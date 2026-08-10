@@ -33,8 +33,8 @@ export function Step({
   n: number;
   title: string;
   active?: boolean;
-  /** Render the title as a disclosure button (the landing rail, where six steps
-   * of full content is more page than a visitor wants up front). */
+  /** Render the title as a disclosure button (the landing rail, where every
+   * step's full content is more page than a visitor wants up front). */
   collapsible?: boolean;
   open?: boolean;
   onToggle?: () => void;

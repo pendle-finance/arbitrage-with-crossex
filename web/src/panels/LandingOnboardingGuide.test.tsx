@@ -1,4 +1,4 @@
-/** The public rail: six steps collapsed to their titles, with step 1 open and
+/** The public rail: four steps collapsed to their titles, with step 1 open and
  * carrying the paste-into-your-own-LLM audit prompt above an OS-aware install
  * command. No key surface may ever appear here. */
 import { screen, within } from '@testing-library/react';
@@ -13,17 +13,36 @@ async function openStep(name: RegExp) {
 }
 
 describe('LandingOnboardingGuide', () => {
-  it('is six steps, install first, before anything touching Gate', () => {
+  it('is four steps, install first, before anything touching Gate', () => {
     renderWithClient(<LandingOnboardingGuide />);
 
-    const steps = screen.getAllByRole('listitem');
-    expect(steps).toHaveLength(6);
+    // Only the four step headings are top-level; the Gate step's own ordered
+    // list nests inside step 2, so scope to the outer <ol>.
+    const steps = screen.getAllByRole('listitem').filter((li) => li.querySelector('h3'));
+    expect(steps).toHaveLength(4);
     expect(within(steps[0]).getByRole('heading')).toHaveTextContent('Install the terminal');
-    expect(within(steps[1]).getByRole('heading')).toHaveTextContent('Fund Gate');
-    // Enabling the feature precedes BOTH funding CrossEx and creating the key.
-    expect(within(steps[2]).getByRole('heading')).toHaveTextContent('Enable CrossEx');
-    expect(within(steps[3]).getByRole('heading')).toHaveTextContent('Fund CrossEx');
-    expect(within(steps[4]).getByRole('heading')).toHaveTextContent('Create your API key');
+    expect(within(steps[1]).getByRole('heading')).toHaveTextContent(
+      'Fund Gate and enable CrossEx',
+    );
+    expect(within(steps[2]).getByRole('heading')).toHaveTextContent('Create your API key');
+    expect(within(steps[3]).getByRole('heading')).toHaveTextContent('Execute');
+  });
+
+  it('keeps the three Gate errands, in order, inside the one step', async () => {
+    renderWithClient(<LandingOnboardingGuide />);
+    await openStep(/^Fund Gate and enable CrossEx/);
+
+    // The nested <li>s are the errands — the step <li>s carry an <h3>.
+    const errands = screen
+      .getAllByRole('listitem')
+      .filter((li) => !li.querySelector('h3'))
+      .map((li) => li.textContent ?? '');
+    expect(errands).toHaveLength(3);
+    // Enabling CrossEx must precede moving funds into it, and both precede the
+    // API key — that ordering is the reason this is a list and not a sentence.
+    expect(errands[0]).toMatch(/gate\.com\/signup/);
+    expect(errands[1]).toMatch(/Switch on CrossEx/);
+    expect(errands[2]).toMatch(/Move your funds into CrossEx/);
   });
 
   it('offers the audit inside step 1, above the install command', () => {
@@ -48,7 +67,7 @@ describe('LandingOnboardingGuide', () => {
       'aria-expanded',
       'true',
     );
-    expect(screen.getAllByRole('button', { expanded: false })).toHaveLength(5);
+    expect(screen.getAllByRole('button', { expanded: false })).toHaveLength(3);
     // A collapsed body is mounted but hidden, so nothing inside it is reachable.
     expect(screen.getByText(/gate\.com\/signup/)).not.toBeVisible();
     expect(screen.getByText(/\/bin\/bash -c/)).toBeVisible();

@@ -26,9 +26,9 @@ export function LandingOnboardingGuide() {
   const windows = os === 'windows';
 
   // Only step 1 starts open: the install command — and the audit prompt above it
-  // — are what a first-time visitor needs in front of them, while five steps of
-  // full content would bury the live rates that are the actual pitch. The rest
-  // read as scannable titles.
+  // — are what a first-time visitor needs in front of them, while the remaining
+  // steps' full content would bury the live rates that are the actual pitch.
+  // The rest read as scannable titles.
   const [openSteps, setOpenSteps] = useState<ReadonlySet<number>>(() => new Set([1]));
   const toggle = (n: number) =>
     setOpenSteps((prev) => {
@@ -105,19 +105,26 @@ export function LandingOnboardingGuide() {
               </span>
             </div>
           </Step>
-          <Step n={2} title="Fund Gate" {...step(2)}>
-            Sign up on <Ext href={GATE_SIGNUP_URL}>gate.com/signup</Ext>, deposit the capital
-            you’ll deploy.
+          {/* One Gate step, not three: signing up, switching CrossEx on and
+              moving funds into it are a single sitting on gate.com, and three
+              one-line steps made the rail read longer than the work is. The
+              ORDER still matters — CrossEx must be on before funds can move
+              into it — so it stays a numbered list inside the step. */}
+          <Step n={2} title="Fund Gate and enable CrossEx" {...step(2)}>
+            All three on gate.com, in this order:
+            <ol className="mt-1.5 flex list-decimal flex-col gap-1 pl-4 marker:text-ink-500">
+              <li>
+                Sign up at <Ext href={GATE_SIGNUP_URL}>gate.com/signup</Ext> and deposit the
+                capital you’ll deploy.
+              </li>
+              <li>
+                Switch on CrossEx at <Ext href={GATE_CROSSEX_URL}>gate.com/crossex</Ext> — both
+                the transfer below and the API-key permission need it enabled first.
+              </li>
+              <li>Move your funds into CrossEx, Gate’s cross-exchange margin account.</li>
+            </ol>
           </Step>
-          <Step n={3} title="Enable CrossEx" {...step(3)}>
-            Switch on the CrossEx feature at <Ext href={GATE_CROSSEX_URL}>gate.com/crossex</Ext> —
-            the API-key permission and the transfer below need it enabled first.
-          </Step>
-          <Step n={4} title="Fund CrossEx" {...step(4)}>
-            Move funds into <Ext href={GATE_CROSSEX_URL}>CrossEx</Ext>, Gate’s cross-exchange
-            margin account.
-          </Step>
-          <Step n={5} title="Create your API key" {...step(5)}>
+          <Step n={3} title="Create your API key" {...step(3)}>
             In <Ext href={GATE_API_KEYS_URL}>API Management</Ext>, create an APIv4 key for your
             Trading account. Set IP Permissions to “Later” (unless your machine has a consistent
             IP), and under Permissions tick only Cross-Exchange with Read and Write; leave
@@ -125,7 +132,7 @@ export function LandingOnboardingGuide() {
             at <Ext href={LOCAL_APP_URL}>localhost:6688</Ext> — keys stay on your machine and
             never touch this website.
           </Step>
-          <Step n={6} title="Execute" {...step(6)}>
+          <Step n={4} title="Execute" {...step(4)}>
             Hit Execute on any card; all four legs land pre-filled.
           </Step>
         </ol>
