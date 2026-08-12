@@ -50,16 +50,14 @@ export function LandingOnboardingGuide() {
   }, [nonce]);
 
   return (
-    <aside
-      className="w-full shrink-0 lg:sticky lg:top-16 lg:w-[360px] lg:self-start"
-      aria-label="Setup guide"
-    >
+    // Variant A reaches this guide as a full-width closer at the bottom of the
+    // scroll narrative, not a co-star sidebar racing the rates for attention —
+    // so it drops the old sticky-360px-rail sizing in favour of the page's own
+    // width. (Sizing lives here, not in the host: LandingApp constrains the
+    // section, this component just stops fighting that width.)
+    <aside className="w-full" aria-label="Setup guide">
       <div className="card px-5 py-5">
-        <h2 className="text-xl font-bold tracking-tight text-ink-100">How to execute</h2>
-        <p className="mt-1.5 text-xs leading-relaxed text-ink-300">
-          Every number on the left is live. Six steps and you can take them.
-        </p>
-        <ol className="mt-5 flex flex-col gap-[18px]">
+        <ol className="flex flex-col gap-[18px]">
           <Step n={1} title="Install the terminal" active {...step(1)}>
             Runs locally on your own machine — free and <Ext href={REPO_URL}>open source</Ext>.
             Audit it first if you want, then pick your system, paste the command and press Return:
