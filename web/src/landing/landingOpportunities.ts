@@ -31,12 +31,11 @@ export interface RankedOpportunity {
 }
 
 /** Every group whose best pair actually prices a net APR on capital — positive
- * OR negative. Unlike OpportunitiesPanel (a trading tool that only lists
- * things worth executing), the landing page's job is to show the real market:
- * spreads flip negative when the fixed rate you'd pay exceeds the one you'd
- * receive, and hiding that would make the hero lie by omission on a bad day.
- * Groups arrive pre-ranked (net fixed APR on capital desc) — this only drops
- * pairs that price nothing at all and keeps server order. */
+ * OR negative. Groups arrive pre-ranked (net fixed APR on capital desc) — this
+ * only drops pairs that price nothing at all and keeps server order.
+ *
+ * The HERO reads this unfiltered, so on a bad day it still tells the truth.
+ * The list uses `positiveOnly` below. */
 export function rankOpportunities(groups: OpportunityGroup[] | undefined): RankedOpportunity[] {
   if (!groups) return [];
   const out: RankedOpportunity[] = [];
@@ -48,4 +47,17 @@ export function rankOpportunities(groups: OpportunityGroup[] | undefined): Ranke
     }
   }
   return out;
+}
+
+/** The shop-window filter: only spreads that actually pay after costs.
+ *
+ * ⚠️ A negative here is NOT a wrong-way-round trade that flipping would fix.
+ * `src/core/boros/opportunities.ts` enumerates BOTH orientations of every venue
+ * pair and emits only the one whose receive-rate exceeds its pay-rate, so every
+ * pair that reaches us already has a positive GROSS spread. A negative
+ * `netFixedAprOnCapital` means execution cost ate more than the spread — and
+ * reversing the legs would give a negative gross spread AND still pay those
+ * costs, i.e. strictly worse. So these are dropped, never swapped. */
+export function positiveOnly(ranked: RankedOpportunity[]): RankedOpportunity[] {
+  return ranked.filter((r) => r.aprOnCapital > 0);
 }

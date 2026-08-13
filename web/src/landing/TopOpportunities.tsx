@@ -2,7 +2,12 @@ import { EmptyState } from '../components/EmptyState';
 import { QueryError } from '../components/QueryError';
 import { Skeleton } from '../components/Skeleton';
 import { fmtDateUtc, fmtNotionalShort, prettyVenue } from '../lib/fmt';
-import { LANDING_NOTIONAL_USD, rankOpportunities, useLandingOpportunities } from './landingOpportunities';
+import {
+  LANDING_NOTIONAL_USD,
+  positiveOnly,
+  rankOpportunities,
+  useLandingOpportunities,
+} from './landingOpportunities';
 
 /**
  * A shop-window list of the best live spreads — deliberately NOT
@@ -11,11 +16,13 @@ import { LANDING_NOTIONAL_USD, rankOpportunities, useLandingOpportunities } from
  * None of that belongs on a page nobody is logged into. Five rows, one number
  * each, fixed at one notional, no controls.
  *
- * Shows negative spreads too, unranked away — the market is what it is.
+ * Positive spreads only (see positiveOnly) — a shop window lists what's
+ * actually executable. The hero above still shows the true best number even
+ * when that's negative, so nothing is hidden, just not shelved as an offer.
  */
 export function TopOpportunities() {
   const query = useLandingOpportunities();
-  const ranked = rankOpportunities(query.data?.groups).slice(0, 5);
+  const ranked = positiveOnly(rankOpportunities(query.data?.groups)).slice(0, 5);
 
   return (
     <section className="mx-auto w-full max-w-3xl px-1">
@@ -42,7 +49,11 @@ export function TopOpportunities() {
           onRetry={() => void query.refetch()}
         />
       ) : ranked.length === 0 ? (
-        <EmptyState icon="◎" title="No spreads pricing right now" hint="This list is live." />
+        <EmptyState
+          icon="◎"
+          title="Nothing pays after costs right now"
+          hint="Spreads exist, but execution costs eat them at this size. This list is live."
+        />
       ) : (
         <ol className="flex flex-col gap-2">
           {ranked.map(({ group, pair, aprOnCapital }, i) => (
@@ -51,13 +62,9 @@ export function TopOpportunities() {
               className="card flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-4 py-3.5"
             >
               <div className="flex items-center gap-3">
-                <span
-                  className={`num text-2xl font-bold leading-none tracking-tight sm:text-[28px] ${
-                    aprOnCapital < 0 ? 'text-rose-400' : 'text-emerald-400'
-                  }`}
-                >
-                  {aprOnCapital < 0 ? '' : '+'}
-                  {(aprOnCapital * 100).toFixed(1)}%
+                {/* Always positive here — positiveOnly() filtered the rest. */}
+                <span className="num text-2xl font-bold leading-none tracking-tight text-emerald-400 sm:text-[28px]">
+                  +{(aprOnCapital * 100).toFixed(1)}%
                 </span>
                 <span className="num flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-ink-700 bg-ink-800 text-[10px] font-semibold text-ink-300">
                   {pair.base}

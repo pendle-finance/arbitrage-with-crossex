@@ -1,10 +1,9 @@
-/** The public shell (Variant A — "the number leads"): a hero APY number, a
- * shop-window opportunities strip with no Execute button (nothing to prefill
- * on a page nobody is logged into — see landing/TopOpportunities.tsx), three
- * CTA cards, a trust section, then the full step-by-step guide as the closer.
- * The old Execute-nudge flow lived on OpportunitiesPanel's per-card button,
- * which this shell no longer renders; LandingOnboardingGuide's own nudge
- * behaviour is still covered by its own test file. */
+/** The public shell (Variant A — "the number leads"): a bare hero number, the
+ * live 4-leg diagram that explains it, a shop-window spreads list, "three
+ * things you need" as the page's only setup surface, and an FAQ holding the
+ * caveats. The old step-by-step rail (LandingOnboardingGuide) was folded into
+ * the three cards and deleted — the terminal's own OnboardingGuide is a
+ * different component and is untouched. */
 import { screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { LandingApp } from './LandingApp';
@@ -13,21 +12,45 @@ import { server } from './test/server';
 import { renderWithClient } from './test/utils';
 
 describe('LandingApp', () => {
-  it('renders the full scroll narrative: hero, opportunities, 3 things, trust, and the guide', async () => {
+  it('renders the scroll narrative: hero, live mechanism, spreads, 3 things, FAQ', async () => {
     server.use(...baseHandlers(), opportunitiesHandler(makeOpportunitiesResult()));
     renderWithClient(<LandingApp />);
 
     expect(await screen.findByText('Fixed APR on capital, right now')).toBeInTheDocument();
     expect(screen.getByText('Live spreads')).toBeInTheDocument();
-    expect(screen.getByText('Three things')).toBeInTheDocument();
-    expect(screen.getByText('Before you trust it with a key')).toBeInTheDocument();
-    expect(await screen.findByRole('button', { name: /^Install the terminal/ })).toBeInTheDocument();
+    expect(screen.getByText('Three things you need')).toBeInTheDocument();
+    expect(screen.getByText('Questions & caveats')).toBeInTheDocument();
+    expect(screen.getByText('The terminal, running locally')).toBeInTheDocument();
+  });
+
+  it('states the caveats without a doubt-first headline', async () => {
+    server.use(...baseHandlers(), opportunitiesHandler(makeOpportunitiesResult()));
+    renderWithClient(<LandingApp />);
+    await screen.findByText('Fixed APR on capital, right now');
+
+    // The concerns survived the move into the FAQ...
+    expect(screen.getByText('Is this a Pendle product?')).toBeInTheDocument();
+    expect(screen.getByText('Who holds my funds and keys?')).toBeInTheDocument();
+    expect(screen.getByText('Can it lose money?')).toBeInTheDocument();
+    // ...but the section no longer leads with the objection as a headline.
+    expect(screen.queryByText('Before you trust it with a key')).toBeNull();
+  });
+
+  it('has one setup surface, not a duplicate step rail', async () => {
+    server.use(...baseHandlers(), opportunitiesHandler(makeOpportunitiesResult()));
+    renderWithClient(<LandingApp />);
+    await screen.findByText('Three things you need');
+
+    expect(screen.queryByText("Ready? Here's every step")).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Install the terminal/ })).toBeNull();
+    // The rail's instructions still exist — inside the cards.
+    expect(screen.getByText('Cross-Exchange, Read and Write')).toBeInTheDocument();
   });
 
   it('exposes no credential surface anywhere on the public shell', async () => {
     server.use(...baseHandlers(), opportunitiesHandler(makeOpportunitiesResult()));
     renderWithClient(<LandingApp />);
-    await screen.findByRole('button', { name: /^Install the terminal/ });
+    await screen.findByText('Three things you need');
 
     expect(screen.queryByLabelText(/API key/i)).toBeNull();
     expect(screen.queryByLabelText(/API secret/i)).toBeNull();
