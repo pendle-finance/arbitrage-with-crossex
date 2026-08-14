@@ -18,9 +18,15 @@ export const INSTALL_CMD_WINDOWS =
  * the source is right there" — this hands the visitor a concrete way to act on
  * that before any key exists. Questions are the ones that actually matter for a
  * tool that holds exchange keys, and it asks for citations so the answer can be
- * checked rather than believed. */
+ * checked rather than believed.
+ *
+ * Points at the pendle-finance org, unlike REPO_URL/INSTALL_CMD* above: this is
+ * prose a human pastes into a chat, not an endpoint anything fetches, so it can
+ * follow the org move without waiting on the raw-content URLs to be verified.
+ * It also sits one FAQ row below a pendle-finance link, and two different repo
+ * URLs for the same project is exactly the doubt this prompt exists to remove. */
 export const AUDIT_PROMPT = `Audit this open-source tool for me before I run it:
-https://github.com/mrenoon/crossex-boros-terminal
+https://github.com/pendle-finance/crossex-boros-terminal
 
 It runs on my own machine and will hold my Gate exchange API keys. Read the real
 source, then answer:

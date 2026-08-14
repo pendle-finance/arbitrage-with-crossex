@@ -33,7 +33,7 @@ describe('LandingApp', () => {
     await screen.findByRole('heading', { level: 1, name: /funding rate arbitrage/i });
 
     // The concerns survived the move into the FAQ...
-    expect(screen.getByText('Is this a Pendle product?')).toBeInTheDocument();
+    expect(screen.getByText('Who built this?')).toBeInTheDocument();
     expect(screen.getByText('Who holds my funds and keys?')).toBeInTheDocument();
     expect(screen.getByText('Can it lose money?')).toBeInTheDocument();
     // ...but the section no longer leads with the objection as a headline.

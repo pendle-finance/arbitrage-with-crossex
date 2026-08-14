@@ -1,9 +1,18 @@
 import type { ReactNode } from 'react';
 import { CopyBlock } from '../components/CopyBlock';
-import { AUDIT_PROMPT, LOCAL_APP_URL, REPO_URL } from '../lib/landing';
+import { AUDIT_PROMPT, LOCAL_APP_URL } from '../lib/landing';
 import { Ext } from '../panels/onboardingBits';
 import { LANDING_NOTIONAL_USD } from './landingOpportunities';
 import { fmtNotionalShort } from '../lib/fmt';
+
+/** The repo moved to the pendle-finance org (2026-08-14).
+ *
+ * Deliberately NOT `REPO_URL` from lib/landing: that constant also builds the
+ * install commands and the update check, which still resolve against the old
+ * mrenoon raw-content endpoints. Changing it here would silently repoint a live
+ * `curl | bash` at a URL nobody has verified serves the installer. This is the
+ * FAQ's own link only — the rest is a separate, deliberate migration. */
+const PENDLE_REPO_URL = 'https://github.com/pendle-finance/crossex-boros-terminal';
 
 /**
  * One collapsed home for every caveat on the page.
@@ -20,8 +29,14 @@ import { fmtNotionalShort } from '../lib/fmt';
  */
 const FAQS: { q: string; a: ReactNode }[] = [
   {
-    q: 'Is this a Pendle product?',
-    a: 'No. Built by mrenoon, an independent developer. Not created, owned, operated, endorsed or supported by Pendle or Univerum Innovations Inc.',
+    q: 'Who built this?',
+    a: (
+      <>
+        The Pendle team. It's an open-source project, published at{' '}
+        <Ext href={PENDLE_REPO_URL}>github.com/pendle-finance/crossex-boros-terminal</Ext>. It is
+        still experimental software, provided "as is" — use it at your own risk.
+      </>
+    ),
   },
   {
     q: 'Who holds my funds and keys?',
@@ -56,9 +71,9 @@ const FAQS: { q: string; a: ReactNode }[] = [
     q: 'What if it breaks?',
     a: (
       <>
-        It's open source and unsupported. Read it yourself:{' '}
-        <Ext href={REPO_URL}>github.com/mrenoon/crossex-boros-terminal</Ext>, or hand the prompt
-        below to an assistant you trust before you paste in a key.
+        It's open source and experimental. Read it yourself:{' '}
+        <Ext href={PENDLE_REPO_URL}>github.com/pendle-finance/crossex-boros-terminal</Ext>, or hand
+        the prompt below to an assistant you trust before you paste in a key.
       </>
     ),
   },

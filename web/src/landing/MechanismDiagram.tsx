@@ -59,43 +59,59 @@ export function MechanismDiagram() {
       </div>
 
       <div className="flex flex-col gap-4">
-        {/* --- Perp row: the two venues, delta neutral against each other --- */}
-        <div className="grid grid-cols-1 items-center gap-3 lg:grid-cols-[1fr_auto_1fr]">
-          {/* Tone follows the PERP side, matching SideVenue in the panel above
-              and the terminal itself: SHORT is rose, LONG is emerald.
-              These boxes state FLOATING only — a perp has no fixed rate, and
-              "cancels price risk" is what the Δ-neutral pill already says. */}
-          <VenueBox tone="rose" side={`Short ${d.recvVenue}`} flow="Receives floating rate" />
-          <span className="mx-auto flex items-center gap-2 whitespace-nowrap rounded-full border border-ink-700 px-3 py-1 text-[10px] font-semibold uppercase tracking-wider text-ink-400">
-            <Dash /> Δ neutral <Dash />
-          </span>
-          <VenueBox tone="emerald" side={`Long ${d.payVenue}`} flow="Pays floating rate" />
+        {/* --- Perps: boxed like Boros below, so the two halves of the trade
+            read as parallel units. The container header states the ONE thing
+            the pair achieves (equal size, opposite sides ⇒ no price exposure);
+            each box then only has to name its side and its floating leg. --- */}
+        <div className="rounded-xl border border-ink-700 bg-ink-900/40 p-3.5 sm:p-4">
+          <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+            <span className="num text-[11px] font-bold uppercase tracking-wider text-ink-300">
+              CrossEx · same size, opposite sides
+            </span>
+            <span className="text-[11px] text-ink-500">
+              price exposure nets to <span className="font-semibold text-ink-300">zero</span>
+            </span>
+          </div>
+          <div className="mt-3 grid grid-cols-1 items-stretch gap-3 lg:grid-cols-2">
+            {/* Tone follows the PERP side, matching SideVenue in the panel above
+                and the terminal itself: SHORT is rose, LONG is emerald. These
+                boxes state FLOATING only — a perp has no fixed rate. */}
+            <VenueBox
+              tone="rose"
+              side={`Short ${d.base}`}
+              venue={d.recvVenue}
+              flow="Receives floating rate"
+            />
+            <VenueBox
+              tone="emerald"
+              side={`Long ${d.base}`}
+              venue={d.payVenue}
+              flow="Pays floating rate"
+            />
+          </div>
         </div>
 
-        {/* --- Connectors: a plain vertical rule under each venue ---------- */}
-        {/* Same column template as the venue row above and the Boros legs
-            below, so each rule drops from its own venue box into its own leg.
-            The Δ-neutral column is spanned by an empty cell. */}
-        {/* gap-3 and the SAME template as the venue row: with a different gap
-            the 1fr columns resolve to different widths, which left each rule
-            ~20px off its box's centre. The middle cell also has to reserve the
-            Δ-neutral pill's width, so it renders an invisible copy of it. */}
-        <div className="hidden grid-cols-[1fr_auto_1fr] gap-3 lg:grid">
+        {/* --- Connectors: a vertical rule from each perp down to its Boros
+            leg. Same 2-col template and gap as BOTH boxes' inner grids, plus
+            the same px padding, so each rule lands under its own column's
+            centre. A different template or gap here silently shifts them. --- */}
+        <div className="hidden grid-cols-2 gap-3 px-3.5 lg:grid sm:px-4">
           <Connector tone="rose" />
-          <span
-            aria-hidden="true"
-            className="invisible mx-auto flex items-center gap-2 whitespace-nowrap rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-wider"
-          >
-            <Dash /> Δ neutral <Dash />
-          </span>
           <Connector tone="emerald" />
         </div>
 
         {/* --- Boros: what swaps floating for fixed on both legs ----------- */}
         <div className="rounded-xl border border-cyan-500/40 bg-cyan-500/[0.04] p-3.5 sm:p-4">
-          <span className="num text-[11px] font-bold uppercase tracking-wider text-cyan-300">
-            Boros · swaps floating for fixed on both legs
-          </span>
+          {/* Same header shape as the perp box: what it is, then the one thing
+              it achieves. The two halves read as a matched pair. */}
+          <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+            <span className="num text-[11px] font-bold uppercase tracking-wider text-cyan-300">
+              Boros · same size as perps leg
+            </span>
+            <span className="text-[11px] text-ink-500">
+              floating funding nets to <span className="font-semibold text-ink-300">zero</span>
+            </span>
+          </div>
           <div className="mt-3 grid grid-cols-1 gap-3 lg:grid-cols-2">
             {/* The fixed rates live HERE, not on the perp boxes: Boros is the
                 only leg with a fixed side. Receiving fixed IS the short-YU
@@ -192,19 +208,27 @@ function pct(x: number): string {
 function VenueBox({
   tone,
   side,
+  venue,
   flow,
 }: {
   tone: 'emerald' | 'rose';
+  /** The position: "Short ETH". Names the ASSET, so a reader can see the two
+   * boxes are the same thing in opposite directions. */
   side: string;
+  venue: string;
   flow: string;
 }) {
   const box =
     tone === 'emerald'
       ? 'border-emerald-500/40 bg-emerald-500/[0.03]'
       : 'border-rose-500/40 bg-rose-500/[0.03]';
+  const head = tone === 'emerald' ? 'text-emerald-400' : 'text-rose-400';
   return (
-    <div className={`flex flex-col gap-1.5 rounded-xl border p-3.5 sm:p-4 ${box}`}>
-      <span className="text-[15px] font-semibold text-ink-100">{side}</span>
+    <div className={`flex flex-col gap-1 rounded-lg border p-3 ${box}`}>
+      <span className="flex flex-wrap items-baseline gap-x-2">
+        <span className={`text-[15px] font-semibold ${head}`}>{side}</span>
+        <span className="num text-[11px] uppercase tracking-wider text-ink-400">on {venue}</span>
+      </span>
       <span className="text-[12.5px] text-ink-400">{flow}</span>
     </div>
   );
@@ -285,8 +309,4 @@ function Arrow(): ReactNode {
       →
     </span>
   );
-}
-
-function Dash(): ReactNode {
-  return <span aria-hidden="true" className="h-px w-4 bg-ink-700" />;
 }
