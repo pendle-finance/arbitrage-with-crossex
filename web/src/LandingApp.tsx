@@ -6,25 +6,10 @@ import { ThreeThings } from './landing/ThreeThings';
 import { REPO_URL } from './lib/landing';
 
 /**
- * Variant A — "the number leads": a conversion-oriented scroll narrative
- * rather than the terminal's own layout wearing a public hat.
- *
- * The trade is 4 legs across 2 venues: a perp pair (short one venue, long the
- * other — cancels price risk) and a Boros fixed-rate pair (one per venue,
- * hedging each perp's floating funding). What's left is the gap between the
- * two fixed rates, leveraged by the perp legs. `netFixedAprOnCapital` already
- * encodes all of it — see MechanismDiagram for the picture.
- *
- * Top to bottom: a split hero — the claim carrying the best live number on the
- * left, that same pair broken open as a 4-leg diagram on the right, so the
- * proof sits beside the claim rather than under it → a shop-window list of
- * live spreads that pay → "3 things you need", the only setup surface on the
- * page → an FAQ holding every caveat.
- *
- * There is deliberately no step-by-step rail at the bottom any more: it
- * restated the three cards in a second shape, so its content was folded INTO
- * them (LandingOnboardingGuide is gone; the terminal's own OnboardingGuide is
- * untouched).
+ * Top to bottom: a split hero — title and short description of strategy on the
+ * left, a shop-window list of live spreads that pay on the right with best
+ * highlighted → that same pair broken open as a 4-leg diagram → "3 things 
+ * you need", the only setup surface on the page → an FAQ holding every caveat.
  *
  * The public landing view with every credential surface removed — no settings
  * drawer, no account pollers, no key input anywhere. Reached only through
@@ -44,7 +29,7 @@ export function LandingApp() {
               href={REPO_URL}
               target="_blank"
               rel="noreferrer"
-              className="rounded-md border border-ink-700 bg-ink-900 px-2.5 py-1 text-sm text-ink-400 transition-colors hover:border-ink-500 hover:text-ink-100"
+              className="rounded-md border border-ink-300 bg-ink-900 px-2.5 py-1 text-sm text-ink-300 transition-colors hover:border-ink-100 hover:text-ink-100"
             >
               View on GitHub
             </a>
