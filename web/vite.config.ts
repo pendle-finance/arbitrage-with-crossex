@@ -17,7 +17,7 @@ import { defineConfig } from 'vitest/config';
 const LANDING_TITLE = 'CrossEx-Boros Terminal — live fixed-rate arbitrage on Boros × Gate CrossEx';
 const LANDING_DESCRIPTION =
   'Live delta-neutral funding-rate opportunities between Boros fixed rates and Gate CrossEx perps. ' +
-  'A free, open-source terminal that runs on your own machine — your keys never leave it.';
+  'A free, open-source terminal by Pendle that runs on your own machine — your keys never leave it.';
 // Public canonical URL for the deployed site — supplied at build time
 // (`LANDING_URL=https://your-domain yarn build:landing`); no domain is baked in,
 // and the canonical/og:url tags are omitted when it is unset.

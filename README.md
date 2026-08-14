@@ -1,10 +1,8 @@
-## ⚠️ Open source project — not a Pendle product
+## ⚠️ Open-source project by Pendle — experimental, use at your own risk
 
-This is an experimental, open-source tool published by mrenoon, an independent developer, in a personal capacity, free of charge and on an **"as is"** basis. It is **not a Pendle product or service** and is not created, owned, operated, endorsed, maintained or supported by Pendle or Univerum Innovations Inc. It runs entirely on your own machine against **your own exchange accounts and API keys** — no one else holds your funds, keys or orders. It places **real orders with real funds** and can lose money. **Nothing here is financial, investment, legal or tax advice.**
+This is an experimental, open-source trading tool published by Pendle, free of charge and on an **"as is"** basis. It runs entirely on your own machine against **your own exchange accounts and API keys** — no one else holds your funds, keys or orders. It places **real orders with real funds** and can lose money. **Nothing here is financial, investment, legal or tax advice.** Gate.io and the other venues referenced are independent third parties; nothing here implies their affiliation, sponsorship or endorsement.
 
 **➡️ Read the full [DISCLAIMER](./docs/DISCLAIMER.md) before use. By using this software you accept it in full.**
-
-Not available to, or intended for, any person where such use is unlawful (including restricted jurisdictions and sanctioned persons).
 
 Not available to, or intended for, any person where such use is unlawful (including restricted jurisdictions and sanctioned persons).
 
@@ -35,7 +33,7 @@ Paste this into the **Terminal** app (Finder → Applications → Utilities → 
 press Return:
 
 ```bash
-/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/mrenoon/crossex-boros-terminal/main/install.sh)"
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/pendle-finance/crossex-boros-terminal/main/install.sh)"
 ```
 
 When it finishes (a few minutes the first time), the terminal opens in your browser at
@@ -55,7 +53,7 @@ PowerShell** is fine — no need to install anything first). Press `Win`, type
 `PowerShell`, open it, then paste:
 
 ```powershell
-irm https://raw.githubusercontent.com/mrenoon/crossex-boros-terminal/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/pendle-finance/crossex-boros-terminal/main/install.ps1 | iex
 ```
 
 When it finishes, the terminal opens in your browser at **http://localhost:6688** —
@@ -138,7 +136,7 @@ for a Gate.io API key:
 **macOS**
 
 ```bash
-/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/mrenoon/crossex-boros-terminal/main/uninstall.sh)"
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/pendle-finance/crossex-boros-terminal/main/uninstall.sh)"
 ```
 
 Keys and trade history in `~/.boros-crossex` are kept; append ` -- --purge` to remove
@@ -147,13 +145,13 @@ those too (or `rm -rf ~/.boros-crossex`).
 **Windows**
 
 ```powershell
-irm https://raw.githubusercontent.com/mrenoon/crossex-boros-terminal/main/uninstall.ps1 | iex
+irm https://raw.githubusercontent.com/pendle-finance/crossex-boros-terminal/main/uninstall.ps1 | iex
 ```
 
 Keys and trade history in `%LOCALAPPDATA%\CrossEx-Boros` are kept. To remove those too:
 
 ```powershell
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/mrenoon/crossex-boros-terminal/main/uninstall.ps1))) -Purge
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/pendle-finance/crossex-boros-terminal/main/uninstall.ps1))) -Purge
 ```
 
 Either way this stops and removes the background service, the app, its private Node.js
@@ -202,7 +200,7 @@ read it and the moment you run it — and again on every update. To close that g
 **1. Pin a commit.** Clone the repo and note the exact tree you are about to audit:
 
 ```bash
-git clone https://github.com/mrenoon/crossex-boros-terminal
+git clone https://github.com/pendle-finance/crossex-boros-terminal
 cd crossex-boros-terminal
 git log -1 --format=%H     # ← this commit is what you are auditing
 ```
@@ -215,12 +213,12 @@ same commit, so the script you run is the one you read):
 
 ```bash
 REF=<commit-sha>
-BOROS_REF=$REF /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/mrenoon/crossex-boros-terminal/$REF/install.sh)"
+BOROS_REF=$REF /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/pendle-finance/crossex-boros-terminal/$REF/install.sh)"
 ```
 
 ```powershell
 $env:BOROS_REF = '<commit-sha>'
-irm "https://raw.githubusercontent.com/mrenoon/crossex-boros-terminal/$($env:BOROS_REF)/install.ps1" | iex
+irm "https://raw.githubusercontent.com/pendle-finance/crossex-boros-terminal/$($env:BOROS_REF)/install.ps1" | iex
 ```
 
 …or straight from the clone you just audited, with no second download at all:
@@ -256,11 +254,11 @@ of this repo for an even deeper read.
 I'm considering installing an open-source crypto trading tool on my Mac, and I want you
 to audit it before I run anything.
 
-Repository:  https://github.com/mrenoon/crossex-boros-terminal
+Repository:  https://github.com/pendle-finance/crossex-boros-terminal
 Commit to audit:  <paste the commit SHA you pinned — or "main" for the current tip>
-Source tree at that commit:  https://github.com/mrenoon/crossex-boros-terminal/tree/<commit>
-Installer I would run:  https://raw.githubusercontent.com/mrenoon/crossex-boros-terminal/<commit>/install.sh
-Uninstaller:  https://raw.githubusercontent.com/mrenoon/crossex-boros-terminal/<commit>/uninstall.sh
+Source tree at that commit:  https://github.com/pendle-finance/crossex-boros-terminal/tree/<commit>
+Installer I would run:  https://raw.githubusercontent.com/pendle-finance/crossex-boros-terminal/<commit>/install.sh
+Uninstaller:  https://raw.githubusercontent.com/pendle-finance/crossex-boros-terminal/<commit>/uninstall.sh
 
 Please read the installer, the uninstaller, and the application source code, then answer:
 

@@ -1,13 +1,13 @@
 <#
   CrossEx-Boros Terminal - Windows uninstaller.
 
-    irm https://raw.githubusercontent.com/mrenoon/crossex-boros-terminal/main/uninstall.ps1 | iex
+    irm https://raw.githubusercontent.com/pendle-finance/crossex-boros-terminal/main/uninstall.ps1 | iex
 
   Removes the background task, the app, and its private Node.js runtime.
   Your API keys (config\) and trade history (data\) are KEPT unless you pass
   -Purge:
 
-    & ([scriptblock]::Create((irm https://raw.githubusercontent.com/mrenoon/crossex-boros-terminal/main/uninstall.ps1))) -Purge
+    & ([scriptblock]::Create((irm https://raw.githubusercontent.com/pendle-finance/crossex-boros-terminal/main/uninstall.ps1))) -Purge
 
   This is the Windows counterpart of uninstall.sh; the two are kept in step.
 #>

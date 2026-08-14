@@ -3,6 +3,8 @@
   "private": true,
   "version": "0.1.0",
   "description": "CrossEx-Boros Terminal — monitoring + trading UI for Gate.io CrossEx",
+  "license": "MIT",
+  "repository": "github:pendle-finance/crossex-boros-terminal",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",

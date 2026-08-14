@@ -1,10 +1,10 @@
 # IMPORTANT — READ BEFORE USING
 
-**This software is a personal, independent, open-source project, provided free of charge on an "AS IS" and "AS AVAILABLE" basis, with all faults and without warranty of any kind. By downloading, installing, accessing or using it, you accept this notice in full. If you do not agree, do not use the software.**
+**This software is an open-source project published by Pendle, provided free of charge on an "AS IS" and "AS AVAILABLE" basis, with all faults and without warranty of any kind. By downloading, installing, accessing or using it, you accept this notice in full. If you do not agree, do not use the software.**
 
-In this notice: "**Author**" means mrenoon, the individual developer who created and published this software, together with any contributors and copyright holders; "**Pendle**" means Pendle, Univerum Innovations Inc. and their respective affiliates, directors, officers, employees and agents; and "**Released Parties**" means the Author and Pendle.
+In this notice: "**Pendle**" means Pendle, Univerum Innovations Inc. and their respective affiliates, directors, officers, employees and agents; and "**Released Parties**" means Pendle together with any contributors and copyright holders.
 
-**1. Personal project; no affiliation with Pendle.** This software is a personal and independent project of the Author, published in the Author's own personal capacity. It is not a Pendle product or service and is not created (in the course of any employment or engagement), owned, operated, published, endorsed, maintained, supported, reviewed or authorised by Pendle. Pendle has no involvement in, control over, or responsibility or liability for this software or its use, and any views expressed are the Author's own and not those of Pendle. References to "Boros", "Pendle", or any exchange or venue are for identification purposes only and do not imply any affiliation, sponsorship or endorsement.
+**1. Open-source software; not a service.** This software is published by Pendle as a free, open-source, self-hosted tool. It is not offered as a service: it runs on your own machine, against your own exchange accounts and API keys, and no Released Party operates it for you, holds your funds, keys or orders, or executes trades on your behalf. References to any exchange or venue (including Gate.io) are for identification purposes only and do not imply any affiliation, sponsorship or endorsement by or of those venues.
 
 **2. No warranty.** To the fullest extent permitted by law, the Released Parties disclaim all warranties, express or implied, including merchantability, fitness for a particular purpose, title, accuracy and non-infringement. The Released Parties do not warrant that the software is secure, bug-free, uninterrupted or error-free, or that it will operate as described, or execute, hedge, close or reconcile any order or position correctly or at all.
 
@@ -18,7 +18,7 @@ In this notice: "**Author**" means mrenoon, the individual developer who created
 
 **7. Eligibility, legality and tax.** You are responsible for ensuring that your use of the software, and of the relevant products and strategies, is lawful for a person in your jurisdiction, and for all licensing, regulatory and tax obligations arising from your activity. The software is not directed at any person in any jurisdiction where such use would be unlawful. Perpetual and derivative products are restricted or prohibited for certain persons and jurisdictions.
 
-**8. No support.** The software is provided with no obligation on the Author to maintain, update, support, correct or continue it.
+**8. No support.** The software is provided with no obligation on any Released Party to maintain, update, support, correct or continue it.
 
 **9. Limitation of liability.** To the fullest extent permitted by law, the Released Parties shall have no liability for any loss or damage of any kind (including direct, indirect, incidental, special, consequential, exemplary or punitive damages, or loss of funds, profits or data) arising out of or in connection with the software or its use or inability to be used, whether in contract, tort (including negligence) or otherwise, even if advised of the possibility of such loss.
 

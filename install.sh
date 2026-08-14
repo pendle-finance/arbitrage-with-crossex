@@ -3,7 +3,7 @@
 # CrossEx-Boros Terminal — macOS installer.
 #
 # Usage (paste into Terminal):
-#   /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/mrenoon/crossex-boros-terminal/main/install.sh)"
+#   /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/pendle-finance/crossex-boros-terminal/main/install.sh)"
 #
 # What this script does — and everything it does:
 #   1. Downloads a private copy of Node.js (official nodejs.org build, checksum
@@ -21,7 +21,7 @@
 # running version first (including any orphaned/wedged copy), so an old version
 # never lingers. Your keys and trade history (kept in ~/.boros-crossex/config and
 # ~/.boros-crossex/data) are never touched.
-# Uninstall: https://github.com/mrenoon/crossex-boros-terminal#uninstall
+# Uninstall: https://github.com/pendle-finance/crossex-boros-terminal#uninstall
 #
 # This script is bash-3.2 compatible (macOS system bash).
 
@@ -30,7 +30,7 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 # Configuration (BOROS_* env vars exist for development/testing overrides)
 # ---------------------------------------------------------------------------
-REPO_SLUG="${BOROS_REPO:-mrenoon/crossex-boros-terminal}"
+REPO_SLUG="${BOROS_REPO:-pendle-finance/crossex-boros-terminal}"
 BRANCH="${BOROS_BRANCH:-main}"
 # Pin an exact commit, tag or branch: BOROS_REF wins over BOROS_BRANCH. This is
 # how you install the very tree you audited — see "Install exactly what you

@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useAcceptDisclaimer, useDisclaimer } from '../api/queries';
 import { Modal } from './Modal';
 
-const DISCLAIMER_URL = 'https://github.com/mrenoon/crossex-boros-terminal/blob/main/docs/DISCLAIMER.md';
+const DISCLAIMER_URL = 'https://github.com/pendle-finance/crossex-boros-terminal/blob/main/docs/DISCLAIMER.md';
 
 /** First-run gate: blocks the terminal until the disclaimer is accepted. The
  * server ALSO refuses trading routes until acceptance is recorded — this modal
@@ -41,8 +41,8 @@ export function DisclaimerGate() {
     <Modal title="Before you continue" locked onClose={() => {}} widthClass="w-[460px]">
       <div className="flex flex-col gap-4 px-5 py-5 text-sm leading-relaxed text-ink-200">
         <p>
-          This is an experimental open source project, provided <strong>"as is"</strong> and free
-          of charge. It is <strong>not a Pendle product</strong> and is{' '}
+          This is an experimental <strong>open-source project by Pendle</strong>, provided{' '}
+          <strong>"as is"</strong> and free of charge. It is{' '}
           <strong>not financial advice</strong>. It places{' '}
           <strong>real orders with real funds</strong> on your own exchange accounts — you may lose
           money, including more than your margin. You use it entirely at your own risk.

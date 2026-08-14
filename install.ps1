@@ -2,7 +2,7 @@
   CrossEx-Boros Terminal - Windows installer.
 
   Usage (paste into PowerShell):
-    irm https://raw.githubusercontent.com/mrenoon/crossex-boros-terminal/main/install.ps1 | iex
+    irm https://raw.githubusercontent.com/pendle-finance/crossex-boros-terminal/main/install.ps1 | iex
 
   What this script does - and everything it does:
     1. Downloads a private copy of Node.js (official nodejs.org build, checksum
@@ -33,7 +33,7 @@ $ProgressPreference = 'SilentlyContinue'  # Invoke-WebRequest is far faster with
 # ---------------------------------------------------------------------------
 # Configuration (BOROS_* env vars exist for development/testing overrides)
 # ---------------------------------------------------------------------------
-$RepoSlug = if ($env:BOROS_REPO)   { $env:BOROS_REPO }   else { 'mrenoon/crossex-boros-terminal' }
+$RepoSlug = if ($env:BOROS_REPO)   { $env:BOROS_REPO }   else { 'pendle-finance/crossex-boros-terminal' }
 $Branch   = if ($env:BOROS_BRANCH) { $env:BOROS_BRANCH } else { 'main' }
 # Pin an exact commit, tag or branch: BOROS_REF wins over BOROS_BRANCH. This is
 # how you install the very tree you audited - see "Install exactly what you

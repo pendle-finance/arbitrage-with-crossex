@@ -147,7 +147,7 @@ describe('GET /api/version', () => {
 
   it('echoes the installer provenance so the UI can show which commit runs', async () => {
     const install = {
-      repo: 'mrenoon/crossex-boros-terminal',
+      repo: 'pendle-finance/crossex-boros-terminal',
       requestedRef: 'refs/heads/main',
       commit: 'f4f681af8b36c1bddc98048f214ff1405d56ca73',
       source: 'github-archive',

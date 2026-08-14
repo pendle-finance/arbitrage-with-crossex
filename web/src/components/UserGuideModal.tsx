@@ -15,7 +15,7 @@ import remarkGfm from 'remark-gfm';
 import { Modal } from './Modal';
 import { Skeleton } from './Skeleton';
 
-const REPO = 'mrenoon/crossex-boros-terminal';
+const REPO = 'pendle-finance/crossex-boros-terminal';
 const BRANCH = 'main';
 const DOC = 'docs/USER_GUIDE.md';
 

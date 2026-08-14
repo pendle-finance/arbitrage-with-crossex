@@ -44,7 +44,7 @@ describe('UpdateIndicator', () => {
     expect(screen.getAllByText('(this machine)')).toHaveLength(1);
     expect(screen.getByRole('link', { name: /Full changelog/ })).toHaveAttribute(
       'href',
-      'https://github.com/mrenoon/crossex-boros-terminal/blob/main/CHANGELOG.md',
+      'https://github.com/pendle-finance/crossex-boros-terminal/blob/main/CHANGELOG.md',
     );
   });
 

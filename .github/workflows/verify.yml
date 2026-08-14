@@ -1,6 +1,6 @@
 # Every commit on main publicly typechecks, passes the offline test suite, and
-# builds the web bundle the installer actually builds. It is the author's code
-# passing the author's tests — it raises the cost of accidental breakage, not
+# builds the web bundle the installer actually builds. It is the project's code
+# passing its own tests — it raises the cost of accidental breakage, not
 # of malice — but it lets anyone match a commit (Settings → About shows which
 # one they run) against a green check.
 name: verify
