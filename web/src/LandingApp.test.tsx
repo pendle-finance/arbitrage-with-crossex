@@ -16,17 +16,21 @@ describe('LandingApp', () => {
     server.use(...baseHandlers(), opportunitiesHandler(makeOpportunitiesResult()));
     renderWithClient(<LandingApp />);
 
-    expect(await screen.findByText('Fixed APR on capital, right now')).toBeInTheDocument();
-    expect(screen.getByText('Live spreads')).toBeInTheDocument();
+    // The h1 spans two lines ("…arbitrage." / "Leveraged."), so match the
+    // heading by role rather than its full text.
+    expect(
+      await screen.findByRole('heading', { level: 1, name: /funding rate arbitrage/i }),
+    ).toBeInTheDocument();
+    expect(screen.getByText('Also live')).toBeInTheDocument();
     expect(screen.getByText('Three things you need')).toBeInTheDocument();
     expect(screen.getByText('Questions & caveats')).toBeInTheDocument();
-    expect(screen.getByText('The terminal, running locally')).toBeInTheDocument();
+    expect(screen.getByText('The terminal')).toBeInTheDocument();
   });
 
   it('states the caveats without a doubt-first headline', async () => {
     server.use(...baseHandlers(), opportunitiesHandler(makeOpportunitiesResult()));
     renderWithClient(<LandingApp />);
-    await screen.findByText('Fixed APR on capital, right now');
+    await screen.findByRole('heading', { level: 1, name: /funding rate arbitrage/i });
 
     // The concerns survived the move into the FAQ...
     expect(screen.getByText('Is this a Pendle product?')).toBeInTheDocument();

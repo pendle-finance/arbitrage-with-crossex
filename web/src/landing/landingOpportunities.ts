@@ -18,7 +18,11 @@ export function useLandingOpportunities() {
   return useOpportunities({
     notionalUsd: LANDING_NOTIONAL_USD,
     borosEntry: 'market',
-    entryMode: 'both-market',
+    // "Limit + hedge": one leg rests as a maker order, the other hedges into
+    // it. Cheaper than crossing both spreads, and it is how a visitor would
+    // actually open this in the terminal — pricing the landing off two market
+    // orders quoted a worse number than the tool itself produces.
+    entryMode: 'maker-hedge',
     exitMode: 'close',
     feeTier: 'vip0',
   });

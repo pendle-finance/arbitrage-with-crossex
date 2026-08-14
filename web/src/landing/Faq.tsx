@@ -64,49 +64,54 @@ const FAQS: { q: string; a: ReactNode }[] = [
   },
 ];
 
+/** One row. No card: a border-top hairline separates it from the row above,
+ * which is enough structure for a list of questions and stops the section
+ * reading as seven stacked boxes. The first row's divider is suppressed since
+ * the heading already sits above it. */
+function Row({ q, children }: { q: string; children: ReactNode }) {
+  return (
+    <details className="group border-t border-ink-800 first:border-t-0">
+      <summary className="flex cursor-pointer list-none items-center gap-2.5 py-3.5 text-sm font-semibold text-ink-100 transition-colors hover:text-cyan-200">
+        <span
+          aria-hidden="true"
+          className="shrink-0 text-[10px] text-ink-500 transition-transform group-open:rotate-90"
+        >
+          ▶
+        </span>
+        {q}
+      </summary>
+      <div className="pb-4 pl-[22px] pr-2 text-[13px] leading-relaxed text-ink-300">{children}</div>
+    </details>
+  );
+}
+
 export function Faq() {
   return (
-    <section className="mx-auto flex w-full max-w-3xl flex-col gap-3 px-1">
+    <section className="flex w-full flex-col gap-5 px-1">
       <h2 className="text-center text-xl font-bold tracking-tight text-ink-100">
         Questions &amp; caveats
       </h2>
 
-      <div className="flex flex-col gap-2">
+      {/* Generous side padding rather than a card: the whitespace is what
+          separates this block from the page, so it needs no border of its own. */}
+      <div className="flex flex-col px-1 sm:px-6">
         {FAQS.map((f) => (
-          <details key={f.q} className="card group px-4 py-3">
-            <summary className="flex cursor-pointer list-none items-center gap-2 text-[13px] font-semibold text-ink-100 transition-colors hover:text-cyan-200">
-              <span
-                aria-hidden="true"
-                className="shrink-0 text-[10px] text-ink-500 transition-transform group-open:rotate-90"
-              >
-                ▶
-              </span>
-              {f.q}
-            </summary>
-            <p className="mt-2 pl-[18px] text-[12.5px] leading-relaxed text-ink-300">{f.a}</p>
-          </details>
+          <Row key={f.q} q={f.q}>
+            {f.a}
+          </Row>
         ))}
 
-        {/* The audit prompt stays a real, takeable action rather than a badge —
-            so it's the one FAQ row that carries a control. */}
-        <details className="card group border-cyan-500/20 bg-cyan-500/[0.03] px-4 py-3">
-          <summary className="flex cursor-pointer list-none items-center gap-2 text-[13px] font-semibold text-ink-100 transition-colors hover:text-cyan-200">
-            <span
-              aria-hidden="true"
-              className="shrink-0 text-[10px] text-ink-500 transition-transform group-open:rotate-90"
-            >
-              ▶
-            </span>
-            Don't take our word for it — audit it first
-          </summary>
-          <div className="mt-2 flex flex-col gap-2 pl-[18px]">
-            <p className="text-[12.5px] leading-relaxed text-ink-300">
+        {/* The audit prompt is the one row carrying a control, so it keeps its
+            copy block — but no tinted card, which would reintroduce the box. */}
+        <Row q="Don't take our word for it, audit it first">
+          <div className="flex flex-col gap-2.5">
+            <p>
               Paste this into whichever assistant you trust (ChatGPT, Claude, Gemini) and have it
               read the real source before you run anything:
             </p>
             <CopyBlock text={AUDIT_PROMPT} label="Copy audit prompt" maxHeightClass="max-h-32" />
           </div>
-        </details>
+        </Row>
       </div>
     </section>
   );

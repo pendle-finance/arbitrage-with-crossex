@@ -1,21 +1,23 @@
+import type { ReactNode } from 'react';
 import { fmtDateUtc, fmtNotionalShort, prettyVenue } from '../lib/fmt';
 import { LANDING_NOTIONAL_USD, rankOpportunities, useLandingOpportunities } from './landingOpportunities';
 
 /**
- * The 4-leg structure AND the hero's receipts, in one block. Two perp legs
- * (opposite sides, two venues) cancel price risk. Two Boros legs (one per
- * venue, opposite side to that venue's perp) cancel each perp's floating
- * funding. What's left: the gap between the two FIXED rates.
+ * The four legs as a flow, then the arithmetic as a chain.
  *
- * Driven by the SAME best pair the hero prints, so the diagram is the
- * explanation of that exact number rather than a generic illustration — the
- * venues, rates, leverage, maturity and capital that used to sit as a prose
- * paragraph under the hero are now the diagram's own labels. Falls back to a
- * static worked example (labelled as such) only when nothing is pricing.
+ * Two venue boxes across the top, delta neutral against each other. A rule
+ * drops from each into the Boros box below, which is where that venue's
+ * floating funding is swapped for a fixed rate. All the connectors are
+ * vertical or horizontal, so they are borders on ordinary elements — no SVG
+ * overlay, and nothing to re-anchor when the columns collapse.
  *
- * The arithmetic is shown honestly in two steps: the raw spread, then what
- * survives costs and leverage. Spread × leverage does NOT equal the headline —
- * costs come out in between — so the two are never collapsed into one equation.
+ * Driven by the SAME best pair the hero panel prints, so this explains that
+ * exact number rather than illustrating a generic one. Falls back to a static
+ * worked example (labelled) only when nothing is pricing.
+ *
+ * The math row is deliberately four steps: spread → after costs → × leverage →
+ * on capital. Spread × leverage does NOT equal the headline, since costs come
+ * out in between, so they are never collapsed into one equation.
  */
 export function MechanismDiagram() {
   const query = useLandingOpportunities();
@@ -40,64 +42,120 @@ export function MechanismDiagram() {
   const d = live ?? EXAMPLE;
 
   return (
-    <section className="mx-auto w-full max-w-3xl px-1">
-      <div className="card border-ink-700 bg-ink-900/60 p-4 sm:p-5">
-        <div className="mb-3 flex items-center justify-between gap-3">
-          <span className="text-xs font-bold uppercase tracking-wider text-ink-200">
-            {live ? (
-              <>
-                How that <span className="num text-cyan-300">{d.base}</span> number is built
-              </>
-            ) : (
-              'How the spread is built'
-            )}
-          </span>
-          <span className="text-[10.5px] text-ink-500">
-            {live ? `matures ${fmtDateUtc(d.maturity)}` : 'example, not live'}
-          </span>
-        </div>
-
-        <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_auto_1fr] sm:items-center">
-          <VenueBox
-            venue={d.recvVenue}
-            tone="emerald"
-            perp="Short perp"
-            fixed={`Receive fixed ${pct(d.recvApr)}`}
-          />
-          <span aria-hidden="true" className="justify-self-center text-lg font-bold text-ink-500">
-            −
-          </span>
-          <VenueBox
-            venue={d.payVenue}
-            tone="rose"
-            perp="Long perp"
-            fixed={`Pay fixed ${pct(d.payApr)}`}
-          />
-        </div>
-
-        {/* The two-step arithmetic: raw spread, then after costs and leverage.
-            Reads as a small ledger rather than a sentence. */}
-        <div className="mt-3 flex flex-col gap-1.5 rounded-lg border border-cyan-500/20 bg-cyan-500/[0.04] px-3 py-2.5">
-          <Row
-            left="Price risk 0 · funding risk 0 · spread left"
-            right={`${pct(d.recvApr)} − ${pct(d.payApr)} = ${pct(d.spreadApr)}`}
-          />
-          {d.netApr !== null && (
-            <Row left="After execution costs" right={pct(d.netApr)} muted />
+    <section className="flex w-full flex-col gap-5 px-1">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <h2 className="text-xl font-bold tracking-tight text-ink-100 sm:text-2xl">
+          {live ? (
+            <>
+              How that <span className="num text-emerald-400">{d.base}</span> number is built
+            </>
+          ) : (
+            'How the spread is built'
           )}
-          <Row
-            left={d.leverage !== null ? `× ${d.leverage.toFixed(1)}x leverage` : '× leverage'}
-            right={
-              <span className={d.onCapital < 0 ? 'text-rose-400' : 'text-cyan-300'}>
-                {d.onCapital < 0 ? '' : '+'}
-                {pct(d.onCapital)} on capital
-              </span>
-            }
-            strong
-          />
+        </h2>
+        <span className="num text-xs text-ink-500">
+          {live ? `matures ${fmtDateUtc(d.maturity)}` : 'example, not live'}
+        </span>
+      </div>
+
+      <div className="flex flex-col gap-4">
+        {/* --- Perp row: the two venues, delta neutral against each other --- */}
+        <div className="grid grid-cols-1 items-center gap-3 lg:grid-cols-[1fr_auto_1fr]">
+          {/* Tone follows the PERP side, matching SideVenue in the panel above
+              and the terminal itself: SHORT is rose, LONG is emerald.
+              These boxes state FLOATING only — a perp has no fixed rate, and
+              "cancels price risk" is what the Δ-neutral pill already says. */}
+          <VenueBox tone="rose" side={`Short ${d.recvVenue}`} flow="Receives floating rate" />
+          <span className="mx-auto flex items-center gap-2 whitespace-nowrap rounded-full border border-ink-700 px-3 py-1 text-[10px] font-semibold uppercase tracking-wider text-ink-400">
+            <Dash /> Δ neutral <Dash />
+          </span>
+          <VenueBox tone="emerald" side={`Long ${d.payVenue}`} flow="Pays floating rate" />
         </div>
 
-        <p className="mt-2 text-center text-[10.5px] text-ink-500">
+        {/* --- Connectors: a plain vertical rule under each venue ---------- */}
+        {/* Same column template as the venue row above and the Boros legs
+            below, so each rule drops from its own venue box into its own leg.
+            The Δ-neutral column is spanned by an empty cell. */}
+        {/* gap-3 and the SAME template as the venue row: with a different gap
+            the 1fr columns resolve to different widths, which left each rule
+            ~20px off its box's centre. The middle cell also has to reserve the
+            Δ-neutral pill's width, so it renders an invisible copy of it. */}
+        <div className="hidden grid-cols-[1fr_auto_1fr] gap-3 lg:grid">
+          <Connector tone="rose" />
+          <span
+            aria-hidden="true"
+            className="invisible mx-auto flex items-center gap-2 whitespace-nowrap rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-wider"
+          >
+            <Dash /> Δ neutral <Dash />
+          </span>
+          <Connector tone="emerald" />
+        </div>
+
+        {/* --- Boros: what swaps floating for fixed on both legs ----------- */}
+        <div className="rounded-xl border border-cyan-500/40 bg-cyan-500/[0.04] p-3.5 sm:p-4">
+          <span className="num text-[11px] font-bold uppercase tracking-wider text-cyan-300">
+            Boros · swaps floating for fixed on both legs
+          </span>
+          <div className="mt-3 grid grid-cols-1 gap-3 lg:grid-cols-2">
+            {/* The fixed rates live HERE, not on the perp boxes: Boros is the
+                only leg with a fixed side. Receiving fixed IS the short-YU
+                side — the mock had these two the wrong way round, so they are
+                labelled from the data (shortLeg = Boros short fixed + perp
+                short). Each pays the floating leg its perp receives, so the
+                two cancel and only the fixed rate is left. */}
+            <YuLeg
+              tone="rose"
+              title={`Short ${d.recvVenue} ${d.base} YU`}
+              fixedLabel="Receives fixed"
+              fixedRate={pct(d.recvApr)}
+              note="pays floating"
+            />
+            <YuLeg
+              tone="emerald"
+              title={`Long ${d.payVenue} ${d.base} YU`}
+              fixedLabel="Pays fixed"
+              fixedRate={pct(d.payApr)}
+              note="receives floating"
+            />
+          </div>
+        </div>
+      </div>
+
+      {/* --- The math ------------------------------------------------------ */}
+      <div className="flex flex-col gap-3 border-t border-ink-800 pt-4">
+        <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-ink-500">
+          The math
+        </span>
+        {/* items-baseline: the arrow sits on the same text baseline as each
+            value. Box-centring never looked right — the values are large digits
+            with no descenders, so their optical centre is above their box
+            centre and a centred arrow reads low. */}
+        <div className="flex flex-wrap items-baseline gap-x-4 gap-y-3">
+          <Step
+            value={`${pct(d.recvApr)} − ${pct(d.payApr)} = ${pct(d.spreadApr)}`}
+            label="spread"
+          />
+          <Arrow />
+          <Step value={d.netApr !== null ? pct(d.netApr) : '—'} label="after costs" />
+          <Arrow />
+          <Step
+            value={d.leverage !== null ? `×${d.leverage.toFixed(1)}x` : '× lev'}
+            label="leverage"
+          />
+          {/* No arrow before the result: `ml-auto` pushes it to the far right,
+              which left the arrow floating in the gap pointing at whitespace. */}
+          <span
+            className={`num ml-auto rounded-xl border px-4 py-2.5 text-lg font-bold leading-none tracking-tight sm:text-xl ${
+              d.onCapital < 0
+                ? 'border-rose-500/40 bg-rose-500/[0.06] text-rose-400'
+                : 'border-emerald-500/40 bg-emerald-500/[0.06] text-emerald-400'
+            }`}
+          >
+            {d.onCapital < 0 ? '' : '+'}
+            {pct(d.onCapital)} on capital
+          </span>
+        </div>
+        <p className="text-[10.5px] text-ink-500">
           {fmtNotionalShort(LANDING_NOTIONAL_USD)} notional per leg
           {d.capitalUsd !== null ? ` · ~${fmtNotionalShort(d.capitalUsd)} capital` : ''}
         </p>
@@ -126,63 +184,109 @@ function pct(x: number): string {
   return `${(x * 100).toFixed(1)}%`;
 }
 
+/** One perp leg. FLOATING only — the fixed side lives in the Boros box.
+ *
+ * One title row, not two: an uppercase venue header above "Short <venue>"
+ * printed the venue name twice. The side keeps the neutral ink colour — the
+ * card's own border and background already carry the long/short tone. */
 function VenueBox({
-  venue,
   tone,
-  perp,
-  fixed,
+  side,
+  flow,
 }: {
-  venue: string;
   tone: 'emerald' | 'rose';
-  perp: string;
-  fixed: string;
+  side: string;
+  flow: string;
 }) {
   const box =
     tone === 'emerald'
-      ? 'border-emerald-500/20 bg-emerald-500/[0.04]'
-      : 'border-rose-500/20 bg-rose-500/[0.04]';
-  const head = tone === 'emerald' ? 'text-emerald-400' : 'text-rose-400';
-  const dot = tone === 'emerald' ? 'bg-emerald-400' : 'bg-rose-400';
+      ? 'border-emerald-500/40 bg-emerald-500/[0.03]'
+      : 'border-rose-500/40 bg-rose-500/[0.03]';
   return (
-    <div className={`flex flex-col gap-1.5 rounded-lg border p-3 ${box}`}>
-      <span className={`text-[10px] font-semibold uppercase tracking-wider ${head}`}>{venue}</span>
-      <Leg label={perp} note="cancels price risk" />
-      <Leg label={fixed} note="cancels floating funding" dot={dot} />
+    <div className={`flex flex-col gap-1.5 rounded-xl border p-3.5 sm:p-4 ${box}`}>
+      <span className="text-[15px] font-semibold text-ink-100">{side}</span>
+      <span className="text-[12.5px] text-ink-400">{flow}</span>
     </div>
   );
 }
 
-function Leg({ label, note, dot = 'bg-ink-500' }: { label: string; note: string; dot?: string }) {
+/** The vertical rule from a venue down into Boros, with its label beside it.
+ * Desktop only: stacked, the boxes already sit directly above one another. */
+function Connector({ tone, label }: { tone: 'emerald' | 'rose'; label?: string }) {
+  const line = tone === 'emerald' ? 'bg-emerald-500/40' : 'bg-rose-500/40';
+  const arrow = tone === 'emerald' ? 'border-t-emerald-500/60' : 'border-t-rose-500/60';
   return (
-    <div className="flex items-baseline gap-2">
-      <span aria-hidden="true" className={`h-1.5 w-1.5 shrink-0 rounded-full ${dot}`} />
-      <span className="text-[12.5px] text-ink-100">{label}</span>
-      <span className="text-[10.5px] text-ink-500">{note}</span>
-    </div>
-  );
-}
-
-function Row({
-  left,
-  right,
-  strong = false,
-  muted = false,
-}: {
-  left: string;
-  right: React.ReactNode;
-  strong?: boolean;
-  muted?: boolean;
-}) {
-  return (
-    <div className="flex flex-wrap items-baseline justify-between gap-x-3">
-      <span className={`text-[12px] ${muted ? 'text-ink-400' : 'text-ink-300'}`}>{left}</span>
+    // items-center on the COLUMN, so the rule lands under the middle of the
+    // venue box above it. It used to be `pl-6`, a hardcoded offset that put the
+    // arrow ~220px left of the box centre.
+    <div className="flex flex-col items-center">
+      <span className={`h-8 w-px ${line}`} />
+      {/* CSS triangle: cheaper than an svg for one arrowhead. */}
       <span
-        className={`num ${strong ? 'text-base font-bold' : 'text-[13px] font-semibold'} ${
-          muted ? 'text-ink-400' : 'text-ink-100'
-        }`}
-      >
-        {right}
+        aria-hidden="true"
+        className={`h-0 w-0 border-x-4 border-t-[6px] border-x-transparent ${arrow}`}
+      />
+      {label && <span className="mt-1 text-[11.5px] leading-tight text-ink-400">{label}</span>}
+    </div>
+  );
+}
+
+/** One Boros YU leg: the fixed rate it locks, and the floating leg it pays or
+ * receives to cancel the perp above it. */
+function YuLeg({
+  tone,
+  title,
+  fixedLabel,
+  fixedRate,
+  note,
+}: {
+  tone: 'emerald' | 'rose';
+  title: string;
+  fixedLabel: string;
+  fixedRate: string;
+  note: string;
+}) {
+  const box =
+    tone === 'emerald'
+      ? 'border-emerald-500/30 bg-emerald-500/[0.04]'
+      : 'border-rose-500/30 bg-rose-500/[0.04]';
+  const rate = tone === 'emerald' ? 'text-emerald-400' : 'text-rose-400';
+  return (
+    <div className={`flex flex-col gap-1 rounded-lg border px-3 py-2.5 ${box}`}>
+      <span className="text-[13px] text-ink-100">{title}</span>
+      <span className="text-[13px] font-semibold text-ink-200">
+        {fixedLabel} <span className={`num ${rate}`}>{fixedRate}</span>
+        <span className="ml-1.5 text-[11.5px] font-normal text-ink-500">· {note}</span>
       </span>
     </div>
   );
+}
+
+/** One step in the math chain. */
+function Step({ value, label }: { value: string; label: string }) {
+  return (
+    // The wrapper's baseline IS the value's baseline (the label sits below it),
+    // so an items-baseline row aligns the arrows to the digits.
+    <span className="flex flex-col">
+      <span className="num text-lg font-bold leading-none tracking-tight text-ink-100 sm:text-xl">
+        {value}
+      </span>
+      <span className="mt-1 text-[10.5px] leading-none text-ink-400">{label}</span>
+    </span>
+  );
+}
+
+/** Sits on the same text BASELINE as the values it points between (the row is
+ * items-baseline). The arrow glyph is centred on its own baseline, so it lands
+ * mid-digit rather than under it. */
+function Arrow(): ReactNode {
+  return (
+    <span aria-hidden="true" className="shrink-0 text-lg leading-none text-ink-600">
+      →
+    </span>
+  );
+}
+
+function Dash(): ReactNode {
+  return <span aria-hidden="true" className="h-px w-4 bg-ink-700" />;
 }

@@ -3,7 +3,6 @@ import { Faq } from './landing/Faq';
 import { LandingHero } from './landing/LandingHero';
 import { MechanismDiagram } from './landing/MechanismDiagram';
 import { ThreeThings } from './landing/ThreeThings';
-import { TopOpportunities } from './landing/TopOpportunities';
 import { REPO_URL } from './lib/landing';
 
 /**
@@ -16,10 +15,11 @@ import { REPO_URL } from './lib/landing';
  * two fixed rates, leveraged by the perp legs. `netFixedAprOnCapital` already
  * encodes all of it — see MechanismDiagram for the picture.
  *
- * Top to bottom: hero (the single best live spread, bare) → the same pair
- * broken open as a 4-leg diagram, which doubles as the hero's explanation →
- * a shop-window list of live spreads that pay → "3 things you need", the only
- * setup surface on the page → an FAQ holding every caveat.
+ * Top to bottom: a split hero — the claim carrying the best live number on the
+ * left, that same pair broken open as a 4-leg diagram on the right, so the
+ * proof sits beside the claim rather than under it → a shop-window list of
+ * live spreads that pay → "3 things you need", the only setup surface on the
+ * page → an FAQ holding every caveat.
  *
  * There is deliberately no step-by-step rail at the bottom any more: it
  * restated the three cards in a second shape, so its content was folded INTO
@@ -52,16 +52,21 @@ export function LandingApp() {
         </div>
       </header>
 
-      <main className="mx-auto flex w-full max-w-[1500px] flex-1 flex-col gap-16 px-5 py-8 sm:gap-20 sm:py-12">
-        {/* Hero + mechanism box are one argument (the number, then why it's
-              true), so they sit close together with their own tight gap instead
-              of the page's normal section rhythm — and both need to clear the
-              1440x1000 fold together. */}
-        <div className="flex flex-col gap-4 sm:gap-5">
-          <LandingHero />
-          <MechanismDiagram />
-        </div>
-        <TopOpportunities />
+      {/* Section rhythm is deliberately tighter than the usual landing-page
+          80px: these sections are short (the hero is ~330px), and a gap that
+          approaches a section's own height reads as the page having stalled
+          rather than as breathing room. */}
+      {/* One width on the MAIN column, not per section: the hero used to run
+          the full 1500px while the blocks below sat at 768-1024, so nothing
+          lined up vertically. Setting it here means every block shares an edge
+          and none of them can drift apart again. 1200 over Tailwind's 5xl
+          (1024), which left the three setup cards visibly cramped. */}
+      <main className="mx-auto flex w-full max-w-[1200px] flex-1 flex-col gap-10 px-5 py-8 sm:gap-16 sm:py-10">
+        {/* Hero = pitch + the live number AND the spreads behind it, one card.
+              The mechanism diagram follows as the answer to "how", explaining
+              the same pair the panel just headlined. */}
+        <LandingHero />
+        <MechanismDiagram />
         <ThreeThings />
         <Faq />
       </main>
