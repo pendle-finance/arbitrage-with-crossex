@@ -20,11 +20,9 @@ export const INSTALL_CMD_WINDOWS =
  * tool that holds exchange keys, and it asks for citations so the answer can be
  * checked rather than believed.
  *
- * Points at the pendle-finance org, unlike REPO_URL/INSTALL_CMD* above: this is
- * prose a human pastes into a chat, not an endpoint anything fetches, so it can
- * follow the org move without waiting on the raw-content URLs to be verified.
- * It also sits one FAQ row below a pendle-finance link, and two different repo
- * URLs for the same project is exactly the doubt this prompt exists to remove. */
+ * The URL here must match REPO_URL above: this prompt renders one FAQ row below
+ * a link built from it, and two different repo URLs for the same project is
+ * exactly the doubt the prompt exists to remove. */
 export const AUDIT_PROMPT = `Audit this open-source tool for me before I run it:
 https://github.com/pendle-finance/crossex-boros-terminal
 
