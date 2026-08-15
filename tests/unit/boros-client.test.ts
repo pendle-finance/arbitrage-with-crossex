@@ -3,15 +3,21 @@
  * (18-dec settleFeeRate), the transactions pagination loop, response-shape
  * guards, and error categorization (429 → rate-limited so TtlCache cools down).
  */
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   fetchBorosCollaterals,
   fetchBorosMarkets,
   fetchBorosOrderBook,
   fetchBorosTransactions,
   resolveCollateralPricesUsd,
+  setClientTagContext,
   type FetchLike,
 } from '../../src/core/boros/client';
+
+// The client tag lives in module state; reset it around every test so a case
+// that sets a version/active flag can never leak into the plain-tag assertions.
+beforeEach(() => setClientTagContext({ version: null, active: false }));
+afterEach(() => setClientTagContext({ version: null, active: false }));
 
 const ADDR = '0x' + 'ab'.repeat(20);
 
@@ -318,5 +324,36 @@ describe('client identification tag', () => {
     for (const url of urls) {
       expect(url.searchParams.get('pendle_client'), url.pathname).toBe('boroscrossex');
     }
+  });
+
+  const tagOf = async (): Promise<string | null> => {
+    let seen: URL | undefined;
+    await fetchBorosMarkets(
+      stub((url) => {
+        seen = url;
+        return { body: { results: [] } };
+      }),
+    );
+    return seen!.searchParams.get('pendle_client');
+  };
+
+  it('appends the configured version', async () => {
+    setClientTagContext({ version: '1.3.0' });
+    expect(await tagOf()).toBe('boroscrossex1.3.0');
+  });
+
+  it('appends _active for a credentialed user, after the version', async () => {
+    setClientTagContext({ version: '1.3.0', active: true });
+    expect(await tagOf()).toBe('boroscrossex1.3.0_active');
+  });
+
+  it('appends _active with no version when the version is unknown', async () => {
+    setClientTagContext({ active: true });
+    expect(await tagOf()).toBe('boroscrossex_active');
+  });
+
+  it('drops a version that fails the safe-charset check', async () => {
+    setClientTagContext({ version: 'a b?' });
+    expect(await tagOf()).toBe('boroscrossex');
   });
 });

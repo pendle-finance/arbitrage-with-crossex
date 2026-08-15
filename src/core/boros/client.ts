@@ -152,12 +152,42 @@ export interface BorosTxn {
   postPositionS: string;
 }
 
-/** Client-identification tag the Boros backend expects on every request from
- * this tool. Appended centrally here so no fetcher can forget it. */
-const CLIENT_TAG = 'pendle_client=boroscrossex';
+/**
+ * Client-identification tag the Boros backend expects on every request from
+ * this tool. Appended centrally here so no fetcher can forget it. The tag is
+ * `pendle_client=boroscrossex<version><_active?>` — e.g. `boroscrossex1.3.0` or
+ * `boroscrossex1.3.0_active` for a credentialed ("active") user.
+ *
+ * WHY mutable module state instead of a const: the version comes from a server
+ * boot-time fs read of version.json, and `active` flips at runtime when a user
+ * hot-swaps in Gate credentials — neither is knowable at import. This core
+ * module stays free of any fs/env reads (that would couple it to the server
+ * layout); the server injects both via `setClientTagContext`. The defaults
+ * reproduce today's plain `boroscrossex` tag, so any caller that never sets the
+ * context (e.g. unit tests) is unaffected.
+ */
+const clientTagState = { version: '', active: false };
+
+/**
+ * Merge a partial update into the client-tag context. A null `version` clears
+ * it (falls back to the versionless tag). The version is sanitized defensively
+ * because it is concatenated into a URL unencoded: trimmed, and accepted only
+ * if it matches the safe set below — otherwise it is treated as absent.
+ */
+export function setClientTagContext(ctx: { version?: string | null; active?: boolean }): void {
+  if (ctx.version !== undefined) {
+    const trimmed = ctx.version === null ? '' : ctx.version.trim();
+    clientTagState.version = /^[0-9A-Za-z._-]+$/.test(trimmed) ? trimmed : '';
+  }
+  if (ctx.active !== undefined) {
+    clientTagState.active = ctx.active;
+  }
+}
 
 async function getJson(fetchImpl: FetchLike, path: string): Promise<unknown> {
-  const url = `${BOROS_BASE_URL}${path}${path.includes('?') ? '&' : '?'}${CLIENT_TAG}`;
+  const clientTag =
+    'pendle_client=boroscrossex' + clientTagState.version + (clientTagState.active ? '_active' : '');
+  const url = `${BOROS_BASE_URL}${path}${path.includes('?') ? '&' : '?'}${clientTag}`;
   let resp: Awaited<ReturnType<FetchLike>>;
   try {
     resp = await fetchImpl(url, { signal: AbortSignal.timeout(15_000) });

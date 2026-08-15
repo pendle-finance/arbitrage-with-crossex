@@ -1,6 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { FastifyInstance } from 'fastify';
+import { setClientTagContext } from '../../core/boros/client';
 import { makeClients } from '../../core/clients';
 import { classifyGateError, CoreError } from '../../core/errors';
 import type { AppDeps } from '../app';
@@ -77,6 +78,10 @@ export function credentialsRoutes(deps: AppDeps) {
       process.env.GATE_API_KEY = key;
       process.env.GATE_API_SECRET = secret;
       svc.setClients(candidate);
+      // This user is now "active" — tag subsequent Boros API traffic accordingly.
+      // Credentials can only be added/replaced here, never removed, so there is
+      // no active:false path.
+      setClientTagContext({ active: true });
       deps.cache.bust(''); // every cached read may belong to the old account
 
       return reply.ok({ ok: true, accountMode });

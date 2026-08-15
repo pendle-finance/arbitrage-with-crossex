@@ -5,6 +5,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import fastifyStatic from '@fastify/static';
+import { setClientTagContext } from '../core/boros/client';
 import { makeClientsIfConfigured, requireClients, type Clients } from '../core/clients';
 import { Store } from '../engine/db';
 import { startLoop, type LoopDeps } from '../engine/loop';
@@ -61,6 +62,12 @@ const clientsRef: { current: Clients | null } = {
   current: publicMode ? null : makeClientsIfConfigured(),
 };
 const getClients = () => requireClients(clientsRef.current);
+
+// Stamp the version onto every Boros API request (public mode too — it also
+// queries the public API), and mark this user "active" when credentials are
+// already configured. The credentials route flips active:true on a later
+// hot-swap. Core reads neither fs nor env, so the server injects both here.
+setClientTagContext({ version: readLocalVersion(repoRoot), active: Boolean(clientsRef.current) });
 
 // The engine (SQLite ledger + reconcile loop) exists only off public mode: the
 // public box is read-only, with no data dir, no ledger, and no venue mutations.
