@@ -57,7 +57,7 @@ export function LandingApp() {
       </main>
 
       <footer className="border-t border-ink-800 px-5 py-6 text-center text-[11px] text-ink-500">
-        Free, open source, experimental software — not a Pendle product. It places real orders with
+        Free, open source, experimental software. It places real orders with
         real funds and can lose money. Nothing here is financial, investment, legal or tax advice.
       </footer>
     </div>
