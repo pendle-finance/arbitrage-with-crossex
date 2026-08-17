@@ -1,9 +1,13 @@
 /** The public shell (Variant A — "the number leads"): a bare hero number, the
  * live 4-leg diagram that explains it, a shop-window spreads list, "three
- * things you need" as the page's only setup surface, and an FAQ holding the
- * caveats. The old step-by-step rail (LandingOnboardingGuide) was folded into
- * the three cards and deleted — the terminal's own OnboardingGuide is a
- * different component and is untouched. */
+ * things you need" as the OVERVIEW's only setup surface, and an FAQ holding the
+ * caveats.
+ *
+ * These cover the `overview` route. The page also has a `#/rates` route
+ * (RatesExplorer: the full opportunities panel plus the restored
+ * LandingOnboardingGuide rail) — see useHashRoute.test.tsx and
+ * RatesExplorer.test.tsx. The terminal's own OnboardingGuide is a different
+ * component and is untouched. */
 import { screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { LandingApp } from './LandingApp';

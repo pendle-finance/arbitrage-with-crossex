@@ -55,9 +55,21 @@ export function MechanismDiagram() {
     <section className="flex w-full flex-col gap-5 px-1">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <h2 className="text-xl font-bold tracking-tight text-ink-100 sm:text-2xl">
+          {/* The RATE, not the asset: "How that ETH number is built" named the
+              wrong thing — the number a visitor is asking about is the headline
+              APR they just read, and printing it here ties this section to the
+              hero and to the result at the end of the math row below. Tone
+              follows the sign, same rule as that result. */}
           {live ? (
             <>
-              How that <span className="num text-emerald-400">{d.base}</span> number is built
+              How that{' '}
+              <span
+                className={`num ${d.onCapital < 0 ? 'text-rose-400' : 'text-emerald-400'}`}
+              >
+                {d.onCapital < 0 ? '' : '+'}
+                {pct(d.onCapital)}
+              </span>{' '}
+              number is built
             </>
           ) : (
             'How the spread is built'

@@ -21,7 +21,7 @@ import { positiveOnly, rankOpportunities, useLandingOpportunities } from './land
  * pair's costs beat its spread the headline goes red and says so — nothing is
  * hidden, it just isn't listed as an offer.
  */
-export function LiveRatesPanel() {
+export function LiveRatesPanel({ onExplore }: { onExplore: () => void }) {
   const query = useLandingOpportunities();
   // One ranking, reused. Calling rankOpportunities twice built two sets of
   // objects, so an identity filter against `best` silently matched nothing and
@@ -151,6 +151,20 @@ export function LiveRatesPanel() {
           </ol>
         )}
 
+        {/* A real button rather than a click handler on the whole card: the
+            rows above carry their own title tooltips, and a card-wide click
+            target would swallow them and leave the panel unreachable by
+            keyboard. Shown even when the list is empty or errored — the deep
+            view has the assumptions strip, which is exactly what a visitor
+            wants when nothing prices at this size. */}
+        <button
+          type="button"
+          onClick={onExplore}
+          className="mt-1 flex w-full items-center justify-center gap-1.5 rounded-lg border border-ink-700 bg-ink-900/60 px-3 py-2 text-xs font-semibold text-ink-200 transition-colors hover:border-cyan-500/50 hover:text-cyan-200"
+        >
+          Show me more
+          <span aria-hidden="true">→</span>
+        </button>
       </div>
     </div>
   );

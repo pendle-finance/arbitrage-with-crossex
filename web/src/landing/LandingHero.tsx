@@ -10,7 +10,7 @@ import { LiveRatesPanel } from './LiveRatesPanel';
  *
  * No data hook here at all: nothing on this side is live.
  */
-export function LandingHero() {
+export function LandingHero({ onExplore }: { onExplore: () => void }) {
   return (
     <section className="grid grid-cols-1 items-center gap-8 pt-2 lg:grid-cols-[minmax(0,1fr)_minmax(0,0.92fr)] lg:gap-12">
       <div className="flex flex-col items-start gap-5">
@@ -32,7 +32,7 @@ export function LandingHero() {
         </a>
       </div>
 
-      <LiveRatesPanel />
+      <LiveRatesPanel onExplore={onExplore} />
     </section>
   );
 }

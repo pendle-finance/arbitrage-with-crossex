@@ -165,7 +165,7 @@ export function ThreeThings() {
         <ThingCard
           n={3}
           title="A funded CrossEx account"
-          what="Capital on Gate, moved into CrossEx. Plus a little on-chain gas."
+          what="Capital on Gate, moved into CrossEx."
         >
           <How>
             <ol className="flex list-decimal flex-col gap-0.5 pl-4 marker:text-ink-500">

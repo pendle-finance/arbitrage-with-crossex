@@ -2,7 +2,9 @@ import { BrandMark } from './components/BrandMark';
 import { Faq } from './landing/Faq';
 import { LandingHero } from './landing/LandingHero';
 import { MechanismDiagram } from './landing/MechanismDiagram';
+import { RatesExplorer } from './landing/RatesExplorer';
 import { ThreeThings } from './landing/ThreeThings';
+import { useHashRoute } from './landing/useHashRoute';
 import { REPO_URL } from './lib/landing';
 
 /**
@@ -19,6 +21,8 @@ import { REPO_URL } from './lib/landing';
  * exists on this page.
  */
 export function LandingApp() {
+  const [route, navigate] = useHashRoute();
+
   return (
     <div className="flex min-h-full flex-col">
       <header className="sticky top-0 z-40 border-b border-ink-800 bg-ink-950/80 backdrop-blur">
@@ -46,14 +50,30 @@ export function LandingApp() {
           lined up vertically. Setting it here means every block shares an edge
           and none of them can drift apart again. 1200 over Tailwind's 5xl
           (1024), which left the three setup cards visibly cramped. */}
-      <main className="mx-auto flex w-full max-w-[1200px] flex-1 flex-col gap-10 px-5 py-8 sm:gap-16 sm:py-10">
-        {/* Hero = pitch + the live number AND the spreads behind it, one card.
+      {/* The overview is one 1200px column (see above). The rates view carries
+          a 360px setup rail beside the panel, and at 1200 that left the cards
+          too narrow to read — so it gets the terminal's own 1500px. */}
+      <main
+        className={`mx-auto flex w-full flex-1 flex-col gap-10 px-5 py-8 sm:gap-16 sm:py-10 ${
+          route === 'rates' ? 'max-w-[1500px]' : 'max-w-[1200px]'
+        }`}
+      >
+        {route === 'rates' ? (
+          /* The deep view replaces the pitch rather than sitting under it: a
+             visitor who asked for every spread has already read the hero, and
+             leaving it above would push the list they asked for off-screen. */
+          <RatesExplorer onBack={() => navigate('overview')} />
+        ) : (
+          <>
+            {/* Hero = pitch + the live number AND the spreads behind it, one card.
               The mechanism diagram follows as the answer to "how", explaining
               the same pair the panel just headlined. */}
-        <LandingHero />
-        <MechanismDiagram />
-        <ThreeThings />
-        <Faq />
+            <LandingHero onExplore={() => navigate('rates')} />
+            <MechanismDiagram />
+            <ThreeThings />
+            <Faq />
+          </>
+        )}
       </main>
 
       <footer className="border-t border-ink-800 px-5 py-6 text-center text-[11px] text-ink-500">
