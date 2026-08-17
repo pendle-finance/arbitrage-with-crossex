@@ -80,6 +80,21 @@ function landingHtml(): PluginOption {
           .replace(
             '  </head>',
             [
+              // Trailing-slash guard, index ONLY. The landing is served behind
+              // reverse proxies at a sub-path (e.g. boros.pendle.finance/crossex
+              // -> Netlify 200-rewrite), and the bundle's relative './assets' +
+              // './api' URLs only resolve correctly when the document URL ends
+              // in '/': at a bare '/crossex' they resolve at the domain root
+              // and the page renders blank. The proxy layer cannot express the
+              // redirect (Netlify's _redirects matching is slash-agnostic and
+              // loops), so the page fixes its own URL before any module runs
+              // (inline head script beats the deferred module scripts; the
+              // preload scanner may fetch once in vain — harmless). At '/'
+              // (direct origin, dev preview) this is a no-op. position.html
+              // must NOT get this: '/crossex/position' already resolves
+              // './assets' to '/crossex/assets', and a forced slash would
+              // break exactly what this fixes here.
+              `    <script>if(!location.pathname.endsWith('/'))location.replace(location.pathname+'/'+location.search+location.hash);</script>`,
               `    <meta name="description" content="${LANDING_DESCRIPTION}" />`,
               `    <meta property="og:title" content="${LANDING_TITLE}" />`,
               `    <meta property="og:description" content="${LANDING_DESCRIPTION}" />`,
