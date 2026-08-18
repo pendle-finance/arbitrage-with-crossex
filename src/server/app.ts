@@ -145,6 +145,13 @@ export function buildApp(deps: AppDeps): FastifyInstance {
       reply.header('X-Content-Type-Options', 'nosniff');
       reply.header('Referrer-Policy', 'strict-origin-when-cross-origin');
     });
+    // CDNs in front cache header-less responses; default everything to no-store.
+    app.addHook('onSend', async (_req, reply, payload) => {
+      if (!reply.getHeader('cache-control') && !reply.raw.getHeader('cache-control')) {
+        reply.header('cache-control', 'no-store');
+      }
+      return payload;
+    });
   } else {
     app.addHook('onRequest', async (req, reply) => {
       // The Host/Origin guard cannot stop framing: a page that iframes
