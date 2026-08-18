@@ -26,9 +26,9 @@ const TEMPLATE = `<!doctype html>
     <meta property="og:type" content="website" />
     <meta name="twitter:card" content="summary_large_image" />
     <!-- /position-meta -->
-    <link rel="canonical" href="https://crossexboros.com/position" />
-    <meta property="og:url" content="https://crossexboros.com/position" />
-    <meta property="og:image" content="https://crossexboros.com/position-og.png" />
+    <link rel="canonical" href="https://boros.pendle.finance/crossex/position" />
+    <meta property="og:url" content="https://boros.pendle.finance/crossex/position" />
+    <meta property="og:image" content="https://boros.pendle.finance/crossex/position-og.png" />
   </head>
   <body><div id="root"></div></body>
 </html>
@@ -112,9 +112,9 @@ describe('renderPositionHtml (pure)', () => {
 
   it('rewrites canonical/og:url to this exact share, og:image untouched', () => {
     const html = renderPositionHtml(TEMPLATE, validD);
-    expect(html).toContain(`<link rel="canonical" href="https://crossexboros.com/position?d=${validD}" />`);
-    expect(html).toContain(`<meta property="og:url" content="https://crossexboros.com/position?d=${validD}" />`);
-    expect(html).toContain('<meta property="og:image" content="https://crossexboros.com/position-og.png" />');
+    expect(html).toContain(`<link rel="canonical" href="https://boros.pendle.finance/crossex/position?d=${validD}" />`);
+    expect(html).toContain(`<meta property="og:url" content="https://boros.pendle.finance/crossex/position?d=${validD}" />`);
+    expect(html).toContain('<meta property="og:image" content="https://boros.pendle.finance/crossex/position-og.png" />');
   });
 
   it('returns the template byte-identical for every malformed shape', () => {
@@ -162,7 +162,7 @@ describe('GET /position', () => {
     const res = await app.inject({
       method: 'GET',
       url: `/position?d=${validD}`,
-      headers: { host: 'crossexboros.com' },
+      headers: { host: 'boros.pendle.finance/crossex' },
     });
     expect(res.statusCode).toBe(200);
     expect(res.headers['content-type']).toContain('text/html');

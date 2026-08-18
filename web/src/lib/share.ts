@@ -6,7 +6,7 @@
 import { encodeSharePayload, type SharePayloadV1 } from './shareCodec';
 import { fmtDateUtc, fmtPct, fmtUsd } from './fmt';
 
-export const SHARE_BASE_URL = 'https://crossexboros.com';
+export const SHARE_BASE_URL = 'https://boros.pendle.finance/crossex';
 export const SHARE_PATH = '/position';
 
 /** Whole days of the strategy's term — clock start to maturity — the

@@ -1,4 +1,4 @@
-/** The public shared-position page (`crossexboros.com/position?d=…`).
+/** The public shared-position page (`boros.pendle.finance/crossex/position?d=…`).
  *
  * Fully static from the URL payload: the codec's strict schema is the only
  * input validation needed, decoded strings render exclusively as React text

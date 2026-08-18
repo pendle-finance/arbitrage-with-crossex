@@ -1,5 +1,5 @@
 /** Share-position payload codec — the wire format behind
- * `crossexboros.com/position?d=<encoded>`.
+ * `boros.pendle.finance/crossex/position?d=<encoded>`.
  *
  * The payload is a compact short-key JSON snapshot of one 4-leg position,
  * base64url-encoded into the URL itself: the public box stores nothing, so the

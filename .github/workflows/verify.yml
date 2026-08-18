@@ -42,7 +42,7 @@ jobs:
       # deploy so the og:image/canonical injection path is the one that ships.
       - run: yarn --cwd web build:landing
         env:
-          LANDING_URL: https://crossexboros.com
+          LANDING_URL: https://boros.pendle.finance/crossex
       - run: |
           shopt -s nullglob
           pos=(web/dist/assets/position-*.js)

@@ -1,4 +1,4 @@
-# Public landing deployment (crossexboros.com): the Fastify server in PUBLIC_MODE
+# Public landing deployment (boros.pendle.finance/crossex): the Fastify server in PUBLIC_MODE
 # serving the prebuilt landing SPA. The frontend is built by deploy/deploy.sh
 # before the image — this image never runs tsc/vite (the VM is small on purpose).
 # The container holds ZERO secrets: no .env, no keys, and PUBLIC_MODE registers
