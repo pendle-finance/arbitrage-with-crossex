@@ -4,7 +4,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import fastifyStatic from '@fastify/static';
+import fastifyStatic, { type FastifyStaticOptions } from '@fastify/static';
 import { setClientTagContext } from '../core/boros/client';
 import { makeClientsIfConfigured, requireClients, type Clients } from '../core/clients';
 import { Store } from '../engine/db';
@@ -161,7 +161,18 @@ if (fs.existsSync(path.join(webDist, 'index.html'))) {
     app.get('/', serveIndex);
     app.get('/index.html', serveIndex);
   }
-  app.register(fastifyStatic, { root: webDist });
+  // Public landing sits behind CDNs: never cache HTML, hashed assets are immutable.
+  const staticOpts: FastifyStaticOptions = { root: webDist };
+  if (publicMode) {
+    staticOpts.cacheControl = false;
+    staticOpts.setHeaders = (res, filePath) => {
+      if (filePath.endsWith('.html')) res.setHeader('cache-control', 'no-store');
+      else if (filePath.includes(`${path.sep}assets${path.sep}`))
+        res.setHeader('cache-control', 'public, max-age=31536000, immutable');
+      else res.setHeader('cache-control', 'public, max-age=60, must-revalidate');
+    };
+  }
+  app.register(fastifyStatic, staticOpts);
 }
 
 app
