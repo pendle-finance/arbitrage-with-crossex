@@ -24,7 +24,7 @@ const FAQS: { q: string; a: ReactNode }[] = [
     a: (
       <>
         The Pendle team. It's an open-source project, published at{' '}
-        <Ext href={REPO_URL}>github.com/pendle-finance/crossex-boros-terminal</Ext>. It is
+        <Ext href={REPO_URL}>github.com/pendle-finance/arbitrage-with-crossex</Ext>. It is
         still experimental software, provided "as is" — use it at your own risk.
       </>
     ),
@@ -63,7 +63,7 @@ const FAQS: { q: string; a: ReactNode }[] = [
     a: (
       <>
         It's open source and experimental. Read it yourself:{' '}
-        <Ext href={REPO_URL}>github.com/pendle-finance/crossex-boros-terminal</Ext>, or hand
+        <Ext href={REPO_URL}>github.com/pendle-finance/arbitrage-with-crossex</Ext>, or hand
         the prompt below to an assistant you trust before you paste in a key.
       </>
     ),

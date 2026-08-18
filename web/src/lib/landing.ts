@@ -3,16 +3,16 @@
  * leaves VITE_LANDING unset so every landing branch is inert. */
 export const IS_LANDING = import.meta.env.VITE_LANDING === '1';
 
-export const REPO_URL = 'https://github.com/pendle-finance/crossex-boros-terminal';
+export const REPO_URL = 'https://github.com/pendle-finance/arbitrage-with-crossex';
 
 /** Verbatim from README "Install (macOS)" — the one command a visitor runs. */
 export const INSTALL_CMD =
-  '/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/pendle-finance/crossex-boros-terminal/main/install.sh)"';
+  '/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/pendle-finance/arbitrage-with-crossex/main/install.sh)"';
 
 /** Verbatim from README "Install (Windows)". Windows 10/11 with the built-in
  * Windows PowerShell 5 — the visitor installs nothing first. */
 export const INSTALL_CMD_WINDOWS =
-  'irm https://raw.githubusercontent.com/pendle-finance/crossex-boros-terminal/main/install.ps1 | iex';
+  'irm https://raw.githubusercontent.com/pendle-finance/arbitrage-with-crossex/main/install.ps1 | iex';
 
 /** Paste-into-your-own-LLM audit prompt. The whole pitch is "don't trust us,
  * the source is right there" — this hands the visitor a concrete way to act on
@@ -24,7 +24,7 @@ export const INSTALL_CMD_WINDOWS =
  * a link built from it, and two different repo URLs for the same project is
  * exactly the doubt the prompt exists to remove. */
 export const AUDIT_PROMPT = `Audit this open-source tool for me before I run it:
-https://github.com/pendle-finance/crossex-boros-terminal
+https://github.com/pendle-finance/arbitrage-with-crossex
 
 It runs on my own machine and will hold my Gate exchange API keys. Read the real
 source, then answer:

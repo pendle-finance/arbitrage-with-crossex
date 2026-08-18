@@ -90,7 +90,7 @@ describe('LandingOnboardingGuide', () => {
     renderWithClient(<LandingOnboardingGuide />);
 
     const prompt = screen.getByText(/Audit this open-source tool/);
-    expect(prompt).toHaveTextContent('github.com/pendle-finance/crossex-boros-terminal');
+    expect(prompt).toHaveTextContent('github.com/pendle-finance/arbitrage-with-crossex');
     expect(prompt).toHaveTextContent(/send my API keys.*off my machine/s);
     expect(prompt).toHaveTextContent(/withdraw funds/);
     expect(prompt).toHaveTextContent(/install\.sh \(macOS\) and install\.ps1 \(Windows\)/);

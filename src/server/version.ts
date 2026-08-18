@@ -13,7 +13,7 @@ import * as path from 'node:path';
 import type { FetchLike } from '../core/boros/client';
 
 export const VERSION_URL =
-  'https://raw.githubusercontent.com/pendle-finance/crossex-boros-terminal/main/version.json';
+  'https://raw.githubusercontent.com/pendle-finance/arbitrage-with-crossex/main/version.json';
 const FETCH_TIMEOUT_MS = 5_000;
 /** Cap on remote highlights — the modal is a nudge, not a changelog. */
 const MAX_HIGHLIGHTS = 10;

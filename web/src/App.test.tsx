@@ -342,7 +342,7 @@ describe('user guide', () => {
     expect(alert).toHaveTextContent(/Couldn’t load the guide/);
     expect(within(alert).getByRole('link', { name: 'docs/USER_GUIDE.md' })).toHaveAttribute(
       'href',
-      'https://github.com/pendle-finance/crossex-boros-terminal/blob/main/docs/USER_GUIDE.md',
+      'https://github.com/pendle-finance/arbitrage-with-crossex/blob/main/docs/USER_GUIDE.md',
     );
   });
 });
