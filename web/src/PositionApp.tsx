@@ -49,7 +49,7 @@ function CtaFooter() {
     <section className="card p-3 text-center sm:p-5">
       <p className="text-sm leading-relaxed text-ink-300">
         This position was executed with Pendle&apos;s free, open-source{' '}
-        <span className="font-semibold text-ink-100">CrossEx-Boros Terminal</span> — it runs on
+        <span className="font-semibold text-ink-100">Arbitrage with CrossEx</span> — it runs on
         your own machine, and your keys never leave it.
       </p>
       <div className="mt-3 flex flex-wrap items-center justify-center gap-2">

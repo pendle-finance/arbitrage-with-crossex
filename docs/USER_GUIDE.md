@@ -2,7 +2,7 @@
 
 In this guide, we will cover:
 1. How the strategy works
-2. The recommended flow for using CrossEx Boros Terminal
+2. The recommended flow for using Arbitrage with CrossEx
 3. How to maximise return
 4. What could go wrong
 
@@ -21,7 +21,7 @@ Boros Academy walks through this strategy in more depth: [Fixed-Return Funding A
 
 **Fixed does not mean risk-free** - see section 4.
 
-## 2. The recommended flow for using CrossEx Boros Terminal
+## 2. The recommended flow for using Arbitrage with CrossEx
 You will use the tool for 3 things, in order:
 
 ### A. Discover and understand opportunities
@@ -113,7 +113,7 @@ Last, let's see the different ways things could go wrong:
 4. Liquidation of Boros positions:
    - If the Boros market prices move too much away from the spread you locked in, your Boros position could be **liquidated**, and the 4-legged position's fixed return is compromised.
    - To avoid this, its advisable to **maintain a buffer** on the Boros margin (especially when Boros margin is relatively non-capital-intensive)
-5. Issues with CrossEx Boros Terminal:
+5. Issues with Arbitrage with CrossEx:
    - Any issues that result in opening a **non-hedged pair** of perp positions will expose you to losses due to price fluctuation.
    - Its advisable to **double check that your perp positions are hedged** after execution.
 

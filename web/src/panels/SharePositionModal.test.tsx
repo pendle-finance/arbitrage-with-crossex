@@ -36,7 +36,7 @@ describe('SharePositionModal', () => {
       'data:image/png;base64,stub',
     );
     const download = screen.getByRole('link', { name: 'Download PNG' });
-    expect(download).toHaveAttribute('download', `crossex-boros-hype-${fmtDateUtc(payload.m)}.png`);
+    expect(download).toHaveAttribute('download', `arbitrage-with-crossex-hype-${fmtDateUtc(payload.m)}.png`);
     // jsdom defines neither ClipboardItem nor clipboard.write → no Copy image.
     expect(screen.queryByRole('button', { name: 'Copy image' })).not.toBeInTheDocument();
   });

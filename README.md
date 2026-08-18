@@ -8,7 +8,7 @@ Not available to, or intended for, any person where such use is unlawful (includ
 
 ---
 
-# CrossEx-Boros Terminal
+# Arbitrage with CrossEx
 
 **Open source tool** · **Experimental, use at your own risks**
 
@@ -38,8 +38,8 @@ press Return:
 
 When it finishes (a few minutes the first time), the terminal opens in your browser at
 **http://localhost:6688** — bookmark it. From then on the app is always running in the
-background, even after you restart your Mac. You'll also find a **"CrossEx-Boros
-Terminal"** launcher in your `~/Applications` folder.
+background, even after you restart your Mac. You'll also find a **"Arbitrage with
+CrossEx"** launcher in your `~/Applications` folder.
 
 Everything lands in one folder: `~/.boros-crossex`.
 
@@ -58,7 +58,7 @@ irm https://raw.githubusercontent.com/pendle-finance/crossex-boros-terminal/main
 
 When it finishes, the terminal opens in your browser at **http://localhost:6688** —
 bookmark it. The app then starts on its own every time you sign in, and you'll find a
-**"CrossEx-Boros Terminal"** shortcut in your Start Menu.
+**"Arbitrage with CrossEx"** shortcut in your Start Menu.
 
 Everything lands in one folder: `%LOCALAPPDATA%\CrossEx-Boros`.
 
@@ -352,7 +352,7 @@ user data lives outside the auto-updated app directory.
 
 ## Web terminal — `yarn dev` / `yarn start`
 
-A local web app ("CrossEx-Boros Terminal") wraps the same core with a monitoring dashboard and a
+A local web app ("Arbitrage with CrossEx") wraps the same core with a monitoring dashboard and a
 safety-gated trading UI:
 
 ```bash

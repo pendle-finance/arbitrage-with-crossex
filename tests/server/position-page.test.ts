@@ -19,9 +19,9 @@ const TEMPLATE = `<!doctype html>
 <html lang="en" class="dark">
   <head>
     <!-- position-meta -->
-    <title>Shared 4-leg hedged position — CrossEx-Boros</title>
+    <title>Shared 4-leg hedged position — Arbitrage with CrossEx</title>
     <meta name="description" content="A delta-neutral, fixed-rate 4-leg funding arbitrage position." />
-    <meta property="og:title" content="Shared 4-leg hedged position — CrossEx-Boros" />
+    <meta property="og:title" content="Shared 4-leg hedged position — Arbitrage with CrossEx" />
     <meta property="og:description" content="A delta-neutral, fixed-rate 4-leg funding arbitrage position." />
     <meta property="og:type" content="website" />
     <meta name="twitter:card" content="summary_large_image" />

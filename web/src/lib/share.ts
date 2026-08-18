@@ -56,5 +56,5 @@ export function buildXIntentUrl(p: SharePayloadV1): string {
 }
 
 export function shareFileName(p: SharePayloadV1): string {
-  return `crossex-boros-${p.b.toLowerCase()}-${fmtDateUtc(p.m)}.png`;
+  return `arbitrage-with-crossex-${p.b.toLowerCase()}-${fmtDateUtc(p.m)}.png`;
 }

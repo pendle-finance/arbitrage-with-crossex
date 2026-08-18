@@ -14,7 +14,7 @@ import { defineConfig } from 'vitest/config';
 // the public page metadata. Vitest runs in mode `test`, so tests always see the
 // terminal app.
 
-const LANDING_TITLE = 'CrossEx-Boros Terminal — live fixed-rate arbitrage on Boros × Gate CrossEx';
+const LANDING_TITLE = 'Arbitrage with CrossEx — live fixed-rate arbitrage on Boros × Gate CrossEx';
 const LANDING_DESCRIPTION =
   'Live delta-neutral funding-rate opportunities between Boros fixed rates and Gate CrossEx perps. ' +
   'A free, open-source terminal by Pendle that runs on your own machine — your keys never leave it.';

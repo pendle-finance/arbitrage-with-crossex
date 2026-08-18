@@ -71,7 +71,7 @@ function metaBlock(p: SharePayloadV1): string {
   const desc = clamp(
     `${pct(p.sp)} spread locked until ${dateUtc(p.m)} (${daysText}). ` +
       `Expected PnL by maturity ${signedUsd(p.p)}. Boros rate legs + hedged perps on ${venues}, ` +
-      `delta-neutral via Gate CrossEx. Self-reported — shared from the open-source CrossEx-Boros terminal.`,
+      `delta-neutral via Gate CrossEx. Self-reported — shared from the open-source Arbitrage with CrossEx terminal.`,
     DESC_MAX,
   );
   const t = escapeHtml(title);
