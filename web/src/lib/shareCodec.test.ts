@@ -7,9 +7,11 @@ import {
   type SharePayloadV1,
 } from './shareCodec';
 
-// The same case list runs against the byte-identical Node canonical copy in
-// tests/unit/share-codec.test.ts — keep the two suites and the golden vector
-// in sync (tests/unit/share-codec-mirror.test.ts pins the sources themselves).
+// The golden vector below is the CROSS-REPO contract: the decoder that has to
+// accept these bytes lives in the arbitrage-landing repo, and no test can span
+// the two. Change the fixture or its encoding only in lockstep with that repo's
+// web/src/lib/shareCodec.test.ts — a green suite here proves nothing about
+// whether shared links still open.
 
 /** Canonical 4-leg fixture. Keep the literal AND its encoding in sync with
  * tests/unit/share-codec.test.ts. */
