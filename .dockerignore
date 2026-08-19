@@ -1,8 +1,0 @@
-node_modules
-web/node_modules
-data
-.git
-.env
-.env.*
-.claude
-tests

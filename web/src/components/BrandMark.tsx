@@ -5,11 +5,12 @@ import { Chip } from './Chip';
 export function BrandMark() {
   return (
     <>
-      <h1 className="flex items-baseline gap-2 text-base font-semibold tracking-tight text-ink-100">
-        CrossEx-Boros
-        <span className="font-mono text-xs font-medium uppercase tracking-widest text-cyan-400">
-          Terminal
-        </span>
+      {/* Two-tone wordmark: the leading "Arbitrage" carries the cyan accent, the
+       * rest stays neutral. Mirrored on the canvas share card (lib/shareCard.ts)
+       * — keep the two in step. */}
+      <h1 className="flex items-baseline gap-1.5 text-base font-semibold tracking-tight text-ink-100">
+        <span className="text-cyan-400">Arbitrage</span>
+        with CrossEx
       </h1>
       <div className="flex items-center gap-2">
         <Chip sm tone="blue" title="Free and open source — audit or contribute on GitHub">

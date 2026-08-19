@@ -1,7 +1,6 @@
 /** Envelope-aware fetch helper. Unwraps { ok, data, meta } and throws a typed
  * ApiError (carrying category/message/hint/retryable) on { ok: false } or
  * transport-level failures. */
-import { IS_LANDING } from '../lib/landing';
 import type { ClassifiedError, Envelope } from './types';
 
 export class ApiError extends Error {
@@ -23,21 +22,16 @@ export class ApiError extends Error {
 }
 
 /** Resolve /api paths against the page origin so requests work in the browser
- * (Vite dev proxy → localhost:6688) AND in jsdom/msw tests (absolute URLs).
- * The landing build resolves against the page URL instead — prefix-agnostic, so
- * the public site works at a domain root or behind any proxy path. */
+ * (Vite dev proxy → localhost:6688) AND in jsdom/msw tests (absolute URLs). */
 function apiUrl(path: string): string {
-  if (IS_LANDING && typeof window !== 'undefined' && window.location) {
-    return new URL(`./api${path}`, window.location.href).toString();
-  }
   const origin =
     typeof window !== 'undefined' && window.location ? window.location.origin : 'http://localhost:6688';
   return new URL(`/api${path}`, origin).toString();
 }
 
 /** The per-install API token, injected into index.html by the backend that
- * serves it. Absent in dev (the Vite proxy attaches the header server-side)
- * and in the landing build; the untouched placeholder means the same thing —
+ * serves it. Absent in dev (the Vite proxy attaches the header server-side);
+ * the untouched placeholder means the same thing —
  * this page did not come from the terminal backend, so send nothing. */
 function authHeader(): Record<string, string> {
   const t =
@@ -64,9 +58,7 @@ export async function fetchJson<T>(path: string, init: RequestInit = {}): Promis
       category: 'network',
       message: `network error calling ${path}: ${(err as Error).message ?? String(err)}`,
       retryable: true,
-      hint: IS_LANDING
-        ? 'The live rates feed is briefly unreachable — it retries automatically.'
-        : 'Is the backend running on localhost:6688?',
+      hint: 'Is the backend running on localhost:6688?',
     });
   }
 

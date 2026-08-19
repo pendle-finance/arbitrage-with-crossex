@@ -168,13 +168,14 @@ export async function renderShareCard(p: SharePayloadV1, scale = 2): Promise<HTM
   const right = SHARE_CARD_W - 64;
 
   // --- header: wordmark left, base + hedge pills right.
-  ctx.fillStyle = TEXT_HI;
+  // Two-tone wordmark, mirroring components/BrandMark.tsx: cyan "Arbitrage",
+  // neutral "with CrossEx". Keep the two in step.
   ctx.font = `600 26px ${SANS}`;
-  ctx.fillText('CrossEx-Boros', left, 76);
-  const wordmarkW = ctx.measureText('CrossEx-Boros').width;
   ctx.fillStyle = CYAN;
-  ctx.font = `500 13px ${MONO}`;
-  ctx.fillText('T E R M I N A L', left + wordmarkW + 14, 76);
+  ctx.fillText('Arbitrage', left, 76);
+  const arbW = ctx.measureText('Arbitrage').width;
+  ctx.fillStyle = TEXT_HI;
+  ctx.fillText(' with CrossEx', left + arbW, 76);
   const hedgeTone =
     p.h === 'h'
       ? { color: EMERALD, bg: 'rgba(52,211,153,0.12)', border: 'rgba(52,211,153,0.35)' }

@@ -1,13 +1,13 @@
 <#
-  CrossEx-Boros Terminal - Windows uninstaller.
+  Arbitrage with CrossEx - Windows uninstaller.
 
-    irm https://raw.githubusercontent.com/pendle-finance/crossex-boros-terminal/main/uninstall.ps1 | iex
+    irm https://raw.githubusercontent.com/pendle-finance/arbitrage-with-crossex/main/uninstall.ps1 | iex
 
   Removes the background task, the app, and its private Node.js runtime.
   Your API keys (config\) and trade history (data\) are KEPT unless you pass
   -Purge:
 
-    & ([scriptblock]::Create((irm https://raw.githubusercontent.com/pendle-finance/crossex-boros-terminal/main/uninstall.ps1))) -Purge
+    & ([scriptblock]::Create((irm https://raw.githubusercontent.com/pendle-finance/arbitrage-with-crossex/main/uninstall.ps1))) -Purge
 
   This is the Windows counterpart of uninstall.sh; the two are kept in step.
 #>
@@ -23,8 +23,11 @@ $Root     = if ($env:BOROS_ROOT) { $env:BOROS_ROOT } else { Join-Path $env:LOCAL
 # Resolved exactly as install.ps1 resolves it: the last-resort port guard below
 # must check the port the server was actually installed on.
 $Port     = if ($env:BOROS_PORT) { [int]$env:BOROS_PORT } else { 6688 }
-$TaskName = 'CrossEx-Boros Terminal'
-$AppTitle = 'CrossEx-Boros Terminal'
+$TaskName = 'Arbitrage with CrossEx'
+$AppTitle = 'Arbitrage with CrossEx'
+# Kept in step with install.ps1: an uninstall must also clear the task and the
+# shortcut left by any previous product name, or they outlive the app.
+$LegacyTitles = @('CrossEx-Boros Terminal', 'Boros CrossEx Terminal')
 $ServerEntry = Join-Path $Root 'app\src\server\index.ts'
 $RunnerPath  = Join-Path $Root 'run-server.ps1'
 
@@ -103,6 +106,10 @@ function Stop-StaleServer {
 Say 'Stopping the background service...'
 try { Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue } catch { }
 try { Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue } catch { }
+foreach ($legacy in $LegacyTitles) {
+  try { Stop-ScheduledTask -TaskName $legacy -ErrorAction SilentlyContinue } catch { }
+  try { Unregister-ScheduledTask -TaskName $legacy -Confirm:$false -ErrorAction SilentlyContinue } catch { }
+}
 Stop-StaleServer
 
 if (@(Get-ServerProcess).Count -gt 0) {
@@ -161,8 +168,11 @@ foreach ($d in @('app', 'app.new', 'app.old', 'node', 'logs')) {
 $runner = Join-Path $Root 'run-server.ps1'
 if (Test-Path $runner) { Remove-Item -Force $runner -ErrorAction SilentlyContinue }
 
-$lnk = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\$AppTitle.url"
-if (Test-Path $lnk) { Remove-Item -Force $lnk -ErrorAction SilentlyContinue }
+$programs = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs'
+foreach ($title in @($AppTitle) + $LegacyTitles) {
+  $lnk = Join-Path $programs "$title.url"
+  if (Test-Path $lnk) { Remove-Item -Force $lnk -ErrorAction SilentlyContinue }
+}
 
 if ($Purge) {
   Say 'Removing API keys and trade history (-Purge)...'

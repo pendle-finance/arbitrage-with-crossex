@@ -45,7 +45,7 @@ describe('SharePositionModal', () => {
     mount();
     const input = screen.getByLabelText('Position share link') as HTMLInputElement;
     expect(input.value).toBe(buildShareUrl(payload));
-    expect(input.value.startsWith('https://crossexboros.com/position?d=')).toBe(true);
+    expect(input.value.startsWith('https://boros.pendle.finance/arbitrage-crossex/position?d=')).toBe(true);
     const d = new URL(input.value).searchParams.get('d') ?? '';
     expect(decodeSharePayload(d)).toEqual({ ok: true, payload });
   });

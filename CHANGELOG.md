@@ -10,7 +10,7 @@ Share a position, explain a stopped deal, and a Windows service that stays hidde
 - **A fully hedged 4-leg position box grows a "Share ↗" button.** It renders a PNG card — "I'm
   getting X% fixed APR on $Y capital" plus the four legs — and offers the link, the PNG, and an X
   post pre-filled with the link. The numbers are frozen as you saw them, cost toggles included.
-- **The link is a page that explains the trade.** `crossexboros.com/position` draws how the four
+- **The link is a page that explains the trade.** `boros.pendle.finance/arbitrage-crossex/position` draws how the four
   legs hedge, the PnL waterfall and the capital split, with collapsible explainers, a roll-over /
   close-perps toggle that re-derives every number, and a "self-reported, not verified" disclaimer.
 - **The whole snapshot travels in the URL.** The public page stores nothing — no database, no new

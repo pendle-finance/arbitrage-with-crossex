@@ -1,8 +1,8 @@
 <#
-  CrossEx-Boros Terminal - Windows installer.
+  Arbitrage with CrossEx - Windows installer.
 
   Usage (paste into PowerShell):
-    irm https://raw.githubusercontent.com/pendle-finance/crossex-boros-terminal/main/install.ps1 | iex
+    irm https://raw.githubusercontent.com/pendle-finance/arbitrage-with-crossex/main/install.ps1 | iex
 
   What this script does - and everything it does:
     1. Downloads a private copy of Node.js (official nodejs.org build, checksum
@@ -33,7 +33,7 @@ $ProgressPreference = 'SilentlyContinue'  # Invoke-WebRequest is far faster with
 # ---------------------------------------------------------------------------
 # Configuration (BOROS_* env vars exist for development/testing overrides)
 # ---------------------------------------------------------------------------
-$RepoSlug = if ($env:BOROS_REPO)   { $env:BOROS_REPO }   else { 'pendle-finance/crossex-boros-terminal' }
+$RepoSlug = if ($env:BOROS_REPO)   { $env:BOROS_REPO }   else { 'pendle-finance/arbitrage-with-crossex' }
 $Branch   = if ($env:BOROS_BRANCH) { $env:BOROS_BRANCH } else { 'main' }
 # Pin an exact commit, tag or branch: BOROS_REF wins over BOROS_BRANCH. This is
 # how you install the very tree you audited - see "Install exactly what you
@@ -42,8 +42,15 @@ $Ref      = $env:BOROS_REF
 $Port     = if ($env:BOROS_PORT)   { [int]$env:BOROS_PORT } else { 6688 }
 $Root     = if ($env:BOROS_ROOT)   { $env:BOROS_ROOT }   else { Join-Path $env:LOCALAPPDATA 'CrossEx-Boros' }
 $NodeLine = 'v24'
-$TaskName = 'CrossEx-Boros Terminal'
-$AppTitle = 'CrossEx-Boros Terminal'
+$TaskName = 'Arbitrage with CrossEx'
+$AppTitle = 'Arbitrage with CrossEx'
+# Display names this app shipped under before. The scheduled task and the Start
+# Menu shortcut are keyed BY NAME, so a rename orphans the old ones: the old task
+# keeps launching the old install and the two servers fight over the port.
+# APPEND the outgoing name on every rename - never replace the list.
+# ($Root is deliberately NOT renamed alongside these: it holds the API keys and
+# the trade ledger, and moving it would risk orphaning both.)
+$LegacyTitles = @('CrossEx-Boros Terminal', 'Boros CrossEx Terminal')
 $LogDir   = Join-Path $Root 'logs'
 
 $ServerEntry = Join-Path $Root 'app\src\server\index.ts'
@@ -55,7 +62,7 @@ function Fail {
   # throw, not exit: this script is normally run as `irm ... | iex`, where `exit`
   # would terminate the user's entire PowerShell session rather than the install.
   param([string]$m)
-  throw "CrossEx-Boros install failed: $m"
+  throw "Arbitrage with CrossEx install failed: $m"
 }
 
 # `$IsWindows` exists only in PowerShell 6+; on Windows PowerShell 5.1 it is undefined.
@@ -504,6 +511,13 @@ while (`$true) {
 function Stop-RunningService {
   Say 'Stopping any running instance...'
   Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
+  # Tasks registered under a previous product name. Without this, an upgrade
+  # across a rename leaves the old task registered and starting the old app -
+  # two servers, one port. This is what makes the rename a safe UPDATE.
+  foreach ($legacy in $LegacyTitles) {
+    Stop-ScheduledTask -TaskName $legacy -ErrorAction SilentlyContinue
+    Unregister-ScheduledTask -TaskName $legacy -Confirm:$false -ErrorAction SilentlyContinue
+  }
   Stop-StaleServer   # reap any old/orphaned server so re-running always updates
 
   if (Test-PortInUseByOther) {
@@ -627,6 +641,11 @@ function New-Launcher {
   # SmartScreen to object to.
   $programs = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs'
   New-Item -ItemType Directory -Force -Path $programs | Out-Null
+  # Shortcuts left by a previous product name - otherwise the Start Menu keeps
+  # one entry per name this app has ever had, all pointing at the same port.
+  foreach ($legacy in $LegacyTitles) {
+    Remove-Item -Path (Join-Path $programs "$legacy.url") -Force -ErrorAction SilentlyContinue
+  }
   $lnk = Join-Path $programs "$AppTitle.url"
   "[InternetShortcut]`r`nURL=http://localhost:$Port`r`n" | Set-Content -Path $lnk -Encoding ASCII
 }

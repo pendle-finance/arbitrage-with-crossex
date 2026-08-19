@@ -6,7 +6,11 @@
 import { encodeSharePayload, type SharePayloadV1 } from './shareCodec';
 import { fmtDateUtc, fmtPct, fmtUsd } from './fmt';
 
-export const SHARE_BASE_URL = 'https://crossexboros.com';
+// The DE FACTO public link. The site is HOSTED at
+// arbitrage.pendle.finance/crossex, but boros.pendle.finance is the
+// user-facing domain we publish, so every shared link uses this form.
+// The page itself lives in the arbitrage-landing repo.
+export const SHARE_BASE_URL = 'https://boros.pendle.finance/arbitrage-crossex';
 export const SHARE_PATH = '/position';
 
 /** Whole days of the strategy's term — clock start to maturity — the

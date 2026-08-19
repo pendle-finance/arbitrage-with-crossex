@@ -187,9 +187,8 @@ export function opportunitiesRoutes(deps: AppDeps) {
       const feeTier: CrossexFeeTier | undefined = parseFeeTier(query.feeTier);
       // fresh=1 also busts the keys shared with /api/strategy, /api/symbols,
       // /api/leverage and /api/fees — deliberate: a manual refresh here means
-      // "re-read upstream". Inert in public mode: anonymous callers must not be
-      // able to force the ~100-call venue fan-out per request past the TTL cache.
-      const fresh = !deps.publicMode && query.fresh === '1';
+      // "re-read upstream".
+      const fresh = query.fresh === '1';
 
       const { value: markets, stale } = await deps.cache.get(
         'boros:markets',

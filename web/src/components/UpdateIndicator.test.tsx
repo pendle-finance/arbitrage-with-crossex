@@ -2,7 +2,7 @@
  * version; the modal shows the highlights and both OS one-liners verbatim. */
 import { fireEvent, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
-import { INSTALL_CMD, INSTALL_CMD_WINDOWS } from '../lib/landing';
+import { INSTALL_CMD, INSTALL_CMD_WINDOWS } from '../lib/app';
 import { versionHandler } from '../test/fixtures';
 import { server } from '../test/server';
 import { renderWithClient } from '../test/utils';
@@ -44,7 +44,7 @@ describe('UpdateIndicator', () => {
     expect(screen.getAllByText('(this machine)')).toHaveLength(1);
     expect(screen.getByRole('link', { name: /Full changelog/ })).toHaveAttribute(
       'href',
-      'https://github.com/pendle-finance/crossex-boros-terminal/blob/main/CHANGELOG.md',
+      'https://github.com/pendle-finance/arbitrage-with-crossex/blob/main/CHANGELOG.md',
     );
   });
 

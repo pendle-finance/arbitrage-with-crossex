@@ -1,9 +1,9 @@
 #!/bin/bash
 #
-# CrossEx-Boros Terminal — macOS installer.
+# Arbitrage with CrossEx — macOS installer.
 #
 # Usage (paste into Terminal):
-#   /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/pendle-finance/crossex-boros-terminal/main/install.sh)"
+#   /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/pendle-finance/arbitrage-with-crossex/main/install.sh)"
 #
 # What this script does — and everything it does:
 #   1. Downloads a private copy of Node.js (official nodejs.org build, checksum
@@ -21,7 +21,7 @@
 # running version first (including any orphaned/wedged copy), so an old version
 # never lingers. Your keys and trade history (kept in ~/.boros-crossex/config and
 # ~/.boros-crossex/data) are never touched.
-# Uninstall: https://github.com/pendle-finance/crossex-boros-terminal#uninstall
+# Uninstall: https://github.com/pendle-finance/arbitrage-with-crossex#uninstall
 #
 # This script is bash-3.2 compatible (macOS system bash).
 
@@ -30,7 +30,7 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 # Configuration (BOROS_* env vars exist for development/testing overrides)
 # ---------------------------------------------------------------------------
-REPO_SLUG="${BOROS_REPO:-pendle-finance/crossex-boros-terminal}"
+REPO_SLUG="${BOROS_REPO:-pendle-finance/arbitrage-with-crossex}"
 BRANCH="${BOROS_BRANCH:-main}"
 # Pin an exact commit, tag or branch: BOROS_REF wins over BOROS_BRANCH. This is
 # how you install the very tree you audited — see "Install exactly what you
@@ -40,7 +40,7 @@ PORT="${BOROS_PORT:-6688}"
 ROOT="${BOROS_ROOT:-$HOME/.boros-crossex}"
 NODE_LINE="v24"
 LABEL="com.boros.crossex-terminal"
-APP_TITLE="CrossEx-Boros Terminal"
+APP_TITLE="Arbitrage with CrossEx"
 LOG_DIR="$HOME/Library/Logs/boros-crossex"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 
@@ -346,8 +346,12 @@ wait_for_server() {
 make_launcher() {
   # A tiny local .app that opens the terminal in your browser. Created locally,
   # so macOS Gatekeeper has no reason to block it.
-  # Second path is the launcher name from before the CrossEx-Boros rename.
-  rm -rf "$HOME/Applications/$APP_TITLE.app" "$HOME/Applications/Boros CrossEx Terminal.app"
+  # The extra paths are the launcher names this app shipped under before. The
+  # .app is keyed by name, so each rename would otherwise leave a stale launcher
+  # in ~/Applications. APPEND the outgoing name on every rename; never replace.
+  rm -rf "$HOME/Applications/$APP_TITLE.app" \
+    "$HOME/Applications/CrossEx-Boros Terminal.app" \
+    "$HOME/Applications/Boros CrossEx Terminal.app"
   osacompile -e "do shell script \"open http://localhost:$PORT\"" \
     -o "$HOME/Applications/$APP_TITLE.app" >/dev/null 2>&1 || true
 }
