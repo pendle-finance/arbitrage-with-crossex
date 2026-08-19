@@ -1,13 +1,10 @@
-/** Server entry point: `tsx src/server/index.ts`. Binds to loopback only.
- *
- * This is the LOCAL terminal: it holds the user's Gate API keys, owns the
- * SQLite ledger, and runs the reconcile loop. The public marketing site and the
- * shared-position page live in a separate repo (arbitrage-landing) and share no
- * code with this one. */
+/** Server entry point: `tsx src/server/index.ts`. Binds to loopback only —
+ * unless PUBLIC_MODE=1, the read-only public deployment: no credentials, no
+ * ledger, no reconcile loop, only the public market-view routes. */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import fastifyStatic from '@fastify/static';
+import fastifyStatic, { type FastifyStaticOptions } from '@fastify/static';
 import { setClientTagContext } from '../core/boros/client';
 import { makeClientsIfConfigured, requireClients, type Clients } from '../core/clients';
 import { Store } from '../engine/db';
@@ -21,10 +18,11 @@ import { tokenizedIndexHtml } from './spa';
 import { restrictToOwner } from './secretFile';
 import { readInstallInfo, readLocalVersion } from './version';
 
+const publicMode = process.env.PUBLIC_MODE === '1';
 const port = Number(process.env.PORT ?? 6688);
-// Loopback only, always: this server exposes a credentialed trading API and
-// must never be reachable off the machine that runs it.
-const host = '127.0.0.1';
+// A public deployment binds beyond loopback (a reverse proxy fronts it); every
+// other deployment stays loopback-only.
+const host = process.env.HOST ?? '127.0.0.1';
 const repoRoot = fileURLToPath(new URL('../..', import.meta.url));
 // Overridable so installed deployments can keep user data outside the app dir
 // (which updates wipe). Defaults preserve the repo-rooted dev layout.
@@ -40,8 +38,9 @@ const hardenConfigDir = Boolean(process.env.DOTENV_CONFIG_PATH);
 
 // The .env holds the live-money Gate secret. The credentials route writes it 0600,
 // but an .env created another way (hand-edited, an older install, a permissive
-// umask) can be group/world-readable — re-assert owner-only on every boot.
-{
+// umask) can be group/world-readable — re-assert owner-only on every boot. Public
+// mode has no .env and no credentials route, so there is nothing to protect.
+if (!publicMode) {
   // restrictToOwner, not chmod: on Windows the mode bits are ignored outright,
   // so the key file would just inherit its parent directory's ACL.
   //
@@ -56,23 +55,25 @@ const hardenConfigDir = Boolean(process.env.DOTENV_CONFIG_PATH);
 }
 
 /** Mutable so the credentials service can hot-swap keys without a restart.
- * Null until the user configures keys (first-run setup guide in the web UI) —
- * a fresh install runs fine with no .env, and every credentialed code path
- * throws not-configured until the keys arrive. */
+ * Null until the user configures keys (first-run setup guide in the web UI). In
+ * public mode it stays null forever — the box has no keys and no route that
+ * could set them, so every credentialed code path throws not-configured. */
 const clientsRef: { current: Clients | null } = {
-  current: makeClientsIfConfigured(),
+  current: publicMode ? null : makeClientsIfConfigured(),
 };
 const getClients = () => requireClients(clientsRef.current);
 
-// Stamp the version onto every Boros API request, and mark this user "active" when credentials are
+// Stamp the version onto every Boros API request (public mode too — it also
+// queries the public API), and mark this user "active" when credentials are
 // already configured. The credentials route flips active:true on a later
 // hot-swap. Core reads neither fs nor env, so the server injects both here.
 setClientTagContext({ version: readLocalVersion(repoRoot), active: Boolean(clientsRef.current) });
 
-// The engine: SQLite ledger + reconcile loop.
+// The engine (SQLite ledger + reconcile loop) exists only off public mode: the
+// public box is read-only, with no data dir, no ledger, and no venue mutations.
 let engine: { store: Store; venue: VenuePort; clock: Clock; wake?: () => void } | undefined;
 let loopDeps: LoopDeps | undefined;
-{
+if (!publicMode) {
   fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
 
   // The store's EXCLUSIVE lock doubles as the single-instance guard: a second
@@ -114,25 +115,33 @@ let loopDeps: LoopDeps | undefined;
 }
 
 const webDist = path.join(repoRoot, 'web', 'dist');
+const positionHtml = path.join(webDist, 'position.html');
 
 const appDeps = {
   getClients,
   cache: new TtlCache(),
+  publicMode,
+  // Only the landing build emits position.html; a terminal dist 404s /position.
+  positionPage: fs.existsSync(positionHtml) ? { htmlPath: positionHtml } : undefined,
   // Created on first boot beside the .env. Public mode has no credentialed
   // route to protect and serves strangers by design, so it carries none.
-  authToken: readOrCreateApiToken(path.dirname(envPath)),
+  authToken: publicMode ? undefined : readOrCreateApiToken(path.dirname(envPath)),
   engine,
   // The public landing never checks for updates (route not even registered);
   // UPDATE_CHECK=0 lets an install opt out of the GitHub read entirely.
-  install: readInstallInfo(repoRoot),
-  updateCheck: { current: readLocalVersion(repoRoot), disabled: process.env.UPDATE_CHECK === '0' },
-  credentials: {
-      envPath,
-      hardenConfigDir,
-      setClients: (clients: Clients) => {
-        clientsRef.current = clients;
+  install: publicMode ? undefined : readInstallInfo(repoRoot),
+  updateCheck: publicMode
+    ? undefined
+    : { current: readLocalVersion(repoRoot), disabled: process.env.UPDATE_CHECK === '0' },
+  credentials: publicMode
+    ? undefined
+    : {
+        envPath,
+        hardenConfigDir,
+        setClients: (clients: Clients) => {
+          clientsRef.current = clients;
+        },
       },
-  },
 };
 const app = buildApp(appDeps);
 
@@ -152,7 +161,18 @@ if (fs.existsSync(path.join(webDist, 'index.html'))) {
     app.get('/', serveIndex);
     app.get('/index.html', serveIndex);
   }
-  app.register(fastifyStatic, { root: webDist });
+  // Public landing sits behind CDNs: never cache HTML, hashed assets are immutable.
+  const staticOpts: FastifyStaticOptions = { root: webDist };
+  if (publicMode) {
+    staticOpts.cacheControl = false;
+    staticOpts.setHeaders = (res, filePath) => {
+      if (filePath.endsWith('.html')) res.setHeader('cache-control', 'no-store');
+      else if (filePath.includes(`${path.sep}assets${path.sep}`))
+        res.setHeader('cache-control', 'public, max-age=31536000, immutable');
+      else res.setHeader('cache-control', 'public, max-age=60, must-revalidate');
+    };
+  }
+  app.register(fastifyStatic, staticOpts);
 }
 
 app
@@ -160,10 +180,11 @@ app
   .then(() => {
     // The reconcile loop IS recovery: any deal that was mid-flight when the
     // server died just gets its next tick. Started after listen so a port
-    // conflict (second instance) can never run venue mutations first.
+    // conflict (second instance) can never run venue mutations first. Absent in
+    // public mode — nothing to reconcile.
     if (loopDeps && engine) engine.wake = startLoop(loopDeps).wake;
     const shown = host === '127.0.0.1' ? 'localhost' : host;
-    console.log(`arb-tools server listening on http://${shown}:${port}`);
+    console.log(`arb-tools server${publicMode ? ' (public mode)' : ''} listening on http://${shown}:${port}`);
   })
   .catch((err) => {
     console.error(err);

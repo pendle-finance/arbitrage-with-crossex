@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useAcceptDisclaimer, useDisclaimer } from '../api/queries';
 import { Modal } from './Modal';
 
-const DISCLAIMER_URL = 'https://github.com/pendle-finance/arbitrage-with-crossex/blob/main/docs/DISCLAIMER.md';
+const DISCLAIMER_URL = 'https://github.com/pendle-finance/crossex-boros-terminal/blob/main/docs/DISCLAIMER.md';
 
 /** First-run gate: blocks the terminal until the disclaimer is accepted. The
  * server ALSO refuses trading routes until acceptance is recorded — this modal

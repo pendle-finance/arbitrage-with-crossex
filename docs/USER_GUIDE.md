@@ -87,7 +87,7 @@ Under **Include**, the **▾** button next to it itemises that cost so you can c
 ## 3. How to maximise return
 These few factors move the needle the most in maximising your return on the 4-legged Funding Rate Arbitrage
 1. Reduce perp fees with a **higher VIP tier** in Gate.
-   * Play around with the VIP tier assumption in https://boros.pendle.finance/arbitrage-crossex, and you will see the immediate impact of your VIP tier on the potential returns.
+   * Play around with the VIP tier assumption in https://crossexboros.com, and you will see the immediate impact of your VIP tier on the potential returns.
    * As an example, my current VIP8 tier boosts a particular opportunity from **11.3% APR** to **16.2% APR**. For reference, I need a 400k capital in Gate to get VIP8 tier.
 2. **Rolling over**
    * Being able to roll over an existing 4-legged position into the next maturity is a powerful boost to your return

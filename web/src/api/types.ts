@@ -1,5 +1,5 @@
 /**
- * Hand-mirrored API contract for the Arbitrage with CrossEx backend
+ * Hand-mirrored API contract for the CrossEx-Boros Terminal backend
  * (Fastify on http://localhost:6688, proxied at /api).
  *
  * Monitoring route shapes mirror what the backend serializes from gate-api +

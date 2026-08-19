@@ -2,9 +2,9 @@
   "name": "arb-tools",
   "version": "0.1.0",
   "private": true,
-  "description": "Arbitrage with CrossEx \u2014 delta-neutral funding-rate arbitrage on Gate CrossEx (web terminal + Fastify server)",
+  "description": "CrossEx-Boros Terminal \u2014 delta-neutral funding-rate arbitrage on Gate CrossEx (web terminal + Fastify server)",
   "license": "MIT",
-  "repository": "github:pendle-finance/arbitrage-with-crossex",
+  "repository": "github:pendle-finance/crossex-boros-terminal",
   "packageManager": "yarn@1.22.22",
   "engines": {
     "node": ">=20"

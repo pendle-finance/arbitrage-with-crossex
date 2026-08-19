@@ -2,12 +2,13 @@
   "name": "crossex-terminal-web",
   "private": true,
   "version": "0.1.0",
-  "description": "Arbitrage with CrossEx \u2014 monitoring + trading UI for Gate.io CrossEx",
+  "description": "CrossEx-Boros Terminal — monitoring + trading UI for Gate.io CrossEx",
   "license": "MIT",
-  "repository": "github:pendle-finance/arbitrage-with-crossex",
+  "repository": "github:pendle-finance/crossex-boros-terminal",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
+    "build:landing": "tsc --noEmit && vite build --mode landing",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"

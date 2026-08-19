@@ -38,13 +38,25 @@ import { microLabelClass } from '../components/Th';
 import { SideVenue } from '../components/VenueChip';
 import { borosMarketUrl } from '../lib/boros';
 import { fmtAge, fmtDateUtc, fmtNotionalShort, fmtPct, fmtTokenQty, fmtUsd, sig } from '../lib/fmt';
+import { IS_LANDING } from '../lib/landing';
 import { readJson, writeJson } from '../lib/storage';
 import { useDebounced } from '../lib/useDebounced';
 import { useTradeFlowOptional } from '../trade/TradeFlow';
 import { StrategyFreshness } from './HomeControls';
 import { canChartCapital, canChartProfit, OpportunityWaterfall } from './OpportunityWaterfall';
 
-export const OPPORTUNITIES_STORAGE_KEY = 'crossex.opportunities.v2';
+/** SEPARATE KEYS PER BUILD. The two builds deliberately disagree on their
+ * defaults ($10k/both-market in the terminal, $100k/maker-hedge on the landing
+ * — see LANDING_DEFAULTS), and they can share an origin during development
+ * (:5199 landing, :6688 terminal are both `localhost`). The panel persists on
+ * MOUNT, not only on user action — the debounced-size effect below fires
+ * immediately because `useDebounced` seeds its state with the input — so one
+ * shared key meant whichever build painted last silently re-set the other's
+ * controls, making each build's own defaults unreachable after a single visit
+ * to the other. Splitting the key is what keeps LANDING_DEFAULTS meaningful. */
+export const OPPORTUNITIES_STORAGE_KEY = IS_LANDING
+  ? 'crossex.opportunities.landing.v2'
+  : 'crossex.opportunities.v2';
 
 /** v1 coupled the notional to the Boros entry mode ('market-100k'); v2 splits
  * them into two independent knobs, so v1 blobs are migrated once and dropped. */
@@ -116,6 +128,22 @@ const DEFAULTS: StoredControls = {
   entryMode: 'both-market',
   exitMode: 'close',
   feeTier: 'vip0',
+};
+
+/** The landing build opens this panel from a headline number, so its first
+ * paint MUST be priced the same way `landingOpportunities.ts` prices that
+ * number — $100k at maker-hedge. With the shared DEFAULTS ($10k, both-market)
+ * the top card contradicted the hero the visitor had just clicked.
+ *
+ * Only the FIRST paint: everything here is a normal control, so changing size
+ * or entry mode works exactly as it does in the terminal, and any stored choice
+ * still wins (see loadControls). Kept in sync with LANDING_NOTIONAL_USD and the
+ * useLandingOpportunities params. */
+const LANDING_DEFAULTS: StoredControls = {
+  ...DEFAULTS,
+  notionalChoice: '100k',
+  customNotionalUsd: 100_000,
+  entryMode: 'maker-hedge',
 };
 
 /** 'vip3' → 'VIP 3'. */
@@ -397,7 +425,10 @@ function OpportunityCard({
       : basesDiffer
         ? `The legs trade different assets (${pair.shortLeg.base} vs ${pair.longLeg.base}) — the pair ticket takes one base`
         : unconfigured
-          ? 'Add your Gate API key in the setup guide on the right — clicking stages this pair for the ticket'
+          ? // No IS_LANDING branch: the landing build does not render this
+            // button at all (see below), so a landing-specific tooltip here
+            // would be unreachable.
+            'Add your Gate API key in the setup guide on the right — clicking stages this pair for the ticket'
           : noSymbols
             ? `Neither ${pair.shortLeg.venue} nor ${pair.longLeg.venue} lists a CrossEx perp for ${pair.base}`
             : 'Prefills the pair ticket with these perp legs — you still confirm the order there';
@@ -548,15 +579,22 @@ function OpportunityCard({
           >
             {open ? 'Hide details' : 'Details'}
           </button>
-          <button
-            type="button"
-            className="btn btn-primary px-4 font-semibold"
-            disabled={executeDisabled}
-            title={executeTitle}
-            onClick={() => pair && onExecute?.(pair)}
-          >
-            Execute it
-          </button>
+          {/* Not on the public site: executing needs the terminal on your own
+              machine, so the button could only ever render disabled there —
+              a dead control on every card, advertising something the page
+              cannot do. The setup rail beside these cards is the real next
+              step. `Details` stays: it works fully without keys. */}
+          {!IS_LANDING && (
+            <button
+              type="button"
+              className="btn btn-primary px-4 font-semibold"
+              disabled={executeDisabled}
+              title={executeTitle}
+              onClick={() => pair && onExecute?.(pair)}
+            >
+              Execute it
+            </button>
+          )}
         </div>
       </div>
 
@@ -694,7 +732,11 @@ function RateNote({ midApr, execApr }: { midApr: number; execApr: number | null 
 }
 
 export function OpportunitiesPanel({ unconfigured = false }: { unconfigured?: boolean } = {}) {
-  const [stored] = useState<StoredControls>(() => loadControls());
+  // IS_LANDING, not `unconfigured`: a fresh terminal install is also
+  // unconfigured and must keep the terminal's own $10k default.
+  const [stored] = useState<StoredControls>(() =>
+    loadControls(IS_LANDING ? LANDING_DEFAULTS : DEFAULTS),
+  );
   const [notionalChoice, setNotionalChoice] = useState<NotionalChoice>(stored.notionalChoice);
   const [borosEntry, setBorosEntry] = useState<BorosEntryMode>(stored.borosEntry);
   const [entryMode, setEntryMode] = useState<EntryMode>(stored.entryMode);

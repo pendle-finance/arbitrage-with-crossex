@@ -33,7 +33,7 @@ Paste this into the **Terminal** app (Finder → Applications → Utilities → 
 press Return:
 
 ```bash
-/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/pendle-finance/arbitrage-with-crossex/main/install.sh)"
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/pendle-finance/crossex-boros-terminal/main/install.sh)"
 ```
 
 When it finishes (a few minutes the first time), the terminal opens in your browser at
@@ -53,7 +53,7 @@ PowerShell** is fine — no need to install anything first). Press `Win`, type
 `PowerShell`, open it, then paste:
 
 ```powershell
-irm https://raw.githubusercontent.com/pendle-finance/arbitrage-with-crossex/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/pendle-finance/crossex-boros-terminal/main/install.ps1 | iex
 ```
 
 When it finishes, the terminal opens in your browser at **http://localhost:6688** —
@@ -136,7 +136,7 @@ for a Gate.io API key:
 **macOS**
 
 ```bash
-/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/pendle-finance/arbitrage-with-crossex/main/uninstall.sh)"
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/pendle-finance/crossex-boros-terminal/main/uninstall.sh)"
 ```
 
 Keys and trade history in `~/.boros-crossex` are kept; append ` -- --purge` to remove
@@ -145,13 +145,13 @@ those too (or `rm -rf ~/.boros-crossex`).
 **Windows**
 
 ```powershell
-irm https://raw.githubusercontent.com/pendle-finance/arbitrage-with-crossex/main/uninstall.ps1 | iex
+irm https://raw.githubusercontent.com/pendle-finance/crossex-boros-terminal/main/uninstall.ps1 | iex
 ```
 
 Keys and trade history in `%LOCALAPPDATA%\CrossEx-Boros` are kept. To remove those too:
 
 ```powershell
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/pendle-finance/arbitrage-with-crossex/main/uninstall.ps1))) -Purge
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/pendle-finance/crossex-boros-terminal/main/uninstall.ps1))) -Purge
 ```
 
 Either way this stops and removes the background service, the app, its private Node.js
@@ -200,8 +200,8 @@ read it and the moment you run it — and again on every update. To close that g
 **1. Pin a commit.** Clone the repo and note the exact tree you are about to audit:
 
 ```bash
-git clone https://github.com/pendle-finance/arbitrage-with-crossex
-cd arbitrage-with-crossex
+git clone https://github.com/pendle-finance/crossex-boros-terminal
+cd crossex-boros-terminal
 git log -1 --format=%H     # ← this commit is what you are auditing
 ```
 
@@ -213,12 +213,12 @@ same commit, so the script you run is the one you read):
 
 ```bash
 REF=<commit-sha>
-BOROS_REF=$REF /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/pendle-finance/arbitrage-with-crossex/$REF/install.sh)"
+BOROS_REF=$REF /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/pendle-finance/crossex-boros-terminal/$REF/install.sh)"
 ```
 
 ```powershell
 $env:BOROS_REF = '<commit-sha>'
-irm "https://raw.githubusercontent.com/pendle-finance/arbitrage-with-crossex/$($env:BOROS_REF)/install.ps1" | iex
+irm "https://raw.githubusercontent.com/pendle-finance/crossex-boros-terminal/$($env:BOROS_REF)/install.ps1" | iex
 ```
 
 …or straight from the clone you just audited, with no second download at all:
@@ -254,11 +254,11 @@ of this repo for an even deeper read.
 I'm considering installing an open-source crypto trading tool on my Mac, and I want you
 to audit it before I run anything.
 
-Repository:  https://github.com/pendle-finance/arbitrage-with-crossex
+Repository:  https://github.com/pendle-finance/crossex-boros-terminal
 Commit to audit:  <paste the commit SHA you pinned — or "main" for the current tip>
-Source tree at that commit:  https://github.com/pendle-finance/arbitrage-with-crossex/tree/<commit>
-Installer I would run:  https://raw.githubusercontent.com/pendle-finance/arbitrage-with-crossex/<commit>/install.sh
-Uninstaller:  https://raw.githubusercontent.com/pendle-finance/arbitrage-with-crossex/<commit>/uninstall.sh
+Source tree at that commit:  https://github.com/pendle-finance/crossex-boros-terminal/tree/<commit>
+Installer I would run:  https://raw.githubusercontent.com/pendle-finance/crossex-boros-terminal/<commit>/install.sh
+Uninstaller:  https://raw.githubusercontent.com/pendle-finance/crossex-boros-terminal/<commit>/uninstall.sh
 
 Please read the installer, the uninstaller, and the application source code, then answer:
 
@@ -451,12 +451,50 @@ curl -s "https://api.gateio.ws/api/v4/crossex/rule/symbols" | jq '.[] | select(.
 - **Real funds.** Start with `--dry-run` and a tiny `--notional`; the confirmation prompt is
   on by default. Margin rates show `n/a` when there are no open positions.
 
-## The public site
+## Running the public landing site on a server
 
-The marketing page and the shared-position page (`/position?d=…`) live in a
-separate repo — **[pendle-finance/arbitrage-landing](https://github.com/pendle-finance/arbitrage-landing)**
-— deployed at <https://boros.pendle.finance/arbitrage-crossex>. It is read-only
-and holds no credentials. This repo builds only the local terminal.
+The first-run view doubles as a public, **read-only** landing page — live opportunity data with
+**no credentials on the box**. It is two pieces: a credentials-free SPA build and the server in
+public mode.
+
+1. **Build the landing bundle.** A separate `--mode landing` build whose module graph contains no
+   credentials or trading UI (its own entry, `main-landing.tsx`), output to `web/dist`:
+
+   ```bash
+   yarn --cwd web build:landing
+   # optional: bake a canonical/OpenGraph URL into the page metadata
+   LANDING_URL=https://your-domain.example yarn --cwd web build:landing
+   ```
+
+2. **Run the server in public mode.** It serves `web/dist` plus exactly two routes —
+   `/api/health` and `/api/opportunities`. Every credentialed or trading route is *never
+   registered* (404, not 401/503), no `.env` is read, and no Gate client or SQLite ledger is ever
+   created — so the box holds no secrets:
+
+   ```bash
+   PUBLIC_MODE=1 yarn server          # loopback 127.0.0.1:6688 by default
+   ```
+
+   `?fresh=1` is ignored in this mode, so an anonymous caller can't force the upstream venue
+   fan-out past the TTL cache. Set `HOST=0.0.0.0` / `PORT=…` if the process must be reachable
+   directly (e.g. inside a container behind a proxy).
+
+3. **Front it with a reverse proxy** for TLS and a rate limit (the opportunities route fans out to
+   public venue APIs). A minimal nginx site:
+
+   ```nginx
+   server {
+       listen 80;
+       server_name your-domain.example;
+       location / {
+           proxy_pass http://127.0.0.1:6688;
+           proxy_set_header Host $host;
+           proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+       }
+   }
+   ```
+
+   Point your domain's DNS at the host and issue TLS with your tool of choice (e.g. certbot).
 
 ## License
 

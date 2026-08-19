@@ -8,7 +8,7 @@
  */
 import { useState } from 'react';
 import { useVersion } from '../api/queries';
-import { INSTALL_CMD, INSTALL_CMD_WINDOWS, REPO_URL } from '../lib/app';
+import { INSTALL_CMD, INSTALL_CMD_WINDOWS, REPO_URL } from '../lib/landing';
 import { CopyBlock } from './CopyBlock';
 import { Modal } from './Modal';
 

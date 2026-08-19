@@ -1,8 +1,8 @@
 #!/bin/bash
 #
-# Arbitrage with CrossEx — macOS uninstaller.
+# CrossEx-Boros Terminal — macOS uninstaller.
 #
-#   /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/pendle-finance/arbitrage-with-crossex/main/uninstall.sh)"
+#   /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/pendle-finance/crossex-boros-terminal/main/uninstall.sh)"
 #
 # Removes the background service, the app, and its private Node.js runtime.
 # Your API keys (~/.boros-crossex/config) and trade history (~/.boros-crossex/data)
@@ -14,7 +14,7 @@ set -euo pipefail
 
 ROOT="${BOROS_ROOT:-$HOME/.boros-crossex}"
 LABEL="com.boros.crossex-terminal"
-APP_TITLE="Arbitrage with CrossEx"
+APP_TITLE="CrossEx-Boros Terminal"
 LOG_DIR="$HOME/Library/Logs/boros-crossex"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 
@@ -97,11 +97,8 @@ main() {
 
   say "Removing the app and its private Node.js runtime…"
   rm -rf "$ROOT/app" "$ROOT/app.new" "$ROOT/app.old" "$ROOT/node" "$ROOT"/node-v*-darwin-*
-  # The extra paths are the launcher names this app shipped under before; kept in
-  # step with install.sh so an uninstall leaves no launcher from any past name.
-  rm -rf "$HOME/Applications/$APP_TITLE.app" \
-    "$HOME/Applications/CrossEx-Boros Terminal.app" \
-    "$HOME/Applications/Boros CrossEx Terminal.app"
+  # Second path is the launcher name from before the CrossEx-Boros rename.
+  rm -rf "$HOME/Applications/$APP_TITLE.app" "$HOME/Applications/Boros CrossEx Terminal.app"
   rm -rf "$LOG_DIR"
 
   if [ "${1:-}" = "--purge" ]; then

@@ -36,3 +36,46 @@ jobs:
       # `verify` only typechecks the web package; the Vite build is what every
       # install runs, so a break here is a broken install.
       - run: yarn --cwd web build
+      # The public site's bundle (second HTML entry: the shared-position page).
+      # Its credential-leak guard is replicated from deploy/deploy.sh, which is
+      # local-only — CI must carry its own copy. LANDING_URL matches the real
+      # deploy so the og:image/canonical injection path is the one that ships.
+      - run: yarn --cwd web build:landing
+        env:
+          LANDING_URL: https://crossexboros.com
+      - run: |
+          shopt -s nullglob
+          pos=(web/dist/assets/position-*.js)
+          if [ ${#pos[@]} -eq 0 ]; then
+            echo "ERROR: landing build emitted no position-*.js — entry renamed? this guard is stale" >&2
+            exit 1
+          fi
+          if grep -q -e 'Save credentials' -e 'API secret' web/dist/assets/*.js; then
+            echo "ERROR: credentials UI leaked into the landing bundle" >&2
+            exit 1
+          fi
+          if ! grep -q 'og:image' web/dist/position.html; then
+            echo "ERROR: position.html lost its og:image tag" >&2
+            exit 1
+          fi
+          # Trade-UI marker ('Convert now', a DealModal control) over the
+          # position entry's FULL chunk graph: the landing index legitimately
+          # carries the trade flow, and Rollup hoists any module shared with it
+          # into a common chunk — so the entry file alone proves nothing.
+          files="${pos[*]}"; queue="${pos[*]}"
+          while [ -n "$queue" ]; do
+            next=""
+            for f in $queue; do
+              for dep in $(grep -o '"\./[A-Za-z0-9_.-]*\.js"' "$f" | tr -d '"' | sed 's|^\./|web/dist/assets/|' | sort -u); do
+                case " $files " in
+                  *" $dep "*) ;;
+                  *) [ -f "$dep" ] && { files="$files $dep"; next="$next $dep"; } ;;
+                esac
+              done
+            done
+            queue="$next"
+          done
+          if grep -q 'Convert now' $files; then
+            echo "ERROR: trading UI leaked into the position page's chunk graph ($files)" >&2
+            exit 1
+          fi
