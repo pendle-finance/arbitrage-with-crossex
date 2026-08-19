@@ -446,8 +446,8 @@ export function makeStrategyReturns(overrides: Partial<StrategyReturns> = {}): S
 /** The canonical hedged HYPE book as a SHARE PAYLOAD — the wire form of the
  * rollup above (17.81% on $41,320, 12 days to maturity, 4 legs). One factory so
  * a schema change edits one literal instead of every position-page suite.
- * The codec suites keep their own literals on purpose: they are the cross-tree
- * drift pins (see tests/unit/share-codec-mirror.test.ts). */
+ * The codec suite keeps its own literals on purpose: that fixture is the
+ * cross-REPO drift pin against the decoder in arbitrage-landing. */
 export function makeSharePayload(overrides: Partial<SharePayloadV1> = {}): SharePayloadV1 {
   return {
     v: 1,

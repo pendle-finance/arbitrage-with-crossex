@@ -13,8 +13,8 @@ import {
 // web/src/lib/shareCodec.test.ts — a green suite here proves nothing about
 // whether shared links still open.
 
-/** Canonical 4-leg fixture. Keep the literal AND its encoding in sync with
- * tests/unit/share-codec.test.ts. */
+/** Canonical 4-leg fixture. Keep the literal AND its encoding in sync with the
+ * arbitrage-landing repo's copy of this suite. */
 const fixture: SharePayloadV1 = {
   v: 1,
   b: 'HYPE',
