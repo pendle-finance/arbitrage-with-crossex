@@ -60,7 +60,7 @@ describe('shareCardLines', () => {
     const lines = shareCardLines(payload);
     expect(lines.footerLeft).toBe('Powered by Boros × Gate CrossEx');
     expect(lines.footerRightPrefix + lines.footerRightBrand).toBe(
-      'Executed with the open-source tool at CrossexBoros.com',
+      'Executed with the open-source tool at boros.pendle.finance/arbitrage-crossex',
     );
   });
 });

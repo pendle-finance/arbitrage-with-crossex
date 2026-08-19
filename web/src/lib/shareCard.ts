@@ -78,7 +78,7 @@ export function shareCardLines(p: SharePayloadV1): ShareCardLines {
     legOverflow: p.l.length > MAX_LEG_ROWS ? `+${p.l.length - MAX_LEG_ROWS} more legs` : null,
     footerLeft: 'Powered by Boros × Gate CrossEx',
     footerRightPrefix: 'Executed with the open-source tool at ',
-    footerRightBrand: 'CrossexBoros.com',
+    footerRightBrand: 'boros.pendle.finance/arbitrage-crossex',
   };
 }
 
