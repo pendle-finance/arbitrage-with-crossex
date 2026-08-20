@@ -4,7 +4,7 @@ In this guide, we will cover:
 1. How the strategy works
 2. The recommended flow for using CrossEx Boros Terminal
 3. How to maximise return
-4. What could go wrong
+4. Risk Disclosure
 
 ## 1. How the strategy works
 
@@ -102,19 +102,11 @@ These few factors move the needle the most in maximising your return on the 4-le
    * To optimise for the spread you are locking, try to use **limit orders** to fill at least one Boros leg, and do a **market order** on the other leg. Sometimes, it can give you a much higher spread.
    * That said, sometimes when a decent opportunity are there that you can just market order, you could just take it (otherwise, some other users might take it before you)
 
-## 4. What could go wrong
-Last, let's see the different ways things could go wrong:
-1. Issues with Gate as an exchange.
-   - **Your money sits within Gate.** Anything happening to Gate will affect your money
-2. Issues with CrossEx as a cross-margin platform
-   - CrossEx might malfunction as a platform (for example, if CrossEx itself is deleveraged or liquidated on some exchange), and your position on CrossEx **might not hold**
-3. Liquidation of Perp positions due to extreme perp price differences.
-   - The prices on the two perps could, for some reason, deviate so much that even a delta-neutral perp pair **could get liquidated**. This is *extremely unlikely*, but could still happen in theory
-4. Liquidation of Boros positions:
-   - If the Boros market prices move too much away from the spread you locked in, your Boros position could be **liquidated**, and the 4-legged position's fixed return is compromised.
-   - To avoid this, its advisable to **maintain a buffer** on the Boros margin (especially when Boros margin is relatively non-capital-intensive)
-5. Issues with CrossEx Boros Terminal:
-   - Any issues that result in opening a **non-hedged pair** of perp positions will expose you to losses due to price fluctuation.
-   - Its advisable to **double check that your perp positions are hedged** after execution.
+## 4. Risk Disclosure
+- **CEX risk** - your funds custody with Gate.
+- **Cross-margin risk** - CrossEx manages margin across exchanges for you.
+- **Spread risk** - rare, but the perp legs could diverge enough to trigger liquidation.
+- **Boros liquidation risk** - a big enough move against your locked-in spread can break the hedge; keep a margin buffer.
+- **Execution risk** - if a leg doesn't open hedged, check after execution.
 
 Ultimately, you should **do your own research**, make sense of all the different risks and rewards, and make the decisions for yourself.
