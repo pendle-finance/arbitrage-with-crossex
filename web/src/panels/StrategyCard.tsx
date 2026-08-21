@@ -1,12 +1,32 @@
 /**
- * One 4-leg fixed-return position box. Hierarchy per the revamp:
- *   Tier 1 — Fixed APR on Capital (hero) · Capital · Profit by maturity
- *   Tier 2 — locked-spread line + the spread-lock assumption caption,
- *            ProfitBars (spread return decomposed vs the MtM "now" row) and
- *            the always-visible paid/future fee legend with per-part exit
- *            checkboxes
- *   Legs   — collapsed rows; a perp row expands to live Entry/Mark/Lev +
- *            [Close]/[Lev] (joined to the 4s positions poll by symbol)
+ * One 4-leg fixed-return position box, in seven descending tiers:
+ *
+ *   1-3  identity — asset · the two venues · maturity, in one line and three
+ *        weights. The timeline below it is progress texture, not the place a
+ *        maturity date is read.
+ *   4    stats — THREE main numbers (Fixed APY · PnL now · Capital), each with
+ *        its workings beneath it as a caption (spread · ROI; the before-cost
+ *        step and the maturity projection). PnL now is AFTER costs: it is what
+ *        the account reflects. A figure describing a FINISHED position appears
+ *        only on a finished one — PnL now is the exception, being real cash and
+ *        value whatever the book's shape.
+ *   5    legs — collapsed rows carrying venue+kind+side as one identity, size
+ *        in tokens and dollars, the locked rate, and Net. A row states its own
+ *        problem (short / over by / unverified) rather than deferring to prose.
+ *        Expanding gives live Entry/Mark/Lev, Close/Lev, and where the leg
+ *        belongs.
+ *   6-7  the waterfalls, and the cost assumptions behind them — the latter in a
+ *        settings dialog, since they configure the numbers rather than report.
+ *
+ * LAYOUT RULE: transient UI (assignment, leverage, close, cost settings) opens
+ * as a portaled overlay. Nothing may push the card's content sideways or down;
+ * an inline panel that reflows the table hides the rows a user was reading.
+ *
+ * The card names four shapes — complete, mismatched, partial, orphan — because
+ * "not fully hedged" covered three different situations with one sentence: a
+ * book with legs missing, a book whose legs are all present but unevenly
+ * sized, and a lone leg that is not a half-built strategy at all.
+ *
  * Purely prop-driven — PositionsHome owns the queries.
  */
 import { useState } from 'react';
@@ -19,9 +39,9 @@ import type {
 } from '../api/types';
 import { Chip } from '../components/Chip';
 import { DataTable, type Column } from '../components/DataTable';
+import { Modal } from '../components/Modal';
 import { Notes } from '../components/Notes';
 import { SignedNumber } from '../components/SignedNumber';
-import { Stat } from '../components/Stat';
 import { microLabelClass } from '../components/Th';
 import { SideChip, VenueChip } from '../components/VenueChip';
 import {
@@ -33,7 +53,6 @@ import {
   fmtTokenQty,
   fmtUsd,
   fmtUsdCompact,
-  num,
   parseSymbol,
   prettyVenue,
   sig,
@@ -42,7 +61,7 @@ import {
 import { SegmentedToggle } from '../components/SegmentedToggle';
 import { TimelineClockEdit } from './HomeControls';
 import { CloseBoth } from './PerpOnlyBox';
-import { PerpLegExpanded } from './PerpLegExpanded';
+import { PerpLegExpanded, PositionRowActions } from './PerpLegExpanded';
 import { ProfitBars } from './ProfitBars';
 import { EntryCostParts } from './EntryCostParts';
 import {
@@ -51,6 +70,7 @@ import {
   saveExcludedPartIds,
 } from './entryPartsStore';
 import {
+  LegAssignment,
   LegMembership,
   positionVenues,
   SplitChip,
@@ -84,6 +104,21 @@ function HedgeChip({ s }: { s: StrategyRollup }) {
 }
 
 type LegRow = StrategyLeg & { _key: string };
+
+/** A leg the book is missing, rendered in the position it would occupy. Not a
+ * StrategyLeg: it has no size, no rate and no PnL, and pretending otherwise
+ * (a zero-filled leg) would let it be summed into totals it is not part of. */
+interface MissingLegRow {
+  _key: string;
+  kind: 'perp' | 'boros';
+  venue: string;
+  side: 'LONG' | 'SHORT';
+  /** What it would need to be, taken from the leg it would offset. */
+  targetUsd: number;
+}
+
+type TableRow = LegRow | MissingLegRow;
+const isMissing = (r: TableRow): r is MissingLegRow => !('notionalUsd' in r);
 
 /** Per-venue floating-cancellation summary for a leg's expanded row. */
 function VenueCancellation({ legs, venue }: { legs: StrategyLeg[]; venue: string }) {
@@ -160,6 +195,11 @@ export function StrategyCard({
   // The two waterfalls sit behind the hero boxes / See-more toggle — collapsed
   // by default; the bordered hero box + its "see more" strip invite the click.
   const [chartsOpen, setChartsOpen] = useState(false);
+  /** The close form. A destructive action belongs behind a deliberate click,
+   * and as an overlay so opening it cannot move the card underneath. */
+  const [closeOpen, setCloseOpen] = useState(false);
+  /** The cost-assumption settings form. */
+  const [costOpen, setCostOpen] = useState(false);
   // Per-position exit assumption: 'close' folds the estimated exit costs in
   // (maker+hedge fees + assumed slippage); 'roll' keeps the perps — no exit
   // costs charged. The profit formula includes future costs, so close is the
@@ -247,13 +287,35 @@ export function StrategyCard({
   // old entries can't be carried over — applied to every strategy of the same
   // maturity they would hand the same cost back twice — so they lapse, and the
   // card says so instead of quietly re-charging.
+  /**
+   * The server's HEDGE-SHAPE warnings are dropped here, and only those.
+   *
+   * Each one restates something the card now says structurally: which legs are
+   * missing (a dimmed row per absent leg), how far a leg is from the leg it
+   * offsets (`short` / `over by` on the row), and whether the book has a Boros
+   * side at all (the banner). Left in, they repeat the table back to the reader
+   * as prose they then have to pair up with the rows — which is what the amber
+   * block was.
+   *
+   * Everything else the server warns about STAYS: stale funding ledgers,
+   * unknown entry slippage, unpriceable collateral zones, missing trade
+   * history, fill-history outages, pinned attribution. None of those have a
+   * row or a chip to live on, and several of them qualify numbers the card
+   * shows as if they were exact — they are the warnings that still matter.
+   */
+  const isHedgeShapeWarning = (w: string) =>
+    /legs are imbalanced by/.test(w) ||
+    /perp found for .* in the connected Gate account/.test(w) ||
+    /No matching perp legs for .* in the connected Gate account/.test(w) ||
+    /No Boros legs in this .* position/.test(w);
+  const serverNotes = s.warnings.filter((w) => !isHedgeShapeWarning(w));
   const cardNotes =
     entryParts.length > 0 && hasLapsedLegacyExclusions()
       ? [
-          ...s.warnings,
+          ...serverNotes,
           'Executions you previously left out were reset — positions can now be split per strategy, and an old exclusion no longer says which one it belonged to.',
         ]
-      : s.warnings;
+      : serverNotes;
 
   const perpLegs = s.legs.filter((l) => l.kind === 'perp');
   const borosLegs = s.legs.filter((l) => l.kind === 'boros');
@@ -363,6 +425,103 @@ export function StrategyCard({
       }
     }
   }
+  /**
+   * Which of the four card shapes this is. The legs are BUILDING BLOCKS; a
+   * position is what they add up to, and only a COMPLETE one is measured.
+   *
+   *  - `complete`  — every leg present and sized; the headline numbers mean
+   *                  something.
+   *  - `mismatched`— all four legs open in the right directions, but the sizes
+   *                  disagree. Only the matched part is hedged, so the rate is
+   *                  still not locked; the per-leg markers say how far off.
+   *  - `partial`   — one or more legs are absent. Say exactly which, and how
+   *                  big, so the book can be finished.
+   *  - `orphan`    — a single leg that pairs with nothing. Nothing is
+   *                  "missing" from it: it is not a half-built strategy, so it
+   *                  gets no completion cues, only assign-or-close.
+   *
+   * Ordering matters: `orphan` is tested before `partial` because a lone leg
+   * would otherwise be reported as a position missing three others.
+   */
+  const legSideSum = (kind: 'perp' | 'boros', side: 'LONG' | 'SHORT'): number =>
+    s.legs
+      .filter((l) => l.kind === kind && l.side === side)
+      .reduce((sum, l) => sum + l.notionalUsd, 0);
+  const cardState: 'complete' | 'mismatched' | 'partial' | 'orphan' = checks.fullyHedged
+    ? 'complete'
+    : s.legs.length <= 1
+      ? 'orphan'
+      : // Every side that a 4-leg book needs is present; only the sizes differ.
+        legSideSum('perp', 'LONG') > 0 &&
+          legSideSum('perp', 'SHORT') > 0 &&
+          legSideSum('boros', 'LONG') > 0 &&
+          legSideSum('boros', 'SHORT') > 0
+        ? 'mismatched'
+        : 'partial';
+
+  /**
+   * Per-leg imbalance, as a number rather than a sentence.
+   *
+   * A leg's target is the leg it is meant to cancel: a perp's target is the
+   * Boros leg at its OWN venue (that is the floating rate it offsets), and a
+   * Boros leg's target is the opposite Boros side. Reported in the leg's own
+   * token unit, because "short 1.53 ETH" is actionable in a way that "71%
+   * matched" is not.
+   *
+   * `null` when the leg is within tolerance — the row then says nothing, which
+   * is what keeps the clean rows clean.
+   */
+  const legImbalanceUsd = (l: StrategyLeg): number | null => {
+    const target =
+      l.kind === 'perp'
+        ? borosLegs
+            .filter((b) => b.venue === l.venue)
+            .reduce((sum, b) => sum + b.notionalUsd, 0)
+        : legSideSum('boros', l.side === 'LONG' ? 'SHORT' : 'LONG');
+    if (target <= 0) return null;
+    const delta = l.notionalUsd - target;
+    // Same 10% band the server's match ratios use, so a leg the engine counts
+    // as matched never gets flagged here.
+    return Math.abs(delta) / target > 0.1 ? delta : null;
+  };
+
+  /**
+   * A leg's bottom line BEFORE costs — the one definition of "Net" the card
+   * uses, so the word means the same thing in the table and in the hero.
+   *
+   * The engine's `netUsd` is fee-inclusive, and differently so per kind: a
+   * perp nets `cashFlow − fees`, a Boros leg `cashFlow + mtm + tradePnl` where
+   * `tradePnl` already has its fees baked in and `cashFlow` already has the
+   * settlement fee taken out. Reading those two as one column is what made
+   * "net" ambiguous. Here every cost is added back and shown once, in Costs.
+   *
+   * Trade fees on the Boros side stay inside `tradePnl`: the venue reports the
+   * fill net, so they cannot be separated without re-deriving from raw txns.
+   * They are small relative to settlement and are disclosed in Costs.
+   */
+  const legNetBeforeCostsUsd = (l: StrategyLeg): number =>
+    l.kind === 'perp'
+      ? l.cashFlowUsd
+      : l.netUsd + (l.settlementFeePaidUsd ?? 0);
+
+  /** The card's Net — the legs' own figures summed, so the hero is always the
+   * total of the column beneath it and the two can never disagree. */
+  const netBeforeCostsUsd = s.legs.reduce((sum, l) => sum + legNetBeforeCostsUsd(l), 0);
+
+  /** The plain return behind Fixed APY: same numerator, same denominator, just
+   * not annualized. Null wherever the APY is null, so they appear together. */
+  const roi =
+    s.capitalUsd > 0 && expectedUsd !== null ? expectedUsd / s.capitalUsd : null;
+
+  /**
+   * What separates Net (before costs) from the money actually kept: every
+   * trading fee and slippage charge, paid and assumed, under the card's own
+   * cost assumptions. Derived as the DIFFERENCE between the two figures the
+   * card already shows rather than re-summed from parts, so the caption
+   * "Net − costs" can never disagree with the numbers either side of it.
+   */
+  const costsTotalUsd = Math.max(0, netBeforeCostsUsd - currentNetUsd);
+
   const hiddenStat = (
     <span className="num text-ink-400" title="Hidden until the position is fully hedged — see the sizing note below">
       —
@@ -390,45 +549,138 @@ export function StrategyCard({
   // Perp legs include the exact symbol so two same-venue same-side positions
   // (e.g. USDT + USDC quotes) can never swap identities on a feed reorder.
   const keyCounts = new Map<string, number>();
-  const rows: LegRow[] = s.legs.map((l) => {
+  const openRows: LegRow[] = s.legs.map((l) => {
     const base = `${l.kind}:${l.venue}:${l.side}${l.symbol ? `:${l.symbol}` : ''}`;
     const n = keyCounts.get(base) ?? 0;
     keyCounts.set(base, n + 1);
     return { ...l, _key: n === 0 ? base : `${base}:${n}` };
   });
 
-  const isCrossexPerp = (l: StrategyLeg) =>
-    l.kind === 'perp' && perpSource === 'connected-gate-account';
+  /**
+   * The legs a complete book needs but this one does not have, as rows.
+   *
+   * A strategy is four legs: a perp and a Boros leg on each of two venues,
+   * opposite sides. Anything absent from that grid is stated as its own dimmed
+   * row — where the leg WOULD be — rather than described in a paragraph under
+   * the table. A row can say "Boros LONG on Binance, about $12,311, not open"
+   * in the same shape as the legs beside it; prose has to re-describe the
+   * table in words and leaves the reader to match them up.
+   *
+   * Sized from the leg it would offset: the Boros leg at that venue for a perp,
+   * the opposite Boros side for a Boros leg. Only emitted when the venue is
+   * known — with no perp legs and no Boros legs there is no grid to complete,
+   * and an orphan gets none of this by construction (`cardState`).
+   */
+  const missingRows: MissingLegRow[] =
+    cardState === 'complete' || cardState === 'orphan'
+      ? []
+      : (['LONG', 'SHORT'] as const).flatMap((side) => {
+          const venue = venueForSide(side);
+          if (!venue) return [];
+          return (['perp', 'boros'] as const).flatMap((kind) => {
+            const present = s.legs.some((l) => l.kind === kind && l.side === side);
+            if (present) return [];
+            // The counterpart that sets this leg's size: for a perp, the Boros
+            // leg at the same venue; for a Boros leg, the opposite Boros side.
+            const targetUsd =
+              kind === 'perp'
+                ? s.legs
+                    .filter((l) => l.kind === 'boros' && l.venue === venue)
+                    .reduce((sum, l) => sum + l.notionalUsd, 0)
+                : legSideSum('boros', side === 'LONG' ? 'SHORT' : 'LONG') ||
+                  legSideSum('perp', side);
+            if (targetUsd <= 0) return [];
+            return [{ _key: `missing:${kind}:${venue}:${side}`, kind, venue, side, targetUsd }];
+          });
+        });
 
-  const columns: Column<LegRow>[] = [
+  const columns: Column<TableRow>[] = [
     {
       key: 'leg',
       header: 'Leg',
-      render: (l) => (
-        <span className="inline-flex items-center gap-2">
-          <VenueChip exchange={l.venue} crossex={isCrossexPerp(l)} />
-          <span
-            className="text-[10px] uppercase tracking-wider text-ink-500"
-            title={l.kind === 'perp' ? 'Perp position from your connected Gate account' : 'Boros position from the entered address'}
-          >
-            {l.kind === 'perp' ? 'perp' : 'Boros'}
+      render: (r) => {
+        // Venue, kind and side are ONE identity ("the Binance Boros long").
+        // Split across three columns they read as unrelated facts, and the eye
+        // has to reassemble them on every row.
+        const head = (
+          <>
+            <VenueChip exchange={r.venue} crossex={r.kind === 'perp' && perpSource === 'connected-gate-account'} />
+            <span
+              className="text-[10px] uppercase tracking-wider text-ink-500"
+              title={r.kind === 'perp' ? 'Perp position from your connected Gate account' : 'Boros position from the entered address'}
+            >
+              {r.kind === 'perp' ? 'perp' : 'Boros'}
+            </span>
+            <SideChip side={r.side} />
+          </>
+        );
+        if (isMissing(r)) {
+          return (
+            <span className="inline-flex items-center gap-2 opacity-60">
+              {head}
+              <Chip sm tone="red" title="This leg is part of the strategy but is not open">
+                missing
+              </Chip>
+            </span>
+          );
+        }
+        const delta = legImbalanceUsd(r);
+        const token = legTokenSize(r);
+        // The gap in the leg's own unit where there is one, dollars otherwise:
+        // "short 1.53 ETH" is actionable in a way that "71% matched" is not.
+        const gapText =
+          delta === null
+            ? null
+            : token && r.notionalUsd > 0
+              ? fmtTokenQty(Math.abs(delta) * (token.qty / r.notionalUsd), token.symbol)
+              : fmtUsdCompact(Math.abs(delta));
+        return (
+          <span className="inline-flex items-center gap-2">
+            {head}
+            {/* Unverifiable is not the same as unhedged: without the Gate
+                account the perp side cannot be seen at all, so the row says so
+                in neutral tone rather than accusing the leg of being wrong. */}
+            {r.kind === 'perp' && perpSource === null && (
+              <Chip sm tone="neutral" title="Connect the Gate account to verify the perp side of the hedge">
+                unverified
+              </Chip>
+            )}
+            {delta !== null && (
+              <Chip
+                sm
+                tone={delta < 0 ? 'amber' : 'cyan'}
+                title={
+                  delta < 0
+                    ? 'Smaller than the leg it offsets — the difference is unhedged'
+                    : 'Larger than the leg it offsets — the excess is unhedged'
+                }
+              >
+                {delta < 0 ? 'short' : 'over by'} {gapText}
+              </Chip>
+            )}
           </span>
-        </span>
-      ),
+        );
+      },
     },
-    { key: 'side', header: 'Side', render: (l) => <SideChip side={l.side} /> },
     {
       key: 'notional',
       header: 'Notional',
       align: 'right',
-      render: (l) => {
-        const token = legTokenSize(l);
+      render: (r) => {
+        if (isMissing(r)) {
+          return (
+            <span className="num text-ink-500" title="The size this leg would need to be, taken from the leg it offsets">
+              ≈{fmtUsdCompact(r.targetUsd)}
+            </span>
+          );
+        }
+        const token = legTokenSize(r);
         return (
           <span
             className="num"
-            title={`${fmtUsd(l.notionalUsd, 0)}${token ? ` = ${sig(token.qty)} ${token.symbol}` : ''}`}
+            title={`${fmtUsd(r.notionalUsd, 0)}${token ? ` = ${sig(token.qty)} ${token.symbol}` : ''}`}
           >
-            {fmtUsdCompact(l.notionalUsd)}
+            {fmtUsdCompact(r.notionalUsd)}
             {token && (
               <span className="text-ink-400"> ({fmtTokenQty(token.qty, token.symbol)})</span>
             )}
@@ -440,59 +692,19 @@ export function StrategyCard({
       key: 'rate',
       header: 'Rate',
       align: 'right',
-      render: (l) =>
-        l.kind === 'boros' && l.entryApr !== undefined ? (
-          <span className="num" title="entry fixed APR → current mark APR">
-            {fmtPct(l.entryApr)}<span className="text-ink-500">→</span>
-            {l.markApr !== undefined ? fmtPct(l.markApr) : '—'}
+      render: (r) =>
+        !isMissing(r) && r.kind === 'boros' && r.entryApr !== undefined ? (
+          // The LOCKED rate only. The live mark used to sit beside it behind an
+          // arrow, which read as a rate that had moved — but the whole point of
+          // this leg is that its rate cannot move. The mark still matters for
+          // MtM, so it stays in the expanded row where it is about valuation.
+          <span className="num" title="The fixed APR this leg locked at entry — it does not change">
+            {fmtPct(r.entryApr)}
           </span>
-        ) : (
-          <span className="text-ink-600">—</span>
-        ),
-    },
-    {
-      key: 'cash',
-      header: 'Cash flow',
-      align: 'right',
-      render: (l) => (
-        <span title={l.kind === 'perp' ? 'Cumulative funding' : 'Funding settlements (net of settlement fees)'}>
-          <SignedNumber value={l.cashFlowUsd} format={(n) => fmtUsd(n)} />
-        </span>
-      ),
-    },
-    {
-      key: 'mtm',
-      header: 'MTM',
-      align: 'right',
-      render: (l) => {
-        // Perp rows: LIVE uPnL (4s feed), DISPLAY-ONLY — excluded from Net.
-        // The delta-neutral pair's price MtMs cancel to entry-gap noise, which
-        // the strategy accounts once as entry slippage. Boros MtM stays in Net.
-        if (l.kind === 'perp') {
-          const live = liveFor(l, livePositions);
-          // Scaled by the leg's share: the live position's uPnL covers the
-          // WHOLE venue leg, and rendering it whole on every card that owns a
-          // slice double-counts it across the page.
-          const value = live ? Number(live.upnl) * (l.share ?? 1) : l.mtmUsd;
-          return (
-            <span
-              className="text-ink-500"
-              title="Price MtM (display only — excluded from Net; the pair's uPnLs cancel, accounted as entry slippage)"
-            >
-              <SignedNumber value={value} format={(n) => num(n)} className="!text-ink-500" />
-            </span>
-          );
-        }
-        return <SignedNumber value={l.mtmUsd} format={(n) => num(n)} />;
-      },
-    },
-    {
-      key: 'fees',
-      header: 'Fees',
-      align: 'right',
-      render: (l) =>
-        l.feesUsd > 0 ? (
-          <span className="num text-ink-300">−{fmtUsd(l.feesUsd)}</span>
+        ) : !isMissing(r) && r.kind === 'perp' ? (
+          <span className="text-xs text-ink-600" title="A perp pays the floating rate — there is nothing locked on this leg">
+            floating
+          </span>
         ) : (
           <span className="text-ink-600">—</span>
         ),
@@ -501,56 +713,121 @@ export function StrategyCard({
       key: 'net',
       header: 'Net',
       align: 'right',
-      render: (l) => (
-        <span
-          title={
-            l.kind === 'perp'
-              ? 'Funding (since the strategy start) − trading fees'
-              : 'Settlements + rate MtM + trade P&L (net of fees)'
-          }
-        >
-          <SignedNumber value={l.netUsd} format={(n) => fmtUsd(n)} className="font-medium" />
-        </span>
-      ),
+      render: (r) =>
+        isMissing(r) ? (
+          <span className="text-ink-600">—</span>
+        ) : (
+          <span
+            title={
+              r.kind === 'perp'
+                ? 'Funding since the strategy start, before trading fees and slippage'
+                : 'Settlements + rate MtM + trade P&L, with settlement fees added back — before costs'
+            }
+          >
+            <SignedNumber
+              value={legNetBeforeCostsUsd(r)}
+              format={(n) => fmtUsd(n)}
+              className="font-medium"
+            />
+          </span>
+        ),
+    },
+    {
+      key: 'belongs',
+      header: 'Belongs to',
+      align: 'right',
+      render: (r) => {
+        if (isMissing(r)) return <span className="text-[10px] text-ink-600">not open</span>;
+        // Stated in the leg's OWN UNIT, and editable from the row.
+        //
+        // This used to read "51% of leg", which is not a quantity anyone holds
+        // — you hold 50k YU, and the other 50k is somewhere else. A percentage
+        // also cannot be typed back in: to move size you have to know the
+        // venue total and do the arithmetic yourself. Amounts can.
+        return (
+          <LegAssignment
+            leg={r}
+            strategyId={s.strategyId}
+            destinations={destinations}
+            onAssert={onAssert}
+          />
+        );
+      },
+    },
+    {
+      key: 'action',
+      header: '',
+      align: 'right',
+      render: (r) => {
+        // A missing leg's action is to open it; the ticket lands sized to the
+        // gap. Only perps can be opened from here — the Boros side is a
+        // different venue with its own flow.
+        if (isMissing(r)) {
+          return r.kind === 'perp' && onOpenPerpLegs && !matured ? (
+            <button
+              type="button"
+              className="btn-ghost-xs !text-cyan-300"
+              title={`Prefills the pair ticket at ${fmtUsd(r.targetUsd, 0)} on ${r.venue}`}
+              onClick={() => onOpenPerpLegs(s, r.targetUsd)}
+            >
+              Open
+            </button>
+          ) : null;
+        }
+        // Closing a leg is a row-level action, so it belongs on the row. It
+        // used to live only inside the expanded detail, which meant closing a
+        // single leg required discovering that rows expand at all.
+        const live = r.kind === 'perp' ? liveFor(r, livePositions) : null;
+        return live ? (
+          <PositionRowActions
+            position={live}
+            // Only when this strategy owns part of the venue leg: the close
+            // acts on the whole position, so the popover has to open on THIS
+            // position's size, not the venue's.
+            attributedQty={(r.share ?? 1) < 0.999 ? r.notionalToken : undefined}
+            closeOnly
+          />
+        ) : null;
+      },
     },
   ];
 
   return (
     <div className="card p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-baseline gap-2">
-          <span className="font-mono text-sm font-semibold text-ink-100">{s.base}</span>
-          <span className="text-xs text-ink-400">
-            {longVenue && (
-              <>
-                <span className="text-emerald-400">long</span> {prettyVenue(longVenue)}
-              </>
-            )}
-            {longVenue && shortVenue && ' '}
-            {shortVenue && (
-              <>
-                <span className="text-rose-400">short</span> {prettyVenue(shortVenue)}
-              </>
-            )}
-          </span>
-          {/* The locked spread only means anything across a MATCHED pair of
-              Boros legs: rate_A − rate_B on a common notional. On a half-built
-              book the same ratio is an outright fixed rate wearing a spread's
-              label — and on a SINGLE Boros leg it reads double that leg's rate
-              (returns.ts divides by gross/2, calibrated for two legs). Gate it
-              with the other headline numbers rather than print it. */}
-          <span
-            className={`num text-xs ${checks.fullyHedged ? 'text-ink-300' : 'text-ink-400'}`}
-            title={
-              !checks.fullyHedged
-                ? 'Hidden until the position is fully hedged — a locked spread needs a matched pair of Boros legs; see the sizing note below'
-                : s.spreadReturnUsd !== null
-                  ? `Assumes ${fmtPct(s.spread)} locked on ${fmtUsdCompact(borosNotionalPerSide)} since the strategy start → spread return ≈${fmtUsd(s.spreadReturnUsd, 0)} by maturity`
-                  : 'Locked fixed spread across the Boros legs'
-            }
-          >
-            ({checks.fullyHedged ? fmtPct(s.spread) : '—'} spread)
-          </span>
+        {/* Identity, in three descending weights: WHAT · WHERE · WHEN. The
+            venue pair reads as one unit rather than "long X short Y" — that
+            phrasing named the PERP sides only, while the same card's Boros
+            legs can both be long, so it stated something the table below it
+            contradicted. Maturity is here, in words, instead of surviving as a
+            9px axis label under the timeline: it is a decision input. */}
+        <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+          <span className="font-mono text-base font-semibold text-ink-100">{s.base}</span>
+          {(longVenue || shortVenue) && (
+            <>
+              <span className="text-ink-600">·</span>
+              <span className="text-sm font-medium text-ink-200">
+                {prettyVenue(longVenue ?? shortVenue ?? '')}
+                {longVenue && shortVenue && (
+                  <>
+                    <span className="mx-1 font-normal text-ink-500">⇄</span>
+                    {prettyVenue(shortVenue)}
+                  </>
+                )}
+              </span>
+            </>
+          )}
+          {!openEnded && (
+            <>
+              <span className="text-ink-600">·</span>
+              <span className="text-xs text-ink-300">
+                {matured ? 'matured' : 'matures'} {fmtDateUtc(s.maturity)}
+                {!matured && (
+                  <span className="text-ink-400"> · {fmtAge(s.secondsToMaturity * 1000)} left</span>
+                )}
+              </span>
+            </>
+          )}
         </div>
         <div className="flex items-center gap-2">
           {canShare && (
@@ -664,72 +941,175 @@ export function StrategyCard({
           onClick={() => setChartsOpen((v) => !v)}
           className="block w-full text-left"
         >
-          <div className="flex flex-wrap items-end gap-x-10 gap-y-3 p-3">
-        <Stat label="Fixed APR on capital" hero>
-          {!checks.fullyHedged ? (
-            hiddenStat
-          ) : fixedAprOnCapital === null ? (
-            <span className="num text-ink-400" title="The strategy start or capital is unknown — no APR">
-              —
-            </span>
-          ) : (
-            <span title="The PnL expected by maturity as a return on the capital this strategy posts, annualized over the full trade life (start → maturity). Net of every cost, and it follows the perp entry and exit cost assumptions below.">
-              <SignedNumber value={fixedAprOnCapital} format={(n) => fmtPct(n)} />
-            </span>
-          )}
-        </Stat>
-        <Stat label="Capital">
-          {!checks.fullyHedged ? (
-            hiddenStat
-          ) : (
-            <span className="num text-ink-100">{fmtUsd(s.capitalUsd, 0)}</span>
-          )}
-        </Stat>
-        <Stat label={matured ? 'PNL (realized at maturity)' : 'PNL by maturity'}>
-          {!checks.fullyHedged ? (
-            hiddenStat
-          ) : expectedUsd === null ? (
-            <span className="num text-ink-400" title="The strategy start is unknown — no projection">
-              —
-            </span>
-          ) : (
-            <SignedNumber value={expectedUsd} format={(n) => fmtUsd(n, 0)} className="font-medium" />
-          )}
-        </Stat>
-          <Stat label="Current PnL">
-            <span
-              title={
-                flags.inclEntryCost
-                  ? 'Funding + Boros settlements & rate MtM − fees − entry slippage — the waterfalls below break it down'
-                  : 'Funding + Boros settlements & rate MtM − Boros fees. The perp entry fees and entry slippage are not charged (rolled over) — the waterfalls below break it down'
+          <div className="p-3">
+            {/* Slot 4, in TWO tiers.
+             *
+             * MAIN — Fixed APY, PnL now, Capital: what it earns, what it has
+             * made, what it ties up. SUPPLEMENTARY — the maturity projection,
+             * the locked spread and ROI — ride underneath as captions, because
+             * each one qualifies a main number rather than standing alone.
+             *
+             * PnL now is AFTER costs: it is the figure the account actually
+             * reflects. "Net (before costs)" was a main number here and should
+             * not have been — it is an intermediate step on the way to this
+             * one, so it moved into the caption where its arithmetic is.
+             *
+             * The gate is unchanged: a figure describing a FINISHED position
+             * appears only on a finished one; PnL now is the exception, being
+             * real cash and value whatever shape the book is in.
+             */}
+            {/* An orphan has ONE number, so it gets one line rather than the
+                three-slot grid with two empty columns — a single figure under a
+                hero-height label left most of the card blank and made a lone leg
+                look like a position missing its numbers. Label and value sit on
+                the same baseline, sized to what it is: an unplaced leg. */}
+            <div
+              className={
+                cardState === 'orphan'
+                  ? 'flex flex-wrap items-baseline gap-x-3'
+                  : 'flex flex-wrap items-start gap-x-12 gap-y-4'
               }
             >
-              <SignedNumber value={currentNetUsd} format={(n) => fmtUsd(n, 0)} className="font-medium" />
-            </span>
-          </Stat>
+              {/* An ORPHAN never gets an APY: it is one leg, not a strategy, so
+                  there is no spread to lock and no capital base to divide by. */}
+              {cardState !== 'orphan' && (
+              <div>
+                <div className={microLabelClass}>{matured ? 'Fixed APY (realized)' : 'Fixed APY'}</div>
+                <div className="mt-0.5 text-3xl font-semibold">
+                  {!checks.fullyHedged ? (
+                    hiddenStat
+                  ) : fixedAprOnCapital === null ? (
+                    <span className="num text-ink-400" title="The strategy start or capital is unknown — no APR">
+                      —
+                    </span>
+                  ) : (
+                    <span title="The PnL expected by maturity as a return on the capital this strategy posts, annualized over the full trade life (start → maturity). Net of every cost, and it follows the perp cost assumptions in settings.">
+                      <SignedNumber value={fixedAprOnCapital} format={(n) => fmtPct(n)} />
+                    </span>
+                  )}
+                </div>
+                <div className="mt-1 flex flex-wrap items-center gap-x-3 text-[11px] text-ink-500">
+                  {checks.fullyHedged ? (
+                    <>
+                      <span
+                        className="num"
+                        title={
+                          s.spreadReturnUsd !== null
+                            ? `Assumes ${fmtPct(s.spread)} locked on ${fmtUsdCompact(borosNotionalPerSide)} since the strategy start → spread return ≈${fmtUsd(s.spreadReturnUsd, 0)} by maturity`
+                            : 'Locked fixed spread across the Boros legs'
+                        }
+                      >
+                        {fmtPct(s.spread)} spread
+                      </span>
+                      {roi !== null && (
+                        <span
+                          className="num"
+                          title={`The same expected PnL as a plain return on capital over this position's life${
+                            lifeSeconds !== null ? ` (${fmtAge(lifeSeconds * 1000)})` : ''
+                          } — Fixed APY is this figure annualized.`}
+                        >
+                          {fmtPct(roi)} ROI
+                        </span>
+                      )}
+                    </>
+                  ) : (
+                    <span>appears once every leg is in place</span>
+                  )}
+                </div>
+              </div>
+              )}
+
+              <div className={cardState === 'orphan' ? 'flex items-baseline gap-2' : undefined}>
+                <div className={microLabelClass}>PnL now</div>
+                <div className={cardState === 'orphan' ? 'text-xl font-semibold' : 'mt-0.5 text-3xl font-semibold'}>
+                  <span title="What this position has actually made so far — funding, Boros settlements and rate MtM, net of the trading fees and slippage it has been charged.">
+                    <SignedNumber value={currentNetUsd} format={(n) => fmtUsd(n, 0)} />
+                  </span>
+                </div>
+                <div className={`flex flex-wrap items-center gap-x-3 text-[11px] text-ink-500 ${cardState === 'orphan' ? '' : 'mt-1'}`}>
+                  <span
+                    className="num"
+                    title="Funding, settlements and rate MtM before any cost — the step above, shown so the arithmetic to PnL now is visible"
+                  >
+                    {fmtUsd(netBeforeCostsUsd, 0)} − {fmtUsd(costsTotalUsd, 0)} costs
+                  </span>
+                  {checks.fullyHedged &&
+                    (expectedUsd !== null ? (
+                      <span
+                        className="num"
+                        title="The PnL this position is projected to end with at maturity, net of every cost"
+                      >
+                        → {fmtUsd(expectedUsd, 0)} {matured ? 'realized' : 'by maturity'}
+                      </span>
+                    ) : (
+                      <span className="num" title="The strategy start is unknown — no projection">
+                        → —
+                      </span>
+                    ))}
+                </div>
+              </div>
+
+              {/* Capital is a MAIN number: it is the denominator every return on
+                  this card divides by, and the amount actually at work. */}
+              {cardState !== 'orphan' && (
+              <div>
+                <div className={microLabelClass}>Capital</div>
+                <div className="mt-0.5 text-3xl font-semibold">
+                  {!checks.fullyHedged ? (
+                    hiddenStat
+                  ) : (
+                    <span className="num text-ink-100" title="The capital this strategy posts">
+                      {fmtUsd(s.capitalUsd, 0)}
+                    </span>
+                  )}
+                </div>
+              </div>
+              )}
+            </div>
           </div>
         </button>
 
         {!checks.fullyHedged && (
-          <div className="border-t border-amber-500/20 bg-amber-500/5 px-3 py-2 text-[12px] leading-relaxed text-amber-300/90">
-            <span className="font-medium">Position not fully hedged — numbers appear once the book is complete.</span>{' '}
-            Boros legs {pct(checks.borosMatchRatio)} matched · perp legs {pct(checks.perpMatchRatio)} matched ·
-            Boros↔perp sizing {pct(checks.borosVsPerpRatio)}.
-            {hedgeCues.length > 0 && (
-              <ul className="mt-1 list-disc pl-4">
-                {hedgeCues.map((cue) => (
-                  <li key={cue}>{cue}</li>
-                ))}
-              </ul>
-            )}
-            {pairTopUpUsd !== null && !matured && onOpenPerpLegs && (
+          <div
+            data-card-state={cardState}
+            className={`flex flex-wrap items-center gap-x-3 gap-y-1.5 border-t px-3 py-2 text-[12px] ${
+              cardState === 'orphan'
+                ? 'border-ink-700 bg-ink-800/40'
+                : 'border-amber-500/20 bg-amber-500/5'
+            }`}
+          >
+            {/* One line, not a paragraph. What each leg needs is stated ON the
+                leg's own row — the match percentages and per-leg cue list that
+                used to live here re-described the table in prose and left the
+                reader to pair the sentences back up with the rows. */}
+            <Chip sm tone={cardState === 'orphan' ? 'neutral' : 'amber'}>
+              {cardState === 'orphan'
+                ? 'Orphan leg'
+                : cardState === 'mismatched'
+                  ? 'Sizes don’t match'
+                  : 'Incomplete position'}
+            </Chip>
+            <span className="text-ink-400">
+              {cardState === 'orphan'
+                ? 'Not part of any position. Assign it below, or close it.'
+                : cardState === 'mismatched'
+                  ? 'Every leg is open in the right direction, but only the matched part is hedged.'
+                  : borosLegs.length === 0
+                    ? // A perp pair with no Boros side at all: the funding is
+                      // floating, and saying "once every leg is in place" would
+                      // imply the missing legs are a formality rather than the
+                      // whole trade.
+                      'No Boros legs yet — the funding is floating, so there is no locked rate to show.'
+                    : 'Rate, capital and ROI appear once every leg is in place.'}
+            </span>
+            {cardState !== 'orphan' && pairTopUpUsd !== null && !matured && onOpenPerpLegs && (
               <button
                 type="button"
-                className="btn-primary mt-2 !py-1 !px-3 text-sm"
-                title={`Prefills the pair ticket at ${fmtUsd(pairTopUpUsd, 0)} per leg on this strategy's venues — the largest top-up that overshoots neither leg. Any residual single-leg gap keeps its cue above.`}
+                className="btn-ghost-xs ml-auto !text-cyan-300"
+                title={`Prefills the pair ticket at ${fmtUsd(pairTopUpUsd, 0)} per leg on this strategy's venues — the largest top-up that overshoots neither leg.`}
                 onClick={() => onOpenPerpLegs(s, pairTopUpUsd ?? undefined)}
               >
-                Execute a pair to complete the hedge →
+                Complete the hedge →
               </button>
             )}
           </div>
@@ -755,7 +1135,10 @@ export function StrategyCard({
           </div>
         )}
 
-        {/* The inviting strip at the bottom of the box. */}
+        {/* The inviting strip at the bottom of the box. An ORPHAN has no
+            spread to decompose and no projection to walk down to, so both
+            waterfalls would be empty scaffolding — the strip goes with them. */}
+        {cardState !== 'orphan' && (
         <button
           type="button"
           aria-expanded={chartsOpen}
@@ -765,10 +1148,46 @@ export function StrategyCard({
         >
           {chartsOpen ? 'see less ▲' : 'see more ▼'}
         </button>
+        )}
       </div>
 
+      {/* Cost assumptions are SETTINGS, not readouts.
+       *
+       * They were two segmented toggles plus an itemiser that expanded DOWNWARD
+       * on the card face — permanently occupying the reading path, and pushing
+       * the leg table around when opened. They change how the numbers above are
+       * computed, which makes them configuration: reachable, not underfoot.
+       * The badge says when a non-default assumption is in force, so a card
+       * whose numbers were tuned still admits it at a glance. */}
+      {cardState !== 'orphan' && (
+        <div className="mt-2 flex justify-end">
+          <button
+            type="button"
+            className="btn-ghost-xs"
+            onClick={() => setCostOpen(true)}
+            title="How this position is charged for perp entry and exit — changes every number above"
+          >
+            Cost assumptions
+            {(entryMode !== 'include' || exitMode !== 'close' || chargedPartCount < entryParts.length) && (
+              <span className="ml-1.5 text-cyan-300">·  modified</span>
+            )}
+          </button>
+        </div>
+      )}
+
+      {costOpen && (
+        <Modal
+          title={`Cost assumptions — ${s.base}`}
+          onClose={() => setCostOpen(false)}
+          widthClass="w-[560px]"
+        >
+          <div className="flex flex-col gap-4 p-4">
       {/* The PER-POSITION cost assumptions — entry first, in the order the
-          money is spent (the spread now lives in the card title). */}
+          money is spent (the spread now lives in the card title).
+
+          Hidden on an ORPHAN: both toggles exist to move a by-maturity
+          projection, and an orphan has none. Left in, they invited the reader
+          to tune the inputs of a number that is not on the card. */}
       <div className="mt-2 flex flex-wrap items-center justify-end gap-x-4 gap-y-2">
         <span
           className="flex items-center gap-1.5"
@@ -839,14 +1258,26 @@ export function StrategyCard({
           chargedUsd={chargedEntryUsd}
         />
       )}
+          </div>
+        </Modal>
+      )}
 
       <div className="mt-3">
         <DataTable
           columns={columns}
-          rows={rows}
-          rowKey={(l) => l._key}
+          // Open legs first, then the ones the book still needs — the grid a
+          // complete strategy would fill, with the gaps stated in place.
+          rows={[...openRows, ...missingRows]}
+          rowKey={(r) => r._key}
           maxHeightClass="max-h-96"
-          renderExpanded={(l) => (
+          rowClassName={(r) => (isMissing(r) ? 'opacity-60' : '')}
+          renderExpanded={(r) => {
+            // A missing leg has nothing to expand into: no live position, no
+            // settlements, and no membership to assert about a leg that is not
+            // there. Its row says what it is and offers the way to open it.
+            if (isMissing(r)) return null;
+            const l = r;
+            return (
             <div className="flex flex-col gap-1.5">
               {l.kind === 'boros' && <VenueCancellation legs={s.legs} venue={l.venue} />}
               {l.kind === 'perp' && (
@@ -856,6 +1287,7 @@ export function StrategyCard({
                   // close acts on the whole position, so the popover has to
                   // open on THIS position's size, not the venue's.
                   attributedQty={(l.share ?? 1) < 0.999 ? l.notionalToken : undefined}
+                  share={l.share ?? 1}
                 />
               )}
               {l.kind === 'boros' && (
@@ -878,26 +1310,84 @@ export function StrategyCard({
               {/* Where this leg belongs, asked about the leg it is about. */}
               <LegMembership s={s} leg={l} destinations={destinations} onAssert={onAssert} />
             </div>
-          )}
+            );
+          }}
         />
       </div>
 
-      {/* A Boros-less pair owning both venue legs whole can be closed as one.
-          Below the legs and right-aligned, where the perp-only box carried it:
-          it acts on the rows above it, and in the cue stack at the top it read
-          as one more thing to fix rather than the card's action. Never on a
-          shared leg — the venue closes the WHOLE position, not this card's
-          slice of it. */}
-      {borosLegs.length === 0 &&
-        perpLegs.length === 2 &&
+      {/* Closing the perp pair as one. Below the legs and right-aligned, where
+          the perp-only box carried it: it acts on the rows above it, and in
+          the cue stack at the top it read as one more thing to fix rather than
+          the card's action. Never on a shared leg — the venue closes the WHOLE
+          position, not this card's slice of it.
+
+          This used to be gated to Boros-less cards. The gate was about the
+          LEGS IT CLOSES, not about the card: on a 4-leg position the perp pair
+          is still exactly two whole venue legs, and closing it is still one
+          coherent action — the user just had no way to ask for it, and had to
+          find two hover-revealed row buttons instead. The Boros legs are
+          deliberately NOT included: they close through a different venue with
+          its own flow, so one button cannot honestly promise all four. */}
+      {perpLegs.length === 2 &&
         perpLegs.every((l) => l.symbol && (l.share ?? 1) >= 0.999) && (
-          <div className="mt-2 flex justify-end">
-            <CloseBoth
-              base={s.base}
-              legs={perpLegs.map((l) => ({ symbol: l.symbol as string, qty: l.notionalToken ?? 0 }))}
-            />
+          // A labelled bar rather than a lone button in the corner: closing is
+          // the card's other action, and it was previously reachable only by
+          // expanding a row and finding a control that rendered at 40% opacity.
+          // A quiet strip, not a red box. Closing is a normal thing to do with
+          // a position; the previous bordered rose panel read as a warning
+          // about the position rather than an action available on it. The
+          // buttons carry the colour, the container does not. Sized to hold
+          // Boros close actions alongside these when they exist.
+          <div className="-mx-4 mt-3 flex flex-wrap items-center gap-2 border-t border-ink-800 px-4 py-2.5">
+            {/* A plain button that OPENS a form, not a hold-to-confirm sitting
+                on the card. A destructive control that arms on press-and-hold,
+                in the reading path, makes the card feel hazardous to touch;
+                behind a click it is available without being underfoot. */}
+            <button
+              type="button"
+              className="btn-ghost-xs !text-rose-300 hover:!border-rose-500/50"
+              onClick={() => setCloseOpen(true)}
+            >
+              Close position
+            </button>
+            {borosLegs.length > 0 && (
+              <span className="text-[11px] text-ink-500">
+                perp pair only — the Boros legs close on their own venue
+              </span>
+            )}
           </div>
         )}
+
+      {closeOpen && (
+        <Modal title={`Close ${s.base} — perp pair`} onClose={() => setCloseOpen(false)} widthClass="w-[460px]">
+          <div className="flex flex-col gap-3 p-4">
+            <div className="text-[12px] leading-relaxed text-ink-300">
+              Closes both perp legs as one action, reduce-only at the current mark.
+              {borosLegs.length > 0 && ' The Boros legs are not touched — they close on their own venue.'}
+            </div>
+            <table className="w-full text-[12px]">
+              <tbody>
+                {perpLegs.map((l) => (
+                  <tr key={`${l.venue}:${l.side}:${l.symbol ?? ''}`} className="border-t border-ink-800 first:border-t-0">
+                    <td className="py-1.5 text-ink-300">
+                      {prettyVenue(l.venue)} <span className="text-ink-500">{l.side}</span>
+                    </td>
+                    <td className="num py-1.5 text-right text-ink-200">
+                      {fmtUsdCompact(l.notionalUsd)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <div className="flex justify-end">
+              <CloseBoth
+                base={s.base}
+                legs={perpLegs.map((l) => ({ symbol: l.symbol as string, qty: l.notionalToken ?? 0 }))}
+              />
+            </div>
+          </div>
+        </Modal>
+      )}
 
       {!perpSource && (
         <div className="mt-2 text-[10px] text-ink-500">

@@ -94,7 +94,7 @@
   }
 
   .th {
-    @apply sticky top-0 z-10 whitespace-nowrap border-b border-ink-700 bg-ink-900 px-3 py-2 text-[11px] font-semibold uppercase tracking-wider text-ink-400;
+    @apply sticky top-0 z-10 whitespace-nowrap border-b border-ink-700 bg-ink-900 px-2 py-2 text-[11px] font-semibold uppercase tracking-wider text-ink-400;
   }
 
   /* Secondary action next to a .btn-primary (the cards' "Details" toggle). */

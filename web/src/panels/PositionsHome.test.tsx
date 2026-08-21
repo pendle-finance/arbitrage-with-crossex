@@ -871,7 +871,9 @@ describe('PositionsHome — a Boros-less pair rendered as a card', () => {
     mockPositions();
     mockStrategy(perpsOnly());
     const { container } = renderWithClient(<PositionsHome />);
-    const close = await screen.findByRole('button', { name: 'Close both' });
+    // The bar now carries a plain trigger that OPENS the close form; the
+    // hold-to-confirm itself lives inside that dialog, off the card face.
+    const close = await screen.findByRole('button', { name: 'Close position' });
 
     // It acts on the rows above it. Carried over from the perp-only box it
     // replaced, it landed among the "what's wrong with this position" notes,
@@ -880,7 +882,7 @@ describe('PositionsHome — a Boros-less pair rendered as a card', () => {
     expect(table).not.toBeNull();
     expect(
       table.compareDocumentPosition(close) & Node.DOCUMENT_POSITION_FOLLOWING,
-      'Close both must come after the leg table',
+      'The close trigger must come after the leg table',
     ).toBeTruthy();
   });
 

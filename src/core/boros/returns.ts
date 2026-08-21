@@ -126,6 +126,15 @@ export interface StrategyLeg {
   floatingApr?: number;
   /** Funding (perp) or settlement (Boros, net of settle fees) cash to date. */
   cashFlowUsd: number;
+  /** Boros only: the settlement fees this leg has ALREADY paid, accrued as
+   * notional × settleFeeApr × elapsed — the per-leg share of
+   * `feesUsd.paid.borosSettlementUsd`, which is the sum of exactly this.
+   *
+   * Exposed because `cashFlowUsd` arrives net of it: a "before costs" reading
+   * of the leg has to add it back, and the alternative — splitting the
+   * strategy-level total across legs by a ratio — would be an estimate where
+   * this is exact. Display-only, like the aggregate: never re-subtract it. */
+  settlementFeePaidUsd?: number;
   /** Mark-to-market of the open position. */
   mtmUsd: number;
   /** Realized trade PnL NET of trade fees (Boros closes/partials; 0 for pure holds). */
@@ -1135,8 +1144,13 @@ function assembleStrategy(args: AssembleInput): StrategyRollup {
     const legMaturity = b.leg.maturity ?? maturity;
     if (b.leg.openedAt !== null) {
       const settledElapsed = Math.max(0, Math.min(nowSec, legMaturity) - b.leg.openedAt);
-      borosSettlementPaidUsd +=
+      const legSettlementPaidUsd =
         b.leg.notionalUsd * b.settleFeeApr * (settledElapsed / SECONDS_IN_YEAR);
+      // Kept on the leg as well as summed: the card adds it back to show a
+      // per-leg figure before costs, and the aggregate cannot be split after
+      // the fact without inventing a ratio.
+      b.leg.settlementFeePaidUsd = legSettlementPaidUsd;
+      borosSettlementPaidUsd += legSettlementPaidUsd;
     }
     // No openedAt condition here: the fee runs to maturity for every open leg
     // whether or not its open time is known.

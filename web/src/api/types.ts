@@ -211,6 +211,10 @@ export interface StrategyLeg {
    * funding ledger when the position predates it; a warning says when the
    * ledger couldn't cover the window). Boros: settlements net of settle fees. */
   cashFlowUsd: number;
+  /** Boros only: settlement fees this leg has already paid — the per-leg share
+   * of `feesUsd.paid.borosSettlementUsd`. `cashFlowUsd` is already net of it,
+   * so a "before costs" reading adds it back. Never re-subtract. */
+  settlementFeePaidUsd?: number;
   /** Perp: price MtM — DISPLAY ONLY, excluded from netUsd (the delta-neutral
    * pair's uPnLs cancel; the residual is accounted once as entry slippage).
    * Boros: mark value of the remaining rate stream — included in netUsd. */

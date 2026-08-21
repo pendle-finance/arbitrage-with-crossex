@@ -245,8 +245,11 @@ export function PositionsHome() {
 
   const header = (
     <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+      {/* "4-leg" described the finished shape, but the list also holds books
+          still being built and single orphan legs — a heading that names four
+          legs over a one-leg card is telling the reader they lost three. */}
       <h2 className="text-xs font-semibold uppercase tracking-wider text-ink-400">
-        4-leg fixed-return positions
+        Fixed-return positions
       </h2>
       {address && (
         <span className="flex flex-wrap items-center gap-2 text-xs">

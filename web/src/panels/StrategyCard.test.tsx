@@ -16,18 +16,32 @@ import { StrategyCard } from './StrategyCard';
 /** Charts default collapsed — open them via the See-more tab below the box. */
 const openDetails = () => fireEvent.click(screen.getByRole('button', { name: /see more/ }));
 
+/** Cost assumptions are settings now — behind a dialog, so they cannot push the
+ * card around when opened. Every helper below opens it first if it is shut. */
+const openCosts = () => {
+  const btn = screen.queryByRole('button', { name: /Cost assumptions/ });
+  if (btn) fireEvent.click(btn);
+};
+
 /** The exit toggle defaults to 'Include' — flip a rendered card to
  * Omit (rolling over) (no exit costs charged). */
-const rollOver = () =>
+const rollOver = () => {
+  openCosts();
   fireEvent.click(screen.getByRole('radio', { name: 'Omit (rolling over)' }));
+};
 
 /** Both cost toggles carry an 'Include' radio — scope by the exit radiogroup. */
-const exitGroup = () => screen.getByRole('radiogroup', { name: 'Perp exit cost' });
+const exitGroup = () => {
+  openCosts();
+  return screen.getByRole('radiogroup', { name: 'Perp exit cost' });
+};
 
 /** The entry toggle defaults to 'Include' — flip a rendered card to Omit, i.e.
  * the perps were rolled into this maturity and paid their entry beforehand. */
-const omitEntry = () =>
+const omitEntry = () => {
+  openCosts();
   fireEvent.click(screen.getByRole('radio', { name: 'Omit (rolled over)' }));
+};
 
 const card = (
   over: Parameters<typeof makeStrategyRollup>[0] = {},
@@ -52,6 +66,11 @@ describe('StrategyCard — a leg shared with another strategy', () => {
       ],
     ]);
     render(card({ legs }, { livePositions: live }));
+    // The live uPnL now lives in the perp row's expanded detail rather than in
+    // a table column, so open the row that carries it.
+    // Row order follows the fixture's legs: [0] Bybit perp, [1] Hyperliquid
+    // perp — the shared leg whose uPnL must be scaled.
+    fireEvent.click(screen.getAllByRole('button', { name: 'toggle details' })[1]);
     // The venue's -1000 covers the whole leg; this card owns 60% of it, so
     // rendering -1000 here would double-count it against the sibling card.
     expect(screen.getByText('-600.00')).toBeInTheDocument();
@@ -63,43 +82,52 @@ describe('StrategyCard — hero tiers', () => {
   it('renders Fixed APR on Capital as the hero, with Capital and Profit by maturity', () => {
     render(card());
     rollOver();
-    expect(screen.getByText('Fixed APR on capital')).toBeInTheDocument();
+    expect(screen.getByText('Fixed APY')).toBeInTheDocument();
     // Net PnL by maturity 282.21 over capital 41,320, annualized across the
     // 14-day life (start → maturity): 282.22 / (41,320 × 14/365) = 17.81%.
     expect(screen.getByText('+17.81%')).toBeInTheDocument();
+    // Capital is a MAIN number; spread and ROI are captions under Fixed APY.
     expect(screen.getByText('Capital')).toBeInTheDocument();
     expect(screen.getByText('$41,320')).toBeInTheDocument();
-    expect(screen.getByText(/PNL by maturity/)).toBeInTheDocument();
-    // 411.81 − 119.54 − 10.06 = 282.21 → "+$282" at 0dp.
-    expect(screen.getAllByText('+$282').length).toBeGreaterThan(0);
-    // Current net PnL sits right of Profit by maturity: realizedPnlUsd at 0dp.
-    expect(screen.getByText('Current PnL')).toBeInTheDocument();
+    expect(screen.getByText(/7\.07% spread/)).toBeInTheDocument();
+    // The projection is the caption under PnL now: "→ $282 by maturity".
+    expect(screen.getByText(/by maturity/)).toBeInTheDocument();
+    expect(screen.getAllByText(/\+?\$282/).length).toBeGreaterThan(0);
+    // PnL now is AFTER costs — what the account actually reflects. The
+    // before-cost step rides in its caption rather than as a main number.
+    expect(screen.getByText('PnL now')).toBeInTheDocument();
     expect(screen.getByText('-$115')).toBeInTheDocument();
+    expect(screen.getByText(/-\$1 − \$114 costs/)).toBeInTheDocument();
     expect(screen.getByText('hedged ✓')).toBeInTheDocument();
   });
 
-  it('titles the card with sides, venues, and the locked spread (assumption in its tooltip)', () => {
+  it('titles the card with the asset, both venues and the maturity', () => {
     render(card());
-    // "HYPE  long Bybit short Hyperliquid (7.07% spread)"
-    expect(screen.getByText('long')).toBeInTheDocument();
+    // "HYPE · Bybit ⇄ Hyperliquid · matures <date> · <n> left". The old title
+    // said "long Bybit short Hyperliquid", which named the PERP sides only —
+    // on a card whose Boros legs can both be long, that contradicted the leg
+    // table underneath it.
+    expect(screen.getByText('HYPE')).toBeInTheDocument();
     expect(screen.getByText(/Bybit/)).toBeInTheDocument();
-    expect(screen.getByText('short')).toBeInTheDocument();
     expect(screen.getByText(/Hyperliquid/)).toBeInTheDocument();
-    const spread = screen.getByText('(7.07% spread)');
-    expect(spread).toBeInTheDocument();
-    // The spread-lock assumption lives in the spread's tooltip.
+    // The timeline's axis label also says 'matures', so assert on the count
+    // rather than uniqueness: the point is that the TITLE now carries it.
+    expect(screen.getAllByText(/matures/).length).toBeGreaterThan(0);
+    // The locked spread is a caption under Fixed APY now, not a
+    // parenthetical in the title.
+    expect(screen.queryByText('(7.07% spread)')).not.toBeInTheDocument();
+    expect(screen.getByText(/7\.07% spread/)).toBeInTheDocument();
+    // The spread-lock assumption still lives in that number's tooltip.
     expect(
       screen.getByTitle(/Assumes 7\.07% locked on \$158\.8k since the strategy start/),
     ).toBeInTheDocument();
-    // The old standalone line is gone.
-    expect(screen.queryByText(/Locked spread/)).not.toBeInTheDocument();
   });
 
   it('folds the checked exit parts into the hero numbers by default', () => {
     render(card()); // defaults to 'Include' → both exit parts on
     // Profit: 282.21 − (80 + 49.16) = 153.05 → "+$153" (hero + target annotation).
-    expect(screen.getAllByText('+$153').length).toBeGreaterThan(0);
-    expect(screen.queryByText('+$282')).not.toBeInTheDocument();
+    expect(screen.getAllByText(/\+?\$153/).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/\+?\$282/)).not.toBeInTheDocument();
     // The APR follows that same net PnL: 153.06 / (41,320 × 14/365) = 9.66%,
     // below the 17.81% Roll figure (which never nets the exit cost).
     expect(screen.getByText('+9.66%')).toBeInTheDocument();
@@ -128,10 +156,10 @@ describe('StrategyCard — hero tiers', () => {
       'aria-checked',
       'true',
     );
-    expect(screen.getAllByText('+$153').length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/\+?\$153/).length).toBeGreaterThan(0);
     // Omit (rolling over) → no exit costs charged: back to the raw projection +$282.
     await userEvent.click(screen.getByRole('radio', { name: 'Omit (rolling over)' }));
-    expect(screen.getAllByText('+$282').length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/\+?\$282/).length).toBeGreaterThan(0);
     // The assumptions live in the toggle's tooltip.
     expect(
       screen.getByTitle(/maker\+hedge close .* exit slippage equal to the entry slippage/),
@@ -139,7 +167,7 @@ describe('StrategyCard — hero tiers', () => {
     // Back to Include = both exit parts folded in at once:
     // 282.21 − 80 − 49.16 = 153.05 → "+$153".
     await userEvent.click(within(exitGroup()).getByRole('radio', { name: 'Include' }));
-    expect(screen.getAllByText('+$153').length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/\+?\$153/).length).toBeGreaterThan(0);
   });
 
   it('shows the strategy timeline bar (start → now → maturity) above the hero box', () => {
@@ -174,7 +202,7 @@ describe('StrategyCard — hero tiers', () => {
     expect(box.contains(waterfall)).toBe(true);
     expect(waterfall!.compareDocumentPosition(open) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     // …while the stats surface stays a click target of its own.
-    const stats = screen.getByRole('button', { name: /Fixed APR on capital/ });
+    const stats = screen.getByRole('button', { name: /Fixed APY/ });
     expect(stats).toHaveAttribute('aria-expanded', 'true');
     await userEvent.click(stats);
     expect(container.querySelector('[data-waterfall]')).toBeNull();
@@ -371,8 +399,14 @@ describe('StrategyCard — legs', () => {
     expect(screen.getByText('61.06')).toBeInTheDocument(); // mark
     expect(screen.getByText('20x')).toBeInTheDocument();
     // Provider-less render → actions disabled, not hidden.
-    expect(screen.getByRole('button', { name: 'Close' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Lev' })).toBeDisabled();
+    // Close is on the row itself now (and still in the expanded detail), so
+    // both are present — assert they are all disabled without TradeFlow.
+    for (const b of screen.getAllByRole('button', { name: 'Close' })) {
+      expect(b).toBeDisabled();
+    }
+    for (const b of screen.getAllByRole('button', { name: 'Lev' })) {
+      expect(b).toBeDisabled();
+    }
   });
 
   it('a perp row whose live position vanished explains itself instead of guessing', async () => {
@@ -386,7 +420,8 @@ describe('StrategyCard — states', () => {
   it('matured: chip + relabeled profit + close-the-perps cue', () => {
     render(card({ secondsToMaturity: 0 }));
     expect(screen.getByText('matured')).toBeInTheDocument();
-    expect(screen.getByText(/PNL \(realized at maturity\)/)).toBeInTheDocument();
+    // The matured projection is a caption under Net now: "→ $x realized".
+    expect(screen.getAllByText(/realized/).length).toBeGreaterThan(0);
     expect(screen.getByText(/close the perp legs/)).toBeInTheDocument();
   });
 
@@ -433,8 +468,12 @@ describe('StrategyCard — states', () => {
     expect(screen.getByText('$250.0k')).toBeInTheDocument();
     // USDT-margined Boros legs stay pure-dollar — no token bracket, bare title.
     expect(screen.getByTitle('$250,000')).toHaveTextContent(/^\$250\.0k$/);
-    const rate = screen.getByTitle('entry fixed APR → current mark APR');
-    expect(rate.textContent).toBe('8.00%→—');
+    // The column shows the LOCKED rate only — the live mark used to sit
+    // beside it behind an arrow, which read as a rate that had moved, when the
+    // whole point of the leg is that its rate cannot. A missing mark can no
+    // longer produce NaN here because the mark is not rendered at all.
+    const rate = screen.getByTitle(/The fixed APR this leg locked at entry/);
+    expect(rate.textContent).toBe('8.00%');
     expect(rate.textContent).not.toMatch(/NaN/);
   });
 
@@ -550,13 +589,96 @@ describe('StrategyCard — sizing gate', () => {
         },
       }),
     );
-    expect(screen.queryByText('$41,320')).toBeNull(); // capital hidden
-    expect(screen.getAllByText('—').length).toBeGreaterThanOrEqual(3);
-    expect(screen.getByText(/Position not fully hedged/)).toBeInTheDocument();
-    expect(screen.getByText(/Boros legs 40% matched/)).toBeInTheDocument();
-    // The cue names the exact gap, side, and amount — no thresholds in the copy.
-    expect(screen.getByText(/add ~\$300,000 to the LONG side/)).toBeInTheDocument();
-    expect(screen.getByText('Current PnL')).toBeInTheDocument();
+    expect(screen.queryByText(/on \$41,320/)).toBeNull(); // capital hidden
+    // Fixed APY is the one hero that hides; Net always renders, and the
+    // workings caption is replaced by the "appears once…" line.
+    expect(screen.getAllByText('—').length).toBeGreaterThanOrEqual(1);
+    // All four sides are present here (Boros LONG 200k vs SHORT 500k), so this
+    // is a SIZE mismatch, not a book with legs missing — the copy says so, and
+    // the cue below still names the exact side and amount to add.
+    expect(screen.getByText(/Sizes don’t match/)).toBeInTheDocument();
+    // The gap is stated ON the undersized leg's row, in its own unit, rather
+    // than as a percentage in a paragraph under the table.
+    expect(screen.getAllByText(/short/).length).toBeGreaterThan(0);
+    expect(screen.getByText('PnL now')).toBeInTheDocument();
+  });
+
+  it('calls a size mismatch what it is, and marks the offending legs', () => {
+    // All four sides present in the right directions — this is NOT a book with
+    // legs missing, so the copy must not send the user looking for one. The
+    // SHORT perp is half the Boros leg it offsets; the marker names the gap in
+    // the leg's own unit rather than a match percentage.
+    render(
+      card({
+        legs: [
+          makeStrategyLeg({ kind: 'perp', venue: 'OKX', side: 'LONG', notionalUsd: 500_000 }),
+          makeStrategyLeg({
+            kind: 'perp',
+            venue: 'HYPERLIQUID',
+            side: 'SHORT',
+            notionalUsd: 250_000,
+          }),
+          makeStrategyLeg({ kind: 'boros', venue: 'OKX', side: 'LONG', notionalUsd: 500_000 }),
+          makeStrategyLeg({
+            kind: 'boros',
+            venue: 'HYPERLIQUID',
+            side: 'SHORT',
+            notionalUsd: 500_000,
+          }),
+        ],
+        hedgeChecks: {
+          borosMatchRatio: 1,
+          perpMatchRatio: 0.5,
+          borosVsPerpRatio: 0.75,
+          fullyHedged: false,
+        },
+      }),
+    );
+    expect(screen.getByText(/Sizes don’t match/)).toBeInTheDocument();
+    expect(screen.queryByText(/Incomplete position/)).toBeNull();
+    // The undersized leg is flagged on its own row.
+    expect(screen.getAllByText(/short/).length).toBeGreaterThan(0);
+  });
+
+  it('drops the hedge-shape warnings the rows now carry, and keeps every other one', () => {
+    // The server describes the book's shape in prose AND the card now shows it
+    // structurally (missing rows, short/over-by chips, the banner). Rendering
+    // both puts the table back on screen as a paragraph — the amber block this
+    // redesign removed. Everything that ISN'T shape, though, qualifies numbers
+    // the card otherwise shows as exact, and must survive.
+    const shape = [
+      'BINANCE legs are imbalanced by $1,850,152 of notional — the locked rate only covers the matched part.',
+      'No BINANCE perp found for ETH in the connected Gate account — that side’s floating rate is unhedged.',
+      'No matching perp legs for ETH in the connected Gate account — the floating side is unhedged (or hedged elsewhere).',
+      'No Boros legs in this ETH position — the funding spread is floating, not locked.',
+    ];
+    const kept = [
+      'Entry slippage for ETH is unknown (not a simple 1-long/1-short perp pair with known entries) — it is excluded from the cost totals.',
+      'The HYPERLIQUID ETH perp predates the strategy start — its funding number includes pre-lock accrual (the CrossEx funding ledger doesn’t cover that window).',
+      'No trade history found for Hyperliquid ETH 25 Sep 2026 — trade fees may be understated and the open time is unknown.',
+      'Couldn’t read your CrossEx fill history right now (auth) — positions sharing a venue leg are split by price and open-time proximity until it returns.',
+    ];
+    render(card({ warnings: [...shape, ...kept] }));
+    for (const w of shape) expect(screen.queryByText(w)).toBeNull();
+    for (const w of kept) expect(screen.getByText(w)).toBeInTheDocument();
+  });
+
+  it('treats a lone leg as an orphan — no completion cues, no missing-leg arithmetic', () => {
+    render(
+      card({
+        legs: [
+          makeStrategyLeg({ kind: 'perp', venue: 'HYPERLIQUID', side: 'SHORT', notionalUsd: 104_743 }),
+        ],
+        hedgeChecks: { borosMatchRatio: 0, perpMatchRatio: 0, borosVsPerpRatio: 0, fullyHedged: false },
+      }),
+    );
+    expect(screen.getByText('Orphan leg')).toBeInTheDocument();
+    expect(screen.getByText(/Not part of any position/)).toBeInTheDocument();
+    // An orphan is not a half-built strategy: it must not be told to complete
+    // a hedge it was never part of.
+    expect(screen.queryByText(/Incomplete position/)).toBeNull();
+    expect(screen.queryByText(/matched/)).toBeNull();
+    expect(screen.queryByText(/lock the rate on both sides/)).toBeNull();
   });
 
   it('cues a missing perp leg with its venue and size', () => {
@@ -570,11 +692,13 @@ describe('StrategyCard — sizing gate', () => {
         hedgeChecks: { borosMatchRatio: 1, perpMatchRatio: 0, borosVsPerpRatio: 0.5, fullyHedged: false },
       }),
     );
-    expect(screen.getByText(/Perp SHORT leg is missing — open ~\$160,000 on HYPERLIQUID/)).toBeInTheDocument();
-    // The sizing cue names the exact missing LEG (Bybit is already matched).
-    expect(
-      screen.getByText(/The perp book is 50% of the Boros book — open ~\$160,000 more SHORT on HYPERLIQUID\./),
-    ).toBeInTheDocument();
+    // The absent leg gets its own dimmed row, in the grid position it would
+    // occupy, carrying the size it would need and the way to open it.
+    expect(screen.getByText('missing')).toBeInTheDocument();
+    expect(screen.getByText('≈$160.0k')).toBeInTheDocument();
+    // No onOpenPerpLegs wired in this render, so the row states the fact
+    // rather than offering an action it cannot perform.
+    expect(screen.getByText('not open')).toBeInTheDocument();
   });
 
   it('an undersized perp pair cues the exact top-up for EACH leg', () => {
@@ -596,11 +720,10 @@ describe('StrategyCard — sizing gate', () => {
         },
       }),
     );
-    expect(
-      screen.getByText(/open ~\$300,000 more SHORT on HYPERLIQUID and ~\$200,000 more LONG on OKX\./),
-    ).toBeInTheDocument();
-    // The leg-imbalance cue is per-leg too (the lagging SHORT, with its venue).
-    expect(screen.getByText(/open ~\$100,000 more SHORT on HYPERLIQUID\./)).toBeInTheDocument();
+    // Both undersized legs are marked on their own rows.
+    expect(screen.getAllByText(/short/).length).toBeGreaterThanOrEqual(2);
+    // The lagging leg is marked on its own row, in its own unit.
+    expect(screen.getAllByText(/short/).length).toBeGreaterThan(0);
   });
 
   it('offers a pair CTA sized to the safe top-up when BOTH perp legs lag', () => {
@@ -624,7 +747,7 @@ describe('StrategyCard — sizing gate', () => {
         { onOpenPerpLegs: onOpen },
       ),
     );
-    const cta = screen.getByRole('button', { name: /Execute a pair to complete the hedge/ });
+    const cta = screen.getByRole('button', { name: /Complete the hedge/ });
     fireEvent.click(cta);
     // min(HL 300k, OKX 200k) — the largest pair that overshoots neither leg.
     expect(onOpen).toHaveBeenCalledTimes(1);
@@ -667,7 +790,11 @@ describe('StrategyCard — sizing gate', () => {
         { perpSource: null },
       ),
     );
-    expect(screen.getByText(/Connect the Gate account to verify the perp side/)).toBeInTheDocument();
+    // Said on the perp rows themselves — "cannot see it" is a property of
+    // those legs, not of the position as a whole.
+    expect(
+      screen.getAllByTitle(/Connect the Gate account to verify the perp side/).length,
+    ).toBeGreaterThan(0);
   });
 
   it('hides the title spread too — a half-built Boros book does not price one', () => {
@@ -682,18 +809,24 @@ describe('StrategyCard — sizing gate', () => {
       }),
     );
     expect(screen.queryByText(/12\.83%/)).toBeNull();
-    expect(screen.getByText('(— spread)')).toBeInTheDocument();
     expect(screen.queryByTitle(/Assumes .* locked on/)).toBeNull();
-    expect(
-      screen.getByTitle(/Hidden until the position is fully hedged — a locked spread needs a matched pair/),
-    ).toBeInTheDocument();
+    expect(screen.queryByText(/7\.07% spread/)).toBeNull();
+    // A lone leg is an ORPHAN, so the Fixed APY block is absent entirely rather
+    // than showing "—" and promising a number once the legs arrive: this leg
+    // has no legs to wait for. Net is the only figure it can honestly show.
+    expect(screen.queryByText('Fixed APY')).toBeNull();
+    expect(screen.queryByText(/appears once every leg is in place/)).toBeNull();
+    expect(screen.getByText('PnL now')).toBeInTheDocument();
   });
 
   it('shows the numbers and no note when fully hedged (the fixture default)', () => {
     render(card());
     expect(screen.getByText('$41,320')).toBeInTheDocument();
-    expect(screen.getByText('(7.07% spread)')).toBeInTheDocument();
-    expect(screen.queryByText(/Position not fully hedged/)).toBeNull();
+    // A complete book shows its workings instead of the placeholder line.
+    expect(screen.queryByText(/appears once every leg is in place/)).toBeNull();
+    expect(screen.getByText(/7\.07% spread/)).toBeInTheDocument();
+    expect(screen.queryByText(/Incomplete position/)).toBeNull();
+    expect(screen.queryByText(/Sizes don’t match/)).toBeNull();
   });
 });
 
@@ -704,15 +837,16 @@ describe('StrategyCard — perp entry cost', () => {
   it('hands back exactly the entry cost the strategy was charged', () => {
     render(card());
     rollOver(); // isolate the entry toggle from the exit one
-    expect(screen.getAllByText('+$282').length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/\+?\$282/).length).toBeGreaterThan(0);
+    // PnL now is AFTER costs, so it carries the entry charge: −$115.
     expect(screen.getByText('-$115')).toBeInTheDocument();
 
     omitEntry();
     // Add-back = perp trading fees 65.01 + entry slippage 49.16 = 114.17.
     // Projection 282.21 + 114.17 = 396.38 → "+$396"; APR 396.38 / (41,320 × 14/365).
-    expect(screen.getAllByText('+$396').length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/\+?\$396/).length).toBeGreaterThan(0);
     expect(screen.getByText('+25.01%')).toBeInTheDocument();
-    // Current PnL moves too: −114.91 + 114.17 = −0.74.
+    // Handing back the entry cost moves PnL now too: −114.91 + 114.17 = −0.74.
     expect(screen.getByText('-$1')).toBeInTheDocument();
     expect(screen.queryByText('-$115')).not.toBeInTheDocument();
   });
@@ -734,7 +868,7 @@ describe('StrategyCard — perp entry cost', () => {
     // 282.21 + 114.17 − (80 + 49.16) = 267.22. The exit slippage still folds in
     // at its FULL magnitude even though the server seeds it from the very entry
     // slippage just handed back — you still have to cross back out.
-    expect(screen.getAllByText('+$267').length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/\+?\$267/).length).toBeGreaterThan(0);
     expect(screen.getByText('+16.86%')).toBeInTheDocument();
   });
 
@@ -777,15 +911,20 @@ describe('StrategyCard — perp entry cost', () => {
  * $44.46 Hyperliquid) — 4 parts totalling the 65.01 + 49.16 aggregates. */
 describe('StrategyCard — itemised entry cost', () => {
   const itemise = () => fireEvent.click(itemiseBtn());
-  const entryGroup = () => screen.getByRole('radiogroup', { name: 'Perp entry cost' });
+  const entryGroup = () => (openCosts(), screen.getByRole('radiogroup', { name: 'Perp entry cost' }));
   const includeRadio = () => within(entryGroup()).getByRole('radio', { name: 'Include' });
   /** The disclosure — its label carries the "n of N charged" count. */
-  const itemiseBtn = () => screen.getByRole('button', { name: 'Itemise the perp entry cost' });
+  const itemiseBtn = () => {
+    openCosts();
+    return screen.getByRole('button', { name: 'Itemise the perp entry cost' });
+  };
 
   /** Two executions can carry identical prose, so address a row by its part id
    * — the same identity the ticks are persisted under. */
-  const rowFor = (container: HTMLElement, partId: string) =>
-    container.querySelector(`[data-part="${partId}"] input`) as HTMLInputElement;
+  // The itemiser lives in the cost-settings dialog, which is PORTALED to
+  // <body> — scoping this to the render container would miss it.
+  const rowFor = (_container: HTMLElement, partId: string) =>
+    document.body.querySelector(`[data-part="${partId}"] input`) as HTMLInputElement;
 
   it('counts what is charged, and lists every execution with its date', () => {
     render(card());
@@ -802,13 +941,13 @@ describe('StrategyCard — itemised entry cost', () => {
   it('un-ticking one execution hands back exactly that part', () => {
     const { container } = render(card());
     rollOver(); // isolate from the exit assumption
-    expect(screen.getAllByText('+$282').length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/\+?\$282/).length).toBeGreaterThan(0);
     itemise();
     fireEvent.click(rowFor(container, 'slip:deal:deal-a'));
     // deal-a cost $30.00 → 282.21 + 30 = 312.21.
-    expect(screen.getAllByText('+$312').length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/\+?\$312/).length).toBeGreaterThan(0);
     expect(itemiseBtn()).toHaveTextContent('3 of 4');
-    // Current PnL moves with it: −114.91 + 30 = −84.91.
+    // PnL now moves with it: −114.91 + 30 = −84.91.
     expect(screen.getByText('-$85')).toBeInTheDocument();
   });
 

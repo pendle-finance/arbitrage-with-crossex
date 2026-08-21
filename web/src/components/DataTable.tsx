@@ -87,7 +87,12 @@ export function DataTable<T>({
                     {columns.map((c) => (
                       <td
                         key={c.key}
-                        className={`whitespace-nowrap px-3 py-1.5 align-middle ${
+                        // px-2: these tables now carry up to six columns inside
+                        // a fixed-width card, and px-3 pushed the last one past
+                        // the edge — the horizontal scroll saved the data but
+                        // put a row action out of reach, which is the opposite
+                        // of what a row action is for.
+                        className={`whitespace-nowrap px-2 py-1.5 align-middle ${
                           c.align === 'right' ? 'text-right' : 'text-left'
                         } ${c.className ?? ''}`}
                       >
