@@ -3,12 +3,13 @@
  * X intent. The payload was frozen when Share was clicked, so the 4s position
  * poll can't mutate an open modal. */
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { postJson } from '../api/client';
 import { Modal } from '../components/Modal';
 import { Spinner } from '../components/Spinner';
 import { useToast } from '../components/Toast';
-import { buildShareUrl, buildXIntentUrl, shareFileName } from '../lib/share';
+import { buildShareUrl, buildShortShareUrl, buildXIntentUrl, shareFileName } from '../lib/share';
 import { renderShareCard } from '../lib/shareCard';
-import type { SharePayloadV1 } from '../lib/shareCodec';
+import { encodeSharePayload, type SharePayloadV1 } from '../lib/shareCodec';
 
 /** `ClipboardItem` accepts a Blob PROMISE — and Safari in fact requires the
  * promise form (constructing after an await loses the user gesture). */
@@ -22,13 +23,38 @@ export function SharePositionModal({ payload, onClose }: { payload: SharePayload
   const [failed, setFailed] = useState(false);
 
   // The link never depends on the canvas — a rendering failure still shares.
-  const shareUrl = useMemo(() => {
+  const longUrl = useMemo(() => {
     try {
       return buildShareUrl(payload);
     } catch {
       return null;
     }
   }, [payload]);
+
+  // Upgrade to a short link in the background: the long URL shows immediately
+  // and stays the silent fallback if the backend is slow, down, or throttled —
+  // sharing never waits on the network.
+  const [shortUrl, setShortUrl] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    setShortUrl(null);
+    let d: string;
+    try {
+      d = encodeSharePayload(payload);
+    } catch {
+      return;
+    }
+    postJson<{ code: string }>('/share-link', { d })
+      .then((r) => {
+        if (!cancelled && r?.code) setShortUrl(buildShortShareUrl(r.code));
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [payload]);
+
+  const shareUrl = shortUrl ?? longUrl;
 
   useEffect(() => {
     let cancelled = false;
@@ -113,7 +139,7 @@ export function SharePositionModal({ payload, onClose }: { payload: SharePayload
         <div className="flex flex-wrap items-center gap-2">
           {shareUrl && (
             <a
-              href={buildXIntentUrl(payload)}
+              href={buildXIntentUrl(payload, shareUrl)}
               target="_blank"
               rel="noopener noreferrer"
               className="btn-primary"

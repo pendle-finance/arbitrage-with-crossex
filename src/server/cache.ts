@@ -50,6 +50,10 @@ export const TTL = {
    * hand-bumped and rare, and a FAILED fetch is cached as null for the same
    * window (one quiet retry per window, silent by design). */
   version: 21_600_000,
+  /** Short-link creation for the share modal. The backend is idempotent per
+   * payload (content-addressed), so reopening the modal within the window
+   * reuses the code without another round-trip. */
+  shareLink: 300_000,
 } as const;
 
 export class TtlCache {

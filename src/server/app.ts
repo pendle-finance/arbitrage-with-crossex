@@ -25,6 +25,7 @@ import { positionsRoutes } from './routes/positions';
 import { previewRoutes } from './routes/preview';
 import { strategyRoutes } from './routes/strategy';
 import { symbolsRoutes } from './routes/symbols';
+import { shareLinkRoutes } from './routes/shareLink';
 import { versionRoutes } from './routes/version';
 import { tradesRoutes } from './routes/trades';
 
@@ -208,6 +209,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
       previewRoutes,
       dealsRoutes,
       versionRoutes,
+      shareLinkRoutes,
   ];
   for (const routes of routeModules) {
     app.register(routes(deps), { prefix: '/api' });

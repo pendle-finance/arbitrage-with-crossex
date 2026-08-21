@@ -43,6 +43,14 @@ export function buildShareUrl(p: SharePayloadV1): string {
   return `${SHARE_BASE_URL}${SHARE_PATH}?d=${encodeSharePayload(p)}`;
 }
 
+/** The short form of the same link, from the code the backend minted for this
+ * payload (POST /api/share-link). Same page, same data — the code resolves
+ * server-side on the public box. The long `?d=` URL stays the fallback: it
+ * needs no backend and never expires. */
+export function buildShortShareUrl(code: string): string {
+  return `${SHARE_BASE_URL}${SHARE_PATH}?s=${code}`;
+}
+
 /** Tweet body — kept under 200 chars so the t.co link X appends always fits. */
 export function buildTweetText(p: SharePayloadV1): string {
   return (
@@ -52,10 +60,11 @@ export function buildTweetText(p: SharePayloadV1): string {
 }
 
 /** Web intents cannot attach an image — the modal says so and offers the PNG
- * for a manual attach in the compose window. */
-export function buildXIntentUrl(p: SharePayloadV1): string {
+ * for a manual attach in the compose window. `shareUrl` lets the modal pass
+ * whichever link it is currently showing (short when minted, long otherwise). */
+export function buildXIntentUrl(p: SharePayloadV1, shareUrl?: string): string {
   const text = encodeURIComponent(buildTweetText(p));
-  const url = encodeURIComponent(buildShareUrl(p));
+  const url = encodeURIComponent(shareUrl ?? buildShareUrl(p));
   return `https://x.com/intent/post?text=${text}&url=${url}`;
 }
 
