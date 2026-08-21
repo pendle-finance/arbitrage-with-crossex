@@ -141,15 +141,10 @@ export function strategyRoutes(deps: AppDeps) {
       const txnsByToken = new Map<number, BorosTxn[]>(
         await Promise.all(
           activeTokenIds.map(async (tokenId): Promise<[number, BorosTxn[]]> => {
-            // The v2 events endpoint is queried per (marketAcc, marketId), so
-            // the fetch needs the zone's handles — the fresh zones fetched
-            // above, not something cached beside them.
-            const zone = zones.find((z) => z.tokenId === tokenId);
-            if (!zone) return [tokenId, []];
             const { value } = await deps.cache.get(
               `boros:txns:${address}:${tokenId}`,
               TTL.boros,
-              () => fetchBorosTransactions(fetchImpl, zone),
+              () => fetchBorosTransactions(fetchImpl, address, tokenId),
               { fresh },
             );
             return [tokenId, value];

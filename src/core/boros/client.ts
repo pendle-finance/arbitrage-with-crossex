@@ -61,9 +61,9 @@ export interface BorosMarket {
   tokenId: number;
   /** Human name, e.g. "Hyperliquid ETH 31 Jul 2026". */
   name: string;
-  /** Reference perp venue, e.g. "Hyperliquid" (platform.platformId). */
+  /** Reference perp venue, e.g. "Hyperliquid" (metadata.platformName). */
   venue: string;
-  /** Underlying coin, e.g. "ETH" (metadata.underlyingSymbol). */
+  /** Underlying coin, e.g. "ETH" (metadata.assetSymbol). */
   base: string;
   /** Unix seconds. */
   maturity: number;
@@ -126,11 +126,8 @@ export interface BorosMarketPosition {
   fixedApr: number;
   markApr: number;
   pnl: {
-    /** Cumulative funding settled, NET of settlement fees (settlement =
-     * yieldReceived − yieldPaid − fee). Since the /apis migration this is the
-     * v2 ALL-TIME settlementPnl for the (marketAcc, marketId) — it diverges
-     * from the current position only when the same market was closed and
-     * re-opened on the same handle. */
+    /** Cumulative funding settled for the CURRENT position — verified NET of
+     * settlement fees (settlement = yieldReceived − yieldPaid − fee). */
     rateSettlementPnl: string;
     unrealisedPnl: string;
   };
@@ -144,9 +141,6 @@ export interface BorosMarginGroup {
   netBalance: string;
   initialMargin?: string;
   marketPositions: BorosMarketPosition[];
-  /** The 28-byte marketAcc handle backing this group — the identity the v2
-   * account endpoints (position-update-events) are queried by. */
-  marketAcc?: string;
 }
 
 export interface BorosCollateralZone {
@@ -155,7 +149,7 @@ export interface BorosCollateralZone {
   isolated: BorosMarginGroup[];
 }
 
-/** One fill (a position-update event). `pnl` is net of `fee` (opens: pnl = −fee). */
+/** One fill from /pnl/transactions. `pnl` is net of `fee` (opens: pnl = −fee). */
 export interface BorosTxn {
   marketId: number;
   /** Unix seconds. */
@@ -201,27 +195,13 @@ export function setClientTagContext(ctx: { version?: string | null; active?: boo
   }
 }
 
-async function getJson(
-  fetchImpl: FetchLike,
-  path: string,
-  post?: { body: unknown },
-): Promise<unknown> {
+async function getJson(fetchImpl: FetchLike, path: string): Promise<unknown> {
   const clientTag =
     'pendle_client=boroscrossex' + clientTagState.version + (clientTagState.active ? '_active' : '');
-  const base = path.startsWith('https://') ? '' : BOROS_BASE_URL;
-  const url = `${base}${path}${path.includes('?') ? '&' : '?'}${clientTag}`;
+  const url = `${BOROS_BASE_URL}${path}${path.includes('?') ? '&' : '?'}${clientTag}`;
   let resp: Awaited<ReturnType<FetchLike>>;
   try {
-    resp = await fetchImpl(url, {
-      signal: AbortSignal.timeout(15_000),
-      ...(post
-        ? {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify(post.body),
-          }
-        : {}),
-    });
+    resp = await fetchImpl(url, { signal: AbortSignal.timeout(15_000) });
   } catch (err) {
     throw new CoreError(
       `Boros API unreachable (${path}): ${(err as Error)?.message ?? String(err)}`,
@@ -243,48 +223,26 @@ async function getJson(
   }
 }
 
-/** GET {gateway}/v1/markets → normalized markets.
- *
- * `isMatured=false` is the surface's own liveness filter and reproduced the
- * old `/core/v1/markets` active set exactly (31/31 ids, live-diffed
- * 2026-08-21). The v2 surface never returns non-whitelisted markets and has
- * no per-market `state` field, so `state` is filled as 'Normal' — the
- * downstream `state === 'Normal'` gate keeps working unchanged.
- * resumeToken-paginated (limit cap 200/page; today's set is one page). */
+/** GET /core/v1/markets → normalized markets (list is small, one page). */
 export async function fetchBorosMarkets(fetchImpl: FetchLike): Promise<BorosMarket[]> {
-  const results: Array<Record<string, unknown>> = [];
-  let resumeToken: string | null = null;
-  for (let page = 0; page < 10; page += 1) {
-    const cursor = resumeToken ? `&resumeToken=${encodeURIComponent(resumeToken)}` : '';
-    const body = (await getJson(
-      fetchImpl,
-      `${BOROS_GATEWAY_BASE_URL}/v1/markets?isMatured=false&limit=200${cursor}`,
-    )) as { results?: Array<Record<string, unknown>>; resumeToken?: unknown };
-    if (!Array.isArray(body?.results)) {
-      throw new CoreError('Boros /markets: unexpected response shape (no results[])', 'network');
-    }
-    results.push(...body.results);
-    resumeToken = typeof body.resumeToken === 'string' && body.resumeToken ? body.resumeToken : null;
-    if (resumeToken === null) break;
+  const body = (await getJson(fetchImpl, '/core/v1/markets')) as {
+    results?: Array<Record<string, unknown>>;
+  };
+  if (!Array.isArray(body?.results)) {
+    throw new CoreError('Boros /markets: unexpected response shape (no results[])', 'network');
   }
-  return results.map((m) => {
+  return body.results.map((m) => {
     const imData = (m.imData ?? {}) as Record<string, unknown>;
     const extConfig = (m.extConfig ?? {}) as Record<string, unknown>;
     const metadata = (m.metadata ?? {}) as Record<string, unknown>;
     const data = (m.data ?? {}) as Record<string, unknown>;
     const config = (m.config ?? {}) as Record<string, unknown>;
-    const platform = (m.platform ?? {}) as Record<string, unknown>;
     return {
       marketId: Number(m.marketId),
       tokenId: Number(m.tokenId),
       name: String(imData.name ?? ''),
-      // platform.platformId equals the old surface's metadata.platformName
-      // byte-for-byte ("Kucoin", not the display name "KuCoin") — the venue
-      // key space downstream must not shift. underlyingSymbol likewise equals
-      // the old assetSymbol ("ETH", not the pair name "ETHUSDC"). Both
-      // live-diffed across all active markets 2026-08-21.
-      venue: String(platform.platformId ?? ''),
-      base: String(metadata.underlyingSymbol ?? ''),
+      venue: String(metadata.platformName ?? ''),
+      base: String(metadata.assetSymbol ?? ''),
       maturity: Number(imData.maturity ?? 0),
       paymentPeriod: Number(extConfig.paymentPeriod ?? 0),
       settleFeeApr: norm18(extConfig.settleFeeRate as string),
@@ -293,9 +251,7 @@ export async function fetchBorosMarkets(fetchImpl: FetchLike): Promise<BorosMark
       midApr: Number(data.midApr ?? 0),
       notionalOi: Number(data.notionalOI ?? 0),
       takerFeeRate: norm18(config.takerFee as string),
-      // The v2 surface has no state field; everything it returns under
-      // isMatured=false is live — see the fetch doc above.
-      state: 'Normal',
+      state: String(m.state ?? ''),
       assetMarkPriceUsd: Number(data.assetMarkPrice ?? 0),
       kIM: norm18(config.kIM as string),
       imTickThresh: Number(imData.iTickThresh ?? 0),
@@ -306,7 +262,7 @@ export async function fetchBorosMarkets(fetchImpl: FetchLike): Promise<BorosMark
 }
 
 /**
- * GET {gateway}/v1/markets/order-book → normalized book, best-first.
+ * GET /core/v1/order-books/{marketId} → normalized book, best-first.
  *
  * ⚠ SIGN CONVENTION — the wire side names are the COUNTERPARTY's side, so they
  * read backwards. The wire `short` side is the ASK side: you LIFT those to go
@@ -322,9 +278,7 @@ export async function fetchBorosOrderBook(
   fetchImpl: FetchLike,
   marketId: number,
 ): Promise<BorosOrderBook> {
-  // includeAmm defaults false — the same book the old /core/v1/order-books
-  // route served (responses byte-identical, live-diffed 2026-08-21).
-  const path = `${BOROS_GATEWAY_BASE_URL}/v1/markets/order-book?marketId=${marketId}&tickSize=${BOROS_BOOK_TICK_SIZE}`;
+  const path = `/core/v1/order-books/${marketId}?tickSize=${BOROS_BOOK_TICK_SIZE}`;
   const body = (await getJson(fetchImpl, path)) as {
     short?: { ia?: unknown; sz?: unknown };
     long?: { ia?: unknown; sz?: unknown };
@@ -364,198 +318,97 @@ export async function fetchBorosOrderBook(
   };
 }
 
-/** Cross-handle sentinel: the marketId embedded in a cross marketAcc (0xFFFFFF). */
-const CROSS_MARKET_ID = 0xff_ffff;
-
-/** Unpack a wire (bytes26) marketAcc handle — root(20B) accountId(1B)
- * tokenId(2B) marketId(3B), big-endian hex. Layout verified against live
- * /accounts/market-acc-infos-by-root responses 2026-08-21 (e.g.
- * 0x<root40>00 0003 ffffff = accountId 0, tokenId 3, cross). */
-export function unpackMarketAcc(
-  marketAcc: string,
-): { marketId: number; tokenId: number; accountId: number; root: string } | null {
-  const m = /^0x([0-9a-fA-F]{52})$/.exec(marketAcc);
-  if (!m) return null;
-  const h = m[1];
-  return {
-    root: `0x${h.slice(0, 40).toLowerCase()}`,
-    accountId: Number.parseInt(h.slice(40, 42), 16),
-    tokenId: Number.parseInt(h.slice(42, 46), 16),
-    marketId: Number.parseInt(h.slice(46, 52), 16),
-  };
-}
-
-/**
- * Margin groups + positions per collateral zone, assembled from the gateway's
- * account endpoints (the old one-shot /core/v1/collaterals/summary has no
- * /apis equivalent):
- * 1. `/v1/accounts/active-positions` — the authority on OPEN positions
- *    (marketId, marketAcc, size, fixedApr, PnL breakdown). Matured entries are
- *    dropped, mirroring the old summary. NOT by-root infos: that endpoint only
- *    enumerates cash-funded handles and omits e.g. a cross account whose
- *    equity sits in position value (live-verified gap, 2026-08-21).
- * 2. `POST /v1/accounts/market-acc-infos` for exactly the handles seen in (1)
- *    — group-level netBalance/IM plus per-position initialMargin.
- *
- * SEMANTIC SHIFTS, deliberate:
- * - `pnl.rateSettlementPnl` carries the v2 `settlementPnl`, ALL-TIME for the
- *   (marketAcc, marketId) — the old field was scoped to the current position.
- *   They differ only when the same market was closed and re-opened on the
- *   same handle.
- * - `initialMargin` is the v2 raw per-position IM, which is NOT the old
- *   summary's `positionInitialMargin` (different formula upstream).
- * - Cash-only margin groups (no open position) are no longer surfaced —
- *   nothing downstream reads them.
- * `markApr` is 0 here — the returns layer already falls back to the market's
- * own markApr. The account endpoints only cover accountId 0.
- */
+/** GET /core/v1/collaterals/summary — margin groups + positions per zone. */
 export async function fetchBorosCollaterals(
   fetchImpl: FetchLike,
   address: string,
   accountId = 0,
 ): Promise<BorosCollateralZone[]> {
-  if (accountId !== 0) {
-    // active-positions/market-acc-infos are queried for the main sub-account; a
-    // silent partial answer for accountId > 0 would read as "no positions".
-    throw new CoreError('Boros account endpoints only cover accountId 0', 'validation');
-  }
-  const activeBody = (await getJson(
+  const body = (await getJson(
     fetchImpl,
-    `${BOROS_GATEWAY_BASE_URL}/v1/accounts/active-positions?root=${address}&accountId=0`,
-  )) as { results?: Array<Record<string, unknown>> };
-  if (!Array.isArray(activeBody?.results)) {
+    `/core/v1/collaterals/summary?userAddress=${address}&accountId=${accountId}`,
+  )) as { collaterals?: Array<Record<string, unknown>> };
+  if (!Array.isArray(body?.collaterals)) {
     throw new CoreError(
-      'Boros /accounts/active-positions: unexpected response shape (no results[])',
+      'Boros /collaterals/summary: unexpected response shape (no collaterals[])',
       'network',
     );
   }
-  const active = activeBody.results.filter((ap) => ap.isMatured !== true);
 
-  const marketAccs = [...new Set(active.map((ap) => String(ap.marketAcc)))];
-  const infosByAcc = new Map<string, Record<string, unknown>>();
-  if (marketAccs.length > 0) {
-    const infosBody = (await getJson(
-      fetchImpl,
-      `${BOROS_GATEWAY_BASE_URL}/v1/accounts/market-acc-infos`,
-      { body: { marketAccs } },
-    )) as { results?: Array<Record<string, unknown>> };
-    if (!Array.isArray(infosBody?.results)) {
-      throw new CoreError(
-        'Boros /accounts/market-acc-infos: unexpected response shape (no results[])',
-        'network',
-      );
-    }
-    for (const info of infosBody.results) {
-      infosByAcc.set(String(info.marketAcc).toLowerCase(), info);
-    }
-  }
-
-  const zones = new Map<number, BorosCollateralZone>();
-  const groups = new Map<string, BorosMarginGroup>();
-  for (const ap of active) {
-    const marketAcc = String(ap.marketAcc ?? '');
-    const unpacked = unpackMarketAcc(marketAcc);
-    if (!unpacked) {
-      throw new CoreError(
-        'Boros /accounts/active-positions: unparseable marketAcc handle',
-        'network',
-      );
-    }
-    const isCross = unpacked.marketId === CROSS_MARKET_ID;
-    let group = groups.get(marketAcc.toLowerCase());
-    if (!group) {
-      const info = infosByAcc.get(marketAcc.toLowerCase());
-      group = {
-        isCross,
-        netBalance: String(info?.netBalance ?? '0'),
-        initialMargin: info?.initialMargin as string | undefined,
-        marketAcc,
-        marketPositions: [],
-      };
-      groups.set(marketAcc.toLowerCase(), group);
-      let zone = zones.get(unpacked.tokenId);
-      if (!zone) {
-        zone = { tokenId: unpacked.tokenId, cross: null, isolated: [] };
-        zones.set(unpacked.tokenId, zone);
-      }
-      if (isCross) zone.cross = group;
-      else zone.isolated.push(group);
-    }
-    const info = infosByAcc.get(marketAcc.toLowerCase());
-    const infoPos = (Array.isArray(info?.positions) ? info?.positions : []) as Array<
-      Record<string, unknown>
-    >;
-    const pos = infoPos.find((p) => Number(p.marketId) === Number(ap.marketId));
-    group.marketPositions.push({
-      marketId: Number(ap.marketId),
-      side: String(ap.signedSize ?? '0').trim().startsWith('-') ? 1 : 0,
-      notionalSize: String(ap.signedSize ?? '0'),
-      fixedApr: Number(ap.fixedApr ?? 0),
-      markApr: 0,
+  const toPosition = (p: Record<string, unknown>): BorosMarketPosition => {
+    const pnl = (p.pnl ?? {}) as Record<string, unknown>;
+    return {
+      marketId: Number(p.marketId),
+      side: Number(p.side),
+      notionalSize: String(p.notionalSize ?? '0'),
+      fixedApr: Number(p.fixedApr ?? 0),
+      markApr: Number(p.markApr ?? 0),
       pnl: {
-        rateSettlementPnl: String(ap.settlementPnl ?? '0'),
-        unrealisedPnl: String(ap.unrealisedPnl ?? '0'),
+        rateSettlementPnl: String(pnl.rateSettlementPnl ?? '0'),
+        unrealisedPnl: String(pnl.unrealisedPnl ?? '0'),
       },
-      initialMargin: pos?.initialMargin as string | undefined,
-    });
-  }
-  return [...zones.values()].sort((a, b) => a.tokenId - b.tokenId);
+      positionInitialMargin: p.positionInitialMargin as string | undefined,
+      initialMargin: p.initialMargin as string | undefined,
+    };
+  };
+  const toGroup = (g: Record<string, unknown>, isCross: boolean): BorosMarginGroup => ({
+    isCross,
+    netBalance: String(g.netBalance ?? '0'),
+    initialMargin: g.initialMargin as string | undefined,
+    marketPositions: Array.isArray(g.marketPositions)
+      ? (g.marketPositions as Array<Record<string, unknown>>).map(toPosition)
+      : [],
+  });
+
+  return body.collaterals.map((zone) => {
+    const cross = zone.crossPosition as Record<string, unknown> | undefined;
+    const isolated = Array.isArray(zone.isolatedPositions)
+      ? (zone.isolatedPositions as Array<Record<string, unknown>>)
+      : [];
+    return {
+      tokenId: Number(zone.tokenId),
+      cross: cross ? toGroup(cross, true) : null,
+      isolated: isolated.map((g) => toGroup(g, false)),
+    };
+  });
 }
 
-/** Fills for every open position in one collateral zone, via the gateway's
- * per-(marketAcc, marketId) `/v1/accounts/position-update-events` (the old
- * zone-wide /core/v1/pnl/transactions has no /apis equivalent). Only markets
- * with a non-zero position are queried — digestTxns is only ever run for
- * those. resumeToken pagination, newest-first on the wire; digestTxns sorts
- * by time itself, so order does not matter here. */
+/** GET /core/v1/pnl/transactions for one collateral zone — paginates fully
+ * (fees + open-time detection need the whole history; counts are small). */
 export async function fetchBorosTransactions(
   fetchImpl: FetchLike,
-  zone: BorosCollateralZone,
+  address: string,
+  tokenId: number,
+  accountId = 0,
 ): Promise<BorosTxn[]> {
-  const pairs: Array<{ marketAcc: string; marketId: number }> = [];
-  for (const group of [...(zone.cross ? [zone.cross] : []), ...zone.isolated]) {
-    if (!group.marketAcc) continue;
-    for (const p of group.marketPositions) {
-      if (Number(p.notionalSize) !== 0) pairs.push({ marketAcc: group.marketAcc, marketId: p.marketId });
-    }
-  }
+  const limit = 200;
   const all: BorosTxn[] = [];
-  await Promise.all(
-    pairs.map(async ({ marketAcc, marketId }) => {
-      let resumeToken: string | null = null;
-      // Page cap: 3 × 500 fills per market — far beyond this feature's scope.
-      // 500/page keeps the gateway's per-request cost low (CU scales with
-      // limit); history only needs to reach the current open-from-flat.
-      for (let page = 0; page < 3; page += 1) {
-        const cursor: string = resumeToken ? `&resumeToken=${encodeURIComponent(resumeToken)}` : '';
-        const body = (await getJson(
-          fetchImpl,
-          `${BOROS_GATEWAY_BASE_URL}/v1/accounts/position-update-events?marketAcc=${marketAcc}&marketId=${marketId}&limit=500${cursor}`,
-        )) as { results?: Array<Record<string, unknown>>; resumeToken?: unknown };
-        if (!Array.isArray(body?.results)) {
-          // A shape change must throw, not get cached as "no trade history"
-          // (which would silently zero the fees).
-          throw new CoreError(
-            'Boros /accounts/position-update-events: unexpected response shape (no results[])',
-            'network',
-          );
-        }
-        for (const t of body.results) {
-          all.push({
-            marketId: Number(t.marketId ?? marketId),
-            time: Number(t.timestamp ?? 0),
-            fee: String(t.fee ?? '0'),
-            pnl: String(t.pnl ?? '0'),
-            prevPositionS: String(t.prevPositionS ?? '0'),
-            postPositionS: String(t.postPositionS ?? '0'),
-          });
-        }
-        resumeToken =
-          typeof body.resumeToken === 'string' && body.resumeToken ? body.resumeToken : null;
-        if (resumeToken === null) break;
-      }
-    }),
-  );
+  // Hard page cap: 25 pages = 5k fills. Beyond that something is wrong (or the
+  // account is far outside this feature's scope) — stop rather than hammer.
+  for (let skip = 0, page = 0; page < 25; skip += limit, page += 1) {
+    const body = (await getJson(
+      fetchImpl,
+      `/core/v1/pnl/transactions?userAddress=${address}&accountId=${accountId}&tokenId=${tokenId}&skip=${skip}&limit=${limit}`,
+    )) as { results?: Array<Record<string, unknown>>; total?: number };
+    if (!Array.isArray(body?.results)) {
+      // Same guard as the other fetchers — a shape change must throw, not get
+      // cached as "no trade history" (which would silently zero the fees).
+      throw new CoreError('Boros /pnl/transactions: unexpected response shape (no results[])', 'network');
+    }
+    const results = body.results;
+    for (const t of results) {
+      all.push({
+        marketId: Number(t.marketId),
+        time: Number(t.time ?? 0),
+        fee: String(t.fee ?? '0'),
+        pnl: String(t.pnl ?? '0'),
+        prevPositionS: String(t.prevPositionS ?? '0'),
+        postPositionS: String(t.postPositionS ?? '0'),
+      });
+    }
+    const total = Number(body?.total ?? 0);
+    if (skip + limit >= total || results.length === 0) break;
+  }
   return all;
 }
 

@@ -39,8 +39,7 @@ function borosBodies(): Record<string, unknown> {
       tickStep: imInputs.imTickStep,
     },
     extConfig: { settleFeeRate: '1000000000000000', paymentPeriod: 3600 },
-    platform: { name: platformName, platformId: platformName },
-    metadata: { underlyingSymbol: 'ETH' },
+    metadata: { platformName, assetSymbol: 'ETH' },
     config: { takerFee: '500000000000000', kIM: raw(imInputs.kIM), tThresh: imInputs.tThreshSec },
     data: {
       midApr,
@@ -56,22 +55,18 @@ function borosBodies(): Record<string, unknown> {
     long: { ia: [bidTick], sz: [raw(5_000_000)] },
     short: { ia: [askTick], sz: [raw(5_000_000)] },
   });
-  const bodies: Record<string, unknown> = {
-    '/apis/v1/markets': {
+  return {
+    '/core/v1/markets': {
       results: [
         market(HL_MARKET, 'Hyperliquid', 0.09, 0.091),
         market(BINANCE_MARKET, 'Binance', 0.045, 0.044),
       ],
-      resumeToken: null,
+      total: 2,
+      skip: 0,
     },
-    // Pseudo-keys the order-book dispatcher below reads — tests delete one to
-    // simulate a single missing book (the stub then 404s just that market).
-    [`book:${HL_MARKET}`]: book(899, 901),
-    [`book:${BINANCE_MARKET}`]: book(449, 451),
+    [`/core/v1/order-books/${HL_MARKET}`]: book(899, 901),
+    [`/core/v1/order-books/${BINANCE_MARKET}`]: book(449, 451),
   };
-  bodies['/apis/v1/markets/order-book'] = (url: URL) =>
-    bodies[`book:${url.searchParams.get('marketId')}`];
-  return bodies;
 }
 
 /** Raw snake_case rule rows: ETH on both venues, plus a USDC Hyperliquid twin
@@ -296,7 +291,7 @@ describe('GET /api/opportunities', () => {
       headers: HOST,
     });
     expect(res.statusCode).toBe(200);
-    expect(calls.some((c) => c.startsWith('/apis/v1/markets/order-book'))).toBe(false);
+    expect(calls.some((c) => c.startsWith('/core/v1/order-books'))).toBe(false);
 
     const { data } = res.json();
     expect(data.meta.borosEntry).toBe('mark');
@@ -505,7 +500,7 @@ describe('GET /api/opportunities', () => {
 
   it('degrades ONE missing Boros book to an unavailable market, not a failed request', async () => {
     const bodies = borosBodies();
-    delete bodies[`book:${BINANCE_MARKET}`]; // stub 404s it
+    delete bodies[`/core/v1/order-books/${BINANCE_MARKET}`]; // stub 404s it
     app = makeTestApp({ borosFetch: borosStub(bodies) });
     mockGate();
     mockVenueBooks();
