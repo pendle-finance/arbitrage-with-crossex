@@ -14,63 +14,59 @@ import { raw } from '../helpers/boros-fixtures';
 import { borosStub } from '../helpers/boros-stub';
 
 const ADDR = '0xB2684Cd15b0CF17050531C51d581A9dDc365f1ef';
+/** The cross marketAcc wire handle for ADDR: accountId 0, tokenId 3, marketId 0xFFFFFF. */
+const CROSS_ACC = `0x${ADDR.slice(2).toLowerCase()}000003ffffff`;
 const NOW = Math.floor(Date.now() / 1000);
 const DAY = 86_400;
 
 /** Minimal raw-API bodies (the canonical 4-leg book of
  * tests/helpers/boros-fixtures.ts, in the wire shape the client normalizes). */
 function borosBodies() {
-  const market = (marketId: number, platformName: string, paymentPeriod: number) => ({
+  const market = (marketId: number, platformName: string, paymentPeriod: number, markApr = 0.076) => ({
     marketId,
     tokenId: 3,
     imData: { name: `${platformName} ETH 31 Jul 2026`, maturity: NOW + 15 * DAY },
     extConfig: { settleFeeRate: '1000000000000000', paymentPeriod },
-    metadata: { platformName, assetSymbol: 'ETH' },
-    data: { markApr: 0.076, floatingApr: 0.075, assetMarkPrice: 1880 },
+    platform: { name: platformName, platformId: platformName },
+    metadata: { underlyingSymbol: 'ETH' },
+    data: { markApr, floatingApr: 0.075, assetMarkPrice: 1880 },
   });
-  return {
-    '/core/v1/markets': { results: [market(155, 'Hyperliquid', 3600), market(158, 'OKX', 28800)], total: 2, skip: 0 },
-    [`/core/v1/collaterals/summary`]: {
-      collaterals: [
+  const events = [
+    { marketId: 155, timestamp: NOW - 12 * DAY, fee: raw(390), pnl: raw(-390), prevPositionS: '0', postPositionS: raw(-1_000_000) },
+    { marketId: 158, timestamp: NOW - 12 * DAY, fee: raw(300), pnl: raw(-300), prevPositionS: '0', postPositionS: raw(1_000_000) },
+  ];
+  const bodies: Record<string, unknown> = {
+    // The per-position markApr the old summary carried now comes off the
+    // market itself — 158's market must carry the 0.032 the old fixture put
+    // on the position.
+    '/apis/v1/markets': {
+      results: [market(155, 'Hyperliquid', 3600), market(158, 'OKX', 28800, 0.032)],
+      resumeToken: null,
+    },
+    '/apis/v1/accounts/market-acc-infos': {
+      results: [
         {
-          tokenId: 3,
-          crossPosition: {
-            isCross: true,
-            netBalance: raw(20_000),
-            marketPositions: [
-              {
-                marketId: 155,
-                side: 1,
-                notionalSize: raw(-1_000_000),
-                fixedApr: 0.08,
-                markApr: 0.076,
-                pnl: { rateSettlementPnl: raw(3_205), unrealisedPnl: raw(820) },
-                positionInitialMargin: raw(5_000),
-              },
-              {
-                marketId: 158,
-                side: 0,
-                notionalSize: raw(1_000_000),
-                fixedApr: 0.03,
-                markApr: 0.032,
-                pnl: { rateSettlementPnl: raw(1_120), unrealisedPnl: raw(-300) },
-                positionInitialMargin: raw(5_000),
-              },
-            ],
-          },
-          isolatedPositions: [],
+          marketAcc: CROSS_ACC,
+          netBalance: raw(20_000),
+          positions: [
+            { marketId: 155, signedSize: raw(-1_000_000), initialMargin: raw(5_000) },
+            { marketId: 158, signedSize: raw(1_000_000), initialMargin: raw(5_000) },
+          ],
         },
       ],
     },
-    '/core/v1/pnl/transactions': {
+    '/apis/v1/accounts/active-positions': {
       results: [
-        { marketId: 155, time: NOW - 12 * DAY, fee: raw(390), pnl: raw(-390), prevPositionS: '0', postPositionS: raw(-1_000_000) },
-        { marketId: 158, time: NOW - 12 * DAY, fee: raw(300), pnl: raw(-300), prevPositionS: '0', postPositionS: raw(1_000_000) },
+        { marketAcc: CROSS_ACC, marketId: 155, fixedApr: 0.08, signedSize: raw(-1_000_000), unrealisedPnl: raw(820), settlementPnl: raw(3_205), isMatured: false },
+        { marketAcc: CROSS_ACC, marketId: 158, fixedApr: 0.03, signedSize: raw(1_000_000), unrealisedPnl: raw(-300), settlementPnl: raw(1_120), isMatured: false },
       ],
-      total: 2,
-      skip: 0,
     },
-  } as Record<string, unknown>;
+  };
+  bodies['/apis/v1/accounts/position-update-events'] = (url: URL) => ({
+    results: events.filter((e) => e.marketId === Number(url.searchParams.get('marketId'))),
+    resumeToken: null,
+  });
+  return bodies;
 }
 
 /** Raw snake_case Gate positions matching the Boros book (SHORT HL / LONG OKX).
@@ -251,7 +247,7 @@ describe('GET /api/strategy/:address', () => {
 
   it('returns 200 with empty strategies for an address with no Boros positions', async () => {
     const bodies = borosBodies();
-    bodies['/core/v1/collaterals/summary'] = { collaterals: [] };
+    bodies['/apis/v1/accounts/active-positions'] = { results: [] };
     app = makeTestApp({ borosFetch: borosStub(bodies) });
     mockGateGet('/positions', { body: [] });
 
@@ -290,8 +286,9 @@ describe('GET /api/strategy/:address', () => {
     mockGateGet('/positions', { body: gatePositions, times: 3 });
 
     await app.inject({ method: 'GET', url: `/api/strategy/${ADDR}`, headers: HOST });
-    const afterFirst = calls.length; // markets + collaterals + txns
-    expect(afterFirst).toBe(3);
+    // markets + by-root + active-positions + one event stream per open market.
+    const afterFirst = calls.length;
+    expect(afterFirst).toBe(5);
 
     // Second request within TTL: everything served from cache.
     await app.inject({ method: 'GET', url: `/api/strategy/${ADDR}`, headers: HOST });
@@ -301,8 +298,8 @@ describe('GET /api/strategy/:address', () => {
     const other = '0x' + 'cd'.repeat(20);
     await app.inject({ method: 'GET', url: `/api/strategy/${other}`, headers: HOST });
     const otherCalls = calls.slice(afterFirst);
-    expect(otherCalls.some((c) => c.includes(`userAddress=${other}`))).toBe(true);
-    expect(otherCalls.some((c) => c.startsWith('/core/v1/markets'))).toBe(false); // markets are shared
+    expect(otherCalls.some((c) => c.includes(`root=${other}`))).toBe(true);
+    expect(otherCalls.some((c) => c.startsWith('/apis/v1/markets?'))).toBe(false); // markets are shared
 
     // fresh=1 bypasses the TTL for this address.
     const beforeFresh = calls.length;
@@ -360,7 +357,7 @@ describe('GET /api/strategy/:address', () => {
     app = makeTestApp({ borosFetch: borosStub(borosBodies(), calls) });
     mockGateGet('/positions', { body: [] });
     await app.inject({ method: 'GET', url: `/api/strategy/${ADDR}`, headers: HOST });
-    const collateralCall = calls.find((c) => c.startsWith('/core/v1/collaterals/summary'));
-    expect(collateralCall).toContain(`userAddress=${ADDR.toLowerCase()}`);
+    const collateralCall = calls.find((c) => c.startsWith('/apis/v1/accounts/active-positions'));
+    expect(collateralCall).toContain(`root=${ADDR.toLowerCase()}`);
   });
 });

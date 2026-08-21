@@ -11,6 +11,7 @@ import {
   fetchBorosTransactions,
   resolveCollateralPricesUsd,
   setClientTagContext,
+  unpackMarketAcc,
   type FetchLike,
 } from '../../src/core/boros/client';
 
@@ -39,7 +40,8 @@ describe('fetchBorosMarkets', () => {
               tokenId: 3,
               imData: { name: 'Hyperliquid ETH 31 Jul 2026', maturity: 1785456000 },
               extConfig: { settleFeeRate: '1000000000000000', paymentPeriod: 3600 },
-              metadata: { platformName: 'Hyperliquid', assetSymbol: 'ETH' },
+              platform: { name: 'Hyperliquid', platformId: 'Hyperliquid' },
+              metadata: { underlyingSymbol: 'ETH' },
               data: { markApr: 0.076, floatingApr: 0.075, assetMarkPrice: 1880 },
             },
           ],
@@ -64,7 +66,8 @@ describe('fetchBorosMarkets', () => {
               imData: { name: 'Hyperliquid ETH 31 Jul 2026', maturity: 1785456000 },
               config: { takerFee: '500000000000000' },
               extConfig: { settleFeeRate: '1000000000000000', paymentPeriod: 3600 },
-              metadata: { platformName: 'Hyperliquid', assetSymbol: 'ETH' },
+              platform: { name: 'Hyperliquid', platformId: 'Hyperliquid' },
+              metadata: { underlyingSymbol: 'ETH' },
               data: {
                 markApr: 0.076,
                 floatingApr: 0.075,
@@ -102,7 +105,8 @@ describe('fetchBorosMarkets', () => {
               config: { kIM: '476190476190476190', tThresh: 432000 },
               // extConfig.tickStep is a decoy: the margin step must come from imData.
               extConfig: { settleFeeRate: '1000000000000000', paymentPeriod: 3600, tickStep: 7 },
-              metadata: { platformName: 'Hyperliquid', assetSymbol: 'ETH' },
+              platform: { name: 'Hyperliquid', platformId: 'Hyperliquid' },
+              metadata: { underlyingSymbol: 'ETH' },
               data: { markApr: 0.076, assetMarkPrice: 1880 },
             },
           ],
@@ -172,7 +176,9 @@ describe('fetchBorosOrderBook', () => {
       155,
     );
 
-    expect(urls).toEqual(['/core/v1/order-books/155?tickSize=0.0001&pendle_client=boroscrossex']);
+    expect(urls).toEqual([
+      '/apis/v1/markets/order-book?marketId=155&tickSize=0.0001&pendle_client=boroscrossex',
+    ]);
     expect(book.marketId).toBe(155);
     // asks (wire "short") sorted apr-ascending, bids (wire "long") apr-descending.
     expect(round(book.asks)).toEqual([
@@ -223,68 +229,209 @@ describe('fetchBorosOrderBook', () => {
   });
 });
 
-describe('fetchBorosTransactions pagination', () => {
-  const txn = (marketId: number, time: number) => ({
+const ROOT40 = 'ab'.repeat(20);
+/** Build a wire marketAcc: root(20B) accountId(1B) tokenId(2B) marketId(3B). */
+const acc = (marketId: number | 'cross', tokenId = 3) =>
+  `0x${ROOT40}00${tokenId.toString(16).padStart(4, '0')}${
+    marketId === 'cross' ? 'ffffff' : marketId.toString(16).padStart(6, '0')
+  }`;
+
+const zoneWith = (
+  marketAcc: string,
+  marketIds: number[],
+  sizes?: string[],
+): import('../../src/core/boros/client').BorosCollateralZone => ({
+  tokenId: 3,
+  cross: {
+    isCross: true,
+    netBalance: '0',
+    marketAcc,
+    marketPositions: marketIds.map((marketId, i) => ({
+      marketId,
+      side: 0,
+      notionalSize: sizes?.[i] ?? '1000000000000000000',
+      fixedApr: 0,
+      markApr: 0,
+      pnl: { rateSettlementPnl: '0', unrealisedPnl: '0' },
+    })),
+  },
+  isolated: [],
+});
+
+describe('fetchBorosCollaterals (by-root + active-positions join)', () => {
+  const CROSS = acc('cross');
+  const ISO = acc(190);
+
+  const respond = (url: URL): { body: unknown } => {
+    if (url.pathname.endsWith('/accounts/active-positions')) {
+      return {
+        body: {
+          results: [
+            {
+              marketAcc: CROSS,
+              marketId: 155,
+              fixedApr: 0.0812,
+              signedSize: '2000000000000000000',
+              unrealisedPnl: '11000000000000000',
+              settlementPnl: '-3000000000000000',
+              isMatured: false,
+            },
+            {
+              marketAcc: ISO,
+              marketId: 190,
+              fixedApr: 0.05,
+              signedSize: '-900000000000000000',
+              unrealisedPnl: '0',
+              settlementPnl: '0',
+              isMatured: false,
+            },
+            // A matured leftover — must be dropped, like the old summary did.
+            {
+              marketAcc: CROSS,
+              marketId: 12,
+              fixedApr: 0.02,
+              signedSize: '1000000000000000000',
+              unrealisedPnl: '0',
+              settlementPnl: '0',
+              isMatured: true,
+            },
+          ],
+        },
+      };
+    }
+    if (url.pathname.endsWith('/accounts/market-acc-infos')) {
+      return {
+        body: {
+          results: [
+            {
+              marketAcc: CROSS,
+              netBalance: '5000000000000000000',
+              initialMargin: '1000000000000000000',
+              positions: [
+                { marketId: 155, signedSize: '2000000000000000000', initialMargin: '300000000000000000' },
+              ],
+            },
+            {
+              marketAcc: ISO,
+              netBalance: '700000000000000000',
+              positions: [{ marketId: 190, signedSize: '-900000000000000000' }],
+            },
+          ],
+        },
+      };
+    }
+    throw new Error(`unexpected path ${url.pathname}`);
+  };
+
+  it('assembles zones from active positions and joins group state from market-acc-infos', async () => {
+    const zones = await fetchBorosCollaterals(stub(respond), ADDR);
+    expect(zones).toHaveLength(1);
+    const z = zones[0];
+    expect(z.tokenId).toBe(3); // decoded from the packed handle
+    expect(z.cross?.marketAcc).toBe(CROSS);
+    expect(z.cross?.netBalance).toBe('5000000000000000000');
+    // The matured marketId-12 entry was dropped.
+    expect(z.cross?.marketPositions).toHaveLength(1);
+    const p = z.cross?.marketPositions[0];
+    expect(p).toMatchObject({
+      marketId: 155,
+      side: 0,
+      notionalSize: '2000000000000000000',
+      fixedApr: 0.0812,
+      initialMargin: '300000000000000000',
+    });
+    expect(p?.pnl).toEqual({
+      rateSettlementPnl: '-3000000000000000',
+      unrealisedPnl: '11000000000000000',
+    });
+    // Isolated handle: side derived from the size sign.
+    const iso = z.isolated[0];
+    expect(iso.isCross).toBe(false);
+    expect(iso.marketPositions[0]).toMatchObject({ marketId: 190, side: 1, fixedApr: 0.05 });
+  });
+
+  it('unpackMarketAcc round-trips a live wire handle', () => {
+    // Verbatim from a live /accounts/market-acc-infos-by-root response.
+    const r = unpackMarketAcc('0xab2df149a0fc85bbb37c645a934067e8be5c273c000003ffffff');
+    expect(r).toEqual({
+      root: '0xab2df149a0fc85bbb37c645a934067e8be5c273c',
+      accountId: 0,
+      tokenId: 3,
+      marketId: 0xffffff,
+    });
+  });
+
+  it('rejects accountId > 0 loudly — by-root only covers the main sub-account', async () => {
+    await expect(fetchBorosCollaterals(stub(respond), ADDR, 1)).rejects.toMatchObject({
+      name: 'CoreError',
+      category: 'validation',
+    });
+  });
+
+  it('throws (never caches "no positions") when results[] is missing', async () => {
+    await expect(fetchBorosCollaterals(stub(() => ({ body: {} })), ADDR)).rejects.toMatchObject({
+      name: 'CoreError',
+      category: 'network',
+    });
+  });
+});
+
+describe('fetchBorosTransactions (per-position events)', () => {
+  const wire = (marketId: number, time: number) => ({
     marketId,
-    time,
+    timestamp: time,
     fee: '1',
     pnl: '-1',
     prevPositionS: '0',
     postPositionS: '1',
   });
 
-  it('walks skip/limit pages until total is exhausted and concatenates in order', async () => {
-    // 3 pages: 200 + 200 + 50 = 450 txns.
-    const TOTAL = 450;
-    const all = Array.from({ length: TOTAL }, (_, i) => txn(100 + i, 1_700_000_000 + i));
-    const requestedSkips: number[] = [];
+  it('queries one (marketAcc, marketId) stream per non-zero position and maps timestamp → time', async () => {
+    const urls: URL[] = [];
     const txns = await fetchBorosTransactions(
       stub((url) => {
-        const skip = Number(url.searchParams.get('skip'));
-        const limit = Number(url.searchParams.get('limit'));
-        requestedSkips.push(skip);
-        return { body: { results: all.slice(skip, skip + limit), total: TOTAL } };
+        urls.push(url);
+        const marketId = Number(url.searchParams.get('marketId'));
+        return { body: { results: [wire(marketId, 1_700_000_000 + marketId)], resumeToken: null } };
       }),
-      ADDR,
-      3,
+      zoneWith(acc('cross'), [155, 190], ['1000000000000000000', '-2000000000000000000']),
     );
-    expect(requestedSkips).toEqual([0, 200, 400]);
-    expect(txns).toHaveLength(TOTAL);
-    expect(txns[0].marketId).toBe(100);
-    expect(txns[TOTAL - 1].marketId).toBe(100 + TOTAL - 1);
+    expect(urls.map((u) => Number(u.searchParams.get('marketId'))).sort()).toEqual([155, 190]);
+    for (const u of urls) expect(u.searchParams.get('marketAcc')).toBe(acc('cross'));
+    expect(txns.map((t) => t.time).sort()).toEqual([1_700_000_155, 1_700_000_190]);
+    expect(txns[0]).toMatchObject({ fee: '1', pnl: '-1', prevPositionS: '0', postPositionS: '1' });
   });
 
-  it('stops after one page when total fits in the first fetch', async () => {
+  it('skips zero-size positions entirely', async () => {
     let calls = 0;
     const txns = await fetchBorosTransactions(
       stub(() => {
         calls += 1;
-        return { body: { results: [txn(1, 1)], total: 1 } };
+        return { body: { results: [], resumeToken: null } };
       }),
-      ADDR,
-      3,
+      zoneWith(acc('cross'), [155], ['0']),
     );
-    expect(calls).toBe(1);
-    expect(txns).toHaveLength(1);
-  });
-
-  it('stops on an empty page even if total lies, and caps runaway pagination', async () => {
-    let calls = 0;
-    const txns = await fetchBorosTransactions(
-      stub(() => {
-        calls += 1;
-        return { body: { results: [], total: 999_999 } }; // server bug: total never reachable
-      }),
-      ADDR,
-      3,
-    );
-    expect(calls).toBe(1); // empty page short-circuits
+    expect(calls).toBe(0);
     expect(txns).toHaveLength(0);
+  });
+
+  it('walks resumeToken pages and caps runaway pagination', async () => {
+    const tokens: Array<string | null> = [];
+    const txns = await fetchBorosTransactions(
+      stub((url) => {
+        tokens.push(url.searchParams.get('resumeToken'));
+        // Always claims another page — the cap must stop it at 3.
+        return { body: { results: [wire(155, 1)], resumeToken: 'next' } };
+      }),
+      zoneWith(acc('cross'), [155]),
+    );
+    expect(tokens).toEqual([null, 'next', 'next']);
+    expect(txns).toHaveLength(3);
   });
 
   it('throws (never caches "no history") when results[] is missing', async () => {
     await expect(
-      fetchBorosTransactions(stub(() => ({ body: { total: 10 } })), ADDR, 3),
+      fetchBorosTransactions(stub(() => ({ body: {} })), zoneWith(acc('cross'), [155])),
     ).rejects.toMatchObject({ name: 'CoreError', category: 'network' });
   });
 });
@@ -312,13 +459,13 @@ describe('client identification tag', () => {
     const urls: URL[] = [];
     const record = stub((url) => {
       urls.push(url);
-      return { body: { results: [], total: 0, skip: 0, collaterals: [], short: { ia: [], sz: [] }, long: { ia: [], sz: [] } } };
+      return { body: { results: [], resumeToken: null, short: { ia: [], sz: [] }, long: { ia: [], sz: [] } } };
     });
 
     await fetchBorosMarkets(record);
     await fetchBorosOrderBook(record, 155);
     await fetchBorosCollaterals(record, ADDR);
-    await fetchBorosTransactions(record, ADDR, 3);
+    await fetchBorosTransactions(record, zoneWith(acc('cross'), [155]));
 
     expect(urls.length).toBeGreaterThanOrEqual(4);
     for (const url of urls) {
