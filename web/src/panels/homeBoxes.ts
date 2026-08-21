@@ -1,14 +1,14 @@
 /** Pure taxonomy for the home view: every position lands in exactly one box.
  *
- * - 'strategy'  — a server StrategyRollup (has Boros legs; 0..n perp legs
- *                 attached). Complete/partial/boros-only render from its hedge.
- * - 'perp-only' — an exposure group (≥2 legs) whose base has NO Boros cohort:
- *                 the delta-neutral pair exists but the rate isn't locked.
- * - 'stray'     — a single unpaired perp leg with no Boros cohort.
- *
- * The leftover set is exactly what returns.ts drops when attaching perps to
- * cohorts (perps whose base has no Boros cohort). With no tracked address the
- * strategy feed is undefined and every exposure group becomes perp-only/stray.
+ * - 'strategy'  — a server StrategyRollup. With the strategy feed live this is
+ *                 EVERY position: the solver emits a card per coin, including
+ *                 Boros-less pairs (`BASE#perps`) and unclaimed size
+ *                 (`BASE#unhedged:SYMBOL`), so the leftover set is empty.
+ * - 'perp-only' / 'stray' — the DEGRADED path only: exposure groups whose base
+ *                 has no rollup. That happens when no address is tracked (the
+ *                 strategy feed never runs) or the feed failed — the positions
+ *                 feed still knows the perps exist, and a trading terminal must
+ *                 not hide live positions behind a dead Boros backend.
  */
 import type {
   ExposureGroup,

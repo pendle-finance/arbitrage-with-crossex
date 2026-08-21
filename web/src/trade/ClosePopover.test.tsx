@@ -53,6 +53,40 @@ describe('ClosePopover', () => {
     Object.defineProperty(window, 'innerHeight', { value: viewportHeight, configurable: true });
   });
 
+  it('opens on this position\'s own size when the venue leg is shared', async () => {
+    // The venue holds 0.3; this strategy owns 0.1. A close acts on the whole
+    // position, so the popover must not default to closing someone else's.
+    server.use(...baseHandlers(), closePreviewHandler());
+    renderWithClient(
+      <ClosePopover
+        position={ethPosition}
+        attributedQty={0.1}
+        anchorRef={null}
+        onDismiss={() => {}}
+      />,
+    );
+    expect(await screen.findByRole('radio', { name: /partial/ })).toHaveAttribute(
+      'aria-checked',
+      'true',
+    );
+    expect(screen.getByLabelText('Close qty')).toHaveValue('0.1');
+    expect(screen.getByText(/holds 0.1 of the 0.3 on the venue/)).toBeInTheDocument();
+
+    // Switching to full spells out whose size goes with it.
+    fireEvent.click(screen.getByRole('radio', { name: /full/ }));
+    expect(screen.getByText(/including the 0.2 that belongs to your other position/)).toBeInTheDocument();
+  });
+
+  it('leaves an unshared position on full', async () => {
+    server.use(...baseHandlers(), closePreviewHandler());
+    renderWithClient(<ClosePopover position={ethPosition} anchorRef={null} onDismiss={() => {}} />);
+    expect(await screen.findByRole('radio', { name: /full/ })).toHaveAttribute(
+      'aria-checked',
+      'true',
+    );
+    expect(screen.queryByText(/belongs to your other position/)).not.toBeInTheDocument();
+  });
+
   it('clamps into the viewport when the trigger sits near the bottom of the page', async () => {
     server.use(...baseHandlers(), closePreviewHandler());
     // A 400px dialog hung off a button whose bottom edge is 40px from the foot

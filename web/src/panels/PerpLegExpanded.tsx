@@ -13,7 +13,14 @@ import { useTradeFlowOptional } from '../trade/TradeFlow';
 /** Row actions: [Close] anchors the close popover; [Lev] swaps to the inline
  * leverage editor. Both need the trade contexts — without them (provider-less
  * unit tests) the buttons stay disabled. */
-export function PositionRowActions({ position }: { position: CrossexPosition }) {
+export function PositionRowActions({
+  position,
+  attributedQty,
+}: {
+  position: CrossexPosition;
+  /** Size the strategy showing this row owns, when the venue leg is shared. */
+  attributedQty?: number;
+}) {
   const flow = useTradeFlowOptional();
   const [open, setOpen] = useState<'close' | 'lev' | null>(null);
   const closeBtnRef = useRef<HTMLButtonElement>(null);
@@ -47,13 +54,24 @@ export function PositionRowActions({ position }: { position: CrossexPosition }) 
         Lev
       </button>
       {open === 'close' && (
-        <ClosePopover position={position} anchorRef={closeBtnRef} onDismiss={() => setOpen(null)} />
+        <ClosePopover
+          position={position}
+          attributedQty={attributedQty}
+          anchorRef={closeBtnRef}
+          onDismiss={() => setOpen(null)}
+        />
       )}
     </span>
   );
 }
 
-export function PerpLegExpanded({ position }: { position: CrossexPosition | null }) {
+export function PerpLegExpanded({
+  position,
+  attributedQty,
+}: {
+  position: CrossexPosition | null;
+  attributedQty?: number;
+}) {
   if (!position) {
     return (
       <span className="text-xs text-ink-500">
@@ -74,7 +92,7 @@ export function PerpLegExpanded({ position }: { position: CrossexPosition | null
           {fmtPct(position.upnlRate)}
         </span>
       </span>
-      <PositionRowActions position={position} />
+      <PositionRowActions position={position} attributedQty={attributedQty} />
     </span>
   );
 }

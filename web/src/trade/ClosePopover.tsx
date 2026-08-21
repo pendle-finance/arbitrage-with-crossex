@@ -21,16 +21,27 @@ const MARGIN = 8;
 
 interface Props {
   position: CrossexPosition;
+  /** Size THIS strategy owns, when the venue position is shared with another
+   * one. The close acts on the whole venue position, so the popover opens on
+   * partial, pre-filled with this size, and says what Full would really do. */
+  attributedQty?: number;
   /** Trigger button to anchor near (null → fallback placement, e.g. in tests).
    * A live ref, not a rect: the popover re-anchors on scroll/resize. */
   anchorRef: RefObject<HTMLElement> | null;
   onDismiss: () => void;
 }
 
-export function ClosePopover({ position, anchorRef, onDismiss }: Props) {
+export function ClosePopover({ position, attributedQty, anchorRef, onDismiss }: Props) {
+  const wholeQty = Math.abs(Number(position.positionQty));
+  // A shared leg: this card owns less than the venue holds.
+  const shared =
+    attributedQty !== undefined &&
+    Number.isFinite(attributedQty) &&
+    attributedQty > 0 &&
+    attributedQty < wholeQty * 0.999;
   const [slipStr, setSlipStr] = useState('0.5');
-  const [mode, setMode] = useState<'full' | 'partial'>('full');
-  const [qtyStr, setQtyStr] = useState('');
+  const [mode, setMode] = useState<'full' | 'partial'>(shared ? 'partial' : 'full');
+  const [qtyStr, setQtyStr] = useState(shared ? String(Number(attributedQty.toPrecision(8))) : '');
   const dialogRef = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
 
@@ -152,6 +163,15 @@ export function ClosePopover({ position, anchorRef, onDismiss }: Props) {
               ]}
             />
           </div>
+          {/* The venue holds one position; a close acts on all of it. Say so
+              where the choice is made, not after the fact. */}
+          {shared && (
+            <p className="leading-relaxed text-amber-400/90">
+              {mode === 'full'
+                ? `Full closes all ${sig(wholeQty)} on the venue — including the ${sig(wholeQty - (attributedQty ?? 0))} that belongs to your other position.`
+                : `This position holds ${sig(attributedQty ?? 0)} of the ${sig(wholeQty)} on the venue; the rest belongs to another position.`}
+            </p>
+          )}
           {mode === 'partial' && (
             <div className="flex items-center gap-2">
               <label htmlFor={`close-qty-${position.symbol}`} className="w-24 text-ink-400">

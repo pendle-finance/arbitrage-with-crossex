@@ -40,6 +40,25 @@ const card = (
   />
 );
 
+describe('StrategyCard — a leg shared with another strategy', () => {
+  it('scales the live uPnL by the leg\'s share instead of showing the whole position', () => {
+    const legs = makeStrategyRollup().legs.map((l) =>
+      l.kind === 'perp' && l.venue === 'HYPERLIQUID' ? { ...l, share: 0.6, mtmUsd: -600 } : l,
+    );
+    const live = new Map([
+      [
+        'HYPERLIQUID_FUTURE_HYPE_USDC',
+        makeCrossexPosition({ symbol: 'HYPERLIQUID_FUTURE_HYPE_USDC', upnl: '-1000' }),
+      ],
+    ]);
+    render(card({ legs }, { livePositions: live }));
+    // The venue's -1000 covers the whole leg; this card owns 60% of it, so
+    // rendering -1000 here would double-count it against the sibling card.
+    expect(screen.getByText('-600.00')).toBeInTheDocument();
+    expect(screen.queryByText('-1,000.00')).not.toBeInTheDocument();
+  });
+});
+
 describe('StrategyCard — hero tiers', () => {
   it('renders Fixed APR on Capital as the hero, with Capital and Profit by maturity', () => {
     render(card());
@@ -447,18 +466,51 @@ describe('StrategyCard — states', () => {
     expect(screen.getByTitle('$250,000 = 100 HYPE')).toHaveTextContent('$250.0k (100 HYPE)');
   });
 
-  it('USDT-margined strategies stay pure-dollar on every leg', () => {
+  it('a USDT-margined book still sizes its PERPS in the base coin', () => {
     render(card());
-    // Default book: 2 perps at $160,316 (with base-coin sizes stamped) and
-    // 2 USDT Boros legs at $158,800 — none may grow a bracket.
-    for (const cell of screen.getAllByTitle('$160,316')) {
-      expect(cell).toHaveTextContent(/^\$160\.3k$/);
-    }
-    expect(screen.getAllByTitle('$160,316')).toHaveLength(2);
+    // Default book: 2 perps at $160,316 and 2 USDT-collateral Boros legs at
+    // $158,800. Only the Boros rows stay pure-dollar — Boros notional is
+    // denominated in the collateral, so "(158,800 USDT)" would restate the
+    // dollars. A perp's coin size restates nothing, and used to be suppressed
+    // purely because the Boros leg beside it was quoted in USDT.
+    const perps = screen.getAllByTitle(/^\$160,316 = /);
+    expect(perps).toHaveLength(2);
+    for (const cell of perps) expect(cell).toHaveTextContent(/^\$160\.3k \([\d.,]+ HYPE\)$/);
+
     for (const cell of screen.getAllByTitle('$158,800')) {
       expect(cell).toHaveTextContent(/^\$158\.8k$/);
     }
     expect(screen.getAllByTitle('$158,800')).toHaveLength(2);
+  });
+
+  it('a position with NO Boros legs shows its perp sizes, whatever the collateral', () => {
+    // The pure-dollar rule is about comparability with a USDT-quoted Boros leg.
+    // With no Boros leg there is nothing to be incomparable with, and the coin
+    // size is the whole point — a leg used to lose it on being detached.
+    render(
+      card({
+        maturity: 0,
+        hedge: 'unhedged',
+        attribution: { source: 'unhedged', confidence: 'measured', pinned: false },
+        legs: [
+          makeStrategyLeg({
+            kind: 'perp',
+            venue: 'GATE',
+            side: 'LONG',
+            notionalUsd: 54,
+            collateral: undefined,
+            notionalToken: 0.023,
+            entryApr: undefined,
+            markApr: undefined,
+            floatingApr: undefined,
+            maturity: undefined,
+            base: 'ETH',
+            symbol: 'GATE_FUTURE_ETH_USDT',
+          }),
+        ],
+      }),
+    );
+    expect(screen.getByTitle('$54 = 0.023 ETH')).toHaveTextContent('(0.023 ETH)');
   });
 
   it('unknown clock: no projection, no assumption caption, hero shows —', () => {
@@ -791,6 +843,21 @@ describe('StrategyCard — itemised entry cost', () => {
     expect(itemiseBtn()).toHaveTextContent('3 of 4');
     itemise();
     expect(screen.getAllByRole('checkbox').filter((b) => (b as HTMLInputElement).checked)).toHaveLength(3);
+  });
+
+  it('does not carry one account\'s ticks onto another\'s identical position', () => {
+    // A strategyId is `HYPE#BYBIT-HYPERLIQUID#a` — coin, venues, evidence
+    // tier, and nothing about whose account it is. Two accounts running the
+    // same pair share it, so without the book in the key one account's
+    // un-ticked fills quietly reduced the other's cost basis.
+    const first = render(card({}, { bookId: '0xaaa|gate-a' }));
+    itemise();
+    fireEvent.click(rowFor(first.container, 'slip:deal:deal-a'));
+    expect(itemiseBtn()).toHaveTextContent('3 of 4');
+    first.unmount();
+
+    render(card({}, { bookId: '0xaaa|gate-b' }));
+    expect(itemiseBtn()).toHaveTextContent('4 of 4');
   });
 
   it('clicking the Include segment itself opens and closes the itemisation', () => {

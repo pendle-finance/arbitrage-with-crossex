@@ -99,6 +99,12 @@ export interface SharePayloadV1 {
   ce: 0 | 1;
   /** 1 when the perp exit cost was included in the displayed numbers. */
   cx: 0 | 1;
+  /** 1 when the position's share of a leg shared with ANOTHER strategy was a
+   * proposal (paired by price/open-time proximity) rather than measured from
+   * the execution record. Absent = nothing was split, or the split was
+   * measured. Optional so links minted before the split existed still
+   * decode. */
+  uc?: 0 | 1;
   /** The legs, at most 8. */
   l: ShareLegV1[];
   /** Fee breakdown. */
@@ -209,7 +215,14 @@ function isShareFeesV1(x: unknown): x is ShareFeesV1 {
  * no free-text and no extension point, so anything extra is hostile or wrong. */
 export function isSharePayloadV1(x: unknown): x is SharePayloadV1 {
   if (typeof x !== 'object' || x === null || Array.isArray(x)) return false;
-  if (!hasExactKeys(x, ['v', 'b', 't', 'm', 'cs', 'a', 'c', 'cp', 'cb', 'p', 'sp', 'h', 'ce', 'cx', 'l', 'f'])) return false;
+  if (
+    !hasExactKeys(
+      x,
+      ['v', 'b', 't', 'm', 'cs', 'a', 'c', 'cp', 'cb', 'p', 'sp', 'h', 'ce', 'cx', 'l', 'f'],
+      ['uc'],
+    )
+  )
+    return false;
   const p = x as Record<string, unknown>;
   return (
     p.v === 1 &&
@@ -227,6 +240,7 @@ export function isSharePayloadV1(x: unknown): x is SharePayloadV1 {
     (p.h === 'h' || p.h === 'p' || p.h === 'u') &&
     (p.ce === 0 || p.ce === 1) &&
     (p.cx === 0 || p.cx === 1) &&
+    (!('uc' in p) || p.uc === 0 || p.uc === 1) &&
     Array.isArray(p.l) &&
     p.l.length >= 1 &&
     p.l.length <= 8 &&
@@ -256,6 +270,9 @@ export function encodeSharePayload(p: SharePayloadV1): string {
     h: p.h,
     ce: p.ce,
     cx: p.cx,
+    // Omitted when false so an unsplit position encodes byte-identically to
+    // the links this build's predecessors minted.
+    ...(p.uc ? { uc: 1 as const } : {}),
     l: p.l.map((leg) => {
       const out: ShareLegV1 = { k: leg.k, x: leg.x, s: leg.s, n: Math.round(leg.n) };
       if (leg.r !== undefined) out.r = roundTo(leg.r, 4);

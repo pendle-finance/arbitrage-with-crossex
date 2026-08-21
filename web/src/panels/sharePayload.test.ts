@@ -49,7 +49,9 @@ describe('buildSharePayload', () => {
 
   it('orders legs deterministically and rounds notionals to display precision ($100)', () => {
     const p = build();
-    expect(p.l).toEqual([
+    // The perps carry their coin size (tn/ts); the USDT Boros legs do not —
+    // asserted on its own above, so the shape here stays about ORDER.
+    expect(p.l.map(({ tn: _tn, ts: _ts, ...rest }) => rest)).toEqual([
       { k: 'b', x: 'HYPERLIQUID', s: 'S', n: 158_800, r: 0.0936 },
       { k: 'b', x: 'BYBIT', s: 'L', n: 158_800, r: 0.0229 },
       { k: 'p', x: 'HYPERLIQUID', s: 'S', n: 160_300 }, // 160,316 → nearest $100
@@ -129,11 +131,18 @@ describe('buildSharePayload', () => {
     expect(() => encodeSharePayload(p)).not.toThrow();
   });
 
-  it('keeps token sizes off the wire for USDT-margined strategies', () => {
-    // The default rollup is USDT-margined; its perp legs carry a base-coin
-    // size, but that alone doesn't qualify — the gate is a token-margined
-    // Boros leg, same doctrine as StrategyCard's notional column.
-    for (const l of build().l) expect([l.tn, l.ts]).toEqual([undefined, undefined]);
+  it('carries a perp coin size even on a USDT-margined book, and no USDT one', () => {
+    // Same rule as the card's notional column, from the same function: a
+    // perp's coin size is never recoverable from its dollars, so it travels;
+    // a USDT Boros leg's "size" IS its dollars, so it does not. Sharing must
+    // not bracket a leg differently than the card it was taken from.
+    const legs = build().l;
+    for (const l of legs.filter((x) => x.k === 'p')) {
+      expect([typeof l.tn, l.ts]).toEqual(['number', 'HYPE']);
+    }
+    for (const l of legs.filter((x) => x.k === 'b')) {
+      expect([l.tn, l.ts]).toEqual([undefined, undefined]);
+    }
   });
 
   it('encodes cleanly and round-trips through the codec', () => {

@@ -28,6 +28,23 @@
 import { resolveFeeRates, type VenueFeeRow } from '../estimate/fees';
 import { parseSymbol } from '../numbers';
 import {
+  allocateBorosByEvidence,
+  borosIncrements,
+  solvePerpPartition,
+  type DealFillRecord,
+  type PerpFillRecord,
+  type PerpLegSnapshot,
+  type PerpPartition,
+  type PerpTranche,
+  type TrancheLeg,
+  legRefKey,
+  type LegRef,
+  type MembershipRow,
+  type TrancheConfidence,
+  type TrancheSource,
+  type UnhedgedResidual,
+} from './partition';
+import {
   BOROS_TOKEN_SYMBOLS,
   norm18,
   type BorosCollateralZone,
@@ -77,23 +94,14 @@ export interface PerpFundingLedger {
  * engine hedges within seconds), so each deal's fill gap is pure crossing
  * cost — unlike the gap between two live entry averages, which absorbs every
  * market move between the legs' open times. Contracts are venue-qualified
- * CrossEx symbols. */
-export interface DealFillRecord {
-  /** The journal pair row's id — stable identity for this one execution. */
-  dealId: string;
-  aContract: string;
-  aSide: 'BUY' | 'SELL';
-  bContract: string;
-  bSide: 'BUY' | 'SELL';
-  /** Absolute filled qty per leg. */
-  aFilled: number;
-  bFilled: number;
-  /** Qty-weighted average fill price per leg. */
-  aAvgFill: number;
-  bAvgFill: number;
-  /** Unix seconds of the deal row. */
-  createdAtSec: number;
-}
+ * CrossEx symbols. Defined in ./partition, which also matches on it. */
+export type {
+  DealFillRecord,
+  PerpFillRecord,
+  LegRef,
+  MembershipRow,
+  UnhedgedResidual,
+} from './partition';
 
 export interface StrategyLeg {
   kind: 'perp' | 'boros';
@@ -102,6 +110,10 @@ export interface StrategyLeg {
   base: string;
   side: 'LONG' | 'SHORT';
   notionalUsd: number;
+  /** Boros only: the venue's own id for this market. How a membership row
+   * names the leg — unambiguous where (venue, base, maturity) is not, since
+   * one market can be listed in two collateral zones. */
+  marketId?: number;
   /** Boros only: the collateral token the position is margined and sized in. */
   collateral?: string;
   /** |notional| in token units — Boros: |notionalSize| in the collateral token
@@ -129,6 +141,11 @@ export interface StrategyLeg {
   /** Perp only: the exact CrossEx symbol — the client's join key to the live
    * 4s-polled position (entry/mark/leverage display + close/lev actions). */
   symbol?: string;
+  /** The fraction of the venue's position attributed to THIS strategy — 1
+   * when the strategy owns the whole leg. Every shared number on the leg
+   * (funding, fees, margin, notional) is already scaled by it; it is carried
+   * so the UI can say "this is part of a bigger position". */
+  share?: number;
   warnings: string[];
 }
 
@@ -228,12 +245,48 @@ export const BOROS_LEG_MATCH_MIN = 0.9;
 export const PERP_LEG_MATCH_MIN = 0.9;
 export const BOROS_VS_PERP_MATCH_MIN = 0.8;
 
+/**
+ * What counts as the capital a Boros position ties up.
+ *  - `balance` — the margin group's posted balance, apportioned across its
+ *    positions by initial-margin share. Right when the account exists FOR this
+ *    position; it over-states capital for anyone who also keeps trading money
+ *    in the same collateral account, because idle cash is counted as if the
+ *    strategy needed it.
+ *  - `im` — only the initial margin the Boros legs actually consume. Right
+ *    when the account is shared, and the same basis the perp side always uses.
+ * The perp side is initial margin under both.
+ */
+export type CapitalBasis = 'balance' | 'im';
+
 /** What anchors the realized-APR annualization clock. Default: the strategy
  * starts when its Boros legs lock the spread — the perp pair may have existed
  * long before as a plain funding arb. */
 export type ClockBasis = 'boros-open' | 'perp-open' | 'custom';
 
+/** How this strategy's share of each shared leg was arrived at.
+ *  - `journal` / `fill-history` — rebuilt from the execution record: sizes,
+ *    both entry prices and (fill-history only) exact fees are MEASURED.
+ *  - `forced` — only one pairing was possible, so no choice was made.
+ *  - `proximity` — no record explained it; paired on price/time closeness.
+ *  - `user` — a pinned size the user asserted.
+ *  - `merged` — not split at all (one strategy per Boros cohort, the legacy
+ *    reading), either because nothing needed splitting or because a split
+ *    failed to reconcile.
+ *  - `boros-only` — Boros legs with no perp tranche to attach to.
+ *  - `unhedged` — the mirror of `boros-only`: perp size no position claimed,
+ *    which is a position of one leg rather than a footnote beside them. */
+export interface StrategyAttribution {
+  source: TrancheSource | 'merged' | 'boros-only' | 'unhedged';
+  confidence: TrancheConfidence;
+  pinned: boolean;
+}
+
 export interface StrategyRollup {
+  /** Stable identity across re-solves — `BASE#VENUE-VENUE#openDay` for a
+   * split strategy, `BASE@maturity` for a merged one. The client keys pins,
+   * excluded entry parts and share links off this. */
+  strategyId: string;
+  attribution: StrategyAttribution;
   base: string;
   /** Unix seconds (the Boros cohort's maturity). */
   maturity: number;
@@ -296,7 +349,13 @@ export interface StrategyReturns {
     perpExitFeesTotalUsd: number | null;
     /** Σ future.perpExitSlippageUsd; null if any strategy's is unknown. */
     perpExitSlippageTotalUsd: number | null;
+    /** How many strategies could not measure their crossing cost. Lets the UI
+     * say "unknown for 2 of 5" instead of blanking the total with no reason. */
+    slippageUnknownCount: number;
+    strategyCount: number;
   };
+  /** Which reading of "capital" produced every capital-derived number here. */
+  capitalBasis: CapitalBasis;
   warnings: string[];
 }
 
@@ -347,6 +406,9 @@ function digestTxns(txns: BorosTxn[], marketId: number): TxnDigest {
 
 interface BorosLegBuild {
   leg: StrategyLeg;
+  /** Boros market id — the join key to this position's fill history, which is
+   * what makes a per-strategy entry rate measurable instead of allocated. */
+  marketId: number;
   /** Stable identity of the margin group this position sits in. */
   groupKey: string;
   /** For capital apportionment (all USD). */
@@ -368,8 +430,24 @@ interface PerpLegBuild {
   qty: number;
   /** Gate position id — joins the account-book funding ledger. */
   positionId: string;
+  /** When the VENUE position opened. Kept separate from `leg.openedAt`, which
+   * a tranche re-stamps to its own open: the cumulative funding counter still
+   * starts here, so the re-base guard has to read this one. */
+  venueOpenedAtSec: number | null;
   /** Gate's position-lifetime cumulative funding (the since-open counter). */
   cumulativeFundingUsd: number;
+  /** Fraction of the venue position this build represents (1 = the whole
+   * leg). Everything on the build is already scaled by it; the ledger re-base
+   * below has to apply it too, because the ledger measures the WHOLE
+   * position. */
+  share: number;
+  /** When the venue leg is SHARED and every sibling tranche's open is known:
+   * this build's fraction of the position at each moment — entries sorted by
+   * `fromSec`, each active until the next, 0 before the first. The funding
+   * re-base uses it so settlements from before a later sibling opened are not
+   * scaled by the FINAL share. Absent = the share never changed (or the
+   * timeline is unknowable) and the flat `share` applies. */
+  shareTimeline?: Array<{ fromSec: number; share: number }>;
 }
 
 function buildBorosLeg(
@@ -400,8 +478,10 @@ function buildBorosLeg(
   const tradePnlUsd = digest.tradePnlSinceOpen * px;
 
   return {
+    marketId: p.marketId,
     leg: {
       kind: 'boros',
+      marketId: p.marketId,
       venue: normalizeVenue(market?.venue ?? ''),
       base: (market?.base ?? '').toUpperCase(),
       side,
@@ -512,7 +592,10 @@ function buildPerpLeg(pos: PerpPositionLike): PerpLegBuild {
     entryPrice: fin(pos.entryPrice),
     qty: Math.abs(qty),
     positionId: pos.positionId ?? '',
+    venueOpenedAtSec:
+      openedAtRaw > 0 ? (openedAtRaw < 1e12 ? openedAtRaw : Math.floor(openedAtRaw / 1000)) : null,
     cumulativeFundingUsd: cashFlowUsd,
+    share: 1,
   };
 }
 
@@ -627,18 +710,38 @@ export function chainPerpEntrySlippageUsd(
   return { usd: gapUsd, deals: used, parts };
 }
 
-function assembleStrategy(
-  base: string,
-  maturity: number,
-  borosBuilds: BorosLegBuild[],
-  perpBuilds: PerpLegBuild[],
-  perpAvailable: boolean,
-  nowSec: number,
-  clockStartOverrideSec?: number,
-  venueFees?: VenueFeeRow[] | null,
-  fundingLedger?: PerpFundingLedger | null,
-  dealFills?: DealFillRecord[] | null,
-): StrategyRollup {
+interface AssembleInput {
+  strategyId: string;
+  attribution: StrategyAttribution;
+  base: string;
+  maturity: number;
+  borosBuilds: BorosLegBuild[];
+  perpBuilds: PerpLegBuild[];
+  perpAvailable: boolean;
+  nowSec: number;
+  clockStartOverrideSec?: number;
+  venueFees?: VenueFeeRow[] | null;
+  fundingLedger?: PerpFundingLedger | null;
+  dealFills?: DealFillRecord[] | null;
+  capitalBasis: CapitalBasis;
+}
+
+function assembleStrategy(args: AssembleInput): StrategyRollup {
+  const {
+    strategyId,
+    attribution,
+    base,
+    maturity,
+    borosBuilds,
+    perpBuilds,
+    perpAvailable,
+    nowSec,
+    clockStartOverrideSec,
+    venueFees,
+    fundingLedger,
+    dealFills,
+    capitalBasis,
+  } = args;
   const warnings: string[] = [];
   const borosLegs = borosBuilds.map((b) => b.leg);
   const perpLegs = perpBuilds.map((b) => b.leg);
@@ -661,7 +764,10 @@ function assembleStrategy(
       anyVenueOutOfBand = true;
       const hasBoros = atVenue.some((l) => l.kind === 'boros');
       const hasPerp = atVenue.some((l) => l.kind === 'perp');
-      if (perpAvailable && hasBoros && !hasPerp) {
+      // Naming the venue is only worth it when SOME other venue on this card
+      // does have its perp. With no perp legs at all the card-level warning
+      // below says the same thing once, instead of once per venue.
+      if (perpAvailable && hasBoros && !hasPerp && perpLegs.length > 0) {
         warnings.push(
           `No ${venue} perp found for ${base} in the connected Gate account — that side's floating rate is unhedged.`,
         );
@@ -672,6 +778,10 @@ function assembleStrategy(
       }
     }
   }
+  // A hedge here is a FIXED leg cancelling a FLOATING one, so it takes both
+  // kinds. One side alone is unhedged whichever side is missing — perps with
+  // no Boros lock nothing, exactly as Boros with no perps hedges nothing.
+  // ('partial' is for a book that has both and sized them unevenly.)
   let hedge: HedgeStatus;
   if (!perpAvailable) {
     hedge = 'partial'; // can't see the perp side — don't assert either way
@@ -679,6 +789,15 @@ function assembleStrategy(
     hedge = 'unhedged';
     warnings.push(
       `No matching perp legs for ${base} in the connected Gate account — the floating side is unhedged (or hedged elsewhere).`,
+    );
+  } else if (!borosLegs.length) {
+    hedge = 'unhedged';
+    const bothSides =
+      perpLegs.some((l) => l.side === 'LONG') && perpLegs.some((l) => l.side === 'SHORT');
+    warnings.push(
+      bothSides
+        ? `No Boros legs in this ${base} position — the funding spread is floating, not locked.`
+        : `No Boros legs in this ${base} position — its funding is directional, not locked.`,
     );
   } else {
     hedge = anyVenueOutOfBand ? 'partial' : 'hedged';
@@ -728,8 +847,15 @@ function assembleStrategy(
     byGroup.set(b.groupKey, entry);
   }
   let borosCapitalUsd = 0;
-  for (const g of byGroup.values()) {
-    borosCapitalUsd += g.groupIm > 0 ? g.balance * (g.strategyIm / g.groupIm) : g.balance;
+  if (capitalBasis === 'im') {
+    // Only what the legs actually post. A collateral account shared with other
+    // trading holds cash this strategy never needed, and counting it drags the
+    // APR down for a position that is doing fine.
+    borosCapitalUsd = borosBuilds.reduce((s, b) => s + b.positionInitialMarginUsd, 0);
+  } else {
+    for (const g of byGroup.values()) {
+      borosCapitalUsd += g.groupIm > 0 ? g.balance * (g.strategyIm / g.groupIm) : g.balance;
+    }
   }
   const capitalUsd = perpCapitalUsd + borosCapitalUsd;
 
@@ -752,9 +878,13 @@ function assembleStrategy(
   } else if (perpOpens.length) {
     clockStart = Math.min(...perpOpens);
     clockBasis = 'perp-open';
-    warnings.push(
-      `The ${base} Boros open time is unknown (no trade history) — the APR clock falls back to the earliest perp open.`,
-    );
+    // Only a MISSING open time is worth a warning. A position with no Boros
+    // legs at all has none to miss — the perp open is simply when it started.
+    if (borosLegs.length) {
+      warnings.push(
+        `The ${base} Boros open time is unknown (no trade history) — the APR clock falls back to the earliest perp open.`,
+      );
+    }
   }
   const elapsedSeconds = clockStart !== null ? Math.max(1, nowSec - clockStart) : null;
 
@@ -765,7 +895,20 @@ function assembleStrategy(
   // account-book ledger; if the ledger can't cover the window, keep the
   // counter and say so.
   for (const b of perpBuilds) {
-    if (clockStart === null || b.leg.openedAt === null || b.leg.openedAt >= clockStart) continue;
+    // `b.leg.openedAt` may be this TRANCHE's open; the counter this branch
+    // re-bases starts when the VENUE position opened, so that is what decides
+    // whether it predates the clock.
+    const venueOpen = b.venueOpenedAtSec;
+    // A share that VARIED over the position's life needs the ledger even when
+    // the position does not predate the clock: the counter × FINAL share
+    // drops the funding this tranche earned while it owned more of it.
+    const shareVaries =
+      b.shareTimeline !== undefined &&
+      b.shareTimeline.some((s) => Math.abs(s.share - b.share) > 1e-9);
+    if (clockStart === null || venueOpen === null || (venueOpen >= clockStart && !shareVaries)) {
+      continue;
+    }
+    const startSec: number = clockStart;
     // The ledger must actually CARRY this position before we re-base against it.
     // `?? []` here would sum to 0 and overwrite the venue's cumulative counter
     // with $0 — and because the outer condition already passed, the warning
@@ -776,14 +919,42 @@ function assembleStrategy(
     // Funding is the single largest P&L component of a funding-rate arb; showing
     // a confident $0 is far worse than showing the counter and saying why.
     const ledgerRows = b.positionId ? fundingLedger?.byPosition.get(b.positionId) : undefined;
-    if (fundingLedger && fundingLedger.coversFromSec <= clockStart && ledgerRows) {
-      const sinceStart = ledgerRows
-        .filter((e) => e.timeSec >= clockStart)
-        .reduce((s, e) => s + e.changeUsd, 0);
+    if (fundingLedger && fundingLedger.coversFromSec <= startSec && ledgerRows) {
+      // The ledger measures the WHOLE venue position; this build may own only
+      // a share of it — and that share may have CHANGED as sibling tranches
+      // opened, so each settlement is scaled by the share held at its time
+      // (0 before this tranche opened, so no explicit window filter is needed
+      // on the timeline path).
+      const shareAt = (t: number): number => {
+        let s = 0;
+        for (const seg of b.shareTimeline ?? []) {
+          if (seg.fromSec <= t) s = seg.share;
+          else break;
+        }
+        return s;
+      };
+      // The startSec window still applies on the timeline path: for a shared
+      // tranche the clock IS its own open (so the filter is a no-op for the
+      // earliest sibling's solo period), but a custom clock override must
+      // keep excluding pre-clock rows exactly as the flat-share path does.
+      const sinceStart = b.shareTimeline
+        ? ledgerRows
+            .filter((e) => e.timeSec >= startSec)
+            .reduce((s, e) => s + e.changeUsd * shareAt(e.timeSec), 0)
+        : ledgerRows.filter((e) => e.timeSec >= startSec).reduce((s, e) => s + e.changeUsd, 0) *
+          b.share;
       b.leg.cashFlowUsd = sinceStart;
       b.leg.netUsd = sinceStart - b.leg.feesUsd;
-    } else if (fundingLedger && fundingLedger.coversFromSec <= clockStart && !ledgerRows) {
-      if (nowSec - clockStart < FUNDING_LEDGER_GRACE_SEC) {
+    } else if (venueOpen >= clockStart) {
+      // Reached only because the share varied: the position does NOT predate
+      // the clock, so the grace/predates branches below do not describe it.
+      // Without a usable ledger the counter × final share stands — say so
+      // rather than silently misattributing the pre-split settlements.
+      warnings.push(
+        `The ${b.leg.venue} ${base} perp is shared by strategies that opened at different times and the CrossEx funding ledger cannot cover it — its funding is the venue counter split by final share, which may misattribute funding settled before the later strategy opened.`,
+      );
+    } else if (fundingLedger && fundingLedger.coversFromSec <= startSec && !ledgerRows) {
+      if (nowSec - startSec < FUNDING_LEDGER_GRACE_SEC) {
         // A young strategy may simply not have crossed a funding-settlement
         // boundary yet (venues settle at up to 8h intervals), so a
         // shortly-pre-existing position with no ledger rows is the EXPECTED
@@ -987,6 +1158,8 @@ function assembleStrategy(
     spreadReturnUsd === null ? null : spreadReturnUsd - paidTotalUsd - borosSettlementFutureUsd;
 
   return {
+    strategyId,
+    attribution,
     base,
     maturity,
     legs,
@@ -1052,6 +1225,16 @@ export interface BuildStrategiesInput {
    * across leg migrations when the live entries are not contemporaneous;
    * null/absent = journal unavailable (public mode, tests). */
   dealFills?: DealFillRecord[] | null;
+  /** Venue fill history — the execution record that splits one venue's leg
+   * across the strategies that built it (and carries per-fill fees).
+   * null/absent = unavailable, so the split falls back to proximity. */
+  perpFills?: PerpFillRecord[] | null;
+  /** What the user has said belongs where. A position with rows is exactly
+   * its rows; everything unclaimed is solved around them. */
+  membership?: MembershipRow[] | null;
+  /** How much capital a Boros position is said to tie up. Defaults to
+   * `balance`, the reading every existing number was computed on. */
+  capitalBasis?: CapitalBasis;
   nowSec: number;
 }
 
@@ -1078,8 +1261,10 @@ export function buildStrategies(input: BuildStrategiesInput): StrategyReturns {
     .filter((p) => fin(p.positionQty) !== 0 || fin(p.positionValue) !== 0)
     .map(buildPerpLeg);
 
-  // --- Group Boros legs into strategies by (base, maturity) ------------------
-  const cohorts = new Map<string, { base: string; maturity: number; builds: BorosLegBuild[] }>();
+  // --- Group Boros legs into cohorts by (base, maturity) ---------------------
+  // A cohort is one coin at one maturity: the Boros side of every strategy on
+  // that pairing, netted by the venue into one position per market.
+  const cohorts = new Map<string, Cohort>();
   for (const b of borosBuilds) {
     const base = b.leg.base || '?';
     const maturity = b.leg.maturity ?? 0;
@@ -1088,79 +1273,179 @@ export function buildStrategies(input: BuildStrategiesInput): StrategyReturns {
     cohort.builds.push(b);
     cohorts.set(key, cohort);
   }
-  const cohortList = [...cohorts.values()];
+  const cohortsBeforeAssertions = [...cohorts.values()];
+  const borosBases = new Set(cohortsBeforeAssertions.map((c) => c.base));
 
-  // --- Attach perp legs to cohorts by (venue, base) ---------------------------
-  // Perps are perpetual (no maturity): when a coin has several Boros maturity
-  // cohorts, attach each perp to the cohort with the largest Boros notional at
-  // its venue and note the ambiguity. Perps whose base has no Boros cohort at
-  // all are NOT part of any 4-leg strategy — the Positions panel owns those.
-  const attachedByCohort = new Map<(typeof cohortList)[number], PerpLegBuild[]>();
-  for (const perp of perpBuildsAll) {
-    const sameBase = cohortList.filter((c) => c.base === perp.leg.base);
-    if (!sameBase.length) continue;
-    const ranked = sameBase
-      .map((c) => ({
-        cohort: c,
-        venueNotional: c.builds
-          .filter((b) => b.leg.venue === perp.leg.venue)
-          .reduce((s, b) => s + b.leg.notionalUsd, 0),
-      }))
-      .sort((a, b) => b.venueNotional - a.venueNotional);
-    const winner = ranked[0].venueNotional > 0 ? ranked[0].cohort : sameBase[0];
-    if (sameBase.length > 1) {
-      perp.leg.warnings.push(
-        `${perp.leg.base} has ${sameBase.length} Boros maturities — this ${perp.leg.venue} perp was attached to the largest cohort on its venue.`,
-      );
+  // --- What the user has already said, before anything is inferred ----------
+  const asserted = applyMembership(input, perpBuildsAll, borosBuilds);
+  for (const note of asserted.notes) globalWarnings.push(note);
+
+  // Both sides of the book, reduced by everything the user spoke for. One
+  // ledger, applied the same way to perps and to Boros — the solver simply
+  // gets a smaller book, and has no idea assertions exist.
+  const cohortList = cohortsBeforeAssertions
+    .map((c) => ({
+      ...c,
+      builds: c.builds
+        .map((b) => {
+          const whole = b.leg.notionalToken ?? 0;
+          const left = asserted.borosLeft.get(b.marketId) ?? whole;
+          if (!(whole > 0) || left >= whole * (1 - 1e-9)) return b;
+          return left <= whole * 1e-9 ? null : scaleBorosBuild(b, left / whole);
+        })
+        .filter((b): b is BorosLegBuild => b !== null),
+    }))
+    .filter((c) => c.builds.length > 0);
+
+  // --- Split what is LEFT into the tranches that built it -------------------
+  const partition = solvePerpPartition({
+    positions: perpBuildsAll
+      .map(snapshotOf)
+      .map((p) => ({ ...p, qty: asserted.perpLeft.get(p.symbol) ?? p.qty }))
+      .filter((p) => p.qty > 0),
+    fills: input.perpFills,
+    deals: input.dealFills,
+  });
+  for (const note of partition.notes) globalWarnings.push(note);
+
+  const strategies = [
+    ...asserted.cards,
+    ...(partition.reconciled
+      ? splitStrategies(input, cohortList, perpBuildsAll, partition, asserted, borosBases)
+      : mergedStrategies(input, cohortList, perpBuildsAll)),
+  ];
+
+  /**
+   * UNHEDGED SIZE, DERIVED — never merged from the places that produce it.
+   *
+   * A perp position is either on a card or it is unhedged, so the honest
+   * definition is subtraction: what the venue reports, minus what the cards
+   * show. Three sources used to be concatenated instead — the solver's
+   * leftovers, the user's detachments, and a sweep for anything both missed —
+   * which double-counted a leg that one branch reported AND another attached,
+   * and still lost size when every branch skipped it.
+   *
+   * What comes out is a POSITION holding one leg, not a footnote. It used to
+   * be a separate `unhedgedResiduals` list the client drew as an amber strip,
+   * with an "attach to" picker and an undo button of its own — two controls
+   * that restated what any leg row's own picker already says. A position is a
+   * set of legs, and "one perp, nothing against it" is a set of legs; giving
+   * it a card is what makes it answerable with the same control as everything
+   * else, and shows its funding and fees, which the strip never did.
+   *
+   * Every coin gets this treatment, in the shape its leftovers actually have:
+   *  - a BOROS coin's leftovers are per-leg cards — each remainder is what one
+   *    strategy released, and they have nothing to do with each other;
+   *  - a coin with NO Boros keeps its legs together on one card — a
+   *    delta-neutral pair waiting for its rate lock is one position, not two.
+   */
+  if (partition.reconciled) {
+    const shown = new Map<string, number>();
+    for (const l of strategies.flatMap((s) => s.legs)) {
+      if (l.kind !== 'perp' || !l.symbol) continue;
+      shown.set(l.symbol, (shown.get(l.symbol) ?? 0) + (l.notionalToken ?? 0));
     }
-    attachedByCohort.set(winner, [...(attachedByCohort.get(winner) ?? []), perp]);
+    /** The unclaimed part of one venue leg, as a build the card can hold. */
+    const leftoverOf = (b: PerpLegBuild): PerpLegBuild | null => {
+      const whole = b.leg.notionalToken ?? 0;
+      const missing = whole - (shown.get(b.symbol) ?? 0);
+      if (missing <= Math.max(1e-12, whole * 1e-9)) return null;
+      const share = whole > 0 ? missing / whole : 1;
+      if (share >= 1 - 1e-9) return b;
+      return scalePerpBuild(
+        b,
+        {
+          symbol: b.symbol,
+          venue: b.leg.venue,
+          side: b.leg.side,
+          qty: missing,
+          // The venue's blended entry covers the positions holding the rest
+          // of this leg too, so the remainder cannot claim a price of its own.
+          entryPrice: null,
+          feesUsd: null,
+          share,
+          shared: true,
+        },
+        null,
+      );
+    };
+    const card = (strategyId: string, base: string, perpBuilds: PerpLegBuild[]) =>
+      assembleStrategy({
+        strategyId,
+        attribution: { source: 'unhedged', confidence: 'measured', pinned: false },
+        base,
+        // No Boros legs, so no maturity — see the sentinel on StrategyRollup.
+        maturity: 0,
+        borosBuilds: [],
+        perpBuilds,
+        perpAvailable,
+        nowSec: input.nowSec,
+        clockStartOverrideSec: input.clockStartOverrideSec,
+        venueFees: input.venueFees,
+        fundingLedger: input.perpFunding,
+        dealFills: input.dealFills,
+        capitalBasis: input.capitalBasis ?? 'balance',
+      });
+
+    const pairless = new Map<string, PerpLegBuild[]>();
+    for (const b of perpBuildsAll) {
+      const left = leftoverOf(b);
+      if (!left) continue;
+      if (borosBases.has(b.leg.base)) {
+        // Keyed by the leg, because that is all this position is. Stable
+        // across re-solves, and distinguishable from a minted position id.
+        strategies.push(card(`${b.leg.base}#unhedged:${b.symbol}`, b.leg.base, [left]));
+      } else {
+        pairless.set(b.leg.base, [...(pairless.get(b.leg.base) ?? []), left]);
+      }
+    }
+    for (const [base, builds] of pairless) {
+      strategies.push(card(`${base}#perps`, base, builds));
+    }
   }
 
-  const strategies = cohortList.map((cohort) =>
-    assembleStrategy(
-      cohort.base,
-      cohort.maturity,
-      cohort.builds,
-      attachedByCohort.get(cohort) ?? [],
-      perpAvailable,
-      input.nowSec,
-      input.clockStartOverrideSec,
-      input.venueFees,
-      input.perpFunding,
-      input.dealFills,
-    ),
-  );
   strategies.sort(
     (a, b) =>
       b.legs.reduce((s, l) => s + l.notionalUsd, 0) - a.legs.reduce((s, l) => s + l.notionalUsd, 0),
   );
 
   // --- Totals ------------------------------------------------------------------
-  const capitalUsd = strategies.reduce((s, x) => s + x.capitalUsd, 0);
-  const realizedPnlUsd = strategies.reduce((s, x) => s + x.realizedPnlUsd, 0);
-  const expectedPnlToMaturityUsd = strategies.reduce(
+  // Over the ARB BOOK only. Unhedged cards render beside the strategies so no
+  // position hides, but they are not Boros-tracked returns — folding a
+  // directional leftover (or a whole coin that never touched Boros) into
+  // "Boros-tracked totals" would let it dominate the APR it has nothing to do
+  // with. The card itself still shows that money.
+  const tracked = strategies.filter((x) => x.attribution.source !== 'unhedged');
+  const capitalUsd = tracked.reduce((s, x) => s + x.capitalUsd, 0);
+  const realizedPnlUsd = tracked.reduce((s, x) => s + x.realizedPnlUsd, 0);
+  const expectedPnlToMaturityUsd = tracked.reduce(
     (s, x) => s + (x.expectedPnlToMaturityUsd ?? 0),
     0,
   );
-  const feesTotalUsd = strategies.reduce((s, x) => s + x.feesUsd.paid.totalUsd, 0);
-  const perpExitFeesTotalUsd = strategies.some((x) => x.feesUsd.future.perpExitFeesUsd === null)
+  const feesTotalUsd = tracked.reduce((s, x) => s + x.feesUsd.paid.totalUsd, 0);
+  const perpExitFeesTotalUsd = tracked.some((x) => x.feesUsd.future.perpExitFeesUsd === null)
     ? null
-    : strategies.reduce((s, x) => s + (x.feesUsd.future.perpExitFeesUsd ?? 0), 0);
-  const perpExitSlippageTotalUsd = strategies.some(
+    : tracked.reduce((s, x) => s + (x.feesUsd.future.perpExitFeesUsd ?? 0), 0);
+  // Deliberately all-or-nothing: a sum over the measurable subset, presented as
+  // a total, is the same confident-average mistake the split exists to fix. The
+  // count travels with it so the UI can say WHY the total is missing.
+  const slippageUnknownCount = tracked.filter(
     (x) => x.feesUsd.future.perpExitSlippageUsd === null,
-  )
-    ? null
-    : strategies.reduce((s, x) => s + (x.feesUsd.future.perpExitSlippageUsd ?? 0), 0);
+  ).length;
+  const perpExitSlippageTotalUsd =
+    slippageUnknownCount > 0
+      ? null
+      : tracked.reduce((s, x) => s + (x.feesUsd.future.perpExitSlippageUsd ?? 0), 0);
   // Blend the annualization over capital-weighted elapsed time; null if any
   // strategy can't be annualized (a partial blend would mislead).
   let realizedApr: number | null = null;
   if (
-    strategies.length > 0 &&
+    tracked.length > 0 &&
     capitalUsd > 0 &&
-    strategies.every((s) => s.realizedApr !== null && s.capitalUsd > 0)
+    tracked.every((s) => s.realizedApr !== null && s.capitalUsd > 0)
   ) {
     const weightedElapsed =
-      strategies.reduce((s, x) => s + x.capitalUsd * (x.elapsedSeconds ?? 0), 0) / capitalUsd;
+      tracked.reduce((s, x) => s + x.capitalUsd * (x.elapsedSeconds ?? 0), 0) / capitalUsd;
     if (weightedElapsed > 0) {
       realizedApr = (realizedPnlUsd / capitalUsd) * (SECONDS_IN_YEAR / weightedElapsed);
     }
@@ -1178,7 +1463,1012 @@ export function buildStrategies(input: BuildStrategiesInput): StrategyReturns {
       feesTotalUsd,
       perpExitFeesTotalUsd,
       perpExitSlippageTotalUsd,
+      slippageUnknownCount,
+      // The totals' own population — unhedged cards render but do not count.
+      strategyCount: tracked.length,
     },
+    capitalBasis: input.capitalBasis ?? 'balance',
     warnings: [...new Set(globalWarnings)],
+  };
+}
+
+interface Cohort {
+  base: string;
+  maturity: number;
+  builds: BorosLegBuild[];
+}
+
+const snapshotOf = (b: PerpLegBuild): PerpLegSnapshot => ({
+  symbol: b.symbol,
+  venue: b.leg.venue,
+  base: b.leg.base,
+  side: b.leg.side,
+  qty: b.qty,
+  entryPrice: b.entryPrice,
+  openedAtSec: b.leg.openedAt,
+});
+
+/**
+ * What the user has ASSERTED, applied before anything is inferred.
+ *
+ * ONE RULE, no cases: a position is the set of (leg, size) rows naming it.
+ * Every row draws from a single ledger of what each venue leg still has left;
+ * whatever the ledger still holds afterwards is the solver's to propose, and
+ * whatever is left after THAT is unhedged. Membership, sizing, detaching and
+ * moving are all the same operation on that ledger — which is why none of them
+ * has a branch here.
+ *
+ * A position is built straight from its rows. It is deliberately NOT fed to
+ * the solver as a tranche: the solver's job is to infer groupings, and there
+ * is nothing to infer about one the user has stated. That also means a
+ * position needs no particular shape — two perps and two Boros legs, a spread
+ * whose hedge is not open yet, a single leg — they are all just row sets.
+ *
+ * Order is the only subtlety: rows carrying an explicit size bind before rows
+ * that say "all of it", so a number the user typed always outranks a blanket
+ * claim.
+ */
+function applyMembership(
+  input: BuildStrategiesInput,
+  perpBuildsAll: PerpLegBuild[],
+  borosBuilds: BorosLegBuild[],
+): {
+  /** One card per position the user defined, whatever shape it is. */
+  cards: StrategyRollup[];
+  /** symbol → base-coin qty the solver may still divide. */
+  perpLeft: Map<string, number>;
+  /** marketId → token size the cohorts may still divide. */
+  borosLeft: Map<number, number>;
+  /** Every perp symbol the user spoke about. The leftover branch in
+   * `splitStrategies` attaches un-spoken-for legs WHOLE to a cohort, which
+   * would undo an assertion. */
+  assertedSymbols: Set<string>;
+  /** Size the user detached, in the shape each side of the book reports it. */
+  residuals: UnhedgedResidual[];
+  orphanedBoros: BorosLegBuild[];
+  notes: string[];
+} {
+  const notes: string[] = [];
+  const perpLeft = new Map<string, number>();
+  const borosLeft = new Map<number, number>();
+  const cards: StrategyRollup[] = [];
+  const residuals: UnhedgedResidual[] = [];
+  const orphanedBoros: BorosLegBuild[] = [];
+  const rows = input.membership ?? [];
+
+  const perpBySymbol = new Map(perpBuildsAll.map((b) => [b.symbol, b]));
+  const borosByMarket = new Map(borosBuilds.map((b) => [b.marketId, b]));
+  for (const b of perpBuildsAll) perpLeft.set(b.symbol, b.leg.notionalToken ?? 0);
+  for (const b of borosBuilds) borosLeft.set(b.marketId, b.leg.notionalToken ?? 0);
+  const assertedSymbols = new Set<string>(
+    rows.flatMap((r) => (r.leg.kind === 'perp' ? [r.leg.symbol] : [])),
+  );
+  if (!rows.length) {
+    return { cards, perpLeft, borosLeft, assertedSymbols, residuals, orphanedBoros, notes };
+  }
+
+  // --- The ledger ------------------------------------------------------------
+  const sizeOf = (l: LegRef): number =>
+    l.kind === 'perp' ? (perpLeft.get(l.symbol) ?? 0) : (borosLeft.get(l.marketId) ?? 0);
+  const draw = (l: LegRef, qty: number): number => {
+    const left = sizeOf(l);
+    const got = Math.min(qty, left);
+    if (!(got > 0)) return 0;
+    if (l.kind === 'perp') perpLeft.set(l.symbol, left - got);
+    else borosLeft.set(l.marketId, left - got);
+    return got;
+  };
+  /**
+   * A leg, named the way the cards name it — never the raw venue symbol.
+   *
+   * These strings go into warnings the user reads. A leg the venue no longer
+   * reports has no build to read a venue off, so the symbol is parsed instead
+   * of printed: `OKX_FUTURE_ETH_USDT` is "OKX ETH perp", not itself.
+   */
+  const describe = (l: LegRef): string => {
+    if (l.kind === 'boros') {
+      const b = borosByMarket.get(l.marketId);
+      return b ? `${b.leg.venue} ${b.leg.base} Boros` : `Boros market ${l.marketId}`;
+    }
+    const p = perpBySymbol.get(l.symbol);
+    if (p) return `${p.leg.venue} ${p.leg.base} perp`;
+    const { exchange, base } = parseSymbol(l.symbol);
+    return exchange && base ? `${exchange} ${base} perp` : l.symbol;
+  };
+
+  /**
+   * An assertion naming a leg the venue no longer reports.
+   *
+   * Reported rather than ignored — this is the whole reason a row names a LEG.
+   * The pins this replaced were keyed by the shape of a grouping, so there was
+   * no object to check them against and a stale one simply kept asserting.
+   */
+  const live = (l: LegRef): boolean =>
+    l.kind === 'perp' ? perpBySymbol.has(l.symbol) : borosByMarket.has(l.marketId);
+  const dangling = rows.filter((r) => !live(r.leg));
+  if (dangling.length) {
+    const many = dangling.length > 1;
+    notes.push(
+      `${dangling.length} saved position assignment${many ? 's no longer match' : ' no longer matches'} anything on the venue (${dangling.map((r) => describe(r.leg)).join(', ')}) — ${many ? 'those positions were' : 'that position was'} closed, or the assignment is stale.`,
+    );
+  }
+  const usable = rows.filter((r) => live(r.leg));
+
+  // --- Draw, in the one order that matters -----------------------------------
+  // A row with no position is a claim by NOBODY, drawn first so no position and
+  // no solver can reach it. Everything else is a claim by someone.
+  const claimed = new Map<string, Map<string, { leg: LegRef; qty: number }>>();
+  const take = (positionId: string | undefined, leg: LegRef, want: number, stated: boolean) => {
+    const got = draw(leg, want);
+    if (stated && got < want * (1 - 1e-9)) {
+      notes.push(
+        `You assigned ${want} of ${describe(leg)} to a position but only ${got} was left — the assignment was clamped, not rescaled.`,
+      );
+    }
+    if (!(got > 0)) return;
+    if (positionId === undefined) {
+      if (leg.kind === 'boros') {
+        const b = borosByMarket.get(leg.marketId) as BorosLegBuild;
+        const whole = b.leg.notionalToken ?? 0;
+        orphanedBoros.push(got >= whole * (1 - 1e-9) ? b : scaleBorosBuild(b, got / whole));
+      } else {
+        const l = perpBySymbol.get(leg.symbol) as PerpLegBuild;
+        const whole = l.leg.notionalToken ?? 0;
+        residuals.push({
+          symbol: leg.symbol,
+          venue: l.leg.venue,
+          base: l.leg.base,
+          side: l.leg.side,
+          qty: got,
+          share: whole > 0 ? got / whole : 1,
+        });
+      }
+      return;
+    }
+    const byLeg = claimed.get(positionId) ?? new Map();
+    const key = legRefKey(leg);
+    byLeg.set(key, { leg, qty: (byLeg.get(key)?.qty ?? 0) + got });
+    claimed.set(positionId, byLeg);
+  };
+
+  for (const r of usable.filter((x) => x.positionId === undefined)) {
+    take(undefined, r.leg, r.qty ?? sizeOf(r.leg), r.qty !== undefined);
+  }
+  for (const r of usable.filter((x) => x.positionId !== undefined && x.qty !== undefined)) {
+    take(r.positionId, r.leg, r.qty as number, true);
+  }
+  // "All of it" rows divide whatever survived the stated ones.
+  const blanket = new Map<string, MembershipRow[]>();
+  for (const r of usable.filter((x) => x.positionId !== undefined && x.qty === undefined)) {
+    const key = legRefKey(r.leg);
+    blanket.set(key, [...(blanket.get(key) ?? []), r]);
+  }
+  for (const [, claimants] of blanket) {
+    const left = sizeOf(claimants[0].leg);
+    if (!(left > 0)) continue;
+    if (claimants.length > 1) {
+      notes.push(
+        `${claimants.length} positions each claim all of ${describe(claimants[0].leg)} — it was divided equally. Give one of them an explicit size to decide it.`,
+      );
+    }
+    const each = left / claimants.length;
+    for (const r of claimants) take(r.positionId, r.leg, each, false);
+  }
+
+  // --- Every claim set becomes a card, whatever shape it is ------------------
+  for (const [positionId, byLeg] of claimed) {
+    const all = [...byLeg.values()];
+    const borosScaled: BorosLegBuild[] = [];
+    const perpScaled: PerpLegBuild[] = [];
+    for (const { leg, qty } of all) {
+      if (leg.kind === 'boros') {
+        const b = borosByMarket.get(leg.marketId) as BorosLegBuild;
+        const whole = b.leg.notionalToken ?? 0;
+        if (!(whole > 0)) continue;
+        borosScaled.push(qty >= whole * (1 - 1e-9) ? b : scaleBorosBuild(b, qty / whole));
+      } else {
+        const l = perpBySymbol.get(leg.symbol) as PerpLegBuild;
+        const whole = l.leg.notionalToken ?? 0;
+        if (!(whole > 0)) continue;
+        const share = Math.min(1, qty / whole);
+        if (share >= 1 - 1e-9) {
+          perpScaled.push(l);
+          continue;
+        }
+        perpScaled.push(
+          scalePerpBuild(
+            l,
+            {
+              symbol: leg.symbol,
+              venue: l.leg.venue,
+              side: l.leg.side,
+              qty,
+              // The venue's blended entry covers every strategy sharing the
+              // leg, so a partial claim cannot claim a price of its own — the
+              // card reports null slippage rather than inventing one. A whole
+              // claim took the branch above and keeps the venue's figures.
+              entryPrice: null,
+              feesUsd: null,
+              share,
+              shared: true,
+            },
+            null,
+          ),
+        );
+      }
+    }
+    if (!borosScaled.length && !perpScaled.length) continue;
+    const maturities = borosScaled.map((b) => b.leg.maturity ?? 0);
+    const card = assembleStrategy({
+      strategyId: positionId,
+      // Stated, not inferred — the strongest attribution there is.
+      attribution: { source: 'user', confidence: 'measured', pinned: true },
+      base: borosScaled[0]?.leg.base || perpScaled[0]?.leg.base || '?',
+      maturity: maturities.length ? Math.min(...maturities) : 0,
+      borosBuilds: borosScaled,
+      perpBuilds: perpScaled,
+      perpAvailable: input.perpPositions !== null,
+      nowSec: input.nowSec,
+      clockStartOverrideSec: input.clockStartOverrideSec,
+      venueFees: input.venueFees,
+      fundingLedger: input.perpFunding,
+      dealFills: input.dealFills,
+      capitalBasis: input.capitalBasis ?? 'balance',
+    });
+    // The card wears a "grouped by you" chip; it must not also claim the split
+    // was guessed. Said here rather than in splitStrategies, because that is
+    // where the card is now built.
+    card.warnings.push(
+      `This ${card.base} position holds the legs you assigned to it — the rest of the book is matched around them, and it holds until you change it.`,
+    );
+    cards.push(card);
+  }
+
+  return { cards, perpLeft, borosLeft, assertedSymbols, residuals, orphanedBoros, notes };
+}
+
+function mergedStrategies(
+  input: BuildStrategiesInput,
+  cohortList: Cohort[],
+  perpBuildsAll: PerpLegBuild[],
+): StrategyRollup[] {
+  const attachedByCohort = new Map<Cohort, PerpLegBuild[]>();
+  for (const perp of perpBuildsAll) {
+    const winner = pickCohort(cohortList, perp.leg.base, [perp.leg.venue]);
+    if (!winner) continue;
+    if (cohortList.filter((c) => c.base === perp.leg.base).length > 1) {
+      perp.leg.warnings.push(
+        `${perp.leg.base} has several Boros maturities — this ${perp.leg.venue} perp was attached to the largest cohort on its venue.`,
+      );
+    }
+    attachedByCohort.set(winner, [...(attachedByCohort.get(winner) ?? []), perp]);
+  }
+  return cohortList.map((cohort) =>
+    assembleStrategy({
+      strategyId: `${cohort.base}@${cohort.maturity}`,
+      attribution: { source: 'merged', confidence: 'measured', pinned: false },
+      base: cohort.base,
+      maturity: cohort.maturity,
+      borosBuilds: cohort.builds,
+      perpBuilds: attachedByCohort.get(cohort) ?? [],
+      perpAvailable: input.perpPositions !== null,
+      nowSec: input.nowSec,
+      clockStartOverrideSec: input.clockStartOverrideSec,
+      venueFees: input.venueFees,
+      fundingLedger: input.perpFunding,
+      dealFills: input.dealFills,
+      capitalBasis: input.capitalBasis ?? 'balance',
+    }),
+  );
+}
+
+/** One strategy per perp tranche, plus one per cohort remainder for the Boros
+ * notional no tranche claimed (standalone directional legs — never force-fitted
+ * into someone else's strategy). */
+function splitStrategies(
+  input: BuildStrategiesInput,
+  cohortList: Cohort[],
+  perpBuildsAll: PerpLegBuild[],
+  partition: PerpPartition,
+  asserted: {
+    /**
+     * symbol → base-coin qty the solver was given, when a user position already
+     * claimed part of it. A SOLVED tranche's `share` is computed against the
+     * size the solver saw, so its fraction of the whole venue position — what
+     * every USD number here is scaled by — is that share times what was left.
+     * A synthetic tranche is already stated against the whole.
+     */
+    perpLeft: Map<string, number>;
+    assertedSymbols: Set<string>;
+    orphanedBoros: BorosLegBuild[];
+    residuals: UnhedgedResidual[];
+    cards: StrategyRollup[];
+  },
+  /** Coins that hold Boros anywhere — before assertions moved any of it. */
+  borosBases: ReadonlySet<string>,
+): StrategyRollup[] {
+  const { perpLeft } = asserted;
+  /**
+   * `share` means "fraction of the whole venue position" everywhere below —
+   * it is what every USD number is scaled by. But the solver computed it
+   * against the size IT was given, which is smaller whenever a user position
+   * already claimed part of the leg. Re-base it once here rather than at each
+   * of the several places that read it.
+   */
+  const wholeOf = new Map(perpBuildsAll.map((b) => [b.symbol, b.leg.notionalToken ?? 0]));
+  const rebase = (leg: TrancheLeg): TrancheLeg => {
+    const whole = wholeOf.get(leg.symbol) ?? 0;
+    const left = perpLeft.get(leg.symbol);
+    if (left === undefined || !(whole > 0)) return leg;
+    const f = Math.min(1, left / whole);
+    return f >= 1 - 1e-12 ? leg : { ...leg, share: leg.share * f, shared: true };
+  };
+  const tranches = partition.tranches.map((t) => ({
+    ...t,
+    long: rebase(t.long),
+    short: rebase(t.short),
+  }));
+  // A perp the partition already spoke for must never be re-attached WHOLE by
+  // the leftover branch below: a leg scaled into a tranche would land in two
+  // strategies at once, and a DETACHED leg would show as hedged inside a card
+  // while the residual box calls the same size unhedged. A leg that is merely
+  // unpaired (no opposing perp yet) is not spoken for — it is still this
+  // cohort's hedge, and the card must show it.
+  const spokenFor = new Set<string>(asserted.assertedSymbols);
+  for (const t of tranches) {
+    spokenFor.add(t.long.symbol);
+    spokenFor.add(t.short.symbol);
+  }
+  const perpBySymbol = new Map(perpBuildsAll.map((b) => [b.symbol, b]));
+  // How much of each Boros position is still unclaimed (1 = untouched).
+  const borosShareLeft = new Map<BorosLegBuild, number>(borosLegsOf(cohortList).map((b) => [b, 1]));
+  const out: StrategyRollup[] = [];
+  const assigned = new Map<Cohort, PerpTranche[]>();
+
+  // One index over the whole txn history, not one flatten per cohort and a
+  // full re-scan per Boros leg: the fetcher returns up to 5,000 fills PER
+  // collateral token, and this route is polled every 30 seconds.
+  const txnsByMarket = new Map<number, BorosTxn[]>();
+  for (const list of input.txnsByToken.values()) {
+    for (const t of list) {
+      const forMarket = txnsByMarket.get(t.marketId);
+      if (forMarket) forMarket.push(t);
+      else txnsByMarket.set(t.marketId, [t]);
+    }
+  }
+
+  /**
+   * The opening fills of each Boros leg, replayed once.
+   *
+   * `borosIncrements` re-filters, re-sorts and re-walks the market's history
+   * on every call, and both the serving-order scan and the allocation below
+   * want the same answer for the same leg. Keyed by market AND size, because a
+   * replay is only valid for the position size it reconciles against.
+   */
+  const incrementsCache = new Map<string, ReturnType<typeof borosIncrements>>();
+  const incrementsFor = (marketId: number, size: number) => {
+    const key = `${marketId}:${size}`;
+    const hit = incrementsCache.get(key);
+    if (hit !== undefined) return hit;
+    const built = borosIncrements(txnsByMarket.get(marketId) ?? [], marketId, size);
+    incrementsCache.set(key, built);
+    return built;
+  };
+
+  /**
+   * How much of each tranche's perp is still free to hedge something, in USD
+   * per venue.
+   *
+   * ⚠ A perp has NO MATURITY. One position hedges every maturity cohort at
+   * once, so it cannot belong to a single one — cohorts DRAW DOWN a shared
+   * capacity instead. `pickCohort` used to force the choice and warn about it,
+   * which stranded the perps on one maturity while a complete Boros pair on
+   * another rendered with no hedge at all.
+   */
+  const capacity = new Map<string, Map<string, number>>();
+  const perpLegAt = (t: PerpTranche, venue: string) => {
+    const leg = t.long.venue === venue ? t.long : t.short.venue === venue ? t.short : null;
+    const live = leg ? perpBySymbol.get(leg.symbol) : undefined;
+    return leg && live ? { leg, live } : null;
+  };
+  const perpUsdAt = (t: PerpTranche, venue: string): number => {
+    const at = perpLegAt(t, venue);
+    return at ? at.live.leg.notionalUsd * at.leg.share : 0;
+  };
+  /**
+   * The venue's own mark for one base coin, backed out of the position it
+   * reports (`positionValue ÷ qty`). Only ever used to undo that same venue's
+   * own conversion — see `unitPriceFor`.
+   */
+  const venuePriceAt = (t: PerpTranche, venue: string): number | null => {
+    const at = perpLegAt(t, venue);
+    const tokens = at?.live.leg.notionalToken ?? 0;
+    return at && tokens > 0 ? at.live.leg.notionalUsd / tokens : null;
+  };
+  for (const t of tranches) {
+    const byVenue = new Map<string, number>();
+    for (const v of new Set([t.long.venue, t.short.venue])) byVenue.set(v, perpUsdAt(t, v));
+    capacity.set(t.id, byVenue);
+  }
+
+  /**
+   * Cohorts are served in EVIDENCE order: the cohort whose Boros fills sit
+   * closest to a candidate tranche's open goes first, so the maturity a perp
+   * was actually opened alongside claims it before an older, larger one can.
+   */
+  const cohortGap = (c: Cohort): number => {
+    let best = Number.POSITIVE_INFINITY;
+    for (const b of c.builds) {
+      const incs = incrementsFor(b.marketId, b.leg.notionalToken ?? 0);
+      for (const t of tranches) {
+        if (t.base !== c.base) continue;
+        if (t.long.venue !== b.leg.venue && t.short.venue !== b.leg.venue) continue;
+        if (t.openedAtSec === null) continue;
+        for (const i of incs ?? []) best = Math.min(best, Math.abs(i.timeSec - t.openedAtSec));
+      }
+    }
+    return best;
+  };
+  const servingOrder = [...cohortList]
+    .map((c) => ({ c, gap: cohortGap(c) }))
+    // No fills to judge by ⇒ fall back to the larger book first, the old
+    // pickCohort tie-break, so a book with no history is unchanged.
+    .sort(
+      (a, b) =>
+        a.gap - b.gap ||
+        b.c.builds.reduce((s, x) => s + x.leg.notionalUsd, 0) -
+          a.c.builds.reduce((s, x) => s + x.leg.notionalUsd, 0),
+    )
+    .map((x) => x.c);
+
+  for (const c of servingOrder) {
+    const eligible = tranches.filter(
+      (t) =>
+        t.base === c.base &&
+        c.builds.some((b) => b.leg.venue === t.long.venue || b.leg.venue === t.short.venue) &&
+        [t.long.venue, t.short.venue].some((v) => (capacity.get(t.id)?.get(v) ?? 0) > 0),
+    );
+    if (eligible.length) assigned.set(c, eligible);
+  }
+
+  /**
+   * A tranche that covers no Boros anywhere still has to be reported — it is a
+   * real perp pair, just an uncovered one. It lands on its best cohort so the
+   * card has a base and a maturity to render.
+   *
+   * When there is no cohort at all on its coin — every Boros leg spoken for by
+   * someone else — it becomes its own cohort with nothing in it, rather than
+   * falling off the page. A perp pair with no hedge is a position; it is just
+   * an unhedged one.
+   */
+  for (const t of tranches) {
+    if ([...assigned.values()].some((ts) => ts.includes(t))) continue;
+    const home =
+      pickCohort(cohortList, t.base, [t.long.venue, t.short.venue]) ??
+      // …but only on a coin this view OWNS. A coin with no Boros at all is the
+      // Positions panel's business, and giving it a strategy card here would
+      // show the same perps twice.
+      (borosBases.has(t.base) ? ({ base: t.base, maturity: 0, builds: [] } satisfies Cohort) : null);
+    if (home) assigned.set(home, [...(assigned.get(home) ?? []), t]);
+  }
+
+  // share_i(t) for SHARED venue legs. The venue's cumulative funding counter
+  // and the account-book ledger both measure the WHOLE position, while a
+  // tranche's ownership of it CHANGES as sibling tranches open — funding
+  // settled while an earlier tranche owned the whole leg must not be scaled
+  // by its FINAL share. Per symbol: each tranche's share renormalised over
+  // the siblings already open at t. Any missing open time makes the timeline
+  // unknowable — no timeline, and the flat share stands.
+  const shareTimelines = new Map<
+    string,
+    Map<string, Array<{ fromSec: number; share: number }>>
+  >();
+  {
+    const legsBySymbol = new Map<
+      string,
+      Array<{ trancheId: string; openedAtSec: number | null; share: number }>
+    >();
+    for (const t of tranches) {
+      for (const leg of [t.long, t.short]) {
+        if (!leg.shared || !(leg.share > 0)) continue;
+        const list = legsBySymbol.get(leg.symbol) ?? [];
+        list.push({ trancheId: t.id, openedAtSec: t.openedAtSec, share: leg.share });
+        legsBySymbol.set(leg.symbol, list);
+      }
+    }
+    for (const [symbol, list] of legsBySymbol) {
+      if (list.length < 2 || list.some((x) => x.openedAtSec === null)) continue;
+      const opens = [...new Set(list.map((x) => x.openedAtSec as number))].sort((a, b) => a - b);
+      const perTranche = new Map<string, Array<{ fromSec: number; share: number }>>();
+      for (const x of list) {
+        const timeline: Array<{ fromSec: number; share: number }> = [];
+        for (const at of opens) {
+          if (at < (x.openedAtSec as number)) continue;
+          const openSum = list
+            .filter((y) => (y.openedAtSec as number) <= at)
+            .reduce((s, y) => s + y.share, 0);
+          timeline.push({ fromSec: at, share: openSum > 0 ? x.share / openSum : x.share });
+        }
+        perTranche.set(x.trancheId, timeline);
+      }
+      shareTimelines.set(symbol, perTranche);
+    }
+  }
+
+  /**
+   * PASS 1 — resolve every cohort's Boros legs, consuming the shared perp
+   * capacity as it goes, so a maturity served earlier cannot have its perp
+   * counted again by a later one.
+   */
+  interface CohortPlan {
+    shareByTranche: Map<string, Map<string, number>>;
+    rateByTranche: Map<string, number>;
+    pinNotes: Map<string, string[]>;
+    coveredUsd: Map<string, number>;
+  }
+  const plans = new Map<Cohort, CohortPlan>();
+  for (const [cohort, cohortTranches] of assigned) {
+    /**
+     * What fraction of THIS cohort's Boros leg at `venue` belongs to tranche
+     * `t` — its perp size there over the perp size of every tranche in this
+     * cohort at the same venue.
+     *
+     * ⚠ NOT `leg.share`. That is the tranche's share of the VENUE PERP, and a
+     * perp is perpetual: one position hedges every maturity cohort at once, so
+     * a book with two maturities splits it 50/50. A cohort's Boros leg is not
+     * shared that way — it belongs entirely to the tranches in its own cohort
+     * — so charging it the perp's share leaves the rest unclaimed, and the
+     * leftover branch below spins it out as a phantom standalone card while
+     * the real strategy reports itself half-hedged.
+     *
+     * Scoping the denominator to the cohort still divides one venue's leg
+     * between two quote-coin symbols (pinTarget in ./partition) when both sit
+     * in the SAME cohort — there the cohort-scoped sum is the venue-wide sum.
+     * Token qty, not USD: the legs share a base, so the ratio is identical and
+     * it needs no live perp build to be computable.
+     */
+    const qtyAt = (x: PerpTranche, venue: string): number => {
+      const leg = x.long.venue === venue ? x.long : x.short.venue === venue ? x.short : null;
+      return leg && leg.qty > 0 ? leg.qty : 0;
+    };
+
+    /**
+     * Resolve every Boros leg in this cohort into a per-tranche share, PINS
+     * FIRST and pro-rata for the rest.
+     *
+     * Same doctrine as a perp pin: a pinned size HOLDS and everything unpinned
+     * absorbs the difference. A pin larger than the leg is clamped and said
+     * out loud, never silently rescaled.
+     */
+    const pinNotes = new Map<string, string[]>();
+    /** `${trancheId}:${venue}` → the fixed APR that tranche actually locked.
+     * Filled by the same allocation that sizes it, so a strategy can never be
+     * credited a rate for size it was not given. */
+    const rateByTranche = new Map<string, number>();
+    const shareByTranche = new Map<string, Map<string, number>>(
+      cohortTranches.map((t) => [t.id, new Map<string, number>()]),
+    );
+    /** USD of perp this cohort's Boros actually covers, per tranche — what the
+     * perp is then divided by in pass 2. */
+    const coveredUsd = new Map<string, number>();
+    for (const b of cohort.builds) {
+      const venue = b.leg.venue;
+      const total = b.leg.notionalToken ?? 0;
+      // Only a tranche with perp exposure at this venue can hold its Boros leg.
+      // Anything the user spoke for is already out of this cohort, so there is
+      // nothing to make an exception for.
+      const eligible = cohortTranches.filter((t) => qtyAt(t, venue) > 0);
+
+      const rest = total;
+      const unpinned = eligible;
+
+      /**
+       * BOROS ANCHORS THE SPLIT. The fills that built this leg say which
+       * strategy opened which part of it; a strategy is capped at the perp
+       * exposure it actually has to hedge, and anything left over stays
+       * unclaimed rather than being pushed onto a strategy that never traded
+       * it.
+       *
+       * Pro-rata by perp size is the fallback, and only where there is no
+       * fill record to anchor on — with no evidence, an equal hedge ratio is
+       * the least-assuming answer.
+       */
+      const scale = total > 0 ? rest / total : 0;
+      const raw = incrementsFor(b.marketId, total);
+      const pool = raw && scale > 0 ? raw.map((i) => ({ ...i, qty: i.qty * scale })) : null;
+      // ⚠ A Boros leg is denominated in its COLLATERAL token, a perp in the
+      // BASE asset — 1,000,000 USDT against 531 ETH. Demand has to cross that
+      // boundary through USD, or a USDT-margined book hands every strategy a
+      // millionth of its leg.
+      const usdPerToken = total > 0 ? b.leg.notionalUsd / total : 0;
+      /**
+       * ...but only when the boundary is really there. When the zone's
+       * collateral IS the base asset — 0.013 ETH of Boros against 0.013 ETH of
+       * perp — both sides already count the same coin, and routing them
+       * through USD converts one with Pendle's mark and the other with the
+       * venue's. Those two oracles are sampled at different instants and
+       * disagree by hundredths of a percent, so the SIGN of that disagreement,
+       * not the hedge, decided whether the perp could cover its Boros. Every
+       * time it came up short the remainder turned into `spare`, was smeared
+       * over the other tranches, and surfaced as a dust card that blinked in
+       * and out with the feeds.
+       *
+       * Undoing the venue's own conversion puts the comparison back in coins,
+       * where it belongs: the price cancels and demand is the perp's token
+       * count. A genuinely cross-denominated zone still goes through USD,
+       * where the Boros notional is already a USD amount and the venue's mark
+       * is the honest value of the perp against it.
+       */
+      const sameUnit = (b.leg.collateral ?? '') === cohort.base;
+      const unitPriceFor = (t: PerpTranche): number =>
+        (sameUnit ? venuePriceAt(t, venue) : usdPerToken) ?? usdPerToken;
+      // Remaining capacity, not the whole perp leg: an earlier maturity may
+      // already be using part of this position to hedge its own Boros.
+      const demandTokens = (t: PerpTranche): number => {
+        const px = unitPriceFor(t);
+        if (!(px > 0)) return 0;
+        const freeUsd = capacity.get(t.id)?.get(venue) ?? 0;
+        return Math.min(freeUsd / px, rest);
+      };
+      const byEvidence = pool
+        ? allocateBorosByEvidence(
+            pool,
+            unpinned.map((t) => ({
+              id: t.id,
+              demand: demandTokens(t),
+              openedAtSec: t.openedAtSec,
+            })),
+          )
+        : null;
+
+      const denom = unpinned.reduce((s, t) => s + Math.min(qtyAt(t, venue), demandTokens(t)), 0);
+      /**
+       * Boros the fills gave to nobody, because every strategy was already
+       * capped at the perp it has to hedge.
+       *
+       * It must NOT be orphaned into a standalone card: a book deliberately
+       * holding more Boros than perp is exactly what the hedge check exists to
+       * report ("the Boros book is 140% of the perp book"), and quietly moving
+       * the excess elsewhere would delete that signal. The demand cap is there
+       * to stop one strategy taking what ANOTHER needs — not to disown size
+       * nobody is competing for.
+       */
+      const claimed = byEvidence
+        ? unpinned.reduce((s, t) => s + (byEvidence.get(t.id)?.qty ?? 0), 0)
+        : 0;
+      const spare = byEvidence ? Math.max(0, rest - claimed) : 0;
+      for (const t of eligible) {
+        const qty = byEvidence
+          ? (byEvidence.get(t.id)?.qty ?? 0) +
+            (spare > 0 && denom > 0 ? (spare * Math.min(qtyAt(t, venue), demandTokens(t))) / denom : 0)
+          : denom > 0
+            ? (rest * Math.min(qtyAt(t, venue), demandTokens(t))) / denom
+            : 0;
+        shareByTranche.get(t.id)?.set(venue, total > 0 ? qty / total : 0);
+        // Same price the demand was measured with, or the tokens consumed and
+        // the capacity they are charged against drift apart every cohort.
+        const usedUsd = qty * unitPriceFor(t);
+        const byVenue = capacity.get(t.id);
+        if (byVenue) byVenue.set(venue, Math.max(0, (byVenue.get(venue) ?? 0) - usedUsd));
+        coveredUsd.set(t.id, (coveredUsd.get(t.id) ?? 0) + usedUsd);
+        const apr = byEvidence?.get(t.id)?.fixedApr;
+        if (apr !== null && apr !== undefined) {
+          rateByTranche.set(`${t.id}:${venue}`, apr);
+        }
+      }
+    }
+
+    plans.set(cohort, { shareByTranche, rateByTranche, pinNotes, coveredUsd });
+  }
+
+  /**
+   * PASS 2 — a perp is divided between the cohorts it actually covers, in
+   * proportion to the Boros it covers in each. Normalised so the shares sum to
+   * one: nothing of the position may vanish from the page, so a tranche that
+   * is only partly covered keeps its whole perp on the cohort that covers it
+   * and reports the imbalance there.
+   */
+  const perpShareIn = (t: PerpTranche, cohort: Cohort): number => {
+    let total = 0;
+    for (const plan of plans.values()) total += plan.coveredUsd.get(t.id) ?? 0;
+    if (!(total > 0)) {
+      /**
+       * Covered NOWHERE — a real perp pair that nothing hedges. It still has
+       * to be reported, but exactly once: a tranche is eligible for every
+       * cohort sharing one of its venues, so returning 1 to each of them
+       * rendered the same position as a full-size card in all of them. And
+       * `spans` counts covered cohorts, which is zero here, so none of those
+       * cards got the disambiguating suffix — the venue's position was
+       * double-counted across the book under one repeated strategyId. The
+       * first cohort to serve it owns it; the rest see 0 and skip below.
+       */
+      const first = [...assigned.keys()].find((c) => assigned.get(c)?.includes(t));
+      return cohort === first ? 1 : 0;
+    }
+    return (plans.get(cohort)?.coveredUsd.get(t.id) ?? 0) / total;
+  };
+
+  for (const [cohort, cohortTranches] of assigned) {
+    const { shareByTranche, rateByTranche, pinNotes } = plans.get(cohort) as CohortPlan;
+    const venueSlice = (t: PerpTranche, venue: string): number =>
+      shareByTranche.get(t.id)?.get(venue) ?? 0;
+
+    for (const t of cohortTranches) {
+      const cohortPerpShare = perpShareIn(t, cohort);
+      /**
+       * A tranche that hedges two maturities produces a card in each, so the
+       * tranche id alone is no longer unique — and everything the client keys
+       * off strategyId (pins, excluded entry parts, React keys, share links)
+       * would collide between them. Suffix ONLY when it actually spans, so
+       * the ordinary single-cohort id is unchanged.
+       */
+      const spans = [...plans.keys()].filter(
+        (c) => (plans.get(c)?.coveredUsd.get(t.id) ?? 0) > 0,
+      ).length;
+      const cardId = spans > 1 ? `${t.id}@${cohort.maturity}` : t.id;
+      if (!(cohortPerpShare > 0) && !cohort.builds.some((b) => venueSlice(t, b.leg.venue) > 0)) {
+        continue;
+      }
+      // A tranche that owns both its legs whole IS the position: leave its
+      // open times alone so nothing about a single-strategy book changes
+      // (the migration chain in assembleStrategy still gets its shot). Only a
+      // SHARED leg needs re-stamping, because the venue row's createTime is
+      // the first tranche's open, not this one's.
+      const ownsBothLegs = !t.long.shared && !t.short.shared;
+      // A Boros position shared by several strategies opened before most of
+      // them: leave its open alone only when this tranche owns it outright,
+      // or every later tranche inherits the first one's APR clock.
+      const trancheOpenedAt = ownsBothLegs ? null : t.openedAtSec;
+      const perpBuilds: PerpLegBuild[] = [];
+      for (const leg of [t.long, t.short]) {
+        const live = perpBySymbol.get(leg.symbol);
+        if (!live) continue;
+        // The tranche's own share of the venue position, then the fraction of
+        // THAT which this maturity covers. A perp spanning two cohorts is
+        // divided between them rather than picked by one.
+        const inCohort =
+          cohortPerpShare >= 1 - 1e-9
+            ? leg
+            : { ...leg, qty: leg.qty * cohortPerpShare, share: leg.share * cohortPerpShare };
+        const build = scalePerpBuild(live, inCohort, trancheOpenedAt);
+        const timeline = shareTimelines.get(leg.symbol)?.get(t.id);
+        if (timeline && timeline.length > 0) build.shareTimeline = timeline;
+        perpBuilds.push(build);
+      }
+      const borosScaled: BorosLegBuild[] = [];
+      for (const b of cohort.builds) {
+        const leg = b.leg.venue === t.long.venue ? t.long : b.leg.venue === t.short.venue ? t.short : null;
+        if (!leg || !(leg.share > 0)) continue;
+        // Clamped by what is left, so no rounding path can hand out more of a
+        // position than exists.
+        const share = Math.min(venueSlice(t, b.leg.venue), borosShareLeft.get(b) ?? 1);
+        if (!(share > 0)) continue;
+        borosScaled.push(
+          scaleBorosBuild(b, share, rateByTranche.get(`${t.id}:${b.leg.venue}`), trancheOpenedAt),
+        );
+        borosShareLeft.set(b, (borosShareLeft.get(b) ?? 1) - share);
+      }
+      // A perp is perpetual, so one position can hedge several maturities at
+      // once. It is no longer ATTACHED to a chosen cohort — each draws the
+      // part it covers — but a leg that really is split says so, because its
+      // numbers here are a fraction of the position the venue reports.
+      if (cohortPerpShare < 1 - 1e-9) {
+        /**
+         * Never round a share to 0% or 100%. A sliver reads as "0% of this
+         * GATE perp is counted here" beside leg rows that plainly carry
+         * numbers, and the reader cannot tell whether the leg is absent,
+         * rounded, or broken; 99.6% claims a whole position on a card that is
+         * not one.
+         */
+        const pct =
+          cohortPerpShare < 0.01
+            ? '<1'
+            : cohortPerpShare > 0.99
+              ? '>99'
+              : String(Math.round(cohortPerpShare * 100));
+        for (const b of perpBuilds) {
+          b.leg.warnings.push(
+            `${pct}% of this ${b.leg.venue} perp is counted here — the rest hedges ${cohort.base}'s other Boros maturities.`,
+          );
+        }
+      }
+      // Float dust from the perp pairing can leave a tranche with essentially
+      // nothing in it. A position of a fraction of a cent is not a strategy.
+      if (![...perpBuilds, ...borosScaled].some((b) => b.leg.notionalUsd > 0.005)) continue;
+      const rollup = assembleStrategy({
+        strategyId: cardId,
+        attribution: { source: t.source, confidence: t.confidence, pinned: t.pinned },
+        base: cohort.base,
+        maturity: cohort.maturity,
+        borosBuilds: borosScaled,
+        perpBuilds,
+        perpAvailable: true,
+        nowSec: input.nowSec,
+        clockStartOverrideSec: input.clockStartOverrideSec,
+        venueFees: input.venueFees,
+        fundingLedger: input.perpFunding,
+        dealFills: input.dealFills,
+        capitalBasis: input.capitalBasis ?? 'balance',
+      });
+      // Both of these are `unconfirmed` — neither was measured from the
+      // execution record — but they are not the same claim, and a card that
+      // shows the `pinned` chip while saying the split was guessed
+      // contradicts itself.
+      for (const note of pinNotes.get(t.id) ?? []) rollup.warnings.push(note);
+      if (t.source === 'user') {
+        rollup.warnings.push(
+          `This ${t.base} position is the size you pinned — the rest of the book is matched around it, and it holds until you change it.`,
+        );
+      } else if (t.confidence === 'unconfirmed') {
+        rollup.warnings.push(
+          `This ${t.base} position was matched by price and open-time proximity, not by an execution record — the split between strategies is a proposal you can edit, not a measurement.`,
+        );
+      }
+      out.push(rollup);
+    }
+  }
+
+  /**
+   * Boros notional NO POSITION CLAIMED — a standalone directional leg.
+   *
+   * Two things arrive here and they are the same thing: what the solver could
+   * not attach, and what the user detached. Grouped by (base, maturity) rather
+   * than by cohort, because a cohort whose every leg was spoken for no longer
+   * exists, and its leftovers would have nowhere to be reported.
+   */
+  const unowned = new Map<string, { cohort: Cohort | undefined; base: string; maturity: number; builds: BorosLegBuild[] }>();
+  const addUnowned = (b: BorosLegBuild, cohort?: Cohort) => {
+    const base = b.leg.base;
+    const maturity = b.leg.maturity ?? 0;
+    const key = `${base}@${maturity}`;
+    const at = unowned.get(key) ?? { cohort, base, maturity, builds: [] };
+    at.cohort = at.cohort ?? cohort;
+    at.builds.push(b);
+    unowned.set(key, at);
+  };
+  for (const b of asserted.orphanedBoros) addUnowned(b);
+  for (const cohort of cohortList) {
+    for (const b of cohort.builds) {
+      const left = borosShareLeft.get(b) ?? 1;
+      if (left <= 1e-6) continue;
+      addUnowned(left >= 1 - 1e-9 ? b : scaleBorosBuild(b, left), cohort);
+    }
+  }
+  for (const { cohort, base, maturity, builds: leftovers } of unowned.values()) {
+    // `attached` = this coin already has a strategy — solved OR asserted — so
+    // the leftover is a remainder beside it. Otherwise the coin is Boros-only
+    // and keeps the legacy behaviour of pulling in any perp nobody spoke for.
+    const attached =
+      (cohort !== undefined && assigned.has(cohort)) ||
+      asserted.cards.some((c) => c.base === base);
+    out.push(
+      assembleStrategy({
+        strategyId: attached ? `${base}@${maturity}#unmatched` : `${base}@${maturity}`,
+        attribution: {
+          source: attached ? 'boros-only' : 'merged',
+          confidence: 'measured',
+          pinned: false,
+        },
+        base,
+        maturity,
+        borosBuilds: leftovers,
+        perpBuilds:
+          attached || cohort === undefined
+            ? []
+            : perpBuildsAll.filter(
+                (p) =>
+                  !spokenFor.has(p.symbol) &&
+                  pickCohort(cohortList, p.leg.base, [p.leg.venue]) === cohort,
+              ),
+        perpAvailable: input.perpPositions !== null,
+        nowSec: input.nowSec,
+        clockStartOverrideSec: input.clockStartOverrideSec,
+        venueFees: input.venueFees,
+        fundingLedger: input.perpFunding,
+        dealFills: input.dealFills,
+        capitalBasis: input.capitalBasis ?? 'balance',
+      }),
+    );
+  }
+  if (!out.length) return mergedStrategies(input, cohortList, perpBuildsAll);
+  return out;
+}
+
+const borosLegsOf = (cohorts: Cohort[]): BorosLegBuild[] => cohorts.flatMap((c) => c.builds);
+
+/** Perps are perpetual (no maturity): when a coin has several Boros maturity
+ * cohorts, prefer the one holding the most Boros notional at the given
+ * venues. */
+function pickCohort(cohorts: Cohort[], base: string, venues: string[]): Cohort | null {
+  const sameBase = cohorts.filter((c) => c.base === base);
+  if (!sameBase.length) return null;
+  const ranked = sameBase
+    .map((c) => ({
+      cohort: c,
+      venueNotional: c.builds
+        .filter((b) => venues.includes(b.leg.venue))
+        .reduce((s, b) => s + b.leg.notionalUsd, 0),
+    }))
+    .sort((a, b) => b.venueNotional - a.venueNotional);
+  return ranked[0].venueNotional > 0 ? ranked[0].cohort : sameBase[0];
+}
+
+/** A perp position scaled down to one tranche: its own size, its own entry
+ * price (null ⇒ the strategy reports null slippage rather than splitting the
+ * venue's blended entry), and its share of every cumulative number. */
+function scalePerpBuild(
+  b: PerpLegBuild,
+  leg: PerpTranche['long'],
+  openedAtSec: number | null,
+): PerpLegBuild {
+  const share = leg.share;
+  // Pro-rata on the venue's CUMULATIVE fee, never the fills' own sum. The
+  // fill-derived figure only covers matched two-symbol opening executions, so
+  // it silently drops fees paid on closes, single-leg adds, fills from other
+  // clients, and anything past the history page cap — and it is denominated
+  // in whatever coin the venue charged. Gate's per-position `fee` is exact and
+  // complete; splitting it by size is the honest decomposition.
+  const feesUsd = b.leg.feesUsd * share;
+  const cashFlowUsd = b.leg.cashFlowUsd * share;
+  return {
+    ...b,
+    leg: {
+      ...b.leg,
+      notionalUsd: b.leg.notionalUsd * share,
+      notionalToken: leg.qty,
+      cashFlowUsd,
+      mtmUsd: b.leg.mtmUsd * share,
+      feesUsd,
+      netUsd: cashFlowUsd - feesUsd,
+      // The TRANCHE's open, not the venue position's: a shared leg's row
+      // stamps its first fill, which is a different day for the strategy
+      // opened later — and the entry-gap check needs the two legs of THIS
+      // execution to be contemporaneous.
+      openedAt: openedAtSec ?? b.leg.openedAt,
+      share,
+      warnings: [...b.leg.warnings],
+    },
+    imUsd: b.imUsd * share,
+    // 0 reads as "unknown" everywhere downstream, which is exactly right when
+    // no execution record explains this tranche's entry.
+    entryPrice: leg.entryPrice ?? 0,
+    qty: leg.qty,
+    cumulativeFundingUsd: cashFlowUsd,
+    share,
+  };
+}
+
+function scaleBorosBuild(
+  b: BorosLegBuild,
+  share: number,
+  entryApr?: number,
+  openedAtSec?: number | null,
+): BorosLegBuild {
+  const cashFlowUsd = b.leg.cashFlowUsd * share;
+  const mtmUsd = b.leg.mtmUsd * share;
+  const tradePnlUsd = b.leg.tradePnlUsd * share;
+  return {
+    ...b,
+    leg: {
+      ...b.leg,
+      notionalUsd: b.leg.notionalUsd * share,
+      notionalToken: (b.leg.notionalToken ?? 0) * share,
+      entryApr: entryApr ?? b.leg.entryApr,
+      cashFlowUsd,
+      mtmUsd,
+      tradePnlUsd,
+      feesUsd: b.leg.feesUsd * share,
+      netUsd: cashFlowUsd + mtmUsd + tradePnlUsd,
+      // The clock (and the settlement-fee accrual) runs from here, so a
+      // shared position's first open must not be handed to a strategy that
+      // started months later.
+      openedAt: openedAtSec ?? b.leg.openedAt,
+      share,
+      warnings: [...b.leg.warnings],
+    },
+    // The group balance stays whole and the position's margin shrinks: the
+    // capital apportionment divides one by the other, so a strategy gets its
+    // share of the group and never more.
+    positionInitialMarginUsd: b.positionInitialMarginUsd * share,
   };
 }

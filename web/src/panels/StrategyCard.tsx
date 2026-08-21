@@ -41,17 +41,37 @@ import {
 } from '../lib/fmt';
 import { SegmentedToggle } from '../components/SegmentedToggle';
 import { TimelineClockEdit } from './HomeControls';
+import { CloseBoth } from './PerpOnlyBox';
 import { PerpLegExpanded } from './PerpLegExpanded';
 import { ProfitBars } from './ProfitBars';
 import { EntryCostParts } from './EntryCostParts';
-import { loadExcludedPartIds, saveExcludedPartIds, strategyKey } from './entryPartsStore';
+import {
+  hasLapsedLegacyExclusions,
+  loadExcludedPartIds,
+  saveExcludedPartIds,
+} from './entryPartsStore';
+import {
+  LegMembership,
+  positionVenues,
+  SplitChip,
+  type LegAssertion,
+  type LegDestination,
+} from './PartitionEditor';
 import { buildSharePayload } from './sharePayload';
 import { SharePositionModal } from './SharePositionModal';
 import type { SharePayloadV1 } from '../lib/shareCodec';
-import { applyCostFlags, SECONDS_IN_YEAR, type CostFlags } from './strategyMath';
+import { applyCostFlags, legTokenSize, SECONDS_IN_YEAR, type CostFlags } from './strategyMath';
+
+/**
+ * A position matures only if it has a maturity to reach. `maturity` is 0 on a
+ * card with no Boros legs — perp-only, either because the user assigned it that
+ * way or because the solver found no Boros side — and the epoch is not a date
+ * that has passed, it is the absence of one.
+ */
+const isMatured = (s: StrategyRollup): boolean => s.maturity > 0 && s.secondsToMaturity === 0;
 
 function HedgeChip({ s }: { s: StrategyRollup }) {
-  if (s.secondsToMaturity === 0) return <Chip sm title="The Boros legs have matured">matured</Chip>;
+  if (isMatured(s)) return <Chip sm title="The Boros legs have matured">matured</Chip>;
   if (s.hedge === 'hedged') return <Chip sm tone="green">hedged ✓</Chip>;
   if (s.hedge === 'partial') {
     return (
@@ -109,9 +129,12 @@ export function StrategyCard({
   onChangeSince,
   livePositions,
   onOpenPerpLegs,
+  onAssert,
+  destinations,
+  bookId = '',
 }: {
-  /** The custom strategy-start override (global ?since=), editable from the
-   * timeline's "Boros position open ✎" label. */
+  /** The custom strategy-start override (per wallet ?since=), editable from
+   * the timeline's "Boros position open ✎" label. */
   since?: number | null;
   onChangeSince?: (since: number | null) => void;
   strategy: StrategyRollup;
@@ -123,6 +146,15 @@ export function StrategyCard({
    * top-up as `notionalUsd` so the ticket lands sized to the GAP, not the
    * whole book). */
   onOpenPerpLegs?: (s: StrategyRollup, notionalUsd?: number) => void;
+  /** Say where one of this position's legs belongs. Absent = the grouping is
+   * read-only (the share page, tests that don't wire it). */
+  onAssert?: (a: LegAssertion) => void;
+  /** Other cards a leg can be sent to. */
+  destinations?: readonly LegDestination[];
+  /** Which (wallet, Gate account) book this card belongs to — see bookId.ts.
+   * Namespaces the excluded entry parts, which are otherwise keyed by a
+   * strategyId that says nothing about whose account it is. */
+  bookId?: string;
 }) {
   const s = strategy;
   // The two waterfalls sit behind the hero boxes / See-more toggle — collapsed
@@ -142,7 +174,16 @@ export function StrategyCard({
   // Which individual executions this position is NOT charged. Persisted (unlike
   // the toggles either side of it) because it records a fact about the book,
   // not a viewing preference — see entryPartsStore.
-  const partsKey = strategyKey(s.base, s.maturity);
+  // Keyed by the strategy's own id: it is distinct per maturity (a rolled
+  // position starts fresh — the new maturity's entry cost is a different
+  // question) AND per tranche when one venue leg is shared, so one
+  // (base, maturity) can hold several strategies and an exclusion belongs to
+  // exactly one of them.
+  // ⚠ The BOOK, then the strategy. A strategyId is `ETH#BINANCE-HYPERLIQUID#exec`
+  // — coin, venue pair, evidence tier, and nothing about whose account it is —
+  // so on its own it is the same key for every account running that pair, and
+  // one account's un-ticked fills quietly reduced another's cost basis.
+  const partsKey = `${bookId}|${s.strategyId}`;
   const [excludedPartIds, setExcludedPartIds] = useState<ReadonlySet<string>>(() =>
     loadExcludedPartIds(partsKey),
   );
@@ -150,7 +191,9 @@ export function StrategyCard({
   // The share snapshot is built at click time and frozen — the 30s strategy
   // refetch can't mutate an open share modal.
   const [sharePayload, setSharePayload] = useState<SharePayloadV1 | null>(null);
-  const partsId = `entry-parts-${partsKey}`;
+  // A DOM id, not a storage key — the book adds nothing a reader can see and
+  // its mask carries characters an id should not.
+  const partsId = `entry-parts-${s.strategyId}`;
   const entryParts = s.perpEntryCostParts ?? [];
   const toggleEntryPart = (partId: string) => {
     setExcludedPartIds((prev) => {
@@ -199,16 +242,26 @@ export function StrategyCard({
       ? expectedUsd / (s.capitalUsd * (lifeSeconds / SECONDS_IN_YEAR))
       : null;
 
+  // One venue leg can now belong to several strategies, so the executions a
+  // user un-ticked are remembered per STRATEGY rather than per maturity. The
+  // old entries can't be carried over — applied to every strategy of the same
+  // maturity they would hand the same cost back twice — so they lapse, and the
+  // card says so instead of quietly re-charging.
+  const cardNotes =
+    entryParts.length > 0 && hasLapsedLegacyExclusions()
+      ? [
+          ...s.warnings,
+          'Executions you previously left out were reset — positions can now be split per strategy, and an old exclusion no longer says which one it belonged to.',
+        ]
+      : s.warnings;
+
   const perpLegs = s.legs.filter((l) => l.kind === 'perp');
   const borosLegs = s.legs.filter((l) => l.kind === 'boros');
-  // Title venues: the perp side wins; Boros sides substitute when the perp leg
-  // isn't on yet (perp side = Boros side at the same venue).
+  // Title venues — shared with the destination picker, so a position is named
+  // the same wherever it appears.
+  const { long: longVenue, short: shortVenue } = positionVenues(s);
   const venueForSide = (side: 'LONG' | 'SHORT'): string | null =>
-    perpLegs.find((l) => l.side === side)?.venue ??
-    borosLegs.find((l) => l.side === side)?.venue ??
-    null;
-  const longVenue = venueForSide('LONG');
-  const shortVenue = venueForSide('SHORT');
+    side === 'LONG' ? longVenue : shortVenue;
 
   // Sizing gate: while the 4-leg book is still being BUILT — a Boros leg
   // unmatched, the perp pair lopsided, or the two layers sized apart — the
@@ -238,7 +291,13 @@ export function StrategyCard({
     const grossBoros = bLong + bShort;
     const grossPerp = pLong + pShort;
     if (!(checks.borosMatchRatio > 0.9)) {
-      if (bLong === 0 || bShort === 0) {
+      if (grossBoros === 0) {
+        // Both sides missing, not one — and there is no Boros size to quote a
+        // top-up against, so the perp book sizes it. Mirrors the perp cue below.
+        hedgeCues.push(
+          `No Boros legs yet — lock the rate on both sides (~${fmtUsd(grossPerp / 2, 0)} each).`,
+        );
+      } else if (bLong === 0 || bShort === 0) {
         const missing = bLong === 0 ? 'pay-fixed (LONG)' : 'receive-fixed (SHORT)';
         hedgeCues.push(
           `Boros ${missing} leg is missing — lock ~${fmtUsd(Math.max(bLong, bShort), 0)} on the other side of the spread.`,
@@ -310,7 +369,9 @@ export function StrategyCard({
     </span>
   );
   const borosNotionalPerSide = borosLegs.reduce((sum, l) => sum + l.notionalUsd, 0) / 2;
-  const matured = s.secondsToMaturity === 0;
+  const matured = isMatured(s);
+  /** No Boros legs, so nothing here has an end date — see `isMatured`. */
+  const openEnded = s.maturity <= 0;
   const borosOnly = perpLegs.length === 0 && perpSource !== null;
   // Share is offered only where the card itself shows the headline numbers: a
   // fully hedged, unmatured book with a knowable APR. The payload snapshots
@@ -339,13 +400,6 @@ export function StrategyCard({
   const isCrossexPerp = (l: StrategyLeg) =>
     l.kind === 'perp' && perpSource === 'connected-gate-account';
 
-  // A token-margined strategy shows every leg's notional in token terms too:
-  // Boros legs in their collateral token, perp legs as their base-coin size.
-  // USDT-margined strategies stay pure-dollar throughout.
-  const tokenMargined = s.legs.some(
-    (l) => l.kind === 'boros' && l.collateral !== undefined && l.collateral !== 'USDT',
-  );
-
   const columns: Column<LegRow>[] = [
     {
       key: 'leg',
@@ -368,14 +422,7 @@ export function StrategyCard({
       header: 'Notional',
       align: 'right',
       render: (l) => {
-        const token =
-          l.kind === 'boros'
-            ? l.collateral && l.collateral !== 'USDT' && l.notionalToken !== undefined
-              ? { qty: l.notionalToken, symbol: l.collateral }
-              : null
-            : tokenMargined && l.notionalToken
-              ? { qty: l.notionalToken, symbol: l.base }
-              : null;
+        const token = legTokenSize(l);
         return (
           <span
             className="num"
@@ -423,7 +470,10 @@ export function StrategyCard({
         // the strategy accounts once as entry slippage. Boros MtM stays in Net.
         if (l.kind === 'perp') {
           const live = liveFor(l, livePositions);
-          const value = live ? Number(live.upnl) : l.mtmUsd;
+          // Scaled by the leg's share: the live position's uPnL covers the
+          // WHOLE venue leg, and rendering it whole on every card that owns a
+          // slice double-counts it across the page.
+          const value = live ? Number(live.upnl) * (l.share ?? 1) : l.mtmUsd;
           return (
             <span
               className="text-ink-500"
@@ -523,11 +573,12 @@ export function StrategyCard({
               Share ↗
             </button>
           )}
+          <SplitChip s={s} />
           <HedgeChip s={s} />
         </div>
       </div>
 
-      <Notes items={s.warnings} className="mt-2" />
+      <Notes items={cardNotes} className="mt-2" />
 
       {/* Cues for incomplete/matured states. */}
       {borosOnly && !matured && onOpenPerpLegs && (
@@ -546,13 +597,12 @@ export function StrategyCard({
           the locked return.
         </div>
       )}
-
       {/* Strategy timeline: start → now → maturity, as a full-width bar. */}
       {s.elapsedSeconds !== null && s.elapsedSeconds + s.secondsToMaturity > 0 && (
         <div
           className="relative mt-3 pt-3.5"
           data-progress="maturity"
-          title={`${fmtAge(s.elapsedSeconds * 1000)} elapsed · ${matured ? 'matured' : `${fmtAge(s.secondsToMaturity * 1000)} left`}`}
+          title={`${fmtAge(s.elapsedSeconds * 1000)} elapsed · ${openEnded ? 'no maturity' : matured ? 'matured' : `${fmtAge(s.secondsToMaturity * 1000)} left`}`}
         >
           {(() => {
             const pct = Math.min(
@@ -585,10 +635,15 @@ export function StrategyCard({
                     </span>
                     <TimelineClockEdit since={since} basis={s.clockBasis} onChange={onChangeSince} />
                   </span>
-                  <span className="num" title="Boros maturity">
-                    {matured
-                      ? `matured ${fmtDateUtc(s.maturity)}`
-                      : `matures ${fmtDateUtc(s.maturity)} · ${fmtAge(s.secondsToMaturity * 1000)} left`}
+                  <span
+                    className="num"
+                    title={openEnded ? 'Only the Boros legs mature; this position has none' : 'Boros maturity'}
+                  >
+                    {openEnded
+                      ? 'no maturity'
+                      : matured
+                        ? `matured ${fmtDateUtc(s.maturity)}`
+                        : `matures ${fmtDateUtc(s.maturity)} · ${fmtAge(s.secondsToMaturity * 1000)} left`}
                   </span>
                 </div>
               </>
@@ -794,7 +849,15 @@ export function StrategyCard({
           renderExpanded={(l) => (
             <div className="flex flex-col gap-1.5">
               {l.kind === 'boros' && <VenueCancellation legs={s.legs} venue={l.venue} />}
-              {l.kind === 'perp' && <PerpLegExpanded position={liveFor(l, livePositions)} />}
+              {l.kind === 'perp' && (
+                <PerpLegExpanded
+                  position={liveFor(l, livePositions)}
+                  // Only when this strategy owns part of the venue leg: the
+                  // close acts on the whole position, so the popover has to
+                  // open on THIS position's size, not the venue's.
+                  attributedQty={(l.share ?? 1) < 0.999 ? l.notionalToken : undefined}
+                />
+              )}
               {l.kind === 'boros' && (
                 <span className="num text-xs text-ink-400">
                   Live floating APR {l.floatingApr !== undefined ? fmtPct(l.floatingApr) : '—'} · opened{' '}
@@ -812,10 +875,29 @@ export function StrategyCard({
                   {w}
                 </span>
               ))}
+              {/* Where this leg belongs, asked about the leg it is about. */}
+              <LegMembership s={s} leg={l} destinations={destinations} onAssert={onAssert} />
             </div>
           )}
         />
       </div>
+
+      {/* A Boros-less pair owning both venue legs whole can be closed as one.
+          Below the legs and right-aligned, where the perp-only box carried it:
+          it acts on the rows above it, and in the cue stack at the top it read
+          as one more thing to fix rather than the card's action. Never on a
+          shared leg — the venue closes the WHOLE position, not this card's
+          slice of it. */}
+      {borosLegs.length === 0 &&
+        perpLegs.length === 2 &&
+        perpLegs.every((l) => l.symbol && (l.share ?? 1) >= 0.999) && (
+          <div className="mt-2 flex justify-end">
+            <CloseBoth
+              base={s.base}
+              legs={perpLegs.map((l) => ({ symbol: l.symbol as string, qty: l.notionalToken ?? 0 }))}
+            />
+          </div>
+        )}
 
       {!perpSource && (
         <div className="mt-2 text-[10px] text-ink-500">

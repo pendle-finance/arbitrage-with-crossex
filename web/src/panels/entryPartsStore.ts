@@ -9,7 +9,12 @@
  * memory, on every reload. */
 import { readJson, writeJson } from '../lib/storage';
 
-const KEY = 'crossex.entryParts.v1';
+// v2: keyed by the strategy's own id, because one (base, maturity) can now
+// hold several strategies. v1 entries are deliberately NOT migrated — an old
+// `base:maturity` exclusion applied to every tranche of that maturity would
+// hand back the same cost twice. They lapse; the card says so once.
+const KEY = 'crossex.entryParts.v2';
+export const LEGACY_KEY = 'crossex.entryParts.v1';
 
 /** Matured positions would otherwise leave keys behind forever, and a card can
  * only ever see its own strategy — so a time bound is the only way to keep this
@@ -39,10 +44,24 @@ const readAll = (): Stored =>
     return out;
   });
 
-/** One strategy's identity: stable for its whole life, distinct per maturity so
- * a rolled position starts fresh (which is exactly right — the new maturity's
- * entry cost is a different question). */
-export const strategyKey = (base: string, maturity: number): string => `${base}:${maturity}`;
+/** True when this browser still held v1 exclusions, which no longer apply.
+ *
+ * Answered ONCE per session, and the dead key is dropped as it is read: the
+ * card shows "your un-ticks were reset" while that is news, and never again.
+ * Left in place it would become permanent chrome on every card — and a
+ * localStorage read on every render. */
+let lapsedLegacy: boolean | undefined;
+export function hasLapsedLegacyExclusions(): boolean {
+  if (lapsedLegacy === undefined) {
+    try {
+      lapsedLegacy = localStorage.getItem(LEGACY_KEY) !== null;
+      if (lapsedLegacy) localStorage.removeItem(LEGACY_KEY);
+    } catch {
+      lapsedLegacy = false;
+    }
+  }
+  return lapsedLegacy;
+}
 
 export function loadExcludedPartIds(key: string): ReadonlySet<string> {
   return new Set(readAll()[key]?.ids ?? []);

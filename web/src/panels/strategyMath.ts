@@ -138,3 +138,32 @@ export function applyCostFlags(opts: {
         : opts.expectedPnlToMaturityUsd + entryAddBackUsd - exitUsd,
   };
 }
+
+/**
+ * A leg's size in tokens, or null when the dollars already say it.
+ *
+ * ONE rule, read off the leg — never off the card. A perp always qualifies:
+ * `$85.6k` is a price times a quantity, and the quantity is the position. A
+ * Boros leg qualifies only off USDT, because Boros notional is denominated in
+ * the COLLATERAL, so `(100,000 USDT)` merely restates `$100.0k` while
+ * `(43.1 ETH)` does not.
+ *
+ * Shared by the card's notional column and the share payload, which used to
+ * carry their own copies of it — and a card-level "is this book
+ * token-margined" flag that let one USDT Boros leg suppress the coin size of
+ * every perp beside it.
+ */
+export function legTokenSize(l: {
+  kind: 'perp' | 'boros';
+  base: string;
+  collateral?: string;
+  notionalToken?: number;
+}): { qty: number; symbol: string } | null {
+  if (l.notionalToken === undefined || !(l.notionalToken > 0)) return null;
+  if (l.kind === 'boros') {
+    return l.collateral && l.collateral !== 'USDT'
+      ? { qty: l.notionalToken, symbol: l.collateral }
+      : null;
+  }
+  return { qty: l.notionalToken, symbol: l.base };
+}
