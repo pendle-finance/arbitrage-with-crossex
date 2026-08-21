@@ -1,0 +1,754 @@
+/**
+ * The two-leg Boros market-order panel's backend.
+ *
+ *   GET  /api/boros/pair/context   — the pairable universe + this account's
+ *                                    netted positions and margin buckets
+ *   POST /api/boros/pair/simulate  — price a pair at a size (fresh books)
+ *   POST /api/boros/pair/execute   — send both legs as ONE atomic batch
+ *
+ * ⚠ THE GATE IS RE-RUN SERVER-SIDE AT EXECUTE. The client's blockers are UX;
+ * these are the failsafes. `/execute` re-fetches the books, re-simulates and
+ * re-evaluates before anything is submitted, so a stale tab, a hand-rolled
+ * request or a race against a margin change cannot get past §7.
+ *
+ * Book freshness matters more here than anywhere else in the app. Every other
+ * Boros book read rides the shared 30s TTL because it only ever backs a
+ * DISPLAYED quote; these back an ORDER, so they use their own short-TTL key
+ * (`TTL.borosBookTrade`) and never share a cache entry with the scan.
+ */
+import type { FastifyInstance } from 'fastify';
+import {
+  BOROS_TOKEN_SYMBOLS,
+  fetchBorosCollaterals,
+  fetchBorosMarkets,
+  fetchBorosOrderBook,
+  norm18,
+  resolveBorosFetch,
+  resolveCollateralPricesUsd,
+  type BorosCollateralZone,
+  type BorosMarket,
+  type BorosOrderBook,
+  type FetchLike,
+} from '../../core/boros/client';
+import {
+  limitAprFor,
+  submitBorosPair,
+  type BorosMarketOrderRequest,
+} from '../../core/boros/orders';
+import {
+  evaluatePairGate,
+  pairEligibility,
+  simulateBorosPair,
+  DEFAULT_SLIPPAGE_APR,
+  MAX_SLIPPAGE_APR,
+  type BorosLegDirection,
+  type BorosMarginBucket,
+  type BorosPairAccountState,
+  type BorosPairLegInput,
+  type PairIntent,
+} from '../../core/boros/pair';
+import { CoreError } from '../../core/errors';
+import type { AppDeps } from '../app';
+import { TTL } from '../cache';
+
+const EVM_ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
+
+/**
+ * Rate tolerance a §6A force-close carries, as an APR fraction. Wider than a
+ * normal entry (100 ticks vs the default 25): the user is unblocking a pair,
+ * not hunting a rate, and a close that keeps missing its bound leaves them
+ * stuck behind the same blocker. Still bounded, and still reported.
+ */
+const CLOSE_SLIPPAGE_APR = 0.01;
+
+/**
+ * How long a completed execution is remembered for replay protection.
+ *
+ * Boros's order DTO has NO client-order-id field, so the venue cannot dedupe
+ * for us: the same batch sent twice fills twice. The panel's own failure mode
+ * is narrow and specific — a response lost in flight, and the user pressing
+ * Confirm again with the SAME ids, because the ticket only re-mints ids when
+ * the intent changes — so remembering recent executions here closes it.
+ *
+ * Deliberately not sold as more than it is: this is per-process and does not
+ * survive a restart, and it cannot stop a second client. It removes the retry
+ * double-fill, not every double-fill.
+ */
+const EXECUTION_MEMO_MS = 10 * 60_000;
+
+/** Wire shape of one leg, as the panel sends it. */
+interface LegBody {
+  marketId?: unknown;
+  direction?: unknown;
+  slippageApr?: unknown;
+}
+
+interface PairBody {
+  address?: unknown;
+  legA?: LegBody;
+  legB?: LegBody;
+  size?: unknown;
+  intent?: unknown;
+  /** §4 acknowledgement, required whenever a leg opposes an existing position. */
+  opposingAcknowledged?: unknown;
+  /** Trade one leg only — what "complete now at market" needs after a partial
+   * fill. The other leg is sized to zero and never submitted. */
+  onlyLeg?: unknown;
+  /**
+   * Replay keys, one per leg.
+   *
+   * ⚠ NOT venue-enforced. Boros's order DTO carries no client order id, so
+   * these are deduped HERE (see `recentExecutions`) — a resend of the same pair
+   * of ids returns the first result instead of trading again. That covers the
+   * lost-response retry this panel actually produces; it cannot protect against
+   * a different process or a restart.
+   */
+  clientOrderIdA?: unknown;
+  clientOrderIdB?: unknown;
+}
+
+function parseOnlyLeg(raw: unknown): 'A' | 'B' | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (raw === 'A' || raw === 'B') return raw;
+  throw new CoreError('onlyLeg must be "A" or "B"', 'validation');
+}
+
+/**
+ * The account the agent key actually signs for, lower-cased; null when this
+ * install cannot place orders.
+ *
+ * Every WRITE route must derive or verify its account against this. The gate in
+ * `evaluatePairGate` reasons over one account's margin, positions and
+ * acknowledgements while `submitBorosPair` signs for another unless they are
+ * bound — a confused deputy in which the caller picks the state that authorises
+ * a capability only the server holds, which is exactly what this module's
+ * header claims a hand-rolled request cannot do.
+ */
+function configuredRoot(): string | null {
+  const root = process.env.BOROS_ROOT_ADDRESS?.trim();
+  return root && EVM_ADDRESS_RE.test(root) ? root.toLowerCase() : null;
+}
+
+/**
+ * Refuse to price a WRITE against any account but the one that will be traded.
+ *
+ * Rejected rather than silently substituted: a client asking about account A
+ * while the server trades account B has a bug, and quietly redirecting it would
+ * trade an account the caller never asked about.
+ */
+function assertTradableAddress(address: string): void {
+  const root = configuredRoot();
+  if (root && address !== root) {
+    throw new CoreError(
+      'address does not match the account this install signs for — refusing to trade a different account than the one priced.',
+      'validation',
+    );
+  }
+}
+
+function parseAddress(raw: unknown): string {
+  if (typeof raw !== 'string' || !EVM_ADDRESS_RE.test(raw)) {
+    throw new CoreError('invalid EVM address (expected 0x + 40 hex chars)', 'validation');
+  }
+  return raw.toLowerCase();
+}
+
+function parseLeg(raw: LegBody | undefined, which: string): {
+  marketId: number;
+  direction: BorosLegDirection;
+  slippageApr: number;
+} {
+  const marketId = Number(raw?.marketId);
+  if (!Number.isInteger(marketId) || marketId <= 0) {
+    throw new CoreError(`${which}.marketId must be a positive integer`, 'validation');
+  }
+  const direction = raw?.direction;
+  if (direction !== 'long' && direction !== 'short') {
+    throw new CoreError(`${which}.direction must be "long" or "short"`, 'validation');
+  }
+  // An absent tolerance takes the default; a present one must be a real number
+  // in range. Silently coercing a bad value would set the rate bound the order
+  // actually carries, so it is rejected instead.
+  let slippageApr = DEFAULT_SLIPPAGE_APR;
+  if (raw?.slippageApr !== undefined && raw.slippageApr !== null) {
+    const n = Number(raw.slippageApr);
+    if (!Number.isFinite(n) || n < 0 || n > MAX_SLIPPAGE_APR) {
+      throw new CoreError(
+        `${which}.slippageApr must be between 0 and ${MAX_SLIPPAGE_APR} (an APR fraction, not percent)`,
+        'validation',
+      );
+    }
+    slippageApr = n;
+  }
+  return { marketId, direction, slippageApr };
+}
+
+function parseSize(raw: unknown): number {
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) {
+    throw new CoreError('size must be a positive number of collateral units', 'validation');
+  }
+  return n;
+}
+
+function parseIntent(raw: unknown): PairIntent {
+  if (raw === undefined || raw === null || raw === 'open') return 'open';
+  if (raw === 'close') return 'close';
+  throw new CoreError('intent must be "open" or "close"', 'validation');
+}
+
+function parseClientOrderId(raw: unknown, which: string): string {
+  if (typeof raw !== 'string' || !/^[A-Za-z0-9_-]{8,64}$/.test(raw)) {
+    throw new CoreError(`${which} must be 8-64 chars of [A-Za-z0-9_-]`, 'validation');
+  }
+  return raw;
+}
+
+/**
+ * Per-(account, market) state the panel needs: the NETTED position, whether it
+ * sits in an isolated bucket, and that bucket's free collateral.
+ *
+ * Available = netBalance − initial margin already committed. Bonds and pending
+ * withdrawals are NOT part of the shape the Boros summary returns, so anything
+ * of that kind is already excluded from `netBalance` upstream; if that ever
+ * stops being true this is the one place to correct it (§6 requires they not
+ * count as available).
+ */
+interface AccountView {
+  /** marketId → signed netted size, collateral units (+ long fixed). */
+  positionByMarket: Map<number, number>;
+  /** marketId → initial margin that position already posts, collateral units. */
+  committedMarginByMarket: Map<number, number>;
+  /** marketId → true when that market currently sits in an ISOLATED bucket. */
+  isolatedMarkets: Set<number>;
+  /** marketId → whether that isolated bucket holds anything at all. */
+  isolatedOccupied: Set<number>;
+  /** tokenId → the cross bucket for that collateral. */
+  crossByToken: Map<number, BorosMarginBucket>;
+  /** marketId → that market's own isolated bucket. */
+  isolatedByMarket: Map<number, BorosMarginBucket>;
+}
+
+/**
+ * A market row "holds something" when it has a netted position OR resting
+ * orders. The collaterals summary carries no order list, but it does carry
+ * the signal: per-market `initialMargin` includes order margin while
+ * `positionInitialMargin` is the position alone, so a gap between them means
+ * an order is resting. (Partial by construction — the venue's IM is
+ * max(long side, short side), so an opposite-side order smaller than the
+ * position's own margin stays invisible — but the case §6A exists for, an
+ * order with NO position, always shows.)
+ */
+function holdsPositionOrOrders(p: {
+  notionalSize: string;
+  initialMargin?: string;
+  positionInitialMargin: string;
+}): boolean {
+  return (
+    norm18(p.notionalSize) !== 0 ||
+    (p.initialMargin !== undefined &&
+      norm18(p.initialMargin) > norm18(p.positionInitialMargin) + 1e-9)
+  );
+}
+
+function readAccount(zones: BorosCollateralZone[]): AccountView {
+  const view: AccountView = {
+    positionByMarket: new Map(),
+    committedMarginByMarket: new Map(),
+    isolatedMarkets: new Set(),
+    isolatedOccupied: new Set(),
+    crossByToken: new Map(),
+    isolatedByMarket: new Map(),
+  };
+  for (const zone of zones) {
+    if (zone.cross) {
+      const used = zone.cross.marketPositions.reduce(
+        (s, p) => s + norm18(p.positionInitialMargin ?? p.initialMargin),
+        0,
+      );
+      view.crossByToken.set(zone.tokenId, {
+        available: norm18(zone.cross.netBalance) - used,
+        hasPositionOrOrders: zone.cross.marketPositions.some(holdsPositionOrOrders),
+      });
+      for (const p of zone.cross.marketPositions) {
+        view.positionByMarket.set(p.marketId, norm18(p.notionalSize));
+        view.committedMarginByMarket.set(
+          p.marketId,
+          norm18(p.positionInitialMargin ?? p.initialMargin),
+        );
+      }
+    }
+    for (const group of zone.isolated) {
+      const used = group.marketPositions.reduce(
+        (s, p) => s + norm18(p.positionInitialMargin ?? p.initialMargin),
+        0,
+      );
+      const occupied = group.marketPositions.some(holdsPositionOrOrders);
+      for (const p of group.marketPositions) {
+        const size = norm18(p.notionalSize);
+        view.positionByMarket.set(p.marketId, size);
+        view.committedMarginByMarket.set(
+          p.marketId,
+          norm18(p.positionInitialMargin ?? p.initialMargin),
+        );
+        view.isolatedMarkets.add(p.marketId);
+        if (occupied) view.isolatedOccupied.add(p.marketId);
+        view.isolatedByMarket.set(p.marketId, {
+          available: norm18(group.netBalance) - used,
+          hasPositionOrOrders: occupied,
+        });
+      }
+    }
+  }
+  return view;
+}
+
+export function borosPairRoutes(deps: AppDeps) {
+  /**
+   * clientOrderId pair → the full response payload the execution produced (or
+   * is producing).
+   *
+   * Keyed on BOTH ids so a resend of the same intent coalesces, while a
+   * genuinely new order (fresh ids) never does. In-flight entries store the
+   * PROMISE, so two rapid clicks await the same submission instead of racing
+   * into two batches. The whole payload (fills + the estimate they were priced
+   * against) is memoized so a replay can answer WITHOUT re-pricing — the first
+   * execution changed the very account state a re-run of the gate would judge.
+   */
+  interface ExecutionPayload {
+    result: Awaited<ReturnType<typeof submitBorosPair>>;
+    estimate: ReturnType<typeof simulateBorosPair>;
+    warnings: string[];
+  }
+  const recentExecutions = new Map<string, { at: number; result: Promise<ExecutionPayload> }>();
+  const sweepExecutions = (): void => {
+    const now = Date.now();
+    for (const [k, v] of recentExecutions) {
+      if (now - v.at > EXECUTION_MEMO_MS) recentExecutions.delete(k);
+    }
+  };
+  const rememberExecution = (key: string, pending: Promise<ExecutionPayload>): void => {
+    recentExecutions.set(key, { at: Date.now(), result: pending });
+    // A submission that provably left NO position — every submitted leg failed
+    // outright with nothing filled and none 'unknown' — is dropped, so an
+    // honest retry is not refused a second attempt. `submitBorosPair` folds
+    // errors into resolved fills rather than rejecting, so this has to be
+    // judged from the RESULT; an 'unknown' leg may have filled, which is
+    // exactly what the memo exists to protect.
+    pending
+      .then(({ result }) => {
+        const legs = [result.legA, result.legB];
+        const anyFailed = legs.some((l) => l.failure !== null);
+        const mayHaveFilled = legs.some((l) => l.filledSize > 0 || l.failure?.code === 'unknown');
+        if (anyFailed && !mayHaveFilled) recentExecutions.delete(key);
+      })
+      .catch(() => recentExecutions.delete(key));
+  };
+
+  /**
+   * BOROS_AGENT_EXPIRY is absolute unix seconds (see routes/borosAgent.ts).
+   * An expired approval otherwise fails at the venue as AuthAgentExpired —
+   * AFTER a confirm the user already committed to — so the write routes
+   * refuse up front instead.
+   */
+  const assertAgentNotExpired = (): void => {
+    const raw = Number(process.env.BOROS_AGENT_EXPIRY);
+    if (Number.isFinite(raw) && raw > 0 && raw <= Math.floor(Date.now() / 1000)) {
+      throw new CoreError(
+        'the Boros agent approval has expired — approve a new agent key before trading.',
+        'auth',
+      );
+    }
+  };
+
+  const fetchImpl: FetchLike = resolveBorosFetch(deps.borosFetch);
+  const envTakerFee = Number(process.env.BOROS_TAKER_FEE_OVERRIDE);
+  const takerFeeOverride = Number.isFinite(envTakerFee) ? envTakerFee : undefined;
+
+  const loadMarkets = async (fresh: boolean): Promise<BorosMarket[]> =>
+    (await deps.cache.get('boros:markets', TTL.boros, () => fetchBorosMarkets(fetchImpl), { fresh }))
+      .value;
+
+  const loadAccount = async (address: string, fresh: boolean): Promise<AccountView> => {
+    const { value } = await deps.cache.get(
+      `boros:collaterals:${address}`,
+      TTL.boros,
+      () => fetchBorosCollaterals(fetchImpl, address),
+      { fresh },
+    );
+    return readAccount(value);
+  };
+
+  /** A book fresh enough to place an order against — never the scan's entry. */
+  const loadTradeBook = async (marketId: number): Promise<BorosOrderBook | null> => {
+    try {
+      const { value } = await deps.cache.get(
+        `boros:book:trade:${marketId}`,
+        TTL.borosBookTrade,
+        () => fetchBorosOrderBook(fetchImpl, marketId),
+      );
+      return value;
+    } catch {
+      // A book that will not load degrades to null: the math turns that into a
+      // named blocker, which is far better than failing the whole request and
+      // leaving the panel with nothing to explain.
+      return null;
+    }
+  };
+
+  const marketOr404 = (markets: BorosMarket[], marketId: number): BorosMarket => {
+    const m = markets.find((x) => x.marketId === marketId);
+    if (!m) throw new CoreError(`unknown Boros market ${marketId}`, 'symbol-invalid');
+    return m;
+  };
+
+  /**
+   * Everything from a validated body up to (but not including) submission —
+   * shared verbatim by /simulate and /execute so the two can never price the
+   * same request differently.
+   */
+  const priceRequest = async (body: PairBody, fresh: boolean) => {
+    const address = parseAddress(body.address);
+    const a = parseLeg(body.legA, 'legA');
+    const b = parseLeg(body.legB, 'legB');
+    const size = parseSize(body.size);
+    const intent = parseIntent(body.intent);
+    const onlyLeg = parseOnlyLeg(body.onlyLeg);
+
+    const [markets, account] = await Promise.all([loadMarkets(fresh), loadAccount(address, fresh)]);
+    const marketA = marketOr404(markets, a.marketId);
+    const marketB = marketOr404(markets, b.marketId);
+    const nowSec = Math.floor(Date.now() / 1000);
+    const eligibility = pairEligibility(marketA, marketB, nowSec);
+
+    // Only walk books once the pair is worth pricing — an ineligible pair has a
+    // reason to show, not a quote.
+    const [bookA, bookB] = eligibility.eligible
+      ? await Promise.all([loadTradeBook(marketA.marketId), loadTradeBook(marketB.marketId)])
+      : [null, null];
+
+    const legInput = (
+      market: BorosMarket,
+      parsed: { direction: BorosLegDirection; slippageApr: number },
+      book: BorosOrderBook | null,
+    ): BorosPairLegInput => ({
+      market,
+      book,
+      direction: parsed.direction,
+      slippageApr: parsed.slippageApr,
+      currentSize: account.positionByMarket.get(market.marketId) ?? 0,
+      committedMargin: account.committedMarginByMarket.get(market.marketId) ?? 0,
+      isolatedOnly: market.isolatedOnly,
+      onIsolatedMargin: account.isolatedMarkets.has(market.marketId),
+      isolatedHasPositionOrOrders: account.isolatedOccupied.has(market.marketId),
+    });
+
+    const legA = legInput(marketA, a, bookA);
+    const legB = legInput(marketB, b, bookB);
+    const collateralPriceUsd = resolveCollateralPricesUsd(markets).get(marketA.tokenId) ?? null;
+
+    const simulation = simulateBorosPair({
+      legA,
+      legB,
+      size,
+      intent,
+      onlyLeg,
+      collateralPriceUsd,
+      nowSec,
+      takerFeeOverride,
+    });
+
+    // Gas is prepaid to a treasury, separate from trading collateral, so a
+    // funded account can still be unable to send. A failed READ raises no
+    // blocker — refusing a trade because we could not check would be worse
+    // than letting the venue reject it with its own message.
+    let gasBalanceUsd: number | undefined;
+    const ordersForGas = deps.getBorosOrders?.();
+    if (ordersForGas?.getGasBalance) {
+      try {
+        gasBalanceUsd = await ordersForGas.getGasBalance();
+      } catch {
+        gasBalanceUsd = undefined;
+      }
+    }
+
+    const accountState: BorosPairAccountState = {
+      cross: account.crossByToken.get(marketA.tokenId) ?? null,
+      isolatedByMarket: account.isolatedByMarket,
+      gasBalanceUsd,
+    };
+    const simulatedAtMs = Date.now();
+    const gate = evaluatePairGate({
+      simulation,
+      legA,
+      legB,
+      account: accountState,
+      eligibility,
+      opposingAcknowledged: body.opposingAcknowledged === true,
+      simulatedAtMs,
+      nowMs: simulatedAtMs,
+    });
+
+    return {
+      simulation,
+      gate,
+      eligibility,
+      legA,
+      legB,
+      simulatedAtMs,
+      size,
+      intent,
+      gasBalanceUsd,
+    };
+  };
+
+  return async function plugin(app: FastifyInstance): Promise<void> {
+    /** The pairable universe for one account, plus its per-market state. */
+    app.get('/boros/pair/context', async (req, reply) => {
+      const query = req.query as { address?: string; fresh?: string };
+      const address = parseAddress(query.address);
+      const fresh = query.fresh === '1';
+      const [markets, account] = await Promise.all([loadMarkets(fresh), loadAccount(address, fresh)]);
+      const nowSec = Math.floor(Date.now() / 1000);
+      const prices = resolveCollateralPricesUsd(markets);
+
+      const rows = markets
+        .filter((m) => m.state === 'Normal' && m.maturity > nowSec)
+        .map((m) => ({
+          marketId: m.marketId,
+          name: m.name,
+          venue: m.venue,
+          base: m.base,
+          tokenId: m.tokenId,
+          // The unit a size on this market is denominated in. Sent with the
+          // market rather than left to the simulation, so the ticket can
+          // label its size field the moment a leg is picked.
+          collateral: BOROS_TOKEN_SYMBOLS[m.tokenId] ?? '',
+          maturity: m.maturity,
+          midApr: m.midApr,
+          markApr: m.markApr,
+          isolatedOnly: m.isolatedOnly === true,
+          onIsolatedMargin: account.isolatedMarkets.has(m.marketId),
+          isolatedHasPositionOrOrders: account.isolatedOccupied.has(m.marketId),
+          currentSize: account.positionByMarket.get(m.marketId) ?? 0,
+          collateralPriceUsd: prices.get(m.tokenId) ?? null,
+        }))
+        .sort((x, y) => x.name.localeCompare(y.name));
+
+      return reply.ok({
+        markets: rows,
+        crossByToken: [...account.crossByToken.entries()].map(([tokenId, b]) => ({
+          tokenId,
+          available: b.available,
+        })),
+        isolatedByMarket: [...account.isolatedByMarket.entries()].map(([marketId, b]) => ({
+          marketId,
+          available: b.available,
+        })),
+        defaultSlippageApr: DEFAULT_SLIPPAGE_APR,
+        maxSlippageApr: MAX_SLIPPAGE_APR,
+      });
+    });
+
+    /** Price the pair. Called on a short interval while the panel is open. */
+    app.post('/boros/pair/simulate', async (req, reply) => {
+      const { simulation, gate, eligibility, simulatedAtMs, gasBalanceUsd } = await priceRequest(
+        req.body as PairBody,
+        false,
+      );
+      // Echoed so the panel can SHOW it. Boros keeps prepaid gas in a pot
+      // separate from collateral, so a "top up to trade" refusal is
+      // indistinguishable from a margin problem unless the number is visible.
+      return reply.ok({
+        simulation,
+        gate,
+        eligibility,
+        simulatedAtMs,
+        gasBalanceUsd: gasBalanceUsd ?? null,
+      });
+    });
+
+    /**
+     * Send both legs. Re-prices from scratch first — see the header note: the
+     * client's gate is UX, this one is the failsafe.
+     */
+    app.post('/boros/pair/execute', async (req, reply) => {
+      const body = req.body as PairBody;
+      // Bound BEFORE pricing: the gate below is only a failsafe if it reasons
+      // over the account the orders will actually hit.
+      assertTradableAddress(parseAddress(body.address));
+      const clientOrderIdA = parseClientOrderId(body.clientOrderIdA, 'clientOrderIdA');
+      const clientOrderIdB = parseClientOrderId(body.clientOrderIdB, 'clientOrderIdB');
+      if (clientOrderIdA === clientOrderIdB) {
+        throw new CoreError('the two legs need distinct clientOrderIds', 'validation');
+      }
+      const orders = deps.getBorosOrders?.();
+      if (!orders) {
+        throw new CoreError(
+          'Boros order placement is not configured on this install.',
+          'not-configured',
+        );
+      }
+      assertAgentNotExpired();
+
+      // The memo is consulted BEFORE re-pricing. A lost-response retry must
+      // get the ORIGINAL outcome, and the first execution changed the very
+      // account state the gate would now re-judge — its margin is spent, its
+      // position is open — so re-running the gate first could 409 the exact
+      // retry the memo exists to answer, hiding that the trade happened.
+      const memoKey = `${clientOrderIdA}|${clientOrderIdB}`;
+      sweepExecutions();
+      const replay = recentExecutions.get(memoKey);
+      if (replay) {
+        const payload = await replay.result;
+        // `replayed` says the fills below are the ORIGINAL submission's, not a
+        // second one — the panel says so rather than implying a fresh trade.
+        return reply.ok({ ...payload, replayed: true });
+      }
+
+      // Fresh account read: margin and positions decide the gate, and a cached
+      // copy could be up to TTL.boros old — far too stale to authorise an order.
+      const { simulation, gate, intent } = await priceRequest(body, true);
+      if (gate.blockers.length > 0) {
+        return reply.code(409).send({
+          ok: false,
+          error: {
+            category: 'validation',
+            message: gate.blockers[0].message,
+            retryable: false,
+          },
+          data: { blockers: gate.blockers },
+        });
+      }
+      if (simulation.receiveLeg === null) {
+        throw new CoreError('the two legs do not offset — no spread to trade', 'validation');
+      }
+
+      /**
+       * null for a leg with nothing to trade.
+       *
+       * A zero-delta leg has no execution rate either (the book was never
+       * walked), so building an order for it produced `null - slippage` — a
+       * NEGATIVE rate bound on a zero-size order. Both legs share one batch, so
+       * that entry's rejection could take the legitimate leg with it.
+       */
+      const orderFor = (
+        leg: typeof simulation.legA,
+        clientOrderId: string,
+      ): BorosMarketOrderRequest | null => {
+        const size = Math.abs(leg.sizing.deltaSize);
+        if (size === 0 || leg.execApr === null) return null;
+        return {
+          marketId: leg.marketId,
+          direction: leg.direction,
+          size,
+          limitApr: limitAprFor(leg.direction, leg.execApr, leg.slippageApr),
+          clientOrderId,
+        };
+      };
+
+      const legAOrder = orderFor(simulation.legA, clientOrderIdA);
+      const legBOrder = orderFor(simulation.legB, clientOrderIdB);
+      if (!legAOrder && !legBOrder) {
+        throw new CoreError('neither leg has anything to trade', 'validation');
+      }
+
+      // A second request that priced concurrently with this one lands here
+      // too — re-check so the two coalesce onto ONE submission instead of
+      // racing into two batches. (No await between this check and the set.)
+      const raced = recentExecutions.get(memoKey);
+      if (raced) {
+        const payload = await raced.result;
+        return reply.ok({ ...payload, replayed: true });
+      }
+      const pending: Promise<ExecutionPayload> = submitBorosPair({
+        client: orders,
+        legA: legAOrder,
+        legB: legBOrder,
+        feeDragApr: simulation.feeDragApr,
+        receiveLeg: simulation.receiveLeg!,
+      }).then((result) => ({ result, estimate: simulation, warnings: gate.warnings }));
+      rememberExecution(memoKey, pending);
+      const payload = await pending;
+      return reply.ok({ ...payload, replayed: false });
+    });
+
+    /**
+     * §6A remediation, both user-initiated from the panel.
+     *
+     * Boros has no close primitive and no reduce-only flag, so the "close" half
+     * is an ordinary opposing market order. Its size, direction and rate bound
+     * are derived HERE from the live netted position and the market's mark, and
+     * echoed back — a force-close at a rate nobody chose would be exactly the
+     * kind of silent money-moving action this panel exists to avoid.
+     */
+    app.post('/boros/pair/market/:marketId/cancel-and-close', async (req, reply) => {
+      const marketId = Number((req.params as { marketId: string }).marketId);
+      if (!Number.isInteger(marketId) || marketId <= 0) {
+        throw new CoreError('invalid marketId', 'validation');
+      }
+      const body = (req.body ?? {}) as { clientOrderId?: unknown };
+      const clientOrderId = parseClientOrderId(body.clientOrderId, 'clientOrderId');
+      const orders = deps.getBorosOrders?.();
+      if (!orders) {
+        throw new CoreError(
+          'Boros order placement is not configured on this install.',
+          'not-configured',
+        );
+      }
+      /**
+       * Derived, never accepted from the body.
+       *
+       * This route runs NO gate — no margin check, no acknowledgement — and it
+       * takes the close SIZE straight from the position it reads. Letting the
+       * caller name the account therefore let them name the size of a market
+       * order on someone else's behalf: pass a whale's address and the server
+       * opens an enormous opposing position on the configured account. There is
+       * no legitimate use for a foreign account here.
+       */
+      const address = configuredRoot();
+      if (!address) {
+        throw new CoreError(
+          'no Boros root address is configured on this install.',
+          'not-configured',
+        );
+      }
+
+      assertAgentNotExpired();
+
+      // Orders first, and BEFORE the position is read: closing while an order
+      // still rests could have it re-open the position behind the close — and
+      // an order that fills between a read and the cancel would leave the
+      // close sized to a stale position, overshooting past flat into a fresh
+      // one (Boros has no reduce-only flag to stop it).
+      await orders.cancelOrders(marketId);
+
+      // Fresh reads AFTER the cancel: the size we close is the size that is
+      // actually there once nothing can fill any more.
+      const [markets, account] = await Promise.all([loadMarkets(true), loadAccount(address, true)]);
+      const market = marketOr404(markets, marketId);
+      const current = account.positionByMarket.get(marketId) ?? 0;
+
+      if (current === 0) {
+        return reply.ok({ marketId, cancelled: true, closed: false, fill: null });
+      }
+      // Reduce = trade the opposite way to the position's sign.
+      const direction: BorosLegDirection = current > 0 ? 'short' : 'long';
+      const fill = await orders.closePosition({
+        marketId,
+        size: Math.abs(current),
+        direction,
+        limitApr: limitAprFor(direction, market.markApr, CLOSE_SLIPPAGE_APR),
+        clientOrderId,
+      });
+      return reply.ok({
+        marketId,
+        cancelled: true,
+        closed: fill.shortfallSize === 0,
+        fill,
+        // Named so the panel can show what bound the close actually carried.
+        slippageApr: CLOSE_SLIPPAGE_APR,
+      });
+    });
+  };
+}

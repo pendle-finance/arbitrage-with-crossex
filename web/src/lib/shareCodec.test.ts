@@ -196,3 +196,27 @@ describe('roundTo (browser mirror)', () => {
     expect(roundTo(-1.005, 2)).toBe(-1);
   });
 });
+
+describe('the unconfirmed-split flag (uc) (browser mirror)', () => {
+  it('is omitted when false, so an unsplit position encodes exactly as before', () => {
+    expect(encodeSharePayload({ ...fixture, uc: 0 })).toBe(GOLDEN);
+  });
+
+  it('round-trips when the split was only a proposal', () => {
+    const encoded = encodeSharePayload({ ...fixture, uc: 1 });
+    const out = decodeSharePayload(encoded);
+    expect(out.ok && out.payload.uc).toBe(1);
+  });
+
+  it('still decodes a link minted before the flag existed', () => {
+    const out = decodeSharePayload(GOLDEN);
+    expect(out.ok && out.payload.uc).toBeUndefined();
+  });
+
+  it('rejects a value that is neither 0 nor 1', () => {
+    expect(decodeSharePayload(reEncode((p) => (p.uc = 2)))).toEqual({
+      ok: false,
+      reason: 'malformed',
+    });
+  });
+});

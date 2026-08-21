@@ -89,6 +89,21 @@ export interface BorosMarket {
   /** Floor on the time the IM formula charges, seconds: it uses
    * `max(timeToMaturity, tThreshSec)`. Lives on `config`, NOT on `imData`. */
   tThreshSec: number;
+  /**
+   * The market can ONLY be traded on isolated margin — it carries its own
+   * collateral bucket and cannot draw on the cross pool. Drives §6B of the
+   * two-leg panel (a per-market shortfall that must never be summed with
+   * another bucket's).
+   *
+   * ⚠ UNVERIFIED WIRE FIELD. The live payload was not observed carrying this
+   * flag when this was written, so it is read defensively from either of the
+   * two plausible homes and defaults to FALSE. False is the safe default: it
+   * routes the leg's margin check at the shared cross bucket, which is the
+   * behaviour every market had before this feature. Confirm the real field
+   * name against a live isolated-only market before relying on §6B. Optional
+   * precisely because it is unconfirmed: absent and false must behave alike.
+   */
+  isolatedOnly?: boolean;
 }
 
 /** Boros books are quoted in whole APR ticks of this size (apr = tick × 0.0001). */
@@ -120,7 +135,12 @@ export interface BorosMarketPosition {
     rateSettlementPnl: string;
     unrealisedPnl: string;
   };
-  positionInitialMargin?: string;
+  /** Required per the API (MarketPositionResponse) — this position's own share
+   * of the margin group's initial margin. */
+  positionInitialMargin: string;
+  /** Also required per the API, but kept optional here: it is only ever read
+   * as a fallback for the line above, and nothing breaks if a legacy response
+   * omits it. */
   initialMargin?: string;
 }
 
@@ -138,10 +158,24 @@ export interface BorosCollateralZone {
   isolated: BorosMarginGroup[];
 }
 
-/** One fill from /pnl/transactions. `pnl` is net of `fee` (opens: pnl = −fee). */
+/**
+ * One fill from /pnl/transactions, projected to the fields this app reads —
+ * `required` / `optional` below mirror PnlTransactionResponse in the API's own
+ * OpenAPI document (https://api.boros.finance/core/docs).
+ *
+ * `txType` is deliberately NOT modelled: it is required upstream and
+ * enumerated 'normal' | 'liquidate' | 'force_deleverage' | 'otc_swap', but
+ * every one of those MOVES the position, so nothing here may filter on it —
+ * the position chain (prevPositionS → postPositionS) is the whole truth, and
+ * reading it keeps a liquidation or an ADL from silently vanishing from a
+ * position's history.
+ *
+ * `pnl` is net of `fee` (opens: pnl = −fee).
+ */
 export interface BorosTxn {
   marketId: number;
-  /** Unix seconds. */
+  /** Unix seconds. Collides when one order fills across several book levels —
+   * order by the position chain (prev/post), never by time alone. */
   time: number;
   /** 18-dec fee in collateral-token units. */
   fee: string;
@@ -150,6 +184,17 @@ export interface BorosTxn {
   /** Position before/after — an open-from-flat has prevPositionS === '0'. */
   prevPositionS: string;
   postPositionS: string;
+  /** THIS fill's traded fixed rate (decimal fraction, may be 0 or negative).
+   * REQUIRED by the API (PnlTransactionResponse), so a non-finite value here
+   * means the response was not the documented shape — callers bail rather
+   * than average a NaN into a position's entry rate. A position's blended
+   * rate is the notional-weighted average of these, which is what lets one
+   * position be split back into the strategies that built it. */
+  fixedApr: number;
+  /** The average entry rate of the position being REDUCED. OPTIONAL per the
+   * API, and in practice present only on reducing fills. Verified equal to the
+   * replayed weighted average, so it doubles as a free correctness check. */
+  entryApr?: number;
 }
 
 /**
@@ -246,6 +291,7 @@ export async function fetchBorosMarkets(fetchImpl: FetchLike): Promise<BorosMark
       imTickThresh: Number(imData.iTickThresh ?? 0),
       imTickStep: Number(imData.tickStep ?? 0),
       tThreshSec: Number(config.tThresh ?? 0),
+      isolatedOnly: Boolean(config.isolatedOnly ?? imData.isolatedOnly ?? false),
     };
   });
 }
@@ -336,7 +382,7 @@ export async function fetchBorosCollaterals(
         rateSettlementPnl: String(pnl.rateSettlementPnl ?? '0'),
         unrealisedPnl: String(pnl.unrealisedPnl ?? '0'),
       },
-      positionInitialMargin: p.positionInitialMargin as string | undefined,
+      positionInitialMargin: String(p.positionInitialMargin ?? p.initialMargin ?? '0'),
       initialMargin: p.initialMargin as string | undefined,
     };
   };
@@ -362,19 +408,32 @@ export async function fetchBorosCollaterals(
   });
 }
 
-/** GET /core/v1/pnl/transactions for one collateral zone — paginates fully
- * (fees + open-time detection need the whole history; counts are small). */
+/**
+ * GET /core/v1/pnl/transactions for one collateral zone — paginates fully
+ * (fees + open-time detection need the whole history; counts are small).
+ *
+ * ⚠ Returns its own COVERAGE, not a bare list. The page cap below is a
+ * runaway guard, but an account that reaches it gets a silently truncated
+ * history — and a truncated history is not merely less useful, it is
+ * misleading in one specific way: any reasoning of the form "this fill has no
+ * counterpart nearby, so it was placed alone" is an argument from ABSENCE, and
+ * absence is exactly what truncation fakes. Callers must be able to see the
+ * difference, so `complete` is impossible to receive without noticing.
+ * (The Gate fill fetch already reports its own cap this way.)
+ */
 export async function fetchBorosTransactions(
   fetchImpl: FetchLike,
   address: string,
   tokenId: number,
   accountId = 0,
-): Promise<BorosTxn[]> {
+): Promise<{ txns: BorosTxn[]; complete: boolean }> {
   const limit = 200;
   const all: BorosTxn[] = [];
   // Hard page cap: 25 pages = 5k fills. Beyond that something is wrong (or the
   // account is far outside this feature's scope) — stop rather than hammer.
-  for (let skip = 0, page = 0; page < 25; skip += limit, page += 1) {
+  const maxPages = 25;
+  let complete = false;
+  for (let skip = 0, page = 0; page < maxPages; skip += limit, page += 1) {
     const body = (await getJson(
       fetchImpl,
       `/core/v1/pnl/transactions?userAddress=${address}&accountId=${accountId}&tokenId=${tokenId}&skip=${skip}&limit=${limit}`,
@@ -386,6 +445,11 @@ export async function fetchBorosTransactions(
     }
     const results = body.results;
     for (const t of results) {
+      // Number(null) is 0, not NaN — so a null rate would read as a real 0%
+      // OTC price. Absent must stay absent.
+      const asRate = (v: unknown): number =>
+        v === null || v === undefined || v === '' ? Number.NaN : Number(v);
+      const entryApr = asRate(t.entryApr);
       all.push({
         marketId: Number(t.marketId),
         time: Number(t.time ?? 0),
@@ -393,12 +457,24 @@ export async function fetchBorosTransactions(
         pnl: String(t.pnl ?? '0'),
         prevPositionS: String(t.prevPositionS ?? '0'),
         postPositionS: String(t.postPositionS ?? '0'),
+        // No `?? 0` on the rate: a rate of exactly 0 is a real OTC price, so a
+        // missing one must stay distinguishable (NaN), not become a free trade.
+        fixedApr: asRate(t.fixedApr),
+        // Optional per the API — omitted rather than NaN so "no cross-check
+        // available" and "cross-check says 0%" stay different things.
+        ...(Number.isFinite(entryApr) ? { entryApr } : {}),
       });
     }
     const total = Number(body?.total ?? 0);
-    if (skip + limit >= total || results.length === 0) break;
+    // Only a run that reaches the end of the venue's own count is complete.
+    // Falling out of the loop on the page cap is not — that is the case this
+    // flag exists to name.
+    if (skip + limit >= total || results.length === 0) {
+      complete = true;
+      break;
+    }
   }
-  return all;
+  return { txns: all, complete };
 }
 
 /**

@@ -8,14 +8,17 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import fastifyStatic from '@fastify/static';
-import { setClientTagContext } from '../core/boros/client';
+import { fetchBorosMarkets, resolveBorosFetch, setClientTagContext } from '../core/boros/client';
 import { makeClientsIfConfigured, requireClients, type Clients } from '../core/clients';
 import { Store } from '../engine/db';
 import { startLoop, type LoopDeps } from '../engine/loop';
 import { gateVenue } from '../engine/venueGate';
 import type { Clock, VenuePort } from '../engine/types';
 import { buildApp } from './app';
-import { TtlCache } from './cache';
+import { readBorosAgentConfig } from './borosAgent';
+import { makeBorosApiOrderClient } from '../core/boros/borosApi';
+import type { BorosOrderClient } from '../core/boros/orders';
+import { TtlCache, TTL } from './cache';
 import { readOrCreateApiToken } from './authToken';
 import { tokenizedIndexHtml } from './spa';
 import { restrictToOwner } from './secretFile';
@@ -113,25 +116,64 @@ let loopDeps: LoopDeps | undefined;
   engine = { store, venue: loopDeps.venue, clock: loopDeps.clock };
 }
 
+// Boros order placement. Absent config is the normal state (the panel still
+// prices pairs and answers 503 on execute); malformed config is surfaced loudly
+// at boot rather than at the moment someone tries to trade. The markets list is
+// read through the same TTL cache the routes use, so resolving a market's
+// collateral token costs nothing extra.
+const cache = new TtlCache();
+// Mutable so the browser's connect-wallet flow can provision an agent without a
+// restart — same shape as the Gate credential hot-swap above.
+const borosOrdersRef: { current: BorosOrderClient | undefined } = { current: undefined };
+try {
+  const agentConfig = readBorosAgentConfig();
+  if (agentConfig) {
+    borosOrdersRef.current = makeBorosApiOrderClient({
+      ...agentConfig,
+      // Shares the routes' cache key, so packing a MarketAcc costs no extra
+      // upstream traffic and can never disagree with what the panel priced.
+      tokenIdForMarket: async (marketId) => {
+        const { value } = await cache.get('boros:markets', TTL.boros, () =>
+          fetchBorosMarkets(resolveBorosFetch()),
+        );
+        return value.find((m) => m.marketId === marketId)?.tokenId;
+      },
+    });
+    console.log(
+      `Boros order placement enabled for ${agentConfig.root} (account ${agentConfig.accountId}) via a delegated agent key — this key can trade, but cannot deposit or withdraw.`,
+    );
+  }
+} catch (err) {
+  console.error(`⚠️  ${(err as Error).message}`);
+}
+
 const webDist = path.join(repoRoot, 'web', 'dist');
 
 const appDeps = {
   getClients,
-  cache: new TtlCache(),
-  // Created on first boot beside the .env. Public mode has no credentialed
-  // route to protect and serves strangers by design, so it carries none.
+  // The same cache the Boros agent wiring above reads markets through, so a
+  // MarketAcc pack and a priced panel can never disagree.
+  cache,
+  // Created on first boot beside the .env.
   authToken: readOrCreateApiToken(path.dirname(envPath)),
   engine,
-  // The public landing never checks for updates (route not even registered);
   // UPDATE_CHECK=0 lets an install opt out of the GitHub read entirely.
   install: readInstallInfo(repoRoot),
   updateCheck: { current: readLocalVersion(repoRoot), disabled: process.env.UPDATE_CHECK === '0' },
+  getBorosOrders: () => borosOrdersRef.current,
+  borosAgent: {
+    envPath,
+    hardenConfigDir,
+    setOrderClient: (client: BorosOrderClient | undefined) => {
+      borosOrdersRef.current = client;
+    },
+  },
   credentials: {
-      envPath,
-      hardenConfigDir,
-      setClients: (clients: Clients) => {
-        clientsRef.current = clients;
-      },
+    envPath,
+    hardenConfigDir,
+    setClients: (clients: Clients) => {
+      clientsRef.current = clients;
+    },
   },
 };
 const app = buildApp(appDeps);

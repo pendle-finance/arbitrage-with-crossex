@@ -12,9 +12,25 @@ import {
   SECONDS_IN_YEAR,
   type BuildStrategiesInput,
   type DealFillRecord,
+  type PerpFillRecord,
   type PerpPositionLike,
+  type StrategyReturns,
 } from '../../src/core/boros/returns';
 import { imInputs, raw } from '../helpers/boros-fixtures';
+
+/** Perp size no position claimed. It is a one-leg card of its own — the
+ * `unhedgedResiduals` list this replaced was the same fact as a footnote. */
+const unhedgedCards = (out: StrategyReturns) =>
+  out.strategies.filter((s) => s.attribution.source === 'unhedged');
+const unhedgedVenues = (out: StrategyReturns) =>
+  unhedgedCards(out)
+    .flatMap((s) => s.legs.map((l) => l.venue))
+    .sort();
+const unhedgedQty = (out: StrategyReturns, venue: string) =>
+  unhedgedCards(out)
+    .flatMap((s) => s.legs)
+    .filter((l) => l.venue === venue)
+    .reduce((a, l) => a + (l.notionalToken ?? 0), 0);
 
 const NOW = 1_752_000_000;
 const DAY = 86_400;
@@ -87,8 +103,8 @@ function ethZones(): BorosCollateralZone[] {
 
 function ethTxns(): BorosTxn[] {
   return [
-    { marketId: 155, time: OPENED, fee: raw(390), pnl: raw(-390), prevPositionS: '0', postPositionS: raw(-1_000_000) },
-    { marketId: 158, time: OPENED, fee: raw(300), pnl: raw(-300), prevPositionS: '0', postPositionS: raw(1_000_000) },
+    { marketId: 155, time: OPENED, fee: raw(390), pnl: raw(-390), prevPositionS: '0', postPositionS: raw(-1_000_000), fixedApr: 0.08 },
+    { marketId: 158, time: OPENED, fee: raw(300), pnl: raw(-300), prevPositionS: '0', postPositionS: raw(1_000_000), fixedApr: 0.03 },
   ];
 }
 
@@ -306,7 +322,10 @@ describe('buildStrategies — scaling', () => {
     const zones = ethZones();
     zones[0].tokenId = 4; // BNB — no BNB market in the fixture set
     const out = buildStrategies(input({ zones, pricesUsd: new Map([[4, null]]) }));
-    expect(out.strategies).toHaveLength(0);
+    // No priceable Boros legs anywhere — the perps still render, as the
+    // unhedged card every Boros-less coin gets, rather than vanishing.
+    expect(out.strategies.flatMap((s) => s.legs).filter((l) => l.kind === 'boros')).toEqual([]);
+    expect(out.strategies.map((s) => s.strategyId)).toEqual(['ETH#perps']);
     expect(out.warnings.join(' ')).toMatch(/BNB collateral zone/);
   });
 });
@@ -329,9 +348,16 @@ describe('buildStrategies — hedge states & degraded modes', () => {
     const s = out.strategies[0];
     expect(s.hedge).toBe('unhedged');
     expect(s.warnings.join(' ')).toMatch(/No matching perp legs for ETH/);
+    // …said ONCE. The per-venue "no X perp found" note is for a card where
+    // some OTHER venue does have its perp; with no perp legs at all it just
+    // repeats the card-level sentence, once per venue.
+    expect(s.warnings.filter((w) => /floating rate is unhedged/.test(w))).toHaveLength(0);
   });
 
-  it('perp legs whose base has no Boros cohort are ignored (not a 4-leg strategy)', () => {
+  it('perp legs whose base has no Boros cohort become a card of their own', () => {
+    // Every position is a card. A coin with no Boros side used to be someone
+    // else's problem (the Positions panel's exposure boxes); now it renders in
+    // the same book, saying plainly that no rate is locked against it.
     const stray: PerpPositionLike = {
       symbol: 'BINANCE_FUTURE_SOL_USDT',
       positionSide: 'LONG',
@@ -343,8 +369,14 @@ describe('buildStrategies — hedge states & degraded modes', () => {
       initialMargin: '400',
     };
     const out = buildStrategies(input({ perpPositions: [...ethPerps(), stray] }));
-    expect(out.strategies).toHaveLength(1);
-    expect(out.strategies[0].legs.filter((l) => l.base === 'SOL')).toHaveLength(0);
+    expect(out.strategies).toHaveLength(2);
+    const sol = out.strategies.find((s) => s.base === 'SOL');
+    expect(sol?.strategyId).toBe('SOL#perps');
+    expect(sol?.attribution.source).toBe('unhedged');
+    expect(sol?.hedge).toBe('unhedged');
+    expect(sol?.legs.map((l) => `${l.kind}:${l.venue}`)).toEqual(['perp:BINANCE']);
+    // The ETH strategy is untouched by the stray coin.
+    expect(out.strategies.find((s) => s.base === 'ETH')?.legs.filter((l) => l.base === 'SOL')).toEqual([]);
   });
 
   it('flags a notional mismatch beyond the 2% band as a partial hedge', () => {
@@ -400,8 +432,8 @@ describe('buildStrategies — time & APR edge cases', () => {
   it('measures fees/open-time from the LATEST open-from-flat event only', () => {
     const txns: BorosTxn[] = [
       // A previous round-trip whose fees must NOT count.
-      { marketId: 155, time: OPENED - 30 * DAY, fee: raw(999), pnl: raw(-999), prevPositionS: '0', postPositionS: raw(-500_000) },
-      { marketId: 155, time: OPENED - 20 * DAY, fee: raw(999), pnl: raw(1_500), prevPositionS: raw(-500_000), postPositionS: '0' },
+      { marketId: 155, time: OPENED - 30 * DAY, fee: raw(999), pnl: raw(-999), prevPositionS: '0', postPositionS: raw(-500_000), fixedApr: 0.09 },
+      { marketId: 155, time: OPENED - 20 * DAY, fee: raw(999), pnl: raw(1_500), prevPositionS: raw(-500_000), postPositionS: '0', fixedApr: 0.085 },
       ...ethTxns(),
     ];
     const s = buildStrategies(input({ txnsByToken: new Map([[3, txns]]) })).strategies[0];
@@ -1061,8 +1093,291 @@ describe('buildStrategies — hedge band boundary', () => {
   });
 });
 
+describe('buildStrategies — what counts as capital', () => {
+  // The canonical book posts $5,000 of Boros initial margin per leg into a
+  // group holding $20,000. The extra $10,000 is the user's own trading money
+  // sitting in the same collateral account — it is not capital this position
+  // needed, and counting it halves the reported APR.
+  it("defaults to the group's posted balance", () => {
+    const s = buildStrategies(input()).strategies[0];
+    expect(s.capitalSplit.borosUsd).toBeCloseTo(20_000, 6);
+    expect(s.capitalUsd).toBeCloseTo(45_000, 6); // perp IM 25k + balance 20k
+    expect(buildStrategies(input()).capitalBasis).toBe('balance');
+  });
+
+  it("counts only the margin the legs post when asked for 'im'", () => {
+    const s = buildStrategies(input({ capitalBasis: 'im' })).strategies[0];
+    expect(s.capitalSplit.borosUsd).toBeCloseTo(10_000, 6); // 5k + 5k, not 20k
+    expect(s.capitalSplit.perpUsd).toBeCloseTo(25_000, 6); // perps were ALWAYS IM
+    expect(s.capitalUsd).toBeCloseTo(35_000, 6);
+    // Every APR is a return on that number, so the basis has to move them.
+    expect(s.lockedAprOnCapital).toBeCloseTo(50_000 / 35_000, 10);
+    expect(s.realizedApr).toBeCloseTo(
+      (s.realizedPnlUsd / 35_000) * (SECONDS_IN_YEAR / (12 * DAY)),
+      10,
+    );
+  });
+
+  it('splits the margin across strategies that share the account', () => {
+    // A shared Boros leg posts its margin once; the two strategies must not
+    // both claim it.
+    const whole = buildStrategies(input({ capitalBasis: 'im' })).totals.capitalUsd;
+    const split = buildStrategies({ ...input({ capitalBasis: 'im' }) });
+    expect(split.totals.capitalUsd).toBeCloseTo(whole, 6);
+    expect(split.capitalBasis).toBe('im');
+  });
+});
+
+describe('buildStrategies — a leg belongs to exactly one strategy', () => {
+  it('does not re-attach a perp a tranche already scaled', () => {
+    // Two maturities: the tranche picks its cohort by BOTH its venues, the
+    // leftover branch used to re-pick by one — so a cohort with no tranche
+    // grabbed a perp that was already inside another strategy.
+    const laterMaturity = MATURITY + 56 * DAY;
+    const hlLate: BorosMarket = { ...hlMarket, marketId: 169, maturity: laterMaturity };
+    const zones = ethZones();
+    zones[0].cross!.marketPositions.push({
+      marketId: 169,
+      side: 1,
+      notionalSize: raw(-2_000_000),
+      fixedApr: 0.06,
+      markApr: 0.058,
+      pnl: { rateSettlementPnl: raw(50), unrealisedPnl: raw(10) },
+      positionInitialMargin: raw(500),
+    });
+    const out = buildStrategies(input({ zones, markets: [hlMarket, okxMarket, hlLate] }));
+    const hlLegs = out.strategies
+      .flatMap((s) => s.legs)
+      .filter((l) => l.kind === 'perp' && l.venue === 'HYPERLIQUID');
+    // The venue holds ONE Hyperliquid perp; the account may never show two.
+    expect(hlLegs.reduce((a, l) => a + (l.notionalToken ?? 0), 0)).toBeCloseTo(531, 6);
+    expect(out.totals.capitalUsd).toBeLessThanOrEqual(45_000 + 1);
+  });
+
+  it('leaves a detached pair out of every strategy card', () => {
+    // A row with no positionId says the leg belongs to nothing at all — the
+    // solver may not group it, and it is reported as exposure instead.
+    const out = buildStrategies(
+      input({
+        membership: [
+          { leg: { kind: 'perp', symbol: 'OKX_FUTURE_ETH_USDT' } },
+          { leg: { kind: 'perp', symbol: 'HYPERLIQUID_FUTURE_ETH_USDC' } },
+        ],
+      }),
+    );
+    // The user said these legs are not a strategy together: each gets a card
+    // of its own holding nothing else, and appears nowhere but there.
+    expect(
+      out.strategies
+        .filter((s) => s.attribution.source !== 'unhedged')
+        .flatMap((s) => s.legs)
+        .filter((l) => l.kind === 'perp'),
+    ).toEqual([]);
+    expect(unhedgedVenues(out)).toEqual(['HYPERLIQUID', 'OKX']);
+  });
+});
+
+describe('buildStrategies — one venue, two quote coins', () => {
+  it('divides that venue\'s single Boros leg instead of giving it to each', () => {
+    // HL lists ETH under both USDC and USDT; each perp position has its own
+    // per-symbol share of 1, so sizing the Boros leg by one symbol's share
+    // handed the WHOLE leg to both strategies.
+    const zones = ethZones();
+    const out = buildStrategies(
+      input({
+        zones,
+        perpPositions: [
+          { ...ethPerps()[0], symbol: 'HYPERLIQUID_FUTURE_ETH_USDC', positionQty: '-265.5', positionValue: '500000' },
+          { ...ethPerps()[0], symbol: 'HYPERLIQUID_FUTURE_ETH_USDT', positionQty: '-265.5', positionValue: '500000' },
+          { ...ethPerps()[1], positionQty: '265.5', positionValue: '500000' },
+          { ...ethPerps()[1], symbol: 'BINANCE_FUTURE_ETH_USDT', positionQty: '265.5', positionValue: '500000' },
+        ],
+      }),
+    );
+    const hlBoros = out.strategies
+      .flatMap((s) => s.legs)
+      .filter((l) => l.kind === 'boros' && l.venue === 'HYPERLIQUID');
+    // The venue reports ONE $1M Boros position; the split must partition it.
+    expect(hlBoros.reduce((a, l) => a + l.notionalUsd, 0)).toBeLessThanOrEqual(1_000_000 + 1);
+  });
+});
+
+describe('buildStrategies — one perp shared across two maturity cohorts', () => {
+  /**
+   * The live-book regression. A perp is PERPETUAL: one Hyperliquid short hedges
+   * both maturities at once, so the partition splits it 50/50 between the two
+   * strategies — correctly. But each cohort has its OWN Hyperliquid Boros leg,
+   * shared with nobody. Charging that leg the perp's 0.5 left half of every
+   * Boros position unclaimed, spun it out as a phantom `boros-only` card, and
+   * reported two genuinely-hedged strategies as `partial`.
+   */
+  const LATER = MATURITY + 56 * DAY;
+  const hlDec: BorosMarket = { ...hlMarket, marketId: 169, maturity: LATER };
+  const binDec: BorosMarket = {
+    ...okxMarket,
+    marketId: 170,
+    name: 'Binance ETHUSDT 25 Sep 2026',
+    venue: 'Binance',
+    maturity: LATER,
+  };
+
+  /** Sep: HL short + OKX long. Dec: HL short + Binance long. $1M every leg. */
+  function twoCohortZones(): BorosCollateralZone[] {
+    const pos = (marketId: number, side: 0 | 1, notional: number, fixedApr: number) => ({
+      marketId,
+      side,
+      notionalSize: raw(notional),
+      fixedApr,
+      markApr: fixedApr - 0.002,
+      pnl: { rateSettlementPnl: raw(100), unrealisedPnl: raw(10) },
+      positionInitialMargin: raw(2_500),
+    });
+    return [
+      {
+        tokenId: 3,
+        cross: {
+          isCross: true,
+          netBalance: raw(20_000),
+          marketPositions: [
+            pos(155, 1, -1_000_000, 0.08), // HL, Sep
+            pos(158, 0, 1_000_000, 0.03), // OKX, Sep
+            pos(169, 1, -1_000_000, 0.07), // HL, Dec
+            pos(170, 0, 1_000_000, 0.025), // Binance, Dec
+          ],
+        },
+        isolated: [],
+      },
+    ];
+  }
+
+  /** ONE Hyperliquid short of 1062 backing both strategies, two longs of 531. */
+  function twoCohortPerps(): PerpPositionLike[] {
+    return [
+      { ...ethPerps()[0], positionQty: '-1062', positionValue: '2000000', initialMargin: '25000' },
+      { ...ethPerps()[1], positionQty: '531', positionValue: '1000000' },
+      {
+        ...ethPerps()[1],
+        symbol: 'BINANCE_FUTURE_ETH_USDT',
+        positionQty: '531',
+        positionValue: '1000000',
+        createTime: String((OPENED + DAY) * 1000),
+      },
+    ];
+  }
+
+  const fill = (
+    hash: string,
+    timeSec: number,
+    symbol: string,
+    side: 'BUY' | 'SELL',
+    ab: 'A' | 'B',
+  ): PerpFillRecord => ({
+    symbol,
+    side,
+    qty: 531,
+    price: 1883,
+    feeUsd: 10,
+    timeSec,
+    text: `t${hash}${ab}1`,
+  });
+
+  const twoCohortInput = (over: Partial<BuildStrategiesInput> = {}) =>
+    input({
+      zones: twoCohortZones(),
+      markets: [hlMarket, okxMarket, hlDec, binDec],
+      perpPositions: twoCohortPerps(),
+      perpFills: [
+        fill('aaaaaaa', OPENED, 'OKX_FUTURE_ETH_USDT', 'BUY', 'A'),
+        fill('aaaaaaa', OPENED, 'HYPERLIQUID_FUTURE_ETH_USDC', 'SELL', 'B'),
+        fill('bbbbbbb', OPENED + DAY, 'BINANCE_FUTURE_ETH_USDT', 'BUY', 'A'),
+        fill('bbbbbbb', OPENED + DAY, 'HYPERLIQUID_FUTURE_ETH_USDC', 'SELL', 'B'),
+      ],
+      ...over,
+    });
+
+  it('gives each cohort\'s Boros leg WHOLE to its strategy, with no phantom leftover card', () => {
+    const out = buildStrategies(twoCohortInput());
+    // Two strategies and nothing else: a `boros-only` remainder here would be
+    // half of a position that is already fully accounted for.
+    expect(out.strategies).toHaveLength(2);
+    expect(out.strategies.map((s) => s.attribution.source)).not.toContain('boros-only');
+
+    for (const s of out.strategies) {
+      const hl = s.legs.find((l) => l.kind === 'boros' && l.venue === 'HYPERLIQUID')!;
+      // The whole $1M leg, not the 0.5 the shared PERP is split by.
+      expect(hl.notionalUsd).toBeCloseTo(1_000_000, 6);
+      expect(hl.share).toBeCloseTo(1, 9);
+      // The perp really is shared — that half is correct and must stay.
+      const hlPerp = s.legs.find((l) => l.kind === 'perp' && l.venue === 'HYPERLIQUID')!;
+      expect(hlPerp.share).toBeCloseTo(0.5, 9);
+    }
+    // Both venue positions land exactly once across the book.
+    const hlBoros = out.strategies
+      .flatMap((s) => s.legs)
+      .filter((l) => l.kind === 'boros' && l.venue === 'HYPERLIQUID');
+    expect(hlBoros.reduce((a, l) => a + l.notionalUsd, 0)).toBeCloseTo(2_000_000, 6);
+  });
+
+  it('reports both strategies as fully hedged, not partial', () => {
+    const out = buildStrategies(twoCohortInput());
+    for (const s of out.strategies) {
+      expect(s.hedge).toBe('hedged');
+      expect(s.hedgeChecks.borosMatchRatio).toBeCloseTo(1, 9);
+      expect(s.hedgeChecks.borosVsPerpRatio).toBeCloseTo(1, 9);
+      expect(s.hedgeChecks.fullyHedged).toBe(true);
+      expect(s.warnings.join(' ')).not.toMatch(/imbalanced by/);
+    }
+    expect(unhedgedVenues(out)).toEqual([]);
+  });
+});
+
+describe('buildStrategies — two quote coins divide one venue\'s locked rate', () => {
+  it('gives each tranche the increment it opened at, not the blend the first one drained', () => {
+    // HL lists ETH under USDC and USDT in ONE cohort, so its single Boros leg
+    // is owned half each. Sizing the rate-allocation targets by `leg.share`
+    // (1 per symbol) asked for the WHOLE pool twice: the older tranche drained
+    // both increments and showed their blend as its measured rate, while its
+    // sibling got nothing and fell back to the position's average.
+    const out = buildStrategies(
+      input({
+        // One HL Boros leg of $1M, built 500k @7% then 500k @5%.
+        txnsByToken: new Map([
+          [
+            3,
+            [
+              { marketId: 155, time: OPENED, fee: raw(100), pnl: raw(-100), prevPositionS: '0', postPositionS: raw(-500_000), fixedApr: 0.07 },
+              { marketId: 155, time: OPENED + DAY, fee: raw(100), pnl: raw(-100), prevPositionS: raw(-500_000), postPositionS: raw(-1_000_000), fixedApr: 0.05 },
+              { marketId: 158, time: OPENED, fee: raw(300), pnl: raw(-300), prevPositionS: '0', postPositionS: raw(1_000_000), fixedApr: 0.03 },
+            ] as BorosTxn[],
+          ],
+        ]),
+        perpPositions: [
+          { ...ethPerps()[0], symbol: 'HYPERLIQUID_FUTURE_ETH_USDC', positionQty: '-265.5', positionValue: '500000' },
+          { ...ethPerps()[0], symbol: 'HYPERLIQUID_FUTURE_ETH_USDT', positionQty: '-265.5', positionValue: '500000' },
+          { ...ethPerps()[1], positionQty: '265.5', positionValue: '500000' },
+          { ...ethPerps()[1], symbol: 'BINANCE_FUTURE_ETH_USDT', positionQty: '265.5', positionValue: '500000' },
+        ],
+        perpFills: [
+          { symbol: 'OKX_FUTURE_ETH_USDT', side: 'BUY', qty: 265.5, price: 1883, feeUsd: 5, timeSec: OPENED, text: 'taaaaaaaA1' },
+          { symbol: 'HYPERLIQUID_FUTURE_ETH_USDC', side: 'SELL', qty: 265.5, price: 1883, feeUsd: 5, timeSec: OPENED, text: 'taaaaaaaB1' },
+          { symbol: 'BINANCE_FUTURE_ETH_USDT', side: 'BUY', qty: 265.5, price: 1883, feeUsd: 5, timeSec: OPENED + DAY, text: 'tbbbbbbbA1' },
+          { symbol: 'HYPERLIQUID_FUTURE_ETH_USDT', side: 'SELL', qty: 265.5, price: 1883, feeUsd: 5, timeSec: OPENED + DAY, text: 'tbbbbbbbB1' },
+        ],
+      }),
+    );
+    const rateOf = (perpVenue: string): number => {
+      const s = out.strategies.find((x) => x.legs.some((l) => l.kind === 'perp' && l.venue === perpVenue))!;
+      return s.legs.find((l) => l.kind === 'boros' && l.venue === 'HYPERLIQUID')!.entryApr!;
+    };
+    expect(rateOf('OKX')).toBeCloseTo(0.07, 6);
+    expect(rateOf('BINANCE')).toBeCloseTo(0.05, 6);
+    // The decomposition still averages back to what the venue charged.
+    expect((rateOf('OKX') + rateOf('BINANCE')) / 2).toBeCloseTo(0.06, 6);
+  });
+});
+
 describe('buildStrategies — multiple cohorts', () => {
-  it('splits maturities into separate strategies and attaches perps to the largest venue cohort', () => {
+  it('splits maturities into separate strategies, and a perp covers what it can', () => {
     const laterMaturity = MATURITY + 56 * DAY;
     const hlSep: BorosMarket = { ...hlMarket, marketId: 169, maturity: laterMaturity };
     const zones = ethZones();
@@ -1080,11 +1395,21 @@ describe('buildStrategies — multiple cohorts', () => {
     expect(out.strategies).toHaveLength(2);
     // Sorted by gross notional: the $1M-per-leg cohort first.
     expect(out.strategies[0].maturity).toBe(MATURITY);
-    // The HL perp lands on the bigger HL cohort and carries the ambiguity note.
+    // The $1M cohort's Boros absorbs the whole HL perp, so nothing is left for
+    // the later, smaller cohort — whose leg is then genuinely uncovered rather
+    // than sharing a perp that is already fully spoken for.
     const bigCohortPerps = out.strategies[0].legs.filter((l) => l.kind === 'perp');
     expect(bigCohortPerps.map((l) => l.venue)).toContain('HYPERLIQUID');
     expect(out.strategies[1].legs.filter((l) => l.kind === 'perp' && l.venue === 'HYPERLIQUID')).toHaveLength(0);
-    expect(bigCohortPerps.flatMap((l) => l.warnings).join(' ')).toMatch(/2 Boros maturities/);
+    // The perp is NOT split here, so it must not claim to be.
+    expect(bigCohortPerps.flatMap((l) => l.warnings).join(' ')).not.toMatch(/counted here/);
+    // And it is counted exactly once across the whole book.
+    expect(
+      out.strategies
+        .flatMap((s) => s.legs)
+        .filter((l) => l.kind === 'perp' && l.venue === 'HYPERLIQUID')
+        .reduce((a, l) => a + l.notionalUsd, 0),
+    ).toBeCloseTo(1_000_000, 6);
     // Totals sum across cohorts.
     expect(out.totals.realizedPnlUsd).toBeCloseTo(
       out.strategies[0].realizedPnlUsd + out.strategies[1].realizedPnlUsd,
@@ -1176,5 +1501,639 @@ describe('buildStrategies — perp entry cost parts', () => {
     const s = buildStrategies(input({ perpPositions: [] })).strategies[0];
     expect(s.perpEntryCostParts).toEqual([]);
     assertEntryPartsSum(s);
+  });
+});
+
+describe('buildStrategies — one venue leg shared by two strategies', () => {
+  // The scenario the split exists for: HL/OKX opened on day 0, HL/Binance a day
+  // later. CrossEx nets the HL leg into ONE row at a blended 1903.6 entry, and
+  // Boros nets the HL rate into ONE position at a blended 6.70%. Neither says
+  // which part belongs to which strategy — the fill record does.
+  const S_OPENED = NOW - 10 * DAY;
+  const HL_SYM = 'HYPERLIQUID_FUTURE_ETH_USDC';
+  const OKX_SYM = 'OKX_FUTURE_ETH_USDT';
+  const BIN_SYM = 'BINANCE_FUTURE_ETH_USDT';
+  const binMarket: BorosMarket = {
+    ...hlMarket,
+    marketId: 161,
+    name: 'Binance ETHUSDT 31 Jul 2026',
+    venue: 'Binance',
+    markApr: 0.023,
+    floatingApr: 0.022,
+  };
+  const HL_BLEND = (190_000 * 0.07 + 285_900 * 0.065) / 475_900;
+
+  function sharedZones(): BorosCollateralZone[] {
+    return [
+      {
+        tokenId: 3,
+        cross: {
+          isCross: true,
+          netBalance: raw(40_000),
+          marketPositions: [
+            {
+              marketId: 155, // Hyperliquid — ONE position, blended rate
+              side: 1,
+              notionalSize: raw(-475_900),
+              fixedApr: HL_BLEND,
+              markApr: 0.076,
+              pnl: { rateSettlementPnl: raw(1_000), unrealisedPnl: raw(200) },
+              positionInitialMargin: raw(10_000),
+            },
+            {
+              marketId: 158, // OKX
+              side: 0,
+              notionalSize: raw(190_040),
+              fixedApr: 0.03,
+              markApr: 0.032,
+              pnl: { rateSettlementPnl: raw(300), unrealisedPnl: raw(-50) },
+              positionInitialMargin: raw(4_000),
+            },
+            {
+              marketId: 161, // Binance
+              side: 0,
+              notionalSize: raw(285_870),
+              fixedApr: 0.022,
+              markApr: 0.023,
+              pnl: { rateSettlementPnl: raw(400), unrealisedPnl: raw(-70) },
+              positionInitialMargin: raw(6_000),
+            },
+          ],
+        },
+        isolated: [],
+      },
+    ];
+  }
+
+  /** The Boros side built in two fills at two different rates — exactly what
+   * the blended 6.70% is an average of. */
+  function sharedTxns(): BorosTxn[] {
+    return [
+      { marketId: 155, time: S_OPENED, fee: raw(60), pnl: raw(-60), prevPositionS: '0', postPositionS: raw(-190_000), fixedApr: 0.07 },
+      { marketId: 158, time: S_OPENED, fee: raw(50), pnl: raw(-50), prevPositionS: '0', postPositionS: raw(190_040), fixedApr: 0.03 },
+      { marketId: 155, time: S_OPENED + DAY, fee: raw(90), pnl: raw(-90), prevPositionS: raw(-190_000), postPositionS: raw(-475_900), fixedApr: 0.065 },
+      { marketId: 161, time: S_OPENED + DAY, fee: raw(70), pnl: raw(-70), prevPositionS: '0', postPositionS: raw(285_870), fixedApr: 0.022 },
+    ];
+  }
+
+  function sharedPerps(): PerpPositionLike[] {
+    return [
+      {
+        symbol: HL_SYM,
+        positionSide: 'SHORT',
+        positionQty: '-250',
+        positionValue: '475900',
+        entryPrice: '1903.6', // (100×1900 + 150×1906) / 250 — the blend
+        upnl: '10',
+        fundingFee: '1000',
+        fee: '-52',
+        initialMargin: '20000',
+        createTime: String(S_OPENED * 1000),
+        positionId: 'hl-1',
+      },
+      {
+        symbol: OKX_SYM,
+        positionSide: 'LONG',
+        positionQty: '100',
+        positionValue: '190040',
+        entryPrice: '1900.4',
+        upnl: '-4',
+        fundingFee: '-400',
+        fee: '-19',
+        initialMargin: '8000',
+        createTime: String(S_OPENED * 1000),
+        positionId: 'okx-1',
+      },
+      {
+        symbol: BIN_SYM,
+        positionSide: 'LONG',
+        positionQty: '150',
+        positionValue: '285870',
+        entryPrice: '1905.8',
+        upnl: '-6',
+        fundingFee: '-600',
+        fee: '-28',
+        initialMargin: '12000',
+        createTime: String((S_OPENED + DAY) * 1000),
+        positionId: 'bin-1',
+      },
+    ];
+  }
+
+  /** The venue's own fill history, engine-tagged so each fill rejoins its deal. */
+  function sharedFills(): PerpFillRecord[] {
+    const leg = (
+      hash: string,
+      timeSec: number,
+      symbol: string,
+      side: 'BUY' | 'SELL',
+      qty: number,
+      price: number,
+      feeUsd: number,
+      ab: 'A' | 'B',
+    ): PerpFillRecord => ({ symbol, side, qty, price, feeUsd, timeSec, text: `t${hash}${ab}1` });
+    return [
+      leg('aaaaaaa', S_OPENED, OKX_SYM, 'BUY', 100, 1900.4, 19, 'A'),
+      leg('aaaaaaa', S_OPENED, HL_SYM, 'SELL', 100, 1900, 21, 'B'),
+      leg('bbbbbbb', S_OPENED + DAY, BIN_SYM, 'BUY', 150, 1905.8, 28, 'A'),
+      leg('bbbbbbb', S_OPENED + DAY, HL_SYM, 'SELL', 150, 1906, 31, 'B'),
+    ];
+  }
+
+  const sharedInput = (over: Partial<BuildStrategiesInput> = {}) =>
+    input({
+      zones: sharedZones(),
+      markets: [hlMarket, okxMarket, binMarket],
+      txnsByToken: new Map([[3, sharedTxns()]]),
+      perpPositions: sharedPerps(),
+      perpFills: sharedFills(),
+      ...over,
+    });
+
+  it('reports two strategies, each with its own four legs', () => {
+    const out = buildStrategies(sharedInput());
+    expect(out.strategies).toHaveLength(2);
+    for (const s of out.strategies) {
+      expect(s.legs).toHaveLength(4);
+      expect(s.attribution.source).toBe('fill-history');
+      expect(s.attribution.confidence).toBe('measured');
+    }
+    // Identities are distinct and stable — the client keys pins off them.
+    const ids = out.strategies.map((s) => s.strategyId);
+    expect(new Set(ids).size).toBe(2);
+  });
+
+  it('gives each strategy the rate it actually locked, not the book\'s blend', () => {
+    const out = buildStrategies(sharedInput());
+    const okx = out.strategies.find((s) => s.legs.some((l) => l.venue === 'OKX'))!;
+    const bin = out.strategies.find((s) => s.legs.some((l) => l.venue === 'BINANCE'))!;
+    const hlRate = (s: (typeof out.strategies)[number]) =>
+      s.legs.find((l) => l.kind === 'boros' && l.venue === 'HYPERLIQUID')!.entryApr!;
+    expect(hlRate(okx)).toBeCloseTo(0.07, 3);
+    expect(hlRate(bin)).toBeCloseTo(0.065, 3);
+    // …and therefore the true spreads (4.0% / 4.3%), where the blended rate
+    // would have shown 3.7% / 4.5% for the same book.
+    expect(okx.spread).toBeCloseTo(0.04, 3);
+    expect(bin.spread).toBeCloseTo(0.043, 3);
+  });
+
+  it('recovers each strategy\'s crossing cost from its own fills', () => {
+    const out = buildStrategies(sharedInput());
+    const okx = out.strategies.find((s) => s.legs.some((l) => l.venue === 'OKX'))!;
+    const bin = out.strategies.find((s) => s.legs.some((l) => l.venue === 'BINANCE'))!;
+    expect(okx.feesUsd.paid.perpEntrySlippageUsd).toBeCloseTo(40, 6);
+    expect(bin.feesUsd.paid.perpEntrySlippageUsd).toBeCloseTo(-30, 6);
+    // Fees come from the venue's CUMULATIVE charge, split by size — the fills'
+    // own sum covers only matched opening executions, so it would quietly drop
+    // whatever was paid on closes or off-journal fills.
+    const hlFee = (s: (typeof out.strategies)[number]) =>
+      s.legs.find((l) => l.kind === 'perp' && l.venue === 'HYPERLIQUID')!.feesUsd;
+    expect(hlFee(okx)).toBeCloseTo(52 * 0.4, 6);
+    expect(hlFee(bin)).toBeCloseTo(52 * 0.6, 6);
+    expect(hlFee(okx) + hlFee(bin)).toBeCloseTo(52, 6);
+  });
+
+  it('every shared number adds back up to what the venue reported', () => {
+    const out = buildStrategies(sharedInput());
+    const legs = out.strategies.flatMap((s) => s.legs);
+    const at = (kind: string, venue: string) => legs.filter((l) => l.kind === kind && l.venue === venue);
+    // The shared HL perp: sizes, funding and notional all partition exactly.
+    expect(at('perp', 'HYPERLIQUID').reduce((s, l) => s + (l.notionalToken ?? 0), 0)).toBeCloseTo(250, 9);
+    expect(at('perp', 'HYPERLIQUID').reduce((s, l) => s + l.cashFlowUsd, 0)).toBeCloseTo(1_000, 6);
+    expect(at('perp', 'HYPERLIQUID').reduce((s, l) => s + l.notionalUsd, 0)).toBeCloseTo(475_900, 6);
+    expect(at('boros', 'HYPERLIQUID').reduce((s, l) => s + l.notionalUsd, 0)).toBeCloseTo(475_900, 6);
+    // Capital: the perp initial margin and the Boros group balance are each
+    // counted once across the two strategies.
+    expect(out.totals.capitalUsd).toBeCloseTo(20_000 + 8_000 + 12_000 + 40_000, 6);
+    // Every leg says what fraction of its venue position it owns.
+    for (const l of at('perp', 'HYPERLIQUID')) expect(l.share).toBeGreaterThan(0);
+    expect(at('perp', 'HYPERLIQUID').reduce((s, l) => s + (l.share ?? 0), 0)).toBeCloseTo(1, 9);
+    expect(unhedgedVenues(out)).toEqual([]);
+  });
+
+  it('without a fill record it still splits, but calls the split a proposal and refuses to invent prices', () => {
+    const out = buildStrategies(sharedInput({ perpFills: null }));
+    expect(out.strategies).toHaveLength(2);
+    for (const s of out.strategies) {
+      expect(s.attribution.confidence).toBe('unconfirmed');
+      // The blended 1903.6 is an average over both strategies: no strategy may
+      // claim it as its own entry, so the crossing cost is unknown, not guessed.
+      expect(s.feesUsd.paid.perpEntrySlippageUsd).toBeNull();
+      expect(s.warnings.join(' ')).toMatch(/proposal you can edit/);
+    }
+    expect(out.totals.perpExitSlippageTotalUsd).toBeNull();
+    expect(out.totals.slippageUnknownCount).toBe(2);
+    expect(out.totals.strategyCount).toBe(2);
+  });
+
+  it('gives each strategy its own APR clock, not the shared position\'s first open', () => {
+    const out = buildStrategies(sharedInput());
+    const okx = out.strategies.find((s) => s.legs.some((l) => l.venue === 'OKX'))!;
+    const bin = out.strategies.find((s) => s.legs.some((l) => l.venue === 'BINANCE'))!;
+    // The HL Boros position opened with the FIRST strategy; the second one
+    // must not inherit its start, or a day of someone else's accrual is
+    // annualized into its APR and its spread projection.
+    expect(okx.clockStartSec).toBe(S_OPENED);
+    expect(bin.clockStartSec).toBe(S_OPENED + DAY);
+    expect(bin.elapsedSeconds).toBe(NOW - (S_OPENED + DAY));
+  });
+
+  it('re-bases a shared leg\'s funding from the ledger instead of pro-rating a lifetime counter', () => {
+    // The HL perp predates the Binance strategy, so its cumulative counter
+    // includes funding that strategy never earned. The ledger can measure the
+    // real amount — the guard must not skip it just because the tranche
+    // re-stamped the leg's open.
+    const ledger = {
+      byPosition: new Map([
+        [
+          'hl-1',
+          [
+            { positionId: 'hl-1', timeSec: S_OPENED + 100, changeUsd: 200 },
+            { positionId: 'hl-1', timeSec: S_OPENED + DAY + 100, changeUsd: 800 },
+          ],
+        ],
+      ]),
+      coversFromSec: 0,
+    };
+    const out = buildStrategies(sharedInput({ perpFunding: ledger }));
+    const bin = out.strategies.find((s) => s.legs.some((l) => l.venue === 'BINANCE'))!;
+    const hl = bin.legs.find((l) => l.kind === 'perp' && l.venue === 'HYPERLIQUID')!;
+    // 0.6 of the $800 settled after this strategy started — not 0.6 of $1,000.
+    expect(hl.cashFlowUsd).toBeCloseTo(480, 6);
+  });
+
+  it('credits the EARLIER strategy the funding it earned while it owned the whole leg', () => {
+    // The share of a shared leg changes over its life: for the first day the
+    // OKX strategy owned 100% of the HL perp, then the Binance strategy opened
+    // and it dropped to 40%. Scaling the lifetime counter (or the ledger sum)
+    // by the FINAL 0.4 would attribute $400 and silently drop the
+    // (1 − 0.4) × $200 earned solo — with the two cards then summing to $880
+    // of the venue's $1,000.
+    const ledger = {
+      byPosition: new Map([
+        [
+          'hl-1',
+          [
+            { positionId: 'hl-1', timeSec: S_OPENED + 100, changeUsd: 200 },
+            { positionId: 'hl-1', timeSec: S_OPENED + DAY + 100, changeUsd: 800 },
+          ],
+        ],
+      ]),
+      coversFromSec: 0,
+    };
+    const out = buildStrategies(sharedInput({ perpFunding: ledger }));
+    const okx = out.strategies.find((s) => s.legs.some((l) => l.venue === 'OKX'))!;
+    const hl = okx.legs.find((l) => l.kind === 'perp' && l.venue === 'HYPERLIQUID')!;
+    // $200 at 100% ownership + 0.4 × $800 after the split.
+    expect(hl.cashFlowUsd).toBeCloseTo(520, 6);
+    // …and the shared leg still adds back up to the venue's counter WITH the
+    // ledger attached (the invariant test above runs without one).
+    const hlLegs = out.strategies
+      .flatMap((s) => s.legs)
+      .filter((l) => l.kind === 'perp' && l.venue === 'HYPERLIQUID');
+    expect(hlLegs.reduce((s, l) => s + l.cashFlowUsd, 0)).toBeCloseTo(1_000, 6);
+  });
+
+  it('honours a stated size, and reports what nothing could hedge', () => {
+    const out = buildStrategies(
+      sharedInput({
+        membership: [
+          { positionId: 'aa', leg: { kind: 'perp', symbol: 'BINANCE_FUTURE_ETH_USDT' }, qty: 150 },
+          { positionId: 'aa', leg: { kind: 'perp', symbol: 'HYPERLIQUID_FUTURE_ETH_USDC' }, qty: 150 },
+        ],
+      }),
+    );
+    const bin = out.strategies.find((s) => s.legs.some((l) => l.venue === 'BINANCE'))!;
+    expect(bin.attribution.pinned).toBe(true);
+    // A stated size is the user's assertion — the card must not also claim it
+    // was guessed by proximity (it shows a `pinned` chip right next to this).
+    expect(bin.warnings.join(' ')).toMatch(/holds the legs you assigned to it/);
+    expect(bin.warnings.join(' ')).not.toMatch(/proposal you can edit/);
+    expect(bin.legs.find((l) => l.kind === 'perp' && l.venue === 'BINANCE')!.notionalToken).toBeCloseTo(150, 9);
+
+    // Orphaning them instead — rows with no positionId — leaves both unhedged.
+    const detached = buildStrategies(
+      sharedInput({
+        membership: [
+          { leg: { kind: 'perp', symbol: 'BINANCE_FUTURE_ETH_USDT' } },
+          { leg: { kind: 'perp', symbol: 'HYPERLIQUID_FUTURE_ETH_USDC' }, qty: 150 },
+        ],
+      }),
+    );
+    expect(unhedgedVenues(detached)).toEqual(['BINANCE', 'HYPERLIQUID']);
+    expect(unhedgedQty(detached, 'HYPERLIQUID')).toBeCloseTo(150, 9);
+  });
+});
+
+describe('buildStrategies — a coin-collateral book does not price its own hedge', () => {
+  /**
+   * The live "dust position" regression. This book is ETH-COLLATERAL, so a
+   * Boros leg and the perp hedging it count the same coin: 1 ETH against 1 ETH.
+   * Routing that comparison through USD priced one side off Pendle's
+   * `assetMarkPriceUsd` and the other off the venue's `positionValue`, two
+   * feeds sampled at different instants. Whenever the venue's happened to be
+   * the lower of the two the perp looked too small to cover its own Boros, the
+   * shortfall became `spare`, got smeared across the other tranches, and one of
+   * them rendered a third card holding a few cents — blinking in and out as the
+   * feeds crossed.
+   */
+  const LATER = MATURITY + 56 * DAY;
+  const hlEth: BorosMarket = { ...hlMarket, tokenId: 2 };
+  const okxEth: BorosMarket = { ...okxMarket, tokenId: 2 };
+  const hlDec: BorosMarket = { ...hlEth, marketId: 169, maturity: LATER };
+  const binDec: BorosMarket = {
+    ...okxEth,
+    marketId: 170,
+    name: 'Binance ETHUSDT 25 Sep 2026',
+    venue: 'Binance',
+    maturity: LATER,
+  };
+  /** Pendle's ETH mark, and what every market above reports. */
+  const BOROS_ETH = hlMarket.assetMarkPriceUsd;
+
+  /** One ETH of Boros on each of the four markets, margined in ETH. */
+  const zones = (): BorosCollateralZone[] => [
+    {
+      tokenId: 2,
+      cross: {
+        isCross: true,
+        netBalance: raw(20),
+        marketPositions: [169, 170, 155, 158].map((marketId) => ({
+          marketId,
+          side: (marketId === 169 || marketId === 155 ? 1 : 0) as 0 | 1,
+          notionalSize: raw(marketId === 169 || marketId === 155 ? -1 : 1),
+          fixedApr: 0.08,
+          markApr: 0.078,
+          pnl: { rateSettlementPnl: raw(0.001), unrealisedPnl: raw(0.0001) },
+          positionInitialMargin: raw(0.01),
+        })),
+      },
+      isolated: [],
+    },
+  ];
+
+  const txns = (): BorosTxn[] =>
+    [155, 158, 169, 170].map((marketId) => ({
+      marketId,
+      time: marketId === 155 || marketId === 158 ? OPENED : OPENED + DAY,
+      fee: raw(0.0001),
+      pnl: raw(-0.0001),
+      prevPositionS: '0',
+      postPositionS: raw(marketId === 169 || marketId === 155 ? -1 : 1),
+      fixedApr: 0.08,
+    }));
+
+  /** ONE Hyperliquid short of 2 ETH hedging both maturities, two longs of 1. */
+  const perps = (hlVenuePrice: number): PerpPositionLike[] => [
+    {
+      ...ethPerps()[0],
+      positionQty: '-2',
+      positionValue: String(2 * hlVenuePrice),
+      initialMargin: '0.05',
+    },
+    { ...ethPerps()[1], positionQty: '1', positionValue: String(BOROS_ETH) },
+    {
+      ...ethPerps()[1],
+      symbol: 'BINANCE_FUTURE_ETH_USDT',
+      positionQty: '1',
+      positionValue: String(BOROS_ETH),
+      createTime: String((OPENED + DAY) * 1000),
+    },
+  ];
+
+  const fill = (hash: string, timeSec: number, symbol: string, side: 'BUY' | 'SELL', ab: 'A' | 'B') => ({
+    symbol,
+    side,
+    qty: 1,
+    price: BOROS_ETH,
+    feeUsd: 0.01,
+    timeSec,
+    text: `t${hash}${ab}1`,
+  });
+
+  const build = (hlVenuePrice: number) =>
+    buildStrategies(
+      input({
+        zones: zones(),
+        markets: [hlEth, okxEth, hlDec, binDec],
+        txnsByToken: new Map([[2, txns()]]),
+        pricesUsd: new Map([[2, BOROS_ETH]]),
+        perpPositions: perps(hlVenuePrice),
+        perpFills: [
+          fill('aaaaaaa', OPENED, 'OKX_FUTURE_ETH_USDT', 'BUY', 'A'),
+          fill('aaaaaaa', OPENED, 'HYPERLIQUID_FUTURE_ETH_USDC', 'SELL', 'B'),
+          fill('bbbbbbb', OPENED + DAY, 'BINANCE_FUTURE_ETH_USDT', 'BUY', 'A'),
+          fill('bbbbbbb', OPENED + DAY, 'HYPERLIQUID_FUTURE_ETH_USDC', 'SELL', 'B'),
+        ],
+      }),
+    );
+
+  it('gives the same two strategies whichever way the venue mark has drifted', () => {
+    // Below Pendle's mark, level with it, and above: the book is the same book.
+    for (const venuePrice of [BOROS_ETH - 4, BOROS_ETH - 0.01, BOROS_ETH, BOROS_ETH + 0.01, BOROS_ETH + 4]) {
+      const out = build(venuePrice);
+      expect(
+        out.strategies.map((s) => s.strategyId).sort(),
+        `venue mark ${venuePrice} vs Boros ${BOROS_ETH}`,
+      ).toEqual(['ETH#BINANCE-HYPERLIQUID#exec', 'ETH#HYPERLIQUID-OKX#exec']);
+    }
+  });
+
+  it('never spins the drift out as a dust card', () => {
+    // The failing case before the fix: venue mark under Pendle's by 0.2%.
+    const out = build(BOROS_ETH - 4);
+    for (const s of out.strategies) {
+      const total = s.legs.reduce((a, l) => a + l.notionalUsd, 0);
+      // Four legs of ~1 ETH each. A card built from the drift came to cents.
+      expect(total).toBeGreaterThan(BOROS_ETH);
+    }
+    // Each Hyperliquid Boros leg belongs whole to its own maturity.
+    for (const s of out.strategies) {
+      const hl = s.legs.find((l) => l.kind === 'boros' && l.venue === 'HYPERLIQUID')!;
+      expect(hl.share).toBeCloseTo(1, 9);
+    }
+  });
+});
+
+describe('buildStrategies — a perp pair nothing hedges is reported once', () => {
+  /**
+   * A tranche is eligible for every cohort that shares one of its venues, so
+   * one whose Boros all went elsewhere used to render a full-size card in each
+   * of them — the venue's own position counted twice across the book. Worse,
+   * the id suffix keys off COVERED cohorts, of which it has none, so both
+   * cards carried the same strategyId and the client's pin store,
+   * excluded-entry-parts store and React keys all collided between them.
+   */
+  const LATER = MATURITY + 56 * DAY;
+  const hlDec: BorosMarket = { ...hlMarket, marketId: 169, maturity: LATER };
+
+  /** Two maturities of Hyperliquid Boros, nothing else. */
+  const zones = (): BorosCollateralZone[] => [
+    {
+      tokenId: 3,
+      cross: {
+        isCross: true,
+        netBalance: raw(20_000),
+        marketPositions: [155, 169].map((marketId) => ({
+          marketId,
+          side: 1 as 0 | 1,
+          notionalSize: raw(-1_000_000),
+          fixedApr: 0.08,
+          markApr: 0.078,
+          pnl: { rateSettlementPnl: raw(100), unrealisedPnl: raw(10) },
+          positionInitialMargin: raw(2_500),
+        })),
+      },
+      isolated: [],
+    },
+  ];
+
+  const txns = (): BorosTxn[] =>
+    [155, 169].map((marketId) => ({
+      marketId,
+      time: marketId === 155 ? OPENED : OPENED + DAY,
+      fee: raw(390),
+      pnl: raw(-390),
+      prevPositionS: '0',
+      postPositionS: raw(-1_000_000),
+      fixedApr: 0.08,
+    }));
+
+  /** One Hyperliquid short of 1062 behind both maturities, two longs of 531. */
+  const perps = (): PerpPositionLike[] => [
+    { ...ethPerps()[0], positionQty: '-1062', positionValue: '2000000', initialMargin: '25000' },
+    { ...ethPerps()[1], positionQty: '531', positionValue: '1000000' },
+    {
+      ...ethPerps()[1],
+      symbol: 'BINANCE_FUTURE_ETH_USDT',
+      positionQty: '531',
+      positionValue: '1000000',
+      createTime: String((OPENED + DAY) * 1000),
+    },
+  ];
+
+  const fill = (h: string, timeSec: number, symbol: string, side: 'BUY' | 'SELL', ab: 'A' | 'B'): PerpFillRecord => ({
+    symbol,
+    side,
+    qty: 531,
+    price: 1883,
+    feeUsd: 10,
+    timeSec,
+    text: `t${h}${ab}1`,
+  });
+
+  /** Both Hyperliquid Boros legs assigned whole to the OKX pair, leaving the
+   * Binance pair covered by nothing at either maturity. */
+  const out = () =>
+    buildStrategies(
+      input({
+        zones: zones(),
+        markets: [hlMarket, okxMarket, hlDec],
+        txnsByToken: new Map([[3, txns()]]),
+        perpPositions: perps(),
+        perpFills: [
+          fill('aaaaaaa', OPENED, 'OKX_FUTURE_ETH_USDT', 'BUY', 'A'),
+          fill('aaaaaaa', OPENED, 'HYPERLIQUID_FUTURE_ETH_USDC', 'SELL', 'B'),
+          fill('bbbbbbb', OPENED + DAY, 'BINANCE_FUTURE_ETH_USDT', 'BUY', 'A'),
+          fill('bbbbbbb', OPENED + DAY, 'HYPERLIQUID_FUTURE_ETH_USDC', 'SELL', 'B'),
+        ],
+        membership: [
+          { positionId: 'okx1', leg: { kind: 'perp' as const, symbol: 'OKX_FUTURE_ETH_USDT' } },
+          {
+            positionId: 'okx1',
+            leg: { kind: 'perp' as const, symbol: 'HYPERLIQUID_FUTURE_ETH_USDC' },
+            qty: 531,
+          },
+          // Both maturities of the Hyperliquid Boros short.
+          { positionId: 'okx1', leg: { kind: 'boros' as const, marketId: 155 } },
+          { positionId: 'okx1', leg: { kind: 'boros' as const, marketId: 169 } },
+        ],
+      }),
+    );
+
+  it('gives every card its own strategyId', () => {
+    const ids = out().strategies.map((s) => s.strategyId);
+    expect(ids).toHaveLength(new Set(ids).size);
+  });
+
+  it('counts the uncovered venue position once, not once per maturity', () => {
+    const legs = out().strategies.flatMap((s) => s.legs);
+    const binance = legs.filter((l) => l.kind === 'perp' && l.venue === 'BINANCE');
+    // The venue reports $1M. Two full-size cards would report $2M.
+    expect(binance.reduce((a, l) => a + l.notionalUsd, 0)).toBeCloseTo(1_000_000, 6);
+    // And the shared short stays whole across the whole book.
+    const hl = legs.filter((l) => l.kind === 'perp' && l.venue === 'HYPERLIQUID');
+    expect(hl.reduce((a, l) => a + l.notionalUsd, 0)).toBeCloseTo(2_000_000, 6);
+  });
+
+  it('still reports the uncovered pair — it is a real position', () => {
+    const binance = out()
+      .strategies.flatMap((s) => s.legs)
+      .filter((l) => l.kind === 'perp' && l.venue === 'BINANCE');
+    expect(binance.length).toBe(1);
+  });
+});
+
+describe('buildStrategies — the shared-perp warning never rounds to 0% or 100%', () => {
+  /**
+   * One perp covering a large maturity and a tiny one. Rounding the split to
+   * whole percent printed "0% of this HYPERLIQUID perp is counted here" on a
+   * card that was showing that perp's numbers, and "100%" on the sibling that
+   * was not whole — the reader cannot tell absent from rounded from broken.
+   */
+  const LATER = MATURITY + 56 * DAY;
+  const hlDec: BorosMarket = { ...hlMarket, marketId: 169, maturity: LATER };
+  const BIG = 1_000_000;
+  const TINY = 1_000;
+
+  const out = () =>
+    buildStrategies(
+      input({
+        markets: [hlMarket, okxMarket, hlDec],
+        zones: [
+          {
+            tokenId: 3,
+            cross: {
+              isCross: true,
+              netBalance: raw(20_000),
+              marketPositions: [
+                { marketId: 155, side: 1 as 0 | 1, notionalSize: raw(-BIG), fixedApr: 0.08, markApr: 0.078, pnl: { rateSettlementPnl: raw(100), unrealisedPnl: raw(10) }, positionInitialMargin: raw(2_500) },
+                { marketId: 158, side: 0 as 0 | 1, notionalSize: raw(BIG), fixedApr: 0.03, markApr: 0.032, pnl: { rateSettlementPnl: raw(50), unrealisedPnl: raw(5) }, positionInitialMargin: raw(2_500) },
+                { marketId: 169, side: 1 as 0 | 1, notionalSize: raw(-TINY), fixedApr: 0.07, markApr: 0.068, pnl: { rateSettlementPnl: raw(1), unrealisedPnl: raw(0) }, positionInitialMargin: raw(10) },
+              ],
+            },
+            isolated: [],
+          },
+        ],
+        txnsByToken: new Map([
+          [
+            3,
+            [
+              { marketId: 155, time: OPENED, fee: raw(390), pnl: raw(-390), prevPositionS: '0', postPositionS: raw(-BIG), fixedApr: 0.08 },
+              { marketId: 158, time: OPENED, fee: raw(300), pnl: raw(-300), prevPositionS: '0', postPositionS: raw(BIG), fixedApr: 0.03 },
+              { marketId: 169, time: OPENED + DAY, fee: raw(1), pnl: raw(-1), prevPositionS: '0', postPositionS: raw(-TINY), fixedApr: 0.07 },
+            ],
+          ],
+        ]),
+        // One pair, big enough to cover both maturities.
+        perpPositions: [
+          { ...ethPerps()[0], positionValue: String(BIG + TINY) },
+          { ...ethPerps()[1], positionValue: String(BIG + TINY) },
+        ],
+      }),
+    );
+
+  it('says <1% and >99% rather than 0% and 100%', () => {
+    const notes = out()
+      .strategies.flatMap((s) => s.legs)
+      .flatMap((l) => l.warnings ?? [])
+      .filter((w) => /is counted here/.test(w));
+    expect(notes.length).toBeGreaterThan(0);
+    for (const w of notes) {
+      expect(w).not.toMatch(/(^|\s)0% of this/);
+      expect(w).not.toMatch(/(^|\s)100% of this/);
+    }
+    expect(notes.some((w) => w.startsWith('<1% of this'))).toBe(true);
+    expect(notes.some((w) => w.startsWith('>99% of this'))).toBe(true);
   });
 });

@@ -8,7 +8,7 @@
  * what the viewer of the link sees is exactly what the sharer saw. */
 import type { StrategyRollup } from '../api/types';
 import type { ShareLegV1, SharePayloadV1 } from '../lib/shareCodec';
-import type { CostFlags } from './strategyMath';
+import { legTokenSize, type CostFlags } from './strategyMath';
 
 export function buildSharePayload(opts: {
   s: StrategyRollup;
@@ -19,12 +19,6 @@ export function buildSharePayload(opts: {
   nowSec: number;
 }): SharePayloadV1 {
   const { s } = opts;
-  // Same doctrine as StrategyCard's notional column: Boros legs bracket in
-  // their collateral token when it isn't USDT, and a token-margined strategy
-  // shows perp legs as their base-coin size too.
-  const tokenMargined = s.legs.some(
-    (l) => l.kind === 'boros' && l.collateral !== undefined && l.collateral !== 'USDT',
-  );
   // Float-noise trim for tn below — NOT the privacy rounding. That job is done
   // by re-expressing the already-$100-rounded n in tokens: 4 sig figs alone
   // would be ~200x finer than n's bucket on a small book.
@@ -44,14 +38,9 @@ export function buildSharePayload(opts: {
       n: Math.round(l.notionalUsd / 100) * 100,
     };
     if (l.kind === 'boros' && l.entryApr !== undefined) leg.r = l.entryApr;
-    const token =
-      l.kind === 'boros'
-        ? l.collateral && l.collateral !== 'USDT' && l.notionalToken !== undefined
-          ? { qty: l.notionalToken, symbol: l.collateral }
-          : null
-        : tokenMargined && l.notionalToken
-          ? { qty: l.notionalToken, symbol: l.base }
-          : null;
+    // Shared with the card's notional column, so a shared image can never
+    // bracket a leg differently than the card it was taken from.
+    const token = legTokenSize(l);
     if (token && SYMBOL_RE.test(token.symbol) && token.qty > 0 && l.notionalUsd > 0) {
       // The rounded n re-expressed in tokens at the leg's own implied price:
       // tn carries nothing n doesn't already say — the same $100 bucket, in
@@ -102,6 +91,9 @@ export function buildSharePayload(opts: {
     h,
     ce: opts.flags.inclEntryCost ? 1 : 0,
     cx: opts.flags.inclExitFees ? 1 : 0,
+    // A split the terminal PROPOSED (no execution record explained how the
+    // shared leg divides) must not read as fact on a public page.
+    ...(s.attribution?.confidence === 'unconfirmed' ? { uc: 1 as const } : {}),
     l: legs,
     f: {
       pp: paidPerpFees,

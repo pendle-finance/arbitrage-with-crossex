@@ -8,11 +8,19 @@ import {
   useQueryClient,
 } from '@tanstack/react-query';
 import { del, fetchJson, postJson, putJson } from './client';
+import { uuid } from '../lib/uuid';
 import type {
   DealAlert,
   DealView,
   BookTouch,
   BorosEntryMode,
+  BorosAgentInput,
+  BorosAgentStatus,
+  BorosPairContext,
+  BorosPairExecuteResponse,
+  BorosPairRequest,
+  BorosPairSimulateResponse,
+  CapitalBasis,
   CredentialsInfo,
   CredentialsInput,
   DisclaimerStatus,
@@ -43,7 +51,10 @@ export const qk = {
   symbols: (q: string) => ['symbols', q] as const,
   symbolsByBase: (base: string) => ['symbols', 'base', base] as const,
   symbolDetail: (symbol: string) => ['symbolDetail', symbol] as const,
-  strategy: (address: string, since: number | null) => ['strategy', address, since ?? ''] as const,
+  strategy: (address: string, since: number | null, partition = '', capital = 'balance') =>
+    ['strategy', address, since ?? '', partition, capital] as const,
+  borosAgent: ['boros', 'agent'] as const,
+  borosPairContext: (address: string) => ['boros', 'pair', 'context', address] as const,
   opportunities: (
     notionalUsd: number,
     borosEntry: BorosEntryMode,
@@ -115,10 +126,25 @@ export function useTrades(limit = 100) {
  * Deliberately NO keepPreviousData: after a Change to a different address the
  * old address's financial data must never render attributed to the new one
  * (same-key background polls keep data without it). */
-export function useStrategy(address: string | null, since: number | null = null) {
-  const search = since ? `?since=${since}` : '';
+export function useStrategy(
+  address: string | null,
+  since: number | null = null,
+  /** base64url pins from partitionStore — the user's edits to the split. */
+  partition = '',
+  /** 'im' counts only the margin the Boros legs post as capital. */
+  capital: CapitalBasis = 'balance',
+) {
+  const params = new URLSearchParams();
+  if (since) params.set('since', String(since));
+  if (partition) params.set('partition', partition);
+  if (capital !== 'balance') params.set('capital', capital);
+  // NOT params.size: it is Baseline-2023 (Safari 17), and where it is
+  // undefined the ternary would drop the whole query string — silently
+  // disabling the clock override and every pin.
+  const query = params.toString();
+  const search = query ? `?${query}` : '';
   return useQuery({
-    queryKey: qk.strategy(address ?? '', since),
+    queryKey: qk.strategy(address ?? '', since, partition, capital),
     queryFn: () => fetchJson<StrategyReturns>(`/strategy/${encodeURIComponent(address ?? '')}${search}`),
     enabled: Boolean(address),
     refetchInterval: 30_000,
@@ -329,5 +355,103 @@ export function usePutCredentials() {
   return useMutation({
     mutationFn: (body: CredentialsInput) => putJson<CredentialsInfo>('/credentials', body),
     onSuccess: () => qc.invalidateQueries(), // credentials changed — everything is suspect
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Boros two-leg market entry
+// ---------------------------------------------------------------------------
+
+/** The pairable Boros universe plus this address's per-market state. Keyed by
+ * address: two addresses must never share positions or margin buckets. */
+export function useBorosPairContext(address: string | null) {
+  return useQuery({
+    queryKey: qk.borosPairContext(address ?? ''),
+    queryFn: () => fetchJson<BorosPairContext>(`/boros/pair/context?address=${address}`),
+    enabled: Boolean(address),
+    placeholderData: keepPreviousData,
+    refetchInterval: 15_000,
+  });
+}
+
+/**
+ * Live pair simulation. `refetchInterval` is deliberately well inside the
+ * server's `SIMULATION_MAX_AGE_MS`: a quote that ages out blocks confirm, so
+ * the panel must replace it before that happens rather than after.
+ *
+ * A POST behind useQuery rather than useMutation on purpose — this is a pure
+ * read that happens to need a body, and it has to poll.
+ */
+export function useBorosPairSimulation(req: BorosPairRequest | null, enabled = true) {
+  return useQuery({
+    // The whole request is the key: any field change is a different quote.
+    queryKey: ['boros', 'pair', 'simulate', JSON.stringify(req)] as const,
+    queryFn: () => postJson<BorosPairSimulateResponse>('/boros/pair/simulate', req),
+    enabled: Boolean(req) && enabled,
+    placeholderData: keepPreviousData,
+    refetchInterval: 4_000,
+    // A stale quote must never back a confirm, so don't serve one from cache
+    // across a remount.
+    gcTime: 0,
+  });
+}
+
+export function useExecuteBorosPair() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (req: BorosPairRequest) =>
+      postJson<BorosPairExecuteResponse>('/boros/pair/execute', req),
+    onSuccess: () => {
+      // Positions and margin buckets both moved.
+      qc.invalidateQueries({ queryKey: ['boros', 'pair', 'context'] });
+      qc.invalidateQueries({ queryKey: qk.positions });
+    },
+  });
+}
+
+/**
+ * §6A remediation: cancel every resting order on a market, then close it.
+ *
+ * The account is NOT sent — the server derives it from the agent key it signs
+ * with, because this route takes the close size from whatever position it
+ * reads. The id is minted per attempt: this route has no replay memo, and a
+ * retry after a failure is a genuinely new order.
+ */
+export function useBorosCancelAndClose() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (marketId: number) =>
+      postJson<{ marketId: number }>(`/boros/pair/market/${marketId}/cancel-and-close`, {
+        clientOrderId: `cx-${uuid()}`.slice(0, 64),
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['boros', 'pair', 'context'] }),
+  });
+}
+
+/** The delegated Boros trading key's status. Cheap and read often — the ticket
+ * gates its confirm on it. */
+export function useBorosAgent() {
+  return useQuery({
+    queryKey: qk.borosAgent,
+    queryFn: () => fetchJson<BorosAgentStatus>('/boros/agent'),
+    staleTime: 10_000,
+  });
+}
+
+export function useProvisionBorosAgent() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: BorosAgentInput) => putJson<BorosAgentStatus>('/boros/agent', body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: qk.borosAgent }),
+  });
+}
+
+/** Forgets the key on THIS machine. Does not revoke the on-chain approval —
+ * the server's response says so and the UI repeats it. */
+export function useForgetBorosAgent() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => del<{ configured: boolean; note: string }>('/boros/agent'),
+    onSuccess: () => qc.invalidateQueries({ queryKey: qk.borosAgent }),
   });
 }

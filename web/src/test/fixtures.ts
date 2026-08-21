@@ -376,6 +376,10 @@ function hypeEntryCostParts(): PerpEntryCostPart[] {
 
 export function makeStrategyRollup(overrides: Partial<StrategyRollup> = {}): StrategyRollup {
   return {
+    // A book that needed no splitting: one strategy per Boros cohort, every
+    // perp leg owned outright — the shape most fixtures want.
+    strategyId: `HYPE@${STRATEGY_MATURITY}`,
+    attribution: { source: 'merged', confidence: 'measured', pinned: false },
     base: 'HYPE',
     maturity: STRATEGY_MATURITY,
     legs: hypeLegs(),
@@ -437,7 +441,12 @@ export function makeStrategyReturns(overrides: Partial<StrategyReturns> = {}): S
         (s, x) => s + (x.feesUsd.future.perpExitSlippageUsd ?? 0),
         0,
       ),
+      slippageUnknownCount: strategies.filter(
+        (x) => x.feesUsd.future.perpExitSlippageUsd === null,
+      ).length,
+      strategyCount: strategies.length,
     },
+    capitalBasis: 'balance',
     warnings: [],
     ...overrides,
   };
