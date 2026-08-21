@@ -7,6 +7,7 @@ import { http, HttpResponse } from 'msw';
 import { describe, expect, it } from 'vitest';
 import type {
   ActionInput,
+  OpportunityLeg,
   OpportunityPair,
   PreviewResponse,
   PreviewResult,
@@ -21,6 +22,7 @@ import {
   makeOpportunityMarketRow,
   makeOpportunityPair,
   opportunitiesHandler,
+  OPP_MATURITY,
   OPP_NT,
   previewFor,
   symbolHandlers,
@@ -38,7 +40,7 @@ const paramsOf = (url: string) => Object.fromEntries(new URL(url).searchParams);
 /** The card's collapse toggle, one per group. */
 const toggles = () => screen.getAllByRole('button', { name: /^(Show|Hide) details for/ });
 
-const executeButtons = () => screen.getAllByRole('button', { name: 'Execute it' });
+const executeButtons = () => screen.getAllByRole('button', { name: /^Execute / });
 
 /** Every knob lives inside the collapsed assumptions strip — open it first. */
 const openAssumptions = () =>
@@ -455,7 +457,7 @@ describe('OpportunitiesPanel — collapse', () => {
 
     await waitFor(() => expect(toggles()).toHaveLength(1));
     expect(screen.getByText('7.0% APR')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Execute it' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Execute ETH short Hyperliquid/ })).toBeInTheDocument();
     expect(toggles()[0]).toHaveTextContent('Details');
     expect(toggles()[0]).toHaveAttribute('aria-expanded', 'false');
     expect(container.querySelector('[data-waterfall]')).toBeNull();
@@ -1001,7 +1003,7 @@ describe('OpportunitiesPanel → PairTicket prefill', () => {
     await openAssumptions();
     const panelModes = screen.getByRole('radiogroup', { name: 'Perp entry mode' });
     await userEvent.click(within(panelModes).getByRole('radio', { name: /Limit \+ hedge/ }));
-    await userEvent.click(screen.getByRole('button', { name: 'Execute it' }));
+    await userEvent.click(screen.getByRole('button', { name: /^Execute ETH short Hyperliquid/ }));
 
     await waitFor(() =>
       expect(screen.getByLabelText('Notional per leg (USDT)')).toHaveValue('10000'),
@@ -1018,5 +1020,313 @@ describe('OpportunitiesPanel → PairTicket prefill', () => {
     expect(legs[0]).toMatchObject({ symbol: 'BINANCE_FUTURE_ETH_USDT', side: 'BUY' });
     expect(legs[1]).toMatchObject({ symbol: 'HYPERLIQUID_FUTURE_ETH_USDC', side: 'SELL' });
     expect(legs.some((a) => a.kind === 'open-limit' && a.pairRole === 'maker')).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Every viable pair, and the facet bar that narrows them
+// ---------------------------------------------------------------------------
+
+/** Distinct id per (side, venue, base). Deriving ids from the venue NAME's
+ * length silently collapsed two venues of equal length onto one id — and the
+ * two market ids are the whole discriminator in a row's React key. */
+const marketIds = new Map<string, number>();
+const marketIdFor = (side: 'short' | 'long', venue: string, base: string): number => {
+  const k = `${side}:${venue}:${base}`;
+  if (!marketIds.has(k)) marketIds.set(k, 900 + marketIds.size);
+  return marketIds.get(k) as number;
+};
+
+/** Hyperliquid quotes USDC on CrossEx; the USDT venues quote USDT. */
+const quoteOf = (venue: string) => (venue === 'HYPERLIQUID' ? 'USDC' : 'USDT');
+
+/** A leg the server could actually emit: the Boros venue, its CrossEx mapping
+ * and the symbol all name the same exchange and the same coin. Renaming only
+ * `venue` decouples the field the venue facet keys on from the one Execute
+ * keys on, which hides exactly the regressions these fixtures exist to catch. */
+function venueLeg(side: 'short' | 'long', venue: string, base: string): OpportunityLeg {
+  return {
+    ...makeOpportunityLeg(),
+    marketId: marketIdFor(side, venue, base),
+    venue,
+    crossexVenue: venue,
+    crossexSymbol: `${venue}_FUTURE_${base}_${quoteOf(venue)}`,
+    base,
+  };
+}
+
+/** One pair pinned to an APR and a pair of Boros venues. */
+function venuePair(
+  apr: number | null,
+  shortVenue: string,
+  longVenue: string,
+  base = 'ETH',
+  over: Partial<OpportunityPair> = {},
+): OpportunityPair {
+  return {
+    ...makeOpportunityPair(),
+    base,
+    shortLeg: venueLeg('short', shortVenue, base),
+    longLeg: venueLeg('long', longVenue, base),
+    netFixedAprOnCapital: apr,
+    ...over,
+  };
+}
+
+/** ETH offers two venue combinations; BTC, in a later cohort, offers one. */
+const multiPairResult = () =>
+  makeOpportunitiesResult({
+    groups: [
+      makeOpportunityGroup({
+        tokenId: 3,
+        underlying: 'ETH',
+        pairs: [
+          venuePair(0.12, 'HYPERLIQUID', 'BINANCE'),
+          venuePair(0.04, 'HYPERLIQUID', 'GATE'),
+        ],
+      }),
+      makeOpportunityGroup({
+        tokenId: 4,
+        underlying: 'BTC',
+        maturity: OPP_MATURITY + 60 * 86_400,
+        secondsToMaturity: 90 * 86_400,
+        pairs: [
+          venuePair(0.08, 'BYBIT', 'GATE', 'BTC', { secondsToMaturity: 90 * 86_400 }),
+        ],
+      }),
+    ],
+  });
+
+const chip = (name: RegExp) => screen.getByRole('button', { name });
+
+/** The Execute control of one card, named by its legs (every card's used to be
+ * the bare "Execute it", which named none of them). */
+const executeFor = (name: RegExp) => screen.getByRole('button', { name });
+
+describe('OpportunitiesPanel — every viable pair', () => {
+  it('shows every pair in a group, not only its best, ranked across groups', async () => {
+    server.use(opportunitiesHandler(multiPairResult()));
+    renderWithClient(<OpportunitiesPanel />);
+
+    await waitFor(() => expect(toggles()).toHaveLength(3));
+    // Best APR first, regardless of which cohort it came from.
+    expect(screen.getAllByText(/^\d+\.\d% APR$/).map((el) => el.textContent)).toEqual([
+      '12.0% APR',
+      '8.0% APR',
+      '4.0% APR',
+    ]);
+    // The two ETH cards are told apart by their legs, in the toggle's name too.
+    expect(toggles()[0]).toHaveAccessibleName(/ETH short Hyperliquid \/ long Binance/);
+    expect(toggles()[2]).toHaveAccessibleName(/ETH short Hyperliquid \/ long Gate/);
+  });
+
+  it('still drops the pairs that price no APR or a loss', async () => {
+    server.use(
+      opportunitiesHandler(
+        makeOpportunitiesResult({
+          groups: [
+            makeOpportunityGroup({
+              pairs: [
+                venuePair(0.12, 'HYPERLIQUID', 'BINANCE'),
+                venuePair(null, 'HYPERLIQUID', 'GATE'),
+                venuePair(-0.03, 'BYBIT', 'GATE'),
+              ],
+            }),
+          ],
+        }),
+      ),
+    );
+    renderWithClient(<OpportunitiesPanel />);
+
+    await waitFor(() => expect(toggles()).toHaveLength(1));
+    expect(screen.getByText('12.0% APR')).toBeInTheDocument();
+  });
+});
+
+describe('OpportunitiesPanel → PairTicket prefill, runner-up pairs', () => {
+  it('arms the ticket with the legs of the card that was CLICKED, not the group best', async () => {
+    const calls: ActionInput[][] = [];
+    server.use(
+      ...baseHandlers(),
+      ...symbolHandlers([ETH_HYPERLIQUID, ETH_BINANCE, ETH_GATE]),
+      previewHandler(calls),
+      // One ETH cohort, two venue combinations: Binance at 12%, Gate at 4%.
+      opportunitiesHandler(
+        makeOpportunitiesResult({
+          groups: [
+            makeOpportunityGroup({
+              pairs: [
+                venuePair(0.12, 'HYPERLIQUID', 'BINANCE'),
+                venuePair(0.04, 'HYPERLIQUID', 'GATE'),
+              ],
+            }),
+          ],
+        }),
+      ),
+    );
+    renderWithClient(
+      <>
+        <OpportunitiesPanel />
+        <PairTicket />
+      </>,
+    );
+
+    await waitFor(() => expect(toggles()).toHaveLength(2));
+    // The RUNNER-UP — the card the old one-per-group list could not even show.
+    await userEvent.click(executeFor(/^Execute ETH short Hyperliquid \/ long Gate/));
+
+    await waitFor(() => expect(calls.at(-1)).toHaveLength(2), { timeout: 4000 });
+    const legs = calls.at(-1) as ActionInput[];
+    // Gate's legs, not the 12% Binance pair's.
+    expect(legs.map((a) => a.symbol).sort()).toEqual([
+      'GATE_FUTURE_ETH_USDT',
+      'HYPERLIQUID_FUTURE_ETH_USDC',
+    ]);
+    expect(legs.find((a) => a.symbol === 'GATE_FUTURE_ETH_USDT')).toMatchObject({ side: 'BUY' });
+    expect(legs.find((a) => a.symbol === 'HYPERLIQUID_FUTURE_ETH_USDC')).toMatchObject({
+      side: 'SELL',
+    });
+    expect(legs.some((a) => a.symbol === 'BINANCE_FUTURE_ETH_USDT')).toBe(false);
+  });
+});
+
+describe('OpportunitiesPanel — filters', () => {
+  it('narrows on an asset chip and restores on Clear filters', async () => {
+    server.use(opportunitiesHandler(multiPairResult()));
+    renderWithClient(<OpportunitiesPanel />);
+
+    await waitFor(() => expect(toggles()).toHaveLength(3));
+    expect(screen.getByText('showing 3 of 3')).toBeInTheDocument();
+
+    await userEvent.click(chip(/^BTC 1$/));
+    await waitFor(() => expect(toggles()).toHaveLength(1));
+    expect(screen.getByText('8.0% APR')).toBeInTheDocument();
+    expect(screen.getByText('showing 1 of 3')).toBeInTheDocument();
+    expect(chip(/^BTC 1$/)).toHaveAttribute('aria-pressed', 'true');
+
+    await userEvent.click(screen.getByRole('button', { name: 'Clear filters' }));
+    await waitFor(() => expect(toggles()).toHaveLength(3));
+  });
+
+  it('matches a venue on either leg, and ORs two chips in one dimension', async () => {
+    server.use(opportunitiesHandler(multiPairResult()));
+    renderWithClient(<OpportunitiesPanel />);
+
+    await waitFor(() => expect(toggles()).toHaveLength(3));
+    // Gate is the LONG leg of one ETH pair and of the BTC pair.
+    await userEvent.click(chip(/^Gate 2$/));
+    await waitFor(() => expect(toggles()).toHaveLength(2));
+
+    await userEvent.click(chip(/^Binance 1$/));
+    await waitFor(() => expect(toggles()).toHaveLength(3));
+  });
+
+  it('counts each chip against the other filters, and deadens one that adds nothing', async () => {
+    server.use(opportunitiesHandler(multiPairResult()));
+    renderWithClient(<OpportunitiesPanel />);
+
+    await waitFor(() => expect(toggles()).toHaveLength(3));
+    await userEvent.click(chip(/^ETH 2$/));
+
+    // Venue counts fall to what ETH leaves; Bybit trades no ETH, so its chip
+    // would add nothing and reads as a dead end. It stays in the tab order and
+    // keeps its tooltip — `aria-disabled`, not the native `disabled` that would
+    // hide the explanation from the people who need it.
+    await waitFor(() => expect(chip(/^Bybit 0$/)).toHaveAttribute('aria-disabled', 'true'));
+    expect(chip(/^Bybit 0$/)).toBeEnabled();
+    expect(chip(/^Bybit 0$/)).toHaveAttribute('title');
+    // Clicking it is inert rather than blocked by the browser.
+    await userEvent.click(chip(/^Bybit 0$/));
+    expect(toggles()).toHaveLength(2);
+    expect(chip(/^Hyperliquid 2$/)).toHaveAttribute('aria-disabled', 'false');
+    // The asset chips keep counting over every row — BTC still offers its 1.
+    expect(chip(/^BTC 1$/)).toHaveAttribute('aria-disabled', 'false');
+  });
+
+  it('applies the APR floor as a percent', async () => {
+    server.use(opportunitiesHandler(multiPairResult()));
+    renderWithClient(<OpportunitiesPanel />);
+
+    await waitFor(() => expect(toggles()).toHaveLength(3));
+    await userEvent.type(screen.getByLabelText('Min APR'), '5');
+
+    await waitFor(() => expect(toggles()).toHaveLength(2));
+    expect(screen.queryByText('4.0% APR')).not.toBeInTheDocument();
+  });
+
+  it('offers no filter row for a dimension that cannot exclude anything', async () => {
+    server.use(opportunitiesHandler(makeOpportunitiesResult()));
+    renderWithClient(<OpportunitiesPanel />);
+
+    await waitFor(() => expect(toggles()).toHaveLength(1));
+    // A single card: its one asset and one maturity are obviously no choice —
+    // and neither are its TWO venue chips, since the card carries both legs, so
+    // picking either leaves exactly the card already on screen.
+    expect(screen.queryByText('Asset')).not.toBeInTheDocument();
+    expect(screen.queryByText('Matures')).not.toBeInTheDocument();
+    expect(screen.queryByText('Venue')).not.toBeInTheDocument();
+  });
+
+  it('keeps a selected chip listed and releasable after its rows leave the data', async () => {
+    server.use(opportunitiesHandler(multiPairResult()));
+    renderWithClient(<OpportunitiesPanel />);
+
+    await waitFor(() => expect(toggles()).toHaveLength(3));
+    await userEvent.click(chip(/^BTC 1$/));
+    await waitFor(() => expect(toggles()).toHaveLength(1));
+
+    // The next response prices no BTC at all. The filter is still armed, so its
+    // chip has to survive at count 0 — otherwise the list stays narrowed with
+    // nothing on screen to explain it, and nothing to click to undo it.
+    server.use(
+      opportunitiesHandler(
+        makeOpportunitiesResult({
+          groups: [
+            makeOpportunityGroup({ pairs: [venuePair(0.12, 'HYPERLIQUID', 'BINANCE')] }),
+          ],
+        }),
+      ),
+    );
+    await userEvent.click(screen.getByTitle('Refetch strategy data'));
+
+    await waitFor(() => expect(chip(/^BTC 0$/)).toBeInTheDocument());
+    expect(chip(/^BTC 0$/)).toHaveAttribute('aria-pressed', 'true');
+    // Still releasable at count 0 — never deadened while selected.
+    expect(chip(/^BTC 0$/)).toHaveAttribute('aria-disabled', 'false');
+    await userEvent.click(chip(/^BTC 0$/));
+    await waitFor(() => expect(toggles()).toHaveLength(1));
+  });
+
+  it('filtered down to nothing blames the filters, not the assumptions', async () => {
+    server.use(opportunitiesHandler(multiPairResult()));
+    renderWithClient(<OpportunitiesPanel />);
+
+    await waitFor(() => expect(toggles()).toHaveLength(3));
+    await userEvent.type(screen.getByLabelText('Min APR'), '99');
+
+    await waitFor(() =>
+      expect(screen.getByText('No opportunity matches these filters')).toBeInTheDocument(),
+    );
+    expect(screen.queryByText('No fixed-return opportunities')).not.toBeInTheDocument();
+    // The bar survives, so the way out is still in reach.
+    expect(screen.getByText('showing 0 of 3')).toBeInTheDocument();
+
+    await userEvent.click(
+      within(screen.getByText('No opportunity matches these filters').parentElement!).getByRole(
+        'button',
+        { name: 'Clear filters' },
+      ),
+    );
+    await waitFor(() => expect(toggles()).toHaveLength(3));
+  });
+
+  it('hides the bar entirely when the assumptions price nothing', async () => {
+    server.use(opportunitiesHandler(makeOpportunitiesResult({ groups: [] })));
+    renderWithClient(<OpportunitiesPanel />);
+
+    await waitFor(() =>
+      expect(screen.getByText('No fixed-return opportunities')).toBeInTheDocument(),
+    );
+    expect(screen.queryByRole('group', { name: 'Filter opportunities' })).not.toBeInTheDocument();
   });
 });
