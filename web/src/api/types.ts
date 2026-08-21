@@ -200,6 +200,8 @@ export interface StrategyLeg {
   /** |notional| in token units — Boros: |notionalSize| in the collateral token
    * (notionalUsd = notionalToken × its USD price); perp: |qty| in the base coin. */
   notionalToken?: number;
+  /** Boros only: the venue's own market id — how a membership row names it. */
+  marketId?: number;
   /** Boros only: entry fixed APR and current mark APR (fractions). */
   entryApr?: number;
   markApr?: number;
@@ -225,6 +227,9 @@ export interface StrategyLeg {
   maturity?: number;
   /** Perp only: the exact CrossEx symbol — join key to the live position. */
   symbol?: string;
+  /** The fraction of the venue position attributed to this strategy (1 = the
+   * whole leg). Every shared number on the leg is already scaled by it. */
+  share?: number;
   warnings: string[];
 }
 
@@ -287,11 +292,41 @@ export interface StrategyFees {
 
 export type HedgeStatus = 'hedged' | 'partial' | 'unhedged';
 
+/** What counts as the capital a Boros position ties up. `balance` apportions
+ * the margin group's posted balance (over-states it when the collateral
+ * account is shared with other trading); `im` counts only the initial margin
+ * the legs consume — the same basis the perp side always uses. */
+export type CapitalBasis = 'balance' | 'im';
+
+/** How a strategy's share of each shared leg was arrived at — see
+ * src/core/boros/partition.ts. `measured` means an execution record (the local
+ * deal journal or the venue's own fills) proved the split; `unconfirmed` means
+ * it was paired on price/open-time proximity and is a proposal to edit. */
+export interface StrategyAttribution {
+  source:
+    | 'journal'
+    | 'fill-history'
+    | 'forced'
+    | 'proximity'
+    | 'user'
+    | 'merged'
+    | 'boros-only'
+    /** Live perp size no position claimed — a position holding that one leg. */
+    | 'unhedged';
+  confidence: 'measured' | 'unconfirmed';
+  pinned: boolean;
+}
+
 /** What anchors the realized-APR clock: earliest Boros leg (default), perp
  * fallback when the Boros open time is unknown, or a user-chosen date. */
 export type ClockBasis = 'boros-open' | 'perp-open' | 'custom';
 
 export interface StrategyRollup {
+  /** Stable identity across re-solves: `BASE#VENUE-VENUE#openDay` when the
+   * book was split, `BASE@maturity` when it was not. Pins, excluded entry
+   * parts and React keys all hang off this. */
+  strategyId: string;
+  attribution: StrategyAttribution;
   base: string;
   /** Unix seconds. */
   maturity: number;
@@ -358,7 +393,13 @@ export interface StrategyReturns {
     perpExitFeesTotalUsd: number | null;
     /** Σ future.perpExitSlippageUsd; null if any strategy's is unknown. */
     perpExitSlippageTotalUsd: number | null;
+    /** How many strategies could not measure their crossing cost — lets the
+     * strip say "unknown for 2 of 5" instead of blanking with no reason. */
+    slippageUnknownCount: number;
+    strategyCount: number;
   };
+  /** Which reading of "capital" produced every capital-derived number here. */
+  capitalBasis: CapitalBasis;
   warnings: string[];
 }
 
@@ -908,4 +949,197 @@ export interface BookTouch {
   bestBid: number;
   bestAsk: number;
   mid: number;
+}
+
+// ---------------------------------------------------------------------------
+// Boros two-leg market entry (mirrors src/core/boros/pair.ts + orders.ts)
+// ---------------------------------------------------------------------------
+
+/** 'short' RECEIVES fixed (hits bids); 'long' PAYS fixed (lifts asks). */
+export type BorosLegDirection = 'long' | 'short';
+export type BorosPairIntent = 'open' | 'close';
+
+export interface BorosPairMarketRow {
+  marketId: number;
+  name: string;
+  venue: string;
+  base: string;
+  tokenId: number;
+  /** Symbol of the collateral token — the unit a size on this market is in.
+   * Empty when the token is one this build has no symbol for. */
+  collateral: string;
+  maturity: number;
+  midApr: number;
+  markApr: number;
+  isolatedOnly: boolean;
+  onIsolatedMargin: boolean;
+  isolatedHasPositionOrOrders: boolean;
+  /** Signed netted position on this market, collateral units (+ long fixed). */
+  currentSize: number;
+  collateralPriceUsd: number | null;
+}
+
+/** GET /api/boros/pair/context */
+export interface BorosPairContext {
+  markets: BorosPairMarketRow[];
+  crossByToken: Array<{ tokenId: number; available: number }>;
+  isolatedByMarket: Array<{ marketId: number; available: number }>;
+  defaultSlippageApr: number;
+  maxSlippageApr: number;
+}
+
+export interface BorosLegSizing {
+  currentSize: number;
+  deltaSize: number;
+  resultingSize: number;
+  opposing: boolean;
+  flips: boolean;
+  clampedToClose: boolean;
+}
+
+export type BorosBookStatus = 'ok' | 'insufficient-depth' | 'unavailable' | 'not-fetched';
+
+export interface BorosSimulatedLeg {
+  marketId: number;
+  marketName: string;
+  venue: string;
+  base: string;
+  direction: BorosLegDirection;
+  execApr: number | null;
+  worstApr: number | null;
+  estFillSize: number;
+  shortfallSize: number;
+  bookStatus: BorosBookStatus;
+  marginRequired: number | null;
+  slippageApr: number;
+  sizing: BorosLegSizing;
+}
+
+export interface BorosPairSimulation {
+  legA: BorosSimulatedLeg;
+  legB: BorosSimulatedLeg;
+  receiveLeg: 'A' | 'B' | null;
+  /** NET of fees. There is no gross counterpart — by design. */
+  estSpreadApr: number | null;
+  worstSpreadApr: number | null;
+  costToCrossSize: number;
+  feeDragApr: number;
+  marginRequiredTotal: number | null;
+  hedgedSize: number;
+  unhedgedSize: number;
+  collateral: string;
+  collateralPriceUsd: number | null;
+  secondsToMaturity: number;
+  reasons: string[];
+}
+
+export interface BorosPairBlocker {
+  code: string;
+  message: string;
+  leg?: 'A' | 'B';
+  marketId?: number;
+  /** Collateral units still needed — the shortfall, never the total. */
+  shortfall?: number;
+}
+
+export interface BorosPairGate {
+  blockers: BorosPairBlocker[];
+  warnings: string[];
+  requiresAcknowledgement: boolean;
+  opposingLegs: Array<'A' | 'B'>;
+}
+
+export interface BorosPairEligibility {
+  eligible: boolean;
+  code: string | null;
+  reason: string | null;
+}
+
+/** POST /api/boros/pair/simulate */
+export interface BorosPairSimulateResponse {
+  simulation: BorosPairSimulation;
+  gate: BorosPairGate;
+  eligibility: BorosPairEligibility;
+  simulatedAtMs: number;
+  /** Prepaid relayer gas in USD — a DIFFERENT pot from trading collateral.
+   * null when the install cannot read it. */
+  gasBalanceUsd: number | null;
+}
+
+export type BorosLegFailureCode =
+  | 'insufficient-depth'
+  | 'rate-deviation'
+  | 'insufficient-margin'
+  | 'rejected'
+  | 'unknown';
+
+export interface BorosLegFill {
+  marketId: number;
+  direction: BorosLegDirection;
+  filledSize: number;
+  shortfallSize: number;
+  execApr: number | null;
+  feeSize: number | null;
+  failure: { code: BorosLegFailureCode; message: string } | null;
+}
+
+export interface BorosPairResult {
+  legA: BorosLegFill;
+  legB: BorosLegFill;
+  /** False when only one leg was submitted (a completion). */
+  bothLegsSubmitted: boolean;
+  hedgedSize: number;
+  unhedgedSize: number;
+  unhedgedLeg: 'A' | 'B' | null;
+  realisedSpreadApr: number | null;
+  partial: boolean;
+}
+
+/** POST /api/boros/pair/execute */
+export interface BorosPairExecuteResponse {
+  result: BorosPairResult;
+  estimate: BorosPairSimulation;
+  warnings: string[];
+  /** True when this response replays an earlier submission with the same order
+   * ids rather than a fresh trade. */
+  replayed?: boolean;
+}
+
+/** Request body shared by simulate and execute. */
+export interface BorosPairRequest {
+  address: string;
+  /** Trade one leg only (a completion); the other is sized to zero. */
+  onlyLeg?: 'A' | 'B';
+  legA: { marketId: number; direction: BorosLegDirection; slippageApr: number };
+  legB: { marketId: number; direction: BorosLegDirection; slippageApr: number };
+  size: number;
+  intent: BorosPairIntent;
+  opposingAcknowledged?: boolean;
+  clientOrderIdA?: string;
+  clientOrderIdB?: string;
+}
+
+/** GET /api/boros/agent — the delegated trading key's status. Never carries the
+ * key itself, under any field name. */
+export interface BorosAgentStatus {
+  configured: boolean;
+  root: string | null;
+  rootMasked: string | null;
+  accountId: number | null;
+  /** Unix seconds the on-chain approval lapses; null when unknown. Past this,
+   * every order fails with AuthAgentExpired(). */
+  expiry: number | null;
+  expired: boolean;
+  /** False on an install with no agent service (e.g. public mode). */
+  canProvision: boolean;
+}
+
+/** PUT /api/boros/agent — a browser-generated agent key, already approved
+ * on-chain by the connected root wallet. */
+export interface BorosAgentInput {
+  root: string;
+  accountId: number;
+  agentPrivateKey: string;
+  /** Absolute unix seconds the approval was signed until. */
+  expiry?: number;
 }

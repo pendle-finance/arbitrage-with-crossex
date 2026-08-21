@@ -84,6 +84,31 @@ Under **Include**, the **▾** button next to it itemises that cost so you can c
 - **Entry slip** rows are **per execution**, each with its date, the two venues crossed and the size matched. Untick the ones whose fills belonged to an earlier strategy.
 - **Fees** rows are **per leg**, marked *position life*. Gate reports a position's trading fees as a single cumulative number and nothing records them per trade, so they genuinely cannot be split by date — the terminal shows them per leg rather than inventing a split. Note this also means a leg you have since migrated away from contributes nothing at all, since it is no longer an open position.
 
+#### When one venue leg belongs to two positions
+
+Run HL/OKX and HL/Binance at the same time and the HL side is **one** position everywhere you look: Gate reports a single row at a blended entry price, and Boros reports a single position at a blended fixed rate. Neither says which part is which strategy.
+
+The terminal splits it back apart, and shows each position as its own box — its own size, its own entry prices, its own locked rate. It works from the execution record: the local deal journal, and your own fill history at the venue (each fill carries the order tag this terminal writes, so a fill can be matched back to the deal that made it). Where that record is complete, the split is a **measurement** — the chip on the box says *split measured*.
+
+Where it isn't — positions opened elsewhere, or older than the fill history reaches — the terminal pairs the legs by how close their prices and open times are, and the box says *split unconfirmed*. Then:
+
+- The sizes are still right: they come from the pairing itself, not from the prices.
+- The **crossing cost is reported as unknown**, not estimated. The venue's blended entry price is an average across *both* strategies, so charging it to either one would invent a number.
+- The **locked spread** falls back to the blended rate, which still nets out correctly across the two positions but is not exactly what either one locked.
+
+**Adjust split** on the box is how you correct it. Type the size this position really holds and **Pin size**; the pinned size holds and everything unpinned is re-solved around it. **Detach** says these two legs are not a strategy together at all — both are then reported as unhedged. **Back to automatic** hands the pair back to the solver. Pins are remembered per tracked address.
+
+If a venue position later shrinks below a pin, the pin is **clamped and reported** — never silently rescaled — and if a size ends up belonging to no position at all, it gets its own **unhedged** box rather than quietly disappearing.
+
+#### What counts as your capital
+
+Every APR on a position is a return *on capital*, so what goes into that number decides whether a position looks good. The perp side is always the initial margin those legs consume. For the Boros side there are two readings, and **Settings → Capital counted per position** picks one:
+
+- **Posted balance** (default) — the collateral account's balance, split across the positions it backs. Right when that account exists for these positions and nothing else.
+- **Margin used** — only the initial margin the Boros legs post. Use this if you also keep trading money in the same collateral account: otherwise that idle cash is counted as capital these positions needed, which inflates capital and drags every APR down.
+
+The choice is remembered per browser and applies to every position box and the totals strip.
+
 ## 3. How to maximise return
 These few factors move the needle the most in maximising your return on the 4-legged Funding Rate Arbitrage
 1. Reduce perp fees with a **higher VIP tier** in Gate.

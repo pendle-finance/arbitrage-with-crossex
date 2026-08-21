@@ -34,18 +34,33 @@ export const TTL = {
   /** Boros backend reads (markets, collaterals, txn history) — settlement
    * cadence is hourly at the fastest; 30s keeps the card feeling live. */
   boros: 30_000,
-  /** Boros order books — the levels the scan's DISPLAYED quote walks; nothing
-   * places an order off them (the engine trades CrossEx only, and settlement
+  /** Boros order books — the levels the scan's DISPLAYED quote walks. Nothing
+   * places an order off THIS key (the two-leg Boros panel has its own,
+   * `borosBookTrade`; the CrossEx engine never reads Boros books at all, and settlement
    * cadence on Boros is hourly). At 5s this was ~97% of all Boros traffic: the
    * dashboard polls every 12s, so every poll re-fetched every mapped market's
    * book (25 books × 300 polls ≈ 7.5k req/h from one open tab, measured
    * 2026-07-29). Books now ride the same 30s cadence as every other Boros
    * read; a scan quote up to ~30s old ranks identically. */
   borosBook: 30_000,
+  /** Boros books that back an ORDER rather than a displayed quote — the
+   * two-leg market panel's simulate/execute path. `borosBook`'s 30s is chosen
+   * for a scan whose quote "up to ~30s old ranks identically"; that reasoning
+   * does not survive contact with a market order, where a 30s-old book sets
+   * the rate bound the order actually carries. Deliberately its own key, so
+   * the scan can never serve this path a stale entry (or vice versa). Kept
+   * comfortably under `SIMULATION_MAX_AGE_MS`, which refuses a confirm behind
+   * a quote older than 12s. */
+  borosBookTrade: 3_000,
   /** Public venue-book touch for the re-peg UI — price display, not a feed. */
   book: 2_000,
   /** Fee rates, symbol rules, risk limits — effectively static. */
   static: 600_000,
+  /** Executed fills, read to split a shared venue leg between strategies. A
+   * past fill never changes and a new one only matters once its position
+   * shows up, so re-paginating this on the 30s strategy poll is pure waste —
+   * at 10 pages a tick it is also the fastest way into a 429 cooldown. */
+  fills: 300_000,
   /** GitHub version.json update check — hours, not minutes: releases are
    * hand-bumped and rare, and a FAILED fetch is cached as null for the same
    * window (one quiet retry per window, silent by design). */

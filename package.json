@@ -27,7 +27,8 @@
     "axios": "^1.7.7",
     "dotenv": "^16.4.5",
     "fastify": "^5.9.0",
-    "gate-api": "^7.1.8"
+    "gate-api": "^7.1.8",
+    "viem": "^2.21.0"
   },
   "devDependencies": {
     "@types/node": "^22.7.0",

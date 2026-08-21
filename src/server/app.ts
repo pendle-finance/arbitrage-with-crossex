@@ -6,6 +6,7 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import Fastify, { type FastifyInstance, type FastifyReply } from 'fastify';
 import type { FetchLike } from '../core/boros/client';
+import type { BorosOrderClient } from '../core/boros/orders';
 import type { Clients } from '../core/clients';
 import { classifyGateError, CoreError, type ClassifiedError } from '../core/errors';
 import type { Store } from '../engine/db';
@@ -19,6 +20,8 @@ import { disclaimerRoutes } from './routes/disclaimer';
 import { feesRoutes } from './routes/fees';
 import { healthRoutes } from './routes/health';
 import { leverageRoutes } from './routes/leverage';
+import { borosAgentRoutes } from './routes/borosAgent';
+import { borosPairRoutes } from './routes/borosPair';
 import { opportunitiesRoutes } from './routes/opportunities';
 import { ordersRoutes } from './routes/orders';
 import { positionsRoutes } from './routes/positions';
@@ -58,6 +61,22 @@ export interface AppDeps {
   authToken?: string;
   /** Test seam for the Boros backend client (defaults to global fetch). */
   borosFetch?: FetchLike;
+  /**
+   * The Boros WRITE port, used by the two-leg market panel. A GETTER, not a
+   * value: the agent can be provisioned from the browser at runtime, so routes
+   * must read the CURRENT client rather than close over whatever existed at
+   * boot. Returning undefined means the install cannot place Boros orders —
+   * /api/boros/pair/execute answers 503 rather than pretending. Reads (context,
+   * simulate) work without it, so the panel prices pairs on any install.
+   */
+  getBorosOrders?: () => BorosOrderClient | undefined;
+  /** Enables PUT/DELETE /api/boros/agent (browser-provisioned agent key). */
+  borosAgent?: {
+    envPath: string;
+    hardenConfigDir?: boolean;
+    /** Install (or clear) the live order client after a successful write. */
+    setOrderClient(client: BorosOrderClient | undefined): void;
+  };
   /** Test seam for the GitHub update check (defaults to global fetch). */
   versionFetch?: FetchLike;
   /** What the installer recorded about this tree (null in a source checkout).
@@ -192,22 +211,24 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   });
 
   const routeModules = [
-      healthRoutes,
-      credentialsRoutes,
-      disclaimerRoutes,
-      accountRoutes,
-      feesRoutes,
-      positionsRoutes,
-      ordersRoutes,
-      tradesRoutes,
-      symbolsRoutes,
-      strategyRoutes,
-      opportunitiesRoutes,
-      booksRoutes,
-      leverageRoutes,
-      previewRoutes,
-      dealsRoutes,
-      versionRoutes,
+    healthRoutes,
+    credentialsRoutes,
+    disclaimerRoutes,
+    accountRoutes,
+    feesRoutes,
+    positionsRoutes,
+    ordersRoutes,
+    tradesRoutes,
+    symbolsRoutes,
+    strategyRoutes,
+    opportunitiesRoutes,
+    borosPairRoutes,
+    borosAgentRoutes,
+    booksRoutes,
+    leverageRoutes,
+    previewRoutes,
+    dealsRoutes,
+    versionRoutes,
   ];
   for (const routes of routeModules) {
     app.register(routes(deps), { prefix: '/api' });
