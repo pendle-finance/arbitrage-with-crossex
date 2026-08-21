@@ -127,9 +127,6 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   const LOCAL_HOST_RE = /^(localhost|127\.0\.0\.1)(:\d+)?$/;
   const LOCAL_ORIGIN_RE = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/;
 
-  // Public mode serves strangers by definition — the guard only protects a
-  // credentialed localhost server from DNS-rebinding/CSRF, and no credentialed
-  // route is registered in public mode.
   // Fail closed on a missing wire-up: an optional field that silently
   // disables authentication is exactly the regression this catches.
   if (!deps.authToken) {

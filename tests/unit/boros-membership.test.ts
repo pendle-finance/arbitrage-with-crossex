@@ -208,114 +208,16 @@ describe('shared Boros leg — anchored on the Boros fills', () => {
   });
 });
 
-describe('shared Boros leg — saying which position holds it', () => {
-  const HL_PERP = 'HYPERLIQUID_FUTURE_ETH_USDC';
-  const BIN_PERP = 'BINANCE_FUTURE_ETH_USDT';
-  const GATE_PERP = 'GATE_FUTURE_ETH_USDT';
-  /** Market 128 is the Hyperliquid Boros short both perp pairs compete for;
-   * 129 is the Binance long only this pair can hold. */
-  const HL_BOROS = 128;
-  const BIN_BOROS = 129;
-
-  /**
-   * A position is EXACTLY its rows — the solver adds nothing to one the user
-   * has stated. So an assertion names every leg the position holds, which is
-   * what the editor writes when it freezes a card, not just the leg being
-   * corrected.
-   */
-  const binancePair = (over: Partial<MembershipRow> = {}): MembershipRow[] => [
-    { positionId: 'bin1', leg: { kind: 'perp', symbol: BIN_PERP } },
-    { positionId: 'bin1', leg: { kind: 'perp', symbol: HL_PERP }, qty: 0.053 },
-    { positionId: 'bin1', leg: { kind: 'boros', marketId: BIN_BOROS } },
-    { positionId: 'bin1', leg: { kind: 'boros', marketId: HL_BOROS }, ...over },
-  ];
-
-  it('gives the whole leg to the position that traded it, keeping the sibling a strategy', () => {
-    // The point of the feature: card 1 becomes fully hedged WITHOUT having to
-    // deny that the Gate/HL perp pair is a strategy.
-    const out = buildStrategies(book({ membership: binancePair({ qty: 0.053 }) }));
-    const bin = cardFor(out, 'BINANCE')!;
-    const gate = cardFor(out, 'GATE')!;
-    expect(borosQty(bin, 'HYPERLIQUID')).toBeCloseTo(0.053, 6);
-    expect(bin.hedge).toBe('hedged');
-    expect(bin.hedgeChecks.borosMatchRatio).toBeCloseTo(1, 6);
-    // The sibling survives as its own (still unhedged) strategy, and simply
-    // holds none of that leg.
-    expect(gate).toBeDefined();
-    expect(borosQty(gate, 'HYPERLIQUID')).toBe(0);
-    expect(gate.legs.filter((l) => l.kind === 'perp')).toHaveLength(2);
-  });
-
-  it('reads a row with no size as "all of it"', () => {
-    // Omitting qty is the common case — the user is saying whose it is, not
-    // how much. It must not be read as zero.
-    const out = buildStrategies(book({ membership: binancePair() }));
-    expect(borosQty(cardFor(out, 'BINANCE')!, 'HYPERLIQUID')).toBeCloseTo(0.053, 6);
-  });
-
-  it('leaves the remainder to whoever else can hedge it', () => {
-    // Claim 0.02 for Binance; the Gate pair is the only other holder, so it
-    // absorbs the difference rather than keeping its old pro-rata share.
-    const out = buildStrategies(book({ membership: binancePair({ qty: 0.02 }) }));
-    expect(borosQty(cardFor(out, 'BINANCE')!, 'HYPERLIQUID')).toBeCloseTo(0.02, 6);
-    expect(borosQty(cardFor(out, 'GATE')!, 'HYPERLIQUID')).toBeCloseTo(0.033, 6);
-  });
-
-  it('clamps a claim bigger than the leg, and says so', () => {
-    const out = buildStrategies(book({ membership: binancePair({ qty: 5 }) }));
-    expect(borosQty(cardFor(out, 'BINANCE')!, 'HYPERLIQUID')).toBeCloseTo(0.053, 6);
-    expect(out.warnings.join(' ')).toMatch(/clamped, not rescaled/);
-  });
-
-  it('reports an assignment naming a leg the venue no longer has', () => {
-    // The thing a pin keyed by a GROUPING could never do: a row names a leg,
-    // so its absence is detectable rather than silently still asserted.
-    const out = buildStrategies(
-      book({
-        membership: [
-          ...binancePair({ qty: 0.053 }),
-          { positionId: 'bin1', leg: { kind: 'boros', marketId: 9999 } },
-        ],
-      }),
-    );
-    expect(out.warnings.join(' ')).toMatch(/no longer matches anything on the venue/);
-    // …and the rest of the assertion still applies.
-    expect(borosQty(cardFor(out, 'BINANCE')!, 'HYPERLIQUID')).toBeCloseTo(0.053, 6);
-  });
-
-  it('leaves a book with no assertions exactly as it was', () => {
-    const before = buildStrategies(book());
-    const after = buildStrategies(book({ membership: [] }));
-    expect(after.strategies.map((s) => s.legs.map((l) => l.notionalToken))).toEqual(
-      before.strategies.map((s) => s.legs.map((l) => l.notionalToken)),
-    );
-  });
-
-  it('claims only part of a shared perp, leaving the rest to the solver', () => {
-    // The commonest assertion of all, and the one a Boros-only model could not
-    // express: half of the shared Hyperliquid short is mine.
-    const out = buildStrategies(
-      book({
-        membership: [
-          { positionId: 'bin1', leg: { kind: 'perp', symbol: BIN_PERP } },
-          { positionId: 'bin1', leg: { kind: 'perp', symbol: HL_PERP }, qty: 0.04 },
-        ],
-      }),
-    );
-    const bin = cardFor(out, 'BINANCE')!;
-    expect(bin.legs.find((l) => l.kind === 'perp' && l.venue === 'HYPERLIQUID')!.notionalToken).toBeCloseTo(0.04, 9);
-    // The Gate pair still exists, solved from what was left of the HL short.
-    const gate = cardFor(out, 'GATE');
-    expect(gate).toBeDefined();
-    // Every venue position is still accounted for exactly once — orphaned
-    // size included, since that is a card too.
-    const hl = out.strategies
-      .flatMap((s) => s.legs)
-      .filter((l) => l.kind === 'perp' && l.venue === 'HYPERLIQUID')
-      .reduce((a, l) => a + (l.notionalToken ?? 0), 0);
-    expect(hl).toBeCloseTo(0.078, 6);
-  });
-});
+/*
+ * The "saying which position holds it" block that stood here is gone.
+ *
+ * Every case in it — claim the whole leg, "all of it" with no size, leave the
+ * remainder, clamp an over-claim, report a stale leg, an unasserted book,
+ * claim part of a shared perp — is covered by boros-membership-usecases.ts on
+ * the SAME book, and covered better: those go through decodeMembership /
+ * encodeMembership, so they also catch a payload the wire silently drops.
+ * Two suites asserting one behaviour, one of them weaker, is not coverage.
+ */
 
 describe('one perp, two maturities', () => {
   /**

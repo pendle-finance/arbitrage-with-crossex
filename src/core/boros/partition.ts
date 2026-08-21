@@ -732,7 +732,11 @@ export interface BorosIncrement {
  * be taken apart again, and each strategy can keep the rate it actually
  * locked instead of the book's blend.
  *
- * Same FIFO doctrine as the perp side: newest opens compose the live position.
+ * ⚠ NOT the perp side's FIFO. A partial close SCALES every open rather than
+ * dropping the oldest — see the note at the end of the function: the venue
+ * does not re-average on a reduce, so the survivor still carries the blend of
+ * all its opens, and dropping oldest-first would report a rate it never
+ * charged.
  * Returns null when the history cannot explain the live size.
  */
 export function borosIncrements(
