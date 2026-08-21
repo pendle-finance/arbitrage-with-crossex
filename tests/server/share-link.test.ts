@@ -43,7 +43,7 @@ describe('POST /api/share-link', () => {
     expect(res.json().data).toEqual({ code: 'Abc123_-xyz', expiresAt: 42 });
     expect(calls).toHaveLength(1);
     expect(calls[0].url).toMatch(
-      /^https:\/\/api\.boros\.finance\/open-api\/v1\/crossex\/shared-positions\?pendle_client=boroscrossex/,
+      /^https:\/\/api-boros\.pendle\.finance\/apis\/v1\/crossex\/shared-positions\?pendle_client=boroscrossex/,
     );
     expect(calls[0].method).toBe('POST');
     expect(JSON.parse(calls[0].body ?? '')).toEqual({ d: D });

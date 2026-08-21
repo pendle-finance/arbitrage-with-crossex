@@ -16,6 +16,9 @@
 import { CoreError } from '../errors';
 
 const BOROS_BASE_URL = 'https://api.boros.finance';
+/** The api-gateway surface (`/apis` → api-gateway → open-api's `open-api-v2/…`
+ * mounts). New endpoints live here — the bare `/open-api` prefix is deprecated. */
+const BOROS_GATEWAY_BASE_URL = 'https://api-boros.pendle.finance/apis';
 
 /** tokenId → collateral token symbol (mirrors boros-tools' TOKEN_IDS). */
 export const BOROS_TOKEN_SYMBOLS: Record<number, string> = {
@@ -431,7 +434,7 @@ export function resolveCollateralPricesUsd(markets: BorosMarket[]): Map<number, 
 }
 
 /**
- * POST /open-api/v1/crossex/shared-positions — store a share payload on the public
+ * POST {gateway}/v1/crossex/shared-positions — store a share payload on the public
  * backend and get its short code back. `d` is the base64url payload the long
  * link would carry after `?d=`; the backend keys it by content hash, so
  * re-sharing the same position returns the same code with a refreshed ~90-day
@@ -444,7 +447,7 @@ export async function createShareShortLink(
 ): Promise<{ code: string; expiresAt: number }> {
   const clientTag =
     'pendle_client=boroscrossex' + clientTagState.version + (clientTagState.active ? '_active' : '');
-  const url = `${BOROS_BASE_URL}/open-api/v1/crossex/shared-positions?${clientTag}`;
+  const url = `${BOROS_GATEWAY_BASE_URL}/v1/crossex/shared-positions?${clientTag}`;
   let resp: Awaited<ReturnType<FetchLike>>;
   try {
     resp = await fetchImpl(url, {
