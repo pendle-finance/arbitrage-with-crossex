@@ -506,8 +506,12 @@ export interface OpportunityGroup {
   warnings: string[];
 }
 
-/** Groups arrive pre-ranked (net fixed APR on capital desc) — never re-sort
- * client-side. */
+/** Groups arrive pre-ranked, and so do the `pairs` within each — on net fixed
+ * APR on capital, then netFixedApr, execSpreadApr, grossSpreadApr. A view that
+ * flattens the groups has to REPRODUCE that comparator (see
+ * `panels/opportunityFilters.ts`), not just its first key: the flat array is
+ * group-major, so sort stability alone would break a cross-group tie by group
+ * rank and float a strictly worse pair to the top. */
 export interface OpportunitiesResult {
   groups: OpportunityGroup[];
   meta: {

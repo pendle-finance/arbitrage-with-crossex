@@ -132,14 +132,22 @@ function ruleClient(deps: AppDeps): CrossExApi {
  *
  * A failed read or a symbol with no row leaves that symbol absent, which nulls
  * only that pair's capital — the notional-basis numbers still price.
+ *
+ * Returns a warning when the read failed for EVERY symbol. One shared
+ * `getLeverageMax` call backs them all, so a single outage empties the whole
+ * map — and with no leverage cap anywhere, no pair can model its capital, no
+ * pair prices an APR on capital, and the terminal shows an empty list. Silence
+ * there reads as "no opportunities at this notional", sending the reader to
+ * re-tune a size that was never the problem.
  */
 async function loadLeverageMax(
   deps: AppDeps,
   symbols: string[],
   fresh: boolean,
   out: Map<string, number>,
-): Promise<void> {
+): Promise<string | null> {
   let batch: Promise<Map<string, number>> | undefined;
+  let failure: unknown;
   await Promise.all(
     symbols.map(async (symbol) => {
       try {
@@ -153,11 +161,15 @@ async function loadLeverageMax(
           { fresh },
         );
         if (value > 0) out.set(symbol, value);
-      } catch {
+      } catch (err) {
         // Omit the symbol; the math turns that into a reason naming the venue.
+        failure ??= err;
       }
     }),
   );
+  if (symbols.length === 0 || out.size > 0 || failure === undefined) return null;
+  const { category } = classifyGateError(failure);
+  return `Couldn't load the CrossEx risk limits right now (${category}) — without a max leverage per venue no opportunity can model the capital it consumes, so none can be ranked. This isn't about your notional; the caps return on the next refresh.`;
 }
 
 export function opportunitiesRoutes(deps: AppDeps) {
@@ -317,7 +329,9 @@ export function opportunitiesRoutes(deps: AppDeps) {
           );
           venueBooks.set(key, value);
         }),
-        loadLeverageMax(deps, [...perpSymbols], fresh, leverageMaxBySymbol),
+        loadLeverageMax(deps, [...perpSymbols], fresh, leverageMaxBySymbol).then((warning) => {
+          if (warning !== null) warnings.push(warning);
+        }),
       ]);
 
       const result = buildOpportunities(
