@@ -408,19 +408,32 @@ export async function fetchBorosCollaterals(
   });
 }
 
-/** GET /core/v1/pnl/transactions for one collateral zone — paginates fully
- * (fees + open-time detection need the whole history; counts are small). */
+/**
+ * GET /core/v1/pnl/transactions for one collateral zone — paginates fully
+ * (fees + open-time detection need the whole history; counts are small).
+ *
+ * ⚠ Returns its own COVERAGE, not a bare list. The page cap below is a
+ * runaway guard, but an account that reaches it gets a silently truncated
+ * history — and a truncated history is not merely less useful, it is
+ * misleading in one specific way: any reasoning of the form "this fill has no
+ * counterpart nearby, so it was placed alone" is an argument from ABSENCE, and
+ * absence is exactly what truncation fakes. Callers must be able to see the
+ * difference, so `complete` is impossible to receive without noticing.
+ * (The Gate fill fetch already reports its own cap this way.)
+ */
 export async function fetchBorosTransactions(
   fetchImpl: FetchLike,
   address: string,
   tokenId: number,
   accountId = 0,
-): Promise<BorosTxn[]> {
+): Promise<{ txns: BorosTxn[]; complete: boolean }> {
   const limit = 200;
   const all: BorosTxn[] = [];
   // Hard page cap: 25 pages = 5k fills. Beyond that something is wrong (or the
   // account is far outside this feature's scope) — stop rather than hammer.
-  for (let skip = 0, page = 0; page < 25; skip += limit, page += 1) {
+  const maxPages = 25;
+  let complete = false;
+  for (let skip = 0, page = 0; page < maxPages; skip += limit, page += 1) {
     const body = (await getJson(
       fetchImpl,
       `/core/v1/pnl/transactions?userAddress=${address}&accountId=${accountId}&tokenId=${tokenId}&skip=${skip}&limit=${limit}`,
@@ -453,9 +466,15 @@ export async function fetchBorosTransactions(
       });
     }
     const total = Number(body?.total ?? 0);
-    if (skip + limit >= total || results.length === 0) break;
+    // Only a run that reaches the end of the venue's own count is complete.
+    // Falling out of the loop on the page cap is not — that is the case this
+    // flag exists to name.
+    if (skip + limit >= total || results.length === 0) {
+      complete = true;
+      break;
+    }
   }
-  return all;
+  return { txns: all, complete };
 }
 
 /**

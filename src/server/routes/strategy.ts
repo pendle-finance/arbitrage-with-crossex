@@ -235,6 +235,9 @@ export function strategyRoutes(deps: AppDeps) {
           ),
         )
         .map((z) => z.tokenId);
+      /** Zones whose history came back truncated by the page cap. Grouping may
+       * not reason from absence on these — see fetchBorosTransactions. */
+      const truncatedZones: number[] = [];
       const txnsByToken = new Map<number, BorosTxn[]>(
         await Promise.all(
           activeTokenIds.map(async (tokenId): Promise<[number, BorosTxn[]]> => {
@@ -244,7 +247,8 @@ export function strategyRoutes(deps: AppDeps) {
               () => fetchBorosTransactions(fetchImpl, address, tokenId),
               { fresh },
             );
-            return [tokenId, value];
+            if (!value.complete) truncatedZones.push(tokenId);
+            return [tokenId, value.txns];
           }),
         ),
       );
@@ -280,6 +284,14 @@ export function strategyRoutes(deps: AppDeps) {
       const hasPositions = perpPositions !== null && perpPositions.length > 0;
       const positions = perpPositions ?? [];
       const fillWarnings: string[] = [];
+      if (truncatedZones.length > 0) {
+        // Silence here would be the same lie the fill-history cap guards
+        // against: the split degrades to proximity and the user cannot tell a
+        // missing record from a page cap.
+        fillWarnings.push(
+          'Only the most recent Boros transactions could be read, so an older position may be split by proximity instead of by the fills that built it.',
+        );
+      }
       const [venueFees, perpFunding, perpFills] = await Promise.all([
         // Venue fee schedule for the exit-cost estimate (shared cache key with
         // /api/fees). Unavailable → feesUsd.future.perpExitFeesUsd reports
@@ -395,6 +407,7 @@ export function strategyRoutes(deps: AppDeps) {
         perpFills,
         membership,
         capitalBasis,
+        borosHistoryComplete: truncatedZones.length === 0,
         nowSec: Math.floor(Date.now() / 1000),
       });
       if (partitionWarning) fillWarnings.push(partitionWarning);
