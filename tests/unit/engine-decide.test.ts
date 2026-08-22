@@ -1,7 +1,7 @@
 /** Pure-function tests: fx arithmetic, projections, sizing, decide edges. */
 import { describe, expect, it } from 'vitest';
 import { fx, fxFloorToStep, fxStr } from '../../src/engine/fx';
-import { clipBandPrice, decide, project, sizeFor } from '../../src/engine/decide';
+import { clipBandPrice, decide, hedgeBandFor, project, sizeFor } from '../../src/engine/decide';
 import { TUNING, type OrderRow, type PairRow } from '../../src/engine/types';
 import type { DecideCtx } from '../../src/engine/decide';
 import { legSpec, A_CONTRACT, B_CONTRACT } from './engine-sim';
@@ -24,6 +24,7 @@ function pairRow(over?: Partial<PairRow>): PairRow {
     hedgeRejectStreak: 0,
     maxClip: null,
     clipBandBp: null,
+    hedgeBandBp: null,
     haltReason: null,
     reportJson: null,
     createdAt: 0,
@@ -180,13 +181,27 @@ describe('decide edges', () => {
     expect(decide(pair, p, 0, ctx)).toEqual({ type: 'idle', reason: 'frozen: order in doubt' });
   });
 
-  it('hedge outranks everything, in every live mode', () => {
-    for (const mode of ['OPENING', 'CONVERTING', 'STOPPING'] as const) {
+  it('hedge outranks everything and is a directionally-rounded banded LIMIT IOC in every live mode', () => {
+    for (const mode of ['OPENING', 'CONVERTING', 'STOPPING', 'HALTED'] as const) {
       const pair = pairRow({ mode });
       const p = project(pair, [order({ state: 'CLOSED', cumQty: '0.05', closeReason: 'filled' })]);
       const a = decide(pair, p, 0, ctx);
-      expect(a).toMatchObject({ type: 'place', leg: 'B', tif: 'ioc', qty: '0.05' });
+      expect(a).toMatchObject({
+        type: 'place',
+        leg: 'B',
+        tif: 'ioc',
+        qty: '0.05',
+        price: '2487.5',
+      });
     }
+    const buyPair = pairRow({ b: legSpec(B_CONTRACT, 'BUY', { tick: '0.1' }) });
+    const buy = decide(
+      buyPair,
+      project(buyPair, [order({ state: 'CLOSED', cumQty: '0.05', closeReason: 'filled' })]),
+      0,
+      ctx,
+    );
+    expect(buy).toMatchObject({ type: 'place', price: '2512.5' });
   });
 
   it('never places the maker blind (no price → idle)', () => {
@@ -249,5 +264,78 @@ describe('decide edges', () => {
     const p = project(pair, [order({ state: 'CLOSED', cumQty: '0.05', closeReason: 'filled' })]);
     const a = decide(pair, p, 0, ctx);
     expect(a.type).toBe('idle'); // owes a hedge; must not widen the gap with a clip
+  });
+
+  it('fails closed on a missing hedge reference even when minNotional is zero', () => {
+    const pair = pairRow({ b: legSpec(B_CONTRACT, 'SELL', { minNotional: '0' }) });
+    const p = project(pair, [order({ state: 'CLOSED', cumQty: '0.05', closeReason: 'filled' })]);
+    expect(decide(pair, p, 0, { ...ctx, refB: null })).toEqual({
+      type: 'idle',
+      reason: 'hedge deferred: no usable reference price',
+    });
+  });
+
+  it('cancels a partially filled maker immediately when its hedge reference disappears', () => {
+    const pair = pairRow({ b: legSpec(B_CONTRACT, 'SELL', { minNotional: '0' }) });
+    const maker = order({ state: 'OPEN', cumQty: '0.05' });
+    expect(decide(pair, project(pair, [maker]), 0, { ...ctx, refB: null })).toEqual({
+      type: 'cancel',
+      order: maker,
+    });
+  });
+
+  it('widens only while draining, caps deterministically, then lifts for emergency flatten', () => {
+    expect(hedgeBandFor(pairRow({ mode: 'OPENING', hedgeRejectStreak: 5, hedgeBandBp: 40 }))).toBe(40);
+    expect(hedgeBandFor(pairRow({ mode: 'STOPPING', hedgeRejectStreak: 3, hedgeBandBp: 40 }))).toBe(40);
+    expect(hedgeBandFor(pairRow({ mode: 'STOPPING', hedgeRejectStreak: 4, hedgeBandBp: 40 }))).toBe(80);
+    expect(hedgeBandFor(pairRow({ mode: 'HALTED', hedgeRejectStreak: 5, hedgeBandBp: 200 }))).toBe(
+      TUNING.HEDGE_EMERGENCY_MAX_BP,
+    );
+    expect(hedgeBandFor(pairRow({ mode: 'HALTED', hedgeRejectStreak: 6, hedgeBandBp: 40 }))).toBeNull();
+  });
+
+  it('emergency flatten may use MARKET only for already-naked STOPPING/HALTED exposure', () => {
+    const pair = pairRow({
+      mode: 'STOPPING',
+      hedgeRejectStreak: TUNING.HEDGE_EMERGENCY_STREAK,
+      b: legSpec(B_CONTRACT, 'SELL', { minNotional: '200' }),
+    });
+    const p = project(pair, [order({ state: 'CLOSED', cumQty: '0.05', closeReason: 'filled' })]);
+    expect(decide(pair, p, 0, { ...ctx, refB: null })).toEqual({
+      type: 'place',
+      leg: 'B',
+      kind: 'taker',
+      tif: 'ioc',
+      qty: '0.05',
+    });
+  });
+
+  it('uses the loop effective emergency threshold instead of the global default', () => {
+    const policy = { ...TUNING, HEDGE_REJECT_HALT: 2, HEDGE_EMERGENCY_STREAK: 3 };
+    const pair = pairRow({
+      mode: 'STOPPING',
+      hedgeRejectStreak: policy.HEDGE_EMERGENCY_STREAK,
+      b: legSpec(B_CONTRACT, 'SELL', { minNotional: '200' }),
+    });
+    const p = project(pair, [order({ state: 'CLOSED', cumQty: '0.05', closeReason: 'filled' })]);
+    expect(decide(pair, p, 0, { ...ctx, refB: '0', tuning: policy })).toEqual({
+      type: 'place',
+      leg: 'B',
+      kind: 'taker',
+      tif: 'ioc',
+      qty: '0.05',
+    });
+  });
+
+  it('finishes honest named dust without rounding up, while DONE remains terminal', () => {
+    const pair = pairRow({ mode: 'STOPPING' });
+    const p = project(pair, [order({ state: 'CLOSED', qty: '0.0005', cumQty: '0.0005', closeReason: 'filled' })]);
+    const finish = decide(pair, p, 0, ctx);
+    expect(finish).toMatchObject({
+      type: 'finish',
+      report: { aFilled: '0.0005', bFilled: '0', unhedged: '0.0005' },
+    });
+    expect((finish as Extract<typeof finish, { type: 'finish' }>).report.reason).toMatch(/unhedged 0.0005/);
+    expect(decide({ ...pair, mode: 'DONE' }, p, 0, ctx)).toEqual({ type: 'idle', reason: 'done' });
   });
 });

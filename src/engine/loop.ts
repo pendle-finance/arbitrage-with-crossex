@@ -7,7 +7,7 @@
  * committed durable state plus current venue state. There is deliberately no
  * recovery module, no adopt-window, no repeg protocol.
  */
-import { fx, fxStr } from './fx';
+import { fx, fxStr, FX_ZERO } from './fx';
 import { POC_REASON, decide, project, sizeFor, type DecideCtx } from './decide';
 import type { Store } from './db';
 import {
@@ -114,7 +114,7 @@ function applySnapshot(deps: LoopDeps, pair: PairRow, o: OrderRow, snap: OrderSn
   if (newCum > oldCum) patch.cumQty = fxStr(newCum);
   // Persist the venue's average execution price whenever it reports one (it only
   // grows meaningful as fills land) — this is the realized fill price the deal
-  // report reads at finish, and the ONLY price a market/IOC hedge exposes.
+  // report reads at finish, independent of the IOC's protection limit.
   if (snap.avgFillPrice && snap.avgFillPrice !== '0' && snap.avgFillPrice !== o.avgFillPrice) {
     patch.avgFillPrice = snap.avgFillPrice;
   }
@@ -211,6 +211,14 @@ function bumpHedgeWall(deps: LoopDeps, pair: PairRow, now: number): void {
       'error',
       pair.id,
       'hedge wall: repeated hedge attempts are failing — exposure is not being neutralized',
+      now,
+    );
+  }
+  if (streak === tuning(deps).HEDGE_EMERGENCY_STREAK) {
+    deps.store.alert(
+      'error',
+      pair.id,
+      `emergency flatten: slippage cap lifted after ${streak} failed banded attempts — residual naked exposure was the larger risk`,
       now,
     );
   }
@@ -329,6 +337,19 @@ async function performPlace(
     tif: a.tif,
     now,
   });
+  if (
+    a.leg === 'B' &&
+    a.price === undefined &&
+    (pair.mode === 'STOPPING' || pair.mode === 'HALTED') &&
+    pair.hedgeRejectStreak >= tuning(deps).HEDGE_EMERGENCY_STREAK
+  ) {
+    deps.store.alert(
+      'error',
+      pair.id,
+      `emergency flatten: slippage cap lifted after ${tuning(deps).HEDGE_EMERGENCY_STREAK} failed banded attempts — residual naked exposure was the larger risk`,
+      now,
+    );
+  }
   // Maker placements update the price intent: "maker price ≠ intent" is exactly
   // the re-peg trigger, so the intent must track what we actually placed.
   if (a.kind === 'maker' && a.price !== undefined) {
@@ -497,11 +518,16 @@ export async function tickPair(deps: LoopDeps, pairId: string): Promise<Action> 
   const frozen = proj.anyPending || proj.anyQuarantined;
   const needTouch =
     !frozen && pair.mode === 'OPENING' && pair.pricePolicy === 'touch' && proj.makerOrder?.state !== 'OPEN';
-  // A reference price is needed ONLY for a min-notional sizing check (taker legs
-  // are plain MARKET, so no band pricing). Fetch it only when a leg with a
-  // min-notional is actually about to submit.
+  // Every owed hedge needs a sane fresh book reference: normal catches are
+  // banded LIMIT IOC, independent of minNotional. Missing/crossed/wide books
+  // feed the same wall even when minNotional=0. Once the drain ladder has
+  // explicitly lifted its cap, MARKET no longer waits on a reference fetch.
   const hedgeOwed = !frozen && pair.b !== null && fx(proj.unhedged) > 0n;
-  const needRefB = hedgeOwed && fx(pair.b!.minNotional) > 0n;
+  const effectiveTuning = tuning(deps);
+  const emergencyMarket =
+    (pair.mode === 'STOPPING' || pair.mode === 'HALTED') &&
+    pair.hedgeRejectStreak >= effectiveTuning.HEDGE_EMERGENCY_STREAK;
+  const needRefB = hedgeOwed && !emergencyMarket;
   // refA prices the min-notional check AND — when the deal carries a slippage
   // band (every close does) — the marketable-limit clip itself, so it must be
   // fetched in that case too or decide() can only defer.
@@ -512,35 +538,23 @@ export async function tickPair(deps: LoopDeps, pairId: string): Promise<Action> 
     (fx(pair.a.minNotional) > 0n || pair.clipBandBp !== null);
   const ctx: DecideCtx = {
     touchA: needTouch ? await deps.venue.touch(pair.a.contract, pair.a.side, pair.a.tick) : null,
-    // '0' (unused) when no hedge is owed; a real fetch only when one is.
+    // '0' is the explicit "not fetched" sentinel (no obligation or emergency MARKET).
     refB: needRefB ? await deps.venue.refPrice(pair.b!.contract) : '0',
     refA: needRefA ? await deps.venue.refPrice(pair.a.contract) : '0',
-    maxClip: pair.maxClip ?? tuning(deps).MAX_CLIP,
+    maxClip: pair.maxClip ?? effectiveTuning.MAX_CLIP,
+    tuning: effectiveTuning,
   };
-  // A hedge that cannot be SIZED is a hedge wall like any other. refPrice()
-  // returns null on any failure — unsupported venue, a wrong native symbol, a
-  // venue outage, a book slower than the 2.5s timeout — and with a positive
-  // min_notional (every CrossEx FUTURE symbol has one) sizeFor then answers
-  // "cannot size safely". No B order is created, so no terminal is ever
-  // observed, so bumpHedgeWall is never called from applySnapshot and
-  // hedgeRejectStreak stays 0 forever: the HEDGE_REJECT_HALT transition was
-  // unreachable and a naked deal could sit in an 'active' mode indefinitely
-  // with no operator signal. Count it here instead.
-  //
-  // Gated on the residual being genuinely SUBMITTABLE, not merely positive:
-  // sizeFor answers FX_ZERO for sub-lot/sub-minSize dust before ever consulting
-  // the ref price, and dust is the steady state between fills whenever leg A's
-  // lot is finer than leg B's. Such a residual is unhedgeable whatever the book
-  // says, no B order is ever submitted for it, and the streak's only reset is a
-  // B fill — so counting dust here would let isolated ref-price blips, even
-  // hours apart, ratchet a healthy deal into a spurious HALT. Only when sizeFor
-  // says "cannot size safely" (null: a whole number of lots blocked purely by
-  // the missing ref) is the null ref a real hedge wall. Backoff-gated, so it
-  // increments at most once per HEDGE_BACKOFF_MS rather than once per tick.
+  // A hedge blocked by an unusable book is a hedge wall like any other.
+  // refPrice() returns null on fetch failure, unsupported venues, crossed books,
+  // and absurd spreads. No B order is created, so no terminal can bump the wall;
+  // count it here. The dust gate is intentionally sizeFor's floor/minSize result:
+  // a sub-lot residual is permanently unsubmittable and must not ratchet a
+  // healthy deal into HALTED. With minNotional>0, sizeFor returns null; with
+  // minNotional=0 it returns a positive size. Both are genuine walls.
   if (
     needRefB &&
     ctx.refB === null &&
-    sizeFor(fx(proj.unhedged), pair.b!, null) === null &&
+    sizeFor(fx(proj.unhedged), pair.b!, null) !== FX_ZERO &&
     deps.clock.now() >= pair.hedgeNotBefore
   ) {
     bumpHedgeWall(deps, pair, deps.clock.now());

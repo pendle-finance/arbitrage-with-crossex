@@ -175,7 +175,7 @@ describe('GET /api/strategy/:address', () => {
     const pairDefaults = {
       targetQty: '531', limitPrice: null, pricePolicy: 'touch' as const, deadlineAt: null,
       makerNotBefore: 0, hedgeNotBefore: 0, pocRejects: 0, hedgeRejectStreak: 0,
-      maxClip: null, clipBandBp: null, haltReason: null, mode: 'DONE' as const,
+      maxClip: null, clipBandBp: null, hedgeBandBp: null, haltReason: null, mode: 'DONE' as const,
     };
     store.createPair({
       ...pairDefaults,

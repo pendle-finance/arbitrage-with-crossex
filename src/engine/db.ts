@@ -42,6 +42,7 @@ CREATE TABLE IF NOT EXISTS pair (
   hedge_reject_streak INTEGER NOT NULL DEFAULT 0,
   max_clip TEXT,
   clip_band_bp INTEGER,
+  hedge_band_bp INTEGER,
   halt_reason TEXT,
   report_json TEXT,
   created_at INTEGER NOT NULL
@@ -97,6 +98,7 @@ interface PairDbRow {
   hedge_reject_streak: number;
   max_clip: string | null;
   clip_band_bp: number | null;
+  hedge_band_bp: number | null;
   halt_reason: string | null;
   report_json: string | null;
   created_at: number;
@@ -147,6 +149,7 @@ function toPair(r: PairDbRow): PairRow {
     hedgeRejectStreak: r.hedge_reject_streak,
     maxClip: r.max_clip,
     clipBandBp: r.clip_band_bp,
+    hedgeBandBp: r.hedge_band_bp,
     haltReason: r.halt_reason,
     reportJson: r.report_json,
     createdAt: r.created_at,
@@ -269,15 +272,19 @@ export class Store {
    * SQLite has no "ADD COLUMN IF NOT EXISTS", so probe table_info and add when
    * missing. Additive-only: existing rows keep their data. */
   private migrate(): void {
-    const cols = this.db.prepare(`PRAGMA table_info(orders)`).all() as unknown as { name: string }[];
-    if (!cols.some((c) => c.name === 'avg_fill_price')) {
+    const orderCols = this.db.prepare(`PRAGMA table_info(orders)`).all() as unknown as { name: string }[];
+    if (!orderCols.some((c) => c.name === 'avg_fill_price')) {
       this.db.exec(`ALTER TABLE orders ADD COLUMN avg_fill_price TEXT NOT NULL DEFAULT '0'`);
     }
-    if (!cols.some((c) => c.name === 'venue_reason')) {
+    if (!orderCols.some((c) => c.name === 'venue_reason')) {
       this.db.exec(`ALTER TABLE orders ADD COLUMN venue_reason TEXT`);
     }
-    if (!cols.some((c) => c.name === 'read_fail_streak')) {
+    if (!orderCols.some((c) => c.name === 'read_fail_streak')) {
       this.db.exec(`ALTER TABLE orders ADD COLUMN read_fail_streak INTEGER NOT NULL DEFAULT 0`);
+    }
+    const pairCols = this.db.prepare(`PRAGMA table_info(pair)`).all() as unknown as { name: string }[];
+    if (!pairCols.some((c) => c.name === 'hedge_band_bp')) {
+      this.db.exec(`ALTER TABLE pair ADD COLUMN hedge_band_bp INTEGER`);
     }
   }
 
@@ -293,8 +300,8 @@ export class Store {
            b_contract, b_side, b_lot, b_min_size, b_min_notional, b_tick, b_reduce_only,
            target_qty, limit_price, price_policy, deadline_at,
            maker_not_before, hedge_not_before, poc_rejects, hedge_reject_streak,
-           max_clip, clip_band_bp, halt_reason, report_json, created_at)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+           max_clip, clip_band_bp, hedge_band_bp, halt_reason, report_json, created_at)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       )
       .run(
         p.id, p.mode,
@@ -303,7 +310,7 @@ export class Store {
         p.b?.minSize ?? null, p.b?.minNotional ?? null, p.b?.tick ?? null, p.b?.reduceOnly ? 1 : 0,
         p.targetQty, p.limitPrice, p.pricePolicy, p.deadlineAt,
         p.makerNotBefore, p.hedgeNotBefore, p.pocRejects, p.hedgeRejectStreak,
-        p.maxClip, p.clipBandBp, p.haltReason, p.reportJson, p.createdAt,
+        p.maxClip, p.clipBandBp, p.hedgeBandBp, p.haltReason, p.reportJson, p.createdAt,
       );
   }
 
@@ -443,8 +450,8 @@ export class Store {
   /** Quantity-weighted average fill price for a leg — Σ(cum·avg) ÷ Σ(cum) over
    * the leg's ORDER rows, each weighted by its venue-reported cumulative fill and
    * average execution price. This is the price the leg actually executed at
-   * across every partial + re-peg (leg A) or every clip (leg B), and is the ONLY
-   * fill price available for a market/IOC hedge (whose order price is null).
+   * across every partial + re-peg (leg A) or every clip (leg B). The venue
+   * execution average, not the submitted limit, is the realized fill price.
    * Orders that never filled (cum 0) or lack a venue avg (0) are skipped; null
    * when no order on the leg has a usable fill. A malformed venue price is
    * skipped rather than crashing the fold. */

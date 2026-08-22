@@ -21,8 +21,14 @@ Share a position, explain a stopped deal, and a Windows service that stays hidde
   limit price was through the market, so the order could never rest — the report used to read a
   bare "stopped". It now names the cause and points you back to the order form for a fresh price.
 - **The live deal graph shows what the hedge will pay.** While Leg A rests, the Leg B column draws
-  the market order the deal fires, sized to everything still unhedged and refreshed as it runs. A
+  the IOC hedge the deal fires, sized to everything still unhedged and refreshed as it runs. A
   simulation off the venue book, not a promised fill.
+- **Hedge catches now have a fail-closed slippage guard.** Normal hedges are marketable LIMIT IOC
+  orders capped at 0.5% around a fresh, sane hedge-book midpoint; a missing, crossed, or absurdly
+  wide book stops new acquisition and feeds the existing hedge wall instead of falling back to an
+  unpriced market sweep. Stop/Halt drain mode widens that cap deterministically to 3%, then raises a
+  persistent error and may lift it only to flatten exposure that is already naked, so the guard
+  cannot make an exit permanently unhedgeable.
 - **The Windows background service no longer pops up a terminal window at logon** — and closing
   that window used to kill the supervisor that restarts the server. Existing installs pick the fix
   up by re-running the install command. It came in as a pull request from HubertHalim — thank you.
@@ -62,7 +68,7 @@ Security pass, acting on an external audit (its findings, and what remains open,
 - **The local API requires a token.** Binding to loopback never stopped another local
   process from trading; every `/api` route except the installer's health probe now needs a
   per-install token stored 0600 beside your keys. Your browser gets it from the page, so the
-  bookmarked http://localhost:6688 is unchanged. Scripting the API needs the `x-arb-token`
+  bookmarked <http://localhost:6688> is unchanged. Scripting the API needs the `x-arb-token`
   header — see the README.
 - **Hand-cancelling can no longer abandon a live deal.** The refusal guard now covers the
   client-text id the venue also accepts, and the window where an order is live on the venue

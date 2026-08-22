@@ -111,6 +111,7 @@ describe('PUT /api/credentials', () => {
       hedgeRejectStreak: 0,
       maxClip: null,
       clipBandBp: null,
+      hedgeBandBp: null,
       haltReason: null,
       reportJson: null,
       createdAt: Date.now(),

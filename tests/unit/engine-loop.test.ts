@@ -196,7 +196,9 @@ describe('hedge leg unsizable (no reference price)', () => {
 
     expect(w.venue.truth().bTrue).toBe(fx('0')); // nothing hedged it
     const beforeAcquired = w.venue.truth().aTrue;
-    await w.step(15); // backoff 3s / tick 1s → the wall crosses HEDGE_REJECT_HALT
+    for (let i = 0; i < 15 && w.store.getPair(w.pairId)!.mode !== 'HALTED'; i++) {
+      await stepChecked(w); // backoff 3s / tick 1s → wall reaches the halt threshold
+    }
 
     const pair = w.store.getPair(w.pairId)!;
     expect(pair.hedgeRejectStreak).toBeGreaterThanOrEqual(TUNING.HEDGE_REJECT_HALT);
@@ -205,6 +207,25 @@ describe('hedge leg unsizable (no reference price)', () => {
     expect(w.venue.truth().aTrue).toBe(beforeAcquired);
     expect(w.venue.liveOrder(A_CONTRACT)).toBeUndefined(); // and it is not left resting
     assertInvariants(w);
+  });
+
+  it('counts a missing hedge reference as a wall even when minNotional is zero', async () => {
+    const w = mkWorld({ b: { minNotional: '0' } });
+    await stepChecked(w);
+    const maker = w.venue.liveOrder(A_CONTRACT)!;
+    w.venue.fill(maker.clientText, '0.05');
+    w.venue.refPrices.delete(B_CONTRACT);
+    await stepChecked(w);
+    expect(w.venue.liveOrder(A_CONTRACT)).toBeUndefined(); // acquisition stops on the first failed ref read
+    for (let i = 0; i < 14 && w.store.getPair(w.pairId)!.mode !== 'HALTED'; i++) {
+      await stepChecked(w);
+    }
+
+    const pair = w.store.getPair(w.pairId)!;
+    expect(pair.hedgeRejectStreak).toBeGreaterThanOrEqual(TUNING.HEDGE_REJECT_HALT);
+    expect(pair.mode).toBe('HALTED');
+    expect(w.venue.truth()).toEqual({ aTrue: fx('0.05'), bTrue: fx('0') });
+    expect(w.venue.liveOrder(A_CONTRACT)).toBeUndefined();
   });
 
   it('resumes normally once the reference price comes back', async () => {
@@ -617,6 +638,37 @@ describe('review regressions', () => {
     expect(alerts.some((a) => /hedge wall/.test(a.message))).toBe(true);
   });
 
+  it('[R2b] STOPPING widens deterministically, then emergency-flattens and finishes honestly', async () => {
+    const w = mkWorld({ hedgeBandBp: 50 });
+    await stepChecked(w);
+    const maker = w.venue.liveOrder(A_CONTRACT)!;
+    w.venue.fill(maker.clientText, '0.05');
+    commands.stop(w.store, w.pairId);
+    w.venue.nextIocFill = [0, 0, 0, 0, 0, 0, 1];
+    await stepChecked(w, 50);
+
+    const hedges = [...w.venue.orders.values()].filter((o) => o.contract === B_CONTRACT);
+    expect(hedges.map((o) => o.price)).toEqual([
+      '2487.5',
+      '2487.5',
+      '2487.5',
+      '2487.5',
+      '2475',
+      '2450',
+      null,
+    ]);
+    const pair = w.store.getPair(w.pairId)!;
+    expect(pair.mode).toBe('DONE');
+    expect(JSON.parse(pair.reportJson!)).toMatchObject({ aFilled: '0.05', bFilled: '0.05', unhedged: '0' });
+    expect(
+      w.store
+        .listAlerts({ unackedOnly: true })
+        .some((a) => /emergency flatten: slippage cap lifted after 6 failed banded attempts/.test(a.message)),
+    ).toBe(true);
+    assertHonestReport(w);
+    assertInvariants(w);
+  });
+
   it('[R3] stop() on a HALTED pair sticks (the wall no longer re-halts a STOPPING pair)', async () => {
     const w = mkWorld();
     await stepChecked(w);
@@ -755,6 +807,7 @@ describe('cutover-review regressions', () => {
         hedgeRejectStreak: 0,
         maxClip: null,
         clipBandBp: null,
+        hedgeBandBp: null,
         haltReason: null,
         reportJson: null,
         createdAt: 0,
@@ -795,7 +848,7 @@ describe('cutover-review regressions', () => {
       b: { contract: B_CONTRACT, side: 'SELL', lot: '0.001', minSize: '0', minNotional: '0', tick: '0.01' },
       targetQty: '0.2', limitPrice: '100', pricePolicy: 'fixed', deadlineAt: null,
       makerNotBefore: 0, hedgeNotBefore: 0, pocRejects: 0, hedgeRejectStreak: 0,
-      maxClip: null, clipBandBp: null, haltReason: null, reportJson: null, createdAt: 0,
+      maxClip: null, clipBandBp: null, hedgeBandBp: null, haltReason: null, reportJson: null, createdAt: 0,
     });
     const filled = (leg: 'A' | 'B', side: 'BUY' | 'SELL', cum: string, avg: string) => {
       const o = store.insertPendingOrder({ pairId: 'p1', leg, kind: 'maker', side, qty: cum, price: avg, tif: 'poc', now: 0 });
@@ -824,7 +877,7 @@ describe('cutover-review regressions', () => {
       b: { contract: B_CONTRACT, side: 'BUY' as const, lot: '0.001', minSize: '0', minNotional: '0', tick: '0.01' },
       targetQty: '1', limitPrice: null, pricePolicy: 'touch' as const, deadlineAt: null,
       makerNotBefore: 0, hedgeNotBefore: 0, pocRejects: 0, hedgeRejectStreak: 0,
-      maxClip: null, clipBandBp: null, haltReason: null,
+      maxClip: null, clipBandBp: null, hedgeBandBp: null, haltReason: null,
     };
     const report = JSON.stringify({ aFilled: '1', bFilled: '1', unhedged: '0', reason: 'target reached', aAvgFill: '100.5', bAvgFill: '100.6' });
     // Usable, out of created_at order to pin the ORDER BY.
@@ -897,7 +950,7 @@ describe('cutover-review regressions', () => {
     expect(JSON.parse(pair.reportJson!).reason).toContain('failing repeatedly');
   });
 
-  it('[C5] a close PAIR completes both legs as MARKET (venue-band protected, no price-limit reject)', async () => {
+  it('[C5] a close pair uses banded LIMIT IOC legs and still finishes honestly', async () => {
     const w = mkWorld({
       mode: 'CONVERTING',
       a: { side: 'SELL', reduceOnly: true },
@@ -906,11 +959,12 @@ describe('cutover-review regressions', () => {
       clipBandBp: 50,
     });
     await stepChecked(w, 8);
+    const aOrders = [...w.venue.orders.values()].filter((o) => o.contract === A_CONTRACT);
     const bOrders = [...w.venue.orders.values()].filter((o) => o.contract === B_CONTRACT);
-    expect(bOrders.length).toBeGreaterThan(0);
-    // Both close legs are plain MARKET IOC — no book-mid limit that the venue's
-    // own price-limit band could reject; reduce-only keeps them safe.
-    expect(bOrders.every((o) => o.price === null && o.reduceOnly && o.tif === 'ioc')).toBe(true);
+    expect(aOrders).toHaveLength(1);
+    expect(bOrders).toHaveLength(1);
+    expect(aOrders[0]).toMatchObject({ price: '2487.5', reduceOnly: true, tif: 'ioc' });
+    expect(bOrders[0]).toMatchObject({ price: '2512.5', reduceOnly: true, tif: 'ioc' });
     assertHonestReport(w);
   });
 
