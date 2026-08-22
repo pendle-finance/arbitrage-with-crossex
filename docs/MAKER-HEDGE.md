@@ -40,6 +40,7 @@ CREATE TABLE pair (            -- THE intent. User commands edit THIS ROW only.
   deadline_at INTEGER,                    -- maker timeout: level check now() >= deadline_at
   maker_not_before INTEGER, hedge_not_before INTEGER,   -- anti-flap backoff
   poc_rejects INTEGER, hedge_reject_streak INTEGER,
+  hedge_band_bp INTEGER,                 -- normal hedge LIMIT-IOC cap; null = 50bp default
   halt_reason TEXT, report_json TEXT,     -- honest terminal report (pure projection)
   created_at INTEGER
 );
@@ -87,18 +88,22 @@ double-counted.
 ## State machines
 
 **Pair modes:**
+
 ```
 OPENING ──deadline / convert-now──► CONVERTING ──residual done──► DONE
 OPENING ──user stop / venue-cancel-not-ours──► STOPPING ──settled──► DONE
-OPENING|CONVERTING|STOPPING ──hedge_reject_streak ≥ N──► HALTED ──user resume──► STOPPING
+OPENING|CONVERTING ──hedge_reject_streak ≥ N──► HALTED ──user stop/resume──► STOPPING
 OPENING ──target filled & hedged──► DONE
 ```
-- **OPENING** — one live POC maker for `(target − A_reserved)` at `limit_price`; hedge everything A filled.
+
+- **OPENING** — one live POC maker for `(target − A_reserved)` at `limit_price`; hedge fills with a
+  marketable LIMIT IOC capped at the configured fresh-book band.
 - **CONVERTING** — maker canceled; A residual completed via taker IOC clips; hedge everything A filled.
   (Timeout and manual convert are the same mode — one code path.)
-- **STOPPING** — maker canceled; no new A exposure; hedge what filled; finish honestly partial.
-- **HALTED** — hedge hit a persistent wall; slow hedge retries continue; **never** auto-completes A.
-  Terminal-until-human.
+- **STOPPING** — maker canceled; no new A exposure; drain what filled, widening the hedge band
+  deterministically; finish honestly partial.
+- **HALTED** — hedge hit a persistent wall; maker canceled, A never auto-completes, but risk-reducing hedge
+  retries continue through the same drain ladder. Terminal-until-human after the exposure is neutralized.
 - **DONE** — terminal; `report_json` is a pure projection {aFilled, bFilled, unhedged dust, per-leg
   average fill price, reason}.
 
@@ -117,6 +122,7 @@ derivable from durable state alone, never reused, alphanumeric-only (Gate enforc
 accepts only letters/digits; reuse would destroy resolvability).
 
 **Placement = write-ahead intent:**
+
 ```
 BEGIN IMMEDIATE: INSERT orders(state='PENDING', qty, client_id...); COMMIT   -- fsynced reservation
 wire: createOrder(text=client_id)                                            -- strictly AFTER commit
@@ -126,11 +132,13 @@ outcome (three-way, never two-way):
                              insufficient margin, bad size, …; anything else is NOT definite)
   anything else (timeout, conn reset, ANY 5xx, unmatched label) → stays PENDING = in doubt
 ```
+
 Unknown-shaped errors default to *in doubt*, not *rejected* (the venue's own doctrine: an HTTP 5xx status
 is UNKNOWN and could have been a success) — and the freeze rule means an in-doubt order blocks all new
 placement on the pair.
 
 **Resolution ladder** (top of every tick, for every PENDING order):
+
 1. GET by `venue_order_id` if known, else GET by client text (must be prompt — Gate's text lookup dies
    ~60s post-terminal; the ~1s tick satisfies this in normal operation).
 2. A failed read resolves nothing → stay PENDING.
@@ -152,6 +160,7 @@ venue reads (monotone; a shrink alerts as corruption). Re-reading after a crash 
 replay-proof by construction.
 
 **Reservation accounting (the no-double-spend spine):**
+
 ```
 reserved(o) = qty      if state ∈ {PENDING, OPEN}    -- in-doubt counts FULL (pessimism → under-hedge only)
             = cum_qty  if CLOSED                       -- final CumQty
@@ -160,11 +169,13 @@ A_reserved, A_filled, B_reserved, B_filled = folds over orders
 unhedged  = A_filled − B_reserved                      -- what we may still hedge
 residualA = target   − A_reserved                      -- what we may still acquire
 ```
+
 Every new order's size is computed from these projections and committed as a PENDING reservation *before*
 the wire call, atomically, by the single writer. That sentence is the whole no-double-hedge /
 no-double-buy argument.
 
 **The tick (~1s):**
+
 ```
 OBSERVE: resolve all PENDING (ladder) → re-read OPEN orders (cum_qty monotone merge, capture avg fill)
 PROJECT: pure fold → {A_filled, A_reserved, B_filled, B_reserved, unhedged, residualA, dust,
@@ -172,17 +183,22 @@ PROJECT: pure fold → {A_filled, A_reserved, B_filled, B_reserved, unhedged, re
 DECIDE (pure function → ONE action):
   if mode=DONE → idle;  if anyPending or anyQuarantined → idle (FREEZE)
   level mode-edits: deadline passed → CONVERTING;  maker CLOSED+cancelled+!cancel_requested → STOPPING
-    (venue cancel = user STOP);  hedge_reject_streak ≥ N → HALTED (cancel maker, never complete)
-  PRIORITY 1 in every mode: unhedged ≥ lotB && past backoff → place hedge IOC floorLot(unhedged)
+    (venue cancel = user STOP); acquiring mode + hedge_reject_streak ≥ N → HALTED (cancel maker)
+  PRIORITY 1 in every mode: unhedged ≥ lotB && past backoff:
+    fresh sane book midpoint → place hedge LIMIT IOC floorLot(unhedged) @ midpoint ± hedge_band_bp
+    OPENING/CONVERTING: missing/crossed/>5%-wide book or whiff/reject → wall; never place blind
+    STOPPING/HALTED: band = min(base·2^max(0, streak−3), 300bp);
+                     at streak 6 lift the cap with a persistent error alert and MARKET only already-naked qty
   OPENING:    maker not OPEN → place POC (target − A_reserved) @ touch (after poc backoff);
               maker price ≠ intent → cancel (re-peg = intent edit + converge)
   CONVERTING: maker OPEN → cancel; else residualA ≥ lotA && unhedged < lotB
               → taker IOC min(residualA, MAX_CLIP)     -- hedge-first gating + clip caps exposure
   STOPPING:   maker OPEN → cancel; else finishIfSettled
-  HALTED:     idle (hedge branch retries slowly)
+  HALTED:     idle after the priority hedge branch (never acquire)
 ACT: perform the one action (place = write-ahead protocol; cancel = idempotent + observed)
 schedule next tick (setTimeout chain)
 ```
+
 Post-only rejects (create-time or accept-then-insta-cancel) need no special path: they collapse to "maker
 not OPEN" next tick → requote at the fresh touch after backoff, bounded by a `poc_rejects` budget →
 STOPPING. Convert idempotency needs no memory: taker size is recomputed each tick as `target − A_reserved`,
@@ -221,7 +237,8 @@ depended on witnessing an event, only on current durable state + current venue s
 | POC reject / insta-cancel | Both collapse to "maker not OPEN" → requote after backoff; `poc_rejects` budget |
 | Read failures / finite listings | Failed read resolves nothing; declare-dead needs authoritative not-found ∧ window expiry ∧ **provable listing coverage** |
 | User actions | Intent levels; venue cancel detected by `cancel_requested=0` → STOPPING |
-| Hedge walls | Reject/whiff streak → HALTED: cancel maker, slow retries, alert; never auto-complete |
+| Hedge slippage / broken books | Normal catches are marketable LIMIT IOC at a validated/default 50bp band around a fresh sane midpoint; one-sided, crossed, or >5%-wide books are unavailable |
+| Hedge walls | Missing reference, reject, or whiff streak → HALTED in acquiring modes and maker cancel; STOPPING/HALTED widen 50→100→200→300bp, then lift the cap at streak 6 with a persistent error only to flatten already-naked exposure |
 | Lots / dust | Floor-only sizing (no round-up path exists); dust = permanent projection + report line |
 | Convert idempotency / margin races | Sizes from reservations (replay-safe); taker gated on maker CLOSED; one wire mutation program-wide + hedge-first ⇒ serial margin |
 | Double process / power loss | EXCLUSIVE lock; WAL + FULL fsync |
@@ -238,14 +255,15 @@ depended on witnessing an event, only on current durable state + current venue s
 - **I2 — Under-hedge is visible and bounded.** `unhedged` / `dust` are pure projections rendered
   continuously and embedded in the terminal report; alerts are unacked rows, not fire-once events. Healthy
   bound: one tick. A wall halts A-side acquisition, capping exposure at what already filled.
-- **I3 — Honest terminals.** DONE / HALTED require zero PENDING/quarantined, venue-confirmed final cums,
-  and `unhedged < 1 lot` (or HALTED naming the shortfall); `report_json` is a fold over the reconciled
-  ledger — it cannot claim more hedged than observed or hide dust.
+- **I3 — Honest terminals.** DONE requires zero PENDING/quarantined, venue-confirmed final cums, and
+  `unhedged < 1 lot`; `report_json` is a fold over the reconciled ledger — it cannot claim more hedged than
+  observed or hide dust. HALTED may still name live exposure, and its drain ladder keeps reducing it.
 
 ## Verification
 
 Deterministic simulation, FoundationDB/TigerBeetle-style — the design is shaped to make it cheap (clock,
 venue, and DB behind interfaces):
+
 1. **Fake venue** with an adversarial script: UNKNOWN outcomes (deliver-but-timeout, timeout-but-deliver),
    POC rejects + accept-then-insta-cancel, partial fills during pending cancel, unknown status strings,
    margin walls, listing truncation.
@@ -260,7 +278,6 @@ Gate that verifies the venue-behavior assumptions (text-as-orderId GET on CrossE
 
 ## Deliberately out of scope / accepted risks
 
-- Hedge slippage quality (market IOC; a slippage circuit-breaker slots into `decide()` later).
 - WebSocket feeds — they would only pre-fill OBSERVE; polling is correctness-complete.
 - No dead-man's switch on CrossEx: exposure during downtime is bounded by restart speed, reconciled on the
   first tick.

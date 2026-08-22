@@ -14,6 +14,7 @@ import {
   type PairRow,
   type Projection,
   type Report,
+  type Tuning,
 } from './types';
 
 /** A close reason counts as a post-only rejection (requote), not a user STOP. */
@@ -102,6 +103,8 @@ export interface DecideCtx {
   /** Reference price on the maker contract for min-notional sizing of convert clips. */
   refA: string | null;
   maxClip: string;
+  /** Effective loop policy. Optional only for direct pure-function callers. */
+  tuning?: Pick<Tuning, 'HEDGE_REJECT_HALT' | 'HEDGE_EMERGENCY_STREAK' | 'HEDGE_EMERGENCY_MAX_BP'>;
 }
 
 /** Marketable-limit price for a banded clip: ref·(1 ± bandBp/10000),
@@ -125,6 +128,23 @@ export function clipBandPrice(ref: string, leg: LegSpec, bandBp: number): string
     return stripZeros(roundToStep(capped, leg.tick, dir));
   }
   return fxStr(raw);
+}
+
+/** Effective hedge band is a pure fold of durable deal state. Acquiring modes
+ * always retain the configured cap. Once acquisition has stopped, each full
+ * hedge-wall threshold step doubles the cap up to the emergency maximum; after
+ * the persistent emergency streak the cap is lifted only to drain exposure that
+ * is already naked. Null therefore means MARKET only in STOPPING/HALTED. */
+export function hedgeBandFor(
+  pair: PairRow,
+  policy: Pick<Tuning, 'HEDGE_REJECT_HALT' | 'HEDGE_EMERGENCY_STREAK' | 'HEDGE_EMERGENCY_MAX_BP'> = TUNING,
+): number | null {
+  const base = pair.hedgeBandBp ?? TUNING.HEDGE_BAND_BP;
+  const draining = pair.mode === 'STOPPING' || pair.mode === 'HALTED';
+  if (!draining) return base;
+  if (pair.hedgeRejectStreak >= policy.HEDGE_EMERGENCY_STREAK) return null;
+  const step = Math.max(0, pair.hedgeRejectStreak - policy.HEDGE_REJECT_HALT);
+  return Math.min(base * 2 ** step, policy.HEDGE_EMERGENCY_MAX_BP);
 }
 
 function report(pair: PairRow, p: Projection, reason: string): Report {
@@ -178,6 +198,7 @@ function finishIfSettled(pair: PairRow, p: Projection, reason: string, hedgeSize
  * Returns exactly ONE action; the loop performs at most one wire mutation per tick.
  */
 export function decide(pair: PairRow, p: Projection, now: number, ctx: DecideCtx): Action {
+  const policy = ctx.tuning ?? TUNING;
   if (pair.mode === 'DONE') return { type: 'idle', reason: 'done' };
 
   const m = p.makerOrder;
@@ -244,7 +265,7 @@ export function decide(pair: PairRow, p: Projection, now: number, ctx: DecideCtx
   // maker and stops acquisition, so re-halting it would swallow a user STOP
   // (stop-on-HALTED must stick; the wall stays visible via the streak alert).
   if (
-    pair.hedgeRejectStreak >= TUNING.HEDGE_REJECT_HALT &&
+    pair.hedgeRejectStreak >= policy.HEDGE_REJECT_HALT &&
     (pair.mode === 'OPENING' || pair.mode === 'CONVERTING')
   ) {
     return {
@@ -256,21 +277,46 @@ export function decide(pair: PairRow, p: Projection, now: number, ctx: DecideCtx
   }
 
   // ---- hedge catch-up: priority 1 in every live mode (slow retries in HALTED).
-  // hedgeSized: >0n = submit now; 0n = provably unsubmittable (dust); null =
-  // cannot size safely (min-notional needs a reference price we don't have).
-  // Single-leg deals (no B) have no hedge obligation by definition: 0n.
-  // On backoff/null we still FALL THROUGH: a STOPPING/HALTED maker cancel must
-  // never wait on the hedge leg, and every branch that could WIDEN the gap
-  // gates on `hedgeOwed` itself, so the obligation is never lost.
-  const hedgeSized = pair.b ? sizeFor(fx(p.unhedged), pair.b, ctx.refB) : FX_ZERO;
+  // Normal acquisition always uses a marketable LIMIT IOC around a sane fresh
+  // book reference. A missing reference is a wall, even when minNotional=0.
+  // STOPPING/HALTED widen deterministically, then may lift the cap only after
+  // the persistent emergency streak to reduce exposure that is already naked.
+  const hedgeRef = ctx.refB && ctx.refB !== '0' ? ctx.refB : null;
+  const hedgeSized = pair.b ? sizeFor(fx(p.unhedged), pair.b, hedgeRef) : FX_ZERO;
+  const emergencyMarket =
+    pair.b !== null &&
+    (pair.mode === 'STOPPING' || pair.mode === 'HALTED') &&
+    pair.hedgeRejectStreak >= policy.HEDGE_EMERGENCY_STREAK;
+  // Emergency flatten can still preserve lot/minSize floor-only sizing without
+  // a reference. Only the min-notional check is unknowable; the venue remains
+  // authoritative and a reject feeds the same durable wall/backoff.
+  const hedgePlaceSized =
+    emergencyMarket && hedgeSized === null && pair.b
+      ? sizeFor(fx(p.unhedged), { ...pair.b, minNotional: '0' }, null)
+      : hedgeSized;
   const hedgeOwed =
-    pair.b !== null && (hedgeSized === null ? fx(p.unhedged) >= fx(pair.b.lot) : hedgeSized > FX_ZERO);
-  if (now >= pair.hedgeNotBefore && hedgeSized !== null && hedgeSized > FX_ZERO && pair.b) {
-    // Taker legs are pure MARKET IOC. The venue crosses within ITS OWN price-
-    // limit band (measured against its mark), which IS the slippage protection;
-    // a book-mid-derived LIMIT band can't reliably stay inside that venue band
-    // and gets price-limit-rejected, blocking the fill. Reduce-only can't flip.
-    return { type: 'place', leg: 'B', kind: 'taker', tif: 'ioc', qty: fxStr(hedgeSized) };
+    pair.b !== null &&
+    (hedgeSized === null ? fx(p.unhedged) >= fx(pair.b.lot) : hedgeSized > FX_ZERO);
+  if (now >= pair.hedgeNotBefore && hedgePlaceSized !== null && hedgePlaceSized > FX_ZERO && pair.b) {
+    const band = hedgeBandFor(pair, policy);
+    if (band === null) {
+      return { type: 'place', leg: 'B', kind: 'taker', tif: 'ioc', qty: fxStr(hedgePlaceSized) };
+    }
+    if (hedgeRef === null) {
+      // A resting maker can keep filling while a normal banded hedge is
+      // impossible. Cancel acquisition on the first failed reference read,
+      // including minNotional=0 legs that can otherwise be sized without it.
+      if (pair.mode === 'OPENING' && m?.state === 'OPEN') return { type: 'cancel', order: m };
+      return { type: 'idle', reason: 'hedge deferred: no usable reference price' };
+    }
+    return {
+      type: 'place',
+      leg: 'B',
+      kind: 'taker',
+      tif: 'ioc',
+      qty: fxStr(hedgePlaceSized),
+      price: clipBandPrice(hedgeRef, pair.b, band),
+    };
   }
 
   switch (pair.mode) {
@@ -337,17 +383,15 @@ export function decide(pair: PairRow, p: Projection, now: number, ctx: DecideCtx
     }
 
     case 'OPENING': {
-      // Hedge-first gating, same rule CONVERTING already applies: never widen an
-      // unhedged gap we cannot currently close. This is reached only when the
-      // hedge is owed but unsubmittable — refB is null, so sizeFor returned null
-      // ("cannot size safely"), so no B order is ever created, so bumpHedgeWall
-      // never fires and hedgeRejectStreak never reaches HEDGE_REJECT_HALT.
-      // Without this the maker kept re-placing for the full residual and leg A
-      // filled to target while nothing hedged it. loop.ts counts the stall so
-      // HALTED stays reachable.
-      if (hedgeOwed && hedgeSized === null) {
+      // Hedge-first gating: never leave or re-place a maker while an owed,
+      // normally banded hedge has no sane reference. This applies even when
+      // minNotional is zero, where sizeFor can determine a quantity without a
+      // reference but clipBandPrice still cannot determine a safe limit.
+      // loop.ts counts the missing reference toward the hedge wall so HALTED
+      // remains reachable.
+      if (hedgeOwed && hedgeRef === null) {
         if (m && m.state === 'OPEN') return { type: 'cancel', order: m };
-        return { type: 'idle', reason: 'acquisition paused: hedge owed but cannot be sized (no reference price)' };
+        return { type: 'idle', reason: 'acquisition paused: hedge owed but cannot be safely priced (no reference)' };
       }
       if (m && m.state === 'OPEN') {
         // Re-peg is an intent edit: live maker price ≠ intent price → converge.

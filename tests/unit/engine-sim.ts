@@ -115,9 +115,14 @@ export class FakeVenue implements VenuePort {
       venueOrderId: o.venueOrderId,
       rawStatus: o.rawStatus,
       cumQty: fxStr(o.cum),
-      // Once anything fills, report an average price: a maker fills at its resting
-      // limit; a market/IOC hedge (price null) fills at the contract ref.
-      avgFillPrice: o.cum > 0n ? o.price ?? this.refPrices.get(o.contract) ?? '0' : '0',
+      // A marketable IOC executes at the simulated touch/reference; its limit is
+      // only the worst-price guard. A resting maker executes at its own price.
+      avgFillPrice:
+        o.cum > 0n
+          ? o.tif === 'ioc'
+            ? this.refPrices.get(o.contract) ?? o.price ?? '0'
+            : o.price ?? '0'
+          : '0',
       reason: o.reason,
     };
   }
@@ -255,6 +260,7 @@ export function mkWorld(opts?: {
   b?: Partial<LegSpec> | null;
   maxClip?: string;
   clipBandBp?: number;
+  hedgeBandBp?: number;
   crashAfterCommit?: () => boolean;
 }): World {
   const store = new Store(':memory:');
@@ -276,6 +282,7 @@ export function mkWorld(opts?: {
     hedgeRejectStreak: 0,
     maxClip: opts?.maxClip ?? null,
     clipBandBp: opts?.clipBandBp ?? null,
+    hedgeBandBp: opts?.hedgeBandBp ?? null,
     haltReason: null,
     reportJson: null,
     createdAt: clock.now(),

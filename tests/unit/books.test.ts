@@ -7,6 +7,7 @@ import {
   parseHlBook,
   parseKrakenBook,
   parseOkxBook,
+  refMidOf,
 } from '../../src/core/estimate/books';
 
 describe('nativeSymbol', () => {
@@ -214,5 +215,28 @@ describe('normalization invariants', () => {
     })!;
     expect(b.bids).toEqual([[98, 1]]);
     expect(b.asks).toEqual([]);
+  });
+});
+
+describe('refMidOf execution guard', () => {
+  const book = (bid: number, ask: number) => ({
+    bids: [[bid, 1] as [number, number]],
+    asks: [[ask, 1] as [number, number]],
+    ts: 0,
+  });
+
+  it('returns the midpoint of a normal two-sided book', () => {
+    expect(refMidOf(book(99, 101), 0.05)).toBe(100);
+  });
+
+  it('rejects crossed/locked and absurdly wide books', () => {
+    expect(refMidOf(book(101, 100), 0.05)).toBeNull();
+    expect(refMidOf(book(100, 100), 0.05)).toBeNull();
+    expect(refMidOf(book(90, 110), 0.05)).toBeNull();
+  });
+
+  it('rejects a one-sided or unavailable book', () => {
+    expect(refMidOf({ bids: [[100, 1]], asks: [], ts: 0 }, 0.05)).toBeNull();
+    expect(refMidOf(null, 0.05)).toBeNull();
   });
 });

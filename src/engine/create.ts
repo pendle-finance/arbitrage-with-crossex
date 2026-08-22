@@ -41,6 +41,8 @@ export interface DealRequest {
   maxClip?: string;
   /** A-clip marketable-limit protection band, percent (closes: slippagePct). */
   clipBandPct?: number;
+  /** Hedge marketable-limit protection band, percent (default 0.5%). */
+  hedgeBandPct?: number;
   /** Leverage to set per leg BEFORE the deal is created (venue max from the UI). */
   leverage?: { a?: number; b?: number };
 }
@@ -223,7 +225,10 @@ export async function resolveDeal(
       ? [{ label: `${aRule.symbol} max LIMIT order size`, cap: maxOf(aRule.maxLimitSize), why: 'the maker leg rests as a limit order' }]
       : []),
     ...(bRule
-      ? [{ label: `${bRule.symbol} max MARKET order size`, cap: maxOf(bRule.maxMarketSize), why: 'the hedge is submitted as a single market order and is never split' }]
+      ? [
+          { label: `${bRule.symbol} max LIMIT order size`, cap: maxOf(bRule.maxLimitSize), why: 'normal hedge catches are submitted as one limit order and are never split' },
+          { label: `${bRule.symbol} max MARKET order size`, cap: maxOf(bRule.maxMarketSize), why: 'emergency flatten may submit the hedge as one market order and never splits it' },
+        ]
       : []),
   ];
   for (const { label, cap, why } of capChecks) {
@@ -268,6 +273,16 @@ export async function resolveDeal(
           return bp;
         })()
       : null;
+  const hedgeBandBp =
+    req.hedgeBandPct !== undefined && req.hedgeBandPct !== null
+      ? (() => {
+          const bp = Math.round(Number(req.hedgeBandPct) * 100);
+          if (!Number.isFinite(bp) || bp <= 0 || bp > 1_000) {
+            throw new CoreError('hedgeBandPct must be in (0, 10]');
+          }
+          return bp;
+        })()
+      : null;
 
   const maxClip = req.maxClip !== undefined && req.maxClip !== null ? fxStr(fx(req.maxClip)) : null;
   if (maxClip !== null && fx(maxClip) <= 0n) throw new CoreError('maxClip must be positive');
@@ -297,6 +312,7 @@ export async function resolveDeal(
     hedgeRejectStreak: 0,
     maxClip,
     clipBandBp,
+    hedgeBandBp,
     haltReason: null,
     reportJson: null,
     createdAt: now,
