@@ -13,7 +13,7 @@
 #   3. Installs the app's dependencies and builds its web interface.
 #   4. Registers a background service (a standard macOS "LaunchAgent") so the
 #      app is always running for you, even after you restart your Mac.
-#   5. Opens http://localhost:6688 in your browser and puts a launcher app in
+#   5. Opens the app securely in your browser and puts a launcher app in
 #      ~/Applications. Your Gate.io API keys are entered later, in the browser —
 #      never in this terminal.
 #
@@ -344,16 +344,30 @@ wait_for_server() {
 }
 
 make_launcher() {
-  # A tiny local .app that opens the terminal in your browser. Created locally,
-  # so macOS Gatekeeper has no reason to block it.
+  # The compiled app contains only the owner-protected token FILE path. Every
+  # click reads the current value, validates its shape, and transfers it in a
+  # URL fragment (never an HTTP request). A 64-character lowercase hex token is
+  # already URL-encoded byte-for-byte, so no escaping can change it.
+  #
   # The extra paths are the launcher names this app shipped under before. The
   # .app is keyed by name, so each rename would otherwise leave a stale launcher
   # in ~/Applications. APPEND the outgoing name on every rename; never replace.
   rm -rf "$HOME/Applications/$APP_TITLE.app" \
     "$HOME/Applications/CrossEx-Boros Terminal.app" \
     "$HOME/Applications/Boros CrossEx Terminal.app"
-  osacompile -e "do shell script \"open http://localhost:$PORT\"" \
-    -o "$HOME/Applications/$APP_TITLE.app" >/dev/null 2>&1 || true
+
+  local token_file escaped_token_file
+  token_file="$ROOT/config/api-token"
+  escaped_token_file="$(printf '%s' "$token_file" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+  cat > "$TMP/open-app.applescript" <<APPLESCRIPT
+on run
+  set tokenFile to "$escaped_token_file"
+  set apiToken to do shell script "/bin/cat " & quoted form of tokenFile
+  do shell script "/usr/bin/printf %s " & quoted form of apiToken & " | /usr/bin/grep -Eq '^[0-9a-f]{64}$'"
+  open location ("http://localhost:$PORT/#token=" & apiToken)
+end run
+APPLESCRIPT
+  osacompile -o "$HOME/Applications/$APP_TITLE.app" "$TMP/open-app.applescript" >/dev/null
 }
 
 main() {
@@ -371,15 +385,15 @@ main() {
   wait_for_server
   make_launcher
   echo
-  say "Done! Opening http://localhost:$PORT …"
+  say "Done! Opening $APP_TITLE …"
   echo
   echo "  • The app now runs in the background, even after you restart your Mac."
-  echo "  • Open it any time at http://localhost:$PORT (bookmark it!) or via"
-  echo "    \"$APP_TITLE\" in your ~/Applications folder."
+  echo "  • Open it any time via \"$APP_TITLE\" in your ~/Applications folder."
+  echo "    After that first secure launch, an ordinary http://localhost:$PORT reload works too."
   echo "  • First time? The app will ask for your Gate.io API keys in the browser."
   echo "  • Update any time by re-running the install command."
   echo
-  open "http://localhost:$PORT" 2>/dev/null || true
+  open "$HOME/Applications/$APP_TITLE.app" 2>/dev/null || true
 }
 
 main "$@"

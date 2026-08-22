@@ -36,10 +36,10 @@ press Return:
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/pendle-finance/arbitrage-with-crossex/main/install.sh)"
 ```
 
-When it finishes (a few minutes the first time), the terminal opens in your browser at
-**http://localhost:6688** — bookmark it. From then on the app is always running in the
-background, even after you restart your Mac. You'll also find a **"CrossEx-Boros
-Terminal"** launcher in your `~/Applications` folder.
+When it finishes (a few minutes the first time), the **"Arbitrage with CrossEx"**
+launcher in `~/Applications` opens the terminal securely in your browser. The app stays
+running in the background, even after you restart your Mac. After that first launcher
+open, ordinary reloads and a bookmark for **<http://localhost:6688>** work too.
 
 Everything lands in one folder: `~/.boros-crossex`.
 
@@ -56,9 +56,10 @@ PowerShell** is fine — no need to install anything first). Press `Win`, type
 irm https://raw.githubusercontent.com/pendle-finance/arbitrage-with-crossex/main/install.ps1 | iex
 ```
 
-When it finishes, the terminal opens in your browser at **http://localhost:6688** —
-bookmark it. The app then starts on its own every time you sign in, and you'll find a
-**"CrossEx-Boros Terminal"** shortcut in your Start Menu.
+When it finishes, the **"Arbitrage with CrossEx"** shortcut in your Start Menu opens the
+terminal securely in your browser. The app then starts on its own every time you sign in.
+After that first shortcut open, ordinary reloads and a bookmark for
+**<http://localhost:6688>** work too.
 
 Everything lands in one folder: `%LOCALAPPDATA%\CrossEx-Boros`.
 
@@ -77,8 +78,8 @@ Everything lands in one folder: `%LOCALAPPDATA%\CrossEx-Boros`.
 - Registers a background service that keeps the app running and restarts it after crashes
   and reboots: a standard **LaunchAgent** on macOS, a per-user **Scheduled Task** on
   Windows.
-- Opens the app in your browser and creates the launcher (an app in `~/Applications`, or a
-  Start Menu shortcut).
+- Opens the app securely in your browser and creates the launcher (an app in
+  `~/Applications`, or a Start Menu shortcut).
 - **It never asks for your exchange keys in the terminal** — those are entered later, in
   the app itself.
 
@@ -113,8 +114,8 @@ for a Gate.io API key:
 
 ### Everyday use
 
-- Open **http://localhost:6688** (or the launcher app / Start Menu shortcut) any time —
-  the server is already running.
+- Open the launcher app / Start Menu shortcut any time. After its first secure open, an
+  ordinary **<http://localhost:6688>** reload or bookmark works too.
 - **Update** to the latest version by re-running the same install command for your
   platform. It stops the previous version first, so an old copy never lingers. Your keys
   and trade history are never touched by updates. When a new version is published, the
@@ -139,7 +140,7 @@ for a Gate.io API key:
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/pendle-finance/arbitrage-with-crossex/main/uninstall.sh)"
 ```
 
-Keys and trade history in `~/.boros-crossex` are kept; append ` -- --purge` to remove
+Keys and trade history in `~/.boros-crossex` are kept; append `-- --purge` to remove
 those too (or `rm -rf ~/.boros-crossex`).
 
 **Windows**
@@ -182,12 +183,16 @@ trade journal out from under a live process that is still placing orders.
   network; it does not stop another local process from simply calling the API. So every
   request that can read your account or trade must carry a random token, created on
   first run and stored — readable only by you — in `~/.boros-crossex/config/api-token`
-  (macOS) or `%LOCALAPPDATA%\CrossEx-Boros\config\api-token` (Windows). Your browser
-  gets it automatically from the page. The same limit as your keys applies, and it is
-  worth saying plainly: **anything running as you can read both.** Scripting the API
-  yourself:
+  (macOS) or `%LOCALAPPDATA%\CrossEx-Boros\config\api-token` (Windows). The public HTML
+  contains no token. Instead, the installed launcher reads the protected file when you
+  click it and opens a `#token=…` URL; URL fragments are not sent to the server. The app
+  removes the fragment immediately, validates it with a read-only protected request, and
+  only then saves it in browser storage scoped to that exact origin and port. Later
+  reloads reuse that validated value. The launcher and shortcut never store the bearer.
+  The same limit as your keys applies, and it is worth saying plainly: **anything running
+  as you can read both.** Scripting the API yourself:
   `curl -H "x-arb-token: $(cat ~/.boros-crossex/config/api-token)" http://localhost:6688/api/positions`.
-  Rotate it by deleting the file and restarting the app (open tabs then need a reload).
+  Rotate it by deleting the file, restarting the app, and opening the launcher again.
 - **It can't withdraw your funds** — and if you created the key as described above,
   Gate.io enforces that at the account level too.
 

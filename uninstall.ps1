@@ -30,6 +30,7 @@ $AppTitle = 'Arbitrage with CrossEx'
 $LegacyTitles = @('CrossEx-Boros Terminal', 'Boros CrossEx Terminal')
 $ServerEntry = Join-Path $Root 'app\src\server\index.ts'
 $RunnerPath  = Join-Path $Root 'run-server.ps1'
+$LauncherPath = Join-Path $Root 'open-app.ps1'
 
 function Say { param([string]$m) Write-Host '==> ' -ForegroundColor Cyan -NoNewline; Write-Host $m }
 
@@ -165,13 +166,16 @@ foreach ($d in @('app', 'app.new', 'app.old', 'node', 'logs')) {
   $p = Join-Path $Root $d
   if (Test-Path $p) { Remove-Item -Recurse -Force $p -ErrorAction SilentlyContinue }
 }
-$runner = Join-Path $Root 'run-server.ps1'
-if (Test-Path $runner) { Remove-Item -Force $runner -ErrorAction SilentlyContinue }
+foreach ($script in @($RunnerPath, $LauncherPath)) {
+  if (Test-Path $script) { Remove-Item -Force $script -ErrorAction SilentlyContinue }
+}
 
 $programs = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs'
 foreach ($title in @($AppTitle) + $LegacyTitles) {
-  $lnk = Join-Path $programs "$title.url"
-  if (Test-Path $lnk) { Remove-Item -Force $lnk -ErrorAction SilentlyContinue }
+  foreach ($extension in @('url', 'lnk')) {
+    $lnk = Join-Path $programs "$title.$extension"
+    if (Test-Path $lnk) { Remove-Item -Force $lnk -ErrorAction SilentlyContinue }
+  }
 }
 
 if ($Purge) {

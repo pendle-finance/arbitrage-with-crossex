@@ -142,8 +142,8 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     }
 
     // The token gate. Scoped to /api DELIBERATELY: this hook runs before the
-    // static plugin, and the page + assets are what DELIVER the token — a
-    // broader check would 401 the very HTML that carries it.
+    // static plugin, and the public page + assets must load before the
+    // fragment bootstrap can validate a launcher-supplied token.
     //
     // /api/health stays open: the installers poll it to decide whether the
     // service came up (install.sh hard-fails on it), and it exposes nothing.
@@ -164,7 +164,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
             category: 'auth',
             message: 'missing or invalid API token',
             retryable: false,
-            hint: 'Reload the page. Scripting the API? Send the x-arb-token header — see the README.',
+            hint: 'Open the installed launcher again. Scripting the API? Send the x-arb-token header — see the README.',
           },
         });
       }
