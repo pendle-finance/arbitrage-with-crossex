@@ -43,13 +43,43 @@ export function dealsRoutes(deps: AppDeps) {
           },
         });
       }
-      const body = req.body as DealRequest & { leverage?: { a?: number; b?: number } };
+      const body = req.body as DealRequest;
       if (!body?.id) throw new CoreError('deal id is required');
       // Idempotency: the client id is the dedup key — a lost-response retry
       // must never create a second deal.
       if (deps.engine!.store.getPair(body.id)) {
         return reply.code(202).ok({ id: body.id, duplicate: true });
       }
+
+      // Validate every requested leverage before resolveDeal performs its live
+      // account/rules preflight. Risk-limit absence is unknown, not permission
+      // to skip the upper bound; no venue write or intent may follow it.
+      const levs: Array<{ contract: string; lev: unknown }> = [];
+      if (body.leverage?.a !== undefined) {
+        if (typeof body.a?.symbol !== 'string') {
+          throw new CoreError('leverage leg a requires a symbol', 'validation');
+        }
+        levs.push({ contract: body.a.symbol.toUpperCase(), lev: body.leverage.a });
+      }
+      if (body.leverage?.b !== undefined) {
+        if (typeof body.b?.symbol !== 'string') {
+          throw new CoreError('leverage leg b requires a symbol', 'validation');
+        }
+        levs.push({ contract: body.b.symbol.toUpperCase(), lev: body.leverage.b });
+      }
+      for (const { contract, lev } of levs) {
+        if (typeof lev !== 'number' || !Number.isFinite(lev)) {
+          throw new CoreError(`leverage for ${contract} must be a number`, 'validation');
+        }
+        const leverageMax = await leverageMaxFor(deps, contract, false);
+        if (lev < 1 || lev > leverageMax) {
+          throw new CoreError(
+            `leverage ${lev}x must be between 1 and ${leverageMax}x for ${contract}`,
+            'leverage',
+          );
+        }
+      }
+
       const clients = deps.getClients();
       const getAccount = async () =>
         (await deps.cache.get('account', TTL.live, async () => (await clients.crossEx.getCrossexAccount()).body)).value;
@@ -62,37 +92,9 @@ export function dealsRoutes(deps: AppDeps) {
         refPriceA,
       });
 
-      // Leverage phase: applied BEFORE the intent exists — a failure aborts with
-      // nothing created and nothing sent (mirrors the abort-pre-send semantics).
-      const levs: Array<{ contract: string; lev: unknown }> = [];
-      if (body.leverage?.a) levs.push({ contract: row.a.contract, lev: body.leverage.a });
-      if (body.leverage?.b && row.b) levs.push({ contract: row.b.contract, lev: body.leverage.b });
-
-      // Validate EVERY leg before touching the venue, with the same rules the
-      // sibling PUT /leverage/:symbol enforces. These arrived as raw JSON: with
-      // no checks, {a: true} silently set 1x and {a: '50'} set 50x (setLeverage
-      // coerces with String(Number(...))), and an over-max value could be
-      // CLAMPED by the venue while create.ts's preflight sized initial margin
-      // against the number we asked for — under-reserving, which is exactly how
-      // a hedge leg gets rejected for margin and leaves the other leg naked.
-      for (const { contract, lev } of levs) {
-        if (typeof lev !== 'number' || !Number.isFinite(lev)) {
-          throw new CoreError(`leverage for ${contract} must be a number`, 'validation');
-        }
-        const leverageMax = await leverageMaxFor(deps, contract, false);
-        if (lev < 1 || (leverageMax > 0 && lev > leverageMax)) {
-          throw new CoreError(
-            `leverage ${lev}x must be between 1 and ${leverageMax}x for ${contract}`,
-            'leverage',
-          );
-        }
-      }
-
-      // Apply, remembering each leg's previous value so a partial application can
-      // be undone. Without this, leg A's leverage stayed changed after leg B's
-      // call failed and the request returned "nothing was created": a user with
-      // an existing position would have had its liquidation price moved without
-      // ever seeing it, on a deal that was never created.
+      // Apply leverage BEFORE the intent exists. Remember each leg's previous
+      // value so a partial application — including a venue clamp reported in a
+      // successful response — can be undone before aborting.
       const applied: Array<{ contract: string; prev: number }> = [];
       try {
         for (const { contract, lev } of levs) {
@@ -103,8 +105,10 @@ export function dealsRoutes(deps: AppDeps) {
           } catch {
             /* can't read it → can't restore it; recorded as 0 and skipped below */
           }
-          await setLeverage(clients.crossEx, contract, lev as number);
+          // Record before the write: setLeverage also rejects a clamped
+          // confirmation, but at that point the venue has already changed it.
           applied.push({ contract, prev });
+          await setLeverage(clients.crossEx, contract, lev as number);
         }
       } catch (err) {
         for (const { contract, prev } of applied.reverse()) {
@@ -117,6 +121,7 @@ export function dealsRoutes(deps: AppDeps) {
         }
         throw new CoreError(
           `aborted before creating the deal: leverage set failed — ${(err as Error).message}`,
+          'leverage',
         );
       }
 

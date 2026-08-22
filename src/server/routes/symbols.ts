@@ -125,7 +125,7 @@ export function symbolsRoutes(deps: AppDeps) {
       const { list, stale } = await livePerps(deps, fresh);
       const info = list.find((s) => s.symbol === symbol);
       if (!info) throw new CoreError(`symbol ${symbol} not found on CrossEx`, 'symbol-invalid');
-      const leverageMax = await leverageMaxFor(deps, symbol, fresh);
+      const leverageMax = await leverageMaxFor(deps, symbol, fresh).catch(() => 0);
       return reply.ok({ ...info, leverageMax }, { stale });
     });
   };

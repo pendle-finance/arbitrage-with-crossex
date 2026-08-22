@@ -33,10 +33,6 @@ line numbers are omitted deliberately (they drift).
   (bid+ask)/2 of the public book. When mid dislocates from the venue's mark by more than the
   band, every clip draws a hard price-limit reject and the close stops at the reject budget —
   exactly during the volatile conditions the band exists for. Honest stop + alert, no silent loss.
-- **Leverage upper bound fails open on an empty risk-limits reply** (`src/server/routes/deals.ts`):
-  a successful-but-tierless response yields max 0, which skips the bound — and the 0 is cached
-  for 10 minutes. An over-max leverage then reaches preflight, which under-reserves margin if the
-  venue clamps instead of rejecting.
 - **A sub-tick explicit re-peg BUY snaps to the string `"0"`** (`src/server/routes/deals.ts`):
   the raw input is validated `> 0`, then the directional snap floors it to `"0"`, which is truthy
   and gets pinned as the fixed intent price — burning the reject budget with a wrong recorded
@@ -102,3 +98,8 @@ line numbers are omitted deliberately (they drift).
 - **The bash installers killed by argv match alone** — an editor or `tail` holding the server
   path was SIGKILLed, and a relative-args server was missed. They now confirm by the
   process's executable and sweep the private runtime, mirroring the Windows scripts.
+- **Leverage upper bounds failed open on an empty risk-limits reply** — tierless
+  data was converted to 0 and cached for 10 minutes, and both leverage write
+  paths treated that 0 as permission to skip the maximum. Unknown caps now stay
+  absent and block writes before deal preflight; reads still report an honest
+  unknown maximum, and venue-clamped confirmations abort and roll back.

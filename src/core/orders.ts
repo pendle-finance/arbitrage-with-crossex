@@ -1,6 +1,7 @@
 /** CrossEx order/domain helpers: sizing, pricing, leverage, and order construction. */
 import { CrossexLeverageRequest } from 'gate-api';
 import type { CrossExApi } from 'gate-api';
+import { CoreError } from './errors';
 import type { Clients } from './clients';
 import { coarsestLot, formatCrossPrice, roundToStep } from './numbers';
 
@@ -131,28 +132,42 @@ export function marketableClosePrice(
   return formatCrossPrice(markPrice * factor, closeSide, symbol, tickSize);
 }
 
-/** Max settable leverage per symbol (highest `leverage_max` across risk tiers).
- * One call covers many symbols (comma-joined). */
+/** Max settable leverage per symbol (highest positive `leverage_max` across
+ * risk tiers). Symbols with no usable tier stay absent: absence means unknown,
+ * never an artificial 0x cap. One call covers many symbols (comma-joined). */
 export async function getLeverageMax(crossEx: CrossExApi, symbols: string[]): Promise<Map<string, number>> {
   const { body } = await crossEx.listCrossexRuleRiskLimits(symbols.join(','));
   const map = new Map<string, number>();
   for (const r of body ?? []) {
-    const max = Math.max(0, ...(r.tiers ?? []).map((t) => Number(t.leverageMax) || 0));
-    if (r.symbol) map.set(r.symbol, max);
+    const tiers = (r.tiers ?? [])
+      .map((tier) => Number(tier.leverageMax))
+      .filter((leverage) => Number.isFinite(leverage) && leverage > 0);
+    if (r.symbol && tiers.length > 0) map.set(r.symbol, Math.max(...tiers));
   }
   return map;
 }
 
-/** Set position leverage for a symbol; returns the confirmed {symbol, leverage}. */
+/** Set position leverage and require the venue to confirm the requested value.
+ * A successful HTTP response may still carry a lower, venue-clamped leverage;
+ * treating that as success would make margin preflight under-reserve. */
 export async function setLeverage(
   crossEx: CrossExApi,
   symbol: string,
   leverage: number | string,
 ): Promise<{ symbol: string; leverage: string }> {
+  const requested = Number(leverage);
   const lev = new CrossexLeverageRequest();
   lev.symbol = symbol;
-  lev.leverage = String(Number(leverage));
+  lev.leverage = String(requested);
   const { body } = await crossEx.updateCrossexPositionsLeverage({ crossexLeverageRequest: lev });
+  const confirmed = Number(body?.leverage);
+  if (body?.symbol !== symbol || !Number.isFinite(confirmed) || confirmed !== requested) {
+    const got = Number.isFinite(confirmed) ? `${confirmed}x` : 'no verifiable leverage';
+    throw new CoreError(
+      `venue confirmed ${got} instead of requested ${requested}x for ${symbol}`,
+      'leverage',
+    );
+  }
   return body;
 }
 
