@@ -245,6 +245,28 @@ describe('GET /api/opportunities', () => {
     expect(group.bestPair).toBeNull();
   });
 
+  it('does not cache 0 for a tierless batch, so the next scan can recover', async () => {
+    app = makeTestApp({ borosFetch: borosStub(borosBodies()) });
+    mockGateGet('/rule/symbols', { body: ruleSymbols });
+    mockGateGet('/fee', { body: feeRows });
+    mockGateGet('/rule/risk_limits', {
+      body: riskLimits.map(({ symbol }) => ({ symbol, tiers: [] })),
+    });
+    mockVenueBooks();
+    // Rules, fees, Boros data and venue books remain warm. Only risk limits
+    // should be re-read because the first unknown values were not cached.
+    const recoveredRisk = mockGateGet('/rule/risk_limits', { body: riskLimits });
+
+    const unknown = await app.inject({ method: 'GET', url: '/api/opportunities', headers: HOST });
+    expect(unknown.statusCode).toBe(200);
+    expect(unknown.json().data.groups[0].pairs[0].capitalUsd).toBeNull();
+
+    const recovered = await app.inject({ method: 'GET', url: '/api/opportunities', headers: HOST });
+    expect(recovered.statusCode).toBe(200);
+    expect(recovered.json().data.groups[0].pairs[0].capitalUsd).toBeGreaterThan(0);
+    expect(recoveredRisk.isDone()).toBe(true);
+  });
+
   it('keeps the scan alive when the risk-limit read itself fails', async () => {
     app = makeTestApp({ borosFetch: borosStub(borosBodies()) });
     mockGateGet('/rule/symbols', { body: ruleSymbols });

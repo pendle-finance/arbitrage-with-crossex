@@ -218,6 +218,50 @@ describe('POST /api/deals', () => {
     expect(w.store.listPairs()).toHaveLength(0);
   });
 
+  it('rejects unknown leverage before resolveDeal preflight and creates no pair', async () => {
+    const w = mkApp();
+    app = w.app;
+    // Deliberately no rule-symbol or account interceptors: consuming either
+    // would prove resolveDeal ran before the risk bound was verified.
+    mockGateGet('/rule/risk_limits', { body: [] });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/deals',
+      headers: HOST,
+      payload: makerPayload({ leverage: { a: 20 } }),
+    });
+
+    expect(res.statusCode, res.body).toBe(400);
+    expect(res.json().error).toMatchObject({ category: 'leverage' });
+    expect(res.json().error.message).toMatch(/could not verify maximum leverage/);
+    expect(w.store.listPairs()).toHaveLength(0);
+    expect(nock.pendingMocks()).toEqual([]);
+  });
+
+  it('validates a mixed two-leg risk batch completely before any leverage write', async () => {
+    const w = mkApp();
+    app = w.app;
+    mockGateGet('/rule/risk_limits', {
+      body: [{ symbol: A_CONTRACT, tiers: [{ leverage_max: '50' }] }],
+    });
+    mockGateGet('/rule/risk_limits', {
+      body: [{ symbol: B_CONTRACT, tiers: [] }],
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/deals',
+      headers: HOST,
+      payload: makerPayload({ leverage: { a: 20, b: 20 } }),
+    });
+
+    expect(res.statusCode, res.body).toBe(400);
+    expect(res.json().error.message).toMatch(/could not verify maximum leverage/);
+    expect(w.store.listPairs()).toHaveLength(0);
+    expect(nock.pendingMocks()).toEqual([]);
+  });
+
   // These arrive as raw JSON and were applied with no checks at all, unlike the
   // sibling PUT /leverage/:symbol which validates type, finiteness and bounds.
   it('rejects an out-of-range or non-numeric leverage before touching the venue', async () => {
@@ -266,7 +310,9 @@ describe('POST /api/deals', () => {
       .reply(function (_uri, reqBody) {
         sets.push(reqBody);
         // 1st = A→20 (ok), 2nd = B→20 (fails), 3rd = the A rollback (ok)
-        return sets.length === 2 ? [400, { label: 'RISK_LIMIT', message: 'too high' }] : [200, {}];
+        if (sets.length === 2) return [400, { label: 'RISK_LIMIT', message: 'too high' }];
+        const request = reqBody as { symbol: string; leverage: string };
+        return [200, { symbol: request.symbol, leverage: request.leverage }];
       });
 
     const res = await app.inject({
@@ -280,6 +326,43 @@ describe('POST /api/deals', () => {
     expect(w.store.listPairs()).toHaveLength(0);
     expect(sets).toHaveLength(3); // the third call is the rollback
     expect(sets[2]).toMatchObject({ symbol: A_CONTRACT, leverage: '5' }); // restored
+  });
+
+  it('detects a venue clamp, restores the prior leverage, and creates no deal', async () => {
+    const w = mkApp();
+    app = w.app;
+    mockGateGet('/rule/risk_limits', {
+      body: [{ symbol: A_CONTRACT, tiers: [{ leverage_max: '50' }] }],
+    });
+    mockGateGet('/rule/symbols', { body: simRules() });
+    mockGateGet('/accounts', { fixture: 'account.json' });
+    gate().get(/positions\/leverage/).reply(200, { [A_CONTRACT]: '5' });
+    const sets: unknown[] = [];
+    gate()
+      .post('/api/v4/crossex/positions/leverage')
+      .times(2)
+      .reply(function (_uri, reqBody) {
+        sets.push(reqBody);
+        if (sets.length === 1) {
+          return [200, { symbol: A_CONTRACT, leverage: '20' }]; // requested 50x was clamped
+        }
+        return [200, { symbol: A_CONTRACT, leverage: '5' }];
+      });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/deals',
+      headers: HOST,
+      payload: makerPayload({ leverage: { a: 50 } }),
+    });
+
+    expect(res.statusCode, res.body).toBe(400);
+    expect(res.json().error.message).toMatch(/confirmed 20x instead of requested 50x/);
+    expect(sets).toEqual([
+      expect.objectContaining({ symbol: A_CONTRACT, leverage: '50' }),
+      expect.objectContaining({ symbol: A_CONTRACT, leverage: '5' }),
+    ]);
+    expect(w.store.listPairs()).toHaveLength(0);
   });
 
   it('creates a reduce-only close deal validated against the live position', async () => {

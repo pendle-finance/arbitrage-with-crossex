@@ -3,6 +3,13 @@
 Only substantial releases are listed here — each one bumps `version.json` (which is what the
 in-app update check compares against).
 
+## Unreleased
+
+- **New deals no longer trust an unknown or silently clamped leverage.** Empty or
+  tierless risk-limit replies now block leverage writes before margin preflight,
+  while read-only views continue to show the maximum as unknown. A venue clamp
+  aborts deal creation and restores earlier leverage changes.
+
 ## 1.3.0 — 2026-08-07
 
 Share a position, explain a stopped deal, and a Windows service that stays hidden.
@@ -62,7 +69,7 @@ Security pass, acting on an external audit (its findings, and what remains open,
 - **The local API requires a token.** Binding to loopback never stopped another local
   process from trading; every `/api` route except the installer's health probe now needs a
   per-install token stored 0600 beside your keys. Your browser gets it from the page, so the
-  bookmarked http://localhost:6688 is unchanged. Scripting the API needs the `x-arb-token`
+  bookmarked <http://localhost:6688> is unchanged. Scripting the API needs the `x-arb-token`
   header — see the README.
 - **Hand-cancelling can no longer abandon a live deal.** The refusal guard now covers the
   client-text id the venue also accepts, and the window where an order is live on the venue

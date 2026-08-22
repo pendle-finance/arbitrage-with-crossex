@@ -130,8 +130,9 @@ function ruleClient(deps: AppDeps): CrossExApi {
  * `/api/leverage` and `/api/symbols` read (so a scan warms the ticket flow), but
  * filled from ONE comma-joined `getLeverageMax` rather than a call per symbol.
  *
- * A failed read or a symbol with no row leaves that symbol absent, which nulls
- * only that pair's capital — the notional-basis numbers still price.
+ * A failed read or a symbol with no usable tier leaves that symbol absent, which
+ * nulls only that pair's capital. Unknown values are thrown out of the cache
+ * loader so an incomplete batch can never poison the shared key with 0.
  */
 async function loadLeverageMax(
   deps: AppDeps,
@@ -148,7 +149,9 @@ async function loadLeverageMax(
           TTL.static,
           async () => {
             batch ??= getLeverageMax(ruleClient(deps), symbols);
-            return (await batch).get(symbol) ?? 0;
+            const max = (await batch).get(symbol);
+            if (max === undefined) throw new Error(`no maximum leverage for ${symbol}`);
+            return max;
           },
           { fresh },
         );

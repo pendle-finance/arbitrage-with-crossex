@@ -76,6 +76,23 @@ describe('GET /api/symbols', () => {
     expect(data.leverageMax).toBe(50); // max over the tiers' leverage_max (50, 20)
   });
 
+  it('GET /api/symbols/:symbol stays available with max 0 for tierless risk data', async () => {
+    app = makeTestApp();
+    mockGateGet('/rule/symbols', { fixture: 'rule-symbols.json' });
+    mockGateGet('/rule/risk_limits', {
+      body: [{ symbol: 'GATE_FUTURE_ETH_USDT', tiers: [] }],
+    });
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/symbols/GATE_FUTURE_ETH_USDT',
+      headers: HOST,
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().data.leverageMax).toBe(0);
+  });
+
   it('GET /api/symbols/:symbol unknown → 400 symbol-invalid envelope', async () => {
     app = makeTestApp();
     mockGateGet('/rule/symbols', { fixture: 'rule-symbols.json' });

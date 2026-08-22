@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   direction,
+  getLeverageMax,
   resolveQty,
   isMultipleOf,
   marketableClosePrice,
@@ -70,6 +71,33 @@ describe('isMultipleOf', () => {
     [0.007, '0.0001', true],
   ])('(%d, %j) -> %s', (qty, step, want) => {
     expect(isMultipleOf(qty, step)).toBe(want);
+  });
+});
+
+describe('getLeverageMax', () => {
+  const read = async (body: unknown[]) => {
+    const crossEx = {
+      listCrossexRuleRiskLimits: async () => ({ body }),
+    } as unknown as Parameters<typeof getLeverageMax>[0];
+    return getLeverageMax(crossEx, ['A', 'B']);
+  };
+
+  it.each([
+    ['empty reply', []],
+    ['tierless row', [{ symbol: 'A', tiers: [] }]],
+    ['row with no tiers field', [{ symbol: 'A' }]],
+    ['row with no positive finite tier', [{ symbol: 'A', tiers: [{ leverageMax: '0' }, { leverageMax: 'bad' }] }]],
+  ])('keeps %s absent instead of manufacturing a 0x cap', async (_name, body) => {
+    const max = await read(body as unknown[]);
+    expect(max.has('A')).toBe(false);
+  });
+
+  it('keeps the valid symbol in a mixed batch and omits the tierless symbol', async () => {
+    const max = await read([
+      { symbol: 'A', tiers: [{ leverageMax: '10' }, { leverageMax: '25' }] },
+      { symbol: 'B', tiers: [] },
+    ]);
+    expect([...max.entries()]).toEqual([['A', 25]]);
   });
 });
 
