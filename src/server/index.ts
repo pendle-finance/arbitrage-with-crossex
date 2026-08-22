@@ -17,7 +17,7 @@ import type { Clock, VenuePort } from '../engine/types';
 import { buildApp } from './app';
 import { TtlCache } from './cache';
 import { readOrCreateApiToken } from './authToken';
-import { tokenizedIndexHtml } from './spa';
+import { registerSpaShell } from './spa';
 import { restrictToOwner } from './secretFile';
 import { readInstallInfo, readLocalVersion } from './version';
 
@@ -138,20 +138,10 @@ const app = buildApp(appDeps);
 
 // Serve the built SPA when present (`yarn start`); in dev, Vite proxies /api here.
 if (fs.existsSync(path.join(webDist, 'index.html'))) {
-  // The HTML is served BY US so the token can be injected; the hashed assets
-  // still go through the static plugin. no-store (and no ETag) because a
-  // cached copy could otherwise revive a page carrying a stale token.
-  // @fastify/static registers only a wildcard, so these explicit routes win.
-  if (appDeps.authToken) {
-    const token = appDeps.authToken;
-    const serveIndex = async (_req: unknown, reply: { header: (k: string, v: string) => typeof reply; type: (t: string) => typeof reply; send: (b: string) => unknown }) =>
-      reply
-        .header('cache-control', 'no-store')
-        .type('text/html; charset=utf-8')
-        .send(tokenizedIndexHtml(webDist, token));
-    app.get('/', serveIndex);
-    app.get('/index.html', serveIndex);
-  }
+  // The shell is public by design but contains no credentials. The installed
+  // launcher transfers the API token in a URL fragment, which never reaches
+  // this route; the SPA validates it before saving it in origin-scoped storage.
+  registerSpaShell(app, webDist);
   app.register(fastifyStatic, { root: webDist });
 }
 

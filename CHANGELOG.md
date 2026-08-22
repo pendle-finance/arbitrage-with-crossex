@@ -3,6 +3,15 @@
 Only substantial releases are listed here — each one bumps `version.json` (which is what the
 in-app update check compares against).
 
+## Unreleased
+
+- **The public app shell no longer exposes the local API bearer.** The installed macOS
+  launcher and Windows shortcut now read the owner-protected token file at click time and
+  pass the token in a URL fragment, without storing it in the launcher. The app removes
+  the fragment immediately, validates it through a protected read-only endpoint, and
+  saves it only after success for ordinary reloads. Unauthenticated `/` and `/index.html`
+  now contain no token to scrape and replay.
+
 ## 1.3.0 — 2026-08-07
 
 Share a position, explain a stopped deal, and a Windows service that stays hidden.
@@ -61,9 +70,9 @@ Security pass, acting on an external audit (its findings, and what remains open,
 
 - **The local API requires a token.** Binding to loopback never stopped another local
   process from trading; every `/api` route except the installer's health probe now needs a
-  per-install token stored 0600 beside your keys. Your browser gets it from the page, so the
-  bookmarked http://localhost:6688 is unchanged. Scripting the API needs the `x-arb-token`
-  header — see the README.
+  per-install token stored 0600 beside your keys. In this release the browser received it
+  from the page; the Unreleased security fix above replaces that disclosure with the
+  protected launcher bootstrap. Scripting the API needs the `x-arb-token` header — see the README.
 - **Hand-cancelling can no longer abandon a live deal.** The refusal guard now covers the
   client-text id the venue also accepts, and the window where an order is live on the venue
   before our ledger knows its id. Either path previously read as a deliberate STOP and gave up
