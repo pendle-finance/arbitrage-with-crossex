@@ -238,7 +238,7 @@ describe('fetchBorosTransactions pagination', () => {
     const TOTAL = 450;
     const all = Array.from({ length: TOTAL }, (_, i) => txn(100 + i, 1_700_000_000 + i));
     const requestedSkips: number[] = [];
-    const txns = await fetchBorosTransactions(
+    const { txns } = await fetchBorosTransactions(
       stub((url) => {
         const skip = Number(url.searchParams.get('skip'));
         const limit = Number(url.searchParams.get('limit'));
@@ -256,7 +256,7 @@ describe('fetchBorosTransactions pagination', () => {
 
   it('stops after one page when total fits in the first fetch', async () => {
     let calls = 0;
-    const txns = await fetchBorosTransactions(
+    const { txns } = await fetchBorosTransactions(
       stub(() => {
         calls += 1;
         return { body: { results: [txn(1, 1)], total: 1 } };
@@ -270,7 +270,7 @@ describe('fetchBorosTransactions pagination', () => {
 
   it('stops on an empty page even if total lies, and caps runaway pagination', async () => {
     let calls = 0;
-    const txns = await fetchBorosTransactions(
+    const { txns } = await fetchBorosTransactions(
       stub(() => {
         calls += 1;
         return { body: { results: [], total: 999_999 } }; // server bug: total never reachable
@@ -286,6 +286,36 @@ describe('fetchBorosTransactions pagination', () => {
     await expect(
       fetchBorosTransactions(stub(() => ({ body: { total: 10 } })), ADDR, 3),
     ).rejects.toMatchObject({ name: 'CoreError', category: 'network' });
+  });
+
+  it('reports coverage: complete when it reaches the venue count', async () => {
+    const { complete } = await fetchBorosTransactions(
+      stub(() => ({ body: { results: [txn(1, 1)], total: 1 } })),
+      ADDR,
+      3,
+    );
+    expect(complete).toBe(true);
+  });
+
+  it('reports coverage: INCOMPLETE when the page cap cuts it short', async () => {
+    // 25 pages × 200 is the runaway guard. An account past it used to get a
+    // silently truncated history — and truncation fakes absence, which is what
+    // any "no counterpart nearby, so it was placed alone" reasoning rests on.
+    const { txns, complete } = await fetchBorosTransactions(
+      stub((url) => {
+        const skip = Number(url.searchParams.get('skip'));
+        return {
+          body: {
+            results: Array.from({ length: 200 }, (_, i) => txn(skip + i, 1_700_000_000 + skip + i)),
+            total: 1_000_000,
+          },
+        };
+      }),
+      ADDR,
+      3,
+    );
+    expect(complete).toBe(false);
+    expect(txns).toHaveLength(25 * 200);
   });
 });
 

@@ -44,6 +44,7 @@ import {
   type TrancheSource,
   type UnhedgedResidual,
 } from './partition';
+import { bindExecutions, legsBoundTogether, type Atom as GroupingAtom } from './grouping';
 import {
   BOROS_TOKEN_SYMBOLS,
   norm18,
@@ -1249,6 +1250,9 @@ export interface BuildStrategiesInput {
   /** How much capital a Boros position is said to tie up. Defaults to
    * `balance`, the reading every existing number was computed on. */
   capitalBasis?: CapitalBasis;
+  /** False for a collateral zone whose transaction history was truncated —
+   * see fetchBorosTransactions. Absence-based bands are illegal there. */
+  borosHistoryComplete?: boolean;
   nowSec: number;
 }
 
@@ -1537,8 +1541,6 @@ function applyMembership(
    * `splitStrategies` attaches un-spoken-for legs WHOLE to a cohort, which
    * would undo an assertion. */
   assertedSymbols: Set<string>;
-  /** Size the user detached, in the shape each side of the book reports it. */
-  residuals: UnhedgedResidual[];
   orphanedBoros: BorosLegBuild[];
   notes: string[];
 } {
@@ -1546,7 +1548,6 @@ function applyMembership(
   const perpLeft = new Map<string, number>();
   const borosLeft = new Map<number, number>();
   const cards: StrategyRollup[] = [];
-  const residuals: UnhedgedResidual[] = [];
   const orphanedBoros: BorosLegBuild[] = [];
   const rows = input.membership ?? [];
 
@@ -1558,7 +1559,7 @@ function applyMembership(
     rows.flatMap((r) => (r.leg.kind === 'perp' ? [r.leg.symbol] : [])),
   );
   if (!rows.length) {
-    return { cards, perpLeft, borosLeft, assertedSymbols, residuals, orphanedBoros, notes };
+    return { cards, perpLeft, borosLeft, assertedSymbols, orphanedBoros, notes };
   }
 
   // --- The ledger ------------------------------------------------------------
@@ -1621,21 +1622,15 @@ function applyMembership(
     }
     if (!(got > 0)) return;
     if (positionId === undefined) {
+      // A detached BOROS leg has to be carried out of here — it becomes its
+      // own unmatched card. A detached PERP simply leaves the pool: the
+      // derived pass reports whatever the cards do not show, by subtraction,
+      // and a second list of the same size here was never read. Keeping one
+      // would put two sources of truth behind one number.
       if (leg.kind === 'boros') {
         const b = borosByMarket.get(leg.marketId) as BorosLegBuild;
         const whole = b.leg.notionalToken ?? 0;
         orphanedBoros.push(got >= whole * (1 - 1e-9) ? b : scaleBorosBuild(b, got / whole));
-      } else {
-        const l = perpBySymbol.get(leg.symbol) as PerpLegBuild;
-        const whole = l.leg.notionalToken ?? 0;
-        residuals.push({
-          symbol: leg.symbol,
-          venue: l.leg.venue,
-          base: l.leg.base,
-          side: l.leg.side,
-          qty: got,
-          share: whole > 0 ? got / whole : 1,
-        });
       }
       return;
     }
@@ -1738,7 +1733,7 @@ function applyMembership(
     cards.push(card);
   }
 
-  return { cards, perpLeft, borosLeft, assertedSymbols, residuals, orphanedBoros, notes };
+  return { cards, perpLeft, borosLeft, assertedSymbols, orphanedBoros, notes };
 }
 
 function mergedStrategies(
@@ -1795,7 +1790,7 @@ function splitStrategies(
     perpLeft: Map<string, number>;
     assertedSymbols: Set<string>;
     orphanedBoros: BorosLegBuild[];
-    residuals: UnhedgedResidual[];
+
     cards: StrategyRollup[];
   },
   /** Coins that hold Boros anywhere — before assertions moved any of it. */
@@ -1868,6 +1863,74 @@ function splitStrategies(
     incrementsCache.set(key, built);
     return built;
   };
+
+  /**
+   * `boros:MARKETID` → every venue the legs placed WITH it sit at.
+   *
+   * Built from the increments each leg decomposes into: two increments a few
+   * seconds apart, at matching size, on opposite sides of one coin are one
+   * trade, and the legs they belong to must therefore land on one card. See
+   * docs/AUTO-GROUPING.md.
+   */
+  const boundVenues = new Map<string, string[]>();
+  {
+    const cohortLegs = borosLegsOf(cohortList);
+    const atoms: GroupingAtom[] = [];
+    for (const b of cohortLegs) {
+      const whole = b.leg.notionalToken ?? 0;
+      const incs = incrementsFor(b.marketId, whole);
+      // A leg whose history cannot be replayed has no increments to pair; it
+      // still gets grouped, just with no co-execution evidence.
+      if (!incs) continue;
+      // Boros LONG receives floating (+), SHORT pays it (−) — the same sign
+      // convention the hedge check uses, so opposite signs really do cancel.
+      const sign = b.leg.side === 'LONG' ? 1 : -1;
+      incs.forEach((inc, i) => {
+        atoms.push({
+          id: `boros:${b.marketId}#${i}`,
+          legKey: `boros:${b.marketId}`,
+          venue: b.leg.venue,
+          base: b.leg.base,
+          floating: sign * inc.qty,
+          qty: inc.qty,
+          rate: inc.fixedApr,
+          at: { kind: 'at', sec: inc.timeSec },
+        });
+      });
+    }
+    const execs = bindExecutions(atoms, {
+      historyComplete: input.borosHistoryComplete !== false,
+    });
+    /**
+     * ⚠ Only legs built by a SINGLE increment are constrained here.
+     *
+     * An execution binds increments, but the constraint below is applied per
+     * LEG — and those are the same thing only when the leg has one increment.
+     * A leg grown over several days takes part in several executions, each
+     * with a different counterparty: a Hyperliquid short opened against OKX
+     * and later added to against Binance is two strategies, and collapsing
+     * its executions to one leg-level set would force both onto one card.
+     * That is the netting mistake this whole module exists to undo, so where
+     * it could happen we do nothing rather than something wrong.
+     *
+     * Lifting this needs the constraint pushed down into the allocator, so a
+     * leg's increments can be placed on different tranches while each stays
+     * with whatever it was traded alongside.
+     */
+    const incrementCount = new Map<string, number>();
+    for (const a of atoms) incrementCount.set(a.legKey, (incrementCount.get(a.legKey) ?? 0) + 1);
+
+    for (const [leg, legs] of legsBoundTogether(atoms, execs)) {
+      if (legs.some((k) => (incrementCount.get(k) ?? 0) !== 1)) continue;
+      boundVenues.set(leg, [
+        ...new Set(
+          legs
+            .map((k) => cohortLegs.find((x) => `boros:${x.marketId}` === k)?.leg.venue)
+            .filter((v): v is string => v !== undefined),
+        ),
+      ]);
+    }
+  }
 
   /**
    * How much of each tranche's perp is still free to hedge something, in USD
@@ -2068,10 +2131,27 @@ function splitStrategies(
     for (const b of cohort.builds) {
       const venue = b.leg.venue;
       const total = b.leg.notionalToken ?? 0;
+      /**
+       * Which venues this leg must be held ALONGSIDE.
+       *
+       * Normally just its own. But when the co-execution pass found this leg
+       * was placed together with another — same instant, matching size,
+       * opposite side — the two are one trade and may not be divided between
+       * cards. Requiring a tranche to cover every venue in the bound set is
+       * what expresses that here: on a Binance-long / Hyperliquid-short pair,
+       * only the tranche holding both perps qualifies, so both halves land on
+       * it instead of being scored separately into two different cards.
+       */
+      const bound = boundVenues.get(`boros:${b.marketId}`);
+      const needVenues = bound && bound.length > 1 ? bound : [venue];
       // Only a tranche with perp exposure at this venue can hold its Boros leg.
       // Anything the user spoke for is already out of this cohort, so there is
       // nothing to make an exception for.
-      const eligible = cohortTranches.filter((t) => qtyAt(t, venue) > 0);
+      const strict = cohortTranches.filter((t) => needVenues.every((v) => qtyAt(t, v) > 0));
+      // ⚠ Never strand the leg. If no tranche covers the whole bound set, the
+      // grouping evidence simply cannot be honoured here — fall back to this
+      // leg's own venue rather than dropping it out of the cohort.
+      const eligible = strict.length > 0 ? strict : cohortTranches.filter((t) => qtyAt(t, venue) > 0);
 
       const rest = total;
       const unpinned = eligible;
