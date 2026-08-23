@@ -68,7 +68,9 @@ import { canChartCapital, canChartProfit, OpportunityWaterfall } from './Opportu
 import {
   applyFilters,
   hasActiveFilter,
+  loadFilters,
   NO_FILTERS,
+  saveFilters,
   toRows,
   type OpportunityFilters,
 } from './opportunityFilters';
@@ -762,10 +764,16 @@ export function OpportunitiesPanel({ unconfigured = false }: { unconfigured?: bo
   const debouncedSize = useDebounced(sizeStr, 400);
   // Deliberately NOT persisted: the strip explains itself once and folds away.
   const [assumptionsOpen, setAssumptionsOpen] = useState(false);
-  // Also deliberately NOT persisted — unlike the assumptions, a filter changes
-  // WHAT IS MISSING from the list, and a hidden one carried over from last week
-  // would read as "there are no BTC opportunities".
-  const [filters, setFilters] = useState<OpportunityFilters>(NO_FILTERS);
+  // Persisted, like the assumptions. A filter is the louder of the two — it
+  // changes what is MISSING rather than how it is priced — so restoring one
+  // leans on the affordances that keep it visible: the ✓ on a selected asset
+  // chip, the count on the filter icon, and a selected value that still renders
+  // at count 0 when the data no longer has it. See `loadFilters`.
+  const [filters, setFilters] = useState<OpportunityFilters>(loadFilters);
+  const updateFilters = useCallback((next: OpportunityFilters) => {
+    setFilters(next);
+    saveFilters(next);
+  }, []);
   const shownKeysRef = useRef<ReadonlySet<string>>(new Set());
   const flow = useTradeFlowOptional();
   const sizeId = useId();
@@ -1051,7 +1059,7 @@ export function OpportunitiesPanel({ unconfigured = false }: { unconfigured?: bo
         <OpportunityFilterBar
           rows={rows}
           filters={filters}
-          onChange={setFilters}
+          onChange={updateFilters}
           shown={visible.length}
         />
       )}
@@ -1073,7 +1081,7 @@ export function OpportunitiesPanel({ unconfigured = false }: { unconfigured?: bo
           hint={`All ${rows.length} priced ${rows.length === 1 ? 'opportunity is' : 'opportunities are'} filtered out. Drop a filter to bring them back.`}
           action={
             hasActiveFilter(filters) ? (
-              <button type="button" className="btn" onClick={() => setFilters(NO_FILTERS)}>
+              <button type="button" className="btn" onClick={() => updateFilters(NO_FILTERS)}>
                 Clear filters
               </button>
             ) : undefined

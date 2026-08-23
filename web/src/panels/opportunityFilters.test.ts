@@ -14,8 +14,11 @@ import {
   applyFilters,
   facets,
   hasActiveFilter,
-  minApr,
+  loadFilters,
+  maxDays,
   NO_FILTERS,
+  OPPORTUNITY_FILTERS_STORAGE_KEY,
+  saveFilters,
   toggleValue,
   toRows,
   type OpportunityFilters,
@@ -109,7 +112,6 @@ describe('toRows', () => {
 
     expect(rows[0].venueKeys).toEqual(['HYPERLIQUID', 'BINANCE']);
     expect(rows[0].asset).toBe('ETH');
-    expect(rows[0].maturity).toBe(OPP_MATURITY);
     expect(rows[0].days).toBe(30);
     expect(rows[0].key).toContain(String(rows[0].pair.shortLeg.marketId));
   });
@@ -175,47 +177,36 @@ describe('applyFilters', () => {
     expect(applyFilters(rows, filters({ venues: ['HYPERLIQUID'] }))).toHaveLength(2);
   });
 
-  it('filters on maturity', () => {
+  it('caps the tenor by DAYS, inclusive of the number the card prints', () => {
     const rows = toRows(book());
-    expect(applyFilters(rows, filters({ maturities: [OPP_MATURITY] }))).toHaveLength(2);
+    // The book is two 30-day ETH rows and one 90-day BTC row.
+    expect(rows.map((r) => r.days)).toEqual([30, 90, 30]);
+
+    expect(applyFilters(rows, filters({ maxDaysText: '30' })).map((r) => r.days)).toEqual([30, 30]);
+    expect(applyFilters(rows, filters({ maxDaysText: '90' }))).toHaveLength(3);
+    expect(applyFilters(rows, filters({ maxDaysText: '29' }))).toHaveLength(0);
   });
 
-  it('reads the APR floor as a percent, and ignores one it cannot parse', () => {
+  it('ignores a tenor cap it cannot parse', () => {
     const rows = toRows(book());
-
-    expect(applyFilters(rows, filters({ minAprPct: '5' })).map((r) => r.apr)).toEqual([0.12, 0.08]);
-    expect(applyFilters(rows, filters({ minAprPct: '12' }))).toHaveLength(1);
     // A half-typed entry must never blank the list.
-    expect(applyFilters(rows, filters({ minAprPct: '1.2e' }))).toHaveLength(3);
-    expect(applyFilters(rows, filters({ minAprPct: '  ' }))).toHaveLength(3);
-  });
-
-  it('floors on the APR the CARD PRINTS, not the raw fraction', () => {
-    // 0.11996 renders "12.0% APR"; a reader who types 12 to keep everything at
-    // 12%-or-better must not watch that very card vanish.
-    const rows = toRows([
-      makeOpportunityGroup({ pairs: [pair(0.11996, 'HYPERLIQUID', 'BINANCE')] }),
-    ]);
-    expect((0.11996 * 100).toFixed(1)).toBe('12.0');
-
-    expect(applyFilters(rows, filters({ minAprPct: '12' }))).toHaveLength(1);
-    // Genuinely below the printed floor still goes.
-    expect(applyFilters(rows, filters({ minAprPct: '12.1' }))).toHaveLength(0);
+    expect(applyFilters(rows, filters({ maxDaysText: '3e' }))).toHaveLength(3);
+    expect(applyFilters(rows, filters({ maxDaysText: '  ' }))).toHaveLength(3);
   });
 
   it('rejects every numeric literal that is not a plain decimal', () => {
     const rows = toRows(book());
     // `Number()` alone happily reads all of these, each as a silently wrong
-    // floor that Number.isFinite would wave through.
+    // cap that Number.isFinite would wave through.
     for (const text of ['0x10', '0o17', '0b11', '+5', '-5', '1e3', 'Infinity']) {
-      expect(minApr(filters({ minAprPct: text }))).toBeNull();
-      expect(applyFilters(rows, filters({ minAprPct: text }))).toHaveLength(3);
-      expect(hasActiveFilter(filters({ minAprPct: text }))).toBe(false);
+      expect(maxDays(filters({ maxDaysText: text }))).toBeNull();
+      expect(applyFilters(rows, filters({ maxDaysText: text }))).toHaveLength(3);
+      expect(hasActiveFilter(filters({ maxDaysText: text }))).toBe(false);
     }
-    // Plain decimals still read, in every shape a person types them.
-    expect(minApr(filters({ minAprPct: '7.5' }))).toBeCloseTo(0.075, 12);
-    expect(minApr(filters({ minAprPct: '.5' }))).toBeCloseTo(0.005, 12);
-    expect(minApr(filters({ minAprPct: '12.' }))).toBeCloseTo(0.12, 12);
+    // Plain numbers still read, in every shape a person types them.
+    expect(maxDays(filters({ maxDaysText: '60' }))).toBe(60);
+    expect(maxDays(filters({ maxDaysText: '.5' }))).toBeCloseTo(0.5, 12);
+    expect(maxDays(filters({ maxDaysText: '30.' }))).toBe(30);
   });
 });
 
@@ -295,7 +286,7 @@ describe('facets', () => {
     const rows = toRows(book());
     const f = facets(rows, NO_FILTERS);
 
-    expect(f.poolSize).toEqual({ assets: 3, venues: 3, maturities: 3 });
+    expect(f.poolSize).toEqual({ assets: 3, venues: 3 });
     // Every row carries BOTH its venues, so no single venue chip excludes
     // anything in a one-row list — which is how the bar knows not to show it.
     const one = toRows([makeOpportunityGroup({ pairs: [pair(0.12, 'HYPERLIQUID', 'BINANCE')] })]);
@@ -306,20 +297,56 @@ describe('facets', () => {
 
   it('lists every option even when a filter excludes it, so it stays releasable', () => {
     const rows = toRows(book());
-    const f = facets(rows, filters({ minAprPct: '100' }));
+    const f = facets(rows, filters({ maxDaysText: '0' }));
 
     expect(f.assets.map((o) => o.value)).toEqual(['ETH', 'BTC']);
     expect(f.assets.every((o) => o.count === 0)).toBe(true);
   });
 
-  it('ranks venues by their overall frequency and maturities by date', () => {
+  it('ranks venues by their overall frequency', () => {
     const rows = toRows(book());
     const f = facets(rows, NO_FILTERS);
 
     // Gate and Hyperliquid appear twice each (alphabetical tiebreak), then the
     // singletons.
     expect(f.venues.map((o) => o.value)).toEqual(['GATE', 'HYPERLIQUID', 'BINANCE', 'BYBIT']);
-    expect(f.maturities.map((o) => o.label)).toEqual(['30d', '90d']);
+  });
+});
+
+describe('persistence', () => {
+  it('round-trips a selection', () => {
+    const chosen = filters({ assets: ['BTC'], venues: ['GATE'], maxDaysText: '60' });
+    saveFilters(chosen);
+
+    expect(loadFilters()).toEqual(chosen);
+  });
+
+  it('falls back to no filters on a missing, corrupt or foreign blob', () => {
+    expect(loadFilters()).toEqual(NO_FILTERS);
+
+    localStorage.setItem(OPPORTUNITY_FILTERS_STORAGE_KEY, '{not json');
+    expect(loadFilters()).toEqual(NO_FILTERS);
+
+    localStorage.setItem(OPPORTUNITY_FILTERS_STORAGE_KEY, JSON.stringify({ assets: 'ETH' }));
+    expect(loadFilters()).toEqual(NO_FILTERS);
+
+    // A v1 blob carrying the fields this version dropped keeps what it can.
+    localStorage.setItem(
+      OPPORTUNITY_FILTERS_STORAGE_KEY,
+      JSON.stringify({ assets: ['ETH', 7, null], venues: ['GATE'], maturities: [123], minAprPct: '5' }),
+    );
+    expect(loadFilters()).toEqual(filters({ assets: ['ETH'], venues: ['GATE'] }));
+  });
+
+  it('re-normalizes venue keys and drops a tenor cap it could not parse', () => {
+    localStorage.setItem(
+      OPPORTUNITY_FILTERS_STORAGE_KEY,
+      JSON.stringify({ assets: [], venues: ['Gate', 'hyperliquid'], maxDaysText: '0x10' }),
+    );
+
+    // Restored as a red field the reader never typed into would be worse than
+    // restored as no cap at all.
+    expect(loadFilters()).toEqual(filters({ venues: ['GATE', 'HYPERLIQUID'] }));
   });
 });
 
@@ -329,16 +356,16 @@ describe('filter state helpers', () => {
     expect(toggleValue(['ETH', 'BTC'], 'ETH')).toEqual(['BTC']);
   });
 
-  it('minApr converts percent to the fraction the rows carry', () => {
-    expect(minApr(filters({ minAprPct: '7.5' }))).toBeCloseTo(0.075, 12);
-    expect(minApr(NO_FILTERS)).toBeNull();
-    expect(minApr(filters({ minAprPct: 'abc' }))).toBeNull();
+  it('maxDays reads the cap in the same unit the rows carry', () => {
+    expect(maxDays(filters({ maxDaysText: '60' }))).toBe(60);
+    expect(maxDays(NO_FILTERS)).toBeNull();
+    expect(maxDays(filters({ maxDaysText: 'abc' }))).toBeNull();
   });
 
-  it('hasActiveFilter ignores an unparseable APR floor', () => {
+  it('hasActiveFilter ignores an unparseable tenor cap', () => {
     expect(hasActiveFilter(NO_FILTERS)).toBe(false);
     expect(hasActiveFilter(filters({ venues: ['GATE'] }))).toBe(true);
-    expect(hasActiveFilter(filters({ minAprPct: '0' }))).toBe(true);
-    expect(hasActiveFilter(filters({ minAprPct: 'x' }))).toBe(false);
+    expect(hasActiveFilter(filters({ maxDaysText: '0' }))).toBe(true);
+    expect(hasActiveFilter(filters({ maxDaysText: 'x' }))).toBe(false);
   });
 });

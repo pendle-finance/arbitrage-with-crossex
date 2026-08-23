@@ -31,6 +31,7 @@ import { env, server } from '../test/server';
 import { renderWithClient } from '../test/utils';
 import { PairTicket } from '../trade/PairTicket';
 import { OPPORTUNITIES_STORAGE_KEY, OpportunitiesPanel } from './OpportunitiesPanel';
+import { OPPORTUNITY_FILTERS_STORAGE_KEY } from './opportunityFilters';
 
 /** The blob v2 supersedes — seeded by hand in the migration tests. */
 const LEGACY_KEY = 'crossex.opportunities.v1';
@@ -1099,6 +1100,10 @@ const multiPairResult = () =>
 
 const chip = (name: RegExp) => screen.getByRole('button', { name });
 
+/** Venue, Matures and Min APR fold behind the filter icon — only Asset rides
+ * the bar's own line. */
+const openMoreFilters = () => userEvent.click(screen.getByRole('button', { name: /^Filters/ }));
+
 /** The Execute control of one card, named by its legs (every card's used to be
  * the bare "Execute it", which named none of them). */
 const executeFor = (name: RegExp) => screen.getByRole('button', { name });
@@ -1191,7 +1196,7 @@ describe('OpportunitiesPanel → PairTicket prefill, runner-up pairs', () => {
 });
 
 describe('OpportunitiesPanel — filters', () => {
-  it('narrows on an asset chip and restores on Clear filters', async () => {
+  it('releases an asset chip by clicking it again — no Clear needed on the bar', async () => {
     server.use(opportunitiesHandler(multiPairResult()));
     renderWithClient(<OpportunitiesPanel />);
 
@@ -1203,9 +1208,30 @@ describe('OpportunitiesPanel — filters', () => {
     expect(screen.getByText('8.0% APR')).toBeInTheDocument();
     expect(screen.getByText('showing 1 of 3')).toBeInTheDocument();
     expect(chip(/^BTC 1$/)).toHaveAttribute('aria-pressed', 'true');
+    // The bar's own line carries no Clear: every chip on it is its own undo.
+    expect(screen.queryByRole('button', { name: 'Clear filters' })).not.toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole('button', { name: 'Clear filters' }));
+    await userEvent.click(chip(/^BTC 1$/));
     await waitFor(() => expect(toggles()).toHaveLength(3));
+  });
+
+  it('offers the blanket Clear inside the popover, where the folded filters are', async () => {
+    server.use(opportunitiesHandler(multiPairResult()));
+    renderWithClient(<OpportunitiesPanel />);
+
+    await waitFor(() => expect(toggles()).toHaveLength(3));
+    // Nothing armed: no Clear to offer, inside or out.
+    await openMoreFilters();
+    expect(screen.queryByRole('button', { name: 'Clear filters' })).not.toBeInTheDocument();
+
+    await userEvent.click(chip(/^Gate 2$/));
+    await waitFor(() => expect(toggles()).toHaveLength(2));
+
+    const popover = screen.getByRole('dialog');
+    await userEvent.click(within(popover).getByRole('button', { name: 'Clear filters' }));
+    await waitFor(() => expect(toggles()).toHaveLength(3));
+    // Clearing does not close the popover the reader is still working in.
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
   });
 
   it('matches a venue on either leg, and ORs two chips in one dimension', async () => {
@@ -1213,6 +1239,7 @@ describe('OpportunitiesPanel — filters', () => {
     renderWithClient(<OpportunitiesPanel />);
 
     await waitFor(() => expect(toggles()).toHaveLength(3));
+    await openMoreFilters();
     // Gate is the LONG leg of one ETH pair and of the BTC pair.
     await userEvent.click(chip(/^Gate 2$/));
     await waitFor(() => expect(toggles()).toHaveLength(2));
@@ -1226,7 +1253,9 @@ describe('OpportunitiesPanel — filters', () => {
     renderWithClient(<OpportunitiesPanel />);
 
     await waitFor(() => expect(toggles()).toHaveLength(3));
+    // Asset stays on the bar's line; the venue chips it re-counts do not.
     await userEvent.click(chip(/^ETH 2$/));
+    await openMoreFilters();
 
     // Venue counts fall to what ETH leaves; Bybit trades no ETH, so its chip
     // would add nothing and reads as a dead end. It stays in the tab order and
@@ -1243,15 +1272,18 @@ describe('OpportunitiesPanel — filters', () => {
     expect(chip(/^BTC 1$/)).toHaveAttribute('aria-disabled', 'false');
   });
 
-  it('applies the APR floor as a percent', async () => {
+  it('caps the tenor in days, keeping the card that prints exactly that number', async () => {
     server.use(opportunitiesHandler(multiPairResult()));
     renderWithClient(<OpportunitiesPanel />);
 
+    // Two 30-day ETH cards and one 90-day BTC card.
     await waitFor(() => expect(toggles()).toHaveLength(3));
-    await userEvent.type(screen.getByLabelText('Min APR'), '5');
+    await openMoreFilters();
+    await userEvent.type(screen.getByLabelText('Matures within'), '30');
 
+    // The 90-day cohort goes; "(30 days)" is inside a 30-day cap, not outside.
     await waitFor(() => expect(toggles()).toHaveLength(2));
-    expect(screen.queryByText('4.0% APR')).not.toBeInTheDocument();
+    expect(screen.queryByText('8.0% APR')).not.toBeInTheDocument();
   });
 
   it('offers no filter row for a dimension that cannot exclude anything', async () => {
@@ -1259,12 +1291,129 @@ describe('OpportunitiesPanel — filters', () => {
     renderWithClient(<OpportunitiesPanel />);
 
     await waitFor(() => expect(toggles()).toHaveLength(1));
-    // A single card: its one asset and one maturity are obviously no choice —
-    // and neither are its TWO venue chips, since the card carries both legs, so
-    // picking either leaves exactly the card already on screen.
+    // A single card: its one asset is obviously no choice.
     expect(screen.queryByText('Asset')).not.toBeInTheDocument();
+    // Nor, once unfolded, its one maturity — nor its TWO venue chips, since the
+    // card carries both legs, so picking either leaves what is already there.
+    await openMoreFilters();
     expect(screen.queryByText('Matures')).not.toBeInTheDocument();
     expect(screen.queryByText('Venue')).not.toBeInTheDocument();
+  });
+
+  it('opens the refinements in a popover, dismissed by Escape, ✕ or a click outside', async () => {
+    server.use(opportunitiesHandler(multiPairResult()));
+    renderWithClient(<OpportunitiesPanel />);
+
+    await waitFor(() => expect(toggles()).toHaveLength(3));
+    const trigger = screen.getByRole('button', { name: 'Filters' });
+    expect(trigger).toHaveAttribute('aria-haspopup', 'dialog');
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+    await openMoreFilters();
+    const popover = screen.getByRole('dialog', { name: /venue, maturity and APR/i });
+    expect(trigger).toHaveAttribute('aria-controls', popover.id);
+    expect(within(popover).getByText('Venue')).toBeInTheDocument();
+    expect(within(popover).getByLabelText('Matures within')).toBeInTheDocument();
+    // The APR floor is gone — the hero APR is what the list is already sorted
+    // by, so a second way to say "at least this much" earned nothing.
+    expect(within(popover).queryByLabelText('Min APR')).not.toBeInTheDocument();
+
+    // Escape hands the caret back to the icon that opened it.
+    await userEvent.keyboard('{Escape}');
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(trigger).toHaveFocus();
+
+    await openMoreFilters();
+    await userEvent.click(screen.getByRole('button', { name: 'dismiss' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+
+    // The scrim behind it closes on a click anywhere outside.
+    await openMoreFilters();
+    await userEvent.click(document.querySelector('[role="presentation"]') as HTMLElement);
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+  });
+
+  it('restores last session\u2019s selection, and keeps it visible while it narrows', async () => {
+    localStorage.setItem(
+      OPPORTUNITY_FILTERS_STORAGE_KEY,
+      JSON.stringify({ assets: ['BTC'], venues: ['GATE'], maxDaysText: '' }),
+    );
+    server.use(opportunitiesHandler(multiPairResult()));
+    renderWithClient(<OpportunitiesPanel />);
+
+    // Applied on the first render, not after a click.
+    await waitFor(() => expect(toggles()).toHaveLength(1));
+    expect(screen.getByText('showing 1 of 3')).toBeInTheDocument();
+    // And ANNOUNCED: the asset chip is pressed, and the folded venue filter is
+    // a count on the icon. A restored filter the reader cannot see reads as an
+    // empty market, which is the whole risk of persisting one.
+    expect(chip(/^BTC 1$/)).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: 'Filters, 1 active' })).toBeInTheDocument();
+  });
+
+  it('keeps a restored selection releasable when today\u2019s data no longer has it', async () => {
+    // SOL priced yesterday; today it does not.
+    localStorage.setItem(
+      OPPORTUNITY_FILTERS_STORAGE_KEY,
+      JSON.stringify({ assets: ['SOL'], venues: [], maxDaysText: '' }),
+    );
+    server.use(opportunitiesHandler(multiPairResult()));
+    renderWithClient(<OpportunitiesPanel />);
+
+    await waitFor(() =>
+      expect(screen.getByText('No opportunity matches these filters')).toBeInTheDocument(),
+    );
+    // The chip survives at count 0 so the reader can see WHAT is hiding the
+    // list, and release it without the blanket Clear.
+    expect(chip(/^SOL 0$/)).toHaveAttribute('aria-pressed', 'true');
+    expect(chip(/^SOL 0$/)).toHaveAttribute('aria-disabled', 'false');
+
+    await userEvent.click(chip(/^SOL 0$/));
+    await waitFor(() => expect(toggles()).toHaveLength(3));
+  });
+
+  it('persists a change so the next mount opens with it', async () => {
+    server.use(opportunitiesHandler(multiPairResult()));
+    const { unmount } = renderWithClient(<OpportunitiesPanel />);
+
+    await waitFor(() => expect(toggles()).toHaveLength(3));
+    await userEvent.click(chip(/^BTC 1$/));
+    await waitFor(() => expect(toggles()).toHaveLength(1));
+    unmount();
+
+    renderWithClient(<OpportunitiesPanel />);
+    await waitFor(() => expect(toggles()).toHaveLength(1));
+    expect(chip(/^BTC 1$/)).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('badges the icon when a folded refinement is armed, and unbadges on Clear', async () => {
+    server.use(opportunitiesHandler(multiPairResult()));
+    renderWithClient(<OpportunitiesPanel />);
+
+    await waitFor(() => expect(toggles()).toHaveLength(3));
+    // Nothing armed behind the fold: the icon carries no count.
+    expect(screen.getByRole('button', { name: 'Filters' })).toBeInTheDocument();
+
+    await openMoreFilters();
+    await userEvent.click(chip(/^Gate 2$/));
+    await waitFor(() => expect(toggles()).toHaveLength(2));
+
+    // Toggling a chip must not close the popover — a reader refining by venue
+    // is usually picking more than one.
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+
+    // Folded away, the armed venue filter must still be visible AS a count —
+    // otherwise the list is narrowed for no reason the reader can see.
+    await userEvent.click(screen.getByRole('button', { name: 'dismiss' }));
+    expect(screen.queryByText('Venue')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Filters, 1 active' })).toBeInTheDocument();
+
+    await openMoreFilters();
+    await userEvent.click(
+      within(screen.getByRole('dialog')).getByRole('button', { name: 'Clear filters' }),
+    );
+    await waitFor(() => expect(toggles()).toHaveLength(3));
+    expect(screen.getByRole('button', { name: 'Filters' })).toBeInTheDocument();
   });
 
   it('keeps a selected chip listed and releasable after its rows leave the data', async () => {
@@ -1302,7 +1451,8 @@ describe('OpportunitiesPanel — filters', () => {
     renderWithClient(<OpportunitiesPanel />);
 
     await waitFor(() => expect(toggles()).toHaveLength(3));
-    await userEvent.type(screen.getByLabelText('Min APR'), '99');
+    await openMoreFilters();
+    await userEvent.type(screen.getByLabelText('Matures within'), '1');
 
     await waitFor(() =>
       expect(screen.getByText('No opportunity matches these filters')).toBeInTheDocument(),
@@ -1312,10 +1462,8 @@ describe('OpportunitiesPanel — filters', () => {
     expect(screen.getByText('showing 0 of 3')).toBeInTheDocument();
 
     await userEvent.click(
-      within(screen.getByText('No opportunity matches these filters').parentElement!).getByRole(
-        'button',
-        { name: 'Clear filters' },
-      ),
+      within(screen.getByText('No opportunity matches these filters').parentElement as HTMLElement)
+        .getByRole('button', { name: 'Clear filters' }),
     );
     await waitFor(() => expect(toggles()).toHaveLength(3));
   });
