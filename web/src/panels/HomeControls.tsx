@@ -40,7 +40,7 @@ export interface Stored {
 export function loadStored(): Stored {
   return readJson<Stored>(
     STRATEGY_STORAGE_KEY,
-    { address: null, sinceByAddress: {}, capitalBasis: 'balance' },
+    { address: null, sinceByAddress: {}, capitalBasis: 'im' },
     (parsed) => {
       const p = parsed as {
         address?: unknown;
@@ -67,7 +67,10 @@ export function loadStored(): Stored {
 
       // Anything but the explicit opt-in reads as the default, so a payload
       // written by an older build keeps the numbers it was showing.
-      const capitalBasis: CapitalBasis = p?.capitalBasis === 'im' ? 'im' : 'balance';
+      // Defaults to 'im' (margin used): the posted balance over-states capital
+      // whenever the collateral account is shared with other trading, which
+      // makes every APR on the page read lower than the trade actually earns.
+      const capitalBasis: CapitalBasis = p?.capitalBasis === 'balance' ? 'balance' : 'im';
       return { address, sinceByAddress, capitalBasis };
     },
   );

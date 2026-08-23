@@ -19,7 +19,7 @@ const openDetails = () => fireEvent.click(screen.getByRole('button', { name: /se
 /** Cost assumptions are settings now — behind a dialog, so they cannot push the
  * card around when opened. Every helper below opens it first if it is shut. */
 const openCosts = () => {
-  const btn = screen.queryByRole('button', { name: /Cost assumptions/ });
+  const btn = screen.queryByRole('button', { name: /^Costs/ });
   if (btn) fireEvent.click(btn);
 };
 
@@ -28,6 +28,12 @@ const openCosts = () => {
 const rollOver = () => {
   openCosts();
   fireEvent.click(screen.getByRole('radio', { name: 'Omit (rolling over)' }));
+};
+
+/** The exit assumption defaults to Omit now — opt in to the charged case. */
+const includeExit = () => {
+  openCosts();
+  fireEvent.click(within(exitGroup()).getByRole('radio', { name: 'Include' }));
 };
 
 /** Both cost toggles carry an 'Include' radio — scope by the exit radiogroup. */
@@ -90,15 +96,30 @@ describe('StrategyCard — hero tiers', () => {
     expect(screen.getByText('Capital')).toBeInTheDocument();
     expect(screen.getByText('$41,320')).toBeInTheDocument();
     expect(screen.getByText(/7\.07% spread/)).toBeInTheDocument();
-    // The projection is the caption under PnL now: "→ $282 by maturity".
-    expect(screen.getByText(/by maturity/)).toBeInTheDocument();
+    // The projection is a MAIN number now, beside what the position has made
+    // so far — the figure the whole trade is for, not small type under it.
+    expect(screen.getByText('PnL at maturity')).toBeInTheDocument();
     expect(screen.getAllByText(/\+?\$282/).length).toBeGreaterThan(0);
-    // PnL now is AFTER costs — what the account actually reflects. The
-    // before-cost step rides in its caption rather than as a main number.
+    // PnL now is AFTER costs — what the account actually reflects. It carries
+    // no subtitle: the before-cost step is a working, and the Costs dialog and
+    // the waterfalls below already itemise it.
     expect(screen.getByText('PnL now')).toBeInTheDocument();
     expect(screen.getByText('-$115')).toBeInTheDocument();
-    expect(screen.getByText(/-\$1 − \$114 costs/)).toBeInTheDocument();
+    expect(screen.queryByText(/− \$114 costs/)).toBeNull();
     expect(screen.getByText('hedged ✓')).toBeInTheDocument();
+  });
+
+  it('hides PnL at maturity until every leg is placed', () => {
+    render(
+      card({
+        hedgeChecks: { borosMatchRatio: 0.4, perpMatchRatio: 1, borosVsPerpRatio: 0.857, fullyHedged: false },
+      }),
+    );
+    // On a half-built book there is no locked spread to project from, so the
+    // projection would be an extrapolation from a hedge that does not exist.
+    expect(screen.queryByText('PnL at maturity')).toBeNull();
+    // What the position has actually made is still real, and still shown.
+    expect(screen.getByText('PnL now')).toBeInTheDocument();
   });
 
   it('titles the card with the asset, both venues and the maturity', () => {
@@ -123,8 +144,11 @@ describe('StrategyCard — hero tiers', () => {
     ).toBeInTheDocument();
   });
 
-  it('folds the checked exit parts into the hero numbers by default', () => {
-    render(card()); // defaults to 'Include' → both exit parts on
+  it('folds the checked exit parts into the hero numbers when included', () => {
+    render(card());
+    // The exit assumption now DEFAULTS to Omit — most positions are held to
+    // maturity — so this test opts in to the charged case it is about.
+    includeExit();
     // Profit: 282.21 − (80 + 49.16) = 153.05 → "+$153" (hero + target annotation).
     expect(screen.getAllByText(/\+?\$153/).length).toBeGreaterThan(0);
     expect(screen.queryByText(/\+?\$282/)).not.toBeInTheDocument();
@@ -151,11 +175,12 @@ describe('StrategyCard — hero tiers', () => {
   });
 
   it('the per-position exit-cost Include / Omit toggle moves the hero profit', async () => {
-    render(card()); // defaults to "Include" → profit +$153
-    expect(within(exitGroup()).getByRole('radio', { name: 'Include' })).toHaveAttribute(
+    render(card()); // defaults to Omit → the raw projection +$282
+    expect(within(exitGroup()).getByRole('radio', { name: 'Omit (rolling over)' })).toHaveAttribute(
       'aria-checked',
       'true',
     );
+    await userEvent.click(within(exitGroup()).getByRole('radio', { name: 'Include' }));
     expect(screen.getAllByText(/\+?\$153/).length).toBeGreaterThan(0);
     // Omit (rolling over) → no exit costs charged: back to the raw projection +$282.
     await userEvent.click(screen.getByRole('radio', { name: 'Omit (rolling over)' }));
@@ -230,6 +255,7 @@ describe('StrategyCard — profit waterfall + legend', () => {
     unmount();
 
     const { container: c2 } = render(card());
+    includeExit(); // the exit assumption defaults to Omit now
     openDetails();
     const segs2 = [...c2.querySelectorAll('[data-segment]')].map((el) =>
       el.getAttribute('data-segment'),
@@ -363,6 +389,7 @@ describe('StrategyCard — profit waterfall + legend', () => {
         },
       }),
     );
+    includeExit(); // the test is about the flag being ON
     openDetails();
     expect(container.querySelector('[data-segment="future-exit-fees"]')).toBeNull();
     // Exit slippage is known — its column still renders.
@@ -778,6 +805,163 @@ describe('StrategyCard — sizing gate', () => {
     expect(screen.queryByRole('button', { name: /Execute a pair/ })).toBeNull();
   });
 
+  it('a missing PERP row opens ONE perp leg, not the pair', () => {
+    const onOpenPerpLeg = vi.fn();
+    const onOpenPerpLegs = vi.fn();
+    render(
+      card(
+        {
+          // Both Boros legs on, only the OKX perp present: exactly one perp
+          // leg is missing, on the HYPERLIQUID side.
+          legs: [
+            makeStrategyLeg({ kind: 'boros', venue: 'HYPERLIQUID', side: 'SHORT', notionalUsd: 400_000 }),
+            makeStrategyLeg({ kind: 'boros', venue: 'OKX', side: 'LONG', notionalUsd: 400_000 }),
+            makeStrategyLeg({ kind: 'perp', venue: 'OKX', side: 'LONG', notionalUsd: 400_000 }),
+          ],
+          hedgeChecks: {
+            borosMatchRatio: 1,
+            perpMatchRatio: 0,
+            borosVsPerpRatio: 0.5,
+            fullyHedged: false,
+          },
+        },
+        { onOpenPerpLeg, onOpenPerpLegs },
+      ),
+    );
+    const opens = screen.getAllByRole('button', { name: /^Open$/ });
+    const perpOpen = opens.find((b) => /single perp ticket/.test(b.getAttribute('title') ?? ''));
+    expect(perpOpen).toBeDefined();
+    fireEvent.click(perpOpen!);
+
+    // The PAIR callback must not fire: this position is short ONE leg, and
+    // opening two would overshoot the hedge it is trying to complete.
+    expect(onOpenPerpLegs).not.toHaveBeenCalled();
+    expect(onOpenPerpLeg).toHaveBeenCalledTimes(1);
+    const row = onOpenPerpLeg.mock.calls[0][1];
+    expect(row.venue).toBe('HYPERLIQUID');
+    expect(row.side).toBe('SHORT');
+    expect(row.targetUsd).toBe(400_000);
+  });
+
+  it('offers NO perp Open on a venue with no CrossEx listing', () => {
+    // LIGHTER is a live Boros venue with no CrossEx perp behind it. Offering
+    // "Open" there armed a ticket that could never resolve a symbol — the rail
+    // switched to Single and the picker sat blank with nothing said. A row that
+    // cannot be acted on must not pretend otherwise.
+    const onOpenPerpLeg = vi.fn();
+    render(
+      card(
+        {
+          base: 'ETH',
+          legs: [
+            makeStrategyLeg({ kind: 'boros', venue: 'LIGHTER', side: 'SHORT', notionalUsd: 500 }),
+            makeStrategyLeg({ kind: 'boros', venue: 'GATE', side: 'LONG', notionalUsd: 500 }),
+            makeStrategyLeg({ kind: 'perp', venue: 'GATE', side: 'LONG', notionalUsd: 500 }),
+          ],
+          hedgeChecks: {
+            borosMatchRatio: 1,
+            perpMatchRatio: 0,
+            borosVsPerpRatio: 0.5,
+            fullyHedged: false,
+          },
+        },
+        { onOpenPerpLeg },
+      ),
+    );
+    const opens = screen.queryAllByRole('button', { name: /^Open$/ });
+    const perpOpens = opens.filter((b) => /single perp ticket/.test(b.getAttribute('title') ?? ''));
+    // The only missing perp is the LIGHTER one, and it cannot be opened here.
+    expect(perpOpens).toHaveLength(0);
+  });
+
+  it('a missing PERP row carries the BOROS leg\'s token size, not just USD', () => {
+    // Hubert's card: both Boros legs on a BTC-collateral market, NO perps yet.
+    // The token size has to come from the Boros leg at the SAME venue — the
+    // leg that actually sets this perp's size. Requiring a same-KIND twin
+    // found nothing here (there are no perps at all), so the row carried no
+    // token size and the ticket fell back to sizing in USDT.
+    const onOpenPerpLeg = vi.fn();
+    render(
+      card(
+        {
+          base: 'BTC',
+          legs: [
+            makeStrategyLeg({
+              kind: 'boros',
+              venue: 'GATE',
+              side: 'LONG',
+              notionalUsd: 771,
+              notionalToken: 0.01,
+              collateral: 'BTC',
+            }),
+            makeStrategyLeg({
+              kind: 'boros',
+              venue: 'HYPERLIQUID',
+              side: 'SHORT',
+              notionalUsd: 771,
+              notionalToken: 0.01,
+              collateral: 'BTC',
+            }),
+          ],
+          hedgeChecks: {
+            borosMatchRatio: 1,
+            perpMatchRatio: 0,
+            borosVsPerpRatio: 0,
+            fullyHedged: false,
+          },
+        },
+        { onOpenPerpLeg },
+      ),
+    );
+    const opens = screen.getAllByRole('button', { name: /^Open$/ });
+    const perpOpen = opens.find((b) => /single perp ticket/.test(b.getAttribute('title') ?? ''));
+    expect(perpOpen).toBeDefined();
+    fireEvent.click(perpOpen!);
+
+    const row = onOpenPerpLeg.mock.calls[0][1];
+    // The pin: WITHOUT these two the prefill has no base quantity to offer and
+    // silently sizes the order in USDT.
+    expect(row.targetToken).toBe(0.01);
+    expect(row.targetUnit).toBe('BTC');
+  });
+
+  it('a missing BOROS row opens that one leg, at that row\'s size', () => {
+    const onOpenBoros = vi.fn();
+    render(
+      card(
+        {
+          // Both perps on, and only the OKX Boros leg is present: the card is
+          // missing exactly one Boros leg, on the HYPERLIQUID side.
+          legs: [
+            makeStrategyLeg({ kind: 'perp', venue: 'HYPERLIQUID', side: 'SHORT', notionalUsd: 400_000 }),
+            makeStrategyLeg({ kind: 'perp', venue: 'OKX', side: 'LONG', notionalUsd: 400_000 }),
+            makeStrategyLeg({ kind: 'boros', venue: 'OKX', side: 'LONG', notionalUsd: 400_000 }),
+          ],
+          hedgeChecks: {
+            borosMatchRatio: 0,
+            perpMatchRatio: 1,
+            borosVsPerpRatio: 0.5,
+            fullyHedged: false,
+          },
+        },
+        { onOpenBorosLegs: onOpenBoros },
+      ),
+    );
+    const opens = screen.getAllByRole('button', { name: /^Open$/ });
+    // Every missing row offers one, and the Boros row's is among them.
+    const borosOpen = opens.find((b) => /Boros ticket/.test(b.getAttribute('title') ?? ''));
+    expect(borosOpen).toBeDefined();
+    fireEvent.click(borosOpen!);
+
+    expect(onOpenBoros).toHaveBeenCalledTimes(1);
+    const only = onOpenBoros.mock.calls[0][1];
+    // The narrowing argument is the whole point: without it the ticket opens a
+    // PAIR and creates the OKX leg this card already holds.
+    expect(only).toBeDefined();
+    expect(only.side).toBe('SHORT');
+    expect(only.sizeUsd).toBe(400_000);
+  });
+
   it('no pair CTA when the book is fully hedged', () => {
     render(card({}, { onOpenPerpLegs: vi.fn() }));
     expect(screen.queryByRole('button', { name: /Execute a pair/ })).toBeNull();
@@ -863,7 +1047,8 @@ describe('StrategyCard — perp entry cost', () => {
   });
 
   it('composes with the exit toggle — the two assumptions stay independent', () => {
-    render(card()); // Close positions (default) + Omit
+    render(card());
+    includeExit(); // exit now defaults to Omit — this test is about BOTH on
     omitEntry();
     // 282.21 + 114.17 − (80 + 49.16) = 267.22. The exit slippage still folds in
     // at its FULL magnitude even though the server seeds it from the very entry

@@ -975,6 +975,10 @@ export interface BorosPairMarketRow {
   maturity: number;
   midApr: number;
   markApr: number;
+  /** The venue's cap on how far one trade may move the rate, as an APR
+   * fraction (config.maxRateDeviationFactorBase1e4 / 1e4 × markApr). Half of
+   * it is the default close tolerance; wider than it can never fill. */
+  maxRateDeviationApr: number;
   isolatedOnly: boolean;
   onIsolatedMargin: boolean;
   isolatedHasPositionOrOrders: boolean;
@@ -1085,6 +1089,26 @@ export interface BorosLegFill {
   execApr: number | null;
   feeSize: number | null;
   failure: { code: BorosLegFailureCode; message: string } | null;
+}
+
+/**
+ * POST /boros/pair/market/:id/cancel-and-close.
+ *
+ * ⚠ A 200 here does NOT mean the position closed. The route answers 200 for
+ * "cancelled, but there was nothing to close" (`fill: null`) and for a close
+ * that filled SHORT or failed at the venue (`fill.failure`). Callers must read
+ * `closed` and `fill` — treating the HTTP status as the outcome reports a
+ * success the user can then watch not happen.
+ */
+export interface BorosCancelAndCloseResult {
+  marketId: number;
+  cancelled: boolean;
+  /** True only when the position is FLAT afterwards. */
+  closed: boolean;
+  fill: BorosLegFill | null;
+  slippageApr?: number;
+  /** What was open when the close was sized. */
+  openSize?: number;
 }
 
 export interface BorosPairResult {

@@ -114,7 +114,9 @@ const DEFAULTS: StoredControls = {
   customNotionalUsd: 10_000,
   borosEntry: 'market',
   entryMode: 'both-market',
-  exitMode: 'close',
+  // 'roll' by default — see StrategyCard: an assumed exit cost is a decision
+  // the user has not made yet, and it understates every quote.
+  exitMode: 'roll',
   feeTier: 'vip0',
 };
 
@@ -346,13 +348,16 @@ function OpportunityCard({
   group,
   notionalUsd,
   onExecute,
+  onExecuteBoros,
   unconfigured,
 }: {
   group: OpportunityGroup;
   /** The notional the RESPONSE priced — the waterfall converts APRs with it. */
   notionalUsd: number;
   /** null when there is no trade-flow provider — the button then explains itself. */
-  onExecute: ((pair: OpportunityPair) => void) | null;
+  onExecute: ((pair: OpportunityPair, sizeBase?: number) => void) | null;
+  /** Arms the BOROS ticket with this pair's two rate legs. */
+  onExecuteBoros?: ((pair: OpportunityPair, maturitySec?: number) => void) | null;
   /** First-run view: symbols are expectedly absent, so Execute stays enabled
    * and clicking it nudges the setup guide instead of dead-ending. */
   unconfigured: boolean;
@@ -423,7 +428,7 @@ function OpportunityCard({
 
   return (
     <div
-      className={`card p-4 ${detailsDisabled ? '' : 'cursor-pointer'}`}
+      className={`card flex flex-col p-4 ${detailsDisabled ? '' : 'cursor-pointer'}`}
       onClick={toggleFromCard}
     >
       {/* Stacked on phones: the shrink-0 button group is 184px, which left the
@@ -536,29 +541,81 @@ function OpportunityCard({
           </div>
         </div>
 
-        <div className="flex shrink-0 items-start gap-2">
-          <button
-            type="button"
-            className="btn-ghost"
-            aria-expanded={open}
-            aria-label={`${open ? 'Hide' : 'Show'} details for ${group.underlying} ${group.collateral}-margined ${fmtDateUtc(group.maturity)}`}
-            disabled={detailsDisabled}
-            title={detailsTitle}
-            onClick={() => setOpen((v) => !v)}
-          >
-            {open ? 'Hide details' : 'Details'}
-          </button>
-          <button
-            type="button"
-            className="btn btn-primary px-4 font-semibold"
-            disabled={executeDisabled}
-            title={executeTitle}
-            onClick={() => pair && onExecute?.(pair)}
-          >
-            Execute it
-          </button>
+        {/* ACTIONS ONLY.
+            The details toggle used to sit here too, so three buttons of three
+            different weights shared one corner and the disclosure read as a
+            third choice with the same standing as placing an order. It now
+            lives at the foot of the card, where a disclosure belongs; this
+            corner is reserved for things that put money on. */}
+        <div className="flex shrink-0 flex-col items-end gap-1">
+          <div className="flex items-center gap-2">
+            {/* PRIMARY. Filled, because locking the fixed spread is the trade
+                — the perps only hedge what this leg buys. */}
+            <button
+              type="button"
+              className="btn btn-primary px-3.5 font-semibold"
+              disabled={executeDisabled}
+              title={
+                executeTitle ??
+                'Prefills the Boros ticket with both rate legs — this is the spread you are buying, so lock it first'
+              }
+              onClick={(e) => {
+                e.stopPropagation();
+                if (pair) onExecuteBoros?.(pair, group.maturity);
+              }}
+            >
+              Lock the rate
+            </button>
+            {/* SECONDARY. Outlined, and second: hedging before the spread is
+                locked leaves you holding naked perp exposure. */}
+            <button
+              type="button"
+              className="btn px-3.5 font-semibold"
+              disabled={executeDisabled}
+              title={
+                executeTitle ?? 'Prefills the pair ticket with the two perp legs that hedge the spread'
+              }
+              onClick={(e) => {
+                e.stopPropagation();
+                // Size the perps in the Boros collateral when that IS the
+                // base coin, so the two legs match without an eyeballed
+                // conversion; USDT-margined cohorts keep the dollar figure.
+                if (pair)
+                  onExecute?.(
+                    pair,
+                    collateralQty && collateralQty.symbol.toUpperCase() === pair.base.toUpperCase()
+                      ? collateralQty.qty
+                      : undefined,
+                  );
+              }}
+            >
+              Hedge the perps
+            </button>
+          </div>
+          {/* The sequence, stated once under the pair rather than wedged
+              between the two buttons as a floating word. */}
+          <span className="text-[10px] text-ink-500">lock the rate first, then hedge</span>
         </div>
       </div>
+
+      {/* The disclosure, at the foot and deliberately quiet: it reveals
+          reading material, which is a different kind of act from the two
+          buttons above and should not compete with them for the same corner. */}
+      {!detailsDisabled && (
+        <button
+          type="button"
+          className="mt-3 self-start text-xs font-medium text-ink-300 underline decoration-dotted underline-offset-2 hover:text-ink-100"
+          aria-expanded={open}
+          aria-label={`${open ? 'Hide' : 'Show'} details for ${group.underlying} ${group.collateral}-margined ${fmtDateUtc(group.maturity)}`}
+          title={detailsTitle}
+          onClick={(e) => {
+            e.stopPropagation();
+            setOpen((v) => !v);
+          }}
+        >
+          {open ? 'Hide details' : 'More details'}
+        </button>
+      )}
 
       {open && pair && (
         // Clicks inside the expanded breakdown must not collapse it — closing is
@@ -753,13 +810,45 @@ export function OpportunitiesPanel({ unconfigured = false }: { unconfigured?: bo
 
   const execute =
     flow &&
-    ((pair: OpportunityPair) =>
+    ((pair: OpportunityPair, sizeBase?: number) =>
       flow.prefillPair({
         base: pair.base,
         longVenue: pair.longLeg.crossexVenue,
         shortVenue: pair.shortLeg.crossexVenue,
         notionalUsd,
+        // Present only for token-margined cohorts, where the collateral IS the
+        // base coin and the perp can be sized in the same unit as the Boros leg.
+        ...(sizeBase !== undefined && sizeBase > 0
+          ? { sizeUnit: 'base' as const, sizeBase }
+          : {}),
         mode: entryMode === 'maker-hedge' ? 'maker' : 'market',
+      }));
+
+  /**
+   * The other half of the trade this card describes.
+   *
+   * The Boros legs are named by their OWN venues (`longLeg.venue`), not the
+   * CrossEx ones the perps use — a card's Boros leg and its perp leg sit at
+   * the same venue but are addressed differently, and crossing the two would
+   * arm the ticket with markets that do not exist.
+   *
+   * Size travels as USD only: a card is priced at a USD notional and holds no
+   * base-coin quantity, so the ticket uses this figure on USD-collateral
+   * markets and leaves the field empty rather than inventing a conversion.
+   */
+  const executeBoros =
+    flow &&
+    ((pair: OpportunityPair, maturitySec?: number) =>
+      flow.prefillBorosOpen({
+        base: pair.base,
+        longVenue: pair.longLeg.venue,
+        shortVenue: pair.shortLeg.venue,
+        maturity: maturitySec,
+        // ⚠ Without this a venue+base match takes whichever maturity comes
+        // first, so the two legs can land on DIFFERENT expiries — and since
+        // each leg filters the other by maturity, both then vanish from their
+        // own dropdowns and the ticket looks empty and broken.
+        size: notionalUsd,
       }));
 
   const summary = assumptionsOpen
@@ -985,6 +1074,7 @@ export function OpportunitiesPanel({ unconfigured = false }: { unconfigured?: bo
               // notional, and the chart must convert with the same one.
               notionalUsd={data?.meta.notionalUsd ?? notionalUsd}
               onExecute={execute || null}
+              onExecuteBoros={executeBoros || null}
               unconfigured={unconfigured}
             />
           ))}

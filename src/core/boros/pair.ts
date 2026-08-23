@@ -398,10 +398,26 @@ export function simulateBorosPair(input: SimulateBorosPairInput): BorosPairSimul
       ? input.takerFeeOverride
       : m.takerFeeRate;
 
-  // Both fees are quoted as rates charged on notional × years, so as an APR
-  // drag on the spread they are simply the sum of the rates.
-  const takerDragApr = takerRate(legA.market) + takerRate(legB.market);
-  const settleDragApr = legA.market.settleFeeApr + legB.market.settleFeeApr;
+  /**
+   * Both fees are quoted as rates charged on notional × years, so as an APR
+   * drag they are the sum of the rates OF THE LEGS THAT ACTUALLY TRADE.
+   *
+   * A single-leg ticket carries a borrowed partner sized to zero purely to
+   * make the pair shape valid. Summing unconditionally charged that phantom
+   * leg's taker and settlement fees too — a one-leg trade was quoted double
+   * the drag it pays, which then propagated into the spread and the net APR.
+   */
+  const tradesA = Math.abs(a.sizing.deltaSize) > 0;
+  const tradesB = Math.abs(b.sizing.deltaSize) > 0;
+  // Before a size is entered NEITHER leg trades; the pair's own fees are still
+  // the right thing to quote, so fall back to both rather than reporting zero.
+  const bothIdle = !tradesA && !tradesB;
+  const takerDragApr =
+    (tradesA || bothIdle ? takerRate(legA.market) : 0) +
+    (tradesB || bothIdle ? takerRate(legB.market) : 0);
+  const settleDragApr =
+    (tradesA || bothIdle ? legA.market.settleFeeApr : 0) +
+    (tradesB || bothIdle ? legB.market.settleFeeApr : 0);
   const feeDragApr = takerDragApr + settleDragApr;
 
   const receiveLeg: 'A' | 'B' | null =
@@ -423,13 +439,31 @@ export function simulateBorosPair(input: SimulateBorosPairInput): BorosPairSimul
 
   // What crossing both books costs right now, in collateral units. Sized off
   // the notional actually expected to trade, not the requested size.
-  const tradedSize = Math.min(Math.abs(a.sizing.deltaSize), Math.abs(b.sizing.deltaSize));
+  // ⚠ min() only when BOTH legs trade. A single-leg ticket (onlyLeg) sizes the
+  // other leg to zero, and min(size, 0) reported the taker fee as 0 on a trade
+  // that genuinely pays one — free execution is the last thing to be wrong
+  // about. With one leg live, that leg IS the traded size.
+  const sizeA = Math.abs(a.sizing.deltaSize);
+  const sizeB = Math.abs(b.sizing.deltaSize);
+  const tradedSize = sizeA === 0 || sizeB === 0 ? Math.max(sizeA, sizeB) : Math.min(sizeA, sizeB);
   const costToCrossSize = takerDragApr * tradedSize * years;
 
-  const marginRequiredTotal =
-    a.marginRequired === null || b.marginRequired === null
-      ? null
-      : a.marginRequired + b.marginRequired;
+  /**
+   * Σ of the legs that actually trade.
+   *
+   * ⚠ A leg sized to zero (a single-leg ticket's borrowed partner) never walks
+   * a book, so it has no execApr and therefore no margin — and requiring BOTH
+   * to be known reported the total as "—" on a trade whose one real leg had a
+   * perfectly good number. Null still propagates from a leg that IS trading
+   * but cannot be modelled, which is the case worth refusing to guess at.
+   */
+  const marginParts = [
+    { size: sizeA, margin: a.marginRequired },
+    { size: sizeB, margin: b.marginRequired },
+  ].filter((x) => x.size > 0);
+  const marginRequiredTotal = marginParts.some((x) => x.margin === null)
+    ? null
+    : marginParts.reduce((sum, x) => sum + (x.margin ?? 0), 0);
 
   // Only meaningful when BOTH legs trade. On a single-leg completion there is
   // no pair to hedge — reporting the one fill as "unhedged" would call closing

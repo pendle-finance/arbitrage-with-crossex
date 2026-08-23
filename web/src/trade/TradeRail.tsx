@@ -23,7 +23,7 @@
  * before anything is sent.
  */
 import { useEffect, useRef, useState } from 'react';
-import { SegmentedToggle } from '../components/SegmentedToggle';
+import { UnderlineTabs } from '../components/UnderlineTabs';
 import { BorosPairTicket } from './BorosPairTicket';
 import { PairTicket } from './PairTicket';
 import { SingleTicket } from './SingleTicket';
@@ -69,16 +69,36 @@ export function TradeRail() {
     asideRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }, [prefillNonce]);
 
+  // A missing-perp ROW asks for one leg, so the rail shows the single ticket
+  // rather than the pair — same contract as the pair prefill above, opposite
+  // mode.
+  const singlePerpNonce = flow?.singlePerpPrefill?.nonce ?? 0;
+  useEffect(() => {
+    if (!singlePerpNonce) return;
+    setVenue('perp');
+    setPerpMode('single');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [singlePerpNonce]);
+
+  // The Boros counterpart of the perp prefill: show the ticket it fills, so a
+  // form is never populated out of sight.
+  const borosOpenNonce = flow?.borosOpenPrefill?.nonce ?? 0;
+  useEffect(() => {
+    if (!borosOpenNonce) return;
+    setVenue('boros');
+    asideRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, [borosOpenNonce]);
+
   return (
     // The 340px is mirrored by TabBar's right slot so the active tab's cyan
     // shelf ends exactly where this rail begins — change both together.
     <aside ref={asideRef} className="flex w-[340px] shrink-0 flex-col gap-4" aria-label="Order ticket">
       <div className="card px-4 py-4">
-        <div className="mb-2 flex items-center justify-between">
-          <h2 className="text-sm font-semibold text-ink-100">Order ticket</h2>
-        </div>
-
-        <SegmentedToggle<Venue>
+        {/* No "Order ticket" heading: the rail is the only thing in this column
+            and the tabs below name what it is. The venue and mode switches are
+            NAVIGATION — which ticket am I on — so they read as underline tabs,
+            while the settings inside each ticket keep their boxed toggles. */}
+        <UnderlineTabs<Venue>
           ariaLabel="Venue"
           value={venue}
           onChange={setVenue}
@@ -89,22 +109,20 @@ export function TradeRail() {
         />
         {/* Stated, never inferred: the rail says which venue's legs this
             ticket touches before the user reads a single field. */}
-        <p className="mt-1.5 mb-3 text-[11px] text-ink-400">{VENUE_BLURB[venue]}</p>
+        <p className="mt-2 mb-3 text-[11px] text-ink-400">{VENUE_BLURB[venue]}</p>
 
         {venue === 'perp' && (
           <>
-            <div className="mb-3 flex items-center justify-between">
-              <span className="text-[11px] text-ink-400">Ticket</span>
-              <SegmentedToggle<PerpMode>
-                ariaLabel="Perp ticket mode"
-                value={perpMode}
-                onChange={setPerpMode}
-                options={[
-                  { value: 'pair', label: 'Pair' },
-                  { value: 'single', label: 'Single' },
-                ]}
-              />
-            </div>
+            <UnderlineTabs<PerpMode>
+              ariaLabel="Perp ticket mode"
+              value={perpMode}
+              onChange={setPerpMode}
+              className="mb-3"
+              options={[
+                { value: 'pair', label: 'Pair' },
+                { value: 'single', label: 'Single' },
+              ]}
+            />
             {perpMode === 'single' ? <SingleTicket /> : <PairTicket />}
           </>
         )}

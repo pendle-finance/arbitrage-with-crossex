@@ -14,9 +14,11 @@ import { DataTable, type Column } from '../components/DataTable';
 import { ExposureBadge } from '../components/ExposureBadge';
 import { SignedNumber } from '../components/SignedNumber';
 import { SideChip, VenueChip } from '../components/VenueChip';
-import { fmtUsd, num, sig } from '../lib/fmt';
+import { fmtUsd, num, prettyVenue, sig } from '../lib/fmt';
 import { uuid } from '../lib/uuid';
 import { ExecuteControl } from '../trade/ExecuteControl';
+import { ClosePreviewPanel } from '../trade/previewBits';
+import { usePreviewDebounced } from '../trade/usePreview';
 import { useTradeFlowOptional } from '../trade/TradeFlow';
 import { AddressForm, short } from './HomeControls';
 import { PerpLegExpanded } from './PerpLegExpanded';
@@ -204,6 +206,67 @@ export function PerpOnlyBox({
           <CloseBoth base={group.base} legs={group.legs} />
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * The pair close as a FORM: what is being closed, at what price, for what fee.
+ *
+ * `CloseBoth` is the same execution behind a bare button, with its review on a
+ * hover card — fine as a row action, wrong inside a dialog the user opened in
+ * order to read exactly these numbers. Hovering to find out what you are about
+ * to pay is not a review, and on touch there is no hover at all.
+ */
+export function ClosePairForm({
+  base,
+  legs,
+  livePositions,
+}: {
+  base: string;
+  legs: Array<{ symbol: string; qty: number; venue: string }>;
+  /** symbol → live position, for the uPnL each close realises. */
+  livePositions?: Map<string, CrossexPosition>;
+}) {
+  const flow = useTradeFlowOptional();
+  const pairGroupId = useMemo(() => uuid(), []);
+  const actions: ActionInput[] =
+    legs.length === 2
+      ? legs.map((l) => ({ kind: 'close-position' as const, symbol: l.symbol, pairGroupId }))
+      : [];
+  // Not lazy: the dialog exists to show this, so it loads with the form.
+  const preview = usePreviewDebounced(`close-pair-${base}`, actions.length ? actions : null, {
+    refetchInterval: 5000,
+  });
+  if (!flow || legs.length !== 2) return null;
+
+  return (
+    <div className="flex flex-col gap-3">
+      <ClosePreviewPanel
+        previews={preview.previews}
+        estimating={preview.estimating}
+        isError={preview.isError}
+        error={preview.error}
+        labelFor={(_p, i) => prettyVenue(legs[i]?.venue ?? '')}
+        realizedFor={(_p, i) => {
+          const live = livePositions?.get(legs[i]?.symbol ?? '');
+          return live ? Number(live.upnl) : null;
+        }}
+        note="The close is sent as a reduce-only IOC limit at mark ± slippage — it can never increase the position and never rests on the book."
+      />
+      <ExecuteControl
+        scope={`close-both-${base}`}
+        actions={actions}
+        tone="red"
+        label="Close both ▸"
+        // See CloseBoth: the per-mount pairGroupId would otherwise change the
+        // intent identity on every remount and break idempotent recovery.
+        intentKey={['closeBoth', ...legs.map((l) => `${l.symbol}:${l.qty}`)].join('|')}
+        buttonClassName="w-full"
+        // The panel above already reviews this close; the hover card would
+        // repeat it on top of the dialog. Errors still surface.
+        hoverCard={false}
+      />
     </div>
   );
 }

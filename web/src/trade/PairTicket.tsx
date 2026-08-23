@@ -48,6 +48,19 @@ export function PairTicket() {
   const [longSym, setLongSym] = useState<string | null>(null);
   const [shortSym, setShortSym] = useState<string | null>(null);
   const [notionalStr, setNotionalStr] = useState('');
+  /**
+   * The unit the size box is in.
+   *
+   * 'base' sends `qty` (ETH, BTC …); 'usd' sends `notional` (USDT). The engine
+   * has always taken either — `resolveQty` converts notional→qty at preview —
+   * so this is a labelling and routing choice, not new sizing maths.
+   *
+   * Base leads because it is what makes a hedge EXACT: the Boros leg of an
+   * ETH-collateral market is denominated in ETH, so sizing the perp in USDT
+   * meant eyeballing an FX conversion to make the two legs match, and any
+   * error showed up later as a position the card flags as imbalanced.
+   */
+  const [sizeUnit, setSizeUnit] = useState<'base' | 'usd'>('base');
   const [nonce, setNonce] = useState(0);
   const flow = useTradeFlowOptional();
   const [mode, setMode] = useState<ExecMode>('maker');
@@ -75,7 +88,23 @@ export function PairTicket() {
     setBase(prefill.base);
     setLongSym(null);
     setShortSym(null);
-    setNotionalStr(String(Math.max(1, Math.round(prefill.notionalUsd))));
+    /**
+     * Unit first, then the figure that matches it.
+     *
+     * ⚠ These two MUST move together: the box holds one number, so arming it
+     * with a USD notional while the unit says ETH would read $10,000 as
+     * 10,000 ETH. When the caller asks for base units it must also supply the
+     * base quantity; without one there is nothing honest to put in the box but
+     * the USD figure, so the unit falls back to USD rather than guessing.
+     */
+    const wantsBase = prefill.sizeUnit === 'base' && prefill.sizeBase !== undefined;
+    if (wantsBase) {
+      setSizeUnit('base');
+      setNotionalStr(String(Number(prefill.sizeBase!.toPrecision(8))));
+    } else {
+      setSizeUnit('usd');
+      setNotionalStr(String(Math.max(1, Math.round(prefill.notionalUsd))));
+    }
     // Same invariant as the manual mode toggle: a mode switch un-pins the price
     // so the maker leg resumes tracking the touch.
     if (prefill.mode) {
@@ -111,6 +140,13 @@ export function PairTicket() {
     [longSym, shortSym, nonce],
   );
 
+  /**
+   * The size field name this ticket sends. `qty` is a BASE quantity and
+   * `notional` a USD one — sending the wrong key would size the order by a
+   * factor of the coin price, so the two are never interchangeable.
+   */
+  const sizeField = sizeUnit === 'base' ? 'qty' : 'notional';
+  const sizeArg = { [sizeField]: notionalStr } as { qty?: string; notional?: string };
   const notionalNum = Number(notionalStr);
   const notionalErr = amountError(notionalStr);
   const notionalOk = Number.isFinite(notionalNum) && notionalNum > 0;
@@ -143,8 +179,8 @@ export function PairTicket() {
     const levS = levShort !== undefined ? { leverage: levShort } : {};
     if (mode === 'market') {
       return [
-        { kind: 'open-market', symbol: longSym, side: 'BUY', notional: notionalStr, pairGroupId, ...levL },
-        { kind: 'open-market', symbol: shortSym, side: 'SELL', notional: notionalStr, pairGroupId, ...levS },
+        { kind: 'open-market', symbol: longSym, side: 'BUY', ...sizeArg, pairGroupId, ...levL },
+        { kind: 'open-market', symbol: shortSym, side: 'SELL', ...sizeArg, pairGroupId, ...levS },
       ];
     }
     // Limit + hedge: the maker leg rests POC at makerPriceStr (auto-tracked to the
@@ -156,7 +192,7 @@ export function PairTicket() {
       kind: 'open-limit',
       symbol: makerIsLong ? longSym : shortSym,
       side: makerIsLong ? 'BUY' : 'SELL',
-      notional: notionalStr,
+      ...sizeArg,
       price: makerPriceStr,
       tif: 'POC',
       pairRole: 'maker',
@@ -168,13 +204,14 @@ export function PairTicket() {
       kind: 'open-market',
       symbol: makerIsLong ? shortSym : longSym,
       side: makerIsLong ? 'SELL' : 'BUY',
-      notional: notionalStr,
+      ...sizeArg,
       pairRole: 'hedge',
       pairGroupId,
       ...(makerIsLong ? levS : levL),
     };
     return makerIsLong ? [makerLeg, hedgeLeg] : [hedgeLeg, makerLeg];
-  }, [longSym, shortSym, notionalOk, notionalStr, levLong, levShort, pairGroupId, mode, makerLegPick, makerPriceStr, timeoutSec]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [longSym, shortSym, notionalOk, notionalStr, sizeUnit, levLong, levShort, pairGroupId, mode, makerLegPick, makerPriceStr, timeoutSec]);
 
   const preview = usePreviewDebounced('ticket-pair', actions, { debounceMs: 400, refetchInterval: 3_000 });
   const legLong = preview.previews?.[0];
@@ -211,8 +248,17 @@ export function PairTicket() {
     if (!fl || !fs || !notionalOk) return null;
     const allTaker = fl.takerRate + fs.takerRate;
     const chosen = makerLegPick === 'long' ? fl.makerRate + fs.takerRate : fs.makerRate + fl.takerRate;
-    return (allTaker - chosen) * notionalNum;
-  }, [legLong?.fees, legShort?.fees, makerLegPick, notionalOk, notionalNum]);
+    /**
+     * This is a DOLLAR saving, so it needs a dollar notional. When the box is
+     * in base units the preview's own resolved estNotional is the honest
+     * source — reusing the typed number would have reported "you save $0.4" on
+     * a 0.4 ETH order, wrong by the whole ETH price.
+     */
+    const usdNotional =
+      sizeUnit === 'usd' ? notionalNum : (legLong?.estNotional ?? legShort?.estNotional ?? null);
+    if (usdNotional === null || !Number.isFinite(usdNotional)) return null;
+    return (allTaker - chosen) * usdNotional;
+  }, [legLong?.fees, legShort?.fees, legLong?.estNotional, legShort?.estNotional, makerLegPick, notionalOk, notionalNum, sizeUnit]);
 
   // Inject the engine-side peg ONLY at confirm and ONLY while auto-tracking: the
   // maker rests at the fresh book-offset price computed at t=submit (same
@@ -269,14 +315,37 @@ export function PairTicket() {
       )}
 
       <div className="flex flex-col gap-1">
-        <label htmlFor="pair-notional" className="text-[11px] text-ink-400">
-          Notional per leg (USDT)
-        </label>
+        <div className="flex items-baseline justify-between gap-2">
+          <label htmlFor="pair-notional" className="text-[11px] text-ink-400">
+            Size per leg{base || sizeUnit === 'usd' ? ` (${sizeUnit === 'base' ? base : 'USDT'})` : ''}
+          </label>
+          {/* Sizing in the BASE coin is what makes the hedge exact — the Boros
+              leg of an ETH-collateral market is denominated in ETH, so a USDT
+              perp size had to be converted by eye. The toggle stays because a
+              USD-collateral market (HYPE) genuinely wants the USD figure, and
+              because some users think in notional regardless. */}
+          {/* No coin picked yet ⇒ nothing sensible to call the base unit, so
+              the choice is withheld rather than shown as "Base". */}
+          {base && (
+          <SegmentedToggle<'base' | 'usd'>
+            ariaLabel="Size unit"
+            value={sizeUnit}
+            onChange={setSizeUnit}
+            options={[
+              // Always the actual coin (ETH / BTC) — "Base" is jargon that
+              // names a role rather than the unit the number is in. Before a
+              // coin is picked the toggle is not shown at all.
+              { value: 'base', label: base ?? '' },
+              { value: 'usd', label: 'USDT' },
+            ]}
+          />
+          )}
+        </div>
         <input
           id="pair-notional"
           className={`input num ${notionalErr ? '!border-rose-500/60' : ''}`}
           inputMode="decimal"
-          placeholder="notional per leg"
+          placeholder={sizeUnit === 'base' && base ? `size in ${base}` : 'size per leg'}
           aria-invalid={notionalErr ? true : undefined}
           aria-describedby={notionalErr ? 'pair-notional-error' : undefined}
           value={notionalStr}

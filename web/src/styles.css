@@ -107,6 +107,14 @@
     @apply bg-cyan-500/15 text-cyan-300;
   }
 
+  /* Rose-active segmented control — a control whose ACTIVE option reduces a
+     position (the Boros ticket's Close intent). Applied only while that option
+     is the live one, so the tint marks what is selected rather than colouring
+     the control permanently. */
+  .seg-rose .seg-btn[data-active='true'] {
+    @apply bg-rose-500/15 text-rose-300;
+  }
+
   /* Ring that flashes around the credentials form when a card's Execute lands. */
   .flash-ring {
     @apply pointer-events-none absolute rounded-xl border-2 border-cyan-400;

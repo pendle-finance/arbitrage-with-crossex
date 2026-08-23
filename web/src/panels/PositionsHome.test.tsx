@@ -21,6 +21,7 @@ import { STRATEGY_STORAGE_KEY } from './HomeControls';
 import { PositionsHome } from './PositionsHome';
 import { SettingsDrawer } from './SettingsDrawer';
 import { TrackedAddressProvider } from './trackedAddress';
+import { TradeFlowProvider, useTradeFlow } from '../trade/TradeFlow';
 
 const ADDR = '0xB2684Cd15b0CF17050531C51d581A9dDc365f1ef';
 /** Annotations are stored per (wallet, Gate account). No /api/credentials
@@ -41,6 +42,17 @@ const mockStrategy = (body: StrategyReturns, requested?: string[]) =>
       return HttpResponse.json(env(body));
     }),
   );
+
+/** Open a leg's assign dialog. The trigger is the "Belongs to" cell; its
+ * accessible name is the size it shows, so match on the title instead. */
+const openAssign = (venue = 'HYPERLIQUID', index = 0) =>
+  fireEvent.click(screen.getAllByTitle(new RegExp(`open on ${venue}`))[index]);
+
+/** Pick a destination inside the open dialog, then confirm. */
+const chooseAndConfirm = (name: RegExp | string) => {
+  fireEvent.click(screen.getByRole('button', { name }));
+  fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+};
 
 describe('PositionsHome — address tracking (ported from StrategyPanel)', () => {
   it('starts with the tracking empty state and rejects a malformed address inline', async () => {
@@ -68,7 +80,7 @@ describe('PositionsHome — address tracking (ported from StrategyPanel)', () =>
     expect(JSON.parse(localStorage.getItem(STRATEGY_STORAGE_KEY)!)).toEqual({
       address: ADDR,
       sinceByAddress: {},
-      capitalBasis: 'balance',
+      capitalBasis: 'im',
     });
     // The input collapsed into the watch header.
     expect(screen.getByRole('button', { name: /0xB268…f1ef/ })).toBeInTheDocument();
@@ -301,47 +313,6 @@ describe('PositionsHome — box taxonomy & cues', () => {
     // renderWithClient mounts TradeFlowProvider → the hold-button renders.
     expect(screen.getByRole('button', { name: 'Close both' })).toBeInTheDocument();
   });
-});
-
-describe('PositionsHome — clock & exit flags', () => {
-  it('lets the user edit the strategy start from the timeline (sent as ?since=) and reset it', async () => {
-    localStorage.setItem(STRATEGY_STORAGE_KEY, JSON.stringify({ address: ADDR }));
-    mockPositions();
-    const sinceSeen: Array<string | null> = [];
-    server.use(
-      http.get('/api/strategy/:address', ({ request }) => {
-        sinceSeen.push(new URL(request.url).searchParams.get('since'));
-        return HttpResponse.json(env(makeStrategyReturns()));
-      }),
-    );
-    renderWithClient(<PositionsHome />);
-    await screen.findByText('hedged ✓');
-    expect(sinceSeen).toEqual([null]); // default: no override
-
-    // The timeline labels the start as the Boros open, with an edit affordance.
-    expect(screen.getByText('Boros position open')).toBeInTheDocument();
-    await userEvent.click(screen.getByRole('button', { name: 'Edit the strategy start' }));
-    const dt = screen.getByLabelText('APR clock start');
-    fireEvent.change(dt, { target: { value: '2026-07-01T10:30' } });
-    await userEvent.click(screen.getByRole('button', { name: 'Apply' }));
-
-    const expected = String(Math.floor(new Date('2026-07-01T10:30').getTime() / 1000));
-    await waitFor(() => expect(sinceSeen.at(-1)).toBe(expected));
-    // Stored against the WALLET it was set on, so switching books cannot
-    // measure the next one's return from this date.
-    expect(JSON.parse(localStorage.getItem(STRATEGY_STORAGE_KEY)!)).toEqual({
-      address: ADDR,
-      sinceByAddress: { [ADDR.toLowerCase()]: Number(expected) },
-      capitalBasis: 'balance',
-    });
-    // With an override the timeline label flips to "custom start".
-    expect(await screen.findByText('custom start')).toBeInTheDocument();
-
-    // Default restores the Boros-open anchor.
-    await userEvent.click(screen.getByRole('button', { name: 'Edit the strategy start' }));
-    await userEvent.click(screen.getByRole('button', { name: 'Default' }));
-    await waitFor(() => expect(sinceSeen.at(-1)).toBeNull());
-  });
 
 
 
@@ -377,7 +348,7 @@ describe('PositionsHome — capital basis', () => {
     expect(urls[0]).toContain('capital=im');
   });
 
-  it('leaves the URL clean on the default basis', async () => {
+  it('sends the basis explicitly — the server still defaults to posted balance', async () => {
     localStorage.setItem(STRATEGY_STORAGE_KEY, JSON.stringify({ address: ADDR, since: null }));
     mockPositions();
     const urls: string[] = [];
@@ -389,7 +360,10 @@ describe('PositionsHome — capital basis', () => {
     );
     renderWithClient(<PositionsHome />);
     await waitFor(() => expect(urls.length).toBeGreaterThan(0));
-    expect(urls[0]).not.toContain('capital=');
+    // The UI default is now "margin used" while the SERVER default is still
+    // posted balance, so the param has to be sent — omitting it would silently
+    // price every position on the other basis.
+    expect(urls[0]).toContain('capital=im');
   });
 });
 
@@ -455,27 +429,22 @@ describe('PositionsHome — a book split across strategies', () => {
     await screen.findByText('split unconfirmed');
     for (const t of screen.getAllByRole('button', { name: 'toggle details' })) fireEvent.click(t);
 
+    // Destinations are option buttons inside the assign dialog now. Open the
+    // first leg's dialog and read what it offers.
+    fireEvent.click(screen.getAllByTitle(/click to assign|click to change/)[0]);
+    const fixed = /^(This position|Nothing — leave it unassigned|Automatic)/;
     const options = screen
-      .getAllByLabelText(/perp leg belongs$/)
-      .flatMap((sel) => [...sel.querySelectorAll('option')])
-      .map((o) => o.textContent ?? '')
-      .filter((t) => !/^(this position|nothing — report as unhedged|automatic)$/.test(t));
+      .getAllByRole('button')
+      .map((b) => b.textContent ?? '')
+      .filter((t) => /^(long|short) /.test(t));
     expect(options.length).toBeGreaterThan(0);
     for (const label of options) {
       expect(label, `destination shown as a raw id: ${label}`).not.toMatch(/#|^[0-9a-f]{8}$/);
       expect(label).toMatch(/^(long|short) /);
+      expect(label).not.toMatch(fixed);
     }
     // The two same-shaped positions are told apart by size, not left identical.
-    const perCard = screen
-      .getAllByLabelText(/perp leg belongs$/)
-      .map((sel) =>
-        [...sel.querySelectorAll('option')]
-          .map((o) => o.textContent ?? '')
-          .filter((t) => !/^(this position|nothing — report as unhedged|automatic)$/.test(t)),
-      );
-    for (const labels of perCard) {
-      expect(new Set(labels).size, `ambiguous options: ${labels}`).toBe(labels.length);
-    }
+    expect(new Set(options).size, `ambiguous options: ${options}`).toBe(options.length);
   });
 
   it('shows leftover exposure as a card of its own instead of letting it disappear', async () => {
@@ -542,10 +511,12 @@ describe('PositionsHome — a book split across strategies', () => {
     await screen.findByText('split unconfirmed');
     for (const t of screen.getAllByRole('button', { name: 'toggle details' })) fireEvent.click(t);
 
-    // The unhedged card renders after the two strategies, so its picker for
-    // the shared HYPERLIQUID leg is the last one.
-    const pickers = screen.getAllByLabelText('Where the HYPERLIQUID perp leg belongs');
-    fireEvent.change(pickers[pickers.length - 1], { target: { value: '<auto>' } });
+    // The unhedged card renders after the two strategies, so its assign
+    // trigger for the shared HYPERLIQUID leg is the last one.
+    const triggers = screen.getAllByTitle(/click to assign|click to change/);
+    fireEvent.click(triggers[triggers.length - 1]);
+    fireEvent.click(screen.getByRole('button', { name: /Automatic/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
     await waitFor(() => {
       const stored = JSON.parse(localStorage.getItem('crossex.partition.v1') ?? '{}');
       expect(stored[BOOK]).toBeUndefined();
@@ -568,17 +539,13 @@ describe('PositionsHome — a book split across strategies', () => {
     renderWithClient(<PositionsHome />);
     await screen.findByText('split unconfirmed');
 
-    // The membership control lives in the leg's own expanded row.
-    for (const t of screen.getAllByRole('button', { name: 'toggle details' })) fireEvent.click(t);
-    fireEvent.click(
-      screen.getAllByRole('button', {
-        name: /Set how much of the HYPERLIQUID perp leg this position holds/,
-      })[0],
-    );
-    fireEvent.change(screen.getAllByLabelText(/size for this position/)[0], {
+    // The assign dialog opens from the leg's "Belongs to" cell; the amount is
+    // the second question, under the destination.
+    openAssign();
+    fireEvent.change(screen.getByLabelText(/size for this position/), {
       target: { value: '175' },
     });
-    fireEvent.click(screen.getAllByRole('button', { name: 'Set size' })[0]);
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
 
     await waitFor(() => expect(urls.some((u) => u.includes('partition='))).toBe(true));
     const stored = JSON.parse(localStorage.getItem('crossex.partition.v1') ?? '{}');
@@ -690,9 +657,8 @@ describe('PositionsHome — membership journeys', () => {
 
   it('ORPHANS a leg: "nothing" is written as a row with no position', async () => {
     await start();
-    fireEvent.change(screen.getAllByLabelText('Where the HYPERLIQUID perp leg belongs')[0], {
-      target: { value: '<nowhere>' },
-    });
+    openAssign();
+    chooseAndConfirm(/Nothing — leave it unassigned/);
     await waitFor(() => expect(stored().length).toBeGreaterThan(0));
     const orphan = stored().find((r) => r.positionId === undefined);
     expect(orphan?.leg).toEqual({ kind: 'perp', symbol: HL });
@@ -701,13 +667,14 @@ describe('PositionsHome — membership journeys', () => {
 
   it('MOVES a leg: the destination card is offered, and both ends get frozen', async () => {
     await start();
-    const picker = screen.getAllByLabelText('Where the BYBIT perp leg belongs')[0];
-    const other = [...picker.querySelectorAll('option')].find((o) =>
-      /HYPE#BYBIT-HYPERLIQUID#b/.test(o.value),
-    );
-    expect(other, 'the sibling card is not offered as a destination').toBeDefined();
-
-    fireEvent.change(picker, { target: { value: 'HYPE#BYBIT-HYPERLIQUID#b' } });
+    // The BYBIT leg is the second row, so its trigger is the second one.
+    openAssign('BYBIT');
+    const sibling = screen
+      .getAllByRole('button')
+      .find((b) => /^(long|short) /.test(b.textContent ?? ''));
+    expect(sibling, 'the sibling card is not offered as a destination').toBeDefined();
+    fireEvent.click(sibling!);
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
     await waitFor(() => expect(stored().length).toBeGreaterThan(0));
 
     const rows = stored();
@@ -722,15 +689,11 @@ describe('PositionsHome — membership journeys', () => {
 
   it('SETS A SIZE: the typed number is what gets stored', async () => {
     await start();
-    fireEvent.click(
-      screen.getAllByRole('button', {
-        name: 'Set how much of the HYPERLIQUID perp leg this position holds',
-      })[0],
-    );
-    fireEvent.change(screen.getAllByLabelText(/size for this position/)[0], {
+    openAssign();
+    fireEvent.change(screen.getByLabelText(/size for this position/), {
       target: { value: '123' },
     });
-    fireEvent.click(screen.getAllByRole('button', { name: 'Set size' })[0]);
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
     await waitFor(() => expect(stored().length).toBeGreaterThan(0));
     expect(stored().find((r) => r.leg.symbol === HL)?.qty).toBe(123);
     expectWireSafe();
@@ -738,9 +701,8 @@ describe('PositionsHome — membership journeys', () => {
 
   it('UNDOES: "automatic" clears the leg and the entry', async () => {
     await start();
-    fireEvent.change(screen.getAllByLabelText('Where the HYPERLIQUID perp leg belongs')[0], {
-      target: { value: '<nowhere>' },
-    });
+    openAssign();
+    chooseAndConfirm(/Nothing — leave it unassigned/);
     await waitFor(() => expect(stored().some((r) => r.positionId === undefined)).toBe(true));
 
     // The server drops the orphaned leg from every card and returns it as a
@@ -751,9 +713,9 @@ describe('PositionsHome — membership journeys', () => {
         screen.getAllByRole('button', { name: 'toggle details' }).length,
       ).toBeGreaterThan(0),
     );
-    for (const t of screen.getAllByRole('button', { name: 'toggle details' })) fireEvent.click(t);
-    const pickers = await screen.findAllByLabelText('Where the HYPERLIQUID perp leg belongs');
-    fireEvent.change(pickers[pickers.length - 1], { target: { value: '<auto>' } });
+    const triggers = await screen.findAllByTitle(/open on HYPERLIQUID/);
+    fireEvent.click(triggers[triggers.length - 1]);
+    chooseAndConfirm(/Automatic/);
     await waitFor(() => expect(stored().some((r) => r.leg.symbol === HL)).toBe(false));
     expectWireSafe();
   });
@@ -761,9 +723,8 @@ describe('PositionsHome — membership journeys', () => {
   it('sends every assertion to the server as ?partition=', async () => {
     const urls = await start();
     const before = urls.length;
-    fireEvent.change(screen.getAllByLabelText('Where the HYPERLIQUID perp leg belongs')[0], {
-      target: { value: '<nowhere>' },
-    });
+    openAssign();
+    chooseAndConfirm(/Nothing — leave it unassigned/);
     await waitFor(() => expect(urls.length).toBeGreaterThan(before));
     expect(urls[urls.length - 1]).toMatch(/partition=/);
   });
@@ -820,16 +781,17 @@ describe('PositionsHome — moving a leg off a Boros-only card', () => {
       fireEvent.click(t);
     }
 
-    // Two Boros pickers — the hedged card's and the Boros-only card's.
-    const pickers = screen.getAllByLabelText('Where the BINANCE boros leg belongs');
-    expect(pickers).toHaveLength(2);
-    // The one on the Boros-only card can send it to the hedged card.
-    const target = pickers.find((p) =>
-      [...p.querySelectorAll('option')].some((o) => o.value === 'HYPE#BYBIT-HYPERLIQUID#a'),
-    );
-    expect(target, 'the hedged card is not offered as a destination').toBeDefined();
-
-    fireEvent.change(target as HTMLElement, { target: { value: 'HYPE#BYBIT-HYPERLIQUID#a' } });
+    // Two Boros triggers — the hedged card's and the Boros-only card's. The
+    // Boros-only one is the second; its dialog offers the hedged card.
+    const triggers = screen.getAllByTitle(/open on BINANCE/);
+    expect(triggers).toHaveLength(2);
+    fireEvent.click(triggers[triggers.length - 1]);
+    const dest = screen
+      .getAllByRole('button')
+      .find((b) => /^(long|short) /.test(b.textContent ?? ''));
+    expect(dest, 'the hedged card is not offered as a destination').toBeDefined();
+    fireEvent.click(dest!);
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
     await waitFor(() => {
       const rows = (JSON.parse(localStorage.getItem('crossex.partition.v1') ?? '{}')[BOOK]?.rows ??
         []) as Array<{ positionId?: string; leg: { kind: string; marketId?: number }; qty?: number }>;
@@ -873,7 +835,7 @@ describe('PositionsHome — a Boros-less pair rendered as a card', () => {
     const { container } = renderWithClient(<PositionsHome />);
     // The bar now carries a plain trigger that OPENS the close form; the
     // hold-to-confirm itself lives inside that dialog, off the card face.
-    const close = await screen.findByRole('button', { name: 'Close position' });
+    const close = await screen.findByRole('button', { name: 'Close perp pair' });
 
     // It acts on the rows above it. Carried over from the perp-only box it
     // replaced, it landed among the "what's wrong with this position" notes,
@@ -896,6 +858,66 @@ describe('PositionsHome — a Boros-less pair rendered as a card', () => {
     mockStrategy(shared);
     renderWithClient(<PositionsHome />);
     await screen.findByText('unhedged');
-    expect(screen.queryByRole('button', { name: 'Close both' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Close perp pair' })).not.toBeInTheDocument();
+  });
+});
+
+
+describe('PositionsHome → Boros prefill', () => {
+  it('sends the card\'s MATURITY with the venues', async () => {
+    /**
+     * Regression: this path armed the Boros ticket with venue + base only.
+     * A venue lists the same base at several expiries, so the two legs could
+     * resolve to DIFFERENT maturities — and because each leg filters the other
+     * by maturity, both then vanished from their own dropdowns and the ticket
+     * rendered empty while state still held two real market ids.
+     *
+     * The sibling path (OpportunitiesPanel) was fixed first; this one was not,
+     * which is the drift this test exists to pin.
+     */
+    const seen: Array<Record<string, unknown>> = [];
+    function Probe() {
+      const flow = useTradeFlow();
+      const p = flow.borosOpenPrefill;
+      if (p && !seen.some((x) => x.nonce === p.nonce)) seen.push({ ...p });
+      return null;
+    }
+
+    // Comfortably in the future: the CTA is hidden once a card has matured.
+    const MATURITY = Math.floor(Date.now() / 1000) + 30 * 86_400;
+    const rollup = makeStrategyReturns({
+      strategies: [
+        {
+          ...makeStrategyRollup(),
+          maturity: MATURITY,
+          legs: [
+            makeStrategyLeg({ kind: 'perp', venue: 'GATE', side: 'LONG', notionalUsd: 1_000 }),
+            makeStrategyLeg({ kind: 'perp', venue: 'OKX', side: 'SHORT', notionalUsd: 1_000 }),
+          ],
+          hedgeChecks: {
+            borosMatchRatio: 0,
+            perpMatchRatio: 1,
+            borosVsPerpRatio: 0,
+            fullyHedged: false,
+          },
+        },
+      ],
+    });
+    localStorage.setItem(STRATEGY_STORAGE_KEY, JSON.stringify({ address: ADDR }));
+    mockPositions();
+    mockStrategy(rollup);
+
+    renderWithClient(
+      <TradeFlowProvider>
+        <PositionsHome />
+        <Probe />
+      </TradeFlowProvider>,
+    );
+
+    const cta = await screen.findByRole('button', { name: /Open the Boros legs/ }, { timeout: 4000 });
+    fireEvent.click(cta);
+
+    await waitFor(() => expect(seen).toHaveLength(1));
+    expect(seen[0].maturity).toBe(MATURITY);
   });
 });

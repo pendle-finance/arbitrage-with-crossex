@@ -26,6 +26,7 @@ const OPENED_2 = NOW - 1 * DAY; // the Gate/HL perp pair, later
 const MATURITY = NOW + 127 * DAY;
 
 const mk = (marketId: number, venue: string, name: string, markApr: number): BorosMarket => ({
+  maxRateDeviationApr: 0.016,
   marketId,
   tokenId: 2,
   name,

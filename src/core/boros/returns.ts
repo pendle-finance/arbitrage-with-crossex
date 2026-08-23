@@ -1594,19 +1594,18 @@ function applyMembership(
   /**
    * An assertion naming a leg the venue no longer reports.
    *
-   * Reported rather than ignored — this is the whole reason a row names a LEG.
-   * The pins this replaced were keyed by the shape of a grouping, so there was
-   * no object to check them against and a stale one simply kept asserting.
+   * Dropped SILENTLY. This used to raise a note, on the reasoning that a row
+   * names a LEG and so a dangling one is checkable and worth surfacing. But
+   * the overwhelmingly common way a leg stops existing is that the user CLOSED
+   * it — the normal end of a position's life — and warning about that greeted
+   * anyone who flattened their book with a wall of amber naming every leg they
+   * had just deliberately closed. The rows are pruned by the client
+   * (partitionStore) once the server stops returning their legs; a genuinely
+   * stale assertion is indistinguishable from a closed one here, and the
+   * closed reading is right almost every time.
    */
   const live = (l: LegRef): boolean =>
     l.kind === 'perp' ? perpBySymbol.has(l.symbol) : borosByMarket.has(l.marketId);
-  const dangling = rows.filter((r) => !live(r.leg));
-  if (dangling.length) {
-    const many = dangling.length > 1;
-    notes.push(
-      `${dangling.length} saved position assignment${many ? 's no longer match' : ' no longer matches'} anything on the venue (${dangling.map((r) => describe(r.leg)).join(', ')}) — ${many ? 'those positions were' : 'that position was'} closed, or the assignment is stale.`,
-    );
-  }
   const usable = rows.filter((r) => live(r.leg));
 
   // --- Draw, in the one order that matters -----------------------------------

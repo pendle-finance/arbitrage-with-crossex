@@ -38,6 +38,7 @@ const OPENED = NOW - 12 * DAY;
 const MATURITY = NOW + 15 * DAY;
 
 const hlMarket: BorosMarket = {
+  maxRateDeviationApr: 0.016,
   marketId: 155,
   tokenId: 3,
   name: 'Hyperliquid ETH 31 Jul 2026',

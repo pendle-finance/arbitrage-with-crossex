@@ -79,7 +79,6 @@ export function PositionRowActions({
         <ClosePopover
           position={position}
           attributedQty={attributedQty}
-          anchorRef={closeBtnRef}
           onDismiss={() => setOpen(null)}
         />
       )}

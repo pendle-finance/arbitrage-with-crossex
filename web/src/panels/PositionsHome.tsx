@@ -34,6 +34,7 @@ import {
   type RowChange,
 } from './partitionStore';
 import { legRefOf, positionVenues, type LegAssertion } from './PartitionEditor';
+import { crossexVenueFor } from '../lib/boros';
 
 /** Stable empty list, so a callback's deps don't change every render. */
 const EMPTY_STRATEGIES: StrategyRollup[] = [];
@@ -229,17 +230,152 @@ export function PositionsHome() {
   // book, and the full leg size when only one Boros leg exists so far) — or
   // the caller's explicit notional when the complete-the-hedge CTA passes the
   // per-leg top-up (the ticket must land sized to the GAP, not the whole book).
+  /**
+   * Arm the Boros ticket to lock the rate this position's perps are paying.
+   * Sized off the perp legs, since they are what the Boros side must hedge.
+   */
+  /**
+   * `only` narrows this to ONE leg: the missing-leg rows open exactly the leg
+   * they name, at the size that row already displays. Without it the card can
+   * only ask for the whole pair, which on a card that is missing one leg would
+   * open a leg it already has.
+   */
+  const openBorosLegs =
+    flow &&
+    ((s: StrategyRollup, only?: { side: 'LONG' | 'SHORT'; sizeUsd: number; sizeBase?: number }) => {
+      const perps = s.legs.filter((l) => l.kind === 'perp');
+      const { long, short } = positionVenues(s);
+      // Both readings of the same leg. The perps carry each one exactly — a
+      // USD notional and a base-coin quantity — and a Boros size is one or the
+      // other depending on the market's collateral, which the ticket resolves.
+      // No price conversion anywhere, so neither can be wrong by an exchange
+      // rate, and this works with no Boros leg present (which is when this cue
+      // fires at all).
+      const perSide = Math.max(...perps.map((l) => l.notionalUsd), 0);
+      const perSideBase = Math.max(
+        ...perps.map((l) => l.notionalToken ?? 0),
+        0,
+      );
+      /**
+       * ⚠ The maturity has to travel with the venues.
+       *
+       * A venue lists the same base at several expiries, so venue+base alone
+       * resolves to whichever comes first. Land the two legs on DIFFERENT
+       * maturities and each one filters the other out of its own dropdown —
+       * both selects fall back to the placeholder and the ticket looks empty
+       * and broken, while the state still holds two real market ids.
+       */
+      // 0 is the sentinel for "no Boros legs, so no maturity" — and that is
+      // exactly the card this cue fires on. Sending it would match no market
+      // at all, so it is omitted and the resolver falls back to venue+base.
+      const maturity = s.maturity > 0 ? s.maturity : undefined;
+      if (only) {
+        // Exactly one venue travels, which is what puts the ticket in Single
+        // mode; the row's own target size travels with it rather than the
+        // per-side figure derived from the perps.
+        flow.prefillBorosOpen({
+          base: s.base,
+          longVenue: only.side === 'LONG' ? long : null,
+          shortVenue: only.side === 'SHORT' ? short : null,
+          maturity,
+          size: only.sizeUsd,
+          sizeBase: only.sizeBase,
+        });
+      } else {
+        flow.prefillBorosOpen({
+          base: s.base,
+          longVenue: long,
+          shortVenue: short,
+          maturity,
+          size: perSide,
+          sizeBase: perSideBase > 0 ? perSideBase : undefined,
+        });
+      }
+    });
+
   const openPerpLegs =
     flow &&
     ((s: StrategyRollup, notionalUsd?: number) => {
       const borosLegs = s.legs.filter((l) => l.kind === 'boros');
       const sideNotional = (side: 'LONG' | 'SHORT') =>
         borosLegs.filter((l) => l.side === side).reduce((sum, l) => sum + l.notionalUsd, 0);
+      /**
+       * Size the perps in whatever the BOROS side is collateralised in.
+       *
+       * A BTC-collateral market holds its Boros leg in BTC, so quoting the
+       * perp in USDT left the user converting by eye to make the two legs
+       * match — and any slip showed up later as a position this very card
+       * flags as imbalanced. USD-collateral markets (HYPE) keep the USD
+       * figure, which is the unit their Boros leg already uses.
+       */
+      const collateral = borosLegs.find((l) => l.collateral)?.collateral ?? '';
+      const usdPegged = collateral === 'USDT' || collateral === 'USDC';
+      // Only meaningful when the collateral IS the base coin — that is the
+      // case where the Boros size and the perp quantity are the same number.
+      const baseSized = !usdPegged && collateral.toUpperCase() === s.base.toUpperCase();
+      const sideBase = (side: 'LONG' | 'SHORT') =>
+        borosLegs
+          .filter((l) => l.side === side)
+          .reduce((sum, l) => sum + (l.notionalToken ?? 0), 0);
+      const baseQty = Math.max(sideBase('LONG'), sideBase('SHORT'));
       flow.prefillPair({
         base: s.base,
         longVenue: borosLegs.find((l) => l.side === 'LONG')?.venue ?? null,
         shortVenue: borosLegs.find((l) => l.side === 'SHORT')?.venue ?? null,
         notionalUsd: notionalUsd ?? Math.max(sideNotional('LONG'), sideNotional('SHORT')),
+        // ⚠ Only when the caller did NOT name its own USD size. A row asking
+        // for a partial top-up passes that figure, and the FULL base quantity
+        // would silently overrule it with a bigger order than the row offered.
+        ...(baseSized && baseQty > 0 && notionalUsd === undefined
+          ? { sizeUnit: 'base' as const, sizeBase: baseQty }
+          : {}),
+      });
+    });
+
+  /**
+   * One missing perp row → one perp leg.
+   *
+   * The row's side is the BOROS side, and the perp at that venue takes the
+   * SAME side — Boros SHORT on Hyperliquid means perp SELL there (the rule the
+   * opportunities prefill already encodes). Flipping it would double the
+   * exposure instead of hedging it.
+   */
+  const openPerpLeg =
+    flow &&
+    ((
+      s: StrategyRollup,
+      row: {
+        venue: string;
+        side: 'LONG' | 'SHORT';
+        targetUsd: number;
+        targetToken?: number;
+        targetUnit?: string;
+      },
+    ) => {
+      /**
+       * ⚠ A row names a BOROS venue; the perp ticket needs a CROSSEX one.
+       *
+       * The two key spaces are identity for every venue mapped today, which is
+       * exactly why passing the raw key looks correct — the bug only shows on
+       * a Boros venue with no CrossEx listing (Lighter is live in the market
+       * list right now). There, the ticket switches to Single, finds no symbol
+       * for the venue, and leaves the picker blank with nothing said. Refusing
+       * up front is the honest failure: the CTA is simply not offered.
+       */
+      const crossexVenue = crossexVenueFor(row.venue);
+      if (!crossexVenue) return;
+      // Size in the Boros collateral when that IS the base coin, so the two
+      // legs match without an eyeballed conversion.
+      const baseSized =
+        row.targetUnit !== undefined &&
+        row.targetToken !== undefined &&
+        row.targetUnit.toUpperCase() === s.base.toUpperCase();
+      flow.prefillSinglePerp({
+        base: s.base,
+        venue: crossexVenue,
+        side: row.side === 'LONG' ? 'BUY' : 'SELL',
+        notionalUsd: row.targetUsd,
+        ...(baseSized ? { sizeUnit: 'base' as const, sizeBase: row.targetToken } : {}),
       });
     });
 
@@ -281,9 +417,17 @@ export function PositionsHome() {
   // pending — hold the skeleton until BOTH feeds have settled.
   const positionsPending = positionsQuery.isPending;
   const strategyPending = Boolean(address) && strategyQuery.isPending;
+  // ⚠ Hold the skeleton while the STRATEGY feed is still pending, even with
+  // boxes already in hand. The positions feed (4s) resolves long before the
+  // strategy aggregate (30s, many venues), and with no rollups yet buildBoxes
+  // classifies every live perp as a DEGRADED perp-only box — so the user saw
+  // the old flat layout and its `Close both` flash past before the real cards
+  // replaced them. The degraded path is for a feed that FAILED, not one that
+  // has not answered yet.
   if (
     (positionsPending && (!address || strategyPending)) ||
-    (boxes.length === 0 && (positionsPending || strategyPending))
+    strategyPending ||
+    (boxes.length === 0 && positionsPending)
   ) {
     return (
       <div>
@@ -347,6 +491,8 @@ export function PositionsHome() {
                 onChangeSince={changeSince}
                 livePositions={livePositions}
                 onOpenPerpLegs={openPerpLegs || undefined}
+                onOpenPerpLeg={openPerpLeg || undefined}
+                onOpenBorosLegs={openBorosLegs || undefined}
                 onAssert={(a) => applyAssertion(box.rollup, a)}
                 destinations={destinationsFor(box.rollup, strategies)}
               />

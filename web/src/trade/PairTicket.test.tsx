@@ -92,7 +92,9 @@ async function fillTwoVenuePair() {
   await userEvent.click(await within(longRow).findByRole('button', { name: 'GATE' }));
   const shortRow = screen.getByText('SHORT venue').parentElement as HTMLElement;
   await userEvent.click(within(shortRow).getByRole('button', { name: 'OKX' }));
-  await userEvent.type(screen.getByLabelText('Notional per leg (USDT)'), '1000');
+  // The size box now defaults to the BASE coin, so a USD figure has to say so.
+  await userEvent.click(within(screen.getByRole('radiogroup', { name: 'Size unit' })).getByRole('radio', { name: 'USDT' }));
+  await userEvent.type(screen.getByLabelText('Size per leg (USDT)'), '1000');
 }
 
 /** ETH via quick-pick, GATE as the LONG venue, OKX as the SHORT venue, $1000/leg. */
@@ -117,6 +119,35 @@ beforeEach(() => {
       HttpResponse.json(env({ symbol: String(params.symbol), bestBid: 2499, bestAsk: 2501, mid: 2500 })),
     ),
   );
+});
+
+describe('PairTicket size unit', () => {
+  it('sends qty (not notional) when the box is in the base coin', async () => {
+    // The two keys are NOT interchangeable: `notional` is a USD figure the
+    // engine divides by a reference price, `qty` is already a base quantity.
+    // Sending 0.4 as `notional` would open a $0.40 order instead of 0.4 ETH.
+    const calls: ActionInput[][] = [];
+    server.use(...baseHandlers(), ...ethSymbolHandlers(), previewHandler({ calls }));
+    renderWithClient(<PairTicket />);
+    await userEvent.click(await screen.findByRole('button', { name: 'ETH' }));
+    const longRow = screen.getByText('LONG venue').parentElement as HTMLElement;
+    await userEvent.click(await within(longRow).findByRole('button', { name: 'GATE' }));
+    const shortRow = screen.getByText('SHORT venue').parentElement as HTMLElement;
+    await userEvent.click(within(shortRow).getByRole('button', { name: 'OKX' }));
+
+    // Base is the DEFAULT — the label says so without anything being clicked.
+    await userEvent.type(screen.getByLabelText('Size per leg (ETH)'), '0.4');
+    await userEvent.click(screen.getByRole('radio', { name: '2 market orders' }));
+
+    await waitFor(() => expect(calls.at(-1)?.[0]).toMatchObject({ qty: '0.4' }), {
+      timeout: 4000,
+    });
+    for (const action of calls.at(-1)!) {
+      expect(action).toMatchObject({ qty: '0.4' });
+      // The pin: the USD key must be absent, not merely also-present.
+      expect(action).not.toHaveProperty('notional');
+    }
+  });
 });
 
 describe('PairTicket execution modes', () => {
@@ -491,7 +522,7 @@ describe('PairTicket prefill', () => {
 
     await userEvent.click(screen.getByRole('button', { name: 'fire-0' }));
 
-    await waitFor(() => expect(screen.getByLabelText('Notional per leg (USDT)')).toHaveValue('1235'));
+    await waitFor(() => expect(screen.getByLabelText('Size per leg (USDT)')).toHaveValue('1235'));
     // Symbols resolved by venue → the preview fires with the mapped legs, in
     // the ticket's default Limit + hedge shape (equal fees → the long leg
     // rests as the maker, the short leg hedges at market).
@@ -524,7 +555,7 @@ describe('PairTicket prefill', () => {
     );
 
     await userEvent.click(screen.getByRole('button', { name: 'fire-0' }));
-    await waitFor(() => expect(screen.getByLabelText('Notional per leg (USDT)')).toHaveValue('500'));
+    await waitFor(() => expect(screen.getByLabelText('Size per leg (USDT)')).toHaveValue('500'));
     // The LONG leg stays unselected (BINANCE lists no ETH rule here) — with
     // only one symbol no preview can fire.
     await new Promise((r) => setTimeout(r, 250));
@@ -550,7 +581,7 @@ describe('PairTicket prefill', () => {
     expect(screen.getByRole('radio', { name: '2 market orders' })).toHaveAttribute('aria-checked', 'false');
     // Same invariant as the manual toggle: the maker price is not pinned.
     expect(screen.getByText(/tracking the book/)).toBeInTheDocument();
-    await waitFor(() => expect(screen.getByLabelText('Notional per leg (USDT)')).toHaveValue('1000'));
+    await waitFor(() => expect(screen.getByLabelText('Size per leg (USDT)')).toHaveValue('1000'));
   });
 
   it('leaves the current mode untouched when the prefill carries none', async () => {
@@ -565,7 +596,7 @@ describe('PairTicket prefill', () => {
     await userEvent.click(screen.getByRole('radio', { name: /Limit \+ hedge/ }));
     await userEvent.click(screen.getByRole('button', { name: 'fire-0' }));
 
-    await waitFor(() => expect(screen.getByLabelText('Notional per leg (USDT)')).toHaveValue('1000'));
+    await waitFor(() => expect(screen.getByLabelText('Size per leg (USDT)')).toHaveValue('1000'));
     expect(screen.getByRole('radio', { name: /Limit \+ hedge/ })).toHaveAttribute('aria-checked', 'true');
   });
 });
@@ -598,7 +629,7 @@ describe('PairTicket prefill — stale symbol-rules cache', () => {
     );
 
     await userEvent.click(screen.getByRole('button', { name: 'fire-0' }));
-    await waitFor(() => expect(screen.getByLabelText('Notional per leg (USDT)')).toHaveValue('400'));
+    await waitFor(() => expect(screen.getByLabelText('Size per leg (USDT)')).toHaveValue('400'));
 
     await userEvent.click(screen.getByRole('button', { name: 'fire-1' }));
     // The ETH pair must eventually arm with ETH symbols…
@@ -620,7 +651,9 @@ describe('notional validation', () => {
     renderWithClient(<PairTicket />);
     await userEvent.click(await screen.findByRole('button', { name: 'ETH' }));
 
-    const notional = screen.getByLabelText('Notional per leg (USDT)');
+    // No unit chosen, so the box is in the base coin — the comma check is the
+    // same either way.
+    const notional = screen.getByLabelText('Size per leg (ETH)');
     await userEvent.type(notional, '7,668.31');
 
     const err = await screen.findByRole('alert');
@@ -632,7 +665,7 @@ describe('notional validation', () => {
     renderWithClient(<PairTicket />);
     await userEvent.click(await screen.findByRole('button', { name: 'ETH' }));
 
-    const notional = screen.getByLabelText('Notional per leg (USDT)');
+    const notional = screen.getByLabelText('Size per leg (ETH)');
     await userEvent.type(notional, '7,668.31');
     expect(await screen.findByRole('alert')).toBeInTheDocument();
 

@@ -68,6 +68,16 @@ export interface BorosMarket {
   notionalOi: number;
   /** Taker fee as a rate fraction (config.takerFee / 1e18); charged rate × notional × years. */
   takerFeeRate: number;
+  /**
+   * The venue's own cap on how far a trade may move the rate, as an APR
+   * fraction: `config.maxRateDeviationFactorBase1e4 / 1e4 × markApr`.
+   *
+   * The factor is a FRACTION OF THE MARK, not the deviation itself — 2500 on a
+   * 6.57% market is 0.25 × 0.0657 = 1.64% APR, which is what the venue UI shows
+   * as "max rate deviation". A close bound wider than this can never fill, so
+   * half of it is the natural default slippage.
+   */
+  maxRateDeviationApr: number;
   /** Lifecycle state; "Normal" means live and tradable. */
   state: string;
   /** USD price of the market's UNDERLYING asset. */
@@ -285,6 +295,8 @@ export async function fetchBorosMarkets(fetchImpl: FetchLike): Promise<BorosMark
       midApr: Number(data.midApr ?? 0),
       notionalOi: Number(data.notionalOI ?? 0),
       takerFeeRate: norm18(config.takerFee as string),
+      maxRateDeviationApr:
+        (Number(config.maxRateDeviationFactorBase1e4 ?? 0) / 1e4) * Number(data.markApr ?? 0),
       state: String(m.state ?? ''),
       assetMarkPriceUsd: Number(data.assetMarkPrice ?? 0),
       kIM: norm18(config.kIM as string),

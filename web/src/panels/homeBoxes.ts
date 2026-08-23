@@ -32,9 +32,21 @@ export function buildBoxes(
     (g) => !rollupBases.has(g.base.toUpperCase()),
   );
   const byGross = (a: ExposureGroup, b: ExposureGroup) => b.grossValue - a.grossValue;
+  /**
+   * Finished positions first, then the biggest.
+   *
+   * A complete book is the thing the user came to read: it has a locked rate,
+   * a capital base and a projection, and it is what the strategy is FOR. Legs
+   * still being assembled are work in progress, so they sort below however
+   * large they are — server order was by notional alone, which floated a
+   * half-built card above a finished one purely for being bigger.
+   */
+  const byCompleteness = (a: StrategyRollup, b: StrategyRollup) => {
+    const done = (r: StrategyRollup) => (r.hedgeChecks.fullyHedged ? 0 : 1);
+    return done(a) - done(b) || b.capitalUsd - a.capitalUsd;
+  };
   return [
-    // Server order (by notional) is kept for strategy boxes.
-    ...rollups.map((rollup) => ({ kind: 'strategy' as const, rollup })),
+    ...[...rollups].sort(byCompleteness).map((rollup) => ({ kind: 'strategy' as const, rollup })),
     ...leftovers.filter((g) => !g.singleLeg).sort(byGross).map((group) => ({
       kind: 'perp-only' as const,
       group,

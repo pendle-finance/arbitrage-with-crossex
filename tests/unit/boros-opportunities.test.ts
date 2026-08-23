@@ -41,6 +41,7 @@ const HL_SYMBOL = 'HYPERLIQUID_FUTURE_ETH_USDC';
 const BN_SYMBOL = 'BINANCE_FUTURE_ETH_USDT';
 
 const hlMarket: BorosMarket = {
+  maxRateDeviationApr: 0.016,
   marketId: 155,
   tokenId: 3,
   name: 'Hyperliquid ETH 31 Aug 2026',

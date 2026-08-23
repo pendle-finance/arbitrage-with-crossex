@@ -514,6 +514,17 @@ export function borosPairRoutes(deps: AppDeps) {
 
       const rows = markets
         .filter((m) => m.state === 'Normal' && m.maturity > nowSec)
+        /**
+         * Drop Hyperliquid's `xyz:` synthetics (BRENTOIL and friends).
+         *
+         * They are index markets with no CrossEx perp behind them, so this
+         * terminal can neither hedge one nor pair it: each is the only market
+         * at its base AND its maturity, which means a pair ticket can never
+         * find it a partner and every simulation it appears in is dead on
+         * arrival. Filtering by the `xyz:` prefix rather than by name keeps
+         * the next synthetic out too.
+         */
+        .filter((m) => !m.base.toLowerCase().startsWith('xyz:'))
         .map((m) => ({
           marketId: m.marketId,
           name: m.name,
@@ -527,6 +538,10 @@ export function borosPairRoutes(deps: AppDeps) {
           maturity: m.maturity,
           midApr: m.midApr,
           markApr: m.markApr,
+          // The venue's own cap on how far a trade may move the rate. Sent per
+          // market because it is per market: half of it is the natural default
+          // close tolerance, and a bound wider than it can never fill.
+          maxRateDeviationApr: m.maxRateDeviationApr,
           isolatedOnly: m.isolatedOnly === true,
           onIsolatedMargin: account.isolatedMarkets.has(m.marketId),
           isolatedHasPositionOrOrders: account.isolatedOccupied.has(m.marketId),
@@ -670,6 +685,20 @@ export function borosPairRoutes(deps: AppDeps) {
       }).then((result) => ({ result, estimate: simulation, warnings: gate.warnings }));
       rememberExecution(memoKey, pending);
       const payload = await pending;
+
+      /**
+       * ⚠ Bust the Boros reads this OPEN just invalidated.
+       *
+       * The close route has always done this; the open route never did, and
+       * the asymmetry IS the bug: /strategy serves boros:collaterals from a
+       * 30s cache (TTL.boros), so a freshly opened leg could be invalidated
+       * client-side, refetched at once, and still come back from the PRE-TRADE
+       * snapshot. The position then appeared only when the TTL happened to
+       * lapse — "it takes a while, and sometimes I have to refresh by hand".
+       */
+      deps.cache.bust('boros:collaterals');
+      deps.cache.bust('boros:txns');
+
       return reply.ok({ ...payload, replayed: false });
     });
 
@@ -687,8 +716,36 @@ export function borosPairRoutes(deps: AppDeps) {
       if (!Number.isInteger(marketId) || marketId <= 0) {
         throw new CoreError('invalid marketId', 'validation');
       }
-      const body = (req.body ?? {}) as { clientOrderId?: unknown };
+      const body = (req.body ?? {}) as {
+        clientOrderId?: unknown;
+        size?: unknown;
+        slippageApr?: unknown;
+      };
       const clientOrderId = parseClientOrderId(body.clientOrderId, 'clientOrderId');
+      /**
+       * Size and rate bound MAY come from the caller; the ACCOUNT may not.
+       *
+       * The account is the dangerous one — it decides whose position is read
+       * and therefore how large an order this route places (see below). Size
+       * and slippage only narrow what happens to the caller's own position:
+       * a partial close is an ordinary thing to want, and a bound the user
+       * chose is safer than one they did not. Both are clamped, and the size
+       * is capped at the live position further down, so neither can be used to
+       * overshoot past flat into a fresh opposing position.
+       */
+      const sizeOverride =
+        body.size === undefined ? null : Number(body.size);
+      if (sizeOverride !== null && (!Number.isFinite(sizeOverride) || sizeOverride <= 0)) {
+        throw new CoreError('size must be a positive number', 'validation');
+      }
+      const slippageOverride =
+        body.slippageApr === undefined ? null : Number(body.slippageApr);
+      if (
+        slippageOverride !== null &&
+        (!Number.isFinite(slippageOverride) || slippageOverride <= 0 || slippageOverride > 0.5)
+      ) {
+        throw new CoreError('slippageApr must be in (0, 0.5]', 'validation');
+      }
       const orders = deps.getBorosOrders?.();
       if (!orders) {
         throw new CoreError(
@@ -734,20 +791,45 @@ export function borosPairRoutes(deps: AppDeps) {
       }
       // Reduce = trade the opposite way to the position's sign.
       const direction: BorosLegDirection = current > 0 ? 'short' : 'long';
+      // ⚠ CLAMPED to what is actually open. Boros has no reduce-only flag, so
+      // a size larger than the position does not stop at flat — it crosses it
+      // and opens a fresh one the other way. The cap is what makes accepting a
+      // caller size safe at all.
+      const openSize = Math.abs(current);
+      const size = sizeOverride === null ? openSize : Math.min(sizeOverride, openSize);
+      const slippageApr = slippageOverride ?? CLOSE_SLIPPAGE_APR;
       const fill = await orders.closePosition({
         marketId,
-        size: Math.abs(current),
+        size,
         direction,
-        limitApr: limitAprFor(direction, market.markApr, CLOSE_SLIPPAGE_APR),
+        limitApr: limitAprFor(direction, market.markApr, slippageApr),
         clientOrderId,
       });
+      /**
+       * ⚠ Bust the Boros reads this close just invalidated.
+       *
+       * `/strategy` serves `boros:collaterals:${address}` from a 30s cache
+       * (TTL.boros), so without this the client could invalidate, refetch
+       * immediately, and still be handed the PRE-CLOSE position — the card sat
+       * on a stale size for up to 30s after saying "closed". Same contract as
+       * the CrossEx writes: a write busts what it changed (deals.ts busts
+       * `account`, leverage.ts busts `positions`).
+       */
+      deps.cache.bust('boros:collaterals');
+      deps.cache.bust('boros:txns');
+
       return reply.ok({
         marketId,
         cancelled: true,
-        closed: fill.shortfallSize === 0,
+        // A PARTIAL close by request is not a failed close: `closed` means the
+        // position is flat, so a deliberate partial reports false and the
+        // caller reads `fill` for what actually happened.
+        closed: fill.shortfallSize === 0 && size >= openSize,
         fill,
         // Named so the panel can show what bound the close actually carried.
-        slippageApr: CLOSE_SLIPPAGE_APR,
+        slippageApr,
+        /** What was open when the close was sized — the cap that was applied. */
+        openSize,
       });
     });
   };

@@ -35,6 +35,7 @@ const T = (30 * DAY) / SECONDS_IN_YEAR;
 const SIZE = 100_000;
 
 const hlMarket: BorosMarket = {
+  maxRateDeviationApr: 0.016,
   marketId: 155,
   tokenId: 3,
   name: 'Hyperliquid ETH 31 Aug 2026',
@@ -208,6 +209,24 @@ describe('simulateBorosPair', () => {
     const sim = simulateBorosPair(simInput());
     // 0.09 − 0.042 − 0.003 = 0.045
     expect(sim.estSpreadApr).toBeCloseTo(0.09 - 0.042 - FEE_DRAG, 12);
+    expect(sim.feeDragApr).toBeCloseTo(FEE_DRAG, 12);
+  });
+
+  it('charges ONE leg\'s fees on a single-leg ticket, not the pair\'s', () => {
+    // A single-leg ticket carries a borrowed partner sized to zero so the pair
+    // shape stays valid. That phantom leg must not be billed: quoting the full
+    // pair drag on a one-leg trade overstates the cost by exactly one leg, and
+    // the error propagates into estSpreadApr and the net APR built on it.
+    const sim = simulateBorosPair(simInput({ onlyLeg: 'A' }));
+    // Each fixture market charges 5bp taker + 10bp settle = 0.0015 per leg.
+    expect(sim.feeDragApr).toBeCloseTo(FEE_DRAG / 2, 12);
+    expect(sim.feeDragApr).toBeLessThan(FEE_DRAG);
+  });
+
+  it('still quotes the pair\'s fees before a size is entered', () => {
+    // With size 0 NEITHER leg trades, but the ticket is still a pair ticket —
+    // reporting zero drag would read as "this trade is free".
+    const sim = simulateBorosPair(simInput({ size: 0 }));
     expect(sim.feeDragApr).toBeCloseTo(FEE_DRAG, 12);
   });
 

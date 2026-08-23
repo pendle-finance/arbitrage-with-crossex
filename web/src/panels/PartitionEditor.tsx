@@ -120,15 +120,14 @@ const AUTO = '<auto>';
 /**
  * A leg's membership, on the leg's own row, in the leg's own unit.
  *
- * The size the user holds is the thing they recognise — "50k YU of the 100k on
- * Hyperliquid" — so that is what the row states and what the editor takes.
- * The previous control said "51% of leg" behind a chevron: a percentage is not
- * a quantity anyone holds, cannot be typed back without knowing the venue
- * total, and hid the fact that a leg was split at all.
+ * The form asks two questions in the order they are decided: WHERE does this
+ * leg belong, and then HOW MUCH of it. Nothing commits until Confirm, and
+ * Confirm only lights up once something actually changed — so the dialog can
+ * be opened, read, and dismissed without touching the book.
  *
- * Releasing size does not delete it. Whatever this position gives up becomes
- * unclaimed and shows up as its own orphan row, which carries the same control
- * — so a 100k leg split 50/50 is two rows the user can each place.
+ * Choosing "Automatic" hides the amount: the whole point of automatic is that
+ * the grouper decides the split, so asking for a number would be asking for
+ * something that is then discarded.
  */
 export function LegAssignment({
   leg,
@@ -142,28 +141,85 @@ export function LegAssignment({
   onAssert?: (a: LegAssertion) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const [draft, setDraft] = useState('');
   const ref = legRefOf(leg);
-  // Read-only surfaces (the share page) get the fact without the affordance.
-  if (!ref || !onAssert) {
-    return <span className="text-[11px] text-ink-500">this position</span>;
-  }
 
   const unit = leg.kind === 'boros' ? leg.collateral : leg.base;
   const held = leg.notionalToken ?? 0;
   const share = leg.share ?? 1;
   const venueTotal = share > 0 ? held / share : held;
   const shared = share < 0.999;
+
+  /** Where the leg goes. HERE / a destination id / NOWHERE / AUTO. */
+  const [where, setWhere] = useState<string>(HERE);
+  const [draft, setDraft] = useState('');
+
+  // Read-only surfaces (the share page) get the fact without the affordance.
+  if (!ref || !onAssert) {
+    return <span className="text-[11px] text-ink-500">this position</span>;
+  }
+
+  const reset = () => {
+    setWhere(HERE);
+    setDraft(String(Number(held.toPrecision(8))));
+  };
+
+  const isAuto = where === AUTO;
+  const isNowhere = where === NOWHERE;
+  const needsAmount = !isAuto && !isNowhere;
   const parsed = Number(draft);
-  const valid = draft !== '' && Number.isFinite(parsed) && parsed >= 0 && parsed <= venueTotal + 1e-9;
+  const amountValid =
+    !needsAmount || (draft !== '' && Number.isFinite(parsed) && parsed >= 0 && parsed <= venueTotal + 1e-9);
+  // Confirm is for CHANGES. Re-asserting the status quo is a no-op the user
+  // should not be invited to perform.
+  // A RELATIVE tolerance, not an absolute one: the input is seeded from
+  // `toPrecision(8)`, so on a large leg the round-trip differs from `held` by
+  // more than 1e-9 and Confirm lit up having changed nothing. The same
+  // tolerance decides whether a residual is worth mentioning below.
+  const eps = Math.max(1e-9, venueTotal * 1e-7);
+  const amountEdited = needsAmount && Math.abs(parsed - held) > eps;
+  const changed = where !== HERE || amountEdited;
+  const canConfirm = amountValid && changed;
+
+  const commit = () => {
+    if (!canConfirm) return;
+    if (isAuto) onAssert({ mode: 'auto', leg: ref });
+    else if (isNowhere) onAssert({ mode: 'orphan', leg: ref });
+    else {
+      // A WHOLE leg is assigned without a qty: `qty` absent means "all of this
+      // leg that no other position claims", which survives the leg growing and
+      // is what a blanket move means. Sending the current size instead would
+      // freeze a float snapshot (0.0065 of a token, in one case) as if the user
+      // had typed it, and `decodeMembership` treats a typed size as outranking
+      // a blanket claim.
+      // Choosing a DESTINATION means the whole leg unless the amount was
+      // deliberately changed: moving a leg to another card is a statement about
+      // ownership, not about the half this card happens to hold right now. Only
+      // an edited amount narrows it.
+      const whole = where !== HERE ? !amountEdited : Math.abs(parsed - venueTotal) <= eps;
+      onAssert({
+        mode: 'assign',
+        leg: ref,
+        to: where === HERE ? strategyId : where,
+        ...(whole ? {} : { qty: parsed }),
+      });
+    }
+    setOpen(false);
+  };
+
+  const optionClass = (active: boolean) =>
+    `rounded-md border px-2.5 py-1.5 text-left text-[11px] transition-colors ${
+      active
+        ? 'border-cyan-500/60 bg-cyan-500/10 text-cyan-200'
+        : 'border-ink-700 bg-ink-900 text-ink-300 hover:border-ink-500 hover:text-ink-100'
+    }`;
 
   return (
     <span className="inline-flex items-center gap-1.5">
       <button
         type="button"
         onClick={() => {
-          setDraft(String(Number(held.toPrecision(8))));
-          setOpen((v) => !v);
+          reset();
+          setOpen(true);
         }}
         title={
           shared
@@ -176,20 +232,16 @@ export function LegAssignment({
             : 'border-ink-600 text-ink-300 hover:border-ink-400 hover:text-ink-100'
         }`}
       >
-        {/* An UNSHARED leg is wholly this position's, and printing its size
-            here just repeats the Notional column one cell to the left. The
-            size only carries information when it is a FRACTION of what the
-            venue holds — so that is the only time it is shown.
-            "All" rather than "this position": the column header already says
-            what it belongs to, and the cell has to share a row with five
-            others inside a fixed-width card. */}
         {shared && unit ? (
           <>
             {fmtTokenQty(held, unit)}
             <span className="text-ink-500"> / {fmtTokenQty(venueTotal, unit)}</span>
           </>
         ) : (
-          'All'
+          // "All of it" rather than "All": the cell answers "how much of this
+          // leg belongs here", and a bare "All" left the reader to guess all of
+          // WHAT — the leg, the venue, the position.
+          'All of it'
         )}
       </button>
 
@@ -197,220 +249,111 @@ export function LegAssignment({
         <Modal
           title={`Assign the ${leg.venue} ${leg.kind === 'boros' ? 'Boros' : 'perp'} leg`}
           onClose={() => setOpen(false)}
-          widthClass="w-[420px]"
+          widthClass="w-[440px]"
         >
-        <div className="p-4 text-left">
-          <div className="text-[12px] font-medium text-ink-200">
-            How much of this leg is in this position?
-          </div>
-          <div className="num mt-1 text-[11px] text-ink-500">
-            {fmtTokenQty(venueTotal, unit ?? '')} open on the venue
-          </div>
-          <div className="mt-2 flex items-center gap-1.5">
-            <input
-              type="number"
-              min="0"
-              max={venueTotal}
-              step="any"
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              aria-label={`${leg.venue} ${leg.kind} size for this position`}
-              className="num w-32 rounded border border-ink-600 bg-ink-950 px-1.5 py-1 text-right text-ink-100"
-            />
-            {unit && <span className="text-[11px] text-ink-500">{unit}</span>}
-            <button
-              type="button"
-              disabled={!valid}
-              className="ml-auto rounded border border-cyan-500/40 bg-cyan-500/10 px-2 py-1 text-[11px] font-medium text-cyan-300 disabled:opacity-40"
-              onClick={() => {
-                if (!valid) return;
-                onAssert({ mode: 'assign', leg: ref, to: strategyId, qty: parsed });
-                setOpen(false);
-              }}
-            >
-              Assign
-            </button>
-          </div>
-          {valid && parsed < venueTotal - 1e-9 && (
-            <div className="num mt-1.5 text-[10px] text-ink-500">
-              {fmtTokenQty(venueTotal - parsed, unit ?? '')} stays unassigned — it appears as its own
-              row to place.
+          <div className="flex flex-col gap-4 px-4 py-4 text-left">
+            <div>
+              <div className="text-[11px] font-medium uppercase tracking-wider text-ink-400">
+                Where does it belong?
+              </div>
+              <div className="mt-2 grid grid-cols-1 gap-1.5">
+                <button type="button" className={optionClass(where === HERE)} onClick={() => setWhere(HERE)}>
+                  This position
+                </button>
+                {destinations.map((d) => (
+                  <button
+                    key={d.id}
+                    type="button"
+                    className={optionClass(where === d.id)}
+                    onClick={() => setWhere(d.id)}
+                  >
+                    {d.label}
+                  </button>
+                ))}
+                <button
+                  type="button"
+                  className={optionClass(isNowhere)}
+                  onClick={() => setWhere(NOWHERE)}
+                >
+                  Nothing — leave it unassigned
+                </button>
+                <button type="button" className={optionClass(isAuto)} onClick={() => setWhere(AUTO)}>
+                  Automatic
+                  <span className="ml-1 text-ink-500">— let the grouper decide</span>
+                </button>
+              </div>
             </div>
-          )}
 
-          {/* Whole-leg moves, for when the size is right and the OWNER is wrong. */}
-          <div className="mt-2.5 flex flex-wrap gap-1.5 border-t border-ink-800 pt-2">
-            {destinations.map((d) => (
+            {/* An amount is only a question when a destination was named. */}
+            {needsAmount && (
+              <div>
+                <div className="text-[11px] font-medium uppercase tracking-wider text-ink-400">
+                  How much of it?
+                </div>
+                <div className="num mt-1 text-[11px] text-ink-500">
+                  {fmtTokenQty(venueTotal, unit ?? '')} open on {leg.venue}
+                </div>
+                <div className="mt-2 flex items-center gap-2">
+                  <input
+                    type="number"
+                    min="0"
+                    max={venueTotal}
+                    step="any"
+                    value={draft}
+                    onChange={(e) => setDraft(e.target.value)}
+                    aria-label={`${leg.venue} ${leg.kind} size for this position`}
+                    className="num w-36 rounded border border-ink-600 bg-ink-950 px-2 py-1.5 text-right text-ink-100"
+                  />
+                  {unit && <span className="text-[11px] text-ink-500">{unit}</span>}
+                  <button
+                    type="button"
+                    className="ml-auto rounded border border-ink-700 px-2 py-1 text-[10px] text-ink-400 hover:border-ink-500 hover:text-ink-200"
+                    onClick={() => setDraft(String(Number(venueTotal.toPrecision(8))))}
+                  >
+                    All
+                  </button>
+                </div>
+                {amountValid && parsed < venueTotal - eps && (
+                  <div className="num mt-1.5 text-[10px] text-ink-500">
+                    {fmtTokenQty(venueTotal - parsed, unit ?? '')} stays unassigned — it appears as its
+                    own row to place.
+                  </div>
+                )}
+                {!amountValid && (
+                  <div className="mt-1.5 text-[10px] text-rose-400">
+                    Enter an amount between 0 and {fmtTokenQty(venueTotal, unit ?? '')}.
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div className="flex items-center gap-2 border-t border-ink-800 pt-3">
+              <span className="text-[10px] leading-relaxed text-ink-500">
+                Changes grouping only. It places no orders.
+              </span>
               <button
-                key={d.id}
                 type="button"
-                className="rounded border border-ink-600 px-1.5 py-0.5 text-[10px] text-ink-300 hover:border-ink-400 hover:text-ink-100"
-                onClick={() => {
-                  onAssert({ mode: 'assign', leg: ref, to: d.id });
-                  setOpen(false);
-                }}
+                className="ml-auto rounded border border-ink-700 px-3 py-1.5 text-[11px] text-ink-300 hover:border-ink-500 hover:text-ink-100"
+                onClick={() => setOpen(false)}
               >
-                → {d.label}
+                Cancel
               </button>
-            ))}
-            <button
-              type="button"
-              className="rounded border border-ink-600 px-1.5 py-0.5 text-[10px] text-ink-300 hover:border-ink-400 hover:text-ink-100"
-              onClick={() => {
-                onAssert({ mode: 'orphan', leg: ref });
-                setOpen(false);
-              }}
-            >
-              Unassign
-            </button>
-            <button
-              type="button"
-              className="rounded border border-ink-600 px-1.5 py-0.5 text-[10px] text-ink-300 hover:border-ink-400 hover:text-ink-100"
-              onClick={() => {
-                onAssert({ mode: 'auto', leg: ref });
-                setOpen(false);
-              }}
-            >
-              Automatic
-            </button>
+              <button
+                type="button"
+                disabled={!canConfirm}
+                onClick={commit}
+                className="rounded border border-cyan-500/50 bg-cyan-500/10 px-3 py-1.5 text-[11px] font-medium text-cyan-300 transition-colors hover:bg-cyan-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Confirm
+              </button>
+            </div>
           </div>
-          <div className="mt-3 text-[11px] leading-relaxed text-ink-500">
-            Changes how the app groups your positions. It places no orders.
-          </div>
-        </div>
         </Modal>
       )}
     </span>
   );
 }
 
-/**
- * Where one leg belongs, rendered inside that leg's own expanded row.
- *
- * It lives there rather than in a block of its own because the question is
- * about THIS leg, and the row above it already says which leg and how big —
- * repeating both in a separate list was the same information twice, on a card
- * that is already dense.
- *
- * A membership row IS (leg → position), so one picker says everything. The
- * five buttons this replaces were three indistinguishable flavours of "remove"
- * plus two of "claim" — and between them they still could not express the
- * commonest correction of all, moving a leg to the card next door.
- */
-export function LegMembership({
-  s,
-  leg,
-  destinations = [],
-  onAssert,
-}: {
-  s: StrategyRollup;
-  leg: StrategyLeg;
-  destinations?: readonly LegDestination[];
-  onAssert?: (a: LegAssertion) => void;
-}) {
-  const [draft, setDraft] = useState<string | null>(null);
-  const ref = legRefOf(leg);
-  if (!ref || !onAssert) return null;
-
-  const held = leg.notionalToken ?? 0;
-  /**
-   * What `notionalToken` counts on THIS leg — never the card's coin.
-   *
-   * A perp is sized in its base coin, but a Boros position is sized in the
-   * COLLATERAL it is margined in, which is routinely a different token: a HYPE
-   * card carrying a USDT-collateral Boros leg offered to hold "100000 HYPE"
-   * when the figure was 100,000 USDT. The notional column already reads the
-   * unit off the leg this way; the size editor did not.
-   */
-  const unit = leg.kind === 'boros' ? leg.collateral : leg.base;
-  const share = leg.share ?? 1;
-  const total = share > 0 ? held / share : held;
-  const shared = share < 0.999;
-  const parsed = Number(draft);
-  const valid = draft !== null && draft !== '' && Number.isFinite(parsed) && parsed >= 0;
-
-  const choose = (value: string) => {
-    if (value === HERE) onAssert({ mode: 'assign', leg: ref, to: s.strategyId });
-    else if (value === NOWHERE) onAssert({ mode: 'orphan', leg: ref });
-    else if (value === AUTO) onAssert({ mode: 'auto', leg: ref });
-    else onAssert({ mode: 'assign', leg: ref, to: value });
-  };
-
-  return (
-    <div className="text-xs">
-      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-        <span className="flex items-center gap-1.5">
-          <span className="text-ink-500">belongs to</span>
-          <select
-            aria-label={`Where the ${leg.venue} ${leg.kind} leg belongs`}
-            className="rounded border border-ink-600 bg-ink-900 px-1.5 py-0.5 text-ink-100"
-            value={HERE}
-            onChange={(e) => choose(e.target.value)}
-          >
-            <option value={HERE}>this position</option>
-            {destinations.map((d) => (
-              <option key={d.id} value={d.id}>
-                {d.label}
-              </option>
-            ))}
-            <option value={NOWHERE}>nothing — report as unhedged</option>
-            <option value={AUTO}>automatic</option>
-          </select>
-          {/* The size is the rare refinement — only a shared leg needs one, and
-              only when the split itself is wrong rather than the ownership. */}
-          <button
-            type="button"
-            aria-label={`Set how much of the ${leg.venue} ${leg.kind} leg this position holds`}
-            className="rounded border border-ink-600 px-1.5 py-0.5 text-[11px] text-ink-300 hover:border-ink-400 hover:text-ink-100"
-            onClick={() =>
-              setDraft((d) => (d === null ? String(Number(held.toPrecision(8))) : null))
-            }
-          >
-            {draft === null ? 'part of it…' : 'Cancel'}
-          </button>
-        </span>
-        {/* The table row above shows this position's size; only the WHOLE the
-            venue reports is missing, and only when the leg is shared. */}
-        {shared && unit && (
-          <span className="num text-ink-500">
-            {fmtTokenQty(held, unit)} of {fmtTokenQty(total, unit)} on the venue
-          </span>
-        )}
-      </div>
-      {draft !== null && (
-        <div className="mt-1.5 flex flex-wrap items-center gap-2">
-          <label className="flex items-center gap-1.5">
-            <span className="text-ink-500">This position holds</span>
-            <input
-              type="number"
-              min="0"
-              step="any"
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              aria-label={`${leg.venue} ${leg.kind} size for this position`}
-              className="num w-28 rounded border border-ink-600 bg-ink-900 px-1.5 py-0.5 text-right text-ink-100"
-            />
-            {/* Silent rather than wrong when the venue did not say what the
-                leg is margined in — the number is still the one it reported. */}
-            {unit && <span className="text-ink-500">{unit}</span>}
-          </label>
-          <button
-            type="button"
-            disabled={!valid}
-            className="rounded border border-cyan-500/40 bg-cyan-500/10 px-2 py-0.5 text-cyan-300 disabled:opacity-40"
-            onClick={() => {
-              if (!valid) return;
-              onAssert({ mode: 'assign', leg: ref, to: s.strategyId, qty: parsed });
-              setDraft(null);
-            }}
-          >
-            Set size
-          </button>
-        </div>
-      )}
-    </div>
-  );
-}
 
 /*
  * An orphaned leg needs no block of its own.

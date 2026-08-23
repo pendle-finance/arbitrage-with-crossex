@@ -7,9 +7,11 @@ import {
   useQuery,
   useQueryClient,
 } from '@tanstack/react-query';
+import { useEffect, useRef } from 'react';
 import { del, fetchJson, postJson, putJson } from './client';
 import { uuid } from '../lib/uuid';
 import type {
+  BorosCancelAndCloseResult,
   DealAlert,
   DealView,
   BookTouch,
@@ -280,13 +282,37 @@ export function useSymbolDetail(symbol: string | null) {
 
 /** Poll one deal every second while it works; stop at DONE (kept for review). */
 export function useDealView(id: string | null) {
-  return useQuery({
+  const qc = useQueryClient();
+  const settled = useRef<string | null>(null);
+  const query = useQuery({
     queryKey: qk.deal(id ?? ''),
     queryFn: () => fetchJson<DealView>(`/deals/${encodeURIComponent(id ?? '')}`),
     enabled: Boolean(id),
-    refetchInterval: (query) => (query.state.data?.pair.mode === 'DONE' ? false : 1_000),
+    refetchInterval: (q) => (q.state.data?.pair.mode === 'DONE' ? false : 1_000),
     refetchIntervalInBackground: true,
   });
+
+  /**
+   * ⚠ A finished deal must refresh the POSITION feeds.
+   *
+   * The poll stops at DONE and nothing else asked the position or strategy
+   * queries to re-read — so an order could fill, the modal could say it had,
+   * and the cards behind it would still show the pre-trade book until their
+   * own 4s/30s interval came round (or the user reloaded). The deal is the
+   * only thing that knows when the fill actually landed.
+   *
+   * Guarded by id so this fires ONCE per deal, not on every poll after DONE.
+   */
+  const mode = query.data?.pair.mode;
+  useEffect(() => {
+    if (!id || mode !== 'DONE' || settled.current === id) return;
+    settled.current = id;
+    void qc.invalidateQueries({ queryKey: qk.positions });
+    void qc.invalidateQueries({ queryKey: ['strategy'] });
+    void qc.invalidateQueries({ queryKey: qk.account });
+  }, [id, mode, qc]);
+
+  return query;
 }
 
 /** Venue touch for the re-peg decision UI — polls only while enabled. */
@@ -401,10 +427,13 @@ export function useExecuteBorosPair() {
   return useMutation({
     mutationFn: (req: BorosPairRequest) =>
       postJson<BorosPairExecuteResponse>('/boros/pair/execute', req),
+    // ⚠ Same contract as the close below: the CARD reads the STRATEGY feed,
+    // not the pair context. Without ['strategy'] a leg that had just been
+    // opened did not appear until some other refetch happened to pull it in.
     onSuccess: () => {
-      // Positions and margin buckets both moved.
-      qc.invalidateQueries({ queryKey: ['boros', 'pair', 'context'] });
-      qc.invalidateQueries({ queryKey: qk.positions });
+      void qc.invalidateQueries({ queryKey: ['boros', 'pair', 'context'] });
+      void qc.invalidateQueries({ queryKey: ['strategy'] });
+      void qc.invalidateQueries({ queryKey: qk.positions });
     },
   });
 }
@@ -420,11 +449,30 @@ export function useExecuteBorosPair() {
 export function useBorosCancelAndClose() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (marketId: number) =>
-      postJson<{ marketId: number }>(`/boros/pair/market/${marketId}/cancel-and-close`, {
+    mutationFn: ({
+      marketId,
+      size,
+      slippageApr,
+    }: {
+      marketId: number;
+      /** Omitted = close whatever is open. The server clamps to it either way. */
+      size?: number;
+      /** APR fraction; omitted = the server's default bound. */
+      slippageApr?: number;
+    }) =>
+      postJson<BorosCancelAndCloseResult>(`/boros/pair/market/${marketId}/cancel-and-close`, {
         clientOrderId: `cx-${uuid()}`.slice(0, 64),
+        ...(size === undefined ? {} : { size }),
+        ...(slippageApr === undefined ? {} : { slippageApr }),
       }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['boros', 'pair', 'context'] }),
+    // ⚠ The CARD reads the strategy feed, not the pair context. Invalidating
+    // only the context left a closed leg on screen at its old size until the
+    // user reloaded — the close had happened, the page just never re-asked.
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['boros', 'pair', 'context'] });
+      void qc.invalidateQueries({ queryKey: ['strategy'] });
+      void qc.invalidateQueries({ queryKey: qk.positions });
+    },
   });
 }
 

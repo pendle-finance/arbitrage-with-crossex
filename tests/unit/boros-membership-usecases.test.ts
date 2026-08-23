@@ -39,6 +39,7 @@ const BIN_POS = 'b1c00001';
 const GATE_POS = 'a2c00002';
 
 const market = (marketId: number, venue: string): BorosMarket => ({
+  maxRateDeviationApr: 0.016,
   marketId,
   tokenId: 2,
   name: `${venue} ETH 25 Dec 2026`,
@@ -281,10 +282,13 @@ describe('membership use cases — the rows the UI writes, through the wire', ()
     expectNothingLost(out);
   });
 
-  it('8 · REPORTS an assertion whose leg the venue no longer has', () => {
+  it('8 · DROPS an assertion whose leg the venue no longer has, silently', () => {
+    // The overwhelmingly common reason a leg stops existing is that the user
+    // CLOSED it. Warning about that greeted anyone who flattened their book
+    // with amber naming every leg they had just deliberately closed — so a
+    // dangling row is dropped without comment, and the rest still applies.
     const out = book([...BIN_CARD, { positionId: BIN_POS, leg: { kind: 'boros', marketId: 999_999 } }]);
-    expect(out.warnings.join(' ')).toMatch(/no longer matches anything on the venue/);
-    // …and the rest of the assertion still applies.
+    expect(out.warnings.join(' ')).not.toMatch(/no longer match/);
     expect(ids(out)).toContain(BIN_POS);
     expectNothingLost(out);
   });
@@ -298,8 +302,9 @@ describe('membership use cases — the rows the UI writes, through the wire', ()
       { positionId: BIN_POS, leg: { kind: 'perp', symbol: HL }, qty: 99 },
     ]);
     const said = out.warnings.join(' ');
-    expect(said).toMatch(/OKX ETH perp/);
-    expect(said).toMatch(/Boros market 999999/);
+    // Dangling legs no longer produce a warning at all (see 8), so the naming
+    // guarantee is checked on the warnings that DO survive — the clamp note,
+    // which names a live leg the same way the cards do.
     expect(said).toMatch(/HYPERLIQUID ETH perp/);
     expect(said, 'a raw venue symbol leaked into a warning').not.toMatch(/_FUTURE_/);
   });

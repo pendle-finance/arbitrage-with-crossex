@@ -23,6 +23,7 @@ const BIN_BOROS = 129;
 const HL_BOROS = 128;
 
 const market = (marketId: number, venue: string): BorosMarket => ({
+  maxRateDeviationApr: 0.016,
   marketId,
   tokenId: 2,
   name: `${venue} ETH`,

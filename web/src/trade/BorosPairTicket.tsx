@@ -23,6 +23,7 @@
  * ticks on a 3% book than on a 30% one, which is not what a tolerance means.
  */
 import { useEffect, useMemo, useState } from 'react';
+import { useTradeFlowOptional } from './TradeFlow';
 import {
   useBorosAgent,
   useBorosCancelAndClose,
@@ -48,13 +49,11 @@ import { BorosAgentSetup } from './BorosAgentSetup';
 import {
   BlockerList,
   DirectionToggle,
-  LegSimTable,
   MarketSelect,
   PairCosts,
   PairResultReport,
   PositionArithmetic,
   SpreadReadout,
-  bpToApr,
 } from './BorosPairBits';
 
 /**
@@ -63,9 +62,22 @@ import {
  */
 const SIMULATION_MAX_AGE_MS = 12_000;
 
-/** Default tolerance, in basis points of APR (25bp = 0.25% APR per leg). */
-const DEFAULT_BP = 25;
-const MAX_BP = 1_000;
+/**
+ * Tolerance is entered as a PERCENT of APR, matching the close dialog — one
+ * unit for the same idea across both surfaces. Basis points were exact but
+ * asked the user to convert; 0.8 reads the way the venue states its own cap.
+ */
+const FALLBACK_SLIP_PCT = 0.25;
+const MAX_SLIP_PCT = 10;
+
+/** Largest 1-significant-figure value at or below `x` (0.8208 → 0.8). */
+function floorTo1Sf(x: number): number {
+  if (!Number.isFinite(x) || x <= 0) return 0;
+  const step = 10 ** Math.floor(Math.log10(x));
+  // toPrecision trims the binary noise `Math.floor(x / step) * step` leaves
+  // (0.0001234 floors to 0.00009999999999999999 without it).
+  return Number((Math.floor(x / step) * step).toPrecision(12));
+}
 
 /** Client order ids must survive a lost response so a resend cannot double-fill,
  * but must be fresh for a genuinely new order. Keyed on the intent below. */
@@ -113,11 +125,97 @@ export function BorosPairTicket({ active = true }: { active?: boolean } = {}) {
   const [dirB, setDirB] = useState<BorosLegDirection>('long');
   const [sizeStr, setSizeStr] = useState('');
   const [intent, setIntent] = useState<BorosPairIntent>('open');
-  const [sharedBp, setSharedBp] = useState(DEFAULT_BP);
+
+  /**
+   * A card asked to open its missing Boros legs: pick the two markets that
+   * match its venues, and arm the size it needs.
+   *
+   * Matched on venue + the collateral/maturity pair the card already trades,
+   * so the ticket lands on the legs that actually hedge those perps rather
+   * than the first market that happens to share a venue name.
+   */
+  const markets = context.data?.markets ?? [];
+  const openPrefill = useTradeFlowOptional()?.borosOpenPrefill ?? null;
+  /** Gates the prefill effect: it cannot resolve venues to markets until the
+   * list has arrived, and must re-run when it does. */
+  const marketsReady = markets.length > 0;
+  const openNonce = openPrefill?.nonce ?? 0;
+  useEffect(() => {
+    // ⚠ `markets` arrives asynchronously. Bailing here USED to be permanent —
+    // the effect keyed on the nonce alone, so a prefill fired before the list
+    // loaded (the common case: a card's button is one click away from a cold
+    // ticket) was dropped and the ticket just sat empty. `marketsReady` in the
+    // deps re-runs it the moment the list is there.
+    if (!openNonce || !openPrefill || markets.length === 0) return;
+    const pick = (venue: string | null) =>
+      venue === null
+        ? undefined
+        : markets.find(
+            (m) =>
+              m.venue.toUpperCase() === venue.toUpperCase() &&
+              m.base.toUpperCase() === openPrefill.base.toUpperCase() &&
+              // A venue lists the same base at several maturities; picking the
+              // wrong one gives two legs that cannot pair with each other.
+              (openPrefill.maturity === undefined || m.maturity === openPrefill.maturity),
+          );
+    const long = pick(openPrefill.longVenue);
+    const short = pick(openPrefill.shortVenue);
+    /**
+     * One venue = one leg. A missing-leg row asks for exactly the leg it is
+     * missing, so opening a PAIR here would silently create a second position
+     * the card never asked for — and on a card that is already lopsided, that
+     * is the opposite of the repair the user clicked.
+     */
+    const onlyOne = (openPrefill.longVenue === null) !== (openPrefill.shortVenue === null);
+    /**
+     * ⚠ Always ASSIGN, never "assign if found".
+     *
+     * These used to be `if (long) setMarketA(...)`, which left a previous
+     * prefill's market in place whenever the new one resolved to nothing. A
+     * stale leg is not a harmless leftover here: each leg filters the other's
+     * dropdown by collateral and maturity, so one leftover 25 Dec market
+     * narrowed the other leg to the handful that could pair with IT — the
+     * ticket looked broken, showing one wrong-maturity option and a caption
+     * blaming a pair the user never chose. Clearing to null is always right:
+     * a market that could not be resolved is one this ticket must not claim.
+     */
+    if (onlyOne) {
+      // Single mode trades leg A, so whichever side is real becomes leg A.
+      const solo = long ?? short;
+      setMarketA(solo ? solo.marketId : null);
+      setMarketB(null);
+      setMode('single');
+      setDirA(openPrefill.shortVenue !== null ? 'short' : 'long');
+    } else {
+      setMarketA(long ? long.marketId : null);
+      setMarketB(short ? short.marketId : null);
+      setMode('pair');
+      // A Boros leg hedges the perp at its OWN venue, so the side mirrors it.
+      // Seeding leg A is enough: the coupling above gives leg B the far side.
+      setDirA('long');
+    }
+    setIntent('open');
+    /**
+     * A Boros size is denominated in the market's COLLATERAL, so the collateral
+     * picks which figure to use — no price conversion, and nothing that can be
+     * wrong by an exchange rate:
+     *   USDT/USDC collateral → the USD notional IS the size;
+     *   ETH/BTC collateral   → the perp's base-coin quantity is.
+     * Unknown collateral leaves the field empty rather than guessing.
+     */
+    const picked = long ?? short;
+    const unit = picked?.collateral ?? '';
+    const usdPegged = unit === 'USDT' || unit === 'USDC';
+    const chosen = usdPegged ? openPrefill.size : openPrefill.sizeBase;
+    setSizeStr(chosen !== undefined && chosen > 0 ? String(Number(chosen.toPrecision(8))) : '');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openNonce, marketsReady]);
+  const [sharedSlip, setSharedSlip] = useState<string | null>(null);
   // Per-leg overrides for pairs where one book is much thinner than the other.
   // null = follow the shared value.
-  const [bpA, setBpA] = useState<number | null>(null);
-  const [bpB, setBpB] = useState<number | null>(null);
+  const [slipA, setSlipA] = useState<string | null>(null);
+  const [slipB, setSlipB] = useState<string | null>(null);
   const [perLeg, setPerLeg] = useState(false);
   const [acknowledged, setAcknowledged] = useState(false);
   const [orderIds, setOrderIds] = useState(newOrderIds);
@@ -126,9 +224,17 @@ export function BorosPairTicket({ active = true }: { active?: boolean } = {}) {
    * the server answered from its memo and no new order went out. */
   const [reportReplayed, setReportReplayed] = useState(false);
   /** Set by "complete now at market": trade only the leg that filled LESS. */
+  /**
+   * Set by a PARTIAL FILL: "the pair half-filled, send the deficient leg".
+   * Recovery state the panel enters on the user's behalf — not the same thing
+   * as the mode below, which is a deliberate choice made before anything is
+   * sent. Both end up as the wire's `onlyLeg`, but only one is undoable by
+   * flipping a toggle, so they are kept apart.
+   */
   const [onlyLeg, setOnlyLeg] = useState<'A' | 'B' | null>(null);
+  /** Pair (both legs) or Single (leg A alone) — the user's own choice. */
+  const [mode, setMode] = useState<'pair' | 'single'>('pair');
 
-  const markets = context.data?.markets ?? [];
   const byId = useMemo(
     () => new Map(markets.map((m) => [m.marketId, m])),
     [markets],
@@ -146,32 +252,103 @@ export function BorosPairTicket({ active = true }: { active?: boolean } = {}) {
     return null;
   };
 
-  // Leg B's direction defaults to the opposite of A (§2) — but only while the
-  // user has not deliberately set it, which `dirBTouched` tracks.
-  const [dirBTouched, setDirBTouched] = useState(false);
+  /**
+   * Leg A always flips leg B to the opposite side (§2).
+   *
+   * ⚠ This used to stop permanently the first time the user touched leg B, via
+   * a `dirBTouched` latch meant to protect a deliberate choice. But the latch
+   * never cleared: one click on leg B disabled the coupling for the rest of the
+   * session, invisibly, with no way to get it back short of a remount — so the
+   * ticket silently stopped behaving the way it had a moment earlier.
+   *
+   * A spread is opposite-by-construction, so the coupling is the rule rather
+   * than a convenience. Setting leg B directly still works and still sticks;
+   * it just no longer switches the rule off. Moving leg A is the user saying
+   * "this is the pair now", and the far side follows.
+   */
   useEffect(() => {
-    if (!dirBTouched) setDirB(dirA === 'short' ? 'long' : 'short');
-  }, [dirA, dirBTouched]);
+    setDirB(dirA === 'short' ? 'long' : 'short');
+  }, [dirA]);
 
   const sizeNum = Number(sizeStr);
   const sizeErr = amountError(sizeStr);
   const sizeOk = Number.isFinite(sizeNum) && sizeNum > 0;
 
-  const aprA = bpToApr(perLeg && bpA !== null ? bpA : sharedBp);
-  const aprB = bpToApr(perLeg && bpB !== null ? bpB : sharedBp);
+  /**
+   * The default tolerance, from the markets' OWN max rate deviation.
+   *
+   * A bound wider than the venue's cap can never fill, and a close is not
+   * hunting a rate, so half the cap is the natural default — the same rule the
+   * close dialog uses. Across a SPREAD both legs must clear their own cap, so
+   * the seed is the mean of the two halves: `(capA + capB) / 2 / 2` — which is
+   * `(capA + capB) / 4`. On a single leg it degenerates to that leg's cap / 2.
+   *
+   * Floored to one significant figure, and never rounded up: a seeded bound
+   * must stay strictly inside the cap it came from.
+   */
+  const capOf = (id: number | null): number | null => {
+    const m = id === null ? undefined : byId.get(id);
+    const cap = m?.maxRateDeviationApr;
+    return typeof cap === 'number' && cap > 0 ? cap : null;
+  };
+  const seedFor = (ids: (number | null)[]): number => {
+    const caps = ids.map(capOf).filter((c): c is number => c !== null);
+    if (caps.length === 0) return FALLBACK_SLIP_PCT;
+    const meanHalf = caps.reduce((sum, c) => sum + c / 2, 0) / caps.length;
+    const pctVal = floorTo1Sf(meanHalf * 100);
+    return pctVal > 0 ? pctVal : FALLBACK_SLIP_PCT;
+  };
+  // One leg drives a single-leg ticket; both drive a spread.
+  const singleLeg = onlyLeg ?? (mode === 'single' ? 'A' : null);
+  const seededShared = seedFor(
+    singleLeg === 'A' ? [marketA] : singleLeg === 'B' ? [marketB] : [marketA, marketB],
+  );
+  const slipStrShared = sharedSlip ?? String(seededShared);
+  const slipStrA = slipA ?? String(seedFor([marketA]));
+  const slipStrB = slipB ?? String(seedFor([marketB]));
+
+  const pctToApr = (raw: string, fallbackPct: number): number => {
+    const n = Number(raw);
+    const safe = !Number.isFinite(n) || n <= 0 ? fallbackPct : Math.min(n, MAX_SLIP_PCT);
+    return safe / 100;
+  };
+  const aprA = pctToApr(perLeg ? slipStrA : slipStrShared, seededShared);
+  const aprB = pctToApr(perLeg ? slipStrB : slipStrShared, seededShared);
 
   const request = useMemo<BorosPairRequest | null>(() => {
-    if (!address || marketA === null || marketB === null || !sizeOk) return null;
+    /**
+     * Single mode still needs a leg B on the wire.
+     *
+     * `/simulate` and `/execute` take a PAIR shape, and the route refuses a
+     * request whose two legs name the same market ("a leg cannot offset
+     * itself") — which also stops it walking either book. So a single-leg
+     * ticket borrows a real, eligible partner (same collateral and maturity)
+     * purely to satisfy the shape; `onlyLeg: 'A'` sizes it to zero, so it is
+     * quoted and never traded.
+     */
+    const partnerId =
+      mode === 'single'
+        ? (markets.find(
+            (m) =>
+              m.marketId !== marketA &&
+              rowA !== null &&
+              m.tokenId === rowA.tokenId &&
+              m.maturity === rowA.maturity,
+          )?.marketId ?? null)
+        : marketB;
+    if (!address || marketA === null || partnerId === null || !sizeOk) return null;
     return {
       address,
       legA: { marketId: marketA, direction: dirA, slippageApr: aprA },
-      legB: { marketId: marketB, direction: dirB, slippageApr: aprB },
+      legB: { marketId: partnerId, direction: dirB, slippageApr: aprB },
       size: sizeNum,
       intent,
       opposingAcknowledged: acknowledged,
-      ...(onlyLeg ? { onlyLeg } : {}),
+      // Recovery takes precedence: a half-filled pair must complete the leg
+      // that fell short, whatever mode the toggle is showing.
+      ...(onlyLeg ? { onlyLeg } : mode === 'single' ? { onlyLeg: 'A' as const } : {}),
     };
-  }, [address, marketA, marketB, dirA, dirB, aprA, aprB, sizeNum, sizeOk, intent, acknowledged, onlyLeg]);
+  }, [address, marketA, marketB, dirA, dirB, aprA, aprB, sizeNum, sizeOk, intent, acknowledged, onlyLeg, mode, markets, rowA]);
 
   // Paused while a report is on screen: the numbers behind that report must not
   // shift under it, and nothing can be confirmed until it is dismissed. Also
@@ -318,19 +495,36 @@ export function BorosPairTicket({ active = true }: { active?: boolean } = {}) {
 
       {context.isError && <QueryError title="Couldn’t load the Boros markets" error={context.error} onRetry={() => context.refetch()} />}
 
+      {/* Pair or one leg. A spread is the usual trade here, so Pair leads;
+          Single is for locking one venue's rate on its own — the same control
+          the perp rail carries, so the two tickets read alike. */}
+      <SegmentedToggle<'pair' | 'single'>
+        ariaLabel="Boros ticket mode"
+        value={mode}
+        onChange={setMode}
+        fill
+        options={[
+          { value: 'pair', label: 'Pair' },
+          { value: 'single', label: 'Single' },
+        ]}
+      />
+
       {/* --- Legs (§2) --------------------------------------------------- */}
       <div className="flex flex-col gap-1.5">
         <MarketSelect
           id="boros-leg-a"
-          label="Leg A"
+          label={mode === 'single' ? 'Market' : 'Leg A'}
           value={marketA}
           markets={markets}
-          reasonFor={reasonAgainst(rowB)}
+          // Single mode trades leg A alone, so nothing constrains it: the
+          // collateral/maturity rules exist to keep a PAIR compatible.
+          reasonFor={reasonAgainst(mode === 'single' ? null : rowB)}
           onPick={setMarketA}
           disabled={context.isPending}
         />
         <DirectionToggle value={dirA} onChange={setDirA} idPrefix="Leg A" />
       </div>
+      {mode === 'pair' && (
       <div className="flex flex-col gap-1.5">
         <MarketSelect
           id="boros-leg-b"
@@ -343,13 +537,11 @@ export function BorosPairTicket({ active = true }: { active?: boolean } = {}) {
         />
         <DirectionToggle
           value={dirB}
-          onChange={(d) => {
-            setDirBTouched(true);
-            setDirB(d);
-          }}
+          onChange={setDirB}
           idPrefix="Leg B"
         />
       </div>
+      )}
 
       {/* --- Size + intent (§4) ------------------------------------------- */}
       <div className="flex flex-col gap-1">
@@ -357,13 +549,15 @@ export function BorosPairTicket({ active = true }: { active?: boolean } = {}) {
           {/* The unit comes off the picked market, not the simulation: there
               is no simulation until a size is typed, and "(collateral)" is
               not a unit anyone can size against. */}
-          Size per leg{rowA ? ` (${simulation?.collateral || rowA.collateral || 'collateral'})` : ''}
+          {/* "per leg" only means something when there are two. */}
+          {mode === 'single' ? 'Size' : 'Size per leg'}
+          {rowA ? ` (${simulation?.collateral || rowA.collateral || 'collateral'})` : ''}
         </label>
         <input
           id="boros-size"
           className={`input num ${sizeErr ? '!border-rose-500/60' : ''}`}
           inputMode="decimal"
-          placeholder="size per leg"
+          placeholder={mode === 'single' ? 'size' : 'size per leg'}
           aria-invalid={sizeErr ? true : undefined}
           aria-describedby={sizeErr ? 'boros-size-error' : undefined}
           value={sizeStr}
@@ -380,63 +574,87 @@ export function BorosPairTicket({ active = true }: { active?: boolean } = {}) {
         ariaLabel="Pair intent"
         value={intent}
         onChange={setIntent}
+        fill
+        // Only Close is tinted, and only while active. Open is the ordinary
+        // thing to be doing, so it stays neutral; rose is reserved for the
+        // side that reduces a position, not spent on both.
+        className={intent === 'close' ? 'seg-rose' : undefined}
         options={[
           { value: 'open', label: 'Open' },
-          { value: 'close', label: 'Close', sub: 'reduce-only' },
+          {
+            value: 'close',
+            label: 'Close',
+            sub: 'reduce-only',
+            // Boros has no reduce-only order type: the cap is applied HERE, by
+            // us, not guaranteed by the venue. Whose promise it is matters, so
+            // the qualification survives — on the badge that makes the claim.
+            subTitle:
+              'Enforced here by capping the size at your current position — Boros has no reduce-only order type, so check the resulting-position row.',
+          },
         ]}
       />
-      {intent === 'close' && (
-        // Boros has no reduce-only order flag, so "reduce-only" here is us
-        // capping the size at what you actually hold — not a venue guarantee.
-        // Saying so beats implying the exchange will catch an overshoot.
-        <p className="-mt-1.5 text-[10.5px] leading-relaxed text-ink-400">
-          Reduce-only is enforced here by capping the size at your current position — Boros has no
-          reduce-only order type, so the resulting-position row is the thing to check.
-        </p>
-      )}
 
       {/* --- Slippage (§2) — one shared value, per-leg override ------------ */}
       <div className="flex flex-col gap-1.5">
         <div className="flex items-center justify-between">
-          <label htmlFor="boros-slip" className="text-[11px] text-ink-400">
-            Max slippage (bp of APR)
-          </label>
-          <button
-            type="button"
-            className="text-[10.5px] text-ink-400 underline decoration-dotted hover:text-ink-200"
-            onClick={() => {
-              setPerLeg((v) => !v);
-              setBpA(sharedBp);
-              setBpB(sharedBp);
-            }}
+          {/* The seed is half the venue's own cap on how far one trade may
+              move the rate — wider than the cap can never fill. That was a
+              caption under the field; it is the same sentence on hover. */}
+          <label
+            htmlFor="boros-slip"
+            className="text-[11px] text-ink-400"
+            title={`Defaults to half ${mode === 'single' ? 'the' : 'each'} market's max rate deviation — wider than that cap can never fill.`}
           >
-            {perLeg ? 'use one value' : 'per leg'}
-          </button>
+            Max slippage (% APR)
+          </label>
+          {/* One leg, one tolerance: the override only means something when
+              there are two legs to differ. */}
+          {mode === 'pair' && (
+            <button
+              type="button"
+              className="text-[10.5px] text-ink-400 underline decoration-dotted hover:text-ink-200"
+              onClick={() => {
+                setPerLeg((v) => !v);
+                setSlipA(slipStrShared);
+                setSlipB(slipStrShared);
+              }}
+            >
+              {perLeg ? 'use one value' : 'per leg'}
+            </button>
+          )}
         </div>
-        {perLeg ? (
+        {perLeg && mode === 'pair' ? (
           <div className="grid grid-cols-2 gap-2">
-            <BpInput id="boros-slip-a" label="Leg A bp" value={bpA ?? sharedBp} onChange={setBpA} />
-            <BpInput id="boros-slip-b" label="Leg B bp" value={bpB ?? sharedBp} onChange={setBpB} />
+            <SlipInput id="boros-slip-a" label="Leg A %" value={slipStrA} onChange={setSlipA} />
+            <SlipInput id="boros-slip-b" label="Leg B %" value={slipStrB} onChange={setSlipB} />
           </div>
         ) : (
           <input
             id="boros-slip"
             className="input num"
-            inputMode="numeric"
-            value={sharedBp}
-            onChange={(e) => setSharedBp(clampBp(e.target.value))}
+            inputMode="decimal"
+            value={slipStrShared}
+            onChange={(e) => setSharedSlip(e.target.value)}
           />
         )}
+
       </div>
 
       {/* --- Simulation (§3) ---------------------------------------------- */}
       {sim.isError && <QueryError title="Couldn’t price this pair" error={sim.error} onRetry={() => sim.refetch()} />}
       {simulation && (
         <>
-          <SpreadReadout sim={simulation} />
-          <LegSimTable sim={simulation} />
-          <PairCosts sim={simulation} gasBalanceUsd={sim.data?.gasBalanceUsd} />
-          <PositionArithmetic sim={simulation} />
+          {/* Renders in BOTH modes now that it carries the per-leg rates: on
+              one leg it is that leg's Est. APR, and the spread lines above it
+              are suppressed, since a "spread" against a borrowed partner
+              would be a number about a trade nobody is making. */}
+          <SpreadReadout sim={simulation} singleLeg={mode === 'single'} />
+          <PairCosts
+            sim={simulation}
+            gasBalanceUsd={sim.data?.gasBalanceUsd}
+            singleLeg={mode === 'single'}
+          />
+          <PositionArithmetic sim={simulation} singleLeg={mode === 'single'} />
         </>
       )}
 
@@ -477,8 +695,8 @@ export function BorosPairTicket({ active = true }: { active?: boolean } = {}) {
       <BlockerList
         blockers={blockers}
         collateral={simulation?.collateral ?? ''}
-        busyMarketId={cancelClose.isPending ? cancelClose.variables ?? null : null}
-        onCancelAndClose={(marketId) => cancelClose.mutate(marketId)}
+        busyMarketId={cancelClose.isPending ? cancelClose.variables?.marketId ?? null : null}
+        onCancelAndClose={(marketId) => cancelClose.mutate({ marketId })}
       />
 
       {execute.isError && <QueryError title="The pair was not sent" error={execute.error} />}
@@ -544,25 +762,39 @@ export function BorosPairTicket({ active = true }: { active?: boolean } = {}) {
               ? 'Sending…'
               : onlyLeg
                 ? `Confirm — complete leg ${onlyLeg} ▸`
-                : 'Confirm — 2 Boros market orders ▸'}
+                : mode === 'single'
+                  ? 'Confirm — 1 Boros market order ▸'
+                  : 'Confirm — 2 Boros market orders ▸'}
           </HoldToConfirmButton>
-          {/* The venue and both markets, named before anything is sent. */}
-          <p className="text-center text-[10.5px] leading-relaxed text-ink-400">
-            {rowA && rowB ? (
+          {/* Every market this will touch, NAMED before anything is sent —
+              the names are the part the button cannot show. It already says
+              how many orders go out ("2 Boros market orders"), so the prose
+              that repeated that is gone; the atomicity rule keeps its meaning
+              on hover, where it is there for whoever wants it. */}
+          <p
+            className="text-center text-[10.5px] leading-relaxed text-ink-400"
+            title={
+              mode === 'pair' && !onlyLeg
+                ? 'One atomic batch — neither leg trades unless both are accepted, but each can still fill short.'
+                : undefined
+            }
+          >
+            {mode === 'single' ? (
+              rowA ? (
+                rowA.name
+              ) : (
+                'Pick a Boros market.'
+              )
+            ) : rowA && rowB ? (
               onlyLeg ? (
-                <>
-                  Sends ONE market order on <span className="text-ink-200">Boros</span>:{' '}
-                  {onlyLeg === 'A' ? rowA.name : rowB.name}.
-                </>
+                onlyLeg === 'A' ? rowA.name : rowB.name
               ) : (
                 <>
-                  Sends two market orders on <span className="text-ink-200">Boros</span>: {rowA.name}{' '}
-                  and {rowB.name}. One atomic batch — neither leg trades unless both are accepted,
-                  but each can still fill short.
+                  {rowA.name} + {rowB.name}
                 </>
               )
             ) : (
-              'Pick two Boros markets that share a collateral token and a maturity.'
+              'Pick two Boros markets sharing a collateral and maturity.'
             )}
           </p>
         </>
@@ -575,44 +807,6 @@ export function BorosPairTicket({ active = true }: { active?: boolean } = {}) {
 const shortAddr = (a: string | null): string =>
   a ? `${a.slice(0, 6)}…${a.slice(-4)}` : '—';
 
-function clampBp(raw: string): number {
-  const n = Math.round(Number(raw));
-  if (!Number.isFinite(n) || n < 0) return 0;
-  return Math.min(n, MAX_BP);
-}
-
-function BpInput({
-  id,
-  label,
-  value,
-  onChange,
-}: {
-  id: string;
-  label: string;
-  value: number;
-  onChange: (n: number) => void;
-}) {
-  return (
-    <div className="flex flex-col gap-1">
-      <label htmlFor={id} className="text-[10.5px] text-ink-500">
-        {label}
-      </label>
-      <input
-        id={id}
-        className="input num"
-        inputMode="numeric"
-        value={value}
-        onChange={(e) => onChange(clampBp(e.target.value))}
-      />
-    </div>
-  );
-}
-
-/**
- * Mirrors `acknowledgementCopy` in src/core/boros/pair.ts. The spec's sentence
- * describes a FLIP; a delta that only reduces does something materially
- * different, so it gets wording that does not overstate it.
- */
 function acknowledgementText(
   leg: { marketName: string; sizing: { currentSize: number; resultingSize: number; flips: boolean } },
   collateral: string,
@@ -629,4 +823,31 @@ function acknowledgementText(
   }
   const to = Math.abs(sizing.resultingSize).toLocaleString('en-US', { maximumFractionDigits: 2 });
   return `I understand this reduces my existing ${leg.marketName} ${side} position of ${held} ${collateral} to ${to} ${collateral}, realising part of its PnL.`;
+}
+
+function SlipInput({
+  id,
+  label,
+  value,
+  onChange,
+}: {
+  id: string;
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  return (
+    <div className="flex flex-col gap-1">
+      <label htmlFor={id} className="text-[10.5px] text-ink-500">
+        {label}
+      </label>
+      <input
+        id={id}
+        className="input num"
+        inputMode="decimal"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+      />
+    </div>
+  );
 }

@@ -31,3 +31,7 @@ api-token
 # installer provenance — written into the INSTALLED app dir, never the repo.
 # Committing one would ship a false "you are running commit X" to every user.
 install-info.json
+
+# Playwright MCP session scratch (snapshots, console logs) — a debugging
+# artifact of whoever last drove the browser, never part of the app.
+.playwright-mcp/

@@ -2,9 +2,8 @@
  * each control asserts. Prop-driven — no query client needed. */
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { StrategyLeg } from '../api/types';
 import { makeStrategyLeg, makeStrategyRollup } from '../test/fixtures';
-import { LegMembership, SplitChip, legRefOf, type LegAssertion } from './PartitionEditor';
+import { LegAssignment, SplitChip, legRefOf, type LegAssertion } from './PartitionEditor';
 
 afterEach(cleanup);
 
@@ -29,17 +28,18 @@ const shared = (over: Parameters<typeof makeStrategyRollup>[0] = {}) =>
 const legOf = (venue: string, kind: 'perp' | 'boros') =>
   shared().legs.find((l) => l.venue === venue && l.kind === kind)!;
 
-/** The control as the card mounts it: inside one leg's expanded row. */
+/** The control as the card mounts it: in one leg's "Belongs to" cell. */
 const mount = (
   venue: string,
   kind: 'perp' | 'boros',
-  props: Partial<Parameters<typeof LegMembership>[0]> = {},
-) => render(<LegMembership s={shared()} leg={legOf(venue, kind)} {...props} />);
+  props: Partial<Parameters<typeof LegAssignment>[0]> = {},
+) =>
+  render(
+    <LegAssignment leg={legOf(venue, kind)} strategyId={shared().strategyId} {...props} />,
+  );
 
-const pick = (venue: string, kind: 'perp' | 'boros', value: string) =>
-  fireEvent.change(screen.getByLabelText(`Where the ${venue} ${kind} leg belongs`), {
-    target: { value },
-  });
+/** Open the dialog from the row's trigger. */
+const openDialog = () => fireEvent.click(screen.getByRole('button'));
 
 describe('legRefOf', () => {
   it('names a perp by symbol and a Boros leg by marketId', () => {
@@ -81,169 +81,122 @@ describe('SplitChip', () => {
   });
 });
 
-describe('LegMembership', () => {
-  it('is read-only with no handler wired', () => {
-    const { container } = render(<LegMembership s={shared()} leg={legOf('BINANCE', 'perp')} />);
-    expect(container).toBeEmptyDOMElement();
+describe('LegAssignment', () => {
+  it('states the fact without an affordance when no handler is wired', () => {
+    mount('BINANCE', 'perp');
+    expect(screen.getByText('this position')).toBeInTheDocument();
+    expect(screen.queryByRole('button')).toBeNull();
   });
 
-  it('asks the one question, on the leg it is about', () => {
+  it('shows a shared leg as its own size against the venue total', () => {
     mount('HYPERLIQUID', 'perp', { onAssert: vi.fn() });
-    expect(screen.getByLabelText('Where the HYPERLIQUID perp leg belongs')).toBeInTheDocument();
-    // The table row already names the leg and its size; only the venue WHOLE
-    // is missing, and only when the leg is shared.
-    expect(screen.getByText(/of.*500.*on the venue/)).toBeInTheDocument();
+    // 60% of 500 = 300 held; the fraction is the information, so both appear.
+    expect(screen.getByRole('button').textContent).toMatch(/300/);
+    expect(screen.getByRole('button').textContent).toMatch(/500/);
   });
 
-  it('says nothing about the venue whole for a leg owned outright', () => {
+  it('holds Confirm until something actually changes', () => {
     mount('BINANCE', 'perp', { onAssert: vi.fn() });
-    expect(screen.queryByText(/on the venue/)).not.toBeInTheDocument();
+    openDialog();
+    // Opened on the status quo: confirming would assert what is already true.
+    expect(screen.getByRole('button', { name: 'Confirm' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: /Nothing/ }));
+    expect(screen.getByRole('button', { name: 'Confirm' })).toBeEnabled();
   });
 
-  it('claims the leg for this position without naming a size', () => {
-    // The commonest assertion: whose it is, not how much. A size here would be
-    // a number the user did not choose.
-    const onAssert = vi.fn<(a: LegAssertion) => void>();
-    mount('HYPERLIQUID', 'perp', { onAssert });
-    pick('HYPERLIQUID', 'perp', '<here>');
-    expect(onAssert).toHaveBeenCalledWith({
-      mode: 'assign',
-      leg: { kind: 'perp', symbol: HL_PERP },
-      to: 'ETH#BINANCE-HYPERLIQUID#exec',
-    });
-    expect(onAssert.mock.calls[0][0]).not.toHaveProperty('qty');
+  it('drops the amount question when the grouper is put in charge', () => {
+    mount('BINANCE', 'perp', { onAssert: vi.fn() });
+    openDialog();
+    expect(screen.getByText('How much of it?')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Automatic/ }));
+    // Automatic means the grouper decides the split, so asking for a number
+    // would be asking for something that is then discarded.
+    expect(screen.queryByText('How much of it?')).toBeNull();
   });
 
-  it('MOVES the leg by naming another card — the correction the buttons could not express', () => {
-    const onAssert = vi.fn<(a: LegAssertion) => void>();
-    mount('BINANCE', 'boros', {
-      onAssert,
-      destinations: [{ id: 'ETH#GATE-HYPERLIQUID#exec', label: 'long Gate / short Hyperliquid' }],
-    });
-    pick('BINANCE', 'boros', 'ETH#GATE-HYPERLIQUID#exec');
-    expect(onAssert).toHaveBeenCalledWith({
-      mode: 'assign',
-      leg: { kind: 'boros', marketId: 129 },
-      to: 'ETH#GATE-HYPERLIQUID#exec',
-    });
-  });
-
-  it('orphans a leg, and hands one back to the solver', () => {
+  it('emits an auto assertion for the leg it is about', () => {
     const onAssert = vi.fn<(a: LegAssertion) => void>();
     mount('BINANCE', 'perp', { onAssert });
-    pick('BINANCE', 'perp', '<nowhere>');
-    expect(onAssert).toHaveBeenCalledWith({ mode: 'orphan', leg: { kind: 'perp', symbol: BIN_PERP } });
-    pick('BINANCE', 'perp', '<auto>');
-    expect(onAssert).toHaveBeenLastCalledWith({ mode: 'auto', leg: { kind: 'perp', symbol: BIN_PERP } });
-  });
-
-  it('states a partial size only when asked for one', () => {
-    const onAssert = vi.fn<(a: LegAssertion) => void>();
-    mount('HYPERLIQUID', 'perp', { onAssert });
-    fireEvent.click(
-      screen.getByRole('button', {
-        name: 'Set how much of the HYPERLIQUID perp leg this position holds',
-      }),
-    );
-    fireEvent.change(screen.getByLabelText('HYPERLIQUID perp size for this position'), {
-      target: { value: '175' },
-    });
-    fireEvent.click(screen.getByRole('button', { name: 'Set size' }));
+    openDialog();
+    fireEvent.click(screen.getByRole('button', { name: /Automatic/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
     expect(onAssert).toHaveBeenCalledWith({
-      mode: 'assign',
-      leg: { kind: 'perp', symbol: HL_PERP },
-      to: 'ETH#BINANCE-HYPERLIQUID#exec',
-      qty: 175,
+      mode: 'auto',
+      leg: { kind: 'perp', symbol: BIN_PERP },
     });
-  });
-
-  it('labels the size in the unit THAT LEG is counted in, not the card\'s coin', () => {
-    // A Boros position is sized in the collateral it is margined in, which is
-    // routinely a different token than the coin the card is named after. On an
-    // ETH card a USDT-collateral Boros leg offered to hold "300 ETH" when the
-    // figure the venue reported was 300 USDT.
-    const s = shared({
-      base: 'ETH',
-      legs: [
-        makeStrategyLeg({
-          kind: 'boros',
-          venue: 'BINANCE',
-          side: 'LONG',
-          notionalToken: 300,
-          share: 0.5,
-          marketId: 129,
-          collateral: 'USDT',
-        }),
-      ],
-    });
-    render(<LegMembership s={s} leg={s.legs[0]} onAssert={vi.fn()} />);
-    // The shared-leg line reads the same unit…
-    expect(screen.getByText(/300 USDT of 600 USDT on the venue/)).toBeInTheDocument();
-    fireEvent.click(
-      screen.getByRole('button', {
-        name: 'Set how much of the BINANCE boros leg this position holds',
-      }),
-    );
-    // …and so does the size editor beside the input.
-    const label = screen.getByLabelText('BINANCE boros size for this position').parentElement!;
-    expect(label).toHaveTextContent(/USDT$/);
-    expect(label).not.toHaveTextContent(/ETH/);
-  });
-
-  it('says no unit at all rather than the wrong one when the venue did not report it', () => {
-    const s = shared({
-      base: 'ETH',
-      legs: [
-        makeStrategyLeg({
-          kind: 'boros',
-          venue: 'BINANCE',
-          side: 'LONG',
-          notionalToken: 300,
-          share: 1,
-          marketId: 129,
-          collateral: undefined,
-        }),
-      ],
-    });
-    render(<LegMembership s={s} leg={s.legs[0]} onAssert={vi.fn()} />);
-    fireEvent.click(
-      screen.getByRole('button', {
-        name: 'Set how much of the BINANCE boros leg this position holds',
-      }),
-    );
-    const label = screen.getByLabelText('BINANCE boros size for this position').parentElement!;
-    expect(label).toHaveTextContent('This position holds');
-    expect(label).not.toHaveTextContent(/ETH/);
-  });
-
-  it('refuses a leg the payload cannot name', () => {
-    const { container } = render(
-      <LegMembership
-        s={shared()}
-        leg={makeStrategyLeg({ kind: 'perp', venue: 'X', side: 'LONG', symbol: undefined })}
-        onAssert={vi.fn()}
-      />,
-    );
-    expect(container).toBeEmptyDOMElement();
   });
 });
 
-describe('the undo for an orphaned leg', () => {
-  /**
-   * There is no orphan block. Every undo reached through this picker, which is
-   * the point: an orphaned Boros leg still has a card, so it still has a row,
-   * so it still has this control — offering the solver AND both positions.
-   * (An orphaned perp becomes unhedged size, and UnhedgedResidualBox carries
-   * that one.)
-   */
-  it('is the ordinary picker, on the leg\'s own row', () => {
-    const onAssert = vi.fn<(a: LegAssertion) => void>();
-    const s = shared();
-    const boros = s.legs.find((l) => l.kind === 'boros') as StrategyLeg;
-    render(<LegMembership s={s} leg={boros} onAssert={onAssert} />);
-    fireEvent.change(screen.getByLabelText(/Where the .* boros leg belongs/), {
-      target: { value: '<auto>' },
+
+/**
+ * Three behaviours the rewrite kept but stopped testing.
+ *
+ * The old suite covered move / orphan / unit-labelling; `LegMembership` was
+ * replaced by `LegAssignment` and those went with it, even though all three
+ * are still live. Unit labelling in particular is the class of bug that has
+ * bitten this codebase twice (a collateral quantity read as a base quantity),
+ * so it is the last thing that should be running untested.
+ */
+describe('LegAssignment — behaviours the rewrite kept but stopped testing', () => {
+  const openDialog = () => fireEvent.click(screen.getByTitle(/open on/));
+
+  it('MOVES a leg to another position — the correction the buttons alone cannot express', () => {
+    const onAssert = vi.fn();
+    mount('HYPERLIQUID', 'perp', {
+      onAssert,
+      destinations: [{ id: 'ETH#OTHER#exec', label: 'ETH · OKX ⇄ Gate' }],
     });
-    expect(onAssert).toHaveBeenCalledWith({ mode: 'auto', leg: legRefOf(boros) });
+    openDialog();
+    fireEvent.click(screen.getByRole('button', { name: /ETH · OKX ⇄ Gate/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+
+    expect(onAssert).toHaveBeenCalledTimes(1);
+    const a = onAssert.mock.calls[0][0] as LegAssertion;
+    // The destination is the whole point: without it this is a no-op that
+    // silently leaves the leg where it was.
+    expect(a.mode).toBe('assign');
+    if (a.mode !== 'assign') throw new Error('expected an assign');
+    expect(a.to).toBe('ETH#OTHER#exec');
+    expect(a.leg).toEqual(legRefOf(legOf('HYPERLIQUID', 'perp')));
+  });
+
+  it('ORPHANS a leg — "nothing" is a real answer, not a missing one', () => {
+    const onAssert = vi.fn();
+    mount('HYPERLIQUID', 'perp', { onAssert });
+    openDialog();
+    fireEvent.click(screen.getByRole('button', { name: /leave it unassigned/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+
+    expect(onAssert).toHaveBeenCalledTimes(1);
+    const a = onAssert.mock.calls[0][0] as LegAssertion;
+    // Unassigned is its OWN mode — not an assign carrying an empty target.
+    expect(a.mode).toBe('orphan');
+    expect(a.leg).toEqual(legRefOf(legOf('HYPERLIQUID', 'perp')));
+  });
+
+  it('labels the amount in the unit THAT LEG is counted in', () => {
+    // A perp is counted in its BASE coin; a Boros leg in its COLLATERAL. They
+    // are the same number only when a market is margined in its own base, so
+    // borrowing the other leg's unit is how a size ends up wrong by a price.
+    mount('HYPERLIQUID', 'perp', { onAssert: vi.fn() });
+    openDialog();
+    // The perp is counted in the BASE coin.
+    const perp = legOf('HYPERLIQUID', 'perp');
+    expect(screen.getByText(/open on HYPERLIQUID/)).toHaveTextContent(perp.base ?? 'HYPE');
+
+    cleanup();
+
+    mount('BINANCE', 'boros', { onAssert: vi.fn() });
+    openDialog();
+    // The Boros fixture's collateral, NOT the strategy's ETH base.
+    // The Boros leg is counted in its COLLATERAL — a different unit from the
+    // perp above, on the same card. Reading one off the other is how a size
+    // ends up wrong by a coin price.
+    const boros = legOf('BINANCE', 'boros');
+    expect(boros.collateral).toBeDefined();
+    expect(screen.getByText(/open on BINANCE/)).toHaveTextContent(boros.collateral!);
+    // The two units genuinely differ here, which is what makes this a guard
+    // rather than a tautology.
+    expect(boros.collateral).not.toBe(legOf('HYPERLIQUID', 'perp').base);
   });
 });

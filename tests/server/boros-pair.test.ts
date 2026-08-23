@@ -15,6 +15,7 @@ import type {
   BorosOrderClient,
 } from '../../src/core/boros/orders';
 import { imInputs, raw } from '../helpers/boros-fixtures';
+import { TtlCache } from '../../src/server/cache';
 import { borosStub } from '../helpers/boros-stub';
 import { HOST, makeTestApp } from './helpers/gate-nock';
 
@@ -142,6 +143,19 @@ describe('GET /api/boros/pair/context', () => {
     expect(res.statusCode).toBe(400);
   });
 
+  it('omits Hyperliquid xyz: synthetics — nothing here can hedge or pair them', async () => {
+    // BRENTOIL and friends are index markets with no CrossEx perp behind them,
+    // and each is the only market at its base AND maturity, so a pair ticket
+    // can never find one a partner. Listing them offered a market whose every
+    // simulation was dead on arrival.
+    const synthetic = market(BN, 'Hyperliquid', 0.05);
+    synthetic.metadata.assetSymbol = 'xyz:BRENTOIL';
+    const res = await makeApp({
+      '/core/v1/markets': { results: [market(HL, 'Hyperliquid', 0.09), synthetic] },
+    }).inject({ method: 'GET', url: `/api/boros/pair/context?address=${ADDRESS}`, headers: HOST });
+    expect(res.json().data.markets.map((m: { marketId: number }) => m.marketId)).toEqual([HL]);
+  });
+
   it('omits matured and halted markets', async () => {
     const dead = market(BN, 'Binance', 0.045);
     dead.imData.maturity = NOW - 1;
@@ -149,6 +163,38 @@ describe('GET /api/boros/pair/context', () => {
       '/core/v1/markets': { results: [market(HL, 'Hyperliquid', 0.09), dead] },
     }).inject({ method: 'GET', url: `/api/boros/pair/context?address=${ADDRESS}`, headers: HOST });
     expect(res.json().data.markets.map((m: { marketId: number }) => m.marketId)).toEqual([HL]);
+  });
+});
+
+describe('boros writes bust the reads they invalidate', () => {
+  /** An app whose cache records every bust, so the route's promise is testable. */
+  function appWithBustSpy(client?: BorosOrderClient) {
+    const busted: string[] = [];
+    const cache = new TtlCache();
+    const realBust = cache.bust.bind(cache);
+    cache.bust = ((prefix: string) => {
+      busted.push(prefix);
+      return realBust(prefix);
+    }) as typeof cache.bust;
+    app = makeTestApp({
+      borosFetch: borosStub(bodies()),
+      getBorosOrders: () => client ?? orderClient(),
+      cache,
+    });
+    return { busted };
+  }
+
+  it('an OPEN busts the cached Boros reads, like a close does', async () => {
+    // `/strategy` serves boros:collaterals from a 30s TTL. Without this bust a
+    // freshly opened leg could be invalidated client-side, refetched at once,
+    // and STILL come back from the pre-trade snapshot — the position appeared
+    // only when the TTL happened to lapse, which is what "it takes a while and
+    // sometimes I have to refresh" actually was.
+    const { busted } = appWithBustSpy();
+    const res = await post('/api/boros/pair/execute', pairBody({ clientOrderIdA: 'coid-bust-a', clientOrderIdB: 'coid-bust-b' }));
+    expect(res.statusCode).toBe(200);
+    expect(busted).toContain('boros:collaterals');
+    expect(busted).toContain('boros:txns');
   });
 });
 
@@ -553,6 +599,144 @@ describe('POST /api/boros/pair/market/:marketId/cancel-and-close', () => {
     expect(closeReq).toMatchObject({ marketId: HL, size: 75_000, direction: 'short' });
     expect(closeReq!.limitApr).toBeLessThan(0.09);
     expect(res.json().data.closed).toBe(true);
+  });
+
+  /** The 75k-long fixture, reused by the size/slippage cases below. */
+  const longPositionApp = (capture: { req: { marketId: number; size: number; direction: string; limitApr: number } | null }) =>
+    makeTestApp({
+      borosFetch: borosStub(
+        bodies({
+          '/core/v1/collaterals/summary': {
+            collaterals: [
+              {
+                tokenId: 3,
+                crossPosition: {
+                  netBalance: raw(500_000),
+                  marketPositions: [
+                    { marketId: HL, side: 0, notionalSize: raw(75_000), pnl: {}, positionInitialMargin: raw(0) },
+                  ],
+                },
+                isolatedPositions: [],
+              },
+            ],
+          },
+        }),
+      ),
+      getBorosOrders: () => ({
+        placeMarketOrders: async (reqs) => reqs.map(() => okFill()),
+        cancelOrders: async () => {},
+        closePosition: async (r) => {
+          capture.req = r;
+          return okFill({ filledSize: r.size, shortfallSize: 0 });
+        },
+      }),
+    });
+
+  it('closes only the size asked for, and reports a partial as not-flat', async () => {
+    const cap: { req: { marketId: number; size: number; direction: string; limitApr: number } | null } = { req: null };
+    app = longPositionApp(cap);
+    const res = await post(`/api/boros/pair/market/${HL}/cancel-and-close`, {
+      clientOrderId: 'coid-part1',
+      size: 25_000,
+    });
+    expect(res.statusCode).toBe(200);
+    expect(cap.req).toMatchObject({ size: 25_000, direction: 'short' });
+    // `closed` means FLAT. A deliberate partial is not a failed close, so it
+    // says so plainly rather than claiming the position is gone.
+    expect(res.json().data).toMatchObject({ closed: false, openSize: 75_000 });
+  });
+
+  it('CLAMPS an oversized close to the position — Boros has no reduce-only flag', async () => {
+    // Without the clamp a size past the position does not stop at flat: it
+    // crosses and opens a fresh one the other way. This is the guarantee that
+    // makes accepting a caller-supplied size safe at all.
+    const cap: { req: { marketId: number; size: number; direction: string; limitApr: number } | null } = { req: null };
+    app = longPositionApp(cap);
+    const res = await post(`/api/boros/pair/market/${HL}/cancel-and-close`, {
+      clientOrderId: 'coid-over1',
+      size: 10_000_000,
+    });
+    expect(res.statusCode).toBe(200);
+    expect(cap.req!.size).toBe(75_000);
+    expect(res.json().data.closed).toBe(true);
+  });
+
+  it('carries the caller\'s rate bound, and rejects an absurd one', async () => {
+    const cap: { req: { marketId: number; size: number; direction: string; limitApr: number } | null } = { req: null };
+    app = longPositionApp(cap);
+    // A SHORT close accepts rates at or above mark − bound, so a wider bound
+    // lands strictly lower than the 1% default.
+    const wide = await post(`/api/boros/pair/market/${HL}/cancel-and-close`, {
+      clientOrderId: 'coid-slip1',
+      slippageApr: 0.05,
+    });
+    expect(wide.statusCode).toBe(200);
+    const wideApr = cap.req!.limitApr;
+
+    cap.req = null;
+    app = longPositionApp(cap);
+    const tight = await post(`/api/boros/pair/market/${HL}/cancel-and-close`, {
+      clientOrderId: 'coid-slip2',
+      slippageApr: 0.001,
+    });
+    expect(tight.statusCode).toBe(200);
+    expect(wideApr).toBeLessThan(cap.req!.limitApr);
+
+    app = longPositionApp({ req: null });
+    const bad = await post(`/api/boros/pair/market/${HL}/cancel-and-close`, {
+      clientOrderId: 'coid-slip3',
+      slippageApr: 5,
+    });
+    expect(bad.statusCode).toBe(400);
+    expect(bad.json().error.message).toMatch(/slippageApr/);
+  });
+
+  it('busts the cached Boros account read, so the next poll cannot serve a pre-close position', async () => {
+    // /strategy serves `boros:collaterals:<addr>` from a 30s cache (TTL.boros).
+    // Without a bust the client can invalidate, refetch at once, and STILL be
+    // handed the position as it was before the close — the card then sat on a
+    // stale size while claiming the close had landed.
+    const calls: string[] = [];
+    const cap: { req: { marketId: number; size: number; direction: string; limitApr: number } | null } = { req: null };
+    app = makeTestApp({
+      borosFetch: borosStub(
+        bodies({
+          '/core/v1/collaterals/summary': {
+            collaterals: [
+              {
+                tokenId: 3,
+                crossPosition: {
+                  netBalance: raw(500_000),
+                  marketPositions: [
+                    { marketId: HL, side: 0, notionalSize: raw(75_000), pnl: {}, positionInitialMargin: raw(0) },
+                  ],
+                },
+                isolatedPositions: [],
+              },
+            ],
+          },
+        }),
+        calls,
+      ),
+      getBorosOrders: () => ({
+        placeMarketOrders: async (reqs) => reqs.map(() => okFill()),
+        cancelOrders: async () => {},
+        closePosition: async (r) => {
+          cap.req = r;
+          return okFill({ filledSize: r.size, shortfallSize: 0 });
+        },
+      }),
+    });
+
+    const summaries = () => calls.filter((c) => c.includes('/collaterals/summary')).length;
+    // Warm the cache, then confirm a second read inside the TTL is served from it.
+    await post(`/api/boros/pair/market/${HL}/cancel-and-close`, { clientOrderId: 'coid-warm' });
+    const afterFirst = summaries();
+
+    await post(`/api/boros/pair/market/${HL}/cancel-and-close`, { clientOrderId: 'coid-second' });
+    // The close busts the key, so the second call had to re-read rather than
+    // sizing from a cached position that no longer exists.
+    expect(summaries()).toBeGreaterThan(afterFirst);
   });
 
   it('cancels and stops when there is no position to close', async () => {

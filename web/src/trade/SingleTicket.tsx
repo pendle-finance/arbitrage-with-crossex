@@ -4,8 +4,9 @@
  * refreshed every 3s while valid). Leverage is always the venue max (shown, not
  * editable). "Execute now" is a hold-to-confirm inline execute (no review modal).
  */
-import { useMemo, useRef, useState } from 'react';
-import { useSymbolDetail } from '../api/queries';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useSymbolDetail, useSymbolsByBase } from '../api/queries';
+import { useTradeFlowOptional } from './TradeFlow';
 import type { ActionInput, Side } from '../api/types';
 import { SegmentedToggle } from '../components/SegmentedToggle';
 import { fmtUsd, parseSymbol, sig } from '../lib/fmt';
@@ -56,6 +57,52 @@ export function SingleTicket() {
   // multiple is a no-op in either direction — so when the side flips after a
   // snap we must re-snap from this raw value, not from the displayed one.
   const rawPrice = useRef<number | null>(null);
+
+  /**
+   * A missing-perp row asked to open exactly this leg.
+   *
+   * Two phases, like the pair ticket's: the size and side land immediately,
+   * then the venue is resolved to a symbol once that base's rules arrive —
+   * `useSymbolsByBase` serves the PREVIOUS base while the new one loads, and
+   * resolving against those would arm the wrong coin's symbol.
+   */
+  const perpPrefill = useTradeFlowOptional()?.singlePerpPrefill ?? null;
+  const [prefillBase, setPrefillBase] = useState<string | null>(null);
+  const [prefillDone, setPrefillDone] = useState(0);
+  const prefillNonce = perpPrefill?.nonce ?? 0;
+  useEffect(() => {
+    if (!perpPrefill || prefillNonce <= prefillDone) return;
+    setPrefillBase(perpPrefill.base);
+    setSymbol(null);
+    setSide(perpPrefill.side);
+    setType('MARKET');
+    // ⚠ Unit and figure move together: the box holds ONE number, so arming it
+    // with a USD notional while the mode says base would read $12,000 as
+    // 12,000 ETH. Base needs a base quantity; without one, USD is the only
+    // honest reading.
+    if (perpPrefill.sizeUnit === 'base' && perpPrefill.sizeBase !== undefined) {
+      setSizeMode('base');
+      setSizeStr(String(Number(perpPrefill.sizeBase.toPrecision(8))));
+    } else {
+      setSizeMode('usdt');
+      setSizeStr(String(Math.max(1, Math.round(perpPrefill.notionalUsd))));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prefillNonce]);
+
+  const prefillVenues = useSymbolsByBase(prefillBase);
+  useEffect(() => {
+    if (!perpPrefill || prefillNonce <= prefillDone || !prefillBase) return;
+    if (!prefillVenues.data || prefillVenues.isPlaceholderData) return;
+    const rule = prefillVenues.data.find(
+      (r) => r.base === perpPrefill.base && r.exchange === perpPrefill.venue,
+    );
+    // A venue with no CrossEx symbol for this coin leaves the picker empty
+    // rather than arming a different venue's leg.
+    if (rule) setSymbol(rule.symbol);
+    setPrefillDone(prefillNonce);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prefillNonce, prefillBase, prefillVenues.data, prefillVenues.isPlaceholderData]);
 
   const detail = useSymbolDetail(symbol);
 

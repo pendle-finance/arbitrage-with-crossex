@@ -291,16 +291,20 @@ describe('BorosPairTicket', () => {
 
     const legA = within(await screen.findByRole('radiogroup', { name: 'Leg A direction' }));
     const legB = within(screen.getByRole('radiogroup', { name: 'Leg B direction' }));
-    expect(legA.getByRole('radio', { name: 'Receive fixed' })).toHaveAttribute('aria-checked', 'true');
-    expect(legB.getByRole('radio', { name: 'Pay fixed' })).toHaveAttribute('aria-checked', 'true');
+    expect(legA.getByRole('radio', { name: 'Short' })).toHaveAttribute('aria-checked', 'true');
+    expect(legB.getByRole('radio', { name: 'Long' })).toHaveAttribute('aria-checked', 'true');
 
-    await user.click(legA.getByRole('radio', { name: 'Pay fixed' }));
+    await user.click(legA.getByRole('radio', { name: 'Long' }));
     await waitFor(() =>
-      expect(legB.getByRole('radio', { name: 'Receive fixed' })).toHaveAttribute('aria-checked', 'true'),
+      expect(legB.getByRole('radio', { name: 'Short' })).toHaveAttribute('aria-checked', 'true'),
     );
   });
 
-  it('lists ineligible markets disabled WITH the reason, never hidden', async () => {
+  it('hides ineligible markets once a leg is picked, and says how many it dropped', async () => {
+    // Reverses the original §2 rule ("never hidden, disabled WITH the reason").
+    // With a leg chosen, most of the venue's markets are ineligible, and a
+    // dropdown of mostly-dead options is its own kind of hunting — so they are
+    // dropped and a caption carries the explanation §2 was protecting.
     const user = userEvent.setup();
     server.use(...handlers());
     renderWithClient(<BorosPairTicket />);
@@ -313,32 +317,32 @@ describe('BorosPairTicket', () => {
     const byLabel = (needle: string) =>
       [...legB.options].find((o) => o.textContent?.includes(needle));
 
-    const wrongMaturity = byLabel('Bybit ETH 30 Sep 2026');
-    expect(wrongMaturity).toBeDefined();
-    expect(wrongMaturity!.disabled).toBe(true);
-    expect(wrongMaturity!.textContent).toContain('different maturity');
-
-    const wrongCollateral = byLabel('OKX BTC 31 Aug 2026');
-    expect(wrongCollateral!.disabled).toBe(true);
-    expect(wrongCollateral!.textContent).toContain('different collateral');
-
-    // The eligible one is still selectable.
+    // Neither the wrong maturity nor the wrong collateral is offered at all.
+    expect(byLabel('Bybit ETH 30 Sep 2026')).toBeUndefined();
+    expect(byLabel('OKX BTC 31 Aug 2026')).toBeUndefined();
+    // The eligible one is still there and selectable.
     expect(byLabel('Binance ETHUSDT')!.disabled).toBe(false);
+    // The absence is explained rather than silent.
+    expect(await screen.findByText(/markets? hidden/)).toBeInTheDocument();
   });
 
-  it('leads with the worst-case spread and shows the estimate beneath it', async () => {
+  it('leads with the estimated spread and shows the worst case beneath it', async () => {
     const user = userEvent.setup();
     server.use(...handlers());
     renderWithClient(<BorosPairTicket />);
     await fillTicket(user);
 
-    expect(await screen.findByText('Worst-case spread')).toBeInTheDocument();
-    expect(screen.getByText('4.00%')).toBeInTheDocument(); // worst
-    expect(screen.getByText('Estimated spread')).toBeInTheDocument();
-    expect(screen.getByText('4.50%')).toBeInTheDocument(); // estimate
+    expect(await screen.findByText('Estimated spread')).toBeInTheDocument();
+    expect(screen.getByText('4.50%')).toBeInTheDocument(); // estimate — the lead
+    expect(screen.getByText('Worst case')).toBeInTheDocument();
+    expect(screen.getByText('4.00%')).toBeInTheDocument(); // worst — beneath it
     // Both are net; the pre-cost 4.8% must appear nowhere.
     expect(screen.queryByText('4.80%')).not.toBeInTheDocument();
-    expect(screen.getByText(/net of Boros taker and settlement fees/i)).toBeInTheDocument();
+    // The fee caveat is still stated on screen, in one line rather than three;
+    // its long form moved to the hover, which is asserted too so a silent
+    // deletion of the explanation cannot pass.
+    expect(screen.getByText(/net of fees/i)).toBeInTheDocument();
+    expect(screen.getByTitle(/net of Boros taker and settlement fees/i)).toBeInTheDocument();
   });
 
   it('says plainly that slippage bounds the rate, not the fill', async () => {
@@ -349,7 +353,10 @@ describe('BorosPairTicket', () => {
     expect(await screen.findByText(/bounds the rate, not the fill/i)).toBeInTheDocument();
   });
 
-  it('sends the tolerance as an APR fraction derived from basis points, per leg', async () => {
+  it('Single mode sends one leg, borrowing an eligible partner for the pair shape', async () => {
+    // The route refuses a request whose legs name the same market, and will
+    // not walk either book for one — so a single-leg ticket borrows a real
+    // partner and zeroes it with onlyLeg rather than duplicating leg A.
     const user = userEvent.setup();
     const bodies: Record<string, unknown>[] = [];
     server.use(...handlers({ onSimulate: (b) => bodies.push(b) }));
@@ -357,16 +364,71 @@ describe('BorosPairTicket', () => {
     await fillTicket(user);
     await waitFor(() => expect(bodies.length).toBeGreaterThan(0));
 
-    // 25bp default → 0.0025 APR on both legs.
+    await user.click(screen.getByRole('radio', { name: 'Single' }));
+    await waitFor(() => {
+      const last = bodies[bodies.length - 1] as {
+        onlyLeg?: string;
+        legA: { marketId: number };
+        legB: { marketId: number };
+      };
+      expect(last.onlyLeg).toBe('A');
+      // A real second market, never a duplicate of leg A.
+      expect(last.legB.marketId).not.toBe(last.legA.marketId);
+    });
+  });
+
+  it('seeds the tolerance from half each market\'s max rate deviation', async () => {
+    // The venue caps how far one trade may move the rate; a bound wider than
+    // that can never fill, so half of it is the natural default. Across a
+    // spread both legs must clear their own cap, so the seed is the mean of
+    // the two halves — floored to 1 s.f. so it never rounds UP past the cap.
+    const user = userEvent.setup();
+    const bodies: Record<string, unknown>[] = [];
+    server.use(
+      ...handlers({
+        onSimulate: (b) => bodies.push(b),
+        ctx: {
+          markets: [
+            marketRow({ maxRateDeviationApr: 0.0164 }),
+            marketRow({
+              marketId: BN,
+              name: 'Binance ETHUSDT 31 Aug 2026',
+              venue: 'Binance',
+              midApr: 0.045,
+              maxRateDeviationApr: 0.0164,
+            }),
+          ],
+        },
+      }),
+    );
+    renderWithClient(<BorosPairTicket />);
+    await fillTicket(user);
+    await waitFor(() => expect(bodies.length).toBeGreaterThan(0));
+
+    // 1.64% cap ⇒ half is 0.82% ⇒ floored to 1 s.f. = 0.8% = 0.008 APR.
+    const last = bodies[bodies.length - 1] as { legA: { slippageApr: number } };
+    expect(last.legA.slippageApr).toBeCloseTo(0.008, 9);
+  });
+
+  it('sends the tolerance as an APR fraction derived from a PERCENT, per leg', async () => {
+    const user = userEvent.setup();
+    const bodies: Record<string, unknown>[] = [];
+    server.use(...handlers({ onSimulate: (b) => bodies.push(b) }));
+    renderWithClient(<BorosPairTicket />);
+    await fillTicket(user);
+    await waitFor(() => expect(bodies.length).toBeGreaterThan(0));
+
+    // The seed is half each market's max rate deviation; this fixture carries
+    // no cap, so it falls back to 0.25% → 0.0025 APR on both legs.
     const first = bodies[bodies.length - 1] as { legA: { slippageApr: number }; legB: { slippageApr: number } };
     expect(first.legA.slippageApr).toBeCloseTo(0.0025, 9);
     expect(first.legB.slippageApr).toBeCloseTo(0.0025, 9);
 
     // Per-leg override: leg A alone widens.
     await user.click(screen.getByRole('button', { name: 'per leg' }));
-    const slipA = screen.getByLabelText('Leg A bp');
+    const slipA = screen.getByLabelText('Leg A %');
     await user.clear(slipA);
-    await user.type(slipA, '80');
+    await user.type(slipA, '0.8');
 
     await waitFor(() => {
       const last = bodies[bodies.length - 1] as { legA: { slippageApr: number }; legB: { slippageApr: number } };
@@ -396,10 +458,18 @@ describe('BorosPairTicket', () => {
     renderWithClient(<BorosPairTicket />);
     await fillTicket(user);
 
-    expect(await screen.findByText(/Your whole netted position in each market/i)).toBeInTheDocument();
-    expect(screen.getByText('+150,000')).toBeInTheDocument(); // current
-    expect(screen.getByText('-100,000')).toBeInTheDocument(); // trade
-    expect(screen.getByText('+50,000')).toBeInTheDocument(); // resulting
+    // Presented as "current → resulting" per leg, the way the Boros app shows
+    // it: the heading and the three-column grid are gone, so what is pinned is
+    // that each market's ENDING position is on screen and that the netting
+    // rule is still stated somewhere the user can reach it.
+    expect((await screen.findAllByTitle(/whole exposure there/i)).length).toBe(2);
+    expect(screen.getAllByText(/→/).length).toBeGreaterThan(0);
+    // Current and resulting now share one line, "+150k USDT → +50k USDT". The
+    // TRADE column is deliberately gone: it was the reader doing the addition
+    // to reach the resulting figure, which the arrow states outright.
+    const netted = (await screen.findAllByTitle(/whole exposure there/i))[0];
+    expect(netted).toHaveTextContent(/\+150k/);
+    expect(netted).toHaveTextContent(/\+50k/);
   });
 
   it('blocks confirm behind the acknowledgement, and retracts it when the trade changes', async () => {
@@ -451,17 +521,21 @@ describe('BorosPairTicket', () => {
 
     const confirm = await screen.findByRole('button', { name: /2 Boros market orders/i });
     expect(confirm).toBeInTheDocument();
-    expect(screen.getByText(/Sends two market orders on/i)).toHaveTextContent('Boros');
-    expect(screen.getByText(/Sends two market orders on/i)).toHaveTextContent(
-      'Hyperliquid ETH 31 Aug 2026',
-    );
-    expect(screen.getByText(/Sends two market orders on/i)).toHaveTextContent(
-      'Binance ETHUSDT 31 Aug 2026',
-    );
-    // Atomic acceptance is the promise; a full fill is NOT, and the confirm
-    // line has to say both or it oversells what the batch guarantees.
-    expect(screen.getByText(/One atomic batch/i)).toBeInTheDocument();
-    expect(screen.getByText(/can still fill short/i)).toBeInTheDocument();
+    // The button states the COUNT ("2 Boros market orders"); the footer no
+    // longer repeats it and just names the markets, which is the part the
+    // button cannot show. Atomicity keeps its wording on the hover.
+    // Scoped to the footer: the market names also appear in the dropdowns, so
+    // a bare text query matches those too.
+    const footer = screen.getByTitle(/One atomic batch/i);
+    expect(footer).toHaveTextContent('Hyperliquid ETH 31 Aug 2026');
+    expect(footer).toHaveTextContent('Binance ETHUSDT 31 Aug 2026');
+    // Atomic acceptance is the promise; a full fill is NOT. Both halves must
+    // still be stated together — overselling the batch is the failure mode —
+    // so the hover is asserted to carry BOTH clauses, not just the reassuring
+    // one.
+    const atomicity = footer.getAttribute("title") ?? "";
+    expect(atomicity).toMatch(/One atomic batch/i);
+    expect(atomicity).toMatch(/can still fill short/i);
   });
 
   it('renders ETH-collateral sizes at real precision, never rounded to 0', async () => {
@@ -508,15 +582,15 @@ describe('BorosPairTicket', () => {
     renderWithClient(<BorosPairTicket />);
     await fillTicket(user);
 
-    await screen.findByText('Worst-case spread');
-    // Sizes and margins survive at ETH scale.
-    expect(screen.getAllByText('0.01').length).toBeGreaterThan(0);
-    expect(screen.getByText('0.00042')).toBeInTheDocument();
-    expect(screen.getByText('0.00031')).toBeInTheDocument();
-    // The position rows keep their sign AND their magnitude.
-    expect(screen.getAllByText('-0.01').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('+0.01').length).toBeGreaterThan(0);
-    // Nothing collapsed to a bare 0 / -0 / +0.
+    await screen.findByText('Estimated spread');
+    // The COMBINED margin survives at ETH scale. The per-leg margins are no
+    // longer shown — only the combined figure has to clear the account — so
+    // the total is what this now pins.
+    expect(screen.getByText(/0\.00073/)).toBeInTheDocument();
+    // The position lines keep their sign AND their magnitude: "0 → -0.01".
+    expect(screen.getAllByText(/-0\.01/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/\+0\.01/).length).toBeGreaterThan(0);
+    // Nothing collapsed to a bare -0 / +0, which is the actual bug.
     expect(screen.queryByText('-0')).not.toBeInTheDocument();
     expect(screen.queryByText('+0')).not.toBeInTheDocument();
   });
@@ -597,7 +671,7 @@ describe('BorosPairTicket', () => {
     renderWithClient(<BorosPairTicket />);
     await fillTicket(user);
 
-    await screen.findByText('Cost to cross');
+    await screen.findByText('Taker fee');
     // Better absent than a misleading "$0.00".
     expect(screen.queryByText('Prepaid gas')).not.toBeInTheDocument();
   });
@@ -633,7 +707,9 @@ describe('BorosPairTicket', () => {
     );
     // The option's accessible name carries its "reduce-only" sub-label.
     await user.click(screen.getByRole('radio', { name: /^Close/ }));
-    expect(screen.getByText(/Boros has no reduce-only order type/i)).toBeInTheDocument();
+    // Whose guarantee "reduce-only" is still qualified — on the badge that
+    // makes the claim, instead of a paragraph shown every time Close is picked.
+    expect(screen.getByTitle(/Boros has no reduce-only order type/i)).toBeInTheDocument();
   });
 
   it('surfaces a server blocker with its shortfall framed as a top-up', async () => {

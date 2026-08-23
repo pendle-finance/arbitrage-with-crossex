@@ -43,6 +43,7 @@ const PERPS = [
 ];
 
 const market = (m: (typeof MARKETS)[number]): BorosMarket => ({
+  maxRateDeviationApr: 0.016,
   marketId: m.id,
   tokenId: 2,
   name: `${m.venue} ETH ${m.maturity}`,

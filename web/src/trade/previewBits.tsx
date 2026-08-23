@@ -9,7 +9,8 @@ import type {
 } from '../api/types';
 import { Chip } from '../components/Chip';
 import { SideChip } from '../components/VenueChip';
-import { bps, parseSymbol, sig } from '../lib/fmt';
+import { SignedNumber } from '../components/SignedNumber';
+import { bps, fmtUsd, parseSymbol, sig } from '../lib/fmt';
 
 /** Slippage severity coloring: green < 0.05%, amber < 0.3%, red above. */
 export function slippageClass(pct: number): string {
@@ -122,4 +123,87 @@ export function estimateMargin(
     required += p.estNotional / (known || 1);
   }
   return { required, confident };
+}
+
+/**
+ * What a close is about to do, rendered IN the form rather than on hover.
+ *
+ * A close dialog that hides its own numbers behind a hover card asks the user
+ * to commit before they can read the price, the fee and the PnL they are
+ * realising — and on touch there is no hover at all. `ClosePopover` already
+ * inlined this for a single leg; this is the same panel, for any number of
+ * legs, so the pair and Boros forms cannot drift from it.
+ *
+ * One row per leg: side and size, the marketable-limit price, the PnL that
+ * becomes real, and the estimated fee. Violations and warnings ride underneath
+ * because they are about the basket, not any one leg.
+ */
+export function ClosePreviewPanel({
+  previews,
+  estimating,
+  isError,
+  error,
+  labelFor,
+  realizedFor,
+  note,
+}: {
+  previews: PreviewResult[] | undefined;
+  estimating: boolean;
+  isError: boolean;
+  error: unknown;
+  /** How to name a leg — the venue and market, in the caller's own words. */
+  labelFor: (p: PreviewResult, i: number) => string;
+  /** PnL this leg realises, when the caller can compute it. */
+  realizedFor?: (p: PreviewResult, i: number) => number | null;
+  note?: string;
+}) {
+  if (!previews || previews.length === 0) {
+    return (
+      <div className="rounded-lg border border-ink-800 bg-ink-950/60 px-3 py-2.5 text-[11px]">
+        <PreviewFallback isError={isError} error={error} />
+      </div>
+    );
+  }
+  return (
+    <div className="flex flex-col gap-2 rounded-lg border border-ink-800 bg-ink-950/60 px-3 py-2.5 text-[11px]">
+      {estimating && <span className="text-amber-400">estimating…</span>}
+      {previews.map((p, i) => {
+        const realized = realizedFor?.(p, i) ?? null;
+        return (
+          <div key={`${p.symbol ?? i}`} className="flex flex-col gap-0.5">
+            <span className="flex items-center gap-1.5 text-ink-300">
+              <SideChip side={p.side} />
+              <span className="text-ink-200">{labelFor(p, i)}</span>
+              <span className="num ml-auto text-ink-100">{p.qty ? sig(p.qty) : '—'}</span>
+            </span>
+            <span className="flex justify-between text-ink-400">
+              <span>marketable limit px</span>
+              <span className="num text-ink-100">{p.price ? sig(p.price) : '—'}</span>
+            </span>
+            {p.fillEstimate && (
+              <span className="flex items-center justify-between text-ink-400">
+                <span>slippage</span>
+                <SlippageBadge est={p.fillEstimate} />
+              </span>
+            )}
+            {realized !== null && (
+              <span className="flex justify-between text-ink-400">
+                <span>PnL realised</span>
+                <SignedNumber value={realized} format={(n) => fmtUsd(n)} />
+              </span>
+            )}
+            <span className="flex justify-between text-ink-400">
+              <span>est fee</span>
+              <span className="text-ink-200">{feeText(p.fees)}</span>
+            </span>
+          </div>
+        );
+      })}
+      {note && <span className="cursor-help text-ink-500" title={note}>reduce-only IOC marketable limit ⓘ</span>}
+      <ViolationList
+        violations={previews.flatMap((p) => p.violations ?? [])}
+        warnings={previews.flatMap((p) => p.warnings ?? [])}
+      />
+    </div>
+  );
 }
