@@ -16,6 +16,9 @@
 import { CoreError } from '../errors';
 
 const BOROS_BASE_URL = 'https://api.boros.finance';
+/** The api-gateway surface (`/apis` → api-gateway → open-api's `open-api-v2/…`
+ * mounts). New endpoints live here — the bare `/open-api` prefix is deprecated. */
+const BOROS_GATEWAY_BASE_URL = 'https://api-boros.pendle.finance/apis';
 
 /** tokenId → collateral token symbol (mirrors boros-tools' TOKEN_IDS). */
 export const BOROS_TOKEN_SYMBOLS: Record<number, string> = {
@@ -26,7 +29,15 @@ export const BOROS_TOKEN_SYMBOLS: Record<number, string> = {
   5: 'HYPE',
 };
 
-export type FetchLike = (url: string, init?: { signal?: AbortSignal }) => Promise<{
+export type FetchLike = (
+  url: string,
+  init?: {
+    signal?: AbortSignal;
+    method?: string;
+    headers?: Record<string, string>;
+    body?: string;
+  },
+) => Promise<{
   ok: boolean;
   status: number;
   json(): Promise<unknown>;
@@ -508,4 +519,55 @@ export function resolveCollateralPricesUsd(markets: BorosMarket[]): Map<number, 
     prices.set(tokenId, ref ? ref.assetMarkPriceUsd : null);
   }
   return prices;
+}
+
+/**
+ * POST {gateway}/v1/crossex/shared-positions — store a share payload on the public
+ * backend and get its short code back. `d` is the base64url payload the long
+ * link would carry after `?d=`; the backend keys it by content hash, so
+ * re-sharing the same position returns the same code with a refreshed ~90-day
+ * expiry. Throws CoreError('network') on any failure — the share modal treats
+ * that as "no short link today" and falls back to the long URL.
+ */
+export async function createShareShortLink(
+  fetchImpl: FetchLike,
+  d: string,
+): Promise<{ code: string; expiresAt: number }> {
+  const clientTag =
+    'pendle_client=boroscrossex' + clientTagState.version + (clientTagState.active ? '_active' : '');
+  const url = `${BOROS_GATEWAY_BASE_URL}/v1/crossex/shared-positions?${clientTag}`;
+  let resp: Awaited<ReturnType<FetchLike>>;
+  try {
+    resp = await fetchImpl(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ d }),
+      // Snappier than the read timeout: the modal already shows the long link,
+      // a short link that takes this long isn't worth upgrading to.
+      signal: AbortSignal.timeout(10_000),
+    });
+  } catch (err) {
+    throw new CoreError(
+      `Boros API unreachable (shared-positions): ${(err as Error)?.message ?? String(err)}`,
+      'network',
+    );
+  }
+  if (!resp.ok) {
+    throw new CoreError(
+      `Boros API shared-positions returned HTTP ${resp.status}`,
+      resp.status === 429 ? 'rate-limited' : 'network',
+    );
+  }
+  let body: unknown;
+  try {
+    body = await resp.json();
+  } catch {
+    throw new CoreError('Boros API shared-positions returned a non-JSON body', 'network');
+  }
+  const code = (body as { code?: unknown })?.code;
+  const expiresAt = (body as { expiresAt?: unknown })?.expiresAt;
+  if (typeof code !== 'string' || !/^[A-Za-z0-9_-]{4,32}$/.test(code)) {
+    throw new CoreError('Boros API shared-positions returned no usable code', 'network');
+  }
+  return { code, expiresAt: typeof expiresAt === 'number' ? expiresAt : 0 };
 }

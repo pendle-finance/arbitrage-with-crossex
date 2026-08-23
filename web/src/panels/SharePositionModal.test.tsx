@@ -1,12 +1,14 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { http, HttpResponse } from 'msw';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ToastProvider } from '../components/Toast';
 import { fmtDateUtc } from '../lib/fmt';
-import { buildShareUrl } from '../lib/share';
+import { buildShareUrl, buildShortShareUrl } from '../lib/share';
 import { renderShareCard } from '../lib/shareCard';
 import { decodeSharePayload } from '../lib/shareCodec';
 import { makeSharePayload } from '../test/fixtures';
+import { env, server } from '../test/server';
 import { SharePositionModal } from './SharePositionModal';
 
 // jsdom has no 2D canvas — stub the renderer with a canvas-shaped object.
@@ -27,6 +29,20 @@ const mount = () =>
   );
 
 afterEach(() => vi.unstubAllGlobals());
+
+// The modal requests a short link on mount; default it to a failure so every
+// existing assertion sees the deterministic long-URL fallback. Tests of the
+// short link itself override with a success handler.
+const shareLinkFails = http.post('*/api/share-link', () =>
+  HttpResponse.json(
+    { ok: false, error: { category: 'network', message: 'down', retryable: true } },
+    { status: 502 },
+  ),
+);
+const shareLinkMints = (code: string) =>
+  http.post('*/api/share-link', () => HttpResponse.json(env({ code, expiresAt: 0 })));
+
+beforeEach(() => server.use(shareLinkFails));
 
 describe('SharePositionModal', () => {
   it('previews the generated PNG and offers the actions', async () => {
@@ -75,6 +91,27 @@ describe('SharePositionModal', () => {
     mount();
     expect(screen.getByText(/X can't attach an image from a link/)).toBeInTheDocument();
     expect(screen.getByText(/wallet address is not part of the link/)).toBeInTheDocument();
+  });
+
+  it('upgrades the link (and the X intent) to the short URL once the backend mints a code', async () => {
+    server.use(shareLinkMints('Abc123_-xyz'));
+    mount();
+    const input = screen.getByLabelText('Position share link') as HTMLInputElement;
+    // The long link is usable immediately — the upgrade is a background swap.
+    expect(input.value).toBe(buildShareUrl(payload));
+    await waitFor(() => expect(input.value).toBe(buildShortShareUrl('Abc123_-xyz')));
+    expect(input.value).toBe('https://boros.pendle.finance/arbitrage-crossex/position?s=Abc123_-xyz');
+    const href = screen.getByRole('link', { name: 'Share on X →' }).getAttribute('href') ?? '';
+    expect(new URL(href).searchParams.get('url')).toBe(buildShortShareUrl('Abc123_-xyz'));
+  });
+
+  it('keeps the long URL when the short-link mint fails — sharing never blocks on the backend', async () => {
+    mount(); // beforeEach handler: /api/share-link 502s
+    const input = screen.getByLabelText('Position share link') as HTMLInputElement;
+    expect(input.value).toBe(buildShareUrl(payload));
+    // Give the rejected request time to settle; the value must not change.
+    await waitFor(() => expect(input.value).toBe(buildShareUrl(payload)));
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument(); // and no error toast — silent fallback
   });
 
   it('degrades to link-only when the card render fails — the share still works', async () => {
