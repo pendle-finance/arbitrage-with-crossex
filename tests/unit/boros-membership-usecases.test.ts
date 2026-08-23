@@ -466,3 +466,308 @@ describe('membership use cases — a card left holding only perps', () => {
     expectNothingLost(perpsOnly());
   });
 });
+
+/**
+ * Correcting a shared leg's ENTRY, through the wire.
+ *
+ * The venue reports one blended entry across every position sharing a leg. A
+ * user who opened those halves at different prices can say what THEIR half
+ * paid — and the other half must move to compensate, because the venue's
+ * average is ground truth over the whole position. Asserting is dividing a
+ * known total, never restating it.
+ *
+ * The bug this pins: the assertion used to be a label on the asserting card
+ * only. The sibling kept showing the venue blend, so the two cards disagreed
+ * about what one venue position cost.
+ */
+describe('entry assertions — the venue average is conserved across claims', () => {
+  /** HL is shared 0.024 (Binance card) / 0.023 (Gate card) at a venue blend of
+   * 2300 — so 0.047 × 2300 = 108.10 total, whatever the split claims. */
+  const HL_QTY = 0.047;
+  const VENUE_ENTRY = 2_300;
+
+  /**
+   * The observable: entry SLIPPAGE.
+   *
+   * `StrategyLeg` carries no entry price — the entry lives on the internal
+   * build and reaches the user as the signed gap between the pair's two legs.
+   * That is also the number the "entry slippage is unknown" banner is about,
+   * so asserting on it tests the thing the user actually sees.
+   */
+  const slipOf = (out: StrategyReturns, positionId: string): number | null =>
+    out.strategies.find((s) => s.strategyId === positionId)?.feesUsd.paid
+      .perpEntrySlippageUsd ?? null;
+
+  const assertHl = (rows: MembershipRow[], positionId: string, entry: number) =>
+    rows.map((r) =>
+      r.positionId === positionId && r.leg.kind === 'perp' && r.leg.symbol === HL
+        ? { ...r, entry }
+        : r,
+    );
+
+  it('gives BOTH cards a known entry slippage once one half is asserted', () => {
+    // Hubert's case. Unasserted, a partial claim on the shared HL leg has no
+    // price of its own, so neither card can compute entry slippage and both
+    // show "unknown". Asserting one half fixes BOTH: the assertion pins this
+    // card, and conservation implies the sibling's.
+    const before = book([...BIN_CARD, ...GATE_CARD]);
+    expect(slipOf(before, BIN_POS)).toBeNull();
+    expect(slipOf(before, GATE_POS)).toBeNull();
+
+    const out = book(assertHl([...BIN_CARD, ...GATE_CARD], BIN_POS, 2_280));
+    const mine = slipOf(out, BIN_POS);
+    const sibling = slipOf(out, GATE_POS);
+    expect(mine).not.toBeNull();
+    expect(sibling).not.toBeNull();
+
+    // The invariant, read back out of the two cards. BIN is long at the venue
+    // blend (2300) against its asserted 2280 short; GATE is long 2300 against
+    // the implied sibling short. Recovering the two shorts from the slippage
+    // must return the venue's own average over the whole 0.047.
+    const binShort = 2_300 - (mine as number) / 0.024;
+    const gateShort = 2_300 - (sibling as number) / 0.023;
+    expect(binShort).toBeCloseTo(2_280, 6);
+    expect(0.024 * binShort + 0.023 * gateShort).toBeCloseTo(VENUE_ENTRY * HL_QTY, 6);
+    expectNothingLost(out);
+  });
+
+  it('puts the reconciled entry ON BOTH LEGS, so each card can show its own', () => {
+    // The bug behind the screenshot: the fix reached entry SLIPPAGE but never
+    // the per-leg Entry label, which fell back to the venue's blended figure.
+    // The sibling therefore still read 2440 next to an asserted 2418, and the
+    // two did not add back up to the venue average.
+    const legEntry = (out: StrategyReturns, positionId: string): number | undefined => {
+      const card = out.strategies.find((s) => s.strategyId === positionId);
+      const leg = card?.legs.find((l) => l.kind === 'perp' && l.symbol === HL);
+      return leg?.entryPrice;
+    };
+    const out = book(assertHl([...BIN_CARD, ...GATE_CARD], BIN_POS, 2_280));
+    const mine = legEntry(out, BIN_POS);
+    const sibling = legEntry(out, GATE_POS);
+    expect(mine).toBeCloseTo(2_280, 9);
+    expect(sibling).toBeDefined();
+    // THE THING HUBERT CHECKED: the two, weighted by size, are the venue's own.
+    expect(0.024 * (mine as number) + 0.023 * (sibling as number)).toBeCloseTo(
+      VENUE_ENTRY * HL_QTY,
+      6,
+    );
+    // And with nothing asserted the field stays absent, so the UI keeps
+    // falling back to the venue figure exactly as it always did.
+    const plain = book([...BIN_CARD, ...GATE_CARD]);
+    expect(legEntry(plain, BIN_POS)).toBeUndefined();
+    expect(legEntry(plain, GATE_POS)).toBeUndefined();
+  });
+
+  it('leaves an unasserted book exactly as it was', () => {
+    // No assertion ⇒ no invented price anywhere, and the banner still applies.
+    const out = book([...BIN_CARD, ...GATE_CARD]);
+    expect(slipOf(out, BIN_POS)).toBeNull();
+    expect(slipOf(out, GATE_POS)).toBeNull();
+    expectNothingLost(out);
+  });
+
+  it('honours BOTH claims when both assert', () => {
+    const rows = assertHl(assertHl([...BIN_CARD, ...GATE_CARD], BIN_POS, 2_280), GATE_POS, 2_320);
+    const out = book(rows);
+    expect(2_300 - (slipOf(out, BIN_POS) as number) / 0.024).toBeCloseTo(2_280, 6);
+    expect(2_300 - (slipOf(out, GATE_POS) as number) / 0.023).toBeCloseTo(2_320, 6);
+    expectNothingLost(out);
+  });
+
+  it('refuses to invent a price when the assertion overruns the venue', () => {
+    // 100000 on 0.024 of a 0.047 leg blended at 2300 implies a NEGATIVE price
+    // for the remaining 0.023. The client blocks this; a payload that reaches
+    // the server anyway must not fabricate one, so the sibling stays unknown.
+    const out = book(assertHl([...BIN_CARD, ...GATE_CARD], BIN_POS, 100_000));
+    expect(slipOf(out, GATE_POS)).toBeNull();
+    expectNothingLost(out);
+  });
+
+  it('conserves the venue RATE across claims on a shared BOROS leg', () => {
+    // The perp path shipped first and resolved perps only, so a Boros rate the
+    // user asserted was silently dropped while the dialog reported success.
+    // Same conservation, different unit: the venue's blended entryApr covers
+    // every claim, and asserting one moves the others to balance it.
+    const rate = (out: StrategyReturns, positionId: string): number | undefined =>
+      out.strategies
+        .find((x) => x.strategyId === positionId)
+        ?.legs.find((l) => l.kind === 'boros' && l.marketId === BIN_BOROS)?.entryApr;
+
+    // Split the Binance Boros leg (0.013 @ 4.5%) across both cards, then say
+    // this half locked 5%. The other half must absorb the difference.
+    const rows: MembershipRow[] = [
+      { positionId: BIN_POS, leg: { kind: 'perp', symbol: BIN } },
+      { positionId: BIN_POS, leg: { kind: 'boros', marketId: BIN_BOROS }, qty: 0.0065, entry: 0.05 },
+      { positionId: GATE_POS, leg: { kind: 'perp', symbol: GATE } },
+      { positionId: GATE_POS, leg: { kind: 'boros', marketId: BIN_BOROS }, qty: 0.0065 },
+    ];
+    const out = book(rows);
+    const mine = rate(out, BIN_POS);
+    const sibling = rate(out, GATE_POS);
+    expect(mine).toBeCloseTo(0.05, 12);
+    expect(sibling).toBeDefined();
+    // Equal halves, so the sibling takes 2*0.045 − 0.05 = 0.04.
+    expect(sibling as number).toBeCloseTo(0.04, 12);
+    // The invariant, in rate space.
+    expect(0.0065 * (mine as number) + 0.0065 * (sibling as number)).toBeCloseTo(
+      0.045 * 0.013,
+      12,
+    );
+    expectNothingLost(out);
+  });
+
+  it('keeps the VENUE blend alongside the per-claim rate, so the UI can name both', () => {
+    // Once anyone asserts, `entryApr` is that CLAIM's rate — so a UI comparing
+    // against it printed the user's own number back at them as "the venue
+    // reports". `venueEntry` preserves the blend for that comparison.
+    const rows: MembershipRow[] = [
+      { positionId: BIN_POS, leg: { kind: 'boros', marketId: BIN_BOROS }, qty: 0.0065, entry: 0.05 },
+      { positionId: GATE_POS, leg: { kind: 'boros', marketId: BIN_BOROS }, qty: 0.0065 },
+    ];
+    const out = book(rows);
+    for (const id of [BIN_POS, GATE_POS]) {
+      const leg = out.strategies
+        .find((x) => x.strategyId === id)
+        ?.legs.find((l) => l.kind === 'boros' && l.marketId === BIN_BOROS);
+      // Both cards carry the venue's own 4.5%, including the one that asserted
+      // nothing and merely holds the balancing figure.
+      expect(leg?.venueEntry).toBeCloseTo(0.045, 12);
+      expect(leg?.entryApr).not.toBeCloseTo(0.045, 6);
+    }
+  });
+
+  it('leaves an unasserted BOROS split on the venue rate', () => {
+    const rows: MembershipRow[] = [
+      { positionId: BIN_POS, leg: { kind: 'boros', marketId: BIN_BOROS }, qty: 0.0065 },
+      { positionId: GATE_POS, leg: { kind: 'boros', marketId: BIN_BOROS }, qty: 0.0065 },
+    ];
+    const out = book(rows);
+    for (const id of [BIN_POS, GATE_POS]) {
+      const apr = out.strategies
+        .find((x) => x.strategyId === id)
+        ?.legs.find((l) => l.kind === 'boros' && l.marketId === BIN_BOROS)?.entryApr;
+      expect(apr).toBeCloseTo(0.045, 12);
+    }
+    expectNothingLost(out);
+  });
+
+  it('RE-BALANCES a three-way split off whichever claim was asserted last', () => {
+    // "Adjusting 1 = adjusting all", including at 3+ portions. Two claims that
+    // said nothing must BOTH move, and must move to the same figure.
+    const THIRD = 'c3c00003';
+    const rows: MembershipRow[] = [
+      { positionId: BIN_POS, leg: { kind: 'perp', symbol: HL }, qty: 0.02, entry: 2280 },
+      { positionId: GATE_POS, leg: { kind: 'perp', symbol: HL }, qty: 0.015 },
+      { positionId: THIRD, leg: { kind: 'perp', symbol: HL }, qty: 0.012 },
+    ];
+    const out = book(rows);
+    const entry = (id: string): number | undefined =>
+      out.strategies
+        .find((x) => x.strategyId === id)
+        ?.legs.find((l) => l.kind === 'perp' && l.symbol === HL)?.entryPrice;
+    // The two silent claims are DERIVED — both moved off the venue's own 2300,
+    // and both to the same figure, since the remainder splits by size.
+    const g = entry(GATE_POS);
+    const t = entry(THIRD);
+    expect(entry(BIN_POS)).toBeCloseTo(2280, 9);
+    expect(g).toBeDefined();
+    expect(t).toBeDefined();
+    expect(g as number).toBeCloseTo(t as number, 9);
+    expect(g as number).not.toBeCloseTo(2300, 6);
+    // Conservation over the WHOLE venue leg (0.047 at 2300).
+    expect(0.02 * 2280 + (0.047 - 0.02) * (g as number)).toBeCloseTo(2300 * 0.047, 6);
+    expectNothingLost(out);
+  });
+
+  it('re-balances an ORPHANED Boros portion too', () => {
+    // Hubert's screenshot: the grouped card showed the asserted 9.02% while the
+    // "Orphan leg" card beside it still showed the venue's 9.08% — two rates for
+    // one venue position. An orphan is un-asserted size on the same leg, so it
+    // takes the same implied rate.
+    const rows: MembershipRow[] = [
+      { positionId: BIN_POS, leg: { kind: 'boros', marketId: BIN_BOROS }, qty: 0.0065, entry: 0.05 },
+      // Detached: no positionId ⇒ its own orphan card.
+      { leg: { kind: 'boros', marketId: BIN_BOROS }, qty: 0.0065 },
+    ];
+    const out = book(rows);
+    const legs = out.strategies.flatMap((x) =>
+      x.legs.filter((l) => l.kind === 'boros' && l.marketId === BIN_BOROS),
+    );
+    // Every rendering of this market agrees: the asserted 5% and the balancing
+    // 4%, and nothing is left sitting on the venue's own 4.5%.
+    const aprs = legs.map((l) => l.entryApr as number).sort((a, b) => a - b);
+    expect(aprs.length).toBeGreaterThanOrEqual(2);
+    expect(aprs.some((a) => Math.abs(a - 0.05) < 1e-9)).toBe(true);
+    expect(aprs.every((a) => Math.abs(a - 0.045) > 1e-9)).toBe(true);
+    expectNothingLost(out);
+  });
+
+  it('lets a card claim the WHOLE of a leg a sibling already holds part of', () => {
+    // Pressing "All" on a shared leg used to emit a BLANKET claim (`qty`
+    // absent), which the solver reads as "all that no other position claims" —
+    // and the sibling's stated 0.023 was drawn first, so the assignment took
+    // the leftover and silently did nothing. A stated size wins instead.
+    // The client RELEASES the sibling's claim first (see applyAssertion's
+    // takesWholeLeg branch) — two stated claims on one leg cannot both be
+    // honoured, they are drawn in order and clamped. These are the rows that
+    // reach the solver after that release.
+    const rows: MembershipRow[] = [
+      ...withoutHlPerp(GATE_CARD),
+      { positionId: BIN_POS, leg: { kind: 'perp', symbol: BIN } },
+      { positionId: BIN_POS, leg: { kind: 'perp', symbol: HL }, qty: 0.047 },
+    ];
+    const out = book(rows);
+    const hlQty = (id: string) =>
+      out.strategies
+        .find((x) => x.strategyId === id)
+        ?.legs.find((l) => l.kind === 'perp' && l.symbol === HL)?.notionalToken ?? 0;
+    // The whole venue leg lands on the card that asked for all of it.
+    expect(hlQty(BIN_POS)).toBeCloseTo(0.047, 9);
+    expect(hlQty(GATE_POS)).toBeCloseTo(0, 9);
+    expectNothingLost(out);
+  });
+
+  it('re-balances LEFTOVER Boros size that no row mentions at all', () => {
+    // Hubert's screenshot: one claim asserted, and the card holding the size
+    // nobody spoke for still showed the venue's blend — two entries for one
+    // venue position. This size never passes through the per-claim
+    // reconciliation, but the venue average counted it, so it re-balances too.
+    // NOTE: no orphan row here — the remainder is simply unclaimed.
+    const rows: MembershipRow[] = [
+      { positionId: BIN_POS, leg: { kind: 'perp', symbol: BIN } },
+      { positionId: BIN_POS, leg: { kind: 'boros', marketId: BIN_BOROS }, qty: 0.0065, entry: 0.05 },
+    ];
+    const out = book(rows);
+    const aprs = out.strategies
+      .flatMap((x) => x.legs)
+      .filter((l) => l.kind === 'boros' && l.marketId === BIN_BOROS)
+      .map((l) => l.entryApr as number);
+    expect(aprs.length).toBeGreaterThanOrEqual(2);
+    // The asserted 5% is there…
+    expect(aprs.some((a) => Math.abs(a - 0.05) < 1e-9)).toBe(true);
+    // …and NOTHING is still sitting on the venue's own 4.5%.
+    expect(aprs.every((a) => Math.abs(a - 0.045) > 1e-9)).toBe(true);
+    expectNothingLost(out);
+  });
+
+  it('survives the wire — `e` is not dropped by encode/decode', () => {
+    const rows = assertHl([...BIN_CARD, ...GATE_CARD], BIN_POS, 2_280);
+    const through = decodeMembership(encodeMembership(rows)) ?? [];
+    const hl = through.find(
+      (r) => r.positionId === BIN_POS && r.leg.kind === 'perp' && r.leg.symbol === HL,
+    );
+    expect(hl?.entry).toBe(2_280);
+  });
+
+  it('drops a non-positive asserted entry at the decoder', () => {
+    // Same discipline as `q`: not a fill, and it would poison the average.
+    for (const bad of [0, -1]) {
+      const rows = assertHl([...BIN_CARD], BIN_POS, bad);
+      const through = decodeMembership(encodeMembership(rows)) ?? [];
+      const hl = through.find(
+        (r) => r.positionId === BIN_POS && r.leg.kind === 'perp' && r.leg.symbol === HL,
+      );
+      expect(hl?.entry).toBeUndefined();
+    }
+  });
+});

@@ -9,7 +9,7 @@ import { useId, useState, type FormEvent } from 'react';
 import type { CapitalBasis, StrategyReturns } from '../api/types';
 import { FreshnessButton } from '../components/FreshnessIndicator';
 import { SignedNumber } from '../components/SignedNumber';
-import { fmtPct, fmtUsd } from '../lib/fmt';
+import { fmtUsd } from '../lib/fmt';
 import { readJson } from '../lib/storage';
 import { applyCostFlags, type CostFlags } from './strategyMath';
 
@@ -213,14 +213,21 @@ export function TotalsStrip({ data }: { data: StrategyReturns }) {
         Current PnL{' '}
         <SignedNumber value={totals.realizedPnlUsd} format={(n) => fmtUsd(n)} className="font-medium" />
       </span>
-      <span className="text-ink-400">
-        Realized APR{' '}
-        {totals.realizedApr === null ? (
-          <span className="num text-ink-400">—</span>
-        ) : (
-          <SignedNumber value={totals.realizedApr} format={(n) => fmtPct(n)} className="font-medium" />
-        )}
-      </span>
+      {/* No "Realized APR" here, deliberately.
+       *
+       * It was aggregate realized PnL over capital, extrapolated to a year:
+       * × (SECONDS_IN_YEAR / weightedElapsed), with no floor on how short that
+       * window could be. At 13 hours that multiplies by ~674 and at 2 hours by
+       * ~4380, so a few cents of funding noise on a small base rendered as a
+       * three-digit APR that moved on every poll. Two independent UX testers
+       * named it the fastest way to distrust every other number on the page.
+       *
+       * Removed rather than floored: a run of hours cannot be annualized into
+       * anything a trader can act on, so there is no window at which the figure
+       * becomes meaningful enough to keep. `Current PnL` is the honest version
+       * of the same question, and the per-card FIXED APY — suppressed until
+       * every leg is in place — is the honest version of the rate one.
+       */}
       <span className="text-ink-400">
         Capital <span className="num font-medium text-ink-100">{fmtUsd(totals.capitalUsd, 0)}</span>
       </span>

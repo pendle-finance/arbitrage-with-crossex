@@ -123,6 +123,32 @@ export interface StrategyLeg {
   /** Boros only: entry fixed APR and current mark APR. */
   entryApr?: number;
   markApr?: number;
+  /**
+   * The VENUE's own blended entry across every claim on this leg, when a user
+   * assertion has moved this claim's own figure away from it.
+   *
+   * `entryApr` (Boros) and `entryPrice` (perp) become per-claim once anyone
+   * asserts, so they can no longer answer "and what does the venue report?".
+   * Without this the UI compared a number to itself and told the reader the
+   * venue reported their own assertion. Absent when nothing was asserted, in
+   * which case the two are the same number by definition.
+   */
+  venueEntry?: number;
+  /**
+   * Perp only: what THIS strategy's share of the leg entered at.
+   *
+   * Normally the venue's own blended entry, which is the same for every
+   * strategy sharing the leg — so the UI could read it off the live position
+   * and did. It stops being the same the moment a user asserts what their half
+   * actually paid: the asserting card takes its number and the others take
+   * whatever balances, and the venue's average is conserved across them (see
+   * `entryByClaim`). At that point the live position's single figure is wrong
+   * for every card, and the per-leg value has to come from here.
+   *
+   * Absent when nothing is known — a partial claim on a shared leg with no
+   * assertion anywhere. The UI falls back to the venue's figure, as before.
+   */
+  entryPrice?: number;
   /** Boros only: the reference perp's live floating APR (from /markets). */
   floatingApr?: number;
   /** Funding (perp) or settlement (Boros, net of settle fees) cash to date. */
@@ -643,6 +669,19 @@ const FUNDING_LEDGER_GRACE_SEC = 8 * 3600;
  * absorbs market drift and stops being slippage. */
 const PERP_ENTRY_SYNC_MAX_SEC = 15 * 60;
 
+/**
+ * Above this fraction of the matched notional, an ESTIMATED entry slippage is
+ * flagged as probably market drift rather than a cost that was paid.
+ *
+ * Estimates only ever come from legs opened far enough apart that the gap
+ * between their entries includes whatever the coin did in between. A genuine
+ * crossing cost on a liquid perp pair is basis points; half a percent is
+ * already an order of magnitude more than the spread, so past that the number
+ * is telling you about the market, not about the trade. Below it, saying
+ * anything would train the user to dismiss the warning that matters.
+ */
+const ESTIMATED_SLIPPAGE_WARN_FRACTION = 0.005;
+
 /** How far before the earliest live position's open the deal chain may reach:
  * a deal row's created_at precedes the position's first fill by however long
  * the maker rested, so the window must cover intent-to-first-fill lag. */
@@ -1050,10 +1089,51 @@ function assembleStrategy(args: AssembleInput): StrategyRollup {
             `Entry slippage for ${base} is summed from ${chained.deals} deal${chained.deals === 1 ? '' : 's'} in this terminal's journal (${cause}).`,
           );
         } else {
-          slippageCauseWarned = true;
-          warnings.push(
-            `Entry slippage for ${base} is unknown (${cause}, and the local deal journal cannot reconstruct the original fills) — it is excluded from the cost totals.`,
-          );
+          /**
+           * No journal to reconstruct the fills — so ESTIMATE from the live
+           * entry gap rather than dropping the cost.
+           *
+           * This used to report null and exclude the whole figure. That is the
+           * more defensible number in isolation, but it silently understates
+           * every book it touches: a real cost was paid, and reporting nothing
+           * reads as zero in the totals the user actually decides on. An
+           * estimate that is LABELLED and can be corrected is worth more than
+           * an honest blank — the entry override on each leg is the correction
+           * (assert what a leg really paid and this recomputes from it).
+           *
+           * ⚠ The estimate's known flaw: legs opened apart include market
+           * drift between the two opens, so the gap is the crossing cost PLUS
+           * whatever the coin did in between. Small gaps are dominated by the
+           * former, large ones by the latter — hence the threshold below,
+           * which warns only when the number is big enough to be mostly drift.
+           */
+          const matched = Math.min(lo.qty, sh.qty);
+          perpEntrySlippageUsd = (lo.entryPrice - sh.entryPrice) * matched;
+          // The earliest open this cost can be attributed to. 0 when neither
+          // leg reports one — the part is still listed, just undated.
+          const atSec = opens.length ? Math.min(...opens) : 0;
+          perpEntryCostParts.push({
+            id: 'slip:estimated',
+            kind: 'slippage',
+            usd: perpEntrySlippageUsd,
+            atSec,
+            venues: [lo.leg.venue, sh.leg.venue],
+            side: null,
+            qty: matched,
+          });
+          // Only when it is large enough to be suspect. Below the threshold the
+          // gap is an ordinary crossing cost and saying anything would train
+          // the user to ignore the warning that matters.
+          const notionalUsd = Math.abs(lo.entryPrice * matched);
+          const suspect =
+            notionalUsd > 0 &&
+            Math.abs(perpEntrySlippageUsd) > notionalUsd * ESTIMATED_SLIPPAGE_WARN_FRACTION;
+          if (suspect) {
+            slippageCauseWarned = true;
+            warnings.push(
+              `Entry slippage for ${base} is an estimate from the live entry gap (${cause}) and looks large — it may be market drift rather than a cost you paid. Correct a leg's entry from Manual adjustment if you know what it actually filled at.`,
+            );
+          }
         }
       }
     }
@@ -1542,6 +1622,16 @@ function applyMembership(
    * would undo an assertion. */
   assertedSymbols: Set<string>;
   orphanedBoros: BorosLegBuild[];
+  /**
+   * The entry a claim takes when it asserted nothing, keyed by leg.
+   *
+   * Exposed because the leftover/unowned passes downstream build their own
+   * cards out of size no membership row mentions — and that size is still part
+   * of the venue's blend, so it re-balances like any other un-asserted claim.
+   * Without it those cards kept the venue figure while the asserted card moved,
+   * showing two different entries for one venue position.
+   */
+  impliedByLeg: Map<string, number>;
   notes: string[];
 } {
   const notes: string[] = [];
@@ -1549,6 +1639,8 @@ function applyMembership(
   const borosLeft = new Map<number, number>();
   const cards: StrategyRollup[] = [];
   const orphanedBoros: BorosLegBuild[] = [];
+  /** See the note on the return type. Filled while reconciling entries. */
+  const impliedByLeg = new Map<string, number>();
   const rows = input.membership ?? [];
 
   const perpBySymbol = new Map(perpBuildsAll.map((b) => [b.symbol, b]));
@@ -1559,7 +1651,7 @@ function applyMembership(
     rows.flatMap((r) => (r.leg.kind === 'perp' ? [r.leg.symbol] : [])),
   );
   if (!rows.length) {
-    return { cards, perpLeft, borosLeft, assertedSymbols, orphanedBoros, notes };
+    return { cards, perpLeft, borosLeft, assertedSymbols, orphanedBoros, impliedByLeg, notes };
   }
 
   // --- The ledger ------------------------------------------------------------
@@ -1663,6 +1755,93 @@ function applyMembership(
     for (const r of claimants) take(r.positionId, r.leg, each, false);
   }
 
+  /**
+   * What each position's share of a leg ACTUALLY entered at, once the user's
+   * assertions are honoured and the venue's own average is conserved.
+   *
+   * Keyed `positionId|legKey`. The venue reports ONE blended entry across every
+   * position sharing a leg, so a claim cannot normally name a price of its own
+   * — that is why the branch below used to hand every partial claim a null.
+   * An assertion changes that: the user is dividing a known total, not
+   * restating it, so
+   *
+   *   Σ(qty · entry) over every claim  ==  venueEntry · venueQty
+   *
+   * still holds. Claims that asserted keep their number; the rest split what
+   * is left, by size. This mirrors `impliedRemainderPrice` above, which prices
+   * an unexplained remainder against the fills that WERE explained.
+   *
+   * Nothing is invented: a leg nobody asserted keeps null everywhere, exactly
+   * as before. A leg whose assertions leave the remainder non-positive is
+   * abandoned whole — the client blocks that case, and a payload that reaches
+   * here anyway must not produce a negative price.
+   */
+  const entryByClaim = new Map<string, number>();
+  {
+    const asserted = new Map<string, number>();
+    for (const r of usable) {
+      if (r.positionId === undefined || r.entry === undefined) continue;
+      asserted.set(`${r.positionId}|${legRefKey(r.leg)}`, r.entry);
+    }
+    if (asserted.size) {
+      // Every claim on each leg, including the ones that said nothing.
+      const claimsByLeg = new Map<string, Array<{ positionId: string; qty: number }>>();
+      for (const [positionId, byLeg] of claimed) {
+        for (const { leg, qty } of byLeg.values()) {
+          const k = legRefKey(leg);
+          claimsByLeg.set(k, [...(claimsByLeg.get(k) ?? []), { positionId, qty }]);
+        }
+      }
+      for (const [legKey, claims] of claimsByLeg) {
+        if (!claims.some((c) => asserted.has(`${c.positionId}|${legKey}`))) continue;
+        /**
+         * The venue's own blended entry for this leg, whichever kind it is.
+         *
+         * A perp's is a PRICE (quote per coin) and a Boros leg's is a RATE
+         * (`entryApr`), but the conservation is identical: one venue figure
+         * covering every claim, divided by size. Sizes are in the leg's own
+         * unit — base coin for a perp, collateral for Boros — and since every
+         * claim on one leg shares that unit, the weighted average is
+         * well-formed either way.
+         *
+         * This resolved perps only, which silently dropped every Boros rate
+         * the user asserted while the dialog reported success.
+         */
+        const perp = [...perpBySymbol.values()].find(
+          (b) => legRefKey({ kind: 'perp', symbol: b.symbol }) === legKey,
+        );
+        const boros = perp
+          ? undefined
+          : [...borosByMarket.values()].find(
+              (b) => legRefKey({ kind: 'boros', marketId: b.marketId }) === legKey,
+            );
+        const venueEntry = perp ? perp.entryPrice : (boros?.leg.entryApr ?? 0);
+        const venueQty = (perp ?? boros)?.leg.notionalToken ?? 0;
+        if (!(venueEntry > 0) || !(venueQty > 0)) continue;
+        let restQty = venueQty;
+        let restNotional = venueEntry * venueQty;
+        for (const c of claims) {
+          const v = asserted.get(`${c.positionId}|${legKey}`);
+          if (v === undefined) continue;
+          entryByClaim.set(`${c.positionId}|${legKey}`, v);
+          restQty -= c.qty;
+          restNotional -= v * c.qty;
+        }
+        // What every un-asserted claim on this leg entered at, so the venue's
+        // average still comes back out. Guarded: an overrun would imply a
+        // negative price, and a fabricated one is worse than no answer.
+        if (!(restQty > 1e-12)) continue;
+        const implied = restNotional / restQty;
+        if (!(Number.isFinite(implied) && implied > 0)) continue;
+        impliedByLeg.set(legKey, implied);
+        for (const c of claims) {
+          const k = `${c.positionId}|${legKey}`;
+          if (!asserted.has(k)) entryByClaim.set(k, implied);
+        }
+      }
+    }
+  }
+
   // --- Every claim set becomes a card, whatever shape it is ------------------
   for (const [positionId, byLeg] of claimed) {
     const all = [...byLeg.values()];
@@ -1673,7 +1852,27 @@ function applyMembership(
         const b = borosByMarket.get(leg.marketId) as BorosLegBuild;
         const whole = b.leg.notionalToken ?? 0;
         if (!(whole > 0)) continue;
-        borosScaled.push(qty >= whole * (1 - 1e-9) ? b : scaleBorosBuild(b, qty / whole));
+        // The rate this claim actually locked, once the user's assertions are
+        // honoured and the venue's blend is conserved across the claims. Also
+        // applied to a WHOLE-leg claim, which takes the unscaled build: owning
+        // all of a leg does not mean the venue's figure is right for it —
+        // another position may hold size the solver could not attribute.
+        const rate = entryByClaim.get(`${positionId}|${legRefKey(leg)}`);
+        // Keep the venue's own blend alongside the per-claim rate, or the UI
+        // has nothing left to compare against and reports the user's own
+        // assertion as what the venue says.
+        const venueApr = rate === undefined ? undefined : b.leg.entryApr;
+        const withVenue = (x: BorosLegBuild): BorosLegBuild =>
+          venueApr === undefined ? x : { ...x, leg: { ...x.leg, venueEntry: venueApr } };
+        borosScaled.push(
+          withVenue(
+            qty >= whole * (1 - 1e-9)
+              ? rate === undefined
+                ? b
+                : { ...b, leg: { ...b.leg, entryApr: rate } }
+              : scaleBorosBuild(b, qty / whole, rate),
+          ),
+        );
       } else {
         const l = perpBySymbol.get(leg.symbol) as PerpLegBuild;
         const whole = l.leg.notionalToken ?? 0;
@@ -1695,7 +1894,12 @@ function applyMembership(
               // leg, so a partial claim cannot claim a price of its own — the
               // card reports null slippage rather than inventing one. A whole
               // claim took the branch above and keeps the venue's figures.
-              entryPrice: null,
+              //
+              // UNLESS someone asserted one. Then the split is the user's, the
+              // venue average is conserved across the claims (entryByClaim),
+              // and this claim's real entry is known — which also lets the
+              // entry-slippage branch run instead of reporting "unknown".
+              entryPrice: entryByClaim.get(`${positionId}|${legRefKey(leg)}`) ?? null,
               feesUsd: null,
               share,
               shared: true,
@@ -1732,7 +1936,31 @@ function applyMembership(
     cards.push(card);
   }
 
-  return { cards, perpLeft, borosLeft, assertedSymbols, orphanedBoros, notes };
+  /**
+   * An ORPHANED Boros portion re-balances too.
+   *
+   * It is detached size on a leg someone else asserted about, so it takes the
+   * same implied rate as any other un-asserted claim — the venue's blend
+   * already counted it, so leaving it on that blend broke conservation and
+   * showed the user two different rates for one venue position on two cards.
+   *
+   * Done here rather than at the draw site because the implied rate is not
+   * known until every claim on the leg has been collected, which happens after
+   * the orphans are carried out.
+   */
+  if (impliedByLeg.size) {
+    for (let i = 0; i < orphanedBoros.length; i += 1) {
+      const b = orphanedBoros[i];
+      const implied = impliedByLeg.get(legRefKey({ kind: 'boros', marketId: b.marketId }));
+      if (implied === undefined || b.leg.entryApr === implied) continue;
+      orphanedBoros[i] = {
+        ...b,
+        leg: { ...b.leg, entryApr: implied, venueEntry: b.leg.entryApr },
+      };
+    }
+  }
+
+  return { cards, perpLeft, borosLeft, assertedSymbols, orphanedBoros, impliedByLeg, notes };
 }
 
 function mergedStrategies(
@@ -1789,6 +2017,8 @@ function splitStrategies(
     perpLeft: Map<string, number>;
     assertedSymbols: Set<string>;
     orphanedBoros: BorosLegBuild[];
+    /** Per-leg entry for un-asserted size — leftover cards re-balance on it. */
+    impliedByLeg: Map<string, number>;
 
     cards: StrategyRollup[];
   },
@@ -2424,7 +2654,24 @@ function splitStrategies(
     for (const b of cohort.builds) {
       const left = borosShareLeft.get(b) ?? 1;
       if (left <= 1e-6) continue;
-      addUnowned(left >= 1 - 1e-9 ? b : scaleBorosBuild(b, left), cohort);
+      /**
+       * Leftover size re-balances like any other un-asserted claim.
+       *
+       * This is size no membership row mentions, so it never passed through
+       * the per-claim reconciliation — but the venue's blend counted it, so
+       * leaving it on that blend showed two different entries for one venue
+       * position: the asserted card moved and this leftover card did not.
+       */
+      const implied = asserted.impliedByLeg.get(
+        legRefKey({ kind: 'boros', marketId: b.marketId }),
+      );
+      const scaled = left >= 1 - 1e-9 ? b : scaleBorosBuild(b, left, implied);
+      addUnowned(
+        implied !== undefined && scaled.leg.entryApr !== implied
+          ? { ...scaled, leg: { ...scaled.leg, entryApr: implied, venueEntry: b.leg.entryApr } }
+          : scaled,
+        cohort,
+      );
     }
   }
   for (const { cohort, base, maturity, builds: leftovers } of unowned.values()) {
@@ -2519,6 +2766,16 @@ function scalePerpBuild(
       // execution to be contemporaneous.
       openedAt: openedAtSec ?? b.leg.openedAt,
       share,
+      // Only when this tranche's entry is genuinely its own. `legOf` leaves it
+      // null on a shared blended leg precisely so the card does not present
+      // the venue's average as this strategy's price — and an assertion is
+      // what turns it back into a real number.
+      ...(leg.entryPrice !== null && leg.entryPrice > 0 ? { entryPrice: leg.entryPrice } : {}),
+      // The venue's own blend, kept only when this claim's figure has moved
+      // away from it — see the note on `venueEntry`.
+      ...(leg.entryPrice !== null && leg.entryPrice > 0 && b.entryPrice > 0 && leg.entryPrice !== b.entryPrice
+        ? { venueEntry: b.entryPrice }
+        : {}),
       warnings: [...b.leg.warnings],
     },
     imUsd: b.imUsd * share,

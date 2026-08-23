@@ -20,7 +20,7 @@ const shared = (over: Parameters<typeof makeStrategyRollup>[0] = {}) =>
     legs: [
       makeStrategyLeg({ kind: 'perp', venue: 'HYPERLIQUID', side: 'SHORT', notionalToken: 300, share: 0.6, symbol: HL_PERP }),
       makeStrategyLeg({ kind: 'perp', venue: 'BINANCE', side: 'LONG', notionalToken: 300, share: 1, symbol: BIN_PERP }),
-      makeStrategyLeg({ kind: 'boros', venue: 'BINANCE', side: 'LONG', notionalToken: 300, share: 1, marketId: 129 }),
+      makeStrategyLeg({ kind: 'boros', venue: 'BINANCE', side: 'LONG', notionalToken: 300, share: 0.5, marketId: 129 }),
     ],
     ...over,
   });
@@ -198,5 +198,212 @@ describe('LegAssignment — behaviours the rewrite kept but stopped testing', ()
     // The two units genuinely differ here, which is what makes this a guard
     // rather than a tautology.
     expect(boros.collateral).not.toBe(legOf('HYPERLIQUID', 'perp').base);
+  });
+});
+
+/**
+ * Correcting a leg's ENTRY — the price a perp paid, the rate a Boros leg
+ * locked.
+ *
+ * The venue reports ONE blended entry across every strategy sharing a leg, so
+ * a card holding part of it cannot say what it actually paid. This is where
+ * the user says. What the venue reports never changes; the assertion only
+ * decides how that total is divided — see entryOverrideStore.
+ */
+describe('LegAssignment — correcting the entry', () => {
+  const openDialog = () => fireEvent.click(screen.getByTitle(/open on/));
+  const entryField = (rate = false) =>
+    screen.getByLabelText(new RegExp(`entry ${rate ? 'rate' : 'price'} for this position`));
+
+  it('asks for a PRICE on a perp and a RATE on a Boros leg', () => {
+    mount('HYPERLIQUID', 'perp', { onAssert: vi.fn(), venueEntry: 2440 });
+    openDialog();
+    expect(screen.getByText('What did it cost?')).toBeInTheDocument();
+    expect(screen.getByText('per coin')).toBeInTheDocument();
+
+    cleanup();
+
+    mount('BINANCE', 'boros', { onAssert: vi.fn(), venueEntry: 0.0544 });
+    openDialog();
+    expect(screen.getByText('What rate did it lock?')).toBeInTheDocument();
+    expect(screen.getByText('% APR')).toBeInTheDocument();
+  });
+
+  it('emits the typed price as an entry assertion', () => {
+    const onAssert = vi.fn<(a: LegAssertion) => void>();
+    mount('HYPERLIQUID', 'perp', { onAssert, venueEntry: 2440 });
+    openDialog();
+    fireEvent.change(entryField(), { target: { value: '2457.77' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+    expect(onAssert).toHaveBeenCalledWith({
+      mode: 'entry',
+      leg: legRefOf(legOf('HYPERLIQUID', 'perp')),
+      value: 2457.77,
+    });
+  });
+
+  it('converts a Boros rate from percent to a fraction', () => {
+    // Nobody types 0.0544 for 5.44%, and the store holds fractions — so the
+    // conversion has to happen exactly once, here at the UI edge.
+    const onAssert = vi.fn<(a: LegAssertion) => void>();
+    mount('BINANCE', 'boros', { onAssert, venueEntry: 0.0544 });
+    openDialog();
+    fireEvent.change(entryField(true), { target: { value: '9' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+    const a = onAssert.mock.calls[0][0] as LegAssertion;
+    if (a.mode !== 'entry') throw new Error('expected an entry assertion');
+    expect(a.value).toBeCloseTo(0.09, 12);
+  });
+
+  it('seeds from what was ASSERTED, never from the venue average', () => {
+    // Pre-filling the venue's number would turn "open the dialog and press
+    // Confirm" into an assertion the user never made.
+    mount('HYPERLIQUID', 'perp', { onAssert: vi.fn(), venueEntry: 2440 });
+    openDialog();
+    expect(entryField()).toHaveValue(null);
+
+    cleanup();
+
+    mount('HYPERLIQUID', 'perp', { onAssert: vi.fn(), venueEntry: 2440, entryOverride: 2457.77 });
+    openDialog();
+    expect(entryField()).toHaveValue(2457.77);
+  });
+
+  it('clears an assertion by emptying the field', () => {
+    const onAssert = vi.fn<(a: LegAssertion) => void>();
+    mount('HYPERLIQUID', 'perp', { onAssert, venueEntry: 2440, entryOverride: 2457.77 });
+    openDialog();
+    fireEvent.change(entryField(), { target: { value: '' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+    expect(onAssert).toHaveBeenCalledWith({
+      mode: 'entry',
+      leg: legRefOf(legOf('HYPERLIQUID', 'perp')),
+      value: null,
+    });
+  });
+
+  it('refuses a non-positive entry — that is not a fill', () => {
+    mount('HYPERLIQUID', 'perp', { onAssert: vi.fn(), venueEntry: 2440 });
+    openDialog();
+    fireEvent.change(entryField(), { target: { value: '0' } });
+    expect(screen.getByRole('button', { name: 'Confirm' })).toBeDisabled();
+    expect(screen.getByText(/above zero, or leave it empty/)).toBeInTheDocument();
+  });
+
+  it('does not pin the grouping when ONLY the entry changed', () => {
+    // Re-asserting "this position, all of it" would freeze a split the solver
+    // was still free to revise — a side effect the user never asked for.
+    const onAssert = vi.fn<(a: LegAssertion) => void>();
+    mount('HYPERLIQUID', 'perp', { onAssert, venueEntry: 2440 });
+    openDialog();
+    fireEvent.change(entryField(), { target: { value: '2457.77' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+    expect(onAssert).toHaveBeenCalledTimes(1);
+    expect((onAssert.mock.calls[0][0] as LegAssertion).mode).toBe('entry');
+  });
+
+  it('is not asked once the leg is going somewhere else', () => {
+    // An entry is what THIS card paid; it means nothing for a leg it is
+    // handing to another card or back to the grouper.
+    mount('HYPERLIQUID', 'perp', {
+      onAssert: vi.fn(),
+      venueEntry: 2440,
+      destinations: [{ id: 'ETH#OTHER#exec', label: 'ETH · OKX ⇄ Gate' }],
+    });
+    openDialog();
+    expect(screen.getByText('What did it cost?')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /ETH · OKX ⇄ Gate/ }));
+    expect(screen.queryByText('What did it cost?')).toBeNull();
+  });
+
+  it('says plainly that fees stay pro-rated by size', () => {
+    mount('HYPERLIQUID', 'perp', { onAssert: vi.fn(), venueEntry: 2440 });
+    openDialog();
+    expect(screen.getByText(/Fees stay pro-rated by size/)).toBeInTheDocument();
+  });
+});
+
+/**
+ * The three defects the flow-5-9 re-audit found in the entry editor.
+ *
+ * All three shared one root cause: `entryOverrideStore` was written, unit
+ * tested and then never called from the app, so the conservation guarantee the
+ * dialog PROMISED in prose was not actually enforced by anything.
+ */
+describe('LegAssignment — entry editor: regressions from the re-audit', () => {
+  const openShared = () => fireEvent.click(screen.getByTitle(/of the .* open on/));
+  const entryField = () => screen.getByLabelText(/entry price for this position/);
+
+  it('REFUSES an assertion that leaves the rest of the leg below zero', () => {
+    // The fixture holds 180 of 300 on HYPERLIQUID at a venue blend of 2440.
+    // Claiming 100000 implies the other 120 was bought at a negative price.
+    mount('HYPERLIQUID', 'perp', { onAssert: vi.fn(), venueEntry: 2440 });
+    openShared();
+    fireEvent.change(entryField(), { target: { value: '100000' } });
+    expect(screen.getByRole('button', { name: 'Confirm' })).toBeDisabled();
+    expect(screen.getByText(/Nothing could balance that/)).toBeInTheDocument();
+    // And the promise that cannot be kept must not still be on screen.
+    expect(screen.queryByText(/keeps the venue average at/)).toBeNull();
+    // 100000 IS above zero — showing the not-a-number message here told the
+    // user to do what they had already done.
+    expect(screen.queryByText(/above zero, or leave it empty/)).toBeNull();
+  });
+
+  it('names the sibling\'s RESULTING entry, not just the mechanism', () => {
+    // The tester's bail-out point: "takes whatever balances back to 2440" left
+    // them to compute what was being written into a position they could not
+    // see. The fixture holds 180 of 300 at a venue blend of 2440, so asserting
+    // 2400 puts the other 120 at (2440*300 − 2400*180)/120 = 2500.
+    mount('HYPERLIQUID', 'perp', { onAssert: vi.fn(), venueEntry: 2440 });
+    openShared();
+    fireEvent.change(entryField(), { target: { value: '2400' } });
+    expect(screen.getByText(/becomes/)).toHaveTextContent('2500');
+    expect(screen.getByText(/keeps the venue average at/)).toBeInTheDocument();
+  });
+
+  it('still accepts an assertion the remainder CAN absorb', () => {
+    // The guard must not be so eager it blocks ordinary corrections.
+    mount('HYPERLIQUID', 'perp', { onAssert: vi.fn(), venueEntry: 2440 });
+    openShared();
+    fireEvent.change(entryField(), { target: { value: '2457.77' } });
+    expect(screen.getByRole('button', { name: 'Confirm' })).toBeEnabled();
+    // The reconciliation line now names the OUTCOME rather than the mechanism.
+    expect(screen.getByText(/keeps the venue average at/)).toBeInTheDocument();
+  });
+
+  it('stops asking for an entry once the amount is raised to the WHOLE leg', () => {
+    // Claiming all of a shared leg leaves no remainder, so there is nothing to
+    // absorb a correction — and the form was still promising "the other 0.01
+    // becomes 2461.85" while the user claimed all 0.02.
+    mount('HYPERLIQUID', 'perp', { onAssert: vi.fn(), venueEntry: 2440 });
+    openShared();
+    expect(screen.getByText('What did it cost?')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'All' }));
+    expect(screen.queryByText('What did it cost?')).toBeNull();
+  });
+
+  it('asks again when the amount drops back below the whole leg', () => {
+    mount('HYPERLIQUID', 'perp', { onAssert: vi.fn(), venueEntry: 2440 });
+    openShared();
+    fireEvent.click(screen.getByRole('button', { name: 'All' }));
+    expect(screen.queryByText('What did it cost?')).toBeNull();
+    fireEvent.change(screen.getByLabelText(/size for this position/), {
+      target: { value: '100' },
+    });
+    expect(screen.getByText('What did it cost?')).toBeInTheDocument();
+  });
+
+  it('does not ask for an entry on a leg this position owns outright', () => {
+    // No "rest of the leg" exists to absorb a correction, so the question — and
+    // the reconciliation promise under it — would both be false.
+    mount('BINANCE', 'perp', { onAssert: vi.fn(), venueEntry: 2440 });
+    fireEvent.click(screen.getByTitle(/holds all/));
+    expect(screen.queryByText('What did it cost?')).toBeNull();
+  });
+
+  it('shows a Boros rate to 2dp, not to eight decimals', () => {
+    mount('BINANCE', 'boros', { onAssert: vi.fn(), venueEntry: 0.0590778377 });
+    fireEvent.click(screen.getByTitle(/of the .* open on/));
+    expect(screen.getByText(/reports 5\.91% across the whole position/)).toBeInTheDocument();
   });
 });

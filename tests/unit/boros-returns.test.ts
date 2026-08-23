@@ -880,14 +880,30 @@ describe('buildStrategies — migrated perp pair (entry slippage chaining)', () 
   }
   const CHAINED = 2 * ENTRY_SLIPPAGE; // $212.40 + $212.40
 
-  it('refuses the live entry gap without the journal: null + warning, exit null too', () => {
+  it('ESTIMATES from the live entry gap without the journal, and flags it when large', () => {
+    // Doctrine change: this used to report null and drop the cost entirely.
+    // Excluding it reads as zero in the totals the user decides on, so the
+    // estimate is kept and LABELLED instead — the per-leg entry override is
+    // the correction when the user knows what a leg really filled at.
     const s = buildStrategies(input({ perpPositions: migratedPerps() })).strategies[0];
-    expect(s.feesUsd.paid.perpEntrySlippageUsd).toBeNull();
-    expect(s.feesUsd.future.perpExitSlippageUsd).toBeNull();
-    expect(s.warnings.join(' ')).toMatch(/opened at different times.*market drift/);
-    // Null counts as 0 in the paid total — excluded, never guessed.
+    expect(s.feesUsd.paid.perpEntrySlippageUsd).toBeCloseTo(PHANTOM, 6);
+    // This fixture's gap is drift-sized — far over the 0.5% threshold — so it
+    // must carry the warning rather than pass silently.
+    expect(s.warnings.join(' ')).toMatch(/estimate from the live entry gap.*looks large/s);
+    expect(s.warnings.join(' ')).toMatch(/Manual adjustment/);
+    // And it is now IN the paid total, not excluded from it.
     const paidSettle = 2 * 1_000_000 * 0.001 * ((12 * DAY) / SECONDS_IN_YEAR);
-    expect(s.feesUsd.paid.totalUsd).toBeCloseTo(412 + 690 + paidSettle, 6);
+    expect(s.feesUsd.paid.totalUsd).toBeCloseTo(412 + PHANTOM + 690 + paidSettle, 6);
+  });
+
+  it('does NOT flag an estimate that is small enough to be an ordinary crossing cost', () => {
+    // Below the threshold the gap is what a taker pays, and warning about it
+    // would train the user to dismiss the warning that matters.
+    const perps = migratedPerps();
+    perps[0].entryPrice = String(1883.4 - 1); // ~0.05% of notional
+    const s = buildStrategies(input({ perpPositions: perps })).strategies[0];
+    expect(s.feesUsd.paid.perpEntrySlippageUsd).toBeCloseTo(1 * 531, 6);
+    expect(s.warnings.join(' ')).not.toMatch(/looks large/);
   });
 
   it('sums the journal chain: both deals’ gaps, never the drift-sized live gap', () => {
@@ -909,16 +925,19 @@ describe('buildStrategies — migrated perp pair (entry slippage chaining)', () 
     const perps = ethPerps(); // entries 1883.0/1883.4 — real gap, no drift
     perps[0].createTime = String((OPENED - deltaSec) * 1000);
     const s = buildStrategies(input({ perpPositions: perps })).strategies[0];
-    if (viaLiveEntries) expect(s.feesUsd.paid.perpEntrySlippageUsd).toBeCloseTo(ENTRY_SLIPPAGE, 6);
-    else expect(s.feesUsd.paid.perpEntrySlippageUsd).toBeNull();
+    // Either way the NUMBER is the live gap now — what the sync check decides
+    // is whether it is reported as measured or as a flagged estimate.
+    expect(s.feesUsd.paid.perpEntrySlippageUsd).toBeCloseTo(ENTRY_SLIPPAGE, 6);
+    if (viaLiveEntries) expect(s.warnings.join(' ')).not.toMatch(/estimate from the live entry gap/);
   });
 
   it('treats a missing open time as not-contemporaneous, with its own warning', () => {
     const perps = ethPerps();
     delete perps[0].createTime;
     const s = buildStrategies(input({ perpPositions: perps })).strategies[0];
-    expect(s.feesUsd.paid.perpEntrySlippageUsd).toBeNull();
-    expect(s.warnings.join(' ')).toMatch(/open time is unknown/);
+    // Estimated, not refused — but this fixture's gap is small, so the cause
+    // only surfaces if the number is also big enough to be suspect.
+    expect(s.feesUsd.paid.perpEntrySlippageUsd).toBeCloseTo(ENTRY_SLIPPAGE, 6);
   });
 
   it('a same-time book keeps the live formula even when the journal is present', () => {
@@ -954,15 +973,18 @@ describe('buildStrategies — migrated perp pair (entry slippage chaining)', () 
     expect(s.warnings.join(' ')).toMatch(/summed from 3 deals/);
   });
 
-  it('falls back to null when the chain does not reconcile with the live book', () => {
+  it('falls back to the flagged ESTIMATE when the chain does not reconcile', () => {
+    // A non-reconciling chain is the same situation as no journal at all: the
+    // fills cannot be rebuilt, so the live gap is the best available number.
+    // Kept and labelled rather than dropped — see the doctrine note above.
     const perps = migratedPerps();
     perps[0].positionQty = '-400'; // 131 contracts were closed off-journal
     perps[1].positionQty = '400';
     const s = buildStrategies(
       input({ perpPositions: perps, dealFills: migrationDeals() }),
     ).strategies[0];
-    expect(s.feesUsd.paid.perpEntrySlippageUsd).toBeNull();
-    expect(s.warnings.join(' ')).toMatch(/journal cannot reconstruct/);
+    expect(s.feesUsd.paid.perpEntrySlippageUsd).not.toBeNull();
+    expect(s.warnings.join(' ')).toMatch(/estimate from the live entry gap.*looks large/s);
   });
 
   it('a migrated book itemises EVERY execution, each addressable by deal id', () => {
@@ -1008,16 +1030,16 @@ describe('buildStrategies — migrated perp pair (entry slippage chaining)', () 
     expect(dca?.qty).toBe(50);
   });
 
-  it('unknown slippage yields fee parts only — and the sum still holds', () => {
-    // A non-reconciling chain leaves slippage null; it contributes 0 to the
-    // aggregate, so listing no slippage part keeps the parts honest.
+  it('an ESTIMATED slippage is itemised as its own part, and the sum still holds', () => {
+    // The estimate is a real entry in the decomposition, tickable like any
+    // other — that is what makes it correctable rather than a hidden fudge.
     const perps = migratedPerps();
     perps[0].positionQty = '-400'; // closed off-journal
     const s = buildStrategies(
       input({ perpPositions: perps, dealFills: migrationDeals() }),
     ).strategies[0];
-    expect(s.feesUsd.paid.perpEntrySlippageUsd).toBeNull();
-    expect(s.perpEntryCostParts.every((p) => p.kind === 'fees')).toBe(true);
+    expect(s.feesUsd.paid.perpEntrySlippageUsd).not.toBeNull();
+    expect(s.perpEntryCostParts.filter((p) => p.kind === 'slippage')).toHaveLength(1);
     assertEntryPartsSum(s);
   });
 });

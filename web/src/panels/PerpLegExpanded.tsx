@@ -18,6 +18,7 @@ export function PositionRowActions({
   position,
   attributedQty,
   closeOnly = false,
+  levOnly = false,
 }: {
   position: CrossexPosition;
   /** Size the strategy showing this row owns, when the venue leg is shared. */
@@ -27,6 +28,12 @@ export function PositionRowActions({
    * a glance the way closing is — it stays in the expanded detail, where the
    * entry/mark/leverage figures it acts on are already shown. */
   closeOnly?: boolean;
+  /** Drop [Close] and keep [Lev] — the inverse, for the EXPANDED detail. The
+   * collapsed row above it already carries the dedicated [Close], so offering
+   * a second one on expand was two buttons for one action on a real-money
+   * control: same popover, same position, different place to hunt for it.
+   * Leverage has no such duplicate, so it stays. */
+  levOnly?: boolean;
 }) {
   const flow = useTradeFlowOptional();
   const [open, setOpen] = useState<'close' | 'lev' | null>(null);
@@ -54,16 +61,18 @@ export function PositionRowActions({
     // a real-money surface meant the only way to close a leg was to discover a
     // control that looked disabled — and on touch, never to see it at all.
     <span className="inline-flex gap-1.5">
-      <button
-        ref={closeBtnRef}
-        type="button"
-        className="btn-ghost-xs"
-        disabled={!enabled}
-        title={enabled ? `Close ${position.symbol}` : 'trading unavailable'}
-        onClick={() => setOpen('close')}
-      >
-        Close
-      </button>
+      {!levOnly && (
+        <button
+          ref={closeBtnRef}
+          type="button"
+          className="btn-ghost-xs"
+          disabled={!enabled}
+          title={enabled ? `Close ${position.symbol}` : 'trading unavailable'}
+          onClick={() => setOpen('close')}
+        >
+          Close
+        </button>
+      )}
       {!closeOnly && (
         <button
           type="button"
@@ -91,9 +100,24 @@ export function PerpLegExpanded({
   position,
   attributedQty,
   share = 1,
+  levOnly = false,
+  entryOverride = null,
+  venueEntry = null,
 }: {
   position: CrossexPosition | null;
   attributedQty?: number;
+  /** Hide [Close] here because the caller's collapsed row already has one.
+   * Opt-in per call site, NOT the default: `PerpOnlyBox` has no per-row close
+   * column — only a card-level [Close both] — so defaulting this on would
+   * leave its legs with no way to close just one. */
+  levOnly?: boolean;
+  /** What THIS position says it paid, when that differs from the venue's
+   * blended entry across every strategy sharing the leg. */
+  entryOverride?: number | null;
+  /** The venue's own blend, for the comparison in the tooltip. The live
+   * position's `entryPrice` is the venue figure too, so this only matters
+   * where the two could drift; passed explicitly rather than assumed. */
+  venueEntry?: number | null;
   /** This card's fraction of the venue leg. The live feed's uPnL covers the
    * WHOLE position, so a card owning part of a shared leg must scale it —
    * otherwise every sibling card shows the same dollars and the book appears
@@ -112,7 +136,25 @@ export function PerpLegExpanded({
   return (
     <span className="inline-flex flex-wrap items-center gap-x-4 gap-y-1">
       <span className="num text-xs text-ink-300">
-        Entry <span className="text-ink-100">{sig(position.entryPrice)}</span> · Mark{' '}
+        Entry{' '}
+        {entryOverride !== null ? (
+          // Dotted + cyan, exactly like the asserted Boros rate: an entry the
+          // USER stated, not the one the venue reports. The venue's own number
+          // stays in the tooltip so the two are never confused.
+          <span
+            className="border-b border-dashed border-cyan-500/50 text-cyan-200"
+            // Deliberately NOT "you said": on a shared leg only ONE card
+            // carries the user's own words — the sibling's figure is what
+            // conserves the venue average, which it did not assert and must
+            // not be told it did.
+            title={`This position's share entered at ${sig(entryOverride)} — ${position.symbol} reports ${sig(venueEntry ?? position.entryPrice)} blended across every position holding it`}
+          >
+            {sig(entryOverride)}
+          </span>
+        ) : (
+          <span className="text-ink-100">{sig(position.entryPrice)}</span>
+        )}{' '}
+        · Mark{' '}
         <span className="text-ink-100">{sig(position.markPrice)}</span> · Lev{' '}
         <span className="text-ink-100">{position.leverage}x</span>
         <span className="text-[10px] text-ink-500"> /max {position.maxLeverage}x</span> · uPnL{' '}
@@ -125,7 +167,7 @@ export function PerpLegExpanded({
           {fmtPct(position.upnlRate)}
         </span>
       </span>
-      <PositionRowActions position={position} attributedQty={attributedQty} />
+      <PositionRowActions position={position} attributedQty={attributedQty} levOnly={levOnly} />
     </span>
   );
 }

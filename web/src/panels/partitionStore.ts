@@ -39,6 +39,13 @@ export interface MembershipRow {
   positionId?: string;
   leg: LegRef;
   qty?: number;
+  /**
+   * What this position asserts it PAID for its share — price for a perp, APR
+   * fraction for a Boros leg. Held in entryOverrideStore (a separate fact, set
+   * independently of membership) and merged in only when the payload is
+   * encoded, so the server can conserve the venue average across every claim.
+   */
+  entry?: number;
 }
 
 interface Entry {
@@ -183,6 +190,7 @@ export function encodeRows(rows: readonly MembershipRow[]): string {
       k: x.leg.kind === 'perp' ? 'p' : 'b',
       r: x.leg.kind === 'perp' ? x.leg.symbol : x.leg.marketId,
       ...(x.qty === undefined ? {} : { q: x.qty }),
+      ...(x.entry === undefined ? {} : { e: x.entry }),
     })),
   };
   // btoa needs latin1; the payload is ASCII by construction (symbols and ids

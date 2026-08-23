@@ -205,6 +205,17 @@ export interface StrategyLeg {
   /** Boros only: entry fixed APR and current mark APR (fractions). */
   entryApr?: number;
   markApr?: number;
+  /** Perp only: what THIS strategy's share of the leg entered at. Differs from
+   * the live position's blended figure once a user has asserted what their
+   * half paid — the other claims then take whatever conserves the venue
+   * average, so the per-card number has to come from the payload, not from the
+   * position. Absent when nothing is known; fall back to the position. */
+  entryPrice?: number;
+  /** The VENUE's own blended entry across every claim on this leg, present only
+   * when a user assertion has moved this claim away from it. Without it the UI
+   * would compare `entryApr`/`entryPrice` to itself and report the user's own
+   * assertion as what the venue says. */
+  venueEntry?: number;
   /** Boros only: the reference perp's live floating APR. */
   floatingApr?: number;
   /** Perp: funding since the STRATEGY CLOCK START (re-based via the CrossEx

@@ -45,11 +45,22 @@ export function prettyVenue(v: string): string {
 // Web-only additions
 // ---------------------------------------------------------------------------
 
-/** "$1,234.50" (negative → "-$1,234.50"). */
+/**
+ * "$1,234.50" (negative → "-$1,234.50").
+ *
+ * ⚠ `dp` is a MAXIMUM-magnitude preference, not a promise to round a real
+ * balance away. Callers pass `dp = 0` to keep wide columns tidy, which is right
+ * for $1,234 and wrong for $0.07 — that rendered as "$0", a number the user
+ * holds printed as nothing. So a value that would round to zero at the
+ * requested precision falls back to 2dp and shows its cents. Only an exact 0
+ * prints as "$0".
+ */
 export function fmtUsd(value: number | string, dp = 2): string {
   const n = typeof value === 'number' ? value : Number(value);
   if (!Number.isFinite(n)) return String(value);
-  return `${n < 0 ? '-' : ''}$${num(Math.abs(n), dp)}`;
+  const abs = Math.abs(n);
+  const effectiveDp = dp < 2 && abs > 0 && abs < 0.5 * 10 ** -dp ? 2 : dp;
+  return `${n < 0 ? '-' : ''}$${num(abs, effectiveDp)}`;
 }
 
 /** Compact notionals ("$2.58M") so tight numeric columns never clip. */

@@ -71,11 +71,13 @@ import {
 } from './entryPartsStore';
 import {
   LegAssignment,
+  legRefOf,
   positionVenues,
   SplitChip,
   type LegAssertion,
   type LegDestination,
 } from './PartitionEditor';
+import type { LegRef } from './partitionStore';
 import { buildSharePayload } from './sharePayload';
 import { SharePositionModal } from './SharePositionModal';
 import type { SharePayloadV1 } from '../lib/shareCodec';
@@ -180,6 +182,7 @@ export function StrategyCard({
   onOpenBorosLegs,
   onAssert,
   destinations,
+  entryOverrides,
   bookId = '',
 }: {
   /** The custom strategy-start override (per wallet ?since=), editable from
@@ -210,6 +213,10 @@ export function StrategyCard({
   onAssert?: (a: LegAssertion) => void;
   /** Other cards a leg can be sent to. */
   destinations?: readonly LegDestination[];
+  /** What this card has already asserted it paid for a leg — a price for a
+   * perp, an APR fraction for a Boros leg. Absent = nothing asserted (or the
+   * card has no stable id to have asserted under). */
+  entryOverrides?: (leg: LegRef) => number | null;
   /** Which (wallet, Gate account) book this card belongs to — see bookId.ts.
    * Namespaces the excluded entry parts, which are otherwise keyed by a
    * strategyId that says nothing about whose account it is. */
@@ -779,14 +786,44 @@ export function StrategyCard({
       key: 'rate',
       header: 'Rate',
       align: 'right',
-      render: (r) =>
-        !isMissing(r) && r.kind === 'boros' && r.entryApr !== undefined ? (
+      render: (r) => {
+        const ref = isMissing(r) ? null : legRefOf(r);
+        // The SERVER's reconciled rate first — every claim on an asserted leg
+        // gets one, including sibling cards that asserted nothing themselves
+        // (they carry the balancing figure). The local override is only the
+        // fallback for the instant between the click and the refetch.
+        const asserted =
+          !isMissing(r) && r.venueEntry !== undefined && r.entryApr !== undefined
+            ? r.entryApr
+            : ref
+              ? (entryOverrides?.(ref) ?? null)
+              : null;
+        return !isMissing(r) && r.kind === 'boros' && (r.entryApr !== undefined || asserted !== null) ? (
           // The LOCKED rate only. The live mark used to sit beside it behind an
           // arrow, which read as a rate that had moved — but the whole point of
           // this leg is that its rate cannot move. The mark still matters for
           // MtM, so it stays in the expanded row where it is about valuation.
-          <span className="num" title="The fixed APR this leg locked at entry — it does not change">
-            {fmtPct(r.entryApr)}
+          //
+          // A rate the USER asserted is shown dotted, never silently swapped in
+          // for the venue's: the number the venue reports is still the number
+          // the venue reports, and a reader has to be able to tell which they
+          // are looking at.
+          <span
+            className={asserted !== null ? 'num border-b border-dashed border-cyan-500/50 text-cyan-200' : 'num'}
+            title={
+              asserted !== null
+                ? // `r.entryApr` is this CLAIM's rate once anyone asserts, so
+                  // comparing against it printed the user's own number back at
+                  // them as the venue's. `venueEntry` is the venue's own blend.
+                  `This position's share locked ${fmtPct(asserted)}${
+                    r.venueEntry !== undefined
+                      ? ` — ${r.venue} reports ${fmtPct(r.venueEntry)} blended across every position holding it`
+                      : ''
+                  }`
+                : 'The fixed APR this leg locked at entry — it does not change'
+            }
+          >
+            {fmtPct(asserted ?? (r.entryApr as number))}
           </span>
         ) : !isMissing(r) && r.kind === 'perp' ? (
           <span className="text-xs text-ink-600" title="A perp pays the floating rate — there is nothing locked on this leg">
@@ -794,7 +831,8 @@ export function StrategyCard({
           </span>
         ) : (
           <span className="text-ink-600">—</span>
-        ),
+        );
+      },
     },
     {
       key: 'net',
@@ -837,6 +875,35 @@ export function StrategyCard({
             strategyId={s.strategyId}
             destinations={destinations}
             onAssert={onAssert}
+            // This claim's CURRENT entry — the server's reconciled figure once
+            // anyone has divided the leg, so the dialog opens on what this
+            // portion is actually worth rather than blank. The local store is
+            // only the fallback between the click and the refetch.
+            entryOverride={
+              (!isMissing(r) && r.venueEntry !== undefined
+                ? r.kind === 'boros'
+                  ? (r.entryApr ?? null)
+                  : (r.entryPrice ?? null)
+                : null) ??
+              ((ref: LegRef | null) => (ref ? (entryOverrides?.(ref) ?? null) : null))(legRefOf(r))
+            }
+            // The VENUE's own blended entry over the whole position — what an
+            // override divides up. The live perp position carries it for a
+            // perp; a Boros leg's own `entryApr` is already the venue's.
+            venueEntry={
+              // `venueEntry` when present — once anyone asserts, this leg's own
+              // entryApr/entryPrice is a per-claim figure and dividing it again
+              // would compound the correction. Otherwise the two are the same
+              // number and the venue's live/leg value is right.
+              r.venueEntry ??
+              (r.kind === 'perp'
+                ? (() => {
+                    const live = liveFor(r, livePositions);
+                    const px = live ? Number(live.entryPrice) : Number.NaN;
+                    return Number.isFinite(px) && px > 0 ? px : null;
+                  })()
+                : (r.entryApr ?? null))
+            }
           />
         );
       },
@@ -1471,6 +1538,21 @@ export function StrategyCard({
                   // open on THIS position's size, not the venue's.
                   attributedQty={(l.share ?? 1) < 0.999 ? l.notionalToken : undefined}
                   share={l.share ?? 1}
+                  // The collapsed row this expands from already carries the
+                  // dedicated [Close] (`closeOnly` above), so a second one here
+                  // was two buttons for one action. [Lev] has no duplicate.
+                  levOnly
+                  // The SERVER's number first: once anyone asserts on a leg,
+                  // every claim on it gets a reconciled entry, including the
+                  // cards that asserted nothing. The local override is only a
+                  // fallback for the instant between the click and the refetch.
+                  entryOverride={
+                    l.entryPrice ??
+                    ((ref: LegRef | null) => (ref ? (entryOverrides?.(ref) ?? null) : null))(
+                      legRefOf(l),
+                    )
+                  }
+                  venueEntry={l.venueEntry ?? null}
                 />
               )}
               {l.kind === 'boros' && (

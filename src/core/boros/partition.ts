@@ -111,6 +111,16 @@ export interface MembershipRow {
   leg: LegRef;
   /** How much of the leg. Absent = all of it that no other row claims. */
   qty?: number;
+  /**
+   * What this position asserts it actually PAID for its share — a price for a
+   * perp, an APR fraction for a Boros leg. Absent = it has not said, and takes
+   * whatever balances the venue's own blended entry.
+   *
+   * ⚠ The venue's average is never restated by this: it is ground truth over
+   * the whole position, and an assertion only divides it. Claims that have not
+   * asserted absorb the difference — see `applyEntryAssertions`.
+   */
+  entry?: number;
 }
 
 export type TrancheSource = 'journal' | 'fill-history' | 'forced' | 'proximity' | 'user';
@@ -926,12 +936,15 @@ export function allocateBorosByEvidence(
 // ---------------------------------------------------------------------------
 
 /** Compact wire shape for one row. Terse because it rides in a query string
- * next to `?since=`: `p` position, `k` kind, `r` reference, `q` quantity. */
+ * next to `?since=`: `p` position, `k` kind, `r` reference, `q` quantity,
+ * `e` the entry this position asserts it paid (price for a perp, APR fraction
+ * for a Boros leg). */
 interface WireRow {
   p?: string;
   k: 'p' | 'b';
   r: string | number;
   q?: number;
+  e?: number;
 }
 
 /** 8 hex is 4 billion positions per book — collision is not a concern, and a
@@ -990,7 +1003,17 @@ export function decodeMembership(encoded: string): MembershipRow[] | null {
       }
       qty = row.q;
     }
-    byKey.set(`${positionId ?? ''}|${legRefKey(leg)}`, { positionId, leg, qty });
+    // Same discipline as `q`: an asserted entry must be a real positive number.
+    // A price or rate of zero is not a fill, and a negative one is nonsense —
+    // both would poison the weighted average this feeds.
+    let entry: number | undefined;
+    if (row?.e !== undefined) {
+      if (typeof row.e !== 'number' || !Number.isFinite(row.e) || row.e <= 0 || row.e > 1e12) {
+        continue;
+      }
+      entry = row.e;
+    }
+    byKey.set(`${positionId ?? ''}|${legRefKey(leg)}`, { positionId, leg, qty, entry });
   }
   return [...byKey.values()];
 }
@@ -1008,6 +1031,7 @@ export function encodeMembership(rows: readonly MembershipRow[]): string {
       k: x.leg.kind === 'perp' ? 'p' : 'b',
       r: x.leg.kind === 'perp' ? x.leg.symbol : x.leg.marketId,
       ...(x.qty === undefined ? {} : { q: x.qty }),
+      ...(x.entry === undefined ? {} : { e: x.entry }),
     })),
   };
   return Buffer.from(JSON.stringify(body), 'utf8')

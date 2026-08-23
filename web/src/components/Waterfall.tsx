@@ -160,10 +160,13 @@ export function computeWaterfallScale(
 export function applyValueLabels(steps: WaterfallStep[]): void {
   for (const s of steps) {
     const delta = s.to - s.from;
+    // Cents below $10; `fmtUsd` independently refuses to round any non-zero
+    // amount away to "$0", so a small total keeps its value at either setting.
+    const dp = (v: number) => (Math.abs(v) < 10 ? 2 : 0);
     s.valueText =
       s.kind === 'total'
-        ? fmtUsd(s.to, 0)
-        : `${delta >= 0 ? '+' : '−'}${fmtUsd(Math.abs(delta), Math.abs(delta) < 10 ? 2 : 0)}`;
+        ? fmtUsd(s.to, dp(s.to))
+        : `${delta >= 0 ? '+' : '−'}${fmtUsd(Math.abs(delta), dp(delta))}`;
   }
 }
 
@@ -266,7 +269,9 @@ export function WaterfallPlot({
                 mtmTop < 10 ? 'top-0.5' : '-top-3'
               }`}
             >
-              now {fmtUsd(mtmUsd, 0)}
+              {/* Cents below $10, same rule as the bar labels — a live PnL
+                  of $0.07 must not read as "now $0". */}
+              now {fmtUsd(mtmUsd, Math.abs(mtmUsd) < 10 ? 2 : 0)}
             </span>
           </div>
         )}

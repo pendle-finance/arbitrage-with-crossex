@@ -462,6 +462,24 @@ export function PairResultReport({
   busy?: boolean;
 }) {
   const tone = result.partial ? 'amber' : 'green';
+  /**
+   * Was this a deliberate ONE-LEG order?
+   *
+   * Read off the RESULT, never the ticket's live toggle: the report describes
+   * what was submitted, and the toggle can be flipped after the fact — a
+   * receipt that changed its mind about what happened would be worse than a
+   * clumsy one.
+   *
+   * A single-leg open sends one order and borrows a zero-size partner to keep
+   * the pair shape valid (see the `onlyLeg` note in the route), so the second
+   * leg comes back with nothing traded. Reporting that as "0 ETH hedged" with
+   * a "Leg B · long 0 ETH" row describes a hedge the user never asked for and
+   * reads as a failure — it was a complete success at exactly the size they
+   * requested.
+   */
+  const onlyIsA = Math.abs(result.legB?.filledSize ?? 0) === 0;
+  const oneLeg = !result.bothLegsSubmitted;
+  const only = oneLeg ? (onlyIsA ? result.legA : result.legB) : null;
   return (
     <div
       className={`rounded-lg border px-3 py-2.5 ${
@@ -473,20 +491,47 @@ export function PairResultReport({
         <Chip sm tone={tone}>
           {result.partial ? 'partially filled' : 'filled'}
         </Chip>
-        <span className="text-[12px] text-ink-200">
-          {size(result.hedgedSize)} {collateral} hedged
-        </span>
-        {result.realisedSpreadApr !== null && (
-          <span className="num text-[12px] text-ink-100">at {pct(result.realisedSpreadApr)}</span>
+        {oneLeg && only ? (
+          // Direction and size, which is the whole of what was asked for.
+          <span className="text-[12px] text-ink-200">
+            {DIRECTION_LABEL[only.direction]} <span className="num">{size(only.filledSize)}</span>{' '}
+            {collateral}
+            {only.execApr !== null && (
+              <span className="num text-ink-100"> at {pct(only.execApr)}</span>
+            )}
+          </span>
+        ) : (
+          <>
+            <span className="text-[12px] text-ink-200">
+              {size(result.hedgedSize)} {collateral} hedged
+            </span>
+            {result.realisedSpreadApr !== null && (
+              <span className="num text-[12px] text-ink-100">at {pct(result.realisedSpreadApr)}</span>
+            )}
+          </>
         )}
       </div>
 
-      <div className="mt-1.5 flex flex-col gap-0.5 text-[11px] text-ink-300">
-        <LegFillLine label="Leg A" fill={result.legA} collateral={collateral} />
-        <LegFillLine label="Leg B" fill={result.legB} collateral={collateral} />
-      </div>
+      {/* Per-leg rows only when there are two legs to compare. On a one-leg
+          order the header already states the direction, size and rate, and a
+          "Leg B · long 0 ETH" row underneath describes the borrowed zero-size
+          partner rather than anything the user did. */}
+      {!oneLeg && (
+        <div className="mt-1.5 flex flex-col gap-0.5 text-[11px] text-ink-300">
+          <LegFillLine label="Leg A" fill={result.legA} collateral={collateral} />
+          <LegFillLine label="Leg B" fill={result.legB} collateral={collateral} />
+        </div>
+      )}
+      {oneLeg && only?.failure && (
+        <div className="mt-1.5 text-[11px] text-amber-400">{FAILURE_LABEL[only.failure.code]}</div>
+      )}
 
-      {result.unhedgedSize > 0 && (
+      {/* On a ONE-LEG order every unit is unhedged by construction — that was
+          the instruction, not a shortfall, and the ticket said so before the
+          confirm. Repeating it here as an amber alarm cries wolf on the one
+          warning that has to keep its force when a PAIR really does come back
+          lopsided. */}
+      {!oneLeg && result.unhedgedSize > 0 && (
         // The one thing a delta-neutral terminal must never bury.
         <p className="mt-1.5 rounded border border-amber-500/30 bg-amber-500/[0.06] px-2 py-1.5 text-[11px] leading-relaxed text-amber-200">
           {size(result.unhedgedSize)} {collateral} on leg {result.unhedgedLeg} is unhedged — that
@@ -494,7 +539,29 @@ export function PairResultReport({
         </p>
       )}
 
-      {result.partial ? (
+      {result.partial && oneLeg ? (
+        // A one-leg order that filled short is short of the SIZE asked for, not
+        // short of a hedge — so "Complete now at market" (which arms the OTHER
+        // leg) would open the very position the user chose not to open. Retry
+        // and dismiss are the only honest options.
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          <button
+            type="button"
+            disabled={busy}
+            onClick={onRetry}
+            className="rounded border border-ink-600 px-2 py-0.5 text-[11px] text-ink-300 hover:border-ink-400 disabled:opacity-50"
+          >
+            Retry the rest
+          </button>
+          <button
+            type="button"
+            onClick={onDismiss}
+            className="rounded border border-ink-600 px-2 py-0.5 text-[11px] text-ink-300 hover:border-ink-400"
+          >
+            Dismiss
+          </button>
+        </div>
+      ) : result.partial ? (
         <div className="mt-2 flex flex-wrap gap-1.5">
           {/* Never automatic: this is the user re-issuing at a tolerance they
               pick, which is why it routes back through the ticket. */}

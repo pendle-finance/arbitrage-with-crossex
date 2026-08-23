@@ -28,6 +28,8 @@ const OTHER = '0x2222222222222222222222222222222222222222';
 
 const HL = 155;
 const BN = 158;
+/** A third market, for the cases that need an odd one out alongside a pair. */
+const OK = 161;
 
 const market = (marketId: number, platformName: string, midApr: number) => ({
   marketId,
@@ -148,21 +150,57 @@ describe('GET /api/boros/pair/context', () => {
     // and each is the only market at its base AND maturity, so a pair ticket
     // can never find one a partner. Listing them offered a market whose every
     // simulation was dead on arrival.
-    const synthetic = market(BN, 'Hyperliquid', 0.05);
+    //
+    // The two ETH markets are the CONTROL: they pair with each other, so the
+    // only thing this asserts is that the synthetic is gone. Without a viable
+    // pair here the no-partner filter would empty the list and the test would
+    // pass for the wrong reason.
+    const synthetic = market(OK, 'Hyperliquid', 0.05);
     synthetic.metadata.assetSymbol = 'xyz:BRENTOIL';
     const res = await makeApp({
-      '/core/v1/markets': { results: [market(HL, 'Hyperliquid', 0.09), synthetic] },
+      '/core/v1/markets': {
+        results: [market(HL, 'Hyperliquid', 0.09), market(BN, 'Binance', 0.07), synthetic],
+      },
     }).inject({ method: 'GET', url: `/api/boros/pair/context?address=${ADDRESS}`, headers: HOST });
-    expect(res.json().data.markets.map((m: { marketId: number }) => m.marketId)).toEqual([HL]);
+    expect(res.json().data.markets.map((m: { marketId: number }) => m.marketId)).toEqual([BN, HL]);
   });
 
   it('omits matured and halted markets', async () => {
-    const dead = market(BN, 'Binance', 0.045);
+    const dead = market(OK, 'OKX', 0.045);
     dead.imData.maturity = NOW - 1;
     const res = await makeApp({
-      '/core/v1/markets': { results: [market(HL, 'Hyperliquid', 0.09), dead] },
+      '/core/v1/markets': {
+        results: [market(HL, 'Hyperliquid', 0.09), market(BN, 'Binance', 0.07), dead],
+      },
     }).inject({ method: 'GET', url: `/api/boros/pair/context?address=${ADDRESS}`, headers: HOST });
-    expect(res.json().data.markets.map((m: { marketId: number }) => m.marketId)).toEqual([HL]);
+    expect(res.json().data.markets.map((m: { marketId: number }) => m.marketId)).toEqual([BN, HL]);
+  });
+
+  it('omits a market nothing shares its maturity, collateral AND base with', async () => {
+    // The general rule the `xyz:` prefix was only ever a proxy for. Here the
+    // odd one out is a perfectly ordinary market: a lone BTC market sitting in
+    // a cohort of ETH markets. It is ELIGIBLE by pairEligibility (same
+    // collateral, same maturity) but its only partners would be a different
+    // coin, which is not a spread — so the ticket must not offer it.
+    const lone = market(OK, 'OKX', 0.06);
+    lone.metadata.assetSymbol = 'BTC';
+    const res = await makeApp({
+      '/core/v1/markets': {
+        results: [market(HL, 'Hyperliquid', 0.09), market(BN, 'Binance', 0.07), lone],
+      },
+    }).inject({ method: 'GET', url: `/api/boros/pair/context?address=${ADDRESS}`, headers: HOST });
+    expect(res.json().data.markets.map((m: { marketId: number }) => m.marketId)).toEqual([BN, HL]);
+  });
+
+  it('keeps two markets that share maturity, collateral and base', async () => {
+    // The guard against over-filtering: the ordinary two-venue pair this whole
+    // terminal exists to trade must survive.
+    const res = await makeApp({
+      '/core/v1/markets': {
+        results: [market(HL, 'Hyperliquid', 0.09), market(BN, 'Binance', 0.07)],
+      },
+    }).inject({ method: 'GET', url: `/api/boros/pair/context?address=${ADDRESS}`, headers: HOST });
+    expect(res.json().data.markets.map((m: { marketId: number }) => m.marketId)).toEqual([BN, HL]);
   });
 });
 

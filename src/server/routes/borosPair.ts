@@ -515,16 +515,36 @@ export function borosPairRoutes(deps: AppDeps) {
       const rows = markets
         .filter((m) => m.state === 'Normal' && m.maturity > nowSec)
         /**
-         * Drop Hyperliquid's `xyz:` synthetics (BRENTOIL and friends).
+         * Drop any market this ticket could never pair — one with no partner
+         * sharing its maturity, its collateral AND its base.
          *
-         * They are index markets with no CrossEx perp behind them, so this
-         * terminal can neither hedge one nor pair it: each is the only market
-         * at its base AND its maturity, which means a pair ticket can never
-         * find it a partner and every simulation it appears in is dead on
-         * arrival. Filtering by the `xyz:` prefix rather than by name keeps
-         * the next synthetic out too.
+         * This replaces a narrower `xyz:` prefix filter that existed to hide
+         * Hyperliquid's BRENTOIL synthetics. The prefix was only ever a proxy
+         * for the real property: a market nothing can offset is dead on
+         * arrival in every simulation it appears in. Stating the property
+         * directly keeps the next synthetic out for the same reason, and it
+         * also removes a market that IS eligible but has no sensible partner:
+         * the lone USDT-collateral BTC market sitting in a cohort of HYPE
+         * markets. Left in, it appeared in the picker with a label identical
+         * to the BTC-collateral market of the same name and maturity — two
+         * indistinguishable options that post margin in different assets —
+         * and its only available partners were a different coin entirely.
+         *
+         * ⚠ This is deliberately STRICTER than `pairEligibility`, which does
+         * not compare bases (see src/core/boros/pair.ts §2). Eligibility says
+         * what the venue will accept; this says what is worth offering. A
+         * cross-base "spread" is not a spread — the legs face unrelated
+         * funding curves and no CrossEx perp pair can hedge the result.
          */
-        .filter((m) => !m.base.toLowerCase().startsWith('xyz:'))
+        .filter((m, _i, all) =>
+          all.some(
+            (o) =>
+              o.marketId !== m.marketId &&
+              o.tokenId === m.tokenId &&
+              o.maturity === m.maturity &&
+              o.base.toLowerCase() === m.base.toLowerCase(),
+          ),
+        )
         .map((m) => ({
           marketId: m.marketId,
           name: m.name,

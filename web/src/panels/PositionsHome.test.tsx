@@ -699,6 +699,31 @@ describe('PositionsHome — membership journeys', () => {
     expectWireSafe();
   });
 
+  it('TAKES THE WHOLE LEG: pressing All releases the sibling instead of no-opping', async () => {
+    // A blanket claim means "all that no other position claims", so on a leg a
+    // sibling already holds part of, All + Confirm drew only the leftover and
+    // the assignment silently did nothing. Taking all of it must displace the
+    // other claim.
+    await start();
+    openAssign();
+    fireEvent.click(screen.getByRole('button', { name: 'All' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+    await waitFor(() => expect(stored().length).toBeGreaterThan(0));
+
+    const claims = stored().filter((r) => r.leg.kind === 'perp' && r.leg.symbol === HL);
+    // Exactly one card claims this leg now — the sibling's row is gone, not
+    // left behind to be drawn first and clamp the new claim.
+    expect(claims).toHaveLength(1);
+    // And it is a STATED size, which outranks a blanket row at the solver.
+    // Without the release this was a blanket row (`qty` undefined) that drew
+    // only the leftover, which is why the assignment appeared to do nothing.
+    expect(claims[0].qty).toBeGreaterThan(0);
+    // Both cards were frozen — proof the sibling was actually touched, not
+    // merely absent because nothing had been written yet.
+    expect(new Set(stored().map((r) => r.positionId)).size).toBe(2);
+    expectWireSafe();
+  });
+
   it('UNDOES: "automatic" clears the leg and the entry', async () => {
     await start();
     openAssign();

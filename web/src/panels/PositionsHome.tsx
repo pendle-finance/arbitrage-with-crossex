@@ -18,6 +18,13 @@ import { TableSkeleton } from '../components/Skeleton';
 import { fmtDateUtc, fmtUsdCompact, prettyVenue } from '../lib/fmt';
 import { useTradeFlowOptional } from '../trade/TradeFlow';
 import { useBookId } from './bookId';
+import {
+  loadOverrides,
+  overrideFor,
+  saveOverrides,
+  withOverride,
+  type EntryOverride,
+} from './entryOverrideStore';
 import { AddressForm, short, StrategyFreshness, TotalsStrip } from './HomeControls';
 import { buildBoxes } from './homeBoxes';
 import { useTrackedAddress } from './trackedAddress';
@@ -110,12 +117,37 @@ export function PositionsHome() {
   // credentials swap — and this component never remounts for either, so
   // without this the previous book's rows would ride along in ?partition= and
   // be written into the new book's entry on the first edit.
+  // What the user has said each card actually PAID for its share of a leg.
+  // Scoped to the book for the same reason the rows are.
+  const [entryRows, setEntryRows] = useState<EntryOverride[]>(() => loadOverrides(bookId));
   const [rowsFor, setRowsFor] = useState<string>(bookId);
   if (rowsFor !== bookId) {
     setRowsFor(bookId);
     setRows(loadRows(bookId));
+    setEntryRows(loadOverrides(bookId));
   }
-  const encodedPins = useMemo(() => encodeRows(rows), [rows]);
+  /**
+   * Membership and asserted entries travel together.
+   *
+   * They are stored apart (different facts, asserted independently) but the
+   * server needs both at once: an entry only means something against the claim
+   * it belongs to, and conserving the venue's average requires seeing every
+   * claim on a leg in one pass. Merged here, at the last possible moment.
+   */
+  const encodedPins = useMemo(() => {
+    const byKey = new Map(entryRows.map((e) => [`${e.positionId}|${legRefKey(e.leg)}`, e.value]));
+    if (!byKey.size) return encodeRows(rows);
+    return encodeRows(
+      rows.map((r) =>
+        r.positionId === undefined
+          ? r
+          : (() => {
+              const v = byKey.get(`${r.positionId}|${legRefKey(r.leg)}`);
+              return v === undefined ? r : { ...r, entry: v };
+            })(),
+      ),
+    );
+  }, [rows, entryRows]);
 
 
   const positionsQuery = usePositions();
@@ -171,6 +203,43 @@ export function PositionsHome() {
           // evaluates the object literal — so an inline call silently throws
           // every frozen row away.
           const positionId = freeze(target);
+          /**
+           * Claiming the WHOLE venue leg displaces everyone else on it.
+           *
+           * Sized claims are drawn in row order and clamped to what is left, so
+           * a card asking for all 0.047 of a leg whose sibling already states
+           * 0.023 was handed 0.024 and a "clamped, not rescaled" note — the
+           * assignment appeared to do nothing. Taking all of it is a statement
+           * about the leg, not a request for whatever is spare, so the other
+           * claims are released first. Sizes BELOW the whole are still a share:
+           * they leave the siblings alone.
+           */
+          const legVenueTotal = (() => {
+            const l = target.legs.find((x) => {
+              const r = legRefOf(x);
+              return r !== null && legRefKey(r) === legRefKey(a.leg);
+            });
+            const held = l?.notionalToken ?? 0;
+            const sh = l?.share ?? 1;
+            return sh > 0 ? held / sh : held;
+          })();
+          const takesWholeLeg =
+            a.qty !== undefined &&
+            legVenueTotal > 0 &&
+            a.qty >= legVenueTotal - Math.max(1e-9, legVenueTotal * 1e-7);
+          if (takesWholeLeg) {
+            for (const s of strategies) {
+              if (s.strategyId === target.strategyId) continue;
+              if (!s.legs.some((x) => {
+                const r = legRefOf(x);
+                return r !== null && legRefKey(r) === legRefKey(a.leg);
+              })) {
+                continue;
+              }
+              const otherId = freeze(s);
+              next = withRow(next, { mode: 'release', positionId: otherId, leg: a.leg });
+            }
+          }
           next = withRow(next, { mode: 'assign', positionId, leg: a.leg, qty: a.qty });
         } else if (a.mode === 'orphan') {
           // ⚠ Detach only what THIS position holds. A shared leg is on more
@@ -189,6 +258,18 @@ export function PositionsHome() {
             leg: a.leg,
             // Whole leg → no size, so it stays orphaned if the venue grows it.
             ...(share < 0.999 ? { qty: mine?.notionalToken } : {}),
+          });
+        } else if (a.mode === 'entry') {
+          // An entry says what THIS card paid, so it needs a stable id to hang
+          // off — the same freeze the membership modes use. Nothing about the
+          // grouping changes: `freeze` only writes down the split the solver
+          // already proposed, so the card keeps its legs while the correction
+          // has something durable to attach to.
+          const positionId = freeze(from);
+          setEntryRows((prevEntries) => {
+            const nextEntries = withOverride(prevEntries, positionId, a.leg, a.value);
+            saveOverrides(bookId, nextEntries, Math.floor(Date.now() / 1000));
+            return nextEntries;
           });
         } else {
           const change: RowChange = { mode: a.mode, leg: a.leg };
@@ -495,6 +576,13 @@ export function PositionsHome() {
                 onOpenBorosLegs={openBorosLegs || undefined}
                 onAssert={(a) => applyAssertion(box.rollup, a)}
                 destinations={destinationsFor(box.rollup, strategies)}
+                // Only a PINNED card has a stable id to have asserted under;
+                // an unpinned one has said nothing yet by definition.
+                entryOverrides={
+                  box.rollup.attribution.pinned
+                    ? (leg) => overrideFor(entryRows, box.rollup.strategyId, leg)
+                    : undefined
+                }
               />
             ) : (
               <PerpOnlyBox

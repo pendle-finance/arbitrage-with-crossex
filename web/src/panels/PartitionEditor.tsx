@@ -21,6 +21,7 @@ import type { StrategyLeg, StrategyRollup } from '../api/types';
 import { Chip } from '../components/Chip';
 import { Modal } from '../components/Modal';
 import { fmtTokenQty } from '../lib/fmt';
+import { overrunsVenue, reconcileEntries } from './entryOverrideStore';
 import type { LegRef } from './partitionStore';
 
 /**
@@ -34,7 +35,17 @@ import type { LegRef } from './partitionStore';
 export type LegAssertion =
   | { mode: 'assign'; leg: LegRef; to: string; qty?: number }
   | { mode: 'orphan'; leg: LegRef }
-  | { mode: 'auto'; leg: LegRef };
+  | { mode: 'auto'; leg: LegRef }
+  /**
+   * What this position actually paid for its share of the leg — a PRICE for a
+   * perp, an APR (as a fraction) for a Boros leg. `value: null` clears it.
+   *
+   * Separate from `assign` because it answers a different question and is
+   * asserted independently: a leg can be split without correcting its entry,
+   * and an entry can be corrected without moving anything. The venue's own
+   * average is never changed — see entryOverrideStore's conservation note.
+   */
+  | { mode: 'entry'; leg: LegRef; value: number | null };
 
 /** Where a leg can be sent. */
 export interface LegDestination {
@@ -134,11 +145,19 @@ export function LegAssignment({
   strategyId,
   destinations = [],
   onAssert,
+  entryOverride = null,
+  venueEntry = null,
 }: {
   leg: StrategyLeg;
   strategyId: string;
   destinations?: readonly LegDestination[];
   onAssert?: (a: LegAssertion) => void;
+  /** What this position has already asserted it paid, if anything. */
+  entryOverride?: number | null;
+  /** The venue's own blended entry over the WHOLE position — the number an
+   * override divides up. Null when the venue reports none, in which case the
+   * field still works but has nothing to reconcile against. */
+  venueEntry?: number | null;
 }) {
   const [open, setOpen] = useState(false);
   const ref = legRefOf(leg);
@@ -152,6 +171,26 @@ export function LegAssignment({
   /** Where the leg goes. HERE / a destination id / NOWHERE / AUTO. */
   const [where, setWhere] = useState<string>(HERE);
   const [draft, setDraft] = useState('');
+  /**
+   * The asserted entry, as TYPED.
+   *
+   * A Boros rate is stored as a fraction but read and written as a percent —
+   * nobody types 0.0544 for 5.44% — so the conversion happens here at the UI
+   * edge and nowhere else. A perp price needs no conversion.
+   */
+  const isRate = leg.kind === 'boros';
+  // A rate reads as a percent to 2dp — eight decimals of APR is noise, and the
+  // Rate column beside it already shows 5.91%. A price keeps its precision:
+  // rounding one would misstate a fill.
+  // A RATE is always 2dp — as a percent, an APR's third decimal is a
+  // hundredth of a basis point and nobody trades on it; carrying it made the
+  // field and its placeholder read "5.90778377". A PRICE keeps its precision,
+  // where rounding would misstate an actual fill.
+  const toDisplay = (v: number) =>
+    isRate ? Number((v * 100).toFixed(2)) : Number(v.toPrecision(10));
+  const showEntry = (v: number) => (isRate ? `${(v * 100).toFixed(2)}%` : String(toDisplay(v)));
+  const fromDisplay = (v: number) => (isRate ? v / 100 : v);
+  const [entryDraft, setEntryDraft] = useState('');
 
   // Read-only surfaces (the share page) get the fact without the affordance.
   if (!ref || !onAssert) {
@@ -161,6 +200,23 @@ export function LegAssignment({
   const reset = () => {
     setWhere(HERE);
     setDraft(String(Number(held.toPrecision(8))));
+    /**
+     * Seeded from THIS claim's current entry, which after any assertion on the
+     * leg is the reconciled figure the server computed for it — not the venue
+     * blend, and not empty.
+     *
+     * Once someone has divided the leg, every portion HAS a number, so opening
+     * an un-asserted portion and seeing a blank box (with the venue's average
+     * behind it as a placeholder) misrepresented what that portion is currently
+     * worth. Confirming without editing is a no-op either way: `entryEdited`
+     * compares against `entryOverride`, so re-stating the same value changes
+     * nothing.
+     *
+     * Empty still means "nobody has said anything about this leg" — the state
+     * before the first assertion, where the venue's blend genuinely is every
+     * claim's entry.
+     */
+    setEntryDraft(entryOverride === null ? '' : String(toDisplay(entryOverride)));
   };
 
   const isAuto = where === AUTO;
@@ -177,11 +233,102 @@ export function LegAssignment({
   // tolerance decides whether a residual is worth mentioning below.
   const eps = Math.max(1e-9, venueTotal * 1e-7);
   const amountEdited = needsAmount && Math.abs(parsed - held) > eps;
-  const changed = where !== HERE || amountEdited;
-  const canConfirm = amountValid && changed;
+
+  // The entry is asked only when this card keeps the leg: an entry is what THIS
+  // position paid, so it is meaningless once the leg has been sent elsewhere or
+  // handed back to the grouper.
+  // Only on a leg this card KEEPS, and only when it genuinely shares it.
+  //
+  // On a wholly-owned leg there is no "rest of the leg" to absorb a correction:
+  // the venue's entry IS this position's entry, so an assertion here would be
+  // pure fabrication with nothing to balance it — and the reconciliation line
+  // would be a lie ("the rest of the GATE leg takes whatever balances back to
+  // …" when there is no rest). Correcting a wholly-owned entry means disputing
+  // the venue's own fill report, which is not what this control is for.
+  //
+  // ⚠ Judged on the size being claimed IN THIS DIALOG, not just the leg's
+  // current split: taking ALL of a shared leg leaves no remainder either, so
+  // the question stops making sense the moment the amount is raised to the
+  // whole. Without this the form kept offering an entry and promising "the
+  // other 0.01 becomes 2461.85" while the user was claiming all 0.02 — naming
+  // a portion that would no longer exist.
+  const claimsWholeLeg = needsAmount && amountValid && parsed >= venueTotal - eps;
+  const asksEntry = where === HERE && shared && !claimsWholeLeg;
+  const entryParsed = Number(entryDraft);
+  const entryCleared = entryDraft.trim() === '';
+  // A price/rate must be positive — a zero or negative entry is not a fill, and
+  // it would poison the weighted average it feeds.
+  const entryPositive = !asksEntry || entryCleared || (Number.isFinite(entryParsed) && entryParsed > 0);
+  const entryValue = entryCleared ? null : fromDisplay(entryParsed);
+  /**
+   * Does this assertion leave the REST of the venue leg impossible?
+   *
+   * Conservation means the size this card does not hold has to absorb whatever
+   * the assertion moves. Claim a high enough entry and the implied price for
+   * that remainder goes negative — nobody bought at −95,119 per ETH — and the
+   * "balances back to" promise below becomes a falsehood. `overrunsVenue` is
+   * the same check the store's own maths uses; this is where it earns its keep.
+   */
+  const entryOverruns =
+    asksEntry &&
+    entryPositive &&
+    !entryCleared &&
+    entryValue !== null &&
+    venueEntry !== null &&
+    venueTotal > 0 &&
+    overrunsVenue(
+      [
+        { positionId: strategyId, qty: held, asserted: entryValue },
+        // Everything else open on the venue, as one un-asserted claim: it is
+        // what has to absorb the difference.
+        { positionId: '<rest>', qty: venueTotal - held, asserted: null },
+      ],
+      venueEntry,
+      venueTotal,
+    );
+  const entryValid = entryPositive && !entryOverruns;
+  /**
+   * What the rest of the venue leg becomes if this assertion is confirmed.
+   *
+   * Computed with the SAME `reconcileEntries` the store and the backend use,
+   * never a second formula written for the label — a preview that disagreed
+   * with the result would be worse than no preview. Null when there is nothing
+   * to show (no assertion, or an overrun the caller is already refusing), and
+   * the line falls back to naming the mechanism.
+   */
+  const impliedRest =
+    asksEntry && entryValid && !entryCleared && entryValue !== null && venueEntry !== null && venueTotal > 0
+      ? (reconcileEntries(
+          [
+            { positionId: strategyId, qty: held, asserted: entryValue },
+            { positionId: '<rest>', qty: venueTotal - held, asserted: null },
+          ],
+          venueEntry,
+          venueTotal,
+        ).get('<rest>') ?? null)
+      : null;
+  const entryEdited =
+    asksEntry &&
+    entryValid &&
+    (entryValue === null
+      ? entryOverride !== null
+      : entryOverride === null || Math.abs(entryValue - entryOverride) > Math.abs(entryValue) * 1e-9);
+
+  const changed = where !== HERE || amountEdited || entryEdited;
+  const canConfirm = amountValid && entryValid && changed;
 
   const commit = () => {
     if (!canConfirm) return;
+    // The entry rides along with — never instead of — the membership change.
+    // Emitted FIRST so a leg that is also being resized already carries the
+    // corrected entry when the parent re-solves.
+    if (entryEdited) onAssert({ mode: 'entry', leg: ref, value: entryValue });
+    // Membership untouched: the user only corrected the entry, and re-asserting
+    // "this position, all of it" would pin a leg the solver was free to move.
+    if (!(where !== HERE || amountEdited)) {
+      setOpen(false);
+      return;
+    }
     if (isAuto) onAssert({ mode: 'auto', leg: ref });
     else if (isNowhere) onAssert({ mode: 'orphan', leg: ref });
     else {
@@ -195,7 +342,18 @@ export function LegAssignment({
       // deliberately changed: moving a leg to another card is a statement about
       // ownership, not about the half this card happens to hold right now. Only
       // an edited amount narrows it.
-      const whole = where !== HERE ? !amountEdited : Math.abs(parsed - venueTotal) <= eps;
+      //
+      // ⚠ Staying HERE and RAISING the amount is different. A blanket claim
+      // means "all of this leg that NO OTHER position claims", so on a leg a
+      // sibling already holds part of, pressing All and confirming drew only
+      // the leftover — which was nothing, and the assignment silently did
+      // nothing at all. Naming the size instead makes it a stated claim, which
+      // is drawn before blanket ones and takes the size back off the sibling.
+      // That is what the user asked for by typing the venue's whole amount.
+      const whole =
+        where !== HERE
+          ? !amountEdited
+          : !amountEdited && Math.abs(parsed - venueTotal) <= eps;
       onAssert({
         mode: 'assign',
         leg: ref,
@@ -247,7 +405,7 @@ export function LegAssignment({
 
       {open && (
         <Modal
-          title={`Assign the ${leg.venue} ${leg.kind === 'boros' ? 'Boros' : 'perp'} leg`}
+          title={`Adjust the ${leg.venue} ${leg.kind === 'boros' ? 'Boros' : 'perp'} leg`}
           onClose={() => setOpen(false)}
           widthClass="w-[440px]"
         >
@@ -327,9 +485,100 @@ export function LegAssignment({
               </div>
             )}
 
+            {/* Only for a leg this card is keeping — see `asksEntry`. */}
+            {asksEntry && (
+              <div>
+                <div className="text-[11px] font-medium uppercase tracking-wider text-ink-400">
+                  {isRate ? 'What rate did it lock?' : 'What did it cost?'}
+                </div>
+                <div className="num mt-1 text-[11px] text-ink-500">
+                  {venueEntry !== null
+                    ? `${leg.venue} reports ${showEntry(venueEntry)} across the whole position`
+                    : `${leg.venue} reports no ${isRate ? 'rate' : 'entry price'} for this leg`}
+                </div>
+                <div className="mt-2 flex items-center gap-2">
+                  <input
+                    type="number"
+                    min="0"
+                    step="any"
+                    value={entryDraft}
+                    onChange={(e) => setEntryDraft(e.target.value)}
+                    placeholder={venueEntry !== null ? String(toDisplay(venueEntry)) : ''}
+                    aria-label={`${leg.venue} ${leg.kind} entry ${isRate ? 'rate' : 'price'} for this position`}
+                    className="num w-36 rounded border border-ink-600 bg-ink-950 px-2 py-1.5 text-right text-ink-100"
+                  />
+                  <span className="text-[11px] text-ink-500">{isRate ? '% APR' : 'per coin'}</span>
+                  {entryOverride !== null && (
+                    <button
+                      type="button"
+                      className="ml-auto rounded border border-ink-700 px-2 py-1 text-[10px] text-ink-400 hover:border-ink-500 hover:text-ink-200"
+                      onClick={() => setEntryDraft('')}
+                    >
+                      Clear
+                    </button>
+                  )}
+                </div>
+                {entryOverruns && venueEntry !== null && (
+                  <div className="mt-1.5 text-[10px] text-rose-400">
+                    Nothing could balance that. {fmtTokenQty(venueTotal - held, unit ?? '')} of this
+                    leg belongs to other positions, and for the {leg.venue} average to stay{' '}
+                    {showEntry(venueEntry)} they would have to
+                    have entered below zero.
+                  </div>
+                )}
+                {entryValid && !entryCleared && venueEntry !== null && (
+                  // The whole promise of the feature, said plainly: what you
+                  // claim here does not change the venue's total, it decides
+                  // how that total is divided.
+                  //
+                  // ⚠ It states the OUTCOME, not just the mechanism. Saying
+                  // only "takes whatever balances back to X" leaves the reader
+                  // to compute what is being written into a position they are
+                  // not looking at — which is the wrong homework to set before
+                  // a Confirm, and testers stopped here rather than press it.
+                  <div className="num mt-1.5 text-[10px] text-ink-500">
+                    {impliedRest === null ? (
+                      <>
+                        The rest of the {leg.venue} leg takes whatever balances back to{' '}
+                        {showEntry(venueEntry)}.
+                      </>
+                    ) : (
+                      <>
+                        The other {fmtTokenQty(venueTotal - held, unit ?? '')} on {leg.venue}{' '}
+                        becomes <span className="text-ink-300">{showEntry(impliedRest)}</span>, which
+                        keeps the venue average at {showEntry(venueEntry)}.
+                      </>
+                    )}
+                  </div>
+                )}
+                {entryValid && entryCleared && (
+                  <div className="mt-1.5 text-[10px] text-ink-500">
+                    Empty — this position takes its share of the {leg.venue} average.
+                  </div>
+                )}
+                {/* Only the not-a-number case. The overrun above is also
+                    invalid, but it has its own, more specific message — showing
+                    both told the user to enter something above zero when what
+                    they typed already was. */}
+                {!entryPositive && (
+                  <div className="mt-1.5 text-[10px] text-rose-400">
+                    Enter a {isRate ? 'rate' : 'price'} above zero, or leave it empty.
+                  </div>
+                )}
+                <div className="mt-1.5 text-[10px] text-ink-600">
+                  Fees stay pro-rated by size — correcting an entry never restates what you paid in
+                  fees.
+                </div>
+              </div>
+            )}
+
             <div className="flex items-center gap-2 border-t border-ink-800 pt-3">
-              <span className="text-[10px] leading-relaxed text-ink-500">
-                Changes grouping only. It places no orders.
+              {/* Reached from a Positions table full of live [Close] buttons,
+                  so "will this trade?" is the first question a reader has. It
+                  was the smallest text in the dialog, losing to a prominent
+                  Confirm — testers assumed Confirm would place an order. */}
+              <span className="text-[11px] font-medium leading-relaxed text-ink-300">
+                Changes grouping only — it places no orders.
               </span>
               <button
                 type="button"
