@@ -17,12 +17,16 @@ import { useTradeFlowOptional } from '../trade/TradeFlow';
 export function PositionRowActions({
   position,
   attributedQty,
+  onClosed,
   closeOnly = false,
   levOnly = false,
 }: {
   position: CrossexPosition;
   /** Size the strategy showing this row owns, when the venue leg is shared. */
   attributedQty?: number;
+  /** How much came off the venue, so the card can shrink a stated claim by it
+   * — see ClosePopover's note on what "closed" means here. */
+  onClosed?: (qty: number) => void;
   /** Drop [Lev] and keep [Close]. The collapsed leg row has six columns to fit
    * inside a fixed-width card, and leverage is not something you reach for at
    * a glance the way closing is — it stays in the expanded detail, where the
@@ -88,6 +92,7 @@ export function PositionRowActions({
         <ClosePopover
           position={position}
           attributedQty={attributedQty}
+          onClosed={onClosed}
           onDismiss={() => setOpen(null)}
         />
       )}

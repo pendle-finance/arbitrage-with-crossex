@@ -1000,6 +1000,12 @@ export function StrategyCard({
             // acts on the whole position, so the popover has to open on THIS
             // position's size, not the venue's.
             attributedQty={(r.share ?? 1) < 0.999 ? r.notionalToken : undefined}
+            // …and the claim has to come down by what was closed, or the row
+            // goes on asserting a size this card no longer holds.
+            onClosed={(qty) => {
+              const ref = legRefOf(r);
+              if (ref) onAssert?.({ mode: 'closed', leg: ref, qty });
+            }}
             closeOnly
           />
         ) : null;
@@ -1672,7 +1678,14 @@ export function StrategyCard({
           widthClass="w-[460px]"
         >
           <div className="p-4">
-            <CloseBorosForm legs={closingBoros} onDone={() => setClosingBoros([])} />
+            <CloseBorosForm
+              legs={closingBoros}
+              onClosed={(leg, filled) => {
+                const ref = legRefOf(leg);
+                if (ref) onAssert?.({ mode: 'closed', leg: ref, qty: filled });
+              }}
+              onDone={() => setClosingBoros([])}
+            />
           </div>
         </Modal>
       )}

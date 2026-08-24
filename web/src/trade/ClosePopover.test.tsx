@@ -127,6 +127,93 @@ describe('ClosePopover', () => {
     expect(dealCalls[0].b ?? null).toBeNull();
   });
 
+  /**
+   * A venue position NETS, so a card that states an absolute share of a shared
+   * leg has to hear about its own close — otherwise the row goes on claiming
+   * the same size out of a smaller leg, taking it from whoever shares it. The
+   * card looked untouched by its own close: only the denominator moved.
+   */
+  describe('reporting what it closed', () => {
+    const executed = async () => {
+      const btn = await screen.findByRole('button', { name: 'Close now ▸' });
+      await waitFor(() => expect(btn).toBeEnabled());
+      fireEvent.pointerDown(btn);
+    };
+    const dealsOk = () =>
+      http.post('/api/deals', async ({ request }) =>
+        HttpResponse.json(env({ id: ((await request.json()) as DealRequest).id }), { status: 202 }),
+      );
+
+    it('reports this position\'s own size on a partial close', async () => {
+      const closed: number[] = [];
+      server.use(...baseHandlers(), closePreviewHandler(), dealsOk());
+      // The venue holds 0.3, this card owns 0.1 — so partial is pre-selected
+      // at 0.1 and that is what leaves this card.
+      renderWithClient(
+        <ClosePopover
+          position={ethPosition}
+          attributedQty={0.1}
+          onClosed={(q) => closed.push(q)}
+          onDismiss={() => {}}
+        />,
+      );
+      await executed();
+      await waitFor(() => expect(closed).toEqual([0.1]));
+    });
+
+    it('reports the WHOLE venue size on a full close, however little the card owns', async () => {
+      // Full takes the other position's 0.2 with it. This card's claim cannot
+      // survive that, whatever number it stated.
+      const closed: number[] = [];
+      server.use(...baseHandlers(), closePreviewHandler(), dealsOk());
+      renderWithClient(
+        <ClosePopover
+          position={ethPosition}
+          attributedQty={0.1}
+          onClosed={(q) => closed.push(q)}
+          onDismiss={() => {}}
+        />,
+      );
+      fireEvent.click(await screen.findByRole('radio', { name: /full/ }));
+      await executed();
+      await waitFor(() => expect(closed).toEqual([0.3]));
+    });
+
+    it('says nothing until the deal is accepted', async () => {
+      // A 500 is not a close. Shrinking the claim on the attempt would hand
+      // size away that is still very much open.
+      const closed: number[] = [];
+      server.use(
+        ...baseHandlers(),
+        closePreviewHandler(),
+        http.post('/api/deals', () =>
+          HttpResponse.json(
+            {
+              ok: false,
+              error: { category: 'exchange', message: 'venue rejected the close', retryable: true },
+            },
+            { status: 500 },
+          ),
+        ),
+      );
+      renderWithClient(
+        <ClosePopover
+          position={ethPosition}
+          attributedQty={0.1}
+          onClosed={(q) => closed.push(q)}
+          onDismiss={() => {}}
+        />,
+      );
+      await executed();
+      // The rejection surfaces…
+      expect(await screen.findByRole('alert', {}, { timeout: 3_000 })).toHaveTextContent(
+        /venue rejected the close/,
+      );
+      // …and the claim is untouched: that size is still very much open.
+      expect(closed).toEqual([]);
+    });
+  });
+
   it('hovering "Close now" opens no review card — the preview box above already reviews it', async () => {
     server.use(...baseHandlers(), closePreviewHandler());
     renderWithClient(<ClosePopover position={ethPosition} onDismiss={() => {}} />);

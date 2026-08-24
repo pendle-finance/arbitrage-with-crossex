@@ -45,7 +45,19 @@ export type LegAssertion =
    * and an entry can be corrected without moving anything. The venue's own
    * average is never changed — see entryOverrideStore's conservation note.
    */
-  | { mode: 'entry'; leg: LegRef; value: number | null };
+  | { mode: 'entry'; leg: LegRef; value: number | null }
+  /**
+   * This position just CLOSED `qty` of the leg at the venue.
+   *
+   * Not a regrouping — a statement that the size this card claims is now
+   * smaller. It exists because a claim written as an explicit `qty` is an
+   * ABSOLUTE number while a venue position NETS: closing a card's own share of
+   * a shared leg shrank the venue leg and left the row claiming the same
+   * amount out of what remained, quietly taking it from the cards sharing it.
+   * The card looked untouched by its own close — the size never moved, only
+   * the denominator beside it.
+   */
+  | { mode: 'closed'; leg: LegRef; qty: number };
 
 /** Where a leg can be sent. */
 export interface LegDestination {

@@ -3,12 +3,14 @@ import {
   loadOverrides,
   overrideFor,
   overrunsVenue,
+  pruneOverrides,
   reconcileEntries,
   saveOverrides,
   withOverride,
   type EntryClaim,
   type EntryOverride,
 } from './entryOverrideStore';
+import type { MembershipRow } from './partitionStore';
 
 const perp = (symbol: string) => ({ kind: 'perp' as const, symbol });
 const boros = (marketId: number) => ({ kind: 'boros' as const, marketId });
@@ -201,5 +203,49 @@ describe('overrunsVenue', () => {
 
   it('is true when the claims assert more size than the venue holds', () => {
     expect(overrunsVenue(claims(100, 100), 100, 0.005)).toBe(true);
+  });
+});
+
+/**
+ * An asserted entry dies with the CLAIM, not merely with the leg.
+ *
+ * Worse than a stale grouping, which at least shows on the card: a stale
+ * override re-arms silently the next time that position id and leg coexist,
+ * pricing a re-opened leg at what a long-closed position paid — and, because
+ * the venue blend is conserved across claims, pushing the invented difference
+ * onto whatever else claims that leg.
+ */
+describe('pruneOverrides', () => {
+  const OV: EntryOverride[] = [
+    { positionId: 'a1', leg: perp('BINANCE_ETH'), value: 2457.77 },
+    { positionId: 'a1', leg: boros(190), value: 0.081 },
+  ];
+
+  it('drops an assertion whose leg closed', () => {
+    const membership: MembershipRow[] = [{ positionId: 'a1', leg: boros(190) }];
+    expect(pruneOverrides(OV, membership)).toEqual([OV[1]]);
+  });
+
+  it('drops an assertion whose position let go of a still-open leg', () => {
+    // The leg lives on — another card claims it now — but a1 no longer paid
+    // anything for it, so a1's number must not be waiting for a1 to come back.
+    const membership: MembershipRow[] = [
+      { positionId: 'b2', leg: perp('BINANCE_ETH') },
+      { positionId: 'a1', leg: boros(190) },
+    ];
+    expect(pruneOverrides(OV, membership)).toEqual([OV[1]]);
+  });
+
+  it('ignores orphan rows — nobody claims a detached leg, so nobody paid for it', () => {
+    const membership: MembershipRow[] = [{ leg: perp('BINANCE_ETH') }];
+    expect(pruneOverrides(OV, membership)).toEqual([]);
+  });
+
+  it('returns the same array when every assertion still has its claim', () => {
+    const membership: MembershipRow[] = [
+      { positionId: 'a1', leg: perp('BINANCE_ETH') },
+      { positionId: 'a1', leg: boros(190), qty: 0.4 },
+    ];
+    expect(pruneOverrides(OV, membership)).toBe(OV);
   });
 });

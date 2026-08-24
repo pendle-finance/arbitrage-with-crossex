@@ -7,7 +7,7 @@
  * Owns the persisted {address, since, exit flags} state and both queries;
  * the boxes themselves are prop-driven.
  */
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { qk, usePositions, useStrategy } from '../api/queries';
 import type { CrossexPosition, StrategyRollup } from '../api/types';
@@ -21,6 +21,7 @@ import { useBookId } from './bookId';
 import {
   loadOverrides,
   overrideFor,
+  pruneOverrides,
   saveOverrides,
   withOverride,
   type EntryOverride,
@@ -35,6 +36,7 @@ import {
   legRefKey,
   loadRows,
   newPositionId,
+  pruneRows,
   saveRows,
   withRow,
   type MembershipRow,
@@ -45,6 +47,32 @@ import { crossexVenueFor } from '../lib/boros';
 
 /** Stable empty list, so a callback's deps don't change every render. */
 const EMPTY_STRATEGIES: StrategyRollup[] = [];
+
+/** One feed's last settled answer: which legs it reported, and which fetch
+ * said so. The stamp is what makes a second look a second FETCH. */
+interface Seen {
+  at: number;
+  legs: ReadonlySet<string>;
+}
+
+/**
+ * Fold a feed's newest answer into what it said last time.
+ *
+ * `legs` is the union of the two — every leg either look reported, which is
+ * what a prune is allowed to believe is gone — or null while this feed has
+ * only been looked at once, which is not enough to delete anything.
+ */
+function confirmedLegs(
+  prev: Seen | null,
+  at: number,
+  legs: ReadonlySet<string>,
+): { seen: Seen; legs: ReadonlySet<string> | null } {
+  if (prev === null) return { seen: { at, legs }, legs: null };
+  // The same fetch re-read: keep the earlier pair, and keep answering with it,
+  // so a re-render neither advances the count nor forgets a confirmed absence.
+  if (prev.at === at) return { seen: prev, legs: null };
+  return { seen: { at, legs }, legs: new Set([...prev.legs, ...legs]) };
+}
 
 /** A position, named the way its own card header names it. */
 const labelFor = (s: StrategyRollup): string => {
@@ -121,8 +149,15 @@ export function PositionsHome() {
   // Scoped to the book for the same reason the rows are.
   const [entryRows, setEntryRows] = useState<EntryOverride[]>(() => loadOverrides(bookId));
   const [rowsFor, setRowsFor] = useState<string>(bookId);
+  // WHEN this book came on screen. A credentials swap invalidates every query
+  // but does not blank what they already hold, so for a beat `bookId` names
+  // the new account while both feeds still answer for the old one — and
+  // pruning against that would delete the new book's assertions using the old
+  // book's legs. A response is only believed once it is stamped after this.
+  const [bookSince, setBookSince] = useState<number>(() => Date.now());
   if (rowsFor !== bookId) {
     setRowsFor(bookId);
+    setBookSince(Date.now());
     setRows(loadRows(bookId));
     setEntryRows(loadOverrides(bookId));
   }
@@ -259,6 +294,42 @@ export function PositionsHome() {
             // Whole leg → no size, so it stays orphaned if the venue grows it.
             ...(share < 0.999 ? { qty: mine?.notionalToken } : {}),
           });
+        } else if (a.mode === 'closed') {
+          /**
+           * ⚠ ONLY A STATED SIZE CAN GO STALE, and only on the card that
+           * stated it.
+           *
+           * A blanket claim ("all of it") is already relative — it re-derives
+           * from whatever the venue still holds — and a solver-proposed card
+           * is re-solved from the venue on every response. Both follow a close
+           * on their own. Writing a row for either would PIN a grouping the
+           * user never asserted, on their way out of the position, which is
+           * the last moment to start freezing things.
+           */
+          const key = legRefKey(a.leg);
+          const held = next.find(
+            (r) =>
+              r.positionId === from.strategyId && legRefKey(r.leg) === key && r.qty !== undefined,
+          )?.qty;
+          if (held !== undefined) {
+            const left = held - a.qty;
+            // Nothing left worth stating: drop the row, and this card simply
+            // does not hold that leg any more. It cannot drift back — the
+            // solver proposes nothing into a card that has rows of its own.
+            next =
+              left > Math.max(1e-9, held * 1e-6)
+                ? withRow(next, {
+                    mode: 'assign',
+                    positionId: from.strategyId,
+                    leg: a.leg,
+                    qty: left,
+                  })
+                : withRow(next, {
+                    mode: 'release',
+                    positionId: from.strategyId,
+                    leg: a.leg,
+                  });
+          }
         } else if (a.mode === 'entry') {
           // An entry says what THIS card paid, so it needs a stable id to hang
           // off — the same freeze the membership modes use. Nothing about the
@@ -296,6 +367,114 @@ export function PositionsHome() {
     for (const p of positionsData?.positions ?? []) map.set(p.symbol, p);
     return map;
   }, [positionsData?.positions]);
+
+  /**
+   * Perp legs the book actually holds, as `legRefKey` strings.
+   *
+   * The POSITIONS feed is the authority, not the cards: a perp the user
+   * detached never appears on one. `applyMembership` drops a detached perp
+   * straight out of the pool and the derived pass reports it by subtraction —
+   * so pruning perps against the cards would delete exactly the assertion that
+   * made the leg invisible, handing the leg back to the solver on the next
+   * poll. The cards are unioned in anyway: a leg on a card the 4s feed has not
+   * caught up with yet is still open, and the union can only keep rows.
+   */
+  const livePerpLegs = useMemo(() => {
+    const live = new Set<string>();
+    for (const p of positionsData?.positions ?? []) {
+      live.add(legRefKey({ kind: 'perp', symbol: p.symbol }));
+    }
+    for (const s of strategies) {
+      for (const l of s.legs) {
+        if (l.kind !== 'perp') continue;
+        const ref = legRefOf(l);
+        if (ref) live.add(legRefKey(ref));
+      }
+    }
+    return live;
+  }, [positionsData?.positions, strategies]);
+
+  /**
+   * Boros legs the book actually holds.
+   *
+   * Here the cards ARE the authority, and the payload offers nothing else —
+   * there is no flat list of Boros positions on the wire. It is sound because
+   * every live Boros leg reaches a card: what no position claimed and what the
+   * user detached both become their own unowned card (`returns.ts:addUnowned`),
+   * which is the asymmetry with perps above.
+   */
+  const liveBorosLegs = useMemo(() => {
+    const live = new Set<string>();
+    for (const s of strategies) {
+      for (const l of s.legs) {
+        if (l.kind !== 'boros') continue;
+        const ref = legRefOf(l);
+        if (ref) live.add(legRefKey(ref));
+      }
+    }
+    return live;
+  }, [strategies]);
+
+  /**
+   * What each feed reported the LAST time it settled.
+   *
+   * A leg has to be missing from two consecutive responses OF ITS OWN FEED
+   * before its rows are deleted. Venues do answer 200 with an empty list
+   * during an incident, and a single such poll would otherwise erase a whole
+   * book of assertions with no undo — the user would rebuild the grouping from
+   * memory, which is the failure `partitionStore` exists to prevent. Waiting
+   * one more poll costs a cleanup 4s (perps) or 30s (Boros) of lateness.
+   *
+   * Per feed, and keyed by `dataUpdatedAt`, so neither a re-render nor the
+   * perp feed's faster cadence can pass off one look as two.
+   */
+  const lastSeen = useRef<{ perp: Seen | null; boros: Seen | null }>({ perp: null, boros: null });
+
+  const perpAt = positionsQuery.dataUpdatedAt;
+  const borosAt = strategyQuery.dataUpdatedAt;
+  // Both halves of the book have to be settled, and settled for THIS book —
+  // see `bookSince`. Either one missing means we cannot tell a closed leg from
+  // an unloaded one, and a prune is forever.
+  const settledForBook =
+    positionsQuery.isSuccess && strategyQuery.isSuccess && perpAt > bookSince && borosAt > bookSince;
+
+  useEffect(() => {
+    if (!settledForBook) {
+      // A book change or a failed feed voids the first look; the next two
+      // start the count again.
+      lastSeen.current = { perp: null, boros: null };
+      return;
+    }
+    const perp = confirmedLegs(lastSeen.current.perp, perpAt, livePerpLegs);
+    const boros = confirmedLegs(lastSeen.current.boros, borosAt, liveBorosLegs);
+    lastSeen.current = { perp: perp.seen, boros: boros.seen };
+    if (perp.legs === null && boros.legs === null) return; // no feed looked again
+
+    /**
+     * ⚠ EACH KIND IS JUDGED BY ITS OWN FEED, and only while that feed has just
+     * confirmed an absence. The feeds run 4s and 30s apart, so they practically
+     * never advance on the same tick — requiring both would mean this never
+     * ran at all. `null` is "that feed has nothing new to say", which is not
+     * evidence of anything, so its rows are kept and it gets its own turn.
+     */
+    const nextRows = pruneRows(rows, (leg) =>
+      leg.kind === 'perp'
+        ? perp.legs === null || perp.legs.has(legRefKey(leg))
+        : boros.legs === null || boros.legs.has(legRefKey(leg)),
+    );
+    // Membership first: an override outlives its leg only through its claim.
+    const nextEntries = pruneOverrides(entryRows, nextRows);
+    if (nextRows === rows && nextEntries === entryRows) return;
+    const nowSec = Math.floor(Date.now() / 1000);
+    if (nextRows !== rows) {
+      saveRows(bookId, nextRows, nowSec);
+      setRows(nextRows);
+    }
+    if (nextEntries !== entryRows) {
+      saveOverrides(bookId, nextEntries, nowSec);
+      setEntryRows(nextEntries);
+    }
+  }, [settledForBook, perpAt, borosAt, livePerpLegs, liveBorosLegs, rows, entryRows, bookId]);
 
   // Perp-only cue: never claim "no Boros position" unless the strategy feed
   // has actually SETTLED successfully for the tracked address.

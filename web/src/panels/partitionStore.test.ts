@@ -6,6 +6,7 @@ import {
   legRefKey,
   loadRows,
   newPositionId,
+  pruneRows,
   saveRows,
   withRow,
   type MembershipRow,
@@ -171,5 +172,51 @@ describe('encodeRows', () => {
   it('encodes to base64url, and to nothing when empty', () => {
     expect(encodeRows([PERP])).not.toMatch(/[+/=]/);
     expect(encodeRows([])).toBe('');
+  });
+});
+
+/**
+ * The delete `returns.ts:applyMembership` documents but never performed.
+ *
+ * A row names a LEG, so a row outliving its leg does not go quiet — it lies in
+ * wait for the next position to use that symbol. Closing a hand-grouped
+ * position and re-opening the same market used to reconstitute the dead one.
+ */
+describe('pruneRows', () => {
+  const liveSet = (...keys: string[]) => {
+    const live = new Set(keys);
+    return (leg: MembershipRow['leg']) => live.has(legRefKey(leg));
+  };
+
+  it('drops rows naming a leg no feed reports any more', () => {
+    expect(pruneRows([PERP, BOROS, ORPHAN], liveSet('boros:129'))).toEqual([BOROS]);
+  });
+
+  it('drops an ORPHAN row too — a leg that closed is not unhedged exposure', () => {
+    expect(pruneRows([ORPHAN], liveSet())).toEqual([]);
+  });
+
+  it('returns the same array when nothing is stale, so no write happens', () => {
+    const rows = [PERP, BOROS];
+    expect(
+      pruneRows(rows, liveSet('perp:BINANCE_FUTURE_ETH_USDT', 'boros:129')),
+    ).toBe(rows);
+  });
+
+  it('keeps every row of a kind whose feed answers "nothing new to say"', () => {
+    // What a perp poll does to Boros rows: says true, changes nothing. The two
+    // feeds are 26s apart and neither may speak for the other.
+    const rows = [PERP, BOROS];
+    const perpFeedSaysLive = (leg: MembershipRow['leg']) =>
+      leg.kind === 'boros' || legRefKey(leg) === 'perp:BINANCE_FUTURE_ETH_USDT';
+    expect(pruneRows(rows, perpFeedSaysLive)).toBe(rows);
+  });
+
+  it('re-opening the same market does not resurrect the closed position', () => {
+    // The bug, end to end at this layer: BINANCE_FUTURE_ETH_USDT closes, the
+    // rows are pruned, and the symbol coming back finds nothing claiming it.
+    const pruned = pruneRows([PERP, BOROS], liveSet('boros:129'));
+    const reopened = liveSet('perp:BINANCE_FUTURE_ETH_USDT', 'boros:129');
+    expect(pruneRows(pruned, reopened).some((r) => r.leg.kind === 'perp')).toBe(false);
   });
 });

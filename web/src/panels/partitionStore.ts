@@ -197,3 +197,40 @@ export function encodeRows(rows: readonly MembershipRow[]): string {
   // are alphanumeric), so no escape dance is required.
   return btoa(JSON.stringify(body)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
+
+/**
+ * Drop every assertion about a leg the venues no longer report.
+ *
+ * ⚠ THIS IS THE DELETE `returns.ts:applyMembership` HAS ALWAYS DOCUMENTED.
+ * That function already ignores dangling rows, silently and on purpose — it
+ * cannot tell a leg the user closed from one that went stale, and warning
+ * about either greeted anyone who flattened their book with a wall of amber.
+ * But ignoring is per-RESPONSE. The rows stayed here, and a row names a LEG
+ * (`perp:GATE_FUTURE_ETH_USDT`, `boros:12`), never the position it was written
+ * for — so the server binds it to whatever leg carries that name TODAY.
+ * Closing a hand-grouped position and re-opening the same market therefore
+ * reconstituted the dead one: its id, its grouping, its asserted entries and
+ * (keyed off that id) its un-ticked entry-cost parts, with the solver locked
+ * out of legs the user never spoke about in this life.
+ *
+ * ⚠ `isLive` MUST BE ANSWERING FOR THE WHOLE BOOK, and must be believed. A
+ * `false` drawn from a partial view — one feed settled and the other still
+ * loading, a response fetched for the previous book, or a venue answering 200
+ * with an empty list during an incident — deletes facts the user would have to
+ * re-establish from memory, which is the one thing this store exists to
+ * prevent. There is no undo. PositionsHome earns every `false` it returns.
+ *
+ * A PREDICATE, not a set, because the two halves of a book are two feeds on
+ * two cadences and each can only speak for its own legs: it lets the caller
+ * keep a perp poll from deciding anything about a Boros market it never looked
+ * at. `true` is always the safe answer, and means "not known to be gone".
+ *
+ * Returns `rows` itself when nothing is stale, so a caller can skip the write.
+ */
+export function pruneRows(
+  rows: readonly MembershipRow[],
+  isLive: (leg: LegRef) => boolean,
+): MembershipRow[] {
+  const kept = rows.filter((r) => isLive(r.leg));
+  return kept.length === rows.length ? (rows as MembershipRow[]) : kept;
+}

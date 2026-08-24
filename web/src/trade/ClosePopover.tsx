@@ -30,10 +30,22 @@ interface Props {
    * one. The close acts on the whole venue position, so the popover opens on
    * partial, pre-filled with this size, and says what Full would really do. */
   attributedQty?: number;
+  /**
+   * How much this close took off the venue, fired once the deal is accepted.
+   *
+   * ⚠ ACCEPTED, NOT FILLED. `onExecuted` runs on the 202, and this is a
+   * reduce-only IOC that can come back short. The caller uses it to shrink a
+   * claim, so the error is one-directional: a short fill leaves the card
+   * claiming LESS than it holds, and the difference surfaces as size no
+   * position claims — visible, and re-assignable in one click. The reverse
+   * (which is what happens with no callback at all) is a card silently
+   * claiming size it already sold, taken out of whoever shares the leg.
+   */
+  onClosed?: (qty: number) => void;
   onDismiss: () => void;
 }
 
-export function ClosePopover({ position, attributedQty, onDismiss }: Props) {
+export function ClosePopover({ position, attributedQty, onClosed, onDismiss }: Props) {
   const wholeQty = Math.abs(Number(position.positionQty));
   // A shared leg: this card owns less than the venue holds.
   const shared =
@@ -189,7 +201,12 @@ export function ClosePopover({ position, attributedQty, onDismiss }: Props) {
             // card would just repeat it on top of the popover. Errors still open it.
             hoverCard={false}
             previewOpts={{ debounceMs: 300, refetchInterval: 3_000 }}
-            onExecuted={onDismiss}
+            onExecuted={() => {
+              // Full acts on the WHOLE venue position, so it takes this card's
+              // claim with it whatever the card owns.
+              onClosed?.(mode === 'full' ? wholeQty : qtyNum);
+              onDismiss();
+            }}
           />
         </div>
       </div>

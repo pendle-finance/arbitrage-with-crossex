@@ -48,9 +48,20 @@ function floorTo1Sf(x: number): number {
 
 export function CloseBorosForm({
   legs,
+  onClosed,
   onDone,
 }: {
   legs: StrategyLeg[];
+  /**
+   * What actually came off each market, so the caller can shrink a claim that
+   * states an absolute size.
+   *
+   * The EXACT filled size, not the requested one — unlike a perp close, this
+   * route answers with the fill, so a leg that came back short shrinks the
+   * claim by what it really closed. Fires for a partial too: those are the
+   * ones where the number matters.
+   */
+  onClosed?: (leg: StrategyLeg, filled: number) => void;
   onDone?: () => void;
 }) {
   const close = useBorosCancelAndClose();
@@ -241,8 +252,10 @@ export function CloseBorosForm({
               shortfall: r.fill!.shortfallSize,
             },
           ]);
+          onClosed?.(l, r.fill!.filledSize);
         } else {
           setDone((prev) => [...prev, id]);
+          onClosed?.(l, r.fill!.filledSize);
         }
       } catch (err) {
         setFailed((prev) => [

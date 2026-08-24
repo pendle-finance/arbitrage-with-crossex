@@ -1704,10 +1704,17 @@ function applyMembership(
    * the overwhelmingly common way a leg stops existing is that the user CLOSED
    * it — the normal end of a position's life — and warning about that greeted
    * anyone who flattened their book with a wall of amber naming every leg they
-   * had just deliberately closed. The rows are pruned by the client
-   * (partitionStore) once the server stops returning their legs; a genuinely
-   * stale assertion is indistinguishable from a closed one here, and the
-   * closed reading is right almost every time.
+   * had just deliberately closed. A genuinely stale assertion is
+   * indistinguishable from a closed one here, and the closed reading is right
+   * almost every time.
+   *
+   * ⚠ THIS FILTER IS NOT A DELETE, and for a long time nothing else was one:
+   * the comment here claimed the client pruned the rows and it did not. A row
+   * names a LEG, so ignoring it per response left it in the browser naming a
+   * symbol the user was likely to trade again — and re-opening that market
+   * handed the leg straight back to the closed position, id, grouping,
+   * asserted entries and all. The delete now lives where it can see the whole
+   * book at once: `partitionStore.ts:pruneRows`, driven by PositionsHome.
    */
   const live = (l: LegRef): boolean =>
     l.kind === 'perp' ? perpBySymbol.has(l.symbol) : borosByMarket.has(l.marketId);

@@ -22,7 +22,7 @@
  * Anything else would let a user quietly restate their cost basis.
  */
 import { readJson, writeJson } from '../lib/storage';
-import { legRefKey, type LegRef } from './partitionStore';
+import { legRefKey, type LegRef, type MembershipRow } from './partitionStore';
 
 const KEY = 'crossex.entryOverride.v1';
 
@@ -235,4 +235,44 @@ export function overrunsVenue(
   if (restQty < 0) return true; // asserted more size than the venue holds
   const implied = (venueEntry * venueQty - assertedNotional) / restQty;
   return !(Number.isFinite(implied) && implied > 0);
+}
+
+/**
+ * Drop every asserted entry that no surviving CLAIM stands behind.
+ *
+ * An override is a statement about one claim — "my half of that leg entered at
+ * 3 412" — so it dies with the claim, not just with the leg. Both ways of
+ * dying are covered by taking the pruned membership rows as the authority:
+ *
+ *  - the leg closed, so `pruneRows` already deleted every row naming it;
+ *  - the leg is still open but this position let go of it (moved it to another
+ *    card, detached it, handed it back to the solver), so the row is gone
+ *    while the leg is not.
+ *
+ * Left behind, either one is live ammunition rather than dead weight. The
+ * value is merged into `?partition=` by position id and leg (`encodedPins`),
+ * so it re-arms the moment that pair exists again — pricing a leg the user
+ * re-opened at what a position they closed last month paid for it, and, since
+ * the venue's blend is conserved across claims, pushing the invented
+ * difference onto whatever else is claiming that leg. A stale grouping is
+ * visible on the card; a stale entry is just a wrong number.
+ *
+ * ⚠ Prune membership FIRST and pass the result — passing the un-pruned rows
+ * keeps exactly the overrides that most need to go.
+ *
+ * Returns `rows` itself when nothing is stale, so a caller can skip the write.
+ */
+export function pruneOverrides(
+  rows: readonly EntryOverride[],
+  membership: readonly MembershipRow[],
+): EntryOverride[] {
+  // Same key shape as `encodedPins` builds to merge the two back together —
+  // if that ever stops matching, an override silently stops being sent.
+  const claims = new Set(
+    membership.flatMap((r) =>
+      r.positionId === undefined ? [] : [`${r.positionId}|${legRefKey(r.leg)}`],
+    ),
+  );
+  const kept = rows.filter((r) => claims.has(`${r.positionId}|${legRefKey(r.leg)}`));
+  return kept.length === rows.length ? (rows as EntryOverride[]) : kept;
 }
