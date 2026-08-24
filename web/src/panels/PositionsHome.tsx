@@ -212,6 +212,28 @@ export function PositionsHome() {
   const strategies = strategyQuery.data?.strategies ?? EMPTY_STRATEGIES;
 
   /**
+   * Ids minted for solver-proposed cards since the last server response.
+   *
+   * ⚠ ONE CONFIRM IS ONE CHANGE, however many facts it carries. `commit()`
+   * emits an entry correction and a membership change as two `applyAssertion`
+   * calls, and `freeze` decides whether a card already has an id by reading
+   * `attribution.pinned` off the rollup PROP — which is still false during the
+   * second call, because no response has landed in between. So the second call
+   * minted a second id and wrote a second full row set, every leg ended up
+   * claimed by two ids at once, and the server split the card down the middle
+   * into two phantom positions with the asserted entry on one of them.
+   *
+   * Memoizing by the card's current strategyId makes `freeze` idempotent for
+   * as long as the prop it cannot trust stays stale. Keyed on the `strategies`
+   * array identity so a fresh response starts over — by then the card carries
+   * its minted id as its own strategyId and takes the pinned branch anyway.
+   */
+  const mintedFor = useRef<{ solved: readonly StrategyRollup[]; ids: Map<string, string> }>({
+    solved: EMPTY_STRATEGIES,
+    ids: new Map(),
+  });
+
+  /**
    * Record where the user says one leg belongs.
    *
    * ⚠ Both ENDS of a move have to be frozen. A solver-proposed card has no
@@ -227,7 +249,15 @@ export function PositionsHome() {
         let next = prev;
         const freeze = (s: StrategyRollup): string => {
           if (s.attribution.pinned) return s.strategyId;
+          if (mintedFor.current.solved !== strategies) {
+            mintedFor.current = { solved: strategies, ids: new Map() };
+          }
+          // Same card, same tick, same id — see the note on `mintedFor`. Also
+          // what makes this updater safe to run twice under StrictMode.
+          const already = mintedFor.current.ids.get(s.strategyId);
+          if (already !== undefined) return already;
           const id = newPositionId();
+          mintedFor.current.ids.set(s.strategyId, id);
           for (const l of s.legs) {
             const ref = legRefOf(l);
             if (!ref) continue;

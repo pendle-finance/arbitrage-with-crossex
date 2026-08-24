@@ -525,6 +525,51 @@ describe('PositionsHome — a book split across strategies', () => {
     });
   });
 
+  /** Every positionId currently written for this book. */
+  const storedIds = (): string[] => [
+    ...new Set(
+      ((JSON.parse(localStorage.getItem('crossex.partition.v1') ?? '{}')[BOOK]?.rows ??
+        []) as Array<{ positionId?: string }>)
+        .map((r) => r.positionId)
+        .filter((x): x is string => typeof x === 'string'),
+    ),
+  ];
+
+  it('mints ONE id when a single Confirm carries both an entry and a size', async () => {
+    /**
+     * ⚠ ONE CONFIRM IS ONE CHANGE, however many facts it carries.
+     *
+     * `commit()` emits `entry` and then `assign` as two `applyAssertion`
+     * calls. Each one froze the card by re-reading `attribution.pinned` off
+     * the SAME rollup prop — still false, because no server response has
+     * landed in between — so the second minted a second id and wrote a second
+     * full row set. Every leg was then claimed by two ids at once, which the
+     * server duly split down the middle into two phantom positions, with the
+     * asserted entry hanging off whichever half went first.
+     */
+    track();
+    mockPositions();
+    mockStrategy(splitReturns());
+    renderWithClient(<PositionsHome />);
+    await screen.findByText('split unconfirmed');
+
+    // Stay on this card (so the entry question is asked) and change BOTH.
+    openAssign();
+    fireEvent.change(screen.getByLabelText(/size for this position/), { target: { value: '175' } });
+    fireEvent.change(screen.getByLabelText(/entry price for this position/), {
+      target: { value: '2461' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+
+    await waitFor(() => expect(storedIds().length).toBeGreaterThan(0));
+    // One card, one id — not two halves of one card.
+    expect(new Set(storedIds()).size).toBe(1);
+    // …and the entry belongs to the id that actually holds the legs.
+    const overrides = JSON.parse(localStorage.getItem('crossex.entryOverride.v1') ?? '{}')[BOOK]
+      ?.rows as Array<{ positionId: string }> | undefined;
+    expect(overrides?.[0]?.positionId).toBe(storedIds()[0]);
+  });
+
   it('freezes what the solver proposed, then applies the correction', async () => {
     // The first assertion on a proposed card mints an id and writes a row for
     // every leg it already had — otherwise correcting one leg would hand the
