@@ -84,7 +84,10 @@ describe('CloseBorosForm — reporting what it closed', () => {
     );
     await confirmClose();
     await waitFor(() => expect(closed).toEqual([[MARKET, 0.006]]), { timeout: 3_000 });
-    expect(await screen.findByText(/left\s+open/)).toBeInTheDocument();
+    expect(await screen.findByText(/of what you asked for is still open/)).toBeInTheDocument();
+    // …and the size is re-armed at the REMAINDER, so a second press cannot
+    // re-send the amount that just half-filled.
+    expect(screen.getByLabelText(/Close size for the .* Boros leg/)).toHaveValue('0.004');
   });
 
   it('says nothing when the venue rejected the close', async () => {
@@ -111,5 +114,60 @@ describe('CloseBorosForm — reporting what it closed', () => {
     await confirmClose();
     expect(await screen.findByText(/no open position to close/)).toBeInTheDocument();
     expect(closed).toEqual([]);
+  });
+});
+
+/**
+ * What the dialog SAYS once the close lands.
+ *
+ * `closed` is the venue going flat — `shortfall === 0 && size >= openSize`, an
+ * exact comparison. Keying the done panel off it meant a close that did
+ * exactly what was asked could still report itself unfinished: one small amber
+ * line, the confirm button still armed at the same size, and "close again to
+ * finish it" for a leg with nothing of the user's left in it. On a real-money
+ * surface that is an invitation to send the order twice.
+ */
+describe('CloseBorosForm — saying that it landed', () => {
+  const panel = () => screen.queryByText(/Leg closed\./);
+  const armed = () => screen.queryByRole('button', { name: /Close leg/ });
+
+  it('reports DONE when the request filled, even though the venue is not flat', async () => {
+    // The reported case: 39 asked, 39 filled, 0 short — and `closed: false`,
+    // because the live position carried a dust residual over the 39.
+    server.use(
+      ...ready(),
+      closeReturns({ closed: false, fill: fill(MINE), openSize: MINE + 1e-12 }),
+    );
+    renderWithClient(<CloseBorosForm legs={[leg()]} />);
+    await confirmClose();
+
+    expect(await screen.findByText(/Leg closed\./)).toBeInTheDocument();
+    // The confirm is GONE, replaced by Done — the whole point.
+    expect(armed()).toBeNull();
+    expect(screen.getByRole('button', { name: 'Done' })).toBeInTheDocument();
+    expect(screen.queryByText(/close again to finish it/i)).toBeNull();
+  });
+
+  it('names the share another position holds instead of calling it unfinished', async () => {
+    // A card closing its own 0.01 of a 0.03 leg satisfies its request and
+    // leaves 0.02 open. That is somebody else's, and saying "close again to
+    // finish it" would be telling this user to close it.
+    server.use(...ready(), closeReturns({ closed: false, fill: fill(MINE), openSize: 0.03 }));
+    renderWithClient(<CloseBorosForm legs={[leg()]} />);
+    await confirmClose();
+
+    expect(await screen.findByText(/Leg closed\./)).toBeInTheDocument();
+    expect(screen.getByText(/another position's share of the same leg, not yours/)).toBeInTheDocument();
+    expect(armed()).toBeNull();
+  });
+
+  it('keeps the confirm armed only when something of the user\'s is genuinely left', async () => {
+    server.use(...ready(), closeReturns({ closed: false, fill: fill(0.006, 0.004) }));
+    renderWithClient(<CloseBorosForm legs={[leg()]} />);
+    await confirmClose();
+
+    expect(await screen.findByText(/of what you asked for is still open/)).toBeInTheDocument();
+    expect(panel()).toBeNull();
+    expect(armed()).toBeInTheDocument();
   });
 });
