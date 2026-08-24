@@ -52,6 +52,19 @@ export interface BorosMarketOrderRequest {
    * lost response resent by the same process and nothing wider.
    */
   clientOrderId: string;
+  /**
+   * The EXACT size to place, in the venue's own 18-decimal integer units.
+   * Overrides `size` when present.
+   *
+   * ⚠ `size` is a float and an order is placed in WEI, and that conversion is
+   * not order-preserving: `parseUnits(String(50000000000000000 / 1e18))` is
+   * 50000000000000003 — three units ABOVE the position it was read from. On a
+   * venue with no reduce-only flag that is not a rounding detail, it is a
+   * close that crosses past flat and opens a fresh opposing position. This is
+   * the channel that lets a close carry the venue's own integer instead of
+   * re-deriving it through a double.
+   */
+  sizeWei?: string;
 }
 
 export type BorosLegFailureCode =
@@ -94,6 +107,22 @@ export interface BorosClosePositionRequest {
   marketId: number;
   /** Positive size to close — the whole netted position, in collateral units. */
   size: number;
+  /**
+   * What the venue says is open, in ITS OWN 18-decimal integer units — the
+   * ceiling this close may never exceed.
+   *
+   * ⚠ REQUIRED, and required as a STRING, because the cap only works in the
+   * units the order is placed in. `size` above is a double: clamping there
+   * (`Math.min(asked, open)`) compares two numbers that both already lost the
+   * position's low-order digits, and the wei the order is finally built from
+   * can land above the position anyway. Boros has no reduce-only flag, so
+   * that overshoot does not stop at flat — it opens a fresh position the
+   * other way, too small to be closed again under the venue's minimum order
+   * value, and the leg never goes away.
+   *
+   * Pass the venue's `notionalSize` verbatim; the sign is ignored.
+   */
+  openSizeWei: string;
   /** The direction that REDUCES: opposite the position's own side. */
   direction: BorosLegDirection;
   /** Worst rate this close will accept, an APR fraction. */

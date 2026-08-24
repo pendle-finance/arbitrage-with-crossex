@@ -8,6 +8,7 @@ import { keccak256, verifyTypedData, type Hex } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { describe, expect, it } from 'vitest';
 import {
+  absWei,
   BOROS_API_BASE,
   CROSS_MARKET_ID,
   decimalString,
@@ -436,5 +437,88 @@ describe('makeBorosApiOrderClient — a result that says nothing is not a result
     expect(fills[1].failure?.code).toBe('unknown');
     expect(fills[1].failure?.message).toMatch(/may or may not have filled/i);
     expect(fills[1].failure?.message).not.toMatch(/nothing matched/i);
+  });
+});
+
+/**
+ * A CLOSE MAY NEVER PLACE MORE THAN IS OPEN.
+ *
+ * Boros has no reduce-only flag, so nothing at the venue stops a close at
+ * flat: one unit too many crosses it and opens a fresh position the other way.
+ * The route clamps the size to what is open, but it clamps two DOUBLES, and
+ * the order is not built from a double — `parseUnits` of `50000000000000000 /
+ * 1e18` is 50000000000000003. Three units of an opposing position, invisible,
+ * unclosable under the venue's $10 minimum order value, and reported as
+ * "closed" because in float space the two numbers were equal.
+ */
+describe('closePosition — the cap that binds is in wei', () => {
+  /** The wei the venue was actually asked for. */
+  const placedWei = (api: ReturnType<typeof fakeApi>): bigint => {
+    const order = api.calls.find((c) => c.path.startsWith('/v1/calldata-builder/agent/place-order'));
+    return BigInt(String(order!.body.size));
+  };
+  const close = async (api: ReturnType<typeof fakeApi>, over: { size: number; openSizeWei: string }) =>
+    client(api).closePosition({
+      marketId: HL,
+      direction: 'short',
+      limitApr: 0.0875,
+      clientOrderId: 'c-0000001',
+      ...over,
+    });
+
+  it('never asks for more than the venue holds, where the float rounds UP', () => {
+    // 0.05 is the case that bit a real user: a clean open, and the size that
+    // cannot survive the round trip.
+    const api = fakeApi();
+    return close(api, { size: 50000000000000000 / 1e18, openSizeWei: '50000000000000000' }).then(() => {
+      expect(placedWei(api)).toBe(50000000000000000n);
+    });
+  });
+
+  it('holds the line on a size whose float lands 556 units high', async () => {
+    const api = fakeApi();
+    await close(api, { size: 123456789000000000000 / 1e18, openSizeWei: '123456789000000000000' });
+    expect(placedWei(api)).toBe(123456789000000000000n);
+  });
+
+  it('ignores the sign — a short is closed by its magnitude', async () => {
+    const api = fakeApi();
+    await close(api, { size: 50000000000000000 / 1e18, openSizeWei: '-50000000000000000' });
+    expect(placedWei(api)).toBe(50000000000000000n);
+  });
+
+  it('still honours a deliberate PARTIAL rather than widening it to the whole', async () => {
+    // The cap is a ceiling, not the size. Closing 0.02 of 0.05 must place
+    // 0.02 — a cap that overrode the request would close someone's position
+    // for them.
+    const api = fakeApi();
+    await close(api, { size: 0.02, openSizeWei: '50000000000000000' });
+    expect(placedWei(api)).toBe(20000000000000000n);
+  });
+
+  it('falls back to the float when the venue\'s own field is not an integer', async () => {
+    // A cap that cannot be read is no cap. That is the OLD behaviour, which is
+    // a shape change on the venue's side rather than a routine case — better
+    // than throwing on the close path.
+    const api = fakeApi();
+    await close(api, { size: 50000000000000000 / 1e18, openSizeWei: '5e16' });
+    expect(placedWei(api)).toBe(50000000000000003n);
+  });
+});
+
+describe('absWei', () => {
+  it('reads the venue\'s own integer as a magnitude', () => {
+    expect(absWei('50000000000000000')).toBe(50000000000000000n);
+    expect(absWei('-50000000000000000')).toBe(50000000000000000n);
+    expect(absWei(' 0 ')).toBe(0n);
+  });
+
+  it('refuses anything that is not a plain integer, rather than inventing a ceiling', () => {
+    // A wrong ceiling silently truncates a close; no ceiling merely restores
+    // the previous behaviour.
+    expect(absWei('5e16')).toBeNull();
+    expect(absWei('0.05')).toBeNull();
+    expect(absWei('')).toBeNull();
+    expect(absWei('nope')).toBeNull();
   });
 });

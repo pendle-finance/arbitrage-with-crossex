@@ -190,6 +190,25 @@ export function decimalString(n: number): string {
   return n.toFixed(DECIMALS).replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '');
 }
 
+/**
+ * The venue's own 18-decimal size as a magnitude, or null when it is not an
+ * integer this can trust.
+ *
+ * Deliberately strict, and matched by a REGEX rather than left to `BigInt`:
+ * `BigInt('')` is `0n`, not a throw, so an absent field would have become a
+ * cap of ZERO and truncated the close to nothing — the opposite failure, and a
+ * worse one. Anything that is not a plain integer literal (a decimal point,
+ * exponent notation, an empty string) means the field is not the shape this
+ * cap assumes, and inventing a ceiling out of it beats having none only if it
+ * is right.
+ */
+export function absWei(raw: string): bigint | null {
+  const t = raw.trim();
+  if (!/^-?\d+$/.test(t)) return null;
+  const n = BigInt(t);
+  return n < 0n ? -n : n;
+}
+
 // ---------------------------------------------------------------------------
 // Wire shapes (only the fields this module reads)
 // ---------------------------------------------------------------------------
@@ -479,7 +498,7 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
         marketAcc: await marketAccFor(req.marketId),
         marketId: req.marketId,
         side: req.direction === 'long' ? SIDE_LONG : SIDE_SHORT,
-        size: parseUnits(decimalString(req.size), DECIMALS).toString(),
+        size: (req.sizeWei ?? parseUnits(decimalString(req.size), DECIMALS)).toString(),
         tif: TIF_IOC,
         // The worst rate this leg accepts. `slippage` is deliberately NOT sent
         // alongside: the backend derives its guard from mid ± slippage, which
@@ -643,8 +662,26 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
      * A close is an ordinary opposing market order — Boros has no close
      * primitive and no reduce-only flag — so it goes out on exactly the same
      * path as any other leg and reports its fill and shortfall the same way.
+     *
+     * ⚠ WHICH IS WHY THE CAP HAS TO BE APPLIED HERE, IN WEI.
+     *
+     * With no reduce-only flag, nothing at the venue stops a close at flat:
+     * an order one unit larger than the position crosses it and opens a fresh
+     * one the other way. The route already clamps the size to what is open,
+     * but it clamps two DOUBLES — and the order is not built from a double.
+     * `parseUnits(decimalString(50000000000000000 / 1e18))` is
+     * 50000000000000003, so a clean 0.05 close asked for three units more
+     * than existed and left a 3-unit opposing position behind. Too small to
+     * see, too small to close again (the venue refuses orders under $10 of
+     * notional), and reported as "closed" because in float space the two
+     * numbers were equal.
+     *
+     * So the float is only ever allowed to make the order SMALLER here. The
+     * venue's own integer is the ceiling, and it is never re-derived.
      */
     async closePosition(req: BorosClosePositionRequest): Promise<BorosLegFill> {
+      const asked = parseUnits(decimalString(req.size), DECIMALS);
+      const open = absWei(req.openSizeWei);
       const [fill] = await placeMarketOrders([
         {
           marketId: req.marketId,
@@ -652,6 +689,11 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
           size: req.size,
           limitApr: req.limitApr,
           clientOrderId: req.clientOrderId,
+          // A cap we could not read is no cap: fall back to the float the
+          // route already clamped, which is exactly the old behaviour rather
+          // than a new failure. `openSizeWei` is the venue's own field, so
+          // this is a shape change on their side, not a routine case.
+          ...(open === null ? {} : { sizeWei: (asked < open ? asked : open).toString() }),
         },
       ]);
       return fill;

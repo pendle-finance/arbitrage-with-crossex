@@ -217,6 +217,18 @@ function parseClientOrderId(raw: unknown, which: string): string {
 interface AccountView {
   /** marketId → signed netted size, collateral units (+ long fixed). */
   positionByMarket: Map<number, number>;
+  /**
+   * marketId → the SAME position as the venue's own 18-decimal integer,
+   * verbatim.
+   *
+   * ⚠ Kept beside the float rather than derived from it, because it cannot be
+   * derived from it. `norm18` divides an 18-decimal integer into a double and
+   * loses the low-order digits; converting back can land ABOVE where it
+   * started. Everything that only displays or compares is happy with the
+   * float — a close, which places an order in these units on a venue with no
+   * reduce-only flag, is not. See `BorosClosePositionRequest.openSizeWei`.
+   */
+  positionRawByMarket: Map<number, string>;
   /** marketId → initial margin that position already posts, collateral units. */
   committedMarginByMarket: Map<number, number>;
   /** marketId → true when that market currently sits in an ISOLATED bucket. */
@@ -254,6 +266,7 @@ function holdsPositionOrOrders(p: {
 function readAccount(zones: BorosCollateralZone[]): AccountView {
   const view: AccountView = {
     positionByMarket: new Map(),
+    positionRawByMarket: new Map(),
     committedMarginByMarket: new Map(),
     isolatedMarkets: new Set(),
     isolatedOccupied: new Set(),
@@ -272,6 +285,7 @@ function readAccount(zones: BorosCollateralZone[]): AccountView {
       });
       for (const p of zone.cross.marketPositions) {
         view.positionByMarket.set(p.marketId, norm18(p.notionalSize));
+        view.positionRawByMarket.set(p.marketId, String(p.notionalSize ?? '0'));
         view.committedMarginByMarket.set(
           p.marketId,
           norm18(p.positionInitialMargin ?? p.initialMargin),
@@ -287,6 +301,7 @@ function readAccount(zones: BorosCollateralZone[]): AccountView {
       for (const p of group.marketPositions) {
         const size = norm18(p.notionalSize);
         view.positionByMarket.set(p.marketId, size);
+        view.positionRawByMarket.set(p.marketId, String(p.notionalSize ?? '0'));
         view.committedMarginByMarket.set(
           p.marketId,
           norm18(p.positionInitialMargin ?? p.initialMargin),
@@ -811,16 +826,28 @@ export function borosPairRoutes(deps: AppDeps) {
       }
       // Reduce = trade the opposite way to the position's sign.
       const direction: BorosLegDirection = current > 0 ? 'short' : 'long';
-      // ⚠ CLAMPED to what is actually open. Boros has no reduce-only flag, so
-      // a size larger than the position does not stop at flat — it crosses it
-      // and opens a fresh one the other way. The cap is what makes accepting a
-      // caller size safe at all.
+      /**
+       * ⚠ CLAMPED to what is actually open. Boros has no reduce-only flag, so
+       * a size larger than the position does not stop at flat — it crosses it
+       * and opens a fresh one the other way. The cap is what makes accepting a
+       * caller size safe at all.
+       *
+       * ⚠ AND THIS CLAMP IS NOT THE ONE THAT ENFORCES IT. Both operands are
+       * doubles that already lost the position's low-order digits, so it can
+       * only narrow what the CALLER asked for — it cannot bound the wei the
+       * order is finally built from, and for a clean 0.05 that conversion
+       * landed three units above the position. The binding cap is
+       * `openSizeWei`, applied in the venue's own units in `closePosition`.
+       * This one stays because it is still what decides a deliberate PARTIAL.
+       */
       const openSize = Math.abs(current);
       const size = sizeOverride === null ? openSize : Math.min(sizeOverride, openSize);
       const slippageApr = slippageOverride ?? CLOSE_SLIPPAGE_APR;
       const fill = await orders.closePosition({
         marketId,
         size,
+        // The venue's own integer, never re-derived from `size`.
+        openSizeWei: account.positionRawByMarket.get(marketId) ?? '0',
         direction,
         limitApr: limitAprFor(direction, market.markApr, slippageApr),
         clientOrderId,
