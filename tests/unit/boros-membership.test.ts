@@ -287,6 +287,48 @@ describe('one perp, two maturities', () => {
     expect(out.strategies.flatMap((s) => s.warnings).join(' ')).not.toMatch(/largest cohort/);
   });
 
+  /**
+   * ⚠ A POSITION RUNS TO ONE DATE, and only a PINNED card can break that.
+   *
+   * A solved card is single-maturity structurally (cohorts are keyed
+   * `(base, maturity)`), so this is the one path that needs saying out loud.
+   * The dialog refuses the assignment now, but a share link or a pin written
+   * before it did can still carry the clash in — and it does not degrade the
+   * card, it misprices it, silently, while every number keeps its confident
+   * formatting.
+   */
+  it('warns when a pinned position holds Boros legs of two maturities', () => {
+    const P = 'a1b2c3d4';
+    const out = buildStrategies({
+      ...twoMaturities(),
+      membership: [
+        { positionId: P, leg: { kind: 'boros', marketId: 129 } }, // Dec long
+        { positionId: P, leg: { kind: 'boros', marketId: 128 } }, // Dec short
+        { positionId: P, leg: { kind: 'boros', marketId: 102 } }, // SEP short — the intruder
+      ],
+    });
+    const card = out.strategies.find((s) => s.strategyId === P)!;
+    expect(card.legs.filter((l) => l.kind === 'boros')).toHaveLength(3);
+    expect(card.warnings.join(' ')).toMatch(/mature on 2 different dates/);
+    // …and the warning is worth having because THIS is what the card's own
+    // countdown and every projection on it are computed against.
+    expect(card.maturity).toBe(MAT_SEP);
+  });
+
+  it('says nothing when a pinned position keeps to one maturity', () => {
+    const P = 'a1b2c3d4';
+    const out = buildStrategies({
+      ...twoMaturities(),
+      membership: [
+        { positionId: P, leg: { kind: 'boros', marketId: 129 } },
+        { positionId: P, leg: { kind: 'boros', marketId: 128 } },
+      ],
+    });
+    const card = out.strategies.find((s) => s.strategyId === P)!;
+    expect(card.legs.filter((l) => l.kind === 'boros')).toHaveLength(2);
+    expect(card.warnings.join(' ')).not.toMatch(/different dates/);
+  });
+
   it('splits one Hyperliquid perp across the two maturities it hedges', () => {
     const out = buildStrategies(twoMaturities());
     const hlPerp = out.strategies

@@ -42,7 +42,12 @@ import {
   type MembershipRow,
   type RowChange,
 } from './partitionStore';
-import { legRefOf, positionVenues, type LegAssertion } from './PartitionEditor';
+import {
+  legRefOf,
+  positionVenues,
+  type LegAssertion,
+  type LegDestination,
+} from './PartitionEditor';
 import { crossexVenueFor } from '../lib/boros';
 
 /** Stable empty list, so a callback's deps don't change every render. */
@@ -119,14 +124,32 @@ function distinctLabels(items: readonly StrategyRollup[]): string[] {
   return labels;
 }
 
-/** The other cards a leg on `s` can be sent to: same coin, any shape. */
+/**
+ * The other cards a leg on `s` can be sent to: same coin, any shape.
+ *
+ * Shape is still not a filter — a card may hold one leg or six, a hedge that
+ * is half-open, a spread with no perps yet. What each destination carries is
+ * the Boros maturity it already holds, so the dialog can refuse the one shape
+ * a solved card can never have: two maturities at once. See `LegDestination`.
+ */
 function destinationsFor(
   s: StrategyRollup,
   all: readonly StrategyRollup[],
-): Array<{ id: string; label: string }> {
+): LegDestination[] {
   const others = all.filter((o) => o.strategyId !== s.strategyId && o.base === s.base);
   const labels = distinctLabels(others);
-  return others.map((o, i) => ({ id: o.strategyId, label: labels[i] }));
+  return others.map((o, i) => {
+    // The EARLIEST, because that is the one every number on that card is
+    // computed against (`assembleStrategy` takes `Math.min`).
+    const maturities = o.legs
+      .filter((l) => l.kind === 'boros' && typeof l.maturity === 'number' && l.maturity > 0)
+      .map((l) => l.maturity as number);
+    return {
+      id: o.strategyId,
+      label: labels[i],
+      borosMaturity: maturities.length ? Math.min(...maturities) : null,
+    };
+  });
 }
 
 export function PositionsHome() {

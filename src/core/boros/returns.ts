@@ -1963,6 +1963,31 @@ function applyMembership(
     card.warnings.push(
       `This ${card.base} position holds the legs you assigned to it — the rest of the book is matched around them, and it holds until you change it.`,
     );
+    /**
+     * ⚠ A POSITION RUNS TO ONE DATE, and this is the only path that can break
+     * that.
+     *
+     * A solved card is single-maturity structurally: cohorts are keyed
+     * `(base, maturity)` and `mergedStrategies` emits one card per cohort, so
+     * the shape cannot arise there and needs no check. A card built from ROWS
+     * has no such floor — the user can assign a leg from any market on the
+     * coin, and a share link or a pin written before the dialog started
+     * refusing it can carry the clash in.
+     *
+     * It is worth its own warning rather than being left to the hedge ratios,
+     * because it does not degrade the card, it MISPRICES it. `maturity` above
+     * is `Math.min` across the legs, and the countdown, `secondsToMaturity`,
+     * `spreadReturnUsd` and the PnL projection all run off it — so the later
+     * leg's fixed rate is accrued only to the earlier leg's date, and every
+     * number keeps its confident formatting while it does. A size mismatch at
+     * least announces itself.
+     */
+    const legMaturities = [...new Set(maturities.filter((m) => m > 0))].sort((a, b) => a - b);
+    if (legMaturities.length > 1) {
+      card.warnings.push(
+        `This ${card.base} position holds Boros legs that mature on ${legMaturities.length} different dates (${legMaturities.map((m) => new Date(m * 1000).toISOString().slice(0, 10)).join(', ')}). Its countdown and every projection on it run to the earliest of them, so the later leg's rate is credited only up to that date — split them into one position per maturity to price either correctly.`,
+      );
+    }
     cards.push(card);
   }
 

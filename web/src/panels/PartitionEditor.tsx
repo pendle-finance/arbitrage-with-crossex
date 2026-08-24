@@ -20,7 +20,7 @@ import { useState } from 'react';
 import type { StrategyLeg, StrategyRollup } from '../api/types';
 import { Chip } from '../components/Chip';
 import { Modal } from '../components/Modal';
-import { fmtTokenQty } from '../lib/fmt';
+import { fmtDateUtc, fmtTokenQty } from '../lib/fmt';
 import { overrunsVenue, reconcileEntries } from './entryOverrideStore';
 import type { LegRef } from './partitionStore';
 
@@ -64,6 +64,25 @@ export interface LegDestination {
   /** The destination card's current strategyId. */
   id: string;
   label: string;
+  /**
+   * The Boros maturity this card already holds, or null when it holds no
+   * Boros leg and so has none to disagree with.
+   *
+   * ⚠ ONE MATURITY PER POSITION. Cohorts are keyed `(base, maturity)` and
+   * `mergedStrategies` emits one card per cohort, so a SOLVED card is
+   * single-maturity structurally — there is no check because the shape cannot
+   * arise. The manual path had no such floor, and two maturities on one card
+   * break more than the hedge ratios: `maturity` is `Math.min` across the
+   * legs, and the countdown, `secondsToMaturity`, `spreadReturnUsd` and the
+   * PnL projection are all computed against it, so the later leg's rate
+   * accrues to the earlier leg's date. Silently — unlike a size mismatch,
+   * which at least says so.
+   *
+   * A card holding several maturities already (a share link, a pin made
+   * before this rule) reports its EARLIEST here: it is the one the card's own
+   * numbers use, and any leg that disagrees with it is refused anyway.
+   */
+  borosMaturity: number | null;
 }
 
 /**
@@ -179,6 +198,27 @@ export function LegAssignment({
   const share = leg.share ?? 1;
   const venueTotal = share > 0 ? held / share : held;
   const shared = share < 0.999;
+
+  /**
+   * A destination this leg may not go to, and why — see `LegDestination`.
+   *
+   * Only ever a MATURITY clash. Shape is not policed here: a card holding six
+   * legs, or a hedge half-open, is a position the user is entitled to assert.
+   * Two maturities is different because it is not a shape the solver can even
+   * produce, and because the card's own countdown and every projection on it
+   * are computed against one date — so the disagreement does not show up as a
+   * warning, it shows up as numbers that are quietly wrong.
+   *
+   * ⚠ A PERP LEG IS NEVER BLOCKED. A perp is perpetual: one position hedges
+   * every maturity cohort at once, which is why the solver attaches perps
+   * across cohorts freely. It has no maturity to clash with.
+   */
+  const blockedReason = (d: LegDestination): string | null => {
+    if (leg.kind !== 'boros') return null;
+    const mine = leg.maturity;
+    if (!mine || d.borosMaturity === null || d.borosMaturity === mine) return null;
+    return `matures ${fmtDateUtc(d.borosMaturity)}`;
+  };
 
   /** Where the leg goes. HERE / a destination id / NOWHERE / AUTO. */
   const [where, setWhere] = useState<string>(HERE);
@@ -430,16 +470,30 @@ export function LegAssignment({
                 <button type="button" className={optionClass(where === HERE)} onClick={() => setWhere(HERE)}>
                   This position
                 </button>
-                {destinations.map((d) => (
-                  <button
-                    key={d.id}
-                    type="button"
-                    className={optionClass(where === d.id)}
-                    onClick={() => setWhere(d.id)}
-                  >
-                    {d.label}
-                  </button>
-                ))}
+                {destinations.map((d) => {
+                  const blocked = blockedReason(d);
+                  return (
+                    <button
+                      key={d.id}
+                      type="button"
+                      disabled={blocked !== null}
+                      title={
+                        blocked === null
+                          ? undefined
+                          : `That position ${blocked}; this leg matures ${fmtDateUtc(leg.maturity ?? 0)}. A position runs to ONE date — its countdown and every projection on it are computed against a single maturity.`
+                      }
+                      className={`${optionClass(where === d.id)} ${
+                        blocked === null ? '' : 'cursor-not-allowed opacity-40'
+                      }`}
+                      onClick={() => blocked === null && setWhere(d.id)}
+                    >
+                      {d.label}
+                      {blocked !== null && (
+                        <span className="ml-1 text-ink-500">— {blocked}, not this one</span>
+                      )}
+                    </button>
+                  );
+                })}
                 <button
                   type="button"
                   className={optionClass(isNowhere)}

@@ -144,7 +144,7 @@ describe('LegAssignment — behaviours the rewrite kept but stopped testing', ()
     const onAssert = vi.fn();
     mount('HYPERLIQUID', 'perp', {
       onAssert,
-      destinations: [{ id: 'ETH#OTHER#exec', label: 'ETH · OKX ⇄ Gate' }],
+      destinations: [{ id: 'ETH#OTHER#exec', label: 'ETH · OKX ⇄ Gate', borosMaturity: null }],
     });
     openDialog();
     fireEvent.click(screen.getByRole('button', { name: /ETH · OKX ⇄ Gate/ }));
@@ -308,7 +308,7 @@ describe('LegAssignment — correcting the entry', () => {
     mount('HYPERLIQUID', 'perp', {
       onAssert: vi.fn(),
       venueEntry: 2440,
-      destinations: [{ id: 'ETH#OTHER#exec', label: 'ETH · OKX ⇄ Gate' }],
+      destinations: [{ id: 'ETH#OTHER#exec', label: 'ETH · OKX ⇄ Gate', borosMaturity: null }],
     });
     openDialog();
     expect(screen.getByText('What did it cost?')).toBeInTheDocument();
@@ -405,5 +405,76 @@ describe('LegAssignment — entry editor: regressions from the re-audit', () => 
     mount('BINANCE', 'boros', { onAssert: vi.fn(), venueEntry: 0.0590778377 });
     fireEvent.click(screen.getByTitle(/of the .* open on/));
     expect(screen.getByText(/reports 5\.91% across the whole position/)).toBeInTheDocument();
+  });
+});
+
+/**
+ * ONE MATURITY PER POSITION.
+ *
+ * A solved card is single-maturity structurally — cohorts are keyed
+ * `(base, maturity)` and `mergedStrategies` emits one card per cohort, so the
+ * shape cannot arise there. The manual path had no such floor, and two
+ * maturities on one card do not degrade it, they misprice it: `maturity` is
+ * `Math.min` across the legs, and the countdown, `secondsToMaturity`,
+ * `spreadReturnUsd` and the PnL projection all run off it.
+ *
+ * Shape is still not policed. Six legs, a half-open hedge, a spread with no
+ * perps — all assertable. Only the date has to agree.
+ */
+describe('LegAssignment — one maturity per position', () => {
+  const MAT = 1_800_000_000; // 2027-01-15
+  const LATER = 1_820_000_000; // 2027-09-03
+  const boros = makeStrategyLeg({
+    kind: 'boros',
+    venue: 'BINANCE',
+    side: 'LONG',
+    notionalToken: 300,
+    marketId: 129,
+    maturity: MAT,
+  });
+  const mountBoros = (destinations: Parameters<typeof LegAssignment>[0]['destinations']) =>
+    render(
+      <LegAssignment leg={boros} strategyId="ETH#HERE" destinations={destinations} onAssert={vi.fn()} />,
+    );
+  const dest = (borosMaturity: number | null) => [
+    { id: 'ETH#OTHER#exec', label: 'ETH · OKX ⇄ Gate', borosMaturity },
+  ];
+
+  it('refuses a position running to a different date, and names the date', () => {
+    mountBoros(dest(LATER));
+    openDialog();
+    const btn = screen.getByRole('button', { name: /ETH · OKX ⇄ Gate/ });
+    expect(btn).toBeDisabled();
+    expect(btn).toHaveTextContent(/matures 2027-09-03, not this one/);
+  });
+
+  it('a refused destination cannot be selected by clicking it anyway', () => {
+    mountBoros(dest(LATER));
+    openDialog();
+    fireEvent.click(screen.getByRole('button', { name: /ETH · OKX ⇄ Gate/ }));
+    // Confirm only lights up once something changed; nothing did.
+    expect(screen.getByRole('button', { name: 'Confirm' })).toBeDisabled();
+  });
+
+  it('offers a position running to the SAME date', () => {
+    mountBoros(dest(MAT));
+    openDialog();
+    expect(screen.getByRole('button', { name: /ETH · OKX ⇄ Gate/ })).toBeEnabled();
+  });
+
+  it('offers a position holding no Boros leg — it has no date to disagree with', () => {
+    // A perp-only card, or a spread whose Boros side is not open yet. Sending
+    // the first Boros leg there is how it stops being either.
+    mountBoros(dest(null));
+    openDialog();
+    expect(screen.getByRole('button', { name: /ETH · OKX ⇄ Gate/ })).toBeEnabled();
+  });
+
+  it('never blocks a PERP leg — a perp is perpetual and hedges every cohort', () => {
+    // The solver attaches one perp across maturities on purpose; refusing the
+    // same thing by hand would contradict it.
+    mount('HYPERLIQUID', 'perp', { onAssert: vi.fn(), destinations: dest(LATER) });
+    openDialog();
+    expect(screen.getByRole('button', { name: /ETH · OKX ⇄ Gate/ })).toBeEnabled();
   });
 });
