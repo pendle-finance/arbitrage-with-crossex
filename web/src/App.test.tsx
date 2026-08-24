@@ -133,7 +133,9 @@ describe('App tab shell', () => {
     // The panel itself renders inside the tab panel (its cards land once the
     // /api/opportunities fixture resolves).
     expect(
-      await within(panel('opportunities')).findByRole('button', { name: 'Hedge the perps' }),
+      await within(panel('opportunities')).findByRole('button', {
+        name: /^Hedge the perps for ETH short/,
+      }),
     ).toBeInTheDocument();
     expect(panel('opportunities')).toBeVisible();
   });
@@ -267,7 +269,7 @@ describe('App tab shell', () => {
     expect(screen.getByLabelText('Gate VIP tier')).toBeInTheDocument();
 
     // Symbols are expectedly absent — the button stays enabled as the guide's nudge.
-    const execute = screen.getByRole('button', { name: 'Hedge the perps' });
+    const execute = screen.getByRole('button', { name: /^Hedge the perps for ETH short/ });
     expect(execute).toBeEnabled();
     await userEvent.click(execute);
     await waitFor(() => expect(screen.getByLabelText('API key')).toHaveFocus());
