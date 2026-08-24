@@ -2098,8 +2098,7 @@ function splitStrategies(
    *
    * Built from the increments each leg decomposes into: two increments a few
    * seconds apart, at matching size, on opposite sides of one coin are one
-   * trade, and the legs they belong to must therefore land on one card. See
-   * docs/AUTO-GROUPING.md.
+   * trade, and the legs they belong to must therefore land on one card.
    */
   const boundVenues = new Map<string, string[]>();
   {

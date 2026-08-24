@@ -1,9 +1,9 @@
 /**
  * Which trades were placed TOGETHER.
  *
- * See docs/AUTO-GROUPING.md. This module implements steps 2 and 3 of that
- * proposal — scoring candidate pairings and binding them into executions —
- * and nothing else. It answers one question and returns one fact:
+ * This module does two things — scores candidate pairings, then binds them
+ * into executions — and nothing else. It answers one question and returns one
+ * fact:
  *
  *   given the atoms a book is made of, which of them went out as one trade?
  *
