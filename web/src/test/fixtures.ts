@@ -427,6 +427,16 @@ export function makeStrategyReturns(overrides: Partial<StrategyReturns> = {}): S
     address: STRATEGY_ADDRESS,
     perpSource: 'connected-gate-account',
     strategies,
+    // Venue truth, so it defaults to every Boros market the cards hold —
+    // overridable to model a leg that is open but has no card (an unpriced
+    // collateral zone), which is what the prune must not read as closed.
+    liveBorosMarketIds: [
+      ...new Set(
+        strategies.flatMap((s) =>
+          s.legs.flatMap((l) => (l.kind === 'boros' && l.marketId !== undefined ? [l.marketId] : [])),
+        ),
+      ),
+    ],
     totals: {
       capitalUsd: strategies.reduce((s, x) => s + x.capitalUsd, 0),
       realizedPnlUsd: strategies.reduce((s, x) => s + x.realizedPnlUsd, 0),

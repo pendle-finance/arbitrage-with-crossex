@@ -317,6 +317,20 @@ export interface StrategyAttribution {
   source: TrancheSource | 'merged' | 'boros-only' | 'unhedged';
   confidence: TrancheConfidence;
   pinned: boolean;
+  /**
+   * True when this card exists ONLY to report size no position claims —
+   * detached by the user, or left over by the solver.
+   *
+   * ⚠ A SEPARATE QUESTION FROM `source`, which answers how a grouping was
+   * arrived at. The two were conflated, and collided both ways: a solver
+   * tranche on a coin with no Boros reports `source: 'unhedged'` (the chip
+   * means "no rate is locked against this"), while the Boros remainder card
+   * reports `'boros-only'` or `'merged'`. So "is this the card holding the
+   * detached size" could not be read off `source` at all — the client's
+   * Automatic deleted a neighbour's detachment from the first, and did
+   * nothing on the second.
+   */
+  unclaimed?: boolean;
 }
 
 export interface StrategyRollup {
@@ -375,6 +389,18 @@ export interface StrategyReturns {
   /** null when Gate isn't configured — Boros-only view. */
   perpSource: 'connected-gate-account' | null;
   strategies: StrategyRollup[];
+  /**
+   * Every Boros market the venue reports a live position on — counted from the
+   * account's own zones, so no downstream filtering can shorten it.
+   *
+   * ⚠ NOT the same as the markets appearing on `strategies`. A collateral zone
+   * that cannot be priced in USD is excluded from every card (with a warning)
+   * while its positions stay open, so a market can be live here and absent
+   * there. The client prunes membership rows against THIS, never against the
+   * cards: reading "no card holds it" as "the position closed" deleted pins
+   * the user cannot get back.
+   */
+  liveBorosMarketIds: number[];
   totals: {
     capitalUsd: number;
     realizedPnlUsd: number;
@@ -1488,7 +1514,8 @@ export function buildStrategies(input: BuildStrategiesInput): StrategyReturns {
     const card = (strategyId: string, base: string, perpBuilds: PerpLegBuild[]) =>
       assembleStrategy({
         strategyId,
-        attribution: { source: 'unhedged', confidence: 'measured', pinned: false },
+        // Live perp size no position claimed: this card IS the remainder.
+        attribution: { source: 'unhedged', confidence: 'measured', pinned: false, unclaimed: true },
         base,
         // No Boros legs, so no maturity — see the sentinel on StrategyRollup.
         maturity: 0,
@@ -1560,10 +1587,37 @@ export function buildStrategies(input: BuildStrategiesInput): StrategyReturns {
     }
   }
 
+  /**
+   * Every Boros market the venue reports a live position on.
+   *
+   * ⚠ READ FROM THE ZONES, not from the cards, and that is the whole point.
+   * The client prunes a membership row once the server stops reporting its
+   * leg, so "which legs exist" has to be answered by something no downstream
+   * filtering can shorten — and `buildBorosLegs` drops an entire collateral
+   * zone when its USD price cannot be resolved (a warning, and a 200). Legs in
+   * that zone are open, invisible on every card, and were being read as
+   * closed: two settled polls later the user's pins and asserted entries for
+   * them were deleted, with no undo.
+   *
+   * So this counts positions, nothing else. A leg listed here may still be
+   * missing from every card; that means the card could not be built, never
+   * that the position is gone.
+   */
+  const liveBorosMarketIds = [
+    ...new Set(
+      input.zones.flatMap((z) =>
+        [...(z.cross ? [z.cross] : []), ...z.isolated].flatMap((g) =>
+          g.marketPositions.filter((p) => norm18(p.notionalSize) !== 0).map((p) => p.marketId),
+        ),
+      ),
+    ),
+  ];
+
   return {
     address: input.address,
     perpSource: perpAvailable ? 'connected-gate-account' : null,
     strategies,
+    liveBorosMarketIds,
     totals: {
       capitalUsd,
       realizedPnlUsd,
@@ -2797,6 +2851,9 @@ function splitStrategies(
           source: attached ? 'boros-only' : 'merged',
           confidence: g.unconfirmed ? 'unconfirmed' : 'measured',
           pinned: false,
+          // Boros notional NO POSITION CLAIMED — what the solver could not
+          // attach and what the user detached, which arrive here as one thing.
+          unclaimed: true,
         },
         base,
         maturity,

@@ -398,7 +398,7 @@ describe('PositionsHome — a book split across strategies', () => {
         // leg, not a footnote beside them — same card, same controls.
         makeStrategyRollup({
           strategyId: 'HYPE#unhedged:HYPERLIQUID_FUTURE_HYPE_USDC',
-          attribution: { source: 'unhedged', confidence: 'measured', pinned: false },
+          attribution: { source: 'unhedged', confidence: 'measured', pinned: false, unclaimed: true },
           hedge: 'unhedged',
           maturity: 0,
           legs: sharedLegs()
@@ -628,7 +628,7 @@ describe('PositionsHome — membership journeys', () => {
           ...loose.map((l) =>
             makeStrategyRollup({
               strategyId: `${l.base}#unhedged:${l.symbol}`,
-              attribution: { source: 'unhedged', confidence: 'measured', pinned: false },
+              attribution: { source: 'unhedged', confidence: 'measured', pinned: false, unclaimed: true },
               hedge: 'unhedged',
               maturity: 0,
               legs: [l],
@@ -1009,6 +1009,29 @@ describe('PositionsHome — assertions are forgotten when their legs close', () 
    * a second look inside a test without waiting out its 30s poll. */
   const lookAgain = () => fireEvent.click(screen.getByTitle('Refetch strategy data'));
 
+  it('keeps a leg that is OPEN but on no card — an unpriced collateral zone', async () => {
+    // ⚠ THE CARDS ARE NOT A CENSUS. `buildBorosLegs` drops a whole collateral
+    // zone whose USD price cannot be resolved, warns, and still answers 200.
+    // Reading "no card holds it" as "the position closed" deleted pins the
+    // user cannot get back — so the prune counts positions, not cards.
+    track();
+    seed([
+      { positionId: 'a3f1c8d2', leg: { kind: 'boros', marketId: 190 } },
+      // Open, but on no card — its collateral zone could not be priced.
+      { positionId: 'a3f1c8d2', leg: { kind: 'boros', marketId: 777 } },
+      // Genuinely closed: on no card AND not a live position. Its disappearance
+      // is what proves the prune actually ran, so 777 surviving means something.
+      { positionId: 'a3f1c8d2', leg: { kind: 'boros', marketId: 999 } },
+    ]);
+    mockPositions();
+    mockStrategy({ ...liveBook(), liveBorosMarketIds: [190, 777] });
+    renderWithClient(<PositionsHome />);
+    await screen.findByText('hedged ✓');
+
+    lookAgain();
+    await waitFor(() => expect(storedRows().map((r) => r.leg.marketId)).toEqual([190, 777]));
+  });
+
   it('drops the rows of a closed Boros market, and keeps the open one', async () => {
     track();
     seed([
@@ -1291,7 +1314,7 @@ describe('PositionsHome — Automatic forgets only this card', () => {
         }),
         makeStrategyRollup({
           strategyId: 'HYPE#unhedged:190',
-          attribution: { source: 'unhedged', confidence: 'measured', pinned: false },
+          attribution: { source: 'unhedged', confidence: 'measured', pinned: false, unclaimed: true },
           hedge: 'unhedged',
           legs: [borosLeg(REST, REST / (MINE + REST))],
         }),
@@ -1335,6 +1358,76 @@ describe('PositionsHome — Automatic forgets only this card', () => {
     expect(rowsNow()).toEqual([
       { positionId: PINNED, leg: { kind: 'boros', marketId: MARKET }, qty: MINE },
     ]);
+  });
+
+  /**
+   * ⚠ `unclaimed`, NOT `source === 'unhedged'`.
+   *
+   * `source` answers how a grouping was arrived at, and reusing it here
+   * collided both ways: a solver tranche on a coin with no Boros ALSO reports
+   * 'unhedged' (the chip means "no rate is locked against this"), while the
+   * Boros remainder card reports 'boros-only'/'merged'.
+   */
+  it('leaves a neighbour\'s detachment alone when pressed on a solver tranche', async () => {
+    // `ETH#BINANCE-HYPERLIQUID#0` is what the solver emits for a coin with no
+    // Boros cohort — reported 'unhedged' because nothing locks a rate against
+    // it, but it asserted nothing and owns no rows. Automatic there is a
+    // statement about a card that never claimed the leg.
+    track();
+    seed([{ leg: { kind: 'boros', marketId: MARKET }, qty: REST }]);
+    mockPositions();
+    mockStrategy(
+      makeStrategyReturns({
+        strategies: [
+          makeStrategyRollup({
+            strategyId: 'HYPE#BINANCE-HYPERLIQUID#0',
+            attribution: { source: 'unhedged', confidence: 'measured', pinned: false },
+            hedge: 'unhedged',
+            legs: [borosLeg(MINE, MINE / (MINE + REST))],
+          }),
+        ],
+        liveBorosMarketIds: [MARKET],
+      }),
+    );
+    renderWithClient(<PositionsHome />);
+    await screen.findAllByTitle(/click to assign|click to change/);
+    await automaticOnRemainder();
+
+    // The orphan row is somebody else's detachment and must survive.
+    await waitFor(() => expect(rowsNow()).toHaveLength(1));
+    expect(rowsNow()[0].positionId).toBeUndefined();
+  });
+
+  it('un-detaches from a Boros remainder card, which reports neither pinned nor unhedged', async () => {
+    // The unowned Boros card carries source 'boros-only' / 'merged'. Keying
+    // off 'unhedged' made Automatic a silent no-op here — the one card family
+    // where it genuinely means "forget my detachment".
+    track();
+    seed([{ leg: { kind: 'boros', marketId: MARKET }, qty: REST }]);
+    mockPositions();
+    mockStrategy(
+      makeStrategyReturns({
+        strategies: [
+          makeStrategyRollup({
+            strategyId: 'HYPE@boros-remainder',
+            attribution: {
+              source: 'merged',
+              confidence: 'measured',
+              pinned: false,
+              unclaimed: true,
+            },
+            hedge: 'unhedged',
+            legs: [borosLeg(REST, 1)],
+          }),
+        ],
+        liveBorosMarketIds: [MARKET],
+      }),
+    );
+    renderWithClient(<PositionsHome />);
+    await screen.findAllByTitle(/click to assign|click to change/);
+    await automaticOnRemainder();
+
+    await waitFor(() => expect(rowsNow()).toEqual([]));
   });
 
   it('still sends the pin to the server, so the card does not lose the leg', async () => {

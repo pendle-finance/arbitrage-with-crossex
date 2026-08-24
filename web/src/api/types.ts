@@ -330,6 +330,19 @@ export interface StrategyAttribution {
     | 'unhedged';
   confidence: 'measured' | 'unconfirmed';
   pinned: boolean;
+  /**
+   * True when this card exists ONLY to report size no position claims —
+   * detached by the user, or left over by the solver.
+   *
+   * ⚠ A SEPARATE QUESTION FROM `source`, which answers how a grouping was
+   * arrived at. The two were conflated, and collided both ways: a solver
+   * tranche on a coin with no Boros reports `source: 'unhedged'` (the chip
+   * means "no rate is locked against this"), while the Boros remainder card
+   * reports `'boros-only'` or `'merged'`. So "is this the card holding the
+   * detached size" could not be read off `source` at all — Automatic deleted
+   * a neighbour's detachment from the first, and did nothing on the second.
+   */
+  unclaimed?: boolean;
 }
 
 /** What anchors the realized-APR clock: earliest Boros leg (default), perp
@@ -396,6 +409,18 @@ export interface StrategyReturns {
   /** null when Gate isn't configured — Boros-only view. */
   perpSource: 'connected-gate-account' | null;
   strategies: StrategyRollup[];
+  /**
+   * Every Boros market the venue reports a live position on — counted from the
+   * account's own zones, so no downstream filtering can shorten it.
+   *
+   * ⚠ NOT the same as the markets appearing on `strategies`. A collateral zone
+   * that cannot be priced in USD is excluded from every card (with a warning)
+   * while its positions stay open, so a market can be live here and absent
+   * there. The client prunes membership rows against THIS, never against the
+   * cards: reading "no card holds it" as "the position closed" deleted pins
+   * the user cannot get back.
+   */
+  liveBorosMarketIds: number[];
   totals: {
     capitalUsd: number;
     realizedPnlUsd: number;

@@ -148,6 +148,23 @@ describe('CloseBorosForm — saying that it landed', () => {
     expect(screen.queryByText(/close again to finish it/i)).toBeNull();
   });
 
+  it('does not call the user\'s OWN un-closed remainder somebody else\'s', async () => {
+    // A deliberate partial of a sole-owned leg: close 0.004 of 0.01 and the
+    // 0.006 left is entirely the user's. Reporting it as another position's
+    // share is a falsehood about their own money, and the panel replaces the
+    // form — so it also takes away the affordance to close it.
+    server.use(...ready(), closeReturns({ closed: false, fill: fill(0.004), openSize: MINE }));
+    renderWithClient(<CloseBorosForm legs={[{ ...leg(), notionalToken: MINE }]} />);
+    // Ask for less than the whole share.
+    fireEvent.change(screen.getByLabelText(/Close size for the .* Boros leg/), {
+      target: { value: '0.004' },
+    });
+    await confirmClose();
+
+    expect(await screen.findByText(/of this position is still open/)).toBeInTheDocument();
+    expect(screen.queryByText(/not yours/)).toBeNull();
+  });
+
   it('names the share another position holds instead of calling it unfinished', async () => {
     // A card closing its own 0.01 of a 0.03 leg satisfies its request and
     // leaves 0.02 open. That is somebody else's, and saying "close again to

@@ -81,7 +81,7 @@ export function CloseBorosForm({
    * finish it" for a leg with nothing left to finish. The dialog answers the
    * question the user asked it, and mentions the venue residual separately.
    */
-  const [done, setDone] = useState<{ marketId: number; leftOpen: number }[]>([]);
+  const [done, setDone] = useState<{ marketId: number; yours: number; others: number }[]>([]);
   const [failed, setFailed] = useState<{ marketId: number; message: string }[]>([]);
   /** Filled SHORT of what was asked — the book ran out inside the rate bound.
    * `left` is what of this request is still open, never `shortfallSize`
@@ -222,9 +222,19 @@ export function CloseBorosForm({
     : 'The Boros agent approval has expired — approve a new agent key before closing Boros legs.';
 
   const allDone = closable.length > 0 && done.length === closable.length;
-  /** Size the venue still holds on legs that DID satisfy their request — a
-   * share another position owns, or dust. Reported, never acted on. */
-  const residual = done.reduce((sum, d) => sum + d.leftOpen, 0);
+  /**
+   * What the venue still holds on legs that DID satisfy their request, split
+   * by WHOSE it is.
+   *
+   * ⚠ Two different remainders, and reporting them as one told the user a
+   * falsehood about their own money: `openSize − filled` is `(openSize −
+   * myShare)`, which belongs to whoever else holds the leg, PLUS `(myShare −
+   * filled)`, which is theirs and was left open on purpose. Closing 0.004 of a
+   * sole-owned 0.01 announced that the remaining 0.006 was "another position's
+   * share, not yours".
+   */
+  const residualYours = done.reduce((sum, d) => sum + d.yours, 0);
+  const residualOthers = done.reduce((sum, d) => sum + d.others, 0);
 
   const run = async () => {
     setFailed([]);
@@ -275,12 +285,19 @@ export function CloseBorosForm({
           setSizes((prev) => ({ ...prev, [id]: String(Number(left.toPrecision(8))) }));
           onClosed?.(l, filled);
         } else {
-          // Everything asked for came off. Whatever the venue still holds is
-          // somebody else's share or dust — worth SAYING, never worth arming
-          // a second close over.
+          // Everything asked for came off. What the venue still holds splits
+          // in two, and only one half is somebody else's — worth SAYING,
+          // neither worth arming a second close over.
           const filled = r.fill!.filledSize;
-          const over = (r.openSize ?? filled) - filled;
-          setDone((prev) => [...prev, { marketId: id, leftOpen: over > dust ? over : 0 }]);
+          const mine = l.notionalToken ?? filled;
+          // This card's own share that the user chose not to close.
+          const yours = Math.max(0, mine - filled);
+          // The rest of the venue leg, which other positions hold.
+          const others = Math.max(0, (r.openSize ?? mine) - mine);
+          setDone((prev) => [
+            ...prev,
+            { marketId: id, yours: yours > dust ? yours : 0, others: others > dust ? others : 0 },
+          ]);
           onClosed?.(l, filled);
         }
       } catch (err) {
@@ -306,13 +323,20 @@ export function CloseBorosForm({
           {closable.length === 1 ? 'Leg closed.' : `${closable.length} legs closed.`} The position is
           re-reading from the venue now — the card updates on its own.
         </p>
-        {/* The venue leg outliving the close is normal — a second position
-            holds the rest. Said plainly, and NOT as an amber warning: nothing
-            went wrong and there is nothing here for this user to finish. */}
-        {residual > 0 && (
+        {/* The venue leg outliving the close is normal. Said plainly and NOT
+            as an amber warning: nothing went wrong. But the two halves are
+            not interchangeable — one is the user's to close whenever they
+            like, the other is not theirs at all. */}
+        {residualYours > 0 && (
           <p className="text-[11px] leading-relaxed text-ink-400">
-            {fmtTokenQty(residual, unit)} is still open on the venue — that is another position's
-            share of the same leg, not yours.
+            {fmtTokenQty(residualYours, unit)} of this position is still open — you closed part of
+            it. Close the rest whenever you like.
+          </p>
+        )}
+        {residualOthers > 0 && (
+          <p className="text-[11px] leading-relaxed text-ink-400">
+            {fmtTokenQty(residualOthers, unit)} more is open on the venue — that is another
+            position's share of the same leg, not yours.
           </p>
         )}
         <button type="button" className="btn-primary w-full" onClick={onDone}>

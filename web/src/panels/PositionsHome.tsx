@@ -376,15 +376,23 @@ export function PositionsHome() {
            * same warning; this mode simply never got it.
            *
            * Which rows are "this card's" follows from how the card exists at
-           * all: a PINNED card owns rows under its own id, and an UNHEDGED
+           * all: a PINNED card owns rows under its own id, and an UNCLAIMED
            * card IS what an orphan row produces, so its rows carry no id. A
            * solver-proposed card asserted nothing, so it has nothing to
            * forget — Automatic is already true of it, and touching the orphan
            * rows from there would strip a neighbour's detachment instead.
+           *
+           * ⚠ `unclaimed`, NOT `source === 'unhedged'`. `source` answers how a
+           * grouping was arrived at, which is a different question, and using
+           * it here collided both ways: a solver tranche on a coin with no
+           * Boros also reports `'unhedged'` (so Automatic there deleted a
+           * neighbour's detachment — this exact bug, from the other side),
+           * while the Boros remainder card reports `'boros-only'`/`'merged'`
+           * (so Automatic there silently did nothing at all).
            */
           if (from.attribution.pinned) {
             next = withRow(next, { mode: 'auto', leg: a.leg, positionId: from.strategyId });
-          } else if (from.attribution.source === 'unhedged') {
+          } else if (from.attribution.unclaimed) {
             next = withRow(next, { mode: 'auto', leg: a.leg });
           }
         }
@@ -437,16 +445,29 @@ export function PositionsHome() {
   }, [positionsData?.positions, strategies]);
 
   /**
-   * Boros legs the book actually holds.
+   * Boros legs the book actually holds — from the payload's own count of live
+   * positions, NEVER from the cards.
    *
-   * Here the cards ARE the authority, and the payload offers nothing else —
-   * there is no flat list of Boros positions on the wire. It is sound because
-   * every live Boros leg reaches a card: what no position claimed and what the
-   * user detached both become their own unowned card (`returns.ts:addUnowned`),
-   * which is the asymmetry with perps above.
+   * ⚠ THE CARDS ARE NOT A CENSUS OF THE VENUE. This read them, on the
+   * reasoning that every live Boros leg reaches a card: what no position
+   * claimed and what the user detached both become their own unowned card.
+   * That holds for the grouping passes and fails before them —
+   * `buildBorosLegs` drops an entire collateral zone whose USD price cannot be
+   * resolved, warns, and still answers 200. Those positions are open and on no
+   * card, so the prune read them as closed and deleted the user's pins and
+   * asserted entries for them: the exact irreversible loss the two-look guard
+   * exists to prevent, reached by a route the guard cannot see.
+   *
+   * `liveBorosMarketIds` counts positions in the account's own zones and
+   * nothing else, so no downstream filtering can shorten it.
    */
   const liveBorosLegs = useMemo(() => {
     const live = new Set<string>();
+    for (const marketId of strategyData?.liveBorosMarketIds ?? []) {
+      live.add(legRefKey({ kind: 'boros', marketId }));
+    }
+    // A card holding a leg the census somehow missed is still evidence that
+    // leg is open. The union can only ever KEEP rows.
     for (const s of strategies) {
       for (const l of s.legs) {
         if (l.kind !== 'boros') continue;
@@ -455,7 +476,7 @@ export function PositionsHome() {
       }
     }
     return live;
-  }, [strategies]);
+  }, [strategyData?.liveBorosMarketIds, strategies]);
 
   /**
    * What each feed reported the LAST time it settled.
