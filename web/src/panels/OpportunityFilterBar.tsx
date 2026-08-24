@@ -27,7 +27,7 @@ import { useDebounced } from '../lib/useDebounced';
 import {
   facets,
   hasActiveFilter,
-  maxDays,
+  minDays,
   NO_FILTERS,
   toggleValue,
   type FacetOption,
@@ -221,7 +221,7 @@ export function OpportunityFilterBar({
   /** How many cards survive `filters` — the "showing N of M" numerator. */
   shown: number;
 }) {
-  const maxDaysId = useId();
+  const minDaysId = useId();
   const moreId = useId();
   // Asset is the dimension a reader SCANS by; venue, maturity and the APR floor
   // are refinements they reach for. Only the first stays on the line.
@@ -237,36 +237,36 @@ export function OpportunityFilterBar({
   // The field types LOCALLY and lands debounced: every keystroke straight into
   // `filters` re-renders the whole card list synchronously, which at 100 cards
   // costs ~14ms a character (and mounts rows the next character removes).
-  const [maxDaysText, setMaxDaysText] = useState(filters.maxDaysText);
-  const debouncedMaxDays = useDebounced(maxDaysText, 250);
+  const [minDaysText, setMinDaysText] = useState(filters.minDaysText);
+  const debouncedMinDays = useDebounced(minDaysText, 250);
   // What we last pushed up, so an echo of our own value is not mistaken for the
   // parent resetting the field (Clear filters).
-  const pushed = useRef(filters.maxDaysText);
+  const pushed = useRef(filters.minDaysText);
 
   useEffect(() => {
-    if (debouncedMaxDays === pushed.current) return;
-    pushed.current = debouncedMaxDays;
-    onChange({ ...filters, maxDaysText: debouncedMaxDays });
+    if (debouncedMinDays === pushed.current) return;
+    pushed.current = debouncedMinDays;
+    onChange({ ...filters, minDaysText: debouncedMinDays });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [debouncedMaxDays]);
+  }, [debouncedMinDays]);
 
   // Clear filters (or any other outside write) wins over the local text.
   useEffect(() => {
-    if (filters.maxDaysText === pushed.current) return;
-    pushed.current = filters.maxDaysText;
-    setMaxDaysText(filters.maxDaysText);
-  }, [filters.maxDaysText]);
+    if (filters.minDaysText === pushed.current) return;
+    pushed.current = filters.minDaysText;
+    setMinDaysText(filters.minDaysText);
+  }, [filters.minDaysText]);
 
   const f = facets(rows, filters);
   const active = hasActiveFilter(filters);
   // A refinement that is ACTIVE while folded away has to announce itself, or
   // the list is narrowed for no reason the reader can see — the same trap a
   // vanishing chip sets. The badge is what stands in for the hidden chips.
-  const hiddenActive = filters.venues.length + (maxDays(filters) === null ? 0 : 1);
+  const hiddenActive = filters.venues.length + (minDays(filters) === null ? 0 : 1);
   // Judged on what the reader has TYPED, not on the debounced value the list is
   // filtered by — the red border must answer the keystroke, not trail it.
-  const maxDaysBad =
-    maxDaysText.trim() !== '' && maxDays({ ...filters, maxDaysText }) === null;
+  const minDaysBad =
+    minDaysText.trim() !== '' && minDays({ ...filters, minDaysText }) === null;
 
   return (
     <div
@@ -324,27 +324,27 @@ export function OpportunityFilterBar({
             onToggle={(v) => onChange({ ...filters, venues: toggleValue(filters.venues, v) })}
           />
           <span className="flex flex-wrap items-center gap-1.5">
-            <label htmlFor={maxDaysId} className={`${microLabelClass} mr-0.5`}>
-              Matures within
+            <label htmlFor={minDaysId} className={`${microLabelClass} mr-0.5`}>
+              Matures in more than
             </label>
             <input
-              id={maxDaysId}
+              id={minDaysId}
               type="text"
               inputMode="numeric"
               autoComplete="off"
               placeholder="any"
-              value={maxDaysText}
-              onChange={(e) => setMaxDaysText(e.target.value)}
-              title="Longest tenor to keep, in days — a plain number, e.g. 60"
-              aria-invalid={maxDaysBad}
-              aria-describedby={maxDaysBad ? `${maxDaysId}-err` : undefined}
+              value={minDaysText}
+              onChange={(e) => setMinDaysText(e.target.value)}
+              title="Shortest tenor to keep, in days — a plain number, e.g. 30. A card printing exactly that many days is not more than it, so it is cut too."
+              aria-invalid={minDaysBad}
+              aria-describedby={minDaysBad ? `${minDaysId}-err` : undefined}
               className={`input num h-[26px] w-16 !px-2 !py-0 text-[11px] ${
-                maxDaysBad ? 'border-rose-500/60' : ''
+                minDaysBad ? 'border-rose-500/60' : ''
               }`}
             />
             <span className="text-[11px] text-ink-400">days</span>
-            {maxDaysBad && (
-              <span id={`${maxDaysId}-err`} role="alert" className="text-[11px] text-rose-300">
+            {minDaysBad && (
+              <span id={`${minDaysId}-err`} role="alert" className="text-[11px] text-rose-300">
                 needs a plain number
               </span>
             )}

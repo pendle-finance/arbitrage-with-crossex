@@ -97,11 +97,6 @@
     @apply sticky top-0 z-10 whitespace-nowrap border-b border-ink-700 bg-ink-900 px-2 py-2 text-[11px] font-semibold uppercase tracking-wider text-ink-400;
   }
 
-  /* Secondary action next to a .btn-primary (the cards' "Details" toggle). */
-  .btn-ghost {
-    @apply rounded-lg border border-ink-700 bg-transparent px-3.5 py-1.5 text-sm font-medium text-ink-300 transition-colors hover:border-ink-500 hover:text-ink-100 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-ink-700 disabled:hover:text-ink-300;
-  }
-
   /* Cyan-active segmented control — the opportunity assumptions knobs. */
   .seg-cyan .seg-btn[data-active='true'] {
     @apply bg-cyan-500/15 text-cyan-300;

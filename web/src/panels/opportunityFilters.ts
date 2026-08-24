@@ -112,30 +112,32 @@ export interface OpportunityFilters {
   assets: string[];
   /** Venue KEYS (see `venueKey`) — a row matches on either of its two legs. */
   venues: string[];
-  /** Raw field text: the longest tenor to keep, in DAYS; '' = no cap. A tenor
-   * is a span, so it takes a number rather than picking exact maturities — the
-   * reader caps how long their capital is locked, and does not care that two
-   * cohorts happen to settle on different dates inside that span. */
-  maxDaysText: string;
+  /** Raw field text: the shortest tenor to keep, in DAYS; '' = no floor. A
+   * tenor is a span, so it takes a number rather than picking exact maturities
+   * — the reader sets how long their capital must stay locked to be worth the
+   * trade, and does not care that two cohorts happen to settle on different
+   * dates beyond that floor. */
+  minDaysText: string;
 }
 
 export const NO_FILTERS: OpportunityFilters = {
   assets: [],
   venues: [],
-  maxDaysText: '',
+  minDaysText: '',
 };
 
 /** A plain decimal, and nothing else. `Number()` alone also takes `0x10`,
  * `0o17`, `0b11`, `1e3` and a leading sign — each of which would land as a
- * silently wrong cap that `Number.isFinite` is perfectly happy with. Negatives
- * are rejected too: no row has a tenor below one day, so a negative could only
- * blank the list without saying why. */
+ * silently wrong floor that `Number.isFinite` is perfectly happy with.
+ * Negatives are rejected too: they could only ever be a no-op, since every row
+ * has a tenor above zero. */
 const DECIMAL_ONLY = /^(?:\d+(?:\.\d*)?|\.\d+)$/;
 
-/** The typed tenor cap in DAYS; null when the field is blank or holds something
- * that isn't a plain decimal (a half-typed "3e" must not blank the list). */
-export function maxDays(filters: OpportunityFilters): number | null {
-  const text = filters.maxDaysText.trim();
+/** The typed tenor floor in DAYS; null when the field is blank or holds
+ * something that isn't a plain decimal (a half-typed "3e" must not blank the
+ * list). */
+export function minDays(filters: OpportunityFilters): number | null {
+  const text = filters.minDaysText.trim();
   if (text === '' || !DECIMAL_ONLY.test(text)) return null;
   const n = Number(text);
   return Number.isFinite(n) ? n : null;
@@ -143,7 +145,7 @@ export function maxDays(filters: OpportunityFilters): number | null {
 
 /** True once anything is narrowing the list — drives the Clear affordance. */
 export const hasActiveFilter = (filters: OpportunityFilters): boolean =>
-  filters.assets.length > 0 || filters.venues.length > 0 || maxDays(filters) !== null;
+  filters.assets.length > 0 || filters.venues.length > 0 || minDays(filters) !== null;
 
 /** Add or remove one value from a dimension's selection. */
 export function toggleValue<T>(list: T[], value: T): T[] {
@@ -154,17 +156,19 @@ export function toggleValue<T>(list: T[], value: T): T[] {
 // Applying + facet counts
 // ---------------------------------------------------------------------------
 
-type Dimension = 'assets' | 'venues' | 'maxDays';
+type Dimension = 'assets' | 'venues' | 'minDays';
 
 const PREDICATES: Record<Dimension, (row: OpportunityRow, f: OpportunityFilters) => boolean> = {
   assets: (row, f) => f.assets.length === 0 || f.assets.includes(row.asset),
   venues: (row, f) => f.venues.length === 0 || row.venueKeys.some((v) => f.venues.includes(v)),
-  maxDays: (row, f) => {
-    const cap = maxDays(f);
+  minDays: (row, f) => {
+    const floor = minDays(f);
     // Against the tenor the CARD PRINTS — `row.days` is `maturityDays`, the
-    // same rounding behind "(35 days)" — so a card reading 35 survives a cap
-    // of 35 rather than being cut by hours the reader never sees.
-    return cap === null || row.days <= cap;
+    // same rounding behind "(35 days)" — so the reader never has to reconcile
+    // a cut against hours they cannot see. Strictly greater, because the field
+    // reads "matures in more than N days": a card printing exactly 35 is not
+    // more than 35.
+    return floor === null || row.days > floor;
   },
 };
 
@@ -261,17 +265,22 @@ export function loadFilters(): OpportunityFilters {
     OPPORTUNITY_FILTERS_STORAGE_KEY,
     NO_FILTERS,
     (parsed) => {
-      const p = parsed as { assets?: unknown; venues?: unknown; maxDaysText?: unknown } | null;
+      // Only `minDaysText` is read. A blob written while this field meant a
+      // CAP carries `maxDaysText`, and reinterpreting a saved "within 30" as
+      // "more than 30" would silently hide the very rows it used to keep — so
+      // the old key is ignored and that reader restores with no tenor filter.
+      const p = parsed as { assets?: unknown; venues?: unknown; minDaysText?: unknown } | null;
       return {
         assets: stringList(p?.assets),
         // Re-normalized on the way in: a blob written before `venueKey` existed
         // — or hand-edited — must not sit in the state space as "Gate".
         venues: stringList(p?.venues).map(venueKey),
-        // Anything unparseable restores as no cap rather than as a red field
+        // Anything unparseable restores as no floor rather than as a red field
         // the reader never typed into.
-        maxDaysText:
-          typeof p?.maxDaysText === 'string' && maxDays({ ...NO_FILTERS, maxDaysText: p.maxDaysText }) !== null
-            ? p.maxDaysText
+        minDaysText:
+          typeof p?.minDaysText === 'string' &&
+          minDays({ ...NO_FILTERS, minDaysText: p.minDaysText }) !== null
+            ? p.minDaysText
             : '',
       };
     },

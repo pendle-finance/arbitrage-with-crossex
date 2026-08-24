@@ -501,24 +501,31 @@ const OpportunityCard = memo(function OpportunityCard({
       </div>
 
       <div className="p-4">
-        {/* Stacked on phones: the shrink-0 button group is 184px, which left
-            the APR hero and the stat row ~112px to fight over and spilling. */}
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between sm:gap-5">
+        {/* Stacked on phones: the shrink-0 action column is 184px, which left
+            the APR hero and the stat row ~112px to fight over and spilling.
+            items-CENTER, not items-end: the action column runs ~22px taller
+            than the figures (two buttons over their caption), and ending them
+            together dropped that whole gap above the APR, which read as a
+            bloated top margin on every card. */}
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between sm:gap-5">
           {/* Hero + stats share one baseline (items-end): the APR leads, the
               labelled figures columnize across cards. */}
           <div className="flex min-w-0 flex-wrap items-end gap-x-7 gap-y-3">
-            {/* basis-full below xl: the hero takes its own row and the stats a
-                second one, so every card keeps the same shape at the same
+            {/* basis-full below 2xl: the hero takes its own row and the stats
+                a second one, so every card keeps the same shape at the same
                 viewport. The switch must hang on the VIEWPORT, never on fit:
                 token-margined groups render "$10k (4.16 ETH)" where USDT ones
-                render "$10k", and a fit-driven wrap would break only those
-                cards, un-aligning the list. xl is where the content column
-                (viewport less ~400px of rail chrome) fits hero + stats + the
-                buttons on one line even with the token bracket — the same
-                geometry that gates the expanded section's two-column grid. The
-                xl min-width then starts every card's stat columns at the same
-                x, however wide its APR. */}
-            <span className="flex basis-full items-baseline gap-2 xl:basis-auto xl:min-w-[15rem]">
+                render "$10k", and a fit-driven wrap breaks only those cards,
+                stranding Notional on a ragged second line while the USDT card
+                above it stays whole. 2xl, not xl: the content column is the
+                viewport less ~400px of rail chrome, and at xl that leaves ~848
+                inside the card for a row that wants ~851 with the token
+                bracket — three pixels short, which is how the ragged wrap got
+                in. (The expanded section's two-column grid stays at xl; its
+                leg boxes fit where this row does not.) The min-width then
+                starts every card's stat columns at the same x, however wide
+                its APR. */}
+            <span className="flex basis-full items-baseline gap-2 2xl:basis-auto 2xl:min-w-[15rem]">
               {capitalApr === null || !Number.isFinite(capitalApr) ? (
                 <span
                   className="num text-3xl font-bold leading-none tracking-tight text-ink-400"
@@ -595,23 +602,17 @@ const OpportunityCard = memo(function OpportunityCard({
               </Stat>
             )}
           </div>
-
+          {/* Buttons only. The sequence caption used to stack under them here,
+              which made this column ~22px taller than the figures beside it
+              and left that much dead band inside the row; it rides the footer
+              line now, still right-aligned under "Hedge the perps". With it
+              gone the two sides are naturally the same height and the row is
+              exactly as tall as its content. */}
           <div className="flex shrink-0 items-center gap-2">
-            <button
-              type="button"
-              className="btn-ghost"
-              aria-expanded={open}
-              aria-label={`${open ? 'Hide' : 'Show'} details for ${base} short ${prettyVenue(pair.shortLeg.venue)} / long ${prettyVenue(pair.longLeg.venue)}, ${group.collateral}-margined ${fmtDateUtc(group.maturity)}`}
-              disabled={detailsDisabled}
-              title={detailsTitle}
-              onClick={() => setOpen((v) => !v)}
-            >
-              {open ? 'Hide details' : 'Details'}
-            </button>
-            {/* PRIMARY — locking the fixed spread IS the trade; the perps only
-                hedge what this leg buys, so it comes first and hedging second.
-                Both carry the same identity as Details: many cards per cohort
-                now differ only by their legs. */}
+            {/* PRIMARY — locking the fixed spread IS the trade; the perps
+                only hedge what this leg buys, so it comes first and hedging
+                second. Both carry the same identity as Details: many cards
+                per cohort now differ only by their legs. */}
             <button
               type="button"
               className="btn btn-primary px-4 font-semibold"
@@ -634,9 +635,9 @@ const OpportunityCard = memo(function OpportunityCard({
                 executeTitle ?? 'Prefills the pair ticket with the two perp legs that hedge the spread'
               }
               onClick={() =>
-                // Size the perps in the Boros collateral when that IS the base
-                // coin, so the two legs match without an eyeballed conversion;
-                // USDT-margined cohorts keep the dollar figure.
+                // Size the perps in the Boros collateral when that IS the
+                // base coin, so the two legs match without an eyeballed
+                // conversion; USDT-margined cohorts keep the dollar figure.
                 pair &&
                 onExecute?.(
                   pair,
@@ -649,10 +650,34 @@ const OpportunityCard = memo(function OpportunityCard({
               Hedge the perps
             </button>
           </div>
-          {/* The sequence, stated once under the pair rather than wedged
-              between the two buttons as a floating word. Hedging before the
-              spread is locked leaves you holding naked perp exposure. */}
-          <span className="mt-1 block text-right text-[10px] text-ink-500">
+        </div>
+
+        {/* Footer line — the two quiet notes the card still owes, on one row
+            so neither costs its own band: the expand toggle left, the sequence
+            caption right under the buttons it captions. */}
+        <div className="mt-2.5 flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
+          {/* Details as a dotted-underline text link rather than a third
+              button: expanding is the quiet, reversible move and should not
+              carry the weight of the two that open positions. Still a real
+              <button> — it owns aria-expanded and must stay keyboard- and
+              screen-reader-addressable; only its chrome is gone. */}
+          <button
+            type="button"
+            className="text-xs text-ink-300 underline decoration-ink-400 decoration-dotted decoration-2 underline-offset-4 transition-colors hover:text-ink-100 hover:decoration-ink-200 disabled:cursor-not-allowed disabled:no-underline disabled:opacity-50 disabled:hover:text-ink-300"
+            aria-expanded={open}
+            aria-label={`${open ? 'Hide' : 'Show'} details for ${base} short ${prettyVenue(pair.shortLeg.venue)} / long ${prettyVenue(pair.longLeg.venue)}, ${group.collateral}-margined ${fmtDateUtc(group.maturity)}`}
+            disabled={detailsDisabled}
+            title={detailsTitle}
+            onClick={() => setOpen((v) => !v)}
+          >
+            {open ? 'Hide details' : 'More details'}
+          </button>
+          {/* ml-auto so it stays pinned right when the row wraps on a phone and
+              Details is alone on the line above. nowrap keeps the phrase whole:
+              it is one instruction, and breaking after "then" reads as two.
+              Hedging before the spread is locked leaves you holding naked perp
+              exposure. */}
+          <span className="ml-auto whitespace-nowrap text-[10px] text-ink-500">
             lock the rate first, then hedge
           </span>
         </div>

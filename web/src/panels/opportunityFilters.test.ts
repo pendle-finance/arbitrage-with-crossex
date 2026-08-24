@@ -15,7 +15,7 @@ import {
   facets,
   hasActiveFilter,
   loadFilters,
-  maxDays,
+  minDays,
   NO_FILTERS,
   OPPORTUNITY_FILTERS_STORAGE_KEY,
   saveFilters,
@@ -177,36 +177,38 @@ describe('applyFilters', () => {
     expect(applyFilters(rows, filters({ venues: ['HYPERLIQUID'] }))).toHaveLength(2);
   });
 
-  it('caps the tenor by DAYS, inclusive of the number the card prints', () => {
+  it('floors the tenor by DAYS, EXCLUDING the number the card prints', () => {
     const rows = toRows(book());
     // The book is two 30-day ETH rows and one 90-day BTC row.
     expect(rows.map((r) => r.days)).toEqual([30, 90, 30]);
 
-    expect(applyFilters(rows, filters({ maxDaysText: '30' })).map((r) => r.days)).toEqual([30, 30]);
-    expect(applyFilters(rows, filters({ maxDaysText: '90' }))).toHaveLength(3);
-    expect(applyFilters(rows, filters({ maxDaysText: '29' }))).toHaveLength(0);
+    // "more than 30" cuts the cards printing exactly 30, not just the shorter
+    // ones — the field says more THAN, and 30 is not more than 30.
+    expect(applyFilters(rows, filters({ minDaysText: '30' })).map((r) => r.days)).toEqual([90]);
+    expect(applyFilters(rows, filters({ minDaysText: '29' }))).toHaveLength(3);
+    expect(applyFilters(rows, filters({ minDaysText: '90' }))).toHaveLength(0);
   });
 
-  it('ignores a tenor cap it cannot parse', () => {
+  it('ignores a tenor floor it cannot parse', () => {
     const rows = toRows(book());
     // A half-typed entry must never blank the list.
-    expect(applyFilters(rows, filters({ maxDaysText: '3e' }))).toHaveLength(3);
-    expect(applyFilters(rows, filters({ maxDaysText: '  ' }))).toHaveLength(3);
+    expect(applyFilters(rows, filters({ minDaysText: '3e' }))).toHaveLength(3);
+    expect(applyFilters(rows, filters({ minDaysText: '  ' }))).toHaveLength(3);
   });
 
   it('rejects every numeric literal that is not a plain decimal', () => {
     const rows = toRows(book());
     // `Number()` alone happily reads all of these, each as a silently wrong
-    // cap that Number.isFinite would wave through.
+    // floor that Number.isFinite would wave through.
     for (const text of ['0x10', '0o17', '0b11', '+5', '-5', '1e3', 'Infinity']) {
-      expect(maxDays(filters({ maxDaysText: text }))).toBeNull();
-      expect(applyFilters(rows, filters({ maxDaysText: text }))).toHaveLength(3);
-      expect(hasActiveFilter(filters({ maxDaysText: text }))).toBe(false);
+      expect(minDays(filters({ minDaysText: text }))).toBeNull();
+      expect(applyFilters(rows, filters({ minDaysText: text }))).toHaveLength(3);
+      expect(hasActiveFilter(filters({ minDaysText: text }))).toBe(false);
     }
     // Plain numbers still read, in every shape a person types them.
-    expect(maxDays(filters({ maxDaysText: '60' }))).toBe(60);
-    expect(maxDays(filters({ maxDaysText: '.5' }))).toBeCloseTo(0.5, 12);
-    expect(maxDays(filters({ maxDaysText: '30.' }))).toBe(30);
+    expect(minDays(filters({ minDaysText: '60' }))).toBe(60);
+    expect(minDays(filters({ minDaysText: '.5' }))).toBeCloseTo(0.5, 12);
+    expect(minDays(filters({ minDaysText: '30.' }))).toBe(30);
   });
 });
 
@@ -297,7 +299,8 @@ describe('facets', () => {
 
   it('lists every option even when a filter excludes it, so it stays releasable', () => {
     const rows = toRows(book());
-    const f = facets(rows, filters({ maxDaysText: '0' }));
+    // Nothing matures in more than 90 days — the longest row prints exactly 90.
+    const f = facets(rows, filters({ minDaysText: '90' }));
 
     expect(f.assets.map((o) => o.value)).toEqual(['ETH', 'BTC']);
     expect(f.assets.every((o) => o.count === 0)).toBe(true);
@@ -315,7 +318,7 @@ describe('facets', () => {
 
 describe('persistence', () => {
   it('round-trips a selection', () => {
-    const chosen = filters({ assets: ['BTC'], venues: ['GATE'], maxDaysText: '60' });
+    const chosen = filters({ assets: ['BTC'], venues: ['GATE'], minDaysText: '60' });
     saveFilters(chosen);
 
     expect(loadFilters()).toEqual(chosen);
@@ -338,14 +341,14 @@ describe('persistence', () => {
     expect(loadFilters()).toEqual(filters({ assets: ['ETH'], venues: ['GATE'] }));
   });
 
-  it('re-normalizes venue keys and drops a tenor cap it could not parse', () => {
+  it('re-normalizes venue keys and drops a tenor floor it could not parse', () => {
     localStorage.setItem(
       OPPORTUNITY_FILTERS_STORAGE_KEY,
-      JSON.stringify({ assets: [], venues: ['Gate', 'hyperliquid'], maxDaysText: '0x10' }),
+      JSON.stringify({ assets: [], venues: ['Gate', 'hyperliquid'], minDaysText: '0x10' }),
     );
 
     // Restored as a red field the reader never typed into would be worse than
-    // restored as no cap at all.
+    // restored as no floor at all.
     expect(loadFilters()).toEqual(filters({ venues: ['GATE', 'HYPERLIQUID'] }));
   });
 });
@@ -356,16 +359,16 @@ describe('filter state helpers', () => {
     expect(toggleValue(['ETH', 'BTC'], 'ETH')).toEqual(['BTC']);
   });
 
-  it('maxDays reads the cap in the same unit the rows carry', () => {
-    expect(maxDays(filters({ maxDaysText: '60' }))).toBe(60);
-    expect(maxDays(NO_FILTERS)).toBeNull();
-    expect(maxDays(filters({ maxDaysText: 'abc' }))).toBeNull();
+  it('minDays reads the floor in the same unit the rows carry', () => {
+    expect(minDays(filters({ minDaysText: '60' }))).toBe(60);
+    expect(minDays(NO_FILTERS)).toBeNull();
+    expect(minDays(filters({ minDaysText: 'abc' }))).toBeNull();
   });
 
-  it('hasActiveFilter ignores an unparseable tenor cap', () => {
+  it('hasActiveFilter ignores an unparseable tenor floor', () => {
     expect(hasActiveFilter(NO_FILTERS)).toBe(false);
     expect(hasActiveFilter(filters({ venues: ['GATE'] }))).toBe(true);
-    expect(hasActiveFilter(filters({ maxDaysText: '0' }))).toBe(true);
-    expect(hasActiveFilter(filters({ maxDaysText: 'x' }))).toBe(false);
+    expect(hasActiveFilter(filters({ minDaysText: '0' }))).toBe(true);
+    expect(hasActiveFilter(filters({ minDaysText: 'x' }))).toBe(false);
   });
 });

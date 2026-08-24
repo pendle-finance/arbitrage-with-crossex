@@ -464,7 +464,7 @@ describe('OpportunitiesPanel — collapse', () => {
     expect(
       screen.getByRole('button', { name: /^Hedge the perps for ETH short Hyperliquid/ }),
     ).toBeInTheDocument();
-    expect(toggles()[0]).toHaveTextContent('Details');
+    expect(toggles()[0]).toHaveTextContent('More details');
     expect(toggles()[0]).toHaveAttribute('aria-expanded', 'false');
     expect(container.querySelector('[data-waterfall]')).toBeNull();
     expect(screen.queryByText('Boros taker fee')).not.toBeInTheDocument();
@@ -1323,18 +1323,18 @@ describe('OpportunitiesPanel — filters', () => {
     expect(chip(/^BTC 1$/)).toHaveAttribute('aria-disabled', 'false');
   });
 
-  it('caps the tenor in days, keeping the card that prints exactly that number', async () => {
+  it('floors the tenor in days, cutting the card that prints exactly that number', async () => {
     server.use(opportunitiesHandler(multiPairResult()));
     renderWithClient(<OpportunitiesPanel />);
 
     // Two 30-day ETH cards and one 90-day BTC card.
     await waitFor(() => expect(toggles()).toHaveLength(3));
     await openMoreFilters();
-    await userEvent.type(screen.getByLabelText('Matures within'), '30');
+    await userEvent.type(screen.getByLabelText('Matures in more than'), '30');
 
-    // The 90-day cohort goes; "(30 days)" is inside a 30-day cap, not outside.
-    await waitFor(() => expect(toggles()).toHaveLength(2));
-    expect(screen.queryByText('8.0% APR')).not.toBeInTheDocument();
+    // Only the 90-day cohort survives: "(30 days)" is not MORE THAN 30.
+    await waitFor(() => expect(toggles()).toHaveLength(1));
+    expect(screen.getByText('8.0% APR')).toBeInTheDocument();
   });
 
   it('offers no filter row for a dimension that cannot exclude anything', async () => {
@@ -1364,7 +1364,7 @@ describe('OpportunitiesPanel — filters', () => {
     const popover = screen.getByRole('dialog', { name: /venue, maturity and APR/i });
     expect(trigger).toHaveAttribute('aria-controls', popover.id);
     expect(within(popover).getByText('Venue')).toBeInTheDocument();
-    expect(within(popover).getByLabelText('Matures within')).toBeInTheDocument();
+    expect(within(popover).getByLabelText('Matures in more than')).toBeInTheDocument();
     // The APR floor is gone — the hero APR is what the list is already sorted
     // by, so a second way to say "at least this much" earned nothing.
     expect(within(popover).queryByLabelText('Min APR')).not.toBeInTheDocument();
@@ -1387,7 +1387,7 @@ describe('OpportunitiesPanel — filters', () => {
   it('restores last session\u2019s selection, and keeps it visible while it narrows', async () => {
     localStorage.setItem(
       OPPORTUNITY_FILTERS_STORAGE_KEY,
-      JSON.stringify({ assets: ['BTC'], venues: ['GATE'], maxDaysText: '' }),
+      JSON.stringify({ assets: ['BTC'], venues: ['GATE'], minDaysText: '' }),
     );
     server.use(opportunitiesHandler(multiPairResult()));
     renderWithClient(<OpportunitiesPanel />);
@@ -1406,7 +1406,7 @@ describe('OpportunitiesPanel — filters', () => {
     // SOL priced yesterday; today it does not.
     localStorage.setItem(
       OPPORTUNITY_FILTERS_STORAGE_KEY,
-      JSON.stringify({ assets: ['SOL'], venues: [], maxDaysText: '' }),
+      JSON.stringify({ assets: ['SOL'], venues: [], minDaysText: '' }),
     );
     server.use(opportunitiesHandler(multiPairResult()));
     renderWithClient(<OpportunitiesPanel />);
@@ -1503,7 +1503,7 @@ describe('OpportunitiesPanel — filters', () => {
 
     await waitFor(() => expect(toggles()).toHaveLength(3));
     await openMoreFilters();
-    await userEvent.type(screen.getByLabelText('Matures within'), '1');
+    await userEvent.type(screen.getByLabelText('Matures in more than'), '999');
 
     await waitFor(() =>
       expect(screen.getByText('No opportunity matches these filters')).toBeInTheDocument(),
