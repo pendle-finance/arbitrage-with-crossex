@@ -150,9 +150,31 @@ describe('withRow', () => {
     expect(withRow(partial, { mode: 'orphan', leg })).toEqual([{ leg }]);
   });
 
-  it('auto forgets everything said about the leg', () => {
+  /**
+   * ⚠ Automatic is SCOPED, like orphan and for the same reason.
+   *
+   * It used to drop every row naming the leg, so choosing it on the unclaimed
+   * remainder of a shared leg also deleted the pin another card held — a card
+   * the user never touched — and the solver then swept the whole venue leg
+   * into one position.
+   */
+  it('auto forgets one position\'s claim and leaves the rest of the leg alone', () => {
+    const out = withRow([{ positionId: 'aa', leg }, { positionId: 'bb', leg }, { leg }, BOROS], {
+      mode: 'auto',
+      leg,
+      positionId: 'aa',
+    });
+    expect(out).toEqual([{ positionId: 'bb', leg }, { leg }, BOROS]);
+  });
+
+  it('auto with no position forgets the ORPHAN rows — what it means on an unhedged card', () => {
     const out = withRow([{ positionId: 'aa', leg }, { leg }, BOROS], { mode: 'auto', leg });
-    expect(out).toEqual([BOROS]);
+    expect(out).toEqual([{ positionId: 'aa', leg }, BOROS]);
+  });
+
+  it('auto on a leg this position never claimed changes nothing', () => {
+    const rows = [{ positionId: 'aa', leg }, BOROS];
+    expect(withRow(rows, { mode: 'auto', leg, positionId: 'zz' })).toEqual(rows);
   });
 
   it('keys a leg by the venue\'s own identifier', () => {

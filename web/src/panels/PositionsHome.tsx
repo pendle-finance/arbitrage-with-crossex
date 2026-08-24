@@ -40,7 +40,6 @@ import {
   saveRows,
   withRow,
   type MembershipRow,
-  type RowChange,
 } from './partitionStore';
 import {
   legRefOf,
@@ -365,9 +364,29 @@ export function PositionsHome() {
             saveOverrides(bookId, nextEntries, Math.floor(Date.now() / 1000));
             return nextEntries;
           });
-        } else {
-          const change: RowChange = { mode: a.mode, leg: a.leg };
-          next = withRow(next, change);
+        } else if (a.mode === 'auto') {
+          /**
+           * ⚠ FORGET ONLY WHAT THIS CARD SAID, never the whole leg.
+           *
+           * This dropped every row naming the leg. On a shared one that meant
+           * pressing Automatic on the unclaimed 0.04 remainder also deleted
+           * the 0.01 a pinned card held — a card the user never touched — and
+           * the solver, now seeing all 0.05 free, swept it into one position.
+           * The pinned card silently lost its leg. `orphan` above carries the
+           * same warning; this mode simply never got it.
+           *
+           * Which rows are "this card's" follows from how the card exists at
+           * all: a PINNED card owns rows under its own id, and an UNHEDGED
+           * card IS what an orphan row produces, so its rows carry no id. A
+           * solver-proposed card asserted nothing, so it has nothing to
+           * forget — Automatic is already true of it, and touching the orphan
+           * rows from there would strip a neighbour's detachment instead.
+           */
+          if (from.attribution.pinned) {
+            next = withRow(next, { mode: 'auto', leg: a.leg, positionId: from.strategyId });
+          } else if (from.attribution.source === 'unhedged') {
+            next = withRow(next, { mode: 'auto', leg: a.leg });
+          }
         }
         saveRows(bookId, next, Math.floor(Date.now() / 1000));
         return next;

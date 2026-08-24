@@ -1237,3 +1237,128 @@ describe('PositionsHome — a close shrinks the claim it came from', () => {
     expect(claims()[0].qty).toBeUndefined();
   });
 });
+
+/**
+ * "Automatic" is scoped to the card it was pressed on.
+ *
+ * A shared venue leg is on more than one card. Choosing Automatic on the
+ * unclaimed remainder used to delete EVERY row naming that leg — including
+ * the pin a hand-grouped card held on it, a card the user never touched — and
+ * the solver, now seeing the whole venue leg free, swept all of it into one
+ * position. The pinned card silently lost its leg.
+ */
+describe('PositionsHome — Automatic forgets only this card', () => {
+  const PINNED = 'a1b2c3d4';
+  const MARKET = 190;
+  const MINE = 0.01;
+  const REST = 0.04;
+
+  const track = () =>
+    localStorage.setItem(STRATEGY_STORAGE_KEY, JSON.stringify({ address: ADDR, since: null }));
+
+  const borosLeg = (notionalToken: number, share: number) =>
+    makeStrategyLeg({
+      marketId: MARKET,
+      venue: 'HYPERLIQUID',
+      side: 'SHORT' as const,
+      notionalToken,
+      share,
+    });
+
+  /** One venue leg of 0.05, split: 0.01 pinned to a hand-grouped card, 0.04
+   * left over as its own unhedged card. */
+  const sharedBook = () =>
+    makeStrategyReturns({
+      strategies: [
+        makeStrategyRollup({
+          strategyId: PINNED,
+          attribution: { source: 'user', confidence: 'measured', pinned: true },
+          legs: [
+            makeStrategyLeg({
+              kind: 'perp',
+              venue: 'BINANCE',
+              side: 'LONG',
+              symbol: 'BINANCE_FUTURE_HYPE_USDT',
+              notionalToken: 0.05,
+              collateral: undefined,
+              entryApr: undefined,
+              markApr: undefined,
+              floatingApr: undefined,
+              maturity: undefined,
+            }),
+            borosLeg(MINE, MINE / (MINE + REST)),
+          ],
+        }),
+        makeStrategyRollup({
+          strategyId: 'HYPE#unhedged:190',
+          attribution: { source: 'unhedged', confidence: 'measured', pinned: false },
+          hedge: 'unhedged',
+          legs: [borosLeg(REST, REST / (MINE + REST))],
+        }),
+      ],
+    });
+
+  const seed = (rows: unknown[]) =>
+    localStorage.setItem(
+      'crossex.partition.v1',
+      JSON.stringify({ [BOOK]: { rows, savedAtSec: 1_700_000_000 } }),
+    );
+  const rowsNow = (): Array<{ positionId?: string; qty?: number }> =>
+    JSON.parse(localStorage.getItem('crossex.partition.v1') ?? '{}')[BOOK]?.rows ?? [];
+
+  /** Automatic on the LAST assign trigger — the unhedged card renders after
+   * the pinned one, and holds only the Boros leg. */
+  const automaticOnRemainder = async () => {
+    for (const t of screen.getAllByRole('button', { name: 'toggle details' })) fireEvent.click(t);
+    const triggers = screen.getAllByTitle(/click to assign|click to change/);
+    fireEvent.click(triggers[triggers.length - 1]);
+    fireEvent.click(screen.getByRole('button', { name: /Automatic/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+  };
+
+  it('hands the remainder back without stripping the pin on the same leg', async () => {
+    track();
+    seed([
+      { positionId: PINNED, leg: { kind: 'boros', marketId: MARKET }, qty: MINE },
+      { leg: { kind: 'boros', marketId: MARKET }, qty: REST },
+    ]);
+    mockPositions();
+    mockStrategy(sharedBook());
+    renderWithClient(<PositionsHome />);
+    await screen.findByText('grouped by you');
+
+    await automaticOnRemainder();
+
+    // The orphan row goes — that is what Automatic was asked for…
+    await waitFor(() => expect(rowsNow().filter((r) => r.positionId === undefined)).toEqual([]));
+    // …and the hand-grouped card keeps its 0.01. It was never in the question.
+    expect(rowsNow()).toEqual([
+      { positionId: PINNED, leg: { kind: 'boros', marketId: MARKET }, qty: MINE },
+    ]);
+  });
+
+  it('still sends the pin to the server, so the card does not lose the leg', async () => {
+    track();
+    seed([
+      { positionId: PINNED, leg: { kind: 'boros', marketId: MARKET }, qty: MINE },
+      { leg: { kind: 'boros', marketId: MARKET }, qty: REST },
+    ]);
+    mockPositions();
+    const urls: string[] = [];
+    server.use(
+      http.get('/api/strategy/:address', ({ request }) => {
+        urls.push(request.url);
+        return HttpResponse.json(env(sharedBook()));
+      }),
+    );
+    renderWithClient(<PositionsHome />);
+    await screen.findByText('grouped by you');
+
+    await automaticOnRemainder();
+
+    // Every request after the change still carries a partition — an empty one
+    // would mean the whole leg went back to the solver, which is the bug.
+    await waitFor(() => expect(urls.length).toBeGreaterThan(1));
+    expect(urls[urls.length - 1]).toContain('partition=');
+  });
+});

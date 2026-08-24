@@ -135,15 +135,25 @@ export type RowChange =
    * detaches only that much of a SHARED leg, leaving other positions' claims
    * alone; without it the whole venue leg is orphaned. */
   | { mode: 'orphan'; leg: LegRef; qty?: number }
-  /** Forget everything said about it; the solver decides again. */
-  | { mode: 'auto'; leg: LegRef };
+  /**
+   * Forget what THIS position said about it; the solver decides its share
+   * again.
+   *
+   * ⚠ SCOPED, like `orphan` above and for the same reason. It used to drop
+   * EVERY row on the leg, so pressing Automatic on the unclaimed remainder of
+   * a shared leg also deleted the pin another card held on it — a card the
+   * user never touched — and the solver then swept the whole venue leg into
+   * one position. `positionId` names the claim to forget; ABSENT means the
+   * orphan rows, which is what Automatic means on an unhedged card.
+   */
+  | { mode: 'auto'; leg: LegRef; positionId?: string };
 
 export function withRow(rows: readonly MembershipRow[], change: RowChange): MembershipRow[] {
   const key = legRefKey(change.leg);
   const onLeg = (r: MembershipRow) => legRefKey(r.leg) === key;
   switch (change.mode) {
     case 'auto':
-      return rows.filter((r) => !onLeg(r));
+      return rows.filter((r) => !(onLeg(r) && r.positionId === change.positionId));
     case 'orphan': {
       const orphans = rows.filter((r) => onLeg(r) && r.positionId === undefined);
       // The WHOLE leg: exclusive, so no position may keep a claim on any of it.
