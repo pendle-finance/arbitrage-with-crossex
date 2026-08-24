@@ -21,6 +21,20 @@ export class ApiError extends Error {
   }
 }
 
+const API_TOKEN_STORAGE_KEY = 'arb-api-token';
+const API_TOKEN_PATTERN = /^[0-9a-f]{64}$/;
+
+type TokenStorage = Pick<Storage, 'getItem' | 'setItem'>;
+
+function storedApiToken(storage: TokenStorage): string | null {
+  try {
+    const token = storage.getItem(API_TOKEN_STORAGE_KEY);
+    return token && API_TOKEN_PATTERN.test(token) ? token : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Resolve /api paths against the page origin so requests work in the browser
  * (Vite dev proxy → localhost:6688) AND in jsdom/msw tests (absolute URLs). */
 function apiUrl(path: string): string {
@@ -29,26 +43,87 @@ function apiUrl(path: string): string {
   return new URL(`/api${path}`, origin).toString();
 }
 
-/** The per-install API token, injected into index.html by the backend that
- * serves it. Absent in dev (the Vite proxy attaches the header server-side);
- * the untouched placeholder means the same thing —
- * this page did not come from the terminal backend, so send nothing. */
-function authHeader(): Record<string, string> {
-  const t =
-    typeof document === 'undefined'
-      ? null
-      : document.querySelector('meta[name="arb-token"]')?.getAttribute('content');
-  return t && t !== '__ARB_TOKEN__' ? { 'x-arb-token': t } : {};
+/**
+ * Consume a launcher fragment and return the token this page should use.
+ * Clearing happens before validation starts, so the bearer does not linger in
+ * the address bar or browser history. A failed candidate never overwrites a
+ * token that was successfully bootstrapped earlier.
+ */
+export async function bootstrapApiToken(options: {
+  hostname: string;
+  hash: string;
+  storage: TokenStorage;
+  clearFragment: () => void;
+  validate: (candidate: string) => Promise<boolean>;
+}): Promise<string | null> {
+  const local = options.hostname === 'localhost' || options.hostname === '127.0.0.1';
+  const match = local ? /^#token=([0-9a-f]{64})$/.exec(options.hash) : null;
+
+  // Scrub anything presented as a token even when malformed or on a foreign
+  // origin. Only an exact local match is ever validated or persisted.
+  if (options.hash.startsWith('#token=')) options.clearFragment();
+
+  const previous = local ? storedApiToken(options.storage) : null;
+  const candidate = match?.[1];
+  if (!candidate) return previous;
+
+  try {
+    if (!(await options.validate(candidate))) return previous;
+  } catch {
+    return previous;
+  }
+  try {
+    options.storage.setItem(API_TOKEN_STORAGE_KEY, candidate);
+  } catch {
+    // Storage can be unavailable in locked-down browsers. The validated token
+    // still authenticates this page load; the launcher can bootstrap the next.
+  }
+  return candidate;
+}
+
+const browserToken = typeof window === 'undefined'
+  ? Promise.resolve<string | null>(null)
+  : bootstrapApiToken({
+      hostname: window.location.hostname,
+      hash: window.location.hash,
+      storage: window.localStorage,
+      clearFragment: () => {
+        window.history.replaceState(window.history.state, '', `${window.location.pathname}${window.location.search}`);
+      },
+      validate: async (candidate) => {
+        try {
+          const response = await fetch(apiUrl('/credentials'), {
+            method: 'GET',
+            credentials: 'omit',
+            headers: { 'x-arb-token': candidate },
+          });
+          return response.ok;
+        } catch {
+          return false;
+        }
+      },
+    });
+
+async function authHeader(): Promise<Record<string, string>> {
+  const bootstrapped = await browserToken;
+  if (
+    typeof window === 'undefined' ||
+    (window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1')
+  ) {
+    return {};
+  }
+  const token = bootstrapped ?? storedApiToken(window.localStorage);
+  return token ? { 'x-arb-token': token } : {};
 }
 
 export async function fetchJson<T>(path: string, init: RequestInit = {}): Promise<T> {
   let resp: Response;
   try {
     resp = await fetch(apiUrl(path), {
-      credentials: 'same-origin',
       ...init,
+      credentials: 'omit',
       headers: {
-        ...authHeader(),
+        ...(await authHeader()),
         ...(init.body ? { 'content-type': 'application/json' } : {}),
         ...(init.headers ?? {}),
       },

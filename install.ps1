@@ -12,9 +12,9 @@
     3. Installs the app's dependencies and builds its web interface.
     4. Registers a background Scheduled Task so the app is always running for
        you, even after you restart Windows.
-    5. Opens http://localhost:6688 in your browser and puts a shortcut in your
-       Start Menu. Your Gate.io API keys are entered later, in the browser -
-       never in this terminal.
+    5. Opens the app securely in your browser and puts a shortcut in your Start
+       Menu. Your Gate.io API keys are entered later, in the browser - never in
+       this terminal.
 
   Re-running this command updates the app in place - it stops the previously
   running version first (including any orphaned/wedged copy), so an old version
@@ -55,6 +55,7 @@ $LogDir   = Join-Path $Root 'logs'
 
 $ServerEntry = Join-Path $Root 'app\src\server\index.ts'
 $RunnerPath  = Join-Path $Root 'run-server.ps1'
+$LauncherPath = Join-Path $Root 'open-app.ps1'
 $Tmp = $null
 
 function Say  { param([string]$m) Write-Host '==> ' -ForegroundColor Cyan -NoNewline; Write-Host $m }
@@ -637,17 +638,49 @@ the app never started listening on port $Port.
 }
 
 function New-Launcher {
-  # A plain internet shortcut in the Start Menu - nothing to sign, nothing for
-  # SmartScreen to object to.
+  # The script and shortcut contain only the token FILE path (relative to the
+  # install root). Every click reads the current owner-protected value and URL-
+  # encodes it into a fragment, which browsers never send in the HTTP request.
+  $launcherScript = @'
+param()
+$ErrorActionPreference = 'Stop'
+$tokenFile = Join-Path $PSScriptRoot 'config\api-token'
+try {
+  $apiToken = [IO.File]::ReadAllText($tokenFile).Trim()
+  if ($apiToken -cnotmatch '^[0-9a-f]{64}$') {
+    throw "The local API token is missing or invalid: $tokenFile"
+  }
+  $encodedToken = [Uri]::EscapeDataString($apiToken)
+  Start-Process "http://localhost:__PORT__/#token=$encodedToken" | Out-Null
+} catch {
+  $message = "CrossEx-Boros could not read its local API token. Re-run the installer or restart the service, then use this launcher again.`n`n$($_.Exception.Message)"
+  try {
+    $shell = New-Object -ComObject WScript.Shell
+    $null = $shell.Popup($message, 0, 'CrossEx-Boros launcher', 48)
+  } catch {}
+  Start-Process "http://localhost:__PORT__/" | Out-Null
+}
+'@
+  $launcherScript = $launcherScript.Replace('__PORT__', [string]$Port)
+  Set-Content -Path $LauncherPath -Value $launcherScript -Encoding UTF8
+
   $programs = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs'
   New-Item -ItemType Directory -Force -Path $programs | Out-Null
-  # Shortcuts left by a previous product name - otherwise the Start Menu keeps
-  # one entry per name this app has ever had, all pointing at the same port.
-  foreach ($legacy in $LegacyTitles) {
-    Remove-Item -Path (Join-Path $programs "$legacy.url") -Force -ErrorAction SilentlyContinue
+  # Remove both the retired .url launchers and generated .lnk launchers from
+  # every previous product name before creating the current shortcut.
+  foreach ($title in @($AppTitle) + $LegacyTitles) {
+    foreach ($extension in @('url', 'lnk')) {
+      Remove-Item -Path (Join-Path $programs "$title.$extension") -Force -ErrorAction SilentlyContinue
+    }
   }
-  $lnk = Join-Path $programs "$AppTitle.url"
-  "[InternetShortcut]`r`nURL=http://localhost:$Port`r`n" | Set-Content -Path $lnk -Encoding ASCII
+
+  $lnk = Join-Path $programs "$AppTitle.lnk"
+  $shell = New-Object -ComObject WScript.Shell
+  $shortcut = $shell.CreateShortcut($lnk)
+  $shortcut.TargetPath = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+  $shortcut.Arguments = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$LauncherPath`""
+  $shortcut.WorkingDirectory = $Root
+  $shortcut.Save()
 }
 
 # ---------------------------------------------------------------------------
@@ -667,15 +700,15 @@ try {
   Wait-ForServer
   New-Launcher
   Write-Host ''
-  Say "Done! Opening http://localhost:$Port ..."
+  Say "Done! Opening $AppTitle ..."
   Write-Host ''
   Write-Host "  * The app now runs in the background, and starts again when you sign in."
-  Write-Host "  * Open it any time at http://localhost:$Port (bookmark it!) or via"
-  Write-Host "    `"$AppTitle`" in your Start Menu."
+  Write-Host "  * Open it any time via `"$AppTitle`" in your Start Menu."
+  Write-Host "    After that first secure launch, an ordinary http://localhost:$Port reload works too."
   Write-Host '  * First time? The app will ask for your Gate.io API keys in the browser.'
   Write-Host '  * Update any time by re-running the install command.'
   Write-Host ''
-  Start-Process "http://localhost:$Port" | Out-Null
+  & $LauncherPath
 } finally {
   Remove-Temp
 }
