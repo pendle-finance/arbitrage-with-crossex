@@ -10,6 +10,7 @@ import { useToast } from '../components/Toast';
 import { buildShareUrl, buildShortShareUrl, buildXIntentUrl, shareFileName } from '../lib/share';
 import { renderShareCard } from '../lib/shareCard';
 import { encodeSharePayload, type SharePayloadV1 } from '../lib/shareCodec';
+import { useTrackedAddressOptional } from './trackedAddress';
 
 /** `ClipboardItem` accepts a Blob PROMISE — and Safari in fact requires the
  * promise form (constructing after an await loses the user gesture). */
@@ -18,6 +19,12 @@ const canCopyImage = () =>
 
 export function SharePositionModal({ payload, onClose }: { payload: SharePayloadV1; onClose: () => void }) {
   const toast = useToast();
+  // The tracked address rides ALONGSIDE the payload when the code is minted —
+  // never inside it. The wire format has no address field by construction and
+  // the link is posted in public; this travels raw in the POST body, is stored
+  // next to the code, and is never echoed by the resolve endpoint. It exists so
+  // a share code can be checked against what that wallet actually held.
+  const trackedAddress = useTrackedAddressOptional()?.address ?? null;
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [dataUrl, setDataUrl] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
@@ -44,7 +51,7 @@ export function SharePositionModal({ payload, onClose }: { payload: SharePayload
     } catch {
       return;
     }
-    postJson<{ code: string }>('/share-link', { d })
+    postJson<{ code: string }>('/share-link', trackedAddress ? { d, address: trackedAddress } : { d })
       .then((r) => {
         if (!cancelled && r?.code) setShortUrl(buildShortShareUrl(r.code));
       })
@@ -52,7 +59,7 @@ export function SharePositionModal({ payload, onClose }: { payload: SharePayload
     return () => {
       cancelled = true;
     };
-  }, [payload]);
+  }, [payload, trackedAddress]);
 
   const shareUrl = shortUrl ?? longUrl;
 
@@ -118,7 +125,9 @@ export function SharePositionModal({ payload, onClose }: { payload: SharePayload
         <p className="text-xs leading-relaxed text-ink-500">
           X can't attach an image from a link — the post opens pre-filled with your link; download
           or copy the image and add it in the compose window. Your wallet address is not part of
-          the link or the image, and leg details are rounded to display precision.
+          the link or the image, and leg details are rounded to display precision. Pendle does store
+          your address with the short code, so a shared position can be checked for incentive
+          campaigns.
         </p>
 
         {shareUrl && (

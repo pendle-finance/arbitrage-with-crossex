@@ -6,10 +6,15 @@ import { ToastProvider } from '../components/Toast';
 import { fmtDateUtc } from '../lib/fmt';
 import { buildShareUrl, buildShortShareUrl } from '../lib/share';
 import { renderShareCard } from '../lib/shareCard';
-import { decodeSharePayload } from '../lib/shareCodec';
+import { decodeSharePayload, encodeSharePayload } from '../lib/shareCodec';
+import { writeJson } from '../lib/storage';
 import { makeSharePayload } from '../test/fixtures';
 import { env, server } from '../test/server';
+import { loadStored, STRATEGY_STORAGE_KEY } from './HomeControls';
 import { SharePositionModal } from './SharePositionModal';
+import { TrackedAddressProvider } from './trackedAddress';
+
+const TRACKED = '0xAbC0000000000000000000000000000000000123';
 
 // jsdom has no 2D canvas — stub the renderer with a canvas-shaped object.
 vi.mock('../lib/shareCard', () => ({
@@ -27,6 +32,19 @@ const mount = () =>
       <SharePositionModal payload={payload} onClose={() => {}} />
     </ToastProvider>,
   );
+
+/** Same modal, but inside the provider and with an address already tracked —
+ * the only difference the mint call should see. */
+const mountTracked = () => {
+  writeJson(STRATEGY_STORAGE_KEY, { ...loadStored(), address: TRACKED });
+  return render(
+    <ToastProvider>
+      <TrackedAddressProvider>
+        <SharePositionModal payload={payload} onClose={() => {}} />
+      </TrackedAddressProvider>
+    </ToastProvider>,
+  );
+};
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -91,6 +109,41 @@ describe('SharePositionModal', () => {
     mount();
     expect(screen.getByText(/X can't attach an image from a link/)).toBeInTheDocument();
     expect(screen.getByText(/wallet address is not part of the link/)).toBeInTheDocument();
+    // The address is not in the link, but it IS recorded — say both.
+    expect(screen.getByText(/does store\s+your address with the short code/)).toBeInTheDocument();
+  });
+
+  it('sends the tracked address raw alongside the payload — never inside it', async () => {
+    const bodies: Array<Record<string, unknown>> = [];
+    server.use(
+      http.post('*/api/share-link', async ({ request }) => {
+        bodies.push((await request.json()) as Record<string, unknown>);
+        return HttpResponse.json(env({ code: 'Abc123_-xyz', expiresAt: 0 }));
+      }),
+    );
+    mountTracked();
+    await waitFor(() => expect(bodies).toHaveLength(1));
+    expect(bodies[0].address).toBe(TRACKED);
+    // The payload is byte-identical to the address-less one, so the public
+    // link never carries the wallet.
+    expect(bodies[0].d).toBe(encodeSharePayload(payload));
+    const input = screen.getByLabelText('Position share link') as HTMLInputElement;
+    await waitFor(() => expect(input.value).toBe(buildShortShareUrl('Abc123_-xyz')));
+    expect(input.value).not.toContain(TRACKED.toLowerCase());
+    expect(input.value).not.toContain(TRACKED);
+  });
+
+  it('omits the address entirely when none is tracked', async () => {
+    const bodies: Array<Record<string, unknown>> = [];
+    server.use(
+      http.post('*/api/share-link', async ({ request }) => {
+        bodies.push((await request.json()) as Record<string, unknown>);
+        return HttpResponse.json(env({ code: 'Abc123_-xyz', expiresAt: 0 }));
+      }),
+    );
+    mount(); // no provider at all — the modal must still mint
+    await waitFor(() => expect(bodies).toHaveLength(1));
+    expect(Object.keys(bodies[0])).toEqual(['d']);
   });
 
   it('upgrades the link (and the X intent) to the short URL once the backend mints a code', async () => {

@@ -532,6 +532,9 @@ export function resolveCollateralPricesUsd(markets: BorosMarket[]): Map<number, 
 export async function createShareShortLink(
   fetchImpl: FetchLike,
   d: string,
+  /** The sharer's tracked address, lowercased — sent RAW alongside `d`, never
+   * folded into it, and never part of the resulting public link. */
+  address?: string,
 ): Promise<{ code: string; expiresAt: number }> {
   const clientTag =
     'pendle_client=boroscrossex' + clientTagState.version + (clientTagState.active ? '_active' : '');
@@ -541,7 +544,7 @@ export async function createShareShortLink(
     resp = await fetchImpl(url, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ d }),
+      body: JSON.stringify(address ? { d, address } : { d }),
       // Snappier than the read timeout: the modal already shows the long link,
       // a short link that takes this long isn't worth upgrading to.
       signal: AbortSignal.timeout(10_000),
