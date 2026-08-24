@@ -1,9 +1,12 @@
 /** Pure taxonomy for the home view: every position lands in exactly one box.
  *
  * - 'strategy'  — a server StrategyRollup. With the strategy feed live this is
- *                 EVERY position: the solver emits a card per coin, including
- *                 Boros-less pairs (`BASE#perps`) and unclaimed size
+ *                 EVERY position: the solver emits a card per PAIR, including
+ *                 Boros-less pairs and every leg no pair claimed
  *                 (`BASE#unhedged:SYMBOL`), so the leftover set is empty.
+ *                 (Cards stay merged, and may hold more than one pair, when
+ *                 the server could not reconcile the split — it says so in
+ *                 the card's own warnings rather than guessing a grouping.)
  * - 'perp-only' / 'stray' — the DEGRADED path only: exposure groups whose base
  *                 has no rollup. That happens when no address is tracked (the
  *                 strategy feed never runs) or the feed failed — the positions

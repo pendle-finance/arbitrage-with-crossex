@@ -31,6 +31,8 @@ import {
   allocateBorosByEvidence,
   borosIncrements,
   solvePerpPartition,
+  TIME_SCALE_SEC,
+  type BorosIncrement,
   type DealFillRecord,
   type PerpFillRecord,
   type PerpLegSnapshot,
@@ -1431,11 +1433,27 @@ export function buildStrategies(input: BuildStrategiesInput): StrategyReturns {
    * it a card is what makes it answerable with the same control as everything
    * else, and shows its funding and fees, which the strip never did.
    *
-   * Every coin gets this treatment, in the shape its leftovers actually have:
-   *  - a BOROS coin's leftovers are per-leg cards — each remainder is what one
-   *    strategy released, and they have nothing to do with each other;
-   *  - a coin with NO Boros keeps its legs together on one card — a
-   *    delta-neutral pair waiting for its rate lock is one position, not two.
+   * ⚠ A POSITION IS AT MOST TWO PERP LEGS AND TWO BOROS LEGS — one of each per
+   * venue, opposite sides. A coin with no Boros used to have ALL its perp legs
+   * pooled onto one `BASE#perps` card, on the reasoning that a delta-neutral
+   * pair waiting for its rate lock is one position. That reasoning only holds
+   * while the coin has exactly one pair: a book with two longs against one
+   * short is TWO strategies sharing a venue leg, and pooling them produced a
+   * three-legged card whose header could only name two of its venues, whose
+   * hedge ratios compared sums rather than pairs, and whose missing-Boros rows
+   * sized themselves off one leg of a side they had summed.
+   *
+   * So the pairing comes from the same solver every Boros coin uses — the
+   * tranche cards `splitStrategies` already builds — and only what NO tranche
+   * could pair reaches here. What does is per-leg: a remainder is what one
+   * strategy released, and remainders have nothing to do with each other.
+   *
+   * The one exception is `mergedStrategies`, the branch taken when the split
+   * does NOT reconcile. There the solver has said it cannot explain the book,
+   * so its cards stay merged and may hold any number of legs — splitting a
+   * book you have just declared unsplittable would be a guess wearing the
+   * clothes of a measurement. This whole pass is gated on `reconciled` for the
+   * same reason.
    */
   if (partition.reconciled) {
     const shown = new Map<string, number>();
@@ -1485,20 +1503,13 @@ export function buildStrategies(input: BuildStrategiesInput): StrategyReturns {
         capitalBasis: input.capitalBasis ?? 'balance',
       });
 
-    const pairless = new Map<string, PerpLegBuild[]>();
+    // Whatever no card claimed: one leg, one position. Keyed by the leg,
+    // because that is all this position is. Stable across re-solves, and
+    // distinguishable from a minted position id.
     for (const b of perpBuildsAll) {
       const left = leftoverOf(b);
       if (!left) continue;
-      if (borosBases.has(b.leg.base)) {
-        // Keyed by the leg, because that is all this position is. Stable
-        // across re-solves, and distinguishable from a minted position id.
-        strategies.push(card(`${b.leg.base}#unhedged:${b.symbol}`, b.leg.base, [left]));
-      } else {
-        pairless.set(b.leg.base, [...(pairless.get(b.leg.base) ?? []), left]);
-      }
-    }
-    for (const [base, builds] of pairless) {
-      strategies.push(card(`${base}#perps`, base, builds));
+      strategies.push(card(`${b.leg.base}#unhedged:${b.symbol}`, b.leg.base, [left]));
     }
   }
 
@@ -1639,6 +1650,8 @@ function applyMembership(
   const borosLeft = new Map<number, number>();
   const cards: StrategyRollup[] = [];
   const orphanedBoros: BorosLegBuild[] = [];
+  /** marketId → detached token size, summed over every row that detached it. */
+  const detachedByMarket = new Map<number, number>();
   /** See the note on the return type. Filled while reconciling entries. */
   const impliedByLeg = new Map<string, number>();
   const rows = input.membership ?? [];
@@ -1718,10 +1731,12 @@ function applyMembership(
       // derived pass reports whatever the cards do not show, by subtraction,
       // and a second list of the same size here was never read. Keeping one
       // would put two sources of truth behind one number.
+      // Accumulated PER MARKET, not per row: two rows detaching two chunks of
+      // one leg detach one leg, and pushing a build each made two cards out of
+      // one unclaimed position — with the same id, since a card is named for
+      // the legs it holds.
       if (leg.kind === 'boros') {
-        const b = borosByMarket.get(leg.marketId) as BorosLegBuild;
-        const whole = b.leg.notionalToken ?? 0;
-        orphanedBoros.push(got >= whole * (1 - 1e-9) ? b : scaleBorosBuild(b, got / whole));
+        detachedByMarket.set(leg.marketId, (detachedByMarket.get(leg.marketId) ?? 0) + got);
       }
       return;
     }
@@ -1753,6 +1768,14 @@ function applyMembership(
     }
     const each = left / claimants.length;
     for (const r of claimants) take(r.positionId, r.leg, each, false);
+  }
+
+  // Every detachment of one leg, as the ONE leg it is. Done after the draw so
+  // rows that detached the same market in several bites are already summed.
+  for (const [marketId, got] of detachedByMarket) {
+    const b = borosByMarket.get(marketId) as BorosLegBuild;
+    const whole = b.leg.notionalToken ?? 0;
+    orphanedBoros.push(got >= whole * (1 - 1e-9) ? b : scaleBorosBuild(b, got / whole));
   }
 
   /**
@@ -2103,29 +2126,7 @@ function splitStrategies(
   const boundVenues = new Map<string, string[]>();
   {
     const cohortLegs = borosLegsOf(cohortList);
-    const atoms: GroupingAtom[] = [];
-    for (const b of cohortLegs) {
-      const whole = b.leg.notionalToken ?? 0;
-      const incs = incrementsFor(b.marketId, whole);
-      // A leg whose history cannot be replayed has no increments to pair; it
-      // still gets grouped, just with no co-execution evidence.
-      if (!incs) continue;
-      // Boros LONG receives floating (+), SHORT pays it (−) — the same sign
-      // convention the hedge check uses, so opposite signs really do cancel.
-      const sign = b.leg.side === 'LONG' ? 1 : -1;
-      incs.forEach((inc, i) => {
-        atoms.push({
-          id: `boros:${b.marketId}#${i}`,
-          legKey: `boros:${b.marketId}`,
-          venue: b.leg.venue,
-          base: b.leg.base,
-          floating: sign * inc.qty,
-          qty: inc.qty,
-          rate: inc.fixedApr,
-          at: { kind: 'at', sec: inc.timeSec },
-        });
-      });
-    }
+    const { atoms } = borosAtoms(cohortLegs, incrementsFor);
     const execs = bindExecutions(atoms, {
       historyComplete: input.borosHistoryComplete !== false,
     });
@@ -2242,19 +2243,24 @@ function splitStrategies(
    * card has a base and a maturity to render.
    *
    * When there is no cohort at all on its coin — every Boros leg spoken for by
-   * someone else — it becomes its own cohort with nothing in it, rather than
-   * falling off the page. A perp pair with no hedge is a position; it is just
-   * an unhedged one.
+   * someone else, or a coin that never touched Boros — it becomes its own
+   * cohort with nothing in it, rather than falling off the page. A perp pair
+   * with no hedge is a position; it is just an unhedged one.
+   *
+   * ⚠ A coin with no Boros ANYWHERE used to be excluded here and rebuilt by a
+   * second card builder in `buildStrategies`. Two builders meant two copies of
+   * the open-time re-stamp, the share timelines and the dust floor — and they
+   * had already drifted: the copy labelled every pairing `measured`, so a
+   * guessed grouping on a Boros-less coin claimed to be an execution record
+   * while the identical grouping on a Boros coin admitted it was a proposal.
+   * One tranche, one card, one place.
    */
   for (const t of tranches) {
     if ([...assigned.values()].some((ts) => ts.includes(t))) continue;
     const home =
       pickCohort(cohortList, t.base, [t.long.venue, t.short.venue]) ??
-      // …but only on a coin this view OWNS. A coin with no Boros at all is the
-      // Positions panel's business, and giving it a strategy card here would
-      // show the same perps twice.
-      (borosBases.has(t.base) ? ({ base: t.base, maturity: 0, builds: [] } satisfies Cohort) : null);
-    if (home) assigned.set(home, [...(assigned.get(home) ?? []), t]);
+      ({ base: t.base, maturity: 0, builds: [] } satisfies Cohort);
+    assigned.set(home, [...(assigned.get(home) ?? []), t]);
   }
 
   // share_i(t) for SHARED venue legs. The venue's cumulative funding counter
@@ -2599,7 +2605,17 @@ function splitStrategies(
       if (![...perpBuilds, ...borosScaled].some((b) => b.leg.notionalUsd > 0.005)) continue;
       const rollup = assembleStrategy({
         strategyId: cardId,
-        attribution: { source: t.source, confidence: t.confidence, pinned: t.pinned },
+        attribution: {
+          // A coin that never touched Boros is `unhedged` however well the
+          // pairing itself is evidenced: the chip answers "is a rate locked
+          // against this", and nothing is. It is also what keeps a pure
+          // funding arb out of the Boros-tracked totals, where it would
+          // dominate an APR it has no part in. How the pairing was ARRIVED at
+          // is a separate question, and `confidence` still answers it.
+          source: borosBases.has(t.base) ? t.source : 'unhedged',
+          confidence: t.confidence,
+          pinned: t.pinned,
+        },
         base: cohort.base,
         maturity: cohort.maturity,
         borosBuilds: borosScaled,
@@ -2673,32 +2689,89 @@ function splitStrategies(
       );
     }
   }
-  for (const { cohort, base, maturity, builds: leftovers } of unowned.values()) {
+  for (const { cohort, base, maturity, builds: unclaimed } of unowned.values()) {
     // `attached` = this coin already has a strategy — solved OR asserted — so
     // the leftover is a remainder beside it. Otherwise the coin is Boros-only
     // and keeps the legacy behaviour of pulling in any perp nobody spoke for.
     const attached =
       (cohort !== undefined && assigned.has(cohort)) ||
       asserted.cards.some((c) => c.base === base);
-    out.push(
-      assembleStrategy({
-        strategyId: attached ? `${base}@${maturity}#unmatched` : `${base}@${maturity}`,
+    const freePerps =
+      attached || cohort === undefined
+        ? []
+        : perpBuildsAll.filter(
+            (p) =>
+              !spokenFor.has(p.symbol) &&
+              pickCohort(cohortList, p.leg.base, [p.leg.venue]) === cohort,
+          );
+    /**
+     * The spreads inside this remainder, before it is called one position.
+     *
+     * A cohort's unclaimed legs arrive here as a SET, and a set of four legs
+     * is not a strategy just because no perp tranche wanted it — a book that
+     * pays fixed at two venues against one that receives is two spreads
+     * sharing a leg. `pairBorosLegs` states which, and only what it could not
+     * pair stays whole.
+     */
+    const { pairs, leftovers } = pairBorosLegs(
+      unclaimed,
+      incrementsFor,
+      input.borosHistoryComplete !== false,
+    );
+    /** Every card this remainder becomes: its spreads, then its odd legs. */
+    const groups: Array<{ id: string; builds: BorosLegBuild[]; unconfirmed: boolean }> = [
+      ...pairs.map((p) => ({
+        // Keyed by the two MARKETS, not their venues. Stable across re-solves
+        // and it survives the other spread on a shared leg being closed —
+        // while a venue pair does not name a spread uniquely: one venue lists
+        // the same coin in several collateral zones, so two spreads in one
+        // cohort can sit on the same two venues and collide.
+        id: `${base}@${maturity}#boros:${p.long.marketId}-${p.short.marketId}`,
+        builds: [p.long, p.short],
+        unconfirmed: p.unconfirmed,
+      })),
+      ...leftovers.map((b) => ({
+        id: `${base}@${maturity}#boros:${b.marketId}`,
+        builds: [b],
+        unconfirmed: false,
+      })),
+    ];
+    if (groups.length === 1) {
+      // Nothing was split out, so this IS the remainder — keep the id it has
+      // always had, and leave existing pins and share links pointing at it.
+      groups[0].id = attached ? `${base}@${maturity}#unmatched` : `${base}@${maturity}`;
+    } else {
+      /**
+       * A market can reach this pass TWICE — once as size the user detached
+       * and once as size the solver could not place — and those are two
+       * different statements about one leg, so they stay two positions. Their
+       * ids are named for the legs they hold, though, which makes them the
+       * same string; the ordinal keeps them apart. Deterministic, because the
+       * order above is.
+       */
+      const used = new Set<string>();
+      for (const g of groups) {
+        let id = g.id;
+        for (let n = 2; used.has(id); n += 1) id = `${g.id}~${n}`;
+        used.add(id);
+        g.id = id;
+      }
+    }
+    for (const g of groups) {
+      const venues = new Set(g.builds.map((b) => b.leg.venue));
+      const rollup = assembleStrategy({
+        strategyId: g.id,
         attribution: {
           source: attached ? 'boros-only' : 'merged',
-          confidence: 'measured',
+          confidence: g.unconfirmed ? 'unconfirmed' : 'measured',
           pinned: false,
         },
         base,
         maturity,
-        borosBuilds: leftovers,
-        perpBuilds:
-          attached || cohort === undefined
-            ? []
-            : perpBuildsAll.filter(
-                (p) =>
-                  !spokenFor.has(p.symbol) &&
-                  pickCohort(cohortList, p.leg.base, [p.leg.venue]) === cohort,
-              ),
+        borosBuilds: g.builds,
+        // A pulled-in perp goes to the spread it sits at the venue of — never
+        // to all of them, which would count one position several times.
+        perpBuilds: freePerps.filter((p) => venues.has(p.leg.venue)),
         perpAvailable: input.perpPositions !== null,
         nowSec: input.nowSec,
         clockStartOverrideSec: input.clockStartOverrideSec,
@@ -2706,8 +2779,14 @@ function splitStrategies(
         fundingLedger: input.perpFunding,
         dealFills: input.dealFills,
         capitalBasis: input.capitalBasis ?? 'balance',
-      }),
-    );
+      });
+      if (g.unconfirmed) {
+        rollup.warnings.push(
+          `This ${base} spread was paired by size and open-time proximity, not by an execution record — the split between strategies is a proposal you can edit, not a measurement.`,
+        );
+      }
+      out.push(rollup);
+    }
   }
   if (!out.length) return mergedStrategies(input, cohortList, perpBuildsAll);
   return out;
@@ -2730,6 +2809,201 @@ function pickCohort(cohorts: Cohort[], base: string, venues: string[]): Cohort |
     }))
     .sort((a, b) => b.venueNotional - a.venueNotional);
   return ranked[0].venueNotional > 0 ? ranked[0].cohort : sameBase[0];
+}
+
+/**
+ * Boros legs as the trades they were built from — the input `./grouping` needs
+ * to say which of them went out together.
+ *
+ * ONE encoding, because there are two callers: the co-execution constraint on
+ * the cohort's legs, and the spread pairing on the ones no tranche claimed.
+ * The atom id scheme, the leg-key format and the floating-sign convention have
+ * to agree between them or the two passes disagree about what a book is, and
+ * `Atom.identity` (which short-circuits the score and upgrades the band to
+ * `certain`) would otherwise have to be added to both.
+ */
+function borosAtoms(
+  builds: readonly BorosLegBuild[],
+  incrementsFor: (marketId: number, size: number) => BorosIncrement[] | null,
+): { atoms: GroupingAtom[]; byLegKey: Map<string, BorosLegBuild> } {
+  const atoms: GroupingAtom[] = [];
+  const byLegKey = new Map<string, BorosLegBuild>();
+  for (const b of builds) {
+    const incs = incrementsFor(b.marketId, Math.abs(b.leg.notionalToken ?? 0));
+    // A leg whose history cannot be replayed has no increments to pair; both
+    // callers still handle it, just with no co-execution evidence.
+    if (!incs) continue;
+    const legKey = `boros:${b.marketId}`;
+    byLegKey.set(legKey, b);
+    // Boros LONG receives floating (+), SHORT pays it (−) — the same sign
+    // convention the hedge check uses, so opposite signs really do cancel.
+    const sign = b.leg.side === 'LONG' ? 1 : -1;
+    incs.forEach((inc, i) => {
+      atoms.push({
+        id: `${legKey}#${i}`,
+        legKey,
+        venue: b.leg.venue,
+        base: b.leg.base,
+        floating: sign * inc.qty,
+        qty: inc.qty,
+        rate: inc.fixedApr,
+        at: { kind: 'at', sec: inc.timeSec },
+      });
+    });
+  }
+  return { atoms, byLegKey };
+}
+
+/** One spread the Boros remainder pass could form: a pay-fixed leg against a
+ * receive-fixed leg on the same coin and maturity, each already scaled to the
+ * size the pairing gave it. */
+interface BorosPair {
+  long: BorosLegBuild;
+  short: BorosLegBuild;
+  /** True when no execution record explained the pairing — the same claim the
+   * perp side makes with `confidence: 'unconfirmed'`. */
+  unconfirmed: boolean;
+}
+
+/**
+ * Pair the Boros legs NO PERP TRANCHE CLAIMED into spreads.
+ *
+ * ⚠ This does NOT contradict the "perps anchor" doctrine in ./partition. That
+ * rule is about what may anchor the matching of a HEDGE: a Boros leg can be a
+ * standalone directional trade, so it must never pull a perp onto a card. It
+ * says nothing about two Boros legs that are plainly the two sides of one
+ * spread — one paying fixed, one receiving it, same coin, same maturity — and
+ * leaving those merged produced a card with three, four or more legs whose
+ * header could name only two venues and whose spread averaged across trades
+ * that have nothing to do with each other.
+ *
+ * Evidence first, in the same order the perp side uses it:
+ *  1. co-execution — the increments each leg decomposes into, bound by
+ *     `bindExecutions`. This terminal places both Boros legs as ONE order, so
+ *     a book it built is measured here rather than guessed;
+ *  2. proximity — what is left, paired by size and open-time closeness, and
+ *     reported `unconfirmed`.
+ *
+ * Whatever no pairing could claim comes back as `leftovers`: a directional leg
+ * is a position of one leg, never a third leg on someone else's card.
+ */
+function pairBorosLegs(
+  builds: readonly BorosLegBuild[],
+  incrementsFor: (marketId: number, size: number) => BorosIncrement[] | null,
+  historyComplete: boolean,
+): { pairs: BorosPair[]; leftovers: BorosLegBuild[] } {
+  const whole = (b: BorosLegBuild): number => Math.abs(b.leg.notionalToken ?? 0);
+  const sized = builds.filter((b) => whole(b) > 0);
+  const longs = sized.filter((b) => b.leg.side === 'LONG');
+  const shorts = sized.filter((b) => b.leg.side === 'SHORT');
+  // Nothing to pair against: every leg is directional, and each is its own
+  // position. Returned unscaled so a book that never needed splitting is
+  // byte-for-byte what it was.
+  if (!longs.length || !shorts.length) {
+    return { pairs: [], leftovers: [...builds] };
+  }
+
+  const left = new Map<BorosLegBuild, number>(sized.map((b) => [b, whole(b)]));
+  const openedAt = (b: BorosLegBuild): number | null => b.leg.openedAt ?? null;
+  const pairings: Array<{ long: BorosLegBuild; short: BorosLegBuild; qty: number; measured: boolean }> = [];
+  const add = (long: BorosLegBuild, short: BorosLegBuild, want: number, measured: boolean) => {
+    const qty = Math.min(want, left.get(long) ?? 0, left.get(short) ?? 0);
+    if (!(qty > 0)) return;
+    left.set(long, (left.get(long) as number) - qty);
+    left.set(short, (left.get(short) as number) - qty);
+    // ONE pairing per pair of legs, whatever explained it. A book part-built
+    // on the execution record and part off it (a top-up placed by hand) is one
+    // spread, not two cards on the same two legs — and, like a perp tranche
+    // assembled from several sources, it reports the weakest one.
+    const at = pairings.find((p) => p.long === long && p.short === short);
+    if (at) {
+      at.qty += qty;
+      at.measured = at.measured && measured;
+      return;
+    }
+    pairings.push({ long, short, qty, measured });
+  };
+
+  // --- 1. Co-execution ------------------------------------------------------
+  // Skipped when there is only one leg per side: the proximity pass below
+  // pairs them `forced`, which is already the strongest claim available, so
+  // replaying every fill and binding all-pairs could not change the answer.
+  if (longs.length > 1 || shorts.length > 1) {
+    const { atoms, byLegKey } = borosAtoms(sized, incrementsFor);
+    const byId = new Map(atoms.map((a) => [a.id, a]));
+    for (const exec of bindExecutions(atoms, { historyComplete })) {
+      const members = exec.atomIds.map((id) => byId.get(id)).filter((a): a is GroupingAtom => !!a);
+      const qtyByLeg = new Map<string, number>();
+      for (const a of members) qtyByLeg.set(a.legKey, (qtyByLeg.get(a.legKey) ?? 0) + a.qty);
+      // Only a TWO-leg execution states a pair. A wider one is a real trade
+      // that spanned three legs, and forcing it into a pair would invent the
+      // very grouping this is trying to stop guessing at — it falls through
+      // to proximity, which always yields two.
+      if (qtyByLeg.size !== 2) continue;
+      const [a, b] = [...qtyByLeg.keys()].map((k) => byLegKey.get(k));
+      if (!a || !b || a.leg.side === b.leg.side) continue;
+      const long = a.leg.side === 'LONG' ? a : b;
+      const short = a.leg.side === 'LONG' ? b : a;
+      add(
+        long,
+        short,
+        Math.min(qtyByLeg.get(`boros:${long.marketId}`) ?? 0, qtyByLeg.get(`boros:${short.marketId}`) ?? 0),
+        true,
+      );
+    }
+  }
+
+  // --- 2. Proximity ---------------------------------------------------------
+  // Same objective as the perp residual solver: closest in size, then in open
+  // time. A single long against a single short is the whole book, so it is
+  // still reported measured — there was no other partition to choose.
+  const forced = longs.length === 1 && shorts.length === 1;
+  for (;;) {
+    let best: { long: BorosLegBuild; short: BorosLegBuild; qty: number; score: number } | null = null;
+    for (const lo of longs) {
+      const lq = left.get(lo) ?? 0;
+      if (!(lq > 0)) continue;
+      const lt = openedAt(lo);
+      for (const sh of shorts) {
+        const sq = left.get(sh) ?? 0;
+        if (!(sq > 0)) continue;
+        const st = openedAt(sh);
+        const size = Math.abs(lq - sq) / Math.max(lq, sq);
+        const time = lt === null || st === null ? 1 : Math.abs(lt - st) / TIME_SCALE_SEC;
+        const score = size + time;
+        if (!best || score < best.score - 1e-12) {
+          best = { long: lo, short: sh, qty: Math.min(lq, sq), score };
+        }
+      }
+    }
+    if (!best) break;
+    add(best.long, best.short, best.qty, forced);
+  }
+
+  // --- Emit -----------------------------------------------------------------
+  const dust = (b: BorosLegBuild, qty: number) => qty <= Math.max(1e-12, whole(b) * 1e-9);
+  const pairs: BorosPair[] = [];
+  for (const p of pairings) {
+    if (dust(p.long, p.qty) || dust(p.short, p.qty)) continue;
+    const slice = (b: BorosLegBuild) => {
+      const share = p.qty / whole(b);
+      return share >= 1 - 1e-9 ? b : scaleBorosBuild(b, share);
+    };
+    pairs.push({ long: slice(p.long), short: slice(p.short), unconfirmed: !p.measured });
+  }
+  const leftovers: BorosLegBuild[] = [];
+  for (const b of builds) {
+    const over = left.get(b);
+    // A leg the pass never sized (no token notional) is passed through whole
+    // rather than dropped — it still has to be reported somewhere.
+    if (over === undefined) {
+      leftovers.push(b);
+      continue;
+    }
+    if (dust(b, over)) continue;
+    leftovers.push(over >= whole(b) * (1 - 1e-9) ? b : scaleBorosBuild(b, over / whole(b)));
+  }
+  return { pairs, leftovers };
 }
 
 /** A perp position scaled down to one tranche: its own size, its own entry

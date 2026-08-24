@@ -840,7 +840,7 @@ describe('PositionsHome — a Boros-less pair rendered as a card', () => {
     makeStrategyReturns({
       strategies: [
         makeStrategyRollup({
-          strategyId: 'ETH#perps',
+          strategyId: 'ETH#BINANCE-HYPERLIQUID#0',
           attribution: { source: 'unhedged', confidence: 'measured', pinned: false },
           hedge: 'unhedged',
           maturity: 0,

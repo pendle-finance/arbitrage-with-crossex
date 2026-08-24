@@ -324,9 +324,15 @@ describe('buildStrategies — scaling', () => {
     zones[0].tokenId = 4; // BNB — no BNB market in the fixture set
     const out = buildStrategies(input({ zones, pricesUsd: new Map([[4, null]]) }));
     // No priceable Boros legs anywhere — the perps still render, as the
-    // unhedged card every Boros-less coin gets, rather than vanishing.
+    // unhedged card every Boros-less coin gets, rather than vanishing. The
+    // pair is the solver's, so the card is the two-leg tranche, not a pool.
     expect(out.strategies.flatMap((s) => s.legs).filter((l) => l.kind === 'boros')).toEqual([]);
-    expect(out.strategies.map((s) => s.strategyId)).toEqual(['ETH#perps']);
+    expect(out.strategies).toHaveLength(1);
+    expect(out.strategies[0].attribution.source).toBe('unhedged');
+    expect(out.strategies[0].legs.map((l) => `${l.kind}:${l.venue}`)).toEqual([
+      'perp:HYPERLIQUID',
+      'perp:OKX',
+    ]);
     expect(out.warnings.join(' ')).toMatch(/BNB collateral zone/);
   });
 });
@@ -372,12 +378,164 @@ describe('buildStrategies — hedge states & degraded modes', () => {
     const out = buildStrategies(input({ perpPositions: [...ethPerps(), stray] }));
     expect(out.strategies).toHaveLength(2);
     const sol = out.strategies.find((s) => s.base === 'SOL');
-    expect(sol?.strategyId).toBe('SOL#perps');
+    expect(sol?.strategyId).toBe('SOL#unhedged:BINANCE_FUTURE_SOL_USDT');
     expect(sol?.attribution.source).toBe('unhedged');
     expect(sol?.hedge).toBe('unhedged');
     expect(sol?.legs.map((l) => `${l.kind}:${l.venue}`)).toEqual(['perp:BINANCE']);
     // The ETH strategy is untouched by the stray coin.
     expect(out.strategies.find((s) => s.base === 'ETH')?.legs.filter((l) => l.base === 'SOL')).toEqual([]);
+  });
+
+  it('splits a Boros remainder into spreads rather than one many-legged card', () => {
+    // Two pay-fixed legs against one receive-fixed leg of twice the size, and
+    // no perps at all. Merging them made a single three-legged card whose
+    // header could name only two of its three venues and whose spread
+    // averaged two trades that have nothing to do with each other.
+    const bybitMarket: BorosMarket = {
+      ...hlMarket,
+      marketId: 159,
+      name: 'Bybit ETHUSDT 31 Jul 2026',
+      venue: 'Bybit',
+      markApr: 0.062,
+      floatingApr: 0.061,
+      midApr: 0.062,
+    };
+    const LATER = OPENED + 3 * DAY;
+    const zones: BorosCollateralZone[] = [
+      {
+        tokenId: 3,
+        cross: {
+          isCross: true,
+          netBalance: raw(20_000),
+          marketPositions: [
+            {
+              marketId: 155, // Hyperliquid, receive-fixed, twice the size
+              side: 1,
+              notionalSize: raw(-2_000_000),
+              fixedApr: 0.08,
+              markApr: 0.076,
+              pnl: { rateSettlementPnl: raw(0), unrealisedPnl: raw(0) },
+              positionInitialMargin: raw(10_000),
+            },
+            {
+              marketId: 158, // OKX, pay-fixed, opened with the first half
+              side: 0,
+              notionalSize: raw(1_000_000),
+              fixedApr: 0.03,
+              markApr: 0.032,
+              pnl: { rateSettlementPnl: raw(0), unrealisedPnl: raw(0) },
+              positionInitialMargin: raw(5_000),
+            },
+            {
+              marketId: 159, // Bybit, pay-fixed, opened three days later
+              side: 0,
+              notionalSize: raw(1_000_000),
+              fixedApr: 0.05,
+              markApr: 0.062,
+              pnl: { rateSettlementPnl: raw(0), unrealisedPnl: raw(0) },
+              positionInitialMargin: raw(5_000),
+            },
+          ],
+        },
+        isolated: [],
+      },
+    ];
+    // Each half of the Hyperliquid leg was placed in the same second as the
+    // pay-fixed leg it hedges — the co-execution evidence the pairing reads.
+    const txns: BorosTxn[] = [
+      { marketId: 155, time: OPENED, fee: raw(390), pnl: raw(-390), prevPositionS: '0', postPositionS: raw(-1_000_000), fixedApr: 0.08 },
+      { marketId: 158, time: OPENED, fee: raw(300), pnl: raw(-300), prevPositionS: '0', postPositionS: raw(1_000_000), fixedApr: 0.03 },
+      { marketId: 155, time: LATER, fee: raw(390), pnl: raw(-390), prevPositionS: raw(-1_000_000), postPositionS: raw(-2_000_000), fixedApr: 0.08 },
+      { marketId: 159, time: LATER, fee: raw(300), pnl: raw(-300), prevPositionS: '0', postPositionS: raw(1_000_000), fixedApr: 0.05 },
+    ];
+    const out = buildStrategies(
+      input({
+        zones,
+        markets: [hlMarket, okxMarket, bybitMarket],
+        txnsByToken: new Map([[3, txns]]),
+        perpPositions: [],
+      }),
+    );
+    expect(out.strategies).toHaveLength(2);
+    for (const s of out.strategies) {
+      expect(s.legs.filter((l) => l.kind === 'boros')).toHaveLength(2);
+      expect(s.legs.filter((l) => l.side === 'LONG')).toHaveLength(1);
+      expect(s.legs.filter((l) => l.side === 'SHORT')).toHaveLength(1);
+      // Bound by the execution record, not guessed at.
+      expect(s.attribution.confidence).toBe('measured');
+    }
+    // One spread per pay-fixed venue, each against half of the Hyperliquid leg.
+    expect(out.strategies.map((s) => s.legs.map((l) => l.venue).sort().join('/')).sort()).toEqual([
+      'HYPERLIQUID/OKX',
+      'BYBIT/HYPERLIQUID',
+    ].sort());
+    // The shared leg is divided, not double-counted.
+    const hlToken = out.strategies
+      .flatMap((s) => s.legs)
+      .filter((l) => l.venue === 'HYPERLIQUID')
+      .reduce((sum, l) => sum + (l.notionalToken ?? 0), 0);
+    expect(hlToken).toBeCloseTo(2_000_000, 3);
+    // Each spread keeps the rate IT locked, not the book's blend.
+    const bybit = out.strategies.find((s) => s.legs.some((l) => l.venue === 'BYBIT'));
+    expect(bybit?.spread).toBeCloseTo(0.08 - 0.05, 10);
+    const okx = out.strategies.find((s) => s.legs.some((l) => l.venue === 'OKX'));
+    expect(okx?.spread).toBeCloseTo(0.08 - 0.03, 10);
+  });
+
+  it('splits a Boros-less coin into two-leg pairs rather than pooling its legs', () => {
+    // Two longs against one short, no Boros on the coin. Pooling them made a
+    // single three-legged card: its header could name only two of the three
+    // venues, and its perp match ratio compared $59+$57 against $116 and
+    // called a book that is really two strategies perfectly matched.
+    const spread = (over: Partial<PerpPositionLike>): PerpPositionLike => ({
+      symbol: 'BINANCE_FUTURE_SOL_USDT',
+      positionSide: 'LONG',
+      positionQty: '10',
+      positionValue: '2000',
+      entryPrice: '200',
+      upnl: '1',
+      fundingFee: '2',
+      fee: '-1',
+      initialMargin: '400',
+      ...over,
+    });
+    const out = buildStrategies(
+      input({
+        perpPositions: [
+          spread({}),
+          spread({ symbol: 'GATE_FUTURE_SOL_USDT', positionQty: '10', positionValue: '2000' }),
+          spread({
+            symbol: 'HYPERLIQUID_FUTURE_SOL_USDC',
+            positionSide: 'SHORT',
+            positionQty: '-20',
+            positionValue: '4000',
+            initialMargin: '800',
+          }),
+        ],
+      }),
+    );
+    const sol = out.strategies.filter((s) => s.base === 'SOL');
+    expect(sol).toHaveLength(2);
+    for (const s of sol) {
+      expect(s.legs.filter((l) => l.kind === 'perp')).toHaveLength(2);
+      expect(s.legs.filter((l) => l.side === 'LONG')).toHaveLength(1);
+      expect(s.legs.filter((l) => l.side === 'SHORT')).toHaveLength(1);
+      expect(s.hedge).toBe('unhedged'); // no rate is locked against either
+      // A coin that never touched Boros stays out of the Boros-tracked totals
+      // however well the pairing itself is evidenced.
+      expect(s.attribution.source).toBe('unhedged');
+    }
+    // One pair per long venue, each against the shared Hyperliquid short.
+    expect(sol.map((s) => s.legs.map((l) => l.venue).sort().join('/')).sort()).toEqual([
+      'BINANCE/HYPERLIQUID',
+      'GATE/HYPERLIQUID',
+    ]);
+    // The short is split, not double-counted: each card holds half of it.
+    const hlToken = sol
+      .flatMap((s) => s.legs)
+      .filter((l) => l.venue === 'HYPERLIQUID')
+      .reduce((sum, l) => sum + (l.notionalToken ?? 0), 0);
+    expect(hlToken).toBeCloseTo(20, 6);
   });
 
   it('flags a notional mismatch beyond the 2% band as a partial hedge', () => {
