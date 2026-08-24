@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ActionInput, DealRequest, PreviewResponse } from '../api/types';
-import { baseHandlers, ethPosition, previewFor } from '../test/fixtures';
+import { baseHandlers, ethPosition, makeCrossexPosition, previewFor } from '../test/fixtures';
 import { env, server } from '../test/server';
 import { renderWithClient } from '../test/utils';
 import { ClosePopover } from './ClosePopover';
@@ -97,7 +97,9 @@ describe('ClosePopover', () => {
     await userEvent.click(screen.getByRole('radio', { name: 'partial' }));
     await userEvent.type(screen.getByLabelText('Close qty'), '0.5'); // position is 0.3
 
-    expect(await screen.findByText(/close qty exceeds position \(0\.3\)/)).toBeInTheDocument();
+    // ETH is coin-margined, so the box defaults to the coin and the error
+    // names the limit in that unit.
+    expect(await screen.findByText(/close size exceeds position \(0\.3 ETH\)/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Close now ▸' })).toBeDisabled();
   });
 
@@ -246,5 +248,114 @@ describe('ClosePopover', () => {
     expect(await screen.findByRole('alert', {}, { timeout: 3_000 })).toHaveTextContent(
       /venue rejected the close/,
     );
+  });
+});
+
+describe('ClosePopover — sizing a close in dollars', () => {
+  /**
+   * A HYPE position's Boros leg is USDT-collateral and reads $100, so closing
+   * it in coin units meant converting by eye on the very leg where a slip
+   * leaves a naked remainder. The unit follows the same rule as the tickets.
+   */
+  const hypePosition = makeCrossexPosition({
+    symbol: 'BYBIT_FUTURE_HYPE_USDT',
+    positionQty: '1.89',
+    markPrice: '80',
+    entryPrice: '78',
+  });
+
+  it('defaults a non-coin-margined position to USDT and converts at the mark', async () => {
+    server.use(...baseHandlers(), closePreviewHandler());
+    renderWithClient(<ClosePopover position={hypePosition} onDismiss={() => {}} />);
+    await screen.findByText(/marketable limit px/);
+
+    await userEvent.click(screen.getByRole('radio', { name: 'partial' }));
+    // Dollars, not coins — the box says so.
+    const box = screen.getByLabelText('Close value');
+    await userEvent.type(box, '50');
+
+    // 50 USDT at mark 80 = 0.625 HYPE, and the converted figure is SHOWN
+    // rather than left to be inferred. (The shared preview fixture answers
+    // with an ETH-sized position, so the button's own enablement is covered by
+    // the ETH cases above; what matters here is the unit and the conversion.)
+    expect(await screen.findByText(/0\.625/)).toBeInTheDocument();
+    expect(screen.getByText(/at mark/)).toBeInTheDocument();
+  });
+
+  it('validates a USD entry against the position VALUE, not its quantity', async () => {
+    // 1.89 @ 80 = $151.20. A $200 close must be refused; without converting
+    // first, 200 > 1.89 would be refused for the wrong reason and $1 would be
+    // wrongly ACCEPTED as if it were 1 coin.
+    server.use(...baseHandlers(), closePreviewHandler());
+    renderWithClient(<ClosePopover position={hypePosition} onDismiss={() => {}} />);
+    await screen.findByText(/marketable limit px/);
+
+    await userEvent.click(screen.getByRole('radio', { name: 'partial' }));
+    await userEvent.type(screen.getByLabelText('Close value'), '200');
+    expect(await screen.findByText(/close size exceeds position/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Close now ▸' })).toBeDisabled();
+  });
+
+  it('falls back to COIN units when the mark is unusable — never sends dollars as qty', async () => {
+    /**
+     * The unit default is 'usd' for every non-ETH/BTC coin, and the toggle was
+     * the only thing gated on having a mark. A position whose markPrice is
+     * empty/zero therefore sat in 'usd' with no way out, and the conversion
+     * fell through to the raw entry — a "$50" close would have sent 50 HYPE.
+     */
+    server.use(...baseHandlers(), closePreviewHandler());
+    renderWithClient(
+      <ClosePopover position={makeCrossexPosition({ ...hypePosition, markPrice: '0' })} onDismiss={() => {}} />,
+    );
+    await screen.findByText(/marketable limit px/);
+    await userEvent.click(screen.getByRole('radio', { name: 'partial' }));
+
+    // Coin units, and the USD toggle is not offered at all.
+    expect(screen.getByLabelText('Close qty')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Close value')).not.toBeInTheDocument();
+    expect(screen.queryByRole('radiogroup', { name: 'Close size unit' })).not.toBeInTheDocument();
+    // And the limit is stated in coins, so 2 (> 1.89) is refused.
+    await userEvent.type(screen.getByLabelText('Close qty'), '2');
+    expect(await screen.findByText(/close size exceeds position \(1\.89 HYPE\)/)).toBeInTheDocument();
+  });
+
+  it('keeps the SIZE when the unit is toggled, not the digits', async () => {
+    // Relabelling 0.63 as $0.63 would silently resize the close by the mark.
+    server.use(...baseHandlers(), closePreviewHandler());
+    renderWithClient(<ClosePopover position={hypePosition} onDismiss={() => {}} />);
+    await screen.findByText(/marketable limit px/);
+
+    await userEvent.click(screen.getByRole('radio', { name: 'partial' }));
+    await userEvent.type(screen.getByLabelText('Close value'), '80');
+    await userEvent.click(screen.getByRole('radio', { name: 'HYPE' }));
+    // $80 at mark 80 is 1 HYPE.
+    expect(screen.getByLabelText('Close qty')).toHaveValue('1');
+  });
+});
+
+describe('ClosePopover — closing one side of a hedge', () => {
+  it('warns that the far leg is left unhedged, and stays silent when there is none', async () => {
+    /**
+     * A delta-neutral pair earns because the two floating legs cancel. Closing
+     * one end leaves the other running as a directional funding bet the user
+     * did not choose to put on — and the row-level Close said nothing about
+     * that (only the card-level "Close perp pair" is self-describing).
+     */
+    server.use(...baseHandlers(), closePreviewHandler());
+    const { unmount } = renderWithClient(
+      <ClosePopover
+        position={ethPosition}
+        hedgedSibling={{ venue: 'HYPERLIQUID', side: 'SHORT' }}
+        onDismiss={() => {}}
+      />,
+    );
+    expect(await screen.findByText(/Closing it leaves that one unhedged/)).toBeInTheDocument();
+    expect(screen.getByText(/Hyperliquid short/)).toBeInTheDocument();
+    unmount();
+
+    // No sibling (an unpaired leg) ⇒ nothing to un-hedge, so no noise.
+    renderWithClient(<ClosePopover position={ethPosition} onDismiss={() => {}} />);
+    await screen.findByText(/marketable limit px/);
+    expect(screen.queryByText(/leaves that one unhedged/)).not.toBeInTheDocument();
   });
 });

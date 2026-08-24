@@ -13,6 +13,7 @@ import { STRATEGY_STORAGE_KEY } from '../panels/HomeControls';
 import { server } from '../test/server';
 import { renderWithClient } from '../test/utils';
 import { BorosPairTicket } from './BorosPairTicket';
+import { useTradeFlow, type BorosOpenPrefill } from './TradeFlow';
 
 const ADDRESS = '0x1111111111111111111111111111111111111111';
 const HL = 155;
@@ -1003,5 +1004,112 @@ describe('BorosPairTicket — the size unit', () => {
     );
     await user.selectOptions(screen.getByLabelText('Leg A'), '400');
     expect(screen.getByText('Size per leg (BTC)')).toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Card cue prefill ("Open the Boros legs") — maturity agreement
+// ---------------------------------------------------------------------------
+
+function BorosPrefillHarness({ prefill }: { prefill: Omit<BorosOpenPrefill, 'nonce'> }) {
+  const flow = useTradeFlow();
+  return (
+    <>
+      <button type="button" onClick={() => flow.prefillBorosOpen(prefill)}>
+        fire
+      </button>
+      <BorosPairTicket />
+    </>
+  );
+}
+
+describe('BorosPairTicket — the cue prefill lands both legs on ONE maturity', () => {
+  /**
+   * The shape that broke live: the cue fires from a card with NO Boros legs,
+   * so it carries no maturity, and each venue lists a different set. Gate had
+   * exactly one ETH market (the later one is absent) while Hyperliquid listed
+   * the FAR maturity first — so resolving each leg independently armed
+   * Gate-near against HL-far, a pair that cannot trade.
+   */
+  const SEP = MATURITY;
+  const DEC = MATURITY + 90 * 86_400;
+  const twoVenues = () =>
+    handlers({
+      ctx: context({
+        markets: [
+          // Hyperliquid lists the FAR maturity first — the list order that
+          // produced the bug.
+          marketRow({ marketId: 901, name: 'Hyperliquid ETH Dec', venue: 'Hyperliquid', maturity: DEC }),
+          marketRow({ marketId: 902, name: 'Hyperliquid ETH Sep', venue: 'Hyperliquid', maturity: SEP }),
+          // Gate lists only the near one.
+          marketRow({ marketId: 903, name: 'Gate ETH Sep', venue: 'Gate', maturity: SEP }),
+        ],
+      }),
+    });
+
+  it("picks the maturity the two venues SHARE, not each venue's first row", async () => {
+    server.use(...twoVenues());
+    const user = userEvent.setup();
+    renderWithClient(
+      <BorosPrefillHarness
+        prefill={{ base: 'ETH', longVenue: 'Gate', shortVenue: 'Hyperliquid', size: 1000 }}
+      />,
+    );
+    await user.click(screen.getByRole('button', { name: 'fire' }));
+
+    // Both legs on 902/903 (Sep). Before the fix leg B armed 901 (Dec) and the
+    // ticket reported "different maturity" about a pair nobody chose.
+    await waitFor(() => expect(screen.getByLabelText('Leg A')).toHaveValue('903'));
+    expect(screen.getByLabelText('Leg B')).toHaveValue('902');
+    expect(screen.queryByText(/different maturity/)).not.toBeInTheDocument();
+  });
+
+  it('arms neither leg when the venues share no maturity', async () => {
+    // An impossible pair must stay unarmed: a ticket holding two markets that
+    // cannot trade together is worse than an empty one.
+    server.use(
+      ...handlers({
+        ctx: context({
+          markets: [
+            marketRow({ marketId: 911, name: 'Hyperliquid ETH Dec', venue: 'Hyperliquid', maturity: DEC }),
+            marketRow({ marketId: 912, name: 'Gate ETH Sep', venue: 'Gate', maturity: SEP }),
+          ],
+        }),
+      }),
+    );
+    const user = userEvent.setup();
+    renderWithClient(
+      <BorosPrefillHarness
+        prefill={{ base: 'ETH', longVenue: 'Gate', shortVenue: 'Hyperliquid', size: 1000 }}
+      />,
+    );
+    await user.click(screen.getByRole('button', { name: 'fire' }));
+
+    await waitFor(() => expect(screen.getByLabelText('Leg A')).toHaveValue(''));
+    expect(screen.getByLabelText('Leg B')).toHaveValue('');
+  });
+});
+
+describe('BorosPairTicket — slippage is stated, not silently clamped', () => {
+  it('blocks confirm when the typed slippage exceeds the cap', async () => {
+    /**
+     * `pctToApr` clamps to MAX_SLIP_PCT, so typing 50 left "50" on screen while
+     * 10 went on the wire — and clamping client-side made the server's own
+     * "reject, never silently coerce" guard unreachable. The number shown must
+     * be the number sent, or the user must be told it is not.
+     */
+    server.use(...handlers());
+    const user = userEvent.setup();
+    renderWithClient(<BorosPairTicket />);
+    await fillTicket(user);
+
+    const slip = screen.getByLabelText(/Max slippage/);
+    await user.clear(slip);
+    await user.type(slip, '50');
+
+    expect(await screen.findByText(/Max slippage cannot exceed/)).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /Confirm/ })).toBeDisabled(),
+    );
   });
 });

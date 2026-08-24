@@ -3,13 +3,15 @@ import { useTradeFlowOptional } from '../trade/TradeFlow';
 import { Ext, GATE_API_KEYS_URL, GATE_CROSSEX_URL, GATE_SIGNUP_URL, Step, useNudge } from './onboardingBits';
 
 /** First-run right rail: the 4-step Gate onboarding with the credentials form.
- * Replaces the order ticket while credentials are unconfigured. An Execute click
- * on a card bumps the trade-flow prefill nonce — the pair is already staged for
- * the real ticket, so the guide answers by scrolling to and flashing the API-key
- * form, the one step standing between the click and an armed ticket. */
+ * Replaces the order ticket while credentials are unconfigured. Clicking a
+ * card's "Open this strategy" bumps `setupNonce` — the wizard deliberately
+ * stays shut, since with no keys it could not execute — and the guide answers
+ * by scrolling to and flashing the API-key form, the one step standing between
+ * that click and a wizard that can trade. (The prefill nonce still counts too:
+ * the strategy-box cues arm the ticket directly.) */
 export function OnboardingGuide() {
   const flow = useTradeFlowOptional();
-  const nonce = flow?.pairPrefill?.nonce ?? 0;
+  const nonce = (flow?.setupNonce ?? 0) + (flow?.pairPrefill?.nonce ?? 0);
   const { ref: formRef, flash } = useNudge(nonce);
 
   return (

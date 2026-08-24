@@ -134,7 +134,7 @@ describe('App tab shell', () => {
     // /api/opportunities fixture resolves).
     expect(
       await within(panel('opportunities')).findByRole('button', {
-        name: /^Hedge the perps for ETH short/,
+        name: /^Open this strategy — ETH short/,
       }),
     ).toBeInTheDocument();
     expect(panel('opportunities')).toBeVisible();
@@ -268,13 +268,17 @@ describe('App tab shell', () => {
     await userEvent.click(screen.getByRole('button', { name: /with these assumptions/ }));
     expect(screen.getByLabelText('Gate VIP tier')).toBeInTheDocument();
 
-    // Symbols are expectedly absent — the button stays enabled as the guide's nudge.
-    const execute = screen.getByRole('button', { name: /^Hedge the perps for ETH short/ });
+    // Symbols are expectedly absent — the button stays enabled as the guide's
+    // nudge. It does NOT open the wizard here: with no keys there is nothing to
+    // execute, so the click asks for setup instead.
+    const execute = screen.getByRole('button', { name: /^Open this strategy — ETH short/ });
     expect(execute).toBeEnabled();
     await userEvent.click(execute);
     await waitFor(() => expect(screen.getByLabelText('API key')).toHaveFocus());
     // The guide flashes the key form's ring on the same nonce bump.
     expect(document.querySelector('.flash-ring')).not.toBeNull();
+    // And the execution wizard stays shut — it could not trade without keys.
+    expect(screen.queryByRole('heading', { name: /Open this strategy/ })).not.toBeInTheDocument();
   });
 });
 

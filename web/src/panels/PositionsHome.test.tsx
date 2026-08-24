@@ -6,7 +6,7 @@ import { fireEvent, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { describe, expect, it, vi } from 'vitest';
-import type { ActionInput, PositionsResponse, StrategyReturns } from '../api/types';
+import type { ActionInput, PositionsResponse, StrategyReturns, StrategyRollup } from '../api/types';
 import {
   makeCrossexPosition,
   makeExposureGroup,
@@ -21,6 +21,7 @@ import { renderWithClient } from '../test/utils';
 import { bookIdOf } from './bookId';
 import { STRATEGY_STORAGE_KEY } from './HomeControls';
 import { PositionsHome } from './PositionsHome';
+import { StrategyWizard } from '../trade/StrategyWizard';
 import { SettingsDrawer } from './SettingsDrawer';
 import { TrackedAddressProvider } from './trackedAddress';
 import { TradeFlowProvider, useTradeFlow } from '../trade/TradeFlow';
@@ -223,7 +224,7 @@ describe('PositionsHome — degraded states', () => {
 });
 
 describe('PositionsHome — box taxonomy & cues', () => {
-  it('without an address: perp pairs render as boxes with the add-address cue and ZERO strategy calls', async () => {
+  it('without an address: a pair renders as a full card, a stray as a box, and ZERO strategy calls', async () => {
     const requested: string[] = [];
     mockPositions({
       exposure: [
@@ -240,9 +241,16 @@ describe('PositionsHome — box taxonomy & cues', () => {
     renderWithClient(<PositionsHome />);
 
     expect(await screen.findByText('ETH')).toBeInTheDocument();
-    // Pair box: neutral badge + add-address cue; stray box: unpaired-leg chip.
-    expect(screen.getByText('neutral ✓')).toBeInTheDocument();
+    // The PAIR gets the same card a tracked position gets — a position must
+    // not change visual language because of an input not supplied yet.
+    expect(screen.getByText(/Track a Boros address to see whether these perps/)).toBeInTheDocument();
+    // ⚠ And it must claim NOTHING about Boros legs it never looked for.
+    expect(screen.queryByText(/No Boros legs yet/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Open the Boros legs/ })).not.toBeInTheDocument();
+    expect(screen.queryByText('missing')).not.toBeInTheDocument();
+    // The stray keeps the simpler box: one leg, so there is no pair to show.
     expect(screen.getByText('unpaired leg')).toBeInTheDocument();
+    // The one action that can change what we know.
     expect(screen.getAllByRole('button', { name: 'Add Boros address' }).length).toBeGreaterThan(0);
     expect(requested).toHaveLength(0);
   });
@@ -260,7 +268,16 @@ describe('PositionsHome — box taxonomy & cues', () => {
     expect(JSON.parse(localStorage.getItem(STRATEGY_STORAGE_KEY)!).address).toBe(ADDR);
   });
 
-  it('with a settled feed: a perp-only box carries the execute-on-Boros link-out', async () => {
+  it('with a settled feed that skipped a live coin: reports the disagreement, offers no trade', async () => {
+    // A successful feed returning NOTHING for a coin holding live perps — not
+    // even the `BASE#perps` rollup the solver emits for exactly this shape. So
+    // the two feeds disagree, and this box says so.
+    //
+    // It deliberately does NOT offer a way to open Boros legs here. It used to
+    // link out to boros.finance; when the feed is healthy this pair renders as
+    // a StrategyCard which already has the in-app CTA, so a second entry point
+    // on the degraded path would arm a trade off a book we just said we cannot
+    // read.
     localStorage.setItem(STRATEGY_STORAGE_KEY, JSON.stringify({ address: ADDR }));
     mockPositions({ exposure: [makeExposureGroup({ base: 'ETH' })] });
     mockStrategy(makeStrategyReturns()); // HYPE strategy — ETH stays perp-only
@@ -268,8 +285,9 @@ describe('PositionsHome — box taxonomy & cues', () => {
 
     expect(await screen.findByText('hedged ✓')).toBeInTheDocument();
     expect(screen.getByText(/No Boros position found for ETH/)).toBeInTheDocument();
-    const link = screen.getByRole('link', { name: /Execute the fixed legs on Boros/ });
-    expect(link).toHaveAttribute('href', 'https://boros.finance');
+    expect(screen.getByText(/the strategy feed and the positions feed disagree/)).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /Boros/ })).not.toBeInTheDocument();
+    expect(screen.queryByText(/Execute the fixed legs/)).not.toBeInTheDocument();
   });
 
   it('a rollup base consumes its exposure group (no duplicate perp-only box)', async () => {
@@ -292,7 +310,19 @@ describe('PositionsHome — box taxonomy & cues', () => {
     expect(screen.queryByText(/No Boros position found for HYPE/)).not.toBeInTheDocument();
   });
 
-  it('ports the exposure chips: signed venue chips with quote sub-labels + Close both', async () => {
+  it('heads the degraded box in StrategyCard grammar: asset badge, venue pair, Close both', async () => {
+    // A FAILED feed (not merely untracked) is what keeps the box: an untracked
+    // pair now renders as a full card, so this fixture tracks an address and
+    // fails the strategy call.
+    localStorage.setItem(STRATEGY_STORAGE_KEY, JSON.stringify({ address: ADDR }));
+    server.use(
+      http.get('/api/strategy/:address', () =>
+        HttpResponse.json(
+          { ok: false, error: { category: 'unknown', message: 'down', retryable: true } },
+          { status: 503 },
+        ),
+      ),
+    );
     mockPositions({
       exposure: [
         makeExposureGroup({
@@ -309,9 +339,18 @@ describe('PositionsHome — box taxonomy & cues', () => {
       ],
     });
     renderWithClient(<PositionsHome />);
-    expect(await screen.findByText(/\+KRAKEN \$9,387/)).toBeInTheDocument();
-    expect(screen.getByText(/−HYPERLIQUID \$9,389/)).toBeInTheDocument();
+
+    // The header now reads like a StrategyCard's: asset badge, then the venue
+    // pair as ONE unit (long side first), not a row of signed value chips.
+    // The per-leg values live in the table below, where the card keeps them.
+    expect(await screen.findByTitle('BTC perp legs')).toHaveTextContent('BTC');
+    const header = screen.getByTitle('BTC perp legs').parentElement!;
+    expect(header).toHaveTextContent('Kraken');
+    expect(header).toHaveTextContent('Hyperliquid');
+    // The defining fact of this box, in the slot a card gives maturity.
+    expect(header).toHaveTextContent('no rate locked');
     expect(screen.getByText('neutral ✓')).toBeInTheDocument();
+    expect(screen.getByText(/net.*gross/)).toBeInTheDocument();
     // renderWithClient mounts TradeFlowProvider → the hold-button renders.
     expect(screen.getByRole('button', { name: 'Close both' })).toBeInTheDocument();
   });
@@ -1498,5 +1537,121 @@ describe('PositionsHome — Automatic forgets only this card', () => {
     // would mean the whole leg went back to the solver, which is the bug.
     await waitFor(() => expect(urls.length).toBeGreaterThan(1));
     expect(urls[urls.length - 1]).toContain('partition=');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// "Open the perp legs" → the wizard, at the hedge step
+// ---------------------------------------------------------------------------
+
+describe('PositionsHome — resuming a half-open position', () => {
+  /** A rate-locked position with NO perp legs — what the resume cue fires on. */
+  const borosOnly = (over: Partial<StrategyRollup> = {}) =>
+    makeStrategyRollup({
+      strategyId: 'HYPE@boros-only',
+      legs: makeStrategyRollup().legs.filter((l) => l.kind === 'boros'),
+      hedgeChecks: { borosMatchRatio: 1, perpMatchRatio: 0, borosVsPerpRatio: 0, fullyHedged: false },
+      ...over,
+    });
+
+  /** App mounts the wizard beside the panel; these tests need the same pair. */
+  const mountHome = () =>
+    renderWithClient(
+      <>
+        <PositionsHome />
+        <StrategyWizard />
+      </>,
+    );
+
+  const openCue = async () => {
+    const cta = await screen.findByRole('button', { name: /Open the perp legs/ });
+    await userEvent.click(cta);
+  };
+
+  it('opens the WIZARD at step 2 — not the bare ticket', async () => {
+    localStorage.setItem(STRATEGY_STORAGE_KEY, JSON.stringify({ address: ADDR }));
+    mockPositions();
+    mockStrategy(makeStrategyReturns({ strategies: [borosOnly()] }));
+    mountHome();
+    await openCue();
+
+    // The wizard's own framing: it is FINISHING, not opening, and step 1 is
+    // already checked off.
+    expect(await screen.findByText('Finish this strategy')).toBeInTheDocument();
+    expect(screen.getByText('Lock the rate')).toBeInTheDocument();
+    expect(screen.getByText('Hedge the perps')).toBeInTheDocument();
+    // The Boros ticket is NOT mounted — those legs already exist.
+    expect(screen.queryByRole('radiogroup', { name: 'Boros ticket mode' })).not.toBeInTheDocument();
+  });
+
+  it('leaving without hedging warns — the rate is on and naked', async () => {
+    /**
+     * The guard used to test only whether THIS wizard had locked a rate, so a
+     * resume (which arrives with one already locked) closed silently — the one
+     * case where the exposure is guaranteed to exist.
+     */
+    localStorage.setItem(STRATEGY_STORAGE_KEY, JSON.stringify({ address: ADDR }));
+    mockPositions();
+    mockStrategy(makeStrategyReturns({ strategies: [borosOnly()] }));
+    mountHome();
+    await openCue();
+    await screen.findByText('Finish this strategy');
+
+    await userEvent.click(screen.getByRole('button', { name: /close/i }));
+    expect(await screen.findByText(/until the perp legs open you hold directional exposure/)).toBeInTheDocument();
+  });
+
+  it('an UNEVEN book sizes the hedge off the larger Boros side, never the sum', async () => {
+    /**
+     * ⚠ The mis-hedge this guards: summing the two sides would arm the perps
+     * at double the exposure. A lopsided book must still hedge the side that
+     * actually carries risk.
+     */
+    localStorage.setItem(STRATEGY_STORAGE_KEY, JSON.stringify({ address: ADDR }));
+    mockPositions();
+    const legs = makeStrategyRollup().legs.filter((l) => l.kind === 'boros');
+    const uneven = legs.map((l, i) =>
+      i === 0 ? { ...l, notionalUsd: 40_000, notionalToken: 400 } : { ...l, notionalUsd: 10_000, notionalToken: 100 },
+    );
+    mockStrategy(makeStrategyReturns({ strategies: [borosOnly({ legs: uneven })] }));
+    mountHome();
+    await openCue();
+
+    // The perp box lands on the LARGER side (40,000), not 50,000.
+    const size = (await screen.findByLabelText(/Size per leg/)) as HTMLInputElement;
+    expect(size.value).toBe('40000');
+  });
+
+  it('a PARTIAL top-up stays on the bare ticket — no wizard', async () => {
+    /**
+     * "Complete the hedge" evens up one leg inside a position that already
+     * exists. Wrapping that in "step 2 of 2" would narrate a strategy the user
+     * is not opening — and the wizard would re-arm at the FULL size, not the
+     * gap.
+     */
+    localStorage.setItem(STRATEGY_STORAGE_KEY, JSON.stringify({ address: ADDR }));
+    mockPositions();
+    // A partially hedged book: both kinds present, sizes mismatched.
+    const all = makeStrategyRollup().legs;
+    const partial = all.map((l) =>
+      l.kind === 'perp' ? { ...l, notionalUsd: l.notionalUsd / 4, notionalToken: (l.notionalToken ?? 0) / 4 } : l,
+    );
+    mockStrategy(
+      makeStrategyReturns({
+        strategies: [
+          makeStrategyRollup({
+            legs: partial,
+            hedgeChecks: { borosMatchRatio: 1, perpMatchRatio: 0.25, borosVsPerpRatio: 0.25, fullyHedged: false },
+          }),
+        ],
+      }),
+    );
+    mountHome();
+
+    const cta = await screen.findByRole('button', { name: /Complete the hedge/ });
+    await userEvent.click(cta);
+    // No wizard framing anywhere.
+    expect(screen.queryByText('Finish this strategy')).not.toBeInTheDocument();
+    expect(screen.queryByText('Open this strategy')).not.toBeInTheDocument();
   });
 });

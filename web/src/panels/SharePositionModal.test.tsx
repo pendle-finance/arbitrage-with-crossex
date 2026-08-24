@@ -75,18 +75,18 @@ describe('SharePositionModal', () => {
     expect(screen.queryByRole('button', { name: 'Copy image' })).not.toBeInTheDocument();
   });
 
-  it('shows a link that decodes back to the exact payload', () => {
+  it('shows a link that decodes back to the exact payload', async () => {
     mount();
-    const input = screen.getByLabelText('Position share link') as HTMLInputElement;
+    const input = (await screen.findByLabelText('Position share link')) as HTMLInputElement;
     expect(input.value).toBe(buildShareUrl(payload));
     expect(input.value.startsWith('https://boros.pendle.finance/arbitrage-crossex/position?d=')).toBe(true);
     const d = new URL(input.value).searchParams.get('d') ?? '';
     expect(decodeSharePayload(d)).toEqual({ ok: true, payload });
   });
 
-  it('opens the X intent pre-filled with the tweet text and the link', () => {
+  it('opens the X intent pre-filled with the tweet text and the link', async () => {
     mount();
-    const x = screen.getByRole('link', { name: 'Share on X →' });
+    const x = await screen.findByRole('link', { name: 'Share on X →' });
     const href = x.getAttribute('href') ?? '';
     expect(href.startsWith('https://x.com/intent/post?text=')).toBe(true);
     const u = new URL(href);
@@ -100,7 +100,7 @@ describe('SharePositionModal', () => {
     const writeText = vi.fn(async () => {});
     vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } });
     mount();
-    await userEvent.click(screen.getByRole('button', { name: 'Copy link' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Copy link' }));
     expect(writeText).toHaveBeenCalledWith(buildShareUrl(payload));
     await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Link copied'));
   });
@@ -127,7 +127,7 @@ describe('SharePositionModal', () => {
     // The payload is byte-identical to the address-less one, so the public
     // link never carries the wallet.
     expect(bodies[0].d).toBe(encodeSharePayload(payload));
-    const input = screen.getByLabelText('Position share link') as HTMLInputElement;
+    const input = (await screen.findByLabelText('Position share link')) as HTMLInputElement;
     await waitFor(() => expect(input.value).toBe(buildShortShareUrl('Abc123_-xyz')));
     expect(input.value).not.toContain(TRACKED.toLowerCase());
     expect(input.value).not.toContain(TRACKED);
@@ -146,21 +146,26 @@ describe('SharePositionModal', () => {
     expect(Object.keys(bodies[0])).toEqual(['d']);
   });
 
-  it('upgrades the link (and the X intent) to the short URL once the backend mints a code', async () => {
+  it('shows the SHORT url first time — never the long one, then a swap', async () => {
+    /**
+     * The field used to render the long URL immediately and visibly flip to
+     * the short one a moment later. That reads as a glitch, and it puts a
+     * second URL under a selection the user may already be dragging. The field
+     * now holds for a short grace window, so the first link they see is final.
+     */
     server.use(shareLinkMints('Abc123_-xyz'));
     mount();
-    const input = screen.getByLabelText('Position share link') as HTMLInputElement;
-    // The long link is usable immediately — the upgrade is a background swap.
-    expect(input.value).toBe(buildShareUrl(payload));
-    await waitFor(() => expect(input.value).toBe(buildShortShareUrl('Abc123_-xyz')));
+    const input = (await screen.findByLabelText('Position share link')) as HTMLInputElement;
     expect(input.value).toBe('https://boros.pendle.finance/arbitrage-crossex/position?s=Abc123_-xyz');
+    // It was never the long URL on the way there.
+    expect(input.value).not.toBe(buildShareUrl(payload));
     const href = screen.getByRole('link', { name: 'Share on X →' }).getAttribute('href') ?? '';
     expect(new URL(href).searchParams.get('url')).toBe(buildShortShareUrl('Abc123_-xyz'));
   });
 
   it('keeps the long URL when the short-link mint fails — sharing never blocks on the backend', async () => {
     mount(); // beforeEach handler: /api/share-link 502s
-    const input = screen.getByLabelText('Position share link') as HTMLInputElement;
+    const input = (await screen.findByLabelText('Position share link')) as HTMLInputElement;
     expect(input.value).toBe(buildShareUrl(payload));
     // Give the rejected request time to settle; the value must not change.
     await waitFor(() => expect(input.value).toBe(buildShareUrl(payload)));
@@ -171,7 +176,7 @@ describe('SharePositionModal', () => {
     vi.mocked(renderShareCard).mockRejectedValueOnce(new Error('no canvas'));
     mount();
     expect(await screen.findByText(/Image generation failed — the link below still works/)).toBeInTheDocument();
-    expect(screen.getByLabelText('Position share link')).toBeInTheDocument();
+    expect(await screen.findByLabelText('Position share link')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Share on X →' })).toBeInTheDocument();
     expect(screen.queryByRole('link', { name: 'Download PNG' })).not.toBeInTheDocument();
     expect(screen.queryByAltText('Position share card')).not.toBeInTheDocument();

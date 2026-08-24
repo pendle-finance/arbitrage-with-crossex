@@ -8,15 +8,20 @@ Not available to, or intended for, any person where such use is unlawful (includ
 
 ---
 
-# CrossEx-Boros Terminal
+# Arbitrage with CrossEx
 
 **Open source tool** · **Experimental, use at your own risks**
 
-A trading terminal for delta-neutral funding-rate arbitrage on Gate's
-[CrossEx](https://www.gate.com/docs/developers/crossex/en/) platform: one collateral
-pool backing perp positions on multiple venues (BINANCE, BYBIT, GATE, OKX, KRAKEN,
-HYPERLIQUID). Go long a perp on one venue and short the same perp on another; the legs
-are delta-neutral and you collect the funding spread.
+A trading terminal for delta-neutral funding-rate arbitrage across Pendle's
+[Boros](https://boros.pendle.finance) and Gate's
+[CrossEx](https://www.gate.com/docs/developers/crossex/en/): one collateral pool backing
+perp positions on multiple venues (BINANCE, BYBIT, GATE, OKX, KRAKEN, HYPERLIQUID).
+
+The trade is four legs. Two **Boros** legs lock a fixed funding rate until a maturity
+date; two **CrossEx** perp legs — long one venue, short another — cancel the floating
+funding between them. What is left is the locked spread, which is the return. The
+terminal finds those pairs, prices them net of every cost, opens all four legs in the
+right order, and then tracks the position as one thing.
 
 You run it on your own machine — **macOS or Windows**. Your exchange API keys stay on
 that machine and are only ever sent, signed, to Gate.io's official API; the app itself
@@ -38,8 +43,8 @@ press Return:
 
 When it finishes (a few minutes the first time), the terminal opens in your browser at
 **http://localhost:6688** — bookmark it. From then on the app is always running in the
-background, even after you restart your Mac. You'll also find a **"CrossEx-Boros
-Terminal"** launcher in your `~/Applications` folder.
+background, even after you restart your Mac. You'll also find an **"Arbitrage with
+CrossEx"** launcher in your `~/Applications` folder.
 
 Everything lands in one folder: `~/.boros-crossex`.
 
@@ -58,7 +63,7 @@ irm https://raw.githubusercontent.com/pendle-finance/arbitrage-with-crossex/main
 
 When it finishes, the terminal opens in your browser at **http://localhost:6688** —
 bookmark it. The app then starts on its own every time you sign in, and you'll find a
-**"CrossEx-Boros Terminal"** shortcut in your Start Menu.
+**"Arbitrage with CrossEx"** shortcut in your Start Menu.
 
 Everything lands in one folder: `%LOCALAPPDATA%\CrossEx-Boros`.
 
@@ -318,7 +323,7 @@ notionals and check your positions on the exchange directly.
 
 Everything below is for people working on the code. The app is a TypeScript monorepo:
 a framework-free core library, a Fastify server, and a React SPA — built on
-the **official `gate-api` Node SDK** (v7.2+, which ships a native `CrossExApi`).
+the **official `gate-api` Node SDK** (`^7.1.8`, which ships a native `CrossExApi`).
 
 ## Setup
 
@@ -352,7 +357,7 @@ user data lives outside the auto-updated app directory.
 
 ## Web terminal — `yarn dev` / `yarn start`
 
-A local web app ("CrossEx-Boros Terminal") wraps the same core with a monitoring dashboard and a
+A local web app ("Arbitrage with CrossEx") wraps the same core with a monitoring dashboard and a
 safety-gated trading UI:
 
 ```bash
@@ -360,15 +365,23 @@ yarn dev      # Fastify API (127.0.0.1:6688) + Vite dev server with /api proxy (
 yarn start    # build the SPA once, serve everything from http://localhost:6688
 ```
 
-- **Monitoring**: account margin strip, per-coin balances, positions with an **arb-exposure
-  view grouped by coin** (neutral ✓ / imbalanced / single leg), recent trades with the **fee
-  paid per fill** (maker/taker, bps), open orders with cancel, per-venue fee rates.
-- **Trading**: order ticket (market with **tentative average fill price** walked from
-  per-venue public orderbooks + estimated fees; limit with tick snapping and post-only),
-  **pair ticket** (one notional → one shared qty across both legs), a **basket** of mixed
-  actions executed concurrently, and a review modal (previews auto-refresh; confirm is
-  hold-to-press and disabled when previews go stale). Executions run server-side, survive a
-  closed tab, and re-check closes for remnants.
+- **Opportunities**: every viable Boros↔CrossEx pair, ranked by fixed APR net of costs,
+  with the cost assumptions (fee tier, entry mode, perp exit) stated on screen and
+  adjustable. Sizing follows the market's collateral — ETH/BTC markets quote in the coin,
+  USDT/USDC markets in dollars — so both halves of a strategy share one unit.
+- **Monitoring**: account margin strip, per-coin balances, **positions as 4-leg strategy
+  cards** (one card per paired position, with its locked spread, capital, projection and
+  per-leg breakdown; legs shared across maturities show their share), recent trades with
+  the **fee paid per fill** (maker/taker, bps), open orders with cancel, per-venue fee rates.
+- **Trading**: a guided two-step flow — lock the rate on Boros, then hedge the perps —
+  which sizes the hedge from what step 1 actually *filled*, and warns before you leave with
+  a rate locked but unhedged. Underneath it, the same manual tickets: order ticket (market
+  with **tentative average fill price** walked from per-venue public orderbooks + estimated
+  fees; limit with tick snapping and post-only), **pair ticket** (one notional → one shared
+  qty across both legs), a **basket** of mixed actions executed concurrently, and a review
+  modal (previews auto-refresh; confirm is hold-to-press and disabled when previews go
+  stale). Executions run server-side, survive a closed tab, and re-check closes for
+  remnants.
 - **Safety**: pair legs are linked, and if exactly one leg fills you get a red **UNHEDGED**
   banner with one-click remediation (complete the missing leg / unwind the filled one) —
   the web version of `pair.ts`'s guard. Order state strings from Gate are undocumented, so
@@ -431,6 +444,10 @@ curl -s "https://api.gateio.ws/api/v4/crossex/rule/symbols" | jq '.[] | select(.
     never-over-hedge / never-over-acquire against venue truth).
   - `estimate/` — per-venue public orderbook fetchers, VWAP fill estimator (labeled
     source/confidence fallback chain), fee estimation with special-fee overrides.
+  - `boros/` — the fixed-rate side: `opportunities.ts` (prices every viable Boros↔CrossEx
+    pair net of costs), `pair.ts` + `orders.ts` (two-leg quoting and atomic execution),
+    `returns.ts` (the position solver behind the strategy cards — pairing, cost model,
+    projections), `partition.ts` (which venue leg belongs to which strategy).
   - `preview.ts` — `resolveActions` + estimates = `POST /api/preview`.
 - `src/server/` — Fastify app: TTL cache with request coalescing + 429 stale-serve, localhost
   Host/Origin guard, `/api/deals` routes (thin intent writers — the loop owns every venue
@@ -442,14 +459,20 @@ curl -s "https://api.gateio.ws/api/v4/crossex/rule/symbols" | jq '.[] | select(.
 
 ## Caveats & next steps
 
-- **No funding-rate endpoint in CrossEx.** The arb *signal* (which pair to open) must come
-  from each venue's funding data — e.g. Gate futures `GET /futures/usdt/tickers` exposes
-  `funding_rate`. A `funding.ts` scanner is the natural next script (not built yet).
+- **No funding-rate endpoint in CrossEx.** The arb *signal* comes from Boros' own market
+  data rather than CrossEx: `src/core/boros/opportunities.ts` prices every viable pair and
+  serves the Opportunities tab. What CrossEx still does not expose is a per-venue funding
+  feed, so the floating side of a hedge is measured from positions and the funding ledger,
+  not quoted ahead of time.
 - **Reference price for sizing** uses Gate's public spot/futures price, not the exact
-  remote-venue fill price. Cross-venue prices differ only a few bps; for tight sizing pass
-  `--price`. Qty is always floored to lot size, so the real notional is ≤ your target.
-- **Real funds.** Start with `--dry-run` and a tiny `--notional`; the confirmation prompt is
-  on by default. Margin rates show `n/a` when there are no open positions.
+  remote-venue fill price. Cross-venue prices differ only a few bps. Qty is always floored
+  to lot size, so the real notional is ≤ your target.
+- **Real funds.** Start small. Every execution is preceded by a preview you can read, and
+  confirm is hold-to-press and blocked while a quote is stale — but the orders are real.
+  Margin rates show `n/a` when there are no open positions.
+- **Maturity is a deadline.** The Boros legs stop at maturity; the perps do not. A card
+  whose legs have matured says so and asks you to close the perps — leaving them open is
+  naked funding exposure, not an arb.
 
 ## The public site
 

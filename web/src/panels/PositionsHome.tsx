@@ -27,7 +27,7 @@ import {
   type EntryOverride,
 } from './entryOverrideStore';
 import { AddressForm, short, StrategyFreshness, TotalsStrip } from './HomeControls';
-import { buildBoxes } from './homeBoxes';
+import { buildBoxes, rollupFromExposure } from './homeBoxes';
 import { useTrackedAddress } from './trackedAddress';
 import { PerpOnlyBox, type PerpOnlyCue } from './PerpOnlyBox';
 import { StrategyCard } from './StrategyCard';
@@ -47,7 +47,7 @@ import {
   type LegAssertion,
   type LegDestination,
 } from './PartitionEditor';
-import { crossexVenueFor } from '../lib/boros';
+import { crossexVenueFor, isUsdCollateral } from '../lib/boros';
 
 /** Stable empty list, so a callback's deps don't change every render. */
 const EMPTY_STRATEGIES: StrategyRollup[] = [];
@@ -149,6 +149,29 @@ function destinationsFor(
       borosMaturity: maturities.length ? Math.min(...maturities) : null,
     };
   });
+}
+
+/**
+ * The one action an untracked card can offer: name the address holding the
+ * Boros legs. Lazily reveals the form, exactly as PerpOnlyBox's add-address
+ * cue does — a full input row on every card would shout, and most users have
+ * one address to enter once.
+ */
+function AddBorosAddress({ onTrack }: { onTrack: (address: string) => void }) {
+  const [open, setOpen] = useState(false);
+  if (!open) {
+    return (
+      <>
+        <button type="button" className="btn-primary !py-1 !px-3 text-sm" onClick={() => setOpen(true)}>
+          Add Boros address
+        </button>
+        <span className="text-xs text-ink-500">
+          to see whether these perps have a locked rate
+        </span>
+      </>
+    );
+  }
+  return <AddressForm submitLabel="Track" onTrack={onTrack} onCancel={() => setOpen(false)} />;
 }
 
 export function PositionsHome() {
@@ -620,7 +643,10 @@ export function PositionsHome() {
        */
       // 0 is the sentinel for "no Boros legs, so no maturity" — and that is
       // exactly the card this cue fires on. Sending it would match no market
-      // at all, so it is omitted and the resolver falls back to venue+base.
+      // at all, so it is omitted; the ticket then resolves the two legs
+      // together, on the soonest maturity BOTH venues list (it used to take
+      // each venue's first row independently, which armed mismatched expiries).
+
       const maturity = s.maturity > 0 ? s.maturity : undefined;
       if (only) {
         // Exactly one venue travels, which is what puts the ticket in Single
@@ -662,7 +688,7 @@ export function PositionsHome() {
        * figure, which is the unit their Boros leg already uses.
        */
       const collateral = borosLegs.find((l) => l.collateral)?.collateral ?? '';
-      const usdPegged = collateral === 'USDT' || collateral === 'USDC';
+      const usdPegged = isUsdCollateral(collateral);
       // Only meaningful when the collateral IS the base coin — that is the
       // case where the Boros size and the perp quantity are the same number.
       const baseSized = !usdPegged && collateral.toUpperCase() === s.base.toUpperCase();
@@ -671,17 +697,56 @@ export function PositionsHome() {
           .filter((l) => l.side === side)
           .reduce((sum, l) => sum + (l.notionalToken ?? 0), 0);
       const baseQty = Math.max(sideBase('LONG'), sideBase('SHORT'));
+      const longVenue = borosLegs.find((l) => l.side === 'LONG')?.venue ?? null;
+      const shortVenue = borosLegs.find((l) => l.side === 'SHORT')?.venue ?? null;
+      const size = notionalUsd ?? Math.max(sideNotional('LONG'), sideNotional('SHORT'));
+      // ⚠ Only when the caller did NOT name its own USD size. A row asking
+      // for a partial top-up passes that figure, and the FULL base quantity
+      // would silently overrule it with a bigger order than the row offered.
+      const sizing =
+        baseSized && baseQty > 0 && notionalUsd === undefined
+          ? { sizeUnit: 'base' as const, sizeBase: baseQty }
+          : {};
+      /**
+       * A whole-position ask opens the guided wizard AT THE HEDGE STEP; a
+       * partial top-up (`notionalUsd` named by a missing-leg row) stays on the
+       * bare ticket.
+       *
+       * The wizard's job is to say what a complete strategy is and to guard
+       * the half-open state — which is exactly the position this cue fires on:
+       * rate locked, no hedge. A top-up is not that. It is one leg being
+       * evened up inside a position that already exists, so wrapping it in
+       * "step 2 of 2" would narrate a strategy the user is not opening.
+       */
+      if (notionalUsd === undefined) {
+        flow.openWizard({
+          base: s.base,
+          initialStep: 2,
+          // Unused at step 2 (the Boros ticket is never mounted), but they
+          // identify the wizard — the body is keyed on them, so a different
+          // position is a different wizard rather than a form-swap.
+          borosLongVenue: longVenue ?? '',
+          borosShortVenue: shortVenue ?? '',
+          maturity: s.maturity > 0 ? s.maturity : undefined,
+          // ⚠ Boros keys are NOT CrossEx keys. They are identity for every
+          // venue mapped today, which is exactly why omitting the translation
+          // looks correct — but Lighter is live on Boros with no CrossEx
+          // listing, and passing its raw key would arm a ticket for a venue
+          // that cannot fill it. `crossexVenueFor` returns null there, which
+          // correctly leaves the leg unselected.
+          crossexLongVenue: crossexVenueFor(longVenue),
+          crossexShortVenue: crossexVenueFor(shortVenue),
+          notionalUsd: size,
+          ...sizing,
+        });
+        return;
+      }
       flow.prefillPair({
         base: s.base,
-        longVenue: borosLegs.find((l) => l.side === 'LONG')?.venue ?? null,
-        shortVenue: borosLegs.find((l) => l.side === 'SHORT')?.venue ?? null,
-        notionalUsd: notionalUsd ?? Math.max(sideNotional('LONG'), sideNotional('SHORT')),
-        // ⚠ Only when the caller did NOT name its own USD size. A row asking
-        // for a partial top-up passes that figure, and the FULL base quantity
-        // would silently overrule it with a bigger order than the row offered.
-        ...(baseSized && baseQty > 0 && notionalUsd === undefined
-          ? { sizeUnit: 'base' as const, sizeBase: baseQty }
-          : {}),
+        longVenue,
+        shortVenue,
+        notionalUsd: size,
+        ...sizing,
       });
     });
 
@@ -821,7 +886,7 @@ export function PositionsHome() {
           <EmptyState
             icon="◎"
             title="No positions"
-            hint={`No perp positions in the connected account and no Boros positions on ${short(address)} (accountId 0). Open a delta-neutral pair from the order ticket to start a 4-leg position.`}
+            hint={`No perp positions in the connected account and no Boros positions on ${short(address)} (accountId 0). Pick a pair on the Opportunities tab and open it — the guided flow locks the rate, then hedges it.`}
           />
         )
       ) : (
@@ -855,6 +920,31 @@ export function PositionsHome() {
                     ? (leg) => overrideFor(entryRows, box.rollup.strategyId, leg)
                     : undefined
                 }
+              />
+            ) : /**
+             * No address tracked, and this is a real pair: render the SAME
+             * card as a tracked position. A position should not change visual
+             * language because of an input the user has not supplied yet — the
+             * only honest difference is that we cannot speak about its Boros
+             * legs, which `borosUnknown` enforces.
+             *
+             * The other degraded cases keep the simpler box: a stray is a
+             * single leg (no pair to show), and a FAILED or pending feed is
+             * not the same claim as an untracked one — there the card would
+             * have to explain a backend fault, which is what PerpOnlyBox's
+             * cues already do.
+             */
+            perpOnlyCue === 'add-address' && box.kind === 'perp-only' ? (
+              <StrategyCard
+                key={`untracked:${box.group.base}`}
+                bookId={bookId}
+                strategy={rollupFromExposure(box.group)}
+                perpSource={strategyData?.perpSource ?? null}
+                since={since}
+                onChangeSince={changeSince}
+                livePositions={livePositions}
+                borosUnknown
+                borosUnknownCta={<AddBorosAddress onTrack={track} />}
               />
             ) : (
               <PerpOnlyBox

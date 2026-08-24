@@ -490,6 +490,56 @@ describe('PairTicket idempotency across remount', () => {
     // dedupes it into the ORIGINAL deal instead of opening a second pair.
     expect(dealCalls[1].id).toBe(dealCalls[0].id);
   });
+
+  it('mints a NEW deal id when the size UNIT changes — the same digits are a different order', async () => {
+    /**
+     * The mirror of the test above, and the more dangerous direction.
+     *
+     * `sizeUnit` decides whether the box's digits go on the wire as `qty`
+     * (coins) or `notional` (USD), and the toggle deliberately keeps the
+     * figure. With the unit missing from `intentKey`, a lost-response confirm
+     * followed by USDT→ETH produced a byte-identical key: the persisted id was
+     * resent, the server deduped it, and the user was shown "2000 ETH" while
+     * the original $2000 order stood — displayed size ≠ executed size, by the
+     * coin price.
+     */
+    const dealCalls: DealRequest[] = [];
+    server.use(
+      ...baseHandlers(),
+      ...ethSymbolHandlers(),
+      previewHandler({ calls: [] }),
+      http.post('/api/deals', async ({ request }) => {
+        dealCalls.push((await request.json()) as DealRequest);
+        return HttpResponse.json(
+          { ok: false, error: { category: 'network', message: 'socket hang up', retryable: true } },
+          { status: 500 },
+        );
+      }),
+    );
+
+    renderWithClient(<PairTicket />);
+    await fillTwoVenuePair(); // leaves the box in USDT at 1000
+    await waitFor(() => expect(screen.getByLabelText(/Maker price/)).toHaveValue('2497'), { timeout: 4000 });
+    const btn = screen.getByRole('button', { name: 'Execute pair ▸' });
+    await waitFor(() => expect(btn).toBeEnabled(), { timeout: 4000 });
+    fireEvent.pointerDown(btn);
+    await waitFor(() => expect(dealCalls).toHaveLength(1), { timeout: 2_000 });
+
+    // Same digits, different unit — the toggle keeps "1000" in the box.
+    await userEvent.click(
+      within(screen.getByRole('radiogroup', { name: 'Size unit' })).getByRole('radio', { name: 'ETH' }),
+    );
+    expect(screen.getByLabelText('Size per leg (ETH)')).toHaveValue('1000');
+
+    const btn2 = screen.getByRole('button', { name: 'Execute pair ▸' });
+    await waitFor(() => expect(btn2).toBeEnabled(), { timeout: 4000 });
+    fireEvent.pointerDown(btn2);
+    await waitFor(() => expect(dealCalls).toHaveLength(2), { timeout: 2_000 });
+
+    // A different order ⇒ a different id, so the server cannot dedupe it into
+    // the dollar-denominated one.
+    expect(dealCalls[1].id).not.toBe(dealCalls[0].id);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -673,5 +723,63 @@ describe('notional validation', () => {
     await userEvent.type(notional, '7668.31');
     expect(screen.queryByRole('alert')).toBeNull();
     expect(notional).not.toHaveAttribute('aria-invalid');
+  });
+});
+
+describe('PairTicket — the size unit follows the coin', () => {
+  it('defaults ETH to the coin and HYPE to dollars, and re-follows after a prefill', async () => {
+    /**
+     * The unit is half of a hedge, not a preference: ETH/BTC are coin-margined
+     * on Boros so the perp is sized in the coin, every other coin is
+     * USDT-collateral so both legs share the dollar figure.
+     *
+     * The regression this pins: a prefill PINS the unit (it puts one number in
+     * the box and names its unit). The rail's ticket is never remounted, so a
+     * pin that outlived its prefill left every LATER manual coin change stuck
+     * on the previous coin's unit — a HYPE pair sized in "ETH".
+     */
+    server.use(...baseHandlers(), ...ethSymbolHandlers(), previewHandler({ calls: [] }));
+    renderWithClient(
+      <PrefillHarness
+        prefills={[{ base: 'ETH', longVenue: 'OKX', shortVenue: 'GATE', notionalUsd: 1234.6 }]}
+      />,
+    );
+
+    // The prefill carries no base quantity, so it honestly falls back to USD
+    // and pins that — the box must NOT be relabelled ETH under its own figure.
+    await userEvent.click(screen.getByRole('button', { name: 'fire-0' }));
+    await waitFor(() => expect(screen.getByLabelText('Size per leg (USDT)')).toHaveValue('1235'));
+
+    // Now the user picks a DIFFERENT coin by hand. The pin belonged to the
+    // prefill and must not survive it — HYPE is USDT-collateral on Boros, so
+    // dollars is right here and stays right.
+    await userEvent.click(screen.getByRole('button', { name: 'HYPE' }));
+    await waitFor(() => expect(screen.getByLabelText('Size per leg (USDT)')).toBeInTheDocument());
+
+    // And back to a coin-margined one: the box must follow to ETH, which is
+    // what the stuck pin prevented.
+    await userEvent.click(screen.getByRole('button', { name: 'ETH' }));
+    await waitFor(() => expect(screen.getByLabelText('Size per leg (ETH)')).toBeInTheDocument());
+  });
+
+  it('clears the size when the coin changes — a USD figure is never relabelled as coins', async () => {
+    /**
+     * Releasing the unit pin without clearing the number turns "2000" typed as
+     * DOLLARS for HYPE into 2000 ETH the moment ETH is picked — and `sizeField`
+     * flips the wire key from `notional` to `qty`, mis-sizing the order by a
+     * factor of the coin price.
+     */
+    server.use(...baseHandlers(), ...ethSymbolHandlers(), previewHandler({ calls: [] }));
+    renderWithClient(<PairTicket />);
+
+    await userEvent.click(screen.getByRole('button', { name: 'HYPE' }));
+    const usdBox = await screen.findByLabelText('Size per leg (USDT)');
+    await userEvent.type(usdBox, '2000');
+    expect(usdBox).toHaveValue('2000');
+
+    await userEvent.click(screen.getByRole('button', { name: 'ETH' }));
+    // The unit follows the new coin — and the old coin's figure does not.
+    const ethBox = await screen.findByLabelText('Size per leg (ETH)');
+    expect(ethBox).toHaveValue('');
   });
 });

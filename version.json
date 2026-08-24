@@ -1,11 +1,12 @@
 {
-  "version": "1.3.0",
+  "version": "1.4.0",
   "highlights": [
-    "Share a position: a PNG card, a public crossexboros.com link, and a pre-filled X post, straight from a hedged 4-leg box",
-    "The link opens a page that explains the trade — the four legs as a hedging diagram, the PnL waterfall, the capital split",
-    "The whole snapshot rides in the URL: the public page stores nothing, and your wallet address never travels with a link",
-    "A deal that stops because your limit price kept crossing the market now says so, and points you back to the order form",
-    "The deal graph draws what the hedge leg would pay at market, sized to what is still unhedged, refreshed as the deal runs",
-    "On Windows the background service no longer opens a terminal window at logon — re-run the install command to pick it up"
+    "Share links are far shorter — the same snapshot, in a URL that survives a paste into X or Telegram",
+    "Open and close Boros legs directly in the app, without a detour to the Boros front end",
+    "A four-leg arb now goes up in two steps: pick the pair, confirm the size — the legs are placed for you",
+    "When automatic grouping cannot tell shared legs apart, adjust a composite position by hand and the app keeps your split",
+    "Composite positions track more faithfully as legs fill, close, and settle",
+    "Position tracking and cost settings are streamlined into one place, so what you paid and what you hold read together",
+    "App renamed to Arbitrage with CrossEx"
   ]
 }

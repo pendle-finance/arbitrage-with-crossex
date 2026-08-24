@@ -17,6 +17,7 @@ import { useTradeFlowOptional } from '../trade/TradeFlow';
 export function PositionRowActions({
   position,
   attributedQty,
+  hedgedSibling,
   onClosed,
   closeOnly = false,
   levOnly = false,
@@ -24,6 +25,8 @@ export function PositionRowActions({
   position: CrossexPosition;
   /** Size the strategy showing this row owns, when the venue leg is shared. */
   attributedQty?: number;
+  /** The leg this one hedges — closing this one leaves that one naked. */
+  hedgedSibling?: { venue: string; side: 'LONG' | 'SHORT' } | null;
   /** How much came off the venue, so the card can shrink a stated claim by it
    * — see ClosePopover's note on what "closed" means here. */
   onClosed?: (qty: number) => void;
@@ -92,6 +95,7 @@ export function PositionRowActions({
         <ClosePopover
           position={position}
           attributedQty={attributedQty}
+          hedgedSibling={hedgedSibling}
           onClosed={onClosed}
           onDismiss={() => setOpen(null)}
         />
@@ -104,6 +108,7 @@ export function PositionRowActions({
 export function PerpLegExpanded({
   position,
   attributedQty,
+  hedgedSibling,
   share = 1,
   levOnly = false,
   entryOverride = null,
@@ -111,6 +116,8 @@ export function PerpLegExpanded({
 }: {
   position: CrossexPosition | null;
   attributedQty?: number;
+  /** The leg this one hedges — see ClosePopover. */
+  hedgedSibling?: { venue: string; side: 'LONG' | 'SHORT' } | null;
   /** Hide [Close] here because the caller's collapsed row already has one.
    * Opt-in per call site, NOT the default: `PerpOnlyBox` has no per-row close
    * column — only a card-level [Close both] — so defaulting this on would
@@ -172,7 +179,12 @@ export function PerpLegExpanded({
           {fmtPct(position.upnlRate)}
         </span>
       </span>
-      <PositionRowActions position={position} attributedQty={attributedQty} levOnly={levOnly} />
+      <PositionRowActions
+        position={position}
+        attributedQty={attributedQty}
+        hedgedSibling={hedgedSibling}
+        levOnly={levOnly}
+      />
     </span>
   );
 }

@@ -410,7 +410,12 @@ export function CloseBorosForm({
                     </span>
                   </span>
                   <span className="flex justify-between text-ink-400">
-                    <span>est. PnL at that rate</span>
+                    {/* "before fees" because it IS: estPnl is
+                        (locked − exec) × size × years, with no fee term. The
+                        drag is quoted once below rather than subtracted here,
+                        which would need a per-leg apportionment the simulation
+                        does not return. */}
+                    <span>est. PnL at that rate, before fees</span>
                     {estPnl !== null ? (
                       <SignedNumber value={estPnl} format={(n) => fmtUsd(n)} />
                     ) : (
@@ -446,6 +451,16 @@ export function CloseBorosForm({
           );
         })}
       </div>
+
+      {/* One line, once, from the figure the simulation already returns — the
+          per-leg PnL above is a rate difference and carries no fee term, so
+          without this the screen showed only the flattering half. */}
+      {sim.data?.simulation.feeDragApr != null && (
+        <span className="text-[11px] text-ink-500">
+          Boros taker + settlement fees ≈ {fmtPct(sim.data.simulation.feeDragApr)} APR on the size
+          closed.
+        </span>
+      )}
 
       <label className="flex items-center gap-2 text-[11px] text-ink-400">
         <span className="w-20">Slippage %</span>

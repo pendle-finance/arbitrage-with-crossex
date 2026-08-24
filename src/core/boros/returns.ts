@@ -826,7 +826,20 @@ function assembleStrategy(args: AssembleInput): StrategyRollup {
     ...perpLegs.slice().sort((a, b) => a.venue.localeCompare(b.venue)),
     ...borosLegs.slice().sort((a, b) => a.venue.localeCompare(b.venue)),
   ];
-  for (const leg of legs) warnings.push(...leg.warnings);
+  /**
+   * Leg warnings surface on the card — EXCEPT the split-share note.
+   *
+   * That note is per-leg by construction (each leg has its own percentage), so
+   * hoisting it printed the same sentence once per leg at the top of the card.
+   * Summarising it into one card line was still prose restating the table: the
+   * leg's own Manual Adjustment cell already reads `1.26 HYPE / 1.89 HYPE`,
+   * which says "shared, and by how much" in the place the number lives. The
+   * note stays on the leg row; the card says nothing.
+   */
+  const SPLIT_NOTE = /% of this .* perp is counted here\.$/;
+  for (const leg of legs) {
+    for (const w of leg.warnings) if (!SPLIT_NOTE.test(w)) warnings.push(w);
+  }
 
   // --- Hedge health: per-venue floating cancellation ------------------------
   const venues = [...new Set(legs.map((l) => l.venue))];
@@ -2680,10 +2693,18 @@ function splitStrategies(
             : cohortPerpShare > 0.99
               ? '>99'
               : String(Math.round(cohortPerpShare * 100));
+        /**
+         * ONE line per card, not one per leg.
+         *
+         * This was pushed onto every perp leg, and `assembleStrategy` hoists
+         * leg warnings to the card — so a two-leg position printed the same
+         * sentence twice at the top, in full, above the numbers it qualifies.
+         * The fact is about the CARD ("some of these perps also hedge other
+         * maturities"), so it is stated once and briefly; the exact share per
+         * leg is on the leg's own row, beside the numbers it describes.
+         */
         for (const b of perpBuilds) {
-          b.leg.warnings.push(
-            `${pct}% of this ${b.leg.venue} perp is counted here — the rest hedges ${cohort.base}'s other Boros maturities.`,
-          );
+          b.leg.warnings.push(`${pct}% of this ${b.leg.venue} perp is counted here.`);
         }
       }
       // Float dust from the perp pairing can leave a tranche with essentially

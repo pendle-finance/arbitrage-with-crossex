@@ -16,6 +16,7 @@
 import type {
   ExposureGroup,
   PositionsResponse,
+  StrategyLeg,
   StrategyReturns,
   StrategyRollup,
 } from '../api/types';
@@ -59,4 +60,91 @@ export function buildBoxes(
       group,
     })),
   ];
+}
+
+/**
+ * An ExposureGroup rendered as a StrategyRollup, so the degraded path can use
+ * the SAME card as everything else.
+ *
+ * A position should not change visual language because of what the Boros feed
+ * could tell us about it. Everything here comes from the positions feed — the
+ * perp legs, their sides, their notionals — and every field the strategy
+ * solver would have computed is left at the value that means "not known":
+ * no Boros legs, no maturity, no capital, no projection.
+ *
+ * ⚠ The card must NOT then claim the Boros legs are MISSING. With no address
+ * tracked we have not looked, and "no Boros legs yet" is a statement about the
+ * user's book that we are in no position to make — see `borosUnknown` on
+ * StrategyCard, which is what this pairs with.
+ *
+ * Perp-only numbers stay honest: uPnL and funding are per-leg facts the perp
+ * feed knows, so they show. The rate/capital/ROI block does not, because
+ * `fullyHedged: false` gates it — the same gate a half-built tracked position
+ * passes through.
+ */
+export function rollupFromExposure(group: ExposureGroup): StrategyRollup {
+  const legs: StrategyLeg[] = group.legs.map((l) => ({
+    kind: 'perp' as const,
+    venue: l.exchange,
+    base: group.base,
+    side: l.side,
+    notionalUsd: l.value,
+    notionalToken: l.qty,
+    symbol: l.symbol,
+    cashFlowUsd: 0,
+    mtmUsd: 0,
+    tradePnlUsd: 0,
+    feesUsd: 0,
+    netUsd: 0,
+    openedAt: null,
+    warnings: [],
+  }));
+  return {
+    // Distinct from every server id (`BASE#perps`, `BASE@maturity`) so a
+    // membership pin can never be filed against a card that only exists
+    // because the feed is down.
+    strategyId: `${group.base}#untracked`,
+    attribution: { source: 'unhedged', confidence: 'measured', pinned: false },
+    base: group.base,
+    // 0 is the "no Boros legs, so no maturity" sentinel the cards already read.
+    maturity: 0,
+    legs,
+    hedge: 'unhedged',
+    hedgeChecks: {
+      borosMatchRatio: 0,
+      perpMatchRatio: 1,
+      borosVsPerpRatio: 0,
+      fullyHedged: false,
+    },
+    capitalUsd: 0,
+    capitalSplit: { perpUsd: 0, borosUsd: 0 },
+    realizedPnlUsd: 0,
+    realizedApr: null,
+    spread: 0,
+    lockedAprOnCapital: 0,
+    spreadReturnUsd: null,
+    expectedPnlToMaturityUsd: null,
+    elapsedSeconds: null,
+    clockBasis: null,
+    clockStartSec: null,
+    secondsToMaturity: 0,
+    notionalMismatchUsd: Math.abs(group.netValue),
+    perpEntryCostParts: [],
+    feesUsd: {
+      paid: {
+        perpTradingUsd: 0,
+        perpEntrySlippageUsd: null,
+        borosTradeUsd: 0,
+        borosSettlementUsd: 0,
+        totalUsd: 0,
+      },
+      future: {
+        perpExitFeesUsd: 0,
+        perpExitSlippageUsd: null,
+        borosSettlementUsd: 0,
+        totalUsd: 0,
+      },
+    },
+    warnings: [],
+  };
 }

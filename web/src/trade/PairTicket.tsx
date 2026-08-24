@@ -14,6 +14,7 @@ import { useSymbolDetail, useSymbolsByBase } from '../api/queries';
 import type { ActionInput, PreviewResult, RestEstimate } from '../api/types';
 import { SegmentedToggle } from '../components/SegmentedToggle';
 import { amountError } from '../lib/amount';
+import { sizeUnitForBase } from '../lib/boros';
 import { fmtUsd } from '../lib/fmt';
 import { uuid } from '../lib/uuid';
 import { ExecuteControl } from './ExecuteControl';
@@ -43,7 +44,9 @@ function restOffsetPrice(rest: RestEstimate, isBuy: boolean): number {
   return px > 0 ? Number(px.toFixed(12)) : touch;
 }
 
-export function PairTicket() {
+/** `onExecuted` fires once the pair is ACCEPTED (the 202 that opens the deal
+ * view) — execution itself is asynchronous and tracked by the DealModal. */
+export function PairTicket({ onExecuted }: { onExecuted?: () => void } = {}) {
   const [base, setBase] = useState<string | null>(null);
   const [longSym, setLongSym] = useState<string | null>(null);
   const [shortSym, setShortSym] = useState<string | null>(null);
@@ -55,12 +58,17 @@ export function PairTicket() {
    * has always taken either — `resolveQty` converts notional→qty at preview —
    * so this is a labelling and routing choice, not new sizing maths.
    *
-   * Base leads because it is what makes a hedge EXACT: the Boros leg of an
-   * ETH-collateral market is denominated in ETH, so sizing the perp in USDT
-   * meant eyeballing an FX conversion to make the two legs match, and any
-   * error showed up later as a position the card flags as imbalanced.
+   * The default follows the coin, not a fixed preference: it is what makes a
+   * hedge EXACT. An ETH-collateral Boros leg is denominated in ETH, so sizing
+   * its perp in USDT means eyeballing an FX conversion and the error surfaces
+   * later as a position the card flags as imbalanced. But the same argument
+   * runs the other way for every USDT-collateral coin (HYPE and the rest),
+   * where 'base' was imposing exactly that needless conversion — the Boros
+   * side is in dollars, so the perp box should be too. See sizeUnitForBase.
    */
-  const [sizeUnit, setSizeUnit] = useState<'base' | 'usd'>('base');
+  const [sizeUnit, setSizeUnit] = useState<'base' | 'usd'>('usd');
+  /** True once the user picks the unit by hand — stop following the coin. */
+  const [unitPinned, setUnitPinned] = useState(false);
   const [nonce, setNonce] = useState(0);
   const flow = useTradeFlowOptional();
   const [mode, setMode] = useState<ExecMode>('maker');
@@ -68,6 +76,22 @@ export function PairTicket() {
   /** True once the user typed a price — stop auto-tracking the touch. */
   const [pricePinned, setPricePinned] = useState(false);
   const [timeoutSec, setTimeoutSec] = useState<TimeoutChoice>('300');
+
+  /**
+   * Follow the coin until the user says otherwise.
+   *
+   * The size box is not a preference, it is half of a hedge: the unit that
+   * makes the two legs match is a property of the coin's Boros market, so it
+   * has to move when the coin does. Pinned the moment the toggle is touched —
+   * an explicit choice must never be overwritten by picking a venue.
+   *
+   * A prefill pins too (see below): it puts one number in the box and names
+   * its unit, so the coin must not relabel it afterwards.
+   */
+  useEffect(() => {
+    if (unitPinned || !base) return;
+    setSizeUnit(sizeUnitForBase(base));
+  }, [base, unitPinned]);
 
   const venues = useSymbolsByBase(base);
   const longDetail = useSymbolDetail(longSym);
@@ -105,6 +129,17 @@ export function PairTicket() {
       setSizeUnit('usd');
       setNotionalStr(String(Math.max(1, Math.round(prefill.notionalUsd))));
     }
+    /**
+     * ⚠ PIN it. The caller has just put ONE number in the box and named its
+     * unit; the coin-following effect must not then relabel that number.
+     *
+     * The case that bites is an ETH prefill carrying no base quantity: it
+     * falls back to the USD figure above, and an unpinned effect would flip
+     * the unit to ETH underneath it — reading $1,235 as 1,235 ETH. The prefill
+     * is always the more specific answer, because callers that know the Boros
+     * collateral derive the unit from it rather than from the coin.
+     */
+    setUnitPinned(true);
     // Same invariant as the manual mode toggle: a mode switch un-pins the price
     // so the maker leg resumes tracking the touch.
     if (prefill.mode) {
@@ -269,7 +304,10 @@ export function PairTicket() {
       ? acts.map((a) => (a.kind === 'open-limit' && a.pairRole === 'maker' ? { ...a, pegToTouch: true } : a))
       : acts;
 
-  const stageDone = () => setNonce((n) => n + 1); // next pair gets a fresh group id
+  const stageDone = () => {
+    setNonce((n) => n + 1); // next pair gets a fresh group id
+    onExecuted?.();
+  };
 
   // Total initial margin the pair posts — Σ notional/leverage over the open
   // legs, from the same estimator the execute gate uses.
@@ -283,11 +321,25 @@ export function PairTicket() {
           setBase(b);
           setLongSym(null);
           setShortSym(null);
+          // ⚠ Release the prefill's pin — AND clear the number with it.
+          //
+          // The pin stops the coin relabelling a figure the CALLER put in the
+          // box; picking a coin by hand ends that, and the new coin's own unit
+          // must win. But releasing alone would relabel whatever is already
+          // typed: "2000" meant as dollars for HYPE becomes 2000 ETH the
+          // moment ETH is picked, and `sizeField` flips the wire key from
+          // `notional` to `qty` — the exact factor-of-the-coin-price mis-size
+          // that key pair exists to prevent. The size belonged to the old
+          // coin; it does not survive the switch.
+          setUnitPinned(false);
+          setNotionalStr('');
         }}
         onClear={() => {
           setBase(null);
           setLongSym(null);
           setShortSym(null);
+          setUnitPinned(false);
+          setNotionalStr('');
         }}
       />
 
@@ -319,18 +371,22 @@ export function PairTicket() {
           <label htmlFor="pair-notional" className="text-[11px] text-ink-400">
             Size per leg{base || sizeUnit === 'usd' ? ` (${sizeUnit === 'base' ? base : 'USDT'})` : ''}
           </label>
-          {/* Sizing in the BASE coin is what makes the hedge exact — the Boros
-              leg of an ETH-collateral market is denominated in ETH, so a USDT
-              perp size had to be converted by eye. The toggle stays because a
-              USD-collateral market (HYPE) genuinely wants the USD figure, and
-              because some users think in notional regardless. */}
+          {/* The unit follows the coin (see sizeUnitForBase): ETH/BTC are
+              coin-margined on Boros, so the perp is sized in the coin and the
+              hedge is exact; every other coin is USDT-collateral there, so the
+              dollar figure is the one both legs share. The toggle stays because
+              some users think in notional regardless — and once used, it pins. */}
           {/* No coin picked yet ⇒ nothing sensible to call the base unit, so
               the choice is withheld rather than shown as "Base". */}
           {base && (
           <SegmentedToggle<'base' | 'usd'>
             ariaLabel="Size unit"
             value={sizeUnit}
-            onChange={setSizeUnit}
+            onChange={(u) => {
+              // An explicit choice wins over the coin's default from here on.
+              setUnitPinned(true);
+              setSizeUnit(u);
+            }}
             options={[
               // Always the actual coin (ETH / BTC) — "Base" is jargon that
               // names a role rather than the unit the number is in. Before a
@@ -458,10 +514,19 @@ export function PairTicket() {
         // pair. The group id still rides in the actions (it only labels the
         // executed legs as one group); POST /deals dedupes on the deal id alone,
         // so a recovered resend with a different group id is still a no-op.
+        // ⚠ `sizeUnit` is part of the intent, not presentation. It decides
+        // whether the SAME digits go on the wire as `qty` (base coin) or
+        // `notional` (USD) — a factor-of-the-coin-price difference — and the
+        // toggle deliberately keeps the figure. Without it here, a
+        // lost-response confirm followed by a unit flip produced a
+        // byte-identical key, so the recovered basketId was resent and the
+        // server deduped it: the user was shown "2000 ETH" while the ORIGINAL
+        // $2000 order stood.
         intentKey={[
           longSym,
           shortSym,
           notionalStr,
+          sizeUnit,
           mode,
           makerLegPick,
           timeoutSec,

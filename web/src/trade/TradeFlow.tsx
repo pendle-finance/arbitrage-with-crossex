@@ -109,10 +109,73 @@ export interface SinglePerpPrefill {
   nonce: number;
 }
 
+/**
+ * Everything the guided 2-step wizard needs to open one full strategy: the
+ * Boros rate legs (step 1) and the CrossEx perp hedge (step 2).
+ *
+ * Venues travel TWICE because the two halves are addressed differently: a
+ * card's Boros leg and its perp leg sit at the same venue but under different
+ * keys, and crossing them arms tickets with markets that do not exist.
+ */
+export interface StrategyWizardIntent {
+  base: string;
+  /** Boros venue keys for the rate legs, long side first. */
+  borosLongVenue: string;
+  borosShortVenue: string;
+  /** Maturity of the Boros legs, unix seconds — see BorosOpenPrefill.maturity. */
+  maturity?: number;
+  /** CrossEx venue keys for the perp legs; null = no mapped symbol there. */
+  crossexLongVenue: string | null;
+  crossexShortVenue: string | null;
+  /** USD notional per leg. */
+  notionalUsd: number;
+  /**
+   * The same size in the base coin, for token-margined cohorts.
+   *
+   * ⚠ Set ONLY when the Boros collateral IS the base coin — that is the case
+   * where the Boros size and the perp quantity are the same number, needing no
+   * conversion. Every caller guards on it (the Opportunities card compares the
+   * collateral symbol to the base; the Positions cue uses `baseSized`), and
+   * the wizard turns its presence straight into `sizeUnit: 'base'`. Setting it
+   * for a USDT-collateral coin would arm the perp box with a dollar figure
+   * labelled as coins.
+   */
+  sizeBase?: number;
+  /** Perp execution mode to arm step 2 with. */
+  perpMode?: ExecMode;
+  /**
+   * Step to open at. 2 = the rate legs already exist (a boros-only position
+   * resuming its hedge); default 1.
+   */
+  initialStep?: 1 | 2;
+}
+
 export interface TradeFlowApi {
   modalOpen: boolean;
   /** Show the live deal view (post-202, or the recovery banner). */
   openDeal: (dealId: string) => void;
+  /** The guided open-a-strategy wizard; null = closed. */
+  wizard: StrategyWizardIntent | null;
+  openWizard: (w: StrategyWizardIntent) => void;
+  closeWizard: () => void;
+  /**
+   * Bumped when a strategy is requested that cannot be executed yet because
+   * credentials are unconfigured. The wizard deliberately does NOT open — a
+   * two-step execution modal with no keys behind it is a dead end — so this
+   * counter is the click's only trace, and the setup guide answers it by
+   * scrolling to and flashing the API-key form.
+   */
+  setupNonce: number;
+  /** Ask for setup instead of opening the wizard (first-run cards). */
+  requestSetup: () => void;
+  /**
+   * The manual order ticket, now an on-demand drawer rather than a permanent
+   * column. Any prefill fired while the wizard is closed opens it — a form
+   * must never be populated out of sight.
+   */
+  railOpen: boolean;
+  openRail: () => void;
+  closeRail: () => void;
   pairPrefill: PairPrefill | null;
   /** Prefill the pair ticket (strategy-box "Open the perp legs" cue). */
   prefillPair: (p: Omit<PairPrefill, 'nonce'>) => void;
@@ -142,18 +205,37 @@ export function TradeFlowProvider({ children }: { children: ReactNode }) {
   const [pairPrefill, setPairPrefill] = useState<PairPrefill | null>(null);
   const [borosOpenPrefill, setBorosOpenPrefill] = useState<BorosOpenPrefill | null>(null);
   const [singlePerpPrefill, setSinglePerpPrefill] = useState<SinglePerpPrefill | null>(null);
+  const [wizard, setWizard] = useState<StrategyWizardIntent | null>(null);
+  const [railOpen, setRailOpen] = useState(false);
+  const [setupNonce, setSetupNonce] = useState(0);
   const prefillNonce = useRef(0);
+  // Read by the prefill callbacks, which must stay referentially stable: a
+  // wizard-fired prefill arms the wizard's own tickets and must NOT pop the
+  // manual drawer over it.
+  const wizardRef = useRef<StrategyWizardIntent | null>(null);
+  wizardRef.current = wizard;
 
   const openDeal = useCallback((id: string) => setDealId(id), []);
+  /**
+   * A prefill is a promise that the armed form is on screen. The rail is a
+   * drawer now, so any prefill fired outside the wizard has to open it — and a
+   * prefill fired BY the wizard must not, or the drawer would cover the wizard
+   * and mount a second ticket consuming the same prefill.
+   */
+  const revealRail = () => {
+    if (wizardRef.current === null) setRailOpen(true);
+  };
   const prefillPair = useCallback((p: Omit<PairPrefill, 'nonce'>) => {
     prefillNonce.current += 1;
     setPairPrefill({ ...p, nonce: prefillNonce.current });
+    revealRail();
   }, []);
   // Shares the nonce counter with prefillPair: both arm the same rail, so one
   // monotonic source means a stale prefill can never be applied.
   const prefillBorosOpen = useCallback((p: Omit<BorosOpenPrefill, 'nonce'>) => {
     prefillNonce.current += 1;
     setBorosOpenPrefill({ ...p, nonce: prefillNonce.current });
+    revealRail();
   }, []);
 
   // Shares the one monotonic counter with the other prefills: they all arm the
@@ -161,12 +243,50 @@ export function TradeFlowProvider({ children }: { children: ReactNode }) {
   const prefillSinglePerp = useCallback((p: Omit<SinglePerpPrefill, 'nonce'>) => {
     prefillNonce.current += 1;
     setSinglePerpPrefill({ ...p, nonce: prefillNonce.current });
+    revealRail();
+  }, []);
+
+  /**
+   * Closing an execution surface retires its prefills. Without this, a ticket
+   * mounted LATER (the drawer re-opened by hand) would find the old nonce
+   * ahead of its own state and re-arm a form for a trade the user walked away
+   * from — a loaded order whose subject matches nothing on screen.
+   */
+  const clearPrefills = () => {
+    setPairPrefill(null);
+    setBorosOpenPrefill(null);
+    setSinglePerpPrefill(null);
+  };
+  const openWizard = useCallback((w: StrategyWizardIntent) => {
+    setWizard(w);
+    // One execution surface at a time: the wizard replaces whatever the
+    // drawer was staging.
+    setRailOpen(false);
+    clearPrefills();
+  }, []);
+  const closeWizard = useCallback(() => {
+    setWizard(null);
+    clearPrefills();
+  }, []);
+  const requestSetup = useCallback(() => setSetupNonce((n) => n + 1), []);
+  const openRail = useCallback(() => setRailOpen(true), []);
+  const closeRail = useCallback(() => {
+    setRailOpen(false);
+    clearPrefills();
   }, []);
 
   const api = useMemo<TradeFlowApi>(
     () => ({
       modalOpen: dealId !== null,
       openDeal,
+      wizard,
+      openWizard,
+      closeWizard,
+      setupNonce,
+      requestSetup,
+      railOpen,
+      openRail,
+      closeRail,
       pairPrefill,
       prefillPair,
       borosOpenPrefill,
@@ -174,7 +294,7 @@ export function TradeFlowProvider({ children }: { children: ReactNode }) {
       singlePerpPrefill,
       prefillSinglePerp,
     }),
-    [dealId, openDeal, pairPrefill, prefillPair, borosOpenPrefill, prefillBorosOpen, singlePerpPrefill, prefillSinglePerp],
+    [dealId, openDeal, wizard, openWizard, closeWizard, setupNonce, requestSetup, railOpen, openRail, closeRail, pairPrefill, prefillPair, borosOpenPrefill, prefillBorosOpen, singlePerpPrefill, prefillSinglePerp],
   );
 
   return (

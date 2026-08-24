@@ -28,7 +28,7 @@
  *
  * Purely prop-driven — PositionsHome owns the queries.
  */
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import type {
   CrossexPosition,
   EntryCostMode,
@@ -184,6 +184,8 @@ export function StrategyCard({
   destinations,
   entryOverrides,
   bookId = '',
+  borosUnknown = false,
+  borosUnknownCta,
 }: {
   /** The custom strategy-start override (per wallet ?since=), editable from
    * the timeline's "Boros position open ✎" label. */
@@ -208,6 +210,19 @@ export function StrategyCard({
     s: StrategyRollup,
     only?: { side: 'LONG' | 'SHORT'; sizeUsd: number; sizeBase?: number },
   ) => void;
+  /**
+   * No Boros address is tracked, so we have NOT looked for this position's
+   * Boros legs.
+   *
+   * The card must then state the absence of information, never the absence of
+   * legs: "No Boros legs yet" is a claim about the user's book, and with
+   * nothing tracked we are in no position to make it. Suppresses the
+   * missing-leg rows and every cue that offers to open them, because both
+   * assert the same thing.
+   */
+  borosUnknown?: boolean;
+  /** Rendered in place of those cues — the "Add Boros address" control. */
+  borosUnknownCta?: ReactNode;
   /** Say where one of this position's legs belongs. Absent = the grouping is
    * read-only (the share page, tests that don't wire it). */
   onAssert?: (a: LegAssertion) => void;
@@ -394,7 +409,9 @@ export function StrategyCard({
     const pShort = sideSum('perp', 'SHORT');
     const grossBoros = bLong + bShort;
     const grossPerp = pLong + pShort;
-    if (!(checks.borosMatchRatio > 0.9)) {
+    // ⚠ Every cue in this block is a claim that a Boros leg is MISSING. With
+    // no address tracked we never looked, so none of them may be made.
+    if (!(checks.borosMatchRatio > 0.9) && !borosUnknown) {
       if (grossBoros === 0) {
         // Both sides missing, not one — and there is no Boros size to quote a
         // top-up against, so the perp book sizes it. Mirrors the perp cue below.
@@ -600,8 +617,27 @@ export function StrategyCard({
    * known — with no perp legs and no Boros legs there is no grid to complete,
    * and an orphan gets none of this by construction (`cardState`).
    */
+  /**
+   * The perp leg on the far side of this one, when the pair is genuinely a
+   * hedge (both perp sides present and this book is fully hedged).
+   *
+   * Closing one side of a delta-neutral pair stops the funding cancelling and
+   * leaves the other leg running directionally — a position the user did not
+   * choose to put on. Only offered when there IS something to un-hedge: on a
+   * half-built or already-lopsided book the row-level close is how the user
+   * fixes it, and the warning would be noise.
+   */
+  const hedgedSiblingOf = (leg: StrategyLeg): { venue: string; side: 'LONG' | 'SHORT' } | null => {
+    if (leg.kind !== 'perp' || !checks.fullyHedged) return null;
+    const far = perpLegs.find((o) => o.side !== leg.side && o.venue !== leg.venue);
+    return far ? { venue: far.venue, side: far.side } : null;
+  };
+
   const missingRows: MissingLegRow[] =
-    cardState === 'complete' || cardState === 'orphan'
+    // ⚠ A missing row asserts the leg is NOT open, and offers to open it. With
+    // no address tracked we never looked for the Boros legs, so the grid shows
+    // the perps alone rather than two rows claiming an absence.
+    cardState === 'complete' || cardState === 'orphan' || borosUnknown
       ? []
       : (['LONG', 'SHORT'] as const).flatMap((side) => {
           const venue = venueForSide(side);
@@ -1000,6 +1036,7 @@ export function StrategyCard({
             // acts on the whole position, so the popover has to open on THIS
             // position's size, not the venue's.
             attributedQty={(r.share ?? 1) < 0.999 ? r.notionalToken : undefined}
+            hedgedSibling={hedgedSiblingOf(r)}
             // …and the claim has to come down by what was closed, or the row
             // goes on asserting a size this card no longer holds.
             onClosed={(qty) => {
@@ -1123,7 +1160,14 @@ export function StrategyCard({
           that would lock their rate is missing. The card knows the venues and
           the size, so it hands them to the Boros ticket rather than leaving
           the user to rebuild that from the missing-leg rows one at a time. */}
-      {perpLegs.length === 2 && borosLegs.length === 0 && !matured && onOpenBorosLegs && (
+      {/* Nothing tracked: the card offers the one action that can change that,
+          in the slot the "Open the Boros legs" cue occupies on a tracked card.
+          It is not a trade — it is the missing input that would let us answer
+          whether these perps are hedged at all. */}
+      {borosUnknown && borosUnknownCta && (
+        <div className="mt-2 flex flex-wrap items-center gap-2">{borosUnknownCta}</div>
+      )}
+      {!borosUnknown && perpLegs.length === 2 && borosLegs.length === 0 && !matured && onOpenBorosLegs && (
         <div className="mt-2 flex flex-wrap items-center gap-2">
           <button
             type="button"
@@ -1369,13 +1413,18 @@ export function StrategyCard({
                 ? 'Not part of any position. Assign it below, or close it.'
                 : cardState === 'mismatched'
                   ? 'Every leg is open in the right direction, but only the matched part is hedged.'
-                  : borosLegs.length === 0
-                    ? // A perp pair with no Boros side at all: the funding is
-                      // floating, and saying "once every leg is in place" would
-                      // imply the missing legs are a formality rather than the
-                      // whole trade.
-                      'No Boros legs yet — the funding is floating, so there is no locked rate to show.'
-                    : 'Rate, capital and ROI appear once every leg is in place.'}
+                  : borosUnknown
+                    ? // Nothing tracked ⇒ we never looked. Say what we know —
+                      // the perps are here — without claiming the user holds
+                      // no Boros legs.
+                      'Track a Boros address to see whether these perps have a locked rate.'
+                    : borosLegs.length === 0
+                      ? // A perp pair with no Boros side at all: the funding is
+                        // floating, and saying "once every leg is in place"
+                        // would imply the missing legs are a formality rather
+                        // than the whole trade.
+                        'No Boros legs yet — the funding is floating, so there is no locked rate to show.'
+                      : 'Rate, capital and ROI appear once every leg is in place.'}
             </span>
             {cardState !== 'orphan' && pairTopUpUsd !== null && !matured && onOpenPerpLegs && (
               <button
@@ -1543,6 +1592,7 @@ export function StrategyCard({
                   // close acts on the whole position, so the popover has to
                   // open on THIS position's size, not the venue's.
                   attributedQty={(l.share ?? 1) < 0.999 ? l.notionalToken : undefined}
+                  hedgedSibling={hedgedSiblingOf(l)}
                   share={l.share ?? 1}
                   // The collapsed row this expands from already carries the
                   // dedicated [Close] (`closeOnly` above), so a second one here

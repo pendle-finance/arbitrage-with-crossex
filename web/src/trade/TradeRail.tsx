@@ -1,5 +1,8 @@
 /**
- * Right rail: the order ticket.
+ * The manual order ticket — now the CONTENT of an on-demand drawer rather
+ * than a permanent right rail. The guided path is the StrategyWizard; this
+ * surface is for free-form trades, and mounts only while its drawer is open,
+ * so it can never sit armed beside content it has nothing to do with.
  *
  * The top-level choice is the VENUE, not the execution style:
  *
@@ -22,7 +25,7 @@
  * header names it, and the Boros confirm names the venue and both markets
  * before anything is sent.
  */
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { UnderlineTabs } from '../components/UnderlineTabs';
 import { BorosPairTicket } from './BorosPairTicket';
 import { PairTicket } from './PairTicket';
@@ -51,7 +54,6 @@ export function TradeRail() {
   // execution's result entirely.
   const [borosSeen, setBorosSeen] = useState(false);
   const flow = useTradeFlowOptional();
-  const asideRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
     if (venue === 'boros') setBorosSeen(true);
@@ -60,13 +62,13 @@ export function TradeRail() {
   // A strategy-box "Open the perp legs" prefill lands here: make sure the perp
   // pair ticket is visible (PairTicket itself consumes the field values). The
   // venue is set explicitly — a prefill that arrived while the Boros ticket was
-  // open must not silently fill a form the user cannot see.
+  // open must not silently fill a form the user cannot see. No scrolling any
+  // more: the drawer opens over the page, so the armed form is always in view.
   const prefillNonce = flow?.pairPrefill?.nonce ?? 0;
   useEffect(() => {
     if (!prefillNonce) return;
     setVenue('perp');
     setPerpMode('pair');
-    asideRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }, [prefillNonce]);
 
   // A missing-perp ROW asks for one leg, so the rail shows the single ticket
@@ -86,18 +88,15 @@ export function TradeRail() {
   useEffect(() => {
     if (!borosOpenNonce) return;
     setVenue('boros');
-    asideRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }, [borosOpenNonce]);
 
   return (
-    // The 340px is mirrored by TabBar's right slot so the active tab's cyan
-    // shelf ends exactly where this rail begins — change both together.
-    <aside ref={asideRef} className="flex w-[340px] shrink-0 flex-col gap-4" aria-label="Order ticket">
-      <div className="card px-4 py-4">
-        {/* No "Order ticket" heading: the rail is the only thing in this column
-            and the tabs below name what it is. The venue and mode switches are
-            NAVIGATION — which ticket am I on — so they read as underline tabs,
-            while the settings inside each ticket keep their boxed toggles. */}
+    // The drawer supplies width, heading and scroll; this is just the tickets.
+    <div className="flex flex-col gap-4" aria-label="Order ticket">
+      <div>
+        {/* The venue and mode switches are NAVIGATION — which ticket am I on —
+            so they read as underline tabs, while the settings inside each
+            ticket keep their boxed toggles. */}
         <UnderlineTabs<Venue>
           ariaLabel="Venue"
           value={venue}
@@ -132,6 +131,6 @@ export function TradeRail() {
           </div>
         )}
       </div>
-    </aside>
+    </div>
   );
 }

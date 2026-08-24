@@ -3,16 +3,8 @@
  * cohort lives in test/fixtures; degraded variants are spelled per case. */
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { http, HttpResponse } from 'msw';
 import { describe, expect, it } from 'vitest';
-import type {
-  ActionInput,
-  OpportunityLeg,
-  OpportunityPair,
-  PreviewResponse,
-  PreviewResult,
-  SymbolRule,
-} from '../api/types';
+import type { OpportunityLeg, OpportunityPair, SymbolRule } from '../api/types';
 import {
   baseHandlers,
   ETH_GATE,
@@ -24,13 +16,11 @@ import {
   opportunitiesHandler,
   OPP_MATURITY,
   OPP_NT,
-  previewFor,
   symbolHandlers,
 } from '../test/fixtures';
-import { env, server } from '../test/server';
+import { server } from '../test/server';
 import { renderWithClient } from '../test/utils';
-import { PairTicket } from '../trade/PairTicket';
-import { TradeFlowProvider, useTradeFlow } from '../trade/TradeFlow';
+import { useTradeFlow } from '../trade/TradeFlow';
 import { OPPORTUNITIES_STORAGE_KEY, OpportunitiesPanel } from './OpportunitiesPanel';
 import { OPPORTUNITY_FILTERS_STORAGE_KEY } from './opportunityFilters';
 
@@ -42,9 +32,10 @@ const paramsOf = (url: string) => Object.fromEntries(new URL(url).searchParams);
 /** The card's collapse toggle, one per group. */
 const toggles = () => screen.getAllByRole('button', { name: /^(Show|Hide) details for/ });
 
-/** The hedge action. Its accessible name is the aria-label, which carries the
- * card's identity — many cards per cohort differ only by their legs. */
-const executeButtons = () => screen.getAllByRole('button', { name: /^Hedge the perps / });
+/** The card's one CTA — opens the guided wizard. Its accessible name is the
+ * aria-label, which carries the card's identity — many cards per cohort
+ * differ only by their legs. */
+const executeButtons = () => screen.getAllByRole('button', { name: /^Open this strategy — / });
 
 /** Every knob lives inside the collapsed assumptions strip — open it first. */
 const openAssumptions = () =>
@@ -462,7 +453,7 @@ describe('OpportunitiesPanel — collapse', () => {
     await waitFor(() => expect(toggles()).toHaveLength(1));
     expect(screen.getByText('7.0% APR')).toBeInTheDocument();
     expect(
-      screen.getByRole('button', { name: /^Hedge the perps for ETH short Hyperliquid/ }),
+      screen.getByRole('button', { name: /^Open this strategy — ETH short Hyperliquid/ }),
     ).toBeInTheDocument();
     expect(toggles()[0]).toHaveTextContent('More details');
     expect(toggles()[0]).toHaveAttribute('aria-expanded', 'false');
@@ -946,84 +937,45 @@ const ETH_HYPERLIQUID: SymbolRule = {
 };
 const ETH_BINANCE: SymbolRule = { ...ETH_GATE, symbol: 'BINANCE_FUTURE_ETH_USDT', exchange: 'BINANCE' };
 
-const TOUCH = { bestBid: 2499, bestAsk: 2501, mid: 2500 };
-
-/** POST /api/preview echoing taker/maker fees + a touch, as PairTicket.test does. */
-function previewHandler(calls: ActionInput[][]) {
-  return http.post('/api/preview', async ({ request }) => {
-    const { actions } = (await request.json()) as { actions: ActionInput[] };
-    calls.push(actions);
-    const previews = actions.map((a, i): PreviewResult => {
-      const fees = { makerRate: 0.0002, takerRate: 0.0005, specialOverride: false, quote: 'USDT' };
-      if (a.kind === 'open-limit') {
-        return previewFor(a, {
-          index: i,
-          type: 'LIMIT',
-          tif: 'POC',
-          price: a.price || String(TOUCH.mid),
-          qty: '4',
-          estNotional: 10_000,
-          restEstimate: TOUCH,
-          fees: { ...fees, est: { maker: 2 } },
-        });
-      }
-      return previewFor(a, {
-        index: i,
-        qty: '4',
-        estNotional: 10_000,
-        fillEstimate: {
-          qty: '4',
-          avgPrice: 2500.5,
-          worstPrice: 2501,
-          midPrice: TOUCH.mid,
-          slippagePct: 0.02,
-          source: 'venue-orderbook',
-          confidence: 'high',
-          venue: a.symbol.split('_')[0],
-        },
-        fees: { ...fees, est: { taker: 5 } },
-      });
-    });
-    return HttpResponse.json(env<PreviewResponse>({ previews }));
-  });
+/** The last wizard intent the panel opened — the panel's whole execution
+ * contract now: the wizard (mounted in App, not here) arms the tickets from
+ * this, and prefill→ticket is covered by the tickets' own suites. */
+const wizardSeen: Array<Record<string, unknown>> = [];
+function WizardProbe() {
+  const flow = useTradeFlow();
+  const w = flow.wizard as unknown as Record<string, unknown> | null;
+  if (w && wizardSeen.at(-1) !== w) wizardSeen.push(w);
+  return null;
 }
 
-describe('OpportunitiesPanel → Boros prefill', () => {
-  it('arms the Boros ticket with BOTH legs at the card\'s own maturity', async () => {
-    // Regression, twice over:
-    //  1. the maturity did not travel, so a venue+base match took whichever
-    //     expiry came first — the two legs landed on DIFFERENT maturities, and
-    //     since each leg filters the other by maturity, BOTH then vanished
-    //     from their own dropdowns and the ticket rendered empty;
-    //  2. an unresolved market left the PREVIOUS prefill's leg in place, which
-    //     filtered the other leg down to whatever could pair with the stale one.
+describe('OpportunitiesPanel → wizard intent', () => {
+  it('opens the wizard with BOTH Boros legs at the card\'s own maturity', async () => {
+    // Regression heritage (from the old direct-prefill contract): the maturity
+    // must travel, or a venue+base match takes whichever expiry comes first —
+    // the two legs then land on DIFFERENT maturities, and since each leg
+    // filters the other by maturity, BOTH vanish from their own dropdowns and
+    // the ticket renders empty.
     server.use(
       ...baseHandlers(),
       ...symbolHandlers([ETH_HYPERLIQUID, ETH_BINANCE]),
       opportunitiesHandler(makeOpportunitiesResult()),
     );
-    const seen: Array<Record<string, unknown>> = [];
-    function Probe() {
-      const flow = useTradeFlow();
-      const p = flow.borosOpenPrefill;
-      if (p && !seen.some((x) => x.nonce === p.nonce)) seen.push({ ...p });
-      return null;
-    }
+    wizardSeen.length = 0;
     renderWithClient(
-      <TradeFlowProvider>
+      <>
         <OpportunitiesPanel />
-        <Probe />
-      </TradeFlowProvider>,
+        <WizardProbe />
+      </>,
     );
 
     await waitFor(() => expect(toggles()).toHaveLength(1));
-    await userEvent.click(screen.getByRole('button', { name: /^Lock the rate for / }));
+    await userEvent.click(screen.getByRole('button', { name: /^Open this strategy — / }));
 
-    await waitFor(() => expect(seen).toHaveLength(1));
-    const sent = seen[0];
-    // Both venues travel — this opens the PAIR, not one leg.
-    expect(sent.longVenue).toBeTruthy();
-    expect(sent.shortVenue).toBeTruthy();
+    await waitFor(() => expect(wizardSeen).toHaveLength(1));
+    const sent = wizardSeen[0];
+    // Both Boros venues travel — step 1 opens the PAIR, not one leg.
+    expect(sent.borosLongVenue).toBeTruthy();
+    expect(sent.borosShortVenue).toBeTruthy();
     expect(sent.base).toBe('ETH');
     // The pin: the cohort's maturity rides along, so the ticket cannot resolve
     // the two legs to different expiries.
@@ -1032,46 +984,38 @@ describe('OpportunitiesPanel → Boros prefill', () => {
   });
 });
 
-describe('OpportunitiesPanel → PairTicket prefill', () => {
-  it('arms the ticket with the size, the maker mode and the server-supplied legs', async () => {
-    const calls: ActionInput[][] = [];
+describe('OpportunitiesPanel → wizard intent, perp half', () => {
+  it('carries the priced size, the panel\'s entry mode and the CrossEx venue keys', async () => {
     server.use(
       ...baseHandlers(),
       ...symbolHandlers([ETH_HYPERLIQUID, ETH_BINANCE]),
-      previewHandler(calls),
       opportunitiesHandler(makeOpportunitiesResult()),
     );
+    wizardSeen.length = 0;
     renderWithClient(
       <>
         <OpportunitiesPanel />
-        <PairTicket />
+        <WizardProbe />
       </>,
     );
 
     await waitFor(() => expect(toggles()).toHaveLength(1));
-    // The panel's entry mode is what the ticket gets armed with.
+    // The panel's entry mode is what step 2 gets armed with.
     await openAssumptions();
     const panelModes = screen.getByRole('radiogroup', { name: 'Perp entry mode' });
     await userEvent.click(within(panelModes).getByRole('radio', { name: /Limit \+ hedge/ }));
     await userEvent.click(
-      screen.getByRole('button', { name: /^Hedge the perps for ETH short Hyperliquid/ }),
+      screen.getByRole('button', { name: /^Open this strategy — ETH short Hyperliquid/ }),
     );
 
-    await waitFor(() =>
-      expect(screen.getByLabelText('Size per leg (USDT)')).toHaveValue('10000'),
-    );
-    const ticketModes = screen.getByRole('radiogroup', { name: 'Pair execution mode' });
-    expect(within(ticketModes).getByRole('radio', { name: /Limit \+ hedge/ })).toHaveAttribute(
-      'aria-checked',
-      'true',
-    );
-
-    // Boros SHORT on Hyperliquid ⇒ perp SELL there; Boros LONG on Binance ⇒ BUY.
-    await waitFor(() => expect(calls.at(-1)).toHaveLength(2), { timeout: 4000 });
-    const legs = calls.at(-1)!;
-    expect(legs[0]).toMatchObject({ symbol: 'BINANCE_FUTURE_ETH_USDT', side: 'BUY' });
-    expect(legs[1]).toMatchObject({ symbol: 'HYPERLIQUID_FUTURE_ETH_USDC', side: 'SELL' });
-    expect(legs.some((a) => a.kind === 'open-limit' && a.pairRole === 'maker')).toBe(true);
+    await waitFor(() => expect(wizardSeen).toHaveLength(1));
+    const sent = wizardSeen[0];
+    // CrossEx venue keys, NOT the Boros ones — the two halves are addressed
+    // differently even when they sit at the same exchange.
+    expect(sent.crossexLongVenue).toBe('BINANCE');
+    expect(sent.crossexShortVenue).toBe('HYPERLIQUID');
+    expect(sent.notionalUsd).toBe(10_000);
+    expect(sent.perpMode).toBe('maker');
   });
 });
 
@@ -1199,13 +1143,11 @@ describe('OpportunitiesPanel — every viable pair', () => {
   });
 });
 
-describe('OpportunitiesPanel → PairTicket prefill, runner-up pairs', () => {
-  it('arms the ticket with the legs of the card that was CLICKED, not the group best', async () => {
-    const calls: ActionInput[][] = [];
+describe('OpportunitiesPanel → wizard intent, runner-up pairs', () => {
+  it('opens the wizard for the card that was CLICKED, not the group best', async () => {
     server.use(
       ...baseHandlers(),
       ...symbolHandlers([ETH_HYPERLIQUID, ETH_BINANCE, ETH_GATE]),
-      previewHandler(calls),
       // One ETH cohort, two venue combinations: Binance at 12%, Gate at 4%.
       opportunitiesHandler(
         makeOpportunitiesResult({
@@ -1220,29 +1162,25 @@ describe('OpportunitiesPanel → PairTicket prefill, runner-up pairs', () => {
         }),
       ),
     );
+    wizardSeen.length = 0;
     renderWithClient(
       <>
         <OpportunitiesPanel />
-        <PairTicket />
+        <WizardProbe />
       </>,
     );
 
     await waitFor(() => expect(toggles()).toHaveLength(2));
     // The RUNNER-UP — the card the old one-per-group list could not even show.
-    await userEvent.click(executeFor(/^Hedge the perps for ETH short Hyperliquid \/ long Gate/));
+    await userEvent.click(executeFor(/^Open this strategy — ETH short Hyperliquid \/ long Gate/));
 
-    await waitFor(() => expect(calls.at(-1)).toHaveLength(2), { timeout: 4000 });
-    const legs = calls.at(-1) as ActionInput[];
-    // Gate's legs, not the 12% Binance pair's.
-    expect(legs.map((a) => a.symbol).sort()).toEqual([
-      'GATE_FUTURE_ETH_USDT',
-      'HYPERLIQUID_FUTURE_ETH_USDC',
-    ]);
-    expect(legs.find((a) => a.symbol === 'GATE_FUTURE_ETH_USDT')).toMatchObject({ side: 'BUY' });
-    expect(legs.find((a) => a.symbol === 'HYPERLIQUID_FUTURE_ETH_USDC')).toMatchObject({
-      side: 'SELL',
-    });
-    expect(legs.some((a) => a.symbol === 'BINANCE_FUTURE_ETH_USDT')).toBe(false);
+    await waitFor(() => expect(wizardSeen).toHaveLength(1));
+    const sent = wizardSeen[0];
+    // Gate's legs, not the 12% Binance pair's — on BOTH halves.
+    expect(sent.crossexLongVenue).toBe('GATE');
+    expect(sent.crossexShortVenue).toBe('HYPERLIQUID');
+    expect(sent.borosLongVenue).toBe('GATE');
+    expect(sent.borosShortVenue).toBe('HYPERLIQUID');
   });
 });
 

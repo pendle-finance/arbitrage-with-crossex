@@ -19,8 +19,10 @@ import { PositionsHome } from './panels/PositionsHome';
 import { SettingsDrawer } from './panels/SettingsDrawer';
 import { TrackedAddressProvider } from './panels/trackedAddress';
 import { TradesPanel } from './panels/TradesPanel';
+import { Drawer } from './components/Drawer';
 import { RecoveryBanner } from './trade/RecoveryBanner';
-import { TradeFlowProvider } from './trade/TradeFlow';
+import { StrategyWizard } from './trade/StrategyWizard';
+import { TradeFlowProvider, useTradeFlow } from './trade/TradeFlow';
 import { TradeRail } from './trade/TradeRail';
 
 // The markdown renderer is ~160kB and only the guide needs it — split it out so
@@ -73,6 +75,10 @@ export default function App() {
   const headerControls = (
     <>
       <UpdateIndicator />
+      {/* The manual free-form ticket, behind a button now: the guided wizard
+          is the primary path, and an always-on armed order form beside
+          unrelated content was the old layout's mis-execution hazard. */}
+      {configured && <OrderTicketButton />}
       {/* Deliberately the loudest thing in the header after the tabs: new users
           who miss it place real orders without knowing what the scan's
           assumptions mean. */}
@@ -153,6 +159,8 @@ export default function App() {
 
           {credentials.data?.configured && <RecoveryBanner />}
 
+          {/* Full-width content: the order ticket is no longer a permanent
+              column — the wizard and the drawer overlay on demand. */}
           <main className="mx-auto flex w-full max-w-[1500px] flex-1 items-start gap-5 px-5 py-5">
             <section className="min-w-0 flex-1">
               {credentials.isPending ? (
@@ -190,9 +198,15 @@ export default function App() {
               )}
             </section>
 
-            {setupNeeded ? <OnboardingGuide /> : <TradeRail />}
+            {setupNeeded && <OnboardingGuide />}
           </main>
 
+          {configured && (
+            <>
+              <StrategyWizard onViewPositions={() => selectTab('positions')} />
+              <OrderTicketDrawer />
+            </>
+          )}
           <SettingsDrawer open={settingsOpen} onClose={() => setSettingsOpen(false)} />
           {/* Mounted only while open, so the guide is fetched on first request. */}
           {guideOpen && (
@@ -203,5 +217,32 @@ export default function App() {
         </div>
       </TrackedAddressProvider>
     </TradeFlowProvider>
+  );
+}
+
+/** Opens the manual order-ticket drawer. Must render inside TradeFlowProvider. */
+function OrderTicketButton() {
+  const flow = useTradeFlow();
+  return (
+    <button
+      type="button"
+      aria-label="Order ticket"
+      title="The manual order ticket — free-form Boros and CrossEx orders. The cards' own buttons walk you through a full strategy."
+      onClick={flow.openRail}
+      className="rounded-md border border-ink-700 bg-ink-900 px-2.5 py-1 text-xs font-semibold text-ink-300 transition-colors hover:border-ink-500 hover:text-ink-100"
+    >
+      Order ticket
+    </button>
+  );
+}
+
+/** The manual ticket, mounted ONLY while its drawer is open — a closed drawer
+ * cannot sit armed with a stale order. Closing also clears any prefills. */
+function OrderTicketDrawer() {
+  const flow = useTradeFlow();
+  return (
+    <Drawer open={flow.railOpen} title="Order ticket" onClose={flow.closeRail}>
+      <TradeRail />
+    </Drawer>
   );
 }

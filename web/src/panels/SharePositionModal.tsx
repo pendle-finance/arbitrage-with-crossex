@@ -17,6 +17,13 @@ import { useTrackedAddressOptional } from './trackedAddress';
 const canCopyImage = () =>
   typeof ClipboardItem !== 'undefined' && typeof navigator.clipboard?.write === 'function';
 
+/**
+ * How long the link field waits for the short-code mint before falling back to
+ * the long URL. Long enough for a local round-trip, short enough that a dead
+ * backend costs no perceptible wait.
+ */
+const SHORT_LINK_GRACE_MS = 1_500;
+
 export function SharePositionModal({ payload, onClose }: { payload: SharePayloadV1; onClose: () => void }) {
   const toast = useToast();
   // The tracked address rides ALONGSIDE the payload when the code is minted —
@@ -38,30 +45,62 @@ export function SharePositionModal({ payload, onClose }: { payload: SharePayload
     }
   }, [payload]);
 
-  // Upgrade to a short link in the background: the long URL shows immediately
-  // and stays the silent fallback if the backend is slow, down, or throttled —
-  // sharing never waits on the network.
+  /**
+   * Upgrade to a short link in the background. The long URL remains the silent
+   * fallback if the backend is slow, down, or throttled — sharing never waits
+   * indefinitely on the network.
+   *
+   * ⚠ But it must not be shown and then REPLACED. Rendering the long URL
+   * immediately made the field visibly flip to the short one a moment later,
+   * which reads as a glitch and — worse — puts two different URLs in front of
+   * someone who may already be dragging a selection across the first.
+   *
+   * So the field holds until the mint settles, for a short grace window only.
+   * The mint is a local round-trip; if it has not answered within the window
+   * it is not going to be quick, and the long URL takes over for good.
+   */
   const [shortUrl, setShortUrl] = useState<string | null>(null);
+  const [mintSettled, setMintSettled] = useState(false);
   useEffect(() => {
     let cancelled = false;
     setShortUrl(null);
+    setMintSettled(false);
     let d: string;
     try {
       d = encodeSharePayload(payload);
     } catch {
+      // Nothing to mint from — the long URL is the only answer there is.
+      setMintSettled(true);
       return;
     }
+    // The window is the whole of the flicker guard: whatever happens, the user
+    // has a link by the time it elapses.
+    // Once this fires the long URL is committed: a late mint must NOT swap the
+    // field out from under a selection the user is already making. That delayed
+    // swap is the same flicker, just later.
+    let graceElapsed = false;
+    const timer = setTimeout(() => {
+      graceElapsed = true;
+      if (!cancelled) setMintSettled(true);
+    }, SHORT_LINK_GRACE_MS);
     postJson<{ code: string }>('/share-link', trackedAddress ? { d, address: trackedAddress } : { d })
       .then((r) => {
-        if (!cancelled && r?.code) setShortUrl(buildShortShareUrl(r.code));
+        if (cancelled || graceElapsed) return;
+        if (r?.code) setShortUrl(buildShortShareUrl(r.code));
       })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => {
+        if (!cancelled) setMintSettled(true);
+      });
     return () => {
       cancelled = true;
+      clearTimeout(timer);
     };
   }, [payload, trackedAddress]);
 
-  const shareUrl = shortUrl ?? longUrl;
+  // Null while the mint is still in its grace window — the field renders its
+  // placeholder rather than a URL that is about to change.
+  const shareUrl = shortUrl ?? (mintSettled ? longUrl : null);
 
   useEffect(() => {
     let cancelled = false;
@@ -130,7 +169,7 @@ export function SharePositionModal({ payload, onClose }: { payload: SharePayload
           campaigns.
         </p>
 
-        {shareUrl && (
+        {shareUrl ? (
           <div className="flex items-center gap-2">
             <input
               readOnly
@@ -142,6 +181,12 @@ export function SharePositionModal({ payload, onClose }: { payload: SharePayload
             <button type="button" className="btn shrink-0" onClick={copyLink}>
               Copy link
             </button>
+          </div>
+        ) : (
+          // Held only for the grace window above — a placeholder the same
+          // height as the field, so nothing jumps when the link lands.
+          <div className="flex h-[34px] items-center rounded-lg border border-ink-800 bg-ink-950/60 px-2.5 text-[11px] text-ink-400">
+            <Spinner /> <span className="ml-2">Minting a short link…</span>
           </div>
         )}
 

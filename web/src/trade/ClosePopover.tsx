@@ -16,7 +16,8 @@ import { Modal } from '../components/Modal';
 import { SegmentedToggle } from '../components/SegmentedToggle';
 import { SignedNumber } from '../components/SignedNumber';
 import { SideChip, SymbolCell } from '../components/VenueChip';
-import { fmtUsd, sig } from '../lib/fmt';
+import { fmtUsd, parseSymbol, prettyVenue, sig } from '../lib/fmt';
+import { sizeUnitForBase } from '../lib/boros';
 import { ExecuteControl } from './ExecuteControl';
 import { feeText, PreviewFallback, ViolationList } from './previewBits';
 import { usePreviewDebounced } from './usePreview';
@@ -42,10 +43,25 @@ interface Props {
    * claiming size it already sold, taken out of whoever shares the leg.
    */
   onClosed?: (qty: number) => void;
+  /**
+   * This leg is one side of a hedge, so closing it leaves the other side naked.
+   *
+   * A delta-neutral pair earns because the two floating legs cancel; close one
+   * and what remains is a directional funding bet the user did not choose to
+   * put on. The card-level "Close perp pair" says what it does by its name —
+   * this row-level control did not, and said nothing about the consequence.
+   */
+  hedgedSibling?: { venue: string; side: 'LONG' | 'SHORT' } | null;
   onDismiss: () => void;
 }
 
-export function ClosePopover({ position, attributedQty, onClosed, onDismiss }: Props) {
+export function ClosePopover({
+  position,
+  attributedQty,
+  onClosed,
+  hedgedSibling,
+  onDismiss,
+}: Props) {
   const wholeQty = Math.abs(Number(position.positionQty));
   // A shared leg: this card owns less than the venue holds.
   const shared =
@@ -56,6 +72,43 @@ export function ClosePopover({ position, attributedQty, onClosed, onDismiss }: P
   const [slipStr, setSlipStr] = useState('0.5');
   const [mode, setMode] = useState<'full' | 'partial'>(shared ? 'partial' : 'full');
   const [qtyStr, setQtyStr] = useState(shared ? String(Number(attributedQty.toPrecision(8))) : '');
+  /**
+   * Which unit the partial box is in.
+   *
+   * A close has to be sizeable in DOLLARS because that is the unit the other
+   * half of the trade uses: a HYPE position's Boros leg is USDT-collateral and
+   * its notional reads $100, so closing "0.63 HYPE" to match it means doing an
+   * FX conversion by eye — on the leg where a slip leaves a naked remainder.
+   * Follows the same rule as the tickets (ETH/BTC in the coin, everything else
+   * in dollars) so one strategy is sized in one unit end to end.
+   *
+   * The wire format is unchanged: the server's close action takes `qty` only,
+   * so a USD figure is converted here, at the mark the dialog already shows.
+   */
+  const base = parseSymbol(position.symbol).base;
+  /**
+   * ⚠ A shared leg PREFILLS the box with a base quantity (the size this card
+   * owns), so the unit must start as `base` regardless of the coin's default —
+   * otherwise 0.63 HYPE would be relabelled as $0.63. The user can switch, and
+   * the toggle converts the figure with it.
+   */
+  const [unit, setUnit] = useState<'base' | 'usd'>(() =>
+    shared ? 'base' : sizeUnitForBase(base),
+  );
+  const mark = Number(position.markPrice);
+  const markOk = Number.isFinite(mark) && mark > 0;
+  /**
+   * ⚠ USD is only a legal unit while there is a mark to convert AT.
+   *
+   * Gating the toggle on `markOk` was not enough: the DEFAULT is 'usd' for
+   * every non-ETH/BTC coin, so a position whose `markPrice` arrives empty,
+   * zero or unparseable sat in 'usd' with the toggle hidden — and the
+   * conversion fell through to `entered`, sending a DOLLAR figure as a base
+   * quantity. A "$50" partial close of HYPE would have sent 50 HYPE. Every
+   * read of the unit goes through this, so the box, the validation, the wire
+   * value and `onClosed` can never disagree about what the number means.
+   */
+  const effUnit: 'base' | 'usd' = markOk ? unit : 'base';
   const dialogRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -69,10 +122,19 @@ export function ClosePopover({ position, attributedQty, onClosed, onDismiss }: P
   const posQty = Math.abs(Number(position.positionQty));
   const slip = Number(slipStr);
   const slipInvalid = !Number.isFinite(slip) || slip <= 0 || slip > 10;
-  const qtyNum = Number(qtyStr);
+  const entered = Number(qtyStr);
+  /**
+   * The order is always sent in base units. A USD entry converts at the mark —
+   * the same price the preview below quotes — and with no usable mark the USD
+   * option is not offered at all, so this cannot silently divide by a stale or
+   * zero price.
+   */
+  const qtyNum = effUnit === 'usd' ? entered / mark : entered;
   const partialMissing = mode === 'partial' && qtyStr.trim() === '';
   const partialInvalid =
-    mode === 'partial' && qtyStr.trim() !== '' && (!Number.isFinite(qtyNum) || qtyNum <= 0 || qtyNum > posQty);
+    mode === 'partial' &&
+    qtyStr.trim() !== '' &&
+    (!Number.isFinite(entered) || entered <= 0 || !Number.isFinite(qtyNum) || qtyNum <= 0 || qtyNum > posQty);
 
   const action = useMemo<ActionInput | null>(() => {
     if (slipInvalid || partialMissing || partialInvalid) return null;
@@ -80,9 +142,9 @@ export function ClosePopover({ position, attributedQty, onClosed, onDismiss }: P
       kind: 'close-position',
       symbol: position.symbol,
       slippagePct: slip,
-      ...(mode === 'partial' ? { qty: qtyStr } : {}),
+      ...(mode === 'partial' ? { qty: String(Number(qtyNum.toPrecision(8))) } : {}),
     };
-  }, [slipInvalid, partialMissing, partialInvalid, position.symbol, slip, mode, qtyStr]);
+  }, [slipInvalid, partialMissing, partialInvalid, position.symbol, slip, mode, qtyNum]);
 
   const preview = usePreviewDebounced(`close-${position.symbol}`, action ? [action] : null, {
     debounceMs: 300,
@@ -146,22 +208,67 @@ export function ClosePopover({ position, attributedQty, onClosed, onDismiss }: P
                 : `This position holds ${sig(attributedQty ?? 0)} of the ${sig(wholeQty)} on the venue; the rest belongs to another position.`}
             </p>
           )}
+          {hedgedSibling && (
+            /* The consequence, not the mechanics: this pair earns because the
+               two floating legs cancel, and closing one end leaves the other
+               running as a directional funding bet. */
+            <p className="rounded-lg border border-amber-500/40 bg-amber-500/[0.08] px-2.5 py-1.5 leading-relaxed text-amber-100">
+              This leg hedges the {prettyVenue(hedgedSibling.venue)} {hedgedSibling.side.toLowerCase()}{' '}
+              leg. Closing it leaves that one unhedged — its funding stops cancelling and becomes a
+              directional position.
+            </p>
+          )}
           {mode === 'partial' && (
             <div className="flex items-center gap-2">
               <label htmlFor={`close-qty-${position.symbol}`} className="w-24 text-ink-400">
-                Close qty
+                Close {effUnit === 'usd' ? 'value' : 'qty'}
               </label>
               <input
                 id={`close-qty-${position.symbol}`}
                 className={`input num h-8 flex-1 px-2 py-1 ${partialInvalid ? 'border-rose-500' : ''}`}
                 inputMode="decimal"
-                placeholder={`≤ ${sig(posQty)}`}
+                placeholder={effUnit === 'usd' ? `≤ ${sig(posQty * mark)}` : `≤ ${sig(posQty)}`}
                 value={qtyStr}
                 onChange={(e) => setQtyStr(e.target.value)}
               />
+              {/* Only when a mark is available to convert with. */}
+              {markOk && (
+                <SegmentedToggle<'base' | 'usd'>
+                  ariaLabel="Close size unit"
+                  value={unit}
+                  onChange={(u) => {
+                    // Carry the SIZE across the switch, not the digits: the box
+                    // holds one number and relabelling it would silently resize
+                    // the close by the mark price.
+                    const n = Number(qtyStr);
+                    if (Number.isFinite(n) && n > 0) {
+                      const asQty = unit === 'usd' ? n / mark : n;
+                      setQtyStr(String(Number((u === 'usd' ? asQty * mark : asQty).toPrecision(8))));
+                    }
+                    setUnit(u);
+                  }}
+                  options={[
+                    { value: 'base', label: <span className="text-xs">{base}</span> },
+                    { value: 'usd', label: <span className="text-xs">USDT</span> },
+                  ]}
+                />
+              )}
             </div>
           )}
-          {partialInvalid && <span className="text-rose-400">close qty exceeds position ({sig(posQty)})</span>}
+          {partialInvalid && (
+            <span className="text-rose-400">
+              close size exceeds position (
+              {effUnit === 'usd' ? `${sig(posQty * mark)} USDT` : `${sig(posQty)} ${base}`})
+            </span>
+          )}
+          {mode === 'partial' && effUnit === 'usd' && !partialInvalid && qtyStr.trim() !== '' && (
+            // The converted figure is what actually goes to the venue, so it
+            // is shown rather than left to be inferred from the preview.
+            <span className="text-ink-500">
+              ≈ <span className="num">{sig(qtyNum)}</span> {base} at mark{' '}
+              <span className="num">{sig(mark)}</span>
+            </span>
+          )}
 
           {action && (
             <div className="flex flex-col gap-1 rounded-lg border border-ink-800 bg-ink-950/60 px-2.5 py-2">

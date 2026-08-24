@@ -11,6 +11,7 @@ import type { ActionInput, Side } from '../api/types';
 import { SegmentedToggle } from '../components/SegmentedToggle';
 import { fmtUsd, parseSymbol, sig } from '../lib/fmt';
 import { amountError } from '../lib/amount';
+import { sizeUnitForBase } from '../lib/boros';
 import { formatRestPrice } from '../lib/ticks';
 import { ExecuteControl } from './ExecuteControl';
 import { feeText, PreviewFallback, SlippageBadge, ViolationList } from './previewBits';
@@ -46,6 +47,8 @@ export function SingleTicket() {
   const [side, setSide] = useState<Side>('BUY');
   const [type, setType] = useState<'MARKET' | 'LIMIT'>('MARKET');
   const [sizeMode, setSizeMode] = useState<SizeMode>('usdt');
+  /** True once the unit is chosen explicitly — by the toggle or a prefill. */
+  const [unitPinned, setUnitPinned] = useState(false);
   const [sizeStr, setSizeStr] = useState('');
   const [priceStr, setPriceStr] = useState('');
   const [priceFlash, setPriceFlash] = useState(false);
@@ -87,6 +90,10 @@ export function SingleTicket() {
       setSizeMode('usdt');
       setSizeStr(String(Math.max(1, Math.round(perpPrefill.notionalUsd))));
     }
+    // The caller put ONE number in the box and named its unit; the coin must
+    // not relabel it afterwards. (Released when the user picks a coin/symbol
+    // by hand — see the effect below.)
+    setUnitPinned(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [prefillNonce]);
 
@@ -107,6 +114,16 @@ export function SingleTicket() {
   const detail = useSymbolDetail(symbol);
 
   const base = symbol ? parseSymbol(symbol).base : '';
+  /**
+   * Follow the coin, exactly as the pair ticket does: ETH/BTC are coin-margined
+   * on Boros so the perp is sized in the coin and the hedge is exact; every
+   * other coin is USDT-collateral there, so dollars is the unit both legs
+   * share. Only until the unit is chosen explicitly.
+   */
+  useEffect(() => {
+    if (unitPinned || !base) return;
+    setSizeMode(sizeUnitForBase(base) === 'base' ? 'base' : 'usdt');
+  }, [base, unitPinned]);
   const sizeNum = Number(sizeStr);
   const sizeErr = amountError(sizeStr);
   const sizeOk = Number.isFinite(sizeNum) && sizeNum > 0;
@@ -187,7 +204,24 @@ export function SingleTicket() {
 
   return (
     <div className="flex flex-col gap-3">
-      <SymbolCombobox value={symbol} onSelect={setSymbol} onClear={() => setSymbol(null)} />
+      <SymbolCombobox
+        value={symbol}
+        // Picking a symbol by hand ends the prefill's claim on the unit: the
+        // new coin's own default must win, or the ticket stays stuck on the
+        // last prefill's unit for the life of the (never-remounted) drawer.
+        onSelect={(sym) => {
+          setSymbol(sym);
+          // See PairTicket: releasing the pin without clearing the figure
+          // would relabel a USD number as coins (and flip `notional`→`qty`).
+          setUnitPinned(false);
+          setSizeStr('');
+        }}
+        onClear={() => {
+          setSymbol(null);
+          setUnitPinned(false);
+          setSizeStr('');
+        }}
+      />
       <SideToggle value={side} onChange={changeSide} />
       <SegmentedToggle<'MARKET' | 'LIMIT'>
         ariaLabel="Order type"
@@ -207,7 +241,11 @@ export function SingleTicket() {
           <SegmentedToggle<SizeMode>
             ariaLabel="Size mode"
             value={sizeMode}
-            onChange={setSizeMode}
+            onChange={(m) => {
+              // An explicit choice wins over the coin's default from here on.
+              setUnitPinned(true);
+              setSizeMode(m);
+            }}
             options={[
               { value: 'usdt', label: <span className="text-xs">USDT</span> },
               { value: 'base', label: <span className="text-xs">{base || 'qty'}</span> },

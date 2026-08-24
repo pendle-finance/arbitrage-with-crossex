@@ -268,7 +268,9 @@ describe('no Review card on a single order', () => {
     server.use(...baseHandlers(), ...btcSymbolHandlers(), echoPreviewHandler());
     renderWithClient(<SingleTicket />);
     await pickBinanceBtc();
-    await userEvent.type(screen.getByPlaceholderText(/notional/), '500');
+    // BTC is coin-margined on Boros, so the box defaults to the coin — the
+    // same rule the pair ticket follows, so one strategy is sized in one unit.
+    await userEvent.type(screen.getByPlaceholderText(/qty \(BTC\)/), '0.01');
 
     const execute = await screen.findByRole('button', { name: /Execute now/ });
     await userEvent.hover(execute);
@@ -278,5 +280,24 @@ describe('no Review card on a single order', () => {
     expect(screen.queryByRole('tooltip')).toBeNull();
     // The inline preview is still there — nothing was lost by removing it.
     expect(await screen.findByText(/est fee/)).toBeInTheDocument();
+  });
+});
+
+describe('SingleTicket — the size unit follows the coin', () => {
+  it('defaults BTC to the coin, and the toggle still wins', async () => {
+    /**
+     * Same rule as the pair ticket (`sizeUnitForBase`): BTC/ETH are
+     * coin-margined on Boros, so sizing the perp in the coin makes the hedge
+     * exact instead of an eyeballed FX step. The Single ticket used to
+     * hardcode USDT regardless of coin.
+     */
+    server.use(...baseHandlers(), ...btcSymbolHandlers(), echoPreviewHandler());
+    renderWithClient(<SingleTicket />);
+    await pickBinanceBtc();
+
+    expect(await screen.findByPlaceholderText(/qty \(BTC\)/)).toBeInTheDocument();
+    // An explicit choice still overrides the default.
+    await userEvent.click(screen.getByRole('radio', { name: 'USDT' }));
+    expect(screen.getByPlaceholderText(/notional/)).toBeInTheDocument();
   });
 });

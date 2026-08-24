@@ -458,7 +458,13 @@ export function PairResultReport({
   collateral: string;
   onComplete: () => void;
   onRetry: () => void;
-  onDismiss: () => void;
+  /**
+   * Omit where the report IS the surface rather than an overlay on a form —
+   * the wizard's completed step 1, which has no armed ticket to return to.
+   * Rendering a dead "Dismiss" there would offer to hide the step's own
+   * content.
+   */
+  onDismiss?: () => void;
   busy?: boolean;
 }) {
   const tone = result.partial ? 'amber' : 'green';
@@ -589,7 +595,7 @@ export function PairResultReport({
             Leave it
           </button>
         </div>
-      ) : (
+      ) : onDismiss ? (
         <button
           type="button"
           onClick={onDismiss}
@@ -597,7 +603,7 @@ export function PairResultReport({
         >
           Dismiss
         </button>
-      )}
+      ) : null}
     </div>
   );
 }
