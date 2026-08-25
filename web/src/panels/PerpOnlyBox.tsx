@@ -342,7 +342,13 @@ export function ClosePairForm({
         label="Close both ▸"
         // See CloseBoth: the per-mount pairGroupId would otherwise change the
         // intent identity on every remount and break idempotent recovery.
-        intentKey={['closeBoth', ...legs.map((l) => `${l.symbol}:${l.qty}`)].join('|')}
+        // ⚠ `slip` is part of the intent — it rides the wire as `slippagePct`
+        // and sets the close's price band. Without it here, a lost-response
+        // confirm followed by a slippage edit produced a byte-identical key,
+        // so the persisted deal id was resent and the server deduped it into
+        // the ORIGINAL band while the form showed the new one — the same bug
+        // class PairTicket's intentKey fixes by carrying `sizeUnit`.
+        intentKey={['closeBoth', String(slip), ...legs.map((l) => `${l.symbol}:${l.qty}`)].join('|')}
         buttonClassName="w-full"
         // The panel above already reviews this close; the hover card would
         // repeat it on top of the dialog. Errors still surface.

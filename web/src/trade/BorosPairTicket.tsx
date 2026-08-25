@@ -92,6 +92,7 @@ const newOrderIds = () => ({ a: `a-${uuid()}`, b: `b-${uuid()}` });
 export function BorosPairTicket({
   active = true,
   onExecuted,
+  onBusyChange,
 }: {
   active?: boolean;
   /**
@@ -100,6 +101,15 @@ export function BorosPairTicket({
    * these. Re-deriving it there could disagree with the ticket that traded.
    */
   onExecuted?: (result: BorosPairResult, collateral: string) => void;
+  /**
+   * True while an execution is in flight. The surface hosting this ticket
+   * (wizard modal, order-ticket drawer) locks its close controls off it:
+   * unmounting mid-execution skips the mutate-level onSuccess, so the fill
+   * report — including a partial fill's Complete/Unwind remediation — and the
+   * replay-protection order ids would die with the component while the order
+   * executes at the venue regardless.
+   */
+  onBusyChange?: (busy: boolean) => void;
 } = {}) {
   const tracked = useTrackedAddressOptional();
   const agent = useBorosAgent();
@@ -372,8 +382,14 @@ export function BorosPairTicket({
    * disagreement visible instead of silent.
    */
   const slipOutOfRange = (raw: string): boolean => {
+    // ⚠ Two-sided on purpose. Flagging only the too-large direction left the
+    // other half of the same dishonesty in place: a typed zero, negative, or
+    // cleared value fell through to `pctToApr`'s fallback and the order went
+    // out carrying the SEEDED default as its rate bound — a bound the user
+    // explicitly did not choose, with nothing on screen saying so. (The boxes
+    // are seeded, so an empty value only exists after a deliberate clear.)
     const n = Number(raw);
-    return raw.trim() !== '' && Number.isFinite(n) && n > MAX_SLIP_PCT;
+    return raw.trim() === '' || !Number.isFinite(n) || n <= 0 || n > MAX_SLIP_PCT;
   };
   const slipInvalid = perLeg
     ? slipOutOfRange(slipStrA) || slipOutOfRange(slipStrB)
@@ -444,6 +460,20 @@ export function BorosPairTicket({
   const execute = useExecuteBorosPair();
   const cancelClose = useBorosCancelAndClose();
 
+  // Tell the host surface an execution is in flight, so it can lock its close
+  // controls (see the prop doc). Cleared on unmount so a host never stays
+  // locked by a ticket that is gone. A follow-up could make an interrupted
+  // execution genuinely recoverable — persist the in-flight order ids the way
+  // pendingBasket.ts does and re-POST on remount to hit the server's replay
+  // memo — but while the report lives only in this component, blocking the
+  // close is what keeps a live fill visible.
+  const busy = execute.isPending;
+  useEffect(() => {
+    onBusyChange?.(busy);
+    return () => onBusyChange?.(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [busy]);
+
   /**
    * Freshness is judged HERE, not by the server's gate.
    *
@@ -472,7 +502,7 @@ export function BorosPairTicket({
       ? [
           {
             code: 'slippage-out-of-range',
-            message: `Max slippage cannot exceed ${MAX_SLIP_PCT}% APR — lower it, or the order would carry a rate bound you did not choose.`,
+            message: `Max slippage must be greater than 0 and at most ${MAX_SLIP_PCT}% APR — the order would otherwise carry a rate bound you did not choose.`,
           },
         ]
       : []),

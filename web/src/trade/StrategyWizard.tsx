@@ -23,9 +23,10 @@
  * (StrategyCard's boros-only cue) and re-enters here at step 2.
  */
 import { useEffect, useState } from 'react';
-import type { BorosPairResult } from '../api/types';
+import type { BorosLegFill, BorosPairResult } from '../api/types';
 import { Modal } from '../components/Modal';
 import { isUsdCollateral } from '../lib/boros';
+import { sig } from '../lib/fmt';
 import { BorosPairTicket } from './BorosPairTicket';
 import { PairResultReport } from './BorosPairBits';
 import { PairTicket } from './PairTicket';
@@ -54,6 +55,70 @@ export function StrategyWizard({ onViewPositions }: { onViewPositions?: () => vo
 
 type Step = 1 | 2 | 'done';
 
+/**
+ * One leg slot of the wizard's step-1 book. `size` is SIGNED — +long / −short,
+ * in the executed market's collateral — so a close (which always carries the
+ * direction opposing the position) subtracts on its own, with no intent flag.
+ */
+type SlotFill = { size: number; marketId: number; execApr: number | null };
+
+/**
+ * What step 1 has actually put on, folded across EVERY accepted execution —
+ * the pair fill, its retries, its completions, single-leg orders, and closes.
+ *
+ * The old shape was a single `BorosPairResult` gated on `unhedgedSize > 0`,
+ * and every non-clean path broke it: a both-legs-zero fill reported
+ * unhedgedSize 0 and read as "Rate locked ✓"; a completion's merge kept the
+ * stale hedgedSize; a pair-shaped retry REPLACED the aggregate; a single-leg
+ * or close execution read as a pair lock. A cumulative signed book has none of
+ * those cases — every execution is the same fold.
+ *
+ * This is the wizard's session-relative view only. Account truth lives on the
+ * Positions page (see the header comment); in particular a §6A cancel-and-close
+ * fired from a ticket blocker bypasses `onExecuted` and is invisible here.
+ */
+type StepOneBook = {
+  a: SlotFill;
+  b: SlotFill;
+  /** The unit every `size` is in, from the ticket that traded. */
+  collateral: string;
+  /** Display only (spread attribution) — never a source of leg identity:
+   * a not-submitted leg's sentinel carries a HARDCODED direction (orders.ts). */
+  lastResult: BorosPairResult | null;
+  /** True when the whole book is one clean pair execution — the only case
+   * where that execution's realisedSpreadApr describes the book. */
+  soleClean: boolean;
+};
+
+const EMPTY_SLOT: SlotFill = { size: 0, marketId: 0, execApr: null };
+const EMPTY_BOOK: StepOneBook = {
+  a: EMPTY_SLOT,
+  b: EMPTY_SLOT,
+  collateral: '',
+  lastResult: null,
+  soleClean: false,
+};
+
+/** Was this leg actually sent to the venue? A not-submitted sentinel is
+ * all-zero with no failure (orders.ts `notSubmitted`); a REJECTED leg has
+ * filledSize 0 but a shortfall and a failure, and must still count. */
+const legSubmitted = (leg: BorosLegFill): boolean =>
+  leg.filledSize !== 0 || leg.shortfallSize > 0 || leg.failure !== null;
+
+const foldLeg = (slot: SlotFill, leg: BorosLegFill): SlotFill => {
+  if (!legSubmitted(leg)) return slot;
+  return {
+    // The venue's own defence: never trust the raw sign of filledSize.
+    size: slot.size + (leg.direction === 'long' ? 1 : -1) * Math.abs(leg.filledSize),
+    marketId: leg.marketId,
+    execApr: leg.execApr ?? slot.execApr,
+  };
+};
+
+/** Fills round-trip 18-decimal venue values through float64, so exact-zero
+ * comparisons on the folded book can be off by ~1e-11 forever. */
+const EPS = 1e-9;
+
 function WizardBody({
   w,
   flow,
@@ -63,15 +128,21 @@ function WizardBody({
   flow: TradeFlowApi;
   onViewPositions?: () => void;
 }) {
+  const resuming = (w.initialStep ?? 1) === 2;
   const [step, setStep] = useState<Step>(w.initialStep ?? 1);
-  /** Step 1's last venue result — set on any accepted Boros execution. */
-  const [locked, setLocked] = useState<BorosPairResult | null>(null);
-  /** The unit `locked`'s sizes are in, straight from the ticket that traded. */
-  const [lockedCollateral, setLockedCollateral] = useState('');
+  /** Everything step 1 has executed, as one signed book — see StepOneBook. */
+  const [book, setBook] = useState<StepOneBook>(EMPTY_BOOK);
+  /** The hedged size the perp ticket was last armed with. Continue re-arms
+   * ONLY when the book's hedged size differs — a Back → Continue round-trip
+   * with nothing new executed must not wipe the user's step-2 edits. */
+  const [lastArmedHedge, setLastArmedHedge] = useState<number | null>(null);
   /** Mirrors TradeRail's borosSeen: a visited step stays mounted, hidden. */
   const [perpSeen, setPerpSeen] = useState(w.initialStep === 2);
   /** Two-click close while leaving would strand a naked rate position. */
   const [leaveArmed, setLeaveArmed] = useState(false);
+  /** A Boros execution is in flight — the modal must not be closable: the
+   * response (and a partial fill's remediation) dies with the ticket. */
+  const [executing, setExecuting] = useState(false);
 
   const { prefillBorosOpen, prefillPair, closeWizard } = flow;
 
@@ -79,7 +150,7 @@ function WizardBody({
   // boros-only position). Deliberately once per wizard identity — the body is
   // keyed on it — so ticket edits are never fought by a re-arm.
   useEffect(() => {
-    if ((w.initialStep ?? 1) === 1) {
+    if (!resuming) {
       prefillBorosOpen({
         base: w.base,
         longVenue: w.borosLongVenue,
@@ -104,50 +175,82 @@ function WizardBody({
       ...(w.perpMode ? { mode: w.perpMode } : {}),
     });
 
-  const residual = locked !== null && locked.unhedgedSize > 0;
+  /** Fold one accepted execution into the book. Replays never reach this —
+   * the ticket skips `onExecuted` for them. */
+  const recordExecution = (result: BorosPairResult, collateral: string) =>
+    setBook((prev) => {
+      /**
+       * ⚠ Reset before folding when the legs stopped being the same book.
+       *
+       * The ticket's selects stay editable inside the wizard, so the user can
+       * repick both legs to a different cohort — a different market, possibly
+       * a different COLLATERAL — and execute. Summing ETH into a USDT book
+       * would produce a hedged size in no unit at all, so a submitted leg
+       * whose market differs from the slot's recorded one (or a collateral
+       * change) starts the book over from this execution alone.
+       */
+      const marketChanged =
+        (legSubmitted(result.legA) && prev.a.marketId !== 0 && prev.a.marketId !== result.legA.marketId) ||
+        (legSubmitted(result.legB) && prev.b.marketId !== 0 && prev.b.marketId !== result.legB.marketId);
+      const collateralChanged =
+        prev.collateral !== '' && collateral !== '' && prev.collateral !== collateral;
+      const base = marketChanged || collateralChanged ? EMPTY_BOOK : prev;
+      const wasEmpty = Math.abs(base.a.size) <= EPS && Math.abs(base.b.size) <= EPS;
+      return {
+        a: foldLeg(base.a, result.legA),
+        b: foldLeg(base.b, result.legB),
+        collateral: collateral || base.collateral,
+        lastResult: result,
+        soleClean: wasEmpty && result.bothLegsSubmitted && !result.partial,
+      };
+    });
+
+  // The book, read out: total exposure, the part that cancels (hedged) and
+  // the part that does not (residual). Same-signed slots — a deliberate
+  // single-leg lock, say — have hedged 0 and read as all-residual, which is
+  // exactly what they are.
+  const exposure = Math.abs(book.a.size) + Math.abs(book.b.size);
+  const residualSize = Math.abs(book.a.size + book.b.size);
+  const hedged = (exposure - residualSize) / 2;
+  const stepOneDone = hedged > EPS && residualSize <= EPS * Math.max(1, exposure);
+  const lopsided = !stepOneDone && hedged > EPS;
+  const oneSided = !stepOneDone && hedged <= EPS && exposure > EPS;
 
   const continueToHedge = () => {
     /**
-     * The hedge is sized from what step 1 actually FILLED, not what was asked:
-     * a short fill hedged at the intended size is a new directional position
-     * wearing a hedge's name. `hedgedSize` is the size both legs share; on a
-     * clean fill it equals the intent and this is a no-op. A completion result
-     * (`bothLegsSubmitted` false) or a zero falls back to the original intent —
-     * the report on screen is then the honest source and the field stays
-     * editable.
-     */
-    const fillSize =
-      locked && locked.bothLegsSubmitted && locked.hedgedSize > 0 ? locked.hedgedSize : null;
-    /**
-     * ⚠ What `fillSize` MEANS is a property of the market that traded, not of
-     * what this wizard was told when it opened.
+     * The hedge is sized from what step 1 actually FILLED — the book's hedged
+     * size — not what was asked: a short fill hedged at the intended size is a
+     * new directional position wearing a hedge's name. Both buttons that lead
+     * here are gated on `hedged > 0`, so there is always a real size.
      *
-     * `hedgedSize` is denominated in the executed market's COLLATERAL, so the
-     * only safe discriminator is that collateral — captured from the ticket
-     * that traded. Branching on `w.sizeBase !== undefined` (the old test)
-     * asked "did the caller know a base quantity?", which is a different
-     * question: an ETH cohort whose collateral price was unavailable arrives
-     * with no `sizeBase`, and its ETH fill size was then armed as DOLLARS —
-     * a ~$9,000 rate leg hedged with a $2 perp pair.
+     * ⚠ What `hedged` MEANS is a property of the market that traded, not of
+     * what this wizard was told when it opened. It is denominated in the
+     * executed market's COLLATERAL, so that collateral — captured from the
+     * ticket that traded — is the only safe discriminator. Branching on
+     * `w.sizeBase !== undefined` asked "did the caller know a base quantity?",
+     * which is a different question: an ETH cohort whose collateral price was
+     * unavailable arrives with no `sizeBase`, and its ETH fill size was then
+     * armed as DOLLARS — a ~$9,000 rate leg hedged with a $2 perp pair.
      */
-    if (fillSize === null) {
-      armPerps(w.notionalUsd, w.sizeBase);
-    } else if (isUsdCollateral(lockedCollateral)) {
-      // USD-collateral: the Boros size IS the dollar figure.
-      armPerps(fillSize);
-    } else if (w.sizeBase !== undefined && w.sizeBase > 0) {
-      // Token-collateral, and we know the intended quantity — scale the USD
-      // notional by how much of it actually filled.
-      armPerps(w.notionalUsd * (fillSize / w.sizeBase), fillSize);
-    } else {
-      /**
-       * Token-collateral with no conversion available (no `sizeBase`, so no
-       * price to scale by). `fillSize` is a COIN quantity and must never be
-       * passed as dollars, so the perps keep the intent's USD figure and the
-       * user edits before executing — an approximate hedge they can see beats
-       * an exact-looking one off by the coin price.
-       */
-      armPerps(w.notionalUsd);
+    if (lastArmedHedge === null || Math.abs(hedged - lastArmedHedge) > EPS) {
+      if (isUsdCollateral(book.collateral)) {
+        // USD-collateral: the Boros size IS the dollar figure.
+        armPerps(hedged);
+      } else if (w.sizeBase !== undefined && w.sizeBase > 0) {
+        // Token-collateral, and we know the intended quantity — scale the USD
+        // notional by how much of it actually filled.
+        armPerps(w.notionalUsd * (hedged / w.sizeBase), hedged);
+      } else {
+        /**
+         * Token-collateral with no conversion available (no `sizeBase`, so no
+         * price to scale by). `hedged` is a COIN quantity and must never be
+         * passed as dollars, so the perps keep the intent's USD figure and the
+         * user edits before executing — an approximate hedge they can see
+         * beats an exact-looking one off by the coin price.
+         */
+        armPerps(w.notionalUsd);
+      }
+      setLastArmedHedge(hedged);
     }
     setPerpSeen(true);
     setStep(2);
@@ -156,25 +259,27 @@ function WizardBody({
   /**
    * Is there a rate leg on with no hedge against it?
    *
-   * Either because this wizard just locked one (`locked`), or because it was
-   * OPENED on one — a resume starts at step 2 precisely because the Boros legs
-   * already exist and are unhedged. The second case is the same naked
-   * exposure, and it used to leave silently: the guard tested `locked`, which
-   * a resume never sets.
+   * Either because this wizard put exposure on (any nonzero side of the book —
+   * a one-sided fill counts, and a book closed back to zero through the wizard
+   * stops counting), or because it was OPENED on one — a resume starts at
+   * step 2 precisely because the Boros legs already exist and are unhedged.
    */
-  const unhedgedRateOn = locked !== null || (w.initialStep ?? 1) === 2;
+  const unhedgedRateOn = exposure > EPS || resuming;
 
   const requestClose = () => {
     // Rate locked but not hedged = naked directional exposure. Leaving is
-    // always allowed (Positions derives the resume point), but never silently.
-    if (unhedgedRateOn && step !== 'done' && !leaveArmed) {
+    // always allowed (Positions derives the resume point), but never silently
+    // — and never by momentum: once the warning is up, further Escape presses
+    // and backdrop clicks do nothing, because a held key's auto-repeat or a
+    // double-click would otherwise arm and close in one perceived gesture.
+    // Only the banner's explicit Leave button closes from here.
+    if (unhedgedRateOn && step !== 'done') {
       setLeaveArmed(true);
       return;
     }
     closeWizard();
   };
 
-  const resuming = (w.initialStep ?? 1) === 2;
   /**
    * Venue pair for the subtitle, from whichever side is known.
    *
@@ -203,9 +308,9 @@ function WizardBody({
   );
 
   return (
-    <Modal title={title} onClose={requestClose} widthClass="w-[480px]">
+    <Modal title={title} locked={executing} onClose={requestClose} widthClass="w-[480px]">
       <div className="flex flex-col gap-4">
-        <StepStrip step={step} locked={locked !== null} />
+        <StepStrip step={step} locked={stepOneDone} />
 
         {leaveArmed && step !== 'done' && (
           <div className="flex items-center justify-between gap-3 rounded-lg border border-amber-500/40 bg-amber-500/[0.08] px-3 py-2 text-[12px] leading-relaxed text-amber-100">
@@ -231,27 +336,24 @@ function WizardBody({
         {/* --- Step 1: the Boros rate legs. Not mounted at all on a resume
             (initialStep 2): those rate legs already exist as a position, and
             an idle ticket for them would only poll a quote nobody wants. --- */}
-        {(w.initialStep ?? 1) === 1 && (
+        {!resuming && (
         <div hidden={step !== 1}>
           {/**
-           * ⚠ A SUCCEEDED step is a receipt, not a form.
+           * ⚠ A SUCCEEDED step is a receipt, not a form — and "succeeded"
+           * means the BOOK is clean (hedged > 0, residual 0), never a
+           * property of the last result alone. A both-legs-zero fill reports
+           * unhedgedSize 0 and used to render this receipt for a trade where
+           * nothing filled; the book stays empty there and the live ticket —
+           * with its real failure report and working Retry — stays up.
            *
-           * Once the rate is locked the ticket is replaced by its result. It
-           * used to stay mounted underneath, which put TWO live CTAs in the
-           * modal at once — the ticket's own `Confirm — 2 Boros market orders`
-           * and the wizard's `Rate locked ✓ — hedge the perps` — so the same
-           * pair could be fired a second time by a user the wizard had just
-           * told the rate was locked. (Dismissing the ticket's fill report
-           * calls `setReport(null)`, which returns it to its ordinary armed
-           * state; the wizard's own `locked` never cleared, so both showed.)
-           *
-           * A PARTIAL fill is the exception: its Complete/Retry actions arm
-           * the ticket again, so the form has to stay for that case — there
-           * the residual, not the wizard, is what still needs an order.
+           * The ticket is replaced (not just covered) once done: leaving it
+           * mounted put TWO live CTAs in the modal at once, so the same pair
+           * could be fired a second time by a user the wizard had just told
+           * the rate was locked.
            */}
-          {locked !== null && !residual ? (
+          {stepOneDone ? (
             <div className="flex flex-col gap-3">
-              <StepOneReceipt result={locked} collateral={lockedCollateral} />
+              <StepOneReceipt book={book} hedged={hedged} />
               <button type="button" className="btn btn-primary w-full" onClick={continueToHedge}>
                 Rate locked ✓ — hedge the perps ▸
               </button>
@@ -260,44 +362,37 @@ function WizardBody({
             <>
               <BorosPairTicket
                 active={step === 1}
-                onExecuted={(result, collateral) => {
-                  /**
-                   * ⚠ A COMPLETION must not replace the pair result.
-                   *
-                   * `onExecuted` fires for every accepted execution, including
-                   * the one-leg completion the report's "Complete now" arms.
-                   * A completion always reports `unhedgedSize: 0`
-                   * (orders.ts: `bothSubmitted ? … : 0`), so overwriting
-                   * `locked` with it flipped `residual` to false and made the
-                   * receipt describe the 100-unit top-up instead of the
-                   * 1,000-unit rate lock behind it — and sized the hedge off
-                   * the wrong number.
-                   *
-                   * The PAIR result is the one that describes this step, so it
-                   * is kept; a completion only clears the residual it closed.
-                   */
-                  setLockedCollateral(collateral);
-                  setLocked((prev) =>
-                    prev !== null && !result.bothLegsSubmitted
-                      ? { ...prev, unhedgedSize: 0, unhedgedLeg: null }
-                      : result,
-                  );
-                }}
+                onBusyChange={setExecuting}
+                onExecuted={recordExecution}
               />
-              {locked !== null && (
+              {lopsided && (
                 <div className="mt-3 flex flex-col gap-2">
                   <p className="rounded-lg border border-amber-500/25 bg-amber-500/[0.04] px-2.5 py-1.5 text-[11px] leading-relaxed text-amber-200">
                     {/* Deliberately does not say "the report above": that
                         report can be dismissed, and copy pointing at something
                         no longer on screen reads as a bug. The fact that
                         survives either way is what continuing would cost. */}
-                    One leg filled short. Continuing now hedges only the size both legs share —
-                    the rest stays directional until you complete or close it.
+                    The rate legs are lopsided — {sig(residualSize)}
+                    {book.collateral ? ` ${book.collateral}` : ''} is unmatched. Continuing hedges
+                    only the size both legs share; the rest stays directional until you complete or
+                    close it.
                   </p>
                   <button type="button" className="btn btn-primary w-full" onClick={continueToHedge}>
                     Continue anyway — hedge the perps ▸
                   </button>
                 </div>
+              )}
+              {oneSided && (
+                /* Sometimes deliberate (the ticket's Single mode), so this
+                   describes the position, not a failure — and offers no
+                   Continue: with no shared size there is nothing to hedge,
+                   and arming the intent size here was exactly the bug where
+                   a one-leg book got a full-size "hedge". */
+                <p className="mt-3 rounded-lg border border-amber-500/25 bg-amber-500/[0.04] px-2.5 py-1.5 text-[11px] leading-relaxed text-amber-200">
+                  Only one side of the rate pair is on — that is directional exposure, not a locked
+                  spread. There is no shared size to hedge yet; complete the other leg, or close
+                  this one.
+                </p>
               )}
             </>
           )}
@@ -307,15 +402,21 @@ function WizardBody({
         {/* --- Step 2: the CrossEx perp hedge ----------------------------- */}
         {(step === 2 || perpSeen) && (
           <div hidden={step !== 2}>
-            {step === 2 && locked === null && (w.initialStep ?? 1) === 1 && (
-              // Only reachable via the back link below after arriving armed —
-              // still worth stating whose sizes the ticket is holding.
-              <p className="mb-2 text-[11px] text-ink-400">
-                Sized from the locked rate legs — edit before executing if they differ.
-              </p>
-            )}
+            {step === 2 &&
+              !resuming &&
+              lastArmedHedge !== null &&
+              Math.abs(hedged - lastArmedHedge) > EPS && (
+                // An execution that was still in flight when Continue was
+                // clicked has landed and moved the book. Re-arming here would
+                // wipe the user's edits — the exact bug the lastArmedHedge
+                // gate fixes — so say it instead and let them re-continue.
+                <p className="mb-2 rounded-lg border border-amber-500/25 bg-amber-500/[0.04] px-2.5 py-1.5 text-[11px] leading-relaxed text-amber-200">
+                  The rate legs changed since this hedge was sized — go back to the rate legs and
+                  continue again to re-size it.
+                </p>
+              )}
             <PairTicket onExecuted={() => setStep('done')} />
-            {step === 2 && (w.initialStep ?? 1) === 1 && (
+            {step === 2 && !resuming && (
               <button
                 type="button"
                 className="mt-3 text-[11px] text-ink-400 underline decoration-dotted hover:text-ink-200"
@@ -364,24 +465,41 @@ function WizardBody({
  *
  * Reuses the ticket's own report so the numbers and their wording are the same
  * ones the ticket would have shown — a receipt that paraphrased the fill would
- * be a second source of truth about money. The report's Complete/Retry actions
- * are deliberately inert here: this renders only for a CLEAN fill, where there
- * is nothing left to complete, and a partial keeps the live ticket instead.
+ * be a second source of truth about money. It renders the BOOK (the fold of
+ * every execution), synthesized as a clean result: only reachable when the
+ * book is clean, so the report shows no Complete/Retry, and `onDismiss` is
+ * omitted because the report IS this step now.
+ *
+ * ⚠ Leg identity comes from the book's slots, never from any raw result: a
+ * not-submitted leg's sentinel carries a HARDCODED direction (orders.ts), and
+ * after a completion the "last result" describes only the top-up.
  */
-function StepOneReceipt({
-  result,
-  collateral,
-}: {
-  result: BorosPairResult;
-  collateral: string;
-}) {
+function StepOneReceipt({ book, hedged }: { book: StepOneBook; hedged: number }) {
+  const synthLeg = (slot: SlotFill): BorosLegFill => ({
+    marketId: slot.marketId,
+    direction: slot.size > 0 ? 'long' : 'short',
+    filledSize: Math.abs(slot.size),
+    shortfallSize: 0,
+    execApr: slot.execApr,
+    feeSize: null,
+    failure: null,
+  });
+  const result: BorosPairResult = {
+    legA: synthLeg(book.a),
+    legB: synthLeg(book.b),
+    bothLegsSubmitted: true,
+    hedgedSize: hedged,
+    unhedgedSize: 0,
+    unhedgedLeg: null,
+    // Attributable only when the whole book is one clean execution; a spread
+    // stitched across a partial and its top-up would mislabel money.
+    realisedSpreadApr: book.soleClean ? (book.lastResult?.realisedSpreadApr ?? null) : null,
+    partial: false,
+  };
   return (
     <PairResultReport
       result={result}
-      collateral={collateral}
-      // A clean fill has no residual and no shortfall, so neither action is
-      // rendered; `onDismiss` is omitted because the report IS this step now,
-      // and hiding it would leave the step blank.
+      collateral={book.collateral}
       onComplete={() => {}}
       onRetry={() => {}}
     />

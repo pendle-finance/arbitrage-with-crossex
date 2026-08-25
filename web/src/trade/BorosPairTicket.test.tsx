@@ -1107,9 +1107,35 @@ describe('BorosPairTicket — slippage is stated, not silently clamped', () => {
     await user.clear(slip);
     await user.type(slip, '50');
 
-    expect(await screen.findByText(/Max slippage cannot exceed/)).toBeInTheDocument();
+    expect(await screen.findByText(/Max slippage must be greater than 0/)).toBeInTheDocument();
     await waitFor(() =>
       expect(screen.getByRole('button', { name: /Confirm/ })).toBeDisabled(),
     );
+  });
+
+  it('blocks confirm on a typed ZERO — the seeded default must not go out silently', async () => {
+    /**
+     * The check used to be one-sided: only `> MAX_SLIP_PCT` was flagged, while
+     * a typed 0 (or a cleared box, or a negative) fell through to `pctToApr`'s
+     * fallback — the order went out carrying the SEEDED default as its rate
+     * bound, a bound the user explicitly did not choose, with "0" on screen.
+     */
+    server.use(...handlers());
+    const user = userEvent.setup();
+    renderWithClient(<BorosPairTicket />);
+    await fillTicket(user);
+
+    const slip = screen.getByLabelText(/Max slippage/);
+    await user.clear(slip);
+    await user.type(slip, '0');
+
+    expect(await screen.findByText(/Max slippage must be greater than 0/)).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /Confirm/ })).toBeDisabled(),
+    );
+
+    // A cleared box is the same dishonesty — empty on screen, seed on the wire.
+    await user.clear(slip);
+    expect(await screen.findByText(/Max slippage must be greater than 0/)).toBeInTheDocument();
   });
 });

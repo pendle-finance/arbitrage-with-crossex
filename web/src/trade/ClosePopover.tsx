@@ -95,7 +95,17 @@ export function ClosePopover({
   const [unit, setUnit] = useState<'base' | 'usd'>(() =>
     shared ? 'base' : sizeUnitForBase(base),
   );
-  const mark = Number(position.markPrice);
+  /**
+   * ⚠ LATCHED at dialog open, not read live. The `position` prop refreshes
+   * from the 4s positions poll while the dialog is up, and `effUnit` below is
+   * derived from the mark — so a mark that turned empty/zero mid-dialog would
+   * silently re-read a typed "$300" as 300 COINS (and a recovering mark would
+   * divide typed coins by it), with only the label quietly changing. The
+   * conversion price the user was shown when they started typing is the one
+   * every read uses until the dialog closes; the preview below still quotes
+   * live prices server-side.
+   */
+  const [mark] = useState(() => Number(position.markPrice));
   const markOk = Number.isFinite(mark) && mark > 0;
   /**
    * ⚠ USD is only a legal unit while there is a mark to convert AT.
@@ -129,12 +139,24 @@ export function ClosePopover({
    * option is not offered at all, so this cannot silently divide by a stale or
    * zero price.
    */
-  const qtyNum = effUnit === 'usd' ? entered / mark : entered;
+  const rawQty = effUnit === 'usd' ? entered / mark : entered;
+  /**
+   * The displayed maximum is `sig()`-rounded to-nearest, so typing the
+   * dialog's OWN stated limit ("≤ 151.2019") can convert to a hair above
+   * `posQty` — refusing it would reject the very figure the placeholder and
+   * the error message name. Sizes within rounding distance are accepted and
+   * clamped to the position, so nothing can over-close.
+   */
+  const qtyNum = Math.min(rawQty, posQty);
   const partialMissing = mode === 'partial' && qtyStr.trim() === '';
   const partialInvalid =
     mode === 'partial' &&
     qtyStr.trim() !== '' &&
-    (!Number.isFinite(entered) || entered <= 0 || !Number.isFinite(qtyNum) || qtyNum <= 0 || qtyNum > posQty);
+    (!Number.isFinite(entered) ||
+      entered <= 0 ||
+      !Number.isFinite(rawQty) ||
+      rawQty <= 0 ||
+      rawQty > posQty * (1 + 1e-6));
 
   const action = useMemo<ActionInput | null>(() => {
     if (slipInvalid || partialMissing || partialInvalid) return null;

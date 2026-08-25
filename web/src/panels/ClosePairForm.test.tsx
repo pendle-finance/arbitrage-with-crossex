@@ -6,11 +6,11 @@
  * "respected" because it could not be expressed. The single-leg ClosePopover
  * always had the control; this is the two-leg surface catching up.
  */
-import { screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { describe, expect, it } from 'vitest';
-import type { ActionInput, PreviewResponse } from '../api/types';
+import type { ActionInput, DealRequest, PreviewResponse } from '../api/types';
 import { baseHandlers, previewFor } from '../test/fixtures';
 import { env, server } from '../test/server';
 import { renderWithClient } from '../test/utils';
@@ -95,4 +95,47 @@ describe('ClosePairForm — the slippage the user sets is the slippage sent', ()
       expect.stringContaining("the hedge leg is sent at market, inside the venue's own price band"),
     );
   });
+});
+
+describe('ClosePairForm — slippage is part of the close intent', () => {
+  it('mints a NEW deal id when slippage changes after a lost response', async () => {
+    /**
+     * Mirrors PairTicket's size-unit regression: `slippagePct` rides the wire
+     * and sets the close's price band, so it must be in the intentKey. Without
+     * it, a lost-response confirm at 0.5% followed by an edit to 2% produced a
+     * byte-identical key — the persisted deal id was resent, the server
+     * deduped it into the ORIGINAL band, and the form showed the new one.
+     */
+    const dealCalls: DealRequest[] = [];
+    server.use(
+      ...baseHandlers(),
+      previewSpy([]),
+      http.post('/api/deals', async ({ request }) => {
+        dealCalls.push((await request.json()) as DealRequest);
+        return HttpResponse.json(
+          { ok: false, error: { category: 'network', message: 'socket hang up', retryable: true } },
+          { status: 500 },
+        );
+      }),
+    );
+    renderWithClient(<ClosePairForm base="HYPE" legs={LEGS} />);
+
+    const btn = await screen.findByRole('button', { name: /Close both/ });
+    await waitFor(() => expect(btn).toBeEnabled(), { timeout: 4000 });
+    fireEvent.pointerDown(btn);
+    await waitFor(() => expect(dealCalls).toHaveLength(1), { timeout: 2_000 });
+
+    const slip = screen.getByLabelText('Slippage %');
+    await userEvent.clear(slip);
+    await userEvent.type(slip, '2');
+
+    const btn2 = screen.getByRole('button', { name: /Close both/ });
+    await waitFor(() => expect(btn2).toBeEnabled(), { timeout: 4000 });
+    fireEvent.pointerDown(btn2);
+    await waitFor(() => expect(dealCalls).toHaveLength(2), { timeout: 2_000 });
+
+    // A different band is a different order ⇒ a different id, so the server
+    // cannot dedupe the 2% close into the 0.5% one.
+    expect(dealCalls[1].id).not.toBe(dealCalls[0].id);
+  }, 15_000);
 });
