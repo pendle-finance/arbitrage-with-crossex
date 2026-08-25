@@ -237,12 +237,17 @@ function OrderTicketButton() {
 }
 
 /** The manual ticket, mounted ONLY while its drawer is open — a closed drawer
- * cannot sit armed with a stale order. Closing also clears any prefills. */
+ * cannot sit armed with a stale order. Closing also clears any prefills.
+ * `locked` while a Boros execution is in flight: closing would unmount the
+ * ticket, and its fill report — a partial fill's remediation included — and
+ * replay-protection order ids are component state that die with it while the
+ * order executes at the venue regardless. */
 function OrderTicketDrawer() {
   const flow = useTradeFlow();
+  const [busy, setBusy] = useState(false);
   return (
-    <Drawer open={flow.railOpen} title="Order ticket" onClose={flow.closeRail}>
-      <TradeRail />
+    <Drawer open={flow.railOpen} title="Order ticket" locked={busy} onClose={flow.closeRail}>
+      <TradeRail onBusyChange={setBusy} />
     </Drawer>
   );
 }

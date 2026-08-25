@@ -1,8 +1,10 @@
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
+import { useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { ActionInput, DealRequest, PreviewResponse } from '../api/types';
+import type { ActionInput, CrossexPosition, DealRequest, PreviewResponse } from '../api/types';
+import { sig } from '../lib/fmt';
 import { baseHandlers, ethPosition, makeCrossexPosition, previewFor } from '../test/fixtures';
 import { env, server } from '../test/server';
 import { renderWithClient } from '../test/utils';
@@ -357,5 +359,72 @@ describe('ClosePopover — closing one side of a hedge', () => {
     renderWithClient(<ClosePopover position={ethPosition} onDismiss={() => {}} />);
     await screen.findByText(/marketable limit px/);
     expect(screen.queryByText(/leaves that one unhedged/)).not.toBeInTheDocument();
+  });
+});
+
+describe('ClosePopover — the conversion mark is latched at open', () => {
+  const hype = makeCrossexPosition({
+    symbol: 'BYBIT_FUTURE_HYPE_USDT',
+    positionQty: '1.89',
+    markPrice: '80',
+    entryPrice: '78',
+  });
+
+  /** Simulates the 4s positions poll delivering a refreshed position whose
+   * mark has turned unusable while the dialog is up. */
+  function MarkFlipHarness() {
+    const [pos, setPos] = useState<CrossexPosition>(hype);
+    return (
+      <>
+        <button type="button" onClick={() => setPos(makeCrossexPosition({ ...hype, markPrice: '0' }))}>
+          break-mark
+        </button>
+        <ClosePopover position={pos} onDismiss={() => {}} />
+      </>
+    );
+  }
+
+  it('a mark that breaks mid-dialog does NOT relabel the typed USD figure', async () => {
+    /**
+     * `effUnit` used to re-derive from the LIVE markPrice each render while
+     * the typed digits persisted — a mark arriving as ''/'0' mid-edit flipped
+     * the unit to 'base' and re-read "$50" as 50 HYPE (~40× the close), with
+     * only the label quietly changing. The mark is latched at open now.
+     */
+    server.use(...baseHandlers(), closePreviewHandler());
+    renderWithClient(<MarkFlipHarness />);
+    await screen.findByText(/marketable limit px/);
+
+    await userEvent.click(screen.getByRole('radio', { name: 'partial' }));
+    await userEvent.type(screen.getByLabelText('Close value'), '50');
+    await userEvent.click(screen.getByRole('button', { name: 'break-mark' }));
+
+    // Still a DOLLAR box, still converting at the mark the dialog opened with.
+    expect(screen.getByLabelText('Close value')).toHaveValue('50');
+    expect(screen.queryByLabelText('Close qty')).not.toBeInTheDocument();
+    expect(await screen.findByText(/0\.625/)).toBeInTheDocument();
+  });
+
+  it('accepts the USD maximum the dialog itself displays', async () => {
+    /**
+     * The max is DISPLAYED via sig() (round-to-nearest) but was validated by
+     * exact conversion: whenever sig rounded up, typing the placeholder's own
+     * figure converted to a hair above posQty and was refused by an error
+     * naming the very number it rejected. Within rounding distance the entry
+     * is accepted and the wire qty is clamped to the position.
+     */
+    server.use(...baseHandlers(), closePreviewHandler());
+    renderWithClient(
+      <ClosePopover position={makeCrossexPosition({ ...hype, markPrice: '80.001' })} onDismiss={() => {}} />,
+    );
+    await screen.findByText(/marketable limit px/);
+    await userEvent.click(screen.getByRole('radio', { name: 'partial' }));
+
+    // The placeholder's own stated max: sig(1.89 × 80.001) rounds UP.
+    const max = sig(1.89 * 80.001);
+    await userEvent.type(screen.getByLabelText('Close value'), max);
+
+    expect(screen.queryByText(/close size exceeds position/)).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Close now ▸' })).toBeEnabled());
   });
 });

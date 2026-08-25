@@ -18,7 +18,10 @@ export function Modal({ title, locked = false, onClose, widthClass = 'w-[700px]'
   useEffect(() => {
     if (locked) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
+      // e.repeat: a HELD Escape auto-repeats, and surfaces with an arm-then-
+      // confirm close guard (the wizard's leave warning) would see the repeat
+      // as the confirming second call.
+      if (e.key === 'Escape' && !e.repeat) onClose();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);

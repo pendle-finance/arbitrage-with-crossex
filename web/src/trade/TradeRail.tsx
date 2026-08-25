@@ -42,7 +42,13 @@ const VENUE_BLURB: Record<Venue, string> = {
   boros: 'Opens fixed-rate positions on Boros.',
 };
 
-export function TradeRail() {
+export function TradeRail({
+  onBusyChange,
+}: {
+  /** True while a Boros execution is in flight — the drawer hosting this rail
+   * locks its close controls off it (see BorosPairTicket.onBusyChange). */
+  onBusyChange?: (busy: boolean) => void;
+} = {}) {
   const [venue, setVenue] = useState<Venue>('perp');
   // Pair is the default within perps: the terminal exists for delta-neutral
   // pair entries.
@@ -127,7 +133,7 @@ export function TradeRail() {
         )}
         {(venue === 'boros' || borosSeen) && (
           <div hidden={venue !== 'boros'}>
-            <BorosPairTicket active={venue === 'boros'} />
+            <BorosPairTicket active={venue === 'boros'} onBusyChange={onBusyChange} />
           </div>
         )}
       </div>
