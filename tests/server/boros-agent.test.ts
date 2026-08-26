@@ -166,3 +166,57 @@ describe('DELETE /api/boros/agent', () => {
     expect(res.json().data.note).toMatch(/still live until you revoke it/i);
   });
 });
+
+describe('GET /api/boros/agent — the prepaid gas balance', () => {
+  const configure = () => {
+    process.env.BOROS_ROOT_ADDRESS = ROOT;
+    process.env.BOROS_AGENT_PRIVATE_KEY = AGENT_KEY;
+  };
+  const get = () => app!.inject({ method: 'GET', url: '/api/boros/agent', headers: HOST });
+  const gasStub = (impl: () => Promise<number | null>) => {
+    installed = { getGasBalance: impl } as unknown as BorosOrderClient;
+  };
+
+  it('reports the balance, so "trading enabled" is not the only claim on the line', async () => {
+    configure();
+    gasStub(async () => 4.2);
+    expect((await get()).json().data.gasBalanceUsd).toBe(4.2);
+  });
+
+  it('reports null when the read fails, never a zero that would read as empty', async () => {
+    configure();
+    gasStub(async () => {
+      throw new Error('boros unreachable');
+    });
+    expect((await get()).json().data.gasBalanceUsd).toBeNull();
+  });
+
+  it('omits it on an install that cannot place orders at all', async () => {
+    configure();
+    installed = undefined;
+    expect((await get()).json().data.gasBalanceUsd).toBeUndefined();
+  });
+
+  it('reads no gas for an unconfigured account', async () => {
+    let reads = 0;
+    gasStub(async () => {
+      reads += 1;
+      return 4.2;
+    });
+    expect((await get()).json().data).toMatchObject({ configured: false });
+    expect(reads).toBe(0);
+  });
+
+  it('serves repeated polls from one Boros read', async () => {
+    configure();
+    let reads = 0;
+    gasStub(async () => {
+      reads += 1;
+      return 4.2;
+    });
+    await get();
+    await get();
+    await get();
+    expect(reads).toBe(1);
+  });
+});

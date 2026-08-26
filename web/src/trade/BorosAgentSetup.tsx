@@ -22,6 +22,7 @@ import { useState } from 'react';
 import type { Hex } from 'viem';
 import { useBorosAgent, useForgetBorosAgent, useProvisionBorosAgent } from '../api/queries';
 import { Chip } from '../components/Chip';
+import { fmtUsd } from '../lib/fmt';
 import { connectWallet, describeWalletError, hasInjectedWallet, BOROS_CHAIN } from '../lib/wallet';
 
 /**
@@ -40,6 +41,34 @@ const APPROVAL_SECONDS = 365 * 24 * 3600;
 
 /** Absolute unix-second expiry for a fresh approval. */
 const approvalExpiryAt = (): number => Math.floor(Date.now() / 1000) + APPROVAL_SECONDS;
+
+const GAS_LOW_USD = 1;
+
+function GasBalance({ usd }: { usd?: number | null }) {
+  if (usd === undefined) return null;
+  if (usd === null) {
+    return (
+      <span
+        className="num text-[11px] text-ink-500"
+        title="The prepaid gas balance could not be read. An order may still be refused for gas."
+      >
+        gas —
+      </span>
+    );
+  }
+  return (
+    <span
+      className={`num text-[11px] ${usd < GAS_LOW_USD ? 'text-amber-400' : 'text-ink-300'}`}
+      title={
+        usd < GAS_LOW_USD
+          ? `Prepaid gas is ${fmtUsd(usd, 2)}. Boros bills each order to this pot, and it is separate from your trading collateral — depositing margin will not fill it. The order form offers a top-up when it runs out.`
+          : `Prepaid gas: ${fmtUsd(usd, 2)}. Boros bills each order to this pot, separate from your trading collateral.`
+      }
+    >
+      gas {fmtUsd(usd, 2)}
+    </span>
+  );
+}
 
 type Step = 'idle' | 'connecting' | 'approving' | 'saving';
 
@@ -121,6 +150,7 @@ export function BorosAgentSetup() {
             {status.data.expired ? 'approval expired' : 'trading enabled'}
           </Chip>
           <span className="num text-[11px] text-ink-300">{status.data.rootMasked}</span>
+          <GasBalance usd={status.data.gasBalanceUsd} />
           <button
             type="button"
             className="ml-auto rounded border border-ink-600 px-2 py-0.5 text-[10.5px] text-ink-300 hover:border-ink-400 disabled:opacity-50"

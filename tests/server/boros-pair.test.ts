@@ -371,6 +371,33 @@ describe('POST /api/boros/pair/top-up-gas', () => {
     expect(payTreasury).not.toHaveBeenCalled();
   });
 
+  it('drops the cached gas balance, so the agent strip stops showing the old one', async () => {
+    process.env.BOROS_ROOT_ADDRESS = `0x${'1'.repeat(40)}`;
+    process.env.BOROS_AGENT_PRIVATE_KEY = `0x${'a'.repeat(64)}`;
+    try {
+      let reads = 0;
+      makeApp({}, undefined, {
+        ...orderClient(),
+        payTreasury: async () => {},
+        getGasBalance: async () => {
+          reads += 1;
+          return 0.05;
+        },
+      });
+      const strip = () => app!.inject({ method: 'GET', url: '/api/boros/agent', headers: HOST });
+      await strip();
+      await strip();
+      expect(reads).toBe(1);
+
+      expect((await post('/api/boros/pair/top-up-gas', { amountUsd: 5 })).statusCode).toBe(200);
+      await strip();
+      expect(reads).toBe(2);
+    } finally {
+      delete process.env.BOROS_ROOT_ADDRESS;
+      delete process.env.BOROS_AGENT_PRIVATE_KEY;
+    }
+  });
+
   it('answers 503 when this install cannot place Boros orders at all', async () => {
     makeApp();
     const res = await post('/api/boros/pair/top-up-gas', { amountUsd: 5 });

@@ -447,6 +447,7 @@ export function useTopUpGas() {
       postJson<TopUpGasResponse>('/boros/pair/top-up-gas', { amountUsd }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['boros', 'pair', 'simulate'] });
+      void qc.invalidateQueries({ queryKey: qk.borosAgent });
     },
   });
 }
