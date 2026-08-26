@@ -9,14 +9,6 @@
  * can exist in a tool whose promise is that it never holds your funds, and it
  * is why no code path here ever accepts a root private key.
  *
- * The one-time setup (`Agent.create` → `approveAgent`) is deliberately NOT done
- * here: it needs the root wallet, so the user performs it in the Boros app and
- * pastes only the resulting agent key. A gas top-up is different — `payTreasury`
- * IS agent-signable, so this server does it (`payTreasury` in
- * `core/boros/borosApi.ts`). It names no recipient: the money moves from the
- * user's own margin into the user's own gas pot, and the pot has no withdrawal
- * path. So the key still cannot send a token anywhere the user chooses.
- *
  * Config lives in the same `.env` as the Gate credentials and inherits its 0600
  * hardening. Absent or malformed config is not an error — it leaves
  * `deps.borosOrders` undefined, which keeps the panel fully usable for pricing

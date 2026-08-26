@@ -328,22 +328,11 @@ export function StrategyCard({
   // the opportunity scanner uses (estProfit / (capital × yearsToMaturity)); the
   // difference for a live position is that the clock runs from when it opened.
   // Null when the clock or capital is unknowable (matches "PNL by maturity").
-  //
-  // The start is the notional-weighted mean Boros open, not `clockStartSec`.
-  // The clock anchors at the EARLIEST leg, so a leg opened weeks later would be
-  // annualized over a window it never earned across and the rate would read
-  // low. Falls back to the clock when no Boros leg carries an open.
-  //
-  // A user-set clock is an explicit assertion about when the position started,
-  // and the server honours it over every leg open, so the mean must step aside
-  // or the rate would annualize over a window the PnL above it never used.
   let openWeightUsd = 0;
   let openWeightedSec = 0;
   if (s.clockBasis !== 'custom') {
     for (const l of s.legs) {
       if (l.kind !== 'boros') continue;
-      // Mirror the server, which falls an unknown open back to the clock rather
-      // than dropping the leg out of the window entirely.
       openWeightUsd += l.notionalUsd;
       openWeightedSec += l.notionalUsd * (l.openedAt ?? s.clockStartSec ?? 0);
     }

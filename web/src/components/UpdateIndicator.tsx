@@ -1,16 +1,3 @@
-/**
- * "Update available" pill + update modal. Renders nothing unless the
- * server's update check (GET /api/version — cached GitHub read, silent on
- * failure) reports a genuinely newer published version, so the header stays
- * clean in the common case. Deliberately passive: nothing auto-opens and
- * there is no dismissal state — releases are hand-bumped "substantial only",
- * and for software that places real orders the nudge should stay visible.
- *
- * The button posts to the server, which spawns the SAME command shown here.
- * Nothing is pre-checked in the browser: the server refuses a live deal, a
- * Boros order in flight and a source checkout, and a stale tab would walk
- * past any check made here.
- */
 import { useState } from 'react';
 import { ApiError } from '../api/client';
 import { useRunUpdate, useVersion } from '../api/queries';
@@ -31,7 +18,6 @@ export function UpdateIndicator() {
   const platform = navigator.userAgent.includes('Windows')
     ? { name: 'Windows (PowerShell)', cmd: INSTALL_CMD_WINDOWS }
     : { name: 'macOS', cmd: INSTALL_CMD };
-  // A commit hash alone is not auditable by a person; the compare view is.
   const changesUrl = data.install?.commit
     ? `${REPO_URL}/compare/${data.install.commit}...main`
     : `${REPO_URL}/commits/main`;

@@ -653,8 +653,6 @@ describe('BorosPairTicket', () => {
   });
 
   it('names a gas failure as gas, not as margin', async () => {
-    // Sent to a margin top-up, the user funds the wrong pot and the next order
-    // fails the same way.
     const user = userEvent.setup();
     const failed = (marketId: number, direction: string) => ({
       marketId,
@@ -700,8 +698,6 @@ describe('BorosPairTicket', () => {
   });
 
   it('renders nothing about gas when the balance covers the order', async () => {
-    // The row used to render on every ticket, so a healthy account carried a
-    // number it could do nothing with. Gas earns space only when it blocks.
     const user = userEvent.setup();
     server.use(...handlers({ gasBalanceUsd: 25 }));
     renderWithClient(<BorosPairTicket />);
@@ -732,7 +728,6 @@ describe('BorosPairTicket', () => {
     await fillTicket(user);
 
     expect(await screen.findByText(/could not be read/i)).toBeInTheDocument();
-    // The amount needed is unknown, and the read may be the broken thing.
     expect(screen.queryByRole('button', { name: /Top up gas/i })).not.toBeInTheDocument();
   });
 
@@ -760,8 +755,6 @@ describe('BorosPairTicket', () => {
   });
 
   it('tops up gas from inside the blocker, at an amount the user can edit', async () => {
-    // The form used to dead-end here: it said the pot was empty and offered no
-    // way to fill it.
     const user = userEvent.setup();
     const bodies: Record<string, unknown>[] = [];
     server.use(
@@ -788,8 +781,6 @@ describe('BorosPairTicket', () => {
     expect(field.value).toBe('5');
     const button = screen.getByRole('button', { name: /Top up gas/i });
 
-    // Under $2 the $1 ops-fee sweep eats the top-up and blocks again; over $100
-    // is money that cannot be withdrawn. Each refusal says which.
     await user.clear(field);
     await user.type(field, '1');
     expect(button).toBeDisabled();

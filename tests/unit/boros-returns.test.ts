@@ -885,9 +885,6 @@ describe('buildStrategies — APR clock basis', () => {
   });
 
   it('accrues the locked spread from each leg\'s own open, not the earliest', () => {
-    // The receive-fixed HL leg opens 25d before the pay-fixed OKX leg. One
-    // clock for both credited 25 days of a 3% leg that did not exist yet, so
-    // the per-leg sum here is HIGHER, not lower.
     const early = OPENED - 25 * DAY;
     const txns = ethTxns().map((t) => (t.marketId === 155 ? { ...t, time: early } : t));
     const s = buildStrategies(input({ txnsByToken: new Map([[3, txns]]) })).strategies[0];
@@ -898,8 +895,6 @@ describe('buildStrategies — APR clock basis', () => {
   });
 
   it('a leg with no open time accrues from the clock and says so', () => {
-    // Only the HL market has history — the OKX leg's open is unknown, which
-    // the all-unknown clock warning never covered.
     const txns = ethTxns().filter((t) => t.marketId === 155);
     const s = buildStrategies(input({ txnsByToken: new Map([[3, txns]]) })).strategies[0];
     expect(s.clockStartSec).toBe(OPENED);

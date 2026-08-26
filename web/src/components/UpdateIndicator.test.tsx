@@ -1,6 +1,3 @@
-/** The update pill renders ONLY when the server reports a newer published
- * version; the modal shows this machine's one-liner, the changes it brings,
- * and a button that runs the same command server-side. */
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
 import { describe, expect, it } from 'vitest';
@@ -11,7 +8,6 @@ import { env, server } from '../test/server';
 import { renderWithClient } from '../test/utils';
 import { UpdateIndicator } from './UpdateIndicator';
 
-/** POST /api/version/update — records each call so "exactly once" is testable. */
 function updateHandler(calls: unknown[], refusal?: string) {
   return http.post('/api/version/update', () => {
     calls.push(Date.now());
@@ -49,10 +45,6 @@ describe('UpdateIndicator', () => {
     expect(screen.getByText(/You're on/)).toHaveTextContent('v1.0.0');
     expect(screen.getByText('A brand new thing')).toBeInTheDocument();
     expect(screen.getByText('Another improvement')).toBeInTheDocument();
-    // Only the platform that will actually run — the server spawns one command,
-    // and showing the other invites a user to run the wrong one by hand.
-    // jsdom's UA is neither macOS nor Windows-decorated consistently, so assert
-    // the count rather than which.
     const shown = [INSTALL_CMD, INSTALL_CMD_WINDOWS].filter((c) => screen.queryByText(c) !== null);
     expect(shown).toHaveLength(1);
     expect(screen.getByRole('link', { name: /Full changelog/ })).toHaveAttribute(
@@ -95,8 +87,6 @@ describe('UpdateIndicator', () => {
     expect(note).toHaveTextContent('/Users/x/.boros-crossex/logs/update.log');
     expect(note).toHaveTextContent(/comes back on its own/);
     expect(calls).toHaveLength(1);
-    // The button is gone once the install owns the machine — a second spawn
-    // would race the first one's swap.
     expect(screen.queryByRole('button', { name: /^Update to/ })).toBeNull();
   });
 

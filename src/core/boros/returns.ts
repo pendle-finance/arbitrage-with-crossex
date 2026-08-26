@@ -357,10 +357,6 @@ export interface StrategyRollup {
   /** Locked fixed spread across the Boros legs (≈ rate_A − rate_B). */
   spread: number;
   lockedAprOnCapital: number;
-  /** Full-life projection of the locked spread on the Boros notional, summed
-   * per leg: Σ leg rate × leg notional × (its maturity − its open)/YEAR. Assumes
-   * each leg held its full notional from its own open — the UI shows that
-   * assumption. Null when the clock start is unknown. */
   spreadReturnUsd: number | null;
   /** Vu's formula: spreadReturnUsd − feesUsd.paid.totalUsd −
    * feesUsd.future.borosSettlementUsd. The perp exit parts (fees + slippage)
@@ -1214,10 +1210,6 @@ function assembleStrategy(args: AssembleInput): StrategyRollup {
   }
 
   // --- Locked spread ----------------------------------------------------------
-  // Each leg locks its own rate on its own day, so its income accrues from its
-  // OWN open to its OWN maturity — a leg opened late earned nothing before it
-  // existed, and one strategy-wide window credits it anyway. A user-set clock
-  // asserts when the whole position started, so it still wins over every open.
   const perLegClock = clockBasis !== 'custom';
   let netFixedPerYearUsd = 0;
   let spreadReturnUsd: number | null = clockStart === null ? null : 0;
@@ -1231,8 +1223,6 @@ function assembleStrategy(args: AssembleInput): StrategyRollup {
     spreadReturnUsd +=
       perYearUsd * (Math.max(0, (l.maturity ?? maturity) - start) / SECONDS_IN_YEAR);
   }
-  // The clock warning above only fires when NO Boros open is known. This is the
-  // mixed case, where the known opens set the clock and the rest ride on it.
   if (unknownOpen && borosOpens.length) {
     warnings.push(
       `Some ${base} Boros legs have no known open time — their share of the locked spread accrues from the position start instead of their own.`,
@@ -2050,14 +2040,6 @@ function applyMembership(
      * has no such floor — the user can assign a leg from any market on the
      * coin, and a share link or a pin written before the dialog started
      * refusing it can carry the clash in.
-     *
-     * It is worth its own warning rather than being left to the hedge ratios,
-     * because it does not degrade the card, it MISPRICES it. `maturity` above
-     * is `Math.min` across the legs, and the countdown and `secondsToMaturity`
-     * run off it, while `spreadReturnUsd` accrues each leg to its OWN maturity.
-     * So the projection includes income earned after the date the card is
-     * labelled with, and every number keeps its confident formatting while it
-     * does. A size mismatch at least announces itself.
      */
     const legMaturities = [...new Set(maturities.filter((m) => m > 0))].sort((a, b) => a - b);
     if (legMaturities.length > 1) {

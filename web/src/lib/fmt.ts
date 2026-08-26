@@ -19,6 +19,13 @@ export function sig(value: number | string, maxDp = 8): string {
   return n.toFixed(dp).replace(/\.?0+$/, '');
 }
 
+export const FIELD_SIG_FIGS = 8;
+
+export function fieldValue(value: number, sigFigs: number = FIELD_SIG_FIGS): string {
+  if (!Number.isFinite(value)) return '';
+  return String(Number(value.toPrecision(sigFigs)));
+}
+
 /** Parse `{EXCHANGE}_{BUSINESS}_{BASE}_{QUOTE}` into parts. */
 export function parseSymbol(symbol: string): {
   exchange: string;

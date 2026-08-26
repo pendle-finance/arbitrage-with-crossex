@@ -383,12 +383,6 @@ export async function resolveActions(
   return resolved;
 }
 
-/**
- * Pair legs must trade the SAME base qty. Re-resolve ONE shared qty across both open
- * legs' rules (floored to the coarser lot, both mins enforced) and overwrite the
- * per-leg results. Both legs must be sized the same way — both in coins or both in
- * dollars; a coin size needs no reference price, a dollar size does.
- */
 function applySharedPairSizing(resolved: ResolvedAction[]): void {
   const groups = new Map<string, ResolvedAction[]>();
   for (const r of resolved) {
@@ -408,15 +402,12 @@ function applySharedPairSizing(resolved: ResolvedAction[]): void {
     const sizeA = inA.qty ?? inA.notional;
     const sizeB = inB.qty ?? inB.notional;
     if (!sizeA || !sizeB) continue;
-    // One leg in coins and the other in dollars cannot be reconciled: resolveQty takes
-    // one or the other, and converting needs a price the coin leg has no use for.
     if (Boolean(inA.qty) !== Boolean(inB.qty)) {
       for (const l of legs) {
         l.violations.push({ code: 'pair-qty-mismatch', message: 'pair legs are sized differently — one in coins, one in dollars; size both the same way' });
       }
       continue;
     }
-    // Both legs must target the same size — otherwise adopting leg A's silently
     // drops leg B's intent. Flag it rather than reconcile downward without warning.
     const numA = Number(sizeA);
     const numB = Number(sizeB);
@@ -445,8 +436,6 @@ function applySharedPairSizing(resolved: ResolvedAction[]): void {
           l.warnings.push(`size set to ${shared.qtyStr} (was ${l.qty || '—'}) so both legs trade the same amount`);
         }
         l.qty = shared.qtyStr;
-        // With no reference price the shared notional is 0, while a leg may have priced
-        // its own off its limit price — and the margin preflight reads that number.
         if (ref) l.estNotional = shared.estNotional;
         // Per-leg sizing violations are superseded by the successful shared sizing.
         l.violations = l.violations.filter(
@@ -455,7 +444,6 @@ function applySharedPairSizing(resolved: ResolvedAction[]): void {
       }
     } catch (err) {
       const code = sizingViolationCode(err);
-      // The raw lot-incompatible text names neither leg and tells a trader to pass a CLI flag.
       const message =
         code === 'lot-incompatible'
           ? `${a.symbol} trades in steps of ${a.rule!.lotSize} and ${b.symbol} in steps of ${b.rule!.lotSize} — no size fits both legs`

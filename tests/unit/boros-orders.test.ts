@@ -252,7 +252,6 @@ describe('classifyLegFailure', () => {
   });
 
   it('reads the relayer\'s own gas refusal as no-gas, unprompted', () => {
-    // Prepaid gas is a different pot from margin, so it needs a different fix.
     expect(
       classifyLegFailure(new Error('HTTP 400: Insufficient gas balance 0xab. Required: 0.05')),
     ).toBe('no-gas');
@@ -260,8 +259,6 @@ describe('classifyLegFailure', () => {
   });
 
   it('reads the venue top-up string as gas ONLY on a market already entered', () => {
-    // Boros says the same sentence about an account that has not entered the
-    // market. Sending that user to a top-up would not unblock them.
     const topUp = new Error('[SIMULATE] Top up at least ~$10 to trade');
     expect(classifyLegFailure(topUp, true)).toBe('no-gas');
     expect(classifyLegFailure(topUp, false)).toBe('rejected');

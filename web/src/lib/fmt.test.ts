@@ -1,5 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import { bps, feePct, fmtPct, fmtTokenQty, fmtUsd, num, parseSymbol, sig, toDate } from './fmt';
+import {
+  bps,
+  feePct,
+  fieldValue,
+  fmtPct,
+  fmtTokenQty,
+  fmtUsd,
+  num,
+  parseSymbol,
+  sig,
+  toDate,
+} from './fmt';
 
 // num/sig expectations are copied from tests/unit/format.test.ts in the repo
 // root — the web port must behave identically to src/core/numbers.ts.
@@ -96,5 +107,31 @@ describe('web additions', () => {
     expect(toDate('1735689600')).toEqual(fromSeconds);
     expect(toDate(undefined)).toBeNull();
     expect(toDate('nope')).toBeNull();
+  });
+});
+
+describe('fieldValue — the string an editable quantity field holds', () => {
+  it('drops the float noise a real USD-to-token conversion leaves', () => {
+    expect(fieldValue(2.5296100000000002)).toBe('2.52961');
+  });
+
+  it('keeps a large quantity intact, where sig() would change the order', () => {
+    expect(fieldValue(12345.6789)).toBe('12345.679');
+    expect(sig(12345.6789)).toBe('12345.68');
+  });
+
+  it('keeps a small lot-sized quantity whole', () => {
+    expect(fieldValue(0.0001234)).toBe('0.0001234');
+    expect(fieldValue(2.5296)).toBe('2.5296');
+  });
+
+  it('takes more figures for a price, which is rounded against ticks not lots', () => {
+    expect(fieldValue(1234.5678901234, 10)).toBe('1234.56789');
+    expect(fieldValue(1234.5678901234)).toBe('1234.5679');
+  });
+
+  it('answers empty for a value that is not a number', () => {
+    expect(fieldValue(Number.NaN)).toBe('');
+    expect(fieldValue(Number.POSITIVE_INFINITY)).toBe('');
   });
 });

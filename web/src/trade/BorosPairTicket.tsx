@@ -44,6 +44,7 @@ import { QueryError } from '../components/QueryError';
 import { SegmentedToggle } from '../components/SegmentedToggle';
 import { amountError } from '../lib/amount';
 import { isUsdCollateral } from '../lib/boros';
+import { fieldValue } from '../lib/fmt';
 import { useNow } from '../lib/useNow';
 import { uuid } from '../lib/uuid';
 import { useTrackedAddressOptional } from '../panels/trackedAddress';
@@ -150,9 +151,6 @@ export function BorosPairTicket({
   const [dirB, setDirB] = useState<BorosLegDirection>('long');
   const [sizeStr, setSizeStr] = useState('');
   const [intent, setIntent] = useState<BorosPairIntent>('open');
-  // $5 buys 50 to 500 Boros actions and one four-leg position uses 2 to 4, so
-  // the default suits almost everyone. The balance is not refundable, which is
-  // why it is a field and not a fixed amount.
   const [gasTopUpStr, setGasTopUpStr] = useState('5');
 
   /**
@@ -269,7 +267,7 @@ export function BorosPairTicket({
     const picked = long ?? short;
     const usdPegged = isUsdCollateral(picked?.collateral);
     const chosen = usdPegged ? openPrefill.size : openPrefill.sizeBase;
-    setSizeStr(chosen !== undefined && chosen > 0 ? String(Number(chosen.toPrecision(8))) : '');
+    setSizeStr(chosen !== undefined && chosen > 0 ? fieldValue(chosen) : '');
     // eslint-disable-next-line react-hooks/exhaustive-deps
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openNonce, marketsReady]);
@@ -815,8 +813,6 @@ export function BorosPairTicket({
           indexed, so the balance above catches up within a minute — no need to send it again.
         </p>
       )}
-      {/* NOT "was not sent": a timed-out submission may well have landed, and a
-          second top-up cannot be undone. Say what is actually known. */}
       {topUpGas.isError && (
         <QueryError title="The gas top-up did not confirm" error={topUpGas.error} />
       )}

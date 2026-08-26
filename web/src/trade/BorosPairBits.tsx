@@ -36,10 +36,6 @@ import { fmtPct, fmtTokenQty, fmtUsd } from '../lib/fmt';
  */
 export const APR_BP = 0.0001;
 
-/** Mirrors MIN_TOP_UP_USD / MAX_TOP_UP_USD in src/server/routes/borosPair.ts.
- * The server enforces the same pair — this is the message, not the guard.
- * Below the minimum the venue's $1 ops-fee sweep eats the top-up; above the
- * maximum is money the user cannot get back, because the pot has no exit. */
 const MIN_TOP_UP_USD = 2;
 const MAX_TOP_UP_USD = 100;
 
@@ -407,11 +403,6 @@ export function BlockerList({
   onCancelAndClose?: (marketId: number) => void;
   /** marketId currently being remediated, so its button can show progress. */
   busyMarketId?: number | null;
-  /**
-   * null is UNKNOWN, never zero — the read failed. The blocker still shows,
-   * because an unreadable pot can still be empty, but no top-up is offered for
-   * it: the amount needed is unknown, and the read may be the broken thing.
-   */
   gasBalanceUsd?: number | null;
   gasAmount?: string;
   onGasAmountChange?: (raw: string) => void;

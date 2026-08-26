@@ -554,30 +554,21 @@ describe('evaluatePairGate', () => {
   });
 
   it('blocks a LOW balance too, not just an empty one', () => {
-    // $0.05 is under the ops-fee sweep threshold. A `<= 0` check let it through
-    // to fail at submit — the exact failure this blocker exists to pre-empt.
     const g = evaluatePairGate(gateInput({ account: account({ gasBalanceUsd: 0.05 }) }));
     expect(codes(g)).toContain('no-gas');
     const msg = g.blockers.find((b) => b.code === 'no-gas')!.message;
     // Names what is actually there, so the shortfall is obvious.
     expect(msg).toContain('$0.05');
-    // The amount to send is the button's job, not this message's.
     expect(msg).not.toContain('$10');
   });
 
   it('WARNS about an unknown balance without blocking the trade', () => {
-    // null = the read failed. It must say so — rendering an account we know
-    // nothing about as funded is the bug. But it must not refuse the trade:
-    // one failed auxiliary GET is not a reason to stop an order, and the
-    // top-up control only appears on a number, so a blocker would dead-end.
     const g = evaluatePairGate(gateInput({ account: account({ gasBalanceUsd: null }) }));
     expect(codes(g)).not.toContain('no-gas');
     expect(g.warnings.join(' ')).toMatch(/could not be read/i);
   });
 
   it('raises no gas blocker at or above the minimum, or when never read', () => {
-    // undefined = no read was attempted, on an install that cannot place orders
-    // anyway. That is not the same as a read that failed.
     expect(
       codes(evaluatePairGate(gateInput({ account: account({ gasBalanceUsd: undefined }) }))),
     ).not.toContain('no-gas');

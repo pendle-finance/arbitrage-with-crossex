@@ -48,16 +48,6 @@ export const DEFAULT_SLIPPAGE_APR = 0.0025;
  * with a limit, it is a market order. */
 export const MAX_SLIPPAGE_APR = 0.1;
 
-/**
- * Gas that has to be prepaid before an order is worth attempting, in USD.
- * Boros sweeps $1 of ops fee whenever the balance drops under $0.20, and one
- * order costs $0.01 to $0.10 — so $0.30 is the sweep threshold plus an action.
- *
- * This was $10, read off the venue's own "Top up at least ~$10 to trade"
- * string. Do not derive it from that string again: the venue emits it for an
- * unfunded account and for an unentered market alike, and no formula behind it
- * computes $10.
- */
 export const MIN_GAS_BALANCE_USD = 0.3;
 
 /** How long a simulation may back a confirm before it is refused as stale
@@ -532,11 +522,8 @@ export interface BorosPairAccountState {
    * `payTreasury`, SEPARATELY from trading collateral, so an account with
    * plenty of margin can still be unable to send an order.
    *
-   * null = the read failed. It is blocked, not waved through: an account whose
-   * balance we could not read must not present as a funded one.
-   *
-   * undefined = no read was attempted; no blocker is raised, which is the right
-   * default for an install that cannot place orders anyway.
+   * undefined = not read; no blocker is raised, which is the right default for
+   * an install that cannot place orders anyway.
    */
   gasBalanceUsd?: number | null;
 }
@@ -737,17 +724,8 @@ export function evaluatePairGate(input: EvaluatePairInput): PairGate {
   // --- Gas ------------------------------------------------------------------
   // Distinct from margin on purpose: the remedy is `payTreasury`, not a
   // collateral top-up, and conflating them sends the user to the wrong screen.
-  //
-  // The bar is a MINIMUM, not zero: a balance under the ops-fee sweep passes a
-  // `<= 0` check and then fails at submit, which is the failure this blocker
-  // exists to pre-empt. Both branches carry the same code — the remedy differs
-  // by message, and nothing downstream has to tell them apart.
   const gas = input.account.gasBalanceUsd;
   if (gas === null) {
-    // A read we could not make is a WARNING, never a blocker. Refusing a trade
-    // because one auxiliary GET failed would be worse than letting the venue
-    // reject it with its own message — and the top-up control only appears on a
-    // number, so a blocker here would dead-end the user with no way forward.
     warnings.push(
       'Prepaid gas on this Boros account could not be read, so this order may still be refused for gas. ' +
         'This is gas, not trading collateral: topping up your margin will not fix it.',

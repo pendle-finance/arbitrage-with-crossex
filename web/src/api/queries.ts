@@ -440,15 +440,6 @@ export function useExecuteBorosPair() {
   });
 }
 
-/**
- * Top up the prepaid gas pot. The amount is the user's own margin moving into
- * their own gas balance, so it is confirmed, never silent — and it cannot be
- * withdrawn again, which is why the server enforces the same bounds the field
- * shows rather than trusting them.
- *
- * The simulation is invalidated on success so the blocker clears without a
- * reload; the four-second poll would get there anyway, just later.
- */
 export function useTopUpGas() {
   const qc = useQueryClient();
   return useMutation({
@@ -460,13 +451,6 @@ export function useTopUpGas() {
   });
 }
 
-/**
- * Run the installer. The server does NOT exit afterwards — the installer stops
- * it itself, once the download and build are done. So the page keeps its
- * connection for a while, then loses it, then recovers when the service comes
- * back. A 409 here is the server refusing while a deal or a Boros order is
- * still live; its message says which.
- */
 export function useRunUpdate() {
   return useMutation({
     mutationFn: () => postJson<RunUpdateResponse>('/version/update', {}),

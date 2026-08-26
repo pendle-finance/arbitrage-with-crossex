@@ -382,10 +382,6 @@ export interface StrategyRollup {
   /** Locked fixed spread across the Boros legs (≈ rate_A − rate_B). */
   spread: number;
   lockedAprOnCapital: number;
-  /** Full-life spread projection, summed per leg:
-   * Σ leg rate × leg notional × (its maturity − its open)/YEAR.
-   * Assumes each leg held its full notional from its own open. A user-set clock
-   * overrides every open. Null when the clock is unknown. */
   spreadReturnUsd: number | null;
   /** spreadReturnUsd − paid costs − future Boros settle fees. Perp exit parts
    * NOT included — each checkbox folds its own in client-side. Null exactly
@@ -1111,10 +1107,7 @@ export interface BorosPairSimulateResponse {
   eligibility: BorosPairEligibility;
   simulatedAtMs: number;
   /** Prepaid relayer gas in USD — a DIFFERENT pot from trading collateral.
-   *
-   * null means UNKNOWN, never "none": the read failed, or this install cannot
-   * make it. An unknown balance must not render as a funded account — the
-   * server raises its own blocker for it. */
+   * null when the install cannot read it. */
   gasBalanceUsd: number | null;
 }
 
@@ -1122,23 +1115,14 @@ export type BorosLegFailureCode =
   | 'insufficient-depth'
   | 'rate-deviation'
   | 'insufficient-margin'
-  /** The prepaid gas pot could not pay for the action. Mirrors
-   * src/core/boros/orders.ts — a different pot from margin, so a different fix. */
   | 'no-gas'
   | 'rejected'
   | 'unknown';
 
-/** POST /api/boros/pair/top-up-gas — the amount SENT, echoed back.
- *
- * Deliberately not a balance: Boros credits the pot when its indexer processes
- * the on-chain event, so any figure read straight after the call is still the
- * old one. */
 export interface TopUpGasResponse {
   sentUsd: number;
 }
 
-/** POST /api/version/update. `logPath` is where the installer writes: the
- * server's own logs are truncated mid-install, so its output goes elsewhere. */
 export interface RunUpdateResponse {
   started: true;
   logPath: string;

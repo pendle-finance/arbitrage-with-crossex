@@ -14,10 +14,6 @@ import { borosExecutionsPending } from './borosPair';
  * disabled — so an unconfigured `updateCheck` dep (every test app, public
  * mode) makes this route provably network-free. Failures are cached as null
  * for the full TTL: silent by design.
- *
- * POST /api/version/update — run the installer the pop-up shows. Refused (409)
- * while money is at stake or the tree is a source checkout; see the guards on
- * the handler.
  */
 export function versionRoutes(deps: AppDeps) {
   const fetchImpl: FetchLike = deps.versionFetch ?? (globalThis.fetch as unknown as FetchLike);
@@ -49,23 +45,15 @@ export function versionRoutes(deps: AppDeps) {
           error: { category: 'validation', message, retryable },
         });
 
-      // The installer kills this server mid-flight, so anything the restart
-      // cannot pick up again has to finish first.
       if ((deps.engine?.store.listPairs({ activeOnly: true }).length ?? 0) > 0) {
         return refuse('a deal is still working — wait for it to finish, then update', true);
       }
-      // A restart empties the execution memo, and Boros has no venue-side client
-      // order id, so a panel retry after one could double-fill a real order.
       if (borosExecutionsPending() > 0) {
         return refuse(
           'a Boros order may still be settling — wait a few minutes, then update',
           true,
         );
       }
-      // install.sh has no checkout mode. It only ever installs into $ROOT
-      // (default ~/.boros-crossex), so from a git clone it would build a
-      // SECOND, separate installation and leave the tree the developer is
-      // actually running untouched and stale.
       if (!deps.install) {
         return refuse(
           'this is a source checkout, not an installed copy — update it with git',
@@ -73,7 +61,6 @@ export function versionRoutes(deps: AppDeps) {
         );
       }
 
-      // No await above, so nothing can have started since the guards ran.
       return reply.ok({ started: true, logPath: startUpdate() });
     });
   };
