@@ -384,9 +384,10 @@ export async function resolveActions(
 }
 
 /**
- * Pair legs must trade the SAME base qty. When both open legs of a pair group were
- * sized from notional, re-resolve ONE shared qty across both legs' rules (floored
- * to the coarser lot, both mins enforced) and overwrite the per-leg results.
+ * Pair legs must trade the SAME base qty. Re-resolve ONE shared qty across both open
+ * legs' rules (floored to the coarser lot, both mins enforced) and overwrite the
+ * per-leg results. Both legs must be sized the same way — both in coins or both in
+ * dollars; a coin size needs no reference price, a dollar size does.
  */
 function applySharedPairSizing(resolved: ResolvedAction[]): void {
   const groups = new Map<string, ResolvedAction[]>();
@@ -401,26 +402,38 @@ function applySharedPairSizing(resolved: ResolvedAction[]): void {
   for (const legs of groups.values()) {
     if (legs.length !== 2) continue;
     const [a, b] = legs;
-    const bothFromNotional = legs.every(
-      (l) => !(l.input as OpenMarketAction).qty && (l.input as OpenMarketAction).notional,
-    );
-    if (!bothFromNotional || !a.rule || !b.rule) continue;
-    // Both legs must target the same notional — otherwise adopting leg A's silently
-    // drops leg B's intent. Flag it rather than reconcile downward without warning.
-    const notA = Number((a.input as OpenMarketAction).notional);
-    const notB = Number((b.input as OpenMarketAction).notional);
-    if (Number.isFinite(notA) && Number.isFinite(notB) && notA !== notB) {
+    if (!a.rule || !b.rule) continue;
+    const inA = a.input as OpenMarketAction;
+    const inB = b.input as OpenMarketAction;
+    const sizeA = inA.qty ?? inA.notional;
+    const sizeB = inB.qty ?? inB.notional;
+    if (!sizeA || !sizeB) continue;
+    // One leg in coins and the other in dollars cannot be reconciled: resolveQty takes
+    // one or the other, and converting needs a price the coin leg has no use for.
+    if (Boolean(inA.qty) !== Boolean(inB.qty)) {
       for (const l of legs) {
-        l.violations.push({ code: 'pair-qty-mismatch', message: `pair legs have different notional (${notA} vs ${notB}) — use one shared notional` });
+        l.violations.push({ code: 'pair-qty-mismatch', message: 'pair legs are sized differently — one in coins, one in dollars; size both the same way' });
+      }
+      continue;
+    }
+    // Both legs must target the same size — otherwise adopting leg A's silently
+    // drops leg B's intent. Flag it rather than reconcile downward without warning.
+    const numA = Number(sizeA);
+    const numB = Number(sizeB);
+    if (Number.isFinite(numA) && Number.isFinite(numB) && numA !== numB) {
+      const unit = inA.qty ? 'qty' : 'notional';
+      for (const l of legs) {
+        l.violations.push({ code: 'pair-qty-mismatch', message: `pair legs have different ${unit} (${numA} vs ${numB}) — use one shared ${unit}` });
       }
       continue;
     }
     const ref = a.refPrice ?? b.refPrice;
-    if (!ref) continue;
+    if (!inA.qty && !ref) continue;
     try {
       const shared = resolveQty({
-        notional: (a.input as OpenMarketAction).notional,
-        refPrice: ref.value,
+        notional: inA.qty ? undefined : inA.notional,
+        qty: inA.qty,
+        refPrice: ref?.value,
         legs: legs.map((l) => ({
           lotSize: l.rule!.lotSize,
           minSize: Number(l.rule!.minSize ?? 0),
@@ -429,18 +442,26 @@ function applySharedPairSizing(resolved: ResolvedAction[]): void {
       });
       for (const l of legs) {
         if (Number(l.qty) !== shared.qty) {
-          l.warnings.push(`qty shared across the pair (coarser lot binds): ${l.qty || '—'} → ${shared.qtyStr}`);
+          l.warnings.push(`size set to ${shared.qtyStr} (was ${l.qty || '—'}) so both legs trade the same amount`);
         }
         l.qty = shared.qtyStr;
-        l.estNotional = shared.estNotional;
+        // With no reference price the shared notional is 0, while a leg may have priced
+        // its own off its limit price — and the margin preflight reads that number.
+        if (ref) l.estNotional = shared.estNotional;
         // Per-leg sizing violations are superseded by the successful shared sizing.
         l.violations = l.violations.filter(
           (v) => !['below-min-size', 'below-min-notional', 'lot-incompatible', 'qty-invalid', 'sizing-failed'].includes(v.code),
         );
       }
     } catch (err) {
+      const code = sizingViolationCode(err);
+      // The raw lot-incompatible text names neither leg and tells a trader to pass a CLI flag.
+      const message =
+        code === 'lot-incompatible'
+          ? `${a.symbol} trades in steps of ${a.rule!.lotSize} and ${b.symbol} in steps of ${b.rule!.lotSize} — no size fits both legs`
+          : `pair sizing: ${(err as Error).message}`;
       for (const l of legs) {
-        l.violations.push({ code: sizingViolationCode(err), message: `pair sizing: ${(err as Error).message}` });
+        l.violations.push({ code, message });
       }
     }
   }

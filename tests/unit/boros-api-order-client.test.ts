@@ -39,6 +39,10 @@ function fakeApi(
     /** Raw body the ENTER submission answers with, for the shapes that are
      * neither a clean success nor a per-call error. */
     enterReturns?: unknown;
+    /** Same, for the gas TOP-UP submission. */
+    payReturns?: unknown;
+    /** Raw body of the gas-balance read. */
+    gasBalance?: unknown;
     /** marketIds the venue already considers entered, per read. Successive
      * entries let a test change the answer between reads. */
     enteredReads?: number[][];
@@ -65,10 +69,17 @@ function fakeApi(
     if (path.startsWith('/v1/calldata-builder/agent/cancel-orders')) {
       return ok({ calls: [{ calldata: '0xca' }] });
     }
+    if (path.startsWith('/v1/calldata-builder/agent/pay-treasury')) {
+      return ok({ calls: [{ calldata: '0x7a' }] });
+    }
     if (path.startsWith('/v1/send-txs/bulk-calls')) {
       const datas = body.datas as Array<{ calldata: string }>;
       // The enter-markets submission is the one carrying 0xe0; overrides are
       // about the ORDER submission and must not leak onto it.
+      if (datas[0]?.calldata === '0x7a') {
+        if (over.payReturns !== undefined) return ok(over.payReturns);
+        return ok(datas.map((_, i) => ({ txHash: '0xpay', index: i, status: 'success' })));
+      }
       const isEnter = datas[0]?.calldata === '0xe0';
       if (isEnter) {
         if (over.enterReturns !== undefined) return ok(over.enterReturns);
@@ -84,7 +95,9 @@ function fakeApi(
     if (path.startsWith('/v1/send-txs/tx-status-with-events')) {
       return ok(over.status ?? { status: 'success', statuses: [] });
     }
-    if (path.startsWith('/v1/accounts/gas-balance')) return ok({ balanceInUSD: 42 });
+    if (path.startsWith('/v1/accounts/gas-balance')) {
+      return ok(over.gasBalance === undefined ? { balanceInUSD: 42 } : over.gasBalance);
+    }
     return { ok: false, status: 404, json: async () => ({ message: 'nope' }) };
   };
   return { calls, fetchImpl };
@@ -392,6 +405,13 @@ describe('makeBorosApiOrderClient — preconditions and remediation', () => {
     expect(await client(api).getGasBalance?.()).toBe(42);
     expect(api.calls.some((c) => c.path.startsWith('/v1/accounts/gas-balance?root='))).toBe(true);
   });
+
+  it('reports a balance it could not read as UNKNOWN, not as a funded account', async () => {
+    // It used to answer POSITIVE_INFINITY, which every gas check downstream
+    // read as an account rich enough to trade.
+    expect(await client(fakeApi({ gasBalance: {} })).getGasBalance?.()).toBeNull();
+    expect(await client(fakeApi({ gasBalance: null })).getGasBalance?.()).toBeNull();
+  });
 });
 
 describe('makeBorosApiOrderClient — a result that says nothing is not a result', () => {
@@ -520,5 +540,51 @@ describe('absWei', () => {
     expect(absWei('0.05')).toBeNull();
     expect(absWei('')).toBeNull();
     expect(absWei('nope')).toBeNull();
+  });
+});
+
+describe('makeBorosApiOrderClient — the gas top-up', () => {
+  it('signs the builder\'s calldata and submits it, billed on the USD zone', async () => {
+    const api = fakeApi({ enteredReads: [[HL]] });
+    await client(api).payTreasury!(5);
+
+    // The market only picks the treasury and the cross account that pays, so
+    // it has to be one on the zone the dollar amount is denominated in.
+    const read = api.calls.find((c) => c.path.startsWith('/v1/accounts/entered-markets'))!;
+    expect(read.path).toContain(packMarketAcc(ROOT, 0, 3, CROSS_MARKET_ID));
+
+    const build = api.calls.find((c) => c.path === '/v1/calldata-builder/agent/pay-treasury')!;
+    expect(build.body).toMatchObject({ accountId: 0, isCross: true, marketId: HL });
+    // 18 decimals: what the backend decodes, not what its own DTO documents.
+    expect(build.body.amount).toBe('5000000000000000000');
+
+    const datas = api.calls.find((c) => c.path === '/v1/send-txs/bulk-calls')!.body.datas as Array<{
+      calldata: string;
+      signature: string;
+    }>;
+    expect(datas).toHaveLength(1);
+    expect(datas[0].calldata).toBe('0x7a');
+    expect(datas[0].signature).toMatch(/^0x[0-9a-f]+$/);
+  });
+
+  it('raises on a refusal, which the venue delivers by RESOLVING', async () => {
+    const api = fakeApi({ enteredReads: [[HL]], payReturns: [{ error: 'MMInsufficientCash()' }] });
+    await expect(client(api).payTreasury!(5)).rejects.toThrow(/refused the gas top-up/i);
+  });
+
+  it('raises when the submission says nothing at all', async () => {
+    // `submitCalls` renders any non-array body as `[]`. Reported as done, the
+    // user waits on a balance that may never move.
+    for (const body of [{}, null, []]) {
+      const api = fakeApi({ enteredReads: [[HL]], payReturns: body });
+      await expect(client(api).payTreasury!(5)).rejects.toThrow(/cannot tell whether it landed/i);
+    }
+  });
+
+  it('refuses when the account has entered no USD-collateral market', async () => {
+    // The amount is a dollar figure and only that zone makes it one: the same
+    // number billed to a BTC-margined market would spend that many bitcoin.
+    const api = fakeApi({ enteredReads: [[]] });
+    await expect(client(api).payTreasury!(5)).rejects.toThrow(/no USD-collateral market/i);
   });
 });

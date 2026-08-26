@@ -357,10 +357,10 @@ export interface StrategyRollup {
   /** Locked fixed spread across the Boros legs (≈ rate_A − rate_B). */
   spread: number;
   lockedAprOnCapital: number;
-  /** Full-life projection of the locked spread on the Boros notional:
-   * (grossBorosNotional/2) × spread × (maturity − clockStart)/YEAR. Assumes the
-   * spread was locked on the full notional since the strategy start — the UI
-   * shows that assumption. Null when the clock start is unknown. */
+  /** Full-life projection of the locked spread on the Boros notional, summed
+   * per leg: Σ leg rate × leg notional × (its maturity − its open)/YEAR. Assumes
+   * each leg held its full notional from its own open — the UI shows that
+   * assumption. Null when the clock start is unknown. */
   spreadReturnUsd: number | null;
   /** Vu's formula: spreadReturnUsd − feesUsd.paid.totalUsd −
    * feesUsd.future.borosSettlementUsd. The perp exit parts (fees + slippage)
@@ -1214,25 +1214,35 @@ function assembleStrategy(args: AssembleInput): StrategyRollup {
   }
 
   // --- Locked spread ----------------------------------------------------------
-  const netFixedPerYearUsd = borosLegs.reduce(
-    (s, l) => s + fixedSign(l) * (l.entryApr ?? 0) * l.notionalUsd,
-    0,
-  );
+  // Each leg locks its own rate on its own day, so its income accrues from its
+  // OWN open to its OWN maturity — a leg opened late earned nothing before it
+  // existed, and one strategy-wide window credits it anyway. A user-set clock
+  // asserts when the whole position started, so it still wins over every open.
+  const perLegClock = clockBasis !== 'custom';
+  let netFixedPerYearUsd = 0;
+  let spreadReturnUsd: number | null = clockStart === null ? null : 0;
+  let unknownOpen = false;
+  for (const l of borosLegs) {
+    const perYearUsd = fixedSign(l) * (l.entryApr ?? 0) * l.notionalUsd;
+    netFixedPerYearUsd += perYearUsd;
+    if (spreadReturnUsd === null) continue;
+    const start = perLegClock ? (l.openedAt ?? clockStart!) : clockStart!;
+    if (perLegClock && l.openedAt === null) unknownOpen = true;
+    spreadReturnUsd +=
+      perYearUsd * (Math.max(0, (l.maturity ?? maturity) - start) / SECONDS_IN_YEAR);
+  }
+  // The clock warning above only fires when NO Boros open is known. This is the
+  // mixed case, where the known opens set the clock and the rest ride on it.
+  if (unknownOpen && borosOpens.length) {
+    warnings.push(
+      `Some ${base} Boros legs have no known open time — their share of the locked spread accrues from the position start instead of their own.`,
+    );
+  }
   const grossBorosNotional = borosLegs.reduce((s, l) => s + l.notionalUsd, 0);
   // For the canonical 2-leg book (equal notional N): netFixed = (rateA−rateB)·N
   // and gross = 2N, so netFixed / (gross/2) recovers the spread exactly.
   const spread = grossBorosNotional > 0 ? netFixedPerYearUsd / (grossBorosNotional / 2) : 0;
   const lockedAprOnCapital = capitalUsd > 0 ? netFixedPerYearUsd / capitalUsd : 0;
-
-  // Full-life spread return: the locked net fixed rate accrued from the
-  // strategy start to maturity. netFixedPerYearUsd ≡ (gross/2) × spread, so
-  // this is N × spread × duration for the canonical book, and stays exact for
-  // unequal notionals. Assumes the spread was locked on the full notional
-  // since the start — the UI surfaces that assumption verbatim.
-  const spreadReturnUsd =
-    clockStart !== null
-      ? netFixedPerYearUsd * (Math.max(0, maturity - clockStart) / SECONDS_IN_YEAR)
-      : null;
 
   // --- Perp exit cost (maker+hedge close) ---------------------------------------
   // For a 2-leg pair: maker order on one venue + taker hedge on the other —

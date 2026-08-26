@@ -76,6 +76,15 @@ const CLOSE_SLIPPAGE_APR = 0.01;
  */
 const EXECUTION_MEMO_MS = 10 * 60_000;
 
+/**
+ * Bounds on one gas top-up, in USD. Enforced here and not only in the field:
+ * under the low bound the venue's $1 ops-fee sweep eats the top-up and blocks
+ * the user again, and the pot has no withdrawal path, so the high bound is the
+ * only thing standing between a typo and money nobody can get back.
+ */
+const MIN_TOP_UP_USD = 2;
+const MAX_TOP_UP_USD = 100;
+
 /** Wire shape of one leg, as the panel sends it. */
 interface LegBody {
   marketId?: unknown;
@@ -318,30 +327,47 @@ function readAccount(zones: BorosCollateralZone[]): AccountView {
   return view;
 }
 
-export function borosPairRoutes(deps: AppDeps) {
-  /**
-   * clientOrderId pair → the full response payload the execution produced (or
-   * is producing).
-   *
-   * Keyed on BOTH ids so a resend of the same intent coalesces, while a
-   * genuinely new order (fresh ids) never does. In-flight entries store the
-   * PROMISE, so two rapid clicks await the same submission instead of racing
-   * into two batches. The whole payload (fills + the estimate they were priced
-   * against) is memoized so a replay can answer WITHOUT re-pricing — the first
-   * execution changed the very account state a re-run of the gate would judge.
-   */
-  interface ExecutionPayload {
-    result: Awaited<ReturnType<typeof submitBorosPair>>;
-    estimate: ReturnType<typeof simulateBorosPair>;
-    warnings: string[];
+/**
+ * clientOrderId pair → the full response payload the execution produced (or
+ * is producing).
+ *
+ * Keyed on BOTH ids so a resend of the same intent coalesces, while a
+ * genuinely new order (fresh ids) never does. In-flight entries store the
+ * PROMISE, so two rapid clicks await the same submission instead of racing
+ * into two batches. The whole payload (fills + the estimate they were priced
+ * against) is memoized so a replay can answer WITHOUT re-pricing — the first
+ * execution changed the very account state a re-run of the gate would judge.
+ *
+ * Module-scoped so the update route can ask whether a Boros order may still be
+ * unsettled, and cleared when the routes are built so a second app in the same
+ * process (only tests build two) never inherits the first's memo.
+ */
+interface ExecutionPayload {
+  result: Awaited<ReturnType<typeof submitBorosPair>>;
+  estimate: ReturnType<typeof simulateBorosPair>;
+  warnings: string[];
+}
+const recentExecutions = new Map<string, { at: number; result: Promise<ExecutionPayload> }>();
+const sweepExecutions = (): void => {
+  const now = Date.now();
+  for (const [k, v] of recentExecutions) {
+    if (now - v.at > EXECUTION_MEMO_MS) recentExecutions.delete(k);
   }
-  const recentExecutions = new Map<string, { at: number; result: Promise<ExecutionPayload> }>();
-  const sweepExecutions = (): void => {
-    const now = Date.now();
-    for (const [k, v] of recentExecutions) {
-      if (now - v.at > EXECUTION_MEMO_MS) recentExecutions.delete(k);
-    }
-  };
+};
+
+/**
+ * How many executions are recent enough that a resend could still double-fill.
+ * The update route refuses to restart the app over any of them, because a
+ * restart empties the memo above and the venue has no id of its own to dedupe
+ * on. Stale entries are swept first — past the memo window they guard nothing.
+ */
+export function borosExecutionsPending(): number {
+  sweepExecutions();
+  return recentExecutions.size;
+}
+
+export function borosPairRoutes(deps: AppDeps) {
+  recentExecutions.clear();
   const rememberExecution = (key: string, pending: Promise<ExecutionPayload>): void => {
     recentExecutions.set(key, { at: Date.now(), result: pending });
     // A submission that provably left NO position — every submitted leg failed
@@ -474,16 +500,17 @@ export function borosPairRoutes(deps: AppDeps) {
     });
 
     // Gas is prepaid to a treasury, separate from trading collateral, so a
-    // funded account can still be unable to send. A failed READ raises no
-    // blocker — refusing a trade because we could not check would be worse
-    // than letting the venue reject it with its own message.
-    let gasBalanceUsd: number | undefined;
+    // funded account can still be unable to send. A failed READ is `null` and
+    // absent means no read was attempted: the gate blocks on the first and not
+    // the second, so an account we could not read never presents as a funded
+    // one.
+    let gasBalanceUsd: number | null | undefined;
     const ordersForGas = deps.getBorosOrders?.();
     if (ordersForGas?.getGasBalance) {
       try {
         gasBalanceUsd = await ordersForGas.getGasBalance();
       } catch {
-        gasBalanceUsd = undefined;
+        gasBalanceUsd = null;
       }
     }
 
@@ -735,6 +762,49 @@ export function borosPairRoutes(deps: AppDeps) {
       deps.cache.bust('boros:txns');
 
       return reply.ok({ ...payload, replayed: false });
+    });
+
+    /**
+     * Refill the prepaid gas pot, out of this account's own Boros margin.
+     *
+     * Signed with the agent key the server already holds — `payTreasury` names
+     * no token and no recipient, so it can only move the caller's own margin
+     * into their own pot, and the key still cannot move a token out.
+     *
+     * The amount is bounded HERE. The panel bounds the field too, but that is
+     * UX: this spend has no way back, so the server is what decides how much of
+     * it is possible.
+     */
+    app.post('/boros/pair/top-up-gas', async (req, reply) => {
+      const amountUsd = Number((req.body as { amountUsd?: unknown } | undefined)?.amountUsd);
+      if (!Number.isFinite(amountUsd) || amountUsd < MIN_TOP_UP_USD || amountUsd > MAX_TOP_UP_USD) {
+        throw new CoreError(
+          `amountUsd must be between $${MIN_TOP_UP_USD} and $${MAX_TOP_UP_USD}`,
+          'validation',
+        );
+      }
+      const orders = deps.getBorosOrders?.();
+      if (!orders?.payTreasury) {
+        throw new CoreError(
+          'Boros gas top-up is not configured on this install.',
+          'not-configured',
+        );
+      }
+      assertAgentNotExpired();
+      await orders.payTreasury(amountUsd);
+
+      // Re-read so the panel can state the new figure rather than the one the
+      // user typed — the venue charges a fee for the top-up itself. `null`
+      // keeps the meaning it has everywhere else here: unknown, not empty.
+      let balanceUsd: number | null = null;
+      if (orders.getGasBalance) {
+        try {
+          balanceUsd = await orders.getGasBalance();
+        } catch {
+          balanceUsd = null;
+        }
+      }
+      return reply.ok({ balanceUsd });
     });
 
     /**

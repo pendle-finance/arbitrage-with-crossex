@@ -652,41 +652,77 @@ describe('BorosPairTicket', () => {
     expect(report.getAllByText(/its own message is below/i).length).toBe(2);
   });
 
-  it('shows the prepaid gas balance, flagged when below the venue minimum', async () => {
-    // Gas is a different pot from collateral, so a "top up to trade" refusal is
-    // indistinguishable from a margin problem unless the number is on screen.
+  it('names a gas failure as gas, not as margin', async () => {
+    // Sent to a margin top-up, the user funds the wrong pot and the next order
+    // fails the same way.
     const user = userEvent.setup();
-    server.use(...handlers({ gasBalanceUsd: 3.25 }));
+    const failed = (marketId: number, direction: string) => ({
+      marketId,
+      direction,
+      filledSize: 0,
+      shortfallSize: 100_000,
+      execApr: null,
+      feeSize: null,
+      failure: { code: 'no-gas', message: 'Top up at least ~$10 to trade' },
+    });
+    server.use(
+      ...handlers({
+        execute: () =>
+          HttpResponse.json(
+            env({
+              result: {
+                legA: failed(HL, 'short'),
+                legB: failed(BN, 'long'),
+                hedgedSize: 0,
+                unhedgedSize: 0,
+                unhedgedLeg: null,
+                realisedSpreadApr: null,
+                partial: true,
+                bothLegsSubmitted: true,
+              },
+              estimate: simulation(),
+              warnings: [],
+            }),
+          ),
+      }),
+    );
     renderWithClient(<BorosPairTicket />);
     await fillTicket(user);
 
-    expect(await screen.findByText('Prepaid gas')).toBeInTheDocument();
-    const shown = screen.getByText('$3.25');
-    expect(shown).toBeInTheDocument();
-    expect(shown).toHaveClass('text-amber-400');
+    const confirm = await screen.findByRole('button', { name: /2 Boros market orders/i });
+    await waitFor(() => expect(confirm).not.toBeDisabled());
+    await user.pointer({ keys: '[MouseLeft>]', target: confirm });
+    await waitFor(() => expect(screen.queryByRole('status')).toBeInTheDocument(), { timeout: 3_000 });
+
+    const report = within(screen.getByRole('status'));
+    expect(report.getAllByText('no prepaid gas').length).toBe(2);
+    expect(report.getAllByText(/separate from your trading collateral/i).length).toBe(2);
   });
 
-  it('omits the gas row entirely when the install cannot read it', async () => {
+  it('renders nothing about gas when the balance covers the order', async () => {
+    // The row used to render on every ticket, so a healthy account carried a
+    // number it could do nothing with. Gas earns space only when it blocks.
     const user = userEvent.setup();
-    server.use(...handlers({ gasBalanceUsd: null }));
+    server.use(...handlers({ gasBalanceUsd: 25 }));
     renderWithClient(<BorosPairTicket />);
     await fillTicket(user);
 
     await screen.findByText('Taker fee');
-    // Better absent than a misleading "$0.00".
-    expect(screen.queryByText('Prepaid gas')).not.toBeInTheDocument();
+    expect(screen.queryByText(/prepaid gas/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Top up gas/i })).not.toBeInTheDocument();
   });
 
-  it('surfaces an empty gas balance as its own blocker, not a margin one', async () => {
+  it('says an unreadable gas balance is unknown, and offers no top-up for it', async () => {
     const user = userEvent.setup();
     server.use(
       ...handlers({
+        gasBalanceUsd: null,
         gate: {
           blockers: [
             {
               code: 'no-gas',
               message:
-                'No prepaid gas on this Boros account — top up the gas balance before sending orders. This is separate from your trading collateral.',
+                'Prepaid gas on this Boros account could not be read, so we cannot say whether an order will be accepted. This is gas, not trading collateral: topping up your margin will not fix it.',
             },
           ],
         },
@@ -695,8 +731,79 @@ describe('BorosPairTicket', () => {
     renderWithClient(<BorosPairTicket />);
     await fillTicket(user);
 
-    expect(await screen.findByText(/No prepaid gas on this Boros account/i)).toBeInTheDocument();
-    expect(screen.getByText(/separate from your trading collateral/i)).toBeInTheDocument();
+    expect(await screen.findByText(/could not be read/i)).toBeInTheDocument();
+    // The amount needed is unknown, and the read may be the broken thing.
+    expect(screen.queryByRole('button', { name: /Top up gas/i })).not.toBeInTheDocument();
+  });
+
+  it('surfaces an empty gas balance as its own blocker, not a margin one', async () => {
+    const user = userEvent.setup();
+    server.use(
+      ...handlers({
+        gasBalanceUsd: 0,
+        gate: {
+          blockers: [
+            {
+              code: 'no-gas',
+              message:
+                'Prepaid gas on this Boros account is empty — top it up to send an order. This is gas, not trading collateral: topping up your margin will not fix it.',
+            },
+          ],
+        },
+      }),
+    );
+    renderWithClient(<BorosPairTicket />);
+    await fillTicket(user);
+
+    expect(await screen.findByText(/Prepaid gas on this Boros account is empty/i)).toBeInTheDocument();
+    expect(screen.getByText(/topping up your margin will not fix it/i)).toBeInTheDocument();
+  });
+
+  it('tops up gas from inside the blocker, at an amount the user can edit', async () => {
+    // The form used to dead-end here: it said the pot was empty and offered no
+    // way to fill it.
+    const user = userEvent.setup();
+    const bodies: Record<string, unknown>[] = [];
+    server.use(
+      ...handlers({
+        gasBalanceUsd: 0.05,
+        gate: {
+          blockers: [
+            {
+              code: 'no-gas',
+              message: 'Prepaid gas on this Boros account is low, about $0.05 — top it up to send an order.',
+            },
+          ],
+        },
+      }),
+      http.post('/api/boros/pair/top-up-gas', async ({ request }) => {
+        bodies.push((await request.json()) as Record<string, unknown>);
+        return HttpResponse.json(env({ balanceUsd: 20.05 }));
+      }),
+    );
+    renderWithClient(<BorosPairTicket />);
+    await fillTicket(user);
+
+    const field = (await screen.findByLabelText(/Top up \(USD\)/i)) as HTMLInputElement;
+    expect(field.value).toBe('5');
+    const button = screen.getByRole('button', { name: /Top up gas/i });
+
+    // Under $2 the $1 ops-fee sweep eats the top-up and blocks again; over $100
+    // is money that cannot be withdrawn. Each refusal says which.
+    await user.clear(field);
+    await user.type(field, '1');
+    expect(button).toBeDisabled();
+    expect(screen.getByText('Minimum is 2')).toBeInTheDocument();
+    await user.clear(field);
+    await user.type(field, '500');
+    expect(button).toBeDisabled();
+    expect(screen.getByText('Maximum is 100')).toBeInTheDocument();
+
+    await user.clear(field);
+    await user.type(field, '20');
+    await user.click(button);
+    await waitFor(() => expect(bodies.length).toBe(1));
+    expect(bodies[0]).toEqual({ amountUsd: 20 });
   });
 
   it('says reduce-only is enforced by sizing, not by the venue', async () => {

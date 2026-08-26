@@ -251,6 +251,27 @@ describe('classifyLegFailure', () => {
     expect(classifyLegFailure(new Error('MARKET_CLOSED'))).toBe('rejected');
   });
 
+  it('reads the relayer\'s own gas refusal as no-gas, unprompted', () => {
+    // Prepaid gas is a different pot from margin, so it needs a different fix.
+    expect(
+      classifyLegFailure(new Error('HTTP 400: Insufficient gas balance 0xab. Required: 0.05')),
+    ).toBe('no-gas');
+    expect(classifyLegFailure(new Error('GAS_BALANCE_TOO_LOW'))).toBe('no-gas');
+  });
+
+  it('reads the venue top-up string as gas ONLY on a market already entered', () => {
+    // Boros says the same sentence about an account that has not entered the
+    // market. Sending that user to a top-up would not unblock them.
+    const topUp = new Error('[SIMULATE] Top up at least ~$10 to trade');
+    expect(classifyLegFailure(topUp, true)).toBe('no-gas');
+    expect(classifyLegFailure(topUp, false)).toBe('rejected');
+    expect(classifyLegFailure(topUp)).toBe('rejected');
+  });
+
+  it('keeps a margin shortfall out of the gas branch', () => {
+    expect(classifyLegFailure(new Error('INSUFFICIENT_MARGIN'), true)).toBe('insufficient-margin');
+  });
+
   it('classifies off the unwrapped body, not the generic axios message', () => {
     const axiosErr = Object.assign(new Error('Request failed with status code 400'), {
       response: { status: 400, data: { message: 'RATE_DEVIATION too large' } },

@@ -7,6 +7,7 @@ import type { CrossexPosition } from '../api/types';
 import { ToastProvider } from '../components/Toast';
 import { decodeSharePayload } from '../lib/shareCodec';
 import {
+  STRATEGY_MATURITY,
   makeCrossexPosition,
   makeStrategyLeg,
   makeStrategyRollup,
@@ -1283,5 +1284,48 @@ describe('StrategyCard — share', () => {
       expect(dec.payload.l).toHaveLength(4);
     }
     expect(input.value).not.toMatch(/0x[a-fA-F0-9]{40}/);
+  });
+});
+
+describe('StrategyCard — the fixed-APY window', () => {
+  const DAY = 86_400;
+
+  /** The canonical book with its two Boros legs given equal notional and the
+   * opens the case needs. The strategy clock stays where the server puts it,
+   * on the earliest leg — 60 days before maturity. */
+  const splitOpens = (openedAt: (i: number) => number | null) =>
+    card({
+      capitalUsd: 40_000,
+      expectedPnlToMaturityUsd: 1_000,
+      clockStartSec: STRATEGY_MATURITY - 60 * DAY,
+      legs: makeStrategyRollup().legs.map((l, i) =>
+        l.kind === 'boros' ? { ...l, notionalUsd: 100_000, openedAt: openedAt(i) } : l,
+      ),
+    });
+
+  /** Legs 2 and 3 of the fixture are the Boros pair: opens 60 and 30 days out,
+   * so the notional-weighted mean is 45. */
+  const staggered = () => splitOpens((i) => STRATEGY_MATURITY - (i === 2 ? 60 : 30) * DAY);
+
+  it('annualizes over the weighted mean open, not over the earliest leg', () => {
+    render(staggered());
+    rollOver();
+    // 1,000 / (40,000 × 45/365) = 20.28%. Anchored on the earliest leg the same
+    // PnL would be spread over 60 days and read 15.21%.
+    expect(screen.getByText('+20.28%')).toBeInTheDocument();
+    expect(screen.queryByText('+15.21%')).toBeNull();
+  });
+
+  it('prints the same window in the ROI tooltip', () => {
+    render(staggered());
+    rollOver();
+    expect(screen.getByTitle(/over this position's life \(45d\)/)).toBeInTheDocument();
+  });
+
+  it('falls back to the strategy clock when no Boros leg carries an open', () => {
+    render(splitOpens(() => null));
+    rollOver();
+    expect(screen.getByText('+15.21%')).toBeInTheDocument();
+    expect(screen.getByTitle(/over this position's life \(60d\)/)).toBeInTheDocument();
   });
 });

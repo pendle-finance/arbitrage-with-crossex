@@ -72,6 +72,16 @@ const ROUTER_ADDRESS = '0x8080808080daB95eFED788a9214e400ba552DEf6';
 /** `marketId` sentinel for a CROSS account — max uint24. */
 export const CROSS_MARKET_ID = 0xff_ff_ff;
 
+/**
+ * The USD-pegged collateral zone (tokenId 3, `BOROS_TOKEN_SYMBOLS` in `./client`).
+ *
+ * A gas top-up is billed through a market, and the amount is in THAT market's
+ * collateral token — so the same figure sent against a BTC-margined market
+ * would spend that many BITCOIN. Only this zone makes a dollar amount mean
+ * dollars, so `payTreasury` bills through it and refuses anywhere else.
+ */
+const USD_TOKEN_ID = 3;
+
 /** Side enum on the wire: 0 = LONG, 1 = SHORT. */
 const SIDE_LONG = 0;
 const SIDE_SHORT = 1;
@@ -527,7 +537,16 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
   });
   const failedLeg = (req: BorosMarketOrderRequest, message: string): BorosLegFill => ({
     ...emptyLeg(req),
-    failure: { code: classifyLegFailure(new Error(message)), message },
+    failure: {
+      // Whether the market is ENTERED is what tells an empty gas pot apart from
+      // an unregistered account: Boros words both refusals the same way. Only
+      // this module holds that fact.
+      code: classifyLegFailure(
+        new Error(message),
+        [...enteredByToken.values()].some((ids) => ids.has(req.marketId)),
+      ),
+      message,
+    },
   });
   /**
    * A leg whose outcome the venue never told us. NOT a zero fill: it may have
@@ -649,13 +668,72 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
       }
     },
 
-    async getGasBalance(): Promise<number> {
+    async getGasBalance(): Promise<number | null> {
       const res = await call<{ balanceInUSD?: number }>(
         `/v1/accounts/gas-balance?root=${config.root}`,
         undefined,
         'GET',
       );
-      return typeof res?.balanceInUSD === 'number' ? res.balanceInUSD : Number.POSITIVE_INFINITY;
+      // A figure we could not read is UNKNOWN. The old POSITIVE_INFINITY read
+      // downstream as an account rich enough for anything, which silently
+      // removed the one blocker that exists to catch an empty pot.
+      return typeof res?.balanceInUSD === 'number' ? res.balanceInUSD : null;
+    },
+
+    /**
+     * Top that pot up out of the account's own Boros margin.
+     *
+     * The market names the treasury that receives the payment and, through its
+     * collateral token, the cross account that pays it
+     * (`MarketHubEntry.payTreasury`) — so any market this account has already
+     * entered on the USD zone will do. Reading that list is also the check that
+     * the account has cash there to pay with.
+     */
+    async payTreasury(amountUsd: number): Promise<void> {
+      const entered = enteredByToken.get(USD_TOKEN_ID) ?? (await readEntered(USD_TOKEN_ID));
+      if (entered.size === 0) {
+        throw new CoreError(
+          'This Boros account has entered no USD-collateral market, so a dollar top-up has no treasury to go through. Top the gas balance up from the Boros app instead.',
+          'venue-rejected',
+        );
+      }
+      const [marketId] = entered;
+      const { calls } = await call<{ calls: PlaceOrderCall[] }>(
+        '/v1/calldata-builder/agent/pay-treasury',
+        {
+          accountId: config.accountId,
+          isCross: true,
+          marketId,
+          // 18 decimals, NOT the token's own, and the two disagree. The backend
+          // decodes this as an 18-decimal FixedX18 (`fee.service.ts:204`) while
+          // its own DTO documents native token decimals
+          // (`calldata-builder-agent.dto.ts:618`). `pendle-sdk-boros` scales it
+          // one way and `boros-sdk` another, so neither SDK settles it. The
+          // backend is what credits the balance, so the backend wins.
+          amount: parseUnits(decimalString(amountUsd), DECIMALS).toString(),
+        },
+      );
+      if (!calls?.length) {
+        throw new CoreError(
+          `Boros returned no calldata for a $${amountUsd} gas top-up.`,
+          'venue-rejected',
+        );
+      }
+      const res = await submitCalls(await signCalls(calls.map((c) => c.calldata)));
+      // Same reasoning as `enterMissing`: a refusal RESOLVES with a per-call
+      // `error`, and no result is not a clean one either. Reporting a top-up
+      // that may never have landed leaves the user waiting on a balance that
+      // never moves.
+      if (!res.length) {
+        throw new CoreError(
+          `Boros returned no result for the $${amountUsd} gas top-up — cannot tell whether it landed.`,
+          'venue-rejected',
+        );
+      }
+      const refused = res.find((r) => r?.error);
+      if (refused) {
+        throw new CoreError(`Boros refused the gas top-up: ${refused.error}`, 'venue-rejected');
+      }
     },
 
     /**

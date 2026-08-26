@@ -39,6 +39,8 @@ import type {
   TradesResponse,
   VenueFees,
   UpdateStatus,
+  TopUpGasResponse,
+  RunUpdateResponse,
 } from './types';
 
 export const qk = {
@@ -446,6 +448,39 @@ export function useExecuteBorosPair() {
  * reads. The id is minted per attempt: this route has no replay memo, and a
  * retry after a failure is a genuinely new order.
  */
+/**
+ * Top up the prepaid gas pot. The amount is the user's own margin moving into
+ * their own gas balance, so it is confirmed, never silent — and it cannot be
+ * withdrawn again, which is why the server enforces the same bounds the field
+ * shows rather than trusting them.
+ *
+ * The simulation is invalidated on success so the blocker clears without a
+ * reload; the four-second poll would get there anyway, just later.
+ */
+export function useTopUpGas() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (amountUsd: number) =>
+      postJson<TopUpGasResponse>('/boros/pair/top-up-gas', { amountUsd }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['boros', 'pair', 'simulate'] });
+    },
+  });
+}
+
+/**
+ * Run the installer. The server does NOT exit afterwards — the installer stops
+ * it itself, once the download and build are done. So the page keeps its
+ * connection for a while, then loses it, then recovers when the service comes
+ * back. A 409 here is the server refusing while a deal or a Boros order is
+ * still live; its message says which.
+ */
+export function useRunUpdate() {
+  return useMutation({
+    mutationFn: () => postJson<RunUpdateResponse>('/version/update', {}),
+  });
+}
+
 export function useBorosCancelAndClose() {
   const qc = useQueryClient();
   return useMutation({

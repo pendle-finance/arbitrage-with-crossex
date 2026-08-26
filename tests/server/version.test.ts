@@ -3,12 +3,39 @@
  * every failure (a check that can fail loudly is worse than no check), lazy
  * (no remote read until asked), cached, and provably network-free whenever
  * the local version is unknown or the check is disabled.
+ *
+ * POST /api/version/update — the three refusals and the spawn. child_process is
+ * mocked for the whole file: a real spawn here would overwrite the developer's
+ * own installation.
  */
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FetchLike } from '../../src/core/boros/client';
+import { makeClients } from '../../src/core/clients';
+import { Store } from '../../src/engine/db';
+import { gateVenue } from '../../src/engine/venueGate';
 import { compareVersions, VERSION_URL } from '../../src/server/version';
-import { HOST, makeTestApp } from './helpers/gate-nock';
+import { HOST, makeTestApp, TEST_KEY, TEST_SECRET } from './helpers/gate-nock';
+
+const mocks = vi.hoisted(() => ({
+  spawn: vi.fn(() => ({ unref: vi.fn() })),
+  execFileSync: vi.fn(),
+  pending: vi.fn(() => 0),
+}));
+
+vi.mock('node:child_process', () => ({
+  spawn: mocks.spawn,
+  execFileSync: mocks.execFileSync,
+}));
+
+// Partial: borosPairRoutes itself must stay real, or buildApp has no pair routes.
+vi.mock('../../src/server/routes/borosPair', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../src/server/routes/borosPair')>()),
+  borosExecutionsPending: mocks.pending,
+}));
 
 /** Minimal FetchLike stub in the boros-stub style. */
 function stub(
@@ -174,5 +201,140 @@ describe('compareVersions', () => {
     expect(compareVersions('1.0.x', '1.0.0')).toBeNull();
     expect(compareVersions('1.0.0', '')).toBeNull();
     expect(compareVersions('main', '1.0.0')).toBeNull();
+  });
+});
+
+describe('POST /api/version/update', () => {
+  const INSTALLED = {
+    repo: 'pendle-finance/arbitrage-with-crossex',
+    requestedRef: 'refs/heads/main',
+    commit: 'f4f681af8b36c1bddc98048f214ff1405d56ca73',
+    source: 'github-archive',
+    installedAt: '2026-07-30T10:00:00Z',
+  };
+
+  let app: FastifyInstance;
+  let home: string;
+  let realHome: string | undefined;
+
+  beforeEach(() => {
+    mocks.spawn.mockClear();
+    mocks.execFileSync.mockClear();
+    mocks.pending.mockClear();
+    // The installer's log file is real; point it somewhere disposable.
+    home = mkdtempSync(path.join(tmpdir(), 'upd-'));
+    realHome = process.env.HOME;
+    process.env.HOME = home;
+  });
+  afterEach(async () => {
+    if (realHome === undefined) delete process.env.HOME;
+    else process.env.HOME = realHome;
+    await app?.close();
+  });
+
+  const post = () => app.inject({ method: 'POST', url: '/api/version/update', headers: HOST });
+
+  it('spawns the installer detached, returns its log path, and does not exit', async () => {
+    const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    app = makeTestApp({ install: INSTALLED });
+
+    const res = await post();
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().data).toEqual({
+      started: true,
+      logPath: path.join(home, 'Library', 'Logs', 'boros-crossex', 'update.log'),
+    });
+    expect(mocks.spawn).toHaveBeenCalledTimes(1);
+    const [cmd, args, opts] = mocks.spawn.mock.calls[0] as unknown as [
+      string,
+      string[],
+      { detached: boolean },
+    ];
+    expect(cmd).toBe('/bin/bash');
+    // The command the pop-up shows: the tip of main, not the local install.sh.
+    expect(args[1]).toContain('/main/install.sh');
+    expect(opts.detached).toBe(true);
+    expect(exit).not.toHaveBeenCalled();
+    exit.mockRestore();
+  });
+
+  it('refuses while a deal is still working, and names it', async () => {
+    const store = new Store(':memory:');
+    store.createPair({
+      id: 'busy-deal-update',
+      mode: 'OPENING',
+      a: { contract: 'GATE_FUTURE_ETH_USDT', side: 'BUY', lot: '0.001', minSize: '0', minNotional: '0', tick: '0.01' },
+      b: null,
+      targetQty: '0.05',
+      limitPrice: '2500',
+      pricePolicy: 'fixed',
+      deadlineAt: null,
+      makerNotBefore: 0,
+      hedgeNotBefore: 0,
+      pocRejects: 0,
+      hedgeRejectStreak: 0,
+      maxClip: null,
+      clipBandBp: null,
+      haltReason: null,
+      reportJson: null,
+      createdAt: Date.now(),
+    });
+    const clients = makeClients({ key: TEST_KEY, secret: TEST_SECRET });
+    app = makeTestApp({
+      install: INSTALLED,
+      engine: { store, venue: gateVenue(() => clients), clock: { now: () => Date.now() } },
+    });
+
+    const res = await post();
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toMatchObject({ category: 'validation', retryable: true });
+    expect(res.json().error.message).toMatch(/deal is still working/);
+    expect(mocks.spawn).not.toHaveBeenCalled();
+  });
+
+  it('refuses while a Boros order may still be settling, and names it', async () => {
+    mocks.pending.mockReturnValueOnce(1);
+    app = makeTestApp({ install: INSTALLED });
+
+    const res = await post();
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error.message).toMatch(/Boros order may still be settling/);
+    expect(res.json().error.retryable).toBe(true);
+    expect(mocks.spawn).not.toHaveBeenCalled();
+  });
+
+  it('refuses on a source checkout, and says retrying will not help', async () => {
+    app = makeTestApp({ install: null });
+
+    const res = await post();
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error.message).toMatch(/source checkout/);
+    expect(res.json().error.retryable).toBe(false);
+    expect(mocks.spawn).not.toHaveBeenCalled();
+  });
+
+  it('on Windows the installer runs as its own scheduled task, outside the service job', async () => {
+    const realPlatform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+    process.env.BOROS_ROOT = home;
+    app = makeTestApp({ install: INSTALLED });
+    try {
+      const res = await post();
+
+      expect(res.json().data.logPath).toBe(path.join(home, 'logs', 'update.log'));
+      expect(mocks.spawn).not.toHaveBeenCalled();
+      const calls = mocks.execFileSync.mock.calls as unknown as [string, string[]][];
+      expect(calls.map((c) => c[0])).toEqual(['schtasks', 'schtasks']);
+      expect(calls[0][1]).toContain('/create');
+      expect(calls[0][1].join(' ')).toContain('/main/install.ps1');
+      expect(calls[1][1]).toEqual(['/run', '/tn', 'BorosUpdate']);
+    } finally {
+      Object.defineProperty(process, 'platform', realPlatform);
+      delete process.env.BOROS_ROOT;
+    }
   });
 });

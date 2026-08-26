@@ -68,11 +68,13 @@ export interface QtyLeg {
  * Resolve one base-asset quantity valid for every leg: from --qty, or --notional/refPrice;
  * floored to the coarsest lot, then checked against each leg's lot/min-size/min-notional.
  * One leg = single open; two legs = a pair sharing the same qty. Throws on any violation.
+ * Sizing from --qty needs no refPrice; the min-notional check is then skipped, since
+ * there is nothing to compute the notional from. Every other check is price-free.
  */
 export function resolveQty(opts: {
   notional?: string;
   qty?: string;
-  refPrice: number;
+  refPrice?: number;
   legs: QtyLeg[];
 }): { qtyStr: string; qty: number; estNotional: number } {
   if (opts.notional && opts.qty) throw new Error('provide only one of --notional or --qty');
@@ -85,7 +87,7 @@ export function resolveQty(opts: {
   } else {
     const n = Number(opts.notional);
     if (!Number.isFinite(n) || n <= 0) throw new Error('--notional must be a positive number');
-    raw = n / opts.refPrice;
+    raw = n / (opts.refPrice ?? 0);
   }
 
   const coarserLot = coarsestLot(opts.legs.map((l) => l.lotSize)) ?? opts.legs[0].lotSize;
@@ -99,9 +101,10 @@ export function resolveQty(opts: {
     }
     if (qty < l.minSize) throw new Error(`qty ${qtyStr} is below a leg min size (${l.minSize}); increase size`);
   }
-  const estNotional = qty * opts.refPrice;
+  const estNotional = qty * (opts.refPrice ?? 0);
+  // With no reference price estNotional is 0 — unknown, not below the minimum.
   for (const l of opts.legs) {
-    if (l.minNotional > 0 && estNotional < l.minNotional) {
+    if (l.minNotional > 0 && estNotional > 0 && estNotional < l.minNotional) {
       throw new Error(`est. notional ${estNotional.toFixed(2)} is below a leg min notional (${l.minNotional}); increase --notional`);
     }
   }

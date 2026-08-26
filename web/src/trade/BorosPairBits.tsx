@@ -20,6 +20,7 @@ import type {
   BorosSimulatedLeg,
 } from '../api/types';
 import { Chip } from '../components/Chip';
+import { amountError } from '../lib/amount';
 import { fmtPct, fmtTokenQty, fmtUsd } from '../lib/fmt';
 
 /**
@@ -34,9 +35,6 @@ import { fmtPct, fmtTokenQty, fmtUsd } from '../lib/fmt';
  * as an APR fraction and the SDK does any tick conversion at the boundary.
  */
 export const APR_BP = 0.0001;
-
-/** Mirrors MIN_GAS_BALANCE_USD in src/core/boros/pair.ts. */
-const MIN_GAS_USD = 10;
 
 /** USD at a precision that suits the amount. A whole-dollar format reads a
  * real $0.45 of margin as "$0", which is the same "it will do nothing"
@@ -344,14 +342,9 @@ export function PositionArithmetic({
 
 export function PairCosts({
   sim,
-  gasBalanceUsd,
   singleLeg,
 }: {
   sim: BorosPairSimulation;
-  /** Prepaid relayer gas, USD. Shown because it is a SEPARATE pot from
-   * collateral: a "top up to trade" refusal is otherwise indistinguishable
-   * from a margin problem, and the user cannot tell whether a top-up landed. */
-  gasBalanceUsd?: number | null;
   /** Only leg A is real; leg B is a borrowed partner sized to zero. */
   singleLeg?: boolean;
 }) {
@@ -386,17 +379,6 @@ export function PairCosts({
               }`
         }
       />
-      {gasBalanceUsd !== null && gasBalanceUsd !== undefined && (
-        <Row
-          label="Prepaid gas"
-          title="Relayer gas held by Boros, separate from your trading collateral — topped up with payTreasury, not by depositing margin"
-          value={
-            <span className={gasBalanceUsd < MIN_GAS_USD ? 'text-amber-400' : undefined}>
-              {fmtUsd(gasBalanceUsd, 2)}
-            </span>
-          }
-        />
-      )}
     </div>
   );
 }
@@ -407,14 +389,30 @@ export function BlockerList({
   collateral,
   onCancelAndClose,
   busyMarketId,
+  gasBalanceUsd,
+  gasAmount,
+  onGasAmountChange,
+  onTopUpGas,
+  topUpBusy,
 }: {
   blockers: BorosPairBlocker[];
   collateral: string;
   onCancelAndClose?: (marketId: number) => void;
   /** marketId currently being remediated, so its button can show progress. */
   busyMarketId?: number | null;
+  /**
+   * null is UNKNOWN, never zero — the read failed. The blocker still shows,
+   * because an unreadable pot can still be empty, but no top-up is offered for
+   * it: the amount needed is unknown, and the read may be the broken thing.
+   */
+  gasBalanceUsd?: number | null;
+  gasAmount?: string;
+  onGasAmountChange?: (raw: string) => void;
+  onTopUpGas?: () => void;
+  topUpBusy?: boolean;
 }) {
   if (blockers.length === 0) return null;
+  const gasErr = amountError(gasAmount ?? '', { min: 2, max: 100 });
   return (
     <ul className="flex flex-col gap-1.5">
       {blockers.map((b, i) => (
@@ -439,6 +437,38 @@ export function BlockerList({
               {busyMarketId === b.marketId ? 'Working…' : 'Cancel orders & close position'}
             </button>
           )}
+          {b.code === 'no-gas' &&
+            onTopUpGas &&
+            gasBalanceUsd !== null &&
+            gasBalanceUsd !== undefined && (
+              <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                <label htmlFor="boros-gas-topup" className="text-ink-400">
+                  Top up (USD)
+                </label>
+                <input
+                  id="boros-gas-topup"
+                  className={`input num w-20 py-0.5 text-[11px] ${gasErr ? '!border-rose-500/60' : ''}`}
+                  inputMode="decimal"
+                  aria-invalid={gasErr ? true : undefined}
+                  aria-describedby={gasErr ? 'boros-gas-topup-error' : undefined}
+                  value={gasAmount ?? ''}
+                  onChange={(e) => onGasAmountChange?.(e.target.value)}
+                />
+                <button
+                  type="button"
+                  className="rounded border border-rose-400/50 px-2 py-0.5 text-[11px] text-rose-200 hover:bg-rose-500/15 disabled:opacity-50"
+                  disabled={topUpBusy || gasErr !== null || !gasAmount}
+                  onClick={onTopUpGas}
+                >
+                  {topUpBusy ? 'Topping up…' : 'Top up gas'}
+                </button>
+                {gasErr && (
+                  <p id="boros-gas-topup-error" role="alert" className="w-full text-rose-300">
+                    {gasErr}
+                  </p>
+                )}
+              </div>
+            )}
         </li>
       ))}
     </ul>
@@ -613,6 +643,7 @@ const FAILURE_LABEL: Record<NonNullable<BorosLegFill['failure']>['code'], string
   'insufficient-depth': 'not enough depth',
   'rate-deviation': 'rate-deviation guard',
   'insufficient-margin': 'not enough margin',
+  'no-gas': 'no prepaid gas',
   rejected: 'rejected',
   unknown: 'no confirmation',
 };
@@ -653,6 +684,8 @@ const FAILURE_HINT: Record<NonNullable<BorosLegFill['failure']>['code'], string>
   'rate-deviation':
     'The chain refused the rate as too far from mark. Widening your tolerance will not help — wait for the mark to move.',
   'insufficient-margin': 'That account could not fund the leg. Top it up, then re-issue.',
+  'no-gas':
+    'Boros bills each action to a prepaid gas pot, which is separate from your trading collateral. Top up the gas balance, then re-issue.',
   rejected: 'The venue rejected the order outright — its own message is below.',
   // Deliberately terse: an 'unknown' failure always carries a specific message
   // below it, and two paragraphs saying the same thing read as two problems.
