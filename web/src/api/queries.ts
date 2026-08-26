@@ -441,14 +441,6 @@ export function useExecuteBorosPair() {
 }
 
 /**
- * §6A remediation: cancel every resting order on a market, then close it.
- *
- * The account is NOT sent — the server derives it from the agent key it signs
- * with, because this route takes the close size from whatever position it
- * reads. The id is minted per attempt: this route has no replay memo, and a
- * retry after a failure is a genuinely new order.
- */
-/**
  * Top up the prepaid gas pot. The amount is the user's own margin moving into
  * their own gas balance, so it is confirmed, never silent — and it cannot be
  * withdrawn again, which is why the server enforces the same bounds the field
@@ -481,6 +473,14 @@ export function useRunUpdate() {
   });
 }
 
+/**
+ * §6A remediation: cancel every resting order on a market, then close it.
+ *
+ * The account is NOT sent — the server derives it from the agent key it signs
+ * with, because this route takes the close size from whatever position it
+ * reads. The id is minted per attempt: this route has no replay memo, and a
+ * retry after a failure is a genuinely new order.
+ */
 export function useBorosCancelAndClose() {
   const qc = useQueryClient();
   return useMutation({

@@ -167,7 +167,17 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     // Hash both sides before timingSafeEqual: it throws on unequal lengths,
     // so comparing a raw attacker string would be a 500 — and hashing keeps
     // the comparison constant-time whatever length arrives.
-    const pathname = req.url.split('?', 1)[0];
+    //
+    // DECODE FIRST. `req.url` is the raw target, and the router percent-decodes
+    // before it matches — so `/%61pi/...` would skip a raw `startsWith('/api/')`
+    // and still reach the handler unauthenticated. One decode is exactly what
+    // the router does: a double-encoded `/%2561pi/...` 404s there instead.
+    let pathname = req.url.split('?', 1)[0];
+    try {
+      pathname = decodeURIComponent(pathname);
+    } catch {
+      // A malformed escape never matches a route either — fail closed.
+    }
     if (expectedTokenHash && pathname.startsWith('/api/') && pathname !== '/api/health') {
       const given = req.headers['x-arb-token'];
       const ok =

@@ -36,6 +36,13 @@ import { fmtPct, fmtTokenQty, fmtUsd } from '../lib/fmt';
  */
 export const APR_BP = 0.0001;
 
+/** Mirrors MIN_TOP_UP_USD / MAX_TOP_UP_USD in src/server/routes/borosPair.ts.
+ * The server enforces the same pair — this is the message, not the guard.
+ * Below the minimum the venue's $1 ops-fee sweep eats the top-up; above the
+ * maximum is money the user cannot get back, because the pot has no exit. */
+const MIN_TOP_UP_USD = 2;
+const MAX_TOP_UP_USD = 100;
+
 /** USD at a precision that suits the amount. A whole-dollar format reads a
  * real $0.45 of margin as "$0", which is the same "it will do nothing"
  * impression the collateral columns used to give. */
@@ -412,7 +419,7 @@ export function BlockerList({
   topUpBusy?: boolean;
 }) {
   if (blockers.length === 0) return null;
-  const gasErr = amountError(gasAmount ?? '', { min: 2, max: 100 });
+  const gasErr = amountError(gasAmount ?? '', { min: MIN_TOP_UP_USD, max: MAX_TOP_UP_USD });
   return (
     <ul className="flex flex-col gap-1.5">
       {blockers.map((b, i) => (
@@ -457,7 +464,7 @@ export function BlockerList({
                 <button
                   type="button"
                   className="rounded border border-rose-400/50 px-2 py-0.5 text-[11px] text-rose-200 hover:bg-rose-500/15 disabled:opacity-50"
-                  disabled={topUpBusy || gasErr !== null || !gasAmount}
+                  disabled={topUpBusy || gasErr !== null || !gasAmount?.trim()}
                   onClick={onTopUpGas}
                 >
                   {topUpBusy ? 'Topping up…' : 'Top up gas'}

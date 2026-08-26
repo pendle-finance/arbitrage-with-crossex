@@ -23,6 +23,19 @@ describe('API token gate', () => {
 
   const bareHost = { host: 'localhost:6688' };
 
+  // The router percent-decodes before it matches, so a gate reading the RAW url
+  // let `/%61pi/...` through unauthenticated while still reaching the handler.
+  // Both forms below reached a 200 before the gate decoded its own path.
+  it.each(['/%61pi/credentials', '/ap%69/credentials', '/%61pi/version/update'])(
+    'refuses a percent-encoded path that the router still matches: %s',
+    async (url) => {
+      app = makeTestApp();
+      const res = await app.inject({ method: 'GET', url, headers: bareHost });
+      expect(res.statusCode).toBe(401);
+      expect(res.json().error).toMatchObject({ category: 'auth' });
+    },
+  );
+
   it('refuses an /api request with no token', async () => {
     app = makeTestApp();
     const res = await app.inject({ method: 'GET', url: '/api/credentials', headers: bareHost });

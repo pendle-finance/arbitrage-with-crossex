@@ -544,14 +544,14 @@ describe('absWei', () => {
 });
 
 describe('makeBorosApiOrderClient — the gas top-up', () => {
-  it('signs the builder\'s calldata and submits it, billed on the USD zone', async () => {
-    const api = fakeApi({ enteredReads: [[HL]] });
-    await client(api).payTreasury!(5);
+  it('signs the builder\'s calldata and submits it, billed on the market it is given', async () => {
+    const api = fakeApi({});
+    await client(api).payTreasury!(5, HL);
 
-    // The market only picks the treasury and the cross account that pays, so
-    // it has to be one on the zone the dollar amount is denominated in.
-    const read = api.calls.find((c) => c.path.startsWith('/v1/accounts/entered-markets'))!;
-    expect(read.path).toContain(packMarketAcc(ROOT, 0, 3, CROSS_MARKET_ID));
+    // It must NOT read entered-markets. Entering is order registration, and a
+    // fresh account with an empty gas pot has entered nothing — refusing that
+    // user is refusing the only one this route exists for.
+    expect(api.calls.some((c) => c.path.startsWith('/v1/accounts/entered-markets'))).toBe(false);
 
     const build = api.calls.find((c) => c.path === '/v1/calldata-builder/agent/pay-treasury')!;
     expect(build.body).toMatchObject({ accountId: 0, isCross: true, marketId: HL });
@@ -568,23 +568,17 @@ describe('makeBorosApiOrderClient — the gas top-up', () => {
   });
 
   it('raises on a refusal, which the venue delivers by RESOLVING', async () => {
-    const api = fakeApi({ enteredReads: [[HL]], payReturns: [{ error: 'MMInsufficientCash()' }] });
-    await expect(client(api).payTreasury!(5)).rejects.toThrow(/refused the gas top-up/i);
+    const api = fakeApi({ payReturns: [{ error: 'MMInsufficientCash()' }] });
+    await expect(client(api).payTreasury!(5, HL)).rejects.toThrow(/refused the gas top-up/i);
   });
 
   it('raises when the submission says nothing at all', async () => {
     // `submitCalls` renders any non-array body as `[]`. Reported as done, the
     // user waits on a balance that may never move.
     for (const body of [{}, null, []]) {
-      const api = fakeApi({ enteredReads: [[HL]], payReturns: body });
-      await expect(client(api).payTreasury!(5)).rejects.toThrow(/cannot tell whether it landed/i);
+      const api = fakeApi({ payReturns: body });
+      await expect(client(api).payTreasury!(5, HL)).rejects.toThrow(/cannot tell whether it landed/i);
     }
   });
 
-  it('refuses when the account has entered no USD-collateral market', async () => {
-    // The amount is a dollar figure and only that zone makes it one: the same
-    // number billed to a BTC-margined market would spend that many bitcoin.
-    const api = fakeApi({ enteredReads: [[]] });
-    await expect(client(api).payTreasury!(5)).rejects.toThrow(/no USD-collateral market/i);
-  });
 });

@@ -80,7 +80,7 @@ export const CROSS_MARKET_ID = 0xff_ff_ff;
  * would spend that many BITCOIN. Only this zone makes a dollar amount mean
  * dollars, so `payTreasury` bills through it and refuses anywhere else.
  */
-const USD_TOKEN_ID = 3;
+export const USD_TOKEN_ID = 3;
 
 /** Side enum on the wire: 0 = LONG, 1 = SHORT. */
 const SIDE_LONG = 0;
@@ -683,21 +683,19 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
     /**
      * Top that pot up out of the account's own Boros margin.
      *
-     * The market names the treasury that receives the payment and, through its
-     * collateral token, the cross account that pays it
-     * (`MarketHubEntry.payTreasury`) — so any market this account has already
-     * entered on the USD zone will do. Reading that list is also the check that
-     * the account has cash there to pay with.
+     * ⚠ `marketId` only names the COLLATERAL TOKEN to spend. On a cross account
+     * the router throws the market away — `toMarketAcc(cross, tokenId, marketId)`
+     * returns `toCross(acc, tokenId)` (`pendle-core-v3` `types/Account.sol`), and
+     * `payTreasury` reads the market solely for `cache.tokenId`
+     * (`router/modules/TradeModule.sol`). So the caller must pass a market whose
+     * token is the USD zone: the amount is scaled as dollars, and the same number
+     * against a BTC-margined book would spend that many BTC.
+     *
+     * It does NOT have to be a market the account has entered. Entering is order
+     * registration, and requiring it would refuse the one user this exists for —
+     * a fresh account with an empty gas pot has entered nothing.
      */
-    async payTreasury(amountUsd: number): Promise<void> {
-      const entered = enteredByToken.get(USD_TOKEN_ID) ?? (await readEntered(USD_TOKEN_ID));
-      if (entered.size === 0) {
-        throw new CoreError(
-          'This Boros account has entered no USD-collateral market, so a dollar top-up has no treasury to go through. Top the gas balance up from the Boros app instead.',
-          'venue-rejected',
-        );
-      }
-      const [marketId] = entered;
+    async payTreasury(amountUsd: number, marketId: number): Promise<void> {
       const { calls } = await call<{ calls: PlaceOrderCall[] }>(
         '/v1/calldata-builder/agent/pay-treasury',
         {

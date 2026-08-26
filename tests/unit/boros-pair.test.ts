@@ -565,12 +565,14 @@ describe('evaluatePairGate', () => {
     expect(msg).not.toContain('$10');
   });
 
-  it('blocks an UNKNOWN balance and says the read failed', () => {
-    // null = the read failed. Waving it through renders an account we know
-    // nothing about as a funded one.
+  it('WARNS about an unknown balance without blocking the trade', () => {
+    // null = the read failed. It must say so — rendering an account we know
+    // nothing about as funded is the bug. But it must not refuse the trade:
+    // one failed auxiliary GET is not a reason to stop an order, and the
+    // top-up control only appears on a number, so a blocker would dead-end.
     const g = evaluatePairGate(gateInput({ account: account({ gasBalanceUsd: null }) }));
-    expect(codes(g)).toContain('no-gas');
-    expect(g.blockers.find((b) => b.code === 'no-gas')!.message).toMatch(/could not be read/i);
+    expect(codes(g)).not.toContain('no-gas');
+    expect(g.warnings.join(' ')).toMatch(/could not be read/i);
   });
 
   it('raises no gas blocker at or above the minimum, or when never read', () => {

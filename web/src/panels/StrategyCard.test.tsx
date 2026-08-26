@@ -141,7 +141,8 @@ describe('StrategyCard — hero tiers', () => {
     expect(screen.getByText(/7\.07% spread/)).toBeInTheDocument();
     // The spread-lock assumption still lives in that number's tooltip.
     expect(
-      screen.getByTitle(/Assumes 7\.07% locked on \$158\.8k since the strategy start/),
+      // Not "since the strategy start": each leg accrues from its OWN open now.
+      screen.getByTitle(/Assumes 7\.07% locked on \$158\.8k, each leg accruing from its own open/),
     ).toBeInTheDocument();
   });
 
@@ -1293,11 +1294,15 @@ describe('StrategyCard — the fixed-APY window', () => {
   /** The canonical book with its two Boros legs given equal notional and the
    * opens the case needs. The strategy clock stays where the server puts it,
    * on the earliest leg — 60 days before maturity. */
-  const splitOpens = (openedAt: (i: number) => number | null) =>
+  const splitOpens = (
+    openedAt: (i: number) => number | null,
+    over: Parameters<typeof makeStrategyRollup>[0] = {},
+  ) =>
     card({
       capitalUsd: 40_000,
       expectedPnlToMaturityUsd: 1_000,
       clockStartSec: STRATEGY_MATURITY - 60 * DAY,
+      ...over,
       legs: makeStrategyRollup().legs.map((l, i) =>
         l.kind === 'boros' ? { ...l, notionalUsd: 100_000, openedAt: openedAt(i) } : l,
       ),
@@ -1325,6 +1330,20 @@ describe('StrategyCard — the fixed-APY window', () => {
   it('falls back to the strategy clock when no Boros leg carries an open', () => {
     render(splitOpens(() => null));
     rollOver();
+    expect(screen.getByText('+15.21%')).toBeInTheDocument();
+    expect(screen.getByTitle(/over this position's life \(60d\)/)).toBeInTheDocument();
+  });
+
+  it('yields to a user-set clock, because the PnL above it does too', () => {
+    // The server stops accruing per leg once the user asserts a start date
+    // (`clockBasis === 'custom'`), so a weighted-mean denominator here would
+    // annualize that PnL over a window it never used — a rate over one window
+    // beside a life over another, which is what D2 exists to prevent.
+    render(
+      splitOpens((i) => STRATEGY_MATURITY - (i === 2 ? 60 : 30) * DAY, { clockBasis: 'custom' }),
+    );
+    rollOver();
+    // 60 days, the user's own clock — not the 45-day weighted mean.
     expect(screen.getByText('+15.21%')).toBeInTheDocument();
     expect(screen.getByTitle(/over this position's life \(60d\)/)).toBeInTheDocument();
   });

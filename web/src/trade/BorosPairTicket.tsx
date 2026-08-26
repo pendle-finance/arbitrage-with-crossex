@@ -150,7 +150,7 @@ export function BorosPairTicket({
   const [dirB, setDirB] = useState<BorosLegDirection>('long');
   const [sizeStr, setSizeStr] = useState('');
   const [intent, setIntent] = useState<BorosPairIntent>('open');
-  // $5 buys 50 to 100 Boros actions and one four-leg position uses 2 to 4, so
+  // $5 buys 50 to 500 Boros actions and one four-leg position uses 2 to 4, so
   // the default suits almost everyone. The balance is not refundable, which is
   // why it is a field and not a fixed amount.
   const [gasTopUpStr, setGasTopUpStr] = useState('5');
@@ -809,7 +809,17 @@ export function BorosPairTicket({
         onTopUpGas={() => topUpGas.mutate(Number(gasTopUpStr))}
         topUpBusy={topUpGas.isPending}
       />
-      {topUpGas.isError && <QueryError title="The gas top-up was not sent" error={topUpGas.error} />}
+      {topUpGas.isSuccess && (
+        <p className="rounded-lg border border-emerald-500/25 bg-emerald-500/[0.04] px-2.5 py-1.5 text-[11px] leading-relaxed text-emerald-200">
+          Sent a ${topUpGas.data.sentUsd} gas top-up. Boros credits it once the transaction is
+          indexed, so the balance above catches up within a minute — no need to send it again.
+        </p>
+      )}
+      {/* NOT "was not sent": a timed-out submission may well have landed, and a
+          second top-up cannot be undone. Say what is actually known. */}
+      {topUpGas.isError && (
+        <QueryError title="The gas top-up did not confirm" error={topUpGas.error} />
+      )}
 
       {execute.isError && <QueryError title="The pair was not sent" error={execute.error} />}
 
