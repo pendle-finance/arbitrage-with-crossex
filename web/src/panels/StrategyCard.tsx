@@ -328,14 +328,27 @@ export function StrategyCard({
   // the opportunity scanner uses (estProfit / (capital × yearsToMaturity)); the
   // difference for a live position is that the clock runs from when it opened.
   // Null when the clock or capital is unknowable (matches "PNL by maturity").
+  const perLegClock = s.clockBasis !== 'custom';
   let openWeightUsd = 0;
   let openWeightedSec = 0;
-  if (s.clockBasis !== 'custom') {
-    for (const l of s.legs) {
-      if (l.kind !== 'boros') continue;
+  const spreadLines: string[] = [];
+  for (const l of s.legs) {
+    if (l.kind !== 'boros') continue;
+    const start = perLegClock ? (l.openedAt ?? s.clockStartSec) : s.clockStartSec;
+    if (perLegClock) {
       openWeightUsd += l.notionalUsd;
-      openWeightedSec += l.notionalUsd * (l.openedAt ?? s.clockStartSec ?? 0);
+      openWeightedSec += l.notionalUsd * (start ?? 0);
     }
+    if (start === null) continue;
+    const end = l.maturity ?? s.maturity;
+    const perYearUsd = (l.side === 'SHORT' ? 1 : -1) * (l.entryApr ?? 0) * l.notionalUsd;
+    const earnsUsd = perYearUsd * (Math.max(0, end - start) / SECONDS_IN_YEAR);
+    const days = Math.max(0, Math.round((end - start) / 86_400));
+    spreadLines.push(
+      `${l.side === 'SHORT' ? 'receives' : 'pays'} ${fmtPct(l.entryApr ?? 0)} on ${fmtUsdCompact(l.notionalUsd)}` +
+        `${perLegClock && l.openedAt === null ? ' · open date unknown, from' : ' · from'} ${fmtDateUtc(start)}` +
+        ` to ${fmtDateUtc(end)} (${days}d) = ${earnsUsd < 0 ? '-' : '+'}${fmtUsd(Math.abs(earnsUsd), 0)}`,
+    );
   }
   const lifeSeconds =
     s.clockStartSec === null
@@ -1319,9 +1332,19 @@ export function StrategyCard({
                       <span
                         className="num"
                         title={
-                          s.spreadReturnUsd !== null
-                            ? `Assumes ${fmtPct(s.spread)} locked on ${fmtUsdCompact(borosNotionalPerSide)}, each leg accruing from its own open date → spread return ≈${fmtUsd(s.spreadReturnUsd, 0)} by maturity`
-                            : 'Locked fixed spread across the Boros legs'
+                          s.spreadReturnUsd !== null && spreadLines.length > 0
+                            ? [
+                                perLegClock
+                                  ? 'Each leg earns its fixed rate from its own open date to its own maturity:'
+                                  : `Every leg accrues from the clock you set (${fmtDateUtc(s.clockStartSec ?? 0)}):`,
+                                '',
+                                ...spreadLines,
+                                '',
+                                `spread return by maturity = ${fmtUsd(s.spreadReturnUsd, 0)}`,
+                              ].join('\n')
+                            : s.spreadReturnUsd !== null
+                              ? `Assumes ${fmtPct(s.spread)} locked on ${fmtUsdCompact(borosNotionalPerSide)} → spread return ≈${fmtUsd(s.spreadReturnUsd, 0)} by maturity`
+                              : 'Locked fixed spread across the Boros legs'
                         }
                       >
                         {fmtPct(s.spread)} spread

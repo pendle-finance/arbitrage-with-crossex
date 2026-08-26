@@ -139,9 +139,8 @@ describe('StrategyCard — hero tiers', () => {
     // parenthetical in the title.
     expect(screen.queryByText('(7.07% spread)')).not.toBeInTheDocument();
     expect(screen.getByText(/7\.07% spread/)).toBeInTheDocument();
-    // The spread-lock assumption still lives in that number's tooltip.
     expect(
-      screen.getByTitle(/Assumes 7\.07% locked on \$158\.8k, each leg accruing from its own open/),
+      screen.getByTitle(/Each leg earns its fixed rate from its own open date[\s\S]*receives 9\.36% on \$158\.8k/),
     ).toBeInTheDocument();
   });
 
@@ -1333,5 +1332,64 @@ describe('StrategyCard — the fixed-APY window', () => {
     rollOver();
     expect(screen.getByText('+15.21%')).toBeInTheDocument();
     expect(screen.getByTitle(/over this position's life \(60d\)/)).toBeInTheDocument();
+  });
+});
+
+describe('StrategyCard — the spread tooltip', () => {
+  const DAY = 86_400;
+
+  const staggered = (over: Parameters<typeof makeStrategyRollup>[0] = {}) =>
+    card({
+      clockStartSec: STRATEGY_MATURITY - 60 * DAY,
+      spreadReturnUsd: 392.88,
+      ...over,
+      legs: makeStrategyRollup().legs.map((l, i) =>
+        l.kind === 'boros'
+          ? { ...l, notionalUsd: 100_000, openedAt: STRATEGY_MATURITY - (i === 2 ? 60 : 30) * DAY }
+          : l,
+      ),
+    });
+
+  const tipText = () =>
+    screen.getByTitle(/spread return by maturity/).getAttribute('title') ?? '';
+
+  it('gives each leg its own line, with its own window and its own share', () => {
+    render(staggered());
+    rollOver();
+    const tip = tipText();
+    expect(tip).toContain('pays 2.29% on $100.0k');
+    expect(tip).toContain('(60d) = -$376');
+    expect(tip).toContain('receives 9.36% on $100.0k');
+    expect(tip).toContain('(30d) = +$769');
+  });
+
+  it('ends on the total, and the leg lines add up to it', () => {
+    render(staggered());
+    rollOver();
+    expect(tipText()).toContain('spread return by maturity = $393');
+    expect(Math.round(769.32 - 376.44)).toBe(393);
+  });
+
+  it('says so when a user-set clock overrides every leg open', () => {
+    render(staggered({ clockBasis: 'custom' }));
+    rollOver();
+    const tip = tipText();
+    expect(tip).toContain('Every leg accrues from the clock you set');
+    expect(tip).toContain('(60d) = -$376');
+    expect(tip).toContain('(60d) = +$1,539');
+  });
+
+  it('marks a leg whose open date is unknown, rather than dating it silently', () => {
+    render(
+      card({
+        clockStartSec: STRATEGY_MATURITY - 60 * DAY,
+        spreadReturnUsd: 1_161.75,
+        legs: makeStrategyRollup().legs.map((l) =>
+          l.kind === 'boros' ? { ...l, notionalUsd: 100_000, openedAt: null } : l,
+        ),
+      }),
+    );
+    rollOver();
+    expect(tipText()).toContain('open date unknown, from');
   });
 });
