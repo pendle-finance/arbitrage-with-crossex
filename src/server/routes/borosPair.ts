@@ -766,6 +766,7 @@ export function borosPairRoutes(deps: AppDeps) {
         );
       }
       await orders.payTreasury(amountUsd, usdMarket.marketId);
+      deps.cache.bust('boros:gas-balance');
 
       return reply.ok({ sentUsd: amountUsd });
     });

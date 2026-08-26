@@ -234,3 +234,40 @@ describe('BorosAgentSetup', () => {
     expect(screen.queryByRole('button', { name: 'Connect wallet' })).not.toBeInTheDocument();
   });
 });
+
+describe('BorosAgentSetup — the prepaid gas balance', () => {
+  const configured = (over: Record<string, unknown> = {}) =>
+    status({ configured: true, root: ROOT, rootMasked: '0x1111…1111', ...over });
+
+  const showing = (over: Record<string, unknown>) => {
+    server.use(http.get('/api/boros/agent', () => HttpResponse.json(env(configured(over)))));
+    renderWithClient(<BorosAgentSetup />);
+  };
+
+  it('shows the balance beside the address, so the chip is not the only claim', async () => {
+    showing({ gasBalanceUsd: 4.2 });
+    expect(await screen.findByText('gas $4.20')).toBeInTheDocument();
+  });
+
+  it('turns amber under a dollar, before the order form ever blocks', async () => {
+    showing({ gasBalanceUsd: 0.42 });
+    expect(await screen.findByText('gas $0.42')).toHaveClass('text-amber-400');
+  });
+
+  it('leaves a healthy balance quiet', async () => {
+    showing({ gasBalanceUsd: 12 });
+    expect(await screen.findByText('gas $12.00')).toHaveClass('text-ink-300');
+  });
+
+  it('says the read failed rather than showing a number it does not have', async () => {
+    showing({ gasBalanceUsd: null });
+    expect(await screen.findByText('gas —')).toBeInTheDocument();
+    expect(screen.getByTitle(/could not be read/i)).toBeInTheDocument();
+  });
+
+  it('shows nothing at all on an install that cannot place orders', async () => {
+    showing({});
+    expect(await screen.findByText('0x1111…1111')).toBeInTheDocument();
+    expect(screen.queryByText(/^gas /)).toBeNull();
+  });
+});
