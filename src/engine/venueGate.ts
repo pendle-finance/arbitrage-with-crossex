@@ -8,16 +8,17 @@
  */
 import { CrossexOrderRequest } from 'gate-api';
 import type { Clients } from '../core/clients';
-import { fetchVenueBook } from '../core/estimate/books';
+import { fetchVenueBook, refMidOf } from '../core/estimate/books';
 import { formatRestPrice, parseSymbol } from '../core/numbers';
-import type {
-  CancelOutcome,
-  CreateOutcome,
-  OrderSnapshot,
-  ReadOutcome,
-  Side,
-  SweepResult,
-  VenuePort,
+import {
+  TUNING,
+  type CancelOutcome,
+  type CreateOutcome,
+  type OrderSnapshot,
+  type ReadOutcome,
+  type Side,
+  type SweepResult,
+  type VenuePort,
 } from './types';
 
 /** Venue labels that constitute a DEFINITE business rejection of a create. */
@@ -235,18 +236,13 @@ export function gateVenue(getClients: () => Clients): VenuePort {
 
     async refPrice(contract: string): Promise<string | null> {
       return cachedPrice(`ref:${contract}`, async () => {
-      try {
-        const { exchange, base, quote } = parseSymbol(contract);
-        const book = await fetchVenueBook(exchange, base, quote);
-        const bid = book?.bids?.[0]?.[0];
-        const ask = book?.asks?.[0]?.[0];
-        if (Number.isFinite(bid) && Number.isFinite(ask)) {
-          return numToDec(((bid as number) + (ask as number)) / 2);
+        try {
+          const { exchange, base, quote } = parseSymbol(contract);
+          const book = await fetchVenueBook(exchange, base, quote);
+          return numToDec(refMidOf(book, TUNING.MAX_BOOK_SPREAD));
+        } catch {
+          return null;
         }
-        return null;
-      } catch {
-        return null;
-      }
       });
     },
   };

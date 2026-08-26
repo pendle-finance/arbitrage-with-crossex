@@ -70,6 +70,7 @@ describe('POST /api/deals', () => {
     const pair = w.store.getPair('deal-000001')!;
     expect(pair.mode).toBe('OPENING');
     expect(pair.deadlineAt).not.toBeNull(); // maker PAIRS always bound unhedged time
+    expect(pair.hedgeBandBp).toBeNull(); // legacy/null state resolves to the 50bp engine default
 
     // Drive the engine: place maker → venue fills → hedge → DONE.
     await tickPair(w.loop, pair.id);
@@ -80,6 +81,8 @@ describe('POST /api/deals', () => {
       await tickPair(w.loop, pair.id);
       w.clock.advance(1000);
     }
+    const hedge = [...w.venue.orders.values()].find((o) => o.contract === B_CONTRACT)!;
+    expect(hedge.price).toBe('2487.5'); // default 50bp guard reached the wire
     const got = await app.inject({ method: 'GET', url: '/api/deals/deal-000001', headers: HOST });
     const view = got.json().data;
     expect(view.pair.mode).toBe('DONE');
@@ -106,6 +109,8 @@ describe('POST /api/deals', () => {
       makerPayload({ b: { symbol: A_CONTRACT, side: 'SELL' } }), // same contract
       makerPayload({ qty: '0.0005' }), // not a lot multiple
       makerPayload({ price: undefined }), // maker without price
+      makerPayload({ hedgeBandPct: 0 }),
+      makerPayload({ hedgeBandPct: 10.01 }),
     ];
     for (const payload of bads) {
       mockGateGet('/rule/symbols', { body: simRules() });
@@ -168,11 +173,10 @@ describe('POST /api/deals', () => {
     expect(w.store.listPairs()).toHaveLength(0);
   });
 
-  // The hedge is submitted as ONE market order for the whole unhedged amount and
-  // is never split, so a deal above the hedge venue's max market size is
-  // unhedgeable BY CONSTRUCTION: every attempt is rejected, the wall trips, and
-  // the deal halts one-sided. actions.ts blocks this at preview, so the UI never
-  // gets here - but resolveDeal is the only gate a direct API call passes.
+  // The hedge is submitted as ONE order for the whole unhedged amount and is
+  // never split: normal catches are LIMIT, emergency flatten is MARKET. A deal
+  // above either venue cap is unhedgeable by construction. actions.ts blocks
+  // this at preview, but resolveDeal is the gate for direct API calls.
   it('rejects a deal that exceeds a venue max order size (400, nothing created)', async () => {
     const w = mkApp();
     app = w.app;
@@ -182,6 +186,7 @@ describe('POST /api/deals', () => {
       );
     const cases = [
       { over: { max_market_size: '0.1' }, symbol: B_CONTRACT, why: 'hedge leg market cap' },
+      { over: { max_limit_size: '0.1' }, symbol: B_CONTRACT, why: 'hedge leg limit cap' },
       { over: { max_market_size: '0.1' }, symbol: A_CONTRACT, why: 'maker leg market cap (convert path)' },
       { over: { max_limit_size: '0.1' }, symbol: A_CONTRACT, why: 'maker leg limit cap' },
     ];
@@ -316,6 +321,7 @@ describe('POST /api/deals', () => {
         qty: '0.1',
         execution: 'taker',
         clipBandPct: 0.5,
+        hedgeBandPct: 0.75,
       },
     });
     expect(res.statusCode, res.body).toBe(202);
@@ -323,6 +329,7 @@ describe('POST /api/deals', () => {
     expect(pair.mode).toBe('CONVERTING'); // taker deals clip from birth
     expect(pair.a.reduceOnly).toBe(true);
     expect(pair.clipBandBp).toBe(50);
+    expect(pair.hedgeBandBp).toBe(75);
     expect(pair.b).toBeNull();
 
     // The driven loop clips it closed with a reduce-only marketable LIMIT IOC at

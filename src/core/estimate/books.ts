@@ -122,6 +122,18 @@ export function touchOf(book: NormalizedBook | null): { bestBid: number; bestAsk
   return { bestBid: bestBid as number, bestAsk: bestAsk as number, mid: ((bestBid as number) + (bestAsk as number)) / 2 };
 }
 
+/** Midpoint suitable for execution guards. Unlike display/estimate callers, a
+ * hedge must fail closed on one-sided, crossed, or absurdly wide books because
+ * those shapes are not trustworthy slippage anchors. `maxRelativeSpread` is a
+ * fraction of mid (0.05 = 5%). */
+export function refMidOf(book: NormalizedBook | null, maxRelativeSpread: number): number | null {
+  const touch = touchOf(book);
+  if (!touch || touch.bestAsk <= touch.bestBid || touch.mid <= 0) return null;
+  const relativeSpread = (touch.bestAsk - touch.bestBid) / touch.mid;
+  if (!Number.isFinite(relativeSpread) || relativeSpread > maxRelativeSpread) return null;
+  return touch.mid;
+}
+
 interface BookSource {
   method: 'GET' | 'POST';
   url: (base: string, quote: string) => string;

@@ -41,7 +41,7 @@ export interface PairRow {
   id: string;
   mode: PairMode;
   a: LegSpec; // leg A = acquiring leg (post-only maker; taker clips when converting)
-  b: LegSpec | null; // leg B = hedge leg (market/IOC, opposite exposure); null = single-leg deal
+  b: LegSpec | null; // leg B = hedge leg (marketable LIMIT IOC, opposite exposure); null = single-leg deal
   targetQty: string;
   /** Current maker price intent. Placement writes the price it actually used back
    * here, so "maker price ≠ intent" is exactly "a re-peg was requested". */
@@ -58,6 +58,10 @@ export interface PairRow {
    * Closes carry the user's slippage here — the clip becomes LIMIT IOC at
    * ref·(1 ± band), the close-protection semantics. */
   clipBandBp: number | null;
+  /** Hedge marketable-limit band in basis points. Null is reserved for legacy
+   * rows and resolves to TUNING.HEDGE_BAND_BP — there is no unpriced normal
+   * hedge path. */
+  hedgeBandBp: number | null;
   haltReason: string | null;
   reportJson: string | null;
   createdAt: number;
@@ -118,8 +122,8 @@ export interface OrderSnapshot {
   rawStatus: string;
   cumQty: string;
   /** Venue's own average execution price for THIS order (Gate executed_avg_price);
-   * '0' when nothing has filled. The only trustworthy fill price for a market/IOC
-   * hedge, whose order `price` is null. */
+   * '0' when nothing has filled. The only trustworthy realized fill price for
+   * an IOC order. */
   avgFillPrice: string;
   /** Venue's cancellation/rejection cause ('' when none). */
   reason: string;
@@ -166,7 +170,8 @@ export interface VenuePort {
    * (tick-snapped + Hyperliquid 5-sig-fig cap — `tick` is the leg's tick size);
    * null when the book is unavailable. */
   touch(contract: string, side: Side, tick: string): Promise<string | null>;
-  /** Reference price for min-notional checks; null when unavailable. */
+  /** Sane fresh book midpoint for sizing and band pricing; null when the book
+   * is unavailable, crossed, one-sided, or absurdly wide. */
   refPrice(contract: string): Promise<string | null>;
 }
 
@@ -230,6 +235,14 @@ export interface Tuning {
   HEDGE_BACKOFF_MS: number;
   MAX_POC_REJECTS: number;
   HEDGE_REJECT_HALT: number;
+  /** Default normal hedge slippage guard, basis points. */
+  HEDGE_BAND_BP: number;
+  /** Maximum hedge band while draining already-naked exposure. */
+  HEDGE_EMERGENCY_MAX_BP: number;
+  /** Failed attempts at which STOPPING/HALTED may lift the cap and use MARKET. */
+  HEDGE_EMERGENCY_STREAK: number;
+  /** Maximum sane relative bid/ask spread (0.05 = 5%). */
+  MAX_BOOK_SPREAD: number;
   /** Convert clips: caps peak unhedged exposure during completion. */
   MAX_CLIP: string;
   /** Consecutive failed reads on ONE live order before alerting. A live order we
@@ -246,6 +259,10 @@ export const TUNING: Tuning = {
   HEDGE_BACKOFF_MS: 3_000,
   MAX_POC_REJECTS: 5,
   HEDGE_REJECT_HALT: 3,
+  HEDGE_BAND_BP: 50,
+  HEDGE_EMERGENCY_MAX_BP: 300,
+  HEDGE_EMERGENCY_STREAK: 6,
+  MAX_BOOK_SPREAD: 0.05,
   MAX_CLIP: '1000000000', // effectively uncapped by default; pairs may be created with less
   READ_FAIL_ALERT: 5,
 };
