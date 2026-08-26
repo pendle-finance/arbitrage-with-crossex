@@ -328,7 +328,22 @@ export function StrategyCard({
   // the opportunity scanner uses (estProfit / (capital × yearsToMaturity)); the
   // difference for a live position is that the clock runs from when it opened.
   // Null when the clock or capital is unknowable (matches "PNL by maturity").
-  const lifeSeconds = s.clockStartSec === null ? null : s.maturity - s.clockStartSec;
+  //
+  // The start is the notional-weighted mean Boros open, not `clockStartSec`.
+  // The clock anchors at the EARLIEST leg, so a leg opened weeks later would be
+  // annualized over a window it never earned across and the rate would read
+  // low. Falls back to the clock when no Boros leg carries an open.
+  let openWeightUsd = 0;
+  let openWeightedSec = 0;
+  for (const l of s.legs) {
+    if (l.kind !== 'boros' || l.openedAt === null) continue;
+    openWeightUsd += l.notionalUsd;
+    openWeightedSec += l.notionalUsd * l.openedAt;
+  }
+  const lifeSeconds =
+    s.clockStartSec === null
+      ? null
+      : s.maturity - (openWeightUsd > 0 ? openWeightedSec / openWeightUsd : s.clockStartSec);
   const fixedAprOnCapital =
     lifeSeconds !== null && lifeSeconds > 0 && s.capitalUsd > 0 && expectedUsd !== null
       ? expectedUsd / (s.capitalUsd * (lifeSeconds / SECONDS_IN_YEAR))

@@ -14,6 +14,7 @@ import type {
   BorosMarketOrderRequest,
   BorosOrderClient,
 } from '../../src/core/boros/orders';
+import { borosExecutionsPending } from '../../src/server/routes/borosPair';
 import { imInputs, raw } from '../helpers/boros-fixtures';
 import { TtlCache } from '../../src/server/cache';
 import { borosStub } from '../helpers/boros-stub';
@@ -301,6 +302,108 @@ describe('POST /api/boros/pair/simulate', () => {
     const res = await post('/api/boros/pair/simulate', pairBody({ legB: { marketId: 999, direction: 'long' } }));
     expect(res.statusCode).toBe(400);
     expect(res.json().error.message).toMatch(/unknown Boros market 999/);
+  });
+
+  // A gas read that fails must not look like a rich account. Both shapes of
+  // failure — a throw and a null — have to land on the SAME unknown state, or
+  // one of them waves the trade through to a venue rejection the panel cannot
+  // explain.
+  const failedReads: Array<[string, () => Promise<number | null>]> = [
+    ['throws', async () => { throw new Error('boros rpc down'); }],
+    ['returns null', async () => null],
+  ];
+  it.each(failedReads)('treats a gas read that %s as unknown, not as funded', async (_label, getGasBalance) => {
+    makeApp({}, undefined, { ...orderClient(), getGasBalance });
+    const res = await post('/api/boros/pair/simulate', pairBody());
+    const { data } = res.json();
+    expect(data.gasBalanceUsd).toBeNull();
+    const gas = data.gate.blockers.find((b: { code: string }) => b.code === 'no-gas');
+    expect(gas.message).toMatch(/could not be read/i);
+  });
+
+  it('raises no gas blocker on a funded pot', async () => {
+    makeApp({}, undefined, { ...orderClient(), getGasBalance: async () => 5 });
+    const res = await post('/api/boros/pair/simulate', pairBody());
+    const { data } = res.json();
+    expect(data.gasBalanceUsd).toBe(5);
+    expect(data.gate.blockers).toEqual([]);
+  });
+});
+
+describe('POST /api/boros/pair/top-up-gas', () => {
+  it('pays once and answers with the re-read balance, not the amount asked for', async () => {
+    const paid: number[] = [];
+    let balance = 0.05;
+    makeApp({}, undefined, {
+      ...orderClient(),
+      payTreasury: async (amountUsd) => {
+        paid.push(amountUsd);
+        // The venue charges the top-up itself, so the credit is not the ask.
+        balance += amountUsd - 0.01;
+      },
+      getGasBalance: async () => balance,
+    });
+    const res = await post('/api/boros/pair/top-up-gas', { amountUsd: 5 });
+    expect(res.statusCode).toBe(200);
+    expect(paid).toEqual([5]);
+    expect(res.json().data.balanceUsd).toBeCloseTo(5.04, 9);
+  });
+
+  it.each([
+    ['under the floor, where the ops-fee sweep would eat it', 1],
+    ['over the cap, which the user cannot get back', 500],
+    ['not a number', 'five'],
+    ['absent', undefined],
+  ])('refuses an amount %s without spending anything', async (_label, amountUsd) => {
+    const payTreasury = vi.fn();
+    makeApp({}, undefined, { ...orderClient(), payTreasury });
+    const res = await post('/api/boros/pair/top-up-gas', { amountUsd });
+    expect(res.statusCode).toBe(400);
+    expect(payTreasury).not.toHaveBeenCalled();
+  });
+
+  it('answers 503 when this install cannot place Boros orders at all', async () => {
+    makeApp();
+    const res = await post('/api/boros/pair/top-up-gas', { amountUsd: 5 });
+    expect(res.statusCode).toBe(503);
+  });
+
+  it('answers 503 when the order client cannot top up', async () => {
+    // `payTreasury` is optional on the port: an install that can trade may
+    // still have no way to pay, and that is a 503, not a 500.
+    makeApp({}, undefined, orderClient());
+    const res = await post('/api/boros/pair/top-up-gas', { amountUsd: 5 });
+    expect(res.statusCode).toBe(503);
+  });
+
+  it('reports an unreadable balance after a successful top-up as unknown', async () => {
+    makeApp({}, undefined, {
+      ...orderClient(),
+      payTreasury: async () => {},
+      getGasBalance: async () => { throw new Error('boros rpc down'); },
+    });
+    const res = await post('/api/boros/pair/top-up-gas', { amountUsd: 5 });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().data.balanceUsd).toBeNull();
+  });
+});
+
+describe('borosExecutionsPending', () => {
+  it('counts a memoized execution and starts each app at zero', async () => {
+    // What the update route reads before restarting: a restart empties the
+    // replay memo, so a panel retry after it would double-fill for real.
+    makeApp({}, undefined, orderClient());
+    expect(borosExecutionsPending()).toBe(0);
+    const res = await post(
+      '/api/boros/pair/execute',
+      pairBody({ clientOrderIdA: 'coid-aaaa', clientOrderIdB: 'coid-bbbb' }),
+    );
+    expect(res.statusCode).toBe(200);
+    expect(borosExecutionsPending()).toBe(1);
+
+    await app!.close();
+    makeApp({}, undefined, orderClient());
+    expect(borosExecutionsPending()).toBe(0);
   });
 });
 

@@ -49,11 +49,16 @@ export const DEFAULT_SLIPPAGE_APR = 0.0025;
 export const MAX_SLIPPAGE_APR = 0.1;
 
 /**
- * Gas the venue wants prepaid before it will accept an order, in USD. Its own
- * message quotes "at least ~$10"; the threshold is the venue's, so treat this
- * as a floor that may drift rather than an exact contract constant.
+ * Gas that has to be prepaid before an order is worth attempting, in USD.
+ * Boros sweeps $1 of ops fee whenever the balance drops under $0.20, and one
+ * order costs $0.01 to $0.10 — so $0.30 is the sweep threshold plus an action.
+ *
+ * This was $10, read off the venue's own "Top up at least ~$10 to trade"
+ * string. Do not derive it from that string again: the venue emits it for an
+ * unfunded account and for an unentered market alike, and no formula behind it
+ * computes $10.
  */
-export const MIN_GAS_BALANCE_USD = 10;
+export const MIN_GAS_BALANCE_USD = 0.3;
 
 /** How long a simulation may back a confirm before it is refused as stale
  * (§7). The panel re-simulates well inside this. */
@@ -527,10 +532,13 @@ export interface BorosPairAccountState {
    * `payTreasury`, SEPARATELY from trading collateral, so an account with
    * plenty of margin can still be unable to send an order.
    *
-   * undefined = not read; no blocker is raised, which is the right default for
-   * an install that cannot place orders anyway.
+   * null = the read failed. It is blocked, not waved through: an account whose
+   * balance we could not read must not present as a funded one.
+   *
+   * undefined = no read was attempted; no blocker is raised, which is the right
+   * default for an install that cannot place orders anyway.
    */
-  gasBalanceUsd?: number;
+  gasBalanceUsd?: number | null;
 }
 
 export type BlockerCode =
@@ -730,16 +738,23 @@ export function evaluatePairGate(input: EvaluatePairInput): PairGate {
   // Distinct from margin on purpose: the remedy is `payTreasury`, not a
   // collateral top-up, and conflating them sends the user to the wrong screen.
   //
-  // The bar is a MINIMUM, not zero. The venue refuses below roughly $10 with
-  // "Top up at least ~$10 to trade", so a balance of a few dollars passes a
-  // `<= 0` check and then fails at submit — the exact failure this blocker
-  // exists to pre-empt. Checked here so it is caught before the user commits.
+  // The bar is a MINIMUM, not zero: a balance under the ops-fee sweep passes a
+  // `<= 0` check and then fails at submit, which is the failure this blocker
+  // exists to pre-empt. Both branches carry the same code — the remedy differs
+  // by message, and nothing downstream has to tell them apart.
   const gas = input.account.gasBalanceUsd;
-  if (gas !== undefined && gas < MIN_GAS_BALANCE_USD) {
+  if (gas === null) {
     blockers.push({
       code: 'no-gas',
       message:
-        `Prepaid gas on this Boros account is ${gas <= 0 ? 'empty' : `only ~$${gas.toFixed(2)}`} — the venue needs about $${MIN_GAS_BALANCE_USD} to accept an order. ` +
+        'Prepaid gas on this Boros account could not be read, so we cannot say whether an order will be accepted. ' +
+        'This is gas, not trading collateral: topping up your margin will not fix it.',
+    });
+  } else if (gas !== undefined && gas < MIN_GAS_BALANCE_USD) {
+    blockers.push({
+      code: 'no-gas',
+      message:
+        `Prepaid gas on this Boros account is ${gas <= 0 ? 'empty' : `low, about $${gas.toFixed(2)}`} — top it up to send an order. ` +
         'This is gas, not trading collateral: topping up your margin will not fix it.',
     });
   }

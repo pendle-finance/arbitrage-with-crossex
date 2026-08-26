@@ -30,6 +30,7 @@ import {
   useBorosPairContext,
   useBorosPairSimulation,
   useExecuteBorosPair,
+  useTopUpGas,
 } from '../api/queries';
 import type {
   BorosLegDirection,
@@ -149,6 +150,10 @@ export function BorosPairTicket({
   const [dirB, setDirB] = useState<BorosLegDirection>('long');
   const [sizeStr, setSizeStr] = useState('');
   const [intent, setIntent] = useState<BorosPairIntent>('open');
+  // $5 buys 50 to 100 Boros actions and one four-leg position uses 2 to 4, so
+  // the default suits almost everyone. The balance is not refundable, which is
+  // why it is a field and not a fixed amount.
+  const [gasTopUpStr, setGasTopUpStr] = useState('5');
 
   /**
    * A card asked to open its missing Boros legs: pick the two markets that
@@ -459,6 +464,7 @@ export function BorosPairTicket({
 
   const execute = useExecuteBorosPair();
   const cancelClose = useBorosCancelAndClose();
+  const topUpGas = useTopUpGas();
 
   // Tell the host surface an execution is in flight, so it can lock its close
   // controls (see the prop doc). Cleared on unmount so a host never stays
@@ -753,11 +759,7 @@ export function BorosPairTicket({
               are suppressed, since a "spread" against a borrowed partner
               would be a number about a trade nobody is making. */}
           <SpreadReadout sim={simulation} singleLeg={mode === 'single'} />
-          <PairCosts
-            sim={simulation}
-            gasBalanceUsd={sim.data?.gasBalanceUsd}
-            singleLeg={mode === 'single'}
-          />
+          <PairCosts sim={simulation} singleLeg={mode === 'single'} />
           <PositionArithmetic sim={simulation} singleLeg={mode === 'single'} />
         </>
       )}
@@ -801,7 +803,13 @@ export function BorosPairTicket({
         collateral={simulation?.collateral ?? ''}
         busyMarketId={cancelClose.isPending ? cancelClose.variables?.marketId ?? null : null}
         onCancelAndClose={(marketId) => cancelClose.mutate({ marketId })}
+        gasBalanceUsd={sim.data?.gasBalanceUsd}
+        gasAmount={gasTopUpStr}
+        onGasAmountChange={setGasTopUpStr}
+        onTopUpGas={() => topUpGas.mutate(Number(gasTopUpStr))}
+        topUpBusy={topUpGas.isPending}
       />
+      {topUpGas.isError && <QueryError title="The gas top-up was not sent" error={topUpGas.error} />}
 
       {execute.isError && <QueryError title="The pair was not sent" error={execute.error} />}
 

@@ -1110,7 +1110,10 @@ export interface BorosPairSimulateResponse {
   eligibility: BorosPairEligibility;
   simulatedAtMs: number;
   /** Prepaid relayer gas in USD — a DIFFERENT pot from trading collateral.
-   * null when the install cannot read it. */
+   *
+   * null means UNKNOWN, never "none": the read failed, or this install cannot
+   * make it. An unknown balance must not render as a funded account — the
+   * server raises its own blocker for it. */
   gasBalanceUsd: number | null;
 }
 
@@ -1118,8 +1121,24 @@ export type BorosLegFailureCode =
   | 'insufficient-depth'
   | 'rate-deviation'
   | 'insufficient-margin'
+  /** The prepaid gas pot could not pay for the action. Mirrors
+   * src/core/boros/orders.ts — a different pot from margin, so a different fix. */
+  | 'no-gas'
   | 'rejected'
   | 'unknown';
+
+/** POST /api/boros/pair/top-up-gas — the re-read balance, or null when the
+ * re-read itself failed. The top-up still landed. */
+export interface TopUpGasResponse {
+  balanceUsd: number | null;
+}
+
+/** POST /api/version/update. `logPath` is where the installer writes: the
+ * server's own logs are truncated mid-install, so its output goes elsewhere. */
+export interface RunUpdateResponse {
+  started: true;
+  logPath: string;
+}
 
 export interface BorosLegFill {
   marketId: number;

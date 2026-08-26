@@ -884,6 +884,32 @@ describe('buildStrategies — APR clock basis', () => {
     );
   });
 
+  it('accrues the locked spread from each leg\'s own open, not the earliest', () => {
+    // The receive-fixed HL leg opens 25d before the pay-fixed OKX leg. One
+    // clock for both credited 25 days of a 3% leg that did not exist yet, so
+    // the per-leg sum here is HIGHER, not lower.
+    const early = OPENED - 25 * DAY;
+    const txns = ethTxns().map((t) => (t.marketId === 155 ? { ...t, time: early } : t));
+    const s = buildStrategies(input({ txnsByToken: new Map([[3, txns]]) })).strategies[0];
+    const yr = (days: number) => (days * DAY) / SECONDS_IN_YEAR;
+    expect(s.clockStartSec).toBe(early);
+    expect(s.spreadReturnUsd).toBeCloseTo(0.08 * 1_000_000 * yr(52) - 0.03 * 1_000_000 * yr(27), 6);
+    expect(s.spreadReturnUsd!).toBeGreaterThan((0.08 - 0.03) * 1_000_000 * yr(52));
+  });
+
+  it('a leg with no open time accrues from the clock and says so', () => {
+    // Only the HL market has history — the OKX leg's open is unknown, which
+    // the all-unknown clock warning never covered.
+    const txns = ethTxns().filter((t) => t.marketId === 155);
+    const s = buildStrategies(input({ txnsByToken: new Map([[3, txns]]) })).strategies[0];
+    expect(s.clockStartSec).toBe(OPENED);
+    expect(s.spreadReturnUsd).toBeCloseTo(
+      (0.08 - 0.03) * 1_000_000 * ((27 * DAY) / SECONDS_IN_YEAR),
+      6,
+    );
+    expect(s.warnings.join(' ')).toMatch(/no known open time/);
+  });
+
   it('the suppression rule applies to the override window too', () => {
     // 30-minute custom window < OKX's 8h settlement period → APR suppressed.
     const s = buildStrategies(input({ clockStartOverrideSec: NOW - 1_800 })).strategies[0];
