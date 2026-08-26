@@ -21,7 +21,9 @@ import { compareVersions, VERSION_URL } from '../../src/server/version';
 import { HOST, makeTestApp, TEST_KEY, TEST_SECRET } from './helpers/gate-nock';
 
 const mocks = vi.hoisted(() => ({
-  spawn: vi.fn(() => ({ unref: vi.fn() })),
+  // `on` is not decoration: spawn reports a missing binary asynchronously, and
+  // with no listener node kills the whole server.
+  spawn: vi.fn(() => ({ unref: vi.fn(), on: vi.fn() })),
   execFileSync: vi.fn(),
   pending: vi.fn(() => 0),
 }));

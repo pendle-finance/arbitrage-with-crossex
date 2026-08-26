@@ -47,8 +47,21 @@ function updateLogPath(): string {
   return path.join(dir, 'update.log');
 }
 
+/**
+ * True once the installer has been launched.
+ *
+ * The install takes MINUTES — the download and the build both finish before
+ * `install_service` kills this server (install.sh:319). Refusing the update
+ * while a deal is live buys nothing if a deal can start one second after the
+ * spawn, so the write paths ask this and refuse for the rest of the process's
+ * life. It is never cleared: the process is going to be killed.
+ */
+let updating = false;
+export const isUpdating = (): boolean => updating;
+
 /** Spawns the installer and returns the log file it writes to. */
 export function startUpdate(): string {
+  updating = true;
   const logPath = updateLogPath();
 
   if (process.platform === 'win32') {
@@ -83,6 +96,17 @@ export function startUpdate(): string {
   const child = spawn('/bin/bash', ['-c', INSTALL_CMD], {
     detached: true,
     stdio: ['ignore', log, log],
+  });
+  // `spawn` reports a missing binary asynchronously, not by throwing. With no
+  // listener node raises "Unhandled 'error' event" and the SERVER exits — after
+  // this route has already told the user the install started. Nothing here can
+  // recover, so record it where the pop-up is already pointing the user.
+  child.on('error', (err) => {
+    try {
+      fs.appendFileSync(logPath, `\nfailed to start the installer: ${String(err)}\n`);
+    } catch {
+      // The log was best-effort; losing it must not take the server with it.
+    }
   });
   child.unref();
   fs.closeSync(log);

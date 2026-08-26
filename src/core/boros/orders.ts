@@ -167,9 +167,9 @@ export interface BorosOrderClient {
   /** Force-close the whole netted position on one market (§6A remediation). */
   closePosition(req: BorosClosePositionRequest): Promise<BorosLegFill>;
   /**
-   * Prepaid relayer gas on this account, in USD. Optional: an install without
-   * it simply raises no gas blocker, which is strictly better than blocking a
-   * trade on a number we could not read.
+   * Prepaid relayer gas on this account, in USD. Optional: an install with no
+   * way to place orders has no gas to check, so an absent method raises
+   * nothing.
    *
    * `null` is UNKNOWN, never zero: the read itself failed. Nothing downstream
    * may take it for a funded account.
@@ -182,7 +182,7 @@ export interface BorosOrderClient {
    * ⚠ ONE-WAY. The gas balance has no withdrawal path, so the caller bounds the
    * amount and asks the user before spending it.
    */
-  payTreasury?(amountUsd: number): Promise<void>;
+  payTreasury?(amountUsd: number, marketId: number): Promise<void>;
 }
 
 /** The rate bound one leg carries, from its estimate and its tolerance. */

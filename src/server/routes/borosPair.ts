@@ -30,6 +30,8 @@ import {
   type BorosOrderBook,
   type FetchLike,
 } from '../../core/boros/client';
+import { USD_TOKEN_ID } from '../../core/boros/borosApi';
+import { isUpdating } from '../updater';
 import {
   limitAprFor,
   submitBorosPair,
@@ -392,6 +394,23 @@ export function borosPairRoutes(deps: AppDeps) {
    * AFTER a confirm the user already committed to — so the write routes
    * refuse up front instead.
    */
+  /**
+   * Refuse a Boros write once the installer is running.
+   *
+   * The install runs for minutes before it kills this server, and the update
+   * route's own "wait for the deal to finish" guard only reads the instant of
+   * the click. Without this, an order sent during that window is SIGKILLed
+   * mid-flight and its replay memo dies with the process.
+   */
+  const assertNotUpdating = (): void => {
+    if (isUpdating()) {
+      throw new CoreError(
+        'the app is updating — it will restart shortly, then you can send this again',
+        'validation',
+      );
+    }
+  };
+
   const assertAgentNotExpired = (): void => {
     const raw = Number(process.env.BOROS_AGENT_EXPIRY);
     if (Number.isFinite(raw) && raw > 0 && raw <= Math.floor(Date.now() / 1000)) {
@@ -633,9 +652,10 @@ export function borosPairRoutes(deps: AppDeps) {
         req.body as PairBody,
         false,
       );
-      // Echoed so the panel can SHOW it. Boros keeps prepaid gas in a pot
-      // separate from collateral, so a "top up to trade" refusal is
-      // indistinguishable from a margin problem unless the number is visible.
+      // Echoed so the panel knows whether to OFFER a top-up: it only offers one
+      // on a number it could actually read. Boros keeps prepaid gas in a pot
+      // separate from collateral, so a gas refusal and a margin problem look
+      // alike and need different fixes.
       return reply.ok({
         simulation,
         gate,
@@ -666,6 +686,7 @@ export function borosPairRoutes(deps: AppDeps) {
           'not-configured',
         );
       }
+      assertNotUpdating();
       assertAgentNotExpired();
 
       // The memo is consulted BEFORE re-pricing. A lost-response retry must
@@ -790,21 +811,27 @@ export function borosPairRoutes(deps: AppDeps) {
           'not-configured',
         );
       }
+      assertNotUpdating();
       assertAgentNotExpired();
-      await orders.payTreasury(amountUsd);
-
-      // Re-read so the panel can state the new figure rather than the one the
-      // user typed — the venue charges a fee for the top-up itself. `null`
-      // keeps the meaning it has everywhere else here: unknown, not empty.
-      let balanceUsd: number | null = null;
-      if (orders.getGasBalance) {
-        try {
-          balanceUsd = await orders.getGasBalance();
-        } catch {
-          balanceUsd = null;
-        }
+      // The marketId only names the COLLATERAL TOKEN to spend: on a cross
+      // account the router discards it and keys off the token alone. So any
+      // USD-zone market works, and it does NOT have to be one this account has
+      // entered — a fresh account with an empty gas pot has entered none, and
+      // that is the exact user this route exists for.
+      const usdMarket = (await loadMarkets(false)).find((m) => m.tokenId === USD_TOKEN_ID);
+      if (!usdMarket) {
+        throw new CoreError(
+          'Boros lists no USD-collateral market to route a dollar top-up through.',
+          'venue-rejected',
+        );
       }
-      return reply.ok({ balanceUsd });
+      await orders.payTreasury(amountUsd, usdMarket.marketId);
+
+      // Report the amount SENT, not a re-read balance. The credit lands only
+      // when the indexer processes the PayTreasury event, so a read taken now
+      // still returns the old figure — stating it would tell the user the
+      // top-up did nothing and invite a second, unrecoverable one.
+      return reply.ok({ sentUsd: amountUsd });
     });
 
     /**
@@ -876,6 +903,7 @@ export function borosPairRoutes(deps: AppDeps) {
         );
       }
 
+      assertNotUpdating();
       assertAgentNotExpired();
 
       // Orders first, and BEFORE the position is read: closing while an order

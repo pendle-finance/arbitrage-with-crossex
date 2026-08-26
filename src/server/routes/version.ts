@@ -62,9 +62,10 @@ export function versionRoutes(deps: AppDeps) {
           true,
         );
       }
-      // install.sh has no checkout mode: it would lay a second copy down under
-      // ~/.boros-crossex, and with BOROS_ROOT pointing here `swap_app` would
-      // delete this tree, .git and uncommitted work included.
+      // install.sh has no checkout mode. It only ever installs into $ROOT
+      // (default ~/.boros-crossex), so from a git clone it would build a
+      // SECOND, separate installation and leave the tree the developer is
+      // actually running untouched and stale.
       if (!deps.install) {
         return refuse(
           'this is a source checkout, not an installed copy — update it with git',

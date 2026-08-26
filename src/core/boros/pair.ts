@@ -744,12 +744,14 @@ export function evaluatePairGate(input: EvaluatePairInput): PairGate {
   // by message, and nothing downstream has to tell them apart.
   const gas = input.account.gasBalanceUsd;
   if (gas === null) {
-    blockers.push({
-      code: 'no-gas',
-      message:
-        'Prepaid gas on this Boros account could not be read, so we cannot say whether an order will be accepted. ' +
+    // A read we could not make is a WARNING, never a blocker. Refusing a trade
+    // because one auxiliary GET failed would be worse than letting the venue
+    // reject it with its own message — and the top-up control only appears on a
+    // number, so a blocker here would dead-end the user with no way forward.
+    warnings.push(
+      'Prepaid gas on this Boros account could not be read, so this order may still be refused for gas. ' +
         'This is gas, not trading collateral: topping up your margin will not fix it.',
-    });
+    );
   } else if (gas !== undefined && gas < MIN_GAS_BALANCE_USD) {
     blockers.push({
       code: 'no-gas',

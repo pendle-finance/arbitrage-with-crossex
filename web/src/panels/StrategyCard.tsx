@@ -333,12 +333,20 @@ export function StrategyCard({
   // The clock anchors at the EARLIEST leg, so a leg opened weeks later would be
   // annualized over a window it never earned across and the rate would read
   // low. Falls back to the clock when no Boros leg carries an open.
+  //
+  // A user-set clock is an explicit assertion about when the position started,
+  // and the server honours it over every leg open, so the mean must step aside
+  // or the rate would annualize over a window the PnL above it never used.
   let openWeightUsd = 0;
   let openWeightedSec = 0;
-  for (const l of s.legs) {
-    if (l.kind !== 'boros' || l.openedAt === null) continue;
-    openWeightUsd += l.notionalUsd;
-    openWeightedSec += l.notionalUsd * l.openedAt;
+  if (s.clockBasis !== 'custom') {
+    for (const l of s.legs) {
+      if (l.kind !== 'boros') continue;
+      // Mirror the server, which falls an unknown open back to the clock rather
+      // than dropping the leg out of the window entirely.
+      openWeightUsd += l.notionalUsd;
+      openWeightedSec += l.notionalUsd * (l.openedAt ?? s.clockStartSec ?? 0);
+    }
   }
   const lifeSeconds =
     s.clockStartSec === null
@@ -1323,7 +1331,7 @@ export function StrategyCard({
                         className="num"
                         title={
                           s.spreadReturnUsd !== null
-                            ? `Assumes ${fmtPct(s.spread)} locked on ${fmtUsdCompact(borosNotionalPerSide)} since the strategy start → spread return ≈${fmtUsd(s.spreadReturnUsd, 0)} by maturity`
+                            ? `Assumes ${fmtPct(s.spread)} locked on ${fmtUsdCompact(borosNotionalPerSide)}, each leg accruing from its own open date → spread return ≈${fmtUsd(s.spreadReturnUsd, 0)} by maturity`
                             : 'Locked fixed spread across the Boros legs'
                         }
                       >

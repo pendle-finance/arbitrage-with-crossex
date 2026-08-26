@@ -382,9 +382,10 @@ export interface StrategyRollup {
   /** Locked fixed spread across the Boros legs (≈ rate_A − rate_B). */
   spread: number;
   lockedAprOnCapital: number;
-  /** Full-life spread projection: N × spread × (maturity − clockStart)/YEAR.
-   * Assumes the spread was locked on the full notional since the strategy
-   * start — the UI shows that assumption. Null when the clock is unknown. */
+  /** Full-life spread projection, summed per leg:
+   * Σ leg rate × leg notional × (its maturity − its open)/YEAR.
+   * Assumes each leg held its full notional from its own open. A user-set clock
+   * overrides every open. Null when the clock is unknown. */
   spreadReturnUsd: number | null;
   /** spreadReturnUsd − paid costs − future Boros settle fees. Perp exit parts
    * NOT included — each checkbox folds its own in client-side. Null exactly
@@ -1127,10 +1128,13 @@ export type BorosLegFailureCode =
   | 'rejected'
   | 'unknown';
 
-/** POST /api/boros/pair/top-up-gas — the re-read balance, or null when the
- * re-read itself failed. The top-up still landed. */
+/** POST /api/boros/pair/top-up-gas — the amount SENT, echoed back.
+ *
+ * Deliberately not a balance: Boros credits the pot when its indexer processes
+ * the on-chain event, so any figure read straight after the call is still the
+ * old one. */
 export interface TopUpGasResponse {
-  balanceUsd: number | null;
+  sentUsd: number;
 }
 
 /** POST /api/version/update. `logPath` is where the installer writes: the

@@ -317,8 +317,11 @@ describe('POST /api/boros/pair/simulate', () => {
     const res = await post('/api/boros/pair/simulate', pairBody());
     const { data } = res.json();
     expect(data.gasBalanceUsd).toBeNull();
-    const gas = data.gate.blockers.find((b: { code: string }) => b.code === 'no-gas');
-    expect(gas.message).toMatch(/could not be read/i);
+    // It SAYS so, but it does not refuse the trade: this read is not on the
+    // order's critical path, and the top-up control only shows on a number, so
+    // a blocker here would strand the user with no way forward.
+    expect(data.gate.blockers).toEqual([]);
+    expect(data.gate.warnings.join(' ')).toMatch(/could not be read/i);
   });
 
   it('raises no gas blocker on a funded pot', async () => {
@@ -331,22 +334,42 @@ describe('POST /api/boros/pair/simulate', () => {
 });
 
 describe('POST /api/boros/pair/top-up-gas', () => {
-  it('pays once and answers with the re-read balance, not the amount asked for', async () => {
+  it('pays once and echoes the amount SENT, never a freshly read balance', async () => {
+    // Boros credits the pot when its indexer processes the PayTreasury event,
+    // so a balance read straight after the call still returns the OLD figure.
+    // Reporting it would tell the user the top-up did nothing and invite a
+    // second one, which cannot be undone.
+    const paid: Array<[number, number]> = [];
+    const getGasBalance = vi.fn(async () => 0.05);
+    makeApp({}, undefined, {
+      ...orderClient(),
+      payTreasury: async (amountUsd, marketId) => {
+        paid.push([amountUsd, marketId]);
+      },
+      getGasBalance,
+    });
+    const res = await post('/api/boros/pair/top-up-gas', { amountUsd: 5 });
+    expect(res.statusCode).toBe(200);
+    expect(paid).toHaveLength(1);
+    expect(paid[0][0]).toBe(5);
+    expect(res.json().data).toEqual({ sentUsd: 5 });
+    expect(getGasBalance).not.toHaveBeenCalled();
+  });
+
+  it('tops up an account that has entered no market — the cold start', async () => {
+    // The user this whole route exists for. Requiring an entered market would
+    // refuse exactly them: entering is order registration, and they cannot
+    // place an order until the gas lands.
     const paid: number[] = [];
-    let balance = 0.05;
     makeApp({}, undefined, {
       ...orderClient(),
       payTreasury: async (amountUsd) => {
         paid.push(amountUsd);
-        // The venue charges the top-up itself, so the credit is not the ask.
-        balance += amountUsd - 0.01;
       },
-      getGasBalance: async () => balance,
     });
     const res = await post('/api/boros/pair/top-up-gas', { amountUsd: 5 });
     expect(res.statusCode).toBe(200);
     expect(paid).toEqual([5]);
-    expect(res.json().data.balanceUsd).toBeCloseTo(5.04, 9);
   });
 
   it.each([
@@ -376,16 +399,6 @@ describe('POST /api/boros/pair/top-up-gas', () => {
     expect(res.statusCode).toBe(503);
   });
 
-  it('reports an unreadable balance after a successful top-up as unknown', async () => {
-    makeApp({}, undefined, {
-      ...orderClient(),
-      payTreasury: async () => {},
-      getGasBalance: async () => { throw new Error('boros rpc down'); },
-    });
-    const res = await post('/api/boros/pair/top-up-gas', { amountUsd: 5 });
-    expect(res.statusCode).toBe(200);
-    expect(res.json().data.balanceUsd).toBeNull();
-  });
 });
 
 describe('borosExecutionsPending', () => {
