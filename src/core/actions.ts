@@ -436,7 +436,10 @@ function applySharedPairSizing(resolved: ResolvedAction[]): void {
           l.warnings.push(`size set to ${shared.qtyStr} (was ${l.qty || '—'}) so both legs trade the same amount`);
         }
         l.qty = shared.qtyStr;
-        if (ref) l.estNotional = shared.estNotional;
+        if (ref) {
+          const own = Number(l.price);
+          l.estNotional = shared.qty * (Number.isFinite(own) && own > 0 ? own : ref.value);
+        }
         // Per-leg sizing violations are superseded by the successful shared sizing.
         l.violations = l.violations.filter(
           (v) => !['below-min-size', 'below-min-notional', 'lot-incompatible', 'qty-invalid', 'sizing-failed'].includes(v.code),

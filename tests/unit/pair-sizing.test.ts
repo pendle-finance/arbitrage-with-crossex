@@ -80,6 +80,22 @@ describe('shared pair sizing', () => {
     expect(Number.isFinite(r[1].estNotional)).toBe(true);
   });
 
+  it('values a maker leg at its own limit price, not the market reference', async () => {
+    const clients = fakeClients([rule(GATE, '0.001'), rule(OKX, '0.0001')], 65_000);
+    const r = await resolveActions(
+      clients,
+      [
+        { kind: 'open-limit', symbol: GATE, side: 'BUY', qty: '2.5296', price: '60000', pairGroupId: 'g1' },
+        leg(OKX, 'SELL', { qty: '2.5296' }),
+      ],
+      { mode: 'preview' },
+    );
+
+    expect(r.map((l) => l.qty)).toEqual(['2.529', '2.529']);
+    expect(r[0].estNotional).toBeCloseTo(2.529 * 60_000);
+    expect(r[1].estNotional).toBeCloseTo(2.529 * 65_000);
+  });
+
   it('refuses a pair with one leg in coins and one in dollars', async () => {
     const clients = fakeClients([rule(GATE, '0.001'), rule(OKX, '0.0001')], 65_000);
     const r = await resolveActions(
