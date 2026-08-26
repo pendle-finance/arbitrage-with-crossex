@@ -23,11 +23,27 @@ function updateLogPath(): string {
   return path.join(dir, 'update.log');
 }
 
+const UPDATE_WINDOW_MS = 10 * 60_000;
+
 let updating = false;
+let windowTimer: ReturnType<typeof setTimeout> | null = null;
+
 export const isUpdating = (): boolean => updating;
 
-export function startUpdate(): string {
+export function endUpdateWindow(): void {
+  updating = false;
+  if (windowTimer) clearTimeout(windowTimer);
+  windowTimer = null;
+}
+
+function beginUpdateWindow(): void {
   updating = true;
+  if (windowTimer) clearTimeout(windowTimer);
+  windowTimer = setTimeout(endUpdateWindow, UPDATE_WINDOW_MS);
+  windowTimer.unref?.();
+}
+
+export function startUpdate(): string {
   const logPath = updateLogPath();
 
   if (process.platform === 'win32') {
@@ -47,6 +63,7 @@ export function startUpdate(): string {
       '/f',
     ]);
     execFileSync('schtasks', ['/run', '/tn', TASK_NAME]);
+    beginUpdateWindow();
     return logPath;
   }
 
@@ -56,6 +73,7 @@ export function startUpdate(): string {
     stdio: ['ignore', log, log],
   });
   child.on('error', (err) => {
+    endUpdateWindow();
     try {
       fs.appendFileSync(logPath, `\nfailed to start the installer: ${String(err)}\n`);
     } catch {
@@ -63,5 +81,6 @@ export function startUpdate(): string {
   });
   child.unref();
   fs.closeSync(log);
+  beginUpdateWindow();
   return logPath;
 }

@@ -13,6 +13,7 @@ import type { FetchLike } from '../../src/core/boros/client';
 import { makeClients } from '../../src/core/clients';
 import { Store } from '../../src/engine/db';
 import { gateVenue } from '../../src/engine/venueGate';
+import { endUpdateWindow, isUpdating, startUpdate } from '../../src/server/updater';
 import { compareVersions, VERSION_URL } from '../../src/server/version';
 import { HOST, makeTestApp, TEST_KEY, TEST_SECRET } from './helpers/gate-nock';
 
@@ -325,6 +326,64 @@ describe('POST /api/version/update', () => {
       expect(calls[0][1]).toContain('/create');
       expect(calls[0][1].join(' ')).toContain('/main/install.ps1');
       expect(calls[1][1]).toEqual(['/run', '/tn', 'BorosUpdate']);
+    } finally {
+      Object.defineProperty(process, 'platform', realPlatform);
+      delete process.env.BOROS_ROOT;
+    }
+  });
+});
+
+describe('the window that refuses Boros orders while an update runs', () => {
+  let home: string;
+  let realHome: string | undefined;
+
+  beforeEach(() => {
+    endUpdateWindow();
+    mocks.spawn.mockClear();
+    mocks.execFileSync.mockClear();
+    home = mkdtempSync(path.join(tmpdir(), 'upd-win-'));
+    realHome = process.env.HOME;
+    process.env.HOME = home;
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    endUpdateWindow();
+    if (realHome === undefined) delete process.env.HOME;
+    else process.env.HOME = realHome;
+  });
+
+  it('opens on a launch that starts, then closes on its own after ten minutes', () => {
+    vi.useFakeTimers();
+    startUpdate();
+
+    expect(isUpdating()).toBe(true);
+    vi.advanceTimersByTime(10 * 60_000 - 1);
+    expect(isUpdating()).toBe(true);
+    vi.advanceTimersByTime(1);
+    expect(isUpdating()).toBe(false);
+  });
+
+  it('closes when the installer fails to start, so orders are not refused forever', () => {
+    startUpdate();
+    expect(isUpdating()).toBe(true);
+
+    const handle = mocks.spawn.mock.results[0].value as { on: { mock: { calls: unknown[][] } } };
+    const onError = handle.on.mock.calls.find((c) => c[0] === 'error')![1] as (e: Error) => void;
+    onError(new Error('bash is missing'));
+
+    expect(isUpdating()).toBe(false);
+  });
+
+  it('never opens when the scheduled task cannot be created', () => {
+    const realPlatform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+    process.env.BOROS_ROOT = home;
+    mocks.execFileSync.mockImplementationOnce(() => {
+      throw new Error('schtasks is not on this machine');
+    });
+    try {
+      expect(() => startUpdate()).toThrow(/schtasks is not on this machine/);
+      expect(isUpdating()).toBe(false);
     } finally {
       Object.defineProperty(process, 'platform', realPlatform);
       delete process.env.BOROS_ROOT;
