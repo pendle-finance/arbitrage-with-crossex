@@ -176,8 +176,8 @@ export function LegAssignment({
   strategyId,
   destinations = [],
   onAssert,
-  entryOverride = null,
-  venueEntry = null,
+  entryOverride: entryOverrideProp = null,
+  venueEntry: venueEntryProp = null,
 }: {
   leg: StrategyLeg;
   strategyId: string;
@@ -192,6 +192,17 @@ export function LegAssignment({
 }) {
   const [open, setOpen] = useState(false);
   const ref = legRefOf(leg);
+
+  /**
+   * A value that is not a number is not a value. Both of these arrive from
+   * JSON and from localStorage, and both formatters mishandle a non-finite
+   * one: the price branch prints "0", which reads as a real price, and the
+   * rate branch prints "NaN". The component already draws "the venue reports
+   * none" correctly and that path is tested, so fold non-finite into it rather
+   * than formatting a number nobody has.
+   */
+  const entryOverride = Number.isFinite(entryOverrideProp) ? entryOverrideProp : null;
+  const venueEntry = Number.isFinite(venueEntryProp) ? venueEntryProp : null;
 
   const unit = leg.kind === 'boros' ? leg.collateral : leg.base;
   const held = leg.notionalToken ?? 0;
