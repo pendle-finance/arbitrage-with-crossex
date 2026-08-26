@@ -74,8 +74,6 @@ export type BorosLegFailureCode =
   | 'rate-deviation'
   /** The bucket could not fund it. */
   | 'insufficient-margin'
-  /** The prepaid gas pot could not pay for the action. A DIFFERENT pot from
-   * margin, so a different fix: top the pot up, do not add collateral. */
   | 'no-gas'
   /** Anything the venue rejected for another reason. */
   | 'rejected'
@@ -166,22 +164,7 @@ export interface BorosOrderClient {
   cancelOrders(marketId: number): Promise<void>;
   /** Force-close the whole netted position on one market (§6A remediation). */
   closePosition(req: BorosClosePositionRequest): Promise<BorosLegFill>;
-  /**
-   * Prepaid relayer gas on this account, in USD. Optional: an install with no
-   * way to place orders has no gas to check, so an absent method raises
-   * nothing.
-   *
-   * `null` is UNKNOWN, never zero: the read itself failed. Nothing downstream
-   * may take it for a funded account.
-   */
   getGasBalance?(): Promise<number | null>;
-  /**
-   * Add `amountUsd` to that pot, paid out of the account's own Boros margin.
-   * Optional, like the read above.
-   *
-   * ⚠ ONE-WAY. The gas balance has no withdrawal path, so the caller bounds the
-   * amount and asks the user before spending it.
-   */
   payTreasury?(amountUsd: number, marketId: number): Promise<void>;
 }
 
@@ -324,10 +307,6 @@ export async function submitBorosPair(input: SubmitBorosPairInput): Promise<Boro
  * rate-deviation case is checked FIRST and on its own terms: it is the one
  * failure whose remedy ("your rate was too far from mark") is different from
  * every other, and a generic price/limit rule would otherwise swallow it.
- *
- * `marketEntered` says whether the account is already registered on the market
- * the error came from. Only a caller holding that fact can get the gas case
- * below right, so an omitted argument is the safe answer, not a guess.
  */
 export function classifyLegFailure(err: unknown, marketEntered = false): BorosLegFailureCode {
   const text = describeLegFailure(err).toUpperCase();
@@ -337,14 +316,6 @@ export function classifyLegFailure(err: unknown, marketEntered = false): BorosLe
   if (/INSUFFICIENT_LIQUIDITY|NO_LIQUIDITY|NOT_ENOUGH_(DEPTH|LIQUIDITY)|BOOK_EMPTY|DEPTH/.test(text)) {
     return 'insufficient-depth';
   }
-  // Gas is a prepaid pot held apart from margin, and it is decided BEFORE the
-  // margin branch: a wording that carries both words would otherwise be read as
-  // a collateral shortfall and send the user to the wrong fix.
-  //
-  // The relayer's own "Insufficient gas balance" means the pot and nothing
-  // else. "Top up at least ~$10 to trade" does not: Boros says it for an empty
-  // pot AND for a market the account has not entered (see `packMarketAcc` and
-  // `enterMissing` in `./borosApi`), so it only means gas once the market is in.
   if (/INSUFFICIENT[ _]GAS|GAS[ _]BALANCE/.test(text) || (marketEntered && /TOP UP/.test(text))) {
     return 'no-gas';
   }
@@ -416,4 +387,3 @@ export function extractApiDetail(body: unknown): string | null {
   }
   return null;
 }
-

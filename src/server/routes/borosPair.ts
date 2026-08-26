@@ -78,12 +78,6 @@ const CLOSE_SLIPPAGE_APR = 0.01;
  */
 const EXECUTION_MEMO_MS = 10 * 60_000;
 
-/**
- * Bounds on one gas top-up, in USD. Enforced here and not only in the field:
- * under the low bound the venue's $1 ops-fee sweep eats the top-up and blocks
- * the user again, and the pot has no withdrawal path, so the high bound is the
- * only thing standing between a typo and money nobody can get back.
- */
 const MIN_TOP_UP_USD = 2;
 const MAX_TOP_UP_USD = 100;
 
@@ -329,21 +323,6 @@ function readAccount(zones: BorosCollateralZone[]): AccountView {
   return view;
 }
 
-/**
- * clientOrderId pair → the full response payload the execution produced (or
- * is producing).
- *
- * Keyed on BOTH ids so a resend of the same intent coalesces, while a
- * genuinely new order (fresh ids) never does. In-flight entries store the
- * PROMISE, so two rapid clicks await the same submission instead of racing
- * into two batches. The whole payload (fills + the estimate they were priced
- * against) is memoized so a replay can answer WITHOUT re-pricing — the first
- * execution changed the very account state a re-run of the gate would judge.
- *
- * Module-scoped so the update route can ask whether a Boros order may still be
- * unsettled, and cleared when the routes are built so a second app in the same
- * process (only tests build two) never inherits the first's memo.
- */
 interface ExecutionPayload {
   result: Awaited<ReturnType<typeof submitBorosPair>>;
   estimate: ReturnType<typeof simulateBorosPair>;
@@ -357,12 +336,6 @@ const sweepExecutions = (): void => {
   }
 };
 
-/**
- * How many executions are recent enough that a resend could still double-fill.
- * The update route refuses to restart the app over any of them, because a
- * restart empties the memo above and the venue has no id of its own to dedupe
- * on. Stale entries are swept first — past the memo window they guard nothing.
- */
 export function borosExecutionsPending(): number {
   sweepExecutions();
   return recentExecutions.size;
@@ -393,14 +366,6 @@ export function borosPairRoutes(deps: AppDeps) {
    * An expired approval otherwise fails at the venue as AuthAgentExpired —
    * AFTER a confirm the user already committed to — so the write routes
    * refuse up front instead.
-   */
-  /**
-   * Refuse a Boros write once the installer is running.
-   *
-   * The install runs for minutes before it kills this server, and the update
-   * route's own "wait for the deal to finish" guard only reads the instant of
-   * the click. Without this, an order sent during that window is SIGKILLed
-   * mid-flight and its replay memo dies with the process.
    */
   const assertNotUpdating = (): void => {
     if (isUpdating()) {
@@ -518,11 +483,6 @@ export function borosPairRoutes(deps: AppDeps) {
       takerFeeOverride,
     });
 
-    // Gas is prepaid to a treasury, separate from trading collateral, so a
-    // funded account can still be unable to send. A failed READ is `null` and
-    // absent means no read was attempted: the gate blocks on the first and not
-    // the second, so an account we could not read never presents as a funded
-    // one.
     let gasBalanceUsd: number | null | undefined;
     const ordersForGas = deps.getBorosOrders?.();
     if (ordersForGas?.getGasBalance) {
@@ -652,10 +612,6 @@ export function borosPairRoutes(deps: AppDeps) {
         req.body as PairBody,
         false,
       );
-      // Echoed so the panel knows whether to OFFER a top-up: it only offers one
-      // on a number it could actually read. Boros keeps prepaid gas in a pot
-      // separate from collateral, so a gas refusal and a margin problem look
-      // alike and need different fixes.
       return reply.ok({
         simulation,
         gate,
@@ -785,17 +741,6 @@ export function borosPairRoutes(deps: AppDeps) {
       return reply.ok({ ...payload, replayed: false });
     });
 
-    /**
-     * Refill the prepaid gas pot, out of this account's own Boros margin.
-     *
-     * Signed with the agent key the server already holds — `payTreasury` names
-     * no token and no recipient, so it can only move the caller's own margin
-     * into their own pot, and the key still cannot move a token out.
-     *
-     * The amount is bounded HERE. The panel bounds the field too, but that is
-     * UX: this spend has no way back, so the server is what decides how much of
-     * it is possible.
-     */
     app.post('/boros/pair/top-up-gas', async (req, reply) => {
       const amountUsd = Number((req.body as { amountUsd?: unknown } | undefined)?.amountUsd);
       if (!Number.isFinite(amountUsd) || amountUsd < MIN_TOP_UP_USD || amountUsd > MAX_TOP_UP_USD) {
@@ -813,11 +758,6 @@ export function borosPairRoutes(deps: AppDeps) {
       }
       assertNotUpdating();
       assertAgentNotExpired();
-      // The marketId only names the COLLATERAL TOKEN to spend: on a cross
-      // account the router discards it and keys off the token alone. So any
-      // USD-zone market works, and it does NOT have to be one this account has
-      // entered — a fresh account with an empty gas pot has entered none, and
-      // that is the exact user this route exists for.
       const usdMarket = (await loadMarkets(false)).find((m) => m.tokenId === USD_TOKEN_ID);
       if (!usdMarket) {
         throw new CoreError(
@@ -827,10 +767,6 @@ export function borosPairRoutes(deps: AppDeps) {
       }
       await orders.payTreasury(amountUsd, usdMarket.marketId);
 
-      // Report the amount SENT, not a re-read balance. The credit lands only
-      // when the indexer processes the PayTreasury event, so a read taken now
-      // still returns the old figure — stating it would tell the user the
-      // top-up did nothing and invite a second, unrecoverable one.
       return reply.ok({ sentUsd: amountUsd });
     });
 

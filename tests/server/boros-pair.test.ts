@@ -304,10 +304,6 @@ describe('POST /api/boros/pair/simulate', () => {
     expect(res.json().error.message).toMatch(/unknown Boros market 999/);
   });
 
-  // A gas read that fails must not look like a rich account. Both shapes of
-  // failure — a throw and a null — have to land on the SAME unknown state, or
-  // one of them waves the trade through to a venue rejection the panel cannot
-  // explain.
   const failedReads: Array<[string, () => Promise<number | null>]> = [
     ['throws', async () => { throw new Error('boros rpc down'); }],
     ['returns null', async () => null],
@@ -317,9 +313,6 @@ describe('POST /api/boros/pair/simulate', () => {
     const res = await post('/api/boros/pair/simulate', pairBody());
     const { data } = res.json();
     expect(data.gasBalanceUsd).toBeNull();
-    // It SAYS so, but it does not refuse the trade: this read is not on the
-    // order's critical path, and the top-up control only shows on a number, so
-    // a blocker here would strand the user with no way forward.
     expect(data.gate.blockers).toEqual([]);
     expect(data.gate.warnings.join(' ')).toMatch(/could not be read/i);
   });
@@ -335,10 +328,6 @@ describe('POST /api/boros/pair/simulate', () => {
 
 describe('POST /api/boros/pair/top-up-gas', () => {
   it('pays once and echoes the amount SENT, never a freshly read balance', async () => {
-    // Boros credits the pot when its indexer processes the PayTreasury event,
-    // so a balance read straight after the call still returns the OLD figure.
-    // Reporting it would tell the user the top-up did nothing and invite a
-    // second one, which cannot be undone.
     const paid: Array<[number, number]> = [];
     const getGasBalance = vi.fn(async () => 0.05);
     makeApp({}, undefined, {
@@ -357,9 +346,6 @@ describe('POST /api/boros/pair/top-up-gas', () => {
   });
 
   it('tops up an account that has entered no market — the cold start', async () => {
-    // The user this whole route exists for. Requiring an entered market would
-    // refuse exactly them: entering is order registration, and they cannot
-    // place an order until the gas lands.
     const paid: number[] = [];
     makeApp({}, undefined, {
       ...orderClient(),
@@ -392,8 +378,6 @@ describe('POST /api/boros/pair/top-up-gas', () => {
   });
 
   it('answers 503 when the order client cannot top up', async () => {
-    // `payTreasury` is optional on the port: an install that can trade may
-    // still have no way to pay, and that is a 503, not a 500.
     makeApp({}, undefined, orderClient());
     const res = await post('/api/boros/pair/top-up-gas', { amountUsd: 5 });
     expect(res.statusCode).toBe(503);
@@ -403,8 +387,6 @@ describe('POST /api/boros/pair/top-up-gas', () => {
 
 describe('borosExecutionsPending', () => {
   it('counts a memoized execution and starts each app at zero', async () => {
-    // What the update route reads before restarting: a restart empties the
-    // replay memo, so a panel retry after it would double-fill for real.
     makeApp({}, undefined, orderClient());
     expect(borosExecutionsPending()).toBe(0);
     const res = await post(

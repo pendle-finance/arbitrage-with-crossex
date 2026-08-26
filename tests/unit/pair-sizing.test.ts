@@ -1,11 +1,3 @@
-/**
- * Shared pair sizing — `applySharedPairSizing` is private, so every case drives it
- * through `resolveActions` with a fake Clients (no network).
- * A pair sized in coins (BTC and ETH always are) used to skip the helper: each leg
- * floored to its own venue lot, the two sizes differed, and the pair-group check
- * blocked the order. These cases pin the coin path, the dollar path it must not
- * change, and the two pair shapes it refuses.
- */
 import { describe, expect, it } from 'vitest';
 import type { Symbol as RuleSymbol } from 'gate-api';
 import { resolveActions, type ActionInput, type ResolvedAction } from '../../src/core/actions';
@@ -27,10 +19,8 @@ const rule = (symbol: string, lotSize: string, minNotional = '5'): RuleSymbol =>
     minNotional,
   }) as RuleSymbol;
 
-/** The rule read every resolve makes, plus an optional Gate spot price for dollar sizing. */
 function fakeClients(rules: RuleSymbol[], refPrice?: number): Clients {
   const base = clientsWith({ listCrossexRuleSymbols: async () => ({ body: rules }) });
-  // No spot/futures client at all → every price lookup throws → no reference price.
   if (refPrice === undefined) return base;
   return { ...base, spot: { listTickers: async () => ({ body: [{ last: String(refPrice) }] }) } } as Clients;
 }
@@ -86,7 +76,7 @@ describe('shared pair sizing', () => {
     );
 
     expect(r.map((l) => l.qty)).toEqual(['2.529', '2.529']);
-    expect(r[0].estNotional).toBeCloseTo(2.529 * 65_000); // the margin preflight reads this
+    expect(r[0].estNotional).toBeCloseTo(2.529 * 65_000);
     expect(Number.isFinite(r[1].estNotional)).toBe(true);
   });
 
@@ -139,7 +129,7 @@ describe('shared pair sizing', () => {
     const both = [leg(GATE, 'BUY', { notional: '500' }), leg(OKX, 'SELL', { notional: '500' })];
 
     const ok = await resolveActions(fakeClients(rules, 65_000), both, { mode: 'preview' });
-    expect(ok.map((l) => l.qty)).toEqual(['0.007', '0.007']); // 500/65000 floored to lot 0.001
+    expect(ok.map((l) => l.qty)).toEqual(['0.007', '0.007']);
     expect(codes(ok)).not.toContain('pair-qty-mismatch');
 
     const rich = [rule(GATE, '0.001', '1000'), rule(OKX, '0.0001', '1000')];

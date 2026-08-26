@@ -3,10 +3,6 @@
  * every failure (a check that can fail loudly is worse than no check), lazy
  * (no remote read until asked), cached, and provably network-free whenever
  * the local version is unknown or the check is disabled.
- *
- * POST /api/version/update — the three refusals and the spawn. child_process is
- * mocked for the whole file: a real spawn here would overwrite the developer's
- * own installation.
  */
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -21,8 +17,6 @@ import { compareVersions, VERSION_URL } from '../../src/server/version';
 import { HOST, makeTestApp, TEST_KEY, TEST_SECRET } from './helpers/gate-nock';
 
 const mocks = vi.hoisted(() => ({
-  // `on` is not decoration: spawn reports a missing binary asynchronously, and
-  // with no listener node kills the whole server.
   spawn: vi.fn(() => ({ unref: vi.fn(), on: vi.fn() })),
   execFileSync: vi.fn(),
   pending: vi.fn(() => 0),
@@ -33,7 +27,6 @@ vi.mock('node:child_process', () => ({
   execFileSync: mocks.execFileSync,
 }));
 
-// Partial: borosPairRoutes itself must stay real, or buildApp has no pair routes.
 vi.mock('../../src/server/routes/borosPair', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../src/server/routes/borosPair')>()),
   borosExecutionsPending: mocks.pending,
@@ -223,7 +216,6 @@ describe('POST /api/version/update', () => {
     mocks.spawn.mockClear();
     mocks.execFileSync.mockClear();
     mocks.pending.mockClear();
-    // The installer's log file is real; point it somewhere disposable.
     home = mkdtempSync(path.join(tmpdir(), 'upd-'));
     realHome = process.env.HOME;
     process.env.HOME = home;
@@ -254,7 +246,6 @@ describe('POST /api/version/update', () => {
       { detached: boolean },
     ];
     expect(cmd).toBe('/bin/bash');
-    // The command the pop-up shows: the tip of main, not the local install.sh.
     expect(args[1]).toContain('/main/install.sh');
     expect(opts.detached).toBe(true);
     expect(exit).not.toHaveBeenCalled();

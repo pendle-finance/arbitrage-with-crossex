@@ -15,7 +15,7 @@ import type { ActionInput, PreviewResult, RestEstimate } from '../api/types';
 import { SegmentedToggle } from '../components/SegmentedToggle';
 import { amountError } from '../lib/amount';
 import { sizeUnitForBase } from '../lib/boros';
-import { fmtUsd } from '../lib/fmt';
+import { fieldValue, fmtUsd } from '../lib/fmt';
 import { uuid } from '../lib/uuid';
 import { ExecuteControl } from './ExecuteControl';
 import { estimateMargin } from './previewBits';
@@ -126,7 +126,7 @@ export function PairTicket({ onExecuted }: { onExecuted?: () => void } = {}) {
     const wantsBase = prefill.sizeUnit === 'base' && prefill.sizeBase !== undefined;
     if (wantsBase) {
       setSizeUnit('base');
-      setNotionalStr(String(Number(prefill.sizeBase!.toPrecision(8))));
+      setNotionalStr(fieldValue(prefill.sizeBase!));
     } else {
       setSizeUnit('usd');
       setNotionalStr(String(Math.max(1, Math.round(prefill.notionalUsd))));

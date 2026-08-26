@@ -20,7 +20,7 @@ import { useState } from 'react';
 import type { StrategyLeg, StrategyRollup } from '../api/types';
 import { Chip } from '../components/Chip';
 import { Modal } from '../components/Modal';
-import { fmtDateUtc, fmtTokenQty } from '../lib/fmt';
+import { fieldValue, fmtDateUtc, fmtTokenQty } from '../lib/fmt';
 import { overrunsVenue, reconcileEntries } from './entryOverrideStore';
 import type { LegRef } from './partitionStore';
 
@@ -239,7 +239,7 @@ export function LegAssignment({
   // field and its placeholder read "5.90778377". A PRICE keeps its precision,
   // where rounding would misstate an actual fill.
   const toDisplay = (v: number) =>
-    isRate ? Number((v * 100).toFixed(2)) : Number(v.toPrecision(10));
+    isRate ? Number((v * 100).toFixed(2)) : Number(fieldValue(v, 10));
   const showEntry = (v: number) => (isRate ? `${(v * 100).toFixed(2)}%` : String(toDisplay(v)));
   const fromDisplay = (v: number) => (isRate ? v / 100 : v);
   const [entryDraft, setEntryDraft] = useState('');
@@ -251,7 +251,7 @@ export function LegAssignment({
 
   const reset = () => {
     setWhere(HERE);
-    setDraft(String(Number(held.toPrecision(8))));
+    setDraft(fieldValue(held));
     /**
      * Seeded from THIS claim's current entry, which after any assertion on the
      * leg is the reconciled figure the server computed for it — not the venue
@@ -279,10 +279,6 @@ export function LegAssignment({
     !needsAmount || (draft !== '' && Number.isFinite(parsed) && parsed >= 0 && parsed <= venueTotal + 1e-9);
   // Confirm is for CHANGES. Re-asserting the status quo is a no-op the user
   // should not be invited to perform.
-  // A RELATIVE tolerance, not an absolute one: the input is seeded from
-  // `toPrecision(8)`, so on a large leg the round-trip differs from `held` by
-  // more than 1e-9 and Confirm lit up having changed nothing. The same
-  // tolerance decides whether a residual is worth mentioning below.
   const eps = Math.max(1e-9, venueTotal * 1e-7);
   const amountEdited = needsAmount && Math.abs(parsed - held) > eps;
 
@@ -532,7 +528,7 @@ export function LegAssignment({
                   <button
                     type="button"
                     className="ml-auto rounded border border-ink-700 px-2 py-1 text-[10px] text-ink-400 hover:border-ink-500 hover:text-ink-200"
-                    onClick={() => setDraft(String(Number(venueTotal.toPrecision(8))))}
+                    onClick={() => setDraft(fieldValue(venueTotal))}
                   >
                     All
                   </button>

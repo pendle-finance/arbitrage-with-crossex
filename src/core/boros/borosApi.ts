@@ -72,14 +72,6 @@ const ROUTER_ADDRESS = '0x8080808080daB95eFED788a9214e400ba552DEf6';
 /** `marketId` sentinel for a CROSS account — max uint24. */
 export const CROSS_MARKET_ID = 0xff_ff_ff;
 
-/**
- * The USD-pegged collateral zone (tokenId 3, `BOROS_TOKEN_SYMBOLS` in `./client`).
- *
- * A gas top-up is billed through a market, and the amount is in THAT market's
- * collateral token — so the same figure sent against a BTC-margined market
- * would spend that many BITCOIN. Only this zone makes a dollar amount mean
- * dollars, so `payTreasury` bills through it and refuses anywhere else.
- */
 export const USD_TOKEN_ID = 3;
 
 /** Side enum on the wire: 0 = LONG, 1 = SHORT. */
@@ -538,9 +530,6 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
   const failedLeg = (req: BorosMarketOrderRequest, message: string): BorosLegFill => ({
     ...emptyLeg(req),
     failure: {
-      // Whether the market is ENTERED is what tells an empty gas pot apart from
-      // an unregistered account: Boros words both refusals the same way. Only
-      // this module holds that fact.
       code: classifyLegFailure(
         new Error(message),
         [...enteredByToken.values()].some((ids) => ids.has(req.marketId)),
@@ -674,27 +663,9 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
         undefined,
         'GET',
       );
-      // A figure we could not read is UNKNOWN. The old POSITIVE_INFINITY read
-      // downstream as an account rich enough for anything, which silently
-      // removed the one blocker that exists to catch an empty pot.
       return typeof res?.balanceInUSD === 'number' ? res.balanceInUSD : null;
     },
 
-    /**
-     * Top that pot up out of the account's own Boros margin.
-     *
-     * ⚠ `marketId` only names the COLLATERAL TOKEN to spend. On a cross account
-     * the router throws the market away — `toMarketAcc(cross, tokenId, marketId)`
-     * returns `toCross(acc, tokenId)` (`pendle-core-v3` `types/Account.sol`), and
-     * `payTreasury` reads the market solely for `cache.tokenId`
-     * (`router/modules/TradeModule.sol`). So the caller must pass a market whose
-     * token is the USD zone: the amount is scaled as dollars, and the same number
-     * against a BTC-margined book would spend that many BTC.
-     *
-     * It does NOT have to be a market the account has entered. Entering is order
-     * registration, and requiring it would refuse the one user this exists for —
-     * a fresh account with an empty gas pot has entered nothing.
-     */
     async payTreasury(amountUsd: number, marketId: number): Promise<void> {
       const { calls } = await call<{ calls: PlaceOrderCall[] }>(
         '/v1/calldata-builder/agent/pay-treasury',
@@ -702,12 +673,6 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
           accountId: config.accountId,
           isCross: true,
           marketId,
-          // 18 decimals, NOT the token's own, and the two disagree. The backend
-          // decodes this as an 18-decimal FixedX18 (`fee.service.ts:204`) while
-          // its own DTO documents native token decimals
-          // (`calldata-builder-agent.dto.ts:618`). `pendle-sdk-boros` scales it
-          // one way and `boros-sdk` another, so neither SDK settles it. The
-          // backend is what credits the balance, so the backend wins.
           amount: parseUnits(decimalString(amountUsd), DECIMALS).toString(),
         },
       );
@@ -718,10 +683,6 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
         );
       }
       const res = await submitCalls(await signCalls(calls.map((c) => c.calldata)));
-      // Same reasoning as `enterMissing`: a refusal RESOLVES with a per-call
-      // `error`, and no result is not a clean one either. Reporting a top-up
-      // that may never have landed leaves the user waiting on a balance that
-      // never moves.
       if (!res.length) {
         throw new CoreError(
           `Boros returned no result for the $${amountUsd} gas top-up — cannot tell whether it landed.`,

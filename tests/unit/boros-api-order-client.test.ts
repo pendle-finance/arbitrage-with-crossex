@@ -39,9 +39,7 @@ function fakeApi(
     /** Raw body the ENTER submission answers with, for the shapes that are
      * neither a clean success nor a per-call error. */
     enterReturns?: unknown;
-    /** Same, for the gas TOP-UP submission. */
     payReturns?: unknown;
-    /** Raw body of the gas-balance read. */
     gasBalance?: unknown;
     /** marketIds the venue already considers entered, per read. Successive
      * entries let a test change the answer between reads. */
@@ -407,8 +405,6 @@ describe('makeBorosApiOrderClient — preconditions and remediation', () => {
   });
 
   it('reports a balance it could not read as UNKNOWN, not as a funded account', async () => {
-    // It used to answer POSITIVE_INFINITY, which every gas check downstream
-    // read as an account rich enough to trade.
     expect(await client(fakeApi({ gasBalance: {} })).getGasBalance?.()).toBeNull();
     expect(await client(fakeApi({ gasBalance: null })).getGasBalance?.()).toBeNull();
   });
@@ -548,14 +544,10 @@ describe('makeBorosApiOrderClient — the gas top-up', () => {
     const api = fakeApi({});
     await client(api).payTreasury!(5, HL);
 
-    // It must NOT read entered-markets. Entering is order registration, and a
-    // fresh account with an empty gas pot has entered nothing — refusing that
-    // user is refusing the only one this route exists for.
     expect(api.calls.some((c) => c.path.startsWith('/v1/accounts/entered-markets'))).toBe(false);
 
     const build = api.calls.find((c) => c.path === '/v1/calldata-builder/agent/pay-treasury')!;
     expect(build.body).toMatchObject({ accountId: 0, isCross: true, marketId: HL });
-    // 18 decimals: what the backend decodes, not what its own DTO documents.
     expect(build.body.amount).toBe('5000000000000000000');
 
     const datas = api.calls.find((c) => c.path === '/v1/send-txs/bulk-calls')!.body.datas as Array<{
@@ -573,8 +565,6 @@ describe('makeBorosApiOrderClient — the gas top-up', () => {
   });
 
   it('raises when the submission says nothing at all', async () => {
-    // `submitCalls` renders any non-array body as `[]`. Reported as done, the
-    // user waits on a balance that may never move.
     for (const body of [{}, null, []]) {
       const api = fakeApi({ payReturns: body });
       await expect(client(api).payTreasury!(5, HL)).rejects.toThrow(/cannot tell whether it landed/i);
