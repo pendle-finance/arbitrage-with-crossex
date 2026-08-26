@@ -9,6 +9,13 @@
  *  - **Reduce-only legs consume no margin** (a close FREES it). They contribute 0 to
  *    the requirement, so a close (or close-pair) is never blocked — including for an
  *    underwater account, which is exactly the account that most needs to close.
+ *  - **An open leg is netted against the live opposite position.** `reduceOnly` is a
+ *    flag on the ORDER, not a description of its effect: in one-way mode a plain BUY
+ *    against a short shrinks the position and releases IM. The pair ticket unwinds a
+ *    hedged book exactly this way (BUY the short venue, SELL the long venue) with two
+ *    ordinary opens. Only the excess PAST flat is charged. ONE-WAY MODE ONLY: in hedge
+ *    mode that BUY opens a separate long at full IM, so netting would UNDER-require —
+ *    the one direction this file must never move in. Gated on positionMode.
  *  - **Fail-open on any READ failure.** If the account / reference-price / leverage
  *    read throws (endpoint down, 429, unreachable), the preflight SKIPS rather than
  *    blocks: fail-closed would turn a flaky Gate endpoint into a trading outage that
@@ -49,6 +56,9 @@ export interface PreflightDeps {
   /** Current effective per-symbol leverage (test seam); defaults to Gate CrossEx.
    * Values may be numbers or strings (the SDK returns strings) — coerced below. */
   getPositionLeverage?: (symbols: string[]) => Promise<Record<string, string | number>>;
+  /** Live positions, for netting an unwinding leg (test seam). A failure charges every
+   * leg in full — over-requiring, not under. */
+  getPositions?: () => Promise<Array<{ symbol?: string; positionQty?: string | number }>>;
 }
 
 interface LegRequirement {
@@ -85,7 +95,7 @@ export async function preflightMargin(
   // already resolved so resolveActions skips the ref lookup), so we must price them
   // ourselves. A per-leg pricing failure EXEMPTS that leg (fail-open), not the basket.
   const refCache = new Map<string, number | null>();
-  const priced: Array<{ index: number; symbol: string; notional: number; leverage?: number }> = [];
+  const priced: Array<{ leg: ResolvedAction; index: number; symbol: string; notional: number; leverage?: number }> = [];
   for (const leg of openLegs) {
     let notional = leg.estNotional > 0 ? leg.estNotional : 0;
     if (notional <= 0) {
@@ -102,14 +112,50 @@ export async function preflightMargin(
       notional = Number(leg.qty) * px;
     }
     if (!(notional > 0)) continue;
-    priced.push({ index: leg.index, symbol: leg.symbol, notional, leverage: leg.leverage?.requested });
+    priced.push({ leg, index: leg.index, symbol: leg.symbol, notional, leverage: leg.leverage?.requested });
   }
-  if (priced.length === 0) return;
+  if (priced.length === 0) return; // nothing priceable — no account read needed
+
+  // Read once, after pricing: gives both the comparison and the netting mode. Fail-open.
+  let account: CrossexAccount;
+  try {
+    account = deps.getAccount ? await deps.getAccount() : (await clients.crossEx.getCrossexAccount()).body;
+  } catch (err) {
+    console.warn(`[preflight] account read failed — skipping margin check (fail-open): ${(err as Error).message}`);
+    return;
+  }
+  const available = Number(account.availableMargin);
+  if (!Number.isFinite(available)) {
+    console.warn('[preflight] account.availableMargin not a number — skipping margin check (fail-open)');
+    return;
+  }
+
+  // Net off the share of each leg that only unwinds. Symbols uppercased both sides (as
+  // create.ts/actions.ts do): a casing miss silently charges in full, i.e. the bug back.
+  if (isOneWayMode(account.positionMode)) {
+    const posQty = new Map<string, number>();
+    try {
+      const rows = deps.getPositions
+        ? await deps.getPositions()
+        : (await clients.crossEx.listCrossexPositions()).body ?? [];
+      for (const r of rows) {
+        const q = Number(r?.positionQty);
+        if (r?.symbol && Number.isFinite(q) && q !== 0) posQty.set(r.symbol.toUpperCase(), q);
+      }
+    } catch (err) {
+      console.warn(`[preflight] positions read failed — charging every leg in full: ${(err as Error).message}`);
+    }
+    for (const p of priced) p.notional *= 1 - offsetFraction(p.leg, posQty.get(p.symbol.toUpperCase()));
+  } else {
+    console.warn(`[preflight] positionMode '${account.positionMode}' is not one-way — charging every leg in full`);
+  }
+  const opening = priced.filter((p) => p.notional > 0);
+  if (opening.length === 0) return;
 
   // Fill in leverage for legs that don't carry a requested value (remediation
   // completeLeg, hand-built baskets) from the account's CURRENT effective leverage —
   // one batched read. A failure exempts those legs (fail-open).
-  const needLev = priced.filter((p) => !(p.leverage && p.leverage > 0));
+  const needLev = opening.filter((p) => !(p.leverage && p.leverage > 0));
   if (needLev.length > 0) {
     const symbols = [...new Set(needLev.map((p) => p.symbol))];
     let levMap: Record<string, string | number> = {};
@@ -127,7 +173,7 @@ export async function preflightMargin(
     }
   }
 
-  const legs: LegRequirement[] = priced
+  const legs: LegRequirement[] = opening
     .filter((p) => !!p.leverage && p.leverage > 0)
     .map((p) => ({ index: p.index, symbol: p.symbol, notional: p.notional, leverage: p.leverage as number }));
   if (legs.length === 0) return; // nothing we can size confidently → fail-open
@@ -135,19 +181,6 @@ export async function preflightMargin(
   const required =
     legs.reduce((s, l) => s + l.notional / l.leverage, 0) * PREFLIGHT_MARGIN_BUFFER +
     legs.reduce((s, l) => s + l.notional, 0) * TAKER_FEE_RESERVE;
-
-  let account: CrossexAccount;
-  try {
-    account = deps.getAccount ? await deps.getAccount() : (await clients.crossEx.getCrossexAccount()).body;
-  } catch (err) {
-    console.warn(`[preflight] account read failed — skipping margin check (fail-open): ${(err as Error).message}`);
-    return;
-  }
-  const available = Number(account.availableMargin);
-  if (!Number.isFinite(available)) {
-    console.warn('[preflight] account.availableMargin not a number — skipping margin check (fail-open)');
-    return;
-  }
 
   if (required > available) {
     throw new CoreError(
@@ -158,4 +191,21 @@ export async function preflightMargin(
       { required, available, legs },
     );
   }
+}
+
+/** Fraction of an open leg that only nets down an opposite position (1 = fully
+ * offsetting). Unknown/aligned ⇒ 0 (charge in full). Mirrors web/src/trade/previewBits.tsx. */
+function offsetFraction(leg: ResolvedAction, positionQty: number | undefined): number {
+  const qty = Number(leg.qty);
+  if (positionQty === undefined || !Number.isFinite(qty) || qty <= 0) return 0;
+  const opposes = leg.side === 'BUY' ? positionQty < 0 : positionQty > 0;
+  if (!opposes) return 0;
+  return Math.min(qty, Math.abs(positionQty)) / qty;
+}
+
+/** One-way (netting) mode? Gate reports 'SINGLE'. Anything else — hedge mode, or an
+ * unrecognised value — answers NO and charges in full: a wrong YES can half-fill a pair. */
+function isOneWayMode(mode: string | undefined): boolean {
+  const m = (mode ?? '').toUpperCase();
+  return m === 'SINGLE' || m === 'ONE_WAY' || m === 'ONEWAY';
 }

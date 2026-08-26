@@ -173,11 +173,17 @@ export function ExecuteControl({
   // Money-safety: block confirm when the basket's estimated margin exceeds available
   // (the same shortfall the server preflight rejects — this just spares the round-trip
   // and explains why). Only when the estimate is CONFIDENT (every open leg has a known
-  // leverage), so a fallback-to-1x guess can't false-block; closes are already exempt
-  // inside estimateMargin.
+  // leverage), so a fallback-to-1x guess can't false-block.
+  //
+  // `required > 0` is load-bearing: an all-close basket requires 0, and 0 still "exceeds"
+  // a NEGATIVE availableMargin (which CrossEx reports when a sub-account borrows against
+  // the others) — that blocked every close on the account that most needs to close.
   const available = Number(account.data?.availableMargin ?? NaN);
-  const margin = previews ? estimateMargin(previews, positions.data?.positions) : { required: 0, confident: false };
-  const marginBlocked = Boolean(previews) && margin.confident && Number.isFinite(available) && margin.required > available;
+  const margin = previews
+    ? estimateMargin(previews, positions.data?.positions, account.data?.positionMode)
+    : { required: 0, confident: false };
+  const marginBlocked =
+    Boolean(previews) && margin.confident && Number.isFinite(available) && margin.required > 0 && margin.required > available;
   // The confirmed intent must map onto a deal shape the engine models (probe
   // with a placeholder id) — an unmappable shape must disable, not no-op.
   const mappable =

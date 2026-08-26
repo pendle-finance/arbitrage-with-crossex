@@ -1,12 +1,8 @@
 {
-  "version": "1.4.0",
+  "version": "1.4.1",
   "highlights": [
-    "Share links are far shorter — the same snapshot, in a URL that survives a paste into X or Telegram",
-    "Open and close Boros legs directly in the app, without a detour to the Boros front end",
-    "A four-leg arb now goes up in two steps: pick the pair, confirm the size — the legs are placed for you",
-    "When automatic grouping cannot tell shared legs apart, adjust a composite position by hand and the app keeps your split",
-    "Composite positions track more faithfully as legs fill, close, and settle",
-    "Position tracking and cost settings are streamlined into one place, so what you paid and what you hold read together",
-    "App renamed to Arbitrage with CrossEx"
+    "Closing a position is no longer blocked when your available margin has gone negative — the one state where closing matters most",
+    "Unwinding a hedged pair from the order ticket no longer asks for margin it does not need: an order that only reduces an open position is charged for the part that actually opens, if any",
+    "The ticket's margin figure reflects the same thing, so what it quotes and what it lets you do now agree"
   ]
 }

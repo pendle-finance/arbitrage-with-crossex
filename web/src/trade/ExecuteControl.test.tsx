@@ -3,7 +3,7 @@ import { http, HttpResponse } from 'msw';
 import { useState } from 'react';
 import { describe, expect, it } from 'vitest';
 import type { ActionInput, DealRequest } from '../api/types';
-import { baseHandlers, echoPreviewHandler, previewFor } from '../test/fixtures';
+import { account, baseHandlers, echoPreviewHandler, ethPosition, previewFor } from '../test/fixtures';
 import { env, server } from '../test/server';
 import { renderWithClient } from '../test/utils';
 import { ExecuteControl } from './ExecuteControl';
@@ -398,6 +398,85 @@ describe('ExecuteControl', () => {
         execution: 'taker',
         clipBandPct: 0.5,
       });
+    });
+
+    it('never blocks a close when availableMargin is NEGATIVE (borrowing sub-account)', async () => {
+      // A close requires 0, and 0 > -3870 is true — that disabled the one control that
+      // could fix the account.
+      const calls: DealRequest[] = [];
+      const closeAction: ActionInput = { kind: 'close-position', symbol: 'GATE_FUTURE_ETH_USDT' };
+      server.use(
+        // FIRST match wins within one server.use — the override must precede baseHandlers'
+        // own /api/account or the fixture's positive balance silently stands.
+        http.get('/api/account', () =>
+          HttpResponse.json(env({ ...account, availableMargin: '-3870.72', marginBalance: '4040.86', initialMargin: '7857.62' })),
+        ),
+        ...baseHandlers(),
+        echoPreviewHandler({ overrides: { estNotional: 36_080 } }),
+        dealHandler(calls),
+      );
+      renderWithClient(<ExecuteControl scope="mn" actions={[closeAction]} label="Close now" holdMs={50} />);
+
+      const btn = await screen.findByRole('button', { name: 'Close now' });
+      await waitFor(() => expect(btn).toBeEnabled());
+      expect(screen.queryByText(/exceeds available/)).toBeNull();
+      fireEvent.pointerDown(btn);
+      await waitFor(() => expect(calls).toHaveLength(1));
+      expect(calls[0]).toMatchObject({ a: { reduceOnly: true }, execution: 'taker' });
+    });
+
+    // Two ORDINARY open-market legs (the pair ticket has no reduce-only mode), each
+    // opposing a live position — together they open nothing.
+    const UNWIND: ActionInput[] = [
+      { kind: 'open-market', symbol: 'HYPERLIQUID_FUTURE_ETH_USDC', side: 'BUY', qty: '1', leverage: 25 },
+      { kind: 'open-market', symbol: 'BINANCE_FUTURE_ETH_USDT', side: 'SELL', qty: '1', leverage: 25 },
+    ];
+    const BOOK = [
+      { ...ethPosition, symbol: 'HYPERLIQUID_FUTURE_ETH_USDC', positionQty: '-25.25', leverage: '25' },
+      { ...ethPosition, symbol: 'BINANCE_FUTURE_ETH_USDT', positionQty: '10.579', leverage: '25' },
+    ];
+    /** Underwater account + a live book; `positions: null` leaves the read failing. */
+    const underwater = (positions: unknown[] | null, positionMode = 'ONE_WAY') => [
+      http.get('/api/account', () =>
+        HttpResponse.json(env({ ...account, availableMargin: '-3824.76', positionMode })),
+      ),
+      http.get('/api/positions', () =>
+        positions ? HttpResponse.json(env({ positions, exposure: [] })) : HttpResponse.error(),
+      ),
+      ...baseHandlers(),
+      echoPreviewHandler({ overrides: { qty: '1', estNotional: 2457.8, leverage: { requested: 25, max: 25 } } }),
+    ];
+
+    it('nets an OPEN leg against the live opposite position (pair-ticket unwind)', async () => {
+      server.use(...underwater(BOOK));
+      renderWithClient(<ExecuteControl scope="mo" actions={UNWIND} label="Execute pair" holdMs={50} />);
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Execute pair' })).toBeEnabled());
+      expect(screen.queryByText(/exceeds available/)).toBeNull();
+    });
+
+    it('does not block while positions are still loading', async () => {
+      // The legs carry a requested leverage, so without the guard the estimate is
+      // "confident" and full-priced — a false block until the 4s poll lands.
+      server.use(...underwater(null));
+      renderWithClient(<ExecuteControl scope="ml" actions={UNWIND} label="Execute pair" holdMs={50} />);
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Execute pair' })).toBeEnabled());
+      expect(screen.queryByText(/exceeds available/)).toBeNull();
+    });
+
+    it('does NOT net in dual-side (hedge) mode — the same unwind stays blocked', async () => {
+      // There a BUY against a short opens a SEPARATE long at full IM.
+      server.use(...underwater(BOOK, 'DUAL_SIDE'));
+      renderWithClient(<ExecuteControl scope="mh" actions={UNWIND} label="Execute pair" holdMs={50} />);
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Execute pair' })).toBeDisabled());
+      expect(await screen.findByRole('alert')).toHaveTextContent(/exceeds available/);
+    });
+
+    it('still blocks an ALIGNED open that adds to an existing position', async () => {
+      const add: ActionInput[] = [{ kind: 'open-market', symbol: 'BINANCE_FUTURE_ETH_USDT', side: 'BUY', qty: '1', leverage: 25 }];
+      server.use(...underwater(BOOK));
+      renderWithClient(<ExecuteControl scope="mp" actions={add} label="Add" holdMs={50} />);
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Add' })).toBeDisabled());
+      expect(await screen.findByRole('alert')).toHaveTextContent(/exceeds available/);
     });
 
     it('does not block a low-confidence estimate (no known leverage) — display only', async () => {

@@ -30,7 +30,7 @@ function leg(over: Partial<ResolvedAction>): ResolvedAction {
   };
 }
 
-const acct = (availableMargin: string) => ({ availableMargin }) as Awaited<ReturnType<NonNullable<Parameters<typeof preflightMargin>[2]>['getAccount'] & object>>;
+const acct = (availableMargin: string, positionMode = 'SINGLE') => ({ availableMargin, positionMode }) as Awaited<ReturnType<NonNullable<Parameters<typeof preflightMargin>[2]>['getAccount'] & object>>;
 
 /** required for a single leg, per the documented formula, so tests read as intent. */
 const requiredFor = (notional: number, lev: number) =>
@@ -49,6 +49,72 @@ describe('preflightMargin', () => {
     await expect(
       preflightMargin(clients, legs, { getAccount: async () => acct(String(need + 1)) }),
     ).resolves.toBeUndefined();
+  });
+
+  describe('netting an open leg against the live opposite position', () => {
+    // The pair ticket unwinds with two ORDINARY opens: no reduceOnly, but no new IM.
+    const unwind = [
+      leg({ index: 0, symbol: 'HYPERLIQUID_FUTURE_ETH_USDC', side: 'BUY', qty: '1', estNotional: 2457.8, leverage: { requested: 25, max: 25 } }),
+      leg({ index: 1, symbol: 'BINANCE_FUTURE_ETH_USDT', side: 'SELL', qty: '1', estNotional: 2457.26, leverage: { requested: 25, max: 25 } }),
+    ];
+    const book = async () => [
+      { symbol: 'HYPERLIQUID_FUTURE_ETH_USDC', positionQty: '-25.25' }, // short → a BUY nets down
+      { symbol: 'BINANCE_FUTURE_ETH_USDT', positionQty: '10.579' }, // long → a SELL nets down
+    ];
+
+    it('does not block a fully offsetting pair on a NEGATIVE available margin', async () => {
+      await expect(
+        preflightMargin(clients, unwind, { getAccount: async () => acct('-3824.76'), getPositions: book }),
+      ).resolves.toBeUndefined();
+    });
+
+    it('charges only the excess PAST flat', async () => {
+      // BUY 30 against a 25.25 short: 4.75 of it opens a new long.
+      const over = [leg({ index: 0, symbol: 'HYPERLIQUID_FUTURE_ETH_USDC', side: 'BUY', qty: '30', estNotional: 30 * 2457.8, leverage: { requested: 25, max: 25 } })];
+      const need = requiredFor(4.75 * 2457.8, 25);
+      await expect(
+        preflightMargin(clients, over, { getAccount: async () => acct(String(need - 1)), getPositions: book }),
+      ).rejects.toMatchObject({ category: 'insufficient-margin' });
+      await expect(
+        preflightMargin(clients, over, { getAccount: async () => acct(String(need + 1)), getPositions: book }),
+      ).resolves.toBeUndefined();
+    });
+
+    it('charges an ALIGNED leg in full (adding to a position is a real open)', async () => {
+      const add = [leg({ index: 0, symbol: 'BINANCE_FUTURE_ETH_USDT', side: 'BUY', qty: '1', estNotional: 2457.26, leverage: { requested: 25, max: 25 } })];
+      await expect(
+        preflightMargin(clients, add, { getAccount: async () => acct('50'), getPositions: book }),
+      ).rejects.toMatchObject({ category: 'insufficient-margin' });
+    });
+
+    // In hedge mode that BUY opens a SEPARATE long at full IM, so netting would
+    // under-require and leave leg B rejected with leg A filled. Unknown modes too.
+    it.each(['DUAL_SIDE', 'SOMETHING_NEW', ''])('does NOT net when positionMode is %j', async (mode) => {
+      await expect(
+        preflightMargin(clients, unwind, { getAccount: async () => acct('-3824.76', mode), getPositions: book }),
+      ).rejects.toMatchObject({ category: 'insufficient-margin' });
+    });
+
+    it('matches the position regardless of the venue symbol casing', async () => {
+      const lower = async () => [
+        { symbol: 'hyperliquid_future_eth_usdc', positionQty: '-25.25' },
+        { symbol: 'binance_future_eth_usdt', positionQty: '10.579' },
+      ];
+      await expect(
+        preflightMargin(clients, unwind, { getAccount: async () => acct('-3824.76'), getPositions: lower }),
+      ).resolves.toBeUndefined();
+    });
+
+    it('charges every leg in full when the positions read fails (safe direction)', async () => {
+      await expect(
+        preflightMargin(clients, unwind, {
+          getAccount: async () => acct('-3824.76'),
+          getPositions: async () => {
+            throw new Error('boom');
+          },
+        }),
+      ).rejects.toMatchObject({ category: 'insufficient-margin' });
+    });
   });
 
   it('prices a MARKET open leg (estNotional 0 at execute) via the ref-price seam', async () => {

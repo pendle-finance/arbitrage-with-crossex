@@ -108,21 +108,52 @@ export function describeAction(a: ActionInput): string {
  * leverage, else 1x (worst case). `confident` is false when any counted leg had to
  * fall back to 1x (no requested and no live position leverage) — the number is still
  * shown, but blocking on it would risk a false block, so callers must not gate on it.
+ *
+ * CALLER CONTRACT: excluding closes from the SUM is not the same as exempting them from
+ * a comparison. An all-close basket returns 0, and `availableMargin` can be NEGATIVE, so
+ * any gate must also require `required > 0` — otherwise 0 > -3870 blocks the close.
  */
 export function estimateMargin(
   previews: PreviewResult[],
   positions: CrossexPosition[] | undefined,
+  positionMode?: string,
 ): { required: number; confident: boolean } {
+  const canNet = isOneWayMode(positionMode);
   let required = 0;
-  let confident = true;
+  // Positions unknown while netting is live: an unwind is indistinguishable from an open
+  // and would false-block. `[]` is an answer, `undefined` is not. Not-confident fails open.
+  let confident = !(canNet && positions === undefined);
   for (const p of previews) {
     if (p.reduceOnly) continue; // a close consumes no margin
-    const posLev = Number(positions?.find((x) => x.symbol === p.symbol)?.leverage);
+    // Case-normalized like every other position lookup here (core/actions.ts, create.ts).
+    const pos = positions?.find((x) => (x.symbol ?? '').toUpperCase() === p.symbol.toUpperCase());
+    const notional = p.estNotional * (canNet ? 1 - offsetFraction(p, pos) : 1);
+    if (!(notional > 0)) continue; // fully offsetting — opens no new exposure
+    const posLev = Number(pos?.leverage);
     const known = p.leverage?.requested || (Number.isFinite(posLev) && posLev > 0 ? posLev : 0);
     if (!known) confident = false; // fell back to 1x worst case
-    required += p.estNotional / (known || 1);
+    required += notional / (known || 1);
   }
   return { required, confident };
+}
+
+/** One-way (netting) mode? In hedge mode a BUY against a short opens a SEPARATE long at
+ * full IM. Anything unrecognised answers NO and charges in full. Mirrors core/preflight.ts. */
+function isOneWayMode(mode: string | undefined): boolean {
+  const m = (mode ?? '').toUpperCase();
+  return m === 'SINGLE' || m === 'ONE_WAY' || m === 'ONEWAY';
+}
+
+/** Fraction of an OPEN leg that only nets down an opposite position (1 = fully
+ * offsetting). A BUY against a short releases IM rather than locking it, so only the
+ * excess past flat opens. Unknown/aligned ⇒ 0 (charge in full). One-way mode only. */
+function offsetFraction(p: PreviewResult, pos: CrossexPosition | undefined): number {
+  const posQty = Number(pos?.positionQty);
+  const qty = Number(p.qty);
+  if (!Number.isFinite(posQty) || posQty === 0 || !Number.isFinite(qty) || qty <= 0) return 0;
+  const opposes = p.side === 'BUY' ? posQty < 0 : posQty > 0;
+  if (!opposes) return 0;
+  return Math.min(qty, Math.abs(posQty)) / qty;
 }
 
 /**

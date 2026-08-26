@@ -11,7 +11,7 @@ import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { describe, expect, it } from 'vitest';
 import type { ActionInput, DealRequest, PreviewResponse } from '../api/types';
-import { baseHandlers, previewFor } from '../test/fixtures';
+import { account, baseHandlers, previewFor } from '../test/fixtures';
 import { env, server } from '../test/server';
 import { renderWithClient } from '../test/utils';
 import { ClosePairForm } from './PerpOnlyBox';
@@ -63,6 +63,37 @@ describe('ClosePairForm — the slippage the user sets is the slippage sent', ()
 
     // Both legs, not just the one that carries the band.
     await waitFor(() => expect(slipOf(seen.at(-1)!)).toEqual([2, 2]), { timeout: 4000 });
+  });
+
+  it('stays executable when availableMargin is NEGATIVE', async () => {
+    // Both legs are reduce-only and require 0; 0 must not "exceed" a negative available.
+    const seen: ActionInput[][] = [];
+    const posted: DealRequest[] = [];
+    server.use(
+      http.get('/api/account', () => HttpResponse.json(env({ ...account, availableMargin: '-3824.76' }))),
+      ...baseHandlers(),
+      previewSpy(seen),
+      http.post('/api/deals', async ({ request }) => {
+        posted.push((await request.json()) as DealRequest);
+        return HttpResponse.json(env({ id: 'd-neg' }), { status: 202 });
+      }),
+    );
+    renderWithClient(<ClosePairForm base="HYPE" legs={LEGS} />);
+
+    await waitFor(() => expect(seen.length).toBeGreaterThan(0), { timeout: 4000 });
+    const btn = screen.getByRole('button', { name: /Close both/ });
+    await waitFor(() => expect(btn).toBeEnabled(), { timeout: 4000 });
+    expect(screen.queryByText(/exceeds available/)).toBeNull();
+
+    // Enabled is not enough — asserting the payload proves it also clears `!mappable`.
+    fireEvent.pointerDown(btn);
+    await waitFor(() => expect(posted).toHaveLength(1), { timeout: 4000 });
+    expect(posted[0]).toMatchObject({
+      a: { symbol: 'BYBIT_FUTURE_HYPE_USDT', reduceOnly: true },
+      b: { symbol: 'HYPERLIQUID_FUTURE_HYPE_USDC', reduceOnly: true },
+      qty: '1.89',
+      execution: 'taker',
+    });
   });
 
   it('refuses an out-of-range slippage instead of silently defaulting', async () => {

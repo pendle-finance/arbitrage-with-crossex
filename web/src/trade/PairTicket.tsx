@@ -10,7 +10,7 @@
  * confirm — no review modal — so the maker price stays live until t=submit.
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useSymbolDetail, useSymbolsByBase } from '../api/queries';
+import { useAccount, usePositions, useSymbolDetail, useSymbolsByBase } from '../api/queries';
 import type { ActionInput, PreviewResult, RestEstimate } from '../api/types';
 import { SegmentedToggle } from '../components/SegmentedToggle';
 import { amountError } from '../lib/amount';
@@ -94,6 +94,8 @@ export function PairTicket({ onExecuted }: { onExecuted?: () => void } = {}) {
   }, [base, unitPinned]);
 
   const venues = useSymbolsByBase(base);
+  const positions = usePositions();
+  const account = useAccount();
   const longDetail = useSymbolDetail(longSym);
   const shortDetail = useSymbolDetail(shortSym);
 
@@ -309,9 +311,12 @@ export function PairTicket({ onExecuted }: { onExecuted?: () => void } = {}) {
     onExecuted?.();
   };
 
-  // Total initial margin the pair posts — Σ notional/leverage over the open
-  // legs, from the same estimator the execute gate uses.
-  const marginRequired = preview.previews ? estimateMargin(preview.previews, undefined).required : null;
+  // Total initial margin the pair posts — Σ notional/leverage over the open legs, from
+  // the same estimator (and the same live positions/mode) the execute gate uses, or an
+  // unwind reads as $197 of IM on a ticket that opens nothing.
+  const marginRequired = preview.previews
+    ? estimateMargin(preview.previews, positions.data?.positions, account.data?.positionMode).required
+    : null;
 
   return (
     <div className="flex flex-col gap-3">

@@ -53,12 +53,16 @@ export function dealsRoutes(deps: AppDeps) {
       const clients = deps.getClients();
       const getAccount = async () =>
         (await deps.cache.get('account', TTL.live, async () => (await clients.crossEx.getCrossexAccount()).body)).value;
+      // Shares the `positions` cache key with GET /positions (the UI polls it every 4s),
+      // so the preflight's netting read is normally already warm.
+      const getPositions = async () =>
+        (await deps.cache.get('positions', TTL.live, async () => (await clients.crossEx.listCrossexPositions()).body)).value ?? [];
       const refPriceA =
         body.execution === 'taker' && body.a?.symbol
           ? await deps.engine!.venue.refPrice(body.a.symbol.toUpperCase()).catch(() => null)
           : null;
       const row = await resolveDeal(clients, body, deps.engine!.clock.now(), {
-        preflight: { getAccount },
+        preflight: { getAccount, getPositions },
         refPriceA,
       });
 
