@@ -15,12 +15,18 @@ export function UpdateIndicator() {
   const [open, setOpen] = useState(false);
   if (!data?.updateAvailable || !data.latest) return null;
 
-  const platform = navigator.userAgent.includes('Windows')
-    ? { name: 'Windows (PowerShell)', cmd: INSTALL_CMD_WINDOWS }
-    : { name: 'macOS', cmd: INSTALL_CMD };
+  const pin = data.latestCommit;
+  const isWindows = navigator.userAgent.includes('Windows');
+  const platform = isWindows
+    ? {
+        name: 'Windows (PowerShell)',
+        cmd: pin ? `$env:BOROS_REF='${pin}'; ${INSTALL_CMD_WINDOWS}` : INSTALL_CMD_WINDOWS,
+      }
+    : { name: 'macOS', cmd: pin ? `BOROS_REF=${pin} ${INSTALL_CMD}` : INSTALL_CMD };
+  const target = pin ?? 'main';
   const changesUrl = data.install?.commit
-    ? `${REPO_URL}/compare/${data.install.commit}...main`
-    : `${REPO_URL}/commits/main`;
+    ? `${REPO_URL}/compare/${data.install.commit}...${target}`
+    : `${REPO_URL}/commits/${target}`;
 
   return (
     <>
@@ -51,6 +57,12 @@ export function UpdateIndicator() {
               one in. Your keys and trade history are never touched. You can also paste it into a
               terminal yourself.
             </p>
+            {pin && (
+              <p className="text-[13px] text-ink-300">
+                It installs commit <span className="num text-ink-200">{pin.slice(0, 7)}</span> —
+                the exact code the link below shows, not whatever lands on the branch later.
+              </p>
+            )}
             <div className="flex flex-col gap-1.5">
               <h3 className="text-[10px] font-semibold uppercase tracking-wider text-ink-400">
                 {platform.name}

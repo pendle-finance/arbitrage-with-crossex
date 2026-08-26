@@ -32,6 +32,7 @@ export function versionRoutes(deps: AppDeps) {
         current,
         install: deps.install ?? null,
         latest: remote?.version ?? null,
+        latestCommit: updateAvailable && remote ? remote.commit : null,
         updateAvailable,
         // Highlights only when they describe a version the user doesn't have.
         highlights: updateAvailable && remote ? remote.highlights : [],
@@ -61,7 +62,15 @@ export function versionRoutes(deps: AppDeps) {
         );
       }
 
-      return reply.ok({ started: true, logPath: startUpdate() });
+      let pin: string | null = null;
+      if (deps.updateCheck?.current && !deps.updateCheck.disabled) {
+        const { value } = await deps.cache.get('version:latest', TTL.version, () =>
+          fetchLatestVersion(fetchImpl),
+        );
+        pin = value?.commit ?? null;
+      }
+
+      return reply.ok({ started: true, logPath: startUpdate(pin), ref: pin });
     });
   };
 }

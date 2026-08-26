@@ -9,6 +9,7 @@ const INSTALL_CMD_WINDOWS =
   'irm https://raw.githubusercontent.com/pendle-finance/arbitrage-with-crossex/main/install.ps1 | iex';
 
 const TASK_NAME = 'BorosUpdate';
+const COMMIT_SHA = /^[0-9a-f]{40}$/;
 
 function updateLogPath(): string {
   const dir =
@@ -43,13 +44,15 @@ function beginUpdateWindow(): void {
   windowTimer.unref?.();
 }
 
-export function startUpdate(): string {
+export function startUpdate(ref?: string | null): string {
+  const pin = ref && COMMIT_SHA.test(ref) ? ref : null;
   const logPath = updateLogPath();
 
   if (process.platform === 'win32') {
     const at = new Date(Date.now() + 60_000);
     const hhmm = `${String(at.getHours()).padStart(2, '0')}:${String(at.getMinutes()).padStart(2, '0')}`;
-    const command = `& { ${INSTALL_CMD_WINDOWS} } *> '${logPath.replace(/'/g, "''")}'`;
+    const prefix = pin ? `$env:BOROS_REF='${pin}'; ` : '';
+    const command = `${prefix}& { ${INSTALL_CMD_WINDOWS} } *> '${logPath.replace(/'/g, "''")}'`;
     execFileSync('schtasks', [
       '/create',
       '/tn',
@@ -71,6 +74,7 @@ export function startUpdate(): string {
   const child = spawn('/bin/bash', ['-c', INSTALL_CMD], {
     detached: true,
     stdio: ['ignore', log, log],
+    env: pin ? { ...process.env, BOROS_REF: pin } : process.env,
   });
   child.on('error', (err) => {
     endUpdateWindow();

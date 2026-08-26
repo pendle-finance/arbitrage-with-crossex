@@ -18,7 +18,11 @@ function updateHandler(calls: unknown[], refusal?: string) {
       );
     }
     return HttpResponse.json(
-      env<RunUpdateResponse>({ started: true, logPath: '/Users/x/.boros-crossex/logs/update.log' }),
+      env<RunUpdateResponse>({
+        started: true,
+        logPath: '/Users/x/.boros-crossex/logs/update.log',
+        ref: null,
+      }),
     );
   });
 }
@@ -75,6 +79,33 @@ describe('UpdateIndicator', () => {
       'href',
       'https://github.com/pendle-finance/arbitrage-with-crossex/commits/main',
     );
+  });
+
+  it('pins the command and the diff to the advertised commit', async () => {
+    const sha = '3f7c1b9e2d4a6058cbe1740f9a2d5b83c6e0f1a4';
+    await openModal({
+      latestCommit: sha,
+      install: {
+        repo: 'pendle-finance/arbitrage-with-crossex',
+        requestedRef: 'main',
+        commit: 'abc1234',
+        source: 'install.sh',
+        installedAt: '2026-08-01T00:00:00Z',
+      },
+    });
+
+    expect(screen.getByRole('link', { name: /code changes/ })).toHaveAttribute(
+      'href',
+      `https://github.com/pendle-finance/arbitrage-with-crossex/compare/abc1234...${sha}`,
+    );
+    expect(screen.getByText(`BOROS_REF=${sha} ${INSTALL_CMD}`)).toBeInTheDocument();
+    expect(screen.getByText(/It installs commit/)).toHaveTextContent('3f7c1b9');
+  });
+
+  it('says nothing about a commit when the sha is unknown', async () => {
+    await openModal();
+    expect(screen.queryByText(/It installs commit/)).toBeNull();
+    expect(screen.getByText(INSTALL_CMD)).toBeInTheDocument();
   });
 
   it('the button runs the update once and names the log file', async () => {
