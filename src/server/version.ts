@@ -14,6 +14,9 @@ import type { FetchLike } from '../core/boros/client';
 
 export const VERSION_URL =
   'https://raw.githubusercontent.com/pendle-finance/arbitrage-with-crossex/main/version.json';
+export const COMMIT_URL =
+  'https://api.github.com/repos/pendle-finance/arbitrage-with-crossex/git/ref/heads/main';
+export const COMMIT_SHA = /^[0-9a-f]{40}$/;
 const FETCH_TIMEOUT_MS = 5_000;
 /** Cap on remote highlights — the modal is a nudge, not a changelog. */
 const MAX_HIGHLIGHTS = 10;
@@ -21,6 +24,7 @@ const MAX_HIGHLIGHTS = 10;
 export interface RemoteVersion {
   version: string;
   highlights: string[];
+  commit: string | null;
 }
 
 /** The running copy's version from `<repoRoot>/version.json`, or null when the
@@ -102,7 +106,22 @@ export async function fetchLatestVersion(fetchImpl: FetchLike): Promise<RemoteVe
     const highlights = Array.isArray(body.highlights)
       ? body.highlights.filter((h): h is string => typeof h === 'string').slice(0, MAX_HIGHLIGHTS)
       : [];
-    return { version: body.version, highlights };
+    return { version: body.version, highlights, commit: await fetchMainCommit(fetchImpl) };
+  } catch {
+    return null;
+  }
+}
+
+async function fetchMainCommit(fetchImpl: FetchLike): Promise<string | null> {
+  try {
+    const res = await fetchImpl(COMMIT_URL, {
+      headers: { Accept: 'application/vnd.github+json' },
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    });
+    if (!res.ok) return null;
+    const body = (await res.json()) as { object?: { sha?: unknown } };
+    const sha = body.object?.sha;
+    return typeof sha === 'string' && COMMIT_SHA.test(sha) ? sha : null;
   } catch {
     return null;
   }

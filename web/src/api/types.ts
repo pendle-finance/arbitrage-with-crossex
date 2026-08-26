@@ -99,6 +99,7 @@ export interface UpdateStatus {
   } | null;
   /** The latest published version (null = remote unreadable / check disabled). */
   latest: string | null;
+  latestCommit: string | null;
   updateAvailable: boolean;
   /** The latest version's feature list — only when updateAvailable. */
   highlights: string[];
@@ -1126,6 +1127,7 @@ export interface TopUpGasResponse {
 export interface RunUpdateResponse {
   started: true;
   logPath: string;
+  ref: string | null;
 }
 
 export interface BorosLegFill {

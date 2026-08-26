@@ -14,7 +14,7 @@ import { makeClients } from '../../src/core/clients';
 import { Store } from '../../src/engine/db';
 import { gateVenue } from '../../src/engine/venueGate';
 import { endUpdateWindow, isUpdating, startUpdate } from '../../src/server/updater';
-import { compareVersions, VERSION_URL } from '../../src/server/version';
+import { COMMIT_URL, compareVersions, VERSION_URL } from '../../src/server/version';
 import { HOST, makeTestApp, TEST_KEY, TEST_SECRET } from './helpers/gate-nock';
 
 const mocks = vi.hoisted(() => ({
@@ -33,14 +33,21 @@ vi.mock('../../src/server/routes/borosPair', async (importOriginal) => ({
   borosExecutionsPending: mocks.pending,
 }));
 
+const MAIN_SHA = '3f7c1b9e2d4a6058cbe1740f9a2d5b83c6e0f1a4';
+
 /** Minimal FetchLike stub in the boros-stub style. */
 function stub(
   body: unknown,
-  opts: { status?: number; reject?: boolean; calls?: string[] } = {},
+  opts: { status?: number; reject?: boolean; calls?: string[]; sha?: string | null } = {},
 ): FetchLike {
   return async (url) => {
     opts.calls?.push(url);
     if (opts.reject) throw new Error('network down');
+    if (url === COMMIT_URL) {
+      const sha = opts.sha === undefined ? MAIN_SHA : opts.sha;
+      if (sha === null) return { ok: false, status: 404, json: async () => ({}) };
+      return { ok: true, status: 200, json: async () => ({ object: { sha } }) };
+    }
     const status = opts.status ?? 200;
     return { ok: status < 400, status, json: async () => body };
   };
@@ -66,10 +73,11 @@ describe('GET /api/version', () => {
       current: '1.0.0',
       install: null,
       latest: '1.1.0',
+      latestCommit: MAIN_SHA,
       updateAvailable: true,
       highlights: ['a', 'b'],
     });
-    expect(calls).toEqual([VERSION_URL]);
+    expect(calls).toEqual([VERSION_URL, COMMIT_URL]);
   });
 
   it('equal versions: no update, no highlights', async () => {
@@ -101,6 +109,7 @@ describe('GET /api/version', () => {
       current: '1.0.0',
       install: null,
       latest: null,
+      latestCommit: null,
       updateAvailable: false,
       highlights: [],
     });
@@ -137,7 +146,8 @@ describe('GET /api/version', () => {
     });
     await get();
     await get();
-    expect(calls).toHaveLength(1);
+    expect(calls.filter((u) => u === VERSION_URL)).toHaveLength(1);
+    expect(calls.filter((u) => u === COMMIT_URL)).toHaveLength(1);
   });
 
   it('UPDATE_CHECK=0 (disabled) never touches the network', async () => {
@@ -152,6 +162,7 @@ describe('GET /api/version', () => {
       current: '1.0.0',
       install: null,
       latest: null,
+      latestCommit: null,
       updateAvailable: false,
       highlights: [],
     });
@@ -166,6 +177,24 @@ describe('GET /api/version', () => {
     expect(calls).toHaveLength(0);
     expect(data.current).toBeNull();
     expect(data.updateAvailable).toBe(false);
+  });
+
+  it('a sha read that fails still announces the update, unpinned', async () => {
+    app = makeTestApp({
+      updateCheck: { current: '1.0.0' },
+      versionFetch: stub({ version: '1.1.0', highlights: [] }, { sha: null }),
+    });
+    const { data } = (await get()).json();
+    expect(data.updateAvailable).toBe(true);
+    expect(data.latestCommit).toBeNull();
+  });
+
+  it('refuses a sha that is not 40 hex characters', async () => {
+    app = makeTestApp({
+      updateCheck: { current: '1.0.0' },
+      versionFetch: stub({ version: '1.1.0', highlights: [] }, { sha: 'main; rm -rf /' }),
+    });
+    expect((await get()).json().data.latestCommit).toBeNull();
   });
 
   it('echoes the installer provenance so the UI can show which commit runs', async () => {
@@ -239,6 +268,7 @@ describe('POST /api/version/update', () => {
     expect(res.json().data).toEqual({
       started: true,
       logPath: path.join(home, 'Library', 'Logs', 'boros-crossex', 'update.log'),
+      ref: null,
     });
     expect(mocks.spawn).toHaveBeenCalledTimes(1);
     const [cmd, args, opts] = mocks.spawn.mock.calls[0] as unknown as [
@@ -311,6 +341,43 @@ describe('POST /api/version/update', () => {
     expect(mocks.spawn).not.toHaveBeenCalled();
   });
 
+  it('installs the exact commit the modal advertised', async () => {
+    app = makeTestApp({
+      install: INSTALLED,
+      updateCheck: { current: '1.0.0' },
+      versionFetch: stub({ version: '1.1.0', highlights: [] }),
+    });
+
+    const res = await post();
+
+    expect(res.json().data.ref).toBe(MAIN_SHA);
+    const [, args, opts] = mocks.spawn.mock.calls[0] as unknown as [
+      string,
+      string[],
+      { env: Record<string, string> },
+    ];
+    expect(opts.env.BOROS_REF).toBe(MAIN_SHA);
+    expect(args[1]).toContain('/main/install.sh');
+  });
+
+  it('falls back to the branch when the commit is unknown', async () => {
+    app = makeTestApp({
+      install: INSTALLED,
+      updateCheck: { current: '1.0.0' },
+      versionFetch: stub({ version: '1.1.0', highlights: [] }, { sha: null }),
+    });
+
+    const res = await post();
+
+    expect(res.json().data.ref).toBeNull();
+    const [, , opts] = mocks.spawn.mock.calls[0] as unknown as [
+      string,
+      string[],
+      { env: Record<string, string> },
+    ];
+    expect(opts.env.BOROS_REF).toBeUndefined();
+  });
+
   it('on Windows the installer runs as its own scheduled task, outside the service job', async () => {
     const realPlatform = Object.getOwnPropertyDescriptor(process, 'platform')!;
     Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
@@ -372,6 +439,34 @@ describe('the window that refuses Boros orders while an update runs', () => {
     onError(new Error('bash is missing'));
 
     expect(isUpdating()).toBe(false);
+  });
+
+  it('refuses a ref that is not a commit sha, rather than passing it to a shell', () => {
+    startUpdate("main'; rm -rf ~; echo '");
+
+    const [, , opts] = mocks.spawn.mock.calls[0] as unknown as [
+      string,
+      string[],
+      { env: Record<string, string> },
+    ];
+    expect(opts.env.BOROS_REF).toBeUndefined();
+  });
+
+  it('pins the scheduled task to the commit on Windows', () => {
+    const realPlatform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+    process.env.BOROS_ROOT = home;
+    try {
+      startUpdate('3f7c1b9e2d4a6058cbe1740f9a2d5b83c6e0f1a4');
+
+      const calls = mocks.execFileSync.mock.calls as unknown as [string, string[]][];
+      expect(calls[0][1].join(' ')).toContain(
+        "$env:BOROS_REF='3f7c1b9e2d4a6058cbe1740f9a2d5b83c6e0f1a4';",
+      );
+    } finally {
+      Object.defineProperty(process, 'platform', realPlatform);
+      delete process.env.BOROS_ROOT;
+    }
   });
 
   it('never opens when the scheduled task cannot be created', () => {
