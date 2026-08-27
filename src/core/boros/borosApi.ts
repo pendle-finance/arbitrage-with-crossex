@@ -407,100 +407,6 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
     return null;
   };
 
-  /**
-   * Register the account with a market before trading it.
-   *
-   * Boros refuses an order in a market the account has not ENTERED, and phrases
-   * the refusal as "[SIMULATE] Top up at least ~$10 to trade" — a funding
-   * complaint about an account that was never short. So this is a precondition,
-   * not an error path. Entering takes on no exposure; it is registration.
-   *
-   * Every missing market goes in ONE call: the builder takes an array, so a
-   * two-leg pair in two fresh markets costs one transaction rather than two
-   * serialized ones ahead of a quote that is already ageing.
-   */
-  /**
-   * tokenId → the markets that CROSS account has already entered.
-   *
-   * ⚠ Entered-ness is per cross account, and a cross account is per
-   * (root, accountId, tokenId) — never global. It is also PERMANENT until the
-   * account exits, so the venue is asked once per collateral zone per process
-   * and the answer cached.
-   */
-  const enteredByToken = new Map<number, Set<number>>();
-
-  const readEntered = async (tokenId: number): Promise<Set<number>> => {
-    const marketAcc = packMarketAcc(config.root, config.accountId, tokenId, CROSS_MARKET_ID);
-    const res = await call<{ results?: Array<{ marketId?: number }> }>(
-      `/v1/accounts/entered-markets?marketAcc=${marketAcc}`,
-      undefined,
-      'GET',
-    );
-    const ids = (res?.results ?? [])
-      .map((r) => Number(r?.marketId))
-      .filter((n) => Number.isFinite(n));
-    const set = new Set(ids);
-    enteredByToken.set(tokenId, set);
-    return set;
-  };
-
-  const enterMissing = async (tokenId: number, ids: number[], retry = true): Promise<void> => {
-    const already = enteredByToken.get(tokenId) ?? (await readEntered(tokenId));
-    const missing = ids.filter((id) => !already.has(id));
-    if (!missing.length) return;
-
-    const { calls } = await call<{ calls: PlaceOrderCall[] }>(
-      '/v1/calldata-builder/agent/enter-markets',
-      { accountId: config.accountId, isCross: true, marketIds: missing },
-    );
-    if (!calls?.length) return;
-    const res = await submitCalls(await signCalls(calls.map((c) => c.calldata)));
-    // A refusal RESOLVES with a per-call `error` rather than throwing, so the
-    // result has to be inspected: caching a refused entry as entered would
-    // reject every later order on the market with the misleading top-up
-    // message above, until the process restarts.
-    //
-    // NO result is not a clean one either. `submitCalls` renders anything that
-    // is not an array as `[]`, so an unexpected body would otherwise read as
-    // "entered, no errors" and poison that cache for the life of the process.
-    if (!res.length) {
-      throw new CoreError(
-        `Boros returned no result for entering market(s) ${missing.join(', ')} — cannot tell whether it landed.`,
-        'venue-rejected',
-      );
-    }
-    const refused = res.find((r) => r?.error);
-    if (!refused) {
-      for (const id of missing) already.add(id);
-      return;
-    }
-    // `MMMarketAlreadyEntered()` means the cached view was stale — something
-    // entered this market since the read (another client, or a first order
-    // that raced this one). The whole call reverts, so markets in it that were
-    // genuinely missing are still missing: re-read and retry exactly once
-    // rather than assuming either way.
-    if (retry && /AlreadyEntered/i.test(refused.error ?? '')) {
-      await readEntered(tokenId);
-      await enterMissing(tokenId, ids, false);
-      return;
-    }
-    throw new CoreError(
-      `Boros refused to enter market(s) ${missing.join(', ')}: ${refused.error}`,
-      'venue-rejected',
-    );
-  };
-
-  const ensureEntered = async (marketIds: number[]): Promise<void> => {
-    const byToken = new Map<number, number[]>();
-    for (const id of new Set(marketIds)) {
-      const tokenId = await config.tokenIdForMarket(id);
-      if (tokenId === undefined) continue; // marketAccFor raises the real error
-      byToken.set(tokenId, [...(byToken.get(tokenId) ?? []), id]);
-    }
-    // One enter call per collateral zone, carrying every market missing in it.
-    for (const [tokenId, ids] of byToken) await enterMissing(tokenId, ids);
-  };
-
   const readGasBalance = async (): Promise<number | null> => {
     const res = await call<{ balanceInUSD?: number }>(
       `/v1/accounts/gas-balance?root=${config.root}`,
@@ -542,11 +448,17 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
    * removes. If the balance really was too low the venue refuses the bundle and
    * `classifyLegFailure` reports that as a gas failure, which is the truth.
    */
-  const autoTopUpCalldata = async (): Promise<Hex[]> => {
+  const autoTopUpCalldata = async (reducing: boolean): Promise<Hex[]> => {
     if (!config.usdMarketId) return [];
     try {
       const balance = await readGasBalance();
-      if (balance === null || balance >= AUTO_TOP_UP_BELOW_USD) return [];
+      // An EXIT is funded only when it genuinely cannot pay. The relayer's floor
+      // is 0 and an order's gas is a couple of cents, so anything above zero
+      // already covers a close — topping it up there would spend a dollar of
+      // margin, and add a `_checkIMStrict` that can revert, to buy nothing. An
+      // OPEN keeps the buffer: it is the order that should not stall next time.
+      const floor = reducing ? 0 : AUTO_TOP_UP_BELOW_USD;
+      if (balance === null || balance >= floor) return [];
       const marketId = await config.usdMarketId();
       if (marketId === undefined) return [];
       // A negative budget is debt. Clear it and leave the full amount on top,
@@ -602,10 +514,10 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
   const failedLeg = (req: BorosMarketOrderRequest, message: string): BorosLegFill => ({
     ...emptyLeg(req),
     failure: {
-      code: classifyLegFailure(
-        new Error(message),
-        [...enteredByToken.values()].some((ids) => ids.has(req.marketId)),
-      ),
+      // Entered: every order carries `enterMarket` itself, so Boros's "Top up
+      // at least ~$10 to trade" can only be about gas here, never about a
+      // market the account never registered with.
+      code: classifyLegFailure(new Error(message), true),
       message,
     },
   });
@@ -620,15 +532,21 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
 
   const placeMarketOrders = async (
     reqs: BorosMarketOrderRequest[],
+    opts?: { reducing?: boolean },
   ): Promise<BorosLegFill[]> => {
     if (reqs.length === 0) return [];
-    await ensureEntered(reqs.map((r) => r.marketId));
 
-    // Prepended, not appended: the top-up is the first thing in the bundle, so
-    // the calls that spend gas are the ones that follow it. The relayer credits
-    // it either way (its pre-check reads the whole submission), but on-chain
-    // order is the readable one.
-    const topUp = await autoTopUpCalldata();
+    // Prepended, which is what the backend's own builders do (payTreasury goes
+    // first in getPositionTransferCallData and getCancelOrderCallData).
+    //
+    // Position does NOT decide whether the batch is funded: the relayer sums
+    // the whole submission and checks it once, before anything executes
+    // (gas-tracking.service), so the credit counts wherever the call sits.
+    // What position does decide is when `payTreasury`'s own `_checkIMStrict`
+    // runs (MarginManager.sol) — first means before the batch frees any margin.
+    // That is only reachable on a close whose budget is already at or below
+    // zero, because `autoTopUpCalldata` leaves any solvent close alone.
+    const topUp = await autoTopUpCalldata(opts?.reducing === true);
     const calldatas = [...topUp, ...(await Promise.all(reqs.map(buildOrderCalldata)))];
     const signed = await signCalls(calldatas);
     const responses = await submitCalls(signed);
@@ -725,7 +643,7 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
       );
       if (!calls?.length) return;
       const res = await submitCalls(await signCalls(calls.map((c) => c.calldata)));
-      // Same reasoning as `enterMissing`: an empty result is "we cannot tell",
+      // An empty result is "we cannot tell",
       // and reporting a cancel that may never have been submitted as done is
       // the one answer a remediation path must not give.
       if (!res.length) {
@@ -794,7 +712,7 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
           // this is a shape change on their side, not a routine case.
           ...(open === null ? {} : { sizeWei: (asked < open ? asked : open).toString() }),
         },
-      ]);
+      ], { reducing: true });
       return fill;
     },
   };

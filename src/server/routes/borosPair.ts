@@ -721,6 +721,9 @@ export function borosPairRoutes(deps: AppDeps) {
         legB: legBOrder,
         feeDragApr: simulation.feeDragApr,
         receiveLeg: simulation.receiveLeg!,
+        // A close only reduces, so the gas top-up stays out of its way unless
+        // the budget genuinely cannot pay — an exit is never taxed a dollar.
+        reducing: intent === 'close',
       }).then((result) => ({ result, estimate: simulation, warnings: gate.warnings }));
       rememberExecution(memoKey, pending);
       const payload = await pending;
