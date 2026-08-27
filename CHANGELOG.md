@@ -3,6 +3,73 @@
 Only substantial releases are listed here — each one bumps `version.json` (which is what the
 in-app update check compares against).
 
+## 1.5.0 — 2026-08-27
+
+An update button that updates, gas you never have to think about, and messages that say what
+to do instead of naming a flag.
+
+- **The update button in the pop-up now installs the update.** It was a pair of commands to copy
+  into a terminal. Press it and the app downloads the new version, installs it, restarts, and the
+  page reloads itself onto the copy that is now serving. It refuses while a deal is working or a
+  Boros order may still be settling, and says which. A "Read the code changes →" link opens the
+  exact GitHub comparison between the version you are running and the one that will install — and
+  it installs *that* commit, not whatever `main` holds by the time the download starts.
+- **⚠ Windows users must re-run the install command once.** Every Windows install so far reported
+  itself as a source checkout, so the button refused it. The fix cannot install itself: run the
+  install command from the pop-up one more time, and every update after this one is a button
+  press. macOS installs pick this up automatically.
+- **An order now pays for its own gas.** Boros bills each action to a prepaid pot, separate from
+  your trading collateral, and an empty pot used to stop every order with nothing to click. An
+  order now tops the pot up inside the same transaction, so there is no wait and nothing to press.
+  A healthy balance shows nothing at all; a low one gets one amber line naming the amount. Closing
+  a position is never charged for gas it can already afford.
+- **A too-small order says what it needs, in words.** A pair that could not be sized told a browser
+  user to "increase --notional", a flag no browser has, and never said which venue was the
+  problem. Every one of those messages is rewritten and names the leg at fault: *this size is worth
+  2.49, below BINANCE_FUTURE_ETH_USDT's minimum order value of 20 — increase it*. A Boros leg worth
+  ten dollars or less is now caught while you type the size, instead of failing after you confirm.
+- **Profit is counted from the day the position opened.** A position's Fixed APY spread the whole
+  term's income over the days remaining rather than the days held, which overstated the headline
+  and the ROI beside it. The hover now shows the arithmetic one line per leg, and a leg with no
+  known open date says so instead of quietly guessing.
+- **An update that installs but will not start puts the previous version back.** Both installers
+  keep the old copy, and restore it if the new one does not answer. A machine can no longer be left
+  with no server at all.
+- **Amount boxes keep one precision rule.** Ten editable quantity fields rounded differently; they
+  now agree. A value that is not a number leaves the box empty instead of writing `NaN`.
+- **Security.** The local API's token check compared an address in a way that a crafted request
+  could sidestep. Closed, along with two dead ends the first pass at the gas fix introduced.
+
+## 1.4.1 — 2026-08-26
+
+Closing a position stops asking for margin it does not need.
+
+- **A close is never blocked by margin.** Closing was refused when available margin had gone
+  negative — the one state where closing matters most. An order that only reduces an open position
+  is now charged for the part that actually opens, if any, and nothing more.
+- **The ticket's margin figure agrees with what it lets you do.** It quoted the full requirement
+  while the gate charged the incremental one, so the number on screen and the button's behaviour
+  disagreed.
+
+## 1.4.0 — 2026-08-25
+
+Boros legs from inside the app, a two-step pair wizard, and hand-grouped positions.
+
+- **Open and close Boros legs directly in the app**, without a detour to the Boros front end. Both
+  legs of a pair go out as one atomic batch: neither trades unless both are accepted.
+- **A four-leg arb goes up in two steps** — pick the pair, confirm the size, and the legs are
+  placed for you.
+- **Positions pair their legs instead of pooling them by coin.** When automatic grouping cannot
+  tell shared legs apart, group a composite position by hand and the app keeps your split; it also
+  forgets closed legs, holds one maturity, and stops a close crossing past flat.
+- **Share links are far shorter** — the same snapshot, in a URL that survives a paste into X or
+  Telegram. The tracked address travels with the mint, raw and out of the link.
+- **Opportunities lists every viable pair** behind a compact facet bar, with the tenor filter
+  flipped to a floor and the card unpacked.
+- **Position tracking and cost settings are streamlined into one place**, so what you paid and what
+  you hold read together.
+- **The app is renamed Arbitrage with CrossEx**, and re-homed as a Pendle open-source project.
+
 ## 1.3.0 — 2026-08-07
 
 Share a position, explain a stopped deal, and a Windows service that stays hidden.
