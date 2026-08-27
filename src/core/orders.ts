@@ -62,12 +62,23 @@ export interface QtyLeg {
   lotSize: string;
   minSize: number;
   minNotional: number;
+  /** Venue, so a violation can name the leg at fault. Every message here is
+   * rendered verbatim in the browser, so "a leg" is not good enough. */
+  symbol?: string;
 }
 
+/** Possessive venue name for a message, when the caller supplied one. */
+const legName = (l: QtyLeg): string => (l.symbol ? `${l.symbol}'s` : "a leg's");
+
 /**
- * Resolve one base-asset quantity valid for every leg: from --qty, or --notional/refPrice;
- * floored to the coarsest lot, then checked against each leg's lot/min-size/min-notional.
+ * Resolve one base-asset quantity valid for every leg: from a coin size, or from a
+ * dollar size and refPrice; floored to the coarsest lot, then checked against each
+ * leg's lot/min-size/min-notional.
  * One leg = single open; two legs = a pair sharing the same qty. Throws on any violation.
+ *
+ * Every message thrown here reaches a trader in the browser — resolveActions renders
+ * it verbatim in the ticket's violation list. There is no CLI any more, so no message
+ * may name a `--flag`, and one that blames a leg must say which leg.
  */
 export function resolveQty(opts: {
   notional?: string;
@@ -75,34 +86,34 @@ export function resolveQty(opts: {
   refPrice?: number;
   legs: QtyLeg[];
 }): { qtyStr: string; qty: number; estNotional: number } {
-  if (opts.notional && opts.qty) throw new Error('provide only one of --notional or --qty');
-  if (!opts.notional && !opts.qty) throw new Error('provide --notional <USDT> or --qty <base>');
+  if (opts.notional && opts.qty) throw new Error('size this order in coins or in dollars, not both');
+  if (!opts.notional && !opts.qty) throw new Error('enter a size, in coins or in dollars');
 
   let raw: number;
   if (opts.qty) {
     raw = Number(opts.qty);
-    if (!Number.isFinite(raw) || raw <= 0) throw new Error('--qty must be a positive number');
+    if (!Number.isFinite(raw) || raw <= 0) throw new Error('size must be a positive number');
   } else {
     const n = Number(opts.notional);
-    if (!Number.isFinite(n) || n <= 0) throw new Error('--notional must be a positive number');
+    if (!Number.isFinite(n) || n <= 0) throw new Error('the dollar size must be a positive number');
     raw = n / (opts.refPrice ?? 0);
   }
 
   const coarserLot = coarsestLot(opts.legs.map((l) => l.lotSize)) ?? opts.legs[0].lotSize;
   const qtyStr = roundToStep(raw, coarserLot, 'down');
   const qty = Number(qtyStr);
-  if (qty <= 0) throw new Error(`resolved qty is 0; increase --notional/--qty (lot ${coarserLot})`);
+  if (qty <= 0) throw new Error(`this size rounds down to zero — ${coarserLot} is the smallest step available`);
 
   for (const l of opts.legs) {
     if (!isMultipleOf(qty, l.lotSize)) {
-      throw new Error(`lot sizes incompatible (${opts.legs.map((x) => x.lotSize).join(', ')}); pass --qty as a common multiple`);
+      throw new Error(`lot sizes do not fit together (${opts.legs.map((x) => x.lotSize).join(', ')}) — no size works on every leg`);
     }
-    if (qty < l.minSize) throw new Error(`qty ${qtyStr} is below a leg min size (${l.minSize}); increase size`);
+    if (qty < l.minSize) throw new Error(`size ${qtyStr} is below ${legName(l)} minimum size of ${l.minSize}`);
   }
   const estNotional = qty * (opts.refPrice ?? 0);
   for (const l of opts.legs) {
     if (l.minNotional > 0 && estNotional > 0 && estNotional < l.minNotional) {
-      throw new Error(`est. notional ${estNotional.toFixed(2)} is below a leg min notional (${l.minNotional}); increase --notional`);
+      throw new Error(`this size is worth ${estNotional.toFixed(2)}, below ${legName(l)} minimum order value of ${l.minNotional} — increase it`);
     }
   }
   return { qtyStr, qty, estNotional };

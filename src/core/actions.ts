@@ -326,7 +326,7 @@ export async function resolveActions(
           notional: input.qty ? undefined : input.notional,
           qty: input.qty,
           refPrice: sizingRef ?? 0,
-          legs: [{ lotSize: rule.lotSize, minSize: Number(rule.minSize ?? 0), minNotional }],
+          legs: [{ symbol, lotSize: rule.lotSize, minSize: Number(rule.minSize ?? 0), minNotional }],
         });
         qty = r.qtyStr;
         estNotional = r.estNotional;
@@ -426,6 +426,7 @@ function applySharedPairSizing(resolved: ResolvedAction[]): void {
         qty: inA.qty,
         refPrice: ref?.value,
         legs: legs.map((l) => ({
+          symbol: l.symbol,
           lotSize: l.rule!.lotSize,
           minSize: Number(l.rule!.minSize ?? 0),
           minNotional: Number(l.rule!.minNotional ?? 0),
@@ -450,7 +451,7 @@ function applySharedPairSizing(resolved: ResolvedAction[]): void {
       const message =
         code === 'lot-incompatible'
           ? `${a.symbol} trades in steps of ${a.rule!.lotSize} and ${b.symbol} in steps of ${b.rule!.lotSize} — no size fits both legs`
-          : `pair sizing: ${(err as Error).message}`;
+          : (err as Error).message;
       for (const l of legs) {
         l.violations.push({ code, message });
       }
@@ -535,10 +536,12 @@ async function resolveClose(
 
 function sizingViolationCode(err: unknown): Violation['code'] {
   const m = (err as Error).message ?? '';
-  if (/min size/.test(m)) return 'below-min-size';
-  if (/min notional/.test(m)) return 'below-min-notional';
-  if (/lot sizes incompatible/.test(m)) return 'lot-incompatible';
-  if (/qty is 0|must be a positive/.test(m)) return 'qty-invalid';
+  // Keyed off resolveQty's wording, so the two move together. Order matters:
+  // the min-size and min-notional messages both read "is below <venue>'s ...".
+  if (/minimum order value/.test(m)) return 'below-min-notional';
+  if (/minimum size/.test(m)) return 'below-min-size';
+  if (/lot sizes do not fit/.test(m)) return 'lot-incompatible';
+  if (/rounds down to zero|must be a positive/.test(m)) return 'qty-invalid';
   return 'sizing-failed';
 }
 
