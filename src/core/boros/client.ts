@@ -20,6 +20,31 @@ const BOROS_BASE_URL = 'https://api.boros.finance';
  * mounts). New endpoints live here — the bare `/open-api` prefix is deprecated. */
 const BOROS_GATEWAY_BASE_URL = 'https://api-boros.pendle.finance/apis';
 
+/**
+ * Gas the order pays for itself.
+ *
+ * Boros funds its relayer from an off-chain USD budget per root, separate from
+ * trading collateral, and an account with plenty of margin can still be unable
+ * to send an order. The venue's own app never makes a user think about that,
+ * and the mechanism is not a background job: a `payTreasury` call placed in the
+ * SAME submission is counted as a credit by the relayer's pre-check
+ * (`deltaFee = gas - marketEntranceFee - payTreasuryFee`, gas-tracking.service),
+ * so a bundle carrying its own top-up is accepted even when the budget is at
+ * zero or in debt. We do the same, so a low balance is never a dead end.
+ *
+ * These mirror the backend's ops-fee defaults (`minOpsFeeInUSD` 0.2,
+ * `opsFeeToTakeInUSD` 1). They are app-settings values retuned upstream against
+ * live gas prices and we do not read them — ours fire slightly earlier on
+ * purpose, so an order tops up before it reaches the venue's own floor rather
+ * than racing it. If Boros ever raises its floor above this, the venue's
+ * refusal is still reported honestly as a gas failure.
+ *
+ * Here, not in borosApi, so the gate that warns and the client that tops up
+ * read one number instead of two that drift.
+ */
+export const AUTO_TOP_UP_BELOW_USD = 0.3;
+export const AUTO_TOP_UP_USD = 1;
+
 /** tokenId → collateral token symbol (mirrors boros-tools' TOKEN_IDS). */
 export const BOROS_TOKEN_SYMBOLS: Record<number, string> = {
   1: 'BTC',

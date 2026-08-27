@@ -737,7 +737,7 @@ describe('BorosPairTicket', () => {
         gasBalanceUsd: 0,
         gate: {
           warnings: [
-            'Prepaid gas on this Boros account is empty, so this order tops it up as it sends. That is charged from your USD collateral, not from the margin for these legs.',
+            'Prepaid gas on this Boros account is empty, so this order tops it up as it sends. That takes about $1.00 from your Boros USDT balance, on top of the margin for these legs.',
           ],
         },
       }),
@@ -746,7 +746,7 @@ describe('BorosPairTicket', () => {
     await fillTicket(user);
 
     expect(await screen.findByText(/tops it up as it sends/i)).toBeInTheDocument();
-    expect(screen.getByText(/USD collateral/i)).toBeInTheDocument();
+    expect(screen.getByText(/Boros USDT balance/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Confirm/i })).toBeEnabled();
   });
 
