@@ -185,6 +185,25 @@ export async function startUpdate(ref?: string | null): Promise<string> {
       hhmm,
       '/f',
     ]);
+    /**
+     * ⚠ A TASK MADE BY `schtasks /create` WILL NOT START ON BATTERY.
+     *
+     * The CLI has no flag for it, so the task inherits
+     * DisallowStartIfOnBatteries=True — on a laptop on battery `/run` parks it
+     * at "Queued" forever, no error anywhere, while the dialog says the install
+     * is running and the badge survives every refresh. The installer already
+     * registers the app's own task battery-safe (install.ps1, Register-
+     * ScheduledTask with these same two settings); this task forgot.
+     *
+     * Deliberately NOT best-effort: if the settings cannot be applied the
+     * throw reaches the dialog as "could not start the update", which beats
+     * queuing a task that may never run.
+     */
+    execFileSync('powershell', [
+      '-NoProfile',
+      '-Command',
+      `Set-ScheduledTask -TaskName '${TASK_NAME}' -Settings (New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries) | Out-Null`,
+    ]);
     execFileSync('schtasks', ['/run', '/tn', TASK_NAME]);
     beginUpdateWindow();
     return logPath;

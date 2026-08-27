@@ -431,9 +431,13 @@ describe('POST /api/version/update', () => {
       expect(res.json().data.logPath).toBe(path.join(home, 'logs', 'update.log'));
       expect(mocks.spawn).not.toHaveBeenCalled();
       const calls = mocks.execFileSync.mock.calls as unknown as [string, string[]][];
-      expect(calls.map((c) => c[0])).toEqual(['schtasks', 'schtasks']);
+      expect(calls.map((c) => c[0])).toEqual(['schtasks', 'powershell', 'schtasks']);
       expect(calls[0][1]).toContain('/create');
-      expect(calls[1][1]).toEqual(['/run', '/tn', 'BorosUpdate']);
+      // schtasks-created tasks refuse to start on battery; the settings pass
+      // between create and run is what makes the button work on a laptop.
+      expect(calls[1][1].join(' ')).toContain('-AllowStartIfOnBatteries');
+      expect(calls[1][1].join(' ')).toContain('-DontStopIfGoingOnBatteries');
+      expect(calls[2][1]).toEqual(['/run', '/tn', 'BorosUpdate']);
 
       // The installer is staged to disk and the task runs THAT.
       expect(readFileSync(path.join(home, 'update-installer.ps1'), 'utf8')).toContain(
