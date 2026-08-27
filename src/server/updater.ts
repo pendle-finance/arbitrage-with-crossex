@@ -97,6 +97,22 @@ export function startUpdate(ref?: string | null): string {
     } catch {
     }
   });
+  /**
+   * A NON-ZERO EXIT MEANS NOTHING IS COMING BACK.
+   *
+   * This never fires on a success: the installer stops this server before it
+   * swaps the new copy in, so a completed update kills the parent first. It
+   * fires when the installer starts and then dies — a failed build, an
+   * unreachable download, a kill. Without it the window stays open for its
+   * full ten minutes and every Boros write is refused, while the panel still
+   * reads "comes back on its own".
+   *
+   * `code` is null when a signal killed it; that is not coming back either,
+   * which is why the test is `!== 0` rather than `> 0`.
+   */
+  child.on('exit', (code) => {
+    if (code !== 0) endUpdateWindow();
+  });
   child.unref();
   fs.closeSync(log);
   beginUpdateWindow();

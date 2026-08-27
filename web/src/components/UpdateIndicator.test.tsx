@@ -1,7 +1,7 @@
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
-import { describe, expect, it } from 'vitest';
-import type { RunUpdateResponse } from '../api/types';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { RunUpdateResponse, UpdateStatus } from '../api/types';
 import { INSTALL_CMD, INSTALL_CMD_WINDOWS } from '../lib/app';
 import { versionHandler } from '../test/fixtures';
 import { env, server } from '../test/server';
@@ -25,6 +25,33 @@ function updateHandler(calls: unknown[], refusal?: string) {
       }),
     );
   });
+}
+
+
+/** An install-info block, so a test can say which commit is being served. */
+function installedAt(commit: string): UpdateStatus['install'] {
+  return {
+    repo: 'pendle-finance/arbitrage-with-crossex',
+    requestedRef: 'refs/heads/main',
+    commit,
+    source: 'github-archive',
+    installedAt: '2026-01-01T00:00:00Z',
+  };
+}
+
+/** jsdom's own reload throws. Replace the whole object, and put it back after
+ * — a leaked stub would silently disarm navigation in every later test. */
+function stubReload() {
+  const real = window.location;
+  const reload = vi.fn();
+  Object.defineProperty(window, 'location', {
+    configurable: true,
+    value: { ...real, reload },
+  });
+  return {
+    reload,
+    restore: () => Object.defineProperty(window, 'location', { configurable: true, value: real }),
+  };
 }
 
 async function openModal(over: Parameters<typeof versionHandler>[0] = {}) {
@@ -154,6 +181,66 @@ describe('UpdateIndicator', () => {
     // half-hidden behind the page content.
     await openModal();
     expect(screen.getByRole('dialog').parentElement).toBe(document.body);
+  });
+
+  describe('after the install lands', () => {
+    let stub: ReturnType<typeof stubReload> | null = null;
+    afterEach(() => {
+      stub?.restore();
+      stub = null;
+    });
+
+    it('reloads once the server is serving a different commit', async () => {
+      stub = stubReload();
+      const calls: unknown[] = [];
+      // The page's own /version answer is cached for six hours, so it keeps
+      // reporting the OLD commit. The watch is what sees the swap.
+      server.use(
+        versionHandler({ latest: '1.2.0', updateAvailable: true, install: installedAt('a'.repeat(40)) }),
+        updateHandler(calls),
+      );
+      renderWithClient(<UpdateIndicator />);
+      fireEvent.click(await screen.findByRole('button', { name: 'Update v1.2.0' }));
+
+      server.use(
+        versionHandler({ latest: '1.2.0', updateAvailable: true, install: installedAt('b'.repeat(40)) }),
+      );
+      fireEvent.click(screen.getByRole('button', { name: 'Update to v1.2.0' }));
+
+      await waitFor(() => expect(stub!.reload).toHaveBeenCalled());
+    });
+
+    it('does not reload while the same commit is still serving', async () => {
+      stub = stubReload();
+      const calls: unknown[] = [];
+      server.use(
+        versionHandler({ latest: '1.2.0', updateAvailable: true, install: installedAt('a'.repeat(40)) }),
+        updateHandler(calls),
+      );
+      renderWithClient(<UpdateIndicator />);
+      fireEvent.click(await screen.findByRole('button', { name: 'Update v1.2.0' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Update to v1.2.0' }));
+
+      await screen.findByRole('status');
+      expect(stub!.reload).not.toHaveBeenCalled();
+    });
+
+    it('never watches before the update is asked for', async () => {
+      stub = stubReload();
+      // A page that merely SEES an update available must not reload, even
+      // though the server it polls could be a different install.
+      server.use(
+        versionHandler({ latest: '1.2.0', updateAvailable: true, install: installedAt('a'.repeat(40)) }),
+      );
+      renderWithClient(<UpdateIndicator />);
+      await screen.findByRole('button', { name: 'Update v1.2.0' });
+
+      server.use(
+        versionHandler({ latest: '1.2.0', updateAvailable: true, install: installedAt('b'.repeat(40)) }),
+      );
+      await new Promise((r) => setTimeout(r, 50));
+      expect(stub!.reload).not.toHaveBeenCalled();
+    });
   });
 
   it('the modal closes', async () => {

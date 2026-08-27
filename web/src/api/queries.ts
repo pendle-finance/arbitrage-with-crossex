@@ -249,6 +249,27 @@ export function useVersion() {
   });
 }
 
+/**
+ * Watches the installed commit while an update runs, so the page can reload
+ * onto the new bundle.
+ *
+ * A separate key from `qk.version` on purpose: that one is cached for six
+ * hours and would keep answering from the pre-update snapshot, which is the
+ * whole reason the badge went on offering an update the machine already had.
+ * Errors are expected here — the server is stopped for part of the swap — so
+ * the interval keeps polling through them.
+ */
+export function useInstallWatch(enabled: boolean) {
+  return useQuery({
+    queryKey: [...qk.version, 'watch'] as const,
+    queryFn: () => fetchJson<UpdateStatus>('/version'),
+    enabled,
+    refetchInterval: 5_000,
+    staleTime: 0,
+    retry: false,
+  });
+}
+
 export function useAcceptDisclaimer() {
   const qc = useQueryClient();
   return useMutation({
