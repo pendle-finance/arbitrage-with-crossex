@@ -57,6 +57,19 @@ describe('UpdateIndicator', () => {
     );
   });
 
+  it('offers the other OS behind a toggle, this machine first', async () => {
+    // jsdom's UA is not Windows, so macOS is the default and leads the toggle.
+    await openModal();
+    const [first, second] = screen.getAllByRole('radio');
+    expect(first).toHaveTextContent('macOS');
+    expect(first).toBeChecked();
+    expect(screen.getByText(INSTALL_CMD)).toBeInTheDocument();
+
+    fireEvent.click(second);
+    expect(screen.getByText(INSTALL_CMD_WINDOWS)).toBeInTheDocument();
+    expect(screen.queryByText(INSTALL_CMD)).toBeNull();
+  });
+
   it('links the diff from the installed commit', async () => {
     await openModal({
       install: {

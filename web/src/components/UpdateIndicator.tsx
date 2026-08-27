@@ -4,8 +4,23 @@ import { useRunUpdate, useVersion } from '../api/queries';
 import { INSTALL_CMD, INSTALL_CMD_WINDOWS, REPO_URL } from '../lib/app';
 import { CopyBlock } from './CopyBlock';
 import { Modal } from './Modal';
+import { SegmentedToggle } from './SegmentedToggle';
 
 const CHANGELOG_URL = `${REPO_URL}/blob/main/CHANGELOG.md`;
+
+type Os = 'macos' | 'windows';
+const OS_LABEL: Record<Os, string> = { macos: 'macOS', windows: 'Windows (PowerShell)' };
+/** The machine reading this. Only the default — the other OS stays one click
+ * away, because a user copying the command for a second machine is common. */
+const thisMachine = (): Os => (navigator.userAgent.includes('Windows') ? 'windows' : 'macos');
+const installCmd = (os: Os, pin: string | null): string =>
+  os === 'windows'
+    ? pin
+      ? `$env:BOROS_REF='${pin}'; ${INSTALL_CMD_WINDOWS}`
+      : INSTALL_CMD_WINDOWS
+    : pin
+      ? `BOROS_REF=${pin} ${INSTALL_CMD}`
+      : INSTALL_CMD;
 const LINK_CLASS =
   'text-xs text-cyan-300 underline decoration-cyan-500/40 underline-offset-2 hover:text-cyan-200';
 
@@ -13,16 +28,13 @@ export function UpdateIndicator() {
   const { data } = useVersion();
   const runUpdate = useRunUpdate();
   const [open, setOpen] = useState(false);
+  const [os, setOs] = useState<Os>(thisMachine);
   if (!data?.updateAvailable || !data.latest) return null;
 
   const pin = data.latestCommit;
-  const isWindows = navigator.userAgent.includes('Windows');
-  const platform = isWindows
-    ? {
-        name: 'Windows (PowerShell)',
-        cmd: pin ? `$env:BOROS_REF='${pin}'; ${INSTALL_CMD_WINDOWS}` : INSTALL_CMD_WINDOWS,
-      }
-    : { name: 'macOS', cmd: pin ? `BOROS_REF=${pin} ${INSTALL_CMD}` : INSTALL_CMD };
+  // This machine first, so the command the user almost always wants is the one
+  // under the cursor as well as the one selected.
+  const order: Os[] = thisMachine() === 'windows' ? ['windows', 'macos'] : ['macos', 'windows'];
   const target = pin ?? 'main';
   const changesUrl = data.install?.commit
     ? `${REPO_URL}/compare/${data.install.commit}...${target}`
@@ -63,11 +75,14 @@ export function UpdateIndicator() {
                 the exact code the link below shows, not whatever lands on the branch later.
               </p>
             )}
-            <div className="flex flex-col gap-1.5">
-              <h3 className="text-[10px] font-semibold uppercase tracking-wider text-ink-400">
-                {platform.name}
-              </h3>
-              <CopyBlock text={platform.cmd} />
+            <div className="flex flex-col items-start gap-2">
+              <SegmentedToggle
+                value={os}
+                options={order.map((v) => ({ value: v, label: OS_LABEL[v] }))}
+                onChange={setOs}
+                ariaLabel="Operating system"
+              />
+              <CopyBlock text={installCmd(os, pin)} />
             </div>
             {runUpdate.data ? (
               <p
