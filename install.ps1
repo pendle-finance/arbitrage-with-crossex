@@ -740,7 +740,9 @@ the new version did not start, and the previous one could not be restored.
   Remove-OldApp   # the new version answers on the port; the way back can go
   New-Launcher
   Write-Host ''
-  Say "Done! Opening http://localhost:$Port ..."
+  # BOROS_NO_BROWSER: set by the in-app updater, whose page reloads itself onto
+  # the new copy - opening a browser here would just be a duplicate tab.
+  if ($env:BOROS_NO_BROWSER) { Say 'Done!' } else { Say "Done! Opening http://localhost:$Port ..." }
   Write-Host ''
   Write-Host "  * The app now runs in the background, and starts again when you sign in."
   Write-Host "  * Open it any time at http://localhost:$Port (bookmark it!) or via"
@@ -748,7 +750,7 @@ the new version did not start, and the previous one could not be restored.
   Write-Host '  * First time? The app will ask for your Gate.io API keys in the browser.'
   Write-Host '  * Update any time by re-running the install command.'
   Write-Host ''
-  Start-Process "http://localhost:$Port" | Out-Null
+  if (-not $env:BOROS_NO_BROWSER) { Start-Process "http://localhost:$Port" | Out-Null }
 } finally {
   Remove-Temp
 }

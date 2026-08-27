@@ -445,7 +445,13 @@ main() {
   remove_old_app   # the new version answers on the port; the way back can go
   make_launcher
   echo
-  say "Done! Opening http://localhost:$PORT …"
+  # BOROS_NO_BROWSER: set by the in-app updater, whose page reloads itself onto
+  # the new copy — opening a browser here would just be a duplicate tab.
+  if [ -n "${BOROS_NO_BROWSER:-}" ]; then
+    say "Done!"
+  else
+    say "Done! Opening http://localhost:$PORT …"
+  fi
   echo
   echo "  • The app now runs in the background, even after you restart your Mac."
   echo "  • Open it any time at http://localhost:$PORT (bookmark it!) or via"
@@ -453,7 +459,7 @@ main() {
   echo "  • First time? The app will ask for your Gate.io API keys in the browser."
   echo "  • Update any time by re-running the install command."
   echo
-  open "http://localhost:$PORT" 2>/dev/null || true
+  [ -n "${BOROS_NO_BROWSER:-}" ] || open "http://localhost:$PORT" 2>/dev/null || true
 }
 
 main "$@"
