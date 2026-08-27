@@ -471,6 +471,36 @@ describe('the window that refuses Boros orders while an update runs', () => {
     expect(isUpdating()).toBe(false);
   });
 
+  it.each([
+    ['a build that failed', 1, null],
+    ['a kill', null, 'SIGTERM'],
+  ])('closes when the installer dies after starting — %s', (_case, code, signal) => {
+    startUpdate();
+    expect(isUpdating()).toBe(true);
+
+    const handle = mocks.spawn.mock.results[0].value as { on: { mock: { calls: unknown[][] } } };
+    const onExit = handle.on.mock.calls.find((c) => c[0] === 'exit')![1] as (
+      c: number | null,
+      s: string | null,
+    ) => void;
+    onExit(code, signal);
+
+    expect(isUpdating()).toBe(false);
+  });
+
+  it('leaves the window open while the installer is still working', () => {
+    startUpdate();
+
+    const handle = mocks.spawn.mock.results[0].value as { on: { mock: { calls: unknown[][] } } };
+    const onExit = handle.on.mock.calls.find((c) => c[0] === 'exit')![1] as (
+      c: number | null,
+      s: string | null,
+    ) => void;
+    onExit(0, null);
+
+    expect(isUpdating()).toBe(true);
+  });
+
   it('refuses a ref that is not a commit sha, rather than passing it to a shell', () => {
     startUpdate("main'; rm -rf ~; echo '");
 

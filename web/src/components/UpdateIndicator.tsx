@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ApiError } from '../api/client';
-import { useRunUpdate, useVersion } from '../api/queries';
+import { useInstallWatch, useRunUpdate, useVersion } from '../api/queries';
 import { INSTALL_CMD, INSTALL_CMD_WINDOWS, REPO_URL } from '../lib/app';
 import { CopyBlock } from './CopyBlock';
 import { Modal } from './Modal';
@@ -28,6 +28,27 @@ export function UpdateIndicator() {
   const runUpdate = useRunUpdate();
   const [open, setOpen] = useState(false);
   const [os, setOs] = useState<Os>(thisMachine);
+
+  /**
+   * RELOAD ONTO THE NEW BUNDLE, once the swap has actually happened.
+   *
+   * After a successful update this page reconnects to the new server still
+   * running the OLD javascript, and its version answer is cached for six
+   * hours. So the badge went on reading "Update available" for something the
+   * machine already had — and clicking it again re-ran the installer and
+   * re-opened the ten-minute window that refuses every Boros write.
+   *
+   * The commit is the signal, not a timer: it changes exactly when the new
+   * copy is serving, however long the install took.
+   */
+  const installedCommit = data?.install?.commit ?? null;
+  const servingCommit = useInstallWatch(Boolean(runUpdate.data)).data?.install?.commit ?? null;
+  useEffect(() => {
+    if (installedCommit && servingCommit && servingCommit !== installedCommit) {
+      window.location.reload();
+    }
+  }, [installedCommit, servingCommit]);
+
   if (!data?.updateAvailable || !data.latest) return null;
 
   const pin = data.latestCommit;
