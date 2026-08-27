@@ -270,7 +270,7 @@ function Get-ArchiveCommit {
 # Surfaced by the app in Settings -> About and on GET /api/version.
 function Write-InstallInfo {
   param([string]$New, [string]$Commit, [string]$Requested, [string]$Source)
-  @{
+  $json = @{
     schema       = 1
     repo         = $RepoSlug
     requestedRef = $Requested
@@ -278,7 +278,13 @@ function Write-InstallInfo {
     source       = $Source
     installedAt  = (Get-Date).ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss'Z'")
     installer    = 'install.ps1'
-  } | ConvertTo-Json | Set-Content -Path (Join-Path $New 'install-info.json') -Encoding UTF8
+  } | ConvertTo-Json
+  # NOT `Set-Content -Encoding UTF8`: on Windows PowerShell 5.1 that writes a
+  # UTF-8 BOM, Node's JSON.parse rejects it, and readInstallInfo() turns the
+  # parse error into "no install info" - which made every installed copy look
+  # like a source checkout and the update button refuse. WriteAllText is
+  # BOM-less on every PowerShell version.
+  [IO.File]::WriteAllText((Join-Path $New 'install-info.json'), $json)
 }
 
 function Get-App {

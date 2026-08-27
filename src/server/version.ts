@@ -27,13 +27,19 @@ export interface RemoteVersion {
   commit: string | null;
 }
 
+/** Read a JSON file this app wrote about itself, tolerating a UTF-8 BOM.
+ * `JSON.parse` throws on a leading U+FEFF and every failure here is swallowed,
+ * so a BOM surfaces as "installed copy claims to be a source checkout" rather
+ * than as an error. install.ps1 no longer writes one; Notepad still would. */
+function readSelfJson(file: string): unknown {
+  return JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''));
+}
+
 /** The running copy's version from `<repoRoot>/version.json`, or null when the
  * file is missing/unparseable — callers then skip the remote check entirely. */
 export function readLocalVersion(repoRoot: string): string | null {
   try {
-    const parsed = JSON.parse(
-      fs.readFileSync(path.join(repoRoot, 'version.json'), 'utf8'),
-    ) as { version?: unknown };
+    const parsed = readSelfJson(path.join(repoRoot, 'version.json')) as { version?: unknown };
     return typeof parsed.version === 'string' ? parsed.version : null;
   } catch {
     return null;
@@ -55,9 +61,10 @@ export interface InstallInfo {
  * coerced and length-capped: a hand-edited file must not reshape the API. */
 export function readInstallInfo(repoRoot: string): InstallInfo | null {
   try {
-    const parsed = JSON.parse(
-      fs.readFileSync(path.join(repoRoot, 'install-info.json'), 'utf8'),
-    ) as Record<string, unknown>;
+    const parsed = readSelfJson(path.join(repoRoot, 'install-info.json')) as Record<
+      string,
+      unknown
+    >;
     const str = (v: unknown): string | null =>
       typeof v === 'string' && v.trim() ? v.trim().slice(0, 200) : null;
     return {
