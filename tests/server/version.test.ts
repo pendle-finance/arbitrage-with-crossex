@@ -4,7 +4,7 @@
  * (no remote read until asked), cached, and provably network-free whenever
  * the local version is unknown or the check is disabled.
  */
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
@@ -248,6 +248,33 @@ describe('GET /api/version', () => {
     expect((await get()).json().data.packageReady).toBe(false);
   });
 
+  it('sweeps a stale package but keeps the staged installer', async () => {
+    stagePackage(root, 'install.sh', '#!/bin/bash\n# Arbitrage with CrossEx\n');
+    const stale = stagePackage(root, 'crossex-1.0.9.tar.gz', GZIP);
+    // A version no other case here uses: the sweep runs once per version, and
+    // a repeat of one already prefetched in this process is a no-op.
+    app = makeTestApp({
+      // Prefetch runs only for an installed copy. A source checkout resolves
+      // its root to the checkout's PARENT, and must never stage anything there.
+      install: {
+        repo: 'pendle-finance/arbitrage-with-crossex',
+        requestedRef: 'v1.0.0',
+        commit: MAIN_SHA,
+        source: 'release-package',
+        installedAt: '2026-08-01T10:00:00Z',
+      },
+      updateCheck: { current: '1.0.0' },
+      versionFetch: stub({ version: '1.2.5', highlights: [] }),
+    });
+
+    await get();
+
+    // Only one package is kept. The installer is not version-specific, so a
+    // sweep that took it would put the network back in the update.
+    expect(existsSync(stale)).toBe(false);
+    expect(existsSync(path.join(root, 'pkg', 'install.sh'))).toBe(true);
+  });
+
   it('echoes the installer provenance so the UI can show which commit runs', async () => {
     const install = {
       repo: 'pendle-finance/arbitrage-with-crossex',
@@ -484,8 +511,40 @@ describe('POST /api/version/update', () => {
       string[],
       { env: Record<string, string> },
     ];
-    expect(opts.env.BOROS_TARBALL).toBe(staged);
+    // Handed over once, under a name stagedPackage() no longer returns: an
+    // archive that will not extract must not come back on every later press.
+    expect(opts.env.BOROS_TARBALL).toBe(`${staged}.used`);
+    expect(existsSync(staged)).toBe(false);
   });
+
+  it('runs the staged installer, so a click with no network still installs', async () => {
+    // The package alone is not enough. INSTALL_CMD curls install.sh, so an
+    // update with the cable out died on the script, not on the package.
+    const installer = stagePackage(
+      process.env.BOROS_ROOT!,
+      'install.sh',
+      '#!/bin/bash\n# Arbitrage with CrossEx\n',
+    );
+    app = makeTestApp({ install: INSTALLED });
+
+    await post();
+
+    const [file, args] = mocks.spawn.mock.calls[0] as unknown as [string, string[]];
+    expect(file).toBe('/bin/bash');
+    expect(args).toEqual([installer]);
+    expect(args.join(' ')).not.toContain('curl');
+  });
+
+  it('falls back to the published command when nothing is staged', async () => {
+    app = makeTestApp({ install: INSTALLED });
+
+    await post();
+
+    const [, args] = mocks.spawn.mock.calls[0] as unknown as [string, string[]];
+    expect(args[0]).toBe('-c');
+    expect(args[1]).toContain('install.sh');
+  });
+
 
   it("carries the server's own port, and carries none when the server has none", async () => {
     // install.sh reads BOROS_PORT, but the LaunchAgent exports PORT. A server
@@ -599,7 +658,7 @@ describe('POST /api/version/update', () => {
       const runner = readFileSync(path.join(home, 'update.ps1'), 'utf8');
       expect(runner).toContain(`$env:BOROS_ROOT = '${home}'`);
       expect(runner).toContain("$env:BOROS_PORT = '6699'");
-      expect(runner).toContain(`$env:BOROS_ZIP = '${staged}'`);
+      expect(runner).toContain(`$env:BOROS_ZIP = '${staged}.used'`);
     } finally {
       Object.defineProperty(process, 'platform', realPlatform);
       delete process.env.BOROS_ROOT;

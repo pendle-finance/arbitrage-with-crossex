@@ -8,10 +8,8 @@ import { Modal } from './Modal';
 
 const CHANGELOG_URL = `${REPO_URL}/blob/main/CHANGELOG.md`;
 
-type Os = 'macos' | 'windows';
-
-const INSTALL_BY_OS: Record<Os, string> = { macos: INSTALL_CMD, windows: INSTALL_CMD_WINDOWS };
-const thisMachine = (): Os => (navigator.userAgent.includes('Windows') ? 'windows' : 'macos');
+const installCmd = (): string =>
+  navigator.userAgent.includes('Windows') ? INSTALL_CMD_WINDOWS : INSTALL_CMD;
 
 const LINK_CLASS =
   'text-xs text-cyan-300 underline decoration-cyan-500/40 underline-offset-2 hover:text-cyan-200';
@@ -127,7 +125,7 @@ export function UpdateIndicator() {
                       again.
                     </p>
                     <div className="mt-2">
-                      <CopyBlock text={INSTALL_BY_OS[thisMachine()]} />
+                      <CopyBlock text={installCmd()} />
                     </div>
                     <details className="mt-2">
                       <summary className="cursor-pointer text-[11px] text-ink-500 hover:text-ink-300">

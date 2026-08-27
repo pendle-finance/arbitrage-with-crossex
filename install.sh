@@ -412,12 +412,47 @@ PLIST
   plutil -lint -s "$PLIST" || fail "generated LaunchAgent plist failed validation."
 }
 
+# A LaunchAgent belongs to this install when it does not exist yet, or when it
+# names this $ROOT. The service name is keyed on the PORT, so two roots sharing
+# the default port also share this file — and touching another root's agent
+# would stop its server, or re-point it at this root and orphan its keys and
+# its trade journal.
+plist_is_ours() {
+  [ -f "$1" ] || return 0
+  grep -qF "<string>$ROOT/app</string>" "$1"
+}
+
 stop_running_service() {
   local uid; uid="$(id -u)"
-  if [ "$LABEL" != "$DEFAULT_LABEL" ] || grep -qF "<string>$ROOT/app</string>" "$PLIST" 2>/dev/null; then
+  if plist_is_ours "$PLIST"; then
     launchctl bootout "gui/$uid/$LABEL" 2>/dev/null || true
   fi
+  # The name this install used before the port was part of it. Left registered,
+  # it starts a SECOND server from this same root on this same port — and its
+  # plist still names the tsx entry, which a prebuilt install does not contain,
+  # so it crash-loops every 15 seconds into the live server's own error log.
+  local legacy="$HOME/Library/LaunchAgents/$DEFAULT_LABEL.plist"
+  if [ "$LABEL" != "$DEFAULT_LABEL" ] && grep -qF "<string>$ROOT/app</string>" "$legacy" 2>/dev/null; then
+    launchctl bootout "gui/$uid/$DEFAULT_LABEL" 2>/dev/null || true
+    rm -f "$legacy"
+  fi
   stop_stale_server  # reap any old/orphaned server so re-running always updates
+}
+
+# Both checks below call `fail`, so both run BEFORE the app folder is swapped.
+# This is also why install_service no longer checks the port: restore_app calls
+# install_service, and a rollback that exits through `fail` leaves the old code
+# on disk with nothing registered and nothing serving. Runs after
+# stop_running_service, so anything still on the port is another program.
+claim_service() {
+  plist_is_ours "$PLIST" || fail "another install already uses this background service.
+  $PLIST is registered and points at a different folder.
+  Install this copy on its own port instead:  BOROS_PORT=<other port>"
+  if port_in_use_by_other_app; then
+    fail "port $PORT is already in use by another program.
+  See what it is with:  lsof -nP -iTCP:$PORT -sTCP:LISTEN
+  Quit that program and re-run this installer (or re-run with BOROS_PORT=<other port>)."
+  fi
 }
 
 install_service() {
@@ -426,11 +461,6 @@ install_service() {
   : > "$LOG_DIR/server.out.log"; : > "$LOG_DIR/server.err.log"
   local uid; uid="$(id -u)"
   stop_running_service
-  if port_in_use_by_other_app; then
-    fail "port $PORT is already in use by another program.
-  See what it is with:  lsof -nP -iTCP:$PORT -sTCP:LISTEN
-  Quit that program and re-run this installer (or re-run with BOROS_PORT=<other port>)."
-  fi
   write_plist
   launchctl enable "gui/$uid/$LABEL" 2>/dev/null || true
   launchctl bootstrap "gui/$uid" "$PLIST"
@@ -479,6 +509,7 @@ main() {
   fetch_app
   build_app
   stop_running_service
+  claim_service
   swap_app
   ROLLBACK_ON_FAIL=1
   trap 'rollback_new_app' ERR

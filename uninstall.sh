@@ -83,6 +83,15 @@ main() {
   say "Stopping the background service…"
   launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
   rm -f "$PLIST"
+  # The name this install used before the port was part of it. Kept in step with
+  # install.sh, which also removes it. Left behind with the app deleted, it
+  # crash-loops every 15 seconds for ever.
+  local legacy="$HOME/Library/LaunchAgents/com.boros.crossex-terminal.plist"
+  if [ "$LABEL" != "com.boros.crossex-terminal" ] \
+    && grep -qF "<string>$ROOT/app</string>" "$legacy" 2>/dev/null; then
+    launchctl bootout "gui/$(id -u)/com.boros.crossex-terminal" 2>/dev/null || true
+    rm -f "$legacy"
+  fi
   stop_stale_server
 
   # Never delete the app or the trade journal out from under a live engine: it

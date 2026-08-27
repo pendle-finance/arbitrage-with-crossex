@@ -16,6 +16,12 @@ on:
 permissions:
   contents: write
 
+# Two pushes inside one job window would both read "no tag yet" and both call
+# `gh release create` for the same version. The loser exits non-zero.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
   release:
     runs-on: ubuntu-latest

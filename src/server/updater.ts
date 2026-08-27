@@ -8,10 +8,16 @@ const INSTALL_CMD =
   '/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/pendle-finance/arbitrage-with-crossex/main/install.sh)"';
 const INSTALLER_URL_WINDOWS =
   'https://raw.githubusercontent.com/pendle-finance/arbitrage-with-crossex/main/install.ps1';
-/** Dev/test override, same family as install.ps1's own BOROS_* knobs: a URL, or
- * a path to a local install.ps1 so the whole flow can be exercised offline. */
-const INSTALLER_SOURCE_WINDOWS = (): string =>
-  process.env.BOROS_INSTALLER ?? INSTALLER_URL_WINDOWS;
+const INSTALLER_URL_MACOS =
+  'https://raw.githubusercontent.com/pendle-finance/arbitrage-with-crossex/main/install.sh';
+/** Dev/test override, same family as the installers' own BOROS_* knobs: a URL,
+ * or a path to a local installer so the whole flow can be exercised offline. */
+const installerSource = (): string =>
+  process.env.BOROS_INSTALLER ??
+  (process.platform === 'win32' ? INSTALLER_URL_WINDOWS : INSTALLER_URL_MACOS);
+/** Both installers carry this. A captive portal answers 200 with an HTML page,
+ * and that page would otherwise be written out and run. */
+const INSTALLER_MARKER = 'Arbitrage with CrossEx';
 
 const RELEASE_ASSET_URL =
   'https://github.com/pendle-finance/arbitrage-with-crossex/releases/download';
@@ -127,10 +133,56 @@ function isPackageFile(file: string): boolean {
   }
 }
 
+function installerName(): string {
+  return process.platform === 'win32' ? 'install.ps1' : 'install.sh';
+}
+
+/** The installer script itself, from a URL or a local path. */
+async function readInstaller(src: string): Promise<string> {
+  let script: string;
+  if (/^https?:/i.test(src)) {
+    const res = await fetch(src, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
+    if (!res.ok) throw new Error(`could not download the installer (HTTP ${res.status})`);
+    script = await res.text();
+  } else {
+    script = fs.readFileSync(src, 'utf8');
+  }
+  if (!script.includes(INSTALLER_MARKER)) {
+    throw new Error(`the downloaded installer does not look like ${installerName()}`);
+  }
+  return script;
+}
+
+/** The installer staged beside the package. This is the other half of what
+ * makes an update need no network: the package is 1.3 MB, the script is 20 KB,
+ * and a click that still has to fetch either one is not offline. */
+function stagedInstaller(): string | null {
+  try {
+    const file = path.join(pkgDir(), installerName());
+    return fs.readFileSync(file, 'utf8').includes(INSTALLER_MARKER) ? file : null;
+  } catch {
+    return null;
+  }
+}
+
+async function stageInstaller(): Promise<void> {
+  const script = await readInstaller(installerSource());
+  fs.writeFileSync(path.join(pkgDir(), installerName()), script, 'utf8');
+}
+
 function stagedPackage(): string | null {
   try {
     const dir = pkgDir();
-    return fs.readdirSync(dir).map((n) => path.join(dir, n)).find(isPackageFile) ?? null;
+    // By name AND by magic bytes. A half-written `.part` left by a full disk
+    // still starts with the right two bytes, and handing that to the installer
+    // fails the extract after the swap.
+    return (
+      fs
+        .readdirSync(dir)
+        .filter((n) => n.endsWith(`.${pkgExt()}`))
+        .map((n) => path.join(dir, n))
+        .find(isPackageFile) ?? null
+    );
   } catch {
     return null;
   }
@@ -148,14 +200,34 @@ export function prefetchPackage(version: string): void {
     prefetched = version;
     const dir = pkgDir();
     const name = `crossex-${version}.${pkgExt()}`;
+    const keep = [name, installerName()];
     fs.mkdirSync(dir, { recursive: true });
     for (const other of fs.readdirSync(dir)) {
-      if (other !== name) fs.rmSync(path.join(dir, other), { recursive: true, force: true });
+      if (!keep.includes(other)) fs.rmSync(path.join(dir, other), { recursive: true, force: true });
     }
+    void stageInstaller().catch(() => {});
     const target = path.join(dir, name);
     if (fs.existsSync(target)) return;
     void downloadPackage(version, target).catch(() => {});
   } catch {
+  }
+}
+
+/** Hand the staged package over exactly once. The renamed file is invisible to
+ * stagedPackage(), so an update that dies on an archive which passed the
+ * two-byte check but will not extract is not offered that same archive on
+ * every later press. Clearing `prefetched` lets the next /api/version stage a
+ * fresh one, and the next version's sweep deletes this. */
+function consumePackage(): string | null {
+  const staged = stagedPackage();
+  if (!staged) return null;
+  prefetched = null;
+  try {
+    const used = `${staged}.used`;
+    fs.renameSync(staged, used);
+    return used;
+  } catch {
+    return staged;
   }
 }
 
@@ -188,19 +260,8 @@ async function stageWindowsInstaller(logPath: string, pin: string | null): Promi
   const installer = path.join(root, 'update-installer.ps1');
   const runner = path.join(root, 'update.ps1');
 
-  const src = INSTALLER_SOURCE_WINDOWS();
-  let script: string;
-  if (/^https?:/i.test(src)) {
-    const res = await fetch(src, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
-    if (!res.ok) throw new Error(`could not download the installer (HTTP ${res.status})`);
-    script = await res.text();
-  } else {
-    script = fs.readFileSync(src, 'utf8');
-  }
-  // A captive portal or an error page would otherwise be written out and run.
-  if (!script.includes('Arbitrage with CrossEx')) {
-    throw new Error('the downloaded installer does not look like install.ps1');
-  }
+  const local = stagedInstaller();
+  const script = local ? fs.readFileSync(local, 'utf8') : await readInstaller(installerSource());
   fs.mkdirSync(root, { recursive: true });
   fs.writeFileSync(installer, script, 'utf8');
 
@@ -223,7 +284,7 @@ async function stageWindowsInstaller(logPath: string, pin: string | null): Promi
   //
   // Each ArgumentList element carries its own quotes: PowerShell 5.1 joins them
   // with spaces without quoting, so a root containing a space would split.
-  const staged = stagedPackage();
+  const staged = consumePackage();
   const wrapper = [
     '# Generated by the in-app updater on each run. Do not edit.',
     "$ErrorActionPreference = 'Continue'",
@@ -284,12 +345,15 @@ export async function startUpdate(ref?: string | null): Promise<string> {
    * why the install works by hand and only ever fails from here.
    */
   const { NODE_ENV: _serviceEnv, ...installerEnv } = process.env;
-  const staged = stagedPackage();
+  const staged = consumePackage();
   const env: NodeJS.ProcessEnv = { ...installerEnv, BOROS_ROOT: installRoot() };
   if (process.env.PORT) env.BOROS_PORT = process.env.PORT;
   if (pin) env.BOROS_REF = pin;
   if (staged) env.BOROS_TARBALL = staged;
-  const child = spawn('/bin/bash', ['-c', INSTALL_CMD], {
+  // The staged installer when there is one, so a click with no network still
+  // installs. INSTALL_CMD curls install.sh, which is the whole point of staging.
+  const local = stagedInstaller();
+  const child = spawn('/bin/bash', local ? [local] : ['-c', INSTALL_CMD], {
     detached: true,
     stdio: ['ignore', log, log],
     env,

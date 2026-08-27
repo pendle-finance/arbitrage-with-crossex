@@ -644,10 +644,26 @@ function Stop-RunningService {
   # Tasks registered under a previous product name. Without this, an upgrade
   # across a rename leaves the old task registered and starting the old app -
   # two servers, one port. This is what makes the rename a safe UPDATE.
-  foreach ($legacy in $LegacyTitles) {
-    Unregister-TaskForRoot $legacy
+  # $AppTitle is also the name this install used BEFORE the port was part of it.
+  # Left registered on a custom port, it starts a second server from this same
+  # root - and its runner still names the tsx entry, which a prebuilt install
+  # does not contain.
+  foreach ($legacy in ($LegacyTitles + @($AppTitle))) {
+    if ($legacy -ne $TaskName) { Unregister-TaskForRoot $legacy }
   }
   Stop-StaleServer   # reap any old/orphaned server so re-running always updates
+
+  # Unregister-TaskForRoot leaves a task belonging to ANOTHER root alone. If one
+  # is still registered under our name, the Register-ScheduledTask -Force in
+  # Install-Service would hijack it and re-point that install at this root,
+  # orphaning its API keys and its trade journal.
+  if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) {
+    Fail @"
+another install already uses the background task "$TaskName".
+  That task points at a different folder. Install this copy on its own port:
+  set BOROS_PORT to another port and re-run.
+"@
+  }
 
   if (Test-PortInUseByOther) {
     Fail @"
@@ -801,14 +817,25 @@ try {
     $started = Wait-ForServer
   } catch {
     $why = $_.Exception.Message
-    if (Restore-App) {
+    # Restore-App calls Install-Service, which is often the thing that just
+    # threw. Under $ErrorActionPreference='Stop' a second failure would escape
+    # this catch entirely, past the outer finally, and leave the machine with
+    # the old code on disk and nothing registered or running.
+    $back = $false
+    try { $back = Restore-App } catch { $back = $false }
+    if ($back) {
       Fail @"
 $why
   The previous version was put back and is running.
   Nothing was lost - your keys and trade history are untouched.
 "@
     }
-    throw
+    Fail @"
+$why
+  The previous version could not be put back either.
+  Your keys and trade history are untouched, in $Root.
+  Re-run this installer to try again.
+"@
   }
   if (-not $started) {
     if (Restore-App) {

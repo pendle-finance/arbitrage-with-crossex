@@ -28,7 +28,10 @@ export function versionRoutes(deps: AppDeps) {
       }
       const updateAvailable =
         remote !== null && current !== null && (compareVersions(remote.version, current) ?? 0) > 0;
-      if (updateAvailable && remote) prefetchPackage(remote.version);
+      // Only an INSTALLED copy, the same gate the update route uses. In a
+      // source checkout the install root resolves to the checkout's PARENT,
+      // and prefetching there would write a pkg folder outside the repo.
+      if (updateAvailable && remote && deps.install) prefetchPackage(remote.version);
       return reply.ok({
         current,
         install: deps.install ?? null,
