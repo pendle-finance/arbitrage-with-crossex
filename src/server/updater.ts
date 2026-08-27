@@ -71,10 +71,24 @@ export function startUpdate(ref?: string | null): string {
   }
 
   const log = fs.openSync(logPath, 'a');
+  /**
+   * ⚠ NODE_ENV MUST NOT REACH THE INSTALLER.
+   *
+   * The LaunchAgent this app writes for itself sets NODE_ENV=production, so the
+   * server always runs with it. Yarn 1 reads NODE_ENV=production as
+   * `--production` and skips devDependencies — and still exits 0. `vite` and
+   * `typescript` are devDependencies, so the installer's `yarn build` step then
+   * has nothing to build with and dies. Inheriting the server's environment
+   * wholesale makes every update from this button fail, every time.
+   *
+   * A user pasting the same command into a terminal has no NODE_ENV, which is
+   * why the install works by hand and only ever fails from here.
+   */
+  const { NODE_ENV: _serviceEnv, ...installerEnv } = process.env;
   const child = spawn('/bin/bash', ['-c', INSTALL_CMD], {
     detached: true,
     stdio: ['ignore', log, log],
-    env: pin ? { ...process.env, BOROS_REF: pin } : process.env,
+    env: pin ? { ...installerEnv, BOROS_REF: pin } : installerEnv,
   });
   child.on('error', (err) => {
     endUpdateWindow();

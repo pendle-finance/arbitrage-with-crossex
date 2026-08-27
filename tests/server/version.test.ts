@@ -360,6 +360,36 @@ describe('POST /api/version/update', () => {
     expect(args[1]).toContain('/main/install.sh');
   });
 
+  it('never hands NODE_ENV to the installer', async () => {
+    // The LaunchAgent runs the server with NODE_ENV=production. Yarn 1 reads
+    // that as --production, skips devDependencies and still exits 0, so the
+    // installer's `yarn build` loses vite and typescript and dies. Inheriting
+    // the server's env wholesale makes every update from the button fail.
+    const real = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'production';
+    try {
+      app = makeTestApp({
+        install: INSTALLED,
+        updateCheck: { current: '1.0.0' },
+        versionFetch: stub({ version: '1.1.0', highlights: [] }),
+      });
+
+      await post();
+
+      const [, , opts] = mocks.spawn.mock.calls[0] as unknown as [
+        string,
+        string[],
+        { env: Record<string, string> },
+      ];
+      expect('NODE_ENV' in opts.env).toBe(false);
+      // The rest of the environment still goes through — PATH above all.
+      expect(opts.env.BOROS_REF).toBe(MAIN_SHA);
+    } finally {
+      if (real === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = real;
+    }
+  });
+
   it('falls back to the branch when the commit is unknown', async () => {
     app = makeTestApp({
       install: INSTALLED,
