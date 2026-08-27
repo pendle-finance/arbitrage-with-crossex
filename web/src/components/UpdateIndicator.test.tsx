@@ -210,6 +210,40 @@ describe('UpdateIndicator', () => {
       await waitFor(() => expect(stub!.reload).toHaveBeenCalled());
     });
 
+    it('keeps watching while the tab is hidden, which is where an update spends its minute', async () => {
+      // Nobody watches a progress line for a minute. React Query pauses a
+      // plain interval on a hidden tab, so without refetchIntervalInBackground
+      // the watch fetches once and the page never learns about the swap.
+      stub = stubReload();
+      vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden');
+
+      let served = 0;
+      const calls: unknown[] = [];
+      server.use(
+        http.get('/api/version', () => {
+          served += 1;
+          // The first two answers are the OLD commit: the swap has not
+          // happened yet. Only a later poll can see the new one.
+          return HttpResponse.json(
+            env<UpdateStatus>({
+              current: '1.0.0',
+              install: installedAt((served <= 2 ? 'a' : 'b').repeat(40)),
+              latest: '1.2.0',
+              latestCommit: null,
+              updateAvailable: true,
+              highlights: [],
+            }),
+          );
+        }),
+        updateHandler(calls),
+      );
+      renderWithClient(<UpdateIndicator />);
+      fireEvent.click(await screen.findByRole('button', { name: 'Update v1.2.0' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Update to v1.2.0' }));
+
+      await waitFor(() => expect(stub!.reload).toHaveBeenCalled(), { timeout: 9000 });
+    }, 12000);
+
     it('does not reload while the same commit is still serving', async () => {
       stub = stubReload();
       const calls: unknown[] = [];

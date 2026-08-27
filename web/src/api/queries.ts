@@ -258,13 +258,22 @@ export function useVersion() {
  * whole reason the badge went on offering an update the machine already had.
  * Errors are expected here — the server is stopped for part of the swap — so
  * the interval keeps polling through them.
+ *
+ * ⚠ `refetchIntervalInBackground` IS LOAD-BEARING. An update takes about a
+ * minute, and nobody watches a progress line for a minute — the tab is hidden
+ * for most of it. React Query pauses a plain interval on a hidden tab, so
+ * without this flag the watch fetches once and then stops, and the page never
+ * learns that the swap happened. Measured on a real update: the watch made one
+ * request, while `/api/deals` and `/api/alerts`, which set this flag, made 19
+ * and 11.
  */
 export function useInstallWatch(enabled: boolean) {
   return useQuery({
     queryKey: [...qk.version, 'watch'] as const,
     queryFn: () => fetchJson<UpdateStatus>('/version'),
     enabled,
-    refetchInterval: 5_000,
+    refetchInterval: 2_500,
+    refetchIntervalInBackground: true,
     staleTime: 0,
     retry: false,
   });
