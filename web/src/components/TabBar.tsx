@@ -98,9 +98,12 @@ export function TabBar({
           })}
         </div>
       </div>
-      {/* Reserves the order ticket's width so the shelf ends where it begins. */}
+      {/* Sized to its controls. This used to reserve a fixed 340px for the
+          order-ticket rail, but the ticket is an overlay drawer now and <main>
+          has no rail column — so the reservation only squeezed the controls
+          into wrapping, which is what made the row four different heights. */}
       {right && (
-        <div className="flex w-[340px] shrink-0 items-center justify-end gap-2 pb-1.5">{right}</div>
+        <div className="flex shrink-0 items-center justify-end gap-2 pb-1.5">{right}</div>
       )}
     </div>
   );
