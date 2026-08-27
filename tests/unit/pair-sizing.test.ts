@@ -151,7 +151,12 @@ describe('shared pair sizing', () => {
     const rich = [rule(GATE, '0.001', '1000'), rule(OKX, '0.0001', '1000')];
     const low = await resolveActions(fakeClients(rich, 65_000), both, { mode: 'preview' });
     expect(codes(low)).toContain('below-min-notional');
-    expect(messages(low)).toContain('pair sizing: est. notional 455.00 is below a leg min notional (1000); increase --notional');
+    expect(messages(low)).toContain(
+      `this size is worth 455.00, below ${GATE}'s minimum order value of 1000 — increase it`,
+    );
+    // It used to read "below a leg min notional (1000); increase --notional" — a
+    // flag that does not exist, and no way to tell which leg was too small.
+    expect(messages(low).some((m) => /--\w/.test(m))).toBe(false);
   });
 
   it('leaves a dollar-sized pair unsized when there is no reference price', async () => {
