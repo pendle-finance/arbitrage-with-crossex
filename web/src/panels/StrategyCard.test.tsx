@@ -31,6 +31,11 @@ const rollOver = () => {
   fireEvent.click(screen.getByRole('radio', { name: 'Omit (rolling over)' }));
 };
 
+/** The locked-spread breakdown is a hover card now. Click opens it too — and
+ * has to, or reading it would toggle the chart box the trigger sits inside. */
+const openSpread = () => fireEvent.click(screen.getByText(/% spread$/));
+const spreadCard = () => screen.getByRole('tooltip').textContent ?? '';
+
 /** The exit assumption defaults to Omit now — opt in to the charged case. */
 const includeExit = () => {
   openCosts();
@@ -139,9 +144,10 @@ describe('StrategyCard — hero tiers', () => {
     // parenthetical in the title.
     expect(screen.queryByText('(7.07% spread)')).not.toBeInTheDocument();
     expect(screen.getByText(/7\.07% spread/)).toBeInTheDocument();
-    expect(
-      screen.getByTitle(/Each leg earns its fixed rate from its own open date[\s\S]*receives 9\.36% on \$158\.8k/),
-    ).toBeInTheDocument();
+    openSpread();
+    expect(spreadCard()).toMatch(/Each leg earns its fixed rate from its own open date/);
+    expect(spreadCard()).toContain('9.36%');
+    expect(spreadCard()).toContain('$158.8k');
   });
 
   it('folds the checked exit parts into the hero numbers when included', () => {
@@ -1350,33 +1356,36 @@ describe('StrategyCard — the spread tooltip', () => {
       ),
     });
 
-  const tipText = () =>
-    screen.getByTitle(/spread return by maturity/).getAttribute('title') ?? '';
-
-  it('gives each leg its own line, with its own window and its own share', () => {
+  it('gives each leg its own row, with its own window and its own share', () => {
     render(staggered());
     rollOver();
-    const tip = tipText();
-    expect(tip).toContain('pays 2.29% on $100.0k');
-    expect(tip).toContain('(60d) = -$376');
-    expect(tip).toContain('receives 9.36% on $100.0k');
-    expect(tip).toContain('(30d) = +$769');
+    openSpread();
+    const card = spreadCard();
+    expect(card).toContain('pays 2.29%');
+    expect(card).toContain('60d');
+    expect(card).toContain('-$376');
+    expect(card).toContain('gets 9.36%');
+    expect(card).toContain('30d');
+    expect(card).toContain('+$769');
+    expect(card).toContain('$100.0k');
   });
 
-  it('ends on the total, and the leg lines add up to it', () => {
+  it('ends on the total, and the leg rows add up to it', () => {
     render(staggered());
     rollOver();
-    expect(tipText()).toContain('spread return by maturity = $393');
+    openSpread();
+    expect(spreadCard()).toMatch(/Spread return\+\$393/);
     expect(Math.round(769.32 - 376.44)).toBe(393);
   });
 
   it('says so when a user-set clock overrides every leg open', () => {
     render(staggered({ clockBasis: 'custom' }));
     rollOver();
-    const tip = tipText();
-    expect(tip).toContain('Every leg accrues from the clock you set');
-    expect(tip).toContain('(60d) = -$376');
-    expect(tip).toContain('(60d) = +$1,539');
+    openSpread();
+    const card = spreadCard();
+    expect(card).toContain('Every leg accrues from the clock you set');
+    expect(card).toContain('-$376');
+    expect(card).toContain('+$1,539');
   });
 
   it('marks a leg whose open date is unknown, rather than dating it silently', () => {
@@ -1390,6 +1399,8 @@ describe('StrategyCard — the spread tooltip', () => {
       }),
     );
     rollOver();
-    expect(tipText()).toContain('open date unknown, from');
+    openSpread();
+    expect(screen.getAllByTitle(/open date unknown, so it accrues from the position start/).length).toBeGreaterThan(0);
+    expect(spreadCard()).toContain('Amber: open date unknown.');
   });
 });

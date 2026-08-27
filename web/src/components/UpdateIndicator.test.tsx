@@ -1,7 +1,7 @@
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { RunUpdateResponse, UpdateStatus } from '../api/types';
+import type { RunUpdateResponse, UpdateProgress, UpdateStatus } from '../api/types';
 import { INSTALL_CMD, INSTALL_CMD_WINDOWS } from '../lib/app';
 import { versionHandler } from '../test/fixtures';
 import { env, server } from '../test/server';
@@ -27,6 +27,18 @@ function updateHandler(calls: unknown[], refusal?: string) {
   });
 }
 
+
+/** The installer's output. Polled the moment an update starts, so every test
+ * that presses the button needs one — msw is set to error on a stray request. */
+function logHandler(text = '') {
+  return http.get('/api/version/update/log', () =>
+    HttpResponse.json(env<UpdateProgress>({ startedAt: Date.now(), running: true, text })),
+  );
+}
+
+/** The install command lives behind the second route now — the dialog opens on
+ * the one-click one. */
+const manualRoute = () => fireEvent.click(screen.getByRole('radio', { name: 'Run it in my terminal' }));
 
 /** An install-info block, so a test can say which commit is being served. */
 function installedAt(commit: string): UpdateStatus['install'] {
@@ -69,30 +81,34 @@ describe('UpdateIndicator', () => {
     expect(screen.queryByRole('button', { name: /Update v/ })).toBeNull();
   });
 
-  it('shows the pill for a newer version; the modal carries highlights and ONE OS command', async () => {
+  it('shows the pill for a newer version; the modal carries highlights and ONE button', async () => {
     await openModal({ current: '1.0.0', highlights: ['A brand new thing', 'Another improvement'] });
 
     expect(screen.getByText('Update available — v1.2.0')).toBeInTheDocument();
-    expect(screen.getByText(/You're on/)).toHaveTextContent('v1.0.0');
+    expect(screen.getByText(/You’re on/)).toHaveTextContent('v1.0.0');
     expect(screen.getByText('A brand new thing')).toBeInTheDocument();
     expect(screen.getByText('Another improvement')).toBeInTheDocument();
-    const shown = [INSTALL_CMD, INSTALL_CMD_WINDOWS].filter((c) => screen.queryByText(c) !== null);
-    expect(shown).toHaveLength(1);
+    // The one-click route is what opens, so the only thing to press is the
+    // update itself — no command block competing with it for the eye.
+    expect(screen.getByRole('button', { name: 'Update to v1.2.0' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Copy command/ })).toBeNull();
+    expect([INSTALL_CMD, INSTALL_CMD_WINDOWS].filter((c) => screen.queryByText(c))).toHaveLength(0);
     expect(screen.getByRole('link', { name: /Full changelog/ })).toHaveAttribute(
       'href',
       'https://github.com/pendle-finance/arbitrage-with-crossex/blob/main/CHANGELOG.md',
     );
   });
 
-  it('offers the other OS behind a toggle, this machine first', async () => {
-    // jsdom's UA is not Windows, so macOS is the default and leads the toggle.
+  it('puts the command behind the second route, this machine selected', async () => {
+    // jsdom's UA is not Windows, so macOS is the one already chosen.
     await openModal();
-    const [first, second] = screen.getAllByRole('tab');
-    expect(first).toHaveTextContent('macOS');
-    expect(first).toHaveAttribute('aria-selected', 'true');
+    manualRoute();
+    expect(screen.getByRole('radio', { name: 'macOS' })).toHaveAttribute('aria-checked', 'true');
     expect(screen.getByText(INSTALL_CMD)).toBeInTheDocument();
+    // One thing to press on this route too.
+    expect(screen.queryByRole('button', { name: /^Update to/ })).toBeNull();
 
-    fireEvent.click(second);
+    fireEvent.click(screen.getByRole('radio', { name: 'Windows' }));
     expect(screen.getByText(INSTALL_CMD_WINDOWS)).toBeInTheDocument();
     expect(screen.queryByText(INSTALL_CMD)).toBeNull();
   });
@@ -121,7 +137,7 @@ describe('UpdateIndicator', () => {
     );
   });
 
-  it('pins the command and the diff to the advertised commit', async () => {
+  it('pins the diff link to the advertised commit, and keeps shas out of the dialog', async () => {
     const sha = '3f7c1b9e2d4a6058cbe1740f9a2d5b83c6e0f1a4';
     await openModal({
       latestCommit: sha,
@@ -138,32 +154,60 @@ describe('UpdateIndicator', () => {
       'href',
       `https://github.com/pendle-finance/arbitrage-with-crossex/compare/abc1234...${sha}`,
     );
-    expect(screen.getByText(`BOROS_REF=${sha} ${INSTALL_CMD}`)).toBeInTheDocument();
-    expect(screen.getByText(/It installs commit/)).toHaveTextContent('3f7c1b9');
-  });
-
-  it('says nothing about a commit when the sha is unknown', async () => {
-    await openModal();
-    expect(screen.queryByText(/It installs commit/)).toBeNull();
+    // The command the user pastes is the one on the landing page and in the
+    // README. A 40-character ref in front of it is a sha to check against a
+    // link that already shows the same thing — and the server pins the
+    // one-click install to that commit either way.
+    manualRoute();
     expect(screen.getByText(INSTALL_CMD)).toBeInTheDocument();
+    expect(screen.queryByText(new RegExp(sha))).toBeNull();
   });
 
-  it('the button runs the update once and names the log file', async () => {
+  it('the button runs the update once, then shows what the installer is doing', async () => {
     const calls: unknown[] = [];
-    server.use(updateHandler(calls));
+    server.use(updateHandler(calls), logHandler('==> Installing dependencies (this takes a minute)…'));
     await openModal();
 
     fireEvent.click(screen.getByRole('button', { name: 'Update to v1.2.0' }));
-    const note = await screen.findByRole('status');
-    expect(note).toHaveTextContent('/Users/x/.boros-crossex/logs/update.log');
-    expect(note).toHaveTextContent(/comes back on its own/);
+    const panel = await screen.findByRole('status');
+    expect(panel).toHaveTextContent('Installation running in the background.');
     expect(calls).toHaveLength(1);
     expect(screen.queryByRole('button', { name: /^Update to/ })).toBeNull();
+
+    // The step the installer named, and the checklist caught up to it.
+    await waitFor(() => expect(panel).toHaveTextContent('Installing dependencies'));
+    expect(panel).toHaveTextContent('/Users/x/.boros-crossex/logs/update.log');
+    expect(within(panel).getAllByRole('listitem')[1]).toHaveTextContent('✓Download');
+    expect(within(panel).getAllByRole('listitem')[2]).toHaveTextContent('●Dependencies');
+    expect(within(panel).getAllByRole('listitem')[3]).toHaveTextContent('○Build');
+  });
+
+  it('says an update failed rather than spinning, and offers another go', async () => {
+    const calls: unknown[] = [];
+    server.use(
+      updateHandler(calls),
+      logHandler(
+        ['==> Building the web interface…', 'Error: build failed',
+         '      the previous version is running again at http://localhost:6688'].join('\n'),
+      ),
+    );
+    await openModal();
+    fireEvent.click(screen.getByRole('button', { name: 'Update to v1.2.0' }));
+
+    const panel = await screen.findByRole('status');
+    await waitFor(() => expect(panel).toHaveTextContent('The update failed'));
+    expect(panel).toHaveTextContent('Your keys and trade history are untouched');
+
+    fireEvent.click(within(panel).getByRole('button', { name: 'Try again' }));
+    expect(screen.getByRole('button', { name: 'Update to v1.2.0' })).toBeEnabled();
   });
 
   it('a refusal shows the server’s own reason and leaves the button usable', async () => {
     const calls: unknown[] = [];
-    server.use(updateHandler(calls, 'a deal is still working — wait for it to finish before updating'));
+    server.use(
+      updateHandler(calls, 'a deal is still working — wait for it to finish before updating'),
+      logHandler(),
+    );
     await openModal();
 
     fireEvent.click(screen.getByRole('button', { name: 'Update to v1.2.0' }));
@@ -198,6 +242,7 @@ describe('UpdateIndicator', () => {
       server.use(
         versionHandler({ latest: '1.2.0', updateAvailable: true, install: installedAt('a'.repeat(40)) }),
         updateHandler(calls),
+        logHandler(),
       );
       renderWithClient(<UpdateIndicator />);
       fireEvent.click(await screen.findByRole('button', { name: 'Update v1.2.0' }));
@@ -236,6 +281,7 @@ describe('UpdateIndicator', () => {
           );
         }),
         updateHandler(calls),
+        logHandler(),
       );
       renderWithClient(<UpdateIndicator />);
       fireEvent.click(await screen.findByRole('button', { name: 'Update v1.2.0' }));
@@ -250,6 +296,7 @@ describe('UpdateIndicator', () => {
       server.use(
         versionHandler({ latest: '1.2.0', updateAvailable: true, install: installedAt('a'.repeat(40)) }),
         updateHandler(calls),
+        logHandler(),
       );
       renderWithClient(<UpdateIndicator />);
       fireEvent.click(await screen.findByRole('button', { name: 'Update v1.2.0' }));

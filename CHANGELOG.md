@@ -14,6 +14,12 @@ to do instead of naming a flag.
   Boros order may still be settling, and says which. A "Read the code changes →" link opens the
   exact GitHub comparison between the version you are running and the one that will install — and
   it installs *that* commit, not whatever `main` holds by the time the download starts.
+- **The update pop-up shows what the installer is doing.** It used to say the install takes a few
+  minutes and then show the same screen for those minutes, which is indistinguishable from a stuck
+  update. It now names the step the installer is on, ticks off the five steps it goes through, and
+  runs a clock. An update that fails and rolls back says so, with the installer's own output to
+  read. The dialog asks one question first — let the app do it, or copy the command and run it
+  yourself — and puts a single button under the answer.
 - **⚠ Windows users must re-run the install command once.** Every Windows install so far reported
   itself as a source checkout, so the button refused it. The fix cannot install itself: run the
   install command from the pop-up one more time, and every update after this one is a button
@@ -30,8 +36,9 @@ to do instead of naming a flag.
   ten dollars or less is now caught while you type the size, instead of failing after you confirm.
 - **Profit is counted from the day the position opened.** A position's Fixed APY spread the whole
   term's income over the days remaining rather than the days held, which overstated the headline
-  and the ROI beside it. The hover now shows the arithmetic one line per leg, and a leg with no
-  known open date says so instead of quietly guessing.
+  and the ROI beside it. The locked spread beside it now opens a breakdown — one row per Boros
+  leg with its rate, its size, the window it accrues over and what it is worth by maturity — and a
+  leg with no known open date is marked rather than quietly guessed.
 - **An update that installs but will not start puts the previous version back.** Both installers
   keep the old copy, and restore it if the new one does not answer. A machine can no longer be left
   with no server at all.

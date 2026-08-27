@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import type { FetchLike } from '../../core/boros/client';
 import type { AppDeps } from '../app';
 import { TTL } from '../cache';
-import { startUpdate } from '../updater';
+import { startUpdate, updateProgress } from '../updater';
 import { compareVersions, fetchLatestVersion, type RemoteVersion } from '../version';
 import { borosExecutionsPending } from './borosPair';
 
@@ -38,6 +38,15 @@ export function versionRoutes(deps: AppDeps) {
         highlights: updateAvailable && remote ? remote.highlights : [],
       });
     });
+
+    /**
+     * GET /api/version/update/log — what the installer has printed so far.
+     *
+     * The dialog used to say "this takes a few minutes" and then show nothing
+     * for those minutes, which is indistinguishable from a stuck update. The
+     * installer names each step it starts, so the panel can name it too.
+     */
+    app.get('/version/update/log', async (_req, reply) => reply.ok(updateProgress()));
 
     app.post('/version/update', async (_req, reply) => {
       const refuse = (message: string, retryable: boolean) =>

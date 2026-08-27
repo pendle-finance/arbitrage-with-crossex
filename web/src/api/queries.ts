@@ -41,6 +41,7 @@ import type {
   UpdateStatus,
   TopUpGasResponse,
   RunUpdateResponse,
+  UpdateProgress,
 } from './types';
 
 export const qk = {
@@ -485,6 +486,26 @@ export function useTopUpGas() {
 export function useRunUpdate() {
   return useMutation({
     mutationFn: () => postJson<RunUpdateResponse>('/version/update', {}),
+  });
+}
+
+/**
+ * The installer's output while an update runs.
+ *
+ * Errors are the normal case for part of it — the installer stops this server
+ * before it swaps the new copy in — so this never retries and never treats a
+ * failure as final. Background refetch for the same reason `useInstallWatch`
+ * needs it: nobody keeps the tab in front of them for a whole install.
+ */
+export function useUpdateLog(enabled: boolean) {
+  return useQuery({
+    queryKey: [...qk.version, 'log'] as const,
+    queryFn: () => fetchJson<UpdateProgress>('/version/update/log'),
+    enabled,
+    refetchInterval: 1_500,
+    refetchIntervalInBackground: true,
+    staleTime: 0,
+    retry: false,
   });
 }
 
