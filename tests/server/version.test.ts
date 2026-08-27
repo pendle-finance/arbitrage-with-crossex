@@ -393,6 +393,8 @@ describe('POST /api/version/update', () => {
       expect('NODE_ENV' in opts.env).toBe(false);
       // The rest of the environment still goes through — PATH above all.
       expect(opts.env.BOROS_REF).toBe(MAIN_SHA);
+      // No duplicate tab: the page the update was clicked on reloads itself.
+      expect(opts.env.BOROS_NO_BROWSER).toBe('1');
     } finally {
       if (real === undefined) delete process.env.NODE_ENV;
       else process.env.NODE_ENV = real;
@@ -470,9 +472,11 @@ describe('POST /api/version/update', () => {
       expect(tr).not.toMatch(/iex|Invoke-Expression|https?:|-Command/i);
       // The pin travels in the staged runner, never on the command line.
       expect(args.join(' ')).not.toContain(MAIN_SHA);
-      expect(readFileSync(path.join(home, 'update.ps1'), 'utf8')).toContain(
-        `$env:BOROS_REF = '${MAIN_SHA}'`,
-      );
+      const runner = readFileSync(path.join(home, 'update.ps1'), 'utf8');
+      expect(runner).toContain(`$env:BOROS_REF = '${MAIN_SHA}'`);
+      // The page reloads itself onto the new copy; the installer must not
+      // open a second tab on top of it.
+      expect(runner).toContain("$env:BOROS_NO_BROWSER = '1'");
     } finally {
       Object.defineProperty(process, 'platform', realPlatform);
       delete process.env.BOROS_ROOT;
