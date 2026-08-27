@@ -25,7 +25,7 @@
 #
 # This script is bash-3.2 compatible (macOS system bash).
 
-set -euo pipefail
+set -Eeuo pipefail
 
 # ⚠ NODE_ENV must not survive into this script.
 #
@@ -51,17 +51,22 @@ BRANCH="${BOROS_BRANCH:-main}"
 # audited" in the README.
 REF="${BOROS_REF:-}"
 PORT="${BOROS_PORT:-6688}"
-ROOT="${BOROS_ROOT:-$HOME/.boros-crossex}"
+DEFAULT_ROOT="$HOME/.boros-crossex"
+ROOT="${BOROS_ROOT:-$DEFAULT_ROOT}"
 NODE_LINE="v24"
-LABEL="com.boros.crossex-terminal"
+DEFAULT_LABEL="com.boros.crossex-terminal"
+LABEL="$DEFAULT_LABEL"
+[ "$PORT" = "6688" ] || LABEL="$DEFAULT_LABEL.$PORT"
 APP_TITLE="Arbitrage with CrossEx"
 LOG_DIR="$HOME/Library/Logs/boros-crossex"
+[ "$ROOT" = "$DEFAULT_ROOT" ] || LOG_DIR="$ROOT/logs"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 
 TMP=""
+ROLLBACK_ON_FAIL=""
 
 say()  { printf '\033[1;36m==>\033[0m %s\n' "$*"; }
-fail() { printf '\033[1;31mError:\033[0m %s\n' "$*" >&2; exit 1; }
+fail() { printf '\033[1;31mError:\033[0m %s\n' "$*" >&2; rollback_new_app; exit 1; }
 
 cleanup() { [ -n "$TMP" ] && rm -rf "$TMP" || true; }
 
@@ -170,10 +175,21 @@ fetch_app() {
   say "Downloading the app…"
   rm -rf "$ROOT/app.new"
   mkdir -p "$ROOT/app.new"
-  local tgz requested source
+  local tgz requested source version commit extracted=""
   if [ -n "${BOROS_TARBALL:-}" ]; then
     tgz="$BOROS_TARBALL"; requested=""; source="local-archive"
+  elif [ -z "$REF" ] \
+    && version="$(curl -fsSL --retry 3 "https://raw.githubusercontent.com/$REPO_SLUG/$BRANCH/version.json" 2>/dev/null \
+        | sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')" \
+    && [ -n "$version" ] \
+    && curl -fsSL --retry 3 -o "$TMP/crossex.tar.gz" \
+        "https://github.com/$REPO_SLUG/releases/download/v$version/crossex.tar.gz" 2>/dev/null \
+    && tar -xzf "$TMP/crossex.tar.gz" -C "$ROOT/app.new" --strip-components=1 2>/dev/null
+  then
+    tgz="$TMP/crossex.tar.gz"; requested="v$version"; source="release-package"; extracted=1
   else
+    rm -rf "$ROOT/app.new"
+    mkdir -p "$ROOT/app.new"
     # Download to disk rather than streaming into tar: the commit stamp is read
     # back out of the archive, and a truncated transfer can no longer leave a
     # half-extracted app.new behind.
@@ -189,9 +205,16 @@ fetch_app() {
     fi
     source="github-archive"
   fi
-  tar -xzf "$tgz" -C "$ROOT/app.new" --strip-components=1
+  [ -n "$extracted" ] || tar -xzf "$tgz" -C "$ROOT/app.new" --strip-components=1
   [ -f "$ROOT/app.new/package.json" ] || fail "app download looks incomplete (no package.json)."
-  write_install_info "$(archive_commit "$tgz")" "$requested" "$source"
+  commit="$(sed -n 's/.*"commit"[[:space:]]*:[[:space:]]*"\([0-9a-f]\{40\}\)".*/\1/p' \
+    "$ROOT/app.new/version.json" 2>/dev/null || true)"
+  if [ -n "$commit" ]; then
+    source="release-package"
+  else
+    commit="$(archive_commit "$tgz")"
+  fi
+  write_install_info "$commit" "$requested" "$source"
 }
 
 # Run one build step quietly, but never silently.
@@ -212,6 +235,8 @@ run_step() {
 
 build_app() {
   local yarn="$ROOT/node/bin/yarn"
+  [ -f "$ROOT/app.new/dist/server/index.mjs" ] && return 0
+  install_yarn
   say "Installing dependencies (this takes a minute on first install)…"
   run_step "installing the server dependencies failed." \
     "$yarn" --cwd "$ROOT/app.new" install --frozen-lockfile --silent --non-interactive
@@ -220,6 +245,9 @@ build_app() {
   say "Building the web interface…"
   run_step "building the web interface failed." \
     "$yarn" --cwd "$ROOT/app.new/web" --silent build
+  say "Bundling the server…"
+  run_step "bundling the server failed." \
+    "$yarn" --cwd "$ROOT/app.new" --silent run bundle
 }
 
 swap_app() {
@@ -257,6 +285,13 @@ restore_app() {
 # the rollback target and must survive.
 remove_old_app() { rm -rf "$ROOT/app.old"; }
 
+rollback_new_app() {
+  [ -n "$ROLLBACK_ON_FAIL" ] || return 0
+  ROLLBACK_ON_FAIL=""
+  trap - ERR
+  restore_app || true
+}
+
 # ---------------------------------------------------------------------------
 # Step 4: LaunchAgent — keeps the server running, across reboots and crashes
 # ---------------------------------------------------------------------------
@@ -281,10 +316,10 @@ server_pids() {
   uid="$(id -u)"
   rootdir="$(cd "$ROOT" 2>/dev/null && pwd -P || true)"
   if [ -z "$rootdir" ] || ! command -v lsof >/dev/null 2>&1; then
-    pgrep -U "$uid" -f "$ROOT/app/src/server/index.ts" 2>/dev/null || true
+    pgrep -U "$uid" -f "$ROOT/app/" 2>/dev/null || true
     return 0
   fi
-  for pid in $(pgrep -U "$uid" -f "$ROOT/app/src/server/index.ts" 2>/dev/null || true); do
+  for pid in $(pgrep -U "$uid" -f "$ROOT/app/" 2>/dev/null || true); do
     exe="$(lsof -p "$pid" -a -d txt -Fn 2>/dev/null | sed -n 's/^n//p' | head -1)"
     case "$exe" in "$rootdir"/node*/*) out="$out $pid" ;; esac
   done
@@ -325,6 +360,13 @@ port_in_use_by_other_app() {
 }
 
 write_plist() {
+  local entry
+  if [ -f "$ROOT/app/dist/server/index.mjs" ]; then
+    entry="    <string>$ROOT/app/dist/server/index.mjs</string>"
+  else
+    entry="    <string>$ROOT/app/node_modules/tsx/dist/cli.mjs</string>
+    <string>$ROOT/app/src/server/index.ts</string>"
+  fi
   cat > "$PLIST" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -335,8 +377,7 @@ write_plist() {
   <key>ProgramArguments</key>
   <array>
     <string>$ROOT/node/bin/node</string>
-    <string>$ROOT/app/node_modules/tsx/dist/cli.mjs</string>
-    <string>$ROOT/app/src/server/index.ts</string>
+$entry
   </array>
   <key>WorkingDirectory</key>
   <string>$ROOT/app</string>
@@ -371,13 +412,20 @@ PLIST
   plutil -lint -s "$PLIST" || fail "generated LaunchAgent plist failed validation."
 }
 
+stop_running_service() {
+  local uid; uid="$(id -u)"
+  if [ "$LABEL" != "$DEFAULT_LABEL" ] || grep -qF "<string>$ROOT/app</string>" "$PLIST" 2>/dev/null; then
+    launchctl bootout "gui/$uid/$LABEL" 2>/dev/null || true
+  fi
+  stop_stale_server  # reap any old/orphaned server so re-running always updates
+}
+
 install_service() {
   say "Registering the background service…"
   # Keep the always-on logs from growing without bound: reset on each (re)install.
   : > "$LOG_DIR/server.out.log"; : > "$LOG_DIR/server.err.log"
   local uid; uid="$(id -u)"
-  launchctl bootout "gui/$uid/$LABEL" 2>/dev/null || true
-  stop_stale_server  # reap any old/orphaned server so re-running always updates
+  stop_running_service
   if port_in_use_by_other_app; then
     fail "port $PORT is already in use by another program.
   See what it is with:  lsof -nP -iTCP:$PORT -sTCP:LISTEN
@@ -408,6 +456,7 @@ wait_for_server() {
 }
 
 make_launcher() {
+  [ "$ROOT" = "$DEFAULT_ROOT" ] || return 0
   # A tiny local .app that opens the terminal in your browser. Created locally,
   # so macOS Gatekeeper has no reason to block it.
   # The extra paths are the launcher names this app shipped under before. The
@@ -427,10 +476,12 @@ main() {
   echo
   preflight
   install_node
-  install_yarn
   fetch_app
   build_app
+  stop_running_service
   swap_app
+  ROLLBACK_ON_FAIL=1
+  trap 'rollback_new_app' ERR
   install_service
   if ! wait_for_server; then
     if restore_app; then
@@ -443,6 +494,8 @@ main() {
   Re-run this installer to try again."
   fi
   remove_old_app   # the new version answers on the port; the way back can go
+  trap - ERR
+  ROLLBACK_ON_FAIL=""
   make_launcher
   echo
   say "Done! Opening http://localhost:$PORT …"

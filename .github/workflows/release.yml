@@ -1,0 +1,73 @@
+# Publishes the prebuilt package both installers download, on a push to `main`
+# that touches version.json. It stops without failing when the tag for that
+# version already exists, so a push that only reworded `highlights` publishes
+# nothing.
+#
+# The assets are named for an exact version, never `latest`: `main` can carry a
+# new version.json minutes before this job finishes, so `latest` would serve the
+# previous version and the installer would install what the user already has.
+name: release
+
+on:
+  push:
+    branches: [main]
+    paths: [version.json]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - id: check
+        run: |
+          version=$(jq -r .version version.json)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if git ls-remote --exit-code --tags origin "refs/tags/v$version" >/dev/null 2>&1; then
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/setup-node@v4
+        if: steps.check.outputs.publish == 'true'
+        with:
+          # The line the installers ship, not the local .nvmrc: the bundle must
+          # run on the runtime users actually get.
+          node-version: 24
+          cache: yarn
+          cache-dependency-path: |
+            yarn.lock
+            web/yarn.lock
+      - if: steps.check.outputs.publish == 'true'
+        run: yarn install --frozen-lockfile
+      - if: steps.check.outputs.publish == 'true'
+        run: yarn --cwd web install --frozen-lockfile
+      - if: steps.check.outputs.publish == 'true'
+        run: yarn bundle
+      - if: steps.check.outputs.publish == 'true'
+        run: yarn --cwd web build
+      - name: Pack the two archives
+        if: steps.check.outputs.publish == 'true'
+        env:
+          VERSION: ${{ steps.check.outputs.version }}
+        run: |
+          dir="crossex-$VERSION"
+          mkdir -p "$dir/dist/server" "$dir/web"
+          cp dist/server/index.mjs "$dir/dist/server/index.mjs"
+          cp -R web/dist "$dir/web/dist"
+          cp package.json "$dir/package.json"
+          # `commit` exists only in the shipped copy, never in the repo. The
+          # Update button reloads the page when the serving commit differs from
+          # the installed one; with no commit both are null and it never reloads.
+          jq --arg c "$GITHUB_SHA" '. + {commit: $c}' version.json > "$dir/version.json"
+          # Exactly one top directory in each archive. Both installers strip it.
+          tar -czf crossex.tar.gz "$dir"
+          zip -qr crossex.zip "$dir"
+      - name: Publish the release
+        if: steps.check.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "v${{ steps.check.outputs.version }}" crossex.tar.gz crossex.zip --generate-notes

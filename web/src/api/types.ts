@@ -101,6 +101,7 @@ export interface UpdateStatus {
   latest: string | null;
   latestCommit: string | null;
   updateAvailable: boolean;
+  packageReady: boolean;
   /** The latest version's feature list — only when updateAvailable. */
   highlights: string[];
 }
@@ -1127,7 +1128,6 @@ export interface TopUpGasResponse {
 export interface RunUpdateResponse {
   started: true;
   logPath: string;
-  ref: string | null;
 }
 
 /** What the running installer has printed so far — drives the progress panel. */

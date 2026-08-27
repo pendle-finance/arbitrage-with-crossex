@@ -182,7 +182,9 @@ trade journal out from under a live process that is still placing orders.
   `api.hyperliquid.xyz`, `api.gateio.ws`) — public data, nothing about you; and
   `raw.githubusercontent.com` — a 6-hourly read of this repo's one-line `version.json`
   to show "update available". Nothing is ever sent, and `UPDATE_CHECK=0` disables it.
-  The installer downloads only from `nodejs.org` and `github.com`.
+  The installer downloads only from `nodejs.org`, `github.com`,
+  `objects.githubusercontent.com` (where GitHub serves release assets) and
+  `raw.githubusercontent.com`.
 - **Other accounts on your computer can't drive it.** Binding to loopback stops the
   network; it does not stop another local process from simply calling the API. So every
   request that can read your account or trade must carry a random token, created on
@@ -244,9 +246,11 @@ stay on an audited commit.
 against nodejs.org's published manifest. The app archive comes from GitHub over TLS but is
 **not signed and carries no separate checksum** — GitHub's generated archives are not
 byte-stable, so publishing a hash of one would break spuriously and train you to ignore
-the failure. Pinning a commit and auditing that commit is the integrity story. JavaScript
-dependencies are locked by the committed `yarn.lock` files and installed with
-`--frozen-lockfile`.
+the failure. Pinning a commit and auditing that commit is the integrity story. The default
+install downloads a prebuilt package that CI built from the tagged commit, so no lockfile
+is read on your machine — CI installs from the committed `yarn.lock` files with
+`--frozen-lockfile`, and the build runs in public. `BOROS_REF` builds the tree yourself,
+on your machine, from those same lockfiles.
 
 ## Verify this project yourself with AI
 
@@ -274,16 +278,18 @@ Please read the installer, the uninstaller, and the application source code, the
    verified? The README claims: Node.js is SHA-256-verified against nodejs.org's
    manifest; the app archive comes from github.com over TLS with no signature or
    checksum of its own (pinning a commit with BOROS_REF and auditing that commit is
-   the integrity story); npm dependencies are pinned by committed lockfiles installed
-   with --frozen-lockfile. Verify each claim and flag anything that contradicts it.
+   the integrity story); the default install downloads a prebuilt package that CI
+   built from the tagged commit, so no lockfile is read on my machine, and BOROS_REF
+   is the way to build the audited tree myself. Verify each claim and flag anything
+   that contradicts it.
 3. What background service does it install, and what are the exact commands to remove
    everything it added?
 4. Where are my exchange API keys stored, and do they ever leave my machine other than
    in signed requests to Gate.io's official API (api.gateio.ws)?
 5. Is there any telemetry, analytics, or other "phoning home" in the app or installer?
    The README claims the only outbound hosts are Gate.io, public Boros/venue market-data
-   APIs, and a version check against raw.githubusercontent.com — verify that list is
-   complete.
+   APIs, a version check against raw.githubusercontent.com, and the prebuilt package from
+   github.com and objects.githubusercontent.com — verify that list is complete.
 6. Is the app's web server reachable from other devices on my network, or only from my
    own machine?
 7. Could this app withdraw funds from my exchange account? Which API permissions does it

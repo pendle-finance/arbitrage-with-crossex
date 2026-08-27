@@ -4,7 +4,7 @@
  * (no remote read until asked), cached, and provably network-free whenever
  * the local version is unknown or the check is disabled.
  */
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
@@ -13,7 +13,7 @@ import type { FetchLike } from '../../src/core/boros/client';
 import { makeClients } from '../../src/core/clients';
 import { Store } from '../../src/engine/db';
 import { gateVenue } from '../../src/engine/venueGate';
-import { endUpdateWindow, isUpdating, startUpdate } from '../../src/server/updater';
+import { endUpdateWindow, installRoot, isUpdating, startUpdate } from '../../src/server/updater';
 import { COMMIT_URL, compareVersions, VERSION_URL } from '../../src/server/version';
 import { HOST, makeTestApp, TEST_KEY, TEST_SECRET } from './helpers/gate-nock';
 
@@ -44,6 +44,18 @@ function fakeInstaller(dir: string): string {
   return p;
 }
 
+/** The first two bytes each platform's package must start with. A staged file
+ * that fails them is a captive portal's HTML, not a release. */
+const GZIP = Buffer.from([0x1f, 0x8b, 0x08, 0x00]);
+const ZIP = Buffer.from([0x50, 0x4b, 0x03, 0x04]);
+
+function stagePackage(root: string, name: string, body: Buffer | string): string {
+  const file = path.join(root, 'pkg', name);
+  mkdirSync(path.dirname(file), { recursive: true });
+  writeFileSync(file, body);
+  return file;
+}
+
 /** Minimal FetchLike stub in the boros-stub style. */
 function stub(
   body: unknown,
@@ -64,7 +76,16 @@ function stub(
 
 describe('GET /api/version', () => {
   let app: FastifyInstance;
+  let root: string;
+
+  beforeEach(() => {
+    // The route stages the package under the install root, so a root that is
+    // not pointed somewhere disposable writes next to the checkout.
+    root = mkdtempSync(path.join(tmpdir(), 'ver-'));
+    process.env.BOROS_ROOT = root;
+  });
   afterEach(async () => {
+    delete process.env.BOROS_ROOT;
     await app?.close();
   });
 
@@ -84,6 +105,7 @@ describe('GET /api/version', () => {
       latest: '1.1.0',
       latestCommit: MAIN_SHA,
       updateAvailable: true,
+      packageReady: false,
       highlights: ['a', 'b'],
     });
     expect(calls).toEqual([VERSION_URL, COMMIT_URL]);
@@ -120,6 +142,7 @@ describe('GET /api/version', () => {
       latest: null,
       latestCommit: null,
       updateAvailable: false,
+      packageReady: false,
       highlights: [],
     });
   });
@@ -173,6 +196,7 @@ describe('GET /api/version', () => {
       latest: null,
       latestCommit: null,
       updateAvailable: false,
+      packageReady: false,
       highlights: [],
     });
   });
@@ -204,6 +228,24 @@ describe('GET /api/version', () => {
       versionFetch: stub({ version: '1.1.0', highlights: [] }, { sha: 'main; rm -rf /' }),
     });
     expect((await get()).json().data.latestCommit).toBeNull();
+  });
+
+  it('reports a staged package, and does not count a captive-portal page as one', async () => {
+    const staged = stagePackage(root, 'crossex-1.1.0.tar.gz', GZIP);
+    const make = () =>
+      makeTestApp({
+        updateCheck: { current: '1.0.0' },
+        versionFetch: stub({ version: '1.1.0', highlights: [] }),
+      });
+    app = make();
+    expect((await get()).json().data.packageReady).toBe(true);
+    await app.close();
+
+    // A captive portal answers 200 with an HTML page. Counting that as ready
+    // would move the failure from before the update into the middle of it.
+    writeFileSync(staged, '<html>sign in to continue</html>');
+    app = make();
+    expect((await get()).json().data.packageReady).toBe(false);
   });
 
   it('echoes the installer provenance so the UI can show which commit runs', async () => {
@@ -258,10 +300,15 @@ describe('POST /api/version/update', () => {
     home = mkdtempSync(path.join(tmpdir(), 'upd-'));
     realHome = process.env.HOME;
     process.env.HOME = home;
+    // The default macOS root, under this HOME. The log, the staged installer
+    // and the staged package all live under the root, and none of them may
+    // land in the real install.
+    process.env.BOROS_ROOT = path.join(home, '.boros-crossex');
   });
   afterEach(async () => {
     if (realHome === undefined) delete process.env.HOME;
     else process.env.HOME = realHome;
+    delete process.env.BOROS_ROOT;
     await app?.close();
   });
 
@@ -277,7 +324,6 @@ describe('POST /api/version/update', () => {
     expect(res.json().data).toEqual({
       started: true,
       logPath: path.join(home, 'Library', 'Logs', 'boros-crossex', 'update.log'),
-      ref: null,
     });
     expect(mocks.spawn).toHaveBeenCalledTimes(1);
     const [cmd, args, opts] = mocks.spawn.mock.calls[0] as unknown as [
@@ -350,7 +396,9 @@ describe('POST /api/version/update', () => {
     expect(mocks.spawn).not.toHaveBeenCalled();
   });
 
-  it('installs the exact commit the modal advertised', async () => {
+  it('installs the published release, and pins no commit even when it knows one', async () => {
+    // The release asset for the advertised version is the stronger pin: a
+    // published asset cannot change under the installer, a branch can.
     app = makeTestApp({
       install: INSTALLED,
       updateCheck: { current: '1.0.0' },
@@ -359,13 +407,13 @@ describe('POST /api/version/update', () => {
 
     const res = await post();
 
-    expect(res.json().data.ref).toBe(MAIN_SHA);
+    expect('ref' in res.json().data).toBe(false);
     const [, args, opts] = mocks.spawn.mock.calls[0] as unknown as [
       string,
       string[],
       { env: Record<string, string> },
     ];
-    expect(opts.env.BOROS_REF).toBe(MAIN_SHA);
+    expect(opts.env.BOROS_REF).toBeUndefined();
     expect(args[1]).toContain('/main/install.sh');
   });
 
@@ -392,29 +440,75 @@ describe('POST /api/version/update', () => {
       ];
       expect('NODE_ENV' in opts.env).toBe(false);
       // The rest of the environment still goes through — PATH above all.
-      expect(opts.env.BOROS_REF).toBe(MAIN_SHA);
+      expect(opts.env.PATH).toBe(process.env.PATH);
     } finally {
       if (real === undefined) delete process.env.NODE_ENV;
       else process.env.NODE_ENV = real;
     }
   });
 
-  it('falls back to the branch when the commit is unknown', async () => {
-    app = makeTestApp({
-      install: INSTALLED,
-      updateCheck: { current: '1.0.0' },
-      versionFetch: stub({ version: '1.1.0', highlights: [] }, { sha: null }),
-    });
+  it('updates the install the server runs from, not a second copy in the default root', async () => {
+    // Without BOROS_ROOT the installer resolves the DEFAULT root, so a
+    // custom-root user was given a second install with an empty config and an
+    // empty ledger while their keys stayed in the old folder.
+    const custom = path.join(home, 'custom-root');
+    process.env.BOROS_ROOT = custom;
+    app = makeTestApp({ install: INSTALLED });
 
     const res = await post();
 
-    expect(res.json().data.ref).toBeNull();
+    expect(res.json().data.logPath).toBe(path.join(custom, 'logs', 'update.log'));
     const [, , opts] = mocks.spawn.mock.calls[0] as unknown as [
       string,
       string[],
       { env: Record<string, string> },
     ];
-    expect(opts.env.BOROS_REF).toBeUndefined();
+    expect(opts.env.BOROS_ROOT).toBe(custom);
+  });
+
+  it('falls back to the folder the app runs from, not to a guessed home folder', async () => {
+    delete process.env.BOROS_ROOT;
+    // install.sh puts the app in <root>/app, so the root is the app folder's
+    // parent. The old fallback was ~/CrossEx-Boros, which is nobody's install.
+    expect(installRoot()).toBe(path.dirname(path.resolve(__dirname, '../..')));
+  });
+
+  it('hands the staged package to the installer, so the update needs no download', async () => {
+    const staged = stagePackage(process.env.BOROS_ROOT!, 'crossex-1.1.0.tar.gz', GZIP);
+    app = makeTestApp({ install: INSTALLED });
+
+    await post();
+
+    const [, , opts] = mocks.spawn.mock.calls[0] as unknown as [
+      string,
+      string[],
+      { env: Record<string, string> },
+    ];
+    expect(opts.env.BOROS_TARBALL).toBe(staged);
+  });
+
+  it("carries the server's own port, and carries none when the server has none", async () => {
+    // install.sh reads BOROS_PORT, but the LaunchAgent exports PORT. A server
+    // on 6699 would otherwise be updated as an install on 6688 and fail the
+    // port check the default install holds.
+    const realPort = process.env.PORT;
+    app = makeTestApp({ install: INSTALLED });
+    try {
+      process.env.PORT = '6699';
+      await post();
+      delete process.env.PORT;
+      await post();
+    } finally {
+      if (realPort === undefined) delete process.env.PORT;
+      else process.env.PORT = realPort;
+    }
+
+    const envs = (
+      mocks.spawn.mock.calls as unknown as [string, string[], { env: Record<string, string> }][]
+    ).map((c) => c[2].env);
+    expect(envs[0].BOROS_PORT).toBe('6699');
+    // No port to pass means the installer keeps its own default.
+    expect('BOROS_PORT' in envs[1]).toBe(false);
   });
 
   it('on Windows the installer runs as its own scheduled task, outside the service job', async () => {
@@ -429,9 +523,25 @@ describe('POST /api/version/update', () => {
       expect(res.json().data.logPath).toBe(path.join(home, 'logs', 'update.log'));
       expect(mocks.spawn).not.toHaveBeenCalled();
       const calls = mocks.execFileSync.mock.calls as unknown as [string, string[]][];
-      expect(calls.map((c) => c[0])).toEqual(['schtasks', 'schtasks']);
-      expect(calls[0][1]).toContain('/create');
-      expect(calls[1][1]).toEqual(['/run', '/tn', 'BorosUpdate']);
+      expect(calls.map((c) => c[0])).toEqual(['powershell']);
+      const cmd = calls[0][1][calls[0][1].indexOf('-Command') + 1];
+      // schtasks cannot register a task that runs on battery power, so a
+      // laptop on battery never started the update at all.
+      expect(cmd).toContain('-AllowStartIfOnBatteries');
+      expect(cmd).toContain('-DontStopIfGoingOnBatteries');
+      expect(cmd).toContain('Register-ScheduledTask -TaskName BorosUpdate');
+      expect(cmd).toContain('-Force');
+      // Registering without starting makes every update wait a minute.
+      expect(cmd).toContain('Start-ScheduledTask -TaskName BorosUpdate');
+      // The other two switches on install.ps1's settings call would re-run the
+      // installer every minute, and run a missed update days later.
+      expect(cmd).not.toMatch(/RestartCount|StartWhenAvailable/);
+
+      // The task deletes itself, whether the install works, fails or rolls back.
+      const runner = readFileSync(path.join(home, 'update.ps1'), 'utf8');
+      expect(runner.trimEnd().endsWith('Unregister-ScheduledTask -TaskName BorosUpdate -Confirm:$false')).toBe(
+        true,
+      );
 
       // The installer is staged to disk and the task runs THAT.
       expect(readFileSync(path.join(home, 'update-installer.ps1'), 'utf8')).toContain(
@@ -453,30 +563,49 @@ describe('POST /api/version/update', () => {
     Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
     process.env.BOROS_ROOT = home;
     process.env.BOROS_INSTALLER = fakeInstaller(home);
-    app = makeTestApp({
-      install: INSTALLED,
-      updateCheck: { current: '1.0.0' },
-      versionFetch: stub({ version: '1.1.0', highlights: [] }),
-    });
+    app = makeTestApp({ install: INSTALLED });
     try {
       await post();
 
       const args = (mocks.execFileSync.mock.calls as unknown as [string, string[]][])[0][1];
-      const tr = args[args.indexOf('/tr') + 1];
+      const cmd = args[args.indexOf('-Command') + 1];
+      const taskArg = cmd.match(/-Argument '([^']*)'/)![1];
 
-      expect(tr).toBe(
-        `powershell -NoProfile -ExecutionPolicy Bypass -File "${path.join(home, 'update.ps1')}"`,
+      expect(taskArg).toBe(
+        `-NoProfile -ExecutionPolicy Bypass -File "${path.join(home, 'update.ps1')}"`,
       );
-      expect(tr).not.toMatch(/iex|Invoke-Expression|https?:|-Command/i);
-      // The pin travels in the staged runner, never on the command line.
-      expect(args.join(' ')).not.toContain(MAIN_SHA);
-      expect(readFileSync(path.join(home, 'update.ps1'), 'utf8')).toContain(
-        `$env:BOROS_REF = '${MAIN_SHA}'`,
-      );
+      expect(taskArg).not.toMatch(/iex|Invoke-Expression|https?:|-Command/i);
+      // Everything the update needs travels in the staged runner on disk.
+      expect(cmd).not.toMatch(/iex|Invoke-Expression|https?:/i);
     } finally {
       Object.defineProperty(process, 'platform', realPlatform);
       delete process.env.BOROS_ROOT;
       delete process.env.BOROS_INSTALLER;
+    }
+  });
+
+  it('the staged runner carries the root, the port and the staged package', async () => {
+    const realPlatform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+    const realPort = process.env.PORT;
+    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+    process.env.BOROS_ROOT = home;
+    process.env.BOROS_INSTALLER = fakeInstaller(home);
+    process.env.PORT = '6699';
+    const staged = stagePackage(home, 'crossex-1.1.0.zip', ZIP);
+    app = makeTestApp({ install: INSTALLED });
+    try {
+      await post();
+
+      const runner = readFileSync(path.join(home, 'update.ps1'), 'utf8');
+      expect(runner).toContain(`$env:BOROS_ROOT = '${home}'`);
+      expect(runner).toContain("$env:BOROS_PORT = '6699'");
+      expect(runner).toContain(`$env:BOROS_ZIP = '${staged}'`);
+    } finally {
+      Object.defineProperty(process, 'platform', realPlatform);
+      delete process.env.BOROS_ROOT;
+      delete process.env.BOROS_INSTALLER;
+      if (realPort === undefined) delete process.env.PORT;
+      else process.env.PORT = realPort;
     }
   });
 
@@ -615,10 +744,10 @@ describe('the window that refuses Boros orders while an update runs', () => {
     process.env.BOROS_ROOT = home;
     process.env.BOROS_INSTALLER = fakeInstaller(home);
     mocks.execFileSync.mockImplementationOnce(() => {
-      throw new Error('schtasks is not on this machine');
+      throw new Error('powershell is not on this machine');
     });
     try {
-      await expect(startUpdate()).rejects.toThrow(/schtasks is not on this machine/);
+      await expect(startUpdate()).rejects.toThrow(/powershell is not on this machine/);
       expect(isUpdating()).toBe(false);
     } finally {
       Object.defineProperty(process, 'platform', realPlatform);

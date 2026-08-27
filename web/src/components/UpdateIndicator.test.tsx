@@ -21,7 +21,6 @@ function updateHandler(calls: unknown[], refusal?: string) {
       env<RunUpdateResponse>({
         started: true,
         logPath: '/Users/x/.boros-crossex/logs/update.log',
-        ref: null,
       }),
     );
   });
@@ -35,10 +34,6 @@ function logHandler(text = '') {
     HttpResponse.json(env<UpdateProgress>({ startedAt: Date.now(), running: true, text })),
   );
 }
-
-/** The install command lives behind the second route now — the dialog opens on
- * the one-click one. */
-const manualRoute = () => fireEvent.click(screen.getByRole('radio', { name: 'Run it in my terminal' }));
 
 /** An install-info block, so a test can say which commit is being served. */
 function installedAt(commit: string): UpdateStatus['install'] {
@@ -99,18 +94,19 @@ describe('UpdateIndicator', () => {
     );
   });
 
-  it('puts the command behind the second route, this machine selected', async () => {
-    // jsdom's UA is not Windows, so macOS is the one already chosen.
+  it('hands back this machine’s command once the update has stopped', async () => {
+    server.use(
+      updateHandler([]),
+      logHandler('      the previous version is running again at http://localhost:6688'),
+    );
     await openModal();
-    manualRoute();
-    expect(screen.getByRole('radio', { name: 'macOS' })).toHaveAttribute('aria-checked', 'true');
-    expect(screen.getByText(INSTALL_CMD)).toBeInTheDocument();
-    // One thing to press on this route too.
-    expect(screen.queryByRole('button', { name: /^Update to/ })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Update to v1.2.0' }));
 
-    fireEvent.click(screen.getByRole('radio', { name: 'Windows' }));
-    expect(screen.getByText(INSTALL_CMD_WINDOWS)).toBeInTheDocument();
-    expect(screen.queryByText(INSTALL_CMD)).toBeNull();
+    // There is no platform toggle any more, so the failure has one command to
+    // offer and it has to pick. jsdom's UA is not Windows, so macOS is it.
+    const panel = await screen.findByRole('status');
+    await waitFor(() => expect(within(panel).getByText(INSTALL_CMD)).toBeInTheDocument());
+    expect(screen.queryByText(INSTALL_CMD_WINDOWS)).toBeNull();
   });
 
   it('links the diff from the installed commit', async () => {
@@ -154,32 +150,29 @@ describe('UpdateIndicator', () => {
       'href',
       `https://github.com/pendle-finance/arbitrage-with-crossex/compare/abc1234...${sha}`,
     );
-    // The command the user pastes is the one on the landing page and in the
-    // README. A 40-character ref in front of it is a sha to check against a
-    // link that already shows the same thing — and the server pins the
-    // one-click install to that commit either way.
-    manualRoute();
-    expect(screen.getByText(INSTALL_CMD)).toBeInTheDocument();
+    // The sha belongs in that link and nowhere else. Printed in the dialog it
+    // is a 40-character string to check by eye against a link that already
+    // shows the same thing — and the one-click install pins itself to the
+    // release tag, not to a ref the dialog hands it.
     expect(screen.queryByText(new RegExp(sha))).toBeNull();
   });
 
-  it('the button runs the update once, then shows what the installer is doing', async () => {
+  it('the button runs the update once, then shows one line while it installs', async () => {
     const calls: unknown[] = [];
     server.use(updateHandler(calls), logHandler('==> Installing dependencies (this takes a minute)…'));
     await openModal();
 
     fireEvent.click(screen.getByRole('button', { name: 'Update to v1.2.0' }));
     const panel = await screen.findByRole('status');
-    expect(panel).toHaveTextContent('Installation running in the background.');
+    expect(panel).toHaveTextContent('Installing v1.2.0. This page reloads itself when it is done.');
     expect(calls).toHaveLength(1);
     expect(screen.queryByRole('button', { name: /^Update to/ })).toBeNull();
 
-    // The step the installer named, and the checklist caught up to it.
-    await waitFor(() => expect(panel).toHaveTextContent('Installing dependencies'));
-    expect(panel).toHaveTextContent('/Users/x/.boros-crossex/logs/update.log');
-    expect(within(panel).getAllByRole('listitem')[1]).toHaveTextContent('✓Download');
-    expect(within(panel).getAllByRole('listitem')[2]).toHaveTextContent('●Dependencies');
-    expect(within(panel).getAllByRole('listitem')[3]).toHaveTextContent('○Build');
+    // The installer's own steps stay out of a running update: a fast install
+    // prints none of them, so a checklist built from them reads as skipped work.
+    await new Promise((r) => setTimeout(r, 30));
+    expect(panel).not.toHaveTextContent('Installing dependencies');
+    expect(within(panel).queryByText('Show log')).toBeNull();
   });
 
   it('says an update failed rather than spinning, and offers another go', async () => {
@@ -197,10 +190,30 @@ describe('UpdateIndicator', () => {
     const panel = await screen.findByRole('status');
     await waitFor(() => expect(panel).toHaveTextContent('The update failed'));
     expect(panel).toHaveTextContent('Your keys and trade history are untouched');
+    expect(within(panel).getByText('Show log')).toBeInTheDocument();
+    expect(panel).toHaveTextContent('/Users/x/.boros-crossex/logs/update.log');
 
     fireEvent.click(within(panel).getByRole('button', { name: 'Try again' }));
-    expect(screen.getByRole('button', { name: 'Update to v1.2.0' })).toBeEnabled();
+    expect(await screen.findByRole('button', { name: 'Update to v1.2.0' })).toBeEnabled();
   });
+
+  it('reads “Restart to update” when the package is already staged', async () => {
+    await openModal({ packageReady: true });
+    expect(screen.getByRole('button', { name: 'Restart to update' })).toBeInTheDocument();
+  });
+
+  it('flips to “Restart to update” when the package lands, past the six-hour cache', async () => {
+    // /version is cached for six hours, so the first answer — package not
+    // ready — is the only one the page itself ever sees. The install watch is
+    // what learns the download finished, and it polls every 2.5 seconds.
+    await openModal({ packageReady: false });
+    expect(screen.getByRole('button', { name: 'Update to v1.2.0' })).toBeInTheDocument();
+
+    server.use(versionHandler({ latest: '1.2.0', updateAvailable: true, packageReady: true }));
+    expect(
+      await screen.findByRole('button', { name: 'Restart to update' }, { timeout: 6000 }),
+    ).toBeInTheDocument();
+  }, 9000);
 
   it('a refusal shows the server’s own reason and leaves the button usable', async () => {
     const calls: unknown[] = [];
@@ -238,7 +251,9 @@ describe('UpdateIndicator', () => {
       stub = stubReload();
       const calls: unknown[] = [];
       // The page's own /version answer is cached for six hours, so it keeps
-      // reporting the OLD commit. The watch is what sees the swap.
+      // reporting the OLD commit. The watch is what sees the swap — and it is
+      // already running before the click, staging the package, so the new
+      // commit arrives on its next 2.5-second poll rather than at once.
       server.use(
         versionHandler({ latest: '1.2.0', updateAvailable: true, install: installedAt('a'.repeat(40)) }),
         updateHandler(calls),
@@ -252,8 +267,8 @@ describe('UpdateIndicator', () => {
       );
       fireEvent.click(screen.getByRole('button', { name: 'Update to v1.2.0' }));
 
-      await waitFor(() => expect(stub!.reload).toHaveBeenCalled());
-    });
+      await waitFor(() => expect(stub!.reload).toHaveBeenCalled(), { timeout: 6000 });
+    }, 9000);
 
     it('keeps watching while the tab is hidden, which is where an update spends its minute', async () => {
       // Nobody watches a progress line for a minute. React Query pauses a
@@ -276,6 +291,7 @@ describe('UpdateIndicator', () => {
               latest: '1.2.0',
               latestCommit: null,
               updateAvailable: true,
+              packageReady: false,
               highlights: [],
             }),
           );

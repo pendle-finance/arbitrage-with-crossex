@@ -20,6 +20,7 @@ tests/live/.data-*/
 tests/fixtures/gate/recorded/
 # build output
 web/dist/
+dist/
 # local tooling state
 .claude/
 
