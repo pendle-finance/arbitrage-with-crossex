@@ -4,7 +4,7 @@
  * (no remote read until asked), cached, and provably network-free whenever
  * the local version is unknown or the check is disabled.
  */
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
@@ -34,6 +34,15 @@ vi.mock('../../src/server/routes/borosPair', async (importOriginal) => ({
 }));
 
 const MAIN_SHA = '3f7c1b9e2d4a6058cbe1740f9a2d5b83c6e0f1a4';
+
+/** A stand-in for install.ps1, pointed at with BOROS_INSTALLER so the Windows
+ * path stages from disk instead of the network. It only has to look enough like
+ * the real thing to pass the captive-portal guard. */
+function fakeInstaller(dir: string): string {
+  const p = path.join(dir, 'fake-install.ps1');
+  writeFileSync(p, '# Arbitrage with CrossEx - Windows installer (test fixture)\n');
+  return p;
+}
 
 /** Minimal FetchLike stub in the boros-stub style. */
 function stub(
@@ -412,6 +421,7 @@ describe('POST /api/version/update', () => {
     const realPlatform = Object.getOwnPropertyDescriptor(process, 'platform')!;
     Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
     process.env.BOROS_ROOT = home;
+    process.env.BOROS_INSTALLER = fakeInstaller(home);
     app = makeTestApp({ install: INSTALLED });
     try {
       const res = await post();
@@ -421,11 +431,72 @@ describe('POST /api/version/update', () => {
       const calls = mocks.execFileSync.mock.calls as unknown as [string, string[]][];
       expect(calls.map((c) => c[0])).toEqual(['schtasks', 'schtasks']);
       expect(calls[0][1]).toContain('/create');
-      expect(calls[0][1].join(' ')).toContain('/main/install.ps1');
       expect(calls[1][1]).toEqual(['/run', '/tn', 'BorosUpdate']);
+
+      // The installer is staged to disk and the task runs THAT.
+      expect(readFileSync(path.join(home, 'update-installer.ps1'), 'utf8')).toContain(
+        'Arbitrage with CrossEx',
+      );
     } finally {
       Object.defineProperty(process, 'platform', realPlatform);
       delete process.env.BOROS_ROOT;
+      delete process.env.BOROS_INSTALLER;
+    }
+  });
+
+  /** The bug that made the button dead on Windows: a /tr carrying
+   * `irm <url> | iex` is detected as Trojan:Win32/Commando.A!ml and the process
+   * creation denied (`spawnSync schtasks EPERM`). Only a local path may reach
+   * that command line. */
+  it('puts no download-and-execute on the scheduled task command line', async () => {
+    const realPlatform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+    process.env.BOROS_ROOT = home;
+    process.env.BOROS_INSTALLER = fakeInstaller(home);
+    app = makeTestApp({
+      install: INSTALLED,
+      updateCheck: { current: '1.0.0' },
+      versionFetch: stub({ version: '1.1.0', highlights: [] }),
+    });
+    try {
+      await post();
+
+      const args = (mocks.execFileSync.mock.calls as unknown as [string, string[]][])[0][1];
+      const tr = args[args.indexOf('/tr') + 1];
+
+      expect(tr).toBe(
+        `powershell -NoProfile -ExecutionPolicy Bypass -File "${path.join(home, 'update.ps1')}"`,
+      );
+      expect(tr).not.toMatch(/iex|Invoke-Expression|https?:|-Command/i);
+      // The pin travels in the staged runner, never on the command line.
+      expect(args.join(' ')).not.toContain(MAIN_SHA);
+      expect(readFileSync(path.join(home, 'update.ps1'), 'utf8')).toContain(
+        `$env:BOROS_REF = '${MAIN_SHA}'`,
+      );
+    } finally {
+      Object.defineProperty(process, 'platform', realPlatform);
+      delete process.env.BOROS_ROOT;
+      delete process.env.BOROS_INSTALLER;
+    }
+  });
+
+  it('reports a failed download in the dialog instead of scheduling a task that does nothing', async () => {
+    const realPlatform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+    process.env.BOROS_ROOT = home;
+    process.env.BOROS_INSTALLER = path.join(home, 'does-not-exist.ps1');
+    app = makeTestApp({ install: INSTALLED });
+    try {
+      const res = await post();
+
+      expect(res.statusCode).toBe(409);
+      expect(res.json().error.message).toMatch(/could not start the update/);
+      expect(res.json().error.retryable).toBe(true);
+      expect(mocks.execFileSync).not.toHaveBeenCalled();
+    } finally {
+      Object.defineProperty(process, 'platform', realPlatform);
+      delete process.env.BOROS_ROOT;
+      delete process.env.BOROS_INSTALLER;
     }
   });
 });
@@ -441,17 +512,25 @@ describe('the window that refuses Boros orders while an update runs', () => {
     home = mkdtempSync(path.join(tmpdir(), 'upd-win-'));
     realHome = process.env.HOME;
     process.env.HOME = home;
+    // These cases cover the update WINDOW, not either platform's launch
+    // mechanism, so they run on whatever host they are on. On Windows that
+    // stages an installer and a log under BOROS_ROOT, which would otherwise
+    // land in the real %LOCALAPPDATA% install. The darwin branch reads neither.
+    process.env.BOROS_INSTALLER = fakeInstaller(home);
+    process.env.BOROS_ROOT = home;
   });
   afterEach(() => {
     vi.useRealTimers();
     endUpdateWindow();
+    delete process.env.BOROS_INSTALLER;
+    delete process.env.BOROS_ROOT;
     if (realHome === undefined) delete process.env.HOME;
     else process.env.HOME = realHome;
   });
 
-  it('opens on a launch that starts, then closes on its own after ten minutes', () => {
+  it('opens on a launch that starts, then closes on its own after ten minutes', async () => {
     vi.useFakeTimers();
-    startUpdate();
+    await startUpdate();
 
     expect(isUpdating()).toBe(true);
     vi.advanceTimersByTime(10 * 60_000 - 1);
@@ -460,8 +539,8 @@ describe('the window that refuses Boros orders while an update runs', () => {
     expect(isUpdating()).toBe(false);
   });
 
-  it('closes when the installer fails to start, so orders are not refused forever', () => {
-    startUpdate();
+  it('closes when the installer fails to start, so orders are not refused forever', async () => {
+    await startUpdate();
     expect(isUpdating()).toBe(true);
 
     const handle = mocks.spawn.mock.results[0].value as { on: { mock: { calls: unknown[][] } } };
@@ -474,8 +553,8 @@ describe('the window that refuses Boros orders while an update runs', () => {
   it.each([
     ['a build that failed', 1, null],
     ['a kill', null, 'SIGTERM'],
-  ])('closes when the installer dies after starting — %s', (_case, code, signal) => {
-    startUpdate();
+  ])('closes when the installer dies after starting — %s', async (_case, code, signal) => {
+    await startUpdate();
     expect(isUpdating()).toBe(true);
 
     const handle = mocks.spawn.mock.results[0].value as { on: { mock: { calls: unknown[][] } } };
@@ -488,8 +567,8 @@ describe('the window that refuses Boros orders while an update runs', () => {
     expect(isUpdating()).toBe(false);
   });
 
-  it('leaves the window open while the installer is still working', () => {
-    startUpdate();
+  it('leaves the window open while the installer is still working', async () => {
+    await startUpdate();
 
     const handle = mocks.spawn.mock.results[0].value as { on: { mock: { calls: unknown[][] } } };
     const onExit = handle.on.mock.calls.find((c) => c[0] === 'exit')![1] as (
@@ -501,8 +580,8 @@ describe('the window that refuses Boros orders while an update runs', () => {
     expect(isUpdating()).toBe(true);
   });
 
-  it('refuses a ref that is not a commit sha, rather than passing it to a shell', () => {
-    startUpdate("main'; rm -rf ~; echo '");
+  it('refuses a ref that is not a commit sha, rather than passing it to a shell', async () => {
+    await startUpdate("main'; rm -rf ~; echo '");
 
     const [, , opts] = mocks.spawn.mock.calls[0] as unknown as [
       string,
@@ -512,36 +591,55 @@ describe('the window that refuses Boros orders while an update runs', () => {
     expect(opts.env.BOROS_REF).toBeUndefined();
   });
 
-  it('pins the scheduled task to the commit on Windows', () => {
+  it('pins the update to the commit in the staged runner on Windows', async () => {
     const realPlatform = Object.getOwnPropertyDescriptor(process, 'platform')!;
     Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
     process.env.BOROS_ROOT = home;
+    process.env.BOROS_INSTALLER = fakeInstaller(home);
     try {
-      startUpdate('3f7c1b9e2d4a6058cbe1740f9a2d5b83c6e0f1a4');
+      await startUpdate(MAIN_SHA);
 
-      const calls = mocks.execFileSync.mock.calls as unknown as [string, string[]][];
-      expect(calls[0][1].join(' ')).toContain(
-        "$env:BOROS_REF='3f7c1b9e2d4a6058cbe1740f9a2d5b83c6e0f1a4';",
+      expect(readFileSync(path.join(home, 'update.ps1'), 'utf8')).toContain(
+        `$env:BOROS_REF = '${MAIN_SHA}'`,
       );
     } finally {
       Object.defineProperty(process, 'platform', realPlatform);
       delete process.env.BOROS_ROOT;
+      delete process.env.BOROS_INSTALLER;
     }
   });
 
-  it('never opens when the scheduled task cannot be created', () => {
+  it('never opens when the scheduled task cannot be created', async () => {
     const realPlatform = Object.getOwnPropertyDescriptor(process, 'platform')!;
     Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
     process.env.BOROS_ROOT = home;
+    process.env.BOROS_INSTALLER = fakeInstaller(home);
     mocks.execFileSync.mockImplementationOnce(() => {
       throw new Error('schtasks is not on this machine');
     });
     try {
-      expect(() => startUpdate()).toThrow(/schtasks is not on this machine/);
+      await expect(startUpdate()).rejects.toThrow(/schtasks is not on this machine/);
       expect(isUpdating()).toBe(false);
     } finally {
       Object.defineProperty(process, 'platform', realPlatform);
       delete process.env.BOROS_ROOT;
+      delete process.env.BOROS_INSTALLER;
+    }
+  });
+
+  it('never opens when the installer cannot be staged', async () => {
+    const realPlatform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+    process.env.BOROS_ROOT = home;
+    process.env.BOROS_INSTALLER = path.join(home, 'nope.ps1');
+    try {
+      await expect(startUpdate()).rejects.toThrow();
+      expect(isUpdating()).toBe(false);
+      expect(mocks.execFileSync).not.toHaveBeenCalled();
+    } finally {
+      Object.defineProperty(process, 'platform', realPlatform);
+      delete process.env.BOROS_ROOT;
+      delete process.env.BOROS_INSTALLER;
     }
   });
 });
