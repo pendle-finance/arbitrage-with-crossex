@@ -159,7 +159,10 @@ export interface BorosOrderClient {
    *
    * Returns one fill per request, in the same order.
    */
-  placeMarketOrders(reqs: BorosMarketOrderRequest[]): Promise<BorosLegFill[]>;
+  placeMarketOrders(
+    reqs: BorosMarketOrderRequest[],
+    opts?: { reducing?: boolean },
+  ): Promise<BorosLegFill[]>;
   /** Force-cancel every resting order on one market (§6A remediation). */
   cancelOrders(marketId: number): Promise<void>;
   /** Force-close the whole netted position on one market (§6A remediation). */
@@ -197,6 +200,9 @@ export interface SubmitBorosPairInput {
   feeDragApr: number;
   /** Which leg receives fixed — fixes the sign of the realised spread. */
   receiveLeg: 'A' | 'B';
+  /** Both legs only reduce what the account already holds. Decides how hard the
+   * gas top-up tries: an exit is funded only when it truly cannot pay. */
+  reducing?: boolean;
 }
 
 export interface BorosPairResult {
@@ -261,7 +267,9 @@ export async function submitBorosPair(input: SubmitBorosPairInput): Promise<Boro
   const byKey = new Map<'A' | 'B', BorosLegFill>();
   if (submitted.length > 0) {
     try {
-      const fills = await input.client.placeMarketOrders(submitted.map((x) => x.req));
+      const fills = await input.client.placeMarketOrders(submitted.map((x) => x.req), {
+        reducing: input.reducing,
+      });
       submitted.forEach(({ key, req }, i) => {
         byKey.set(key, fills[i] ?? failed(req, new Error(`no result returned for leg ${key}`)));
       });

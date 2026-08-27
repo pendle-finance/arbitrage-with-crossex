@@ -364,6 +364,46 @@ describe('evaluatePairGate', () => {
     expect(evaluatePairGate(gateInput()).blockers).toEqual([]);
   });
 
+  /**
+   * Boros refuses an order worth $10 or less and says so as a raw HTTP 400 at
+   * the calldata builder — AFTER Confirm. The gate says it while the size is
+   * still being typed.
+   */
+  it('blocks a leg worth $10 or less, and says which leg and how much', () => {
+    const g = evaluatePairGate(gateInput({ simulation: simulateBorosPair(simInput({ size: 9 })) }));
+    const blocker = g.blockers.find((b) => b.code === 'below-min-order-value');
+    expect(blocker).toBeDefined();
+    expect(blocker!.message).toMatch(/worth \$9\.00/);
+    expect(blocker!.message).toMatch(/at or under \$10/);
+  });
+
+  it('blocks the boundary too — the venue prices $10 of USDT at $9.998', () => {
+    const g = evaluatePairGate(gateInput({ simulation: simulateBorosPair(simInput({ size: 10 })) }));
+    expect(codes(g)).toContain('below-min-order-value');
+  });
+
+  it('lets a size past the floor through', () => {
+    const g = evaluatePairGate(gateInput({ simulation: simulateBorosPair(simInput({ size: 11 })) }));
+    expect(codes(g)).not.toContain('below-min-order-value');
+  });
+
+  /** A delta that lands exactly flat is exempt at the venue
+   * (`prePositionSignedSize === -orderSignedSize`), so it is exempt here — a
+   * small position must never be trapped by the floor that opened it. */
+  it('never traps a small position: an exact close is exempt from the floor', () => {
+    // Directions OPPOSE the positions, or the close clamps to zero and never
+    // reaches the floor at all.
+    const legA = leg({ currentSize: -5, direction: 'long' });
+    const legB = leg({ market: bnMarket, book: book(101, 0.04, 0.042), direction: 'short', currentSize: 5 });
+    const sim = simulateBorosPair(simInput({ legA, legB, size: 5, intent: 'close' }));
+    expect(sim.legA.sizing.resultingSize).toBe(0);
+    expect(sim.legB.sizing.resultingSize).toBe(0);
+    const g = evaluatePairGate(
+      gateInput({ simulation: sim, legA, legB, opposingAcknowledged: true }),
+    );
+    expect(codes(g)).not.toContain('below-min-order-value');
+  });
+
   it('blocks an ineligible pair', () => {
     const g = evaluatePairGate(
       gateInput({ eligibility: pairEligibility(hlMarket, { ...bnMarket, tokenId: 1 }, NOW) }),

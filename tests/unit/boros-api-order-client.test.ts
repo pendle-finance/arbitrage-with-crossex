@@ -244,6 +244,25 @@ describe('makeBorosApiOrderClient — an order tops up its own gas', () => {
     expect(orderSubmit(api)).toHaveLength(1);
   });
 
+  /** An EXIT is funded only when it truly cannot pay. The relayer's floor is 0
+   * and an order costs cents, so anything above zero already covers a close;
+   * charging it a dollar of margin there buys nothing. */
+  it('does not tax a close that the budget can already afford', async () => {
+    const api = fakeApi({ gasBalance: { balanceInUSD: 0.05 } });
+    await client(api).placeMarketOrders([leg()], { reducing: true });
+
+    expect(api.calls.some((c) => c.path.includes('agent/pay-treasury'))).toBe(false);
+    expect(orderSubmit(api)).toHaveLength(1);
+  });
+
+  it('still funds a close the budget genuinely cannot pay for', async () => {
+    const api = fakeApi({ gasBalance: { balanceInUSD: -0.4 } });
+    await client(api).placeMarketOrders([leg()], { reducing: true });
+
+    const pay = api.calls.find((c) => c.path.includes('agent/pay-treasury'))!;
+    expect(pay.body.amount).toBe('1400000000000000000'); // $1 on top of $0.40 owed
+  });
+
   /** The top-up occupies slot 0, so a leg reading results positionally would
    * take the top-up's outcome as its own fill and report nothing traded. */
   it('still attributes each leg its own fill once the bundle is shifted', async () => {
@@ -433,61 +452,19 @@ describe('makeBorosApiOrderClient — fills', () => {
 });
 
 describe('makeBorosApiOrderClient — preconditions and remediation', () => {
-  it('never re-enters a market the venue already entered', async () => {
-    // The live failure: entering is permanent, so a fresh process that assumes
-    // nothing is entered reverts the whole batch with
-    // "[SIMULATE] MMMarketAlreadyEntered()" and no order is ever placed.
-    const api = fakeApi({ enteredReads: [[HL, BN]] });
-    await client(api).placeMarketOrders([leg(), leg({ marketId: BN, direction: 'long' })]);
-    expect(api.calls.filter((c) => c.path.includes('/calldata-builder/agent/enter-markets'))).toHaveLength(0);
-    // …and it asked, once, rather than guessing.
-    expect(api.calls.filter((c) => c.path.startsWith('/v1/accounts/entered-markets'))).toHaveLength(1);
-  });
-
-  it('enters only the markets missing from the venue\'s list', async () => {
-    const api = fakeApi({ enteredReads: [[HL]] });
-    await client(api).placeMarketOrders([leg(), leg({ marketId: BN, direction: 'long' })]);
-    const enter = api.calls.find((c) => c.path.includes('/calldata-builder/agent/enter-markets'))!;
-    expect(enter.body.marketIds).toEqual([BN]);
-  });
-
-  it('re-reads and retries once when the venue says AlreadyEntered', async () => {
-    // A stale cached view — another client entered the market since the read.
-    // The call reverts wholesale, so markets that were genuinely missing are
-    // still missing; re-reading is the only way to tell which.
-    const api = fakeApi({
-      enteredReads: [[], [HL, BN]],
-      failEnter: '[SIMULATE] MMMarketAlreadyEntered()',
-    });
-    const fills = await client(api).placeMarketOrders([leg()]);
-    // It recovered instead of failing the order.
-    expect(fills[0].failure?.code).not.toBe('rejected');
-    expect(api.calls.filter((c) => c.path.startsWith('/v1/accounts/entered-markets'))).toHaveLength(2);
-    // And it did not loop: exactly one enter attempt before the re-read cleared it.
-    expect(api.calls.filter((c) => c.path.includes('/calldata-builder/agent/enter-markets'))).toHaveLength(1);
-  });
-
-  it('enters every missing market in ONE call, then caches it', async () => {
+  /**
+   * Entering is NOT done here. The place-order builder reads the account's
+   * entered markets and sets `enterMarket` on the order itself
+   * (calldata.service + BatchMarketEntryTracker), so a separate enter-markets
+   * submission was a second transaction doing work the order already did —
+   * and it went out with no gas top-up of its own. Verified live: an order on
+   * a never-entered market filled and entered it, with this step removed.
+   */
+  it('does not send a separate enter-markets submission', async () => {
     const api = fakeApi();
-    const c = client(api);
-    await c.placeMarketOrders([leg(), leg({ marketId: BN, direction: 'long' })]);
-    const enters = api.calls.filter((x) => x.path === '/v1/calldata-builder/agent/enter-markets');
-    expect(enters).toHaveLength(1);
-    expect(enters[0].body).toMatchObject({ isCross: true, marketIds: [HL, BN] });
-
-    await c.placeMarketOrders([leg()]);
-    expect(api.calls.filter((x) => x.path.includes('enter-markets'))).toHaveLength(1);
-  });
-
-  it('does not cache a REFUSED market entry', async () => {
-    // The submission resolves with a per-call error rather than throwing;
-    // caching it as entered would reject every later order on this market with
-    // the venue's misleading "top up" message until the process restarts.
-    const api = fakeApi({ failEnter: 'GAS_BALANCE_TOO_LOW' });
-    const c = client(api);
-    await expect(c.placeMarketOrders([leg()])).rejects.toThrow(/refused to enter/i);
-    await expect(c.placeMarketOrders([leg()])).rejects.toThrow(/refused to enter/i);
-    expect(api.calls.filter((x) => x.path.includes('enter-markets'))).toHaveLength(2);
+    await client(api).placeMarketOrders([leg(), leg({ marketId: BN, direction: 'long' })]);
+    expect(api.calls.filter((c) => c.path.includes('enter-markets'))).toHaveLength(0);
+    expect(api.calls.filter((c) => c.path.startsWith('/v1/accounts/entered-markets'))).toHaveLength(0);
   });
 
   it('cancels every resting order on a market', async () => {
@@ -514,21 +491,6 @@ describe('makeBorosApiOrderClient — preconditions and remediation', () => {
 });
 
 describe('makeBorosApiOrderClient — a result that says nothing is not a result', () => {
-  it('refuses to cache a market entry whose submission returned no result', async () => {
-    // `submitCalls` renders any non-array body as `[]`. Read as "submitted,
-    // no per-call errors", that caches the market as entered and every later
-    // order is refused by the venue with its misleading "top up ~$10" message
-    // — for the life of the process, because the cache short-circuits.
-    for (const body of [{}, null, { results: [] }, []]) {
-      const api = fakeApi({ enterReturns: body });
-      const c = client(api);
-      await expect(c.placeMarketOrders([leg()])).rejects.toThrow(/no result for entering/i);
-      // Nothing was cached: the next attempt tries to enter again.
-      await expect(c.placeMarketOrders([leg()])).rejects.toThrow(/no result for entering/i);
-      expect(api.calls.filter((x) => x.path.includes('enter-markets'))).toHaveLength(2);
-    }
-  });
-
   it('refuses to report a cancel whose submission returned no result', async () => {
     // A remediation path reporting a cancel that may never have been submitted
     // is the one answer it must not give.

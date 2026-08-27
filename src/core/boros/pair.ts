@@ -56,6 +56,16 @@ export const MAX_SLIPPAGE_APR = 0.1;
 
 export const MIN_GAS_BALANCE_USD = AUTO_TOP_UP_BELOW_USD;
 
+/** Boros refuses any order worth less than this (`DEFAULT_MIN_ORDER_VALUE`
+ * in the backend's trade.service). Checked here so the refusal arrives while
+ * the size is being typed rather than after Confirm.
+ *
+ * The BOUNDARY is blocked too, not just below it. The venue prices the order
+ * with its own collateral quote, and a USDT quote a hair under $1 makes 10
+ * units worth $9.998 — observed live: a 10-unit pair came back "Order value
+ * must be greater than 10 USD". Blocking exactly $10 costs nobody a trade. */
+export const MIN_ORDER_VALUE_USD = 10;
+
 /** How long a simulation may back a confirm before it is refused as stale
  * (§7). The panel re-simulates well inside this. */
 export const SIMULATION_MAX_AGE_MS = 12_000;
@@ -545,6 +555,7 @@ export type BlockerCode =
   | 'cross-short-margin'
   | 'margin-unknown'
   | 'flip-unacknowledged'
+  | 'below-min-order-value'
   | 'stale-simulation';
 
 export interface PairBlocker {
@@ -642,6 +653,28 @@ export function evaluatePairGate(input: EvaluatePairInput): PairGate {
 
   for (const { key, sim: leg, input: legIn } of legs) {
     if (Math.abs(leg.sizing.deltaSize) === 0) continue;
+    // Boros refuses an order worth under $10 (DEFAULT_MIN_ORDER_VALUE,
+    // trade.service) and phrases it as a raw HTTP 400 at the calldata builder —
+    // AFTER the user has pressed Confirm. Say it here instead, in the panel
+    // that set the size. A delta that lands the position exactly flat is
+    // exempt at the venue, so it is exempt here.
+    // No collateral price means no USD value to test. Let it through and let
+    // the venue answer: blocking on an unknown would refuse valid sizes.
+    const value =
+      sim.collateralPriceUsd === null
+        ? null
+        : Math.abs(leg.sizing.deltaSize) * sim.collateralPriceUsd;
+    const flattens = leg.sizing.currentSize !== 0 && leg.sizing.resultingSize === 0;
+    if (!flattens && value !== null && value <= MIN_ORDER_VALUE_USD) {
+      blockers.push({
+        code: 'below-min-order-value',
+        leg: key,
+        marketId: leg.marketId,
+        message:
+          `${leg.marketName}: this leg is worth $${value.toFixed(2)}, and Boros takes nothing ` +
+          `at or under $${MIN_ORDER_VALUE_USD} — increase the size.`,
+      });
+    }
     if (leg.bookStatus === 'unavailable') {
       blockers.push({
         code: 'book-unavailable',
