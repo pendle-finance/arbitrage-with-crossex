@@ -45,7 +45,7 @@ export function UpdateIndicator() {
         type="button"
         onClick={() => setOpen(true)}
         title={`Version ${data.latest} is available — click to review and update`}
-        className="self-center whitespace-nowrap rounded-md border border-amber-500/50 bg-amber-500/10 px-2 py-1 text-xs text-amber-400 transition-colors hover:bg-amber-500/20"
+        className="hdr-ctl border-amber-500/50 bg-amber-500/10 text-amber-400 hover:bg-amber-500/20"
       >
         Update v{data.latest}
       </button>

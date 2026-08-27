@@ -12,12 +12,16 @@ export function FreshnessButton({
   title,
   onRefetch,
   dense,
+  className,
 }: {
   dataUpdatedAt: number;
   staleError: boolean;
   title: string;
   onRefetch: () => void;
   dense?: boolean;
+  /** Replaces the default box — the header row passes `hdr-ctl` so this chip
+   * is the same height as everything beside it. Colours stay below. */
+  className?: string;
 }) {
   const now = useNow(1000);
   if (!dataUpdatedAt) return <span className="num text-xs text-ink-500">⟳ —</span>;
@@ -27,7 +31,7 @@ export function FreshnessButton({
       type="button"
       onClick={onRefetch}
       title={title}
-      className={`num rounded-md border px-2 ${dense ? 'py-0.5' : 'py-1'} text-xs transition-colors ${
+      className={`num ${className ?? `rounded-md border px-2 ${dense ? 'py-0.5' : 'py-1'} text-xs transition-colors`} ${
         staleError
           ? 'border-amber-500/50 bg-amber-500/10 text-amber-400'
           : 'border-ink-700 bg-ink-900 text-ink-400 hover:border-ink-500 hover:text-ink-200'
@@ -56,6 +60,7 @@ export function FreshnessIndicator() {
       dataUpdatedAt={newest}
       staleError={staleError}
       title="Refetch all panels"
+      className="hdr-ctl font-normal"
       onRefetch={() => void qc.invalidateQueries()}
     />
   );
