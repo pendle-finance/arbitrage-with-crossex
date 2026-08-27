@@ -70,7 +70,16 @@ export function versionRoutes(deps: AppDeps) {
         pin = value?.commit ?? null;
       }
 
-      return reply.ok({ started: true, logPath: startUpdate(pin), ref: pin });
+      // Windows stages the installer to disk before the task is created, so
+      // this can fail on a bad download — which belongs in the dialog the user
+      // is looking at, not in a log they would have to go find.
+      let logPath: string;
+      try {
+        logPath = await startUpdate(pin);
+      } catch (err) {
+        return refuse(`could not start the update: ${(err as Error).message}`, true);
+      }
+      return reply.ok({ started: true, logPath, ref: pin });
     });
   };
 }
