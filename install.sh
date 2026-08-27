@@ -27,6 +27,20 @@
 
 set -euo pipefail
 
+# ⚠ NODE_ENV must not survive into this script.
+#
+# Yarn 1 reads NODE_ENV=production as `--production`: it skips devDependencies
+# and still exits 0. `vite` and `typescript` are devDependencies, so the build
+# step below would then have nothing to build with. The installer always needs
+# a full dev install, whatever the caller's environment says.
+#
+# This bites two callers. The in-app update button spawns this script from the
+# server, which the LaunchAgent runs with NODE_ENV=production; and anyone whose
+# shell profile exports it hits the same wall by hand. The runtime value is set
+# by the LaunchAgent, not here, so unsetting it changes nothing about the
+# installed app.
+unset NODE_ENV
+
 # ---------------------------------------------------------------------------
 # Configuration (BOROS_* env vars exist for development/testing overrides)
 # ---------------------------------------------------------------------------
@@ -180,13 +194,32 @@ fetch_app() {
   write_install_info "$(archive_commit "$tgz")" "$requested" "$source"
 }
 
+# Run one build step quietly, but never silently.
+#
+# `>/dev/null` on these steps was throwing away the only explanation a failure
+# has: yarn AND tsc both report to stdout, and under `set -e` the script then
+# exits having logged nothing at all. A user updating from inside the app reads
+# that log and cannot see why. So capture the output and print it if the step
+# fails — a successful install stays as quiet as it was.
+run_step() {
+  local label="$1"; shift
+  local out
+  if ! out=$(PATH="$ROOT/node/bin:$PATH" "$@" 2>&1); then
+    printf '%s\n' "$out" >&2
+    fail "$label"
+  fi
+}
+
 build_app() {
   local yarn="$ROOT/node/bin/yarn"
   say "Installing dependencies (this takes a minute on first install)…"
-  PATH="$ROOT/node/bin:$PATH" "$yarn" --cwd "$ROOT/app.new" install --frozen-lockfile --silent --non-interactive
-  PATH="$ROOT/node/bin:$PATH" "$yarn" --cwd "$ROOT/app.new/web" install --frozen-lockfile --silent --non-interactive
+  run_step "installing the server dependencies failed." \
+    "$yarn" --cwd "$ROOT/app.new" install --frozen-lockfile --silent --non-interactive
+  run_step "installing the web dependencies failed." \
+    "$yarn" --cwd "$ROOT/app.new/web" install --frozen-lockfile --silent --non-interactive
   say "Building the web interface…"
-  PATH="$ROOT/node/bin:$PATH" "$yarn" --cwd "$ROOT/app.new/web" --silent build >/dev/null
+  run_step "building the web interface failed." \
+    "$yarn" --cwd "$ROOT/app.new/web" --silent build
 }
 
 swap_app() {
