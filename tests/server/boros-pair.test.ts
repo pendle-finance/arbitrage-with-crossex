@@ -413,19 +413,46 @@ describe('POST /api/boros/pair/top-up-gas', () => {
 });
 
 describe('borosExecutionsPending', () => {
-  it('counts a memoized execution and starts each app at zero', async () => {
-    makeApp({}, undefined, orderClient());
+  it('counts an order that is still in flight, and starts each app at zero', async () => {
+    let release!: () => void;
+    const held = new Promise<void>((r) => {
+      release = r;
+    });
+    makeApp(
+      {},
+      undefined,
+      orderClient(async (r) => {
+        await held;
+        return okFill({ marketId: r.marketId, direction: r.direction });
+      }),
+    );
     expect(borosExecutionsPending()).toBe(0);
-    const res = await post(
+
+    const inFlight = post(
       '/api/boros/pair/execute',
       pairBody({ clientOrderIdA: 'coid-aaaa', clientOrderIdB: 'coid-bbbb' }),
     );
-    expect(res.statusCode).toBe(200);
-    expect(borosExecutionsPending()).toBe(1);
+    await vi.waitFor(() => expect(borosExecutionsPending()).toBe(1));
+    release();
+    expect((await inFlight).statusCode).toBe(200);
 
     await app!.close();
     makeApp({}, undefined, orderClient());
     expect(borosExecutionsPending()).toBe(0);
+  });
+
+  it('stops counting once the orders settle, and still replays that submission', async () => {
+    // The memo holds a finished execution for ten minutes so a resend is
+    // recognised. Counting it as pending refused the Update button for those
+    // ten minutes, saying an order might still be settling.
+    makeApp({}, undefined, orderClient());
+    const body = pairBody({ clientOrderIdA: 'coid-aaaa', clientOrderIdB: 'coid-bbbb' });
+    const res = await post('/api/boros/pair/execute', body);
+    expect(res.statusCode).toBe(200);
+    expect(borosExecutionsPending()).toBe(0);
+
+    const again = await post('/api/boros/pair/execute', body);
+    expect(again.json().data.replayed).toBe(true);
   });
 });
 

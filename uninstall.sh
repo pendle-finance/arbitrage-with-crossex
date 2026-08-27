@@ -12,10 +12,13 @@
 
 set -euo pipefail
 
+PORT="${BOROS_PORT:-6688}"
 ROOT="${BOROS_ROOT:-$HOME/.boros-crossex}"
 LABEL="com.boros.crossex-terminal"
+[ "$PORT" = 6688 ] || LABEL="$LABEL.$PORT"
 APP_TITLE="Arbitrage with CrossEx"
 LOG_DIR="$HOME/Library/Logs/boros-crossex"
+[ "$ROOT" = "$HOME/.boros-crossex" ] || LOG_DIR="$ROOT/logs"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 
 say() { printf '\033[1;36m==>\033[0m %s\n' "$*"; }
@@ -48,10 +51,10 @@ server_pids() {
   uid="$(id -u)"
   rootdir="$(cd "$ROOT" 2>/dev/null && pwd -P || true)"
   if [ -z "$rootdir" ] || ! command -v lsof >/dev/null 2>&1; then
-    pgrep -U "$uid" -f "$ROOT/app/src/server/index.ts" 2>/dev/null || true
+    pgrep -U "$uid" -f "$ROOT/app/" 2>/dev/null || true
     return 0
   fi
-  for pid in $(pgrep -U "$uid" -f "$ROOT/app/src/server/index.ts" 2>/dev/null || true); do
+  for pid in $(pgrep -U "$uid" -f "$ROOT/app/" 2>/dev/null || true); do
     exe="$(lsof -p "$pid" -a -d txt -Fn 2>/dev/null | sed -n 's/^n//p' | head -1)"
     case "$exe" in "$rootdir"/node*/*) out="$out $pid" ;; esac
   done
@@ -80,6 +83,15 @@ main() {
   say "Stopping the background service…"
   launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
   rm -f "$PLIST"
+  # The name this install used before the port was part of it. Kept in step with
+  # install.sh, which also removes it. Left behind with the app deleted, it
+  # crash-loops every 15 seconds for ever.
+  local legacy="$HOME/Library/LaunchAgents/com.boros.crossex-terminal.plist"
+  if [ "$LABEL" != "com.boros.crossex-terminal" ] \
+    && grep -qF "<string>$ROOT/app</string>" "$legacy" 2>/dev/null; then
+    launchctl bootout "gui/$(id -u)/com.boros.crossex-terminal" 2>/dev/null || true
+    rm -f "$legacy"
+  fi
   stop_stale_server
 
   # Never delete the app or the trade journal out from under a live engine: it
@@ -96,7 +108,7 @@ main() {
   fi
 
   say "Removing the app and its private Node.js runtime…"
-  rm -rf "$ROOT/app" "$ROOT/app.new" "$ROOT/app.old" "$ROOT/node" "$ROOT"/node-v*-darwin-*
+  rm -rf "$ROOT/app" "$ROOT/app.new" "$ROOT/app.old" "$ROOT/pkg" "$ROOT/node" "$ROOT"/node-v*-darwin-*
   # The extra paths are the launcher names this app shipped under before; kept in
   # step with install.sh so an uninstall leaves no launcher from any past name.
   rm -rf "$HOME/Applications/$APP_TITLE.app" \

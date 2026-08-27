@@ -23,12 +23,12 @@ $Root     = if ($env:BOROS_ROOT) { $env:BOROS_ROOT } else { Join-Path $env:LOCAL
 # Resolved exactly as install.ps1 resolves it: the last-resort port guard below
 # must check the port the server was actually installed on.
 $Port     = if ($env:BOROS_PORT) { [int]$env:BOROS_PORT } else { 6688 }
-$TaskName = 'Arbitrage with CrossEx'
+$TaskName = if ($Port -eq 6688) { 'Arbitrage with CrossEx' } else { "Arbitrage with CrossEx $Port" }
 $AppTitle = 'Arbitrage with CrossEx'
 # Kept in step with install.ps1: an uninstall must also clear the task and the
 # shortcut left by any previous product name, or they outlive the app.
 $LegacyTitles = @('CrossEx-Boros Terminal', 'Boros CrossEx Terminal')
-$ServerEntry = Join-Path $Root 'app\src\server\index.ts'
+$ServerEntry = (Join-Path $Root 'app') + '\'
 $RunnerPath  = Join-Path $Root 'run-server.ps1'
 
 function Say { param([string]$m) Write-Host '==> ' -ForegroundColor Cyan -NoNewline; Write-Host $m }
@@ -110,6 +110,7 @@ foreach ($legacy in $LegacyTitles) {
   try { Stop-ScheduledTask -TaskName $legacy -ErrorAction SilentlyContinue } catch { }
   try { Unregister-ScheduledTask -TaskName $legacy -Confirm:$false -ErrorAction SilentlyContinue } catch { }
 }
+try { Unregister-ScheduledTask -TaskName 'BorosUpdate' -Confirm:$false -ErrorAction SilentlyContinue } catch { }
 Stop-StaleServer
 
 if (@(Get-ServerProcess).Count -gt 0) {
@@ -161,12 +162,14 @@ if ($stillListening.Count -gt 0) {
 }
 
 Say 'Removing the app and its private Node.js runtime...'
-foreach ($d in @('app', 'app.new', 'app.old', 'node', 'logs')) {
+foreach ($d in @('app', 'app.new', 'app.old', 'pkg', 'node', 'logs')) {
   $p = Join-Path $Root $d
   if (Test-Path $p) { Remove-Item -Recurse -Force $p -ErrorAction SilentlyContinue }
 }
-$runner = Join-Path $Root 'run-server.ps1'
-if (Test-Path $runner) { Remove-Item -Force $runner -ErrorAction SilentlyContinue }
+foreach ($f in @('run-server.ps1', 'update.ps1', 'update-installer.ps1')) {
+  $p = Join-Path $Root $f
+  if (Test-Path $p) { Remove-Item -Force $p -ErrorAction SilentlyContinue }
+}
 
 $programs = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs'
 foreach ($title in @($AppTitle) + $LegacyTitles) {

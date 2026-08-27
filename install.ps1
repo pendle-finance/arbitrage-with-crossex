@@ -40,9 +40,10 @@ $Branch   = if ($env:BOROS_BRANCH) { $env:BOROS_BRANCH } else { 'main' }
 # audited" in the README.
 $Ref      = $env:BOROS_REF
 $Port     = if ($env:BOROS_PORT)   { [int]$env:BOROS_PORT } else { 6688 }
-$Root     = if ($env:BOROS_ROOT)   { $env:BOROS_ROOT }   else { Join-Path $env:LOCALAPPDATA 'CrossEx-Boros' }
+$DefaultRoot = Join-Path $env:LOCALAPPDATA 'CrossEx-Boros'
+$Root     = if ($env:BOROS_ROOT)   { $env:BOROS_ROOT }   else { $DefaultRoot }
 $NodeLine = 'v24'
-$TaskName = 'Arbitrage with CrossEx'
+$TaskName = if ($Port -eq 6688) { 'Arbitrage with CrossEx' } else { "Arbitrage with CrossEx $Port" }
 $AppTitle = 'Arbitrage with CrossEx'
 # Display names this app shipped under before. The scheduled task and the Start
 # Menu shortcut are keyed BY NAME, so a rename orphans the old ones: the old task
@@ -53,7 +54,7 @@ $AppTitle = 'Arbitrage with CrossEx'
 $LegacyTitles = @('CrossEx-Boros Terminal', 'Boros CrossEx Terminal')
 $LogDir   = Join-Path $Root 'logs'
 
-$ServerEntry = Join-Path $Root 'app\src\server\index.ts'
+$ServerEntry = (Join-Path $Root 'app') + '\'
 $RunnerPath  = Join-Path $Root 'run-server.ps1'
 $Tmp = $null
 
@@ -287,50 +288,98 @@ function Write-InstallInfo {
   [IO.File]::WriteAllText((Join-Path $New 'install-info.json'), $json)
 }
 
+function Expand-App {
+  param([string]$Zip, [string]$New)
+  $stage = Join-Path $script:Tmp 'app-zip'
+  if (Test-Path $stage) { Remove-Item -Recurse -Force $stage }
+  New-Item -ItemType Directory -Force -Path $stage | Out-Null
+  Expand-Archive -Path $Zip -DestinationPath $stage -Force
+  # GitHub zips and the release package alike wrap everything in one folder
+  # (named for the ref or the version) - strip it, the equivalent of
+  # tar --strip-components=1.
+  $inner = Get-ChildItem -Path $stage -Directory | Select-Object -First 1
+  if (-not $inner) { Fail 'app download looks incomplete (empty archive).' }
+  Get-ChildItem -Path $inner.FullName -Force | Move-Item -Destination $New
+
+  if (-not (Test-Path (Join-Path $New 'package.json'))) {
+    Fail 'app download looks incomplete (no package.json).'
+  }
+}
+
 function Get-App {
   Say 'Downloading the app...'
   $new = Join-Path $Root 'app.new'
   if (Test-Path $new) { Remove-Item -Recurse -Force $new }
   New-Item -ItemType Directory -Force -Path $new | Out-Null
 
-  $stage = Join-Path $script:Tmp 'app-zip'
-  New-Item -ItemType Directory -Force -Path $stage | Out-Null
-  if ($env:BOROS_ZIP) {
-    $zip = $env:BOROS_ZIP
-    $requested = ''
-    $source = 'local-archive'
-  } else {
-    $zip = Join-Path $script:Tmp 'app.zip'
-    if ($Ref) {
-      $requested = $Ref
-      $url = "https://github.com/$RepoSlug/archive/$Ref.zip"
-    } else {
-      $requested = "refs/heads/$Branch"
-      $url = "https://github.com/$RepoSlug/archive/refs/heads/$Branch.zip"
-    }
-    try {
-      Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $zip
-    } catch {
-      Fail "could not download '$requested' from $RepoSlug - does it exist?"
-    }
-    $source = 'github-archive'
-  }
-  Expand-Archive -Path $zip -DestinationPath $stage -Force
-  # GitHub zips wrap everything in one folder (named for the ref, whatever its
-  # kind) - strip it, the equivalent of tar --strip-components=1.
-  $inner = Get-ChildItem -Path $stage -Directory | Select-Object -First 1
-  if (-not $inner) { Fail 'app download looks incomplete (empty archive).' }
-  Get-ChildItem -Path $inner.FullName -Force | Move-Item -Destination $new
+  $zip = $null
+  $requested = ''
+  $source = ''
 
-  if (-not (Test-Path (Join-Path $new 'package.json'))) {
-    Fail 'app download looks incomplete (no package.json).'
+  if (-not $Ref -and -not $env:BOROS_ZIP) {
+    try {
+      $probe = (Invoke-WebRequest -UseBasicParsing `
+        -Uri "https://raw.githubusercontent.com/$RepoSlug/$Branch/version.json").Content
+      $version = (ConvertFrom-Json $probe).version
+      if (-not $version) { throw 'version.json carries no version.' }
+      $pkg = Join-Path $script:Tmp 'crossex.zip'
+      Invoke-WithRetry -Tries 3 -DelayMs 1000 -Action {
+        Invoke-WebRequest -UseBasicParsing `
+          -Uri "https://github.com/$RepoSlug/releases/download/v$version/crossex.zip" -OutFile $pkg
+      }
+      Expand-App -Zip $pkg -New $new
+      $zip = $pkg
+      $requested = "v$version"
+      $source = 'release-package'
+    } catch {
+      Say 'No prebuilt package available - building this one from source.'
+      $zip = $null
+      if (Test-Path $new) { Remove-Item -Recurse -Force $new }
+      New-Item -ItemType Directory -Force -Path $new | Out-Null
+    }
   }
-  Write-InstallInfo -New $new -Commit (Get-ArchiveCommit $zip) -Requested $requested -Source $source
+
+  if (-not $zip) {
+    if ($env:BOROS_ZIP) {
+      $zip = $env:BOROS_ZIP
+      $requested = ''
+      $source = 'local-archive'
+    } else {
+      $zip = Join-Path $script:Tmp 'app.zip'
+      if ($Ref) {
+        $requested = $Ref
+        $url = "https://github.com/$RepoSlug/archive/$Ref.zip"
+      } else {
+        $requested = "refs/heads/$Branch"
+        $url = "https://github.com/$RepoSlug/archive/refs/heads/$Branch.zip"
+      }
+      try {
+        Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $zip
+      } catch {
+        Fail "could not download '$requested' from $RepoSlug - does it exist?"
+      }
+      $source = 'github-archive'
+    }
+    Expand-App -Zip $zip -New $new
+  }
+
+  $commit = Get-ArchiveCommit $zip
+  try {
+    $vj = Get-Content -Raw -Path (Join-Path $new 'version.json') -ErrorAction Stop | ConvertFrom-Json
+    $stamped = $vj.PSObject.Properties['commit']
+    if ($stamped -and $stamped.Value -match '^[0-9a-f]{40}$') {
+      $commit = $stamped.Value
+      $source = 'release-package'
+    }
+  } catch { }
+  Write-InstallInfo -New $new -Commit $commit -Requested $requested -Source $source
 }
 
 function Build-App {
-  $yarn = Join-Path $Root 'node\yarn.cmd'
   $new = Join-Path $Root 'app.new'
+  if (Test-Path (Join-Path $new 'dist\server\index.mjs')) { return }
+  Install-Yarn
+  $yarn = Join-Path $Root 'node\yarn.cmd'
   $env:PATH = "$(Join-Path $Root 'node');$env:PATH"
   Say 'Installing dependencies (this takes a minute on first install)...'
   & $yarn --cwd $new install --frozen-lockfile --silent --non-interactive
@@ -340,6 +389,9 @@ function Build-App {
   Say 'Building the web interface...'
   & $yarn --cwd (Join-Path $new 'web') --silent build | Out-Null
   if ($LASTEXITCODE -ne 0) { Fail 'web build failed.' }
+  Say 'Bundling the server...'
+  & $yarn --cwd $new --silent bundle | Out-Null
+  if ($LASTEXITCODE -ne 0) { Fail 'server bundle failed.' }
 }
 
 function Swap-App {
@@ -496,6 +548,11 @@ function Write-RunnerScript {
   $qRoot  = $Root.Replace("'", "''")
   $outLog = (Join-Path $LogDir 'server.out.log').Replace("'", "''")
   $errLog = (Join-Path $LogDir 'server.err.log').Replace("'", "''")
+  $entryArgs = if (Test-Path (Join-Path $Root 'app\dist\server\index.mjs')) {
+    '@("`"$root\app\dist\server\index.mjs`"")'
+  } else {
+    '@("`"$root\app\node_modules\tsx\dist\cli.mjs`"", "`"$root\app\src\server\index.ts`"")'
+  }
   @"
 # Generated by install.ps1 - regenerated on every install. Do not edit.
 
@@ -531,7 +588,7 @@ Set-Location "`$root\app"
 # the executable install.ps1 puts in the Scheduled Task action.)
 `$startArgs = @{
   FilePath               = "`$root\node\node.exe"
-  ArgumentList           = @("``"`$root\app\node_modules\tsx\dist\cli.mjs``"", "``"`$root\app\src\server\index.ts``"")
+  ArgumentList           = $entryArgs
   NoNewWindow            = `$true
   Wait                   = `$true
   PassThru               = `$true
@@ -560,20 +617,53 @@ while (`$true) {
   return $runner
 }
 
+function Unregister-TaskForRoot {
+  param([string]$Name)
+  $mine = $false
+  try {
+    $task = Get-ScheduledTask -TaskName $Name -ErrorAction SilentlyContinue
+    if ($task) {
+      foreach ($a in @($task.Actions)) {
+        if ($a.Arguments -and $a.Arguments.IndexOf($Root, [StringComparison]::OrdinalIgnoreCase) -ge 0) {
+          $mine = $true
+        }
+      }
+    }
+  } catch { }
+  if (-not $mine) { return }
+  Stop-ScheduledTask -TaskName $Name -ErrorAction SilentlyContinue
+  Unregister-ScheduledTask -TaskName $Name -Confirm:$false -ErrorAction SilentlyContinue
+}
+
 # Runs BEFORE the app directory is swapped. Ordering matters on Windows: the
 # previous server holds open handles inside $Root\app, and nothing can move that
 # directory until it exits.
 function Stop-RunningService {
   Say 'Stopping any running instance...'
-  Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
+  Unregister-TaskForRoot $TaskName
   # Tasks registered under a previous product name. Without this, an upgrade
   # across a rename leaves the old task registered and starting the old app -
   # two servers, one port. This is what makes the rename a safe UPDATE.
-  foreach ($legacy in $LegacyTitles) {
-    Stop-ScheduledTask -TaskName $legacy -ErrorAction SilentlyContinue
-    Unregister-ScheduledTask -TaskName $legacy -Confirm:$false -ErrorAction SilentlyContinue
+  # $AppTitle is also the name this install used BEFORE the port was part of it.
+  # Left registered on a custom port, it starts a second server from this same
+  # root - and its runner still names the tsx entry, which a prebuilt install
+  # does not contain.
+  foreach ($legacy in ($LegacyTitles + @($AppTitle))) {
+    if ($legacy -ne $TaskName) { Unregister-TaskForRoot $legacy }
   }
   Stop-StaleServer   # reap any old/orphaned server so re-running always updates
+
+  # Unregister-TaskForRoot leaves a task belonging to ANOTHER root alone. If one
+  # is still registered under our name, the Register-ScheduledTask -Force in
+  # Install-Service would hijack it and re-point that install at this root,
+  # orphaning its API keys and its trade journal.
+  if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) {
+    Fail @"
+another install already uses the background task "$TaskName".
+  That task points at a different folder. Install this copy on its own port:
+  set BOROS_PORT to another port and re-run.
+"@
+  }
 
   if (Test-PortInUseByOther) {
     Fail @"
@@ -717,13 +807,37 @@ try {
   Write-Host ''
   Invoke-Preflight
   Install-Node
-  Install-Yarn
   Get-App
   Build-App
   Stop-RunningService   # must precede Swap-App - see the note there
-  Swap-App
-  Install-Service
-  if (-not (Wait-ForServer)) {
+  $started = $false
+  try {
+    Swap-App
+    Install-Service
+    $started = Wait-ForServer
+  } catch {
+    $why = $_.Exception.Message
+    # Restore-App calls Install-Service, which is often the thing that just
+    # threw. Under $ErrorActionPreference='Stop' a second failure would escape
+    # this catch entirely, past the outer finally, and leave the machine with
+    # the old code on disk and nothing registered or running.
+    $back = $false
+    try { $back = Restore-App } catch { $back = $false }
+    if ($back) {
+      Fail @"
+$why
+  The previous version was put back and is running.
+  Nothing was lost - your keys and trade history are untouched.
+"@
+    }
+    Fail @"
+$why
+  The previous version could not be put back either.
+  Your keys and trade history are untouched, in $Root.
+  Re-run this installer to try again.
+"@
+  }
+  if (-not $started) {
     if (Restore-App) {
       Fail @"
 the new version did not start, so the previous one was put back and is running.
@@ -738,7 +852,7 @@ the new version did not start, and the previous one could not be restored.
 "@
   }
   Remove-OldApp   # the new version answers on the port; the way back can go
-  New-Launcher
+  if ($Root -eq $DefaultRoot) { New-Launcher }
   Write-Host ''
   Say "Done! Opening http://localhost:$Port ..."
   Write-Host ''

@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import type { FetchLike } from '../../core/boros/client';
 import type { AppDeps } from '../app';
 import { TTL } from '../cache';
-import { startUpdate, updateProgress } from '../updater';
+import { packageReady, prefetchPackage, startUpdate, updateProgress } from '../updater';
 import { compareVersions, fetchLatestVersion, type RemoteVersion } from '../version';
 import { borosExecutionsPending } from './borosPair';
 
@@ -28,12 +28,17 @@ export function versionRoutes(deps: AppDeps) {
       }
       const updateAvailable =
         remote !== null && current !== null && (compareVersions(remote.version, current) ?? 0) > 0;
+      // Only an INSTALLED copy, the same gate the update route uses. In a
+      // source checkout the install root resolves to the checkout's PARENT,
+      // and prefetching there would write a pkg folder outside the repo.
+      if (updateAvailable && remote && deps.install) prefetchPackage(remote.version);
       return reply.ok({
         current,
         install: deps.install ?? null,
         latest: remote?.version ?? null,
         latestCommit: updateAvailable && remote ? remote.commit : null,
         updateAvailable,
+        packageReady: packageReady(),
         // Highlights only when they describe a version the user doesn't have.
         highlights: updateAvailable && remote ? remote.highlights : [],
       });
@@ -71,24 +76,16 @@ export function versionRoutes(deps: AppDeps) {
         );
       }
 
-      let pin: string | null = null;
-      if (deps.updateCheck?.current && !deps.updateCheck.disabled) {
-        const { value } = await deps.cache.get('version:latest', TTL.version, () =>
-          fetchLatestVersion(fetchImpl),
-        );
-        pin = value?.commit ?? null;
-      }
-
       // Windows stages the installer to disk before the task is created, so
       // this can fail on a bad download — which belongs in the dialog the user
       // is looking at, not in a log they would have to go find.
       let logPath: string;
       try {
-        logPath = await startUpdate(pin);
+        logPath = await startUpdate();
       } catch (err) {
         return refuse(`could not start the update: ${(err as Error).message}`, true);
       }
-      return reply.ok({ started: true, logPath, ref: pin });
+      return reply.ok({ started: true, logPath });
     });
   };
 }

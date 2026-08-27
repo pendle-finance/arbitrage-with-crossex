@@ -251,8 +251,9 @@ export function useVersion() {
 }
 
 /**
- * Watches the installed commit while an update runs, so the page can reload
- * onto the new bundle.
+ * Reads /version past its six-hour cache: the installed commit while an update
+ * runs, so the page can reload onto the new bundle, and `packageReady` while
+ * the server fetches the next version's package in the background.
  *
  * A separate key from `qk.version` on purpose: that one is cached for six
  * hours and would keep answering from the pre-update snapshot, which is the

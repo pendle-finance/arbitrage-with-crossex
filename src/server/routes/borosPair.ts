@@ -328,7 +328,10 @@ interface ExecutionPayload {
   estimate: ReturnType<typeof simulateBorosPair>;
   warnings: string[];
 }
-const recentExecutions = new Map<string, { at: number; result: Promise<ExecutionPayload> }>();
+const recentExecutions = new Map<
+  string,
+  { at: number; result: Promise<ExecutionPayload>; settled: boolean }
+>();
 const sweepExecutions = (): void => {
   const now = Date.now();
   for (const [k, v] of recentExecutions) {
@@ -338,13 +341,14 @@ const sweepExecutions = (): void => {
 
 export function borosExecutionsPending(): number {
   sweepExecutions();
-  return recentExecutions.size;
+  return [...recentExecutions.values()].filter((v) => !v.settled).length;
 }
 
 export function borosPairRoutes(deps: AppDeps) {
   recentExecutions.clear();
   const rememberExecution = (key: string, pending: Promise<ExecutionPayload>): void => {
-    recentExecutions.set(key, { at: Date.now(), result: pending });
+    const entry = { at: Date.now(), result: pending, settled: false };
+    recentExecutions.set(key, entry);
     // A submission that provably left NO position — every submitted leg failed
     // outright with nothing filled and none 'unknown' — is dropped, so an
     // honest retry is not refused a second attempt. `submitBorosPair` folds
@@ -357,6 +361,7 @@ export function borosPairRoutes(deps: AppDeps) {
         const anyFailed = legs.some((l) => l.failure !== null);
         const mayHaveFilled = legs.some((l) => l.filledSize > 0 || l.failure?.code === 'unknown');
         if (anyFailed && !mayHaveFilled) recentExecutions.delete(key);
+        else entry.settled = true;
       })
       .catch(() => recentExecutions.delete(key));
   };
