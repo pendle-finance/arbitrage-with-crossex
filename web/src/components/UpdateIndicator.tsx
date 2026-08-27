@@ -4,7 +4,6 @@ import { useRunUpdate, useVersion } from '../api/queries';
 import { INSTALL_CMD, INSTALL_CMD_WINDOWS, REPO_URL } from '../lib/app';
 import { CopyBlock } from './CopyBlock';
 import { Modal } from './Modal';
-import { SegmentedToggle } from './SegmentedToggle';
 
 const CHANGELOG_URL = `${REPO_URL}/blob/main/CHANGELOG.md`;
 
@@ -75,14 +74,37 @@ export function UpdateIndicator() {
                 the exact code the link below shows, not whatever lands on the branch later.
               </p>
             )}
-            <div className="flex flex-col items-start gap-2">
-              <SegmentedToggle
-                value={os}
-                options={order.map((v) => ({ value: v, label: OS_LABEL[v] }))}
-                onChange={setOs}
-                ariaLabel="Operating system"
-              />
-              <CopyBlock text={installCmd(os, pin)} />
+            <div className="flex flex-col">
+              {/* Folder tabs, same recipe as TabBar: -mb-px pulls the strip down
+                  over the block's top border, and the active tab's opaque
+                  bg-ink-900 — the block's own colour — cuts that line, so the
+                  two read as one surface. Flex items paint in document order, so
+                  the strip needs z-10 or the block below repaints its own border
+                  over the tab. Per-side border colours, never `border-*`, or the
+                  cyan cap loses to the all-sides rule. */}
+              <div
+                role="tablist"
+                aria-label="Operating system"
+                className="relative z-10 -mb-px flex"
+              >
+                {order.map((v) => (
+                  <button
+                    key={v}
+                    type="button"
+                    role="tab"
+                    aria-selected={os === v}
+                    onClick={() => setOs(v)}
+                    className={`shrink-0 whitespace-nowrap rounded-t-md border-x border-t-2 px-3 py-1.5 text-xs font-medium transition-colors ${
+                      os === v
+                        ? 'border-x-ink-700 border-t-cyan-400 bg-ink-900 text-ink-100'
+                        : 'border-transparent text-ink-400 hover:border-t-ink-500 hover:bg-ink-900/40 hover:text-ink-200'
+                    }`}
+                  >
+                    {OS_LABEL[v]}
+                  </button>
+                ))}
+              </div>
+              <CopyBlock text={installCmd(os, pin)} tabbed />
             </div>
             {runUpdate.data ? (
               <p
