@@ -226,8 +226,36 @@ swap_app() {
   rm -rf "$ROOT/app.old"
   [ -d "$ROOT/app" ] && mv "$ROOT/app" "$ROOT/app.old"
   mv "$ROOT/app.new" "$ROOT/app"
-  rm -rf "$ROOT/app.old"
+  # app.old is KEPT until the new version proves it can boot (remove_old_app):
+  # until then it is the only way back — see restore_app.
+  return 0
 }
+
+# Put the previous version back, and start it. Called only when the new version
+# did not come up: without this, a release that installs but cannot boot leaves
+# the machine with no server at all — on a box that may be minding an open
+# position, where the reconcile loop is what hedges, requotes and closes.
+restore_app() {
+  [ -d "$ROOT/app.old" ] || return 1
+  printf '\033[1;33m%s\033[0m\n' "Rolling back to the previous version…" >&2
+  rm -rf "$ROOT/app.failed"
+  [ -d "$ROOT/app" ] && mv "$ROOT/app" "$ROOT/app.failed"
+  mv "$ROOT/app.old" "$ROOT/app"
+  # install_service truncates both logs, so the restart below would wipe the
+  # failed version's stderr — the only record of why it would not boot, and
+  # exactly what the caller tells the user to read. Keep a copy first.
+  cp "$LOG_DIR/server.err.log" "$LOG_DIR/server.failed.log" 2>/dev/null || true
+  # install_service boots out the failed instance and reaps orphans for us.
+  install_service
+  wait_for_server || return 1
+  echo "      the previous version is running again at http://localhost:$PORT" >&2
+  echo "      the version that failed is kept at $ROOT/app.failed" >&2
+  return 0
+}
+
+# Only after the new version has answered on the port. Before that, app.old is
+# the rollback target and must survive.
+remove_old_app() { rm -rf "$ROOT/app.old"; }
 
 # ---------------------------------------------------------------------------
 # Step 4: LaunchAgent — keeps the server running, across reboots and crashes
@@ -364,6 +392,7 @@ install_service() {
 # ---------------------------------------------------------------------------
 # Step 5: open the app, create the launcher
 # ---------------------------------------------------------------------------
+# Returns non-zero rather than failing: the caller decides whether to roll back.
 wait_for_server() {
   say "Waiting for the app to start…"
   local i
@@ -373,7 +402,9 @@ wait_for_server() {
     fi
     sleep 0.5
   done
-  fail "the app did not start. Check the log: $LOG_DIR/server.err.log"
+  printf '\033[1;33m%s\033[0m\n' "Note: the app did not answer on port $PORT." >&2
+  echo "      Log: $LOG_DIR/server.err.log" >&2
+  return 1
 }
 
 make_launcher() {
@@ -401,7 +432,17 @@ main() {
   build_app
   swap_app
   install_service
-  wait_for_server
+  if ! wait_for_server; then
+    if restore_app; then
+      fail "the new version did not start, so the previous one was put back and is running.
+  Nothing was lost — your keys and trade history are untouched.
+  Why the new version failed: $LOG_DIR/server.failed.log"
+    fi
+    fail "the new version did not start, and the previous one could not be restored.
+  Log: $LOG_DIR/server.err.log
+  Re-run this installer to try again."
+  fi
+  remove_old_app   # the new version answers on the port; the way back can go
   make_launcher
   echo
   say "Done! Opening http://localhost:$PORT …"

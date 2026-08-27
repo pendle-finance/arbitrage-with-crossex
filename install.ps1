@@ -354,7 +354,56 @@ function Swap-App {
   if (Test-Path $old) { Invoke-WithRetry { Remove-Item -Recurse -Force $old } }
   if (Test-Path $app) { Invoke-WithRetry { Move-Item -Path $app -Destination $old } }
   Invoke-WithRetry { Move-Item -Path $new -Destination $app }
-  if (Test-Path $old) { Remove-Item -Recurse -Force $old -ErrorAction SilentlyContinue }
+  # app.old is deliberately KEPT here. It is deleted only once the new version
+  # has proved it can boot (see Remove-OldApp), because until then it is the
+  # only way back - see Restore-App.
+}
+
+# Put the previous version back, and start it. Called only when the new version
+# did not come up: without this, a release that installs but cannot boot leaves
+# the machine with no server at all - on a box that may be minding an open
+# position, where the reconcile loop is what hedges, requotes and closes.
+function Restore-App {
+  $app    = Join-Path $Root 'app'
+  $old    = Join-Path $Root 'app.old'
+  $failed = Join-Path $Root 'app.failed'
+  if (-not (Test-Path $old)) { return $false }
+
+  Write-Host 'Rolling back to the previous version...' -ForegroundColor Yellow
+  # Not Stop-RunningService: that Fails on a busy port, and we are already on
+  # the error path. Take the task down and reap whatever the new version left.
+  Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
+  Stop-StaleServer
+  try {
+    if (Test-Path $failed) { Invoke-WithRetry { Remove-Item -Recurse -Force $failed } }
+    if (Test-Path $app)    { Invoke-WithRetry { Move-Item -Path $app -Destination $failed } }
+    Invoke-WithRetry { Move-Item -Path $old -Destination $app }
+  } catch {
+    Write-Host "      could not put the previous version back: $($_.Exception.Message)" -ForegroundColor Red
+    return $false
+  }
+  # Install-Service truncates both logs, so the restart below would wipe the
+  # failed version's stderr - the only record of why it would not boot, and
+  # exactly what the caller tells the user to read. Keep a copy first.
+  Copy-Item (Join-Path $LogDir 'server.err.log') (Join-Path $LogDir 'server.failed.log') `
+    -Force -ErrorAction SilentlyContinue
+
+  Install-Service
+  if (-not (Wait-ForServer)) { return $false }
+  Write-Host "      the previous version is running again at http://localhost:$Port" -ForegroundColor Yellow
+  Write-Host "      the version that failed is kept at $failed" -ForegroundColor DarkGray
+  return $true
+}
+
+# Only after the new version has answered on the port. Before that, app.old is
+# the rollback target and must survive.
+function Remove-OldApp {
+  $old = Join-Path $Root 'app.old'
+  if (-not (Test-Path $old)) { return }
+  # Retry for the reason Invoke-WithRetry exists: AV and the Search indexer open
+  # a folder the moment it stops changing. Observed leaving app.old behind
+  # without this. Never fatal - the next Swap-App clears it.
+  try { Invoke-WithRetry { Remove-Item -Recurse -Force $old } } catch { }
 }
 
 # Both halves of the service: the node server AND the PowerShell supervisor that
@@ -612,12 +661,12 @@ function Wait-ForServer {
     }
     Start-Sleep -Milliseconds 500
   }
+  # Returns $false rather than failing: the caller decides whether to roll back.
   if (-not $listening) {
-    Fail @"
-the app never started listening on port $Port.
-  Log: $LogDir\server.err.log
-  Last error: $last
-"@
+    Write-Host "Note: the app never started listening on port $Port." -ForegroundColor Yellow
+    Write-Host "      Log: $LogDir\server.err.log" -ForegroundColor DarkGray
+    Write-Host "      Last error: $last" -ForegroundColor DarkGray
+    return $false
   }
 
   # Stage 2: confirm it is really our API. WebClient with Proxy = $null, not
@@ -628,7 +677,7 @@ the app never started listening on port $Port.
       $wc = New-Object Net.WebClient
       $wc.Proxy = $null
       $body = $wc.DownloadString($uri)
-      if ($body -match '"status"\s*:\s*"ok"') { return }
+      if ($body -match '"status"\s*:\s*"ok"') { return $true }
       $last = "unexpected health response: $body"
     } catch {
       $last = $_.Exception.Message
@@ -638,8 +687,12 @@ the app never started listening on port $Port.
 
   # The port is open, so the app IS running - only our verification failed. Say
   # so and carry on rather than failing an install that actually succeeded.
+  # Deliberately $true, so this never triggers a rollback: something IS serving,
+  # and rolling back over a proxy quirk or a slow first response would replace a
+  # working install with an older one.
   Write-Host "Note: port $Port is open but the health check did not confirm it ($last)." -ForegroundColor Yellow
   Write-Host "      The app is most likely fine - open http://127.0.0.1:$Port to check." -ForegroundColor Yellow
+  return $true
 }
 
 function New-Launcher {
@@ -670,7 +723,21 @@ try {
   Stop-RunningService   # must precede Swap-App - see the note there
   Swap-App
   Install-Service
-  Wait-ForServer
+  if (-not (Wait-ForServer)) {
+    if (Restore-App) {
+      Fail @"
+the new version did not start, so the previous one was put back and is running.
+  Nothing was lost - your keys and trade history are untouched.
+  Why the new version failed: $LogDir\server.failed.log
+"@
+    }
+    Fail @"
+the new version did not start, and the previous one could not be restored.
+  Log: $LogDir\server.err.log
+  Re-run this installer to try again.
+"@
+  }
+  Remove-OldApp   # the new version answers on the port; the way back can go
   New-Launcher
   Write-Host ''
   Say "Done! Opening http://localhost:$Port ..."
