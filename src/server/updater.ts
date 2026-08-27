@@ -178,7 +178,11 @@ export async function startUpdate(ref?: string | null): Promise<string> {
       '/tn',
       TASK_NAME,
       '/tr',
-      `powershell -NoProfile -ExecutionPolicy Bypass -File "${path.join(borosRoot(), 'update.ps1')}"`,
+      // conhost --headless, for the same reason install.ps1 uses it for the
+      // service task: a bare powershell /tr opens a console window for the
+      // whole install (Windows Terminal ignores -WindowStyle Hidden), and
+      // closing that window kills the installer mid-swap.
+      `conhost.exe --headless powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "${path.join(borosRoot(), 'update.ps1')}"`,
       '/sc',
       'once',
       '/st',

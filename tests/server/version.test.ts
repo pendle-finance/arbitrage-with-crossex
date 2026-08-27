@@ -471,7 +471,7 @@ describe('POST /api/version/update', () => {
       const tr = args[args.indexOf('/tr') + 1];
 
       expect(tr).toBe(
-        `powershell -NoProfile -ExecutionPolicy Bypass -File "${path.join(home, 'update.ps1')}"`,
+        `conhost.exe --headless powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "${path.join(home, 'update.ps1')}"`,
       );
       expect(tr).not.toMatch(/iex|Invoke-Expression|https?:|-Command/i);
       // The pin travels in the staged runner, never on the command line.
