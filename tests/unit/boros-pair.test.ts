@@ -550,11 +550,11 @@ describe('evaluatePairGate', () => {
     const g = evaluatePairGate(gateInput({ account: account({ gasBalanceUsd: 0 }) }));
     const codesOut = codes(g);
     expect(codesOut).not.toContain('no-gas');
-    // Gas comes out of USD collateral, margin out of the pair's own — different
-    // pots, so a gas warning must never read as a margin problem.
+    // Gas comes out of the USDT balance, margin out of the pair's own —
+    // different pots, so a gas warning must never read as a margin problem.
     expect(codesOut).not.toContain('cross-short-margin');
     expect(g.warnings.join(' ')).toMatch(/tops it up as it sends/i);
-    expect(g.warnings.join(' ')).toMatch(/USD collateral/i);
+    expect(g.warnings.join(' ')).toMatch(/\$1\.00 from your Boros USDT balance/i);
   });
 
   it('says how low a LOW balance is, and still does not block', () => {

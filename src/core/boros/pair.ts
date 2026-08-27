@@ -35,7 +35,13 @@ import {
   type BookStatus,
 } from './opportunities';
 import { SECONDS_IN_YEAR } from './returns';
-import { BOROS_TOKEN_SYMBOLS, type BorosMarket, type BorosOrderBook } from './client';
+import {
+  AUTO_TOP_UP_BELOW_USD,
+  AUTO_TOP_UP_USD,
+  BOROS_TOKEN_SYMBOLS,
+  type BorosMarket,
+  type BorosOrderBook,
+} from './client';
 
 /** Default per-leg tolerance: 25 ticks of APR. Wide enough that a normal
  * two-or-three-level walk is not rejected, tight enough that the worst-case
@@ -48,7 +54,7 @@ export const DEFAULT_SLIPPAGE_APR = 0.0025;
  * with a limit, it is a market order. */
 export const MAX_SLIPPAGE_APR = 0.1;
 
-export const MIN_GAS_BALANCE_USD = 0.3;
+export const MIN_GAS_BALANCE_USD = AUTO_TOP_UP_BELOW_USD;
 
 /** How long a simulation may back a confirm before it is refused as stale
  * (§7). The panel re-simulates well inside this. */
@@ -730,13 +736,16 @@ export function evaluatePairGate(input: EvaluatePairInput): PairGate {
         'This is gas, not trading collateral: topping up your margin will not fix it.',
     );
   } else if (gas !== undefined && gas < MIN_GAS_BALANCE_USD) {
-    // NOT a blocker. The order carries its own `payTreasury` (see
-    // AUTO_TOP_UP_BELOW_USD in borosApi) and the relayer counts that as a
-    // credit when it checks the budget, so a low balance stops nothing. Said
-    // anyway because it moves real money out of USD collateral.
+    // NOT a blocker. The order carries its own `payTreasury` and the relayer
+    // counts that as a credit when it checks the budget, so a low balance stops
+    // nothing. Said anyway because it spends real money.
+    //
+    // A negative balance is debt the top-up clears on top of its own dollar, so
+    // quote the amount rather than the constant.
+    const topUp = AUTO_TOP_UP_USD + (gas < 0 ? -gas : 0);
     warnings.push(
       `Prepaid gas on this Boros account is ${gas <= 0 ? 'empty' : `low, about $${gas.toFixed(2)}`}, so this order tops it up as it sends. ` +
-        'That is charged from your USD collateral, not from the margin for these legs.',
+        `That takes about $${topUp.toFixed(2)} from your Boros USDT balance, on top of the margin for these legs.`,
     );
   }
 
