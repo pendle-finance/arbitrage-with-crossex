@@ -538,7 +538,6 @@ export type BlockerCode =
   | 'isolated-short-margin'
   | 'cross-short-margin'
   | 'margin-unknown'
-  | 'no-gas'
   | 'flip-unacknowledged'
   | 'stale-simulation';
 
@@ -731,12 +730,14 @@ export function evaluatePairGate(input: EvaluatePairInput): PairGate {
         'This is gas, not trading collateral: topping up your margin will not fix it.',
     );
   } else if (gas !== undefined && gas < MIN_GAS_BALANCE_USD) {
-    blockers.push({
-      code: 'no-gas',
-      message:
-        `Prepaid gas on this Boros account is ${gas <= 0 ? 'empty' : `low, about $${gas.toFixed(2)}`} — top it up to send an order. ` +
-        'This is gas, not trading collateral: topping up your margin will not fix it.',
-    });
+    // NOT a blocker. The order carries its own `payTreasury` (see
+    // AUTO_TOP_UP_BELOW_USD in borosApi) and the relayer counts that as a
+    // credit when it checks the budget, so a low balance stops nothing. Said
+    // anyway because it moves real money out of USD collateral.
+    warnings.push(
+      `Prepaid gas on this Boros account is ${gas <= 0 ? 'empty' : `low, about $${gas.toFixed(2)}`}, so this order tops it up as it sends. ` +
+        'That is charged from your USD collateral, not from the margin for these legs.',
+    );
   }
 
   // --- §4 acknowledgement --------------------------------------------------

@@ -714,12 +714,8 @@ describe('BorosPairTicket', () => {
       ...handlers({
         gasBalanceUsd: null,
         gate: {
-          blockers: [
-            {
-              code: 'no-gas',
-              message:
-                'Prepaid gas on this Boros account could not be read, so we cannot say whether an order will be accepted. This is gas, not trading collateral: topping up your margin will not fix it.',
-            },
+          warnings: [
+            'Prepaid gas on this Boros account could not be read, so this order may still be refused for gas. This is gas, not trading collateral: topping up your margin will not fix it.',
           ],
         },
       }),
@@ -731,18 +727,17 @@ describe('BorosPairTicket', () => {
     expect(screen.queryByRole('button', { name: /Top up gas/i })).not.toBeInTheDocument();
   });
 
-  it('surfaces an empty gas balance as its own blocker, not a margin one', async () => {
+  /** This used to be a blocker, and it was a dead end: the only remedy was a
+   * top-up the ticket refused to send until you had already made it. The order
+   * now carries its own, so an empty balance is said and not enforced. */
+  it('says an empty gas balance tops itself up, and does not block the confirm', async () => {
     const user = userEvent.setup();
     server.use(
       ...handlers({
         gasBalanceUsd: 0,
         gate: {
-          blockers: [
-            {
-              code: 'no-gas',
-              message:
-                'Prepaid gas on this Boros account is empty — top it up to send an order. This is gas, not trading collateral: topping up your margin will not fix it.',
-            },
+          warnings: [
+            'Prepaid gas on this Boros account is empty, so this order tops it up as it sends. That is charged from your USD collateral, not from the margin for these legs.',
           ],
         },
       }),
@@ -750,22 +745,20 @@ describe('BorosPairTicket', () => {
     renderWithClient(<BorosPairTicket />);
     await fillTicket(user);
 
-    expect(await screen.findByText(/Prepaid gas on this Boros account is empty/i)).toBeInTheDocument();
-    expect(screen.getByText(/topping up your margin will not fix it/i)).toBeInTheDocument();
+    expect(await screen.findByText(/tops it up as it sends/i)).toBeInTheDocument();
+    expect(screen.getByText(/USD collateral/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Confirm/i })).toBeEnabled();
   });
 
-  it('tops up gas from inside the blocker, at an amount the user can edit', async () => {
+  it('still offers a manual top-up on a low balance, at an amount the user can edit', async () => {
     const user = userEvent.setup();
     const bodies: Record<string, unknown>[] = [];
     server.use(
       ...handlers({
         gasBalanceUsd: 0.05,
         gate: {
-          blockers: [
-            {
-              code: 'no-gas',
-              message: 'Prepaid gas on this Boros account is low, about $0.05 — top it up to send an order.',
-            },
+          warnings: [
+            'Prepaid gas on this Boros account is low, about $0.05, so this order tops it up as it sends.',
           ],
         },
       }),
@@ -777,7 +770,7 @@ describe('BorosPairTicket', () => {
     renderWithClient(<BorosPairTicket />);
     await fillTicket(user);
 
-    const field = (await screen.findByLabelText(/Top up \(USD\)/i)) as HTMLInputElement;
+    const field = (await screen.findByLabelText(/Top up gas by hand \(USD\)/i)) as HTMLInputElement;
     expect(field.value).toBe('5');
     const button = screen.getByRole('button', { name: /Top up gas/i });
 

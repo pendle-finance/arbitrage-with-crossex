@@ -25,7 +25,7 @@
  */
 import type { FastifyInstance } from 'fastify';
 import { CoreError } from '../../core/errors';
-import { makeBorosApiOrderClient } from '../../core/boros/borosApi';
+import { makeBorosApiOrderClient, USD_TOKEN_ID } from '../../core/boros/borosApi';
 import { fetchBorosMarkets, resolveBorosFetch } from '../../core/boros/client';
 import type { AppDeps } from '../app';
 import { TTL } from '../cache';
@@ -133,6 +133,12 @@ export function borosAgentRoutes(deps: AppDeps) {
             fetchBorosMarkets(resolveBorosFetch(deps.borosFetch)),
           );
           return value.find((m) => m.marketId === marketId)?.tokenId;
+        },
+        usdMarketId: async () => {
+          const { value } = await deps.cache.get('boros:markets', TTL.boros, () =>
+            fetchBorosMarkets(resolveBorosFetch(deps.borosFetch)),
+          );
+          return value.find((m) => m.tokenId === USD_TOKEN_ID)?.marketId;
         },
       });
 
