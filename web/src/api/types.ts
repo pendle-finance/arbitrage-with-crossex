@@ -1130,6 +1130,16 @@ export interface RunUpdateResponse {
   ref: string | null;
 }
 
+/** What the running installer has printed so far — drives the progress panel. */
+export interface UpdateProgress {
+  /** ms epoch, from the server that STARTED the update. Null once the NEW copy
+   * is the one answering: a fresh process has no memory of the install that
+   * replaced it. The dialog keeps its own start time for the clock. */
+  startedAt: number | null;
+  running: boolean;
+  text: string;
+}
+
 export interface BorosLegFill {
   marketId: number;
   direction: BorosLegDirection;

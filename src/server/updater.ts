@@ -28,9 +28,48 @@ function updateLogPath(): string {
 const UPDATE_WINDOW_MS = 10 * 60_000;
 
 let updating = false;
+let startedAtMs: number | null = null;
 let windowTimer: ReturnType<typeof setTimeout> | null = null;
 
 export const isUpdating = (): boolean => updating;
+
+/** Tail of the running installer's output, for the progress panel.
+ *
+ * The installer stops this server partway through, so the panel loses the feed
+ * and picks it back up from the NEW server — which is why the log has to be the
+ * source of truth rather than anything held in memory here. Both installers
+ * print their steps as `==> …`, and both print the rollback banner on a
+ * failure, so the text alone says where the update got to. */
+export function updateProgress(): { startedAt: number | null; running: boolean; text: string } {
+  const main = tail(updateLogPath());
+  // Windows keeps native stderr in its own file; a failure that never reached
+  // a `Say` line leaves its only explanation there.
+  const err = process.platform === 'win32' ? tail(updateLogPath().replace(/\.log$/, '.err.log')) : '';
+  return {
+    startedAt: startedAtMs,
+    running: updating,
+    text: err.trim() ? `${main}\n${err}` : main,
+  };
+}
+
+const TAIL_BYTES = 16_384;
+
+function tail(file: string): string {
+  try {
+    const fd = fs.openSync(file, 'r');
+    try {
+      const { size } = fs.fstatSync(fd);
+      const take = Math.min(size, TAIL_BYTES);
+      const buf = Buffer.alloc(take);
+      fs.readSync(fd, buf, 0, take, size - take);
+      return buf.toString('utf8');
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    return '';
+  }
+}
 
 export function endUpdateWindow(): void {
   updating = false;
@@ -40,6 +79,7 @@ export function endUpdateWindow(): void {
 
 function beginUpdateWindow(): void {
   updating = true;
+  startedAtMs = Date.now();
   if (windowTimer) clearTimeout(windowTimer);
   windowTimer = setTimeout(endUpdateWindow, UPDATE_WINDOW_MS);
   windowTimer.unref?.();
@@ -83,6 +123,12 @@ async function stageWindowsInstaller(logPath: string, pin: string | null): Promi
   }
   fs.mkdirSync(root, { recursive: true });
   fs.writeFileSync(installer, script, 'utf8');
+
+  // Start-Process truncates both files, but only once the task actually fires.
+  // Until then the progress panel would be reading the LAST update's output —
+  // and calling this one finished on the previous run's "Done!".
+  fs.writeFileSync(logPath, '');
+  fs.writeFileSync(logPath.replace(/\.log$/, '.err.log'), '');
 
   // BOROS_REF can no longer travel on the command line, so the runner sets it.
   // `pin` is a validated 40-char sha and '' doubles PowerShell's quote escape.
@@ -141,7 +187,7 @@ export async function startUpdate(ref?: string | null): Promise<string> {
     return logPath;
   }
 
-  const log = fs.openSync(logPath, 'a');
+  const log = fs.openSync(logPath, 'w');
   /**
    * ⚠ NODE_ENV MUST NOT REACH THE INSTALLER.
    *

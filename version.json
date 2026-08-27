@@ -2,9 +2,9 @@
   "version": "1.5.0",
   "highlights": [
     "Windows only, one time: run the install command below once more. After that, updating is a button press",
-    "Updating is now one button — it installs the new version, restarts, and reloads this page. If it cannot start, your old version comes back",
+    "Updating is now one button — it installs the new version, restarts, and reloads this page. You can watch it work, and if it cannot start, your old version comes back",
     "Boros gas takes care of itself. An empty gas pot no longer stops an order, and there is nothing to top up by hand",
     "Orders that cannot go through now say what to change, and which venue is the problem",
-    "A position's Fixed APY is counted from the day you opened it. The old figure was too high"
+    "A position's Fixed APY is counted from the day you opened it. The old figure was too high — and the spread beside it now shows what each leg contributes"
   ]
 }
