@@ -542,24 +542,33 @@ describe('evaluatePairGate', () => {
     expect(b.message).toMatch(/ETH/);
   });
 
-  it('blocks on an empty prepaid gas balance, distinctly from margin', () => {
+  /** An empty gas balance used to be a blocker, which was a dead end: the one
+   * remedy was a top-up the ticket refused to send until you had already made
+   * it. The order now carries its own `payTreasury`, so this only has to be
+   * SAID — never enforced. */
+  it('does not block an empty prepaid gas balance — the order tops itself up', () => {
     const g = evaluatePairGate(gateInput({ account: account({ gasBalanceUsd: 0 }) }));
     const codesOut = codes(g);
-    expect(codesOut).toContain('no-gas');
-    // Gas is topped up with payTreasury, margin with collateral — different fix.
+    expect(codesOut).not.toContain('no-gas');
+    // Gas comes out of USD collateral, margin out of the pair's own — different
+    // pots, so a gas warning must never read as a margin problem.
     expect(codesOut).not.toContain('cross-short-margin');
-    expect(g.blockers.find((b) => b.code === 'no-gas')!.message).toMatch(
-      /gas, not trading collateral/i,
-    );
+    expect(g.warnings.join(' ')).toMatch(/tops it up as it sends/i);
+    expect(g.warnings.join(' ')).toMatch(/USD collateral/i);
   });
 
-  it('blocks a LOW balance too, not just an empty one', () => {
+  it('says how low a LOW balance is, and still does not block', () => {
     const g = evaluatePairGate(gateInput({ account: account({ gasBalanceUsd: 0.05 }) }));
-    expect(codes(g)).toContain('no-gas');
-    const msg = g.blockers.find((b) => b.code === 'no-gas')!.message;
-    // Names what is actually there, so the shortfall is obvious.
+    expect(codes(g)).not.toContain('no-gas');
+    const msg = g.warnings.join(' ');
+    // Names what is actually there, so the charge is not a surprise.
     expect(msg).toContain('$0.05');
     expect(msg).not.toContain('$10');
+  });
+
+  it('a healthy balance says nothing about gas at all', () => {
+    const g = evaluatePairGate(gateInput({ account: account({ gasBalanceUsd: 5 }) }));
+    expect(g.warnings.join(' ')).not.toMatch(/gas/i);
   });
 
   it('WARNS about an unknown balance without blocking the trade', () => {

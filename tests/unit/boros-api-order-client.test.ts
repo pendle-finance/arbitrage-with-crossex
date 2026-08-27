@@ -23,6 +23,7 @@ const ROOT = '0x9dcf85824e024fea9e3ef583dccbea68edbc37b8' as const;
 const AGENT_KEY = `0x${'11'.repeat(32)}` as const;
 const HL = 155;
 const BN = 158;
+const USD_MARKET = 900;
 
 interface Call {
   path: string;
@@ -74,7 +75,7 @@ function fakeApi(
       const datas = body.datas as Array<{ calldata: string }>;
       // The enter-markets submission is the one carrying 0xe0; overrides are
       // about the ORDER submission and must not leak onto it.
-      if (datas[0]?.calldata === '0x7a') {
+      if (datas.length === 1 && datas[0]?.calldata === '0x7a') {
         if (over.payReturns !== undefined) return ok(over.payReturns);
         return ok(datas.map((_, i) => ({ txHash: '0xpay', index: i, status: 'success' })));
       }
@@ -101,7 +102,7 @@ function fakeApi(
   return { calls, fetchImpl };
 }
 
-const client = (api: ReturnType<typeof fakeApi>) =>
+const client = (api: ReturnType<typeof fakeApi>, over: { noUsdMarket?: boolean } = {}) =>
   makeBorosApiOrderClient({
     root: ROOT,
     accountId: 0,
@@ -109,6 +110,7 @@ const client = (api: ReturnType<typeof fakeApi>) =>
     // Both legs on ETH collateral: an eligible pair must share a token, which
     // is also what makes them one cross account.
     tokenIdForMarket: () => 2,
+    usdMarketId: over.noUsdMarket ? undefined : () => USD_MARKET,
     fetchImpl: api.fetchImpl,
     statusAttempts: 1,
     sleep: async () => {},
@@ -191,6 +193,107 @@ describe('makeBorosApiOrderClient — atomicity', () => {
     // The endpoint rejects unsorted or reused nonces outright.
     expect(BigInt(datas[1].message.nonce)).toBeGreaterThan(BigInt(datas[0].message.nonce));
     expect(datas[0].message.account).toBe(packAccount(ROOT, 0));
+  });
+});
+
+/**
+ * Gas the order pays for itself.
+ *
+ * Boros funds its relayer from an off-chain USD budget, and an account with
+ * plenty of margin can still be unable to send an order. A low balance used to
+ * be a confirm blocker, which was a dead end. The relayer's own pre-check
+ * counts a `payTreasury` in the SAME submission as a credit, so an order that
+ * carries its own top-up is accepted at zero — which is what the venue's own
+ * app does.
+ */
+describe('makeBorosApiOrderClient — an order tops up its own gas', () => {
+  const orderSubmit = (api: ReturnType<typeof fakeApi>) =>
+    api.calls
+      .filter((c) => c.path === '/v1/send-txs/bulk-calls')
+      .map((c) => c.body.datas as Array<{ calldata: string }>)
+      .pop()!;
+
+  it('prepends a pay-treasury when the budget is low, and charges the USD market', async () => {
+    const api = fakeApi({ gasBalance: { balanceInUSD: 0.05 } });
+    await client(api).placeMarketOrders([leg(), leg({ marketId: BN, direction: 'long' })]);
+
+    expect(orderSubmit(api).map((d) => d.calldata)[0]).toBe('0x7a');
+    expect(orderSubmit(api)).toHaveLength(3); // top-up + two legs, ONE submission
+
+    const pay = api.calls.find((c) => c.path.includes('agent/pay-treasury'))!;
+    // The top-up comes out of USD collateral, so it must not be charged
+    // through one of the ETH markets being traded.
+    expect(pay.body.marketId).toBe(USD_MARKET);
+    expect(pay.body.amount).toBe('1000000000000000000'); // $1, 18dp
+  });
+
+  it('clears the debt as well when the budget is already negative', async () => {
+    const api = fakeApi({ gasBalance: { balanceInUSD: -0.8 } });
+    await client(api).placeMarketOrders([leg()]);
+
+    const pay = api.calls.find((c) => c.path.includes('agent/pay-treasury'))!;
+    // $1 on top of the $0.80 owed — the venue charges its own users the same.
+    expect(pay.body.amount).toBe('1800000000000000000');
+  });
+
+  it('leaves a healthy budget alone', async () => {
+    const api = fakeApi({ gasBalance: { balanceInUSD: 42 } });
+    await client(api).placeMarketOrders([leg()]);
+
+    expect(api.calls.some((c) => c.path.includes('agent/pay-treasury'))).toBe(false);
+    expect(orderSubmit(api)).toHaveLength(1);
+  });
+
+  /** The top-up occupies slot 0, so a leg reading results positionally would
+   * take the top-up's outcome as its own fill and report nothing traded. */
+  it('still attributes each leg its own fill once the bundle is shifted', async () => {
+    const api = fakeApi({
+      gasBalance: { balanceInUSD: 0 },
+      status: {
+        status: 'success',
+        statuses: [
+          { index: 0 },                                        // the top-up
+          { index: 1, marketOrdersExecuted: [filled(HL, '10000000000000000000')] },
+          { index: 2, marketOrdersExecuted: [filled(BN, '10000000000000000000')] },
+        ],
+      },
+    });
+    const fills = await client(api).placeMarketOrders([
+      leg(),
+      leg({ marketId: BN, direction: 'long' }),
+    ]);
+
+    expect(fills.map((f) => f.marketId)).toEqual([HL, BN]);
+    expect(fills.map((f) => f.filledSize)).toEqual([10, 10]);
+    expect(fills.some((f) => f.failure)).toBe(false);
+  });
+
+  it('fails every leg when the top-up itself reverts — one submission, one fate', async () => {
+    const api = fakeApi({
+      gasBalance: { balanceInUSD: 0 },
+      submit: () => [{ error: 'INSUFFICIENT_MARGIN' }],
+    });
+    const fills = await client(api).placeMarketOrders([leg()]);
+    expect(fills[0].failure?.code).toBe('insufficient-margin');
+  });
+
+  /** Best effort by design: a supplementary read must never be the reason a
+   * trade does not go out. If the budget really was too low the venue refuses
+   * the bundle, and that is reported as a gas failure. */
+  it('sends the order anyway when it cannot work out a top-up', async () => {
+    const api = fakeApi({ gasBalance: { balanceInUSD: 0 } });
+    await client(api, { noUsdMarket: true }).placeMarketOrders([leg()]);
+
+    expect(api.calls.some((c) => c.path.includes('agent/pay-treasury'))).toBe(false);
+    expect(orderSubmit(api)).toHaveLength(1);
+  });
+
+  it('sends the order anyway when the gas balance cannot be read', async () => {
+    const api = fakeApi({ gasBalance: {} });
+    await client(api).placeMarketOrders([leg()]);
+
+    expect(api.calls.some((c) => c.path.includes('agent/pay-treasury'))).toBe(false);
+    expect(orderSubmit(api)).toHaveLength(1);
   });
 });
 

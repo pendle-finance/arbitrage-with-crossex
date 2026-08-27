@@ -74,6 +74,28 @@ export const CROSS_MARKET_ID = 0xff_ff_ff;
 
 export const USD_TOKEN_ID = 3;
 
+/**
+ * Gas the order pays for itself.
+ *
+ * Boros funds its relayer from an off-chain USD budget per root, separate from
+ * trading collateral, and an account with plenty of margin can still be unable
+ * to send an order. The venue's own app never makes a user think about that,
+ * and the mechanism is not a background job: a `payTreasury` call placed in the
+ * SAME submission is counted as a credit by the relayer's pre-check
+ * (`deltaFee = gas - marketEntranceFee - payTreasuryFee`, gas-tracking.service),
+ * so a bundle carrying its own top-up is accepted even when the budget is at
+ * zero or in debt. We do the same, so a low balance is never a dead end.
+ *
+ * These mirror the backend's ops-fee defaults (`minOpsFeeInUSD` 0.2,
+ * `opsFeeToTakeInUSD` 1). They are app-settings values retuned upstream against
+ * live gas prices and we do not read them — ours fire slightly earlier on
+ * purpose, so an order tops up before it reaches the venue's own floor rather
+ * than racing it. If Boros ever raises its floor above this, the venue's
+ * refusal is still reported honestly as a gas failure.
+ */
+export const AUTO_TOP_UP_BELOW_USD = 0.3;
+export const AUTO_TOP_UP_USD = 1;
+
 /** Side enum on the wire: 0 = LONG, 1 = SHORT. */
 const SIDE_LONG = 0;
 const SIDE_SHORT = 1;
@@ -134,6 +156,11 @@ export interface BorosApiConfig {
   /** marketId → collateral tokenId, needed to pack a MarketAcc. Async so the
    * caller can serve it off the same TTL-cached markets read the routes use. */
   tokenIdForMarket: (marketId: number) => Promise<number | undefined> | number | undefined;
+  /** A market in the USD collateral zone, which is where a gas top-up is
+   * charged from. Without it an order cannot carry its own top-up and the
+   * account has to be topped up by hand. Async for the same reason as
+   * `tokenIdForMarket`: it comes off the routes' cached markets read. */
+  usdMarketId?: () => Promise<number | undefined> | number | undefined;
   baseUrl?: string;
   fetchImpl?: ApiFetch;
   /** Receipt polling, exposed so tests need no timers. */
@@ -493,6 +520,70 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
     for (const [tokenId, ids] of byToken) await enterMissing(tokenId, ids);
   };
 
+  const readGasBalance = async (): Promise<number | null> => {
+    const res = await call<{ balanceInUSD?: number }>(
+      `/v1/accounts/gas-balance?root=${config.root}`,
+      undefined,
+      'GET',
+    );
+    return typeof res?.balanceInUSD === 'number' ? res.balanceInUSD : null;
+  };
+
+  /** `cents`, not dollars: the exact integer→wei step is the whole point, so
+   * no float ever reaches the amount. */
+  const buildPayTreasuryCalldata = async (cents: number, marketId: number): Promise<Hex[]> => {
+    const { calls } = await call<{ calls: PlaceOrderCall[] }>(
+      '/v1/calldata-builder/agent/pay-treasury',
+      {
+        accountId: config.accountId,
+        isCross: true,
+        marketId,
+        amount: (BigInt(cents) * 10n ** BigInt(DECIMALS - 2)).toString(),
+      },
+    );
+    if (!calls?.length) {
+      throw new CoreError(
+        `Boros returned no calldata for a $${cents / 100} gas top-up.`,
+        'venue-rejected',
+      );
+    }
+    return calls.map((c) => c.calldata as Hex);
+  };
+
+  /**
+   * The top-up an order carries so it can pay its own gas — see
+   * AUTO_TOP_UP_BELOW_USD. Empty when the budget is healthy, unreadable, or
+   * there is no USD market to charge.
+   *
+   * Best effort ON PURPOSE. Every failure here returns [] and lets the order go
+   * out: the budget may well be fine, and refusing to trade because a
+   * supplementary read failed would reinstate exactly the dead end this
+   * removes. If the balance really was too low the venue refuses the bundle and
+   * `classifyLegFailure` reports that as a gas failure, which is the truth.
+   */
+  const autoTopUpCalldata = async (): Promise<Hex[]> => {
+    if (!config.usdMarketId) return [];
+    try {
+      const balance = await readGasBalance();
+      if (balance === null || balance >= AUTO_TOP_UP_BELOW_USD) return [];
+      const marketId = await config.usdMarketId();
+      if (marketId === undefined) return [];
+      // A negative budget is debt. Clear it and leave the full amount on top,
+      // which is what Boros charges its own users in the same state.
+      //
+      // Counted in CENTS, and the wei built from those, because `decimalString`
+      // goes through `toFixed(18)`: $1.80 as a float is 1.80000000000000004…,
+      // and formatting it to 18 places writes that tail into the amount. Round
+      // rather than ceil — a sub-cent under-recovery of the debt is absorbed by
+      // the whole dollar sitting on top of it.
+      const owed = balance < 0 ? -balance : 0;
+      const cents = Math.round(AUTO_TOP_UP_USD * 100) + Math.round(owed * 100);
+      return await buildPayTreasuryCalldata(cents, marketId);
+    } catch {
+      return [];
+    }
+  };
+
   const buildOrderCalldata = async (req: BorosMarketOrderRequest): Promise<Hex> => {
     const { calls } = await call<{ calls: PlaceOrderCall[] }>(
       '/v1/calldata-builder/agent/place-order',
@@ -552,13 +643,24 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
     if (reqs.length === 0) return [];
     await ensureEntered(reqs.map((r) => r.marketId));
 
-    const calldatas = await Promise.all(reqs.map(buildOrderCalldata));
+    // Prepended, not appended: the top-up is the first thing in the bundle, so
+    // the calls that spend gas are the ones that follow it. The relayer credits
+    // it either way (its pre-check reads the whole submission), but on-chain
+    // order is the readable one.
+    const topUp = await autoTopUpCalldata();
+    const calldatas = [...topUp, ...(await Promise.all(reqs.map(buildOrderCalldata)))];
     const signed = await signCalls(calldatas);
     const responses = await submitCalls(signed);
+    // Everything below indexes BY LEG, and the top-up occupies the first
+    // `topUp.length` slots of the submission. Read leg results off the shifted
+    // view, and shift the positional fallback too, or leg 0 reads the top-up's
+    // outcome as its own fill.
+    const legResponses = responses.slice(topUp.length);
 
     // With `requireSuccess` the legs stand or fall together, so one error is
-    // the whole batch's: report every leg failed rather than implying the
-    // others might have traded.
+    // the whole batch's — the top-up's included: it is in the same submission,
+    // so if it reverted nothing else traded either. Report every leg failed
+    // rather than implying the others might have traded.
     const failure = responses.find((r) => r?.error);
     if (failure) return reqs.map((req) => failedLeg(req, failure.error as string));
 
@@ -580,7 +682,7 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
           `Submitted as ${txHash} but no status came back, so this leg may or may not have filled. Check the position on Boros before re-issuing.`,
         );
       }
-      const status = byIndex.get(responses[i]?.index ?? i);
+      const status = byIndex.get(legResponses[i]?.index ?? i + topUp.length);
       // A status array that skips this call says nothing about it — exactly
       // the uncertainty the `!byIndex` branch above reports. Falling through
       // would compute `filled` as 0 and claim "nothing matched", telling the
@@ -657,32 +759,11 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
       }
     },
 
-    async getGasBalance(): Promise<number | null> {
-      const res = await call<{ balanceInUSD?: number }>(
-        `/v1/accounts/gas-balance?root=${config.root}`,
-        undefined,
-        'GET',
-      );
-      return typeof res?.balanceInUSD === 'number' ? res.balanceInUSD : null;
-    },
+    getGasBalance: readGasBalance,
 
     async payTreasury(amountUsd: number, marketId: number): Promise<void> {
-      const { calls } = await call<{ calls: PlaceOrderCall[] }>(
-        '/v1/calldata-builder/agent/pay-treasury',
-        {
-          accountId: config.accountId,
-          isCross: true,
-          marketId,
-          amount: parseUnits(decimalString(amountUsd), DECIMALS).toString(),
-        },
-      );
-      if (!calls?.length) {
-        throw new CoreError(
-          `Boros returned no calldata for a $${amountUsd} gas top-up.`,
-          'venue-rejected',
-        );
-      }
-      const res = await submitCalls(await signCalls(calls.map((c) => c.calldata)));
+      const calldatas = await buildPayTreasuryCalldata(Math.round(amountUsd * 100), marketId);
+      const res = await submitCalls(await signCalls(calldatas));
       if (!res.length) {
         throw new CoreError(
           `Boros returned no result for the $${amountUsd} gas top-up — cannot tell whether it landed.`,

@@ -38,6 +38,10 @@ export const APR_BP = 0.0001;
 
 const MIN_TOP_UP_USD = 2;
 const MAX_TOP_UP_USD = 100;
+/** Mirrors MIN_GAS_BALANCE_USD server-side, the same way MIN_TOP_UP_USD mirrors
+ * the route's own bound. Only decides whether to OFFER the manual top-up — the
+ * order tops itself up regardless, so a drift here costs nothing. */
+const LOW_GAS_USD = 0.3;
 
 /** USD at a precision that suits the amount. A whole-dollar format reads a
  * real $0.45 of margin as "$0", which is the same "it will do nothing"
@@ -386,31 +390,77 @@ export function PairCosts({
   );
 }
 
+/**
+ * The manual gas top-up.
+ *
+ * An order tops its own gas up as it sends (AUTO_TOP_UP_BELOW_USD in borosApi),
+ * so this is no longer the way to get an order out — it used to hang off a
+ * blocker, which made a low balance a dead end. It stays for the two cases the
+ * automatic one does not cover: prepaying more than an order would, and an
+ * install where the automatic top-up cannot run (no USD market, or the balance
+ * could not be read) and the venue refuses the order for gas.
+ */
+export function GasTopUp({
+  gasBalanceUsd,
+  amount,
+  onAmountChange,
+  onTopUp,
+  busy,
+}: {
+  gasBalanceUsd?: number | null;
+  amount?: string;
+  onAmountChange?: (raw: string) => void;
+  onTopUp?: () => void;
+  busy?: boolean;
+}) {
+  if (!onTopUp || gasBalanceUsd === null || gasBalanceUsd === undefined) return null;
+  if (gasBalanceUsd >= LOW_GAS_USD) return null;
+  const err = amountError(amount ?? '', { min: MIN_TOP_UP_USD, max: MAX_TOP_UP_USD });
+  return (
+    <div className="flex flex-wrap items-center gap-1.5 rounded-lg border border-ink-700 bg-ink-900/40 px-2.5 py-2 text-[11px] text-ink-300">
+      <label htmlFor="boros-gas-topup" className="text-ink-400">
+        Top up gas by hand (USD)
+      </label>
+      <input
+        id="boros-gas-topup"
+        className={`input num w-20 py-0.5 text-[11px] ${err ? '!border-rose-500/60' : ''}`}
+        inputMode="decimal"
+        aria-invalid={err ? true : undefined}
+        aria-describedby={err ? 'boros-gas-topup-error' : undefined}
+        value={amount ?? ''}
+        onChange={(e) => onAmountChange?.(e.target.value)}
+      />
+      <button
+        type="button"
+        className="rounded border border-ink-600 px-2 py-0.5 text-[11px] text-ink-200 hover:bg-ink-800 disabled:opacity-50"
+        disabled={busy || err !== null || !amount?.trim()}
+        onClick={onTopUp}
+      >
+        {busy ? 'Topping up…' : 'Top up gas'}
+      </button>
+      {err && (
+        <p id="boros-gas-topup-error" role="alert" className="w-full text-rose-300">
+          {err}
+        </p>
+      )}
+    </div>
+  );
+}
+
 /** Confirm blockers, each with its own remediation where one exists (§6). */
 export function BlockerList({
   blockers,
   collateral,
   onCancelAndClose,
   busyMarketId,
-  gasBalanceUsd,
-  gasAmount,
-  onGasAmountChange,
-  onTopUpGas,
-  topUpBusy,
 }: {
   blockers: BorosPairBlocker[];
   collateral: string;
   onCancelAndClose?: (marketId: number) => void;
   /** marketId currently being remediated, so its button can show progress. */
   busyMarketId?: number | null;
-  gasBalanceUsd?: number | null;
-  gasAmount?: string;
-  onGasAmountChange?: (raw: string) => void;
-  onTopUpGas?: () => void;
-  topUpBusy?: boolean;
 }) {
   if (blockers.length === 0) return null;
-  const gasErr = amountError(gasAmount ?? '', { min: MIN_TOP_UP_USD, max: MAX_TOP_UP_USD });
   return (
     <ul className="flex flex-col gap-1.5">
       {blockers.map((b, i) => (
@@ -435,38 +485,6 @@ export function BlockerList({
               {busyMarketId === b.marketId ? 'Working…' : 'Cancel orders & close position'}
             </button>
           )}
-          {b.code === 'no-gas' &&
-            onTopUpGas &&
-            gasBalanceUsd !== null &&
-            gasBalanceUsd !== undefined && (
-              <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-                <label htmlFor="boros-gas-topup" className="text-ink-400">
-                  Top up (USD)
-                </label>
-                <input
-                  id="boros-gas-topup"
-                  className={`input num w-20 py-0.5 text-[11px] ${gasErr ? '!border-rose-500/60' : ''}`}
-                  inputMode="decimal"
-                  aria-invalid={gasErr ? true : undefined}
-                  aria-describedby={gasErr ? 'boros-gas-topup-error' : undefined}
-                  value={gasAmount ?? ''}
-                  onChange={(e) => onGasAmountChange?.(e.target.value)}
-                />
-                <button
-                  type="button"
-                  className="rounded border border-rose-400/50 px-2 py-0.5 text-[11px] text-rose-200 hover:bg-rose-500/15 disabled:opacity-50"
-                  disabled={topUpBusy || gasErr !== null || !gasAmount?.trim()}
-                  onClick={onTopUpGas}
-                >
-                  {topUpBusy ? 'Topping up…' : 'Top up gas'}
-                </button>
-                {gasErr && (
-                  <p id="boros-gas-topup-error" role="alert" className="w-full text-rose-300">
-                    {gasErr}
-                  </p>
-                )}
-              </div>
-            )}
         </li>
       ))}
     </ul>

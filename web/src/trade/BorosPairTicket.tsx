@@ -51,6 +51,7 @@ import { useTrackedAddressOptional } from '../panels/trackedAddress';
 import { BorosAgentSetup } from './BorosAgentSetup';
 import {
   BlockerList,
+  GasTopUp,
   DirectionToggle,
   MarketSelect,
   PairCosts,
@@ -801,11 +802,13 @@ export function BorosPairTicket({
         collateral={simulation?.collateral ?? ''}
         busyMarketId={cancelClose.isPending ? cancelClose.variables?.marketId ?? null : null}
         onCancelAndClose={(marketId) => cancelClose.mutate({ marketId })}
+      />
+      <GasTopUp
         gasBalanceUsd={sim.data?.gasBalanceUsd}
-        gasAmount={gasTopUpStr}
-        onGasAmountChange={setGasTopUpStr}
-        onTopUpGas={() => topUpGas.mutate(Number(gasTopUpStr))}
-        topUpBusy={topUpGas.isPending}
+        amount={gasTopUpStr}
+        onAmountChange={setGasTopUpStr}
+        onTopUp={() => topUpGas.mutate(Number(gasTopUpStr))}
+        busy={topUpGas.isPending}
       />
       {topUpGas.isSuccess && (
         <p className="rounded-lg border border-emerald-500/25 bg-emerald-500/[0.04] px-2.5 py-1.5 text-[11px] leading-relaxed text-emerald-200">
