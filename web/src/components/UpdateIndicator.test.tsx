@@ -60,9 +60,9 @@ describe('UpdateIndicator', () => {
   it('offers the other OS behind a toggle, this machine first', async () => {
     // jsdom's UA is not Windows, so macOS is the default and leads the toggle.
     await openModal();
-    const [first, second] = screen.getAllByRole('radio');
+    const [first, second] = screen.getAllByRole('tab');
     expect(first).toHaveTextContent('macOS');
-    expect(first).toBeChecked();
+    expect(first).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByText(INSTALL_CMD)).toBeInTheDocument();
 
     fireEvent.click(second);
