@@ -311,7 +311,9 @@ export async function resolveActions(
         message: 'execute requires a resolved qty string; notional sizing is preview-only',
       });
     } else if (!input.qty && !input.notional) {
-      violations.push({ code: 'qty-missing', message: 'provide qty (or notional in preview)' });
+      // Same words `resolveQty` uses for the same case — this one is rendered
+      // verbatim in the ticket, so it cannot stay in field names.
+      violations.push({ code: 'qty-missing', message: 'enter a size, in coins or in dollars' });
     } else if (!input.qty && input.notional && !sizingRef) {
       violations.push({ code: 'ref-price-unavailable', message: `no reference price for ${symbol}; enter qty directly` });
     } else if (rule) {
