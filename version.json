@@ -1,8 +1,10 @@
 {
-  "version": "1.4.1",
+  "version": "1.5.0",
   "highlights": [
-    "Closing a position is no longer blocked when your available margin has gone negative — the one state where closing matters most",
-    "Unwinding a hedged pair from the order ticket no longer asks for margin it does not need: an order that only reduces an open position is charged for the part that actually opens, if any",
-    "The ticket's margin figure reflects the same thing, so what it quotes and what it lets you do now agree"
+    "Windows only, one time: run the install command below once more. After that, updating is a button press",
+    "Updating is now one button — it installs the new version, restarts, and reloads this page. If it cannot start, your old version comes back",
+    "Boros gas takes care of itself. An empty gas pot no longer stops an order, and there is nothing to top up by hand",
+    "Orders that cannot go through now say what to change, and which venue is the problem",
+    "A position's Fixed APY is counted from the day you opened it. The old figure was too high"
   ]
 }
