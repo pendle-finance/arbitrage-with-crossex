@@ -45,21 +45,7 @@ export function borosAgentRoutes(deps: AppDeps) {
       const rawExpiry = Number(process.env.BOROS_AGENT_EXPIRY);
       const expiry = configured && Number.isFinite(rawExpiry) && rawExpiry > 0 ? rawExpiry : null;
 
-      let gasBalanceUsd: number | null | undefined;
-      const orders = configured ? deps.getBorosOrders?.() : undefined;
-      if (orders?.getGasBalance) {
-        try {
-          const { value } = await deps.cache.get('boros:gas-balance', TTL.boros, () =>
-            orders.getGasBalance!(),
-          );
-          gasBalanceUsd = value;
-        } catch {
-          gasBalanceUsd = null;
-        }
-      }
-
       return reply.ok({
-        gasBalanceUsd,
         configured,
         root: configured ? root : null,
         rootMasked: configured && root ? maskAddress(root) : null,

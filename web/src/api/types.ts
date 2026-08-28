@@ -1210,7 +1210,6 @@ export interface BorosPairRequest {
  * key itself, under any field name. */
 export interface BorosAgentStatus {
   configured: boolean;
-  gasBalanceUsd?: number | null;
   root: string | null;
   rootMasked: string | null;
   accountId: number | null;
