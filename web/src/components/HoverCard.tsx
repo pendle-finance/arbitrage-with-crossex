@@ -108,6 +108,10 @@ export function HoverCard({
         if (box) setBox(null);
         else open();
       }}
+      /* An empty title stops an ANCESTOR's title being inherited here. The
+         card hero is a button titled "Show the waterfall breakdown", and that
+         native tooltip otherwise opens on top of this card's first row. */
+      title=""
       className="inline-flex cursor-help items-center gap-1 border-b border-dotted border-ink-600 text-ink-400 transition-colors hover:border-cyan-400/70 hover:text-cyan-200"
     >
       {label}

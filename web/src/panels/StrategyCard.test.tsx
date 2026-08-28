@@ -144,6 +144,10 @@ describe('StrategyCard — hero tiers', () => {
     // parenthetical in the title.
     expect(screen.queryByText('(7.07% spread)')).not.toBeInTheDocument();
     expect(screen.getByText(/7\.07% spread/)).toBeInTheDocument();
+    // The hero is a button titled "Show the waterfall breakdown". Without an
+    // empty title of its own, the trigger inherits it and the NATIVE tooltip
+    // opens on top of the card's first leg row.
+    expect(screen.getByText(/7\.07% spread$/).closest('[title]')).toHaveAttribute('title', '');
     openSpread();
     expect(spreadCard()).toMatch(/Each leg earns its fixed rate from its own open date/);
     expect(spreadCard()).toContain('9.36%');
