@@ -91,7 +91,7 @@ export default function App() {
           markGuideHintDone();
           setGuideOpen(true);
         }}
-        className="self-center whitespace-nowrap rounded-md border border-cyan-400/70 bg-cyan-500/10 px-2.5 py-1 text-xs font-semibold text-cyan-300 shadow-[0_0_0_1px_rgba(34,211,238,0.15)] transition-colors hover:border-cyan-300 hover:bg-cyan-500/20 hover:text-cyan-200"
+        className="hdr-ctl border-cyan-400/70 bg-cyan-500/10 text-cyan-300 shadow-[0_0_0_1px_rgba(34,211,238,0.15)] hover:border-cyan-300 hover:bg-cyan-500/20 hover:text-cyan-200"
       >
         📖 User guide
       </button>
@@ -101,7 +101,7 @@ export default function App() {
         aria-label="Settings"
         title="Settings"
         onClick={openSettings}
-        className="rounded-md border border-ink-700 bg-ink-900 px-2.5 py-1 text-lg leading-none text-ink-400 transition-colors hover:border-ink-500 hover:text-ink-100"
+        className="hdr-ctl border-ink-700 bg-ink-900 text-base leading-none text-ink-400 hover:border-ink-500 hover:text-ink-100"
       >
         ⚙
       </button>
@@ -229,7 +229,7 @@ function OrderTicketButton() {
       aria-label="Order ticket"
       title="The manual order ticket — free-form Boros and CrossEx orders. The cards' own buttons walk you through a full strategy."
       onClick={flow.openRail}
-      className="rounded-md border border-ink-700 bg-ink-900 px-2.5 py-1 text-xs font-semibold text-ink-300 transition-colors hover:border-ink-500 hover:text-ink-100"
+      className="hdr-ctl border-ink-700 bg-ink-900 text-ink-300 hover:border-ink-500 hover:text-ink-100"
     >
       Order ticket
     </button>

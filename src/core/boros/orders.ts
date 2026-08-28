@@ -74,6 +74,7 @@ export type BorosLegFailureCode =
   | 'rate-deviation'
   /** The bucket could not fund it. */
   | 'insufficient-margin'
+  | 'no-gas'
   /** Anything the venue rejected for another reason. */
   | 'rejected'
   /** The submission never got a usable answer; the fill state is UNKNOWN. */
@@ -158,17 +159,16 @@ export interface BorosOrderClient {
    *
    * Returns one fill per request, in the same order.
    */
-  placeMarketOrders(reqs: BorosMarketOrderRequest[]): Promise<BorosLegFill[]>;
+  placeMarketOrders(
+    reqs: BorosMarketOrderRequest[],
+    opts?: { reducing?: boolean },
+  ): Promise<BorosLegFill[]>;
   /** Force-cancel every resting order on one market (§6A remediation). */
   cancelOrders(marketId: number): Promise<void>;
   /** Force-close the whole netted position on one market (§6A remediation). */
   closePosition(req: BorosClosePositionRequest): Promise<BorosLegFill>;
-  /**
-   * Prepaid relayer gas on this account. Optional: an install without it simply
-   * raises no gas blocker, which is strictly better than blocking a trade on a
-   * number we could not read.
-   */
-  getGasBalance?(): Promise<number>;
+  getGasBalance?(): Promise<number | null>;
+  payTreasury?(amountUsd: number, marketId: number): Promise<void>;
 }
 
 /** The rate bound one leg carries, from its estimate and its tolerance. */
@@ -200,6 +200,9 @@ export interface SubmitBorosPairInput {
   feeDragApr: number;
   /** Which leg receives fixed — fixes the sign of the realised spread. */
   receiveLeg: 'A' | 'B';
+  /** Both legs only reduce what the account already holds. Decides how hard the
+   * gas top-up tries: an exit is funded only when it truly cannot pay. */
+  reducing?: boolean;
 }
 
 export interface BorosPairResult {
@@ -264,7 +267,9 @@ export async function submitBorosPair(input: SubmitBorosPairInput): Promise<Boro
   const byKey = new Map<'A' | 'B', BorosLegFill>();
   if (submitted.length > 0) {
     try {
-      const fills = await input.client.placeMarketOrders(submitted.map((x) => x.req));
+      const fills = await input.client.placeMarketOrders(submitted.map((x) => x.req), {
+        reducing: input.reducing,
+      });
       submitted.forEach(({ key, req }, i) => {
         byKey.set(key, fills[i] ?? failed(req, new Error(`no result returned for leg ${key}`)));
       });
@@ -311,13 +316,16 @@ export async function submitBorosPair(input: SubmitBorosPairInput): Promise<Boro
  * failure whose remedy ("your rate was too far from mark") is different from
  * every other, and a generic price/limit rule would otherwise swallow it.
  */
-export function classifyLegFailure(err: unknown): BorosLegFailureCode {
+export function classifyLegFailure(err: unknown, marketEntered = false): BorosLegFailureCode {
   const text = describeLegFailure(err).toUpperCase();
   if (/RATE_DEVIATION|DEVIATION|RATE_OUT_OF_(RANGE|BOUND)|MARK_DEVIATION/.test(text)) {
     return 'rate-deviation';
   }
   if (/INSUFFICIENT_LIQUIDITY|NO_LIQUIDITY|NOT_ENOUGH_(DEPTH|LIQUIDITY)|BOOK_EMPTY|DEPTH/.test(text)) {
     return 'insufficient-depth';
+  }
+  if (/INSUFFICIENT[ _]GAS|GAS[ _]BALANCE/.test(text) || (marketEntered && /TOP UP/.test(text))) {
+    return 'no-gas';
   }
   if (/INSUFFICIENT_(MARGIN|BALANCE|COLLATERAL)|NOT_ENOUGH_(MARGIN|BALANCE)|MARGIN/.test(text)) {
     return 'insufficient-margin';
@@ -387,4 +395,3 @@ export function extractApiDetail(body: unknown): string | null {
   }
   return null;
 }
-

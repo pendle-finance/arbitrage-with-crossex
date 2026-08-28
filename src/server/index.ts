@@ -16,7 +16,7 @@ import { gateVenue } from '../engine/venueGate';
 import type { Clock, VenuePort } from '../engine/types';
 import { buildApp } from './app';
 import { readBorosAgentConfig } from './borosAgent';
-import { makeBorosApiOrderClient } from '../core/boros/borosApi';
+import { makeBorosApiOrderClient, USD_TOKEN_ID } from '../core/boros/borosApi';
 import type { BorosOrderClient } from '../core/boros/orders';
 import { TtlCache, TTL } from './cache';
 import { readOrCreateApiToken } from './authToken';
@@ -137,6 +137,14 @@ try {
           fetchBorosMarkets(resolveBorosFetch()),
         );
         return value.find((m) => m.marketId === marketId)?.tokenId;
+      },
+      // Same cached read, so an order that has to top its own gas up costs no
+      // extra upstream traffic.
+      usdMarketId: async () => {
+        const { value } = await cache.get('boros:markets', TTL.boros, () =>
+          fetchBorosMarkets(resolveBorosFetch()),
+        );
+        return value.find((m) => m.tokenId === USD_TOKEN_ID)?.marketId;
       },
     });
     console.log(

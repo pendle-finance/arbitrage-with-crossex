@@ -35,7 +35,13 @@ import {
   type BookStatus,
 } from './opportunities';
 import { SECONDS_IN_YEAR } from './returns';
-import { BOROS_TOKEN_SYMBOLS, type BorosMarket, type BorosOrderBook } from './client';
+import {
+  AUTO_TOP_UP_BELOW_USD,
+  AUTO_TOP_UP_USD,
+  BOROS_TOKEN_SYMBOLS,
+  type BorosMarket,
+  type BorosOrderBook,
+} from './client';
 
 /** Default per-leg tolerance: 25 ticks of APR. Wide enough that a normal
  * two-or-three-level walk is not rejected, tight enough that the worst-case
@@ -48,12 +54,17 @@ export const DEFAULT_SLIPPAGE_APR = 0.0025;
  * with a limit, it is a market order. */
 export const MAX_SLIPPAGE_APR = 0.1;
 
-/**
- * Gas the venue wants prepaid before it will accept an order, in USD. Its own
- * message quotes "at least ~$10"; the threshold is the venue's, so treat this
- * as a floor that may drift rather than an exact contract constant.
- */
-export const MIN_GAS_BALANCE_USD = 10;
+export const MIN_GAS_BALANCE_USD = AUTO_TOP_UP_BELOW_USD;
+
+/** Boros refuses any order worth less than this (`DEFAULT_MIN_ORDER_VALUE`
+ * in the backend's trade.service). Checked here so the refusal arrives while
+ * the size is being typed rather than after Confirm.
+ *
+ * The BOUNDARY is blocked too, not just below it. The venue prices the order
+ * with its own collateral quote, and a USDT quote a hair under $1 makes 10
+ * units worth $9.998 — observed live: a 10-unit pair came back "Order value
+ * must be greater than 10 USD". Blocking exactly $10 costs nobody a trade. */
+export const MIN_ORDER_VALUE_USD = 10;
 
 /** How long a simulation may back a confirm before it is refused as stale
  * (§7). The panel re-simulates well inside this. */
@@ -530,7 +541,7 @@ export interface BorosPairAccountState {
    * undefined = not read; no blocker is raised, which is the right default for
    * an install that cannot place orders anyway.
    */
-  gasBalanceUsd?: number;
+  gasBalanceUsd?: number | null;
 }
 
 export type BlockerCode =
@@ -543,8 +554,8 @@ export type BlockerCode =
   | 'isolated-short-margin'
   | 'cross-short-margin'
   | 'margin-unknown'
-  | 'no-gas'
   | 'flip-unacknowledged'
+  | 'below-min-order-value'
   | 'stale-simulation';
 
 export interface PairBlocker {
@@ -642,6 +653,28 @@ export function evaluatePairGate(input: EvaluatePairInput): PairGate {
 
   for (const { key, sim: leg, input: legIn } of legs) {
     if (Math.abs(leg.sizing.deltaSize) === 0) continue;
+    // Boros refuses an order worth under $10 (DEFAULT_MIN_ORDER_VALUE,
+    // trade.service) and phrases it as a raw HTTP 400 at the calldata builder —
+    // AFTER the user has pressed Confirm. Say it here instead, in the panel
+    // that set the size. A delta that lands the position exactly flat is
+    // exempt at the venue, so it is exempt here.
+    // No collateral price means no USD value to test. Let it through and let
+    // the venue answer: blocking on an unknown would refuse valid sizes.
+    const value =
+      sim.collateralPriceUsd === null
+        ? null
+        : Math.abs(leg.sizing.deltaSize) * sim.collateralPriceUsd;
+    const flattens = leg.sizing.currentSize !== 0 && leg.sizing.resultingSize === 0;
+    if (!flattens && value !== null && value <= MIN_ORDER_VALUE_USD) {
+      blockers.push({
+        code: 'below-min-order-value',
+        leg: key,
+        marketId: leg.marketId,
+        message:
+          `${leg.marketName}: this leg is worth $${value.toFixed(2)}, and Boros takes nothing ` +
+          `at or under $${MIN_ORDER_VALUE_USD} — increase the size.`,
+      });
+    }
     if (leg.bookStatus === 'unavailable') {
       blockers.push({
         code: 'book-unavailable',
@@ -729,19 +762,24 @@ export function evaluatePairGate(input: EvaluatePairInput): PairGate {
   // --- Gas ------------------------------------------------------------------
   // Distinct from margin on purpose: the remedy is `payTreasury`, not a
   // collateral top-up, and conflating them sends the user to the wrong screen.
-  //
-  // The bar is a MINIMUM, not zero. The venue refuses below roughly $10 with
-  // "Top up at least ~$10 to trade", so a balance of a few dollars passes a
-  // `<= 0` check and then fails at submit — the exact failure this blocker
-  // exists to pre-empt. Checked here so it is caught before the user commits.
   const gas = input.account.gasBalanceUsd;
-  if (gas !== undefined && gas < MIN_GAS_BALANCE_USD) {
-    blockers.push({
-      code: 'no-gas',
-      message:
-        `Prepaid gas on this Boros account is ${gas <= 0 ? 'empty' : `only ~$${gas.toFixed(2)}`} — the venue needs about $${MIN_GAS_BALANCE_USD} to accept an order. ` +
+  if (gas === null) {
+    warnings.push(
+      'Prepaid gas on this Boros account could not be read, so this order may still be refused for gas. ' +
         'This is gas, not trading collateral: topping up your margin will not fix it.',
-    });
+    );
+  } else if (gas !== undefined && gas < MIN_GAS_BALANCE_USD) {
+    // NOT a blocker. The order carries its own `payTreasury` and the relayer
+    // counts that as a credit when it checks the budget, so a low balance stops
+    // nothing. Said anyway because it spends real money.
+    //
+    // A negative balance is debt the top-up clears on top of its own dollar, so
+    // quote the amount rather than the constant.
+    const topUp = AUTO_TOP_UP_USD + (gas < 0 ? -gas : 0);
+    warnings.push(
+      `Prepaid gas on this Boros account is ${gas <= 0 ? 'empty' : `low, about $${gas.toFixed(2)}`}, so this order tops it up as it sends. ` +
+        `That takes about $${topUp.toFixed(2)} from your Boros USDT balance, on top of the margin for these legs.`,
+    );
   }
 
   // --- §4 acknowledgement --------------------------------------------------

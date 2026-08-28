@@ -42,18 +42,54 @@ describe('resolveQty', () => {
   });
 
   it.each<[Parameters<typeof resolveQty>[0], RegExp]>([
-    [{ notional: '500', qty: '1', refPrice: 100, legs: [leg('0.1')] }, /only one of/],
-    [{ refPrice: 100, legs: [leg('0.1')] }, /provide --notional/],
-    [{ qty: 'abc', refPrice: 100, legs: [leg('0.1')] }, /--qty must be a positive number/],
-    [{ notional: '-5', refPrice: 100, legs: [leg('0.1')] }, /--notional must be a positive number/],
+    [{ notional: '500', qty: '1', refPrice: 100, legs: [leg('0.1')] }, /in coins or in dollars, not both/],
+    [{ refPrice: 100, legs: [leg('0.1')] }, /enter a size/],
+    [{ qty: 'abc', refPrice: 100, legs: [leg('0.1')] }, /size must be a positive number/],
+    [{ notional: '-5', refPrice: 100, legs: [leg('0.1')] }, /dollar size must be a positive number/],
     // 5/65000 = 7.7e-5 floors to 0 at lot 0.001
-    [{ notional: '5', refPrice: 65000, legs: [leg('0.001', 0.001, 5)] }, /resolved qty is 0/],
+    [{ notional: '5', refPrice: 65000, legs: [leg('0.001', 0.001, 5)] }, /rounds down to zero/],
     // 0.9 is a multiple of the coarser 0.3 but not of 0.2
-    [{ qty: '0.9', refPrice: 100, legs: [leg('0.3', 0.1, 0), leg('0.2', 0.1, 0)] }, /lot sizes incompatible/],
-    [{ qty: '0.5', refPrice: 100, legs: [leg('0.1', 1, 0)] }, /below a leg min size/],
-    [{ qty: '0.5', refPrice: 100, legs: [leg('0.1', 0.1, 100)] }, /below a leg min notional/],
+    [{ qty: '0.9', refPrice: 100, legs: [leg('0.3', 0.1, 0), leg('0.2', 0.1, 0)] }, /lot sizes do not fit together/],
+    [{ qty: '0.5', refPrice: 100, legs: [leg('0.1', 1, 0)] }, /below a leg's minimum size of 1/],
+    [{ qty: '0.5', refPrice: 100, legs: [leg('0.1', 0.1, 100)] }, /below a leg's minimum order value of 100/],
   ])('throws %j', (opts, err) => {
     expect(() => resolveQty(opts)).toThrow(err);
+  });
+
+  /** These strings are rendered verbatim in the browser's violation list. There is
+   * no CLI any more, so a `--flag` in one is a dead instruction to a trader — the
+   * bug this guards against was `increase --notional` reaching the order ticket. */
+  it('names the venue at fault and never tells a trader to pass a flag', () => {
+    const gate = (min: number, minNotional = 0): QtyLeg => ({
+      symbol: 'GATE:BTC_USDT',
+      lotSize: '0.1',
+      minSize: min,
+      minNotional,
+    });
+    const thrown = [
+      () => resolveQty({ qty: '0.5', refPrice: 100, legs: [gate(1)] }),
+      () => resolveQty({ qty: '0.5', refPrice: 100, legs: [gate(0.1, 100)] }),
+      () => resolveQty({ notional: '500', qty: '1', refPrice: 100, legs: [gate(0)] }),
+      () => resolveQty({ refPrice: 100, legs: [gate(0)] }),
+      () => resolveQty({ qty: 'abc', refPrice: 100, legs: [gate(0)] }),
+      () => resolveQty({ notional: '-5', refPrice: 100, legs: [gate(0)] }),
+      () => resolveQty({ notional: '0.01', refPrice: 1, legs: [gate(0)] }), // floors to 0 at lot 0.1
+    ].map((f) => {
+      try {
+        f();
+        return '';
+      } catch (e) {
+        return (e as Error).message;
+      }
+    });
+
+    expect(thrown.every((m) => m !== '')).toBe(true);
+    for (const m of thrown) expect(m).not.toMatch(/--\w/);
+    // The two that blame one leg say which leg it is.
+    expect(thrown[0]).toBe("size 0.5 is below GATE:BTC_USDT's minimum size of 1");
+    expect(thrown[1]).toBe(
+      "this size is worth 50.00, below GATE:BTC_USDT's minimum order value of 100 — increase it",
+    );
   });
 
   it('minNotional of 0 is skipped', () => {

@@ -99,6 +99,7 @@ export interface UpdateStatus {
   } | null;
   /** The latest published version (null = remote unreadable / check disabled). */
   latest: string | null;
+  latestCommit: string | null;
   updateAvailable: boolean;
   /** The latest version's feature list — only when updateAvailable. */
   highlights: string[];
@@ -382,9 +383,6 @@ export interface StrategyRollup {
   /** Locked fixed spread across the Boros legs (≈ rate_A − rate_B). */
   spread: number;
   lockedAprOnCapital: number;
-  /** Full-life spread projection: N × spread × (maturity − clockStart)/YEAR.
-   * Assumes the spread was locked on the full notional since the strategy
-   * start — the UI shows that assumption. Null when the clock is unknown. */
   spreadReturnUsd: number | null;
   /** spreadReturnUsd − paid costs − future Boros settle fees. Perp exit parts
    * NOT included — each checkbox folds its own in client-side. Null exactly
@@ -1118,8 +1116,29 @@ export type BorosLegFailureCode =
   | 'insufficient-depth'
   | 'rate-deviation'
   | 'insufficient-margin'
+  | 'no-gas'
   | 'rejected'
   | 'unknown';
+
+export interface TopUpGasResponse {
+  sentUsd: number;
+}
+
+export interface RunUpdateResponse {
+  started: true;
+  logPath: string;
+  ref: string | null;
+}
+
+/** What the running installer has printed so far — drives the progress panel. */
+export interface UpdateProgress {
+  /** ms epoch, from the server that STARTED the update. Null once the NEW copy
+   * is the one answering: a fresh process has no memory of the install that
+   * replaced it. The dialog keeps its own start time for the clock. */
+  startedAt: number | null;
+  running: boolean;
+  text: string;
+}
 
 export interface BorosLegFill {
   marketId: number;

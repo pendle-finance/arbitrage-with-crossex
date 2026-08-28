@@ -234,3 +234,16 @@ describe('BorosAgentSetup', () => {
     expect(screen.queryByRole('button', { name: 'Connect wallet' })).not.toBeInTheDocument();
   });
 });
+
+describe('BorosAgentSetup — no gas balance on the strip', () => {
+  it('never mentions gas: orders fund their own gas, so there is nothing to watch', async () => {
+    server.use(
+      http.get('/api/boros/agent', () =>
+        HttpResponse.json(env(status({ configured: true, root: ROOT, rootMasked: '0x1111…1111' }))),
+      ),
+    );
+    renderWithClient(<BorosAgentSetup />);
+    expect(await screen.findByText('0x1111…1111')).toBeInTheDocument();
+    expect(screen.queryByText(/gas/i)).toBeNull();
+  });
+});

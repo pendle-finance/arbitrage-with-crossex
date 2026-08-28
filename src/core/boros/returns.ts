@@ -357,10 +357,6 @@ export interface StrategyRollup {
   /** Locked fixed spread across the Boros legs (≈ rate_A − rate_B). */
   spread: number;
   lockedAprOnCapital: number;
-  /** Full-life projection of the locked spread on the Boros notional:
-   * (grossBorosNotional/2) × spread × (maturity − clockStart)/YEAR. Assumes the
-   * spread was locked on the full notional since the strategy start — the UI
-   * shows that assumption. Null when the clock start is unknown. */
   spreadReturnUsd: number | null;
   /** Vu's formula: spreadReturnUsd − feesUsd.paid.totalUsd −
    * feesUsd.future.borosSettlementUsd. The perp exit parts (fees + slippage)
@@ -1214,25 +1210,29 @@ function assembleStrategy(args: AssembleInput): StrategyRollup {
   }
 
   // --- Locked spread ----------------------------------------------------------
-  const netFixedPerYearUsd = borosLegs.reduce(
-    (s, l) => s + fixedSign(l) * (l.entryApr ?? 0) * l.notionalUsd,
-    0,
-  );
+  const perLegClock = clockBasis !== 'custom';
+  let netFixedPerYearUsd = 0;
+  let spreadReturnUsd: number | null = clockStart === null ? null : 0;
+  let unknownOpen = false;
+  for (const l of borosLegs) {
+    const perYearUsd = fixedSign(l) * (l.entryApr ?? 0) * l.notionalUsd;
+    netFixedPerYearUsd += perYearUsd;
+    if (spreadReturnUsd === null) continue;
+    const start = perLegClock ? (l.openedAt ?? clockStart!) : clockStart!;
+    if (perLegClock && l.openedAt === null) unknownOpen = true;
+    spreadReturnUsd +=
+      perYearUsd * (Math.max(0, (l.maturity ?? maturity) - start) / SECONDS_IN_YEAR);
+  }
+  if (unknownOpen && borosOpens.length) {
+    warnings.push(
+      `Some ${base} Boros legs have no known open time — their share of the locked spread accrues from the position start instead of their own.`,
+    );
+  }
   const grossBorosNotional = borosLegs.reduce((s, l) => s + l.notionalUsd, 0);
   // For the canonical 2-leg book (equal notional N): netFixed = (rateA−rateB)·N
   // and gross = 2N, so netFixed / (gross/2) recovers the spread exactly.
   const spread = grossBorosNotional > 0 ? netFixedPerYearUsd / (grossBorosNotional / 2) : 0;
   const lockedAprOnCapital = capitalUsd > 0 ? netFixedPerYearUsd / capitalUsd : 0;
-
-  // Full-life spread return: the locked net fixed rate accrued from the
-  // strategy start to maturity. netFixedPerYearUsd ≡ (gross/2) × spread, so
-  // this is N × spread × duration for the canonical book, and stays exact for
-  // unequal notionals. Assumes the spread was locked on the full notional
-  // since the start — the UI surfaces that assumption verbatim.
-  const spreadReturnUsd =
-    clockStart !== null
-      ? netFixedPerYearUsd * (Math.max(0, maturity - clockStart) / SECONDS_IN_YEAR)
-      : null;
 
   // --- Perp exit cost (maker+hedge close) ---------------------------------------
   // For a 2-leg pair: maker order on one venue + taker hedge on the other —
@@ -2040,19 +2040,11 @@ function applyMembership(
      * has no such floor — the user can assign a leg from any market on the
      * coin, and a share link or a pin written before the dialog started
      * refusing it can carry the clash in.
-     *
-     * It is worth its own warning rather than being left to the hedge ratios,
-     * because it does not degrade the card, it MISPRICES it. `maturity` above
-     * is `Math.min` across the legs, and the countdown, `secondsToMaturity`,
-     * `spreadReturnUsd` and the PnL projection all run off it — so the later
-     * leg's fixed rate is accrued only to the earlier leg's date, and every
-     * number keeps its confident formatting while it does. A size mismatch at
-     * least announces itself.
      */
     const legMaturities = [...new Set(maturities.filter((m) => m > 0))].sort((a, b) => a - b);
     if (legMaturities.length > 1) {
       card.warnings.push(
-        `This ${card.base} position holds Boros legs that mature on ${legMaturities.length} different dates (${legMaturities.map((m) => new Date(m * 1000).toISOString().slice(0, 10)).join(', ')}). Its countdown and every projection on it run to the earliest of them, so the later leg's rate is credited only up to that date — split them into one position per maturity to price either correctly.`,
+        `This ${card.base} position holds Boros legs that mature on ${legMaturities.length} different dates (${legMaturities.map((m) => new Date(m * 1000).toISOString().slice(0, 10)).join(', ')}). Its countdown runs to the earliest of them while each leg's fixed rate is credited to its own maturity, so the projection reaches past the date shown — split them into one position per maturity to price either correctly.`,
       );
     }
     cards.push(card);

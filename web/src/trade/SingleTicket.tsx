@@ -9,7 +9,7 @@ import { useSymbolDetail, useSymbolsByBase } from '../api/queries';
 import { useTradeFlowOptional } from './TradeFlow';
 import type { ActionInput, Side } from '../api/types';
 import { SegmentedToggle } from '../components/SegmentedToggle';
-import { fmtUsd, parseSymbol, sig } from '../lib/fmt';
+import { fieldValue, fmtUsd, parseSymbol, sig } from '../lib/fmt';
 import { amountError } from '../lib/amount';
 import { sizeUnitForBase } from '../lib/boros';
 import { formatRestPrice } from '../lib/ticks';
@@ -85,7 +85,7 @@ export function SingleTicket() {
     // honest reading.
     if (perpPrefill.sizeUnit === 'base' && perpPrefill.sizeBase !== undefined) {
       setSizeMode('base');
-      setSizeStr(String(Number(perpPrefill.sizeBase.toPrecision(8))));
+      setSizeStr(fieldValue(perpPrefill.sizeBase));
     } else {
       setSizeMode('usdt');
       setSizeStr(String(Math.max(1, Math.round(perpPrefill.notionalUsd))));

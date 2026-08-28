@@ -38,6 +38,7 @@ import type {
 } from '../api/types';
 import { Chip } from '../components/Chip';
 import { DataTable, type Column } from '../components/DataTable';
+import { HoverCard } from '../components/HoverCard';
 import { Modal } from '../components/Modal';
 import { Notes } from '../components/Notes';
 import { SignedNumber } from '../components/SignedNumber';
@@ -64,6 +65,7 @@ import { CloseBorosForm } from '../trade/CloseBorosForm';
 import { PerpLegExpanded, PositionRowActions } from './PerpLegExpanded';
 import { ProfitBars } from './ProfitBars';
 import { EntryCostParts } from './EntryCostParts';
+import { SpreadBreakdown, type SpreadLeg } from './SpreadBreakdown';
 import {
   hasLapsedLegacyExclusions,
   loadExcludedPartIds,
@@ -328,7 +330,36 @@ export function StrategyCard({
   // the opportunity scanner uses (estProfit / (capital × yearsToMaturity)); the
   // difference for a live position is that the clock runs from when it opened.
   // Null when the clock or capital is unknowable (matches "PNL by maturity").
-  const lifeSeconds = s.clockStartSec === null ? null : s.maturity - s.clockStartSec;
+  const perLegClock = s.clockBasis !== 'custom';
+  let openWeightUsd = 0;
+  let openWeightedSec = 0;
+  const spreadLegs: SpreadLeg[] = [];
+  for (const l of s.legs) {
+    if (l.kind !== 'boros') continue;
+    const start = perLegClock ? (l.openedAt ?? s.clockStartSec) : s.clockStartSec;
+    if (perLegClock) {
+      openWeightUsd += l.notionalUsd;
+      openWeightedSec += l.notionalUsd * (start ?? 0);
+    }
+    if (start === null) continue;
+    const end = l.maturity ?? s.maturity;
+    const perYearUsd = (l.side === 'SHORT' ? 1 : -1) * (l.entryApr ?? 0) * l.notionalUsd;
+    spreadLegs.push({
+      venue: l.venue,
+      side: l.side,
+      apr: l.entryApr ?? 0,
+      notionalUsd: l.notionalUsd,
+      startSec: start,
+      endSec: end,
+      days: Math.max(0, Math.round((end - start) / 86_400)),
+      usd: perYearUsd * (Math.max(0, end - start) / SECONDS_IN_YEAR),
+      datedFromPosition: perLegClock && l.openedAt === null,
+    });
+  }
+  const lifeSeconds =
+    s.clockStartSec === null
+      ? null
+      : s.maturity - (openWeightUsd > 0 ? openWeightedSec / openWeightUsd : s.clockStartSec);
   const fixedAprOnCapital =
     lifeSeconds !== null && lifeSeconds > 0 && s.capitalUsd > 0 && expectedUsd !== null
       ? expectedUsd / (s.capitalUsd * (lifeSeconds / SECONDS_IN_YEAR))
@@ -1304,16 +1335,30 @@ export function StrategyCard({
                 <div className="mt-1 flex flex-wrap items-center gap-x-3 text-[11px] text-ink-500">
                   {checks.fullyHedged ? (
                     <>
-                      <span
-                        className="num"
-                        title={
-                          s.spreadReturnUsd !== null
-                            ? `Assumes ${fmtPct(s.spread)} locked on ${fmtUsdCompact(borosNotionalPerSide)} since the strategy start → spread return ≈${fmtUsd(s.spreadReturnUsd, 0)} by maturity`
-                            : 'Locked fixed spread across the Boros legs'
-                        }
-                      >
-                        {fmtPct(s.spread)} spread
-                      </span>
+                      {s.spreadReturnUsd !== null && spreadLegs.length > 0 ? (
+                        <HoverCard widthPx={460} label={<span className="num">{fmtPct(s.spread)} spread</span>}>
+                          <SpreadBreakdown
+                            legs={spreadLegs}
+                            totalUsd={s.spreadReturnUsd}
+                            clockNote={
+                              perLegClock
+                                ? 'Each leg earns its fixed rate from its own open date to its own maturity.'
+                                : `Every leg accrues from the clock you set (${fmtDateUtc(s.clockStartSec ?? 0)}).`
+                            }
+                          />
+                        </HoverCard>
+                      ) : (
+                        <span
+                          className="num"
+                          title={
+                            s.spreadReturnUsd !== null
+                              ? `Assumes ${fmtPct(s.spread)} locked on ${fmtUsdCompact(borosNotionalPerSide)} → spread return ≈${fmtUsd(s.spreadReturnUsd, 0)} by maturity`
+                              : 'Locked fixed spread across the Boros legs'
+                          }
+                        >
+                          {fmtPct(s.spread)} spread
+                        </span>
+                      )}
                       {roi !== null && (
                         <span
                           className="num"
