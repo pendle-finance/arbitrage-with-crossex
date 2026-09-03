@@ -48,6 +48,13 @@ import {
   type LegDestination,
 } from './PartitionEditor';
 import { crossexVenueFor, isUsdCollateral } from '../lib/boros';
+import { readJson, writeJson } from '../lib/storage';
+import { TrackingHome } from './tracking/TrackingHome';
+
+/** The preview toggle's own key — nothing else reads it. */
+const PREVIEW_KEY = 'crossex.trackingPreview.v1';
+const readPreview = (): boolean =>
+  readJson<boolean>(PREVIEW_KEY, false, (v) => v === true);
 
 /** Stable empty list, so a callback's deps don't change every render. */
 const EMPTY_STRATEGIES: StrategyRollup[] = [];
@@ -592,6 +599,19 @@ export function PositionsHome() {
     }
   }, [settledForBook, perpAt, borosAt, livePerpLegs, liveBorosLegs, rows, entryRows, bookId]);
 
+  // PREVIEW: the new event-ledger tracking UX, behind an explicit opt-in.
+  // Rendered INSTEAD of the classic boxes; classic state is never written by
+  // it (its ledger lives under crossex.ledger.v1). All hooks above still ran,
+  // so toggling back and forth never changes hook order.
+  const [trackingPreview, setTrackingPreview] = useState(readPreview);
+  const setPreview = (on: boolean) => {
+    writeJson(PREVIEW_KEY, on);
+    setTrackingPreview(on);
+  };
+  if (trackingPreview) {
+    return <TrackingHome onExit={() => setPreview(false)} />;
+  }
+
   // Perp-only cue: never claim "no Boros position" unless the strategy feed
   // has actually SETTLED successfully for the tracked address.
   const perpOnlyCue: PerpOnlyCue = !address
@@ -805,6 +825,14 @@ export function PositionsHome() {
       <h2 className="text-xs font-semibold uppercase tracking-wider text-ink-400">
         Fixed-return positions
       </h2>
+      <button
+        type="button"
+        className="btn-ghost-xs !text-violet-400"
+        title="Prototype of the reworked tracking: durable positions, pull-in of unassigned legs, retire/rollover, banked PnL. Uses its own storage — your groupings here are untouched."
+        onClick={() => setPreview(true)}
+      >
+        ✦ Try the new tracking (preview)
+      </button>
       {address && (
         <span className="flex flex-wrap items-center gap-2 text-xs">
           {/* The address is edited in Settings now — the chip just jumps there. */}

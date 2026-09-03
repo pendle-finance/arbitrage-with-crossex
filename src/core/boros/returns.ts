@@ -174,6 +174,21 @@ export interface StrategyLeg {
   netUsd: number;
   /** Unix seconds the position was opened, when known. */
   openedAt: number | null;
+  /** When the VENUE position opened — unlike `openedAt`, never re-stamped to a
+   * tranche's own open. The two differ exactly when this strategy's share of
+   * the leg started later than the venue position (prior trading, a DCA'd
+   * book), and the UI uses the pair to say so instead of showing one date that
+   * silently means two different things. */
+  venueOpenedAt?: number | null;
+  /** Boros only: the opening fills that built the VENUE position (oldest
+   * first) — each with the token qty and the fixed APR it actually traded at.
+   * The venue's blended entryApr is the notional-weighted average of exactly
+   * these rows, so they are the leg's real entry history. */
+  venueFills?: Array<{ timeSec: number; qty: number; apr: number }>;
+  /** Boros only: the subset of `venueFills` allocated to THIS strategy's
+   * share by the fill-evidence split — how the leg was divided, fill by fill.
+   * Absent when the leg is not split (the whole history is this card's). */
+  fills?: Array<{ timeSec: number; qty: number; apr: number }>;
   /** Boros only: unix-seconds maturity of the market. */
   maturity?: number;
   /** Perp only: the exact CrossEx symbol — the client's join key to the live
@@ -536,6 +551,9 @@ function buildBorosLeg(
   const cashFlowUsd = norm18(p.pnl.rateSettlementPnl) * px;
   const mtmUsd = norm18(p.pnl.unrealisedPnl) * px;
   const tradePnlUsd = digest.tradePnlSinceOpen * px;
+  // The leg's real entry history — null when the fill replay cannot explain
+  // the live size (history gap), in which case the blend is all we can say.
+  const venueFills = borosIncrements(txns, p.marketId, signed);
 
   return {
     marketId: p.marketId,
@@ -559,6 +577,10 @@ function buildBorosLeg(
       feesUsd: digest.feesSinceOpen * px,
       netUsd: cashFlowUsd + mtmUsd + tradePnlUsd,
       openedAt: digest.openedAt,
+      venueOpenedAt: digest.openedAt,
+      ...(venueFills && venueFills.length
+        ? { venueFills: venueFills.map((f) => ({ timeSec: f.timeSec, qty: f.qty, apr: f.fixedApr })) }
+        : {}),
       maturity: market?.maturity,
       warnings: legWarnings,
     },
@@ -643,6 +665,8 @@ function buildPerpLeg(pos: PerpPositionLike): PerpLegBuild {
       netUsd: cashFlowUsd - feesUsd,
       // createTime may be seconds or milliseconds — normalize to seconds.
       openedAt:
+        openedAtRaw > 0 ? (openedAtRaw < 1e12 ? openedAtRaw : Math.floor(openedAtRaw / 1000)) : null,
+      venueOpenedAt:
         openedAtRaw > 0 ? (openedAtRaw < 1e12 ? openedAtRaw : Math.floor(openedAtRaw / 1000)) : null,
       symbol: pos.symbol,
       warnings: [],
@@ -2405,6 +2429,9 @@ function splitStrategies(
   interface CohortPlan {
     shareByTranche: Map<string, Map<string, number>>;
     rateByTranche: Map<string, number>;
+    /** `${trancheId}:${venue}` → the fill slices behind that rate — the split
+     * itself, surfaced so the card can show which fills its share is made of. */
+    fillsByTranche: Map<string, BorosIncrement[]>;
     pinNotes: Map<string, string[]>;
     coveredUsd: Map<string, number>;
   }
@@ -2447,6 +2474,7 @@ function splitStrategies(
      * Filled by the same allocation that sizes it, so a strategy can never be
      * credited a rate for size it was not given. */
     const rateByTranche = new Map<string, number>();
+    const fillsByTranche = new Map<string, BorosIncrement[]>();
     const shareByTranche = new Map<string, Map<string, number>>(
       cohortTranches.map((t) => [t.id, new Map<string, number>()]),
     );
@@ -2574,10 +2602,16 @@ function splitStrategies(
         if (apr !== null && apr !== undefined) {
           rateByTranche.set(`${t.id}:${venue}`, apr);
         }
+        // Slice qtys are already in token units (the allocation draws real
+        // size from the pool), so they can sit directly beside `venueFills`.
+        const allocFills = byEvidence?.get(t.id)?.fills;
+        if (allocFills && allocFills.length) {
+          fillsByTranche.set(`${t.id}:${venue}`, allocFills);
+        }
       }
     }
 
-    plans.set(cohort, { shareByTranche, rateByTranche, pinNotes, coveredUsd });
+    plans.set(cohort, { shareByTranche, rateByTranche, fillsByTranche, pinNotes, coveredUsd });
   }
 
   /**
@@ -2608,7 +2642,7 @@ function splitStrategies(
   };
 
   for (const [cohort, cohortTranches] of assigned) {
-    const { shareByTranche, rateByTranche, pinNotes } = plans.get(cohort) as CohortPlan;
+    const { shareByTranche, rateByTranche, fillsByTranche, pinNotes } = plans.get(cohort) as CohortPlan;
     const venueSlice = (t: PerpTranche, venue: string): number =>
       shareByTranche.get(t.id)?.get(venue) ?? 0;
 
@@ -2663,7 +2697,13 @@ function splitStrategies(
         const share = Math.min(venueSlice(t, b.leg.venue), borosShareLeft.get(b) ?? 1);
         if (!(share > 0)) continue;
         borosScaled.push(
-          scaleBorosBuild(b, share, rateByTranche.get(`${t.id}:${b.leg.venue}`), trancheOpenedAt),
+          scaleBorosBuild(
+            b,
+            share,
+            rateByTranche.get(`${t.id}:${b.leg.venue}`),
+            trancheOpenedAt,
+            fillsByTranche.get(`${t.id}:${b.leg.venue}`),
+          ),
         );
         borosShareLeft.set(b, (borosShareLeft.get(b) ?? 1) - share);
       }
@@ -3168,6 +3208,7 @@ function scaleBorosBuild(
   share: number,
   entryApr?: number,
   openedAtSec?: number | null,
+  allocatedFills?: readonly BorosIncrement[],
 ): BorosLegBuild {
   const cashFlowUsd = b.leg.cashFlowUsd * share;
   const mtmUsd = b.leg.mtmUsd * share;
@@ -3189,6 +3230,12 @@ function scaleBorosBuild(
       // started months later.
       openedAt: openedAtSec ?? b.leg.openedAt,
       share,
+      // The fill slices this card's share is made of. Only when the evidence
+      // split produced them — a pro-rata fallback has no per-fill story to
+      // tell, and inventing one would misattribute rates.
+      ...(allocatedFills && allocatedFills.length
+        ? { fills: allocatedFills.map((f) => ({ timeSec: f.timeSec, qty: f.qty, apr: f.fixedApr })) }
+        : {}),
       warnings: [...b.leg.warnings],
     },
     // The group balance stays whole and the position's margin shrinks: the

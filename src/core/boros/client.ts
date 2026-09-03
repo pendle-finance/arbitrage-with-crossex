@@ -546,6 +546,103 @@ export function resolveCollateralPricesUsd(markets: BorosMarket[]): Map<number, 
   return prices;
 }
 
+
+/** One periodic funding settlement for a (marketAcc, marketId) — the venue's
+ * own per-period record: when, at what size, at what effective rate, and the
+ * cash that moved. Amounts are in the market's SETTLEMENT TOKEN (norm18'd),
+ * not USD — the caller owns the conversion. */
+export interface BorosSettlementEvent {
+  marketId: number;
+  timeSec: number;
+  /** |position| at the settlement instant, token units. */
+  positionAbs: number;
+  /** Net settlement = yieldReceived − yieldPaid − fee, SIGNED (+ = paid out). */
+  settlementToken: number;
+  /** Settlement fee charged this period (positive cost). */
+  feeToken: number;
+  /** Annualized rate effectively applied this period. */
+  settlementRate: number;
+}
+
+/**
+ * GET /v1/accounts/settlement-events (gateway) — the per-settlement ledger
+ * that makes windowed Boros reconstruction EXACT: pages backward by
+ * resumeToken and stops once rows predate `sinceSec` (or history is
+ * exhausted). Returns its own coverage the same way the other ledger
+ * fetchers do: `coversFromSec` is the oldest row read when the page cap was
+ * hit, else 0 ("complete for every window that matters").
+ */
+export async function fetchSettlementEvents(
+  fetchImpl: FetchLike,
+  address: string,
+  accountId = 0,
+  sinceSec = 0,
+): Promise<{ events: BorosSettlementEvent[]; coversFromSec: number }> {
+  const clientTag =
+    'pendle_client=boroscrossex' + clientTagState.version + (clientTagState.active ? '_active' : '');
+  const events: BorosSettlementEvent[] = [];
+  let resumeToken: string | null = null;
+  let oldest = Number.POSITIVE_INFINITY;
+  // 60 pages × 100 ≈ 6k settlements ≈ 8 months of hourly rows on one market —
+  // a runaway guard, not an expected ceiling (the live probe read a full
+  // 10-month account in 35 pages).
+  const maxPages = 60;
+  let capped = true;
+  for (let page = 0; page < maxPages; page += 1) {
+    const url =
+      `${BOROS_GATEWAY_BASE_URL}/v1/accounts/settlement-events?root=${address}` +
+      `&accountId=${accountId}&limit=100` +
+      (resumeToken ? `&resumeToken=${encodeURIComponent(resumeToken)}` : '') +
+      `&${clientTag}`;
+    let resp: Awaited<ReturnType<FetchLike>>;
+    try {
+      resp = await fetchImpl(url, { signal: AbortSignal.timeout(15_000) });
+    } catch (err) {
+      throw new CoreError(
+        `Boros API unreachable (settlement-events): ${(err as Error)?.message ?? String(err)}`,
+        'network',
+      );
+    }
+    if (!resp.ok) {
+      throw new CoreError(
+        `Boros API settlement-events returned HTTP ${resp.status}`,
+        resp.status === 429 ? 'rate-limited' : 'network',
+      );
+    }
+    const body = (await resp.json()) as {
+      results?: Array<Record<string, unknown>>;
+      resumeToken?: string | null;
+    };
+    if (!Array.isArray(body?.results)) {
+      throw new CoreError('Boros settlement-events: unexpected response shape (no results[])', 'network');
+    }
+    let pastWindow = false;
+    for (const r of body.results) {
+      const timeSec = Number(r.timestamp);
+      if (!Number.isFinite(timeSec) || timeSec <= 0) continue;
+      oldest = Math.min(oldest, timeSec);
+      if (timeSec < sinceSec) {
+        pastWindow = true;
+        continue;
+      }
+      events.push({
+        marketId: Number(r.marketId),
+        timeSec,
+        positionAbs: Math.abs(norm18(r.positionSize as string)),
+        settlementToken: norm18(r.settlement as string),
+        feeToken: Math.abs(norm18(r.fee as string)),
+        settlementRate: Number(r.settlementRate ?? Number.NaN),
+      });
+    }
+    resumeToken = body.resumeToken ?? null;
+    if (pastWindow || !resumeToken || body.results.length === 0) {
+      capped = false;
+      break;
+    }
+  }
+  return { events, coversFromSec: capped ? oldest : 0 };
+}
+
 /**
  * POST {gateway}/v1/crossex/shared-positions — store a share payload on the public
  * backend and get its short code back. `d` is the base64url payload the long

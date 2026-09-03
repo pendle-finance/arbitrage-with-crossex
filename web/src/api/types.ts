@@ -239,6 +239,17 @@ export interface StrategyLeg {
   netUsd: number;
   /** Unix seconds, null when unknown. */
   openedAt: number | null;
+  /** When the VENUE position opened — never re-stamped to a tranche's own
+   * open, so it can differ from `openedAt` on a DCA'd or previously-traded
+   * leg. */
+  venueOpenedAt?: number | null;
+  /** Boros only: the opening fills that built the VENUE position (oldest
+   * first) — token qty and the fixed APR each actually traded at. The blended
+   * entryApr is the notional-weighted average of exactly these rows. */
+  venueFills?: Array<{ timeSec: number; qty: number; apr: number }>;
+  /** Boros only: the subset of venueFills the evidence split allocated to
+   * THIS strategy's share. Absent when the leg was not split. */
+  fills?: Array<{ timeSec: number; qty: number; apr: number }>;
   /** Boros only: unix-seconds maturity. */
   maturity?: number;
   /** Perp only: the exact CrossEx symbol — join key to the live position. */
