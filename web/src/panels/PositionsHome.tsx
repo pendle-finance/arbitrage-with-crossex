@@ -49,7 +49,7 @@ import {
 } from './PartitionEditor';
 import { crossexVenueFor, isUsdCollateral } from '../lib/boros';
 import { readJson, writeJson } from '../lib/storage';
-import { TrackingHome } from './tracking/TrackingHome';
+import { AssetsHome } from './assets/AssetsHome';
 
 /** The preview toggle's own key — nothing else reads it. */
 const PREVIEW_KEY = 'crossex.trackingPreview.v1';
@@ -599,9 +599,9 @@ export function PositionsHome() {
     }
   }, [settledForBook, perpAt, borosAt, livePerpLegs, liveBorosLegs, rows, entryRows, bookId]);
 
-  // PREVIEW: the new event-ledger tracking UX, behind an explicit opt-in.
+  // PREVIEW: the asset-grouped tracking view, behind an explicit opt-in.
   // Rendered INSTEAD of the classic boxes; classic state is never written by
-  // it (its ledger lives under crossex.ledger.v1). All hooks above still ran,
+  // it (its prefs live under crossex.assetView.v1). All hooks above still ran,
   // so toggling back and forth never changes hook order.
   const [trackingPreview, setTrackingPreview] = useState(readPreview);
   const setPreview = (on: boolean) => {
@@ -609,7 +609,7 @@ export function PositionsHome() {
     setTrackingPreview(on);
   };
   if (trackingPreview) {
-    return <TrackingHome onExit={() => setPreview(false)} />;
+    return <AssetsHome onExit={() => setPreview(false)} />;
   }
 
   // Perp-only cue: never claim "no Boros position" unless the strategy feed
@@ -828,7 +828,7 @@ export function PositionsHome() {
       <button
         type="button"
         className="btn-ghost-xs !text-violet-400"
-        title="Prototype of the reworked tracking: durable positions, pull-in of unassigned legs, retire/rollover, banked PnL. Uses its own storage — your groupings here are untouched."
+        title="Preview of the asset-grouped tracking: every leg grouped by its coin, what's missing for a perfect hedge, and lifetime PnL from the venues' own records. Uses its own storage — your groupings here are untouched."
         onClick={() => setPreview(true)}
       >
         ✦ Try the new tracking (preview)

@@ -1241,3 +1241,104 @@ export interface BorosAgentInput {
   /** Absolute unix seconds the approval was signed until. */
   expiry?: number;
 }
+
+// ---------------------------------------------------------------------------
+// GET /api/asset-view/:address — mirror of src/server/routes/assetView.ts.
+// The ASSET-GROUPED tracking view: every leg grouped by underlying asset,
+// numbers are venue-reported lifetime sums since a caller-chosen start.
+// ---------------------------------------------------------------------------
+
+export interface AssetPerpOpen {
+  symbol: string;
+  venue: string;
+  side: 'LONG' | 'SHORT';
+  /** |qty| in the base coin. */
+  qty: number;
+  notionalUsd: number;
+  entryPrice: number;
+  markPrice: number;
+  leverage: number;
+  upnlUsd: number;
+  /** Venue cumulative funding for the CURRENT position (signed, + = received). */
+  fundingUsd: number;
+  /** Cumulative trading fees, positive cost. */
+  feesUsd: number;
+  imUsd: number;
+  openedAt: number | null;
+}
+
+/** Closed positions since the start date, aggregated per symbol. */
+export interface AssetPerpClosed {
+  symbol: string;
+  venue: string;
+  closedPnlUsd: number;
+  fundingUsd: number;
+  feesUsd: number;
+  count: number;
+  lastClosedAt: number | null;
+}
+
+export interface AssetBorosOpen {
+  marketId: number;
+  venue: string;
+  maturity: number;
+  collateral: string;
+  /** LONG = pays fixed, receives floating (hedges a LONG perp's funding). */
+  side: 'LONG' | 'SHORT';
+  /** |notionalSize| in the collateral token. */
+  sizeToken: number;
+  notionalUsd: number;
+  entryApr: number;
+  markApr: number;
+  floatingApr: number;
+  /** Cumulative settlement of the CURRENT position (display only — totals
+   * come from borosHistory, which covers the same flows plus closed legs). */
+  settleUsd: number;
+  /** Mark value of the remaining rate stream (excluded from headline PnL). */
+  mtmUsd: number;
+  imUsd: number;
+}
+
+/** Per-market history sums since the start date — open, closed and matured
+ * positions uniformly (settlements and fills are account-level events). */
+export interface AssetBorosHistory {
+  marketId: number;
+  venue: string;
+  maturity: number;
+  /** Σ settlements, net of per-settlement fees. */
+  settleUsd: number;
+  /** Fees inside that net, positive (display; never re-subtract). */
+  settleFeeUsd: number;
+  /** Σ realized trade PnL, net of trade fees. */
+  tradePnlUsd: number;
+  /** Fees inside that net, positive (display; never re-subtract). */
+  tradeFeeUsd: number;
+}
+
+export interface AssetGroup {
+  base: string;
+  /** USD price of the underlying (0 = unknown). */
+  priceUsd: number;
+  /** Earliest activity instant in THIS asset's sums (APR clock floor). */
+  earliestSec: number | null;
+  perpOpen: AssetPerpOpen[];
+  perpClosed: AssetPerpClosed[];
+  borosOpen: AssetBorosOpen[];
+  borosHistory: AssetBorosHistory[];
+}
+
+export interface AssetViewResponse {
+  sinceSec: number;
+  nowSec: number;
+  assets: AssetGroup[];
+  /** Earliest activity instant in any sum — the APR clock floor. */
+  earliestSec: number | null;
+  coverage: {
+    /** Oldest settlement row read when the page cap was hit; 0 = complete. */
+    settlementsFromSec: number;
+    /** Oldest closed-position row read when capped; 0 = complete. */
+    perpClosedFromSec: number;
+    borosTxnsComplete: boolean;
+  };
+  warnings: string[];
+}

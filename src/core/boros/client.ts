@@ -303,7 +303,9 @@ async function getJson(fetchImpl: FetchLike, path: string): Promise<unknown> {
   }
 }
 
-/** GET /core/v1/markets → normalized markets (list is small, one page). */
+/** GET /core/v1/markets → normalized markets (list is small, one page).
+ * ⚠ LIVE MARKETS ONLY: a matured market drops out of this listing. History
+ * that references one resolves it through `fetchBorosMarket` instead. */
 export async function fetchBorosMarkets(fetchImpl: FetchLike): Promise<BorosMarket[]> {
   const body = (await getJson(fetchImpl, '/core/v1/markets')) as {
     results?: Array<Record<string, unknown>>;
@@ -311,8 +313,26 @@ export async function fetchBorosMarkets(fetchImpl: FetchLike): Promise<BorosMark
   if (!Array.isArray(body?.results)) {
     throw new CoreError('Boros /markets: unexpected response shape (no results[])', 'network');
   }
-  return body.results.map((m) => {
-    const imData = (m.imData ?? {}) as Record<string, unknown>;
+  return body.results.map(normalizeBorosMarket);
+}
+
+/**
+ * GET /core/v1/markets/{marketId} — one market by id, INCLUDING matured ones
+ * (probed live 2026-09-03: id 155, matured 31 Jul, still served here while
+ * absent from the listing). This is how history rows on delisted markets get
+ * their base/venue/token back. Metadata of a matured market is immutable, so
+ * callers may cache it for as long as they like.
+ */
+export async function fetchBorosMarket(fetchImpl: FetchLike, marketId: number): Promise<BorosMarket> {
+  const body = (await getJson(fetchImpl, `/core/v1/markets/${marketId}`)) as Record<string, unknown>;
+  if (!body || typeof body !== 'object' || !Number.isFinite(Number(body.marketId))) {
+    throw new CoreError(`Boros /markets/${marketId}: unexpected response shape`, 'network');
+  }
+  return normalizeBorosMarket(body);
+}
+
+function normalizeBorosMarket(m: Record<string, unknown>): BorosMarket {
+  const imData = (m.imData ?? {}) as Record<string, unknown>;
     const extConfig = (m.extConfig ?? {}) as Record<string, unknown>;
     const metadata = (m.metadata ?? {}) as Record<string, unknown>;
     const data = (m.data ?? {}) as Record<string, unknown>;
@@ -340,8 +360,7 @@ export async function fetchBorosMarkets(fetchImpl: FetchLike): Promise<BorosMark
       imTickStep: Number(imData.tickStep ?? 0),
       tThreshSec: Number(config.tThresh ?? 0),
       isolatedOnly: Boolean(config.isolatedOnly ?? imData.isolatedOnly ?? false),
-    };
-  });
+  };
 }
 
 /**

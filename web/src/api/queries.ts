@@ -11,6 +11,7 @@ import { useEffect, useRef } from 'react';
 import { del, fetchJson, postJson, putJson } from './client';
 import { uuid } from '../lib/uuid';
 import type {
+  AssetViewResponse,
   BorosCancelAndCloseResult,
   DealAlert,
   DealView,
@@ -58,6 +59,7 @@ export const qk = {
   symbolDetail: (symbol: string) => ['symbolDetail', symbol] as const,
   strategy: (address: string, since: number | null, partition = '', capital = 'balance') =>
     ['strategy', address, since ?? '', partition, capital] as const,
+  assetView: (address: string, since: number) => ['assetView', address, since] as const,
   borosAgent: ['boros', 'agent'] as const,
   borosPairContext: (address: string) => ['boros', 'pair', 'context', address] as const,
   opportunities: (
@@ -151,6 +153,21 @@ export function useStrategy(
   return useQuery({
     queryKey: qk.strategy(address ?? '', since, partition, capital),
     queryFn: () => fetchJson<StrategyReturns>(`/strategy/${encodeURIComponent(address ?? '')}${search}`),
+    enabled: Boolean(address),
+    refetchInterval: 30_000,
+  });
+}
+
+/** Asset-grouped tracking view: venue-reported lifetime sums per asset since
+ * `since` (0 = all time). Same address-switch doctrine as useStrategy:
+ * deliberately NO keepPreviousData across keys. */
+export function useAssetView(address: string | null, since = 0) {
+  return useQuery({
+    queryKey: qk.assetView(address ?? '', since),
+    queryFn: () =>
+      fetchJson<AssetViewResponse>(
+        `/asset-view/${encodeURIComponent(address ?? '')}${since > 0 ? `?since=${since}` : ''}`,
+      ),
     enabled: Boolean(address),
     refetchInterval: 30_000,
   });
