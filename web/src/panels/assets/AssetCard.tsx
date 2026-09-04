@@ -6,6 +6,7 @@
  * All numbers arrive derived (assetModel.ts) — this file only renders.
  */
 import { useState } from 'react';
+import { Modal } from '../../components/Modal';
 import type { AssetBorosOpen, AssetGroup, AssetPerpOpen } from '../../api/types';
 import { Chip } from '../../components/Chip';
 import { SignedNumber } from '../../components/SignedNumber';
@@ -18,14 +19,28 @@ import {
   type Exclusions,
   type HedgeGapRow,
 } from './assetModel';
+import { AssetBars } from './AssetBars';
 
 interface Props {
   group: AssetGroup;
   derived: AssetDerived;
+  /** THIS asset's window start (0 = all time) — per asset, not app-wide. */
+  sinceSec: number;
+  /** True while a newly-chosen window's fetch is still in flight (the
+   * all-time numbers stand in meanwhile). */
+  windowPending: boolean;
+  onChangeSince: (sec: number) => void;
   exclusions: Exclusions;
   /** value: excluded qty in the leg's unit, 'all', or undefined to clear. */
   onExclude: (key: string, value: number | 'all' | undefined) => void;
 }
+
+/** Unix seconds → the value an <input type="date"> wants (local). */
+const toDateInput = (sec: number): string => {
+  const d = new Date(sec * 1000);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+};
 
 const sizeLabel = (size: number, unit: 'base' | 'usd', base: string): string =>
   unit === 'base' ? fmtTokenQty(size, base) : fmtUsdCompact(size);
@@ -148,13 +163,12 @@ function PerpRow({
           ? `${fmtUsd(leg.entryPrice)} → ${fmtUsd(leg.markPrice)}`
           : '—'}
       </td>
-      <td className="num text-right">
+      <td
+        className="num text-right"
+        title={`uPnL ${fmtUsd(leg.upnlUsd)} · fees ${fmtUsd(leg.feesUsd)} · IM ${fmtUsd(leg.imUsd)}`}
+      >
         <SignedNumber value={leg.fundingUsd} format={fmtUsd} />
       </td>
-      <td className="num text-right">
-        <SignedNumber value={leg.upnlUsd} format={fmtUsd} />
-      </td>
-      <td className="num text-right text-ink-400">{fmtUsd(leg.imUsd)}</td>
       <td className="text-right">
         <ExcludeCell
           exKey={key}
@@ -170,10 +184,15 @@ function PerpRow({
 
 function BorosRow({
   leg,
+  windowedGrossUsd,
   exclusions,
   onExclude,
 }: {
   leg: AssetBorosOpen;
+  /** This market's settle+trade GROSS inside the window — the exact number
+   * that feeds PnL (the leg's own cumulative is a different window). Split
+   * kept for the tooltip: a PARTIAL close's trade PnL rides here. */
+  windowedGrossUsd: { gross: number; settle: number; trade: number } | null;
   exclusions: Exclusions;
   onExclude: Props['onExclude'];
 }) {
@@ -203,13 +222,20 @@ function BorosRow({
       <td className="num text-right text-ink-400">
         {fmtPct(leg.entryApr)} → {fmtPct(leg.markApr)}
       </td>
-      <td className="num text-right" title="Cumulative settlement of the current position (already inside the asset's Boros settlement total)">
-        <SignedNumber value={leg.settleUsd} format={fmtUsd} />
+      <td
+        className="num text-right"
+        title={
+          windowedGrossUsd === null
+            ? `No settlements or trades inside this window · MtM ${fmtUsd(leg.mtmUsd)} · IM ${fmtUsd(leg.imUsd)}`
+            : `Inside your window, GROSS of fees (fees sit in the Boros-fees line): settle ${fmtUsd(windowedGrossUsd.settle)} · trade ${fmtUsd(windowedGrossUsd.trade)} (a partial close's trade PnL rides here). Position-lifetime settled ${fmtUsd(leg.settleUsd)} · MtM ${fmtUsd(leg.mtmUsd)} · IM ${fmtUsd(leg.imUsd)}`
+        }
+      >
+        {windowedGrossUsd === null ? (
+          <span className="text-ink-600">—</span>
+        ) : (
+          <SignedNumber value={windowedGrossUsd.gross} format={fmtUsd} />
+        )}
       </td>
-      <td className="num text-right text-ink-400" title="Mark value of the remaining rate stream — informational, not in the headline PnL">
-        <SignedNumber value={leg.mtmUsd} format={fmtUsd} />
-      </td>
-      <td className="num text-right text-ink-400">{fmtUsd(leg.imUsd)}</td>
       <td className="text-right">
         <ExcludeCell
           exKey={key}
@@ -223,8 +249,9 @@ function BorosRow({
   );
 }
 
-export function AssetCard({ group, derived, exclusions, onExclude }: Props) {
+export function AssetCard({ group, derived, sinceSec, windowPending, onChangeSince, exclusions, onExclude }: Props) {
   const { totals, gaps, venues } = derived;
+  const [feesOpen, setFeesOpen] = useState(false);
   const hasLegs = group.perpOpen.length > 0 || group.borosOpen.length > 0;
   const expiring = venues.filter((v) => v.expiresSoon);
 
@@ -234,8 +261,13 @@ export function AssetCard({ group, derived, exclusions, onExclude }: Props) {
     const i = venueOrder.indexOf(venue);
     return i === -1 ? venueOrder.length : i;
   };
+  const histByMarket = new Map(group.borosHistory.map((h) => [h.marketId, h]));
+  // Mirror the model: a market matured before the window neither shows nor
+  // counts (assetModel filters it out of hedge/capital too).
+  const borosVisible =
+    sinceSec > 0 ? group.borosOpen.filter((l) => l.maturity >= sinceSec) : group.borosOpen;
   const perpSorted = [...group.perpOpen].sort((a, b) => orderOf(a.venue) - orderOf(b.venue));
-  const borosSorted = [...group.borosOpen].sort((a, b) => orderOf(a.venue) - orderOf(b.venue));
+  const borosSorted = [...borosVisible].sort((a, b) => orderOf(a.venue) - orderOf(b.venue));
 
   return (
     <div className="card p-4">
@@ -256,19 +288,56 @@ export function AssetCard({ group, derived, exclusions, onExclude }: Props) {
             </Chip>
           ))}
         <span className="ml-auto" />
-        {derived.clockStartSec !== null && (
-          <span className="text-xs text-ink-500" title="The APR clock: your start date, or the asset's earliest recorded activity">
-            since {fmtDateLocal(derived.clockStartSec)}
-          </span>
-        )}
+        {windowPending && <span className="text-xs text-ink-600">updating window…</span>}
+        <label className="flex items-center gap-1.5 text-xs text-ink-500">
+          since
+          <input
+            type="date"
+            className="input w-32 px-2 py-1 text-xs"
+            value={sinceSec > 0 ? toDateInput(sinceSec) : ''}
+            max={toDateInput(Math.floor(Date.now() / 1000))}
+            title={`Count THIS asset's PnL from this date (local midnight). Empty = all time${derived.clockStartSec !== null ? ` — activity starts ${fmtDateLocal(derived.clockStartSec)}` : ''}.`}
+            onChange={(e) => {
+              const v = e.target.value;
+              const sec = v ? Math.floor(new Date(`${v}T00:00`).getTime() / 1000) : 0;
+              onChangeSince(Number.isFinite(sec) && sec > 0 ? sec : 0);
+            }}
+          />
+          {sinceSec > 0 && (
+            <button type="button" className="btn-ghost-xs" onClick={() => onChangeSince(0)}>
+              all time
+            </button>
+          )}
+        </label>
       </div>
 
-      {/* Hero */}
-      <div className="mb-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
+      {/* Hero — exactly what he asked to know: PnL (ROI in brackets),
+          the CURRENT locked APR, and capital. Carry lives on the stats
+          strip below; nothing else competes up here. */}
+      <div className="mb-3 grid grid-cols-2 gap-3 sm:grid-cols-3">
         <div>
-          <div className="text-xs uppercase tracking-wider text-ink-500">PnL</div>
+          <div className="text-xs uppercase tracking-wider text-ink-500" title="Lifetime PnL since the start date (ROI = PnL over current capital, in brackets)">
+            PnL
+          </div>
           <div className="num text-lg font-semibold">
             <SignedNumber value={totals.pnlUsd} format={fmtUsd} />
+            {derived.roi !== null && (
+              <span className="ml-1.5 text-sm text-ink-400">
+                (<SignedNumber value={derived.roi} format={fmtPct} className="!text-ink-400" />)
+              </span>
+            )}
+          </div>
+        </div>
+        <div>
+          <div className="text-xs uppercase tracking-wider text-ink-500" title="The rate the hedge locks RIGHT NOW: on covered venues the floating sides cancel, leaving each Boros leg's fixed side — deterministic while the hedge holds. Steps down as legs mature (maturities differ per leg). Dash = the hedge isn't complete.">
+            Current APR
+          </div>
+          <div className="num text-lg font-semibold">
+            {derived.lockedAprFwd !== null ? (
+              <SignedNumber value={derived.lockedAprFwd} format={fmtPct} />
+            ) : (
+              '—'
+            )}
           </div>
         </div>
         <div>
@@ -276,22 +345,6 @@ export function AssetCard({ group, derived, exclusions, onExclude }: Props) {
             Capital
           </div>
           <div className="num text-lg font-semibold text-ink-200">{fmtUsd(totals.capitalUsd)}</div>
-        </div>
-        <div>
-          <div className="text-xs uppercase tracking-wider text-ink-500" title="PnL over current capital, annualized since the clock start — approximate: capital is today's requirement, not a time-weighted history">
-            APR ≈
-          </div>
-          <div className="num text-lg font-semibold">
-            {derived.aprEst !== null ? <SignedNumber value={derived.aprEst} format={fmtPct} /> : '—'}
-          </div>
-        </div>
-        <div>
-          <div className="text-xs uppercase tracking-wider text-ink-500" title="Mark value of the open Boros rate streams. Converges to zero at maturity — shown for context, excluded from PnL">
-            Boros MtM
-          </div>
-          <div className="num text-lg text-ink-400">
-            <SignedNumber value={totals.mtmUsd} format={fmtUsd} />
-          </div>
         </div>
       </div>
 
@@ -345,8 +398,6 @@ export function AssetCard({ group, derived, exclusions, onExclude }: Props) {
                 <th className="text-right">Size</th>
                 <th className="text-right">Entry → Mark</th>
                 <th className="text-right">Funding / Settled</th>
-                <th className="text-right">uPnL / MtM</th>
-                <th className="text-right">IM</th>
                 <th className="text-right"> </th>
               </tr>
             </thead>
@@ -361,7 +412,19 @@ export function AssetCard({ group, derived, exclusions, onExclude }: Props) {
                 />
               ))}
               {borosSorted.map((l) => (
-                <BorosRow key={l.marketId} leg={l} exclusions={exclusions} onExclude={onExclude} />
+                <BorosRow
+                  key={l.marketId}
+                  leg={l}
+                  windowedGrossUsd={(() => {
+                    const h = histByMarket.get(l.marketId);
+                    if (!h) return null;
+                    const settle = h.settleUsd + h.settleFeeUsd;
+                    const trade = h.tradePnlUsd + h.tradeFeeUsd;
+                    return { gross: settle + trade, settle, trade };
+                  })()}
+                  exclusions={exclusions}
+                  onExclude={onExclude}
+                />
               ))}
             </tbody>
           </table>
@@ -372,66 +435,345 @@ export function AssetCard({ group, derived, exclusions, onExclude }: Props) {
         </p>
       )}
 
-      {/* Breakdown */}
-      <details className="mt-3">
-        <summary className="cursor-pointer text-xs uppercase tracking-wider text-ink-500">
-          PnL breakdown
-        </summary>
-        <div className="mt-2 grid grid-cols-2 gap-x-6 gap-y-1 text-sm sm:grid-cols-4">
-          {(
-            [
-              ['Perp uPnL (open)', totals.breakdown.perpUpnlUsd],
-              ['Perp funding (open)', totals.breakdown.perpFundingUsd],
-              ['Perp fees (open)', -totals.breakdown.perpFeesUsd],
-              ['Closed perps (PnL + funding − fees)', totals.breakdown.perpClosedPnlUsd],
-              ['Boros settlements (net of fees)', totals.breakdown.borosSettleUsd],
-              ['Boros trade PnL (net of fees)', totals.breakdown.borosTradePnlUsd],
-            ] as const
-          ).map(([label, v]) => (
-            <div key={label} className="flex items-baseline justify-between gap-2">
-              <span className="text-xs text-ink-500">{label}</span>
-              <span className="num">
-                <SignedNumber value={v} format={fmtUsd} />
+      {/* Breakdown: the strip (price package + fee aggregates), the
+          waterfall, and a fees pop-up with the per-venue / per-market rows. */}
+      {/* The cost line: PnL = all funding/settlement, minus these three. */}
+      <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-1 text-xs text-ink-400">
+        <span>
+          Perp fees <span className="num text-ink-300">{fmtUsd(totals.perpFeesAllUsd)}</span>
+        </span>
+        <span>
+          Boros fees <span className="num text-ink-300">{fmtUsd(totals.borosFeesAllUsd)}</span>
+        </span>
+        <span title="Open perp uPnL + closed positions' realized price PnL — a delta-neutral book expects this near 0">
+          Price slippage (perps){' '}
+          <span className="num">
+            <SignedNumber value={totals.priceResidualUsd} format={fmtUsd} />
+          </span>
+        </span>
+        <button type="button" className="btn-ghost-xs" onClick={() => setFeesOpen(true)}>
+          breakdown
+        </button>
+        <span className="ml-auto text-ink-600" title="Mark value of the open Boros rate streams — converges to zero at maturity; excluded from PnL">
+          Boros MtM <span className="num"><SignedNumber value={totals.mtmUsd} format={fmtUsd} className="!text-ink-500" /></span>
+        </span>
+      </div>
+
+      {(() => {
+        const nowSec = Math.floor(Date.now() / 1000);
+        const completedPerps = group.perpClosed.flatMap((r) =>
+          r.rows
+            .filter((row) => row.complete)
+            .map((row) => ({ ...row, symbol: r.symbol, venue: r.venue })),
+        );
+        const openMarketIds = new Set(group.borosOpen.map((l) => l.marketId));
+        const doneBoros = group.borosHistory.filter(
+          (h) => h.maturity < nowSec || !openMarketIds.has(h.marketId),
+        );
+        if (!completedPerps.length && !doneBoros.length) return null;
+        const perpCarry = completedPerps.reduce(
+          (t, r) => t + (r.dedupedIntoOpen ? 0 : r.fundingUsd),
+          0,
+        );
+        const borosCarry = doneBoros.reduce(
+          (t, h) => t + h.settleUsd + h.settleFeeUsd + h.tradePnlUsd + h.tradeFeeUsd,
+          0,
+        );
+        const ribbon = (label: string, sub: string, carry: number, body: React.ReactNode) => (
+          <details className="mt-2 overflow-hidden rounded-md border border-ink-700">
+            <summary
+              className="flex cursor-pointer flex-wrap items-center gap-2 bg-ink-950/60 px-3 py-2 text-xs hover:bg-ink-950"
+              title="Carry contribution only — fees and price PnL are not repeated here; they sit in the fee and price-slippage lines."
+            >
+              <span className="font-semibold uppercase tracking-wider text-ink-300">{label}</span>
+              <span className="text-ink-500">{sub}</span>
+              <span className="ml-auto num">
+                carry contribution{' '}
+                <span className="text-sm font-semibold">
+                  <SignedNumber value={carry} format={fmtUsd} />
+                </span>
               </span>
-            </div>
-          ))}
-        </div>
-        {(group.perpClosed.length > 0 || group.borosHistory.length > 0) && (
-          <div className="mt-2 flex flex-col gap-1 text-xs text-ink-500">
-            {group.perpClosed.map((r) => (
-              <div key={r.symbol} className="flex items-baseline justify-between gap-2">
-                <span>
-                  {prettyVenue(r.venue)} · {r.count} closed position{r.count === 1 ? '' : 's'}
-                  {r.lastClosedAt !== null && ` (last ${fmtDateLocal(r.lastClosedAt)})`}
-                  {exclusions[perpKey(r.symbol)] === 'all' && ' — excluded'}
-                </span>
-                <span className="num">
-                  <SignedNumber
-                    value={r.closedPnlUsd + r.fundingUsd - r.feesUsd}
-                    format={fmtUsd}
-                  />
-                </span>
-              </div>
-            ))}
-            {group.borosHistory.map((h) => (
-              <div key={h.marketId} className="flex items-baseline justify-between gap-2">
-                <span>
-                  {prettyVenue(h.venue)} · Boros {fmtDateLocal(h.maturity)}
-                  {exclusions[borosKey(h.marketId)] === 'all' && ' — excluded'}
-                </span>
-                <span className="num">
-                  <SignedNumber value={h.settleUsd + h.tradePnlUsd} format={fmtUsd} />
-                </span>
-              </div>
-            ))}
-          </div>
-        )}
+            </summary>
+            <div className="flex flex-col gap-0.5 p-2 pt-1 text-xs">{body}</div>
+          </details>
+        );
+        return (
+          <>
+            {completedPerps.length > 0 &&
+              ribbon(
+                'Closed perps',
+                `${completedPerps.length} position${completedPerps.length === 1 ? '' : 's'}`,
+                perpCarry,
+                completedPerps.map((row) => (
+                  <div
+                    key={`${row.symbol}:${row.closedAt}`}
+                    className="flex flex-wrap items-baseline gap-x-2 rounded-md bg-ink-950/40 px-3 py-1 text-ink-400"
+                  >
+                    <span className="text-ink-300">{prettyVenue(row.venue)}</span>
+                    <span className="num">
+                      {fmtTokenQty(row.qty, group.base)} · {fmtUsd(row.openPx)} → {fmtUsd(row.closePx)}
+                    </span>
+                    {row.closedAt !== null && (
+                      <span className="text-ink-600">closed {fmtDateLocal(row.closedAt)}</span>
+                    )}
+                    <span className="ml-auto num">
+                      {row.dedupedIntoOpen ? (
+                        <span className="text-ink-600" title="This slice's funding/fees are booked on the surviving open row">
+                          carry in open ↑
+                        </span>
+                      ) : (
+                        <>
+                          funding <SignedNumber value={row.fundingUsd} format={fmtUsd} />
+                        </>
+                      )}
+                      <span className="text-ink-600" title="Already in their own strip lines — reference only">
+                        {' '}· fees {fmtUsd(row.feesUsd)} → fees line · price{' '}
+                        <SignedNumber value={row.priceUsd} format={fmtUsd} className="!text-ink-500" /> → slippage
+                      </span>
+                    </span>
+                  </div>
+                )),
+              )}
+            {doneBoros.length > 0 &&
+              ribbon(
+                'Completed Boros',
+                `${doneBoros.length} market${doneBoros.length === 1 ? '' : 's'}`,
+                borosCarry,
+                doneBoros.map((h) => (
+                  <div
+                    key={h.marketId}
+                    className="flex flex-wrap items-baseline gap-x-2 rounded-md bg-ink-950/40 px-3 py-1 text-ink-400"
+                  >
+                    <span className="text-ink-300">{prettyVenue(h.venue)}</span>
+                    <span className="text-ink-600">
+                      {h.maturity < nowSec
+                        ? `matured ${fmtDateLocal(h.maturity)}`
+                        : `closed early (was ${fmtDateLocal(h.maturity)})`}
+                    </span>
+                    <span className="ml-auto num">
+                      settle <SignedNumber value={h.settleUsd + h.settleFeeUsd} format={fmtUsd} />
+                      {' '}· trade <SignedNumber value={h.tradePnlUsd + h.tradeFeeUsd} format={fmtUsd} />
+                      <span className="text-ink-600" title="Inside the Boros-fees strip line — reference only">
+                        {' '}· fees {fmtUsd(h.settleFeeUsd + h.tradeFeeUsd)} → fees line
+                      </span>
+                    </span>
+                  </div>
+                )),
+              )}
+          </>
+        );
+      })()}
+
+      <details className="mt-2">
+        <summary className="cursor-pointer text-xs uppercase tracking-wider text-ink-500">
+          PnL waterfall
+        </summary>
+        <AssetBars totals={totals} />
         <p className="mt-2 text-xs text-ink-600">
           Partial exclusions scale the open legs only; closed positions and Boros history are
-          dropped only by excluding the whole leg. Open-position funding and fees are the venue’s
-          whole-position numbers, so a position opened before the start date counts in full.
+          dropped only by excluding the whole leg. With a start date set, funding and fees are
+          summed from the venue’s per-tick ledgers inside the window (a resize before the window
+          counts only at post-resize size); without one they are the venue’s whole-position
+          cumulatives.
         </p>
       </details>
+
+      {feesOpen && (
+        <Modal title={`${group.base} — fees & history breakdown`} onClose={() => setFeesOpen(false)} widthClass="w-[640px]">
+          {(() => {
+            const cell = 'px-2 py-1.5';
+            const th = 'px-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-ink-600';
+            const perpRows = [
+              ...group.perpOpen.map((l) => ({
+                key: `o:${l.symbol}`,
+                venue: prettyVenue(l.venue),
+                status: 'open',
+                note: '',
+                fundingUsd: l.fundingUsd as number | null,
+                priceUsd: l.upnlUsd as number | null,
+                priceIsUpnl: true,
+                feesUsd: l.feesUsd,
+                deduped: false,
+                excluded: exclusions[perpKey(l.symbol)] === 'all',
+              })),
+              ...group.perpClosed.map((r) => ({
+                key: `c:${r.symbol}`,
+                venue: prettyVenue(r.venue),
+                status: `${r.count} closed`,
+                note: r.lastClosedAt !== null ? `last ${fmtDateLocal(r.lastClosedAt)}` : '',
+                fundingUsd: (r.fundingUsd !== 0 ? r.fundingUsd : null) as number | null,
+                priceUsd: r.closedPnlUsd as number | null,
+                priceIsUpnl: false,
+                feesUsd: r.feesUsd,
+                deduped: r.dedupedIntoOpen === true,
+                excluded: exclusions[perpKey(r.symbol)] === 'all',
+              })),
+            ];
+            const perpTotals = perpRows.reduce(
+              (t, r) => ({
+                funding: t.funding + (r.excluded ? 0 : (r.fundingUsd ?? 0)),
+                price: t.price + (r.excluded ? 0 : (r.priceUsd ?? 0)),
+                fees: t.fees + (r.excluded ? 0 : r.feesUsd),
+              }),
+              { funding: 0, price: 0, fees: 0 },
+            );
+            const borosRows = group.borosHistory.map((h) => ({
+              key: h.marketId,
+              venue: prettyVenue(h.venue),
+              maturity: fmtDateLocal(h.maturity),
+              // GROSS of their own fees: an open-only market then shows ≈$0
+              // trade PnL (the wire's net figure was really just the entry
+              // fee), and all cost lives in the fee column once.
+              settleUsd: h.settleUsd + h.settleFeeUsd,
+              tradeUsd: h.tradePnlUsd + h.tradeFeeUsd,
+              feesUsd: h.settleFeeUsd + h.tradeFeeUsd,
+              excluded: exclusions[borosKey(h.marketId)] === 'all',
+            }));
+            const borosTotals = borosRows.reduce(
+              (t, r) =>
+                r.excluded
+                  ? t
+                  : { settle: t.settle + r.settleUsd, trade: t.trade + r.tradeUsd, fees: t.fees + r.feesUsd },
+              { settle: 0, trade: 0, fees: 0 },
+            );
+            const dim = (ex: boolean) => (ex ? 'opacity-40' : '');
+            return (
+              <>
+                <p className="mb-1 text-xs font-semibold uppercase tracking-wider text-ink-400">
+                  Perps — by venue
+                </p>
+                {perpRows.length ? (
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="text-left">
+                        <th className={th}>Venue</th>
+                        <th className={th}>Position</th>
+                        <th className={`${th} text-right`}>Funding</th>
+                        <th className={`${th} text-right`}>Price PnL</th>
+                        <th className={`${th} text-right`}>Fees</th>
+                      </tr>
+                    </thead>
+                    <tbody className="num">
+                      {perpRows.map((r) => (
+                        <tr key={r.key} className={dim(r.excluded)}>
+                          <td className={`${cell} text-ink-300`}>{r.venue}</td>
+                          <td className={`${cell} text-xs text-ink-500`}>
+                            {r.status}
+                            {r.note && ` · ${r.note}`}
+                            {r.excluded && ' · excluded'}
+                          </td>
+                          <td className={`${cell} text-right`}>
+                            {r.fundingUsd === null ? (
+                              <span
+                                className="text-ink-600"
+                                title={r.deduped ? 'Carried in the open position\u2019s cumulative funding above (split-position dedupe).' : undefined}
+                              >
+                                {r.deduped ? 'in open ↑' : '—'}
+                              </span>
+                            ) : (
+                              <SignedNumber value={r.fundingUsd} format={fmtUsd} />
+                            )}
+                          </td>
+                          <td
+                            className={`${cell} text-right`}
+                            title={r.priceIsUpnl ? 'Live uPnL — unrealized' : undefined}
+                          >
+                            {r.priceUsd === null ? (
+                              <span className="text-ink-600">—</span>
+                            ) : (
+                              <SignedNumber value={r.priceUsd} format={fmtUsd} />
+                            )}
+                          </td>
+                          <td className={`${cell} text-right text-ink-300`}>
+                            {r.deduped ? (
+                              <span
+                                className="text-ink-600"
+                                title="Not free — this venue reports whole-life fees and funding on the SURVIVING open position's row (the close's ~costs are inside the open line above); shown once to avoid double-counting."
+                              >
+                                in open ↑
+                              </span>
+                            ) : (
+                              fmtUsd(r.feesUsd)
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                      <tr className="border-t border-ink-700 font-semibold">
+                        <td className={`${cell} text-xs uppercase tracking-wider text-ink-500`} colSpan={2}>
+                          Total
+                        </td>
+                        <td className={`${cell} text-right`}>
+                          <SignedNumber value={perpTotals.funding} format={fmtUsd} />
+                        </td>
+                        <td className={`${cell} text-right`}>
+                          <SignedNumber value={perpTotals.price} format={fmtUsd} />
+                        </td>
+                        <td className={`${cell} text-right text-ink-200`}>{fmtUsd(perpTotals.fees)}</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                ) : (
+                  <p className="text-sm text-ink-600">No perp activity in this window.</p>
+                )}
+
+                <p className="mb-1 mt-5 text-xs font-semibold uppercase tracking-wider text-ink-400">
+                  Boros — by market
+                </p>
+                {borosRows.length ? (
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="text-left">
+                        <th className={th}>Venue</th>
+                        <th className={th}>Maturity</th>
+                        <th className={`${th} text-right`}>Settlement</th>
+                        <th className={`${th} text-right`}>Trade PnL</th>
+                        <th className={`${th} text-right`}>Fees</th>
+                      </tr>
+                    </thead>
+                    <tbody className="num">
+                      {borosRows.map((r) => (
+                        <tr key={r.key} className={dim(r.excluded)}>
+                          <td className={`${cell} text-ink-300`}>{r.venue}</td>
+                          <td className={`${cell} text-xs text-ink-500`}>
+                            {r.maturity}
+                            {r.excluded && ' · excluded'}
+                          </td>
+                          <td className={`${cell} text-right`}>
+                            <SignedNumber value={r.settleUsd} format={fmtUsd} />
+                          </td>
+                          <td className={`${cell} text-right`}>
+                            <SignedNumber value={r.tradeUsd} format={fmtUsd} />
+                          </td>
+                          <td className={`${cell} text-right text-ink-300`}>{fmtUsd(r.feesUsd)}</td>
+                        </tr>
+                      ))}
+                      <tr className="border-t border-ink-700 font-semibold">
+                        <td className={`${cell} text-xs uppercase tracking-wider text-ink-500`} colSpan={2}>
+                          Total
+                        </td>
+                        <td className={`${cell} text-right`}>
+                          <SignedNumber value={borosTotals.settle} format={fmtUsd} />
+                        </td>
+                        <td className={`${cell} text-right`}>
+                          <SignedNumber value={borosTotals.trade} format={fmtUsd} />
+                        </td>
+                        <td className={`${cell} text-right text-ink-200`}>{fmtUsd(borosTotals.fees)}</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                ) : (
+                  <p className="text-sm text-ink-600">No Boros activity in this window.</p>
+                )}
+                <p className="mt-3 text-[11px] text-ink-600">
+                  Boros settlement and trade PnL are shown GROSS here; the fee column is what
+                  subtracts (gross − fees = the card's net figures). Excluded legs are dimmed and
+                  left out of the totals. Open perps' Price PnL is live uPnL.
+                </p>
+              </>
+            );
+          })()}
+        </Modal>
+      )}
     </div>
   );
 }

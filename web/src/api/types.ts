@@ -1276,6 +1276,23 @@ export interface AssetPerpClosed {
   feesUsd: number;
   count: number;
   lastClosedAt: number | null;
+  /** Funding/fees zeroed here because the surviving open position's
+   * cumulatives already carry them (split-position dedupe, by position id —
+   * a reopen is a new id and keeps its own books). */
+  dedupedIntoOpen?: boolean;
+  rows: AssetPerpClosedRow[];
+}
+
+export interface AssetPerpClosedRow {
+  closedAt: number | null;
+  qty: number;
+  openPx: number;
+  closePx: number;
+  priceUsd: number;
+  fundingUsd: number;
+  feesUsd: number;
+  complete: boolean;
+  dedupedIntoOpen: boolean;
 }
 
 export interface AssetBorosOpen {

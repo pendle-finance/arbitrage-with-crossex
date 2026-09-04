@@ -92,6 +92,24 @@ export interface AssetTotals {
    * (closedPnl + funding − fees) + Boros history (settle + trade PnL).
    * Boros MtM deliberately excluded (see mtmUsd). */
   pnlUsd: number;
+  /**
+   * THE DRIVER — what the farm exists to harvest: perp funding (open +
+   * closed) + Boros settlement PnL (net). The card leads with this.
+   */
+  carryUsd: number;
+  /** Perp funding across open AND closed positions. */
+  perpFundingAllUsd: number;
+  /** Perp trading fees across open AND closed positions (positive cost). */
+  perpFeesAllUsd: number;
+  /** Boros fees: settlement + trade (positive cost; display — the settle
+   * and trade PnL figures are already net of them). */
+  borosFeesAllUsd: number;
+  /**
+   * The PRICE PACKAGE: open perp uPnL + closed positions' realized price
+   * PnL. On a delta-neutral book the user expects this ≈ 0 — surfacing it
+   * as one number makes the expectation checkable at a glance.
+   */
+  priceResidualUsd: number;
   /** Σ current initial margin across both sides, after exclusions. */
   capitalUsd: number;
   /** Mark value of the open Boros rate streams — info, not in pnlUsd. */
@@ -128,6 +146,22 @@ export interface AssetDerived {
   /** pnl / capital, annualized over the clock — null when it cannot be
    * computed honestly (no capital, no clock, or a sub-hour window). */
   aprEst: number | null;
+  /** Plain pnl / capital — no annualization games. Null under MIN capital. */
+  roi: number | null;
+  /**
+   * FORWARD locked carry — the deterministic part of the future. On a
+   * covered venue the floating sides cancel, so what remains is the fixed
+   * side each Boros leg locked: SHORT YU receives its entry APR, LONG pays
+   * it. Summed over open Boros legs on COVERED venues only (an uncovered
+   * or non-neutral book isn't deterministic — null there).
+   */
+  lockedCarryPerYearUsd: number | null;
+  /** lockedCarryPerYearUsd / capital — "the APR this position earns right
+   * now", knowable the moment the hedge is complete. */
+  lockedAprFwd: number | null;
+  /** Each covered Boros leg's fixed carry accrued to ITS maturity — the
+   * farm's deterministic future PnL from now. */
+  lockedToMaturityUsd: number | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -151,6 +185,16 @@ export function deriveAsset(
   nowSec: number,
 ): AssetDerived {
   const unit = sizeUnitForBase(group.base);
+
+  /**
+   * A market that MATURED before the window start is economically dead for
+   * this window: it can neither settle nor hedge inside it. Its still-open
+   * on-chain leg must not show, hedge, or tie up "capital" here — same
+   * doctrine as history windowing, applied to the open side.
+   */
+  const borosOpenWindowed =
+    sinceSec > 0 ? group.borosOpen.filter((l) => l.maturity >= sinceSec) : group.borosOpen;
+  group = { ...group, borosOpen: borosOpenWindowed };
 
   // --- Per-venue hedge state ---------------------------------------------
   const byVenue = new Map<string, VenueHedge>();
@@ -233,9 +277,15 @@ export function deriveAsset(
   // symbol/market drops them.
   const closedCounted = (r: AssetPerpClosed): boolean => exclusions[perpKey(r.symbol)] !== 'all';
   let perpClosedPnlUsd = 0;
+  let closedPriceUsd = 0;
+  let closedFundingUsd = 0;
+  let closedFeesUsd = 0;
   for (const r of group.perpClosed) {
     if (!closedCounted(r)) continue;
     perpClosedPnlUsd += r.closedPnlUsd + r.fundingUsd - r.feesUsd;
+    closedPriceUsd += r.closedPnlUsd;
+    closedFundingUsd += r.fundingUsd;
+    closedFeesUsd += r.feesUsd;
   }
   let borosSettleUsd = 0;
   let borosSettleFeeUsd = 0;
@@ -257,6 +307,11 @@ export function deriveAsset(
 
   const pnlUsd =
     perpUpnlUsd + perpFundingUsd - perpFeesUsd + perpClosedPnlUsd + borosSettleUsd + borosTradePnlUsd;
+  // The same sum, regrouped the way a trader reads it (identical by algebra).
+  const perpFundingAllUsd = perpFundingUsd + closedFundingUsd;
+  const perpFeesAllUsd = perpFeesUsd + closedFeesUsd;
+  const priceResidualUsd = perpUpnlUsd + closedPriceUsd;
+  const carryUsd = perpFundingAllUsd + borosSettleUsd;
 
   // --- APR ----------------------------------------------------------------
   const clockStartSec =
@@ -266,12 +321,36 @@ export function deriveAsset(
     clockStartSec !== null && elapsedSec > 3600 && capitalUsd >= MIN_APR_CAPITAL_USD
       ? pnlUsd / capitalUsd / (elapsedSec / SECONDS_IN_YEAR)
       : null;
+  const roi = capitalUsd >= MIN_APR_CAPITAL_USD ? pnlUsd / capitalUsd : null;
+
+  // Forward locked numbers — deterministic only where the hedge holds.
+  const coveredVenues = new Set([...byVenue.values()].filter((v) => v.covered).map((v) => v.venue));
+  let lockedCarryPerYearUsd = 0;
+  let lockedToMaturityUsd = 0;
+  let anyLocked = false;
+  for (const l of group.borosOpen) {
+    const keep = 1 - excludedFraction(exclusions, borosKey(l.marketId), l.sizeToken);
+    if (keep <= 0 || !coveredVenues.has(l.venue)) continue;
+    if (!(l.maturity > nowSec)) continue;
+    anyLocked = true;
+    const perYear = (l.side === 'SHORT' ? 1 : -1) * l.entryApr * l.notionalUsd * keep;
+    lockedCarryPerYearUsd += perYear;
+    lockedToMaturityUsd += (perYear * (l.maturity - nowSec)) / SECONDS_IN_YEAR;
+  }
+  const lockedOk = anyLocked && deltaNeutral;
+  const lockedAprFwd =
+    lockedOk && capitalUsd >= MIN_APR_CAPITAL_USD ? lockedCarryPerYearUsd / capitalUsd : null;
 
   return {
     base: group.base,
     priceUsd: group.priceUsd,
     totals: {
       pnlUsd,
+      carryUsd,
+      perpFundingAllUsd,
+      perpFeesAllUsd,
+      borosFeesAllUsd: borosSettleFeeUsd + borosTradeFeeUsd,
+      priceResidualUsd,
       capitalUsd,
       mtmUsd,
       breakdown: {
@@ -293,5 +372,9 @@ export function deriveAsset(
     perfect: deltaNeutral && gaps.length === 0,
     clockStartSec,
     aprEst,
+    roi,
+    lockedCarryPerYearUsd: lockedOk ? lockedCarryPerYearUsd : null,
+    lockedAprFwd,
+    lockedToMaturityUsd: lockedOk ? lockedToMaturityUsd : null,
   };
 }

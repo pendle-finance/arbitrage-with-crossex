@@ -86,6 +86,21 @@ export interface AssetPerpOpenOut {
 /** Closed positions since `since`, aggregated per symbol. Whole-lifetime
  * venue numbers per position; a position closed after `since` but opened
  * before it counts in full (documented approximation of the start date). */
+export interface AssetPerpClosedRowOut {
+  closedAt: number | null;
+  qty: number;
+  openPx: number;
+  closePx: number;
+  priceUsd: number;
+  fundingUsd: number;
+  feesUsd: number;
+  /** COMPLETE_CLOSED = the position ended (a later reopen is a NEW id, with
+   * its own books); anything else is a partial slice of a live id. */
+  complete: boolean;
+  /** Funding/fees booked on the surviving open row (same position id). */
+  dedupedIntoOpen: boolean;
+}
+
 export interface AssetPerpClosedOut {
   symbol: string;
   venue: string;
@@ -94,6 +109,13 @@ export interface AssetPerpClosedOut {
   feesUsd: number;
   count: number;
   lastClosedAt: number | null;
+  /** True when this batch's funding/fees were zeroed because the SURVIVING
+   * open position's cumulatives already carry them (split-position dedupe) —
+   * the close wasn't free, its costs are just booked on the open row. */
+  dedupedIntoOpen?: boolean;
+  /** The individual closed rows (newest first, capped) — feeds the
+   * completed-history section. */
+  rows: AssetPerpClosedRowOut[];
 }
 
 export interface AssetBorosOpenOut {
@@ -168,24 +190,32 @@ export interface AssetViewOut {
 /** Structural subset of the SDK's CrossexHistoricalPosition. */
 interface HistoryPositionLike {
   symbol?: string;
+  positionId?: string;
+  closedType?: string;
   closedPnl?: string;
   fundingFee?: string;
   fee?: string;
   liqFee?: string;
+  openAvgPrice?: string;
+  closedAvgPrice?: string;
+  closedQty?: string;
   updateTime?: string;
 }
 
 async function fetchClosedPositions(
   deps: AppDeps,
-  sinceSec: number,
 ): Promise<{ rows: HistoryPositionLike[]; coversFromSec: number }> {
   const rows: HistoryPositionLike[] = [];
   let capped = false;
   for (let page = 1; page <= MAX_PAGES; page += 1) {
+    // ⚠ NO `from` here: the venue filters that parameter by the position's
+    // OPEN time, so a window starting mid-life dropped the very closed row
+    // whose realized price PnL offsets the surviving legs' uPnL (an Aug-24
+    // window lost the Jul-31-opened +\$831k close and reported −\$829k).
+    // The route already windows by CLOSE time (updateTime) after the fetch.
     const { body } = await deps.getClients().crossEx.listCrossexHistoryPositions({
       page,
       limit: PAGE_LIMIT,
-      ...(sinceSec > 0 ? { from: sinceSec * 1000 } : {}),
     });
     const batch = body as HistoryPositionLike[];
     rows.push(...batch);
@@ -330,14 +360,93 @@ export function assetViewRoutes(deps: AppDeps) {
         }
       }
 
+      /**
+       * WINDOWED open-leg funding and fees (only when a start date is set).
+       * The venue's cumulative fundingFee/fee cover the position's whole
+       * life; a window starting mid-life must count only in-window flows.
+       * The account book has one FUNDING_FEE row per tick per position —
+       * and each row is the amount actually paid AT THE SIZE OF THAT TICK,
+       * so summing in-window rows is exact through resizes (a 1000→500 cut
+       * before the window contributes only 500-sized rows inside it). Fees
+       * come from the per-fill history the same way. If a ledger cannot
+       * reach the window start, the cumulative stands with a warning.
+       */
+      let fundingWindow: Map<string, number> | null = null; // positionId → USD
+      let feesWindow: Map<string, number> | null = null; // symbol → USD
+      if (perpAvailable && sinceSec > 0) {
+        try {
+          const { value } = await deps.cache.get(
+            `crossex:funding-window:${Math.floor(sinceSec / 3600)}`,
+            TTL.boros,
+            async () => {
+              const rows: Array<{ businessId?: string; change?: string; createTime?: string }> = [];
+              for (let page = 1; page <= 25; page += 1) {
+                const { body } = await deps.getClients().crossEx.listCrossexAccountBook({
+                  statementType: 'FUNDING_FEE',
+                  from: sinceSec * 1000 - 3_600_000,
+                  limit: PAGE_LIMIT,
+                  page,
+                });
+                rows.push(...(body as typeof rows));
+                if ((body as unknown[]).length < PAGE_LIMIT) break;
+              }
+              const byPosition = new Map<string, number>();
+              for (const r of rows) {
+                const pid = String(r.businessId ?? '').split('_')[0];
+                const t = fin(r.createTime);
+                const usd = Number(r.change);
+                if (!pid || !Number.isFinite(usd) || epochToSec(t) < sinceSec) continue;
+                byPosition.set(pid, (byPosition.get(pid) ?? 0) + usd);
+              }
+              return byPosition;
+            },
+            { fresh },
+          );
+          fundingWindow = value;
+        } catch {
+          warnings.push(
+            'Funding ledger unavailable — open-leg funding shows whole-position cumulatives despite the start date.',
+          );
+        }
+        try {
+          const { value } = await deps.cache.get(
+            `crossex:fees-window:${Math.floor(sinceSec / 3600)}`,
+            TTL.boros,
+            async () => {
+              const bySymbol = new Map<string, number>();
+              for (let page = 1; page <= 25; page += 1) {
+                const { body } = await deps.getClients().crossEx.listCrossexHistoryTrades({
+                  page,
+                  limit: PAGE_LIMIT,
+                  from: sinceSec * 1000,
+                });
+                for (const f of body as Array<{ symbol?: string; fee?: string }>) {
+                  const sym = String(f.symbol ?? '');
+                  if (!sym) continue;
+                  bySymbol.set(sym, (bySymbol.get(sym) ?? 0) + Math.abs(Number(f.fee) || 0));
+                }
+                if ((body as unknown[]).length < PAGE_LIMIT) break;
+              }
+              return bySymbol;
+            },
+            { fresh },
+          );
+          feesWindow = value;
+        } catch {
+          warnings.push(
+            'Fill history unavailable — perp fees show whole-position cumulatives despite the start date.',
+          );
+        }
+      }
+
       let closedRows: HistoryPositionLike[] = [];
       let perpClosedFromSec = 0;
       if (perpAvailable) {
         try {
           const { value } = await deps.cache.get(
-            `crossex:closed-positions:${Math.floor(sinceSec / 3600)}`,
+            'crossex:closed-positions',
             TTL.boros,
-            () => fetchClosedPositions(deps, sinceSec),
+            () => fetchClosedPositions(deps),
             { fresh },
           );
           closedRows = value.rows;
@@ -389,6 +498,7 @@ export function assetViewRoutes(deps: AppDeps) {
         const g = groupFor(base);
         seen(g, openedAt);
         if (g.priceUsd === 0 && absQty > 0) g.priceUsd = notionalUsd / absQty;
+        const pid = (pos as { positionId?: string }).positionId ?? '';
         g.perpOpen.push({
           symbol: pos.symbol ?? '',
           venue: normalizeVenue(exchange),
@@ -399,14 +509,29 @@ export function assetViewRoutes(deps: AppDeps) {
           markPrice: fin((pos as { markPrice?: string }).markPrice),
           leverage: fin(pos.leverage),
           upnlUsd: fin(pos.upnl),
-          fundingUsd: fin(pos.fundingFee),
-          feesUsd: Math.abs(fin(pos.fee)),
+          fundingUsd:
+            fundingWindow !== null && pid ? (fundingWindow.get(pid) ?? 0) : fin(pos.fundingFee),
+          feesUsd:
+            feesWindow !== null && pos.symbol
+              ? (feesWindow.get(pos.symbol) ?? 0)
+              : Math.abs(fin(pos.fee)),
           imUsd: Math.abs(fin(pos.initialMargin)),
           openedAt,
         });
       }
 
       // Closed perps since T0, aggregated per symbol.
+      //
+      // ⚠ SPLIT-POSITION DEDUPE, BY POSITION ID (ledger-verified 2026-09-04):
+      // a PARTIAL close's funding/fee ride the SURVIVING open row's
+      // cumulatives (the open row's cumulative equals the account-book total
+      // exactly), so counting the closed slice again double-charges it. The
+      // match is by position id — a close-and-REOPEN mints a new id, and the
+      // old COMPLETE_CLOSED row rightly keeps its own funding/fees (an
+      // earlier symbol-based match would have swallowed them).
+      const openIds = new Set(
+        perpPositions.map((p) => (p as { positionId?: string }).positionId ?? '').filter(Boolean),
+      );
       const closedBySymbol = new Map<string, AssetPerpClosedOut>();
       for (const r of closedRows) {
         const closedAtRaw = fin(r.updateTime);
@@ -426,13 +551,39 @@ export function assetViewRoutes(deps: AppDeps) {
             feesUsd: 0,
             count: 0,
             lastClosedAt: null,
+            rows: [],
           };
           closedBySymbol.set(key, agg);
           groupFor(base).perpClosed.push(agg);
         }
+        const deduped = r.positionId !== undefined && openIds.has(r.positionId);
         agg.closedPnlUsd += fin(r.closedPnl);
-        agg.fundingUsd += fin(r.fundingFee);
-        agg.feesUsd += Math.abs(fin(r.fee)) + Math.abs(fin(r.liqFee));
+        if (!deduped) {
+          agg.fundingUsd +=
+            fundingWindow !== null && r.positionId
+              ? (fundingWindow.get(r.positionId) ?? 0)
+              : fin(r.fundingFee);
+          agg.feesUsd += Math.abs(fin(r.fee)) + Math.abs(fin(r.liqFee));
+        } else {
+          agg.dedupedIntoOpen = true;
+        }
+        if (agg.rows.length < 20) {
+          agg.rows.push({
+            closedAt,
+            qty: fin(r.closedQty),
+            openPx: fin(r.openAvgPrice),
+            closePx: fin(r.closedAvgPrice),
+            priceUsd: fin(r.closedPnl),
+            fundingUsd: deduped
+              ? 0
+              : fundingWindow !== null && r.positionId
+                ? (fundingWindow.get(r.positionId) ?? 0)
+                : fin(r.fundingFee),
+            feesUsd: deduped ? 0 : Math.abs(fin(r.fee)) + Math.abs(fin(r.liqFee)),
+            complete: String(r.closedType ?? '') === 'COMPLETE_CLOSED',
+            dedupedIntoOpen: deduped,
+          });
+        }
         agg.count += 1;
         if (closedAt !== null && (agg.lastClosedAt === null || closedAt > agg.lastClosedAt)) {
           agg.lastClosedAt = closedAt;

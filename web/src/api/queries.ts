@@ -4,6 +4,7 @@ import {
   keepPreviousData,
   useInfiniteQuery,
   useMutation,
+  useQueries,
   useQuery,
   useQueryClient,
 } from '@tanstack/react-query';
@@ -171,6 +172,30 @@ export function useAssetView(address: string | null, since = 0) {
     enabled: Boolean(address),
     refetchInterval: 30_000,
   });
+}
+
+/** One asset-view fetch per DISTINCT window — the start date is per asset,
+ * but the server windows a whole response at once, so assets sharing a date
+ * share a request (usually one or two in practice). Returns since → data. */
+export function useAssetViewWindows(address: string | null, sinces: readonly number[]) {
+  const distinct = [...new Set(sinces)].sort((a, b) => a - b);
+  const results = useQueries({
+    queries: distinct.map((since) => ({
+      queryKey: qk.assetView(address ?? '', since),
+      queryFn: () =>
+        fetchJson<AssetViewResponse>(
+          `/asset-view/${encodeURIComponent(address ?? '')}${since > 0 ? `?since=${since}` : ''}`,
+        ),
+      enabled: Boolean(address),
+      refetchInterval: 30_000,
+    })),
+  });
+  const bySince = new Map<number, AssetViewResponse>();
+  distinct.forEach((since, i) => {
+    const d = results[i]?.data;
+    if (d) bySince.set(since, d);
+  });
+  return { bySince, results, distinct };
 }
 
 export interface OpportunitiesParams {

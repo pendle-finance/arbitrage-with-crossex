@@ -17,21 +17,31 @@ import type { Exclusions } from './assetModel';
 const KEY = 'crossex.assetView.v1';
 
 export interface AssetViewPrefs {
-  sinceSec: number;
+  /** Per-ASSET start dates (base → unix sec; absent = all time). The window
+   * is a property of a strategy, not of the app — his call 2026-09-04. */
+  sinceByAsset: Record<string, number>;
   exclusions: Exclusions;
 }
 
 type AllBooks = Record<string, AssetViewPrefs>;
 
-const EMPTY: AssetViewPrefs = { sinceSec: 0, exclusions: {} };
+const EMPTY: AssetViewPrefs = { sinceByAsset: {}, exclusions: {} };
 
 const validate = (parsed: unknown): AllBooks => {
   if (!parsed || typeof parsed !== 'object') return {};
   const out: AllBooks = {};
   for (const [book, v] of Object.entries(parsed as Record<string, unknown>)) {
     if (!v || typeof v !== 'object') continue;
-    const p = v as Partial<AssetViewPrefs>;
-    const sinceSec = Number(p.sinceSec);
+    const p = v as Partial<AssetViewPrefs> & { sinceSec?: unknown };
+    const sinceByAsset: Record<string, number> = {};
+    if (p.sinceByAsset && typeof p.sinceByAsset === 'object') {
+      for (const [base, q] of Object.entries(p.sinceByAsset)) {
+        const n = Number(q);
+        if (Number.isFinite(n) && n > 0) sinceByAsset[base.toUpperCase()] = n;
+      }
+    }
+    // Legacy shape carried ONE app-wide sinceSec — the window is per asset
+    // now; a legacy date is simply dropped (preferences only, never numbers).
     const exclusions: Exclusions = {};
     if (p.exclusions && typeof p.exclusions === 'object') {
       for (const [k, q] of Object.entries(p.exclusions)) {
@@ -39,7 +49,7 @@ const validate = (parsed: unknown): AllBooks => {
         else if (Number.isFinite(Number(q)) && Number(q) > 0) exclusions[k] = Number(q);
       }
     }
-    out[book] = { sinceSec: Number.isFinite(sinceSec) && sinceSec > 0 ? sinceSec : 0, exclusions };
+    out[book] = { sinceByAsset, exclusions };
   }
   return out;
 };

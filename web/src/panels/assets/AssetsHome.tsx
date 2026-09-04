@@ -11,7 +11,7 @@
  * every number is a pure function of the venue feeds.
  */
 import { useMemo, useState } from 'react';
-import { useAssetView } from '../../api/queries';
+import { useAssetView, useAssetViewWindows } from '../../api/queries';
 import { Chip } from '../../components/Chip';
 import { EmptyState } from '../../components/EmptyState';
 import { QueryError } from '../../components/QueryError';
@@ -29,13 +29,6 @@ interface Props {
   onExit: () => void;
 }
 
-/** Unix seconds → the value an <input type="date"> wants (local). */
-const toDateInput = (sec: number): string => {
-  const d = new Date(sec * 1000);
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-};
-
 export function AssetsHome({ onExit }: Props) {
   const { address, setAddress } = useTrackedAddress();
   const bookId = useBookId(address);
@@ -52,16 +45,34 @@ export function AssetsHome({ onExit }: Props) {
     setPrefs(next);
   };
 
-  const query = useAssetView(address, prefs.sinceSec);
+  // Base query (all time) enumerates the assets; each asset with its OWN
+  // start date reads from the extra window(s) — one request per distinct
+  // date, shared across assets that agree.
+  const query = useAssetView(address, 0);
   const data = query.data;
+  const extraSinces = useMemo(
+    () => [...new Set(Object.values(prefs.sinceByAsset).filter((n) => n > 0))],
+    [prefs.sinceByAsset],
+  );
+  const windows = useAssetViewWindows(address, extraSinces);
 
   const allDerived = useMemo(
     () =>
-      (data?.assets ?? []).map((g) => ({
-        group: g,
-        derived: deriveAsset(g, prefs.exclusions, data?.sinceSec ?? 0, data?.nowSec ?? 0),
-      })),
-    [data, prefs.exclusions],
+      (data?.assets ?? []).map((g) => {
+        const since = prefs.sinceByAsset[g.base] ?? 0;
+        const win = since > 0 ? windows.bySince.get(since) : undefined;
+        // Until that window's fetch lands, the all-time numbers stand in;
+        // an asset absent from a narrower window is genuinely empty there.
+        const group = win ? (win.assets.find((a) => a.base === g.base) ?? { ...g, perpClosed: [], borosHistory: [] }) : g;
+        const meta = win ?? data;
+        return {
+          group,
+          sinceSec: since,
+          windowPending: since > 0 && !win,
+          derived: deriveAsset(group, prefs.exclusions, meta?.sinceSec ?? 0, meta?.nowSec ?? 0),
+        };
+      }),
+    [data, windows.bySince, prefs.exclusions, prefs.sinceByAsset],
   );
   // Dust fold: an asset with nothing open and a negligible history total is
   // real (the sums keep it) but not worth a card — one muted line names them.
@@ -102,30 +113,6 @@ export function AssetsHome({ onExit }: Props) {
       </Chip>
       {address && <span className="num text-xs text-ink-500">{short(address)}</span>}
       <span className="ml-auto" />
-      <label className="flex items-center gap-1.5 text-xs text-ink-500">
-        since
-        <input
-          type="date"
-          className="input w-36 px-2 py-1 text-xs"
-          value={prefs.sinceSec > 0 ? toDateInput(prefs.sinceSec) : ''}
-          max={toDateInput(Math.floor(Date.now() / 1000))}
-          title="Count PnL from this date (local midnight). Empty = all time."
-          onChange={(e) => {
-            const v = e.target.value;
-            const sec = v ? Math.floor(new Date(`${v}T00:00`).getTime() / 1000) : 0;
-            update({ ...prefs, sinceSec: Number.isFinite(sec) && sec > 0 ? sec : 0 });
-          }}
-        />
-        {prefs.sinceSec > 0 && (
-          <button
-            type="button"
-            className="btn-ghost-xs"
-            onClick={() => update({ ...prefs, sinceSec: 0 })}
-          >
-            all time
-          </button>
-        )}
-      </label>
       <button type="button" className="btn-ghost-xs" onClick={onExit}>
         ← Back to classic view
       </button>
@@ -237,11 +224,19 @@ export function AssetsHome({ onExit }: Props) {
         />
       ) : (
         <div className="flex flex-col gap-3">
-          {derived.map(({ group, derived: d }) => (
+          {derived.map(({ group, derived: d, sinceSec, windowPending }) => (
             <AssetCard
               key={group.base}
               group={group}
               derived={d}
+              sinceSec={sinceSec}
+              windowPending={windowPending}
+              onChangeSince={(sec: number) => {
+                const sinceByAsset = { ...prefs.sinceByAsset };
+                if (sec > 0) sinceByAsset[group.base] = sec;
+                else delete sinceByAsset[group.base];
+                update({ ...prefs, sinceByAsset });
+              }}
               exclusions={prefs.exclusions}
               onExclude={(key, value) => {
                 const exclusions = { ...prefs.exclusions };
