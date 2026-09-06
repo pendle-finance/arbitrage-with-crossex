@@ -14,6 +14,7 @@ import type {
   BorosMarketOrderRequest,
   BorosOrderClient,
 } from '../../src/core/boros/orders';
+import { borosExecutionsPending } from '../../src/server/routes/borosPair';
 import { imInputs, raw } from '../helpers/boros-fixtures';
 import { TtlCache } from '../../src/server/cache';
 import { borosStub } from '../helpers/boros-stub';
@@ -301,6 +302,104 @@ describe('POST /api/boros/pair/simulate', () => {
     const res = await post('/api/boros/pair/simulate', pairBody({ legB: { marketId: 999, direction: 'long' } }));
     expect(res.statusCode).toBe(400);
     expect(res.json().error.message).toMatch(/unknown Boros market 999/);
+  });
+
+  const failedReads: Array<[string, () => Promise<number | null>]> = [
+    ['throws', async () => { throw new Error('boros rpc down'); }],
+    ['returns null', async () => null],
+  ];
+  it.each(failedReads)('treats a gas read that %s as unknown, not as funded', async (_label, getGasBalance) => {
+    makeApp({}, undefined, { ...orderClient(), getGasBalance });
+    const res = await post('/api/boros/pair/simulate', pairBody());
+    const { data } = res.json();
+    expect(data.gasBalanceUsd).toBeNull();
+    expect(data.gate.blockers).toEqual([]);
+    expect(data.gate.warnings.join(' ')).toMatch(/could not be read/i);
+  });
+
+  it('raises no gas blocker on a funded pot', async () => {
+    makeApp({}, undefined, { ...orderClient(), getGasBalance: async () => 5 });
+    const res = await post('/api/boros/pair/simulate', pairBody());
+    const { data } = res.json();
+    expect(data.gasBalanceUsd).toBe(5);
+    expect(data.gate.blockers).toEqual([]);
+  });
+});
+
+describe('POST /api/boros/pair/top-up-gas', () => {
+  it('pays once and echoes the amount SENT, never a freshly read balance', async () => {
+    const paid: Array<[number, number]> = [];
+    const getGasBalance = vi.fn(async () => 0.05);
+    makeApp({}, undefined, {
+      ...orderClient(),
+      payTreasury: async (amountUsd, marketId) => {
+        paid.push([amountUsd, marketId]);
+      },
+      getGasBalance,
+    });
+    const res = await post('/api/boros/pair/top-up-gas', { amountUsd: 5 });
+    expect(res.statusCode).toBe(200);
+    expect(paid).toHaveLength(1);
+    expect(paid[0][0]).toBe(5);
+    expect(res.json().data).toEqual({ sentUsd: 5 });
+    expect(getGasBalance).not.toHaveBeenCalled();
+  });
+
+  it('tops up an account that has entered no market — the cold start', async () => {
+    const paid: number[] = [];
+    makeApp({}, undefined, {
+      ...orderClient(),
+      payTreasury: async (amountUsd) => {
+        paid.push(amountUsd);
+      },
+    });
+    const res = await post('/api/boros/pair/top-up-gas', { amountUsd: 5 });
+    expect(res.statusCode).toBe(200);
+    expect(paid).toEqual([5]);
+  });
+
+  it.each([
+    ['under the floor, where the ops-fee sweep would eat it', 1],
+    ['over the cap, which the user cannot get back', 500],
+    ['not a number', 'five'],
+    ['absent', undefined],
+  ])('refuses an amount %s without spending anything', async (_label, amountUsd) => {
+    const payTreasury = vi.fn();
+    makeApp({}, undefined, { ...orderClient(), payTreasury });
+    const res = await post('/api/boros/pair/top-up-gas', { amountUsd });
+    expect(res.statusCode).toBe(400);
+    expect(payTreasury).not.toHaveBeenCalled();
+  });
+
+
+  it('answers 503 when this install cannot place Boros orders at all', async () => {
+    makeApp();
+    const res = await post('/api/boros/pair/top-up-gas', { amountUsd: 5 });
+    expect(res.statusCode).toBe(503);
+  });
+
+  it('answers 503 when the order client cannot top up', async () => {
+    makeApp({}, undefined, orderClient());
+    const res = await post('/api/boros/pair/top-up-gas', { amountUsd: 5 });
+    expect(res.statusCode).toBe(503);
+  });
+
+});
+
+describe('borosExecutionsPending', () => {
+  it('counts a memoized execution and starts each app at zero', async () => {
+    makeApp({}, undefined, orderClient());
+    expect(borosExecutionsPending()).toBe(0);
+    const res = await post(
+      '/api/boros/pair/execute',
+      pairBody({ clientOrderIdA: 'coid-aaaa', clientOrderIdB: 'coid-bbbb' }),
+    );
+    expect(res.statusCode).toBe(200);
+    expect(borosExecutionsPending()).toBe(1);
+
+    await app!.close();
+    makeApp({}, undefined, orderClient());
+    expect(borosExecutionsPending()).toBe(0);
   });
 });
 

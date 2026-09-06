@@ -166,3 +166,24 @@ describe('DELETE /api/boros/agent', () => {
     expect(res.json().data.note).toMatch(/still live until you revoke it/i);
   });
 });
+
+describe('GET /api/boros/agent — no gas balance', () => {
+  const get = () => app!.inject({ method: 'GET', url: '/api/boros/agent', headers: HOST });
+
+  it('touches no Boros read and answers no gas field — orders fund their own gas', async () => {
+    process.env.BOROS_ROOT_ADDRESS = ROOT;
+    process.env.BOROS_AGENT_PRIVATE_KEY = AGENT_KEY;
+    let reads = 0;
+    installed = {
+      getGasBalance: async () => {
+        reads += 1;
+        return 4.2;
+      },
+    } as unknown as BorosOrderClient;
+
+    const { data } = (await get()).json();
+    expect(reads).toBe(0);
+    expect('gasBalanceUsd' in data).toBe(false);
+    expect(data.configured).toBe(true);
+  });
+});

@@ -218,7 +218,10 @@ describe('membership invariants — random assertions over a two-maturity book',
       }
       checkInvariants(out, `case ${i} rows=${JSON.stringify(rows)}`);
     }
-  });
+    // 3000 iterations run ~2s alone but ~7s when the whole suite's workers
+    // share the CPU — the default 5s timeout makes this flake by machine
+    // speed, not by correctness.
+  }, 30_000);
 
   it('is deterministic — the same assertions always give the same book', () => {
     const rnd = prng(7);

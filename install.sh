@@ -27,6 +27,20 @@
 
 set -euo pipefail
 
+# ⚠ NODE_ENV must not survive into this script.
+#
+# Yarn 1 reads NODE_ENV=production as `--production`: it skips devDependencies
+# and still exits 0. `vite` and `typescript` are devDependencies, so the build
+# step below would then have nothing to build with. The installer always needs
+# a full dev install, whatever the caller's environment says.
+#
+# This bites two callers. The in-app update button spawns this script from the
+# server, which the LaunchAgent runs with NODE_ENV=production; and anyone whose
+# shell profile exports it hits the same wall by hand. The runtime value is set
+# by the LaunchAgent, not here, so unsetting it changes nothing about the
+# installed app.
+unset NODE_ENV
+
 # ---------------------------------------------------------------------------
 # Configuration (BOROS_* env vars exist for development/testing overrides)
 # ---------------------------------------------------------------------------
@@ -180,21 +194,68 @@ fetch_app() {
   write_install_info "$(archive_commit "$tgz")" "$requested" "$source"
 }
 
+# Run one build step quietly, but never silently.
+#
+# `>/dev/null` on these steps was throwing away the only explanation a failure
+# has: yarn AND tsc both report to stdout, and under `set -e` the script then
+# exits having logged nothing at all. A user updating from inside the app reads
+# that log and cannot see why. So capture the output and print it if the step
+# fails — a successful install stays as quiet as it was.
+run_step() {
+  local label="$1"; shift
+  local out
+  if ! out=$(PATH="$ROOT/node/bin:$PATH" "$@" 2>&1); then
+    printf '%s\n' "$out" >&2
+    fail "$label"
+  fi
+}
+
 build_app() {
   local yarn="$ROOT/node/bin/yarn"
   say "Installing dependencies (this takes a minute on first install)…"
-  PATH="$ROOT/node/bin:$PATH" "$yarn" --cwd "$ROOT/app.new" install --frozen-lockfile --silent --non-interactive
-  PATH="$ROOT/node/bin:$PATH" "$yarn" --cwd "$ROOT/app.new/web" install --frozen-lockfile --silent --non-interactive
+  run_step "installing the server dependencies failed." \
+    "$yarn" --cwd "$ROOT/app.new" install --frozen-lockfile --silent --non-interactive
+  run_step "installing the web dependencies failed." \
+    "$yarn" --cwd "$ROOT/app.new/web" install --frozen-lockfile --silent --non-interactive
   say "Building the web interface…"
-  PATH="$ROOT/node/bin:$PATH" "$yarn" --cwd "$ROOT/app.new/web" --silent build >/dev/null
+  run_step "building the web interface failed." \
+    "$yarn" --cwd "$ROOT/app.new/web" --silent build
 }
 
 swap_app() {
   rm -rf "$ROOT/app.old"
   [ -d "$ROOT/app" ] && mv "$ROOT/app" "$ROOT/app.old"
   mv "$ROOT/app.new" "$ROOT/app"
-  rm -rf "$ROOT/app.old"
+  # app.old is KEPT until the new version proves it can boot (remove_old_app):
+  # until then it is the only way back — see restore_app.
+  return 0
 }
+
+# Put the previous version back, and start it. Called only when the new version
+# did not come up: without this, a release that installs but cannot boot leaves
+# the machine with no server at all — on a box that may be minding an open
+# position, where the reconcile loop is what hedges, requotes and closes.
+restore_app() {
+  [ -d "$ROOT/app.old" ] || return 1
+  printf '\033[1;33m%s\033[0m\n' "Rolling back to the previous version…" >&2
+  rm -rf "$ROOT/app.failed"
+  [ -d "$ROOT/app" ] && mv "$ROOT/app" "$ROOT/app.failed"
+  mv "$ROOT/app.old" "$ROOT/app"
+  # install_service truncates both logs, so the restart below would wipe the
+  # failed version's stderr — the only record of why it would not boot, and
+  # exactly what the caller tells the user to read. Keep a copy first.
+  cp "$LOG_DIR/server.err.log" "$LOG_DIR/server.failed.log" 2>/dev/null || true
+  # install_service boots out the failed instance and reaps orphans for us.
+  install_service
+  wait_for_server || return 1
+  echo "      the previous version is running again at http://localhost:$PORT" >&2
+  echo "      the version that failed is kept at $ROOT/app.failed" >&2
+  return 0
+}
+
+# Only after the new version has answered on the port. Before that, app.old is
+# the rollback target and must survive.
+remove_old_app() { rm -rf "$ROOT/app.old"; }
 
 # ---------------------------------------------------------------------------
 # Step 4: LaunchAgent — keeps the server running, across reboots and crashes
@@ -331,6 +392,7 @@ install_service() {
 # ---------------------------------------------------------------------------
 # Step 5: open the app, create the launcher
 # ---------------------------------------------------------------------------
+# Returns non-zero rather than failing: the caller decides whether to roll back.
 wait_for_server() {
   say "Waiting for the app to start…"
   local i
@@ -340,7 +402,9 @@ wait_for_server() {
     fi
     sleep 0.5
   done
-  fail "the app did not start. Check the log: $LOG_DIR/server.err.log"
+  printf '\033[1;33m%s\033[0m\n' "Note: the app did not answer on port $PORT." >&2
+  echo "      Log: $LOG_DIR/server.err.log" >&2
+  return 1
 }
 
 make_launcher() {
@@ -368,10 +432,26 @@ main() {
   build_app
   swap_app
   install_service
-  wait_for_server
+  if ! wait_for_server; then
+    if restore_app; then
+      fail "the new version did not start, so the previous one was put back and is running.
+  Nothing was lost — your keys and trade history are untouched.
+  Why the new version failed: $LOG_DIR/server.failed.log"
+    fi
+    fail "the new version did not start, and the previous one could not be restored.
+  Log: $LOG_DIR/server.err.log
+  Re-run this installer to try again."
+  fi
+  remove_old_app   # the new version answers on the port; the way back can go
   make_launcher
   echo
-  say "Done! Opening http://localhost:$PORT …"
+  # BOROS_NO_BROWSER: set by the in-app updater, whose page reloads itself onto
+  # the new copy — opening a browser here would just be a duplicate tab.
+  if [ -n "${BOROS_NO_BROWSER:-}" ]; then
+    say "Done!"
+  else
+    say "Done! Opening http://localhost:$PORT …"
+  fi
   echo
   echo "  • The app now runs in the background, even after you restart your Mac."
   echo "  • Open it any time at http://localhost:$PORT (bookmark it!) or via"
@@ -379,7 +459,7 @@ main() {
   echo "  • First time? The app will ask for your Gate.io API keys in the browser."
   echo "  • Update any time by re-running the install command."
   echo
-  open "http://localhost:$PORT" 2>/dev/null || true
+  [ -n "${BOROS_NO_BROWSER:-}" ] || open "http://localhost:$PORT" 2>/dev/null || true
 }
 
 main "$@"

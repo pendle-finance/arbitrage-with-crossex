@@ -879,7 +879,7 @@ export function borosIncrements(
 export function allocateBorosByEvidence(
   increments: readonly BorosIncrement[],
   targets: ReadonlyArray<{ id: string; demand: number; openedAtSec: number | null }>,
-): Map<string, { qty: number; fixedApr: number | null }> {
+): Map<string, { qty: number; fixedApr: number | null; fills: BorosIncrement[] }> {
   const pool = increments.map((i) => ({ ...i }));
   // Stable order so equal gaps resolve the same way every solve: earlier open
   // first, then the LARGER claim, then id.
@@ -899,6 +899,10 @@ export function allocateBorosByEvidence(
   const need = new Map(ordered.map((t) => [t.id, Math.max(0, t.demand)]));
   const took = new Map(ordered.map((t) => [t.id, 0]));
   const notional = new Map(ordered.map((t) => [t.id, 0]));
+  // The fill slices each target actually received — the split, kept apart so
+  // the UI can show WHICH fills a strategy's rate is made of, not just the
+  // blended result.
+  const slices = new Map<string, BorosIncrement[]>(ordered.map((t) => [t.id, []]));
 
   for (;;) {
     let best: { id: string; idx: number; gap: number } | null = null;
@@ -916,17 +920,22 @@ export function allocateBorosByEvidence(
     const q = Math.min(need.get(best.id) as number, pool[best.idx].qty);
     took.set(best.id, (took.get(best.id) as number) + q);
     notional.set(best.id, (notional.get(best.id) as number) + q * pool[best.idx].fixedApr);
+    slices.get(best.id)?.push({ timeSec: pool[best.idx].timeSec, qty: q, fixedApr: pool[best.idx].fixedApr });
     need.set(best.id, (need.get(best.id) as number) - q);
     pool[best.idx].qty -= q;
   }
 
-  const out = new Map<string, { qty: number; fixedApr: number | null }>();
+  const out = new Map<string, { qty: number; fixedApr: number | null; fills: BorosIncrement[] }>();
   for (const t of ordered) {
     const qty = took.get(t.id) as number;
     // The rate covers exactly the size allocated — they come from the same
     // fills — so unlike the old two-stage split there is no way for a strategy
     // to be credited a rate for a size it was not given.
-    out.set(t.id, { qty, fixedApr: qty > 0 ? (notional.get(t.id) as number) / qty : null });
+    out.set(t.id, {
+      qty,
+      fixedApr: qty > 0 ? (notional.get(t.id) as number) / qty : null,
+      fills: (slices.get(t.id) ?? []).sort((a, b) => a.timeSec - b.timeSec),
+    });
   }
   return out;
 }

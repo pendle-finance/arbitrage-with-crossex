@@ -83,9 +83,9 @@ describe('App tab shell', () => {
 
     // Inactive content is mounted (data loads, badges stay live) yet hidden.
     expect(await screen.findByText(/Your CrossEx fee rates/)).not.toBeVisible();
-    // The 4-leg home base: with no tracked address it shows the address empty
-    // state and makes NO /api/strategy request.
-    expect(await screen.findByText('Track your 4-leg strategy')).not.toBeVisible();
+    // The positions home (asset view): with no tracked address it shows the
+    // track-an-address empty state.
+    expect(await screen.findByText('Track an address to see your farm by asset')).not.toBeVisible();
   });
 
   it('lands on Positions instead when the account already holds some', async () => {
@@ -199,7 +199,7 @@ describe('App tab shell', () => {
     expect(await screen.findByRole('complementary', { name: 'Setup guide' })).toBeInTheDocument();
     // Neither the tab strip nor the Positions home base is rendered.
     expect(screen.queryByRole('tablist')).not.toBeInTheDocument();
-    expect(screen.queryByText('Track your 4-leg strategy')).not.toBeInTheDocument();
+    expect(screen.queryByText('Track an address to see your farm by asset')).not.toBeInTheDocument();
   });
 
   it('replaces the trading shell (tabs included) with opportunities + guide when unconfigured', async () => {

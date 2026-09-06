@@ -20,6 +20,31 @@ const BOROS_BASE_URL = 'https://api.boros.finance';
  * mounts). New endpoints live here — the bare `/open-api` prefix is deprecated. */
 const BOROS_GATEWAY_BASE_URL = 'https://api-boros.pendle.finance/apis';
 
+/**
+ * Gas the order pays for itself.
+ *
+ * Boros funds its relayer from an off-chain USD budget per root, separate from
+ * trading collateral, and an account with plenty of margin can still be unable
+ * to send an order. The venue's own app never makes a user think about that,
+ * and the mechanism is not a background job: a `payTreasury` call placed in the
+ * SAME submission is counted as a credit by the relayer's pre-check
+ * (`deltaFee = gas - marketEntranceFee - payTreasuryFee`, gas-tracking.service),
+ * so a bundle carrying its own top-up is accepted even when the budget is at
+ * zero or in debt. We do the same, so a low balance is never a dead end.
+ *
+ * These mirror the backend's ops-fee defaults (`minOpsFeeInUSD` 0.2,
+ * `opsFeeToTakeInUSD` 1). They are app-settings values retuned upstream against
+ * live gas prices and we do not read them — ours fire slightly earlier on
+ * purpose, so an order tops up before it reaches the venue's own floor rather
+ * than racing it. If Boros ever raises its floor above this, the venue's
+ * refusal is still reported honestly as a gas failure.
+ *
+ * Here, not in borosApi, so the gate that warns and the client that tops up
+ * read one number instead of two that drift.
+ */
+export const AUTO_TOP_UP_BELOW_USD = 0.3;
+export const AUTO_TOP_UP_USD = 1;
+
 /** tokenId → collateral token symbol (mirrors boros-tools' TOKEN_IDS). */
 export const BOROS_TOKEN_SYMBOLS: Record<number, string> = {
   1: 'BTC',
@@ -278,7 +303,9 @@ async function getJson(fetchImpl: FetchLike, path: string): Promise<unknown> {
   }
 }
 
-/** GET /core/v1/markets → normalized markets (list is small, one page). */
+/** GET /core/v1/markets → normalized markets (list is small, one page).
+ * ⚠ LIVE MARKETS ONLY: a matured market drops out of this listing. History
+ * that references one resolves it through `fetchBorosMarket` instead. */
 export async function fetchBorosMarkets(fetchImpl: FetchLike): Promise<BorosMarket[]> {
   const body = (await getJson(fetchImpl, '/core/v1/markets')) as {
     results?: Array<Record<string, unknown>>;
@@ -286,8 +313,26 @@ export async function fetchBorosMarkets(fetchImpl: FetchLike): Promise<BorosMark
   if (!Array.isArray(body?.results)) {
     throw new CoreError('Boros /markets: unexpected response shape (no results[])', 'network');
   }
-  return body.results.map((m) => {
-    const imData = (m.imData ?? {}) as Record<string, unknown>;
+  return body.results.map(normalizeBorosMarket);
+}
+
+/**
+ * GET /core/v1/markets/{marketId} — one market by id, INCLUDING matured ones
+ * (probed live 2026-09-03: id 155, matured 31 Jul, still served here while
+ * absent from the listing). This is how history rows on delisted markets get
+ * their base/venue/token back. Metadata of a matured market is immutable, so
+ * callers may cache it for as long as they like.
+ */
+export async function fetchBorosMarket(fetchImpl: FetchLike, marketId: number): Promise<BorosMarket> {
+  const body = (await getJson(fetchImpl, `/core/v1/markets/${marketId}`)) as Record<string, unknown>;
+  if (!body || typeof body !== 'object' || !Number.isFinite(Number(body.marketId))) {
+    throw new CoreError(`Boros /markets/${marketId}: unexpected response shape`, 'network');
+  }
+  return normalizeBorosMarket(body);
+}
+
+function normalizeBorosMarket(m: Record<string, unknown>): BorosMarket {
+  const imData = (m.imData ?? {}) as Record<string, unknown>;
     const extConfig = (m.extConfig ?? {}) as Record<string, unknown>;
     const metadata = (m.metadata ?? {}) as Record<string, unknown>;
     const data = (m.data ?? {}) as Record<string, unknown>;
@@ -315,8 +360,7 @@ export async function fetchBorosMarkets(fetchImpl: FetchLike): Promise<BorosMark
       imTickStep: Number(imData.tickStep ?? 0),
       tThreshSec: Number(config.tThresh ?? 0),
       isolatedOnly: Boolean(config.isolatedOnly ?? imData.isolatedOnly ?? false),
-    };
-  });
+  };
 }
 
 /**
@@ -519,6 +563,103 @@ export function resolveCollateralPricesUsd(markets: BorosMarket[]): Map<number, 
     prices.set(tokenId, ref ? ref.assetMarkPriceUsd : null);
   }
   return prices;
+}
+
+
+/** One periodic funding settlement for a (marketAcc, marketId) — the venue's
+ * own per-period record: when, at what size, at what effective rate, and the
+ * cash that moved. Amounts are in the market's SETTLEMENT TOKEN (norm18'd),
+ * not USD — the caller owns the conversion. */
+export interface BorosSettlementEvent {
+  marketId: number;
+  timeSec: number;
+  /** |position| at the settlement instant, token units. */
+  positionAbs: number;
+  /** Net settlement = yieldReceived − yieldPaid − fee, SIGNED (+ = paid out). */
+  settlementToken: number;
+  /** Settlement fee charged this period (positive cost). */
+  feeToken: number;
+  /** Annualized rate effectively applied this period. */
+  settlementRate: number;
+}
+
+/**
+ * GET /v1/accounts/settlement-events (gateway) — the per-settlement ledger
+ * that makes windowed Boros reconstruction EXACT: pages backward by
+ * resumeToken and stops once rows predate `sinceSec` (or history is
+ * exhausted). Returns its own coverage the same way the other ledger
+ * fetchers do: `coversFromSec` is the oldest row read when the page cap was
+ * hit, else 0 ("complete for every window that matters").
+ */
+export async function fetchSettlementEvents(
+  fetchImpl: FetchLike,
+  address: string,
+  accountId = 0,
+  sinceSec = 0,
+): Promise<{ events: BorosSettlementEvent[]; coversFromSec: number }> {
+  const clientTag =
+    'pendle_client=boroscrossex' + clientTagState.version + (clientTagState.active ? '_active' : '');
+  const events: BorosSettlementEvent[] = [];
+  let resumeToken: string | null = null;
+  let oldest = Number.POSITIVE_INFINITY;
+  // 60 pages × 100 ≈ 6k settlements ≈ 8 months of hourly rows on one market —
+  // a runaway guard, not an expected ceiling (the live probe read a full
+  // 10-month account in 35 pages).
+  const maxPages = 60;
+  let capped = true;
+  for (let page = 0; page < maxPages; page += 1) {
+    const url =
+      `${BOROS_GATEWAY_BASE_URL}/v1/accounts/settlement-events?root=${address}` +
+      `&accountId=${accountId}&limit=100` +
+      (resumeToken ? `&resumeToken=${encodeURIComponent(resumeToken)}` : '') +
+      `&${clientTag}`;
+    let resp: Awaited<ReturnType<FetchLike>>;
+    try {
+      resp = await fetchImpl(url, { signal: AbortSignal.timeout(15_000) });
+    } catch (err) {
+      throw new CoreError(
+        `Boros API unreachable (settlement-events): ${(err as Error)?.message ?? String(err)}`,
+        'network',
+      );
+    }
+    if (!resp.ok) {
+      throw new CoreError(
+        `Boros API settlement-events returned HTTP ${resp.status}`,
+        resp.status === 429 ? 'rate-limited' : 'network',
+      );
+    }
+    const body = (await resp.json()) as {
+      results?: Array<Record<string, unknown>>;
+      resumeToken?: string | null;
+    };
+    if (!Array.isArray(body?.results)) {
+      throw new CoreError('Boros settlement-events: unexpected response shape (no results[])', 'network');
+    }
+    let pastWindow = false;
+    for (const r of body.results) {
+      const timeSec = Number(r.timestamp);
+      if (!Number.isFinite(timeSec) || timeSec <= 0) continue;
+      oldest = Math.min(oldest, timeSec);
+      if (timeSec < sinceSec) {
+        pastWindow = true;
+        continue;
+      }
+      events.push({
+        marketId: Number(r.marketId),
+        timeSec,
+        positionAbs: Math.abs(norm18(r.positionSize as string)),
+        settlementToken: norm18(r.settlement as string),
+        feeToken: Math.abs(norm18(r.fee as string)),
+        settlementRate: Number(r.settlementRate ?? Number.NaN),
+      });
+    }
+    resumeToken = body.resumeToken ?? null;
+    if (pastWindow || !resumeToken || body.results.length === 0) {
+      capped = false;
+      break;
+    }
+  }
+  return { events, coversFromSec: capped ? oldest : 0 };
 }
 
 /**

@@ -20,6 +20,7 @@ import { disclaimerRoutes } from './routes/disclaimer';
 import { feesRoutes } from './routes/fees';
 import { healthRoutes } from './routes/health';
 import { leverageRoutes } from './routes/leverage';
+import { assetViewRoutes } from './routes/assetView';
 import { borosAgentRoutes } from './routes/borosAgent';
 import { borosPairRoutes } from './routes/borosPair';
 import { opportunitiesRoutes } from './routes/opportunities';
@@ -167,7 +168,11 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     // Hash both sides before timingSafeEqual: it throws on unequal lengths,
     // so comparing a raw attacker string would be a 500 — and hashing keeps
     // the comparison constant-time whatever length arrives.
-    const pathname = req.url.split('?', 1)[0];
+    let pathname = req.url.split('?', 1)[0];
+    try {
+      pathname = decodeURIComponent(pathname);
+    } catch {
+    }
     if (expectedTokenHash && pathname.startsWith('/api/') && pathname !== '/api/health') {
       const given = req.headers['x-arb-token'];
       const ok =
@@ -221,6 +226,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     strategyRoutes,
     opportunitiesRoutes,
     borosPairRoutes,
+    assetViewRoutes,
     borosAgentRoutes,
     booksRoutes,
     leverageRoutes,

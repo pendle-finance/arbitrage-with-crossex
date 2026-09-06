@@ -4,6 +4,7 @@ import {
   keepPreviousData,
   useInfiniteQuery,
   useMutation,
+  useQueries,
   useQuery,
   useQueryClient,
 } from '@tanstack/react-query';
@@ -11,6 +12,7 @@ import { useEffect, useRef } from 'react';
 import { del, fetchJson, postJson, putJson } from './client';
 import { uuid } from '../lib/uuid';
 import type {
+  AssetViewResponse,
   BorosCancelAndCloseResult,
   DealAlert,
   DealView,
@@ -39,6 +41,9 @@ import type {
   TradesResponse,
   VenueFees,
   UpdateStatus,
+  TopUpGasResponse,
+  RunUpdateResponse,
+  UpdateProgress,
 } from './types';
 
 export const qk = {
@@ -55,6 +60,7 @@ export const qk = {
   symbolDetail: (symbol: string) => ['symbolDetail', symbol] as const,
   strategy: (address: string, since: number | null, partition = '', capital = 'balance') =>
     ['strategy', address, since ?? '', partition, capital] as const,
+  assetView: (address: string, since: number) => ['assetView', address, since] as const,
   borosAgent: ['boros', 'agent'] as const,
   borosPairContext: (address: string) => ['boros', 'pair', 'context', address] as const,
   opportunities: (
@@ -153,6 +159,45 @@ export function useStrategy(
   });
 }
 
+/** Asset-grouped tracking view: venue-reported lifetime sums per asset since
+ * `since` (0 = all time). Same address-switch doctrine as useStrategy:
+ * deliberately NO keepPreviousData across keys. */
+export function useAssetView(address: string | null, since = 0) {
+  return useQuery({
+    queryKey: qk.assetView(address ?? '', since),
+    queryFn: () =>
+      fetchJson<AssetViewResponse>(
+        `/asset-view/${encodeURIComponent(address ?? '')}${since > 0 ? `?since=${since}` : ''}`,
+      ),
+    enabled: Boolean(address),
+    refetchInterval: 30_000,
+  });
+}
+
+/** One asset-view fetch per DISTINCT window — the start date is per asset,
+ * but the server windows a whole response at once, so assets sharing a date
+ * share a request (usually one or two in practice). Returns since → data. */
+export function useAssetViewWindows(address: string | null, sinces: readonly number[]) {
+  const distinct = [...new Set(sinces)].sort((a, b) => a - b);
+  const results = useQueries({
+    queries: distinct.map((since) => ({
+      queryKey: qk.assetView(address ?? '', since),
+      queryFn: () =>
+        fetchJson<AssetViewResponse>(
+          `/asset-view/${encodeURIComponent(address ?? '')}${since > 0 ? `?since=${since}` : ''}`,
+        ),
+      enabled: Boolean(address),
+      refetchInterval: 30_000,
+    })),
+  });
+  const bySince = new Map<number, AssetViewResponse>();
+  distinct.forEach((since, i) => {
+    const d = results[i]?.data;
+    if (d) bySince.set(since, d);
+  });
+  return { bySince, results, distinct };
+}
+
 export interface OpportunitiesParams {
   notionalUsd: number;
   borosEntry: BorosEntryMode;
@@ -244,6 +289,36 @@ export function useVersion() {
     refetchInterval: 21_600_000,
     retry: false,
     retryOnMount: false,
+  });
+}
+
+/**
+ * Watches the installed commit while an update runs, so the page can reload
+ * onto the new bundle.
+ *
+ * A separate key from `qk.version` on purpose: that one is cached for six
+ * hours and would keep answering from the pre-update snapshot, which is the
+ * whole reason the badge went on offering an update the machine already had.
+ * Errors are expected here — the server is stopped for part of the swap — so
+ * the interval keeps polling through them.
+ *
+ * ⚠ `refetchIntervalInBackground` IS LOAD-BEARING. An update takes about a
+ * minute, and nobody watches a progress line for a minute — the tab is hidden
+ * for most of it. React Query pauses a plain interval on a hidden tab, so
+ * without this flag the watch fetches once and then stops, and the page never
+ * learns that the swap happened. Measured on a real update: the watch made one
+ * request, while `/api/deals` and `/api/alerts`, which set this flag, made 19
+ * and 11.
+ */
+export function useInstallWatch(enabled: boolean) {
+  return useQuery({
+    queryKey: [...qk.version, 'watch'] as const,
+    queryFn: () => fetchJson<UpdateStatus>('/version'),
+    enabled,
+    refetchInterval: 2_500,
+    refetchIntervalInBackground: true,
+    staleTime: 0,
+    retry: false,
   });
 }
 
@@ -435,6 +510,44 @@ export function useExecuteBorosPair() {
       void qc.invalidateQueries({ queryKey: ['strategy'] });
       void qc.invalidateQueries({ queryKey: qk.positions });
     },
+  });
+}
+
+export function useTopUpGas() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (amountUsd: number) =>
+      postJson<TopUpGasResponse>('/boros/pair/top-up-gas', { amountUsd }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['boros', 'pair', 'simulate'] });
+      void qc.invalidateQueries({ queryKey: qk.borosAgent });
+    },
+  });
+}
+
+export function useRunUpdate() {
+  return useMutation({
+    mutationFn: () => postJson<RunUpdateResponse>('/version/update', {}),
+  });
+}
+
+/**
+ * The installer's output while an update runs.
+ *
+ * Errors are the normal case for part of it — the installer stops this server
+ * before it swaps the new copy in — so this never retries and never treats a
+ * failure as final. Background refetch for the same reason `useInstallWatch`
+ * needs it: nobody keeps the tab in front of them for a whole install.
+ */
+export function useUpdateLog(enabled: boolean) {
+  return useQuery({
+    queryKey: [...qk.version, 'log'] as const,
+    queryFn: () => fetchJson<UpdateProgress>('/version/update/log'),
+    enabled,
+    refetchInterval: 1_500,
+    refetchIntervalInBackground: true,
+    staleTime: 0,
+    retry: false,
   });
 }
 

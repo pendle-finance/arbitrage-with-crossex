@@ -23,6 +23,9 @@ web/dist/
 # local tooling state
 .claude/
 
+# git worktrees made by `gwta`, which land inside the repo
+.worktrees/
+
 # Local-only tooling.
 deploy/
 # per-install API token — written next to the .env (the repo root in a source

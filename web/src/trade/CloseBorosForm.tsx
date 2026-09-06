@@ -24,7 +24,7 @@
 import { useMemo, useState } from 'react';
 import type { BorosPairRequest, BorosSimulatedLeg, StrategyLeg } from '../api/types';
 import { SignedNumber } from '../components/SignedNumber';
-import { fmtPct, fmtTokenQty, fmtUsd, prettyVenue } from '../lib/fmt';
+import { fieldValue, fmtPct, fmtTokenQty, fmtUsd, prettyVenue } from '../lib/fmt';
 import {
   useBorosAgent,
   useBorosCancelAndClose,
@@ -133,7 +133,7 @@ export function CloseBorosForm({
   const shownSize = (l: StrategyLeg): string => {
     const raw = sizes[l.marketId as number];
     if (raw !== undefined) return raw;
-    return String(Number((l.notionalToken ?? 0).toPrecision(8)));
+    return fieldValue(l.notionalToken ?? 0);
   };
 
   const slipPct = Number(slipStr);
@@ -282,7 +282,7 @@ export function CloseBorosForm({
           const filled = r.fill!.filledSize;
           const left = requested - filled;
           setPartial((prev) => [...prev, { marketId: id, filled, left }]);
-          setSizes((prev) => ({ ...prev, [id]: String(Number(left.toPrecision(8))) }));
+          setSizes((prev) => ({ ...prev, [id]: fieldValue(left) }));
           onClosed?.(l, filled);
         } else {
           // Everything asked for came off. What the venue still holds splits

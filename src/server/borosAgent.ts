@@ -9,10 +9,6 @@
  * can exist in a tool whose promise is that it never holds your funds, and it
  * is why no code path here ever accepts a root private key.
  *
- * The one-time setup (`Agent.create` → `approveAgent`, plus `payTreasury` for
- * gas) is deliberately NOT done here: it needs the root wallet, so the user
- * performs it in the Boros app and pastes only the resulting agent key.
- *
  * Config lives in the same `.env` as the Gate credentials and inherits its 0600
  * hardening. Absent or malformed config is not an error — it leaves
  * `deps.borosOrders` undefined, which keeps the panel fully usable for pricing

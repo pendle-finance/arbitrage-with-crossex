@@ -364,6 +364,46 @@ describe('evaluatePairGate', () => {
     expect(evaluatePairGate(gateInput()).blockers).toEqual([]);
   });
 
+  /**
+   * Boros refuses an order worth $10 or less and says so as a raw HTTP 400 at
+   * the calldata builder — AFTER Confirm. The gate says it while the size is
+   * still being typed.
+   */
+  it('blocks a leg worth $10 or less, and says which leg and how much', () => {
+    const g = evaluatePairGate(gateInput({ simulation: simulateBorosPair(simInput({ size: 9 })) }));
+    const blocker = g.blockers.find((b) => b.code === 'below-min-order-value');
+    expect(blocker).toBeDefined();
+    expect(blocker!.message).toMatch(/worth \$9\.00/);
+    expect(blocker!.message).toMatch(/at or under \$10/);
+  });
+
+  it('blocks the boundary too — the venue prices $10 of USDT at $9.998', () => {
+    const g = evaluatePairGate(gateInput({ simulation: simulateBorosPair(simInput({ size: 10 })) }));
+    expect(codes(g)).toContain('below-min-order-value');
+  });
+
+  it('lets a size past the floor through', () => {
+    const g = evaluatePairGate(gateInput({ simulation: simulateBorosPair(simInput({ size: 11 })) }));
+    expect(codes(g)).not.toContain('below-min-order-value');
+  });
+
+  /** A delta that lands exactly flat is exempt at the venue
+   * (`prePositionSignedSize === -orderSignedSize`), so it is exempt here — a
+   * small position must never be trapped by the floor that opened it. */
+  it('never traps a small position: an exact close is exempt from the floor', () => {
+    // Directions OPPOSE the positions, or the close clamps to zero and never
+    // reaches the floor at all.
+    const legA = leg({ currentSize: -5, direction: 'long' });
+    const legB = leg({ market: bnMarket, book: book(101, 0.04, 0.042), direction: 'short', currentSize: 5 });
+    const sim = simulateBorosPair(simInput({ legA, legB, size: 5, intent: 'close' }));
+    expect(sim.legA.sizing.resultingSize).toBe(0);
+    expect(sim.legB.sizing.resultingSize).toBe(0);
+    const g = evaluatePairGate(
+      gateInput({ simulation: sim, legA, legB, opposingAcknowledged: true }),
+    );
+    expect(codes(g)).not.toContain('below-min-order-value');
+  });
+
   it('blocks an ineligible pair', () => {
     const g = evaluatePairGate(
       gateInput({ eligibility: pairEligibility(hlMarket, { ...bnMarket, tokenId: 1 }, NOW) }),
@@ -542,33 +582,47 @@ describe('evaluatePairGate', () => {
     expect(b.message).toMatch(/ETH/);
   });
 
-  it('blocks on an empty prepaid gas balance, distinctly from margin', () => {
+  /** An empty gas balance used to be a blocker, which was a dead end: the one
+   * remedy was a top-up the ticket refused to send until you had already made
+   * it. The order now carries its own `payTreasury`, so this only has to be
+   * SAID — never enforced. */
+  it('does not block an empty prepaid gas balance — the order tops itself up', () => {
     const g = evaluatePairGate(gateInput({ account: account({ gasBalanceUsd: 0 }) }));
     const codesOut = codes(g);
-    expect(codesOut).toContain('no-gas');
-    // Gas is topped up with payTreasury, margin with collateral — different fix.
+    expect(codesOut).not.toContain('no-gas');
+    // Gas comes out of the USDT balance, margin out of the pair's own —
+    // different pots, so a gas warning must never read as a margin problem.
     expect(codesOut).not.toContain('cross-short-margin');
-    expect(g.blockers.find((b) => b.code === 'no-gas')!.message).toMatch(
-      /gas, not trading collateral/i,
-    );
+    expect(g.warnings.join(' ')).toMatch(/tops it up as it sends/i);
+    expect(g.warnings.join(' ')).toMatch(/\$1\.00 from your Boros USDT balance/i);
   });
 
-  it('blocks a LOW balance too, not just an empty one', () => {
-    // The venue refuses below ~$10. A `<= 0` check let $3 through to fail at
-    // submit — the exact failure this blocker exists to pre-empt.
-    const g = evaluatePairGate(gateInput({ account: account({ gasBalanceUsd: 3 }) }));
-    expect(codes(g)).toContain('no-gas');
-    const msg = g.blockers.find((b) => b.code === 'no-gas')!.message;
-    // Names what is actually there, so the shortfall is obvious.
-    expect(msg).toContain('$3.00');
-    expect(msg).toContain(`$${MIN_GAS_BALANCE_USD}`);
+  it('says how low a LOW balance is, and still does not block', () => {
+    const g = evaluatePairGate(gateInput({ account: account({ gasBalanceUsd: 0.05 }) }));
+    expect(codes(g)).not.toContain('no-gas');
+    const msg = g.warnings.join(' ');
+    // Names what is actually there, so the charge is not a surprise.
+    expect(msg).toContain('$0.05');
+    expect(msg).not.toContain('$10');
+  });
+
+  it('a healthy balance says nothing about gas at all', () => {
+    const g = evaluatePairGate(gateInput({ account: account({ gasBalanceUsd: 5 }) }));
+    expect(g.warnings.join(' ')).not.toMatch(/gas/i);
+  });
+
+  it('WARNS about an unknown balance without blocking the trade', () => {
+    const g = evaluatePairGate(gateInput({ account: account({ gasBalanceUsd: null }) }));
+    expect(codes(g)).not.toContain('no-gas');
+    expect(g.warnings.join(' ')).toMatch(/could not be read/i);
   });
 
   it('raises no gas blocker at or above the minimum, or when never read', () => {
-    // undefined = not read. Refusing a trade over a number we could not check
-    // would be worse than letting the venue reject it.
     expect(
       codes(evaluatePairGate(gateInput({ account: account({ gasBalanceUsd: undefined }) }))),
+    ).not.toContain('no-gas');
+    expect(
+      codes(evaluatePairGate(gateInput({ account: account({ gasBalanceUsd: 5 }) }))),
     ).not.toContain('no-gas');
     expect(
       codes(

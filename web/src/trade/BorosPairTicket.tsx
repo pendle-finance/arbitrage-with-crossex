@@ -30,6 +30,7 @@ import {
   useBorosPairContext,
   useBorosPairSimulation,
   useExecuteBorosPair,
+  useTopUpGas,
 } from '../api/queries';
 import type {
   BorosLegDirection,
@@ -43,12 +44,14 @@ import { QueryError } from '../components/QueryError';
 import { SegmentedToggle } from '../components/SegmentedToggle';
 import { amountError } from '../lib/amount';
 import { isUsdCollateral } from '../lib/boros';
+import { fieldValue } from '../lib/fmt';
 import { useNow } from '../lib/useNow';
 import { uuid } from '../lib/uuid';
 import { useTrackedAddressOptional } from '../panels/trackedAddress';
 import { BorosAgentSetup } from './BorosAgentSetup';
 import {
   BlockerList,
+  GasTopUp,
   DirectionToggle,
   MarketSelect,
   PairCosts,
@@ -149,6 +152,7 @@ export function BorosPairTicket({
   const [dirB, setDirB] = useState<BorosLegDirection>('long');
   const [sizeStr, setSizeStr] = useState('');
   const [intent, setIntent] = useState<BorosPairIntent>('open');
+  const [gasTopUpStr, setGasTopUpStr] = useState('5');
 
   /**
    * A card asked to open its missing Boros legs: pick the two markets that
@@ -264,7 +268,7 @@ export function BorosPairTicket({
     const picked = long ?? short;
     const usdPegged = isUsdCollateral(picked?.collateral);
     const chosen = usdPegged ? openPrefill.size : openPrefill.sizeBase;
-    setSizeStr(chosen !== undefined && chosen > 0 ? String(Number(chosen.toPrecision(8))) : '');
+    setSizeStr(chosen !== undefined && chosen > 0 ? fieldValue(chosen) : '');
     // eslint-disable-next-line react-hooks/exhaustive-deps
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openNonce, marketsReady]);
@@ -459,6 +463,7 @@ export function BorosPairTicket({
 
   const execute = useExecuteBorosPair();
   const cancelClose = useBorosCancelAndClose();
+  const topUpGas = useTopUpGas();
 
   // Tell the host surface an execution is in flight, so it can lock its close
   // controls (see the prop doc). Cleared on unmount so a host never stays
@@ -753,11 +758,7 @@ export function BorosPairTicket({
               are suppressed, since a "spread" against a borrowed partner
               would be a number about a trade nobody is making. */}
           <SpreadReadout sim={simulation} singleLeg={mode === 'single'} />
-          <PairCosts
-            sim={simulation}
-            gasBalanceUsd={sim.data?.gasBalanceUsd}
-            singleLeg={mode === 'single'}
-          />
+          <PairCosts sim={simulation} singleLeg={mode === 'single'} />
           <PositionArithmetic sim={simulation} singleLeg={mode === 'single'} />
         </>
       )}
@@ -802,6 +803,22 @@ export function BorosPairTicket({
         busyMarketId={cancelClose.isPending ? cancelClose.variables?.marketId ?? null : null}
         onCancelAndClose={(marketId) => cancelClose.mutate({ marketId })}
       />
+      <GasTopUp
+        gasBalanceUsd={sim.data?.gasBalanceUsd}
+        amount={gasTopUpStr}
+        onAmountChange={setGasTopUpStr}
+        onTopUp={() => topUpGas.mutate(Number(gasTopUpStr))}
+        busy={topUpGas.isPending}
+      />
+      {topUpGas.isSuccess && (
+        <p className="rounded-lg border border-emerald-500/25 bg-emerald-500/[0.04] px-2.5 py-1.5 text-[11px] leading-relaxed text-emerald-200">
+          Sent a ${topUpGas.data.sentUsd} gas top-up. Boros credits it once the transaction is
+          indexed, so the balance above catches up within a minute — no need to send it again.
+        </p>
+      )}
+      {topUpGas.isError && (
+        <QueryError title="The gas top-up did not confirm" error={topUpGas.error} />
+      )}
 
       {execute.isError && <QueryError title="The pair was not sent" error={execute.error} />}
 

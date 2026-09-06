@@ -30,6 +30,8 @@ import {
   type BorosOrderBook,
   type FetchLike,
 } from '../../core/boros/client';
+import { USD_TOKEN_ID } from '../../core/boros/borosApi';
+import { isUpdating } from '../updater';
 import {
   limitAprFor,
   submitBorosPair,
@@ -75,6 +77,9 @@ const CLOSE_SLIPPAGE_APR = 0.01;
  * double-fill, not every double-fill.
  */
 const EXECUTION_MEMO_MS = 10 * 60_000;
+
+const MIN_TOP_UP_USD = 2;
+const MAX_TOP_UP_USD = 100;
 
 /** Wire shape of one leg, as the panel sends it. */
 interface LegBody {
@@ -318,30 +323,26 @@ function readAccount(zones: BorosCollateralZone[]): AccountView {
   return view;
 }
 
-export function borosPairRoutes(deps: AppDeps) {
-  /**
-   * clientOrderId pair → the full response payload the execution produced (or
-   * is producing).
-   *
-   * Keyed on BOTH ids so a resend of the same intent coalesces, while a
-   * genuinely new order (fresh ids) never does. In-flight entries store the
-   * PROMISE, so two rapid clicks await the same submission instead of racing
-   * into two batches. The whole payload (fills + the estimate they were priced
-   * against) is memoized so a replay can answer WITHOUT re-pricing — the first
-   * execution changed the very account state a re-run of the gate would judge.
-   */
-  interface ExecutionPayload {
-    result: Awaited<ReturnType<typeof submitBorosPair>>;
-    estimate: ReturnType<typeof simulateBorosPair>;
-    warnings: string[];
+interface ExecutionPayload {
+  result: Awaited<ReturnType<typeof submitBorosPair>>;
+  estimate: ReturnType<typeof simulateBorosPair>;
+  warnings: string[];
+}
+const recentExecutions = new Map<string, { at: number; result: Promise<ExecutionPayload> }>();
+const sweepExecutions = (): void => {
+  const now = Date.now();
+  for (const [k, v] of recentExecutions) {
+    if (now - v.at > EXECUTION_MEMO_MS) recentExecutions.delete(k);
   }
-  const recentExecutions = new Map<string, { at: number; result: Promise<ExecutionPayload> }>();
-  const sweepExecutions = (): void => {
-    const now = Date.now();
-    for (const [k, v] of recentExecutions) {
-      if (now - v.at > EXECUTION_MEMO_MS) recentExecutions.delete(k);
-    }
-  };
+};
+
+export function borosExecutionsPending(): number {
+  sweepExecutions();
+  return recentExecutions.size;
+}
+
+export function borosPairRoutes(deps: AppDeps) {
+  recentExecutions.clear();
   const rememberExecution = (key: string, pending: Promise<ExecutionPayload>): void => {
     recentExecutions.set(key, { at: Date.now(), result: pending });
     // A submission that provably left NO position — every submitted leg failed
@@ -366,6 +367,15 @@ export function borosPairRoutes(deps: AppDeps) {
    * AFTER a confirm the user already committed to — so the write routes
    * refuse up front instead.
    */
+  const assertNotUpdating = (): void => {
+    if (isUpdating()) {
+      throw new CoreError(
+        'the app is updating — it will restart shortly, then you can send this again',
+        'validation',
+      );
+    }
+  };
+
   const assertAgentNotExpired = (): void => {
     const raw = Number(process.env.BOROS_AGENT_EXPIRY);
     if (Number.isFinite(raw) && raw > 0 && raw <= Math.floor(Date.now() / 1000)) {
@@ -473,17 +483,13 @@ export function borosPairRoutes(deps: AppDeps) {
       takerFeeOverride,
     });
 
-    // Gas is prepaid to a treasury, separate from trading collateral, so a
-    // funded account can still be unable to send. A failed READ raises no
-    // blocker — refusing a trade because we could not check would be worse
-    // than letting the venue reject it with its own message.
-    let gasBalanceUsd: number | undefined;
+    let gasBalanceUsd: number | null | undefined;
     const ordersForGas = deps.getBorosOrders?.();
     if (ordersForGas?.getGasBalance) {
       try {
         gasBalanceUsd = await ordersForGas.getGasBalance();
       } catch {
-        gasBalanceUsd = undefined;
+        gasBalanceUsd = null;
       }
     }
 
@@ -606,9 +612,6 @@ export function borosPairRoutes(deps: AppDeps) {
         req.body as PairBody,
         false,
       );
-      // Echoed so the panel can SHOW it. Boros keeps prepaid gas in a pot
-      // separate from collateral, so a "top up to trade" refusal is
-      // indistinguishable from a margin problem unless the number is visible.
       return reply.ok({
         simulation,
         gate,
@@ -639,6 +642,7 @@ export function borosPairRoutes(deps: AppDeps) {
           'not-configured',
         );
       }
+      assertNotUpdating();
       assertAgentNotExpired();
 
       // The memo is consulted BEFORE re-pricing. A lost-response retry must
@@ -717,6 +721,9 @@ export function borosPairRoutes(deps: AppDeps) {
         legB: legBOrder,
         feeDragApr: simulation.feeDragApr,
         receiveLeg: simulation.receiveLeg!,
+        // A close only reduces, so the gas top-up stays out of its way unless
+        // the budget genuinely cannot pay — an exit is never taxed a dollar.
+        reducing: intent === 'close',
       }).then((result) => ({ result, estimate: simulation, warnings: gate.warnings }));
       rememberExecution(memoKey, pending);
       const payload = await pending;
@@ -735,6 +742,35 @@ export function borosPairRoutes(deps: AppDeps) {
       deps.cache.bust('boros:txns');
 
       return reply.ok({ ...payload, replayed: false });
+    });
+
+    app.post('/boros/pair/top-up-gas', async (req, reply) => {
+      const amountUsd = Number((req.body as { amountUsd?: unknown } | undefined)?.amountUsd);
+      if (!Number.isFinite(amountUsd) || amountUsd < MIN_TOP_UP_USD || amountUsd > MAX_TOP_UP_USD) {
+        throw new CoreError(
+          `amountUsd must be between $${MIN_TOP_UP_USD} and $${MAX_TOP_UP_USD}`,
+          'validation',
+        );
+      }
+      const orders = deps.getBorosOrders?.();
+      if (!orders?.payTreasury) {
+        throw new CoreError(
+          'Boros gas top-up is not configured on this install.',
+          'not-configured',
+        );
+      }
+      assertNotUpdating();
+      assertAgentNotExpired();
+      const usdMarket = (await loadMarkets(false)).find((m) => m.tokenId === USD_TOKEN_ID);
+      if (!usdMarket) {
+        throw new CoreError(
+          'Boros lists no USD-collateral market to route a dollar top-up through.',
+          'venue-rejected',
+        );
+      }
+      await orders.payTreasury(amountUsd, usdMarket.marketId);
+
+      return reply.ok({ sentUsd: amountUsd });
     });
 
     /**
@@ -806,6 +842,7 @@ export function borosPairRoutes(deps: AppDeps) {
         );
       }
 
+      assertNotUpdating();
       assertAgentNotExpired();
 
       // Orders first, and BEFORE the position is read: closing while an order

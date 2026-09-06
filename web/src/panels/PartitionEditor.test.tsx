@@ -406,6 +406,29 @@ describe('LegAssignment — entry editor: regressions from the re-audit', () => 
     fireEvent.click(screen.getByTitle(/of the .* open on/));
     expect(screen.getByText(/reports 5\.91% across the whole position/)).toBeInTheDocument();
   });
+
+  it('treats an entry that is not a number as no entry at all', () => {
+    // Both values arrive from JSON and from localStorage. Formatted, a
+    // non-finite price printed "0", which reads as a real price, and a
+    // non-finite rate printed "NaN". Neither is a number the venue reported.
+    mount('HYPERLIQUID', 'perp', {
+      onAssert: vi.fn(),
+      venueEntry: Number.NaN,
+      entryOverride: Number.POSITIVE_INFINITY,
+    });
+    openShared();
+    expect(screen.getByText(/reports no entry price for this leg/)).toBeInTheDocument();
+    expect(entryField()).toHaveValue(null);
+    // Clear offers to withdraw an assertion. There is none to withdraw.
+    expect(screen.queryByText('Clear')).toBeNull();
+  });
+
+  it('shows a rate that is not a number as no rate, not as NaN', () => {
+    mount('BINANCE', 'boros', { onAssert: vi.fn(), venueEntry: Number.NaN });
+    openShared();
+    expect(screen.getByText(/reports no rate for this leg/)).toBeInTheDocument();
+    expect(screen.getByLabelText(/entry rate for this position/)).toHaveValue(null);
+  });
 });
 
 /**

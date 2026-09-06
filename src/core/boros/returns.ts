@@ -174,6 +174,21 @@ export interface StrategyLeg {
   netUsd: number;
   /** Unix seconds the position was opened, when known. */
   openedAt: number | null;
+  /** When the VENUE position opened — unlike `openedAt`, never re-stamped to a
+   * tranche's own open. The two differ exactly when this strategy's share of
+   * the leg started later than the venue position (prior trading, a DCA'd
+   * book), and the UI uses the pair to say so instead of showing one date that
+   * silently means two different things. */
+  venueOpenedAt?: number | null;
+  /** Boros only: the opening fills that built the VENUE position (oldest
+   * first) — each with the token qty and the fixed APR it actually traded at.
+   * The venue's blended entryApr is the notional-weighted average of exactly
+   * these rows, so they are the leg's real entry history. */
+  venueFills?: Array<{ timeSec: number; qty: number; apr: number }>;
+  /** Boros only: the subset of `venueFills` allocated to THIS strategy's
+   * share by the fill-evidence split — how the leg was divided, fill by fill.
+   * Absent when the leg is not split (the whole history is this card's). */
+  fills?: Array<{ timeSec: number; qty: number; apr: number }>;
   /** Boros only: unix-seconds maturity of the market. */
   maturity?: number;
   /** Perp only: the exact CrossEx symbol — the client's join key to the live
@@ -357,10 +372,6 @@ export interface StrategyRollup {
   /** Locked fixed spread across the Boros legs (≈ rate_A − rate_B). */
   spread: number;
   lockedAprOnCapital: number;
-  /** Full-life projection of the locked spread on the Boros notional:
-   * (grossBorosNotional/2) × spread × (maturity − clockStart)/YEAR. Assumes the
-   * spread was locked on the full notional since the strategy start — the UI
-   * shows that assumption. Null when the clock start is unknown. */
   spreadReturnUsd: number | null;
   /** Vu's formula: spreadReturnUsd − feesUsd.paid.totalUsd −
    * feesUsd.future.borosSettlementUsd. The perp exit parts (fees + slippage)
@@ -540,6 +551,9 @@ function buildBorosLeg(
   const cashFlowUsd = norm18(p.pnl.rateSettlementPnl) * px;
   const mtmUsd = norm18(p.pnl.unrealisedPnl) * px;
   const tradePnlUsd = digest.tradePnlSinceOpen * px;
+  // The leg's real entry history — null when the fill replay cannot explain
+  // the live size (history gap), in which case the blend is all we can say.
+  const venueFills = borosIncrements(txns, p.marketId, signed);
 
   return {
     marketId: p.marketId,
@@ -563,6 +577,10 @@ function buildBorosLeg(
       feesUsd: digest.feesSinceOpen * px,
       netUsd: cashFlowUsd + mtmUsd + tradePnlUsd,
       openedAt: digest.openedAt,
+      venueOpenedAt: digest.openedAt,
+      ...(venueFills && venueFills.length
+        ? { venueFills: venueFills.map((f) => ({ timeSec: f.timeSec, qty: f.qty, apr: f.fixedApr })) }
+        : {}),
       maturity: market?.maturity,
       warnings: legWarnings,
     },
@@ -647,6 +665,8 @@ function buildPerpLeg(pos: PerpPositionLike): PerpLegBuild {
       netUsd: cashFlowUsd - feesUsd,
       // createTime may be seconds or milliseconds — normalize to seconds.
       openedAt:
+        openedAtRaw > 0 ? (openedAtRaw < 1e12 ? openedAtRaw : Math.floor(openedAtRaw / 1000)) : null,
+      venueOpenedAt:
         openedAtRaw > 0 ? (openedAtRaw < 1e12 ? openedAtRaw : Math.floor(openedAtRaw / 1000)) : null,
       symbol: pos.symbol,
       warnings: [],
@@ -1214,25 +1234,29 @@ function assembleStrategy(args: AssembleInput): StrategyRollup {
   }
 
   // --- Locked spread ----------------------------------------------------------
-  const netFixedPerYearUsd = borosLegs.reduce(
-    (s, l) => s + fixedSign(l) * (l.entryApr ?? 0) * l.notionalUsd,
-    0,
-  );
+  const perLegClock = clockBasis !== 'custom';
+  let netFixedPerYearUsd = 0;
+  let spreadReturnUsd: number | null = clockStart === null ? null : 0;
+  let unknownOpen = false;
+  for (const l of borosLegs) {
+    const perYearUsd = fixedSign(l) * (l.entryApr ?? 0) * l.notionalUsd;
+    netFixedPerYearUsd += perYearUsd;
+    if (spreadReturnUsd === null) continue;
+    const start = perLegClock ? (l.openedAt ?? clockStart!) : clockStart!;
+    if (perLegClock && l.openedAt === null) unknownOpen = true;
+    spreadReturnUsd +=
+      perYearUsd * (Math.max(0, (l.maturity ?? maturity) - start) / SECONDS_IN_YEAR);
+  }
+  if (unknownOpen && borosOpens.length) {
+    warnings.push(
+      `Some ${base} Boros legs have no known open time — their share of the locked spread accrues from the position start instead of their own.`,
+    );
+  }
   const grossBorosNotional = borosLegs.reduce((s, l) => s + l.notionalUsd, 0);
   // For the canonical 2-leg book (equal notional N): netFixed = (rateA−rateB)·N
   // and gross = 2N, so netFixed / (gross/2) recovers the spread exactly.
   const spread = grossBorosNotional > 0 ? netFixedPerYearUsd / (grossBorosNotional / 2) : 0;
   const lockedAprOnCapital = capitalUsd > 0 ? netFixedPerYearUsd / capitalUsd : 0;
-
-  // Full-life spread return: the locked net fixed rate accrued from the
-  // strategy start to maturity. netFixedPerYearUsd ≡ (gross/2) × spread, so
-  // this is N × spread × duration for the canonical book, and stays exact for
-  // unequal notionals. Assumes the spread was locked on the full notional
-  // since the start — the UI surfaces that assumption verbatim.
-  const spreadReturnUsd =
-    clockStart !== null
-      ? netFixedPerYearUsd * (Math.max(0, maturity - clockStart) / SECONDS_IN_YEAR)
-      : null;
 
   // --- Perp exit cost (maker+hedge close) ---------------------------------------
   // For a 2-leg pair: maker order on one venue + taker hedge on the other —
@@ -2040,19 +2064,11 @@ function applyMembership(
      * has no such floor — the user can assign a leg from any market on the
      * coin, and a share link or a pin written before the dialog started
      * refusing it can carry the clash in.
-     *
-     * It is worth its own warning rather than being left to the hedge ratios,
-     * because it does not degrade the card, it MISPRICES it. `maturity` above
-     * is `Math.min` across the legs, and the countdown, `secondsToMaturity`,
-     * `spreadReturnUsd` and the PnL projection all run off it — so the later
-     * leg's fixed rate is accrued only to the earlier leg's date, and every
-     * number keeps its confident formatting while it does. A size mismatch at
-     * least announces itself.
      */
     const legMaturities = [...new Set(maturities.filter((m) => m > 0))].sort((a, b) => a - b);
     if (legMaturities.length > 1) {
       card.warnings.push(
-        `This ${card.base} position holds Boros legs that mature on ${legMaturities.length} different dates (${legMaturities.map((m) => new Date(m * 1000).toISOString().slice(0, 10)).join(', ')}). Its countdown and every projection on it run to the earliest of them, so the later leg's rate is credited only up to that date — split them into one position per maturity to price either correctly.`,
+        `This ${card.base} position holds Boros legs that mature on ${legMaturities.length} different dates (${legMaturities.map((m) => new Date(m * 1000).toISOString().slice(0, 10)).join(', ')}). Its countdown runs to the earliest of them while each leg's fixed rate is credited to its own maturity, so the projection reaches past the date shown — split them into one position per maturity to price either correctly.`,
       );
     }
     cards.push(card);
@@ -2413,6 +2429,9 @@ function splitStrategies(
   interface CohortPlan {
     shareByTranche: Map<string, Map<string, number>>;
     rateByTranche: Map<string, number>;
+    /** `${trancheId}:${venue}` → the fill slices behind that rate — the split
+     * itself, surfaced so the card can show which fills its share is made of. */
+    fillsByTranche: Map<string, BorosIncrement[]>;
     pinNotes: Map<string, string[]>;
     coveredUsd: Map<string, number>;
   }
@@ -2455,6 +2474,7 @@ function splitStrategies(
      * Filled by the same allocation that sizes it, so a strategy can never be
      * credited a rate for size it was not given. */
     const rateByTranche = new Map<string, number>();
+    const fillsByTranche = new Map<string, BorosIncrement[]>();
     const shareByTranche = new Map<string, Map<string, number>>(
       cohortTranches.map((t) => [t.id, new Map<string, number>()]),
     );
@@ -2582,10 +2602,16 @@ function splitStrategies(
         if (apr !== null && apr !== undefined) {
           rateByTranche.set(`${t.id}:${venue}`, apr);
         }
+        // Slice qtys are already in token units (the allocation draws real
+        // size from the pool), so they can sit directly beside `venueFills`.
+        const allocFills = byEvidence?.get(t.id)?.fills;
+        if (allocFills && allocFills.length) {
+          fillsByTranche.set(`${t.id}:${venue}`, allocFills);
+        }
       }
     }
 
-    plans.set(cohort, { shareByTranche, rateByTranche, pinNotes, coveredUsd });
+    plans.set(cohort, { shareByTranche, rateByTranche, fillsByTranche, pinNotes, coveredUsd });
   }
 
   /**
@@ -2616,7 +2642,7 @@ function splitStrategies(
   };
 
   for (const [cohort, cohortTranches] of assigned) {
-    const { shareByTranche, rateByTranche, pinNotes } = plans.get(cohort) as CohortPlan;
+    const { shareByTranche, rateByTranche, fillsByTranche, pinNotes } = plans.get(cohort) as CohortPlan;
     const venueSlice = (t: PerpTranche, venue: string): number =>
       shareByTranche.get(t.id)?.get(venue) ?? 0;
 
@@ -2671,7 +2697,13 @@ function splitStrategies(
         const share = Math.min(venueSlice(t, b.leg.venue), borosShareLeft.get(b) ?? 1);
         if (!(share > 0)) continue;
         borosScaled.push(
-          scaleBorosBuild(b, share, rateByTranche.get(`${t.id}:${b.leg.venue}`), trancheOpenedAt),
+          scaleBorosBuild(
+            b,
+            share,
+            rateByTranche.get(`${t.id}:${b.leg.venue}`),
+            trancheOpenedAt,
+            fillsByTranche.get(`${t.id}:${b.leg.venue}`),
+          ),
         );
         borosShareLeft.set(b, (borosShareLeft.get(b) ?? 1) - share);
       }
@@ -3176,6 +3208,7 @@ function scaleBorosBuild(
   share: number,
   entryApr?: number,
   openedAtSec?: number | null,
+  allocatedFills?: readonly BorosIncrement[],
 ): BorosLegBuild {
   const cashFlowUsd = b.leg.cashFlowUsd * share;
   const mtmUsd = b.leg.mtmUsd * share;
@@ -3197,6 +3230,12 @@ function scaleBorosBuild(
       // started months later.
       openedAt: openedAtSec ?? b.leg.openedAt,
       share,
+      // The fill slices this card's share is made of. Only when the evidence
+      // split produced them — a pro-rata fallback has no per-fill story to
+      // tell, and inventing one would misattribute rates.
+      ...(allocatedFills && allocatedFills.length
+        ? { fills: allocatedFills.map((f) => ({ timeSec: f.timeSec, qty: f.qty, apr: f.fixedApr })) }
+        : {}),
       warnings: [...b.leg.warnings],
     },
     // The group balance stays whole and the position's margin shrinks: the

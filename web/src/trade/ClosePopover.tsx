@@ -16,7 +16,7 @@ import { Modal } from '../components/Modal';
 import { SegmentedToggle } from '../components/SegmentedToggle';
 import { SignedNumber } from '../components/SignedNumber';
 import { SideChip, SymbolCell } from '../components/VenueChip';
-import { fmtUsd, parseSymbol, prettyVenue, sig } from '../lib/fmt';
+import { fieldValue, fmtUsd, parseSymbol, prettyVenue, sig } from '../lib/fmt';
 import { sizeUnitForBase } from '../lib/boros';
 import { ExecuteControl } from './ExecuteControl';
 import { feeText, PreviewFallback, ViolationList } from './previewBits';
@@ -71,7 +71,7 @@ export function ClosePopover({
     attributedQty < wholeQty * 0.999;
   const [slipStr, setSlipStr] = useState('0.5');
   const [mode, setMode] = useState<'full' | 'partial'>(shared ? 'partial' : 'full');
-  const [qtyStr, setQtyStr] = useState(shared ? String(Number(attributedQty.toPrecision(8))) : '');
+  const [qtyStr, setQtyStr] = useState(shared ? fieldValue(attributedQty) : '');
   /**
    * Which unit the partial box is in.
    *
@@ -164,7 +164,7 @@ export function ClosePopover({
       kind: 'close-position',
       symbol: position.symbol,
       slippagePct: slip,
-      ...(mode === 'partial' ? { qty: String(Number(qtyNum.toPrecision(8))) } : {}),
+      ...(mode === 'partial' ? { qty: fieldValue(qtyNum) } : {}),
     };
   }, [slipInvalid, partialMissing, partialInvalid, position.symbol, slip, mode, qtyNum]);
 
@@ -265,7 +265,7 @@ export function ClosePopover({
                     const n = Number(qtyStr);
                     if (Number.isFinite(n) && n > 0) {
                       const asQty = unit === 'usd' ? n / mark : n;
-                      setQtyStr(String(Number((u === 'usd' ? asQty * mark : asQty).toPrecision(8))));
+                      setQtyStr(fieldValue(u === 'usd' ? asQty * mark : asQty));
                     }
                     setUnit(u);
                   }}

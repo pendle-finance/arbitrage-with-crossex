@@ -7,6 +7,7 @@ import type { CrossexPosition } from '../api/types';
 import { ToastProvider } from '../components/Toast';
 import { decodeSharePayload } from '../lib/shareCodec';
 import {
+  STRATEGY_MATURITY,
   makeCrossexPosition,
   makeStrategyLeg,
   makeStrategyRollup,
@@ -29,6 +30,11 @@ const rollOver = () => {
   openCosts();
   fireEvent.click(screen.getByRole('radio', { name: 'Omit (rolling over)' }));
 };
+
+/** The locked-spread breakdown is a hover card now. Click opens it too — and
+ * has to, or reading it would toggle the chart box the trigger sits inside. */
+const openSpread = () => fireEvent.click(screen.getByText(/% spread$/));
+const spreadCard = () => screen.getByRole('tooltip').textContent ?? '';
 
 /** The exit assumption defaults to Omit now — opt in to the charged case. */
 const includeExit = () => {
@@ -138,10 +144,14 @@ describe('StrategyCard — hero tiers', () => {
     // parenthetical in the title.
     expect(screen.queryByText('(7.07% spread)')).not.toBeInTheDocument();
     expect(screen.getByText(/7\.07% spread/)).toBeInTheDocument();
-    // The spread-lock assumption still lives in that number's tooltip.
-    expect(
-      screen.getByTitle(/Assumes 7\.07% locked on \$158\.8k since the strategy start/),
-    ).toBeInTheDocument();
+    // The hero is a button titled "Show the waterfall breakdown". Without an
+    // empty title of its own, the trigger inherits it and the NATIVE tooltip
+    // opens on top of the card's first leg row.
+    expect(screen.getByText(/7\.07% spread$/).closest('[title]')).toHaveAttribute('title', '');
+    openSpread();
+    expect(spreadCard()).toMatch(/Each leg earns its fixed rate from its own open date/);
+    expect(spreadCard()).toContain('9.36%');
+    expect(spreadCard()).toContain('$158.8k');
   });
 
   it('folds the checked exit parts into the hero numbers when included', () => {
@@ -1283,5 +1293,118 @@ describe('StrategyCard — share', () => {
       expect(dec.payload.l).toHaveLength(4);
     }
     expect(input.value).not.toMatch(/0x[a-fA-F0-9]{40}/);
+  });
+});
+
+describe('StrategyCard — the fixed-APY window', () => {
+  const DAY = 86_400;
+
+  const splitOpens = (
+    openedAt: (i: number) => number | null,
+    over: Parameters<typeof makeStrategyRollup>[0] = {},
+  ) =>
+    card({
+      capitalUsd: 40_000,
+      expectedPnlToMaturityUsd: 1_000,
+      clockStartSec: STRATEGY_MATURITY - 60 * DAY,
+      ...over,
+      legs: makeStrategyRollup().legs.map((l, i) =>
+        l.kind === 'boros' ? { ...l, notionalUsd: 100_000, openedAt: openedAt(i) } : l,
+      ),
+    });
+
+  const staggered = () => splitOpens((i) => STRATEGY_MATURITY - (i === 2 ? 60 : 30) * DAY);
+
+  it('annualizes over the weighted mean open, not over the earliest leg', () => {
+    render(staggered());
+    rollOver();
+    expect(screen.getByText('+20.28%')).toBeInTheDocument();
+    expect(screen.queryByText('+15.21%')).toBeNull();
+  });
+
+  it('prints the same window in the ROI tooltip', () => {
+    render(staggered());
+    rollOver();
+    expect(screen.getByTitle(/over this position's life \(45d\)/)).toBeInTheDocument();
+  });
+
+  it('falls back to the strategy clock when no Boros leg carries an open', () => {
+    render(splitOpens(() => null));
+    rollOver();
+    expect(screen.getByText('+15.21%')).toBeInTheDocument();
+    expect(screen.getByTitle(/over this position's life \(60d\)/)).toBeInTheDocument();
+  });
+
+  it('yields to a user-set clock, because the PnL above it does too', () => {
+    render(
+      splitOpens((i) => STRATEGY_MATURITY - (i === 2 ? 60 : 30) * DAY, { clockBasis: 'custom' }),
+    );
+    rollOver();
+    expect(screen.getByText('+15.21%')).toBeInTheDocument();
+    expect(screen.getByTitle(/over this position's life \(60d\)/)).toBeInTheDocument();
+  });
+});
+
+describe('StrategyCard — the spread tooltip', () => {
+  const DAY = 86_400;
+
+  const staggered = (over: Parameters<typeof makeStrategyRollup>[0] = {}) =>
+    card({
+      clockStartSec: STRATEGY_MATURITY - 60 * DAY,
+      spreadReturnUsd: 392.88,
+      ...over,
+      legs: makeStrategyRollup().legs.map((l, i) =>
+        l.kind === 'boros'
+          ? { ...l, notionalUsd: 100_000, openedAt: STRATEGY_MATURITY - (i === 2 ? 60 : 30) * DAY }
+          : l,
+      ),
+    });
+
+  it('gives each leg its own row, with its own window and its own share', () => {
+    render(staggered());
+    rollOver();
+    openSpread();
+    const card = spreadCard();
+    expect(card).toContain('pays 2.29%');
+    expect(card).toContain('60d');
+    expect(card).toContain('-$376');
+    expect(card).toContain('gets 9.36%');
+    expect(card).toContain('30d');
+    expect(card).toContain('+$769');
+    expect(card).toContain('$100.0k');
+  });
+
+  it('ends on the total, and the leg rows add up to it', () => {
+    render(staggered());
+    rollOver();
+    openSpread();
+    expect(spreadCard()).toMatch(/Spread return\+\$393/);
+    expect(Math.round(769.32 - 376.44)).toBe(393);
+  });
+
+  it('says so when a user-set clock overrides every leg open', () => {
+    render(staggered({ clockBasis: 'custom' }));
+    rollOver();
+    openSpread();
+    const card = spreadCard();
+    expect(card).toContain('Every leg accrues from the clock you set');
+    expect(card).toContain('-$376');
+    expect(card).toContain('+$1,539');
+  });
+
+  it('marks a leg whose open date is unknown, rather than dating it silently', () => {
+    render(
+      card({
+        clockStartSec: STRATEGY_MATURITY - 60 * DAY,
+        spreadReturnUsd: 1_161.75,
+        legs: makeStrategyRollup().legs.map((l) =>
+          l.kind === 'boros' ? { ...l, notionalUsd: 100_000, openedAt: null } : l,
+        ),
+      }),
+    );
+    rollOver();
+    openSpread();
+    expect(screen.getAllByTitle(/open date unknown, so it accrues from the position start/).length).toBeGreaterThan(0);
+    expect(spreadCard()).toContain('Amber: open date unknown.');
   });
 });

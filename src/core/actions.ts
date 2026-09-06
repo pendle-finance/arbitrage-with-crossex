@@ -311,7 +311,9 @@ export async function resolveActions(
         message: 'execute requires a resolved qty string; notional sizing is preview-only',
       });
     } else if (!input.qty && !input.notional) {
-      violations.push({ code: 'qty-missing', message: 'provide qty (or notional in preview)' });
+      // Same words `resolveQty` uses for the same case — this one is rendered
+      // verbatim in the ticket, so it cannot stay in field names.
+      violations.push({ code: 'qty-missing', message: 'enter a size, in coins or in dollars' });
     } else if (!input.qty && input.notional && !sizingRef) {
       violations.push({ code: 'ref-price-unavailable', message: `no reference price for ${symbol}; enter qty directly` });
     } else if (rule) {
@@ -326,7 +328,7 @@ export async function resolveActions(
           notional: input.qty ? undefined : input.notional,
           qty: input.qty,
           refPrice: sizingRef ?? 0,
-          legs: [{ lotSize: rule.lotSize, minSize: Number(rule.minSize ?? 0), minNotional }],
+          legs: [{ symbol, lotSize: rule.lotSize, minSize: Number(rule.minSize ?? 0), minNotional }],
         });
         qty = r.qtyStr;
         estNotional = r.estNotional;
@@ -383,11 +385,6 @@ export async function resolveActions(
   return resolved;
 }
 
-/**
- * Pair legs must trade the SAME base qty. When both open legs of a pair group were
- * sized from notional, re-resolve ONE shared qty across both legs' rules (floored
- * to the coarser lot, both mins enforced) and overwrite the per-leg results.
- */
 function applySharedPairSizing(resolved: ResolvedAction[]): void {
   const groups = new Map<string, ResolvedAction[]>();
   for (const r of resolved) {
@@ -401,27 +398,37 @@ function applySharedPairSizing(resolved: ResolvedAction[]): void {
   for (const legs of groups.values()) {
     if (legs.length !== 2) continue;
     const [a, b] = legs;
-    const bothFromNotional = legs.every(
-      (l) => !(l.input as OpenMarketAction).qty && (l.input as OpenMarketAction).notional,
-    );
-    if (!bothFromNotional || !a.rule || !b.rule) continue;
-    // Both legs must target the same notional — otherwise adopting leg A's silently
-    // drops leg B's intent. Flag it rather than reconcile downward without warning.
-    const notA = Number((a.input as OpenMarketAction).notional);
-    const notB = Number((b.input as OpenMarketAction).notional);
-    if (Number.isFinite(notA) && Number.isFinite(notB) && notA !== notB) {
+    if (!a.rule || !b.rule) continue;
+    const inA = a.input as OpenMarketAction;
+    const inB = b.input as OpenMarketAction;
+    const sizeA = inA.qty ?? inA.notional;
+    const sizeB = inB.qty ?? inB.notional;
+    if (!sizeA || !sizeB) continue;
+    if (Boolean(inA.qty) !== Boolean(inB.qty)) {
       for (const l of legs) {
-        l.violations.push({ code: 'pair-qty-mismatch', message: `pair legs have different notional (${notA} vs ${notB}) — use one shared notional` });
+        l.violations.push({ code: 'pair-qty-mismatch', message: 'pair legs are sized differently — one in coins, one in dollars; size both the same way' });
+      }
+      continue;
+    }
+    // drops leg B's intent. Flag it rather than reconcile downward without warning.
+    const numA = Number(sizeA);
+    const numB = Number(sizeB);
+    if (Number.isFinite(numA) && Number.isFinite(numB) && numA !== numB) {
+      const unit = inA.qty ? 'qty' : 'notional';
+      for (const l of legs) {
+        l.violations.push({ code: 'pair-qty-mismatch', message: `pair legs have different ${unit} (${numA} vs ${numB}) — use one shared ${unit}` });
       }
       continue;
     }
     const ref = a.refPrice ?? b.refPrice;
-    if (!ref) continue;
+    if (!inA.qty && !ref) continue;
     try {
       const shared = resolveQty({
-        notional: (a.input as OpenMarketAction).notional,
-        refPrice: ref.value,
+        notional: inA.qty ? undefined : inA.notional,
+        qty: inA.qty,
+        refPrice: ref?.value,
         legs: legs.map((l) => ({
+          symbol: l.symbol,
           lotSize: l.rule!.lotSize,
           minSize: Number(l.rule!.minSize ?? 0),
           minNotional: Number(l.rule!.minNotional ?? 0),
@@ -429,18 +436,26 @@ function applySharedPairSizing(resolved: ResolvedAction[]): void {
       });
       for (const l of legs) {
         if (Number(l.qty) !== shared.qty) {
-          l.warnings.push(`qty shared across the pair (coarser lot binds): ${l.qty || '—'} → ${shared.qtyStr}`);
+          l.warnings.push(`size set to ${shared.qtyStr} (was ${l.qty || '—'}) so both legs trade the same amount`);
         }
         l.qty = shared.qtyStr;
-        l.estNotional = shared.estNotional;
+        if (ref) {
+          const own = Number(l.price);
+          l.estNotional = shared.qty * (Number.isFinite(own) && own > 0 ? own : ref.value);
+        }
         // Per-leg sizing violations are superseded by the successful shared sizing.
         l.violations = l.violations.filter(
           (v) => !['below-min-size', 'below-min-notional', 'lot-incompatible', 'qty-invalid', 'sizing-failed'].includes(v.code),
         );
       }
     } catch (err) {
+      const code = sizingViolationCode(err);
+      const message =
+        code === 'lot-incompatible'
+          ? `${a.symbol} trades in steps of ${a.rule!.lotSize} and ${b.symbol} in steps of ${b.rule!.lotSize} — no size fits both legs`
+          : (err as Error).message;
       for (const l of legs) {
-        l.violations.push({ code: sizingViolationCode(err), message: `pair sizing: ${(err as Error).message}` });
+        l.violations.push({ code, message });
       }
     }
   }
@@ -523,10 +538,12 @@ async function resolveClose(
 
 function sizingViolationCode(err: unknown): Violation['code'] {
   const m = (err as Error).message ?? '';
-  if (/min size/.test(m)) return 'below-min-size';
-  if (/min notional/.test(m)) return 'below-min-notional';
-  if (/lot sizes incompatible/.test(m)) return 'lot-incompatible';
-  if (/qty is 0|must be a positive/.test(m)) return 'qty-invalid';
+  // Keyed off resolveQty's wording, so the two move together. Order matters:
+  // the min-size and min-notional messages both read "is below <venue>'s ...".
+  if (/minimum order value/.test(m)) return 'below-min-notional';
+  if (/minimum size/.test(m)) return 'below-min-size';
+  if (/lot sizes do not fit/.test(m)) return 'lot-incompatible';
+  if (/rounds down to zero|must be a positive/.test(m)) return 'qty-invalid';
   return 'sizing-failed';
 }
 
