@@ -1,7 +1,7 @@
 {
   "version": "1.5.1",
   "highlights": [
-    "The Balances tab now shows when Hyperliquid has borrowed USDC, and what it costs you in held margin and interest",
+    "An amber pill in the header shows when Gate has lent you USDC for Hyperliquid. The Balances tab says what it costs you in held margin and interest",
     "One hold pays the borrow back by the cheapest route, or brings spare USDC home as USDT",
     "A progress bar shows each step and how long it should take. A refresh keeps a running move; a restart halts it safely with Resume and Abandon"
   ]

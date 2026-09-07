@@ -117,7 +117,7 @@ Opening a Hyperliquid leg does not borrow USDC. Its margin comes from your whole
 
 The borrow costs two things. Gate holds 20% of it as initial margin and 10% as maintenance margin. Once the bucket is more than 10,000 USDC short, Gate also charges interest every hour.
 
-The Balances tab shows a **Rebalance** section whenever Hyperliquid has a USDC borrow or spare USDC, or a job runs or is halted. The pill shows the borrow and the margin it holds. The two tiles show the interest per day and the interest paid in the last 30 days. The info mark next to the title opens a short card that says all this.
+The Balances tab shows a **Rebalance** section whenever Hyperliquid has a USDC borrow or spare USDC, or a job runs or is halted. An amber pill shows the borrow. The line under it says what Gate lent you, the margin it holds, and whether interest runs. Two tiles with the interest per day and the interest paid in the last 30 days appear once interest is charged. The info mark next to the title opens a short card that says all this. The same amber pill sits in the header on every tab. Click it to open this section.
 
 Pick a direction, keep the prefilled amount or type one, and hold the button:
 

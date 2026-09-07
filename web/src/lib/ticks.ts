@@ -103,3 +103,9 @@ export function formatRestPrice(price: number, side: 'BUY' | 'SELL', symbol: str
   }
   return stripZeros(snapped);
 }
+
+/** Floor to cents, never negative. A figure a button acts on must not show
+ * more than the button can move. */
+export function floorCents(value: number): number {
+  return Number(roundToStep(Math.max(0, value), '0.01', 'down'));
+}
