@@ -3,6 +3,26 @@
 Only substantial releases are listed here — each one bumps `version.json` (which is what the
 in-app update check compares against).
 
+## 1.5.1 — 2026-09-07
+
+Pay back borrowed USDC from the Balances tab, or bring spare USDC home, with one hold.
+
+- **A new Rebalance section on the Balances tab.** When a Hyperliquid leg loses money or pays
+  funding, Gate lends the USDC and holds 20% of it as initial margin and 10% as maintenance
+  margin. Past 10,000 USDC short it also charges interest every hour. The section shows the
+  borrow with the margin it holds, the interest per day, and the interest paid in the last 30
+  days. An info mark next to the title explains all of it.
+- **One hold moves cash either way.** USDT to Hyperliquid USDC pays the borrow back and frees
+  the margin. Hyperliquid USDC to USDT brings spare USDC home, capped so it never opens a
+  borrow. The amount is prefilled with the most that can move, and you can type less.
+- **The cheaper route is picked for you and shown.** An instant convert at 20 bps, or a spot
+  loop through Gate that costs $0.05 for a pay-down and a flat $1 for a pull. The quote line
+  names the winner, the price, what lands, the cost, and the borrow after the move. Under
+  1 USDC there is nothing to hold.
+- **You can watch it run.** A progress bar shows each step with its seconds. A job survives a
+  page refresh. If the app restarts mid-job, it halts, says where the funds are, and offers
+  Resume and Abandon.
+
 ## 1.5.0 — 2026-08-27
 
 An update button that updates, gas you never have to think about, and messages that say what

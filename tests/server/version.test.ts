@@ -13,6 +13,7 @@ import type { FetchLike } from '../../src/core/boros/client';
 import { makeClients } from '../../src/core/clients';
 import { Store } from '../../src/engine/db';
 import { gateVenue } from '../../src/engine/venueGate';
+import { JobFile, newJob } from '../../src/server/rebalanceJob';
 import { endUpdateWindow, isUpdating, startUpdate } from '../../src/server/updater';
 import { COMMIT_URL, compareVersions, VERSION_URL } from '../../src/server/version';
 import { HOST, makeTestApp, TEST_KEY, TEST_SECRET } from './helpers/gate-nock';
@@ -324,6 +325,20 @@ describe('POST /api/version/update', () => {
     expect(res.statusCode).toBe(409);
     expect(res.json().error).toMatchObject({ category: 'validation', retryable: true });
     expect(res.json().error.message).toMatch(/deal is still working/);
+    expect(mocks.spawn).not.toHaveBeenCalled();
+  });
+
+  it('refuses while a pay-down is still running, and names it', async () => {
+    const jobs = new JobFile(mkdtempSync(path.join(tmpdir(), 'rebalance-')));
+    app = makeTestApp({ install: INSTALLED, rebalance: { jobs } });
+    await app.ready();
+    jobs.write(newJob('payDown', 'loop', 12, Date.now()));
+
+    const res = await post();
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error.message).toMatch(/pay-down is still running/);
+    expect(res.json().error.retryable).toBe(true);
     expect(mocks.spawn).not.toHaveBeenCalled();
   });
 

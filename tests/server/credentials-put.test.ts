@@ -9,6 +9,7 @@ import type { FastifyInstance } from 'fastify';
 import nock from 'nock';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { makeClients, type Clients } from '../../src/core/clients';
+import { JobFile, newJob } from '../../src/server/rebalanceJob';
 import { rewriteEnvFile } from '../../src/server/routes/credentials';
 import { Store } from '../../src/engine/db';
 import { gateVenue } from '../../src/engine/venueGate';
@@ -130,6 +131,24 @@ describe('PUT /api/credentials', () => {
     gate().get('/api/v4/crossex/accounts').query(true).reply(200, fixture('account.json'));
     const ok = await put({ key: NEW_KEY, secret: NEW_SECRET });
     expect(ok.statusCode).toBe(200);
+  });
+
+  it('refuses with 409 while a pay-down is still running', async () => {
+    await app.close();
+    const jobs = new JobFile(mkdtempSync(path.join(tmpdir(), 'rebalance-')));
+    app = makeTestApp({
+      getClients: () => current,
+      credentials: { envPath, setClients: (c) => (current = c) },
+      rebalance: { jobs },
+    });
+    await app.ready();
+    jobs.write(newJob('payDown', 'loop', 12, Date.now()));
+
+    const res = await put({ key: NEW_KEY, secret: NEW_SECRET });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error.message).toMatch(/pay-down is still running/);
+    expect(readFileSync(envPath, 'utf8')).toContain(`GATE_API_KEY=${TEST_KEY}`);
   });
 
   it('validates the body shape', async () => {

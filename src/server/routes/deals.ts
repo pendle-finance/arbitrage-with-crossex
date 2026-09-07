@@ -1,5 +1,6 @@
 /**
- * Deal routes — the app's ONLY execution surface (engine). The route layer
+ * Deal routes — one of the app's two execution surfaces (engine). The other
+ * is the rebalance runner (src/server/rebalanceRunner.ts). The route layer
  * never touches venue-mutating endpoints itself: creation writes an intent row
  * the reconcile loop picks up on its next tick; commands are one-row intent
  * edits (levels, not events).

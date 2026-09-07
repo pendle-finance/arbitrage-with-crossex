@@ -7,6 +7,15 @@ import { classifyGateError, CoreError } from '../../core/errors';
 import type { AppDeps } from '../app';
 import { restrictToOwner } from '../secretFile';
 
+const PAY_DOWN_RUNNING = {
+  ok: false,
+  error: {
+    category: 'validation',
+    message: 'a pay-down is still running — wait for it to finish before changing credentials',
+    retryable: true,
+  },
+};
+
 /**
  * Credentials: read masked status; replace keys with validate-before-commit.
  * PUT builds a CANDIDATE client and calls getCrossexAccount first — only a key
@@ -43,6 +52,7 @@ export function credentialsRoutes(deps: AppDeps) {
           },
         });
       }
+      if (deps.rebalance?.jobs.read()?.status === 'running') return reply.code(409).send(PAY_DOWN_RUNNING);
 
       // Validate with a candidate client; nothing is persisted on failure.
       const candidate = makeClients({ key, secret });
@@ -73,6 +83,7 @@ export function credentialsRoutes(deps: AppDeps) {
           },
         });
       }
+      if (deps.rebalance?.jobs.read()?.status === 'running') return reply.code(409).send(PAY_DOWN_RUNNING);
 
       rewriteEnvFile(svc.envPath, { GATE_API_KEY: key, GATE_API_SECRET: secret }, svc.hardenConfigDir);
       process.env.GATE_API_KEY = key;
