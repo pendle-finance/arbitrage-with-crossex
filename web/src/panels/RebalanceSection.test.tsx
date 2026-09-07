@@ -127,7 +127,6 @@ const step = (name: string, over: Partial<RebalanceStep> = {}): RebalanceStep =>
   quoteId: null,
   venueId: null,
   qty: null,
-  balanceBefore: null,
   attempt: 0,
   status: 'pending',
   startedAt: null,
@@ -301,6 +300,24 @@ describe('RebalanceSection', () => {
       'Interest paid · 30 d': '$4.20',
     });
     expect(fact('Liquidation')).toBeNull();
+  });
+
+  it('says so with a retry when the first fetch fails, instead of hiding the section', async () => {
+    server.use(
+      http.get('/api/rebalance', () =>
+        HttpResponse.json({ ok: false, error: { category: 'upstream', message: 'gate down', retryable: true } }, { status: 502 }),
+      ),
+    );
+    renderWithClient(<RebalanceSection holdMs={50} />);
+
+    await section();
+    expect(screen.getByRole('alert').textContent).toContain('Could not load the rebalance view.');
+    expect(screen.queryByText(HOLD)).toBeNull();
+
+    serve(view());
+    await userEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(screen.getByText('Borrowing 1,200.00 USDC')).toBeInTheDocument());
+    expect(screen.queryByRole('alert')).toBeNull();
   });
 
   it('floors the borrow pill to cents so it never shows more than the button', async () => {

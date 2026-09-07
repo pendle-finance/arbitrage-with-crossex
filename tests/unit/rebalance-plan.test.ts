@@ -205,11 +205,24 @@ describe('planFor amount', () => {
     expect(p.amount).toBe(0);
   });
 
-  it('carries savesPerDayUsd and marginFreedUsd scaled by amount over borrow', () => {
+  it('carries savesPerDayUsd and marginFreedUsd scaled by what lands over the borrow', () => {
     const p = plan({ usdcEquity: -20000, usdcBorrow: 20000, usdcIm: 4000, usdtCash: 5000, margin: 50000 });
     expect(p.amount).toBe(5000);
-    expect(p.savesPerDayUsd).toBeCloseTo((20000 * 0.00001 * 24 * 5000) / 20000, 9);
-    expect(p.marginFreedUsd).toBeCloseTo((5000 * 4000) / 20000, 9);
+    expect(p.receives).toBeLessThan(5000);
+    expect(p.savesPerDayUsd).toBeCloseTo((20000 * 0.00001 * 24 * p.receives) / 20000, 9);
+    expect(p.marginFreedUsd).toBeCloseTo((p.receives * 4000) / 20000, 9);
+  });
+
+  it('saves the whole daily charge when the repayment brings the borrow back under the interest-free 10,000', () => {
+    const p = plan({ usdcEquity: -10001, usdtCash: 1000, margin: 1000 }, OPEN, { requested: 100 });
+    expect(p.borrowAfterUsd).toBeLessThan(10000);
+    expect(p.savesPerDayUsd).toBeCloseTo(10001 * 0.00001 * 24, 9);
+  });
+
+  it('saves nothing when no interest runs, and still frees margin for what lands', () => {
+    const p = plan({ usdcEquity: -500, usdcIm: 100, usdtCash: 1000, margin: 2000 });
+    expect(p.savesPerDayUsd).toBe(0);
+    expect(p.marginFreedUsd).toBeCloseTo((p.receives * 100) / 500, 9);
   });
 
   it('reads savesPerDayUsd and marginFreedUsd as 0 when the borrow is 0', () => {

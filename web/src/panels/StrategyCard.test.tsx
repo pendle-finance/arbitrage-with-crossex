@@ -1426,14 +1426,20 @@ describe('liquidation chip', () => {
     expect(screen.getByText('Liquidates if ETH falls to ~$1,840 (-20%)').className).toMatch(/amber/);
   });
 
-  it('says so when no line is within 10x, and shows nothing while the line is not known', () => {
-    render(card({}, { liquidation: 'far' }));
-    expect(screen.getByText('No liquidation within 10x').getAttribute('title')).toContain(
-      'survives a 10x pump or a 98% dump of',
+  it('says safe through 10x when no line is within range, says the estimate is missing when Gate sent no figures, and shows nothing while not loaded', () => {
+    render(card({ base: 'HYPE' }, { liquidation: 'far' }));
+    expect(screen.getByText('Safe through a 10x HYPE pump or 98% dump')).toHaveAttribute(
+      'title',
+      'Estimate: the account is not liquidated if HYPE rises 10x or falls 98% and every other coin holds still.',
     );
+    cleanup();
+    render(card({}, { liquidation: 'unknown' }));
+    expect(screen.getByText('No liquidation estimate').getAttribute('title')).toContain('cannot be estimated');
+    expect(screen.queryByText(/^Safe through/)).toBeNull();
     cleanup();
     render(card());
     expect(screen.queryByText(/^Liquidates if/)).toBeNull();
-    expect(screen.queryByText('No liquidation within 10x')).toBeNull();
+    expect(screen.queryByText(/^Safe through/)).toBeNull();
+    expect(screen.queryByText('No liquidation estimate')).toBeNull();
   });
 });

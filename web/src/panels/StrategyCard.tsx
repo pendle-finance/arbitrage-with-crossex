@@ -110,14 +110,21 @@ function HedgeChip({ s }: { s: StrategyRollup }) {
 
 /** Where this coin's move liquidates the account. Red inside 15%, amber
  * inside 30%: a hedged pair is delta-neutral but not margin-neutral. */
-function LiquidationChip({ line, base }: { line: LiquidationLine | 'far'; base: string }) {
+function LiquidationChip({ line, base }: { line: LiquidationLine | 'far' | 'unknown'; base: string }) {
+  if (line === 'unknown') {
+    return (
+      <Chip sm title="Gate did not send the account's margin figures, so the line cannot be estimated.">
+        No liquidation estimate
+      </Chip>
+    );
+  }
   if (line === 'far') {
     return (
       <Chip
         sm
-        title={`The account survives a 10x pump or a 98% dump of ${base} with every other coin held still.`}
+        title={`Estimate: the account is not liquidated if ${base} rises 10x or falls 98% and every other coin holds still.`}
       >
-        No liquidation within 10x
+        {`Safe through a 10x ${base} pump or 98% dump`}
       </Chip>
     );
   }
@@ -213,8 +220,8 @@ export function StrategyCard({
   liquidation = null,
 }: {
   /** The account's liquidation line if only this coin moves; 'far' = none
-   * within 10x; null = not known yet. */
-  liquidation?: LiquidationLine | 'far' | null;
+   * within 10x; 'unknown' = Gate's figures are missing; null = not loaded. */
+  liquidation?: LiquidationLine | 'far' | 'unknown' | null;
   /** The custom strategy-start override (per wallet ?since=), editable from
    * the timeline's "Boros position open ✎" label. */
   since?: number | null;

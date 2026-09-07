@@ -16,7 +16,7 @@ import { Notes } from '../components/Notes';
 import { QueryError } from '../components/QueryError';
 import { TableSkeleton } from '../components/Skeleton';
 import { fmtDateUtc, fmtUsdCompact, prettyVenue } from '../lib/fmt';
-import { liquidationLines } from '../lib/liquidation';
+import { lineFor as lineIn, liquidationLines } from '../lib/liquidation';
 import { useTradeFlowOptional } from '../trade/TradeFlow';
 import { useBookId } from './bookId';
 import {
@@ -470,15 +470,18 @@ export function PositionsHome() {
      the header already polls, so the query is shared. */
   const accountData = useAccount().data;
   const liquidation = useMemo(
-    () => (accountData && positionsData ? liquidationLines(accountData, positionsData) : []),
+    () => (accountData && positionsData ? liquidationLines(accountData, positionsData) : undefined),
     [accountData, positionsData],
   );
-  /* null while the account or positions are not loaded; 'far' once both are
-     and this coin has no line within 10x, so the card can say so instead of
-     leaving a gap that reads as "not computed". */
-  const lineFor = (base: string) =>
-    liquidation.find((l) => l.base.toUpperCase() === base.toUpperCase()) ??
-    (accountData && positionsData ? ('far' as const) : null);
+  /* null while the account or positions are not loaded, or when this coin has
+     no priced leg; 'unknown' when Gate's margin figures are not numbers, so
+     the card says the estimate is missing rather than claiming safety; 'far'
+     when the coin was priced to 10x and 2% with no line. */
+  const lineFor = (base: string) => {
+    if (liquidation === undefined) return null;
+    if (liquidation === null) return 'unknown' as const;
+    return lineIn(liquidation, base);
+  };
 
   const livePositions = useMemo(() => {
     const map = new Map<string, CrossexPosition>();

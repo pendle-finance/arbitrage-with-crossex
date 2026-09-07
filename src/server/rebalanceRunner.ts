@@ -67,6 +67,7 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
   const haltDead = (step: Step, reason: string): void => {
     step.venueId = null;
     step.text = null;
+    step.quoteId = null;
     step.attempt += 1;
     halt(reason);
   };
@@ -84,19 +85,13 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
 
   const previousQty = (): number => (job.stepIndex === 0 ? job.amount : (job.steps[job.stepIndex - 1].qty ?? 0));
 
-  const balanceOf = async (coin: string, venue: string): Promise<number> => {
-    const { body } = await crossEx().getCrossexAccount();
-    const asset = body.assets?.find((a) => a.coin === coin && a.exchangeType === venue);
-    return Number(asset?.balance ?? 0);
-  };
-
   /** Convert runs on Hyperliquid in both directions. Pay-down turns USDT into
    * USDC there; pull turns USDC into USDT, which lands in the pooled CROSSEX
-   * bucket. The landing check watches the bucket that receives. */
+   * bucket. */
   const convertSpec = () =>
     job.direction === 'pull'
-      ? { fromCoin: 'USDC', toCoin: 'USDT', dest: 'CROSSEX' as FundsAt, landed: () => balanceOf('USDT', 'CROSSEX') }
-      : { fromCoin: 'USDT', toCoin: 'USDC', dest: 'HYPERLIQUID' as FundsAt, landed: () => balanceOf('USDC', 'HYPERLIQUID') };
+      ? { fromCoin: 'USDC', toCoin: 'USDT', dest: 'CROSSEX' as FundsAt }
+      : { fromCoin: 'USDT', toCoin: 'USDC', dest: 'HYPERLIQUID' as FundsAt };
 
   const transferRow = async (
     match: (row: CrossexTransferRecord) => boolean,
@@ -105,32 +100,22 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
     return (body ?? []).find(match) ?? null;
   };
 
-  const convertLanded = async (step: Step): Promise<boolean> => {
-    const spec = convertSpec();
-    const balance = await spec.landed();
-    if (step.balanceBefore === null || step.qty === null || balance - step.balanceBefore < step.qty - 0.01) {
-      return false;
-    }
-    finish(step, step.qty, spec.dest);
-    return true;
-  };
-
   const poll = async (step: Step, spec: StepSpec, venueId: string): Promise<void> => {
-    if (spec.kind === 'order') {
+    if (spec.kind !== 'transfer') {
       const { body } = await crossEx().getCrossexOrder(venueId);
       const state = String(body.state ?? '');
       if (decodeStatus(state) !== 'closed') return;
       let filled: number;
-      if (spec.side === CrossexOrderRequest.Side.SELL) {
+      if (spec.kind === 'convert' || spec.side === CrossexOrderRequest.Side.SELL) {
+        // Gate books a convert as a market sell of the from coin, so what came
+        // back is executedAmount, as for a spot sell.
         filled = Number(body.executedAmount ?? 0);
       } else {
         const fee = String(body.feeCoin ?? '') === 'USDC' ? Number(body.fee ?? 0) : 0;
         filled = Number(body.executedQty ?? 0) - (Number.isFinite(fee) ? fee : 0);
       }
-      if (filled > 0) finish(step, filled, spec.dest);
+      if (filled > 0) finish(step, filled, spec.kind === 'convert' ? convertSpec().dest : spec.dest);
       else haltDead(step, `order ${state} with nothing filled`);
-    } else if (spec.kind === 'convert') {
-      await convertLanded(step);
     } else {
       const row = await transferRow((r) => r.id === venueId);
       if (!row) return;
@@ -145,13 +130,17 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
     }
   };
 
-  const lookup = async (spec: StepSpec, tag: string): Promise<string | null> => {
-    if (spec.kind !== 'order') {
-      const row = await transferRow((r) => r.text === tag);
+  /** The venue id of a send whose response was lost, or null when Gate has
+   * no record of it. A transfer is found by its tag; an order by its tag,
+   * which Gate resolves on the order endpoint; a convert by its quote id,
+   * which Gate stores as the convert order's text (checked live 2026-09-07). */
+  const lookup = async (spec: StepSpec, key: string): Promise<string | null> => {
+    if (spec.kind === 'transfer') {
+      const row = await transferRow((r) => r.text === key);
       return row ? row.id : null;
     }
     try {
-      const { body } = await crossEx().getCrossexOrder(tag);
+      const { body } = await crossEx().getCrossexOrder(key);
       return body.orderId ? String(body.orderId) : null;
     } catch (err) {
       const c = classifyGateError(err);
@@ -176,7 +165,6 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
 
   const sendConvert = async (step: Step): Promise<void> => {
     const spec = convertSpec();
-    if (step.balanceBefore === null) step.balanceBefore = await spec.landed();
     const { body: quote } = await crossEx().createCrossexConvertQuote({
       crossexConvertQuoteRequest: {
         exchangeType: 'HYPERLIQUID',
@@ -190,6 +178,8 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
       halt('quote worse than 30 bps');
       return;
     }
+    // On disk before the send: if the response is lost, the quote id is the
+    // key that finds the order on Gate, so the step is never sent twice.
     step.quoteId = String(quote.quoteId);
     step.qty = toAmount;
     deps.jobs.write(job);
@@ -252,27 +242,23 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
         if (step.text === null) {
           step.text = tagFor(job.id, job.stepIndex, step.attempt);
           deps.jobs.write(job);
-        } else if (spec.kind === 'convert') {
-          phase = 'lookup';
-          if (step.quoteId !== null) {
-            let landed = await convertLanded(step);
-            if (!landed) {
-              await deps.sleep(LOOKUP_RETRY_MS);
-              landed = await convertLanded(step);
-            }
-            if (landed) continue;
-          }
         } else {
-          phase = 'lookup';
-          let found = await lookup(spec, step.text);
-          if (found === null) {
-            await deps.sleep(LOOKUP_RETRY_MS);
-            found = await lookup(spec, step.text);
-          }
-          if (found !== null) {
-            step.venueId = found;
-            deps.jobs.write(job);
-            continue;
+          // A tag with no venue id: a send may have gone through and lost its
+          // response. Ask Gate twice, 10 s apart, before sending again. A
+          // convert with no quote id never reached the order call.
+          const key = spec.kind === 'convert' ? step.quoteId : step.text;
+          if (key !== null) {
+            phase = 'lookup';
+            let found = await lookup(spec, key);
+            if (found === null) {
+              await deps.sleep(LOOKUP_RETRY_MS);
+              found = await lookup(spec, key);
+            }
+            if (found !== null) {
+              step.venueId = found;
+              deps.jobs.write(job);
+              continue;
+            }
           }
         }
         phase = 'send';

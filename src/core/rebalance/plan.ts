@@ -253,9 +253,16 @@ export function planFor(
         : 0;
   const price = route === 'loop' ? ask : route === 'convert' ? 1 - CONVERT_RATE : null;
 
-  const savesPerDayUsd =
-    usdcBucket && usdcBucket.borrow > 0 ? (usdcBucket.interestPerDayUsd * amount) / usdcBucket.borrow : 0;
-  const marginFreedUsd = usdcBucket && usdcBucket.borrow > 0 ? (amount * usdcBucket.imHeldUsd) / usdcBucket.borrow : 0;
+  // What lands, not what is sent, repays the borrow. Interest runs on the
+  // whole borrow only past the threshold, so a repayment that crosses it
+  // stops the whole charge, not its share.
+  const repaid = usdcBucket ? Math.min(receives, usdcBucket.borrow) : 0;
+  const chargedAfter =
+    usdcBucket && usdcBucket.borrow > 0 && usdcBucket.equity + receives < INTEREST_THRESHOLD
+      ? (usdcBucket.interestPerDayUsd * (usdcBucket.borrow - repaid)) / usdcBucket.borrow
+      : 0;
+  const savesPerDayUsd = usdcBucket ? Math.max(0, usdcBucket.interestPerDayUsd - chargedAfter) : 0;
+  const marginFreedUsd = usdcBucket && usdcBucket.borrow > 0 ? (repaid * usdcBucket.imHeldUsd) / usdcBucket.borrow : 0;
 
   return {
     direction,

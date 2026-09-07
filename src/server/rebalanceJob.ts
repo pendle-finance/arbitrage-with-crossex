@@ -15,7 +15,6 @@ export interface Step {
   quoteId: string | null;
   venueId: string | null;
   qty: number | null;
-  balanceBefore: number | null;
   attempt: number;
   status: StepStatus;
   startedAt: number | null;
@@ -24,6 +23,9 @@ export interface Step {
 
 export interface Job {
   id: string;
+  /** Gate user id the job was started on. A resume on another account is
+   * refused; null on files written before this field existed. */
+  userId: string | null;
   direction: Direction;
   route: RouteName;
   amount: number;
@@ -45,10 +47,17 @@ export const STEP_NAMES: readonly string[] = [...LOOP_STEPS, ...CONVERT_STEPS, .
 const JOB_STATUSES: readonly string[] = ['running', 'halted', 'done', 'abandoned'];
 const FUNDS_AT: readonly string[] = ['CROSSEX', 'GATE', 'SPOT', 'HYPERLIQUID'];
 
-export function newJob(direction: Direction, route: RouteName, amount: number, now: number): Job {
+export function newJob(
+  direction: Direction,
+  route: RouteName,
+  amount: number,
+  now: number,
+  userId: string | null = null,
+): Job {
   const names: readonly string[] = route === 'convert' ? CONVERT_STEPS : direction === 'pull' ? PULL_STEPS : LOOP_STEPS;
   return {
     id: now.toString(36),
+    userId,
     direction,
     route,
     amount,
@@ -60,7 +69,6 @@ export function newJob(direction: Direction, route: RouteName, amount: number, n
       quoteId: null,
       venueId: null,
       qty: null,
-      balanceBefore: null,
       attempt: 0,
       status: 'pending',
       startedAt: null,
@@ -82,6 +90,7 @@ function parseJob(value: unknown): Job | null {
   const job = value as Partial<Job> | null;
   if (typeof job !== 'object' || job === null) return null;
   if (job.direction === undefined) job.direction = 'payDown';
+  if (job.userId === undefined) job.userId = null;
   if (job.direction !== 'payDown' && job.direction !== 'pull') return null;
   if (!JOB_STATUSES.includes(String(job.status))) return null;
   if (!Array.isArray(job.steps) || job.steps.length === 0) return null;

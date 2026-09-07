@@ -82,17 +82,24 @@ function root(g: (f: number) => number, lo: number, hi: number): number {
   return (a + b) / 2;
 }
 
-/** One line per coin held, nearest first. Empty when nothing is open or the
- * account is missing a figure. */
+/** The lines the model found, nearest first, and the coins it priced to
+ * 10x and 2% without finding one. A coin in neither has no priced leg. */
+export interface LiquidationView {
+  lines: LiquidationLine[];
+  far: string[];
+}
+
+/** One line per coin held. Null when Gate's margin figures are not numbers:
+ * unknown is not the same as far, and the cards must not say safe. */
 export function liquidationLines(
   acc: CrossexAccount,
   positions: PositionsResponse,
   shift: WalletShift = {},
-): LiquidationLine[] {
-  const legs = legsOf(positions);
+): LiquidationView | null {
   const marginBalance = Number(acc.marginBalance);
   const maintenance = Number(acc.maintenanceMargin);
-  if (legs.length === 0 || !Number.isFinite(marginBalance) || !Number.isFinite(maintenance)) return [];
+  if (!Number.isFinite(marginBalance) || !Number.isFinite(maintenance)) return null;
+  const legs = legsOf(positions);
 
   const equityNow = new Map<string, number>();
   for (const a of acc.assets) equityNow.set(`${a.coin}/${a.exchangeType}`, Number(a.equity) || 0);
@@ -102,6 +109,7 @@ export function liquidationLines(
   const liabilityNow = liabilityOf((w) => equityNow.get(w) ?? 0);
 
   const lines: LiquidationLine[] = [];
+  const far: string[] = [];
   for (const base of new Set(legs.map((l) => l.base))) {
     const mine = legs.filter((l) => l.base === base);
     const g = (f: number): number => {
@@ -122,12 +130,22 @@ export function liquidationLines(
       if (g(F_MAX) <= 0) candidates.push(root(g, 1, F_MAX));
       if (g(F_MIN) <= 0) candidates.push(root(g, F_MIN, 1));
     }
-    if (candidates.length === 0) continue;
+    if (candidates.length === 0) {
+      far.push(base);
+      continue;
+    }
     const f = candidates.reduce((a, b) => (Math.abs(a - 1) <= Math.abs(b - 1) ? a : b));
     const biggest = mine.reduce((a, b) => (b.value > a.value ? b : a));
     lines.push({ base, price: biggest.mark * f, move: f - 1 });
   }
-  return lines.sort((a, b) => Math.abs(a.move) - Math.abs(b.move));
+  return { lines: lines.sort((a, b) => Math.abs(a.move) - Math.abs(b.move)), far };
+}
+
+/** This coin's entry in a view: its line, 'far' when it was priced without
+ * one, null when it has no priced leg. */
+export function lineFor(view: LiquidationView, base: string): LiquidationLine | 'far' | null {
+  const up = base.toUpperCase();
+  return view.lines.find((l) => l.base.toUpperCase() === up) ?? (view.far.some((b) => b.toUpperCase() === up) ? 'far' : null);
 }
 
 export function nearestLiquidation(
@@ -136,7 +154,7 @@ export function nearestLiquidation(
   shift?: WalletShift,
 ): LiquidationLine | null {
   if (!acc || !positions) return null;
-  return liquidationLines(acc, positions, shift)[0] ?? null;
+  return liquidationLines(acc, positions, shift)?.lines[0] ?? null;
 }
 
 /** `+37%`, `-20%`. Whole percents: the line is a model, not a quote. */
