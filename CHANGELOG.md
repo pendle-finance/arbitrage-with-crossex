@@ -9,9 +9,10 @@ Pay back borrowed USDC from the Balances tab, or bring spare USDC home, with one
 
 - **A new Rebalance section on the Balances tab.** When a Hyperliquid leg loses money or pays
   funding, Gate lends the USDC and holds 20% of it as initial margin and 10% as maintenance
-  margin. Past 10,000 USDC short it also charges interest every hour. The section shows the
-  borrow with the margin it holds, the interest per day, and the interest paid in the last 30
-  days. An info mark next to the title explains all of it.
+  margin. Past 10,000 USDC short it also charges interest every hour. The section says in
+  words what Gate lent you, the margin it holds, and whether interest runs. The borrow also
+  shows as an amber pill in the header on every tab; click it to open the section. An info
+  mark next to the title explains all of it.
 - **One hold moves cash either way.** USDT to Hyperliquid USDC pays the borrow back and frees
   the margin. Hyperliquid USDC to USDT brings spare USDC home, capped so it never opens a
   borrow. The amount is prefilled with the most that can move, and you can type less.

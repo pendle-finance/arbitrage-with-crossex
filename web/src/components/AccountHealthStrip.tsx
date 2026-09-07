@@ -1,11 +1,13 @@
+import type { ReactNode } from 'react';
 import { useAccount } from '../api/queries';
 import { fmtUsd } from '../lib/fmt';
 import { MarginBreakdown } from './MarginDonut';
 import { SignedNumber } from './SignedNumber';
 import { Skeleton } from './Skeleton';
 
-/** Header strip: available/balance, signed uPnL (sum of asset uPnLs), margin pies. */
-export function AccountHealthStrip() {
+/** Header strip: available/balance, signed uPnL (sum of asset uPnLs), margin
+ * pies, then `children` (the borrow pill) once the account has loaded. */
+export function AccountHealthStrip({ children }: { children?: ReactNode }) {
   const { data: acc } = useAccount();
   if (!acc) {
     return (
@@ -30,6 +32,7 @@ export function AccountHealthStrip() {
         <SignedNumber value={upnl} format={(n) => fmtUsd(n)} className="font-medium" />
       </div>
       <MarginBreakdown acc={acc} variant="compact" />
+      {children}
       <span className="hidden text-[10px] uppercase tracking-wider text-ink-500 xl:inline">
         {acc.accountMode} · {acc.positionMode}
       </span>

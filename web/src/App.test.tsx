@@ -6,7 +6,7 @@ import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import App from './App';
-import type { OpenOrder, PositionsResponse, TradesResponse, VenueFees } from './api/types';
+import type { OpenOrder, PositionsResponse, RebalanceBucket, TradesResponse, VenueFees } from './api/types';
 import { ACTIVE_TAB_KEY } from './components/TabBar';
 import { USER_GUIDE_RAW_URL } from './components/UserGuideModal';
 import {
@@ -16,7 +16,9 @@ import {
   makeOpportunityGroup,
   makeOpportunityLeg,
   makeOpportunityPair,
+  makeRebalanceView,
   opportunitiesHandler,
+  rebalanceHandler,
   versionHandler,
 } from './test/fixtures';
 import { env, server } from './test/server';
@@ -279,6 +281,54 @@ describe('App tab shell', () => {
     expect(document.querySelector('.flash-ring')).not.toBeNull();
     // And the execution wizard stays shut — it could not trade without keys.
     expect(screen.queryByRole('heading', { name: /Open this strategy/ })).not.toBeInTheDocument();
+  });
+});
+
+/** The Hyperliquid USDC bucket with `borrow` USDC lent by Gate. */
+function borrowed(borrow: number): RebalanceBucket {
+  return {
+    coin: 'USDC',
+    venue: 'HYPERLIQUID',
+    cash: -borrow,
+    upnl: 0,
+    equity: -borrow,
+    borrow,
+    imHeldUsd: borrow * 0.2,
+    mmHeldUsd: borrow * 0.1,
+    interestPaid30dUsd: 0,
+    interestPerDayUsd: 0,
+  };
+}
+
+describe('borrow pill', () => {
+  it('shows the USDC borrow in the header on every tab, and opens Balances on click', async () => {
+    mockApp();
+    server.use(rebalanceHandler(makeRebalanceView({ buckets: [borrowed(8.5)] })));
+    await renderApp();
+
+    const pill = await screen.findByRole('button', { name: 'Borrowing 8.50 USDC' });
+    expect(tab(/^Opportunities/)).toHaveAttribute('aria-selected', 'true');
+    expect(pill).toHaveAttribute(
+      'title',
+      'Gate lent you 8.50 USDC for the Hyperliquid legs. It holds $1.70 of initial margin against it. Open Balances to pay it back.',
+    );
+
+    await userEvent.click(pill);
+
+    expect(tab(/^Balances/)).toHaveAttribute('aria-selected', 'true');
+    expect(panel('balances')).toBeVisible();
+    expect(within(panel('balances')).getByRole('region', { name: 'Rebalance' })).toBeVisible();
+  });
+
+  it('shows no pill under 1 USDC of borrow', async () => {
+    mockApp();
+    server.use(rebalanceHandler(makeRebalanceView({ buckets: [borrowed(0.4)] })));
+    await renderApp();
+
+    // The hidden Balances panel renders its section from the same response,
+    // so once it exists the pill has had its answer.
+    await screen.findByRole('region', { name: 'Rebalance', hidden: true });
+    expect(screen.queryByRole('button', { name: /^Borrowing / })).toBeNull();
   });
 });
 

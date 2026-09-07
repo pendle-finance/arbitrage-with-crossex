@@ -1,18 +1,20 @@
 import { useEffect, useRef, useState } from 'react';
 import { ApiError } from '../api/client';
 import { useRebalance, useRebalanceCommand, useStartRebalance } from '../api/queries';
-import type { RebalanceDirection, RebalanceJob, RebalancePlan, RebalanceStep } from '../api/types';
+import type { RebalanceBucket, RebalanceDirection, RebalanceJob, RebalancePlan, RebalanceStep } from '../api/types';
 import { HoldToConfirmButton } from '../components/HoldToConfirmButton';
 import { HoverCard } from '../components/HoverCard';
 import { SegmentedToggle } from '../components/SegmentedToggle';
 import { Stat } from '../components/Stat';
 import { fmtAge, fmtUsd, num } from '../lib/fmt';
-import { roundToStep } from '../lib/ticks';
+import { floorCents, roundToStep } from '../lib/ticks';
 import { useNow } from '../lib/useNow';
 
 const PULL_STEP_SECONDS = 390;
 /** Under this the hold is hidden: a few-cent convert or a pull that the $1 fee eats is never worth a hold. */
 const MIN_AMOUNT = 1;
+/** Gate charges interest on the borrow only past this. Server: INTEREST_THRESHOLD in core/rebalance/plan.ts. */
+const INTEREST_FREE_UNTIL = 10_000;
 
 const EXPECTED_SECONDS: Record<string, number> = {
   'Buy USDC': 2,
@@ -40,7 +42,7 @@ const ABOUT = (
     <p>
       <span className="font-semibold text-ink-100">Why it matters. </span>
       Gate holds extra margin against the borrow: 20% as initial margin and 10% as maintenance margin. Once you are
-      more than 10,000 USDC short, Gate also charges interest every hour.
+      more than {num(INTEREST_FREE_UNTIL, 0)} USDC short, Gate also charges interest every hour.
     </p>
     <p>
       <span className="font-semibold text-ink-100">The two moves. </span>
@@ -76,10 +78,6 @@ const SEGMENT_TEXT: Record<SegmentKind, string> = {
   halted: 'text-rose-300',
 };
 
-function floorCents(value: number): number {
-  return Number(roundToStep(Math.max(0, value), '0.01', 'down'));
-}
-
 function parseAmount(text: string): number | null {
   const n = Number(text);
   return text.trim() !== '' && Number.isFinite(n) && n > 0 ? n : null;
@@ -113,6 +111,16 @@ function noRouteLine(plan: RebalancePlan, pull: boolean, borrow: number, free: n
   if (borrow === 0) return { text: 'Nothing to pay back. There is no USDC borrow on Hyperliquid.', warn: false };
   if (free === 0) return { text: 'Nothing to move. There is no free USDT.', warn: false };
   return { text: 'Nothing to move.', warn: false };
+}
+
+/** The situation in words, so a skimmer does not have to decode IM, MM, or a $0.00 tile. */
+function costLine(usdc: RebalanceBucket, borrow: number): string {
+  const held = `It holds ${fmtUsd(usdc.imHeldUsd)} of initial margin and ${fmtUsd(usdc.mmHeldUsd)} of maintenance margin against it.`;
+  const interest =
+    usdc.interestPerDayUsd > 0
+      ? `It charges ${fmtUsd(usdc.interestPerDayUsd)} a day in interest.`
+      : `No interest until the borrow passes ${num(INTEREST_FREE_UNTIL, 0)} USDC.`;
+  return `Gate lent you ${num(borrow, 2)} USDC. ${held} ${interest}`;
 }
 
 function tooSmallLine(pull: boolean, borrow: number): string {
@@ -233,6 +241,10 @@ export function RebalanceSection({ holdMs }: { holdMs?: number }) {
 
   const plan = data.plan;
   const pull = direction === 'pull';
+  /* The tiles earn their place only once interest is real. Under the
+     threshold they read $0.00, which says "no cost" to a skimmer; the cost
+     line above them says what the borrow holds instead. */
+  const charged = (usdc?.interestPerDayUsd ?? 0) > 0 || (usdc?.interestPaid30dUsd ?? 0) > 0;
 
   const pickDirection = (next: RebalanceDirection) => {
     setChosen(next);
@@ -361,18 +373,21 @@ export function RebalanceSection({ holdMs }: { holdMs?: number }) {
         </div>
         {borrow >= MIN_AMOUNT && (
           <span className="num rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[11px] text-amber-200">
-            {`Borrow ${fmtUsd(borrow)} · +${fmtUsd(usdc?.imHeldUsd ?? 0)} IM · +${fmtUsd(usdc?.mmHeldUsd ?? 0)} MM`}
+            {`Borrowing ${num(borrow, 2)} USDC`}
           </span>
         )}
       </div>
-      <div className="flex flex-wrap gap-8">
-        <Stat label="Interest / day">
-          <span className="num">{fmtUsd(usdc?.interestPerDayUsd ?? 0)}</span>
-        </Stat>
-        <Stat label="Interest paid · 30 d">
-          <span className="num">{fmtUsd(usdc?.interestPaid30dUsd ?? 0)}</span>
-        </Stat>
-      </div>
+      {usdc && borrow >= MIN_AMOUNT && <p className="text-[12px] text-ink-200">{costLine(usdc, borrow)}</p>}
+      {charged && (
+        <div className="flex flex-wrap gap-8">
+          <Stat label="Interest / day">
+            <span className="num">{fmtUsd(usdc?.interestPerDayUsd ?? 0)}</span>
+          </Stat>
+          <Stat label="Interest paid · 30 d">
+            <span className="num">{fmtUsd(usdc?.interestPaid30dUsd ?? 0)}</span>
+          </Stat>
+        </div>
+      )}
       <p className="text-[12px] text-ink-400">{EXPLANATION[job ? job.direction : direction]}</p>
       {body}
     </section>
