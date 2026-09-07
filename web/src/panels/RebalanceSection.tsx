@@ -4,6 +4,7 @@ import type { RebalanceJob, RebalanceStep } from '../api/types';
 import { HoldToConfirmButton } from '../components/HoldToConfirmButton';
 import { Stat } from '../components/Stat';
 import { fmtAge, fmtUsd, num } from '../lib/fmt';
+import { roundToStep } from '../lib/ticks';
 import { useNow } from '../lib/useNow';
 
 const SHORTFALL_TEXT = {
@@ -40,16 +41,25 @@ function errorLine(error: Error | null) {
   );
 }
 
+/** The step the job stopped on keeps status running in the file; on screen it is halted. */
+function stepLabel(step: RebalanceStep, job: RebalanceJob): { text: string; tone: string } {
+  if (job.status === 'halted' && step.status === 'running') return { text: 'halted', tone: 'text-rose-300' };
+  return { text: step.status, tone: STEP_TONE[step.status] };
+}
+
 function stepRows(job: RebalanceJob, now: number) {
   return (
     <ul className="flex flex-col gap-1 text-sm">
-      {job.steps.map((s) => (
-        <li key={s.name} className="flex items-baseline gap-3">
-          <span className="text-ink-100">{s.name}</span>
-          <span className={`text-[11px] uppercase tracking-wider ${STEP_TONE[s.status]}`}>{s.status}</span>
-          <span className="num ml-auto text-ink-300">{elapsedText(s, job, now)}</span>
-        </li>
-      ))}
+      {job.steps.map((s) => {
+        const label = stepLabel(s, job);
+        return (
+          <li key={s.name} className="flex items-baseline gap-3">
+            <span className="text-ink-100">{s.name}</span>
+            <span className={`text-[11px] uppercase tracking-wider ${label.tone}`}>{label.text}</span>
+            <span className="num ml-auto text-ink-300">{elapsedText(s, job, now)}</span>
+          </li>
+        );
+      })}
     </ul>
   );
 }
@@ -133,7 +143,7 @@ export function RebalanceSection({ holdMs }: { holdMs?: number }) {
       <h2 className="text-xs font-semibold uppercase tracking-wider text-ink-400">Pay down</h2>
       <div className="flex flex-wrap gap-8">
         <Stat label="Borrow (USDC)">
-          <span className="num">{num(borrow, 2)}</span>
+          <span className="num">{num(roundToStep(borrow, '0.01', 'down'), 2)}</span>
         </Stat>
         <Stat label="Interest / day">
           <span className="num">{fmtUsd(bucket?.interestPerDayUsd ?? 0)}</span>

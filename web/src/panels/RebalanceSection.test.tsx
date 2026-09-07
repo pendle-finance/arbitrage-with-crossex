@@ -317,4 +317,22 @@ describe('RebalanceSection', () => {
     expect(screen.getByRole('button', { name: 'Abandon' })).toBeInTheDocument();
     expect(screen.queryByRole('alert')).toBeNull();
   }, 10_000);
+  it('floors the borrow tile to cents so it never shows more than the button', async () => {
+    serve(view({ buckets: [usdc({ borrow: 1200.999 }), usdt] }));
+    renderWithClient(<RebalanceSection holdMs={50} />);
+
+    await section();
+    expect(screen.getByText('1,200.99')).toBeInTheDocument();
+  });
+
+  it('labels the step a halted job stopped on as halted, not running', async () => {
+    serve(view({ job: job({ status: 'halted', haltReason: 'timeout', fundsAt: 'GATE' }) }));
+    renderWithClient(<RebalanceSection holdMs={50} />);
+
+    await section();
+    const rows = screen.getAllByRole('listitem');
+    expect(rows[1].textContent).toContain('To spot');
+    expect(rows[1].textContent).toContain('halted');
+    expect(rows[1].textContent).not.toContain('running');
+  });
 });
