@@ -75,7 +75,7 @@ function LegRow({ label, tone, p }: { label: string; tone: 'green' | 'red'; p: P
     <tr>
       <td className="py-0.5">
         <span className="inline-flex items-center gap-1">
-          <Chip sm tone={tone} className="font-mono">
+          <Chip sm tone={tone}>
             {parseSymbol(p.symbol).exchange}
           </Chip>
           {isMaker && (
@@ -131,10 +131,10 @@ export function MakerHedgeControls({
   onTimeout: (v: TimeoutChoice) => void;
 }) {
   return (
-    <div className="flex flex-col gap-2 rounded-lg border border-cyan-500/20 bg-cyan-500/5 px-3 py-2">
+    <div className="flex flex-col gap-2 rounded-lg border border-ink-700 bg-ink-100/[0.03] px-3 py-2">
       <div className="flex flex-wrap items-center gap-2 text-[11px]">
         <span className="text-ink-400">Maker leg:</span>
-        <Chip sm tone="cyan" className="font-mono">
+        <Chip sm tone="cyan">
           {makerLegPick === 'long' ? (longSym ? parseSymbol(longSym).exchange : 'LONG') : shortSym ? parseSymbol(shortSym).exchange : 'SHORT'}
         </Chip>
         <span className="text-ink-500" title="Auto-chosen: the cheapest maker+taker fee combo">auto</span>
@@ -183,6 +183,7 @@ export function MakerHedgeControls({
         </span>
         <SegmentedToggle
           ariaLabel="Maker timeout"
+          fill
           value={timeoutSec}
           onChange={onTimeout}
           options={TIMEOUT_CHOICES.map((t) => ({ value: t.value, label: t.label }))}

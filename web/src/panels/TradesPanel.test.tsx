@@ -19,7 +19,7 @@ const fills: Trade[] = [
     fee: '0.0046',
     feeCoin: 'USDT',
     feeRate: '0.0002',
-    matchRole: 'taker',
+    matchRole: 'TAKER',
     rpnl: '0',
     createTime: 1_751_500_000, // seconds epoch — must not crash the defensive toDate
     orderType: 'LIMIT',
@@ -36,7 +36,7 @@ const fills: Trade[] = [
     fee: '0.0047',
     feeCoin: 'USDT',
     feeRate: '0.0002',
-    matchRole: 'taker',
+    matchRole: 'TAKER',
     rpnl: '0',
     createTime: 1_751_500_001,
     orderType: 'LIMIT',

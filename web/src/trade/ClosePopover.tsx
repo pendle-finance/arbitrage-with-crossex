@@ -302,7 +302,8 @@ export function ClosePopover({
                     <span className="num text-ink-100">{p.qty ? sig(p.qty) : '—'}</span>
                   </span>
                   <span className="text-ink-400">
-                    marketable limit px <span className="num text-ink-100">{p.price ? sig(p.price) : '—'}</span>
+                    <span title="Reduce-only IOC limit at mark ± slippage — fills what it can at once, never rests, never adds">limit px</span>{' '}
+                    <span className="num text-ink-100">{p.price ? sig(p.price) : '—'}</span>
                   </span>
                   <span className="text-ink-400">
                     uPnL to realize{' '}
@@ -310,7 +311,7 @@ export function ClosePopover({
                   </span>
                   <span className="text-ink-400">est fee {feeText(p.fees)}</span>
                   <span className="cursor-help text-ink-500" title={CLOSE_INFO}>
-                    reduce-only IOC marketable limit ⓘ
+                    reduce-only ⓘ
                   </span>
                   <ViolationList violations={p.violations} warnings={p.warnings} />
                 </>

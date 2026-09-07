@@ -85,16 +85,16 @@ describe('ClosePopover', () => {
     server.use(...baseHandlers(), closePreviewHandler());
     renderWithClient(<ClosePopover position={ethPosition} onDismiss={() => {}} />);
 
-    expect(await screen.findByText(/marketable limit px/)).toBeInTheDocument();
+    expect(await screen.findByText(/limit px/)).toBeInTheDocument();
     expect(screen.getByText('2497.45')).toBeInTheDocument();
-    expect(screen.getByText(/reduce-only IOC marketable limit/)).toBeInTheDocument();
+    expect(screen.getByText(/reduce-only ⓘ/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Close now ▸' })).toBeEnabled();
   });
 
   it('partial qty above the position shows an inline error and disables Close', async () => {
     server.use(...baseHandlers(), closePreviewHandler());
     renderWithClient(<ClosePopover position={ethPosition} onDismiss={() => {}} />);
-    await screen.findByText(/marketable limit px/);
+    await screen.findByText(/limit px/);
 
     await userEvent.click(screen.getByRole('radio', { name: 'partial' }));
     await userEvent.type(screen.getByLabelText('Close qty'), '0.5'); // position is 0.3
@@ -269,7 +269,7 @@ describe('ClosePopover — sizing a close in dollars', () => {
   it('defaults a non-coin-margined position to USDT and converts at the mark', async () => {
     server.use(...baseHandlers(), closePreviewHandler());
     renderWithClient(<ClosePopover position={hypePosition} onDismiss={() => {}} />);
-    await screen.findByText(/marketable limit px/);
+    await screen.findByText(/limit px/);
 
     await userEvent.click(screen.getByRole('radio', { name: 'partial' }));
     // Dollars, not coins — the box says so.
@@ -290,7 +290,7 @@ describe('ClosePopover — sizing a close in dollars', () => {
     // wrongly ACCEPTED as if it were 1 coin.
     server.use(...baseHandlers(), closePreviewHandler());
     renderWithClient(<ClosePopover position={hypePosition} onDismiss={() => {}} />);
-    await screen.findByText(/marketable limit px/);
+    await screen.findByText(/limit px/);
 
     await userEvent.click(screen.getByRole('radio', { name: 'partial' }));
     await userEvent.type(screen.getByLabelText('Close value'), '200');
@@ -309,7 +309,7 @@ describe('ClosePopover — sizing a close in dollars', () => {
     renderWithClient(
       <ClosePopover position={makeCrossexPosition({ ...hypePosition, markPrice: '0' })} onDismiss={() => {}} />,
     );
-    await screen.findByText(/marketable limit px/);
+    await screen.findByText(/limit px/);
     await userEvent.click(screen.getByRole('radio', { name: 'partial' }));
 
     // Coin units, and the USD toggle is not offered at all.
@@ -325,7 +325,7 @@ describe('ClosePopover — sizing a close in dollars', () => {
     // Relabelling 0.63 as $0.63 would silently resize the close by the mark.
     server.use(...baseHandlers(), closePreviewHandler());
     renderWithClient(<ClosePopover position={hypePosition} onDismiss={() => {}} />);
-    await screen.findByText(/marketable limit px/);
+    await screen.findByText(/limit px/);
 
     await userEvent.click(screen.getByRole('radio', { name: 'partial' }));
     await userEvent.type(screen.getByLabelText('Close value'), '80');
@@ -357,7 +357,7 @@ describe('ClosePopover — closing one side of a hedge', () => {
 
     // No sibling (an unpaired leg) ⇒ nothing to un-hedge, so no noise.
     renderWithClient(<ClosePopover position={ethPosition} onDismiss={() => {}} />);
-    await screen.findByText(/marketable limit px/);
+    await screen.findByText(/limit px/);
     expect(screen.queryByText(/leaves that one unhedged/)).not.toBeInTheDocument();
   });
 });
@@ -393,7 +393,7 @@ describe('ClosePopover — the conversion mark is latched at open', () => {
      */
     server.use(...baseHandlers(), closePreviewHandler());
     renderWithClient(<MarkFlipHarness />);
-    await screen.findByText(/marketable limit px/);
+    await screen.findByText(/limit px/);
 
     await userEvent.click(screen.getByRole('radio', { name: 'partial' }));
     await userEvent.type(screen.getByLabelText('Close value'), '50');
@@ -417,7 +417,7 @@ describe('ClosePopover — the conversion mark is latched at open', () => {
     renderWithClient(
       <ClosePopover position={makeCrossexPosition({ ...hype, markPrice: '80.001' })} onDismiss={() => {}} />,
     );
-    await screen.findByText(/marketable limit px/);
+    await screen.findByText(/limit px/);
     await userEvent.click(screen.getByRole('radio', { name: 'partial' }));
 
     // The placeholder's own stated max: sig(1.89 × 80.001) rounds UP.

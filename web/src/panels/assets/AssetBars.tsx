@@ -92,6 +92,7 @@ export function AssetBars({ totals }: { totals: AssetTotals }) {
         span={span}
         domainMin={domainMin}
         caption="Boros settle + perp funding = the locked spread; then fees and the perp price residual"
+        showCaption={false}
       />
     </div>
   );

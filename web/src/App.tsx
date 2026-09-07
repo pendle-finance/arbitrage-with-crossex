@@ -63,7 +63,12 @@ export default function App() {
   const orderCount = openOrders.data?.length ?? 0;
   const ordersBadge =
     orderCount > 0 ? (
-      <Chip sm tone="cyan" className="num" title={`${orderCount} open order${orderCount === 1 ? '' : 's'}`}>
+      <Chip
+        sm
+        tone="info"
+        className="num"
+        title={`${orderCount} open order${orderCount === 1 ? '' : 's'}`}
+      >
         {orderCount}
       </Chip>
     ) : undefined;
@@ -79,21 +84,23 @@ export default function App() {
           is the primary path, and an always-on armed order form beside
           unrelated content was the old layout's mis-execution hazard. */}
       {configured && <OrderTicketButton />}
-      {/* Deliberately the loudest thing in the header after the tabs: new users
-          who miss it place real orders without knowing what the scan's
-          assumptions mean. */}
+      {/* The one tinted control up here — `info`, the same blue every other
+          "this is an action" wears. It used to shout in cyan with a glow ring
+          on the theory that a new user who misses it trades without reading
+          the assumptions; that job now belongs to UserGuideHint, which points
+          AT this button on first run and can't be tuned out by familiarity the
+          way a permanently loud control is. */}
       <button
         type="button"
-        // The label carries the emoji; the a11y name stays plain.
         aria-label="User guide"
         title="How to read the Opportunities scan and open a pair well"
         onClick={() => {
           markGuideHintDone();
           setGuideOpen(true);
         }}
-        className="hdr-ctl border-cyan-400/70 bg-cyan-500/10 text-cyan-300 shadow-[0_0_0_1px_rgba(34,211,238,0.15)] hover:border-cyan-300 hover:bg-cyan-500/20 hover:text-cyan-200"
+        className="hdr-ctl border-info/50 bg-info/[0.12] font-medium text-pastel-blue hover:bg-info/[0.22]"
       >
-        📖 User guide
+        User guide
       </button>
       <FreshnessIndicator />
       <button
@@ -131,19 +138,27 @@ export default function App() {
           {/* The tab strip lives INSIDE the sticky header so it can never be
               hidden under it — the header wraps to two rows on narrow screens,
               which a fixed `top-16` offset would get wrong. */}
-          <header className="sticky top-0 z-40 border-b border-ink-800 bg-ink-950/80 backdrop-blur">
-            <div className="mx-auto flex max-w-[1500px] flex-wrap items-center gap-x-6 gap-y-1.5 px-5 py-2">
+          <header className="sticky top-0 z-40 border-b border-ink-700 bg-ink-950/95">
+            <div className="mx-auto flex min-h-[52px] max-w-[1500px] flex-wrap items-center gap-x-[14px] gap-y-2 px-5 py-2">
               <BrandMark />
               {/* Unconfigured, /api/account 503s forever and the strip would
                   sit on its loading skeleton — hide it until keys exist. */}
               {!setupNeeded && <AccountHealthStrip />}
-              {!configured && <div className="ml-auto flex items-center gap-2">{headerControls}</div>}
+              {/* The controls ride in the TOP bar beside the account cluster,
+                  not down in the tab row: they act on the account, which is
+                  what the rest of this bar is about, and the tab row is then
+                  free to be only tabs. `ml-auto` when the strip is hidden so
+                  they still sit right. */}
+              <div
+                className={`flex items-center gap-2 ${setupNeeded ? 'ml-auto' : ''}`}
+              >
+                {headerControls}
+              </div>
             </div>
             {configured && (
               <TabBar
                 active={activeTab}
                 onSelect={selectTab}
-                right={headerControls}
                 tabs={[
                   // Forward-looking: what to put on next, then what is on.
                   { id: 'opportunities', label: 'Opportunities', primary: true },

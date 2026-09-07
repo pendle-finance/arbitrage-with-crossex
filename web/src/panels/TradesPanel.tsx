@@ -15,7 +15,16 @@ import { bps, fmtTime, sig, toDate } from '../lib/fmt';
 type Mode = 'grouped' | 'flat';
 type Role = 'maker' | 'taker' | 'mixed';
 
-const ROLE_TONE: Record<Role, ChipTone> = { maker: 'cyan', taker: 'orange', mixed: 'neutral' };
+/* Maker blue / taker gold, per the mock. The same pair tones Open Orders'
+ * state chips — one role palette across both tables, not one per table. */
+const ROLE_TONE: Record<Role, ChipTone> = { maker: 'link', taker: 'amber', mixed: 'neutral' };
+
+/** The venue reports MAKER/TAKER uppercase, so a lowercase lookup silently
+ * missed and every role chip rendered untoned. Normalise at the boundary. */
+export function asRole(v: string): Role {
+  const k = v.toLowerCase();
+  return k === 'maker' || k === 'taker' ? k : 'mixed';
+}
 
 function RoleChip({ role }: { role: Role }) {
   return <Chip sm tone={ROLE_TONE[role]}>{role}</Chip>;
@@ -71,7 +80,7 @@ function groupByOrder(trades: Trade[]): OrderGroup[] {
       const d = toDate(f.createTime);
       if (d && (!earliest || d < earliest)) earliest = d;
     }
-    const roles = new Set(fills.map((f) => f.matchRole));
+    const roles = new Set(fills.map((f) => asRole(f.matchRole)));
     const withType = fills.find((f) => f.orderType);
     return {
       key,
@@ -84,7 +93,7 @@ function groupByOrder(trades: Trade[]): OrderGroup[] {
       totalFee,
       feeCoin: fills[0].feeCoin,
       feeRate: notional > 0 ? weightedRate / notional : 0,
-      role: roles.size === 1 ? fills[0].matchRole : 'mixed',
+      role: roles.size === 1 ? asRole(fills[0].matchRole) : 'mixed',
       typeLabel: withType ? orderTypeLabel(withType) : null,
     };
   });
@@ -110,7 +119,7 @@ const FILL_COLUMNS: Column<Trade>[] = [
     align: 'right',
     render: (t) => <span className="num text-ink-300">{bps(t.feeRate)}</span>,
   },
-  { key: 'role', header: 'Role', render: (t) => <RoleChip role={t.matchRole} /> },
+  { key: 'role', header: 'Role', render: (t) => <RoleChip role={asRole(t.matchRole)} /> },
   {
     key: 'rpnl',
     header: 'rPnL',

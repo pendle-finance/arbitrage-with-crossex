@@ -120,7 +120,7 @@ describe('ClosePairForm — the slippage the user sets is the slippage sent', ()
     renderWithClient(<ClosePairForm base="HYPE" legs={LEGS} />);
     // The note rides as the tooltip on the "reduce-only IOC marketable limit"
     // affordance, so assert the title rather than visible text.
-    const badge = await screen.findByText(/reduce-only IOC marketable limit/);
+    const badge = await screen.findByText(/reduce-only ⓘ/);
     expect(badge).toHaveAttribute(
       'title',
       expect.stringContaining("the hedge leg is sent at market, inside the venue's own price band"),

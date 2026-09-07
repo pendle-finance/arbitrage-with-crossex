@@ -30,10 +30,10 @@ export function Modal({ title, locked = false, onClose, widthClass = 'w-[700px]'
   return createPortal(
     <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto p-4" role="dialog" aria-modal="true">
       <div
-        className="absolute inset-0 bg-black/60 backdrop-blur-[2px]"
+        className="absolute inset-0 bg-black/80"
         onClick={locked ? undefined : onClose}
       />
-      <div className={`relative mt-12 max-w-[95vw] rounded-xl border border-ink-700 bg-ink-900 shadow-2xl ${widthClass}`}>
+      <div className={`relative mt-12 max-w-[95vw] rounded-xl border border-ink-700 bg-ink-900 ${widthClass}`}>
         <div className="flex items-center justify-between border-b border-ink-800 px-5 py-3.5">
           <h2 className="text-sm font-semibold text-ink-100">{title}</h2>
           {!locked && (

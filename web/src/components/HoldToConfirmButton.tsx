@@ -15,7 +15,8 @@ interface Props {
 const TONES: Record<NonNullable<Props['tone']>, string> = {
   green: 'border-emerald-500/60 bg-emerald-500/15 text-emerald-300 hover:bg-emerald-500/25',
   red: 'border-rose-500/60 bg-rose-500/15 text-rose-300 hover:bg-rose-500/25',
-  cyan: 'border-cyan-500/60 bg-cyan-500/15 text-cyan-300 hover:bg-cyan-500/25',
+  // The mock's execute button: the one solid info fill in the ticket.
+  cyan: 'border-transparent bg-info text-ink-50 hover:bg-info/75',
 };
 
 const R = 7;

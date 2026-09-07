@@ -41,9 +41,47 @@ export const MIN_APR_CAPITAL_USD = 100;
 // Exclusions
 // ---------------------------------------------------------------------------
 
-/** `perp:{symbol}` or `boros:{marketId}` → excluded quantity in the leg's own
- * size unit (perp: base coin; Boros: collateral token), or 'all'. */
-export type Exclusions = Record<string, number | 'all'>;
+/** One leg's exclusion — the slice of it that is NOT part of the farm.
+ * `qty` is in the leg's own size unit (perp: base coin; Boros: collateral
+ * token). `at` is the price (perp, USD) or fixed rate (Boros, APR fraction)
+ * that slice was put on at; when given, the REMAINDER's entry is re-derived as
+ * the weighted residual, so excluding 300 ETH bought at $2,600 out of a
+ * 1,000 ETH $2,489 leg leaves 700 ETH at $2,441 — not 700 ETH at $2,489.
+ * A bare number is the legacy shape (qty only, pro-rata). */
+export interface ExclusionSlice {
+  qty: number;
+  at?: number;
+}
+export type ExclusionEntry = number | ExclusionSlice | 'all';
+/** `perp:{symbol}` or `boros:{marketId}` → that leg's exclusion. */
+export type Exclusions = Record<string, ExclusionEntry>;
+
+/** The excluded quantity of an entry, or null for 'all'/absent/invalid. */
+export function exclusionQty(v: ExclusionEntry | undefined): number | null {
+  if (v === undefined || v === 'all') return null;
+  const q = typeof v === 'number' ? v : v.qty;
+  return Number.isFinite(q) && q > 0 ? q : null;
+}
+/** The price/rate the excluded slice was carved out at, if one was given. */
+export function exclusionAt(v: ExclusionEntry | undefined): number | null {
+  if (v === undefined || v === 'all' || typeof v === 'number') return null;
+  return v.at !== undefined && Number.isFinite(v.at) ? v.at : null;
+}
+
+/** A perp opened this long before its Boros leg was not opened FOR the hedge,
+ * so its entry fees are not this pair's cost by default. */
+export const PERP_PREDATES_HEDGE_SEC = 3 * 86_400;
+
+/** Default for the pair popup's "perp fees paid" switch: on, unless the perp
+ * side went on more than three days before the Boros side. Unknown opens
+ * leave it on — a fee shown and dismissable beats one silently dropped. */
+export function defaultChargePerpFees(pair: {
+  perpOpenedSec: number | null;
+  borosOpenedSec: number | null;
+}): boolean {
+  if (pair.perpOpenedSec === null || pair.borosOpenedSec === null) return true;
+  return pair.perpOpenedSec >= pair.borosOpenedSec - PERP_PREDATES_HEDGE_SEC;
+}
 
 export const perpKey = (symbol: string): string => `perp:${symbol}`;
 export const borosKey = (marketId: number): string => `boros:${marketId}`;
@@ -53,8 +91,28 @@ export function excludedFraction(ex: Exclusions, key: string, legQty: number): n
   const v = ex[key];
   if (v === undefined) return 0;
   if (v === 'all') return 1;
-  if (!(legQty > 0) || !Number.isFinite(v) || v <= 0) return 0;
-  return Math.min(1, v / legQty);
+  const q = exclusionQty(v);
+  if (!(legQty > 0) || q === null) return 0;
+  return Math.min(1, q / legQty);
+}
+
+/**
+ * What remains of a leg after its exclusion: the kept fraction and the entry
+ * (price or rate) of that remainder. With a slice price the remainder's entry
+ * is the weighted residual `(entry − f·at) / (1 − f)`; without one the slice
+ * is pro-rata and the entry is unchanged.
+ */
+export function keptSlice(
+  ex: Exclusions,
+  key: string,
+  legQty: number,
+  entry: number,
+): { keep: number; entry: number; at: number | null } {
+  const f = excludedFraction(ex, key, legQty);
+  const keep = 1 - f;
+  const at = exclusionAt(ex[key]);
+  if (keep <= 0 || at === null || f <= 0) return { keep, entry, at };
+  return { keep, entry: (entry - f * at) / keep, at };
 }
 
 // ---------------------------------------------------------------------------
@@ -82,10 +140,18 @@ export interface VenueHedge {
 export interface HedgeGapRow {
   venue: string;
   /** What to ADD to make the venue whole. */
-  action: 'long-boros' | 'short-boros';
+  action: 'long-boros' | 'short-boros' | 'long-perp' | 'short-perp';
   /** |gap| in `unit`. */
   size: number;
   unit: 'base' | 'usd';
+  /** The flag always sits on the side that is SHORT of the other, never on
+   * the surplus: `missing` = that side has no leg at all on this venue,
+   * `deficit` = it exists but is smaller than its partner by `size`. */
+  kind: 'missing' | 'deficit';
+  /** Which leg is short: the floating perp or the fixed Boros side. */
+  leg: 'perp' | 'boros';
+  /** Where the short side should end up (its partner's size), in `unit`. */
+  want: number;
 }
 
 export interface AssetTotals {
@@ -111,6 +177,19 @@ export interface AssetTotals {
    * as one number makes the expectation checkable at a glance.
    */
   priceResidualUsd: number;
+  /**
+   * CARRY, GROSS — every dollar the farm paid out before any fee: perp
+   * funding (open + closed) + Boros settlement AND trade PnL with their
+   * fees added back. The card's first ledger.
+   */
+  carryGrossUsd: number;
+  /**
+   * COST — everything that eats into the carry, whenever it was paid: perp
+   * fees + Boros fees − price basis (a positive price basis reduces cost).
+   * Split by KIND, never by open/closed, so nothing changes bucket on the
+   * day a leg matures. `pnlUsd === carryGrossUsd − costUsd` by algebra.
+   */
+  costUsd: number;
   /** Σ current initial margin across both sides, after exclusions. */
   capitalUsd: number;
   /** Mark value of the open Boros rate streams — info, not in pnlUsd. */
@@ -149,6 +228,19 @@ export interface PairLegDetail {
   feesUsd: number;
   /** YU only: maturity (0 for perps). */
   maturity: number;
+  /** Perp only: the exact CrossEx symbol — the join key to the live position
+   * (and what a close order names). */
+  symbol?: string;
+  /** YU only: the Boros market id (what a close order names). */
+  marketId?: number;
+  /** Margin this slice ties up TODAY (venue-reported, pro-rata). */
+  imUsd: number;
+  /** YU only: the margin at open, ESTIMATED — Boros margin decays toward
+   * maturity and the venue reports only today's requirement, so this scales
+   * it back over the leg's life assuming the requirement is linear in time
+   * to maturity. null for perps (their margin does not decay) and when the
+   * leg's start is unknown. */
+  imAtOpenUsd: number | null;
 }
 
 /**
@@ -179,6 +271,11 @@ export interface PairEstimate {
    * amortize over hedgedSince → soonest maturity — the position's full
    * hedged life, not the remaining days. Null when no leg start is known. */
   hedgedSinceSec: number | null;
+  /** The LATER of the two perp legs' open times; null when unknown. */
+  perpOpenedSec: number | null;
+  /** The EARLIEST first settlement/trade among the pair's Boros legs — the
+   * hourly-granular proxy for when the rate side went on; null if unknown. */
+  borosOpenedSec: number | null;
   /** Soonest Boros maturity among the pair's live YU legs (0 = none). */
   soonestMaturitySec: number;
   /** Per-leg reconstruction: locked rates and paid fees per attributed
@@ -328,11 +425,25 @@ export function deriveAsset(
       v.borosSigned !== 0 &&
       v.soonestMaturity - nowSec < EXPIRY_WARN_SEC;
     if (!v.covered) {
+      // The side to flag is the SMALLER one — the trader is told what to
+      // add, never what is in surplus. A Boros leg pointing the wrong way
+      // (signs differ) counts as a Boros deficit of the whole distance.
+      const p = Math.abs(v.perpSigned);
+      const b = Math.abs(v.borosSigned);
+      const sameWay = v.perpSigned * v.borosSigned > 0;
+      const leg: 'perp' | 'boros' = p === 0 ? 'perp' : b === 0 || !sameWay || b < p ? 'boros' : 'perp';
+      const kind: 'missing' | 'deficit' = (leg === 'perp' ? p : b) === 0 ? 'missing' : 'deficit';
+      // Direction of what to add: the Boros side follows the perp's sign
+      // (a long perp is hedged by a long YU); the perp follows the YU's.
+      const dir = leg === 'boros' ? v.perpSigned > 0 : v.borosSigned > 0;
       gaps.push({
         venue: v.venue,
-        action: v.gap > 0 ? 'long-boros' : 'short-boros',
+        action: leg === 'boros' ? (dir ? 'long-boros' : 'short-boros') : dir ? 'long-perp' : 'short-perp',
         size: Math.abs(v.gap),
         unit,
+        kind,
+        leg,
+        want: leg === 'boros' ? p : b,
       });
     }
   }
@@ -351,9 +462,14 @@ export function deriveAsset(
   let capitalUsd = 0;
   let mtmUsd = 0;
   for (const l of group.perpOpen) {
-    const keep = 1 - excludedFraction(exclusions, perpKey(l.symbol), l.qty);
+    const { keep, at } = keptSlice(exclusions, perpKey(l.symbol), l.qty, l.entryPrice);
     if (keep <= 0) continue;
-    perpUpnlUsd += l.upnlUsd * keep;
+    // A slice carved out at its own price hands back exactly ITS
+    // mark-to-market, not a pro-rata share of the venue's blended figure.
+    perpUpnlUsd +=
+      at !== null && l.markPrice > 0
+        ? l.upnlUsd - (l.side === 'LONG' ? 1 : -1) * (1 - keep) * l.qty * (l.markPrice - at)
+        : l.upnlUsd * keep;
     perpFundingUsd += l.fundingUsd * keep;
     perpFeesUsd += l.feesUsd * keep;
     capitalUsd += l.imUsd * keep;
@@ -398,6 +514,9 @@ export function deriveAsset(
   const perpFeesAllUsd = perpFeesUsd + closedFeesUsd;
   const priceResidualUsd = perpUpnlUsd + closedPriceUsd;
   const carryUsd = perpFundingAllUsd + borosSettleUsd;
+  const carryGrossUsd =
+    perpFundingAllUsd + borosSettleUsd + borosSettleFeeUsd + borosTradePnlUsd + borosTradeFeeUsd;
+  const costUsd = perpFeesAllUsd + borosSettleFeeUsd + borosTradeFeeUsd - priceResidualUsd;
 
   // --- APR ----------------------------------------------------------------
   const clockStartSec =
@@ -416,16 +535,23 @@ export function deriveAsset(
   let lockedNotionalUsd = 0;
   let anyLocked = false;
   for (const l of group.borosOpen) {
-    const keep = 1 - excludedFraction(exclusions, borosKey(l.marketId), l.sizeToken);
+    const { keep, entry: entryApr } = keptSlice(
+      exclusions,
+      borosKey(l.marketId),
+      l.sizeToken,
+      l.entryApr,
+    );
     if (keep <= 0 || !coveredVenues.has(l.venue)) continue;
     if (!(l.maturity > nowSec)) continue;
     anyLocked = true;
-    const perYear = (l.side === 'SHORT' ? 1 : -1) * l.entryApr * l.notionalUsd * keep;
+    const perYear = (l.side === 'SHORT' ? 1 : -1) * entryApr * l.notionalUsd * keep;
     lockedCarryPerYearUsd += perYear;
     lockedToMaturityUsd += (perYear * (l.maturity - nowSec)) / SECONDS_IN_YEAR;
     lockedNotionalUsd += l.notionalUsd * keep;
   }
-  const lockedOk = anyLocked && deltaNeutral;
+  // "Locked" means the whole book is: a venue with a missing or short leg
+  // has no deterministic carry to quote, however good the covered half.
+  const lockedOk = anyLocked && deltaNeutral && gaps.length === 0;
   const lockedAprFwd =
     lockedOk && capitalUsd >= MIN_APR_CAPITAL_USD ? lockedCarryPerYearUsd / capitalUsd : null;
 
@@ -440,19 +566,32 @@ export function deriveAsset(
     1 - excludedFraction(exclusions, borosKey(l.marketId), l.sizeToken);
   const longs = group.perpOpen.filter((l) => l.side === 'LONG' && keepOf(l) > 0);
   const shorts = group.perpOpen.filter((l) => l.side === 'SHORT' && keepOf(l) > 0);
-  const longTotal = longs.reduce((t, l) => t + (unit === 'base' ? l.qty : l.notionalUsd) * keepOf(l), 0);
+  const legSize = (l: AssetPerpOpen) => (unit === 'base' ? l.qty : l.notionalUsd) * keepOf(l);
+  const longTotal = longs.reduce((t, l) => t + legSize(l), 0);
+  const shortTotal = shorts.reduce((t, l) => t + legSize(l), 0);
   const pairs: PairEstimate[] = [];
-  if (longs.length > 0 && shorts.length === 1 && longTotal > 0) {
-    const sLeg = shorts[0];
-    const sKeep = keepOf(sLeg);
+  /**
+   * Every long × short combination, sized L·S / max(ΣL, ΣS): each long is
+   * spread over the shorts in proportion and vice versa, no leg is ever
+   * over-allocated, and with one short and a balanced book it collapses to
+   * "each long pairs with its slice of the short" exactly as before. A
+   * book with two SHORT venues used to produce no pairs at all.
+   */
+  const pool = Math.max(longTotal, shortTotal);
+  if (longs.length > 0 && shorts.length > 0 && pool > 0) {
     const histByMarket = new Map(group.borosHistory.map((h) => [h.marketId, h]));
-    const shortBoros = group.borosOpen.filter((b) => b.venue === sLeg.venue && borosKeepOf(b) > 0);
-    for (const lLeg of longs) {
+    for (const lLeg of longs)
+    for (const sLeg of shorts) {
       const lKeep = keepOf(lLeg);
-      const size = (unit === 'base' ? lLeg.qty : lLeg.notionalUsd) * lKeep;
-      const share = size / longTotal; // slice of the short side
+      const sKeep = keepOf(sLeg);
+      const lSize = legSize(lLeg);
+      const sSize = legSize(sLeg);
+      const size = (lSize * sSize) / pool;
+      const lShare = size / lSize; // slice of the long leg
+      const share = size / sSize; // slice of the short leg
       const longBoros = group.borosOpen.filter((b) => b.venue === lLeg.venue && borosKeepOf(b) > 0);
-      let cap = lLeg.imUsd * lKeep + sLeg.imUsd * sKeep * share;
+      const shortBoros = group.borosOpen.filter((b) => b.venue === sLeg.venue && borosKeepOf(b) > 0);
+      let cap = lLeg.imUsd * lKeep * lShare + sLeg.imUsd * sKeep * share;
       let perYear = 0;
       let soonest = 0;
       const legs: PairLegDetail[] = [
@@ -460,11 +599,14 @@ export function deriveAsset(
           venue: lLeg.venue,
           kind: 'perp',
           side: 'LONG',
-          share: 1,
+          share: lShare,
           size,
           lockedApr: null,
-          feesUsd: lLeg.feesUsd * lKeep,
+          feesUsd: lLeg.feesUsd * lKeep * lShare,
+          symbol: lLeg.symbol,
           maturity: 0,
+          imUsd: lLeg.imUsd * lKeep * lShare,
+          imAtOpenUsd: null,
         },
         {
           venue: sLeg.venue,
@@ -474,7 +616,10 @@ export function deriveAsset(
           size: (unit === 'base' ? sLeg.qty : sLeg.notionalUsd) * sKeep * share,
           lockedApr: null,
           feesUsd: sLeg.feesUsd * sKeep * share,
+          symbol: sLeg.symbol,
           maturity: 0,
+          imUsd: sLeg.imUsd * sKeep * share,
+          imAtOpenUsd: null,
         },
       ];
       // "First fully hedged" = the LATEST leg start: the hedge only exists
@@ -487,38 +632,54 @@ export function deriveAsset(
       };
       legStart(lLeg.openedAt);
       legStart(sLeg.openedAt);
+      const perpOpened = Math.max(lLeg.openedAt ?? 0, sLeg.openedAt ?? 0);
+      let borosOpened = Number.POSITIVE_INFINITY;
       let borosFeesPaidUsd = 0;
       const addBoros = (b: AssetBorosOpen, frac: number) => {
-        const keep = borosKeepOf(b) * frac;
+        const slice = keptSlice(exclusions, borosKey(b.marketId), b.sizeToken, b.entryApr);
+        const keep = slice.keep * frac;
+        const entryApr = slice.entry;
         cap += b.imUsd * keep;
         if (b.maturity > nowSec) {
-          perYear += (b.side === 'SHORT' ? 1 : -1) * b.entryApr * b.notionalUsd * keep;
+          perYear += (b.side === 'SHORT' ? 1 : -1) * entryApr * b.notionalUsd * keep;
           if (soonest === 0 || b.maturity < soonest) soonest = b.maturity;
         }
         const h = histByMarket.get(b.marketId);
         const fees = h ? (h.settleFeeUsd + h.tradeFeeUsd) * keep : 0;
         borosFeesPaidUsd += fees;
         legStart(h?.firstEventSec);
+        if (h?.firstEventSec) borosOpened = Math.min(borosOpened, h.firstEventSec);
         legs.push({
           venue: b.venue,
           kind: 'yu',
           side: b.side,
           share: frac,
           size: (unit === 'base' ? b.sizeToken : b.notionalUsd) * keep,
-          lockedApr: (b.side === 'SHORT' ? 1 : -1) * b.entryApr,
+          lockedApr: (b.side === 'SHORT' ? 1 : -1) * entryApr,
           feesUsd: fees,
           maturity: b.maturity,
+          marketId: b.marketId,
+          imUsd: b.imUsd * keep,
+          imAtOpenUsd:
+            h?.firstEventSec && b.maturity > nowSec && b.maturity > h.firstEventSec
+              ? (b.imUsd * keep * (b.maturity - h.firstEventSec)) / (b.maturity - nowSec)
+              : null,
         });
       };
-      for (const b of longBoros) addBoros(b, 1);
+      for (const b of longBoros) addBoros(b, lShare);
       for (const b of shortBoros) addBoros(b, share);
-      const notionalUsd = lLeg.notionalUsd * lKeep + sLeg.notionalUsd * sKeep * share;
+      const notionalUsd = lLeg.notionalUsd * lKeep * lShare + sLeg.notionalUsd * sKeep * share;
       // Exit cost: both perp legs crossed once at taker — the account's own
       // per-venue schedule when known, a flat 4.5bp otherwise.
       const FALLBACK_TAKER_RATE = 0.00045;
       const exitFeeUsd =
-        lLeg.notionalUsd * lKeep * (takerOf(lLeg.symbol) ?? FALLBACK_TAKER_RATE) +
+        lLeg.notionalUsd * lKeep * lShare * (takerOf(lLeg.symbol) ?? FALLBACK_TAKER_RATE) +
         sLeg.notionalUsd * sKeep * share * (takerOf(sLeg.symbol) ?? FALLBACK_TAKER_RATE);
+      // A 4-leg arbitrage needs all four: a perp AND a YU at each venue.
+      // Two perps with a YU on one side only are a hedge in progress, and
+      // quoting them as a "pair" would lend a locked rate to a book that has
+      // none yet — the missing-leg rows already say what to open.
+      if (longBoros.length === 0 || shortBoros.length === 0) continue;
       pairs.push({
         longVenue: lLeg.venue,
         shortVenue: sLeg.venue,
@@ -529,9 +690,11 @@ export function deriveAsset(
         lockedAprFwd: cap >= MIN_APR_CAPITAL_USD && perYear !== 0 ? perYear / cap : null,
         exitFeeUsd,
         hedgedSinceSec: hedgedSince > 0 && hedgedSince < nowSec ? hedgedSince : null,
+        perpOpenedSec: perpOpened > 0 ? perpOpened : null,
+        borosOpenedSec: Number.isFinite(borosOpened) ? borosOpened : null,
         soonestMaturitySec: soonest,
         legs,
-        perpFeesPaidUsd: lLeg.feesUsd * lKeep + sLeg.feesUsd * sKeep * share,
+        perpFeesPaidUsd: lLeg.feesUsd * lKeep * lShare + sLeg.feesUsd * sKeep * share,
         borosFeesPaidUsd,
       });
     }
@@ -548,6 +711,8 @@ export function deriveAsset(
       perpFeesAllUsd,
       borosFeesAllUsd: borosSettleFeeUsd + borosTradeFeeUsd,
       priceResidualUsd,
+      carryGrossUsd,
+      costUsd,
       capitalUsd,
       mtmUsd,
       breakdown: {

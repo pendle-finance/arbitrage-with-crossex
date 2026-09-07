@@ -672,7 +672,8 @@ export interface Trade {
   feeCoin: string;
   /** Fraction: 0.0002 = 2 bps. */
   feeRate: string;
-  matchRole: 'maker' | 'taker';
+  /** The venue sends these UPPERCASE ("TAKER"); normalise before comparing. */
+  matchRole: 'MAKER' | 'TAKER';
   rpnl: string;
   /** Epoch seconds OR milliseconds — use toDate(). */
   createTime: number | string;
@@ -1070,6 +1071,10 @@ export interface BorosSimulatedLeg {
   marginRequired: number | null;
   slippageApr: number;
   sizing: BorosLegSizing;
+  /** This leg's taker fee at its traded size, collateral units (× the
+   * simulation's collateralPriceUsd for dollars). Optional only for an
+   * older server. */
+  takerFeeCost?: number;
 }
 
 export interface BorosPairSimulation {
@@ -1364,6 +1369,15 @@ export interface AssetViewResponse {
     /** Oldest closed-position row read when capped; 0 = complete. */
     perpClosedFromSec: number;
     borosTxnsComplete: boolean;
+  };
+  /** Margin-borrow interest paid by the CrossEx account inside the window —
+   * account-level, so it is charged on the total and not on any card.
+   * Optional only for an older server: absent ⇒ not charged. */
+  interest?: {
+    paidUsd: number;
+    byCoin: Record<string, number>;
+    coversFromSec: number;
+    available: boolean;
   };
   warnings: string[];
 }

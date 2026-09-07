@@ -245,6 +245,12 @@ export interface SimulatedLeg {
   /** Effective tolerance after clamping. */
   slippageApr: number;
   sizing: LegSizing;
+  /** Taker fee THIS leg pays to cross the book at its traded size,
+   * collateral units: rate × |deltaSize| × years to maturity. Zero for a
+   * leg that does not trade. Per leg because a close asks "what does this
+   * order cost me", and the pair-level `costToCrossSize` is sized off the
+   * SMALLER leg. */
+  takerFeeCost: number;
 }
 
 export interface BorosPairSimulation {
@@ -357,6 +363,7 @@ function simulateLeg(
     marginRequired,
     slippageApr,
     sizing,
+    takerFeeCost: 0, // priced by the caller, which knows the rate and the term
   };
 }
 
@@ -458,6 +465,8 @@ export function simulateBorosPair(input: SimulateBorosPairInput): BorosPairSimul
   const sizeB = Math.abs(b.sizing.deltaSize);
   const tradedSize = sizeA === 0 || sizeB === 0 ? Math.max(sizeA, sizeB) : Math.min(sizeA, sizeB);
   const costToCrossSize = takerDragApr * tradedSize * years;
+  a.takerFeeCost = takerRate(legA.market) * sizeA * years;
+  b.takerFeeCost = takerRate(legB.market) * sizeB * years;
 
   /**
    * Σ of the legs that actually trade.

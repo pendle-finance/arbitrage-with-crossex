@@ -123,7 +123,7 @@ export function HoverCard({
             style={{ left: box.left, top: box.top, bottom: box.bottom, width: widthPx }}
             onMouseEnter={stopClosing}
             onMouseLeave={() => close(false)}
-            className="fixed z-50 rounded-lg border border-ink-700 bg-ink-950 px-3 py-2.5 text-ink-200 shadow-xl shadow-black/60"
+            className="fixed z-50 rounded border border-ink-600 bg-ink-950 px-3 py-2.5 text-ink-100"
           >
             {children}
           </div>,

@@ -139,6 +139,23 @@ export function ExecuteControl({
     // the id (the server dedupes on it; a network-lost POST must never double-execute).
   });
 
+  /** The split close: two single-leg deals, posted in order, one intent. */
+  const executeSplit = useMutation({
+    mutationFn: async (deals: Array<Parameters<typeof postJson>[1] & { id: string }>) => {
+      const out: DealResponse[] = [];
+      for (const d of deals) out.push(await postJson<DealResponse>('/deals', d));
+      return out;
+    },
+    onSuccess: (rs) => {
+      basketIdRef.current = null;
+      clearPendingBasket(inflightIntentRef.current);
+      onExecuted?.();
+      // One deal modal at a time: show the last leg's; the first is on Trades.
+      const last = rs[rs.length - 1];
+      if (last) flow.openDeal(last.id);
+    },
+  });
+
   // A CHANGED intent must mint a fresh basketId: an id retained after a lost-
   // response error would otherwise be reused with EDITED actions, which the
   // server dedupes against the original — silently dropping the edit and
@@ -186,13 +203,39 @@ export function ExecuteControl({
     Boolean(previews) && margin.confident && Number.isFinite(available) && margin.required > 0 && margin.required > available;
   // The confirmed intent must map onto a deal shape the engine models (probe
   // with a placeholder id) — an unmappable shape must disable, not no-op.
+  const probeActions = previews ? (decorate ? decorate(finalizeActions(previews)) : finalizeActions(previews)) : null;
+  /**
+   * Two closes of DIFFERENT sizes cannot be one deal — a DealRequest carries
+   * a single qty for both legs — but each is a perfectly good single-leg
+   * reduce-only deal, so the intent runs as two. Only closes: an open pair
+   * genuinely needs the hedge loop that one deal buys.
+   */
+  const splitClose =
+    !!actions &&
+    !!previews &&
+    !!probeActions &&
+    !preview.estimating &&
+    actions.length === 2 &&
+    actions.every((a) => a.kind === 'close-position') &&
+    dealFromActions('probe-0', probeActions, previews) === null &&
+    dealFromActions('probe-a', [probeActions[0]], [previews[0]]) !== null &&
+    dealFromActions('probe-b', [probeActions[1]], [previews[1]]) !== null;
   const mappable =
     !actions ||
     !previews ||
     preview.estimating ||
-    dealFromActions('probe-0', decorate ? decorate(finalizeActions(previews)) : finalizeActions(previews), previews) !== null;
+    !probeActions ||
+    dealFromActions('probe-0', probeActions, previews) !== null ||
+    splitClose;
   const disabled =
-    !actions || extraDisabled || execute.isPending || previewMissing || hasViolations || marginBlocked || !mappable;
+    !actions ||
+    extraDisabled ||
+    execute.isPending ||
+    executeSplit.isPending ||
+    previewMissing ||
+    hasViolations ||
+    marginBlocked ||
+    !mappable;
 
   const onConfirm = () => {
     if (!actions || !previews || preview.estimating) return; // deal mapping needs the CURRENT preview
@@ -204,7 +247,22 @@ export function ExecuteControl({
     // Stamp resolver qty/price from the preview, apply confirm-time decorations
     // (pegToTouch), then map the confirmed intent onto the deal contract.
     const base = finalizeActions(previews);
-    const deal = dealFromActions(basketIdRef.current, decorate ? decorate(base) : base, previews);
+    const decorated = decorate ? decorate(base) : base;
+    const deal = dealFromActions(basketIdRef.current, decorated, previews);
+    if (!deal && splitClose) {
+      // Two single-leg deals under ONE basket: ids derived from the basket id
+      // so a retry after a lost response re-sends the same two ids and the
+      // server dedupes each leg. The pending record clears only once both
+      // have landed (see executeSplit.onSuccess).
+      const a = dealFromActions(`${basketIdRef.current}-a`, [decorated[0]], [previews[0]]);
+      const b = dealFromActions(`${basketIdRef.current}-b`, [decorated[1]], [previews[1]]);
+      if (!a || !b) return;
+      restingOnlyRef.current = false;
+      placedSummaryRef.current = null;
+      setPlacedResting(null);
+      executeSplit.mutate([a, b]);
+      return;
+    }
     if (!deal) return; // unmappable shape — the button was disabled anyway
     // `b` is OMITTED for a single leg, not set to null — hence ?? null.
     restingOnlyRef.current = (deal.b ?? null) === null && deal.execution === 'maker';
@@ -215,11 +273,10 @@ export function ExecuteControl({
     execute.mutate(deal);
   };
 
+  const anyError = execute.error ?? executeSplit.error;
   const errMsg =
-    execute.error instanceof ApiError
-      ? execute.error.message
-      : (execute.error as Error | null)?.message ?? null;
-  const cardOpen = (hoverCard && hovering) || execute.isError;
+    anyError instanceof ApiError ? anyError.message : (anyError as Error | null)?.message ?? null;
+  const cardOpen = (hoverCard && hovering) || execute.isError || executeSplit.isError;
 
   return (
     <div
@@ -231,7 +288,7 @@ export function ExecuteControl({
       onBlurCapture={() => setHovering(false)}
     >
       <HoldToConfirmButton tone={tone} disabled={disabled} holdMs={holdMs} onConfirm={onConfirm} className={buttonClassName}>
-        {execute.isPending ? (
+        {execute.isPending || executeSplit.isPending ? (
           <span className="inline-flex items-center gap-1.5">
             <Spinner className="h-3.5 w-3.5" /> executing…
           </span>
@@ -267,6 +324,11 @@ export function ExecuteControl({
       {!mappable && (
         <div role="alert" className="mt-1 text-[11px] text-amber-400">
           can't run as one deal (e.g. unequal leg sizes) — execute the legs individually
+        </div>
+      )}
+      {splitClose && (
+        <div className="mt-1 text-[11px] text-ink-400">
+          two deals, one per leg (sizes differ)
         </div>
       )}
       {cardOpen && (
@@ -338,7 +400,7 @@ function HoverCard({
   return createPortal(
     <div
       role="tooltip"
-      className="fixed z-[55] w-[320px] rounded-xl border border-ink-700 bg-ink-900 p-3 text-xs shadow-2xl"
+      className="fixed z-[55] w-[320px] rounded-xl border border-ink-600 bg-ink-900 p-3 text-xs"
       style={{ left: pos.left, bottom: pos.bottom }}
     >
       {execError && (

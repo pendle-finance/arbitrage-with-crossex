@@ -193,8 +193,7 @@ export function MarketSelect({
       </select>
       {hidden > 0 && (
         <span className="text-[10px] text-ink-500">
-          {hidden} markets hidden — a pair must share its collateral and maturity with the other
-          leg.
+          {hidden} hidden · other collateral or maturity
         </span>
       )}
     </div>
@@ -717,7 +716,7 @@ function FailureDetail({ fill }: { fill: BorosLegFill }) {
     <p className="pl-2 text-[10.5px] leading-relaxed text-ink-500">
       {FAILURE_HINT[fill.failure.code]}
       {fill.failure.message && (
-        <span className="mt-0.5 block break-words font-mono text-[10px] text-ink-600">
+        <span className="mt-0.5 block break-words text-[10px] text-ink-600">
           {fill.failure.message}
         </span>
       )}

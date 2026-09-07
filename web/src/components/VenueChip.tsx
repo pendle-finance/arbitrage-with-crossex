@@ -17,14 +17,14 @@ export function VenueChip({ exchange, crossex }: { exchange: string; crossex?: b
   // Gate CrossEx account.
   if (crossex) {
     return (
-      <Chip sm tone="violet" className="font-mono" title="via CrossEx (connected Gate account)">
+      <Chip sm tone="violet" title="via CrossEx (connected Gate account)">
         {exchange}
         <span className="ml-1 text-[9px] font-semibold text-violet-300">·CX</span>
       </Chip>
     );
   }
   return (
-    <Chip sm tone={USDT_PERP_VENUES.has(exchange) ? 'cyan' : 'neutral'} className="font-mono">
+    <Chip sm tone={USDT_PERP_VENUES.has(exchange) ? 'cyan' : 'neutral'}>
       {exchange}
     </Chip>
   );

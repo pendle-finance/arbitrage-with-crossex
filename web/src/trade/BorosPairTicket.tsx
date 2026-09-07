@@ -219,8 +219,20 @@ export function BorosPairTicket({
     } else {
       // Single-leg prefills: only one side was asked for, so there is nothing
       // to agree with and the soonest at that venue is the right default.
-      long = soonest(longAt);
-      short = soonest(shortAt);
+      // If the asked-for maturity is not listed at this venue at all, the
+      // hedge is still perp↔YU on ONE venue and the term is the user's to
+      // pick — arm the venue's soonest market rather than an empty dropdown
+      // (the leg is missing; an unarmed ticket is not the safer state).
+      const anyTerm = (venue: string | null) =>
+        venue === null
+          ? []
+          : markets.filter(
+              (m) =>
+                m.venue.toUpperCase() === venue.toUpperCase() &&
+                m.base.toUpperCase() === openPrefill.base.toUpperCase(),
+            );
+      long = soonest(longAt.length > 0 ? longAt : anyTerm(openPrefill.longVenue));
+      short = soonest(shortAt.length > 0 ? shortAt : anyTerm(openPrefill.shortVenue));
     }
     /**
      * One venue = one leg. A missing-leg row asks for exactly the leg it is
@@ -595,10 +607,9 @@ export function BorosPairTicket({
         // numbers for "your Boros position" is exactly how someone ends up
         // reasoning about the wrong account.
         <p className="rounded-lg border border-amber-500/30 bg-amber-500/[0.05] px-2.5 py-2 text-[11px] leading-relaxed text-amber-200">
-          This ticket prices and trades <span className="num">{shortAddr(agentRoot)}</span> — the
-          account your agent key signs for. The Positions view is tracking{' '}
-          <span className="num">{shortAddr(trackedAddress)}</span>, so its numbers are a different
-          account.
+          Trades <span className="num">{shortAddr(agentRoot)}</span> (the account your agent key
+          signs for); Positions tracks <span className="num">{shortAddr(trackedAddress)}</span> — a
+          different account.
         </p>
       )}
 

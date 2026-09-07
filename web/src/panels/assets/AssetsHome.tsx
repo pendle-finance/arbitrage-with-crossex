@@ -13,7 +13,6 @@
  */
 import { useMemo, useState } from 'react';
 import { useAssetView, useAssetViewWindows, useFees } from '../../api/queries';
-import { Chip } from '../../components/Chip';
 import { EmptyState } from '../../components/EmptyState';
 import { QueryError } from '../../components/QueryError';
 import { TableSkeleton } from '../../components/Skeleton';
@@ -84,7 +83,11 @@ export function AssetsHome() {
   );
   const dust = allDerived.filter((a) => !derived.includes(a));
 
-  const totalPnl = derived.reduce((s, a) => s + a.derived.totals.pnlUsd, 0);
+  // Borrow interest is booked by the venue per LIABILITY COIN, not per
+  // market, so it cannot sit on a card: it is charged once, here, and the
+  // total then differs from the cards' sum by exactly this line.
+  const interestUsd = data?.interest?.available ? data.interest.paidUsd : 0;
+  const totalPnl = derived.reduce((s, a) => s + a.derived.totals.pnlUsd, 0) - interestUsd;
   const totalCapital = derived.reduce((s, a) => s + a.derived.totals.capitalUsd, 0);
   // Blended APR: Σpnl over Σ(capital · its own elapsed clock) — each asset
   // keeps its clock, so a young asset doesn't dilute an old one's rate.
@@ -102,11 +105,12 @@ export function AssetsHome() {
     },
     { pnl: 0, capYears: 0 },
   );
-  const blendedApr = aprAgg.capYears > 0 ? aprAgg.pnl / aprAgg.capYears : null;
-  const gapCount = derived.reduce(
-    (s, a) => s + a.derived.gaps.length + (a.derived.deltaNeutral ? 0 : 1),
-    0,
-  );
+  const blendedApr = aprAgg.capYears > 0 ? (aprAgg.pnl - interestUsd) / aprAgg.capYears : null;
+  // Legs to open (missing or short), counted the way the cards show them.
+  // A book whose perps do not cancel is a second, different fact — it gets
+  // its own words rather than an invisible +1 in the count.
+  const gapCount = derived.reduce((s, a) => s + a.derived.gaps.length, 0);
+  const nonNeutral = derived.some((a) => !a.derived.deltaNeutral);
 
   const header = (
     <div className="mb-3 flex flex-wrap items-center gap-2">
@@ -173,12 +177,44 @@ export function AssetsHome() {
     <section>
       {header}
 
-      {/* Totals strip */}
+      {/* Totals strip. It used to hide behind a single card as a duplicate
+          of that card's hero; it now carries what no card can — borrow
+          interest and the account-wide hedge status — so it always shows
+          once there is anything to sum. */}
+      {derived.length > 0 && (
       <div className="card mb-3 flex flex-wrap items-center gap-x-8 gap-y-2 p-4">
         <div>
-          <div className="text-xs uppercase tracking-wider text-ink-500">Total PnL</div>
+          <div
+            className="text-xs uppercase tracking-wider text-ink-500"
+            title={
+              interestUsd > 0
+                ? `Σ cards − ${fmtUsd(interestUsd)} borrow interest`
+                : data?.interest?.available === false
+                  ? 'Borrow interest could not be read — not charged here'
+                  : undefined
+            }
+          >
+            Total PnL
+          </div>
           <div className="num text-xl font-semibold">
             <SignedNumber value={totalPnl} format={fmtUsd} />
+          </div>
+        </div>
+        <div>
+          <div
+            className="text-xs uppercase tracking-wider text-ink-500"
+            title={`Margin-borrow interest the CrossEx account paid inside this window${
+              data?.interest && Object.keys(data.interest.byCoin).length > 0
+                ? ` — ${Object.entries(data.interest.byCoin)
+                    .map(([c, n]) => `${n.toFixed(2)} ${c}`)
+                    .join(', ')}`
+                : ''
+            }. Account-level, so it is charged here and on no card.`}
+          >
+            Interest paid
+          </div>
+          <div className={`num text-xl font-semibold ${interestUsd > 0 ? 'text-guava' : 'text-ink-200'}`}>
+            {data?.interest?.available === false ? '—' : `−${fmtUsd(interestUsd)}`}
           </div>
         </div>
         <div>
@@ -188,7 +224,7 @@ export function AssetsHome() {
         <div>
           <div
             className="text-xs uppercase tracking-wider text-ink-500"
-            title="REALIZED so far: Σ PnL over Σ (capital × each asset's own elapsed time), annualized — approximate: capital is today's requirement. Each card's Current APR (locked) is the different, forward-looking number."
+            title="REALIZED so far: Σ PnL over Σ (capital × each asset's own elapsed time), annualized — approximate: capital is today's requirement. Each card's Current APR (Fixed) is the different, forward-looking number."
           >
             Realized APR ≈
           </div>
@@ -196,17 +232,22 @@ export function AssetsHome() {
             {blendedApr !== null ? <SignedNumber value={blendedApr} format={fmtPct} /> : '—'}
           </div>
         </div>
+        {/* The HEDGE label stays; both states are plain text under it, green
+            or gold — a badge here shouted next to the figures (his call). */}
         <div className="ml-auto text-right">
           <div className="text-xs uppercase tracking-wider text-ink-500">Hedge</div>
-          {gapCount === 0 ? (
-            <Chip tone="green">all covered ✓</Chip>
+          {gapCount === 0 && !nonNeutral ? (
+            <span className="text-[13px] text-grass">fully covered ✓</span>
           ) : (
-            <Chip tone="amber">
-              {gapCount} thing{gapCount === 1 ? '' : 's'} to fix
-            </Chip>
+            <span className="text-[13px] text-gold">
+              {gapCount > 0 && `${gapCount} leg${gapCount === 1 ? '' : 's'} to fix`}
+              {gapCount > 0 && nonNeutral && ' · '}
+              {nonNeutral && 'perps don’t cancel'}
+            </span>
           )}
         </div>
       </div>
+      )}
 
       {[...data.warnings, ...coverageNotes].map((w) => (
         <p
@@ -248,15 +289,15 @@ export function AssetsHome() {
             />
           ))}
           {dust.length > 0 && (
-            <p className="text-xs text-ink-600">
-              {dust.length} more asset{dust.length === 1 ? '' : 's'} with nothing open and under $1
-              of history (
-              {dust
+            <p
+              className="text-xs text-ink-600"
+              title={`Nothing open and under $1 of history — still counted in the totals: ${dust
                 .map(
                   (a) => `${a.group.base} ${a.derived.totals.pnlUsd < 0 ? '−' : '+'}$${Math.abs(a.derived.totals.pnlUsd).toFixed(2)}`,
                 )
-                .join(' · ')}
-              ) — included in the totals above.
+                .join(' · ')}`}
+            >
+              + {dust.length} dust asset{dust.length === 1 ? '' : 's'} ⓘ
             </p>
           )}
         </div>

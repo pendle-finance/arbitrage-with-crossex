@@ -208,7 +208,7 @@ export function ClosePreviewPanel({
               <span className="num ml-auto text-ink-100">{p.qty ? sig(p.qty) : '—'}</span>
             </span>
             <span className="flex justify-between text-ink-400">
-              <span>marketable limit px</span>
+              <span title="Reduce-only IOC limit at mark ± slippage — fills what it can at once, never rests, never adds">limit px</span>
               <span className="num text-ink-100">{p.price ? sig(p.price) : '—'}</span>
             </span>
             {p.fillEstimate && (
@@ -230,7 +230,7 @@ export function ClosePreviewPanel({
           </div>
         );
       })}
-      {note && <span className="cursor-help text-ink-500" title={note}>reduce-only IOC marketable limit ⓘ</span>}
+      {note && <span className="cursor-help text-ink-500" title={note}>reduce-only ⓘ</span>}
       <ViolationList
         violations={previews.flatMap((p) => p.violations ?? [])}
         warnings={previews.flatMap((p) => p.warnings ?? [])}

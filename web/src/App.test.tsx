@@ -263,9 +263,8 @@ describe('App tab shell', () => {
     expect(screen.getByRole('heading', { name: 'Fund Gate' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Execute' })).toBeInTheDocument();
 
-    // The VIP simulator only exists while unconfigured — and the knobs now live
-    // behind the collapsed assumptions strip, so open it first.
-    await userEvent.click(screen.getByRole('button', { name: /with these assumptions/ }));
+    // The VIP simulator only exists while unconfigured, and it sits on the
+    // always-visible assumptions row — nothing to open first.
     expect(screen.getByLabelText('Gate VIP tier')).toBeInTheDocument();
 
     // Symbols are expectedly absent — the button stays enabled as the guide's

@@ -1,6 +1,16 @@
 import type { ReactNode } from 'react';
 
-export type ChipTone = 'green' | 'red' | 'amber' | 'cyan' | 'orange' | 'blue' | 'violet' | 'neutral';
+export type ChipTone =
+  | 'green'
+  | 'red'
+  | 'amber'
+  | 'cyan'
+  | 'orange'
+  | 'blue'
+  | 'violet'
+  | 'info'
+  | 'link'
+  | 'neutral';
 
 /** Tone → utility overrides. Utilities land after the `.chip` component layer,
  * so they win over the neutral defaults. */
@@ -12,6 +22,9 @@ const TONES: Record<ChipTone, string> = {
   orange: 'border-orange-500/40 bg-orange-500/10 text-orange-400',
   blue: 'border-sky-500/40 bg-sky-500/10 text-sky-400',
   violet: 'border-violet-500/40 bg-violet-500/10 text-violet-400',
+  /* Count badges — the mock's borderless `info @18%` fill. */
+  info: 'border-transparent bg-info/[0.18] text-pastel-blue',
+  link: 'border-link/40 bg-link/10 text-link',
   neutral: '',
 };
 

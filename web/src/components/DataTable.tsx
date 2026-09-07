@@ -49,7 +49,7 @@ export function DataTable<T>({
   return (
     <div className="card overflow-hidden">
       <div className={`overflow-x-auto overflow-y-auto ${maxHeightClass}`}>
-        <table className="w-full border-collapse text-sm">
+        <table className="w-full border-collapse text-[12.5px] text-ink-100">
           <thead>
             <tr>
               {expandable && <th className="th w-8" aria-hidden />}
@@ -74,7 +74,7 @@ export function DataTable<T>({
               return (
                 <Fragment key={k}>
                   <tr
-                    className={`group border-t border-ink-800 first:border-t-0 transition-opacity hover:bg-ink-800/50 ${
+                    className={`group border-t border-ink-850 first:border-t-0 transition-opacity hover:bg-ink-800/50 ${
                       rowClassName?.(row) ?? ''
                     }`}
                   >
@@ -101,7 +101,7 @@ export function DataTable<T>({
                         // the edge — the horizontal scroll saved the data but
                         // put a row action out of reach, which is the opposite
                         // of what a row action is for.
-                        className={`whitespace-nowrap px-2 py-1.5 align-middle ${
+                        className={`whitespace-nowrap px-2.5 py-2 align-middle ${
                           c.align === 'right' ? 'text-right' : 'text-left'
                         } ${c.className ?? ''}`}
                       >
@@ -110,7 +110,7 @@ export function DataTable<T>({
                     ))}
                   </tr>
                   {isOpen && rowExpandable && (
-                    <tr className="border-t border-ink-800 bg-ink-950/70">
+                    <tr className="border-t border-ink-850 bg-ink-950/70">
                       <td colSpan={colSpan} className="px-4 py-3">
                         {expansion}
                       </td>

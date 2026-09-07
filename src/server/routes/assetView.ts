@@ -190,10 +190,68 @@ export interface AssetViewOut {
     perpClosedFromSec: number;
     borosTxnsComplete: boolean;
   };
+  /** Margin-borrow interest the CrossEx account paid inside the window.
+   * ACCOUNT-level: the venue books it per liability coin, not per market,
+   * so it belongs to the total and not to any one asset's card. Stable
+   * liabilities count 1:1 in USD; any other coin is listed in `byCoin`
+   * but left out of `paidUsd` (no price here). */
+  interest: {
+    paidUsd: number;
+    byCoin: Record<string, number>;
+    /** Oldest interest row read when the page cap was hit; 0 = complete. */
+    coversFromSec: number;
+    /** False when the venue call failed — the total is then missing it. */
+    available: boolean;
+  };
   warnings: string[];
 }
 
 // ---------------------------------------------------------------------------
+
+/** Structural subset of the SDK's CrossexMarginInterestRecord. */
+interface InterestRecordLike {
+  interest?: string;
+  liabilityCoin?: string;
+  createTime?: string;
+}
+
+const STABLE_COIN_RE = /^(USDT|USDC|USD1|FDUSD|DAI|USDE|USD)$/i;
+
+/** Every interest row, newest first, windowed by its own timestamp AFTER the
+ * fetch — the same rule as the closed-positions walk, so a window boundary
+ * cannot be mis-applied by the venue's own `from` semantics. */
+async function fetchInterestPaid(
+  deps: AppDeps,
+  sinceSec: number,
+): Promise<{ paidUsd: number; byCoin: Record<string, number>; coversFromSec: number }> {
+  const rows: InterestRecordLike[] = [];
+  let capped = false;
+  for (let page = 1; page <= MAX_PAGES; page += 1) {
+    const { body } = await deps.getClients().crossEx.listCrossexHistoryMarginInterests({
+      page,
+      limit: PAGE_LIMIT,
+    });
+    const batch = body as InterestRecordLike[];
+    rows.push(...batch);
+    if (batch.length < PAGE_LIMIT) break;
+    if (page === MAX_PAGES) capped = true;
+  }
+  const byCoin: Record<string, number> = {};
+  let paidUsd = 0;
+  let oldest = Number.POSITIVE_INFINITY;
+  for (const r of rows) {
+    const t = fin(r.createTime);
+    const sec = t > 0 ? epochToSec(t) : 0;
+    if (sec > 0) oldest = Math.min(oldest, sec);
+    if (sec < sinceSec) continue;
+    const amt = fin(r.interest);
+    if (!(amt > 0)) continue;
+    const coin = (r.liabilityCoin ?? '?').toUpperCase();
+    byCoin[coin] = (byCoin[coin] ?? 0) + amt;
+    if (STABLE_COIN_RE.test(coin)) paidUsd += amt;
+  }
+  return { paidUsd, byCoin, coversFromSec: capped && Number.isFinite(oldest) ? oldest : 0 };
+}
 
 /** Structural subset of the SDK's CrossexHistoricalPosition. */
 interface HistoryPositionLike {
@@ -754,10 +812,35 @@ export function assetViewRoutes(deps: AppDeps) {
         return foot(b) - foot(a) || a.base.localeCompare(b.base);
       });
 
+      // Borrow interest rides beside the per-asset sums, never inside them.
+      // A failed read must not sink the view: the total is then reported
+      // without it, and says so.
+      let interest: AssetViewOut['interest'] = { paidUsd: 0, byCoin: {}, coversFromSec: 0, available: false };
+      try {
+        const { value } = await deps.cache.get(
+          `crossex:interest:${Math.floor(sinceSec / 3600)}`,
+          TTL.trades,
+          () => fetchInterestPaid(deps, sinceSec),
+          { fresh },
+        );
+        interest = { ...value, available: true };
+        const unpriced = Object.keys(value.byCoin).filter((c) => !STABLE_COIN_RE.test(c));
+        if (unpriced.length > 0) {
+          warnings.push(`Borrow interest in ${unpriced.join(', ')} is not priced — left out of the total.`);
+        }
+      } catch (err) {
+        // Unconfigured Gate is the Boros-only mode, not a failure worth a line.
+        const c = classifyGateError(err);
+        if (c.category !== 'not-configured') {
+          warnings.push(`Borrow interest unavailable — the total PnL omits it (${c.category}).`);
+        }
+      }
+
       const out: AssetViewOut = {
         sinceSec,
         nowSec,
         assets,
+        interest,
         earliestSec: Number.isFinite(earliestSec) ? earliestSec : null,
         coverage: {
           settlementsFromSec: settlements.coversFromSec,

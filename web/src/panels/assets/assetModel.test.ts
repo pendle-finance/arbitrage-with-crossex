@@ -5,7 +5,14 @@
  */
 import { describe, expect, it } from 'vitest';
 import type { AssetBorosOpen, AssetGroup, AssetPerpOpen } from '../../api/types';
-import { borosKey, deriveAsset, perpKey, SECONDS_IN_YEAR } from './assetModel';
+import {
+  borosKey,
+  defaultChargePerpFees,
+  deriveAsset,
+  keptSlice,
+  perpKey,
+  SECONDS_IN_YEAR,
+} from './assetModel';
 
 const NOW = 1_760_000_000;
 const DAY = 86_400;
@@ -86,7 +93,7 @@ describe('hedge status', () => {
     const d = deriveAsset(g, {}, 0, NOW);
     expect(d.deltaNeutral).toBe(true);
     // A SHORT perp receives floating; a SHORT YU locks it — that's the miss.
-    expect(d.gaps).toEqual([{ venue: 'OKX', action: 'short-boros', size: 1000, unit: 'base' }]);
+    expect(d.gaps).toMatchObject([{ venue: 'OKX', action: 'short-boros', size: 1000, unit: 'base', kind: 'missing', leg: 'boros' }]);
     expect(d.perfect).toBe(false);
   });
 
@@ -96,7 +103,7 @@ describe('hedge status', () => {
       borosOpen: [boros({ marketId: 1, venue: 'HYPERLIQUID', side: 'LONG', sizeToken: 900 })],
     });
     const d = deriveAsset(g, {}, 0, NOW);
-    expect(d.gaps).toEqual([
+    expect(d.gaps).toMatchObject([
       { venue: 'HYPERLIQUID', action: 'long-boros', size: 100, unit: 'base' },
     ]);
 
@@ -119,12 +126,12 @@ describe('hedge status', () => {
     expect(d.perfect).toBe(false);
   });
 
-  it('a Boros leg with no perp behind it is a SHORT-side gap (over-hedged venue)', () => {
+  it('a Boros leg with no perp behind it flags the MISSING perp, never the Boros surplus', () => {
     const g = group({
       borosOpen: [boros({ marketId: 1, venue: 'OKX', side: 'LONG', sizeToken: 500 })],
     });
     const d = deriveAsset(g, {}, 0, NOW);
-    expect(d.gaps).toEqual([{ venue: 'OKX', action: 'short-boros', size: 500, unit: 'base' }]);
+    expect(d.gaps).toMatchObject([{ venue: 'OKX', action: 'long-perp', size: 500, unit: 'base', kind: 'missing', leg: 'perp', want: 500 }]);
   });
 
   it('USD-collateral assets (HYPE) compare USD notionals, not token quantities', () => {
@@ -171,19 +178,43 @@ describe('exclusions', () => {
 
   it("'all' on a perp removes it from gap math, totals and capital", () => {
     const d = deriveAsset(g(), { [perpKey('HL')]: 'all' }, 0, NOW);
-    // With the HL perp gone its Boros leg is over-coverage; OKX stays whole.
-    expect(d.gaps).toEqual([{ venue: 'HYPERLIQUID', action: 'short-boros', size: 1000, unit: 'base' }]);
+    // With the HL perp gone its Boros leg has no floating side: the PERP is
+    // what's missing (the flag never sits on the surplus); OKX stays whole.
+    expect(d.gaps).toMatchObject([{ venue: 'HYPERLIQUID', action: 'long-perp', size: 1000, unit: 'base', kind: 'missing', leg: 'perp' }]);
     expect(d.totals.breakdown.perpUpnlUsd).toBe(0);
     expect(d.totals.capitalUsd).toBe(500); // only the HL Boros leg's IM remains
   });
 
   it('a partial exclusion scales the leg pro-rata everywhere', () => {
     const d = deriveAsset(g(), { [perpKey('HL')]: 250 }, 0, NOW);
-    // 750 kept vs 1000 boros → gap −250 → short 250 YU to rebalance.
-    expect(d.gaps).toEqual([{ venue: 'HYPERLIQUID', action: 'short-boros', size: 250, unit: 'base' }]);
+    // 750 kept vs 1000 boros → the perp is 250 short of its YU.
+    expect(d.gaps).toMatchObject([{ venue: 'HYPERLIQUID', action: 'long-perp', size: 250, unit: 'base', kind: 'deficit', leg: 'perp', want: 1000 }]);
     expect(d.totals.breakdown.perpUpnlUsd).toBeCloseTo(75, 9);
     expect(d.totals.breakdown.perpFundingUsd).toBeCloseTo(37.5, 9);
     expect(d.totals.capitalUsd).toBeCloseTo(2000 * 0.75 + 500 + 0 + 0, 9);
+  });
+
+  it('a slice carved out AT A PRICE hands back exactly its own mark-to-market', () => {
+    // 1000 ETH long, venue average $1,900, mark $1,900, venue uPnL +100.
+    // Exclude 250 ETH that were bought at $1,800: that slice alone is
+    // +250 × (1,900 − 1,800) = +25,000 of the venue's figure, and it leaves.
+    const d = deriveAsset(g(), { [perpKey('HL')]: { qty: 250, at: 1800 } }, 0, NOW);
+    expect(d.totals.breakdown.perpUpnlUsd).toBeCloseTo(100 - 250 * (1900 - 1800), 9);
+    // Everything that cannot be attributed to a price stays pro-rata.
+    expect(d.totals.breakdown.perpFundingUsd).toBeCloseTo(37.5, 9);
+    expect(d.gaps).toMatchObject([{ venue: 'HYPERLIQUID', action: 'long-perp', size: 250, unit: 'base', kind: 'deficit', leg: 'perp' }]);
+  });
+
+  it('keptSlice re-derives the remainder as the weighted residual; a bare qty leaves it alone', () => {
+    const priced = keptSlice({ k: { qty: 250, at: 1800 } }, 'k', 1000, 1900);
+    expect(priced.keep).toBeCloseTo(0.75, 12);
+    // (1000×1900 − 250×1800) / 750
+    expect(priced.entry).toBeCloseTo((1_900_000 - 450_000) / 750, 9);
+    const plain = keptSlice({ k: 250 }, 'k', 1000, 1900);
+    expect(plain).toEqual({ keep: 0.75, entry: 1900, at: null });
+    expect(keptSlice({ k: 'all' }, 'k', 1000, 1900).keep).toBe(0);
+    // A rate works the same way: 25% of the leg locked at 12% out of an 8% blend.
+    expect(keptSlice({ k: { qty: 250, at: 0.12 } }, 'k', 1000, 0.08).entry).toBeCloseTo(0.05 / 0.75, 12);
   });
 
   it("'all' on a market also drops its history rows; partial does not", () => {
@@ -209,6 +240,28 @@ describe('exclusions', () => {
 
     const partial = deriveAsset(base, { [borosKey(1)]: 500 }, 0, NOW);
     expect(partial.totals.pnlUsd).toBeCloseTo(all.totals.pnlUsd, 9);
+  });
+});
+
+describe('carry − cost', () => {
+  it('the headline PnL is exactly gross carry minus cost, with fees and price basis in cost', () => {
+    const g = group({
+      perpOpen: [
+        perp({ symbol: 'HL', venue: 'HYPERLIQUID', side: 'LONG', qty: 1000, upnlUsd: 120, fundingUsd: 300, feesUsd: 40 }),
+      ],
+      perpClosed: [
+        { symbol: 'GATE_OLD', venue: 'GATE', closedPnlUsd: -25, fundingUsd: 80, feesUsd: 15, count: 1, lastClosedAt: NOW - DAY, rows: [] },
+      ],
+      borosHistory: [
+        { marketId: 1, venue: 'HYPERLIQUID', maturity: NOW + DAY, settleUsd: 500, settleFeeUsd: 12, tradePnlUsd: -30, tradeFeeUsd: 8 },
+      ],
+    });
+    const d = deriveAsset(g, {}, 0, NOW);
+    // Carry, gross: 300 + 80 funding, 500 + 12 settlement, −30 + 8 trade.
+    expect(d.totals.carryGrossUsd).toBeCloseTo(300 + 80 + 512 - 22, 9);
+    // Cost: perp fees 40 + 15, Boros fees 12 + 8, less the price basis (120 − 25).
+    expect(d.totals.costUsd).toBeCloseTo(55 + 20 - 95, 9);
+    expect(d.totals.pnlUsd).toBeCloseTo(d.totals.carryGrossUsd - d.totals.costUsd, 9);
   });
 });
 
@@ -272,3 +325,22 @@ describe('totals & APR', () => {
     expect(d.clockStartSec).toBe(since);
   });
 });
+
+describe('defaultChargePerpFees', () => {
+  const boros = NOW - 10 * DAY;
+  it('on when the perp went on with (or after) its Boros leg', () => {
+    expect(defaultChargePerpFees({ perpOpenedSec: boros, borosOpenedSec: boros })).toBe(true);
+    expect(defaultChargePerpFees({ perpOpenedSec: boros + DAY, borosOpenedSec: boros })).toBe(true);
+    // Up to three days earlier still counts as opened for this hedge.
+    expect(defaultChargePerpFees({ perpOpenedSec: boros - 3 * DAY, borosOpenedSec: boros })).toBe(true);
+  });
+  it('off when the perp predates the Boros leg by more than three days', () => {
+    expect(defaultChargePerpFees({ perpOpenedSec: boros - 3 * DAY - 1, borosOpenedSec: boros })).toBe(false);
+    expect(defaultChargePerpFees({ perpOpenedSec: boros - 30 * DAY, borosOpenedSec: boros })).toBe(false);
+  });
+  it('stays on when either open is unknown', () => {
+    expect(defaultChargePerpFees({ perpOpenedSec: null, borosOpenedSec: boros })).toBe(true);
+    expect(defaultChargePerpFees({ perpOpenedSec: boros, borosOpenedSec: null })).toBe(true);
+  });
+});
+

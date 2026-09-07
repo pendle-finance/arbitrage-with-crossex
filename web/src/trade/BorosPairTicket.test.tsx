@@ -324,7 +324,7 @@ describe('BorosPairTicket', () => {
     // The eligible one is still there and selectable.
     expect(byLabel('Binance ETHUSDT')!.disabled).toBe(false);
     // The absence is explained rather than silent.
-    expect(await screen.findByText(/markets? hidden/)).toBeInTheDocument();
+    expect(await screen.findByText(/\d+ hidden · other collateral or maturity/)).toBeInTheDocument();
   });
 
   it('leads with the estimated spread and shows the worst case beneath it', async () => {

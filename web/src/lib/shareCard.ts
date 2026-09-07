@@ -16,19 +16,27 @@ import type { SharePayloadV1 } from './shareCodec';
 export const SHARE_CARD_W = 1200;
 export const SHARE_CARD_H = 675;
 
-const MONO = '"JetBrains Mono", ui-monospace, SFMono-Regular, monospace';
+/* Inter carries the numerals too — the app dropped its mono face, and a share
+ * card in a typeface the app no longer uses would read as a different product.
+ * Canvas has no `font-variant-numeric`, so digits here are not tabular; the
+ * card is a brag image, not a table, so nothing needs to align in a column. */
 const SANS = 'Inter, ui-sans-serif, system-ui, sans-serif';
 
-// The ink palette + accents (web/tailwind.config.cjs / styles.css).
-const BG = '#0d0f13'; // ink-900
-const SEPARATOR = '#1c2029'; // ink-700
-const TEXT_HI = '#e9ebf0'; // ink-100
-const TEXT_MID = '#c8ccd6'; // ink-200
-const TEXT_LOW = '#8a92a3'; // ink-300
-const TEXT_FAINT = '#5a6273'; // ink-400
-const CYAN = '#22d3ee';
-const EMERALD = '#34d399';
-const ROSE = '#fb7185';
+/* Boros design-system tokens, mirroring web/tailwind.config.cjs. Restated as
+ * literals because canvas cannot read a CSS variable — keep the two in step. */
+const BG = '#0F1421'; // ink-900
+const SEPARATOR = '#2B3B55'; // ink-700
+const TEXT_HI = '#FFFFFF'; // ink-50
+const TEXT_MID = '#BFCBDF'; // ink-100
+const TEXT_LOW = '#9DAFCD'; // ink-200
+const TEXT_FAINT = '#5B749D'; // ink-400
+const GRASS = '#1BE3C2'; // long / positive / APR
+const GUAVA = '#FF9393'; // short / negative
+const GOLD = '#F0CE74'; // fixed rate, warnings
+/* The accent aliases the drawing code below still spells the old way. */
+const CYAN = GRASS;
+const EMERALD = GRASS;
+const ROSE = GUAVA;
 
 export interface ShareCardLeg {
   side: 'LONG' | 'SHORT';
@@ -88,8 +96,8 @@ async function ensureFonts(): Promise<void> {
   const fonts = typeof document !== 'undefined' ? document.fonts : undefined;
   if (!fonts?.load) return;
   const wanted = [
-    `600 86px ${MONO}`,
-    `500 15px ${MONO}`,
+    `600 86px ${SANS}`,
+    `500 15px ${SANS}`,
     `500 30px ${SANS}`,
     `600 34px ${SANS}`,
     `500 21px ${SANS}`,
@@ -116,7 +124,7 @@ function pill(
   ctx: CanvasRenderingContext2D,
   opts: { text: string; centerY: number; left?: number; right?: number; color: string; bg: string; border: string },
 ): number {
-  ctx.font = `600 12px ${MONO}`;
+  ctx.font = `600 12px ${SANS}`;
   const w = Math.ceil(ctx.measureText(opts.text).width) + 24;
   const h = 26;
   const x = opts.right !== undefined ? opts.right - w : (opts.left ?? 0);
@@ -157,10 +165,10 @@ export async function renderShareCard(p: SharePayloadV1, scale = 2): Promise<HTM
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, SHARE_CARD_W, SHARE_CARD_H);
   };
-  glow(200, 80, 540, 'rgba(34,211,238,0.10)');
-  glow(1030, 610, 500, 'rgba(52,211,153,0.07)');
+  glow(200, 80, 540, 'rgba(27,227,194,0.10)');
+  glow(1030, 610, 500, 'rgba(27,227,194,0.07)');
   roundedRect(ctx, 10, 10, SHARE_CARD_W - 20, SHARE_CARD_H - 20, 20);
-  ctx.strokeStyle = 'rgba(34,211,238,0.22)';
+  ctx.strokeStyle = 'rgba(27,227,194,0.22)';
   ctx.lineWidth = 1.5;
   ctx.stroke();
 
@@ -178,8 +186,8 @@ export async function renderShareCard(p: SharePayloadV1, scale = 2): Promise<HTM
   ctx.fillText(' with CrossEx', left + arbW, 76);
   const hedgeTone =
     p.h === 'h'
-      ? { color: EMERALD, bg: 'rgba(52,211,153,0.12)', border: 'rgba(52,211,153,0.35)' }
-      : { color: '#fbbf24', bg: 'rgba(251,191,36,0.12)', border: 'rgba(251,191,36,0.35)' };
+      ? { color: GRASS, bg: 'rgba(27,227,194,0.12)', border: 'rgba(27,227,194,0.35)' }
+      : { color: GOLD, bg: 'rgba(240,206,116,0.12)', border: 'rgba(240,206,116,0.35)' };
   const hedgeText = p.h === 'h' ? 'hedged ✓' : lines.hedgeLabel;
   const hedgeW = pill(ctx, { text: hedgeText, centerY: 68, right, ...hedgeTone });
   pill(ctx, {
@@ -187,8 +195,8 @@ export async function renderShareCard(p: SharePayloadV1, scale = 2): Promise<HTM
     centerY: 68,
     right: right - hedgeW - 10,
     color: TEXT_MID,
-    bg: 'rgba(28,32,41,0.8)',
-    border: '#262b37',
+    bg: 'rgba(28,39,64,0.8)',
+    border: '#374B6D',
   });
 
   // --- headline block.
@@ -196,7 +204,7 @@ export async function renderShareCard(p: SharePayloadV1, scale = 2): Promise<HTM
   ctx.font = `500 30px ${SANS}`;
   ctx.fillText(lines.headline, left, 186);
   ctx.fillStyle = CYAN;
-  ctx.font = `600 86px ${MONO}`;
+  ctx.font = `600 86px ${SANS}`;
   ctx.fillText(lines.aprText, left, 272);
   const aprW = ctx.measureText(lines.aprText).width;
   ctx.fillStyle = TEXT_HI;
@@ -206,7 +214,7 @@ export async function renderShareCard(p: SharePayloadV1, scale = 2): Promise<HTM
   ctx.font = `500 28px ${SANS}`;
   ctx.fillText(lines.capitalLine, left, 320);
   ctx.fillStyle = TEXT_FAINT;
-  ctx.font = `500 15px ${MONO}`;
+  ctx.font = `500 15px ${SANS}`;
   ctx.fillText(lines.contextLine, left, 356);
 
   // --- leg rows on separator lines.
@@ -230,21 +238,21 @@ export async function renderShareCard(p: SharePayloadV1, scale = 2): Promise<HTM
       centerY,
       left,
       color: long ? EMERALD : ROSE,
-      bg: long ? 'rgba(52,211,153,0.12)' : 'rgba(251,113,133,0.12)',
-      border: long ? 'rgba(52,211,153,0.35)' : 'rgba(251,113,133,0.35)',
+      bg: long ? 'rgba(27,227,194,0.12)' : 'rgba(255,147,147,0.12)',
+      border: long ? 'rgba(27,227,194,0.35)' : 'rgba(255,147,147,0.35)',
     });
     ctx.textBaseline = 'middle';
     ctx.fillStyle = TEXT_FAINT;
-    ctx.font = `500 12px ${MONO}`;
+    ctx.font = `500 12px ${SANS}`;
     ctx.fillText(leg.kind.toUpperCase(), left + 96, centerY + 0.5);
     ctx.fillStyle = TEXT_HI;
     ctx.font = `500 21px ${SANS}`;
     ctx.fillText(leg.venue, left + 176, centerY + 0.5);
     ctx.fillStyle = TEXT_LOW;
-    ctx.font = `500 17px ${MONO}`;
+    ctx.font = `500 17px ${SANS}`;
     ctx.fillText(leg.detail, 620, centerY + 0.5);
     ctx.fillStyle = TEXT_MID;
-    ctx.font = `500 21px ${MONO}`;
+    ctx.font = `500 21px ${SANS}`;
     ctx.textAlign = 'right';
     ctx.fillText(leg.notional, right, centerY + 0.5);
     ctx.textAlign = 'left';
@@ -252,7 +260,7 @@ export async function renderShareCard(p: SharePayloadV1, scale = 2): Promise<HTM
   });
   if (lines.legOverflow) {
     ctx.fillStyle = TEXT_FAINT;
-    ctx.font = `500 13px ${MONO}`;
+    ctx.font = `500 13px ${SANS}`;
     ctx.fillText(lines.legOverflow, left, legsTop + lines.legs.length * pitch + 18);
   }
 
@@ -260,7 +268,7 @@ export async function renderShareCard(p: SharePayloadV1, scale = 2): Promise<HTM
   ctx.fillStyle = TEXT_FAINT;
   ctx.font = `400 15px ${SANS}`;
   ctx.fillText(lines.footerLeft, left, 638);
-  ctx.font = `600 15px ${MONO}`;
+  ctx.font = `600 15px ${SANS}`;
   const brandW = ctx.measureText(lines.footerRightBrand).width;
   ctx.fillStyle = CYAN;
   ctx.fillText(lines.footerRightBrand, right - brandW, 638);

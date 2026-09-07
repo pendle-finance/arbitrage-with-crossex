@@ -52,7 +52,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
           <div
             key={t.id}
             role="alert"
-            className={`pointer-events-auto flex items-center gap-3 rounded-lg border bg-ink-900/95 px-4 py-3 text-xs shadow-xl backdrop-blur ${KIND_CLASSES[t.kind]}`}
+            className={`pointer-events-auto flex items-center gap-3 rounded border bg-ink-900 px-4 py-3 text-xs ${KIND_CLASSES[t.kind]}`}
           >
             <span className="flex-1">{t.text}</span>
           </div>

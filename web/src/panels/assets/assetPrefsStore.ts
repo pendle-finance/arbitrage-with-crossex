@@ -46,7 +46,15 @@ const validate = (parsed: unknown): AllBooks => {
     if (p.exclusions && typeof p.exclusions === 'object') {
       for (const [k, q] of Object.entries(p.exclusions)) {
         if (q === 'all') exclusions[k] = 'all';
-        else if (Number.isFinite(Number(q)) && Number(q) > 0) exclusions[k] = Number(q);
+        else if (q && typeof q === 'object') {
+          // The priced-slice shape. A bad qty drops the entry; a bad price
+          // keeps the qty and falls back to pro-rata.
+          const slice = q as { qty?: unknown; at?: unknown };
+          const qty = Number(slice.qty);
+          if (!Number.isFinite(qty) || qty <= 0) continue;
+          const at = Number(slice.at);
+          exclusions[k] = Number.isFinite(at) && at >= 0 ? { qty, at } : { qty };
+        } else if (Number.isFinite(Number(q)) && Number(q) > 0) exclusions[k] = Number(q);
       }
     }
     out[book] = { sinceByAsset, exclusions };

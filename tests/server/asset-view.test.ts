@@ -208,6 +208,7 @@ describe('GET /api/asset-view/:address', () => {
     app = makeTestApp({ borosFetch: borosStub(borosBodies()) });
     mockGateGet('/positions', { body: gatePositions });
     mockGateGet('/history_positions', { body: closedPositions });
+    mockGateGet('/history_margin_interests', { body: [] });
 
     const res = await get(`/api/asset-view/${ADDR}`);
     expect(res.statusCode).toBe(200);
@@ -285,6 +286,7 @@ describe('GET /api/asset-view/:address', () => {
     app = makeTestApp({ borosFetch: borosStub(borosBodies()) });
     mockGateGet('/positions', { body: gatePositions });
     mockGateGet('/history_positions', { body: closedPositions });
+    mockGateGet('/history_margin_interests', { body: [] });
 
     // Between the NOW−5d and NOW−4d closed rows, and after every fill.
     const since = NOW - 4 * DAY - DAY / 2;
@@ -367,6 +369,7 @@ describe('GET /api/asset-view/:address', () => {
     app = makeTestApp({ borosFetch: borosStub(bodies) });
     mockGateGet('/positions', { body: [] });
     mockGateGet('/history_positions', { body: [] });
+    mockGateGet('/history_margin_interests', { body: [] });
 
     const res = await get(`/api/asset-view/${ADDR}`);
     const { data } = res.json();
@@ -390,6 +393,7 @@ describe('GET /api/asset-view/:address', () => {
     app = makeTestApp({ borosFetch: borosStub(bodies) });
     mockGateGet('/positions', { body: [] });
     mockGateGet('/history_positions', { body: [] });
+    mockGateGet('/history_margin_interests', { body: [] });
 
     const res = await get(`/api/asset-view/${ADDR}`);
     const { data } = res.json();

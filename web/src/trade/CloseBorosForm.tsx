@@ -348,11 +348,6 @@ export function CloseBorosForm({
 
   return (
     <div className="flex flex-col gap-3">
-      <p className="text-[12px] leading-relaxed text-ink-300">
-        Cancels any resting orders on {closable.length === 1 ? 'this market' : 'these markets'}, then
-        sends an opposite market order at the size below.
-      </p>
-
       {agentBlocked && (
         <p className="rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-[11px] leading-relaxed text-amber-300/90">
           {agentReason}
@@ -401,7 +396,7 @@ export function CloseBorosForm({
               ) : (
                 <>
                   <span className="flex justify-between text-ink-400">
-                    <span>est. execution rate</span>
+                    <span title="Market order after cancelling any resting orders on this market">est. rate</span>
                     <span className="num text-ink-100">
                       {q?.execApr != null ? fmtPct(q.execApr) : sim.isFetching ? 'quoting…' : '—'}
                       {q?.worstApr != null && (
@@ -415,13 +410,29 @@ export function CloseBorosForm({
                         drag is quoted once below rather than subtracted here,
                         which would need a per-leg apportionment the simulation
                         does not return. */}
-                    <span>est. PnL at that rate, before fees</span>
+                    <span title="(locked − execution rate) × size × time to maturity, before the fee below">est. PnL</span>
                     {estPnl !== null ? (
                       <SignedNumber value={estPnl} format={(n) => fmtUsd(n)} />
                     ) : (
                       <span className="text-ink-500">—</span>
                     )}
                   </span>
+                  {/* The taker fee THIS order pays, from the simulation: rate ×
+                      size × years to maturity. Settlement fees are not here —
+                      a close ends the settlements that would have paid them. */}
+                  {q?.takerFeeCost !== undefined && (
+                    <span className="flex justify-between text-ink-400">
+                      <span title="Boros taker fee on this order: rate × size × time to maturity">est. fee</span>
+                      {(() => {
+                        const px = sim.data?.simulation.collateralPriceUsd;
+                        return px != null && px > 0 ? (
+                          <span className="num text-guava">−{fmtUsd(q.takerFeeCost * px)}</span>
+                        ) : (
+                          <span className="num text-guava">−{fmtTokenQty(q.takerFeeCost, unit)}</span>
+                        );
+                      })()}
+                    </span>
+                  )}
                   {/* A dust residual is not a shortfall: the walk returns
                       sizes like 419.49999999 for a book that fully covers
                       419.5, and warning on that reads as "no depth" on a
@@ -455,15 +466,14 @@ export function CloseBorosForm({
       {/* One line, once, from the figure the simulation already returns — the
           per-leg PnL above is a rate difference and carries no fee term, so
           without this the screen showed only the flattering half. */}
-      {sim.data?.simulation.feeDragApr != null && (
-        <span className="text-[11px] text-ink-500">
-          Boros taker + settlement fees ≈ {fmtPct(sim.data.simulation.feeDragApr)} APR on the size
-          closed.
-        </span>
-      )}
 
       <label className="flex items-center gap-2 text-[11px] text-ink-400">
-        <span className="w-20">Slippage %</span>
+        <span
+          className="w-20 cursor-help underline decoration-dotted underline-offset-2"
+          title="A rate bound: the worst APR this close will accept. A close that keeps missing it leaves the position open. Size is capped at what is open once the cancel lands — Boros has no reduce-only flag, so it can never cross past flat."
+        >
+          Slippage %
+        </span>
         <input
           className={`input num h-7 flex-1 px-2 py-0.5 ${slipInvalid ? 'border-rose-500' : ''}`}
           inputMode="decimal"
@@ -474,12 +484,6 @@ export function CloseBorosForm({
         <span className="text-ink-500">APR</span>
       </label>
       {slipInvalid && <span className="text-[11px] text-rose-400">slippage must be in (0, 50]</span>}
-
-      <p className="text-[11px] leading-relaxed text-ink-500">
-        The bound is a rate, not a price: it caps the APR this close will accept, and a close that
-        keeps missing it leaves the position open. Size is capped at whatever is actually open once
-        the cancel lands — Boros has no reduce-only flag, so it can never cross past flat.
-      </p>
 
       <HoldToConfirmButton
         tone="red"

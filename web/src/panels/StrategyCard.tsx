@@ -1735,10 +1735,6 @@ export function StrategyCard({
       {closeOpen && (
         <Modal title={`Close ${s.base} — perp pair`} onClose={() => setCloseOpen(false)} widthClass="w-[460px]">
           <div className="flex flex-col gap-3 p-4">
-            <div className="text-[12px] leading-relaxed text-ink-300">
-              Closes both perp legs as one action, reduce-only at the current mark.
-              {borosLegs.length > 0 && ' The Boros legs are not touched — they close on their own venue.'}
-            </div>
             <table className="w-full text-[12px]">
               <tbody>
                 {perpLegs.map((l) => (

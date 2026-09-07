@@ -14,7 +14,7 @@ const ASSET_COLUMNS: Column<CrossexAsset>[] = [
     header: 'Coin',
     render: (a) => (
       <span className="inline-flex items-baseline gap-2">
-        <span className="font-mono font-semibold text-ink-100">{a.coin}</span>
+        <span className="font-semibold text-ink-100">{a.coin}</span>
         <span className="text-[10px] text-ink-500">{a.exchangeType}</span>
       </span>
     ),

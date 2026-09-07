@@ -177,6 +177,7 @@ export function WaterfallPlot({
   span,
   domainMin,
   caption,
+  showCaption = true,
   legend,
   mtmUsd = 0,
   mtmChip = false,
@@ -186,6 +187,9 @@ export function WaterfallPlot({
   span: number;
   domainMin: number;
   caption: string;
+  /** False where an enclosing pane already carries the title. The caption is
+   * still required — it remains the plot's accessible description. */
+  showCaption?: boolean;
   /** Optional swatch key beside the caption, for plots whose colour convention
    * needs spelling out (the opportunity card's solid-vs-dashed amber costs). */
   legend?: ReactNode;
@@ -290,10 +294,17 @@ export function WaterfallPlot({
           </div>
         ))}
       </div>
-      <div className="flex items-center justify-center gap-3 pt-0.5">
-        <span className="text-[9px] uppercase tracking-wider text-ink-400">{caption}</span>
-        {legend}
-      </div>
+      {/* The caption is hidden where the plot already sits in a titled pane —
+          two copies of "profit by maturity" under one heading is noise. The
+          legend still renders, since it explains the bar colours. */}
+      {(showCaption || legend) && (
+        <div className="flex items-center justify-center gap-3 pt-0.5">
+          {showCaption && (
+            <span className="text-[9px] uppercase tracking-wider text-ink-400">{caption}</span>
+          )}
+          {legend}
+        </div>
+      )}
     </div>
   );
 }

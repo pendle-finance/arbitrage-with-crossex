@@ -263,7 +263,9 @@ export function ClosePairForm({
   livePositions,
 }: {
   base: string;
-  legs: Array<{ symbol: string; qty: number; venue: string }>;
+  /** `partial`: close exactly `qty` rather than the whole venue position —
+   * a pair's attributed share of a leg two pairs sit on. */
+  legs: Array<{ symbol: string; qty: number; venue: string; partial?: boolean }>;
   /** symbol → live position, for the uPnL each close realises. */
   livePositions?: Map<string, CrossexPosition>;
 }) {
@@ -288,6 +290,10 @@ export function ClosePairForm({
           symbol: l.symbol,
           pairGroupId,
           slippagePct: slip,
+          // Whole legs omit qty so the venue re-derives the exact position;
+          // a shared leg names its share, or it would flatten the other
+          // pair's hedge too.
+          ...(l.partial ? { qty: String(l.qty) } : {}),
         }))
       : null;
   // Not lazy: the dialog exists to show this, so it loads with the form.
@@ -304,9 +310,16 @@ export function ClosePairForm({
         isError={preview.isError}
         error={preview.error}
         labelFor={(_p, i) => prettyVenue(legs[i]?.venue ?? '')}
-        realizedFor={(_p, i) => {
+        realizedFor={(p, i) => {
           const live = livePositions?.get(legs[i]?.symbol ?? '');
-          return live ? Number(live.upnl) : null;
+          if (!live) return null;
+          // A partial close realises only its slice of the position's uPnL:
+          // scale by the close qty the resolver actually stamped over what
+          // the venue holds. A whole close is the ratio 1.
+          const held = Math.abs(Number(live.positionQty));
+          const closing = Number(p.qty);
+          const frac = held > 0 && Number.isFinite(closing) ? Math.min(1, closing / held) : 1;
+          return Number(live.upnl) * frac;
         }}
         /**
          * ⚠ Accurate for a PAIR, which is not what the single-leg note says.

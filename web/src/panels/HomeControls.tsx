@@ -126,7 +126,7 @@ export function AddressForm({
           placeholder="0x…"
           value={value}
           onChange={(e) => setValue(e.target.value)}
-          className={`input num font-mono ${full ? 'min-w-0 flex-1' : 'w-96 max-w-full'} ${
+          className={`input num ${full ? 'min-w-0 flex-1' : 'w-96 max-w-full'} ${
             touched && !valid ? 'border-rose-500/60' : ''
           }`}
         />
