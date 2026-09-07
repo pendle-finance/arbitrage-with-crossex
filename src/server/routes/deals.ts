@@ -5,7 +5,7 @@
  * the reconcile loop picks up on its next tick; commands are one-row intent
  * edits (levels, not events).
  */
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyReply } from 'fastify';
 import { CoreError } from '../../core/errors';
 import { formatRestPrice } from '../../core/numbers';
 import { setLeverage } from '../../core/orders';
@@ -27,6 +27,23 @@ function dealView(deps: AppDeps, pair: PairRow) {
 
 export function dealsRoutes(deps: AppDeps) {
   return async function routes(app: FastifyInstance): Promise<void> {
+    /* A rebalance moves cash out of CrossEx for minutes, and its amount was
+       sized on the margin that was free when it started. A deal that opens
+       meanwhile takes that margin. The rebalance start refuses while a deal
+       works; this is the same rule the other way. Only a running job blocks:
+       a halted one moves nothing until it is resumed, and resume has the
+       same check. */
+    const rebalanceRunning = (): boolean => deps.rebalance?.jobs.read()?.status === 'running';
+    const refuseForRebalance = (reply: FastifyReply, what: string): FastifyReply =>
+      reply.code(409).send({
+        ok: false,
+        error: {
+          category: 'validation',
+          message: `a rebalance is still running — wait for it to finish before ${what}`,
+          retryable: true,
+        },
+      });
+
     app.post('/deals', async (req, reply) => {
       // First-run gate: no real order until the disclaimer is accepted. Tied to
       // the config-backed credentials service (always present in a real install;
@@ -51,6 +68,7 @@ export function dealsRoutes(deps: AppDeps) {
       if (deps.engine!.store.getPair(body.id)) {
         return reply.code(202).ok({ id: body.id, duplicate: true });
       }
+      if (rebalanceRunning()) return refuseForRebalance(reply, 'starting a deal');
       const clients = deps.getClients();
       const getAccount = async () =>
         (await deps.cache.get('account', TTL.live, async () => (await clients.crossEx.getCrossexAccount()).body)).value;
@@ -205,6 +223,7 @@ export function dealsRoutes(deps: AppDeps) {
     app.post('/deals/:id/resume', async (req, reply) => {
       const pair = requireDeal((req.params as { id: string }).id);
       if (pair.mode !== 'HALTED') throw new CoreError(`deal ${pair.id} is not halted (mode: ${pair.mode})`);
+      if (rebalanceRunning()) return refuseForRebalance(reply, 'resuming a deal');
       commands.resumeAfterHalt(deps.engine!.store, pair.id);
       deps.engine!.wake?.();
       return reply.ok({ id: pair.id, mode: 'STOPPING' });

@@ -187,6 +187,10 @@ export function rebalanceRoutes(deps: AppDeps) {
       const store = requireJobs();
       const job = haltedOr409(store, (req.params as { id: string }).id, reply);
       if (!job) return reply;
+      // The same rule as the start: the remaining steps move cash a working
+      // deal may be counting on.
+      const working = workingDeal();
+      if (working) return conflict(reply, `deal ${working} is still working`);
       // The steps hold venue ids and amounts of the account they ran on. On
       // another account they would poll ids it does not know, or send from it.
       if (job.userId !== null && (await currentUserId()) !== job.userId) {
