@@ -109,11 +109,24 @@ Every APR on a position is a return *on capital*, so what goes into that number 
 
 The choice is remembered per browser and applies to every position box and the totals strip.
 
-#### Paying down borrowed USDC
+#### Rebalancing USDC and USDT
 
-When a Hyperliquid position loses money, CrossEx borrows USDC for that venue and charges interest every hour. The terminal shows the borrow as a negative USDC balance on Hyperliquid. While Hyperliquid has a USDC borrow, or a pay-down job runs or is halted, the Balances tab shows a **Pay down** section. Its three tiles show the borrow in USDC, the interest per day, and the interest paid in the last 30 days.
+Your CrossEx account holds USDT. Every venue except Hyperliquid margins and settles in USDT. Hyperliquid settles in USDC, so it has its own USDC bucket, which starts at 0.
 
-Hold `Pay down <amount> USDC` and the terminal moves that much USDT from CrossEx into USDC on Hyperliquid. The terminal chooses the cheaper route automatically: a spot buy plus two transfers (about 2.5 minutes), or a direct convert (instant). A halted job shows the reason, the line `Funds are in <place>`, and a **Resume** and an **Abandon** button. After **Abandon**, move any USDC left in the Gate spot wallet by hand in Gate.
+Opening a Hyperliquid leg does not borrow USDC. Its margin comes from your whole account. The USDC bucket moves only when that leg pays or receives USDC: hourly funding, fees, and profit or loss. When the leg loses, the bucket goes negative and Gate lends you the difference. Gate counts the unrealised loss too, so a borrow can show while the cash is still positive.
+
+The borrow costs two things. Gate holds 20% of it as initial margin and 10% as maintenance margin. Once the bucket is more than 10,000 USDC short, Gate also charges interest every hour.
+
+The Balances tab shows a **Rebalance** section whenever Hyperliquid has a USDC borrow or spare USDC, or a job runs or is halted. The pill shows the borrow and the margin it holds. The two tiles show the interest per day and the interest paid in the last 30 days. The info mark next to the title opens a short card that says all this.
+
+Pick a direction, keep the prefilled amount or type one, and hold the button:
+
+- **USDT → Hyperliquid USDC** pays the borrow back. The amount is capped at the borrow, at your free USDT, and at your available margin. The quote line shows the route the terminal picked, the price, what lands, the cost, what it saves per day, the margin it frees, and the borrow after the move. When less than the borrow can move, an amber line says how much stays borrowed and why.
+- **Hyperliquid USDC → USDT** brings spare USDC back. The amount is capped at the USDC you own there after open losses, so a pull never starts a new borrow.
+
+Two routes exist and the terminal takes the cheaper one: a direct convert on Hyperliquid (instant, about 20 bps), or a spot loop through Gate (a spot trade plus two transfers; about 2.5 minutes for a pay-down, about 6.5 minutes plus a flat $1 fee for a pull). Under 1 USDC the hold is hidden.
+
+A running job shows a progress bar, one segment per step with its seconds. A halted job shows the reason, the line `Funds are in <place>`, and a **Resume** and an **Abandon** button. After **Abandon**, move any USDC left in the Gate spot wallet by hand in Gate.
 
 ## 3. How to maximise return
 These few factors move the needle the most in maximising your return on the 4-legged Funding Rate Arbitrage
