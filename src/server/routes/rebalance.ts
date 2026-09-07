@@ -1,7 +1,6 @@
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import { CoreError } from '../../core/errors';
-import { roundToStep } from '../../core/numbers';
-import { bucketsFrom, planFor, SPOT_SYMBOL, type InterestRowLike } from '../../core/rebalance/plan';
+import { bucketsFrom, planFor, SPOT_SYMBOL, type Direction, type InterestRowLike } from '../../core/rebalance/plan';
 import type { AppDeps } from '../app';
 import { TTL } from '../cache';
 import { isDisclaimerAccepted } from '../disclaimer';
@@ -18,6 +17,13 @@ const conflict = (reply: FastifyReply, message: string): FastifyReply =>
 
 const orEmpty = <T>(read: Promise<{ value: T[]; stale: boolean }>): Promise<{ value: T[]; stale: boolean }> =>
   read.catch(() => ({ value: [], stale: true }));
+
+const directionOf = (value: unknown): Direction => (value === 'pull' ? 'pull' : 'payDown');
+
+const requestedOf = (value: unknown): number => {
+  const n = typeof value === 'number' || typeof value === 'string' ? Number(value) : NaN;
+  return Number.isFinite(n) && n > 0 ? n : Infinity;
+};
 
 export function rebalanceRoutes(deps: AppDeps) {
   return async function plugin(app: FastifyInstance): Promise<void> {
@@ -65,7 +71,7 @@ export function rebalanceRoutes(deps: AppDeps) {
       return rows;
     };
 
-    const loadView = async (fresh: boolean) => {
+    const loadView = async (fresh: boolean, direction: Direction, requested: number) => {
       const crossEx = () => deps.getClients().crossEx;
       const since = now() - THIRTY_DAYS_MS;
       const [account, rates, paid, coins, rules, fees, tickers] = await Promise.all([
@@ -85,12 +91,19 @@ export function rebalanceRoutes(deps: AppDeps) {
       const gateFees = fees.value.find((f) => f.exchangeType === 'GATE');
       const special = gateFees?.specialFeeList?.find((s) => s.symbol === SPOT_SYMBOL);
       const ask = Number(tickers.value[0]?.lowestAsk);
-      const plan = planFor(buckets, account.value, {
-        usdcTransfer: coins.value.find((c) => c.coin === 'USDC') ?? null,
-        spotRule: rules.value.find((r) => r.symbol === SPOT_SYMBOL) ?? null,
-        spotTakerRate: Number(special?.takerFeeRate ?? gateFees?.spotTakerFee ?? 0),
-        ask: Number.isFinite(ask) ? ask : null,
-      });
+      const bid = Number(tickers.value[0]?.highestBid);
+      const plan = planFor(
+        buckets,
+        account.value,
+        {
+          usdcTransfer: coins.value.find((c) => c.coin === 'USDC') ?? null,
+          spotRule: rules.value.find((r) => r.symbol === SPOT_SYMBOL) ?? null,
+          spotTakerRate: Number(special?.takerFeeRate ?? gateFees?.spotTakerFee ?? 0),
+          ask: Number.isFinite(ask) ? ask : null,
+          bid: Number.isFinite(bid) ? bid : null,
+        },
+        { direction, requested },
+      );
       const stale = [account, rates, paid, coins, rules, fees, tickers].some((r) => r.stale);
       return { buckets, plan, job: jobs?.read() ?? null, stale };
     };
@@ -105,8 +118,9 @@ export function rebalanceRoutes(deps: AppDeps) {
       return job;
     };
 
-    app.get('/rebalance', async (_req, reply) => {
-      const { buckets, plan, job, stale } = await loadView(false);
+    app.get('/rebalance', async (req, reply) => {
+      const query = (req.query ?? {}) as { direction?: unknown; amount?: unknown };
+      const { buckets, plan, job, stale } = await loadView(false, directionOf(query.direction), requestedOf(query.amount));
       return reply.ok({ buckets, plan, job }, { stale });
     });
 
@@ -128,20 +142,17 @@ export function rebalanceRoutes(deps: AppDeps) {
       if (busy) return conflict(reply, `rebalance ${busy.id} is ${busy.status}`);
       const working = deps.engine!.store.listPairs({ activeOnly: true });
       if (working.length > 0) return conflict(reply, `deal ${working[0].id} is still working`);
-      const { plan } = await loadView(true);
-      const body = (req.body ?? {}) as { amount?: unknown; route?: unknown };
+      const body = (req.body ?? {}) as { direction?: unknown; amount?: unknown; route?: unknown };
+      const direction = directionOf(body.direction);
+      const { plan } = await loadView(true, direction, requestedOf(body.amount));
       if (typeof body.route === 'string' && body.route !== plan.route) {
         return conflict(reply, `plan changed: now ${plan.route ?? 'no route'}`);
       }
       if (!plan.route) return conflict(reply, 'no route');
-      let amount = plan.amount;
-      if (typeof body.amount === 'number' && Number.isFinite(body.amount) && body.amount > 0) {
-        amount = Number(roundToStep(Math.min(plan.amount, body.amount), '0.01', 'down'));
-      }
-      if (!(amount > 0)) return conflict(reply, 'nothing to move');
+      if (!(plan.amount > 0)) return conflict(reply, 'nothing to move');
       const again = busyJob(store);
       if (again) return conflict(reply, `rebalance ${again.id} is ${again.status}`);
-      const job = newJob(plan.route, amount, now());
+      const job = newJob(direction, plan.route, plan.amount, now());
       store.write(job);
       start(store);
       return reply.code(202).ok({ id: job.id });

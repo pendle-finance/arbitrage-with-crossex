@@ -1,7 +1,9 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import type { Direction } from '../core/rebalance/plan';
 import { restrictToOwner } from './secretFile';
 
+export type { Direction };
 export type JobStatus = 'running' | 'halted' | 'done' | 'abandoned';
 export type StepStatus = 'pending' | 'running' | 'done';
 export type FundsAt = 'CROSSEX' | 'GATE' | 'SPOT' | 'HYPERLIQUID';
@@ -22,6 +24,7 @@ export interface Step {
 
 export interface Job {
   id: string;
+  direction: Direction;
   route: RouteName;
   amount: number;
   status: JobStatus;
@@ -35,15 +38,18 @@ export interface Job {
 
 export const LOOP_STEPS = ['Buy USDC', 'To spot', 'To Hyperliquid'] as const;
 export const CONVERT_STEPS = ['Convert'] as const;
-export const STEP_NAMES: readonly string[] = [...LOOP_STEPS, ...CONVERT_STEPS];
+export const PULL_STEPS = ['Pull from Hyperliquid', 'To Gate', 'Sell USDC'] as const;
+export type StepName = (typeof LOOP_STEPS)[number] | (typeof CONVERT_STEPS)[number] | (typeof PULL_STEPS)[number];
+export const STEP_NAMES: readonly string[] = [...LOOP_STEPS, ...CONVERT_STEPS, ...PULL_STEPS];
 
 const JOB_STATUSES: readonly string[] = ['running', 'halted', 'done', 'abandoned'];
 const FUNDS_AT: readonly string[] = ['CROSSEX', 'GATE', 'SPOT', 'HYPERLIQUID'];
 
-export function newJob(route: RouteName, amount: number, now: number): Job {
-  const names: readonly string[] = route === 'loop' ? LOOP_STEPS : CONVERT_STEPS;
+export function newJob(direction: Direction, route: RouteName, amount: number, now: number): Job {
+  const names: readonly string[] = direction === 'pull' ? PULL_STEPS : route === 'loop' ? LOOP_STEPS : CONVERT_STEPS;
   return {
     id: now.toString(36),
+    direction,
     route,
     amount,
     status: 'running',
@@ -60,7 +66,7 @@ export function newJob(route: RouteName, amount: number, now: number): Job {
       startedAt: null,
       doneAt: null,
     })),
-    fundsAt: 'CROSSEX',
+    fundsAt: direction === 'pull' ? 'HYPERLIQUID' : 'CROSSEX',
     haltReason: null,
     createdAt: now,
     updatedAt: now,
@@ -72,15 +78,18 @@ export function haltMessage(job: Job): string {
   return `rebalance ${job.id} halted at ${step.name}: ${job.haltReason}. Funds are in ${job.fundsAt}.`;
 }
 
-function isJob(value: unknown): value is Job {
+function parseJob(value: unknown): Job | null {
   const job = value as Partial<Job> | null;
-  if (typeof job !== 'object' || job === null) return false;
-  if (!JOB_STATUSES.includes(String(job.status))) return false;
-  if (!Array.isArray(job.steps) || job.steps.length === 0) return false;
+  if (typeof job !== 'object' || job === null) return null;
+  if (job.direction === undefined) job.direction = 'payDown';
+  if (job.direction !== 'payDown' && job.direction !== 'pull') return null;
+  if (!JOB_STATUSES.includes(String(job.status))) return null;
+  if (!Array.isArray(job.steps) || job.steps.length === 0) return null;
   const index = job.stepIndex;
-  if (!Number.isInteger(index) || (index as number) < 0 || (index as number) >= job.steps.length) return false;
-  if (!job.steps.every((step) => STEP_NAMES.includes(String((step as Partial<Step> | null)?.name)))) return false;
-  return FUNDS_AT.includes(String(job.fundsAt));
+  if (!Number.isInteger(index) || (index as number) < 0 || (index as number) >= job.steps.length) return null;
+  if (!job.steps.every((step) => STEP_NAMES.includes(String((step as Partial<Step> | null)?.name)))) return null;
+  if (!FUNDS_AT.includes(String(job.fundsAt))) return null;
+  return job as Job;
 }
 
 export class JobFile {
@@ -99,8 +108,7 @@ export class JobFile {
     this.job = null;
     if (!fs.existsSync(this.file)) return null;
     try {
-      const parsed: unknown = JSON.parse(fs.readFileSync(this.file, 'utf8'));
-      if (isJob(parsed)) this.job = parsed;
+      this.job = parseJob(JSON.parse(fs.readFileSync(this.file, 'utf8')));
     } catch {}
     if (this.job === null) console.error(`rebalance.json at ${this.file} is unreadable; treating as no job`);
     return this.job;

@@ -5,17 +5,23 @@ export const SURPLUS = { coin: 'USDT', venue: 'CROSSEX' } as const;
 export const SPOT_SYMBOL = 'GATE_SPOT_USDC_USDT';
 const INTEREST_THRESHOLD = -10000;
 export const LOOP_WAIT_SECONDS = 150;
+export const PULL_WAIT_SECONDS = 400;
 const CONVERT_RATE = 0.002;
 const DEPOSIT_FEE_USD = 0.05;
+export const PULL_FEE_USD = 1;
+
+export type Direction = 'payDown' | 'pull';
 
 export interface AssetLike {
   coin?: string;
   exchangeType?: string;
   balance?: string;
+  availableBalance?: string;
   upnl?: string;
   equity?: string;
   liability?: string;
   borrowingInitialMargin: string;
+  borrowingMaintenanceMargin: string;
 }
 
 export interface AccountLike {
@@ -42,6 +48,8 @@ export interface Bucket {
   upnl: number;
   equity: number;
   borrow: number;
+  imHeldUsd: number;
+  mmHeldUsd: number;
   interestPaid30dUsd: number;
   interestPerDayUsd: number;
 }
@@ -54,7 +62,11 @@ export interface RouteQuote {
 }
 
 export interface Plan {
+  direction: Direction;
   amount: number;
+  receives: number;
+  price: number | null;
+  borrowAfterUsd: number;
   shortfall: { reason: 'cash' | 'margin'; remaining: number } | null;
   routes: { loop: RouteQuote; convert: RouteQuote };
   route: 'loop' | 'convert' | null;
@@ -67,6 +79,12 @@ export interface PlanInputs {
   spotRule: { state: string } | null;
   spotTakerRate: number;
   ask: number | null;
+  bid: number | null;
+}
+
+export interface PlanRequest {
+  direction?: Direction;
+  requested?: number;
 }
 
 function num(s: string | undefined): number {
@@ -76,6 +94,10 @@ function num(s: string | undefined): number {
 
 function floorCents(value: number): number {
   return Number(roundToStep(value, '0.01', 'down'));
+}
+
+function positive(value: number | null): number | null {
+  return value !== null && value > 0 ? value : null;
 }
 
 export function bucketsFrom(account: AccountLike, rates: RateLike[], interestRows: InterestRowLike[]): Bucket[] {
@@ -96,19 +118,89 @@ export function bucketsFrom(account: AccountLike, rates: RateLike[], interestRow
       upnl: num(asset.upnl),
       equity,
       borrow,
+      imHeldUsd: num(asset.borrowingInitialMargin),
+      mmHeldUsd: num(asset.borrowingMaintenanceMargin),
       interestPaid30dUsd,
       interestPerDayUsd: equity < INTEREST_THRESHOLD ? borrow * hourly * 24 : 0,
     };
   });
 }
 
-export function planFor(buckets: Bucket[], account: AccountLike, inputs: PlanInputs): Plan {
-  const deficitBucket = buckets.find((b) => b.coin === DEFICIT.coin && b.venue === DEFICIT.venue);
+function loopQuote(
+  amount: number,
+  inputs: PlanInputs,
+  price: number | null,
+  spread: number,
+  feeUsd: number,
+  waitSeconds: number,
+  belowMinimum: (min: number) => string | null,
+): RouteQuote {
+  let reason: string | null = null;
+  if (!(amount > 0)) {
+    reason = 'nothing to move';
+  } else if (!inputs.usdcTransfer || inputs.usdcTransfer.isDisabled === 1) {
+    reason = 'USDC transfers are disabled on CrossEx';
+  } else if (!inputs.spotRule || inputs.spotRule.state !== 'live') {
+    reason = `${SPOT_SYMBOL} is not live`;
+  } else if (price === null) {
+    reason = 'no spot price for USDC_USDT';
+  } else {
+    reason = belowMinimum(inputs.usdcTransfer.minTransAmount);
+  }
+  return {
+    costUsd: amount * spread + amount * inputs.spotTakerRate + feeUsd,
+    waitSeconds,
+    available: reason === null,
+    reason,
+  };
+}
+
+export function planFor(
+  buckets: Bucket[],
+  account: AccountLike,
+  inputs: PlanInputs,
+  { direction = 'payDown', requested = Infinity }: PlanRequest = {},
+): Plan {
+  const usdcBucket = buckets.find((b) => b.coin === DEFICIT.coin && b.venue === DEFICIT.venue);
+  const deficit = Math.max(0, -(usdcBucket?.equity ?? 0));
+
+  if (direction === 'pull') {
+    const usdcAsset = (account.assets ?? []).find((a) => a.coin === DEFICIT.coin && a.exchangeType === DEFICIT.venue);
+    const equity = usdcBucket?.equity ?? 0;
+    const amount = equity > 0 ? Math.max(0, floorCents(Math.min(requested, num(usdcAsset?.availableBalance), equity))) : 0;
+    const bid = positive(inputs.bid);
+    const lands = Math.max(0, floorCents(amount - PULL_FEE_USD));
+    const loop = loopQuote(
+      amount,
+      inputs,
+      bid,
+      bid === null ? 0 : Math.max(1 - bid, 0),
+      PULL_FEE_USD,
+      PULL_WAIT_SECONDS,
+      (min) =>
+        lands < min ? `pull lands ${lands} USDC after the $${PULL_FEE_USD} fee, below the ${min} USDC transfer minimum` : null,
+    );
+    const convert: RouteQuote = { costUsd: 0, waitSeconds: 0, available: false, reason: 'convert runs one way only' };
+    const route: Plan['route'] = loop.available ? 'loop' : null;
+    const receives = route === 'loop' && bid !== null ? Math.max(0, floorCents(lands * bid * (1 - inputs.spotTakerRate))) : 0;
+    return {
+      direction,
+      amount,
+      receives,
+      price: route === 'loop' ? bid : null,
+      borrowAfterUsd: deficit,
+      shortfall: null,
+      routes: { loop, convert },
+      route,
+      savesPerDayUsd: 0,
+      marginFreedUsd: 0,
+    };
+  }
+
   const surplusBucket = buckets.find((b) => b.coin === SURPLUS.coin && b.venue === SURPLUS.venue);
-  const deficit = Math.max(0, -(deficitBucket?.equity ?? 0));
   const surplusCash = surplusBucket?.cash ?? 0;
   const availableMargin = num(account.availableMargin);
-  const amount = Math.max(0, floorCents(Math.min(deficit, surplusCash, availableMargin)));
+  const amount = Math.max(0, floorCents(Math.min(requested, deficit, surplusCash, availableMargin)));
 
   const shortfall: Plan['shortfall'] =
     deficit === 0 || (deficit <= surplusCash && deficit <= availableMargin)
@@ -122,28 +214,17 @@ export function planFor(buckets: Bucket[], account: AccountLike, inputs: PlanInp
     reason: amount > 0 ? null : 'nothing to move',
   };
 
-  const ask = inputs.ask !== null && inputs.ask > 0 ? inputs.ask : null;
-  let loopReason: string | null = null;
-  if (!(amount > 0)) {
-    loopReason = 'nothing to move';
-  } else if (!inputs.usdcTransfer || inputs.usdcTransfer.isDisabled === 1) {
-    loopReason = 'USDC transfers are disabled on CrossEx';
-  } else if (!inputs.spotRule || inputs.spotRule.state !== 'live') {
-    loopReason = `${SPOT_SYMBOL} is not live`;
-  } else if (ask === null) {
-    loopReason = 'no spot price for USDC_USDT';
-  } else {
-    const bought = floorCents(amount / ask);
-    const min = inputs.usdcTransfer.minTransAmount;
-    if (bought < min) loopReason = `loop buys ${bought} USDC, below the ${min} USDC transfer minimum`;
-  }
-  const spread = ask === null ? 0 : Math.max(ask - 1, 0);
-  const loop: RouteQuote = {
-    costUsd: amount * spread + amount * inputs.spotTakerRate + DEPOSIT_FEE_USD,
-    waitSeconds: LOOP_WAIT_SECONDS,
-    available: loopReason === null,
-    reason: loopReason,
-  };
+  const ask = positive(inputs.ask);
+  const bought = ask === null ? 0 : floorCents(amount / ask);
+  const loop = loopQuote(
+    amount,
+    inputs,
+    ask,
+    ask === null ? 0 : Math.max(ask - 1, 0),
+    DEPOSIT_FEE_USD,
+    LOOP_WAIT_SECONDS,
+    (min) => (bought < min ? `loop buys ${bought} USDC, below the ${min} USDC transfer minimum` : null),
+  );
 
   const route: Plan['route'] =
     loop.available && convert.available
@@ -156,11 +237,28 @@ export function planFor(buckets: Bucket[], account: AccountLike, inputs: PlanInp
           ? 'convert'
           : null;
 
-  const savesPerDayUsd =
-    deficitBucket && deficitBucket.borrow > 0 ? (deficitBucket.interestPerDayUsd * amount) / deficitBucket.borrow : 0;
-  const deficitAsset = (account.assets ?? []).find((a) => a.coin === DEFICIT.coin && a.exchangeType === DEFICIT.venue);
-  const liability = num(deficitAsset?.liability);
-  const marginFreedUsd = liability > 0 ? (amount * num(deficitAsset?.borrowingInitialMargin)) / liability : 0;
+  const receives =
+    route === 'loop'
+      ? Math.max(0, floorCents(bought - amount * inputs.spotTakerRate - DEPOSIT_FEE_USD))
+      : route === 'convert'
+        ? floorCents(amount * (1 - CONVERT_RATE))
+        : 0;
+  const price = route === 'loop' ? ask : route === 'convert' ? 1 - CONVERT_RATE : null;
 
-  return { amount, shortfall, routes: { loop, convert }, route, savesPerDayUsd, marginFreedUsd };
+  const savesPerDayUsd =
+    usdcBucket && usdcBucket.borrow > 0 ? (usdcBucket.interestPerDayUsd * amount) / usdcBucket.borrow : 0;
+  const marginFreedUsd = usdcBucket && usdcBucket.borrow > 0 ? (amount * usdcBucket.imHeldUsd) / usdcBucket.borrow : 0;
+
+  return {
+    direction,
+    amount,
+    receives,
+    price,
+    borrowAfterUsd: Math.max(0, deficit - receives),
+    shortfall,
+    routes: { loop, convert },
+    route,
+    savesPerDayUsd,
+    marginFreedUsd,
+  };
 }

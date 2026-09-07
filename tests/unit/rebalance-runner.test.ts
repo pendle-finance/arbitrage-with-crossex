@@ -98,7 +98,7 @@ function harness(
   }
   const dir = fs.mkdtempSync(path.join(tmpdir(), 'rebalance-'));
   const jobs = new JobFile(dir, clock.now);
-  const job = newJob(route, 12, clock.now());
+  const job = newJob('payDown', route, 12, clock.now());
   edit?.(job);
   jobs.write(job);
   const cache = new TtlCache();
@@ -698,10 +698,10 @@ describe('JobFile', () => {
 
   it('writes an owner-only file that a new JobFile reads back', () => {
     const d = dir();
-    const job = newJob('loop', 12, 1_000_000);
+    const job = newJob('payDown', 'loop', 12, 1_000_000);
     expect(job.id).toBe((1_000_000).toString(36));
     expect(job.steps.map((s) => s.name)).toEqual(['Buy USDC', 'To spot', 'To Hyperliquid']);
-    expect(newJob('convert', 5, 7).steps.map((s) => s.name)).toEqual(['Convert']);
+    expect(newJob('payDown', 'convert', 5, 7).steps.map((s) => s.name)).toEqual(['Convert']);
 
     new JobFile(d).write(job);
 
@@ -717,7 +717,7 @@ describe('JobFile', () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     try {
       const d = dir();
-      const { steps: _steps, ...noSteps } = newJob('loop', 12, 1_000_000);
+      const { steps: _steps, ...noSteps } = newJob('payDown', 'loop', 12, 1_000_000);
       fs.writeFileSync(path.join(d, 'rebalance.json'), JSON.stringify(noSteps));
       const jobs = new JobFile(d);
       expect(jobs.read()).toBeNull();
@@ -728,12 +728,12 @@ describe('JobFile', () => {
       fs.writeFileSync(path.join(d, 'rebalance.json'), '{not json');
       expect(new JobFile(d).read()).toBeNull();
 
-      const bogus = newJob('loop', 12, 1_000_000);
+      const bogus = newJob('payDown', 'loop', 12, 1_000_000);
       bogus.steps[1].name = 'Bogus';
       fs.writeFileSync(path.join(d, 'rebalance.json'), JSON.stringify(bogus));
       expect(new JobFile(d).read()).toBeNull();
 
-      const wrongIndex = { ...newJob('loop', 12, 1_000_000), stepIndex: 3 };
+      const wrongIndex = { ...newJob('payDown', 'loop', 12, 1_000_000), stepIndex: 3 };
       fs.writeFileSync(path.join(d, 'rebalance.json'), JSON.stringify(wrongIndex));
       expect(new JobFile(d).read()).toBeNull();
       expect(error).toHaveBeenCalledTimes(4);
@@ -744,7 +744,7 @@ describe('JobFile', () => {
 
   it('stamps updatedAt from the clock it was given', () => {
     const jobs = new JobFile(dir(), () => 42);
-    const job = newJob('loop', 12, 1_000_000);
+    const job = newJob('payDown', 'loop', 12, 1_000_000);
     jobs.write(job);
     expect(job.updatedAt).toBe(42);
   });
@@ -752,7 +752,7 @@ describe('JobFile', () => {
   it('haltIfRunning halts a running job with the reason and leaves other statuses alone', () => {
     const d = dir();
     const jobs = new JobFile(d);
-    jobs.write(newJob('loop', 12, 1_000_000));
+    jobs.write(newJob('payDown', 'loop', 12, 1_000_000));
 
     expect(jobs.haltIfRunning('server restarted')).toBe(true);
 
@@ -760,7 +760,7 @@ describe('JobFile', () => {
     expect(new JobFile(d).read()).toMatchObject({ status: 'halted', haltReason: 'server restarted' });
     expect(jobs.haltIfRunning('server restarted')).toBe(false);
 
-    const done = { ...newJob('loop', 12, 2_000_000), status: 'done' as const };
+    const done = { ...newJob('payDown', 'loop', 12, 2_000_000), status: 'done' as const };
     jobs.write(done);
     expect(jobs.haltIfRunning('server restarted')).toBe(false);
     expect(jobs.read()).toMatchObject({ status: 'done', haltReason: null });

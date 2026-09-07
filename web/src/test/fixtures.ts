@@ -238,7 +238,11 @@ export function baseHandlers() {
         env<RebalanceView>({
           buckets: [],
           plan: {
+            direction: 'payDown',
             amount: 0,
+            receives: 0,
+            price: null,
+            borrowAfterUsd: 0,
             shortfall: null,
             routes: {
               loop: { costUsd: 0.05, waitSeconds: 150, available: false, reason: 'nothing to move' },

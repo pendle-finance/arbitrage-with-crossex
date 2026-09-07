@@ -142,7 +142,7 @@ describe('PUT /api/credentials', () => {
       rebalance: { jobs },
     });
     await app.ready();
-    jobs.write(newJob('loop', 12, Date.now()));
+    jobs.write(newJob('payDown', 'loop', 12, Date.now()));
 
     const res = await put({ key: NEW_KEY, secret: NEW_SECRET });
 

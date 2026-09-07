@@ -91,7 +91,7 @@ describe('GET /api/rebalance', () => {
     expect(buckets).toHaveLength(3);
     const usdc = buckets.find((b: { coin: string; venue: string }) => b.coin === 'USDC' && b.venue === 'HYPERLIQUID');
     expect(Object.keys(usdc).sort()).toEqual(
-      ['coin', 'venue', 'cash', 'upnl', 'equity', 'borrow', 'interestPaid30dUsd', 'interestPerDayUsd'].sort(),
+      ['coin', 'venue', 'cash', 'upnl', 'equity', 'borrow', 'imHeldUsd', 'mmHeldUsd', 'interestPaid30dUsd', 'interestPerDayUsd'].sort(),
     );
     expect(usdc).toMatchObject({ cash: 0, upnl: 0, equity: -300, borrow: 300, interestPerDayUsd: 0 });
     expect(usdc.interestPaid30dUsd).toBeCloseTo(0.03, 6);

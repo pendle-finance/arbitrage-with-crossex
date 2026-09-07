@@ -5,7 +5,7 @@ import { roundToStep } from '../core/numbers';
 import { SPOT_SYMBOL } from '../core/rebalance/plan';
 import { decodeStatus } from '../engine/loop';
 import type { TtlCache } from './cache';
-import { haltMessage, STEP_NAMES, type FundsAt, type JobFile, type Step } from './rebalanceJob';
+import { haltMessage, type FundsAt, type JobFile, type Step, type StepName } from './rebalanceJob';
 
 export interface RunnerDeps {
   clients: () => Clients;
@@ -17,13 +17,36 @@ export interface RunnerDeps {
 }
 
 export const STEP_TIMEOUT_MS = 600_000;
+export const HL_TRANSFER_TIMEOUT_MS = 1_800_000;
 export const POLL_MS = 1_000;
 export const LOOKUP_RETRY_MS = 10_000;
 export const QUOTE_FLOOR = 0.997;
 export const TRANSFER_STEP = '0.00001';
+const SELL_STEP = '0.01';
+const HYPERLIQUID_ACCOUNT = 'CROSSEX_HYPERLIQUID';
 
 const NOT_FOUND = /NOT_FOUND/i;
 const TRANSFER_DEAD = /FAIL|CANCEL|REJECT|EXPIRE/i;
+
+type StepSpec =
+  | { kind: 'order'; side: CrossexOrderRequest.Side; dest: FundsAt }
+  | { kind: 'transfer'; from: string; to: string; dest: FundsAt }
+  | { kind: 'convert'; dest: FundsAt };
+
+const STEPS: Record<StepName, StepSpec> = {
+  'Buy USDC': { kind: 'order', side: CrossexOrderRequest.Side.BUY, dest: 'GATE' },
+  'To spot': { kind: 'transfer', from: 'CROSSEX_GATE', to: 'SPOT', dest: 'SPOT' },
+  'To Hyperliquid': { kind: 'transfer', from: 'SPOT', to: HYPERLIQUID_ACCOUNT, dest: 'HYPERLIQUID' },
+  Convert: { kind: 'convert', dest: 'HYPERLIQUID' },
+  'Pull from Hyperliquid': { kind: 'transfer', from: HYPERLIQUID_ACCOUNT, to: 'SPOT', dest: 'SPOT' },
+  'To Gate': { kind: 'transfer', from: 'SPOT', to: 'CROSSEX_GATE', dest: 'GATE' },
+  'Sell USDC': { kind: 'order', side: CrossexOrderRequest.Side.SELL, dest: 'CROSSEX' },
+};
+
+const timeoutFor = (spec: StepSpec): number =>
+  spec.kind === 'transfer' && (spec.from === HYPERLIQUID_ACCOUNT || spec.to === HYPERLIQUID_ACCOUNT)
+    ? HL_TRANSFER_TIMEOUT_MS
+    : STEP_TIMEOUT_MS;
 
 export function tagFor(jobId: string, stepIndex: number, attempt = 0): string {
   return attempt > 0 ? `t-rb${jobId}${stepIndex}x${attempt}` : `t-rb${jobId}${stepIndex}`;
@@ -53,11 +76,13 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
     step.status = 'done';
     step.doneAt = deps.now();
     job.fundsAt = fundsAt;
-    if (fundsAt === 'HYPERLIQUID') deps.cache.bust('account');
+    if (fundsAt === 'HYPERLIQUID' || fundsAt === 'CROSSEX') deps.cache.bust('account');
     if (job.stepIndex === job.steps.length - 1) job.status = 'done';
     else job.stepIndex += 1;
     deps.jobs.write(job);
   };
+
+  const previousQty = (): number => (job.stepIndex === 0 ? job.amount : (job.steps[job.stepIndex - 1].qty ?? 0));
 
   const usdcOnHyperliquid = async (): Promise<number> => {
     const { body } = await crossEx().getCrossexAccount();
@@ -81,16 +106,21 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
     return true;
   };
 
-  const poll = async (step: Step, venueId: string): Promise<void> => {
-    if (step.name === 'Buy USDC') {
+  const poll = async (step: Step, spec: StepSpec, venueId: string): Promise<void> => {
+    if (spec.kind === 'order') {
       const { body } = await crossEx().getCrossexOrder(venueId);
       const state = String(body.state ?? '');
       if (decodeStatus(state) !== 'closed') return;
-      const fee = String(body.feeCoin ?? '') === 'USDC' ? Number(body.fee ?? 0) : 0;
-      const filled = Number(body.executedQty ?? 0) - (Number.isFinite(fee) ? fee : 0);
-      if (filled > 0) finish(step, filled, 'GATE');
+      let filled: number;
+      if (spec.side === CrossexOrderRequest.Side.SELL) {
+        filled = Number(body.executedAmount ?? 0);
+      } else {
+        const fee = String(body.feeCoin ?? '') === 'USDC' ? Number(body.fee ?? 0) : 0;
+        filled = Number(body.executedQty ?? 0) - (Number.isFinite(fee) ? fee : 0);
+      }
+      if (filled > 0) finish(step, filled, spec.dest);
       else haltDead(step, `order ${state} with nothing filled`);
-    } else if (step.name === 'Convert') {
+    } else if (spec.kind === 'convert') {
       await convertLanded(step);
     } else {
       const row = await transferRow((r) => r.id === venueId);
@@ -98,7 +128,7 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
       const status = String(row.status ?? '');
       if (status === 'SUCCESS') {
         const received = Number(row.actualReceive ?? row.amount);
-        if (received > 0) finish(step, received, step.name === 'To spot' ? 'SPOT' : 'HYPERLIQUID');
+        if (received > 0) finish(step, received, spec.dest);
         else halt('transfer SUCCESS with nothing received');
       } else if (TRANSFER_DEAD.test(status)) {
         haltDead(step, row.failReason || `transfer ${status}`);
@@ -106,8 +136,8 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
     }
   };
 
-  const lookup = async (step: Step, tag: string): Promise<string | null> => {
-    if (step.name !== 'Buy USDC') {
+  const lookup = async (spec: StepSpec, tag: string): Promise<string | null> => {
+    if (spec.kind !== 'order') {
       const row = await transferRow((r) => r.text === tag);
       return row ? row.id : null;
     }
@@ -122,9 +152,14 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
   };
 
   const transfer = async (from: string, to: string, tag: string): Promise<string> => {
-    const amount = job.steps[job.stepIndex - 1].qty ?? 0;
     const { body } = await crossEx().createCrossexTransfer({
-      crossexTransferRequest: { coin: 'USDC', amount: roundToStep(amount, TRANSFER_STEP, 'down'), from, to, text: tag },
+      crossexTransferRequest: {
+        coin: 'USDC',
+        amount: roundToStep(previousQty(), TRANSFER_STEP, 'down'),
+        from,
+        to,
+        text: tag,
+      },
     });
     if (!body.txId) throw new Error('transfer response has no txId');
     return String(body.txId);
@@ -156,24 +191,26 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
     finish(step, toAmount, 'HYPERLIQUID');
   };
 
-  const send = async (step: Step, tag: string): Promise<void> => {
-    if (step.name === 'Convert') return sendConvert(step);
-    if (step.name === 'Buy USDC') {
+  const send = async (step: Step, spec: StepSpec, tag: string): Promise<void> => {
+    if (spec.kind === 'convert') return sendConvert(step);
+    if (spec.kind === 'order') {
+      const size =
+        spec.side === CrossexOrderRequest.Side.SELL
+          ? { qty: roundToStep(previousQty(), SELL_STEP, 'down') }
+          : { quoteQty: String(job.amount) };
       const { body } = await crossEx().createCrossexOrder({
         crossexOrderRequest: {
           symbol: SPOT_SYMBOL,
-          side: CrossexOrderRequest.Side.BUY,
+          side: spec.side,
           type: CrossexOrderRequest.Type.MARKET,
-          quoteQty: String(job.amount),
+          ...size,
           text: tag,
         },
       });
       if (!body.orderId) throw new Error('order response has no orderId');
       step.venueId = String(body.orderId);
-    } else if (step.name === 'To spot') {
-      step.venueId = await transfer('CROSSEX_GATE', 'SPOT', tag);
-    } else if (step.name === 'To Hyperliquid') {
-      step.venueId = await transfer('SPOT', 'CROSSEX_HYPERLIQUID', tag);
+    } else {
+      step.venueId = await transfer(spec.from, spec.to, tag);
     }
     deps.jobs.write(job);
   };
@@ -181,7 +218,8 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
   try {
     while (job.status === 'running') {
       const step = job.steps[job.stepIndex];
-      if (!STEP_NAMES.includes(step.name)) {
+      const spec: StepSpec | undefined = STEPS[step.name as StepName];
+      if (!spec) {
         halt(`unknown step ${step.name}`);
         return;
       }
@@ -190,21 +228,21 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
         step.status = 'running';
         deps.jobs.write(job);
       }
-      if (deps.now() - step.startedAt > STEP_TIMEOUT_MS) {
+      if (deps.now() - step.startedAt > timeoutFor(spec)) {
         halt('timeout');
         return;
       }
       let phase: 'poll' | 'lookup' | 'send' = 'poll';
       try {
         if (step.venueId !== null) {
-          await poll(step, step.venueId);
+          await poll(step, spec, step.venueId);
           if (job.status === 'running' && step.status !== 'done') await deps.sleep(POLL_MS);
           continue;
         }
         if (step.text === null) {
           step.text = tagFor(job.id, job.stepIndex, step.attempt);
           deps.jobs.write(job);
-        } else if (step.name === 'Convert') {
+        } else if (spec.kind === 'convert') {
           phase = 'lookup';
           if (step.quoteId !== null) {
             let landed = await convertLanded(step);
@@ -216,10 +254,10 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
           }
         } else {
           phase = 'lookup';
-          let found = await lookup(step, step.text);
+          let found = await lookup(spec, step.text);
           if (found === null) {
             await deps.sleep(LOOKUP_RETRY_MS);
-            found = await lookup(step, step.text);
+            found = await lookup(spec, step.text);
           }
           if (found !== null) {
             step.venueId = found;
@@ -228,7 +266,7 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
           }
         }
         phase = 'send';
-        await send(step, step.text);
+        await send(step, spec, step.text);
       } catch (err) {
         const c = classifyGateError(err);
         const notFound = c.httpStatus === 404 || NOT_FOUND.test(c.label ?? '');

@@ -332,7 +332,7 @@ describe('POST /api/version/update', () => {
     const jobs = new JobFile(mkdtempSync(path.join(tmpdir(), 'rebalance-')));
     app = makeTestApp({ install: INSTALLED, rebalance: { jobs } });
     await app.ready();
-    jobs.write(newJob('loop', 12, Date.now()));
+    jobs.write(newJob('payDown', 'loop', 12, Date.now()));
 
     const res = await post();
 

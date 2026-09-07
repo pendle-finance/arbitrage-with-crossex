@@ -137,6 +137,8 @@ export interface CrossexAccount {
 // GET /api/rebalance · POST /api/rebalance · POST /api/rebalance/:id/{resume,abandon}
 // ---------------------------------------------------------------------------
 
+export type RebalanceDirection = 'payDown' | 'pull';
+
 export interface RebalanceBucket {
   coin: string;
   venue: string;
@@ -144,6 +146,8 @@ export interface RebalanceBucket {
   upnl: number;
   equity: number;
   borrow: number;
+  imHeldUsd: number;
+  mmHeldUsd: number;
   interestPaid30dUsd: number;
   interestPerDayUsd: number;
 }
@@ -156,7 +160,11 @@ export interface RebalanceRoute {
 }
 
 export interface RebalancePlan {
+  direction: RebalanceDirection;
   amount: number;
+  receives: number;
+  price: number | null;
+  borrowAfterUsd: number;
   shortfall: { reason: 'cash' | 'margin'; remaining: number } | null;
   routes: { loop: RebalanceRoute; convert: RebalanceRoute };
   route: 'loop' | 'convert' | null;
@@ -179,6 +187,7 @@ export interface RebalanceStep {
 
 export interface RebalanceJob {
   id: string;
+  direction: RebalanceDirection;
   route: 'loop' | 'convert';
   amount: number;
   status: 'running' | 'halted' | 'done' | 'abandoned';

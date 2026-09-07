@@ -33,6 +33,7 @@ import type {
   OpenOrder,
   OpportunitiesResult,
   PositionsResponse,
+  RebalanceDirection,
   RebalanceJob,
   RebalanceView,
   StrategyReturns,
@@ -392,10 +393,14 @@ export function useAlerts() {
   });
 }
 
-export function useRebalance() {
+export function useRebalance({ direction, amount }: { direction: RebalanceDirection; amount: number | null }) {
+  const params = new URLSearchParams();
+  if (direction !== 'payDown') params.set('direction', direction);
+  if (amount !== null) params.set('amount', String(amount));
+  const query = params.toString();
   return useQuery({
-    queryKey: qk.rebalance,
-    queryFn: () => fetchJson<RebalanceView>('/rebalance'),
+    queryKey: [...qk.rebalance, direction, amount ?? ''] as const,
+    queryFn: () => fetchJson<RebalanceView>(`/rebalance${query ? `?${query}` : ''}`),
     refetchInterval: (q) => (q.state.data?.job?.status === 'running' ? 1_000 : 4_000),
     refetchIntervalInBackground: true,
     placeholderData: keepPreviousData,
@@ -405,7 +410,7 @@ export function useRebalance() {
 export function useStartRebalance() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (body: { amount: number; route: 'loop' | 'convert' }) =>
+    mutationFn: (body: { direction: RebalanceDirection; amount: number; route: 'loop' | 'convert' }) =>
       postJson<{ id: string }>('/rebalance', body),
     onSuccess: () => void qc.invalidateQueries({ queryKey: qk.rebalance }),
   });
