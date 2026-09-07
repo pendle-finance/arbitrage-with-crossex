@@ -3,6 +3,7 @@
   "highlights": [
     "An amber pill in the header shows when Gate has lent you USDC for Hyperliquid. The Balances tab says what it costs you in held margin and interest",
     "One hold pays the borrow back by the cheapest route, or brings spare USDC home as USDT",
-    "A progress bar shows each step and how long it should take. A refresh keeps a running move; a restart halts it safely with Resume and Abandon"
+    "A progress bar shows each step and how long it should take. A refresh keeps a running move; a restart halts it safely with Resume and Abandon",
+    "Each pair on the Positions tab now says the price at which the account liquidates if only that coin moves, in red inside 15%"
   ]
 }

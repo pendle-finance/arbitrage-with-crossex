@@ -23,6 +23,13 @@ Pay back borrowed USDC from the Balances tab, or bring spare USDC home, with one
 - **You can watch it run.** A progress bar shows each step with its seconds. A job survives a
   page refresh. If the app restarts mid-job, it halts, says where the funds are, and offers
   Resume and Abandon.
+- **Each pair says where it liquidates.** A hedged pair is delta-neutral but not
+  margin-neutral: a move against the Hyperliquid leg grows the maintenance margin twice,
+  through the leg's notional and through the USDC borrow it creates. Every card on the
+  Positions tab carries `liq ~$3,150 (+37%)`, the coin's price at which the account
+  liquidates if only that coin moves. Amber inside 30%, red inside 15%. The nearest line is
+  in the header's margin-gauge hover, and the rebalance quote line shows how far a pay-down
+  moves it.
 
 ## 1.5.0 — 2026-08-27
 

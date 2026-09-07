@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
-import { useAccount } from '../api/queries';
+import { useAccount, usePositions } from '../api/queries';
 import { fmtUsd } from '../lib/fmt';
+import { describeLine, nearestLiquidation } from '../lib/liquidation';
 import { MarginBreakdown } from './MarginDonut';
 import { SignedNumber } from './SignedNumber';
 import { Skeleton } from './Skeleton';
@@ -9,6 +10,7 @@ import { Skeleton } from './Skeleton';
  * pies, then `children` (the borrow pill) once the account has loaded. */
 export function AccountHealthStrip({ children }: { children?: ReactNode }) {
   const { data: acc } = useAccount();
+  const { data: positions } = usePositions();
   if (!acc) {
     return (
       <div className="flex items-center gap-6">
@@ -19,6 +21,7 @@ export function AccountHealthStrip({ children }: { children?: ReactNode }) {
   }
 
   const upnl = (acc.assets ?? []).reduce((sum, a) => sum + (Number(a.upnl) || 0), 0);
+  const nearest = nearestLiquidation(acc, positions);
   return (
     <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
       <div className="text-sm">
@@ -31,7 +34,11 @@ export function AccountHealthStrip({ children }: { children?: ReactNode }) {
         <span className="text-ink-400">uPnL </span>
         <SignedNumber value={upnl} format={(n) => fmtUsd(n)} className="font-medium" />
       </div>
-      <MarginBreakdown acc={acc} variant="compact" />
+      <MarginBreakdown
+        acc={acc}
+        variant="compact"
+        liquidation={nearest ? `Nearest liquidation: ${nearest.base}. ${describeLine(nearest)}` : null}
+      />
       {children}
       <span className="hidden text-[10px] uppercase tracking-wider text-ink-500 xl:inline">
         {acc.accountMode} · {acc.positionMode}

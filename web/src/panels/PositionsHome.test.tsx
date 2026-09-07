@@ -8,6 +8,7 @@ import { http, HttpResponse } from 'msw';
 import { describe, expect, it, vi } from 'vitest';
 import type { ActionInput, PositionsResponse, StrategyReturns, StrategyRollup } from '../api/types';
 import {
+  account,
   makeCrossexPosition,
   makeExposureGroup,
   makeStrategyLeg,
@@ -33,6 +34,7 @@ const BOOK = bookIdOf(ADDR, null);
 
 const mockPositions = (body: Partial<PositionsResponse> = {}) =>
   server.use(
+    http.get('/api/account', () => HttpResponse.json(env(account))),
     http.get('/api/positions', () =>
       HttpResponse.json(env<PositionsResponse>({ positions: [], exposure: [], ...body })),
     ),

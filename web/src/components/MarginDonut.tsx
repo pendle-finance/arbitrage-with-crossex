@@ -173,7 +173,16 @@ function LegendRow({
  * margin balance) + a mini pie for maintenance margin vs balance.
  * `compact` — two small pies for the header strip.
  */
-export function MarginBreakdown({ acc, variant = 'full' }: { acc: CrossexAccount; variant?: 'full' | 'compact' }) {
+export function MarginBreakdown({
+  acc,
+  variant = 'full',
+  liquidation,
+}: {
+  acc: CrossexAccount;
+  variant?: 'full' | 'compact';
+  /** One sentence on the nearest liquidation line, appended to the compact hover. */
+  liquidation?: string | null;
+}) {
   const p = marginParts(acc);
   // Initial margin is always green (it's expected to be the bulk of the balance);
   // maintenance margin is the risk signal — color it by how close it is to the
@@ -202,7 +211,7 @@ export function MarginBreakdown({ acc, variant = 'full' }: { acc: CrossexAccount
         className="flex items-center gap-4"
         title={`Initial margin ${fmtUsd(p.initial)} · Available ${fmtUsd(p.available)} · Maintenance ${fmtUsd(
           p.maintenance,
-        )} — shown as a share of the ${fmtUsd(p.balance)} margin balance`}
+        )} — shown as a share of the ${fmtUsd(p.balance)} margin balance${liquidation ? ` · ${liquidation}` : ''}`}
       >
         <div className="flex items-center gap-1.5">
           <Donut size={34} thickness={5} segments={[usedSeg, freeSeg]} ariaLabel="Initial margin vs available" />

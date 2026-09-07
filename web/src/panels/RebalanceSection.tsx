@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import { ApiError } from '../api/client';
-import { useRebalance, useRebalanceCommand, useStartRebalance } from '../api/queries';
+import { useAccount, usePositions, useRebalance, useRebalanceCommand, useStartRebalance } from '../api/queries';
 import type { RebalanceBucket, RebalanceDirection, RebalanceJob, RebalancePlan, RebalanceStep } from '../api/types';
 import { HoldToConfirmButton } from '../components/HoldToConfirmButton';
 import { HoverCard } from '../components/HoverCard';
 import { SegmentedToggle } from '../components/SegmentedToggle';
 import { Stat } from '../components/Stat';
 import { fmtAge, fmtUsd, num } from '../lib/fmt';
+import { fmtMove, nearestLiquidation } from '../lib/liquidation';
 import { floorCents, roundToStep } from '../lib/ticks';
 import { useNow } from '../lib/useNow';
 
@@ -83,23 +84,45 @@ function parseAmount(text: string): number | null {
   return text.trim() !== '' && Number.isFinite(n) && n > 0 ? n : null;
 }
 
-function quoteLine(plan: RebalancePlan, routeName: 'loop' | 'convert', pull: boolean): string {
+function quoteLine(plan: RebalancePlan, routeName: 'loop' | 'convert', pull: boolean, liquidation = ''): string {
   const route = plan.routes[routeName];
   const price = plan.price === null ? '—' : num(plan.price, 4);
   const wait = `about ${num(route.waitSeconds / 60, 1)} min`;
   if (pull) {
     const move = `${num(plan.amount, 2)} USDC → ${num(plan.receives, 2)} USDT @ ${price}`;
     if (routeName === 'convert') {
-      return `via convert · ${move} · spread ${fmtUsd(route.costUsd)} · instant · sends on a fresh quote within 30 bps of this one`;
+      return `via convert · ${move} · spread ${fmtUsd(route.costUsd)}${liquidation} · instant · sends on a fresh quote within 30 bps of this one`;
     }
-    return `via spot loop · ${move} · costs ${fmtUsd(route.costUsd)} · ${wait}`;
+    return `via spot loop · ${move} · costs ${fmtUsd(route.costUsd)}${liquidation} · ${wait}`;
   }
   const move = `${num(plan.amount, 2)} USDT → ${num(plan.receives, 2)} USDC @ ${price}`;
-  const effect = `saves ${fmtUsd(plan.savesPerDayUsd)}/day · frees ${fmtUsd(plan.marginFreedUsd)} margin · borrow after ${fmtUsd(plan.borrowAfterUsd)}`;
+  const effect = `saves ${fmtUsd(plan.savesPerDayUsd)}/day · frees ${fmtUsd(plan.marginFreedUsd)} margin · borrow after ${fmtUsd(plan.borrowAfterUsd)}${liquidation}`;
   if (routeName === 'convert') {
     return `via convert · ${move} · spread ${fmtUsd(route.costUsd)} · ${effect} · instant · sends on a fresh quote within 30 bps of this one`;
   }
   return `via spot loop · ${move} · costs ${fmtUsd(route.costUsd)} · ${effect} · ${wait}`;
+}
+
+/** ` · liquidation +37% → +43%`: how much room the move buys. A rebalance
+ * moves cash between the USDT and USDC wallets; the liability, and so the
+ * maintenance margin, follows. Empty when the account has no line. */
+function liquidationShift(
+  acc: ReturnType<typeof useAccount>['data'],
+  positions: ReturnType<typeof usePositions>['data'],
+  plan: RebalancePlan,
+  pull: boolean,
+): string {
+  const before = nearestLiquidation(acc, positions);
+  if (!before) return '';
+  const after = nearestLiquidation(
+    acc,
+    positions,
+    pull
+      ? { 'USDC/HYPERLIQUID': -plan.amount, 'USDT/CROSSEX': plan.receives }
+      : { 'USDC/HYPERLIQUID': plan.receives, 'USDT/CROSSEX': -plan.amount },
+  );
+  if (!after) return ` · liquidation ${fmtMove(before.move)} → none within 10x`;
+  return ` · liquidation ${fmtMove(before.move)} → ${fmtMove(after.move)}`;
 }
 
 function noRouteLine(plan: RebalancePlan, pull: boolean, borrow: number, free: number): { text: string; warn: boolean } {
@@ -195,6 +218,8 @@ export function RebalanceSection({ holdMs }: { holdMs?: number }) {
   const resume = useRebalanceCommand('resume');
   const abandon = useRebalanceCommand('abandon');
   const now = useNow(1_000);
+  const account = useAccount().data;
+  const positions = usePositions().data;
 
   useEffect(() => {
     if (typed === null) return;
@@ -341,7 +366,9 @@ export function RebalanceSection({ holdMs }: { holdMs?: number }) {
         {capTooSmall && <p className="text-[12px] text-ink-300">{tooSmallLine(pull, borrow)}</p>}
         {floorHit ? null : routeName ? (
           <>
-            <p className="text-[12px] text-ink-300">{quoteLine(plan, routeName, pull)}</p>
+            <p className="text-[12px] text-ink-300">
+              {quoteLine(plan, routeName, pull, liquidationShift(account, positions, plan, pull))}
+            </p>
             {!pull && plan.shortfall && (
               <p className="text-[12px] text-amber-300">
                 {`Only ${num(plan.amount, 2)} USDC can move. ${num(plan.shortfall.remaining, 2)} USDC stays borrowed: ${SHORTFALL_TEXT[plan.shortfall.reason]}`}

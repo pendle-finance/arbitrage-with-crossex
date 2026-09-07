@@ -85,6 +85,7 @@ import { SharePositionModal } from './SharePositionModal';
 import type { SharePayloadV1 } from '../lib/shareCodec';
 import { applyCostFlags, legTokenSize, SECONDS_IN_YEAR, type CostFlags } from './strategyMath';
 import { crossexVenueFor } from '../lib/boros';
+import { describeLine, fmtLinePrice, fmtMove, type LiquidationLine } from '../lib/liquidation';
 
 /**
  * A position matures only if it has a maturity to reach. `maturity` is 0 on a
@@ -105,6 +106,17 @@ function HedgeChip({ s }: { s: StrategyRollup }) {
     );
   }
   return <Chip sm tone="red" title="No matching perp legs found in the connected Gate account">unhedged</Chip>;
+}
+
+/** Where this coin's move liquidates the account. Red inside 15%, amber
+ * inside 30%: a hedged pair is delta-neutral but not margin-neutral. */
+function LiquidationChip({ line }: { line: LiquidationLine }) {
+  const near = Math.abs(line.move);
+  return (
+    <Chip sm tone={near < 0.15 ? 'red' : near < 0.3 ? 'amber' : 'neutral'} className="num" title={describeLine(line)}>
+      {`liq ${fmtLinePrice(line.price)} (${fmtMove(line.move)})`}
+    </Chip>
+  );
 }
 
 type LegRow = StrategyLeg & { _key: string };
@@ -188,7 +200,11 @@ export function StrategyCard({
   bookId = '',
   borosUnknown = false,
   borosUnknownCta,
+  liquidation = null,
 }: {
+  /** The account's liquidation line if only this coin moves; null = not
+   * known (account not loaded) or no line within 10x. */
+  liquidation?: LiquidationLine | null;
   /** The custom strategy-start override (per wallet ?since=), editable from
    * the timeline's "Boros position open ✎" label. */
   since?: number | null;
@@ -1127,6 +1143,7 @@ export function StrategyCard({
           )}
           <SplitChip s={s} />
           <HedgeChip s={s} />
+          {liquidation && <LiquidationChip line={liquidation} />}
         </div>
         {/* Right rail: the card's ACTIONS. The badges that describe the
             position moved left onto the title, where the thing they describe

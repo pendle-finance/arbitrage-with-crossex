@@ -1,7 +1,7 @@
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import type {
   RebalanceBucket,
   RebalanceJob,
@@ -10,6 +10,7 @@ import type {
   RebalanceStep,
   RebalanceView,
 } from '../api/types';
+import { account, ethPosition } from '../test/fixtures';
 import { env, server } from '../test/server';
 import { renderWithClient } from '../test/utils';
 import { RebalanceSection } from './RebalanceSection';
@@ -214,7 +215,65 @@ const section = () => screen.findByRole('region', { name: 'Rebalance' });
 const amountInput = (label: string) => screen.getByRole('textbox', { name: label });
 const toPull = () => userEvent.click(screen.getByRole('radio', { name: 'Hyperliquid USDC → USDT' }));
 
+/** The report's box, scaled to this account: $20k margin, $250k a leg, short
+ * on Hyperliquid, 0.5% maintenance a leg. Liquidates at +64%; a $900 pay-down
+ * moves that to +64% still (900 of cover on a $250k leg is 0.4%). */
+const liquidationAccount = () => ({
+  ...account,
+  marginBalance: '20000',
+  maintenanceMargin: '2500',
+  assets: [
+    { coin: 'USDT', exchangeType: 'CROSSEX', balance: '20000', equity: '20000', availableBalance: '20000', upnl: '0', liability: '0' },
+    { coin: 'USDC', exchangeType: 'HYPERLIQUID', balance: '0', equity: '0', availableBalance: '0', upnl: '0', liability: '0' },
+  ],
+});
+const liquidationPositions = () => ({
+  positions: [
+    { ...ethPosition, symbol: 'GATE_FUTURE_ETH_USDT', positionValue: '250000', markPrice: '2300', maintenanceMargin: '1250' },
+    { ...ethPosition, symbol: 'HYPERLIQUID_FUTURE_ETH_USDC', positionValue: '250000', markPrice: '2300', maintenanceMargin: '1250' },
+  ],
+  exposure: [
+    {
+      base: 'ETH',
+      legs: [
+        { symbol: 'GATE_FUTURE_ETH_USDT', exchange: 'GATE', quote: 'USDT', side: 'LONG' as const, qty: 108.7, value: 250000 },
+        { symbol: 'HYPERLIQUID_FUTURE_ETH_USDC', exchange: 'HYPERLIQUID', quote: 'USDC', side: 'SHORT' as const, qty: 108.7, value: 250000 },
+      ],
+      longValue: 250000,
+      shortValue: 250000,
+      netValue: 0,
+      grossValue: 500000,
+      neutral: true,
+      singleLeg: false,
+    },
+  ],
+});
+
 describe('RebalanceSection', () => {
+  // The section reads the account and the positions for the liquidation
+  // line. The defaults carry no positions, so no line and the quote lines
+  // below stay as they were.
+  beforeEach(() => {
+    server.use(
+      http.get('/api/account', () => HttpResponse.json(env(account))),
+      http.get('/api/positions', () => HttpResponse.json(env({ positions: [], exposure: [] }))),
+    );
+  });
+
+  it('adds how far the liquidation line moves to the quote line', async () => {
+    server.use(
+      http.get('/api/account', () => HttpResponse.json(env(liquidationAccount()))),
+      http.get('/api/positions', () => HttpResponse.json(env(liquidationPositions()))),
+    );
+    serve(borrowAccount());
+    renderWithClient(<RebalanceSection holdMs={50} />);
+
+    await section();
+    // 20000 = 2500 f + 25000 (f − 1) → +64%. With 899.55 USDC of cover:
+    // 20000 = 2500 f + 0.1 (250000 (f − 1) − 899.55) → +64% still, rounded.
+    expect(await screen.findByText(/borrow after \$300\.45 · liquidation \+64% → \+64% · about 2\.5 min$/)).toBeInTheDocument();
+  });
+
   it('shows the Rebalance header, the borrow pill, the cost line, and the two tiles', async () => {
     serve(view());
     renderWithClient(<RebalanceSection holdMs={50} />);

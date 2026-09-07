@@ -117,6 +117,8 @@ Opening a Hyperliquid leg does not borrow USDC. Its margin comes from your whole
 
 The borrow costs two things. Gate holds 20% of it as initial margin and 10% as maintenance margin. Once the bucket is more than 10,000 USDC short, Gate also charges interest every hour.
 
+A hedged pair is delta-neutral, but not margin-neutral. Gate liquidates the account when the margin balance falls to the maintenance margin, and the maintenance margin grows with a move against the Hyperliquid leg: each leg's maintenance margin scales with its notional, and the losing Hyperliquid leg drives its USDC wallet negative, a borrow that adds 10% of itself to the maintenance margin. Each card on the Positions tab carries a `liq ~$3,150 (+37%)` chip: the price of the coin at which the account liquidates if only that coin moves and every other coin holds still. It turns amber inside 30% and red inside 15%. The same nearest line sits in the hover of the IM and MM gauges in the header, and the rebalance quote line shows how far a move pushes it (`liquidation +37% → +43%`).
+
 The Balances tab shows a **Rebalance** section whenever Hyperliquid has a USDC borrow or spare USDC, or a job runs or is halted. An amber pill shows the borrow. The line under it says what Gate lent you, the margin it holds, and whether interest runs. Two tiles with the interest per day and the interest paid in the last 30 days appear once interest is charged. The info mark next to the title opens a short card that says all this. The same amber pill sits in the header on every tab. Click it to open this section.
 
 Pick a direction, keep the prefilled amount or type one, and hold the button:
