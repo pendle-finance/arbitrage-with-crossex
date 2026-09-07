@@ -15,13 +15,23 @@ import { env, server } from '../test/server';
 import { renderWithClient } from '../test/utils';
 import { RebalanceSection } from './RebalanceSection';
 
-const PAY_DOWN_TEXT =
-  "Sends USDT to Hyperliquid as USDC and pays the borrow back. Each USDC paid back cuts the borrow by 1 USDC and frees 0.20 USDC of initial margin and 0.10 USDC of maintenance margin. Your account total changes only by the route's cost.";
-const PULL_TEXT =
-  'Brings USDC from Hyperliquid back to USDT. You can pull at most the USDC you own there, so a pull never starts a new borrow.';
-const LOOP_LINE =
-  'via spot loop · 900.00 USDT → 899.55 USDC @ 1.0005 · costs $0.50 · saves $0.29/day · frees $450.00 margin · borrow after $300.45 · about 2.5 min';
-const PULL_LINE = 'via spot loop · 400.00 USDC → 399.52 USDT @ 0.9988 · costs $0.60 · about 6.7 min';
+const PAY_DOWN_TEXT = 'Pays the borrow back. Each USDC frees 0.20 initial and 0.10 maintenance margin.';
+const PULL_TEXT = 'Brings spare USDC home. Capped at what you own there, so it never borrows.';
+/** A labelled fact's value, or null when the label is not on screen. */
+const fact = (label: string) => screen.queryByText(label, { selector: 'dt' })?.nextElementSibling?.textContent ?? null;
+const expectFacts = (facts: Record<string, string>) => {
+  for (const [label, value] of Object.entries(facts)) expect(fact(label)).toBe(value);
+};
+const LOOP_FACTS = {
+  Route: 'Spot loop · about 2.5 min',
+  Sends: '900.00 USDT → 899.55 USDC @ 1.0005',
+  Cost: '$0.50',
+  'Borrow after': '$300.45',
+  Frees: '$450.00 margin',
+  Saves: '$0.29 / day',
+};
+const PULL_FACTS = { Route: 'Spot loop · about 6.7 min', Sends: '400.00 USDC → 399.52 USDT @ 0.9988', Cost: '$0.60' };
+const CONVERT_NOTE = 'Sends on a fresh quote within 30 bps of this one.';
 const HOLD = 'Hold to move 900.00 USDT → USDC';
 const PULL_HOLD = 'Hold to pull 400.00 USDC → USDT';
 
@@ -271,9 +281,8 @@ describe('RebalanceSection', () => {
     await section();
     // 20000 = 2500 f + 25000 (f − 1) → +64%. With 899.55 USDC of cover:
     // 20000 = 2500 f + 0.1 (250000 (f − 1) − 899.55) → +64% still, rounded.
-    expect(
-      await screen.findByText(/borrow after \$300\.45 · liquidates at ETH \+64% → \+64% · about 2\.5 min$/),
-    ).toBeInTheDocument();
+    await waitFor(() => expect(fact('Liquidation')).toBe('ETH +64% → +64%'));
+    expectFacts(LOOP_FACTS);
   });
 
   it('shows the Rebalance header, the borrow pill, the cost line, and the two tiles', async () => {
@@ -284,16 +293,14 @@ describe('RebalanceSection', () => {
     expect(screen.getByRole('heading', { name: 'Rebalance' })).toBeInTheDocument();
     expect(screen.getByText('move cash between USDT and Hyperliquid USDC')).toBeInTheDocument();
     expect(screen.getByText('Borrowing 1,200.00 USDC')).toHaveClass('border-amber-500/30');
-    expect(
-      screen.getByText(
-        'Gate lent you 1,200.00 USDC. It holds $240.00 of initial margin and $120.00 of maintenance margin against it. It charges $0.31 a day in interest.',
-      ),
-    ).toBeInTheDocument();
-    expect(screen.getByText('Interest / day')).toBeInTheDocument();
-    expect(screen.getByText('$0.31')).toBeInTheDocument();
-    expect(screen.getByText('Interest paid · 30 d')).toBeInTheDocument();
-    expect(screen.getByText('$4.20')).toBeInTheDocument();
-    expect(screen.queryByText('Borrow (USDC)')).toBeNull();
+    expectFacts({
+      'Lent by Gate': '1,200.00 USDC',
+      'Initial margin held': '$240.00',
+      'Maintenance margin held': '$120.00',
+      Interest: '$0.31 / day',
+      'Interest paid · 30 d': '$4.20',
+    });
+    expect(fact('Liquidation')).toBeNull();
   });
 
   it('floors the borrow pill to cents so it never shows more than the button', async () => {
@@ -310,13 +317,13 @@ describe('RebalanceSection', () => {
 
     await section();
     expect(screen.getByText('Borrowing 8.50 USDC')).toBeInTheDocument();
-    expect(
-      screen.getByText(
-        'Gate lent you 8.50 USDC. It holds $1.70 of initial margin and $0.85 of maintenance margin against it. No interest until the borrow passes 10,000 USDC.',
-      ),
-    ).toBeInTheDocument();
-    expect(screen.queryByText('Interest / day')).toBeNull();
-    expect(screen.queryByText('Interest paid · 30 d')).toBeNull();
+    expectFacts({
+      'Lent by Gate': '8.50 USDC',
+      'Initial margin held': '$1.70',
+      'Maintenance margin held': '$0.85',
+      Interest: 'none under 10,000 USDC',
+    });
+    expect(fact('Interest paid · 30 d')).toBeNull();
   });
 
   it('keeps the interest tiles for interest already paid once the borrow is gone', async () => {
@@ -330,9 +337,8 @@ describe('RebalanceSection', () => {
 
     await section();
     expect(screen.queryByText(/^Borrowing /)).toBeNull();
-    expect(screen.queryByText(/^Gate lent you/)).toBeNull();
-    expect(screen.getByText('Interest paid · 30 d')).toBeInTheDocument();
-    expect(screen.getByText('$2.50')).toBeInTheDocument();
+    expect(fact('Lent by Gate')).toBeNull();
+    expectFacts({ 'Spare USDC on Hyperliquid': '5.00 USDC', 'Interest paid · 30 d': '$2.50' });
   });
 
   it('shows the explanation line for each direction', async () => {
@@ -388,7 +394,7 @@ describe('RebalanceSection', () => {
     const pullInput = amountInput('Amount (USDC) · free 400.00');
     expect(pullInput).toHaveValue('400.00');
     expect(screen.getByText(PULL_TEXT)).toBeInTheDocument();
-    expect(screen.getByText(PULL_LINE)).toBeInTheDocument();
+    expectFacts(PULL_FACTS);
     await userEvent.clear(pullInput);
     await userEvent.type(pullInput, '77');
     expect(pullInput).toHaveValue('77');
@@ -400,7 +406,7 @@ describe('RebalanceSection', () => {
     const input = await screen.findByRole('textbox', { name: 'Amount (USDT) · free 5,000.00' });
     await waitFor(() => expect(input).toHaveValue('0.00'));
     expect(screen.getByText(PAY_DOWN_TEXT)).toBeInTheDocument();
-    expect(screen.queryByText(PULL_LINE)).toBeNull();
+    expect(fact('Sends')).toBeNull();
     expect(screen.getByText('Nothing to pay back. There is no USDC borrow on Hyperliquid.')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^Hold to/ })).toBeNull();
 
@@ -409,7 +415,7 @@ describe('RebalanceSection', () => {
     await waitFor(() => expect(urls.at(-1)?.searchParams.get('direction')).toBe('pull'));
     expect(await screen.findByRole('textbox', { name: 'Amount (USDC) · free 400.00' })).toHaveValue('400.00');
     expect(screen.getByText(PULL_TEXT)).toBeInTheDocument();
-    expect(await screen.findByText(PULL_LINE)).toBeInTheDocument();
+    await waitFor(() => expectFacts(PULL_FACTS));
     expect(screen.getByRole('button', { name: PULL_HOLD })).toBeInTheDocument();
   });
 
@@ -493,7 +499,9 @@ describe('RebalanceSection', () => {
     renderWithClient(<RebalanceSection holdMs={50} />);
 
     await section();
-    expect(screen.getByText(LOOP_LINE)).toBeInTheDocument();
+    expectFacts(LOOP_FACTS);
+    expect(fact('Liquidation')).toBeNull();
+    expect(screen.queryByText(CONVERT_NOTE)).toBeNull();
   });
 
   it('shows the quote line for convert', async () => {
@@ -501,11 +509,15 @@ describe('RebalanceSection', () => {
     renderWithClient(<RebalanceSection holdMs={50} />);
 
     await section();
-    expect(
-      screen.getByText(
-        'via convert · 900.00 USDT → 898.20 USDC @ 0.9980 · spread $1.80 · saves $0.29/day · frees $450.00 margin · borrow after $300.45 · instant · sends on a fresh quote within 30 bps of this one',
-      ),
-    ).toBeInTheDocument();
+    expectFacts({
+      Route: 'Convert · instant',
+      Sends: '900.00 USDT → 898.20 USDC @ 0.9980',
+      Cost: '$1.80 spread',
+      'Borrow after': '$300.45',
+      Frees: '$450.00 margin',
+      Saves: '$0.29 / day',
+    });
+    expect(screen.getByText(CONVERT_NOTE)).toBeInTheDocument();
   });
 
   it('shows the quote line for a pull', async () => {
@@ -513,7 +525,8 @@ describe('RebalanceSection', () => {
     renderWithClient(<RebalanceSection holdMs={50} />);
 
     await section();
-    expect(await screen.findByText(PULL_LINE)).toBeInTheDocument();
+    await waitFor(() => expectFacts(PULL_FACTS));
+    expect(fact('Borrow after')).toBeNull();
   });
 
   it('shows the quote line for a pull by convert and posts route convert', async () => {
@@ -528,7 +541,11 @@ describe('RebalanceSection', () => {
     renderWithClient(<RebalanceSection holdMs={50} />);
 
     await section();
-    expect(await screen.findByText('via convert · 400.00 USDC → 399.20 USDT @ 0.9980 · spread $0.80 · instant · sends on a fresh quote within 30 bps of this one')).toBeInTheDocument();
+    await waitFor(() =>
+      expectFacts({ Route: 'Convert · instant', Sends: '400.00 USDC → 399.20 USDT @ 0.9980', Cost: '$0.80 spread' }),
+    );
+    expect(fact('Borrow after')).toBeNull();
+    expect(screen.getByText(CONVERT_NOTE)).toBeInTheDocument();
     fireEvent.pointerDown(screen.getByRole('button', { name: PULL_HOLD }));
 
     await waitFor(() => expect(posts).toEqual([{ direction: 'pull', amount: 400, route: 'convert' }]));
@@ -709,8 +726,8 @@ describe('RebalanceSection', () => {
     await section();
     expect(screen.queryByText(/^Borrowing /)).toBeNull();
     expect(screen.getByRole('radiogroup', { name: 'Direction' })).toBeInTheDocument();
-    expect(screen.queryByText(/^Gate lent you/)).toBeNull();
-    expect(screen.queryByText('Interest / day')).toBeNull();
+    expect(fact('Lent by Gate')).toBeNull();
+    expectFacts({ 'Spare USDC on Hyperliquid': '400.00 USDC' });
   });
 
   it('renders with borrow 0 and nothing to pull while a job runs', async () => {
@@ -841,7 +858,7 @@ describe('RebalanceSection', () => {
     expect(await screen.findByRole('button', { name: HOLD }, { timeout: 5_000 })).toBeEnabled();
     expect(screen.queryByRole('progressbar')).toBeNull();
     expect(screen.getByText('Borrowing 300.00 USDC')).toBeInTheDocument();
-    expect(screen.getByText('$0.08')).toBeInTheDocument();
+    expect(fact('Interest')).toBe('$0.08 / day');
   }, 10_000);
 
   it('goes back to the default direction with a fresh input once a job ends', async () => {
