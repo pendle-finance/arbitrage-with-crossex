@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ApiError } from '../api/client';
 import { useRebalance, useRebalanceCommand, useStartRebalance } from '../api/queries';
 import type { RebalanceDirection, RebalanceJob, RebalancePlan, RebalanceStep } from '../api/types';
@@ -199,16 +199,37 @@ export function RebalanceSection({ holdMs }: { holdMs?: number }) {
   const usdt = data?.buckets.find((b) => b.coin === 'USDT' && b.venue === 'CROSSEX');
   const borrow = floorCents(usdc?.borrow ?? 0);
   const pullable = floorCents(Math.min(usdc?.cash ?? 0, usdc?.equity ?? 0));
+  const job = data?.job && (data.job.status === 'running' || data.job.status === 'halted') ? data.job : null;
 
   useEffect(() => {
     if (chosen !== null || !data) return;
-    setChosen(borrow === 0 && pullable > 0 ? 'pull' : 'payDown');
+    setChosen(borrow < MIN_AMOUNT && pullable > 0 ? 'pull' : 'payDown');
   }, [chosen, data, borrow, pullable]);
+
+  /* A finished job leaves the bucket on the other side: a pay-down leaves
+     spare USDC, a pull leaves nothing. Go back to the default direction and
+     a fresh input, so the section reads for what is now possible. */
+  const activeJobId = job?.id ?? null;
+  const lastActive = useRef<string | null>(null);
+  useEffect(() => {
+    if (lastActive.current !== null && activeJobId === null) {
+      setChosen(null);
+      setTyped(null);
+      setAmountParam(null);
+      setBlurred(false);
+    }
+    lastActive.current = activeJobId;
+  }, [activeJobId]);
 
   if (!data) return null;
 
-  const job = data.job && (data.job.status === 'running' || data.job.status === 'halted') ? data.job : null;
-  if (borrow === 0 && pullable === 0 && !job) return null;
+  /* Presence must not depend on cents. Both directions end with the bucket's
+     equity near zero, where unrealised PnL flips the borrow and the pullable
+     amount between 0.00 and a few cents on every poll. Show the section for
+     any Hyperliquid USDC activity at all; the floor lines say what is
+     possible. */
+  const active = Boolean(usdc && (usdc.cash !== 0 || usdc.equity !== 0 || usdc.upnl !== 0)) || data.job !== null;
+  if (!active) return null;
 
   const plan = data.plan;
   const pull = direction === 'pull';
@@ -338,7 +359,7 @@ export function RebalanceSection({ holdMs }: { holdMs?: number }) {
           </div>
           <p className="text-[12px] text-ink-500">move cash between USDT and Hyperliquid USDC</p>
         </div>
-        {borrow > 0 && (
+        {borrow >= MIN_AMOUNT && (
           <span className="num rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[11px] text-amber-200">
             {`Borrow ${fmtUsd(borrow)} · +${fmtUsd(usdc?.imHeldUsd ?? 0)} IM · +${fmtUsd(usdc?.mmHeldUsd ?? 0)} MM`}
           </span>

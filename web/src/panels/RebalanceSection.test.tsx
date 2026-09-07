@@ -443,7 +443,7 @@ describe('RebalanceSection', () => {
     const { unmount } = renderWithClient(<RebalanceSection holdMs={50} />);
 
     await section();
-    expect(screen.getByText('Borrow $0.37 · +$0.07 IM · +$0.03 MM')).toBeInTheDocument();
+    expect(screen.queryByText(/^Borrow \$/)).toBeNull();
     expect(screen.getByText('Nothing to pay back. The borrow is under 1 USDC.')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^Hold to/ })).toBeNull();
     expect(screen.queryByText(/^via /)).toBeNull();
@@ -594,6 +594,17 @@ describe('RebalanceSection', () => {
     expect(screen.queryByRole('region', { name: 'Rebalance' })).toBeNull();
   });
 
+  it('stays rendered when the borrow and the pullable amount both floor to 0 but the bucket is in use', async () => {
+    const onTheLine = usdc({ cash: 16.65, upnl: -16.646, equity: 0.004, borrow: 0, imHeldUsd: 0, mmHeldUsd: 0 });
+    serve(view({ buckets: [onTheLine, usdt], plan: noRoutePlan() }));
+    renderWithClient(<RebalanceSection holdMs={50} />);
+
+    await section();
+    expect(screen.queryByText(/^Borrow \$/)).toBeNull();
+    expect(screen.getByRole('radiogroup', { name: 'Direction' })).toBeInTheDocument();
+    expect(screen.getByText('Nothing to pay back. There is no USDC borrow on Hyperliquid.')).toBeInTheDocument();
+  });
+
   it('renders with borrow 0 when USDC can be pulled, without the pill', async () => {
     serve(pullAccount());
     renderWithClient(<RebalanceSection holdMs={50} />);
@@ -733,5 +744,28 @@ describe('RebalanceSection', () => {
     expect(screen.queryByRole('progressbar')).toBeNull();
     expect(screen.getByText('Borrow $300.00 · +$240.00 IM · +$120.00 MM')).toBeInTheDocument();
     expect(screen.getByText('$0.08')).toBeInTheDocument();
+  }, 10_000);
+
+  it('goes back to the default direction with a fresh input once a job ends', async () => {
+    serve(view({ job: job() }));
+    renderWithClient(<RebalanceSection holdMs={50} />);
+
+    await section();
+    expect(screen.getAllByRole('progressbar')).toHaveLength(3);
+
+    const done = job({ status: 'done' });
+    serve(
+      byDirection(
+        view({ buckets: pullBuckets, plan: noRoutePlan(), job: done }),
+        view({ buckets: pullBuckets, plan: pullPlan(), job: done }),
+      ),
+    );
+
+    expect(
+      await screen.findByRole('radio', { name: 'Hyperliquid USDC → USDT', checked: true }, { timeout: 5_000 }),
+    ).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: PULL_HOLD })).toBeEnabled();
+    expect(amountInput('Amount (USDC) · free 400.00')).toHaveValue('400.00');
+    expect(screen.queryByText(/^Borrow \$/)).toBeNull();
   }, 10_000);
 });
