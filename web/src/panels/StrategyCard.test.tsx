@@ -1426,8 +1426,14 @@ describe('liquidation chip', () => {
     expect(screen.getByText('Liquidates if ETH falls to ~$1,840 (-20%)').className).toMatch(/amber/);
   });
 
-  it('shows no chip when the line is not known', () => {
+  it('says so when no line is within 10x, and shows nothing while the line is not known', () => {
+    render(card({}, { liquidation: 'far' }));
+    expect(screen.getByText('No liquidation within 10x').getAttribute('title')).toContain(
+      'survives a 10x pump or a 98% dump of',
+    );
+    cleanup();
     render(card());
     expect(screen.queryByText(/^Liquidates if/)).toBeNull();
+    expect(screen.queryByText('No liquidation within 10x')).toBeNull();
   });
 });
