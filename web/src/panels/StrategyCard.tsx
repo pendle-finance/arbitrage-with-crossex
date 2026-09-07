@@ -110,7 +110,17 @@ function HedgeChip({ s }: { s: StrategyRollup }) {
 
 /** Where this coin's move liquidates the account. Red inside 15%, amber
  * inside 30%: a hedged pair is delta-neutral but not margin-neutral. */
-function LiquidationChip({ line }: { line: LiquidationLine }) {
+function LiquidationChip({ line, base }: { line: LiquidationLine | 'far'; base: string }) {
+  if (line === 'far') {
+    return (
+      <Chip
+        sm
+        title={`The account survives a 10x pump or a 98% dump of ${base} with every other coin held still.`}
+      >
+        No liquidation within 10x
+      </Chip>
+    );
+  }
   const near = Math.abs(line.move);
   return (
     <Chip sm tone={near < 0.15 ? 'red' : near < 0.3 ? 'amber' : 'neutral'} className="num" title={describeLine(line)}>
@@ -202,9 +212,9 @@ export function StrategyCard({
   borosUnknownCta,
   liquidation = null,
 }: {
-  /** The account's liquidation line if only this coin moves; null = not
-   * known (account not loaded) or no line within 10x. */
-  liquidation?: LiquidationLine | null;
+  /** The account's liquidation line if only this coin moves; 'far' = none
+   * within 10x; null = not known yet. */
+  liquidation?: LiquidationLine | 'far' | null;
   /** The custom strategy-start override (per wallet ?since=), editable from
    * the timeline's "Boros position open ✎" label. */
   since?: number | null;
@@ -1143,7 +1153,7 @@ export function StrategyCard({
           )}
           <SplitChip s={s} />
           <HedgeChip s={s} />
-          {liquidation && <LiquidationChip line={liquidation} />}
+          {liquidation && <LiquidationChip line={liquidation} base={s.base} />}
         </div>
         {/* Right rail: the card's ACTIONS. The badges that describe the
             position moved left onto the title, where the thing they describe

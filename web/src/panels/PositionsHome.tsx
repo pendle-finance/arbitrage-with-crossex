@@ -473,7 +473,12 @@ export function PositionsHome() {
     () => (accountData && positionsData ? liquidationLines(accountData, positionsData) : []),
     [accountData, positionsData],
   );
-  const lineFor = (base: string) => liquidation.find((l) => l.base.toUpperCase() === base.toUpperCase()) ?? null;
+  /* null while the account or positions are not loaded; 'far' once both are
+     and this coin has no line within 10x, so the card can say so instead of
+     leaving a gap that reads as "not computed". */
+  const lineFor = (base: string) =>
+    liquidation.find((l) => l.base.toUpperCase() === base.toUpperCase()) ??
+    (accountData && positionsData ? ('far' as const) : null);
 
   const livePositions = useMemo(() => {
     const map = new Map<string, CrossexPosition>();
