@@ -5,11 +5,15 @@
  * MANUALLY (tickPair) against the same FakeVenue the unit sim uses, proving the
  * route → store → loop wiring end to end without timers.
  */
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import nock from 'nock';
 import { afterEach, describe, expect, it } from 'vitest';
 import { tickPair, type LoopDeps } from '../../src/engine/loop';
 import { Store } from '../../src/engine/db';
+import { JobFile, newJob } from '../../src/server/rebalanceJob';
 import { A_CONTRACT, B_CONTRACT, FakeVenue, VirtualClock } from '../unit/engine-sim';
 import { gate, HOST, makeTestApp, mockGateGet } from './helpers/gate-nock';
 
@@ -85,6 +89,62 @@ describe('POST /api/deals', () => {
     expect(view.pair.mode).toBe('DONE');
     expect(view.projection.aFilled).toBe('0.152');
     expect(view.projection.bFilled).toBe('0.152');
+  });
+
+  it('refuses to start or resume a deal while a rebalance is running, and not while one is halted', async () => {
+    const jobs = new JobFile(mkdtempSync(path.join(tmpdir(), 'rebalance-')));
+    const store = new Store(':memory:');
+    app = makeTestApp({ engine: { store, venue: new FakeVenue(), clock: new VirtualClock() }, rebalance: { jobs } });
+    // The rebalance plugin halts a running job at boot, so boot first.
+    await app.ready();
+    const running = newJob('payDown', 'loop', 300, Date.now());
+    jobs.write(running);
+
+    let res = await app.inject({ method: 'POST', url: '/api/deals', headers: HOST, payload: makerPayload() });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({
+      ok: false,
+      error: {
+        category: 'validation',
+        message: 'a rebalance is still running — wait for it to finish before starting a deal',
+        retryable: true,
+      },
+    });
+    expect(store.getPair('deal-000001')).toBeNull();
+
+    store.createPair({
+      id: 'deal-halted',
+      mode: 'HALTED',
+      a: { contract: A_CONTRACT, side: 'BUY', lot: '0.001', minSize: '0', minNotional: '0', tick: '0.01' },
+      b: null,
+      targetQty: '0.05',
+      limitPrice: '2500',
+      pricePolicy: 'fixed',
+      deadlineAt: null,
+      makerNotBefore: 0,
+      hedgeNotBefore: 0,
+      pocRejects: 0,
+      hedgeRejectStreak: 0,
+      maxClip: null,
+      clipBandBp: null,
+      haltReason: 'test',
+      reportJson: null,
+      createdAt: Date.now(),
+    });
+    res = await app.inject({ method: 'POST', url: '/api/deals/deal-halted/resume', headers: HOST });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error.message).toBe('a rebalance is still running — wait for it to finish before resuming a deal');
+    expect(store.getPair('deal-halted')!.mode).toBe('HALTED');
+
+    running.status = 'halted';
+    jobs.write(running);
+    res = await app.inject({ method: 'POST', url: '/api/deals/deal-halted/resume', headers: HOST });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().data).toEqual({ id: 'deal-halted', mode: 'STOPPING' });
+    // The create guard is past too: the empty body fails on validation, not on the rebalance.
+    res = await app.inject({ method: 'POST', url: '/api/deals', headers: HOST, payload: {} });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error.message).toBe('deal id is required');
   });
 
   it('is idempotent on the deal id (duplicate → 202, nothing new created)', async () => {

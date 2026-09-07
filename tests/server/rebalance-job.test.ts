@@ -792,6 +792,18 @@ describe('POST /api/rebalance/:id/resume and /abandon', () => {
     expect(res.json().error.message).toBe(`rebalance ${halted.id} is abandoned`);
   });
 
+  it('resume refuses while a deal is working', async () => {
+    mockView();
+    const job = haltedLoopJob(1, { venueId: 'x1' });
+    const h = boot({ job, store: busyDeal() });
+
+    const res = await h.post(`/api/rebalance/${job.id}/resume`);
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error.message).toBe('deal deal-409 is still working');
+    expect(h.file().status).toBe('halted');
+  });
+
   it('resume refuses a job started on another Gate account and runs one started on this account', async () => {
     mockView();
     const foreign = haltedLoopJob(1, { venueId: 'x1' });
