@@ -1408,3 +1408,26 @@ describe('StrategyCard — the spread tooltip', () => {
     expect(spreadCard()).toContain('Amber: open date unknown.');
   });
 });
+
+describe('liquidation chip', () => {
+  it('names the price and the move, red inside 15%, and says the assumption on hover', () => {
+    render(card({}, { liquidation: { base: 'ETH', price: 3150, move: 0.37 } }));
+    const chip = screen.getByText('Liquidates if ETH hits ~$3,150 (+37%)');
+    expect(chip).toHaveAttribute(
+      'title',
+      'Liquidates at about $3,150 if only ETH moves (+37%) and every other coin holds still.',
+    );
+    expect(chip.className).not.toMatch(/rose|amber/);
+    cleanup();
+    render(card({}, { liquidation: { base: 'ETH', price: 2600, move: 0.12 } }));
+    expect(screen.getByText('Liquidates if ETH hits ~$2,600 (+12%)').className).toMatch(/rose/);
+    cleanup();
+    render(card({}, { liquidation: { base: 'ETH', price: 1840, move: -0.2 } }));
+    expect(screen.getByText('Liquidates if ETH falls to ~$1,840 (-20%)').className).toMatch(/amber/);
+  });
+
+  it('shows no chip when the line is not known', () => {
+    render(card());
+    expect(screen.queryByText(/^Liquidates if/)).toBeNull();
+  });
+});

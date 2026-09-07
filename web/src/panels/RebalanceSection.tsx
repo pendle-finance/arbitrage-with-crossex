@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import { ApiError } from '../api/client';
-import { useRebalance, useRebalanceCommand, useStartRebalance } from '../api/queries';
+import { useAccount, usePositions, useRebalance, useRebalanceCommand, useStartRebalance } from '../api/queries';
 import type { RebalanceBucket, RebalanceDirection, RebalanceJob, RebalancePlan, RebalanceStep } from '../api/types';
 import { HoldToConfirmButton } from '../components/HoldToConfirmButton';
 import { HoverCard } from '../components/HoverCard';
 import { SegmentedToggle } from '../components/SegmentedToggle';
-import { Stat } from '../components/Stat';
+import { microLabelClass } from '../components/Th';
 import { fmtAge, fmtUsd, num } from '../lib/fmt';
+import { fmtMove, nearestLiquidation } from '../lib/liquidation';
 import { floorCents, roundToStep } from '../lib/ticks';
 import { useNow } from '../lib/useNow';
 
@@ -26,11 +27,31 @@ const EXPECTED_SECONDS: Record<string, number> = {
   'Sell USDC': 2,
 };
 
+/** One line under the direction toggle. The long form is in the info card. */
 const EXPLANATION: Record<RebalanceDirection, string> = {
-  payDown:
-    "Sends USDT to Hyperliquid as USDC and pays the borrow back. Each USDC paid back cuts the borrow by 1 USDC and frees 0.20 USDC of initial margin and 0.10 USDC of maintenance margin. Your account total changes only by the route's cost.",
-  pull: 'Brings USDC from Hyperliquid back to USDT. You can pull at most the USDC you own there, so a pull never starts a new borrow.',
+  payDown: 'Pays the borrow back. Each USDC frees 0.20 initial and 0.10 maintenance margin.',
+  pull: 'Brings spare USDC home. Capped at what you own there, so it never borrows.',
 };
+
+interface Fact {
+  label: string;
+  value: string;
+}
+
+/** Labelled facts in a row, so a reader scans a label and one number
+ * instead of a sentence. */
+function Facts({ items }: { items: Fact[] }) {
+  return (
+    <dl className="flex flex-wrap gap-x-7 gap-y-2">
+      {items.map((f) => (
+        <div key={f.label} className="flex flex-col gap-0.5">
+          <dt className={microLabelClass}>{f.label}</dt>
+          <dd className="num text-[12px] text-ink-200">{f.value}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
 
 const ABOUT = (
   <div className="flex flex-col gap-2 text-[12px] leading-snug">
@@ -83,23 +104,73 @@ function parseAmount(text: string): number | null {
   return text.trim() !== '' && Number.isFinite(n) && n > 0 ? n : null;
 }
 
-function quoteLine(plan: RebalancePlan, routeName: 'loop' | 'convert', pull: boolean): string {
+/** The quote as facts: route, what moves, what it costs, what it changes. */
+function quoteFacts(plan: RebalancePlan, routeName: 'loop' | 'convert', pull: boolean, liquidation: string | null): Fact[] {
   const route = plan.routes[routeName];
   const price = plan.price === null ? '—' : num(plan.price, 4);
-  const wait = `about ${num(route.waitSeconds / 60, 1)} min`;
-  if (pull) {
-    const move = `${num(plan.amount, 2)} USDC → ${num(plan.receives, 2)} USDT @ ${price}`;
-    if (routeName === 'convert') {
-      return `via convert · ${move} · spread ${fmtUsd(route.costUsd)} · instant · sends on a fresh quote within 30 bps of this one`;
-    }
-    return `via spot loop · ${move} · costs ${fmtUsd(route.costUsd)} · ${wait}`;
+  const convert = routeName === 'convert';
+  const facts: Fact[] = [
+    { label: 'Route', value: convert ? 'Convert · instant' : `Spot loop · about ${num(route.waitSeconds / 60, 1)} min` },
+    {
+      label: 'Sends',
+      value: pull
+        ? `${num(plan.amount, 2)} USDC → ${num(plan.receives, 2)} USDT @ ${price}`
+        : `${num(plan.amount, 2)} USDT → ${num(plan.receives, 2)} USDC @ ${price}`,
+    },
+    { label: 'Cost', value: convert ? `${fmtUsd(route.costUsd)} spread` : fmtUsd(route.costUsd) },
+  ];
+  if (!pull) {
+    facts.push(
+      { label: 'Borrow after', value: fmtUsd(plan.borrowAfterUsd) },
+      { label: 'Frees', value: `${fmtUsd(plan.marginFreedUsd)} margin` },
+      { label: 'Saves', value: `${fmtUsd(plan.savesPerDayUsd)} / day` },
+    );
   }
-  const move = `${num(plan.amount, 2)} USDT → ${num(plan.receives, 2)} USDC @ ${price}`;
-  const effect = `saves ${fmtUsd(plan.savesPerDayUsd)}/day · frees ${fmtUsd(plan.marginFreedUsd)} margin · borrow after ${fmtUsd(plan.borrowAfterUsd)}`;
-  if (routeName === 'convert') {
-    return `via convert · ${move} · spread ${fmtUsd(route.costUsd)} · ${effect} · instant · sends on a fresh quote within 30 bps of this one`;
+  if (liquidation) facts.push({ label: 'Liquidation', value: liquidation });
+  return facts;
+}
+
+/** `ETH +37% → +43%`: how much room the move buys. A rebalance moves cash
+ * between the USDT and USDC wallets; the liability, and so the maintenance
+ * margin, follows. Null when the account has no line. */
+function liquidationShift(
+  acc: ReturnType<typeof useAccount>['data'],
+  positions: ReturnType<typeof usePositions>['data'],
+  plan: RebalancePlan,
+  pull: boolean,
+): string | null {
+  const before = nearestLiquidation(acc, positions);
+  if (!before) return null;
+  const after = nearestLiquidation(
+    acc,
+    positions,
+    pull
+      ? { 'USDC/HYPERLIQUID': -plan.amount, 'USDT/CROSSEX': plan.receives }
+      : { 'USDC/HYPERLIQUID': plan.receives, 'USDT/CROSSEX': -plan.amount },
+  );
+  return `${before.base} ${fmtMove(before.move)} → ${after ? fmtMove(after.move) : 'past 10x'}`;
+}
+
+/** The situation as facts: what Gate lent, the margin it holds, the interest. */
+function situationFacts(usdc: RebalanceBucket | undefined, borrow: number, pullable: number): Fact[] {
+  if (!usdc) return [];
+  const facts: Fact[] = [];
+  const paid = usdc.interestPaid30dUsd > 0 ? { label: 'Interest paid · 30 d', value: fmtUsd(usdc.interestPaid30dUsd) } : null;
+  if (borrow >= MIN_AMOUNT) {
+    facts.push(
+      { label: 'Lent by Gate', value: `${num(borrow, 2)} USDC` },
+      { label: 'Initial margin held', value: fmtUsd(usdc.imHeldUsd) },
+      { label: 'Maintenance margin held', value: fmtUsd(usdc.mmHeldUsd) },
+      {
+        label: 'Interest',
+        value: usdc.interestPerDayUsd > 0 ? `${fmtUsd(usdc.interestPerDayUsd)} / day` : `none under ${num(INTEREST_FREE_UNTIL, 0)} USDC`,
+      },
+    );
+  } else if (pullable >= MIN_AMOUNT) {
+    facts.push({ label: 'Spare USDC on Hyperliquid', value: `${num(pullable, 2)} USDC` });
   }
-  return `via spot loop · ${move} · costs ${fmtUsd(route.costUsd)} · ${effect} · ${wait}`;
+  if (paid) facts.push(paid);
+  return facts;
 }
 
 function noRouteLine(plan: RebalancePlan, pull: boolean, borrow: number, free: number): { text: string; warn: boolean } {
@@ -111,16 +182,6 @@ function noRouteLine(plan: RebalancePlan, pull: boolean, borrow: number, free: n
   if (borrow === 0) return { text: 'Nothing to pay back. There is no USDC borrow on Hyperliquid.', warn: false };
   if (free === 0) return { text: 'Nothing to move. There is no free USDT.', warn: false };
   return { text: 'Nothing to move.', warn: false };
-}
-
-/** The situation in words, so a skimmer does not have to decode IM, MM, or a $0.00 tile. */
-function costLine(usdc: RebalanceBucket, borrow: number): string {
-  const held = `It holds ${fmtUsd(usdc.imHeldUsd)} of initial margin and ${fmtUsd(usdc.mmHeldUsd)} of maintenance margin against it.`;
-  const interest =
-    usdc.interestPerDayUsd > 0
-      ? `It charges ${fmtUsd(usdc.interestPerDayUsd)} a day in interest.`
-      : `No interest until the borrow passes ${num(INTEREST_FREE_UNTIL, 0)} USDC.`;
-  return `Gate lent you ${num(borrow, 2)} USDC. ${held} ${interest}`;
 }
 
 function tooSmallLine(pull: boolean, borrow: number): string {
@@ -195,6 +256,8 @@ export function RebalanceSection({ holdMs }: { holdMs?: number }) {
   const resume = useRebalanceCommand('resume');
   const abandon = useRebalanceCommand('abandon');
   const now = useNow(1_000);
+  const account = useAccount().data;
+  const positions = usePositions().data;
 
   useEffect(() => {
     if (typed === null) return;
@@ -241,10 +304,7 @@ export function RebalanceSection({ holdMs }: { holdMs?: number }) {
 
   const plan = data.plan;
   const pull = direction === 'pull';
-  /* The tiles earn their place only once interest is real. Under the
-     threshold they read $0.00, which says "no cost" to a skimmer; the cost
-     line above them says what the borrow holds instead. */
-  const charged = (usdc?.interestPerDayUsd ?? 0) > 0 || (usdc?.interestPaid30dUsd ?? 0) > 0;
+  const situation = situationFacts(usdc, borrow, pullable);
 
   const pickDirection = (next: RebalanceDirection) => {
     setChosen(next);
@@ -341,7 +401,10 @@ export function RebalanceSection({ holdMs }: { holdMs?: number }) {
         {capTooSmall && <p className="text-[12px] text-ink-300">{tooSmallLine(pull, borrow)}</p>}
         {floorHit ? null : routeName ? (
           <>
-            <p className="text-[12px] text-ink-300">{quoteLine(plan, routeName, pull)}</p>
+            <Facts items={quoteFacts(plan, routeName, pull, liquidationShift(account, positions, plan, pull))} />
+            {routeName === 'convert' && (
+              <p className="text-[11px] text-ink-500">Sends on a fresh quote within 30 bps of this one.</p>
+            )}
             {!pull && plan.shortfall && (
               <p className="text-[12px] text-amber-300">
                 {`Only ${num(plan.amount, 2)} USDC can move. ${num(plan.shortfall.remaining, 2)} USDC stays borrowed: ${SHORTFALL_TEXT[plan.shortfall.reason]}`}
@@ -377,17 +440,7 @@ export function RebalanceSection({ holdMs }: { holdMs?: number }) {
           </span>
         )}
       </div>
-      {usdc && borrow >= MIN_AMOUNT && <p className="text-[12px] text-ink-200">{costLine(usdc, borrow)}</p>}
-      {charged && (
-        <div className="flex flex-wrap gap-8">
-          <Stat label="Interest / day">
-            <span className="num">{fmtUsd(usdc?.interestPerDayUsd ?? 0)}</span>
-          </Stat>
-          <Stat label="Interest paid · 30 d">
-            <span className="num">{fmtUsd(usdc?.interestPaid30dUsd ?? 0)}</span>
-          </Stat>
-        </div>
-      )}
+      {situation.length > 0 && <Facts items={situation} />}
       <p className="text-[12px] text-ink-400">{EXPLANATION[job ? job.direction : direction]}</p>
       {body}
     </section>

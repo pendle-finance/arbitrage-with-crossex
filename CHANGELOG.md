@@ -9,20 +9,28 @@ Pay back borrowed USDC from the Balances tab, or bring spare USDC home, with one
 
 - **A new Rebalance section on the Balances tab.** When a Hyperliquid leg loses money or pays
   funding, Gate lends the USDC and holds 20% of it as initial margin and 10% as maintenance
-  margin. Past 10,000 USDC short it also charges interest every hour. The section says in
-  words what Gate lent you, the margin it holds, and whether interest runs. The borrow also
+  margin. Past 10,000 USDC short it also charges interest every hour. The section shows
+  what Gate lent you, the margin it holds, and the interest as labelled facts, not a
+  paragraph. The borrow also
   shows as an amber pill in the header on every tab; click it to open the section. An info
   mark next to the title explains all of it.
 - **One hold moves cash either way.** USDT to Hyperliquid USDC pays the borrow back and frees
   the margin. Hyperliquid USDC to USDT brings spare USDC home, capped so it never opens a
   borrow. The amount is prefilled with the most that can move, and you can type less.
 - **The cheaper route is picked for you and shown.** An instant convert at 20 bps, or a spot
-  loop through Gate that costs $0.05 for a pay-down and a flat $1 for a pull. The quote line
-  names the winner, the price, what lands, the cost, and the borrow after the move. Under
+  loop through Gate that costs $0.05 for a pay-down and a flat $1 for a pull. The quote is a
+  row of facts: the route, the price, what lands, the cost, and the borrow after the move. Under
   1 USDC there is nothing to hold.
 - **You can watch it run.** A progress bar shows each step with its seconds. A job survives a
   page refresh. If the app restarts mid-job, it halts, says where the funds are, and offers
   Resume and Abandon.
+- **Each pair says where it liquidates.** A hedged pair is delta-neutral but not
+  margin-neutral: a move against the Hyperliquid leg grows the maintenance margin twice,
+  through the leg's notional and through the USDC borrow it creates. Every card on the
+  Positions tab says `Liquidates if ETH hits ~$3,150 (+37%)`, the coin's price at which the
+  account liquidates if only that coin moves. Amber inside 30%, red inside 15%. The nearest line is
+  in the header's margin-gauge hover, and the rebalance quote shows how far a pay-down
+  moves it.
 
 ## 1.5.0 — 2026-08-27
 

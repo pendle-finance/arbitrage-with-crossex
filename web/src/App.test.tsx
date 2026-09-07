@@ -10,6 +10,7 @@ import type { OpenOrder, PositionsResponse, RebalanceBucket, TradesResponse, Ven
 import { ACTIVE_TAB_KEY } from './components/TabBar';
 import { USER_GUIDE_RAW_URL } from './components/UserGuideModal';
 import {
+  account,
   baseHandlers,
   ethPosition,
   makeOpportunitiesResult,
@@ -318,6 +319,61 @@ describe('borrow pill', () => {
     expect(tab(/^Balances/)).toHaveAttribute('aria-selected', 'true');
     expect(panel('balances')).toBeVisible();
     expect(within(panel('balances')).getByRole('region', { name: 'Rebalance' })).toBeVisible();
+  });
+
+  it('puts the nearest liquidation line in the margin gauges hover', async () => {
+    mockApp();
+    server.use(
+      http.get('/api/account', () =>
+        HttpResponse.json(
+          env({
+            ...account,
+            marginBalance: '20000',
+            maintenanceMargin: '2500',
+            assets: [
+              { coin: 'USDT', exchangeType: 'CROSSEX', balance: '20000', equity: '20000', availableBalance: '20000', upnl: '0', liability: '0' },
+              { coin: 'USDC', exchangeType: 'HYPERLIQUID', balance: '0', equity: '0', availableBalance: '0', upnl: '0', liability: '0' },
+            ],
+          }),
+        ),
+      ),
+      http.get('/api/positions', () =>
+        HttpResponse.json(
+          env<PositionsResponse>({
+            positions: [
+              { ...ethPosition, symbol: 'GATE_FUTURE_ETH_USDT', positionValue: '250000', markPrice: '2300', maintenanceMargin: '1250' },
+              { ...ethPosition, symbol: 'HYPERLIQUID_FUTURE_ETH_USDC', positionValue: '250000', markPrice: '2300', maintenanceMargin: '1250' },
+            ],
+            exposure: [
+              {
+                base: 'ETH',
+                legs: [
+                  { symbol: 'GATE_FUTURE_ETH_USDT', exchange: 'GATE', quote: 'USDT', side: 'LONG', qty: 108.7, value: 250000 },
+                  { symbol: 'HYPERLIQUID_FUTURE_ETH_USDC', exchange: 'HYPERLIQUID', quote: 'USDC', side: 'SHORT', qty: 108.7, value: 250000 },
+                ],
+                longValue: 250000,
+                shortValue: 250000,
+                netValue: 0,
+                grossValue: 500000,
+                neutral: true,
+                singleLeg: false,
+              },
+            ],
+          }),
+        ),
+      ),
+    );
+    await renderApp();
+
+    const gauges = screen.getByRole('img', { name: 'Maintenance margin vs balance' }).closest('[title]')!;
+    await waitFor(() =>
+      expect(gauges).toHaveAttribute(
+        'title',
+        expect.stringContaining(
+          'Nearest liquidation: ETH. Liquidates at about $3,764 if only ETH moves (+64%) and every other coin holds still.',
+        ),
+      ),
+    );
   });
 
   it('shows no pill under 1 USDC of borrow', async () => {
