@@ -502,7 +502,7 @@ describe('POST /api/rebalance', () => {
     });
     expect(before.plan.routes.loop).toMatchObject({ waitSeconds: PULL_WAIT_SECONDS, available: true, reason: null });
     expect(before.plan.routes.loop.costUsd).toBeCloseTo(PULL_AMOUNT * 0.001 + PULL_FEE_USD, 9);
-    expect(before.plan.routes.convert).toMatchObject({ available: false, reason: 'convert runs one way only' });
+    expect(before.plan.routes.convert).toMatchObject({ available: false, reason: 'Convert runs only from USDT to USDC.' });
     expect(before.job).toBeNull();
 
     const res = await h.post('/api/rebalance', { direction: 'pull', amount: PULL_AMOUNT, route: 'loop' });
@@ -541,7 +541,7 @@ describe('POST /api/rebalance', () => {
     const empty = (await h.view('?direction=pull')).data.plan;
     expect(empty).toMatchObject({ direction: 'pull', amount: 0, route: null, receives: 0, price: null });
     expect(empty.routes.loop).toMatchObject({ available: false, reason: 'nothing to move' });
-    expect(empty.routes.convert).toMatchObject({ available: false, reason: 'convert runs one way only' });
+    expect(empty.routes.convert).toMatchObject({ available: false, reason: 'Convert runs only from USDT to USDC.' });
     const refused = await h.post('/api/rebalance', { direction: 'pull' });
     expect(refused.statusCode).toBe(409);
     expect(refused.json().error.message).toBe('no route');

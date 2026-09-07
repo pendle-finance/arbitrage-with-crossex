@@ -87,7 +87,7 @@ const pullPlan = (over: Partial<RebalancePlan> = {}): RebalancePlan =>
     borrowAfterUsd: 0,
     routes: {
       loop: route({ costUsd: 0.6, waitSeconds: 400 }),
-      convert: route({ costUsd: 0, waitSeconds: 0, available: false, reason: 'convert runs one way only' }),
+      convert: route({ costUsd: 0, waitSeconds: 0, available: false, reason: 'Convert runs only from USDT to USDC.' }),
     },
     savesPerDayUsd: 0,
     marginFreedUsd: 0,
@@ -304,7 +304,7 @@ describe('RebalanceSection', () => {
     await waitFor(() => expect(input).toHaveValue('0.00'));
     expect(screen.getByText(PAY_DOWN_TEXT)).toBeInTheDocument();
     expect(screen.queryByText(PULL_LINE)).toBeNull();
-    expect(screen.getByText('Loop: nothing to move')).toBeInTheDocument();
+    expect(screen.getByText('Nothing to pay back. There is no USDC borrow on Hyperliquid.')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^Hold to/ })).toBeNull();
 
     await toPull();
@@ -447,11 +447,36 @@ describe('RebalanceSection', () => {
     renderWithClient(<RebalanceSection holdMs={50} />);
 
     await section();
-    expect(screen.getByText('Loop: USDC transfer is disabled')).toBeInTheDocument();
-    expect(screen.getByText('Convert: convert quote failed')).toBeInTheDocument();
+    expect(screen.getByText('USDC transfer is disabled')).toBeInTheDocument();
+    expect(screen.queryByText(/convert quote failed/)).toBeNull();
     expect(screen.queryByText(/^via /)).toBeNull();
     expect(screen.queryByRole('button', { name: /^Hold to/ })).toBeNull();
     expect(amountInput('Amount (USDT) · free 5,000.00')).toHaveValue('900.00');
+  });
+
+  it('shows one plain line for a pull with no route and never the convert reason', async () => {
+    serve(
+      view({
+        buckets: [usdc({ cash: 1.29, upnl: 0, equity: 1.29, borrow: 0, imHeldUsd: 0, mmHeldUsd: 0 }), usdt],
+        plan: pullPlan({
+          amount: 1.29,
+          receives: 0,
+          price: null,
+          route: null,
+          routes: {
+            loop: route({ available: false, reason: 'Too small to pull. Gate takes a flat $1 fee on the way out and needs at least 11 USDC to arrive. Pull at least 12 USDC.' }),
+            convert: route({ costUsd: 0, waitSeconds: 0, available: false, reason: 'Convert runs only from USDT to USDC.' }),
+          },
+        }),
+      }),
+    );
+    renderWithClient(<RebalanceSection holdMs={50} />);
+
+    await section();
+    expect(await screen.findByText('Too small to pull. Gate takes a flat $1 fee on the way out and needs at least 11 USDC to arrive. Pull at least 12 USDC.')).toBeInTheDocument();
+    expect(screen.queryByText(/Convert runs only/)).toBeNull();
+    expect(screen.queryByText(/^Loop:/)).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Hold to/ })).toBeNull();
   });
 
   it('sends one POST /api/rebalance with the plan amount and route after a full hold', async () => {

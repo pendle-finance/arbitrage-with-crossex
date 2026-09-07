@@ -377,31 +377,31 @@ describe('planFor loop unavailable', () => {
   it('when the USDC transfer isDisabled is 1', () => {
     const p = plan(s, { ...OPEN, usdcTransfer: { isDisabled: 1, minTransAmount: 11 } });
     expect(p.routes.loop.available).toBe(false);
-    expect(p.routes.loop.reason).toBe('USDC transfers are disabled on CrossEx');
+    expect(p.routes.loop.reason).toBe('Gate has paused USDC transfers on CrossEx. Try again later.');
   });
 
   it('when the USDC transfer row is missing', () => {
     const p = plan(s, { ...OPEN, usdcTransfer: null });
     expect(p.routes.loop.available).toBe(false);
-    expect(p.routes.loop.reason).toBe('USDC transfers are disabled on CrossEx');
+    expect(p.routes.loop.reason).toBe('Gate has paused USDC transfers on CrossEx. Try again later.');
   });
 
   it('when the spot rule is not live', () => {
     const p = plan(s, { ...OPEN, spotRule: { state: 'suspended' } });
     expect(p.routes.loop.available).toBe(false);
-    expect(p.routes.loop.reason).toBe(`${SPOT_SYMBOL} is not live`);
-    expect(p.routes.loop.reason).toBe('GATE_SPOT_USDC_USDT is not live');
+    expect(p.routes.loop.reason).toBe('The USDC/USDT spot market on Gate is not trading right now.');
+    expect(p.routes.loop.reason).toBe('The USDC/USDT spot market on Gate is not trading right now.');
   });
 
   it('when the spot rule is missing', () => {
     const p = plan(s, { ...OPEN, spotRule: null });
     expect(p.routes.loop.available).toBe(false);
-    expect(p.routes.loop.reason).toBe('GATE_SPOT_USDC_USDT is not live');
+    expect(p.routes.loop.reason).toBe('The USDC/USDT spot market on Gate is not trading right now.');
   });
 
   it('when there is no spot ask', () => {
-    expect(plan(s, { ...OPEN, ask: null }).routes.loop.reason).toBe('no spot price for USDC_USDT');
-    expect(plan(s, { ...OPEN, ask: 0 }).routes.loop.reason).toBe('no spot price for USDC_USDT');
+    expect(plan(s, { ...OPEN, ask: null }).routes.loop.reason).toBe('No price for USDC/USDT on Gate spot right now.');
+    expect(plan(s, { ...OPEN, ask: 0 }).routes.loop.reason).toBe('No price for USDC/USDT on Gate spot right now.');
     expect(plan(s, { ...OPEN, ask: 0 }).routes.loop.available).toBe(false);
   });
 
@@ -409,7 +409,7 @@ describe('planFor loop unavailable', () => {
     const p = plan({ usdcEquity: -500, usdtCash: 11, margin: 2000 });
     expect(p.amount).toBe(11);
     expect(p.routes.loop.available).toBe(false);
-    expect(p.routes.loop.reason).toBe('loop buys 10.99 USDC, below the 11 USDC transfer minimum');
+    expect(p.routes.loop.reason).toBe('Too small for the spot loop. Gate needs at least 11 USDC per transfer.');
   });
 
   it('is available when 12 USDT buys 11.99 USDC', () => {
@@ -423,9 +423,9 @@ describe('planFor loop unavailable', () => {
     const nothing = plan({ usdcEquity: 50, usdtCash: 1000, margin: 2000 }, { ...OPEN, usdcTransfer: null, spotRule: null });
     expect(nothing.routes.loop.reason).toBe('nothing to move');
     const disabled = plan(s, { ...OPEN, usdcTransfer: { isDisabled: 1, minTransAmount: 11 }, spotRule: null, ask: null });
-    expect(disabled.routes.loop.reason).toBe('USDC transfers are disabled on CrossEx');
+    expect(disabled.routes.loop.reason).toBe('Gate has paused USDC transfers on CrossEx. Try again later.');
     const notLive = plan(s, { ...OPEN, spotRule: { state: 'paused' }, ask: null });
-    expect(notLive.routes.loop.reason).toBe('GATE_SPOT_USDC_USDT is not live');
+    expect(notLive.routes.loop.reason).toBe('The USDC/USDT spot market on Gate is not trading right now.');
   });
 
   it('leaves convert available when only loop is unavailable', () => {
@@ -466,7 +466,7 @@ describe('planFor pull', () => {
       expect(p.amount).toBe(0);
       expect(p.route).toBeNull();
       expect(p.routes.loop).toMatchObject({ available: false, reason: 'nothing to move' });
-      expect(p.routes.convert).toMatchObject({ available: false, reason: 'convert runs one way only' });
+      expect(p.routes.convert).toMatchObject({ available: false, reason: 'Convert runs only from USDT to USDC.' });
     }
   });
 
@@ -486,7 +486,7 @@ describe('planFor pull', () => {
 
   it('marks convert unavailable because it runs one way only', () => {
     const p = plan(s, OPEN, PULL);
-    expect(p.routes.convert).toEqual({ costUsd: 0, waitSeconds: 0, available: false, reason: 'convert runs one way only' });
+    expect(p.routes.convert).toEqual({ costUsd: 0, waitSeconds: 0, available: false, reason: 'Convert runs only from USDT to USDC.' });
   });
 
   it('picks the loop with the bid as the price and the sold USDT as receives', () => {
@@ -515,23 +515,23 @@ describe('planFor pull', () => {
 
   it('is unavailable when the USDC transfer is disabled or missing', () => {
     const disabled = plan(s, { ...OPEN, usdcTransfer: { isDisabled: 1, minTransAmount: 11 } }, PULL);
-    expect(disabled.routes.loop).toMatchObject({ available: false, reason: 'USDC transfers are disabled on CrossEx' });
+    expect(disabled.routes.loop).toMatchObject({ available: false, reason: 'Gate has paused USDC transfers on CrossEx. Try again later.' });
     const missing = plan(s, { ...OPEN, usdcTransfer: null }, PULL);
-    expect(missing.routes.loop).toMatchObject({ available: false, reason: 'USDC transfers are disabled on CrossEx' });
+    expect(missing.routes.loop).toMatchObject({ available: false, reason: 'Gate has paused USDC transfers on CrossEx. Try again later.' });
     expect(missing.route).toBeNull();
   });
 
   it('is unavailable when the spot rule is not live or missing', () => {
     expect(plan(s, { ...OPEN, spotRule: { state: 'suspended' } }, PULL).routes.loop.reason).toBe(
-      'GATE_SPOT_USDC_USDT is not live',
+      'The USDC/USDT spot market on Gate is not trading right now.',
     );
-    expect(plan(s, { ...OPEN, spotRule: null }, PULL).routes.loop.reason).toBe('GATE_SPOT_USDC_USDT is not live');
+    expect(plan(s, { ...OPEN, spotRule: null }, PULL).routes.loop.reason).toBe('The USDC/USDT spot market on Gate is not trading right now.');
   });
 
   it('is unavailable when there is no spot bid, even with an ask', () => {
     for (const bid of [null, 0]) {
       const p = plan(s, { ...OPEN, bid }, PULL);
-      expect(p.routes.loop).toMatchObject({ available: false, reason: 'no spot price for USDC_USDT' });
+      expect(p.routes.loop).toMatchObject({ available: false, reason: 'No price for USDC/USDT on Gate spot right now.' });
       expect(p.route).toBeNull();
       expect(p.price).toBeNull();
       expect(p.receives).toBe(0);
@@ -542,7 +542,7 @@ describe('planFor pull', () => {
     const p = plan({ ...s, usdcEquity: 11.5, usdcCash: 11.5 }, OPEN, PULL);
     expect(p.amount).toBe(11.5);
     expect(p.routes.loop.available).toBe(false);
-    expect(p.routes.loop.reason).toBe('pull lands 10.5 USDC after the $1 fee, below the 11 USDC transfer minimum');
+    expect(p.routes.loop.reason).toBe('Too small to pull. Gate takes a flat $1 fee on the way out and needs at least 11 USDC to arrive. Pull at least 12 USDC.');
     const enough = plan({ ...s, usdcEquity: 12, usdcCash: 12 }, OPEN, PULL);
     expect(enough.routes.loop.available).toBe(true);
   });
@@ -551,8 +551,8 @@ describe('planFor pull', () => {
     const nothing = plan({ ...s, usdcEquity: 0 }, { ...OPEN, usdcTransfer: null, bid: null }, PULL);
     expect(nothing.routes.loop.reason).toBe('nothing to move');
     const disabled = plan(s, { ...OPEN, usdcTransfer: { isDisabled: 1, minTransAmount: 11 }, spotRule: null, bid: null }, PULL);
-    expect(disabled.routes.loop.reason).toBe('USDC transfers are disabled on CrossEx');
+    expect(disabled.routes.loop.reason).toBe('Gate has paused USDC transfers on CrossEx. Try again later.');
     const notLive = plan(s, { ...OPEN, spotRule: { state: 'paused' }, bid: null }, PULL);
-    expect(notLive.routes.loop.reason).toBe('GATE_SPOT_USDC_USDT is not live');
+    expect(notLive.routes.loop.reason).toBe('The USDC/USDT spot market on Gate is not trading right now.');
   });
 });

@@ -98,6 +98,17 @@ function quoteLine(plan: RebalancePlan, routeName: 'loop' | 'convert', pull: boo
   return `via spot loop · ${move} · costs ${fmtUsd(route.costUsd)} · ${effect} · ${wait}`;
 }
 
+function noRouteLine(plan: RebalancePlan, pull: boolean, borrow: number, free: number): { text: string; warn: boolean } {
+  const reason = plan.routes.loop.reason;
+  if (reason && reason !== 'nothing to move') return { text: reason, warn: true };
+  if (pull) {
+    return { text: free > 0 ? 'Nothing to pull.' : 'Nothing to pull. There is no spare USDC on Hyperliquid.', warn: false };
+  }
+  if (borrow === 0) return { text: 'Nothing to pay back. There is no USDC borrow on Hyperliquid.', warn: false };
+  if (free === 0) return { text: 'Nothing to move. There is no free USDT.', warn: false };
+  return { text: 'Nothing to move.', warn: false };
+}
+
 function segment(step: RebalanceStep, job: RebalanceJob, now: number): { kind: SegmentKind; pct: number; text: string } {
   const expected = EXPECTED_SECONDS[step.name] ?? 0;
   if (step.status === 'done' && step.startedAt !== null && step.doneAt !== null) {
@@ -285,10 +296,10 @@ export function RebalanceSection({ holdMs }: { holdMs?: number }) {
             {errorLine(start.error)}
           </>
         ) : (
-          <>
-            <p className="text-[12px] text-ink-300">Loop: {plan.routes.loop.reason ?? '—'}</p>
-            <p className="text-[12px] text-ink-300">Convert: {plan.routes.convert.reason ?? '—'}</p>
-          </>
+          (() => {
+            const line = noRouteLine(plan, pull, borrow, free);
+            return <p className={`text-[12px] ${line.warn ? 'text-amber-300' : 'text-ink-300'}`}>{line.text}</p>;
+          })()
         )}
       </>
     );

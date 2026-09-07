@@ -139,11 +139,11 @@ function loopQuote(
   if (!(amount > 0)) {
     reason = 'nothing to move';
   } else if (!inputs.usdcTransfer || inputs.usdcTransfer.isDisabled === 1) {
-    reason = 'USDC transfers are disabled on CrossEx';
+    reason = 'Gate has paused USDC transfers on CrossEx. Try again later.';
   } else if (!inputs.spotRule || inputs.spotRule.state !== 'live') {
-    reason = `${SPOT_SYMBOL} is not live`;
+    reason = 'The USDC/USDT spot market on Gate is not trading right now.';
   } else if (price === null) {
-    reason = 'no spot price for USDC_USDT';
+    reason = 'No price for USDC/USDT on Gate spot right now.';
   } else {
     reason = belowMinimum(inputs.usdcTransfer.minTransAmount);
   }
@@ -178,9 +178,11 @@ export function planFor(
       PULL_FEE_USD,
       PULL_WAIT_SECONDS,
       (min) =>
-        lands < min ? `pull lands ${lands} USDC after the $${PULL_FEE_USD} fee, below the ${min} USDC transfer minimum` : null,
+        lands < min
+          ? `Too small to pull. Gate takes a flat $${PULL_FEE_USD} fee on the way out and needs at least ${min} USDC to arrive. Pull at least ${min + PULL_FEE_USD} USDC.`
+          : null,
     );
-    const convert: RouteQuote = { costUsd: 0, waitSeconds: 0, available: false, reason: 'convert runs one way only' };
+    const convert: RouteQuote = { costUsd: 0, waitSeconds: 0, available: false, reason: 'Convert runs only from USDT to USDC.' };
     const route: Plan['route'] = loop.available ? 'loop' : null;
     const receives = route === 'loop' && bid !== null ? Math.max(0, floorCents(lands * bid * (1 - inputs.spotTakerRate))) : 0;
     return {
@@ -223,7 +225,7 @@ export function planFor(
     ask === null ? 0 : Math.max(ask - 1, 0),
     DEPOSIT_FEE_USD,
     LOOP_WAIT_SECONDS,
-    (min) => (bought < min ? `loop buys ${bought} USDC, below the ${min} USDC transfer minimum` : null),
+    (min) => (bought < min ? `Too small for the spot loop. Gate needs at least ${min} USDC per transfer.` : null),
   );
 
   const route: Plan['route'] =
