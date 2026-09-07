@@ -121,8 +121,8 @@ function liquidationShift(
       ? { 'USDC/HYPERLIQUID': -plan.amount, 'USDT/CROSSEX': plan.receives }
       : { 'USDC/HYPERLIQUID': plan.receives, 'USDT/CROSSEX': -plan.amount },
   );
-  if (!after) return ` · liquidation ${fmtMove(before.move)} → none within 10x`;
-  return ` · liquidation ${fmtMove(before.move)} → ${fmtMove(after.move)}`;
+  if (!after) return ` · liquidates at ${before.base} ${fmtMove(before.move)} → past 10x`;
+  return ` · liquidates at ${before.base} ${fmtMove(before.move)} → ${fmtMove(after.move)}`;
 }
 
 function noRouteLine(plan: RebalancePlan, pull: boolean, borrow: number, free: number): { text: string; warn: boolean } {

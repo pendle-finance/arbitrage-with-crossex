@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { CrossexAccount, CrossexPosition, ExposureGroup, PositionsResponse } from '../api/types';
-import { describeLine, fmtLinePrice, fmtMove, liquidationLines, nearestLiquidation } from './liquidation';
+import { describeLine, fmtLinePrice, fmtMove, lineLabel, liquidationLines, nearestLiquidation } from './liquidation';
 
 const position = (symbol: string, over: Partial<CrossexPosition> = {}): CrossexPosition => ({
   symbol,
@@ -180,6 +180,8 @@ describe('formatting', () => {
     expect(fmtMove(-0.2)).toBe('-20%');
     expect(fmtLinePrice(3150.4)).toBe('~$3,150');
     expect(fmtLinePrice(115.23)).toBe('~$115.23');
+    expect(lineLabel({ base: 'ETH', price: 3150, move: 0.37 })).toBe('Liquidates if ETH hits ~$3,150 (+37%)');
+    expect(lineLabel({ base: 'ETH', price: 1840, move: -0.2 })).toBe('Liquidates if ETH falls to ~$1,840 (-20%)');
     expect(describeLine({ base: 'ETH', price: 3150, move: 0.37 })).toBe(
       'Liquidates at about $3,150 if only ETH moves (+37%) and every other coin holds still.',
     );

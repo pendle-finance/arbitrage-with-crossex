@@ -271,7 +271,9 @@ describe('RebalanceSection', () => {
     await section();
     // 20000 = 2500 f + 25000 (f − 1) → +64%. With 899.55 USDC of cover:
     // 20000 = 2500 f + 0.1 (250000 (f − 1) − 899.55) → +64% still, rounded.
-    expect(await screen.findByText(/borrow after \$300\.45 · liquidation \+64% → \+64% · about 2\.5 min$/)).toBeInTheDocument();
+    expect(
+      await screen.findByText(/borrow after \$300\.45 · liquidates at ETH \+64% → \+64% · about 2\.5 min$/),
+    ).toBeInTheDocument();
   });
 
   it('shows the Rebalance header, the borrow pill, the cost line, and the two tiles', async () => {

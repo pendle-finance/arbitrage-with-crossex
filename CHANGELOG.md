@@ -26,8 +26,8 @@ Pay back borrowed USDC from the Balances tab, or bring spare USDC home, with one
 - **Each pair says where it liquidates.** A hedged pair is delta-neutral but not
   margin-neutral: a move against the Hyperliquid leg grows the maintenance margin twice,
   through the leg's notional and through the USDC borrow it creates. Every card on the
-  Positions tab carries `liq ~$3,150 (+37%)`, the coin's price at which the account
-  liquidates if only that coin moves. Amber inside 30%, red inside 15%. The nearest line is
+  Positions tab says `Liquidates if ETH hits ~$3,150 (+37%)`, the coin's price at which the
+  account liquidates if only that coin moves. Amber inside 30%, red inside 15%. The nearest line is
   in the header's margin-gauge hover, and the rebalance quote line shows how far a pay-down
   moves it.
 

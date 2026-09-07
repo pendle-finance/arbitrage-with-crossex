@@ -149,6 +149,11 @@ export function fmtLinePrice(price: number): string {
   return `~${fmtUsd(price, price >= 1000 ? 0 : 2)}`;
 }
 
+/** `Liquidates if ETH hits ~$3,150 (+37%)`, or `falls to` for a dump. The chip text. */
+export function lineLabel(line: LiquidationLine): string {
+  return `Liquidates if ${line.base} ${line.move < 0 ? 'falls to' : 'hits'} ${fmtLinePrice(line.price)} (${fmtMove(line.move)})`;
+}
+
 /** One sentence for a hover. */
 export function describeLine(line: LiquidationLine): string {
   return `Liquidates at about ${fmtUsd(line.price, line.price >= 1000 ? 0 : 2)} if only ${line.base} moves (${fmtMove(line.move)}) and every other coin holds still.`;

@@ -85,7 +85,7 @@ import { SharePositionModal } from './SharePositionModal';
 import type { SharePayloadV1 } from '../lib/shareCodec';
 import { applyCostFlags, legTokenSize, SECONDS_IN_YEAR, type CostFlags } from './strategyMath';
 import { crossexVenueFor } from '../lib/boros';
-import { describeLine, fmtLinePrice, fmtMove, type LiquidationLine } from '../lib/liquidation';
+import { describeLine, lineLabel, type LiquidationLine } from '../lib/liquidation';
 
 /**
  * A position matures only if it has a maturity to reach. `maturity` is 0 on a
@@ -114,7 +114,7 @@ function LiquidationChip({ line }: { line: LiquidationLine }) {
   const near = Math.abs(line.move);
   return (
     <Chip sm tone={near < 0.15 ? 'red' : near < 0.3 ? 'amber' : 'neutral'} className="num" title={describeLine(line)}>
-      {`liq ${fmtLinePrice(line.price)} (${fmtMove(line.move)})`}
+      {lineLabel(line)}
     </Chip>
   );
 }
