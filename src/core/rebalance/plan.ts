@@ -3,10 +3,10 @@ import { roundToStep } from '../numbers';
 export const DEFICIT = { coin: 'USDC', venue: 'HYPERLIQUID' } as const;
 export const SURPLUS = { coin: 'USDT', venue: 'CROSSEX' } as const;
 export const SPOT_SYMBOL = 'GATE_SPOT_USDC_USDT';
-export const INTEREST_THRESHOLD = -10000;
+const INTEREST_THRESHOLD = -10000;
 export const LOOP_WAIT_SECONDS = 150;
-export const CONVERT_RATE = 0.002;
-export const DEPOSIT_FEE_USD = 0.05;
+const CONVERT_RATE = 0.002;
+const DEPOSIT_FEE_USD = 0.05;
 
 export interface AssetLike {
   coin?: string;
@@ -20,7 +20,7 @@ export interface AssetLike {
 
 export interface AccountLike {
   availableMargin: string;
-  assets: AssetLike[];
+  assets?: AssetLike[];
 }
 
 export interface RateLike {
@@ -55,7 +55,6 @@ export interface RouteQuote {
 
 export interface Plan {
   amount: number;
-  deficit: number;
   shortfall: { reason: 'cash' | 'margin'; remaining: number } | null;
   routes: { loop: RouteQuote; convert: RouteQuote };
   route: 'loop' | 'convert' | null;
@@ -80,7 +79,7 @@ function floorCents(value: number): number {
 }
 
 export function bucketsFrom(account: AccountLike, rates: RateLike[], interestRows: InterestRowLike[]): Bucket[] {
-  return account.assets.map((asset) => {
+  return (account.assets ?? []).map((asset) => {
     const coin = asset.coin ?? '';
     const venue = asset.exchangeType ?? '';
     const equity = num(asset.equity);
@@ -159,9 +158,9 @@ export function planFor(buckets: Bucket[], account: AccountLike, inputs: PlanInp
 
   const savesPerDayUsd =
     deficitBucket && deficitBucket.borrow > 0 ? (deficitBucket.interestPerDayUsd * amount) / deficitBucket.borrow : 0;
-  const deficitAsset = account.assets.find((a) => a.coin === DEFICIT.coin && a.exchangeType === DEFICIT.venue);
+  const deficitAsset = (account.assets ?? []).find((a) => a.coin === DEFICIT.coin && a.exchangeType === DEFICIT.venue);
   const liability = num(deficitAsset?.liability);
   const marginFreedUsd = liability > 0 ? (amount * num(deficitAsset?.borrowingInitialMargin)) / liability : 0;
 
-  return { amount, deficit, shortfall, routes: { loop, convert }, route, savesPerDayUsd, marginFreedUsd };
+  return { amount, shortfall, routes: { loop, convert }, route, savesPerDayUsd, marginFreedUsd };
 }

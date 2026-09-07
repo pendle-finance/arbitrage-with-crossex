@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { makeClients } from '../../src/core/clients';
 import { Store } from '../../src/engine/db';
 import { gateVenue } from '../../src/engine/venueGate';
+import { JobFile } from '../../src/server/rebalanceJob';
 import { gate, HOST, makeTestApp, mockGateGet, TEST_KEY, TEST_SECRET } from './helpers/gate-nock';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -52,7 +53,7 @@ describe('GET /api/rebalance', () => {
     app = makeTestApp({
       getClients,
       rebalance: {
-        dataDir: mkdtempSync(path.join(tmpdir(), 'rebalance-')),
+        jobs: new JobFile(mkdtempSync(path.join(tmpdir(), 'rebalance-'))),
         sleep: async () => undefined,
       },
       engine: { store: new Store(':memory:'), venue: gateVenue(getClients), clock: { now: () => t } },
@@ -62,9 +63,10 @@ describe('GET /api/rebalance', () => {
       mockGateGet('/interest_rate', {
         body: [{ coin: 'USDC', exchange_type: 'HYPERLIQUID', hour_interest_rate: '0.000005', time: String(t) }],
       }),
-      mockGateGet('/history_margin_interests', {
-        body: [interestRow('0.01', t - 1000), interestRow('0.02', t - 2000), interestRow('5', t - 31 * DAY_MS)],
-      }),
+      gate()
+        .get('/api/v4/crossex/history_margin_interests')
+        .query((q) => q.from === String(t - 30 * DAY_MS) && q.to === String(t) && q.page === '1' && q.limit === '100')
+        .reply(200, [interestRow('5', t - 31 * DAY_MS), interestRow('0.02', t - 2000), interestRow('0.01', t - 1000)]),
       mockGateGet('/transfers/coin', {
         body: [{ coin: 'USDC', min_trans_amount: 11, est_fee: 0.05, precision: 5, is_disabled: 0 }],
       }),
@@ -96,7 +98,6 @@ describe('GET /api/rebalance', () => {
     expect(buckets.find((b: { coin: string }) => b.coin === 'USDT')).toMatchObject({ venue: 'CROSSEX', cash: 1200 });
 
     expect(plan.amount).toBe(300);
-    expect(plan.deficit).toBe(300);
     expect(plan.shortfall).toBeNull();
     expect(plan.routes.loop).toMatchObject({ waitSeconds: 150, available: true, reason: null });
     expect(plan.routes.loop.costUsd).toBeCloseTo(0.38, 6);

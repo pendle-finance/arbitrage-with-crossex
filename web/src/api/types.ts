@@ -133,6 +133,10 @@ export interface CrossexAccount {
   assets: CrossexAsset[];
 }
 
+// ---------------------------------------------------------------------------
+// GET /api/rebalance · POST /api/rebalance · POST /api/rebalance/:id/{resume,abandon}
+// ---------------------------------------------------------------------------
+
 export interface RebalanceBucket {
   coin: string;
   venue: string;
@@ -153,7 +157,6 @@ export interface RebalanceRoute {
 
 export interface RebalancePlan {
   amount: number;
-  deficit: number;
   shortfall: { reason: 'cash' | 'margin'; remaining: number } | null;
   routes: { loop: RebalanceRoute; convert: RebalanceRoute };
   route: 'loop' | 'convert' | null;
@@ -168,6 +171,7 @@ export interface RebalanceStep {
   venueId: string | null;
   qty: number | null;
   balanceBefore: number | null;
+  attempt: number;
   status: 'pending' | 'running' | 'done';
   startedAt: number | null;
   doneAt: number | null;

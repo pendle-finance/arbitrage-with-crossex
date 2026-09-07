@@ -109,6 +109,12 @@ Every APR on a position is a return *on capital*, so what goes into that number 
 
 The choice is remembered per browser and applies to every position box and the totals strip.
 
+#### Paying down borrowed USDC
+
+When a Hyperliquid position loses money, CrossEx borrows USDC for that venue and charges interest every hour. The terminal shows the borrow as a negative USDC balance on Hyperliquid. While Hyperliquid has a USDC borrow, or a pay-down job runs or is halted, the Balances tab shows a **Pay down** section. Its three tiles show the borrow in USDC, the interest per day, and the interest paid in the last 30 days.
+
+Hold `Pay down <amount> USDC` and the terminal moves that much USDT from CrossEx into USDC on Hyperliquid. The terminal chooses the cheaper route automatically: a spot buy plus two transfers (about 2.5 minutes), or a direct convert (instant). A halted job shows the reason, the line `Funds are in <place>`, and a **Resume** and an **Abandon** button. After **Abandon**, move any USDC left in the Gate spot wallet by hand in Gate.
+
 ## 3. How to maximise return
 These few factors move the needle the most in maximising your return on the 4-legged Funding Rate Arbitrage
 1. Reduce perp fees with a **higher VIP tier** in Gate.

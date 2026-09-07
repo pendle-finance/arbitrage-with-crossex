@@ -239,7 +239,6 @@ export function baseHandlers() {
           buckets: [],
           plan: {
             amount: 0,
-            deficit: 0,
             shortfall: null,
             routes: {
               loop: { costUsd: 0.05, waitSeconds: 150, available: false, reason: 'nothing to move' },

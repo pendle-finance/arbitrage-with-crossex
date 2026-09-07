@@ -1,8 +1,9 @@
+import { ApiError } from '../api/client';
 import { useRebalance, useRebalanceCommand, useStartRebalance } from '../api/queries';
 import type { RebalanceJob, RebalanceStep } from '../api/types';
 import { HoldToConfirmButton } from '../components/HoldToConfirmButton';
 import { Stat } from '../components/Stat';
-import { fmtUsd, num } from '../lib/fmt';
+import { fmtAge, fmtUsd, num } from '../lib/fmt';
 import { useNow } from '../lib/useNow';
 
 const SHORTFALL_TEXT = {
@@ -21,10 +22,22 @@ function waitText(waitSeconds: number): string {
   return `about ${Math.round(waitSeconds / 6) / 10} min`;
 }
 
-function elapsedText(step: RebalanceStep, now: number): string {
+function elapsedText(step: RebalanceStep, job: RebalanceJob, now: number): string {
   if (step.status === 'pending' || step.startedAt === null) return '—';
-  const end = step.status === 'done' && step.doneAt !== null ? step.doneAt : now;
-  return `${Math.max(0, Math.floor((end - step.startedAt) / 1000))}s`;
+  const end =
+    step.status === 'done' && step.doneAt !== null ? step.doneAt : job.status === 'halted' ? job.updatedAt : now;
+  return fmtAge(end - step.startedAt);
+}
+
+function errorLine(error: Error | null) {
+  if (!error) return null;
+  const hint = error instanceof ApiError ? error.hint : undefined;
+  return (
+    <p role="alert" className="text-[12px] text-rose-300">
+      {error.message}
+      {hint ? <span className="text-ink-400"> {hint}</span> : null}
+    </p>
+  );
 }
 
 function stepRows(job: RebalanceJob, now: number) {
@@ -34,7 +47,7 @@ function stepRows(job: RebalanceJob, now: number) {
         <li key={s.name} className="flex items-baseline gap-3">
           <span className="text-ink-100">{s.name}</span>
           <span className={`text-[11px] uppercase tracking-wider ${STEP_TONE[s.status]}`}>{s.status}</span>
-          <span className="num ml-auto text-ink-300">{elapsedText(s, now)}</span>
+          <span className="num ml-auto text-ink-300">{elapsedText(s, job, now)}</span>
         </li>
       ))}
     </ul>
@@ -57,13 +70,6 @@ export function RebalanceSection({ holdMs }: { holdMs?: number }) {
   if (borrow === 0 && !jobActive) return null;
 
   const plan = data.plan;
-  const cmdError = (start.error ?? resume.error ?? abandon.error) as { message: string; hint?: string } | null;
-  const errorLine = cmdError && (
-    <p role="alert" className="text-[12px] text-rose-300">
-      {cmdError.message}
-      {cmdError.hint ? <span className="text-ink-400"> {cmdError.hint}</span> : null}
-    </p>
-  );
 
   let body;
   if (job && job.status === 'running') {
@@ -83,11 +89,12 @@ export function RebalanceSection({ holdMs }: { holdMs?: number }) {
             Abandon
           </button>
         </div>
-        {errorLine}
+        {errorLine(resume.error ?? abandon.error)}
       </>
     );
   } else if (plan.route) {
-    const route = plan.routes[plan.route];
+    const routeName = plan.route;
+    const route = plan.routes[routeName];
     body = (
       <>
         <p className="text-[12px] text-ink-300">
@@ -104,12 +111,12 @@ export function RebalanceSection({ holdMs }: { holdMs?: number }) {
           tone="cyan"
           holdMs={holdMs}
           disabled={start.isPending}
-          onConfirm={() => start.mutate()}
+          onConfirm={() => start.mutate({ amount: plan.amount, route: routeName })}
           className="self-start"
         >
           {`Pay down ${num(plan.amount, 2)} USDC`}
         </HoldToConfirmButton>
-        {errorLine}
+        {errorLine(start.error)}
       </>
     );
   } else {

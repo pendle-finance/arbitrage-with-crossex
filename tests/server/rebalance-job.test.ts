@@ -7,8 +7,9 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { makeClients } from '../../src/core/clients';
 import { Store } from '../../src/engine/db';
 import { gateVenue } from '../../src/engine/venueGate';
-import { newJob, type Job, type Step } from '../../src/server/rebalanceJob';
+import { JobFile, newJob, type Job, type Step } from '../../src/server/rebalanceJob';
 import { LOOKUP_RETRY_MS, STEP_TIMEOUT_MS, tagFor } from '../../src/server/rebalanceRunner';
+import type { AppDeps } from '../../src/server/app';
 import { gate, HOST, makeTestApp, mockGateGet, mockGatePost, TEST_KEY, TEST_SECRET } from './helpers/gate-nock';
 
 const API = '/api/v4';
@@ -48,19 +49,23 @@ async function waitFor(pred: () => boolean, what: string, ms = 5000): Promise<vo
   }
 }
 
-function boot(over: { store?: Store; sleep?: (ms: number) => Promise<void>; job?: Job } = {}) {
+function boot(
+  over: { store?: Store; sleep?: (ms: number) => Promise<void>; job?: Job; credentials?: AppDeps['credentials'] } = {},
+) {
   const dataDir = mkdtempSync(path.join(tmpdir(), 'rebalance-'));
   if (over.job) writeFileSync(path.join(dataDir, 'rebalance.json'), JSON.stringify(over.job));
   const getClients = () => makeClients({ key: TEST_KEY, secret: TEST_SECRET });
   const app = makeTestApp({
     getClients,
-    rebalance: { dataDir, sleep: over.sleep ?? sleep },
+    rebalance: { jobs: new JobFile(dataDir), sleep: over.sleep ?? sleep },
     engine: { store: over.store ?? new Store(':memory:'), venue: gateVenue(getClients), clock: { now: () => t } },
+    credentials: over.credentials,
   });
   apps.push(app);
   return {
     file: () => JSON.parse(readFileSync(path.join(dataDir, 'rebalance.json'), 'utf8')) as Job,
-    post: (url = '/api/rebalance') => app.inject({ method: 'POST', url, headers: HOST, payload: {} }),
+    post: (url = '/api/rebalance', payload: Record<string, unknown> = {}) =>
+      app.inject({ method: 'POST', url, headers: HOST, payload }),
     view: async () => (await app.inject({ method: 'GET', url: '/api/rebalance', headers: HOST })).json(),
   };
 }
@@ -214,12 +219,38 @@ describe('POST /api/rebalance', () => {
 
     release();
     await waitFor(() => h.file().status === 'halted', 'the halt');
+
+    await reset();
+    mockView();
+    mockGatePost('/orders', { body: orderBody('OPEN', '0') });
+    mockGateGet('/orders/o1', { body: orderBody('REJECT', '0') });
+    const capped = boot();
+    const smaller = await capped.post('/api/rebalance', { amount: 100.005, route: 'loop' });
+    expect(smaller.statusCode).toBe(202);
+    expect(capped.file()).toMatchObject({ amount: 100, route: 'loop' });
+    await waitFor(() => capped.file().status === 'halted', 'the halt');
+
+    await reset();
+    mockView();
+    mockGatePost('/orders', { body: orderBody('OPEN', '0') });
+    mockGateGet('/orders/o1', { body: orderBody('REJECT', '0') });
+    const larger = boot();
+    const capped2 = await larger.post('/api/rebalance', { amount: 5000 });
+    expect(capped2.statusCode).toBe(202);
+    expect(larger.file().amount).toBe(AMOUNT);
+    await waitFor(() => larger.file().status === 'halted', 'the halt');
   });
 
-  it('refuses: 409 for a running job, a working deal, no route, and one of two concurrent POSTs', async () => {
-    mockView();
-    let h = boot({ store: busyDeal() });
+  it('refuses: 409 for a running job, a working deal, no route, a changed plan, and one of two concurrent POSTs; 403 before the disclaimer', async () => {
+    const stored = newJob('loop', AMOUNT, t);
+    let h = boot({ job: stored });
     let res = await h.post();
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error.message).toBe(`rebalance ${stored.id} is halted`);
+
+    await reset();
+    h = boot({ store: busyDeal() });
+    res = await h.post();
     expect(res.statusCode).toBe(409);
     expect(res.json()).toEqual({
       ok: false,
@@ -227,11 +258,26 @@ describe('POST /api/rebalance', () => {
     });
 
     await reset();
+    const envPath = path.join(mkdtempSync(path.join(tmpdir(), 'disc-')), '.env');
+    h = boot({ credentials: { envPath, setClients: () => {} } });
+    res = await h.post();
+    expect(res.statusCode).toBe(403);
+    expect(res.json().error.label).toBe('DISCLAIMER_NOT_ACCEPTED');
+
+    await reset();
     mockView({ disabled: 1, account: account({ equity: '0', liability: '0' }) });
     h = boot();
     res = await h.post();
     expect(res.statusCode).toBe(409);
     expect(res.json().error.message).toBe('no route');
+
+    await reset();
+    mockView();
+    h = boot();
+    res = await h.post('/api/rebalance', { route: 'convert' });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error.message).toBe('plan changed: now loop');
+    expect(() => h.file()).toThrow();
 
     await reset();
     const release = holdRunner();
@@ -332,6 +378,7 @@ describe('POST /api/rebalance', () => {
     await h.post();
     await waitFor(() => h.file().status === 'halted', 'the halt');
     expect(h.file()).toMatchObject({ haltReason: 'order REJECT with nothing filled', fundsAt: 'CROSSEX', stepIndex: 0 });
+    expect(h.file().steps[0]).toMatchObject({ venueId: null, text: null });
 
     await reset();
     mockView();
@@ -413,8 +460,10 @@ describe('POST /api/rebalance/:id/resume and /abandon', () => {
     expect(res.statusCode).toBe(409);
     expect(res.json().error.message).toBe(`rebalance ${job.id} is done`);
     res = await h.post('/api/rebalance/nope/resume');
-    expect(res.statusCode).toBe(409);
+    expect(res.statusCode).toBe(400);
     expect(res.json().error.message).toBe('unknown rebalance nope');
+    res = await h.post('/api/rebalance/nope/abandon');
+    expect(res.statusCode).toBe(400);
 
     await reset();
     const halted = haltedLoopJob(1, { venueId: 'x1' });

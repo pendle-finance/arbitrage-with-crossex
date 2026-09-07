@@ -393,31 +393,20 @@ export function useAlerts() {
 }
 
 export function useRebalance() {
-  const qc = useQueryClient();
-  const settled = useRef<string | null>(null);
-  const query = useQuery({
+  return useQuery({
     queryKey: qk.rebalance,
     queryFn: () => fetchJson<RebalanceView>('/rebalance'),
     refetchInterval: (q) => (q.state.data?.job?.status === 'running' ? 1_000 : 4_000),
     refetchIntervalInBackground: true,
     placeholderData: keepPreviousData,
   });
-
-  const jobId = query.data?.job?.id ?? null;
-  const jobStatus = query.data?.job?.status;
-  useEffect(() => {
-    if (!jobId || jobStatus !== 'done' || settled.current === jobId) return;
-    settled.current = jobId;
-    void qc.invalidateQueries({ queryKey: qk.account });
-  }, [jobId, jobStatus, qc]);
-
-  return query;
 }
 
 export function useStartRebalance() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: () => postJson<{ id: string }>('/rebalance', {}),
+    mutationFn: (body: { amount: number; route: 'loop' | 'convert' }) =>
+      postJson<{ id: string }>('/rebalance', body),
     onSuccess: () => void qc.invalidateQueries({ queryKey: qk.rebalance }),
   });
 }

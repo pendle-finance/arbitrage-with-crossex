@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { TtlCache } from '../../src/server/cache';
 import { JobFile, newJob, type Job, type RouteName } from '../../src/server/rebalanceJob';
 import {
@@ -40,7 +40,12 @@ const gateError = (status: number, label: string, message: string) => () => {
 };
 
 const created = (orderId: string) => ({ body: { orderId, text: 't' } });
-const order = (state: string, executedQty: string, orderId = 'o1') => ({ body: { orderId, state, executedQty } });
+const order = (state: string, executedQty: string, orderId = 'o1', extra: Record<string, string> = {}) => ({
+  body: { orderId, state, executedQty, ...extra },
+});
+const networkError = () => {
+  throw Object.assign(new Error('timeout of 10000ms exceeded'), { code: 'ECONNABORTED' });
+};
 const tx = (txId: string) => ({ body: { txId, text: 't' } });
 const row = (id: string, status: string, extra: Record<string, string> = {}) => ({
   id,
@@ -92,14 +97,15 @@ function harness(
     };
   }
   const dir = fs.mkdtempSync(path.join(tmpdir(), 'rebalance-'));
-  const jobs = new JobFile(dir);
+  const jobs = new JobFile(dir, clock.now);
   const job = newJob(route, 12, clock.now());
   edit?.(job);
   jobs.write(job);
   const cache = new TtlCache();
-  const deps = { clients: () => clientsWith(crossEx), jobs, cache, now: clock.now, sleep: clock.sleep };
+  const log = vi.fn();
+  const deps = { clients: () => clientsWith(crossEx), jobs, cache, now: clock.now, sleep: clock.sleep, log };
   const count = (name: string) => calls[name]?.length ?? 0;
-  return { dir, job, jobs, cache, calls, count, deps, run: () => runJob(deps) };
+  return { dir, job, jobs, cache, calls, count, deps, log, run: () => runJob(deps) };
 }
 
 const doneStep = (name: string, tag: string, venueId: string, qty: number, at: number) => ({
@@ -109,6 +115,7 @@ const doneStep = (name: string, tag: string, venueId: string, qty: number, at: n
   venueId,
   qty,
   balanceBefore: null,
+  attempt: 0,
   status: 'done' as const,
   startedAt: at,
   doneAt: at,
@@ -157,7 +164,8 @@ describe('runJob loop route', () => {
       { coin: 'USDC', amount: '11.99000', from: 'CROSSEX_GATE', to: 'SPOT', text: tagFor(job.id, 1) },
       { coin: 'USDC', amount: '11.99000', from: 'SPOT', to: 'CROSSEX_HYPERLIQUID', text: tagFor(job.id, 2) },
     ]);
-    expect(h.calls.listCrossexTransfers[0]).toEqual({ coin: 'USDC', limit: 20 });
+    expect(h.calls.listCrossexTransfers[0]).toEqual({ coin: 'USDC', limit: 100 });
+    expect(h.log).not.toHaveBeenCalled();
 
     const onDisk = JSON.parse(fs.readFileSync(path.join(h.dir, 'rebalance.json'), 'utf8')) as Job;
     expect(onDisk.status).toBe('done');
@@ -177,15 +185,141 @@ describe('runJob loop route', () => {
     expect(job.haltReason).toBe('order REJECT with nothing filled');
     expect(job.fundsAt).toBe('CROSSEX');
     expect(job.stepIndex).toBe(0);
-    expect(job.steps[0].venueId).toBe('o1');
+    expect(job.steps[0].venueId).toBeNull();
+    expect(job.steps[0].text).toBeNull();
     expect(job.steps[0].status).toBe('running');
+    expect(h.count('createCrossexTransfer')).toBe(0);
+    expect(h.log).toHaveBeenCalledWith(
+      `rebalance ${job.id} halted at Buy USDC: order REJECT with nothing filled. Funds are in CROSSEX.`,
+    );
+  });
+
+  it('subtracts a USDC fee from the executed qty', async () => {
+    const h = harness(fakeClock(), 'loop', {
+      ...happyLoop(),
+      getCrossexOrder: seq(order('FILLED', '11.99', 'o1', { feeCoin: 'USDC', fee: '0.012' })),
+      listCrossexTransfers: seq(
+        rows(row('x1', 'SUCCESS', { actualReceive: '11.978' })),
+        rows(row('x2', 'SUCCESS', { actualReceive: '11.928' })),
+      ),
+    });
+
+    await h.run();
+
+    const job = h.jobs.read()!;
+    expect(job.status).toBe('done');
+    expect(job.steps[0].qty).toBe(11.978);
+    expect(h.calls.createCrossexTransfer[0].crossexTransferRequest.amount).toBe('11.97800');
+  });
+
+  it('keeps a USDT fee out of the executed qty', async () => {
+    const h = harness(fakeClock(), 'loop', {
+      ...happyLoop(),
+      getCrossexOrder: seq(order('FILLED', '11.99', 'o1', { feeCoin: 'USDT', fee: '0.012' })),
+    });
+
+    await h.run();
+
+    expect(h.jobs.read()!.steps[0].qty).toBe(11.99);
+  });
+
+  it('keeps polling through an ACTIVE state and finishes on FILLED', async () => {
+    const h = harness(fakeClock(), 'loop', {
+      ...happyLoop(),
+      getCrossexOrder: seq(order('ACTIVE', '0'), order('ACTIVE', '0'), order('FILLED', '11.99')),
+    });
+
+    await h.run();
+
+    expect(h.jobs.read()!.status).toBe('done');
+    expect(h.count('getCrossexOrder')).toBe(3);
+  });
+
+  it('treats a 404 on a poll as transient and finishes on the next FILLED', async () => {
+    const h = harness(fakeClock(), 'loop', {
+      ...happyLoop(),
+      getCrossexOrder: seq(gateError(404, 'ORDER_NOT_FOUND', 'order not found'), order('FILLED', '11.99')),
+    });
+
+    await h.run();
+
+    const job = h.jobs.read()!;
+    expect(job.status).toBe('done');
+    expect(job.haltReason).toBeNull();
+    expect(h.count('getCrossexOrder')).toBe(2);
+  });
+
+  it('halts on a transfer SUCCESS that received nothing', async () => {
+    const h = harness(fakeClock(), 'loop', {
+      ...happyLoop(),
+      listCrossexTransfers: seq(rows(row('x1', 'SUCCESS', { actualReceive: '0' }))),
+    });
+
+    await h.run();
+
+    const job = h.jobs.read()!;
+    expect(job.status).toBe('halted');
+    expect(job.haltReason).toBe('transfer SUCCESS with nothing received');
+    expect(job.fundsAt).toBe('GATE');
+    expect(job.steps[1].venueId).toBe('x1');
+  });
+
+  it('halts on a CANCELLED transfer and clears its ids for a fresh send', async () => {
+    const h = harness(fakeClock(), 'loop', {
+      ...happyLoop(),
+      listCrossexTransfers: seq(rows(row('x1', 'CANCELLED'))),
+    });
+
+    await h.run();
+
+    const job = h.jobs.read()!;
+    expect(job.status).toBe('halted');
+    expect(job.haltReason).toBe('transfer CANCELLED');
+    expect(job.steps[1].venueId).toBeNull();
+    expect(job.steps[1].text).toBeNull();
+  });
+
+  it('halts on a step name it does not know before any venue call', async () => {
+    const h = harness(fakeClock(), 'loop', happyLoop(), (job) => {
+      job.steps[0].name = 'Bogus';
+    });
+
+    await h.run();
+
+    const job = h.jobs.read()!;
+    expect(job.status).toBe('halted');
+    expect(job.haltReason).toBe('unknown step Bogus');
+    expect(h.count('createCrossexOrder')).toBe(0);
     expect(h.count('createCrossexTransfer')).toBe(0);
   });
 
-  it('halts on a FAILED transfer with its failReason and fundsAt GATE', async () => {
+  it('adopts a transfer by tag on the next pass when the send response has no txId', async () => {
+    const id = (1_000_000).toString(36);
+    const x1 = row('x1', 'SUCCESS', { actualReceive: '11.99', text: tagFor(id, 1) });
     const h = harness(fakeClock(), 'loop', {
       ...happyLoop(),
-      listCrossexTransfers: seq(rows(row('x1', 'FAILED', { failReason: 'insufficient balance' }))),
+      createCrossexTransfer: seq({ body: { text: 't' } }, tx('x2')),
+      listCrossexTransfers: seq(rows(x1), rows(x1), rows(x1, row('x2', 'SUCCESS', { actualReceive: '11.94' }))),
+    });
+
+    await h.run();
+
+    const job = h.jobs.read()!;
+    expect(job.id).toBe(id);
+    expect(job.status).toBe('done');
+    expect(job.steps.map((s) => s.venueId)).toEqual(['o1', 'x1', 'x2']);
+    expect(h.count('createCrossexTransfer')).toBe(2);
+  });
+
+  it('halts on a FAILED transfer with its failReason and fundsAt GATE, and a resume sends one new transfer', async () => {
+    const h = harness(fakeClock(), 'loop', {
+      ...happyLoop(),
+      createCrossexTransfer: seq(tx('x1'), tx('x2'), tx('x3')),
+      listCrossexTransfers: seq(
+        rows(row('x1', 'FAILED', { failReason: 'insufficient balance' })),
+        rows(row('x2', 'SUCCESS', { actualReceive: '11.99' })),
+        rows(row('x3', 'SUCCESS', { actualReceive: '11.94' })),
+      ),
     });
 
     await h.run();
@@ -196,8 +330,25 @@ describe('runJob loop route', () => {
     expect(job.fundsAt).toBe('GATE');
     expect(job.stepIndex).toBe(1);
     expect(job.steps[0].status).toBe('done');
-    expect(job.steps[1].venueId).toBe('x1');
+    expect(job.steps[1].venueId).toBeNull();
+    expect(job.steps[1].text).toBeNull();
     expect(h.count('createCrossexTransfer')).toBe(1);
+    expect(h.log).toHaveBeenCalledWith(
+      `rebalance ${job.id} halted at To spot: insufficient balance. Funds are in GATE.`,
+    );
+
+    job.status = 'running';
+    job.haltReason = null;
+    h.jobs.write(job);
+    await h.run();
+
+    const resumed = h.jobs.read()!;
+    expect(resumed.steps[1].attempt).toBe(1);
+    expect(h.calls.createCrossexTransfer[1].crossexTransferRequest.text).toBe(tagFor(job.id, 1, 1));
+    expect(h.calls.createCrossexTransfer[1].crossexTransferRequest.text).not.toBe(h.calls.createCrossexTransfer[0].crossexTransferRequest.text);
+    expect(resumed.status).toBe('done');
+    expect(resumed.steps.map((s) => s.venueId)).toEqual(['o1', 'x2', 'x3']);
+    expect(h.count('createCrossexTransfer')).toBe(3);
   });
 
   it('halts with timeout after 600 s without a terminal state', async () => {
@@ -210,6 +361,8 @@ describe('runJob loop route', () => {
     expect(job.status).toBe('halted');
     expect(job.haltReason).toBe('timeout');
     expect(job.fundsAt).toBe('CROSSEX');
+    expect(job.steps[0].venueId).toBe('o1');
+    expect(job.steps[0].text).toBe(tagFor(job.id, 0));
     expect(clock.now() - job.steps[0].startedAt!).toBe(STEP_TIMEOUT_MS + POLL_MS);
     expect(h.count('getCrossexOrder')).toBe(STEP_TIMEOUT_MS / POLL_MS + 1);
     expect(h.count('createCrossexOrder')).toBe(1);
@@ -339,8 +492,28 @@ describe('runJob convert route', () => {
     expect(job.fundsAt).toBe('CROSSEX');
     expect(job.steps[0].quoteId).toBeNull();
     expect(job.steps[0].venueId).toBeNull();
+    expect(job.steps[0].balanceBefore).toBe(100);
     expect(h.count('createCrossexConvertOrder')).toBe(0);
-    expect(h.count('getCrossexAccount')).toBe(0);
+    expect(h.count('getCrossexAccount')).toBe(1);
+  });
+
+  it('sends one order when the order call times out and the balance then shows it landed', async () => {
+    const clock = fakeClock();
+    const h = harness(clock, 'convert', {
+      createCrossexConvertQuote: seq(quote('q1', '11.976')),
+      getCrossexAccount: seq(account('100'), account('100'), account('111.976')),
+      createCrossexConvertOrder: seq(networkError, { body: { orderId: 'c1', text: 'q1' } }),
+    });
+
+    await h.run();
+
+    const job = h.jobs.read()!;
+    expect(job.status).toBe('done');
+    expect(job.steps[0]).toMatchObject({ quoteId: 'q1', venueId: null, qty: 11.976, balanceBefore: 100, status: 'done' });
+    expect(h.count('createCrossexConvertOrder')).toBe(1);
+    expect(h.count('createCrossexConvertQuote')).toBe(1);
+    expect(h.count('getCrossexAccount')).toBe(3);
+    expect(job.steps[0].doneAt! - job.steps[0].startedAt!).toBe(POLL_MS + LOOKUP_RETRY_MS);
   });
 });
 
@@ -540,21 +713,58 @@ describe('JobFile', () => {
     expect(back.updatedAt).toBeGreaterThan(job.createdAt);
   });
 
+  it('reads null and says so once when the file is not a job', () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      const d = dir();
+      const { steps: _steps, ...noSteps } = newJob('loop', 12, 1_000_000);
+      fs.writeFileSync(path.join(d, 'rebalance.json'), JSON.stringify(noSteps));
+      const jobs = new JobFile(d);
+      expect(jobs.read()).toBeNull();
+      expect(jobs.read()).toBeNull();
+      expect(error).toHaveBeenCalledTimes(1);
+      expect(String(error.mock.calls[0][0])).toContain('treating as no job');
+
+      fs.writeFileSync(path.join(d, 'rebalance.json'), '{not json');
+      expect(new JobFile(d).read()).toBeNull();
+
+      const bogus = newJob('loop', 12, 1_000_000);
+      bogus.steps[1].name = 'Bogus';
+      fs.writeFileSync(path.join(d, 'rebalance.json'), JSON.stringify(bogus));
+      expect(new JobFile(d).read()).toBeNull();
+
+      const wrongIndex = { ...newJob('loop', 12, 1_000_000), stepIndex: 3 };
+      fs.writeFileSync(path.join(d, 'rebalance.json'), JSON.stringify(wrongIndex));
+      expect(new JobFile(d).read()).toBeNull();
+      expect(error).toHaveBeenCalledTimes(4);
+    } finally {
+      error.mockRestore();
+    }
+  });
+
+  it('stamps updatedAt from the clock it was given', () => {
+    const jobs = new JobFile(dir(), () => 42);
+    const job = newJob('loop', 12, 1_000_000);
+    jobs.write(job);
+    expect(job.updatedAt).toBe(42);
+  });
+
   it('haltIfRunning halts a running job with the reason and leaves other statuses alone', () => {
     const d = dir();
     const jobs = new JobFile(d);
     jobs.write(newJob('loop', 12, 1_000_000));
 
-    jobs.haltIfRunning('server restarted');
+    expect(jobs.haltIfRunning('server restarted')).toBe(true);
 
     expect(jobs.read()).toMatchObject({ status: 'halted', haltReason: 'server restarted' });
     expect(new JobFile(d).read()).toMatchObject({ status: 'halted', haltReason: 'server restarted' });
+    expect(jobs.haltIfRunning('server restarted')).toBe(false);
 
     const done = { ...newJob('loop', 12, 2_000_000), status: 'done' as const };
     jobs.write(done);
-    jobs.haltIfRunning('server restarted');
+    expect(jobs.haltIfRunning('server restarted')).toBe(false);
     expect(jobs.read()).toMatchObject({ status: 'done', haltReason: null });
 
-    expect(() => new JobFile(dir()).haltIfRunning('server restarted')).not.toThrow();
+    expect(new JobFile(dir()).haltIfRunning('server restarted')).toBe(false);
   });
 });

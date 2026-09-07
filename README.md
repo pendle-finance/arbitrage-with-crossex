@@ -450,8 +450,8 @@ curl -s "https://api.gateio.ws/api/v4/crossex/rule/symbols" | jq '.[] | select(.
     projections), `partition.ts` (which venue leg belongs to which strategy).
   - `preview.ts` — `resolveActions` + estimates = `POST /api/preview`.
 - `src/server/` — Fastify app: TTL cache with request coalescing + 429 stale-serve, localhost
-  Host/Origin guard, `/api/deals` routes (thin intent writers — the loop owns every venue
-  mutation), routes.
+  Host/Origin guard, `/api/deals` routes (thin intent writers — the loop owns every deal's
+  venue mutation; the rebalance runner owns the pay-down's), routes.
 - `web/` — React 18 + Vite + Tailwind + react-query SPA (standalone package).
 - `install.sh` / `uninstall.sh` — the macOS one-command installer (private Node runtime in
   `~/.boros-crossex`, LaunchAgent `com.boros.crossex-terminal`, user data outside the app dir).

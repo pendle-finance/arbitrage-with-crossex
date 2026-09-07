@@ -119,7 +119,6 @@ describe('bucketsFrom interest', () => {
 describe('planFor amount', () => {
   it('equals the deficit when the deficit is the smallest', () => {
     const p = plan({ usdcEquity: -500, usdtCash: 1000, margin: 2000 });
-    expect(p.deficit).toBe(500);
     expect(p.amount).toBe(500);
   });
 
@@ -140,14 +139,12 @@ describe('planFor amount', () => {
 
   it('is 0 when USDC on Hyperliquid has no deficit', () => {
     const p = plan({ usdcEquity: 50, usdtCash: 1000, margin: 2000 });
-    expect(p.deficit).toBe(0);
     expect(p.amount).toBe(0);
   });
 
   it('is 0 when the USDC bucket is absent', () => {
     const account: AccountLike = { availableMargin: '2000', assets: [asset('USDT', 'CROSSEX', { balance: 1000 })] };
     const p = planFor(bucketsFrom(account, USDC_RATE, []), account, OPEN);
-    expect(p.deficit).toBe(0);
     expect(p.amount).toBe(0);
   });
 

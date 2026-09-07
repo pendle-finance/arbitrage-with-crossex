@@ -42,7 +42,7 @@ describe.skipIf(process.env.REBALANCE !== '1')('live rebalance — loop route wi
     jobs.write(job);
     console.log(`  ▸ job ${job.id} written to ${dataDir}`);
 
-    await runJob({ clients: () => clients, jobs, cache: new TtlCache(), now: Date.now, sleep });
+    await runJob({ clients: () => clients, jobs, cache: new TtlCache(), now: Date.now, sleep, log: console.error });
 
     console.log(`  ▸ job ${job.id}: ${job.status}${job.haltReason ? ` (${job.haltReason})` : ''} fundsAt=${job.fundsAt}`);
     for (const step of job.steps) {

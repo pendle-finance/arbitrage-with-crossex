@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { describe, expect, it } from 'vitest';
@@ -47,7 +47,6 @@ const route = (over: Partial<RebalanceRoute> = {}): RebalanceRoute => ({
 
 const plan = (over: Partial<RebalancePlan> = {}): RebalancePlan => ({
   amount: 900,
-  deficit: 900,
   shortfall: null,
   routes: { loop: route(), convert: route({ costUsd: 1.8, waitSeconds: 0 }) },
   route: 'loop',
@@ -63,6 +62,7 @@ const step = (name: string, over: Partial<RebalanceStep> = {}): RebalanceStep =>
   venueId: null,
   qty: null,
   balanceBefore: null,
+  attempt: 0,
   status: 'pending',
   startedAt: null,
   doneAt: null,
@@ -103,6 +103,20 @@ function serve(v: RebalanceView) {
     }),
   );
   return () => gets;
+}
+
+function refuseStart() {
+  server.use(
+    http.post('/api/rebalance', () =>
+      HttpResponse.json(
+        {
+          ok: false,
+          error: { category: 'validation', message: 'a trade is unfilled: deal-7', retryable: true },
+        },
+        { status: 409 },
+      ),
+    ),
+  );
 }
 
 const section = () => screen.findByRole('region', { name: 'Pay down' });
@@ -237,12 +251,35 @@ describe('RebalanceSection', () => {
     await waitFor(() => expect(posts).toEqual(['rb-1/resume']));
   });
 
-  it('sends one POST /api/rebalance after a full hold', async () => {
+  it('stops a halted step counter at the halt time', async () => {
+    serve(
+      view({
+        job: job({
+          status: 'halted',
+          haltReason: 'timeout',
+          fundsAt: 'SPOT',
+          updatedAt: 13_000,
+          steps: [
+            step('Buy USDC', { status: 'done', startedAt: 1_000, doneAt: 3_000 }),
+            step('To spot', { status: 'done', startedAt: 3_000, doneAt: 8_000 }),
+            step('To Hyperliquid', { status: 'running', startedAt: 8_000 }),
+          ],
+        }),
+      }),
+    );
+    renderWithClient(<RebalanceSection holdMs={50} />);
+
+    await section();
+    const rows = screen.getAllByRole('listitem');
+    expect(within(rows[2]).getByText('5s')).toBeInTheDocument();
+  });
+
+  it('sends one POST /api/rebalance with the plan amount and route after a full hold', async () => {
     serve(view());
-    let posts = 0;
+    const posts: unknown[] = [];
     server.use(
-      http.post('/api/rebalance', () => {
-        posts += 1;
+      http.post('/api/rebalance', async ({ request }) => {
+        posts.push(await request.json());
         return HttpResponse.json(env({ id: 'rb-2' }), { status: 202 });
       }),
     );
@@ -251,28 +288,33 @@ describe('RebalanceSection', () => {
     const btn = await screen.findByRole('button', { name: 'Pay down 900.00 USDC' });
     fireEvent.pointerDown(btn);
 
-    await waitFor(() => expect(posts).toBe(1));
+    await waitFor(() => expect(posts).toEqual([{ amount: 900, route: 'loop' }]));
     await new Promise((r) => setTimeout(r, 200));
-    expect(posts).toBe(1);
+    expect(posts).toHaveLength(1);
   });
 
   it('shows the 409 message when the start is refused', async () => {
     serve(view());
-    server.use(
-      http.post('/api/rebalance', () =>
-        HttpResponse.json(
-          {
-            ok: false,
-            error: { category: 'validation', message: 'a trade is unfilled: deal-7', retryable: true },
-          },
-          { status: 409 },
-        ),
-      ),
-    );
+    refuseStart();
     renderWithClient(<RebalanceSection holdMs={50} />);
 
     fireEvent.pointerDown(await screen.findByRole('button', { name: 'Pay down 900.00 USDC' }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent('a trade is unfilled: deal-7');
   });
+
+  it('drops a refused start error once the poll shows a halted job', async () => {
+    serve(view());
+    refuseStart();
+    renderWithClient(<RebalanceSection holdMs={50} />);
+
+    fireEvent.pointerDown(await screen.findByRole('button', { name: 'Pay down 900.00 USDC' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('a trade is unfilled: deal-7');
+
+    serve(view({ job: job({ status: 'halted', haltReason: 'timeout', fundsAt: 'SPOT' }) }));
+
+    await screen.findByRole('button', { name: 'Resume' }, { timeout: 6_000 });
+    expect(screen.getByRole('button', { name: 'Abandon' })).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).toBeNull();
+  }, 10_000);
 });

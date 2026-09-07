@@ -1,9 +1,11 @@
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import { CoreError } from '../../core/errors';
+import { roundToStep } from '../../core/numbers';
 import { bucketsFrom, planFor, SPOT_SYMBOL, type InterestRowLike } from '../../core/rebalance/plan';
 import type { AppDeps } from '../app';
 import { TTL } from '../cache';
-import { JobFile, newJob, type Job } from '../rebalanceJob';
+import { isDisclaimerAccepted } from '../disclaimer';
+import { haltMessage, newJob, type Job, type JobFile } from '../rebalanceJob';
 import { runJob } from '../rebalanceRunner';
 
 const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
@@ -15,13 +17,18 @@ const conflict = (reply: FastifyReply, message: string): FastifyReply =>
   reply.code(409).send({ ok: false, error: { category: 'validation', message, retryable: true } });
 
 const orEmpty = <T>(read: Promise<{ value: T[]; stale: boolean }>): Promise<{ value: T[]; stale: boolean }> =>
-  read.catch(() => ({ value: [], stale: false }));
+  read.catch(() => ({ value: [], stale: true }));
 
 export function rebalanceRoutes(deps: AppDeps) {
   return async function plugin(app: FastifyInstance): Promise<void> {
-    const jobs = deps.rebalance ? new JobFile(deps.rebalance.dataDir) : null;
-    jobs?.haltIfRunning('server restarted');
+    const jobs = deps.rebalance?.jobs ?? null;
     const now = (): number => deps.engine!.clock.now();
+    const log = (message: string): void => {
+      console.error(message);
+      const engine = deps.engine;
+      if (engine) engine.store.alert('error', null, message, engine.clock.now(), { once: true });
+    };
+    if (jobs?.haltIfRunning('server restarted')) log(haltMessage(jobs.read()!));
     let inflight: Promise<void> | null = null;
 
     const requireJobs = (): JobFile => {
@@ -29,11 +36,16 @@ export function rebalanceRoutes(deps: AppDeps) {
       return jobs;
     };
 
+    const busyJob = (store: JobFile): Job | null => {
+      const current = store.read();
+      return current && (current.status === 'running' || current.status === 'halted') ? current : null;
+    };
+
     const start = (store: JobFile): void => {
       if (inflight) return;
       const sleep =
         deps.rebalance?.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
-      inflight = runJob({ clients: () => deps.getClients(), jobs: store, cache: deps.cache, now, sleep }).finally(
+      inflight = runJob({ clients: () => deps.getClients(), jobs: store, cache: deps.cache, now, sleep, log }).finally(
         () => {
           inflight = null;
         },
@@ -45,10 +57,10 @@ export function rebalanceRoutes(deps: AppDeps) {
       for (let page = 1; page <= INTEREST_MAX_PAGES; page += 1) {
         const { body } = await deps
           .getClients()
-          .crossEx.listCrossexHistoryMarginInterests({ page, limit: INTEREST_PAGE_SIZE });
+          .crossEx.listCrossexHistoryMarginInterests({ from: since, to: now(), page, limit: INTEREST_PAGE_SIZE });
         const list = body ?? [];
         rows.push(...list.filter((r) => Number(r.createTime) >= since));
-        if (list.length < INTEREST_PAGE_SIZE || list.some((r) => Number(r.createTime) < since)) break;
+        if (list.length < INTEREST_PAGE_SIZE) break;
       }
       return rows;
     };
@@ -59,7 +71,7 @@ export function rebalanceRoutes(deps: AppDeps) {
       const [account, rates, paid, coins, rules, fees, tickers] = await Promise.all([
         deps.cache.get('account', TTL.live, async () => (await crossEx().getCrossexAccount()).body, { fresh }),
         orEmpty(deps.cache.get('interest:rate', TTL.static, async () => (await crossEx().getCrossexInterestRate()).body)),
-        orEmpty(deps.cache.get('interest:paid', TTL.historyOrders, () => interestPaidSince(since))),
+        orEmpty(deps.cache.get('interest:paid', TTL.fills, () => interestPaidSince(since))),
         deps.cache.get('transfer:coins', TTL.static, async () => (await crossEx().listCrossexTransferCoins()).body),
         deps.cache.get('rules:all', TTL.static, async () => (await crossEx().listCrossexRuleSymbols()).body),
         deps.cache.get('fees', TTL.static, async () => (await crossEx().getCrossexFee()).body),
@@ -85,10 +97,7 @@ export function rebalanceRoutes(deps: AppDeps) {
 
     const haltedOr409 = (store: JobFile, id: string, reply: FastifyReply): Job | null => {
       const job = store.read();
-      if (!job || job.id !== id) {
-        conflict(reply, `unknown rebalance ${id}`);
-        return null;
-      }
+      if (!job || job.id !== id) throw new CoreError(`unknown rebalance ${id}`);
       if (job.status !== 'halted') {
         conflict(reply, `rebalance ${job.id} is ${job.status}`);
         return null;
@@ -101,17 +110,38 @@ export function rebalanceRoutes(deps: AppDeps) {
       return reply.ok({ buckets, plan, job }, { stale });
     });
 
-    app.post('/rebalance', async (_req, reply) => {
-      const store = requireJobs();
-      const { plan } = await loadView(true);
-      const current = store.read();
-      if (current && (current.status === 'running' || current.status === 'halted')) {
-        return conflict(reply, `rebalance ${current.id} is ${current.status}`);
+    app.post('/rebalance', async (req, reply) => {
+      const envPath = deps.credentials?.envPath;
+      if (envPath && !isDisclaimerAccepted(envPath)) {
+        return reply.code(403).send({
+          ok: false,
+          error: {
+            category: 'validation',
+            label: 'DISCLAIMER_NOT_ACCEPTED',
+            message: 'You must accept the disclaimer before placing any order.',
+            retryable: false,
+          },
+        });
       }
+      const store = requireJobs();
+      const busy = busyJob(store);
+      if (busy) return conflict(reply, `rebalance ${busy.id} is ${busy.status}`);
       const working = deps.engine!.store.listPairs({ activeOnly: true });
       if (working.length > 0) return conflict(reply, `deal ${working[0].id} is still working`);
+      const { plan } = await loadView(true);
+      const body = (req.body ?? {}) as { amount?: unknown; route?: unknown };
+      if (typeof body.route === 'string' && body.route !== plan.route) {
+        return conflict(reply, `plan changed: now ${plan.route ?? 'no route'}`);
+      }
       if (!plan.route) return conflict(reply, 'no route');
-      const job = newJob(plan.route, plan.amount, now());
+      let amount = plan.amount;
+      if (typeof body.amount === 'number' && Number.isFinite(body.amount) && body.amount > 0) {
+        amount = Number(roundToStep(Math.min(plan.amount, body.amount), '0.01', 'down'));
+      }
+      if (!(amount > 0)) return conflict(reply, 'nothing to move');
+      const again = busyJob(store);
+      if (again) return conflict(reply, `rebalance ${again.id} is ${again.status}`);
+      const job = newJob(plan.route, amount, now());
       store.write(job);
       start(store);
       return reply.code(202).ok({ id: job.id });

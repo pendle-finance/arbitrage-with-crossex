@@ -12,6 +12,7 @@ import { classifyGateError, CoreError, type ClassifiedError } from '../core/erro
 import type { Store } from '../engine/db';
 import type { Clock, VenuePort } from '../engine/types';
 import type { TtlCache } from './cache';
+import type { JobFile } from './rebalanceJob';
 import { accountRoutes } from './routes/account';
 import { booksRoutes } from './routes/books';
 import { credentialsRoutes } from './routes/credentials';
@@ -88,7 +89,7 @@ export interface AppDeps {
    * copy's version from <repoRoot>/version.json — null means "unknown", which
    * disables the remote read entirely — plus the UPDATE_CHECK=0 opt-out. */
   updateCheck?: { current: string | null; disabled?: boolean };
-  rebalance?: { dataDir: string; sleep?: (ms: number) => Promise<void> };
+  rebalance?: { jobs: JobFile; sleep?: (ms: number) => Promise<void> };
 }
 
 declare module 'fastify' {
