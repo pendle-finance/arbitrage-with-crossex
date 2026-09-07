@@ -15,8 +15,9 @@ import { renderWithClient } from '../test/utils';
 import { RebalanceSection } from './RebalanceSection';
 
 const PAY_DOWN_TEXT =
-  "Only cash moves. Unrealised PnL stays where it is. Each USDC paid back lowers the Hyperliquid borrow by one USDC and frees 20% of it as initial margin and 10% as maintenance margin. Margin balance changes only by the route's cost.";
-const PULL_TEXT = "Only cash moves. The most you can pull is the bucket's equity, so a pull never opens a borrow.";
+  "Sends USDT to Hyperliquid as USDC and pays the borrow back. Each USDC paid back cuts the borrow by 1 USDC and frees 0.20 USDC of initial margin and 0.10 USDC of maintenance margin. Your account total changes only by the route's cost.";
+const PULL_TEXT =
+  'Brings USDC from Hyperliquid back to USDT. You can pull at most the USDC you own there, so a pull never starts a new borrow.';
 const LOOP_LINE =
   'via spot loop · 900.00 USDT → 899.55 USDC @ 1.0005 · costs $0.50 · saves $0.29/day · frees $450.00 margin · borrow after $300.45 · about 2.5 min';
 const PULL_LINE = 'via spot loop · 400.00 USDC → 399.52 USDT @ 0.9988 · costs $0.60 · about 6.7 min';
@@ -248,6 +249,25 @@ describe('RebalanceSection', () => {
 
     expect(await screen.findByText(PULL_TEXT)).toBeInTheDocument();
     expect(screen.queryByText(PAY_DOWN_TEXT)).toBeNull();
+  });
+
+  it('opens the what-and-why card from the info mark next to the title', async () => {
+    serve(borrowAccount());
+    renderWithClient(<RebalanceSection holdMs={50} />);
+
+    await section();
+    expect(screen.queryByRole('tooltip')).toBeNull();
+
+    await userEvent.hover(screen.getByText('About rebalance').parentElement!);
+
+    const card = await screen.findByRole('tooltip');
+    expect(card).toHaveTextContent('Gate lends you the USDC to cover it');
+    expect(card).toHaveTextContent('20% as initial margin and 10% as maintenance margin');
+    expect(card).toHaveTextContent('USDT → Hyperliquid USDC pays the borrow back');
+
+    await userEvent.unhover(screen.getByText('About rebalance').parentElement!);
+
+    await waitFor(() => expect(screen.queryByRole('tooltip')).toBeNull());
   });
 
   it('defaults the direction to pull when there is no borrow and USDC can be pulled', async () => {

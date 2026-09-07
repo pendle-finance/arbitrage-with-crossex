@@ -3,6 +3,7 @@ import { ApiError } from '../api/client';
 import { useRebalance, useRebalanceCommand, useStartRebalance } from '../api/queries';
 import type { RebalanceDirection, RebalanceJob, RebalancePlan, RebalanceStep } from '../api/types';
 import { HoldToConfirmButton } from '../components/HoldToConfirmButton';
+import { HoverCard } from '../components/HoverCard';
 import { SegmentedToggle } from '../components/SegmentedToggle';
 import { Stat } from '../components/Stat';
 import { fmtAge, fmtUsd, num } from '../lib/fmt';
@@ -23,9 +24,29 @@ const EXPECTED_SECONDS: Record<string, number> = {
 
 const EXPLANATION: Record<RebalanceDirection, string> = {
   payDown:
-    "Only cash moves. Unrealised PnL stays where it is. Each USDC paid back lowers the Hyperliquid borrow by one USDC and frees 20% of it as initial margin and 10% as maintenance margin. Margin balance changes only by the route's cost.",
-  pull: "Only cash moves. The most you can pull is the bucket's equity, so a pull never opens a borrow.",
+    "Sends USDT to Hyperliquid as USDC and pays the borrow back. Each USDC paid back cuts the borrow by 1 USDC and frees 0.20 USDC of initial margin and 0.10 USDC of maintenance margin. Your account total changes only by the route's cost.",
+  pull: 'Brings USDC from Hyperliquid back to USDT. You can pull at most the USDC you own there, so a pull never starts a new borrow.',
 };
+
+const ABOUT = (
+  <div className="flex flex-col gap-2 text-[12px] leading-snug">
+    <p>
+      <span className="font-semibold text-ink-100">What this is. </span>
+      Your CrossEx account holds USDT. The Hyperliquid legs of your pairs settle in USDC. When those legs lose money
+      or pay funding, Gate lends you the USDC to cover it. The amber pill shows that borrow.
+    </p>
+    <p>
+      <span className="font-semibold text-ink-100">Why it matters. </span>
+      Gate holds extra margin against the borrow: 20% as initial margin and 10% as maintenance margin. Once you are
+      more than 10,000 USDC short, Gate also charges interest every hour.
+    </p>
+    <p>
+      <span className="font-semibold text-ink-100">The two moves. </span>
+      USDT → Hyperliquid USDC pays the borrow back. That frees the margin and stops the interest. Hyperliquid USDC →
+      USDT brings spare USDC home when those legs made money.
+    </p>
+  </div>
+);
 
 const DIRECTION_OPTIONS: { value: RebalanceDirection; label: string }[] = [
   { value: 'payDown', label: 'USDT → Hyperliquid USDC' },
@@ -277,7 +298,12 @@ export function RebalanceSection({ holdMs }: { holdMs?: number }) {
     <section aria-label="Rebalance" className="flex flex-col gap-3">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
-          <h2 className="text-xs font-semibold uppercase tracking-wider text-ink-400">Rebalance</h2>
+          <div className="flex items-center gap-1.5">
+            <h2 className="text-xs font-semibold uppercase tracking-wider text-ink-400">Rebalance</h2>
+            <HoverCard widthPx={420} label={<span className="sr-only">About rebalance</span>}>
+              {ABOUT}
+            </HoverCard>
+          </div>
           <p className="text-[12px] text-ink-500">move cash between USDT and Hyperliquid USDC</p>
         </div>
         {borrow > 0 && (
