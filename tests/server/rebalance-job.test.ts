@@ -107,7 +107,7 @@ function mockView(opts: { ask?: string; account?: unknown; disabled?: number } =
     body: [{ liability_coin: 'USDC', exchange_type: 'HYPERLIQUID', interest: '0.01', create_time: String(t - 1000) }],
   });
   mockGateGet('/transfers/coin', {
-    body: [{ coin: 'USDC', min_trans_amount: 11, est_fee: 0.05, precision: 5, is_disabled: opts.disabled ?? 0 }],
+    body: [{ coin: 'USDC', min_trans_amount: '11', est_fee: '1', precision: 5, is_disabled: opts.disabled ?? 0 }],
   });
   mockGateGet('/rule/symbols', {
     body: [{ symbol: 'GATE_SPOT_USDC_USDT', exchange_type: 'GATE', business_type: 'SPOT', state: 'live' }],
@@ -564,6 +564,12 @@ describe('POST /api/rebalance', () => {
     expect(before.plan.routes.loop).toMatchObject({ available: true, reason: null });
     expect(before.plan.routes.loop.costUsd).toBeCloseTo(12 * 0.001 + PULL_FEE_USD, 9);
     expect(before.plan.routes.convert.costUsd).toBeCloseTo(0.024, 9);
+    // Gate sends min_trans_amount as the string "11"; the reason must add, not concatenate.
+    const small = (await h.view('?direction=pull&amount=11.5')).data.plan;
+    expect(small.routes.loop.reason).toBe(
+      'Too small to pull. Gate takes a flat $1 fee on the way out and needs at least 11 USDC to arrive. Pull at least 12 USDC.',
+    );
+    expect(small.route).toBe('convert');
 
     const res = await h.post('/api/rebalance', { direction: 'pull', amount: 12, route: 'convert' });
     expect(res.statusCode).toBe(202);

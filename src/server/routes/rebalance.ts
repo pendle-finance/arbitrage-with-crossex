@@ -92,11 +92,16 @@ export function rebalanceRoutes(deps: AppDeps) {
       const special = gateFees?.specialFeeList?.find((s) => s.symbol === SPOT_SYMBOL);
       const ask = Number(tickers.value[0]?.lowestAsk);
       const bid = Number(tickers.value[0]?.highestBid);
+      // Gate sends min_trans_amount as a string although the SDK declares a
+      // number. Coerce here so the plan's arithmetic never concatenates.
+      const usdcCoin = coins.value.find((c) => c.coin === 'USDC');
       const plan = planFor(
         buckets,
         account.value,
         {
-          usdcTransfer: coins.value.find((c) => c.coin === 'USDC') ?? null,
+          usdcTransfer: usdcCoin
+            ? { isDisabled: Number(usdcCoin.isDisabled), minTransAmount: Number(usdcCoin.minTransAmount) }
+            : null,
           spotRule: rules.value.find((r) => r.symbol === SPOT_SYMBOL) ?? null,
           spotTakerRate: Number(special?.takerFeeRate ?? gateFees?.spotTakerFee ?? 0),
           ask: Number.isFinite(ask) ? ask : null,

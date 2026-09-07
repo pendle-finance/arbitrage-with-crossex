@@ -68,7 +68,7 @@ describe('GET /api/rebalance', () => {
         .query((q) => q.from === String(t - 30 * DAY_MS) && q.to === String(t) && q.page === '1' && q.limit === '100')
         .reply(200, [interestRow('5', t - 31 * DAY_MS), interestRow('0.02', t - 2000), interestRow('0.01', t - 1000)]),
       mockGateGet('/transfers/coin', {
-        body: [{ coin: 'USDC', min_trans_amount: 11, est_fee: 0.05, precision: 5, is_disabled: 0 }],
+        body: [{ coin: 'USDC', min_trans_amount: '11', est_fee: '1', precision: 5, is_disabled: 0 }],
       }),
       mockGateGet('/rule/symbols', {
         body: [{ symbol: 'GATE_SPOT_USDC_USDT', exchange_type: 'GATE', business_type: 'SPOT', state: 'live' }],
