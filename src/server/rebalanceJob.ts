@@ -46,7 +46,7 @@ const JOB_STATUSES: readonly string[] = ['running', 'halted', 'done', 'abandoned
 const FUNDS_AT: readonly string[] = ['CROSSEX', 'GATE', 'SPOT', 'HYPERLIQUID'];
 
 export function newJob(direction: Direction, route: RouteName, amount: number, now: number): Job {
-  const names: readonly string[] = direction === 'pull' ? PULL_STEPS : route === 'loop' ? LOOP_STEPS : CONVERT_STEPS;
+  const names: readonly string[] = route === 'convert' ? CONVERT_STEPS : direction === 'pull' ? PULL_STEPS : LOOP_STEPS;
   return {
     id: now.toString(36),
     direction,

@@ -419,6 +419,65 @@ describe('RebalanceSection', () => {
     expect(await screen.findByText(PULL_LINE)).toBeInTheDocument();
   });
 
+  it('shows the quote line for a pull by convert and posts route convert', async () => {
+    const convertPull = pullPlan({
+      route: 'convert',
+      price: 0.998,
+      receives: 399.2,
+      routes: { loop: route({ costUsd: 1.4, waitSeconds: 400 }), convert: route({ costUsd: 0.8, waitSeconds: 0 }) },
+    });
+    serve(byDirection(view({ buckets: pullBuckets, plan: noRoutePlan() }), view({ buckets: pullBuckets, plan: convertPull })));
+    const posts = recordStarts();
+    renderWithClient(<RebalanceSection holdMs={50} />);
+
+    await section();
+    expect(await screen.findByText('via convert · 400.00 USDC → 399.20 USDT @ 0.9980 · spread $0.80 · instant · sends on a fresh quote within 30 bps of this one')).toBeInTheDocument();
+    fireEvent.pointerDown(screen.getByRole('button', { name: PULL_HOLD }));
+
+    await waitFor(() => expect(posts).toEqual([{ direction: 'pull', amount: 400, route: 'convert' }]));
+  });
+
+  it('hides the hold and the quote line under 1 USDC and says why, for either direction', async () => {
+    const tiny = usdc({ cash: -0.37, upnl: 0, equity: -0.37, borrow: 0.37, imHeldUsd: 0.07, mmHeldUsd: 0.03 });
+    serve(view({ buckets: [tiny, usdt], plan: plan({ amount: 0.37, route: 'convert', receives: 0.36, price: 0.998 }) }));
+    const { unmount } = renderWithClient(<RebalanceSection holdMs={50} />);
+
+    await section();
+    expect(screen.getByText('Borrow $0.37 · +$0.07 IM · +$0.03 MM')).toBeInTheDocument();
+    expect(screen.getByText('Nothing to pay back. The borrow is under 1 USDC.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Hold to/ })).toBeNull();
+    expect(screen.queryByText(/^via /)).toBeNull();
+    expect(screen.getByRole('radiogroup', { name: 'Direction' })).toBeInTheDocument();
+    unmount();
+
+    const spare = usdc({ cash: 0.5, upnl: 0, equity: 0.5, borrow: 0, imHeldUsd: 0, mmHeldUsd: 0 });
+    serve(view({ buckets: [spare, usdt], plan: pullPlan({ amount: 0.5, route: 'convert', receives: 0.49, price: 0.998 }) }));
+    renderWithClient(<RebalanceSection holdMs={50} />);
+
+    await section();
+    expect(await screen.findByText('Nothing to pull. Spare USDC is under 1 USDC.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Hold to/ })).toBeNull();
+    expect(screen.queryByText(/^via /)).toBeNull();
+  });
+
+  it('asks for at least 1 USDT when the typed amount is under the floor and hides the hold', async () => {
+    serve((url) => {
+      const typed = url.searchParams.get('amount');
+      return view({ plan: plan(typed ? { amount: Number(typed), route: 'convert', receives: Number(typed) * 0.998 } : {}) });
+    });
+    renderWithClient(<RebalanceSection holdMs={50} />);
+
+    await screen.findByRole('button', { name: HOLD });
+    const input = amountInput('Amount (USDT) · free 5,000.00');
+    await userEvent.clear(input);
+    await userEvent.type(input, '0.5');
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Enter at least 1 USDT');
+    expect(screen.queryByRole('button', { name: /^Hold to/ })).toBeNull();
+    expect(screen.queryByText(/^via /)).toBeNull();
+    expect(screen.queryByText(/^Capped at/)).toBeNull();
+  });
+
   it('shows the shortfall line in amber under the quote line with the cash reason', async () => {
     serve(view({ plan: plan({ amount: 600, shortfall: { reason: 'cash', remaining: 300 } }) }));
     renderWithClient(<RebalanceSection holdMs={50} />);

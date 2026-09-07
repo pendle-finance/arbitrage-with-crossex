@@ -126,6 +126,21 @@ export function bucketsFrom(account: AccountLike, rates: RateLike[], interestRow
   });
 }
 
+function convertQuote(amount: number): RouteQuote {
+  return {
+    costUsd: amount * CONVERT_RATE,
+    waitSeconds: 0,
+    available: amount > 0,
+    reason: amount > 0 ? null : 'nothing to move',
+  };
+}
+
+function pickRoute(loop: RouteQuote, convert: RouteQuote): Plan['route'] {
+  if (loop.available && convert.available) return loop.costUsd < convert.costUsd ? 'loop' : 'convert';
+  if (loop.available) return 'loop';
+  return convert.available ? 'convert' : null;
+}
+
 function loopQuote(
   amount: number,
   inputs: PlanInputs,
@@ -182,14 +197,19 @@ export function planFor(
           ? `Too small to pull. Gate takes a flat $${PULL_FEE_USD} fee on the way out and needs at least ${min} USDC to arrive. Pull at least ${min + PULL_FEE_USD} USDC.`
           : null,
     );
-    const convert: RouteQuote = { costUsd: 0, waitSeconds: 0, available: false, reason: 'Convert runs only from USDT to USDC.' };
-    const route: Plan['route'] = loop.available ? 'loop' : null;
-    const receives = route === 'loop' && bid !== null ? Math.max(0, floorCents(lands * bid * (1 - inputs.spotTakerRate))) : 0;
+    const convert = convertQuote(amount);
+    const route = pickRoute(loop, convert);
+    const receives =
+      route === 'loop' && bid !== null
+        ? Math.max(0, floorCents(lands * bid * (1 - inputs.spotTakerRate)))
+        : route === 'convert'
+          ? floorCents(amount * (1 - CONVERT_RATE))
+          : 0;
     return {
       direction,
       amount,
       receives,
-      price: route === 'loop' ? bid : null,
+      price: route === 'loop' ? bid : route === 'convert' ? 1 - CONVERT_RATE : null,
       borrowAfterUsd: deficit,
       shortfall: null,
       routes: { loop, convert },
@@ -209,12 +229,7 @@ export function planFor(
       ? null
       : { reason: surplusCash <= availableMargin ? 'cash' : 'margin', remaining: floorCents(deficit - amount) };
 
-  const convert: RouteQuote = {
-    costUsd: amount * CONVERT_RATE,
-    waitSeconds: 0,
-    available: amount > 0,
-    reason: amount > 0 ? null : 'nothing to move',
-  };
+  const convert = convertQuote(amount);
 
   const ask = positive(inputs.ask);
   const bought = ask === null ? 0 : floorCents(amount / ask);
@@ -228,16 +243,7 @@ export function planFor(
     (min) => (bought < min ? `Too small for the spot loop. Gate needs at least ${min} USDC per transfer.` : null),
   );
 
-  const route: Plan['route'] =
-    loop.available && convert.available
-      ? loop.costUsd < convert.costUsd
-        ? 'loop'
-        : 'convert'
-      : loop.available
-        ? 'loop'
-        : convert.available
-          ? 'convert'
-          : null;
+  const route = pickRoute(loop, convert);
 
   const receives =
     route === 'loop'

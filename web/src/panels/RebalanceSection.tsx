@@ -11,6 +11,8 @@ import { roundToStep } from '../lib/ticks';
 import { useNow } from '../lib/useNow';
 
 const PULL_STEP_SECONDS = 390;
+/** Under this the hold is hidden: a few-cent convert or a pull that the $1 fee eats is never worth a hold. */
+const MIN_AMOUNT = 1;
 
 const EXPECTED_SECONDS: Record<string, number> = {
   'Buy USDC': 2,
@@ -88,7 +90,11 @@ function quoteLine(plan: RebalancePlan, routeName: 'loop' | 'convert', pull: boo
   const price = plan.price === null ? '—' : num(plan.price, 4);
   const wait = `about ${num(route.waitSeconds / 60, 1)} min`;
   if (pull) {
-    return `via spot loop · ${num(plan.amount, 2)} USDC → ${num(plan.receives, 2)} USDT @ ${price} · costs ${fmtUsd(route.costUsd)} · ${wait}`;
+    const move = `${num(plan.amount, 2)} USDC → ${num(plan.receives, 2)} USDT @ ${price}`;
+    if (routeName === 'convert') {
+      return `via convert · ${move} · spread ${fmtUsd(route.costUsd)} · instant · sends on a fresh quote within 30 bps of this one`;
+    }
+    return `via spot loop · ${move} · costs ${fmtUsd(route.costUsd)} · ${wait}`;
   }
   const move = `${num(plan.amount, 2)} USDT → ${num(plan.receives, 2)} USDC @ ${price}`;
   const effect = `saves ${fmtUsd(plan.savesPerDayUsd)}/day · frees ${fmtUsd(plan.marginFreedUsd)} margin · borrow after ${fmtUsd(plan.borrowAfterUsd)}`;
@@ -107,6 +113,12 @@ function noRouteLine(plan: RebalancePlan, pull: boolean, borrow: number, free: n
   if (borrow === 0) return { text: 'Nothing to pay back. There is no USDC borrow on Hyperliquid.', warn: false };
   if (free === 0) return { text: 'Nothing to move. There is no free USDT.', warn: false };
   return { text: 'Nothing to move.', warn: false };
+}
+
+function tooSmallLine(pull: boolean, borrow: number): string {
+  if (pull) return `Nothing to pull. Spare USDC is under ${MIN_AMOUNT} USDC.`;
+  if (borrow < MIN_AMOUNT) return `Nothing to pay back. The borrow is under ${MIN_AMOUNT} USDC.`;
+  return `Under ${MIN_AMOUNT} USDT can move. Free USDT or margin is too low.`;
 }
 
 function segment(step: RebalanceStep, job: RebalanceJob, now: number): { kind: SegmentKind; pct: number; text: string } {
@@ -239,6 +251,9 @@ export function RebalanceSection({ holdMs }: { holdMs?: number }) {
     const capped = settled && typedAmount !== null && floorCents(typedAmount) > plan.amount;
     const free = pull ? pullable : floorCents(usdt?.cash ?? 0);
     const routeName = plan.route;
+    const floorHit = settled && routeName !== null && plan.amount < MIN_AMOUNT;
+    const capTooSmall = floorHit && (typedAmount === null || floorCents(typedAmount) > plan.amount);
+    const typedTooSmall = floorHit && !capTooSmall;
     body = (
       <>
         <div className="flex flex-wrap items-end gap-3">
@@ -266,7 +281,7 @@ export function RebalanceSection({ holdMs }: { holdMs?: number }) {
               onBlur={() => setBlurred(true)}
             />
           </div>
-          {routeName && (
+          {routeName && !floorHit && (
             <HoldToConfirmButton
               tone="cyan"
               holdMs={holdMs}
@@ -284,8 +299,14 @@ export function RebalanceSection({ holdMs }: { holdMs?: number }) {
             Enter an amount
           </p>
         )}
-        {capped && <p className="text-[11px] text-amber-300">Capped at {num(plan.amount, 2)}</p>}
-        {routeName ? (
+        {typedTooSmall && (
+          <p role="alert" className="text-[11px] text-rose-300">
+            {`Enter at least ${MIN_AMOUNT} ${pull ? 'USDC' : 'USDT'}`}
+          </p>
+        )}
+        {capped && !floorHit && <p className="text-[11px] text-amber-300">Capped at {num(plan.amount, 2)}</p>}
+        {capTooSmall && <p className="text-[12px] text-ink-300">{tooSmallLine(pull, borrow)}</p>}
+        {floorHit ? null : routeName ? (
           <>
             <p className="text-[12px] text-ink-300">{quoteLine(plan, routeName, pull)}</p>
             {!pull && plan.shortfall && (

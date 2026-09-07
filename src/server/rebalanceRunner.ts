@@ -84,11 +84,19 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
 
   const previousQty = (): number => (job.stepIndex === 0 ? job.amount : (job.steps[job.stepIndex - 1].qty ?? 0));
 
-  const usdcOnHyperliquid = async (): Promise<number> => {
+  const balanceOf = async (coin: string, venue: string): Promise<number> => {
     const { body } = await crossEx().getCrossexAccount();
-    const asset = body.assets?.find((a) => a.coin === 'USDC' && a.exchangeType === 'HYPERLIQUID');
+    const asset = body.assets?.find((a) => a.coin === coin && a.exchangeType === venue);
     return Number(asset?.balance ?? 0);
   };
+
+  /** Convert runs on Hyperliquid in both directions. Pay-down turns USDT into
+   * USDC there; pull turns USDC into USDT, which lands in the pooled CROSSEX
+   * bucket. The landing check watches the bucket that receives. */
+  const convertSpec = () =>
+    job.direction === 'pull'
+      ? { fromCoin: 'USDC', toCoin: 'USDT', dest: 'CROSSEX' as FundsAt, landed: () => balanceOf('USDT', 'CROSSEX') }
+      : { fromCoin: 'USDT', toCoin: 'USDC', dest: 'HYPERLIQUID' as FundsAt, landed: () => balanceOf('USDC', 'HYPERLIQUID') };
 
   const transferRow = async (
     match: (row: CrossexTransferRecord) => boolean,
@@ -98,11 +106,12 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
   };
 
   const convertLanded = async (step: Step): Promise<boolean> => {
-    const balance = await usdcOnHyperliquid();
+    const spec = convertSpec();
+    const balance = await spec.landed();
     if (step.balanceBefore === null || step.qty === null || balance - step.balanceBefore < step.qty - 0.01) {
       return false;
     }
-    finish(step, step.qty, 'HYPERLIQUID');
+    finish(step, step.qty, spec.dest);
     return true;
   };
 
@@ -166,12 +175,13 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
   };
 
   const sendConvert = async (step: Step): Promise<void> => {
-    if (step.balanceBefore === null) step.balanceBefore = await usdcOnHyperliquid();
+    const spec = convertSpec();
+    if (step.balanceBefore === null) step.balanceBefore = await spec.landed();
     const { body: quote } = await crossEx().createCrossexConvertQuote({
       crossexConvertQuoteRequest: {
         exchangeType: 'HYPERLIQUID',
-        fromCoin: 'USDT',
-        toCoin: 'USDC',
+        fromCoin: spec.fromCoin,
+        toCoin: spec.toCoin,
         fromAmount: String(job.amount),
       },
     });
@@ -188,7 +198,7 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
     });
     if (!body.orderId) throw new Error('convert order response has no orderId');
     step.venueId = String(body.orderId);
-    finish(step, toAmount, 'HYPERLIQUID');
+    finish(step, toAmount, spec.dest);
   };
 
   const send = async (step: Step, spec: StepSpec, tag: string): Promise<void> => {

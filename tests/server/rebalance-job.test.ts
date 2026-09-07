@@ -176,15 +176,15 @@ function haltedLoopJob(stepIndex: number, patch: Partial<Step> = {}): Job {
   return job;
 }
 
-const PULL_AMOUNT = 12;
+const PULL_AMOUNT = 1200;
 
-const pullAccount = () => account({ balance: '50', available_balance: '50', equity: '50', liability: '0' });
+const pullAccount = () => account({ balance: '5000', available_balance: '5000', equity: '5000', liability: '0' });
 
 const isTransfer = (b: Record<string, unknown>, from: string, to: string, amount: string): boolean =>
   b.coin === 'USDC' && b.from === from && b.to === to && b.amount === amount && typeof b.text === 'string';
 
 const isSell = (b: Record<string, unknown>): boolean =>
-  b.symbol === 'GATE_SPOT_USDC_USDT' && b.side === 'SELL' && b.type === 'MARKET' && b.qty === '11.00' && !('quote_qty' in b);
+  b.symbol === 'GATE_SPOT_USDC_USDT' && b.side === 'SELL' && b.type === 'MARKET' && b.qty === '1199.00' && !('quote_qty' in b);
 
 function holdRunner(): () => void {
   let release: () => void = () => undefined;
@@ -465,19 +465,19 @@ describe('POST /api/rebalance', () => {
     const cache = new TtlCache();
     mockView({ account: pullAccount() });
     const pulls = gate()
-      .post(`${API}/crossex/transfers`, (b) => isTransfer(b, 'CROSSEX_HYPERLIQUID', 'SPOT', '12.00000'))
+      .post(`${API}/crossex/transfers`, (b) => isTransfer(b, 'CROSSEX_HYPERLIQUID', 'SPOT', '1200.00000'))
       .query(true)
       .reply(200, { tx_id: 'p1', text: 't' });
-    mockGateGet('/transfers', { body: [transferRow('p1', 'PENDING', { amount: '12.00000' })] });
-    mockGateGet('/transfers', { body: [transferRow('p1', 'SUCCESS', { amount: '12.00000', actual_receive: '11' })] });
+    mockGateGet('/transfers', { body: [transferRow('p1', 'PENDING', { amount: '1200.00000' })] });
+    mockGateGet('/transfers', { body: [transferRow('p1', 'SUCCESS', { amount: '1200.00000', actual_receive: '1199' })] });
     const toGate = gate()
-      .post(`${API}/crossex/transfers`, (b) => isTransfer(b, 'SPOT', 'CROSSEX_GATE', '11.00000'))
+      .post(`${API}/crossex/transfers`, (b) => isTransfer(b, 'SPOT', 'CROSSEX_GATE', '1199.00000'))
       .query(true)
       .reply(200, { tx_id: 'p2', text: 't' });
     mockGateGet('/transfers', {
       body: [
-        transferRow('p1', 'SUCCESS', { amount: '12.00000', actual_receive: '11' }),
-        transferRow('p2', 'SUCCESS', { amount: '11.00000', actual_receive: '11' }),
+        transferRow('p1', 'SUCCESS', { amount: '1200.00000', actual_receive: '1199' }),
+        transferRow('p2', 'SUCCESS', { amount: '1199.00000', actual_receive: '1199' }),
       ],
     });
     const sells = gate()
@@ -485,16 +485,16 @@ describe('POST /api/rebalance', () => {
       .query(true)
       .reply(200, orderBody('OPEN', '0', 's1'));
     mockGateGet('/orders/s1', { body: orderBody('OPEN', '0', 's1') });
-    mockGateGet('/orders/s1', { body: { ...orderBody('FILLED', '11', 's1'), executed_amount: '10.9989' } });
+    mockGateGet('/orders/s1', { body: { ...orderBody('FILLED', '1199', 's1'), executed_amount: '1197.8011' } });
     let h = boot({ cache });
 
-    const before = (await h.view('?direction=pull&amount=12')).data;
+    const before = (await h.view(`?direction=pull&amount=${PULL_AMOUNT}`)).data;
     expect(before.plan).toMatchObject({
       direction: 'pull',
       amount: PULL_AMOUNT,
       route: 'loop',
       price: 1,
-      receives: 10.98,
+      receives: 1197.8,
       borrowAfterUsd: 0,
       shortfall: null,
       savesPerDayUsd: 0,
@@ -502,7 +502,8 @@ describe('POST /api/rebalance', () => {
     });
     expect(before.plan.routes.loop).toMatchObject({ waitSeconds: PULL_WAIT_SECONDS, available: true, reason: null });
     expect(before.plan.routes.loop.costUsd).toBeCloseTo(PULL_AMOUNT * 0.001 + PULL_FEE_USD, 9);
-    expect(before.plan.routes.convert).toMatchObject({ available: false, reason: 'Convert runs only from USDT to USDC.' });
+    expect(before.plan.routes.convert).toMatchObject({ available: true, reason: null, waitSeconds: 0 });
+    expect(before.plan.routes.convert.costUsd).toBeCloseTo(PULL_AMOUNT * 0.002, 9);
     expect(before.job).toBeNull();
 
     const res = await h.post('/api/rebalance', { direction: 'pull', amount: PULL_AMOUNT, route: 'loop' });
@@ -528,7 +529,7 @@ describe('POST /api/rebalance', () => {
     expect(job).toMatchObject({ direction: 'pull', status: 'done', stepIndex: 2, fundsAt: 'CROSSEX', haltReason: null });
     expect(job.steps.map((s: Step) => s.status)).toEqual(['done', 'done', 'done']);
     expect(job.steps.map((s: Step) => s.venueId)).toEqual(['p1', 'p2', 's1']);
-    expect(job.steps.map((s: Step) => s.qty)).toEqual([11, 11, 10.9989]);
+    expect(job.steps.map((s: Step) => s.qty)).toEqual([1199, 1199, 1197.8011]);
     for (const step of job.steps as Step[]) {
       expect(step.text).toBe(tagFor(job.id, job.steps.indexOf(step)));
       expect(step.doneAt).toBeTypeOf('number');
@@ -541,16 +542,79 @@ describe('POST /api/rebalance', () => {
     const empty = (await h.view('?direction=pull')).data.plan;
     expect(empty).toMatchObject({ direction: 'pull', amount: 0, route: null, receives: 0, price: null });
     expect(empty.routes.loop).toMatchObject({ available: false, reason: 'nothing to move' });
-    expect(empty.routes.convert).toMatchObject({ available: false, reason: 'Convert runs only from USDT to USDC.' });
+    expect(empty.routes.convert).toMatchObject({ available: false, reason: 'nothing to move' });
     const refused = await h.post('/api/rebalance', { direction: 'pull' });
     expect(refused.statusCode).toBe(409);
     expect(refused.json().error.message).toBe('no route');
   });
 
+  it('pull convert: a small pull picks convert, quotes USDC to USDT, sends, funds at CROSSEX; a resumed quote lands on the USDT balance', async () => {
+    mockView({ account: pullAccount() });
+    const isPullQuote = (b: Record<string, unknown>): boolean =>
+      b.exchange_type === 'HYPERLIQUID' && b.from_coin === 'USDC' && b.to_coin === 'USDT' && b.from_amount === '12';
+    const quotes = gate()
+      .post(`${API}/crossex/convert/quote`, isPullQuote)
+      .query(true)
+      .reply(200, { ...quoteBody('q3', '11.98'), from_coin: 'USDC', to_coin: 'USDT', from_amount: '12', price: '0.9981' });
+    const orders = mockGatePost('/convert/orders', { body: { order_id: 'c3', text: 'q3' } });
+    let h = boot();
+
+    const before = (await h.view('?direction=pull&amount=12')).data;
+    expect(before.plan).toMatchObject({ direction: 'pull', amount: 12, route: 'convert', price: 0.998, receives: 11.97 });
+    expect(before.plan.routes.loop).toMatchObject({ available: true, reason: null });
+    expect(before.plan.routes.loop.costUsd).toBeCloseTo(12 * 0.001 + PULL_FEE_USD, 9);
+    expect(before.plan.routes.convert.costUsd).toBeCloseTo(0.024, 9);
+
+    const res = await h.post('/api/rebalance', { direction: 'pull', amount: 12, route: 'convert' });
+    expect(res.statusCode).toBe(202);
+    expect(h.file()).toMatchObject({ direction: 'pull', route: 'convert', amount: 12, fundsAt: 'HYPERLIQUID' });
+    expect(h.file().steps.map((s) => s.name)).toEqual(['Convert']);
+    await waitFor(() => h.file().status === 'done', 'done');
+
+    expect(quotes.isDone()).toBe(true);
+    expect(orders.isDone()).toBe(true);
+    const { job } = (await h.view()).data;
+    expect(job).toMatchObject({ direction: 'pull', route: 'convert', status: 'done', fundsAt: 'CROSSEX', haltReason: null });
+    expect(job.steps[0]).toMatchObject({
+      name: 'Convert',
+      text: tagFor(job.id, 0),
+      quoteId: 'q3',
+      venueId: 'c3',
+      qty: 11.98,
+      balanceBefore: 1200,
+      status: 'done',
+    });
+
+    await reset();
+    const landed = pullAccount();
+    landed.assets[0].balance = '1211.98';
+    mockView({ account: landed });
+    const unsent = mockGatePost('/convert/orders', { body: { order_id: 'c4', text: 'q4' } });
+    const resumed = newJob('pull', 'convert', 12, t);
+    resumed.status = 'halted';
+    resumed.haltReason = 'server restarted';
+    Object.assign(resumed.steps[0], {
+      text: tagFor(resumed.id, 0),
+      quoteId: 'q4',
+      qty: 11.98,
+      balanceBefore: 1200,
+      status: 'running',
+      startedAt: t,
+    });
+    h = boot({ job: resumed });
+
+    const again = await h.post(`/api/rebalance/${resumed.id}/resume`);
+    expect(again.statusCode).toBe(200);
+    await waitFor(() => h.file().status === 'done', 'done');
+    expect(unsent.isDone()).toBe(false);
+    expect(h.file()).toMatchObject({ status: 'done', fundsAt: 'CROSSEX' });
+    expect(h.file().steps[0]).toMatchObject({ quoteId: 'q4', venueId: null, qty: 11.98, status: 'done' });
+  });
+
   it('pull halts and resumes like pay-down: a FAILED pull halts with funds at HYPERLIQUID, abandon ends it, and a resumed Sell USDC with a tag only adopts the order and sends nothing', async () => {
     mockView({ account: pullAccount() });
     mockGatePost('/transfers', { body: { tx_id: 'p1', text: 't' } });
-    mockGateGet('/transfers', { body: [transferRow('p1', 'FAILED', { amount: '12.00000', fail_reason: 'withdraw paused' })] });
+    mockGateGet('/transfers', { body: [transferRow('p1', 'FAILED', { amount: '1200.00000', fail_reason: 'withdraw paused' })] });
     let h = boot();
     let res = await h.post('/api/rebalance', { direction: 'pull', amount: PULL_AMOUNT });
     expect(res.statusCode).toBe(202);

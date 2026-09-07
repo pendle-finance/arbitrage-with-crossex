@@ -466,7 +466,7 @@ describe('planFor pull', () => {
       expect(p.amount).toBe(0);
       expect(p.route).toBeNull();
       expect(p.routes.loop).toMatchObject({ available: false, reason: 'nothing to move' });
-      expect(p.routes.convert).toMatchObject({ available: false, reason: 'Convert runs only from USDT to USDC.' });
+      expect(p.routes.convert).toMatchObject({ available: false, reason: 'nothing to move' });
     }
   });
 
@@ -484,33 +484,45 @@ describe('planFor pull', () => {
     expect(p.routes.loop.costUsd).toBeCloseTo(PULL_FEE_USD, 9);
   });
 
-  it('marks convert unavailable because it runs one way only', () => {
+  it('quotes convert as amount x 0.002, instant, and picks it for a small pull', () => {
     const p = plan(s, OPEN, PULL);
-    expect(p.routes.convert).toEqual({ costUsd: 0, waitSeconds: 0, available: false, reason: 'Convert runs only from USDT to USDC.' });
+    expect(p.routes.convert).toMatchObject({ waitSeconds: 0, available: true, reason: null });
+    expect(p.routes.convert.costUsd).toBeCloseTo(0.1, 9);
+    expect(p.routes.loop.costUsd).toBeCloseTo(1.005, 9);
+    expect(p.route).toBe('convert');
+    expect(p.price).toBe(0.998);
+    expect(p.receives).toBe(49.9);
+    expect(p.shortfall).toBeNull();
+    expect(p.borrowAfterUsd).toBe(0);
   });
 
-  it('picks the loop with the bid as the price and the sold USDT as receives', () => {
-    const p = plan(s, OPEN, PULL);
+  it('picks the loop for a big pull, where the $1 fee beats 20 bps, with the bid as the price and the sold USDT as receives', () => {
+    const p = plan({ ...s, usdcEquity: 5000, usdcCash: 5000 }, OPEN, PULL);
+    expect(p.routes.loop.costUsd).toBeCloseTo(1.5, 9);
+    expect(p.routes.convert.costUsd).toBeCloseTo(10, 9);
     expect(p.route).toBe('loop');
     expect(p.price).toBe(0.9999);
-    expect(p.receives).toBe(48.99);
+    expect(p.receives).toBe(4998.5);
     expect(p.shortfall).toBeNull();
     expect(p.borrowAfterUsd).toBe(0);
     expect(p.savesPerDayUsd).toBe(0);
     expect(p.marginFreedUsd).toBe(0);
   });
 
-  it('matches the live run: 12 USDC at bid 1 lands 11 and receives 11 USDT', () => {
+  it('matches the live runs: the loop for 12 USDC at bid 1 costs the $1 fee, and convert at 2 cents wins', () => {
     const p = plan({ ...s, usdcEquity: 12, usdcCash: 12 }, { ...OPEN, bid: 1 }, PULL);
     expect(p.amount).toBe(12);
-    expect(p.route).toBe('loop');
+    expect(p.routes.loop).toMatchObject({ available: true, reason: null });
     expect(p.routes.loop.costUsd).toBeCloseTo(1, 9);
-    expect(p.receives).toBe(11);
+    expect(p.routes.convert.costUsd).toBeCloseTo(0.024, 9);
+    expect(p.route).toBe('convert');
+    expect(p.receives).toBe(11.97);
   });
 
-  it('takes the spot taker fee out of receives', () => {
-    const p = plan(s, { ...OPEN, bid: 1, spotTakerRate: 0.001 }, PULL);
-    expect(p.receives).toBe(48.95);
+  it('takes the spot taker fee out of the loop receives', () => {
+    const p = plan({ ...s, usdcEquity: 5000, usdcCash: 5000 }, { ...OPEN, bid: 1, spotTakerRate: 0.001 }, PULL);
+    expect(p.route).toBe('loop');
+    expect(p.receives).toBe(4994);
   });
 
   it('is unavailable when the USDC transfer is disabled or missing', () => {
@@ -518,7 +530,7 @@ describe('planFor pull', () => {
     expect(disabled.routes.loop).toMatchObject({ available: false, reason: 'Gate has paused USDC transfers on CrossEx. Try again later.' });
     const missing = plan(s, { ...OPEN, usdcTransfer: null }, PULL);
     expect(missing.routes.loop).toMatchObject({ available: false, reason: 'Gate has paused USDC transfers on CrossEx. Try again later.' });
-    expect(missing.route).toBeNull();
+    expect(missing.route).toBe('convert');
   });
 
   it('is unavailable when the spot rule is not live or missing', () => {
@@ -532,9 +544,9 @@ describe('planFor pull', () => {
     for (const bid of [null, 0]) {
       const p = plan(s, { ...OPEN, bid }, PULL);
       expect(p.routes.loop).toMatchObject({ available: false, reason: 'No price for USDC/USDT on Gate spot right now.' });
-      expect(p.route).toBeNull();
-      expect(p.price).toBeNull();
-      expect(p.receives).toBe(0);
+      expect(p.route).toBe('convert');
+      expect(p.price).toBe(0.998);
+      expect(p.receives).toBe(49.9);
     }
   });
 
@@ -543,6 +555,7 @@ describe('planFor pull', () => {
     expect(p.amount).toBe(11.5);
     expect(p.routes.loop.available).toBe(false);
     expect(p.routes.loop.reason).toBe('Too small to pull. Gate takes a flat $1 fee on the way out and needs at least 11 USDC to arrive. Pull at least 12 USDC.');
+    expect(p.route).toBe('convert');
     const enough = plan({ ...s, usdcEquity: 12, usdcCash: 12 }, OPEN, PULL);
     expect(enough.routes.loop.available).toBe(true);
   });
