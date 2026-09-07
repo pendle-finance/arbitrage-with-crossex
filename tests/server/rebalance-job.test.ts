@@ -98,8 +98,23 @@ const account = (usdcOnHl: Record<string, string> = { equity: '-300', liability:
   assets: [asset('USDT', 'CROSSEX', { balance: '1200', equity: '1200' }), asset('USDC', 'HYPERLIQUID', usdcOnHl), asset('USDC', 'GATE')],
 });
 
-function mockView(opts: { ask?: string; account?: unknown; disabled?: number } = {}): void {
-  gate().persist().get(`${API}/crossex/accounts`).query(true).reply(200, opts.account ?? account());
+function mockView(
+  opts: { ask?: string; account?: unknown; disabled?: number; accountThen429?: boolean; onAccountRead?: () => void } = {},
+): void {
+  const body = opts.account ?? account();
+  if (opts.accountThen429) {
+    gate().get(`${API}/crossex/accounts`).query(true).reply(200, body);
+    gate().persist().get(`${API}/crossex/accounts`).query(true).reply(429, { label: 'TOO_MANY_REQUESTS', message: 'slow down' });
+  } else {
+    gate()
+      .persist()
+      .get(`${API}/crossex/accounts`)
+      .query(true)
+      .reply(200, () => {
+        opts.onAccountRead?.();
+        return body;
+      });
+  }
   mockGateGet('/interest_rate', {
     body: [{ coin: 'USDC', exchange_type: 'HYPERLIQUID', hour_interest_rate: '0.000005', time: String(t) }],
   });
@@ -125,6 +140,14 @@ const orderBody = (state: string, executedQty: string, orderId = 'o1') => ({
   text: 't',
   state,
   executed_qty: executedQty,
+});
+/** Gate books a convert as a filled market sell whose text is the quote id. */
+const convertOrderBody = (orderId: string, quoteId: string, received: string) => ({
+  order_id: orderId,
+  text: quoteId,
+  state: 'FILLED',
+  executed_qty: '0',
+  executed_amount: received,
 });
 const transferRow = (id: string, status: string, over: Record<string, string> = {}) => ({
   id,
@@ -194,8 +217,7 @@ function holdRunner(): () => void {
   return release;
 }
 
-const busyDeal = () => {
-  const store = new Store(':memory:');
+const createDeal = (store: Store): void => {
   store.createPair({
     id: 'deal-409',
     mode: 'OPENING',
@@ -215,6 +237,11 @@ const busyDeal = () => {
     reportJson: null,
     createdAt: Date.now(),
   });
+};
+
+const busyDeal = () => {
+  const store = new Store(':memory:');
+  createDeal(store);
   return store;
 };
 
@@ -232,7 +259,7 @@ describe('POST /api/rebalance', () => {
     expect(res.statusCode).toBe(202);
     const { id } = res.json().data;
     expect(id).toBeTypeOf('string');
-    expect(h.file()).toMatchObject({ id, status: 'running', route: 'loop', amount: AMOUNT, stepIndex: 0 });
+    expect(h.file()).toMatchObject({ id, userId: '1', status: 'running', route: 'loop', amount: AMOUNT, stepIndex: 0 });
     await waitFor(() => orders.isDone(), 'the order POST', 2000);
     expect(h.file().status).toBe('running');
 
@@ -323,6 +350,34 @@ describe('POST /api/rebalance', () => {
     expect(res.json().error.message).toBe(`rebalance ${id} is halted`);
   });
 
+  it('refuses: 409 when the fresh account read is rate-limited and Gate would have served the cached one', async () => {
+    mockView({ accountThen429: true });
+    const h = boot();
+    expect((await h.view()).ok).toBe(true);
+
+    const res = await h.post();
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error.message).toBe('Gate is rate-limiting the account read. Try again in a few seconds.');
+    expect(() => h.file()).toThrow();
+  });
+
+  it('refuses: 409 when a deal starts while the plan is being read', async () => {
+    const store = new Store(':memory:');
+    mockView({
+      onAccountRead: () => {
+        if (store.listPairs({ activeOnly: true }).length === 0) createDeal(store);
+      },
+    });
+    const h = boot({ store });
+
+    const res = await h.post();
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error.message).toBe('deal deal-409 is still working');
+    expect(() => h.file()).toThrow();
+  });
+
   it('completes loop: three steps done with venue ids within 5 s of the last SUCCESS', async () => {
     mockView();
     const orders = mockGatePost('/orders', { body: orderBody('OPEN', '0') });
@@ -375,7 +430,6 @@ describe('POST /api/rebalance', () => {
       quoteId: 'q1',
       venueId: 'c1',
       qty: 299.4,
-      balanceBefore: 0,
       status: 'done',
     });
     expect(quotes.isDone()).toBe(true);
@@ -548,7 +602,7 @@ describe('POST /api/rebalance', () => {
     expect(refused.json().error.message).toBe('no route');
   });
 
-  it('pull convert: a small pull picks convert, quotes USDC to USDT, sends, funds at CROSSEX; a resumed quote lands on the USDT balance', async () => {
+  it('pull convert: a small pull picks convert, quotes USDC to USDT, sends, funds at CROSSEX; a resumed quote is found on Gate by its id', async () => {
     mockView({ account: pullAccount() });
     const isPullQuote = (b: Record<string, unknown>): boolean =>
       b.exchange_type === 'HYPERLIQUID' && b.from_coin === 'USDC' && b.to_coin === 'USDT' && b.from_amount === '12';
@@ -587,34 +641,27 @@ describe('POST /api/rebalance', () => {
       quoteId: 'q3',
       venueId: 'c3',
       qty: 11.98,
-      balanceBefore: 1200,
       status: 'done',
     });
 
     await reset();
-    const landed = pullAccount();
-    landed.assets[0].balance = '1211.98';
-    mockView({ account: landed });
-    const unsent = mockGatePost('/convert/orders', { body: { order_id: 'c4', text: 'q4' } });
+    mockView({ account: pullAccount() });
+    const byQuote = mockGateGet('/orders/q4', { body: convertOrderBody('c4', 'q4', '11.98') });
+    mockGateGet('/orders/c4', { body: convertOrderBody('c4', 'q4', '11.98') });
+    const unsent = mockGatePost('/convert/orders', { body: { order_id: 'c5', text: 'q5' } });
     const resumed = newJob('pull', 'convert', 12, t);
     resumed.status = 'halted';
     resumed.haltReason = 'server restarted';
-    Object.assign(resumed.steps[0], {
-      text: tagFor(resumed.id, 0),
-      quoteId: 'q4',
-      qty: 11.98,
-      balanceBefore: 1200,
-      status: 'running',
-      startedAt: t,
-    });
+    Object.assign(resumed.steps[0], { text: tagFor(resumed.id, 0), quoteId: 'q4', qty: 11.98, status: 'running', startedAt: t });
     h = boot({ job: resumed });
 
     const again = await h.post(`/api/rebalance/${resumed.id}/resume`);
     expect(again.statusCode).toBe(200);
     await waitFor(() => h.file().status === 'done', 'done');
+    expect(byQuote.isDone()).toBe(true);
     expect(unsent.isDone()).toBe(false);
     expect(h.file()).toMatchObject({ status: 'done', fundsAt: 'CROSSEX' });
-    expect(h.file().steps[0]).toMatchObject({ quoteId: 'q4', venueId: null, qty: 11.98, status: 'done' });
+    expect(h.file().steps[0]).toMatchObject({ quoteId: 'q4', venueId: 'c4', qty: 11.98, status: 'done' });
   });
 
   it('pull halts and resumes like pay-down: a FAILED pull halts with funds at HYPERLIQUID, abandon ends it, and a resumed Sell USDC with a tag only adopts the order and sends nothing', async () => {
@@ -696,7 +743,7 @@ describe('GET /api/rebalance', () => {
 
     const { data } = await h.view();
 
-    expect(data.job).toMatchObject({ id: legacy.id, direction: 'payDown', status: 'halted', haltReason: 'server restarted' });
+    expect(data.job).toMatchObject({ id: legacy.id, userId: null, direction: 'payDown', status: 'halted', haltReason: 'server restarted' });
     expect(data.job.steps.map((s: Step) => s.name)).toEqual(['Buy USDC', 'To spot', 'To Hyperliquid']);
     expect(h.file().direction).toBe('payDown');
   });
@@ -745,7 +792,36 @@ describe('POST /api/rebalance/:id/resume and /abandon', () => {
     expect(res.json().error.message).toBe(`rebalance ${halted.id} is abandoned`);
   });
 
-  it('no double send: a venueId is polled once, a found tag is adopted, a missing tag is sent once after 10 s, a landed quote needs no order', async () => {
+  it('resume refuses a job started on another Gate account and runs one started on this account', async () => {
+    mockView();
+    const foreign = haltedLoopJob(1, { venueId: 'x1' });
+    foreign.userId = '2';
+    let h = boot({ job: foreign });
+
+    let res = await h.post(`/api/rebalance/${foreign.id}/resume`);
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error.message).toBe(`rebalance ${foreign.id} was started on another Gate account. Abandon it.`);
+    expect(h.file().status).toBe('halted');
+
+    await reset();
+    mockView();
+    const own = haltedLoopJob(1, { venueId: 'x1' });
+    own.userId = '1';
+    mockGateGet('/transfers', { body: [transferRow('x1', 'SUCCESS', { actual_receive: BOUGHT })] });
+    mockGatePost('/transfers', { body: { tx_id: 'x2', text: 't' } });
+    mockGateGet('/transfers', {
+      body: [transferRow('x1', 'SUCCESS'), transferRow('x2', 'SUCCESS', { actual_receive: '299.92' })],
+    });
+    h = boot({ job: own });
+
+    res = await h.post(`/api/rebalance/${own.id}/resume`);
+
+    expect(res.statusCode).toBe(200);
+    await waitFor(() => h.file().status === 'done', 'done');
+  });
+
+  it('no double send: a venueId is polled once, a found tag is adopted, a missing tag is sent once after 10 s, a quote Gate knows needs no order', async () => {
     mockView();
     let orders = mockGatePost('/orders', { body: orderBody('OPEN', '0') });
     let poll = mockLoopAfterBuy();
@@ -797,26 +873,22 @@ describe('POST /api/rebalance/:id/resume and /abandon', () => {
     expect(h.file().steps[0].venueId).toBe('o1');
 
     await reset();
-    mockView({ account: account({ balance: '399.4', equity: '99.4', liability: '300', borrowing_initial_margin: '30' }) });
+    mockView();
     const quotes = mockGatePost('/convert/quote', { body: quoteBody('q9', '299.4') });
     const convertOrders = mockGatePost('/convert/orders', { body: { order_id: 'c9', text: 'q9' } });
+    const known = mockGateGet('/orders/q1', { body: convertOrderBody('c1', 'q1', '299.4') });
+    mockGateGet('/orders/c1', { body: convertOrderBody('c1', 'q1', '299.4') });
     job = newJob('payDown', 'convert', AMOUNT, t);
     job.status = 'halted';
     job.haltReason = 'server restarted';
-    Object.assign(job.steps[0], {
-      text: tagFor(job.id, 0),
-      quoteId: 'q1',
-      qty: 299.4,
-      balanceBefore: 100,
-      status: 'running',
-      startedAt: t,
-    });
+    Object.assign(job.steps[0], { text: tagFor(job.id, 0), quoteId: 'q1', qty: 299.4, status: 'running', startedAt: t });
     h = boot({ job });
     res = await h.post(`/api/rebalance/${job.id}/resume`);
     expect(res.statusCode).toBe(200);
     await waitFor(() => h.file().status === 'done', 'done');
     expect(h.file()).toMatchObject({ status: 'done', fundsAt: 'HYPERLIQUID' });
-    expect(h.file().steps[0]).toMatchObject({ quoteId: 'q1', venueId: null, qty: 299.4, status: 'done' });
+    expect(h.file().steps[0]).toMatchObject({ quoteId: 'q1', venueId: 'c1', qty: 299.4, status: 'done' });
+    expect(known.isDone()).toBe(true);
     expect(quotes.isDone()).toBe(false);
     expect(convertOrders.isDone()).toBe(false);
   });

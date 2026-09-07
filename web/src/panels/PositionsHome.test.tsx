@@ -1657,3 +1657,32 @@ describe('PositionsHome — resuming a half-open position', () => {
     expect(screen.queryByText('Open this strategy')).not.toBeInTheDocument();
   });
 });
+
+describe('PositionsHome — liquidation chip', () => {
+  const hedgedEth = () =>
+    mockPositions({
+      positions: [
+        makeCrossexPosition({ symbol: 'GATE_FUTURE_ETH_USDT' }),
+        makeCrossexPosition({ symbol: 'HYPERLIQUID_FUTURE_ETH_USDC' }),
+      ],
+      exposure: [makeExposureGroup()],
+    });
+
+  it('says safe through 10x on a hedged pair the model priced without finding a line', async () => {
+    hedgedEth();
+    renderWithClient(<PositionsHome />);
+
+    expect(await screen.findByText('Safe through a 10x ETH pump or 98% dump')).toBeInTheDocument();
+    expect(screen.queryByText('No liquidation estimate')).toBeNull();
+  });
+
+  it('does not claim safety when Gate sends no margin balance', async () => {
+    hedgedEth();
+    server.use(http.get('/api/account', () => HttpResponse.json(env({ ...account, marginBalance: 'unavailable' }))));
+    renderWithClient(<PositionsHome />);
+
+    expect(await screen.findByText('No liquidation estimate')).toBeInTheDocument();
+    expect(screen.queryByText(/^Safe through/)).toBeNull();
+    expect(screen.queryByText(/^Liquidates if/)).toBeNull();
+  });
+});

@@ -178,7 +178,6 @@ export interface RebalanceStep {
   quoteId: string | null;
   venueId: string | null;
   qty: number | null;
-  balanceBefore: number | null;
   attempt: number;
   status: 'pending' | 'running' | 'done';
   startedAt: number | null;

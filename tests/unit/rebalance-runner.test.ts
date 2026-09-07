@@ -114,7 +114,6 @@ const doneStep = (name: string, tag: string, venueId: string, qty: number, at: n
   quoteId: null,
   venueId,
   qty,
-  balanceBefore: null,
   attempt: 0,
   status: 'done' as const,
   startedAt: at,
@@ -150,7 +149,6 @@ describe('runJob loop route', () => {
       expect(s.startedAt).toBeTypeOf('number');
       expect(s.doneAt).toBeTypeOf('number');
       expect(s.quoteId).toBeNull();
-      expect(s.balanceBefore).toBeNull();
     }
 
     expect(h.calls.createCrossexOrder[0].crossexOrderRequest).toEqual({
@@ -441,10 +439,9 @@ describe('runJob loop route', () => {
 });
 
 describe('runJob convert route', () => {
-  it('quotes, reads the balance, sends the order, and is done with one step', async () => {
+  it('quotes, sends the order, and is done with one step and no account read', async () => {
     const h = harness(fakeClock(), 'convert', {
       createCrossexConvertQuote: seq(quote('q1', '11.976')),
-      getCrossexAccount: seq(account('100')),
       createCrossexConvertOrder: seq({ body: { orderId: 'c1', text: 'q1' } }),
     });
     await h.cache.get('account', 60_000, async () => 'old');
@@ -461,7 +458,6 @@ describe('runJob convert route', () => {
       quoteId: 'q1',
       venueId: 'c1',
       qty: 11.976,
-      balanceBefore: 100,
       status: 'done',
     });
     expect(h.calls.createCrossexConvertQuote[0].crossexConvertQuoteRequest).toEqual({
@@ -471,7 +467,8 @@ describe('runJob convert route', () => {
       fromAmount: '12',
     });
     expect(h.calls.createCrossexConvertOrder[0].crossexConvertOrderRequest).toEqual({ quoteId: 'q1' });
-    expect(h.count('getCrossexAccount')).toBe(1);
+    expect(h.count('getCrossexAccount')).toBe(0);
+    expect(h.count('getCrossexOrder')).toBe(0);
     const { value } = await h.cache.get('account', 60_000, async () => 'new');
     expect(value).toBe('new');
   });
@@ -480,7 +477,6 @@ describe('runJob convert route', () => {
     const below = String(12 * QUOTE_FLOOR - 0.01);
     const h = harness(fakeClock(), 'convert', {
       createCrossexConvertQuote: seq(quote('q1', below)),
-      getCrossexAccount: seq(account('100')),
       createCrossexConvertOrder: seq({ body: { orderId: 'c1', text: 'q1' } }),
     });
 
@@ -492,27 +488,42 @@ describe('runJob convert route', () => {
     expect(job.fundsAt).toBe('CROSSEX');
     expect(job.steps[0].quoteId).toBeNull();
     expect(job.steps[0].venueId).toBeNull();
-    expect(job.steps[0].balanceBefore).toBe(100);
     expect(h.count('createCrossexConvertOrder')).toBe(0);
-    expect(h.count('getCrossexAccount')).toBe(1);
   });
 
-  it('sends one order when the order call times out and the balance then shows it landed', async () => {
-    const clock = fakeClock();
-    const h = harness(clock, 'convert', {
+  it('holds the quote id on disk before the order call, so a lost response is found on Gate by that id and nothing is sent twice', async () => {
+    const h = harness(fakeClock(), 'convert', {
       createCrossexConvertQuote: seq(quote('q1', '11.976')),
-      getCrossexAccount: seq(account('100'), account('100'), account('111.976')),
-      createCrossexConvertOrder: seq(networkError, { body: { orderId: 'c1', text: 'q1' } }),
+      createCrossexConvertOrder: seq(networkError, { body: { orderId: 'c9', text: 'q1' } }),
+      getCrossexOrder: seq(order('FILLED', '12', 'c1', { executedAmount: '11.976' })),
     });
 
     await h.run();
 
     const job = h.jobs.read()!;
     expect(job.status).toBe('done');
-    expect(job.steps[0]).toMatchObject({ quoteId: 'q1', venueId: null, qty: 11.976, balanceBefore: 100, status: 'done' });
+    expect(job.steps[0]).toMatchObject({ quoteId: 'q1', venueId: 'c1', qty: 11.976, status: 'done' });
     expect(h.count('createCrossexConvertOrder')).toBe(1);
     expect(h.count('createCrossexConvertQuote')).toBe(1);
-    expect(h.count('getCrossexAccount')).toBe(3);
+    expect(h.calls.getCrossexOrder).toEqual(['q1', 'c1']);
+    expect(job.steps[0].doneAt! - job.steps[0].startedAt!).toBe(POLL_MS);
+  });
+
+  it('re-quotes and sends once more when Gate does not know the quote id twice, 10 s apart', async () => {
+    const h = harness(fakeClock(), 'convert', {
+      createCrossexConvertQuote: seq(quote('q1', '11.976'), quote('q2', '11.97')),
+      createCrossexConvertOrder: seq(networkError, { body: { orderId: 'c2', text: 'q2' } }),
+      getCrossexOrder: seq(gateError(404, 'ORDER_NOT_FOUND', 'order not found')),
+    });
+
+    await h.run();
+
+    const job = h.jobs.read()!;
+    expect(job.status).toBe('done');
+    expect(job.steps[0]).toMatchObject({ quoteId: 'q2', venueId: 'c2', qty: 11.97, status: 'done' });
+    expect(h.count('createCrossexConvertQuote')).toBe(2);
+    expect(h.count('createCrossexConvertOrder')).toBe(2);
+    expect(h.calls.getCrossexOrder).toEqual(['q1', 'q1']);
     expect(job.steps[0].doneAt! - job.steps[0].startedAt!).toBe(POLL_MS + LOOKUP_RETRY_MS);
   });
 });
@@ -623,25 +634,18 @@ describe('runJob resumed steps send nothing twice', () => {
     expect(sentAt).toBe(t0 + LOOKUP_RETRY_MS);
   });
 
-  it('a convert step with a quoteId is done with no send when the balance rose by the quote', async () => {
+  it('a convert step with a quoteId that Gate knows adopts the order and sends nothing', async () => {
     const clock = fakeClock();
     const h = harness(
       clock,
       'convert',
       {
         createCrossexConvertQuote: seq(quote('q2', '11.976')),
-        getCrossexAccount: seq(account('111.97')),
         createCrossexConvertOrder: seq({ body: { orderId: 'c2', text: 'q2' } }),
+        getCrossexOrder: seq(order('FILLED', '12', 'c1', { executedAmount: '11.97' })),
       },
       (job) => {
-        Object.assign(job.steps[0], {
-          text: tagFor(job.id, 0),
-          quoteId: 'q1',
-          qty: 11.976,
-          balanceBefore: 100,
-          status: 'running',
-          startedAt: clock.now(),
-        });
+        Object.assign(job.steps[0], { text: tagFor(job.id, 0), quoteId: 'q1', qty: 11.976, status: 'running', startedAt: clock.now() });
       },
     );
 
@@ -650,31 +654,24 @@ describe('runJob resumed steps send nothing twice', () => {
     const job = h.jobs.read()!;
     expect(job.status).toBe('done');
     expect(job.fundsAt).toBe('HYPERLIQUID');
-    expect(job.steps[0]).toMatchObject({ quoteId: 'q1', venueId: null, qty: 11.976, status: 'done' });
-    expect(h.count('getCrossexAccount')).toBe(1);
+    expect(job.steps[0]).toMatchObject({ quoteId: 'q1', venueId: 'c1', qty: 11.97, status: 'done' });
+    expect(h.calls.getCrossexOrder).toEqual(['q1', 'c1']);
     expect(h.count('createCrossexConvertQuote')).toBe(0);
     expect(h.count('createCrossexConvertOrder')).toBe(0);
   });
 
-  it('a convert step with a quoteId re-quotes and sends once when the balance did not rise', async () => {
+  it('a convert step with a quoteId Gate does not know re-quotes and sends once', async () => {
     const clock = fakeClock();
     const h = harness(
       clock,
       'convert',
       {
         createCrossexConvertQuote: seq(quote('q2', '11.97')),
-        getCrossexAccount: seq(account('100')),
         createCrossexConvertOrder: seq({ body: { orderId: 'c2', text: 'q2' } }),
+        getCrossexOrder: seq(gateError(404, 'ORDER_NOT_FOUND', 'order not found')),
       },
       (job) => {
-        Object.assign(job.steps[0], {
-          text: tagFor(job.id, 0),
-          quoteId: 'q1',
-          qty: 11.976,
-          balanceBefore: 100,
-          status: 'running',
-          startedAt: clock.now(),
-        });
+        Object.assign(job.steps[0], { text: tagFor(job.id, 0), quoteId: 'q1', qty: 11.976, status: 'running', startedAt: clock.now() });
       },
     );
 
@@ -682,9 +679,32 @@ describe('runJob resumed steps send nothing twice', () => {
 
     const job = h.jobs.read()!;
     expect(job.status).toBe('done');
-    expect(job.steps[0]).toMatchObject({ quoteId: 'q2', venueId: 'c2', qty: 11.97, balanceBefore: 100 });
-    expect(h.count('getCrossexAccount')).toBe(2);
+    expect(job.steps[0]).toMatchObject({ quoteId: 'q2', venueId: 'c2', qty: 11.97, status: 'done' });
+    expect(h.calls.getCrossexOrder).toEqual(['q1', 'q1']);
     expect(h.count('createCrossexConvertQuote')).toBe(1);
+    expect(h.count('createCrossexConvertOrder')).toBe(1);
+  });
+
+  it('a convert step with a tag and no quoteId never reached Gate: it quotes and sends with no lookup', async () => {
+    const clock = fakeClock();
+    const h = harness(
+      clock,
+      'convert',
+      {
+        createCrossexConvertQuote: seq(quote('q1', '11.976')),
+        createCrossexConvertOrder: seq({ body: { orderId: 'c1', text: 'q1' } }),
+      },
+      (job) => {
+        Object.assign(job.steps[0], { text: tagFor(job.id, 0), status: 'running', startedAt: clock.now() });
+      },
+    );
+
+    await h.run();
+
+    const job = h.jobs.read()!;
+    expect(job.status).toBe('done');
+    expect(job.steps[0]).toMatchObject({ quoteId: 'q1', venueId: 'c1', qty: 11.976, status: 'done' });
+    expect(h.count('getCrossexOrder')).toBe(0);
     expect(h.count('createCrossexConvertOrder')).toBe(1);
   });
 });

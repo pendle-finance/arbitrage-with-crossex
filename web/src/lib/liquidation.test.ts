@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { CrossexAccount, CrossexPosition, ExposureGroup, PositionsResponse } from '../api/types';
-import { describeLine, fmtLinePrice, fmtMove, lineLabel, liquidationLines, nearestLiquidation } from './liquidation';
+import { describeLine, fmtLinePrice, fmtMove, lineFor, lineLabel, liquidationLines, nearestLiquidation } from './liquidation';
+
+/** The lines of a view the model could price. */
+const lines = (...args: Parameters<typeof liquidationLines>) => liquidationLines(...args)!.lines;
 
 const position = (symbol: string, over: Partial<CrossexPosition> = {}): CrossexPosition => ({
   symbol,
@@ -71,7 +74,7 @@ describe('liquidationLines', () => {
     // Margin balance is flat. Maintenance grows 2500 per 1x of move from the
     // legs and 25,000 per 1x from the borrow (10% of the Hyperliquid loss):
     // 20000 = 2500 f + 25000 (f - 1)  →  f = 45000 / 27500.
-    const [line] = liquidationLines(account(), box());
+    const [line] = lines(account(), box());
     expect(line.base).toBe('ETH');
     expect(line.move).toBeCloseTo(45000 / 27500 - 1, 4);
     expect(line.price).toBeCloseTo(2300 * (45000 / 27500), 2);
@@ -80,7 +83,7 @@ describe('liquidationLines', () => {
   it('moves the line out when cash is shifted into the Hyperliquid USDC wallet', () => {
     // 20k of USDC cover absorbs the first 20k of loss before any borrow:
     // 20000 = 2500 f + 0.1 (250000 (f - 1) - 20000)  →  f = 47000 / 27500.
-    const [line] = liquidationLines(account(), box(), { 'USDC/HYPERLIQUID': 20000, 'USDT/CROSSEX': -20000 });
+    const [line] = lines(account(), box(), { 'USDC/HYPERLIQUID': 20000, 'USDT/CROSSEX': -20000 });
     expect(line.move).toBeCloseTo(47000 / 27500 - 1, 4);
   });
 
@@ -88,7 +91,7 @@ describe('liquidationLines', () => {
     const flipped = box();
     flipped.exposure[0].legs[0].side = 'SHORT';
     flipped.exposure[0].legs[1].side = 'LONG';
-    const [line] = liquidationLines(account(), flipped);
+    const [line] = lines(account(), flipped);
     // Pump: the Gate short loses, the USDT wallet spends its 20k of cash and
     // then borrows: 20000 = 2500 f + 0.1 (250000 (f - 1) - 20000) → f = 47000 / 27500, +71%.
     // Dump: the Hyperliquid long loses and its empty USDC wallet borrows from
@@ -106,7 +109,7 @@ describe('liquidationLines', () => {
         ]),
       ],
     };
-    const [line] = liquidationLines(account({ maintenanceMargin: '1250' }), lone);
+    const [line] = lines(account({ maintenanceMargin: '1250' }), lone);
     // 20000 - 250000 (1 - f) = 1250 f + 25000 (1 - f) → f = 255000 / 273750, a 6.9% dump.
     expect(line.move).toBeCloseTo(255000 / 273750 - 1, 4);
     expect(line.move).toBeLessThan(0);
@@ -116,17 +119,23 @@ describe('liquidationLines', () => {
     const usdt = box();
     usdt.positions[1].symbol = 'BINANCE_FUTURE_ETH_USDT';
     usdt.exposure[0].legs[1] = { ...usdt.exposure[0].legs[1], symbol: 'BINANCE_FUTURE_ETH_USDT', exchange: 'BINANCE', quote: 'USDT' };
-    const [line] = liquidationLines(account(), usdt);
+    const [line] = lines(account(), usdt);
     // 20000 = 2500 f  →  f = 8, a +700% pump.
     expect(line.move).toBeCloseTo(7, 4);
   });
 
-  it('reports nothing past a 10x pump, and nothing with no positions', () => {
+  it('lists a coin as far past a 10x pump, prices nothing with no positions, and is unknown without margin figures', () => {
     const wide = box();
     wide.positions[1].symbol = 'BINANCE_FUTURE_ETH_USDT';
     wide.exposure[0].legs[1] = { ...wide.exposure[0].legs[1], symbol: 'BINANCE_FUTURE_ETH_USDT', exchange: 'BINANCE', quote: 'USDT' };
-    expect(liquidationLines(account({ marginBalance: '30000' }), wide)).toEqual([]);
-    expect(liquidationLines(account(), { positions: [], exposure: [] })).toEqual([]);
+    const far = liquidationLines(account({ marginBalance: '30000' }), wide);
+    expect(far).toEqual({ lines: [], far: ['ETH'] });
+    expect(lineFor(far!, 'eth')).toBe('far');
+    expect(lineFor(far!, 'HYPE')).toBeNull();
+    expect(liquidationLines(account(), { positions: [], exposure: [] })).toEqual({ lines: [], far: [] });
+    expect(liquidationLines(account({ marginBalance: 'n/a' }), box())).toBeNull();
+    expect(liquidationLines(account({ maintenanceMargin: undefined as unknown as string }), box())).toBeNull();
+    expect(nearestLiquidation(account({ marginBalance: 'n/a' }), box())).toBeNull();
     expect(nearestLiquidation(undefined, box())).toBeNull();
   });
 
@@ -162,15 +171,16 @@ describe('liquidationLines', () => {
         ]),
       ],
     };
-    const lines = liquidationLines(acc, live);
+    const view = liquidationLines(acc, live)!;
     // By hand: 926.55 of room, eaten at 25.37 (net short) + 47.0 (legs) +
     // 152.04 (borrow) = 224.4 per 1x of ETH  →  +4.13.
-    const eth = lines.find((l) => l.base === 'ETH')!;
+    const eth = lineFor(view, 'ETH') as { move: number; price: number };
     expect(eth.move).toBeCloseTo(4.13, 1);
     expect(eth.price).toBeCloseTo(2492.5 * 5.13, -1);
     // HYPE: 926.55 eaten at 0.06 (net) + 13.26 (legs) + 19.94 (borrow) = 33.3 per 1x → far past 10x.
-    expect(lines.find((l) => l.base === 'HYPE')).toBeUndefined();
-    expect(lines[0].base).toBe('ETH');
+    expect(lineFor(view, 'HYPE')).toBe('far');
+    expect(view.far).toEqual(['HYPE']);
+    expect(view.lines[0].base).toBe('ETH');
   });
 });
 

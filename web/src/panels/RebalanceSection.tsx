@@ -7,7 +7,7 @@ import { HoverCard } from '../components/HoverCard';
 import { SegmentedToggle } from '../components/SegmentedToggle';
 import { microLabelClass } from '../components/Th';
 import { fmtAge, fmtUsd, num } from '../lib/fmt';
-import { fmtMove, nearestLiquidation } from '../lib/liquidation';
+import { fmtMove, lineFor, liquidationLines, nearestLiquidation } from '../lib/liquidation';
 import { floorCents, roundToStep } from '../lib/ticks';
 import { useNow } from '../lib/useNow';
 
@@ -130,9 +130,10 @@ function quoteFacts(plan: RebalancePlan, routeName: 'loop' | 'convert', pull: bo
   return facts;
 }
 
-/** `ETH +37% → +43%`: how much room the move buys. A rebalance moves cash
- * between the USDT and USDC wallets; the liability, and so the maintenance
- * margin, follows. Null when the account has no line. */
+/** `ETH +37% → +43%`: how much room the move buys for the nearest coin. A
+ * rebalance moves cash between the USDT and USDC wallets; the liability, and
+ * so the maintenance margin, follows. The after figure is the same coin's,
+ * not whichever coin is nearest after. Null when the account has no line. */
 function liquidationShift(
   acc: ReturnType<typeof useAccount>['data'],
   positions: ReturnType<typeof usePositions>['data'],
@@ -140,15 +141,16 @@ function liquidationShift(
   pull: boolean,
 ): string | null {
   const before = nearestLiquidation(acc, positions);
-  if (!before) return null;
-  const after = nearestLiquidation(
+  if (!before || !acc || !positions) return null;
+  const view = liquidationLines(
     acc,
     positions,
     pull
       ? { 'USDC/HYPERLIQUID': -plan.amount, 'USDT/CROSSEX': plan.receives }
       : { 'USDC/HYPERLIQUID': plan.receives, 'USDT/CROSSEX': -plan.amount },
   );
-  return `${before.base} ${fmtMove(before.move)} → ${after ? fmtMove(after.move) : 'past 10x'}`;
+  const after = view ? lineFor(view, before.base) : null;
+  return `${before.base} ${fmtMove(before.move)} → ${after && after !== 'far' ? fmtMove(after.move) : 'past 10x'}`;
 }
 
 /** The situation as facts: what Gate lent, the margin it holds, the interest. */
@@ -292,7 +294,22 @@ export function RebalanceSection({ holdMs }: { holdMs?: number }) {
     lastActive.current = activeJobId;
   }, [activeJobId]);
 
-  if (!data) return null;
+  /* A first fetch that failed must not hide the section: the user would not
+     know the borrow exists. Say so and offer a retry. */
+  if (!data) {
+    if (!query.error) return null;
+    return (
+      <section aria-label="Rebalance" className="flex flex-col gap-2">
+        <h2 className="text-xs font-semibold uppercase tracking-wider text-ink-400">Rebalance</h2>
+        <p role="alert" className="text-[12px] text-rose-300">
+          Could not load the rebalance view. {query.error.message}
+        </p>
+        <button type="button" className="btn-ghost-xs self-start" onClick={() => void query.refetch()}>
+          Retry
+        </button>
+      </section>
+    );
+  }
 
   /* Presence must not depend on cents. Both directions end with the bucket's
      equity near zero, where unrealised PnL flips the borrow and the pullable

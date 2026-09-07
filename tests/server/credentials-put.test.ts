@@ -151,6 +151,40 @@ describe('PUT /api/credentials', () => {
     expect(readFileSync(envPath, 'utf8')).toContain(`GATE_API_KEY=${TEST_KEY}`);
   });
 
+  it('refuses with 409 while a halted rebalance belongs to another account or to a file with no account id, and accepts a rotated key on the same account', async () => {
+    await app.close();
+    const jobs = new JobFile(mkdtempSync(path.join(tmpdir(), 'rebalance-')));
+    app = makeTestApp({
+      getClients: () => current,
+      credentials: { envPath, setClients: (c) => (current = c) },
+      rebalance: { jobs },
+    });
+    await app.ready();
+    const halted = (userId: string | null) => {
+      const job = newJob('payDown', 'loop', 12, Date.now(), userId);
+      job.status = 'halted';
+      jobs.write(job);
+    };
+
+    halted('999');
+    gate().get('/api/v4/crossex/accounts').query(true).reply(200, fixture('account.json'));
+    let res = await put({ key: NEW_KEY, secret: NEW_SECRET });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error.message).toMatch(/halted rebalance/);
+    expect(readFileSync(envPath, 'utf8')).toContain(`GATE_API_KEY=${TEST_KEY}`);
+
+    halted(null);
+    gate().get('/api/v4/crossex/accounts').query(true).reply(200, fixture('account.json'));
+    res = await put({ key: NEW_KEY, secret: NEW_SECRET });
+    expect(res.statusCode).toBe(409);
+
+    halted('1234567');
+    gate().get('/api/v4/crossex/accounts').query(true).reply(200, fixture('account.json'));
+    res = await put({ key: NEW_KEY, secret: NEW_SECRET });
+    expect(res.statusCode).toBe(200);
+    expect(readFileSync(envPath, 'utf8')).toContain(`GATE_API_KEY=${NEW_KEY}`);
+  });
+
   it('validates the body shape', async () => {
     const res = await put({ key: '', secret: 'x' });
     expect(res.statusCode).toBe(400);

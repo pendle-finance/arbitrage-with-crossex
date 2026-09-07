@@ -104,8 +104,9 @@ describe('GET /api/rebalance', () => {
     expect(plan.routes.convert).toMatchObject({ waitSeconds: 0, available: true, reason: null });
     expect(plan.routes.convert.costUsd).toBeCloseTo(0.6, 6);
     expect(plan.route).toBe('loop');
-    expect(plan.savesPerDayUsd).toBeTypeOf('number');
-    expect(plan.marginFreedUsd).toBe(30);
+    expect(plan.savesPerDayUsd).toBe(0);
+    // 30 of initial margin held on the 300 borrow, freed for what lands.
+    expect(plan.marginFreedUsd).toBeCloseTo((plan.receives * 30) / 300, 9);
 
     expect(job).toBeNull();
     for (const scope of scopes) expect(scope.isDone()).toBe(true);

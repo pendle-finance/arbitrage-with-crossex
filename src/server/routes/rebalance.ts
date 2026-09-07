@@ -110,7 +110,19 @@ export function rebalanceRoutes(deps: AppDeps) {
         { direction, requested },
       );
       const stale = [account, rates, paid, coins, rules, fees, tickers].some((r) => r.stale);
-      return { buckets, plan, job: jobs?.read() ?? null, stale };
+      const userId = account.value.userId ? String(account.value.userId) : null;
+      return { buckets, plan, job: jobs?.read() ?? null, stale, accountStale: account.stale, userId };
+    };
+
+    const workingDeal = (): string | null => deps.engine!.store.listPairs({ activeOnly: true })[0]?.id ?? null;
+
+    const currentUserId = async (): Promise<string | null> => {
+      const { value } = await deps.cache.get(
+        'account',
+        TTL.live,
+        async () => (await deps.getClients().crossEx.getCrossexAccount()).body,
+      );
+      return value.userId ? String(value.userId) : null;
     };
 
     const haltedOr409 = (store: JobFile, id: string, reply: FastifyReply): Job | null => {
@@ -145,19 +157,27 @@ export function rebalanceRoutes(deps: AppDeps) {
       const store = requireJobs();
       const busy = busyJob(store);
       if (busy) return conflict(reply, `rebalance ${busy.id} is ${busy.status}`);
-      const working = deps.engine!.store.listPairs({ activeOnly: true });
-      if (working.length > 0) return conflict(reply, `deal ${working[0].id} is still working`);
+      const working = workingDeal();
+      if (working) return conflict(reply, `deal ${working} is still working`);
       const body = (req.body ?? {}) as { direction?: unknown; amount?: unknown; route?: unknown };
       const direction = directionOf(body.direction);
-      const { plan } = await loadView(true, direction, requestedOf(body.amount));
+      const { plan, accountStale, userId } = await loadView(true, direction, requestedOf(body.amount));
+      // The amount is sized from this read. A read served from the cache
+      // because Gate rate-limited the fresh one may be seconds old, and a
+      // pull sized on old equity can open the borrow it promises not to.
+      if (accountStale) return conflict(reply, 'Gate is rate-limiting the account read. Try again in a few seconds.');
       if (typeof body.route === 'string' && body.route !== plan.route) {
         return conflict(reply, `plan changed: now ${plan.route ?? 'no route'}`);
       }
       if (!plan.route) return conflict(reply, 'no route');
       if (!(plan.amount > 0)) return conflict(reply, 'nothing to move');
+      // Both checks again: the reads above took time, and a second POST or a
+      // deal can have started during them.
       const again = busyJob(store);
       if (again) return conflict(reply, `rebalance ${again.id} is ${again.status}`);
-      const job = newJob(direction, plan.route, plan.amount, now());
+      const started = workingDeal();
+      if (started) return conflict(reply, `deal ${started} is still working`);
+      const job = newJob(direction, plan.route, plan.amount, now(), userId);
       store.write(job);
       start(store);
       return reply.code(202).ok({ id: job.id });
@@ -167,6 +187,11 @@ export function rebalanceRoutes(deps: AppDeps) {
       const store = requireJobs();
       const job = haltedOr409(store, (req.params as { id: string }).id, reply);
       if (!job) return reply;
+      // The steps hold venue ids and amounts of the account they ran on. On
+      // another account they would poll ids it does not know, or send from it.
+      if (job.userId !== null && (await currentUserId()) !== job.userId) {
+        return conflict(reply, `rebalance ${job.id} was started on another Gate account. Abandon it.`);
+      }
       job.status = 'running';
       job.haltReason = null;
       job.steps[job.stepIndex].startedAt = now();
