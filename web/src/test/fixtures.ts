@@ -17,6 +17,7 @@ import type {
   PositionsResponse,
   PreviewResponse,
   PreviewResult,
+  RebalanceView,
   StrategyLeg,
   StrategyReturns,
   StrategyRollup,
@@ -232,6 +233,26 @@ export function baseHandlers() {
       HttpResponse.json(env(makeDealView({ pair: { id: String(params.id) } }))),
     ),
     http.get('/api/deals', () => HttpResponse.json(env([]))),
+    http.get('/api/rebalance', () =>
+      HttpResponse.json(
+        env<RebalanceView>({
+          buckets: [],
+          plan: {
+            amount: 0,
+            deficit: 0,
+            shortfall: null,
+            routes: {
+              loop: { costUsd: 0.05, waitSeconds: 150, available: false, reason: 'nothing to move' },
+              convert: { costUsd: 0, waitSeconds: 0, available: false, reason: 'nothing to move' },
+            },
+            route: null,
+            savesPerDayUsd: 0,
+            marginFreedUsd: 0,
+          },
+          job: null,
+        }),
+      ),
+    ),
     http.get('/api/alerts', () => HttpResponse.json(env([]))),
     // Default: disclaimer already accepted, so the gate stays out of the way.
     // Tests that exercise the gate override this with accepted:false.

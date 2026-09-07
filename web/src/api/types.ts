@@ -133,6 +133,65 @@ export interface CrossexAccount {
   assets: CrossexAsset[];
 }
 
+export interface RebalanceBucket {
+  coin: string;
+  venue: string;
+  cash: number;
+  upnl: number;
+  equity: number;
+  borrow: number;
+  interestPaid30dUsd: number;
+  interestPerDayUsd: number;
+}
+
+export interface RebalanceRoute {
+  costUsd: number;
+  waitSeconds: number;
+  available: boolean;
+  reason: string | null;
+}
+
+export interface RebalancePlan {
+  amount: number;
+  deficit: number;
+  shortfall: { reason: 'cash' | 'margin'; remaining: number } | null;
+  routes: { loop: RebalanceRoute; convert: RebalanceRoute };
+  route: 'loop' | 'convert' | null;
+  savesPerDayUsd: number;
+  marginFreedUsd: number;
+}
+
+export interface RebalanceStep {
+  name: string;
+  text: string | null;
+  quoteId: string | null;
+  venueId: string | null;
+  qty: number | null;
+  balanceBefore: number | null;
+  status: 'pending' | 'running' | 'done';
+  startedAt: number | null;
+  doneAt: number | null;
+}
+
+export interface RebalanceJob {
+  id: string;
+  route: 'loop' | 'convert';
+  amount: number;
+  status: 'running' | 'halted' | 'done' | 'abandoned';
+  stepIndex: number;
+  steps: RebalanceStep[];
+  fundsAt: 'CROSSEX' | 'GATE' | 'SPOT' | 'HYPERLIQUID';
+  haltReason: string | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface RebalanceView {
+  buckets: RebalanceBucket[];
+  plan: RebalancePlan;
+  job: RebalanceJob | null;
+}
+
 // ---------------------------------------------------------------------------
 // GET /api/positions
 // ---------------------------------------------------------------------------

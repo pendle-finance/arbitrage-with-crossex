@@ -168,6 +168,7 @@ const appDeps = {
   // UPDATE_CHECK=0 lets an install opt out of the GitHub read entirely.
   install: readInstallInfo(repoRoot),
   updateCheck: { current: readLocalVersion(repoRoot), disabled: process.env.UPDATE_CHECK === '0' },
+  rebalance: { dataDir },
   getBorosOrders: () => borosOrdersRef.current,
   borosAgent: {
     envPath,

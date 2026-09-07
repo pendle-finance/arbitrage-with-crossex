@@ -33,6 +33,8 @@ import type {
   OpenOrder,
   OpportunitiesResult,
   PositionsResponse,
+  RebalanceJob,
+  RebalanceView,
   StrategyReturns,
   SymbolDetail,
   SymbolRule,
@@ -70,6 +72,7 @@ export const qk = {
   deal: (id: string) => ['deal', id] as const,
   activeDeals: ['deals', 'active'] as const,
   alerts: ['alerts'] as const,
+  rebalance: ['rebalance'] as const,
 };
 
 export function useCredentials() {
@@ -386,6 +389,44 @@ export function useAlerts() {
     queryFn: () => fetchJson<DealAlert[]>('/alerts?unacked=1'),
     refetchInterval: 10_000,
     refetchIntervalInBackground: true,
+  });
+}
+
+export function useRebalance() {
+  const qc = useQueryClient();
+  const settled = useRef<string | null>(null);
+  const query = useQuery({
+    queryKey: qk.rebalance,
+    queryFn: () => fetchJson<RebalanceView>('/rebalance'),
+    refetchInterval: (q) => (q.state.data?.job?.status === 'running' ? 1_000 : 4_000),
+    refetchIntervalInBackground: true,
+    placeholderData: keepPreviousData,
+  });
+
+  const jobId = query.data?.job?.id ?? null;
+  const jobStatus = query.data?.job?.status;
+  useEffect(() => {
+    if (!jobId || jobStatus !== 'done' || settled.current === jobId) return;
+    settled.current = jobId;
+    void qc.invalidateQueries({ queryKey: qk.account });
+  }, [jobId, jobStatus, qc]);
+
+  return query;
+}
+
+export function useStartRebalance() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => postJson<{ id: string }>('/rebalance', {}),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: qk.rebalance }),
+  });
+}
+
+export function useRebalanceCommand(cmd: 'resume' | 'abandon') {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => postJson<RebalanceJob>(`/rebalance/${encodeURIComponent(id)}/${cmd}`, {}),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: qk.rebalance }),
   });
 }
 
