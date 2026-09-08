@@ -63,6 +63,45 @@ export interface ShareCardLines {
 
 const MAX_LEG_ROWS = 6;
 
+/**
+ * The Boros mark, drawn with paths rather than rasterised from the app's
+ * inline SVG: this canvas renders synchronously into a data URL, and an
+ * Image() decode is async — a share taken before it resolved would silently
+ * ship an unbranded card. Geometry mirrors components/BorosLogo.tsx (its
+ * 25.49 x 31.86 bounding box), so the two can't drift.
+ *
+ * `size` is the mark's drawn HEIGHT; the glyph is taller than it is wide.
+ */
+function borosMark(ctx: CanvasRenderingContext2D, x: number, y: number, size: number): number {
+  const k = size / 31.86; // the SVG's own height, so `size` lands exactly
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.scale(k, k);
+  // Upper disc at half opacity, then the stem-mask cutout, then the solid
+  // lower disc — the same three shapes, in the same order, as the SVG.
+  ctx.fillStyle = 'rgba(255,255,255,0.5)';
+  ctx.beginPath();
+  ctx.arc(12.7496, 12.8751, 12.7459, 0, Math.PI * 2);
+  ctx.fill();
+  // The masked wedge: the full disc clipped to the 6.24→7.81 vertical band,
+  // which is what lends the mark its bright stem.
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(6.24487, 0.852173, 7.80798 - 6.24487, 19.6444 - 0.852173);
+  ctx.clip();
+  ctx.fillStyle = '#FFFFFF';
+  ctx.beginPath();
+  ctx.arc(12.7496, 12.8754, 12.7459, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+  ctx.fillStyle = '#FFFFFF';
+  ctx.beginPath();
+  ctx.arc(7.01565, 24.9812, 7.01198, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+  return 25.4955 * k; // drawn width, for laying out what follows
+}
+
 /** Everything the card says — pure, deterministic, pinned by tests. */
 export function shareCardLines(p: SharePayloadV1): ShareCardLines {
   const hedge = hedgeLabel(p.h);
@@ -175,15 +214,31 @@ export async function renderShareCard(p: SharePayloadV1, scale = 2): Promise<HTM
   const left = 64;
   const right = SHARE_CARD_W - 64;
 
-  // --- header: wordmark left, base + hedge pills right.
-  // Two-tone wordmark, mirroring components/BrandMark.tsx: cyan "Arbitrage",
-  // neutral "with CrossEx". Keep the two in step.
+  // --- header: brand left, base + hedge pills right.
+  // Mark -> divider -> two-tone wordmark, the same order and parts as
+  // components/BrandMark.tsx: cyan "Arbitrage", neutral "with CrossEx".
+  // Keep the two in step.
+  // The wordmark's cap-height box (ascent 21 / descent 6 at this size), so
+  // the mark and divider centre on the TEXT rather than on its baseline —
+  // the app centres the same three parts with flex `items-center`.
+  const WORD_TOP = 76 - 21;
+  const WORD_BOTTOM = 76 + 6;
+  const MARK_H = WORD_BOTTOM - WORD_TOP;
+  const markW = borosMark(ctx, left, WORD_TOP, MARK_H);
+  const dividerX = left + markW + 16;
+  ctx.strokeStyle = '#374B6D'; // ink-600, as the app's divider
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(dividerX, WORD_TOP);
+  ctx.lineTo(dividerX, WORD_BOTTOM);
+  ctx.stroke();
+  const wordX = dividerX + 16;
   ctx.font = `600 26px ${SANS}`;
   ctx.fillStyle = CYAN;
-  ctx.fillText('Arbitrage', left, 76);
+  ctx.fillText('Arbitrage', wordX, 76);
   const arbW = ctx.measureText('Arbitrage').width;
   ctx.fillStyle = TEXT_HI;
-  ctx.fillText(' with CrossEx', left + arbW, 76);
+  ctx.fillText(' with CrossEx', wordX + arbW, 76);
   const hedgeTone =
     p.h === 'h'
       ? { color: GRASS, bg: 'rgba(27,227,194,0.12)', border: 'rgba(27,227,194,0.35)' }

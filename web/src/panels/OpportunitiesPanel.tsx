@@ -1073,9 +1073,6 @@ export function OpportunitiesPanel({ unconfigured = false }: { unconfigured?: bo
               </option>
             ))}
           </select>
-          <span className="max-w-[170px] text-[10.5px] leading-snug text-ink-400">
-            simulated — connect keys to price from your real schedule
-          </span>
         </div>
       )}
       <div className="flex flex-col items-start gap-1.5">

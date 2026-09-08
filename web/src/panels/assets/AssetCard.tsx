@@ -25,6 +25,7 @@ import { ClosePopover } from '../../trade/ClosePopover';
 import { useTradeFlowOptional } from '../../trade/TradeFlow';
 import { usePositions } from '../../api/queries';
 import { pairSharePayload } from '../sharePayload';
+import type { SharePayloadV1 } from '../../lib/shareCodec';
 import { SignedNumber } from '../../components/SignedNumber';
 import { fmtDateLocal, fmtPct, fmtTokenQty, fmtUsd, fmtUsdCompact, prettyVenue } from '../../lib/fmt';
 import { describeLine, lineLabel, type LiquidationLine } from '../../lib/liquidation';
@@ -176,7 +177,16 @@ function PairModal({
   // the rate side matures on its own and the perps are usually rolled.
   const [inclPerpFees, setInclPerpFees] = useState(() => defaultChargePerpFees(pair));
   const [inclExitFee, setInclExitFee] = useState(false);
-  const [shareOpen, setShareOpen] = useState(false);
+  /**
+   * The share payload is FROZEN when Share is clicked, never rebuilt while
+   * the modal is open. Passing a freshly-built object on every render made
+   * `SharePositionModal`'s effects (short-link mint, card render) see a new
+   * `payload` identity each time; each one set state, which re-rendered this
+   * card, which built another object — the link visibly reminted in a loop.
+   * A frozen snapshot is also what the modal documents it receives, and what
+   * the classic StrategyCard has always passed.
+   */
+  const [sharePayload, setSharePayload] = useState<SharePayloadV1 | null>(null);
   const nowSec = Date.now() / 1000;
   const soonest = pair.soonestMaturitySec;
   // Fee → APR: one-off fees spread over the pair's FULL hedged life
@@ -448,7 +458,15 @@ function PairModal({
               ← Pairs
             </button>
           )}
-          <button type="button" className="btn" onClick={() => setShareOpen(true)}>
+          <button
+            type="button"
+            className="btn"
+            onClick={() =>
+              setSharePayload(
+                pairSharePayload(pair, base, { nowSec, inclPerpFees, inclExitFee, netApr, netUsd }),
+              )
+            }
+          >
             Share this pair
           </button>
         </span>
@@ -456,11 +474,8 @@ function PairModal({
           Proportional split by today’s sizes — reference only.
         </span>
       </div>
-      {shareOpen && (
-        <SharePositionModal
-          payload={pairSharePayload(pair, base, { nowSec, inclPerpFees, inclExitFee, netApr, netUsd })}
-          onClose={() => setShareOpen(false)}
-        />
+      {sharePayload && (
+        <SharePositionModal payload={sharePayload} onClose={() => setSharePayload(null)} />
       )}
     </Modal>
   );
