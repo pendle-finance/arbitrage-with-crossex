@@ -1,15 +1,13 @@
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import { CoreError } from '../../core/errors';
-import { bucketsFrom, planFor, SPOT_SYMBOL, type Direction, type InterestRowLike } from '../../core/rebalance/plan';
+import { bucketsFrom, planFor, SPOT_SYMBOL, type Direction, type InterestPaidLike } from '../../core/rebalance/plan';
 import type { AppDeps } from '../app';
 import { TTL } from '../cache';
 import { isDisclaimerAccepted } from '../disclaimer';
+import { INTEREST_OVERFLOW, InterestFile, syncInterest } from '../interestLedger';
 import { haltMessage, newJob, type Job, type JobFile } from '../rebalanceJob';
 import { runJob } from '../rebalanceRunner';
 
-const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
-const INTEREST_PAGE_SIZE = 100;
-const INTEREST_MAX_PAGES = 8;
 const SPOT_PAIR = 'USDC_USDT';
 
 const conflict = (reply: FastifyReply, message: string): FastifyReply =>
@@ -58,26 +56,33 @@ export function rebalanceRoutes(deps: AppDeps) {
       );
     };
 
-    const interestPaidSince = async (since: number): Promise<InterestRowLike[]> => {
-      const rows: InterestRowLike[] = [];
-      for (let page = 1; page <= INTEREST_MAX_PAGES; page += 1) {
-        const { body } = await deps
-          .getClients()
-          .crossEx.listCrossexHistoryMarginInterests({ from: since, to: now(), page, limit: INTEREST_PAGE_SIZE });
-        const list = body ?? [];
-        rows.push(...list.filter((r) => Number(r.createTime) >= since));
-        if (list.length < INTEREST_PAGE_SIZE) break;
-      }
-      return rows;
-    };
+    // All-time interest, kept on disk and topped up with the rows since the
+    // last sync. The account is read first because the ledger is per account.
+    const interest = deps.rebalance?.interest ?? new InterestFile(null);
+    const interestPaid = (userId: string | null): Promise<{ value: InterestPaidLike; stale: boolean }> =>
+      deps.cache
+        .get('interest:paid', TTL.fills, () =>
+          syncInterest(
+            interest,
+            userId,
+            async (q) => (await deps.getClients().crossEx.listCrossexHistoryMarginInterests(q)).body ?? [],
+            now(),
+          ),
+        )
+        .catch((e: unknown) => {
+          if (e instanceof CoreError && e.details === INTEREST_OVERFLOW) log(e.message);
+          return { value: {}, stale: true };
+        });
 
     const loadView = async (fresh: boolean, direction: Direction, requested: number) => {
       const crossEx = () => deps.getClients().crossEx;
-      const since = now() - THIRTY_DAYS_MS;
-      const [account, rates, paid, coins, rules, fees, tickers] = await Promise.all([
-        deps.cache.get('account', TTL.live, async () => (await crossEx().getCrossexAccount()).body, { fresh }),
+      const account = await deps.cache.get('account', TTL.live, async () => (await crossEx().getCrossexAccount()).body, {
+        fresh,
+      });
+      const userId = account.value.userId ? String(account.value.userId) : null;
+      const [rates, paid, coins, rules, fees, tickers] = await Promise.all([
         orEmpty(deps.cache.get('interest:rate', TTL.static, async () => (await crossEx().getCrossexInterestRate()).body)),
-        orEmpty(deps.cache.get('interest:paid', TTL.fills, () => interestPaidSince(since))),
+        interestPaid(userId),
         deps.cache.get('transfer:coins', TTL.static, async () => (await crossEx().listCrossexTransferCoins()).body),
         deps.cache.get('rules:all', TTL.static, async () => (await crossEx().listCrossexRuleSymbols()).body),
         deps.cache.get('fees', TTL.static, async () => (await crossEx().getCrossexFee()).body),
@@ -110,7 +115,6 @@ export function rebalanceRoutes(deps: AppDeps) {
         { direction, requested },
       );
       const stale = [account, rates, paid, coins, rules, fees, tickers].some((r) => r.stale);
-      const userId = account.value.userId ? String(account.value.userId) : null;
       return { buckets, plan, job: jobs?.read() ?? null, stale, accountStale: account.stale, userId };
     };
 

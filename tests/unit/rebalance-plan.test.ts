@@ -2,8 +2,8 @@ import { describe, it, expect } from 'vitest';
 import {
   bucketsFrom,
   planFor,
-  DEFICIT,
-  SURPLUS,
+  USDC_WALLET,
+  USDT_WALLET,
   SPOT_SYMBOL,
   LOOP_WAIT_SECONDS,
   PULL_FEE_USD,
@@ -42,7 +42,11 @@ function asset(coin: string, exchangeType: string, f: Figures = {}): AssetLike {
   };
 }
 
-const USDC_RATE: RateLike[] = [{ coin: DEFICIT.coin, exchangeType: DEFICIT.venue, hourInterestRate: '0.00001' }];
+const USDC_RATE: RateLike[] = [{ coin: USDC_WALLET.coin, exchangeType: USDC_WALLET.venue, hourInterestRate: '0.00001' }];
+const BOTH_RATES: RateLike[] = [
+  ...USDC_RATE,
+  { coin: USDT_WALLET.coin, exchangeType: USDT_WALLET.venue, hourInterestRate: '0.00002' },
+];
 
 const OPEN: PlanInputs = {
   usdcTransfer: { isDisabled: 0, minTransAmount: 11 },
@@ -61,6 +65,9 @@ interface Scenario {
   usdcCash?: number;
   usdcAvailable?: number;
   usdtCash: number;
+  /** Defaults to the cash. Below zero it is a USDT borrow. */
+  usdtEquity?: number;
+  usdtIm?: number;
   margin: number;
 }
 
@@ -68,21 +75,26 @@ function accountFor(s: Scenario): AccountLike {
   return {
     availableMargin: String(s.margin),
     assets: [
-      asset(DEFICIT.coin, DEFICIT.venue, {
+      asset(USDC_WALLET.coin, USDC_WALLET.venue, {
         balance: s.usdcCash ?? 0,
         availableBalance: s.usdcAvailable ?? s.usdcCash ?? 0,
         equity: s.usdcEquity,
         liability: s.usdcBorrow ?? Math.max(0, -s.usdcEquity),
         borrowingInitialMargin: s.usdcIm ?? 0,
       }),
-      asset(SURPLUS.coin, SURPLUS.venue, { balance: s.usdtCash, equity: s.usdtCash }),
+      asset(USDT_WALLET.coin, USDT_WALLET.venue, {
+        balance: s.usdtCash,
+        equity: s.usdtEquity ?? s.usdtCash,
+        liability: Math.max(0, -(s.usdtEquity ?? s.usdtCash)),
+        borrowingInitialMargin: s.usdtIm ?? 0,
+      }),
     ],
   };
 }
 
-function plan(s: Scenario, inputs: PlanInputs = OPEN, request?: PlanRequest) {
+function plan(s: Scenario, inputs: PlanInputs = OPEN, request?: PlanRequest, rates: RateLike[] = USDC_RATE) {
   const account = accountFor(s);
-  return planFor(bucketsFrom(account, USDC_RATE, []), account, inputs, request);
+  return planFor(bucketsFrom(account, rates, {}), account, inputs, request);
 }
 
 describe('bucketsFrom interest', () => {
@@ -94,7 +106,7 @@ describe('bucketsFrom interest', () => {
         asset('USDT', 'CROSSEX', { balance: 200, upnl: 0, equity: 200 }),
       ],
     };
-    const buckets = bucketsFrom(account, USDC_RATE, []);
+    const buckets = bucketsFrom(account, USDC_RATE, {});
     expect(buckets).toHaveLength(2);
     expect(buckets[0]).toMatchObject({ coin: 'USDC', venue: 'HYPERLIQUID', cash: -50, upnl: 10, equity: -40, borrow: 50 });
     expect(buckets[1]).toMatchObject({ coin: 'USDT', venue: 'CROSSEX', cash: 200, upnl: 0, equity: 200, borrow: 0 });
@@ -102,40 +114,43 @@ describe('bucketsFrom interest', () => {
 
   it('charges interest per day when equity is below -10000', () => {
     const account = accountFor({ usdcEquity: -10001, usdtCash: 0, margin: 0 });
-    const [usdc] = bucketsFrom(account, USDC_RATE, []);
+    const [usdc] = bucketsFrom(account, USDC_RATE, {});
     expect(usdc.interestPerDayUsd).toBeCloseTo(10001 * 0.00001 * 24, 9);
   });
 
   it('charges no interest at exactly -10000', () => {
     const account = accountFor({ usdcEquity: -10000, usdtCash: 0, margin: 0 });
-    const [usdc] = bucketsFrom(account, USDC_RATE, []);
+    const [usdc] = bucketsFrom(account, USDC_RATE, {});
     expect(usdc.interestPerDayUsd).toBe(0);
   });
 
   it('uses rate 0 when no rate row matches the coin and venue', () => {
     const account = accountFor({ usdcEquity: -20000, usdtCash: 0, margin: 0 });
     const other: RateLike[] = [{ coin: 'USDC', exchangeType: 'GATE', hourInterestRate: '0.5' }];
-    const [usdc] = bucketsFrom(account, other, []);
+    const [usdc] = bucketsFrom(account, other, {});
     expect(usdc.interestPerDayUsd).toBe(0);
   });
 
-  it('sums interest paid over rows with the same coin and venue', () => {
+  it('reads the all-time interest paid by wallet key', () => {
     const account = accountFor({ usdcEquity: -500, usdtCash: 0, margin: 0 });
-    const rows = [
-      { liabilityCoin: 'USDC', exchangeType: 'HYPERLIQUID', interest: '1.5' },
-      { liabilityCoin: 'USDC', exchangeType: 'HYPERLIQUID', interest: '2.25' },
-      { liabilityCoin: 'USDC', exchangeType: 'GATE', interest: '9' },
-      { liabilityCoin: 'USDT', exchangeType: 'CROSSEX', interest: '4' },
-    ];
-    const [usdc, usdt] = bucketsFrom(account, USDC_RATE, rows);
-    expect(usdc.interestPaid30dUsd).toBeCloseTo(3.75, 9);
-    expect(usdt.interestPaid30dUsd).toBe(4);
+    const paid = { 'USDC/HYPERLIQUID': 3.75, 'USDC/GATE': 9, 'USDT/CROSSEX': 4 };
+    const [usdc, usdt] = bucketsFrom(account, USDC_RATE, paid);
+    expect(usdc.interestPaidUsd).toBe(3.75);
+    expect(usdt.interestPaidUsd).toBe(4);
   });
 
-  it('reads interest paid as 0 with no rows', () => {
+  it('reads interest paid as 0 with no entry for the wallet', () => {
     const account = accountFor({ usdcEquity: -500, usdtCash: 0, margin: 0 });
-    const [usdc] = bucketsFrom(account, USDC_RATE, []);
-    expect(usdc.interestPaid30dUsd).toBe(0);
+    const [usdc, usdt] = bucketsFrom(account, USDC_RATE, { 'USDC/GATE': 9 });
+    expect(usdc.interestPaidUsd).toBe(0);
+    expect(usdt.interestPaidUsd).toBe(0);
+  });
+
+  it('charges interest on a USDT borrow below -10000 at the USDT rate', () => {
+    const account = accountFor({ usdcEquity: 0, usdtCash: 0, usdtEquity: -20000, margin: 0 });
+    const [, usdt] = bucketsFrom(account, BOTH_RATES, {});
+    expect(usdt).toMatchObject({ borrow: 20000 });
+    expect(usdt.interestPerDayUsd).toBeCloseTo(20000 * 0.00002 * 24, 9);
   });
 });
 
@@ -153,7 +168,7 @@ describe('bucketsFrom held margin', () => {
         asset('USDT', 'CROSSEX', { balance: 1200, equity: 1200 }),
       ],
     };
-    const [usdc, usdt] = bucketsFrom(account, USDC_RATE, []);
+    const [usdc, usdt] = bucketsFrom(account, USDC_RATE, {});
     expect(usdc).toMatchObject({ borrow: 300, imHeldUsd: 60, mmHeldUsd: 30 });
     expect(usdt).toMatchObject({ imHeldUsd: 0, mmHeldUsd: 0 });
   });
@@ -163,7 +178,7 @@ describe('bucketsFrom held margin', () => {
       availableMargin: '100',
       assets: [{ ...asset('USDC', 'HYPERLIQUID'), borrowingInitialMargin: '', borrowingMaintenanceMargin: 'n/a' }],
     };
-    const [usdc] = bucketsFrom(account, USDC_RATE, []);
+    const [usdc] = bucketsFrom(account, USDC_RATE, {});
     expect(usdc).toMatchObject({ imHeldUsd: 0, mmHeldUsd: 0 });
   });
 });
@@ -196,7 +211,7 @@ describe('planFor amount', () => {
 
   it('is 0 when the USDC bucket is absent', () => {
     const account: AccountLike = { availableMargin: '2000', assets: [asset('USDT', 'CROSSEX', { balance: 1000 })] };
-    const p = planFor(bucketsFrom(account, USDC_RATE, []), account, OPEN);
+    const p = planFor(bucketsFrom(account, USDC_RATE, {}), account, OPEN);
     expect(p.amount).toBe(0);
   });
 
@@ -580,5 +595,58 @@ describe('planFor pull', () => {
     expect(disabled.routes.loop.reason).toBe('Gate has paused USDC transfers on CrossEx. Try again later.');
     const notLive = plan(s, { ...OPEN, spotRule: { state: 'paused' }, bid: null }, PULL);
     expect(notLive.routes.loop.reason).toBe('The USDC/USDT spot market on Gate is not trading right now.');
+  });
+});
+
+describe('planFor pull with a USDT borrow', () => {
+  // USDC on Hyperliquid holds 500 of spare; the USDT wallet is 300 short.
+  const s: Scenario = { usdcEquity: 500, usdcCash: 500, usdtCash: 100, usdtEquity: -300, usdtIm: 60, margin: 2000 };
+
+  it('prefills the USDT deficit, not the whole spare, and the borrow after is what does not land', () => {
+    const p = plan(s, OPEN, PULL, BOTH_RATES);
+    expect(p.amount).toBe(300);
+    expect(p.shortfall).toBeNull();
+    expect(p.receives).toBeGreaterThan(0);
+    expect(p.borrowAfterUsd).toBeCloseTo(300 - p.receives, 9);
+  });
+
+  it('lets a typed amount bring more than the deficit home, up to the spare', () => {
+    expect(plan(s, OPEN, { ...PULL, requested: 450 }, BOTH_RATES).amount).toBe(450);
+    expect(plan(s, OPEN, { ...PULL, requested: 600 }, BOTH_RATES).amount).toBe(500);
+  });
+
+  it('caps the prefilled amount at the spare and names spare as the shortfall', () => {
+    const p = plan({ ...s, usdcEquity: 100, usdcCash: 100 }, OPEN, PULL, BOTH_RATES);
+    expect(p.amount).toBe(100);
+    expect(p.shortfall).toEqual({ reason: 'spare', remaining: 200 });
+  });
+
+  it('names cash when the USDC profit is not yet cash', () => {
+    const p = plan({ ...s, usdcCash: 100 }, OPEN, PULL, BOTH_RATES);
+    expect(p.amount).toBe(100);
+    expect(p.shortfall).toEqual({ reason: 'cash', remaining: 200 });
+  });
+
+  it('frees initial margin and saves interest on the USDT borrow for what lands', () => {
+    const big: Scenario = { usdcEquity: 5000, usdcCash: 5000, usdtCash: 0, usdtEquity: -20000, usdtIm: 4000, margin: 0 };
+    const p = plan(big, OPEN, PULL, BOTH_RATES);
+    expect(p.amount).toBe(5000);
+    expect(p.shortfall).toEqual({ reason: 'spare', remaining: 15000 });
+    const perDay = 20000 * 0.00002 * 24;
+    expect(p.marginFreedUsd).toBeCloseTo((p.receives * 4000) / 20000, 9);
+    expect(p.savesPerDayUsd).toBeCloseTo(perDay - (perDay * (20000 - p.receives)) / 20000, 9);
+    expect(p.borrowAfterUsd).toBeCloseTo(20000 - p.receives, 9);
+  });
+
+  it('saves the whole charge when the pull brings the USDT borrow back under 10,000', () => {
+    const near: Scenario = { usdcEquity: 5000, usdcCash: 5000, usdtCash: 0, usdtEquity: -10500, usdtIm: 2100, margin: 0 };
+    const p = plan(near, OPEN, PULL, BOTH_RATES);
+    expect(p.savesPerDayUsd).toBeCloseTo(10500 * 0.00002 * 24, 9);
+  });
+
+  it('saves and frees nothing without a USDT borrow', () => {
+    const p = plan({ ...s, usdtCash: 1000, usdtEquity: 1000, usdtIm: 0 }, OPEN, PULL, BOTH_RATES);
+    expect(p.amount).toBe(500);
+    expect(p).toMatchObject({ borrowAfterUsd: 0, savesPerDayUsd: 0, marginFreedUsd: 0, shortfall: null });
   });
 });

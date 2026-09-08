@@ -1,9 +1,10 @@
 {
   "version": "1.5.1",
   "highlights": [
-    "An amber pill in the header shows when Gate has lent you USDC for Hyperliquid. The Balances tab says what it costs you in held margin and interest",
-    "One hold pays the borrow back by the cheapest route, or brings spare USDC home as USDT",
+    "An amber pill in the header shows when Gate has lent you USDC or USDT. The Balances tab says what it costs you in held margin and interest, and what you have paid all time",
+    "One hold pays the borrow back by the cheapest route, in either direction, or brings spare USDC home as USDT",
     "A progress bar shows each step and how long it should take. A refresh keeps a running move; a restart halts it safely with Resume and Abandon",
-    "Each pair on the Positions tab now says the price at which the account liquidates if only that coin moves, in red inside 15%"
+    "Each pair on the Positions tab says the price at which the account liquidates if only that coin moves, in red inside 15%. The rebalance quote shows that price before and after the move",
+    "The update dialog opens by itself when a new version is out, so you do not miss one"
   ]
 }

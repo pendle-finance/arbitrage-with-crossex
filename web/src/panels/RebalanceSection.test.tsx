@@ -15,7 +15,8 @@ import { env, server } from '../test/server';
 import { renderWithClient } from '../test/utils';
 import { RebalanceSection } from './RebalanceSection';
 
-const PAY_DOWN_TEXT = 'Pays the borrow back. Each USDC frees 0.20 initial and 0.10 maintenance margin.';
+const PAY_DOWN_TEXT = 'Pays the USDC borrow back. Each USDC frees 0.20 initial and 0.10 maintenance margin.';
+const PAY_USDT_TEXT = 'Pays the USDT borrow back. Each USDT frees 0.20 initial and 0.10 maintenance margin.';
 const PULL_TEXT = 'Brings spare USDC home. Capped at what you own there, so it never borrows.';
 /** A labelled fact's value, or null when the label is not on screen. */
 const fact = (label: string) => screen.queryByText(label, { selector: 'dt' })?.nextElementSibling?.textContent ?? null;
@@ -44,7 +45,7 @@ const usdc = (over: Partial<RebalanceBucket> = {}): RebalanceBucket => ({
   borrow: 1200,
   imHeldUsd: 240,
   mmHeldUsd: 120,
-  interestPaid30dUsd: 4.2,
+  interestPaidUsd: 4.2,
   interestPerDayUsd: 0.31,
   ...over,
 });
@@ -58,12 +59,12 @@ const usdt: RebalanceBucket = {
   borrow: 0,
   imHeldUsd: 0,
   mmHeldUsd: 0,
-  interestPaid30dUsd: 0,
+  interestPaidUsd: 0,
   interestPerDayUsd: 0,
 };
 
 const pullBuckets = [
-  usdc({ cash: 400, upnl: 100, equity: 500, borrow: 0, imHeldUsd: 0, mmHeldUsd: 0, interestPaid30dUsd: 0, interestPerDayUsd: 0 }),
+  usdc({ cash: 400, upnl: 100, equity: 500, borrow: 0, imHeldUsd: 0, mmHeldUsd: 0, interestPaidUsd: 0, interestPerDayUsd: 0 }),
   usdt,
 ];
 
@@ -278,9 +279,10 @@ describe('RebalanceSection', () => {
     renderWithClient(<RebalanceSection holdMs={50} />);
 
     await section();
-    // 20000 = 2500 f + 25000 (f − 1) → +64%. With 899.55 USDC of cover:
-    // 20000 = 2500 f + 0.1 (250000 (f − 1) − 899.55) → +64% still, rounded.
-    await waitFor(() => expect(fact('Liquidation')).toBe('ETH +64% → +64%'));
+    // 20000 = 2500 f + 25000 (f − 1) → f = 1.636: $3,764 at a 2,300 mark, +64%.
+    // With 899.55 USDC of cover: 20000 = 2500 f + 0.1 (250000 (f − 1) − 899.55)
+    // → $3,771, +64% still, rounded. The price is what a trader watches.
+    await waitFor(() => expect(fact('Liquidation')).toBe('ETH ~$3,764 (+64%) → ~$3,771 (+64%)'));
     expectFacts(LOOP_FACTS);
   });
 
@@ -297,7 +299,8 @@ describe('RebalanceSection', () => {
       'Initial margin held': '$240.00',
       'Maintenance margin held': '$120.00',
       Interest: '$0.31 / day',
-      'Interest paid · 30 d': '$4.20',
+      'Spare USDC on Hyperliquid': '0.00 USDC',
+      'Interest paid · all time': '$4.20',
     });
     expect(fact('Liquidation')).toBeNull();
   });
@@ -328,8 +331,8 @@ describe('RebalanceSection', () => {
     expect(screen.getByText('Borrowing 1,200.99 USDC')).toBeInTheDocument();
   });
 
-  it('says in words that margin is held and no interest runs yet, and drops the $0.00 tiles', async () => {
-    serve(view({ buckets: [usdc({ borrow: 8.5, imHeldUsd: 1.7, mmHeldUsd: 0.85, interestPaid30dUsd: 0, interestPerDayUsd: 0 }), usdt] }));
+  it('says in words that margin is held and no interest runs yet, and keeps every fact at zero', async () => {
+    serve(view({ buckets: [usdc({ borrow: 8.5, imHeldUsd: 1.7, mmHeldUsd: 0.85, interestPaidUsd: 0, interestPerDayUsd: 0 }), usdt] }));
     renderWithClient(<RebalanceSection holdMs={50} />);
 
     await section();
@@ -339,14 +342,14 @@ describe('RebalanceSection', () => {
       'Initial margin held': '$1.70',
       'Maintenance margin held': '$0.85',
       Interest: 'none under 10,000 USDC',
+      'Interest paid · all time': '$0.00',
     });
-    expect(fact('Interest paid · 30 d')).toBeNull();
   });
 
-  it('keeps the interest tiles for interest already paid once the borrow is gone', async () => {
+  it('shows the same six facts without a borrow, zeros included, so the row never changes shape', async () => {
     serve(
       view({
-        buckets: [usdc({ cash: 5, upnl: 0, equity: 5, borrow: 0, imHeldUsd: 0, mmHeldUsd: 0, interestPaid30dUsd: 2.5, interestPerDayUsd: 0 }), usdt],
+        buckets: [usdc({ cash: 5, upnl: 0, equity: 5, borrow: 0, imHeldUsd: 0, mmHeldUsd: 0, interestPaidUsd: 2.5, interestPerDayUsd: 0 }), usdt],
         plan: noRoutePlan(),
       }),
     );
@@ -354,8 +357,22 @@ describe('RebalanceSection', () => {
 
     await section();
     expect(screen.queryByText(/^Borrowing /)).toBeNull();
-    expect(fact('Lent by Gate')).toBeNull();
-    expectFacts({ 'Spare USDC on Hyperliquid': '5.00 USDC', 'Interest paid · 30 d': '$2.50' });
+    expectFacts({
+      'Lent by Gate': '0.00',
+      'Initial margin held': '$0.00',
+      'Maintenance margin held': '$0.00',
+      Interest: '$0.00 / day',
+      'Spare USDC on Hyperliquid': '5.00 USDC',
+      'Interest paid · all time': '$2.50',
+    });
+  });
+
+  it('adds the interest paid on both wallets', async () => {
+    serve(view({ buckets: [usdc({ interestPaidUsd: 4.2 }), { ...usdt, interestPaidUsd: 0.8 }] }));
+    renderWithClient(<RebalanceSection holdMs={50} />);
+
+    await section();
+    expectFacts({ 'Interest paid · all time': '$5.00' });
   });
 
   it('shows the explanation line for each direction', async () => {
@@ -381,9 +398,10 @@ describe('RebalanceSection', () => {
     await userEvent.hover(screen.getByText('About rebalance').parentElement!);
 
     const card = await screen.findByRole('tooltip');
-    expect(card).toHaveTextContent('Gate lends you the USDC to cover it');
+    expect(card).toHaveTextContent('Gate lends the coin: USDC for the Hyperliquid legs, USDT for the rest');
     expect(card).toHaveTextContent('20% as initial margin and 10% as maintenance margin');
-    expect(card).toHaveTextContent('USDT → Hyperliquid USDC pays the borrow back');
+    expect(card).toHaveTextContent('USDT → Hyperliquid USDC pays a USDC borrow back');
+    expect(card).toHaveTextContent('Hyperliquid USDC → USDT pays a USDT borrow back');
 
     await userEvent.unhover(screen.getByText('About rebalance').parentElement!);
 
@@ -743,8 +761,7 @@ describe('RebalanceSection', () => {
     await section();
     expect(screen.queryByText(/^Borrowing /)).toBeNull();
     expect(screen.getByRole('radiogroup', { name: 'Direction' })).toBeInTheDocument();
-    expect(fact('Lent by Gate')).toBeNull();
-    expectFacts({ 'Spare USDC on Hyperliquid': '400.00 USDC' });
+    expectFacts({ 'Lent by Gate': '0.00', 'Spare USDC on Hyperliquid': '400.00 USDC' });
   });
 
   it('renders with borrow 0 and nothing to pull while a job runs', async () => {
@@ -900,4 +917,96 @@ describe('RebalanceSection', () => {
     expect(amountInput('Amount (USDC) · free 400.00')).toHaveValue('400.00');
     expect(screen.queryByText(/^Borrowing /)).toBeNull();
   }, 10_000);
+});
+
+describe('RebalanceSection — a USDT borrow', () => {
+  // The legs on the other venues lost more than the USDT wallet held: Gate
+  // lent 300 USDT. Hyperliquid holds 500 USDC of spare to repay it with.
+  const spareUsdc = usdc({ cash: 500, upnl: 0, equity: 500, borrow: 0, imHeldUsd: 0, mmHeldUsd: 0, interestPaidUsd: 0, interestPerDayUsd: 0 });
+  const usdtBorrowed: RebalanceBucket = {
+    ...usdt,
+    cash: 100,
+    upnl: -400,
+    equity: -300,
+    borrow: 300,
+    imHeldUsd: 60,
+    mmHeldUsd: 30,
+    interestPaidUsd: 1.25,
+    interestPerDayUsd: 0,
+  };
+  const repayPlan = (over: Partial<RebalancePlan> = {}) =>
+    pullPlan({ amount: 300, receives: 298.7, borrowAfterUsd: 1.3, marginFreedUsd: 59.74, savesPerDayUsd: 0, ...over });
+  const usdtBorrowAccount = (pull: RebalancePlan = repayPlan()) =>
+    byDirection(
+      view({ buckets: [spareUsdc, usdtBorrowed], plan: noRoutePlan() }),
+      view({ buckets: [spareUsdc, usdtBorrowed], plan: pull }),
+    );
+
+  beforeEach(() => {
+    server.use(
+      http.get('/api/account', () => HttpResponse.json(env(account))),
+      http.get('/api/positions', () => HttpResponse.json(env({ positions: [], exposure: [] }))),
+    );
+  });
+
+  it('defaults to the pull, reads it as a repayment, and shows the USDT borrow in the pill and the facts', async () => {
+    serve(usdtBorrowAccount());
+    renderWithClient(<RebalanceSection holdMs={50} />);
+
+    expect(await screen.findByRole('button', { name: 'Hold to pull 300.00 USDC → USDT' })).toBeInTheDocument();
+    expect(screen.getByText('Borrowing 300.00 USDT')).toHaveClass('border-amber-500/30');
+    expect(screen.getByText(PAY_USDT_TEXT)).toBeInTheDocument();
+    expectFacts({
+      'Lent by Gate': '300.00 USDT',
+      'Initial margin held': '$60.00',
+      'Maintenance margin held': '$30.00',
+      Interest: 'none under 10,000 USDT',
+      'Spare USDC on Hyperliquid': '500.00 USDC',
+      'Interest paid · all time': '$1.25',
+    });
+  });
+
+  it('quotes the pull with the borrow after, the margin it frees, and the interest it saves', async () => {
+    serve(usdtBorrowAccount());
+    renderWithClient(<RebalanceSection holdMs={50} />);
+
+    await screen.findByRole('button', { name: 'Hold to pull 300.00 USDC → USDT' });
+    expectFacts({
+      Route: 'Spot loop · about 6.7 min',
+      Sends: '300.00 USDC → 298.70 USDT @ 0.9988',
+      'Borrow after': '$1.30',
+      Frees: '$59.74 margin',
+      Saves: '$0.00 / day',
+    });
+  });
+
+  it('says what stays borrowed when the spare does not cover the USDT borrow', async () => {
+    serve(usdtBorrowAccount(repayPlan({ amount: 100, receives: 98.9, shortfall: { reason: 'spare', remaining: 200 } })));
+    renderWithClient(<RebalanceSection holdMs={50} />);
+
+    await screen.findByRole('button', { name: 'Hold to pull 100.00 USDC → USDT' });
+    expect(
+      screen.getByText('Only 100.00 USDC can move. 200.00 USDT stays borrowed: there is no more spare USDC on Hyperliquid'),
+    ).toHaveClass('text-amber-300');
+  });
+
+  it('shows the section for a USDT borrow even when the USDC wallet is empty', async () => {
+    const empty = usdc({ cash: 0, upnl: 0, equity: 0, borrow: 0, imHeldUsd: 0, mmHeldUsd: 0, interestPaidUsd: 0, interestPerDayUsd: 0 });
+    serve(view({ buckets: [empty, usdtBorrowed], plan: noRoutePlan({ direction: 'pull' }) }));
+    renderWithClient(<RebalanceSection holdMs={50} />);
+
+    await section();
+    expect(screen.getByText('Borrowing 300.00 USDT')).toBeInTheDocument();
+    expect(screen.getByText('Nothing to pull. There is no spare USDC on Hyperliquid.')).toBeInTheDocument();
+  });
+
+  it('keeps the USDC direction a plain pay-down when the USDT borrow is the only one', async () => {
+    serve(usdtBorrowAccount());
+    renderWithClient(<RebalanceSection holdMs={50} />);
+
+    await screen.findByRole('button', { name: 'Hold to pull 300.00 USDC → USDT' });
+    fireEvent.click(screen.getByRole('radio', { name: 'USDT → Hyperliquid USDC' }));
+    expect(await screen.findByText('Nothing to pay back. There is no USDC borrow on Hyperliquid.')).toBeInTheDocument();
+    expect(screen.getByText(PAY_DOWN_TEXT)).toBeInTheDocument();
+  });
 });
