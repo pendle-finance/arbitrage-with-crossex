@@ -81,6 +81,22 @@ describe('UpdateIndicator', () => {
     expect(screen.queryByRole('button', { name: /Update v/ })).toBeNull();
   });
 
+  it('opens the dialog by itself when an update is waiting; close puts it away for this page load', async () => {
+    server.use(versionHandler({ latest: '1.2.0', updateAvailable: true, highlights: ['A brand new thing'] }));
+    renderWithClient(<UpdateIndicator />);
+
+    // No click: the dialog is up as soon as the version answer lands.
+    expect(await screen.findByText('Update available — v1.2.0')).toBeInTheDocument();
+    expect(screen.getByText('A brand new thing')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'close' }));
+    expect(screen.queryByText('Update available — v1.2.0')).toBeNull();
+    // The button stays, and the dialog does not come back on its own.
+    await new Promise((r) => setTimeout(r, 20));
+    expect(screen.queryByText('Update available — v1.2.0')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Update v1.2.0' })).toBeInTheDocument();
+  });
+
   it('shows the pill for a newer version; the modal carries highlights and ONE button', async () => {
     await openModal({ current: '1.0.0', highlights: ['A brand new thing', 'Another improvement'] });
 
