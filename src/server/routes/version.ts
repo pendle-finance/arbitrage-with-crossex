@@ -58,6 +58,9 @@ export function versionRoutes(deps: AppDeps) {
       if ((deps.engine?.store.listPairs({ activeOnly: true }).length ?? 0) > 0) {
         return refuse('a deal is still working — wait for it to finish, then update', true);
       }
+      if (deps.rebalance?.jobs.read()?.status === 'running') {
+        return refuse('a pay-down is still running — wait for it to finish, then update', true);
+      }
       if (borosExecutionsPending() > 0) {
         return refuse(
           'a Boros order may still be settling — wait a few minutes, then update',

@@ -134,6 +134,78 @@ export interface CrossexAccount {
 }
 
 // ---------------------------------------------------------------------------
+// GET /api/rebalance · POST /api/rebalance · POST /api/rebalance/:id/{resume,abandon}
+// ---------------------------------------------------------------------------
+
+export type RebalanceDirection = 'toUsdc' | 'toUsdt';
+
+export interface RebalanceBucket {
+  coin: string;
+  venue: string;
+  cash: number;
+  upnl: number;
+  equity: number;
+  borrow: number;
+  imHeldUsd: number;
+  mmHeldUsd: number;
+  /** All time, or as far back as Gate's history reaches (2025-01-01). */
+  interestPaidUsd: number;
+  interestPerDayUsd: number;
+}
+
+export interface RebalanceRoute {
+  costUsd: number;
+  waitSeconds: number;
+  available: boolean;
+  reason: string | null;
+}
+
+export interface RebalancePlan {
+  direction: RebalanceDirection;
+  amount: number;
+  receives: number;
+  price: number | null;
+  borrowAfterUsd: number;
+  shortfall: { reason: 'cash' | 'margin' | 'spare'; remaining: number } | null;
+  routes: { loop: RebalanceRoute; convert: RebalanceRoute };
+  route: 'loop' | 'convert' | null;
+  savesPerDayUsd: number;
+  marginFreedUsd: number;
+}
+
+export interface RebalanceStep {
+  name: string;
+  text: string | null;
+  quoteId: string | null;
+  venueId: string | null;
+  qty: number | null;
+  attempt: number;
+  status: 'pending' | 'running' | 'done';
+  startedAt: number | null;
+  doneAt: number | null;
+}
+
+export interface RebalanceJob {
+  id: string;
+  direction: RebalanceDirection;
+  route: 'loop' | 'convert';
+  amount: number;
+  status: 'running' | 'halted' | 'done' | 'abandoned';
+  stepIndex: number;
+  steps: RebalanceStep[];
+  fundsAt: 'CROSSEX' | 'GATE' | 'SPOT' | 'HYPERLIQUID';
+  haltReason: string | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface RebalanceView {
+  buckets: RebalanceBucket[];
+  plan: RebalancePlan;
+  job: RebalanceJob | null;
+}
+
+// ---------------------------------------------------------------------------
 // GET /api/positions
 // ---------------------------------------------------------------------------
 

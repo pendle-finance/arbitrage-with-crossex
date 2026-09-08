@@ -7,6 +7,24 @@ import { classifyGateError, CoreError } from '../../core/errors';
 import type { AppDeps } from '../app';
 import { restrictToOwner } from '../secretFile';
 
+const PAY_DOWN_RUNNING = {
+  ok: false,
+  error: {
+    category: 'validation',
+    message: 'a pay-down is still running — wait for it to finish before changing credentials',
+    retryable: true,
+  },
+};
+
+const REBALANCE_HALTED = {
+  ok: false,
+  error: {
+    category: 'validation',
+    message: 'a halted rebalance belongs to the current account — resume or abandon it before changing to another account',
+    retryable: true,
+  },
+};
+
 /**
  * Credentials: read masked status; replace keys with validate-before-commit.
  * PUT builds a CANDIDATE client and calls getCrossexAccount first — only a key
@@ -43,13 +61,16 @@ export function credentialsRoutes(deps: AppDeps) {
           },
         });
       }
+      if (deps.rebalance?.jobs.read()?.status === 'running') return reply.code(409).send(PAY_DOWN_RUNNING);
 
       // Validate with a candidate client; nothing is persisted on failure.
       const candidate = makeClients({ key, secret });
       let accountMode: string | undefined;
+      let candidateUserId: string | null = null;
       try {
         const { body: account } = await candidate.crossEx.getCrossexAccount();
         accountMode = account.accountMode;
+        candidateUserId = account.userId ? String(account.userId) : null;
       } catch (err) {
         const classified = classifyGateError(err);
         return reply.code(401).send({
@@ -72,6 +93,15 @@ export function credentialsRoutes(deps: AppDeps) {
             retryable: true,
           },
         });
+      }
+      const job = deps.rebalance?.jobs.read() ?? null;
+      if (job?.status === 'running') return reply.code(409).send(PAY_DOWN_RUNNING);
+      // A halted job keeps venue ids and amounts of the account it ran on, and
+      // Resume would run them on the new one. A rotated key on the same
+      // account is fine; a job file from before the field is treated as
+      // another account's.
+      if (job?.status === 'halted' && (job.userId === null || job.userId !== candidateUserId)) {
+        return reply.code(409).send(REBALANCE_HALTED);
       }
 
       rewriteEnvFile(svc.envPath, { GATE_API_KEY: key, GATE_API_SECRET: secret }, svc.hardenConfigDir);

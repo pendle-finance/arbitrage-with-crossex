@@ -45,7 +45,7 @@ export interface LoopDeps {
 const OPENISH = /^(NEW|OPEN|LIVE|PENDING|ACTIVE|CREATED|ACCEPTED|PARTIAL(LY)?[-_ ]?FILL(ED)?)$/i;
 const CLOSEDISH = /^(FILLED|FINISHED|CLOSED|DONE|CANCELL?ED|EXPIRED|REJECT(ED)?|FAIL(ED)?|IOC_?CANCELL?ED)$/i;
 
-function decodeStatus(raw: string): 'open' | 'closed' | 'unknown' {
+export function decodeStatus(raw: string): 'open' | 'closed' | 'unknown' {
   const s = raw.trim();
   if (CLOSEDISH.test(s)) return 'closed';
   if (OPENISH.test(s)) return 'open';

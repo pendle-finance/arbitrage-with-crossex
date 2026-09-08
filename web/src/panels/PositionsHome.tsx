@@ -9,13 +9,14 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { qk, usePositions, useStrategy } from '../api/queries';
+import { qk, useAccount, usePositions, useStrategy } from '../api/queries';
 import type { CrossexPosition, StrategyRollup } from '../api/types';
 import { EmptyState } from '../components/EmptyState';
 import { Notes } from '../components/Notes';
 import { QueryError } from '../components/QueryError';
 import { TableSkeleton } from '../components/Skeleton';
 import { fmtDateUtc, fmtUsdCompact, prettyVenue } from '../lib/fmt';
+import { lineFor as lineIn, liquidationLines } from '../lib/liquidation';
 import { useTradeFlowOptional } from '../trade/TradeFlow';
 import { useBookId } from './bookId';
 import {
@@ -464,6 +465,23 @@ export function PositionsHome() {
     () => buildBoxes(strategyData, positionsData),
     [strategyData, positionsData],
   );
+  /* Where each coin's pair liquidates the account, if only that coin moves.
+     Needs the account (margin balance, maintenance, wallet equities), which
+     the header already polls, so the query is shared. */
+  const accountData = useAccount().data;
+  const liquidation = useMemo(
+    () => (accountData && positionsData ? liquidationLines(accountData, positionsData) : undefined),
+    [accountData, positionsData],
+  );
+  /* null while the account or positions are not loaded, or when this coin has
+     no priced leg; 'unknown' when Gate's margin figures are not numbers, so
+     the card says the estimate is missing rather than claiming safety; 'far'
+     when the coin was priced to 10x and 2% with no line. */
+  const lineFor = (base: string) => {
+    if (liquidation === undefined) return null;
+    if (liquidation === null) return 'unknown' as const;
+    return lineIn(liquidation, base);
+  };
 
   const livePositions = useMemo(() => {
     const map = new Map<string, CrossexPosition>();
@@ -908,6 +926,7 @@ export function PositionsHome() {
                 since={since}
                 onChangeSince={changeSince}
                 livePositions={livePositions}
+                liquidation={lineFor(box.rollup.base)}
                 onOpenPerpLegs={openPerpLegs || undefined}
                 onOpenPerpLeg={openPerpLeg || undefined}
                 onOpenBorosLegs={openBorosLegs || undefined}
@@ -943,6 +962,7 @@ export function PositionsHome() {
                 since={since}
                 onChangeSince={changeSince}
                 livePositions={livePositions}
+                liquidation={lineFor(box.group.base)}
                 borosUnknown
                 borosUnknownCta={<AddBorosAddress onTrack={track} />}
               />

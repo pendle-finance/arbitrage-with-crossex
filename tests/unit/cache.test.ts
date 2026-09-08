@@ -69,6 +69,20 @@ describe('TtlCache', () => {
     expect(f).toHaveBeenCalledTimes(2); // busted → refetched
   });
 
+  it('a bust during an inflight fetch is not undone when that fetch resolves', async () => {
+    const cache = new TtlCache();
+    let resolve!: (v: string) => void;
+    const slow = new Promise<string>((res) => (resolve = res));
+    const fetch = vi.fn().mockReturnValueOnce(slow).mockResolvedValueOnce('v2');
+    const first = cache.get('account', 10_000, fetch);
+    cache.bust('account');
+    resolve('v1');
+    expect((await first).value).toBe('v1');
+    const second = await cache.get('account', 10_000, fetch);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(second).toEqual({ value: 'v2', stale: false });
+  });
+
   it('caps entry count (no unbounded growth)', async () => {
     const cache = new TtlCache();
     for (let i = 0; i < 700; i++) await cache.get(`k${i}`, 10_000, async () => i);

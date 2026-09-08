@@ -20,6 +20,8 @@ import { makeBorosApiOrderClient, USD_TOKEN_ID } from '../core/boros/borosApi';
 import type { BorosOrderClient } from '../core/boros/orders';
 import { TtlCache, TTL } from './cache';
 import { readOrCreateApiToken } from './authToken';
+import { InterestFile } from './interestLedger';
+import { JobFile } from './rebalanceJob';
 import { tokenizedIndexHtml } from './spa';
 import { restrictToOwner } from './secretFile';
 import { readInstallInfo, readLocalVersion } from './version';
@@ -168,6 +170,7 @@ const appDeps = {
   // UPDATE_CHECK=0 lets an install opt out of the GitHub read entirely.
   install: readInstallInfo(repoRoot),
   updateCheck: { current: readLocalVersion(repoRoot), disabled: process.env.UPDATE_CHECK === '0' },
+  rebalance: { jobs: new JobFile(dataDir), interest: new InterestFile(dataDir) },
   getBorosOrders: () => borosOrdersRef.current,
   borosAgent: {
     envPath,

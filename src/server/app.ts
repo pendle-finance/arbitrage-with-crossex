@@ -12,6 +12,8 @@ import { classifyGateError, CoreError, type ClassifiedError } from '../core/erro
 import type { Store } from '../engine/db';
 import type { Clock, VenuePort } from '../engine/types';
 import type { TtlCache } from './cache';
+import type { InterestFile } from './interestLedger';
+import type { JobFile } from './rebalanceJob';
 import { accountRoutes } from './routes/account';
 import { booksRoutes } from './routes/books';
 import { credentialsRoutes } from './routes/credentials';
@@ -26,6 +28,7 @@ import { opportunitiesRoutes } from './routes/opportunities';
 import { ordersRoutes } from './routes/orders';
 import { positionsRoutes } from './routes/positions';
 import { previewRoutes } from './routes/preview';
+import { rebalanceRoutes } from './routes/rebalance';
 import { strategyRoutes } from './routes/strategy';
 import { symbolsRoutes } from './routes/symbols';
 import { shareLinkRoutes } from './routes/shareLink';
@@ -87,6 +90,8 @@ export interface AppDeps {
    * copy's version from <repoRoot>/version.json — null means "unknown", which
    * disables the remote read entirely — plus the UPDATE_CHECK=0 opt-out. */
   updateCheck?: { current: string | null; disabled?: boolean };
+  /** `interest` absent keeps the all-time interest ledger in memory: tests only. */
+  rebalance?: { jobs: JobFile; interest?: InterestFile; sleep?: (ms: number) => Promise<void> };
 }
 
 declare module 'fastify' {
@@ -230,6 +235,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     leverageRoutes,
     previewRoutes,
     dealsRoutes,
+    rebalanceRoutes,
     versionRoutes,
     shareLinkRoutes,
   ];
