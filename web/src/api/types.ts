@@ -148,7 +148,8 @@ export interface RebalanceBucket {
   borrow: number;
   imHeldUsd: number;
   mmHeldUsd: number;
-  interestPaid30dUsd: number;
+  /** All time, or as far back as Gate's history reaches (2025-01-01). */
+  interestPaidUsd: number;
   interestPerDayUsd: number;
 }
 
@@ -165,7 +166,7 @@ export interface RebalancePlan {
   receives: number;
   price: number | null;
   borrowAfterUsd: number;
-  shortfall: { reason: 'cash' | 'margin'; remaining: number } | null;
+  shortfall: { reason: 'cash' | 'margin' | 'spare'; remaining: number } | null;
   routes: { loop: RebalanceRoute; convert: RebalanceRoute };
   route: 'loop' | 'convert' | null;
   savesPerDayUsd: number;

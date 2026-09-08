@@ -1,8 +1,15 @@
 import { roundToStep } from '../numbers';
 
-export const DEFICIT = { coin: 'USDC', venue: 'HYPERLIQUID' } as const;
-export const SURPLUS = { coin: 'USDT', venue: 'CROSSEX' } as const;
+/** The two wallets a rebalance moves cash between. Either can go negative:
+ * Gate lends the coin, holds margin against it, and past the interest-free
+ * line charges interest on it. Verified for both on 2026-09-08: Gate's rate
+ * list carries USDT/CROSSEX and USDC/HYPERLIQUID. */
+export const USDC_WALLET = { coin: 'USDC', venue: 'HYPERLIQUID' } as const;
+export const USDT_WALLET = { coin: 'USDT', venue: 'CROSSEX' } as const;
+export type Wallet = typeof USDC_WALLET | typeof USDT_WALLET;
 export const SPOT_SYMBOL = 'GATE_SPOT_USDC_USDT';
+/** Gate charges interest on a borrow only once the wallet's equity is below
+ * this. Checked live for USDC on Hyperliquid; assumed the same for USDT. */
 const INTEREST_THRESHOLD = -10000;
 export const LOOP_WAIT_SECONDS = 150;
 export const PULL_WAIT_SECONDS = 400;
@@ -11,6 +18,12 @@ const DEPOSIT_FEE_USD = 0.05;
 export const PULL_FEE_USD = 1;
 
 export type Direction = 'payDown' | 'pull';
+
+/** Where the cash lands. A move repays that wallet's borrow first. */
+export const TARGET: Record<Direction, Wallet> = { payDown: USDC_WALLET, pull: USDT_WALLET };
+
+/** `USDC/HYPERLIQUID`: the key the interest ledger and the buckets share. */
+export const walletKey = (coin: string, venue: string): string => `${coin}/${venue}`;
 
 export interface AssetLike {
   coin?: string;
@@ -35,11 +48,8 @@ export interface RateLike {
   hourInterestRate: string;
 }
 
-export interface InterestRowLike {
-  liabilityCoin: string;
-  exchangeType: string;
-  interest: string;
-}
+/** Interest paid since Gate's history floor, by wallet key. See interestLedger.ts. */
+export type InterestPaidLike = Record<string, number>;
 
 export interface Bucket {
   coin: string;
@@ -50,7 +60,8 @@ export interface Bucket {
   borrow: number;
   imHeldUsd: number;
   mmHeldUsd: number;
-  interestPaid30dUsd: number;
+  /** All time, or as far back as Gate's history reaches (2025-01-01). */
+  interestPaidUsd: number;
   interestPerDayUsd: number;
 }
 
@@ -67,7 +78,10 @@ export interface Plan {
   receives: number;
   price: number | null;
   borrowAfterUsd: number;
-  shortfall: { reason: 'cash' | 'margin'; remaining: number } | null;
+  /** Why less than the borrow can move: `cash` when profit is not yet cash,
+   * `margin` when Gate's available margin caps it, `spare` when the other
+   * wallet simply holds less than the borrow. */
+  shortfall: { reason: 'cash' | 'margin' | 'spare'; remaining: number } | null;
   routes: { loop: RouteQuote; convert: RouteQuote };
   route: 'loop' | 'convert' | null;
   savesPerDayUsd: number;
@@ -100,7 +114,7 @@ function positive(value: number | null): number | null {
   return value !== null && value > 0 ? value : null;
 }
 
-export function bucketsFrom(account: AccountLike, rates: RateLike[], interestRows: InterestRowLike[]): Bucket[] {
+export function bucketsFrom(account: AccountLike, rates: RateLike[], interestPaid: InterestPaidLike): Bucket[] {
   return (account.assets ?? []).map((asset) => {
     const coin = asset.coin ?? '';
     const venue = asset.exchangeType ?? '';
@@ -108,9 +122,8 @@ export function bucketsFrom(account: AccountLike, rates: RateLike[], interestRow
     const borrow = num(asset.liability);
     const rate = rates.find((r) => r.coin === coin && r.exchangeType === venue);
     const hourly = rate ? num(rate.hourInterestRate) : 0;
-    const interestPaid30dUsd = interestRows
-      .filter((r) => r.liabilityCoin === coin && r.exchangeType === venue)
-      .reduce((sum, r) => sum + num(r.interest), 0);
+    const paid = interestPaid[walletKey(coin, venue)];
+    const interestPaidUsd = Number.isFinite(paid) ? paid : 0;
     return {
       coin,
       venue,
@@ -120,7 +133,7 @@ export function bucketsFrom(account: AccountLike, rates: RateLike[], interestRow
       borrow,
       imHeldUsd: num(asset.borrowingInitialMargin),
       mmHeldUsd: num(asset.borrowingMaintenanceMargin),
-      interestPaid30dUsd,
+      interestPaidUsd,
       interestPerDayUsd: equity < INTEREST_THRESHOLD ? borrow * hourly * 24 : 0,
     };
   });
@@ -170,19 +183,56 @@ function loopQuote(
   };
 }
 
+/** What `receives` landing in a wallet changes. Interest runs on the whole
+ * borrow only past the threshold, so a repayment that crosses it stops the
+ * whole charge, not its share. What lands repays, not what is sent. */
+function repayment(
+  bucket: Bucket | undefined,
+  receives: number,
+): Pick<Plan, 'borrowAfterUsd' | 'savesPerDayUsd' | 'marginFreedUsd'> {
+  const deficit = Math.max(0, -(bucket?.equity ?? 0));
+  const borrowAfterUsd = Math.max(0, deficit - receives);
+  if (!bucket || bucket.borrow <= 0) return { borrowAfterUsd, savesPerDayUsd: 0, marginFreedUsd: 0 };
+  const repaid = Math.min(receives, bucket.borrow);
+  const chargedAfter =
+    bucket.equity + receives < INTEREST_THRESHOLD
+      ? (bucket.interestPerDayUsd * (bucket.borrow - repaid)) / bucket.borrow
+      : 0;
+  return {
+    borrowAfterUsd,
+    savesPerDayUsd: Math.max(0, bucket.interestPerDayUsd - chargedAfter),
+    marginFreedUsd: (repaid * bucket.imHeldUsd) / bucket.borrow,
+  };
+}
+
+const isWallet = (w: Wallet) => (b: { coin?: string; venue?: string; exchangeType?: string }) =>
+  b.coin === w.coin && (b.venue ?? b.exchangeType) === w.venue;
+
 export function planFor(
   buckets: Bucket[],
   account: AccountLike,
   inputs: PlanInputs,
   { direction = 'payDown', requested = Infinity }: PlanRequest = {},
 ): Plan {
-  const usdcBucket = buckets.find((b) => b.coin === DEFICIT.coin && b.venue === DEFICIT.venue);
-  const deficit = Math.max(0, -(usdcBucket?.equity ?? 0));
+  const usdcBucket = buckets.find(isWallet(USDC_WALLET));
+  const usdtBucket = buckets.find(isWallet(USDT_WALLET));
 
   if (direction === 'pull') {
-    const usdcAsset = (account.assets ?? []).find((a) => a.coin === DEFICIT.coin && a.exchangeType === DEFICIT.venue);
+    // USDC → USDT. The USDC that can leave is what the wallet owns after open
+    // losses, so a pull never opens a USDC borrow. With a USDT borrow the
+    // prefilled amount repays it and no more; a typed amount may bring any
+    // of the spare home, borrow or not.
+    const usdcAsset = (account.assets ?? []).find(isWallet(USDC_WALLET));
     const equity = usdcBucket?.equity ?? 0;
-    const amount = equity > 0 ? Math.max(0, floorCents(Math.min(requested, num(usdcAsset?.availableBalance), equity))) : 0;
+    const available = num(usdcAsset?.availableBalance);
+    const spare = equity > 0 ? Math.max(0, floorCents(Math.min(available, equity))) : 0;
+    const deficit = Math.max(0, -(usdtBucket?.equity ?? 0));
+    const wanted = requested === Infinity && deficit > 0 ? deficit : requested;
+    const amount = Math.max(0, floorCents(Math.min(wanted, spare)));
+    const shortfall: Plan['shortfall'] =
+      deficit === 0 || deficit <= spare
+        ? null
+        : { reason: available < equity ? 'cash' : 'spare', remaining: floorCents(deficit - amount) };
     const bid = positive(inputs.bid);
     const lands = Math.max(0, floorCents(amount - PULL_FEE_USD));
     const loop = loopQuote(
@@ -210,17 +260,17 @@ export function planFor(
       amount,
       receives,
       price: route === 'loop' ? bid : route === 'convert' ? 1 - CONVERT_RATE : null,
-      borrowAfterUsd: deficit,
-      shortfall: null,
+      shortfall,
       routes: { loop, convert },
       route,
-      savesPerDayUsd: 0,
-      marginFreedUsd: 0,
+      ...repayment(usdtBucket, receives),
     };
   }
 
-  const surplusBucket = buckets.find((b) => b.coin === SURPLUS.coin && b.venue === SURPLUS.venue);
-  const surplusCash = surplusBucket?.cash ?? 0;
+  // USDT → USDC. Capped at the USDC borrow: the wallet exists to serve the
+  // Hyperliquid legs, and cash parked there earns nothing.
+  const deficit = Math.max(0, -(usdcBucket?.equity ?? 0));
+  const surplusCash = usdtBucket?.cash ?? 0;
   const availableMargin = num(account.availableMargin);
   const amount = Math.max(0, floorCents(Math.min(requested, deficit, surplusCash, availableMargin)));
 
@@ -253,27 +303,14 @@ export function planFor(
         : 0;
   const price = route === 'loop' ? ask : route === 'convert' ? 1 - CONVERT_RATE : null;
 
-  // What lands, not what is sent, repays the borrow. Interest runs on the
-  // whole borrow only past the threshold, so a repayment that crosses it
-  // stops the whole charge, not its share.
-  const repaid = usdcBucket ? Math.min(receives, usdcBucket.borrow) : 0;
-  const chargedAfter =
-    usdcBucket && usdcBucket.borrow > 0 && usdcBucket.equity + receives < INTEREST_THRESHOLD
-      ? (usdcBucket.interestPerDayUsd * (usdcBucket.borrow - repaid)) / usdcBucket.borrow
-      : 0;
-  const savesPerDayUsd = usdcBucket ? Math.max(0, usdcBucket.interestPerDayUsd - chargedAfter) : 0;
-  const marginFreedUsd = usdcBucket && usdcBucket.borrow > 0 ? (repaid * usdcBucket.imHeldUsd) / usdcBucket.borrow : 0;
-
   return {
     direction,
     amount,
     receives,
     price,
-    borrowAfterUsd: Math.max(0, deficit - receives),
     shortfall,
     routes: { loop, convert },
     route,
-    savesPerDayUsd,
-    marginFreedUsd,
+    ...repayment(usdcBucket, receives),
   };
 }

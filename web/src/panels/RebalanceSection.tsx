@@ -6,8 +6,9 @@ import { HoldToConfirmButton } from '../components/HoldToConfirmButton';
 import { HoverCard } from '../components/HoverCard';
 import { SegmentedToggle } from '../components/SegmentedToggle';
 import { microLabelClass } from '../components/Th';
+import { borrowedBucket } from '../lib/borrow';
 import { fmtAge, fmtUsd, num } from '../lib/fmt';
-import { fmtMove, lineFor, liquidationLines, nearestLiquidation } from '../lib/liquidation';
+import { fmtLinePrice, fmtMove, lineFor, liquidationLines, nearestLiquidation, type LiquidationLine } from '../lib/liquidation';
 import { floorCents, roundToStep } from '../lib/ticks';
 import { useNow } from '../lib/useNow';
 
@@ -27,11 +28,13 @@ const EXPECTED_SECONDS: Record<string, number> = {
   'Sell USDC': 2,
 };
 
-/** One line under the direction toggle. The long form is in the info card. */
-const EXPLANATION: Record<RebalanceDirection, string> = {
-  payDown: 'Pays the borrow back. Each USDC frees 0.20 initial and 0.10 maintenance margin.',
-  pull: 'Brings spare USDC home. Capped at what you own there, so it never borrows.',
-};
+/** One line under the direction toggle. The long form is in the info card.
+ * A pull reads as a repayment when the USDT wallet is the borrowed one. */
+function explanation(direction: RebalanceDirection, usdtBorrowed: boolean): string {
+  if (direction === 'payDown') return 'Pays the USDC borrow back. Each USDC frees 0.20 initial and 0.10 maintenance margin.';
+  if (usdtBorrowed) return 'Pays the USDT borrow back. Each USDT frees 0.20 initial and 0.10 maintenance margin.';
+  return 'Brings spare USDC home. Capped at what you own there, so it never borrows.';
+}
 
 interface Fact {
   label: string;
@@ -57,18 +60,20 @@ const ABOUT = (
   <div className="flex flex-col gap-2 text-[12px] leading-snug">
     <p>
       <span className="font-semibold text-ink-100">What this is. </span>
-      Your CrossEx account holds USDT. The Hyperliquid legs of your pairs settle in USDC. When those legs lose money
-      or pay funding, Gate lends you the USDC to cover it. The amber pill shows that borrow.
+      Your CrossEx account has two wallets. USDT margins every venue but Hyperliquid. The Hyperliquid legs of your
+      pairs settle in their own USDC wallet. When a wallet's legs lose money or pay funding past what it holds, Gate
+      lends the coin: USDC for the Hyperliquid legs, USDT for the rest. The amber pill shows that borrow.
     </p>
     <p>
       <span className="font-semibold text-ink-100">Why it matters. </span>
-      Gate holds extra margin against the borrow: 20% as initial margin and 10% as maintenance margin. Once you are
-      more than {num(INTEREST_FREE_UNTIL, 0)} USDC short, Gate also charges interest every hour.
+      Gate holds extra margin against a borrow: 20% as initial margin and 10% as maintenance margin. Once a wallet is
+      more than {num(INTEREST_FREE_UNTIL, 0)} short, Gate also charges interest on it every hour.
     </p>
     <p>
       <span className="font-semibold text-ink-100">The two moves. </span>
-      USDT → Hyperliquid USDC pays the borrow back. That frees the margin and stops the interest. Hyperliquid USDC →
-      USDT brings spare USDC home when those legs made money.
+      Each direction moves cash into the other wallet. USDT → Hyperliquid USDC pays a USDC borrow back. Hyperliquid
+      USDC → USDT pays a USDT borrow back, or brings spare USDC home when the Hyperliquid legs made money. Paying a
+      borrow back frees the margin and stops the interest.
     </p>
   </div>
 );
@@ -81,6 +86,7 @@ const DIRECTION_OPTIONS: { value: RebalanceDirection; label: string }[] = [
 const SHORTFALL_TEXT = {
   cash: 'unrealised profit cannot move until the position closes',
   margin: 'available margin is too low',
+  spare: 'there is no more spare USDC on Hyperliquid',
 } as const;
 
 type SegmentKind = 'done' | 'running' | 'pending' | 'halted';
@@ -104,8 +110,16 @@ function parseAmount(text: string): number | null {
   return text.trim() !== '' && Number.isFinite(n) && n > 0 ? n : null;
 }
 
-/** The quote as facts: route, what moves, what it costs, what it changes. */
-function quoteFacts(plan: RebalancePlan, routeName: 'loop' | 'convert', pull: boolean, liquidation: string | null): Fact[] {
+/** The quote as facts: route, what moves, what it costs, what it changes.
+ * `repays`: the wallet the cash lands in has a borrow, so the move has a
+ * borrow after, margin it frees, and interest it saves. */
+function quoteFacts(
+  plan: RebalancePlan,
+  routeName: 'loop' | 'convert',
+  pull: boolean,
+  repays: boolean,
+  liquidation: string | null,
+): Fact[] {
   const route = plan.routes[routeName];
   const price = plan.price === null ? '—' : num(plan.price, 4);
   const convert = routeName === 'convert';
@@ -119,7 +133,7 @@ function quoteFacts(plan: RebalancePlan, routeName: 'loop' | 'convert', pull: bo
     },
     { label: 'Cost', value: convert ? `${fmtUsd(route.costUsd)} spread` : fmtUsd(route.costUsd) },
   ];
-  if (!pull) {
+  if (repays) {
     facts.push(
       { label: 'Borrow after', value: fmtUsd(plan.borrowAfterUsd) },
       { label: 'Frees', value: `${fmtUsd(plan.marginFreedUsd)} margin` },
@@ -130,10 +144,11 @@ function quoteFacts(plan: RebalancePlan, routeName: 'loop' | 'convert', pull: bo
   return facts;
 }
 
-/** `ETH +37% → +43%`: how much room the move buys for the nearest coin. A
- * rebalance moves cash between the USDT and USDC wallets; the liability, and
- * so the maintenance margin, follows. The after figure is the same coin's,
- * not whichever coin is nearest after. Null when the account has no line. */
+/** `ETH ~$3,150 (+37%) → ~$3,290 (+43%)`: the nearest coin's liquidation
+ * price before and after the move. A rebalance moves cash between the USDT
+ * and USDC wallets; the liability, and so the maintenance margin, follows.
+ * The after figure is the same coin's, not whichever coin is nearest after.
+ * Null when the account has no line. */
 function liquidationShift(
   acc: ReturnType<typeof useAccount>['data'],
   positions: ReturnType<typeof usePositions>['data'],
@@ -150,29 +165,33 @@ function liquidationShift(
       : { 'USDC/HYPERLIQUID': plan.receives, 'USDT/CROSSEX': -plan.amount },
   );
   const after = view ? lineFor(view, before.base) : null;
-  return `${before.base} ${fmtMove(before.move)} → ${after && after !== 'far' ? fmtMove(after.move) : 'past 10x'}`;
+  const at = (l: LiquidationLine) => `${fmtLinePrice(l.price)} (${fmtMove(l.move)})`;
+  return `${before.base} ${at(before)} → ${after && after !== 'far' ? at(after) : 'past 10x'}`;
 }
 
-/** The situation as facts: what Gate lent, the margin it holds, the interest. */
-function situationFacts(usdc: RebalanceBucket | undefined, borrow: number, pullable: number): Fact[] {
-  if (!usdc) return [];
-  const facts: Fact[] = [];
-  const paid = usdc.interestPaid30dUsd > 0 ? { label: 'Interest paid · 30 d', value: fmtUsd(usdc.interestPaid30dUsd) } : null;
-  if (borrow >= MIN_AMOUNT) {
-    facts.push(
-      { label: 'Lent by Gate', value: `${num(borrow, 2)} USDC` },
-      { label: 'Initial margin held', value: fmtUsd(usdc.imHeldUsd) },
-      { label: 'Maintenance margin held', value: fmtUsd(usdc.mmHeldUsd) },
-      {
-        label: 'Interest',
-        value: usdc.interestPerDayUsd > 0 ? `${fmtUsd(usdc.interestPerDayUsd)} / day` : `none under ${num(INTEREST_FREE_UNTIL, 0)} USDC`,
-      },
-    );
-  } else if (pullable >= MIN_AMOUNT) {
-    facts.push({ label: 'Spare USDC on Hyperliquid', value: `${num(pullable, 2)} USDC` });
-  }
-  if (paid) facts.push(paid);
-  return facts;
+/** The situation as facts: what Gate lent, the margin it holds, the
+ * interest, the spare USDC, the interest paid so far. The same six with and
+ * without a borrow, zeros shown: a row that changes shape reads as a bug. */
+function situationFacts(
+  usdc: RebalanceBucket | undefined,
+  usdt: RebalanceBucket | undefined,
+  borrowed: RebalanceBucket | null,
+  pullable: number,
+): Fact[] {
+  const borrow = borrowed ? floorCents(borrowed.borrow) : 0;
+  const interest = !borrowed
+    ? `${fmtUsd(0)} / day`
+    : borrowed.interestPerDayUsd > 0
+      ? `${fmtUsd(borrowed.interestPerDayUsd)} / day`
+      : `none under ${num(INTEREST_FREE_UNTIL, 0)} ${borrowed.coin}`;
+  return [
+    { label: 'Lent by Gate', value: borrowed ? `${num(borrow, 2)} ${borrowed.coin}` : '0.00' },
+    { label: 'Initial margin held', value: fmtUsd(borrowed?.imHeldUsd ?? 0) },
+    { label: 'Maintenance margin held', value: fmtUsd(borrowed?.mmHeldUsd ?? 0) },
+    { label: 'Interest', value: interest },
+    { label: 'Spare USDC on Hyperliquid', value: `${num(pullable, 2)} USDC` },
+    { label: 'Interest paid · all time', value: fmtUsd((usdc?.interestPaidUsd ?? 0) + (usdt?.interestPaidUsd ?? 0)) },
+  ];
 }
 
 function noRouteLine(plan: RebalancePlan, pull: boolean, borrow: number, free: number): { text: string; warn: boolean } {
@@ -270,14 +289,19 @@ export function RebalanceSection({ holdMs }: { holdMs?: number }) {
   const data = query.data;
   const usdc = data?.buckets.find((b) => b.coin === 'USDC' && b.venue === 'HYPERLIQUID');
   const usdt = data?.buckets.find((b) => b.coin === 'USDT' && b.venue === 'CROSSEX');
+  /* Either wallet can be the borrowed one. The direction toward it repays. */
+  const borrowed = borrowedBucket(data?.buckets);
   const borrow = floorCents(usdc?.borrow ?? 0);
-  const pullable = floorCents(Math.min(usdc?.cash ?? 0, usdc?.equity ?? 0));
+  const usdtBorrowed = borrowed?.venue === 'CROSSEX';
+  const pullable = Math.max(0, floorCents(Math.min(usdc?.cash ?? 0, usdc?.equity ?? 0)));
   const job = data?.job && (data.job.status === 'running' || data.job.status === 'halted') ? data.job : null;
 
+  /* Default to the direction that repays the borrow; with none, to bringing
+     spare USDC home when there is any. */
   useEffect(() => {
     if (chosen !== null || !data) return;
-    setChosen(borrow < MIN_AMOUNT && pullable > 0 ? 'pull' : 'payDown');
-  }, [chosen, data, borrow, pullable]);
+    setChosen(borrow >= MIN_AMOUNT ? 'payDown' : usdtBorrowed || pullable > 0 ? 'pull' : 'payDown');
+  }, [chosen, data, borrow, usdtBorrowed, pullable]);
 
   /* A finished job leaves the bucket on the other side: a pay-down leaves
      spare USDC, a pull leaves nothing. Go back to the default direction and
@@ -316,12 +340,14 @@ export function RebalanceSection({ holdMs }: { holdMs?: number }) {
      amount between 0.00 and a few cents on every poll. Show the section for
      any Hyperliquid USDC activity at all; the floor lines say what is
      possible. */
-  const active = Boolean(usdc && (usdc.cash !== 0 || usdc.equity !== 0 || usdc.upnl !== 0)) || data.job !== null;
+  const active =
+    Boolean(usdc && (usdc.cash !== 0 || usdc.equity !== 0 || usdc.upnl !== 0)) || usdtBorrowed || data.job !== null;
   if (!active) return null;
 
   const plan = data.plan;
   const pull = direction === 'pull';
-  const situation = situationFacts(usdc, borrow, pullable);
+  const repays = pull ? usdtBorrowed : borrow >= MIN_AMOUNT;
+  const situation = situationFacts(usdc, usdt, borrowed, pullable);
 
   const pickDirection = (next: RebalanceDirection) => {
     setChosen(next);
@@ -418,13 +444,13 @@ export function RebalanceSection({ holdMs }: { holdMs?: number }) {
         {capTooSmall && <p className="text-[12px] text-ink-300">{tooSmallLine(pull, borrow)}</p>}
         {floorHit ? null : routeName ? (
           <>
-            <Facts items={quoteFacts(plan, routeName, pull, liquidationShift(account, positions, plan, pull))} />
+            <Facts items={quoteFacts(plan, routeName, pull, repays, liquidationShift(account, positions, plan, pull))} />
             {routeName === 'convert' && (
               <p className="text-[11px] text-ink-500">Sends on a fresh quote within 30 bps of this one.</p>
             )}
-            {!pull && plan.shortfall && (
+            {plan.shortfall && (
               <p className="text-[12px] text-amber-300">
-                {`Only ${num(plan.amount, 2)} USDC can move. ${num(plan.shortfall.remaining, 2)} USDC stays borrowed: ${SHORTFALL_TEXT[plan.shortfall.reason]}`}
+                {`Only ${num(plan.amount, 2)} USDC can move. ${num(plan.shortfall.remaining, 2)} ${pull ? 'USDT' : 'USDC'} stays borrowed: ${SHORTFALL_TEXT[plan.shortfall.reason]}`}
               </p>
             )}
             {errorLine(start.error)}
@@ -451,14 +477,14 @@ export function RebalanceSection({ holdMs }: { holdMs?: number }) {
           </div>
           <p className="text-[12px] text-ink-500">move cash between USDT and Hyperliquid USDC</p>
         </div>
-        {borrow >= MIN_AMOUNT && (
+        {borrowed && (
           <span className="num rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[11px] text-amber-200">
-            {`Borrowing ${num(borrow, 2)} USDC`}
+            {`Borrowing ${num(floorCents(borrowed.borrow), 2)} ${borrowed.coin}`}
           </span>
         )}
       </div>
-      {situation.length > 0 && <Facts items={situation} />}
-      <p className="text-[12px] text-ink-400">{EXPLANATION[job ? job.direction : direction]}</p>
+      {usdc && <Facts items={situation} />}
+      <p className="text-[12px] text-ink-400">{explanation(job ? job.direction : direction, usdtBorrowed)}</p>
       {body}
     </section>
   );

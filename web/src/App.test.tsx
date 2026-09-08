@@ -296,7 +296,7 @@ function borrowed(borrow: number): RebalanceBucket {
     borrow,
     imHeldUsd: borrow * 0.2,
     mmHeldUsd: borrow * 0.1,
-    interestPaid30dUsd: 0,
+    interestPaidUsd: 0,
     interestPerDayUsd: 0,
   };
 }
@@ -319,6 +319,20 @@ describe('borrow pill', () => {
     expect(tab(/^Balances/)).toHaveAttribute('aria-selected', 'true');
     expect(panel('balances')).toBeVisible();
     expect(within(panel('balances')).getByRole('region', { name: 'Rebalance' })).toBeVisible();
+  });
+
+  it('shows a USDT borrow the same way, naming the legs on the other venues', async () => {
+    mockApp();
+    const usdt: RebalanceBucket = { ...borrowed(300), coin: 'USDT', venue: 'CROSSEX' };
+    const usdc: RebalanceBucket = { ...borrowed(0), cash: 500, equity: 500 };
+    server.use(rebalanceHandler(makeRebalanceView({ buckets: [usdc, usdt] })));
+    await renderApp();
+
+    const pill = await screen.findByRole('button', { name: 'Borrowing 300.00 USDT' });
+    expect(pill).toHaveAttribute(
+      'title',
+      'Gate lent you 300.00 USDT for the legs on the other venues. It holds $60.00 of initial margin against it. Open Balances to pay it back.',
+    );
   });
 
   it('puts the nearest liquidation line in the margin gauges hover', async () => {

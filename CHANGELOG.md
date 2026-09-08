@@ -5,18 +5,20 @@ in-app update check compares against).
 
 ## 1.5.1 — 2026-09-07
 
-Pay back borrowed USDC from the Balances tab, or bring spare USDC home, with one hold.
+Pay back what Gate lent you, USDC or USDT, from the Balances tab with one hold.
 
-- **A new Rebalance section on the Balances tab.** When a Hyperliquid leg loses money or pays
-  funding, Gate lends the USDC and holds 20% of it as initial margin and 10% as maintenance
-  margin. Past 10,000 USDC short it also charges interest every hour. The section shows
-  what Gate lent you, the margin it holds, and the interest as labelled facts, not a
-  paragraph. The borrow also
-  shows as an amber pill in the header on every tab; click it to open the section. An info
-  mark next to the title explains all of it.
-- **One hold moves cash either way.** USDT to Hyperliquid USDC pays the borrow back and frees
-  the margin. Hyperliquid USDC to USDT brings spare USDC home, capped so it never opens a
-  borrow. The amount is prefilled with the most that can move, and you can type less.
+- **A new Rebalance section on the Balances tab.** Your account has two wallets: USDT for every
+  venue but Hyperliquid, and USDC for the Hyperliquid legs. When a wallet's legs lose money or
+  pay funding past what it holds, Gate lends the coin and holds 20% of it as initial margin and
+  10% as maintenance margin. Past 10,000 short it also charges interest every hour. The section
+  shows six facts, the same with and without a borrow: what Gate lent you, the margin it holds,
+  the interest per day, the spare USDC on Hyperliquid, and the interest you have paid all time.
+  The borrow also shows as an amber pill in the header on every tab; click it to open the
+  section. An info mark next to the title explains all of it.
+- **One hold moves cash either way, and the section opens on the direction that repays.** USDT
+  to Hyperliquid USDC pays a USDC borrow back. Hyperliquid USDC to USDT pays a USDT borrow back,
+  or brings spare USDC home when there is none, capped so it never opens a borrow. The amount is
+  prefilled with the borrow, and you can type another.
 - **The cheaper route is picked for you and shown.** An instant convert at 20 bps, or a spot
   loop through Gate that costs $0.05 for a pay-down and a flat $1 for a pull. The quote is a
   row of facts: the route, the price, what lands, the cost, and the borrow after the move. Under
@@ -29,8 +31,11 @@ Pay back borrowed USDC from the Balances tab, or bring spare USDC home, with one
   through the leg's notional and through the USDC borrow it creates. Every card on the
   Positions tab says `Liquidates if ETH hits ~$3,150 (+37%)`, the coin's price at which the
   account liquidates if only that coin moves. Amber inside 30%, red inside 15%. The nearest line is
-  in the header's margin-gauge hover, and the rebalance quote shows how far a pay-down
-  moves it.
+  in the header's margin-gauge hover, and the rebalance quote shows that price before and after
+  the move.
+- **The update dialog opens by itself.** When a new version is out, the dialog opens on every
+  open of the app until you install it. Close puts it away until the next open. Until now the
+  only sign was an amber button in the header, and people missed it.
 
 ## 1.5.0 — 2026-08-27
 

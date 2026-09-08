@@ -6,6 +6,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { makeClients } from '../../src/core/clients';
 import { Store } from '../../src/engine/db';
 import { gateVenue } from '../../src/engine/venueGate';
+import { GATE_HISTORY_FLOOR_MS } from '../../src/server/interestLedger';
+import { InterestFile } from '../../src/server/interestLedger';
 import { JobFile } from '../../src/server/rebalanceJob';
 import { gate, HOST, makeTestApp, mockGateGet, TEST_KEY, TEST_SECRET } from './helpers/gate-nock';
 
@@ -35,6 +37,7 @@ const account = {
 };
 
 const interestRow = (interest: string, createTime: number) => ({
+  interest_id: `${createTime}`,
   liability_coin: 'USDC',
   exchange_type: 'HYPERLIQUID',
   interest,
@@ -50,10 +53,12 @@ describe('GET /api/rebalance', () => {
   it('returns the buckets, the plan with both routes, and a null job', async () => {
     const t = Date.now();
     const getClients = () => makeClients({ key: TEST_KEY, secret: TEST_SECRET });
+    const dataDir = mkdtempSync(path.join(tmpdir(), 'rebalance-'));
     app = makeTestApp({
       getClients,
       rebalance: {
-        jobs: new JobFile(mkdtempSync(path.join(tmpdir(), 'rebalance-'))),
+        jobs: new JobFile(dataDir),
+        interest: new InterestFile(dataDir),
         sleep: async () => undefined,
       },
       engine: { store: new Store(':memory:'), venue: gateVenue(getClients), clock: { now: () => t } },
@@ -65,7 +70,8 @@ describe('GET /api/rebalance', () => {
       }),
       gate()
         .get('/api/v4/crossex/history_margin_interests')
-        .query((q) => q.from === String(t - 30 * DAY_MS) && q.to === String(t) && q.page === '1' && q.limit === '100')
+        // All time: from Gate's history floor, in pages of 1,000.
+        .query((q) => q.from === String(GATE_HISTORY_FLOOR_MS) && q.to === String(t) && q.page === '1' && q.limit === '1000')
         .reply(200, [interestRow('5', t - 31 * DAY_MS), interestRow('0.02', t - 2000), interestRow('0.01', t - 1000)]),
       mockGateGet('/transfers/coin', {
         body: [{ coin: 'USDC', min_trans_amount: '11', est_fee: '1', precision: 5, is_disabled: 0 }],
@@ -91,10 +97,15 @@ describe('GET /api/rebalance', () => {
     expect(buckets).toHaveLength(3);
     const usdc = buckets.find((b: { coin: string; venue: string }) => b.coin === 'USDC' && b.venue === 'HYPERLIQUID');
     expect(Object.keys(usdc).sort()).toEqual(
-      ['coin', 'venue', 'cash', 'upnl', 'equity', 'borrow', 'imHeldUsd', 'mmHeldUsd', 'interestPaid30dUsd', 'interestPerDayUsd'].sort(),
+      ['coin', 'venue', 'cash', 'upnl', 'equity', 'borrow', 'imHeldUsd', 'mmHeldUsd', 'interestPaidUsd', 'interestPerDayUsd'].sort(),
     );
     expect(usdc).toMatchObject({ cash: 0, upnl: 0, equity: -300, borrow: 300, interestPerDayUsd: 0 });
-    expect(usdc.interestPaid30dUsd).toBeCloseTo(0.03, 6);
+    // The 31-day-old row counts: the figure is all time, not 30 days.
+    expect(usdc.interestPaidUsd).toBeCloseTo(5.03, 6);
+    // ...and the total is on disk for the next sync to top up.
+    const ledger = new InterestFile(dataDir).read();
+    expect(ledger).toMatchObject({ userId: '1', through: t - 1000 });
+    expect(ledger?.paid['USDC/HYPERLIQUID']).toBeCloseTo(5.03, 6);
     expect(buckets.find((b: { coin: string }) => b.coin === 'USDT')).toMatchObject({ venue: 'CROSSEX', cash: 1200 });
 
     expect(plan.amount).toBe(300);
