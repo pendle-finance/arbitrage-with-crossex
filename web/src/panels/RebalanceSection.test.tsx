@@ -442,7 +442,7 @@ describe('RebalanceSection', () => {
     await waitFor(() => expect(input).toHaveValue('0.00'));
     expect(screen.getByText(PAY_USDC_TEXT)).toBeInTheDocument();
     expect(fact('Sends')).toBeNull();
-    expect(screen.getByText('Nothing to pay back. There is no USDC borrow on Hyperliquid.')).toBeInTheDocument();
+    expect(screen.getByText('Nothing to move. There is no USDC borrow on Hyperliquid.')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^Hold to/ })).toBeNull();
 
     await pickToUsdt();
@@ -593,7 +593,7 @@ describe('RebalanceSection', () => {
 
     await section();
     expect(screen.queryByText(/^Borrowing /)).toBeNull();
-    expect(screen.getByText('Nothing to pay back. The borrow is under 1 USDC.')).toBeInTheDocument();
+    expect(screen.getByText('Nothing to move. The USDC borrow is under 1 USDC.')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^Hold to/ })).toBeNull();
     expect(screen.queryByText(/^via /)).toBeNull();
     expect(screen.getByRole('radiogroup', { name: 'Direction' })).toBeInTheDocument();
@@ -751,7 +751,7 @@ describe('RebalanceSection', () => {
     await section();
     expect(screen.queryByText(/^Borrowing /)).toBeNull();
     expect(screen.getByRole('radiogroup', { name: 'Direction' })).toBeInTheDocument();
-    expect(screen.getByText('Nothing to pay back. There is no USDC borrow on Hyperliquid.')).toBeInTheDocument();
+    expect(screen.getByText('Nothing to move. There is no USDC borrow on Hyperliquid.')).toBeInTheDocument();
   });
 
   it('renders with borrow 0 and spare USDC, without the pill', async () => {
@@ -1006,7 +1006,7 @@ describe('RebalanceSection — a USDT borrow', () => {
 
     await screen.findByRole('button', { name: 'Hold to move 300.00 USDC → USDT' });
     fireEvent.click(screen.getByRole('radio', { name: 'USDT → Hyperliquid USDC' }));
-    expect(await screen.findByText('Nothing to pay back. There is no USDC borrow on Hyperliquid.')).toBeInTheDocument();
+    expect(await screen.findByText('Nothing to move. There is no USDC borrow on Hyperliquid.')).toBeInTheDocument();
     expect(screen.getByText(PAY_USDC_TEXT)).toBeInTheDocument();
   });
 });

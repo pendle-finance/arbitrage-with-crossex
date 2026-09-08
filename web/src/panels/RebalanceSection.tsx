@@ -200,14 +200,14 @@ function noRouteLine(plan: RebalancePlan, toUsdt: boolean, borrow: number, free:
   if (toUsdt) {
     return { text: free > 0 ? 'Nothing to move.' : 'Nothing to move. There is no spare USDC on Hyperliquid.', warn: false };
   }
-  if (borrow === 0) return { text: 'Nothing to pay back. There is no USDC borrow on Hyperliquid.', warn: false };
+  if (borrow === 0) return { text: 'Nothing to move. There is no USDC borrow on Hyperliquid.', warn: false };
   if (free === 0) return { text: 'Nothing to move. There is no free USDT.', warn: false };
   return { text: 'Nothing to move.', warn: false };
 }
 
 function tooSmallLine(toUsdt: boolean, borrow: number): string {
   if (toUsdt) return `Nothing to move. Spare USDC is under ${MIN_AMOUNT} USDC.`;
-  if (borrow < MIN_AMOUNT) return `Nothing to pay back. The borrow is under ${MIN_AMOUNT} USDC.`;
+  if (borrow < MIN_AMOUNT) return `Nothing to move. The USDC borrow is under ${MIN_AMOUNT} USDC.`;
   return `Under ${MIN_AMOUNT} USDT can move. Free USDT or margin is too low.`;
 }
 
