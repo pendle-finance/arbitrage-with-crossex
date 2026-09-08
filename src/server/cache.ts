@@ -117,8 +117,10 @@ export class TtlCache {
       entry.value = value;
       entry.has = true;
       entry.expiresAt = Date.now() + ttlMs;
-      this.touch(key, entry);
-      this.evictIfNeeded();
+      if (this.entries.get(key) === entry) {
+        this.touch(key, entry);
+        this.evictIfNeeded();
+      }
       return { value, stale: false };
     } catch (err) {
       if (classifyGateError(err).category === 'rate-limited') {

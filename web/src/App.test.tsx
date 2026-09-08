@@ -6,17 +6,20 @@ import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import App from './App';
-import type { OpenOrder, PositionsResponse, TradesResponse, VenueFees } from './api/types';
+import type { OpenOrder, PositionsResponse, RebalanceBucket, TradesResponse, VenueFees } from './api/types';
 import { ACTIVE_TAB_KEY } from './components/TabBar';
 import { USER_GUIDE_RAW_URL } from './components/UserGuideModal';
 import {
+  account,
   baseHandlers,
   ethPosition,
   makeOpportunitiesResult,
   makeOpportunityGroup,
   makeOpportunityLeg,
   makeOpportunityPair,
+  makeRebalanceView,
   opportunitiesHandler,
+  rebalanceHandler,
   versionHandler,
 } from './test/fixtures';
 import { env, server } from './test/server';
@@ -278,6 +281,124 @@ describe('App tab shell', () => {
     expect(document.querySelector('.flash-ring')).not.toBeNull();
     // And the execution wizard stays shut — it could not trade without keys.
     expect(screen.queryByRole('heading', { name: /Open this strategy/ })).not.toBeInTheDocument();
+  });
+});
+
+/** The Hyperliquid USDC bucket with `borrow` USDC lent by Gate. */
+function borrowed(borrow: number): RebalanceBucket {
+  return {
+    coin: 'USDC',
+    venue: 'HYPERLIQUID',
+    cash: -borrow,
+    upnl: 0,
+    equity: -borrow,
+    borrow,
+    imHeldUsd: borrow * 0.2,
+    mmHeldUsd: borrow * 0.1,
+    interestPaidUsd: 0,
+    interestPerDayUsd: 0,
+  };
+}
+
+describe('borrow pill', () => {
+  it('shows the USDC borrow in the header on every tab, and opens Balances on click', async () => {
+    mockApp();
+    server.use(rebalanceHandler(makeRebalanceView({ buckets: [borrowed(8.5)] })));
+    await renderApp();
+
+    const pill = await screen.findByRole('button', { name: 'Borrowing 8.50 USDC' });
+    expect(tab(/^Opportunities/)).toHaveAttribute('aria-selected', 'true');
+    expect(pill).toHaveAttribute(
+      'title',
+      'Gate lent you 8.50 USDC for the Hyperliquid legs. It holds $1.70 of initial margin against it. Open Balances to pay it back.',
+    );
+
+    await userEvent.click(pill);
+
+    expect(tab(/^Balances/)).toHaveAttribute('aria-selected', 'true');
+    expect(panel('balances')).toBeVisible();
+    expect(within(panel('balances')).getByRole('region', { name: 'Rebalance' })).toBeVisible();
+  });
+
+  it('shows a USDT borrow the same way, naming the legs on the other venues', async () => {
+    mockApp();
+    const usdt: RebalanceBucket = { ...borrowed(300), coin: 'USDT', venue: 'CROSSEX' };
+    const usdc: RebalanceBucket = { ...borrowed(0), cash: 500, equity: 500 };
+    server.use(rebalanceHandler(makeRebalanceView({ buckets: [usdc, usdt] })));
+    await renderApp();
+
+    const pill = await screen.findByRole('button', { name: 'Borrowing 300.00 USDT' });
+    expect(pill).toHaveAttribute(
+      'title',
+      'Gate lent you 300.00 USDT for the legs on the other venues. It holds $60.00 of initial margin against it. Open Balances to pay it back.',
+    );
+  });
+
+  it('puts the nearest liquidation line in the margin gauges hover', async () => {
+    mockApp();
+    server.use(
+      http.get('/api/account', () =>
+        HttpResponse.json(
+          env({
+            ...account,
+            marginBalance: '20000',
+            maintenanceMargin: '2500',
+            assets: [
+              { coin: 'USDT', exchangeType: 'CROSSEX', balance: '20000', equity: '20000', availableBalance: '20000', upnl: '0', liability: '0' },
+              { coin: 'USDC', exchangeType: 'HYPERLIQUID', balance: '0', equity: '0', availableBalance: '0', upnl: '0', liability: '0' },
+            ],
+          }),
+        ),
+      ),
+      http.get('/api/positions', () =>
+        HttpResponse.json(
+          env<PositionsResponse>({
+            positions: [
+              { ...ethPosition, symbol: 'GATE_FUTURE_ETH_USDT', positionValue: '250000', markPrice: '2300', maintenanceMargin: '1250' },
+              { ...ethPosition, symbol: 'HYPERLIQUID_FUTURE_ETH_USDC', positionValue: '250000', markPrice: '2300', maintenanceMargin: '1250' },
+            ],
+            exposure: [
+              {
+                base: 'ETH',
+                legs: [
+                  { symbol: 'GATE_FUTURE_ETH_USDT', exchange: 'GATE', quote: 'USDT', side: 'LONG', qty: 108.7, value: 250000 },
+                  { symbol: 'HYPERLIQUID_FUTURE_ETH_USDC', exchange: 'HYPERLIQUID', quote: 'USDC', side: 'SHORT', qty: 108.7, value: 250000 },
+                ],
+                longValue: 250000,
+                shortValue: 250000,
+                netValue: 0,
+                grossValue: 500000,
+                neutral: true,
+                singleLeg: false,
+              },
+            ],
+          }),
+        ),
+      ),
+    );
+    await renderApp();
+
+    // The header meters carry the whole margin story in one hover title.
+    const gauges = screen.getByRole('img', { name: 'Initial and maintenance margin' });
+    await waitFor(() =>
+      expect(gauges).toHaveAttribute(
+        'title',
+        expect.stringContaining(
+          'Nearest liquidation: ETH. Liquidates at about $3,764 if only ETH moves (+64%) and every other coin holds still.',
+        ),
+      ),
+    );
+  });
+
+  it('shows no pill under 1 USDC of borrow', async () => {
+    mockApp();
+    server.use(rebalanceHandler(makeRebalanceView({ buckets: [borrowed(0.4)] })));
+    await renderApp();
+
+    // The hidden Balances panel renders its section from the same response,
+    // so once it exists the pill has had its answer.
+    await screen.findByRole('region', { name: 'Rebalance', hidden: true });
+    expect(screen.queryByRole('button', { name: /^Borrowing / })).toBeNull();
   });
 });
 

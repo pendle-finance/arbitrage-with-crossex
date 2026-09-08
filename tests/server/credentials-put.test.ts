@@ -9,6 +9,7 @@ import type { FastifyInstance } from 'fastify';
 import nock from 'nock';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { makeClients, type Clients } from '../../src/core/clients';
+import { JobFile, newJob } from '../../src/server/rebalanceJob';
 import { rewriteEnvFile } from '../../src/server/routes/credentials';
 import { Store } from '../../src/engine/db';
 import { gateVenue } from '../../src/engine/venueGate';
@@ -130,6 +131,58 @@ describe('PUT /api/credentials', () => {
     gate().get('/api/v4/crossex/accounts').query(true).reply(200, fixture('account.json'));
     const ok = await put({ key: NEW_KEY, secret: NEW_SECRET });
     expect(ok.statusCode).toBe(200);
+  });
+
+  it('refuses with 409 while a pay-down is still running', async () => {
+    await app.close();
+    const jobs = new JobFile(mkdtempSync(path.join(tmpdir(), 'rebalance-')));
+    app = makeTestApp({
+      getClients: () => current,
+      credentials: { envPath, setClients: (c) => (current = c) },
+      rebalance: { jobs },
+    });
+    await app.ready();
+    jobs.write(newJob('toUsdc', 'loop', 12, Date.now()));
+
+    const res = await put({ key: NEW_KEY, secret: NEW_SECRET });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error.message).toMatch(/pay-down is still running/);
+    expect(readFileSync(envPath, 'utf8')).toContain(`GATE_API_KEY=${TEST_KEY}`);
+  });
+
+  it('refuses with 409 while a halted rebalance belongs to another account or to a file with no account id, and accepts a rotated key on the same account', async () => {
+    await app.close();
+    const jobs = new JobFile(mkdtempSync(path.join(tmpdir(), 'rebalance-')));
+    app = makeTestApp({
+      getClients: () => current,
+      credentials: { envPath, setClients: (c) => (current = c) },
+      rebalance: { jobs },
+    });
+    await app.ready();
+    const halted = (userId: string | null) => {
+      const job = newJob('toUsdc', 'loop', 12, Date.now(), userId);
+      job.status = 'halted';
+      jobs.write(job);
+    };
+
+    halted('999');
+    gate().get('/api/v4/crossex/accounts').query(true).reply(200, fixture('account.json'));
+    let res = await put({ key: NEW_KEY, secret: NEW_SECRET });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error.message).toMatch(/halted rebalance/);
+    expect(readFileSync(envPath, 'utf8')).toContain(`GATE_API_KEY=${TEST_KEY}`);
+
+    halted(null);
+    gate().get('/api/v4/crossex/accounts').query(true).reply(200, fixture('account.json'));
+    res = await put({ key: NEW_KEY, secret: NEW_SECRET });
+    expect(res.statusCode).toBe(409);
+
+    halted('1234567');
+    gate().get('/api/v4/crossex/accounts').query(true).reply(200, fixture('account.json'));
+    res = await put({ key: NEW_KEY, secret: NEW_SECRET });
+    expect(res.statusCode).toBe(200);
+    expect(readFileSync(envPath, 'utf8')).toContain(`GATE_API_KEY=${NEW_KEY}`);
   });
 
   it('validates the body shape', async () => {

@@ -169,6 +169,22 @@ export function UpdateIndicator() {
   const log = useUpdateLog(running);
 
   /**
+   * OPEN BY ITSELF, once per page load, while an update waits.
+   *
+   * The amber button alone was missed: a trader who never reads the header
+   * runs an old version for weeks. So the dialog opens on every open of the
+   * app until the update is installed. Close puts it away for this page load,
+   * and the button stays for when they are ready.
+   */
+  const [offered, setOffered] = useState(false);
+  const waiting = Boolean(data?.updateAvailable && data.latest);
+  useEffect(() => {
+    if (offered || running || !waiting) return;
+    setOffered(true);
+    setOpen(true);
+  }, [offered, running, waiting]);
+
+  /**
    * RELOAD ONTO THE NEW BUNDLE, once the swap has actually happened.
    *
    * After a successful update this page reconnects to the new server still

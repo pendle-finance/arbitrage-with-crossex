@@ -12,12 +12,13 @@
  * every number is a pure function of the venue feeds.
  */
 import { useMemo, useState } from 'react';
-import { useAssetView, useAssetViewWindows, useFees } from '../../api/queries';
+import { useAccount, useAssetView, useAssetViewWindows, useFees, usePositions } from '../../api/queries';
 import { EmptyState } from '../../components/EmptyState';
 import { QueryError } from '../../components/QueryError';
 import { TableSkeleton } from '../../components/Skeleton';
 import { SignedNumber } from '../../components/SignedNumber';
-import { fmtDateLocal, fmtPct, fmtUsd } from '../../lib/fmt';
+import { fmtPct, fmtUsd } from '../../lib/fmt';
+import { lineFor as lineIn, liquidationLines } from '../../lib/liquidation';
 import { useBookId } from '../bookId';
 import { AddressForm, short } from '../HomeControls';
 import { useTrackedAddress } from '../trackedAddress';
@@ -82,6 +83,26 @@ export function AssetsHome() {
       Math.abs(a.derived.totals.pnlUsd) >= 1,
   );
   const dust = allDerived.filter((a) => !derived.includes(a));
+
+  /* Where each coin's move liquidates the ACCOUNT. Needs margin balance,
+     maintenance and the wallet equities, which the header already polls, so
+     both queries are shared rather than re-fetched. */
+  const accountData = useAccount().data;
+  const positionsData = usePositions().data;
+  const liquidation = useMemo(
+    () => (accountData && positionsData ? liquidationLines(accountData, positionsData) : undefined),
+    [accountData, positionsData],
+  );
+  /* null while the account or positions are not loaded, and for a coin with
+     no priced leg in the CONNECTED account (a tracked address's history can
+     name coins this account does not hold); 'unknown' when Gate's margin
+     figures are not numbers, so the card says the estimate is missing rather
+     than claiming safety; 'far' when priced to 10x and 2% with no line. */
+  const lineFor = (base: string) => {
+    if (liquidation === undefined) return null;
+    if (liquidation === null) return 'unknown' as const;
+    return lineIn(liquidation, base);
+  };
 
   // Borrow interest is booked by the venue per LIABILITY COIN, not per
   // market, so it cannot sit on a card: it is charged once, here, and the
@@ -153,23 +174,6 @@ export function AssetsHome() {
         {header}
         <TableSkeleton rows={6} cols={5} />
       </section>
-    );
-  }
-
-  const coverageNotes: string[] = [];
-  if (data.coverage.settlementsFromSec > 0) {
-    coverageNotes.push(
-      `Boros settlement history could only be read back to ${fmtDateLocal(data.coverage.settlementsFromSec)} — older settlements are missing from the sums.`,
-    );
-  }
-  if (data.coverage.perpClosedFromSec > 0) {
-    coverageNotes.push(
-      `Closed-position history could only be read back to ${fmtDateLocal(data.coverage.perpClosedFromSec)} — older closed positions are missing from the sums.`,
-    );
-  }
-  if (!data.coverage.borosTxnsComplete) {
-    coverageNotes.push(
-      'Boros trade history came back truncated — trade PnL sums may be missing old fills.',
     );
   }
 
@@ -249,15 +253,6 @@ export function AssetsHome() {
       </div>
       )}
 
-      {[...data.warnings, ...coverageNotes].map((w) => (
-        <p
-          key={w}
-          className="mb-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-1.5 text-xs text-amber-400"
-        >
-          {w}
-        </p>
-      ))}
-
       {derived.length === 0 ? (
         <EmptyState
           icon="◦"
@@ -279,6 +274,7 @@ export function AssetsHome() {
                 else delete sinceByAsset[group.base];
                 update({ ...prefs, sinceByAsset });
               }}
+              liquidation={lineFor(group.base)}
               exclusions={prefs.exclusions}
               onExclude={(key, value) => {
                 const exclusions = { ...prefs.exclusions };

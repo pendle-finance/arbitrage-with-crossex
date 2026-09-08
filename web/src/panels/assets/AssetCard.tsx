@@ -27,6 +27,7 @@ import { usePositions } from '../../api/queries';
 import { pairSharePayload } from '../sharePayload';
 import { SignedNumber } from '../../components/SignedNumber';
 import { fmtDateLocal, fmtPct, fmtTokenQty, fmtUsd, fmtUsdCompact, prettyVenue } from '../../lib/fmt';
+import { describeLine, lineLabel, type LiquidationLine } from '../../lib/liquidation';
 import {
   type AssetDerived,
   type ExclusionEntry,
@@ -57,6 +58,40 @@ interface Props {
   /** value: the excluded slice ({qty, at?} in the leg's unit), 'all', or
    * undefined to include the whole leg again. */
   onExclude: (key: string, value: ExclusionEntry | undefined) => void;
+  /** Where the ACCOUNT liquidates if only this coin moves. 'far' = no line
+   * within 10x, 'unknown' = Gate sent no margin figures, null = not loaded
+   * or this coin has no priced leg in the connected account. */
+  liquidation?: LiquidationLine | 'far' | 'unknown' | null;
+}
+
+/** Where this coin's move liquidates the account. Red inside 15%, amber
+ * inside 30%: a hedged asset is delta-neutral but not margin-neutral — the
+ * losing Hyperliquid leg drives its USDC wallet into a borrow, and Gate
+ * charges maintenance margin on that. */
+function LiquidationChip({ line, base }: { line: LiquidationLine | 'far' | 'unknown'; base: string }) {
+  if (line === 'unknown') {
+    return (
+      <Chip sm title="Gate did not send the account's margin figures, so the line cannot be estimated.">
+        No liquidation estimate
+      </Chip>
+    );
+  }
+  if (line === 'far') {
+    return (
+      <Chip
+        sm
+        title={`Estimate: the account is not liquidated if ${base} rises 10x or falls 98% and every other coin holds still.`}
+      >
+        {`Safe through a 10x ${base} pump or 98% dump`}
+      </Chip>
+    );
+  }
+  const near = Math.abs(line.move);
+  return (
+    <Chip sm tone={near < 0.15 ? 'red' : near < 0.3 ? 'amber' : 'neutral'} className="num" title={describeLine(line)}>
+      {lineLabel(line)}
+    </Chip>
+  );
 }
 
 /** Unix seconds → the value an <input type="date"> wants (local). */
@@ -1060,7 +1095,7 @@ function BorosRow({
   );
 }
 
-export function AssetCard({ group, derived, sinceSec, windowPending, onChangeSince, exclusions, onExclude }: Props) {
+export function AssetCard({ group, derived, sinceSec, windowPending, onChangeSince, exclusions, onExclude, liquidation = null }: Props) {
   const { totals, gaps, venues } = derived;
   const flow = useTradeFlowOptional();
   /**
@@ -1308,6 +1343,7 @@ export function AssetCard({ group, derived, sinceSec, windowPending, onChangeSin
               perps don’t cancel
             </Chip>
           ))}
+        {hasLegs && liquidation && <LiquidationChip line={liquidation} base={group.base} />}
         <span className="ml-auto" />
         {windowPending && <span className="text-xs text-ink-600">updating window…</span>}
         <label className="flex items-center gap-1.5 text-xs text-ink-500">

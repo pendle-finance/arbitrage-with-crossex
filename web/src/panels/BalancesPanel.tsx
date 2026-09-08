@@ -7,6 +7,7 @@ import { MarginBreakdown } from '../components/MarginDonut';
 import { SignedNumber } from '../components/SignedNumber';
 import { TableSkeleton, TilesSkeleton } from '../components/Skeleton';
 import { sig } from '../lib/fmt';
+import { RebalanceSection } from './RebalanceSection';
 
 const ASSET_COLUMNS: Column<CrossexAsset>[] = [
   {
@@ -59,6 +60,8 @@ export function BalancesPanel() {
   return (
     <div className="flex flex-col gap-6">
       <MarginBreakdown acc={acc} />
+
+      <RebalanceSection />
 
       <section aria-label="Assets">
         <h2 className="mb-2 text-xs font-semibold uppercase tracking-wider text-ink-400">

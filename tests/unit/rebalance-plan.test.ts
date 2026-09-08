@@ -1,0 +1,652 @@
+import { describe, it, expect } from 'vitest';
+import {
+  bucketsFrom,
+  planFor,
+  USDC_WALLET,
+  USDT_WALLET,
+  SPOT_SYMBOL,
+  TO_USDC_WAIT_SECONDS,
+  HYPERLIQUID_WITHDRAW_FEE_USD,
+  TO_USDT_WAIT_SECONDS,
+  type AccountLike,
+  type AssetLike,
+  type PlanInputs,
+  type PlanRequest,
+  type RateLike,
+} from '../../src/core/rebalance/plan';
+
+type Figures = Partial<
+  Record<
+    | 'balance'
+    | 'availableBalance'
+    | 'upnl'
+    | 'equity'
+    | 'liability'
+    | 'borrowingInitialMargin'
+    | 'borrowingMaintenanceMargin',
+    number
+  >
+>;
+
+function asset(coin: string, exchangeType: string, f: Figures = {}): AssetLike {
+  return {
+    coin,
+    exchangeType,
+    balance: String(f.balance ?? 0),
+    availableBalance: String(f.availableBalance ?? f.balance ?? 0),
+    upnl: String(f.upnl ?? 0),
+    equity: String(f.equity ?? 0),
+    liability: String(f.liability ?? 0),
+    borrowingInitialMargin: String(f.borrowingInitialMargin ?? 0),
+    borrowingMaintenanceMargin: String(f.borrowingMaintenanceMargin ?? 0),
+  };
+}
+
+const USDC_RATE: RateLike[] = [{ coin: USDC_WALLET.coin, exchangeType: USDC_WALLET.venue, hourInterestRate: '0.00001' }];
+const BOTH_RATES: RateLike[] = [
+  ...USDC_RATE,
+  { coin: USDT_WALLET.coin, exchangeType: USDT_WALLET.venue, hourInterestRate: '0.00002' },
+];
+
+const OPEN: PlanInputs = {
+  usdcTransfer: { isDisabled: 0, minTransAmount: 11 },
+  spotRule: { state: 'live' },
+  spotTakerRate: 0,
+  ask: 1.0001,
+  bid: 0.9999,
+};
+
+const TO_USDT: PlanRequest = { direction: 'toUsdt' };
+
+interface Scenario {
+  usdcEquity: number;
+  usdcBorrow?: number;
+  usdcIm?: number;
+  usdcCash?: number;
+  usdcAvailable?: number;
+  usdtCash: number;
+  /** Defaults to the cash. Below zero it is a USDT borrow. */
+  usdtEquity?: number;
+  usdtIm?: number;
+  margin: number;
+}
+
+function accountFor(s: Scenario): AccountLike {
+  return {
+    availableMargin: String(s.margin),
+    assets: [
+      asset(USDC_WALLET.coin, USDC_WALLET.venue, {
+        balance: s.usdcCash ?? 0,
+        availableBalance: s.usdcAvailable ?? s.usdcCash ?? 0,
+        equity: s.usdcEquity,
+        liability: s.usdcBorrow ?? Math.max(0, -s.usdcEquity),
+        borrowingInitialMargin: s.usdcIm ?? 0,
+      }),
+      asset(USDT_WALLET.coin, USDT_WALLET.venue, {
+        balance: s.usdtCash,
+        equity: s.usdtEquity ?? s.usdtCash,
+        liability: Math.max(0, -(s.usdtEquity ?? s.usdtCash)),
+        borrowingInitialMargin: s.usdtIm ?? 0,
+      }),
+    ],
+  };
+}
+
+function plan(s: Scenario, inputs: PlanInputs = OPEN, request?: PlanRequest, rates: RateLike[] = USDC_RATE) {
+  const account = accountFor(s);
+  return planFor(bucketsFrom(account, rates, {}), account, inputs, request);
+}
+
+describe('bucketsFrom interest', () => {
+  it('maps one row per asset: cash from balance, borrow from liability', () => {
+    const account: AccountLike = {
+      availableMargin: '100',
+      assets: [
+        asset('USDC', 'HYPERLIQUID', { balance: -50, upnl: 10, equity: -40, liability: 50 }),
+        asset('USDT', 'CROSSEX', { balance: 200, upnl: 0, equity: 200 }),
+      ],
+    };
+    const buckets = bucketsFrom(account, USDC_RATE, {});
+    expect(buckets).toHaveLength(2);
+    expect(buckets[0]).toMatchObject({ coin: 'USDC', venue: 'HYPERLIQUID', cash: -50, upnl: 10, equity: -40, borrow: 50 });
+    expect(buckets[1]).toMatchObject({ coin: 'USDT', venue: 'CROSSEX', cash: 200, upnl: 0, equity: 200, borrow: 0 });
+  });
+
+  it('charges interest per day when equity is below -10000', () => {
+    const account = accountFor({ usdcEquity: -10001, usdtCash: 0, margin: 0 });
+    const [usdc] = bucketsFrom(account, USDC_RATE, {});
+    expect(usdc.interestPerDayUsd).toBeCloseTo(10001 * 0.00001 * 24, 9);
+  });
+
+  it('charges no interest at exactly -10000', () => {
+    const account = accountFor({ usdcEquity: -10000, usdtCash: 0, margin: 0 });
+    const [usdc] = bucketsFrom(account, USDC_RATE, {});
+    expect(usdc.interestPerDayUsd).toBe(0);
+  });
+
+  it('uses rate 0 when no rate row matches the coin and venue', () => {
+    const account = accountFor({ usdcEquity: -20000, usdtCash: 0, margin: 0 });
+    const other: RateLike[] = [{ coin: 'USDC', exchangeType: 'GATE', hourInterestRate: '0.5' }];
+    const [usdc] = bucketsFrom(account, other, {});
+    expect(usdc.interestPerDayUsd).toBe(0);
+  });
+
+  it('reads the all-time interest paid by wallet key', () => {
+    const account = accountFor({ usdcEquity: -500, usdtCash: 0, margin: 0 });
+    const paid = { 'USDC/HYPERLIQUID': 3.75, 'USDC/GATE': 9, 'USDT/CROSSEX': 4 };
+    const [usdc, usdt] = bucketsFrom(account, USDC_RATE, paid);
+    expect(usdc.interestPaidUsd).toBe(3.75);
+    expect(usdt.interestPaidUsd).toBe(4);
+  });
+
+  it('reads interest paid as 0 with no entry for the wallet', () => {
+    const account = accountFor({ usdcEquity: -500, usdtCash: 0, margin: 0 });
+    const [usdc, usdt] = bucketsFrom(account, USDC_RATE, { 'USDC/GATE': 9 });
+    expect(usdc.interestPaidUsd).toBe(0);
+    expect(usdt.interestPaidUsd).toBe(0);
+  });
+
+  it('charges interest on a USDT borrow below -10000 at the USDT rate', () => {
+    const account = accountFor({ usdcEquity: 0, usdtCash: 0, usdtEquity: -20000, margin: 0 });
+    const [, usdt] = bucketsFrom(account, BOTH_RATES, {});
+    expect(usdt).toMatchObject({ borrow: 20000 });
+    expect(usdt.interestPerDayUsd).toBeCloseTo(20000 * 0.00002 * 24, 9);
+  });
+});
+
+describe('bucketsFrom held margin', () => {
+  it('reads imHeldUsd and mmHeldUsd from the asset borrowing margins', () => {
+    const account: AccountLike = {
+      availableMargin: '100',
+      assets: [
+        asset('USDC', 'HYPERLIQUID', {
+          equity: -300,
+          liability: 300,
+          borrowingInitialMargin: 60,
+          borrowingMaintenanceMargin: 30,
+        }),
+        asset('USDT', 'CROSSEX', { balance: 1200, equity: 1200 }),
+      ],
+    };
+    const [usdc, usdt] = bucketsFrom(account, USDC_RATE, {});
+    expect(usdc).toMatchObject({ borrow: 300, imHeldUsd: 60, mmHeldUsd: 30 });
+    expect(usdt).toMatchObject({ imHeldUsd: 0, mmHeldUsd: 0 });
+  });
+
+  it('reads held margin as 0 when the asset margin is not a number', () => {
+    const account: AccountLike = {
+      availableMargin: '100',
+      assets: [{ ...asset('USDC', 'HYPERLIQUID'), borrowingInitialMargin: '', borrowingMaintenanceMargin: 'n/a' }],
+    };
+    const [usdc] = bucketsFrom(account, USDC_RATE, {});
+    expect(usdc).toMatchObject({ imHeldUsd: 0, mmHeldUsd: 0 });
+  });
+});
+
+describe('planFor amount', () => {
+  it('equals the deficit when the deficit is the smallest', () => {
+    const p = plan({ usdcEquity: -500, usdtCash: 1000, margin: 2000 });
+    expect(p.amount).toBe(500);
+  });
+
+  it('equals the USDT cash when cash is the smallest', () => {
+    const p = plan({ usdcEquity: -500, usdtCash: 300.456, margin: 2000 });
+    expect(p.amount).toBe(300.45);
+  });
+
+  it('equals the available margin when margin is the smallest', () => {
+    const p = plan({ usdcEquity: -500, usdtCash: 1000, margin: 120 });
+    expect(p.amount).toBe(120);
+  });
+
+  it('floors the amount to 0.01', () => {
+    const p = plan({ usdcEquity: -12.999, usdtCash: 1000, margin: 2000 });
+    expect(p.amount).toBe(12.99);
+  });
+
+  it('is 0 when USDC on Hyperliquid has no deficit', () => {
+    const p = plan({ usdcEquity: 50, usdtCash: 1000, margin: 2000 });
+    expect(p.amount).toBe(0);
+  });
+
+  it('is 0 when the USDC bucket is absent', () => {
+    const account: AccountLike = { availableMargin: '2000', assets: [asset('USDT', 'CROSSEX', { balance: 1000 })] };
+    const p = planFor(bucketsFrom(account, USDC_RATE, {}), account, OPEN);
+    expect(p.amount).toBe(0);
+  });
+
+  it('never goes below 0 when the USDT cash is negative', () => {
+    const p = plan({ usdcEquity: -500, usdtCash: -3.456, margin: 2000 });
+    expect(p.amount).toBe(0);
+  });
+
+  it('carries savesPerDayUsd and marginFreedUsd scaled by what lands over the borrow', () => {
+    const p = plan({ usdcEquity: -20000, usdcBorrow: 20000, usdcIm: 4000, usdtCash: 5000, margin: 50000 });
+    expect(p.amount).toBe(5000);
+    expect(p.receives).toBeLessThan(5000);
+    expect(p.savesPerDayUsd).toBeCloseTo((20000 * 0.00001 * 24 * p.receives) / 20000, 9);
+    expect(p.marginFreedUsd).toBeCloseTo((p.receives * 4000) / 20000, 9);
+  });
+
+  it('saves the whole daily charge when the repayment brings the borrow back under the interest-free 10,000', () => {
+    const p = plan({ usdcEquity: -10001, usdtCash: 1000, margin: 1000 }, OPEN, { requested: 100 });
+    expect(p.borrowAfterUsd).toBeLessThan(10000);
+    expect(p.savesPerDayUsd).toBeCloseTo(10001 * 0.00001 * 24, 9);
+  });
+
+  it('saves nothing when no interest runs, and still frees margin for what lands', () => {
+    const p = plan({ usdcEquity: -500, usdcIm: 100, usdtCash: 1000, margin: 2000 });
+    expect(p.savesPerDayUsd).toBe(0);
+    expect(p.marginFreedUsd).toBeCloseTo((p.receives * 100) / 500, 9);
+  });
+
+  it('reads savesPerDayUsd and marginFreedUsd as 0 when the borrow is 0', () => {
+    const p = plan({ usdcEquity: -500, usdcBorrow: 0, usdcIm: 0, usdtCash: 1000, margin: 2000 });
+    expect(p.savesPerDayUsd).toBe(0);
+    expect(p.marginFreedUsd).toBe(0);
+  });
+});
+
+describe('planFor requested amount', () => {
+  const s: Scenario = { usdcEquity: -500, usdtCash: 1000, margin: 2000 };
+
+  it('reads as toUsdc for the full deficit when no request is given', () => {
+    const p = plan(s);
+    expect(p.direction).toBe('toUsdc');
+    expect(p.amount).toBe(500);
+  });
+
+  it('equals the requested amount when it is the smallest', () => {
+    const p = plan(s, OPEN, { requested: 120 });
+    expect(p.amount).toBe(120);
+  });
+
+  it('floors the requested amount to 0.01', () => {
+    expect(plan(s, OPEN, { requested: 120.005 }).amount).toBe(120);
+  });
+
+  it('caps a requested amount above the deficit at the deficit', () => {
+    expect(plan(s, OPEN, { requested: 5000 }).amount).toBe(500);
+  });
+
+  it('caps a requested amount at the cash and keeps the cash shortfall', () => {
+    const p = plan({ usdcEquity: -500, usdtCash: 300, margin: 2000 }, OPEN, { requested: 100 });
+    expect(p.amount).toBe(100);
+    expect(p.shortfall).toEqual({ reason: 'cash', remaining: 400 });
+  });
+
+  it('carries the loop price, receives, and borrowAfterUsd', () => {
+    const p = plan(s, OPEN, { requested: 120 });
+    expect(p.route).toBe('loop');
+    expect(p.price).toBe(1.0001);
+    expect(p.receives).toBe(119.93);
+    expect(p.borrowAfterUsd).toBeCloseTo(500 - 119.93, 9);
+  });
+
+  it('takes the spot taker fee out of receives on the loop', () => {
+    const p = plan(s, { ...OPEN, spotTakerRate: 0.001 }, { requested: 120 });
+    expect(p.route).toBe('loop');
+    expect(p.receives).toBe(119.81);
+  });
+
+  it('carries the convert price, receives, and borrowAfterUsd', () => {
+    const p = plan({ usdcEquity: -20, usdtCash: 1000, margin: 2000 });
+    expect(p.route).toBe('convert');
+    expect(p.price).toBeCloseTo(0.998, 9);
+    expect(p.receives).toBe(19.96);
+    expect(p.borrowAfterUsd).toBeCloseTo(0.04, 9);
+  });
+
+  it('reads price null, receives 0, and the full deficit as borrowAfterUsd when no route is available', () => {
+    const p = plan(s, { ...OPEN, usdcTransfer: null }, { requested: 0 });
+    expect(p.route).toBeNull();
+    expect(p.price).toBeNull();
+    expect(p.receives).toBe(0);
+    expect(p.borrowAfterUsd).toBe(500);
+  });
+});
+
+describe('planFor shortfall', () => {
+  it('is null when the deficit is the smallest', () => {
+    const p = plan({ usdcEquity: -500, usdtCash: 1000, margin: 2000 });
+    expect(p.shortfall).toBeNull();
+  });
+
+  it('is null when the deficit is 0', () => {
+    const p = plan({ usdcEquity: 50, usdtCash: 0, margin: 0 });
+    expect(p.shortfall).toBeNull();
+  });
+
+  it('names cash with the remaining deficit when cash is the smallest', () => {
+    const p = plan({ usdcEquity: -500, usdtCash: 300, margin: 2000 });
+    expect(p.shortfall).toEqual({ reason: 'cash', remaining: 200 });
+  });
+
+  it('names margin with the remaining deficit when margin is the smallest', () => {
+    const p = plan({ usdcEquity: -500, usdtCash: 1000, margin: 120 });
+    expect(p.shortfall).toEqual({ reason: 'margin', remaining: 380 });
+  });
+
+  it('names cash when cash and margin tie as the smallest', () => {
+    const p = plan({ usdcEquity: -500, usdtCash: 300, margin: 300 });
+    expect(p.shortfall).toEqual({ reason: 'cash', remaining: 200 });
+  });
+
+  it('floors remaining to 0.01', () => {
+    const p = plan({ usdcEquity: -500.129, usdtCash: 300, margin: 2000 });
+    expect(p.amount).toBe(300);
+    expect(p.shortfall).toEqual({ reason: 'cash', remaining: 200.12 });
+  });
+});
+
+describe('planFor route', () => {
+  it('quotes loop at 150 s and convert at 0 s with the formula costs', () => {
+    const p = plan({ usdcEquity: -500, usdtCash: 1000, margin: 2000 });
+    expect(p.routes.loop.waitSeconds).toBe(TO_USDC_WAIT_SECONDS);
+    expect(p.routes.loop.waitSeconds).toBe(150);
+    expect(p.routes.convert.waitSeconds).toBe(0);
+    expect(p.routes.loop.costUsd).toBeCloseTo(500 * 0.0001 + 0.05, 9);
+    expect(p.routes.convert.costUsd).toBeCloseTo(500 * 0.002, 9);
+  });
+
+  it('adds the spot taker fee to the loop cost', () => {
+    const p = plan({ usdcEquity: -500, usdtCash: 1000, margin: 2000 }, { ...OPEN, spotTakerRate: 0.001 });
+    expect(p.routes.loop.costUsd).toBeCloseTo(500 * 0.0001 + 500 * 0.001 + 0.05, 9);
+  });
+
+  it('picks loop when both are available and loop is cheaper', () => {
+    const p = plan({ usdcEquity: -500, usdtCash: 1000, margin: 2000 });
+    expect(p.routes.loop.available).toBe(true);
+    expect(p.routes.convert.available).toBe(true);
+    expect(p.route).toBe('loop');
+  });
+
+  it('picks convert when both are available and convert is cheaper', () => {
+    const p = plan({ usdcEquity: -20, usdtCash: 1000, margin: 2000 });
+    expect(p.routes.loop.available).toBe(true);
+    expect(p.routes.convert.available).toBe(true);
+    expect(p.routes.convert.costUsd).toBeLessThan(p.routes.loop.costUsd);
+    expect(p.route).toBe('convert');
+  });
+
+  it('picks convert when the costs are equal', () => {
+    const p = plan({ usdcEquity: -25, usdtCash: 1000, margin: 2000 }, { ...OPEN, ask: 1 });
+    expect(p.routes.loop.costUsd).toBe(p.routes.convert.costUsd);
+    expect(p.route).toBe('convert');
+  });
+
+  it('picks the one available route', () => {
+    const p = plan(
+      { usdcEquity: -500, usdtCash: 1000, margin: 2000 },
+      { ...OPEN, usdcTransfer: { isDisabled: 1, minTransAmount: 11 } },
+    );
+    expect(p.routes.loop.available).toBe(false);
+    expect(p.routes.convert.available).toBe(true);
+    expect(p.route).toBe('convert');
+  });
+
+  it('is null when amount is 0 and both routes say nothing to move', () => {
+    const p = plan({ usdcEquity: 50, usdtCash: 1000, margin: 2000 });
+    expect(p.route).toBeNull();
+    expect(p.routes.loop).toMatchObject({ available: false, reason: 'nothing to move' });
+    expect(p.routes.convert).toMatchObject({ available: false, reason: 'nothing to move' });
+  });
+
+  it('reads reason null on an available route', () => {
+    const p = plan({ usdcEquity: -500, usdtCash: 1000, margin: 2000 });
+    expect(p.routes.loop.reason).toBeNull();
+    expect(p.routes.convert.reason).toBeNull();
+  });
+});
+
+describe('planFor loop unavailable', () => {
+  const s: Scenario = { usdcEquity: -500, usdtCash: 1000, margin: 2000 };
+
+  it('when the USDC transfer isDisabled is 1', () => {
+    const p = plan(s, { ...OPEN, usdcTransfer: { isDisabled: 1, minTransAmount: 11 } });
+    expect(p.routes.loop.available).toBe(false);
+    expect(p.routes.loop.reason).toBe('Gate has paused USDC transfers on CrossEx. Try again later.');
+  });
+
+  it('when the USDC transfer row is missing', () => {
+    const p = plan(s, { ...OPEN, usdcTransfer: null });
+    expect(p.routes.loop.available).toBe(false);
+    expect(p.routes.loop.reason).toBe('Gate has paused USDC transfers on CrossEx. Try again later.');
+  });
+
+  it('when the spot rule is not live', () => {
+    const p = plan(s, { ...OPEN, spotRule: { state: 'suspended' } });
+    expect(p.routes.loop.available).toBe(false);
+    expect(p.routes.loop.reason).toBe('The USDC/USDT spot market on Gate is not trading right now.');
+    expect(p.routes.loop.reason).toBe('The USDC/USDT spot market on Gate is not trading right now.');
+  });
+
+  it('when the spot rule is missing', () => {
+    const p = plan(s, { ...OPEN, spotRule: null });
+    expect(p.routes.loop.available).toBe(false);
+    expect(p.routes.loop.reason).toBe('The USDC/USDT spot market on Gate is not trading right now.');
+  });
+
+  it('when there is no spot ask', () => {
+    expect(plan(s, { ...OPEN, ask: null }).routes.loop.reason).toBe('No price for USDC/USDT on Gate spot right now.');
+    expect(plan(s, { ...OPEN, ask: 0 }).routes.loop.reason).toBe('No price for USDC/USDT on Gate spot right now.');
+    expect(plan(s, { ...OPEN, ask: 0 }).routes.loop.available).toBe(false);
+  });
+
+  it('when the bought USDC is below the transfer minimum', () => {
+    const p = plan({ usdcEquity: -500, usdtCash: 11, margin: 2000 });
+    expect(p.amount).toBe(11);
+    expect(p.routes.loop.available).toBe(false);
+    expect(p.routes.loop.reason).toBe('Too small for the spot loop. Gate needs at least 11 USDC per transfer.');
+  });
+
+  it('is available when 12 USDT buys 11.99 USDC', () => {
+    const p = plan({ usdcEquity: -500, usdtCash: 12, margin: 2000 });
+    expect(p.amount).toBe(12);
+    expect(p.routes.loop.available).toBe(true);
+    expect(p.routes.loop.reason).toBeNull();
+  });
+
+  it('reports the first cause only', () => {
+    const nothing = plan({ usdcEquity: 50, usdtCash: 1000, margin: 2000 }, { ...OPEN, usdcTransfer: null, spotRule: null });
+    expect(nothing.routes.loop.reason).toBe('nothing to move');
+    const disabled = plan(s, { ...OPEN, usdcTransfer: { isDisabled: 1, minTransAmount: 11 }, spotRule: null, ask: null });
+    expect(disabled.routes.loop.reason).toBe('Gate has paused USDC transfers on CrossEx. Try again later.');
+    const notLive = plan(s, { ...OPEN, spotRule: { state: 'paused' }, ask: null });
+    expect(notLive.routes.loop.reason).toBe('The USDC/USDT spot market on Gate is not trading right now.');
+  });
+
+  it('leaves convert available when only loop is unavailable', () => {
+    const p = plan(s, { ...OPEN, ask: null });
+    expect(p.routes.convert.available).toBe(true);
+    expect(p.route).toBe('convert');
+  });
+});
+
+describe('planFor toUsdt', () => {
+  const s: Scenario = { usdcEquity: 50, usdcCash: 50, usdtCash: 1000, margin: 2000 };
+
+  it('reads as toUsdt with the bucket equity as the amount', () => {
+    const p = plan(s, OPEN, TO_USDT);
+    expect(p.direction).toBe('toUsdt');
+    expect(p.amount).toBe(50);
+  });
+
+  it('equals the requested amount when it is the smallest', () => {
+    expect(plan(s, OPEN, { ...TO_USDT, requested: 20 }).amount).toBe(20);
+  });
+
+  it('equals the available balance when it is the smallest', () => {
+    expect(plan({ ...s, usdcAvailable: 30 }, OPEN, TO_USDT).amount).toBe(30);
+  });
+
+  it('equals the equity when it is the smallest', () => {
+    expect(plan({ ...s, usdcAvailable: 80 }, OPEN, TO_USDT).amount).toBe(50);
+  });
+
+  it('floors the amount to 0.01', () => {
+    expect(plan({ ...s, usdcEquity: 50.129, usdcAvailable: 100 }, OPEN, TO_USDT).amount).toBe(50.12);
+  });
+
+  it('is 0 when the equity is 0 or below, with both routes unavailable', () => {
+    for (const usdcEquity of [0, -300]) {
+      const p = plan({ ...s, usdcEquity, usdcAvailable: 100 }, OPEN, TO_USDT);
+      expect(p.amount).toBe(0);
+      expect(p.route).toBeNull();
+      expect(p.routes.loop).toMatchObject({ available: false, reason: 'nothing to move' });
+      expect(p.routes.convert).toMatchObject({ available: false, reason: 'nothing to move' });
+    }
+  });
+
+  it('quotes the loop as amount x (1 - bid) + amount x taker + the Hyperliquid withdraw fee, with the toUsdt wait', () => {
+    const p = plan(s, OPEN, TO_USDT);
+    expect(p.routes.loop.costUsd).toBeCloseTo(50 * 0.0001 + HYPERLIQUID_WITHDRAW_FEE_USD, 9);
+    expect(p.routes.loop.waitSeconds).toBe(TO_USDT_WAIT_SECONDS);
+    expect(p.routes.loop.waitSeconds).toBe(400);
+    const withFee = plan(s, { ...OPEN, spotTakerRate: 0.001 }, TO_USDT);
+    expect(withFee.routes.loop.costUsd).toBeCloseTo(50 * 0.0001 + 50 * 0.001 + HYPERLIQUID_WITHDRAW_FEE_USD, 9);
+  });
+
+  it('charges no spread when the bid is above 1', () => {
+    const p = plan(s, { ...OPEN, bid: 1.0002 }, TO_USDT);
+    expect(p.routes.loop.costUsd).toBeCloseTo(HYPERLIQUID_WITHDRAW_FEE_USD, 9);
+  });
+
+  it('quotes convert as amount x 0.002, instant, and picks it for a small move', () => {
+    const p = plan(s, OPEN, TO_USDT);
+    expect(p.routes.convert).toMatchObject({ waitSeconds: 0, available: true, reason: null });
+    expect(p.routes.convert.costUsd).toBeCloseTo(0.1, 9);
+    expect(p.routes.loop.costUsd).toBeCloseTo(1.005, 9);
+    expect(p.route).toBe('convert');
+    expect(p.price).toBe(0.998);
+    expect(p.receives).toBe(49.9);
+    expect(p.shortfall).toBeNull();
+    expect(p.borrowAfterUsd).toBe(0);
+  });
+
+  it('picks the loop for a big move, where the $1 fee beats 20 bps, with the bid as the price and the sold USDT as receives', () => {
+    const p = plan({ ...s, usdcEquity: 5000, usdcCash: 5000 }, OPEN, TO_USDT);
+    expect(p.routes.loop.costUsd).toBeCloseTo(1.5, 9);
+    expect(p.routes.convert.costUsd).toBeCloseTo(10, 9);
+    expect(p.route).toBe('loop');
+    expect(p.price).toBe(0.9999);
+    expect(p.receives).toBe(4998.5);
+    expect(p.shortfall).toBeNull();
+    expect(p.borrowAfterUsd).toBe(0);
+    expect(p.savesPerDayUsd).toBe(0);
+    expect(p.marginFreedUsd).toBe(0);
+  });
+
+  it('matches the live runs: the loop for 12 USDC at bid 1 costs the $1 fee, and convert at 2 cents wins', () => {
+    const p = plan({ ...s, usdcEquity: 12, usdcCash: 12 }, { ...OPEN, bid: 1 }, TO_USDT);
+    expect(p.amount).toBe(12);
+    expect(p.routes.loop).toMatchObject({ available: true, reason: null });
+    expect(p.routes.loop.costUsd).toBeCloseTo(1, 9);
+    expect(p.routes.convert.costUsd).toBeCloseTo(0.024, 9);
+    expect(p.route).toBe('convert');
+    expect(p.receives).toBe(11.97);
+  });
+
+  it('takes the spot taker fee out of the loop receives', () => {
+    const p = plan({ ...s, usdcEquity: 5000, usdcCash: 5000 }, { ...OPEN, bid: 1, spotTakerRate: 0.001 }, TO_USDT);
+    expect(p.route).toBe('loop');
+    expect(p.receives).toBe(4994);
+  });
+
+  it('is unavailable when the USDC transfer is disabled or missing', () => {
+    const disabled = plan(s, { ...OPEN, usdcTransfer: { isDisabled: 1, minTransAmount: 11 } }, TO_USDT);
+    expect(disabled.routes.loop).toMatchObject({ available: false, reason: 'Gate has paused USDC transfers on CrossEx. Try again later.' });
+    const missing = plan(s, { ...OPEN, usdcTransfer: null }, TO_USDT);
+    expect(missing.routes.loop).toMatchObject({ available: false, reason: 'Gate has paused USDC transfers on CrossEx. Try again later.' });
+    expect(missing.route).toBe('convert');
+  });
+
+  it('is unavailable when the spot rule is not live or missing', () => {
+    expect(plan(s, { ...OPEN, spotRule: { state: 'suspended' } }, TO_USDT).routes.loop.reason).toBe(
+      'The USDC/USDT spot market on Gate is not trading right now.',
+    );
+    expect(plan(s, { ...OPEN, spotRule: null }, TO_USDT).routes.loop.reason).toBe('The USDC/USDT spot market on Gate is not trading right now.');
+  });
+
+  it('is unavailable when there is no spot bid, even with an ask', () => {
+    for (const bid of [null, 0]) {
+      const p = plan(s, { ...OPEN, bid }, TO_USDT);
+      expect(p.routes.loop).toMatchObject({ available: false, reason: 'No price for USDC/USDT on Gate spot right now.' });
+      expect(p.route).toBe('convert');
+      expect(p.price).toBe(0.998);
+      expect(p.receives).toBe(49.9);
+    }
+  });
+
+  it('is unavailable when the move lands below the transfer minimum after the fee', () => {
+    const p = plan({ ...s, usdcEquity: 11.5, usdcCash: 11.5 }, OPEN, TO_USDT);
+    expect(p.amount).toBe(11.5);
+    expect(p.routes.loop.available).toBe(false);
+    expect(p.routes.loop.reason).toBe('Too small to move. Gate takes a flat $1 fee on the way out and needs at least 11 USDC to arrive. Move at least 12 USDC.');
+    expect(p.route).toBe('convert');
+    const enough = plan({ ...s, usdcEquity: 12, usdcCash: 12 }, OPEN, TO_USDT);
+    expect(enough.routes.loop.available).toBe(true);
+  });
+
+  it('reports the first cause only', () => {
+    const nothing = plan({ ...s, usdcEquity: 0 }, { ...OPEN, usdcTransfer: null, bid: null }, TO_USDT);
+    expect(nothing.routes.loop.reason).toBe('nothing to move');
+    const disabled = plan(s, { ...OPEN, usdcTransfer: { isDisabled: 1, minTransAmount: 11 }, spotRule: null, bid: null }, TO_USDT);
+    expect(disabled.routes.loop.reason).toBe('Gate has paused USDC transfers on CrossEx. Try again later.');
+    const notLive = plan(s, { ...OPEN, spotRule: { state: 'paused' }, bid: null }, TO_USDT);
+    expect(notLive.routes.loop.reason).toBe('The USDC/USDT spot market on Gate is not trading right now.');
+  });
+});
+
+describe('planFor toUsdt with a USDT borrow', () => {
+  // USDC on Hyperliquid holds 500 of spare; the USDT wallet is 300 short.
+  const s: Scenario = { usdcEquity: 500, usdcCash: 500, usdtCash: 100, usdtEquity: -300, usdtIm: 60, margin: 2000 };
+
+  it('prefills the USDT deficit, not the whole spare, and the borrow after is what does not land', () => {
+    const p = plan(s, OPEN, TO_USDT, BOTH_RATES);
+    expect(p.amount).toBe(300);
+    expect(p.shortfall).toBeNull();
+    expect(p.receives).toBeGreaterThan(0);
+    expect(p.borrowAfterUsd).toBeCloseTo(300 - p.receives, 9);
+  });
+
+  it('lets a typed amount bring more than the deficit home, up to the spare', () => {
+    expect(plan(s, OPEN, { ...TO_USDT, requested: 450 }, BOTH_RATES).amount).toBe(450);
+    expect(plan(s, OPEN, { ...TO_USDT, requested: 600 }, BOTH_RATES).amount).toBe(500);
+  });
+
+  it('caps the prefilled amount at the spare and names spare as the shortfall', () => {
+    const p = plan({ ...s, usdcEquity: 100, usdcCash: 100 }, OPEN, TO_USDT, BOTH_RATES);
+    expect(p.amount).toBe(100);
+    expect(p.shortfall).toEqual({ reason: 'spare', remaining: 200 });
+  });
+
+  it('names cash when the USDC profit is not yet cash', () => {
+    const p = plan({ ...s, usdcCash: 100 }, OPEN, TO_USDT, BOTH_RATES);
+    expect(p.amount).toBe(100);
+    expect(p.shortfall).toEqual({ reason: 'cash', remaining: 200 });
+  });
+
+  it('frees initial margin and saves interest on the USDT borrow for what lands', () => {
+    const big: Scenario = { usdcEquity: 5000, usdcCash: 5000, usdtCash: 0, usdtEquity: -20000, usdtIm: 4000, margin: 0 };
+    const p = plan(big, OPEN, TO_USDT, BOTH_RATES);
+    expect(p.amount).toBe(5000);
+    expect(p.shortfall).toEqual({ reason: 'spare', remaining: 15000 });
+    const perDay = 20000 * 0.00002 * 24;
+    expect(p.marginFreedUsd).toBeCloseTo((p.receives * 4000) / 20000, 9);
+    expect(p.savesPerDayUsd).toBeCloseTo(perDay - (perDay * (20000 - p.receives)) / 20000, 9);
+    expect(p.borrowAfterUsd).toBeCloseTo(20000 - p.receives, 9);
+  });
+
+  it('saves the whole charge when the move brings the USDT borrow back under 10,000', () => {
+    const near: Scenario = { usdcEquity: 5000, usdcCash: 5000, usdtCash: 0, usdtEquity: -10500, usdtIm: 2100, margin: 0 };
+    const p = plan(near, OPEN, TO_USDT, BOTH_RATES);
+    expect(p.savesPerDayUsd).toBeCloseTo(10500 * 0.00002 * 24, 9);
+  });
+
+  it('saves and frees nothing without a USDT borrow', () => {
+    const p = plan({ ...s, usdtCash: 1000, usdtEquity: 1000, usdtIm: 0 }, OPEN, TO_USDT, BOTH_RATES);
+    expect(p.amount).toBe(500);
+    expect(p).toMatchObject({ borrowAfterUsd: 0, savesPerDayUsd: 0, marginFreedUsd: 0, shortfall: null });
+  });
+});

@@ -1,6 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useState } from 'react';
 import { useCredentials, useDisclaimer, useOpenOrders, usePositions } from './api/queries';
 import { AccountHealthStrip } from './components/AccountHealthStrip';
+import { BorrowChip } from './components/BorrowChip';
 import { BrandMark } from './components/BrandMark';
 import { Chip } from './components/Chip';
 import { DisclaimerGate } from './components/DisclaimerGate';
@@ -143,7 +144,14 @@ export default function App() {
               <BrandMark />
               {/* Unconfigured, /api/account 503s forever and the strip would
                   sit on its loading skeleton — hide it until keys exist. */}
-              {!setupNeeded && <AccountHealthStrip />}
+              {!setupNeeded && (
+                <AccountHealthStrip>
+                  {/* The borrow, on every tab: the Rebalance section lives on
+                      Balances, and a trader on Positions would never learn
+                      about it otherwise. */}
+                  {configured && <BorrowChip onOpen={() => selectTab('balances')} />}
+                </AccountHealthStrip>
+              )}
               {/* The controls ride in the TOP bar beside the account cluster,
                   not down in the tab row: they act on the account, which is
                   what the rest of this bar is about, and the tab row is then
