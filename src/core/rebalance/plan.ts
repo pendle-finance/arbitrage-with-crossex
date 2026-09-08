@@ -11,16 +11,16 @@ export const SPOT_SYMBOL = 'GATE_SPOT_USDC_USDT';
 /** Gate charges interest on a borrow only once the wallet's equity is below
  * this. Checked live for USDC on Hyperliquid; assumed the same for USDT. */
 const INTEREST_THRESHOLD = -10000;
-export const LOOP_WAIT_SECONDS = 150;
-export const PULL_WAIT_SECONDS = 400;
+export const TO_USDC_WAIT_SECONDS = 150;
+export const TO_USDT_WAIT_SECONDS = 400;
 const CONVERT_RATE = 0.002;
 const DEPOSIT_FEE_USD = 0.05;
-export const PULL_FEE_USD = 1;
+export const HYPERLIQUID_WITHDRAW_FEE_USD = 1;
 
-export type Direction = 'payDown' | 'pull';
+export type Direction = 'toUsdc' | 'toUsdt';
 
 /** Where the cash lands. A move repays that wallet's borrow first. */
-export const TARGET: Record<Direction, Wallet> = { payDown: USDC_WALLET, pull: USDT_WALLET };
+export const TARGET: Record<Direction, Wallet> = { toUsdc: USDC_WALLET, toUsdt: USDT_WALLET };
 
 /** `USDC/HYPERLIQUID`: the key the interest ledger and the buckets share. */
 export const walletKey = (coin: string, venue: string): string => `${coin}/${venue}`;
@@ -212,14 +212,14 @@ export function planFor(
   buckets: Bucket[],
   account: AccountLike,
   inputs: PlanInputs,
-  { direction = 'payDown', requested = Infinity }: PlanRequest = {},
+  { direction = 'toUsdc', requested = Infinity }: PlanRequest = {},
 ): Plan {
   const usdcBucket = buckets.find(isWallet(USDC_WALLET));
   const usdtBucket = buckets.find(isWallet(USDT_WALLET));
 
-  if (direction === 'pull') {
+  if (direction === 'toUsdt') {
     // USDC → USDT. The USDC that can leave is what the wallet owns after open
-    // losses, so a pull never opens a USDC borrow. With a USDT borrow the
+    // losses, so the move never opens a USDC borrow. With a USDT borrow the
     // prefilled amount repays it and no more; a typed amount may bring any
     // of the spare home, borrow or not.
     const usdcAsset = (account.assets ?? []).find(isWallet(USDC_WALLET));
@@ -234,17 +234,17 @@ export function planFor(
         ? null
         : { reason: available < equity ? 'cash' : 'spare', remaining: floorCents(deficit - amount) };
     const bid = positive(inputs.bid);
-    const lands = Math.max(0, floorCents(amount - PULL_FEE_USD));
+    const lands = Math.max(0, floorCents(amount - HYPERLIQUID_WITHDRAW_FEE_USD));
     const loop = loopQuote(
       amount,
       inputs,
       bid,
       bid === null ? 0 : Math.max(1 - bid, 0),
-      PULL_FEE_USD,
-      PULL_WAIT_SECONDS,
+      HYPERLIQUID_WITHDRAW_FEE_USD,
+      TO_USDT_WAIT_SECONDS,
       (min) =>
         lands < min
-          ? `Too small to pull. Gate takes a flat $${PULL_FEE_USD} fee on the way out and needs at least ${min} USDC to arrive. Pull at least ${min + PULL_FEE_USD} USDC.`
+          ? `Too small to move. Gate takes a flat $${HYPERLIQUID_WITHDRAW_FEE_USD} fee on the way out and needs at least ${min} USDC to arrive. Move at least ${min + HYPERLIQUID_WITHDRAW_FEE_USD} USDC.`
           : null,
     );
     const convert = convertQuote(amount);
@@ -289,7 +289,7 @@ export function planFor(
     ask,
     ask === null ? 0 : Math.max(ask - 1, 0),
     DEPOSIT_FEE_USD,
-    LOOP_WAIT_SECONDS,
+    TO_USDC_WAIT_SECONDS,
     (min) => (bought < min ? `Too small for the spot loop. Gate needs at least ${min} USDC per transfer.` : null),
   );
 

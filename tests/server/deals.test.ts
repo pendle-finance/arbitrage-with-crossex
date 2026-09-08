@@ -97,7 +97,7 @@ describe('POST /api/deals', () => {
     app = makeTestApp({ engine: { store, venue: new FakeVenue(), clock: new VirtualClock() }, rebalance: { jobs } });
     // The rebalance plugin halts a running job at boot, so boot first.
     await app.ready();
-    const running = newJob('payDown', 'loop', 300, Date.now());
+    const running = newJob('toUsdc', 'loop', 300, Date.now());
     jobs.write(running);
 
     let res = await app.inject({ method: 'POST', url: '/api/deals', headers: HOST, payload: makerPayload() });

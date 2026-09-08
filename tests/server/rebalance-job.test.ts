@@ -5,7 +5,7 @@ import type { FastifyInstance } from 'fastify';
 import nock from 'nock';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { makeClients } from '../../src/core/clients';
-import { PULL_FEE_USD, PULL_WAIT_SECONDS } from '../../src/core/rebalance/plan';
+import { HYPERLIQUID_WITHDRAW_FEE_USD, TO_USDT_WAIT_SECONDS } from '../../src/core/rebalance/plan';
 import { Store } from '../../src/engine/db';
 import { gateVenue } from '../../src/engine/venueGate';
 import { TtlCache } from '../../src/server/cache';
@@ -179,7 +179,7 @@ function mockLoopAfterBuy(): nock.Scope {
 }
 
 function haltedLoopJob(stepIndex: number, patch: Partial<Step> = {}): Job {
-  const job = newJob('payDown', 'loop', AMOUNT, t);
+  const job = newJob('toUsdc', 'loop', AMOUNT, t);
   job.status = 'halted';
   job.haltReason = 'server restarted';
   job.stepIndex = stepIndex;
@@ -199,9 +199,9 @@ function haltedLoopJob(stepIndex: number, patch: Partial<Step> = {}): Job {
   return job;
 }
 
-const PULL_AMOUNT = 1200;
+const TO_USDT_AMOUNT = 1200;
 
-const pullAccount = () => account({ balance: '5000', available_balance: '5000', equity: '5000', liability: '0' });
+const toUsdtAccount = () => account({ balance: '5000', available_balance: '5000', equity: '5000', liability: '0' });
 
 const isTransfer = (b: Record<string, unknown>, from: string, to: string, amount: string): boolean =>
   b.coin === 'USDC' && b.from === from && b.to === to && b.amount === amount && typeof b.text === 'string';
@@ -288,7 +288,7 @@ describe('POST /api/rebalance', () => {
   });
 
   it('refuses: 409 for a running job, a working deal, no route, a changed plan, and one of two concurrent POSTs; 403 before the disclaimer', async () => {
-    const stored = newJob('payDown', 'loop', AMOUNT, t);
+    const stored = newJob('toUsdc', 'loop', AMOUNT, t);
     let h = boot({ job: stored });
     let res = await h.post();
     expect(res.statusCode).toBe(409);
@@ -390,7 +390,7 @@ describe('POST /api/rebalance', () => {
 
     const { job } = (await h.view()).data;
     expect(job).toMatchObject({
-      direction: 'payDown',
+      direction: 'toUsdc',
       status: 'done',
       route: 'loop',
       amount: AMOUNT,
@@ -504,7 +504,7 @@ describe('POST /api/rebalance', () => {
 
   it('halts on boot: a running job in rebalance.json is halted with server restarted before the first GET', async () => {
     mockView();
-    const job = newJob('payDown', 'loop', AMOUNT, t);
+    const job = newJob('toUsdc', 'loop', AMOUNT, t);
     Object.assign(job.steps[0], { text: tagFor(job.id, 0), venueId: 'o1', status: 'running', startedAt: t });
     const h = boot({ job });
 
@@ -515,10 +515,10 @@ describe('POST /api/rebalance', () => {
     expect(h.file()).toMatchObject({ status: 'halted', haltReason: 'server restarted' });
   });
 
-  it('pull: 202 with direction pull, two transfers then a market sell sized by what landed, qty from executedAmount, funds at CROSSEX', async () => {
+  it('toUsdt: 202 with direction toUsdt, two transfers then a market sell sized by what landed, qty from executedAmount, funds at CROSSEX', async () => {
     const cache = new TtlCache();
-    mockView({ account: pullAccount() });
-    const pulls = gate()
+    mockView({ account: toUsdtAccount() });
+    const transfers = gate()
       .post(`${API}/crossex/transfers`, (b) => isTransfer(b, 'CROSSEX_HYPERLIQUID', 'SPOT', '1200.00000'))
       .query(true)
       .reply(200, { tx_id: 'p1', text: 't' });
@@ -542,10 +542,10 @@ describe('POST /api/rebalance', () => {
     mockGateGet('/orders/s1', { body: { ...orderBody('FILLED', '1199', 's1'), executed_amount: '1197.8011' } });
     let h = boot({ cache });
 
-    const before = (await h.view(`?direction=pull&amount=${PULL_AMOUNT}`)).data;
+    const before = (await h.view(`?direction=toUsdt&amount=${TO_USDT_AMOUNT}`)).data;
     expect(before.plan).toMatchObject({
-      direction: 'pull',
-      amount: PULL_AMOUNT,
+      direction: 'toUsdt',
+      amount: TO_USDT_AMOUNT,
       route: 'loop',
       price: 1,
       receives: 1197.8,
@@ -554,33 +554,33 @@ describe('POST /api/rebalance', () => {
       savesPerDayUsd: 0,
       marginFreedUsd: 0,
     });
-    expect(before.plan.routes.loop).toMatchObject({ waitSeconds: PULL_WAIT_SECONDS, available: true, reason: null });
-    expect(before.plan.routes.loop.costUsd).toBeCloseTo(PULL_AMOUNT * 0.001 + PULL_FEE_USD, 9);
+    expect(before.plan.routes.loop).toMatchObject({ waitSeconds: TO_USDT_WAIT_SECONDS, available: true, reason: null });
+    expect(before.plan.routes.loop.costUsd).toBeCloseTo(TO_USDT_AMOUNT * 0.001 + HYPERLIQUID_WITHDRAW_FEE_USD, 9);
     expect(before.plan.routes.convert).toMatchObject({ available: true, reason: null, waitSeconds: 0 });
-    expect(before.plan.routes.convert.costUsd).toBeCloseTo(PULL_AMOUNT * 0.002, 9);
+    expect(before.plan.routes.convert.costUsd).toBeCloseTo(TO_USDT_AMOUNT * 0.002, 9);
     expect(before.job).toBeNull();
 
-    const res = await h.post('/api/rebalance', { direction: 'pull', amount: PULL_AMOUNT, route: 'loop' });
+    const res = await h.post('/api/rebalance', { direction: 'toUsdt', amount: TO_USDT_AMOUNT, route: 'loop' });
     expect(res.statusCode).toBe(202);
     expect(h.file()).toMatchObject({
       id: res.json().data.id,
-      direction: 'pull',
+      direction: 'toUsdt',
       route: 'loop',
-      amount: PULL_AMOUNT,
+      amount: TO_USDT_AMOUNT,
       status: 'running',
       fundsAt: 'HYPERLIQUID',
     });
-    expect(h.file().steps.map((s) => s.name)).toEqual(['Pull from Hyperliquid', 'To Gate', 'Sell USDC']);
+    expect(h.file().steps.map((s) => s.name)).toEqual(['From Hyperliquid', 'To Gate', 'Sell USDC']);
     await waitFor(() => h.file().status === 'done', 'done');
 
-    expect(pulls.isDone()).toBe(true);
+    expect(transfers.isDone()).toBe(true);
     expect(toGate.isDone()).toBe(true);
     expect(sells.isDone()).toBe(true);
     const { value } = await cache.get('account', 60_000, async () => 'fresh');
     expect(value).toBe('fresh');
 
     const { job } = (await h.view()).data;
-    expect(job).toMatchObject({ direction: 'pull', status: 'done', stepIndex: 2, fundsAt: 'CROSSEX', haltReason: null });
+    expect(job).toMatchObject({ direction: 'toUsdt', status: 'done', stepIndex: 2, fundsAt: 'CROSSEX', haltReason: null });
     expect(job.steps.map((s: Step) => s.status)).toEqual(['done', 'done', 'done']);
     expect(job.steps.map((s: Step) => s.venueId)).toEqual(['p1', 'p2', 's1']);
     expect(job.steps.map((s: Step) => s.qty)).toEqual([1199, 1199, 1197.8011]);
@@ -593,48 +593,48 @@ describe('POST /api/rebalance', () => {
     await reset();
     mockView();
     h = boot();
-    const empty = (await h.view('?direction=pull')).data.plan;
-    expect(empty).toMatchObject({ direction: 'pull', amount: 0, route: null, receives: 0, price: null });
+    const empty = (await h.view('?direction=toUsdt')).data.plan;
+    expect(empty).toMatchObject({ direction: 'toUsdt', amount: 0, route: null, receives: 0, price: null });
     expect(empty.routes.loop).toMatchObject({ available: false, reason: 'nothing to move' });
     expect(empty.routes.convert).toMatchObject({ available: false, reason: 'nothing to move' });
-    const refused = await h.post('/api/rebalance', { direction: 'pull' });
+    const refused = await h.post('/api/rebalance', { direction: 'toUsdt' });
     expect(refused.statusCode).toBe(409);
     expect(refused.json().error.message).toBe('no route');
   });
 
-  it('pull convert: a small pull picks convert, quotes USDC to USDT, sends, funds at CROSSEX; a resumed quote is found on Gate by its id', async () => {
-    mockView({ account: pullAccount() });
-    const isPullQuote = (b: Record<string, unknown>): boolean =>
+  it('toUsdt convert: a small move picks convert, quotes USDC to USDT, sends, funds at CROSSEX; a resumed quote is found on Gate by its id', async () => {
+    mockView({ account: toUsdtAccount() });
+    const isToUsdtQuote = (b: Record<string, unknown>): boolean =>
       b.exchange_type === 'HYPERLIQUID' && b.from_coin === 'USDC' && b.to_coin === 'USDT' && b.from_amount === '12';
     const quotes = gate()
-      .post(`${API}/crossex/convert/quote`, isPullQuote)
+      .post(`${API}/crossex/convert/quote`, isToUsdtQuote)
       .query(true)
       .reply(200, { ...quoteBody('q3', '11.98'), from_coin: 'USDC', to_coin: 'USDT', from_amount: '12', price: '0.9981' });
     const orders = mockGatePost('/convert/orders', { body: { order_id: 'c3', text: 'q3' } });
     let h = boot();
 
-    const before = (await h.view('?direction=pull&amount=12')).data;
-    expect(before.plan).toMatchObject({ direction: 'pull', amount: 12, route: 'convert', price: 0.998, receives: 11.97 });
+    const before = (await h.view('?direction=toUsdt&amount=12')).data;
+    expect(before.plan).toMatchObject({ direction: 'toUsdt', amount: 12, route: 'convert', price: 0.998, receives: 11.97 });
     expect(before.plan.routes.loop).toMatchObject({ available: true, reason: null });
-    expect(before.plan.routes.loop.costUsd).toBeCloseTo(12 * 0.001 + PULL_FEE_USD, 9);
+    expect(before.plan.routes.loop.costUsd).toBeCloseTo(12 * 0.001 + HYPERLIQUID_WITHDRAW_FEE_USD, 9);
     expect(before.plan.routes.convert.costUsd).toBeCloseTo(0.024, 9);
     // Gate sends min_trans_amount as the string "11"; the reason must add, not concatenate.
-    const small = (await h.view('?direction=pull&amount=11.5')).data.plan;
+    const small = (await h.view('?direction=toUsdt&amount=11.5')).data.plan;
     expect(small.routes.loop.reason).toBe(
-      'Too small to pull. Gate takes a flat $1 fee on the way out and needs at least 11 USDC to arrive. Pull at least 12 USDC.',
+      'Too small to move. Gate takes a flat $1 fee on the way out and needs at least 11 USDC to arrive. Move at least 12 USDC.',
     );
     expect(small.route).toBe('convert');
 
-    const res = await h.post('/api/rebalance', { direction: 'pull', amount: 12, route: 'convert' });
+    const res = await h.post('/api/rebalance', { direction: 'toUsdt', amount: 12, route: 'convert' });
     expect(res.statusCode).toBe(202);
-    expect(h.file()).toMatchObject({ direction: 'pull', route: 'convert', amount: 12, fundsAt: 'HYPERLIQUID' });
+    expect(h.file()).toMatchObject({ direction: 'toUsdt', route: 'convert', amount: 12, fundsAt: 'HYPERLIQUID' });
     expect(h.file().steps.map((s) => s.name)).toEqual(['Convert']);
     await waitFor(() => h.file().status === 'done', 'done');
 
     expect(quotes.isDone()).toBe(true);
     expect(orders.isDone()).toBe(true);
     const { job } = (await h.view()).data;
-    expect(job).toMatchObject({ direction: 'pull', route: 'convert', status: 'done', fundsAt: 'CROSSEX', haltReason: null });
+    expect(job).toMatchObject({ direction: 'toUsdt', route: 'convert', status: 'done', fundsAt: 'CROSSEX', haltReason: null });
     expect(job.steps[0]).toMatchObject({
       name: 'Convert',
       text: tagFor(job.id, 0),
@@ -645,11 +645,11 @@ describe('POST /api/rebalance', () => {
     });
 
     await reset();
-    mockView({ account: pullAccount() });
+    mockView({ account: toUsdtAccount() });
     const byQuote = mockGateGet('/orders/q4', { body: convertOrderBody('c4', 'q4', '11.98') });
     mockGateGet('/orders/c4', { body: convertOrderBody('c4', 'q4', '11.98') });
     const unsent = mockGatePost('/convert/orders', { body: { order_id: 'c5', text: 'q5' } });
-    const resumed = newJob('pull', 'convert', 12, t);
+    const resumed = newJob('toUsdt', 'convert', 12, t);
     resumed.status = 'halted';
     resumed.haltReason = 'server restarted';
     Object.assign(resumed.steps[0], { text: tagFor(resumed.id, 0), quoteId: 'q4', qty: 11.98, status: 'running', startedAt: t });
@@ -664,24 +664,24 @@ describe('POST /api/rebalance', () => {
     expect(h.file().steps[0]).toMatchObject({ quoteId: 'q4', venueId: 'c4', qty: 11.98, status: 'done' });
   });
 
-  it('pull halts and resumes like pay-down: a FAILED pull halts with funds at HYPERLIQUID, abandon ends it, and a resumed Sell USDC with a tag only adopts the order and sends nothing', async () => {
-    mockView({ account: pullAccount() });
+  it('toUsdt halts and resumes like toUsdc: a FAILED transfer halts with funds at HYPERLIQUID, abandon ends it, and a resumed Sell USDC with a tag only adopts the order and sends nothing', async () => {
+    mockView({ account: toUsdtAccount() });
     mockGatePost('/transfers', { body: { tx_id: 'p1', text: 't' } });
     mockGateGet('/transfers', { body: [transferRow('p1', 'FAILED', { amount: '1200.00000', fail_reason: 'withdraw paused' })] });
     let h = boot();
-    let res = await h.post('/api/rebalance', { direction: 'pull', amount: PULL_AMOUNT });
+    let res = await h.post('/api/rebalance', { direction: 'toUsdt', amount: TO_USDT_AMOUNT });
     expect(res.statusCode).toBe(202);
     await waitFor(() => h.file().status === 'halted', 'the halt');
-    expect(h.file()).toMatchObject({ direction: 'pull', haltReason: 'withdraw paused', fundsAt: 'HYPERLIQUID', stepIndex: 0 });
-    expect(h.file().steps[0]).toMatchObject({ name: 'Pull from Hyperliquid', venueId: null, text: null, status: 'running' });
+    expect(h.file()).toMatchObject({ direction: 'toUsdt', haltReason: 'withdraw paused', fundsAt: 'HYPERLIQUID', stepIndex: 0 });
+    expect(h.file().steps[0]).toMatchObject({ name: 'From Hyperliquid', venueId: null, text: null, status: 'running' });
     const { id } = h.file();
     res = await h.post(`/api/rebalance/${id}/abandon`);
     expect(res.statusCode).toBe(200);
-    expect(res.json().data).toMatchObject({ id, direction: 'pull', status: 'abandoned' });
+    expect(res.json().data).toMatchObject({ id, direction: 'toUsdt', status: 'abandoned' });
 
     await reset();
-    mockView({ account: pullAccount() });
-    const job = newJob('pull', 'loop', PULL_AMOUNT, t);
+    mockView({ account: toUsdtAccount() });
+    const job = newJob('toUsdt', 'loop', TO_USDT_AMOUNT, t);
     job.status = 'halted';
     job.haltReason = 'server restarted';
     job.stepIndex = 2;
@@ -706,7 +706,7 @@ describe('POST /api/rebalance', () => {
 
     res = await h.post(`/api/rebalance/${job.id}/resume`);
     expect(res.statusCode).toBe(200);
-    expect(res.json().data).toMatchObject({ id: job.id, direction: 'pull', status: 'running', stepIndex: 2 });
+    expect(res.json().data).toMatchObject({ id: job.id, direction: 'toUsdt', status: 'running', stepIndex: 2 });
     await waitFor(() => h.file().status === 'done', 'done');
     expect(lookup.isDone()).toBe(true);
     expect(poll.isDone()).toBe(true);
@@ -723,29 +723,37 @@ describe('GET /api/rebalance', () => {
     const planAt = async (query: string) => (await h.view(query)).data.plan;
 
     const full = await planAt('');
-    expect(full).toMatchObject({ direction: 'payDown', amount: AMOUNT, route: 'loop', price: 1.0001, receives: 299.62 });
+    expect(full).toMatchObject({ direction: 'toUsdc', amount: AMOUNT, route: 'loop', price: 1.0001, receives: 299.62 });
     expect(full.borrowAfterUsd).toBeCloseTo(0.38, 9);
 
     const capped = await planAt('?amount=100.005');
-    expect(capped).toMatchObject({ direction: 'payDown', amount: 100, route: 'loop', price: 1.0001, receives: 99.84 });
+    expect(capped).toMatchObject({ direction: 'toUsdc', amount: 100, route: 'loop', price: 1.0001, receives: 99.84 });
     expect(capped.borrowAfterUsd).toBeCloseTo(200.16, 9);
 
     expect((await planAt('?amount=5000')).amount).toBe(AMOUNT);
     expect((await planAt('?amount=abc')).amount).toBe(AMOUNT);
     expect((await planAt('?amount=0')).amount).toBe(AMOUNT);
-    expect((await planAt('?direction=payDown&amount=50')).amount).toBe(50);
+    expect((await planAt('?direction=toUsdc&amount=50')).amount).toBe(50);
   });
 
-  it('old job file: a rebalance.json without direction reads as payDown and is written back with it', async () => {
+  it('old job file: a rebalance.json without direction reads as toUsdc and is written back with it', async () => {
     mockView();
-    const { direction: _direction, ...legacy } = newJob('payDown', 'loop', AMOUNT, t);
+    const { direction: _direction, ...legacy } = newJob('toUsdc', 'loop', AMOUNT, t);
     const h = boot({ job: legacy as Job });
 
     const { data } = await h.view();
 
-    expect(data.job).toMatchObject({ id: legacy.id, userId: null, direction: 'payDown', status: 'halted', haltReason: 'server restarted' });
+    expect(data.job).toMatchObject({ id: legacy.id, userId: null, direction: 'toUsdc', status: 'halted', haltReason: 'server restarted' });
     expect(data.job.steps.map((s: Step) => s.name)).toEqual(['Buy USDC', 'To spot', 'To Hyperliquid']);
-    expect(h.file().direction).toBe('payDown');
+    expect(h.file().direction).toBe('toUsdc');
+  });
+
+  it('accepts the direction names from before 1.5.1 on the API: pull reads as toUsdt, payDown as toUsdc', async () => {
+    mockView();
+    const h = boot();
+
+    expect((await h.view('?direction=pull')).data.plan.direction).toBe('toUsdt');
+    expect((await h.view('?direction=payDown')).data.plan.direction).toBe('toUsdc');
   });
 });
 
@@ -890,7 +898,7 @@ describe('POST /api/rebalance/:id/resume and /abandon', () => {
     const convertOrders = mockGatePost('/convert/orders', { body: { order_id: 'c9', text: 'q9' } });
     const known = mockGateGet('/orders/q1', { body: convertOrderBody('c1', 'q1', '299.4') });
     mockGateGet('/orders/c1', { body: convertOrderBody('c1', 'q1', '299.4') });
-    job = newJob('payDown', 'convert', AMOUNT, t);
+    job = newJob('toUsdc', 'convert', AMOUNT, t);
     job.status = 'halted';
     job.haltReason = 'server restarted';
     Object.assign(job.steps[0], { text: tagFor(job.id, 0), quoteId: 'q1', qty: 299.4, status: 'running', startedAt: t });

@@ -124,9 +124,9 @@ The Balances tab shows a **Rebalance** section whenever either wallet has a borr
 The section opens on the direction that repays the borrow. Keep the prefilled amount or type one, and hold the button:
 
 - **USDT → Hyperliquid USDC** pays a USDC borrow back. The amount is capped at the borrow, at your free USDT, and at your available margin. When less than the borrow can move, an amber line says how much stays borrowed and why.
-- **Hyperliquid USDC → USDT** pays a USDT borrow back, or brings spare USDC home when there is none. The amount is capped at the USDC you own there after open losses, so a pull never starts a new borrow. With a USDT borrow the prefilled amount is the borrow, and you can type more, up to the spare.
+- **Hyperliquid USDC → USDT** pays a USDT borrow back, or brings spare USDC home when there is none. The amount is capped at the USDC you own there after open losses, so this move never starts a new borrow. With a USDT borrow the prefilled amount is the borrow, and you can type more, up to the spare.
 
-Two routes exist and the terminal takes the cheaper one: a direct convert on Hyperliquid (instant, about 20 bps), or a spot loop through Gate (a spot trade plus two transfers; about 2.5 minutes for a pay-down, about 6.5 minutes plus a flat $1 fee for a pull). Under 1 USDC the hold is hidden.
+Two routes exist and the terminal takes the cheaper one: a direct convert on Hyperliquid (instant, about 20 bps), or a spot loop through Gate (a spot trade plus two transfers; about 2.5 minutes toward USDC, about 6.5 minutes plus a flat $1 fee toward USDT). Under 1 USDC the hold is hidden.
 
 A running job shows a progress bar, one segment per step with its seconds. A halted job shows the reason, the line `Funds are in <place>`, and a **Resume** and an **Abandon** button. After **Abandon**, move any USDC left in the Gate spot wallet by hand in Gate.
 

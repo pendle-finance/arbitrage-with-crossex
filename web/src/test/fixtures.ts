@@ -719,7 +719,7 @@ export function makeRebalanceView(over: Partial<RebalanceView> = {}): RebalanceV
   return {
     buckets: [],
     plan: {
-      direction: 'payDown',
+      direction: 'toUsdc',
       amount: 0,
       receives: 0,
       price: null,

@@ -38,7 +38,7 @@ const STEPS: Record<StepName, StepSpec> = {
   'To spot': { kind: 'transfer', from: 'CROSSEX_GATE', to: 'SPOT', dest: 'SPOT' },
   'To Hyperliquid': { kind: 'transfer', from: 'SPOT', to: HYPERLIQUID_ACCOUNT, dest: 'HYPERLIQUID' },
   Convert: { kind: 'convert', dest: 'HYPERLIQUID' },
-  'Pull from Hyperliquid': { kind: 'transfer', from: HYPERLIQUID_ACCOUNT, to: 'SPOT', dest: 'SPOT' },
+  'From Hyperliquid': { kind: 'transfer', from: HYPERLIQUID_ACCOUNT, to: 'SPOT', dest: 'SPOT' },
   'To Gate': { kind: 'transfer', from: 'SPOT', to: 'CROSSEX_GATE', dest: 'GATE' },
   'Sell USDC': { kind: 'order', side: CrossexOrderRequest.Side.SELL, dest: 'CROSSEX' },
 };
@@ -85,11 +85,11 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
 
   const previousQty = (): number => (job.stepIndex === 0 ? job.amount : (job.steps[job.stepIndex - 1].qty ?? 0));
 
-  /** Convert runs on Hyperliquid in both directions. Pay-down turns USDT into
-   * USDC there; pull turns USDC into USDT, which lands in the pooled CROSSEX
-   * bucket. */
+  /** Convert runs on Hyperliquid in both directions. Toward USDC it turns USDT
+   * into USDC there; toward USDT it turns USDC into USDT, which lands in the
+   * pooled CROSSEX bucket. */
   const convertSpec = () =>
-    job.direction === 'pull'
+    job.direction === 'toUsdt'
       ? { fromCoin: 'USDC', toCoin: 'USDT', dest: 'CROSSEX' as FundsAt }
       : { fromCoin: 'USDT', toCoin: 'USDC', dest: 'HYPERLIQUID' as FundsAt };
 

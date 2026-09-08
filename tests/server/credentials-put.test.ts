@@ -142,7 +142,7 @@ describe('PUT /api/credentials', () => {
       rebalance: { jobs },
     });
     await app.ready();
-    jobs.write(newJob('payDown', 'loop', 12, Date.now()));
+    jobs.write(newJob('toUsdc', 'loop', 12, Date.now()));
 
     const res = await put({ key: NEW_KEY, secret: NEW_SECRET });
 
@@ -161,7 +161,7 @@ describe('PUT /api/credentials', () => {
     });
     await app.ready();
     const halted = (userId: string | null) => {
-      const job = newJob('payDown', 'loop', 12, Date.now(), userId);
+      const job = newJob('toUsdc', 'loop', 12, Date.now(), userId);
       job.status = 'halted';
       jobs.write(job);
     };

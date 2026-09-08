@@ -137,7 +137,7 @@ export interface CrossexAccount {
 // GET /api/rebalance · POST /api/rebalance · POST /api/rebalance/:id/{resume,abandon}
 // ---------------------------------------------------------------------------
 
-export type RebalanceDirection = 'payDown' | 'pull';
+export type RebalanceDirection = 'toUsdc' | 'toUsdt';
 
 export interface RebalanceBucket {
   coin: string;

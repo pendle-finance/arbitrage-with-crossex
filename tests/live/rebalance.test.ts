@@ -28,7 +28,7 @@ describe.skipIf(process.env.REBALANCE !== '1')('live rebalance — 12 USDT down 
     const liability = Number(row(before, 'USDC', 'HYPERLIQUID')?.liability ?? 0);
     const cash = Number(row(before, 'USDT', 'CROSSEX')?.balance ?? 0);
     if (!(liability > AMOUNT)) {
-      throw new Error(`USDC/HYPERLIQUID liability ${liability} is not above ${AMOUNT}. Nothing to pay down.`);
+      throw new Error(`USDC/HYPERLIQUID liability ${liability} is not above ${AMOUNT}. Nothing to move toward USDC.`);
     }
     if (!(cash > AMOUNT)) {
       throw new Error(`USDT/CROSSEX balance ${cash} is not above ${AMOUNT}. Not enough cash to buy USDC.`);
@@ -39,7 +39,7 @@ describe.skipIf(process.env.REBALANCE !== '1')('live rebalance — 12 USDT down 
 
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'rebalance-live-'));
     const jobs = new JobFile(dataDir);
-    const job = newJob('payDown', 'loop', AMOUNT, Date.now());
+    const job = newJob('toUsdc', 'loop', AMOUNT, Date.now());
     jobs.write(job);
     console.log(`  ▸ job ${job.id} written to ${dataDir}`);
 
@@ -63,7 +63,7 @@ describe.skipIf(process.env.REBALANCE !== '1')('live rebalance — 12 USDT down 
     expect(Math.abs(balanceAfter - balanceBefore - landed)).toBeLessThanOrEqual(0.01);
   }, 400_000);
 
-  it('pull: moves USDC from Hyperliquid to spot, then to Gate, then sells it for USDT', async (ctx) => {
+  it('toUsdt: moves USDC from Hyperliquid to spot, then to Gate, then sells it for USDT', async (ctx) => {
     assertLiveTestsEnabled();
     assertAck();
     const clients = assertCredentials();
@@ -75,15 +75,15 @@ describe.skipIf(process.env.REBALANCE !== '1')('live rebalance — 12 USDT down 
     const usdc = row(before, 'USDC', 'HYPERLIQUID');
     const cap = Math.min(Number(usdc?.availableBalance ?? 0), Number(usdc?.equity ?? 0));
     if (!(cap >= AMOUNT)) {
-      ctx.skip(`USDC/HYPERLIQUID pull cap ${cap} is below ${AMOUNT} USDC. Nothing to pull.`);
+      ctx.skip(`USDC/HYPERLIQUID spare cap ${cap} is below ${AMOUNT} USDC. Nothing to move.`);
     }
     const cashBefore = Number(row(before, 'USDT', 'CROSSEX')?.balance ?? 0);
 
-    budget.beforeOrder(AMOUNT, 'rebalance pull');
+    budget.beforeOrder(AMOUNT, 'rebalance toUsdt');
 
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'rebalance-live-'));
     const jobs = new JobFile(dataDir);
-    const job = newJob('pull', 'loop', AMOUNT, Date.now());
+    const job = newJob('toUsdt', 'loop', AMOUNT, Date.now());
     jobs.write(job);
     console.log(`  ▸ job ${job.id} written to ${dataDir}`);
 
