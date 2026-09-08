@@ -39,3 +39,14 @@ export function bookIdOf(address: string | null, gateKeyMasked: string | null): 
 export function useBookId(address: string | null): string {
   return bookIdOf(address, useCredentials().data?.keyMasked ?? null);
 }
+
+/**
+ * A book id as a storage key.
+ *
+ * ⚠ Per tracked ADDRESS is not enough. An annotation names a leg the way its
+ * venue names it, and half of those legs (`GATE_FUTURE_ETH_USDT`) belong to
+ * the Gate account, not the wallet. Keyed by the wallet alone, swapping only
+ * the Gate account left every annotation naming a symbol the new account also
+ * holds silently claiming that account's position instead.
+ */
+export const bookKey = (bookId: string | null): string => (bookId ?? '').toLowerCase();

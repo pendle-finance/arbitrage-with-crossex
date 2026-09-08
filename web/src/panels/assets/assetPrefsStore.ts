@@ -5,13 +5,12 @@
  *   - exclusions: legs (or portions of legs) the user does not consider part
  *     of the funding farm (see assetModel.ts Exclusions).
  *
- * Stored under its own key (`crossex.assetView.v1`), per book — never touches
- * the classic view's annotations. Everything else the view shows is derived
- * from the venue feeds, which is the point of the model: lose this key and
- * only preferences are lost, never numbers.
+ * Stored under its own key (`crossex.assetView.v1`), per book. Everything else
+ * the view shows is derived from the venue feeds, which is the point of the
+ * model: lose this key and only preferences are lost, never numbers.
  */
 import { readJson, writeJson } from '../../lib/storage';
-import { bookKey } from '../partitionStore';
+import { bookKey } from '../bookId';
 import type { Exclusions } from './assetModel';
 
 const KEY = 'crossex.assetView.v1';
