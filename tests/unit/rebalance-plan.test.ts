@@ -5,9 +5,9 @@ import {
   USDC_WALLET,
   USDT_WALLET,
   SPOT_SYMBOL,
-  LOOP_WAIT_SECONDS,
-  PULL_FEE_USD,
-  PULL_WAIT_SECONDS,
+  TO_USDC_WAIT_SECONDS,
+  HYPERLIQUID_WITHDRAW_FEE_USD,
+  TO_USDT_WAIT_SECONDS,
   type AccountLike,
   type AssetLike,
   type PlanInputs,
@@ -56,7 +56,7 @@ const OPEN: PlanInputs = {
   bid: 0.9999,
 };
 
-const PULL: PlanRequest = { direction: 'pull' };
+const TO_USDT: PlanRequest = { direction: 'toUsdt' };
 
 interface Scenario {
   usdcEquity: number;
@@ -250,9 +250,9 @@ describe('planFor amount', () => {
 describe('planFor requested amount', () => {
   const s: Scenario = { usdcEquity: -500, usdtCash: 1000, margin: 2000 };
 
-  it('reads as payDown for the full deficit when no request is given', () => {
+  it('reads as toUsdc for the full deficit when no request is given', () => {
     const p = plan(s);
-    expect(p.direction).toBe('payDown');
+    expect(p.direction).toBe('toUsdc');
     expect(p.amount).toBe(500);
   });
 
@@ -342,7 +342,7 @@ describe('planFor shortfall', () => {
 describe('planFor route', () => {
   it('quotes loop at 150 s and convert at 0 s with the formula costs', () => {
     const p = plan({ usdcEquity: -500, usdtCash: 1000, margin: 2000 });
-    expect(p.routes.loop.waitSeconds).toBe(LOOP_WAIT_SECONDS);
+    expect(p.routes.loop.waitSeconds).toBe(TO_USDC_WAIT_SECONDS);
     expect(p.routes.loop.waitSeconds).toBe(150);
     expect(p.routes.convert.waitSeconds).toBe(0);
     expect(p.routes.loop.costUsd).toBeCloseTo(500 * 0.0001 + 0.05, 9);
@@ -463,34 +463,34 @@ describe('planFor loop unavailable', () => {
   });
 });
 
-describe('planFor pull', () => {
+describe('planFor toUsdt', () => {
   const s: Scenario = { usdcEquity: 50, usdcCash: 50, usdtCash: 1000, margin: 2000 };
 
-  it('reads as pull with the bucket equity as the amount', () => {
-    const p = plan(s, OPEN, PULL);
-    expect(p.direction).toBe('pull');
+  it('reads as toUsdt with the bucket equity as the amount', () => {
+    const p = plan(s, OPEN, TO_USDT);
+    expect(p.direction).toBe('toUsdt');
     expect(p.amount).toBe(50);
   });
 
   it('equals the requested amount when it is the smallest', () => {
-    expect(plan(s, OPEN, { ...PULL, requested: 20 }).amount).toBe(20);
+    expect(plan(s, OPEN, { ...TO_USDT, requested: 20 }).amount).toBe(20);
   });
 
   it('equals the available balance when it is the smallest', () => {
-    expect(plan({ ...s, usdcAvailable: 30 }, OPEN, PULL).amount).toBe(30);
+    expect(plan({ ...s, usdcAvailable: 30 }, OPEN, TO_USDT).amount).toBe(30);
   });
 
   it('equals the equity when it is the smallest', () => {
-    expect(plan({ ...s, usdcAvailable: 80 }, OPEN, PULL).amount).toBe(50);
+    expect(plan({ ...s, usdcAvailable: 80 }, OPEN, TO_USDT).amount).toBe(50);
   });
 
   it('floors the amount to 0.01', () => {
-    expect(plan({ ...s, usdcEquity: 50.129, usdcAvailable: 100 }, OPEN, PULL).amount).toBe(50.12);
+    expect(plan({ ...s, usdcEquity: 50.129, usdcAvailable: 100 }, OPEN, TO_USDT).amount).toBe(50.12);
   });
 
   it('is 0 when the equity is 0 or below, with both routes unavailable', () => {
     for (const usdcEquity of [0, -300]) {
-      const p = plan({ ...s, usdcEquity, usdcAvailable: 100 }, OPEN, PULL);
+      const p = plan({ ...s, usdcEquity, usdcAvailable: 100 }, OPEN, TO_USDT);
       expect(p.amount).toBe(0);
       expect(p.route).toBeNull();
       expect(p.routes.loop).toMatchObject({ available: false, reason: 'nothing to move' });
@@ -498,22 +498,22 @@ describe('planFor pull', () => {
     }
   });
 
-  it('quotes the loop as amount x (1 - bid) + amount x taker + the pull fee, with the pull wait', () => {
-    const p = plan(s, OPEN, PULL);
-    expect(p.routes.loop.costUsd).toBeCloseTo(50 * 0.0001 + PULL_FEE_USD, 9);
-    expect(p.routes.loop.waitSeconds).toBe(PULL_WAIT_SECONDS);
+  it('quotes the loop as amount x (1 - bid) + amount x taker + the Hyperliquid withdraw fee, with the toUsdt wait', () => {
+    const p = plan(s, OPEN, TO_USDT);
+    expect(p.routes.loop.costUsd).toBeCloseTo(50 * 0.0001 + HYPERLIQUID_WITHDRAW_FEE_USD, 9);
+    expect(p.routes.loop.waitSeconds).toBe(TO_USDT_WAIT_SECONDS);
     expect(p.routes.loop.waitSeconds).toBe(400);
-    const withFee = plan(s, { ...OPEN, spotTakerRate: 0.001 }, PULL);
-    expect(withFee.routes.loop.costUsd).toBeCloseTo(50 * 0.0001 + 50 * 0.001 + PULL_FEE_USD, 9);
+    const withFee = plan(s, { ...OPEN, spotTakerRate: 0.001 }, TO_USDT);
+    expect(withFee.routes.loop.costUsd).toBeCloseTo(50 * 0.0001 + 50 * 0.001 + HYPERLIQUID_WITHDRAW_FEE_USD, 9);
   });
 
   it('charges no spread when the bid is above 1', () => {
-    const p = plan(s, { ...OPEN, bid: 1.0002 }, PULL);
-    expect(p.routes.loop.costUsd).toBeCloseTo(PULL_FEE_USD, 9);
+    const p = plan(s, { ...OPEN, bid: 1.0002 }, TO_USDT);
+    expect(p.routes.loop.costUsd).toBeCloseTo(HYPERLIQUID_WITHDRAW_FEE_USD, 9);
   });
 
-  it('quotes convert as amount x 0.002, instant, and picks it for a small pull', () => {
-    const p = plan(s, OPEN, PULL);
+  it('quotes convert as amount x 0.002, instant, and picks it for a small move', () => {
+    const p = plan(s, OPEN, TO_USDT);
     expect(p.routes.convert).toMatchObject({ waitSeconds: 0, available: true, reason: null });
     expect(p.routes.convert.costUsd).toBeCloseTo(0.1, 9);
     expect(p.routes.loop.costUsd).toBeCloseTo(1.005, 9);
@@ -524,8 +524,8 @@ describe('planFor pull', () => {
     expect(p.borrowAfterUsd).toBe(0);
   });
 
-  it('picks the loop for a big pull, where the $1 fee beats 20 bps, with the bid as the price and the sold USDT as receives', () => {
-    const p = plan({ ...s, usdcEquity: 5000, usdcCash: 5000 }, OPEN, PULL);
+  it('picks the loop for a big move, where the $1 fee beats 20 bps, with the bid as the price and the sold USDT as receives', () => {
+    const p = plan({ ...s, usdcEquity: 5000, usdcCash: 5000 }, OPEN, TO_USDT);
     expect(p.routes.loop.costUsd).toBeCloseTo(1.5, 9);
     expect(p.routes.convert.costUsd).toBeCloseTo(10, 9);
     expect(p.route).toBe('loop');
@@ -538,7 +538,7 @@ describe('planFor pull', () => {
   });
 
   it('matches the live runs: the loop for 12 USDC at bid 1 costs the $1 fee, and convert at 2 cents wins', () => {
-    const p = plan({ ...s, usdcEquity: 12, usdcCash: 12 }, { ...OPEN, bid: 1 }, PULL);
+    const p = plan({ ...s, usdcEquity: 12, usdcCash: 12 }, { ...OPEN, bid: 1 }, TO_USDT);
     expect(p.amount).toBe(12);
     expect(p.routes.loop).toMatchObject({ available: true, reason: null });
     expect(p.routes.loop.costUsd).toBeCloseTo(1, 9);
@@ -548,29 +548,29 @@ describe('planFor pull', () => {
   });
 
   it('takes the spot taker fee out of the loop receives', () => {
-    const p = plan({ ...s, usdcEquity: 5000, usdcCash: 5000 }, { ...OPEN, bid: 1, spotTakerRate: 0.001 }, PULL);
+    const p = plan({ ...s, usdcEquity: 5000, usdcCash: 5000 }, { ...OPEN, bid: 1, spotTakerRate: 0.001 }, TO_USDT);
     expect(p.route).toBe('loop');
     expect(p.receives).toBe(4994);
   });
 
   it('is unavailable when the USDC transfer is disabled or missing', () => {
-    const disabled = plan(s, { ...OPEN, usdcTransfer: { isDisabled: 1, minTransAmount: 11 } }, PULL);
+    const disabled = plan(s, { ...OPEN, usdcTransfer: { isDisabled: 1, minTransAmount: 11 } }, TO_USDT);
     expect(disabled.routes.loop).toMatchObject({ available: false, reason: 'Gate has paused USDC transfers on CrossEx. Try again later.' });
-    const missing = plan(s, { ...OPEN, usdcTransfer: null }, PULL);
+    const missing = plan(s, { ...OPEN, usdcTransfer: null }, TO_USDT);
     expect(missing.routes.loop).toMatchObject({ available: false, reason: 'Gate has paused USDC transfers on CrossEx. Try again later.' });
     expect(missing.route).toBe('convert');
   });
 
   it('is unavailable when the spot rule is not live or missing', () => {
-    expect(plan(s, { ...OPEN, spotRule: { state: 'suspended' } }, PULL).routes.loop.reason).toBe(
+    expect(plan(s, { ...OPEN, spotRule: { state: 'suspended' } }, TO_USDT).routes.loop.reason).toBe(
       'The USDC/USDT spot market on Gate is not trading right now.',
     );
-    expect(plan(s, { ...OPEN, spotRule: null }, PULL).routes.loop.reason).toBe('The USDC/USDT spot market on Gate is not trading right now.');
+    expect(plan(s, { ...OPEN, spotRule: null }, TO_USDT).routes.loop.reason).toBe('The USDC/USDT spot market on Gate is not trading right now.');
   });
 
   it('is unavailable when there is no spot bid, even with an ask', () => {
     for (const bid of [null, 0]) {
-      const p = plan(s, { ...OPEN, bid }, PULL);
+      const p = plan(s, { ...OPEN, bid }, TO_USDT);
       expect(p.routes.loop).toMatchObject({ available: false, reason: 'No price for USDC/USDT on Gate spot right now.' });
       expect(p.route).toBe('convert');
       expect(p.price).toBe(0.998);
@@ -578,32 +578,32 @@ describe('planFor pull', () => {
     }
   });
 
-  it('is unavailable when the pull lands below the transfer minimum after the fee', () => {
-    const p = plan({ ...s, usdcEquity: 11.5, usdcCash: 11.5 }, OPEN, PULL);
+  it('is unavailable when the move lands below the transfer minimum after the fee', () => {
+    const p = plan({ ...s, usdcEquity: 11.5, usdcCash: 11.5 }, OPEN, TO_USDT);
     expect(p.amount).toBe(11.5);
     expect(p.routes.loop.available).toBe(false);
-    expect(p.routes.loop.reason).toBe('Too small to pull. Gate takes a flat $1 fee on the way out and needs at least 11 USDC to arrive. Pull at least 12 USDC.');
+    expect(p.routes.loop.reason).toBe('Too small to move. Gate takes a flat $1 fee on the way out and needs at least 11 USDC to arrive. Move at least 12 USDC.');
     expect(p.route).toBe('convert');
-    const enough = plan({ ...s, usdcEquity: 12, usdcCash: 12 }, OPEN, PULL);
+    const enough = plan({ ...s, usdcEquity: 12, usdcCash: 12 }, OPEN, TO_USDT);
     expect(enough.routes.loop.available).toBe(true);
   });
 
   it('reports the first cause only', () => {
-    const nothing = plan({ ...s, usdcEquity: 0 }, { ...OPEN, usdcTransfer: null, bid: null }, PULL);
+    const nothing = plan({ ...s, usdcEquity: 0 }, { ...OPEN, usdcTransfer: null, bid: null }, TO_USDT);
     expect(nothing.routes.loop.reason).toBe('nothing to move');
-    const disabled = plan(s, { ...OPEN, usdcTransfer: { isDisabled: 1, minTransAmount: 11 }, spotRule: null, bid: null }, PULL);
+    const disabled = plan(s, { ...OPEN, usdcTransfer: { isDisabled: 1, minTransAmount: 11 }, spotRule: null, bid: null }, TO_USDT);
     expect(disabled.routes.loop.reason).toBe('Gate has paused USDC transfers on CrossEx. Try again later.');
-    const notLive = plan(s, { ...OPEN, spotRule: { state: 'paused' }, bid: null }, PULL);
+    const notLive = plan(s, { ...OPEN, spotRule: { state: 'paused' }, bid: null }, TO_USDT);
     expect(notLive.routes.loop.reason).toBe('The USDC/USDT spot market on Gate is not trading right now.');
   });
 });
 
-describe('planFor pull with a USDT borrow', () => {
+describe('planFor toUsdt with a USDT borrow', () => {
   // USDC on Hyperliquid holds 500 of spare; the USDT wallet is 300 short.
   const s: Scenario = { usdcEquity: 500, usdcCash: 500, usdtCash: 100, usdtEquity: -300, usdtIm: 60, margin: 2000 };
 
   it('prefills the USDT deficit, not the whole spare, and the borrow after is what does not land', () => {
-    const p = plan(s, OPEN, PULL, BOTH_RATES);
+    const p = plan(s, OPEN, TO_USDT, BOTH_RATES);
     expect(p.amount).toBe(300);
     expect(p.shortfall).toBeNull();
     expect(p.receives).toBeGreaterThan(0);
@@ -611,25 +611,25 @@ describe('planFor pull with a USDT borrow', () => {
   });
 
   it('lets a typed amount bring more than the deficit home, up to the spare', () => {
-    expect(plan(s, OPEN, { ...PULL, requested: 450 }, BOTH_RATES).amount).toBe(450);
-    expect(plan(s, OPEN, { ...PULL, requested: 600 }, BOTH_RATES).amount).toBe(500);
+    expect(plan(s, OPEN, { ...TO_USDT, requested: 450 }, BOTH_RATES).amount).toBe(450);
+    expect(plan(s, OPEN, { ...TO_USDT, requested: 600 }, BOTH_RATES).amount).toBe(500);
   });
 
   it('caps the prefilled amount at the spare and names spare as the shortfall', () => {
-    const p = plan({ ...s, usdcEquity: 100, usdcCash: 100 }, OPEN, PULL, BOTH_RATES);
+    const p = plan({ ...s, usdcEquity: 100, usdcCash: 100 }, OPEN, TO_USDT, BOTH_RATES);
     expect(p.amount).toBe(100);
     expect(p.shortfall).toEqual({ reason: 'spare', remaining: 200 });
   });
 
   it('names cash when the USDC profit is not yet cash', () => {
-    const p = plan({ ...s, usdcCash: 100 }, OPEN, PULL, BOTH_RATES);
+    const p = plan({ ...s, usdcCash: 100 }, OPEN, TO_USDT, BOTH_RATES);
     expect(p.amount).toBe(100);
     expect(p.shortfall).toEqual({ reason: 'cash', remaining: 200 });
   });
 
   it('frees initial margin and saves interest on the USDT borrow for what lands', () => {
     const big: Scenario = { usdcEquity: 5000, usdcCash: 5000, usdtCash: 0, usdtEquity: -20000, usdtIm: 4000, margin: 0 };
-    const p = plan(big, OPEN, PULL, BOTH_RATES);
+    const p = plan(big, OPEN, TO_USDT, BOTH_RATES);
     expect(p.amount).toBe(5000);
     expect(p.shortfall).toEqual({ reason: 'spare', remaining: 15000 });
     const perDay = 20000 * 0.00002 * 24;
@@ -638,14 +638,14 @@ describe('planFor pull with a USDT borrow', () => {
     expect(p.borrowAfterUsd).toBeCloseTo(20000 - p.receives, 9);
   });
 
-  it('saves the whole charge when the pull brings the USDT borrow back under 10,000', () => {
+  it('saves the whole charge when the move brings the USDT borrow back under 10,000', () => {
     const near: Scenario = { usdcEquity: 5000, usdcCash: 5000, usdtCash: 0, usdtEquity: -10500, usdtIm: 2100, margin: 0 };
-    const p = plan(near, OPEN, PULL, BOTH_RATES);
+    const p = plan(near, OPEN, TO_USDT, BOTH_RATES);
     expect(p.savesPerDayUsd).toBeCloseTo(10500 * 0.00002 * 24, 9);
   });
 
   it('saves and frees nothing without a USDT borrow', () => {
-    const p = plan({ ...s, usdtCash: 1000, usdtEquity: 1000, usdtIm: 0 }, OPEN, PULL, BOTH_RATES);
+    const p = plan({ ...s, usdtCash: 1000, usdtEquity: 1000, usdtIm: 0 }, OPEN, TO_USDT, BOTH_RATES);
     expect(p.amount).toBe(500);
     expect(p).toMatchObject({ borrowAfterUsd: 0, savesPerDayUsd: 0, marginFreedUsd: 0, shortfall: null });
   });

@@ -38,11 +38,15 @@ export interface Job {
   updatedAt: number;
 }
 
-export const LOOP_STEPS = ['Buy USDC', 'To spot', 'To Hyperliquid'] as const;
+export const TO_USDC_STEPS = ['Buy USDC', 'To spot', 'To Hyperliquid'] as const;
 export const CONVERT_STEPS = ['Convert'] as const;
-export const PULL_STEPS = ['Pull from Hyperliquid', 'To Gate', 'Sell USDC'] as const;
-export type StepName = (typeof LOOP_STEPS)[number] | (typeof CONVERT_STEPS)[number] | (typeof PULL_STEPS)[number];
-export const STEP_NAMES: readonly string[] = [...LOOP_STEPS, ...CONVERT_STEPS, ...PULL_STEPS];
+export const TO_USDT_STEPS = ['From Hyperliquid', 'To Gate', 'Sell USDC'] as const;
+export type StepName = (typeof TO_USDC_STEPS)[number] | (typeof CONVERT_STEPS)[number] | (typeof TO_USDT_STEPS)[number];
+export const STEP_NAMES: readonly string[] = [...TO_USDC_STEPS, ...CONVERT_STEPS, ...TO_USDT_STEPS];
+
+/** Names before 1.5.1. A job file written by that build must still resume. */
+const LEGACY_DIRECTION: Record<string, Direction> = { payDown: 'toUsdc', pull: 'toUsdt' };
+const LEGACY_STEP: Record<string, StepName> = { 'Pull from Hyperliquid': 'From Hyperliquid' };
 
 const JOB_STATUSES: readonly string[] = ['running', 'halted', 'done', 'abandoned'];
 const FUNDS_AT: readonly string[] = ['CROSSEX', 'GATE', 'SPOT', 'HYPERLIQUID'];
@@ -54,7 +58,7 @@ export function newJob(
   now: number,
   userId: string | null = null,
 ): Job {
-  const names: readonly string[] = route === 'convert' ? CONVERT_STEPS : direction === 'pull' ? PULL_STEPS : LOOP_STEPS;
+  const names: readonly string[] = route === 'convert' ? CONVERT_STEPS : direction === 'toUsdt' ? TO_USDT_STEPS : TO_USDC_STEPS;
   return {
     id: now.toString(36),
     userId,
@@ -74,7 +78,7 @@ export function newJob(
       startedAt: null,
       doneAt: null,
     })),
-    fundsAt: direction === 'pull' ? 'HYPERLIQUID' : 'CROSSEX',
+    fundsAt: direction === 'toUsdt' ? 'HYPERLIQUID' : 'CROSSEX',
     haltReason: null,
     createdAt: now,
     updatedAt: now,
@@ -89,11 +93,15 @@ export function haltMessage(job: Job): string {
 function parseJob(value: unknown): Job | null {
   const job = value as Partial<Job> | null;
   if (typeof job !== 'object' || job === null) return null;
-  if (job.direction === undefined) job.direction = 'payDown';
+  if (job.direction === undefined) job.direction = 'toUsdc';
+  if (typeof job.direction === 'string' && job.direction in LEGACY_DIRECTION) job.direction = LEGACY_DIRECTION[job.direction];
   if (job.userId === undefined) job.userId = null;
-  if (job.direction !== 'payDown' && job.direction !== 'pull') return null;
+  if (job.direction !== 'toUsdc' && job.direction !== 'toUsdt') return null;
   if (!JOB_STATUSES.includes(String(job.status))) return null;
   if (!Array.isArray(job.steps) || job.steps.length === 0) return null;
+  for (const step of job.steps as Partial<Step>[]) {
+    if (typeof step?.name === 'string' && step.name in LEGACY_STEP) step.name = LEGACY_STEP[step.name];
+  }
   const index = job.stepIndex;
   if (!Number.isInteger(index) || (index as number) < 0 || (index as number) >= job.steps.length) return null;
   if (!job.steps.every((step) => STEP_NAMES.includes(String((step as Partial<Step> | null)?.name)))) return null;

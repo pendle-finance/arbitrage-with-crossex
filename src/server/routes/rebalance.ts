@@ -16,7 +16,9 @@ const conflict = (reply: FastifyReply, message: string): FastifyReply =>
 const orEmpty = <T>(read: Promise<{ value: T[]; stale: boolean }>): Promise<{ value: T[]; stale: boolean }> =>
   read.catch(() => ({ value: [], stale: true }));
 
-const directionOf = (value: unknown): Direction => (value === 'pull' ? 'pull' : 'payDown');
+/** `pull` and `payDown` are the names before 1.5.1; a tab still running that
+ * bundle for a moment after an update must not have its move flipped. */
+const directionOf = (value: unknown): Direction => (value === 'toUsdt' || value === 'pull' ? 'toUsdt' : 'toUsdc');
 
 const requestedOf = (value: unknown): number => {
   const n = typeof value === 'number' || typeof value === 'string' ? Number(value) : NaN;
@@ -168,7 +170,7 @@ export function rebalanceRoutes(deps: AppDeps) {
       const { plan, accountStale, userId } = await loadView(true, direction, requestedOf(body.amount));
       // The amount is sized from this read. A read served from the cache
       // because Gate rate-limited the fresh one may be seconds old, and a
-      // pull sized on old equity can open the borrow it promises not to.
+      // move to USDT sized on old equity can open the borrow it promises not to.
       if (accountStale) return conflict(reply, 'Gate is rate-limiting the account read. Try again in a few seconds.');
       if (typeof body.route === 'string' && body.route !== plan.route) {
         return conflict(reply, `plan changed: now ${plan.route ?? 'no route'}`);

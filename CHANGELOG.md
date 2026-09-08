@@ -20,7 +20,7 @@ Pay back what Gate lent you, USDC or USDT, from the Balances tab with one hold.
   or brings spare USDC home when there is none, capped so it never opens a borrow. The amount is
   prefilled with the borrow, and you can type another.
 - **The cheaper route is picked for you and shown.** An instant convert at 20 bps, or a spot
-  loop through Gate that costs $0.05 for a pay-down and a flat $1 for a pull. The quote is a
+  loop through Gate that costs $0.05 toward USDC and a flat $1 toward USDT. The quote is a
   row of facts: the route, the price, what lands, the cost, and the borrow after the move. Under
   1 USDC there is nothing to hold.
 - **You can watch it run.** A progress bar shows each step with its seconds. A job survives a

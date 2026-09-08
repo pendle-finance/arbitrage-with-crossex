@@ -15,9 +15,9 @@ import { env, server } from '../test/server';
 import { renderWithClient } from '../test/utils';
 import { RebalanceSection } from './RebalanceSection';
 
-const PAY_DOWN_TEXT = 'Pays the USDC borrow back. Each USDC frees 0.20 initial and 0.10 maintenance margin.';
+const PAY_USDC_TEXT = 'Pays the USDC borrow back. Each USDC frees 0.20 initial and 0.10 maintenance margin.';
 const PAY_USDT_TEXT = 'Pays the USDT borrow back. Each USDT frees 0.20 initial and 0.10 maintenance margin.';
-const PULL_TEXT = 'Brings spare USDC home. Capped at what you own there, so it never borrows.';
+const HOME_TEXT = 'Brings spare USDC home. Capped at what you own there, so it never borrows.';
 /** A labelled fact's value, or null when the label is not on screen. */
 const fact = (label: string) => screen.queryByText(label, { selector: 'dt' })?.nextElementSibling?.textContent ?? null;
 const expectFacts = (facts: Record<string, string>) => {
@@ -31,10 +31,10 @@ const LOOP_FACTS = {
   Frees: '$450.00 margin',
   Saves: '$0.29 / day',
 };
-const PULL_FACTS = { Route: 'Spot loop · about 6.7 min', Sends: '400.00 USDC → 399.52 USDT @ 0.9988', Cost: '$0.60' };
+const TO_USDT_FACTS = { Route: 'Spot loop · about 6.7 min', Sends: '400.00 USDC → 399.52 USDT @ 0.9988', Cost: '$0.60' };
 const CONVERT_NOTE = 'Sends on a fresh quote within 30 bps of this one.';
 const HOLD = 'Hold to move 900.00 USDT → USDC';
-const PULL_HOLD = 'Hold to pull 400.00 USDC → USDT';
+const TO_USDT_HOLD = 'Hold to move 400.00 USDC → USDT';
 
 const usdc = (over: Partial<RebalanceBucket> = {}): RebalanceBucket => ({
   coin: 'USDC',
@@ -63,7 +63,7 @@ const usdt: RebalanceBucket = {
   interestPerDayUsd: 0,
 };
 
-const pullBuckets = [
+const toUsdtBuckets = [
   usdc({ cash: 400, upnl: 100, equity: 500, borrow: 0, imHeldUsd: 0, mmHeldUsd: 0, interestPaidUsd: 0, interestPerDayUsd: 0 }),
   usdt,
 ];
@@ -77,7 +77,7 @@ const route = (over: Partial<RebalanceRoute> = {}): RebalanceRoute => ({
 });
 
 const plan = (over: Partial<RebalancePlan> = {}): RebalancePlan => ({
-  direction: 'payDown',
+  direction: 'toUsdc',
   amount: 900,
   receives: 899.55,
   price: 1.0005,
@@ -90,9 +90,9 @@ const plan = (over: Partial<RebalancePlan> = {}): RebalancePlan => ({
   ...over,
 });
 
-const pullPlan = (over: Partial<RebalancePlan> = {}): RebalancePlan =>
+const toUsdtPlan = (over: Partial<RebalancePlan> = {}): RebalancePlan =>
   plan({
-    direction: 'pull',
+    direction: 'toUsdt',
     amount: 400,
     receives: 399.52,
     price: 0.9988,
@@ -137,7 +137,7 @@ const step = (name: string, over: Partial<RebalanceStep> = {}): RebalanceStep =>
 
 const job = (over: Partial<RebalanceJob> = {}): RebalanceJob => ({
   id: 'rb-1',
-  direction: 'payDown',
+  direction: 'toUsdc',
   route: 'loop',
   amount: 900,
   status: 'running',
@@ -188,13 +188,13 @@ function serve(answer: Answer) {
   return urls;
 }
 
-const byDirection = (payDown: RebalanceView, pull: RebalanceView) => (url: URL) =>
-  url.searchParams.get('direction') === 'pull' ? pull : payDown;
+const byDirection = (toUsdc: RebalanceView, toUsdt: RebalanceView) => (url: URL) =>
+  url.searchParams.get('direction') === 'toUsdt' ? toUsdt : toUsdc;
 
-const borrowAccount = () => byDirection(view(), view({ plan: noRoutePlan({ direction: 'pull' }) }));
+const borrowAccount = () => byDirection(view(), view({ plan: noRoutePlan({ direction: 'toUsdt' }) }));
 
-const pullAccount = () =>
-  byDirection(view({ buckets: pullBuckets, plan: noRoutePlan() }), view({ buckets: pullBuckets, plan: pullPlan() }));
+const toUsdtAccount = () =>
+  byDirection(view({ buckets: toUsdtBuckets, plan: noRoutePlan() }), view({ buckets: toUsdtBuckets, plan: toUsdtPlan() }));
 
 function refuseStart() {
   server.use(
@@ -223,10 +223,10 @@ function recordStarts() {
 
 const section = () => screen.findByRole('region', { name: 'Rebalance' });
 const amountInput = (label: string) => screen.getByRole('textbox', { name: label });
-const toPull = () => userEvent.click(screen.getByRole('radio', { name: 'Hyperliquid USDC → USDT' }));
+const pickToUsdt = () => userEvent.click(screen.getByRole('radio', { name: 'Hyperliquid USDC → USDT' }));
 
 /** The report's box, scaled to this account: $20k margin, $250k a leg, short
- * on Hyperliquid, 0.5% maintenance a leg. Liquidates at +64%; a $900 pay-down
+ * on Hyperliquid, 0.5% maintenance a leg. Liquidates at +64%; a $900 move to USDC
  * moves that to +64% still (900 of cover on a $250k leg is 0.4%). */
 const liquidationAccount = () => ({
   ...account,
@@ -380,12 +380,12 @@ describe('RebalanceSection', () => {
     renderWithClient(<RebalanceSection holdMs={50} />);
 
     await section();
-    expect(screen.getByText(PAY_DOWN_TEXT)).toBeInTheDocument();
+    expect(screen.getByText(PAY_USDC_TEXT)).toBeInTheDocument();
 
-    await toPull();
+    await pickToUsdt();
 
-    expect(await screen.findByText(PULL_TEXT)).toBeInTheDocument();
-    expect(screen.queryByText(PAY_DOWN_TEXT)).toBeNull();
+    expect(await screen.findByText(HOME_TEXT)).toBeInTheDocument();
+    expect(screen.queryByText(PAY_USDC_TEXT)).toBeNull();
   });
 
   it('opens the what-and-why card from the info mark next to the title', async () => {
@@ -408,31 +408,31 @@ describe('RebalanceSection', () => {
     await waitFor(() => expect(screen.queryByRole('tooltip')).toBeNull());
   });
 
-  it('defaults the direction to pull when there is no borrow and USDC can be pulled', async () => {
-    const urls = serve(pullAccount());
+  it('defaults the direction to USDT when there is no borrow and there is spare USDC', async () => {
+    const urls = serve(toUsdtAccount());
     renderWithClient(<RebalanceSection holdMs={50} />);
 
     await section();
     expect(urls[0].searchParams.has('direction')).toBe(false);
     expect(await screen.findByRole('radio', { name: 'Hyperliquid USDC → USDT', checked: true })).toBeInTheDocument();
     expect(screen.getByRole('radio', { name: 'USDT → Hyperliquid USDC' })).not.toBeChecked();
-    await waitFor(() => expect(urls.at(-1)?.searchParams.get('direction')).toBe('pull'));
-    expect(await screen.findByRole('button', { name: PULL_HOLD })).toBeInTheDocument();
+    await waitFor(() => expect(urls.at(-1)?.searchParams.get('direction')).toBe('toUsdt'));
+    expect(await screen.findByRole('button', { name: TO_USDT_HOLD })).toBeInTheDocument();
   });
 
   it('re-reads the plan and resets the input when the direction toggles', async () => {
-    const urls = serve(pullAccount());
+    const urls = serve(toUsdtAccount());
     renderWithClient(<RebalanceSection holdMs={50} />);
 
-    await screen.findByRole('button', { name: PULL_HOLD });
+    await screen.findByRole('button', { name: TO_USDT_HOLD });
     expect(screen.getByRole('radiogroup', { name: 'Direction' })).toBeInTheDocument();
-    const pullInput = amountInput('Amount (USDC) · free 400.00');
-    expect(pullInput).toHaveValue('400.00');
-    expect(screen.getByText(PULL_TEXT)).toBeInTheDocument();
-    expectFacts(PULL_FACTS);
-    await userEvent.clear(pullInput);
-    await userEvent.type(pullInput, '77');
-    expect(pullInput).toHaveValue('77');
+    const usdcInput = amountInput('Amount (USDC) · free 400.00');
+    expect(usdcInput).toHaveValue('400.00');
+    expect(screen.getByText(HOME_TEXT)).toBeInTheDocument();
+    expectFacts(TO_USDT_FACTS);
+    await userEvent.clear(usdcInput);
+    await userEvent.type(usdcInput, '77');
+    expect(usdcInput).toHaveValue('77');
 
     await userEvent.click(screen.getByRole('radio', { name: 'USDT → Hyperliquid USDC' }));
 
@@ -440,18 +440,18 @@ describe('RebalanceSection', () => {
     expect(screen.getByRole('radio', { name: 'USDT → Hyperliquid USDC' })).toBeChecked();
     const input = await screen.findByRole('textbox', { name: 'Amount (USDT) · free 5,000.00' });
     await waitFor(() => expect(input).toHaveValue('0.00'));
-    expect(screen.getByText(PAY_DOWN_TEXT)).toBeInTheDocument();
+    expect(screen.getByText(PAY_USDC_TEXT)).toBeInTheDocument();
     expect(fact('Sends')).toBeNull();
     expect(screen.getByText('Nothing to pay back. There is no USDC borrow on Hyperliquid.')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^Hold to/ })).toBeNull();
 
-    await toPull();
+    await pickToUsdt();
 
-    await waitFor(() => expect(urls.at(-1)?.searchParams.get('direction')).toBe('pull'));
+    await waitFor(() => expect(urls.at(-1)?.searchParams.get('direction')).toBe('toUsdt'));
     expect(await screen.findByRole('textbox', { name: 'Amount (USDC) · free 400.00' })).toHaveValue('400.00');
-    expect(screen.getByText(PULL_TEXT)).toBeInTheDocument();
-    await waitFor(() => expectFacts(PULL_FACTS));
-    expect(screen.getByRole('button', { name: PULL_HOLD })).toBeInTheDocument();
+    expect(screen.getByText(HOME_TEXT)).toBeInTheDocument();
+    await waitFor(() => expectFacts(TO_USDT_FACTS));
+    expect(screen.getByRole('button', { name: TO_USDT_HOLD })).toBeInTheDocument();
   });
 
   it('prefills the amount and re-reads the plan with the typed amount after 300 ms', async () => {
@@ -521,7 +521,7 @@ describe('RebalanceSection', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: HOLD })).toBeEnabled());
   });
 
-  it('shows the pull amount label with the smaller of cash and equity', async () => {
+  it('shows the USDC amount label with the smaller of cash and equity', async () => {
     serve(view({ buckets: [usdc({ cash: 600, upnl: -150, equity: 450, borrow: 0 }), usdt], plan: noRoutePlan() }));
     renderWithClient(<RebalanceSection holdMs={50} />);
 
@@ -555,23 +555,23 @@ describe('RebalanceSection', () => {
     expect(screen.getByText(CONVERT_NOTE)).toBeInTheDocument();
   });
 
-  it('shows the quote line for a pull', async () => {
-    serve(pullAccount());
+  it('shows the quote line for a move to USDT', async () => {
+    serve(toUsdtAccount());
     renderWithClient(<RebalanceSection holdMs={50} />);
 
     await section();
-    await waitFor(() => expectFacts(PULL_FACTS));
+    await waitFor(() => expectFacts(TO_USDT_FACTS));
     expect(fact('Borrow after')).toBeNull();
   });
 
-  it('shows the quote line for a pull by convert and posts route convert', async () => {
-    const convertPull = pullPlan({
+  it('shows the quote line for a move to USDT by convert and posts route convert', async () => {
+    const convertToUsdt = toUsdtPlan({
       route: 'convert',
       price: 0.998,
       receives: 399.2,
       routes: { loop: route({ costUsd: 1.4, waitSeconds: 400 }), convert: route({ costUsd: 0.8, waitSeconds: 0 }) },
     });
-    serve(byDirection(view({ buckets: pullBuckets, plan: noRoutePlan() }), view({ buckets: pullBuckets, plan: convertPull })));
+    serve(byDirection(view({ buckets: toUsdtBuckets, plan: noRoutePlan() }), view({ buckets: toUsdtBuckets, plan: convertToUsdt })));
     const posts = recordStarts();
     renderWithClient(<RebalanceSection holdMs={50} />);
 
@@ -581,9 +581,9 @@ describe('RebalanceSection', () => {
     );
     expect(fact('Borrow after')).toBeNull();
     expect(screen.getByText(CONVERT_NOTE)).toBeInTheDocument();
-    fireEvent.pointerDown(screen.getByRole('button', { name: PULL_HOLD }));
+    fireEvent.pointerDown(screen.getByRole('button', { name: TO_USDT_HOLD }));
 
-    await waitFor(() => expect(posts).toEqual([{ direction: 'pull', amount: 400, route: 'convert' }]));
+    await waitFor(() => expect(posts).toEqual([{ direction: 'toUsdt', amount: 400, route: 'convert' }]));
   });
 
   it('hides the hold and the quote line under 1 USDC and says why, for either direction', async () => {
@@ -600,11 +600,11 @@ describe('RebalanceSection', () => {
     unmount();
 
     const spare = usdc({ cash: 0.5, upnl: 0, equity: 0.5, borrow: 0, imHeldUsd: 0, mmHeldUsd: 0 });
-    serve(view({ buckets: [spare, usdt], plan: pullPlan({ amount: 0.5, route: 'convert', receives: 0.49, price: 0.998 }) }));
+    serve(view({ buckets: [spare, usdt], plan: toUsdtPlan({ amount: 0.5, route: 'convert', receives: 0.49, price: 0.998 }) }));
     renderWithClient(<RebalanceSection holdMs={50} />);
 
     await section();
-    expect(await screen.findByText('Nothing to pull. Spare USDC is under 1 USDC.')).toBeInTheDocument();
+    expect(await screen.findByText('Nothing to move. Spare USDC is under 1 USDC.')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^Hold to/ })).toBeNull();
     expect(screen.queryByText(/^via /)).toBeNull();
   });
@@ -662,17 +662,17 @@ describe('RebalanceSection', () => {
     expect(amountInput('Amount (USDT) · free 5,000.00')).toHaveValue('900.00');
   });
 
-  it('shows one plain line for a pull with no route and never the convert reason', async () => {
+  it('shows one plain line for a move to USDT with no route and never the convert reason', async () => {
     serve(
       view({
         buckets: [usdc({ cash: 1.29, upnl: 0, equity: 1.29, borrow: 0, imHeldUsd: 0, mmHeldUsd: 0 }), usdt],
-        plan: pullPlan({
+        plan: toUsdtPlan({
           amount: 1.29,
           receives: 0,
           price: null,
           route: null,
           routes: {
-            loop: route({ available: false, reason: 'Too small to pull. Gate takes a flat $1 fee on the way out and needs at least 11 USDC to arrive. Pull at least 12 USDC.' }),
+            loop: route({ available: false, reason: 'Too small to move. Gate takes a flat $1 fee on the way out and needs at least 11 USDC to arrive. Move at least 12 USDC.' }),
             convert: route({ costUsd: 0, waitSeconds: 0, available: false, reason: 'Convert runs only from USDT to USDC.' }),
           },
         }),
@@ -681,7 +681,7 @@ describe('RebalanceSection', () => {
     renderWithClient(<RebalanceSection holdMs={50} />);
 
     await section();
-    expect(await screen.findByText('Too small to pull. Gate takes a flat $1 fee on the way out and needs at least 11 USDC to arrive. Pull at least 12 USDC.')).toBeInTheDocument();
+    expect(await screen.findByText('Too small to move. Gate takes a flat $1 fee on the way out and needs at least 11 USDC to arrive. Move at least 12 USDC.')).toBeInTheDocument();
     expect(screen.queryByText(/Convert runs only/)).toBeNull();
     expect(screen.queryByText(/^Loop:/)).toBeNull();
     expect(screen.queryByRole('button', { name: /^Hold to/ })).toBeNull();
@@ -695,19 +695,19 @@ describe('RebalanceSection', () => {
     const btn = await screen.findByRole('button', { name: HOLD });
     fireEvent.pointerDown(btn);
 
-    await waitFor(() => expect(posts).toEqual([{ direction: 'payDown', amount: 900, route: 'loop' }]));
+    await waitFor(() => expect(posts).toEqual([{ direction: 'toUsdc', amount: 900, route: 'loop' }]));
     await new Promise((r) => setTimeout(r, 200));
     expect(posts).toHaveLength(1);
   });
 
-  it('posts direction pull after a full hold in the pull direction', async () => {
-    serve(pullAccount());
+  it('posts direction toUsdt after a full hold toward USDT', async () => {
+    serve(toUsdtAccount());
     const posts = recordStarts();
     renderWithClient(<RebalanceSection holdMs={50} />);
 
-    fireEvent.pointerDown(await screen.findByRole('button', { name: PULL_HOLD }));
+    fireEvent.pointerDown(await screen.findByRole('button', { name: TO_USDT_HOLD }));
 
-    await waitFor(() => expect(posts).toEqual([{ direction: 'pull', amount: 400, route: 'loop' }]));
+    await waitFor(() => expect(posts).toEqual([{ direction: 'toUsdt', amount: 400, route: 'loop' }]));
   });
 
   it('shows the 409 message when the start is refused', async () => {
@@ -735,7 +735,7 @@ describe('RebalanceSection', () => {
     expect(screen.queryByRole('alert')).toBeNull();
   }, 10_000);
 
-  it('renders nothing with borrow 0, nothing to pull, and no job', async () => {
+  it('renders nothing with borrow 0, nothing to move, and no job', async () => {
     const urls = serve(view({ buckets: [usdc({ cash: 0, upnl: 0, equity: 0, borrow: 0 }), usdt], plan: noRoutePlan() }));
     renderWithClient(<RebalanceSection holdMs={50} />);
 
@@ -743,7 +743,7 @@ describe('RebalanceSection', () => {
     expect(screen.queryByRole('region', { name: 'Rebalance' })).toBeNull();
   });
 
-  it('stays rendered when the borrow and the pullable amount both floor to 0 but the bucket is in use', async () => {
+  it('stays rendered when the borrow and the spareUsdc amount both floor to 0 but the bucket is in use', async () => {
     const onTheLine = usdc({ cash: 16.65, upnl: -16.646, equity: 0.004, borrow: 0, imHeldUsd: 0, mmHeldUsd: 0 });
     serve(view({ buckets: [onTheLine, usdt], plan: noRoutePlan() }));
     renderWithClient(<RebalanceSection holdMs={50} />);
@@ -754,8 +754,8 @@ describe('RebalanceSection', () => {
     expect(screen.getByText('Nothing to pay back. There is no USDC borrow on Hyperliquid.')).toBeInTheDocument();
   });
 
-  it('renders with borrow 0 when USDC can be pulled, without the pill', async () => {
-    serve(pullAccount());
+  it('renders with borrow 0 and spare USDC, without the pill', async () => {
+    serve(toUsdtAccount());
     renderWithClient(<RebalanceSection holdMs={50} />);
 
     await section();
@@ -764,7 +764,7 @@ describe('RebalanceSection', () => {
     expectFacts({ 'Lent by Gate': '0.00', 'Spare USDC on Hyperliquid': '400.00 USDC' });
   });
 
-  it('renders with borrow 0 and nothing to pull while a job runs', async () => {
+  it('renders with borrow 0 and nothing to move while a job runs', async () => {
     serve(view({ buckets: [usdc({ cash: 0, upnl: 0, equity: 0, borrow: 0 }), usdt], plan: noRoutePlan(), job: job() }));
     renderWithClient(<RebalanceSection holdMs={50} />);
 
@@ -905,15 +905,15 @@ describe('RebalanceSection', () => {
     const done = job({ status: 'done' });
     serve(
       byDirection(
-        view({ buckets: pullBuckets, plan: noRoutePlan(), job: done }),
-        view({ buckets: pullBuckets, plan: pullPlan(), job: done }),
+        view({ buckets: toUsdtBuckets, plan: noRoutePlan(), job: done }),
+        view({ buckets: toUsdtBuckets, plan: toUsdtPlan(), job: done }),
       ),
     );
 
     expect(
       await screen.findByRole('radio', { name: 'Hyperliquid USDC → USDT', checked: true }, { timeout: 5_000 }),
     ).toBeInTheDocument();
-    expect(await screen.findByRole('button', { name: PULL_HOLD })).toBeEnabled();
+    expect(await screen.findByRole('button', { name: TO_USDT_HOLD })).toBeEnabled();
     expect(amountInput('Amount (USDC) · free 400.00')).toHaveValue('400.00');
     expect(screen.queryByText(/^Borrowing /)).toBeNull();
   }, 10_000);
@@ -935,11 +935,11 @@ describe('RebalanceSection — a USDT borrow', () => {
     interestPerDayUsd: 0,
   };
   const repayPlan = (over: Partial<RebalancePlan> = {}) =>
-    pullPlan({ amount: 300, receives: 298.7, borrowAfterUsd: 1.3, marginFreedUsd: 59.74, savesPerDayUsd: 0, ...over });
-  const usdtBorrowAccount = (pull: RebalancePlan = repayPlan()) =>
+    toUsdtPlan({ amount: 300, receives: 298.7, borrowAfterUsd: 1.3, marginFreedUsd: 59.74, savesPerDayUsd: 0, ...over });
+  const usdtBorrowAccount = (toUsdt: RebalancePlan = repayPlan()) =>
     byDirection(
       view({ buckets: [spareUsdc, usdtBorrowed], plan: noRoutePlan() }),
-      view({ buckets: [spareUsdc, usdtBorrowed], plan: pull }),
+      view({ buckets: [spareUsdc, usdtBorrowed], plan: toUsdt }),
     );
 
   beforeEach(() => {
@@ -949,11 +949,11 @@ describe('RebalanceSection — a USDT borrow', () => {
     );
   });
 
-  it('defaults to the pull, reads it as a repayment, and shows the USDT borrow in the pill and the facts', async () => {
+  it('defaults to the toUsdt, reads it as a repayment, and shows the USDT borrow in the pill and the facts', async () => {
     serve(usdtBorrowAccount());
     renderWithClient(<RebalanceSection holdMs={50} />);
 
-    expect(await screen.findByRole('button', { name: 'Hold to pull 300.00 USDC → USDT' })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Hold to move 300.00 USDC → USDT' })).toBeInTheDocument();
     expect(screen.getByText('Borrowing 300.00 USDT')).toHaveClass('border-amber-500/30');
     expect(screen.getByText(PAY_USDT_TEXT)).toBeInTheDocument();
     expectFacts({
@@ -966,11 +966,11 @@ describe('RebalanceSection — a USDT borrow', () => {
     });
   });
 
-  it('quotes the pull with the borrow after, the margin it frees, and the interest it saves', async () => {
+  it('quotes the move to USDT with the borrow after, the margin it frees, and the interest it saves', async () => {
     serve(usdtBorrowAccount());
     renderWithClient(<RebalanceSection holdMs={50} />);
 
-    await screen.findByRole('button', { name: 'Hold to pull 300.00 USDC → USDT' });
+    await screen.findByRole('button', { name: 'Hold to move 300.00 USDC → USDT' });
     expectFacts({
       Route: 'Spot loop · about 6.7 min',
       Sends: '300.00 USDC → 298.70 USDT @ 0.9988',
@@ -984,7 +984,7 @@ describe('RebalanceSection — a USDT borrow', () => {
     serve(usdtBorrowAccount(repayPlan({ amount: 100, receives: 98.9, shortfall: { reason: 'spare', remaining: 200 } })));
     renderWithClient(<RebalanceSection holdMs={50} />);
 
-    await screen.findByRole('button', { name: 'Hold to pull 100.00 USDC → USDT' });
+    await screen.findByRole('button', { name: 'Hold to move 100.00 USDC → USDT' });
     expect(
       screen.getByText('Only 100.00 USDC can move. 200.00 USDT stays borrowed: there is no more spare USDC on Hyperliquid'),
     ).toHaveClass('text-amber-300');
@@ -992,21 +992,21 @@ describe('RebalanceSection — a USDT borrow', () => {
 
   it('shows the section for a USDT borrow even when the USDC wallet is empty', async () => {
     const empty = usdc({ cash: 0, upnl: 0, equity: 0, borrow: 0, imHeldUsd: 0, mmHeldUsd: 0, interestPaidUsd: 0, interestPerDayUsd: 0 });
-    serve(view({ buckets: [empty, usdtBorrowed], plan: noRoutePlan({ direction: 'pull' }) }));
+    serve(view({ buckets: [empty, usdtBorrowed], plan: noRoutePlan({ direction: 'toUsdt' }) }));
     renderWithClient(<RebalanceSection holdMs={50} />);
 
     await section();
     expect(screen.getByText('Borrowing 300.00 USDT')).toBeInTheDocument();
-    expect(screen.getByText('Nothing to pull. There is no spare USDC on Hyperliquid.')).toBeInTheDocument();
+    expect(screen.getByText('Nothing to move. There is no spare USDC on Hyperliquid.')).toBeInTheDocument();
   });
 
-  it('keeps the USDC direction a plain pay-down when the USDT borrow is the only one', async () => {
+  it('keeps the USDC direction a plain repayment when the USDT borrow is the only one', async () => {
     serve(usdtBorrowAccount());
     renderWithClient(<RebalanceSection holdMs={50} />);
 
-    await screen.findByRole('button', { name: 'Hold to pull 300.00 USDC → USDT' });
+    await screen.findByRole('button', { name: 'Hold to move 300.00 USDC → USDT' });
     fireEvent.click(screen.getByRole('radio', { name: 'USDT → Hyperliquid USDC' }));
     expect(await screen.findByText('Nothing to pay back. There is no USDC borrow on Hyperliquid.')).toBeInTheDocument();
-    expect(screen.getByText(PAY_DOWN_TEXT)).toBeInTheDocument();
+    expect(screen.getByText(PAY_USDC_TEXT)).toBeInTheDocument();
   });
 });

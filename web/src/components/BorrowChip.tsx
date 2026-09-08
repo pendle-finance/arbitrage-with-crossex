@@ -8,7 +8,7 @@ import { floorCents } from '../lib/ticks';
  * trader who never opens Balances still learns about the borrow. Click
  * opens Balances, where the Rebalance section pays it back. */
 export function BorrowChip({ onOpen }: { onOpen: () => void }) {
-  const { data } = useRebalance({ direction: 'payDown', amount: null });
+  const { data } = useRebalance({ direction: 'toUsdc', amount: null });
   const borrowed = borrowedBucket(data?.buckets);
   if (!borrowed) return null;
   const borrow = floorCents(borrowed.borrow);

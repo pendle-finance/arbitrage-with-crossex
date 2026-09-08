@@ -395,7 +395,7 @@ export function useAlerts() {
 
 export function useRebalance({ direction, amount }: { direction: RebalanceDirection; amount: number | null }) {
   const params = new URLSearchParams();
-  if (direction !== 'payDown') params.set('direction', direction);
+  if (direction !== 'toUsdc') params.set('direction', direction);
   if (amount !== null) params.set('amount', String(amount));
   const query = params.toString();
   return useQuery({
