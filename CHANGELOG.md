@@ -3,39 +3,39 @@
 Only substantial releases are listed here — each one bumps `version.json` (which is what the
 in-app update check compares against).
 
-## 1.5.1 — 2026-09-07
+## 1.5.1 — 2026-09-08
 
-Pay back what Gate lent you, USDC or USDT, from the Balances tab with one hold.
+TLDR: Gate lends you USDC or USDT when a wallet runs short. The app now shows the borrow and
+what it costs, and pays it back with one hold. Each pair says where it liquidates. The update
+dialog opens by itself.
 
-- **A new Rebalance section on the Balances tab.** Your account has two wallets: USDT for every
-  venue but Hyperliquid, and USDC for the Hyperliquid legs. When a wallet's legs lose money or
-  pay funding past what it holds, Gate lends the coin and holds 20% of it as initial margin and
-  10% as maintenance margin. Past 10,000 short it also charges interest every hour. The section
-  shows six facts, the same with and without a borrow: what Gate lent you, the margin it holds,
-  the interest per day, the spare USDC on Hyperliquid, and the interest you have paid all time.
-  The borrow also shows as an amber pill in the header on every tab; click it to open the
-  section. An info mark next to the title explains all of it.
-- **One hold moves cash either way, and the section opens on the direction that repays.** USDT
-  to Hyperliquid USDC pays a USDC borrow back. Hyperliquid USDC to USDT pays a USDT borrow back,
-  or brings spare USDC home when there is none, capped so it never opens a borrow. The amount is
-  prefilled with the borrow, and you can type another.
-- **The cheaper route is picked for you and shown.** An instant convert at 20 bps, or a spot
-  loop through Gate that costs $0.05 toward USDC and a flat $1 toward USDT. The quote is a
-  row of facts: the route, the price, what lands, the cost, and the borrow after the move. Under
-  1 USDC there is nothing to hold.
-- **You can watch it run.** A progress bar shows each step with its seconds. A job survives a
-  page refresh. If the app restarts mid-job, it halts, says where the funds are, and offers
-  Resume and Abandon.
-- **Each pair says where it liquidates.** A hedged pair is delta-neutral but not
-  margin-neutral: a move against the Hyperliquid leg grows the maintenance margin twice,
-  through the leg's notional and through the USDC borrow it creates. Every card on the
-  Positions tab says `Liquidates if ETH hits ~$3,150 (+37%)`, the coin's price at which the
-  account liquidates if only that coin moves. Amber inside 30%, red inside 15%. The nearest line is
-  in the header's margin-gauge hover, and the rebalance quote shows that price before and after
-  the move.
+- **A Rebalance section on the Balances tab.** Your account has two wallets. USDT pays for every
+  venue but Hyperliquid. USDC pays for the Hyperliquid legs. When a wallet's legs lose more than
+  it holds, Gate lends the coin. It holds 20% of the loan as initial margin and 10% as maintenance
+  margin. Past 10,000 borrowed it also charges interest every hour. The section shows six facts:
+  what Gate lent you, the margin it holds, the interest per day, the spare USDC on Hyperliquid,
+  and the interest you have paid since January 2025. The six facts are the same with and without
+  a borrow. An info mark next to the title explains them.
+- **An amber pill in the header shows the borrow on every tab.** It shows from 1 USDC or USDT.
+  Click it to open the section.
+- **One hold pays the borrow back, in either direction.** USDT to Hyperliquid USDC pays a USDC
+  borrow. Hyperliquid USDC to USDT pays a USDT borrow, or moves spare USDC back when there is no
+  borrow. The amount is prefilled with the borrow. A move never opens a new borrow.
+- **The app picks the cheaper route and shows it.** An instant convert costs 20 bps. A spot loop
+  through Gate costs $0.05 toward USDC and a flat $1 toward USDT. The quote shows the route, the
+  price, what lands, the cost, and the borrow after the move.
+- **You can watch a move run.** A progress bar shows each step and its seconds. A page refresh
+  keeps the move running. If the app restarts during a move, the move halts, says where the funds
+  are, and offers Resume and Abandon. A move and a deal do not run at the same time.
+- **Each pair says where it liquidates.** A hedged pair is delta-neutral, but a move against the
+  Hyperliquid leg still grows the maintenance margin. Every card on the Positions tab says
+  `Liquidates if ETH hits ~$3,150 (+37%)`. That is the price at which the account liquidates if
+  only that coin moves. Amber inside 30%, red inside 15%. A pair with no line within 10x says so.
+  The nearest line is in the header's margin-gauge hover. The rebalance quote shows the price
+  before and after the move.
 - **The update dialog opens by itself.** When a new version is out, the dialog opens on every
-  open of the app until you install it. Close puts it away until the next open. Until now the
-  only sign was an amber button in the header, and people missed it.
+  open of the app until you install it. Close hides it until the next open. Before, the only sign
+  was an amber button in the header, and people missed it.
 
 ## 1.5.0 — 2026-08-27
 
