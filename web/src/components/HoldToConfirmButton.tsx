@@ -9,6 +9,9 @@ interface Props {
   tone?: 'green' | 'red' | 'cyan';
   /** Extra classes appended to the base button (e.g. width/margin). */
   className?: string;
+  /** Extra hover text, appended to the press-and-hold instruction — for a
+   * guarantee about what confirming DOES (e.g. atomic acceptance). */
+  title?: string;
   children: ReactNode;
 }
 
@@ -28,7 +31,7 @@ const CIRC = 2 * Math.PI * R;
  * cancels. Deliberately NO keyboard activation — Enter/Space are swallowed so a
  * stray keypress can never send an order.
  */
-export function HoldToConfirmButton({ onConfirm, disabled, holdMs = 800, tone = 'cyan', className, children }: Props) {
+export function HoldToConfirmButton({ onConfirm, disabled, holdMs = 800, tone = 'cyan', className, title, children }: Props) {
   const [progress, setProgress] = useState(0);
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
   const fired = useRef(false);
@@ -76,7 +79,7 @@ export function HoldToConfirmButton({ onConfirm, disabled, holdMs = 800, tone = 
       type="button"
       disabled={disabled}
       aria-label={typeof children === 'string' ? children : undefined}
-      title="press and hold to confirm"
+      title={title ? `${title}\n\nPress and hold to confirm.` : 'press and hold to confirm'}
       onPointerDown={(e) => {
         // Only the primary button holds; jsdom events omit `button`, so treat
         // a missing value as primary.

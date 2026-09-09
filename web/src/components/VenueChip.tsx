@@ -17,14 +17,16 @@ export function VenueChip({ exchange, crossex }: { exchange: string; crossex?: b
   // Gate CrossEx account.
   if (crossex) {
     return (
-      <Chip sm tone="violet" title="via CrossEx (connected Gate account)">
+      <Chip sm tone="crossex" title="via CrossEx (connected Gate account)">
         {exchange}
-        <span className="ml-1 text-[9px] font-semibold text-violet-300">·CX</span>
+        <span className="ml-1 text-[9px] font-semibold text-crossex">·CX</span>
       </Chip>
     );
   }
+  // USDT-quoted venues take the sky/link blue (dapp-nitro's `sky`), a
+  // different hue from the CrossEx cyan above.
   return (
-    <Chip sm tone={USDT_PERP_VENUES.has(exchange) ? 'cyan' : 'neutral'}>
+    <Chip sm tone={USDT_PERP_VENUES.has(exchange) ? 'link' : 'neutral'}>
       {exchange}
     </Chip>
   );

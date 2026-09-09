@@ -10,6 +10,7 @@ export type ChipTone =
   | 'violet'
   | 'info'
   | 'link'
+  | 'crossex'
   | 'neutral';
 
 /** Tone → utility overrides. Utilities land after the `.chip` component layer,
@@ -25,6 +26,9 @@ const TONES: Record<ChipTone, string> = {
   /* Count badges — the mock's borderless `info @18%` fill. */
   info: 'border-transparent bg-info/[0.18] text-pastel-blue',
   link: 'border-link/40 bg-link/10 text-link',
+  /* "via CrossEx" — dapp-nitro's crossex cyan, so it cannot be confused with
+     the info-blue that cyan/blue/violet all resolve to. */
+  crossex: 'border-crossex/40 bg-crossex/10 text-crossex',
   neutral: '',
 };
 

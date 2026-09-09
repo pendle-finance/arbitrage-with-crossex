@@ -790,7 +790,9 @@ describe('RebalanceSection', () => {
     await section();
     expect(screen.queryByRole('radiogroup')).toBeNull();
     expect(screen.queryByRole('textbox')).toBeNull();
-    expect(screen.queryByRole('button')).toBeNull();
+    // No form CONTROLS while a job runs. The "About rebalance" info trigger
+    // is a keyboard-reachable button too (aria-expanded), and stays.
+    expect(screen.queryAllByRole('button').filter((b) => !b.hasAttribute('aria-expanded'))).toHaveLength(0);
 
     const rows = screen.getAllByRole('listitem');
     expect(rows).toHaveLength(3);

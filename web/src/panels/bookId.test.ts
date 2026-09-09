@@ -15,8 +15,8 @@ const WALLET_B = '0xB'.padEnd(42, '2');
 const GATE_A = 'abcd…7890';
 const GATE_B = 'wxyz…4321';
 
-const EMPTY: AssetViewPrefs = { sinceByAsset: {}, exclusions: {} };
-const prefs: AssetViewPrefs = { sinceByAsset: {}, exclusions: { 'perp:GATE_FUTURE_ETH_USDT': 'all' } };
+const EMPTY: AssetViewPrefs = { sinceByAsset: {}, exclusions: {}, legSince: {} };
+const prefs: AssetViewPrefs = { sinceByAsset: {}, exclusions: { 'boros:42': 'all' }, legSince: {} };
 
 describe('bookIdOf', () => {
   it('separates the same wallet on two Gate accounts', () => {
@@ -49,7 +49,7 @@ describe('annotations follow the book, not the wallet', () => {
   });
 
   it('keeps two books' + ' annotations side by side', () => {
-    const other: AssetViewPrefs = { sinceByAsset: { ETH: 1_700_000_000 }, exclusions: {} };
+    const other: AssetViewPrefs = { sinceByAsset: { ETH: 1_700_000_000 }, exclusions: {}, legSince: {} };
     savePrefs(bookIdOf(WALLET_A, GATE_A), prefs);
     savePrefs(bookIdOf(WALLET_B, GATE_A), other);
     expect(loadPrefs(bookIdOf(WALLET_A, GATE_A))).toEqual(prefs);

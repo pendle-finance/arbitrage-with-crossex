@@ -74,6 +74,7 @@ function borosBodies(): Record<string, unknown> {
           pnl: raw(-390),
           prevPositionS: '0',
           postPositionS: raw(-1_000_000),
+          fixedApr: 0.08,
         },
         {
           marketId: 158,
@@ -260,6 +261,10 @@ describe('GET /api/asset-view/:address', () => {
     const h155 = eth.borosHistory.find((h: { marketId: number }) => h.marketId === 155);
     expect(h155.settleUsd).toBeCloseTo(200, 6);
     expect(h155.settleFeeUsd).toBeCloseTo(4, 6);
+    // The locked rate is replayed from the OPENING fill (0 → −1M at 8%), so
+    // a matured or closed market keeps it after the chain forgets the position.
+    expect(h155.entryApr).toBeCloseTo(0.08, 9);
+    expect(h155.side).toBe('SHORT');
     expect(h155.tradePnlUsd).toBeCloseTo(-390, 6);
     expect(h155.tradeFeeUsd).toBeCloseTo(390, 6);
     const h158 = eth.borosHistory.find((h: { marketId: number }) => h.marketId === 158);

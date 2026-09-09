@@ -269,7 +269,13 @@ function OrderTicketDrawer() {
   const flow = useTradeFlow();
   const [busy, setBusy] = useState(false);
   return (
-    <Drawer open={flow.railOpen} title="Order ticket" locked={busy} onClose={flow.closeRail}>
+    <Drawer
+      open={flow.railOpen}
+      title="Order ticket"
+      locked={busy}
+      onClose={flow.closeRail}
+      widthClass="w-[560px]"
+    >
       <TradeRail onBusyChange={setBusy} />
     </Drawer>
   );

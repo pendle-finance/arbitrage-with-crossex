@@ -1083,7 +1083,8 @@ export interface BookTouch {
 
 /** 'short' RECEIVES fixed (hits bids); 'long' PAYS fixed (lifts asks). */
 export type BorosLegDirection = 'long' | 'short';
-export type BorosPairIntent = 'open' | 'close';
+/** `target` sizes to the end state (the guided wizard); see core PairIntent. */
+export type BorosPairIntent = 'open' | 'close' | 'target';
 
 export interface BorosPairMarketRow {
   marketId: number;
@@ -1158,6 +1159,11 @@ export interface BorosPairSimulation {
   worstSpreadApr: number | null;
   costToCrossSize: number;
   feeDragApr: number;
+  /** The spread at MID, same composition as estSpreadApr. Null if unknown. */
+  midSpreadApr?: number | null;
+  /** |midSpread − estSpread| — what crossing the books costs at this size.
+   * SLIPPAGE proper: distance from mid, not unused tolerance. */
+  slippageApr?: number | null;
   marginRequiredTotal: number | null;
   hedgedSize: number;
   unhedgedSize: number;
@@ -1391,6 +1397,10 @@ export interface AssetBorosOpen {
   /** Mark value of the remaining rate stream (excluded from headline PnL). */
   mtmUsd: number;
   imUsd: number;
+  /** Settlement fee as an APR fraction, charged on notional to maturity.
+   * UNAVOIDABLE (it accrues however you enter or roll), so the locked rate
+   * is quoted NET of it. Optional only for an older server. */
+  settleFeeApr?: number;
 }
 
 /** Per-market history sums since the start date — open, closed and matured
@@ -1415,6 +1425,11 @@ export interface AssetBorosHistory {
    * opened (hourly settlements ⇒ at most an hour late; clipped to the
    * window start). 0/absent = no events. */
   firstEventSec?: number;
+  /** The fixed rate the position locked (size-weighted over its opening
+   * fills, replayed from the fill feed) — survives maturity and closure.
+   * Null/absent when no opening fill is in the window or an older server. */
+  entryApr?: number | null;
+  side?: 'LONG' | 'SHORT' | null;
 }
 
 export interface AssetGroup {

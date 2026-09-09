@@ -199,7 +199,10 @@ function parseSize(raw: unknown): number {
 function parseIntent(raw: unknown): PairIntent {
   if (raw === undefined || raw === null || raw === 'open') return 'open';
   if (raw === 'close') return 'close';
-  throw new CoreError('intent must be "open" or "close"', 'validation');
+  // `target` sizes to an END STATE rather than an increment — the guided
+  // wizard's form, where a half-filled leg must not be topped up twice.
+  if (raw === 'target') return 'target';
+  throw new CoreError('intent must be "open", "close" or "target"', 'validation');
 }
 
 function parseClientOrderId(raw: unknown, which: string): string {

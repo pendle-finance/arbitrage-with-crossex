@@ -115,8 +115,9 @@ export function CloseBorosForm({
     return floored > 0 ? floored : FALLBACK_SLIPPAGE_PCT;
   })();
   const [slipEdited, setSlipEdited] = useState<string | null>(null);
+  /** The tolerance popover — closed until asked for. */
+  const [slipOpen, setSlipOpen] = useState(false);
   const slipStr = slipEdited ?? String(seededSlipPct);
-  const setSlipStr = setSlipEdited;
 
   /**
    * Size per market. Empty means "all of it", resolved against the leg CURRENT
@@ -128,28 +129,34 @@ export function CloseBorosForm({
    * the form rejected its own autofilled value as exceeding the maximum. An
    * unset field cannot go stale.
    */
-  const [sizes, setSizes] = useState<Record<number, string>>({});
-  /** What the input shows: the user's text, or the live full size. */
-  const shownSize = (l: StrategyLeg): string => {
-    const raw = sizes[l.marketId as number];
-    if (raw !== undefined) return raw;
-    return fieldValue(l.notionalToken ?? 0);
-  };
+  /**
+   * ONE size for the whole close, not one per leg.
+   *
+   * The request already sends `min(...)` across the legs — two boxes could
+   * only ever disagree with what actually goes out — and a hedge is closed
+   * as a unit: taking 500 off one leg and 300 off the other leaves a naked
+   * 200 nobody asked for. The cap is the SMALLEST leg, for the same reason.
+   */
+  const [sizeEdited, setSizeEdited] = useState<string | null>(null);
+  const maxCloseSize = closable.length
+    ? Math.min(...closable.map((l) => l.notionalToken ?? 0))
+    : 0;
+  const shownSize = (): string => sizeEdited ?? fieldValue(maxCloseSize);
 
   const slipPct = Number(slipStr);
   const slipInvalid = !Number.isFinite(slipPct) || slipPct <= 0 || slipPct > 50;
 
   const sizeOf = (l: StrategyLeg): { value: number; invalid: boolean } => {
-    const raw = shownSize(l);
+    const raw = shownSize();
     const n = Number(raw);
     const open = l.notionalToken ?? 0;
     // A relative tolerance: the shown value is rounded to 8 significant digits,
     // so on a large leg the round-trip differs from `open` by more than any
     // fixed epsilon would allow.
-    const eps = Math.max(1e-9, open * 1e-7);
+    const eps = Math.max(1e-9, maxCloseSize * 1e-7);
     return {
       value: Math.min(n, open),
-      invalid: raw.trim() === '' || !Number.isFinite(n) || n <= 0 || n > open + eps,
+      invalid: raw.trim() === '' || !Number.isFinite(n) || n <= 0 || n > maxCloseSize + eps,
     };
   };
   const anySizeInvalid = closable.some((l) => sizeOf(l).invalid);
@@ -206,7 +213,7 @@ export function CloseBorosForm({
       intent: 'close',
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [address, closable, slipStr, JSON.stringify(sizes), slipInvalid, anySizeInvalid, ctx.data]);
+  }, [address, closable, slipStr, sizeEdited, slipInvalid, anySizeInvalid, ctx.data]);
 
   const sim = useBorosPairSimulation(simReq, simReq !== null);
   const simLegFor = (i: number): BorosSimulatedLeg | null => {
@@ -214,6 +221,24 @@ export function CloseBorosForm({
     if (!s) return null;
     return i === 0 ? s.legA : s.legB;
   };
+
+  /**
+   * Estimated slippage: how far each leg's execution sits from its own mid,
+   * worst leg first — a bound that clears the worst leg clears them all.
+   * Per leg, never summed: a close is one rate per market, not a spread.
+   */
+  const estSlippageApr = ((): number | null => {
+    const sim = simLegFor(0) ? [simLegFor(0), simLegFor(1)] : [];
+    const gaps = sim
+      .map((leg) => {
+        if (!leg || leg.execApr === null) return null;
+        const mid = ctx.data?.markets.find((m) => m.marketId === leg.marketId)?.midApr;
+        return mid && mid > 0 ? Math.abs(leg.execApr - mid) : null;
+      })
+      .filter((n): n is number => n !== null);
+    return gaps.length > 0 ? Math.max(...gaps) : null;
+  })();
+
 
   const agentReady = agent.data?.configured === true && agent.data.expired === false;
   const agentBlocked = agent.isSuccess && !agentReady;
@@ -282,7 +307,13 @@ export function CloseBorosForm({
           const filled = r.fill!.filledSize;
           const left = requested - filled;
           setPartial((prev) => [...prev, { marketId: id, filled, left }]);
-          setSizes((prev) => ({ ...prev, [id]: fieldValue(left) }));
+          // Re-seed the shared box with what this leg still has open. With
+          // one size for both, the SMALLEST remainder is the one that can be
+          // closed on both legs — arming more would re-strand the other.
+          setSizeEdited((prev) => {
+            const n = Number(prev ?? '');
+            return Number.isFinite(n) && n > 0 ? fieldValue(Math.min(n, left)) : fieldValue(left);
+          });
           onClosed?.(l, filled);
         } else {
           // Everything asked for came off. What the venue still holds splits
@@ -354,6 +385,38 @@ export function CloseBorosForm({
         </p>
       )}
 
+      {/* One size for the close, applied to both legs: they are one hedge,
+          and the request already sends the smaller of the two. Capped at the
+          smallest leg — past that the bigger leg would be left naked. */}
+      <div className="flex flex-col gap-1">
+        <div className="flex items-baseline justify-between text-[11px] text-ink-400">
+          <span>Close size</span>
+          {/* The ceiling, stated where the number is typed — and clickable.
+              It was only discoverable by overshooting and reading an error. */}
+          <span className="num">
+            max{' '}
+            <button
+              type="button"
+              className="underline decoration-dotted underline-offset-2 hover:text-ink-200"
+              title="Close the whole position on both legs"
+              onClick={() => setSizeEdited(fieldValue(maxCloseSize))}
+            >
+              {fmtTokenQty(maxCloseSize, closable[0]?.collateral ?? '')}
+            </button>
+          </span>
+        </div>
+        <label className="flex items-center gap-2 text-[11px] text-ink-400">
+          <input
+            className={`input num h-7 flex-1 px-2 py-0.5 ${anySizeInvalid ? 'border-rose-500' : ''}`}
+            inputMode="decimal"
+            value={shownSize()}
+            onChange={(e) => setSizeEdited(e.target.value)}
+            aria-label="Close size, applied to both legs"
+          />
+          {closable[0]?.collateral && <span className="text-ink-500">{closable[0].collateral}</span>}
+        </label>
+      </div>
+
       <div className="flex flex-col gap-2.5 rounded-lg border border-ink-800 bg-ink-950/60 px-3 py-2.5 text-[11px]">
         {closable.map((l, i) => {
           const id = l.marketId as number;
@@ -363,6 +426,7 @@ export function CloseBorosForm({
           const q = simLegFor(i);
           const err = failed.find((f) => f.marketId === id);
           const part = partial.find((x) => x.marketId === id);
+          const finished = done.find((d) => d.marketId === id);
           // PnL at the rate the book would actually give, over the leg's life:
           // (locked − exec) × size × years, signed by the side being closed.
           const years = l.maturity ? Math.max(0, l.maturity - Date.now() / 1000) / 31_536_000 : null;
@@ -376,22 +440,37 @@ export function CloseBorosForm({
                 <span className="text-ink-200">
                   {prettyVenue(l.venue)} <span className="text-ink-500">{l.side}</span>
                 </span>
-                <span className="num ml-auto text-ink-100">{fmtTokenQty(open, unit)} open</span>
+                {/* The size THIS leg closes, not what it holds. An open-size
+                    figure sitting where every other number is a simulation of
+                    the close read as a quote that had not moved. Open size is
+                    still shown, as the "of N" it is being taken out of, and
+                    only when the close is partial. */}
+                <span className="num ml-auto text-ink-200">
+                  {finished ? (
+                    // A leg that CLOSED says so, in the slot where every other
+                    // figure is a size still to be sent. Without this a
+                    // one-closed / one-failed press showed the closed leg as
+                    // an armed size — nothing on screen said the hedge was
+                    // now half gone.
+                    <span className="text-emerald-300">closed ✓</span>
+                  ) : (
+                    <>
+                      {invalid ? '—' : fmtTokenQty(value, unit)}
+                      {!invalid && value < open - Math.max(1e-9, open * 1e-7) && (
+                        <span className="text-ink-500"> of {fmtTokenQty(open, unit)}</span>
+                      )}
+                    </>
+                  )}
+                </span>
               </span>
-              <label className="mt-0.5 flex items-center gap-2 text-ink-400">
-                <span className="w-20">Close size</span>
-                <input
-                  className={`input num h-7 flex-1 px-2 py-0.5 ${invalid ? 'border-rose-500' : ''}`}
-                  inputMode="decimal"
-                  value={shownSize(l)}
-                  onChange={(e) => setSizes((prev) => ({ ...prev, [id]: e.target.value }))}
-                  aria-label={`Close size for the ${l.venue} Boros leg`}
-                />
-                {unit && <span className="text-ink-500">{unit}</span>}
-              </label>
-              {invalid ? (
+              {finished ? (
+                <span className="text-ink-400">
+                  This leg is closed; it will not be sent again.
+                  {finished.yours > 0 && ` ${fmtTokenQty(finished.yours, unit)} of it is still open — you closed part.`}
+                </span>
+              ) : invalid ? (
                 <span className="text-rose-400">
-                  size must be above 0 and at most {fmtTokenQty(open, unit)}
+                  size must be above 0 and at most {fmtTokenQty(maxCloseSize, unit)}
                 </span>
               ) : (
                 <>
@@ -467,23 +546,68 @@ export function CloseBorosForm({
           per-leg PnL above is a rate difference and carries no fee term, so
           without this the screen showed only the flattering half. */}
 
-      <label className="flex items-center gap-2 text-[11px] text-ink-400">
-        <span
-          className="w-20 cursor-help underline decoration-dotted underline-offset-2"
-          title="A rate bound: the worst APR this close will accept. A close that keeps missing it leaves the position open. Size is capped at what is open once the cancel lands — Boros has no reduce-only flag, so it can never cross past flat."
-        >
-          Slippage %
-        </span>
-        <input
-          className={`input num h-7 flex-1 px-2 py-0.5 ${slipInvalid ? 'border-rose-500' : ''}`}
-          inputMode="decimal"
-          value={slipStr}
-          onChange={(e) => setSlipStr(e.target.value)}
-          aria-label="Close slippage tolerance, APR percent"
-        />
-        <span className="text-ink-500">APR</span>
-      </label>
-      {slipInvalid && <span className="text-[11px] text-rose-400">slippage must be in (0, 50]</span>}
+      {/* Same shape as the Boros ticket: the bound is stated inline and only
+          becomes editable when asked for. A close differs in that the bound
+          applies to EACH leg being closed — there is no spread here, just one
+          rate per market — so it is never summed. */}
+      <div className="flex flex-col gap-1.5">
+        <div className="flex items-baseline justify-between gap-3">
+          <span
+            className="text-[11px] text-ink-400"
+            title="A rate bound: the worst APR this close will accept, per leg. A close that keeps missing it leaves the position open. Size is capped at what is open once the cancel lands — Boros has no reduce-only flag, so it can never cross past flat."
+          >
+            Slippage
+          </span>
+          <span className="num text-[12px] text-ink-100">
+            {estSlippageApr !== null ? (
+              <>Est. {fmtPct(estSlippageApr)}</>
+            ) : (
+              <span className="text-ink-500">Est. —</span>
+            )}
+            <span className="text-ink-500"> / Max: </span>
+            <button
+              type="button"
+              className="underline decoration-dotted underline-offset-2 hover:text-white"
+              title="Change the tolerance"
+              onClick={() => setSlipOpen((v) => !v)}
+            >
+              {slipStr}%
+            </button>
+            <span className="text-ink-500"> APR</span>
+          </span>
+        </div>
+        {slipOpen && (
+          <div className="flex flex-col gap-1.5 rounded border border-ink-700 bg-ink-900/60 px-2.5 py-2">
+            <span className="text-[10.5px] leading-relaxed text-ink-400">
+              Max rate this close will accept. A wider tolerance may be needed for a large size or a
+              thin book.
+            </span>
+            <div className="flex items-center gap-1.5">
+              {['0.2', '0.4', '1', '2'].map((q) => (
+                <button
+                  key={q}
+                  type="button"
+                  className={`btn-ghost-xs ${slipStr === q ? '!border-info/60 !text-pastel-blue' : ''}`}
+                  onClick={() => setSlipEdited(q)}
+                >
+                  {q}%
+                </button>
+              ))}
+              <input
+                className={`input num h-7 flex-1 px-2 py-0.5 text-[12px] ${slipInvalid ? 'border-rose-500' : ''}`}
+                inputMode="decimal"
+                value={slipStr}
+                onChange={(e) => setSlipEdited(e.target.value)}
+                aria-label="Close slippage tolerance, APR percent"
+              />
+              <span className="text-[11px] text-ink-400">%</span>
+            </div>
+            {slipInvalid && (
+              <span className="text-[11px] text-rose-400">slippage must be in (0, 50]</span>
+            )}
+          </div>
+        )}
+      </div>
 
       <HoldToConfirmButton
         tone="red"

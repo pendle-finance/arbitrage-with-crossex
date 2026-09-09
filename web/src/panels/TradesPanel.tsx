@@ -10,7 +10,7 @@ import { SignedNumber } from '../components/SignedNumber';
 import { TableSkeleton } from '../components/Skeleton';
 import { Spinner } from '../components/Spinner';
 import { SideChip, SymbolCell } from '../components/VenueChip';
-import { bps, fmtTime, sig, toDate } from '../lib/fmt';
+import { bps, fmtTime, num, sig, toDate } from '../lib/fmt';
 
 type Mode = 'grouped' | 'flat';
 type Role = 'maker' | 'taker' | 'mixed';
@@ -105,13 +105,14 @@ const FILL_COLUMNS: Column<Trade>[] = [
     header: 'Transaction',
     render: (t) => <span className="num text-xs text-ink-400">{t.transactionId}</span>,
   },
-  { key: 'qty', header: 'Qty', align: 'right', render: (t) => <span className="num">{sig(t.qty)}</span> },
+  // Fixed dp per column (qty 4, fee 4, PnL 2) so the decimal points align.
+  { key: 'qty', header: 'Qty', align: 'right', render: (t) => <span className="num">{num(t.qty, 4)}</span> },
   { key: 'price', header: 'Price', align: 'right', render: (t) => <span className="num">{sig(t.price)}</span> },
   {
     key: 'fee',
     header: 'Fee',
     align: 'right',
-    render: (t) => <span className="num">{`${sig(t.fee)} ${t.feeCoin}`}</span>,
+    render: (t) => <span className="num">{`${num(t.fee, 4)} ${t.feeCoin}`}</span>,
   },
   {
     key: 'rate',
@@ -124,7 +125,7 @@ const FILL_COLUMNS: Column<Trade>[] = [
     key: 'rpnl',
     header: 'rPnL',
     align: 'right',
-    render: (t) => <SignedNumber value={t.rpnl} format={(n) => sig(n)} />,
+    render: (t) => <SignedNumber value={t.rpnl} format={(n) => num(n, 2)} />,
   },
 ];
 
@@ -132,13 +133,13 @@ const GROUP_COLUMNS: Column<OrderGroup>[] = [
   { key: 'time', header: 'Time', render: (g) => <span className="num text-xs text-ink-300">{fmtTime(g.time)}</span> },
   { key: 'symbol', header: 'Symbol', render: (g) => <SymbolCell symbol={g.symbol} /> },
   { key: 'side', header: 'Side', render: (g) => <SideChip side={g.side} /> },
-  { key: 'qty', header: 'Qty', align: 'right', render: (g) => <span className="num">{sig(g.totalQty)}</span> },
+  { key: 'qty', header: 'Qty', align: 'right', render: (g) => <span className="num">{num(g.totalQty, 4)}</span> },
   { key: 'avg', header: 'Avg price', align: 'right', render: (g) => <span className="num">{sig(g.avgPrice)}</span> },
   {
     key: 'fee',
     header: 'Fee',
     align: 'right',
-    render: (g) => <span className="num">{`${sig(g.totalFee)} ${g.feeCoin}`}</span>,
+    render: (g) => <span className="num">{`${num(g.totalFee, 4)} ${g.feeCoin}`}</span>,
   },
   {
     key: 'rate',

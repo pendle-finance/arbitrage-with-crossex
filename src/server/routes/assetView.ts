@@ -46,11 +46,16 @@ import { classifyGateError, CoreError } from '../../core/errors';
 import { parseSymbol } from '../../core/numbers';
 import type { AppDeps } from '../app';
 import { TTL } from '../cache';
+import { GATE_HISTORY_FLOOR_MS, INTEREST_MAX_PAGES, INTEREST_PAGE_SIZE } from '../interestLedger';
 
 const EVM_ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
 
-const PAGE_LIMIT = 200;
-const MAX_PAGES = 10;
+// The venue pages newest-first at up to 1,000 rows; 100 pages is the same
+// ceiling the persisted interest ledger uses. With `from` set to the window
+// start (or Gate's 2025-01-01 floor for all time) the read covers the whole
+// window instead of the last 2,000 hourly rows.
+const PAGE_LIMIT = INTEREST_PAGE_SIZE;
+const MAX_PAGES = INTEREST_MAX_PAGES;
 
 const fin = (v: string | number | undefined | null): number => {
   const n = Number(v);
@@ -138,6 +143,16 @@ export interface AssetBorosOpenOut {
   /** Mark value of the remaining rate stream (excluded from headline PnL). */
   mtmUsd: number;
   imUsd: number;
+  /**
+   * The market's settlement fee as an APR fraction, charged on notional
+   * every settlement until maturity.
+   *
+   * Unlike a trade fee this is UNAVOIDABLE — it accrues however the
+   * position was entered and however it is rolled — so the client nets it
+   * out of the locked rate rather than listing it as a cost. Mirrors what
+   * the opportunities feed already charges at entry.
+   */
+  settleFeeApr: number;
 }
 
 /** Per-market history sums since `since` — covers open, closed and matured
@@ -162,6 +177,16 @@ export interface AssetBorosHistoryOut {
    * leg opened (settlements are hourly, so at most an hour late; clipped
    * to the window start when a start date is set). 0 = no events. */
   firstEventSec: number;
+  /**
+   * The fixed rate the position was LOCKED at: the size-weighted average of
+   * its opening fills' traded rates (fills that grew the position), replayed
+   * from the fill feed. Survives maturity and closure — the chain's own
+   * position record does not — so a finished leg can still be judged by
+   * the rate it locked. Null when no opening fill is in the window.
+   */
+  entryApr: number | null;
+  /** Side of the position those fills built (sign of the post-fill size). */
+  side: 'LONG' | 'SHORT' | null;
 }
 
 export interface AssetGroupOut {
@@ -226,8 +251,12 @@ async function fetchInterestPaid(
 ): Promise<{ paidUsd: number; byCoin: Record<string, number>; coversFromSec: number }> {
   const rows: InterestRecordLike[] = [];
   let capped = false;
+  const from = Math.max(sinceSec * 1000, GATE_HISTORY_FLOOR_MS);
+  const to = Date.now();
   for (let page = 1; page <= MAX_PAGES; page += 1) {
     const { body } = await deps.getClients().crossEx.listCrossexHistoryMarginInterests({
+      from,
+      to,
       page,
       limit: PAGE_LIMIT,
     });
@@ -306,8 +335,24 @@ export function assetViewRoutes(deps: AppDeps) {
         throw new CoreError('invalid EVM address (expected 0x + 40 hex chars)', 'validation');
       }
       const address = raw.toLowerCase();
-      const query = req.query as { since?: string; fresh?: string };
+      const query = req.query as { since?: string; fresh?: string; legSince?: string };
       const fresh = query.fresh === '1';
+      /**
+       * Per-market "counted from" floors: `legSince=<marketId>:<sec>,…`.
+       * A Boros market that was traded before, closed, and re-opened for THIS
+       * farm carries history the farm never earned; the floor drops the
+       * earlier events for that market only. Never below `since` — the
+       * window start still bounds every market.
+       */
+      const legSince = new Map<number, number>();
+      if (query.legSince) {
+        for (const part of query.legSince.split(',')) {
+          const m = /^(\d+):(\d+)$/.exec(part.trim());
+          if (!m) throw new CoreError('invalid legSince (expected marketId:unixSeconds pairs)', 'validation');
+          legSince.set(Number(m[1]), Number(m[2]));
+        }
+      }
+      const floorFor = (marketId: number): number => Math.max(sinceSec, legSince.get(marketId) ?? 0);
       const nowSec = Math.floor(Date.now() / 1000);
 
       let sinceSec = 0;
@@ -356,10 +401,10 @@ export function assetViewRoutes(deps: AppDeps) {
       const txnsComplete: boolean[] = [];
       const txnsByToken = new Map<
         number,
-        Array<{ marketId: number; time: number; pnlTok: number; feeTok: number }>
+        Array<{ marketId: number; time: number; pnlTok: number; feeTok: number; fixedApr: number; prev: number; post: number }>
       >(
         await Promise.all(
-          zones.map(async (z): Promise<[number, Array<{ marketId: number; time: number; pnlTok: number; feeTok: number }>]> => {
+          zones.map(async (z): Promise<[number, Array<{ marketId: number; time: number; pnlTok: number; feeTok: number; fixedApr: number; prev: number; post: number }>]> => {
             const { value } = await deps.cache.get(
               `boros:txns:${address}:${z.tokenId}`,
               TTL.boros,
@@ -374,6 +419,9 @@ export function assetViewRoutes(deps: AppDeps) {
                 time: t.time,
                 pnlTok: norm18(t.pnl),
                 feeTok: Math.abs(norm18(t.fee)),
+                fixedApr: Number(t.fixedApr),
+                prev: norm18(t.prevPositionS ?? '0'),
+                post: norm18(t.postPositionS ?? '0'),
               })),
             ];
           }),
@@ -724,6 +772,7 @@ export function assetViewRoutes(deps: AppDeps) {
               settleUsd: norm18(p.pnl.rateSettlementPnl) * px,
               mtmUsd: norm18(p.pnl.unrealisedPnl) * px,
               imUsd: norm18(p.positionInitialMargin ?? p.initialMargin) * px,
+              settleFeeApr: market.settleFeeApr,
             });
           }
         }
@@ -756,13 +805,15 @@ export function assetViewRoutes(deps: AppDeps) {
           peakSizeToken: 0,
           peakNotionalUsd: 0,
           firstEventSec: 0,
+          entryApr: null,
+          side: null,
           _base: market.base,
         };
         histByMarket.set(marketId, h);
         return h;
       };
       for (const ev of settlements.events) {
-        if (ev.timeSec < sinceSec) continue;
+        if (ev.timeSec < floorFor(ev.marketId)) continue;
         const market = marketById.get(ev.marketId);
         const px = market ? tokenPrice(market.tokenId) : null;
         const h = histFor(ev.marketId);
@@ -779,10 +830,28 @@ export function assetViewRoutes(deps: AppDeps) {
         }
         if (h.firstEventSec === 0 || ev.timeSec < h.firstEventSec) h.firstEventSec = ev.timeSec;
       }
+      /**
+       * The locked rate is a property of the POSITION, not of the window:
+       * a leg opened before the start date and settling inside it still
+       * locked its rate on that earlier fill. So the opening-fill average is
+       * replayed over EVERY fill (per-market "counted from" respected, the
+       * asset window not), and attached only to markets the window shows.
+       */
+      const openRate = new Map<number, { size: number; sizeApr: number; side: 'LONG' | 'SHORT' }>();
       for (const [tokenId, txns] of txnsByToken) {
         const px = tokenPrice(tokenId);
         for (const t of txns) {
-          if (t.time < sinceSec) continue;
+          // An OPENING fill grows |position|; its traded rate, weighted by
+          // the size it added, is what the position locked.
+          const grew = Math.abs(t.post) - Math.abs(t.prev);
+          if (grew > 0 && Number.isFinite(t.fixedApr) && t.time >= (legSince.get(t.marketId) ?? 0)) {
+            const r = openRate.get(t.marketId) ?? { size: 0, sizeApr: 0, side: 'LONG' as const };
+            r.size += grew;
+            r.sizeApr += grew * t.fixedApr;
+            r.side = t.post > 0 ? 'LONG' : 'SHORT';
+            openRate.set(t.marketId, r);
+          }
+          if (t.time < floorFor(t.marketId)) continue;
           const h = histFor(t.marketId);
           if (!h || px === null) {
             unknownMarketRows += 1;
@@ -801,6 +870,9 @@ export function assetViewRoutes(deps: AppDeps) {
       }
       for (const h of histByMarket.values()) {
         const { _base, ...out } = h;
+        const r = openRate.get(h.marketId);
+        out.entryApr = r && r.size > 0 ? r.sizeApr / r.size : null;
+        out.side = r?.side ?? null;
         groupFor(_base).borosHistory.push(out);
       }
 

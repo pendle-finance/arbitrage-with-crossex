@@ -187,7 +187,47 @@ describe('resolveLegSizing', () => {
 
   it('close intent on a flat or same-direction market does nothing', () => {
     expect(resolveLegSizing(0, 100, 'short', 'close').deltaSize).toBe(0);
+  });
+
+  it("'target' aims at an END STATE: the delta is whatever is missing", () => {
+    // Flat → the whole target.
+    expect(resolveLegSizing(0, 100, 'long', 'target').deltaSize).toBe(100);
+    // Half-filled → only the remainder. This is the wizard's half-fill case:
+    // same target, less to do.
+    expect(resolveLegSizing(40, 100, 'long', 'target').deltaSize).toBe(60);
+    // Already there → NO CHANGE, which is what the ticket should show once a
+    // leg has landed.
+    expect(resolveLegSizing(100, 100, 'long', 'target').deltaSize).toBe(0);
+    // Overshot → trimmed back to the target.
+    expect(resolveLegSizing(140, 100, 'long', 'target').deltaSize).toBe(-40);
+    // Short side reads the same way, signs mirrored.
+    expect(resolveLegSizing(-40, 100, 'short', 'target').deltaSize).toBe(-60);
+    expect(resolveLegSizing(-100, 100, 'short', 'target')).toMatchObject({
+      deltaSize: 0,
+      resultingSize: -100,
+    });
+  });
+
+  it("'target' never crosses zero — it stops at flat rather than flipping", () => {
+    // Holding +100, aiming at 100 SHORT: closing and re-opening the other way
+    // in one order is a different trade from the one being quoted.
+    const s = resolveLegSizing(100, 100, 'short', 'target');
+    expect(s.deltaSize).toBe(-100);
+    expect(s.resultingSize).toBe(0);
+    expect(s.flips).toBe(false);
     expect(resolveLegSizing(40, 100, 'long', 'close').deltaSize).toBe(0);
+  });
+
+  it("'target' with a ZERO request leaves the leg alone — it is not a target of flat", () => {
+    // `onlyLeg` sizes the other leg to 0 to keep it out of the order. Read as
+    // "aim at 0" that would have sent a full close of the leg that already
+    // filled, in the one flow (a half-filled wizard step) built to repair it.
+    expect(resolveLegSizing(-100, 0, 'short', 'target')).toMatchObject({
+      deltaSize: 0,
+      resultingSize: -100,
+      opposing: false,
+    });
+    expect(resolveLegSizing(100, 0, 'long', 'target').deltaSize).toBe(0);
   });
 });
 
@@ -210,6 +250,26 @@ describe('simulateBorosPair', () => {
     // 0.09 − 0.042 − 0.003 = 0.045
     expect(sim.estSpreadApr).toBeCloseTo(0.09 - 0.042 - FEE_DRAG, 12);
     expect(sim.feeDragApr).toBeCloseTo(FEE_DRAG, 12);
+  });
+
+  it('reports SLIPPAGE as the distance from mid, not the unused tolerance', () => {
+    const sim = simulateBorosPair(simInput());
+    // Mid spread and executed spread are composed identically (receive − pay
+    // − the same fee drag), so their difference is the walk down the book
+    // alone: (0.09 − 0.045) vs (0.09 − 0.042) = 0.003.
+    expect(sim.midSpreadApr).toBeCloseTo(0.09 - 0.045 - FEE_DRAG, 12);
+    expect(sim.slippageApr).toBeCloseTo(Math.abs(0.09 - 0.045 - (0.09 - 0.042)), 12);
+    // ⚠ It must NOT track the slippage SETTING: widening the tolerance moves
+    // the worst case, never what the book actually gives at this size. This
+    // is the bug it replaced — |est − worst| grew with the setting.
+    const wide = simulateBorosPair(
+      simInput({
+        legA: { ...simInput().legA, slippageApr: 0.05 },
+        legB: { ...simInput().legB, slippageApr: 0.05 },
+      }),
+    );
+    expect(wide.slippageApr).toBeCloseTo(sim.slippageApr!, 12);
+    expect(wide.worstSpreadApr).not.toBeCloseTo(sim.worstSpreadApr!, 6);
   });
 
   it('charges ONE leg\'s fees on a single-leg ticket, not the pair\'s', () => {

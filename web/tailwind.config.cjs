@@ -42,9 +42,12 @@ module.exports = {
           850: '#1C2740', // translucent-fill companion; the mock's most-used panel ground
           800: '#151C2B',
           700: '#2B3B55',
-          600: '#374B6D',
-          500: '#4A628C',
-          400: '#5B749D',
+          // 400/500 carry 10–12px text and sit at ≥4.5:1 on ink-900/950;
+          // 600 is placeholders and separators (≥3:1). Lifted 2026-09-09 —
+          // the old values measured 3.9 / 3.0 / 2.1.
+          600: '#4B6795',
+          500: '#667FA8',
+          400: '#7289AF',
           300: '#7B94BD',
           200: '#9DAFCD',
           100: '#BFCBDF',
@@ -58,6 +61,10 @@ module.exports = {
         info: { DEFAULT: info, light: pastelBlue },
         'pastel-blue': pastelBlue,
         link: '#7AB7FF',
+        // dapp-nitro's `crossex` accent — the one colour that means "via
+        // CrossEx" there, distinct from the info blue that every other blue
+        // tone in this file bridges to.
+        crossex: '#4BE7FF',
 
         // Bridge aliases. Delete once call sites are codemodded to the four above.
         // `cyan` was the original app's neutral accent (selected, active,

@@ -257,11 +257,15 @@ describe('carry − cost', () => {
       ],
     });
     const d = deriveAsset(g, {}, 0, NOW);
-    // Carry, gross: 300 + 80 funding, 500 + 12 settlement, −30 + 8 trade.
-    expect(d.totals.carryGrossUsd).toBeCloseTo(300 + 80 + 512 - 22, 9);
-    // Cost: perp fees 40 + 15, Boros fees 12 + 8, less the price basis (120 − 25).
-    expect(d.totals.costUsd).toBeCloseTo(55 + 20 - 95, 9);
+    // Carry: 300 + 80 funding, 500 settlement (ALREADY net of its 12 fee —
+    // unavoidable, so it never enters carry or cost), −30 + 8 trade gross.
+    expect(d.totals.carryGrossUsd).toBeCloseTo(300 + 80 + 500 - 22, 9);
+    // Cost: perp fees 40 + 15, Boros TRADE fee 8, less the price basis (120 − 25).
+    expect(d.totals.costUsd).toBeCloseTo(55 + 8 - 95, 9);
+    // The identity is what actually matters, and it is unchanged: the
+    // settlement fee cancelled on both sides, so PnL is the same as before.
     expect(d.totals.pnlUsd).toBeCloseTo(d.totals.carryGrossUsd - d.totals.costUsd, 9);
+    expect(d.totals.borosFeesAllUsd).toBeCloseTo(8, 9); // trade fees only
   });
 });
 
@@ -344,3 +348,34 @@ describe('defaultChargePerpFees', () => {
   });
 });
 
+
+describe('exclusions and maturity — his 2026-09-09 rules', () => {
+  it('a partial Boros exclusion scales the settled PnL by the kept fraction, not just capital', () => {
+    const g = group({
+      perpOpen: [perp({ symbol: 'HL', venue: 'HYPERLIQUID', side: 'LONG', qty: 1000, imUsd: 10_000 })],
+      borosOpen: [boros({ marketId: 1, venue: 'HYPERLIQUID', side: 'LONG', sizeToken: 1000, imUsd: 10_000, mtmUsd: 900 })],
+      borosHistory: [
+        { marketId: 1, venue: 'HYPERLIQUID', maturity: NOW + 60 * DAY, settleUsd: 3000, settleFeeUsd: 30, tradePnlUsd: -10, tradeFeeUsd: 10 },
+      ],
+    });
+    const whole = deriveAsset(g, {}, 0, NOW);
+    const half = deriveAsset(g, { 'boros:1': 500 }, 0, NOW);
+    expect(half.totals.breakdown.borosSettleUsd).toBeCloseTo(whole.totals.breakdown.borosSettleUsd / 2, 6);
+    expect(half.totals.breakdown.borosSettleFeeUsd).toBeCloseTo(15, 6);
+    // Capital and settlements move together, so ROI does not double.
+    expect(half.totals.capitalUsd).toBeCloseTo(15_000, 6);
+  });
+
+  it('a matured YU leg is finished: it covers nothing and ties up no capital', () => {
+    const g = group({
+      perpOpen: [perp({ symbol: 'HL', venue: 'HYPERLIQUID', side: 'LONG', qty: 1000, imUsd: 10_000 })],
+      borosOpen: [boros({ marketId: 1, venue: 'HYPERLIQUID', side: 'LONG', sizeToken: 1000, maturity: NOW - DAY, imUsd: 5_000 })],
+    });
+    const d = deriveAsset(g, {}, 0, NOW);
+    expect(d.perfect).toBe(false);
+    expect(d.gaps).toHaveLength(1);
+    expect(d.gaps[0]).toMatchObject({ venue: 'HYPERLIQUID', leg: 'boros', kind: 'missing' });
+    expect(d.totals.capitalUsd).toBe(10_000);
+    expect(d.pairs).toHaveLength(0);
+  });
+});

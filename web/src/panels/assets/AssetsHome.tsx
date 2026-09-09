@@ -23,7 +23,7 @@ import { useBookId } from '../bookId';
 import { AddressForm, short } from '../HomeControls';
 import { useTrackedAddress } from '../trackedAddress';
 import { deriveAsset, SECONDS_IN_YEAR } from './assetModel';
-import { loadPrefs, savePrefs, type AssetViewPrefs } from './assetPrefsStore';
+import { legSinceParam, loadPrefs, savePrefs, type AssetViewPrefs } from './assetPrefsStore';
 import { AssetCard } from './AssetCard';
 
 export function AssetsHome() {
@@ -37,15 +37,25 @@ export function AssetsHome() {
     setPrefsBook(bookId);
     setPrefs(loadPrefs(bookId));
   }
-  const update = (next: AssetViewPrefs) => {
-    savePrefs(bookId, next);
-    setPrefs(next);
+  /**
+   * FUNCTIONAL update. The leg-edit modal fires two writes on one Save
+   * (exclusion, then "counted from"); built off the render-time `prefs`
+   * the second spread the stale object and wiped the first — an exclusion
+   * that visibly saved and then was not there.
+   */
+  const update = (fn: (prev: AssetViewPrefs) => AssetViewPrefs) => {
+    setPrefs((prev) => {
+      const next = fn(prev);
+      savePrefs(bookId, next);
+      return next;
+    });
   };
 
   // Base query (all time) enumerates the assets; each asset with its OWN
   // start date reads from the extra window(s) — one request per distinct
   // date, shared across assets that agree.
-  const query = useAssetView(address, 0);
+  const legSince = legSinceParam(prefs.legSince);
+  const query = useAssetView(address, 0, legSince);
   const data = query.data;
   // The account's own fee schedule (VIP tier) — prices the pairs' exit-fee
   // estimate; the model falls back to a flat rate while it loads.
@@ -54,7 +64,7 @@ export function AssetsHome() {
     () => [...new Set(Object.values(prefs.sinceByAsset).filter((n) => n > 0))],
     [prefs.sinceByAsset],
   );
-  const windows = useAssetViewWindows(address, extraSinces);
+  const windows = useAssetViewWindows(address, extraSinces, legSince);
 
   const allDerived = useMemo(
     () =>
@@ -107,7 +117,8 @@ export function AssetsHome() {
   // Borrow interest is booked by the venue per LIABILITY COIN, not per
   // market, so it cannot sit on a card: it is charged once, here, and the
   // total then differs from the cards' sum by exactly this line.
-  const interestUsd = data?.interest?.available ? data.interest.paidUsd : 0;
+  const interestAvailable = data?.interest?.available === true;
+  const interestUsd = interestAvailable ? data!.interest!.paidUsd : 0;
   const totalPnl = derived.reduce((s, a) => s + a.derived.totals.pnlUsd, 0) - interestUsd;
   const totalCapital = derived.reduce((s, a) => s + a.derived.totals.capitalUsd, 0);
   // Blended APR: Σpnl over Σ(capital · its own elapsed clock) — each asset
@@ -187,39 +198,64 @@ export function AssetsHome() {
           once there is anything to sum. */}
       {derived.length > 0 && (
       <div className="card mb-3 flex flex-wrap items-center gap-x-8 gap-y-2 p-4">
-        <div>
-          <div
-            className="text-xs uppercase tracking-wider text-ink-500"
-            title={
-              interestUsd > 0
-                ? `Σ cards − ${fmtUsd(interestUsd)} borrow interest`
-                : data?.interest?.available === false
-                  ? 'Borrow interest could not be read — not charged here'
-                  : undefined
-            }
-          >
-            Total PnL
+        {/* The two figures ARE an equation — total = earnings − interest —
+            so they are written as one, boxed together. Side by side with no
+            operator they read as two unrelated numbers, and the reader is
+            left to guess whether the total already has the interest in it
+            (it does). Each term says what it is on hover. */}
+        <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 rounded border border-ink-700 bg-ink-950/40 px-3 py-2">
+          <div>
+            <div
+              className="text-xs uppercase tracking-wider text-ink-500"
+              title={
+                interestAvailable
+                  ? 'What the farm kept, after the borrow interest below. This is the number to compare against your own record.'
+                  : 'Borrow interest could not be read, so it is NOT subtracted here — this is the cards summed.'
+              }
+            >
+              Total PnL
+            </div>
+            <div className="num text-xl font-semibold">
+              <SignedNumber value={totalPnl} format={fmtUsd} plus={false} />
+            </div>
           </div>
-          <div className="num text-xl font-semibold">
-            <SignedNumber value={totalPnl} format={fmtUsd} />
+          {/* Only an equation when the right-hand side is known: with the
+              interest unreadable the total IS just the cards summed, and
+              "X = X − —" would assert an arithmetic that did not happen. */}
+          {interestAvailable && (
+          <>
+          <span className="num pb-0.5 self-end text-lg text-ink-500">=</span>
+          <div>
+            <div
+              className="text-xs uppercase tracking-wider text-ink-500"
+              title="Every card's PnL added up: funding and settlements earned, less the trading fees and price basis on those legs. Borrow interest is NOT in here — it is the term to the right."
+            >
+              Earnings
+            </div>
+            <div className="num text-xl font-semibold text-ink-200">
+              <SignedNumber value={totalPnl + interestUsd} format={fmtUsd} plus={false} />
+            </div>
           </div>
-        </div>
-        <div>
-          <div
-            className="text-xs uppercase tracking-wider text-ink-500"
-            title={`Margin-borrow interest the CrossEx account paid inside this window${
-              data?.interest && Object.keys(data.interest.byCoin).length > 0
-                ? ` — ${Object.entries(data.interest.byCoin)
-                    .map(([c, n]) => `${n.toFixed(2)} ${c}`)
-                    .join(', ')}`
-                : ''
-            }. Account-level, so it is charged here and on no card.`}
-          >
-            Interest paid
+          <span className="num pb-0.5 self-end text-lg text-ink-500">−</span>
+          <div>
+            <div
+              className="text-xs uppercase tracking-wider text-ink-500"
+              title={`Margin-borrow interest the CrossEx account paid inside this window${
+                data?.interest && Object.keys(data.interest.byCoin).length > 0
+                  ? ` — ${Object.entries(data.interest.byCoin)
+                      .map(([c, n]) => `${n.toFixed(2)} ${c}`)
+                      .join(', ')}`
+                  : ''
+              }. Charged on the account, not on any one position, so it is subtracted once here and appears on no card.`}
+            >
+              Borrow interest
+            </div>
+            <div className={`num text-xl font-semibold ${interestUsd > 0 ? 'text-guava' : 'text-ink-200'}`}>
+              {fmtUsd(interestUsd)}
+            </div>
           </div>
-          <div className={`num text-xl font-semibold ${interestUsd > 0 ? 'text-guava' : 'text-ink-200'}`}>
-            {data?.interest?.available === false ? '—' : `−${fmtUsd(interestUsd)}`}
-          </div>
+          </>
+          )}
         </div>
         <div>
           <div className="text-xs uppercase tracking-wider text-ink-500">Capital at work</div>
@@ -233,7 +269,7 @@ export function AssetsHome() {
             Realized APR ≈
           </div>
           <div className="num text-xl font-semibold">
-            {blendedApr !== null ? <SignedNumber value={blendedApr} format={fmtPct} /> : '—'}
+            {blendedApr !== null ? <SignedNumber value={blendedApr} format={fmtPct} plus={false} /> : '—'}
           </div>
         </div>
         {/* The HEDGE label stays; both states are plain text under it, green
@@ -269,25 +305,38 @@ export function AssetsHome() {
               sinceSec={sinceSec}
               windowPending={windowPending}
               onChangeSince={(sec: number) => {
-                const sinceByAsset = { ...prefs.sinceByAsset };
-                if (sec > 0) sinceByAsset[group.base] = sec;
-                else delete sinceByAsset[group.base];
-                update({ ...prefs, sinceByAsset });
+                update((prev) => {
+                  const sinceByAsset = { ...prev.sinceByAsset };
+                  if (sec > 0) sinceByAsset[group.base] = sec;
+                  else delete sinceByAsset[group.base];
+                  return { ...prev, sinceByAsset };
+                });
               }}
               liquidation={lineFor(group.base)}
               exclusions={prefs.exclusions}
               onExclude={(key, value) => {
-                const exclusions = { ...prefs.exclusions };
-                if (value === undefined) delete exclusions[key];
-                else exclusions[key] = value;
-                update({ ...prefs, exclusions });
+                update((prev) => {
+                  const exclusions = { ...prev.exclusions };
+                  if (value === undefined) delete exclusions[key];
+                  else exclusions[key] = value;
+                  return { ...prev, exclusions };
+                });
+              }}
+              legSince={prefs.legSince}
+              onLegSince={(key, sec) => {
+                update((prev) => {
+                  const next = { ...prev.legSince };
+                  if (sec === undefined || !(sec > 0)) delete next[key];
+                  else next[key] = sec;
+                  return { ...prev, legSince: next };
+                });
               }}
             />
           ))}
           {dust.length > 0 && (
             <p
               className="text-xs text-ink-600"
-              title={`Nothing open and under $1 of history — still counted in the totals: ${dust
+              title={`Nothing open and under $1 of history — left out of the totals above: ${dust
                 .map(
                   (a) => `${a.group.base} ${a.derived.totals.pnlUsd < 0 ? '−' : '+'}$${Math.abs(a.derived.totals.pnlUsd).toFixed(2)}`,
                 )

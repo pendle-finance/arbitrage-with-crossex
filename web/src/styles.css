@@ -2,6 +2,18 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Inter, SELF-HOSTED. This is a local terminal that must render the same
+   offline or with Google blocked — the tables depend on Inter's tabular
+   numerals, and a system-font fallback loses that alignment. One variable
+   file (latin subset, weights 200–700, from Google's own build). */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 200 700;
+  font-display: swap;
+  src: url('./assets/fonts/inter-latin.woff2') format('woff2');
+}
+
 /* House look-and-feel, carrying the Boros design-system tokens on the original
    `ink` names (see tailwind.config.cjs). Inter only — numerals align via
    font-variant-numeric, not a mono face. Depth is hairline borders plus

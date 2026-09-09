@@ -139,11 +139,32 @@ export function ExecuteControl({
     // the id (the server dedupes on it; a network-lost POST must never double-execute).
   });
 
-  /** The split close: two single-leg deals, posted in order, one intent. */
+  /**
+   * The split close: two single-leg deals, posted in order, one intent.
+   *
+   * Each leg's OUTCOME is recorded as it lands, so a failure on the second
+   * leg is reported beside a first leg that already closed — the hedge is
+   * then half gone, and one error string in a hover card did not say so.
+   */
+  const [splitLegs, setSplitLegs] = useState<
+    Array<{ symbol: string; state: 'sent' | 'done' | 'failed'; message?: string }>
+  >([]);
   const executeSplit = useMutation({
-    mutationFn: async (deals: Array<Parameters<typeof postJson>[1] & { id: string }>) => {
+    mutationFn: async (deals: Array<Parameters<typeof postJson>[1] & { id: string; a: { symbol: string } }>) => {
       const out: DealResponse[] = [];
-      for (const d of deals) out.push(await postJson<DealResponse>('/deals', d));
+      setSplitLegs(deals.map((d) => ({ symbol: d.a.symbol, state: 'sent' })));
+      for (let i = 0; i < deals.length; i += 1) {
+        try {
+          out.push(await postJson<DealResponse>('/deals', deals[i]));
+          setSplitLegs((prev) => prev.map((l, k) => (k === i ? { ...l, state: 'done' } : l)));
+        } catch (err) {
+          const message = err instanceof ApiError ? err.message : (err as Error).message;
+          setSplitLegs((prev) =>
+            prev.map((l, k) => (k === i ? { ...l, state: 'failed', message } : k > i ? { ...l, state: 'failed', message: 'not sent' } : l)),
+          );
+          throw err;
+        }
+      }
       return out;
     },
     onSuccess: (rs) => {
@@ -326,9 +347,24 @@ export function ExecuteControl({
           can't run as one deal (e.g. unequal leg sizes) — execute the legs individually
         </div>
       )}
-      {splitClose && (
+      {splitClose && splitLegs.length === 0 && (
         <div className="mt-1 text-[11px] text-ink-400">
-          two deals, one per leg (sizes differ)
+          two deals, one per leg (sizes differ) — sent in order; each leg reports its own outcome
+        </div>
+      )}
+      {splitLegs.some((l) => l.state === 'failed') && (
+        <div role="alert" className="mt-1 flex flex-col gap-0.5 text-[11px]">
+          {splitLegs.map((l) => (
+            <div key={l.symbol} className={l.state === 'done' ? 'text-emerald-300' : l.state === 'failed' ? 'text-rose-300' : 'text-ink-400'}>
+              {l.state === 'done' ? '✓' : l.state === 'failed' ? '✗' : '…'} {parseSymbol(l.symbol).exchange} leg{' '}
+              {l.state === 'done' ? 'closed' : l.state === 'failed' ? `not closed — ${l.message ?? 'failed'}` : 'sending'}
+            </div>
+          ))}
+          {splitLegs.some((l) => l.state === 'done') && (
+            <div className="text-amber-400">
+              One leg is closed and the other is still open — the pair is no longer hedged. Retry closes only the leg that failed.
+            </div>
+          )}
         </div>
       )}
       {cardOpen && (

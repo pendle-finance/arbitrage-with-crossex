@@ -133,18 +133,24 @@ export function pairSharePayload(
   // Same $100 bucket as the strategy card: an exact notional would join a
   // public Boros fill uniquely.
   const round100 = (v: number) => Math.round(v / 100) * 100;
-  // The pair carries size in the asset's unit and one blended notional, so a
-  // leg's notional is its share of the pair's.
-  const totalSize = pair.legs.reduce((t, l) => t + Math.abs(l.size), 0);
+  // `pair.notionalUsd` is the TWO PERP legs' notional at `pair.size` each, so
+  // one unit of size is worth notionalUsd / (2 × size). Every leg — perp or
+  // YU — is priced off that. (Dividing the pair notional across all four
+  // legs' sizes halved each leg's figure: the YU legs are the same size as
+  // the perps but were never part of that notional.)
+  const usdPerUnit = pair.size > 0 ? pair.notionalUsd / (2 * pair.size) : 0;
   const legs: ShareLegV1[] = pair.legs.map((l) => {
     const leg: ShareLegV1 = {
       k: l.kind === 'yu' ? 'b' : 'p',
       x: l.venue,
       s: l.side === 'SHORT' ? 'S' : 'L',
-      n: round100(totalSize > 0 ? (pair.notionalUsd * Math.abs(l.size)) / totalSize : 0),
+      n: round100(Math.abs(l.size) * usdPerUnit),
     };
     if (l.kind === 'yu' && l.lockedApr !== null) leg.r = l.lockedApr;
-    if (SYMBOL_RE.test(base) && Math.abs(l.size) > 0 && leg.n > 0) {
+    // `tn`/`ts` is a COIN quantity; a USD-unit asset's sizes are dollars, and
+    // dollars stamped with the coin's ticker would put "20k SOL" on a card
+    // for a $20k position.
+    if (pair.unit === 'base' && SYMBOL_RE.test(base) && Math.abs(l.size) > 0 && leg.n > 0) {
       const tn = sig4(Math.abs(l.size));
       if (tn > 0 && tn < 1e12) {
         leg.tn = tn;

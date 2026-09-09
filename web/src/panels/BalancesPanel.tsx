@@ -6,7 +6,7 @@ import { QueryError } from '../components/QueryError';
 import { MarginBreakdown } from '../components/MarginDonut';
 import { SignedNumber } from '../components/SignedNumber';
 import { TableSkeleton, TilesSkeleton } from '../components/Skeleton';
-import { sig } from '../lib/fmt';
+import { num } from '../lib/fmt';
 import { RebalanceSection } from './RebalanceSection';
 
 const ASSET_COLUMNS: Column<CrossexAsset>[] = [
@@ -20,19 +20,21 @@ const ASSET_COLUMNS: Column<CrossexAsset>[] = [
       </span>
     ),
   },
-  { key: 'equity', header: 'Equity', align: 'right', render: (a) => <span className="num">{sig(a.equity)}</span> },
-  { key: 'balance', header: 'Balance', align: 'right', render: (a) => <span className="num">{sig(a.balance)}</span> },
+  // Fixed 2dp on every money column: tabular figures only line up when the
+  // decimal point sits in the same place on every row.
+  { key: 'equity', header: 'Equity', align: 'right', render: (a) => <span className="num">{num(a.equity, 2)}</span> },
+  { key: 'balance', header: 'Balance', align: 'right', render: (a) => <span className="num">{num(a.balance, 2)}</span> },
   {
     key: 'available',
     header: 'Available',
     align: 'right',
-    render: (a) => <span className="num">{sig(a.availableBalance)}</span>,
+    render: (a) => <span className="num">{num(a.availableBalance, 2)}</span>,
   },
   {
     key: 'upnl',
     header: 'uPnL',
     align: 'right',
-    render: (a) => <SignedNumber value={a.upnl} format={(n) => sig(n)} />,
+    render: (a) => <SignedNumber value={a.upnl} format={(n) => num(n, 2)} />,
   },
 ];
 
