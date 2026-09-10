@@ -54,14 +54,6 @@ const row = (id: string, status: string, extra: Record<string, string> = {}) => 
   ...extra,
 });
 const rows = (...list: unknown[]) => ({ body: list });
-const account = (usdcOnHl: string) => ({
-  body: {
-    assets: [
-      { coin: 'USDT', exchangeType: 'CROSSEX', balance: '1200' },
-      { coin: 'USDC', exchangeType: 'HYPERLIQUID', balance: usdcOnHl },
-    ],
-  },
-});
 const quote = (quoteId: string, toAmount: string) => ({
   body: { quoteId, validMs: '5000', fromAmount: '12', toAmount, price: '0.998' },
 });

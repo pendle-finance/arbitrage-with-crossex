@@ -210,8 +210,7 @@ function PairModal({
    * `SharePositionModal`'s effects (short-link mint, card render) see a new
    * `payload` identity each time; each one set state, which re-rendered this
    * card, which built another object — the link visibly reminted in a loop.
-   * A frozen snapshot is also what the modal documents it receives, and what
-   * the classic StrategyCard has always passed.
+   * A frozen snapshot is also what the modal documents it receives.
    */
   const [sharePayload, setSharePayload] = useState<SharePayloadV1 | null>(null);
   const nowSec = Date.now() / 1000;

@@ -41,7 +41,7 @@ import {
   type BorosMarket,
   type FetchLike,
 } from '../../core/boros/client';
-import { normalizeVenue, type PerpPositionLike } from '../../core/boros/returns';
+import { normalizeVenue, type PerpPositionLike } from '../../core/boros/venue';
 import { classifyGateError, CoreError } from '../../core/errors';
 import { parseSymbol } from '../../core/numbers';
 import type { AppDeps } from '../app';

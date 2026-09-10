@@ -755,7 +755,7 @@ export function borosPairRoutes(deps: AppDeps) {
        * ⚠ Bust the Boros reads this OPEN just invalidated.
        *
        * The close route has always done this; the open route never did, and
-       * the asymmetry IS the bug: /strategy serves boros:collaterals from a
+       * the asymmetry IS the bug: /asset-view serves boros:collaterals from a
        * 30s cache (TTL.boros), so a freshly opened leg could be invalidated
        * client-side, refetched at once, and still come back from the PRE-TRADE
        * snapshot. The position then appeared only when the TTL happened to
@@ -925,7 +925,7 @@ export function borosPairRoutes(deps: AppDeps) {
       /**
        * ⚠ Bust the Boros reads this close just invalidated.
        *
-       * `/strategy` serves `boros:collaterals:${address}` from a 30s cache
+       * `/asset-view` serves `boros:collaterals:${address}` from a 30s cache
        * (TTL.boros), so without this the client could invalidate, refetch
        * immediately, and still be handed the PRE-CLOSE position — the card sat
        * on a stale size for up to 30s after saying "closed". Same contract as

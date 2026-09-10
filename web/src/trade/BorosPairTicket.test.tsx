@@ -222,7 +222,7 @@ async function fillTicket(user: ReturnType<typeof userEvent.setup>) {
 beforeEach(() => {
   window.localStorage.setItem(
     STRATEGY_STORAGE_KEY,
-    JSON.stringify({ address: ADDRESS, since: null, capitalBasis: 'balance' }),
+    JSON.stringify({ address: ADDRESS }),
   );
 });
 
@@ -247,7 +247,7 @@ describe('BorosPairTicket', () => {
     const other = '0x2222222222222222222222222222222222222222';
     window.localStorage.setItem(
       STRATEGY_STORAGE_KEY,
-      JSON.stringify({ address: other, since: null, capitalBasis: 'balance' }),
+      JSON.stringify({ address: other }),
     );
     const bodies: Record<string, unknown>[] = [];
     server.use(...handlers({ onSimulate: (b) => bodies.push(b) }));

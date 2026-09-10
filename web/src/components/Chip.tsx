@@ -5,9 +5,7 @@ export type ChipTone =
   | 'red'
   | 'amber'
   | 'cyan'
-  | 'orange'
   | 'blue'
-  | 'violet'
   | 'info'
   | 'link'
   | 'crossex'
@@ -20,14 +18,12 @@ const TONES: Record<ChipTone, string> = {
   red: 'border-rose-500/40 bg-rose-500/10 text-rose-400',
   amber: 'border-amber-500/40 bg-amber-500/10 text-amber-400',
   cyan: 'border-cyan-500/40 bg-cyan-500/10 text-cyan-400',
-  orange: 'border-orange-500/40 bg-orange-500/10 text-orange-400',
   blue: 'border-sky-500/40 bg-sky-500/10 text-sky-400',
-  violet: 'border-violet-500/40 bg-violet-500/10 text-violet-400',
   /* Count badges — the mock's borderless `info @18%` fill. */
   info: 'border-transparent bg-info/[0.18] text-pastel-blue',
   link: 'border-link/40 bg-link/10 text-link',
   /* "via CrossEx" — dapp-nitro's crossex cyan, so it cannot be confused with
-     the info-blue that cyan/blue/violet all resolve to. */
+     the info-blue that cyan resolves to. */
   crossex: 'border-crossex/40 bg-crossex/10 text-crossex',
   neutral: '',
 };

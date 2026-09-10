@@ -10,7 +10,7 @@ import type {
 import { Chip } from '../components/Chip';
 import { SideChip } from '../components/VenueChip';
 import { SignedNumber } from '../components/SignedNumber';
-import { bps, fmtUsd, parseSymbol, sig } from '../lib/fmt';
+import { bps, fmtUsd, sig } from '../lib/fmt';
 
 /** Slippage severity coloring: green < 0.05%, amber < 0.3%, red above. */
 export function slippageClass(pct: number): string {
@@ -85,19 +85,6 @@ export function ActionKindChip({ input }: { input: ActionInput }) {
       )}
     </span>
   );
-}
-
-/** Human description of an ActionInput (remediation buttons, review rows). */
-export function describeAction(a: ActionInput): string {
-  const { exchange, base } = parseSymbol(a.symbol);
-  if (a.kind === 'close-position') {
-    const qty = a.qty ? `${sig(a.qty)} ` : '';
-    const slip = a.slippagePct !== undefined ? ` (±${a.slippagePct}%)` : '';
-    return `close ${qty}${base} on ${exchange}${slip}`;
-  }
-  const qty = a.qty ? sig(a.qty) : a.notional ? `$${a.notional}` : '?';
-  const px = a.kind === 'open-limit' ? ` @ ${a.price}` : '';
-  return `${a.side} ${qty} ${base} on ${exchange}${px}`;
 }
 
 /**

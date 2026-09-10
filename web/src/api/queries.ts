@@ -24,21 +24,18 @@ import type {
   BorosPairExecuteResponse,
   BorosPairRequest,
   BorosPairSimulateResponse,
-  CapitalBasis,
   CredentialsInfo,
   CredentialsInput,
   DisclaimerStatus,
   CrossexAccount,
   EntryMode,
   ExitMode,
-  LeverageInfo,
   OpenOrder,
   OpportunitiesResult,
   PositionsResponse,
   RebalanceDirection,
   RebalanceJob,
   RebalanceView,
-  StrategyReturns,
   SymbolDetail,
   SymbolRule,
   TradesResponse,
@@ -61,8 +58,6 @@ export const qk = {
   symbols: (q: string) => ['symbols', q] as const,
   symbolsByBase: (base: string) => ['symbols', 'base', base] as const,
   symbolDetail: (symbol: string) => ['symbolDetail', symbol] as const,
-  strategy: (address: string, since: number | null, partition = '', capital = 'balance') =>
-    ['strategy', address, since ?? '', partition, capital] as const,
   assetView: (address: string, since: number, legSince = '') =>
     ['assetView', address, since, legSince] as const,
   borosAgent: ['boros', 'agent'] as const,
@@ -135,35 +130,6 @@ export function useTrades(limit = 100) {
 }
 
 /** 4-leg strategy returns for the tracked EVM address (Boros legs + perp overlay).
- * Settlements are hourly at the fastest — 30s keeps the card feeling live.
- * Deliberately NO keepPreviousData: after a Change to a different address the
- * old address's financial data must never render attributed to the new one
- * (same-key background polls keep data without it). */
-export function useStrategy(
-  address: string | null,
-  since: number | null = null,
-  /** base64url pins from partitionStore — the user's edits to the split. */
-  partition = '',
-  /** 'im' counts only the margin the Boros legs post as capital. */
-  capital: CapitalBasis = 'balance',
-) {
-  const params = new URLSearchParams();
-  if (since) params.set('since', String(since));
-  if (partition) params.set('partition', partition);
-  if (capital !== 'balance') params.set('capital', capital);
-  // NOT params.size: it is Baseline-2023 (Safari 17), and where it is
-  // undefined the ternary would drop the whole query string — silently
-  // disabling the clock override and every pin.
-  const query = params.toString();
-  const search = query ? `?${query}` : '';
-  return useQuery({
-    queryKey: qk.strategy(address ?? '', since, partition, capital),
-    queryFn: () => fetchJson<StrategyReturns>(`/strategy/${encodeURIComponent(address ?? '')}${search}`),
-    enabled: Boolean(address),
-    refetchInterval: 30_000,
-  });
-}
-
 /** `?since=…&legSince=…` for the asset view; `legSince` is the encoded
  * per-market "counted from" list (see assetPrefsStore.legSinceParam). */
 function assetViewSearch(since: number, legSince: string): string {
@@ -482,16 +448,6 @@ export function useAckAlert() {
   return useMutation({
     mutationFn: (id: number) => postJson<{ acked: boolean }>(`/alerts/${id}/ack`, {}),
     onSuccess: () => void qc.invalidateQueries({ queryKey: qk.alerts }),
-  });
-}
-
-/** PUT /api/leverage/:symbol; positions carry leverage, so bust them. */
-export function useSetLeverage() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: ({ symbol, leverage }: { symbol: string; leverage: number }) =>
-      putJson<LeverageInfo>(`/leverage/${encodeURIComponent(symbol)}`, { leverage }),
-    onSuccess: () => void qc.invalidateQueries({ queryKey: qk.positions }),
   });
 }
 

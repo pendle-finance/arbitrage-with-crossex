@@ -23,7 +23,7 @@ import {
   type EvaluatePairInput,
   type SimulateBorosPairInput,
 } from '../../src/core/boros/pair';
-import { SECONDS_IN_YEAR } from '../../src/core/boros/returns';
+import { SECONDS_IN_YEAR } from '../../src/core/boros/venue';
 import { imInputs } from '../helpers/boros-fixtures';
 
 const NOW = 1_752_000_000;

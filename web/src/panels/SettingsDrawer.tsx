@@ -1,7 +1,6 @@
 import { useCredentials, useVersion } from '../api/queries';
 import { CredentialsForm } from '../components/CredentialsForm';
 import { Drawer } from '../components/Drawer';
-import { SegmentedToggle } from '../components/SegmentedToggle';
 import { AddressForm } from './HomeControls';
 import { useTrackedAddress } from './trackedAddress';
 
@@ -9,7 +8,7 @@ import { useTrackedAddress } from './trackedAddress';
  * replace-credentials form. */
 export function SettingsDrawer({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { data } = useCredentials();
-  const { address, capitalBasis, setAddress, setCapitalBasis } = useTrackedAddress();
+  const { address, setAddress } = useTrackedAddress();
   const version = useVersion(); // same query key as the header pill — deduped
   const install = version.data?.install ?? null;
 
@@ -46,31 +45,6 @@ export function SettingsDrawer({ open, onClose }: { open: boolean; onClose: () =
               Stop tracking
             </button>
           )}
-        </section>
-
-        <section>
-          <h3 className="mb-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-ink-400">
-            Capital counted per position
-          </h3>
-          <p className="mb-2 text-xs leading-relaxed text-ink-400">
-            Every APR is a return ON this number, so it decides whether a position looks good.
-            The perp side is always its initial margin; this picks what the Boros side counts.
-          </p>
-          <SegmentedToggle
-            className="seg-info"
-            ariaLabel="Boros capital"
-            value={capitalBasis}
-            onChange={setCapitalBasis}
-            options={[
-              { value: 'balance', label: 'Posted balance' },
-              { value: 'im', label: 'Margin used' },
-            ]}
-          />
-          <p className="mt-2 text-xs leading-relaxed text-ink-500">
-            {capitalBasis === 'balance'
-              ? 'Counting the whole collateral balance. If you also keep trading money in that account, it is counted as capital these positions needed — switch to Margin used.'
-              : 'Counting only the margin the Boros legs post. Idle cash in the same collateral account is left out.'}
-          </p>
         </section>
 
         <section>

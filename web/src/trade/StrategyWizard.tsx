@@ -20,7 +20,7 @@
  *
  * Progress is never trusted from memory alone: closing after step 1 is safe
  * because the Positions page derives "rate locked, unhedged" from live legs
- * (StrategyCard's boros-only cue) and re-enters here at step 2.
+ * (the asset card's missing-perp cue) and re-enters here at step 2.
  */
 import { Fragment, useEffect, useState } from 'react';
 import type { BorosLegFill, BorosPairResult } from '../api/types';

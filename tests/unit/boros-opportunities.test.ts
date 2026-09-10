@@ -20,7 +20,7 @@ import {
   type BuildOpportunitiesInput,
   type BuildOpportunitiesOptions,
 } from '../../src/core/boros/opportunities';
-import { SECONDS_IN_YEAR } from '../../src/core/boros/returns';
+import { SECONDS_IN_YEAR } from '../../src/core/boros/venue';
 import type { NormalizedBook } from '../../src/core/estimate/books';
 import { imInputs } from '../helpers/boros-fixtures';
 

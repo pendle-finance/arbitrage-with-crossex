@@ -16,4 +16,3 @@ export const INSTALL_CMD =
 export const INSTALL_CMD_WINDOWS =
   'irm https://raw.githubusercontent.com/pendle-finance/arbitrage-with-crossex/main/install.ps1 | iex';
 
-export const LOCAL_APP_URL = 'http://localhost:6688';

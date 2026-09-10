@@ -181,13 +181,6 @@ export interface PreviewResult extends ResolvedAction {
   restEstimate?: RestEstimate;
 }
 
-/** Locate the maker/hedge legs of a maker-hedge basket; null when not that mode. */
-export function makerHedgeRoles(actions: ActionInput[]): { makerIndex: number; hedgeIndex: number } | null {
-  const makerIndex = actions.findIndex((a) => 'pairRole' in a && a.pairRole === 'maker');
-  const hedgeIndex = actions.findIndex((a) => 'pairRole' in a && a.pairRole === 'hedge');
-  return makerIndex >= 0 && hedgeIndex >= 0 ? { makerIndex, hedgeIndex } : null;
-}
-
 // ---------------------------------------------------------------------------
 // Resolver
 // ---------------------------------------------------------------------------
@@ -683,9 +676,4 @@ function applyMakerHedgeChecks(
   if (resolved.length !== 2) {
     flag('pair-mode-mixed-actions', `a maker-hedge basket must contain exactly the two pair legs (got ${resolved.length} actions)`);
   }
-}
-
-/** Hard violations across a resolved basket (what blocks /api/execute). */
-export function collectViolations(resolved: ResolvedAction[]): Array<{ index: number; violation: Violation }> {
-  return resolved.flatMap((r) => r.violations.map((violation) => ({ index: r.index, violation })));
 }

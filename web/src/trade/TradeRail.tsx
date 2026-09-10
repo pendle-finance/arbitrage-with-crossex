@@ -66,7 +66,7 @@ export function TradeRail({
     if (venue === 'boros') setBorosSeen(true);
   }, [venue]);
 
-  // A strategy-box "Open the perp legs" prefill lands here: make sure the perp
+  // A Positions "open perp leg" prefill lands here: make sure the perp
   // pair ticket is visible (PairTicket itself consumes the field values). The
   // venue is set explicitly — a prefill that arrived while the Boros ticket was
   // open must not silently fill a form the user cannot see. No scrolling any

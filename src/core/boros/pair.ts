@@ -34,7 +34,7 @@ import {
   walkBorosBook,
   type BookStatus,
 } from './opportunities';
-import { SECONDS_IN_YEAR } from './returns';
+import { SECONDS_IN_YEAR } from './venue';
 import {
   AUTO_TOP_UP_BELOW_USD,
   AUTO_TOP_UP_USD,

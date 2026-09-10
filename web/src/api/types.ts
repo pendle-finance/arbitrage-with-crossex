@@ -256,9 +256,8 @@ export interface PositionsResponse {
 }
 
 // ---------------------------------------------------------------------------
-// GET /api/strategy/:address — mirror of src/core/boros/returns.ts. All values
-// are computed server-side and arrive as plain NUMBERS (USD / APR fractions /
-// unix seconds); warnings are ready-to-render plain-language sentences.
+// A position leg as the close forms and the pairs table describe it. (The
+// /api/strategy mirror that once surrounded it is gone with the strategy tab.)
 // ---------------------------------------------------------------------------
 
 export interface StrategyLeg {
@@ -332,198 +331,6 @@ export interface StrategyLeg {
   warnings: string[];
 }
 
-/** One tickable piece of a strategy's PAID perp entry cost.
- *
- * INVARIANT: the parts sum to
- *   feesUsd.paid.perpTradingUsd + (feesUsd.paid.perpEntrySlippageUsd ?? 0)
- * — the card subtracts the un-ticked ones from exactly those two aggregates.
- *
- * The kinds are NOT symmetric, and the UI says so:
- *  - `slippage` is per EXECUTION — one per journal deal (a venue migration or a
- *    DCA top-up each get their own), or a single whole-book part when both legs
- *    were opened together.
- *  - `fees` is per LEG, covering that position's whole life: Gate reports a
- *    position's fee as one cumulative scalar and nothing records a trading fee
- *    more finely, so a per-execution split would be invented. A leg migrated
- *    away from has no live position and so never appears here. */
-export interface PerpEntryCostPart {
-  id: string;
-  kind: 'slippage' | 'fees';
-  /** Signed — a favorable crossing is negative. */
-  usd: number;
-  /** Null when the cost has no single point in time (a leg's lifetime fees). */
-  atSec: number | null;
-  /** Two venues for a slippage part, one for fees. */
-  venues: string[];
-  side: 'LONG' | 'SHORT' | null;
-  /** Matched qty — slippage parts only. */
-  qty: number | null;
-}
-
-/** The strategy's cost ledger split by paid (money already gone) vs future
- * (still ahead). expectedPnlToMaturityUsd = spread return − paid.totalUsd −
- * future.borosSettlementUsd; the perp exit parts are folded in client-side,
- * each via its own checkbox. */
-export interface StrategyFees {
-  paid: {
-    perpTradingUsd: number;
-    /** Entry crossing cost (long entry − short entry) × qty; signed, negative
-     * = favorable. Null unless exactly 1 long + 1 short perp leg. */
-    perpEntrySlippageUsd: number | null;
-    borosTradeUsd: number;
-    /** Estimated accrual — settlement PnL is already net of these. */
-    borosSettlementUsd: number;
-    /** Null slippage counts as 0 here (a warning says so). */
-    totalUsd: number;
-  };
-  future: {
-    /** Maker+hedge exit (maker one leg + taker the other, cheaper assignment).
-     * 0 = no perps; null = perps exist but the fee schedule is unknown. */
-    perpExitFeesUsd: number | null;
-    /** Assumed equal to paid.perpEntrySlippageUsd. */
-    perpExitSlippageUsd: number | null;
-    /** Already inside expectedPnlToMaturityUsd — display decomposition only. */
-    borosSettlementUsd: number;
-    /** Null propagates from the perp exit parts. */
-    totalUsd: number | null;
-  };
-}
-
-export type HedgeStatus = 'hedged' | 'partial' | 'unhedged';
-
-/** What counts as the capital a Boros position ties up. `balance` apportions
- * the margin group's posted balance (over-states it when the collateral
- * account is shared with other trading); `im` counts only the initial margin
- * the legs consume — the same basis the perp side always uses. */
-export type CapitalBasis = 'balance' | 'im';
-
-/** How a strategy's share of each shared leg was arrived at — see
- * src/core/boros/partition.ts. `measured` means an execution record (the local
- * deal journal or the venue's own fills) proved the split; `unconfirmed` means
- * it was paired on price/open-time proximity and is a proposal to edit. */
-export interface StrategyAttribution {
-  source:
-    | 'journal'
-    | 'fill-history'
-    | 'forced'
-    | 'proximity'
-    | 'user'
-    | 'merged'
-    | 'boros-only'
-    /** Live perp size no position claimed — a position holding that one leg. */
-    | 'unhedged';
-  confidence: 'measured' | 'unconfirmed';
-  pinned: boolean;
-  /**
-   * True when this card exists ONLY to report size no position claims —
-   * detached by the user, or left over by the solver.
-   *
-   * ⚠ A SEPARATE QUESTION FROM `source`, which answers how a grouping was
-   * arrived at. The two were conflated, and collided both ways: a solver
-   * tranche on a coin with no Boros reports `source: 'unhedged'` (the chip
-   * means "no rate is locked against this"), while the Boros remainder card
-   * reports `'boros-only'` or `'merged'`. So "is this the card holding the
-   * detached size" could not be read off `source` at all — Automatic deleted
-   * a neighbour's detachment from the first, and did nothing on the second.
-   */
-  unclaimed?: boolean;
-}
-
-/** What anchors the realized-APR clock: earliest Boros leg (default), perp
- * fallback when the Boros open time is unknown, or a user-chosen date. */
-export type ClockBasis = 'boros-open' | 'perp-open' | 'custom';
-
-export interface StrategyRollup {
-  /** Stable identity across re-solves: `BASE#VENUE-VENUE#openDay` when the
-   * book was split, `BASE@maturity` when it was not. Pins, excluded entry
-   * parts and React keys all hang off this. */
-  strategyId: string;
-  attribution: StrategyAttribution;
-  base: string;
-  /** Unix seconds. */
-  maturity: number;
-  legs: StrategyLeg[];
-  hedge: HedgeStatus;
-  /** Sizing gate for the headline numbers: all three ratios (matched/larger)
-   * must clear their thresholds — Boros legs > 0.9, perp legs > 0.9,
-   * Boros↔perp > 0.8 — before APR / capital / PnL-by-maturity are shown.
-   * A position still being entered would otherwise show confidently wrong
-   * numbers (a full-life spread projection on half the notional). */
-  hedgeChecks: {
-    borosMatchRatio: number;
-    perpMatchRatio: number;
-    borosVsPerpRatio: number;
-    fullyHedged: boolean;
-  };
-  capitalUsd: number;
-  /** capitalUsd's two components: perp initial margin on CrossEx + the Boros
-   * margin apportioned to this strategy. Sums to capitalUsd by construction. */
-  capitalSplit: { perpUsd: number; borosUsd: number };
-  /** Σ leg nets − entry slippage (pair-level). Perp price MtM is excluded. */
-  realizedPnlUsd: number;
-  /** Annualized on capital; null = too early to annualize / unknowable. */
-  realizedApr: number | null;
-  /** Locked fixed spread across the Boros legs (≈ rate_A − rate_B). */
-  spread: number;
-  lockedAprOnCapital: number;
-  spreadReturnUsd: number | null;
-  /** spreadReturnUsd − paid costs − future Boros settle fees. Perp exit parts
-   * NOT included — each checkbox folds its own in client-side. Null exactly
-   * when spreadReturnUsd is null. */
-  expectedPnlToMaturityUsd: number | null;
-  elapsedSeconds: number | null;
-  clockBasis: ClockBasis | null;
-  /** The clock's start instant — the date the spread-lock assumption runs from. */
-  clockStartSec: number | null;
-  secondsToMaturity: number;
-  notionalMismatchUsd: number;
-  feesUsd: StrategyFees;
-  /** The PAID perp entry cost, itemised so a user can drop the executions that
-   * belong to an earlier strategy. Sums to paid.perpTradingUsd +
-   * (paid.perpEntrySlippageUsd ?? 0). */
-  perpEntryCostParts: PerpEntryCostPart[];
-  warnings: string[];
-}
-
-export interface StrategyReturns {
-  address: string;
-  /** null when Gate isn't configured — Boros-only view. */
-  perpSource: 'connected-gate-account' | null;
-  strategies: StrategyRollup[];
-  /**
-   * Every Boros market the venue reports a live position on — counted from the
-   * account's own zones, so no downstream filtering can shorten it.
-   *
-   * ⚠ NOT the same as the markets appearing on `strategies`. A collateral zone
-   * that cannot be priced in USD is excluded from every card (with a warning)
-   * while its positions stay open, so a market can be live here and absent
-   * there. The client prunes membership rows against THIS, never against the
-   * cards: reading "no card holds it" as "the position closed" deleted pins
-   * the user cannot get back.
-   */
-  liveBorosMarketIds: number[];
-  totals: {
-    capitalUsd: number;
-    realizedPnlUsd: number;
-    realizedApr: number | null;
-    /** Σ non-null strategy projections. */
-    expectedPnlToMaturityUsd: number;
-    /** Σ paid fees only. */
-    feesTotalUsd: number;
-    /** Σ future.perpExitFeesUsd; null if any strategy's schedule is unknown. */
-    perpExitFeesTotalUsd: number | null;
-    /** Σ future.perpExitSlippageUsd; null if any strategy's is unknown. */
-    perpExitSlippageTotalUsd: number | null;
-    /** How many strategies could not measure their crossing cost — lets the
-     * strip say "unknown for 2 of 5" instead of blanking with no reason. */
-    slippageUnknownCount: number;
-    strategyCount: number;
-  };
-  /** Which reading of "capital" produced every capital-derived number here. */
-  capitalBasis: CapitalBasis;
-  warnings: string[];
-}
-
 // ---------------------------------------------------------------------------
 // GET /api/opportunities?notionalUsd&borosEntry&entryMode&exitMode — mirror of
 // src/core/boros/opportunities.ts. Every APR field is a decimal FRACTION (0.09
@@ -545,7 +352,6 @@ export type ExitMode = 'close' | 'roll';
 /** Whether a live strategy is charged the perp entry cost it paid, or not —
  * a perp rolled into this maturity paid its fees and crossed its spread in a
  * previous life. Client-side display only; the server never sees it. */
-export type EntryCostMode = 'include' | 'omit';
 
 /** Why a market's exec APRs are what they are — drives the per-row badge. */
 export type BookStatus = 'ok' | 'insufficient-depth' | 'unavailable' | 'not-fetched';

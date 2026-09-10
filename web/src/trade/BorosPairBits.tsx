@@ -30,18 +30,6 @@ import { fmtDateLocal, fmtPct, fmtTokenQty, fmtUsd } from '../lib/fmt';
 export const legSubmitted = (leg: BorosLegFill): boolean =>
   leg.filledSize !== 0 || leg.shortfallSize > 0 || leg.failure !== null;
 
-/**
- * Tolerances are quoted in BASIS POINTS OF APR — an absolute distance in rate
- * space, so 25bp means the same give-up on a 3% book as on a 30% one.
- *
- * Deliberately NOT called "ticks". Boros has its own tick concept and it is a
- * different quantity: a protocol tick index is EXPONENTIAL in rate
- * (`rate = 1.00005 ^ (tickIndex × tickStep) − 1`), whereas the order book is
- * served to us pre-bucketed linearly at `?tickSize=0.0001`. Labelling this
- * control "ticks" would invite a reader to equate the two. The rate leaves here
- * as an APR fraction and the SDK does any tick conversion at the boundary.
- */
-export const APR_BP = 0.0001;
 
 const MIN_TOP_UP_USD = 2;
 const MAX_TOP_UP_USD = 100;
@@ -55,8 +43,6 @@ const LOW_GAS_USD = 0.3;
  * impression the collateral columns used to give. */
 const usdAt = (n: number): string => fmtUsd(n, Math.abs(n) < 100 ? 2 : 0);
 
-export const bpToApr = (bp: number): number => bp * APR_BP;
-export const aprToBp = (apr: number): number => Math.round(apr / APR_BP);
 
 /** APR fraction → "4.50%". Rates here are always fractions, never percent. */
 const pct = (v: number | null | undefined, dp = 2): string =>

@@ -69,19 +69,12 @@ module.exports = {
         // Bridge aliases. Delete once call sites are codemodded to the four above.
         // `cyan` was the original app's neutral accent (selected, active,
         // mixed-side). Neutral is BLUE in the Boros system, so it bridges to
-        // info; `emerald`/`teal` stay the gain/long green.
+        // info; `emerald` stays the gain/long green.
         cyan: ramp(info, pastelBlue, '#A8B5FF', '#4A5FD9'),
         emerald: ramp(grass, '#5BEBD3', '#A5F3E5', '#14B89C'),
-        teal: ramp(grass, '#5BEBD3', '#A5F3E5', '#14B89C'),
         rose: ramp(guava, '#FFAEAE', '#FFCACA', '#E67878'),
-        red: ramp(guava, '#FFAEAE', '#FFCACA', '#E67878'),
         amber: ramp(gold, '#F5DC9A', '#FAEAC4', '#D4B058'),
-        yellow: ramp(gold, '#F5DC9A', '#FAEAC4', '#D4B058'),
-        orange: ramp(gold, '#F5DC9A', '#FAEAC4', '#D4B058'),
         sky: ramp(info, pastelBlue, '#A8B5FF', '#4A5FD9'),
-        blue: ramp(info, pastelBlue, '#A8B5FF', '#4A5FD9'),
-        violet: ramp(info, pastelBlue, '#A8B5FF', '#4A5FD9'),
-        indigo: ramp(info, pastelBlue, '#A8B5FF', '#4A5FD9'),
       },
       borderRadius: {
         // The mock's three radii. `sm` is tags, `DEFAULT`/`md`/`lg` all collapse
@@ -92,7 +85,6 @@ module.exports = {
         md: '5px',
         lg: '5px',
         xl: '10px',
-        '2xl': '10px',
       },
     },
   },

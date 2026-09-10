@@ -135,8 +135,8 @@ const DEFAULTS: StoredControls = {
   customNotionalUsd: 10_000,
   borosEntry: 'market',
   entryMode: 'both-market',
-  // 'roll' by default — see StrategyCard: an assumed exit cost is a decision
-  // the user has not made yet, and it understates every quote.
+  // 'roll' by default: an assumed exit cost is a decision the user has not
+  // made yet, and it understates every quote.
   exitMode: 'roll',
   feeTier: 'vip0',
 };
