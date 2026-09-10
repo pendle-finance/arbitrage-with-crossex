@@ -87,7 +87,7 @@ describe('CloseBorosForm — reporting what it closed', () => {
     expect(await screen.findByText(/of what you asked for is still open/)).toBeInTheDocument();
     // …and the size is re-armed at the REMAINDER, so a second press cannot
     // re-send the amount that just half-filled.
-    expect(screen.getByLabelText(/Close size for the .* Boros leg/)).toHaveValue('0.004');
+    expect(screen.getByLabelText(/Close size, applied to both legs/)).toHaveValue('0.004');
   });
 
   it('says nothing when the venue rejected the close', async () => {
@@ -156,7 +156,7 @@ describe('CloseBorosForm — saying that it landed', () => {
     server.use(...ready(), closeReturns({ closed: false, fill: fill(0.004), openSize: MINE }));
     renderWithClient(<CloseBorosForm legs={[{ ...leg(), notionalToken: MINE }]} />);
     // Ask for less than the whole share.
-    fireEvent.change(screen.getByLabelText(/Close size for the .* Boros leg/), {
+    fireEvent.change(screen.getByLabelText(/Close size, applied to both legs/), {
       target: { value: '0.004' },
     });
     await confirmClose();

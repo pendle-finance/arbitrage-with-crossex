@@ -285,20 +285,19 @@ describe('BorosPairTicket', () => {
     expect(screen.queryByLabelText('Leg A')).not.toBeInTheDocument();
   });
 
-  it('defaults leg B to the opposite direction of leg A', async () => {
-    const user = userEvent.setup();
+  it('states each leg\'s side as a label — a spread has one long and one short', () => {
+    // The legs are coupled (§2 flips B whenever A moves) and which side each
+    // takes follows from the pair being a spread, so the sides are stated,
+    // never offered as a choice.
     server.use(...handlers());
     renderWithClient(<BorosPairTicket />);
 
-    const legA = within(await screen.findByRole('radiogroup', { name: 'Leg A direction' }));
-    const legB = within(screen.getByRole('radiogroup', { name: 'Leg B direction' }));
-    expect(legA.getByRole('radio', { name: 'Short' })).toHaveAttribute('aria-checked', 'true');
-    expect(legB.getByRole('radio', { name: 'Long' })).toHaveAttribute('aria-checked', 'true');
-
-    await user.click(legA.getByRole('radio', { name: 'Long' }));
-    await waitFor(() =>
-      expect(legB.getByRole('radio', { name: 'Short' })).toHaveAttribute('aria-checked', 'true'),
-    );
+    return waitFor(() => {
+      const labels = screen.getAllByText(/^(Long|Short)$/);
+      expect(labels).toHaveLength(2);
+      // One of each — never two legs on the same side.
+      expect(new Set(labels.map((l) => l.textContent))).toEqual(new Set(['Long', 'Short']));
+    });
   });
 
   it('hides ineligible markets once a leg is picked, and says how many it dropped', async () => {
@@ -324,7 +323,7 @@ describe('BorosPairTicket', () => {
     // The eligible one is still there and selectable.
     expect(byLabel('Binance ETHUSDT')!.disabled).toBe(false);
     // The absence is explained rather than silent.
-    expect(await screen.findByText(/markets? hidden/)).toBeInTheDocument();
+    expect(await screen.findByText(/\d+ hidden · other collateral or maturity/)).toBeInTheDocument();
   });
 
   it('leads with the estimated spread and shows the worst case beneath it', async () => {
@@ -337,21 +336,21 @@ describe('BorosPairTicket', () => {
     expect(screen.getByText('4.50%')).toBeInTheDocument(); // estimate — the lead
     expect(screen.getByText('Worst case')).toBeInTheDocument();
     expect(screen.getByText('4.00%')).toBeInTheDocument(); // worst — beneath it
-    // Both are net; the pre-cost 4.8% must appear nowhere.
+    // Both are net; the pre-cost 4.8% must appear nowhere. That the figures
+    // ARE net is the property worth pinning — the caption saying so was
+    // removed as noise, but a gross number leaking here would be a bug.
     expect(screen.queryByText('4.80%')).not.toBeInTheDocument();
-    // The fee caveat is still stated on screen, in one line rather than three;
-    // its long form moved to the hover, which is asserted too so a silent
-    // deletion of the explanation cannot pass.
-    expect(screen.getByText(/net of fees/i)).toBeInTheDocument();
-    expect(screen.getByTitle(/net of Boros taker and settlement fees/i)).toBeInTheDocument();
   });
 
-  it('says plainly that slippage bounds the rate, not the fill', async () => {
+  it('says that slippage bounds the rate, not the fill — on the slippage row', async () => {
+    // The standalone caption is gone; the caveat rides on the row it is
+    // about. It must survive somewhere: a tolerance that reads as a fill
+    // guarantee is the misunderstanding worth preventing.
     const user = userEvent.setup();
     server.use(...handlers());
     renderWithClient(<BorosPairTicket />);
     await fillTicket(user);
-    expect(await screen.findByText(/bounds the rate, not the fill/i)).toBeInTheDocument();
+    expect(await screen.findByTitle(/caps the RATE, not the fill/i)).toBeInTheDocument();
   });
 
   it('Single mode sends one leg, borrowing an eligible partner for the pair shape', async () => {
@@ -426,7 +425,9 @@ describe('BorosPairTicket', () => {
     expect(first.legB.slippageApr).toBeCloseTo(0.0025, 9);
 
     // Per-leg override: leg A alone widens.
-    await user.click(screen.getByRole('button', { name: 'per leg' }));
+    // The tolerance controls sit behind the "Max:" disclosure now.
+    await user.click(screen.getByTitle(/Change the tolerance/));
+    await user.click(screen.getByRole('button', { name: 'set each leg separately' }));
     const slipA = screen.getByLabelText('Leg A %');
     await user.clear(slipA);
     await user.type(slipA, '0.8');
@@ -465,12 +466,13 @@ describe('BorosPairTicket', () => {
     // rule is still stated somewhere the user can reach it.
     expect((await screen.findAllByTitle(/whole exposure there/i)).length).toBe(2);
     expect(screen.getAllByText(/→/).length).toBeGreaterThan(0);
-    // Current and resulting now share one line, "+150k USDT → +50k USDT". The
-    // TRADE column is deliberately gone: it was the reader doing the addition
-    // to reach the resulting figure, which the arrow states outright.
+    // Current and resulting share one line, "150k USDT → 50k USDT". The TRADE
+    // column is deliberately gone: it was the reader doing the addition to
+    // reach the resulting figure, which the arrow states outright. Signs are
+    // gone too — direction is the colour now — but BOTH figures must show.
     const netted = (await screen.findAllByTitle(/whole exposure there/i))[0];
-    expect(netted).toHaveTextContent(/\+150k/);
-    expect(netted).toHaveTextContent(/\+50k/);
+    expect(netted).toHaveTextContent(/150k/);
+    expect(netted).toHaveTextContent(/50k/);
   });
 
   it('blocks confirm behind the acknowledgement, and retracts it when the trade changes', async () => {
@@ -522,19 +524,15 @@ describe('BorosPairTicket', () => {
 
     const confirm = await screen.findByRole('button', { name: /2 Boros market orders/i });
     expect(confirm).toBeInTheDocument();
-    // The button states the COUNT ("2 Boros market orders"); the footer no
-    // longer repeats it and just names the markets, which is the part the
-    // button cannot show. Atomicity keeps its wording on the hover.
-    // Scoped to the footer: the market names also appear in the dropdowns, so
-    // a bare text query matches those too.
-    const footer = screen.getByTitle(/One atomic batch/i);
-    expect(footer).toHaveTextContent('Hyperliquid ETH 31 Aug 2026');
-    expect(footer).toHaveTextContent('Binance ETHUSDT 31 Aug 2026');
+    // The button states the COUNT ("2 Boros market orders"); the market cards
+    // name the two markets, so the selects carry them by accessible name.
+    expect(screen.getByLabelText('Leg A')).toHaveDisplayValue('Hyperliquid ETH 31 Aug 2026');
+    expect(screen.getByLabelText('Leg B')).toHaveDisplayValue('Binance ETHUSDT 31 Aug 2026');
     // Atomic acceptance is the promise; a full fill is NOT. Both halves must
     // still be stated together — overselling the batch is the failure mode —
     // so the hover is asserted to carry BOTH clauses, not just the reassuring
-    // one.
-    const atomicity = footer.getAttribute("title") ?? "";
+    // one. It now lives on the confirm control itself.
+    const atomicity = confirm.getAttribute("title") ?? "";
     expect(atomicity).toMatch(/One atomic batch/i);
     expect(atomicity).toMatch(/can still fill short/i);
   });
@@ -588,12 +586,16 @@ describe('BorosPairTicket', () => {
     // longer shown — only the combined figure has to clear the account — so
     // the total is what this now pins.
     expect(screen.getByText(/0\.00073/)).toBeInTheDocument();
-    // The position lines keep their sign AND their magnitude: "0 → -0.01".
-    expect(screen.getAllByText(/-0\.01/).length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/\+0\.01/).length).toBeGreaterThan(0);
-    // Nothing collapsed to a bare -0 / +0, which is the actual bug.
-    expect(screen.queryByText('-0')).not.toBeInTheDocument();
-    expect(screen.queryByText('+0')).not.toBeInTheDocument();
+    // The position lines keep their MAGNITUDE at this scale — direction is
+    // carried by colour now, so the sign is gone but "0.01" must not round
+    // away to a bare 0, which is the actual bug this pins.
+    expect(screen.getAllByText(/0\.01/).length).toBeGreaterThan(0);
+    expect(screen.queryByText('0 → 0')).not.toBeInTheDocument();
+    // Opposite sides stay distinguishable: one leg green, one red.
+    const long = document.querySelectorAll('.text-emerald-300');
+    const short = document.querySelectorAll('.text-rose-300');
+    expect(long.length).toBeGreaterThan(0);
+    expect(short.length).toBeGreaterThan(0);
   });
 
   it('shows the venue’s own words when a leg is rejected outright', async () => {
@@ -703,7 +705,8 @@ describe('BorosPairTicket', () => {
     renderWithClient(<BorosPairTicket />);
     await fillTicket(user);
 
-    await screen.findByText('Taker fee');
+    // Pair ticket: the fee covers both legs, and the label says so.
+    await screen.findByText('Taker fee (2 legs)');
     expect(screen.queryByText(/prepaid gas/i)).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Top up gas/i })).not.toBeInTheDocument();
   });
@@ -823,7 +826,9 @@ describe('BorosPairTicket', () => {
     await fillTicket(user);
 
     expect(await screen.findByText(/Cross margin is short 320.00 USDT/)).toBeInTheDocument();
-    expect(screen.getByText(/that is the top-up, not the total requirement/i)).toBeInTheDocument();
+    // One line: the message carries the whole meaning ("short X to open
+    // both legs"), so the second sentence was removed.
+    expect(screen.queryByText(/that is the top-up/i)).not.toBeInTheDocument();
   });
 
   it('sends a usable cancel-and-close request — id present, no address', async () => {
@@ -1194,6 +1199,7 @@ describe('BorosPairTicket — slippage is stated, not silently clamped', () => {
     renderWithClient(<BorosPairTicket />);
     await fillTicket(user);
 
+    await user.click(screen.getByTitle(/Change the tolerance/));
     const slip = screen.getByLabelText(/Max slippage/);
     await user.clear(slip);
     await user.type(slip, '50');
@@ -1216,6 +1222,7 @@ describe('BorosPairTicket — slippage is stated, not silently clamped', () => {
     renderWithClient(<BorosPairTicket />);
     await fillTicket(user);
 
+    await user.click(screen.getByTitle(/Change the tolerance/));
     const slip = screen.getByLabelText(/Max slippage/);
     await user.clear(slip);
     await user.type(slip, '0');

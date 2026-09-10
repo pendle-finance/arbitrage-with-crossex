@@ -133,9 +133,14 @@ export function BorosAgentSetup() {
             {forget.isPending ? 'Removing…' : 'Remove key'}
           </button>
         </div>
-        <p className="mt-1 text-[10.5px] leading-relaxed text-ink-500">
-          A delegated agent key signs your orders. It can trade this account but{' '}
-          <span className="text-ink-300">cannot deposit or withdraw</span> — those need your wallet.
+        <p
+          className="mt-1 text-[10.5px] leading-relaxed text-ink-500"
+          title="A delegated agent key signs your orders. It can trade this account but cannot deposit or withdraw — those need your wallet."
+        >
+          Agent key — trades only, <span className="text-ink-300">cannot deposit or withdraw</span>
+          {status.data.expiry !== null && !status.data.expired
+            ? ` · expires ${new Date(status.data.expiry * 1000).toLocaleDateString()}`
+            : ''}
         </p>
         {status.data.expired ? (
           // Otherwise this only shows up as AuthAgentExpired() on a confirm the
@@ -146,11 +151,7 @@ export function BorosAgentSetup() {
             every order will be refused. Remove the key and connect again to re-approve.
           </p>
         ) : (
-          status.data.expiry !== null && (
-            <p className="mt-1 text-[10.5px] leading-relaxed text-ink-500">
-              Approval expires {new Date(status.data.expiry * 1000).toLocaleDateString()}.
-            </p>
-          )
+          null
         )}
         {note && <p className="mt-1 text-[10.5px] leading-relaxed text-amber-300">{note}</p>}
       </div>

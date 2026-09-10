@@ -4,6 +4,7 @@ import {
   keepPreviousData,
   useInfiniteQuery,
   useMutation,
+  useQueries,
   useQuery,
   useQueryClient,
 } from '@tanstack/react-query';
@@ -11,6 +12,7 @@ import { useEffect, useRef } from 'react';
 import { del, fetchJson, postJson, putJson } from './client';
 import { uuid } from '../lib/uuid';
 import type {
+  AssetViewResponse,
   BorosCancelAndCloseResult,
   DealAlert,
   DealView,
@@ -61,6 +63,8 @@ export const qk = {
   symbolDetail: (symbol: string) => ['symbolDetail', symbol] as const,
   strategy: (address: string, since: number | null, partition = '', capital = 'balance') =>
     ['strategy', address, since ?? '', partition, capital] as const,
+  assetView: (address: string, since: number, legSince = '') =>
+    ['assetView', address, since, legSince] as const,
   borosAgent: ['boros', 'agent'] as const,
   borosPairContext: (address: string) => ['boros', 'pair', 'context', address] as const,
   opportunities: (
@@ -158,6 +162,55 @@ export function useStrategy(
     enabled: Boolean(address),
     refetchInterval: 30_000,
   });
+}
+
+/** `?since=…&legSince=…` for the asset view; `legSince` is the encoded
+ * per-market "counted from" list (see assetPrefsStore.legSinceParam). */
+function assetViewSearch(since: number, legSince: string): string {
+  const p = new URLSearchParams();
+  if (since > 0) p.set('since', String(since));
+  if (legSince) p.set('legSince', legSince);
+  const s = p.toString();
+  return s ? `?${s}` : '';
+}
+
+/** Asset-grouped tracking view: venue-reported lifetime sums per asset since
+ * `since` (0 = all time). Same address-switch doctrine as useStrategy:
+ * deliberately NO keepPreviousData across keys. */
+export function useAssetView(address: string | null, since = 0, legSince = '') {
+  return useQuery({
+    queryKey: qk.assetView(address ?? '', since, legSince),
+    queryFn: () =>
+      fetchJson<AssetViewResponse>(
+        `/asset-view/${encodeURIComponent(address ?? '')}${assetViewSearch(since, legSince)}`,
+      ),
+    enabled: Boolean(address),
+    refetchInterval: 30_000,
+  });
+}
+
+/** One asset-view fetch per DISTINCT window — the start date is per asset,
+ * but the server windows a whole response at once, so assets sharing a date
+ * share a request (usually one or two in practice). Returns since → data. */
+export function useAssetViewWindows(address: string | null, sinces: readonly number[], legSince = '') {
+  const distinct = [...new Set(sinces)].sort((a, b) => a - b);
+  const results = useQueries({
+    queries: distinct.map((since) => ({
+      queryKey: qk.assetView(address ?? '', since, legSince),
+      queryFn: () =>
+        fetchJson<AssetViewResponse>(
+          `/asset-view/${encodeURIComponent(address ?? '')}${assetViewSearch(since, legSince)}`,
+        ),
+      enabled: Boolean(address),
+      refetchInterval: 30_000,
+    })),
+  });
+  const bySince = new Map<number, AssetViewResponse>();
+  distinct.forEach((since, i) => {
+    const d = results[i]?.data;
+    if (d) bySince.set(since, d);
+  });
+  return { bySince, results, distinct };
 }
 
 export interface OpportunitiesParams {

@@ -59,25 +59,17 @@ describe('ClosePopover', () => {
         onDismiss={() => {}}
       />,
     );
-    expect(await screen.findByRole('radio', { name: /partial/ })).toHaveAttribute(
-      'aria-checked',
-      'true',
-    );
-    expect(screen.getByLabelText('Close qty')).toHaveValue('0.1');
+    // The box opens on this card's own share, and the stated max is that
+    // share — not the 0.3 the venue holds.
+    expect(await screen.findByLabelText('Close size')).toHaveValue('0.1');
+    expect(screen.getByRole('button', { name: '0.1 ETH' })).toBeInTheDocument();
     expect(screen.getByText(/holds 0.1 of the 0.3 on the venue/)).toBeInTheDocument();
-
-    // Switching to full spells out whose size goes with it.
-    fireEvent.click(screen.getByRole('radio', { name: /full/ }));
-    expect(screen.getByText(/including the 0.2 that belongs to your other position/)).toBeInTheDocument();
   });
 
-  it('leaves an unshared position on full', async () => {
+  it('opens an unshared position on its whole size', async () => {
     server.use(...baseHandlers(), closePreviewHandler());
     renderWithClient(<ClosePopover position={ethPosition} onDismiss={() => {}} />);
-    expect(await screen.findByRole('radio', { name: /full/ })).toHaveAttribute(
-      'aria-checked',
-      'true',
-    );
+    expect(await screen.findByLabelText('Close size')).toHaveValue('0.3');
     expect(screen.queryByText(/belongs to your other position/)).not.toBeInTheDocument();
   });
 
@@ -85,19 +77,19 @@ describe('ClosePopover', () => {
     server.use(...baseHandlers(), closePreviewHandler());
     renderWithClient(<ClosePopover position={ethPosition} onDismiss={() => {}} />);
 
-    expect(await screen.findByText(/marketable limit px/)).toBeInTheDocument();
+    expect(await screen.findByText(/limit px/)).toBeInTheDocument();
     expect(screen.getByText('2497.45')).toBeInTheDocument();
-    expect(screen.getByText(/reduce-only IOC marketable limit/)).toBeInTheDocument();
+    expect(screen.getByText(/reduce-only ⓘ/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Close now ▸' })).toBeEnabled();
   });
 
-  it('partial qty above the position shows an inline error and disables Close', async () => {
+  it('a size above the position shows an inline error and disables Close', async () => {
     server.use(...baseHandlers(), closePreviewHandler());
     renderWithClient(<ClosePopover position={ethPosition} onDismiss={() => {}} />);
-    await screen.findByText(/marketable limit px/);
+    await screen.findByText(/limit px/);
 
-    await userEvent.click(screen.getByRole('radio', { name: 'partial' }));
-    await userEvent.type(screen.getByLabelText('Close qty'), '0.5'); // position is 0.3
+    await userEvent.clear(screen.getByLabelText('Close size'));
+    await userEvent.type(screen.getByLabelText('Close size'), '0.5'); // position is 0.3
 
     // ETH is coin-margined, so the box defaults to the coin and the error
     // names the limit in that unit.
@@ -165,20 +157,18 @@ describe('ClosePopover', () => {
       await waitFor(() => expect(closed).toEqual([0.1]));
     });
 
-    it('reports the WHOLE venue size on a full close, however little the card owns', async () => {
-      // Full takes the other position's 0.2 with it. This card's claim cannot
-      // survive that, whatever number it stated.
+    it('reports the WHOLE venue size when the close takes all of it', async () => {
+      // An unshared leg closed at its max acts on the whole venue position, so
+      // the card's claim goes with it whatever number it stated.
       const closed: number[] = [];
       server.use(...baseHandlers(), closePreviewHandler(), dealsOk());
       renderWithClient(
         <ClosePopover
           position={ethPosition}
-          attributedQty={0.1}
           onClosed={(q) => closed.push(q)}
           onDismiss={() => {}}
         />,
       );
-      fireEvent.click(await screen.findByRole('radio', { name: /full/ }));
       await executed();
       await waitFor(() => expect(closed).toEqual([0.3]));
     });
@@ -269,11 +259,11 @@ describe('ClosePopover — sizing a close in dollars', () => {
   it('defaults a non-coin-margined position to USDT and converts at the mark', async () => {
     server.use(...baseHandlers(), closePreviewHandler());
     renderWithClient(<ClosePopover position={hypePosition} onDismiss={() => {}} />);
-    await screen.findByText(/marketable limit px/);
+    await screen.findByText(/limit px/);
 
-    await userEvent.click(screen.getByRole('radio', { name: 'partial' }));
     // Dollars, not coins — the box says so.
     const box = screen.getByLabelText('Close value');
+    await userEvent.clear(box);
     await userEvent.type(box, '50');
 
     // 50 USDT at mark 80 = 0.625 HYPE, and the converted figure is SHOWN
@@ -290,9 +280,9 @@ describe('ClosePopover — sizing a close in dollars', () => {
     // wrongly ACCEPTED as if it were 1 coin.
     server.use(...baseHandlers(), closePreviewHandler());
     renderWithClient(<ClosePopover position={hypePosition} onDismiss={() => {}} />);
-    await screen.findByText(/marketable limit px/);
+    await screen.findByText(/limit px/);
 
-    await userEvent.click(screen.getByRole('radio', { name: 'partial' }));
+    await userEvent.clear(screen.getByLabelText('Close value'));
     await userEvent.type(screen.getByLabelText('Close value'), '200');
     expect(await screen.findByText(/close size exceeds position/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Close now ▸' })).toBeDisabled();
@@ -309,14 +299,14 @@ describe('ClosePopover — sizing a close in dollars', () => {
     renderWithClient(
       <ClosePopover position={makeCrossexPosition({ ...hypePosition, markPrice: '0' })} onDismiss={() => {}} />,
     );
-    await screen.findByText(/marketable limit px/);
-    await userEvent.click(screen.getByRole('radio', { name: 'partial' }));
+    await screen.findByText(/limit px/);
 
     // Coin units, and the USD toggle is not offered at all.
     expect(screen.getByLabelText('Close qty')).toBeInTheDocument();
     expect(screen.queryByLabelText('Close value')).not.toBeInTheDocument();
     expect(screen.queryByRole('radiogroup', { name: 'Close size unit' })).not.toBeInTheDocument();
     // And the limit is stated in coins, so 2 (> 1.89) is refused.
+    await userEvent.clear(screen.getByLabelText('Close qty'));
     await userEvent.type(screen.getByLabelText('Close qty'), '2');
     expect(await screen.findByText(/close size exceeds position \(1\.89 HYPE\)/)).toBeInTheDocument();
   });
@@ -325,9 +315,9 @@ describe('ClosePopover — sizing a close in dollars', () => {
     // Relabelling 0.63 as $0.63 would silently resize the close by the mark.
     server.use(...baseHandlers(), closePreviewHandler());
     renderWithClient(<ClosePopover position={hypePosition} onDismiss={() => {}} />);
-    await screen.findByText(/marketable limit px/);
+    await screen.findByText(/limit px/);
 
-    await userEvent.click(screen.getByRole('radio', { name: 'partial' }));
+    await userEvent.clear(screen.getByLabelText('Close value'));
     await userEvent.type(screen.getByLabelText('Close value'), '80');
     await userEvent.click(screen.getByRole('radio', { name: 'HYPE' }));
     // $80 at mark 80 is 1 HYPE.
@@ -357,7 +347,7 @@ describe('ClosePopover — closing one side of a hedge', () => {
 
     // No sibling (an unpaired leg) ⇒ nothing to un-hedge, so no noise.
     renderWithClient(<ClosePopover position={ethPosition} onDismiss={() => {}} />);
-    await screen.findByText(/marketable limit px/);
+    await screen.findByText(/limit px/);
     expect(screen.queryByText(/leaves that one unhedged/)).not.toBeInTheDocument();
   });
 });
@@ -393,9 +383,9 @@ describe('ClosePopover — the conversion mark is latched at open', () => {
      */
     server.use(...baseHandlers(), closePreviewHandler());
     renderWithClient(<MarkFlipHarness />);
-    await screen.findByText(/marketable limit px/);
+    await screen.findByText(/limit px/);
 
-    await userEvent.click(screen.getByRole('radio', { name: 'partial' }));
+    await userEvent.clear(screen.getByLabelText('Close value'));
     await userEvent.type(screen.getByLabelText('Close value'), '50');
     await userEvent.click(screen.getByRole('button', { name: 'break-mark' }));
 
@@ -417,11 +407,11 @@ describe('ClosePopover — the conversion mark is latched at open', () => {
     renderWithClient(
       <ClosePopover position={makeCrossexPosition({ ...hype, markPrice: '80.001' })} onDismiss={() => {}} />,
     );
-    await screen.findByText(/marketable limit px/);
-    await userEvent.click(screen.getByRole('radio', { name: 'partial' }));
+    await screen.findByText(/limit px/);
 
     // The placeholder's own stated max: sig(1.89 × 80.001) rounds UP.
     const max = sig(1.89 * 80.001);
+    await userEvent.clear(screen.getByLabelText('Close value'));
     await userEvent.type(screen.getByLabelText('Close value'), max);
 
     expect(screen.queryByText(/close size exceeds position/)).not.toBeInTheDocument();

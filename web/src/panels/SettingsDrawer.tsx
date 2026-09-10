@@ -17,16 +17,18 @@ export function SettingsDrawer({ open, onClose }: { open: boolean; onClose: () =
     <Drawer open={open} title="Settings" onClose={onClose}>
       <div className="flex flex-col gap-6">
         <section>
-          <h3 className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-ink-400">
+          <h3 className="mb-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-ink-400">
             Tracked Boros address
           </h3>
           <p className="mb-2 text-xs leading-relaxed text-ink-400">
             The EVM address holding your Boros legs. The terminal matches them with your Gate perp
             legs to show your locked and realized return, net of all costs.
           </p>
-          <div className="card num mb-2 break-all px-4 py-3 text-xs text-ink-200">
-            {address ?? 'not tracking any address'}
-          </div>
+          {/* No read-only card above the field: it printed the very address the
+              input below is pre-filled with, so the drawer showed it twice. */}
+          {!address && (
+            <div className="mb-2 text-xs text-ink-400">Not tracking any address.</div>
+          )}
           {/* Remount on change so the input picks up the new address. */}
           <AddressForm
             key={address ?? 'none'}
@@ -47,7 +49,7 @@ export function SettingsDrawer({ open, onClose }: { open: boolean; onClose: () =
         </section>
 
         <section>
-          <h3 className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-ink-400">
+          <h3 className="mb-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-ink-400">
             Capital counted per position
           </h3>
           <p className="mb-2 text-xs leading-relaxed text-ink-400">
@@ -55,6 +57,7 @@ export function SettingsDrawer({ open, onClose }: { open: boolean; onClose: () =
             The perp side is always its initial margin; this picks what the Boros side counts.
           </p>
           <SegmentedToggle
+            className="seg-info"
             ariaLabel="Boros capital"
             value={capitalBasis}
             onChange={setCapitalBasis}
@@ -71,7 +74,7 @@ export function SettingsDrawer({ open, onClose }: { open: boolean; onClose: () =
         </section>
 
         <section>
-          <h3 className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-ink-400">
+          <h3 className="mb-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-ink-400">
             Gate API key
           </h3>
           <div className="card num px-4 py-3 text-sm text-ink-200">
@@ -80,26 +83,29 @@ export function SettingsDrawer({ open, onClose }: { open: boolean; onClose: () =
         </section>
 
         <section>
-          <h3 className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-ink-400">
+          <h3 className="mb-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-ink-400">
             Replace credentials
           </h3>
           <CredentialsForm submitLabel="Replace credentials" />
         </section>
         <section>
-          <h3 className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-ink-400">
+          <h3 className="mb-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-ink-400">
             About
           </h3>
-          <div className="card px-4 py-3 text-xs text-ink-200">
+          <div className="flex flex-col gap-[5px] rounded border border-ink-700 px-3 py-[11px] text-[11.5px] text-ink-100">
             <div className="num">
               Version {version.data?.current ?? 'unknown'}
-              {version.data?.updateAvailable && version.data.latest
-                ? ` — v${version.data.latest} available`
-                : ''}
+              {/* Gold, not a button: an available update is a FACT about this
+                  install, and the upgrade runs through the installer, not from
+                  in here. Colouring it is what makes it noticed. */}
+              {version.data?.updateAvailable && version.data.latest ? (
+                <span className="text-gold"> — v{version.data.latest} available</span>
+              ) : null}
             </div>
             {/* Which code is actually running: the installer records the exact
                 commit it laid down, so "did I install what I audited?" has an
                 answer in the app. A checkout has no installer provenance. */}
-            <div className="num mt-1 text-[11px] text-ink-400">
+            <div className="num text-[11px] text-ink-300">
               {install ? (
                 <>
                   {install.commit ? (

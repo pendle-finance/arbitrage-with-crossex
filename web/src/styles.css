@@ -2,8 +2,22 @@
 @tailwind components;
 @tailwind utilities;
 
-/* House look-and-feel copied from boros-tools dashboards/_shared-frontend/styles.css
-   (dark ink palette, Inter + JetBrains Mono, .num tabular numerals, chip/card/seg). */
+/* Inter, SELF-HOSTED. This is a local terminal that must render the same
+   offline or with Google blocked — the tables depend on Inter's tabular
+   numerals, and a system-font fallback loses that alignment. One variable
+   file (latin subset, weights 200–700, from Google's own build). */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 200 700;
+  font-display: swap;
+  src: url('./assets/fonts/inter-latin.woff2') format('woff2');
+}
+
+/* House look-and-feel, carrying the Boros design-system tokens on the original
+   `ink` names (see tailwind.config.cjs). Inter only — numerals align via
+   font-variant-numeric, not a mono face. Depth is hairline borders plus
+   translucent fills; there are no drop shadows and no background glow. */
 
 @layer base {
   :root {
@@ -17,27 +31,41 @@
   }
 
   body {
-    @apply bg-ink-950 text-ink-100 font-sans antialiased;
+    @apply bg-ink-950 font-sans antialiased;
+    color: #ffffff;
+    font-size: 12px;
     font-feature-settings: 'cv11', 'ss01';
+    /* A quiet ground in Boros's own palette: two soft glows (info at the
+       top-left, grass at the bottom-right) over a faint dot grid, all well
+       under 10% so every hairline and number keeps its contrast. The glows
+       stay fixed so long pages don't scroll a bright patch past the eye. */
+    background-color: #090d18;
     background-image:
-      radial-gradient(ellipse 80% 50% at 50% -20%, rgba(34, 211, 238, 0.06), transparent),
-      radial-gradient(ellipse 60% 40% at 90% 0%, rgba(16, 185, 129, 0.04), transparent);
-    background-attachment: fixed;
+      radial-gradient(ellipse 70% 45% at 8% -10%, rgba(96, 121, 255, 0.11), transparent 62%),
+      radial-gradient(ellipse 60% 40% at 100% 108%, rgba(27, 227, 194, 0.07), transparent 60%),
+      radial-gradient(circle, rgba(157, 175, 205, 0.045) 1px, transparent 1.2px);
+    background-size:
+      100% 100%,
+      100% 100%,
+      28px 28px;
+    background-attachment: fixed, fixed, scroll;
   }
 
+  /* Numerals align in columns without changing typeface — the app is Inter
+     only. Kept as a class because ~every table cell asks for it by name. */
   .num {
-    font-variant-numeric: tabular-nums;
-    @apply font-mono;
+    font-variant-numeric: tabular-nums lining-nums;
   }
 
   ::-webkit-scrollbar {
-    width: 10px;
-    height: 10px;
+    width: 8px;
+    height: 8px;
   }
   ::-webkit-scrollbar-thumb {
-    @apply rounded-full bg-ink-600;
-    border: 2px solid transparent;
-    background-clip: padding-box;
+    @apply rounded-full bg-ink-700;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-ink-600;
   }
   ::-webkit-scrollbar-track {
     background: transparent;
@@ -46,7 +74,7 @@
 
 @layer components {
   .chip {
-    @apply inline-flex items-center gap-1.5 rounded-md border border-ink-700 bg-ink-900 px-2.5 py-1 text-xs font-medium text-ink-300;
+    @apply inline-flex items-center gap-1.5 rounded-sm border border-ink-700 bg-ink-900 px-2.5 py-1 text-[11px] font-medium text-ink-200;
   }
 
   .chip-sm {
@@ -54,15 +82,23 @@
   }
 
   .seg {
-    @apply inline-flex rounded-lg border border-ink-700 bg-ink-900 p-0.5;
+    @apply inline-flex rounded border border-ink-600 bg-transparent p-0.5;
   }
 
   .seg-btn {
-    @apply rounded-md px-3 py-1 text-sm font-medium text-ink-300 transition-colors;
+    @apply rounded px-3 py-1 text-[11.5px] font-medium text-ink-300 transition-colors;
   }
 
+  /* Selected = the same blue every other "this is chosen" signal uses; a
+     grey fill read as disabled next to the info-tinted tabs and chips. */
   .seg-btn[data-active='true'] {
-    @apply bg-ink-700 text-ink-100;
+    @apply bg-info/[0.16] text-pastel-blue;
+  }
+
+  /* Full-row variant (SegmentedToggle `fill`): the mock's ticket switches are
+     a two-column grid with 8px-tall options, not a shrink-to-fit pill. */
+  .seg-fill .seg-btn {
+    @apply py-1.5 text-[12.5px];
   }
 
   /* The first styled checkbox in the app: native input, house colours. Native
@@ -70,11 +106,11 @@
      lookalike would have to rebuild. */
   .chk {
     @apply h-3.5 w-3.5 shrink-0 cursor-pointer rounded border-ink-600 bg-ink-950;
-    accent-color: theme('colors.cyan.500');
+    accent-color: theme('colors.info.DEFAULT');
   }
 
   .card {
-    @apply rounded-xl border border-ink-700 bg-ink-900;
+    @apply rounded border border-ink-700 bg-ink-900;
   }
 
   .input {
@@ -85,8 +121,18 @@
     @apply inline-flex items-center justify-center gap-2 rounded-lg border border-ink-600 bg-ink-800 px-3 py-1.5 text-sm font-medium text-ink-100 transition-colors hover:border-ink-500 hover:bg-ink-700 disabled:cursor-not-allowed disabled:opacity-40;
   }
 
+  /* The one solid-filled control in the app. The mock reserves a filled
+     `info` button for the action that starts something (Open this strategy)
+     and leaves every other control an outline, so the fill is what makes the
+     primary action findable rather than its colour alone.
+
+     It carries the full box, not just the colour: three call sites used
+     `btn-primary` WITHOUT `btn` and so rendered as bare text on a blue
+     rectangle — no padding, no height, no radius. A modifier that depends on
+     callers remembering a second class will keep losing that bet. Applying
+     `btn` here is harmless where both are present (same declarations). */
   .btn-primary {
-    @apply border-cyan-500/50 bg-cyan-500/15 text-cyan-300 hover:border-cyan-400/60 hover:bg-cyan-500/25;
+    @apply inline-flex items-center justify-center gap-2 rounded border border-transparent bg-info px-3 py-1.5 text-sm font-medium text-ink-50 transition-colors hover:border-transparent hover:bg-info/75 disabled:cursor-not-allowed disabled:opacity-40;
   }
 
   /* Every control in the header row. These had drifted into three different
@@ -102,12 +148,15 @@
   }
 
   .th {
-    @apply sticky top-0 z-10 whitespace-nowrap border-b border-ink-700 bg-ink-900 px-2 py-2 text-[11px] font-semibold uppercase tracking-wider text-ink-400;
+    @apply sticky top-0 z-10 whitespace-nowrap border-b border-ink-700 bg-ink-900 px-2.5 py-1.5 text-[10px] font-semibold uppercase text-ink-400;
+    letter-spacing: 0.14em;
   }
 
-  /* Cyan-active segmented control — the opportunity assumptions knobs. */
-  .seg-cyan .seg-btn[data-active='true'] {
-    @apply bg-cyan-500/15 text-cyan-300;
+  /* Info-active segmented control — the opportunity assumptions knobs. The
+     mock tints a chosen option with the same blue it uses for every other
+     "this is selected" signal. */
+  .seg-info .seg-btn[data-active='true'] {
+    @apply bg-info/[0.16] text-pastel-blue;
   }
 
   /* Rose-active segmented control — a control whose ACTIVE option reduces a
@@ -120,11 +169,8 @@
 
   /* Ring that flashes around the credentials form when a card's Execute lands. */
   .flash-ring {
-    @apply pointer-events-none absolute rounded-xl border-2 border-cyan-400;
+    @apply pointer-events-none absolute rounded border border-grass;
     inset: -6px;
-    box-shadow:
-      0 0 24px rgba(34, 211, 238, 0.35),
-      inset 0 0 12px rgba(34, 211, 238, 0.12);
     animation: flashPulse 1.8s ease-out both;
   }
 }

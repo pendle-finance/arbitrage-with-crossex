@@ -19,6 +19,24 @@ export function sig(value: number | string, maxDp = 8): string {
   return n.toFixed(dp).replace(/\.?0+$/, '');
 }
 
+/**
+ * `sig` with thousands separators — for TABLE columns showing account-scale
+ * magnitudes (balances, quantities, realized PnL), where an ungrouped
+ * "1019333.92" is unreadable at a glance.
+ *
+ * Kept separate from `sig` rather than folded into it: `sig` also formats
+ * prices, tick-scale sizes and values that get echoed back into forms, and
+ * grouping separators there would be noise at best and unparseable at worst.
+ */
+export function sigGrouped(value: number | string, maxDp = 8): string {
+  const out = sig(value, maxDp);
+  const n = Number(out);
+  if (!Number.isFinite(n)) return out;
+  const [whole, frac] = out.split('.');
+  const grouped = Number(whole).toLocaleString('en-US', { maximumFractionDigits: 0 });
+  return frac === undefined ? grouped : `${grouped}.${frac}`;
+}
+
 export const FIELD_SIG_FIGS = 8;
 
 export function fieldValue(value: number, sigFigs: number = FIELD_SIG_FIGS): string {
@@ -64,10 +82,16 @@ export function prettyVenue(v: string): string {
  */
 export function fmtUsd(value: number | string, dp = 2): string {
   const n = typeof value === 'number' ? value : Number(value);
-  if (!Number.isFinite(n)) return String(value);
+  // A dash, not "NaN"/"Infinity": these are dollar figures on a trading
+  // screen, and a feed hiccup must read as "unknown", never as a number.
+  if (!Number.isFinite(n)) return '—';
   const abs = Math.abs(n);
   const effectiveDp = dp < 2 && abs > 0 && abs < 0.5 * 10 ** -dp ? 2 : dp;
-  return `${n < 0 ? '-' : ''}$${num(abs, effectiveDp)}`;
+  const body = num(abs, effectiveDp);
+  // No "-$0.00": a value that rounds away at the shown precision has no sign
+  // worth printing (and −0 itself must match +0).
+  const isZero = /^0(\.0+)?$/.test(body);
+  return `${n < 0 && !isZero ? '-' : ''}$${body}`;
 }
 
 /** Compact notionals ("$2.58M") so tight numeric columns never clip. */
@@ -123,14 +147,14 @@ export function fmtTokenQty(amount: number, symbol: string): string {
 /** Ratio → percent: fmtPct(0.1234) → "12.34%". */
 export function fmtPct(ratio: number | string, dp = 2): string {
   const n = typeof ratio === 'number' ? ratio : Number(ratio);
-  if (!Number.isFinite(n)) return String(ratio);
+  if (!Number.isFinite(n)) return '—';
   return `${num(n * 100, dp)}%`;
 }
 
 /** Fee fraction → basis points: bps(0.0002) → "2.0 bps". */
 export function bps(rate: number | string): string {
   const n = typeof rate === 'number' ? rate : Number(rate);
-  if (!Number.isFinite(n)) return String(rate);
+  if (!Number.isFinite(n)) return '—';
   return `${(n * 10000).toFixed(1)} bps`;
 }
 
@@ -142,7 +166,7 @@ export function bpsOf(ratio: number): number {
 /** Fee fraction → percent with fee precision: feePct(0.0002) → "0.0200%". */
 export function feePct(rate: number | string): string {
   const n = typeof rate === 'number' ? rate : Number(rate);
-  if (!Number.isFinite(n)) return String(rate);
+  if (!Number.isFinite(n)) return '—';
   return `${(n * 100).toFixed(4)}%`;
 }
 
@@ -163,6 +187,7 @@ export function toDate(epoch: number | string | undefined | null): Date | null {
 
 /** Compact age: "3s", "4m 12s", "2h 5m", "3d". */
 export function fmtAge(ms: number): string {
+  if (!Number.isFinite(ms)) return '—';
   const s = Math.max(0, Math.floor(ms / 1000));
   if (s < 60) return `${s}s`;
   const m = Math.floor(s / 60);

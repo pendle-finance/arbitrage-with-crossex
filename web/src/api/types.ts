@@ -311,6 +311,17 @@ export interface StrategyLeg {
   netUsd: number;
   /** Unix seconds, null when unknown. */
   openedAt: number | null;
+  /** When the VENUE position opened — never re-stamped to a tranche's own
+   * open, so it can differ from `openedAt` on a DCA'd or previously-traded
+   * leg. */
+  venueOpenedAt?: number | null;
+  /** Boros only: the opening fills that built the VENUE position (oldest
+   * first) — token qty and the fixed APR each actually traded at. The blended
+   * entryApr is the notional-weighted average of exactly these rows. */
+  venueFills?: Array<{ timeSec: number; qty: number; apr: number }>;
+  /** Boros only: the subset of venueFills the evidence split allocated to
+   * THIS strategy's share. Absent when the leg was not split. */
+  fills?: Array<{ timeSec: number; qty: number; apr: number }>;
   /** Boros only: unix-seconds maturity. */
   maturity?: number;
   /** Perp only: the exact CrossEx symbol — join key to the live position. */
@@ -733,7 +744,8 @@ export interface Trade {
   feeCoin: string;
   /** Fraction: 0.0002 = 2 bps. */
   feeRate: string;
-  matchRole: 'maker' | 'taker';
+  /** The venue sends these UPPERCASE ("TAKER"); normalise before comparing. */
+  matchRole: 'MAKER' | 'TAKER';
   rpnl: string;
   /** Epoch seconds OR milliseconds — use toDate(). */
   createTime: number | string;
@@ -1071,7 +1083,8 @@ export interface BookTouch {
 
 /** 'short' RECEIVES fixed (hits bids); 'long' PAYS fixed (lifts asks). */
 export type BorosLegDirection = 'long' | 'short';
-export type BorosPairIntent = 'open' | 'close';
+/** `target` sizes to the end state (the guided wizard); see core PairIntent. */
+export type BorosPairIntent = 'open' | 'close' | 'target';
 
 export interface BorosPairMarketRow {
   marketId: number;
@@ -1131,6 +1144,10 @@ export interface BorosSimulatedLeg {
   marginRequired: number | null;
   slippageApr: number;
   sizing: BorosLegSizing;
+  /** This leg's taker fee at its traded size, collateral units (× the
+   * simulation's collateralPriceUsd for dollars). Optional only for an
+   * older server. */
+  takerFeeCost?: number;
 }
 
 export interface BorosPairSimulation {
@@ -1142,6 +1159,11 @@ export interface BorosPairSimulation {
   worstSpreadApr: number | null;
   costToCrossSize: number;
   feeDragApr: number;
+  /** The spread at MID, same composition as estSpreadApr. Null if unknown. */
+  midSpreadApr?: number | null;
+  /** |midSpread − estSpread| — what crossing the books costs at this size.
+   * SLIPPAGE proper: distance from mid, not unused tolerance. */
+  slippageApr?: number | null;
   marginRequiredTotal: number | null;
   hedgedSize: number;
   unhedgedSize: number;
@@ -1301,4 +1323,148 @@ export interface BorosAgentInput {
   agentPrivateKey: string;
   /** Absolute unix seconds the approval was signed until. */
   expiry?: number;
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/asset-view/:address — mirror of src/server/routes/assetView.ts.
+// The ASSET-GROUPED tracking view: every leg grouped by underlying asset,
+// numbers are venue-reported lifetime sums since a caller-chosen start.
+// ---------------------------------------------------------------------------
+
+export interface AssetPerpOpen {
+  symbol: string;
+  venue: string;
+  side: 'LONG' | 'SHORT';
+  /** |qty| in the base coin. */
+  qty: number;
+  notionalUsd: number;
+  entryPrice: number;
+  markPrice: number;
+  leverage: number;
+  upnlUsd: number;
+  /** Venue cumulative funding for the CURRENT position (signed, + = received). */
+  fundingUsd: number;
+  /** Cumulative trading fees, positive cost. */
+  feesUsd: number;
+  imUsd: number;
+  openedAt: number | null;
+}
+
+/** Closed positions since the start date, aggregated per symbol. */
+export interface AssetPerpClosed {
+  symbol: string;
+  venue: string;
+  closedPnlUsd: number;
+  fundingUsd: number;
+  feesUsd: number;
+  count: number;
+  lastClosedAt: number | null;
+  /** Funding/fees zeroed here because the surviving open position's
+   * cumulatives already carry them (split-position dedupe, by position id —
+   * a reopen is a new id and keeps its own books). */
+  dedupedIntoOpen?: boolean;
+  rows: AssetPerpClosedRow[];
+}
+
+export interface AssetPerpClosedRow {
+  closedAt: number | null;
+  qty: number;
+  openPx: number;
+  closePx: number;
+  priceUsd: number;
+  fundingUsd: number;
+  feesUsd: number;
+  complete: boolean;
+  dedupedIntoOpen: boolean;
+}
+
+export interface AssetBorosOpen {
+  marketId: number;
+  venue: string;
+  maturity: number;
+  collateral: string;
+  /** LONG = pays fixed, receives floating (hedges a LONG perp's funding). */
+  side: 'LONG' | 'SHORT';
+  /** |notionalSize| in the collateral token. */
+  sizeToken: number;
+  notionalUsd: number;
+  entryApr: number;
+  markApr: number;
+  floatingApr: number;
+  /** Cumulative settlement of the CURRENT position (display only — totals
+   * come from borosHistory, which covers the same flows plus closed legs). */
+  settleUsd: number;
+  /** Mark value of the remaining rate stream (excluded from headline PnL). */
+  mtmUsd: number;
+  imUsd: number;
+  /** Settlement fee as an APR fraction, charged on notional to maturity.
+   * UNAVOIDABLE (it accrues however you enter or roll), so the locked rate
+   * is quoted NET of it. Optional only for an older server. */
+  settleFeeApr?: number;
+}
+
+/** Per-market history sums since the start date — open, closed and matured
+ * positions uniformly (settlements and fills are account-level events). */
+export interface AssetBorosHistory {
+  marketId: number;
+  venue: string;
+  maturity: number;
+  /** Σ settlements, net of per-settlement fees. */
+  settleUsd: number;
+  /** Fees inside that net, positive (display; never re-subtract). */
+  settleFeeUsd: number;
+  /** Σ realized trade PnL, net of trade fees. */
+  tradePnlUsd: number;
+  /** Fees inside that net, positive (display; never re-subtract). */
+  tradeFeeUsd: number;
+  /** Largest |position| at any settlement in the window — the leg's
+   * notional footprint (token units / USD at today's price). */
+  peakSizeToken?: number;
+  peakNotionalUsd?: number;
+  /** Earliest settlement/trade in the window — proxy for when the leg
+   * opened (hourly settlements ⇒ at most an hour late; clipped to the
+   * window start). 0/absent = no events. */
+  firstEventSec?: number;
+  /** The fixed rate the position locked (size-weighted over its opening
+   * fills, replayed from the fill feed) — survives maturity and closure.
+   * Null/absent when no opening fill is in the window or an older server. */
+  entryApr?: number | null;
+  side?: 'LONG' | 'SHORT' | null;
+}
+
+export interface AssetGroup {
+  base: string;
+  /** USD price of the underlying (0 = unknown). */
+  priceUsd: number;
+  /** Earliest activity instant in THIS asset's sums (APR clock floor). */
+  earliestSec: number | null;
+  perpOpen: AssetPerpOpen[];
+  perpClosed: AssetPerpClosed[];
+  borosOpen: AssetBorosOpen[];
+  borosHistory: AssetBorosHistory[];
+}
+
+export interface AssetViewResponse {
+  sinceSec: number;
+  nowSec: number;
+  assets: AssetGroup[];
+  /** Earliest activity instant in any sum — the APR clock floor. */
+  earliestSec: number | null;
+  coverage: {
+    /** Oldest settlement row read when the page cap was hit; 0 = complete. */
+    settlementsFromSec: number;
+    /** Oldest closed-position row read when capped; 0 = complete. */
+    perpClosedFromSec: number;
+    borosTxnsComplete: boolean;
+  };
+  /** Margin-borrow interest paid by the CrossEx account inside the window —
+   * account-level, so it is charged on the total and not on any card.
+   * Optional only for an older server: absent ⇒ not charged. */
+  interest?: {
+    paidUsd: number;
+    byCoin: Record<string, number>;
+    coversFromSec: number;
+    available: boolean;
+  };
+  warnings: string[];
 }

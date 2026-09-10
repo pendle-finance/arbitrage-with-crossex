@@ -3,46 +3,45 @@ import { useAccount, usePositions } from '../api/queries';
 import { fmtUsd } from '../lib/fmt';
 import { describeLine, nearestLiquidation } from '../lib/liquidation';
 import { MarginBreakdown } from './MarginDonut';
-import { SignedNumber } from './SignedNumber';
 import { Skeleton } from './Skeleton';
 
-/** Header strip: available/balance, signed uPnL (sum of asset uPnLs), margin
- * pies, then `children` (the borrow pill) once the account has loaded. */
+/** Header strip: available/balance, the margin meters, then `children` (the
+ * borrow pill). (Account uPnL used to sit here; on a delta-neutral book it is
+ * noise — the asset cards carry the PnL that means something.) */
 export function AccountHealthStrip({ children }: { children?: ReactNode }) {
   const { data: acc } = useAccount();
   const { data: positions } = usePositions();
   if (!acc) {
     return (
-      <div className="flex items-center gap-6">
+      <div className="ml-auto flex items-center justify-end gap-4">
         <Skeleton className="h-4 w-56" />
         <Skeleton className="h-4 w-24" />
       </div>
     );
   }
 
-  const upnl = (acc.assets ?? []).reduce((sum, a) => sum + (Number(a.upnl) || 0), 0);
+  // ml-auto: the account cluster belongs at the FAR RIGHT of the bar, against
+  // the controls — beside the wordmark it read as part of the product name.
+  // Whole dollars: cents in a 12px header are unreadable and never actionable;
+  // the exact figures are one hover away on the Balances tab.
   const nearest = nearestLiquidation(acc, positions);
   return (
-    <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
-      <div className="text-sm">
-        <span className="text-ink-400">Avail </span>
-        <span className="num font-medium text-ink-100">{fmtUsd(acc.availableMargin)}</span>
-        <span className="text-ink-500"> / Balance </span>
-        <span className="num font-medium text-ink-100">{fmtUsd(acc.marginBalance)}</span>
-      </div>
-      <div className="text-sm">
-        <span className="text-ink-400">uPnL </span>
-        <SignedNumber value={upnl} format={(n) => fmtUsd(n)} className="font-medium" />
-      </div>
+    <div className="ml-auto flex flex-wrap items-center justify-end gap-x-4 gap-y-2">
+      <span className="flex items-baseline gap-1.5 whitespace-nowrap text-xs">
+        <span className="text-ink-400">Avail</span>
+        <span className="num font-medium text-ink-50">{fmtUsd(acc.availableMargin, 0)}</span>
+        <span className="text-ink-600">/</span>
+        <span className="text-ink-400">Balance</span>
+        <span className="num font-medium text-ink-50">{fmtUsd(acc.marginBalance, 0)}</span>
+      </span>
       <MarginBreakdown
         acc={acc}
         variant="compact"
-        liquidation={nearest ? `Nearest liquidation: ${nearest.base}. ${describeLine(nearest)}` : null}
+        liquidation={
+          nearest ? `Nearest liquidation: ${nearest.base}. ${describeLine(nearest)}` : null
+        }
       />
       {children}
-      <span className="hidden text-[10px] uppercase tracking-wider text-ink-500 xl:inline">
-        {acc.accountMode} · {acc.positionMode}
-      </span>
     </div>
   );
 }

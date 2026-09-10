@@ -52,7 +52,10 @@ export function FreshnessIndicator() {
   const qc = useQueryClient();
 
   const queries = [account, positions, orders];
-  const newest = Math.max(0, ...queries.map((q) => q.dataUpdatedAt || 0));
+  // The STALEST of the three: a freshness clock that reports the newest
+  // query says "0s ago" while another panel is minutes behind.
+  const stamps = queries.map((q) => q.dataUpdatedAt || 0).filter((t) => t > 0);
+  const newest = stamps.length ? Math.min(...stamps) : 0;
   const staleError = queries.some((q) => q.isError && q.data !== undefined);
 
   return (

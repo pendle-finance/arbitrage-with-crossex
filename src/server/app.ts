@@ -22,6 +22,7 @@ import { disclaimerRoutes } from './routes/disclaimer';
 import { feesRoutes } from './routes/fees';
 import { healthRoutes } from './routes/health';
 import { leverageRoutes } from './routes/leverage';
+import { assetViewRoutes } from './routes/assetView';
 import { borosAgentRoutes } from './routes/borosAgent';
 import { borosPairRoutes } from './routes/borosPair';
 import { opportunitiesRoutes } from './routes/opportunities';
@@ -230,6 +231,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     strategyRoutes,
     opportunitiesRoutes,
     borosPairRoutes,
+    assetViewRoutes,
     borosAgentRoutes,
     booksRoutes,
     leverageRoutes,

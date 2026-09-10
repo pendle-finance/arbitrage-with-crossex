@@ -59,7 +59,7 @@ export function UserGuideHint({ enabled, onOpen }: { enabled: boolean; onOpen: (
     <div
       role="dialog"
       aria-label="New here?"
-      className="fixed right-5 top-24 z-50 w-[300px] rounded-lg border border-cyan-400/70 bg-ink-900 p-4 shadow-xl shadow-cyan-500/10"
+      className="fixed right-5 top-24 z-50 w-[300px] rounded border border-info/60 bg-ink-900 p-4"
     >
       <div className="flex items-start justify-between gap-2">
         <h2 className="text-sm font-semibold text-cyan-300">New here?</h2>

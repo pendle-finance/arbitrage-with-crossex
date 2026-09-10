@@ -24,6 +24,7 @@ import {
   WaterfallPlot,
   type WaterfallStep,
 } from '../components/Waterfall';
+import { microLabelClass } from '../components/Th';
 import { fmtPct, fmtUsd } from '../lib/fmt';
 
 const SECONDS_IN_YEAR = 365 * 86_400;
@@ -93,7 +94,9 @@ function costRows(
       c.perpExitFeesUsd,
       dashedAmber,
       'Perp exit fees',
-      `Perp exit fees at maturity ${costText(c.perpExitFeesUsd ?? 0, true)}`,
+      (c.perpExitFeesUsd ?? 0) === 0
+        ? 'No perp exit fee — this card assumes the perp legs roll over rather than close at maturity'
+        : `Perp exit fees at maturity ${costText(c.perpExitFeesUsd ?? 0, true)}`,
     ],
     [
       'opp-exit-slip',
@@ -102,7 +105,9 @@ function costRows(
       'Exit slip',
       // NOT "assumed = entry" — that is the strategy view's estimate. Here the
       // server crosses back out of today's books to price it.
-      `Perp exit slippage, crossing back out of both books at maturity ${costText(c.perpExitSlippageUsd ?? 0, true)}`,
+      (c.perpExitSlippageUsd ?? 0) === 0
+        ? 'No perp exit slippage — this card assumes the perp legs roll over rather than close at maturity'
+        : `Perp exit slippage, crossing back out of both books at maturity ${costText(c.perpExitSlippageUsd ?? 0, true)}`,
     ],
   ];
 }
@@ -175,34 +180,35 @@ function buildCapitalSteps(pair: OpportunityPair): WaterfallStep[] {
   const lev = (max: number | null) =>
     max === null || !Number.isFinite(max) ? '' : ` @ ${max}x`;
 
-  // Capital is neither income nor cost — cyan, the house's informational
+  // Capital is neither income nor cost, so it is drawn in `info` blue rather
+  // than the green/gold the profit chart uses for gains and costs — the
   // register, on an alpha ramp in stacking order.
   const rows: Array<[string, number | null, string, string, string]> = [
     [
       'cap-boros-short',
       cap.borosShortImUsd,
-      'bg-cyan-400/80',
+      'bg-info/80',
       'Boros short IM',
       `Boros initial margin · ${pair.shortLeg.venue} (short) +${fmtUsd(cap.borosShortImUsd ?? 0)}`,
     ],
     [
       'cap-boros-long',
       cap.borosLongImUsd,
-      'bg-cyan-400/60',
+      'bg-info/60',
       'Boros long IM',
       `Boros initial margin · ${pair.longLeg.venue} (long) +${fmtUsd(cap.borosLongImUsd ?? 0)}`,
     ],
     [
       'cap-perp-short',
       cap.perpShortImUsd,
-      'bg-cyan-400/45',
+      'bg-info/45',
       `Perp short IM${lev(cap.shortLeverageMax)}`,
       `Perp initial margin · ${pair.shortLeg.venue} (short) — notional over the venue's max leverage${lev(cap.shortLeverageMax)} +${fmtUsd(cap.perpShortImUsd ?? 0)}`,
     ],
     [
       'cap-perp-long',
       cap.perpLongImUsd,
-      'bg-cyan-400/30',
+      'bg-info/30',
       `Perp long IM${lev(cap.longLeverageMax)}`,
       `Perp initial margin · ${pair.longLeg.venue} (long) — notional over the venue's max leverage${lev(cap.longLeverageMax)} +${fmtUsd(cap.perpLongImUsd ?? 0)}`,
     ],
@@ -222,7 +228,7 @@ function buildCapitalSteps(pair: OpportunityPair): WaterfallStep[] {
     dir: 'up',
     from: 0,
     to: total,
-    className: 'bg-cyan-400',
+    className: 'bg-info',
     title: `Modelled minimum capital ${fmtUsd(total)} across the four legs`,
     axisLabel: 'Total capital',
   });
@@ -257,10 +263,9 @@ export function OpportunityWaterfall({
    * so the USD conversion matches the costs it is charted against. */
   notionalUsd: number;
 }) {
-  // Read the roll off the DATA, like the bars: the live exitMode control moves
-  // before the refetch lands, and a note that contradicts the columns beside it
-  // is worse than one that arrives a beat late.
-  const rolling = pair.costs.perpExitFeesUsd === 0 && pair.costs.perpExitSlippageUsd === 0;
+  // The roll is read off the DATA, not the live exitMode control (which moves
+  // before the refetch lands): a zero exit cost IS the rolled-over case, and
+  // the two exit segments' own titles say so where the reader meets them.
   const profitSteps = canChartProfit(pair) ? buildProfitSteps(pair, notionalUsd) : null;
   const capitalSteps = canChartCapital(pair) ? buildCapitalSteps(pair) : null;
 
@@ -289,54 +294,62 @@ export function OpportunityWaterfall({
         {/* Side by side the two plots split a phone's width into ~20px columns,
             narrower than the value labels themselves, so adjacent labels
             overlapped into a smear and spilled out of the card. */}
-        <div className="flex flex-col gap-6 sm:flex-row sm:items-stretch">
+        {/* Each plot sits in its own bordered pane with a titled header and a
+            summary row that names the number the bars build to — the mock's
+            shape. Auto-fit rather than a plain row: on a phone the two plots
+            would split into ~20px columns, narrower than the value labels,
+            which smeared them into each other. */}
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-[repeat(auto-fit,minmax(280px,1fr))]">
           {showProfit && (
-            <WaterfallPlot
-              steps={profitSteps!}
-              y={left.y}
-              span={left.span}
-              domainMin={left.domainMin}
-              caption="profit by maturity"
-              legend={profitLegend}
-            />
+            <div className="flex min-w-0 flex-col gap-3 rounded border border-ink-700 p-3.5">
+              <span className={microLabelClass}>Profit by maturity</span>
+              <WaterfallPlot
+                steps={profitSteps!}
+                y={left.y}
+                span={left.span}
+                domainMin={left.domainMin}
+                caption="profit by maturity"
+                showCaption={false}
+                legend={profitLegend}
+              />
+              <span className="flex items-baseline justify-between gap-3 border-t border-ink-700 pt-[9px]">
+                <span className="text-[11.5px] text-ink-200">Est. profit</span>
+                <span
+                  className={`num whitespace-nowrap text-sm font-semibold ${
+                    (pair.estProfitUsd ?? 0) < 0 ? 'text-guava' : 'text-grass'
+                  }`}
+                >
+                  {fmtUsd(pair.estProfitUsd ?? 0, 0)}
+                </span>
+              </span>
+            </div>
           )}
           {showCapital && (
-            <WaterfallPlot
-              steps={capitalSteps!}
-              y={right.y}
-              span={right.span}
-              domainMin={right.domainMin}
-              caption="capital (modelled min)"
-            />
+            <div className="flex min-w-0 flex-col gap-3 rounded border border-ink-700 p-3.5">
+              <span className={microLabelClass}>Capital (modelled min)</span>
+              <WaterfallPlot
+                steps={capitalSteps!}
+                y={right.y}
+                span={right.span}
+                domainMin={right.domainMin}
+                caption="capital (modelled min)"
+                showCaption={false}
+              />
+              <span className="flex items-baseline justify-between gap-3 border-t border-ink-700 pt-[9px]">
+                <span className="text-[11.5px] text-ink-200">Total capital</span>
+                <span className="num whitespace-nowrap text-sm font-semibold text-info">
+                  {fmtUsd(pair.capitalUsd ?? 0, 0)}
+                </span>
+              </span>
+            </div>
           )}
         </div>
       </div>
 
-      {/* Outside the role="img" element — its children are presentational to
-          assistive tech, and this prose has to stay readable. */}
-      <div className="mt-2 flex flex-col gap-0.5 leading-relaxed text-ink-500">
-        {showProfit && rolling && <div>rolling — no exit cost</div>}
-        {showProfit && pair.makerLeg && (
-          <div>
-            Maker leg <span className="text-ink-200">{pair.makerLeg}</span>
-          </div>
-        )}
-        {showCapital &&
-          pair.effectiveLeverage !== null &&
-          Number.isFinite(pair.effectiveLeverage) && (
-            <div>
-              <span className="num">{pair.effectiveLeverage.toFixed(1)}x</span> effective leverage —
-              the notional over the modelled capital
-            </div>
-          )}
-        {showCapital && (
-          <div>
-            The Positions view divides by the Boros collateral you have actually POSTED, so a live
-            position that is over-collateralized reads a lower APR than this estimate for the very
-            same trade.
-          </div>
-        )}
-      </div>
+      {/* No prose under the charts. The mock carries none, and each line here
+          either repeated a number the panes already state or explained a
+          convention the axis labels carry. The maker-leg and rolling facts
+          survive as titles on the segments they qualify. */}
     </div>
   );
 }

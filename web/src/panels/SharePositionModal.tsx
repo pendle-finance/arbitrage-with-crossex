@@ -176,7 +176,7 @@ export function SharePositionModal({ payload, onClose }: { payload: SharePayload
               value={shareUrl}
               aria-label="Position share link"
               onFocus={(e) => e.currentTarget.select()}
-              className="input flex-1 select-all font-mono text-[11px]"
+              className="input flex-1 select-all text-[11px]"
             />
             <button type="button" className="btn shrink-0" onClick={copyLink}>
               Copy link

@@ -22,7 +22,7 @@
  * because the Positions page derives "rate locked, unhedged" from live legs
  * (StrategyCard's boros-only cue) and re-enters here at step 2.
  */
-import { useEffect, useState } from 'react';
+import { Fragment, useEffect, useState } from 'react';
 import type { BorosLegFill, BorosPairResult } from '../api/types';
 import { Modal } from '../components/Modal';
 import { isUsdCollateral } from '../lib/boros';
@@ -308,7 +308,15 @@ function WizardBody({
   );
 
   return (
-    <Modal title={title} locked={executing} onClose={requestClose} widthClass="w-[480px]">
+    // Wide enough for the ticket's two columns: a single column ran past the
+    // fold, so the confirm button and the spread it confirms could not be
+    // read at once. Capped to the viewport so a narrow window still stacks.
+    <Modal
+      title={title}
+      locked={executing}
+      onClose={requestClose}
+      widthClass="w-[900px] max-w-[calc(100vw-32px)]"
+    >
       <div className="flex flex-col gap-4">
         <StepStrip step={step} locked={stepOneDone} />
 
@@ -361,6 +369,8 @@ function WizardBody({
           ) : (
             <>
               <BorosPairTicket
+                twoColumn
+                guided
                 active={step === 1}
                 onBusyChange={setExecuting}
                 onExecuted={recordExecution}
@@ -532,8 +542,14 @@ function StepStrip({ step, locked }: { step: Step; locked: boolean }) {
        it separates from the ticket below instead of floating above it. */
     <ol className="flex items-center gap-3 rounded-lg border border-ink-800 bg-ink-900/40 px-3 py-2.5 text-[13px]">
       {items.map((it, i) => (
-        <li key={it.n} className="flex min-w-0 flex-1 items-center gap-2.5">
-          {i > 0 && <span aria-hidden className="h-px w-5 shrink-0 bg-ink-700" />}
+        <Fragment key={it.n}>
+          {/* The connector is a SIBLING of the steps, not nested inside the
+              second one: as a child it could only ever fill that item's own
+              half of the strip, which left a gap between step 1's label and
+              the start of the line. Here it takes whatever space the two
+              content-sized steps leave. */}
+          {i > 0 && <span aria-hidden className="h-px min-w-[20px] flex-1 bg-ink-700" />}
+        <li className="flex min-w-0 shrink-0 items-center gap-2.5">
           <span
             className={`num flex h-7 w-7 shrink-0 items-center justify-center rounded-full border text-[12px] font-semibold ${
               it.done
@@ -556,6 +572,7 @@ function StepStrip({ step, locked }: { step: Step; locked: boolean }) {
             <span className="truncate text-[10.5px] text-ink-500">{it.venue}</span>
           </span>
         </li>
+        </Fragment>
       ))}
     </ol>
   );

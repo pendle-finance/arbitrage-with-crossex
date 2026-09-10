@@ -1,5 +1,5 @@
 /**
- * A row of tabs marked by an underline rather than a filled pill.
+ * A row of pill tabs — the mock's order-ticket tab style.
  *
  * The segmented control this sits beside (`SegmentedToggle`) reads as a
  * setting — a boxed switch inside a form. These read as NAVIGATION: which of
@@ -28,7 +28,7 @@ export function UnderlineTabs<T extends string>({
     <div
       role="radiogroup"
       aria-label={ariaLabel}
-      className={`flex items-center gap-5 border-b border-ink-800 ${className ?? ''}`}
+      className={`flex flex-wrap items-center gap-1.5 ${className ?? ''}`}
     >
       {options.map((o) => {
         const active = o.value === value;
@@ -39,12 +39,12 @@ export function UnderlineTabs<T extends string>({
             role="radio"
             aria-checked={active}
             onClick={() => onChange(o.value)}
-            // -mb-px pulls each tab onto the container's border so the active
-            // underline replaces that hairline rather than stacking under it.
-            className={`-mb-px border-b-2 px-0.5 pb-2 text-[13px] font-medium transition-colors ${
+            // The mock's ticket tabs: outlined pills, the chosen one filled
+            // with the info tint — the same marker as every other selection.
+            className={`rounded-full border px-[13px] py-[6px] text-[11.5px] font-medium transition-colors ${
               active
-                ? 'border-cyan-400 text-ink-100'
-                : 'border-transparent text-ink-400 hover:text-ink-200'
+                ? 'border-info/50 bg-info/[0.14] text-pastel-blue'
+                : 'border-ink-600 text-ink-300 hover:border-ink-500 hover:text-ink-100'
             }`}
           >
             {o.label}

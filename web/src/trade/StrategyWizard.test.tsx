@@ -251,7 +251,7 @@ describe('StrategyWizard — the hedge is sized off the EXECUTED collateral', ()
     // With no `sizeBase` the prefill leaves the size empty (it has no coin
     // quantity to put there) — the user types the ETH size themselves. That
     // is precisely the path that produced the mis-sized hedge.
-    fireEvent.change(screen.getByLabelText(/^Size per leg/), { target: { value: '2' } });
+    fireEvent.change(screen.getByLabelText(/^Target size per leg/), { target: { value: '2' } });
 
     const confirm = await screen.findByRole('button', { name: /Confirm — 2 Boros market orders/ });
     await waitFor(() => expect(confirm).toBeEnabled(), { timeout: 4000 });
@@ -298,7 +298,7 @@ describe('StrategyWizard — step 1 becomes a receipt once the rate is locked', 
     await waitFor(() =>
       expect(screen.queryByRole('button', { name: /Confirm — 2 Boros market orders/ })).not.toBeInTheDocument(),
     );
-    expect(screen.queryByLabelText(/^Size per leg/)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/^Target size per leg/)).not.toBeInTheDocument();
     // Exactly one way forward.
     expect(screen.getByRole('button', { name: /Rate locked ✓ — hedge the perps/ })).toBeInTheDocument();
     // And no Dismiss — the receipt IS the step; hiding it would blank it.
@@ -398,18 +398,6 @@ const RETRY_300 = {
 /** A deliberate one-leg lock (the ticket's Single mode). */
 const SINGLE_LOCK = {
   legA: { marketId: HL_M, direction: 'short', filledSize: 1000, shortfallSize: 0, execApr: 0.09, feeSize: 4, failure: null },
-  legB: NOT_SUBMITTED,
-  hedgedSize: 0,
-  unhedgedSize: 0,
-  unhedgedLeg: null,
-  realisedSpreadApr: null,
-  partial: false,
-  bothLegsSubmitted: false,
-};
-
-/** The close that unwinds SINGLE_LOCK — opposite direction, same market. */
-const SINGLE_CLOSE = {
-  legA: { marketId: HL_M, direction: 'long', filledSize: 1000, shortfallSize: 0, execApr: 0.091, feeSize: 4, failure: null },
   legB: NOT_SUBMITTED,
   hedgedSize: 0,
   unhedgedSize: 0,
@@ -538,8 +526,10 @@ describe('StrategyWizard — the book decides, not the last result', () => {
     server.use(...tradableHandlers(SINGLE_LOCK), ...symbolHandlers([ETH_GATE]));
     renderWizard(WIZ);
     await waitFor(() => expect(screen.getByLabelText('Leg A')).toHaveValue(String(BN_M)));
-    fireEvent.click(screen.getByRole('radio', { name: 'Single' }));
-    const confirm = await screen.findByRole('button', { name: /Confirm — 1 Boros market order/ });
+    // The wizard has no Pair/Single choice — it locks the pair the card
+    // quoted. The mocked result is one-sided regardless, which is the state
+    // under test: a half-filled lock must never read as a clean pair.
+    const confirm = await screen.findByRole('button', { name: /Confirm — 2 Boros market orders/ });
     await waitFor(() => expect(confirm).toBeEnabled(), { timeout: 4000 });
     fireEvent.pointerDown(confirm);
 
@@ -556,34 +546,23 @@ describe('StrategyWizard — the book decides, not the last result', () => {
     ).toBeInTheDocument();
   }, 15_000);
 
-  it('a close through the wizard SUBTRACTS — a book closed to zero leaves silently', async () => {
-    server.use(...tradableHandlers([SINGLE_LOCK, SINGLE_CLOSE]), ...symbolHandlers([ETH_GATE]));
+  it('a one-sided lock warns on the way out — the wizard cannot close it', async () => {
+    // The wizard OPENS: it has no Close intent (step 1 locks the rate a card
+    // quoted). So a half-filled lock is not unwound here — it is announced,
+    // and leaving carries the naked-exposure warning. Unwinding happens in
+    // Positions or the standalone Boros ticket, both of which can close.
+    server.use(...tradableHandlers([SINGLE_LOCK]), ...symbolHandlers([ETH_GATE]));
     renderWizard(WIZ);
     await waitFor(() => expect(screen.getByLabelText('Leg A')).toHaveValue(String(BN_M)));
-    fireEvent.click(screen.getByRole('radio', { name: 'Single' }));
-    const confirm = await screen.findByRole('button', { name: /Confirm — 1 Boros market order/ });
+    const confirm = await screen.findByRole('button', { name: /Confirm — 2 Boros market orders/ });
     await waitFor(() => expect(confirm).toBeEnabled(), { timeout: 4000 });
     fireEvent.pointerDown(confirm);
     await screen.findByText(/Only one side of the rate pair is on/, undefined, { timeout: 4000 });
 
-    // Unwind it: dismiss the report (which clears the size — its point), flip
-    // the intent to Close, re-enter the size, execute.
-    fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
-    fireEvent.click(screen.getByRole('radio', { name: /^Close/ }));
-    // Single-mode label is "Size (USDT)" — not the pair's "Size per leg".
-    fireEvent.change(screen.getByLabelText(/^Size \(/), { target: { value: '1000' } });
-    const confirm2 = await screen.findByRole('button', { name: /Confirm — 1 Boros market order/ });
-    await waitFor(() => expect(confirm2).toBeEnabled(), { timeout: 4000 });
-    fireEvent.pointerDown(confirm2);
-
-    // The book is flat again: the banner clears…
-    await waitFor(
-      () => expect(screen.queryByText(/Only one side of the rate pair is on/)).not.toBeInTheDocument(),
-      { timeout: 4000 },
-    );
-    // …and leaving needs no warning — nothing naked remains.
+    // Leaving with one side on must NOT be silent: the rate is locked and
+    // unhedged, which is directional exposure the user has to be told about.
     fireEvent.keyDown(window, { key: 'Escape' });
-    await waitFor(() => expect(screen.queryByText('Open this strategy')).not.toBeInTheDocument());
+    expect(await screen.findByText(/not hedged/, undefined, { timeout: 4000 })).toBeInTheDocument();
   }, 20_000);
 });
 

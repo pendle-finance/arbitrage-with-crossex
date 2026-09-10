@@ -169,14 +169,19 @@ function liquidationShift(
   return `${before.base} ${at(before)} → ${after && after !== 'far' ? at(after) : 'past 10x'}`;
 }
 
-/** The situation as facts: what Gate lent, the margin it holds, the
- * interest, the spare USDC, the interest paid so far. The same six with and
- * without a borrow, zeros shown: a row that changes shape reads as a bug. */
+/** The situation as facts: what Gate lent, what it charges for it, and what
+ * it has charged so far. The same three with and without a borrow, zeros
+ * shown: a row that changes shape reads as a bug.
+ *
+ * The margin Gate holds against the borrow is not here — the explanation
+ * line under the controls already prices it per unit moved, and the header's
+ * own margin card carries the account totals. Spare USDC is not here either:
+ * the amount field states it as `free …` on the direction that can spend it,
+ * which is the only place it is actionable. */
 function situationFacts(
   usdc: RebalanceBucket | undefined,
   usdt: RebalanceBucket | undefined,
   borrowed: RebalanceBucket | null,
-  spareUsdc: number,
 ): Fact[] {
   const borrow = borrowed ? floorCents(borrowed.borrow) : 0;
   const interest = !borrowed
@@ -186,10 +191,7 @@ function situationFacts(
       : `none under ${num(INTEREST_FREE_UNTIL, 0)} ${borrowed.coin}`;
   return [
     { label: 'Lent by Gate', value: borrowed ? `${num(borrow, 2)} ${borrowed.coin}` : '0.00' },
-    { label: 'Initial margin held', value: fmtUsd(borrowed?.imHeldUsd ?? 0) },
-    { label: 'Maintenance margin held', value: fmtUsd(borrowed?.mmHeldUsd ?? 0) },
     { label: 'Interest', value: interest },
-    { label: 'Spare USDC on Hyperliquid', value: `${num(spareUsdc, 2)} USDC` },
     { label: 'Interest paid · all time', value: fmtUsd((usdc?.interestPaidUsd ?? 0) + (usdt?.interestPaidUsd ?? 0)) },
   ];
 }
@@ -347,7 +349,7 @@ export function RebalanceSection({ holdMs }: { holdMs?: number }) {
   const plan = data.plan;
   const toUsdt = direction === 'toUsdt';
   const repays = toUsdt ? usdtBorrowed : borrow >= MIN_AMOUNT;
-  const situation = situationFacts(usdc, usdt, borrowed, spareUsdc);
+  const situation = situationFacts(usdc, usdt, borrowed);
 
   const pickDirection = (next: RebalanceDirection) => {
     setChosen(next);
@@ -402,7 +404,7 @@ export function RebalanceSection({ holdMs }: { holdMs?: number }) {
               options={DIRECTION_OPTIONS}
             />
           </div>
-          <div className="flex min-w-[16rem] flex-1 flex-col gap-1">
+          <div className="flex w-[15rem] flex-col gap-1">
             <label htmlFor="rebalance-amount" className="text-[11px] text-ink-400">
               {`Amount (${toUsdt ? 'USDC' : 'USDT'}) · free ${num(free, 2)}`}
             </label>
@@ -430,6 +432,11 @@ export function RebalanceSection({ holdMs }: { holdMs?: number }) {
             </HoldToConfirmButton>
           )}
         </div>
+        {/* Directly under the toggle, because it describes the direction that
+            is SELECTED. Above it (where it used to sit) it read as a caption
+            on the facts, and changed under the reader's eyes on a toggle they
+            had not yet reached. */}
+        <p className="text-[12px] text-ink-400">{explanation(direction, usdtBorrowed)}</p>
         {showEnter && (
           <p id="rebalance-amount-error" role="alert" className="text-[11px] text-rose-300">
             Enter an amount
@@ -466,8 +473,8 @@ export function RebalanceSection({ holdMs }: { holdMs?: number }) {
   }
 
   return (
-    <section aria-label="Rebalance" className="flex flex-col gap-3">
-      <div className="flex flex-wrap items-start justify-between gap-2">
+    <section aria-label="Rebalance" className="card flex flex-col gap-3.5 p-4">
+      <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
         <div>
           <div className="flex items-center gap-1.5">
             <h2 className="text-xs font-semibold uppercase tracking-wider text-ink-400">Rebalance</h2>
@@ -483,9 +490,12 @@ export function RebalanceSection({ holdMs }: { holdMs?: number }) {
           </span>
         )}
       </div>
+      {/* THE STATE — three standing facts about the borrow — then a hairline,
+          and below it THE ACTION. They used to run together as one column of
+          rows, so a reader had to work out line by line which was a fact and
+          which a control. */}
       {usdc && <Facts items={situation} />}
-      <p className="text-[12px] text-ink-400">{explanation(job ? job.direction : direction, usdtBorrowed)}</p>
-      {body}
+      <div className="flex flex-col gap-3 border-t border-ink-800 pt-3.5">{body}</div>
     </section>
   );
 }

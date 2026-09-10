@@ -9,13 +9,17 @@ interface Props {
   tone?: 'green' | 'red' | 'cyan';
   /** Extra classes appended to the base button (e.g. width/margin). */
   className?: string;
+  /** Extra hover text, appended to the press-and-hold instruction — for a
+   * guarantee about what confirming DOES (e.g. atomic acceptance). */
+  title?: string;
   children: ReactNode;
 }
 
 const TONES: Record<NonNullable<Props['tone']>, string> = {
   green: 'border-emerald-500/60 bg-emerald-500/15 text-emerald-300 hover:bg-emerald-500/25',
   red: 'border-rose-500/60 bg-rose-500/15 text-rose-300 hover:bg-rose-500/25',
-  cyan: 'border-cyan-500/60 bg-cyan-500/15 text-cyan-300 hover:bg-cyan-500/25',
+  // The mock's execute button: the one solid info fill in the ticket.
+  cyan: 'border-transparent bg-info text-ink-50 hover:bg-info/75',
 };
 
 const R = 7;
@@ -27,7 +31,7 @@ const CIRC = 2 * Math.PI * R;
  * cancels. Deliberately NO keyboard activation — Enter/Space are swallowed so a
  * stray keypress can never send an order.
  */
-export function HoldToConfirmButton({ onConfirm, disabled, holdMs = 800, tone = 'cyan', className, children }: Props) {
+export function HoldToConfirmButton({ onConfirm, disabled, holdMs = 800, tone = 'cyan', className, title, children }: Props) {
   const [progress, setProgress] = useState(0);
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
   const fired = useRef(false);
@@ -75,7 +79,7 @@ export function HoldToConfirmButton({ onConfirm, disabled, holdMs = 800, tone = 
       type="button"
       disabled={disabled}
       aria-label={typeof children === 'string' ? children : undefined}
-      title="press and hold to confirm"
+      title={title ? `${title}\n\nPress and hold to confirm.` : 'press and hold to confirm'}
       onPointerDown={(e) => {
         // Only the primary button holds; jsdom events omit `button`, so treat
         // a missing value as primary.

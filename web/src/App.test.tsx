@@ -86,9 +86,9 @@ describe('App tab shell', () => {
 
     // Inactive content is mounted (data loads, badges stay live) yet hidden.
     expect(await screen.findByText(/Your CrossEx fee rates/)).not.toBeVisible();
-    // The 4-leg home base: with no tracked address it shows the address empty
-    // state and makes NO /api/strategy request.
-    expect(await screen.findByText('Track your 4-leg strategy')).not.toBeVisible();
+    // The positions home (asset view): with no tracked address it shows the
+    // track-an-address empty state.
+    expect(await screen.findByText('Track an address to see your farm by asset')).not.toBeVisible();
   });
 
   it('lands on Positions instead when the account already holds some', async () => {
@@ -202,7 +202,7 @@ describe('App tab shell', () => {
     expect(await screen.findByRole('complementary', { name: 'Setup guide' })).toBeInTheDocument();
     // Neither the tab strip nor the Positions home base is rendered.
     expect(screen.queryByRole('tablist')).not.toBeInTheDocument();
-    expect(screen.queryByText('Track your 4-leg strategy')).not.toBeInTheDocument();
+    expect(screen.queryByText('Track an address to see your farm by asset')).not.toBeInTheDocument();
   });
 
   it('replaces the trading shell (tabs included) with opportunities + guide when unconfigured', async () => {
@@ -266,9 +266,8 @@ describe('App tab shell', () => {
     expect(screen.getByRole('heading', { name: 'Fund Gate' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Execute' })).toBeInTheDocument();
 
-    // The VIP simulator only exists while unconfigured — and the knobs now live
-    // behind the collapsed assumptions strip, so open it first.
-    await userEvent.click(screen.getByRole('button', { name: /with these assumptions/ }));
+    // The VIP simulator only exists while unconfigured, and it sits on the
+    // always-visible assumptions row — nothing to open first.
     expect(screen.getByLabelText('Gate VIP tier')).toBeInTheDocument();
 
     // Symbols are expectedly absent — the button stays enabled as the guide's
@@ -379,7 +378,8 @@ describe('borrow pill', () => {
     );
     await renderApp();
 
-    const gauges = screen.getByRole('img', { name: 'Maintenance margin vs balance' }).closest('[title]')!;
+    // The header meters carry the whole margin story in one hover title.
+    const gauges = screen.getByRole('img', { name: 'Initial and maintenance margin' });
     await waitFor(() =>
       expect(gauges).toHaveAttribute(
         'title',
