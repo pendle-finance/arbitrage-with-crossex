@@ -28,7 +28,7 @@ import { Modal } from '../components/Modal';
 import { isUsdCollateral } from '../lib/boros';
 import { sig } from '../lib/fmt';
 import { BorosPairTicket } from './BorosPairTicket';
-import { PairResultReport } from './BorosPairBits';
+import { PairResultReport, legSubmitted } from './BorosPairBits';
 import { PairTicket } from './PairTicket';
 import { useTradeFlow, type StrategyWizardIntent, type TradeFlowApi } from './TradeFlow';
 
@@ -99,11 +99,6 @@ const EMPTY_BOOK: StepOneBook = {
   soleClean: false,
 };
 
-/** Was this leg actually sent to the venue? A not-submitted sentinel is
- * all-zero with no failure (orders.ts `notSubmitted`); a REJECTED leg has
- * filledSize 0 but a shortfall and a failure, and must still count. */
-const legSubmitted = (leg: BorosLegFill): boolean =>
-  leg.filledSize !== 0 || leg.shortfallSize > 0 || leg.failure !== null;
 
 const foldLeg = (slot: SlotFill, leg: BorosLegFill): SlotFill => {
   if (!legSubmitted(leg)) return slot;

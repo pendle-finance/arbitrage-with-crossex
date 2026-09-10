@@ -292,11 +292,12 @@ describe('simulateBorosPair', () => {
 
   it('compounds BOTH tolerances into the worst case — never just one leg', () => {
     const sim = simulateBorosPair(simInput());
-    const est = 0.09 - 0.042 - FEE_DRAG;
-    // Receive leg slips DOWN, pay leg slips UP: the two give-ups add.
-    expect(sim.worstSpreadApr).toBeCloseTo(est - 2 * DEFAULT_SLIPPAGE_APR, 12);
+    // Anchored on the two MIDS (0.09 / 0.045), not the fills: receive leg
+    // slips DOWN, pay leg slips UP, and the two give-ups add.
+    const midSpread = 0.09 - 0.045 - FEE_DRAG;
+    expect(sim.worstSpreadApr).toBeCloseTo(midSpread - 2 * DEFAULT_SLIPPAGE_APR, 12);
     // Explicitly: it is worse than moving one leg alone would suggest.
-    expect(sim.worstSpreadApr!).toBeLessThan(est - DEFAULT_SLIPPAGE_APR);
+    expect(sim.worstSpreadApr!).toBeLessThan(midSpread - DEFAULT_SLIPPAGE_APR);
   });
 
   it('moves the worst case live with the slippage setting, leaving the estimate alone', () => {
@@ -308,7 +309,33 @@ describe('simulateBorosPair', () => {
     );
     const est = 0.09 - 0.042 - FEE_DRAG;
     expect(tight.estSpreadApr).toBeCloseTo(est, 12);
-    expect(tight.worstSpreadApr).toBeCloseTo(est - 0.0002, 12);
+    // The bound anchors on each book's MID (0.09 / 0.045), not on the fill:
+    // Est. and Max measure from the same number.
+    expect(tight.worstSpreadApr).toBeCloseTo(0.09 - 0.045 - FEE_DRAG - 0.0002, 12);
+    expect(tight.legA.worstApr).toBeCloseTo(0.09 - 0.0001, 12);
+    expect(tight.legB.worstApr).toBeCloseTo(0.045 + 0.0001, 12);
+  });
+
+  it('measures Est. from mid the adverse way, and blocks a fill past the bound', () => {
+    // Leg A is receive-fixed: bids at 0.080 against a 0.090 mid is 1.00%
+    // of adverse slippage, past a 0.25% tolerance. The order would not fill
+    // inside its own bound, so the gate refuses it up front.
+    const sim = simulateBorosPair(
+      simInput({
+        legA: leg({ book: book(hlMarket.marketId, 0.08, 0.082), slippageApr: 0.0025 }),
+        legB: leg({ market: bnMarket, book: book(101, 0.044, 0.046), direction: 'long', slippageApr: 0.0025 }),
+      }),
+    );
+    expect(sim.legA.estSlippageApr).toBeCloseTo(0.01, 12);
+    expect(sim.legA.slippageExceeded).toBe(true);
+    expect(sim.legB.estSlippageApr).toBeCloseTo(0.001, 12);
+    expect(sim.legB.slippageExceeded).toBe(false);
+    const g = evaluatePairGate(gateInput({ simulation: sim }));
+    const blocker = g.blockers.find((b) => b.code === 'slippage-exceeds-max');
+    expect(blocker).toBeDefined();
+    expect(blocker!.leg).toBe('A');
+    expect(blocker!.message).toMatch(/1\.00% from mid/);
+    expect(blocker!.message).toMatch(/0\.25% max/);
   });
 
   it('honours a per-leg slippage override', () => {
@@ -318,7 +345,7 @@ describe('simulateBorosPair', () => {
         legB: leg({ market: bnMarket, book: book(101, 0.04, 0.042), direction: 'long', slippageApr: 0.004 }),
       }),
     );
-    expect(sim.worstSpreadApr).toBeCloseTo(0.09 - 0.042 - FEE_DRAG - 0.005, 12);
+    expect(sim.worstSpreadApr).toBeCloseTo(0.09 - 0.045 - FEE_DRAG - 0.005, 12);
   });
 
   it('clamps a runaway tolerance', () => {
@@ -339,6 +366,24 @@ describe('simulateBorosPair', () => {
     expect(sim.marginRequiredTotal).toBeCloseTo(imA + imB, 6);
     // Not symmetric — the point of showing it per leg.
     expect(sim.legA.marginRequired).not.toBeCloseTo(sim.legB.marginRequired!, 6);
+  });
+
+  it('totals the taker fee over BOTH legs\' own sizes when they differ', () => {
+    // A target repair: A is flat and aims at SIZE, B already holds 60% and
+    // aims at the same SIZE. Deltas differ; the fee is what each leg pays.
+    const sim = simulateBorosPair(
+      simInput({
+        intent: 'target',
+        legA: leg({ market: hlMarket, book: book(hlMarket.marketId, 0.088, 0.09), direction: 'short', currentSize: 0 }),
+        legB: leg({ market: bnMarket, book: book(bnMarket.marketId, 0.044, 0.046), direction: 'long', currentSize: SIZE * 0.6 }),
+      }),
+    );
+    const sizeA = Math.abs(sim.legA.sizing.deltaSize);
+    const sizeB = Math.abs(sim.legB.sizing.deltaSize);
+    expect(sizeA).toBeCloseTo(SIZE, 6);
+    expect(sizeB).toBeCloseTo(SIZE * 0.4, 6);
+    expect(sim.costToCrossSize).toBeCloseTo(sim.legA.takerFeeCost + sim.legB.takerFeeCost, 10);
+    expect(sim.costToCrossSize).toBeCloseTo(0.0005 * sizeA * T + 0.0005 * sizeB * T, 8);
   });
 
   it('prices cost-to-cross off taker fees × size × years', () => {

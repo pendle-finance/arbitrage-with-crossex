@@ -143,6 +143,9 @@ export function dealsRoutes(deps: AppDeps) {
         );
       }
 
+      // Again, with no await between here and the write: the checks above ran
+      // before several reads, and a rebalance can have started during them.
+      if (rebalanceRunning()) return refuseForRebalance(reply, 'starting a deal');
       deps.engine!.store.createPair(row);
       deps.cache.bust('account');
       deps.engine!.wake?.(); // first placement happens now, not after the tick sleep

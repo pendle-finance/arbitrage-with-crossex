@@ -30,7 +30,8 @@ import {
   type BorosOrderBook,
   type FetchLike,
 } from '../../core/boros/client';
-import { USD_TOKEN_ID } from '../../core/boros/borosApi';
+import { USD_TOKEN_ID, absWei, decimalString } from '../../core/boros/borosApi';
+import { parseUnits } from 'viem';
 import { isUpdating } from '../updater';
 import {
   limitAprFor,
@@ -523,6 +524,7 @@ export function borosPairRoutes(deps: AppDeps) {
       size,
       intent,
       gasBalanceUsd,
+      account,
     };
   };
 
@@ -665,7 +667,7 @@ export function borosPairRoutes(deps: AppDeps) {
 
       // Fresh account read: margin and positions decide the gate, and a cached
       // copy could be up to TTL.boros old — far too stale to authorise an order.
-      const { simulation, gate, intent } = await priceRequest(body, true);
+      const { simulation, gate, intent, account } = await priceRequest(body, true);
       if (gate.blockers.length > 0) {
         return reply.code(409).send({
           ok: false,
@@ -695,12 +697,30 @@ export function borosPairRoutes(deps: AppDeps) {
       ): BorosMarketOrderRequest | null => {
         const size = Math.abs(leg.sizing.deltaSize);
         if (size === 0 || leg.execApr === null) return null;
+        /**
+         * ⚠ A leg that REDUCES a position must never cross flat. Boros has no
+         * reduce-only flag, and `size` is a double that already lost the
+         * position's low-order digits: `parseUnits(decimalString(0.05))` is
+         * 50000000000000003 wei, three units above a 0.05 position, and the
+         * overshoot opens an opposing dust position too small to close (see
+         * `closePosition` in borosApi.ts, which has carried this cap since).
+         * So a reducing leg is capped at the venue's OWN integer for the
+         * position. A deliberate flip (`sizing.flips`, acknowledged in §4)
+         * is meant to cross and is left alone; an open adds and has nothing
+         * to cap against.
+         */
+        const raw = account.positionRawByMarket.get(leg.marketId);
+        const openWei = leg.sizing.opposing && !leg.sizing.flips && raw !== undefined ? absWei(raw) : null;
+        const askedWei = openWei === null ? null : parseUnits(decimalString(size), 18);
         return {
           marketId: leg.marketId,
           direction: leg.direction,
           size,
-          limitApr: limitAprFor(leg.direction, leg.execApr, leg.slippageApr),
+          // Bound off the book MID, the same anchor the ticket's "Est." and
+          // "Max" use; a mid-less market falls back to the fill rate.
+          limitApr: limitAprFor(leg.direction, leg.midApr > 0 ? leg.midApr : leg.execApr, leg.slippageApr),
           clientOrderId,
+          ...(openWei !== null && askedWei !== null && askedWei > openWei ? { sizeWei: openWei.toString() } : {}),
         };
       };
 
@@ -889,7 +909,15 @@ export function borosPairRoutes(deps: AppDeps) {
         // The venue's own integer, never re-derived from `size`.
         openSizeWei: account.positionRawByMarket.get(marketId) ?? '0',
         direction,
-        limitApr: limitAprFor(direction, market.markApr, slippageApr),
+        /**
+         * Bound off the BOOK MID, never the mark. Slippage is the distance
+         * between the executed implied rate and the book's mid (dapp-nitro's
+         * definition, and what the close form's "worst" line states); the
+         * mark is a 5-minute TWAP of trades that can sit anywhere relative to
+         * the book, so a bound derived from it was looser or tighter than the
+         * tolerance the user set without anything on screen saying so.
+         */
+        limitApr: limitAprFor(direction, market.midApr, slippageApr),
         clientOrderId,
       });
       /**

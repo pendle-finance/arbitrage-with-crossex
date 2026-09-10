@@ -478,9 +478,16 @@ export function CloseBorosForm({
                     <span title="Market order after cancelling any resting orders on this market">est. rate</span>
                     <span className="num text-ink-100">
                       {q?.execApr != null ? fmtPct(q.execApr) : sim.isFetching ? 'quoting…' : '—'}
-                      {q?.worstApr != null && (
-                        <span className="text-ink-500"> (worst {fmtPct(q.worstApr)})</span>
-                      )}
+                      {/* The bound the order carries: book mid ± the tolerance
+                          (the server derives it the same way). The simulation's
+                          own `worstApr` is exec ± tolerance, which is not what
+                          this close sends. */}
+                      {(() => {
+                        const mid = ctx.data?.markets.find((m) => m.marketId === id)?.midApr;
+                        if (!(mid && mid > 0) || slipInvalid) return null;
+                        const bound = l.side === 'LONG' ? mid - slipPct / 100 : mid + slipPct / 100;
+                        return <span className="text-ink-500"> (worst {fmtPct(bound)})</span>;
+                      })()}
                     </span>
                   </span>
                   <span className="flex justify-between text-ink-400">
@@ -490,8 +497,19 @@ export function CloseBorosForm({
                         which would need a per-leg apportionment the simulation
                         does not return. */}
                     <span title="(locked − execution rate) × size × time to maturity, before the fee below">est. PnL</span>
+                    {/* estPnl is in COLLATERAL units (rate × size × years, size
+                        in the market's collateral). Priced in dollars the same
+                        way the fee line below is; without a price it is shown
+                        in the token, never as dollars it is not. */}
                     {estPnl !== null ? (
-                      <SignedNumber value={estPnl} format={(n) => fmtUsd(n)} />
+                      (() => {
+                        const px = sim.data?.simulation.collateralPriceUsd;
+                        return px != null && px > 0 ? (
+                          <SignedNumber value={estPnl * px} format={(n) => fmtUsd(n)} />
+                        ) : (
+                          <SignedNumber value={estPnl} format={(n) => fmtTokenQty(n, unit)} />
+                        );
+                      })()
                     ) : (
                       <span className="text-ink-500">—</span>
                     )}

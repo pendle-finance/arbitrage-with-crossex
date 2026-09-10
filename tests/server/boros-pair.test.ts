@@ -418,10 +418,10 @@ describe('POST /api/boros/pair/execute', () => {
     const { data } = res.json();
     expect(data.result.partial).toBe(false);
     expect(data.result.hedgedSize).toBe(100_000);
-    // The receive-fixed leg's bound sits BELOW its estimate, the pay-fixed
-    // leg's ABOVE — 0.09 − 0.0025 and 0.042 + 0.0025.
+    // The bound anchors on each market's MID: the receive-fixed leg's sits
+    // BELOW it, the pay-fixed leg's ABOVE — 0.09 − 0.0025 and 0.045 + 0.0025.
     expect(seen.find((s) => s.marketId === HL)!.limitApr).toBeCloseTo(0.0875, 9);
-    expect(seen.find((s) => s.marketId === BN)!.limitApr).toBeCloseTo(0.0445, 9);
+    expect(seen.find((s) => s.marketId === BN)!.limitApr).toBeCloseTo(0.0475, 9);
   });
 
   it('re-runs the gate server-side and refuses a blocked pair with a 409', async () => {
@@ -556,6 +556,73 @@ describe('POST /api/boros/pair/execute', () => {
     expect(sent[0][0].marketId).toBe(HL);
     expect(sent[0][0].size).toBeGreaterThan(0);
     expect(sent[0][0].limitApr).toBeGreaterThan(0);
+  });
+
+  it("caps a CLOSE at the venue's own wei so it can never cross flat", async () => {
+    // 0.05 as a double re-encodes to 50000000000000003 wei — three above the
+    // position. Boros has no reduce-only flag, so that overshoot would open
+    // an opposing dust position too small to close. The cap is the venue's
+    // integer, verbatim, exactly as `closePosition` already does.
+    const sent: Array<{ marketId: number; size: number; sizeWei?: string }> = [];
+    makeApp(
+      {
+        '/core/v1/collaterals/summary': {
+          collaterals: [
+            {
+              tokenId: 3,
+              crossPosition: {
+                netBalance: raw(500_000),
+                marketPositions: [
+                  { marketId: HL, side: 0, notionalSize: '50000000000000000', pnl: {}, positionInitialMargin: raw(0) },
+                ],
+              },
+              isolatedPositions: [],
+            },
+          ],
+        },
+      },
+      undefined,
+      {
+        placeMarketOrders: async (reqs) => {
+          reqs.forEach((r) => sent.push({ marketId: r.marketId, size: r.size, sizeWei: r.sizeWei }));
+          return reqs.map((r) => okFill({ marketId: r.marketId, direction: r.direction }));
+        },
+        cancelOrders: async () => {},
+        closePosition: async () => okFill(),
+      },
+    );
+
+    const res = await post(
+      '/api/boros/pair/execute',
+      pairBody({
+        size: 0.05,
+        intent: 'close',
+        opposingAcknowledged: true,
+        clientOrderIdA: 'coid-aaaa',
+        clientOrderIdB: 'coid-bbbb',
+      }),
+    );
+    expect(res.statusCode).toBe(200);
+    expect(sent).toHaveLength(1);
+    expect(sent[0].marketId).toBe(HL);
+    expect(sent[0].size).toBeCloseTo(0.05, 12);
+    expect(sent[0].sizeWei).toBe('50000000000000000');
+  });
+
+  it('does not cap an OPEN — there is no position to cross', async () => {
+    const sent: Array<{ sizeWei?: string }> = [];
+    makeApp(undefined, undefined, {
+      placeMarketOrders: async (reqs) => {
+        reqs.forEach((r) => sent.push({ sizeWei: r.sizeWei }));
+        return reqs.map((r) => okFill({ marketId: r.marketId, direction: r.direction }));
+      },
+      cancelOrders: async () => {},
+      closePosition: async () => okFill(),
+    });
+    const res = await post('/api/boros/pair/execute', pairBody({ clientOrderIdA: 'coid-aaaa', clientOrderIdB: 'coid-bbbb' }));
+    expect(res.statusCode).toBe(200);
+    expect(sent).toHaveLength(2);
+    expect(sent.every((s) => s.sizeWei === undefined)).toBe(true);
   });
 
   it('trades ONE leg when onlyLeg is set, for a completion', async () => {

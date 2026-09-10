@@ -24,7 +24,7 @@ import { feeText, PreviewFallback, ViolationList } from './previewBits';
 import { usePreviewDebounced } from './usePreview';
 
 const CLOSE_INFO =
-  'The close is sent as a reduce-only IOC limit at mark ± slippage — it can never increase the position and never rests on the book.';
+  'The close is sent as a reduce-only IOC limit at mid ± slippage — it can never increase the position and never rests on the book.';
 
 interface Props {
   position: CrossexPosition;
@@ -177,7 +177,17 @@ export function ClosePopover({
    * `sig()`-rounded, so the round-trip of the dialog's own stated maximum
    * lands a hair above it on a large position.
    */
-  const qtyEps = Math.max(1e-9, maxQtyBase * 1e-7);
+  // The tolerance is at least the rounding the DISPLAY applied: `sig()` keeps
+  // 4 dp from 1 and 2 dp from 1,000, so a flat 1e-7 relative slack refused
+  // "151.202" typed against a 151.20195 position — the very figure the max
+  // hint printed. Converted back to base units when the box is in USD.
+  const displayRounding = (() => {
+    const shown = Number(sig(maxInUnit));
+    if (!Number.isFinite(shown)) return 0;
+    const slack = Math.abs(shown - maxInUnit);
+    return effUnit === 'usd' && mark > 0 ? slack / mark : slack;
+  })();
+  const qtyEps = Math.max(1e-9, maxQtyBase * 1e-7, displayRounding);
   const qtyInvalid =
     qtyStr.trim() === '' ||
     !Number.isFinite(entered) ||
@@ -330,7 +340,7 @@ export function ClosePopover({
                     <span className="num text-ink-100">{p.qty ? sig(p.qty) : '—'}</span>
                   </span>
                   <span className="text-ink-400">
-                    <span title="Reduce-only IOC limit at mark ± slippage — fills what it can at once, never rests, never adds">limit px</span>{' '}
+                    <span title="Reduce-only IOC limit at mid ± slippage — fills what it can at once, never rests, never adds">limit px</span>{' '}
                     <span className="num text-ink-100">{p.price ? sig(p.price) : '—'}</span>
                   </span>
                   <span className="text-ink-400">

@@ -442,8 +442,15 @@ export function BorosPairTicket({
     const safe = !Number.isFinite(n) || n <= 0 ? fallbackPct : Math.min(n, MAX_SLIP_PCT);
     return safe / 100;
   };
-  const aprA = pctToApr(perLeg ? slipStrA : slipStrShared, seededShared);
-  const aprB = pctToApr(perLeg ? slipStrB : slipStrShared, seededShared);
+  // Per-leg tolerances only mean something while TWO legs trade. The toggle
+  // is not reset on a mode switch (the values come back when the pair does),
+  // so everything downstream reads this flag, never `perLeg` itself: with the
+  // per-leg boxes hidden, a cleared box could block Confirm with nothing on
+  // screen to fix, and the shared box's quick picks wrote a value the wire
+  // ignored.
+  const perLegActive = perLeg && mode === 'pair' && onlyLeg === null;
+  const aprA = pctToApr(perLegActive ? slipStrA : slipStrShared, seededShared);
+  const aprB = pctToApr(perLegActive ? slipStrB : slipStrShared, seededShared);
   /**
    * ⚠ Say when the typed number is not the sent number.
    *
@@ -464,7 +471,7 @@ export function BorosPairTicket({
     const n = Number(raw);
     return raw.trim() === '' || !Number.isFinite(n) || n <= 0 || n > MAX_SLIP_PCT;
   };
-  const slipInvalid = perLeg
+  const slipInvalid = perLegActive
     ? slipOutOfRange(slipStrA) || slipOutOfRange(slipStrB)
     : slipOutOfRange(slipStrShared);
 
@@ -533,9 +540,12 @@ export function BorosPairTicket({
 
   // The acknowledgement is about a SPECIFIC position and size; any change to
   // what is being confirmed must retract it rather than carry it forward.
+  // `mode` and `onlyLeg` change WHICH legs trade, and the gate re-derives
+  // the opposing set per leg — a flip on a leg added by the switch was never
+  // the one acknowledged.
   useEffect(() => {
     setAcknowledged(false);
-  }, [marketA, marketB, dirA, dirB, sizeStr, intent]);
+  }, [marketA, marketB, dirA, dirB, sizeStr, intent, mode, onlyLeg]);
 
   // A completion is armed for ONE specific residual; changing the pair or the
   // intent makes it meaningless, so it must not survive into a normal ticket.
@@ -959,7 +969,7 @@ export function BorosPairTicket({
               {/* Per-leg tolerances: a thin book on one venue can need more
                   room than the other. Only meaningful with two legs, and
                   only in the free-form ticket. */}
-              {!guided && mode === 'pair' && (
+              {!guided && mode === 'pair' && onlyLeg === null && (
                 <>
                   <button
                     type="button"
@@ -1083,6 +1093,9 @@ export function BorosPairTicket({
             //
             // Still the user re-issuing, never automatic: the ticket is armed
             // and they confirm at a tolerance they choose.
+            // No imbalance ⇒ nothing to complete (the report hides the
+            // button; this is the belt to that brace).
+            if (report.unhedgedLeg === null || report.unhedgedSize <= 0) return;
             const deficient = report.unhedgedLeg === 'A' ? 'B' : 'A';
             setOnlyLeg(deficient);
             /**

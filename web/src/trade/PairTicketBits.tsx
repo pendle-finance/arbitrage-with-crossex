@@ -72,6 +72,7 @@ function LegRow({ label, tone, p }: { label: string; tone: 'green' | 'red'; p: P
   if (!p) return null;
   const isMaker = 'pairRole' in p.input && p.input.pairRole === 'maker';
   return (
+    <>
     <tr>
       <td className="py-0.5">
         <span className="inline-flex items-center gap-1">
@@ -96,6 +97,17 @@ function LegRow({ label, tone, p }: { label: string; tone: 'green' | 'red'; p: P
       </td>
       <td className="sr-only">{label}</td>
     </tr>
+    {/* The walk ran past the book: the tail of the size was priced at the
+        last level, so the avg price and the badge above are partly invented.
+        Said inline, as the single ticket does — a tooltip is not a warning. */}
+    {p.fillEstimate?.partialDepth && (
+      <tr>
+        <td colSpan={5} className="pb-1 text-[10.5px] text-amber-400">
+          {parseSymbol(p.symbol).exchange}: partial depth — estimate extrapolated past the book
+        </td>
+      </tr>
+    )}
+    </>
   );
 }
 

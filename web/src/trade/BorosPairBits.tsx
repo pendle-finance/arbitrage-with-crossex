@@ -20,8 +20,15 @@ import type {
   BorosSimulatedLeg,
 } from '../api/types';
 import { Chip } from '../components/Chip';
+import { HoldToConfirmButton } from '../components/HoldToConfirmButton';
 import { amountError } from '../lib/amount';
 import { fmtDateLocal, fmtPct, fmtTokenQty, fmtUsd } from '../lib/fmt';
+
+/** Was this leg actually sent to the venue? A not-submitted sentinel is
+ * all-zero with no failure (orders.ts `notSubmitted`); a REJECTED leg has
+ * filledSize 0 but a shortfall and a failure, and must still count. */
+export const legSubmitted = (leg: BorosLegFill): boolean =>
+  leg.filledSize !== 0 || leg.shortfallSize > 0 || leg.failure !== null;
 
 /**
  * Tolerances are quoted in BASIS POINTS OF APR — an absolute distance in rate
@@ -580,14 +587,16 @@ export function GasTopUp({
         value={amount ?? ''}
         onChange={(e) => onAmountChange?.(e.target.value)}
       />
-      <button
-        type="button"
-        className="rounded border border-ink-600 px-2 py-0.5 text-[11px] text-ink-200 hover:bg-ink-800 disabled:opacity-50"
+      {/* Moves margin into the gas budget — a hold, like every other
+          real-money control here, not a click. */}
+      <HoldToConfirmButton
+        onConfirm={onTopUp}
         disabled={busy || err !== null || !amount?.trim()}
-        onClick={onTopUp}
+        className="!rounded !px-2 !py-0.5 !text-[11px] !font-medium"
+        title="Press and hold to move this amount from margin into the gas budget"
       >
         {busy ? 'Topping up…' : 'Top up gas'}
-      </button>
+      </HoldToConfirmButton>
       {err && (
         <p id="boros-gas-topup-error" role="alert" className="w-full text-rose-300">
           {err}
@@ -618,14 +627,19 @@ export function BlockerList({
         >
           {b.message}
           {b.code === 'isolated-must-switch' && onCancelAndClose && b.marketId !== undefined && (
-            <button
-              type="button"
-              className="mt-1.5 rounded border border-rose-400/50 px-2 py-0.5 text-[11px] text-rose-200 hover:bg-rose-500/15 disabled:opacity-50"
+            // Cancels every resting order on the market and closes its WHOLE
+            // position at market, unsized and unpreviewed — the one control
+            // here that acts on a position the user never typed a size for,
+            // so it holds like every other real-money control.
+            <HoldToConfirmButton
+              tone="red"
+              onConfirm={() => onCancelAndClose(b.marketId as number)}
               disabled={busyMarketId === b.marketId}
-              onClick={() => onCancelAndClose(b.marketId as number)}
+              className="mt-1.5 !rounded !px-2 !py-0.5 !text-[11px] !font-medium"
+              title="Press and hold: cancels every resting order on this market and closes its entire position at market"
             >
               {busyMarketId === b.marketId ? 'Working…' : 'Cancel orders & close position'}
-            </button>
+            </HoldToConfirmButton>
           )}
         </li>
       ))}
@@ -671,9 +685,12 @@ export function PairResultReport({
    * reads as a failure — it was a complete success at exactly the size they
    * requested.
    */
-  const onlyIsA = Math.abs(result.legB?.filledSize ?? 0) === 0;
   const oneLeg = !result.bothLegsSubmitted;
-  const only = oneLeg ? (onlyIsA ? result.legA : result.legB) : null;
+  // The SENT leg, never "whichever filled": a leg-B order rejected outright
+  // fills 0 too, and reading that as "A" showed the not-submitted sentinel —
+  // a hardcoded direction and no failure — on the very screen that has to
+  // say why the venue refused.
+  const only = oneLeg ? (legSubmitted(result.legB) ? result.legB : result.legA) : null;
   return (
     <div
       className={`rounded-lg border px-3 py-2.5 ${
@@ -759,14 +776,20 @@ export function PairResultReport({
         <div className="mt-2 flex flex-wrap gap-1.5">
           {/* Never automatic: this is the user re-issuing at a tolerance they
               pick, which is why it routes back through the ticket. */}
-          <button
-            type="button"
-            disabled={busy}
-            onClick={onComplete}
-            className="rounded border border-cyan-500/50 px-2 py-0.5 text-[11px] text-cyan-200 hover:bg-cyan-500/15 disabled:opacity-50"
-          >
-            Complete now at market
-          </button>
+          {/* Only when there IS a deficient leg. A pair that came back with
+              no imbalance — both legs failed, or both fell short by the same
+              amount — has nothing to complete; arming one leg anyway sent it
+              alone at the full target size, naked. Retry re-issues both. */}
+          {result.unhedgedLeg !== null && result.unhedgedSize > 0 && (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={onComplete}
+              className="rounded border border-cyan-500/50 px-2 py-0.5 text-[11px] text-cyan-200 hover:bg-cyan-500/15 disabled:opacity-50"
+            >
+              Complete now at market
+            </button>
+          )}
           <button
             type="button"
             disabled={busy}

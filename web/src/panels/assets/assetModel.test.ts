@@ -150,6 +150,50 @@ describe('hedge status', () => {
     expect(d.venues[0].unit).toBe('usd');
   });
 
+  it('a USDT-margined BTC market hedges a BTC perp by its dollar notional, not its token count', () => {
+    // Hyperliquid BTC trades as a USDT-margined market (194) and a
+    // BTC-margined one (137). 100,000 USDT of YU at a $100k mark covers a
+    // 1 BTC perp exactly; read as 100,000 "BTC" it was a 99,999 BTC deficit.
+    const g = group({
+      base: 'BTC',
+      priceUsd: 100_000,
+      perpOpen: [
+        perp({ symbol: 'HL_BTC', venue: 'HYPERLIQUID', side: 'LONG', qty: 1, notionalUsd: 100_000, entryPrice: 100_000, markPrice: 100_000, imUsd: 20_000 }),
+        perp({ symbol: 'BN_BTC', venue: 'BINANCE', side: 'SHORT', qty: 1, notionalUsd: 100_000, entryPrice: 100_000, markPrice: 100_000, imUsd: 20_000 }),
+      ],
+      borosOpen: [
+        boros({ marketId: 194, venue: 'HYPERLIQUID', side: 'LONG', collateral: 'USDT', sizeToken: 100_000, notionalUsd: 100_000, entryApr: 0.07, imUsd: 2_000 }),
+        boros({ marketId: 137, venue: 'BINANCE', side: 'SHORT', collateral: 'BTC', sizeToken: 1, notionalUsd: 100_000, entryApr: 0.055, imUsd: 2_000 }),
+      ],
+    });
+    const d = deriveAsset(g, {}, 0, NOW);
+    expect(d.gaps).toHaveLength(0);
+    expect(d.venues.map((v) => v.unit)).toEqual(['base', 'base']);
+    expect(d.venues.find((v) => v.venue === 'HYPERLIQUID')!.borosSigned).toBeCloseTo(1, 9);
+    expect(d.lockedAprFwd).not.toBeNull();
+    // One 4-leg pair of 1 BTC, nothing pending, and the locked rate is what
+    // the legs say: receive 5.5% on Binance, pay 7% on Hyperliquid.
+    expect(d.pairs).toHaveLength(1);
+    expect(d.pairs[0].size).toBeCloseTo(1, 9);
+    expect(d.pendingLegs).toHaveLength(0);
+    expect(d.pairs[0].lockedAprFwd).toBeLessThan(0);
+    expect(d.lockedAprFwd).toBeLessThan(0);
+  });
+
+  it('a coin-margined leg on the same coin is still read as coins', () => {
+    const d = deriveAsset(
+      group({
+        perpOpen: [perp({ side: 'LONG', qty: 1000 })],
+        borosOpen: [boros({ side: 'LONG', collateral: 'ETH', sizeToken: 1000 })],
+      }),
+      {},
+      0,
+      NOW,
+    );
+    expect(d.gaps).toHaveLength(0);
+    expect(d.venues[0].borosSigned).toBeCloseTo(1000, 9);
+  });
+
   it('covered venues whose Boros legs mature inside 14d get an expiry warning', () => {
     const g = group({
       perpOpen: [perp({ symbol: 'HL', venue: 'HYPERLIQUID', side: 'LONG', qty: 1000 })],

@@ -382,14 +382,15 @@ export function ClosePairForm({
         /**
          * ⚠ Accurate for a PAIR, which is not what the single-leg note says.
          *
-         * Only the first leg carries the mark ± slippage band; the hedge leg
+         * Only the first leg carries the mid ± slippage band; the hedge leg
          * is sent as a plain MARKET IOC on purpose, because a book-mid limit
          * band cannot reliably stay inside the venue's OWN price-limit band
          * and gets rejected — which would leave the first leg closed and the
          * second still open (see decide.ts). Claiming the band covers both
          * would promise protection the hedge leg does not have.
          */
-        note="The first leg is a reduce-only IOC limit at mark ± slippage; the hedge leg is sent at market, inside the venue's own price band. Neither can increase a position or rest on the book."
+        note="The first leg is a reduce-only IOC limit at mid ± slippage; the hedge leg is sent at market, inside the venue's own price band. Neither can increase a position or rest on the book."
+        hedgeAtMarket
       />
       {/* A plain input, deliberately NOT the Est./Max disclosure the Boros and
           single-leg closes use: the preview above already prints each leg's
@@ -423,7 +424,12 @@ export function ClosePairForm({
         // so the persisted deal id was resent and the server deduped it into
         // the ORIGINAL band while the form showed the new one — the same bug
         // class PairTicket's intentKey fixes by carrying `sizeUnit`.
-        intentKey={['closeBoth', String(slip), ...legs.map((l) => `${l.symbol}:${l.qty}`)].join('|')}
+        // ⚠ And the TYPED size, for the same reason: `l.qty` is the leg's
+        // attributed allocation (a prop), not what the box says. Without it a
+        // lost-response confirm at 0.5 followed by "max" resent the same deal
+        // id, the server deduped it to the 0.5 close, and the form reported
+        // the full close as done.
+        intentKey={['closeBoth', String(slip), qtyStr, ...legs.map((l) => `${l.symbol}:${l.qty}`)].join('|')}
         buttonClassName="w-full"
         // The panel above already reviews this close; the hover card would
         // repeat it on top of the dialog. Errors still surface.

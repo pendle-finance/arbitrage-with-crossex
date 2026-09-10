@@ -262,9 +262,21 @@ export interface SimulatedLeg {
   direction: BorosLegDirection;
   /** VWAP the entered size would achieve against the book as it stands. */
   execApr: number | null;
-  /** execApr moved a full tolerance the WRONG way for this leg's direction:
-   * lower on a receive-fixed leg, higher on a pay-fixed one. */
+  /** The book's mid, the anchor for every slippage figure on this leg. */
+  midApr: number;
+  /** How far the fill sits from mid the WRONG way for this direction
+   * (positive = worse than mid): mid − exec on a receive-fixed leg,
+   * exec − mid on a pay-fixed one. Null without a fill or a mid. */
+  estSlippageApr: number | null;
+  /** The rate bound this leg carries: mid moved a full tolerance the WRONG
+   * way for its direction — lower on a receive-fixed leg, higher on a
+   * pay-fixed one. Mid, not exec: "Est." and "Max" measure from the same
+   * number, so an estimate inside the max is a fill inside the bound. */
   worstApr: number | null;
+  /** estSlippageApr is past the tolerance: the order would not fill inside
+   * its own bound, so it is refused before the wire (dapp-nitro's
+   * PRICE_IMPACT_EXCEEDS_SLIPPAGE), not after. */
+  slippageExceeded: boolean;
   /** Collateral units the book can actually supply; < requested on a thin book. */
   estFillSize: number;
   /** Requested − estFillSize. Non-zero means this leg alone will fall short. */
@@ -370,9 +382,16 @@ function simulateLeg(
   }
 
   const execApr = walk ? walk.execApr : null;
+  const mid = leg.market.midApr > 0 ? leg.market.midApr : null;
   // A receive-fixed leg is hurt by a LOWER rate, a pay-fixed leg by a HIGHER one.
+  const estSlippageApr =
+    execApr === null || mid === null ? null : leg.direction === 'short' ? mid - execApr : execApr - mid;
+  // The bound is MID ± tolerance (a mid-less market falls back to the fill),
+  // so the "Est." beside it is measured from the same anchor as the "Max".
+  const anchor = mid ?? execApr;
   const worstApr =
-    execApr === null ? null : leg.direction === 'short' ? execApr - slippageApr : execApr + slippageApr;
+    anchor === null ? null : leg.direction === 'short' ? anchor - slippageApr : anchor + slippageApr;
+  const slippageExceeded = size > 0 && estSlippageApr !== null && estSlippageApr > slippageApr + 1e-12;
 
   // Margin is charged at the rate the leg actually locks; the IM formula is
   // linear in notional, so collateral units in gives collateral units out.
@@ -396,7 +415,10 @@ function simulateLeg(
     base: leg.market.base,
     direction: leg.direction,
     execApr,
+    midApr: leg.market.midApr,
+    estSlippageApr,
     worstApr,
+    slippageExceeded,
     estFillSize: estFill,
     shortfallSize: Math.max(0, size - estFill),
     bookStatus,
@@ -521,10 +543,14 @@ export function simulateBorosPair(input: SimulateBorosPairInput): BorosPairSimul
   // about. With one leg live, that leg IS the traded size.
   const sizeA = Math.abs(a.sizing.deltaSize);
   const sizeB = Math.abs(b.sizing.deltaSize);
-  const tradedSize = sizeA === 0 || sizeB === 0 ? Math.max(sizeA, sizeB) : Math.min(sizeA, sizeB);
-  const costToCrossSize = takerDragApr * tradedSize * years;
   a.takerFeeCost = takerRate(legA.market) * sizeA * years;
   b.takerFeeCost = takerRate(legB.market) * sizeB * years;
+  // The pair total is the SUM of the two legs' own fees — never the drag rate
+  // times min(sizeA, sizeB). That understated every asymmetric trade: a
+  // `target` repair with A +100 and B −40 charged 140 units of fee and
+  // showed 40 units' worth. (The min() also read 0 on a single-leg ticket,
+  // which the per-leg figures never did.)
+  const costToCrossSize = a.takerFeeCost + b.takerFeeCost;
 
   /**
    * Σ of the legs that actually trade.
@@ -620,6 +646,7 @@ export type BlockerCode =
   | 'legs-do-not-offset'
   | 'book-unavailable'
   | 'no-depth'
+  | 'slippage-exceeds-max'
   | 'isolated-must-switch'
   | 'isolated-short-margin'
   | 'cross-short-margin'
@@ -763,6 +790,19 @@ export function evaluatePairGate(input: EvaluatePairInput): PairGate {
         leg: key,
         marketId: leg.marketId,
         message: `${leg.marketName}: nothing resting on the side this leg would cross.`,
+      });
+    } else if (leg.slippageExceeded) {
+      // The fill already sits past the bound the order would carry, so the
+      // venue would reject or fill nothing. Said here, while the size is
+      // still being typed, rather than as a failed order.
+      const pct = (n: number) => `${(n * 100).toFixed(2)}%`;
+      blockers.push({
+        code: 'slippage-exceeds-max',
+        leg: key,
+        marketId: leg.marketId,
+        message:
+          `${leg.marketName}: this size fills ${pct(leg.estSlippageApr ?? 0)} from mid, past the ` +
+          `${pct(leg.slippageApr)} max — raise the tolerance or reduce the size.`,
       });
     }
     if (leg.marginRequired === null && leg.execApr !== null) {

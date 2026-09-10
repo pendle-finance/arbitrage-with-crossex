@@ -176,6 +176,7 @@ export function ClosePreviewPanel({
   error,
   labelFor,
   realizedFor,
+  hedgeAtMarket,
   note,
 }: {
   previews: PreviewResult[] | undefined;
@@ -187,6 +188,12 @@ export function ClosePreviewPanel({
   /** PnL this leg realises, when the caller can compute it. */
   realizedFor?: (p: PreviewResult, i: number) => number | null;
   note?: string;
+  /**
+   * A two-leg close: only the FIRST leg carries the limit band; every leg
+   * after it is sent as a plain market IOC (see decide.ts). Its row says
+   * so instead of printing a limit price the order will never carry.
+   */
+  hedgeAtMarket?: boolean;
 }) {
   if (!previews || previews.length === 0) {
     return (
@@ -207,10 +214,17 @@ export function ClosePreviewPanel({
               <span className="text-ink-200">{labelFor(p, i)}</span>
               <span className="num ml-auto text-ink-100">{p.qty ? sig(p.qty) : '—'}</span>
             </span>
-            <span className="flex justify-between text-ink-400">
-              <span title="Reduce-only IOC limit at mark ± slippage — fills what it can at once, never rests, never adds">limit px</span>
-              <span className="num text-ink-100">{p.price ? sig(p.price) : '—'}</span>
-            </span>
+            {hedgeAtMarket && i > 0 ? (
+              <span className="flex justify-between text-ink-400">
+                <span title="The hedge leg is sent as a plain market IOC, inside the venue's own price-limit band — no limit price of its own">order</span>
+                <span className="text-ink-100">market IOC</span>
+              </span>
+            ) : (
+              <span className="flex justify-between text-ink-400">
+                <span title="Reduce-only IOC limit at mid ± slippage — fills what it can at once, never rests, never adds">limit px</span>
+                <span className="num text-ink-100">{p.price ? sig(p.price) : '—'}</span>
+              </span>
+            )}
             {p.fillEstimate && (
               <span className="flex items-center justify-between text-ink-400">
                 <span>slippage</span>
@@ -230,7 +244,13 @@ export function ClosePreviewPanel({
           </div>
         );
       })}
-      {note && <span className="cursor-help text-ink-500" title={note}>reduce-only ⓘ</span>}
+      {note && hedgeAtMarket ? (
+        <span className="text-ink-500" title={note}>
+          reduce-only ⓘ <span className="text-ink-500">— first leg limit at mid ± slippage; hedge leg at market</span>
+        </span>
+      ) : (
+        note && <span className="cursor-help text-ink-500" title={note}>reduce-only ⓘ</span>
+      )}
       <ViolationList
         violations={previews.flatMap((p) => p.violations ?? [])}
         warnings={previews.flatMap((p) => p.warnings ?? [])}

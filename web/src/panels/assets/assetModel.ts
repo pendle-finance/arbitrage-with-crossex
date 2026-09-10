@@ -370,10 +370,38 @@ const signedPerp = (l: AssetPerpOpen, unit: 'base' | 'usd', keep: number): numbe
   return (l.side === 'LONG' ? size : -size) * keep;
 };
 
-const signedBoros = (l: AssetBorosOpen, unit: 'base' | 'usd', keep: number): number => {
-  // Coin-margined markets size YU in the coin; USD-margined in dollars — the
-  // same rule picks the asset's unit, so this is the matching reading.
-  const size = unit === 'base' ? l.sizeToken : l.notionalUsd;
+/**
+ * A Boros leg's size in the ASSET's unit.
+ *
+ * `sizeToken` is in the market's COLLATERAL token, which is the coin only on
+ * a coin-margined market. The same coin trades on both kinds: Hyperliquid
+ * BTC 25 Sep 2026 exists as market 137 (margined in BTC) and as market 194
+ * (margined in USDT, and the one with the volume). Reading `sizeToken` as
+ * coins on the USDT one compared 100,000 USDT against 1 BTC — a phantom
+ * 99,999 BTC deficit, a blank locked APR and a sign-flipped pair rate on a
+ * book that was perfectly hedged. So a leg whose collateral is not the coin
+ * is converted through its dollar notional at the coin's price; on a
+ * dollar-unit asset every leg is its notional.
+ */
+export function borosSizeIn(
+  l: Pick<AssetBorosOpen, 'sizeToken' | 'notionalUsd' | 'collateral'>,
+  unit: 'base' | 'usd',
+  base: string,
+  priceUsd: number,
+): number {
+  if (unit === 'usd') return l.notionalUsd;
+  if ((l.collateral ?? '').toUpperCase() === base.toUpperCase()) return l.sizeToken;
+  return priceUsd > 0 ? l.notionalUsd / priceUsd : 0;
+}
+
+const signedBoros = (
+  l: AssetBorosOpen,
+  unit: 'base' | 'usd',
+  keep: number,
+  base: string,
+  priceUsd: number,
+): number => {
+  const size = borosSizeIn(l, unit, base, priceUsd);
   return (l.side === 'LONG' ? size : -size) * keep;
 };
 
@@ -575,7 +603,7 @@ export function deriveAsset(
     const keep = 1 - excludedFraction(exclusions, borosKey(l.marketId), l.sizeToken);
     if (keep <= 0) continue;
     const v = venueFor(l.venue);
-    v.borosSigned += signedBoros(l, unit, keep);
+    v.borosSigned += signedBoros(l, unit, keep, group.base, group.priceUsd);
     if (v.soonestMaturity === 0 || l.maturity < v.soonestMaturity) {
       v.soonestMaturity = l.maturity;
     }
@@ -754,6 +782,8 @@ export function deriveAsset(
   const keepOf = (l: AssetPerpOpen) => 1 - excludedFraction(exclusions, perpKey(l.symbol), l.qty);
   const borosKeepOf = (l: AssetBorosOpen) =>
     1 - excludedFraction(exclusions, borosKey(l.marketId), l.sizeToken);
+  /** A YU leg's whole size in the asset's unit, by its own collateral. */
+  const yuSize = (l: AssetBorosOpen) => borosSizeIn(l, unit, group.base, group.priceUsd);
   const longs = group.perpOpen.filter((l) => l.side === 'LONG' && keepOf(l) > 0);
   const shorts = group.perpOpen.filter((l) => l.side === 'SHORT' && keepOf(l) > 0);
   const legSize = (l: AssetPerpOpen) => (unit === 'base' ? l.qty : l.notionalUsd) * keepOf(l);
@@ -779,7 +809,7 @@ export function deriveAsset(
     const yuRemaining = new Map<number, number>(
       group.borosOpen.map((b) => [
         b.marketId,
-        (unit === 'base' ? b.sizeToken : b.notionalUsd) * borosKeepOf(b),
+        yuSize(b) * borosKeepOf(b),
       ]),
     );
     const yuSlicesFor = (venue: string): YuSlice[] =>
@@ -788,7 +818,7 @@ export function deriveAsset(
         .map((b) => ({
           marketId: b.marketId,
           maturity: b.maturity,
-          size: (unit === 'base' ? b.sizeToken : b.notionalUsd) * borosKeepOf(b),
+          size: yuSize(b) * borosKeepOf(b),
         }));
     /**
      * One row per (long venue, short venue, MATURITY) — a 4-leg arbitrage is
@@ -913,7 +943,7 @@ export function deriveAsset(
           kind: 'yu',
           side: b.side,
           share: frac,
-          size: (unit === 'base' ? b.sizeToken : b.notionalUsd) * keep,
+          size: yuSize(b) * keep,
           lockedApr: (b.side === 'SHORT' ? 1 : -1) * entryApr,
           feesUsd: fees,
           maturity: b.maturity,
@@ -927,12 +957,12 @@ export function deriveAsset(
       };
       for (const b of longBoros) {
         const got = alloc.long.get(b.marketId) ?? 0;
-        const whole = (unit === 'base' ? b.sizeToken : b.notionalUsd) * borosKeepOf(b);
+        const whole = yuSize(b) * borosKeepOf(b);
         if (got > 0 && whole > 0) addBoros(b, got / whole);
       }
       for (const b of shortBoros) {
         const got = alloc.short.get(b.marketId) ?? 0;
-        const whole = (unit === 'base' ? b.sizeToken : b.notionalUsd) * borosKeepOf(b);
+        const whole = yuSize(b) * borosKeepOf(b);
         if (got > 0 && whole > 0) addBoros(b, got / whole);
       }
       const notionalUsd = lLeg.notionalUsd * lKeep * lShare + sLeg.notionalUsd * sKeep * share;
@@ -1014,7 +1044,7 @@ export function deriveAsset(
      */
     for (const b of group.borosOpen) {
       const left = yuRemaining.get(b.marketId) ?? 0;
-      const whole = (unit === 'base' ? b.sizeToken : b.notionalUsd) * borosKeepOf(b);
+      const whole = yuSize(b) * borosKeepOf(b);
       if (whole <= 0 || left <= whole * 0.001) continue;
       pendingLegs.push({
         venue: b.venue,
@@ -1023,7 +1053,7 @@ export function deriveAsset(
         maturity: b.maturity,
         size: left,
         unit,
-        notionalUsd: b.notionalUsd * (left / ((unit === 'base' ? b.sizeToken : b.notionalUsd) || 1)),
+        notionalUsd: b.notionalUsd * (left / (yuSize(b) || 1)),
         lockedApr: (b.side === 'SHORT' ? 1 : -1) * keptSlice(exclusions, borosKey(b.marketId), b.sizeToken, b.entryApr).entry,
         imUsd: b.imUsd * (left / whole),
       });

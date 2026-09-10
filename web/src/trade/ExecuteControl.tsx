@@ -112,6 +112,11 @@ export function ExecuteControl({
   const restingOnlyRef = useRef(false);
   const placedSummaryRef = useRef<string | null>(null);
   const [placedResting, setPlacedResting] = useState<string | null>(null);
+  /** The server answered `duplicate: true`: this confirm matched an earlier
+   * submission and placed nothing new. Said out loud — the Boros ticket does
+   * the same for `replayed` — because the ticket clearing itself and the deal
+   * view opening otherwise read as "your order went out just now". */
+  const [replayedDeal, setReplayedDeal] = useState<string | null>(null);
 
   // Lazy previews only run while the card is shown; eager previews run always so
   // the button is armed the moment the ticket is complete.
@@ -132,6 +137,7 @@ export function ExecuteControl({
       // and wiping those would re-open their double-execute window.
       clearPendingBasket(inflightIntentRef.current);
       onExecuted?.();
+      setReplayedDeal(r.duplicate ? r.id : null);
       if (restingOnlyRef.current) setPlacedResting(placedSummaryRef.current);
       else flow.openDeal(r.id);
     },
@@ -171,6 +177,7 @@ export function ExecuteControl({
       basketIdRef.current = null;
       clearPendingBasket(inflightIntentRef.current);
       onExecuted?.();
+      setReplayedDeal(rs.every((r) => r.duplicate) && rs.length > 0 ? rs.map((r) => r.id).join(', ') : null);
       // One deal modal at a time: show the last leg's; the first is on Trades.
       const last = rs[rs.length - 1];
       if (last) flow.openDeal(last.id);
@@ -281,6 +288,7 @@ export function ExecuteControl({
       restingOnlyRef.current = false;
       placedSummaryRef.current = null;
       setPlacedResting(null);
+      setReplayedDeal(null);
       executeSplit.mutate([a, b]);
       return;
     }
@@ -291,6 +299,7 @@ export function ExecuteControl({
       ? `${deal.a.side} ${deal.qty} ${parseSymbol(deal.a.symbol).base} @ ${deal.price}`
       : null;
     setPlacedResting(null);
+    setReplayedDeal(null);
     execute.mutate(deal);
   };
 
@@ -332,6 +341,22 @@ export function ExecuteControl({
             aria-label="Dismiss"
             className="px-1 leading-none text-emerald-400/70 transition-colors hover:text-emerald-200"
             onClick={() => setPlacedResting(null)}
+          >
+            ×
+          </button>
+        </div>
+      )}
+      {replayedDeal && (
+        <div role="status" className="mt-1 flex items-start gap-2 rounded border border-amber-500/30 bg-amber-500/[0.06] px-2 py-1.5 text-[11px] leading-relaxed text-amber-200">
+          <span>
+            This confirm matched an earlier submission — deal <span className="num">{replayedDeal}</span> already exists and no new
+            order was sent. Showing that deal.
+          </span>
+          <button
+            type="button"
+            aria-label="Dismiss"
+            className="px-1 leading-none text-amber-400/70 transition-colors hover:text-amber-200"
+            onClick={() => setReplayedDeal(null)}
           >
             ×
           </button>

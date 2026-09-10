@@ -788,8 +788,9 @@ describe('BorosPairTicket', () => {
 
     await user.clear(field);
     await user.type(field, '20');
-    await user.click(button);
-    await waitFor(() => expect(bodies.length).toBe(1));
+    // A hold, not a click: it moves margin.
+    await user.pointer({ keys: '[MouseLeft>]', target: button });
+    await waitFor(() => expect(bodies.length).toBe(1), { timeout: 3_000 });
     expect(bodies[0]).toEqual({ amountUsd: 20 });
   });
 
@@ -857,8 +858,10 @@ describe('BorosPairTicket', () => {
     renderWithClient(<BorosPairTicket />);
     await fillTicket(user);
 
-    await user.click(await screen.findByRole('button', { name: /Cancel orders & close position/i }));
-    await waitFor(() => expect(body).not.toBeNull());
+    // A hold, not a click: this flattens a whole market position.
+    const remedy = await screen.findByRole('button', { name: /Cancel orders & close position/i });
+    await user.pointer({ keys: '[MouseLeft>]', target: remedy });
+    await waitFor(() => expect(body).not.toBeNull(), { timeout: 3_000 });
 
     const sent = body as unknown as { clientOrderId?: string; address?: string };
     expect(sent.clientOrderId).toMatch(/^[A-Za-z0-9_-]{8,64}$/);
@@ -939,6 +942,54 @@ describe('BorosPairTicket', () => {
     for (const label of ['Complete now at market', 'Retry', 'Leave it']) {
       expect(report.getByRole('button', { name: label })).toBeInTheDocument();
     }
+  });
+
+  it('a pair that came back with NO imbalance offers Retry, never Complete', async () => {
+    // Both legs failed: partial, but nothing is unhedged and there is no
+    // deficient leg. "Complete now" used to default that null to leg A and
+    // arm a single leg at the full target size — a naked rate bet.
+    const user = userEvent.setup();
+    const bothFailed = (marketId: number, direction: 'short' | 'long') => ({
+      marketId,
+      direction,
+      filledSize: 0,
+      shortfallSize: 100_000,
+      execApr: null,
+      feeSize: null,
+      failure: { code: 'insufficient-depth', message: 'batch reverted' },
+    });
+    server.use(
+      ...handlers({
+        execute: () =>
+          HttpResponse.json(
+            env({
+              result: {
+                legA: bothFailed(HL, 'short'),
+                legB: bothFailed(BN, 'long'),
+                hedgedSize: 0,
+                unhedgedSize: 0,
+                unhedgedLeg: null,
+                realisedSpreadApr: null,
+                partial: true,
+                bothLegsSubmitted: true,
+              },
+              estimate: simulation(),
+              warnings: [],
+            }),
+          ),
+      }),
+    );
+    renderWithClient(<BorosPairTicket />);
+    await fillTicket(user);
+
+    const confirm = await screen.findByRole('button', { name: /2 Boros market orders/i });
+    await waitFor(() => expect(confirm).not.toBeDisabled());
+    await user.pointer({ keys: '[MouseLeft>]', target: confirm });
+    await waitFor(() => expect(screen.queryByRole('status')).toBeInTheDocument(), { timeout: 3_000 });
+
+    const report = within(screen.getByRole('status'));
+    expect(report.queryByRole('button', { name: 'Complete now at market' })).not.toBeInTheDocument();
+    expect(report.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
   });
 
   it('completes the DEFICIENT leg only — never re-arms both', async () => {

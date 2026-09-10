@@ -7,7 +7,8 @@ import type { Clients } from './clients';
 import { fetchVenueBook as realFetchVenueBook, touchOf, type fetchVenueBook } from './estimate/books';
 import { estimateFill } from './estimate/fill';
 import { estimateFees, resolveFeeRates, type VenueFeeRow } from './estimate/fees';
-import { parseSymbol } from './numbers';
+import { DEFAULT_STEP, parseSymbol } from './numbers';
+import { marketableClosePrice } from './orders';
 
 interface PreviewDeps {
   clients: Clients;
@@ -32,8 +33,22 @@ export async function previewActions(deps: PreviewDeps, actions: ActionInput[]):
           { clients: deps.clients, fetchBook: deps.fetchBook },
           { symbol: r.symbol, side: r.side, qty: r.qty, refPrice },
         ).catch(() => null);
-        if (est) preview.fillEstimate = est;
-        else preview.warnings.push('no fill estimate available (no book, no reference price)');
+        if (est) {
+          preview.fillEstimate = est;
+          /**
+           * A reduce-only close is re-priced by the ENGINE at send time off the
+           * venue book's mid (venueGate.refPrice), not off CrossEx's mark. The
+           * resolver only had the mark; now that the book has been walked,
+           * quote the band off the same mid the order will actually carry, so
+           * the "limit px" the dialog prints is the one that goes out.
+           */
+          const close = r.reduceOnly && r.type === 'LIMIT' && r.tif === 'IOC' && r.closing;
+          const slippage = r.input.kind === 'close-position' ? r.input.slippagePct : undefined;
+          const mid = est.midPrice;
+          if (close && slippage !== undefined && mid !== undefined && mid > 0) {
+            preview.price = marketableClosePrice(mid, r.side, slippage, r.symbol, r.rule?.tickSize ?? DEFAULT_STEP);
+          }
+        } else preview.warnings.push('no fill estimate available (no book, no reference price)');
       }
 
       // A POC leg doesn't cross — surface the venue's touch instead, so the

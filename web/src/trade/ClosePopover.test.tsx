@@ -97,6 +97,24 @@ describe('ClosePopover', () => {
     expect(screen.getByRole('button', { name: 'Close now ▸' })).toBeDisabled();
   });
 
+  it('accepts the COIN maximum the dialog itself displays', async () => {
+    // sig() keeps 4 dp from 1: a 151.20195 position prints as 151.202, a hair
+    // ABOVE the position. Typing the hint's own figure must not be refused by
+    // an error that names that same figure.
+    server.use(...baseHandlers(), closePreviewHandler());
+    renderWithClient(
+      <ClosePopover position={makeCrossexPosition({ ...ethPosition, positionQty: '151.20195' })} onDismiss={() => {}} />,
+    );
+    await screen.findByText(/limit px/);
+    expect(sig(151.20195)).toBe('151.202');
+
+    await userEvent.clear(screen.getByLabelText('Close size'));
+    await userEvent.type(screen.getByLabelText('Close size'), '151.202');
+
+    expect(screen.queryByText(/close size exceeds position/)).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Close now ▸' })).toBeEnabled());
+  });
+
   it('holding "Close now" POSTs a reduce-only banded close deal (no review modal)', async () => {
     const dealCalls: DealRequest[] = [];
     server.use(

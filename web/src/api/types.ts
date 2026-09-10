@@ -1137,7 +1137,13 @@ export interface BorosSimulatedLeg {
   base: string;
   direction: BorosLegDirection;
   execApr: number | null;
+  /** The book's mid — the anchor for Est. and Max alike. */
+  midApr?: number;
+  /** Adverse distance of the fill from mid (positive = worse than mid). */
+  estSlippageApr?: number | null;
+  /** The rate bound the order carries: mid ± tolerance. */
   worstApr: number | null;
+  slippageExceeded?: boolean;
   estFillSize: number;
   shortfallSize: number;
   bookStatus: BorosBookStatus;
