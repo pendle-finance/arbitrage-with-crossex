@@ -1,10 +1,11 @@
 {
-  "version": "1.5.1",
+  "version": "1.6.0",
   "highlights": [
-    "An amber pill in the header shows when Gate lends you USDC or USDT. The Balances tab shows the margin it holds, the interest per day, and the interest you have paid so far",
-    "One hold pays the borrow back by the cheapest route, in either direction. It can also move spare USDC on Hyperliquid back to USDT",
-    "A progress bar shows each step and its seconds. A page refresh keeps a move running. A restart halts it safely, with Resume and Abandon",
-    "Each pair on the Positions tab says the price at which the account liquidates if only that coin moves, red inside 15%. The rebalance quote shows that price before and after the move",
-    "The update dialog opens by itself when a new version is out, so you do not miss one"
+    "Positions are grouped by coin. One card per asset shows Total PnL, the fixed APR you lock, capital and lifetime cost, with a PnL waterfall that foots to the cent",
+    "Each exchange is a funding bundle: its perp with every Boros leg hedging it, the blended fixed APR, the floating rate now, settlements, fees and trade PnL. Expand it to see the legs",
+    "Close any leg from its row, or both legs of a pair, with one size box and a hold to confirm. A missing or short leg says so and arms the order ticket",
+    "Set a start date per asset and exclude legs or slices from the farm. Every number follows",
+    "The 2-step wizard and the Boros ticket are redesigned: form on the left, live quote on the right, slippage as distance from mid",
+    "The whole app wears the Boros look, with better contrast and keyboard access"
   ]
 }
