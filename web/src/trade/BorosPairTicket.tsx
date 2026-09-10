@@ -40,6 +40,7 @@ import type {
   BorosPairResult,
 } from '../api/types';
 import { HoldToConfirmButton } from '../components/HoldToConfirmButton';
+import { size as fmtSize, type SoloLeg } from './BorosPairBits';
 import { QueryError } from '../components/QueryError';
 import { SegmentedToggle } from '../components/SegmentedToggle';
 import { amountError } from '../lib/amount';
@@ -516,6 +517,24 @@ export function BorosPairTicket({
   const sim = useBorosPairSimulation(request, report === null && active);
   const simulation = sim.data?.simulation ?? null;
   /**
+   * The leg that actually TRADES, read off the simulation rather than the
+   * Pair/Single toggle. In Pair mode a `target` repair with one leg already
+   * at its target, or a Close on a book that holds only one side, sizes the
+   * other leg to zero; that leg walks no book and has no rate, so every pair
+   * figure (spread, worst case, Est.) came back null while "Max" still added
+   * both tolerances — twice the bound the one order carries — and the fee
+   * read "2 legs". The readouts below follow this, so they describe the
+   * order that goes out; `singleLeg` keeps seeding the tolerance from the
+   * markets the toggle names.
+   */
+  const activeLeg: SoloLeg = (() => {
+    if (singleLeg !== null) return singleLeg;
+    if (!simulation) return null;
+    const tradesA = Math.abs(simulation.legA.sizing.deltaSize) > 0;
+    const tradesB = Math.abs(simulation.legB.sizing.deltaSize) > 0;
+    return tradesA && !tradesB ? 'A' : tradesB && !tradesA ? 'B' : null;
+  })();
+  /**
    * Estimated slippage. A spread reads it off the simulation (mid spread −
    * executed spread). A ONE-leg trade — Single mode, or completing one leg —
    * has no spread, so it is that leg's own distance from mid; without this
@@ -523,9 +542,9 @@ export function BorosPairTicket({
    */
   const estSlippageApr = ((): number | null => {
     if (!simulation) return null;
-    if (singleLeg === null) return simulation.slippageApr ?? null;
-    const leg = singleLeg === 'A' ? simulation.legA : simulation.legB;
-    const mid = (singleLeg === 'A' ? rowA : rowB)?.midApr;
+    if (activeLeg === null) return simulation.slippageApr ?? null;
+    const leg = activeLeg === 'A' ? simulation.legA : simulation.legB;
+    const mid = (activeLeg === 'A' ? rowA : rowB)?.midApr;
     return leg.execApr !== null && mid !== undefined && mid > 0 ? Math.abs(leg.execApr - mid) : null;
   })();
   const gate = sim.data?.gate ?? null;
@@ -797,7 +816,7 @@ export function BorosPairTicket({
             {simulation ? (
               <>
                 <span className="text-ink-400">
-                  {sig(Math.abs((singleLeg === 'B' ? simulation.legB : simulation.legA).sizing.currentSize))}
+                  {sig(Math.abs((activeLeg === 'B' ? simulation.legB : simulation.legA).sizing.currentSize))}
                 </span>
                 <span className="text-ink-600"> → </span>
                 {/* Single mode: this line IS the position readout (the venue
@@ -816,7 +835,7 @@ export function BorosPairTicket({
                           : undefined
                   }
                 >
-                  {sig(Math.abs((singleLeg === 'B' ? simulation.legB : simulation.legA).sizing.resultingSize))}
+                  {sig(Math.abs((activeLeg === 'B' ? simulation.legB : simulation.legA).sizing.resultingSize))}
                 </span>{' '}
                 <span className="text-ink-400">{simulation.collateral}</span>
               </>
@@ -928,7 +947,7 @@ export function BorosPairTicket({
                     per-leg tolerances actually sent (aprA/aprB), so a per-leg
                     override moves it, and a single-leg ticket — Single mode
                     or a one-leg completion — shows that leg's bound alone. */}
-                {fmtPct(singleLeg === 'A' ? aprA : singleLeg === 'B' ? aprB : aprA + aprB)}
+                {fmtPct(activeLeg === 'A' ? aprA : activeLeg === 'B' ? aprB : aprA + aprB)}
               </button>
             </span>
           </div>
@@ -1008,9 +1027,9 @@ export function BorosPairTicket({
           {/* `singleLeg` (not `mode`): a one-leg completion after a half fill
               is single-leg too, and reading it as a pair printed dashes for
               the spread beside an enabled Confirm. */}
-          <SpreadReadout sim={simulation} singleLeg={singleLeg} />
-          <PairCosts sim={simulation} singleLeg={singleLeg} />
-          <PositionArithmetic sim={simulation} singleLeg={singleLeg} />
+          <SpreadReadout sim={simulation} singleLeg={activeLeg} />
+          <PairCosts sim={simulation} singleLeg={activeLeg} />
+          <PositionArithmetic sim={simulation} singleLeg={activeLeg} />
         </>
       )}
 
@@ -1200,16 +1219,19 @@ function acknowledgementText(
   collateral: string,
 ): string {
   const { sizing } = leg;
-  const held = Math.abs(sizing.currentSize).toLocaleString('en-US', { maximumFractionDigits: 2 });
+  // The same magnitude-scaled formatter as every other size on the ticket:
+  // fixed 2dp printed a 0.0123 BTC position as "0.01 BTC" in the one line
+  // that binds the user to what happens to it.
+  const held = fmtSize(Math.abs(sizing.currentSize));
   const side = sizing.currentSize > 0 ? 'long' : 'short';
   if (sizing.flips) {
-    const opened = Math.abs(sizing.resultingSize).toLocaleString('en-US', { maximumFractionDigits: 2 });
+    const opened = fmtSize(Math.abs(sizing.resultingSize));
     return `I understand this closes my existing ${leg.marketName} ${side} position of ${held} ${collateral}, realising its PnL, and opens ${opened} ${collateral} in the opposite direction.`;
   }
   if (sizing.resultingSize === 0) {
     return `I understand this closes my existing ${leg.marketName} ${side} position of ${held} ${collateral} in full, realising its PnL.`;
   }
-  const to = Math.abs(sizing.resultingSize).toLocaleString('en-US', { maximumFractionDigits: 2 });
+  const to = fmtSize(Math.abs(sizing.resultingSize));
   return `I understand this reduces my existing ${leg.marketName} ${side} position of ${held} ${collateral} to ${to} ${collateral}, realising part of its PnL.`;
 }
 

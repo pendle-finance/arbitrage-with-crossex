@@ -76,7 +76,7 @@ const pct = (v: number | null | undefined, dp = 2): string =>
  * digits at every scale, precision scaled to magnitude, floored at
  * "<0.000001". The symbol is dropped — the column header carries it.
  */
-const size = (n: number | null | undefined): string => {
+export const size = (n: number | null | undefined): string => {
   if (n === null || n === undefined || !Number.isFinite(n)) return '—';
   const abs = Math.abs(n);
   if (abs > 0 && abs < 1e-6) return '<0.000001';

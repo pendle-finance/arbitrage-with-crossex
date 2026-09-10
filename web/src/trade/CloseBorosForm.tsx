@@ -24,6 +24,7 @@
 import { useMemo, useState } from 'react';
 import type { BorosPairRequest, BorosSimulatedLeg, StrategyLeg } from '../api/types';
 import { SignedNumber } from '../components/SignedNumber';
+import { QueryError } from '../components/QueryError';
 import { fieldValue, fmtPct, fmtTokenQty, fmtUsd, prettyVenue } from '../lib/fmt';
 import {
   useBorosAgent,
@@ -144,7 +145,11 @@ export function CloseBorosForm({
   const shownSize = (): string => sizeEdited ?? fieldValue(maxCloseSize);
 
   const slipPct = Number(slipStr);
-  const slipInvalid = !Number.isFinite(slipPct) || slipPct <= 0 || slipPct > 50;
+  // 10% is the quote endpoint's own cap (MAX_SLIPPAGE_APR): a bound it refuses
+  // is a bound this form cannot quote, and it used to accept up to 50% — every
+  // number went blank and Confirm still sent at that bound.
+  const MAX_SLIP_PCT = 10;
+  const slipInvalid = !Number.isFinite(slipPct) || slipPct <= 0 || slipPct > MAX_SLIP_PCT;
 
   const sizeOf = (l: StrategyLeg): { value: number; invalid: boolean } => {
     const raw = shownSize();
@@ -417,6 +422,7 @@ export function CloseBorosForm({
         </label>
       </div>
 
+      {sim.isError && <QueryError title="Couldn’t quote this close" error={sim.error} onRetry={() => sim.refetch()} />}
       <div className="flex flex-col gap-2.5 rounded-lg border border-ink-800 bg-ink-950/60 px-3 py-2.5 text-[11px]">
         {closable.map((l, i) => {
           const id = l.marketId as number;
@@ -621,7 +627,7 @@ export function CloseBorosForm({
               <span className="text-[11px] text-ink-400">%</span>
             </div>
             {slipInvalid && (
-              <span className="text-[11px] text-rose-400">slippage must be in (0, 50]</span>
+              <span className="text-[11px] text-rose-400">slippage must be in (0, {MAX_SLIP_PCT}]</span>
             )}
           </div>
         )}
@@ -629,7 +635,9 @@ export function CloseBorosForm({
 
       <HoldToConfirmButton
         tone="red"
-        disabled={close.isPending || slipInvalid || anySizeInvalid || agentBlocked}
+        // No quote, no close: a hold with the numbers blank sends a bound
+        // nothing on screen describes.
+        disabled={close.isPending || slipInvalid || anySizeInvalid || agentBlocked || sim.isError || (simReq !== null && !sim.data)}
         onConfirm={run}
         className="w-full"
       >

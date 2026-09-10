@@ -178,6 +178,21 @@ describe('CloseBorosForm — saying that it landed', () => {
     expect(armed()).toBeNull();
   });
 
+  it('refuses a slippage the quote endpoint would refuse — 10% is the cap everywhere', async () => {
+    // The form used to accept up to 50% while /simulate rejects above 10%: every
+    // quoted number went blank and the hold still sent that bound.
+    server.use(...ready());
+    renderWithClient(<CloseBorosForm legs={[leg()]} />);
+    // The tolerance box sits behind the "Max: X%" toggle.
+    fireEvent.click(await screen.findByRole('button', { name: /%$/ }));
+    const slip = await screen.findByLabelText(/Close slippage tolerance/);
+    fireEvent.change(slip, { target: { value: '20' } });
+    expect(await screen.findByText(/slippage must be in \(0, 10\]/)).toBeInTheDocument();
+    await waitFor(() => expect(armed()).toBeDisabled());
+    fireEvent.change(slip, { target: { value: '5' } });
+    await waitFor(() => expect(armed()).toBeEnabled());
+  });
+
   it('keeps the confirm armed only when something of the user\'s is genuinely left', async () => {
     server.use(...ready(), closeReturns({ closed: false, fill: fill(0.006, 0.004) }));
     renderWithClient(<CloseBorosForm legs={[leg()]} />);

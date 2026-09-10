@@ -944,6 +944,38 @@ describe('BorosPairTicket', () => {
     }
   });
 
+  it('reads as a ONE-leg trade when the simulation sizes the other leg to zero, whatever the toggle says', async () => {
+    // Pair mode, but leg B is already at its target: it walks no book and has
+    // no rate. The readouts used to take the pair branch — "Estimated spread —",
+    // "Max" = both tolerances, fee "(2 legs)" — for an order that is one leg.
+    const user = userEvent.setup();
+    server.use(
+      ...handlers({
+        sim: {
+          legB: simLeg({
+            marketId: BN,
+            marketName: 'Binance ETHUSDT 31 Aug 2026',
+            venue: 'Binance',
+            direction: 'long',
+            execApr: null,
+            worstApr: null,
+            marginRequired: null,
+            sizing: { currentSize: 100_000, deltaSize: 0, resultingSize: 100_000, opposing: false, flips: false, clampedToClose: false },
+          }),
+          estSpreadApr: null,
+          worstSpreadApr: null,
+          slippageApr: null,
+        },
+      }),
+    );
+    renderWithClient(<BorosPairTicket />);
+    await fillTicket(user);
+
+    expect(await screen.findByText('Estimated rate')).toBeInTheDocument();
+    expect(screen.queryByText('Estimated spread')).not.toBeInTheDocument();
+    expect(screen.queryByText('Taker fee (2 legs)')).not.toBeInTheDocument();
+  });
+
   it('a pair that came back with NO imbalance offers Retry, never Complete', async () => {
     // Both legs failed: partial, but nothing is unhedged and there is no
     // deficient leg. "Complete now" used to default that null to leg A and

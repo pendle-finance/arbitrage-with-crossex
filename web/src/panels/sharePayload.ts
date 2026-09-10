@@ -178,7 +178,17 @@ export function pairSharePayload(
     cp: null,
     cb: null,
     p: opts.netUsd ?? 0,
-    sp: pair.lockedAprFwd ?? 0,
+    // The card prints this as "N% locked spread", and a spread is a rate on
+    // NOTIONAL: what the receive leg locks minus what the pay leg locks, net
+    // of settlement fees. `lockedAprFwd` is that same carry over CAPITAL —
+    // the leveraged figure the headline APR already shows — and it read as
+    // a 32% "spread" beside a 26% APR. Recover the notional basis from it:
+    // carry per year = lockedAprFwd × capital; per-leg notional = half the
+    // pair's two perp notionals.
+    sp: (() => {
+      const perLegNotional = pair.notionalUsd / 2;
+      return pair.lockedAprFwd !== null && perLegNotional > 0 ? (pair.lockedAprFwd * pair.capitalUsd) / perLegNotional : 0;
+    })(),
     // A pair only exists once both sides are on, and assetModel builds it from
     // legs that are open on both venues.
     h: 'h',

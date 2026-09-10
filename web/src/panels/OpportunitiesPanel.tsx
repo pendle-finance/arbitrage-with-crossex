@@ -51,7 +51,7 @@ import { SideVenue } from '../components/VenueChip';
 import { borosMarketUrl, isUsdCollateral } from '../lib/boros';
 import {
   fmtAge,
-  fmtDateUtc,
+  fmtDateLocal,
   fmtNotionalShort,
   fmtPct,
   fmtTokenQty,
@@ -476,7 +476,7 @@ const OpportunityCard = memo(function OpportunityCard({
   const netNegative = capitalApr !== null && capitalApr < 0;
   const netTone = netNegative ? 'text-rose-400' : 'text-emerald-400';
   const days = Math.max(1, Math.round(group.secondsToMaturity / 86_400));
-  const maturityTitle = `Matures ${fmtDateUtc(group.maturity)} UTC · ${fmtAge(group.secondsToMaturity * 1000)} left`;
+  const maturityTitle = `Matures ${fmtDateLocal(group.maturity)} · ${fmtAge(group.secondsToMaturity * 1000)} left`;
   // Token-margined groups also size in the collateral token — bracket the
   // notional with that amount (USDT groups stay pure-dollar).
   // ⚠ USDC counts as dollars too — testing `!== 'USDT'` alone handed a
@@ -546,7 +546,7 @@ const OpportunityCard = memo(function OpportunityCard({
             </Chip>
           ))}
           <span className="num whitespace-nowrap text-[11px] text-ink-400" title={maturityTitle}>
-            matures {fmtDateUtc(group.maturity)}
+            matures {fmtDateLocal(group.maturity)}
           </span>
         </span>
       </div>
@@ -604,7 +604,7 @@ const OpportunityCard = memo(function OpportunityCard({
             type="button"
               className="self-start text-[11.5px] text-ink-300 underline decoration-ink-400 decoration-dotted underline-offset-[3px] transition-colors hover:text-ink-50 hover:decoration-ink-200 disabled:cursor-not-allowed disabled:no-underline disabled:opacity-50 disabled:hover:text-ink-300"
               aria-expanded={open}
-              aria-label={`${open ? 'Hide' : 'Show'} details for ${base} short ${prettyVenue(pair.shortLeg.venue)} / long ${prettyVenue(pair.longLeg.venue)}, ${group.collateral}-margined ${fmtDateUtc(group.maturity)}`}
+              aria-label={`${open ? 'Hide' : 'Show'} details for ${base} short ${prettyVenue(pair.shortLeg.venue)} / long ${prettyVenue(pair.longLeg.venue)}, ${group.collateral}-margined ${fmtDateLocal(group.maturity)}`}
               disabled={detailsDisabled}
               title={detailsTitle}
               onClick={() => setOpen((v) => !v)}
@@ -681,7 +681,7 @@ const OpportunityCard = memo(function OpportunityCard({
             <button
               type="button"
               className="btn btn-primary px-4 font-semibold"
-              aria-label={`Open this strategy — ${base} short ${prettyVenue(pair.shortLeg.venue)} / long ${prettyVenue(pair.longLeg.venue)}, ${group.collateral}-margined ${fmtDateUtc(group.maturity)}`}
+              aria-label={`Open this strategy — ${base} short ${prettyVenue(pair.shortLeg.venue)} / long ${prettyVenue(pair.longLeg.venue)}, ${group.collateral}-margined ${fmtDateLocal(group.maturity)}`}
               disabled={executeDisabled}
               title={executeTitle}
               onClick={() =>

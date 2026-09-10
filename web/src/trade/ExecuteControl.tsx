@@ -226,9 +226,12 @@ export function ExecuteControl({
   const available = Number(account.data?.availableMargin ?? NaN);
   const margin = previews
     ? estimateMargin(previews, positions.data?.positions, account.data?.positionMode)
-    : { required: 0, confident: false };
+    : { required: 0, gateRequired: 0, confident: false };
+  // Gate on the server's threshold (IM × buffer + fee reserve), not the raw IM
+  // the ticket displays — the raw figure let a basket through that the
+  // preflight then refused.
   const marginBlocked =
-    Boolean(previews) && margin.confident && Number.isFinite(available) && margin.required > 0 && margin.required > available;
+    Boolean(previews) && margin.confident && Number.isFinite(available) && margin.gateRequired > 0 && margin.gateRequired > available;
   // The confirmed intent must map onto a deal shape the engine models (probe
   // with a placeholder id) — an unmappable shape must disable, not no-op.
   const probeActions = previews ? (decorate ? decorate(finalizeActions(previews)) : finalizeActions(previews)) : null;
@@ -364,7 +367,8 @@ export function ExecuteControl({
       )}
       {marginBlocked && (
         <div role="alert" className="mt-1 text-[11px] text-rose-400">
-          margin ≈ {fmtUsd(margin.required)} exceeds available {Number.isFinite(available) ? fmtUsd(available) : '—'}
+          margin ≈ {fmtUsd(margin.gateRequired)} (incl. 5% buffer + fee reserve) exceeds available{' '}
+          {Number.isFinite(available) ? fmtUsd(available) : '—'}
         </div>
       )}
       {!mappable && (

@@ -8,7 +8,7 @@
  *
  * The canvas never draws an external image, so it can't be tainted —
  * `toDataURL`/`toBlob` stay available regardless of the Google-Fonts CDN. */
-import { fmtDateUtc, fmtPct, fmtTokenQty, fmtUsd, fmtUsdCompact, prettyVenue } from './fmt';
+import { fmtDateLocal, fmtPct, fmtTokenQty, fmtUsd, fmtUsdCompact, prettyVenue } from './fmt';
 import { hedgeLabel, shareDaysText } from './share';
 import type { SharePayloadV1 } from './shareCodec';
 
@@ -110,7 +110,7 @@ export function shareCardLines(p: SharePayloadV1): ShareCardLines {
     aprText: fmtPct(p.a),
     headlineTail: 'fixed APR',
     capitalLine: `on ${fmtUsd(p.c, 0)} capital (${shareDaysText(p)})`,
-    contextLine: `${p.b} · ${fmtPct(p.sp)} locked spread · matures ${fmtDateUtc(p.m)} · ${hedge}`,
+    contextLine: `${p.b} · ${fmtPct(p.sp)} locked spread · matures ${fmtDateLocal(p.m)} · ${hedge}`,
     hedgeLabel: hedge,
     legs: p.l.slice(0, MAX_LEG_ROWS).map((l) => ({
       side: l.s === 'S' ? 'SHORT' : 'LONG',

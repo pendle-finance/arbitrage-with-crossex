@@ -834,11 +834,13 @@ export function borosPairRoutes(deps: AppDeps) {
       }
       const slippageOverride =
         body.slippageApr === undefined ? null : Number(body.slippageApr);
+      // The same cap the quote enforces (MAX_SLIPPAGE_APR): the form can only
+      // show a bound it can quote, so it must not be able to SEND a wider one.
       if (
         slippageOverride !== null &&
-        (!Number.isFinite(slippageOverride) || slippageOverride <= 0 || slippageOverride > 0.5)
+        (!Number.isFinite(slippageOverride) || slippageOverride <= 0 || slippageOverride > MAX_SLIPPAGE_APR)
       ) {
-        throw new CoreError('slippageApr must be in (0, 0.5]', 'validation');
+        throw new CoreError(`slippageApr must be in (0, ${MAX_SLIPPAGE_APR}]`, 'validation');
       }
       const orders = deps.getBorosOrders?.();
       if (!orders) {

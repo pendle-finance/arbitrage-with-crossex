@@ -379,6 +379,26 @@ describe('ExecuteControl', () => {
       expect(calls).toHaveLength(0); // never posts
     });
 
+    it('blocks in the band between raw IM and the server preflight threshold', async () => {
+      // account.availableMargin = 4200; 40,000 / 10x = 4,000 raw IM (under 4,200) — but the
+      // server demands 4,000 × 1.05 + 40,000 × 0.001 = 4,240, so the hold used to complete and
+      // the POST 400'd with a number the ticket never showed. The gate mirrors the server now.
+      const calls: DealRequest[] = [];
+      server.use(
+        ...baseHandlers(),
+        echoPreviewHandler({ overrides: { estNotional: 40_000, leverage: { requested: 10, max: 50 } } }),
+        dealHandler(calls),
+      );
+      renderWithClient(<ExecuteControl scope="mband" actions={[notionalAction]} label="Execute" holdMs={50} />);
+
+      const btn = await screen.findByRole('button', { name: 'Execute' });
+      await waitFor(() => expect(btn).toBeDisabled());
+      expect(await screen.findByRole('alert')).toHaveTextContent(/4,240/);
+      fireEvent.pointerDown(btn);
+      await new Promise((r) => setTimeout(r, 80));
+      expect(calls).toHaveLength(0);
+    });
+
     it('never blocks a close (reduce-only) even with a huge notional and tiny balance', async () => {
       const calls: DealRequest[] = [];
       const closeAction: ActionInput = { kind: 'close-position', symbol: 'GATE_FUTURE_ETH_USDT' };

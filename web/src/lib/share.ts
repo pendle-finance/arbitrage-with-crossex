@@ -4,7 +4,7 @@
  * travels IN the URL (`?d=`): the public box is stateless by design, so the
  * link is the data. */
 import { encodeSharePayload, type SharePayloadV1 } from './shareCodec';
-import { fmtDateUtc, fmtPct, fmtUsd } from './fmt';
+import { fmtDateLocal, fmtPct, fmtUsd } from './fmt';
 
 // The DE FACTO public link. The site is HOSTED at
 // arbitrage.pendle.finance/crossex, but boros.pendle.finance is the
@@ -69,5 +69,5 @@ export function buildXIntentUrl(p: SharePayloadV1, shareUrl?: string): string {
 }
 
 export function shareFileName(p: SharePayloadV1): string {
-  return `crossex-boros-${p.b.toLowerCase()}-${fmtDateUtc(p.m)}.png`;
+  return `crossex-boros-${p.b.toLowerCase()}-${fmtDateLocal(p.m)}.png`;
 }

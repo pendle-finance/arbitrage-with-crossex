@@ -113,13 +113,23 @@ export function describeAction(a: ActionInput): string {
  * a comparison. An all-close basket returns 0, and `availableMargin` can be NEGATIVE, so
  * any gate must also require `required > 0` — otherwise 0 > -3870 blocks the close.
  */
+/**
+ * Mirrors of the server preflight's constants (src/core/preflight.ts:
+ * PREFLIGHT_MARGIN_BUFFER, TAKER_FEE_RESERVE). The gate below has to refuse
+ * exactly what the server refuses, or the hold completes and the POST 400s
+ * with a number ~7% above the one the ticket printed. Keep in step.
+ */
+export const PREFLIGHT_MARGIN_BUFFER = 1.05;
+export const TAKER_FEE_RESERVE = 0.001;
+
 export function estimateMargin(
   previews: PreviewResult[],
   positions: CrossexPosition[] | undefined,
   positionMode?: string,
-): { required: number; confident: boolean } {
+): { required: number; gateRequired: number; confident: boolean } {
   const canNet = isOneWayMode(positionMode);
   let required = 0;
+  let notionalSum = 0;
   // Positions unknown while netting is live: an unwind is indistinguishable from an open
   // and would false-block. `[]` is an answer, `undefined` is not. Not-confident fails open.
   let confident = !(canNet && positions === undefined);
@@ -133,8 +143,11 @@ export function estimateMargin(
     const known = p.leverage?.requested || (Number.isFinite(posLev) && posLev > 0 ? posLev : 0);
     if (!known) confident = false; // fell back to 1x worst case
     required += notional / (known || 1);
+    notionalSum += notional;
   }
-  return { required, confident };
+  // `required` is the honest IM figure the ticket prints; `gateRequired` is
+  // what the server preflight will actually demand (buffer + fee reserve).
+  return { required, gateRequired: required * PREFLIGHT_MARGIN_BUFFER + notionalSum * TAKER_FEE_RESERVE, confident };
 }
 
 /** One-way (netting) mode? In hedge mode a BUY against a short opens a SEPARATE long at
