@@ -7,7 +7,7 @@
   "repository": "github:pendle-finance/arbitrage-with-crossex",
   "packageManager": "yarn@1.22.22",
   "engines": {
-    "node": ">=20"
+    "node": ">=22.13"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
