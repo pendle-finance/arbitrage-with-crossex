@@ -566,9 +566,13 @@ export function BorosPairTicket({
   // previous intent can never be mistaken for this one. Slippage is part of the
   // intent too: a re-confirm at a different tolerance is a different order, and
   // must not coalesce with the previous one in the server's replay memo.
+  // `mode` and `onlyLeg` change WHICH legs are sent, so they are part of the
+  // intent too: without them a Pair whose response was lost and a Single
+  // re-confirmed at the same size shared a memo key, and the Single was
+  // answered with the Pair's fills.
   useEffect(() => {
     setOrderIds(newOrderIds());
-  }, [marketA, marketB, dirA, dirB, sizeStr, intent, aprA, aprB]);
+  }, [marketA, marketB, dirA, dirB, sizeStr, intent, aprA, aprB, mode, onlyLeg]);
 
   // The acknowledgement is about a SPECIFIC position and size; any change to
   // what is being confirmed must retract it rather than carry it forward.

@@ -90,6 +90,27 @@ describe('CloseBorosForm — reporting what it closed', () => {
     expect(screen.getByLabelText(/Close size, applied to both legs/)).toHaveValue('0.004');
   });
 
+  it('reports a PARTIAL as a partial even though the venue client stamps it with a failure', async () => {
+    // The real client sets `insufficient-depth` on EVERY short fill. 0.006 of
+    // 0.01 coming off is a partial reduction, not a failed close — reported
+    // red, the user would believe nothing happened.
+    server.use(
+      ...ready(),
+      closeReturns({
+        closed: false,
+        fill: {
+          ...fill(0.006, 0.004),
+          failure: { code: 'insufficient-depth', message: 'Only 0.006 of 0.01 matched inside the rate bound.' },
+        },
+      }),
+    );
+    renderWithClient(<CloseBorosForm legs={[leg()]} />);
+    await confirmClose();
+    expect(await screen.findByText(/of what you asked for is still open/)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Close size, applied to both legs/)).toHaveValue('0.004');
+    expect(screen.queryByText(/Only 0.006 of 0.01 matched/)).not.toBeInTheDocument();
+  });
+
   it('says nothing when the venue rejected the close', async () => {
     // ⚠ A 200 is not a close. Reporting one here would shrink a claim on a
     // position that never moved.
@@ -127,6 +148,34 @@ describe('CloseBorosForm — reporting what it closed', () => {
  * finish it" for a leg with nothing of the user's left in it. On a real-money
  * surface that is an invitation to send the order twice.
  */
+describe('CloseBorosForm — whose legs these are', () => {
+  const ROOT = '0x1111111111111111111111111111111111111111';
+  const OTHER = '0x2222222222222222222222222222222222222222';
+  const agentFor = (root: string) =>
+    http.get('/api/boros/agent', () => HttpResponse.json(env({ configured: true, expired: false, root })));
+
+  it('refuses to close when the tracked address is not the account the agent signs for', async () => {
+    localStorage.setItem('crossex.strategy.v1', JSON.stringify({ address: OTHER }));
+    server.use(versionHandler(), agentFor(ROOT), closeReturns({}));
+    renderWithClient(<CloseBorosForm legs={[leg()]} />);
+    expect(await screen.findByText(/a different account from the one your agent key signs for/)).toBeInTheDocument();
+    const btn = await screen.findByRole('button', { name: /Close leg/ });
+    expect(btn).toBeDisabled();
+    localStorage.clear();
+  });
+
+  it('names the account the close was sized against, so the server can refuse a mismatch too', async () => {
+    localStorage.setItem('crossex.strategy.v1', JSON.stringify({ address: ROOT }));
+    const seen: Array<{ address?: string }> = [];
+    server.use(versionHandler(), agentFor(ROOT), closeReturns({ fill: fill(MINE) }, seen));
+    renderWithClient(<CloseBorosForm legs={[leg()]} />);
+    await confirmClose();
+    await waitFor(() => expect(seen).toHaveLength(1), { timeout: 3_000 });
+    expect(seen[0].address).toBe(ROOT);
+    localStorage.clear();
+  });
+});
+
 describe('CloseBorosForm — saying that it landed', () => {
   const panel = () => screen.queryByText(/Leg closed\./);
   const armed = () => screen.queryByRole('button', { name: /Close leg/ });

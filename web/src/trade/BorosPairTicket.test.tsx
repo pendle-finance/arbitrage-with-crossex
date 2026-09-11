@@ -791,7 +791,7 @@ describe('BorosPairTicket', () => {
     // A hold, not a click: it moves margin.
     await user.pointer({ keys: '[MouseLeft>]', target: button });
     await waitFor(() => expect(bodies.length).toBe(1), { timeout: 3_000 });
-    expect(bodies[0]).toEqual({ amountUsd: 20 });
+    expect(bodies[0]).toMatchObject({ amountUsd: 20, clientOrderId: expect.stringMatching(/^gas-/) });
   });
 
   it('says reduce-only is enforced by sizing, not by the venue', async () => {

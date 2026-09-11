@@ -768,14 +768,28 @@ export function borosPairRoutes(deps: AppDeps) {
       return reply.ok({ ...payload, replayed: false });
     });
 
+    /**
+     * ⚠ A top-up is an on-chain payment with no venue-side dedupe. Two things
+     * keep a re-press from paying twice: ONE top-up in flight at a time, and a
+     * replay memo keyed by the caller's id — a response lost after the payment
+     * landed answers the retry from the memo instead of paying again. A memo
+     * entry is dropped when its payment FAILED, so a genuine retry can pay.
+     */
+    const topUps = new Map<string, Promise<{ sentUsd: number }>>();
+    let topUpInFlight = false;
     app.post('/boros/pair/top-up-gas', async (req, reply) => {
-      const amountUsd = Number((req.body as { amountUsd?: unknown } | undefined)?.amountUsd);
+      const body = (req.body ?? {}) as { amountUsd?: unknown; clientOrderId?: unknown };
+      const amountUsd = Number(body.amountUsd);
       if (!Number.isFinite(amountUsd) || amountUsd < MIN_TOP_UP_USD || amountUsd > MAX_TOP_UP_USD) {
         throw new CoreError(
           `amountUsd must be between $${MIN_TOP_UP_USD} and $${MAX_TOP_UP_USD}`,
           'validation',
         );
       }
+      const clientOrderId =
+        body.clientOrderId === undefined ? null : parseClientOrderId(body.clientOrderId, 'clientOrderId');
+      const prior = clientOrderId === null ? undefined : topUps.get(clientOrderId);
+      if (prior) return reply.ok({ ...(await prior), replayed: true });
       const orders = deps.getBorosOrders?.();
       if (!orders?.payTreasury) {
         throw new CoreError(
@@ -785,16 +799,31 @@ export function borosPairRoutes(deps: AppDeps) {
       }
       assertNotUpdating();
       assertAgentNotExpired();
-      const usdMarket = (await loadMarkets(false)).find((m) => m.tokenId === USD_TOKEN_ID);
-      if (!usdMarket) {
+      if (topUpInFlight) {
         throw new CoreError(
-          'Boros lists no USD-collateral market to route a dollar top-up through.',
-          'venue-rejected',
+          'a gas top-up is already in flight — wait for it to land before sending another.',
+          'validation',
         );
       }
-      await orders.payTreasury(amountUsd, usdMarket.marketId);
-
-      return reply.ok({ sentUsd: amountUsd });
+      topUpInFlight = true;
+      const payment = (async () => {
+        const usdMarket = (await loadMarkets(false)).find((m) => m.tokenId === USD_TOKEN_ID);
+        if (!usdMarket) {
+          throw new CoreError(
+            'Boros lists no USD-collateral market to route a dollar top-up through.',
+            'venue-rejected',
+          );
+        }
+        await orders.payTreasury!(amountUsd, usdMarket.marketId);
+        return { sentUsd: amountUsd };
+      })().finally(() => {
+        topUpInFlight = false;
+      });
+      if (clientOrderId !== null) {
+        topUps.set(clientOrderId, payment);
+        payment.catch(() => topUps.delete(clientOrderId));
+      }
+      return reply.ok({ ...(await payment), replayed: false });
     });
 
     /**
@@ -815,6 +844,7 @@ export function borosPairRoutes(deps: AppDeps) {
         clientOrderId?: unknown;
         size?: unknown;
         slippageApr?: unknown;
+        address?: unknown;
       };
       const clientOrderId = parseClientOrderId(body.clientOrderId, 'clientOrderId');
       /**
@@ -833,6 +863,13 @@ export function borosPairRoutes(deps: AppDeps) {
       if (sizeOverride !== null && (!Number.isFinite(sizeOverride) || sizeOverride <= 0)) {
         throw new CoreError('size must be a positive number', 'validation');
       }
+      /**
+       * The account the CALLER sized this close against. Never used to pick
+       * the account (see below) — only to refuse when it is not the one this
+       * install signs for: the close form shows the TRACKED address's legs,
+       * and tracking someone else's book must not close the agent's own.
+       */
+      if (body.address !== undefined) assertTradableAddress(parseAddress(body.address));
       const slippageOverride =
         body.slippageApr === undefined ? null : Number(body.slippageApr);
       // The same cap the quote enforces (MAX_SLIPPAGE_APR): the form can only

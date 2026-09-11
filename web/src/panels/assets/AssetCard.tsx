@@ -2462,6 +2462,14 @@ export function AssetCard({ group, derived, sinceSec, windowPending, onChangeSin
       {closeLeg?.kind === 'perp' && livePositions.get(closeLeg.leg.symbol) && (
         <ClosePopover
           position={livePositions.get(closeLeg.leg.symbol)!}
+          // The opposite perp at another venue is what cancels this leg's
+          // price delta; without naming it the popover's "closing leaves
+          // that one unhedged" warning could never show.
+          hedgedSibling={(() => {
+            const me = closeLeg.leg;
+            const other = group.perpOpen.find((p) => p.venue !== me.venue && p.side !== me.side);
+            return other ? { venue: other.venue, side: other.side } : null;
+          })()}
           onDismiss={() => setCloseLeg(null)}
         />
       )}

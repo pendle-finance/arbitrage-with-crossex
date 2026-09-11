@@ -522,10 +522,17 @@ export function useExecuteBorosPair() {
 
 export function useTopUpGas() {
   const qc = useQueryClient();
+  // One id per ATTEMPT-UNTIL-SUCCESS: a re-press after a lost response sends
+  // the same id, and the server answers from its memo instead of paying
+  // again. A success mints a fresh id for the next top-up.
+  const idRef = useRef<string | null>(null);
   return useMutation({
-    mutationFn: (amountUsd: number) =>
-      postJson<TopUpGasResponse>('/boros/pair/top-up-gas', { amountUsd }),
+    mutationFn: (amountUsd: number) => {
+      idRef.current ??= `gas-${uuid()}`.slice(0, 64);
+      return postJson<TopUpGasResponse>('/boros/pair/top-up-gas', { amountUsd, clientOrderId: idRef.current });
+    },
     onSuccess: () => {
+      idRef.current = null;
       void qc.invalidateQueries({ queryKey: ['boros', 'pair', 'simulate'] });
       void qc.invalidateQueries({ queryKey: qk.borosAgent });
     },
@@ -573,17 +580,23 @@ export function useBorosCancelAndClose() {
       marketId,
       size,
       slippageApr,
+      address,
     }: {
       marketId: number;
       /** Omitted = close whatever is open. The server clamps to it either way. */
       size?: number;
       /** APR fraction; omitted = the server's default bound. */
       slippageApr?: number;
+      /** The account whose leg this close was sized against. The server
+       * always closes the account it signs for; naming this one lets it
+       * REFUSE when they differ instead of closing the wrong book. */
+      address?: string;
     }) =>
       postJson<BorosCancelAndCloseResult>(`/boros/pair/market/${marketId}/cancel-and-close`, {
         clientOrderId: `cx-${uuid()}`.slice(0, 64),
         ...(size === undefined ? {} : { size }),
         ...(slippageApr === undefined ? {} : { slippageApr }),
+        ...(address === undefined ? {} : { address }),
       }),
     // ⚠ The CARD reads the strategy feed, not the pair context. Invalidating
     // only the context left a closed leg on screen at its old size until the
