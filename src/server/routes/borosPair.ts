@@ -45,6 +45,7 @@ import {
   simulateBorosPair,
   DEFAULT_SLIPPAGE_APR,
   MAX_SLIPPAGE_APR,
+  MIN_ORDER_VALUE_USD,
   type BorosLegDirection,
   type BorosMarginBucket,
   type BorosPairAccountState,
@@ -917,6 +918,31 @@ export function borosPairRoutes(deps: AppDeps) {
       assertNotUpdating();
       assertAgentNotExpired();
 
+      /** Refused BEFORE the cancel, which cannot be undone: Boros takes nothing
+       * at or under $10 and only says so at its calldata builder, by which
+       * point the orders are gone. Only a caller-named size can trip it —
+       * closing everything flattens, and the venue exempts that. */
+      if (sizeOverride !== null) {
+        const preMarkets = await loadMarkets(false);
+        const preOpen = Math.abs(
+          (await loadAccount(address, true)).positionByMarket.get(marketId) ?? 0,
+        );
+        const price =
+          resolveCollateralPricesUsd(preMarkets).get(marketOr404(preMarkets, marketId).tokenId) ??
+          null;
+        // No collateral price means no USD value to test. Let it through and
+        // let the venue answer: refusing on an unknown would block valid sizes.
+        const value = price === null ? null : Math.min(sizeOverride, preOpen) * price;
+        const flattens = preOpen > 0 && sizeOverride >= preOpen;
+        if (!flattens && value !== null && value <= MIN_ORDER_VALUE_USD) {
+          throw new CoreError(
+            `this close is worth $${value.toFixed(2)}, and Boros takes nothing at or under ` +
+              `$${MIN_ORDER_VALUE_USD} — close more of the position, or all of it.`,
+            'size-too-small',
+          );
+        }
+      }
+
       // Orders first, and BEFORE the position is read: closing while an order
       // still rests could have it re-open the position behind the close — and
       // an order that fills between a read and the cancel would leave the
@@ -924,79 +950,94 @@ export function borosPairRoutes(deps: AppDeps) {
       // one (Boros has no reduce-only flag to stop it).
       await orders.cancelOrders(marketId);
 
-      // Fresh reads AFTER the cancel: the size we close is the size that is
-      // actually there once nothing can fill any more.
-      const [markets, account] = await Promise.all([loadMarkets(true), loadAccount(address, true)]);
-      const market = marketOr404(markets, marketId);
-      const current = account.positionByMarket.get(marketId) ?? 0;
+      /** ⚠ THE CANCEL HAS LANDED and nothing below undoes it, so every failure
+       * from here has to say so — reporting only the close error read as
+       * "nothing happened" while the caller's resting orders were gone. */
+      try {
 
-      if (current === 0) {
-        return reply.ok({ marketId, cancelled: true, closed: false, fill: null });
-      }
-      // Reduce = trade the opposite way to the position's sign.
-      const direction: BorosLegDirection = current > 0 ? 'short' : 'long';
-      /**
-       * ⚠ CLAMPED to what is actually open. Boros has no reduce-only flag, so
-       * a size larger than the position does not stop at flat — it crosses it
-       * and opens a fresh one the other way. The cap is what makes accepting a
-       * caller size safe at all.
-       *
-       * ⚠ AND THIS CLAMP IS NOT THE ONE THAT ENFORCES IT. Both operands are
-       * doubles that already lost the position's low-order digits, so it can
-       * only narrow what the CALLER asked for — it cannot bound the wei the
-       * order is finally built from, and for a clean 0.05 that conversion
-       * landed three units above the position. The binding cap is
-       * `openSizeWei`, applied in the venue's own units in `closePosition`.
-       * This one stays because it is still what decides a deliberate PARTIAL.
-       */
-      const openSize = Math.abs(current);
-      const size = sizeOverride === null ? openSize : Math.min(sizeOverride, openSize);
-      const slippageApr = slippageOverride ?? CLOSE_SLIPPAGE_APR;
-      const fill = await orders.closePosition({
-        marketId,
-        size,
-        // The venue's own integer, never re-derived from `size`.
-        openSizeWei: account.positionRawByMarket.get(marketId) ?? '0',
-        direction,
+        // Fresh reads AFTER the cancel: the size we close is the size that is
+        // actually there once nothing can fill any more.
+        const [markets, account] = await Promise.all([loadMarkets(true), loadAccount(address, true)]);
+        const market = marketOr404(markets, marketId);
+        const current = account.positionByMarket.get(marketId) ?? 0;
+
+        if (current === 0) {
+          return reply.ok({ marketId, cancelled: true, closed: false, fill: null });
+        }
+        // Reduce = trade the opposite way to the position's sign.
+        const direction: BorosLegDirection = current > 0 ? 'short' : 'long';
         /**
-         * Bound off the BOOK MID, never the mark. Slippage is the distance
-         * between the executed implied rate and the book's mid (dapp-nitro's
-         * definition, and what the close form's "worst" line states); the
-         * mark is a 5-minute TWAP of trades that can sit anywhere relative to
-         * the book, so a bound derived from it was looser or tighter than the
-         * tolerance the user set without anything on screen saying so.
+         * ⚠ CLAMPED to what is actually open. Boros has no reduce-only flag, so
+         * a size larger than the position does not stop at flat — it crosses it
+         * and opens a fresh one the other way. The cap is what makes accepting a
+         * caller size safe at all.
+         *
+         * ⚠ AND THIS CLAMP IS NOT THE ONE THAT ENFORCES IT. Both operands are
+         * doubles that already lost the position's low-order digits, so it can
+         * only narrow what the CALLER asked for — it cannot bound the wei the
+         * order is finally built from, and for a clean 0.05 that conversion
+         * landed three units above the position. The binding cap is
+         * `openSizeWei`, applied in the venue's own units in `closePosition`.
+         * This one stays because it is still what decides a deliberate PARTIAL.
          */
-        // A market with no mid (the feed's 0) falls back to the mark: a bound
-        // of 0 ± tolerance would be nowhere near the book.
-        limitApr: limitAprFor(direction, knownRate(market.midApr) ? market.midApr : market.markApr, slippageApr),
-        clientOrderId,
-      });
-      /**
-       * ⚠ Bust the Boros reads this close just invalidated.
-       *
-       * `/asset-view` serves `boros:collaterals:${address}` from a 30s cache
-       * (TTL.boros), so without this the client could invalidate, refetch
-       * immediately, and still be handed the PRE-CLOSE position — the card sat
-       * on a stale size for up to 30s after saying "closed". Same contract as
-       * the CrossEx writes: a write busts what it changed (deals.ts busts
-       * `account`, leverage.ts busts `positions`).
-       */
-      deps.cache.bust('boros:collaterals');
-      deps.cache.bust('boros:txns');
+        const openSize = Math.abs(current);
+        const size = sizeOverride === null ? openSize : Math.min(sizeOverride, openSize);
+        const slippageApr = slippageOverride ?? CLOSE_SLIPPAGE_APR;
+        const fill = await orders.closePosition({
+          marketId,
+          size,
+          // The venue's own integer, never re-derived from `size`.
+          openSizeWei: account.positionRawByMarket.get(marketId) ?? '0',
+          direction,
+          /**
+           * Bound off the BOOK MID, never the mark. Slippage is the distance
+           * between the executed implied rate and the book's mid (dapp-nitro's
+           * definition, and what the close form's "worst" line states); the
+           * mark is a 5-minute TWAP of trades that can sit anywhere relative to
+           * the book, so a bound derived from it was looser or tighter than the
+           * tolerance the user set without anything on screen saying so.
+           */
+          // A market with no mid (the feed's 0) falls back to the mark: a bound
+          // of 0 ± tolerance would be nowhere near the book.
+          limitApr: limitAprFor(direction, knownRate(market.midApr) ? market.midApr : market.markApr, slippageApr),
+          clientOrderId,
+        });
+        /**
+         * ⚠ Bust the Boros reads this close just invalidated.
+         *
+         * `/asset-view` serves `boros:collaterals:${address}` from a 30s cache
+         * (TTL.boros), so without this the client could invalidate, refetch
+         * immediately, and still be handed the PRE-CLOSE position — the card sat
+         * on a stale size for up to 30s after saying "closed". Same contract as
+         * the CrossEx writes: a write busts what it changed (deals.ts busts
+         * `account`, leverage.ts busts `positions`).
+         */
+        deps.cache.bust('boros:collaterals');
+        deps.cache.bust('boros:txns');
 
-      return reply.ok({
-        marketId,
-        cancelled: true,
-        // A PARTIAL close by request is not a failed close: `closed` means the
-        // position is flat, so a deliberate partial reports false and the
-        // caller reads `fill` for what actually happened.
-        closed: fill.shortfallSize === 0 && size >= openSize,
-        fill,
-        // Named so the panel can show what bound the close actually carried.
-        slippageApr,
-        /** What was open when the close was sized — the cap that was applied. */
-        openSize,
-      });
+        return reply.ok({
+          marketId,
+          cancelled: true,
+          // A PARTIAL close by request is not a failed close: `closed` means the
+          // position is flat, so a deliberate partial reports false and the
+          // caller reads `fill` for what actually happened.
+          closed: fill.shortfallSize === 0 && size >= openSize,
+          fill,
+          // Named so the panel can show what bound the close actually carried.
+          slippageApr,
+          /** What was open when the close was sized — the cap that was applied. */
+          openSize,
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        throw new CoreError(
+          // "any", not "the": cancelOrders sends cancelAll and reports no
+          // count, so the route cannot claim anything was actually resting.
+          `${msg} — any resting orders on this market have already been cancelled, and that ` +
+            `is not undone. Check your open orders before retrying.`,
+          err instanceof CoreError ? err.category : 'venue-rejected',
+        );
+      }
     });
   };
 }

@@ -1044,6 +1044,89 @@ describe('POST /api/boros/pair/market/:marketId/cancel-and-close', () => {
     expect(res.json().data.closed).toBe(true);
   });
 
+  /**
+   * The cancel is irreversible and runs first, so anything that will certainly
+   * fail has to be caught before it. Found live: a 0.001 ETH partial cancelled
+   * a resting order and then died on the venue's $10 floor.
+   */
+  describe('the $10 floor is checked before the cancel', () => {
+    /** A 75k long on a USDT market, so one token unit is one dollar. */
+    const trackedApp = (calls: string[], close?: () => never) =>
+      makeTestApp({
+        borosFetch: borosStub(
+          bodies({
+            '/core/v1/collaterals/summary': {
+              collaterals: [
+                {
+                  tokenId: 3,
+                  crossPosition: {
+                    netBalance: raw(500_000),
+                    marketPositions: [
+                      { marketId: HL, side: 0, notionalSize: raw(75_000), pnl: {}, positionInitialMargin: raw(0) },
+                    ],
+                  },
+                  isolatedPositions: [],
+                },
+              ],
+            },
+          }),
+        ),
+        getBorosOrders: () => ({
+          placeMarketOrders: async (reqs) => reqs.map(() => okFill()),
+          cancelOrders: async () => {
+            calls.push('cancel');
+          },
+          closePosition: async (r) => {
+            calls.push('close');
+            if (close) close();
+            return okFill({ filledSize: r.size, shortfallSize: 0 });
+          },
+        }),
+      });
+
+    it('refuses a sub-minimum partial WITHOUT cancelling anything', async () => {
+      const calls: string[] = [];
+      app = trackedApp(calls);
+      const res = await post(`/api/boros/pair/market/${HL}/cancel-and-close`, {
+        clientOrderId: 'coid-min1',
+        size: 5,
+      });
+      expect(res.statusCode).toBeGreaterThanOrEqual(400);
+      expect(res.json().error.message).toMatch(/worth \$5\.00.*at or under \$10/);
+      // The whole point: the irreversible step never ran.
+      expect(calls).toEqual([]);
+    });
+
+    it('still allows a close that FLATTENS a position worth under $10', async () => {
+      const calls: string[] = [];
+      app = trackedApp(calls);
+      // Blocking this would strand every small position permanently, and the
+      // venue itself exempts a flattening order.
+      const res = await post(`/api/boros/pair/market/${HL}/cancel-and-close`, {
+        clientOrderId: 'coid-min2',
+        size: 75_000,
+      });
+      expect(res.statusCode).toBe(200);
+      expect(calls).toEqual(['cancel', 'close']);
+    });
+
+    it('says the cancel already landed when the close then fails', async () => {
+      const calls: string[] = [];
+      app = trackedApp(calls, () => {
+        throw new Error('Boros API /v1/calldata-builder/agent/place-order — HTTP 400');
+      });
+      const res = await post(`/api/boros/pair/market/${HL}/cancel-and-close`, {
+        clientOrderId: 'coid-min3',
+      });
+      expect(res.statusCode).toBeGreaterThanOrEqual(400);
+      expect(calls).toEqual(['cancel', 'close']);
+      // Both facts, not just the one that threw.
+      const msg = res.json().error.message;
+      expect(msg).toMatch(/HTTP 400/);
+      expect(msg).toMatch(/already been cancelled/);
+    });
+  });
+
   it('carries the caller\'s rate bound, and rejects an absurd one', async () => {
     const cap: { req: { marketId: number; size: number; direction: string; limitApr: number } | null } = { req: null };
     app = longPositionApp(cap);
