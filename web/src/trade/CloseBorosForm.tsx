@@ -92,6 +92,22 @@ export function CloseBorosForm({
   const [partial, setPartial] = useState<{ marketId: number; filled: number; left: number }[]>([]);
 
   const closable = useMemo(() => legs.filter((l) => l.marketId !== undefined), [legs]);
+  /**
+   * ⚠ ONE size, TWO legs, ONE unit — or no close at all.
+   *
+   * The quote prices closable[0] and closable[1]; the run loop closes EVERY
+   * leg at the shared box number. A third leg would go out unquoted, and a
+   * USDT-margined leg beside an ETH-margined one would be sent the same raw
+   * number as two different quantities. Neither is a close the user was
+   * shown, so the form refuses and points at the legs table, where each leg
+   * closes on its own terms.
+   */
+  const collaterals = [...new Set(closable.map((l) => (l.collateral ?? '').toUpperCase()))];
+  const legsBlocked = closable.length > 2 || collaterals.length > 1;
+  const legsReason =
+    closable.length > 2
+      ? `This close spans ${closable.length} Boros legs, but one size can only be quoted and sent for two. Close them one at a time from the legs table.`
+      : `These legs are sized in different collateral (${collaterals.join(', ')}), so one size cannot apply to both. Close them one at a time from the legs table.`;
 
   const ctx = useBorosPairContext(address);
   /**
@@ -177,7 +193,7 @@ export function CloseBorosForm({
    */
   const closeDir = (l: StrategyLeg) => (l.side === 'LONG' ? ('short' as const) : ('long' as const));
   const simReq: BorosPairRequest | null = useMemo(() => {
-    if (!address || closable.length === 0 || slipInvalid || anySizeInvalid) return null;
+    if (!address || closable.length === 0 || legsBlocked || slipInvalid || anySizeInvalid) return null;
     const a = closable[0];
     const slippageApr = slipPct / 100;
 
@@ -291,6 +307,7 @@ export function CloseBorosForm({
   const run = async () => {
     setFailed([]);
     setPartial([]);
+    if (legsBlocked) return;
     for (const l of closable) {
       const id = l.marketId as number;
       if (done.some((d) => d.marketId === id)) continue;
@@ -422,6 +439,11 @@ export function CloseBorosForm({
       {agentBlocked && (
         <p className="rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-[11px] leading-relaxed text-amber-300/90">
           {agentReason}
+        </p>
+      )}
+      {legsBlocked && (
+        <p className="rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-[11px] leading-relaxed text-amber-300/90">
+          {legsReason}
         </p>
       )}
 
@@ -683,7 +705,7 @@ export function CloseBorosForm({
         tone="red"
         // No quote, no close: a hold with the numbers blank sends a bound
         // nothing on screen describes.
-        disabled={close.isPending || slipInvalid || anySizeInvalid || agentBlocked || sim.isError || (simReq !== null && !sim.data) || anyBelowMin}
+        disabled={close.isPending || slipInvalid || anySizeInvalid || agentBlocked || legsBlocked || sim.isError || (simReq !== null && !sim.data) || anyBelowMin}
         onConfirm={run}
         className="w-full"
       >
