@@ -47,7 +47,7 @@ export function TabBar({
       {/* The folder's surface: a cyan hairline spanning the content column and
           stopping at the order ticket, which every tab shows. -mb-px pulls it
           over the header's grey border-b, which a child's border paints above. */}
-      <div className="-mb-px min-w-0 flex-1 border-b border-cyan-500/40">
+      <div className="-mb-px min-w-0 flex-1 border-b border-info/35">
         {/* The second -mb-px pulls the tabs down over the hairline. Children
             paint above their parent's border, so the active tab's opaque
             background cuts the shelf; transparent tabs let it show through. */}
@@ -78,15 +78,22 @@ export function TabBar({
                   // surface with the content. Colour is a signal, not paint —
                   // the label goes bright white; only the cap is cyan. Inactive
                   // keeps the same box (transparent borders) so nothing shifts.
-                  className={`flex shrink-0 items-center gap-1.5 whitespace-nowrap border-x border-t-2 uppercase transition-colors ${
+                  // Metrics from the mock's TAB_BASE / TAB_ON. The mock's
+                  // sub-tabs changed only their label colour; here they wear
+                  // the same folder box and info cap as the primaries, at
+                  // their own size — one selection marker for every tab.
+                  style={t.primary ? { letterSpacing: '0.08em' } : { letterSpacing: '0.12em' }}
+                  className={`flex shrink-0 items-center gap-1.5 whitespace-nowrap uppercase transition-colors ${
                     t.primary
-                      ? 'px-5 pb-2.5 pt-[9px] text-[15px] font-semibold tracking-wider'
-                      : 'px-3 pb-2.5 pt-[11px] text-[11px] font-medium tracking-wider'
-                  } ${
-                    activeTab
-                      ? 'border-x-ink-700 border-t-cyan-400 bg-ink-900 text-ink-100'
-                      : `border-transparent hover:border-t-ink-500 hover:bg-ink-900/40 ${
-                          t.primary ? 'text-ink-400 hover:text-ink-200' : 'text-ink-500 hover:text-ink-300'
+                      ? `border-x border-t-2 px-[18px] pb-[9px] pt-[7px] text-[13px] font-semibold ${
+                          activeTab
+                            ? 'border-x-ink-700 border-t-info bg-ink-100/[0.06] text-ink-50'
+                            : 'border-transparent text-ink-400 hover:border-t-ink-500 hover:text-ink-200'
+                        }`
+                      : `border-x border-t-2 px-3 pb-[11px] pt-[9px] text-[10px] font-medium ${
+                          activeTab
+                            ? 'border-x-ink-700 border-t-info bg-ink-100/[0.06] text-ink-50'
+                            : 'border-transparent text-ink-400 hover:border-t-ink-500 hover:text-ink-100'
                         }`
                   }`}
                 >

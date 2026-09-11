@@ -17,6 +17,12 @@ interface Entry {
   /** Per-key rate-limit cooldown — a 429 on one key must not stall unrelated keys. */
   cooldownUntil: number;
   inflight?: Promise<unknown>;
+  /** Whether `inflight` was started by a `fresh` caller — a fresh read may
+   * only coalesce onto a fetch that is itself fresh. */
+  inflightFresh?: boolean;
+  /** Bumped per fetch start; a fetch only writes back if it is still the
+   * latest, so a slow stale fetch cannot overwrite a fresher value. */
+  gen?: number;
 }
 
 const COOLDOWN_MS = 2000;
@@ -92,10 +98,14 @@ export class TtlCache {
     if (entry?.has && !opts?.fresh && now < entry.cooldownUntil) {
       return { value: entry.value as T, stale: true };
     }
-    // `fresh` bypasses the TTL/cooldown but still rides an already-inflight fetch —
-    // and degrades like the primary caller if that shared fetch 429s (fix: a waiter
-    // must not get a raw 429 thrown while the primary is served stale).
-    if (entry?.inflight) {
+    // A plain read rides any in-flight fetch. A `fresh` read rides one only if
+    // that fetch is itself fresh: a fetch that started BEFORE a write (the
+    // cancel-and-close route reads the position after cancelling its orders)
+    // answers with the pre-write state, which is exactly what `fresh` exists
+    // to refuse. The waiter degrades like the primary if the shared fetch
+    // 429s (a waiter must not get a raw 429 thrown while the primary is
+    // served stale).
+    if (entry?.inflight && (!opts?.fresh || entry.inflightFresh)) {
       try {
         return { value: (await entry.inflight) as T, stale: false };
       } catch (err) {
@@ -112,8 +122,13 @@ export class TtlCache {
     }
     const inflight = fetch();
     entry.inflight = inflight;
+    entry.inflightFresh = !!opts?.fresh;
+    const gen = (entry.gen = (entry.gen ?? 0) + 1);
     try {
       const value = await inflight;
+      // Superseded by a fresher fetch (a `fresh` read started after this one):
+      // serve this caller its own answer, but leave the cache to the newer one.
+      if (entry.gen !== gen) return { value, stale: false };
       entry.value = value;
       entry.has = true;
       entry.expiresAt = Date.now() + ttlMs;
@@ -129,7 +144,10 @@ export class TtlCache {
       }
       throw err;
     } finally {
-      if (entry.inflight === inflight) entry.inflight = undefined;
+      if (entry.inflight === inflight) {
+        entry.inflight = undefined;
+        entry.inflightFresh = undefined;
+      }
     }
   }
 

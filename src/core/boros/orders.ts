@@ -75,6 +75,11 @@ export type BorosLegFailureCode =
   /** The bucket could not fund it. */
   | 'insufficient-margin'
   | 'no-gas'
+  /** First market on this collateral token, and that token's Boros account is
+   * under the venue's minimum-cash floor. Not `insufficient-margin` (a fixed
+   * entry requirement, not this order's margin) and not `no-gas`
+   * (`payTreasury` cannot clear it). */
+  | 'min-cash'
   /** Anything the venue rejected for another reason. */
   | 'rejected'
   /** The submission never got a usable answer; the fill state is UNKNOWN. */
@@ -220,6 +225,13 @@ export interface BorosPairResult {
   /** True when either leg fell short — the panel shows the residual and the
    * three follow-up actions rather than a clean success. */
   partial: boolean;
+  /**
+   * Nothing filled on any submitted leg. Check this BEFORE `partial`, which is
+   * necessarily true here too — a leg that filled nothing is short by its whole
+   * request — so branching on `partial` first calls a total refusal
+   * "partially filled".
+   */
+  filledNothing: boolean;
   /** False when only one leg was submitted (a completion). */
   bothLegsSubmitted: boolean;
 }
@@ -307,6 +319,11 @@ export async function submitBorosPair(input: SubmitBorosPairInput): Promise<Boro
     bothLegsSubmitted: bothSubmitted,
     realisedSpreadApr,
     partial: submitted.some(({ key }) => (byKey.get(key)?.shortfallSize ?? 0) > 0),
+    // Off the fills, not the shortfalls, and only over legs actually sent: a
+    // request with nothing to send was not refused.
+    filledNothing:
+      submitted.length > 0 &&
+      submitted.every(({ key }) => Math.abs(byKey.get(key)?.filledSize ?? 0) === 0),
   };
 }
 
@@ -316,7 +333,7 @@ export async function submitBorosPair(input: SubmitBorosPairInput): Promise<Boro
  * failure whose remedy ("your rate was too far from mark") is different from
  * every other, and a generic price/limit rule would otherwise swallow it.
  */
-export function classifyLegFailure(err: unknown, marketEntered = false): BorosLegFailureCode {
+export function classifyLegFailure(err: unknown): BorosLegFailureCode {
   const text = describeLegFailure(err).toUpperCase();
   if (/RATE_DEVIATION|DEVIATION|RATE_OUT_OF_(RANGE|BOUND)|MARK_DEVIATION/.test(text)) {
     return 'rate-deviation';
@@ -324,7 +341,21 @@ export function classifyLegFailure(err: unknown, marketEntered = false): BorosLe
   if (/INSUFFICIENT_LIQUIDITY|NO_LIQUIDITY|NOT_ENOUGH_(DEPTH|LIQUIDITY)|BOOK_EMPTY|DEPTH/.test(text)) {
     return 'insufficient-depth';
   }
-  if (/INSUFFICIENT[ _]GAS|GAS[ _]BALANCE/.test(text) || (marketEntered && /TOP UP/.test(text))) {
+  /**
+   * Before the gas rule, because it contains the words "top up".
+   *
+   * "Top up at least ~$10 to trade" renders exactly one contract error,
+   * `MMInsufficientMinCash` — a COLLATERAL floor (MarginManager.sol requires
+   * `cash >= minCashCross` only when `enteredMarkets.length == 0`). Calling it
+   * gas sent users to `payTreasury`, which cannot clear it and cannot be
+   * withdrawn again. Proved live: refused identically at $3.07 and $18.06 of
+   * gas.
+   *
+   * Match the stable words, not the dollar figure. Other "top up" text falls
+   * through to `rejected` and keeps the venue's own wording.
+   */
+  if (/TOP UP AT LEAST/.test(text)) return 'min-cash';
+  if (/INSUFFICIENT[ _]GAS|GAS[ _]BALANCE/.test(text)) {
     return 'no-gas';
   }
   if (/INSUFFICIENT_(MARGIN|BALANCE|COLLATERAL)|NOT_ENOUGH_(MARGIN|BALANCE)|MARGIN/.test(text)) {

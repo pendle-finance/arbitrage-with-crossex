@@ -112,6 +112,11 @@ export function ExecuteControl({
   const restingOnlyRef = useRef(false);
   const placedSummaryRef = useRef<string | null>(null);
   const [placedResting, setPlacedResting] = useState<string | null>(null);
+  /** The server answered `duplicate: true`: this confirm matched an earlier
+   * submission and placed nothing new. Said out loud — the Boros ticket does
+   * the same for `replayed` — because the ticket clearing itself and the deal
+   * view opening otherwise read as "your order went out just now". */
+  const [replayedDeal, setReplayedDeal] = useState<string | null>(null);
 
   // Lazy previews only run while the card is shown; eager previews run always so
   // the button is armed the moment the ticket is complete.
@@ -132,11 +137,51 @@ export function ExecuteControl({
       // and wiping those would re-open their double-execute window.
       clearPendingBasket(inflightIntentRef.current);
       onExecuted?.();
+      setReplayedDeal(r.duplicate ? r.id : null);
       if (restingOnlyRef.current) setPlacedResting(placedSummaryRef.current);
       else flow.openDeal(r.id);
     },
     // onError deliberately KEEPS basketIdRef so a retry of the SAME order reuses
     // the id (the server dedupes on it; a network-lost POST must never double-execute).
+  });
+
+  /**
+   * The split close: two single-leg deals, posted in order, one intent.
+   *
+   * Each leg's OUTCOME is recorded as it lands, so a failure on the second
+   * leg is reported beside a first leg that already closed — the hedge is
+   * then half gone, and one error string in a hover card did not say so.
+   */
+  const [splitLegs, setSplitLegs] = useState<
+    Array<{ symbol: string; state: 'sent' | 'done' | 'failed'; message?: string }>
+  >([]);
+  const executeSplit = useMutation({
+    mutationFn: async (deals: Array<Parameters<typeof postJson>[1] & { id: string; a: { symbol: string } }>) => {
+      const out: DealResponse[] = [];
+      setSplitLegs(deals.map((d) => ({ symbol: d.a.symbol, state: 'sent' })));
+      for (let i = 0; i < deals.length; i += 1) {
+        try {
+          out.push(await postJson<DealResponse>('/deals', deals[i]));
+          setSplitLegs((prev) => prev.map((l, k) => (k === i ? { ...l, state: 'done' } : l)));
+        } catch (err) {
+          const message = err instanceof ApiError ? err.message : (err as Error).message;
+          setSplitLegs((prev) =>
+            prev.map((l, k) => (k === i ? { ...l, state: 'failed', message } : k > i ? { ...l, state: 'failed', message: 'not sent' } : l)),
+          );
+          throw err;
+        }
+      }
+      return out;
+    },
+    onSuccess: (rs) => {
+      basketIdRef.current = null;
+      clearPendingBasket(inflightIntentRef.current);
+      onExecuted?.();
+      setReplayedDeal(rs.every((r) => r.duplicate) && rs.length > 0 ? rs.map((r) => r.id).join(', ') : null);
+      // One deal modal at a time: show the last leg's; the first is on Trades.
+      const last = rs[rs.length - 1];
+      if (last) flow.openDeal(last.id);
+    },
   });
 
   // A CHANGED intent must mint a fresh basketId: an id retained after a lost-
@@ -181,18 +226,47 @@ export function ExecuteControl({
   const available = Number(account.data?.availableMargin ?? NaN);
   const margin = previews
     ? estimateMargin(previews, positions.data?.positions, account.data?.positionMode)
-    : { required: 0, confident: false };
+    : { required: 0, gateRequired: 0, confident: false };
+  // Gate on the server's threshold (IM × buffer + fee reserve), not the raw IM
+  // the ticket displays — the raw figure let a basket through that the
+  // preflight then refused.
   const marginBlocked =
-    Boolean(previews) && margin.confident && Number.isFinite(available) && margin.required > 0 && margin.required > available;
+    Boolean(previews) && margin.confident && Number.isFinite(available) && margin.gateRequired > 0 && margin.gateRequired > available;
   // The confirmed intent must map onto a deal shape the engine models (probe
   // with a placeholder id) — an unmappable shape must disable, not no-op.
+  const probeActions = previews ? (decorate ? decorate(finalizeActions(previews)) : finalizeActions(previews)) : null;
+  /**
+   * Two closes of DIFFERENT sizes cannot be one deal — a DealRequest carries
+   * a single qty for both legs — but each is a perfectly good single-leg
+   * reduce-only deal, so the intent runs as two. Only closes: an open pair
+   * genuinely needs the hedge loop that one deal buys.
+   */
+  const splitClose =
+    !!actions &&
+    !!previews &&
+    !!probeActions &&
+    !preview.estimating &&
+    actions.length === 2 &&
+    actions.every((a) => a.kind === 'close-position') &&
+    dealFromActions('probe-0', probeActions, previews) === null &&
+    dealFromActions('probe-a', [probeActions[0]], [previews[0]]) !== null &&
+    dealFromActions('probe-b', [probeActions[1]], [previews[1]]) !== null;
   const mappable =
     !actions ||
     !previews ||
     preview.estimating ||
-    dealFromActions('probe-0', decorate ? decorate(finalizeActions(previews)) : finalizeActions(previews), previews) !== null;
+    !probeActions ||
+    dealFromActions('probe-0', probeActions, previews) !== null ||
+    splitClose;
   const disabled =
-    !actions || extraDisabled || execute.isPending || previewMissing || hasViolations || marginBlocked || !mappable;
+    !actions ||
+    extraDisabled ||
+    execute.isPending ||
+    executeSplit.isPending ||
+    previewMissing ||
+    hasViolations ||
+    marginBlocked ||
+    !mappable;
 
   const onConfirm = () => {
     if (!actions || !previews || preview.estimating) return; // deal mapping needs the CURRENT preview
@@ -204,7 +278,23 @@ export function ExecuteControl({
     // Stamp resolver qty/price from the preview, apply confirm-time decorations
     // (pegToTouch), then map the confirmed intent onto the deal contract.
     const base = finalizeActions(previews);
-    const deal = dealFromActions(basketIdRef.current, decorate ? decorate(base) : base, previews);
+    const decorated = decorate ? decorate(base) : base;
+    const deal = dealFromActions(basketIdRef.current, decorated, previews);
+    if (!deal && splitClose) {
+      // Two single-leg deals under ONE basket: ids derived from the basket id
+      // so a retry after a lost response re-sends the same two ids and the
+      // server dedupes each leg. The pending record clears only once both
+      // have landed (see executeSplit.onSuccess).
+      const a = dealFromActions(`${basketIdRef.current}-a`, [decorated[0]], [previews[0]]);
+      const b = dealFromActions(`${basketIdRef.current}-b`, [decorated[1]], [previews[1]]);
+      if (!a || !b) return;
+      restingOnlyRef.current = false;
+      placedSummaryRef.current = null;
+      setPlacedResting(null);
+      setReplayedDeal(null);
+      executeSplit.mutate([a, b]);
+      return;
+    }
     if (!deal) return; // unmappable shape — the button was disabled anyway
     // `b` is OMITTED for a single leg, not set to null — hence ?? null.
     restingOnlyRef.current = (deal.b ?? null) === null && deal.execution === 'maker';
@@ -212,14 +302,14 @@ export function ExecuteControl({
       ? `${deal.a.side} ${deal.qty} ${parseSymbol(deal.a.symbol).base} @ ${deal.price}`
       : null;
     setPlacedResting(null);
+    setReplayedDeal(null);
     execute.mutate(deal);
   };
 
+  const anyError = execute.error ?? executeSplit.error;
   const errMsg =
-    execute.error instanceof ApiError
-      ? execute.error.message
-      : (execute.error as Error | null)?.message ?? null;
-  const cardOpen = (hoverCard && hovering) || execute.isError;
+    anyError instanceof ApiError ? anyError.message : (anyError as Error | null)?.message ?? null;
+  const cardOpen = (hoverCard && hovering) || execute.isError || executeSplit.isError;
 
   return (
     <div
@@ -231,7 +321,7 @@ export function ExecuteControl({
       onBlurCapture={() => setHovering(false)}
     >
       <HoldToConfirmButton tone={tone} disabled={disabled} holdMs={holdMs} onConfirm={onConfirm} className={buttonClassName}>
-        {execute.isPending ? (
+        {execute.isPending || executeSplit.isPending ? (
           <span className="inline-flex items-center gap-1.5">
             <Spinner className="h-3.5 w-3.5" /> executing…
           </span>
@@ -259,14 +349,51 @@ export function ExecuteControl({
           </button>
         </div>
       )}
+      {replayedDeal && (
+        <div role="status" className="mt-1 flex items-start gap-2 rounded border border-amber-500/30 bg-amber-500/[0.06] px-2 py-1.5 text-[11px] leading-relaxed text-amber-200">
+          <span>
+            This confirm matched an earlier submission — deal <span className="num">{replayedDeal}</span> already exists and no new
+            order was sent. Showing that deal.
+          </span>
+          <button
+            type="button"
+            aria-label="Dismiss"
+            className="px-1 leading-none text-amber-400/70 transition-colors hover:text-amber-200"
+            onClick={() => setReplayedDeal(null)}
+          >
+            ×
+          </button>
+        </div>
+      )}
       {marginBlocked && (
         <div role="alert" className="mt-1 text-[11px] text-rose-400">
-          margin ≈ {fmtUsd(margin.required)} exceeds available {Number.isFinite(available) ? fmtUsd(available) : '—'}
+          margin ≈ {fmtUsd(margin.gateRequired)} (incl. 5% buffer + fee reserve) exceeds available{' '}
+          {Number.isFinite(available) ? fmtUsd(available) : '—'}
         </div>
       )}
       {!mappable && (
         <div role="alert" className="mt-1 text-[11px] text-amber-400">
           can't run as one deal (e.g. unequal leg sizes) — execute the legs individually
+        </div>
+      )}
+      {splitClose && splitLegs.length === 0 && (
+        <div className="mt-1 text-[11px] text-ink-400">
+          two deals, one per leg (sizes differ) — sent in order; each leg reports its own outcome
+        </div>
+      )}
+      {splitLegs.some((l) => l.state === 'failed') && (
+        <div role="alert" className="mt-1 flex flex-col gap-0.5 text-[11px]">
+          {splitLegs.map((l) => (
+            <div key={l.symbol} className={l.state === 'done' ? 'text-emerald-300' : l.state === 'failed' ? 'text-rose-300' : 'text-ink-400'}>
+              {l.state === 'done' ? '✓' : l.state === 'failed' ? '✗' : '…'} {parseSymbol(l.symbol).exchange} leg{' '}
+              {l.state === 'done' ? 'closed' : l.state === 'failed' ? `not closed — ${l.message ?? 'failed'}` : 'sending'}
+            </div>
+          ))}
+          {splitLegs.some((l) => l.state === 'done') && (
+            <div className="text-amber-400">
+              One leg is closed and the other is still open — the pair is no longer hedged. Retry closes only the leg that failed.
+            </div>
+          )}
         </div>
       )}
       {cardOpen && (
@@ -338,7 +465,7 @@ function HoverCard({
   return createPortal(
     <div
       role="tooltip"
-      className="fixed z-[55] w-[320px] rounded-xl border border-ink-700 bg-ink-900 p-3 text-xs shadow-2xl"
+      className="fixed z-[55] w-[320px] rounded-xl border border-ink-600 bg-ink-900 p-3 text-xs"
       style={{ left: pos.left, bottom: pos.bottom }}
     >
       {execError && (

@@ -80,6 +80,44 @@ describe('limitAprFor', () => {
   });
 });
 
+describe('submitBorosPair — nothing filled is not a partial fill', () => {
+  /** A 0-fill leg is short by its whole request, so `partial` alone cannot tell
+   * a total refusal from a half-done pair. The panel read it as "partially
+   * filled · 0 hedged" over two rejected legs. */
+  it('flags a double rejection as filledNothing, not just partial', async () => {
+    const refused = new Error('[SIMULATE] Top up at least ~$10 to trade');
+    const client = clientOf({ 155: refused, 101: refused });
+    const res = await submitBorosPair({ client, legA, legB, feeDragApr: FEE_DRAG, receiveLeg: 'A' });
+
+    expect(res.filledNothing).toBe(true);
+    expect(res.partial).toBe(true); // still true — which is the whole problem
+    expect(res.hedgedSize).toBe(0);
+    expect(res.legA.failure?.code).toBe('min-cash');
+  });
+
+  it('keeps a genuine partial out of the filledNothing state', async () => {
+    const client = clientOf({
+      155: fill({ marketId: 155, filledSize: 40_000, shortfallSize: 60_000 }),
+      101: fill({ marketId: 101, direction: 'long', filledSize: 100_000 }),
+    });
+    const res = await submitBorosPair({ client, legA, legB, feeDragApr: FEE_DRAG, receiveLeg: 'A' });
+
+    expect(res.partial).toBe(true);
+    expect(res.filledNothing).toBe(false);
+  });
+
+  it('is false on a clean fill', async () => {
+    const client = clientOf({
+      155: fill({ marketId: 155 }),
+      101: fill({ marketId: 101, direction: 'long' }),
+    });
+    const res = await submitBorosPair({ client, legA, legB, feeDragApr: FEE_DRAG, receiveLeg: 'A' });
+
+    expect(res.filledNothing).toBe(false);
+    expect(res.partial).toBe(false);
+  });
+});
+
 describe('submitBorosPair', () => {
   it('sends BOTH legs in one batch — never two races for the same nonce', async () => {
     // Boros enforces strictly increasing nonces per signer, and both legs share
@@ -258,15 +296,28 @@ describe('classifyLegFailure', () => {
     expect(classifyLegFailure(new Error('GAS_BALANCE_TOO_LOW'))).toBe('no-gas');
   });
 
-  it('reads the venue top-up string as gas ONLY on a market already entered', () => {
+  /** This asserted the opposite until live testing refused the same pair
+   * identically at $3.07 and $18.06 of gas. The string is
+   * `MMInsufficientMinCash` — a cash floor on a token's first market entry. */
+  it('reads the venue top-up string as a cash floor, never as gas', () => {
     const topUp = new Error('[SIMULATE] Top up at least ~$10 to trade');
-    expect(classifyLegFailure(topUp, true)).toBe('no-gas');
-    expect(classifyLegFailure(topUp, false)).toBe('rejected');
-    expect(classifyLegFailure(topUp)).toBe('rejected');
+    expect(classifyLegFailure(topUp)).toBe('min-cash');
+  });
+
+  it('does not let the cash floor be confused with the gas budget', () => {
+    // Same account, same order, a healthy gas budget: still min-cash.
+    expect(classifyLegFailure(new Error('Top up at least ~$25 to trade'))).toBe('min-cash');
+    // A real gas refusal still reads as gas.
+    expect(classifyLegFailure(new Error('Insufficient gas balance for 0xab'))).toBe('no-gas');
+  });
+
+  it('falls through to rejected when "top up" is not the venue\'s cash sentence', () => {
+    // Guessing caused the original bug; keep the venue's own words instead.
+    expect(classifyLegFailure(new Error('Top up your account'))).toBe('rejected');
   });
 
   it('keeps a margin shortfall out of the gas branch', () => {
-    expect(classifyLegFailure(new Error('INSUFFICIENT_MARGIN'), true)).toBe('insufficient-margin');
+    expect(classifyLegFailure(new Error('INSUFFICIENT_MARGIN'))).toBe('insufficient-margin');
   });
 
   it('classifies off the unwrapped body, not the generic axios message', () => {

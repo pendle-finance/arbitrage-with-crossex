@@ -13,6 +13,48 @@ describe('TtlCache', () => {
     expect(b.value).toBe('v');
   });
 
+  it('a FRESH read does not ride a non-fresh in-flight fetch', async () => {
+    // The in-flight fetch started BEFORE a write (cancel-and-close reads the
+    // position after cancelling its orders); a fresh read that joined it
+    // would answer with the pre-write state, which is what `fresh` refuses.
+    const cache = new TtlCache();
+    let resolveSlow!: (v: string) => void;
+    const slow = new Promise<string>((res) => (resolveSlow = res));
+    const stale = cache.get('k', 1000, () => slow);
+    const fresh = cache.get('k', 1000, async () => 'after', { fresh: true });
+    resolveSlow('before');
+    expect((await fresh).value).toBe('after');
+    expect((await stale).value).toBe('before');
+    // And the cache keeps the fresher answer, whichever landed last.
+    const later = await cache.get('k', 10_000, async () => 'unexpected');
+    expect(later.value).toBe('after');
+  });
+
+  it('a fresh read DOES ride an in-flight fetch that is itself fresh', async () => {
+    const cache = new TtlCache();
+    const fetch = vi.fn(async () => 'v');
+    const [a, b] = await Promise.all([
+      cache.get('k', 1000, fetch, { fresh: true }),
+      cache.get('k', 1000, fetch, { fresh: true }),
+    ]);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(a.value).toBe('v');
+    expect(b.value).toBe('v');
+  });
+
+  it('a superseded slow fetch never overwrites the fresher value', async () => {
+    const cache = new TtlCache();
+    let resolveSlow!: (v: string) => void;
+    const slow = new Promise<string>((res) => (resolveSlow = res));
+    const stale = cache.get('k', 10_000, () => slow);
+    const fresh = await cache.get('k', 10_000, async () => 'after', { fresh: true });
+    expect(fresh.value).toBe('after');
+    resolveSlow('before'); // lands AFTER the fresh one
+    expect((await stale).value).toBe('before');
+    const later = await cache.get('k', 10_000, async () => 'unexpected');
+    expect(later.value).toBe('after');
+  });
+
   it('serves a fresh cache hit within TTL without refetching', async () => {
     const cache = new TtlCache();
     const fetch = vi.fn(async () => 'v');

@@ -192,7 +192,7 @@ function FilterPopover({
         ref={dialogRef}
         role="dialog"
         aria-label="Filter opportunities by venue, maturity and APR"
-        className="fixed max-h-[calc(100vh-16px)] w-[320px] overflow-y-auto rounded-xl border border-ink-600 bg-ink-900 p-3 shadow-2xl"
+        className="fixed max-h-[calc(100vh-16px)] w-[320px] overflow-y-auto rounded border border-ink-600 bg-ink-900 p-3"
         style={pos ?? { top: 96, left: 16 }}
         onClick={(e) => e.stopPropagation()}
       >

@@ -1,12 +1,34 @@
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
 import { describe, expect, it } from 'vitest';
-import type { ActionInput } from '../api/types';
+import type { ActionInput, DealOrder } from '../api/types';
 import { baseHandlers, makeDealView, previewFor } from '../test/fixtures';
 import { env, server } from '../test/server';
 import { renderWithClient } from '../test/utils';
 import { DealModal } from './DealModal';
 import { TradeFlowProvider } from './TradeFlow';
+
+/** One filled order row — the report reads leg roles off these. */
+const dealOrder = (leg: 'A' | 'B', kind: 'maker' | 'taker'): DealOrder => ({
+  pairId: 'd1',
+  leg,
+  seq: 1,
+  clientId: `c-${leg}`,
+  kind,
+  side: leg === 'A' ? 'BUY' : 'SELL',
+  qty: '0.05',
+  price: kind === 'maker' ? '2500' : null,
+  tif: kind === 'maker' ? 'poc' : 'ioc',
+  state: 'CLOSED',
+  venueOrderId: `v-${leg}`,
+  cumQty: '0.05',
+  closeReason: 'filled',
+  cancelRequested: 0,
+  quarantinedStatus: null,
+  venueReason: null,
+  createdAt: 1_751_500_000_000,
+  resolvedAt: 1_751_500_001_000,
+});
 
 function renderModal(view = makeDealView()) {
   server.use(
@@ -330,22 +352,52 @@ describe('DealModal', () => {
             aAvgFill: '2500', bAvgFill: '2503.75',
           }),
         },
+        // The roles are read off the ORDERS, so a maker/hedge deal has to say so.
+        orders: [dealOrder('A', 'maker'), dealOrder('B', 'taker')],
         projection: { aFilled: '0.05', bFilled: '0.05', unhedged: '0' },
       }),
     );
-    expect(await screen.findByText('Report')).toBeInTheDocument();
+    // Scoped to the report: the orders table below it prints kinds too.
+    const rep = within(await screen.findByTestId('deal-report'));
     // Each leg reads: role · direction · venue · @ price.
-    expect(screen.getByText('maker')).toBeInTheDocument();
-    expect(screen.getByText('taker')).toBeInTheDocument();
-    expect(screen.getByText('long')).toBeInTheDocument(); // the BUY (maker) leg
-    expect(screen.getByText('short')).toBeInTheDocument(); // the SELL (taker) leg
-    expect(screen.getByText('Gate')).toBeInTheDocument(); // maker venue
-    expect(screen.getByText('Binance')).toBeInTheDocument(); // taker venue
-    expect(screen.getByText('2500')).toBeInTheDocument(); // long/maker avg fill
-    expect(screen.getByText('2503.75')).toBeInTheDocument(); // short/taker avg fill
-    expect(screen.getByText(/^\+3\.75$/)).toBeInTheDocument(); // signed price basis
-    expect(screen.getByText(/^\(\+0\.150%\)$/)).toBeInTheDocument(); // +0.150%
-    expect(screen.getByText('favorable')).toBeInTheDocument();
+    expect(rep.getByText('maker')).toBeInTheDocument();
+    expect(rep.getByText('taker')).toBeInTheDocument();
+    expect(rep.getByText('limit — the filled resting leg')).toBeInTheDocument();
+    expect(rep.getByText('long')).toBeInTheDocument(); // the BUY (maker) leg
+    expect(rep.getByText('short')).toBeInTheDocument(); // the SELL (taker) leg
+    expect(rep.getByText('Gate')).toBeInTheDocument(); // maker venue
+    expect(rep.getByText('Binance')).toBeInTheDocument(); // taker venue
+    expect(rep.getByText('2500')).toBeInTheDocument(); // long/maker avg fill
+    expect(rep.getByText('2503.75')).toBeInTheDocument(); // short/taker avg fill
+    expect(rep.getByText(/^\+3\.75$/)).toBeInTheDocument(); // signed price basis
+    expect(rep.getByText(/^\(\+0\.150%\)$/)).toBeInTheDocument(); // +0.150%
+    expect(rep.getByText('favorable')).toBeInTheDocument();
+  });
+
+  /** "2 market orders" sends both legs as takers and nothing rests. The report
+   * used to hardcode leg A as "maker · limit — the filled resting leg", right
+   * under a table whose own kind column said taker on both rows. */
+  it('DONE: a two-market-order pair never claims a resting maker leg', async () => {
+    renderModal(
+      makeDealView({
+        pair: {
+          mode: 'DONE',
+          reportJson: JSON.stringify({
+            aFilled: '0.05', bFilled: '0.05', unhedged: '0', reason: 'filled',
+            aAvgFill: '2500', bAvgFill: '2503.75',
+          }),
+        },
+        orders: [dealOrder('A', 'taker'), dealOrder('B', 'taker')],
+        projection: { aFilled: '0.05', bFilled: '0.05', unhedged: '0' },
+      }),
+    );
+    const rep = within(await screen.findByTestId('deal-report'));
+    expect(rep.queryByText('maker')).not.toBeInTheDocument();
+    expect(rep.queryByText(/the filled resting leg/)).not.toBeInTheDocument();
+    expect(rep.getAllByText('taker')).toHaveLength(2);
+    expect(rep.getByText('market order')).toBeInTheDocument();
+    // The basis is a difference of averages — right in either mode.
+    expect(rep.getByText(/^\+3\.75$/)).toBeInTheDocument();
   });
 
   it('DONE: omits the slippage block when a leg has no average fill', async () => {

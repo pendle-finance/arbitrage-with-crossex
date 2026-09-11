@@ -51,7 +51,7 @@ import { SideVenue } from '../components/VenueChip';
 import { borosMarketUrl, isUsdCollateral } from '../lib/boros';
 import {
   fmtAge,
-  fmtDateUtc,
+  fmtDateLocal,
   fmtNotionalShort,
   fmtPct,
   fmtTokenQty,
@@ -97,11 +97,6 @@ const NOTIONAL_OPTIONS: { value: NotionalChoice; label: string }[] = [
   { value: 'custom', label: 'Custom…' },
 ];
 
-const BOROS_ENTRY_OPTIONS: { value: BorosEntryMode; label: string }[] = [
-  { value: 'mark', label: 'At mark rate' },
-  { value: 'market', label: 'Market at size' },
-];
-
 const ENTRY_MODE_LABEL: Record<EntryMode, string> = {
   'both-market': '2 market orders',
   'maker-hedge': 'Limit + hedge',
@@ -124,11 +119,6 @@ const EXIT_MODE_PROSE: Record<ExitMode, string> = {
   roll: 'roll over',
 };
 
-const BOROS_ENTRY_PROSE: Record<BorosEntryMode, string> = {
-  mark: 'at mark rate',
-  market: 'market at size',
-};
-
 export interface StoredControls {
   notionalChoice: NotionalChoice;
   /** The size behind "Custom…" (USD). */
@@ -145,8 +135,8 @@ const DEFAULTS: StoredControls = {
   customNotionalUsd: 10_000,
   borosEntry: 'market',
   entryMode: 'both-market',
-  // 'roll' by default — see StrategyCard: an assumed exit cost is a decision
-  // the user has not made yet, and it understates every quote.
+  // 'roll' by default: an assumed exit cost is a decision the user has not
+  // made yet, and it understates every quote.
   exitMode: 'roll',
   feeTier: 'vip0',
 };
@@ -194,7 +184,9 @@ function migrateLegacy(): StoredControls | null {
             : // 'mark' and 'market-custom' both carried their size in customSize.
               snapToPreset(size),
     customNotionalUsd: size,
-    borosEntry: choice === 'mark' ? 'mark' : 'market',
+    // v1's 'mark' choice has no home any more — every card is priced
+    // market-at-size — so the size migrates and the entry lands on market.
+    borosEntry: 'market',
     entryMode: validEntryMode(p?.entryMode),
     exitMode: validExitMode(p?.exitMode),
     feeTier: validFeeTier(p?.feeTier),
@@ -265,10 +257,15 @@ function Dash({ why }: { why: string }) {
  * every card's CAPITAL / RETURN / NOTIONAL at the same x, so a column of cards
  * reads as a table — the inline sentence it replaces couldn't line up. */
 function Stat({ label, children }: { label: string; children: ReactNode }) {
+  // Measured against the mock: the label's TOP lines up with the APR's top and
+  // the value's baseline then lands within ~3px of the APR's, because a 30px
+  // number and a 10px label + 7px gap + 14px value happen to span the same box.
+  // So this is plain top-alignment — no height box, which only pushed the
+  // values a full line below the APR.
   return (
-    <span className="flex flex-col gap-1">
+    <span className="flex flex-col items-start gap-[7px]">
       <span className={microLabelClass}>{label}</span>
-      <span className="num text-sm leading-none text-ink-100">{children}</span>
+      <span className="num text-sm leading-none text-ink-50">{children}</span>
     </span>
   );
 }
@@ -328,34 +325,49 @@ const CAPITAL_APR_TITLE =
 /** One "$10k · Short ETH · BYBIT · <note>" row of the 4-leg explainer. The four
  * cells are a fragment so the parent grid keeps both rows aligned. */
 function LegRow({
-  notionalUsd,
-  collateral,
+  n,
   side,
   label,
-  venue,
+  kind,
   note,
   href,
 }: {
-  notionalUsd: number;
-  /** Token-margined groups: the same notional in the collateral token. */
-  collateral?: { qty: number; symbol: string } | null;
+  /** 1–4. The mock numbers the legs in the order they are opened. */
+  n: number;
   side: 'short' | 'long';
   label: string;
-  venue: string;
-  /** Trailing annotation; empty keeps the row's 4th cell in the grid. */
+  /** Which book the leg is on — "CrossEx" or "Boros". */
+  kind: 'CrossEx' | 'Boros';
+  /** Trailing annotation; empty keeps the row's 3rd cell in the grid. */
   note: ReactNode;
   /** Link the label out (the Boros legs → the market page, side prefilled). */
   href?: string;
 }) {
+  const labelEl = (
+    <>
+      {label}{' '}
+      <span
+        className={`text-[10px] font-normal uppercase tracking-[0.1em] ${
+          kind === 'Boros' ? 'text-link' : 'text-ink-400'
+        }`}
+      >
+        {kind}
+      </span>
+    </>
+  );
   return (
-    // `sm:contents` hands the four cells back to the parent grid on real
-    // screens. Below that the grid's three max-content tracks have a ~270px
-    // floor that no phone can pay — it pushed the page body sideways — so the
-    // row becomes a plain wrapping line instead.
+    // `sm:contents` hands the three cells back to the parent grid on real
+    // screens. Below that the grid's max-content tracks have a floor no phone
+    // can pay, so the row becomes a plain wrapping line instead.
     <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 sm:contents">
-      <span className="num justify-self-start rounded-md border border-cyan-500/30 bg-cyan-500/[0.08] px-1.5 py-0.5 text-[10px] font-medium text-cyan-300/85">
-        {fmtNotionalShort(notionalUsd)}
-        {collateral ? ` (${fmtTokenQty(collateral.qty, collateral.symbol)})` : ''}
+      {/* The leg's number, tinted by its direction — the mock's 17px square. */}
+      <span
+        aria-hidden="true"
+        className={`num grid h-[17px] w-[17px] shrink-0 place-items-center rounded-sm text-[10px] font-semibold ${
+          side === 'short' ? 'bg-guava/[0.14] text-guava' : 'bg-grass/[0.14] text-grass'
+        }`}
+      >
+        {n}
       </span>
       {href ? (
         <a
@@ -363,24 +375,58 @@ function LegRow({
           target="_blank"
           rel="noreferrer"
           title={`Open this market on Boros with the ${side} side prefilled`}
-          className={`num text-xs font-medium underline decoration-current/40 underline-offset-2 transition-opacity hover:opacity-80 ${
-            side === 'short' ? 'text-rose-400' : 'text-emerald-400'
-          }`}
+          /* The visible label is the mock's bare "Short BTC" + a Boros tag; the
+             tag disambiguates it on screen, but a link's accessible name has to
+             stand alone, so it says which book and which rate it is. */
+          aria-label={`${label} funding on Boros`}
+          className="num min-w-0 text-[12.5px] font-medium text-ink-50 underline decoration-ink-500 underline-offset-2 transition-opacity hover:opacity-80"
         >
-          <span>{label}</span>{' '}
-          <span aria-hidden="true">↗</span>
+          {labelEl} <span aria-hidden="true">↗</span>
         </a>
       ) : (
-        <span
-          className={`num text-xs font-medium ${side === 'short' ? 'text-rose-400' : 'text-emerald-400'}`}
-        >
-          {label}
-        </span>
+        <span className="num min-w-0 text-[12.5px] font-medium text-ink-50">{labelEl}</span>
       )}
-      <span className="num justify-self-start rounded-md border border-ink-700 bg-ink-800 px-1.5 py-0.5 text-[10px] font-medium text-ink-300">
-        {venue}
+      <span className="whitespace-nowrap text-[11.5px] text-ink-300">{note}</span>
+    </div>
+  );
+}
+
+/** One venue's pane: its name, why it is on this side, and the fixed rate the
+ * two legs there lock. The mock groups by VENUE (where the funding is rich vs
+ * cheap), not by book — the numbered legs carry the book. */
+function VenueBox({
+  venue,
+  why,
+  fixedApr,
+  positive,
+  children,
+}: {
+  venue: string;
+  why: string;
+  fixedApr: number | null;
+  /** Receives fixed (green, "+") vs pays fixed (guava, "−"). */
+  positive: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <div className="flex min-w-0 flex-col gap-[11px] rounded border border-ink-700 bg-ink-950/50 p-3.5">
+      <span className="flex flex-wrap items-center gap-2">
+        <span className="whitespace-nowrap text-[13.5px] font-semibold text-ink-50">{venue}</span>
+        <span className="whitespace-nowrap text-[11.5px] text-ink-300">{why}</span>
+        {fixedApr !== null && Number.isFinite(fixedApr) && (
+          <span
+            className={`num ml-auto whitespace-nowrap rounded px-2.5 py-1 text-[11.5px] font-semibold ${
+              positive ? 'bg-grass/[0.14] text-grass' : 'bg-guava/[0.14] text-guava'
+            }`}
+          >
+            {positive ? '+' : '−'}
+            {fmtPct(Math.abs(fixedApr), 1)} Fixed
+          </span>
+        )}
       </span>
-      <span className="text-[11.5px] text-ink-300">{note}</span>
+      <span className="grid grid-cols-1 items-center gap-x-2.5 gap-y-2 sm:grid-cols-[auto_minmax(0,1fr)_auto]">
+        {children}
+      </span>
     </div>
   );
 }
@@ -422,17 +468,15 @@ const OpportunityCard = memo(function OpportunityCard({
   const capitalApr = pair.netFixedAprOnCapital;
   const capitalUsd = finite(pair.capitalUsd);
   const estProfitUsd = finite(pair.estProfitUsd);
-  // A resting maker leg or an extrapolated book still prices a number, so these
-  // caveats have no dash to hang off — without a chip they would be invisible.
-  if (capitalApr !== null && reasons.length > 0) {
-    chips.push({ key: 'caveats', label: 'caveats', title: reasons.join('\n'), tone: 'neutral' });
-  }
+  // No "caveats" chip: the same `reasons` already hang off the two numbers they
+  // qualify (the APR and Capital titles below), so a third copy on the header
+  // strip only added a badge the mock doesn't carry and the reader can't act on.
   // Costs can swallow the whole spread — the server ranks those groups last but
   // still serves them, so a loss must never wear the profit colour.
   const netNegative = capitalApr !== null && capitalApr < 0;
   const netTone = netNegative ? 'text-rose-400' : 'text-emerald-400';
   const days = Math.max(1, Math.round(group.secondsToMaturity / 86_400));
-  const maturityTitle = `Matures ${fmtDateUtc(group.maturity)} UTC · ${fmtAge(group.secondsToMaturity * 1000)} left`;
+  const maturityTitle = `Matures ${fmtDateLocal(group.maturity)} · ${fmtAge(group.secondsToMaturity * 1000)} left`;
   // Token-margined groups also size in the collateral token — bracket the
   // notional with that amount (USDT groups stay pure-dollar).
   // ⚠ USDC counts as dollars too — testing `!== 'USDT'` alone handed a
@@ -486,27 +530,28 @@ const OpportunityCard = memo(function OpportunityCard({
           the two legs, warnings pushed right. Its darker ground and hairline
           give the list a ledger rhythm and keep warnings out of the hero's
           way. */}
-      <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1.5 border-b border-ink-800 bg-ink-950/40 px-4 py-2">
+      <div className="flex flex-wrap items-center gap-x-2.5 gap-y-2 border-b border-ink-850 bg-ink-100/[0.04] px-3.5 py-[9px]">
         <span
-          className="num text-[13px] font-semibold tracking-wide text-ink-100"
+          className="num text-[12.5px] font-semibold tracking-[0.03em] text-ink-50"
           title={`${base} funding rate`}
         >
           {base}
         </span>
         <SideVenue side="SHORT" venue={pair.shortLeg.venue} />
         <SideVenue side="LONG" venue={pair.longLeg.venue} />
-        {chips.length > 0 && (
-          <span className="ml-auto flex flex-wrap items-center gap-1.5">
-            {chips.map((c) => (
-              <Chip key={c.key} sm tone={c.tone ?? 'amber'} title={c.title}>
-                {c.label}
-              </Chip>
-            ))}
+        <span className="ml-auto flex flex-wrap items-center gap-2">
+          {chips.map((c) => (
+            <Chip key={c.key} sm tone={c.tone ?? 'amber'} title={c.title}>
+              {c.label}
+            </Chip>
+          ))}
+          <span className="num whitespace-nowrap text-[11px] text-ink-400" title={maturityTitle}>
+            matures {fmtDateLocal(group.maturity)}
           </span>
-        )}
+        </span>
       </div>
 
-      <div className="p-4">
+      <div className="p-3.5">
         {/* Stacked on phones: the shrink-0 action column is 184px, which left
             the APR hero and the stat row ~112px to fight over and spilling.
             items-CENTER, not items-end: the action column runs ~22px taller
@@ -516,33 +561,23 @@ const OpportunityCard = memo(function OpportunityCard({
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between sm:gap-5">
           {/* Hero + stats share one baseline (items-end): the APR leads, the
               labelled figures columnize across cards. */}
-          <div className="flex min-w-0 flex-wrap items-end gap-x-7 gap-y-3">
-            {/* basis-full below 2xl: the hero takes its own row and the stats
-                a second one, so every card keeps the same shape at the same
-                viewport. The switch must hang on the VIEWPORT, never on fit:
-                token-margined groups render "$10k (4.16 ETH)" where USDT ones
-                render "$10k", and a fit-driven wrap breaks only those cards,
-                stranding Notional on a ragged second line while the USDT card
-                above it stays whole. 2xl, not xl: the content column is the
-                viewport less ~400px of rail chrome, and at xl that leaves ~848
-                inside the card for a row that wants ~851 with the token
-                bracket — three pixels short, which is how the ragged wrap got
-                in. (The expanded section's two-column grid stays at xl; its
-                leg boxes fit where this row does not.) The min-width then
-                starts every card's stat columns at the same x, however wide
-                its APR. */}
-            <span className="flex basis-full items-baseline gap-2 2xl:basis-auto 2xl:min-w-[15rem]">
+          <div className="flex min-w-0 flex-wrap items-start gap-x-[34px] gap-y-4">
+            {/* One row: the APR leads and CAPITAL / RETURN / NOTIONAL sit beside
+                it, so a column of cards reads as a table. They wrap together
+                only when the viewport actually runs out. */}
+            <span className="flex flex-col gap-[7px]">
+            <span className="flex items-baseline gap-2">
               {capitalApr === null || !Number.isFinite(capitalApr) ? (
                 <span
-                  className="num text-3xl font-bold leading-none tracking-tight text-ink-400"
+                  className="num text-[30px] font-semibold leading-none tracking-[-0.03em] text-ink-400"
                   title={reasons.length > 0 ? reasons.join('\n') : CAPITAL_WHY}
                 >
-                  —% APR
+                  —%
                 </span>
               ) : (
                 <span
-                  className={`num text-3xl font-bold leading-none tracking-tight ${
-                    capitalApr < 0 ? 'text-rose-400' : 'text-emerald-400'
+                  className={`num text-[30px] font-semibold leading-none tracking-[-0.03em] ${
+                    capitalApr < 0 ? 'text-guava' : 'text-grass'
                   }`}
                   title={
                     reasons.length > 0
@@ -550,12 +585,32 @@ const OpportunityCard = memo(function OpportunityCard({
                       : CAPITAL_APR_TITLE
                   }
                 >
-                  {(capitalApr * 100).toFixed(1)}% APR
+                  {(capitalApr * 100).toFixed(1)}%
                 </span>
               )}
-              <span className="text-[13px] text-ink-300" title={maturityTitle}>
-                ({days} {days === 1 ? 'day' : 'days'})
+              {/* "APR" is its own muted label in the mock, not part of the
+                  number — the figure stays the loudest thing on the card. */}
+              <span className="text-sm font-medium text-ink-200">APR</span>
+              <span className="text-[12.5px] text-ink-400" title={maturityTitle}>
+                ({days}d)
               </span>
+            </span>
+            {/* Details as a dotted-underline text link rather than a button:
+                expanding is the quiet, reversible move and should not carry
+                the weight of the one that opens a position. Still a real
+                <button> — it owns aria-expanded and must stay keyboard- and
+                screen-reader-addressable; only its chrome is gone. */}
+            <button
+            type="button"
+              className="self-start text-[11.5px] text-ink-300 underline decoration-ink-400 decoration-dotted underline-offset-[3px] transition-colors hover:text-ink-50 hover:decoration-ink-200 disabled:cursor-not-allowed disabled:no-underline disabled:opacity-50 disabled:hover:text-ink-300"
+              aria-expanded={open}
+              aria-label={`${open ? 'Hide' : 'Show'} details for ${base} short ${prettyVenue(pair.shortLeg.venue)} / long ${prettyVenue(pair.longLeg.venue)}, ${group.collateral}-margined ${fmtDateLocal(group.maturity)}`}
+              disabled={detailsDisabled}
+              title={detailsTitle}
+              onClick={() => setOpen((v) => !v)}
+            >
+              {open ? 'Hide details' : 'More details'}
+            </button>
             </span>
 
             <Stat label="Capital">
@@ -581,12 +636,12 @@ const OpportunityCard = memo(function OpportunityCard({
             </Stat>
             <Stat label="Notional">
               <span
-                className="text-cyan-400/85"
+                className="text-pastel-blue"
                 title={`${fmtUsd(notionalUsd, 0)} per leg${collateralQty ? ` ≈ ${sig(collateralQty.qty)} ${collateralQty.symbol}` : ''}`}
               >
                 {fmtNotionalShort(notionalUsd)}
                 {collateralQty && (
-                  <span className="text-cyan-400/60">
+                  <span className="text-pastel-blue/70">
                     {' '}
                     ({fmtTokenQty(collateralQty.qty, collateralQty.symbol)})
                   </span>
@@ -626,7 +681,7 @@ const OpportunityCard = memo(function OpportunityCard({
             <button
               type="button"
               className="btn btn-primary px-4 font-semibold"
-              aria-label={`Open this strategy — ${base} short ${prettyVenue(pair.shortLeg.venue)} / long ${prettyVenue(pair.longLeg.venue)}, ${group.collateral}-margined ${fmtDateUtc(group.maturity)}`}
+              aria-label={`Open this strategy — ${base} short ${prettyVenue(pair.shortLeg.venue)} / long ${prettyVenue(pair.longLeg.venue)}, ${group.collateral}-margined ${fmtDateLocal(group.maturity)}`}
               disabled={executeDisabled}
               title={executeTitle}
               onClick={() =>
@@ -648,30 +703,6 @@ const OpportunityCard = memo(function OpportunityCard({
           </div>
         </div>
 
-        {/* Footer line — the quiet note the card still owes, kept off the
-            action row so it costs no band of its own: the expand toggle. */}
-        <div className="mt-2.5 flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
-          {/* Details as a dotted-underline text link rather than a second
-              button: expanding is the quiet, reversible move and should not
-              carry the weight of the one that opens a position. Still a real
-              <button> — it owns aria-expanded and must stay keyboard- and
-              screen-reader-addressable; only its chrome is gone. */}
-          <button
-            type="button"
-            className="text-xs text-ink-300 underline decoration-ink-400 decoration-dotted decoration-2 underline-offset-4 transition-colors hover:text-ink-100 hover:decoration-ink-200 disabled:cursor-not-allowed disabled:no-underline disabled:opacity-50 disabled:hover:text-ink-300"
-            aria-expanded={open}
-            aria-label={`${open ? 'Hide' : 'Show'} details for ${base} short ${prettyVenue(pair.shortLeg.venue)} / long ${prettyVenue(pair.longLeg.venue)}, ${group.collateral}-margined ${fmtDateUtc(group.maturity)}`}
-            disabled={detailsDisabled}
-            title={detailsTitle}
-            onClick={() => setOpen((v) => !v)}
-          >
-            {open ? 'Hide details' : 'More details'}
-          </button>
-          {/* The "lock the rate first, then hedge" caption that sat here is
-              gone with the two buttons it captioned: one CTA now opens the
-              whole strategy, and the wizard states that order as numbered
-              steps instead of a 10px footnote nobody had to read. */}
-        </div>
 
         {open && (
           // Clicks inside the expanded breakdown must not collapse it — closing
@@ -680,111 +711,127 @@ const OpportunityCard = memo(function OpportunityCard({
             className="mt-4 flex cursor-auto flex-col gap-3.5 border-t border-ink-800 pt-4 text-xs"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className={microLabelClass}>How it works — you open 4 legs</div>
-            {/* Two columns only from xl: the content column is the viewport less
-                ~400px of chrome (page padding + the 340px trade rail), so at md
-                each leg box would be ~175px and the rows below would overflow. */}
-            <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
-              <div className="flex min-w-0 flex-col gap-2 rounded-lg border border-ink-700 bg-ink-950 p-3">
-                <div className="text-[11px] font-semibold uppercase tracking-wider text-ink-300">
-                  On CrossEx{' '}
-                  <span className="font-normal normal-case tracking-normal text-ink-400">
-                    (perp legs)
-                  </span>
-                </div>
-                <div className="flex flex-col gap-2 sm:grid sm:grid-cols-[max-content_max-content_max-content_minmax(0,1fr)] sm:items-center sm:gap-x-2.5 sm:gap-y-1.5">
-                  <LegRow
-                    notionalUsd={notionalUsd}
-                    collateral={collateralQty}
-                    side="short"
-                    label={`Short ${base}`}
-                    venue={pair.shortLeg.crossexVenue || pair.shortLeg.venue}
-                    note={
-                      pair.capital.shortLeverageMax === null
-                        ? ''
-                        : `up to ${pair.capital.shortLeverageMax}× leverage`
-                    }
-                  />
-                  <LegRow
-                    notionalUsd={notionalUsd}
-                    collateral={collateralQty}
-                    side="long"
-                    label={`Long ${base}`}
-                    venue={pair.longLeg.crossexVenue || pair.longLeg.venue}
-                    note={
-                      pair.capital.longLeverageMax === null
-                        ? ''
-                        : `up to ${pair.capital.longLeverageMax}× leverage`
-                    }
-                  />
-                </div>
-                <div className="text-[11px] leading-relaxed text-ink-300">
-                  The terminal opens both legs delta-neutral in one cross-margin account — minimal
-                  liquidation risk.
-                </div>
-              </div>
-  
-              <div className="flex min-w-0 flex-col gap-2 rounded-lg border border-ink-700 bg-ink-950 p-3">
-                <div className="text-[11px] font-semibold uppercase tracking-wider text-ink-300">
-                  On Boros{' '}
-                  <span className="font-normal normal-case tracking-normal text-ink-400">
-                    (rate legs)
-                  </span>
-                </div>
-                <div className="flex flex-col gap-2 sm:grid sm:grid-cols-[max-content_max-content_max-content_minmax(0,1fr)] sm:items-center sm:gap-x-2.5 sm:gap-y-1.5">
-                  <LegRow
-                    notionalUsd={notionalUsd}
-                    collateral={collateralQty}
-                    side="short"
-                    label={`Short ${base} funding`}
-                    venue={pair.shortLeg.venue}
-                    note={<RateNote midApr={pair.shortLeg.midApr} execApr={pair.shortLeg.execApr} />}
-                    href={borosMarketUrl(pair.shortLeg.marketId, 'short')}
-                  />
-                  <LegRow
-                    notionalUsd={notionalUsd}
-                    collateral={collateralQty}
-                    side="long"
-                    label={`Long ${base} funding`}
-                    venue={pair.longLeg.venue}
-                    note={<RateNote midApr={pair.longLeg.midApr} execApr={pair.longLeg.execApr} />}
-                    href={borosMarketUrl(pair.longLeg.marketId, 'long')}
-                  />
-                </div>
-              </div>
+            {/* "four legs · $10k notional each", then a rule, then the
+                no-price-risk reassurance — the mock's divider line. */}
+            <div className="flex flex-wrap items-center gap-x-3.5 gap-y-2.5">
+              <span className="whitespace-nowrap text-[11.5px] text-ink-200">
+                four legs ·{' '}
+                <span className="text-link">
+                  {fmtNotionalShort(notionalUsd)}
+                  {collateralQty
+                    ? ` (${fmtTokenQty(collateralQty.qty, collateralQty.symbol)})`
+                    : ''}{' '}
+                  notional each
+                </span>
+              </span>
+              <span aria-hidden="true" className="h-px min-w-[24px] flex-1 bg-ink-700" />
+              <span className="whitespace-nowrap rounded-full border border-ink-600 px-3 py-[5px] text-[11px] text-ink-200">
+                nets to 0 · no price risk
+              </span>
             </div>
-  
+            {/* Two columns only from xl: the content column is the viewport less
+                ~400px of chrome, so at md each box would be ~175px and the rows
+                below would overflow. */}
+            <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
+              <VenueBox
+                venue={prettyVenue(pair.shortLeg.venue)}
+                why="funding is rich here"
+                fixedApr={pair.shortLeg.execApr ?? pair.shortLeg.midApr}
+                positive
+              >
+                <LegRow
+                  n={1}
+                  side="short"
+                  label={`Short ${base}`}
+                  kind="CrossEx"
+                  note={
+                    pair.capital.shortLeverageMax === null
+                      ? ''
+                      : `up to ${pair.capital.shortLeverageMax}× leverage`
+                  }
+                />
+                <LegRow
+                  n={2}
+                  side="short"
+                  label={`Short ${base}`}
+                  kind="Boros"
+                  note={<RateNote midApr={pair.shortLeg.midApr} execApr={pair.shortLeg.execApr} />}
+                  href={borosMarketUrl(pair.shortLeg.marketId, 'short')}
+                />
+              </VenueBox>
+              <VenueBox
+                venue={prettyVenue(pair.longLeg.venue)}
+                why="funding is cheap here"
+                fixedApr={pair.longLeg.execApr ?? pair.longLeg.midApr}
+                positive={false}
+              >
+                <LegRow
+                  n={3}
+                  side="long"
+                  label={`Long ${base}`}
+                  kind="CrossEx"
+                  note={
+                    pair.capital.longLeverageMax === null
+                      ? ''
+                      : `up to ${pair.capital.longLeverageMax}× leverage`
+                  }
+                />
+                <LegRow
+                  n={4}
+                  side="long"
+                  label={`Long ${base}`}
+                  kind="Boros"
+                  note={<RateNote midApr={pair.longLeg.midApr} execApr={pair.longLeg.execApr} />}
+                  href={borosMarketUrl(pair.longLeg.marketId, 'long')}
+                />
+              </VenueBox>
+            </div>
+            {/* Kept from the app: the mock never says this, but it is the one
+                line that explains why four legs are not four risks. */}
+            <div className="text-[11px] leading-relaxed text-ink-400">
+              The terminal opens both perp legs delta-neutral in one cross-margin account — minimal
+              liquidation risk.
+            </div>
+
+            {/* No shared heading: each plot now carries its own titled pane,
+                so one above both only repeated them. */}
+            {chartable && <OpportunityWaterfall pair={pair} notionalUsd={notionalUsd} />}
             {pair.execSpreadApr !== null &&
               pair.netFixedAprOnCapital !== null &&
               pair.capitalUsd !== null && (
-                <div
-                  className={`rounded-lg border px-3.5 py-2.5 text-[12.5px] leading-relaxed text-ink-100 ${
-                    netNegative
-                      ? 'border-rose-500/20 bg-rose-500/5'
-                      : 'border-emerald-500/20 bg-emerald-500/5'
-                  }`}
-                >
-                  <span
-                    className={`${microLabelClass} mr-2 ${netNegative ? '!text-rose-400' : '!text-emerald-400'}`}
-                  >
-                    Net effect
+                // The strip's own colour is `info` in every state: it frames
+                // the summary rather than grading it, and the sign already
+                // lives on the APR inside it.
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 rounded border border-info/30 bg-info/[0.06] px-3.5 py-3 text-[12.5px] text-ink-200">
+                  <span className={`${microLabelClass} mr-1 !text-pastel-blue`}>Net effect</span>
+                  <span className="whitespace-nowrap">
+                    Locks a{' '}
+                    <span className="num font-semibold text-ink-50">
+                      {fmtPct(pair.execSpreadApr, 1)}
+                    </span>{' '}
+                    funding spread at
                   </span>
-                  Locks a <span className={`num ${netTone}`}>{fmtPct(pair.execSpreadApr, 1)}</span>{' '}
-                  funding spread → After leverage:{' '}
-                  <span className={`num font-semibold ${netTone}`}>
-                    {(pair.netFixedAprOnCapital * 100).toFixed(1)}% APR
-                  </span>{' '}
-                  on <span className={`num ${netTone}`}>{fmtNotionalShort(pair.capitalUsd)}</span>{' '}
-                  capital
+                  {pair.effectiveLeverage !== null && Number.isFinite(pair.effectiveLeverage) && (
+                    <span className="whitespace-nowrap">
+                      <span className="num font-semibold text-ink-50">
+                        {pair.effectiveLeverage.toFixed(1)}x
+                      </span>{' '}
+                      effective leverage →
+                    </span>
+                  )}
+                  <span className="whitespace-nowrap">
+                    <span className={`num font-semibold ${netTone}`}>
+                      {(pair.netFixedAprOnCapital * 100).toFixed(1)}% APR
+                    </span>{' '}
+                    on{' '}
+                    <span className="num font-semibold text-ink-50">
+                      {fmtNotionalShort(pair.capitalUsd)}
+                    </span>{' '}
+                    capital
+                  </span>
                 </div>
               )}
   
-            {chartable && (
-              <>
-                <div className={microLabelClass}>PnL &amp; capital breakdown</div>
-                <OpportunityWaterfall pair={pair} notionalUsd={notionalUsd} />
-              </>
-            )}
           </div>
         )}
       </div>
@@ -794,23 +841,29 @@ const OpportunityCard = memo(function OpportunityCard({
 
 /** "at 8.0% → 7.8% after impact" — the Boros leg's mid rate and what it locks. */
 function RateNote({ midApr, execApr }: { midApr: number; execApr: number | null }) {
+  // Only the rate this leg actually LOCKS. The mid → exec arrow that used to
+  // sit here showed a number the trade never gets; the mid is still one hover
+  // away, where it belongs as provenance rather than as a second headline.
   return (
-    <>
-      at <span className="num text-ink-100">{fmtPct(midApr, 1)}</span> →{' '}
+    <span title={`Mid ${fmtPct(midApr, 1)} before book impact`}>
+      at{' '}
       {execApr === null ? (
         <Dash why={THIN_BOOK_WHY} />
       ) : (
-        <span className="num text-ink-100">{fmtPct(execApr, 1)}</span>
+        <span className="num text-ink-50">{fmtPct(execApr, 1)}</span>
       )}{' '}
       after impact
-    </>
+    </span>
   );
 }
 
 export function OpportunitiesPanel({ unconfigured = false }: { unconfigured?: boolean } = {}) {
   const [stored] = useState<StoredControls>(() => loadControls());
   const [notionalChoice, setNotionalChoice] = useState<NotionalChoice>(stored.notionalChoice);
-  const [borosEntry, setBorosEntry] = useState<BorosEntryMode>(stored.borosEntry);
+  // Always market-at-size. The "at mark rate" alternative priced cards at a
+  // number no order could get, so the knob only made a card disagree with the
+  // book under it. The stored value is still read for compatibility.
+  const borosEntry: BorosEntryMode = 'market';
   const [entryMode, setEntryMode] = useState<EntryMode>(stored.entryMode);
   const [exitMode, setExitMode] = useState<ExitMode>(stored.exitMode);
   const [feeTier, setFeeTier] = useState<OpportunityFeeTier>(stored.feeTier);
@@ -818,8 +871,6 @@ export function OpportunitiesPanel({ unconfigured = false }: { unconfigured?: bo
   // The last VALID size: a half-typed entry must never blank the list.
   const [size, setSize] = useState(stored.customNotionalUsd);
   const debouncedSize = useDebounced(sizeStr, 400);
-  // Deliberately NOT persisted: the strip explains itself once and folds away.
-  const [assumptionsOpen, setAssumptionsOpen] = useState(false);
   // Persisted, like the assumptions. A filter is the louder of the two — it
   // changes what is MISSING rather than how it is priced — so restoring one
   // leans on the affordances that keep it visible: the ✓ on a selected asset
@@ -834,7 +885,6 @@ export function OpportunitiesPanel({ unconfigured = false }: { unconfigured?: bo
   const flow = useTradeFlowOptional();
   const sizeId = useId();
   const feeTierId = useId();
-  const assumptionsId = useId();
 
   const persist = (next: Partial<StoredControls>) =>
     writeJson(OPPORTUNITIES_STORAGE_KEY, {
@@ -935,165 +985,138 @@ export function OpportunitiesPanel({ unconfigured = false }: { unconfigured?: bo
     [flow, pricedNotionalUsd, entryMode, unconfigured],
   );
 
-  const summary = assumptionsOpen
-    ? ''
-    : [
-        unconfigured ? feeTierLabel(feeTier) : null,
-        ENTRY_MODE_PROSE[entryMode],
-        EXIT_MODE_PROSE[exitMode],
-        BOROS_ENTRY_PROSE[borosEntry],
-      ]
-        .filter((s): s is string => s !== null)
-        .map((s) => `· ${s}`)
-        .join(' ');
-
   const controls = (
-    <div className="mb-3 flex flex-col gap-2">
-      <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-2">
-        <button
-          type="button"
-          aria-expanded={assumptionsOpen}
-          aria-controls={assumptionsId}
-          onClick={() => setAssumptionsOpen((v) => !v)}
-          className="flex items-center gap-2 rounded-lg border border-ink-700 bg-ink-900 px-3 py-1.5 text-xs text-ink-300 transition-colors hover:border-ink-500"
+    <div className="mb-4 flex flex-wrap items-start gap-x-6 gap-y-3 rounded border border-ink-700 bg-ink-100/[0.03] px-4 py-3.5">
+      {/* One row, nothing folded away: the size every card is priced at, the
+          two execution assumptions, the clock. With the account connected
+          there is no fee tier to simulate, and two knobs do not earn a panel
+          of their own. */}
+      <div className="flex flex-col items-start gap-1.5">
+        <div className={microLabelClass}>Notional per leg</div>
+        <div className="flex flex-wrap items-center gap-2">
+        <span
+          className={`flex h-8 items-center gap-2 rounded border bg-ink-950/60 px-3 ${
+            sizeBad ? 'border-guava/60' : 'border-ink-600'
+          }`}
         >
-          <span className="font-semibold text-ink-100">with these assumptions</span>
-          <span className="num text-cyan-300">: {fmtNotionalShort(notionalUsd)} notional</span>
-          {summary && <span className="num text-ink-400">{summary}</span>}
-          <span aria-hidden="true" className="text-cyan-400">
-            ⚙
+          <span className="text-[11.5px] text-ink-400">$</span>
+          {notionalChoice === 'custom' ? (
+            <input
+              id={sizeId}
+              type="text"
+              inputMode="numeric"
+              autoComplete="off"
+              aria-label="Custom notional (USD)"
+              value={sizeStr}
+              onChange={(e) => setSizeStr(e.target.value)}
+              title="The notional every card is priced at — both Boros legs and both perp legs"
+              className="num w-24 bg-transparent text-sm font-semibold text-ink-50 outline-none placeholder:text-ink-500"
+            />
+          ) : (
+            <span className="num text-sm font-semibold text-ink-50">
+              {notionalUsd.toLocaleString('en-US')}
+            </span>
+          )}
+        </span>
+        {/* The one and only notional control. It used to be repeated inside
+            the advanced panel as a second segmented toggle. */}
+        <span role="radiogroup" aria-label="Notional" className="flex flex-wrap items-center gap-1.5">
+          {NOTIONAL_OPTIONS.map((o) => {
+            const on = notionalChoice === o.value;
+            return (
+              <button
+                key={o.value}
+                type="button"
+                role="radio"
+                aria-checked={on}
+                onClick={() => {
+                  setNotionalChoice(o.value);
+                  persist({ notionalChoice: o.value });
+                }}
+                className={`num whitespace-nowrap rounded-full border px-3 py-1.5 text-[11.5px] font-medium transition-colors ${
+                  on
+                    ? 'border-info/50 bg-info/[0.14] text-pastel-blue'
+                    : 'border-ink-600 text-ink-200 hover:border-ink-500 hover:text-ink-50'
+                }`}
+              >
+                {o.label}
+              </button>
+            );
+          })}
+        </span>
+        </div>
+        {sizeErr && (
+          <span role="alert" className="text-[10.5px] text-guava">
+            {sizeErr}
           </span>
-          <span aria-hidden="true" className="text-[10px] text-ink-400">
-            {assumptionsOpen ? '▴' : '▾'}
-          </span>
-        </button>
-        <span className="flex items-center gap-2">
-          {query.isPlaceholderData && <span className="text-xs text-ink-500">recomputing…</span>}
+        )}
+      </div>
+      {unconfigured && (
+        <div className="flex flex-col items-start gap-1.5">
+          <label htmlFor={feeTierId} className={microLabelClass}>
+            Gate VIP tier
+          </label>
+          <select
+            id={feeTierId}
+            value={feeTier}
+            onChange={(e) => {
+              const next = e.target.value as OpportunityFeeTier;
+              setFeeTier(next);
+              persist({ feeTier: next });
+            }}
+            title="Perp fees assume this Gate CrossEx VIP tier — connect Gate keys to price from your real schedule"
+            className="input num h-[30px] w-24 !py-0 text-xs"
+          >
+            {OPPORTUNITY_FEE_TIERS.map((t) => (
+              <option key={t} value={t}>
+                {feeTierLabel(t)}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+      <div className="flex flex-col items-start gap-1.5">
+        <div className={microLabelClass}>Perp entry</div>
+        <SegmentedToggle<EntryMode>
+          className="seg-info"
+          ariaLabel="Perp entry mode"
+          value={entryMode}
+          onChange={(next) => {
+            setEntryMode(next);
+            persist({ entryMode: next });
+          }}
+          options={[
+            { value: 'both-market', label: ENTRY_MODE_LABEL['both-market'] },
+            { value: 'maker-hedge', label: ENTRY_MODE_LABEL['maker-hedge'] },
+          ]}
+        />
+      </div>
+
+      <div className="flex flex-col items-start gap-1.5">
+        <div className={microLabelClass}>Perp exit cost</div>
+        <SegmentedToggle<ExitMode>
+          className="seg-info"
+          ariaLabel="Perp legs at maturity"
+          value={exitMode}
+          onChange={(next) => {
+            setExitMode(next);
+            persist({ exitMode: next });
+          }}
+          options={[
+            { value: 'close', label: EXIT_MODE_LABEL.close },
+            { value: 'roll', label: EXIT_MODE_LABEL.roll },
+          ]}
+        />
+      </div>
+
+        <span className="ml-auto flex items-center gap-2">
+          {query.isPlaceholderData && <span className="text-xs text-ink-400">recomputing…</span>}
           <StrategyFreshness
             dataUpdatedAt={query.dataUpdatedAt || 0}
             staleError={query.isError && data !== undefined}
             onRefetch={() => void query.refetch()}
           />
         </span>
-      </div>
-
-      {assumptionsOpen && (
-        <div
-          id={assumptionsId}
-          className="flex flex-wrap gap-x-7 gap-y-4 rounded-xl border border-ink-700 bg-ink-900 p-4"
-        >
-          <div className="flex flex-col items-start gap-1.5">
-            <div className={microLabelClass}>Notional</div>
-            <SegmentedToggle<NotionalChoice>
-              className="seg-cyan"
-              ariaLabel="Notional"
-              value={notionalChoice}
-              onChange={(next) => {
-                setNotionalChoice(next);
-                persist({ notionalChoice: next });
-              }}
-              options={NOTIONAL_OPTIONS}
-            />
-            {notionalChoice === 'custom' && (
-              <input
-                id={sizeId}
-                type="text"
-                inputMode="numeric"
-                autoComplete="off"
-                aria-label="Custom notional (USD)"
-                value={sizeStr}
-                onChange={(e) => setSizeStr(e.target.value)}
-                title="The notional every card is priced at — both Boros legs and both perp legs"
-                className={`input num w-28 !py-1 text-xs text-cyan-300 ${
-                  sizeBad ? 'border-rose-500/60' : 'border-cyan-500/50'
-                }`}
-              />
-            )}
-            <span className={`text-[10.5px] ${sizeErr ? 'text-rose-300' : 'text-ink-400'}`} role={sizeErr ? 'alert' : undefined}>
-              {sizeErr ?? '$1k – $100M — re-prices every card'}
-            </span>
-          </div>
-
-          {unconfigured && (
-            <div className="flex flex-col items-start gap-1.5">
-              <label htmlFor={feeTierId} className={microLabelClass}>
-                Gate VIP tier
-              </label>
-              <select
-                id={feeTierId}
-                value={feeTier}
-                onChange={(e) => {
-                  const next = e.target.value as OpportunityFeeTier;
-                  setFeeTier(next);
-                  persist({ feeTier: next });
-                }}
-                title="Perp fees assume this Gate CrossEx VIP tier — connect Gate keys to price from your real schedule"
-                className="input num h-[30px] w-24 !py-0 text-xs"
-              >
-                {OPPORTUNITY_FEE_TIERS.map((t) => (
-                  <option key={t} value={t}>
-                    {feeTierLabel(t)}
-                  </option>
-                ))}
-              </select>
-              <span className="max-w-[170px] text-[10.5px] leading-snug text-ink-400">
-                simulated — connect keys to price from your real schedule
-              </span>
-            </div>
-          )}
-
-          <div className="flex flex-col items-start gap-1.5">
-            <div className={microLabelClass}>Perp entry</div>
-            <SegmentedToggle<EntryMode>
-              className="seg-cyan"
-              ariaLabel="Perp entry mode"
-              value={entryMode}
-              onChange={(next) => {
-                setEntryMode(next);
-                persist({ entryMode: next });
-              }}
-              options={[
-                { value: 'both-market', label: ENTRY_MODE_LABEL['both-market'] },
-                { value: 'maker-hedge', label: ENTRY_MODE_LABEL['maker-hedge'] },
-              ]}
-            />
-          </div>
-
-          <div className="flex flex-col items-start gap-1.5">
-            <div className={microLabelClass}>Perp exit cost</div>
-            <SegmentedToggle<ExitMode>
-              className="seg-cyan"
-              ariaLabel="Perp legs at maturity"
-              value={exitMode}
-              onChange={(next) => {
-                setExitMode(next);
-                persist({ exitMode: next });
-              }}
-              options={[
-                { value: 'close', label: EXIT_MODE_LABEL.close },
-                { value: 'roll', label: EXIT_MODE_LABEL.roll },
-              ]}
-            />
-            {/* Only under "Roll over" — beneath a "Perp exit cost" label with
-                "Close positions" picked, it reads as a flat contradiction. */}
-            {exitMode === 'roll' && <span className="text-[10.5px] text-ink-400">no exit cost</span>}
-          </div>
-
-          <div className="flex flex-col items-start gap-1.5">
-            <div className={microLabelClass}>Boros entry</div>
-            <SegmentedToggle<BorosEntryMode>
-              className="seg-cyan"
-              ariaLabel="Boros entry"
-              value={borosEntry}
-              onChange={(next) => {
-                setBorosEntry(next);
-                persist({ borosEntry: next });
-              }}
-              options={BOROS_ENTRY_OPTIONS}
-            />
-          </div>
-        </div>
-      )}
     </div>
   );
 
@@ -1145,9 +1168,7 @@ export function OpportunitiesPanel({ unconfigured = false }: { unconfigured?: bo
         <EmptyState
           icon="◎"
           title="No fixed-return opportunities"
-          hint={`No Boros arb pair prices out at ${fmtUsd(notionalUsd, 0)} notional with a Boros entry ${
-            borosEntry === 'mark' ? 'at mark rate' : 'at market size'
-          }, ${ENTRY_MODE_PROSE[entryMode]} perp entry and ${EXIT_MODE_PROSE[exitMode]}. Try another notional or another assumption.`}
+          hint={`No Boros arb pair prices out at ${fmtUsd(notionalUsd, 0)} notional at market size, ${ENTRY_MODE_PROSE[entryMode]} perp entry and ${EXIT_MODE_PROSE[exitMode]}. Try another notional or another assumption.`}
         />
       ) : visible.length === 0 ? (
         // Distinct from the one above: the assumptions DO price opportunities,

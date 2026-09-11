@@ -38,8 +38,8 @@ const toggles = () => screen.getAllByRole('button', { name: /^(Show|Hide) detail
 const executeButtons = () => screen.getAllByRole('button', { name: /^Open this strategy — / });
 
 /** Every knob lives inside the collapsed assumptions strip — open it first. */
-const openAssumptions = () =>
-  userEvent.click(screen.getByRole('button', { name: /with these assumptions/ }));
+/** Every knob is always on screen now — kept so the call sites read as before. */
+const openAssumptions = async () => {};
 
 /** The canonical pair with a cost overridden, keeping the server's identity
  * exact: netFixedApr = execSpreadApr − totalUsd/NT and estProfit = net × NT. */
@@ -176,8 +176,10 @@ describe('OpportunitiesPanel — ranking and null tolerance', () => {
     // chips and dashed hero included.
     await waitFor(() => expect(toggles()).toHaveLength(1));
     expect(toggles()[0]).toHaveAccessibleName(/ETH/);
-    expect(screen.getByText('7.0% APR')).toBeInTheDocument();
-    expect(screen.queryByText('—% APR')).not.toBeInTheDocument();
+    // The hero prints the number and "APR" as separate elements (the label is
+    // muted beside the figure), so match the pair, not one text node.
+    expect(screen.getByText('7.0%')).toBeInTheDocument();
+    expect(screen.queryByText('—%')).not.toBeInTheDocument();
     expect(screen.queryByText('thin book')).not.toBeInTheDocument();
     expect(screen.queryByText('costs incomplete')).not.toBeInTheDocument();
 
@@ -193,11 +195,11 @@ describe('OpportunitiesPanel — ranking and null tolerance', () => {
 
     // Fixture legs: short marketId 101, long 102. The direction lands the
     // visitor on the exact side this leg needs.
-    expect(screen.getByRole('link', { name: /Short ETH funding/ })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: /Short ETH funding on Boros/ })).toHaveAttribute(
       'href',
       'https://boros.pendle.finance/markets/101?form=market&direction=short',
     );
-    expect(screen.getByRole('link', { name: /Long ETH funding/ })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: /Long ETH funding on Boros/ })).toHaveAttribute(
       'href',
       'https://boros.pendle.finance/markets/102?form=market&direction=long',
     );
@@ -313,8 +315,8 @@ describe('OpportunitiesPanel — capital basis', () => {
     renderWithClient(<OpportunitiesPanel />);
 
     await waitFor(() => expect(toggles()).toHaveLength(1));
-    expect(screen.getByTitle(/Locked fixed spread annualized/)).toHaveTextContent('7.0% APR');
-    expect(screen.getByText('(30 days)')).toBeInTheDocument();
+    expect(screen.getByTitle(/Locked fixed spread annualized/)).toHaveTextContent('7.0%');
+    expect(screen.getByText('(30d)')).toBeInTheDocument();
     expect(screen.getByText('~$1,512')).toBeInTheDocument();
     expect(screen.getByTitle('Estimated profit by maturity on $10,000 per leg')).toHaveTextContent(
       '$9',
@@ -345,7 +347,7 @@ describe('OpportunitiesPanel — capital basis', () => {
 
     await waitFor(() => expect(toggles()).toHaveLength(1));
     expect(toggles()[0]).toHaveAccessibleName(/ETH/);
-    expect(screen.queryByText('-4.2% APR')).not.toBeInTheDocument();
+    expect(screen.queryByText('-4.2%')).not.toBeInTheDocument();
   });
 
   it('builds the capital waterfall per leg with the leverage each perp was sized at', async () => {
@@ -366,7 +368,7 @@ describe('OpportunitiesPanel — capital basis', () => {
     expect(level('cap-total')).toBe('1512.00');
 
     const total = container.querySelector('[data-segment="cap-total"]')!;
-    expect(total.className).toContain('cyan');
+    expect(total.className).toContain('info');
     expect(total.getAttribute('data-tone')).toBe('pos');
 
     // The leverage each perp margin was sized at rides on its axis label.
@@ -375,9 +377,14 @@ describe('OpportunitiesPanel — capital basis', () => {
     // Component value labels are signed deltas; the total prints its level.
     expect(screen.getByText('+$8.00')).toBeInTheDocument();
     expect(screen.getByText('+$1,000')).toBeInTheDocument();
-    // The two footnotes the text ledger used to carry survive under the chart.
+    // Effective leverage is stated once, in the Net effect strip — not also as
+    // a footnote under the chart.
     expect(screen.getByText(/6\.6x/)).toBeInTheDocument();
-    expect(screen.getByText(/over-collateralized reads a lower APR/)).toBeInTheDocument();
+    // The over-collateralization caveat is gone from under the chart (the mock
+    // carries no prose there); the capital pane states the modelled total, and
+    // Positions is where a POSTED-collateral APR is shown.
+    // Twice by design: the final bar's axis label and the pane's summary row.
+    expect(screen.getAllByText('Total capital').length).toBeGreaterThan(0);
   });
 
   it('shows the empty state when every group is unpriced', async () => {
@@ -387,7 +394,7 @@ describe('OpportunitiesPanel — capital basis', () => {
     // An unmodellable group is dropped, and with nothing left the panel says so
     // instead of parading dashes.
     expect(await screen.findByText('No fixed-return opportunities')).toBeInTheDocument();
-    expect(screen.queryByText('—% APR')).not.toBeInTheDocument();
+    expect(screen.queryByText('—%')).not.toBeInTheDocument();
     expect(document.body.textContent).not.toContain('NaN');
   });
 });
@@ -409,13 +416,13 @@ describe('OpportunitiesPanel — collateral bracket', () => {
     await waitFor(() => expect(toggles()).toHaveLength(1));
     expect(screen.getByTitle('$10,000 per leg ≈ 5.2632 ETH')).toHaveTextContent('$10k (5.26 ETH)');
 
-    // Expanded: all four legs carry the bracket — the Boros rate legs and the
-    // CrossEx perp legs alike (the same notional, in the collateral token).
+    // Expanded, the notional is stated ONCE for all four legs rather than
+    // repeated on each row: every leg carries the same size, so four copies of
+    // it were four chances to misread it as four different numbers.
     await userEvent.click(toggles()[0]);
-    const borosBox = screen.getByText('On Boros').parentElement!;
-    expect(within(borosBox).getAllByText('$10k (5.26 ETH)')).toHaveLength(2);
-    const perpBox = screen.getByText('On CrossEx').parentElement!;
-    expect(within(perpBox).getAllByText('$10k (5.26 ETH)')).toHaveLength(2);
+    expect(screen.getByText(/four legs ·/)).toHaveTextContent(
+      'four legs · $10k (5.26 ETH) notional each',
+    );
   });
 
   it('keeps USDT groups and unpriceable collateral pure-dollar', async () => {
@@ -451,7 +458,7 @@ describe('OpportunitiesPanel — collapse', () => {
     const { container } = renderWithClient(<OpportunitiesPanel />);
 
     await waitFor(() => expect(toggles()).toHaveLength(1));
-    expect(screen.getByText('7.0% APR')).toBeInTheDocument();
+    expect(screen.getByText('7.0%')).toBeInTheDocument();
     expect(
       screen.getByRole('button', { name: /^Open this strategy — ETH short Hyperliquid/ }),
     ).toBeInTheDocument();
@@ -459,19 +466,21 @@ describe('OpportunitiesPanel — collapse', () => {
     expect(toggles()[0]).toHaveAttribute('aria-expanded', 'false');
     expect(container.querySelector('[data-waterfall]')).toBeNull();
     expect(screen.queryByText('Boros taker fee')).not.toBeInTheDocument();
-    expect(screen.queryByText('How it works — you open 4 legs')).not.toBeInTheDocument();
+    expect(screen.queryByText(/four legs ·/)).not.toBeInTheDocument();
 
     await userEvent.click(toggles()[0]);
     expect(toggles()[0]).toHaveTextContent('Hide details');
     expect(toggles()[0]).toHaveAttribute('aria-expanded', 'true');
 
     // The body is the 4-leg explainer, the net-effect sentence and the charts.
-    expect(screen.getByText('How it works — you open 4 legs')).toBeInTheDocument();
-    expect(screen.getByText('Short ETH')).toBeInTheDocument();
-    expect(screen.getByText('Long ETH funding')).toBeInTheDocument();
+    expect(screen.getByText(/four legs ·/)).toBeInTheDocument();
+    // Two legs read "Short ETH" — the CrossEx perp and the Boros rate leg. The
+    // suffix tag on each is what tells them apart, exactly as designed.
+    expect(screen.getAllByText('Short ETH')).toHaveLength(2);
+    expect(screen.getByRole('link', { name: /Long ETH funding on Boros/ })).toBeInTheDocument();
     const netEffect = screen.getByText('Net effect').parentElement as HTMLElement;
     expect(netEffect.textContent).toMatch(/Locks a 4\.4% funding spread/);
-    expect(netEffect.textContent).toMatch(/After leverage: 7\.0% APR on \$1\.5k capital/);
+    expect(netEffect.textContent).toMatch(/7\.0% APR on \$1\.5k capital/);
 
     // The waterfalls ARE the breakdown; the cost names live on their axes.
     expect(container.querySelector('[data-waterfall]')).not.toBeNull();
@@ -496,7 +505,8 @@ describe('OpportunitiesPanel — collapse', () => {
     await userEvent.click(screen.getByRole('radio', { name: /Roll over/ }));
     await userEvent.click(toggles()[0]);
 
-    expect(screen.getByText('rolling — no exit cost')).toBeInTheDocument();
+    // Rolling shows only as the ABSENCE of the two exit segments below — the
+    // control carries no note of its own.
     expect(screen.queryByText('Perp exit fees')).not.toBeInTheDocument();
     expect(container.querySelector('[data-segment="opp-exit-fees"]')).toBeNull();
     expect(container.querySelector('[data-segment="opp-exit-slip"]')).toBeNull();
@@ -666,18 +676,14 @@ describe('OpportunitiesPanel — the assumptions strip', () => {
       entryMode: 'both-market',
       exitMode: 'roll',
     });
-    // Collapsed: the summary is on the button, the radios are not rendered.
-    expect(screen.queryByRole('radiogroup', { name: 'Notional' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('radiogroup', { name: 'Boros entry' })).not.toBeInTheDocument();
-
-    await openAssumptions();
+    // The notional lives on the always-visible first row; the panel holds only
+    // the rarer knobs. There is no Boros-entry control any more — every card
+    // is priced market-at-size.
     expect(screen.getByRole('radiogroup', { name: 'Notional' })).toBeInTheDocument();
     expect(screen.getByRole('radio', { name: '$10k' })).toHaveAttribute('aria-checked', 'true');
-    expect(screen.getByRole('radio', { name: 'Market at size' })).toHaveAttribute(
-      'aria-checked',
-      'true',
-    );
     expect(screen.queryByLabelText('Custom notional (USD)')).not.toBeInTheDocument();
+    await openAssumptions();
+    expect(screen.queryByRole('radiogroup', { name: 'Boros entry' })).not.toBeInTheDocument();
   });
 
   it('re-prices on the notional presets without touching the Boros entry', async () => {
@@ -695,42 +701,6 @@ describe('OpportunitiesPanel — the assumptions strip', () => {
     await userEvent.click(screen.getByRole('radio', { name: '$500k' }));
     await waitFor(() =>
       expect(paramsOf(urls.at(-1)!)).toMatchObject({ borosEntry: 'market', notionalUsd: '500000' }),
-    );
-  });
-
-  it('switches the Boros entry without touching the notional', async () => {
-    const urls: string[] = [];
-    server.use(opportunitiesHandler(makeOpportunitiesResult(), { urls }));
-    renderWithClient(<OpportunitiesPanel />);
-
-    await waitFor(() => expect(urls).toHaveLength(1));
-    await openAssumptions();
-
-    await userEvent.click(screen.getByRole('radio', { name: 'At mark rate' }));
-    await waitFor(() =>
-      expect(paramsOf(urls.at(-1)!)).toMatchObject({ borosEntry: 'mark', notionalUsd: '10000' }),
-    );
-    expect(screen.getByRole('radio', { name: '$10k' })).toHaveAttribute('aria-checked', 'true');
-  });
-
-  it('combines the two knobs freely — $100k AT MARK RATE sends both', async () => {
-    // The point of splitting v1's coupled control: any size, either entry.
-    const urls: string[] = [];
-    server.use(opportunitiesHandler(makeOpportunitiesResult(), { urls }));
-    renderWithClient(<OpportunitiesPanel />);
-
-    await waitFor(() => expect(urls).toHaveLength(1));
-    await openAssumptions();
-
-    await userEvent.click(screen.getByRole('radio', { name: '$100k' }));
-    await userEvent.click(screen.getByRole('radio', { name: 'At mark rate' }));
-    await waitFor(() =>
-      expect(paramsOf(urls.at(-1)!)).toMatchObject({ borosEntry: 'mark', notionalUsd: '100000' }),
-    );
-    expect(screen.getByRole('radio', { name: '$100k' })).toHaveAttribute('aria-checked', 'true');
-    expect(screen.getByRole('radio', { name: 'At mark rate' })).toHaveAttribute(
-      'aria-checked',
-      'true',
     );
   });
 
@@ -798,7 +768,6 @@ describe('OpportunitiesPanel — the assumptions strip', () => {
     await waitFor(() => expect(toggles()).toHaveLength(1));
     await openAssumptions();
     await userEvent.click(screen.getByRole('radio', { name: '$100k' }));
-    await userEvent.click(screen.getByRole('radio', { name: 'At mark rate' }));
     await userEvent.click(screen.getByRole('radio', { name: /Limit \+ hedge/ }));
     await userEvent.click(screen.getByRole('radio', { name: /Roll over/ }));
     first.unmount();
@@ -806,12 +775,8 @@ describe('OpportunitiesPanel — the assumptions strip', () => {
     renderWithClient(<OpportunitiesPanel />);
     await waitFor(() => expect(toggles()).toHaveLength(1));
     // The strip itself is deliberately NOT persisted — it folds away again.
-    expect(screen.getByRole('button', { name: /with these assumptions/ })).toHaveAttribute(
-      'aria-expanded',
-      'false',
-    );
     await openAssumptions();
-    for (const name of ['$100k', 'At mark rate', /Limit \+ hedge/, /Roll over/] as const) {
+    for (const name of ['$100k', /Limit \+ hedge/, /Roll over/] as const) {
       expect(screen.getByRole('radio', { name })).toHaveAttribute('aria-checked', 'true');
     }
   });
@@ -842,10 +807,6 @@ describe('OpportunitiesPanel — the assumptions strip', () => {
 
     await openAssumptions();
     expect(screen.getByRole('radio', { name: '$100k' })).toHaveAttribute('aria-checked', 'true');
-    expect(screen.getByRole('radio', { name: 'Market at size' })).toHaveAttribute(
-      'aria-checked',
-      'true',
-    );
     expect(screen.getByRole('radio', { name: /Limit \+ hedge/ })).toHaveAttribute(
       'aria-checked',
       'true',
@@ -864,9 +825,10 @@ describe('OpportunitiesPanel — the assumptions strip', () => {
     });
   });
 
-  it('migrates a v1 "mark" blob into a mark entry at its own custom size', async () => {
+  it('migrates a v1 "mark" blob to market-at-size at its own custom size', async () => {
     // v1's 'mark' carried its size in customSize — a non-preset one lands on
-    // "Custom…" with the size intact, and the entry knob on "At mark rate".
+    // "Custom…" with the size intact. The mark entry has no home any more:
+    // every card is priced market-at-size.
     localStorage.setItem(LEGACY_KEY, JSON.stringify({ choice: 'mark', customSize: 25_000 }));
     const urls: string[] = [];
     server.use(opportunitiesHandler(makeOpportunitiesResult(), { urls }));
@@ -875,24 +837,20 @@ describe('OpportunitiesPanel — the assumptions strip', () => {
     await waitFor(() => expect(urls).toHaveLength(1));
     expect(paramsOf(urls.at(-1)!)).toMatchObject({
       notionalUsd: '25000',
-      borosEntry: 'mark',
+      borosEntry: 'market',
       entryMode: 'both-market',
       exitMode: 'roll',
     });
 
     await openAssumptions();
     expect(screen.getByRole('radio', { name: /^Custom/ })).toHaveAttribute('aria-checked', 'true');
-    expect(screen.getByRole('radio', { name: 'At mark rate' })).toHaveAttribute(
-      'aria-checked',
-      'true',
-    );
     expect(screen.getByLabelText('Custom notional (USD)')).toHaveValue('25000');
 
     expect(localStorage.getItem(LEGACY_KEY)).toBeNull();
     expect(JSON.parse(localStorage.getItem(OPPORTUNITIES_STORAGE_KEY)!)).toMatchObject({
       notionalChoice: 'custom',
       customNotionalUsd: 25_000,
-      borosEntry: 'mark',
+      borosEntry: 'market',
       feeTier: 'vip0',
     });
   });
@@ -906,7 +864,7 @@ describe('OpportunitiesPanel — empty and error states', () => {
     expect(await screen.findByText('No fixed-return opportunities')).toBeInTheDocument();
     expect(
       screen.getByText(
-        /\$10,000 notional with a Boros entry at market size, both legs market perp entry and roll over/,
+        /\$10,000 notional at market size, both legs market perp entry and roll over/,
       ),
     ).toBeInTheDocument();
   });
@@ -1110,10 +1068,10 @@ describe('OpportunitiesPanel — every viable pair', () => {
 
     await waitFor(() => expect(toggles()).toHaveLength(3));
     // Best APR first, regardless of which cohort it came from.
-    expect(screen.getAllByText(/^\d+\.\d% APR$/).map((el) => el.textContent)).toEqual([
-      '12.0% APR',
-      '8.0% APR',
-      '4.0% APR',
+    expect(screen.getAllByText(/^\d+\.\d%$/).map((el) => el.textContent)).toEqual([
+      '12.0%',
+      '8.0%',
+      '4.0%',
     ]);
     // The two ETH cards are told apart by their legs, in the toggle's name too.
     expect(toggles()[0]).toHaveAccessibleName(/ETH short Hyperliquid \/ long Binance/);
@@ -1139,7 +1097,7 @@ describe('OpportunitiesPanel — every viable pair', () => {
     renderWithClient(<OpportunitiesPanel />);
 
     await waitFor(() => expect(toggles()).toHaveLength(1));
-    expect(screen.getByText('12.0% APR')).toBeInTheDocument();
+    expect(screen.getByText('12.0%')).toBeInTheDocument();
   });
 });
 
@@ -1194,7 +1152,7 @@ describe('OpportunitiesPanel — filters', () => {
 
     await userEvent.click(chip(/^BTC 1$/));
     await waitFor(() => expect(toggles()).toHaveLength(1));
-    expect(screen.getByText('8.0% APR')).toBeInTheDocument();
+    expect(screen.getByText('8.0%')).toBeInTheDocument();
     expect(screen.getByText('showing 1 of 3')).toBeInTheDocument();
     expect(chip(/^BTC 1$/)).toHaveAttribute('aria-pressed', 'true');
     // The bar's own line carries no Clear: every chip on it is its own undo.
@@ -1270,9 +1228,9 @@ describe('OpportunitiesPanel — filters', () => {
     await openMoreFilters();
     await userEvent.type(screen.getByLabelText('Matures in more than'), '30');
 
-    // Only the 90-day cohort survives: "(30 days)" is not MORE THAN 30.
+    // Only the 90-day cohort survives: "(30d)" is not MORE THAN 30.
     await waitFor(() => expect(toggles()).toHaveLength(1));
-    expect(screen.getByText('8.0% APR')).toBeInTheDocument();
+    expect(screen.getByText('8.0%')).toBeInTheDocument();
   });
 
   it('offers no filter row for a dimension that cannot exclude anything', async () => {

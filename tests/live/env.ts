@@ -34,8 +34,6 @@ export const NOTIONAL = Number(process.env.LIVE_TRADE_NOTIONAL ?? '20');
  * purpose: no env var can raise it. */
 export const HARD_NOTIONAL_CEILING_USDT = 100;
 
-/** Default close-order protection band (percent). */
-export const SLIPPAGE_PCT = 0.5;
 
 /** Raw-payload recording default ON; set LIVE_TRADE_RECORD_FIXTURES=0 to disable. */
 export const RECORD_FIXTURES = process.env.LIVE_TRADE_RECORD_FIXTURES !== '0';

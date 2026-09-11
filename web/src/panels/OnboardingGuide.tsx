@@ -8,7 +8,7 @@ import { Ext, GATE_API_KEYS_URL, GATE_CROSSEX_URL, GATE_SIGNUP_URL, Step, useNud
  * stays shut, since with no keys it could not execute — and the guide answers
  * by scrolling to and flashing the API-key form, the one step standing between
  * that click and a wizard that can trade. (The prefill nonce still counts too:
- * the strategy-box cues arm the ticket directly.) */
+ * the Positions cues arm the ticket directly.) */
 export function OnboardingGuide() {
   const flow = useTradeFlowOptional();
   const nonce = (flow?.setupNonce ?? 0) + (flow?.pairPrefill?.nonce ?? 0);

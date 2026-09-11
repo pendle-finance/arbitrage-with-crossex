@@ -1,7 +1,6 @@
-/** Waterfall primitives shared by the strategy card's returns charts
- * (panels/ProfitBars), the opportunity card's profit/capital charts
- * (panels/OpportunityWaterfall), and the shared-position page
- * (position/PositionBreakdowns).
+/** Waterfall primitives shared by the opportunity card's profit/capital
+ * charts (panels/OpportunityWaterfall) and the Positions asset card's PnL
+ * bars (panels/assets/AssetBars).
  *
  * Hand-rolled divs (house precedent — no chart lib). A plot is a row of
  * columns; each column draws one bar between its `from` and `to` running
@@ -34,7 +33,6 @@ export interface WaterfallStep {
 
 export const dashedAmber = 'border border-dashed border-amber-500/60 bg-amber-500/20';
 export const dashedEmerald = 'border border-dashed border-emerald-500/60 bg-emerald-500/20';
-export const dashedCyan = 'border border-dashed border-cyan-400/60 bg-cyan-400/20';
 
 /** A cost in a tooltip: "−$65.00", or "+$0.50 (favorable)" for a negative. */
 export function costText(usd: number, approx = false): string {
@@ -42,96 +40,6 @@ export function costText(usd: number, approx = false): string {
   return usd >= 0
     ? `${prefix}−${fmtUsd(usd)}`
     : `${prefix}+${fmtUsd(Math.abs(usd))} (favorable)`;
-}
-
-/** The tooltip names of the cost rows in a spread-return → PnL waterfall.
- * Internal to buildCostWaterfallSteps — shared through it, so the terminal
- * card and the public share page can't drift apart. */
-const COST_TITLES: Record<string, string> = {
-  'paid-perp-fees': 'Perp trading fees paid',
-  'paid-entry-slippage': 'Perp entry slippage paid',
-  'paid-boros-trade': 'Boros trading fees paid',
-  'paid-boros-settle': 'Boros settlement fees paid (est.)',
-  'future-boros-settle': 'Boros settlement fees to maturity (est.)',
-  'future-exit-fees': 'Perp exit fees (maker+hedge, est.)',
-  'future-exit-slippage': 'Perp exit slippage (assumed = entry, est.)',
-};
-
-/** One decrement of a cost waterfall: `usd` is SIGNED (a favorable cost steps
- * UP) and null/0 drops the row entirely; `className` styles the positive case. */
-export type CostRow = [key: string, usd: number | null, className: string, axisLabel: string];
-
-/**
- * Spread return → costs → PnL, the shape both the strategy card's left chart
- * (panels/ProfitBars) and the shared-position page (position/PositionBreakdowns)
- * draw. Callers own only WHICH rows are charged — the gates differ (the card
- * reads its cost toggles, the page reads the flags frozen into the payload) —
- * while the bar semantics live here: paid vs future by key prefix, a favorable
- * (negative) cost stepping up in emerald, and both totals rising from 0 so the
- * end bar sits on the authoritative number rather than on a running sum.
- */
-export function buildCostWaterfallSteps({
-  spreadReturnUsd,
-  profitUsd,
-  costRows,
-  profitTitleSuffix = '',
-  devWarnLabel,
-}: {
-  spreadReturnUsd: number;
-  profitUsd: number;
-  costRows: CostRow[];
-  /** Appended to the end bar's tooltip (the share page marks it "(as shared)"). */
-  profitTitleSuffix?: string;
-  /** Enables the DEV identity-drift warning. Omit where the identity holds by
-   * construction (the share page derives its spread return FROM the target). */
-  devWarnLabel?: string;
-}): WaterfallStep[] {
-  const steps: WaterfallStep[] = [
-    {
-      key: 'spread',
-      kind: 'total',
-      dir: 'up',
-      from: 0,
-      to: spreadReturnUsd,
-      className: 'bg-emerald-500',
-      title: `Spread return (locked) ${fmtUsd(spreadReturnUsd)}`,
-      axisLabel: 'Spread locked',
-    },
-  ];
-  let level = spreadReturnUsd;
-  for (const [key, usd, cls, axisLabel] of costRows) {
-    if (usd === null || usd === 0) continue;
-    const from = level;
-    level -= usd; // signed: a favorable (negative) cost raises the level
-    const isFuture = key.startsWith('future');
-    steps.push({
-      key,
-      kind: isFuture ? 'cost-future' : 'cost-paid',
-      dir: usd > 0 ? 'down' : 'up',
-      from,
-      to: level,
-      className: usd > 0 ? cls : isFuture ? dashedEmerald : 'bg-emerald-500/80',
-      title: `${COST_TITLES[key]} ${costText(usd, isFuture || key === 'paid-boros-settle')}`,
-      axisLabel,
-    });
-  }
-  steps.push({
-    key: 'profit',
-    kind: 'total',
-    dir: profitUsd >= 0 ? 'up' : 'down',
-    from: 0,
-    to: profitUsd,
-    className: profitUsd >= 0 ? 'bg-emerald-500' : 'bg-rose-500',
-    title: `Net PnL by maturity ${fmtUsd(profitUsd)}${profitTitleSuffix}`,
-    axisLabel: 'PnL',
-  });
-  // The end total is drawn at the authoritative profit; the running level must
-  // land there by construction — warn (dev only) on any drift.
-  if (devWarnLabel && import.meta.env.DEV && Math.abs(level - profitUsd) > 0.01) {
-    // eslint-disable-next-line no-console
-    console.warn(`waterfall identity drift (${devWarnLabel})`, { level, profitUsd });
-  }
-  return steps;
 }
 
 /**
@@ -177,6 +85,7 @@ export function WaterfallPlot({
   span,
   domainMin,
   caption,
+  showCaption = true,
   legend,
   mtmUsd = 0,
   mtmChip = false,
@@ -186,6 +95,9 @@ export function WaterfallPlot({
   span: number;
   domainMin: number;
   caption: string;
+  /** False where an enclosing pane already carries the title. The caption is
+   * still required — it remains the plot's accessible description. */
+  showCaption?: boolean;
   /** Optional swatch key beside the caption, for plots whose colour convention
    * needs spelling out (the opportunity card's solid-vs-dashed amber costs). */
   legend?: ReactNode;
@@ -290,10 +202,17 @@ export function WaterfallPlot({
           </div>
         ))}
       </div>
-      <div className="flex items-center justify-center gap-3 pt-0.5">
-        <span className="text-[9px] uppercase tracking-wider text-ink-400">{caption}</span>
-        {legend}
-      </div>
+      {/* The caption is hidden where the plot already sits in a titled pane —
+          two copies of "profit by maturity" under one heading is noise. The
+          legend still renders, since it explains the bar colours. */}
+      {(showCaption || legend) && (
+        <div className="flex items-center justify-center gap-3 pt-0.5">
+          {showCaption && (
+            <span className="text-[9px] uppercase tracking-wider text-ink-400">{caption}</span>
+          )}
+          {legend}
+        </div>
+      )}
     </div>
   );
 }

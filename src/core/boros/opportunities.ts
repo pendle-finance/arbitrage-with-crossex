@@ -37,7 +37,7 @@ import { touchOf, type NormalizedBook } from '../estimate/books';
 import { walkBook } from '../estimate/fill';
 import { resolveFeeRates, resolveVenueFeeRates, type VenueFeeRow } from '../estimate/fees';
 import { BOROS_TOKEN_SYMBOLS, type BorosMarket, type BorosOrderBook } from './client';
-import { normalizeVenue, SECONDS_IN_YEAR } from './returns';
+import { normalizeVenue, SECONDS_IN_YEAR } from './venue';
 
 /** Boros platformName (normalized) → CrossEx exchange key. Venues absent here
  * (Kucoin, Lighter) are listed in the group but can't carry a perp leg. */

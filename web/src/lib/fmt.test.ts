@@ -1,16 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import {
-  bps,
-  feePct,
-  fieldValue,
-  fmtPct,
-  fmtTokenQty,
-  fmtUsd,
-  num,
-  parseSymbol,
-  sig,
-  toDate,
-} from './fmt';
+import { bps, feePct, fieldValue, fmtPct, fmtTokenQty, fmtUsd, num, parseSymbol, sig, sigGrouped, toDate } from './fmt';
 
 // num/sig expectations are copied from tests/unit/format.test.ts in the repo
 // root — the web port must behave identically to src/core/numbers.ts.
@@ -31,6 +20,24 @@ describe('sig (port of core numbers.sig)', () => {
     [0.000012345, '0.00001234'],
   ])('sig(%f) -> %s', (value, expected) => {
     expect(sig(value)).toBe(expected);
+  });
+});
+
+describe('sigGrouped', () => {
+  it.each([
+    // The account-scale magnitudes this exists for.
+    [577491.04, '577,491.04'],
+    [1019333.92, '1,019,333.92'],
+    // Negatives keep their sign on both sides of the grouping.
+    [-1041360.1, '-1,041,360.1'],
+    [-22026.18, '-22,026.18'],
+    // Below the grouping threshold it is exactly sig().
+    [0, '0'],
+    [999, '999'],
+    [1.23456789, '1.2346'],
+    [-0.000012345, '-0.00001234'],
+  ])('sigGrouped(%f) -> %s', (value, expected) => {
+    expect(sigGrouped(value)).toBe(expected);
   });
 });
 
@@ -87,6 +94,18 @@ describe('web additions', () => {
   it('fmtUsd renders signed dollars', () => {
     expect(fmtUsd(9387.2, 0)).toBe('$9,387');
     expect(fmtUsd('-1234.5')).toBe('-$1,234.50');
+  });
+
+  it('fmtUsd never prints a negative zero, and a non-number is a dash', () => {
+    // A value that rounds away at the shown precision has no sign to print.
+    expect(fmtUsd(-0.004)).toBe('$0.00');
+    expect(fmtUsd(-0)).toBe('$0.00');
+    expect(fmtUsd(-0.004, 0)).toBe('$0.00');
+    // Not "NaN"/"Infinity": a feed hiccup must read as unknown, not as money.
+    expect(fmtUsd(NaN)).toBe('—');
+    expect(fmtUsd(Infinity)).toBe('—');
+    expect(fmtPct(NaN)).toBe('—');
+    expect(bps(Infinity)).toBe('—');
   });
 
   it('fmtPct treats input as a ratio', () => {

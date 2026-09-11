@@ -443,6 +443,7 @@ export function PairTicket({ onExecuted }: { onExecuted?: () => void } = {}) {
         <span className="text-[11px] text-ink-400">Execution</span>
         <SegmentedToggle<ExecMode>
           ariaLabel="Pair execution mode"
+          fill
           value={mode}
           onChange={(m) => {
             setMode(m);

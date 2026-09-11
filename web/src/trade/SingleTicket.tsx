@@ -223,8 +223,12 @@ export function SingleTicket() {
         }}
       />
       <SideToggle value={side} onChange={changeSide} />
+      {/* Owns its row, so it takes the whole width — shrink-to-fit left a
+          band of dead space beside it. The toggles that sit INLINE beside a
+          label (size unit, close amount) stay compact on purpose. */}
       <SegmentedToggle<'MARKET' | 'LIMIT'>
         ariaLabel="Order type"
+        fill
         value={type}
         onChange={setType}
         options={[

@@ -1,7 +1,8 @@
 /**
- * Close-position dialog for a position row: slippage band, full vs partial qty
- * (validated against the live position), and a live preview of the reduce-only
- * IOC marketable-limit close. "Close now" is inline hold-to-confirm.
+ * Close-position dialog for a position row: one close size (pre-filled with
+ * the maximum and validated against the live position), a live preview of the
+ * reduce-only IOC marketable-limit close, and the slippage band below it.
+ * "Close now" is inline hold-to-confirm.
  *
  * Centred rather than anchored to its trigger. It used to position itself
  * below-right of the button, with clamping, scroll re-anchoring and a
@@ -23,13 +24,13 @@ import { feeText, PreviewFallback, ViolationList } from './previewBits';
 import { usePreviewDebounced } from './usePreview';
 
 const CLOSE_INFO =
-  'The close is sent as a reduce-only IOC limit at mark ± slippage — it can never increase the position and never rests on the book.';
+  'The close is sent as a reduce-only IOC limit at mid ± slippage — it can never increase the position and never rests on the book.';
 
 interface Props {
   position: CrossexPosition;
   /** Size THIS strategy owns, when the venue position is shared with another
-   * one. The close acts on the whole venue position, so the popover opens on
-   * partial, pre-filled with this size, and says what Full would really do. */
+   * one. It caps the close and pre-fills the box, so the default never takes
+   * size out of the position that shares the leg. */
   attributedQty?: number;
   /**
    * How much this close took off the venue, fired once the deal is accepted.
@@ -70,10 +71,19 @@ export function ClosePopover({
     attributedQty > 0 &&
     attributedQty < wholeQty * 0.999;
   const [slipStr, setSlipStr] = useState('0.5');
-  const [mode, setMode] = useState<'full' | 'partial'>(shared ? 'partial' : 'full');
-  const [qtyStr, setQtyStr] = useState(shared ? fieldValue(attributedQty) : '');
   /**
-   * Which unit the partial box is in.
+   * ONE size box, pre-filled with the maximum, exactly as the Boros and pair
+   * closes work. The old full/partial toggle made the common case (close it
+   * all) a mode rather than a default, and hid the number the other close
+   * forms put front and centre — so the same decision looked like two
+   * different controls depending on which row you clicked.
+   *
+   * `null` means untouched: the field shows the max and follows it as the
+   * position refreshes, rather than latching a figure the user never typed.
+   */
+  const [qtyEdited, setQtyEdited] = useState<string | null>(null);
+  /**
+   * Which unit the size box is in.
    *
    * A close has to be sizeable in DOLLARS because that is the unit the other
    * half of the trade uses: a HYPE position's Boros leg is USDT-collateral and
@@ -130,8 +140,22 @@ export function ClosePopover({
   }, [onDismiss]);
 
   const posQty = Math.abs(Number(position.positionQty));
+  /**
+   * The cap, in BASE units.
+   *
+   * A shared leg's max is what THIS card owns — closing past it eats size
+   * belonging to another position. Unshared, the venue position is the limit.
+   * A shared venue leg is therefore closed from each position that holds a
+   * share of it, one close per position (his call 2026-09-09) — there is no
+   * "flatten the whole venue leg" path here.
+   */
+  const maxQtyBase = shared ? (attributedQty as number) : posQty;
   const slip = Number(slipStr);
   const slipInvalid = !Number.isFinite(slip) || slip <= 0 || slip > 10;
+  // The cap in whatever unit the box is currently in — what the "max" hint
+  // shows and what the MAX button fills in.
+  const maxInUnit = effUnit === 'usd' ? maxQtyBase * mark : maxQtyBase;
+  const qtyStr = qtyEdited ?? fieldValue(maxInUnit);
   const entered = Number(qtyStr);
   /**
    * The order is always sent in base units. A USD entry converts at the mark —
@@ -148,25 +172,42 @@ export function ClosePopover({
    * clamped to the position, so nothing can over-close.
    */
   const qtyNum = Math.min(rawQty, posQty);
-  const partialMissing = mode === 'partial' && qtyStr.trim() === '';
-  const partialInvalid =
-    mode === 'partial' &&
-    qtyStr.trim() !== '' &&
-    (!Number.isFinite(entered) ||
-      entered <= 0 ||
-      !Number.isFinite(rawQty) ||
-      rawQty <= 0 ||
-      rawQty > posQty * (1 + 1e-6));
+  /**
+   * A relative tolerance, as in the Boros close: the field carries the max
+   * `sig()`-rounded, so the round-trip of the dialog's own stated maximum
+   * lands a hair above it on a large position.
+   */
+  // The tolerance is at least the rounding the DISPLAY applied: `sig()` keeps
+  // 4 dp from 1 and 2 dp from 1,000, so a flat 1e-7 relative slack refused
+  // "151.202" typed against a 151.20195 position — the very figure the max
+  // hint printed. Converted back to base units when the box is in USD.
+  const displayRounding = (() => {
+    const shown = Number(sig(maxInUnit));
+    if (!Number.isFinite(shown)) return 0;
+    const slack = Math.abs(shown - maxInUnit);
+    return effUnit === 'usd' && mark > 0 ? slack / mark : slack;
+  })();
+  const qtyEps = Math.max(1e-9, maxQtyBase * 1e-7, displayRounding);
+  const qtyInvalid =
+    qtyStr.trim() === '' ||
+    !Number.isFinite(entered) ||
+    entered <= 0 ||
+    !Number.isFinite(rawQty) ||
+    rawQty <= 0 ||
+    rawQty > maxQtyBase + qtyEps;
+  // Below the cap ⇒ a reduce-only partial; at the cap on an UNSHARED leg it is
+  // the whole venue position, which the server closes best by qty-less action.
+  const closesEverything = !shared && rawQty >= posQty - qtyEps;
 
   const action = useMemo<ActionInput | null>(() => {
-    if (slipInvalid || partialMissing || partialInvalid) return null;
+    if (slipInvalid || qtyInvalid) return null;
     return {
       kind: 'close-position',
       symbol: position.symbol,
       slippagePct: slip,
-      ...(mode === 'partial' ? { qty: fieldValue(qtyNum) } : {}),
+      ...(closesEverything ? {} : { qty: fieldValue(qtyNum) }),
     };
-  }, [slipInvalid, partialMissing, partialInvalid, position.symbol, slip, mode, qtyNum]);
+  }, [slipInvalid, qtyInvalid, position.symbol, slip, closesEverything, qtyNum]);
 
   const preview = usePreviewDebounced(`close-${position.symbol}`, action ? [action] : null, {
     debounceMs: 300,
@@ -195,39 +236,12 @@ export function ClosePopover({
         </div>
 
         <div className="flex flex-col gap-2 text-[11px]">
-          <div className="flex items-center gap-2">
-            <label htmlFor={`close-slip-${position.symbol}`} className="w-24 text-ink-400">
-              Slippage %
-            </label>
-            <input
-              id={`close-slip-${position.symbol}`}
-              className={`input num h-8 flex-1 px-2 py-1 ${slipInvalid ? 'border-rose-500' : ''}`}
-              inputMode="decimal"
-              value={slipStr}
-              onChange={(e) => setSlipStr(e.target.value)}
-            />
-          </div>
-          {slipInvalid && <span className="text-rose-400">slippage must be in (0, 10]</span>}
-
-          <div className="flex items-center gap-2">
-            <span className="w-24 text-ink-400">Amount</span>
-            <SegmentedToggle<'full' | 'partial'>
-              ariaLabel="Close amount"
-              value={mode}
-              onChange={setMode}
-              options={[
-                { value: 'full', label: <span className="text-xs">full</span> },
-                { value: 'partial', label: <span className="text-xs">partial</span> },
-              ]}
-            />
-          </div>
-          {/* The venue holds one position; a close acts on all of it. Say so
-              where the choice is made, not after the fact. */}
+          {/* The venue holds one position; this card may own only part of it.
+              Say so where the size is chosen, not after the fact. */}
           {shared && (
             <p className="leading-relaxed text-amber-400/90">
-              {mode === 'full'
-                ? `Full closes all ${sig(wholeQty)} on the venue — including the ${sig(wholeQty - (attributedQty ?? 0))} that belongs to your other position.`
-                : `This position holds ${sig(attributedQty ?? 0)} of the ${sig(wholeQty)} on the venue; the rest belongs to another position.`}
+              This position holds {sig(attributedQty ?? 0)} of the {sig(wholeQty)} on the venue; the
+              rest belongs to another position.
             </p>
           )}
           {hedgedSibling && (
@@ -240,18 +254,42 @@ export function ClosePopover({
               directional position.
             </p>
           )}
-          {mode === 'partial' && (
-            <div className="flex items-center gap-2">
-              <label htmlFor={`close-qty-${position.symbol}`} className="w-24 text-ink-400">
-                Close {effUnit === 'usd' ? 'value' : 'qty'}
+          {/* Same shape as the Boros and pair closes: the size leads, the max
+              sits beside its label as a button, the simulation follows. */}
+          <div className="flex flex-col gap-1">
+            <div className="flex items-baseline justify-between">
+              <label htmlFor={`close-qty-${position.symbol}`} className="text-ink-400">
+                Close size
               </label>
+              <span className="num text-ink-400">
+                max{' '}
+                <button
+                  type="button"
+                  className="underline decoration-dotted underline-offset-2 hover:text-ink-200"
+                  title={
+                    shared
+                      ? 'Close everything this position owns on the venue'
+                      : 'Close the whole position'
+                  }
+                  onClick={() => setQtyEdited(fieldValue(maxInUnit))}
+                >
+                  {sig(maxInUnit)} {effUnit === 'usd' ? 'USDT' : base}
+                </button>
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
               <input
                 id={`close-qty-${position.symbol}`}
-                className={`input num h-8 flex-1 px-2 py-1 ${partialInvalid ? 'border-rose-500' : ''}`}
+                className={`input num h-8 flex-1 px-2 py-1 ${qtyInvalid ? 'border-rose-500' : ''}`}
                 inputMode="decimal"
-                placeholder={effUnit === 'usd' ? `≤ ${sig(posQty * mark)}` : `≤ ${sig(posQty)}`}
                 value={qtyStr}
-                onChange={(e) => setQtyStr(e.target.value)}
+                onChange={(e) => setQtyEdited(e.target.value)}
+                /* The visible label reads "Close size" in both units, but the
+                   ACCESSIBLE name still says which unit the box is in — a
+                   screen reader (and the tests that guard the fallback to coin
+                   units) would otherwise have no way to tell 50 dollars from
+                   50 coins. */
+                aria-label={effUnit === 'usd' ? 'Close value' : 'Close qty'}
               />
               {/* Only when a mark is available to convert with. */}
               {markOk && (
@@ -265,7 +303,7 @@ export function ClosePopover({
                     const n = Number(qtyStr);
                     if (Number.isFinite(n) && n > 0) {
                       const asQty = unit === 'usd' ? n / mark : n;
-                      setQtyStr(fieldValue(u === 'usd' ? asQty * mark : asQty));
+                      setQtyEdited(fieldValue(u === 'usd' ? asQty * mark : asQty));
                     }
                     setUnit(u);
                   }}
@@ -276,14 +314,14 @@ export function ClosePopover({
                 />
               )}
             </div>
-          )}
-          {partialInvalid && (
+          </div>
+          {qtyInvalid && qtyStr.trim() !== '' && (
             <span className="text-rose-400">
-              close size exceeds position (
-              {effUnit === 'usd' ? `${sig(posQty * mark)} USDT` : `${sig(posQty)} ${base}`})
+              close size exceeds {shared ? "this position's share" : 'position'} (
+              {effUnit === 'usd' ? `${sig(maxInUnit)} USDT` : `${sig(maxInUnit)} ${base}`})
             </span>
           )}
-          {mode === 'partial' && effUnit === 'usd' && !partialInvalid && qtyStr.trim() !== '' && (
+          {effUnit === 'usd' && !qtyInvalid && qtyStr.trim() !== '' && (
             // The converted figure is what actually goes to the venue, so it
             // is shown rather than left to be inferred from the preview.
             <span className="text-ink-500">
@@ -302,7 +340,8 @@ export function ClosePopover({
                     <span className="num text-ink-100">{p.qty ? sig(p.qty) : '—'}</span>
                   </span>
                   <span className="text-ink-400">
-                    marketable limit px <span className="num text-ink-100">{p.price ? sig(p.price) : '—'}</span>
+                    <span title="Reduce-only IOC limit at mid ± slippage — fills what it can at once, never rests, never adds">limit px</span>{' '}
+                    <span className="num text-ink-100">{p.price ? sig(p.price) : '—'}</span>
                   </span>
                   <span className="text-ink-400">
                     uPnL to realize{' '}
@@ -310,7 +349,7 @@ export function ClosePopover({
                   </span>
                   <span className="text-ink-400">est fee {feeText(p.fees)}</span>
                   <span className="cursor-help text-ink-500" title={CLOSE_INFO}>
-                    reduce-only IOC marketable limit ⓘ
+                    reduce-only ⓘ
                   </span>
                   <ViolationList violations={p.violations} warnings={p.warnings} />
                 </>
@@ -319,6 +358,24 @@ export function ClosePopover({
               )}
             </div>
           )}
+
+          {/* A plain input, deliberately NOT the Est./Max disclosure the Boros
+              close uses: the preview above already states the limit price this
+              band produced, so an "Est." summary would restate it. Kept below
+              the simulation so the size still leads the form. */}
+          <div className="flex items-center gap-2">
+            <label htmlFor={`close-slip-${position.symbol}`} className="w-24 text-ink-400">
+              Slippage %
+            </label>
+            <input
+              id={`close-slip-${position.symbol}`}
+              className={`input num h-8 flex-1 px-2 py-1 ${slipInvalid ? 'border-rose-500' : ''}`}
+              inputMode="decimal"
+              value={slipStr}
+              onChange={(e) => setSlipStr(e.target.value)}
+            />
+          </div>
+          {slipInvalid && <span className="text-rose-400">slippage must be in (0, 10]</span>}
 
           <ExecuteControl
             scope={`close-${position.symbol}`}
@@ -331,9 +388,9 @@ export function ClosePopover({
             hoverCard={false}
             previewOpts={{ debounceMs: 300, refetchInterval: 3_000 }}
             onExecuted={() => {
-              // Full acts on the WHOLE venue position, so it takes this card's
-              // claim with it whatever the card owns.
-              onClosed?.(mode === 'full' ? wholeQty : qtyNum);
+              // A qty-less close acts on the WHOLE venue position, so it takes
+              // this card's claim with it whatever the card owns.
+              onClosed?.(closesEverything ? wholeQty : qtyNum);
               onDismiss();
             }}
           />

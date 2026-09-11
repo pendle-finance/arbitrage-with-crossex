@@ -177,7 +177,7 @@ export interface TradeFlowApi {
   openRail: () => void;
   closeRail: () => void;
   pairPrefill: PairPrefill | null;
-  /** Prefill the pair ticket (strategy-box "Open the perp legs" cue). */
+  /** Prefill the pair ticket (the Positions "open both perp legs" cue). */
   prefillPair: (p: Omit<PairPrefill, 'nonce'>) => void;
   borosOpenPrefill: BorosOpenPrefill | null;
   /** Arm the Boros ticket to open this position's missing Boros legs. */

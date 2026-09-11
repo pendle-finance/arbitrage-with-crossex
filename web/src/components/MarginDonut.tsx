@@ -53,6 +53,10 @@ function utilStroke(pct: number): string {
 function utilText(pct: number): string {
   return pct < 0.5 ? 'text-emerald-400' : pct < 0.75 ? 'text-amber-400' : 'text-rose-400';
 }
+/** Same risk bands as `utilStroke`, as a bar fill for the header meters. */
+function utilBar(pct: number): string {
+  return pct < 0.5 ? 'bg-grass' : pct < 0.75 ? 'bg-gold' : 'bg-guava';
+}
 
 // ---------------------------------------------------------------------------
 // Donut primitive (self-contained SVG — no chart library)
@@ -206,35 +210,39 @@ export function MarginBreakdown({
   };
 
   if (variant === 'compact') {
+    // Flat 44x4 meters, not pies: in a 52px bar a donut is read as decoration,
+    // while a bar's fill length is legible at a glance and lines the two
+    // ratios up against each other. The full card below keeps the donuts.
+    const meter = (label: string, pct: number, barClass: string, textClass: string) => (
+      <span className="flex items-center gap-1.5">
+        <span className="text-[11px] text-ink-400">{label}</span>
+        <span className="block h-1 w-11 overflow-hidden rounded-full bg-ink-850">
+          <span
+            className={`block h-full ${barClass}`}
+            style={{ width: `${Math.max(0, Math.min(100, pct * 100))}%` }}
+          />
+        </span>
+        <span className={`num text-[11px] ${textClass}`}>
+          {p.hasFunds ? fmtPct(pct, 0) : '—'}
+        </span>
+      </span>
+    );
     return (
       <div
-        className="flex items-center gap-4"
+        role="img"
+        aria-label="Initial and maintenance margin"
+        className="flex items-center gap-2.5"
         title={`Initial margin ${fmtUsd(p.initial)} · Available ${fmtUsd(p.available)} · Maintenance ${fmtUsd(
           p.maintenance,
         )} — shown as a share of the ${fmtUsd(p.balance)} margin balance${liquidation ? ` · ${liquidation}` : ''}`}
       >
-        <div className="flex items-center gap-1.5">
-          <Donut size={34} thickness={5} segments={[usedSeg, freeSeg]} ariaLabel="Initial margin vs available" />
-          <div className="leading-tight">
-            <div className="text-[9px] font-semibold uppercase tracking-wider text-ink-400">IM</div>
-            <div className={`num text-xs font-medium ${p.hasFunds ? 'text-emerald-400' : 'text-ink-300'}`}>
-              {p.hasFunds ? fmtPct(p.imPct, 0) : '—'}
-            </div>
-          </div>
-        </div>
-        <div className="flex items-center gap-1.5">
-          <Donut
-            size={22}
-            thickness={4}
-            total={p.balance}
-            segments={[mmSeg]}
-            ariaLabel="Maintenance margin vs balance"
-          />
-          <div className="leading-tight">
-            <div className="text-[9px] font-semibold uppercase tracking-wider text-ink-400">MM</div>
-            <div className={`num text-xs font-medium ${mmText}`}>{p.hasFunds ? fmtPct(p.mmPct, 0) : '—'}</div>
-          </div>
-        </div>
+        {meter('IM', p.imPct, p.hasFunds ? 'bg-grass' : 'bg-ink-600', 'text-ink-100')}
+        {meter(
+          'MM',
+          p.mmPct,
+          p.hasFunds ? utilBar(p.mmPct) : 'bg-ink-600',
+          p.hasFunds ? 'text-ink-100' : 'text-ink-300',
+        )}
       </div>
     );
   }
@@ -243,7 +251,12 @@ export function MarginBreakdown({
     <div className="card flex flex-col items-center gap-6 p-5 sm:flex-row sm:gap-8">
       <Donut size={132} thickness={20} segments={[usedSeg, freeSeg]} ariaLabel="Margin usage">
         <div className="text-[10px] font-semibold uppercase tracking-wider text-ink-400">Balance</div>
-        <div className="num mt-0.5 text-base font-semibold text-ink-100">{fmtUsd(p.balance)}</div>
+        {/* Whole dollars at 13px: the ring's inner diameter is 92px and the
+            cents version at 16px ran ~100px wide, straight through the ring.
+            The exact figure stays one hover away. */}
+        <div className="num mt-0.5 text-[13px] font-semibold text-ink-100" title={fmtUsd(p.balance)}>
+          {fmtUsd(p.balance, 0)}
+        </div>
       </Donut>
 
       <div className="flex w-full flex-1 flex-col gap-2.5 text-sm">

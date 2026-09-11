@@ -3,6 +3,50 @@
 Only substantial releases are listed here — each one bumps `version.json` (which is what the
 in-app update check compares against).
 
+## 1.6.0 — 2026-09-10
+
+TLDR: The Positions tab is rebuilt around your coins. Every perp and Boros leg in an asset sits
+under one card, with a PnL that foots to the cent, a funding bundle per exchange, and a close
+button on every leg. The whole app now wears the Boros look.
+
+- **Positions are grouped by asset, not by strategy box.** One card per coin holds every perp and
+  Boros leg in it, across every venue and maturity. Nothing to enrol, nothing to group by hand,
+  and every number comes from the venues' own records, so two machines tracking the same address
+  read the same dollars. The old strategy-box tab, hand-grouping and entry-cost overrides are
+  gone.
+- **Each card leads with four numbers.** Total PnL with ROI, Current APR (the fixed rate the hedge
+  locks right now), Capital and Lifetime Cost, plus a PnL waterfall. Clicking Total PnL opens the
+  breakdown: funding settlements + Boros trade PnL − fees + price basis, and every table on the
+  card sums to it.
+- **A funding bundle per exchange.** Each exchange shows its perp with every Boros leg hedging it:
+  notional, the blended fixed APR you receive or pay, the floating rate now, settlements with
+  fees, and trade PnL. It expands to its legs. Matured and closed legs sit behind a toggle with
+  the rate they locked. A missing or short leg says so, with a button that arms the order ticket
+  with exactly what is needed.
+- **Close any leg from its row.** Every live leg has Edit and Close leg. A perp closes reduce-only
+  at mark; a Boros leg closes at market and pays only its own taker fee. The 4-leg pairs table
+  closes both perps or both Boros legs of a pair with one size box, sized per leg so a close never
+  leaves a naked remainder.
+- **A start date and exclusions per asset.** Set a "since" date and funding and fees are summed
+  from the venues' per-tick ledgers inside that window. Exclude a whole Boros leg or a slice of it
+  at a given rate. Excluded legs stay listed and can be restored.
+- **Hedge status says what to fix.** "fully covered ✓" or "N legs to fix", a check that the two
+  perps cancel, and a warning when Boros coverage is about to mature. Pairs are formed at one
+  maturity only, never blending terms.
+- **Settlement fees are part of the rate.** They are netted inside the settlement they belong to
+  and inside every locked rate, never listed as a cost, so tracking now agrees with the entry
+  quote on the Opportunities tab. Interest paid on a Gate borrow counts against Total PnL.
+- **The 2-step wizard and the Boros ticket are redesigned.** Form on the left, live quote on the
+  right, so nothing moves while the quote ticks. Wizard sizes are targets per leg, so a
+  half-filled leg only trades the unfilled part. The Boros ticket shows Market A and Market B with
+  one spread-direction control and slippage as "Est. X / Max: Y", measured from mid.
+- **The whole app wears the Boros look.** Boros palette, Inter with tabular numerals, a header
+  strip with Avail, Balance and margin meters, and the Boros mark on the favicon and share card.
+  Contrast is lifted to WCAG, dialogs trap focus, hover cards open from the keyboard.
+- **Fixes.** Matured Boros legs leave the hedge and capital. Dollar-sized assets no longer print a
+  coin ticker. A partial close shows the realised PnL of the closed part only. Nothing prints
+  "-$0.00". The USDT to USDC rebalance says "Nothing to move" when there is nothing to move.
+
 ## 1.5.1 — 2026-09-08
 
 TLDR: Gate lends you USDC or USDT when a wallet runs short. The app now shows the borrow and

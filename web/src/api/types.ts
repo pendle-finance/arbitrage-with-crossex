@@ -256,9 +256,8 @@ export interface PositionsResponse {
 }
 
 // ---------------------------------------------------------------------------
-// GET /api/strategy/:address — mirror of src/core/boros/returns.ts. All values
-// are computed server-side and arrive as plain NUMBERS (USD / APR fractions /
-// unix seconds); warnings are ready-to-render plain-language sentences.
+// A position leg as the close forms and the pairs table describe it. (The
+// /api/strategy mirror that once surrounded it is gone with the strategy tab.)
 // ---------------------------------------------------------------------------
 
 export interface StrategyLeg {
@@ -311,6 +310,17 @@ export interface StrategyLeg {
   netUsd: number;
   /** Unix seconds, null when unknown. */
   openedAt: number | null;
+  /** When the VENUE position opened — never re-stamped to a tranche's own
+   * open, so it can differ from `openedAt` on a DCA'd or previously-traded
+   * leg. */
+  venueOpenedAt?: number | null;
+  /** Boros only: the opening fills that built the VENUE position (oldest
+   * first) — token qty and the fixed APR each actually traded at. The blended
+   * entryApr is the notional-weighted average of exactly these rows. */
+  venueFills?: Array<{ timeSec: number; qty: number; apr: number }>;
+  /** Boros only: the subset of venueFills the evidence split allocated to
+   * THIS strategy's share. Absent when the leg was not split. */
+  fills?: Array<{ timeSec: number; qty: number; apr: number }>;
   /** Boros only: unix-seconds maturity. */
   maturity?: number;
   /** Perp only: the exact CrossEx symbol — join key to the live position. */
@@ -318,198 +328,6 @@ export interface StrategyLeg {
   /** The fraction of the venue position attributed to this strategy (1 = the
    * whole leg). Every shared number on the leg is already scaled by it. */
   share?: number;
-  warnings: string[];
-}
-
-/** One tickable piece of a strategy's PAID perp entry cost.
- *
- * INVARIANT: the parts sum to
- *   feesUsd.paid.perpTradingUsd + (feesUsd.paid.perpEntrySlippageUsd ?? 0)
- * — the card subtracts the un-ticked ones from exactly those two aggregates.
- *
- * The kinds are NOT symmetric, and the UI says so:
- *  - `slippage` is per EXECUTION — one per journal deal (a venue migration or a
- *    DCA top-up each get their own), or a single whole-book part when both legs
- *    were opened together.
- *  - `fees` is per LEG, covering that position's whole life: Gate reports a
- *    position's fee as one cumulative scalar and nothing records a trading fee
- *    more finely, so a per-execution split would be invented. A leg migrated
- *    away from has no live position and so never appears here. */
-export interface PerpEntryCostPart {
-  id: string;
-  kind: 'slippage' | 'fees';
-  /** Signed — a favorable crossing is negative. */
-  usd: number;
-  /** Null when the cost has no single point in time (a leg's lifetime fees). */
-  atSec: number | null;
-  /** Two venues for a slippage part, one for fees. */
-  venues: string[];
-  side: 'LONG' | 'SHORT' | null;
-  /** Matched qty — slippage parts only. */
-  qty: number | null;
-}
-
-/** The strategy's cost ledger split by paid (money already gone) vs future
- * (still ahead). expectedPnlToMaturityUsd = spread return − paid.totalUsd −
- * future.borosSettlementUsd; the perp exit parts are folded in client-side,
- * each via its own checkbox. */
-export interface StrategyFees {
-  paid: {
-    perpTradingUsd: number;
-    /** Entry crossing cost (long entry − short entry) × qty; signed, negative
-     * = favorable. Null unless exactly 1 long + 1 short perp leg. */
-    perpEntrySlippageUsd: number | null;
-    borosTradeUsd: number;
-    /** Estimated accrual — settlement PnL is already net of these. */
-    borosSettlementUsd: number;
-    /** Null slippage counts as 0 here (a warning says so). */
-    totalUsd: number;
-  };
-  future: {
-    /** Maker+hedge exit (maker one leg + taker the other, cheaper assignment).
-     * 0 = no perps; null = perps exist but the fee schedule is unknown. */
-    perpExitFeesUsd: number | null;
-    /** Assumed equal to paid.perpEntrySlippageUsd. */
-    perpExitSlippageUsd: number | null;
-    /** Already inside expectedPnlToMaturityUsd — display decomposition only. */
-    borosSettlementUsd: number;
-    /** Null propagates from the perp exit parts. */
-    totalUsd: number | null;
-  };
-}
-
-export type HedgeStatus = 'hedged' | 'partial' | 'unhedged';
-
-/** What counts as the capital a Boros position ties up. `balance` apportions
- * the margin group's posted balance (over-states it when the collateral
- * account is shared with other trading); `im` counts only the initial margin
- * the legs consume — the same basis the perp side always uses. */
-export type CapitalBasis = 'balance' | 'im';
-
-/** How a strategy's share of each shared leg was arrived at — see
- * src/core/boros/partition.ts. `measured` means an execution record (the local
- * deal journal or the venue's own fills) proved the split; `unconfirmed` means
- * it was paired on price/open-time proximity and is a proposal to edit. */
-export interface StrategyAttribution {
-  source:
-    | 'journal'
-    | 'fill-history'
-    | 'forced'
-    | 'proximity'
-    | 'user'
-    | 'merged'
-    | 'boros-only'
-    /** Live perp size no position claimed — a position holding that one leg. */
-    | 'unhedged';
-  confidence: 'measured' | 'unconfirmed';
-  pinned: boolean;
-  /**
-   * True when this card exists ONLY to report size no position claims —
-   * detached by the user, or left over by the solver.
-   *
-   * ⚠ A SEPARATE QUESTION FROM `source`, which answers how a grouping was
-   * arrived at. The two were conflated, and collided both ways: a solver
-   * tranche on a coin with no Boros reports `source: 'unhedged'` (the chip
-   * means "no rate is locked against this"), while the Boros remainder card
-   * reports `'boros-only'` or `'merged'`. So "is this the card holding the
-   * detached size" could not be read off `source` at all — Automatic deleted
-   * a neighbour's detachment from the first, and did nothing on the second.
-   */
-  unclaimed?: boolean;
-}
-
-/** What anchors the realized-APR clock: earliest Boros leg (default), perp
- * fallback when the Boros open time is unknown, or a user-chosen date. */
-export type ClockBasis = 'boros-open' | 'perp-open' | 'custom';
-
-export interface StrategyRollup {
-  /** Stable identity across re-solves: `BASE#VENUE-VENUE#openDay` when the
-   * book was split, `BASE@maturity` when it was not. Pins, excluded entry
-   * parts and React keys all hang off this. */
-  strategyId: string;
-  attribution: StrategyAttribution;
-  base: string;
-  /** Unix seconds. */
-  maturity: number;
-  legs: StrategyLeg[];
-  hedge: HedgeStatus;
-  /** Sizing gate for the headline numbers: all three ratios (matched/larger)
-   * must clear their thresholds — Boros legs > 0.9, perp legs > 0.9,
-   * Boros↔perp > 0.8 — before APR / capital / PnL-by-maturity are shown.
-   * A position still being entered would otherwise show confidently wrong
-   * numbers (a full-life spread projection on half the notional). */
-  hedgeChecks: {
-    borosMatchRatio: number;
-    perpMatchRatio: number;
-    borosVsPerpRatio: number;
-    fullyHedged: boolean;
-  };
-  capitalUsd: number;
-  /** capitalUsd's two components: perp initial margin on CrossEx + the Boros
-   * margin apportioned to this strategy. Sums to capitalUsd by construction. */
-  capitalSplit: { perpUsd: number; borosUsd: number };
-  /** Σ leg nets − entry slippage (pair-level). Perp price MtM is excluded. */
-  realizedPnlUsd: number;
-  /** Annualized on capital; null = too early to annualize / unknowable. */
-  realizedApr: number | null;
-  /** Locked fixed spread across the Boros legs (≈ rate_A − rate_B). */
-  spread: number;
-  lockedAprOnCapital: number;
-  spreadReturnUsd: number | null;
-  /** spreadReturnUsd − paid costs − future Boros settle fees. Perp exit parts
-   * NOT included — each checkbox folds its own in client-side. Null exactly
-   * when spreadReturnUsd is null. */
-  expectedPnlToMaturityUsd: number | null;
-  elapsedSeconds: number | null;
-  clockBasis: ClockBasis | null;
-  /** The clock's start instant — the date the spread-lock assumption runs from. */
-  clockStartSec: number | null;
-  secondsToMaturity: number;
-  notionalMismatchUsd: number;
-  feesUsd: StrategyFees;
-  /** The PAID perp entry cost, itemised so a user can drop the executions that
-   * belong to an earlier strategy. Sums to paid.perpTradingUsd +
-   * (paid.perpEntrySlippageUsd ?? 0). */
-  perpEntryCostParts: PerpEntryCostPart[];
-  warnings: string[];
-}
-
-export interface StrategyReturns {
-  address: string;
-  /** null when Gate isn't configured — Boros-only view. */
-  perpSource: 'connected-gate-account' | null;
-  strategies: StrategyRollup[];
-  /**
-   * Every Boros market the venue reports a live position on — counted from the
-   * account's own zones, so no downstream filtering can shorten it.
-   *
-   * ⚠ NOT the same as the markets appearing on `strategies`. A collateral zone
-   * that cannot be priced in USD is excluded from every card (with a warning)
-   * while its positions stay open, so a market can be live here and absent
-   * there. The client prunes membership rows against THIS, never against the
-   * cards: reading "no card holds it" as "the position closed" deleted pins
-   * the user cannot get back.
-   */
-  liveBorosMarketIds: number[];
-  totals: {
-    capitalUsd: number;
-    realizedPnlUsd: number;
-    realizedApr: number | null;
-    /** Σ non-null strategy projections. */
-    expectedPnlToMaturityUsd: number;
-    /** Σ paid fees only. */
-    feesTotalUsd: number;
-    /** Σ future.perpExitFeesUsd; null if any strategy's schedule is unknown. */
-    perpExitFeesTotalUsd: number | null;
-    /** Σ future.perpExitSlippageUsd; null if any strategy's is unknown. */
-    perpExitSlippageTotalUsd: number | null;
-    /** How many strategies could not measure their crossing cost — lets the
-     * strip say "unknown for 2 of 5" instead of blanking with no reason. */
-    slippageUnknownCount: number;
-    strategyCount: number;
-  };
-  /** Which reading of "capital" produced every capital-derived number here. */
-  capitalBasis: CapitalBasis;
   warnings: string[];
 }
 
@@ -534,7 +352,6 @@ export type ExitMode = 'close' | 'roll';
 /** Whether a live strategy is charged the perp entry cost it paid, or not —
  * a perp rolled into this maturity paid its fees and crossed its spread in a
  * previous life. Client-side display only; the server never sees it. */
-export type EntryCostMode = 'include' | 'omit';
 
 /** Why a market's exec APRs are what they are — drives the per-row badge. */
 export type BookStatus = 'ok' | 'insufficient-depth' | 'unavailable' | 'not-fetched';
@@ -733,7 +550,8 @@ export interface Trade {
   feeCoin: string;
   /** Fraction: 0.0002 = 2 bps. */
   feeRate: string;
-  matchRole: 'maker' | 'taker';
+  /** The venue sends these UPPERCASE ("TAKER"); normalise before comparing. */
+  matchRole: 'MAKER' | 'TAKER';
   rpnl: string;
   /** Epoch seconds OR milliseconds — use toDate(). */
   createTime: number | string;
@@ -1071,7 +889,8 @@ export interface BookTouch {
 
 /** 'short' RECEIVES fixed (hits bids); 'long' PAYS fixed (lifts asks). */
 export type BorosLegDirection = 'long' | 'short';
-export type BorosPairIntent = 'open' | 'close';
+/** `target` sizes to the end state (the guided wizard); see core PairIntent. */
+export type BorosPairIntent = 'open' | 'close' | 'target';
 
 export interface BorosPairMarketRow {
   marketId: number;
@@ -1113,6 +932,9 @@ export interface BorosLegSizing {
   opposing: boolean;
   flips: boolean;
   clampedToClose: boolean;
+  /** The side the ORDER takes — the sign of `deltaSize`, not the side held.
+   * A reducing target sells a leg whose `direction` is still 'long'. */
+  orderSide: BorosLegDirection;
 }
 
 export type BorosBookStatus = 'ok' | 'insufficient-depth' | 'unavailable' | 'not-fetched';
@@ -1124,13 +946,23 @@ export interface BorosSimulatedLeg {
   base: string;
   direction: BorosLegDirection;
   execApr: number | null;
+  /** The book's mid — the anchor for Est. and Max alike. */
+  midApr?: number;
+  /** Adverse distance of the fill from mid (positive = worse than mid). */
+  estSlippageApr?: number | null;
+  /** The rate bound the order carries: mid ± tolerance. */
   worstApr: number | null;
+  slippageExceeded?: boolean;
   estFillSize: number;
   shortfallSize: number;
   bookStatus: BorosBookStatus;
   marginRequired: number | null;
   slippageApr: number;
   sizing: BorosLegSizing;
+  /** This leg's taker fee at its traded size, collateral units (× the
+   * simulation's collateralPriceUsd for dollars). Optional only for an
+   * older server. */
+  takerFeeCost?: number;
 }
 
 export interface BorosPairSimulation {
@@ -1142,6 +974,11 @@ export interface BorosPairSimulation {
   worstSpreadApr: number | null;
   costToCrossSize: number;
   feeDragApr: number;
+  /** The spread at MID, same composition as estSpreadApr. Null if unknown. */
+  midSpreadApr?: number | null;
+  /** |midSpread − estSpread| — what crossing the books costs at this size.
+   * SLIPPAGE proper: distance from mid, not unused tolerance. */
+  slippageApr?: number | null;
   marginRequiredTotal: number | null;
   hedgedSize: number;
   unhedgedSize: number;
@@ -1189,11 +1026,17 @@ export type BorosLegFailureCode =
   | 'rate-deviation'
   | 'insufficient-margin'
   | 'no-gas'
+  /** Mirrors src/core/boros/orders.ts: the venue's minimum cash to enter the
+   * first market on a collateral token. Collateral, not gas. */
+  | 'min-cash'
   | 'rejected'
   | 'unknown';
 
 export interface TopUpGasResponse {
   sentUsd: number;
+  /** True when this answer came from the server's memo — the payment for
+   * this id had already landed and nothing new was sent. */
+  replayed?: boolean;
 }
 
 export interface RunUpdateResponse {
@@ -1252,6 +1095,9 @@ export interface BorosPairResult {
   unhedgedLeg: 'A' | 'B' | null;
   realisedSpreadApr: number | null;
   partial: boolean;
+  /** Nothing filled on any submitted leg. `partial` is true here too, so check
+   * this one FIRST — see src/core/boros/orders.ts. */
+  filledNothing: boolean;
 }
 
 /** POST /api/boros/pair/execute */
@@ -1301,4 +1147,148 @@ export interface BorosAgentInput {
   agentPrivateKey: string;
   /** Absolute unix seconds the approval was signed until. */
   expiry?: number;
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/asset-view/:address — mirror of src/server/routes/assetView.ts.
+// The ASSET-GROUPED tracking view: every leg grouped by underlying asset,
+// numbers are venue-reported lifetime sums since a caller-chosen start.
+// ---------------------------------------------------------------------------
+
+export interface AssetPerpOpen {
+  symbol: string;
+  venue: string;
+  side: 'LONG' | 'SHORT';
+  /** |qty| in the base coin. */
+  qty: number;
+  notionalUsd: number;
+  entryPrice: number;
+  markPrice: number;
+  leverage: number;
+  upnlUsd: number;
+  /** Venue cumulative funding for the CURRENT position (signed, + = received). */
+  fundingUsd: number;
+  /** Cumulative trading fees, positive cost. */
+  feesUsd: number;
+  imUsd: number;
+  openedAt: number | null;
+}
+
+/** Closed positions since the start date, aggregated per symbol. */
+export interface AssetPerpClosed {
+  symbol: string;
+  venue: string;
+  closedPnlUsd: number;
+  fundingUsd: number;
+  feesUsd: number;
+  count: number;
+  lastClosedAt: number | null;
+  /** Funding/fees zeroed here because the surviving open position's
+   * cumulatives already carry them (split-position dedupe, by position id —
+   * a reopen is a new id and keeps its own books). */
+  dedupedIntoOpen?: boolean;
+  rows: AssetPerpClosedRow[];
+}
+
+export interface AssetPerpClosedRow {
+  closedAt: number | null;
+  qty: number;
+  openPx: number;
+  closePx: number;
+  priceUsd: number;
+  fundingUsd: number;
+  feesUsd: number;
+  complete: boolean;
+  dedupedIntoOpen: boolean;
+}
+
+export interface AssetBorosOpen {
+  marketId: number;
+  venue: string;
+  maturity: number;
+  collateral: string;
+  /** LONG = pays fixed, receives floating (hedges a LONG perp's funding). */
+  side: 'LONG' | 'SHORT';
+  /** |notionalSize| in the collateral token. */
+  sizeToken: number;
+  notionalUsd: number;
+  entryApr: number;
+  markApr: number;
+  floatingApr: number;
+  /** Cumulative settlement of the CURRENT position (display only — totals
+   * come from borosHistory, which covers the same flows plus closed legs). */
+  settleUsd: number;
+  /** Mark value of the remaining rate stream (excluded from headline PnL). */
+  mtmUsd: number;
+  imUsd: number;
+  /** Settlement fee as an APR fraction, charged on notional to maturity.
+   * UNAVOIDABLE (it accrues however you enter or roll), so the locked rate
+   * is quoted NET of it. Optional only for an older server. */
+  settleFeeApr?: number;
+}
+
+/** Per-market history sums since the start date — open, closed and matured
+ * positions uniformly (settlements and fills are account-level events). */
+export interface AssetBorosHistory {
+  marketId: number;
+  venue: string;
+  maturity: number;
+  /** Σ settlements, net of per-settlement fees. */
+  settleUsd: number;
+  /** Fees inside that net, positive (display; never re-subtract). */
+  settleFeeUsd: number;
+  /** Σ realized trade PnL, net of trade fees. */
+  tradePnlUsd: number;
+  /** Fees inside that net, positive (display; never re-subtract). */
+  tradeFeeUsd: number;
+  /** Largest |position| at any settlement in the window — the leg's
+   * notional footprint (token units / USD at today's price). */
+  peakSizeToken?: number;
+  peakNotionalUsd?: number;
+  /** Earliest settlement/trade in the window — proxy for when the leg
+   * opened (hourly settlements ⇒ at most an hour late; clipped to the
+   * window start). 0/absent = no events. */
+  firstEventSec?: number;
+  /** The fixed rate the position locked (size-weighted over its opening
+   * fills, replayed from the fill feed) — survives maturity and closure.
+   * Null/absent when no opening fill is in the window or an older server. */
+  entryApr?: number | null;
+  side?: 'LONG' | 'SHORT' | null;
+}
+
+export interface AssetGroup {
+  base: string;
+  /** USD price of the underlying (0 = unknown). */
+  priceUsd: number;
+  /** Earliest activity instant in THIS asset's sums (APR clock floor). */
+  earliestSec: number | null;
+  perpOpen: AssetPerpOpen[];
+  perpClosed: AssetPerpClosed[];
+  borosOpen: AssetBorosOpen[];
+  borosHistory: AssetBorosHistory[];
+}
+
+export interface AssetViewResponse {
+  sinceSec: number;
+  nowSec: number;
+  assets: AssetGroup[];
+  /** Earliest activity instant in any sum — the APR clock floor. */
+  earliestSec: number | null;
+  coverage: {
+    /** Oldest settlement row read when the page cap was hit; 0 = complete. */
+    settlementsFromSec: number;
+    /** Oldest closed-position row read when capped; 0 = complete. */
+    perpClosedFromSec: number;
+    borosTxnsComplete: boolean;
+  };
+  /** Margin-borrow interest paid by the CrossEx account inside the window —
+   * account-level, so it is charged on the total and not on any card.
+   * Optional only for an older server: absent ⇒ not charged. */
+  interest?: {
+    paidUsd: number;
+    byCoin: Record<string, number>;
+    coversFromSec: number;
+    available: boolean;
+  };
+  warnings: string[];
 }

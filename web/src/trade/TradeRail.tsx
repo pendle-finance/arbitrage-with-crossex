@@ -26,6 +26,7 @@
  * before anything is sent.
  */
 import { useEffect, useState } from 'react';
+import { SegmentedToggle } from '../components/SegmentedToggle';
 import { UnderlineTabs } from '../components/UnderlineTabs';
 import { BorosPairTicket } from './BorosPairTicket';
 import { PairTicket } from './PairTicket';
@@ -65,7 +66,7 @@ export function TradeRail({
     if (venue === 'boros') setBorosSeen(true);
   }, [venue]);
 
-  // A strategy-box "Open the perp legs" prefill lands here: make sure the perp
+  // A Positions "open perp leg" prefill lands here: make sure the perp
   // pair ticket is visible (PairTicket itself consumes the field values). The
   // venue is set explicitly — a prefill that arrived while the Boros ticket was
   // open must not silently fill a form the user cannot see. No scrolling any
@@ -100,9 +101,10 @@ export function TradeRail({
     // The drawer supplies width, heading and scroll; this is just the tickets.
     <div className="flex flex-col gap-4" aria-label="Order ticket">
       <div>
-        {/* The venue and mode switches are NAVIGATION — which ticket am I on —
-            so they read as underline tabs, while the settings inside each
-            ticket keep their boxed toggles. */}
+        {/* The VENUE switch is navigation — which ticket am I on — so it
+            reads as tabs. The perp mode below is a setting on the ticket,
+            the same choice the Boros ticket makes with a boxed toggle, so
+            it is styled to match rather than looking like a third surface. */}
         <UnderlineTabs<Venue>
           ariaLabel="Venue"
           value={venue}
@@ -118,16 +120,18 @@ export function TradeRail({
 
         {venue === 'perp' && (
           <>
-            <UnderlineTabs<PerpMode>
-              ariaLabel="Perp ticket mode"
-              value={perpMode}
-              onChange={setPerpMode}
-              className="mb-3"
-              options={[
-                { value: 'pair', label: 'Pair' },
-                { value: 'single', label: 'Single' },
-              ]}
-            />
+            <div className="mb-3">
+              <SegmentedToggle<PerpMode>
+                ariaLabel="Perp ticket mode"
+                value={perpMode}
+                onChange={setPerpMode}
+                fill
+                options={[
+                  { value: 'pair', label: 'Pair' },
+                  { value: 'single', label: 'Single' },
+                ]}
+              />
+            </div>
             {perpMode === 'single' ? <SingleTicket /> : <PairTicket />}
           </>
         )}

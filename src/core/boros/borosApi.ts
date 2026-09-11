@@ -514,10 +514,11 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
   const failedLeg = (req: BorosMarketOrderRequest, message: string): BorosLegFill => ({
     ...emptyLeg(req),
     failure: {
-      // Entered: every order carries `enterMarket` itself, so Boros's "Top up
-      // at least ~$10 to trade" can only be about gas here, never about a
-      // market the account never registered with.
-      code: classifyLegFailure(new Error(message), true),
+      // This used to pass `marketEntered: true`, arguing that since every order
+      // carries `enterMarket`, "Top up ~$10" could only mean gas. Backwards:
+      // carrying `enterMarket` is what MAKES the venue run its minimum-cash
+      // check. The classifier reads the sentence itself now.
+      code: classifyLegFailure(new Error(message)),
       message,
     },
   });

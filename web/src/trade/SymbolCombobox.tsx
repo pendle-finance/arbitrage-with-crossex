@@ -86,7 +86,7 @@ function QuickPicks({ active, onPick }: { active: string | null; onPick: (coin: 
           key={coin}
           type="button"
           onClick={() => onPick(coin)}
-          className={`chip chip-sm font-mono transition-colors ${
+          className={`chip chip-sm transition-colors ${
             active === coin
               ? 'border-cyan-400/70 bg-cyan-500/15 text-cyan-300'
               : 'hover:border-ink-500 hover:text-ink-100'
@@ -127,7 +127,7 @@ export function VenuePickChip({
       disabled={disabled}
       title={disabled ? disabledTitle : rule.symbol}
       onClick={onPick}
-      className={`chip chip-sm font-mono transition-colors disabled:cursor-not-allowed disabled:opacity-35 ${
+      className={`chip chip-sm transition-colors disabled:cursor-not-allowed disabled:opacity-35 ${
         active ? activeClass : 'hover:border-ink-500 hover:text-ink-100'
       }`}
     >
@@ -239,7 +239,7 @@ export function SymbolCombobox({ value, onSelect, onClear }: SymbolComboboxProps
                         type="button"
                         title={s}
                         onClick={() => choose(s)}
-                        className="chip chip-sm font-mono transition-colors hover:border-ink-500 hover:text-ink-100"
+                        className="chip chip-sm transition-colors hover:border-ink-500 hover:text-ink-100"
                       >
                         {p.exchange} {p.base}
                         {p.quote !== 'USDT' && <span className="text-[9px] opacity-70">{p.quote}</span>}
@@ -256,7 +256,7 @@ export function SymbolCombobox({ value, onSelect, onClear }: SymbolComboboxProps
               groups={groups}
               renderGroup={(base, rules) => (
                 <div key={base} className="flex items-center gap-2 border-t border-ink-800 px-2.5 py-1.5 first:border-t-0">
-                  <span className="w-14 shrink-0 font-mono text-xs font-semibold text-ink-100">{base}</span>
+                  <span className="w-14 shrink-0 text-xs font-semibold text-ink-100">{base}</span>
                   <span className="flex flex-wrap gap-1">
                     {rules.map((r) => (
                       <VenuePickChip key={r.symbol} rule={r} onPick={() => choose(r.symbol)} />
@@ -299,7 +299,7 @@ export function CoinCombobox({ value, onSelect, onClear }: CoinComboboxProps) {
       {value ? (
         <>
           <div className="flex items-center justify-between gap-2 rounded-lg border border-ink-700 bg-ink-950 px-3 py-2">
-            <span className="font-mono text-sm font-semibold text-ink-100">{value}</span>
+            <span className="text-sm font-semibold text-ink-100">{value}</span>
             <button type="button" aria-label="change coin" className="btn-ghost-xs" onClick={onClear}>
               ✕
             </button>
@@ -330,10 +330,10 @@ export function CoinCombobox({ value, onSelect, onClear }: CoinComboboxProps) {
                   className="flex w-full items-center gap-2 border-t border-ink-800 px-2.5 py-1.5 text-left transition-colors first:border-t-0 hover:bg-ink-800/60"
                   onClick={() => pick(base)}
                 >
-                  <span className="w-14 shrink-0 font-mono text-xs font-semibold text-ink-100">{base}</span>
+                  <span className="w-14 shrink-0 text-xs font-semibold text-ink-100">{base}</span>
                   <span className="flex flex-wrap gap-1">
                     {rules.map((r) => (
-                      <span key={r.symbol} className="chip chip-sm font-mono">
+                      <span key={r.symbol} className="chip chip-sm">
                         {r.exchange}
                         {r.quote !== 'USDT' && <span className="text-[9px] opacity-70">{r.quote}</span>}
                       </span>

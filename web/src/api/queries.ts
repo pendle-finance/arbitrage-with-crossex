@@ -4,6 +4,7 @@ import {
   keepPreviousData,
   useInfiniteQuery,
   useMutation,
+  useQueries,
   useQuery,
   useQueryClient,
 } from '@tanstack/react-query';
@@ -11,6 +12,7 @@ import { useEffect, useRef } from 'react';
 import { del, fetchJson, postJson, putJson } from './client';
 import { uuid } from '../lib/uuid';
 import type {
+  AssetViewResponse,
   BorosCancelAndCloseResult,
   DealAlert,
   DealView,
@@ -22,21 +24,18 @@ import type {
   BorosPairExecuteResponse,
   BorosPairRequest,
   BorosPairSimulateResponse,
-  CapitalBasis,
   CredentialsInfo,
   CredentialsInput,
   DisclaimerStatus,
   CrossexAccount,
   EntryMode,
   ExitMode,
-  LeverageInfo,
   OpenOrder,
   OpportunitiesResult,
   PositionsResponse,
   RebalanceDirection,
   RebalanceJob,
   RebalanceView,
-  StrategyReturns,
   SymbolDetail,
   SymbolRule,
   TradesResponse,
@@ -59,8 +58,8 @@ export const qk = {
   symbols: (q: string) => ['symbols', q] as const,
   symbolsByBase: (base: string) => ['symbols', 'base', base] as const,
   symbolDetail: (symbol: string) => ['symbolDetail', symbol] as const,
-  strategy: (address: string, since: number | null, partition = '', capital = 'balance') =>
-    ['strategy', address, since ?? '', partition, capital] as const,
+  assetView: (address: string, since: number, legSince = '') =>
+    ['assetView', address, since, legSince] as const,
   borosAgent: ['boros', 'agent'] as const,
   borosPairContext: (address: string) => ['boros', 'pair', 'context', address] as const,
   opportunities: (
@@ -131,33 +130,58 @@ export function useTrades(limit = 100) {
 }
 
 /** 4-leg strategy returns for the tracked EVM address (Boros legs + perp overlay).
- * Settlements are hourly at the fastest — 30s keeps the card feeling live.
- * Deliberately NO keepPreviousData: after a Change to a different address the
- * old address's financial data must never render attributed to the new one
- * (same-key background polls keep data without it). */
-export function useStrategy(
-  address: string | null,
-  since: number | null = null,
-  /** base64url pins from partitionStore — the user's edits to the split. */
-  partition = '',
-  /** 'im' counts only the margin the Boros legs post as capital. */
-  capital: CapitalBasis = 'balance',
-) {
-  const params = new URLSearchParams();
-  if (since) params.set('since', String(since));
-  if (partition) params.set('partition', partition);
-  if (capital !== 'balance') params.set('capital', capital);
-  // NOT params.size: it is Baseline-2023 (Safari 17), and where it is
-  // undefined the ternary would drop the whole query string — silently
-  // disabling the clock override and every pin.
-  const query = params.toString();
-  const search = query ? `?${query}` : '';
+/** `?since=…&legSince=…` for the asset view; `legSince` is the encoded
+ * per-market "counted from" list (see assetPrefsStore.legSinceParam). */
+function assetViewSearch(since: number, legSince: string): string {
+  const p = new URLSearchParams();
+  if (since > 0) p.set('since', String(since));
+  if (legSince) p.set('legSince', legSince);
+  const s = p.toString();
+  return s ? `?${s}` : '';
+}
+
+/** Asset-grouped tracking view: venue-reported lifetime sums per asset since
+ * `since` (0 = all time). Same address-switch doctrine as useStrategy:
+ * deliberately NO keepPreviousData across keys. */
+export function useAssetView(address: string | null, since = 0, legSince = '') {
   return useQuery({
-    queryKey: qk.strategy(address ?? '', since, partition, capital),
-    queryFn: () => fetchJson<StrategyReturns>(`/strategy/${encodeURIComponent(address ?? '')}${search}`),
+    queryKey: qk.assetView(address ?? '', since, legSince),
+    queryFn: () =>
+      fetchJson<AssetViewResponse>(
+        `/asset-view/${encodeURIComponent(address ?? '')}${assetViewSearch(since, legSince)}`,
+      ),
     enabled: Boolean(address),
     refetchInterval: 30_000,
   });
+}
+
+/** One asset-view fetch per DISTINCT window — the start date is per asset,
+ * but the server windows a whole response at once, so assets sharing a date
+ * share a request (usually one or two in practice). Returns since → data. */
+export function useAssetViewWindows(address: string | null, sinces: readonly number[], legSince = '') {
+  const distinct = [...new Set(sinces)].sort((a, b) => a - b);
+  const results = useQueries({
+    queries: distinct.map((since) => ({
+      queryKey: qk.assetView(address ?? '', since, legSince),
+      queryFn: () =>
+        fetchJson<AssetViewResponse>(
+          `/asset-view/${encodeURIComponent(address ?? '')}${assetViewSearch(since, legSince)}`,
+        ),
+      enabled: Boolean(address),
+      refetchInterval: 30_000,
+    })),
+  });
+  const bySince = new Map<number, AssetViewResponse>();
+  // A window whose fetch FAILED (no data, not loading). Without this the
+  // caller cannot tell "still fetching" from "never coming".
+  const errorBySince = new Map<number, unknown>();
+  distinct.forEach((since, i) => {
+    const r = results[i];
+    const d = r?.data;
+    if (d) bySince.set(since, d);
+    else if (r?.isError) errorBySince.set(since, r.error);
+  });
+  return { bySince, errorBySince, results, distinct };
 }
 
 export interface OpportunitiesParams {
@@ -332,7 +356,7 @@ export function useDealView(id: string | null) {
   /**
    * ⚠ A finished deal must refresh the POSITION feeds.
    *
-   * The poll stops at DONE and nothing else asked the position or strategy
+   * The poll stops at DONE and nothing else asked the position or asset-view
    * queries to re-read — so an order could fill, the modal could say it had,
    * and the cards behind it would still show the pre-trade book until their
    * own 4s/30s interval came round (or the user reloaded). The deal is the
@@ -345,7 +369,7 @@ export function useDealView(id: string | null) {
     if (!id || mode !== 'DONE' || settled.current === id) return;
     settled.current = id;
     void qc.invalidateQueries({ queryKey: qk.positions });
-    void qc.invalidateQueries({ queryKey: ['strategy'] });
+    void qc.invalidateQueries({ queryKey: ['assetView'] });
     void qc.invalidateQueries({ queryKey: qk.account });
   }, [id, mode, qc]);
 
@@ -432,16 +456,6 @@ export function useAckAlert() {
   });
 }
 
-/** PUT /api/leverage/:symbol; positions carry leverage, so bust them. */
-export function useSetLeverage() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: ({ symbol, leverage }: { symbol: string; leverage: number }) =>
-      putJson<LeverageInfo>(`/leverage/${encodeURIComponent(symbol)}`, { leverage }),
-    onSuccess: () => void qc.invalidateQueries({ queryKey: qk.positions }),
-  });
-}
-
 /** PUT /api/credentials — the backend route ships later; callers must handle
  * 404/network errors gracefully ("credentials service not available yet"). */
 export function usePutCredentials() {
@@ -495,12 +509,12 @@ export function useExecuteBorosPair() {
   return useMutation({
     mutationFn: (req: BorosPairRequest) =>
       postJson<BorosPairExecuteResponse>('/boros/pair/execute', req),
-    // ⚠ Same contract as the close below: the CARD reads the STRATEGY feed,
-    // not the pair context. Without ['strategy'] a leg that had just been
+    // ⚠ Same contract as the close below: the CARD reads the ASSET VIEW,
+    // not the pair context. Without ['assetView'] a leg that had just been
     // opened did not appear until some other refetch happened to pull it in.
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['boros', 'pair', 'context'] });
-      void qc.invalidateQueries({ queryKey: ['strategy'] });
+      void qc.invalidateQueries({ queryKey: ['assetView'] });
       void qc.invalidateQueries({ queryKey: qk.positions });
     },
   });
@@ -508,10 +522,17 @@ export function useExecuteBorosPair() {
 
 export function useTopUpGas() {
   const qc = useQueryClient();
+  // One id per ATTEMPT-UNTIL-SUCCESS: a re-press after a lost response sends
+  // the same id, and the server answers from its memo instead of paying
+  // again. A success mints a fresh id for the next top-up.
+  const idRef = useRef<string | null>(null);
   return useMutation({
-    mutationFn: (amountUsd: number) =>
-      postJson<TopUpGasResponse>('/boros/pair/top-up-gas', { amountUsd }),
+    mutationFn: (amountUsd: number) => {
+      idRef.current ??= `gas-${uuid()}`.slice(0, 64);
+      return postJson<TopUpGasResponse>('/boros/pair/top-up-gas', { amountUsd, clientOrderId: idRef.current });
+    },
     onSuccess: () => {
+      idRef.current = null;
       void qc.invalidateQueries({ queryKey: ['boros', 'pair', 'simulate'] });
       void qc.invalidateQueries({ queryKey: qk.borosAgent });
     },
@@ -559,24 +580,30 @@ export function useBorosCancelAndClose() {
       marketId,
       size,
       slippageApr,
+      address,
     }: {
       marketId: number;
       /** Omitted = close whatever is open. The server clamps to it either way. */
       size?: number;
       /** APR fraction; omitted = the server's default bound. */
       slippageApr?: number;
+      /** The account whose leg this close was sized against. The server
+       * always closes the account it signs for; naming this one lets it
+       * REFUSE when they differ instead of closing the wrong book. */
+      address?: string;
     }) =>
       postJson<BorosCancelAndCloseResult>(`/boros/pair/market/${marketId}/cancel-and-close`, {
         clientOrderId: `cx-${uuid()}`.slice(0, 64),
         ...(size === undefined ? {} : { size }),
         ...(slippageApr === undefined ? {} : { slippageApr }),
+        ...(address === undefined ? {} : { address }),
       }),
-    // ⚠ The CARD reads the strategy feed, not the pair context. Invalidating
+    // ⚠ The CARD reads the asset view, not the pair context. Invalidating
     // only the context left a closed leg on screen at its old size until the
     // user reloaded — the close had happened, the page just never re-asked.
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['boros', 'pair', 'context'] });
-      void qc.invalidateQueries({ queryKey: ['strategy'] });
+      void qc.invalidateQueries({ queryKey: ['assetView'] });
       void qc.invalidateQueries({ queryKey: qk.positions });
     },
   });

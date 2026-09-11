@@ -10,7 +10,7 @@ import type {
 import { Chip } from '../components/Chip';
 import { SideChip } from '../components/VenueChip';
 import { SignedNumber } from '../components/SignedNumber';
-import { bps, fmtUsd, parseSymbol, sig } from '../lib/fmt';
+import { bps, fmtUsd, sig } from '../lib/fmt';
 
 /** Slippage severity coloring: green < 0.05%, amber < 0.3%, red above. */
 export function slippageClass(pct: number): string {
@@ -87,19 +87,6 @@ export function ActionKindChip({ input }: { input: ActionInput }) {
   );
 }
 
-/** Human description of an ActionInput (remediation buttons, review rows). */
-export function describeAction(a: ActionInput): string {
-  const { exchange, base } = parseSymbol(a.symbol);
-  if (a.kind === 'close-position') {
-    const qty = a.qty ? `${sig(a.qty)} ` : '';
-    const slip = a.slippagePct !== undefined ? ` (±${a.slippagePct}%)` : '';
-    return `close ${qty}${base} on ${exchange}${slip}`;
-  }
-  const qty = a.qty ? sig(a.qty) : a.notional ? `$${a.notional}` : '?';
-  const px = a.kind === 'open-limit' ? ` @ ${a.price}` : '';
-  return `${a.side} ${qty} ${base} on ${exchange}${px}`;
-}
-
 /**
  * Estimated margin the basket will consume: Σ estNotional / leverage over the OPEN
  * legs only — reduce-only (close) legs FREE margin, so counting them would make an
@@ -113,13 +100,23 @@ export function describeAction(a: ActionInput): string {
  * a comparison. An all-close basket returns 0, and `availableMargin` can be NEGATIVE, so
  * any gate must also require `required > 0` — otherwise 0 > -3870 blocks the close.
  */
+/**
+ * Mirrors of the server preflight's constants (src/core/preflight.ts:
+ * PREFLIGHT_MARGIN_BUFFER, TAKER_FEE_RESERVE). The gate below has to refuse
+ * exactly what the server refuses, or the hold completes and the POST 400s
+ * with a number ~7% above the one the ticket printed. Keep in step.
+ */
+export const PREFLIGHT_MARGIN_BUFFER = 1.05;
+export const TAKER_FEE_RESERVE = 0.001;
+
 export function estimateMargin(
   previews: PreviewResult[],
   positions: CrossexPosition[] | undefined,
   positionMode?: string,
-): { required: number; confident: boolean } {
+): { required: number; gateRequired: number; confident: boolean } {
   const canNet = isOneWayMode(positionMode);
   let required = 0;
+  let notionalSum = 0;
   // Positions unknown while netting is live: an unwind is indistinguishable from an open
   // and would false-block. `[]` is an answer, `undefined` is not. Not-confident fails open.
   let confident = !(canNet && positions === undefined);
@@ -133,8 +130,11 @@ export function estimateMargin(
     const known = p.leverage?.requested || (Number.isFinite(posLev) && posLev > 0 ? posLev : 0);
     if (!known) confident = false; // fell back to 1x worst case
     required += notional / (known || 1);
+    notionalSum += notional;
   }
-  return { required, confident };
+  // `required` is the honest IM figure the ticket prints; `gateRequired` is
+  // what the server preflight will actually demand (buffer + fee reserve).
+  return { required, gateRequired: required * PREFLIGHT_MARGIN_BUFFER + notionalSum * TAKER_FEE_RESERVE, confident };
 }
 
 /** One-way (netting) mode? In hedge mode a BUY against a short opens a SEPARATE long at
@@ -176,6 +176,7 @@ export function ClosePreviewPanel({
   error,
   labelFor,
   realizedFor,
+  hedgeAtMarket,
   note,
 }: {
   previews: PreviewResult[] | undefined;
@@ -187,6 +188,12 @@ export function ClosePreviewPanel({
   /** PnL this leg realises, when the caller can compute it. */
   realizedFor?: (p: PreviewResult, i: number) => number | null;
   note?: string;
+  /**
+   * A two-leg close: only the FIRST leg carries the limit band; every leg
+   * after it is sent as a plain market IOC (see decide.ts). Its row says
+   * so instead of printing a limit price the order will never carry.
+   */
+  hedgeAtMarket?: boolean;
 }) {
   if (!previews || previews.length === 0) {
     return (
@@ -207,10 +214,17 @@ export function ClosePreviewPanel({
               <span className="text-ink-200">{labelFor(p, i)}</span>
               <span className="num ml-auto text-ink-100">{p.qty ? sig(p.qty) : '—'}</span>
             </span>
-            <span className="flex justify-between text-ink-400">
-              <span>marketable limit px</span>
-              <span className="num text-ink-100">{p.price ? sig(p.price) : '—'}</span>
-            </span>
+            {hedgeAtMarket && i > 0 ? (
+              <span className="flex justify-between text-ink-400">
+                <span title="The hedge leg is sent as a plain market IOC, inside the venue's own price-limit band — no limit price of its own">order</span>
+                <span className="text-ink-100">market IOC</span>
+              </span>
+            ) : (
+              <span className="flex justify-between text-ink-400">
+                <span title="Reduce-only IOC limit at mid ± slippage — fills what it can at once, never rests, never adds">limit px</span>
+                <span className="num text-ink-100">{p.price ? sig(p.price) : '—'}</span>
+              </span>
+            )}
             {p.fillEstimate && (
               <span className="flex items-center justify-between text-ink-400">
                 <span>slippage</span>
@@ -230,7 +244,13 @@ export function ClosePreviewPanel({
           </div>
         );
       })}
-      {note && <span className="cursor-help text-ink-500" title={note}>reduce-only IOC marketable limit ⓘ</span>}
+      {note && hedgeAtMarket ? (
+        <span className="text-ink-500" title={note}>
+          reduce-only ⓘ <span className="text-ink-500">— first leg limit at mid ± slippage; hedge leg at market</span>
+        </span>
+      ) : (
+        note && <span className="cursor-help text-ink-500" title={note}>reduce-only ⓘ</span>
+      )}
       <ViolationList
         violations={previews.flatMap((p) => p.violations ?? [])}
         warnings={previews.flatMap((p) => p.warnings ?? [])}

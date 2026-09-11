@@ -6,6 +6,9 @@ interface Props {
    * for positives is added here — formatters keep their own '-' for negatives. */
   format?: (n: number) => string;
   className?: string;
+  /** Prefix positives with '+' (default). Headline figures pass false — the
+   * colour already carries the sign, and a '+' beside it says it twice. */
+  plus?: boolean;
 }
 
 /**
@@ -18,7 +21,7 @@ interface Props {
  * formatted form carries no non-zero digit is shown dim and unsigned, matching
  * what an exact zero would look like.
  */
-export function SignedNumber({ value, format = (n) => num(n), className }: Props) {
+export function SignedNumber({ value, format = (n) => num(n), className, plus = true }: Props) {
   const n = typeof value === 'number' ? value : Number(value);
   if (!Number.isFinite(n)) return <span className={`num text-ink-400 ${className ?? ''}`}>—</span>;
   const body = format(n);
@@ -29,7 +32,7 @@ export function SignedNumber({ value, format = (n) => num(n), className }: Props
   const shown = showsZero ? format(Math.abs(n)) : body;
   return (
     <span className={`num ${signedClass(showsZero ? 0 : n)} ${className ?? ''}`}>
-      {!showsZero && n > 0 ? '+' : ''}
+      {plus && !showsZero && n > 0 ? '+' : ''}
       {shown}
     </span>
   );

@@ -117,6 +117,16 @@ export function dealsRoutes(deps: AppDeps) {
       // an existing position would have had its liquidation price moved without
       // ever seeing it, on a deal that was never created.
       const applied: Array<{ contract: string; prev: number }> = [];
+      const restoreLeverage = async () => {
+        for (const { contract, prev } of applied.reverse()) {
+          if (!Number.isFinite(prev) || prev < 1) continue; // nothing trustworthy to restore
+          try {
+            await setLeverage(clients.crossEx, contract, prev);
+          } catch {
+            /* best-effort: the refusal below is the one the user must see */
+          }
+        }
+      };
       try {
         for (const { contract, lev } of levs) {
           let prev = 0;
@@ -130,19 +140,20 @@ export function dealsRoutes(deps: AppDeps) {
           applied.push({ contract, prev });
         }
       } catch (err) {
-        for (const { contract, prev } of applied.reverse()) {
-          if (!Number.isFinite(prev) || prev < 1) continue; // nothing trustworthy to restore
-          try {
-            await setLeverage(clients.crossEx, contract, prev);
-          } catch {
-            /* best-effort: the abort error below is the one the user must see */
-          }
-        }
+        await restoreLeverage();
         throw new CoreError(
           `aborted before creating the deal: leverage set failed — ${(err as Error).message}`,
         );
       }
 
+      // Again, with no await between here and the write: the checks above ran
+      // before several reads, and a rebalance can have started during them.
+      // A refusal here is the same outcome as a failed set — nothing created —
+      // so the leverage just applied is put back the same way.
+      if (rebalanceRunning()) {
+        await restoreLeverage();
+        return refuseForRebalance(reply, 'starting a deal');
+      }
       deps.engine!.store.createPair(row);
       deps.cache.bust('account');
       deps.engine!.wake?.(); // first placement happens now, not after the tick sleep

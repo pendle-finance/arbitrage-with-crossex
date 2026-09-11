@@ -21,7 +21,7 @@ import { dealsRoutes } from './routes/deals';
 import { disclaimerRoutes } from './routes/disclaimer';
 import { feesRoutes } from './routes/fees';
 import { healthRoutes } from './routes/health';
-import { leverageRoutes } from './routes/leverage';
+import { assetViewRoutes } from './routes/assetView';
 import { borosAgentRoutes } from './routes/borosAgent';
 import { borosPairRoutes } from './routes/borosPair';
 import { opportunitiesRoutes } from './routes/opportunities';
@@ -29,7 +29,6 @@ import { ordersRoutes } from './routes/orders';
 import { positionsRoutes } from './routes/positions';
 import { previewRoutes } from './routes/preview';
 import { rebalanceRoutes } from './routes/rebalance';
-import { strategyRoutes } from './routes/strategy';
 import { symbolsRoutes } from './routes/symbols';
 import { shareLinkRoutes } from './routes/shareLink';
 import { versionRoutes } from './routes/version';
@@ -227,12 +226,11 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     ordersRoutes,
     tradesRoutes,
     symbolsRoutes,
-    strategyRoutes,
     opportunitiesRoutes,
     borosPairRoutes,
+    assetViewRoutes,
     borosAgentRoutes,
     booksRoutes,
-    leverageRoutes,
     previewRoutes,
     dealsRoutes,
     rebalanceRoutes,

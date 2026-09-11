@@ -3,18 +3,20 @@
  *
  * Both halves of a position can be swapped independently, and every store that
  * remembers something ABOUT a position has to be keyed on both. These are the
- * cases that were silently wrong when they were not.
+ * cases that were silently wrong when they were not. Proven against
+ * assetPrefsStore, the one store that carries per-book annotations.
  */
 import { describe, expect, it } from 'vitest';
 import { bookIdOf } from './bookId';
-import { loadRows, saveRows, type MembershipRow } from './partitionStore';
+import { loadPrefs, savePrefs, type AssetViewPrefs } from './assets/assetPrefsStore';
 
 const WALLET_A = '0xA'.padEnd(42, '1');
 const WALLET_B = '0xB'.padEnd(42, '2');
 const GATE_A = 'abcd…7890';
 const GATE_B = 'wxyz…4321';
 
-const row: MembershipRow = { positionId: 'aaaa0001', leg: { kind: 'perp', symbol: 'GATE_FUTURE_ETH_USDT' } };
+const EMPTY: AssetViewPrefs = { sinceByAsset: {}, exclusions: {}, legSince: {} };
+const prefs: AssetViewPrefs = { sinceByAsset: {}, exclusions: { 'boros:42': 'all' }, legSince: {} };
 
 describe('bookIdOf', () => {
   it('separates the same wallet on two Gate accounts', () => {
@@ -36,21 +38,21 @@ describe('bookIdOf', () => {
   });
 });
 
-describe('membership rows follow the book, not the wallet', () => {
-  it('does not hand one Gate account the assertions made on another', () => {
-    // The row names GATE_FUTURE_ETH_USDT. Keyed by the wallet alone it applied
-    // to whatever the next Gate account held under that symbol.
-    saveRows(bookIdOf(WALLET_A, GATE_A), [row], 1_700_000_000);
-    expect(loadRows(bookIdOf(WALLET_A, GATE_B))).toEqual([]);
+describe('annotations follow the book, not the wallet', () => {
+  it('does not hand one Gate account the exclusions made on another', () => {
+    // The exclusion names GATE_FUTURE_ETH_USDT. Keyed by the wallet alone it
+    // applied to whatever the next Gate account held under that symbol.
+    savePrefs(bookIdOf(WALLET_A, GATE_A), prefs);
+    expect(loadPrefs(bookIdOf(WALLET_A, GATE_B))).toEqual(EMPTY);
     // …and switching back finds them again.
-    expect(loadRows(bookIdOf(WALLET_A, GATE_A))).toEqual([row]);
+    expect(loadPrefs(bookIdOf(WALLET_A, GATE_A))).toEqual(prefs);
   });
 
-  it('keeps two books' + ' assertions side by side', () => {
-    const other: MembershipRow = { leg: { kind: 'boros', marketId: 128 } };
-    saveRows(bookIdOf(WALLET_A, GATE_A), [row], 1_700_000_000);
-    saveRows(bookIdOf(WALLET_B, GATE_A), [other], 1_700_000_000);
-    expect(loadRows(bookIdOf(WALLET_A, GATE_A))).toEqual([row]);
-    expect(loadRows(bookIdOf(WALLET_B, GATE_A))).toEqual([other]);
+  it('keeps two books' + ' annotations side by side', () => {
+    const other: AssetViewPrefs = { sinceByAsset: { ETH: 1_700_000_000 }, exclusions: {}, legSince: {} };
+    savePrefs(bookIdOf(WALLET_A, GATE_A), prefs);
+    savePrefs(bookIdOf(WALLET_B, GATE_A), other);
+    expect(loadPrefs(bookIdOf(WALLET_A, GATE_A))).toEqual(prefs);
+    expect(loadPrefs(bookIdOf(WALLET_B, GATE_A))).toEqual(other);
   });
 });

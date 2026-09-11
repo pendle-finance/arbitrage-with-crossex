@@ -34,7 +34,7 @@ import {
   walkBorosBook,
   type BookStatus,
 } from './opportunities';
-import { SECONDS_IN_YEAR } from './returns';
+import { SECONDS_IN_YEAR, knownRate } from './venue';
 import {
   AUTO_TOP_UP_BELOW_USD,
   AUTO_TOP_UP_USD,
@@ -76,7 +76,22 @@ export type BorosLegDirection = 'long' | 'short';
 /** What the ticket is doing with the entered size. `close` forces both legs
  * reduce-only against what the account already holds; `open` runs the
  * three-state behaviour in `resolveLegSizing`. */
-export type PairIntent = 'open' | 'close';
+/**
+ * `open` ADDS the requested size (typing 100 twice opens 200 — what a trader
+ * means by "open 100 more"). `close` reduces and can never flip.
+ *
+ * `target` is the guided form: the size is the position you want to END UP
+ * with, so the delta is target − current. It exists because the wizard's
+ * step 1 can half-fill — one rate leg lands, the other does not — and the
+ * repair is then "same target, less to do", not "work out the remainder and
+ * type it in". A leg already at its target simply reports no change.
+ *
+ * An end state can also sit BELOW the position, so `target` is the one intent
+ * whose delta may oppose the side the leg holds. Everything that acts on the
+ * trade — the book side walked, the slippage sign, the rate bound and the
+ * order itself — reads `LegSizing.orderSide`, never `direction`.
+ */
+export type PairIntent = 'open' | 'close' | 'target';
 
 export type PairIneligibleCode =
   | 'different-collateral'
@@ -143,6 +158,25 @@ export interface LegSizing {
   flips: boolean;
   /** `close` intent clamped the size down to what is actually there to close. */
   clampedToClose: boolean;
+  /**
+   * The side the ORDER takes: the sign of `deltaSize`, NOT the side the
+   * account holds.
+   *
+   * They differ under `target` alone. A target BELOW a long position reduces
+   * it, so the delta is negative and the order is a SELL while `direction`
+   * stays 'long'. Sending the held side there BOUGHT more of the position
+   * that the §4 row and the acknowledgement had both promised to reduce
+   * (1,000 asked down to 500 became 1,500), and the reduce-only cap could not
+   * catch it because 500 is not greater than 1,000.
+   *
+   * Under `open` the delta IS the signed request, and under `close` it can
+   * only oppose the position, so both already agreed with `direction` and
+   * neither changes.
+   *
+   * A zero delta keeps the held side: that leg does not trade, and the rate
+   * bound shown beside it still reads from its own side.
+   */
+  orderSide: BorosLegDirection;
 }
 
 const sign = (n: number): number => (n > 0 ? 1 : n < 0 ? -1 : 0);
@@ -151,7 +185,8 @@ const sign = (n: number): number => (n > 0 ? 1 : n < 0 ? -1 : 0);
  * The §4 arithmetic for one leg. `close` reduces the existing position and can
  * never flip it (size clamps at |current|, and a flat market gets a zero
  * delta); `open` runs the three starting states — flat, same direction,
- * opposing — off the same signed sum.
+ * opposing — off the same signed sum; `target` aims at an end state instead
+ * of an increment (see PairIntent).
  */
 export function resolveLegSizing(
   currentSize: number,
@@ -165,7 +200,26 @@ export function resolveLegSizing(
 
   let delta = signedWant;
   let clampedToClose = false;
-  if (intent === 'close') {
+  if (intent === 'target') {
+    /**
+     * Aim at the end state: whatever is missing between here and the target.
+     * A leg already there gets a zero delta — the "no change" a half-filled
+     * step 1 should show — and one that overshot is trimmed back.
+     *
+     * ⚠ Never crosses zero. A target on the OPPOSITE side of what is held
+     * would otherwise close the position and re-open it the other way in a
+     * single order, which is a different trade from the one the wizard is
+     * quoting; the delta stops at flat and the operator can re-aim.
+     */
+    // ⚠ A ZERO request means "this leg does not trade", exactly as it does
+    // for `open` and `close` — not "aim at flat". `onlyLeg` sizes the other
+    // leg to 0 to keep it out of the order, and reading that 0 as a target
+    // would have sent a full close of the leg that already filled.
+    delta = want > 0 ? signedWant - cur : 0;
+    if (want > 0 && sign(signedWant) !== sign(cur) && cur !== 0) {
+      delta = -cur;
+    }
+  } else if (intent === 'close') {
     // Reduce-only: the delta must oppose the position and can never exceed it.
     if (cur === 0 || sign(signedWant) === sign(cur)) {
       delta = 0;
@@ -187,6 +241,7 @@ export function resolveLegSizing(
     // not re-open, so it needs no flip acknowledgement.
     flips: opposing && Math.abs(delta) > Math.abs(cur),
     clampedToClose,
+    orderSide: delta === 0 ? direction : delta > 0 ? 'long' : 'short',
   };
 }
 
@@ -229,12 +284,28 @@ export interface SimulatedLeg {
   marketName: string;
   venue: string;
   base: string;
+  /** The side the account HOLDS on this market — what the hedge is made of,
+   * and what the §4 row and the acknowledgement describe. The side the ORDER
+   * takes is `sizing.orderSide`, and a reducing `target` is the one case
+   * where they differ. */
   direction: BorosLegDirection;
   /** VWAP the entered size would achieve against the book as it stands. */
   execApr: number | null;
-  /** execApr moved a full tolerance the WRONG way for this leg's direction:
-   * lower on a receive-fixed leg, higher on a pay-fixed one. */
+  /** The book's mid, the anchor for every slippage figure on this leg. */
+  midApr: number;
+  /** How far the fill sits from mid the WRONG way for the ORDER
+   * (`sizing.orderSide`, positive = worse than mid): mid − exec on a sell,
+   * exec − mid on a buy. Null without a fill or a mid. */
+  estSlippageApr: number | null;
+  /** The rate bound this leg carries: mid moved a full tolerance the WRONG
+   * way for the ORDER (`sizing.orderSide`) — lower on a sell, higher on a
+   * buy. Mid, not exec: "Est." and "Max" measure from the same
+   * number, so an estimate inside the max is a fill inside the bound. */
   worstApr: number | null;
+  /** estSlippageApr is past the tolerance: the order would not fill inside
+   * its own bound, so it is refused before the wire (dapp-nitro's
+   * PRICE_IMPACT_EXCEEDS_SLIPPAGE), not after. */
+  slippageExceeded: boolean;
   /** Collateral units the book can actually supply; < requested on a thin book. */
   estFillSize: number;
   /** Requested − estFillSize. Non-zero means this leg alone will fall short. */
@@ -245,6 +316,12 @@ export interface SimulatedLeg {
   /** Effective tolerance after clamping. */
   slippageApr: number;
   sizing: LegSizing;
+  /** Taker fee THIS leg pays to cross the book at its traded size,
+   * collateral units: rate × |deltaSize| × years to maturity. Zero for a
+   * leg that does not trade. Per leg because a close asks "what does this
+   * order cost me", and the pair-level `costToCrossSize` is sized off the
+   * SMALLER leg. */
+  takerFeeCost: number;
 }
 
 export interface BorosPairSimulation {
@@ -264,6 +341,16 @@ export interface BorosPairSimulation {
   costToCrossSize: number;
   /** The fee drag already subtracted from both spread numbers, as an APR. */
   feeDragApr: number;
+  /** How the entered size was read (see PairIntent) — the gate needs it to
+   * tell "no size entered" from "already at the target". */
+  intent: PairIntent;
+  /** The spread at MID — the same composition as `estSpreadApr`, priced off
+   * each book's mid rather than the walk. Null when either mid is unknown. */
+  midSpreadApr: number | null;
+  /** |midSpread − estSpread|: what crossing the books costs at this size.
+   * This is SLIPPAGE proper — the distance from mid, not the unused part of
+   * the tolerance. */
+  slippageApr: number | null;
   /** Σ of the legs' margin; null if either leg's is unknown. Displayed per leg
    * as well — per-market floors differ, so one figure hides the asymmetry. */
   marginRequiredTotal: number | null;
@@ -298,7 +385,11 @@ function simulateLeg(
   const sizing = resolveLegSizing(leg.currentSize, requestedSize, leg.direction, intent);
   const size = Math.abs(sizing.deltaSize);
 
-  const levels = leg.book ? (leg.direction === 'long' ? leg.book.asks : leg.book.bids) : null;
+  // The side the ORDER takes, not the side the account holds: a reducing
+  // `target` sells a long leg, and walking the asks for it quoted the wrong
+  // half of the book before sending the wrong way down it.
+  const { orderSide } = sizing;
+  const levels = leg.book ? (orderSide === 'long' ? leg.book.asks : leg.book.bids) : null;
   // Collateral units in, collateral units out: the walk is linear in the price
   // it is handed, so passing 1 keeps every size in book units.
   const walk = levels && size > 0 ? walkBorosBook(levels, size, 1) : null;
@@ -313,7 +404,7 @@ function simulateLeg(
     bookStatus = size > 0 ? 'insufficient-depth' : 'not-fetched';
     if (size > 0) {
       reasons.push(
-        `${leg.market.name}: the ${leg.direction === 'long' ? 'ask' : 'bid'} side is empty — nothing to cross.`,
+        `${leg.market.name}: the ${orderSide === 'long' ? 'ask' : 'bid'} side is empty — nothing to cross.`,
       );
     }
   } else if (walk.insufficient) {
@@ -324,9 +415,17 @@ function simulateLeg(
   }
 
   const execApr = walk ? walk.execApr : null;
-  // A receive-fixed leg is hurt by a LOWER rate, a pay-fixed leg by a HIGHER one.
+  const mid = knownRate(leg.market.midApr) ? leg.market.midApr : null;
+  // A SELL is hurt by a LOWER rate, a BUY by a HIGHER one — which way is
+  // wrong is a property of the order, so it follows `orderSide` too.
+  const estSlippageApr =
+    execApr === null || mid === null ? null : orderSide === 'short' ? mid - execApr : execApr - mid;
+  // The bound is MID ± tolerance (a mid-less market falls back to the fill),
+  // so the "Est." beside it is measured from the same anchor as the "Max".
+  const anchor = mid ?? execApr;
   const worstApr =
-    execApr === null ? null : leg.direction === 'short' ? execApr - slippageApr : execApr + slippageApr;
+    anchor === null ? null : orderSide === 'short' ? anchor - slippageApr : anchor + slippageApr;
+  const slippageExceeded = size > 0 && estSlippageApr !== null && estSlippageApr > slippageApr + 1e-12;
 
   // Margin is charged at the rate the leg actually locks; the IM formula is
   // linear in notional, so collateral units in gives collateral units out.
@@ -350,13 +449,17 @@ function simulateLeg(
     base: leg.market.base,
     direction: leg.direction,
     execApr,
+    midApr: leg.market.midApr,
+    estSlippageApr,
     worstApr,
+    slippageExceeded,
     estFillSize: estFill,
     shortfallSize: Math.max(0, size - estFill),
     bookStatus,
     marginRequired,
     slippageApr,
     sizing,
+    takerFeeCost: 0, // priced by the caller, which knows the rate and the term
   };
 }
 
@@ -444,6 +547,24 @@ export function simulateBorosPair(input: SimulateBorosPairInput): BorosPairSimul
   const quotable = receiveLeg !== null && recv.execApr !== null && pay.execApr !== null;
 
   const estSpreadApr = quotable ? recv.execApr! - pay.execApr! - feeDragApr : null;
+  /**
+   * SLIPPAGE: how far the book moves the trade away from mid.
+   *
+   * Built exactly like the executed spread — receive leg minus pay leg, less
+   * the same fee drag — so the difference between the two is the walk down
+   * the book and nothing else. (Subtracting an un-netted mid would report
+   * the fees as slippage.) Per leg it is |exec − mid|; for the pair it is
+   * the distance between the mid spread and the spread this size actually
+   * gets, which is what the trader gives up by crossing.
+   */
+  // The mids come off the INPUTS (a SimulatedLeg carries no market), matched
+  // to whichever side receives.
+  const recvMid = (receiveLeg === 'A' ? legA : legB).market.midApr;
+  const payMid = (receiveLeg === 'A' ? legB : legA).market.midApr;
+  const midSpreadApr =
+    quotable && knownRate(recvMid) && knownRate(payMid) ? recvMid - payMid - feeDragApr : null;
+  const slippageApr =
+    midSpreadApr !== null && estSpreadApr !== null ? Math.abs(midSpreadApr - estSpreadApr) : null;
   // Both tolerances spent at once. Equivalently estSpread − (slipA + slipB):
   // the legs cross in opposite directions so the two slips compound.
   const worstSpreadApr = quotable ? recv.worstApr! - pay.worstApr! - feeDragApr : null;
@@ -456,8 +577,14 @@ export function simulateBorosPair(input: SimulateBorosPairInput): BorosPairSimul
   // about. With one leg live, that leg IS the traded size.
   const sizeA = Math.abs(a.sizing.deltaSize);
   const sizeB = Math.abs(b.sizing.deltaSize);
-  const tradedSize = sizeA === 0 || sizeB === 0 ? Math.max(sizeA, sizeB) : Math.min(sizeA, sizeB);
-  const costToCrossSize = takerDragApr * tradedSize * years;
+  a.takerFeeCost = takerRate(legA.market) * sizeA * years;
+  b.takerFeeCost = takerRate(legB.market) * sizeB * years;
+  // The pair total is the SUM of the two legs' own fees — never the drag rate
+  // times min(sizeA, sizeB). That understated every asymmetric trade: a
+  // `target` repair with A +100 and B −40 charged 140 units of fee and
+  // showed 40 units' worth. (The min() also read 0 on a single-leg ticket,
+  // which the per-leg figures never did.)
+  const costToCrossSize = a.takerFeeCost + b.takerFeeCost;
 
   /**
    * Σ of the legs that actually trade.
@@ -500,8 +627,11 @@ export function simulateBorosPair(input: SimulateBorosPairInput): BorosPairSimul
     receiveLeg,
     estSpreadApr,
     worstSpreadApr,
+    midSpreadApr,
+    slippageApr,
     costToCrossSize,
     feeDragApr,
+    intent,
     marginRequiredTotal,
     hedgedSize,
     unhedgedSize,
@@ -550,6 +680,7 @@ export type BlockerCode =
   | 'legs-do-not-offset'
   | 'book-unavailable'
   | 'no-depth'
+  | 'slippage-exceeds-max'
   | 'isolated-must-switch'
   | 'isolated-short-margin'
   | 'cross-short-margin'
@@ -633,7 +764,12 @@ export function evaluatePairGate(input: EvaluatePairInput): PairGate {
     const flat = clamped.filter((l) => l.sim.sizing.currentSize === 0);
     const adding = clamped.filter((l) => l.sim.sizing.currentSize !== 0);
     let message = 'Enter a size to trade.';
-    if (adding.length) {
+    // `target` with a position on: every leg is already where the target
+    // puts it — the guided wizard's "nothing left to do", not a missing size.
+    const atTarget = sim.intent === 'target' && legs.some((l) => l.sim.sizing.currentSize !== 0);
+    if (atTarget) {
+      message = 'Both legs are already at this target — there is nothing to send.';
+    } else if (adding.length) {
       message =
         `Close is reduce-only, and ${adding.map((l) => l.sim.marketName).join(' and ')} ` +
         `${adding.length > 1 ? 'are' : 'is'} pointed the same way as the position you hold — ` +
@@ -688,6 +824,19 @@ export function evaluatePairGate(input: EvaluatePairInput): PairGate {
         leg: key,
         marketId: leg.marketId,
         message: `${leg.marketName}: nothing resting on the side this leg would cross.`,
+      });
+    } else if (leg.slippageExceeded) {
+      // The fill already sits past the bound the order would carry, so the
+      // venue would reject or fill nothing. Said here, while the size is
+      // still being typed, rather than as a failed order.
+      const pct = (n: number) => `${(n * 100).toFixed(2)}%`;
+      blockers.push({
+        code: 'slippage-exceeds-max',
+        leg: key,
+        marketId: leg.marketId,
+        message:
+          `${leg.marketName}: this size fills ${pct(leg.estSlippageApr ?? 0)} from mid, past the ` +
+          `${pct(leg.slippageApr)} max — raise the tolerance or reduce the size.`,
       });
     }
     if (leg.marginRequired === null && leg.execApr !== null) {
@@ -754,7 +903,14 @@ export function evaluatePairGate(input: EvaluatePairInput): PairGate {
       blockers.push({
         code: 'cross-short-margin',
         shortfall: crossRequired - available,
-        message: `Cross margin is short ${fmtSize(crossRequired - available)} ${sim.collateral} for both legs together.`,
+        // "both legs" is a lie on a single-leg ticket: it names a second leg the
+        // user never asked for, in the one message that is telling them why
+        // their order cannot go out.
+        message: `Cross margin is short ${fmtSize(crossRequired - available)} ${sim.collateral} to open ${
+          Math.abs(sim.legA.sizing.deltaSize) > 0 && Math.abs(sim.legB.sizing.deltaSize) > 0
+            ? 'both legs'
+            : 'this leg'
+        }.`,
       });
     }
   }

@@ -296,12 +296,15 @@ describe('RebalanceSection', () => {
     expect(screen.getByText('Borrowing 1,200.00 USDC')).toHaveClass('border-amber-500/30');
     expectFacts({
       'Lent by Gate': '1,200.00 USDC',
-      'Initial margin held': '$240.00',
-      'Maintenance margin held': '$120.00',
       Interest: '$0.31 / day',
-      'Spare USDC on Hyperliquid': '0.00 USDC',
       'Interest paid · all time': '$4.20',
     });
+    // The margin Gate holds is priced per unit in the explanation line, and
+    // the spare is stated as `free …` on the field that can spend it — none
+    // of the three earns a standing fact of its own.
+    expect(fact('Initial margin held')).toBeNull();
+    expect(fact('Maintenance margin held')).toBeNull();
+    expect(fact('Spare USDC on Hyperliquid')).toBeNull();
     expect(fact('Liquidation')).toBeNull();
   });
 
@@ -331,7 +334,7 @@ describe('RebalanceSection', () => {
     expect(screen.getByText('Borrowing 1,200.99 USDC')).toBeInTheDocument();
   });
 
-  it('says in words that margin is held and no interest runs yet, and keeps every fact at zero', async () => {
+  it('says in words that no interest runs yet under the threshold, and keeps every fact at zero', async () => {
     serve(view({ buckets: [usdc({ borrow: 8.5, imHeldUsd: 1.7, mmHeldUsd: 0.85, interestPaidUsd: 0, interestPerDayUsd: 0 }), usdt] }));
     renderWithClient(<RebalanceSection holdMs={50} />);
 
@@ -339,14 +342,12 @@ describe('RebalanceSection', () => {
     expect(screen.getByText('Borrowing 8.50 USDC')).toBeInTheDocument();
     expectFacts({
       'Lent by Gate': '8.50 USDC',
-      'Initial margin held': '$1.70',
-      'Maintenance margin held': '$0.85',
       Interest: 'none under 10,000 USDC',
       'Interest paid · all time': '$0.00',
     });
   });
 
-  it('shows the same six facts without a borrow, zeros included, so the row never changes shape', async () => {
+  it('shows the same three facts without a borrow, zeros included, so the row never changes shape', async () => {
     serve(
       view({
         buckets: [usdc({ cash: 5, upnl: 0, equity: 5, borrow: 0, imHeldUsd: 0, mmHeldUsd: 0, interestPaidUsd: 2.5, interestPerDayUsd: 0 }), usdt],
@@ -359,10 +360,7 @@ describe('RebalanceSection', () => {
     expect(screen.queryByText(/^Borrowing /)).toBeNull();
     expectFacts({
       'Lent by Gate': '0.00',
-      'Initial margin held': '$0.00',
-      'Maintenance margin held': '$0.00',
       Interest: '$0.00 / day',
-      'Spare USDC on Hyperliquid': '5.00 USDC',
       'Interest paid · all time': '$2.50',
     });
   });
@@ -442,7 +440,7 @@ describe('RebalanceSection', () => {
     await waitFor(() => expect(input).toHaveValue('0.00'));
     expect(screen.getByText(PAY_USDC_TEXT)).toBeInTheDocument();
     expect(fact('Sends')).toBeNull();
-    expect(screen.getByText('Nothing to pay back. There is no USDC borrow on Hyperliquid.')).toBeInTheDocument();
+    expect(screen.getByText('Nothing to move. There is no USDC borrow on Hyperliquid.')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^Hold to/ })).toBeNull();
 
     await pickToUsdt();
@@ -593,7 +591,7 @@ describe('RebalanceSection', () => {
 
     await section();
     expect(screen.queryByText(/^Borrowing /)).toBeNull();
-    expect(screen.getByText('Nothing to pay back. The borrow is under 1 USDC.')).toBeInTheDocument();
+    expect(screen.getByText('Nothing to move. The USDC borrow is under 1 USDC.')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^Hold to/ })).toBeNull();
     expect(screen.queryByText(/^via /)).toBeNull();
     expect(screen.getByRole('radiogroup', { name: 'Direction' })).toBeInTheDocument();
@@ -751,7 +749,7 @@ describe('RebalanceSection', () => {
     await section();
     expect(screen.queryByText(/^Borrowing /)).toBeNull();
     expect(screen.getByRole('radiogroup', { name: 'Direction' })).toBeInTheDocument();
-    expect(screen.getByText('Nothing to pay back. There is no USDC borrow on Hyperliquid.')).toBeInTheDocument();
+    expect(screen.getByText('Nothing to move. There is no USDC borrow on Hyperliquid.')).toBeInTheDocument();
   });
 
   it('renders with borrow 0 and spare USDC, without the pill', async () => {
@@ -761,7 +759,9 @@ describe('RebalanceSection', () => {
     await section();
     expect(screen.queryByText(/^Borrowing /)).toBeNull();
     expect(screen.getByRole('radiogroup', { name: 'Direction' })).toBeInTheDocument();
-    expectFacts({ 'Lent by Gate': '0.00', 'Spare USDC on Hyperliquid': '400.00 USDC' });
+    expectFacts({ 'Lent by Gate': '0.00' });
+    // The spare is not a fact any more — it is the ceiling on the field that spends it.
+    expect(screen.getByRole('textbox', { name: 'Amount (USDC) · free 400.00' })).toBeInTheDocument();
   });
 
   it('renders with borrow 0 and nothing to move while a job runs', async () => {
@@ -790,7 +790,9 @@ describe('RebalanceSection', () => {
     await section();
     expect(screen.queryByRole('radiogroup')).toBeNull();
     expect(screen.queryByRole('textbox')).toBeNull();
-    expect(screen.queryByRole('button')).toBeNull();
+    // No form CONTROLS while a job runs. The "About rebalance" info trigger
+    // is a keyboard-reachable button too (aria-expanded), and stays.
+    expect(screen.queryAllByRole('button').filter((b) => !b.hasAttribute('aria-expanded'))).toHaveLength(0);
 
     const rows = screen.getAllByRole('listitem');
     expect(rows).toHaveLength(3);
@@ -958,10 +960,7 @@ describe('RebalanceSection — a USDT borrow', () => {
     expect(screen.getByText(PAY_USDT_TEXT)).toBeInTheDocument();
     expectFacts({
       'Lent by Gate': '300.00 USDT',
-      'Initial margin held': '$60.00',
-      'Maintenance margin held': '$30.00',
       Interest: 'none under 10,000 USDT',
-      'Spare USDC on Hyperliquid': '500.00 USDC',
       'Interest paid · all time': '$1.25',
     });
   });
@@ -1006,7 +1005,7 @@ describe('RebalanceSection — a USDT borrow', () => {
 
     await screen.findByRole('button', { name: 'Hold to move 300.00 USDC → USDT' });
     fireEvent.click(screen.getByRole('radio', { name: 'USDT → Hyperliquid USDC' }));
-    expect(await screen.findByText('Nothing to pay back. There is no USDC borrow on Hyperliquid.')).toBeInTheDocument();
+    expect(await screen.findByText('Nothing to move. There is no USDC borrow on Hyperliquid.')).toBeInTheDocument();
     expect(screen.getByText(PAY_USDC_TEXT)).toBeInTheDocument();
   });
 });

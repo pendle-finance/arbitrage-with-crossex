@@ -98,6 +98,20 @@ export function HoverCard({
   return (
     <span
       ref={anchor}
+      /* Reachable by keyboard: a button role, a tab stop, and Enter/Space
+         toggling it — the pointer-only trigger left the card unopenable
+         without a mouse, and its own Escape handler unreachable. */
+      role="button"
+      tabIndex={0}
+      aria-expanded={box !== null}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          e.stopPropagation();
+          if (box) setBox(null);
+          else open();
+        }
+      }}
       onMouseEnter={open}
       onMouseLeave={() => close(true)}
       /* These triggers sit inside larger buttons (the card hero toggles its
@@ -123,7 +137,7 @@ export function HoverCard({
             style={{ left: box.left, top: box.top, bottom: box.bottom, width: widthPx }}
             onMouseEnter={stopClosing}
             onMouseLeave={() => close(false)}
-            className="fixed z-50 rounded-lg border border-ink-700 bg-ink-950 px-3 py-2.5 text-ink-200 shadow-xl shadow-black/60"
+            className="fixed z-50 rounded border border-ink-600 bg-ink-950 px-3 py-2.5 text-ink-100"
           >
             {children}
           </div>,

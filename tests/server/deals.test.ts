@@ -259,6 +259,39 @@ describe('POST /api/deals', () => {
     expect(w.store.listPairs()).toHaveLength(0);
   });
 
+  it('a rebalance that starts DURING the leverage phase refuses the deal AND puts the leverage back', async () => {
+    const jobs = new JobFile(mkdtempSync(path.join(tmpdir(), 'rebalance-')));
+    const store = new Store(':memory:');
+    app = makeTestApp({ engine: { store, venue: new FakeVenue(), clock: new VirtualClock() }, rebalance: { jobs } });
+    await app.ready();
+    mockGateGet('/rule/symbols', { body: simRules() });
+    mockGateGet('/accounts', { fixture: 'account.json' });
+    mockGateGet('/rule/risk_limits', { body: [{ symbol: A_CONTRACT, tiers: [{ leverage_max: '50' }] }] });
+    gate().get(/positions\/leverage/).reply(200, { [A_CONTRACT]: '10' }); // previous value
+    const levSets: unknown[] = [];
+    gate()
+      .post('/api/v4/crossex/positions/leverage')
+      .times(2)
+      .reply(function (_uri, body) {
+        levSets.push(body);
+        // The rebalance starts while the first set is in flight.
+        if (levSets.length === 1) jobs.write(newJob('toUsdc', 'loop', 300, Date.now()));
+        return [200, {}];
+      });
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/deals',
+      headers: HOST,
+      payload: makerPayload({ leverage: { a: 50 } }),
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error.message).toMatch(/rebalance is still running/);
+    expect(store.listPairs()).toHaveLength(0);
+    // Applied 50x, then restored 10x — never left at 50x on a deal that was not created.
+    expect(levSets).toHaveLength(2);
+    expect(String((levSets[1] as { leverage?: unknown }).leverage)).toBe('10');
+  });
+
   it('applies the leverage phase BEFORE creating; a leverage failure aborts with nothing created', async () => {
     const w = mkApp();
     app = w.app;

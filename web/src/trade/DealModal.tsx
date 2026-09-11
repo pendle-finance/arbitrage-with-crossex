@@ -158,6 +158,11 @@ export function DealModal({ dealId, onClose }: { dealId: string; onClose: () => 
   const dealAlerts = (alerts.data ?? []).filter((a) => a.pairId === dealId);
   const report: DealReport | null = pair?.reportJson ? (JSON.parse(pair.reportJson) as DealReport) : null;
   const slip = pair ? dealSlippage(pair, report) : null;
+  /** What a leg actually was, off the orders rather than the deal's mode — so a
+   * maker converted to a taker still reads as it executed. No rows = never
+   * rested. */
+  const legRole = (leg: 'A' | 'B'): 'maker' | 'taker' =>
+    orders.some((o) => o.leg === leg && o.kind === 'maker') ? 'maker' : 'taker';
   const anyCmdPending = convert.isPending || repeg.isPending || stop.isPending || resume.isPending;
   const cmdError = (convert.error ?? repeg.error ?? stop.error ?? resume.error) as
     | { message: string; hint?: string }
@@ -396,7 +401,10 @@ export function DealModal({ dealId, onClose }: { dealId: string; onClose: () => 
 
             {/* Terminal report */}
             {report && (
-              <div className="rounded-lg border border-ink-800 bg-ink-950/60 px-3 py-2 text-[11px] text-ink-300">
+              <div
+                data-testid="deal-report"
+                className="rounded-lg border border-ink-800 bg-ink-950/60 px-3 py-2 text-[11px] text-ink-300"
+              >
                 <div className="mb-1 text-[10px] uppercase tracking-wider text-ink-500">Report</div>
                 <div className="flex flex-wrap gap-x-4 gap-y-0.5">
                   <span>
@@ -416,15 +424,20 @@ export function DealModal({ dealId, onClose }: { dealId: string; onClose: () => 
                 </div>
                 {slip && pair.b && (
                   <div className="mt-1.5 flex flex-col gap-0.5 border-t border-ink-800 pt-1.5">
+                    {/* Hardcoded maker/taker here described a market-order pair
+                        as "maker — the filled resting leg", directly under a
+                        table whose own kind column said taker on both rows. The
+                        slippage below is a difference of averages and was never
+                        affected. */}
                     <LegFillLine
-                      role="maker"
+                      role={legRole('A')}
                       side={pair.a.side}
                       contract={pair.a.contract}
                       price={slip.limitAvg}
-                      note="limit — the filled resting leg"
+                      note={legRole('A') === 'maker' ? 'limit — the filled resting leg' : 'market order'}
                     />
                     <LegFillLine
-                      role="taker"
+                      role={legRole('B')}
                       side={pair.b.side}
                       contract={pair.b.contract}
                       price={slip.takerAvg}

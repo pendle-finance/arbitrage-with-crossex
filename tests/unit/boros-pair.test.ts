@@ -23,7 +23,7 @@ import {
   type EvaluatePairInput,
   type SimulateBorosPairInput,
 } from '../../src/core/boros/pair';
-import { SECONDS_IN_YEAR } from '../../src/core/boros/returns';
+import { SECONDS_IN_YEAR } from '../../src/core/boros/venue';
 import { imInputs } from '../helpers/boros-fixtures';
 
 const NOW = 1_752_000_000;
@@ -187,7 +187,82 @@ describe('resolveLegSizing', () => {
 
   it('close intent on a flat or same-direction market does nothing', () => {
     expect(resolveLegSizing(0, 100, 'short', 'close').deltaSize).toBe(0);
+  });
+
+  it("'target' aims at an END STATE: the delta is whatever is missing", () => {
+    // Flat → the whole target.
+    expect(resolveLegSizing(0, 100, 'long', 'target').deltaSize).toBe(100);
+    // Half-filled → only the remainder. This is the wizard's half-fill case:
+    // same target, less to do.
+    expect(resolveLegSizing(40, 100, 'long', 'target').deltaSize).toBe(60);
+    // Already there → NO CHANGE, which is what the ticket should show once a
+    // leg has landed.
+    expect(resolveLegSizing(100, 100, 'long', 'target').deltaSize).toBe(0);
+    // Overshot → trimmed back to the target.
+    expect(resolveLegSizing(140, 100, 'long', 'target').deltaSize).toBe(-40);
+    // Short side reads the same way, signs mirrored.
+    expect(resolveLegSizing(-40, 100, 'short', 'target').deltaSize).toBe(-60);
+    expect(resolveLegSizing(-100, 100, 'short', 'target')).toMatchObject({
+      deltaSize: 0,
+      resultingSize: -100,
+    });
+  });
+
+  it("'target' never crosses zero — it stops at flat rather than flipping", () => {
+    // Holding +100, aiming at 100 SHORT: closing and re-opening the other way
+    // in one order is a different trade from the one being quoted.
+    const s = resolveLegSizing(100, 100, 'short', 'target');
+    expect(s.deltaSize).toBe(-100);
+    expect(s.resultingSize).toBe(0);
+    expect(s.flips).toBe(false);
     expect(resolveLegSizing(40, 100, 'long', 'close').deltaSize).toBe(0);
+  });
+
+  it('orderSide is the sign of the DELTA, not the side held', () => {
+    // The two intents that can only ever add to, or only ever reduce, a
+    // position already agree with the side held — nothing changes for them.
+    expect(resolveLegSizing(0, 100, 'long', 'open').orderSide).toBe('long');
+    expect(resolveLegSizing(100, 100, 'long', 'open').orderSide).toBe('long');
+    expect(resolveLegSizing(100, 40, 'short', 'close').orderSide).toBe('short');
+
+    // `target` is the one that parts company. Aiming a LONG 1,000 leg at 500
+    // is a SELL of 500: the leg stays long, the order does not.
+    const down = resolveLegSizing(1_000, 500, 'long', 'target');
+    expect(down.deltaSize).toBe(-500);
+    expect(down.resultingSize).toBe(500);
+    expect(down.orderSide).toBe('short');
+    // Reading the held side here sent a BUY of 500 against a long 1,000 and
+    // finished at 1,500 — the opposite of what the §4 row promised — and the
+    // reduce-only cap could not catch it, because 500 < 1,000.
+    expect(down.orderSide).not.toBe('long');
+
+    // Mirrored on the short side: a SHORT 1,000 aimed at 500 is a BUY.
+    expect(resolveLegSizing(-1_000, 500, 'short', 'target')).toMatchObject({
+      deltaSize: 500,
+      resultingSize: -500,
+      orderSide: 'long',
+    });
+
+    // Still growing towards the target: the order agrees with the side again.
+    expect(resolveLegSizing(400, 1_000, 'long', 'target').orderSide).toBe('long');
+
+    // A leg that does not trade keeps the side it holds; it has no order.
+    expect(resolveLegSizing(1_000, 1_000, 'long', 'target')).toMatchObject({
+      deltaSize: 0,
+      orderSide: 'long',
+    });
+  });
+
+  it("'target' with a ZERO request leaves the leg alone — it is not a target of flat", () => {
+    // `onlyLeg` sizes the other leg to 0 to keep it out of the order. Read as
+    // "aim at 0" that would have sent a full close of the leg that already
+    // filled, in the one flow (a half-filled wizard step) built to repair it.
+    expect(resolveLegSizing(-100, 0, 'short', 'target')).toMatchObject({
+      deltaSize: 0,
+      resultingSize: -100,
+      opposing: false,
+    });
+    expect(resolveLegSizing(100, 0, 'long', 'target').deltaSize).toBe(0);
   });
 });
 
@@ -212,6 +287,42 @@ describe('simulateBorosPair', () => {
     expect(sim.feeDragApr).toBeCloseTo(FEE_DRAG, 12);
   });
 
+  it('still prices the mid spread, slippage and the mid-anchored bound when BOTH mids are negative', () => {
+    // A `mid > 0` guard read a negative-funding market as "no mid": the
+    // spread/slippage went blank and the rate bound silently fell back to the
+    // fill instead of mid ± tolerance. 0 is the feed's "none"; a sign is not.
+    const sim = simulateBorosPair(
+      simInput({
+        legA: leg({ market: { ...hlMarket, midApr: -0.02 }, book: book(155, -0.02, -0.018) }),
+        legB: leg({ market: { ...bnMarket, midApr: -0.05 }, book: book(101, -0.05, -0.048), direction: 'long' }),
+      }),
+    );
+    expect(sim.midSpreadApr).toBeCloseTo(-0.02 - -0.05 - FEE_DRAG, 12);
+    expect(sim.slippageApr).not.toBeNull();
+    expect(sim.legA.worstApr).toBeCloseTo(-0.02 - DEFAULT_SLIPPAGE_APR, 12);
+    expect(sim.legB.worstApr).toBeCloseTo(-0.05 + DEFAULT_SLIPPAGE_APR, 12);
+  });
+
+  it('reports SLIPPAGE as the distance from mid, not the unused tolerance', () => {
+    const sim = simulateBorosPair(simInput());
+    // Mid spread and executed spread are composed identically (receive − pay
+    // − the same fee drag), so their difference is the walk down the book
+    // alone: (0.09 − 0.045) vs (0.09 − 0.042) = 0.003.
+    expect(sim.midSpreadApr).toBeCloseTo(0.09 - 0.045 - FEE_DRAG, 12);
+    expect(sim.slippageApr).toBeCloseTo(Math.abs(0.09 - 0.045 - (0.09 - 0.042)), 12);
+    // ⚠ It must NOT track the slippage SETTING: widening the tolerance moves
+    // the worst case, never what the book actually gives at this size. This
+    // is the bug it replaced — |est − worst| grew with the setting.
+    const wide = simulateBorosPair(
+      simInput({
+        legA: { ...simInput().legA, slippageApr: 0.05 },
+        legB: { ...simInput().legB, slippageApr: 0.05 },
+      }),
+    );
+    expect(wide.slippageApr).toBeCloseTo(sim.slippageApr!, 12);
+    expect(wide.worstSpreadApr).not.toBeCloseTo(sim.worstSpreadApr!, 6);
+  });
+
   it('charges ONE leg\'s fees on a single-leg ticket, not the pair\'s', () => {
     // A single-leg ticket carries a borrowed partner sized to zero so the pair
     // shape stays valid. That phantom leg must not be billed: quoting the full
@@ -232,11 +343,12 @@ describe('simulateBorosPair', () => {
 
   it('compounds BOTH tolerances into the worst case — never just one leg', () => {
     const sim = simulateBorosPair(simInput());
-    const est = 0.09 - 0.042 - FEE_DRAG;
-    // Receive leg slips DOWN, pay leg slips UP: the two give-ups add.
-    expect(sim.worstSpreadApr).toBeCloseTo(est - 2 * DEFAULT_SLIPPAGE_APR, 12);
+    // Anchored on the two MIDS (0.09 / 0.045), not the fills: receive leg
+    // slips DOWN, pay leg slips UP, and the two give-ups add.
+    const midSpread = 0.09 - 0.045 - FEE_DRAG;
+    expect(sim.worstSpreadApr).toBeCloseTo(midSpread - 2 * DEFAULT_SLIPPAGE_APR, 12);
     // Explicitly: it is worse than moving one leg alone would suggest.
-    expect(sim.worstSpreadApr!).toBeLessThan(est - DEFAULT_SLIPPAGE_APR);
+    expect(sim.worstSpreadApr!).toBeLessThan(midSpread - DEFAULT_SLIPPAGE_APR);
   });
 
   it('moves the worst case live with the slippage setting, leaving the estimate alone', () => {
@@ -248,7 +360,33 @@ describe('simulateBorosPair', () => {
     );
     const est = 0.09 - 0.042 - FEE_DRAG;
     expect(tight.estSpreadApr).toBeCloseTo(est, 12);
-    expect(tight.worstSpreadApr).toBeCloseTo(est - 0.0002, 12);
+    // The bound anchors on each book's MID (0.09 / 0.045), not on the fill:
+    // Est. and Max measure from the same number.
+    expect(tight.worstSpreadApr).toBeCloseTo(0.09 - 0.045 - FEE_DRAG - 0.0002, 12);
+    expect(tight.legA.worstApr).toBeCloseTo(0.09 - 0.0001, 12);
+    expect(tight.legB.worstApr).toBeCloseTo(0.045 + 0.0001, 12);
+  });
+
+  it('measures Est. from mid the adverse way, and blocks a fill past the bound', () => {
+    // Leg A is receive-fixed: bids at 0.080 against a 0.090 mid is 1.00%
+    // of adverse slippage, past a 0.25% tolerance. The order would not fill
+    // inside its own bound, so the gate refuses it up front.
+    const sim = simulateBorosPair(
+      simInput({
+        legA: leg({ book: book(hlMarket.marketId, 0.08, 0.082), slippageApr: 0.0025 }),
+        legB: leg({ market: bnMarket, book: book(101, 0.044, 0.046), direction: 'long', slippageApr: 0.0025 }),
+      }),
+    );
+    expect(sim.legA.estSlippageApr).toBeCloseTo(0.01, 12);
+    expect(sim.legA.slippageExceeded).toBe(true);
+    expect(sim.legB.estSlippageApr).toBeCloseTo(0.001, 12);
+    expect(sim.legB.slippageExceeded).toBe(false);
+    const g = evaluatePairGate(gateInput({ simulation: sim }));
+    const blocker = g.blockers.find((b) => b.code === 'slippage-exceeds-max');
+    expect(blocker).toBeDefined();
+    expect(blocker!.leg).toBe('A');
+    expect(blocker!.message).toMatch(/1\.00% from mid/);
+    expect(blocker!.message).toMatch(/0\.25% max/);
   });
 
   it('honours a per-leg slippage override', () => {
@@ -258,7 +396,7 @@ describe('simulateBorosPair', () => {
         legB: leg({ market: bnMarket, book: book(101, 0.04, 0.042), direction: 'long', slippageApr: 0.004 }),
       }),
     );
-    expect(sim.worstSpreadApr).toBeCloseTo(0.09 - 0.042 - FEE_DRAG - 0.005, 12);
+    expect(sim.worstSpreadApr).toBeCloseTo(0.09 - 0.045 - FEE_DRAG - 0.005, 12);
   });
 
   it('clamps a runaway tolerance', () => {
@@ -279,6 +417,67 @@ describe('simulateBorosPair', () => {
     expect(sim.marginRequiredTotal).toBeCloseTo(imA + imB, 6);
     // Not symmetric — the point of showing it per leg.
     expect(sim.legA.marginRequired).not.toBeCloseTo(sim.legB.marginRequired!, 6);
+  });
+
+  it('quotes a REDUCING target off the other half of the book', () => {
+    // Re-running the wizard at a lower notional: the leg holds 1,000 long and
+    // the box now says 500, so the delta is −500 and the ORDER is a sell.
+    // Reading the held side instead walked the asks, quoted the buy rate, put
+    // the bound on the wrong side of mid, and sent a BUY that finished at
+    // 1,500 under a §4 row reading 1,000 → 500.
+    const sim = simulateBorosPair(
+      simInput({
+        intent: 'target',
+        size: 500,
+        // Deliberately asymmetric around the 0.09 mid, so the side walked is
+        // readable straight off the rate: bid 0.088, ask 0.092.
+        legA: leg({ book: book(hlMarket.marketId, 0.088, 0.092), direction: 'long', currentSize: 1_000 }),
+        legB: leg({ market: bnMarket, book: book(bnMarket.marketId, 0.04, 0.042), direction: 'short', currentSize: 0 }),
+      }),
+    );
+
+    expect(sim.legA.sizing).toMatchObject({
+      currentSize: 1_000,
+      deltaSize: -500,
+      resultingSize: 500,
+      opposing: true,
+      flips: false,
+      orderSide: 'short',
+    });
+    // The side the account HOLDS is untouched — it is what the §4 row and the
+    // acknowledgement describe, and it is still long.
+    expect(sim.legA.direction).toBe('long');
+
+    // Crossed the BIDS: 0.088, not the 0.092 ask the old read quoted.
+    expect(sim.legA.execApr).toBeCloseTo(0.088, 12);
+    expect(sim.legA.estFillSize).toBeCloseTo(500, 12);
+    // Worse-than-mid for a SELL is a LOWER rate: 0.09 − 0.088.
+    expect(sim.legA.estSlippageApr).toBeCloseTo(0.002, 12);
+    // The bound sits a full tolerance BELOW mid, not above it.
+    expect(sim.legA.worstApr).toBeCloseTo(0.09 - DEFAULT_SLIPPAGE_APR, 12);
+    expect(sim.legA.slippageExceeded).toBe(false);
+
+    // A leg growing towards its target is unchanged: order side = side held.
+    expect(sim.legB.sizing).toMatchObject({ deltaSize: -500, resultingSize: -500, orderSide: 'short' });
+    expect(sim.legB.execApr).toBeCloseTo(0.04, 12);
+  });
+
+  it('totals the taker fee over BOTH legs\' own sizes when they differ', () => {
+    // A target repair: A is flat and aims at SIZE, B already holds 60% and
+    // aims at the same SIZE. Deltas differ; the fee is what each leg pays.
+    const sim = simulateBorosPair(
+      simInput({
+        intent: 'target',
+        legA: leg({ market: hlMarket, book: book(hlMarket.marketId, 0.088, 0.09), direction: 'short', currentSize: 0 }),
+        legB: leg({ market: bnMarket, book: book(bnMarket.marketId, 0.044, 0.046), direction: 'long', currentSize: SIZE * 0.6 }),
+      }),
+    );
+    const sizeA = Math.abs(sim.legA.sizing.deltaSize);
+    const sizeB = Math.abs(sim.legB.sizing.deltaSize);
+    expect(sizeA).toBeCloseTo(SIZE, 6);
+    expect(sizeB).toBeCloseTo(SIZE * 0.4, 6);
+    expect(sim.costToCrossSize).toBeCloseTo(sim.legA.takerFeeCost + sim.legB.takerFeeCost, 10);
+    expect(sim.costToCrossSize).toBeCloseTo(0.0005 * sizeA * T + 0.0005 * sizeB * T, 8);
   });
 
   it('prices cost-to-cross off taker fees × size × years', () => {

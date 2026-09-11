@@ -7,7 +7,7 @@ interface Props<T extends string> {
   options: { value: T; label: ReactNode; sub?: ReactNode; subTitle?: string }[];
   onChange: (next: T) => void;
   ariaLabel?: string;
-  /** Extra classes on the track — e.g. `seg-cyan` for the cyan-active variant. */
+  /** Extra classes on the track — e.g. `seg-info` for the info-active variant. */
   className?: string;
   /**
    * Stretch the options across the full width of the row.
@@ -30,7 +30,7 @@ export function SegmentedToggle<T extends string>({
 }: Props<T>) {
   return (
     <div
-      className={`seg${fill ? ' flex w-full' : ''}${className ? ` ${className}` : ''}`}
+      className={`seg${fill ? ' seg-fill flex w-full' : ''}${className ? ` ${className}` : ''}`}
       role="radiogroup"
       aria-label={ariaLabel}
     >

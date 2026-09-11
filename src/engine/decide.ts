@@ -305,7 +305,7 @@ export function decide(pair: PairRow, p: Projection, now: number, ctx: DecideCtx
       if (clip > FX_ZERO) {
         // With a band set (closes carry the user's slippage as clipBandBp) the
         // clip is a MARKETABLE LIMIT at ref·(1 ± band) — this is what the close
-        // UI promises verbatim: "a reduce-only IOC limit at mark ± slippage".
+        // UI promises verbatim: "a reduce-only IOC limit at mid ± slippage".
         // The band is priced off the venue REFERENCE price, not book mid, so it
         // stays inside the venue's own price-limit band; clipBandPrice rounds
         // BUY down / SELL up so the fill can never be worse than the band.
