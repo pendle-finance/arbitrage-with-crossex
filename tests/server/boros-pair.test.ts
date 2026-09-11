@@ -341,7 +341,7 @@ describe('POST /api/boros/pair/top-up-gas', () => {
     expect(res.statusCode).toBe(200);
     expect(paid).toHaveLength(1);
     expect(paid[0][0]).toBe(5);
-    expect(res.json().data).toEqual({ sentUsd: 5 });
+    expect(res.json().data).toEqual({ sentUsd: 5, replayed: false });
     expect(getGasBalance).not.toHaveBeenCalled();
   });
 
@@ -376,6 +376,45 @@ describe('POST /api/boros/pair/top-up-gas', () => {
     makeApp();
     const res = await post('/api/boros/pair/top-up-gas', { amountUsd: 5 });
     expect(res.statusCode).toBe(503);
+  });
+
+  it('pays ONCE for a re-press with the same id — a lost response is answered from the memo', async () => {
+    const paid: number[] = [];
+    makeApp({}, undefined, {
+      ...orderClient(),
+      payTreasury: async (amountUsd) => {
+        paid.push(amountUsd);
+      },
+    });
+    const first = await post('/api/boros/pair/top-up-gas', { amountUsd: 5, clientOrderId: 'gas-0000000001' });
+    const again = await post('/api/boros/pair/top-up-gas', { amountUsd: 5, clientOrderId: 'gas-0000000001' });
+    expect(first.json().data).toEqual({ sentUsd: 5, replayed: false });
+    expect(again.json().data).toEqual({ sentUsd: 5, replayed: true });
+    expect(paid).toEqual([5]);
+  });
+
+  it('refuses a second top-up while one is still in flight', async () => {
+    let release: () => void = () => {};
+    const landed = new Promise<void>((r) => {
+      release = r;
+    });
+    const paid: number[] = [];
+    makeApp({}, undefined, {
+      ...orderClient(),
+      payTreasury: async (amountUsd) => {
+        paid.push(amountUsd);
+        await landed;
+      },
+    });
+    const first = post('/api/boros/pair/top-up-gas', { amountUsd: 5, clientOrderId: 'gas-000000000a' });
+    // Let the first request reach the payment before the second arrives.
+    await new Promise((r) => setTimeout(r, 20));
+    const second = await post('/api/boros/pair/top-up-gas', { amountUsd: 5, clientOrderId: 'gas-000000000b' });
+    expect(second.statusCode).toBe(400);
+    expect(second.json().error.message).toMatch(/already in flight/);
+    release();
+    expect((await first).statusCode).toBe(200);
+    expect(paid).toEqual([5]);
   });
 
   it('answers 503 when the order client cannot top up', async () => {
@@ -625,6 +664,75 @@ describe('POST /api/boros/pair/execute', () => {
     expect(sent.every((s) => s.sizeWei === undefined)).toBe(true);
   });
 
+  it('sends a reducing TARGET as a SELL of the delta, not a buy on the side held', async () => {
+    // The wizard re-run at a lower notional. The leg holds 1,000 LONG and the
+    // box now says 500, so §4 reads 1,000 → 500 and the acknowledgement says
+    // "reduces". Reading the side HELD instead of the sign of the delta sent a
+    // BUY of 500 and finished at 1,500 — and the reduce-only wei cap could not
+    // catch it, because 500 is not greater than the 1,000 open.
+    const sent: BorosMarketOrderRequest[] = [];
+    makeApp(
+      {
+        '/core/v1/collaterals/summary': {
+          collaterals: [
+            {
+              tokenId: 3,
+              crossPosition: {
+                netBalance: raw(500_000),
+                marketPositions: [
+                  { marketId: HL, side: 0, notionalSize: raw(1_000), pnl: {}, positionInitialMargin: raw(0) },
+                ],
+              },
+              isolatedPositions: [],
+            },
+          ],
+        },
+      },
+      undefined,
+      {
+        placeMarketOrders: async (reqs) => {
+          reqs.forEach((r) => sent.push(r));
+          return reqs.map((r) => okFill({ marketId: r.marketId, direction: r.direction, filledSize: r.size }));
+        },
+        cancelOrders: async () => {},
+        closePosition: async () => okFill(),
+      },
+    );
+
+    const res = await post(
+      '/api/boros/pair/execute',
+      pairBody({
+        legA: { marketId: HL, direction: 'long', slippageApr: 0.0025 },
+        // The Binance fixture's BID sits 0.5% under its mid, so a sell there
+        // needs a tolerance that admits it; the point under test is the SIDE.
+        legB: { marketId: BN, direction: 'short', slippageApr: 0.01 },
+        size: 500,
+        intent: 'target',
+        opposingAcknowledged: true,
+        clientOrderIdA: 'coid-aaaa',
+        clientOrderIdB: 'coid-bbbb',
+      }),
+    );
+    expect(res.statusCode).toBe(200);
+
+    const hl = sent.find((r) => r.marketId === HL)!;
+    expect(hl).toBeDefined();
+    // Declared 'long' in the body; the ORDER is the other way.
+    expect(hl.direction).toBe('short');
+    expect(hl.size).toBeCloseTo(500, 9);
+    // A sell's bound sits BELOW the 0.09 mid. The old read put it above.
+    expect(hl.limitApr).toBeLessThan(0.09);
+    // Nothing to cap: the delta is smaller than the position, so it cannot
+    // cross flat and the wei override must stay off.
+    expect(hl.sizeWei).toBeUndefined();
+
+    // The leg that is only growing towards its target is untouched: its order
+    // side is still the side it declared.
+    const bn = sent.find((r) => r.marketId === BN)!;
+    expect(bn.direction).toBe('short');
+    expect(bn.limitApr).toBeLessThan(0.045);
+  });
+
   it('trades ONE leg when onlyLeg is set, for a completion', async () => {
     const sent: number[][] = [];
     makeApp({}, undefined, {
@@ -707,10 +815,12 @@ describe('POST /api/boros/pair/execute', () => {
     expect(place).not.toHaveBeenCalled();
   });
 
-  it('ignores a foreign address on cancel-and-close rather than sizing from it', async () => {
+  it('refuses a foreign address on cancel-and-close rather than sizing from it', async () => {
     // This route runs no gate and takes the close SIZE from the position it
     // reads, so a foreign address would let the caller choose the size of a
-    // market order on the configured account.
+    // market order on the configured account. It is never used to pick the
+    // account — and it is not ignored either: the close form sizes off the
+    // TRACKED book, so a mismatch means the user is looking at the wrong one.
     let sized: number | null = null;
     app = makeTestApp({
       borosFetch: borosStub(bodies()),
@@ -727,10 +837,8 @@ describe('POST /api/boros/pair/execute', () => {
       address: OTHER,
       clientOrderId: 'coid-foreign',
     });
-    // Accepted, but the body's address had no effect: the configured account is
-    // flat, so there is nothing to close.
-    expect(res.statusCode).toBe(200);
-    expect(res.json().data).toMatchObject({ cancelled: true, closed: false, fill: null });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error.message).toMatch(/does not match the account this install signs for/);
     expect(sized).toBeNull();
   });
 
@@ -803,6 +911,77 @@ describe('POST /api/boros/pair/market/:marketId/cancel-and-close', () => {
     expect(closeReq).toMatchObject({ marketId: HL, size: 75_000, direction: 'short' });
     expect(closeReq!.limitApr).toBeLessThan(0.09);
     expect(res.json().data.closed).toBe(true);
+  });
+
+  /** The same 75k long, with the HL market's mid overridden. */
+  const closeWithMid = async (midApr: number) => {
+    let closeReq: { limitApr: number } | null = null;
+    const hl = market(HL, 'Hyperliquid', 0.09);
+    app = makeTestApp({
+      borosFetch: borosStub(
+        bodies({
+          '/core/v1/markets': { results: [{ ...hl, data: { ...hl.data, midApr } }, market(BN, 'Binance', 0.045)] },
+          '/core/v1/collaterals/summary': {
+            collaterals: [
+              {
+                tokenId: 3,
+                crossPosition: {
+                  netBalance: raw(500_000),
+                  marketPositions: [
+                    { marketId: HL, side: 0, notionalSize: raw(75_000), pnl: {}, positionInitialMargin: raw(0) },
+                  ],
+                },
+                isolatedPositions: [],
+              },
+            ],
+          },
+        }),
+      ),
+      getBorosOrders: () => ({
+        placeMarketOrders: async (reqs) => reqs.map(() => okFill()),
+        cancelOrders: async () => {},
+        closePosition: async (r) => {
+          closeReq = r;
+          return okFill({ filledSize: r.size, shortfallSize: 0 });
+        },
+      }),
+    });
+    const res = await post(`/api/boros/pair/market/${HL}/cancel-and-close`, { clientOrderId: 'coid-mid' });
+    expect(res.statusCode).toBe(200);
+    return closeReq!.limitApr;
+  };
+
+  it('bounds off the MARK when the feed has no mid (0), never off 0 ± tolerance', async () => {
+    const bound = await closeWithMid(0);
+    // A short close: mark − tolerance, so inside (mark − 10%, mark).
+    expect(bound).toBeLessThan(0.09);
+    expect(bound).toBeGreaterThan(0.09 - 0.1);
+  });
+
+  it('bounds off a NEGATIVE mid — negative funding is a real market, not a missing one', async () => {
+    const bound = await closeWithMid(-0.02);
+    expect(bound).toBeLessThan(-0.02);
+    expect(bound).toBeGreaterThan(-0.02 - 0.1);
+  });
+
+  it('refuses a close sized against a DIFFERENT account than the one this install signs for', async () => {
+    const cap: { req: { marketId: number; size: number; direction: string; limitApr: number } | null } = { req: null };
+    app = longPositionApp(cap);
+    const res = await post(`/api/boros/pair/market/${HL}/cancel-and-close`, {
+      clientOrderId: 'coid-other',
+      address: '0x2222222222222222222222222222222222222222',
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error.message).toMatch(/does not match the account this install signs for/);
+    expect(cap.req).toBeNull();
+  });
+
+  it('accepts a close that names the account it signs for', async () => {
+    const cap: { req: { marketId: number; size: number; direction: string; limitApr: number } | null } = { req: null };
+    app = longPositionApp(cap);
+    const res = await post(`/api/boros/pair/market/${HL}/cancel-and-close`, { clientOrderId: 'coid-same', address: ADDRESS });
+    expect(res.statusCode).toBe(200);
+    expect(cap.req).toMatchObject({ marketId: HL, size: 75_000, direction: 'short' });
   });
 
   /** The 75k-long fixture, reused by the size/slippage cases below. */

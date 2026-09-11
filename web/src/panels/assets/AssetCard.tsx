@@ -9,7 +9,6 @@ import { Fragment, useMemo, useState } from 'react';
 import { Modal } from '../../components/Modal';
 import type {
   CrossexPosition,
-  StrategyLeg,
   AssetBorosHistory,
   AssetBorosOpen,
   AssetGroup,
@@ -45,7 +44,11 @@ import {
   exclusionQty,
   keptSlice,
   perpKey,
+  pairBorosCloseLegs,
+  pairPerpCloseLegs,
+  sizeIn,
 } from './assetModel';
+import { knownRate } from '../../lib/boros';
 import { AssetBars } from './AssetBars';
 
 interface Props {
@@ -375,7 +378,7 @@ function PairModal({
                   </span>
                 </td>
                 <td className={`${cell} num whitespace-nowrap text-right text-ink-100`}>
-                  <span title={exactSize(l.size, pair.unit, base)}>{sizeLabel(l.size, pair.unit, base)}</span>
+                  <span title={exactSize(sizeIn(l, pair.unit), pair.unit, base)}>{sizeLabel(sizeIn(l, pair.unit), pair.unit, base)}</span>
                   {l.share < 0.9995 && (
                     <span
                       className="text-ink-500"
@@ -615,7 +618,8 @@ export function LegEditModal({
   const qty = Number(qtyStr);
   const qtyOk = Number.isFinite(qty) && qty > 0;
   const atRaw = Number(atStr);
-  const at = Number.isFinite(atRaw) && atRaw >= 0 ? (entryKind === 'rate' ? atRaw / 100 : atRaw) : null;
+  // A rate may be negative (negative funding); a price may not.
+  const at = Number.isFinite(atRaw) && (entryKind === 'rate' || atRaw >= 0) ? (entryKind === 'rate' ? atRaw / 100 : atRaw) : null;
   const whole = mode === 'all' ? false : qtyOk && qty >= legQty;
   // Live preview of what the farm keeps.
   const preview =
@@ -1155,7 +1159,7 @@ function InactiveBorosRow({
           label={`${prettyVenue(h.venue)} YU · ${fmtDateLocal(h.maturity)}`}
           unit={base}
           legQty={h.peakSizeToken ?? 0}
-          entry={0}
+          entry={entryApr ?? 0}
           entryKind="rate"
           current={exclusions[key]}
           onExclude={onExclude}
@@ -1558,9 +1562,9 @@ export function AssetCard({ group, derived, sinceSec, windowPending, onChangeSin
       const partner = g.kind === 'missing' ? pairPartner(g) : undefined;
       // A pair has ONE size: the smaller of the two asks. Any remainder
       // shows up as a deficit on the bigger side afterwards.
-      const size = partner ? Math.min(g.size, partner.size) : g.size;
-      const sizeBase = g.unit === 'base' ? size : group.priceUsd > 0 ? size / group.priceUsd : undefined;
-      const notionalUsd = g.unit === 'usd' ? size : size * group.priceUsd;
+      const ask = partner && partner.size < g.size ? partner : g;
+      const sizeBase = ask.sizeBase > 0 ? ask.sizeBase : undefined;
+      const notionalUsd = ask.notionalUsd;
       if (partner) {
         const longVenue = long ? g.venue : partner.venue;
         const shortVenue = long ? partner.venue : g.venue;
@@ -1718,7 +1722,8 @@ export function AssetCard({ group, derived, sinceSec, windowPending, onChangeSin
       }
       const perpNotional = perps.reduce((t, l) => t + l.notionalUsd, 0);
       const perpQty = perps.reduce((t, l) => t + l.qty, 0);
-      const floatingApr = boros.find((l) => l.floatingApr > 0)?.floatingApr ?? null;
+      // Known, not positive: a negative-funding market has a real float too.
+      const floatingApr = boros.find((l) => knownRate(l.floatingApr))?.floatingApr ?? null;
       const hist = group.borosHistory.filter((h) => h.venue === venue);
       // Per-symbol AGGREGATES for the closed side, exactly as the model sums
       // them — so the bundles foot to the totals to the cent.
@@ -2364,7 +2369,7 @@ export function AssetCard({ group, derived, sinceSec, windowPending, onChangeSin
                     </span>
                   </td>
                   <td className="num whitespace-nowrap px-2.5 py-2 text-right text-ink-100">
-                    <span title={exactSize(l.size, l.unit, group.base)}>{sizeLabel(l.size, l.unit, group.base)}</span>
+                    <span title={exactSize(sizeIn(l, l.unit), l.unit, group.base)}>{sizeLabel(sizeIn(l, l.unit), l.unit, group.base)}</span>
                   </td>
                   <td className="num whitespace-nowrap px-2.5 py-2 text-right text-ink-100">
                     <span title={exactUsd(l.notionalUsd)}>{fmtUsdCompact(l.notionalUsd)}</span>
@@ -2438,14 +2443,7 @@ export function AssetCard({ group, derived, sinceSec, windowPending, onChangeSin
             )}
             <ClosePairForm
               base={group.base}
-              legs={closePerps.legs
-                .filter((l) => l.kind === 'perp' && l.symbol)
-                .map((l) => ({
-                  symbol: l.symbol as string,
-                  qty: l.size,
-                  venue: l.venue,
-                  partial: l.share < 0.9995,
-                }))}
+              legs={pairPerpCloseLegs(closePerps)}
               livePositions={livePositions}
             />
             <button
@@ -2464,6 +2462,14 @@ export function AssetCard({ group, derived, sinceSec, windowPending, onChangeSin
       {closeLeg?.kind === 'perp' && livePositions.get(closeLeg.leg.symbol) && (
         <ClosePopover
           position={livePositions.get(closeLeg.leg.symbol)!}
+          // The opposite perp at another venue is what cancels this leg's
+          // price delta; without naming it the popover's "closing leaves
+          // that one unhedged" warning could never show.
+          hedgedSibling={(() => {
+            const me = closeLeg.leg;
+            const other = group.perpOpen.find((p) => p.venue !== me.venue && p.side !== me.side);
+            return other ? { venue: other.venue, side: other.side } : null;
+          })()}
           onDismiss={() => setCloseLeg(null)}
         />
       )}
@@ -2509,37 +2515,7 @@ export function AssetCard({ group, derived, sinceSec, windowPending, onChangeSin
         >
           <div className="flex flex-col gap-3">
             <CloseBorosForm
-              legs={closeBoros.legs
-                .filter((l) => l.kind === 'yu' && l.marketId !== undefined)
-                .flatMap((l): StrategyLeg[] => {
-                  const b = group.borosOpen.find((x) => x.marketId === l.marketId);
-                  if (!b) return [];
-                  // The pair's attributed slice of the venue position — a
-                  // shared leg closes only its share.
-                  return [
-                    {
-                      kind: 'boros',
-                      venue: b.venue,
-                      base: group.base,
-                      side: b.side,
-                      notionalUsd: b.notionalUsd * (l.size / b.sizeToken),
-                      collateral: b.collateral,
-                      notionalToken: l.size,
-                      marketId: b.marketId,
-                      entryApr: b.entryApr,
-                      markApr: b.markApr,
-                      maturity: b.maturity,
-                      share: l.share,
-                      cashFlowUsd: 0,
-                      mtmUsd: 0,
-                      tradePnlUsd: 0,
-                      feesUsd: 0,
-                      netUsd: 0,
-                      openedAt: null,
-                      warnings: [],
-                    },
-                  ];
-                })}
+              legs={pairBorosCloseLegs(closeBoros, group)}
               onDone={() => setCloseBoros(null)}
             />
             <button

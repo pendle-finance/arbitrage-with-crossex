@@ -31,6 +31,14 @@ export function sizeUnitForBase(base: string | null | undefined): 'base' | 'usd'
 }
 
 /** The same rule expressed as a collateral symbol, for labelling a size box. */
+/**
+ * A rate the feed actually knows. The Boros API leaves an absent mid or
+ * floating rate as 0, so 0 is "none"; a NEGATIVE rate is a real
+ * negative-funding market and must never be read as missing.
+ */
+export const knownRate = (n: number | null | undefined): n is number =>
+  typeof n === 'number' && Number.isFinite(n) && n !== 0;
+
 export function isUsdCollateral(collateral: string | null | undefined): boolean {
   const c = (collateral ?? '').toUpperCase();
   return c === 'USDT' || c === 'USDC';

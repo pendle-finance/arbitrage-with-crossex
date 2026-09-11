@@ -32,6 +32,7 @@ import {
 } from '../../core/boros/client';
 import { USD_TOKEN_ID, absWei, decimalString } from '../../core/boros/borosApi';
 import { parseUnits } from 'viem';
+import { knownRate } from '../../core/boros/venue';
 import { isUpdating } from '../updater';
 import {
   limitAprFor,
@@ -712,13 +713,22 @@ export function borosPairRoutes(deps: AppDeps) {
         const raw = account.positionRawByMarket.get(leg.marketId);
         const openWei = leg.sizing.opposing && !leg.sizing.flips && raw !== undefined ? absWei(raw) : null;
         const askedWei = openWei === null ? null : parseUnits(decimalString(size), 18);
+        /**
+         * ⚠ The side the ORDER takes, never the side the account holds.
+         * They part company on a reducing `target`: the leg stays 'long' and
+         * the delta is negative, so sending `leg.direction` bought MORE of
+         * the position the §4 row promised to reduce. The cancel-and-close
+         * route below already derives its side from the position sign for
+         * the same reason; this is that rule, applied from the delta.
+         */
+        const { orderSide } = leg.sizing;
         return {
           marketId: leg.marketId,
-          direction: leg.direction,
+          direction: orderSide,
           size,
           // Bound off the book MID, the same anchor the ticket's "Est." and
           // "Max" use; a mid-less market falls back to the fill rate.
-          limitApr: limitAprFor(leg.direction, leg.midApr > 0 ? leg.midApr : leg.execApr, leg.slippageApr),
+          limitApr: limitAprFor(orderSide, knownRate(leg.midApr) ? leg.midApr : leg.execApr, leg.slippageApr),
           clientOrderId,
           ...(openWei !== null && askedWei !== null && askedWei > openWei ? { sizeWei: openWei.toString() } : {}),
         };
@@ -767,14 +777,28 @@ export function borosPairRoutes(deps: AppDeps) {
       return reply.ok({ ...payload, replayed: false });
     });
 
+    /**
+     * ⚠ A top-up is an on-chain payment with no venue-side dedupe. Two things
+     * keep a re-press from paying twice: ONE top-up in flight at a time, and a
+     * replay memo keyed by the caller's id — a response lost after the payment
+     * landed answers the retry from the memo instead of paying again. A memo
+     * entry is dropped when its payment FAILED, so a genuine retry can pay.
+     */
+    const topUps = new Map<string, Promise<{ sentUsd: number }>>();
+    let topUpInFlight = false;
     app.post('/boros/pair/top-up-gas', async (req, reply) => {
-      const amountUsd = Number((req.body as { amountUsd?: unknown } | undefined)?.amountUsd);
+      const body = (req.body ?? {}) as { amountUsd?: unknown; clientOrderId?: unknown };
+      const amountUsd = Number(body.amountUsd);
       if (!Number.isFinite(amountUsd) || amountUsd < MIN_TOP_UP_USD || amountUsd > MAX_TOP_UP_USD) {
         throw new CoreError(
           `amountUsd must be between $${MIN_TOP_UP_USD} and $${MAX_TOP_UP_USD}`,
           'validation',
         );
       }
+      const clientOrderId =
+        body.clientOrderId === undefined ? null : parseClientOrderId(body.clientOrderId, 'clientOrderId');
+      const prior = clientOrderId === null ? undefined : topUps.get(clientOrderId);
+      if (prior) return reply.ok({ ...(await prior), replayed: true });
       const orders = deps.getBorosOrders?.();
       if (!orders?.payTreasury) {
         throw new CoreError(
@@ -784,16 +808,31 @@ export function borosPairRoutes(deps: AppDeps) {
       }
       assertNotUpdating();
       assertAgentNotExpired();
-      const usdMarket = (await loadMarkets(false)).find((m) => m.tokenId === USD_TOKEN_ID);
-      if (!usdMarket) {
+      if (topUpInFlight) {
         throw new CoreError(
-          'Boros lists no USD-collateral market to route a dollar top-up through.',
-          'venue-rejected',
+          'a gas top-up is already in flight — wait for it to land before sending another.',
+          'validation',
         );
       }
-      await orders.payTreasury(amountUsd, usdMarket.marketId);
-
-      return reply.ok({ sentUsd: amountUsd });
+      topUpInFlight = true;
+      const payment = (async () => {
+        const usdMarket = (await loadMarkets(false)).find((m) => m.tokenId === USD_TOKEN_ID);
+        if (!usdMarket) {
+          throw new CoreError(
+            'Boros lists no USD-collateral market to route a dollar top-up through.',
+            'venue-rejected',
+          );
+        }
+        await orders.payTreasury!(amountUsd, usdMarket.marketId);
+        return { sentUsd: amountUsd };
+      })().finally(() => {
+        topUpInFlight = false;
+      });
+      if (clientOrderId !== null) {
+        topUps.set(clientOrderId, payment);
+        payment.catch(() => topUps.delete(clientOrderId));
+      }
+      return reply.ok({ ...(await payment), replayed: false });
     });
 
     /**
@@ -814,6 +853,7 @@ export function borosPairRoutes(deps: AppDeps) {
         clientOrderId?: unknown;
         size?: unknown;
         slippageApr?: unknown;
+        address?: unknown;
       };
       const clientOrderId = parseClientOrderId(body.clientOrderId, 'clientOrderId');
       /**
@@ -832,6 +872,13 @@ export function borosPairRoutes(deps: AppDeps) {
       if (sizeOverride !== null && (!Number.isFinite(sizeOverride) || sizeOverride <= 0)) {
         throw new CoreError('size must be a positive number', 'validation');
       }
+      /**
+       * The account the CALLER sized this close against. Never used to pick
+       * the account (see below) — only to refuse when it is not the one this
+       * install signs for: the close form shows the TRACKED address's legs,
+       * and tracking someone else's book must not close the agent's own.
+       */
+      if (body.address !== undefined) assertTradableAddress(parseAddress(body.address));
       const slippageOverride =
         body.slippageApr === undefined ? null : Number(body.slippageApr);
       // The same cap the quote enforces (MAX_SLIPPAGE_APR): the form can only
@@ -919,7 +966,9 @@ export function borosPairRoutes(deps: AppDeps) {
          * the book, so a bound derived from it was looser or tighter than the
          * tolerance the user set without anything on screen saying so.
          */
-        limitApr: limitAprFor(direction, market.midApr, slippageApr),
+        // A market with no mid (the feed's 0) falls back to the mark: a bound
+        // of 0 ± tolerance would be nowhere near the book.
+        limitApr: limitAprFor(direction, knownRate(market.midApr) ? market.midApr : market.markApr, slippageApr),
         clientOrderId,
       });
       /**

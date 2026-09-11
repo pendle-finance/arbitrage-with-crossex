@@ -816,8 +816,16 @@ export function assetViewRoutes(deps: AppDeps) {
         if (ev.timeSec < floorFor(ev.marketId)) continue;
         const market = marketById.get(ev.marketId);
         const px = market ? tokenPrice(market.tokenId) : null;
+        // Unpriceable ⇒ no aggregate at all. histFor() stores the row it
+        // creates and the final loop pushes every stored row — creating one
+        // here and then skipping it shipped a $0 history line with a real
+        // locked rate while the leg's PnL was left out of the sums.
+        if (px === null) {
+          unknownMarketRows += 1;
+          continue;
+        }
         const h = histFor(ev.marketId);
-        if (!h || px === null) {
+        if (!h) {
           unknownMarketRows += 1;
           continue;
         }
@@ -852,14 +860,28 @@ export function assetViewRoutes(deps: AppDeps) {
             openRate.set(t.marketId, r);
           }
           if (t.time < floorFor(t.marketId)) continue;
+          if (px === null) {
+            unknownMarketRows += 1;
+            continue;
+          }
           const h = histFor(t.marketId);
-          if (!h || px === null) {
+          if (!h) {
             unknownMarketRows += 1;
             continue;
           }
           seen(groupFor(h._base), t.time);
           h.tradePnlUsd += t.pnlTok * px;
           h.tradeFeeUsd += t.feeTok * px;
+          // The peak is what a partial exclusion is measured against once the
+          // leg is gone. Settlements alone miss a leg opened and closed
+          // between two settlements — its fills are the only size record.
+          // Both sides of the fill: a leg opened before the window and wound
+          // down inside it is seen only through its pre-fill sizes.
+          const absPeak = Math.max(Math.abs(t.prev), Math.abs(t.post));
+          if (absPeak > h.peakSizeToken) {
+            h.peakSizeToken = absPeak;
+            h.peakNotionalUsd = absPeak * px;
+          }
           if (h.firstEventSec === 0 || t.time < h.firstEventSec) h.firstEventSec = t.time;
         }
       }

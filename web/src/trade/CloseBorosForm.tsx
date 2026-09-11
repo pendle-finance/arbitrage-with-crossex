@@ -25,6 +25,7 @@ import { useMemo, useState } from 'react';
 import type { BorosPairRequest, BorosSimulatedLeg, StrategyLeg } from '../api/types';
 import { SignedNumber } from '../components/SignedNumber';
 import { QueryError } from '../components/QueryError';
+import { knownRate } from '../lib/boros';
 import { fieldValue, fmtPct, fmtTokenQty, fmtUsd, prettyVenue } from '../lib/fmt';
 import {
   useBorosAgent,
@@ -233,12 +234,14 @@ export function CloseBorosForm({
    * Per leg, never summed: a close is one rate per market, not a spread.
    */
   const estSlippageApr = ((): number | null => {
-    const sim = simLegFor(0) ? [simLegFor(0), simLegFor(1)] : [];
+    // A one-leg close quotes with a synthetic, zero-sized partner leg B
+    // purely to make the pair eligible — its slippage is not this close's.
+    const sim = simLegFor(0) ? (closable.length > 1 ? [simLegFor(0), simLegFor(1)] : [simLegFor(0)]) : [];
     const gaps = sim
       .map((leg) => {
         if (!leg || leg.execApr === null) return null;
         const mid = ctx.data?.markets.find((m) => m.marketId === leg.marketId)?.midApr;
-        return mid && mid > 0 ? Math.abs(leg.execApr - mid) : null;
+        return knownRate(mid) ? Math.abs(leg.execApr - mid) : null;
       })
       .filter((n): n is number => n !== null);
     return gaps.length > 0 ? Math.max(...gaps) : null;
@@ -246,10 +249,22 @@ export function CloseBorosForm({
 
 
   const agentReady = agent.data?.configured === true && agent.data.expired === false;
-  const agentBlocked = agent.isSuccess && !agentReady;
+  /**
+   * ⚠ The legs on this form belong to the TRACKED address; the server closes
+   * the account the agent key signs for. Those are the same account for a
+   * user watching their own book and DIFFERENT ones for someone tracking
+   * another wallet — and a close from that card would act on the agent's
+   * own position, sized off the other book. Refused here (and again server
+   * side, which is why the request names the address).
+   */
+  const agentRoot = agent.data?.configured ? agent.data.root : null;
+  const addressMismatch = Boolean(agentRoot && address && agentRoot.toLowerCase() !== address.toLowerCase());
+  const agentBlocked = agent.isSuccess && (!agentReady || addressMismatch);
   const agentReason = !agent.data?.configured
     ? 'No Boros wallet is connected on this install — connect one and approve an agent key before closing Boros legs.'
-    : 'The Boros agent approval has expired — approve a new agent key before closing Boros legs.';
+    : agent.data.expired
+      ? 'The Boros agent approval has expired — approve a new agent key before closing Boros legs.'
+      : `These legs belong to ${address} — a different account from the one your agent key signs for (${agentRoot}). Track that address to close its legs.`;
 
   const allDone = closable.length > 0 && done.length === closable.length;
   /**
@@ -282,6 +297,7 @@ export function CloseBorosForm({
           marketId: id,
           size: requested,
           slippageApr: slipPct / 100,
+          ...(address ? { address } : {}),
         });
         /**
          * ⚠ A 200 is NOT a close.
@@ -292,7 +308,19 @@ export function CloseBorosForm({
          * user their position was gone while it was still open — the worst
          * possible lie on a trading surface. Read the outcome instead.
          */
-        if (r.fill?.failure) {
+        /**
+         * The venue client stamps EVERY short fill with an
+         * `insufficient-depth` failure, including one that took most of the
+         * size. That is a partial, not a failure: something came off and the
+         * remainder is what the second press must be armed with. Only a fill
+         * that took NOTHING, or failed for another reason, is a failure.
+         */
+        const partialFill =
+          r.fill !== null &&
+          r.fill.filledSize > 0 &&
+          r.fill.filledSize < requested - dust &&
+          (r.fill.failure === null || r.fill.failure.code === 'insufficient-depth');
+        if (r.fill?.failure && !partialFill) {
           setFailed((prev) => [...prev, { marketId: id, message: r.fill!.failure!.message }]);
         } else if (!r.fill) {
           setFailed((prev) => [
@@ -304,7 +332,7 @@ export function CloseBorosForm({
                 : 'Nothing was closed.',
             },
           ]);
-        } else if (r.fill!.filledSize < requested - dust) {
+        } else if (partialFill) {
           // SHORT of what was asked: the book ran out inside the rate bound.
           // The only outcome that leaves something for a second press — so it
           // is also the only one that re-seeds the size, below, rather than
@@ -490,7 +518,7 @@ export function CloseBorosForm({
                           this close sends. */}
                       {(() => {
                         const mid = ctx.data?.markets.find((m) => m.marketId === id)?.midApr;
-                        if (!(mid && mid > 0) || slipInvalid) return null;
+                        if (!knownRate(mid) || slipInvalid) return null;
                         const bound = l.side === 'LONG' ? mid - slipPct / 100 : mid + slipPct / 100;
                         return <span className="text-ink-500"> (worst {fmtPct(bound)})</span>;
                       })()}

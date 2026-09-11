@@ -2,6 +2,7 @@
   "version": "1.6.0",
   "highlights": [
     "Positions are grouped by coin. One card per asset shows Total PnL, the fixed APR you lock, capital and lifetime cost, with a PnL waterfall that foots to the cent",
+    "This replaces the strategy-box tab. Hand-grouping and entry-cost overrides are gone: cards build themselves from the venues' records, so there is nothing to set up. Groups you built by hand in 1.5.x do not carry over",
     "Each exchange is a funding bundle: its perp with every Boros leg hedging it, the blended fixed APR, the floating rate now, settlements, fees and trade PnL. Expand it to see the legs",
     "Close any leg from its row, or both legs of a pair, with one size box and a hold to confirm. A missing or short leg says so and arms the order ticket",
     "Set a start date per asset and exclude legs or slices from the farm. Every number follows",

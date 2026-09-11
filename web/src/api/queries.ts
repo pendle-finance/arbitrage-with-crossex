@@ -172,11 +172,16 @@ export function useAssetViewWindows(address: string | null, sinces: readonly num
     })),
   });
   const bySince = new Map<number, AssetViewResponse>();
+  // A window whose fetch FAILED (no data, not loading). Without this the
+  // caller cannot tell "still fetching" from "never coming".
+  const errorBySince = new Map<number, unknown>();
   distinct.forEach((since, i) => {
-    const d = results[i]?.data;
+    const r = results[i];
+    const d = r?.data;
     if (d) bySince.set(since, d);
+    else if (r?.isError) errorBySince.set(since, r.error);
   });
-  return { bySince, results, distinct };
+  return { bySince, errorBySince, results, distinct };
 }
 
 export interface OpportunitiesParams {
@@ -351,7 +356,7 @@ export function useDealView(id: string | null) {
   /**
    * ⚠ A finished deal must refresh the POSITION feeds.
    *
-   * The poll stops at DONE and nothing else asked the position or strategy
+   * The poll stops at DONE and nothing else asked the position or asset-view
    * queries to re-read — so an order could fill, the modal could say it had,
    * and the cards behind it would still show the pre-trade book until their
    * own 4s/30s interval came round (or the user reloaded). The deal is the
@@ -364,7 +369,7 @@ export function useDealView(id: string | null) {
     if (!id || mode !== 'DONE' || settled.current === id) return;
     settled.current = id;
     void qc.invalidateQueries({ queryKey: qk.positions });
-    void qc.invalidateQueries({ queryKey: ['strategy'] });
+    void qc.invalidateQueries({ queryKey: ['assetView'] });
     void qc.invalidateQueries({ queryKey: qk.account });
   }, [id, mode, qc]);
 
@@ -504,12 +509,12 @@ export function useExecuteBorosPair() {
   return useMutation({
     mutationFn: (req: BorosPairRequest) =>
       postJson<BorosPairExecuteResponse>('/boros/pair/execute', req),
-    // ⚠ Same contract as the close below: the CARD reads the STRATEGY feed,
-    // not the pair context. Without ['strategy'] a leg that had just been
+    // ⚠ Same contract as the close below: the CARD reads the ASSET VIEW,
+    // not the pair context. Without ['assetView'] a leg that had just been
     // opened did not appear until some other refetch happened to pull it in.
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['boros', 'pair', 'context'] });
-      void qc.invalidateQueries({ queryKey: ['strategy'] });
+      void qc.invalidateQueries({ queryKey: ['assetView'] });
       void qc.invalidateQueries({ queryKey: qk.positions });
     },
   });
@@ -517,10 +522,17 @@ export function useExecuteBorosPair() {
 
 export function useTopUpGas() {
   const qc = useQueryClient();
+  // One id per ATTEMPT-UNTIL-SUCCESS: a re-press after a lost response sends
+  // the same id, and the server answers from its memo instead of paying
+  // again. A success mints a fresh id for the next top-up.
+  const idRef = useRef<string | null>(null);
   return useMutation({
-    mutationFn: (amountUsd: number) =>
-      postJson<TopUpGasResponse>('/boros/pair/top-up-gas', { amountUsd }),
+    mutationFn: (amountUsd: number) => {
+      idRef.current ??= `gas-${uuid()}`.slice(0, 64);
+      return postJson<TopUpGasResponse>('/boros/pair/top-up-gas', { amountUsd, clientOrderId: idRef.current });
+    },
     onSuccess: () => {
+      idRef.current = null;
       void qc.invalidateQueries({ queryKey: ['boros', 'pair', 'simulate'] });
       void qc.invalidateQueries({ queryKey: qk.borosAgent });
     },
@@ -568,24 +580,30 @@ export function useBorosCancelAndClose() {
       marketId,
       size,
       slippageApr,
+      address,
     }: {
       marketId: number;
       /** Omitted = close whatever is open. The server clamps to it either way. */
       size?: number;
       /** APR fraction; omitted = the server's default bound. */
       slippageApr?: number;
+      /** The account whose leg this close was sized against. The server
+       * always closes the account it signs for; naming this one lets it
+       * REFUSE when they differ instead of closing the wrong book. */
+      address?: string;
     }) =>
       postJson<BorosCancelAndCloseResult>(`/boros/pair/market/${marketId}/cancel-and-close`, {
         clientOrderId: `cx-${uuid()}`.slice(0, 64),
         ...(size === undefined ? {} : { size }),
         ...(slippageApr === undefined ? {} : { slippageApr }),
+        ...(address === undefined ? {} : { address }),
       }),
-    // ⚠ The CARD reads the strategy feed, not the pair context. Invalidating
+    // ⚠ The CARD reads the asset view, not the pair context. Invalidating
     // only the context left a closed leg on screen at its old size until the
     // user reloaded — the close had happened, the page just never re-asked.
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['boros', 'pair', 'context'] });
-      void qc.invalidateQueries({ queryKey: ['strategy'] });
+      void qc.invalidateQueries({ queryKey: ['assetView'] });
       void qc.invalidateQueries({ queryKey: qk.positions });
     },
   });

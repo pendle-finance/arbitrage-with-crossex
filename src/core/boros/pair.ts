@@ -34,7 +34,7 @@ import {
   walkBorosBook,
   type BookStatus,
 } from './opportunities';
-import { SECONDS_IN_YEAR } from './venue';
+import { SECONDS_IN_YEAR, knownRate } from './venue';
 import {
   AUTO_TOP_UP_BELOW_USD,
   AUTO_TOP_UP_USD,
@@ -85,6 +85,11 @@ export type BorosLegDirection = 'long' | 'short';
  * step 1 can half-fill — one rate leg lands, the other does not — and the
  * repair is then "same target, less to do", not "work out the remainder and
  * type it in". A leg already at its target simply reports no change.
+ *
+ * An end state can also sit BELOW the position, so `target` is the one intent
+ * whose delta may oppose the side the leg holds. Everything that acts on the
+ * trade — the book side walked, the slippage sign, the rate bound and the
+ * order itself — reads `LegSizing.orderSide`, never `direction`.
  */
 export type PairIntent = 'open' | 'close' | 'target';
 
@@ -153,6 +158,25 @@ export interface LegSizing {
   flips: boolean;
   /** `close` intent clamped the size down to what is actually there to close. */
   clampedToClose: boolean;
+  /**
+   * The side the ORDER takes: the sign of `deltaSize`, NOT the side the
+   * account holds.
+   *
+   * They differ under `target` alone. A target BELOW a long position reduces
+   * it, so the delta is negative and the order is a SELL while `direction`
+   * stays 'long'. Sending the held side there BOUGHT more of the position
+   * that the §4 row and the acknowledgement had both promised to reduce
+   * (1,000 asked down to 500 became 1,500), and the reduce-only cap could not
+   * catch it because 500 is not greater than 1,000.
+   *
+   * Under `open` the delta IS the signed request, and under `close` it can
+   * only oppose the position, so both already agreed with `direction` and
+   * neither changes.
+   *
+   * A zero delta keeps the held side: that leg does not trade, and the rate
+   * bound shown beside it still reads from its own side.
+   */
+  orderSide: BorosLegDirection;
 }
 
 const sign = (n: number): number => (n > 0 ? 1 : n < 0 ? -1 : 0);
@@ -217,6 +241,7 @@ export function resolveLegSizing(
     // not re-open, so it needs no flip acknowledgement.
     flips: opposing && Math.abs(delta) > Math.abs(cur),
     clampedToClose,
+    orderSide: delta === 0 ? direction : delta > 0 ? 'long' : 'short',
   };
 }
 
@@ -259,18 +284,22 @@ export interface SimulatedLeg {
   marketName: string;
   venue: string;
   base: string;
+  /** The side the account HOLDS on this market — what the hedge is made of,
+   * and what the §4 row and the acknowledgement describe. The side the ORDER
+   * takes is `sizing.orderSide`, and a reducing `target` is the one case
+   * where they differ. */
   direction: BorosLegDirection;
   /** VWAP the entered size would achieve against the book as it stands. */
   execApr: number | null;
   /** The book's mid, the anchor for every slippage figure on this leg. */
   midApr: number;
-  /** How far the fill sits from mid the WRONG way for this direction
-   * (positive = worse than mid): mid − exec on a receive-fixed leg,
-   * exec − mid on a pay-fixed one. Null without a fill or a mid. */
+  /** How far the fill sits from mid the WRONG way for the ORDER
+   * (`sizing.orderSide`, positive = worse than mid): mid − exec on a sell,
+   * exec − mid on a buy. Null without a fill or a mid. */
   estSlippageApr: number | null;
   /** The rate bound this leg carries: mid moved a full tolerance the WRONG
-   * way for its direction — lower on a receive-fixed leg, higher on a
-   * pay-fixed one. Mid, not exec: "Est." and "Max" measure from the same
+   * way for the ORDER (`sizing.orderSide`) — lower on a sell, higher on a
+   * buy. Mid, not exec: "Est." and "Max" measure from the same
    * number, so an estimate inside the max is a fill inside the bound. */
   worstApr: number | null;
   /** estSlippageApr is past the tolerance: the order would not fill inside
@@ -356,7 +385,11 @@ function simulateLeg(
   const sizing = resolveLegSizing(leg.currentSize, requestedSize, leg.direction, intent);
   const size = Math.abs(sizing.deltaSize);
 
-  const levels = leg.book ? (leg.direction === 'long' ? leg.book.asks : leg.book.bids) : null;
+  // The side the ORDER takes, not the side the account holds: a reducing
+  // `target` sells a long leg, and walking the asks for it quoted the wrong
+  // half of the book before sending the wrong way down it.
+  const { orderSide } = sizing;
+  const levels = leg.book ? (orderSide === 'long' ? leg.book.asks : leg.book.bids) : null;
   // Collateral units in, collateral units out: the walk is linear in the price
   // it is handed, so passing 1 keeps every size in book units.
   const walk = levels && size > 0 ? walkBorosBook(levels, size, 1) : null;
@@ -371,7 +404,7 @@ function simulateLeg(
     bookStatus = size > 0 ? 'insufficient-depth' : 'not-fetched';
     if (size > 0) {
       reasons.push(
-        `${leg.market.name}: the ${leg.direction === 'long' ? 'ask' : 'bid'} side is empty — nothing to cross.`,
+        `${leg.market.name}: the ${orderSide === 'long' ? 'ask' : 'bid'} side is empty — nothing to cross.`,
       );
     }
   } else if (walk.insufficient) {
@@ -382,15 +415,16 @@ function simulateLeg(
   }
 
   const execApr = walk ? walk.execApr : null;
-  const mid = leg.market.midApr > 0 ? leg.market.midApr : null;
-  // A receive-fixed leg is hurt by a LOWER rate, a pay-fixed leg by a HIGHER one.
+  const mid = knownRate(leg.market.midApr) ? leg.market.midApr : null;
+  // A SELL is hurt by a LOWER rate, a BUY by a HIGHER one — which way is
+  // wrong is a property of the order, so it follows `orderSide` too.
   const estSlippageApr =
-    execApr === null || mid === null ? null : leg.direction === 'short' ? mid - execApr : execApr - mid;
+    execApr === null || mid === null ? null : orderSide === 'short' ? mid - execApr : execApr - mid;
   // The bound is MID ± tolerance (a mid-less market falls back to the fill),
   // so the "Est." beside it is measured from the same anchor as the "Max".
   const anchor = mid ?? execApr;
   const worstApr =
-    anchor === null ? null : leg.direction === 'short' ? anchor - slippageApr : anchor + slippageApr;
+    anchor === null ? null : orderSide === 'short' ? anchor - slippageApr : anchor + slippageApr;
   const slippageExceeded = size > 0 && estSlippageApr !== null && estSlippageApr > slippageApr + 1e-12;
 
   // Margin is charged at the rate the leg actually locks; the IM formula is
@@ -528,7 +562,7 @@ export function simulateBorosPair(input: SimulateBorosPairInput): BorosPairSimul
   const recvMid = (receiveLeg === 'A' ? legA : legB).market.midApr;
   const payMid = (receiveLeg === 'A' ? legB : legA).market.midApr;
   const midSpreadApr =
-    quotable && recvMid > 0 && payMid > 0 ? recvMid - payMid - feeDragApr : null;
+    quotable && knownRate(recvMid) && knownRate(payMid) ? recvMid - payMid - feeDragApr : null;
   const slippageApr =
     midSpreadApr !== null && estSpreadApr !== null ? Math.abs(midSpreadApr - estSpreadApr) : null;
   // Both tolerances spent at once. Equivalently estSpread − (slipA + slipB):

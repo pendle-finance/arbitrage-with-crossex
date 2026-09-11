@@ -932,6 +932,9 @@ export interface BorosLegSizing {
   opposing: boolean;
   flips: boolean;
   clampedToClose: boolean;
+  /** The side the ORDER takes — the sign of `deltaSize`, not the side held.
+   * A reducing target sells a leg whose `direction` is still 'long'. */
+  orderSide: BorosLegDirection;
 }
 
 export type BorosBookStatus = 'ok' | 'insufficient-depth' | 'unavailable' | 'not-fetched';
@@ -1028,6 +1031,9 @@ export type BorosLegFailureCode =
 
 export interface TopUpGasResponse {
   sentUsd: number;
+  /** True when this answer came from the server's memo — the payment for
+   * this id had already landed and nothing new was sent. */
+  replayed?: boolean;
 }
 
 export interface RunUpdateResponse {

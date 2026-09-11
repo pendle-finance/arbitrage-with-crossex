@@ -23,6 +23,15 @@ export interface PerpPositionLike {
   createTime?: string;
 }
 
+/**
+ * A rate the feed actually knows. The Boros API leaves an absent mid or
+ * floating rate as 0 (client.ts: `Number(data.midApr ?? 0)`), so 0 is "none";
+ * a NEGATIVE rate is a real negative-funding market and must never be read
+ * as missing.
+ */
+export const knownRate = (n: number | null | undefined): n is number =>
+  typeof n === 'number' && Number.isFinite(n) && n !== 0;
+
 /** Venue keys compare upper-case and trimmed, however the source spelled them. */
 export function normalizeVenue(venue: string): string {
   return venue.trim().toUpperCase();

@@ -26,6 +26,10 @@ export function useFocusTrap(ref: RefObject<HTMLElement>, active: boolean): void
     // Focus the first control on the next frame: the panel may still be
     // laying out on the same tick it mounted.
     const raf = requestAnimationFrame(() => {
+      // Already inside (the user clicked a control before this frame ran):
+      // moving it would drop the keystrokes they are mid-way through.
+      const current = document.activeElement;
+      if (current && current !== document.body && root.contains(current)) return;
       const first = focusables(root)[0];
       if (first) first.focus();
       else {

@@ -22,6 +22,7 @@ import type {
   AssetGroup,
   AssetPerpClosed,
   AssetPerpOpen,
+  StrategyLeg,
   VenueFees,
 } from '../../api/types';
 import { sizeUnitForBase } from '../../lib/boros';
@@ -68,6 +69,68 @@ export function exclusionAt(v: ExclusionEntry | undefined): number | null {
   if (v === undefined || v === 'all' || typeof v === 'number') return null;
   return v.at !== undefined && Number.isFinite(v.at) ? v.at : null;
 }
+
+// ---------------------------------------------------------------------------
+// Closing from a pair row — what the close forms are handed
+// ---------------------------------------------------------------------------
+
+/** A perp leg to close, exactly as ClosePairForm takes it. */
+export interface PerpCloseLeg {
+  symbol: string;
+  /** Base-coin quantity — the reduce-only order's size. */
+  qty: number;
+  venue: string;
+  /** True when the pair holds only a slice of the venue position. */
+  partial: boolean;
+}
+
+/** The perp legs of a pair, sized to close THIS pair's share: one order per
+ * symbol, in the coin, whatever unit the asset displays in. */
+export function pairPerpCloseLegs(pair: Pick<PairEstimate, 'legs'>): PerpCloseLeg[] {
+  return pair.legs
+    .filter((l) => l.kind === 'perp' && l.symbol !== undefined)
+    .map((l) => ({ symbol: l.symbol as string, qty: l.sizeToken, venue: l.venue, partial: l.share < 0.9995 }));
+}
+
+/** The Boros legs of a pair as the close form's StrategyLeg rows: the
+ * pair's attributed slice (a shared leg closes only its share), in the
+ * collateral token, with the venue leg's own rates and maturity. A market
+ * the account no longer lists is skipped — there is nothing to close. */
+export function pairBorosCloseLegs(pair: Pick<PairEstimate, 'legs'>, group: Pick<AssetGroup, 'base' | 'borosOpen'>): StrategyLeg[] {
+  return pair.legs
+    .filter((l) => l.kind === 'yu' && l.marketId !== undefined)
+    .flatMap((l): StrategyLeg[] => {
+      const b = group.borosOpen.find((x) => x.marketId === l.marketId);
+      if (!b) return [];
+      return [
+        {
+          kind: 'boros',
+          venue: b.venue,
+          base: group.base,
+          side: b.side,
+          notionalUsd: l.notionalUsd,
+          collateral: b.collateral,
+          notionalToken: l.sizeToken,
+          marketId: b.marketId,
+          entryApr: b.entryApr,
+          markApr: b.markApr,
+          maturity: b.maturity,
+          share: l.share,
+          cashFlowUsd: 0,
+          mtmUsd: 0,
+          tradePnlUsd: 0,
+          feesUsd: 0,
+          netUsd: 0,
+          openedAt: null,
+          warnings: [],
+        },
+      ];
+    });
+}
+
+/** A leg's size in the unit a card displays: coin quantity or dollars. */
+export const sizeIn = (l: { sizeBase: number; notionalUsd: number }, unit: 'base' | 'usd'): number =>
+  unit === 'base' ? l.sizeBase : l.notionalUsd;
 
 /** A perp opened this long before its Boros leg was not opened FOR the hedge,
  * so its entry fees are not this pair's cost by default. */
@@ -142,9 +205,14 @@ export interface HedgeGapRow {
   venue: string;
   /** What to ADD to make the venue whole. */
   action: 'long-boros' | 'short-boros' | 'long-perp' | 'short-perp';
-  /** |gap| in `unit`. */
+  /** |gap| in `unit` — the reading the hedge is judged in. */
   size: number;
   unit: 'base' | 'usd';
+  /** The same gap as a coin quantity and in dollars (converted at the
+   * asset's price), so the ticket is armed from a number that says what
+   * it is. */
+  sizeBase: number;
+  notionalUsd: number;
   /** The flag always sits on the side that is SHORT of the other, never on
    * the surplus: `missing` = that side has no leg at all on this venue,
    * `deficit` = it exists but is smaller than its partner by `size`. */
@@ -219,8 +287,17 @@ export interface PairLegDetail {
   /** Fraction of the venue leg attributed to this pair (1, or the
    * proportional share of the single short side). */
   share: number;
-  /** Attributed size in the asset's unit. */
-  size: number;
+  /** Attributed size in the leg's OWN token — what a close order is sized
+   * in: a perp's base-coin quantity, a YU leg's collateral-token size (USDT
+   * on a USDT-margined market). Never "in the asset's unit": a number that
+   * means coins or dollars depending on a sibling field is how a close order
+   * gets sent in the wrong unit. */
+  sizeToken: number;
+  /** The same slice as a quantity of the asset's COIN (a USDT-margined YU
+   * leg converts through its notional at the coin's price). */
+  sizeBase: number;
+  /** The same slice in dollars. Display picks coin or dollars via `sizeIn`. */
+  notionalUsd: number;
   /** YU: the fixed rate this leg locks, signed by side (SHORT receives +,
    * LONG pays −). Perps: null (their floating side is what the YU swaps). */
   lockedApr: number | null;
@@ -308,11 +385,11 @@ export interface PendingLeg {
   side: 'LONG' | 'SHORT';
   marketId: number;
   maturity: number;
-  /** Unallocated size in the asset's unit. */
-  size: number;
-  /** Which unit `size` is in — coin quantity or dollars — as PairEstimate.unit. */
-  unit: 'base' | 'usd';
+  /** Unallocated size as a quantity of the asset's coin, and in dollars. */
+  sizeBase: number;
   notionalUsd: number;
+  /** The asset's display unit, as PairEstimate.unit. */
+  unit: 'base' | 'usd';
   /** Signed by side, as PairLegDetail.lockedApr. */
   lockedApr: number;
   imUsd: number;
@@ -533,6 +610,47 @@ export function borosHistoryKeep(
   return legQty > 0 ? 1 - excludedFraction(exclusions, key, legQty) : 1;
 }
 
+/**
+ * Legs of two merged sub-pairs. ONE venue position attributed to both
+ * sub-pairs — a single YU leg hedging two perp books at a venue, or the
+ * short perp each of two long books took a share of — must come back as one
+ * leg, or the close forms see the same market or symbol twice: an
+ * ineligible Boros "pair" they cannot quote, and a close submitted twice.
+ */
+function mergeLegs(a: readonly PairLegDetail[], b: readonly PairLegDetail[]): PairLegDetail[] {
+  const out: PairLegDetail[] = [...a];
+  const same = (x: PairLegDetail, y: PairLegDetail) =>
+    x.kind === y.kind &&
+    x.side === y.side &&
+    (x.kind === 'yu' ? x.marketId !== undefined && x.marketId === y.marketId : x.symbol !== undefined && x.symbol === y.symbol);
+  for (const leg of b) {
+    const i = out.findIndex((o) => same(o, leg));
+    if (i < 0) {
+      out.push(leg);
+      continue;
+    }
+    const prev = out[i];
+    const notionalUsd = prev.notionalUsd + leg.notionalUsd;
+    out[i] = {
+      ...prev,
+      share: Math.min(1, prev.share + leg.share),
+      sizeToken: prev.sizeToken + leg.sizeToken,
+      sizeBase: prev.sizeBase + leg.sizeBase,
+      notionalUsd,
+      // Same market, same locked rate in practice; weight by notional regardless.
+      lockedApr:
+        prev.lockedApr !== null && leg.lockedApr !== null && notionalUsd > 0
+          ? (prev.lockedApr * prev.notionalUsd + leg.lockedApr * leg.notionalUsd) / notionalUsd
+          : (prev.lockedApr ?? leg.lockedApr),
+      feesUsd: prev.feesUsd + leg.feesUsd,
+      imUsd: prev.imUsd + leg.imUsd,
+      imAtOpenUsd:
+        prev.imAtOpenUsd !== null && leg.imAtOpenUsd !== null ? prev.imAtOpenUsd + leg.imAtOpenUsd : null,
+    };
+  }
+  return out;
+}
+
 export function deriveAsset(
   group: AssetGroup,
   exclusions: Exclusions,
@@ -636,6 +754,8 @@ export function deriveAsset(
         action: leg === 'boros' ? (dir ? 'long-boros' : 'short-boros') : dir ? 'long-perp' : 'short-perp',
         size: Math.abs(v.gap),
         unit,
+        sizeBase: unit === 'base' ? Math.abs(v.gap) : group.priceUsd > 0 ? Math.abs(v.gap) / group.priceUsd : 0,
+        notionalUsd: unit === 'usd' ? Math.abs(v.gap) : Math.abs(v.gap) * group.priceUsd,
         kind,
         leg,
         want: leg === 'boros' ? p : b,
@@ -882,7 +1002,9 @@ export function deriveAsset(
           kind: 'perp',
           side: 'LONG',
           share: lShare,
-          size,
+          sizeToken: lLeg.qty * lKeep * lShare,
+          sizeBase: lLeg.qty * lKeep * lShare,
+          notionalUsd: lLeg.notionalUsd * lKeep * lShare,
           lockedApr: null,
           feesUsd: lLeg.feesUsd * lKeep * lShare,
           symbol: lLeg.symbol,
@@ -895,7 +1017,9 @@ export function deriveAsset(
           kind: 'perp',
           side: 'SHORT',
           share,
-          size: (unit === 'base' ? sLeg.qty : sLeg.notionalUsd) * sKeep * share,
+          sizeToken: sLeg.qty * sKeep * share,
+          sizeBase: sLeg.qty * sKeep * share,
+          notionalUsd: sLeg.notionalUsd * sKeep * share,
           lockedApr: null,
           feesUsd: sLeg.feesUsd * sKeep * share,
           symbol: sLeg.symbol,
@@ -943,7 +1067,9 @@ export function deriveAsset(
           kind: 'yu',
           side: b.side,
           share: frac,
-          size: yuSize(b) * keep,
+          sizeToken: b.sizeToken * keep,
+          sizeBase: borosSizeIn(b, 'base', group.base, group.priceUsd) * keep,
+          notionalUsd: b.notionalUsd * keep,
           lockedApr: (b.side === 'SHORT' ? 1 : -1) * entryApr,
           feesUsd: fees,
           maturity: b.maturity,
@@ -1026,7 +1152,7 @@ export function deriveAsset(
         exitFeeUsd: prev.exitFeeUsd + p.exitFeeUsd,
         perpFeesPaidUsd: prev.perpFeesPaidUsd + p.perpFeesPaidUsd,
         borosFeesPaidUsd: prev.borosFeesPaidUsd + p.borosFeesPaidUsd,
-        legs: [...prev.legs, ...p.legs],
+        legs: mergeLegs(prev.legs, p.legs),
         hedgedSinceSec:
           prev.hedgedSinceSec !== null && p.hedgedSinceSec !== null
             ? Math.max(prev.hedgedSinceSec, p.hedgedSinceSec)
@@ -1051,9 +1177,9 @@ export function deriveAsset(
         side: b.side,
         marketId: b.marketId,
         maturity: b.maturity,
-        size: left,
-        unit,
+        sizeBase: borosSizeIn(b, 'base', group.base, group.priceUsd) * (left / (yuSize(b) || 1)),
         notionalUsd: b.notionalUsd * (left / (yuSize(b) || 1)),
+        unit,
         lockedApr: (b.side === 'SHORT' ? 1 : -1) * keptSlice(exclusions, borosKey(b.marketId), b.sizeToken, b.entryApr).entry,
         imUsd: b.imUsd * (left / whole),
       });
