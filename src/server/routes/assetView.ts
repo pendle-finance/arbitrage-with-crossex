@@ -875,10 +875,12 @@ export function assetViewRoutes(deps: AppDeps) {
           // The peak is what a partial exclusion is measured against once the
           // leg is gone. Settlements alone miss a leg opened and closed
           // between two settlements — its fills are the only size record.
-          const absPost = Math.abs(t.post);
-          if (absPost > h.peakSizeToken) {
-            h.peakSizeToken = absPost;
-            h.peakNotionalUsd = absPost * px;
+          // Both sides of the fill: a leg opened before the window and wound
+          // down inside it is seen only through its pre-fill sizes.
+          const absPeak = Math.max(Math.abs(t.prev), Math.abs(t.post));
+          if (absPeak > h.peakSizeToken) {
+            h.peakSizeToken = absPeak;
+            h.peakNotionalUsd = absPeak * px;
           }
           if (h.firstEventSec === 0 || t.time < h.firstEventSec) h.firstEventSec = t.time;
         }
