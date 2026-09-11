@@ -205,9 +205,12 @@ const tradableHandlersSeq = (next: () => Record<string, unknown>, collateral: st
       }),
     ),
   ),
-  http.post('/api/boros/pair/execute', () =>
-    HttpResponse.json(env({ result: next(), estimate: null, warnings: [] })),
-  ),
+  http.post('/api/boros/pair/execute', () => {
+    // A scripted answer may carry its own pre-trade `estimate` (per-leg
+    // `sizing.currentSize`); the rest of the object is the result.
+    const { estimate = null, ...result } = next() as { estimate?: unknown } & Record<string, unknown>;
+    return HttpResponse.json(env({ result, estimate, warnings: [] }));
+  }),
 ];
 
 const CLEAN_FILL = {
@@ -220,6 +223,31 @@ const CLEAN_FILL = {
   partial: false,
   bothLegsSubmitted: true,
 };
+
+describe('StrategyWizard — a fill that closes an existing position is not new exposure', () => {
+  it('does not offer to hedge a leg whose fill only closed a position the account already held', async () => {
+    // The account holds +1000 on HL from before. Step 1 shorts 1000 HL and
+    // longs 1000 BN: the HL short CLOSES the old long (nothing new there),
+    // so only the BN long is new — a one-sided book, not a locked spread.
+    // Folding raw fills read it as ±1000 hedged and armed a perp hedge for
+    // exposure that does not exist.
+    const closingFill = {
+      ...CLEAN_FILL,
+      estimate: {
+        legA: { sizing: { currentSize: 1000, resultingSize: 0, deltaSize: -1000, opposing: true, flips: false, clampedToClose: false } },
+        legB: { sizing: { currentSize: 0, resultingSize: 1000, deltaSize: 1000, opposing: false, flips: false, clampedToClose: false } },
+      },
+    };
+    server.use(...tradableHandlers(closingFill), ...symbolHandlers([ETH_GATE]));
+    renderWizard({ ...INTENT, maturity: MAT, borosLongVenue: 'BINANCE', borosShortVenue: 'HYPERLIQUID' });
+    await waitFor(() => expect(screen.getByLabelText('Leg A')).toHaveValue(String(BN_M)));
+    const confirm = await screen.findByRole('button', { name: /Confirm — 2 Boros market orders/ });
+    await waitFor(() => expect(confirm).toBeEnabled(), { timeout: 4000 });
+    fireEvent.pointerDown(confirm);
+    expect(await screen.findByText(/no shared size to hedge/i, {}, { timeout: 4000 })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Rate locked/ })).not.toBeInTheDocument();
+  });
+});
 
 describe('StrategyWizard — the hedge is sized off the EXECUTED collateral', () => {
   it('an ETH-collateral fill with no sizeBase arms the perps in DOLLARS, not the coin count', async () => {
