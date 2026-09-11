@@ -805,6 +805,57 @@ describe('POST /api/boros/pair/market/:marketId/cancel-and-close', () => {
     expect(res.json().data.closed).toBe(true);
   });
 
+  /** The same 75k long, with the HL market's mid overridden. */
+  const closeWithMid = async (midApr: number) => {
+    let closeReq: { limitApr: number } | null = null;
+    const hl = market(HL, 'Hyperliquid', 0.09);
+    app = makeTestApp({
+      borosFetch: borosStub(
+        bodies({
+          '/core/v1/markets': { results: [{ ...hl, data: { ...hl.data, midApr } }, market(BN, 'Binance', 0.045)] },
+          '/core/v1/collaterals/summary': {
+            collaterals: [
+              {
+                tokenId: 3,
+                crossPosition: {
+                  netBalance: raw(500_000),
+                  marketPositions: [
+                    { marketId: HL, side: 0, notionalSize: raw(75_000), pnl: {}, positionInitialMargin: raw(0) },
+                  ],
+                },
+                isolatedPositions: [],
+              },
+            ],
+          },
+        }),
+      ),
+      getBorosOrders: () => ({
+        placeMarketOrders: async (reqs) => reqs.map(() => okFill()),
+        cancelOrders: async () => {},
+        closePosition: async (r) => {
+          closeReq = r;
+          return okFill({ filledSize: r.size, shortfallSize: 0 });
+        },
+      }),
+    });
+    const res = await post(`/api/boros/pair/market/${HL}/cancel-and-close`, { clientOrderId: 'coid-mid' });
+    expect(res.statusCode).toBe(200);
+    return closeReq!.limitApr;
+  };
+
+  it('bounds off the MARK when the feed has no mid (0), never off 0 ± tolerance', async () => {
+    const bound = await closeWithMid(0);
+    // A short close: mark − tolerance, so inside (mark − 10%, mark).
+    expect(bound).toBeLessThan(0.09);
+    expect(bound).toBeGreaterThan(0.09 - 0.1);
+  });
+
+  it('bounds off a NEGATIVE mid — negative funding is a real market, not a missing one', async () => {
+    const bound = await closeWithMid(-0.02);
+    expect(bound).toBeLessThan(-0.02);
+    expect(bound).toBeGreaterThan(-0.02 - 0.1);
+  });
+
   /** The 75k-long fixture, reused by the size/slippage cases below. */
   const longPositionApp = (capture: { req: { marketId: number; size: number; direction: string; limitApr: number } | null }) =>
     makeTestApp({

@@ -919,7 +919,14 @@ export function borosPairRoutes(deps: AppDeps) {
          * the book, so a bound derived from it was looser or tighter than the
          * tolerance the user set without anything on screen saying so.
          */
-        limitApr: limitAprFor(direction, market.midApr, slippageApr),
+        limitApr: limitAprFor(
+          direction,
+          // 0 is the feed's "no mid" (client.ts defaults a missing midApr to
+          // 0): a bound of 0 ± tolerance would be nowhere near the book, so
+          // that one case falls back to the mark. A NEGATIVE mid is real.
+          Number.isFinite(market.midApr) && market.midApr !== 0 ? market.midApr : market.markApr,
+          slippageApr,
+        ),
         clientOrderId,
       });
       /**
