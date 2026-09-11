@@ -149,6 +149,41 @@ describe('CloseBorosForm — reporting what it closed', () => {
  * finish it" for a leg with nothing of the user's left in it. On a real-money
  * surface that is an invitation to send the order twice.
  */
+describe('CloseBorosForm — one size, two legs, one unit', () => {
+  it('refuses THREE legs: only two are quoted, and every leg would be sent the shared size', async () => {
+    const seen: unknown[] = [];
+    server.use(...ready(), closeReturns({ fill: fill(MINE) }, seen));
+    renderWithClient(
+      <CloseBorosForm
+        legs={[
+          makeStrategyLeg({ marketId: 155, notionalToken: MINE, collateral: 'ETH' }),
+          makeStrategyLeg({ marketId: 158, notionalToken: MINE, collateral: 'ETH' }),
+          makeStrategyLeg({ marketId: 161, notionalToken: MINE, collateral: 'ETH' }),
+        ]}
+      />,
+    );
+    expect(await screen.findByText(/spans 3 Boros legs/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Close 3 legs/ })).toBeDisabled();
+    expect(seen).toHaveLength(0);
+  });
+
+  it('refuses legs in DIFFERENT collateral: 0.01 ETH and 0.01 USDT are not one size', async () => {
+    const seen: unknown[] = [];
+    server.use(...ready(), closeReturns({ fill: fill(MINE) }, seen));
+    renderWithClient(
+      <CloseBorosForm
+        legs={[
+          makeStrategyLeg({ marketId: 155, notionalToken: MINE, collateral: 'ETH' }),
+          makeStrategyLeg({ marketId: 194, notionalToken: 8_000, collateral: 'USDT' }),
+        ]}
+      />,
+    );
+    expect(await screen.findByText(/different collateral \(ETH, USDT\)/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Close 2 legs/ })).toBeDisabled();
+    expect(seen).toHaveLength(0);
+  });
+});
+
 describe('CloseBorosForm — whose legs these are', () => {
   const ROOT = '0x1111111111111111111111111111111111111111';
   const OTHER = '0x2222222222222222222222222222222222222222';

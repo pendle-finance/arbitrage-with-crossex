@@ -33,6 +33,7 @@ import {
   useTopUpGas,
 } from '../api/queries';
 import type {
+  BorosPairSimulation,
   BorosLegDirection,
   BorosPairIntent,
   BorosPairMarketRow,
@@ -129,7 +130,7 @@ export function BorosPairTicket({
    * denominated in, and the caller (the wizard) renders its own receipt from
    * these. Re-deriving it there could disagree with the ticket that traded.
    */
-  onExecuted?: (result: BorosPairResult, collateral: string) => void;
+  onExecuted?: (result: BorosPairResult, collateral: string, estimate?: BorosPairSimulation | null) => void;
   /**
    * True while an execution is in flight. The surface hosting this ticket
    * (wizard modal, order-ticket drawer) locks its close controls off it:
@@ -665,7 +666,10 @@ export function BorosPairTicket({
           setReport(res.result);
           setReportReplayed(Boolean(res.replayed));
           // A replay is the EARLIER submission's result — it already fired.
-          if (!res.replayed) onExecuted?.(res.result, simulation?.collateral ?? '');
+          // The server's own pre-trade estimate rides along: its per-leg
+          // `sizing.currentSize` is what the account held BEFORE this fill,
+          // which is what tells a hedge-sizer how much of the fill is new.
+          if (!res.replayed) onExecuted?.(res.result, simulation?.collateral ?? '', res.estimate ?? null);
           setAcknowledged(false);
           // This execution is DONE — the ids have served their replay-protection
           // purpose. Fresh ones now, so a later confirm of the same unchanged

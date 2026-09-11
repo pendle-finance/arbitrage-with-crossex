@@ -23,7 +23,7 @@
  * (the asset card's missing-perp cue) and re-enters here at step 2.
  */
 import { Fragment, useEffect, useState } from 'react';
-import type { BorosLegFill, BorosPairResult } from '../api/types';
+import type { BorosLegFill, BorosLegSizing, BorosPairResult, BorosPairSimulation } from '../api/types';
 import { Modal } from '../components/Modal';
 import { isUsdCollateral } from '../lib/boros';
 import { sig } from '../lib/fmt';
@@ -60,7 +60,16 @@ type Step = 1 | 2 | 'done';
  * in the executed market's collateral — so a close (which always carries the
  * direction opposing the position) subtracts on its own, with no intent flag.
  */
-type SlotFill = { size: number; marketId: number; execApr: number | null };
+type SlotFill = {
+  size: number;
+  marketId: number;
+  execApr: number | null;
+  /** The account's position in this market BEFORE the session's first fill
+   * (from the server's pre-trade estimate), or null when no estimate has
+   * named it. With it, `size` is the exposure this session is responsible
+   * for; without it, the signed sum of fills. */
+  baseline: number | null;
+};
 
 /**
  * What step 1 has actually put on, folded across EVERY accepted execution —
@@ -90,7 +99,7 @@ type StepOneBook = {
   soleClean: boolean;
 };
 
-const EMPTY_SLOT: SlotFill = { size: 0, marketId: 0, execApr: null };
+const EMPTY_SLOT: SlotFill = { size: 0, marketId: 0, execApr: null, baseline: null };
 const EMPTY_BOOK: StepOneBook = {
   a: EMPTY_SLOT,
   b: EMPTY_SLOT,
@@ -100,14 +109,26 @@ const EMPTY_BOOK: StepOneBook = {
 };
 
 
-const foldLeg = (slot: SlotFill, leg: BorosLegFill): SlotFill => {
+const foldLeg = (slot: SlotFill, leg: BorosLegFill, sizing: BorosLegSizing | null): SlotFill => {
   if (!legSubmitted(leg)) return slot;
-  return {
-    // The venue's own defence: never trust the raw sign of filledSize.
-    size: slot.size + (leg.direction === 'long' ? 1 : -1) * Math.abs(leg.filledSize),
-    marketId: leg.marketId,
-    execApr: leg.execApr ?? slot.execApr,
-  };
+  // The venue's own defence: never trust the raw sign of filledSize.
+  const signedFill = (leg.direction === 'long' ? 1 : -1) * Math.abs(leg.filledSize);
+  const execApr = leg.execApr ?? slot.execApr;
+  /**
+   * ⚠ A fill that REDUCES a position the account already held is not new
+   * exposure, and must not be hedged as if it were. The server's pre-trade
+   * estimate says what the account held; the exposure this session owns is
+   * the part of the position now beyond what was there when it started —
+   * all of it once the sign flipped, none while it only shrank.
+   */
+  if (sizing && Number.isFinite(sizing.currentSize)) {
+    const baseline = slot.baseline ?? sizing.currentSize;
+    const after = sizing.currentSize + signedFill;
+    const sameSide = baseline !== 0 && Math.sign(after) === Math.sign(baseline);
+    const owned = sameSide ? Math.sign(after) * Math.max(0, Math.abs(after) - Math.abs(baseline)) : after;
+    return { size: owned, marketId: leg.marketId, execApr, baseline };
+  }
+  return { size: slot.size + signedFill, marketId: leg.marketId, execApr, baseline: slot.baseline };
 };
 
 /** Fills round-trip 18-decimal venue values through float64, so exact-zero
@@ -172,7 +193,7 @@ function WizardBody({
 
   /** Fold one accepted execution into the book. Replays never reach this —
    * the ticket skips `onExecuted` for them. */
-  const recordExecution = (result: BorosPairResult, collateral: string) =>
+  const recordExecution = (result: BorosPairResult, collateral: string, estimate?: BorosPairSimulation | null) =>
     setBook((prev) => {
       /**
        * ⚠ Reset before folding when the legs stopped being the same book.
@@ -192,8 +213,8 @@ function WizardBody({
       const base = marketChanged || collateralChanged ? EMPTY_BOOK : prev;
       const wasEmpty = Math.abs(base.a.size) <= EPS && Math.abs(base.b.size) <= EPS;
       return {
-        a: foldLeg(base.a, result.legA),
-        b: foldLeg(base.b, result.legB),
+        a: foldLeg(base.a, result.legA, estimate?.legA?.sizing ?? null),
+        b: foldLeg(base.b, result.legB, estimate?.legB?.sizing ?? null),
         collateral: collateral || base.collateral,
         lastResult: result,
         soleClean: wasEmpty && result.bothLegsSubmitted && !result.partial,
