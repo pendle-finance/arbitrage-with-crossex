@@ -218,6 +218,41 @@ describe('resolveLegSizing', () => {
     expect(resolveLegSizing(40, 100, 'long', 'close').deltaSize).toBe(0);
   });
 
+  it('orderSide is the sign of the DELTA, not the side held', () => {
+    // The two intents that can only ever add to, or only ever reduce, a
+    // position already agree with the side held — nothing changes for them.
+    expect(resolveLegSizing(0, 100, 'long', 'open').orderSide).toBe('long');
+    expect(resolveLegSizing(100, 100, 'long', 'open').orderSide).toBe('long');
+    expect(resolveLegSizing(100, 40, 'short', 'close').orderSide).toBe('short');
+
+    // `target` is the one that parts company. Aiming a LONG 1,000 leg at 500
+    // is a SELL of 500: the leg stays long, the order does not.
+    const down = resolveLegSizing(1_000, 500, 'long', 'target');
+    expect(down.deltaSize).toBe(-500);
+    expect(down.resultingSize).toBe(500);
+    expect(down.orderSide).toBe('short');
+    // Reading the held side here sent a BUY of 500 against a long 1,000 and
+    // finished at 1,500 — the opposite of what the §4 row promised — and the
+    // reduce-only cap could not catch it, because 500 < 1,000.
+    expect(down.orderSide).not.toBe('long');
+
+    // Mirrored on the short side: a SHORT 1,000 aimed at 500 is a BUY.
+    expect(resolveLegSizing(-1_000, 500, 'short', 'target')).toMatchObject({
+      deltaSize: 500,
+      resultingSize: -500,
+      orderSide: 'long',
+    });
+
+    // Still growing towards the target: the order agrees with the side again.
+    expect(resolveLegSizing(400, 1_000, 'long', 'target').orderSide).toBe('long');
+
+    // A leg that does not trade keeps the side it holds; it has no order.
+    expect(resolveLegSizing(1_000, 1_000, 'long', 'target')).toMatchObject({
+      deltaSize: 0,
+      orderSide: 'long',
+    });
+  });
+
   it("'target' with a ZERO request leaves the leg alone — it is not a target of flat", () => {
     // `onlyLeg` sizes the other leg to 0 to keep it out of the order. Read as
     // "aim at 0" that would have sent a full close of the leg that already
@@ -382,6 +417,49 @@ describe('simulateBorosPair', () => {
     expect(sim.marginRequiredTotal).toBeCloseTo(imA + imB, 6);
     // Not symmetric — the point of showing it per leg.
     expect(sim.legA.marginRequired).not.toBeCloseTo(sim.legB.marginRequired!, 6);
+  });
+
+  it('quotes a REDUCING target off the other half of the book', () => {
+    // Re-running the wizard at a lower notional: the leg holds 1,000 long and
+    // the box now says 500, so the delta is −500 and the ORDER is a sell.
+    // Reading the held side instead walked the asks, quoted the buy rate, put
+    // the bound on the wrong side of mid, and sent a BUY that finished at
+    // 1,500 under a §4 row reading 1,000 → 500.
+    const sim = simulateBorosPair(
+      simInput({
+        intent: 'target',
+        size: 500,
+        // Deliberately asymmetric around the 0.09 mid, so the side walked is
+        // readable straight off the rate: bid 0.088, ask 0.092.
+        legA: leg({ book: book(hlMarket.marketId, 0.088, 0.092), direction: 'long', currentSize: 1_000 }),
+        legB: leg({ market: bnMarket, book: book(bnMarket.marketId, 0.04, 0.042), direction: 'short', currentSize: 0 }),
+      }),
+    );
+
+    expect(sim.legA.sizing).toMatchObject({
+      currentSize: 1_000,
+      deltaSize: -500,
+      resultingSize: 500,
+      opposing: true,
+      flips: false,
+      orderSide: 'short',
+    });
+    // The side the account HOLDS is untouched — it is what the §4 row and the
+    // acknowledgement describe, and it is still long.
+    expect(sim.legA.direction).toBe('long');
+
+    // Crossed the BIDS: 0.088, not the 0.092 ask the old read quoted.
+    expect(sim.legA.execApr).toBeCloseTo(0.088, 12);
+    expect(sim.legA.estFillSize).toBeCloseTo(500, 12);
+    // Worse-than-mid for a SELL is a LOWER rate: 0.09 − 0.088.
+    expect(sim.legA.estSlippageApr).toBeCloseTo(0.002, 12);
+    // The bound sits a full tolerance BELOW mid, not above it.
+    expect(sim.legA.worstApr).toBeCloseTo(0.09 - DEFAULT_SLIPPAGE_APR, 12);
+    expect(sim.legA.slippageExceeded).toBe(false);
+
+    // A leg growing towards its target is unchanged: order side = side held.
+    expect(sim.legB.sizing).toMatchObject({ deltaSize: -500, resultingSize: -500, orderSide: 'short' });
+    expect(sim.legB.execApr).toBeCloseTo(0.04, 12);
   });
 
   it('totals the taker fee over BOTH legs\' own sizes when they differ', () => {

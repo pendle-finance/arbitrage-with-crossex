@@ -932,6 +932,9 @@ export interface BorosLegSizing {
   opposing: boolean;
   flips: boolean;
   clampedToClose: boolean;
+  /** The side the ORDER takes — the sign of `deltaSize`, not the side held.
+   * A reducing target sells a leg whose `direction` is still 'long'. */
+  orderSide: BorosLegDirection;
 }
 
 export type BorosBookStatus = 'ok' | 'insufficient-depth' | 'unavailable' | 'not-fetched';

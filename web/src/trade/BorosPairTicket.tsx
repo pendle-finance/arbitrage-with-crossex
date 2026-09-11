@@ -904,8 +904,13 @@ export function BorosPairTicket({
         )}
       </div>
 
-      {/* The wizard only ever OPENS: step 1 locks a rate the card quoted,
-          and a reduce-only close there would be a different trade entirely. */}
+      {/* The wizard has no intent toggle: it always sends `target`, the END
+          STATE, so step 1 can be re-run at a new notional without the
+          operator working out the remainder. `target` is not "only opens" —
+          a notional BELOW what the leg holds reduces it, and the order side
+          follows the sign of the delta (`sizing.orderSide`), not the side
+          held. A reduce-only `close` here would be a different trade: it
+          could never grow a leg that is short of its target. */}
       {!guided && (
       <SegmentedToggle<BorosPairIntent>
         ariaLabel="Pair intent"

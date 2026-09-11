@@ -713,13 +713,22 @@ export function borosPairRoutes(deps: AppDeps) {
         const raw = account.positionRawByMarket.get(leg.marketId);
         const openWei = leg.sizing.opposing && !leg.sizing.flips && raw !== undefined ? absWei(raw) : null;
         const askedWei = openWei === null ? null : parseUnits(decimalString(size), 18);
+        /**
+         * ⚠ The side the ORDER takes, never the side the account holds.
+         * They part company on a reducing `target`: the leg stays 'long' and
+         * the delta is negative, so sending `leg.direction` bought MORE of
+         * the position the §4 row promised to reduce. The cancel-and-close
+         * route below already derives its side from the position sign for
+         * the same reason; this is that rule, applied from the delta.
+         */
+        const { orderSide } = leg.sizing;
         return {
           marketId: leg.marketId,
-          direction: leg.direction,
+          direction: orderSide,
           size,
           // Bound off the book MID, the same anchor the ticket's "Est." and
           // "Max" use; a mid-less market falls back to the fill rate.
-          limitApr: limitAprFor(leg.direction, knownRate(leg.midApr) ? leg.midApr : leg.execApr, leg.slippageApr),
+          limitApr: limitAprFor(orderSide, knownRate(leg.midApr) ? leg.midApr : leg.execApr, leg.slippageApr),
           clientOrderId,
           ...(openWei !== null && askedWei !== null && askedWei > openWei ? { sizeWei: openWei.toString() } : {}),
         };

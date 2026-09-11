@@ -356,7 +356,7 @@ export function useDealView(id: string | null) {
   /**
    * ⚠ A finished deal must refresh the POSITION feeds.
    *
-   * The poll stops at DONE and nothing else asked the position or strategy
+   * The poll stops at DONE and nothing else asked the position or asset-view
    * queries to re-read — so an order could fill, the modal could say it had,
    * and the cards behind it would still show the pre-trade book until their
    * own 4s/30s interval came round (or the user reloaded). The deal is the
@@ -369,7 +369,7 @@ export function useDealView(id: string | null) {
     if (!id || mode !== 'DONE' || settled.current === id) return;
     settled.current = id;
     void qc.invalidateQueries({ queryKey: qk.positions });
-    void qc.invalidateQueries({ queryKey: ['strategy'] });
+    void qc.invalidateQueries({ queryKey: ['assetView'] });
     void qc.invalidateQueries({ queryKey: qk.account });
   }, [id, mode, qc]);
 
@@ -509,12 +509,12 @@ export function useExecuteBorosPair() {
   return useMutation({
     mutationFn: (req: BorosPairRequest) =>
       postJson<BorosPairExecuteResponse>('/boros/pair/execute', req),
-    // ⚠ Same contract as the close below: the CARD reads the STRATEGY feed,
-    // not the pair context. Without ['strategy'] a leg that had just been
+    // ⚠ Same contract as the close below: the CARD reads the ASSET VIEW,
+    // not the pair context. Without ['assetView'] a leg that had just been
     // opened did not appear until some other refetch happened to pull it in.
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['boros', 'pair', 'context'] });
-      void qc.invalidateQueries({ queryKey: ['strategy'] });
+      void qc.invalidateQueries({ queryKey: ['assetView'] });
       void qc.invalidateQueries({ queryKey: qk.positions });
     },
   });
@@ -598,12 +598,12 @@ export function useBorosCancelAndClose() {
         ...(slippageApr === undefined ? {} : { slippageApr }),
         ...(address === undefined ? {} : { address }),
       }),
-    // ⚠ The CARD reads the strategy feed, not the pair context. Invalidating
+    // ⚠ The CARD reads the asset view, not the pair context. Invalidating
     // only the context left a closed leg on screen at its old size until the
     // user reloaded — the close had happened, the page just never re-asked.
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['boros', 'pair', 'context'] });
-      void qc.invalidateQueries({ queryKey: ['strategy'] });
+      void qc.invalidateQueries({ queryKey: ['assetView'] });
       void qc.invalidateQueries({ queryKey: qk.positions });
     },
   });

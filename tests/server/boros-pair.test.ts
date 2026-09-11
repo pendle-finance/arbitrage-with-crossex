@@ -664,6 +664,75 @@ describe('POST /api/boros/pair/execute', () => {
     expect(sent.every((s) => s.sizeWei === undefined)).toBe(true);
   });
 
+  it('sends a reducing TARGET as a SELL of the delta, not a buy on the side held', async () => {
+    // The wizard re-run at a lower notional. The leg holds 1,000 LONG and the
+    // box now says 500, so §4 reads 1,000 → 500 and the acknowledgement says
+    // "reduces". Reading the side HELD instead of the sign of the delta sent a
+    // BUY of 500 and finished at 1,500 — and the reduce-only wei cap could not
+    // catch it, because 500 is not greater than the 1,000 open.
+    const sent: BorosMarketOrderRequest[] = [];
+    makeApp(
+      {
+        '/core/v1/collaterals/summary': {
+          collaterals: [
+            {
+              tokenId: 3,
+              crossPosition: {
+                netBalance: raw(500_000),
+                marketPositions: [
+                  { marketId: HL, side: 0, notionalSize: raw(1_000), pnl: {}, positionInitialMargin: raw(0) },
+                ],
+              },
+              isolatedPositions: [],
+            },
+          ],
+        },
+      },
+      undefined,
+      {
+        placeMarketOrders: async (reqs) => {
+          reqs.forEach((r) => sent.push(r));
+          return reqs.map((r) => okFill({ marketId: r.marketId, direction: r.direction, filledSize: r.size }));
+        },
+        cancelOrders: async () => {},
+        closePosition: async () => okFill(),
+      },
+    );
+
+    const res = await post(
+      '/api/boros/pair/execute',
+      pairBody({
+        legA: { marketId: HL, direction: 'long', slippageApr: 0.0025 },
+        // The Binance fixture's BID sits 0.5% under its mid, so a sell there
+        // needs a tolerance that admits it; the point under test is the SIDE.
+        legB: { marketId: BN, direction: 'short', slippageApr: 0.01 },
+        size: 500,
+        intent: 'target',
+        opposingAcknowledged: true,
+        clientOrderIdA: 'coid-aaaa',
+        clientOrderIdB: 'coid-bbbb',
+      }),
+    );
+    expect(res.statusCode).toBe(200);
+
+    const hl = sent.find((r) => r.marketId === HL)!;
+    expect(hl).toBeDefined();
+    // Declared 'long' in the body; the ORDER is the other way.
+    expect(hl.direction).toBe('short');
+    expect(hl.size).toBeCloseTo(500, 9);
+    // A sell's bound sits BELOW the 0.09 mid. The old read put it above.
+    expect(hl.limitApr).toBeLessThan(0.09);
+    // Nothing to cap: the delta is smaller than the position, so it cannot
+    // cross flat and the wei override must stay off.
+    expect(hl.sizeWei).toBeUndefined();
+
+    // The leg that is only growing towards its target is untouched: its order
+    // side is still the side it declared.
+    const bn = sent.find((r) => r.marketId === BN)!;
+    expect(bn.direction).toBe('short');
+    expect(bn.limitApr).toBeLessThan(0.045);
+  });
+
   it('trades ONE leg when onlyLeg is set, for a completion', async () => {
     const sent: number[][] = [];
     makeApp({}, undefined, {
