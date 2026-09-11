@@ -500,6 +500,8 @@ function StepOneReceipt({ book, hedged }: { book: StepOneBook; hedged: number })
     // stitched across a partial and its top-up would mislabel money.
     realisedSpreadApr: book.soleClean ? (book.lastResult?.realisedSpreadApr ?? null) : null,
     partial: false,
+    // The book only holds accepted fills, so something filled by construction.
+    filledNothing: false,
   };
   return (
     <PairResultReport

@@ -677,16 +677,27 @@ export function PairResultReport({
   // a hardcoded direction and no failure — on the very screen that has to
   // say why the venue refused.
   const only = oneLeg ? (legSubmitted(result.legB) ? result.legB : result.legA) : null;
+  /**
+   * Three outcomes, not two. A total refusal satisfies `partial` as much as a
+   * half-done pair does, so it used to print "partially filled · 0 ETH hedged"
+   * over two rejected legs. Red, not amber: there is no residual to complete.
+   */
+  const nothing = result.filledNothing;
+  const shortfall = !nothing && result.partial;
   return (
     <div
       className={`rounded-lg border px-3 py-2.5 ${
-        result.partial ? 'border-amber-500/30 bg-amber-500/[0.04]' : 'border-emerald-500/25 bg-emerald-500/5'
+        nothing
+          ? 'border-rose-500/30 bg-rose-500/[0.04]'
+          : shortfall
+            ? 'border-amber-500/30 bg-amber-500/[0.04]'
+            : 'border-emerald-500/25 bg-emerald-500/5'
       }`}
       role="status"
     >
       <div className="flex flex-wrap items-center gap-2">
-        <Chip sm tone={tone}>
-          {result.partial ? 'partially filled' : 'filled'}
+        <Chip sm tone={nothing ? 'red' : tone}>
+          {nothing ? 'nothing filled' : shortfall ? 'partially filled' : 'filled'}
         </Chip>
         {oneLeg && only ? (
           // Direction and size, which is the whole of what was asked for.
@@ -811,6 +822,7 @@ const FAILURE_LABEL: Record<NonNullable<BorosLegFill['failure']>['code'], string
   'rate-deviation': 'rate-deviation guard',
   'insufficient-margin': 'not enough margin',
   'no-gas': 'no prepaid gas',
+  'min-cash': 'below the venue minimum',
   rejected: 'rejected',
   unknown: 'no confirmation',
 };
@@ -853,6 +865,11 @@ const FAILURE_HINT: Record<NonNullable<BorosLegFill['failure']>['code'], string>
   'insufficient-margin': 'That account could not fund the leg. Top it up, then re-issue.',
   'no-gas':
     'Boros bills each action to a prepaid gas pot, which is separate from your trading collateral. Top up the gas balance, then re-issue.',
+  // Says "collateral, not gas" outright: the venue's own "top up" reads as gas,
+  // and paying gas here spends margin on nothing and cannot be undone.
+  'min-cash':
+    'This is the first trade on this collateral on Boros, and the venue needs a minimum balance in that account before it will accept one. ' +
+    'This is collateral, not gas: topping up the gas balance will not clear it. Deposit into your Boros balance for this collateral, then re-issue.',
   rejected: 'The venue rejected the order outright — its own message is below.',
   // Deliberately terse: an 'unknown' failure always carries a specific message
   // below it, and two paragraphs saying the same thing read as two problems.
