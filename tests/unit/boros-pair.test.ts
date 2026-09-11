@@ -252,6 +252,22 @@ describe('simulateBorosPair', () => {
     expect(sim.feeDragApr).toBeCloseTo(FEE_DRAG, 12);
   });
 
+  it('still prices the mid spread, slippage and the mid-anchored bound when BOTH mids are negative', () => {
+    // A `mid > 0` guard read a negative-funding market as "no mid": the
+    // spread/slippage went blank and the rate bound silently fell back to the
+    // fill instead of mid ± tolerance. 0 is the feed's "none"; a sign is not.
+    const sim = simulateBorosPair(
+      simInput({
+        legA: leg({ market: { ...hlMarket, midApr: -0.02 }, book: book(155, -0.02, -0.018) }),
+        legB: leg({ market: { ...bnMarket, midApr: -0.05 }, book: book(101, -0.05, -0.048), direction: 'long' }),
+      }),
+    );
+    expect(sim.midSpreadApr).toBeCloseTo(-0.02 - -0.05 - FEE_DRAG, 12);
+    expect(sim.slippageApr).not.toBeNull();
+    expect(sim.legA.worstApr).toBeCloseTo(-0.02 - DEFAULT_SLIPPAGE_APR, 12);
+    expect(sim.legB.worstApr).toBeCloseTo(-0.05 + DEFAULT_SLIPPAGE_APR, 12);
+  });
+
   it('reports SLIPPAGE as the distance from mid, not the unused tolerance', () => {
     const sim = simulateBorosPair(simInput());
     // Mid spread and executed spread are composed identically (receive − pay

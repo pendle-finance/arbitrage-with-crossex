@@ -172,11 +172,16 @@ export function useAssetViewWindows(address: string | null, sinces: readonly num
     })),
   });
   const bySince = new Map<number, AssetViewResponse>();
+  // A window whose fetch FAILED (no data, not loading). Without this the
+  // caller cannot tell "still fetching" from "never coming".
+  const errorBySince = new Map<number, unknown>();
   distinct.forEach((since, i) => {
-    const d = results[i]?.data;
+    const r = results[i];
+    const d = r?.data;
     if (d) bySince.set(since, d);
+    else if (r?.isError) errorBySince.set(since, r.error);
   });
-  return { bySince, results, distinct };
+  return { bySince, errorBySince, results, distinct };
 }
 
 export interface OpportunitiesParams {

@@ -125,7 +125,7 @@ describe('pairs are 4-leg units at one maturity', () => {
     expect(yuLegs.every((l) => l.maturity === SEP)).toBe(true);
     // The orphan Oct leg is listed apart, at its full size.
     expect(d.pendingLegs).toHaveLength(1);
-    expect(d.pendingLegs[0]).toMatchObject({ venue: 'HYPERLIQUID', maturity: OCT, size: 40 });
+    expect(d.pendingLegs[0]).toMatchObject({ venue: 'HYPERLIQUID', maturity: OCT, sizeBase: 40 });
   });
 
   it('both sides laddered → TWO pairs, one per maturity, no pending legs', () => {
@@ -168,8 +168,8 @@ describe('pairs are 4-leg units at one maturity', () => {
     expect(sep.size).toBeCloseTo(75, 6);
     expect(oct.size).toBeCloseTo(25, 6);
     // Each perp leg is carried at its share, never in full on both rows.
-    expect(sep.legs.find((l) => l.kind === 'perp' && l.side === 'LONG')!.size).toBeCloseTo(75, 6);
-    expect(oct.legs.find((l) => l.kind === 'perp' && l.side === 'LONG')!.size).toBeCloseTo(25, 6);
+    expect(sep.legs.find((l) => l.kind === 'perp' && l.side === 'LONG')!.sizeToken).toBeCloseTo(75, 6);
+    expect(oct.legs.find((l) => l.kind === 'perp' && l.side === 'LONG')!.sizeToken).toBeCloseTo(25, 6);
     expect(sep.capitalUsd + oct.capitalUsd).toBeCloseTo(
       // both perps' IM + both YU legs' IM, whole
       100 * 250 * 2 + 100 * 100 * 2,
@@ -230,7 +230,7 @@ describe('pairs are 4-leg units at one maturity', () => {
     expect(d.pairs[0].size).toBeCloseTo(60, 6); // capped by the thinner side
     // Gate's unpaired 40 is pending, HL has nothing left over.
     expect(d.pendingLegs).toHaveLength(1);
-    expect(d.pendingLegs[0]).toMatchObject({ venue: 'GATE', size: 40 });
+    expect(d.pendingLegs[0]).toMatchObject({ venue: 'GATE', sizeBase: 40 });
   });
 
   it('one laddered venue vs two single-maturity venues: each unit keeps its term', () => {

@@ -71,6 +71,9 @@ export function AssetsHome() {
       (data?.assets ?? []).map((g) => {
         const since = prefs.sinceByAsset[g.base] ?? 0;
         const win = since > 0 ? windows.bySince.get(since) : undefined;
+        // A window whose fetch FAILED is not pending: the all-time numbers
+        // stand in, and the "updating window…" hint must not spin forever.
+        const windowFailed = since > 0 && !win && windows.errorBySince.has(since);
         // Until that window's fetch lands, the all-time numbers stand in;
         // an asset absent from a narrower window is genuinely empty there.
         const group = win ? (win.assets.find((a) => a.base === g.base) ?? { ...g, perpClosed: [], borosHistory: [] }) : g;
@@ -78,11 +81,11 @@ export function AssetsHome() {
         return {
           group,
           sinceSec: since,
-          windowPending: since > 0 && !win,
+          windowPending: since > 0 && !win && !windowFailed,
           derived: deriveAsset(group, prefs.exclusions, meta?.sinceSec ?? 0, meta?.nowSec ?? 0, feeRows),
         };
       }),
-    [data, windows.bySince, prefs.exclusions, prefs.sinceByAsset, feeRows],
+    [data, windows.bySince, windows.errorBySince, prefs.exclusions, prefs.sinceByAsset, feeRows],
   );
   // Dust fold: an asset with nothing open and a negligible history total is
   // real (the sums keep it) but not worth a card — one muted line names them.

@@ -76,7 +76,9 @@ const validate = (parsed: unknown): AllBooks => {
           const qty = Number(slice.qty);
           if (!Number.isFinite(qty) || qty <= 0) continue;
           const at = Number(slice.at);
-          exclusions[k] = Number.isFinite(at) && at >= 0 ? { qty, at } : { qty };
+          // A Boros fixed rate can be negative (negative-funding regime), so
+          // only a non-number is dropped — the sign is part of the price.
+          exclusions[k] = Number.isFinite(at) ? { qty, at } : { qty };
         } else if (Number.isFinite(Number(q)) && Number(q) > 0) exclusions[k] = Number(q);
       }
     }

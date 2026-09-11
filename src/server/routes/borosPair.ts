@@ -718,7 +718,7 @@ export function borosPairRoutes(deps: AppDeps) {
           size,
           // Bound off the book MID, the same anchor the ticket's "Est." and
           // "Max" use; a mid-less market falls back to the fill rate.
-          limitApr: limitAprFor(leg.direction, leg.midApr > 0 ? leg.midApr : leg.execApr, leg.slippageApr),
+          limitApr: limitAprFor(leg.direction, Number.isFinite(leg.midApr) && leg.midApr !== 0 ? leg.midApr : leg.execApr, leg.slippageApr),
           clientOrderId,
           ...(openWei !== null && askedWei !== null && askedWei > openWei ? { sizeWei: openWei.toString() } : {}),
         };

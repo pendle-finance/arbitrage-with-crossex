@@ -10,6 +10,8 @@ import {
   defaultChargePerpFees,
   deriveAsset,
   keptSlice,
+  pairBorosCloseLegs,
+  pairPerpCloseLegs,
   perpKey,
   SECONDS_IN_YEAR,
 } from './assetModel';
@@ -392,6 +394,92 @@ describe('defaultChargePerpFees', () => {
   });
 });
 
+
+describe('pairs — merging sub-pairs of one venue pairing', () => {
+  it('ONE Boros market hedging two perp books at a venue comes back as ONE leg, not two', () => {
+    // HL holds ETH_USDC 600 + ETH_USDT 400 (two books), hedged by one HL YU of
+    // 1000; Gate is short 1000 with its own YU. Each HL book forms its own
+    // (HL, GATE, maturity) sub-pair, and the merge used to concatenate the
+    // legs — the same marketId twice, which the close form cannot quote
+    // (a pair against itself) and would submit as two closes.
+    const g = group({
+      perpOpen: [
+        perp({ symbol: 'HL_USDC', venue: 'HYPERLIQUID', side: 'LONG', qty: 600, notionalUsd: 1_140_000, imUsd: 6_000 }),
+        perp({ symbol: 'HL_USDT', venue: 'HYPERLIQUID', side: 'LONG', qty: 400, notionalUsd: 760_000, imUsd: 4_000 }),
+        perp({ symbol: 'GATE', venue: 'GATE', side: 'SHORT', qty: 1000, imUsd: 10_000 }),
+      ],
+      borosOpen: [
+        boros({ marketId: 1, venue: 'HYPERLIQUID', side: 'LONG', sizeToken: 1000, imUsd: 10_000 }),
+        boros({ marketId: 2, venue: 'GATE', side: 'SHORT', sizeToken: 1000, imUsd: 10_000 }),
+      ],
+    });
+    const d = deriveAsset(g, {}, 0, NOW);
+    expect(d.pairs).toHaveLength(1);
+    const yu = d.pairs[0].legs.filter((l) => l.kind === 'yu');
+    expect(yu.map((l) => l.marketId).sort()).toEqual([1, 2]);
+    const hl = yu.find((l) => l.marketId === 1)!;
+    // The merged leg carries the WHOLE attributed size, share and margin.
+    expect(hl.sizeToken).toBeCloseTo(1000, 6);
+    expect(hl.notionalUsd).toBeCloseTo(1_900_000, 6);
+    expect(hl.share).toBeCloseTo(1, 6);
+    expect(hl.imUsd).toBeCloseTo(10_000, 6);
+    // The Gate short was shared between the two sub-pairs: one row, whole.
+    const perps = d.pairs[0].legs.filter((l) => l.kind === 'perp');
+    expect(perps.map((l) => l.symbol).sort()).toEqual(['GATE', 'HL_USDC', 'HL_USDT']);
+    expect(perps.find((l) => l.symbol === 'GATE')!.sizeToken).toBeCloseTo(1000, 6);
+  });
+});
+
+describe('closing from a pair row', () => {
+  // HYPE sizes in DOLLARS on the card and its YU legs are USDT-margined. The
+  // close orders must still go out in each leg's own token: 100 HYPE on the
+  // perps, 8,000 USDT on the YU legs — never $8,000 "HYPE".
+  const hype = group({
+    base: 'HYPE',
+    priceUsd: 80,
+    perpOpen: [
+      perp({ symbol: 'GATE_HYPE', venue: 'GATE', side: 'LONG', qty: 100, notionalUsd: 8_000, imUsd: 800 }),
+      perp({ symbol: 'HL_HYPE', venue: 'HYPERLIQUID', side: 'SHORT', qty: 100, notionalUsd: 8_000, imUsd: 800 }),
+    ],
+    borosOpen: [
+      boros({ marketId: 7, venue: 'GATE', side: 'LONG', collateral: 'USDT', sizeToken: 8_000, notionalUsd: 8_000, imUsd: 800 }),
+      boros({ marketId: 8, venue: 'HYPERLIQUID', side: 'SHORT', collateral: 'USDT', sizeToken: 8_000, notionalUsd: 8_000, imUsd: 800 }),
+    ],
+  });
+
+  it('perp close legs are coin quantities even when the asset displays in USD', () => {
+    const d = deriveAsset(hype, {}, 0, NOW);
+    expect(d.pairs).toHaveLength(1);
+    expect(d.pairs[0].unit).toBe('usd');
+    expect(pairPerpCloseLegs(d.pairs[0])).toEqual([
+      { symbol: 'GATE_HYPE', qty: 100, venue: 'GATE', partial: false },
+      { symbol: 'HL_HYPE', qty: 100, venue: 'HYPERLIQUID', partial: false },
+    ]);
+  });
+
+  it('Boros close legs carry the collateral-token size and the same slice in dollars', () => {
+    const d = deriveAsset(hype, {}, 0, NOW);
+    const legs = pairBorosCloseLegs(d.pairs[0], hype);
+    expect(legs.map((l) => l.marketId).sort()).toEqual([7, 8]);
+    for (const l of legs) {
+      expect(l.notionalToken).toBeCloseTo(8_000, 6);
+      expect(l.notionalUsd).toBeCloseTo(8_000, 6);
+      expect(l.collateral).toBe('USDT');
+    }
+    // And the coin reading of the same slice is 100 HYPE, for display.
+    const yu = d.pairs[0].legs.filter((l) => l.kind === 'yu');
+    for (const l of yu) expect(l.sizeBase).toBeCloseTo(100, 6);
+  });
+
+  it('a half-excluded Boros leg closes only the kept half', () => {
+    const d = deriveAsset(hype, { 'boros:7': 4_000 }, 0, NOW);
+    const gate = pairBorosCloseLegs(d.pairs[0], hype).find((l) => l.marketId === 7)!;
+    expect(gate.notionalToken).toBeCloseTo(4_000, 6);
+    // The excluded half is not this farm's, so the pair holds ALL of what is
+    // left: `share` is against the kept leg, not the venue position.
+    expect(gate.share).toBeCloseTo(1, 6);
+  });
+});
 
 describe('exclusions and maturity — his 2026-09-09 rules', () => {
   it('a partial Boros exclusion scales the settled PnL by the kept fraction, not just capital', () => {

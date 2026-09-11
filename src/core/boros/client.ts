@@ -575,7 +575,8 @@ export interface BorosSettlementEvent {
   timeSec: number;
   /** |position| at the settlement instant, token units. */
   positionAbs: number;
-  /** Net settlement = yieldReceived − yieldPaid − fee, SIGNED (+ = paid out). */
+  /** Net settlement = yieldReceived − yieldPaid − fee, SIGNED (+ = received
+   * by the account, a gain; − = paid). */
   settlementToken: number;
   /** Settlement fee charged this period (positive cost). */
   feeToken: number;

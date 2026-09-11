@@ -244,28 +244,6 @@ export function BorosPairTicket({
       [...ms].sort((a, b) => a.maturity - b.maturity)[0];
     let long: Market | undefined;
     let short: Market | undefined;
-    if (longAt.length > 0 && shortAt.length > 0) {
-      const shortMaturities = new Set(shortAt.map((m) => m.maturity));
-      long = soonest(longAt.filter((m) => shortMaturities.has(m.maturity)));
-      short = long ? shortAt.find((m) => m.maturity === long!.maturity) : undefined;
-    } else {
-      // Single-leg prefills: only one side was asked for, so there is nothing
-      // to agree with and the soonest at that venue is the right default.
-      // If the asked-for maturity is not listed at this venue at all, the
-      // hedge is still perp↔YU on ONE venue and the term is the user's to
-      // pick — arm the venue's soonest market rather than an empty dropdown
-      // (the leg is missing; an unarmed ticket is not the safer state).
-      const anyTerm = (venue: string | null) =>
-        venue === null
-          ? []
-          : markets.filter(
-              (m) =>
-                m.venue.toUpperCase() === venue.toUpperCase() &&
-                m.base.toUpperCase() === openPrefill.base.toUpperCase(),
-            );
-      long = soonest(longAt.length > 0 ? longAt : anyTerm(openPrefill.longVenue));
-      short = soonest(shortAt.length > 0 ? shortAt : anyTerm(openPrefill.shortVenue));
-    }
     /**
      * One venue = one leg. A missing-leg row asks for exactly the leg it is
      * missing, so opening a PAIR here would silently create a second position
@@ -273,6 +251,41 @@ export function BorosPairTicket({
      * is the opposite of the repair the user clicked.
      */
     const onlyOne = (openPrefill.longVenue === null) !== (openPrefill.shortVenue === null);
+    const anyTerm = (venue: string | null) =>
+      venue === null
+        ? []
+        : markets.filter(
+            (m) =>
+              m.venue.toUpperCase() === venue.toUpperCase() &&
+              m.base.toUpperCase() === openPrefill.base.toUpperCase(),
+          );
+    const shared = (ls: Market[], ss: Market[]) => {
+      const shortMaturities = new Set(ss.map((m) => m.maturity));
+      const l = soonest(ls.filter((m) => shortMaturities.has(m.maturity)));
+      return { long: l, short: l ? ss.find((m) => m.maturity === l.maturity) : undefined };
+    };
+    if (longAt.length > 0 && shortAt.length > 0) {
+      ({ long, short } = shared(longAt, shortAt));
+    } else if (!onlyOne) {
+      // A PAIR was asked for, but one venue lists nothing at the requested
+      // maturity. Falling through to "each side's soonest" armed the other
+      // venue at the requested term against this one at ANY term — the very
+      // cross-maturity pair the intersection above exists to prevent. Re-
+      // resolve both sides on a maturity they share; none shared ⇒ no pair.
+      ({ long, short } = shared(
+        longAt.length > 0 ? longAt : anyTerm(openPrefill.longVenue),
+        shortAt.length > 0 ? shortAt : anyTerm(openPrefill.shortVenue),
+      ));
+    } else {
+      // Single-leg prefills: only one side was asked for, so there is nothing
+      // to agree with and the soonest at that venue is the right default.
+      // If the asked-for maturity is not listed at this venue at all, the
+      // hedge is still perp↔YU on ONE venue and the term is the user's to
+      // pick — arm the venue's soonest market rather than an empty dropdown
+      // (the leg is missing; an unarmed ticket is not the safer state).
+      long = soonest(longAt.length > 0 ? longAt : anyTerm(openPrefill.longVenue));
+      short = soonest(shortAt.length > 0 ? shortAt : anyTerm(openPrefill.shortVenue));
+    }
     /**
      * ⚠ Always ASSIGN, never "assign if found".
      *
@@ -545,7 +558,7 @@ export function BorosPairTicket({
     if (activeLeg === null) return simulation.slippageApr ?? null;
     const leg = activeLeg === 'A' ? simulation.legA : simulation.legB;
     const mid = (activeLeg === 'A' ? rowA : rowB)?.midApr;
-    return leg.execApr !== null && mid !== undefined && mid > 0 ? Math.abs(leg.execApr - mid) : null;
+    return leg.execApr !== null && mid !== undefined && Number.isFinite(mid) && mid !== 0 ? Math.abs(leg.execApr - mid) : null;
   })();
   const gate = sim.data?.gate ?? null;
 
