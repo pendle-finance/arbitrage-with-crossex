@@ -25,6 +25,7 @@ import { useMemo, useState } from 'react';
 import type { BorosPairRequest, BorosSimulatedLeg, StrategyLeg } from '../api/types';
 import { SignedNumber } from '../components/SignedNumber';
 import { QueryError } from '../components/QueryError';
+import { knownRate } from '../lib/boros';
 import { fieldValue, fmtPct, fmtTokenQty, fmtUsd, prettyVenue } from '../lib/fmt';
 import {
   useBorosAgent,
@@ -238,10 +239,9 @@ export function CloseBorosForm({
     const sim = simLegFor(0) ? (closable.length > 1 ? [simLegFor(0), simLegFor(1)] : [simLegFor(0)]) : [];
     const gaps = sim
       .map((leg) => {
-        if (!leg || leg.execApr == null || !Number.isFinite(leg.execApr)) return null;
+        if (!leg || leg.execApr === null) return null;
         const mid = ctx.data?.markets.find((m) => m.marketId === leg.marketId)?.midApr;
-        // 0 is the feed's "no mid"; a negative mid is a real market.
-        return mid !== undefined && Number.isFinite(mid) && mid !== 0 ? Math.abs(leg.execApr - mid) : null;
+        return knownRate(mid) ? Math.abs(leg.execApr - mid) : null;
       })
       .filter((n): n is number => n !== null);
     return gaps.length > 0 ? Math.max(...gaps) : null;
@@ -493,7 +493,7 @@ export function CloseBorosForm({
                           this close sends. */}
                       {(() => {
                         const mid = ctx.data?.markets.find((m) => m.marketId === id)?.midApr;
-                        if (mid === undefined || !Number.isFinite(mid) || mid === 0 || slipInvalid) return null;
+                        if (!knownRate(mid) || slipInvalid) return null;
                         const bound = l.side === 'LONG' ? mid - slipPct / 100 : mid + slipPct / 100;
                         return <span className="text-ink-500"> (worst {fmtPct(bound)})</span>;
                       })()}

@@ -32,6 +32,7 @@ import {
 } from '../../core/boros/client';
 import { USD_TOKEN_ID, absWei, decimalString } from '../../core/boros/borosApi';
 import { parseUnits } from 'viem';
+import { knownRate } from '../../core/boros/venue';
 import { isUpdating } from '../updater';
 import {
   limitAprFor,
@@ -718,7 +719,7 @@ export function borosPairRoutes(deps: AppDeps) {
           size,
           // Bound off the book MID, the same anchor the ticket's "Est." and
           // "Max" use; a mid-less market falls back to the fill rate.
-          limitApr: limitAprFor(leg.direction, Number.isFinite(leg.midApr) && leg.midApr !== 0 ? leg.midApr : leg.execApr, leg.slippageApr),
+          limitApr: limitAprFor(leg.direction, knownRate(leg.midApr) ? leg.midApr : leg.execApr, leg.slippageApr),
           clientOrderId,
           ...(openWei !== null && askedWei !== null && askedWei > openWei ? { sizeWei: openWei.toString() } : {}),
         };
@@ -919,14 +920,9 @@ export function borosPairRoutes(deps: AppDeps) {
          * the book, so a bound derived from it was looser or tighter than the
          * tolerance the user set without anything on screen saying so.
          */
-        limitApr: limitAprFor(
-          direction,
-          // 0 is the feed's "no mid" (client.ts defaults a missing midApr to
-          // 0): a bound of 0 ± tolerance would be nowhere near the book, so
-          // that one case falls back to the mark. A NEGATIVE mid is real.
-          Number.isFinite(market.midApr) && market.midApr !== 0 ? market.midApr : market.markApr,
-          slippageApr,
-        ),
+        // A market with no mid (the feed's 0) falls back to the mark: a bound
+        // of 0 ± tolerance would be nowhere near the book.
+        limitApr: limitAprFor(direction, knownRate(market.midApr) ? market.midApr : market.markApr, slippageApr),
         clientOrderId,
       });
       /**

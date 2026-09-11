@@ -48,6 +48,7 @@ import {
   pairPerpCloseLegs,
   sizeIn,
 } from './assetModel';
+import { knownRate } from '../../lib/boros';
 import { AssetBars } from './AssetBars';
 
 interface Props {
@@ -1721,9 +1722,8 @@ export function AssetCard({ group, derived, sinceSec, windowPending, onChangeSin
       }
       const perpNotional = perps.reduce((t, l) => t + l.notionalUsd, 0);
       const perpQty = perps.reduce((t, l) => t + l.qty, 0);
-      // Known, not positive: a negative-funding market has a real float too
-      // (0 is the feed's "none").
-      const floatingApr = boros.find((l) => Number.isFinite(l.floatingApr) && l.floatingApr !== 0)?.floatingApr ?? null;
+      // Known, not positive: a negative-funding market has a real float too.
+      const floatingApr = boros.find((l) => knownRate(l.floatingApr))?.floatingApr ?? null;
       const hist = group.borosHistory.filter((h) => h.venue === venue);
       // Per-symbol AGGREGATES for the closed side, exactly as the model sums
       // them — so the bundles foot to the totals to the cent.

@@ -820,8 +820,12 @@ export function assetViewRoutes(deps: AppDeps) {
         // creates and the final loop pushes every stored row — creating one
         // here and then skipping it shipped a $0 history line with a real
         // locked rate while the leg's PnL was left out of the sums.
-        const h = px === null ? null : histFor(ev.marketId);
-        if (px === null || !h) {
+        if (px === null) {
+          unknownMarketRows += 1;
+          continue;
+        }
+        const h = histFor(ev.marketId);
+        if (!h) {
           unknownMarketRows += 1;
           continue;
         }
@@ -856,8 +860,12 @@ export function assetViewRoutes(deps: AppDeps) {
             openRate.set(t.marketId, r);
           }
           if (t.time < floorFor(t.marketId)) continue;
-          const h = px === null ? null : histFor(t.marketId);
-          if (px === null || !h) {
+          if (px === null) {
+            unknownMarketRows += 1;
+            continue;
+          }
+          const h = histFor(t.marketId);
+          if (!h) {
             unknownMarketRows += 1;
             continue;
           }

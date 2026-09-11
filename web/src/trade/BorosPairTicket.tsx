@@ -44,7 +44,7 @@ import { size as fmtSize, type SoloLeg } from './BorosPairBits';
 import { QueryError } from '../components/QueryError';
 import { SegmentedToggle } from '../components/SegmentedToggle';
 import { amountError } from '../lib/amount';
-import { isUsdCollateral } from '../lib/boros';
+import { isUsdCollateral, knownRate } from '../lib/boros';
 import { fieldValue, fmtPct, sig } from '../lib/fmt';
 import { useNow } from '../lib/useNow';
 import { uuid } from '../lib/uuid';
@@ -558,7 +558,7 @@ export function BorosPairTicket({
     if (activeLeg === null) return simulation.slippageApr ?? null;
     const leg = activeLeg === 'A' ? simulation.legA : simulation.legB;
     const mid = (activeLeg === 'A' ? rowA : rowB)?.midApr;
-    return leg.execApr !== null && mid !== undefined && Number.isFinite(mid) && mid !== 0 ? Math.abs(leg.execApr - mid) : null;
+    return leg.execApr !== null && knownRate(mid) ? Math.abs(leg.execApr - mid) : null;
   })();
   const gate = sim.data?.gate ?? null;
 

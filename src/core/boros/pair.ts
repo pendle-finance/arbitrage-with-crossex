@@ -34,7 +34,7 @@ import {
   walkBorosBook,
   type BookStatus,
 } from './opportunities';
-import { SECONDS_IN_YEAR } from './venue';
+import { SECONDS_IN_YEAR, knownRate } from './venue';
 import {
   AUTO_TOP_UP_BELOW_USD,
   AUTO_TOP_UP_USD,
@@ -382,9 +382,7 @@ function simulateLeg(
   }
 
   const execApr = walk ? walk.execApr : null;
-  // 0 is the API's "no mid" (client.ts defaults a missing midApr to 0); a
-  // NEGATIVE mid is a real negative-funding market and anchors like any other.
-  const mid = Number.isFinite(leg.market.midApr) && leg.market.midApr !== 0 ? leg.market.midApr : null;
+  const mid = knownRate(leg.market.midApr) ? leg.market.midApr : null;
   // A receive-fixed leg is hurt by a LOWER rate, a pay-fixed leg by a HIGHER one.
   const estSlippageApr =
     execApr === null || mid === null ? null : leg.direction === 'short' ? mid - execApr : execApr - mid;
@@ -530,9 +528,7 @@ export function simulateBorosPair(input: SimulateBorosPairInput): BorosPairSimul
   const recvMid = (receiveLeg === 'A' ? legA : legB).market.midApr;
   const payMid = (receiveLeg === 'A' ? legB : legA).market.midApr;
   const midSpreadApr =
-    quotable && recvMid !== 0 && payMid !== 0 && Number.isFinite(recvMid) && Number.isFinite(payMid)
-      ? recvMid - payMid - feeDragApr
-      : null;
+    quotable && knownRate(recvMid) && knownRate(payMid) ? recvMid - payMid - feeDragApr : null;
   const slippageApr =
     midSpreadApr !== null && estSpreadApr !== null ? Math.abs(midSpreadApr - estSpreadApr) : null;
   // Both tolerances spent at once. Equivalently estSpread − (slipA + slipB):
