@@ -222,6 +222,13 @@ export function CloseBorosForm({
   }, [address, closable, slipStr, sizeEdited, slipInvalid, anySizeInvalid, ctx.data]);
 
   const sim = useBorosPairSimulation(simReq, simReq !== null);
+  /** Boros refuses an order worth $10 or less, and the close cancels resting
+   * orders before it prices anything — so letting it through costs those
+   * orders and closes nothing. Only this blocker: the quote is a synthetic
+   * pair, and its other blockers describe the zero-sized partner leg. */
+  const anyBelowMin = (sim.data?.gate.blockers ?? []).some(
+    (b) => b.code === 'below-min-order-value' && closable.some((l) => l.marketId === b.marketId),
+  );
   const simLegFor = (i: number): BorosSimulatedLeg | null => {
     const s = sim.data?.simulation;
     if (!s) return null;
@@ -457,6 +464,13 @@ export function CloseBorosForm({
           const unit = l.collateral ?? '';
           const open = l.notionalToken ?? 0;
           const { value, invalid } = sizeOf(l);
+          /** Read off the quote, not recomputed: the gate owns the threshold,
+           * the collateral price and the flatten exemption. Matched on
+           * marketId — the quote is a pair, and its other blockers are about
+           * the partner leg. */
+          const belowMin = sim.data?.gate.blockers.find(
+            (b) => b.code === 'below-min-order-value' && b.marketId === id,
+          );
           const q = simLegFor(i);
           const err = failed.find((f) => f.marketId === id);
           const part = partial.find((x) => x.marketId === id);
@@ -506,6 +520,10 @@ export function CloseBorosForm({
                 <span className="text-rose-400">
                   size must be above 0 and at most {fmtTokenQty(maxCloseSize, unit)}
                 </span>
+              ) : belowMin ? (
+                /* The server's own words — a copy here could disagree at the
+                   boundary. */
+                <span className="text-rose-400">{belowMin.message}</span>
               ) : (
                 <>
                   <span className="flex justify-between text-ink-400">
@@ -665,7 +683,7 @@ export function CloseBorosForm({
         tone="red"
         // No quote, no close: a hold with the numbers blank sends a bound
         // nothing on screen describes.
-        disabled={close.isPending || slipInvalid || anySizeInvalid || agentBlocked || sim.isError || (simReq !== null && !sim.data)}
+        disabled={close.isPending || slipInvalid || anySizeInvalid || agentBlocked || sim.isError || (simReq !== null && !sim.data) || anyBelowMin}
         onConfirm={run}
         className="w-full"
       >

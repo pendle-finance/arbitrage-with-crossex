@@ -15,7 +15,12 @@ import type { PairEstimate } from './assets/assetModel';
  * in rather than re-derived so the link shows exactly what the sharer saw.
  *
  * A pair is an ESTIMATE (the short side is sliced proportionally), so it always
- * mints `uc: 1` — the shared page must not present a proposed split as fact. */
+ * mints `uc: 1` — the shared page must not present a proposed split as fact.
+ *
+ * ⚠ The displayed numbers are REQUIRED. `SharePayloadV1` types `a`, `p` and
+ * `sp` as plain numbers, so a null reaching here can only become zero — and
+ * zero is a public claim, not a blank. Non-nullable params push that decision
+ * back to `canSharePair`, which hides the button instead. */
 export function pairSharePayload(
   pair: PairEstimate,
   base: string,
@@ -23,9 +28,12 @@ export function pairSharePayload(
     nowSec: number;
     inclPerpFees: boolean;
     inclExitFee: boolean;
-    /** The popup's displayed net APR / net dollars. */
-    netApr: number | null;
-    netUsd: number | null;
+    /** The popup's displayed net APR / net dollars — non-null by `canSharePair`. */
+    netApr: number;
+    netUsd: number;
+    /** `pair.lockedAprFwd`, also non-null by `canSharePair`. Passed rather than
+     * re-read off `pair` so the guarantee is the type system's, not a comment. */
+    lockedAprFwd: number;
   },
 ): SharePayloadV1 {
   const sig4 = (v: number) => Number(v.toPrecision(4));
@@ -64,12 +72,12 @@ export function pairSharePayload(
       pair.hedgedSinceSec === null
         ? null
         : pair.hedgedSinceSec - (pair.hedgedSinceSec % 86_400),
-    a: opts.netApr ?? 0,
+    a: opts.netApr,
     c: pair.capitalUsd,
     // The pair model carries one capital figure, not a perp/Boros split.
     cp: null,
     cb: null,
-    p: opts.netUsd ?? 0,
+    p: opts.netUsd,
     // The card prints this as "N% locked spread", and a spread is a rate on
     // NOTIONAL: what the receive leg locks minus what the pay leg locks, net
     // of settlement fees. `lockedAprFwd` is that same carry over CAPITAL —
@@ -79,7 +87,7 @@ export function pairSharePayload(
     // pair's two perp notionals.
     sp: (() => {
       const perLegNotional = pair.notionalUsd / 2;
-      return pair.lockedAprFwd !== null && perLegNotional > 0 ? (pair.lockedAprFwd * pair.capitalUsd) / perLegNotional : 0;
+      return perLegNotional > 0 ? (opts.lockedAprFwd * pair.capitalUsd) / perLegNotional : 0;
     })(),
     // A pair only exists once both sides are on, and assetModel builds it from
     // legs that are open on both venues.

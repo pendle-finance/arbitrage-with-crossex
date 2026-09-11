@@ -1026,6 +1026,9 @@ export type BorosLegFailureCode =
   | 'rate-deviation'
   | 'insufficient-margin'
   | 'no-gas'
+  /** Mirrors src/core/boros/orders.ts: the venue's minimum cash to enter the
+   * first market on a collateral token. Collateral, not gas. */
+  | 'min-cash'
   | 'rejected'
   | 'unknown';
 
@@ -1092,6 +1095,9 @@ export interface BorosPairResult {
   unhedgedLeg: 'A' | 'B' | null;
   realisedSpreadApr: number | null;
   partial: boolean;
+  /** Nothing filled on any submitted leg. `partial` is true here too, so check
+   * this one FIRST — see src/core/boros/orders.ts. */
+  filledNothing: boolean;
 }
 
 /** POST /api/boros/pair/execute */

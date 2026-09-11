@@ -9,8 +9,9 @@
  */
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { BorosCancelAndCloseResult, StrategyLeg } from '../api/types';
+import { STRATEGY_STORAGE_KEY } from '../panels/HomeControls';
 import { makeStrategyLeg, versionHandler } from '../test/fixtures';
 import { env, server } from '../test/server';
 import { renderWithClient } from '../test/utils';
@@ -250,5 +251,102 @@ describe('CloseBorosForm — saying that it landed', () => {
     expect(await screen.findByText(/of what you asked for is still open/)).toBeInTheDocument();
     expect(panel()).toBeNull();
     expect(armed()).toBeInTheDocument();
+  });
+});
+
+/**
+ * The $10 floor. Boros refuses an order worth that or less, and the close route
+ * cancels every resting order on the market BEFORE it prices anything — so a
+ * close that was always going to be refused still costs the user those orders.
+ *
+ * Read off the quote's gate rather than recomputed here: the server owns the
+ * threshold, the collateral price and the "a flattening close is exempt" rule.
+ */
+describe('CloseBorosForm — the venue minimum', () => {
+  const MATURITY = 1_800_000_000;
+
+  // No tracked address means no quote at all, and then no gate to read.
+  beforeEach(() => {
+    window.localStorage.setItem(
+      STRATEGY_STORAGE_KEY,
+      JSON.stringify({ address: '0x1111111111111111111111111111111111111111' }),
+    );
+  });
+  afterEach(() => window.localStorage.clear());
+
+  const marketRow = (over: Record<string, unknown> = {}) => ({
+    marketId: MARKET,
+    name: 'Hyperliquid ETH',
+    venue: 'Hyperliquid',
+    base: 'ETH',
+    tokenId: 2,
+    collateral: 'ETH',
+    maturity: MATURITY,
+    midApr: 0.09,
+    markApr: 0.09,
+    isolatedOnly: false,
+    onIsolatedMargin: false,
+    isolatedHasPositionOrOrders: false,
+    currentSize: 0,
+    collateralPriceUsd: 2_460,
+    ...over,
+  });
+
+  /** A partner sharing collateral and maturity, so the quote is eligible. */
+  const quoting = (blockers: unknown[]) => [
+    ...ready(),
+    http.get('/api/boros/pair/context', () =>
+      HttpResponse.json(
+        env({
+          markets: [marketRow(), marketRow({ marketId: MARKET + 1, name: 'Binance ETH' })],
+          crossByToken: [{ tokenId: 2, available: 5 }],
+          isolatedByMarket: [],
+          defaultSlippageApr: 0.0025,
+          maxSlippageApr: 0.1,
+        }),
+      ),
+    ),
+    http.post('/api/boros/pair/simulate', () =>
+      HttpResponse.json(
+        env({
+          simulation: { legA: null, legB: null, collateralPriceUsd: 2_460 },
+          gate: { blockers, warnings: [], requiresAcknowledgement: false, opposingLegs: [] },
+          eligibility: { eligible: true, code: null, reason: null },
+          simulatedAtMs: Date.now(),
+          gasBalanceUsd: null,
+        }),
+      ),
+    ),
+  ];
+
+  const belowMin = {
+    code: 'below-min-order-value',
+    leg: 'A',
+    marketId: MARKET,
+    message: 'Hyperliquid ETH: this leg is worth $2.46, and Boros takes nothing at or under $10 — increase the size.',
+  };
+
+  it("shows the server's own words and will not let the close through", async () => {
+    server.use(...quoting([belowMin]));
+    renderWithClient(<CloseBorosForm legs={[leg()]} />);
+    expect(await screen.findByText(/worth \$2\.46/)).toBeInTheDocument();
+    const btn = await screen.findByRole('button', { name: /Close leg/ });
+    await waitFor(() => expect(btn).toBeDisabled());
+  });
+
+  it('ignores blockers about the synthetic partner leg', async () => {
+    // The quote is a PAIR, so the gate also reports these about the zero-sized
+    // partner. Neither describes this close, and neither may block it.
+    server.use(
+      ...quoting([
+        { code: 'legs-do-not-offset', message: 'Both legs point the same way — flip one to trade a spread.' },
+        { code: 'flip-unacknowledged', message: 'Tick the acknowledgement.' },
+        { code: 'below-min-order-value', leg: 'B', marketId: MARKET + 1, message: 'partner leg is worth $0.00' },
+      ]),
+    );
+    renderWithClient(<CloseBorosForm legs={[leg()]} />);
+    const btn = await screen.findByRole('button', { name: /Close leg/ });
+    await waitFor(() => expect(btn).toBeEnabled());
+    expect(screen.queryByText(/flip one to trade a spread/)).not.toBeInTheDocument();
   });
 });

@@ -242,6 +242,20 @@ function PairModal({
     netUsd !== null && termYears > 0 && pair.capitalUsd > 0
       ? netUsd / pair.capitalUsd / termYears
       : null;
+  /**
+   * The share card says "I'm getting N% fixed APR" in public, so every number
+   * on it has to be one we know. Below `MIN_APR_CAPITAL_USD` the model
+   * withholds the APR on purpose, and a matured pair has no present tense —
+   * both once published as a confident 0.00%. StrategyCard had this guard
+   * (`canShare`) before the asset view replaced it.
+   *
+   * A `const`, not `pair.lockedAprFwd` inline: TS narrows an aliased condition
+   * only through const bindings.
+   */
+  const lockedAprFwd = pair.lockedAprFwd;
+  const canSharePair =
+    netApr !== null && netUsd !== null && lockedAprFwd !== null && soonest > nowSec;
+
   const cell = 'border-b border-ink-850 px-2.5 py-2';
 
   /** One switch of the charge row — a setting, not a figure: the amounts
@@ -491,17 +505,27 @@ function PairModal({
               ← Pairs
             </button>
           )}
-          <button
-            type="button"
-            className="btn"
-            onClick={() =>
-              setSharePayload(
-                pairSharePayload(pair, base, { nowSec, inclPerpFees, inclExitFee, netApr, netUsd }),
-              )
-            }
-          >
-            Share this pair
-          </button>
+          {canSharePair && (
+            <button
+              type="button"
+              className="btn"
+              title="Share this pair — a public link + image; your wallet address is not included"
+              onClick={() =>
+                setSharePayload(
+                  pairSharePayload(pair, base, {
+                    nowSec,
+                    inclPerpFees,
+                    inclExitFee,
+                    netApr,
+                    netUsd,
+                    lockedAprFwd,
+                  }),
+                )
+              }
+            >
+              Share this pair
+            </button>
+          )}
         </span>
         <span className="text-[11px] text-ink-400">
           Proportional split by today’s sizes — reference only.

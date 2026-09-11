@@ -13,6 +13,25 @@ interface HistoryQuery {
   fresh?: string;
 }
 
+/**
+ * Gate sends `reduceOnly` as the string "true"/"false" while `OpenOrder` types
+ * it `boolean`, and this body reaches the web verbatim — so `"false"` was
+ * truthy and every order wore the "RO" badge, opening ones included. Coerced
+ * here because this is where venue JSON becomes our types. Gate's other
+ * strings (`qty`, `price`, `leverage`) are declared as strings and only
+ * rendered.
+ */
+export function normalizeOpenOrders(body: unknown): unknown {
+  if (!Array.isArray(body)) return body;
+  return body.map((o) => {
+    if (o === null || typeof o !== 'object' || !('reduceOnly' in o)) return o;
+    const raw = (o as { reduceOnly: unknown }).reduceOnly;
+    // A real boolean passes through; anything else is read as the venue's text.
+    const value = typeof raw === 'boolean' ? raw : String(raw).toLowerCase() === 'true';
+    return { ...o, reduceOnly: value };
+  });
+}
+
 /** Paging params with defaults; limit capped at Gate's 200. */
 export function pageParams(q: { page?: string; limit?: string; from?: string; to?: string }): {
   page: number;
@@ -35,8 +54,13 @@ export function ordersRoutes(deps: AppDeps) {
         `openOrders:${q.symbol ?? ''}`,
         TTL.live,
         async () =>
-          (await deps.getClients().crossEx.listCrossexOpenOrders(q.symbol ? { symbol: q.symbol } : {}))
-            .body,
+          normalizeOpenOrders(
+            (
+              await deps
+                .getClients()
+                .crossEx.listCrossexOpenOrders(q.symbol ? { symbol: q.symbol } : {})
+            ).body,
+          ),
         { fresh: q.fresh === '1' },
       );
       return reply.ok(value, { stale });
