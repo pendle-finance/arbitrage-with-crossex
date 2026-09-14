@@ -180,7 +180,7 @@ export default function App() {
             )}
           </header>
 
-          {credentials.data?.configured && <RecoveryBanner />}
+          {credentials.data?.configured && <RecoveryBanner onOpenTab={selectTab} />}
 
           {/* Full-width content: the order ticket is no longer a permanent
               column — the wizard and the drawer overlay on demand. */}

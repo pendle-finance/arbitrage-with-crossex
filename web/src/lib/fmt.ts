@@ -197,6 +197,12 @@ export function fmtAge(ms: number): string {
   return `${Math.floor(h / 24)}d`;
 }
 
+export function fmtAbout(seconds: number): string {
+  if (seconds < 60) return `about ${Math.round(seconds)}s`;
+  if (seconds < 600) return `about ${Math.round(seconds / 30) / 2} min`;
+  return `about ${Math.round(seconds / 60)} min`;
+}
+
 /** Unix seconds → UTC "YYYY-MM-DD" (maturities are quoted in UTC). */
 export function fmtDateUtc(unixSec: number): string {
   return unixSec > 0 ? new Date(unixSec * 1000).toISOString().slice(0, 10) : '—';

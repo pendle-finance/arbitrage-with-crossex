@@ -13,11 +13,25 @@ import nock from 'nock';
 import { afterEach, describe, expect, it } from 'vitest';
 import { tickPair, type LoopDeps } from '../../src/engine/loop';
 import { Store } from '../../src/engine/db';
-import { JobFile, newJob } from '../../src/server/rebalanceJob';
+import { JobFile, newJob, newTransferJob, TransferFile } from '../../src/server/rebalanceJob';
 import { A_CONTRACT, B_CONTRACT, FakeVenue, VirtualClock } from '../unit/engine-sim';
 import { gate, HOST, makeTestApp, mockGateGet } from './helpers/gate-nock';
 
 let app: FastifyInstance;
+
+const runningJob = () =>
+  newJob(
+    {
+      direction: 'toUsdc',
+      route: 'loop',
+      steps: [{ round: 1, kind: 'round', buy: 300, move: 300, arrives: 299.95, borrowLeft: 0, seconds: 130 }],
+      amount: 300,
+      costUsd: 0.05,
+      target: [],
+      userId: null,
+    },
+    Date.now(),
+  );
 
 afterEach(async () => {
   await app?.close();
@@ -97,7 +111,7 @@ describe('POST /api/deals', () => {
     app = makeTestApp({ engine: { store, venue: new FakeVenue(), clock: new VirtualClock() }, rebalance: { jobs } });
     // The rebalance plugin halts a running job at boot, so boot first.
     await app.ready();
-    const running = newJob('toUsdc', 'loop', 300, Date.now());
+    const running = runningJob();
     jobs.write(running);
 
     let res = await app.inject({ method: 'POST', url: '/api/deals', headers: HOST, payload: makerPayload() });
@@ -145,6 +159,27 @@ describe('POST /api/deals', () => {
     res = await app.inject({ method: 'POST', url: '/api/deals', headers: HOST, payload: {} });
     expect(res.statusCode).toBe(400);
     expect(res.json().error.message).toBe('deal id is required');
+  });
+
+  it('deal starts while a transfer moves', async () => {
+    const transfers = new TransferFile(mkdtempSync(path.join(tmpdir(), 'transfer-')));
+    const store = new Store(':memory:');
+    app = makeTestApp({
+      engine: { store, venue: new FakeVenue(), clock: new VirtualClock() },
+      transfer: { jobs: transfers, sleep: () => new Promise<void>(() => undefined) },
+    });
+    await app.ready();
+    transfers.write(
+      newTransferJob({ coin: 'USDC', from: 'CROSSEX_HYPERLIQUID', to: 'SPOT', amount: 11.88, userId: '1' }, Date.now()),
+    );
+    mockGateGet('/rule/symbols', { body: simRules() });
+    mockGateGet('/accounts', { fixture: 'account.json' });
+
+    const res = await app.inject({ method: 'POST', url: '/api/deals', headers: HOST, payload: makerPayload() });
+
+    expect(res.statusCode, res.body).toBe(202);
+    expect(store.getPair('deal-000001')?.mode).toBe('OPENING');
+    expect(transfers.read()?.status).toBe('moving');
   });
 
   it('is idempotent on the deal id (duplicate → 202, nothing new created)', async () => {
@@ -275,7 +310,7 @@ describe('POST /api/deals', () => {
       .reply(function (_uri, body) {
         levSets.push(body);
         // The rebalance starts while the first set is in flight.
-        if (levSets.length === 1) jobs.write(newJob('toUsdc', 'loop', 300, Date.now()));
+        if (levSets.length === 1) jobs.write(runningJob());
         return [200, {}];
       });
     const res = await app.inject({

@@ -67,7 +67,7 @@ const LABEL_RULES: Array<{ match: RegExp; category: ErrorCategory; hint?: string
   { match: /MAX_MARKET_SIZE|MAX_LIMIT_SIZE|SIZE_TOO_LARGE|TOO_LARGE/, category: 'size-too-large' },
   { match: /SIGNIFICANT_FIGURES|PRICE/, category: 'price-limit', hint: 'Price outside the venue’s allowed band or precision.' },
   // Anchor INSUFFICIENT to a funds word so INSUFFICIENT_PERMISSION (handled above) can't reach here.
-  { match: /BALANCE|MARGIN|INSUFFICIENT_(BALANCE|MARGIN|AVAILABLE|FUND)|NOT_ENOUGH/, category: 'insufficient-margin' },
+  { match: /BALANCE|MARGIN|INSUFFICIENT_(BALANCE|MARGIN|AVAILABLE|FUND)|NOT_ENOUGH|TRANSFER_AMOUNT_INSUFFICIENT/, category: 'insufficient-margin' },
   // Order/position "not found" is a stale-state validation error, NOT a bad symbol —
   // must beat the broad SYMBOL/NOT_FOUND rule below.
   { match: /ORDER_NOT_FOUND|ORDER_CLOSED|ORDER_FINISHED|POSITION_NOT_FOUND|NO_POSITION/, category: 'validation' },

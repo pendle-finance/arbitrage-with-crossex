@@ -332,7 +332,20 @@ describe('POST /api/version/update', () => {
     const jobs = new JobFile(mkdtempSync(path.join(tmpdir(), 'rebalance-')));
     app = makeTestApp({ install: INSTALLED, rebalance: { jobs } });
     await app.ready();
-    jobs.write(newJob('toUsdc', 'loop', 12, Date.now()));
+    jobs.write(
+      newJob(
+        {
+          direction: 'toUsdc',
+          route: 'loop',
+          steps: [{ round: 1, kind: 'round', buy: 12, move: 12, arrives: 11.95, borrowLeft: 0, seconds: 130 }],
+          amount: 12,
+          costUsd: 0.05,
+          target: [],
+          userId: null,
+        },
+        Date.now(),
+      ),
+    );
 
     const res = await post();
 

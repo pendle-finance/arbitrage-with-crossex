@@ -42,4 +42,14 @@ describe('classifyGateError label anchoring', () => {
     expect(net.category).toBe('network');
     expect(net.retryable).toBe(true);
   });
+
+  it('transfer amount insufficient is margin', () => {
+    const c = classifyGateError(gate(422, 'TRANSFER_AMOUNT_INSUFFICIENT'));
+    expect(c.category).toBe('insufficient-margin');
+    expect(c.retryable).toBe(false);
+  });
+
+  it('transfer amount below minimum is still unknown', () => {
+    expect(classifyGateError(gate(422, 'TRANSFER_AMOUNT_MINTRANS_INVALID_ERROR')).category).toBe('unknown');
+  });
 });

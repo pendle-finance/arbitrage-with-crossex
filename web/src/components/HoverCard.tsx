@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
+import { FOCUSABLE } from '../lib/focusTrap';
 
 /**
  * A figure that shows its working when you point at it.
@@ -36,14 +37,20 @@ function InfoMark() {
 export function HoverCard({
   label,
   widthPx = 460,
+  icon = true,
+  underline = true,
   children,
 }: {
   /** The figure itself — it keeps its own styling. */
   label: ReactNode;
   widthPx?: number;
+  icon?: boolean;
+  underline?: boolean;
   children: ReactNode;
 }) {
   const anchor = useRef<HTMLSpanElement>(null);
+  const card = useRef<HTMLDivElement>(null);
+  const openedByKeyboard = useRef(false);
   const closing = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [box, setBox] = useState<Box | null>(null);
 
@@ -81,7 +88,9 @@ export function HoverCard({
     if (!box) return;
     const shut = () => setBox(null);
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setBox(null);
+      if (e.key !== 'Escape') return;
+      if (card.current?.contains(document.activeElement)) anchor.current?.focus();
+      setBox(null);
     };
     window.addEventListener('scroll', shut, true);
     window.addEventListener('resize', shut);
@@ -91,6 +100,12 @@ export function HoverCard({
       window.removeEventListener('resize', shut);
       window.removeEventListener('keydown', onKey);
     };
+  }, [box]);
+
+  useEffect(() => {
+    if (!box || !openedByKeyboard.current) return;
+    openedByKeyboard.current = false;
+    card.current?.querySelector<HTMLElement>(FOCUSABLE)?.focus({ preventScroll: true });
   }, [box]);
 
   useEffect(() => stopClosing, []);
@@ -105,11 +120,16 @@ export function HoverCard({
       tabIndex={0}
       aria-expanded={box !== null}
       onKeyDown={(e) => {
+        if (e.target !== e.currentTarget) return;
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();
           e.stopPropagation();
-          if (box) setBox(null);
-          else open();
+          if (box) {
+            setBox(null);
+            return;
+          }
+          openedByKeyboard.current = true;
+          open();
         }
       }}
       onMouseEnter={open}
@@ -117,7 +137,8 @@ export function HoverCard({
       /* These triggers sit inside larger buttons (the card hero toggles its
          own charts). Reading the breakdown must not also fire that. */
       onClick={(e) => {
-        e.preventDefault();
+        const fromCard = e.target instanceof Node && card.current?.contains(e.target);
+        if (!fromCard) e.preventDefault();
         e.stopPropagation();
         if (box) setBox(null);
         else open();
@@ -126,15 +147,27 @@ export function HoverCard({
          card hero is a button titled "Show the waterfall breakdown", and that
          native tooltip otherwise opens on top of this card's first row. */
       title=""
-      className="inline-flex cursor-help items-center gap-1 border-b border-dotted border-ink-600 text-ink-400 transition-colors hover:border-cyan-400/70 hover:text-cyan-200"
+      className={`inline-flex cursor-help items-center gap-1 text-ink-400 transition-colors hover:text-cyan-200 ${
+        underline ? 'border-b border-dotted border-ink-600 hover:border-cyan-400/70' : ''
+      }`}
     >
       {label}
-      <InfoMark />
+      {icon && <InfoMark />}
       {box &&
         createPortal(
           <div
+            ref={card}
             role="tooltip"
             style={{ left: box.left, top: box.top, bottom: box.bottom, width: widthPx }}
+            onKeyDown={(e) => {
+              if (e.key !== 'Tab') return;
+              const items = e.currentTarget.querySelectorAll<HTMLElement>(FOCUSABLE);
+              const edge = e.shiftKey ? items[0] : items[items.length - 1];
+              if (!edge || document.activeElement !== edge) return;
+              e.preventDefault();
+              anchor.current?.focus();
+              setBox(null);
+            }}
             onMouseEnter={stopClosing}
             onMouseLeave={() => close(false)}
             className="fixed z-50 rounded border border-ink-600 bg-ink-950 px-3 py-2.5 text-ink-100"

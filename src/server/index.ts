@@ -21,7 +21,7 @@ import type { BorosOrderClient } from '../core/boros/orders';
 import { TtlCache, TTL } from './cache';
 import { readOrCreateApiToken } from './authToken';
 import { InterestFile } from './interestLedger';
-import { JobFile } from './rebalanceJob';
+import { JobFile, TransferFile } from './rebalanceJob';
 import { tokenizedIndexHtml } from './spa';
 import { restrictToOwner } from './secretFile';
 import { readInstallInfo, readLocalVersion } from './version';
@@ -171,6 +171,7 @@ const appDeps = {
   install: readInstallInfo(repoRoot),
   updateCheck: { current: readLocalVersion(repoRoot), disabled: process.env.UPDATE_CHECK === '0' },
   rebalance: { jobs: new JobFile(dataDir), interest: new InterestFile(dataDir) },
+  transfer: { jobs: new TransferFile(dataDir) },
   getBorosOrders: () => borosOrdersRef.current,
   borosAgent: {
     envPath,

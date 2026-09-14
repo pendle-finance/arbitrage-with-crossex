@@ -15,7 +15,7 @@ import { commands } from '../../engine/loop';
 import type { PairRow } from '../../engine/types';
 import type { AppDeps } from '../app';
 import { TTL } from '../cache';
-import { isDisclaimerAccepted } from '../disclaimer';
+import { DISCLAIMER_NOT_ACCEPTED, isDisclaimerAccepted } from '../disclaimer';
 import { leverageMaxFor } from './leverage';
 
 // deps.engine is non-null here: the deals routes are registered only when the
@@ -50,17 +50,7 @@ export function dealsRoutes(deps: AppDeps) {
       // absent in unit tests, which skip the gate). The UI shows the modal
       // proactively; this 403 is the backstop against a direct API call.
       const envPath = deps.credentials?.envPath;
-      if (envPath && !isDisclaimerAccepted(envPath)) {
-        return reply.code(403).send({
-          ok: false,
-          error: {
-            category: 'validation',
-            label: 'DISCLAIMER_NOT_ACCEPTED',
-            message: 'You must accept the disclaimer before placing any order.',
-            retryable: false,
-          },
-        });
-      }
+      if (envPath && !isDisclaimerAccepted(envPath)) return reply.code(403).send(DISCLAIMER_NOT_ACCEPTED);
       const body = req.body as DealRequest & { leverage?: { a?: number; b?: number } };
       if (!body?.id) throw new CoreError('deal id is required');
       // Idempotency: the client id is the dedup key — a lost-response retry

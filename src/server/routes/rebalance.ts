@@ -1,40 +1,65 @@
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import { CoreError } from '../../core/errors';
-import { bucketsFrom, planFor, SPOT_SYMBOL, type Direction, type InterestPaidLike } from '../../core/rebalance/plan';
+import {
+  bucketsFrom,
+  floorCents,
+  planFor,
+  SPOT_PAIR,
+  SPOT_SYMBOL,
+  type InterestPaidLike,
+  type RouteName,
+} from '../../core/rebalance/plan';
 import type { AppDeps } from '../app';
 import { TTL } from '../cache';
-import { isDisclaimerAccepted } from '../disclaimer';
+import { DISCLAIMER_NOT_ACCEPTED, isDisclaimerAccepted } from '../disclaimer';
 import { INTEREST_OVERFLOW, InterestFile, syncInterest } from '../interestLedger';
-import { haltMessage, newJob, type Job, type JobFile } from '../rebalanceJob';
+import {
+  bannerFor,
+  inTransitOf,
+  LOCK_TEXT,
+  moneyLockFor,
+  newJob,
+  type Job,
+  type JobFile,
+  type MoneyLock,
+} from '../rebalanceJob';
 import { runJob } from '../rebalanceRunner';
 
-const SPOT_PAIR = 'USDC_USDT';
+const ROUTE_NAMES: readonly string[] = ['mix', 'loop', 'convert'];
 
-const conflict = (reply: FastifyReply, message: string): FastifyReply =>
+export const STALE_TEXT = 'Gate is rate-limiting the account read. Try again in a few seconds.';
+
+export const conflict = (reply: FastifyReply, message: string): FastifyReply =>
   reply.code(409).send({ ok: false, error: { category: 'validation', message, retryable: true } });
+
+export const sleep = (ms: number): Promise<void> => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+const workingDeal = (deps: AppDeps): string | null => deps.engine!.store.listPairs({ activeOnly: true })[0]?.id ?? null;
+
+export const moneyLockNow = (deps: AppDeps): MoneyLock | null =>
+  moneyLockFor({
+    rebalance: deps.rebalance?.jobs.read() ?? null,
+    transfer: deps.transfer?.jobs.read() ?? null,
+    dealId: workingDeal(deps),
+  });
 
 const orEmpty = <T>(read: Promise<{ value: T[]; stale: boolean }>): Promise<{ value: T[]; stale: boolean }> =>
   read.catch(() => ({ value: [], stale: true }));
 
-/** `pull` and `payDown` are the names before 1.5.1; a tab still running that
- * bundle for a moment after an update must not have its move flipped. */
-const directionOf = (value: unknown): Direction => (value === 'toUsdt' || value === 'pull' ? 'toUsdt' : 'toUsdc');
-
-const requestedOf = (value: unknown): number => {
-  const n = typeof value === 'number' || typeof value === 'string' ? Number(value) : NaN;
-  return Number.isFinite(n) && n > 0 ? n : Infinity;
-};
+const isRouteName = (value: unknown): value is RouteName => typeof value === 'string' && ROUTE_NAMES.includes(value);
 
 export function rebalanceRoutes(deps: AppDeps) {
   return async function plugin(app: FastifyInstance): Promise<void> {
     const jobs = deps.rebalance?.jobs ?? null;
     const now = (): number => deps.engine!.clock.now();
-    const log = (message: string): void => {
+    const alert = (pairId: string | null, message: string): void => {
       console.error(message);
       const engine = deps.engine;
-      if (engine) engine.store.alert('error', null, message, engine.clock.now(), { once: true });
+      if (engine) engine.store.alert('error', pairId, message, engine.clock.now(), { once: true });
     };
-    if (jobs?.haltIfRunning('server restarted')) log(haltMessage(jobs.read()!));
+    const onHalt = (job: Job): void => alert(`rebalance:${job.id}`, bannerFor(job));
+    const haltedAtBoot = jobs?.haltIfRunning() ? jobs.read() : null;
+    if (haltedAtBoot) onHalt(haltedAtBoot);
     let inflight: Promise<void> | null = null;
 
     const requireJobs = (): JobFile => {
@@ -42,20 +67,18 @@ export function rebalanceRoutes(deps: AppDeps) {
       return jobs;
     };
 
-    const busyJob = (store: JobFile): Job | null => {
-      const current = store.read();
-      return current && (current.status === 'running' || current.status === 'halted') ? current : null;
-    };
-
     const start = (store: JobFile): void => {
       if (inflight) return;
-      const sleep =
-        deps.rebalance?.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
-      inflight = runJob({ clients: () => deps.getClients(), jobs: store, cache: deps.cache, now, sleep, log }).finally(
-        () => {
-          inflight = null;
-        },
-      );
+      inflight = runJob({
+        clients: () => deps.getClients(),
+        jobs: store,
+        cache: deps.cache,
+        now,
+        sleep: deps.rebalance?.sleep ?? sleep,
+        onHalt,
+      }).finally(() => {
+        inflight = null;
+      });
     };
 
     // All-time interest, kept on disk and topped up with the rows since the
@@ -72,11 +95,11 @@ export function rebalanceRoutes(deps: AppDeps) {
           ),
         )
         .catch((e: unknown) => {
-          if (e instanceof CoreError && e.details === INTEREST_OVERFLOW) log(e.message);
+          if (e instanceof CoreError && e.details === INTEREST_OVERFLOW) alert(null, e.message);
           return { value: {}, stale: true };
         });
 
-    const loadView = async (fresh: boolean, direction: Direction, requested: number) => {
+    const loadView = async (fresh: boolean) => {
       const crossEx = () => deps.getClients().crossEx;
       const account = await deps.cache.get('account', TTL.live, async () => (await crossEx().getCrossexAccount()).body, {
         fresh,
@@ -99,28 +122,24 @@ export function rebalanceRoutes(deps: AppDeps) {
       const special = gateFees?.specialFeeList?.find((s) => s.symbol === SPOT_SYMBOL);
       const ask = Number(tickers.value[0]?.lowestAsk);
       const bid = Number(tickers.value[0]?.highestBid);
-      // Gate sends min_trans_amount as a string although the SDK declares a
-      // number. Coerce here so the plan's arithmetic never concatenates.
-      const usdcCoin = coins.value.find((c) => c.coin === 'USDC');
-      const plan = planFor(
-        buckets,
-        account.value,
-        {
-          usdcTransfer: usdcCoin
-            ? { isDisabled: Number(usdcCoin.isDisabled), minTransAmount: Number(usdcCoin.minTransAmount) }
-            : null,
-          spotRule: rules.value.find((r) => r.symbol === SPOT_SYMBOL) ?? null,
-          spotTakerRate: Number(special?.takerFeeRate ?? gateFees?.spotTakerFee ?? 0),
-          ask: Number.isFinite(ask) ? ask : null,
-          bid: Number.isFinite(bid) ? bid : null,
-        },
-        { direction, requested },
-      );
+      const plan = planFor(buckets, account.value, {
+        coins: coins.value,
+        spotRule: rules.value.find((r) => r.symbol === SPOT_SYMBOL) ?? null,
+        spotTakerRate: Number(special?.takerFeeRate ?? gateFees?.spotTakerFee ?? 0),
+        ask: Number.isFinite(ask) ? ask : null,
+        bid: Number.isFinite(bid) ? bid : null,
+      });
       const stale = [account, rates, paid, coins, rules, fees, tickers].some((r) => r.stale);
-      return { buckets, plan, job: jobs?.read() ?? null, stale, accountStale: account.stale, userId };
+      return { buckets, plan, stale, accountStale: account.stale, userId };
     };
 
-    const workingDeal = (): string | null => deps.engine!.store.listPairs({ activeOnly: true })[0]?.id ?? null;
+    const findLock = (): string | null => {
+      const lock = moneyLockNow(deps);
+      if (lock === null) return null;
+      if (lock.kind === 'moving') return LOCK_TEXT.rebalanceWaits;
+      if (lock.kind === 'deal') return `deal ${lock.id} is still working`;
+      return `rebalance ${lock.id} is ${lock.kind === 'halted' ? 'halted' : 'running'}`;
+    };
 
     const currentUserId = async (): Promise<string | null> => {
       const { value } = await deps.cache.get(
@@ -141,49 +160,44 @@ export function rebalanceRoutes(deps: AppDeps) {
       return job;
     };
 
-    app.get('/rebalance', async (req, reply) => {
-      const query = (req.query ?? {}) as { direction?: unknown; amount?: unknown };
-      const { buckets, plan, job, stale } = await loadView(false, directionOf(query.direction), requestedOf(query.amount));
-      return reply.ok({ buckets, plan, job }, { stale });
+    app.get('/rebalance', async (_req, reply) => {
+      const { buckets, plan, stale } = await loadView(false);
+      const job = jobs?.read() ?? null;
+      return reply.ok({ buckets, plan, job: job ? { ...job, inTransit: inTransitOf(job) } : null }, { stale });
     });
 
     app.post('/rebalance', async (req, reply) => {
       const envPath = deps.credentials?.envPath;
-      if (envPath && !isDisclaimerAccepted(envPath)) {
-        return reply.code(403).send({
-          ok: false,
-          error: {
-            category: 'validation',
-            label: 'DISCLAIMER_NOT_ACCEPTED',
-            message: 'You must accept the disclaimer before placing any order.',
-            retryable: false,
-          },
-        });
-      }
+      if (envPath && !isDisclaimerAccepted(envPath)) return reply.code(403).send(DISCLAIMER_NOT_ACCEPTED);
+      const { route } = (req.body ?? {}) as { route?: unknown };
+      if (!isRouteName(route)) throw new CoreError(`unknown route ${String(route)}`);
       const store = requireJobs();
-      const busy = busyJob(store);
-      if (busy) return conflict(reply, `rebalance ${busy.id} is ${busy.status}`);
-      const working = workingDeal();
-      if (working) return conflict(reply, `deal ${working} is still working`);
-      const body = (req.body ?? {}) as { direction?: unknown; amount?: unknown; route?: unknown };
-      const direction = directionOf(body.direction);
-      const { plan, accountStale, userId } = await loadView(true, direction, requestedOf(body.amount));
+      const locked = findLock();
+      if (locked) return conflict(reply, locked);
+      const { plan, accountStale, userId } = await loadView(true);
       // The amount is sized from this read. A read served from the cache
       // because Gate rate-limited the fresh one may be seconds old, and a
       // move to USDT sized on old equity can open the borrow it promises not to.
-      if (accountStale) return conflict(reply, 'Gate is rate-limiting the account read. Try again in a few seconds.');
-      if (typeof body.route === 'string' && body.route !== plan.route) {
-        return conflict(reply, `plan changed: now ${plan.route ?? 'no route'}`);
-      }
-      if (!plan.route) return conflict(reply, 'no route');
-      if (!(plan.amount > 0)) return conflict(reply, 'nothing to move');
-      // Both checks again: the reads above took time, and a second POST or a
-      // deal can have started during them.
-      const again = busyJob(store);
-      if (again) return conflict(reply, `rebalance ${again.id} is ${again.status}`);
-      const started = workingDeal();
-      if (started) return conflict(reply, `deal ${started} is still working`);
-      const job = newJob(direction, plan.route, plan.amount, now(), userId);
+      if (accountStale) return conflict(reply, STALE_TEXT);
+      if (plan.balanced || plan.direction === null) return conflict(reply, 'Already even.');
+      const name = route === 'mix' && !plan.routes.mix ? plan.recommended : route;
+      const picked = name ? plan.routes[name] : null;
+      if (!name || !picked?.available) return conflict(reply, picked?.reason ?? 'no route');
+      const lockedNow = findLock();
+      if (lockedNow) return conflict(reply, lockedNow);
+      const moved = picked.steps.reduce((total, step) => total + step.move, 0);
+      const job = newJob(
+        {
+          direction: plan.direction,
+          route: name,
+          steps: picked.steps,
+          amount: floorCents(moved),
+          costUsd: picked.costUsd,
+          target: picked.after,
+          userId,
+        },
+        now(),
+      );
       store.write(job);
       start(store);
       return reply.code(202).ok({ id: job.id });
@@ -195,7 +209,7 @@ export function rebalanceRoutes(deps: AppDeps) {
       if (!job) return reply;
       // The same rule as the start: the remaining steps move cash a working
       // deal may be counting on.
-      const working = workingDeal();
+      const working = workingDeal(deps);
       if (working) return conflict(reply, `deal ${working} is still working`);
       // The steps hold venue ids and amounts of the account they ran on. On
       // another account they would poll ids it does not know, or send from it.

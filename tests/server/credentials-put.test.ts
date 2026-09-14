@@ -18,6 +18,20 @@ import { fixture, gate, HOST, makeTestApp, TEST_KEY, TEST_SECRET } from './helpe
 const NEW_KEY = 'newkey876543210';
 const NEW_SECRET = 'newsecret';
 
+const oneRound = (userId: string | null) =>
+  newJob(
+    {
+      direction: 'toUsdc',
+      route: 'loop',
+      steps: [{ round: 1, kind: 'round', buy: 12, move: 12, arrives: 11.95, borrowLeft: 0, seconds: 130 }],
+      amount: 12,
+      costUsd: 0.05,
+      target: [],
+      userId,
+    },
+    Date.now(),
+  );
+
 let app: FastifyInstance;
 let envPath: string;
 let current: Clients;
@@ -142,7 +156,7 @@ describe('PUT /api/credentials', () => {
       rebalance: { jobs },
     });
     await app.ready();
-    jobs.write(newJob('toUsdc', 'loop', 12, Date.now()));
+    jobs.write(oneRound(null));
 
     const res = await put({ key: NEW_KEY, secret: NEW_SECRET });
 
@@ -161,7 +175,7 @@ describe('PUT /api/credentials', () => {
     });
     await app.ready();
     const halted = (userId: string | null) => {
-      const job = newJob('toUsdc', 'loop', 12, Date.now(), userId);
+      const job = oneRound(userId);
       job.status = 'halted';
       jobs.write(job);
     };
