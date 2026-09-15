@@ -5,7 +5,7 @@ import { floorCents } from '../lib/ticks';
 import { HoverCard } from './HoverCard';
 import { microLabelClass } from './Th';
 
-const HYPERLIQUID_LEGS = 'Hyperliquid legs';
+const VENUE_LEGS: Readonly<Record<string, string>> = { HYPERLIQUID: 'Hyperliquid legs', LIGHTER: 'Lighter legs' };
 const OTHER_VENUE_LEGS = 'Gate, Binance, OKX and Bybit legs';
 
 export function BorrowChip({ onOpen }: { onOpen: () => void }) {
@@ -13,7 +13,7 @@ export function BorrowChip({ onOpen }: { onOpen: () => void }) {
   const borrowed = borrowedBucket(data?.buckets);
   if (!borrowed) return null;
   const borrow = floorCents(borrowed.borrow);
-  const legs = borrowed.venue === 'HYPERLIQUID' ? HYPERLIQUID_LEGS : OTHER_VENUE_LEGS;
+  const legs = VENUE_LEGS[borrowed.venue] ?? OTHER_VENUE_LEGS;
 
   return (
     <HoverCard

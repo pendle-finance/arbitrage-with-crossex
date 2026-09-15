@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useAccount, usePositions, useTransfer } from '../api/queries';
-import type { CrossexAccount, PositionsResponse, RebalanceStep, RebalanceView, TransferView } from '../api/types';
+import type { CrossexAccount, PositionsResponse, RebalanceStep, RebalanceView, RoutePlan, TransferView } from '../api/types';
 import {
   accountBodies,
   accountHandler,
@@ -106,9 +106,28 @@ const withBorrow = (view: RebalanceView, key: string, borrow: number, interestPe
   buckets: rebased(view.buckets, { [key]: { cash: -borrow, equity: -borrow, borrow, interestPerDayUsd } }),
 });
 
+const withLighterBorrow = (view: RebalanceView, borrow: number, interestPerDayUsd: number): RebalanceView => ({
+  ...view,
+  buckets: [
+    ...view.buckets,
+    {
+      coin: 'USDC',
+      venue: 'LIGHTER',
+      cash: -borrow,
+      upnl: 0,
+      equity: -borrow,
+      borrow,
+      imHeldUsd: borrow * 0.2,
+      mmHeldUsd: borrow * 0.1,
+      interestPaidUsd: 0,
+      interestPerDayUsd,
+    },
+  ],
+});
+
 const CASH_LIMITED_EVEN: RebalanceView = {
   ...rebalanceViews.balancedNoJob,
-  plan: { ...rebalanceViews.balancedNoJob.plan, direction: 'toUsdt', shortOfEven: 203.64 },
+  plan: { ...rebalanceViews.balancedNoJob.plan, shortOfEven: 203.64 },
 };
 
 function serve({
@@ -160,6 +179,12 @@ const bars = (name: string): Record<string, string | null> => {
       value.textContent,
     ]),
   );
+};
+
+const shareColumn = (rowsOf: string): Record<string, string | null> => {
+  const names = Object.keys(bars(rowsOf));
+  const cells = [...within(region()).getByRole('group', { name: 'Position share' }).querySelectorAll('span.num')];
+  return Object.fromEntries(cells.map((cell, i) => [names[i], cell.textContent]));
 };
 
 const line = (text: string) => screen.queryByText((_, el) => el?.tagName === 'P' && el.textContent === text);
@@ -420,16 +445,37 @@ describe('RebalanceSection hovers and copy', () => {
     const user = userEvent.setup();
     await show(rebalanceViews.accountA);
     const card = await hoverCard(user, 'Rebalance', region());
-    expect(card.text.startsWith('CrossEx margin sits in two wallets.')).toBe(true);
-    expect(card.rows).toEqual(['Spot loop', 'Convert']);
+    expect(card.text.startsWith('Rebalance splits CrossEx equity by position size at mark price.')).toBe(true);
+    expect(card.rows).toEqual([
+      'USDT · CrossEx',
+      'USDC · Hyperliquid',
+      'USDC · Lighter',
+      'Spot loop',
+      'Hyperliquid to USDT',
+      'USDT to Lighter',
+      'Lighter to USDT',
+      'Hyperliquid to Lighter',
+      'Lighter to Hyperliquid',
+      'Convert',
+      'Hyperliquid ↔ Lighter',
+    ]);
   });
 
   it('info card cost is a floor', async () => {
     const user = userEvent.setup();
     await show(rebalanceViews.accountA);
-    expect((await hoverCard(user, 'Rebalance', region())).text).toContain(
-      'from $0.05 a round toward USDC, from $1.00 toward USDT',
-    );
+    const card = await hoverCard(user, 'Rebalance', region());
+    expect(card.text).toContain('USDT to Hyperliquidabout 2 minfrom $0.05');
+    expect(card.text).toContain('Hyperliquid to Lighterabout 10 minfrom $2.03');
+  });
+
+  it('info card names the borrow interest of each wallet', async () => {
+    const user = userEvent.setup();
+    await show(rebalanceViews.accountA);
+    const card = await hoverCard(user, 'Rebalance', region());
+    expect(card.text).toContain('USDC · HyperliquidHyperliquidfree up to 10,000 USDC, then about 5% a year');
+    expect(card.text).toContain('USDC · LighterLighterfrom the first dollar, about 11% a year');
+    expect(card.text).toContain('USDT · CrossExGate, Binance, OKX, Bybitfrom the first dollar');
   });
 
   it('every term has its hover', async () => {
@@ -447,8 +493,12 @@ describe('RebalanceSection hovers and copy', () => {
     });
     let shown = renderWithClient(<RebalanceSection />);
     await check('Rebalance', [
-      ['Rebalance', 'CrossEx margin sits in two wallets. USDT: Gate, Binance, OKX and Bybit legs. USDC: Hyperliquid legs.'],
-      ['Rebalance', 'Rebalance makes their equity equal. A negative wallet is a borrow.'],
+      [
+        'Rebalance',
+        'Rebalance splits CrossEx equity by position size at mark price. Example: $500 of positions on Gate, $250 on Hyperliquid and $250 on Lighter give 50%, 25% and 25%.',
+      ],
+      ['Rebalance', 'A negative wallet is a borrow. A borrow locks 20% of its size as initial margin.'],
+      ['Position share', "This wallet's positions at mark price ÷ all positions. Rebalance moves equity to this share."],
       ['USDT · CrossEx', 'CrossEx wallet. Margin for Gate, Binance, OKX and Bybit legs.'],
       ['USDC · Hyperliquid', 'CrossEx wallet. Margin for Hyperliquid legs.'],
       ['USDC · Gate', 'CrossEx wallet. USDC left from a spot buy. Still margin. Rebalance empties it.'],
@@ -514,8 +564,8 @@ describe('RebalanceSection hovers and copy', () => {
     shown = renderWithClient(<TransferSection />);
     await check('Transfer', [
       ['Manual Transfer', "Move funds between Gate spot and CrossEx. Gate's website cannot do this."],
-      ['Fee', 'Gate fee. Into the CrossEx Hyperliquid wallet $0.05. Out of it $1.00. Others free.'],
-      ['Time', 'Typical time. Moves out of the CrossEx Hyperliquid wallet can take longer.'],
+      ['Fee', 'Gate fee. CrossEx Hyperliquid wallet: in $0.05, out $1.00. CrossEx Lighter wallet: in $1.03, out free. Others free.'],
+      ['Time', 'Typical time. Moves into or out of the CrossEx Hyperliquid and Lighter wallets can take longer.'],
       ['up to 816.10', "Free margin, capped at this wallet's cash."],
       ['Gate spot', 'Not margin.'],
     ]);
@@ -523,7 +573,7 @@ describe('RebalanceSection hovers and copy', () => {
 
     shown = renderWithClient(<TransferSection pick={{ coin: 'USDC', wallet: 'CROSSEX_HYPERLIQUID', nonce: 1 }} />);
     await check('Transfer', [
-      ['Minimum', 'Gate minimum for moves into or out of the CrossEx Hyperliquid wallet. Fee included.'],
+      ['Minimum', 'Gate minimum for moves into or out of the CrossEx Hyperliquid and Lighter wallets. Fee included.'],
       ['up to 0.00', 'Your Gate spot balance.'],
     ]);
     shown.unmount();
@@ -531,7 +581,7 @@ describe('RebalanceSection hovers and copy', () => {
 
   it('subtitle', async () => {
     await show(rebalanceViews.accountA);
-    expect(within(region()).getByText('Even out your CrossEx USDT and USDC wallets')).toBeInTheDocument();
+    expect(within(region()).getByText('Split your CrossEx equity by position size')).toBeInTheDocument();
   });
 
   it('no direction toggle', async () => {
@@ -634,6 +684,14 @@ describe('RebalanceSection bars and facts', () => {
     expect(facts()['Lent by Gate']).toBe('2,000.00 USDT');
     expect(facts().Interest).toBe('$0.31 a day');
     expect(within(region()).queryByText(/none under/)).toBeNull();
+  });
+
+  it('a Lighter USDC borrow under 10,000 pays interest from the first dollar', async () => {
+    const user = userEvent.setup();
+    await show(withLighterBorrow(rebalanceViews.exampleC, 500, 0.15));
+    expect(facts()['Lent by Gate']).toBe('500.00 USDC');
+    expect(facts().Interest).toBe('$0.15 a day');
+    expect((await hoverCard(user, 'Interest', region())).text).toBe('Interest from the first dollar. About 11% a year.');
   });
 
   it('USDT interest hover says from the first dollar', async () => {
@@ -1000,7 +1058,7 @@ describe('RebalanceSection run states', () => {
     rows = within(region()).getAllByRole('listitem');
     expect(rows[6]).toHaveAttribute('aria-current', 'step');
     expect(within(rows[6]).getByText('Convert')).toBeInTheDocument();
-    expect(within(rows[6]).getByText('Convert 7,521.59 USDT to USDC')).toBeInTheDocument();
+    expect(within(rows[6]).getByText('Convert 7,521.59 USDT to USDC in the CrossEx Hyperliquid wallet')).toBeInTheDocument();
   });
 
   it('halted buttons press from the keyboard', async () => {
@@ -1072,13 +1130,14 @@ describe('RebalanceSection balanced and spot money', () => {
     await show(rebalanceViews.balancedNoJob);
     expect(within(region()).getByText('Balanced')).toBeInTheDocument();
     expect(facts()).toEqual({});
+    expect(shareColumn('Now')).toEqual({ 'USDT · CrossEx': '50% · $1,000', 'USDC · Hyperliquid': '50% · $1,000' });
   });
 
   it('balanced by cash shows as even as cash allows', async () => {
     await show(CASH_LIMITED_EVEN);
     expect(within(region()).getByText('As even as cash allows')).toBeInTheDocument();
     expect(within(region()).queryByText('Balanced')).toBeNull();
-    expect(facts()).toEqual({ 'Short of even': '203.64 USDC' });
+    expect(facts()).toEqual({ 'Short of even': '$203.64' });
     expect(within(region()).getByRole('button', { name: 'Hold to rebalance' })).toBeDisabled();
   });
 
@@ -1203,5 +1262,168 @@ describe('RebalanceSection balanced and spot money', () => {
     await waitFor(() => expect(line('Gate spot has 5.00 USDC. Move it in to use it.')).toBeInTheDocument());
     await user.click(within(region()).getByRole('button', { name: 'Transfer ▸' }));
     expect(onTransfer).toHaveBeenCalledWith('USDC', 'CROSSEX_GATE');
+  });
+});
+
+describe('RebalanceSection Lighter and moves between wallets', () => {
+  const stepTexts = () =>
+    within(region())
+      .getAllByRole('listitem')
+      .map((row) => [...row.querySelectorAll('span')].map((span) => span.textContent).filter(Boolean));
+
+  it('three wallet bars and the position share of each', async () => {
+    await show(rebalanceViews.lighterSplit);
+    expect(bars('Now')).toEqual({ 'USDT · CrossEx': '1,000.00', 'USDC · Hyperliquid': '0.00', 'USDC · Lighter': '0.00' });
+    expect(bars('After rebalance')).toEqual({
+      'USDT · CrossEx': '499.60',
+      'USDC · Hyperliquid': '249.78',
+      'USDC · Lighter': '249.78',
+    });
+    expect(shareColumn('After rebalance')).toEqual({
+      'USDT · CrossEx': '50% · $500',
+      'USDC · Hyperliquid': '25% · $250',
+      'USDC · Lighter': '25% · $250',
+    });
+    expect(facts()).not.toHaveProperty('Split');
+  });
+
+  it('the Lighter row stays hidden with no Lighter legs, equity or move', async () => {
+    await show(rebalanceViews.accountA);
+    expect(Object.keys(bars('Now'))).toEqual(['USDT · CrossEx', 'USDC · Hyperliquid', 'USDC · Gate']);
+  });
+
+  it('each step names the wallet it moves to', async () => {
+    const user = userEvent.setup();
+    await show(rebalanceViews.lighterSplit);
+    await user.click(within(region()).getByRole('button', { name: 'Show the 2 steps' }));
+    expect(stepTexts()).toEqual([
+      ['Round 1', 'Buy 249.83 USDC, move it to the CrossEx Hyperliquid wallet', '249.78 arrives', 'about 2 min'],
+      ['Convert', 'Convert 250.29 USDT to USDC in the CrossEx Lighter wallet', '249.78 arrives', 'instant'],
+    ]);
+
+    await user.click(screen.getByRole('radio', { name: 'Spot loop' }));
+    expect(stepTexts()).toEqual([
+      ['Round 1', 'Buy 249.63 USDC, move it to the CrossEx Hyperliquid wallet', '249.58 arrives', 'about 2 min'],
+      ['Round 2', 'Buy 250.61 USDC, move it to the CrossEx Lighter wallet', '249.58 arrives', 'about 4 min'],
+    ]);
+  });
+
+  it('hovers for a move into two wallets', async () => {
+    const user = userEvent.setup();
+    await show(rebalanceViews.lighterSplit);
+    const card = region();
+    expect((await hoverCard(user, 'USDC · Lighter', card)).text).toBe('CrossEx wallet. Margin for Lighter legs.');
+    expect((await hoverCard(user, 'Spot loop', card)).text).toBe(
+      'Buy USDC in CrossEx, move it through Gate spot into the CrossEx Hyperliquid wallet and the CrossEx Lighter wallet. Gate has no direct transfer between CrossEx wallets. Repeats in rounds.',
+    );
+    const loopRounds = await hoverCard(user, '2 rounds', card);
+    expect(loopRounds.terms).toEqual([
+      'A round, USDT · CrossEx to USDC · Hyperliquid',
+      'A round, USDT · CrossEx to USDC · Lighter',
+      'Why 2',
+    ]);
+    expect(loopRounds.text).toContain('Buy USDC in CrossEx. Move it to Gate spot, then into the CrossEx Lighter wallet. About 4 min.');
+    expect(loopRounds.text).toContain('One round for each wallet.');
+    expect((await hoverCard(user, '1 round', card)).text).toContain(
+      '1 round, then Convert is the cheapest mix that takes 15 min or less.',
+    );
+  });
+
+  it('hovers for a move from Hyperliquid to Lighter', async () => {
+    const user = userEvent.setup();
+    await show(rebalanceViews.lighterAcross);
+    const card = region();
+    expect((await hoverCard(user, 'Spot loop', card)).text).toBe(
+      'Move USDC from the CrossEx Hyperliquid wallet through Gate spot into the CrossEx Lighter wallet. Gate has no direct transfer between CrossEx wallets. Repeats in rounds.',
+    );
+    expect((await hoverCard(user, '1 round', card)).text).toContain(
+      'Move USDC from the CrossEx Hyperliquid wallet to Gate spot, then into the CrossEx Lighter wallet. About 10 min.',
+    );
+    expect((await hoverCard(user, 'Convert', card)).text).toBe(
+      'Instant swap between your CrossEx USDT and USDC wallets. 0.2% fee. USDC between Hyperliquid and Lighter swaps twice, through USDT.',
+    );
+    expect(shareColumn('After rebalance')).toEqual({
+      'USDT · CrossEx': '50% · $500',
+      'USDC · Hyperliquid': '0% · $0',
+      'USDC · Lighter': '50% · $500',
+    });
+  });
+
+  it('a running move from Hyperliquid to Lighter shows one round with its leg and time', async () => {
+    vi.setSystemTime(REBALANCE_NOW);
+    await show(rebalanceViews.lighterAcrossRunning);
+    expect(facts()).toEqual({ Route: 'Spot loop', Round: '1 of 1', Time: '6m 40s of about 10 min' });
+    expect(stepTexts()).toEqual([
+      ['Round 1', 'Move 500.00 USDC from the CrossEx Hyperliquid wallet to the CrossEx Lighter wallet', 'Gate spot to the CrossEx Lighter wallet', '6m 40s of about 10 min'],
+    ]);
+    expect(bars('Now')).toMatchObject({ 'USDC · Lighter': '0.00', 'On the way': '499.00' });
+    expect(bars('After rebalance')).toMatchObject({ 'USDC · Hyperliquid': '0.00', 'USDC · Lighter': '497.97' });
+    vi.useRealTimers();
+  });
+
+  it('a stopped two-half Convert is one row, and the done one reads as one Convert', async () => {
+    const done = rebalanceViews.lighterConvertDone;
+    const halted: RebalanceView = {
+      ...rebalanceViews.lighterAcross,
+      job: {
+        ...done.job,
+        status: 'halted',
+        stepIndex: 1,
+        haltReason: 'Convert quote was more than 0.3% under market.',
+        steps: [done.job.steps[0], { ...done.job.steps[1], qty: null, status: 'pending', startedAt: null, doneAt: null }],
+      },
+    };
+    await show(halted);
+    expect(stepTexts()).toEqual([
+      ['Convert', 'Convert 500.00 USDC from the CrossEx Hyperliquid wallet to the CrossEx Lighter wallet', 'stopped'],
+    ]);
+    cleanup();
+
+    await show(done);
+    expect(facts()).toEqual({ 'Last run': 'Convert', Took: '2s', Cost: '$2.00' });
+  });
+
+  it('money a stopped move to Lighter left in Gate spot goes to the Lighter wallet', async () => {
+    const user = userEvent.setup();
+    const onTransfer = await show(rebalanceViews.lighterAcrossAbandoned, { transfer: transferViews.noSpot });
+    await waitFor(() => expect(line('Last run left 499.00 USDC in Gate spot.')).toBeInTheDocument());
+    await user.click(within(region()).getByRole('button', { name: 'Transfer ▸' }));
+    expect(onTransfer).toHaveBeenCalledWith('USDC', 'CROSSEX_LIGHTER');
+  });
+
+  it('a borrow in a wallet the plan pays into shows what it frees', async () => {
+    await show(rebalanceViews.lighterSplit);
+    expect(facts()).not.toHaveProperty('Frees');
+    cleanup();
+
+    const view = rebalanceViews.lighterSplit;
+    await show({
+      ...view,
+      buckets: rebased(view.buckets, { 'USDC/LIGHTER': { cash: -50, equity: -50, borrow: 50, interestPerDayUsd: 0.02 } }),
+    });
+    expect(facts()).toMatchObject({ Frees: '$0.00 margin', Saves: '$0.00 / day', Interest: '$0.02 a day' });
+  });
+
+  it('no open positions says so and cannot start', async () => {
+    await show(rebalanceViews.noLegs);
+    expect(line('No open positions. Nothing to rebalance.')).toBeInTheDocument();
+    expect(within(region()).queryByText('Balanced')).toBeNull();
+    expect(facts()).toEqual({});
+    expect(within(region()).queryByRole('group', { name: 'Position share' })).toBeNull();
+    expect(within(region()).getByRole('button', { name: 'Hold to rebalance' })).toBeDisabled();
+  });
+
+  it('a plan with every route closed shows each reason and cannot start', async () => {
+    const view = rebalanceViews.lighterSplit;
+    const reason = 'A Convert between Hyperliquid and Lighter needs USDT · CrossEx cash of -1 or more.';
+    const close = (route: RoutePlan): RoutePlan => ({ ...route, available: false, reason });
+    const { mix, loop, convert } = view.plan.routes;
+    const routes = { mix: mix && close(mix), loop: close(loop), convert: close(convert) };
+    await show({ ...view, plan: { ...view.plan, recommended: null, routes } });
+    expect(rowOf('Spot loop')).toHaveTextContent(reason);
+    expect(rowOf('Convert')).toHaveTextContent(reason);
+    expect(screen.getByRole('radio', { name: 'Convert' })).not.toBeChecked();
+    expect(within(region()).queryByText('Recommended')).toBeNull();
+    expect(within(region()).getByRole('button', { name: 'Hold to rebalance' })).toBeDisabled();
   });
 });

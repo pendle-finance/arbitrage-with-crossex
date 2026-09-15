@@ -10,8 +10,8 @@ import {
   DUST_USDC,
   HYPERLIQUID_DEPOSIT_FEE_USD,
   nearestCents,
+  roundSeconds,
   SPOT_SYMBOL,
-  TO_USDC_WAIT_SECONDS,
   type GateAccount,
   type PlannedStep,
   type TransferCoin,
@@ -53,7 +53,10 @@ type SentOrder = { key: string; orderId: string; at: number };
 type Call = { key: string; seconds: number };
 type Booted = { jobs: JobFile; job: Job };
 
-const CONVERT_STEP: PlannedStep = {
+const TO_HYPERLIQUID = { from: 'CROSSEX', to: 'HYPERLIQUID' } as const;
+const FROM_HYPERLIQUID = { from: 'HYPERLIQUID', to: 'CROSSEX' } as const;
+
+const CONVERT_STEP: Omit<PlannedStep, 'from' | 'to'> = {
   round: null,
   kind: 'convert',
   buy: 0,
@@ -63,7 +66,7 @@ const CONVERT_STEP: PlannedStep = {
   seconds: 0,
 };
 
-const CONVERT_USDC_STEP: PlannedStep = {
+const CONVERT_USDC_STEP: Omit<PlannedStep, 'from' | 'to'> = {
   ...CONVERT_STEP,
   move: CONVERT_USDC,
   arrives: nearestCents(CONVERT_USDC * (1 - CONVERT_RATE)),
@@ -96,7 +99,8 @@ const planRound = (n: number, liability: number): PlannedStep => ({
   move: ROUND,
   arrives: ROUND - HYPERLIQUID_DEPOSIT_FEE_USD,
   borrowLeft: Math.max(0, liability - n * (ROUND - HYPERLIQUID_DEPOSIT_FEE_USD)),
-  seconds: TO_USDC_WAIT_SECONDS,
+  seconds: roundSeconds('CROSSEX', 'HYPERLIQUID'),
+  ...TO_HYPERLIQUID,
 });
 
 const logJob = (job: Job): void => {
@@ -373,7 +377,6 @@ describe.skipIf(process.env.REBALANCE !== '1')('live rebalance recovery and tran
     budget.beforeOrder(2 * ROUND, 'Buy USDC restart');
 
     const { dataDir, tag } = writeRunningJob({
-      direction: 'toUsdc',
       route: 'loop',
       steps: [planRound(1, liability)],
       amount: ROUND,
@@ -428,9 +431,8 @@ describe.skipIf(process.env.REBALANCE !== '1')('live rebalance recovery and tran
     budget.beforeOrder(2 * CONVERT_USDC, 'Convert restart');
 
     const { dataDir, jobs, job, tag } = writeRunningJob({
-      direction: 'toUsdt',
       route: 'convert',
-      steps: [CONVERT_USDC_STEP],
+      steps: [{ ...CONVERT_USDC_STEP, ...FROM_HYPERLIQUID }],
       amount: CONVERT_USDC,
       costUsd: nearestCents(CONVERT_USDC * CONVERT_RATE),
     });
@@ -567,9 +569,8 @@ describe.skipIf(process.env.REBALANCE !== '1')('live rebalance recovery and tran
     console.log(`  ▸ USDC/GATE cash ${gateCash} before the Convert job`);
 
     const job = await runLiveJob(clients, {
-      direction: 'toUsdc',
       route: 'convert',
-      steps: [CONVERT_STEP],
+      steps: [{ ...CONVERT_STEP, ...TO_HYPERLIQUID }],
       amount: ROUND,
       costUsd: 0.03,
     });

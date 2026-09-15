@@ -6,24 +6,30 @@ import { Chip } from '../components/Chip';
 import { HoldToConfirmButton } from '../components/HoldToConfirmButton';
 import { microLabelClass } from '../components/Th';
 import { useToast } from '../components/Toast';
-import { borrowedBucket, MIN_BORROW } from '../lib/borrow';
+import { borrowedBucket } from '../lib/borrow';
 import { fmtAbout, fmtAge, num } from '../lib/fmt';
 import { floorCents } from '../lib/ticks';
 import { useNow } from '../lib/useNow';
 import { useSettledError } from '../lib/useSettledError';
-import { BalanceBars, BarLegend, jobRows, planRows, ROUND_SECONDS, StepList, type BarRow } from './RebalanceBits';
-import { HOVER } from './rebalanceCopy';
-import { balancedFacts, borrowFacts, cashFacts, DUST, Facts, isCashLimitedEven, quoteFacts } from './RebalanceHovers';
-import { keyOf, RebalanceInfo, ROUTE_LABEL, roundCountOf, RouteRow, SpotLines, stepsNoun, Term, WalletTerm } from './RebalanceHovers';
+import { BalanceBars, BarLegend, jobRows, jobSeconds, planRows, ShareColumn, StepList, type BarRow } from './RebalanceBits';
+import { HOVER, NO_LEGS } from './rebalanceCopy';
+import { balancedFacts, borrowFacts, cashFacts, DUST, Facts, isCashLimitedEven, positionShares, quoteFacts } from './RebalanceHovers';
+import { keyOf, movesKey, planSteps, RebalanceInfo, receivingBorrow, ROUTE_LABEL, roundCountOf, RouteRow } from './RebalanceHovers';
+import { SpotLines, stepsNoun, Term, WalletTerm } from './RebalanceHovers';
 
 const ROUTE_ORDER: RouteName[] = ['mix', 'loop', 'convert'];
-const WALLET_TONE: Record<string, BarRow['tone']> = { 'USDT/CROSSEX': 'usdt', 'USDC/HYPERLIQUID': 'usdc', 'USDC/GATE': 'gate' };
+const WALLET_TONE: Record<string, BarRow['tone']> = {
+  'USDT/CROSSEX': 'usdt',
+  'USDC/HYPERLIQUID': 'usdc',
+  'USDC/LIGHTER': 'lighter',
+  'USDC/GATE': 'gate',
+};
 
 const scaleOf = (...sets: BarRow[][]) => Math.max(0, ...sets.flat().map((row) => Math.abs(row.cash + row.gain)));
 
-function barRows(wallets: WalletAfter[], showGate: boolean): BarRow[] {
+function barRows(wallets: WalletAfter[], shown: ReadonlySet<string>): BarRow[] {
   return Object.keys(WALLET_TONE)
-    .filter((key) => showGate || key !== 'USDC/GATE')
+    .filter((key) => shown.has(key))
     .flatMap((key): BarRow[] => {
       const w = wallets.find((wallet) => keyOf(wallet) === key);
       if (!w) return [];
@@ -102,19 +108,39 @@ export function RebalanceSection({
     toast.push('error', `${error.message}${period} ${hint}`);
   };
   const mode = job?.status === 'running' || job?.status === 'halted' ? job.status : plan.balanced ? 'balanced' : 'plan';
-  const runKey = [job?.id, job?.status, plan.direction, plan.recommended].join(':');
+  const runKey = [job?.id, job?.status, movesKey(planSteps(plan)), plan.recommended].join(':');
   const isOpen = (name: RouteName | null): name is RouteName => name !== null && plan.routes[name]?.available === true;
   const pick = [chosen?.key === runKey ? chosen.route : null, plan.recommended, ...ROUTE_ORDER].find(isOpen) ?? null;
   const route = plan.routes[pick ?? plan.recommended ?? 'convert'] ?? plan.routes.convert;
-  const direction = job && (mode === 'running' || mode === 'halted') ? job.direction : (plan.direction ?? 'toUsdc');
+  const inJob = job !== null && (mode === 'running' || mode === 'halted');
+  const moveSteps = inJob ? job.steps : planSteps(plan);
+  const touched = new Set(moveSteps.flatMap((step) => [step.from, step.to]));
+  const lighter = buckets.find((b) => keyOf(b) === 'USDC/LIGHTER');
+  const showLighter =
+    touched.has('LIGHTER') ||
+    plan.split.some((share) => share.venue === 'LIGHTER') ||
+    Math.abs(lighter?.equity ?? 0) >= DUST ||
+    Math.abs(lighter?.cash ?? 0) >= DUST;
   const showGate = Math.abs(buckets.find((b) => keyOf(b) === 'USDC/GATE')?.cash ?? 0) >= DUST;
+  const shown = new Set([
+    'USDT/CROSSEX',
+    'USDC/HYPERLIQUID',
+    ...(showLighter ? ['USDC/LIGHTER'] : []),
+    ...(showGate ? ['USDC/GATE'] : []),
+  ]);
   const borrowed = borrowedBucket(buckets);
-  const receiving = buckets.find((b) => keyOf(b) === (direction === 'toUsdt' ? 'USDT/CROSSEX' : 'USDC/HYPERLIQUID'));
-  const borrow = receiving && floorCents(receiving.borrow) >= MIN_BORROW ? receiving.borrow : null;
+  const borrow = receivingBorrow(buckets, moveSteps);
   const moving = transfer?.transfer?.status === 'moving';
   const dealWorking = transfer?.lock === 'deal';
   const nowCaption = <Term label="Now" text={HOVER.now} />;
-  const nowRows = barRows(buckets, showGate);
+  const shares = positionShares(plan);
+  const shareColumn = (rows: BarRow[]) =>
+    shares.size > 0 && (
+      <ShareColumn caption={<Term label="Position share" text={HOVER.positionShare} />} rows={rows} shares={shares} />
+    );
+  const barsGrid = (withShare: boolean) =>
+    withShare && shares.size > 0 ? 'grid grid-cols-[1fr_1fr_auto] gap-8' : 'grid grid-cols-2 gap-8';
+  const nowRows = barRows(buckets, shown);
   const currentRound = job?.steps[job.stepIndex]?.round ?? null;
   const withSpot = (key: string, label: string, text: string): BarRow[] =>
     job?.inTransit
@@ -135,10 +161,10 @@ export function RebalanceSection({
   let body: ReactNode;
   if (job && mode === 'running') {
     const rounds = roundCountOf(job);
-    const total = rounds * ROUND_SECONDS[job.direction];
+    const total = jobSeconds(job);
     const elapsed = fmtAge(Math.max(0, now - job.createdAt));
     const rows = withSpot('transit', 'On the way', HOVER.onTheWay);
-    const target = job.target ? barRows(job.target, showGate) : [];
+    const target = job.target ? barRows(job.target, shown) : [];
     const roundFact = { key: 'round', label: 'Round', value: `${num(currentRound ?? 0, 0)} of ${num(rounds, 0)}` };
     body = (
       <>
@@ -149,9 +175,10 @@ export function RebalanceSection({
             { key: 'time', label: 'Time', value: total > 0 ? `${elapsed} of ${fmtAbout(total)}` : elapsed },
           ]}
         />
-        <div className="grid grid-cols-2 gap-8 border-t border-ink-800 pt-3">
+        <div className={`${barsGrid(target.length > 0)} border-t border-ink-800 pt-3`}>
           <BalanceBars caption={nowCaption} rows={rows} scale={scaleOf(rows, target)} />
           {target.length > 0 && <BalanceBars caption="After rebalance" rows={target} scale={scaleOf(rows, target)} />}
+          {target.length > 0 && shareColumn(target)}
         </div>
         <BarLegend rows={[...rows, ...target]} />
         <StepList rows={jobRows(job, now, borrow)} />
@@ -196,17 +223,19 @@ export function RebalanceSection({
   } else if (mode === 'balanced') {
     body = (
       <>
-        <div className="grid grid-cols-2 gap-8">
+        <div className={shares.size > 0 ? 'grid grid-cols-[1fr_auto_1fr] gap-8' : 'grid grid-cols-2 gap-8'}>
           <BalanceBars caption={nowCaption} rows={nowRows} scale={scaleOf(nowRows)} />
+          {shareColumn(nowRows)}
         </div>
         <BarLegend rows={nowRows} />
+        {plan.noLegs && <p className="text-xs text-ink-400">{NO_LEGS}</p>}
         <Facts items={balancedFacts(plan, job)} />
         <div>{hold}</div>
         {spotLines}
       </>
     );
   } else {
-    const afterRows = barRows(route.after, showGate);
+    const afterRows = barRows(route.after, shown);
     const waitLine = moving
       ? 'Rebalance waits until the transfer ends.'
       : dealWorking
@@ -215,9 +244,10 @@ export function RebalanceSection({
     body = (
       <>
         <Facts items={borrowFacts(buckets)} />
-        <div className="grid grid-cols-2 gap-8 border-t border-ink-800 pt-3">
+        <div className={`${barsGrid(true)} border-t border-ink-800 pt-3`}>
           <BalanceBars caption={nowCaption} rows={nowRows} scale={scaleOf(nowRows, afterRows)} />
           <BalanceBars caption="After rebalance" rows={afterRows} scale={scaleOf(nowRows, afterRows)} />
+          {shareColumn(afterRows)}
         </div>
         <BarLegend rows={[...nowRows, ...afterRows]} />
         <Facts items={cashFacts(plan)} />
@@ -250,7 +280,7 @@ export function RebalanceSection({
             {`${stepsOpen ? 'Hide' : 'Show'} ${stepsNoun(route)}`}
           </button>
         )}
-        {stepsOpen && <StepList rows={planRows(route, direction, borrow)} />}
+        {stepsOpen && <StepList rows={planRows(route, borrow)} />}
         <div className="flex flex-wrap items-center gap-3">
           {hold}
           {plan.shortOfEven > 0 && <Chip tone="amber">Ends as even as cash allows</Chip>}
@@ -266,9 +296,10 @@ export function RebalanceSection({
       <div className="flex items-start justify-between gap-4">
         <div className="flex flex-col gap-0.5">
           {title}
-          <p className="text-xs text-ink-500">Even out your CrossEx USDT and USDC wallets</p>
+          <p className="text-xs text-ink-500">Split your CrossEx equity by position size</p>
         </div>
         {mode === 'balanced' &&
+          !plan.noLegs &&
           (isCashLimitedEven(plan) ? (
             <Chip tone="amber">As even as cash allows</Chip>
           ) : (

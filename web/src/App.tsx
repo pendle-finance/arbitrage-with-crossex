@@ -184,7 +184,7 @@ export default function App() {
 
           {/* Full-width content: the order ticket is no longer a permanent
               column — the wizard and the drawer overlay on demand. */}
-          <main className="mx-auto flex w-full max-w-[1500px] flex-1 items-start gap-5 px-5 py-5">
+          <main className="mx-auto flex w-full max-w-[1500px] flex-1 items-start gap-5 px-5 pb-16 pt-5">
             <section className="min-w-0 flex-1">
               {credentials.isPending ? (
                 <TableSkeleton rows={6} cols={7} />

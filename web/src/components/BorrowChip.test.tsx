@@ -60,6 +60,19 @@ describe('BorrowChip', () => {
     expect(within(card).getByText('Gate, Binance, OKX and Bybit legs')).toBeInTheDocument();
   });
 
+  it('Lighter borrow legs', async () => {
+    const view = rebalanceViews.exampleC;
+    const lighter = { coin: 'USDC', venue: 'LIGHTER', cash: -500, upnl: 0, equity: -500, borrow: 500, imHeldUsd: 100, mmHeldUsd: 50, interestPaidUsd: 0, interestPerDayUsd: 0.15 };
+    server.use(rebalanceHandler({ ...view, buckets: [...view.buckets, lighter] }));
+    renderWithClient(<BorrowChip onOpen={vi.fn()} />);
+
+    const pill = await screen.findByRole('button', { name: 'Borrowing 500.00 USDC' });
+    await userEvent.hover(pill);
+
+    const card = await screen.findByRole('tooltip');
+    expect(within(card).getByText('Lighter legs')).toBeInTheDocument();
+  });
+
   it('a click on the pill opens Balances', async () => {
     server.use(rebalanceHandler(rebalanceViews.accountA));
     const onOpen = vi.fn();

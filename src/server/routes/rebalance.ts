@@ -1,8 +1,10 @@
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import { classifyGateError, classifyPlain, CoreError } from '../../core/errors';
+import { computeExposure } from '../../core/positions';
 import {
   bucketsFrom,
   floorCents,
+  notionalByWallet,
   planFor,
   SPOT_PAIR,
   SPOT_SYMBOL,
@@ -29,6 +31,7 @@ import { receivedOf, runJob, STEPS, transferRow } from '../rebalanceRunner';
 
 const ROUTE_NAMES: readonly string[] = ['mix', 'loop', 'convert'];
 const ALREADY_EVEN = 'Already even.';
+const NO_LEGS = 'No open positions. Nothing to rebalance.';
 
 export const STALE_TEXT = 'Gate is rate-limiting the account read. Try again in a few seconds.';
 
@@ -133,7 +136,8 @@ export function rebalanceRoutes(deps: AppDeps) {
         fresh,
       });
       const userId = account.value.userId ? String(account.value.userId) : null;
-      const [rates, paid, coins, rules, fees, tickers] = await Promise.all([
+      const [positions, rates, paid, coins, rules, fees, tickers] = await Promise.all([
+        deps.cache.get('positions', TTL.live, async () => (await crossEx().listCrossexPositions()).body, { fresh }),
         orEmpty(deps.cache.get('interest:rate', TTL.static, async () => (await crossEx().getCrossexInterestRate()).body)),
         interestPaid(userId),
         deps.cache.get('transfer:coins', TTL.static, async () => (await crossEx().listCrossexTransferCoins()).body),
@@ -156,9 +160,10 @@ export function rebalanceRoutes(deps: AppDeps) {
         spotTakerRate: Number(special?.takerFeeRate ?? gateFees?.spotTakerFee ?? 0),
         ask: Number.isFinite(ask) ? ask : null,
         bid: Number.isFinite(bid) ? bid : null,
+        notional: notionalByWallet(computeExposure(positions.value ?? []).flatMap((group) => group.legs)),
       });
-      const stale = [account, rates, paid, coins, rules, fees, tickers].some((r) => r.stale);
-      return { buckets, plan, stale, accountStale: account.stale, userId };
+      const stale = [account, positions, rates, paid, coins, rules, fees, tickers].some((r) => r.stale);
+      return { buckets, plan, stale, accountStale: account.stale || positions.stale, userId };
     };
 
     const loadInTransit = async (job: Job): Promise<ReturnType<typeof inTransitOf>> => {
@@ -229,7 +234,7 @@ export function rebalanceRoutes(deps: AppDeps) {
       // because Gate rate-limited the fresh one may be seconds old, and a
       // move to USDT sized on old equity can open the borrow it promises not to.
       if (accountStale) return conflict(reply, STALE_TEXT);
-      if (plan.balanced || plan.direction === null) return conflict(reply, ALREADY_EVEN);
+      if (plan.balanced) return conflict(reply, plan.noLegs ? NO_LEGS : ALREADY_EVEN);
       const name = route === 'mix' && !plan.routes.mix ? plan.recommended : route;
       const picked = name ? plan.routes[name] : null;
       if (!name || !picked?.available) return conflict(reply, picked?.reason ?? 'no route');
@@ -239,7 +244,6 @@ export function rebalanceRoutes(deps: AppDeps) {
       const moved = picked.steps.reduce((total, step) => total + step.move, 0);
       const job = newJob(
         {
-          direction: plan.direction,
           route: name,
           steps: picked.steps,
           amount: floorCents(moved),

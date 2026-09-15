@@ -1,10 +1,10 @@
 import { useId, type ReactNode } from 'react';
-import type { PlannedStep, RebalanceDirection, RebalanceJob, RebalanceStep, RoutePlan } from '../api/types';
+import type { PlannedStep, Pool, RebalanceJob, RebalanceStep, RoutePlan } from '../api/types';
 import { microLabelClass } from '../components/Th';
 import { fmtAbout, fmtAge, num } from '../lib/fmt';
-import { LEG_TEXT } from './rebalanceCopy';
+import { LEG_TEXT, MOVE_TEXT } from './rebalanceCopy';
 
-type BarTone = 'usdt' | 'usdc' | 'gate' | 'spot';
+type BarTone = 'usdt' | 'usdc' | 'lighter' | 'gate' | 'spot';
 
 export interface BarRow {
   key: string;
@@ -17,6 +17,7 @@ export interface BarRow {
 const BAR_FILL: Record<BarTone, string> = {
   usdt: 'bg-info',
   usdc: 'bg-crossex',
+  lighter: 'bg-grass',
   gate: 'bg-ink-600',
   spot: 'bg-gold',
 };
@@ -24,6 +25,7 @@ const BAR_FILL: Record<BarTone, string> = {
 const GAIN_FILL: Record<BarTone, string> = {
   usdt: 'bar-gain-usdt',
   usdc: 'bar-gain-usdc',
+  lighter: 'bar-gain-lighter',
   gate: 'bar-gain-gate',
   spot: 'bar-gain-spot',
 };
@@ -45,12 +47,12 @@ export function BalanceBars({ caption, rows, scale }: { caption: ReactNode; rows
   const bars = rows.map((row) => ({ row, ...barParts(row) }));
   return (
     <div role="group" aria-labelledby={captionId} className="flex flex-col gap-2">
-      <div id={captionId} className={microLabelClass}>
+      <div id={captionId} className={`h-4 ${microLabelClass}`}>
         {caption}
       </div>
       <div className="flex flex-col gap-1.5">
         {bars.map(({ row, value, solid, gain }) => (
-          <div key={row.key} className="flex items-center gap-3 text-xs">
+          <div key={row.key} className="flex h-4 items-center gap-3 text-xs">
             <div className="w-40 shrink-0 whitespace-nowrap text-ink-100">{row.label}</div>
             <div className="relative h-3 min-w-0 flex-1">
               <div aria-hidden className="flex h-3 w-full overflow-hidden rounded-sm bg-ink-950">
@@ -66,6 +68,24 @@ export function BalanceBars({ caption, rows, scale }: { caption: ReactNode; rows
             </div>
             <span className="num w-20 shrink-0 text-right text-ink-100">{num(value)}</span>
           </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+export function ShareColumn({ caption, rows, shares }: { caption: ReactNode; rows: BarRow[]; shares: Map<string, string> }) {
+  const captionId = useId();
+  return (
+    <div role="group" aria-labelledby={captionId} className="flex flex-col gap-2">
+      <div id={captionId} className={`h-4 whitespace-nowrap text-right ${microLabelClass}`}>
+        {caption}
+      </div>
+      <div className="flex flex-col gap-1.5">
+        {rows.map((row) => (
+          <span key={row.key} className="num h-4 whitespace-nowrap text-right text-xs leading-4 text-ink-100">
+            {shares.get(row.key) ?? ''}
+          </span>
         ))}
       </div>
     </div>
@@ -165,11 +185,9 @@ export function StepList({ rows }: { rows: StepRow[] }) {
   );
 }
 
-const HYPERLIQUID_WALLET = 'the CrossEx Hyperliquid wallet';
+type StepTextInput = Pick<PlannedStep, 'kind' | 'buy' | 'move' | 'arrives' | 'from' | 'to'> & { borrowLeft: number | null };
 
-type StepTextInput = Pick<PlannedStep, 'kind' | 'buy' | 'move' | 'arrives'> & { borrowLeft: number | null };
-
-export function stepText(step: StepTextInput, direction: RebalanceDirection): { text: string; sub: string } {
+export function stepText(step: StepTextInput): { text: string; sub: string } {
   const move = num(step.move);
   const arrives = num(step.arrives);
   const borrowLeft = step.borrowLeft === null ? null : num(step.borrowLeft);
@@ -177,36 +195,49 @@ export function stepText(step: StepTextInput, direction: RebalanceDirection): { 
     borrowLeft === null
       ? `${arrives} arrives`
       : `${arrives} arrives · ${borrowLeft === num(0) ? 'borrow paid' : `borrow left ${borrowLeft}`}`;
-  if (step.kind === 'convert') {
-    const pair = direction === 'toUsdc' ? 'USDT to USDC' : 'USDC to USDT';
-    return { text: `Convert ${move} ${pair}`, sub };
-  }
-  if (direction === 'toUsdt') {
-    return { text: `Move ${move} USDC out of ${HYPERLIQUID_WALLET}, sell ${arrives} for USDT`, sub };
-  }
+  if (step.kind === 'convert') return { text: MOVE_TEXT.convert(step.from, step.to, move), sub };
+  if (step.from !== 'CROSSEX') return { text: MOVE_TEXT.step(step.from, step.to, move, arrives), sub };
+  const wallet = MOVE_TEXT.into(step.to);
   const buy = num(step.buy);
-  if (buy === num(0)) return { text: `Move ${move} USDC to ${HYPERLIQUID_WALLET}`, sub };
-  if (buy === move) return { text: `Buy ${buy} USDC, move it to ${HYPERLIQUID_WALLET}`, sub };
-  return { text: `Buy ${buy} USDC, move ${move} USDC to ${HYPERLIQUID_WALLET}`, sub };
+  if (buy === num(0)) return { text: `Move ${move} USDC to ${wallet}`, sub };
+  if (buy === move) return { text: `Buy ${buy} USDC, move it to ${wallet}`, sub };
+  return { text: `Buy ${buy} USDC, move ${move} USDC to ${wallet}`, sub };
 }
 
-export const ROUND_SECONDS: Record<RebalanceDirection, number> = { toUsdc: 130, toUsdt: 400 };
+const HOP_SECONDS: Record<Pool, { in: number; out: number }> = {
+  CROSSEX: { in: 5, out: 5 },
+  HYPERLIQUID: { in: 125, out: 395 },
+  LIGHTER: { in: 230, out: 180 },
+};
 
-function jobStepText(steps: RebalanceStep[], round: number | null, direction: RebalanceDirection) {
-  const named = (name: string) => steps.find((step) => step.name === name);
-  const toUsdc = direction === 'toUsdc';
-  const last = toUsdc ? named('To Hyperliquid') : named('Sell USDC');
+export const roundSeconds = (from: Pool, to: Pool): number => HOP_SECONDS[from].out + HOP_SECONDS[to].in;
+
+export function jobSeconds(job: RebalanceJob): number {
+  const rounds = new Map<number, number>();
+  for (const step of job.steps) {
+    if (step.round !== null && !rounds.has(step.round)) rounds.set(step.round, roundSeconds(step.from, step.to));
+  }
+  return [...rounds.values()].reduce((total, seconds) => total + seconds, 0);
+}
+
+function jobStepText(steps: RebalanceStep[], round: number | null) {
+  const named = (...names: string[]) => steps.find((step) => names.includes(step.name));
+  const { from, to } = steps[0];
+  const into = from === 'CROSSEX';
+  const out = to === 'CROSSEX';
+  const last = out ? named('Sell USDC') : named('To Hyperliquid', 'To Lighter');
+  const converts = steps.filter((step) => step.name.startsWith('Convert'));
   const input =
     round === null
-      ? { kind: 'convert' as const, buy: 0, move: named('Convert')?.planned ?? 0, arrives: named('Convert')?.qty ?? null }
+      ? { kind: 'convert' as const, buy: 0, move: converts[0]?.planned ?? 0, arrives: converts.at(-1)?.qty ?? null }
       : {
           kind: 'round' as const,
-          buy: toUsdc ? (named('Buy USDC')?.qty ?? named('Buy USDC')?.planned ?? 0) : 0,
-          move: (toUsdc ? named('To spot') : named('From Hyperliquid'))?.planned ?? 0,
-          arrives: (toUsdc ? last?.arrives : last?.planned) ?? null,
+          buy: into ? (named('Buy USDC')?.qty ?? named('Buy USDC')?.planned ?? 0) : 0,
+          move: (into ? named('To spot') : named('From Hyperliquid', 'From Lighter'))?.planned ?? 0,
+          arrives: (out ? last?.planned : last?.arrives) ?? null,
         };
   const borrowLeft = round === null ? null : (last?.borrowLeft ?? null);
-  const { text, sub } = stepText({ ...input, arrives: input.arrives ?? 0, borrowLeft }, direction);
+  const { text, sub } = stepText({ ...input, from, to, arrives: input.arrives ?? 0, borrowLeft });
   return { text, sub: input.arrives === null ? '' : sub };
 }
 
@@ -216,15 +247,17 @@ export function jobRows(job: RebalanceJob, now: number, borrow: number | null): 
   const groups: { round: number | null; steps: RebalanceStep[] }[] = [];
   for (const step of jobSteps) {
     const last = groups.at(-1);
-    if (last && last.round === step.round) last.steps.push(step);
+    const head = last?.steps[0];
+    if (last && head && last.round === step.round && head.from === step.from && head.to === step.to) last.steps.push(step);
     else groups.push({ round: step.round, steps: [step] });
   }
   const current = jobSteps[job.stepIndex];
-  return groups.map(({ round, steps }): StepRow => {
-    const expected = round === null ? 0 : ROUND_SECONDS[job.direction];
+  return groups.map(({ round, steps }, index): StepRow => {
+    const { from, to } = steps[0];
+    const expected = round === null ? 0 : roundSeconds(from, to);
     const started = steps.find((step) => step.startedAt !== null)?.startedAt ?? null;
     const label = round === null ? 'Convert' : `Round ${num(round, 0)}`;
-    const base = { key: label, label, ...jobStepText(steps, round, job.direction) };
+    const base = { key: `${label}:${index}`, label, ...jobStepText(steps, round) };
     const doneAt = steps.at(-1)?.doneAt ?? null;
     if (steps.every((step) => step.status === 'done')) {
       const took = started === null || doneAt === null ? '' : fmtAge(doneAt - started);
@@ -241,11 +274,11 @@ export function jobRows(job: RebalanceJob, now: number, borrow: number | null): 
   });
 }
 
-export function planRows(route: RoutePlan, direction: RebalanceDirection, borrow: number | null): StepRow[] {
+export function planRows(route: RoutePlan, borrow: number | null): StepRow[] {
   return route.steps.map((step, index): StepRow => {
     const label = step.kind === 'convert' ? 'Convert' : `Round ${num(step.round ?? index + 1, 0)}`;
     const right = step.kind === 'convert' ? 'instant' : fmtAbout(step.seconds);
-    const text = stepText({ ...step, borrowLeft: borrow === null ? null : step.borrowLeft }, direction);
+    const text = stepText({ ...step, borrowLeft: borrow === null ? null : step.borrowLeft });
     return { key: String(index), label, ...text, right, state: 'pending', progress: 0 };
   });
 }

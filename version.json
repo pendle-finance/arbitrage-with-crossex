@@ -1,10 +1,10 @@
 {
-  "version": "1.6.1",
+  "version": "1.6.2",
   "highlights": [
-    "Rebalance makes your CrossEx USDT and USDC equity even with one hold. A borrow no longer stops it at To spot",
-    "Before you hold, you see each route: Spot loop, Convert or both, with its rounds, time and cost",
-    "A new Manual Transfer card moves USDT and USDC between Gate spot and your three CrossEx wallets",
-    "A stopped run says where your money is, and offers Resume or Abandon",
-    "To see Gate spot balances, add Spot Trading Read Only to your Gate API key. Without it, everything still works"
+    "Lighter pairs now show in Opportunities. Lighter allows up to 50x, so a pair needs less capital",
+    "Rebalance splits your CrossEx equity by position size across USDT, Hyperliquid and Lighter. A Position share column shows each wallet's share",
+    "One hold moves money into and out of your Lighter wallet, and between Hyperliquid and Lighter",
+    "Manual Transfer moves USDC between Gate spot and USDC · Lighter",
+    "A Lighter borrow pays about 11% a year from the first dollar. Hyperliquid stays free up to 10,000 USDC"
   ]
 }

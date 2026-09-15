@@ -30,6 +30,7 @@ import type {
   TransferView,
   UpdateStatus,
   WalletAfter,
+  WalletShare,
 } from '../api/types';
 import type { SharePayloadV1 } from '../lib/shareCodec';
 import { env } from './server';
@@ -525,8 +526,17 @@ export function accountHandler(body: CrossexAccount = accountBodies.accountB) {
 
 export const REBALANCE_NOW = 1_789_306_394_208;
 
+const TO_HYPERLIQUID = { from: 'CROSSEX', to: 'HYPERLIQUID' } as const;
+const FROM_HYPERLIQUID = { from: 'HYPERLIQUID', to: 'CROSSEX' } as const;
+
+const EVEN_SPLIT: WalletShare[] = [
+  { coin: 'USDT', venue: 'CROSSEX', notionalUsd: 1000, share: 0.5 },
+  { coin: 'USDC', venue: 'HYPERLIQUID', notionalUsd: 1000, share: 0.5 },
+];
+
 function jobStep(step: Pick<RebalanceStep, 'name' | 'round' | 'planned'> & Partial<RebalanceStep>): RebalanceStep {
   return {
+    ...TO_HYPERLIQUID,
     text: null,
     quoteId: null,
     venueId: null,
@@ -547,7 +557,7 @@ function balancedPlan(after: WalletAfter[]): EvenPlan {
     savesPerDayUsd: 0, after, steps: [],
   };
   return {
-    direction: null, balanced: true, moves: 0, shortOfEven: 0, roundCap: 0,
+    balanced: true, noLegs: false, moves: 0, shortOfEven: 0, roundCap: 0, split: EVEN_SPLIT,
     routes: { mix: null, loop: idle, convert: idle },
     recommended: null,
   };
@@ -602,7 +612,7 @@ const ACCOUNT_A_ROUND_3_BUCKETS: RebalanceBucket[] = [
 ];
 
 const ACCOUNT_A_ROUND_3_PLAN: EvenPlan = {
-  direction: 'toUsdc', balanced: false, moves: 103.19, shortOfEven: 0, roundCap: 6,
+  balanced: false, noLegs: false, moves: 103.19, shortOfEven: 0, roundCap: 6, split: EVEN_SPLIT,
   routes: {
     mix: null,
     loop: {
@@ -614,7 +624,7 @@ const ACCOUNT_A_ROUND_3_PLAN: EvenPlan = {
         { coin: 'USDC', venue: 'GATE', cash: 0, equity: 0 },
       ],
       steps: [
-        { round: null, kind: 'convert', buy: 0, move: 103.19, arrives: 102.98, borrowLeft: 0, seconds: 0 },
+        { round: null, kind: 'convert', buy: 0, move: 103.19, arrives: 102.98, borrowLeft: 0, seconds: 0, ...TO_HYPERLIQUID },
       ],
     },
     convert: {
@@ -626,7 +636,7 @@ const ACCOUNT_A_ROUND_3_PLAN: EvenPlan = {
         { coin: 'USDC', venue: 'GATE', cash: 0, equity: 0 },
       ],
       steps: [
-        { round: null, kind: 'convert', buy: 0, move: 103.19, arrives: 102.98, borrowLeft: 0, seconds: 0 },
+        { round: null, kind: 'convert', buy: 0, move: 103.19, arrives: 102.98, borrowLeft: 0, seconds: 0, ...TO_HYPERLIQUID },
       ],
     },
   },
@@ -634,7 +644,7 @@ const ACCOUNT_A_ROUND_3_PLAN: EvenPlan = {
 };
 
 const ACCOUNT_A_RUNNING_JOB: RebalanceJob = {
-  id: 'mtzunfww', direction: 'toUsdc', route: 'loop', amount: 175.88, costUsd: 0.26,
+  id: 'mtzunfww', route: 'loop', amount: 175.88, costUsd: 0.26,
   target: [
     { coin: 'USDT', venue: 'CROSSEX', cash: 28.61, equity: 28.61 },
     { coin: 'USDC', venue: 'HYPERLIQUID', cash: 28.58, equity: 28.58 },
@@ -731,7 +741,7 @@ const BALANCED_PLAN: EvenPlan = balancedPlan([
 ]);
 
 const BALANCED_DONE_JOB: RebalanceJob = {
-  id: 'mtzuqygg', direction: 'toUsdc', route: 'loop', amount: 477.29, costUsd: 0.1,
+  id: 'mtzuqygg', route: 'loop', amount: 477.29, costUsd: 0.1,
   target: [
     { coin: 'USDT', venue: 'CROSSEX', cash: 509.27, equity: 493.88 },
     { coin: 'USDC', venue: 'HYPERLIQUID', cash: 489.12, equity: 494.15 },
@@ -757,7 +767,7 @@ const BALANCED_DONE_JOB: RebalanceJob = {
 };
 
 const OLD_DONE_JOB: RebalanceJob = {
-  id: 'mtzuqygg', direction: 'toUsdc', route: 'loop', amount: 111.96, status: 'done', stepIndex: 2,
+  id: 'mtzuqygg', route: 'loop', amount: 111.96, status: 'done', stepIndex: 2,
   steps: [
     jobStep({
       name: 'Buy USDC', qty: 111.96, status: 'done', startedAt: REBALANCE_NOW - 134_000,
@@ -781,12 +791,12 @@ const ACCOUNT_A_CONVERT: RoutePlan = {
   marginFreedUsd: 29.41, savesPerDayUsd: 0,
   after: afterOf(28.54, 28.53, 0),
   steps: [
-    { round: null, kind: 'convert', buy: 0, move: 175.94, arrives: 175.58, borrowLeft: 0, seconds: 0 },
+    { round: null, kind: 'convert', buy: 0, move: 175.94, arrives: 175.58, borrowLeft: 0, seconds: 0, ...TO_HYPERLIQUID },
   ],
 };
 
 const ACCOUNT_A_PLAN: EvenPlan = {
-  direction: 'toUsdc', balanced: false, moves: 175.89, shortOfEven: 0, roundCap: 6,
+  balanced: false, noLegs: false, moves: 175.89, shortOfEven: 0, roundCap: 6, split: EVEN_SPLIT,
   routes: {
     mix: null,
     loop: {
@@ -794,11 +804,11 @@ const ACCOUNT_A_PLAN: EvenPlan = {
       marginFreedUsd: 29.41, savesPerDayUsd: 0,
       after: afterOf(28.61, 28.58, 0),
       steps: [
-        { round: 1, kind: 'round', buy: 0, move: 24.51, arrives: 24.46, borrowLeft: 122.59, seconds: 130 },
-        { round: 2, kind: 'round', buy: 0, move: 29.93, arrives: 29.88, borrowLeft: 92.71, seconds: 130 },
-        { round: 3, kind: 'round', buy: 0, move: 36.58, arrives: 36.53, borrowLeft: 56.18, seconds: 130 },
-        { round: 4, kind: 'round', buy: 23.77, move: 44.71, arrives: 44.66, borrowLeft: 11.53, seconds: 130 },
-        { round: 5, kind: 'round', buy: 40.15, move: 40.15, arrives: 40.1, borrowLeft: 0, seconds: 130 },
+        { round: 1, kind: 'round', buy: 0, move: 24.51, arrives: 24.46, borrowLeft: 122.59, seconds: 130, ...TO_HYPERLIQUID },
+        { round: 2, kind: 'round', buy: 0, move: 29.93, arrives: 29.88, borrowLeft: 92.71, seconds: 130, ...TO_HYPERLIQUID },
+        { round: 3, kind: 'round', buy: 0, move: 36.58, arrives: 36.53, borrowLeft: 56.18, seconds: 130, ...TO_HYPERLIQUID },
+        { round: 4, kind: 'round', buy: 23.77, move: 44.71, arrives: 44.66, borrowLeft: 11.53, seconds: 130, ...TO_HYPERLIQUID },
+        { round: 5, kind: 'round', buy: 40.15, move: 40.15, arrives: 40.1, borrowLeft: 0, seconds: 130, ...TO_HYPERLIQUID },
       ],
     },
     convert: ACCOUNT_A_CONVERT,
@@ -807,7 +817,7 @@ const ACCOUNT_A_PLAN: EvenPlan = {
 };
 
 const ACCOUNT_A_PAUSED_PLAN: EvenPlan = {
-  direction: 'toUsdc', balanced: false, moves: 175.94, shortOfEven: 0, roundCap: 6,
+  balanced: false, noLegs: false, moves: 175.94, shortOfEven: 0, roundCap: 6, split: EVEN_SPLIT,
   routes: {
     mix: null,
     loop: {
@@ -815,11 +825,11 @@ const ACCOUNT_A_PAUSED_PLAN: EvenPlan = {
       oneMoreRoundCostUsd: null, marginFreedUsd: 29.41, savesPerDayUsd: 0,
       after: afterOf(28.6, 28.59, 0),
       steps: [
-        { round: 1, kind: 'round', buy: 0, move: 24.51, arrives: 24.46, borrowLeft: 122.59, seconds: 130 },
-        { round: 2, kind: 'round', buy: 0, move: 29.93, arrives: 29.88, borrowLeft: 92.71, seconds: 130 },
-        { round: 3, kind: 'round', buy: 0, move: 36.58, arrives: 36.53, borrowLeft: 56.18, seconds: 130 },
-        { round: 4, kind: 'round', buy: 23.77, move: 44.71, arrives: 44.66, borrowLeft: 11.52, seconds: 130 },
-        { round: 5, kind: 'round', buy: 40.16, move: 40.16, arrives: 40.11, borrowLeft: 0, seconds: 130 },
+        { round: 1, kind: 'round', buy: 0, move: 24.51, arrives: 24.46, borrowLeft: 122.59, seconds: 130, ...TO_HYPERLIQUID },
+        { round: 2, kind: 'round', buy: 0, move: 29.93, arrives: 29.88, borrowLeft: 92.71, seconds: 130, ...TO_HYPERLIQUID },
+        { round: 3, kind: 'round', buy: 0, move: 36.58, arrives: 36.53, borrowLeft: 56.18, seconds: 130, ...TO_HYPERLIQUID },
+        { round: 4, kind: 'round', buy: 23.77, move: 44.71, arrives: 44.66, borrowLeft: 11.52, seconds: 130, ...TO_HYPERLIQUID },
+        { round: 5, kind: 'round', buy: 40.16, move: 40.16, arrives: 40.11, borrowLeft: 0, seconds: 130, ...TO_HYPERLIQUID },
       ],
     },
     convert: ACCOUNT_A_CONVERT,
@@ -830,7 +840,7 @@ const ACCOUNT_A_PAUSED_PLAN: EvenPlan = {
 const ACCOUNT_A_INSIDE_BUCKETS = rebased(ACCOUNT_A_ROUND_3_BUCKETS, { 'USDC/GATE': { cash: 57.52, equity: 57.52 } });
 
 const ACCOUNT_A_INSIDE_PLAN: EvenPlan = {
-  direction: 'toUsdc', balanced: false, moves: 121.45, shortOfEven: 0, roundCap: 6,
+  balanced: false, noLegs: false, moves: 121.45, shortOfEven: 0, roundCap: 6, split: EVEN_SPLIT,
   routes: {
     mix: null,
     loop: {
@@ -838,9 +848,9 @@ const ACCOUNT_A_INSIDE_PLAN: EvenPlan = {
       marginFreedUsd: 18.54, savesPerDayUsd: 0,
       after: afterOf(28.6, 28.59, 0),
       steps: [
-        { round: 1, kind: 'round', buy: 0, move: 36.58, arrives: 36.53, borrowLeft: 56.18, seconds: 130 },
-        { round: 2, kind: 'round', buy: 23.77, move: 44.71, arrives: 44.66, borrowLeft: 11.52, seconds: 130 },
-        { round: 3, kind: 'round', buy: 40.16, move: 40.16, arrives: 40.11, borrowLeft: 0, seconds: 130 },
+        { round: 1, kind: 'round', buy: 0, move: 36.58, arrives: 36.53, borrowLeft: 56.18, seconds: 130, ...TO_HYPERLIQUID },
+        { round: 2, kind: 'round', buy: 23.77, move: 44.71, arrives: 44.66, borrowLeft: 11.52, seconds: 130, ...TO_HYPERLIQUID },
+        { round: 3, kind: 'round', buy: 40.16, move: 40.16, arrives: 40.11, borrowLeft: 0, seconds: 130, ...TO_HYPERLIQUID },
       ],
     },
     convert: {
@@ -848,7 +858,7 @@ const ACCOUNT_A_INSIDE_PLAN: EvenPlan = {
       marginFreedUsd: 18.54, savesPerDayUsd: 0,
       after: afterOf(28.55, 28.54, 0),
       steps: [
-        { round: null, kind: 'convert', buy: 0, move: 121.5, arrives: 121.25, borrowLeft: 0, seconds: 0 },
+        { round: null, kind: 'convert', buy: 0, move: 121.5, arrives: 121.25, borrowLeft: 0, seconds: 0, ...TO_HYPERLIQUID },
       ],
     },
   },
@@ -867,7 +877,7 @@ const HALTED_INSIDE_JOB: RebalanceJob = {
 };
 
 const CONVERT_DONE_JOB: RebalanceJob = {
-  id: 'mtzutp80', direction: 'toUsdc', route: 'convert', amount: 175.94, costUsd: 0.36,
+  id: 'mtzutp80', route: 'convert', amount: 175.94, costUsd: 0.36,
   target: ACCOUNT_A_CONVERT.after, status: 'done', stepIndex: 1,
   steps: [
     jobStep({
@@ -894,7 +904,7 @@ const BORROW_UNDER_ONE_BUCKETS = rebased(ACCOUNT_B_BUCKETS, {
 });
 
 const BORROW_UNDER_ONE_PLAN: EvenPlan = {
-  direction: 'toUsdc', balanced: false, moves: 483.43, shortOfEven: 0, roundCap: 6,
+  balanced: false, noLegs: false, moves: 483.43, shortOfEven: 0, roundCap: 6, split: EVEN_SPLIT,
   routes: {
     mix: null,
     loop: {
@@ -906,7 +916,7 @@ const BORROW_UNDER_ONE_PLAN: EvenPlan = {
         { coin: 'USDC', venue: 'GATE', cash: 0.29, equity: 0.29 },
       ],
       steps: [
-        { round: 1, kind: 'round', buy: 483.43, move: 483.43, arrives: 483.38, borrowLeft: 0, seconds: 130 },
+        { round: 1, kind: 'round', buy: 483.43, move: 483.43, arrives: 483.38, borrowLeft: 0, seconds: 130, ...TO_HYPERLIQUID },
       ],
     },
     convert: {
@@ -918,7 +928,7 @@ const BORROW_UNDER_ONE_PLAN: EvenPlan = {
         { coin: 'USDC', venue: 'GATE', cash: 0.29, equity: 0.29 },
       ],
       steps: [
-        { round: null, kind: 'convert', buy: 0, move: 483.92, arrives: 482.95, borrowLeft: 0, seconds: 0 },
+        { round: null, kind: 'convert', buy: 0, move: 483.92, arrives: 482.95, borrowLeft: 0, seconds: 0, ...TO_HYPERLIQUID },
       ],
     },
   },
@@ -945,13 +955,13 @@ const EXAMPLE_D_MIX: RoutePlan = {
   marginFreedUsd: 1922.48, savesPerDayUsd: 0,
   after: afterOf(1226.85, 1226.83, 0),
   steps: [
-    { round: 1, kind: 'round', buy: 316.19, move: 316.19, arrives: 316.14, borrowLeft: 9296.26, seconds: 130 },
-    { round: 2, kind: 'round', buy: 386.92, move: 386.92, arrives: 386.87, borrowLeft: 8909.39, seconds: 130 },
-    { round: 3, kind: 'round', buy: 473.49, move: 473.49, arrives: 473.44, borrowLeft: 8435.95, seconds: 130 },
-    { round: 4, kind: 'round', buy: 579.44, move: 579.44, arrives: 579.39, borrowLeft: 7856.56, seconds: 130 },
-    { round: 5, kind: 'round', buy: 709.12, move: 709.12, arrives: 709.07, borrowLeft: 7147.49, seconds: 130 },
-    { round: 6, kind: 'round', buy: 867.83, move: 867.83, arrives: 867.78, borrowLeft: 6279.71, seconds: 130 },
-    { round: null, kind: 'convert', buy: 0, move: 7521.59, arrives: 7506.54, borrowLeft: 0, seconds: 0 },
+    { round: 1, kind: 'round', buy: 316.19, move: 316.19, arrives: 316.14, borrowLeft: 9296.26, seconds: 130, ...TO_HYPERLIQUID },
+    { round: 2, kind: 'round', buy: 386.92, move: 386.92, arrives: 386.87, borrowLeft: 8909.39, seconds: 130, ...TO_HYPERLIQUID },
+    { round: 3, kind: 'round', buy: 473.49, move: 473.49, arrives: 473.44, borrowLeft: 8435.95, seconds: 130, ...TO_HYPERLIQUID },
+    { round: 4, kind: 'round', buy: 579.44, move: 579.44, arrives: 579.39, borrowLeft: 7856.56, seconds: 130, ...TO_HYPERLIQUID },
+    { round: 5, kind: 'round', buy: 709.12, move: 709.12, arrives: 709.07, borrowLeft: 7147.49, seconds: 130, ...TO_HYPERLIQUID },
+    { round: 6, kind: 'round', buy: 867.83, move: 867.83, arrives: 867.78, borrowLeft: 6279.71, seconds: 130, ...TO_HYPERLIQUID },
+    { round: null, kind: 'convert', buy: 0, move: 7521.59, arrives: 7506.54, borrowLeft: 0, seconds: 0, ...TO_HYPERLIQUID },
   ],
 };
 
@@ -961,7 +971,7 @@ const EXAMPLE_D_MID_BUCKETS = rebased(EXAMPLE_D_BUCKETS, {
 });
 
 const EXAMPLE_D_MID_PLAN: EvenPlan = {
-  direction: 'toUsdc', balanced: false, moves: 7513.82, shortOfEven: 0, roundCap: 6,
+  balanced: false, noLegs: false, moves: 7513.82, shortOfEven: 0, roundCap: 6, split: EVEN_SPLIT,
   routes: {
     mix: null,
     loop: {
@@ -969,11 +979,11 @@ const EXAMPLE_D_MID_PLAN: EvenPlan = {
       marginFreedUsd: 1255.94, savesPerDayUsd: 0,
       after: afterOf(1233.87, 1233.86, 0),
       steps: [
-        { round: 1, kind: 'round', buy: 1062.08, move: 1062.08, arrives: 1062.03, borrowLeft: 5217.68, seconds: 130 },
-        { round: 2, kind: 'round', buy: 1299.82, move: 1299.82, arrives: 1299.77, borrowLeft: 3917.91, seconds: 130 },
-        { round: 3, kind: 'round', buy: 1590.78, move: 1590.78, arrives: 1590.73, borrowLeft: 2327.18, seconds: 130 },
-        { round: 4, kind: 'round', buy: 1946.9, move: 1946.9, arrives: 1946.85, borrowLeft: 380.33, seconds: 130 },
-        { round: 5, kind: 'round', buy: 1614.24, move: 1614.24, arrives: 1614.19, borrowLeft: 0, seconds: 130 },
+        { round: 1, kind: 'round', buy: 1062.08, move: 1062.08, arrives: 1062.03, borrowLeft: 5217.68, seconds: 130, ...TO_HYPERLIQUID },
+        { round: 2, kind: 'round', buy: 1299.82, move: 1299.82, arrives: 1299.77, borrowLeft: 3917.91, seconds: 130, ...TO_HYPERLIQUID },
+        { round: 3, kind: 'round', buy: 1590.78, move: 1590.78, arrives: 1590.73, borrowLeft: 2327.18, seconds: 130, ...TO_HYPERLIQUID },
+        { round: 4, kind: 'round', buy: 1946.9, move: 1946.9, arrives: 1946.85, borrowLeft: 380.33, seconds: 130, ...TO_HYPERLIQUID },
+        { round: 5, kind: 'round', buy: 1614.24, move: 1614.24, arrives: 1614.19, borrowLeft: 0, seconds: 130, ...TO_HYPERLIQUID },
       ],
     },
     convert: {
@@ -981,7 +991,7 @@ const EXAMPLE_D_MID_PLAN: EvenPlan = {
       marginFreedUsd: 1255.94, savesPerDayUsd: 0,
       after: EXAMPLE_D_MIX.after,
       steps: [
-        { round: null, kind: 'convert', buy: 0, move: 7521.59, arrives: 7506.54, borrowLeft: 0, seconds: 0 },
+        { round: null, kind: 'convert', buy: 0, move: 7521.59, arrives: 7506.54, borrowLeft: 0, seconds: 0, ...TO_HYPERLIQUID },
       ],
     },
   },
@@ -991,7 +1001,7 @@ const EXAMPLE_D_MID_PLAN: EvenPlan = {
 const EXAMPLE_D_STARTED = REBALANCE_NOW - 783_000;
 
 const EXAMPLE_D_CONVERT_JOB: RebalanceJob = {
-  id: 'mtzud1oo', direction: 'toUsdc', route: 'mix', amount: 10854.58, costUsd: EXAMPLE_D_MIX.costUsd,
+  id: 'mtzud1oo', route: 'mix', amount: 10854.58, costUsd: EXAMPLE_D_MIX.costUsd,
   target: EXAMPLE_D_MIX.after, status: 'running', stepIndex: 18,
   steps: EXAMPLE_D_MIX.steps.flatMap((step, index): RebalanceStep[] => {
     const start = EXAMPLE_D_STARTED + index * 130_000;
@@ -1052,12 +1062,12 @@ const EXAMPLE_E_MID_CONVERT: RoutePlan = {
   marginFreedUsd: 122.47, savesPerDayUsd: 0.09,
   after: afterOf(241.32, 241.33, 0),
   steps: [
-    { round: null, kind: 'convert', buy: 0, move: 855.39, arrives: 853.67, borrowLeft: 0, seconds: 0 },
+    { round: null, kind: 'convert', buy: 0, move: 855.39, arrives: 853.67, borrowLeft: 0, seconds: 0, ...FROM_HYPERLIQUID },
   ],
 };
 
 const EXAMPLE_E_MID_PLAN: EvenPlan = {
-  direction: 'toUsdt', balanced: false, moves: 855.39, shortOfEven: 0, roundCap: 2,
+  balanced: false, noLegs: false, moves: 855.39, shortOfEven: 0, roundCap: 2, split: EVEN_SPLIT,
   routes: {
     mix: null,
     loop: { ...EXAMPLE_E_MID_CONVERT, available: false, reason: 'Free margin is too low for an 11 USDC round.' },
@@ -1067,17 +1077,17 @@ const EXAMPLE_E_MID_PLAN: EvenPlan = {
 };
 
 const EXAMPLE_E_JOB: RebalanceJob = {
-  id: 'mtzuqm40', direction: 'toUsdt', route: 'loop', amount: 1228.31, costUsd: 2.12,
+  id: 'mtzuqm40', route: 'loop', amount: 1228.31, costUsd: 2.12,
   target: afterOf(613.83, 613.85, 0), status: 'running', stepIndex: 0,
   steps: [
-    jobStep({
+    jobStep({ ...FROM_HYPERLIQUID,
       name: 'From Hyperliquid', status: 'running', startedAt: REBALANCE_NOW - 150_000, round: 1, planned: 745.44,
     }),
-    jobStep({ name: 'To Gate', round: 1, planned: 744.44 }),
-    jobStep({ name: 'Sell USDC', round: 1, planned: 744.44, borrowLeft: 0 }),
-    jobStep({ name: 'From Hyperliquid', round: 2, planned: 482.87 }),
-    jobStep({ name: 'To Gate', round: 2, planned: 481.87 }),
-    jobStep({ name: 'Sell USDC', round: 2, planned: 481.87, borrowLeft: 0 }),
+    jobStep({ ...FROM_HYPERLIQUID, name: 'To Gate', round: 1, planned: 744.44 }),
+    jobStep({ ...FROM_HYPERLIQUID, name: 'Sell USDC', round: 1, planned: 744.44, borrowLeft: 0 }),
+    jobStep({ ...FROM_HYPERLIQUID, name: 'From Hyperliquid', round: 2, planned: 482.87 }),
+    jobStep({ ...FROM_HYPERLIQUID, name: 'To Gate', round: 2, planned: 481.87 }),
+    jobStep({ ...FROM_HYPERLIQUID, name: 'Sell USDC', round: 2, planned: 481.87, borrowLeft: 0 }),
   ],
   fundsAt: 'HYPERLIQUID', haltReason: null, createdAt: REBALANCE_NOW - 150_000, updatedAt: REBALANCE_NOW - 150_000,
   inTransit: null,
@@ -1088,14 +1098,374 @@ const EXAMPLE_E_ABANDONED_JOB: RebalanceJob = {
   haltReason: 'The app restarted during the run. Nothing failed. Press Resume.', createdAt: REBALANCE_NOW - 460_000,
   updatedAt: REBALANCE_NOW - 30_000, inTransit: { coin: 'USDC', qty: 744.44, at: 'SPOT' },
   steps: [
-    jobStep({
+    jobStep({ ...FROM_HYPERLIQUID,
       name: 'From Hyperliquid', qty: 744.44, status: 'done', startedAt: REBALANCE_NOW - 460_000,
       doneAt: REBALANCE_NOW - 60_000, round: 1, planned: 745.44,
     }),
-    jobStep({ name: 'To Gate', status: 'running', startedAt: REBALANCE_NOW - 60_000, round: 1, planned: 744.44 }),
+    jobStep({ ...FROM_HYPERLIQUID, name: 'To Gate', status: 'running', startedAt: REBALANCE_NOW - 60_000, round: 1, planned: 744.44 }),
     ...EXAMPLE_E_JOB.steps.slice(2),
   ],
 };
+
+const LIGHTER_SPLIT_BUCKETS: RebalanceBucket[] = [
+  {
+    coin: 'USDT',
+    venue: 'CROSSEX',
+    cash: 1000,
+    upnl: 0,
+    equity: 1000,
+    borrow: 0,
+    imHeldUsd: 0,
+    mmHeldUsd: 0,
+    interestPaidUsd: 0,
+    interestPerDayUsd: 0,
+  },
+  {
+    coin: 'USDC',
+    venue: 'HYPERLIQUID',
+    cash: 0,
+    upnl: 0,
+    equity: 0,
+    borrow: 0,
+    imHeldUsd: 0,
+    mmHeldUsd: 0,
+    interestPaidUsd: 0,
+    interestPerDayUsd: 0,
+  },
+  {
+    coin: 'USDC',
+    venue: 'LIGHTER',
+    cash: 0,
+    upnl: 0,
+    equity: 0,
+    borrow: 0,
+    imHeldUsd: 0,
+    mmHeldUsd: 0,
+    interestPaidUsd: 0,
+    interestPerDayUsd: 0,
+  },
+  {
+    coin: 'USDC',
+    venue: 'GATE',
+    cash: 0,
+    upnl: 0,
+    equity: 0,
+    borrow: 0,
+    imHeldUsd: 0,
+    mmHeldUsd: 0,
+    interestPaidUsd: 0,
+    interestPerDayUsd: 0,
+  },
+];
+
+const LIGHTER_SPLIT_PLAN: EvenPlan = {
+  balanced: false,
+  noLegs: false,
+  moves: 500.12,
+  shortOfEven: 0,
+  roundCap: 6,
+  split: [
+    { coin: 'USDT', venue: 'CROSSEX', notionalUsd: 500, share: 0.5 },
+    { coin: 'USDC', venue: 'HYPERLIQUID', notionalUsd: 250, share: 0.25 },
+    { coin: 'USDC', venue: 'LIGHTER', notionalUsd: 250, share: 0.25 },
+  ],
+  routes: {
+    mix: {
+      available: true,
+      reason: null,
+      costUsd: 0.83,
+      seconds: 130,
+      rounds: 1,
+      oneMoreRoundCostUsd: null,
+      marginFreedUsd: 0,
+      savesPerDayUsd: 0,
+      after: [
+        { coin: 'USDT', venue: 'CROSSEX', cash: 499.6, equity: 499.6 },
+        { coin: 'USDC', venue: 'HYPERLIQUID', cash: 249.78, equity: 249.78 },
+        { coin: 'USDC', venue: 'LIGHTER', cash: 249.78, equity: 249.78 },
+        { coin: 'USDC', venue: 'GATE', cash: 0, equity: 0 },
+      ],
+      steps: [
+        {
+          round: 1,
+          kind: 'round',
+          buy: 249.83,
+          move: 249.83,
+          arrives: 249.78,
+          borrowLeft: 0,
+          seconds: 130,
+          from: 'CROSSEX',
+          to: 'HYPERLIQUID',
+        },
+        {
+          round: null,
+          kind: 'convert',
+          buy: 0,
+          move: 250.29,
+          arrives: 249.78,
+          borrowLeft: 0,
+          seconds: 0,
+          from: 'CROSSEX',
+          to: 'LIGHTER',
+        },
+      ],
+    },
+    loop: {
+      available: true,
+      reason: null,
+      costUsd: 1.63,
+      seconds: 365,
+      rounds: 2,
+      oneMoreRoundCostUsd: null,
+      marginFreedUsd: 0,
+      savesPerDayUsd: 0,
+      after: [
+        { coin: 'USDT', venue: 'CROSSEX', cash: 499.2, equity: 499.2 },
+        { coin: 'USDC', venue: 'HYPERLIQUID', cash: 249.58, equity: 249.58 },
+        { coin: 'USDC', venue: 'LIGHTER', cash: 249.58, equity: 249.58 },
+        { coin: 'USDC', venue: 'GATE', cash: 0, equity: 0 },
+      ],
+      steps: [
+        {
+          round: 1,
+          kind: 'round',
+          buy: 249.63,
+          move: 249.63,
+          arrives: 249.58,
+          borrowLeft: 0,
+          seconds: 130,
+          from: 'CROSSEX',
+          to: 'HYPERLIQUID',
+        },
+        {
+          round: 2,
+          kind: 'round',
+          buy: 250.61,
+          move: 250.61,
+          arrives: 249.58,
+          borrowLeft: 0,
+          seconds: 235,
+          from: 'CROSSEX',
+          to: 'LIGHTER',
+        },
+      ],
+    },
+    convert: {
+      available: true,
+      reason: null,
+      costUsd: 1,
+      seconds: 0,
+      rounds: 0,
+      oneMoreRoundCostUsd: null,
+      marginFreedUsd: 0,
+      savesPerDayUsd: 0,
+      after: [
+        { coin: 'USDT', venue: 'CROSSEX', cash: 499.5, equity: 499.5 },
+        { coin: 'USDC', venue: 'HYPERLIQUID', cash: 249.74, equity: 249.74 },
+        { coin: 'USDC', venue: 'LIGHTER', cash: 249.74, equity: 249.74 },
+        { coin: 'USDC', venue: 'GATE', cash: 0, equity: 0 },
+      ],
+      steps: [
+        {
+          round: null,
+          kind: 'convert',
+          buy: 0,
+          move: 250.25,
+          arrives: 249.74,
+          borrowLeft: 0,
+          seconds: 0,
+          from: 'CROSSEX',
+          to: 'HYPERLIQUID',
+        },
+        {
+          round: null,
+          kind: 'convert',
+          buy: 0,
+          move: 250.25,
+          arrives: 249.74,
+          borrowLeft: 0,
+          seconds: 0,
+          from: 'CROSSEX',
+          to: 'LIGHTER',
+        },
+      ],
+    },
+  },
+  recommended: 'mix',
+};
+
+const LIGHTER_ACROSS_BUCKETS: RebalanceBucket[] = [
+  {
+    coin: 'USDT',
+    venue: 'CROSSEX',
+    cash: 500,
+    upnl: 0,
+    equity: 500,
+    borrow: 0,
+    imHeldUsd: 0,
+    mmHeldUsd: 0,
+    interestPaidUsd: 0,
+    interestPerDayUsd: 0,
+  },
+  {
+    coin: 'USDC',
+    venue: 'HYPERLIQUID',
+    cash: 500,
+    upnl: 0,
+    equity: 500,
+    borrow: 0,
+    imHeldUsd: 0,
+    mmHeldUsd: 0,
+    interestPaidUsd: 0,
+    interestPerDayUsd: 0,
+  },
+  {
+    coin: 'USDC',
+    venue: 'LIGHTER',
+    cash: 0,
+    upnl: 0,
+    equity: 0,
+    borrow: 0,
+    imHeldUsd: 0,
+    mmHeldUsd: 0,
+    interestPaidUsd: 0,
+    interestPerDayUsd: 0,
+  },
+  {
+    coin: 'USDC',
+    venue: 'GATE',
+    cash: 0,
+    upnl: 0,
+    equity: 0,
+    borrow: 0,
+    imHeldUsd: 0,
+    mmHeldUsd: 0,
+    interestPaidUsd: 0,
+    interestPerDayUsd: 0,
+  },
+];
+
+const LIGHTER_ACROSS_PLAN: EvenPlan = {
+  balanced: false,
+  noLegs: false,
+  moves: 500,
+  shortOfEven: 0,
+  roundCap: 1,
+  split: [
+    { coin: 'USDT', venue: 'CROSSEX', notionalUsd: 500, share: 0.5 },
+    { coin: 'USDC', venue: 'HYPERLIQUID', notionalUsd: 0, share: 0 },
+    { coin: 'USDC', venue: 'LIGHTER', notionalUsd: 500, share: 0.5 },
+  ],
+  routes: {
+    mix: null,
+    loop: {
+      available: true,
+      reason: null,
+      costUsd: 2.03,
+      seconds: 625,
+      rounds: 1,
+      oneMoreRoundCostUsd: null,
+      marginFreedUsd: 0,
+      savesPerDayUsd: 0,
+      after: [
+        { coin: 'USDT', venue: 'CROSSEX', cash: 500, equity: 500 },
+        { coin: 'USDC', venue: 'HYPERLIQUID', cash: 0, equity: 0 },
+        { coin: 'USDC', venue: 'LIGHTER', cash: 497.97, equity: 497.97 },
+        { coin: 'USDC', venue: 'GATE', cash: 0, equity: 0 },
+      ],
+      steps: [
+        {
+          round: 1,
+          kind: 'round',
+          buy: 0,
+          move: 500,
+          arrives: 497.97,
+          borrowLeft: 0,
+          seconds: 625,
+          from: 'HYPERLIQUID',
+          to: 'LIGHTER',
+        },
+      ],
+    },
+    convert: {
+      available: true,
+      reason: null,
+      costUsd: 2,
+      seconds: 0,
+      rounds: 0,
+      oneMoreRoundCostUsd: null,
+      marginFreedUsd: 0,
+      savesPerDayUsd: 0,
+      after: [
+        { coin: 'USDT', venue: 'CROSSEX', cash: 500, equity: 500 },
+        { coin: 'USDC', venue: 'HYPERLIQUID', cash: 0, equity: 0 },
+        { coin: 'USDC', venue: 'LIGHTER', cash: 498, equity: 498 },
+        { coin: 'USDC', venue: 'GATE', cash: 0, equity: 0 },
+      ],
+      steps: [
+        {
+          round: null,
+          kind: 'convert',
+          buy: 0,
+          move: 500,
+          arrives: 498,
+          borrowLeft: 0,
+          seconds: 0,
+          from: 'HYPERLIQUID',
+          to: 'LIGHTER',
+        },
+      ],
+    },
+  },
+  recommended: 'convert',
+};
+
+const ACROSS = { from: 'HYPERLIQUID', to: 'LIGHTER' } as const;
+
+const LIGHTER_ACROSS_RUNNING_JOB: RebalanceJob = {
+  id: 'mtzv1l7g', route: 'loop', amount: 500, costUsd: 2.03, target: LIGHTER_ACROSS_PLAN.routes.loop.after,
+  status: 'running', stepIndex: 1,
+  steps: [
+    jobStep({
+      ...ACROSS, name: 'From Hyperliquid', qty: 499, status: 'done', startedAt: REBALANCE_NOW - 400_000,
+      doneAt: REBALANCE_NOW - 10_000, round: 1, planned: 500,
+    }),
+    jobStep({
+      ...ACROSS, name: 'To Lighter', venueId: 'x2', status: 'running', startedAt: REBALANCE_NOW - 10_000, round: 1,
+      planned: 499, arrives: 497.97, borrowLeft: 0,
+    }),
+  ],
+  fundsAt: 'SPOT', haltReason: null, createdAt: REBALANCE_NOW - 400_000, updatedAt: REBALANCE_NOW - 10_000,
+  inTransit: { coin: 'USDC', qty: 499, at: 'MOVING' },
+};
+
+const LIGHTER_ACROSS_ABANDONED_JOB: RebalanceJob = {
+  ...LIGHTER_ACROSS_RUNNING_JOB, status: 'abandoned', haltReason: 'Gate took too long on this step. Press Resume to check again.',
+  inTransit: { coin: 'USDC', qty: 499, at: 'SPOT' },
+  steps: [
+    LIGHTER_ACROSS_RUNNING_JOB.steps[0],
+    jobStep({ ...ACROSS, name: 'To Lighter', round: 1, planned: 499, arrives: 497.97, borrowLeft: 0 }),
+  ],
+};
+
+const LIGHTER_CONVERT_DONE_JOB: RebalanceJob = {
+  id: 'mtzv2c1q', route: 'convert', amount: 500, costUsd: 2, target: LIGHTER_ACROSS_PLAN.routes.convert.after,
+  status: 'done', stepIndex: 1,
+  steps: [
+    jobStep({
+      ...ACROSS, name: 'Convert to USDT', qty: 499, status: 'done', startedAt: REBALANCE_NOW - 3_000,
+      doneAt: REBALANCE_NOW - 2_000, round: null, planned: 500,
+    }),
+    jobStep({
+      ...ACROSS, name: 'Convert to USDC', qty: 498, status: 'done', startedAt: REBALANCE_NOW - 2_000,
+      doneAt: REBALANCE_NOW - 1_000, round: null, planned: 499,
+    }),
+  ],
+  fundsAt: 'LIGHTER', haltReason: null, createdAt: REBALANCE_NOW - 3_000, updatedAt: REBALANCE_NOW - 1_000,
+  inTransit: null,
+};
+
+const NO_LEGS_PLAN: EvenPlan = { ...balancedPlan(afterOf(1000, 0, 0)), split: [], noLegs: true };
 
 export const rebalanceViews = {
   accountA: { buckets: ACCOUNT_A_BUCKETS, plan: ACCOUNT_A_PLAN, job: null },
@@ -1109,7 +1479,7 @@ export const rebalanceViews = {
   accountB: {
     buckets: ACCOUNT_B_BUCKETS,
     plan: {
-      direction: 'toUsdc', balanced: false, moves: 477.29, shortOfEven: 0, roundCap: 6,
+      balanced: false, noLegs: false, moves: 477.29, shortOfEven: 0, roundCap: 6, split: EVEN_SPLIT,
       routes: {
         mix: null,
         loop: {
@@ -1121,7 +1491,7 @@ export const rebalanceViews = {
             { coin: 'USDC', venue: 'GATE', cash: 0.29, equity: 0.29 },
           ],
           steps: [
-            { round: 1, kind: 'round', buy: 477.29, move: 477.29, arrives: 477.24, borrowLeft: 0, seconds: 130 },
+            { round: 1, kind: 'round', buy: 477.29, move: 477.29, arrives: 477.24, borrowLeft: 0, seconds: 130, ...TO_HYPERLIQUID },
           ],
         },
         convert: {
@@ -1133,7 +1503,7 @@ export const rebalanceViews = {
             { coin: 'USDC', venue: 'GATE', cash: 0.29, equity: 0.29 },
           ],
           steps: [
-            { round: null, kind: 'convert', buy: 0, move: 477.77, arrives: 476.81, borrowLeft: 0, seconds: 0 },
+            { round: null, kind: 'convert', buy: 0, move: 477.77, arrives: 476.81, borrowLeft: 0, seconds: 0, ...TO_HYPERLIQUID },
           ],
         },
       },
@@ -1157,7 +1527,7 @@ export const rebalanceViews = {
       },
     ],
     plan: {
-      direction: 'toUsdt', balanced: false, moves: 22.18, shortOfEven: 8, roundCap: 2,
+      balanced: false, noLegs: false, moves: 22.18, shortOfEven: 8, roundCap: 2, split: EVEN_SPLIT,
       routes: {
         mix: null,
         loop: {
@@ -1169,7 +1539,7 @@ export const rebalanceViews = {
             { coin: 'USDC', venue: 'GATE', cash: 0, equity: 0 },
           ],
           steps: [
-            { round: 1, kind: 'round', buy: 0, move: 22.18, arrives: 21.18, borrowLeft: 0, seconds: 400 },
+            { round: 1, kind: 'round', buy: 0, move: 22.18, arrives: 21.18, borrowLeft: 0, seconds: 400, ...FROM_HYPERLIQUID },
           ],
         },
         convert: {
@@ -1181,7 +1551,7 @@ export const rebalanceViews = {
             { coin: 'USDC', venue: 'GATE', cash: 0, equity: 0 },
           ],
           steps: [
-            { round: null, kind: 'convert', buy: 0, move: 22.18, arrives: 22.13, borrowLeft: 0, seconds: 0 },
+            { round: null, kind: 'convert', buy: 0, move: 22.18, arrives: 22.13, borrowLeft: 0, seconds: 0, ...FROM_HYPERLIQUID },
           ],
         },
       },
@@ -1192,7 +1562,7 @@ export const rebalanceViews = {
   exampleD: {
     buckets: EXAMPLE_D_BUCKETS,
     plan: {
-      direction: 'toUsdc', balanced: false, moves: 10854.58, shortOfEven: 0, roundCap: 6,
+      balanced: false, noLegs: false, moves: 10854.58, shortOfEven: 0, roundCap: 6, split: EVEN_SPLIT,
       routes: {
         mix: EXAMPLE_D_MIX,
         loop: {
@@ -1204,23 +1574,23 @@ export const rebalanceViews = {
             { coin: 'USDC', venue: 'GATE', cash: 0, equity: 0 },
           ],
           steps: [
-            { round: 1, kind: 'round', buy: 316.19, move: 316.19, arrives: 316.14, borrowLeft: 9296.26, seconds: 130 },
-            { round: 2, kind: 'round', buy: 386.92, move: 386.92, arrives: 386.87, borrowLeft: 8909.39, seconds: 130 },
-            { round: 3, kind: 'round', buy: 473.49, move: 473.49, arrives: 473.44, borrowLeft: 8435.95, seconds: 130 },
-            { round: 4, kind: 'round', buy: 579.44, move: 579.44, arrives: 579.39, borrowLeft: 7856.56, seconds: 130 },
-            { round: 5, kind: 'round', buy: 709.12, move: 709.12, arrives: 709.07, borrowLeft: 7147.49, seconds: 130 },
-            { round: 6, kind: 'round', buy: 867.83, move: 867.83, arrives: 867.78, borrowLeft: 6279.71, seconds: 130 },
+            { round: 1, kind: 'round', buy: 316.19, move: 316.19, arrives: 316.14, borrowLeft: 9296.26, seconds: 130, ...TO_HYPERLIQUID },
+            { round: 2, kind: 'round', buy: 386.92, move: 386.92, arrives: 386.87, borrowLeft: 8909.39, seconds: 130, ...TO_HYPERLIQUID },
+            { round: 3, kind: 'round', buy: 473.49, move: 473.49, arrives: 473.44, borrowLeft: 8435.95, seconds: 130, ...TO_HYPERLIQUID },
+            { round: 4, kind: 'round', buy: 579.44, move: 579.44, arrives: 579.39, borrowLeft: 7856.56, seconds: 130, ...TO_HYPERLIQUID },
+            { round: 5, kind: 'round', buy: 709.12, move: 709.12, arrives: 709.07, borrowLeft: 7147.49, seconds: 130, ...TO_HYPERLIQUID },
+            { round: 6, kind: 'round', buy: 867.83, move: 867.83, arrives: 867.78, borrowLeft: 6279.71, seconds: 130, ...TO_HYPERLIQUID },
             {
-              round: 7, kind: 'round', buy: 1062.08, move: 1062.08, arrives: 1062.03, borrowLeft: 5217.68, seconds: 130,
+              round: 7, kind: 'round', buy: 1062.08, move: 1062.08, arrives: 1062.03, borrowLeft: 5217.68, seconds: 130, ...TO_HYPERLIQUID,
             },
             {
-              round: 8, kind: 'round', buy: 1299.82, move: 1299.82, arrives: 1299.77, borrowLeft: 3917.91, seconds: 130,
+              round: 8, kind: 'round', buy: 1299.82, move: 1299.82, arrives: 1299.77, borrowLeft: 3917.91, seconds: 130, ...TO_HYPERLIQUID,
             },
             {
-              round: 9, kind: 'round', buy: 1590.78, move: 1590.78, arrives: 1590.73, borrowLeft: 2327.18, seconds: 130,
+              round: 9, kind: 'round', buy: 1590.78, move: 1590.78, arrives: 1590.73, borrowLeft: 2327.18, seconds: 130, ...TO_HYPERLIQUID,
             },
-            { round: 10, kind: 'round', buy: 1946.9, move: 1946.9, arrives: 1946.85, borrowLeft: 380.33, seconds: 130 },
-            { round: 11, kind: 'round', buy: 1614.24, move: 1614.24, arrives: 1614.19, borrowLeft: 0, seconds: 130 },
+            { round: 10, kind: 'round', buy: 1946.9, move: 1946.9, arrives: 1946.85, borrowLeft: 380.33, seconds: 130, ...TO_HYPERLIQUID },
+            { round: 11, kind: 'round', buy: 1614.24, move: 1614.24, arrives: 1614.19, borrowLeft: 0, seconds: 130, ...TO_HYPERLIQUID },
           ],
         },
         convert: {
@@ -1232,7 +1602,7 @@ export const rebalanceViews = {
             { coin: 'USDC', venue: 'GATE', cash: 0, equity: 0 },
           ],
           steps: [
-            { round: null, kind: 'convert', buy: 0, move: 10857.94, arrives: 10836.22, borrowLeft: 0, seconds: 0 },
+            { round: null, kind: 'convert', buy: 0, move: 10857.94, arrives: 10836.22, borrowLeft: 0, seconds: 0, ...TO_HYPERLIQUID },
           ],
         },
       },
@@ -1243,7 +1613,7 @@ export const rebalanceViews = {
   exampleE: {
     buckets: EXAMPLE_E_BUCKETS,
     plan: {
-      direction: 'toUsdt', balanced: false, moves: 1228.27, shortOfEven: 0, roundCap: 2,
+      balanced: false, noLegs: false, moves: 1228.27, shortOfEven: 0, roundCap: 2, split: EVEN_SPLIT,
       routes: {
         mix: {
           available: true, reason: null, costUsd: 2.04, seconds: 400, rounds: 1, oneMoreRoundCostUsd: 2.12,
@@ -1254,8 +1624,8 @@ export const rebalanceViews = {
             { coin: 'USDC', venue: 'GATE', cash: 0, equity: 0 },
           ],
           steps: [
-            { round: 1, kind: 'round', buy: 0, move: 745.44, arrives: 744.44, borrowLeft: 0, seconds: 400 },
-            { round: null, kind: 'convert', buy: 0, move: 482.83, arrives: 481.86, borrowLeft: 0, seconds: 0 },
+            { round: 1, kind: 'round', buy: 0, move: 745.44, arrives: 744.44, borrowLeft: 0, seconds: 400, ...FROM_HYPERLIQUID },
+            { round: null, kind: 'convert', buy: 0, move: 482.83, arrives: 481.86, borrowLeft: 0, seconds: 0, ...FROM_HYPERLIQUID },
           ],
         },
         loop: {
@@ -1267,8 +1637,8 @@ export const rebalanceViews = {
             { coin: 'USDC', venue: 'GATE', cash: 0, equity: 0 },
           ],
           steps: [
-            { round: 1, kind: 'round', buy: 0, move: 745.44, arrives: 744.44, borrowLeft: 0, seconds: 400 },
-            { round: 2, kind: 'round', buy: 0, move: 482.87, arrives: 481.87, borrowLeft: 0, seconds: 400 },
+            { round: 1, kind: 'round', buy: 0, move: 745.44, arrives: 744.44, borrowLeft: 0, seconds: 400, ...FROM_HYPERLIQUID },
+            { round: 2, kind: 'round', buy: 0, move: 482.87, arrives: 481.87, borrowLeft: 0, seconds: 400, ...FROM_HYPERLIQUID },
           ],
         },
         convert: {
@@ -1280,7 +1650,7 @@ export const rebalanceViews = {
             { coin: 'USDC', venue: 'GATE', cash: 0, equity: 0 },
           ],
           steps: [
-            { round: null, kind: 'convert', buy: 0, move: 1228.48, arrives: 1226.02, borrowLeft: 0, seconds: 0 },
+            { round: null, kind: 'convert', buy: 0, move: 1228.48, arrives: 1226.02, borrowLeft: 0, seconds: 0, ...FROM_HYPERLIQUID },
           ],
         },
       },
@@ -1314,6 +1684,28 @@ export const rebalanceViews = {
   },
   borrowUnderOne: { buckets: BORROW_UNDER_ONE_BUCKETS, plan: BORROW_UNDER_ONE_PLAN, job: null },
   accountADone: { buckets: ACCOUNT_A_BUCKETS, plan: ACCOUNT_A_PLAN, job: CONVERT_DONE_JOB },
+  lighterSplit: { buckets: LIGHTER_SPLIT_BUCKETS, plan: LIGHTER_SPLIT_PLAN, job: null },
+  lighterAcross: { buckets: LIGHTER_ACROSS_BUCKETS, plan: LIGHTER_ACROSS_PLAN, job: null },
+  lighterAcrossRunning: {
+    buckets: rebased(LIGHTER_ACROSS_BUCKETS, { 'USDC/HYPERLIQUID': { cash: 0, equity: 0 } }), plan: LIGHTER_ACROSS_PLAN,
+    job: LIGHTER_ACROSS_RUNNING_JOB,
+  },
+  lighterAcrossAbandoned: {
+    buckets: rebased(LIGHTER_ACROSS_BUCKETS, { 'USDC/HYPERLIQUID': { cash: 0, equity: 0 } }), plan: LIGHTER_ACROSS_PLAN,
+    job: LIGHTER_ACROSS_ABANDONED_JOB,
+  },
+  lighterConvertDone: {
+    buckets: rebased(LIGHTER_ACROSS_BUCKETS, {
+      'USDC/HYPERLIQUID': { cash: 0, equity: 0 },
+      'USDC/LIGHTER': { cash: 498, equity: 498 },
+    }),
+    plan: {
+      ...balancedPlan(LIGHTER_ACROSS_PLAN.routes.convert.after),
+      split: LIGHTER_ACROSS_PLAN.split.filter((share) => share.share > 0),
+    },
+    job: LIGHTER_CONVERT_DONE_JOB,
+  },
+  noLegs: { buckets: LIGHTER_SPLIT_BUCKETS, plan: NO_LEGS_PLAN, job: null },
 } satisfies Record<string, RebalanceView>;
 
 const ACCOUNT_B_SPOT: SpotBalance[] = [
@@ -1328,6 +1720,8 @@ const ACCOUNT_B_PATHS: TransferPath[] = [
   { coin: 'USDC', from: 'CROSSEX_GATE', to: 'SPOT', max: 0.29, min: 0.00001, feeUsd: 0, seconds: 5 },
   { coin: 'USDC', from: 'SPOT', to: 'CROSSEX_HYPERLIQUID', max: 0, min: 11, feeUsd: 0.05, seconds: 120 },
   { coin: 'USDC', from: 'CROSSEX_HYPERLIQUID', to: 'SPOT', max: 11.88, min: 11, feeUsd: 1, seconds: 400 },
+  { coin: 'USDC', from: 'SPOT', to: 'CROSSEX_LIGHTER', max: 0, min: 11, feeUsd: 1.03, seconds: 230 },
+  { coin: 'USDC', from: 'CROSSEX_LIGHTER', to: 'SPOT', max: 0, min: 11, feeUsd: 0, seconds: 180 },
 ];
 
 const NO_SPOT_PATHS: TransferPath[] = [
@@ -1337,6 +1731,8 @@ const NO_SPOT_PATHS: TransferPath[] = [
   { coin: 'USDC', from: 'CROSSEX_GATE', to: 'SPOT', max: 0.29, min: 0.00001, feeUsd: 0, seconds: 5 },
   { coin: 'USDC', from: 'SPOT', to: 'CROSSEX_HYPERLIQUID', max: null, min: 11, feeUsd: 0.05, seconds: 120 },
   { coin: 'USDC', from: 'CROSSEX_HYPERLIQUID', to: 'SPOT', max: 11.88, min: 11, feeUsd: 1, seconds: 400 },
+  { coin: 'USDC', from: 'SPOT', to: 'CROSSEX_LIGHTER', max: null, min: 11, feeUsd: 1.03, seconds: 230 },
+  { coin: 'USDC', from: 'CROSSEX_LIGHTER', to: 'SPOT', max: 0, min: 11, feeUsd: 0, seconds: 180 },
 ];
 
 const MOVING_TRANSFER: TransferJob = {
@@ -1456,6 +1852,24 @@ const ACCOUNT_ASSETS = {
       borrowingInitialMargin: '0', borrowingMaintenanceMargin: '0',
     },
   ],
+  lighter: [
+    {
+      coin: 'USDT', exchangeType: 'CROSSEX', balance: '1000', availableBalance: '1000', upnl: '0', equity: '1000',
+      liability: '0', borrowingInitialMargin: '0', borrowingMaintenanceMargin: '0',
+    },
+    {
+      coin: 'USDC', exchangeType: 'HYPERLIQUID', balance: '0', availableBalance: '0', upnl: '0', equity: '0',
+      liability: '0', borrowingInitialMargin: '0', borrowingMaintenanceMargin: '0',
+    },
+    {
+      coin: 'USDC', exchangeType: 'LIGHTER', balance: '0', availableBalance: '0', upnl: '0', equity: '0',
+      liability: '0', borrowingInitialMargin: '0', borrowingMaintenanceMargin: '0',
+    },
+    {
+      coin: 'USDC', exchangeType: 'GATE', balance: '0', availableBalance: '0', upnl: '0', equity: '0', liability: '0',
+      borrowingInitialMargin: '0', borrowingMaintenanceMargin: '0',
+    },
+  ],
   exampleE: [
     {
       coin: 'USDT', exchangeType: 'CROSSEX', balance: '-612.35', availableBalance: '0', upnl: '0', equity: '-612.35',
@@ -1498,6 +1912,10 @@ export const accountBodies = {
     ...account, marginBalance: '1229.81', availableMargin: '797.34', initialMargin: '432.47',
     maintenanceMargin: '61.235', initialMarginRate: '0.3517', maintenanceMarginRate: '0.0498',
     assets: ACCOUNT_ASSETS.exampleE,
+  },
+  lighter: {
+    ...account, marginBalance: '1000', availableMargin: '1000', initialMargin: '0', maintenanceMargin: '0',
+    initialMarginRate: '0', maintenanceMarginRate: '0', assets: ACCOUNT_ASSETS.lighter,
   },
   noAssets: {
     ...account, marginBalance: '0', availableMargin: '0', initialMargin: '0', maintenanceMargin: '0',

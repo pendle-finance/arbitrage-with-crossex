@@ -10,11 +10,11 @@ import {
   JobFile,
   newJob,
   TO_USDC_STEPS,
-  type Direction,
   type Job,
   type RouteName,
 } from '../../src/server/rebalanceJob';
 import {
+  HL_TRANSFER_TIMEOUT_MS,
   LOOKUP_RETRY_MS,
   LOOKUP_WINDOW_MS,
   POLL_MS,
@@ -90,6 +90,7 @@ const account = (
     gate?: number;
     hyperliquid?: number;
     hyperliquidEquity?: number;
+    lighter?: number;
   } = {},
 ) => {
   const wallet = (coin: string, exchangeType: string, balance: number, equity = balance) => ({
@@ -107,14 +108,22 @@ const account = (
         wallet('USDT', 'CROSSEX', over.usdt ?? 1_000),
         wallet('USDC', 'GATE', over.gate ?? 0),
         wallet('USDC', 'HYPERLIQUID', over.hyperliquid ?? 0, over.hyperliquidEquity),
+        wallet('USDC', 'LIGHTER', over.lighter ?? 0),
       ],
     },
   };
 };
 
+type Direction = 'toUsdc' | 'toUsdt';
+type Planned = Omit<PlannedStep, 'from' | 'to'>;
+const MOVE: Record<Direction, Pick<PlannedStep, 'from' | 'to'>> = {
+  toUsdc: { from: 'CROSSEX', to: 'HYPERLIQUID' },
+  toUsdt: { from: 'HYPERLIQUID', to: 'CROSSEX' },
+};
+
 const accountA = account({ marginBalance: 57.45, initialMargin: 29.41, usdt: 92.54, gate: 111.96, hyperliquid: -147.05 });
 
-const round = (n: number, move: number, buy = 0): PlannedStep => ({
+const round = (n: number, move: number, buy = 0): Planned => ({
   round: n,
   kind: 'round',
   buy,
@@ -123,7 +132,7 @@ const round = (n: number, move: number, buy = 0): PlannedStep => ({
   borrowLeft: 0,
   seconds: 130,
 });
-const convert = (move: number): PlannedStep => ({
+const convert = (move: number): Planned => ({
   round: null,
   kind: 'convert',
   buy: 0,
@@ -133,7 +142,7 @@ const convert = (move: number): PlannedStep => ({
   seconds: 0,
 });
 
-const accountALoop: PlannedStep[] = [
+const accountALoop: Planned[] = [
   { round: 1, kind: 'round', buy: 0, move: 24.51, arrives: 24.46, borrowLeft: 122.59, seconds: 130 },
   { round: 2, kind: 'round', buy: 0, move: 29.93, arrives: 29.88, borrowLeft: 92.71, seconds: 130 },
   { round: 3, kind: 'round', buy: 0, move: 36.58, arrives: 36.53, borrowLeft: 56.19, seconds: 130 },
@@ -144,8 +153,10 @@ const accountALoop: PlannedStep[] = [
 interface PlanInput {
   direction?: Direction;
   route: RouteName;
-  steps: PlannedStep[];
+  steps: (Planned | PlannedStep)[];
 }
+
+const between = (from: PlannedStep['from'], to: PlannedStep['to'], step: Planned): PlannedStep => ({ ...step, from, to });
 
 const oneRound: PlanInput = { route: 'loop', steps: [round(1, 12, 12)] };
 
@@ -191,7 +202,14 @@ function harness(
   const jobs = new JobFile(dir, clock.now);
   const amount = plan.steps.reduce((total, step) => total + step.move, 0);
   const job = newJob(
-    { direction: plan.direction ?? 'toUsdc', route: plan.route, steps: plan.steps, amount, costUsd: 0, target: [], userId: null },
+    {
+      route: plan.route,
+      steps: plan.steps.map((step) => ({ ...MOVE[plan.direction ?? 'toUsdc'], ...step })),
+      amount,
+      costUsd: 0,
+      target: [],
+      userId: null,
+    },
     clock.now(),
   );
   edit?.(job);
@@ -371,7 +389,7 @@ describe('runJob rounds at the fresh fit', () => {
   });
 
   it('shrink rewrites the round figures', async () => {
-    const steps: PlannedStep[] = [
+    const steps: Planned[] = [
       { round: 1, kind: 'round', buy: 0, move: 30, arrives: 29.95, borrowLeft: 40, seconds: 130 },
       { round: 2, kind: 'round', buy: 0, move: 30, arrives: 29.95, borrowLeft: 10, seconds: 130 },
     ];
@@ -1850,10 +1868,381 @@ describe('runJob resumed steps send nothing twice', () => {
   });
 });
 
+describe('runJob Lighter and moves between venue wallets', () => {
+  const intoLighter = (n: number, move: number, buy = 0): PlannedStep =>
+    between('CROSSEX', 'LIGHTER', { ...round(n, move, buy), arrives: Math.round((move - 1.03) * 100) / 100, seconds: 235 });
+
+  it('a round into Lighter sends To Lighter from Gate spot and takes off the 1.03 fee when Gate lists no actualReceive', async () => {
+    const h = harness(fakeClock(), { route: 'loop', steps: [intoLighter(1, 12)] }, {
+      getCrossexAccount: seq(account({ gate: 12 })),
+      createCrossexTransfer: seq(tx('x1'), tx('x2')),
+      listCrossexTransfers: seq(
+        rows(row('x1', 'SUCCESS', { amount: '12', actualReceive: '12' })),
+        rows(row('x2', 'SUCCESS', { amount: '12' })),
+      ),
+    });
+
+    await h.run();
+
+    const job = h.jobs.read()!;
+    expect(job).toMatchObject({ status: 'done', fundsAt: 'LIGHTER' });
+    expect(job.steps.map(({ name, qty }) => ({ name, qty }))).toEqual([
+      { name: 'Buy USDC', qty: 0 },
+      { name: 'To spot', qty: 12 },
+      { name: 'To Lighter', qty: 10.97 },
+    ]);
+    expect(h.transfers()).toMatchObject([
+      { coin: 'USDC', amount: '12', from: 'CROSSEX_GATE', to: 'SPOT' },
+      { coin: 'USDC', amount: '12', from: 'SPOT', to: 'CROSSEX_LIGHTER' },
+    ]);
+    expect(h.count('createCrossexOrder')).toBe(0);
+  });
+
+  it('a round out of Lighter sends the Lighter wallet cash to Gate spot with no fee, then sells it on Gate', async () => {
+    const steps = [between('LIGHTER', 'CROSSEX', { ...round(1, 20), arrives: 20, seconds: 185 })];
+    const h = harness(fakeClock(), { route: 'loop', steps }, {
+      getCrossexAccount: seq(account({ lighter: 60 }), account({ lighter: 40, gate: 20 })),
+      createCrossexTransfer: seq(tx('x1'), tx('x2')),
+      listCrossexTransfers: seq(rows(row('x1', 'SUCCESS', { amount: '20' })), rows(row('x2', 'SUCCESS', { amount: '20' }))),
+      createCrossexOrder: seq(created('o1')),
+      getCrossexOrder: seq(order('FILLED', '20', 'o1', { executedAmount: '19.99' })),
+    });
+
+    expect(h.job.fundsAt).toBe('LIGHTER');
+
+    await h.run();
+
+    const job = h.jobs.read()!;
+    expect(job).toMatchObject({ status: 'done', fundsAt: 'CROSSEX' });
+    expect(job.steps.map(({ name, qty }) => ({ name, qty }))).toEqual([
+      { name: 'From Lighter', qty: 20 },
+      { name: 'To Gate', qty: 20 },
+      { name: 'Sell USDC', qty: 19.99 },
+    ]);
+    expect(h.transfers()).toMatchObject([
+      { coin: 'USDC', amount: '20', from: 'CROSSEX_LIGHTER', to: 'SPOT' },
+      { coin: 'USDC', amount: '20', from: 'SPOT', to: 'CROSSEX_GATE' },
+    ]);
+    expect(h.sent('createCrossexOrder')[0].crossexOrderRequest).toMatchObject({ side: 'SELL' });
+  });
+
+  it('a move into Lighter waits 30 min before the timeout halt, as Hyperliquid does', async () => {
+    const clock = fakeClock();
+    const h = harness(
+      clock,
+      { route: 'loop', steps: [intoLighter(1, 12)] },
+      { listCrossexTransfers: seq(rows(row('x2', 'PENDING'))) },
+      (job) => {
+        doneStep(job, 0, { venueId: 'o1', qty: 0, at: clock.now() });
+        doneStep(job, 1, { venueId: 'x1', qty: 12, at: clock.now() });
+        Object.assign(job.steps[2], { text: tagFor(job.id, 2), venueId: 'x2', status: 'running', startedAt: clock.now() });
+        Object.assign(job, { stepIndex: 2, fundsAt: 'SPOT' });
+      },
+    );
+
+    await h.run();
+
+    const job = h.jobs.read()!;
+    expect(job).toMatchObject({ status: 'halted', haltReason: HALT_TEXT.timeout, fundsAt: 'SPOT' });
+    expect(clock.now() - job.steps[2].startedAt!).toBe(HL_TRANSFER_TIMEOUT_MS + POLL_MS);
+    expect(h.count('createCrossexTransfer')).toBe(0);
+  });
+
+  it('a Convert into Lighter quotes on LIGHTER, and a lost order is found in the Lighter convert history and never sent twice', async () => {
+    const h = harness(fakeClock(), { route: 'convert', steps: [between('CROSSEX', 'LIGHTER', convert(12))] }, {
+      getCrossexAccount: seq(account()),
+      createCrossexConvertQuote: seq(quote('q1', '11.976'), quote('q2', '11.97')),
+      createCrossexConvertOrder: seq(networkError, { body: { orderId: 'c2', text: 'q2' } }),
+      getCrossexOrder: async (id: string) =>
+        id === 'c1'
+          ? order('FILLED', '12', 'c1', { executedAmount: '11.97' })
+          : gateError(404, 'ORDER_NOT_FOUND', 'order not found')(),
+      listCrossexOpenOrders: seq({ body: [] }),
+      listCrossexHistoryOrders: seq({ body: [convertRow('c1', 'q1', 'LIGHTER_CONVERT_USDT_USDC', '11.97')] }),
+    });
+
+    await h.run();
+
+    const job = h.jobs.read()!;
+    expect(job).toMatchObject({ status: 'done', fundsAt: 'LIGHTER' });
+    expect(job.steps[0]).toMatchObject({ name: 'Convert', quoteId: 'q1', venueId: 'c1', qty: 11.97 });
+    expect(h.sent('createCrossexConvertQuote')[0].crossexConvertQuoteRequest).toEqual({
+      exchangeType: 'LIGHTER',
+      fromCoin: 'USDT',
+      toCoin: 'USDC',
+      fromAmount: '12',
+    });
+    expect(h.count('createCrossexConvertOrder')).toBe(1);
+    expect(h.sent('listCrossexOpenOrders').map((arg) => arg.symbol)).toEqual(['LIGHTER_CONVERT_USDT_USDC']);
+    expect(h.sent('listCrossexHistoryOrders').map((arg) => arg.symbol)).toEqual(['LIGHTER_CONVERT_USDT_USDC']);
+  });
+
+  it('a Convert out of Lighter sells USDC on LIGHTER, no more than the Lighter wallet cash', async () => {
+    const h = harness(fakeClock(), { route: 'convert', steps: [between('LIGHTER', 'CROSSEX', convert(50))] }, {
+      getCrossexAccount: seq(account({ lighter: 30, hyperliquid: 500 })),
+      createCrossexConvertQuote: seq(quote('q1', '29.95')),
+      createCrossexConvertOrder: seq({ body: { orderId: 'c1', text: 'q1' } }),
+    });
+
+    await h.run();
+
+    expect(h.jobs.read()!).toMatchObject({ status: 'done', fundsAt: 'CROSSEX' });
+    expect(h.sent('createCrossexConvertQuote')[0].crossexConvertQuoteRequest).toEqual({
+      exchangeType: 'LIGHTER',
+      fromCoin: 'USDC',
+      toCoin: 'USDT',
+      fromAmount: '30',
+    });
+  });
+
+  it('a move from Hyperliquid to Lighter sends From Hyperliquid, then To Lighter what reached Gate spot, with no spot order', async () => {
+    const steps: PlannedStep[] = [
+      { round: 1, kind: 'round', buy: 0, move: 401.01, arrives: 398.98, borrowLeft: 0, seconds: 625, from: 'HYPERLIQUID', to: 'LIGHTER' },
+    ];
+    const h = harness(fakeClock(), { route: 'loop', steps }, {
+      getCrossexAccount: seq(account({ hyperliquid: 500 })),
+      createCrossexTransfer: seq(tx('x1'), tx('x2')),
+      listCrossexTransfers: seq(
+        rows(row('x1', 'SUCCESS', { amount: '401.01' })),
+        rows(row('x2', 'SUCCESS', { amount: '400.01', actualReceive: '398.98' })),
+      ),
+    });
+
+    expect(h.job.fundsAt).toBe('HYPERLIQUID');
+
+    await h.run();
+
+    const job = h.jobs.read()!;
+    expect(job).toMatchObject({ status: 'done', fundsAt: 'LIGHTER' });
+    expect(job.steps.map(({ name, planned, arrives, qty }) => ({ name, planned, arrives, qty }))).toEqual([
+      { name: 'From Hyperliquid', planned: 401.01, arrives: null, qty: 400.01 },
+      { name: 'To Lighter', planned: 400.01, arrives: 398.98, qty: 398.98 },
+    ]);
+    expect(h.transfers()).toMatchObject([
+      { coin: 'USDC', amount: '401.01', from: 'CROSSEX_HYPERLIQUID', to: 'SPOT' },
+      { coin: 'USDC', amount: '400.01', from: 'SPOT', to: 'CROSSEX_LIGHTER' },
+    ]);
+    expect(h.count('createCrossexOrder')).toBe(0);
+    expect(h.count('listTickers')).toBe(0);
+  });
+
+  it('a Hyperliquid to Lighter shrink sets To Lighter at what reaches Gate spot and what arrives after both fees', async () => {
+    const steps: PlannedStep[] = [
+      { round: 1, kind: 'round', buy: 0, move: 401.01, arrives: 398.98, borrowLeft: 0, seconds: 625, from: 'HYPERLIQUID', to: 'LIGHTER' },
+    ];
+    const h = harness(fakeClock(), { route: 'loop', steps }, {
+      getCrossexAccount: seq(account({ marginBalance: 200, hyperliquid: 500 })),
+      createCrossexTransfer: seq(tx('x1')),
+      listCrossexTransfers: seq(rows(row('x1', 'FAILED'))),
+    });
+
+    await h.run();
+
+    const figures = h.jobs.read()!.steps.map(({ name, round: r, planned, arrives }) => ({ name, round: r, planned, arrives }));
+    expect(figures).toEqual([
+      { name: 'From Hyperliquid', round: 1, planned: 200, arrives: null },
+      { name: 'To Lighter', round: 1, planned: 199, arrives: 197.97 },
+      { name: 'From Hyperliquid', round: 2, planned: 201.01, arrives: null },
+      { name: 'To Lighter', round: 2, planned: 200.01, arrives: 198.98 },
+    ]);
+    expect(h.transfers()[0]).toMatchObject({ amount: '200', from: 'CROSSEX_HYPERLIQUID', to: 'SPOT' });
+  });
+
+  it('a mix move from Hyperliquid to Lighter under the 12 USDC minimum drops its round into both Convert halves', async () => {
+    const across = (step: Planned) => between('HYPERLIQUID', 'LIGHTER', step);
+    const h = harness(fakeClock(), { route: 'mix', steps: [across(round(1, 30)), across(convert(50))] }, {
+      getCrossexAccount: seq(account({ marginBalance: 11.5, hyperliquid: 100 })),
+      createCrossexConvertQuote: seq(quote('q1', '79.84'), quote('q2', '79.68')),
+      createCrossexConvertOrder: seq({ body: { orderId: 'c1', text: 'q1' } }, { body: { orderId: 'c2', text: 'q2' } }),
+    });
+
+    await h.run();
+
+    const job = h.jobs.read()!;
+    expect(job).toMatchObject({ status: 'done', fundsAt: 'LIGHTER' });
+    expect(job.steps.map(({ name, round: r, planned, qty }) => ({ name, round: r, planned, qty }))).toEqual([
+      { name: 'Convert to USDT', round: null, planned: 80, qty: 79.84 },
+      { name: 'Convert to USDC', round: null, planned: 79.84, qty: 79.68 },
+    ]);
+    expect(h.sent('createCrossexConvertQuote').map((arg) => arg.crossexConvertQuoteRequest)).toEqual([
+      { exchangeType: 'HYPERLIQUID', fromCoin: 'USDC', toCoin: 'USDT', fromAmount: '80' },
+      { exchangeType: 'LIGHTER', fromCoin: 'USDT', toCoin: 'USDC', fromAmount: '79.84' },
+    ]);
+    expect(h.count('createCrossexTransfer')).toBe(0);
+  });
+
+  it('the Convert to USDC half sends no more than the USDT cash', async () => {
+    const h = harness(fakeClock(), { route: 'convert', steps: [between('HYPERLIQUID', 'LIGHTER', convert(40))] }, {
+      getCrossexAccount: seq(account({ hyperliquid: 100 }), account({ usdt: 25, hyperliquid: 60 })),
+      createCrossexConvertQuote: seq(quote('q1', '39.92'), quote('q2', '24.95')),
+      createCrossexConvertOrder: seq({ body: { orderId: 'c1', text: 'q1' } }, { body: { orderId: 'c2', text: 'q2' } }),
+    });
+
+    await h.run();
+
+    expect(h.jobs.read()!).toMatchObject({ status: 'done', fundsAt: 'LIGHTER' });
+    expect(h.sent('createCrossexConvertQuote').map((arg) => arg.crossexConvertQuoteRequest.fromAmount)).toEqual(['40', '25']);
+  });
+
+  it('a Convert from Hyperliquid to Lighter sends nothing while USDT cash is below 0', async () => {
+    const h = harness(fakeClock(), { route: 'convert', steps: [between('HYPERLIQUID', 'LIGHTER', convert(40))] }, {
+      getCrossexAccount: seq(account({ usdt: -300, hyperliquid: 100 })),
+    });
+
+    await h.run();
+
+    expect(h.jobs.read()!).toMatchObject({ status: 'halted', stepIndex: 0, haltReason: HALT_TEXT.usdtBelowZero });
+    expect(h.count('createCrossexConvertQuote')).toBe(0);
+  });
+
+  it('the Convert to USDC half never quotes 0 when USDT cash fell below 0', async () => {
+    const h = harness(fakeClock(), { route: 'convert', steps: [between('HYPERLIQUID', 'LIGHTER', convert(40))] }, {
+      getCrossexAccount: seq(account({ usdt: 0, hyperliquid: 100 }), account({ usdt: -5, hyperliquid: 60 })),
+      createCrossexConvertQuote: seq(quote('q1', '39.92')),
+      createCrossexConvertOrder: seq({ body: { orderId: 'c1', text: 'q1' } }),
+    });
+
+    await h.run();
+
+    expect(h.jobs.read()!).toMatchObject({ status: 'halted', stepIndex: 1, haltReason: HALT_TEXT.usdtBelowZero });
+    expect(h.sent('createCrossexConvertQuote').map((arg) => arg.crossexConvertQuoteRequest.fromAmount)).toEqual(['40']);
+  });
+
+  it('a Convert under 1.01 between Hyperliquid and Lighter still sends its second half when USDT cash is above 0', async () => {
+    const h = harness(fakeClock(), { route: 'convert', steps: [between('HYPERLIQUID', 'LIGHTER', convert(0.9))] }, {
+      getCrossexAccount: seq(account({ usdt: 100, hyperliquid: 100 }), account({ usdt: 100.89, hyperliquid: 99.1 })),
+      createCrossexConvertQuote: seq(quote('q1', '0.8982'), quote('q2', '0.8882')),
+      createCrossexConvertOrder: seq({ body: { orderId: 'c1', text: 'q1' } }, { body: { orderId: 'c2', text: 'q2' } }),
+    });
+
+    await h.run();
+
+    expect(h.jobs.read()!).toMatchObject({ status: 'done', fundsAt: 'LIGHTER' });
+    expect(h.sent('createCrossexConvertQuote').map((arg) => arg.crossexConvertQuoteRequest.fromAmount)).toEqual(['0.9', '0.89']);
+  });
+
+  it('the Convert to USDC half sends what USDT cash holds when that cash is under 1 but above 0', async () => {
+    const h = harness(fakeClock(), { route: 'convert', steps: [between('HYPERLIQUID', 'LIGHTER', convert(1.2))] }, {
+      getCrossexAccount: seq(account({ usdt: -0.5, hyperliquid: 100 }), account({ usdt: 0.69, hyperliquid: 98.8 })),
+      createCrossexConvertQuote: seq(quote('q1', '1.1976'), quote('q2', '0.6886')),
+      createCrossexConvertOrder: seq({ body: { orderId: 'c1', text: 'q1' } }, { body: { orderId: 'c2', text: 'q2' } }),
+    });
+
+    await h.run();
+
+    expect(h.jobs.read()!).toMatchObject({ status: 'done', fundsAt: 'LIGHTER' });
+    expect(h.sent('createCrossexConvertQuote').map((arg) => arg.crossexConvertQuoteRequest.fromAmount)).toEqual(['1.2', '0.69']);
+  });
+
+  it('the Convert to USDC half of a 0.01 Convert finishes with 0 and never quotes 0', async () => {
+    const h = harness(fakeClock(), { route: 'convert', steps: [between('HYPERLIQUID', 'LIGHTER', convert(0.01))] }, {
+      getCrossexAccount: seq(account({ usdt: 100, hyperliquid: 50 }), account({ usdt: 100, hyperliquid: 49.99 })),
+      createCrossexConvertQuote: seq(quote('q1', '0.00998')),
+      createCrossexConvertOrder: seq({ body: { orderId: 'c1', text: 'q1' } }),
+    });
+
+    await h.run();
+
+    const job = h.jobs.read()!;
+    expect(job).toMatchObject({ status: 'done', fundsAt: 'LIGHTER' });
+    expect(job.steps.map(({ name, qty }) => [name, qty])).toEqual([
+      ['Convert to USDT', 0.00998],
+      ['Convert to USDC', 0],
+    ]);
+    expect(h.sent('createCrossexConvertQuote').map((arg) => arg.crossexConvertQuoteRequest.fromAmount)).toEqual(['0.01']);
+  });
+
+  it('a mix job that drops the rounds of its second move still runs the Convert it adds', async () => {
+    const steps = [between('CROSSEX', 'HYPERLIQUID', convert(50)), intoLighter(1, 30)];
+    const h = harness(fakeClock(), { route: 'mix', steps }, {
+      getCrossexAccount: seq(account(), account({ marginBalance: 8 }), account()),
+      createCrossexConvertQuote: seq(quote('q1', '49.9'), quote('q2', '29.94')),
+      createCrossexConvertOrder: seq({ body: { orderId: 'c1', text: 'q1' } }, { body: { orderId: 'c2', text: 'q2' } }),
+    });
+
+    await h.run();
+
+    const job = h.jobs.read()!;
+    expect(job).toMatchObject({ status: 'done', fundsAt: 'LIGHTER' });
+    expect(job.steps.map(({ name, to, status }) => [name, to, status])).toEqual([
+      ['Convert', 'HYPERLIQUID', 'done'],
+      ['Convert', 'LIGHTER', 'done'],
+    ]);
+    expect(h.sent('createCrossexConvertQuote').map(({ crossexConvertQuoteRequest: q }) => [q.exchangeType, q.fromAmount])).toEqual([
+      ['HYPERLIQUID', '50'],
+      ['LIGHTER', '30'],
+    ]);
+  });
+
+  it('a mix job with two moves drops only the rounds of the move that is short, and the next move runs as round 1', async () => {
+    const toHyperliquid = (step: Planned) => between('CROSSEX', 'HYPERLIQUID', step);
+    const toLighter = (step: Planned) => between('CROSSEX', 'LIGHTER', step);
+    const steps = [toHyperliquid(round(1, 30)), toHyperliquid(convert(50)), intoLighter(2, 30), toLighter(convert(20))];
+    const h = harness(fakeClock(), { route: 'mix', steps }, {
+      getCrossexAccount: seq(account({ marginBalance: 8 }), account(), account({ gate: 30 }), account({ gate: 30 }), account()),
+      createCrossexConvertQuote: seq(quote('q1', '79.84'), quote('q2', '19.96')),
+      createCrossexConvertOrder: seq({ body: { orderId: 'c1', text: 'q1' } }, { body: { orderId: 'c2', text: 'q2' } }),
+      createCrossexTransfer: seq(tx('x1'), tx('x2')),
+      listCrossexTransfers: seq(
+        rows(row('x1', 'SUCCESS', { amount: '30', actualReceive: '30' })),
+        rows(row('x2', 'SUCCESS', { amount: '30' })),
+      ),
+    });
+
+    await h.run();
+
+    const job = h.jobs.read()!;
+    expect(job).toMatchObject({ status: 'done', fundsAt: 'LIGHTER' });
+    expect(job.steps.map(({ name, round: r, to, planned, qty }) => ({ name, round: r, to, planned, qty }))).toEqual([
+      { name: 'Convert', round: null, to: 'HYPERLIQUID', planned: 80, qty: 79.84 },
+      { name: 'Buy USDC', round: 1, to: 'LIGHTER', planned: 0, qty: 0 },
+      { name: 'To spot', round: 1, to: 'LIGHTER', planned: 30, qty: 30 },
+      { name: 'To Lighter', round: 1, to: 'LIGHTER', planned: 30, qty: 28.97 },
+      { name: 'Convert', round: null, to: 'LIGHTER', planned: 20, qty: 19.96 },
+    ]);
+    expect(h.sent('createCrossexConvertQuote').map(({ crossexConvertQuoteRequest: q }) => [q.exchangeType, q.fromAmount])).toEqual([
+      ['HYPERLIQUID', '80'],
+      ['LIGHTER', '20'],
+    ]);
+    expect(h.transfers().map(({ from, to }) => [from, to])).toEqual([
+      ['CROSSEX_GATE', 'SPOT'],
+      ['SPOT', 'CROSSEX_LIGHTER'],
+    ]);
+  });
+
+  it('a loop job with two moves adds the extra round after the short move and moves the later round up by one', async () => {
+    const steps = [between('CROSSEX', 'HYPERLIQUID', round(1, 30)), intoLighter(2, 30)];
+    const h = harness(fakeClock(), { route: 'loop', steps }, {
+      getCrossexAccount: seq(account({ marginBalance: 19, gate: 200 })),
+      createCrossexTransfer: seq(tx('x1')),
+      listCrossexTransfers: seq(rows(row('x1', 'FAILED'))),
+    });
+
+    await h.run();
+
+    const figures = h.jobs.read()!.steps.map(({ name, round: r, to, planned, arrives }) => ({ name, round: r, to, planned, arrives }));
+    expect(figures).toEqual([
+      { name: 'Buy USDC', round: 1, to: 'HYPERLIQUID', planned: 0, arrives: null },
+      { name: 'To spot', round: 1, to: 'HYPERLIQUID', planned: 19, arrives: null },
+      { name: 'To Hyperliquid', round: 1, to: 'HYPERLIQUID', planned: 19, arrives: 18.95 },
+      { name: 'Buy USDC', round: 2, to: 'HYPERLIQUID', planned: 11, arrives: null },
+      { name: 'To spot', round: 2, to: 'HYPERLIQUID', planned: 11, arrives: null },
+      { name: 'To Hyperliquid', round: 2, to: 'HYPERLIQUID', planned: 11, arrives: 10.95 },
+      { name: 'Buy USDC', round: 3, to: 'LIGHTER', planned: 0, arrives: null },
+      { name: 'To spot', round: 3, to: 'LIGHTER', planned: 30, arrives: null },
+      { name: 'To Lighter', round: 3, to: 'LIGHTER', planned: 30, arrives: 28.97 },
+    ]);
+    expect(h.transfers()[0]).toMatchObject({ amount: '19', from: 'CROSSEX_GATE', to: 'SPOT' });
+  });
+});
+
 describe('JobFile', () => {
   const dir = () => fs.mkdtempSync(path.join(tmpdir(), 'rebalance-'));
   const loopJob = () =>
-    newJob({ direction: 'toUsdc', route: 'loop', steps: [round(1, 12, 12)], amount: 12, costUsd: 0, target: [], userId: null }, 1_000_000);
+    newJob(
+      { route: 'loop', steps: [{ ...round(1, 12, 12), ...MOVE.toUsdc }], amount: 12, costUsd: 0, target: [], userId: null },
+      1_000_000,
+    );
 
   it('reads null when no file exists', () => {
     expect(new JobFile(dir()).read()).toBeNull();

@@ -1,15 +1,16 @@
 import { useId, type ReactNode } from 'react';
-import type { CrossexAccount, EvenPlan, GateAccount, PositionsResponse, RebalanceBucket } from '../api/types';
+import type { CrossexAccount, EvenPlan, GateAccount, PlannedStep, Pool, PositionsResponse, RebalanceBucket } from '../api/types';
 import type { RebalanceJob, RouteName, RoutePlan, TransferCoin, TransferView, WalletAfter } from '../api/types';
 import { Chip } from '../components/Chip';
 import { HoverCard } from '../components/HoverCard';
 import { RadioRow } from '../components/RadioRow';
 import { microLabelClass, Th } from '../components/Th';
-import { borrowedBucket } from '../lib/borrow';
+import { borrowedBucket, MIN_BORROW } from '../lib/borrow';
 import { fmtAbout, fmtAge, fmtUsd, num } from '../lib/fmt';
 import { fmtLinePrice, fmtMove, lineFor, liquidationLines, nearestLiquidation, type LiquidationLine } from '../lib/liquidation';
 import { floorCents } from '../lib/ticks';
-import { HOVER, roundCount, WALLET_LABEL } from './rebalanceCopy';
+import { roundSeconds } from './RebalanceBits';
+import { HOVER, MOVE_TEXT, poolKey, roundCount, WALLET_LABEL } from './rebalanceCopy';
 import { findPath } from './TransferBits';
 
 const BORROW_INITIAL_MARGIN = 0.2;
@@ -21,6 +22,7 @@ export const ROUTE_LABEL: Record<RouteName, string> = { mix: 'Spot loop, then Co
 const WALLET_HOVER: Readonly<Record<string, string>> = {
   'USDT/CROSSEX': HOVER.walletUsdt,
   'USDC/HYPERLIQUID': HOVER.walletUsdc,
+  'USDC/LIGHTER': HOVER.walletLighter,
   'USDC/GATE': HOVER.walletGate,
 };
 
@@ -33,6 +35,30 @@ export interface Fact {
 
 export const keyOf = (wallet: { coin: string; venue: string }) => `${wallet.coin}/${wallet.venue}`;
 const equityOf = (wallets: WalletAfter[], key: string) => wallets.find((w) => keyOf(w) === key)?.equity ?? 0;
+
+type Move = Pick<PlannedStep, 'from' | 'to'>;
+
+export const planSteps = (plan: EvenPlan): PlannedStep[] => [
+  ...(plan.routes.mix?.steps ?? []),
+  ...plan.routes.loop.steps,
+  ...plan.routes.convert.steps,
+];
+
+export function movesOf(steps: readonly Move[]): Move[] {
+  const moves: Move[] = [];
+  for (const { from, to } of steps) {
+    if (!moves.some((move) => move.from === from && move.to === to)) moves.push({ from, to });
+  }
+  return moves;
+}
+
+export const movesKey = (steps: readonly Move[]): string => movesOf(steps).map((move) => `${move.from}>${move.to}`).join(',');
+
+export function receivingBorrow(buckets: RebalanceBucket[], steps: readonly Move[]): number | null {
+  const keys = new Set(steps.map((step) => poolKey(step.to)));
+  const lent = buckets.filter((b) => keys.has(keyOf(b)) && floorCents(b.borrow) >= MIN_BORROW);
+  return lent.length === 0 ? null : lent.reduce((total, b) => total + b.borrow, 0);
+}
 
 export const roundCountOf = (job: RebalanceJob) =>
   new Set(job.steps.flatMap((step) => (step.round === null ? [] : [step.round]))).size;
@@ -86,12 +112,16 @@ export function borrowFacts(buckets: RebalanceBucket[]): Fact[] {
   const paid = buckets.reduce((sum, b) => sum + b.interestPaidUsd, 0);
   const paidFact: Fact = { key: 'paid', label: <Term label="Interest paid" text={HOVER.interestPaid} />, value: fmtUsd(paid) };
   if (!borrowed) return paid >= 0.01 ? [paidFact] : [];
-  const isUsdc = borrowed.coin === 'USDC';
+  const isHyperliquid = borrowed.coin === 'USDC' && borrowed.venue === 'HYPERLIQUID';
   const interest =
-    isUsdc && borrowed.borrow <= HYPERLIQUID_INTEREST_FREE_USDC
+    isHyperliquid && borrowed.borrow <= HYPERLIQUID_INTEREST_FREE_USDC
       ? `none under ${num(HYPERLIQUID_INTEREST_FREE_USDC, 0)} USDC`
       : `${fmtUsd(borrowed.interestPerDayUsd)} a day`;
-  const interestText = isUsdc ? HOVER.interestUsdc : HOVER.interestUsdt;
+  const interestText = isHyperliquid
+    ? HOVER.interestUsdc
+    : borrowed.venue === 'LIGHTER'
+      ? HOVER.interestLighter
+      : HOVER.interestUsdt;
   return [
     { key: 'lent', label: 'Lent by Gate', value: `${num(floorCents(borrowed.borrow))} ${borrowed.coin}` },
     { key: 'interest', label: <Term label="Interest" text={interestText} />, value: interest },
@@ -99,18 +129,28 @@ export function borrowFacts(buckets: RebalanceBucket[]): Fact[] {
   ];
 }
 
-const sendingCoin = (plan: EvenPlan) => (plan.direction === 'toUsdt' ? 'USDC' : 'USDT');
+function amountIn(plan: EvenPlan, amount: number): string {
+  const senders = new Set(planSteps(plan).map((step) => step.from));
+  if (senders.size === 0) return fmtUsd(amount);
+  if (!senders.has('CROSSEX')) return `${num(amount)} USDC`;
+  return senders.size === 1 ? `${num(amount)} USDT` : fmtUsd(amount);
+}
 
 function shortFact(plan: EvenPlan): Fact {
   const short = <Term label="Short of even" text={HOVER.shortOfEven} />;
-  return { key: 'short', label: short, value: `${num(plan.shortOfEven)} ${sendingCoin(plan)}`, warn: true };
+  return { key: 'short', label: short, value: amountIn(plan, plan.shortOfEven), warn: true };
 }
 
 export const isCashLimitedEven = (plan: EvenPlan) => plan.balanced && plan.shortOfEven >= DUST;
 
+export function positionShares(plan: EvenPlan): Map<string, string> {
+  if (plan.noLegs) return new Map();
+  return new Map(plan.split.map((share) => [keyOf(share), `${num(share.share * 100, 0)}% · ${fmtUsd(share.notionalUsd, 0)}`]));
+}
+
 export function cashFacts(plan: EvenPlan): Fact[] {
   if (plan.shortOfEven <= 0) return [];
-  return [{ key: 'moves', label: 'Moves', value: `${num(plan.moves)} ${sendingCoin(plan)}` }, shortFact(plan)];
+  return [{ key: 'moves', label: 'Moves', value: amountIn(plan, plan.moves) }, shortFact(plan)];
 }
 
 export function balancedFacts(plan: EvenPlan, job: RebalanceJob | null): Fact[] {
@@ -138,6 +178,7 @@ export function quoteFacts(quote: {
   const moved = liquidationLines(account, positions, {
     'USDT/CROSSEX': shiftOf('USDT/CROSSEX'),
     'USDC/HYPERLIQUID': shiftOf('USDC/HYPERLIQUID'),
+    'USDC/LIGHTER': shiftOf('USDC/LIGHTER'),
   });
   const after = moved ? lineFor(moved, before.base) : null;
   const at = (line: LiquidationLine) => `${fmtLinePrice(line.price)} (${fmtMove(line.move)})`;
@@ -159,9 +200,11 @@ function lastRunFacts(job: RebalanceJob | null): Fact[] {
   ];
 }
 
-function whyText(route: RouteName, routePlan: RoutePlan, cap: number): string {
-  if (route === 'loop') return routePlan.rounds === 1 ? HOVER.whyLoopOne : HOVER.whyLoopMore(routePlan.rounds);
-  if (routePlan.rounds >= cap || routePlan.oneMoreRoundCostUsd === null) return HOVER.whyMixAtCap(cap);
+function whyText(route: RouteName, routePlan: RoutePlan, cap: number, onePerWallet: boolean): string {
+  if (route === 'loop' && onePerWallet) return routePlan.rounds === 1 ? HOVER.whyLoopOne : HOVER.whyOnePerWallet;
+  if (route === 'loop') return HOVER.whyLoopMore(routePlan.rounds);
+  if (routePlan.rounds >= cap) return HOVER.whyMixAtCap(cap);
+  if (routePlan.oneMoreRoundCostUsd === null) return HOVER.whyMixCheapest(routePlan.rounds);
   return HOVER.whyMixUnderCap(routePlan.rounds, fmtUsd(routePlan.costUsd), fmtUsd(routePlan.oneMoreRoundCostUsd));
 }
 
@@ -171,16 +214,25 @@ interface RouteRowProps {
   borrow: number | null;
 }
 
+const aboutText = (seconds: number): string => {
+  const about = fmtAbout(seconds);
+  return `${about.charAt(0).toUpperCase()}${about.slice(1)}`;
+};
+
 function RoundsTerm({ route, routePlan, plan, borrow }: RouteRowProps & { routePlan: RoutePlan }) {
   const n = routePlan.rounds;
-  const lines: { term: string; text: string }[] = [
-    { term: HOVER.roundLabel, text: plan.direction === 'toUsdt' ? HOVER.roundToUsdt : HOVER.roundToUsdc },
-  ];
-  if (n > 1) {
+  const rounds = routePlan.steps.filter((step) => step.kind === 'round');
+  const moves = movesOf(rounds);
+  const onePerWallet = rounds.length === moves.length;
+  const lines: { term: string; text: string }[] = moves.map(({ from, to }) => ({
+    term: moves.length === 1 ? HOVER.roundLabel : MOVE_TEXT.roundTerm(from, to),
+    text: MOVE_TEXT.round(from, to, aboutText(roundSeconds(from, to))),
+  }));
+  if (n > 1 && !onePerWallet) {
     const locks = borrow === null ? '' : ` ${HOVER.whyMoreThanOneBorrow(fmtUsd(borrow * BORROW_INITIAL_MARGIN))}`;
     lines.push({ term: HOVER.whyMoreThanOneLabel, text: `${HOVER.whyMoreThanOne}${locks}` });
   }
-  lines.push({ term: HOVER.whyLabel(n), text: whyText(route, routePlan, plan.roundCap) });
+  lines.push({ term: HOVER.whyLabel(n), text: whyText(route, routePlan, plan.roundCap, onePerWallet) });
   return (
     <HoverCard icon={false} widthPx={380} label={roundCount(n)}>
       <dl className="flex flex-col gap-2 text-xs leading-snug">
@@ -200,8 +252,15 @@ export function RouteRow({ route, plan, borrow, checked, onPick }: RouteRowProps
   const routePlan = plan.routes[route];
   if (!routePlan) return null;
   const blocked = !routePlan.available;
-  const loop = plan.direction === 'toUsdt' ? HOVER.loopToUsdt : HOVER.loopToUsdc;
-  const nameText = route === 'mix' ? HOVER.mix(plan.roundCap) : route === 'loop' ? loop : HOVER.convert;
+  const moves = movesOf(planSteps(plan));
+  const loop = [
+    ...MOVE_TEXT.loop(moves),
+    ...(moves.some((move) => move.to !== 'CROSSEX') ? [HOVER.noDirectTransfer] : []),
+    HOVER.repeats,
+  ].join(' ');
+  const across = moves.some((move) => move.from !== 'CROSSEX' && move.to !== 'CROSSEX');
+  const convert = across ? `${HOVER.convert} ${HOVER.convertAcross}` : HOVER.convert;
+  const nameText = route === 'mix' ? HOVER.mix(plan.roundCap) : route === 'loop' ? loop : convert;
   const time = `${route === 'mix' ? ', then Convert' : ''} · ${fmtAbout(routePlan.seconds)}`;
   const rounds = <RoundsTerm route={route} routePlan={routePlan} plan={plan} borrow={borrow} />;
   return (
@@ -230,12 +289,18 @@ interface SpotLine {
 
 type OnTransfer = (coin: TransferCoin, wallet: GateAccount) => void;
 
-const LANDS_IN_SPOT: readonly string[] = ['To spot', 'From Hyperliquid'];
+const LANDS_IN_SPOT: readonly string[] = ['To spot', 'From Hyperliquid', 'From Lighter'];
+
+const VENUE_ACCOUNT: Record<Pool, GateAccount> = {
+  CROSSEX: 'CROSSEX_GATE',
+  HYPERLIQUID: 'CROSSEX_HYPERLIQUID',
+  LIGHTER: 'CROSSEX_LIGHTER',
+};
 
 export function SpotLines({ transfer, job, onTransfer }: { transfer?: TransferView; job: RebalanceJob | null; onTransfer?: OnTransfer }) {
   const amount = (text: string) => <span className="num font-semibold text-ink-100">{text}</span>;
-  const hyperliquidMin = findPath(transfer?.paths ?? [], { from: 'SPOT', to: 'CROSSEX_HYPERLIQUID' })?.min ?? 0;
-  const usdcWallet = (qty: number, target: GateAccount): GateAccount => (qty < hyperliquidMin ? 'CROSSEX_GATE' : target);
+  const minInto = (target: GateAccount) => findPath(transfer?.paths ?? [], { from: 'SPOT', to: target })?.min ?? 0;
+  const usdcWallet = (qty: number, target: GateAccount): GateAccount => (qty < minInto(target) ? 'CROSSEX_GATE' : target);
   const lines = (transfer?.spot ?? [])
     .filter((spot) => spot.available >= DUST)
     .map(
@@ -254,7 +319,7 @@ export function SpotLines({ transfer, job, onTransfer }: { transfer?: TransferVi
     job?.inTransit?.at === 'SPOT' ||
     (job?.inTransit?.at === 'MOVING' && LANDS_IN_SPOT.includes(job.steps[job.stepIndex]?.name ?? ''));
   if (transfer?.spot === null && job?.status === 'abandoned' && job.inTransit && leftInSpot) {
-    const wallet = usdcWallet(job.inTransit.qty, job.direction === 'toUsdc' ? 'CROSSEX_HYPERLIQUID' : 'CROSSEX_GATE');
+    const wallet = usdcWallet(job.inTransit.qty, VENUE_ACCOUNT[job.steps[job.stepIndex]?.to ?? 'CROSSEX']);
     const text = <>Last run left {amount(`${num(job.inTransit.qty)} USDC`)} in Gate spot.</>;
     lines.push({ coin: 'USDC', wallet, text });
   }
@@ -274,31 +339,55 @@ export function SpotLines({ transfer, job, onTransfer }: { transfer?: TransferVi
 
 export function RebalanceInfo() {
   const card = HOVER.rebalanceTitle;
-  const cell = 'px-2 py-1.5';
+  const cell = 'whitespace-nowrap px-2 py-1';
   return (
-    <HoverCard widthPx={640} underline={false} label="Rebalance">
+    <HoverCard widthPx={600} underline={false} label="Rebalance">
       <div className="flex flex-col gap-2 text-xs leading-snug">
-        <p>{card.wallets}</p>
         <p>{card.equity}</p>
+        <table className="w-full border border-ink-700">
+          <thead>
+            <tr>
+              <Th className="text-left">{card.walletHead.wallet}</Th>
+              <Th className="text-left">{card.walletHead.legs}</Th>
+              <Th className="text-left">{card.walletHead.interest}</Th>
+            </tr>
+          </thead>
+          <tbody>
+            {card.wallets.map((row) => (
+              <tr key={row.wallet} className="border-t border-ink-700">
+                <td className={cell}>{row.wallet}</td>
+                <td className={cell}>{row.legs}</td>
+                <td className={cell}>{row.interest}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <p>{card.borrow}</p>
         <p>{card.rounds}</p>
         <table className="w-full border border-ink-700">
           <thead>
             <tr>
-              <Th className="text-left">{card.head.route}</Th>
-              <Th className="text-left">{card.head.how}</Th>
-              <Th className="text-right">{card.head.time}</Th>
-              <Th className="text-right">{card.head.cost}</Th>
+              <Th className="text-left">{card.routeHead.route}</Th>
+              <Th className="text-left">{card.routeHead.path}</Th>
+              <Th className="text-right">{card.routeHead.time}</Th>
+              <Th className="text-right">{card.routeHead.cost}</Th>
             </tr>
           </thead>
           <tbody>
-            {card.routes.map((row) => (
-              <tr key={row.route} className="border-t border-ink-700">
-                <td className={cell}>{row.route}</td>
-                <td className={cell}>{row.how}</td>
-                <td className={`${cell} text-right`}>{row.time}</td>
-                <td className={`${cell} text-right`}>{row.cost}</td>
-              </tr>
-            ))}
+            {card.routes.flatMap((group) =>
+              group.paths.map((row, index) => (
+                <tr key={`${group.route} ${row.path}`} className={index === 0 ? 'border-t border-ink-700' : undefined}>
+                  {index === 0 && (
+                    <td rowSpan={group.paths.length} className={`${cell} align-top`}>
+                      {group.route}
+                    </td>
+                  )}
+                  <td className={cell}>{row.path}</td>
+                  <td className={`${cell} text-right`}>{row.time}</td>
+                  <td className={`${cell} text-right`}>{row.cost}</td>
+                </tr>
+              )),
+            )}
           </tbody>
         </table>
         <p>{card.recommended}</p>

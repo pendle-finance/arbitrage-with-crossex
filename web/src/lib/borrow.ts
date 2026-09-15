@@ -5,9 +5,8 @@ import { floorCents } from './ticks';
  * few cents on every poll. The header pill and the section share it. */
 export const MIN_BORROW = 1;
 
-/** The two wallets a rebalance moves cash between. Either can be borrowed. */
 export const isRebalanceWallet = (b: { coin: string; venue: string }): boolean =>
-  (b.coin === 'USDC' && b.venue === 'HYPERLIQUID') || (b.coin === 'USDT' && b.venue === 'CROSSEX');
+  (b.coin === 'USDC' && (b.venue === 'HYPERLIQUID' || b.venue === 'LIGHTER')) || (b.coin === 'USDT' && b.venue === 'CROSSEX');
 
 /** The wallet Gate has lent to, the larger borrow when both. Null under 1. */
 export function borrowedBucket(buckets: RebalanceBucket[] | undefined): RebalanceBucket | null {

@@ -64,7 +64,7 @@ describe('transferPaths', () => {
     expect(pathOf(paths, 'USDC', 'CROSSEX_HYPERLIQUID', 'SPOT').max).toBe(11.92);
   });
 
-  it('six paths', () => {
+  it('eight paths', () => {
     expect(paths.map((p) => [p.coin, p.from, p.to])).toEqual([
       ['USDT', 'SPOT', 'CROSSEX'],
       ['USDT', 'CROSSEX', 'SPOT'],
@@ -72,7 +72,22 @@ describe('transferPaths', () => {
       ['USDC', 'CROSSEX_GATE', 'SPOT'],
       ['USDC', 'SPOT', 'CROSSEX_HYPERLIQUID'],
       ['USDC', 'CROSSEX_HYPERLIQUID', 'SPOT'],
+      ['USDC', 'SPOT', 'CROSSEX_LIGHTER'],
+      ['USDC', 'CROSSEX_LIGHTER', 'SPOT'],
     ]);
+  });
+
+  it('minimum 11 on Lighter paths, from the coin rule', () => {
+    expect(pathOf(paths, 'USDC', 'SPOT', 'CROSSEX_LIGHTER').min).toBe(11);
+    expect(pathOf(paths, 'USDC', 'CROSSEX_LIGHTER', 'SPOT').min).toBe(11);
+    const higher = transferPaths({ account: ACCOUNT, spot: SPOT, coins: [{ coin: 'USDC', minTransAmount: 12, estFee: 1, isDisabled: 0 }] });
+    expect(pathOf(higher, 'USDC', 'SPOT', 'CROSSEX_LIGHTER').min).toBe(12);
+  });
+
+  it('Lighter out max is cash under the margin fit', () => {
+    const withLighter = { ...ACCOUNT, assets: [...(ACCOUNT.assets ?? []), cashRow('USDC', 'LIGHTER', '25.5', '31.2')] };
+    expect(pathOf(transferPaths({ account: withLighter, spot: SPOT, coins: COINS }), 'USDC', 'CROSSEX_LIGHTER', 'SPOT').max).toBe(25.5);
+    expect(pathOf(paths, 'USDC', 'CROSSEX_LIGHTER', 'SPOT').max).toBe(0);
   });
 
   it('minimum 11 on Hyperliquid paths', () => {
@@ -113,17 +128,17 @@ describe('transferPaths', () => {
     { marginBalance: '988.23', initialMargin: 'NaN' },
   ])('no max out of CrossEx when margins read $marginBalance and $initialMargin', (margins) => {
     const garbled = transferPaths({ account: { ...ACCOUNT, ...margins }, spot: SPOT, coins: COINS });
-    expect(garbled.filter((p) => p.from !== 'SPOT').map((p) => p.max)).toEqual([0, 0, 0]);
-    expect(garbled.filter((p) => p.from === 'SPOT').map((p) => p.max)).toEqual([318.42, 0, 0]);
+    expect(garbled.filter((p) => p.from !== 'SPOT').map((p) => p.max)).toEqual([0, 0, 0, 0]);
+    expect(garbled.filter((p) => p.from === 'SPOT').map((p) => p.max)).toEqual([318.42, 0, 0, 0]);
   });
 
   it('fees per path', () => {
-    expect(paths.map((p) => p.feeUsd)).toEqual([0, 0, 0, 0, 0.05, 1]);
+    expect(paths.map((p) => p.feeUsd)).toEqual([0, 0, 0, 0, 0.05, 1, 1.03, 0]);
   });
 
   it('no spot read no max', () => {
     const unread = transferPaths({ account: ACCOUNT, spot: null, coins: COINS });
-    expect(unread.filter((p) => p.from === 'SPOT').map((p) => p.max)).toEqual([null, null, null]);
+    expect(unread.filter((p) => p.from === 'SPOT').map((p) => p.max)).toEqual([null, null, null, null]);
   });
 
   it('string coin rules', () => {
@@ -152,12 +167,12 @@ describe('transferPaths', () => {
 
   it('missing coin rules fall back to the static table', () => {
     const fallback = transferPaths({ account: ACCOUNT, spot: SPOT, coins: [] });
-    expect(fallback.map((p) => p.min)).toEqual([MIN_TRANSFER, MIN_TRANSFER, MIN_TRANSFER, MIN_TRANSFER, 11, 11]);
-    expect(fallback.map((p) => p.feeUsd)).toEqual([0, 0, 0, 0, 0.05, 1]);
+    expect(fallback.map((p) => p.min)).toEqual([MIN_TRANSFER, MIN_TRANSFER, MIN_TRANSFER, MIN_TRANSFER, 11, 11, 11, 11]);
+    expect(fallback.map((p) => p.feeUsd)).toEqual([0, 0, 0, 0, 0.05, 1, 1.03, 0]);
   });
 
   it('seconds per path', () => {
-    expect(paths.map((p) => p.seconds)).toEqual([3, 3, 5, 5, 120, 400]);
+    expect(paths.map((p) => p.seconds)).toEqual([3, 3, 5, 5, 120, 400, 230, 180]);
   });
 });
 
@@ -175,6 +190,7 @@ describe('pathRule', () => {
 
   it('is null for a path not in the table', () => {
     expect(pathRule('USDC', 'CROSSEX_HYPERLIQUID', 'CROSSEX_GATE')).toBeNull();
+    expect(pathRule('USDC', 'CROSSEX_LIGHTER', 'CROSSEX_GATE')).toBeNull();
     expect(pathRule('USDT', 'SPOT', 'CROSSEX_GATE')).toBeNull();
   });
 });

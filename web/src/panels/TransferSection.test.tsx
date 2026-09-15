@@ -75,6 +75,7 @@ describe('TransferSection', () => {
         'USDT · CrossEx 986.61 USDT',
         'USDC · Gate 0.29 USDC',
         'USDC · Hyperliquid 11.88 USDC',
+        'USDC · Lighter 0.00 USDC',
       ]),
     );
   });
@@ -92,7 +93,7 @@ describe('TransferSection', () => {
     await pickInto();
 
     expect(within(screen.getByRole('group', { name: 'From' })).getByText('Gate spot')).toBeInTheDocument();
-    expect(within(screen.getByRole('radiogroup', { name: 'To · CrossEx wallet' })).getAllByRole('radio')).toHaveLength(3);
+    expect(within(screen.getByRole('radiogroup', { name: 'To · CrossEx wallet' })).getAllByRole('radio')).toHaveLength(4);
     expect(screen.queryByRole('radiogroup', { name: 'From · CrossEx wallet' })).toBeNull();
   });
 

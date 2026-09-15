@@ -3,6 +3,33 @@
 Only substantial releases are listed here — each one bumps `version.json` (which is what the
 in-app update check compares against).
 
+## 1.6.2 — 2026-09-15
+
+TLDR: Lighter is on CrossEx, and the app trades it. Rebalance now splits your equity by position
+size across USDT, Hyperliquid and Lighter, and Manual Transfer reaches your Lighter wallet.
+
+- **Lighter pairs in Opportunities.** Boros Lighter markets now pair with the Lighter perp on
+  CrossEx, priced from the Lighter order book. Lighter allows up to 50x on ETH and BTC, so a pair
+  needs less capital. The venue list now comes from CrossEx itself: a venue Gate adds later shows
+  up without an app update.
+- **Rebalance splits equity by position size.** Each CrossEx wallet gets the share of your equity
+  that its legs hold at mark price. Example: $500 of positions on Gate, $250 on Hyperliquid and
+  $250 on Lighter give 50%, 25% and 25%. A Position share column shows each wallet's share and
+  the positions behind it. A wallet with no open legs sends its money to the wallets that have
+  legs. With no open positions, Rebalance has nothing to do.
+- **A third wallet: USDC · Lighter.** Rebalance moves money into and out of it by Spot loop or
+  Convert, and between Hyperliquid and Lighter. One hold runs every move, one after another.
+  Into Lighter costs 1.03 USDC a round and takes about 4 min. Out is free and takes about 3 min.
+  Convert between Hyperliquid and Lighter swaps twice, through USDT, for about 0.4%.
+- **Manual Transfer reaches USDC · Lighter.** Move USDC between Gate spot and your Lighter wallet.
+- **Borrow on Lighter reads as Gate charges it.** A Lighter USDC borrow pays about 11% a year from
+  the first dollar. There is no free allowance, unlike Hyperliquid. The Rebalance hover lists the
+  interest rule for each wallet. The Borrow pill and the liquidation line count Lighter as its own
+  wallet.
+- **Smaller things.** The Rebalance hover shows one row per path, so no cell wraps. The Balances
+  tab shows the last Assets row in full on a short window. The User guide covers the three
+  wallets, every round and every transfer path.
+
 ## 1.6.1 — 2026-09-15
 
 TLDR: One hold now makes your CrossEx USDT and USDC equity even. A new Manual Transfer card moves

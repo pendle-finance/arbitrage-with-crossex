@@ -153,6 +153,7 @@ export function BalancesPanel() {
           columns={ASSET_COLUMNS}
           rows={rows}
           rowKey={rowKeyOf}
+          maxHeightClass="max-h-none"
           emptyState={<EmptyState icon="○" title="No non-zero balances" hint="Deposit collateral to CrossEx to get started." />}
         />
         {assets.length === 0 && spot === null && <NoSpotReadRow />}

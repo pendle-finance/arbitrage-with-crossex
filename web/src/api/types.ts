@@ -137,7 +137,7 @@ export interface CrossexAccount {
 // GET /api/rebalance · POST /api/rebalance · POST /api/rebalance/:id/{resume,abandon}
 // ---------------------------------------------------------------------------
 
-export type RebalanceDirection = 'toUsdc' | 'toUsdt';
+export type Pool = 'CROSSEX' | 'HYPERLIQUID' | 'LIGHTER';
 
 export interface RebalanceBucket {
   coin: string;
@@ -155,7 +155,7 @@ export interface RebalanceBucket {
 
 export type RouteName = 'mix' | 'loop' | 'convert';
 
-export type GateAccount = 'SPOT' | 'CROSSEX' | 'CROSSEX_GATE' | 'CROSSEX_HYPERLIQUID';
+export type GateAccount = 'SPOT' | 'CROSSEX' | 'CROSSEX_GATE' | 'CROSSEX_HYPERLIQUID' | 'CROSSEX_LIGHTER';
 
 export type TransferCoin = 'USDT' | 'USDC';
 
@@ -166,6 +166,13 @@ export interface WalletAfter {
   equity: number;
 }
 
+export interface WalletShare {
+  coin: string;
+  venue: string;
+  notionalUsd: number;
+  share: number;
+}
+
 export interface PlannedStep {
   round: number | null;
   kind: 'round' | 'convert';
@@ -174,6 +181,8 @@ export interface PlannedStep {
   arrives: number;
   borrowLeft: number;
   seconds: number;
+  from: Pool;
+  to: Pool;
 }
 
 export interface RoutePlan {
@@ -190,11 +199,12 @@ export interface RoutePlan {
 }
 
 export interface EvenPlan {
-  direction: RebalanceDirection | null;
   balanced: boolean;
+  noLegs: boolean;
   moves: number;
   shortOfEven: number;
   roundCap: number;
+  split: WalletShare[];
   routes: { mix: RoutePlan | null; loop: RoutePlan; convert: RoutePlan };
   recommended: RouteName | null;
 }
@@ -213,11 +223,12 @@ export interface RebalanceStep {
   planned: number | null;
   arrives: number | null;
   borrowLeft: number | null;
+  from: Pool;
+  to: Pool;
 }
 
 export interface RebalanceJob {
   id: string;
-  direction: RebalanceDirection;
   route: RouteName;
   amount: number;
   costUsd: number | null;
@@ -225,7 +236,7 @@ export interface RebalanceJob {
   status: 'running' | 'halted' | 'done' | 'abandoned';
   stepIndex: number;
   steps: RebalanceStep[];
-  fundsAt: 'CROSSEX' | 'GATE' | 'SPOT' | 'HYPERLIQUID';
+  fundsAt: 'CROSSEX' | 'GATE' | 'SPOT' | 'HYPERLIQUID' | 'LIGHTER';
   haltReason: string | null;
   createdAt: number;
   updatedAt: number;

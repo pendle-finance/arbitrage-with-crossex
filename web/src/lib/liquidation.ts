@@ -28,7 +28,7 @@ export interface LiquidationLine {
 
 /** Cash moved between wallets before the move is priced, in USD. Positive
  * adds to the wallet. Used to price "after the rebalance". */
-export type WalletShift = Partial<Record<'USDC/HYPERLIQUID' | 'USDT/CROSSEX', number>>;
+export type WalletShift = Partial<Record<string, number>>;
 
 /** Gate's maintenance margin on a borrow: 10% of the liability. */
 const BORROW_MM = 0.1;
@@ -45,9 +45,10 @@ interface Leg {
   mark: number;
 }
 
-/** Only Hyperliquid settles in USDC. Every other venue's leg lives in the pooled USDT wallet. */
-function walletOf(exchange: string): 'USDC/HYPERLIQUID' | 'USDT/CROSSEX' {
-  return exchange === 'HYPERLIQUID' ? 'USDC/HYPERLIQUID' : 'USDT/CROSSEX';
+const USDC_WALLET_VENUES: readonly string[] = ['HYPERLIQUID', 'LIGHTER'];
+
+function walletOf(exchange: string): string {
+  return USDC_WALLET_VENUES.includes(exchange) ? `USDC/${exchange}` : 'USDT/CROSSEX';
 }
 
 function legsOf(positions: PositionsResponse): Leg[] {
@@ -119,7 +120,7 @@ export function liquidationLines(
       const liability = liabilityOf(
         (w) =>
           (equityNow.get(w) ?? 0) +
-          (shift[w as keyof WalletShift] ?? 0) +
+          (shift[w] ?? 0) +
           mine.filter((l) => l.wallet === w).reduce((s, l) => s + l.sign * l.value * d, 0),
       );
       return marginBalance + upnl - (maintenance + mm + BORROW_MM * (liability - liabilityNow));
