@@ -90,12 +90,12 @@ const noCashAccount = {
 
 const lighterAccount = {
   user_id: '1',
-  available_margin: '1000',
-  margin_balance: '1000',
+  available_margin: '4000',
+  margin_balance: '4000',
   initial_margin: '0',
   account_mode: 'CROSS_EXCHANGE',
   assets: [
-    asset('USDT', 'CROSSEX', { balance: '1000', available_balance: '1000', equity: '1000' }),
+    asset('USDT', 'CROSSEX', { balance: '4000', available_balance: '4000', equity: '4000' }),
     asset('USDC', 'HYPERLIQUID'),
     asset('USDC', 'LIGHTER'),
     asset('USDC', 'GATE'),
@@ -262,7 +262,7 @@ describe('GET /api/rebalance', () => {
     expect(plan.routes.loop).toMatchObject({ available: true, reason: null, rounds: 5 });
     expect(plan.routes.convert).toMatchObject({ available: true, reason: null, rounds: 0 });
     expect(plan).toMatchObject({ balanced: false, noLegs: false, recommended: 'loop' });
-    expect(plan.routes.loop.steps.every((step) => step.from === 'CROSSEX' && step.to === 'HYPERLIQUID')).toBe(true);
+    expect(plan.routes.loop!.steps.every((step) => step.from === 'CROSSEX' && step.to === 'HYPERLIQUID')).toBe(true);
   });
 
   it('splits equity by position size across the Gate, Hyperliquid and Lighter wallets', async () => {
@@ -277,9 +277,9 @@ describe('GET /api/rebalance', () => {
       { coin: 'USDC', venue: 'HYPERLIQUID', notionalUsd: 250, share: 0.25 },
       { coin: 'USDC', venue: 'LIGHTER', notionalUsd: 250, share: 0.25 },
     ]);
-    expect(plan.routes.loop.steps.map(({ from, to, kind, move, arrives }) => ({ from, to, kind, move, arrives }))).toEqual([
-      { from: 'CROSSEX', to: 'HYPERLIQUID', kind: 'round', move: 249.76, arrives: 249.71 },
-      { from: 'CROSSEX', to: 'LIGHTER', kind: 'round', move: 250.74, arrives: 249.71 },
+    expect(plan.routes.loop!.steps.map(({ from, to, kind, move, arrives }) => ({ from, to, kind, move, arrives }))).toEqual([
+      { from: 'CROSSEX', to: 'HYPERLIQUID', kind: 'round', move: 999.72, arrives: 999.67 },
+      { from: 'CROSSEX', to: 'LIGHTER', kind: 'round', move: 1000.7, arrives: 999.67 },
     ]);
   });
 
@@ -290,10 +290,10 @@ describe('GET /api/rebalance', () => {
     const job = newJob(
       {
         route: 'loop',
-        steps: plan.routes.loop.steps,
+        steps: plan.routes.loop!.steps,
         amount: plan.moves,
-        costUsd: plan.routes.loop.costUsd,
-        target: plan.routes.loop.after,
+        costUsd: plan.routes.loop!.costUsd,
+        target: plan.routes.loop!.after,
         userId: '1',
       },
       t,
@@ -368,7 +368,7 @@ describe('POST /api/rebalance', () => {
 
     expect(res.statusCode).toBe(202);
     expect(h.file().amount).toBe(plan.moves);
-    expect(h.file().amount).toBe(movedBy(plan.routes.loop.steps));
+    expect(h.file().amount).toBe(movedBy(plan.routes.loop!.steps));
     expect(h.file().amount).not.toBe(5);
     await waitFor(() => h.file().status === 'halted', 'the halt');
   });
@@ -436,7 +436,7 @@ describe('POST /api/rebalance', () => {
       ['To spot', 2, 'CROSSEX', 'LIGHTER'],
       ['To Lighter', 2, 'CROSSEX', 'LIGHTER'],
     ]);
-    expect(h.file()).toMatchObject({ amount: 500.5, fundsAt: 'CROSSEX' });
+    expect(h.file()).toMatchObject({ amount: 2000.42, fundsAt: 'CROSSEX' });
     await waitFor(() => h.file().status === 'halted', 'the halt');
   });
 
@@ -478,8 +478,32 @@ describe('POST /api/rebalance', () => {
     const res = await h.post('/api/rebalance', { route: 'mix' });
 
     expect(res.statusCode).toBe(202);
-    expect(h.file()).toMatchObject({ route: 'loop', amount: movedBy(plan.routes.loop.steps) });
+    expect(h.file()).toMatchObject({ route: 'loop', amount: movedBy(plan.routes.loop!.steps) });
     await waitFor(() => h.file().status === 'halted', 'the halt');
+  });
+
+  it('refuses a Spot loop that costs more than Convert and is no longer offered', async () => {
+    const assets = [
+      asset('USDT', 'CROSSEX', { balance: '40', available_balance: '40', equity: '40' }),
+      asset('USDC', 'HYPERLIQUID'),
+      asset('USDC', 'GATE'),
+    ];
+    mockView({
+      account: { ...lighterAccount, available_margin: '40', margin_balance: '40', assets },
+      positions: HEDGED_POSITIONS,
+    });
+    const h = boot();
+    const plan = await h.plan();
+    expect(plan.routes).toMatchObject({ mix: null, loop: null });
+    expect(plan.recommended).toBe('convert');
+
+    for (const route of ['loop', 'mix']) {
+      const res = await h.post('/api/rebalance', { route });
+
+      expect(res.statusCode).toBe(409);
+      expect(res.json().error.message).toBe('Spot loop is no longer offered. Pick a route again.');
+    }
+    expect(() => h.file()).toThrow();
   });
 
   it('one of two rebalance posts', async () => {

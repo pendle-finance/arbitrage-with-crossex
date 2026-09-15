@@ -205,7 +205,7 @@ export interface EvenPlan {
   shortOfEven: number;
   roundCap: number;
   split: WalletShare[];
-  routes: { mix: RoutePlan | null; loop: RoutePlan; convert: RoutePlan };
+  routes: { mix: RoutePlan | null; loop: RoutePlan | null; convert: RoutePlan };
   recommended: RouteName | null;
 }
 
