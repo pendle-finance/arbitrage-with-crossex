@@ -71,6 +71,12 @@ const ACCOUNT_OF: Record<keyof typeof rebalanceViews, CrossexAccount> = {
   underMinimum: accountBodies.accountA,
   borrowUnderOne: accountBodies.accountB,
   accountADone: accountBodies.accountA,
+  lighterSplit: accountBodies.lighter,
+  lighterAcross: accountBodies.lighter,
+  lighterAcrossRunning: accountBodies.lighter,
+  lighterAcrossAbandoned: accountBodies.lighter,
+  lighterConvertDone: accountBodies.lighter,
+  noLegs: accountBodies.lighter,
 };
 
 const isRebalanceName = (name: string): name is keyof typeof rebalanceViews => name in rebalanceViews;
@@ -130,6 +136,11 @@ describe('BalancesPanel layout', () => {
     ]);
     const margin = screen.getByRole('img', { name: 'Margin usage' });
     expect(margin.compareDocumentPosition(region('Rebalance')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('assets table scrolls with the page', async () => {
+    await show(ACCOUNT_B);
+    expect(within(region('Assets')).getByRole('table').parentElement).toHaveClass('max-h-none');
   });
 
   it('two info marks', async () => {

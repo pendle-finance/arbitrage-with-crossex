@@ -8,7 +8,7 @@ import {
   floorCents,
   HYPERLIQUID_DEPOSIT_FEE_USD,
   HYPERLIQUID_MIN_USDC,
-  TO_USDC_WAIT_SECONDS,
+  roundSeconds,
   type GateAccount,
   type PlannedStep,
   type TransferCoin,
@@ -32,7 +32,10 @@ const HYPERLIQUID_WAIT_MS = 900_000;
 const QUICK_WAIT_MS = 120_000;
 const TOKEN = 'live-rebalance-token';
 
-const CONVERT_STEP: PlannedStep = {
+const TO_HYPERLIQUID = { from: 'CROSSEX', to: 'HYPERLIQUID' } as const;
+const FROM_HYPERLIQUID = { from: 'HYPERLIQUID', to: 'CROSSEX' } as const;
+
+const CONVERT_STEP: Omit<PlannedStep, 'from' | 'to'> = {
   round: null,
   kind: 'convert',
   buy: 0,
@@ -64,7 +67,8 @@ const planRound = (n: number, liability: number): PlannedStep => ({
   move: ROUND,
   arrives: ROUND - HYPERLIQUID_DEPOSIT_FEE_USD,
   borrowLeft: Math.max(0, liability - n * (ROUND - HYPERLIQUID_DEPOSIT_FEE_USD)),
-  seconds: TO_USDC_WAIT_SECONDS,
+  seconds: roundSeconds('CROSSEX', 'HYPERLIQUID'),
+  ...TO_HYPERLIQUID,
 });
 
 const logJob = (job: Job): void => {
@@ -163,7 +167,6 @@ describe.skipIf(process.env.REBALANCE !== '1')('live rebalance rounds and manual
     budget.beforeOrder(ROUND * ROUNDS, 'rebalance two rounds');
 
     const job = await runLiveJob(clients, {
-      direction: 'toUsdc',
       route: 'loop',
       steps: [planRound(1, liability), planRound(2, liability)],
       amount: ROUND * ROUNDS,
@@ -197,9 +200,8 @@ describe.skipIf(process.env.REBALANCE !== '1')('live rebalance rounds and manual
     budget.beforeOrder(ROUND, 'rebalance toUsdt');
 
     const job = await runLiveJob(clients, {
-      direction: 'toUsdt',
       route: 'loop',
-      steps: [{ round: 1, kind: 'round', buy: 0, move: ROUND, arrives: ROUND - 1, borrowLeft: 0, seconds: 400 }],
+      steps: [{ round: 1, kind: 'round', buy: 0, move: ROUND, arrives: ROUND - 1, borrowLeft: 0, seconds: 400, ...FROM_HYPERLIQUID }],
       amount: ROUND,
       costUsd: 1,
     });
@@ -310,9 +312,8 @@ describe.skipIf(process.env.REBALANCE !== '1')('live rebalance rounds and manual
     budget.beforeOrder(amount, 'rebalance mix');
 
     const job = await runLiveJob(clients, {
-      direction: 'toUsdc',
       route: 'mix',
-      steps: [planRound(1, liability), CONVERT_STEP],
+      steps: [planRound(1, liability), { ...CONVERT_STEP, ...TO_HYPERLIQUID }],
       amount,
       costUsd: 0.08,
     });
@@ -350,9 +351,8 @@ describe.skipIf(process.env.REBALANCE !== '1')('live rebalance rounds and manual
     budget.beforeOrder(ROUND, 'rebalance Convert toUsdt');
 
     const job = await runLiveJob(clients, {
-      direction: 'toUsdt',
       route: 'convert',
-      steps: [CONVERT_STEP],
+      steps: [{ ...CONVERT_STEP, ...FROM_HYPERLIQUID }],
       amount: ROUND,
       costUsd: 0.03,
     });

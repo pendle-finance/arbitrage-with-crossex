@@ -15,9 +15,10 @@ const WALLET: Record<CrossexWallet, { coin: TransferCoin; venue: string }> = {
   CROSSEX: { coin: 'USDT', venue: 'CROSSEX' },
   CROSSEX_GATE: { coin: 'USDC', venue: 'GATE' },
   CROSSEX_HYPERLIQUID: { coin: 'USDC', venue: 'HYPERLIQUID' },
+  CROSSEX_LIGHTER: { coin: 'USDC', venue: 'LIGHTER' },
 };
 
-const WALLET_ORDER: CrossexWallet[] = ['CROSSEX', 'CROSSEX_GATE', 'CROSSEX_HYPERLIQUID'];
+const WALLET_ORDER: CrossexWallet[] = ['CROSSEX', 'CROSSEX_GATE', 'CROSSEX_HYPERLIQUID', 'CROSSEX_LIGHTER'];
 
 export function coinOf(wallet: CrossexWallet): TransferCoin {
   return WALLET[wallet].coin;

@@ -61,7 +61,12 @@ function boot(over: { store?: Store; job?: unknown; credentials?: AppDeps['crede
   };
 }
 
-function mockView(opts: { accountThen429?: boolean; onAccountRead?: () => void } = {}): void {
+const HEDGED_POSITIONS = [
+  { symbol: 'HYPERLIQUID_FUTURE_ETH_USDC', position_side: 'NONE', position_qty: '-0.1', position_value: '250', mark_price: '2500' },
+  { symbol: 'GATE_FUTURE_ETH_USDT', position_side: 'NONE', position_qty: '0.1', position_value: '250', mark_price: '2500' },
+];
+
+function mockView(opts: { accountThen429?: boolean; onAccountRead?: () => void; positions?: unknown[] } = {}): void {
   if (opts.accountThen429) {
     gate().get(`${API}/crossex/accounts`).query(true).reply(200, accountA);
     gate().persist().get(`${API}/crossex/accounts`).query(true).reply(429, { label: 'TOO_MANY_REQUESTS', message: 'slow down' });
@@ -81,6 +86,7 @@ function mockView(opts: { accountThen429?: boolean; onAccountRead?: () => void }
     .query(true)
     .reply(200, [{ coin: 'USDC', exchange_type: 'HYPERLIQUID', hour_interest_rate: '0.000005', time: String(t) }]);
   gate().persist().get(`${API}/crossex/history_margin_interests`).query(true).reply(200, []);
+  gate().persist().get(`${API}/crossex/positions`).query(true).reply(200, opts.positions ?? HEDGED_POSITIONS);
   gate()
     .persist()
     .get(`${API}/crossex/transfers/coin`)
@@ -116,10 +122,10 @@ const step160 = (name: string, over: Record<string, unknown> = {}) => ({
   ...over,
 });
 
-const ONE_ROUND: PlannedStep[] = [{ round: 1, kind: 'round', buy: 300, move: 300, arrives: 299.95, borrowLeft: 0, seconds: 130 }];
+const ONE_ROUND: PlannedStep[] = [{ round: 1, kind: 'round', buy: 300, move: 300, arrives: 299.95, borrowLeft: 0, seconds: 130, from: 'CROSSEX', to: 'HYPERLIQUID' }];
 
 function haltedLoopJob(stepIndex: number, patch: Partial<Step> = {}): Job {
-  const job = newJob({ direction: 'toUsdc', route: 'loop', steps: ONE_ROUND, amount: 300, costUsd: 0.08, target: [], userId: null }, t);
+  const job = newJob({ route: 'loop', steps: ONE_ROUND, amount: 300, costUsd: 0.08, target: [], userId: null }, t);
   job.status = 'halted';
   job.haltReason = HALT_TEXT.restart;
   job.stepIndex = stepIndex;
@@ -147,7 +153,7 @@ async function accountAPlan(): Promise<EvenPlan> {
 
 function roundThreeInSpot(plan: EvenPlan, status: Job['status']): Job {
   const { steps, costUsd, after } = plan.routes.loop;
-  const job = newJob({ direction: 'toUsdc', route: 'loop', steps, amount: plan.moves, costUsd, target: after, userId: '1' }, t);
+  const job = newJob({ route: 'loop', steps, amount: plan.moves, costUsd, target: after, userId: '1' }, t);
   for (const step of job.steps.slice(0, 8)) Object.assign(step, { status: 'done', qty: step.planned, startedAt: t, doneAt: t });
   Object.assign(job.steps[8], { status: 'running', startedAt: t });
   return Object.assign(job, { status, stepIndex: 8, fundsAt: 'SPOT' });
@@ -343,7 +349,7 @@ describe('halt alerts', () => {
 
   it('boot waits for a step Gate is moving, then halts before the next send', async () => {
     const steps: PlannedStep[] = [ONE_ROUND[0], { ...ONE_ROUND[0], round: 2 }];
-    const job = newJob({ direction: 'toUsdc', route: 'loop', steps, amount: 600, costUsd: 0.16, target: [], userId: null }, t);
+    const job = newJob({ route: 'loop', steps, amount: 600, costUsd: 0.16, target: [], userId: null }, t);
     for (const [index, venueId] of ['o1', 'x1'].entries()) {
       Object.assign(job.steps[index], { text: tagFor(job.id, index + 1), venueId, qty: Number(BOUGHT), status: 'done', startedAt: t, doneAt: t });
     }

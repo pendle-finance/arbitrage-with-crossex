@@ -164,9 +164,8 @@ const mockRows = (status: string, over: Record<string, unknown> = {}) =>
 const rebalanceJob = (status: Job['status']): Job => ({
   ...newJob(
     {
-      direction: 'toUsdc',
       route: 'loop',
-      steps: [{ round: 1, kind: 'round', buy: 12, move: 12, arrives: 11.95, borrowLeft: 0, seconds: 130 }],
+      steps: [{ round: 1, kind: 'round', buy: 12, move: 12, arrives: 11.95, borrowLeft: 0, seconds: 130, from: 'CROSSEX', to: 'HYPERLIQUID' }],
       amount: 12,
       costUsd: 0.05,
       target: [],
@@ -252,6 +251,7 @@ describe('GET /api/transfer', () => {
     const { data } = res.json();
     expect(data.spot).toBeNull();
     expect(data.paths.filter((p: { from: string }) => p.from === 'SPOT').map((p: { max: unknown }) => p.max)).toEqual([
+      null,
       null,
       null,
       null,
@@ -882,6 +882,12 @@ describe('POST /api/transfer races', () => {
       body: [{ coin: 'USDC', exchange_type: 'HYPERLIQUID', hour_interest_rate: '0.000005', time: String(Date.now()) }],
     });
     mockGateGet('/history_margin_interests', { body: [] });
+    mockGateGet('/positions', {
+      body: [
+        { symbol: 'HYPERLIQUID_FUTURE_ETH_USDC', position_side: 'NONE', position_qty: '-0.1', position_value: '250', mark_price: '2500' },
+        { symbol: 'GATE_FUTURE_ETH_USDT', position_side: 'NONE', position_qty: '0.1', position_value: '250', mark_price: '2500' },
+      ],
+    });
     mockGateGet('/rule/symbols', {
       body: [{ symbol: 'GATE_SPOT_USDC_USDT', exchange_type: 'GATE', business_type: 'SPOT', state: 'live' }],
     });

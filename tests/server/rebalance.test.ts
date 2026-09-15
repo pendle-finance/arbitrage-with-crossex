@@ -88,9 +88,34 @@ const noCashAccount = {
   ],
 };
 
+const lighterAccount = {
+  user_id: '1',
+  available_margin: '1000',
+  margin_balance: '1000',
+  initial_margin: '0',
+  account_mode: 'CROSS_EXCHANGE',
+  assets: [
+    asset('USDT', 'CROSSEX', { balance: '1000', available_balance: '1000', equity: '1000' }),
+    asset('USDC', 'HYPERLIQUID'),
+    asset('USDC', 'LIGHTER'),
+    asset('USDC', 'GATE'),
+  ],
+};
+
+const THREE_WALLET_POSITIONS = [
+  { symbol: 'GATE_FUTURE_ETH_USDT', position_side: 'NONE', position_qty: '0.2', position_value: '500', mark_price: '2500' },
+  { symbol: 'HYPERLIQUID_FUTURE_ETH_USDC', position_side: 'NONE', position_qty: '-0.1', position_value: '250', mark_price: '2500' },
+  { symbol: 'LIGHTER_FUTURE_ETH_USDC', position_side: 'NONE', position_qty: '-0.1', position_value: '250', mark_price: '2500' },
+];
+
 const REFUSAL = { label: 'INVALID_PARAM_VALUE', message: 'refused by the test' };
 
-function mockView(opts: { account?: unknown; disabled?: string; accountDelayMs?: number } = {}): void {
+const HEDGED_POSITIONS = [
+  { symbol: 'HYPERLIQUID_FUTURE_ETH_USDC', position_side: 'NONE', position_qty: '-0.1', position_value: '250', mark_price: '2500' },
+  { symbol: 'GATE_FUTURE_ETH_USDT', position_side: 'NONE', position_qty: '0.1', position_value: '250', mark_price: '2500' },
+];
+
+function mockView(opts: { account?: unknown; disabled?: string; accountDelayMs?: number; positions?: unknown[] } = {}): void {
   const accounts = gate().persist().get(`${API}/crossex/accounts`).query(true);
   if (opts.accountDelayMs) accounts.delay(opts.accountDelayMs);
   accounts.reply(200, opts.account ?? accountA);
@@ -100,6 +125,7 @@ function mockView(opts: { account?: unknown; disabled?: string; accountDelayMs?:
     .query(true)
     .reply(200, [{ coin: 'USDC', exchange_type: 'HYPERLIQUID', hour_interest_rate: '0.000005', time: String(t) }]);
   gate().persist().get(`${API}/crossex/history_margin_interests`).query(true).reply(200, []);
+  gate().persist().get(`${API}/crossex/positions`).query(true).reply(200, opts.positions ?? HEDGED_POSITIONS);
   gate()
     .persist()
     .get(`${API}/crossex/transfers/coin`)
@@ -180,6 +206,7 @@ describe('GET /api/rebalance', () => {
     apps.push(app);
     const scopes = [
       mockGateGet('/accounts', { body: account }),
+      mockGateGet('/positions', { body: HEDGED_POSITIONS }),
       mockGateGet('/interest_rate', {
         body: [{ coin: 'USDC', exchange_type: 'HYPERLIQUID', hour_interest_rate: '0.000005', time: String(t) }],
       }),
@@ -234,7 +261,26 @@ describe('GET /api/rebalance', () => {
     expect(plan.routes.mix).toBeNull();
     expect(plan.routes.loop).toMatchObject({ available: true, reason: null, rounds: 5 });
     expect(plan.routes.convert).toMatchObject({ available: true, reason: null, rounds: 0 });
-    expect(plan).toMatchObject({ direction: 'toUsdc', balanced: false, recommended: 'loop' });
+    expect(plan).toMatchObject({ balanced: false, noLegs: false, recommended: 'loop' });
+    expect(plan.routes.loop.steps.every((step) => step.from === 'CROSSEX' && step.to === 'HYPERLIQUID')).toBe(true);
+  });
+
+  it('splits equity by position size across the Gate, Hyperliquid and Lighter wallets', async () => {
+    mockView({ account: lighterAccount, positions: THREE_WALLET_POSITIONS });
+    const h = boot();
+
+    const plan = await h.plan();
+
+    expect(plan).toMatchObject({ balanced: false, noLegs: false });
+    expect(plan.split).toEqual([
+      { coin: 'USDT', venue: 'CROSSEX', notionalUsd: 500, share: 0.5 },
+      { coin: 'USDC', venue: 'HYPERLIQUID', notionalUsd: 250, share: 0.25 },
+      { coin: 'USDC', venue: 'LIGHTER', notionalUsd: 250, share: 0.25 },
+    ]);
+    expect(plan.routes.loop.steps.map(({ from, to, kind, move, arrives }) => ({ from, to, kind, move, arrives }))).toEqual([
+      { from: 'CROSSEX', to: 'HYPERLIQUID', kind: 'round', move: 249.76, arrives: 249.71 },
+      { from: 'CROSSEX', to: 'LIGHTER', kind: 'round', move: 250.74, arrives: 249.71 },
+    ]);
   });
 
   it('abandoned job keeps inTransit', async () => {
@@ -243,7 +289,6 @@ describe('GET /api/rebalance', () => {
     const plan = await h.plan();
     const job = newJob(
       {
-        direction: 'toUsdc',
         route: 'loop',
         steps: plan.routes.loop.steps,
         amount: plan.moves,
@@ -360,6 +405,39 @@ describe('POST /api/rebalance', () => {
     expect(res.statusCode).toBe(409);
     expect(res.json().error.message).toBe('Already even.');
     expect(() => h.file()).toThrow();
+  });
+
+  it('refuses with no open positions', async () => {
+    mockView({ account: lighterAccount, positions: [] });
+    const h = boot();
+
+    const plan = await h.plan();
+    const res = await h.post('/api/rebalance', { route: 'loop' });
+
+    expect(plan).toMatchObject({ balanced: true, noLegs: true });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error.message).toBe('No open positions. Nothing to rebalance.');
+    expect(() => h.file()).toThrow();
+  });
+
+  it('starts one job that moves into both Hyperliquid and Lighter', async () => {
+    mockView({ account: lighterAccount, positions: THREE_WALLET_POSITIONS });
+    refuseSends();
+    const h = boot();
+
+    const res = await h.post('/api/rebalance', { route: 'loop' });
+
+    expect(res.statusCode).toBe(202);
+    expect(h.file().steps.map(({ name, round, from, to }) => [name, round, from, to])).toEqual([
+      ['Buy USDC', 1, 'CROSSEX', 'HYPERLIQUID'],
+      ['To spot', 1, 'CROSSEX', 'HYPERLIQUID'],
+      ['To Hyperliquid', 1, 'CROSSEX', 'HYPERLIQUID'],
+      ['Buy USDC', 2, 'CROSSEX', 'LIGHTER'],
+      ['To spot', 2, 'CROSSEX', 'LIGHTER'],
+      ['To Lighter', 2, 'CROSSEX', 'LIGHTER'],
+    ]);
+    expect(h.file()).toMatchObject({ amount: 500.5, fundsAt: 'CROSSEX' });
+    await waitFor(() => h.file().status === 'halted', 'the halt');
   });
 
   it('refuses a route with no steps', async () => {
@@ -481,8 +559,8 @@ describe('POST /api/rebalance/:id/resume', () => {
   });
 
   it('resume refuses while a transfer moves', async () => {
-    const convert: PlannedStep = { round: null, kind: 'convert', buy: 0, move: 12, arrives: 11.97, borrowLeft: 0, seconds: 0 };
-    const job = newJob({ direction: 'toUsdc', route: 'convert', steps: [convert], amount: 12, costUsd: 0, target: [], userId: null }, t);
+    const convert: PlannedStep = { round: null, kind: 'convert', buy: 0, move: 12, arrives: 11.97, borrowLeft: 0, seconds: 0, from: 'CROSSEX', to: 'HYPERLIQUID' };
+    const job = newJob({ route: 'convert', steps: [convert], amount: 12, costUsd: 0, target: [], userId: null }, t);
     Object.assign(job, { status: 'halted', haltReason: 'Gate took too long on this step.' });
     const h = boot({ job });
     await h.ready();

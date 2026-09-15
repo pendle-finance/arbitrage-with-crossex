@@ -84,9 +84,6 @@ const VENUE_OVERRIDES: Record<string, Record<number, MakerTaker>> = {
   },
 };
 
-/** Every venue the schedule (and BOROS_VENUE_TO_CROSSEX) knows. */
-const VENUES = ['GATE', 'BINANCE', 'OKX', 'BYBIT', 'KRAKEN', 'HYPERLIQUID'] as const;
-
 export function feeTierLabel(tier: CrossexFeeTier): string {
   return `VIP ${tier.slice(3)}`;
 }
@@ -105,9 +102,9 @@ export function parseFeeTier(raw: string | undefined): CrossexFeeTier | undefine
 }
 
 /** The tier's schedule in /crossex/fee row shape — one row per venue. */
-export function feeRowsForTier(tier: CrossexFeeTier): VenueFeeRow[] {
+export function feeRowsForTier(tier: CrossexFeeTier, venues: Iterable<string>): VenueFeeRow[] {
   const level = Number(tier.slice(3));
-  return VENUES.map((venue) => {
+  return [...venues].map((venue) => {
     const [futureMakerFee, futureTakerFee] = VENUE_OVERRIDES[venue]?.[level] ?? BASE_LADDER[level];
     return { exchangeType: venue, futureMakerFee, futureTakerFee };
   });

@@ -8,6 +8,7 @@ const USDT_PERP_VENUES = new Set(['BINANCE', 'BYBIT', 'GATE', 'OKX']);
 export const VENUE_QUOTE_NOTE: Record<string, string> = {
   KRAKEN: 'quotes USD',
   HYPERLIQUID: 'quotes USDC',
+  LIGHTER: 'quotes USDC',
   DERIBIT: 'quotes USDC',
 };
 

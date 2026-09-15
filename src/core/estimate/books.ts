@@ -29,6 +29,7 @@ export function nativeSymbol(exchange: string, base: string, quote: string): str
     case 'OKX':
       return `${base}-${quote}-SWAP`;
     case 'HYPERLIQUID':
+    case 'LIGHTER':
       return base;
     // Kraken linear perps are PF_<BASE>USD regardless of the CrossEx quote label.
     case 'KRAKEN':
@@ -112,6 +113,30 @@ export function parseKrakenBook(json: unknown): NormalizedBook | null {
   return assemble(toLevels(ob?.bids, pickTuple, 1), toLevels(ob?.asks, pickTuple, 1));
 }
 
+export function parseLighterBook(json: unknown): NormalizedBook | null {
+  const j = json as { bids?: unknown; asks?: unknown } | null;
+  const pick = (row: unknown): [unknown, unknown] | null => {
+    const o = row as { price?: unknown; remaining_base_amount?: unknown } | null;
+    return o && o.price != null && o.remaining_base_amount != null ? [o.price, o.remaining_base_amount] : null;
+  };
+  const merged = (levels: Level[]): Level[] => {
+    const byPrice = new Map<number, number>();
+    for (const [price, qty] of levels) byPrice.set(price, (byPrice.get(price) ?? 0) + qty);
+    return [...byPrice];
+  };
+  return assemble(merged(toLevels(j?.bids, pick, 1)), merged(toLevels(j?.asks, pick, 1)));
+}
+
+export function lighterMarketId(json: unknown, base: string): string | null {
+  const books = (json as { order_books?: unknown } | null)?.order_books;
+  if (!Array.isArray(books)) return null;
+  const row = books.find((b) => {
+    const o = b as { symbol?: unknown; market_type?: unknown; status?: unknown };
+    return o.symbol === base && o.market_type === 'perp' && o.status === 'active';
+  }) as { market_id?: unknown } | undefined;
+  return typeof row?.market_id === 'number' ? String(row.market_id) : null;
+}
+
 /** Best bid/ask/mid of a normalized book; null unless BOTH sides have a level
  * (a one-sided book has no mid to quote — callers that can work from a single
  * side, like the POC same-side reprice, read the level directly instead). */
@@ -124,7 +149,7 @@ export function touchOf(book: NormalizedBook | null): { bestBid: number; bestAsk
 
 interface BookSource {
   method: 'GET' | 'POST';
-  url: (base: string, quote: string) => string;
+  url: (base: string, quote: string, marketId: string | null) => string;
   body?: (base: string, quote: string) => unknown;
   /** sizeMult scales venue sizes to base qty (1 where sizes are already base). */
   parse: (json: unknown, sizeMult: number) => NormalizedBook | null;
@@ -132,6 +157,10 @@ interface BookSource {
   meta?: {
     url: (base: string, quote: string) => string;
     extract: (json: unknown) => number | null;
+  };
+  market?: {
+    url: string;
+    extract: (json: unknown, base: string) => string | null;
   };
 }
 
@@ -185,11 +214,24 @@ const BOOK_SOURCES: Record<string, BookSource> = {
     url: (base, quote) => `https://futures.kraken.com/derivatives/api/v3/orderbook?symbol=${nativeSymbol('KRAKEN', base, quote)}`,
     parse: parseKrakenBook,
   },
+  LIGHTER: {
+    method: 'GET',
+    url: (_base, _quote, marketId) =>
+      `https://mainnet.zklighter.elliot.ai/api/v1/orderBookOrders?market_id=${marketId}&limit=250`,
+    parse: parseLighterBook,
+    market: {
+      url: 'https://mainnet.zklighter.elliot.ai/api/v1/orderBooks',
+      extract: lighterMarketId,
+    },
+  },
 };
+
+export const BOOK_VENUES: ReadonlySet<string> = new Set(Object.keys(BOOK_SOURCES));
 
 /** Contract-size multipliers (gate quanto_multiplier, okx ctVal) — instrument specs
  * are effectively immutable, so a process-lifetime memo avoids a second call per fetch. */
 const sizeMultCache = new Map<string, number>();
+const marketIdCache = new Map<string, string>();
 
 /**
  * Fetch + normalize a venue's public book. Unknown venue (e.g. DERIBIT), HTTP error,
@@ -214,7 +256,18 @@ export async function fetchVenueBook(exchange: string, base: string, quote: stri
         sizeMult = m;
       }
     }
-    const url = src.url(base, quote);
+    let marketId: string | null = null;
+    if (src.market) {
+      const key = `${exchange.toUpperCase()}:${base}`;
+      marketId = marketIdCache.get(key) ?? null;
+      if (marketId === null) {
+        const { data } = await axios.get(src.market.url, { timeout: TIMEOUT_MS });
+        marketId = src.market.extract(data, base);
+        if (marketId === null) return null;
+        marketIdCache.set(key, marketId);
+      }
+    }
+    const url = src.url(base, quote, marketId);
     const { data } =
       src.method === 'POST'
         ? await axios.post(url, src.body?.(base, quote), { timeout: TIMEOUT_MS })

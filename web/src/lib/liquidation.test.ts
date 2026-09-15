@@ -80,6 +80,29 @@ describe('liquidationLines', () => {
     expect(line.price).toBeCloseTo(2300 * (45000 / 27500), 2);
   });
 
+  it('a Lighter leg borrows in its own USDC wallet, not the USDT wallet', () => {
+    const lighter = box();
+    lighter.positions[1] = { ...lighter.positions[1], symbol: 'LIGHTER_FUTURE_ETH_USDC' };
+    lighter.exposure[0].legs[1] = { ...lighter.exposure[0].legs[1], symbol: 'LIGHTER_FUTURE_ETH_USDC', exchange: 'LIGHTER' };
+    const assets = account().assets.map((a) => (a.exchangeType === 'HYPERLIQUID' ? { ...a, exchangeType: 'LIGHTER' } : a));
+    const [line] = lines(account({ assets }), lighter);
+    expect(line.move).toBeCloseTo(45000 / 27500 - 1, 4);
+    const [covered] = lines(account({ assets }), lighter, { 'USDC/LIGHTER': 20000, 'USDT/CROSSEX': -20000 });
+    expect(covered.move).toBeCloseTo(47000 / 27500 - 1, 4);
+  });
+
+  it('a USDC-quoted Binance leg stays in the pooled USDT wallet', () => {
+    const binance = box();
+    binance.positions[1] = { ...binance.positions[1], symbol: 'BINANCE_FUTURE_ETH_USDC' };
+    binance.exposure[0].legs[1] = { ...binance.exposure[0].legs[1], symbol: 'BINANCE_FUTURE_ETH_USDC', exchange: 'BINANCE', quote: 'USDC' };
+    const usdt = box();
+    usdt.positions[1] = { ...usdt.positions[1], symbol: 'BINANCE_FUTURE_ETH_USDT' };
+    usdt.exposure[0].legs[1] = { ...usdt.exposure[0].legs[1], symbol: 'BINANCE_FUTURE_ETH_USDT', exchange: 'BINANCE', quote: 'USDT' };
+    const shift = { 'USDC/HYPERLIQUID': 5000, 'USDT/CROSSEX': -5000 };
+    expect(lines(account(), binance, shift)).toEqual(lines(account(), usdt, shift));
+    expect(lines(account(), binance, shift)).not.toEqual(lines(account(), box(), shift));
+  });
+
   it('moves the line out when cash is shifted into the Hyperliquid USDC wallet', () => {
     // 20k of USDC cover absorbs the first 20k of loss before any borrow:
     // 20000 = 2500 f + 0.1 (250000 (f - 1) - 20000)  →  f = 47000 / 27500.

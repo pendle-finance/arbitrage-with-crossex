@@ -24,7 +24,11 @@ const dir = () => fs.mkdtempSync(path.join(tmpdir(), 'rebalance-'));
 const gateError = (status: number, label: string, message: string) =>
   Object.assign(new Error(message), { response: { status, data: { label, message } } });
 
-const accountALoop: PlannedStep[] = [
+type Planned = Omit<PlannedStep, 'from' | 'to'>;
+const TO_HYPERLIQUID = { from: 'CROSSEX', to: 'HYPERLIQUID' } as const;
+const FROM_HYPERLIQUID = { from: 'HYPERLIQUID', to: 'CROSSEX' } as const;
+
+const accountALoop: Planned[] = [
   { round: 1, kind: 'round', buy: 0, move: 24.51, arrives: 24.46, borrowLeft: 122.59, seconds: 130 },
   { round: 2, kind: 'round', buy: 0, move: 29.93, arrives: 29.88, borrowLeft: 92.71, seconds: 130 },
   { round: 3, kind: 'round', buy: 0, move: 36.58, arrives: 36.53, borrowLeft: 56.19, seconds: 130 },
@@ -38,20 +42,34 @@ const accountATarget: WalletAfter[] = [
   { coin: 'USDC', venue: 'GATE', cash: 0, equity: 0 },
 ];
 
-const exampleEMix: PlannedStep[] = [
+const exampleEMix: Planned[] = [
   { round: 1, kind: 'round', buy: 0, move: 745.44, arrives: 744.44, borrowLeft: 0, seconds: 400 },
   { round: null, kind: 'convert', buy: 0, move: 482.83, arrives: 481.86, borrowLeft: 0, seconds: 0 },
 ];
 
 const accountAJob = (): Job =>
   newJob(
-    { direction: 'toUsdc', route: 'loop', steps: accountALoop, amount: 175.88, costUsd: 0.26, target: accountATarget, userId: '1' },
+    {
+      route: 'loop',
+      steps: accountALoop.map((step) => ({ ...step, ...TO_HYPERLIQUID })),
+      amount: 175.88,
+      costUsd: 0.26,
+      target: accountATarget,
+      userId: '1',
+    },
     1_000_000,
   );
 
 const exampleEJob = (): Job =>
   newJob(
-    { direction: 'toUsdt', route: 'mix', steps: exampleEMix, amount: 1228.27, costUsd: 2.04, target: [], userId: '1' },
+    {
+      route: 'mix',
+      steps: exampleEMix.map((step) => ({ ...step, ...FROM_HYPERLIQUID })),
+      amount: 1228.27,
+      costUsd: 2.04,
+      target: [],
+      userId: '1',
+    },
     2_000_000,
   );
 
@@ -164,7 +182,6 @@ describe('newJob', () => {
     expect(job).toMatchObject({
       id: (1_000_000).toString(36),
       userId: '1',
-      direction: 'toUsdc',
       route: 'loop',
       amount: 175.88,
       costUsd: 0.26,
@@ -178,9 +195,9 @@ describe('newJob', () => {
     expect(job.steps).toHaveLength(15);
     expect(job.steps.map((s) => s.round)).toEqual([1, 1, 1, 2, 2, 2, 3, 3, 3, 4, 4, 4, 5, 5, 5]);
     expect(job.steps.slice(9, 12)).toEqual([
-      { name: 'Buy USDC', text: null, quoteId: null, venueId: null, qty: null, attempt: 0, status: 'pending', startedAt: null, doneAt: null, round: 4, planned: 23.77, arrives: null, borrowLeft: null },
-      { name: 'To spot', text: null, quoteId: null, venueId: null, qty: null, attempt: 0, status: 'pending', startedAt: null, doneAt: null, round: 4, planned: 44.71, arrives: null, borrowLeft: null },
-      { name: 'To Hyperliquid', text: null, quoteId: null, venueId: null, qty: null, attempt: 0, status: 'pending', startedAt: null, doneAt: null, round: 4, planned: 44.71, arrives: 44.66, borrowLeft: 11.53 },
+      { name: 'Buy USDC', text: null, quoteId: null, venueId: null, qty: null, attempt: 0, status: 'pending', startedAt: null, doneAt: null, round: 4, planned: 23.77, arrives: null, borrowLeft: null, from: 'CROSSEX', to: 'HYPERLIQUID' },
+      { name: 'To spot', text: null, quoteId: null, venueId: null, qty: null, attempt: 0, status: 'pending', startedAt: null, doneAt: null, round: 4, planned: 44.71, arrives: null, borrowLeft: null, from: 'CROSSEX', to: 'HYPERLIQUID' },
+      { name: 'To Hyperliquid', text: null, quoteId: null, venueId: null, qty: null, attempt: 0, status: 'pending', startedAt: null, doneAt: null, round: 4, planned: 44.71, arrives: 44.66, borrowLeft: 11.53, from: 'CROSSEX', to: 'HYPERLIQUID' },
     ]);
     expect(job.steps[0]).toMatchObject({ name: 'Buy USDC', planned: 0 });
   });
@@ -188,7 +205,8 @@ describe('newJob', () => {
   it('expands a round toward USDT into out of the Hyperliquid wallet, to Gate and sell, then Convert', () => {
     const job = exampleEJob();
 
-    expect(job).toMatchObject({ direction: 'toUsdt', route: 'mix', amount: 1228.27, costUsd: 2.04, fundsAt: 'HYPERLIQUID' });
+    expect(job).toMatchObject({ route: 'mix', amount: 1228.27, costUsd: 2.04, fundsAt: 'HYPERLIQUID' });
+    expect(job.steps.every((step) => step.from === 'HYPERLIQUID' && step.to === 'CROSSEX')).toBe(true);
     expect(job.steps.map(({ name, round, planned, arrives, borrowLeft }) => ({ name, round, planned, arrives, borrowLeft }))).toEqual([
       { name: 'From Hyperliquid', round: 1, planned: 745.44, arrives: null, borrowLeft: null },
       { name: 'To Gate', round: 1, planned: 744.44, arrives: null, borrowLeft: null },
@@ -198,14 +216,105 @@ describe('newJob', () => {
   });
 
   it('a convert-only job is one Convert step', () => {
-    const convert: PlannedStep = { round: null, kind: 'convert', buy: 0, move: 175.94, arrives: 175.58, borrowLeft: 0, seconds: 0 };
+    const convert: PlannedStep = { round: null, kind: 'convert', buy: 0, move: 175.94, arrives: 175.58, borrowLeft: 0, seconds: 0, ...TO_HYPERLIQUID };
 
-    const job = newJob({ direction: 'toUsdc', route: 'convert', steps: [convert], amount: 175.94, costUsd: 0.36, target: [], userId: null }, 7);
+    const job = newJob({ route: 'convert', steps: [convert], amount: 175.94, costUsd: 0.36, target: [], userId: null }, 7);
 
     expect(job.steps).toEqual([
-      { name: 'Convert', text: null, quoteId: null, venueId: null, qty: null, attempt: 0, status: 'pending', startedAt: null, doneAt: null, round: null, planned: 175.94, arrives: null, borrowLeft: null },
+      { name: 'Convert', text: null, quoteId: null, venueId: null, qty: null, attempt: 0, status: 'pending', startedAt: null, doneAt: null, round: null, planned: 175.94, arrives: null, borrowLeft: null, from: 'CROSSEX', to: 'HYPERLIQUID' },
     ]);
     expect(job.fundsAt).toBe('CROSSEX');
+  });
+
+  it('expands a move from Hyperliquid to Lighter into out of one wallet and into the other, and its Convert into two halves', () => {
+    const across = { from: 'HYPERLIQUID', to: 'LIGHTER' } as const;
+    const steps: PlannedStep[] = [
+      { round: 1, kind: 'round', buy: 0, move: 401.01, arrives: 398.98, borrowLeft: 0, seconds: 625, ...across },
+      { round: null, kind: 'convert', buy: 0, move: 400.8, arrives: 399.19, borrowLeft: 0, seconds: 0, ...across },
+    ];
+
+    const job = newJob({ route: 'mix', steps, amount: 801.81, costUsd: 3.63, target: [], userId: null }, 7);
+
+    expect(job.fundsAt).toBe('HYPERLIQUID');
+    expect(job.steps.every((step) => step.from === 'HYPERLIQUID' && step.to === 'LIGHTER')).toBe(true);
+    expect(job.steps.map(({ name, round, planned, arrives, borrowLeft }) => ({ name, round, planned, arrives, borrowLeft }))).toEqual([
+      { name: 'From Hyperliquid', round: 1, planned: 401.01, arrives: null, borrowLeft: null },
+      { name: 'To Lighter', round: 1, planned: 400.01, arrives: 398.98, borrowLeft: 0 },
+      { name: 'Convert to USDT', round: null, planned: 400.8, arrives: null, borrowLeft: null },
+      { name: 'Convert to USDC', round: null, planned: 399.99, arrives: null, borrowLeft: null },
+    ]);
+  });
+
+  it('expands a round into Lighter and a round out of Lighter through Gate spot', () => {
+    const into: PlannedStep = { round: 1, kind: 'round', buy: 5, move: 30, arrives: 28.97, borrowLeft: 0, seconds: 235, from: 'CROSSEX', to: 'LIGHTER' };
+    const out: PlannedStep = { round: 2, kind: 'round', buy: 0, move: 20, arrives: 20, borrowLeft: 0, seconds: 185, from: 'LIGHTER', to: 'CROSSEX' };
+
+    const job = newJob({ route: 'loop', steps: [into, out], amount: 50, costUsd: 1.1, target: [], userId: null }, 7);
+
+    expect(job.steps.map(({ name, round, planned, arrives, from, to }) => ({ name, round, planned, arrives, from, to }))).toEqual([
+      { name: 'Buy USDC', round: 1, planned: 5, arrives: null, from: 'CROSSEX', to: 'LIGHTER' },
+      { name: 'To spot', round: 1, planned: 30, arrives: null, from: 'CROSSEX', to: 'LIGHTER' },
+      { name: 'To Lighter', round: 1, planned: 30, arrives: 28.97, from: 'CROSSEX', to: 'LIGHTER' },
+      { name: 'From Lighter', round: 2, planned: 20, arrives: null, from: 'LIGHTER', to: 'CROSSEX' },
+      { name: 'To Gate', round: 2, planned: 20, arrives: null, from: 'LIGHTER', to: 'CROSSEX' },
+      { name: 'Sell USDC', round: 2, planned: 20, arrives: null, from: 'LIGHTER', to: 'CROSSEX' },
+    ]);
+  });
+});
+
+describe('1.6.2 job file', () => {
+  const lighterJob = (): Job =>
+    newJob(
+      {
+        route: 'loop',
+        steps: [
+          { round: 1, kind: 'round', buy: 0, move: 30, arrives: 28.97, borrowLeft: 0, seconds: 235, from: 'CROSSEX', to: 'LIGHTER' },
+          { round: 2, kind: 'round', buy: 0, move: 20, arrives: 20, borrowLeft: 0, seconds: 185, from: 'LIGHTER', to: 'CROSSEX' },
+        ],
+        amount: 50,
+        costUsd: 1.03,
+        target: [],
+        userId: '1',
+      },
+      3_000_000,
+    );
+
+  it('reads back a job with moves into and out of Lighter, funds at Lighter', () => {
+    const d = dir();
+    new JobFile(d).write(stopAt(lighterJob(), 3, { status: 'halted', fundsAt: 'LIGHTER' }));
+
+    const job = new JobFile(d).read()!;
+
+    expect(job).toMatchObject({ status: 'halted', stepIndex: 3, fundsAt: 'LIGHTER' });
+    expect(job).not.toHaveProperty('direction');
+    expect(job.steps.map((step) => [step.name, step.from, step.to])).toEqual([
+      ['Buy USDC', 'CROSSEX', 'LIGHTER'],
+      ['To spot', 'CROSSEX', 'LIGHTER'],
+      ['To Lighter', 'CROSSEX', 'LIGHTER'],
+      ['From Lighter', 'LIGHTER', 'CROSSEX'],
+      ['To Gate', 'LIGHTER', 'CROSSEX'],
+      ['Sell USDC', 'LIGHTER', 'CROSSEX'],
+    ]);
+  });
+
+  it('reads null when a step lacks one wallet, names an unknown wallet, or has the same wallet at both ends', () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      const bad = [
+        { from: undefined },
+        { from: 'CROSSEX', to: 'BINANCE' },
+        { from: 'LIGHTER', to: 'LIGHTER' },
+      ];
+      for (const wallets of bad) {
+        const job = lighterJob();
+        Object.assign(job.steps[1], wallets);
+        const d = dir();
+        writeRaw(d, 'rebalance.json', job);
+        expect(new JobFile(d).read()).toBeNull();
+      }
+    } finally {
+      error.mockRestore();
+    }
   });
 });
 
@@ -298,7 +407,9 @@ describe('1.6.0 job file', () => {
 
     const pulled = new JobFile(d).read()!;
 
-    expect(pulled).toMatchObject({ userId: null, direction: 'toUsdt', costUsd: null, target: null });
+    expect(pulled).toMatchObject({ userId: null, costUsd: null, target: null });
+    expect(pulled).not.toHaveProperty('direction');
+    expect(pulled.steps.every((step) => step.from === 'HYPERLIQUID' && step.to === 'CROSSEX')).toBe(true);
     expect(pulled.steps.map((s) => [s.name, s.round, s.planned])).toEqual([
       ['From Hyperliquid', 1, 12],
       ['To Gate', 1, 12],
@@ -307,7 +418,7 @@ describe('1.6.0 job file', () => {
 
     const e = dir();
     writeRaw(e, 'rebalance.json', { ...JSON.parse(fs.readFileSync(path.join(d, 'rebalance.json'), 'utf8')), direction: 'payDown', steps: [step160('Convert')] });
-    expect(new JobFile(e).read()).toMatchObject({ direction: 'toUsdc' });
+    expect(new JobFile(e).read()!.steps[0]).toMatchObject({ name: 'Convert', from: 'CROSSEX', to: 'HYPERLIQUID' });
   });
 
   it('a file with no tag count starts past every tag the old scheme made', () => {
@@ -404,7 +515,7 @@ describe('bannerFor', () => {
 
   it('says Sell USDC at a Sell USDC step put in before Convert', () => {
     const job = exampleEJob();
-    job.steps.splice(3, 0, pendingStep('Sell USDC', { round: null, planned: 20.93, arrives: null, borrowLeft: null }));
+    job.steps.splice(3, 0, pendingStep('Sell USDC', { round: null, planned: 20.93, arrives: null, borrowLeft: null, ...FROM_HYPERLIQUID }));
     stopAt(job, 3, { status: 'halted', fundsAt: 'CROSSEX' });
 
     expect(bannerFor(job)).toBe('Rebalance stopped at Sell USDC.');
@@ -422,6 +533,22 @@ describe('bannerFor', () => {
     expect(bannerFor(fromHyperliquid)).toBe('Rebalance stopped in round 1. 745.44 USDC is on the way to Gate spot.');
     expect(bannerFor(toHyperliquid)).toBe('Rebalance stopped in round 3. 36.58 USDC is on the way to USDC · Hyperliquid.');
     expect(bannerFor(toGate)).toBe('Rebalance stopped in round 1. 744.44 USDC is on the way to USDC · Gate.');
+  });
+
+  it('says Gate spot out of Lighter and USDC · Lighter into it', () => {
+    const planned: PlannedStep[] = [
+      { round: 1, kind: 'round', buy: 0, move: 401.01, arrives: 398.98, borrowLeft: 0, seconds: 625, from: 'HYPERLIQUID', to: 'LIGHTER' },
+      { round: 2, kind: 'round', buy: 0, move: 60, arrives: 60, borrowLeft: 0, seconds: 305, from: 'LIGHTER', to: 'HYPERLIQUID' },
+    ];
+    const across = () => newJob({ route: 'loop', steps: planned, amount: 461.01, costUsd: 2.08, target: [], userId: null }, 9);
+    const intoLighter = stopAt(across(), 1, { status: 'halted', fundsAt: 'SPOT' });
+    Object.assign(intoLighter.steps[1], { venueId: 'x2', status: 'running' });
+    const outOfLighter = stopAt(across(), 2, { status: 'halted', fundsAt: 'LIGHTER' });
+    Object.assign(outOfLighter.steps[2], { venueId: 'x3', status: 'running' });
+
+    expect(bannerFor(intoLighter)).toBe('Rebalance stopped in round 1. 401.01 USDC is on the way to USDC · Lighter.');
+    expect(bannerFor(outOfLighter)).toBe('Rebalance stopped in round 2. 60.00 USDC is on the way to Gate spot.');
+    expect(bannerFor(stopAt(across(), 2, { status: 'halted', fundsAt: 'LIGHTER' }))).toBe('Rebalance stopped in round 2.');
   });
 
   it('never throws on a job with no current step', () => {

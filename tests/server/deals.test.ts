@@ -23,9 +23,8 @@ let app: FastifyInstance;
 const runningJob = () =>
   newJob(
     {
-      direction: 'toUsdc',
       route: 'loop',
-      steps: [{ round: 1, kind: 'round', buy: 300, move: 300, arrives: 299.95, borrowLeft: 0, seconds: 130 }],
+      steps: [{ round: 1, kind: 'round', buy: 300, move: 300, arrives: 299.95, borrowLeft: 0, seconds: 130, from: 'CROSSEX', to: 'HYPERLIQUID' }],
       amount: 300,
       costUsd: 0.05,
       target: [],

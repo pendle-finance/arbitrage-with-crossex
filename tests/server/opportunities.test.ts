@@ -402,6 +402,49 @@ describe('GET /api/opportunities', () => {
     expect(group.bestPair).toBeNull();
   });
 
+  it('pairs a Lighter market once the CrossEx symbol list names Lighter, priced from the Lighter book', async () => {
+    const bodies = borosBodies();
+    const listed = bodies['/core/v1/markets'] as { results: { metadata: { platformName: string } }[] };
+    listed.results[1].metadata.platformName = 'Lighter';
+    app = makeTestApp({ borosFetch: borosStub(bodies) });
+    mockGateGet('/rule/symbols', {
+      body: [
+        ruleSymbols[0],
+        { symbol: 'LIGHTER_FUTURE_ETH_USDC', exchange_type: 'LIGHTER', business_type: 'FUTURE', state: 'live' },
+      ],
+    });
+    mockGateGet('/rule/risk_limits', {
+      body: [riskLimits[0], { symbol: 'LIGHTER_FUTURE_ETH_USDC', tiers: [{ leverage_max: '50' }] }],
+    });
+    mockGateGet('/fee', {
+      body: [feeRows[0], { exchange_type: 'LIGHTER', future_maker_fee: '0.0002', future_taker_fee: '0.0005' }],
+    });
+    nock('https://api.hyperliquid.xyz')
+      .post('/info')
+      .reply(200, { levels: [[{ px: '1899', sz: '5000' }], [{ px: '1901', sz: '5000' }]] });
+    nock('https://mainnet.zklighter.elliot.ai')
+      .get('/api/v1/orderBooks')
+      .reply(200, { order_books: [{ symbol: 'ETH', market_id: 0, market_type: 'perp', status: 'active' }] });
+    nock('https://mainnet.zklighter.elliot.ai')
+      .get('/api/v1/orderBookOrders')
+      .query({ market_id: '0', limit: '250' })
+      .reply(200, {
+        bids: [{ price: '1899', remaining_base_amount: '5000' }],
+        asks: [{ price: '1901', remaining_base_amount: '5000' }],
+      });
+
+    const res = await app.inject({ method: 'GET', url: '/api/opportunities', headers: HOST });
+
+    expect(res.statusCode).toBe(200);
+    const { data } = res.json();
+    const pair = data.groups[0].bestPair;
+    expect(pair.shortLeg.crossexSymbol).toBe('HYPERLIQUID_FUTURE_ETH_USDC');
+    expect(pair.longLeg).toMatchObject({ marketId: BINANCE_MARKET, crossexVenue: 'LIGHTER', crossexSymbol: 'LIGHTER_FUTURE_ETH_USDC' });
+    expect(pair.costs.perpEntrySlippageUsd).toBeGreaterThan(0);
+    expect(pair.capitalUsd).not.toBeNull();
+    expect(data.warnings).toEqual([]);
+  });
+
   it('prices from the VENUE:BASE fallback books when the symbol universe is unreachable', async () => {
     app = makeTestApp({
       borosFetch: borosStub(borosBodies()),

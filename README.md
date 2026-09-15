@@ -15,7 +15,7 @@ Not available to, or intended for, any person where such use is unlawful (includ
 A trading terminal for delta-neutral funding-rate arbitrage across Pendle's
 [Boros](https://boros.pendle.finance) and Gate's
 [CrossEx](https://www.gate.com/docs/developers/crossex/en/): one collateral pool backing
-perp positions on multiple venues (BINANCE, BYBIT, GATE, OKX, KRAKEN, HYPERLIQUID).
+perp positions on multiple venues (BINANCE, BYBIT, GATE, OKX, KRAKEN, HYPERLIQUID, LIGHTER).
 
 The trade is four legs. Two **Boros** legs lock a fixed funding rate until a maturity
 date; two **CrossEx** perp legs — long one venue, short another — cancel the floating

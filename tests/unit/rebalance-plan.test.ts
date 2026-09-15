@@ -3,11 +3,11 @@ import { roundToStep } from '../../src/core/numbers';
 import {
   bucketsFrom,
   fit,
+  notionalByWallet,
   planFor,
+  roundSeconds,
   USDC_WALLET,
   USDT_WALLET,
-  TO_USDC_WAIT_SECONDS,
-  TO_USDT_WAIT_SECONDS,
   type AccountLike,
   type AssetLike,
   type CoinRuleLike,
@@ -55,6 +55,7 @@ const LIVE_RATES: RateLike[] = [
 ];
 
 const cents = (value: number): string => roundToStep(value, '0.01', 'nearest');
+const DUST = 1;
 
 function accountOf(assets: AssetLike[]): AccountLike {
   return { availableMargin: '0', marginBalance: '0', initialMargin: '0', assets };
@@ -107,6 +108,14 @@ describe('bucketsFrom interest', () => {
     const [usdc, usdt] = bucketsFrom(account, USDC_RATE, { 'USDC/GATE': 9 });
     expect(usdc.interestPaidUsd).toBe(0);
     expect(usdt.interestPaidUsd).toBe(0);
+  });
+
+  it('charges a USDC Lighter borrow from the first dollar at the Lighter rate', () => {
+    const rates: RateLike[] = [...LIVE_RATES, { coin: 'USDC', exchangeType: 'LIGHTER', hourInterestRate: '0.0000125' }];
+    const account = accountOf([asset('USDC', 'LIGHTER', { equity: -500, liability: 500 })]);
+    const [lighter] = bucketsFrom(account, rates, {});
+    expect(lighter.interestPerDayUsd).toBeCloseTo(500 * 0.0000125 * 24, 9);
+    expect(cents(lighter.interestPerDayUsd)).toBe('0.15');
   });
 
   it('charges a USDT borrow from the first dollar at the USDT rate', () => {
@@ -206,7 +215,11 @@ const OPEN: PlanInputs = {
   spotTakerRate: 0,
   ask: 1.0001,
   bid: 0.9999,
+  notional: { 'USDT/CROSSEX': 1000, 'USDC/HYPERLIQUID': 1000 },
 };
+
+const TO_USDC_WAIT_SECONDS = roundSeconds('CROSSEX', 'HYPERLIQUID');
+const TO_USDT_WAIT_SECONDS = roundSeconds('HYPERLIQUID', 'CROSSEX');
 
 function wallet(coin: string, venue: string, cash: number, upnl = 0): AssetLike {
   const borrow = Math.max(0, -cash);
@@ -356,7 +369,7 @@ describe('planFor Example C', () => {
   });
 
   it('C mix is null when rounds never help', () => {
-    expect(plan.direction).toBe('toUsdt');
+    expect(plan.routes.convert.steps[0]).toMatchObject({ from: 'HYPERLIQUID', to: 'CROSSEX' });
     expect(plan.routes.mix).toBeNull();
     expect(plan.routes.loop).toMatchObject({ rounds: 1, costUsd: 1, seconds: TO_USDT_WAIT_SECONDS });
     expect(plan.routes.convert.costUsd).toBeCloseTo(0.04, 2);
@@ -426,7 +439,7 @@ describe('planFor Example E', () => {
   });
 
   it('E rounds move out of the Hyperliquid wallet less the 1.00 fee', () => {
-    expect(plan.direction).toBe('toUsdt');
+    expect(plan.routes.mix!.steps[0]).toMatchObject({ from: 'HYPERLIQUID', to: 'CROSSEX' });
     expect(plan.routes.mix!.steps[0]).toMatchObject({ kind: 'round', buy: 0, move: 745.44, arrives: 744.44, seconds: 400 });
     expect(plan.routes.mix!.costUsd).toBeCloseTo(2.04, 2);
     expect(plan.routes.mix!.marginFreedUsd).toBeCloseTo(122.47, 2);
@@ -438,7 +451,6 @@ describe('planFor toward USDT with USDC in the Gate bucket', () => {
   const plan = planOf({ usdt: 100, gate: 50, usdc: 250, positionIm: 0 });
 
   it('toward USDT sells the Gate bucket and ends even', () => {
-    expect(plan.direction).toBe('toUsdt');
     for (const route of [plan.routes.loop, plan.routes.convert]) {
       const usdt = walletIn(route.after, 'USDT', 'CROSSEX').equity;
       const usdc = walletIn(route.after, 'USDC', 'HYPERLIQUID').equity;
@@ -468,7 +480,7 @@ describe('planFor sending wallet with no cash', () => {
   const plan = planOf({ usdt: 100, gate: 0, usdc: -5, usdcUpnl: 500, positionIm: 0 });
 
   it('no cash to send is balanced and keeps short of even', () => {
-    expect(plan).toMatchObject({ direction: 'toUsdt', balanced: true, moves: 0, shortOfEven: 197.5, recommended: null });
+    expect(plan).toMatchObject({ balanced: true, noLegs: false, moves: 0, shortOfEven: 197.5, recommended: null });
   });
 
   it('no cash to send leaves no route to start', () => {
@@ -523,8 +535,7 @@ describe('planFor loop sizing', () => {
 
   it('11 USDC out of Hyperliquid is allowed', () => {
     const plan = planOf({ usdt: 0, gate: 0, usdc: 11, usdcUpnl: 100, positionIm: 0 });
-    expect(plan.direction).toBe('toUsdt');
-    expect(plan.routes.loop.steps[0]).toMatchObject({ kind: 'round', move: 11, arrives: 10 });
+    expect(plan.routes.loop.steps[0]).toMatchObject({ kind: 'round', move: 11, arrives: 10, from: 'HYPERLIQUID', to: 'CROSSEX' });
     expect(plan.routes.loop.available).toBe(true);
   });
 
@@ -541,9 +552,9 @@ describe('planFor balanced', () => {
     expect(plan.balanced).toBe(true);
   });
 
-  it('a balanced plan has no direction and no route to run', () => {
+  it('a balanced plan has no route to run', () => {
     const plan = planOf({ usdt: 500, gate: 0, usdc: 499.5, positionIm: 0 });
-    expect(plan).toMatchObject({ direction: null, moves: 0, shortOfEven: 0, recommended: null });
+    expect(plan).toMatchObject({ moves: 0, shortOfEven: 0, recommended: null });
     expect(plan.routes.mix).toBeNull();
     expect(plan.routes.loop).toMatchObject({ available: false, reason: null, steps: [] });
     expect(plan.routes.convert).toMatchObject({ available: false, reason: null, steps: [] });
@@ -615,5 +626,186 @@ describe('planFor loose Gate numbers', () => {
     expect(plan.routes.loop.steps.every((step) => step.move > 0)).toBe(true);
     const rounds = planOf(ACCOUNT_A, { ...OPEN, coins: [{ ...USDC_RULE, minTransAmount: min }] }).routes.loop.steps;
     expect(rounds.map((step) => step.move)).toEqual([24.51, 29.93, 36.58, 44.71, 40.16]);
+  });
+});
+
+interface Wallets3 {
+  usdt: number;
+  hyperliquid: number;
+  lighter: number;
+  gate?: number;
+  positionIm: number;
+}
+
+function threeWallets(f: Wallets3): AccountLike {
+  const marginBalance = f.usdt + f.hyperliquid + f.lighter + (f.gate ?? 0);
+  const borrows = [f.usdt, f.hyperliquid, f.lighter].reduce((total, cash) => total + Math.max(0, -cash) / 5, 0);
+  return {
+    availableMargin: cents(marginBalance - f.positionIm - borrows),
+    marginBalance: cents(marginBalance),
+    initialMargin: cents(f.positionIm + borrows),
+    assets: [
+      wallet('USDT', 'CROSSEX', f.usdt),
+      wallet('USDC', 'HYPERLIQUID', f.hyperliquid),
+      wallet('USDC', 'LIGHTER', f.lighter),
+      wallet('USDC', 'GATE', f.gate ?? 0),
+    ],
+  };
+}
+
+function splitPlan(f: Wallets3, notional: Record<string, number>) {
+  const account = threeWallets(f);
+  return planFor(bucketsFrom(account, BOTH_RATES, {}), account, { ...OPEN, notional });
+}
+
+const moveOf = (step: { from: string; to: string }) => `${step.from}>${step.to}`;
+
+describe('notionalByWallet', () => {
+  it('counts Hyperliquid and Lighter legs in their own USDC wallets and every other venue in USDT', () => {
+    const legs = [
+      { exchange: 'HYPERLIQUID', value: 1538.59 },
+      { exchange: 'LIGHTER', value: 400 },
+      { exchange: 'GATE', value: 1377.39 },
+      { exchange: 'BINANCE', value: 124.07 },
+      { exchange: 'LIGHTER', value: -100 },
+    ];
+    expect(notionalByWallet(legs)).toEqual({
+      'USDC/HYPERLIQUID': 1538.59,
+      'USDC/LIGHTER': 500,
+      'USDT/CROSSEX': 1377.39 + 124.07,
+    });
+  });
+});
+
+describe('planFor split by notional', () => {
+  it('Hyperliquid and Lighter each hedged against Gate at one size gives USDT 50, Hyperliquid 25, Lighter 25', () => {
+    const plan = splitPlan(
+      { usdt: 3000, hyperliquid: 0, lighter: 0, positionIm: 1200 },
+      { 'USDT/CROSSEX': 20000, 'USDC/HYPERLIQUID': 10000, 'USDC/LIGHTER': 10000 },
+    );
+    expect(plan.split.map((row) => [row.venue, row.share])).toEqual([
+      ['CROSSEX', 0.5],
+      ['HYPERLIQUID', 0.25],
+      ['LIGHTER', 0.25],
+    ]);
+    expect(plan.routes.convert.steps.map(moveOf)).toEqual(['CROSSEX>HYPERLIQUID', 'CROSSEX>LIGHTER']);
+    for (const route of [plan.routes.loop, plan.routes.convert]) {
+      const usdt = walletIn(route.after, 'USDT', 'CROSSEX').equity;
+      expect(Math.abs(walletIn(route.after, 'USDC', 'HYPERLIQUID').equity - usdt / 2)).toBeLessThanOrEqual(0.05);
+      expect(Math.abs(walletIn(route.after, 'USDC', 'LIGHTER').equity - usdt / 2)).toBeLessThanOrEqual(0.05);
+    }
+  });
+
+  it('one job makes both moves: a Lighter round pays 1.03 and takes 235 s', () => {
+    const plan = splitPlan(
+      { usdt: 3000, hyperliquid: 0, lighter: 0, positionIm: 1200 },
+      { 'USDT/CROSSEX': 20000, 'USDC/HYPERLIQUID': 10000, 'USDC/LIGHTER': 10000 },
+    );
+    expect(plan.recommended).toBe('loop');
+    expect(plan.routes.loop.steps).toEqual([
+      expect.objectContaining({ round: 1, from: 'CROSSEX', to: 'HYPERLIQUID', move: 749.73, arrives: 749.68, seconds: 130 }),
+      expect.objectContaining({ round: 2, from: 'CROSSEX', to: 'LIGHTER', move: 750.71, arrives: 749.68, seconds: 235 }),
+    ]);
+    expect(plan.routes.loop).toMatchObject({ costUsd: 1.23, seconds: 365, rounds: 2 });
+  });
+
+  it('a larger Hyperliquid leg takes a larger share', () => {
+    const plan = splitPlan(
+      { usdt: 3000, hyperliquid: 0, lighter: 0, positionIm: 1200 },
+      { 'USDT/CROSSEX': 30000, 'USDC/HYPERLIQUID': 20000, 'USDC/LIGHTER': 10000 },
+    );
+    const after = plan.routes.convert.after;
+    expect(walletIn(after, 'USDC', 'HYPERLIQUID').equity / walletIn(after, 'USDC', 'LIGHTER').equity).toBeCloseTo(2, 2);
+    expect(walletIn(after, 'USDT', 'CROSSEX').equity / walletIn(after, 'USDC', 'LIGHTER').equity).toBeCloseTo(3, 2);
+  });
+
+  it('a wallet with no open legs empties into the wallet with legs', () => {
+    const plan = splitPlan(
+      { usdt: 1000, hyperliquid: 500, lighter: 0, positionIm: 200 },
+      { 'USDT/CROSSEX': 5000, 'USDC/LIGHTER': 5000 },
+    );
+    expect(plan.split.find((row) => row.venue === 'HYPERLIQUID')).toMatchObject({ notionalUsd: 0, share: 0 });
+    expect(plan.routes.convert.steps.map(moveOf)).toEqual(['HYPERLIQUID>LIGHTER', 'CROSSEX>LIGHTER']);
+    for (const route of [plan.routes.loop, plan.routes.convert]) {
+      expect(walletIn(route.after, 'USDC', 'HYPERLIQUID').equity).toBeLessThan(DUST);
+      const usdt = walletIn(route.after, 'USDT', 'CROSSEX').equity;
+      expect(Math.abs(walletIn(route.after, 'USDC', 'LIGHTER').equity - usdt)).toBeLessThanOrEqual(0.05);
+    }
+  });
+
+  it('Hyperliquid to Lighter goes through Gate spot with no sale and pays both fees', () => {
+    const plan = splitPlan(
+      { usdt: 0, hyperliquid: 900, lighter: 100, positionIm: 200 },
+      { 'USDC/HYPERLIQUID': 5000, 'USDC/LIGHTER': 5000 },
+    );
+    expect(plan.routes.loop.steps).toEqual([
+      expect.objectContaining({ kind: 'round', buy: 0, from: 'HYPERLIQUID', to: 'LIGHTER', move: 401.01, arrives: 398.98, seconds: 625 }),
+    ]);
+    expect(plan.routes.loop.costUsd).toBe(2.03);
+    expect(plan.routes.convert.steps).toEqual([
+      expect.objectContaining({ kind: 'convert', from: 'HYPERLIQUID', to: 'LIGHTER', move: 400.8, arrives: 399.19 }),
+    ]);
+    expect(plan.routes.convert.costUsd).toBe(1.6);
+    expect(plan.recommended).toBe('convert');
+  });
+
+  it('Lighter to Hyperliquid pays only the 0.05 Hyperliquid fee', () => {
+    const plan = splitPlan(
+      { usdt: 0, hyperliquid: 100, lighter: 900, positionIm: 200 },
+      { 'USDC/HYPERLIQUID': 5000, 'USDC/LIGHTER': 5000 },
+    );
+    expect(plan.routes.loop.steps).toEqual([
+      expect.objectContaining({ from: 'LIGHTER', to: 'HYPERLIQUID', move: 400.02, arrives: 399.97, seconds: 305 }),
+    ]);
+    expect(plan.routes.loop.costUsd).toBe(0.05);
+    expect(plan.recommended).toBe('loop');
+  });
+
+  it('a Hyperliquid to Lighter round is at least 12, so 11 still reaches Gate spot after the 1.00 fee', () => {
+    const plan = splitPlan(
+      { usdt: 0, hyperliquid: 521, lighter: 500, positionIm: 0 },
+      { 'USDC/HYPERLIQUID': 5000, 'USDC/LIGHTER': 5000 },
+    );
+    expect(plan.routes.loop).toMatchObject({ available: false, reason: 'The move is under the 12 USDC minimum.' });
+    expect(plan.recommended).toBe('convert');
+  });
+
+  it('a move under 11 next to a move that loops blocks the spot loop and leaves the mix', () => {
+    const plan = splitPlan(
+      { usdt: 476, hyperliquid: 478, lighter: 24.5, positionIm: 150 },
+      { 'USDT/CROSSEX': 1672, 'USDC/HYPERLIQUID': 1709 },
+    );
+    expect(plan.routes.loop).toMatchObject({ available: false, reason: 'The move is under the 11 USDC minimum.' });
+    expect(plan.routes.mix?.steps.map((step) => `${step.kind} ${moveOf(step)}`)).toEqual([
+      'round LIGHTER>HYPERLIQUID',
+      'convert LIGHTER>CROSSEX',
+    ]);
+    expect(plan.recommended).toBe('mix');
+  });
+
+  it('with no open legs there is nothing to rebalance', () => {
+    const plan = splitPlan({ usdt: 1000, hyperliquid: 0, lighter: 0, positionIm: 0 }, {});
+    expect(plan).toMatchObject({ balanced: true, noLegs: true, moves: 0, shortOfEven: 0, recommended: null });
+    expect(plan.routes.loop.steps).toEqual([]);
+    expect(plan.routes.convert.steps).toEqual([]);
+  });
+
+  it('a Lighter wallet under 1 with no legs stays out of the split', () => {
+    const plain = planOf({ usdt: 1000, gate: 0, usdc: 200, positionIm: 100 });
+    const withDust = splitPlan(
+      { usdt: 1000, hyperliquid: 200, lighter: -0.5, positionIm: 100 },
+      { 'USDT/CROSSEX': 1000, 'USDC/HYPERLIQUID': 1000 },
+    );
+    expect(withDust.split.map((row) => row.venue)).toEqual(['CROSSEX', 'HYPERLIQUID']);
+    expect(withDust.routes.loop.steps.map((step) => step.move)).toEqual(plain.routes.loop.steps.map((step) => step.move));
+  });
+
+  it('a spot market that is closed does not block a move between the two USDC wallets', () => {
+    const plan = planFor(
+      bucketsFrom(threeWallets({ usdt: 0, hyperliquid: 100, lighter: 900, positionIm: 200 }), BOTH_RATES, {}),
+      threeWallets({ usdt: 0, hyperliquid: 100, lighter: 900, positionIm: 200 }),
+      { ...OPEN, spotRule: null, ask: null, bid: null, notional: { 'USDC/HYPERLIQUID': 5000, 'USDC/LIGHTER': 5000 } },
+    );
+    expect(plan.routes.loop).toMatchObject({ available: true, reason: null });
   });
 });

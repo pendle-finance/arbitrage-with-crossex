@@ -335,9 +335,8 @@ describe('POST /api/version/update', () => {
     jobs.write(
       newJob(
         {
-          direction: 'toUsdc',
           route: 'loop',
-          steps: [{ round: 1, kind: 'round', buy: 12, move: 12, arrives: 11.95, borrowLeft: 0, seconds: 130 }],
+          steps: [{ round: 1, kind: 'round', buy: 12, move: 12, arrives: 11.95, borrowLeft: 0, seconds: 130, from: 'CROSSEX', to: 'HYPERLIQUID' }],
           amount: 12,
           costUsd: 0.05,
           target: [],

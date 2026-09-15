@@ -22,7 +22,6 @@ import {
   type FetchLike,
 } from '../../core/boros/client';
 import {
-  BOROS_VENUE_TO_CROSSEX,
   buildOpportunities,
   groupBorosMarkets,
   type BorosEntryMode,
@@ -30,7 +29,7 @@ import {
   type ExitMode,
 } from '../../core/boros/opportunities';
 import { normalizeVenue } from '../../core/boros/venue';
-import { fetchVenueBook, type NormalizedBook } from '../../core/estimate/books';
+import { BOOK_VENUES, fetchVenueBook, type NormalizedBook } from '../../core/estimate/books';
 import {
   feeRowsForTier,
   feeTierLabel,
@@ -64,7 +63,7 @@ interface OpportunitiesQuery {
 
 /** Default quote for a venue's PUBLIC book when no CrossEx symbol names one. */
 function fallbackQuote(venue: string): string {
-  if (venue === 'HYPERLIQUID') return 'USDC';
+  if (venue === 'HYPERLIQUID' || venue === 'LIGHTER') return 'USDC';
   if (venue === 'KRAKEN') return 'USD';
   return 'USDT';
 }
@@ -235,13 +234,16 @@ export function opportunitiesRoutes(deps: AppDeps) {
           `Couldn't load the CrossEx symbol list right now (${category}) — pricing the perp legs from the venues' public books instead; listings and leverage return on the next refresh.`,
         );
       }
+      const crossexVenues: ReadonlySet<string> = rulesAvailable
+        ? new Set([...symbolsByVenueBase.keys()].map((key) => key.split(':')[0]))
+        : BOOK_VENUES;
 
       // Fees are the ONE genuinely per-account input (/crossex/fee is auth-only).
       // An explicit tier is a deliberate what-if and always wins; otherwise read
       // the account's schedule and fall back to VIP 0 when there is no account.
       let assumedTier: CrossexFeeTier | undefined;
       if (feeTier !== undefined) {
-        feeRows = feeRowsForTier(feeTier);
+        feeRows = feeRowsForTier(feeTier, crossexVenues);
         assumedTier = feeTier;
       } else {
         try {
@@ -253,7 +255,7 @@ export function opportunitiesRoutes(deps: AppDeps) {
           );
           feeRows = value as VenueFeeRow[];
         } catch {
-          feeRows = feeRowsForTier('vip0');
+          feeRows = feeRowsForTier('vip0', crossexVenues);
           assumedTier = 'vip0';
         }
       }
@@ -275,8 +277,8 @@ export function opportunitiesRoutes(deps: AppDeps) {
       const fallbackBooks = new Set<string>();
       for (const plan of groupBorosMarkets(markets, nowSec)) {
         for (const market of plan.markets) {
-          const crossexVenue = BOROS_VENUE_TO_CROSSEX[normalizeVenue(market.venue)];
-          if (!crossexVenue) continue;
+          const crossexVenue = normalizeVenue(market.venue);
+          if (!crossexVenues.has(crossexVenue)) continue;
           bookMarketIds.push(market.marketId);
           const base = market.base.toUpperCase();
           const symbol = symbolsByVenueBase.get(`${crossexVenue}:${base}`);
@@ -341,6 +343,7 @@ export function opportunitiesRoutes(deps: AppDeps) {
           borosBooks,
           venueBooks,
           symbolsByVenueBase,
+          crossexVenues,
           leverageMaxBySymbol,
           feeRows,
           nowSec,

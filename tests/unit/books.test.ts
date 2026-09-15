@@ -6,7 +6,9 @@ import {
   parseGateBook,
   parseHlBook,
   parseKrakenBook,
+  parseLighterBook,
   parseOkxBook,
+  lighterMarketId,
 } from '../../src/core/estimate/books';
 
 describe('nativeSymbol', () => {
@@ -16,6 +18,7 @@ describe('nativeSymbol', () => {
     expect(nativeSymbol('OKX', 'BTC', 'USDT')).toBe('BTC-USDT-SWAP');
     expect(nativeSymbol('KRAKEN', 'BTC', 'USD')).toBe('PF_BTCUSD');
     expect(nativeSymbol('HYPERLIQUID', 'BTC', 'USDC')).toBe('BTC');
+    expect(nativeSymbol('LIGHTER', 'ETH', 'USDC')).toBe('ETH');
   });
 
   it('GATE always uses the USDT-settled contract regardless of the target quote', () => {
@@ -154,6 +157,66 @@ describe('parseHlBook', () => {
   it('returns null on garbage', () => {
     expect(parseHlBook({ levels: [[]] })).toBeNull();
     expect(parseHlBook({})).toBeNull();
+  });
+});
+
+describe('parseLighterBook', () => {
+  const order = (price: string, qty: string) => ({
+    order_index: 1,
+    order_id: '1',
+    owner_account_index: 7,
+    initial_base_amount: qty,
+    remaining_base_amount: qty,
+    price,
+    order_expiry: 1789532407887,
+    transaction_time: 0,
+  });
+  const payload = {
+    code: 200,
+    total_asks: 3,
+    asks: [order('2499.07', '0.0443'), order('2499.07', '0.5'), order('2499.10', '1.2')],
+    total_bids: 2,
+    bids: [order('2498.98', '1.3865'), order('2498.90', '0.25')],
+  };
+
+  it('merges single orders at one price into one level', () => {
+    const b = parseLighterBook(payload)!;
+    expect(b.asks).toEqual([
+      [2499.07, 0.5443],
+      [2499.1, 1.2],
+    ]);
+    expect(b.bids).toEqual([
+      [2498.98, 1.3865],
+      [2498.9, 0.25],
+    ]);
+  });
+
+  it('returns null on garbage', () => {
+    expect(parseLighterBook({ asks: [], bids: [] })).toBeNull();
+    expect(parseLighterBook({})).toBeNull();
+  });
+});
+
+describe('lighterMarketId', () => {
+  const list = {
+    code: 200,
+    order_books: [
+      { symbol: 'ETH/USDC', market_id: 2048, market_type: 'spot', status: 'active' },
+      { symbol: 'ETH', market_id: 0, market_type: 'perp', status: 'active' },
+      { symbol: 'BTC', market_id: 1, market_type: 'perp', status: 'active' },
+      { symbol: 'OLD', market_id: 90, market_type: 'perp', status: 'inactive' },
+    ],
+  };
+
+  it('finds the active perp market for a base coin, id 0 included', () => {
+    expect(lighterMarketId(list, 'ETH')).toBe('0');
+    expect(lighterMarketId(list, 'BTC')).toBe('1');
+  });
+
+  it('returns null for a spot-only, inactive or unknown coin', () => {
+    expect(lighterMarketId(list, 'OLD')).toBeNull();
+    expect(lighterMarketId(list, 'DOGE')).toBeNull();
+    expect(lighterMarketId({}, 'ETH')).toBeNull();
   });
 });
 

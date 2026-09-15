@@ -105,6 +105,7 @@ function input(over: Partial<BuildOpportunitiesInput> = {}): BuildOpportunitiesI
       ['HYPERLIQUID:ETH', HL_SYMBOL],
       ['BINANCE:ETH', BN_SYMBOL],
     ]),
+    crossexVenues: new Set(['BINANCE', 'BYBIT', 'GATE', 'HYPERLIQUID', 'KRAKEN', 'LIGHTER', 'OKX']),
     leverageMaxBySymbol: new Map([
       [HL_SYMBOL, HL_LEVERAGE],
       [BN_SYMBOL, BN_LEVERAGE],
@@ -667,7 +668,7 @@ describe('buildOpportunities — degraded modes', () => {
   it('a venue with no CrossEx perp is listed but never paired', () => {
     const out = buildOpportunities(
       input({
-        markets: [hlMarket, bnMarket, { ...bnMarket, marketId: 190, name: 'Lighter ETH', venue: 'Lighter', midApr: 0.07 }],
+        markets: [hlMarket, bnMarket, { ...bnMarket, marketId: 190, name: 'KuCoin ETH', venue: 'KuCoin', midApr: 0.07 }],
       }),
       opts(),
     );
@@ -676,8 +677,54 @@ describe('buildOpportunities — degraded modes', () => {
     expect(group.markets.find((m) => m.marketId === 190)!.crossexVenue).toBeNull();
     expect(group.pairs).toHaveLength(1);
     expect(group.warnings.join(' ')).toMatch(
-      /Lighter ETH trades against Lighter, which has no CrossEx perp venue/,
+      /KuCoin ETH trades against KuCoin, which has no CrossEx perp venue/,
     );
+  });
+
+  it('a venue pairs as soon as CrossEx lists it, with no code change', () => {
+    const LT_SYMBOL = 'LIGHTER_FUTURE_ETH_USDC';
+    const ltMarket: BorosMarket = { ...bnMarket, marketId: 187, name: 'Lighter ETH 31 Aug 2026', venue: 'Lighter', midApr: 0.07 };
+    const markets = [hlMarket, bnMarket, ltMarket];
+    const listed = buildOpportunities(
+      input({
+        markets,
+        borosBooks: new Map([
+          [155, borosBook(155, 0.0899, 0.0901)],
+          [101, borosBook(101, 0.0449, 0.0451)],
+          [187, borosBook(187, 0.0699, 0.0701)],
+        ]),
+        venueBooks: new Map([
+          [HL_SYMBOL, perpBook(0.1)],
+          [BN_SYMBOL, perpBook(0.1)],
+          [LT_SYMBOL, perpBook(0.1)],
+        ]),
+        symbolsByVenueBase: new Map([
+          ['HYPERLIQUID:ETH', HL_SYMBOL],
+          ['BINANCE:ETH', BN_SYMBOL],
+          ['LIGHTER:ETH', LT_SYMBOL],
+        ]),
+        leverageMaxBySymbol: new Map([
+          [HL_SYMBOL, HL_LEVERAGE],
+          [BN_SYMBOL, BN_LEVERAGE],
+          [LT_SYMBOL, 50],
+        ]),
+        feeRows: [...feeRows, { exchangeType: 'LIGHTER', futureMakerFee: '0.0002', futureTakerFee: '0.0005' }],
+      }),
+      opts(),
+    );
+    const group = listed.groups[0];
+    const lighter = group.markets.find((m) => m.marketId === 187)!;
+    expect(lighter.crossexVenue).toBe('LIGHTER');
+    expect(lighter.crossexSymbol).toBe(LT_SYMBOL);
+    expect(group.pairs).toHaveLength(3);
+    const ltPair = group.pairs.find((p) => p.shortLeg.marketId === 155 && p.longLeg.marketId === 187)!;
+    expect(ltPair.longLeg.crossexVenue).toBe('LIGHTER');
+    expect(ltPair.costs.perpEntryFeesUsd).toBeCloseTo(2 * N * 0.0005, 8);
+    expect(ltPair.netFixedApr).not.toBeNull();
+
+    const unlisted = buildOpportunities(input({ markets, crossexVenues: new Set(['HYPERLIQUID', 'BINANCE']) }), opts());
+    expect(unlisted.groups[0].markets.find((m) => m.marketId === 187)!.crossexVenue).toBeNull();
+    expect(unlisted.groups[0].pairs).toHaveLength(1);
   });
 
   it('a mapped venue with no live CrossEx symbol still pairs — venue fees resolve, missing book nulls the net', () => {

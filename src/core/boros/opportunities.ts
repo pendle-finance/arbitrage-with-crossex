@@ -39,17 +39,6 @@ import { resolveFeeRates, resolveVenueFeeRates, type VenueFeeRow } from '../esti
 import { BOROS_TOKEN_SYMBOLS, type BorosMarket, type BorosOrderBook } from './client';
 import { normalizeVenue, SECONDS_IN_YEAR } from './venue';
 
-/** Boros platformName (normalized) → CrossEx exchange key. Venues absent here
- * (Kucoin, Lighter) are listed in the group but can't carry a perp leg. */
-export const BOROS_VENUE_TO_CROSSEX: Record<string, string> = {
-  BINANCE: 'BINANCE',
-  BYBIT: 'BYBIT',
-  GATE: 'GATE',
-  OKX: 'OKX',
-  HYPERLIQUID: 'HYPERLIQUID',
-  KRAKEN: 'KRAKEN',
-};
-
 /** Fungible tickers that must land in ONE group (mirrors boros-tools'
  * _UNDERLYING_GROUPS) — the books trade the same underlying under two names. */
 const UNDERLYING_GROUPS: Record<string, string> = {
@@ -226,6 +215,7 @@ export interface BuildOpportunitiesInput {
   venueBooks: Map<string, NormalizedBook | null>;
   /** `VENUE:BASE` → live CrossEx symbol. */
   symbolsByVenueBase: Map<string, string>;
+  crossexVenues: ReadonlySet<string>;
   /** CrossEx symbol → venue max leverage; absent = the risk-limit read failed
    * or wasn't attempted, which nulls that pair's capital. */
   leverageMaxBySymbol: Map<string, number>;
@@ -395,7 +385,8 @@ function buildMarketRow(
   options: BuildOpportunitiesOptions,
   collateralPriceUsd: number | null,
 ): MarketRowBuild {
-  const crossexVenue = BOROS_VENUE_TO_CROSSEX[normalizeVenue(market.venue)] ?? null;
+  const venue = normalizeVenue(market.venue);
+  const crossexVenue = input.crossexVenues.has(venue) ? venue : null;
   const base = market.base.toUpperCase();
   const crossexSymbol = crossexVenue
     ? (input.symbolsByVenueBase.get(`${crossexVenue}:${base}`) ?? null)

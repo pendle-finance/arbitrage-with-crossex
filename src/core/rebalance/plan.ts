@@ -1,35 +1,54 @@
 import { roundToStep } from '../numbers';
 
 export const USDC_WALLET = { coin: 'USDC', venue: 'HYPERLIQUID' } as const;
+export const LIGHTER_WALLET = { coin: 'USDC', venue: 'LIGHTER' } as const;
 export const USDT_WALLET = { coin: 'USDT', venue: 'CROSSEX' } as const;
-export type Wallet = typeof USDC_WALLET | typeof USDT_WALLET;
 export const SPOT_SYMBOL = 'GATE_SPOT_USDC_USDT';
 export const SPOT_PAIR = 'USDC_USDT';
 const HYPERLIQUID_FREE_BORROW_USDC = 10000;
-export const TO_USDC_WAIT_SECONDS = 130;
-export const TO_USDT_WAIT_SECONDS = 400;
 export const CONVERT_RATE = 0.002;
 export const HYPERLIQUID_DEPOSIT_FEE_USD = 0.05;
 export const HYPERLIQUID_WITHDRAW_FEE_USD = 1;
 export const HYPERLIQUID_MIN_USDC = 11;
+export const LIGHTER_DEPOSIT_FEE_USD = 1.03;
 const APP_FLOOR = 1.12;
 const BORROW_INITIAL_MARGIN = 0.2;
 export const MIN_TRANSFER = 0.00001;
 export const SPOT_MIN_QUOTE_USDT = 3;
 const RECOMMENDED_MAX_SECONDS = 900;
 export const DUST_USDC = 1;
+const GATE_HOP_SECONDS = 5;
 
-export type Direction = 'toUsdc' | 'toUsdt';
+export type Pool = 'CROSSEX' | 'HYPERLIQUID' | 'LIGHTER';
+export type Venue = Exclude<Pool, 'CROSSEX'>;
+export const POOLS: readonly Pool[] = ['CROSSEX', 'HYPERLIQUID', 'LIGHTER'];
+const VENUES: readonly Venue[] = ['HYPERLIQUID', 'LIGHTER'];
 
-const ROUND_CAP: Record<Direction, number> = { toUsdc: 6, toUsdt: 2 };
+interface VenueRule {
+  inFeeUsd: number;
+  outFeeUsd: number;
+  inSeconds: number;
+  outSeconds: number;
+}
 
-/** Where the cash lands. A move repays that wallet's borrow first. */
-export const TARGET: Record<Direction, Wallet> = { toUsdc: USDC_WALLET, toUsdt: USDT_WALLET };
+const VENUE: Record<Venue, VenueRule> = {
+  HYPERLIQUID: {
+    inFeeUsd: HYPERLIQUID_DEPOSIT_FEE_USD,
+    outFeeUsd: HYPERLIQUID_WITHDRAW_FEE_USD,
+    inSeconds: 125,
+    outSeconds: 395,
+  },
+  LIGHTER: { inFeeUsd: LIGHTER_DEPOSIT_FEE_USD, outFeeUsd: 0, inSeconds: 230, outSeconds: 180 },
+};
 
-/** `USDC/HYPERLIQUID`: the key the interest ledger and the buckets share. */
 export const walletKey = (coin: string, venue: string): string => `${coin}/${venue}`;
 
 export const GATE_WALLET = { coin: 'USDC', venue: 'GATE' } as const;
+
+export const poolWallet = (pool: Pool): { coin: string; venue: string } =>
+  pool === 'CROSSEX' ? USDT_WALLET : { coin: 'USDC', venue: pool };
+
+export const isVenue = (value: string): value is Venue => (VENUES as readonly string[]).includes(value);
 
 const PAUSED_REASON = 'Gate paused USDC transfers.';
 const CLOSED_REASON = 'The spot market for USDC is closed.';
@@ -37,7 +56,7 @@ const NO_ROUND_REASON = 'Free margin is too low for an 11 USDC round.';
 const NO_CASH_REASON = 'Not enough cash for an 11 USDC round.';
 const underMinimumReason = (minimum: number): string => `The move is under the ${minimum} USDC minimum.`;
 
-export type GateAccount = 'SPOT' | 'CROSSEX' | 'CROSSEX_GATE' | 'CROSSEX_HYPERLIQUID';
+export type GateAccount = 'SPOT' | 'CROSSEX' | 'CROSSEX_GATE' | 'CROSSEX_HYPERLIQUID' | 'CROSSEX_LIGHTER';
 export type TransferCoin = 'USDT' | 'USDC';
 export type RouteName = 'mix' | 'loop' | 'convert';
 
@@ -97,6 +116,13 @@ export interface WalletAfter {
   equity: number;
 }
 
+export interface WalletShare {
+  coin: string;
+  venue: string;
+  notionalUsd: number;
+  share: number;
+}
+
 export interface PlannedStep {
   round: number | null;
   kind: 'round' | 'convert';
@@ -105,6 +131,8 @@ export interface PlannedStep {
   arrives: number;
   borrowLeft: number;
   seconds: number;
+  from: Pool;
+  to: Pool;
 }
 
 export interface RoutePlan {
@@ -121,11 +149,12 @@ export interface RoutePlan {
 }
 
 export interface EvenPlan {
-  direction: Direction | null;
   balanced: boolean;
+  noLegs: boolean;
   moves: number;
   shortOfEven: number;
   roundCap: number;
+  split: WalletShare[];
   routes: { mix: RoutePlan | null; loop: RoutePlan; convert: RoutePlan };
   recommended: RouteName | null;
 }
@@ -136,6 +165,7 @@ export interface PlanInputs {
   spotTakerRate: number;
   ask: number | null;
   bid: number | null;
+  notional: Readonly<Record<string, number>>;
 }
 
 export interface SpotBalance {
@@ -177,13 +207,18 @@ const PATHS: PathRule[] = [
     feeUsd: HYPERLIQUID_WITHDRAW_FEE_USD,
     seconds: 400,
   },
+  { coin: 'USDC', from: 'SPOT', to: 'CROSSEX_LIGHTER', min: HYPERLIQUID_MIN_USDC, feeUsd: LIGHTER_DEPOSIT_FEE_USD, seconds: 230 },
+  { coin: 'USDC', from: 'CROSSEX_LIGHTER', to: 'SPOT', min: HYPERLIQUID_MIN_USDC, feeUsd: 0, seconds: 180 },
 ];
 
 const CROSSEX_VENUE: Record<Exclude<GateAccount, 'SPOT'>, string> = {
   CROSSEX: USDT_WALLET.venue,
   CROSSEX_GATE: GATE_WALLET.venue,
   CROSSEX_HYPERLIQUID: USDC_WALLET.venue,
+  CROSSEX_LIGHTER: LIGHTER_WALLET.venue,
 };
+
+const VENUE_WALLETS: readonly GateAccount[] = ['CROSSEX_HYPERLIQUID', 'CROSSEX_LIGHTER'];
 
 function num(s: string | undefined): number {
   const n = Number(s);
@@ -204,6 +239,30 @@ export function ceilCents(value: number): number {
 
 function positive(value: number | null): number | null {
   return value !== null && value > 0 ? value : null;
+}
+
+const outFee = (pool: Pool): number => (pool === 'CROSSEX' ? 0 : VENUE[pool].outFeeUsd);
+const inFee = (pool: Pool): number => (pool === 'CROSSEX' ? 0 : VENUE[pool].inFeeUsd);
+
+export const roundSeconds = (from: Pool, to: Pool): number =>
+  (from === 'CROSSEX' ? GATE_HOP_SECONDS : VENUE[from].outSeconds) +
+  (to === 'CROSSEX' ? GATE_HOP_SECONDS : VENUE[to].inSeconds);
+
+export const spotArrivalFor = (from: Pool, move: number): number => floorCents(move - outFee(from));
+
+export const arrivesFor = (from: Pool, to: Pool, move: number): number => floorCents(move - outFee(from) - inFee(to));
+
+export const roundMinimum = (from: Pool, to: Pool, minimum = HYPERLIQUID_MIN_USDC): number =>
+  from !== 'CROSSEX' && to !== 'CROSSEX' ? minimum + outFee(from) : minimum;
+
+export function notionalByWallet(legs: readonly { exchange: string; value: number }[]): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const leg of legs) {
+    const wallet = isVenue(leg.exchange) ? poolWallet(leg.exchange) : USDT_WALLET;
+    const key = walletKey(wallet.coin, wallet.venue);
+    out[key] = (out[key] ?? 0) + Math.abs(leg.value);
+  }
+  return out;
 }
 
 export function bucketsFrom(account: AccountLike, rates: RateLike[], interestPaid: InterestPaidLike): Bucket[] {
@@ -242,11 +301,6 @@ export function fit(account: { marginBalance: number; initialMargin: number }, c
   const borrowFloor = APP_FLOOR * BORROW_INITIAL_MARGIN;
   const room = free <= unborrowed ? free : (free + borrowFloor * unborrowed) / (1 + borrowFloor);
   return floorCents(Math.max(0, Math.min(cash, room)));
-}
-
-export function arrivesFor(direction: Direction, move: number): number {
-  const fee = direction === 'toUsdc' ? HYPERLIQUID_DEPOSIT_FEE_USD : HYPERLIQUID_WITHDRAW_FEE_USD;
-  return floorCents(move - fee);
 }
 
 function repayment(
@@ -294,27 +348,35 @@ interface Holding {
   equity: number;
 }
 
-interface Book {
-  direction: Direction;
+interface Move {
+  from: Pool;
+  to: Pool;
+  check: Pool;
+}
+
+interface Wallets {
   usdt: Holding;
-  usdc: Holding;
   gate: Holding;
+  venues: Record<Venue, Holding>;
+}
+
+interface Book extends Wallets {
   gateMovable: number;
+  buckets: Partial<Record<Pool, Bucket>>;
+  pools: Pool[];
+  notional: Record<Pool, number>;
+  shares: Record<Pool, number>;
   marginBalance: number;
   initialMargin: number;
-  receiving: Bucket | undefined;
   ask: number;
   bid: number;
   takerRate: number;
   minimum: number;
 }
 
-interface Run {
-  usdt: Holding;
-  usdc: Holding;
-  gate: Holding;
+interface Run extends Wallets {
   gateMovable: number;
-  received: number;
+  received: Record<Pool, number>;
   costUsd: number;
   steps: PlannedStep[];
   cashLimited: boolean;
@@ -338,154 +400,221 @@ const leaveMinimum: Sizer = (cap, left, minimum) => {
   return rest > 0 && rest < minimum && shrunk >= minimum ? shrunk : size;
 };
 
-function sendingCash(book: Book, run: Run): number {
-  if (book.direction === 'toUsdt') return Math.max(0, run.usdc.cash);
-  return Math.max(0, run.usdt.cash) + run.gateMovable;
+const equityOf = (wallets: Wallets, pool: Pool): number =>
+  pool === 'CROSSEX' ? wallets.usdt.equity + wallets.gate.cash : wallets.venues[pool].equity;
+
+function shiftPool(run: Run, pool: Pool, delta: number): void {
+  if (pool === 'CROSSEX') run.usdt = shifted(run.usdt, delta);
+  else run.venues[pool] = shifted(run.venues[pool], delta);
 }
 
-function sendingEquity(book: Book, run: Run): number {
-  if (book.direction === 'toUsdt') return run.usdc.equity;
-  return Math.max(0, run.usdt.equity) + run.gateMovable;
+function sendingCash(run: Run, move: Move): number {
+  if (move.from === 'CROSSEX') return Math.max(0, run.usdt.cash) + run.gateMovable;
+  return Math.max(0, run.venues[move.from].cash);
+}
+
+function sendingEquity(run: Run, move: Move): number {
+  if (move.from === 'CROSSEX') return Math.max(0, run.usdt.equity) + run.gateMovable;
+  return run.venues[move.from].equity;
 }
 
 const borrowOf = (holding: Holding): number => Math.max(0, -holding.equity);
 
 function marginsOf(book: Book, run: Run): { marginBalance: number; initialMargin: number } {
   const moved =
-    run.usdt.equity - book.usdt.equity + (run.usdc.equity - book.usdc.equity) + (run.gate.equity - book.gate.equity);
-  const borrowed =
-    Math.max(0, borrowOf(run.usdt) - borrowOf(book.usdt)) + Math.max(0, borrowOf(run.usdc) - borrowOf(book.usdc));
+    VENUES.reduce(
+      (total, venue) => total + (run.venues[venue].equity - book.venues[venue].equity),
+      run.usdt.equity - book.usdt.equity,
+    ) +
+    (run.gate.equity - book.gate.equity);
+  const borrowed = VENUES.reduce(
+    (total, venue) => total + Math.max(0, borrowOf(run.venues[venue]) - borrowOf(book.venues[venue])),
+    Math.max(0, borrowOf(run.usdt) - borrowOf(book.usdt)),
+  );
+  const freed = POOLS.reduce(
+    (total, pool) => total + repayment(book.buckets[pool], run.received[pool]).marginFreedUsd,
+    0,
+  );
   return {
     marginBalance: book.marginBalance + moved,
-    initialMargin:
-      book.initialMargin -
-      repayment(book.receiving, run.received).marginFreedUsd +
-      borrowed * BORROW_INITIAL_MARGIN,
+    initialMargin: book.initialMargin - freed + borrowed * BORROW_INITIAL_MARGIN,
   };
 }
 
-const borrowLeftOf = (book: Book, run: Run): number =>
-  floorCents(Math.max(0, (book.receiving?.borrow ?? 0) - run.received));
+const borrowLeftOf = (book: Book, run: Run, pool: Pool): number =>
+  floorCents(Math.max(0, (book.buckets[pool]?.borrow ?? 0) - run.received[pool]));
 
-function roundToUsdc(book: Book, run: Run, move: number): void {
-  const fromGate = Math.min(run.gateMovable, move);
-  const buy = floorCents(move - fromGate);
-  const arrives = arrivesFor('toUsdc', move);
-  run.usdt = shifted(run.usdt, -buy * book.ask * (1 + book.takerRate));
-  run.gate = shifted(run.gate, -fromGate);
-  run.gateMovable -= fromGate;
-  run.usdc = shifted(run.usdc, arrives);
-  run.received += arrives;
-  run.costUsd += HYPERLIQUID_DEPOSIT_FEE_USD + buy * Math.max(0, book.ask - 1) + buy * book.ask * book.takerRate;
+function pushRound(book: Book, run: Run, move: Move, figures: Pick<PlannedStep, 'buy' | 'move' | 'arrives'>): void {
   run.steps.push({
-    round: run.steps.length + 1,
+    round: run.steps.filter((step) => step.kind === 'round').length + 1,
     kind: 'round',
-    buy,
-    move,
-    arrives,
-    borrowLeft: borrowLeftOf(book, run),
-    seconds: TO_USDC_WAIT_SECONDS,
+    ...figures,
+    borrowLeft: borrowLeftOf(book, run, move.to),
+    seconds: roundSeconds(move.from, move.to),
+    from: move.from,
+    to: move.to,
   });
 }
 
-function sellUsdc(book: Book, run: Run, arrived: number): void {
+function roundInto(book: Book, run: Run, move: Move, size: number): void {
+  const venue = move.to as Venue;
+  const fromGate = Math.min(run.gateMovable, size);
+  const buy = floorCents(size - fromGate);
+  const arrives = arrivesFor(move.from, venue, size);
+  run.usdt = shifted(run.usdt, -buy * book.ask * (1 + book.takerRate));
+  run.gate = shifted(run.gate, -fromGate);
+  run.gateMovable -= fromGate;
+  run.venues[venue] = shifted(run.venues[venue], arrives);
+  run.received[venue] += arrives;
+  run.costUsd += VENUE[venue].inFeeUsd + buy * Math.max(0, book.ask - 1) + buy * book.ask * book.takerRate;
+  pushRound(book, run, move, { buy, move: size, arrives });
+}
+
+function sellUsdc(book: Book, run: Run, move: Move, arrived: number): void {
   const sold = arrived + run.gateMovable;
   const gained = sold * book.bid * (1 - book.takerRate);
   run.usdt = shifted(run.usdt, gained);
   run.gate = shifted(run.gate, -run.gateMovable);
   run.gateMovable = 0;
-  if (book.direction === 'toUsdt') run.received += gained;
+  if (move.to === 'CROSSEX') run.received.CROSSEX += gained;
   run.costUsd += sold * Math.max(0, 1 - book.bid) + sold * book.bid * book.takerRate;
 }
 
-function roundToUsdt(book: Book, run: Run, move: number): void {
-  const arrives = arrivesFor('toUsdt', move);
-  run.usdc = shifted(run.usdc, -move);
-  run.costUsd += HYPERLIQUID_WITHDRAW_FEE_USD;
-  sellUsdc(book, run, arrives);
-  run.steps.push({
-    round: run.steps.length + 1,
-    kind: 'round',
-    buy: 0,
-    move,
-    arrives,
-    borrowLeft: borrowLeftOf(book, run),
-    seconds: TO_USDT_WAIT_SECONDS,
-  });
+function roundOut(book: Book, run: Run, move: Move, size: number): void {
+  const venue = move.from as Venue;
+  const arrives = arrivesFor(venue, move.to, size);
+  run.venues[venue] = shifted(run.venues[venue], -size);
+  run.costUsd += VENUE[venue].outFeeUsd;
+  sellUsdc(book, run, move, arrives);
+  pushRound(book, run, move, { buy: 0, move: size, arrives });
 }
 
-function convertRest(book: Book, run: Run, left: number): void {
-  const toUsdc = book.direction === 'toUsdc';
-  if (run.gateMovable * book.bid >= SPOT_MIN_QUOTE_USDT) sellUsdc(book, run, 0);
-  const move = floorCents(Math.min(left, Math.max(0, toUsdc ? run.usdt.cash : run.usdc.cash)));
-  if (move <= 0) return;
-  const arrives = floorCents(move * (1 - CONVERT_RATE));
-  run.usdt = shifted(run.usdt, toUsdc ? -move : arrives);
-  run.usdc = shifted(run.usdc, toUsdc ? arrives : -move);
-  run.received += arrives;
-  run.costUsd += move * CONVERT_RATE;
-  run.steps.push({ round: null, kind: 'convert', buy: 0, move, arrives, borrowLeft: borrowLeftOf(book, run), seconds: 0 });
+function roundAcross(book: Book, run: Run, move: Move, size: number): void {
+  const from = move.from as Venue;
+  const to = move.to as Venue;
+  const arrives = arrivesFor(from, to, size);
+  run.venues[from] = shifted(run.venues[from], -size);
+  run.venues[to] = shifted(run.venues[to], arrives);
+  run.received[to] += arrives;
+  run.costUsd += VENUE[from].outFeeUsd + VENUE[to].inFeeUsd;
+  pushRound(book, run, move, { buy: 0, move: size, arrives });
+}
+
+const touchesUsdt = (move: { from: Pool; to: Pool }): boolean => move.from === 'CROSSEX' || move.to === 'CROSSEX';
+
+function convertRest(book: Book, run: Run, move: Move, left: number): void {
+  if (touchesUsdt(move) && run.gateMovable * book.bid >= SPOT_MIN_QUOTE_USDT) sellUsdc(book, run, move, 0);
+  const cash = move.from === 'CROSSEX' ? run.usdt.cash : run.venues[move.from].cash;
+  const size = floorCents(Math.min(left, Math.max(0, cash)));
+  if (size <= 0) return;
+  const kept = touchesUsdt(move) ? 1 - CONVERT_RATE : (1 - CONVERT_RATE) ** 2;
+  const arrives = floorCents(size * kept);
+  shiftPool(run, move.from, -size);
+  shiftPool(run, move.to, arrives);
+  run.received[move.to] += arrives;
+  run.costUsd += touchesUsdt(move) ? size * CONVERT_RATE : size - size * kept;
+  run.steps.push({
+    round: null,
+    kind: 'convert',
+    buy: 0,
+    move: size,
+    arrives,
+    borrowLeft: borrowLeftOf(book, run, move.to),
+    seconds: 0,
+    from: move.from,
+    to: move.to,
+  });
 }
 
 function startRun(book: Book): Run {
   return {
     usdt: book.usdt,
-    usdc: book.usdc,
     gate: book.gate,
+    venues: { ...book.venues },
     gateMovable: book.gateMovable,
-    received: 0,
+    received: { CROSSEX: 0, HYPERLIQUID: 0, LIGHTER: 0 },
     costUsd: 0,
     steps: [],
     cashLimited: false,
   };
 }
 
-function simulate(book: Book, amount: number, maxRounds: number, size: Sizer): Run {
+function simulate(book: Book, moves: Move[], amounts: number[], maxRounds: number[], size: Sizer): Run {
   const run = startRun(book);
-  const round = book.direction === 'toUsdc' ? roundToUsdc : roundToUsdt;
-  let left = amount;
-  while (left > 0 && run.steps.length < maxRounds) {
-    const move = size(fit(marginsOf(book, run), sendingCash(book, run), sendingEquity(book, run)), left, book.minimum);
-    if (move <= 0 || move < book.minimum) break;
-    round(book, run, move);
-    left = floorCents(left - move);
-  }
-  if (left > 0) convertRest(book, run, left);
+  moves.forEach((move, index) => {
+    const round = move.from === 'CROSSEX' ? roundInto : move.to === 'CROSSEX' ? roundOut : roundAcross;
+    const minimum = roundMinimum(move.from, move.to, book.minimum);
+    let left = amounts[index];
+    let rounds = 0;
+    while (left > 0 && rounds < maxRounds[index]) {
+      const next = size(fit(marginsOf(book, run), sendingCash(run, move), sendingEquity(run, move)), left, minimum);
+      if (next <= 0 || next < minimum) break;
+      round(book, run, move, next);
+      rounds += 1;
+      left = floorCents(left - next);
+    }
+    if (left > 0) convertRest(book, run, move, left);
+  });
   return run;
 }
 
-function stillShort(book: Book, run: Run): boolean {
-  const usdtSide = floorCents(run.usdt.equity + run.gate.cash);
-  const usdcSide = floorCents(run.usdc.equity);
-  return book.direction === 'toUsdc' ? usdcSide < usdtSide : usdtSide < usdcSide;
+function stillShort(book: Book, run: Run, move: Move): boolean {
+  const total = book.pools.reduce((sum, pool) => sum + floorCents(equityOf(run, pool)), 0);
+  const own = floorCents(equityOf(run, move.check));
+  const target = total * book.shares[move.check];
+  return move.check === move.to ? own < target : own > target;
 }
 
-function solve(book: Book, maxRounds: number, size: Sizer): Run {
-  const attempt = (cents: number): Run => simulate(book, cents / 100, maxRounds, size);
-  let lo = 0;
-  let hi = Math.round(floorCents(sendingCash(book, startRun(book))) * 100);
-  const all = attempt(hi);
-  if (stillShort(book, all)) return { ...all, cashLimited: true };
-  while (hi - lo > 1) {
-    const mid = Math.floor((lo + hi) / 2);
-    if (stillShort(book, attempt(mid))) lo = mid;
-    else hi = mid;
+function solve(book: Book, moves: Move[], start: number[], maxRounds: number[], size: Sizer): Run {
+  const amounts = [...start];
+  const limited = moves.map(() => false);
+  for (let pass = 0; pass < moves.length; pass += 1) {
+    moves.forEach((move, index) => {
+      const attempt = (cents: number): Run => {
+        amounts[index] = cents / 100;
+        return simulate(book, moves, amounts, maxRounds, size);
+      };
+      let lo = 0;
+      let hi = Math.round(floorCents(sendingCash(startRun(book), move)) * 100);
+      limited[index] = stillShort(book, attempt(hi), move);
+      if (limited[index]) return;
+      while (hi - lo > 1) {
+        const mid = Math.floor((lo + hi) / 2);
+        if (stillShort(book, attempt(mid), move)) lo = mid;
+        else hi = mid;
+      }
+      amounts[index] = lo / 100;
+    });
   }
-  return attempt(lo);
+  return { ...simulate(book, moves, amounts, maxRounds, size), cashLimited: limited.some(Boolean) };
 }
 
-function afterOf(run: Pick<Run, 'usdt' | 'usdc' | 'gate'>): WalletAfter[] {
+function afterOf(book: Book, run: Run): WalletAfter[] {
   const wallet = (w: { coin: string; venue: string }, holding: Holding): WalletAfter => ({
     coin: w.coin,
     venue: w.venue,
     cash: floorCents(holding.cash),
     equity: floorCents(holding.equity),
   });
-  return [wallet(USDT_WALLET, run.usdt), wallet(USDC_WALLET, run.usdc), wallet(GATE_WALLET, run.gate)];
+  const venues = VENUES.filter((venue) => book.pools.includes(venue) || book.buckets[venue] !== undefined);
+  return [
+    wallet(USDT_WALLET, run.usdt),
+    ...venues.map((venue) => wallet(poolWallet(venue), run.venues[venue])),
+    wallet(GATE_WALLET, run.gate),
+  ];
 }
 
 function routePlan(book: Book, run: Run, reason: string | null): RoutePlan {
-  const freed = repayment(book.receiving, run.received);
+  const freed = POOLS.reduce(
+    (total, pool) => {
+      const repaid = repayment(book.buckets[pool], run.received[pool]);
+      return {
+        savesPerDayUsd: total.savesPerDayUsd + repaid.savesPerDayUsd,
+        marginFreedUsd: total.marginFreedUsd + repaid.marginFreedUsd,
+      };
+    },
+    { savesPerDayUsd: 0, marginFreedUsd: 0 },
+  );
   return {
     available: reason === null,
     reason,
@@ -495,7 +624,7 @@ function routePlan(book: Book, run: Run, reason: string | null): RoutePlan {
     oneMoreRoundCostUsd: null,
     marginFreedUsd: nearestCents(freed.marginFreedUsd),
     savesPerDayUsd: nearestCents(freed.savesPerDayUsd),
-    after: afterOf(run),
+    after: afterOf(book, run),
     steps: run.steps,
   };
 }
@@ -503,8 +632,9 @@ function routePlan(book: Book, run: Run, reason: string | null): RoutePlan {
 const cheaper = (best: RoutePlan, next: RoutePlan): RoutePlan =>
   next.costUsd < best.costUsd || (next.costUsd === best.costUsd && next.seconds < best.seconds) ? next : best;
 
-function blockedReason(inputs: PlanInputs): string | null {
+function blockedReason(inputs: PlanInputs, moves: Move[]): string | null {
   if (coinRule(inputs.coins, 'USDC')?.isDisabled) return PAUSED_REASON;
+  if (!moves.some(touchesUsdt)) return null;
   if (inputs.spotRule?.state !== 'live') return CLOSED_REASON;
   if (positive(inputs.ask) === null || positive(inputs.bid) === null) return CLOSED_REASON;
   return null;
@@ -519,85 +649,145 @@ function recommend(routes: EvenPlan['routes']): RouteName | null {
   return open.reduce((best, next) => (cheaper(best.route, next.route) === next.route ? next : best)).name;
 }
 
-function loopReason(book: Book, loopRun: Run): string | null {
-  if (loopRun.steps.some((step) => step.kind === 'round')) return null;
+function loopReason(book: Book, moves: Move[], loopRun: Run): string | null {
+  const stepsOf = (move: Move) => loopRun.steps.filter((step) => step.from === move.from && step.to === move.to);
+  const onlyConverts = (move: Move) => stepsOf(move).length > 0 && stepsOf(move).every((step) => step.kind === 'convert');
+  const move = loopRun.steps.some((step) => step.kind === 'round') ? moves.find(onlyConverts) : moves[0];
+  if (!move) return null;
   const start = startRun(book);
-  const cash = sendingCash(book, start);
-  if (fit(marginsOf(book, start), cash, sendingEquity(book, start)) >= book.minimum) {
-    return underMinimumReason(book.minimum);
+  const cash = sendingCash(start, move);
+  const minimum = roundMinimum(move.from, move.to, book.minimum);
+  if (fit(marginsOf(book, start), cash, sendingEquity(start, move)) >= minimum) {
+    return underMinimumReason(minimum);
   }
-  if (cash < book.minimum) return NO_CASH_REASON;
+  if (cash < minimum) return NO_CASH_REASON;
   return NO_ROUND_REASON;
+}
+
+function splitOf(book: Book): WalletShare[] {
+  return book.pools.map((pool) => ({
+    ...poolWallet(pool),
+    notionalUsd: nearestCents(book.notional[pool]),
+    share: book.shares[pool],
+  }));
 }
 
 const idleRoute = (book: Book): RoutePlan => ({ ...routePlan(book, startRun(book), null), available: false });
 
-const balancedPlan = (book: Book, direction: Direction | null, shortOfEven: number): EvenPlan => ({
-  direction,
+const balancedPlan = (book: Book, shortOfEven: number, noLegs: boolean): EvenPlan => ({
   balanced: true,
+  noLegs,
   moves: 0,
   shortOfEven,
   roundCap: 0,
+  split: splitOf(book),
   routes: { mix: null, loop: idleRoute(book), convert: idleRoute(book) },
   recommended: null,
 });
 
+function movesFor(pools: Pool[], gaps: Record<Pool, number>): Move[] {
+  const bySize = (a: Pool, b: Pool): number => Math.abs(gaps[b]) - Math.abs(gaps[a]);
+  const senders = pools.filter((pool) => gaps[pool] <= -DUST_USDC).sort(bySize);
+  const receivers = pools.filter((pool) => gaps[pool] >= DUST_USDC).sort(bySize);
+  if (senders.length === 0 || receivers.length === 0) return [];
+  if (senders.length === 1) return receivers.map((to) => ({ from: senders[0], to, check: to }));
+  return senders.map((from) => ({ from, to: receivers[0], check: from }));
+}
+
+function roundBudgets(moves: Move[]): number[][] {
+  const seconds = moves.map((move) => roundSeconds(move.from, move.to));
+  const budgets: number[][] = [];
+  const walk = (index: number, used: number, picked: number[]): void => {
+    if (index === moves.length) {
+      budgets.push(picked);
+      return;
+    }
+    for (let rounds = 0; used + rounds * seconds[index] <= RECOMMENDED_MAX_SECONDS; rounds += 1) {
+      walk(index + 1, used + rounds * seconds[index], [...picked, rounds]);
+    }
+  };
+  walk(0, 0, []);
+  return budgets;
+}
+
+const sum = (values: number[]): number => values.reduce((total, value) => total + value, 0);
+
 export function planFor(buckets: Bucket[], account: AccountLike, inputs: PlanInputs): EvenPlan {
-  const usdtBucket = buckets.find(isWallet(USDT_WALLET));
-  const usdcBucket = buckets.find(isWallet(USDC_WALLET));
-  const gateBucket = buckets.find(isWallet(GATE_WALLET));
-  const usdtSide = (usdtBucket?.equity ?? 0) + (gateBucket?.cash ?? 0);
-  const usdcSide = usdcBucket?.equity ?? 0;
-  const direction: Direction = usdtSide > usdcSide ? 'toUsdc' : 'toUsdt';
-  const halfGap = Math.abs(usdtSide - usdcSide) / 2;
+  const bucketOf = (wallet: { coin: string; venue: string }) => buckets.find(isWallet(wallet));
+  const poolBuckets: Partial<Record<Pool, Bucket>> = {
+    CROSSEX: bucketOf(USDT_WALLET),
+    HYPERLIQUID: bucketOf(USDC_WALLET),
+    LIGHTER: bucketOf(LIGHTER_WALLET),
+  };
+  const gateBucket = bucketOf(GATE_WALLET);
   const gateCash = gateBucket?.cash ?? 0;
-  const book: Book = {
-    direction,
-    usdt: holdingOf(usdtBucket),
-    usdc: holdingOf(usdcBucket),
+  const wallets: Wallets = {
+    usdt: holdingOf(poolBuckets.CROSSEX),
     gate: holdingOf(gateBucket),
+    venues: { HYPERLIQUID: holdingOf(poolBuckets.HYPERLIQUID), LIGHTER: holdingOf(poolBuckets.LIGHTER) },
+  };
+  const notionalOf = (pool: Pool): number => {
+    const wallet = poolWallet(pool);
+    const value = Number(inputs.notional[walletKey(wallet.coin, wallet.venue)] ?? 0);
+    return Number.isFinite(value) ? Math.max(0, value) : 0;
+  };
+  const notional = { CROSSEX: notionalOf('CROSSEX'), HYPERLIQUID: notionalOf('HYPERLIQUID'), LIGHTER: notionalOf('LIGHTER') };
+  const pools = POOLS.filter((pool) => notional[pool] > 0 || Math.abs(equityOf(wallets, pool)) >= DUST_USDC);
+  const totalNotional = sum(pools.map((pool) => notional[pool]));
+  const shareOf = (pool: Pool): number => (totalNotional > 0 && pools.includes(pool) ? notional[pool] / totalNotional : 0);
+  const shares = { CROSSEX: shareOf('CROSSEX'), HYPERLIQUID: shareOf('HYPERLIQUID'), LIGHTER: shareOf('LIGHTER') };
+  const book: Book = {
+    ...wallets,
     gateMovable: gateCash >= DUST_USDC ? gateCash : 0,
+    buckets: poolBuckets,
+    pools,
+    notional,
+    shares,
     marginBalance: num(account.marginBalance),
     initialMargin: num(account.initialMargin),
-    receiving: buckets.find(isWallet(TARGET[direction])),
     ask: positive(inputs.ask) ?? 1,
     bid: positive(inputs.bid) ?? 1,
     takerRate: inputs.spotTakerRate,
     minimum: coinRule(inputs.coins, 'USDC')?.min ?? HYPERLIQUID_MIN_USDC,
   };
 
-  if (halfGap < 1) return balancedPlan(book, null, 0);
+  if (totalNotional <= 0) return balancedPlan(book, 0, true);
 
-  const blocked = blockedReason(inputs);
-  const roundCap = ROUND_CAP[direction];
-  const mixRuns = Array.from({ length: roundCap + 1 }, (_, rounds) => solve(book, rounds, fillCap));
+  const equity = sum(pools.map((pool) => equityOf(wallets, pool)));
+  const gapOf = (pool: Pool): number => (pools.includes(pool) ? equity * shares[pool] - equityOf(wallets, pool) : 0);
+  const gaps = { CROSSEX: gapOf('CROSSEX'), HYPERLIQUID: gapOf('HYPERLIQUID'), LIGHTER: gapOf('LIGHTER') };
+  const moves = movesFor(pools, gaps);
+  if (moves.length === 0) return balancedPlan(book, 0, false);
+
+  const start = moves.map((move) => floorCents(Math.abs(gaps[move.check])));
+  const need = sum(moves.map((move) => Math.abs(gaps[move.check])));
+  const blocked = blockedReason(inputs, moves);
+  const budgets = roundBudgets(moves);
+  const roundCap = Math.max(...budgets.map(sum));
+  const mixRuns = budgets.map((budget) => solve(book, moves, start, budget, fillCap));
   const mixPlans = mixRuns.map((run) => routePlan(book, run, blocked));
   const bestMix = mixPlans.reduce(cheaper);
   const mixConverts = bestMix.steps.some((step) => step.kind === 'convert');
-  const mix =
-    bestMix.rounds === 0 || !mixConverts
-      ? null
-      : {
-          ...bestMix,
-          oneMoreRoundCostUsd: bestMix.rounds < roundCap ? mixPlans[bestMix.rounds + 1].costUsd : null,
-        };
+  const oneMore = moves.length === 1 && bestMix.rounds < roundCap ? mixPlans[bestMix.rounds + 1].costUsd : null;
+  const mix = bestMix.rounds === 0 || !mixConverts ? null : { ...bestMix, oneMoreRoundCostUsd: oneMore };
 
-  const loopRun = solve(book, Infinity, leaveMinimum);
-  const loop = routePlan(book, loopRun, blocked ?? loopReason(book, loopRun));
+  const loopRun = solve(book, moves, start, moves.map(() => Infinity), leaveMinimum);
+  const loop = routePlan(book, loopRun, blocked ?? loopReason(book, moves, loopRun));
   const convert = routePlan(book, mixRuns[0], null);
 
   const routes = { mix, loop, convert };
   const runs: Record<RouteName, Run> = { mix: mixRuns[mixPlans.indexOf(bestMix)], loop: loopRun, convert: mixRuns[0] };
   const recommended = recommend(routes);
   const picked = recommended ? runs[recommended] : null;
-  const moves = floorCents((picked?.steps ?? []).reduce((total, step) => total + step.move, 0));
-  if (moves < DUST_USDC) return balancedPlan(book, direction, picked?.cashLimited ? floorCents(halfGap) : 0);
+  const moved = floorCents(sum((picked?.steps ?? []).map((step) => step.move)));
+  if (moved < DUST_USDC) return balancedPlan(book, picked?.cashLimited ? floorCents(need) : 0, false);
   return {
-    direction,
     balanced: false,
-    moves,
-    shortOfEven: picked?.cashLimited ? floorCents(Math.max(0, halfGap - moves)) : 0,
+    noLegs: false,
+    moves: moved,
+    shortOfEven: picked?.cashLimited ? floorCents(Math.max(0, need - moved)) : 0,
     roundCap,
+    split: splitOf(book),
     routes,
     recommended,
   };
@@ -621,8 +811,8 @@ function pathMax(path: PathRule, account: AccountLike, spot: SpotBalance[] | nul
 }
 
 function pathMin(path: PathRule, coins: CoinRuleLike[]): number {
-  const touchesHyperliquid = path.from === 'CROSSEX_HYPERLIQUID' || path.to === 'CROSSEX_HYPERLIQUID';
-  if (path.coin === 'USDC' && !touchesHyperliquid) return path.min;
+  const touchesVenueWallet = VENUE_WALLETS.includes(path.from) || VENUE_WALLETS.includes(path.to);
+  if (path.coin === 'USDC' && !touchesVenueWallet) return path.min;
   return Math.max(MIN_TRANSFER, coinRule(coins, path.coin)?.min ?? path.min);
 }
 
