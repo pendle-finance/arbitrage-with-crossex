@@ -116,11 +116,7 @@ export async function syncInterest(
   const rows: InterestRowLike[] = [];
   for (let page = 1; ; page += 1) {
     if (page > INTEREST_MAX_PAGES) {
-      throw new CoreError(
-        `interest history has more than ${INTEREST_MAX_PAGES * INTEREST_PAGE_SIZE} rows since the last sync; the all-time total was not updated`,
-        'validation',
-        INTEREST_OVERFLOW,
-      );
+      throw new CoreError('Interest paid is out of date. Gate sent too many rows.', 'validation', INTEREST_OVERFLOW);
     }
     const batch = await list({ from, to: now, page, limit: INTEREST_PAGE_SIZE });
     rows.push(...batch);

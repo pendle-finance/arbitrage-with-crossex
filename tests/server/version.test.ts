@@ -13,7 +13,7 @@ import type { FetchLike } from '../../src/core/boros/client';
 import { makeClients } from '../../src/core/clients';
 import { Store } from '../../src/engine/db';
 import { gateVenue } from '../../src/engine/venueGate';
-import { JobFile, newJob } from '../../src/server/rebalanceJob';
+import { JobFile, newJob, newTransferJob, TransferFile } from '../../src/server/rebalanceJob';
 import { endUpdateWindow, isUpdating, startUpdate } from '../../src/server/updater';
 import { COMMIT_URL, compareVersions, VERSION_URL } from '../../src/server/version';
 import { HOST, makeTestApp, TEST_KEY, TEST_SECRET } from './helpers/gate-nock';
@@ -350,7 +350,26 @@ describe('POST /api/version/update', () => {
     const res = await post();
 
     expect(res.statusCode).toBe(409);
-    expect(res.json().error.message).toMatch(/pay-down is still running/);
+    expect(res.json().error.message).toBe('a rebalance is still running. Wait for it to finish, then update.');
+    expect(res.json().error.retryable).toBe(true);
+    expect(mocks.spawn).not.toHaveBeenCalled();
+  });
+
+  it('refuses while a transfer is still moving, and names it', async () => {
+    const transfers = new TransferFile(mkdtempSync(path.join(tmpdir(), 'transfer-')));
+    app = makeTestApp({
+      install: INSTALLED,
+      transfer: { jobs: transfers, sleep: () => new Promise<void>(() => undefined) },
+    });
+    await app.ready();
+    transfers.write(
+      newTransferJob({ coin: 'USDC', from: 'CROSSEX_HYPERLIQUID', to: 'SPOT', amount: 11.88, userId: '1' }, Date.now()),
+    );
+
+    const res = await post();
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error.message).toBe('A transfer is still moving. Wait for it to end, then update.');
     expect(res.json().error.retryable).toBe(true);
     expect(mocks.spawn).not.toHaveBeenCalled();
   });

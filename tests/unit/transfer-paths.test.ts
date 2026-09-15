@@ -9,8 +9,8 @@ import {
   type TransferPath,
 } from '../../src/core/rebalance/plan';
 
-function cashRow(coin: string, exchangeType: string, balance: string): AssetLike {
-  return { coin, exchangeType, balance, borrowingInitialMargin: '0', borrowingMaintenanceMargin: '0' };
+function cashRow(coin: string, exchangeType: string, balance: string, equity: string): AssetLike {
+  return { coin, exchangeType, balance, equity, borrowingInitialMargin: '0', borrowingMaintenanceMargin: '0' };
 }
 
 const ACCOUNT: AccountLike = {
@@ -18,11 +18,24 @@ const ACCOUNT: AccountLike = {
   marginBalance: '988.23',
   initialMargin: '156.28',
   assets: [
-    cashRow('USDT', 'CROSSEX', '986.60'),
-    cashRow('USDC', 'GATE', '0.29'),
-    cashRow('USDC', 'HYPERLIQUID', '11.92'),
+    cashRow('USDT', 'CROSSEX', '986.60', '990.34'),
+    cashRow('USDC', 'GATE', '0.29', '0.29'),
+    cashRow('USDC', 'HYPERLIQUID', '11.92', '-2.39'),
   ],
 };
+
+const HEDGED: AccountLike = {
+  availableMargin: '900',
+  marginBalance: '1000',
+  initialMargin: '100',
+  assets: [
+    cashRow('USDT', 'CROSSEX', '888', '0'),
+    cashRow('USDC', 'HYPERLIQUID', '12', '1000'),
+    cashRow('USDC', 'GATE', '0', '0'),
+  ],
+};
+
+const MIN_TRANSFER = 0.00001;
 
 const COINS: CoinRuleLike[] = [
   { coin: 'USDT', minTransAmount: 0.00000001, estFee: 0, isDisabled: 0 },
@@ -65,10 +78,43 @@ describe('transferPaths', () => {
   it('minimum 11 on Hyperliquid paths', () => {
     expect(pathOf(paths, 'USDC', 'SPOT', 'CROSSEX_HYPERLIQUID').min).toBe(11);
     expect(pathOf(paths, 'USDC', 'CROSSEX_HYPERLIQUID', 'SPOT').min).toBe(11);
-    expect(pathOf(paths, 'USDC', 'SPOT', 'CROSSEX_GATE').min).toBe(0);
-    expect(pathOf(paths, 'USDC', 'CROSSEX_GATE', 'SPOT').min).toBe(0);
-    expect(pathOf(paths, 'USDT', 'SPOT', 'CROSSEX').min).toBe(0.00000001);
-    expect(pathOf(paths, 'USDT', 'CROSSEX', 'SPOT').min).toBe(0.00000001);
+    expect(pathOf(paths, 'USDC', 'SPOT', 'CROSSEX_GATE').min).toBe(MIN_TRANSFER);
+    expect(pathOf(paths, 'USDC', 'CROSSEX_GATE', 'SPOT').min).toBe(MIN_TRANSFER);
+    expect(pathOf(paths, 'USDT', 'SPOT', 'CROSSEX').min).toBe(MIN_TRANSFER);
+    expect(pathOf(paths, 'USDT', 'CROSSEX', 'SPOT').min).toBe(MIN_TRANSFER);
+  });
+
+  it('no minimum under 0.00001', () => {
+    for (const coins of [COINS, [], [{ coin: 'USDT', minTransAmount: '0', estFee: '0', isDisabled: '0' }]]) {
+      const mins = transferPaths({ account: ACCOUNT, spot: SPOT, coins }).map((p) => p.min);
+      expect(mins.every((min) => min >= MIN_TRANSFER)).toBe(true);
+    }
+  });
+
+  it.each(['', '  ', 0, '0', 'n/a', -3])('a Hyperliquid minimum of %j falls back to 11', (min) => {
+    const coins = [{ coin: 'USDC', minTransAmount: min, estFee: '1', isDisabled: '0' }];
+    const loose = transferPaths({ account: ACCOUNT, spot: SPOT, coins });
+    expect(pathOf(loose, 'USDC', 'SPOT', 'CROSSEX_HYPERLIQUID').min).toBe(11);
+    expect(pathOf(loose, 'USDC', 'CROSSEX_HYPERLIQUID', 'SPOT').min).toBe(11);
+  });
+
+  it('Max out of CrossEx counts the borrow the move creates', () => {
+    const max = pathOf(transferPaths({ account: HEDGED, spot: null, coins: [] }), 'USDT', 'CROSSEX', 'SPOT').max;
+    expect(max).not.toBe(888);
+    expect(max).toBe(725.49);
+    const moved = max ?? 0;
+    expect(1000 - moved).toBeGreaterThanOrEqual(1.12 * (100 + moved / 5));
+  });
+
+  it.each([
+    { marginBalance: '', initialMargin: '156.28' },
+    { marginBalance: 'n/a', initialMargin: '156.28' },
+    { marginBalance: '988.23', initialMargin: '' },
+    { marginBalance: '988.23', initialMargin: 'NaN' },
+  ])('no max out of CrossEx when margins read $marginBalance and $initialMargin', (margins) => {
+    const garbled = transferPaths({ account: { ...ACCOUNT, ...margins }, spot: SPOT, coins: COINS });
+    expect(garbled.filter((p) => p.from !== 'SPOT').map((p) => p.max)).toEqual([0, 0, 0]);
+    expect(garbled.filter((p) => p.from === 'SPOT').map((p) => p.max)).toEqual([318.42, 0, 0]);
   });
 
   it('fees per path', () => {
@@ -106,7 +152,7 @@ describe('transferPaths', () => {
 
   it('missing coin rules fall back to the static table', () => {
     const fallback = transferPaths({ account: ACCOUNT, spot: SPOT, coins: [] });
-    expect(fallback.map((p) => p.min)).toEqual([0.00000001, 0.00000001, 0, 0, 11, 11]);
+    expect(fallback.map((p) => p.min)).toEqual([MIN_TRANSFER, MIN_TRANSFER, MIN_TRANSFER, MIN_TRANSFER, 11, 11]);
     expect(fallback.map((p) => p.feeUsd)).toEqual([0, 0, 0, 0, 0.05, 1]);
   });
 

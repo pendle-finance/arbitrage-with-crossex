@@ -465,9 +465,22 @@ export function useTransfer() {
 
 export function useStartTransfer() {
   const qc = useQueryClient();
+  const heldRef = useRef<{ id: string; body: Omit<StartTransferBody, 'id'> } | null>(null);
   return useMutation({
-    mutationFn: (body: StartTransferBody) => postJson<{ id: string }>('/transfer', body),
+    mutationFn: (body: Omit<StartTransferBody, 'id'>) => {
+      const held = heldRef.current;
+      const sameHold =
+        held !== null &&
+        held.body.coin === body.coin &&
+        held.body.from === body.from &&
+        held.body.to === body.to &&
+        held.body.amount === body.amount;
+      const id = sameHold ? held.id : uuid().replace(/-/g, '').slice(0, 16);
+      heldRef.current = { id, body };
+      return postJson<{ id: string }>('/transfer', { ...body, id });
+    },
     onSuccess: () => {
+      heldRef.current = null;
       void qc.invalidateQueries({ queryKey: qk.transfer });
       void qc.invalidateQueries({ queryKey: qk.account });
       void qc.invalidateQueries({ queryKey: qk.rebalance });

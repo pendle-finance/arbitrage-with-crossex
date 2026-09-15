@@ -22,10 +22,10 @@ const BAR_FILL: Record<BarTone, string> = {
 };
 
 const GAIN_FILL: Record<BarTone, string> = {
-  usdt: 'bg-info/20 bg-[repeating-linear-gradient(135deg,theme(colors.info.DEFAULT)_0_2px,transparent_2px_6px)]',
-  usdc: 'bg-crossex/20 bg-[repeating-linear-gradient(135deg,theme(colors.crossex)_0_2px,transparent_2px_6px)]',
-  gate: 'bg-ink-600/20 bg-[repeating-linear-gradient(135deg,theme(colors.ink.600)_0_2px,transparent_2px_6px)]',
-  spot: 'bg-gold/20 bg-[repeating-linear-gradient(135deg,theme(colors.gold)_0_2px,transparent_2px_6px)]',
+  usdt: 'bar-gain-usdt',
+  usdc: 'bar-gain-usdc',
+  gate: 'bar-gain-gate',
+  spot: 'bar-gain-spot',
 };
 
 function barParts(row: BarRow): { value: number; solid: number; gain: number } {

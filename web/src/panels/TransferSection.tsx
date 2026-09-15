@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
+import { ApiError } from '../api/client';
 import { useRebalance, useStartTransfer, useTransfer } from '../api/queries';
 import type { GateAccount, TransferCoin, TransferJob, TransferLock, TransferPath } from '../api/types';
 import { HoldToConfirmButton } from '../components/HoldToConfirmButton';
@@ -13,6 +14,7 @@ import { useNow } from '../lib/useNow';
 import { useSettledError } from '../lib/useSettledError';
 import { HOVER } from './rebalanceCopy';
 import {
+  findPath,
   fmtTransferAmount,
   MovingLine,
   NoSpotReadLine,
@@ -67,10 +69,6 @@ function limitLine(tab: Tab, path: TransferPath, amount: number | null): string 
   }
   if (amount < path.min) return `Minimum ${sig(path.min)} ${path.coin}.`;
   return null;
-}
-
-function samePath(path: TransferPath, move: { coin: TransferCoin; from: GateAccount; to: GateAccount }): boolean {
-  return path.coin === move.coin && path.from === move.from && path.to === move.to;
 }
 
 export function TransferSection({ holdMs, pick }: { holdMs?: number; pick?: TransferPick | null }) {
@@ -133,9 +131,9 @@ export function TransferSection({ holdMs, pick }: { holdMs?: number; pick?: Tran
         {loadError ? (
           <div className="flex flex-wrap items-center gap-3">
             <p role="alert" className="text-xs text-rose-300">
-              {loadError.message}
+              Could not load transfers. {loadError.message}
             </p>
-            <button type="button" className="btn-ghost-xs" onClick={() => void query.refetch()}>
+            <button type="button" className="btn-ghost-xs leading-4" onClick={() => void query.refetch()}>
               Retry
             </button>
           </div>
@@ -149,10 +147,11 @@ export function TransferSection({ holdMs, pick }: { holdMs?: number; pick?: Tran
   const coin = coinOf(wallet);
   const from: GateAccount = tab === 'out' ? wallet : 'SPOT';
   const to: GateAccount = tab === 'out' ? 'SPOT' : wallet;
-  const path = view.paths.find((p) => samePath(p, { coin, from, to }));
+  const path = findPath(view.paths, { coin, from, to });
   const max = path?.max ?? null;
   const moving = transfer?.status === 'moving' ? transfer : null;
-  const formOff = moving !== null || view.lock !== null;
+  const locked = view.lock !== null;
+  const formOff = moving !== null || locked;
   const amount = parsedAmount(typed);
   const problem = formatLine(typed.trim()) ?? (path ? limitLine(tab, path, amount) : null);
   const canSend = !formOff && !start.isPending && path !== undefined && amount !== null && problem === null;
@@ -160,7 +159,7 @@ export function TransferSection({ holdMs, pick }: { holdMs?: number; pick?: Tran
 
   let status: ReactNode = null;
   if (moving) {
-    const movingPath = view.paths.find((p) => samePath(p, moving));
+    const movingPath = findPath(view.paths, moving);
     status = <MovingLine transfer={moving} seconds={movingPath?.seconds ?? null} now={now} />;
   } else if (view.lock) {
     status = (
@@ -180,8 +179,9 @@ export function TransferSection({ holdMs, pick }: { holdMs?: number; pick?: Tran
   };
 
   const walletList = (side: 'From' | 'To') => (
-    <WalletList side={side} wallet={wallet} buckets={buckets} onPick={setWallet} />
+    <WalletList side={side} wallet={wallet} buckets={buckets} disabled={locked} onPick={setWallet} />
   );
+  const spotTile = (side: 'From' | 'To') => <SpotTile side={side} spot={view.spot} disabled={locked} />;
 
   return (
     <section aria-label="Transfer" className="card flex flex-col gap-3.5 p-4">
@@ -190,12 +190,19 @@ export function TransferSection({ holdMs, pick }: { holdMs?: number; pick?: Tran
       {view.spot === null && <NoSpotReadLine />}
       <fieldset disabled={formOff} className="grid min-w-0 gap-6 md:grid-cols-2">
         <div className="flex flex-col gap-3">
-          <SegmentedToggle<Tab> ariaLabel="Direction" value={tab} onChange={setTab} options={TABS} fill />
-          {tab === 'out' ? walletList('From') : <SpotTile side="From" spot={view.spot} />}
-          {tab === 'out' ? <SpotTile side="To" spot={view.spot} /> : walletList('To')}
+          <SegmentedToggle<Tab>
+            ariaLabel="Direction"
+            value={tab}
+            onChange={setTab}
+            options={TABS}
+            className={locked ? 'opacity-50' : undefined}
+            fill
+          />
+          {tab === 'out' ? walletList('From') : spotTile('From')}
+          {tab === 'out' ? spotTile('To') : walletList('To')}
         </div>
         <div className="flex flex-col gap-3 md:border-l md:border-ink-700 md:pl-6">
-          <label htmlFor={inputId} className="text-xs text-ink-400">
+          <label htmlFor={inputId} className={`text-xs text-ink-400 ${locked ? 'opacity-50' : ''}`}>
             {'Amount'}
             {max !== null && ' · '}
             {max !== null && (
@@ -219,14 +226,14 @@ export function TransferSection({ holdMs, pick }: { holdMs?: number; pick?: Tran
             {max !== null && (
               <button
                 type="button"
-                className="btn-ghost-xs"
+                className="btn-ghost-xs leading-4"
                 onClick={() => setTyped(roundToStep(floorCents(max), '0.01', 'down'))}
               >
                 Max
               </button>
             )}
           </div>
-          {path && <TransferFacts path={path} amount={amount ?? 0} showYouGet={!problem} />}
+          {path && <TransferFacts path={path} amount={amount ?? 0} showYouGet={!problem} disabled={locked} />}
           {problem && <p className="num text-xs text-rose-300">{problem}</p>}
           <HoldToConfirmButton tone="cyan" holdMs={holdMs} disabled={!canSend} onConfirm={send} className="num self-start">
             {holdLabel}
@@ -234,6 +241,9 @@ export function TransferSection({ holdMs, pick }: { holdMs?: number; pick?: Tran
           {start.error && (
             <p role="alert" className="num text-xs text-rose-300">
               {start.error.message}
+              {start.error instanceof ApiError && start.error.hint ? (
+                <span className="block text-rose-400/80">{start.error.hint}</span>
+              ) : null}
             </p>
           )}
         </div>

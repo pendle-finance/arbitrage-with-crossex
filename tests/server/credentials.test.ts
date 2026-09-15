@@ -43,8 +43,9 @@ describe('PUT /api/credentials with a transfer', () => {
       transfer: { jobs: transfers, sleep: () => new Promise<void>(() => undefined) },
     });
     await app.ready();
-    const moving = () =>
-      transfers.write(newTransferJob({ coin: 'USDT', from: 'CROSSEX', to: 'SPOT', amount: 5, userId: '1234567' }, Date.now()));
+    const moving = (userId: string | null) =>
+      transfers.write(newTransferJob({ coin: 'USDT', from: 'CROSSEX', to: 'SPOT', amount: 5, userId }, Date.now()));
+    const keyCheck = () => gate().get('/api/v4/crossex/accounts').query(true).reply(200, fixture('account.json'));
     const put = () =>
       app.inject({
         method: 'PUT',
@@ -52,12 +53,13 @@ describe('PUT /api/credentials with a transfer', () => {
         headers: HOST,
         payload: { key: 'newkey876543210', secret: 'newsecret' },
       });
-    return { envPath, moving, put };
+    return { envPath, transfers, moving, keyCheck, put };
   };
 
   it('refuses while a transfer moves', async () => {
-    const { envPath, moving, put } = await setup();
-    moving();
+    const { envPath, moving, keyCheck, put } = await setup();
+    moving('999');
+    keyCheck();
 
     const res = await put();
 
@@ -66,13 +68,37 @@ describe('PUT /api/credentials with a transfer', () => {
     expect(readFileSync(envPath, 'utf8')).toContain(`GATE_API_KEY=${TEST_KEY}`);
   });
 
+  it('refuses while a transfer with no account id moves', async () => {
+    const { envPath, moving, keyCheck, put } = await setup();
+    moving(null);
+    keyCheck();
+
+    const res = await put();
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error.message).toBe('A transfer is still moving.');
+    expect(readFileSync(envPath, 'utf8')).toContain(`GATE_API_KEY=${TEST_KEY}`);
+  });
+
+  it('accepts a new key on the same account while a transfer moves', async () => {
+    const { envPath, transfers, moving, keyCheck, put } = await setup();
+    moving('1234567');
+    keyCheck();
+
+    const res = await put();
+
+    expect(res.statusCode).toBe(200);
+    expect(readFileSync(envPath, 'utf8')).toContain('GATE_API_KEY=newkey876543210');
+    expect(transfers.read()?.status).toBe('moving');
+  });
+
   it('refuses when a transfer starts during the key check', async () => {
     const { envPath, moving, put } = await setup();
     gate()
       .get('/api/v4/crossex/accounts')
       .query(true)
       .reply(200, () => {
-        moving();
+        moving('999');
         return fixture('account.json');
       });
 

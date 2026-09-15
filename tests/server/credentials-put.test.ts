@@ -161,7 +161,7 @@ describe('PUT /api/credentials', () => {
     const res = await put({ key: NEW_KEY, secret: NEW_SECRET });
 
     expect(res.statusCode).toBe(409);
-    expect(res.json().error.message).toMatch(/pay-down is still running/);
+    expect(res.json().error.message).toBe('A rebalance is running. Wait for it to end, then change the key.');
     expect(readFileSync(envPath, 'utf8')).toContain(`GATE_API_KEY=${TEST_KEY}`);
   });
 

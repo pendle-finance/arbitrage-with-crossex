@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import nock from 'nock';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeClients } from '../../src/core/clients';
 import { roundToStep } from '../../src/core/numbers';
 import type { EvenPlan, PlannedStep } from '../../src/core/rebalance/plan';
@@ -15,6 +15,20 @@ import { JobFile, newJob, newTransferJob, TransferFile, type Job } from '../../s
 import { gate, HOST, makeTestApp, mockGateGet, TEST_KEY, TEST_SECRET } from './helpers/gate-nock';
 import { accountA, asset, waitFor } from './helpers/rebalance';
 
+const planEdit = vi.hoisted(() => ({ dropConvertSteps: false }));
+
+vi.mock(import('../../src/core/rebalance/plan'), async (importOriginal) => {
+  const plan = await importOriginal();
+  return {
+    ...plan,
+    planFor: (...args: Parameters<typeof plan.planFor>) => {
+      const made = plan.planFor(...args);
+      if (!planEdit.dropConvertSteps) return made;
+      return { ...made, routes: { ...made.routes, convert: { ...made.routes.convert, steps: [] } } };
+    },
+  };
+});
+
 const API = '/api/v4';
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -24,6 +38,7 @@ let apps: FastifyInstance[];
 beforeEach(() => {
   t = Date.now();
   apps = [];
+  planEdit.dropConvertSteps = false;
 });
 
 afterEach(async () => {
@@ -56,6 +71,19 @@ const balancedAccount = {
   assets: [
     asset('USDT', 'CROSSEX', { balance: '500', available_balance: '500', equity: '500' }),
     asset('USDC', 'HYPERLIQUID', { balance: '499.5', available_balance: '499.5', equity: '499.5' }),
+    asset('USDC', 'GATE'),
+  ],
+};
+
+const noCashAccount = {
+  user_id: '1',
+  available_margin: '594',
+  margin_balance: '595',
+  initial_margin: '1',
+  account_mode: 'CROSS_EXCHANGE',
+  assets: [
+    asset('USDT', 'CROSSEX', { balance: '100', available_balance: '100', equity: '100' }),
+    asset('USDC', 'HYPERLIQUID', { balance: '-5', upnl: '500', equity: '495', liability: '5', borrowing_initial_margin: '1' }),
     asset('USDC', 'GATE'),
   ],
 };
@@ -117,6 +145,7 @@ function boot(over: { job?: unknown } = {}) {
     transfers,
     ready: () => app.ready(),
     file: () => JSON.parse(readFileSync(path.join(dataDir, 'rebalance.json'), 'utf8')) as Job,
+    get: (url: string) => app.inject({ method: 'GET', url, headers: HOST }),
     post: (url: string, payload: Record<string, unknown> = {}) => app.inject({ method: 'POST', url, headers: HOST, payload }),
     plan: async (): Promise<EvenPlan> =>
       (await app.inject({ method: 'GET', url: '/api/rebalance', headers: HOST })).json().data.plan,
@@ -231,7 +260,34 @@ describe('GET /api/rebalance', () => {
     const { data } = await h.view();
 
     expect(data.job).toMatchObject({ id: job.id, status: 'abandoned' });
-    expect(data.job.inTransit).toEqual({ coin: 'USDC', qty: 36.58 });
+    expect(data.job.inTransit).toEqual({ coin: 'USDC', qty: 36.58, at: 'SPOT' });
+  });
+
+  it('a Gate error on the rebalance card reads as a plain sentence', async () => {
+    gate().get(`${API}/crossex/accounts`).query(true).reply(401, { label: 'INVALID_KEY', message: 'Invalid key' });
+    const h = boot();
+
+    const res = await h.get('/api/rebalance');
+
+    expect(res.statusCode).toBe(401);
+    const { error } = res.json();
+    expect(error.message).toBe('Gate refused the API key.');
+    expect(error.hint).toBe('Check it in Settings.');
+    expect(error.category).toBe('auth');
+  });
+});
+
+describe('GET /api/account', () => {
+  it("a Gate error on another route keeps Gate's status and label", async () => {
+    gate().get(`${API}/crossex/accounts`).query(true).reply(401, { label: 'INVALID_KEY', message: 'Invalid key' });
+    const h = boot();
+
+    const res = await h.get('/api/account');
+
+    expect(res.statusCode).toBe(401);
+    const { error } = res.json();
+    expect(error.message).toBe('Gate API error (HTTP 401) [INVALID_KEY]: Invalid key');
+    expect(error.hint).toBe('Check the API key/secret in Settings.');
   });
 });
 
@@ -303,6 +359,33 @@ describe('POST /api/rebalance', () => {
 
     expect(res.statusCode).toBe(409);
     expect(res.json().error.message).toBe('Already even.');
+    expect(() => h.file()).toThrow();
+  });
+
+  it('refuses a route with no steps', async () => {
+    mockView();
+    planEdit.dropConvertSteps = true;
+    const h = boot();
+    const plan = await h.plan();
+    expect(plan).toMatchObject({ balanced: false, routes: { convert: { available: true, steps: [] } } });
+
+    const res = await h.post('/api/rebalance', { route: 'convert' });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error.message).toBe('Already even.');
+    expect(() => h.file()).toThrow();
+  });
+
+  it('refuses every route when the sending wallet has no cash', async () => {
+    mockView({ account: noCashAccount });
+    const h = boot();
+
+    for (const route of ['convert', 'loop', 'mix']) {
+      const res = await h.post('/api/rebalance', { route });
+
+      expect(res.statusCode).toBe(409);
+      expect(res.json().error.message).toBe('Already even.');
+    }
     expect(() => h.file()).toThrow();
   });
 
@@ -395,5 +478,20 @@ describe('POST /api/rebalance/:id/resume', () => {
     await waitFor(() => h.file().status === 'halted', 'the halt');
     expect(sent).toHaveLength(1);
     expect(sent[0]).toMatchObject({ coin: 'USDC', from: 'CROSSEX_GATE', to: 'SPOT', amount: '24.51' });
+  });
+
+  it('resume refuses while a transfer moves', async () => {
+    const convert: PlannedStep = { round: null, kind: 'convert', buy: 0, move: 12, arrives: 11.97, borrowLeft: 0, seconds: 0 };
+    const job = newJob({ direction: 'toUsdc', route: 'convert', steps: [convert], amount: 12, costUsd: 0, target: [], userId: null }, t);
+    Object.assign(job, { status: 'halted', haltReason: 'Gate took too long on this step.' });
+    const h = boot({ job });
+    await h.ready();
+    h.transfers.write(newTransferJob({ coin: 'USDC', from: 'CROSSEX_HYPERLIQUID', to: 'SPOT', amount: 11.88, userId: '1' }, t));
+
+    const res = await h.post(`/api/rebalance/${job.id}/resume`);
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error.message).toBe('Rebalance waits until the transfer ends.');
+    expect(h.file()).toMatchObject({ status: 'halted', haltReason: 'Gate took too long on this step.' });
   });
 });

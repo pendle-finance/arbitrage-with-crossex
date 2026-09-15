@@ -49,6 +49,11 @@ const BOTH_RATES: RateLike[] = [
   { coin: USDT_WALLET.coin, exchangeType: USDT_WALLET.venue, hourInterestRate: '0.00002' },
 ];
 
+const LIVE_RATES: RateLike[] = [
+  { coin: USDC_WALLET.coin, exchangeType: USDC_WALLET.venue, hourInterestRate: '0.0000057077626' },
+  { coin: USDT_WALLET.coin, exchangeType: USDT_WALLET.venue, hourInterestRate: '0.000006436251' },
+];
+
 const cents = (value: number): string => roundToStep(value, '0.01', 'nearest');
 
 function accountOf(assets: AssetLike[]): AccountLike {
@@ -67,16 +72,19 @@ describe('bucketsFrom interest', () => {
     expect(buckets[1]).toMatchObject({ coin: 'USDT', venue: 'CROSSEX', cash: 200, upnl: 0, equity: 200, borrow: 0 });
   });
 
-  it('charges interest per day when equity is below -10000', () => {
-    const account = accountOf([asset('USDC', 'HYPERLIQUID', { equity: -10001, liability: 10001 })]);
-    const [usdc] = bucketsFrom(account, USDC_RATE, {});
-    expect(usdc.interestPerDayUsd).toBeCloseTo(10001 * 0.00001 * 24, 9);
+  it('charges a USDC Hyperliquid borrow only on the part over 10000', () => {
+    const account = accountOf([asset('USDC', 'HYPERLIQUID', { equity: -12000, liability: 12000 })]);
+    const [usdc] = bucketsFrom(account, LIVE_RATES, {});
+    expect(usdc.interestPerDayUsd).toBeCloseTo(2000 * 0.0000057077626 * 24, 9);
+    expect(cents(usdc.interestPerDayUsd)).toBe('0.27');
   });
 
-  it('charges no interest at exactly -10000', () => {
-    const account = accountOf([asset('USDC', 'HYPERLIQUID', { equity: -10000, liability: 10000 })]);
-    const [usdc] = bucketsFrom(account, USDC_RATE, {});
-    expect(usdc.interestPerDayUsd).toBe(0);
+  it('charges no interest on a USDC Hyperliquid borrow of 10000 or less', () => {
+    const account = accountOf([
+      asset('USDC', 'HYPERLIQUID', { equity: -5000, liability: 5000 }),
+      asset('USDC', 'HYPERLIQUID', { equity: -10000, liability: 10000 }),
+    ]);
+    expect(bucketsFrom(account, LIVE_RATES, {}).map((b) => b.interestPerDayUsd)).toEqual([0, 0]);
   });
 
   it('uses rate 0 when no rate row matches the coin and venue', () => {
@@ -101,11 +109,13 @@ describe('bucketsFrom interest', () => {
     expect(usdt.interestPaidUsd).toBe(0);
   });
 
-  it('charges interest on a USDT borrow below -10000 at the USDT rate', () => {
-    const account = accountOf([asset('USDC', 'HYPERLIQUID'), asset('USDT', 'CROSSEX', { equity: -20000, liability: 20000 })]);
-    const [, usdt] = bucketsFrom(account, BOTH_RATES, {});
-    expect(usdt).toMatchObject({ borrow: 20000 });
-    expect(usdt.interestPerDayUsd).toBeCloseTo(20000 * 0.00002 * 24, 9);
+  it('charges a USDT borrow from the first dollar at the USDT rate', () => {
+    const account = accountOf([asset('USDC', 'HYPERLIQUID'), asset('USDT', 'CROSSEX', { equity: -2000, liability: 2000 })]);
+    const [usdc, usdt] = bucketsFrom(account, LIVE_RATES, {});
+    expect(usdt).toMatchObject({ borrow: 2000 });
+    expect(usdt.interestPerDayUsd).toBeCloseTo(2000 * 0.000006436251 * 24, 9);
+    expect(cents(usdt.interestPerDayUsd)).toBe('0.31');
+    expect(usdc.interestPerDayUsd).toBe(0);
   });
 });
 
@@ -149,6 +159,26 @@ describe('fit', () => {
 
   it('is 0 when the sending cash is negative', () => {
     expect(fit({ marginBalance: 1000, initialMargin: 0 }, -5)).toBe(0);
+  });
+
+  it('counts the initial margin of a borrow the move creates', () => {
+    const moved = fit({ marginBalance: 1000, initialMargin: 100 }, 888, 0);
+    expect(moved).toBe(725.49);
+    expect(1000 - moved).toBeGreaterThanOrEqual(1.12 * (100 + moved / 5));
+  });
+
+  it('counts only the part of the move past the wallet equity as borrow', () => {
+    const moved = fit({ marginBalance: 1000, initialMargin: 100 }, 888, 500);
+    expect(moved).toBe(816.99);
+    expect(1000 - moved).toBeGreaterThanOrEqual(1.12 * (100 + (moved - 500) / 5));
+  });
+
+  it('counts no borrow when the wallet equity covers the move', () => {
+    expect(fit({ marginBalance: 1000, initialMargin: 100 }, 888, 900)).toBe(888);
+  });
+
+  it('counts the whole move as borrow when the wallet equity is below 0', () => {
+    expect(fit({ marginBalance: 1000, initialMargin: 100 }, 888, -50)).toBe(725.49);
   });
 });
 
@@ -404,6 +434,68 @@ describe('planFor Example E', () => {
   });
 });
 
+describe('planFor toward USDT with USDC in the Gate bucket', () => {
+  const plan = planOf({ usdt: 100, gate: 50, usdc: 250, positionIm: 0 });
+
+  it('toward USDT sells the Gate bucket and ends even', () => {
+    expect(plan.direction).toBe('toUsdt');
+    for (const route of [plan.routes.loop, plan.routes.convert]) {
+      const usdt = walletIn(route.after, 'USDT', 'CROSSEX').equity;
+      const usdc = walletIn(route.after, 'USDC', 'HYPERLIQUID').equity;
+      expect(walletIn(route.after, 'USDC', 'GATE').cash).toBe(0);
+      expect(Math.abs(usdt - 200)).toBeLessThanOrEqual(1);
+      expect(Math.abs(usdc - 200)).toBeLessThanOrEqual(1);
+      expect(Math.abs(usdt - usdc)).toBeLessThanOrEqual(0.05);
+    }
+  });
+
+  it('toward USDT prices the Gate bucket sale in the cost', () => {
+    expect(plan.routes.convert.steps).toEqual([expect.objectContaining({ kind: 'convert', move: 50.05 })]);
+    expect(plan.routes.convert.costUsd).toBeCloseTo(0.11, 2);
+    expect(walletIn(plan.routes.convert.after, 'USDT', 'CROSSEX').equity).toBe(199.93);
+    expect(plan.routes.loop.steps).toEqual([expect.objectContaining({ kind: 'round', move: 50.5, arrives: 49.5 })]);
+    expect(walletIn(plan.routes.loop.after, 'USDT', 'CROSSEX').equity).toBe(199.49);
+  });
+
+  it('toward USDT keeps Gate bucket dust under 1', () => {
+    const dust = planOf({ usdt: 100, gate: 0.5, usdc: 250, positionIm: 0 });
+    expect(walletIn(dust.routes.loop.after, 'USDC', 'GATE').cash).toBe(0.5);
+    expect(walletIn(dust.routes.convert.after, 'USDC', 'GATE').cash).toBe(0.5);
+  });
+});
+
+describe('planFor sending wallet with no cash', () => {
+  const plan = planOf({ usdt: 100, gate: 0, usdc: -5, usdcUpnl: 500, positionIm: 0 });
+
+  it('no cash to send is balanced and keeps short of even', () => {
+    expect(plan).toMatchObject({ direction: 'toUsdt', balanced: true, moves: 0, shortOfEven: 197.5, recommended: null });
+  });
+
+  it('no cash to send leaves no route to start', () => {
+    expect(plan.routes.mix).toBeNull();
+    expect(plan.routes.loop).toMatchObject({ available: false, steps: [] });
+    expect(plan.routes.convert).toMatchObject({ available: false, steps: [] });
+  });
+});
+
+describe('planFor interest saved', () => {
+  it('a repaid USDT borrow saves interest from the first dollar', () => {
+    const plan = planOf(EXAMPLE_E);
+    expect(plan.routes.mix!.savesPerDayUsd).toBe(Number(cents(612.35 * 0.00002 * 24)));
+    expect(plan.routes.mix!.savesPerDayUsd).toBe(0.29);
+  });
+
+  it('a repaid USDC Hyperliquid borrow saves only the interest on the part over 10000', () => {
+    const plan = planOf({ usdt: 5000, gate: 0, usdc: -12000, positionIm: 0 });
+    expect(plan.recommended).toBe('convert');
+    expect(walletIn(plan.routes.convert.after, 'USDC', 'HYPERLIQUID').equity).toBeGreaterThan(-10000);
+    expect(plan.routes.convert.savesPerDayUsd).toBe(Number(cents(2000 * 0.00001 * 24)));
+    const partial = planOf({ usdt: 1000, gate: 0, usdc: -13000, positionIm: 0 }).routes.convert;
+    expect(partial.steps).toEqual([expect.objectContaining({ move: 1000, arrives: 998 })]);
+    expect(partial.savesPerDayUsd).toBe(Number(cents((3000 - 2002) * 0.00001 * 24)));
+  });
+});
+
 describe('planFor Thin margin', () => {
   const plan = planOf(THIN_MARGIN);
 
@@ -506,5 +598,22 @@ describe('planFor blocked routes', () => {
 
   it('no USDC coin rule leaves the loop open', () => {
     expect(planOf(ACCOUNT_A, { ...OPEN, coins: [] }).routes.loop).toMatchObject({ available: true, reason: null });
+  });
+
+  it('cash under 11 blocks the loop with the cash reason', () => {
+    const plan = planOf({ usdt: 100, gate: 0, usdc: 8, usdcUpnl: 500, positionIm: 10 });
+    expect(plan.routes.loop).toMatchObject({ available: false, reason: 'Not enough cash for an 11 USDC round.' });
+    expect(plan.routes.convert).toMatchObject({ available: true, reason: null });
+    expect(plan.recommended).toBe('convert');
+  });
+});
+
+describe('planFor loose Gate numbers', () => {
+  it.each(['', '  ', 0, '0', 'n/a', -3])('a USDC minimum of %j falls back to 11 and never hangs the plan', (min) => {
+    const plan = planOf(ACCOUNT_A_ROUND_3, { ...OPEN, coins: [{ ...USDC_RULE, minTransAmount: min }] });
+    expect(plan.routes.loop.reason).toBe('Free margin is too low for an 11 USDC round.');
+    expect(plan.routes.loop.steps.every((step) => step.move > 0)).toBe(true);
+    const rounds = planOf(ACCOUNT_A, { ...OPEN, coins: [{ ...USDC_RULE, minTransAmount: min }] }).routes.loop.steps;
+    expect(rounds.map((step) => step.move)).toEqual([24.51, 29.93, 36.58, 44.71, 40.16]);
   });
 });

@@ -1,4 +1,5 @@
 import { useState, type ReactNode } from 'react';
+import { ApiError } from '../api/client';
 import { useAccount, usePositions, useRebalance, useRebalanceCommand, useStartRebalance, useTransfer } from '../api/queries';
 import type { GateAccount, RouteName, TransferCoin, WalletAfter } from '../api/types';
 import { Chip } from '../components/Chip';
@@ -12,8 +13,8 @@ import { useNow } from '../lib/useNow';
 import { useSettledError } from '../lib/useSettledError';
 import { BalanceBars, BarLegend, jobRows, planRows, ROUND_SECONDS, StepList, type BarRow } from './RebalanceBits';
 import { HOVER } from './rebalanceCopy';
-import { borrowFacts, cashFacts, DUST, Facts, lastRunFacts, quoteFacts, RebalanceInfo, ROUTE_LABEL } from './RebalanceHovers';
-import { keyOf, roundCountOf, RouteRow, SpotLines, Term, toggleLabel, WalletTerm } from './RebalanceHovers';
+import { balancedFacts, borrowFacts, cashFacts, DUST, Facts, isCashLimitedEven, quoteFacts } from './RebalanceHovers';
+import { keyOf, RebalanceInfo, ROUTE_LABEL, roundCountOf, RouteRow, SpotLines, stepsNoun, Term, WalletTerm } from './RebalanceHovers';
 
 const ROUTE_ORDER: RouteName[] = ['mix', 'loop', 'convert'];
 const WALLET_TONE: Record<string, BarRow['tone']> = { 'USDT/CROSSEX': 'usdt', 'USDC/HYPERLIQUID': 'usdc', 'USDC/GATE': 'gate' };
@@ -30,20 +31,23 @@ function barRows(wallets: WalletAfter[], showGate: boolean): BarRow[] {
     });
 }
 
-function CommandButton({ name, text, disabled, onPress }: { name: string; text: string; disabled: boolean; onPress: () => void }) {
-  const rule = (
-    <span className="h-1.5 w-full">
-      <span className="sr-only">{`About ${name}`}</span>
-    </span>
+function CommandButton({
+  shown,
+  text,
+  disabled,
+  onPress,
+}: {
+  shown: string;
+  text: string;
+  disabled: boolean;
+  onPress: () => void;
+}) {
+  const button = (
+    <button type="button" className="btn-ghost-xs leading-4" disabled={disabled} onClick={onPress}>
+      <span className="underline decoration-ink-600 decoration-dotted underline-offset-4">{shown}</span>
+    </button>
   );
-  return (
-    <span className="inline-flex flex-col">
-      <button type="button" className="btn-ghost-xs" disabled={disabled} onClick={onPress}>
-        {name}
-      </button>
-      <Term label={rule} text={text} />
-    </span>
-  );
+  return <Term wrapsControl label={button} text={text} />;
 }
 
 export function RebalanceSection({
@@ -80,7 +84,7 @@ export function RebalanceSection({
         <p role="alert" className="text-xs text-rose-300">
           Could not load the rebalance view. {loadError.message}
         </p>
-        <button type="button" className="btn-ghost-xs self-start" onClick={() => void query.refetch()}>
+        <button type="button" className="btn-ghost-xs leading-4 self-start" onClick={() => void query.refetch()}>
           Retry
         </button>
       </section>
@@ -88,7 +92,15 @@ export function RebalanceSection({
   }
 
   const { plan, job, buckets } = view;
-  const onError = (error: Error) => toast.push('error', error.message);
+  const onError = (error: Error) => {
+    const hint = error instanceof ApiError ? error.hint : undefined;
+    if (!hint) {
+      toast.push('error', error.message);
+      return;
+    }
+    const period = error.message.endsWith('.') ? '' : '.';
+    toast.push('error', `${error.message}${period} ${hint}`);
+  };
   const mode = job?.status === 'running' || job?.status === 'halted' ? job.status : plan.balanced ? 'balanced' : 'plan';
   const runKey = [job?.id, job?.status, plan.direction, plan.recommended].join(':');
   const isOpen = (name: RouteName | null): name is RouteName => name !== null && plan.routes[name]?.available === true;
@@ -100,6 +112,7 @@ export function RebalanceSection({
   const receiving = buckets.find((b) => keyOf(b) === (direction === 'toUsdt' ? 'USDT/CROSSEX' : 'USDC/HYPERLIQUID'));
   const borrow = receiving && floorCents(receiving.borrow) >= MIN_BORROW ? receiving.borrow : null;
   const moving = transfer?.transfer?.status === 'moving';
+  const dealWorking = transfer?.lock === 'deal';
   const nowCaption = <Term label="Now" text={HOVER.now} />;
   const nowRows = barRows(buckets, showGate);
   const currentRound = job?.steps[job.stepIndex]?.round ?? null;
@@ -111,7 +124,7 @@ export function RebalanceSection({
     <HoldToConfirmButton
       tone="cyan"
       holdMs={holdMs}
-      disabled={mode !== 'plan' || moving || pick === null || start.isPending}
+      disabled={mode !== 'plan' || moving || dealWorking || pick === null || start.isPending}
       onConfirm={() => pick && start.mutate({ route: pick }, { onError })}
     >
       Hold to rebalance
@@ -146,7 +159,10 @@ export function RebalanceSection({
       </>
     );
   } else if (job && mode === 'halted') {
-    const rows = withSpot('spot', 'Gate spot', HOVER.gateSpot);
+    const rows =
+      job.inTransit?.at === 'MOVING'
+        ? withSpot('transit', 'On the way', HOVER.onTheWay)
+        : withSpot('spot', 'Gate spot', HOVER.gateSpot);
     const busy = resume.isPending || abandon.isPending;
     body = (
       <>
@@ -161,8 +177,18 @@ export function RebalanceSection({
         </div>
         <BarLegend rows={rows} />
         <div className="flex gap-2">
-          <CommandButton name="Resume" text={HOVER.resume} disabled={busy} onPress={() => resume.mutate(job.id, { onError })} />
-          <CommandButton name="Abandon" text={HOVER.abandon} disabled={busy} onPress={() => abandon.mutate(job.id, { onError })} />
+          <CommandButton
+            shown={resume.isPending ? 'Resuming' : 'Resume'}
+            text={HOVER.resume}
+            disabled={busy}
+            onPress={() => resume.mutate(job.id, { onError })}
+          />
+          <CommandButton
+            shown="Abandon"
+            text={HOVER.abandon}
+            disabled={busy}
+            onPress={() => abandon.mutate(job.id, { onError })}
+          />
         </div>
         <StepList rows={jobRows(job, now, borrow)} />
       </>
@@ -174,13 +200,18 @@ export function RebalanceSection({
           <BalanceBars caption={nowCaption} rows={nowRows} scale={scaleOf(nowRows)} />
         </div>
         <BarLegend rows={nowRows} />
-        <Facts items={lastRunFacts(job)} />
+        <Facts items={balancedFacts(plan, job)} />
         <div>{hold}</div>
         {spotLines}
       </>
     );
   } else {
     const afterRows = barRows(route.after, showGate);
+    const waitLine = moving
+      ? 'Rebalance waits until the transfer ends.'
+      : dealWorking
+        ? 'Rebalance waits until the deal ends.'
+        : null;
     body = (
       <>
         <Facts items={borrowFacts(buckets)} />
@@ -215,8 +246,8 @@ export function RebalanceSection({
             aria-expanded={stepsOpen}
             onClick={() => setStepsOpen(!stepsOpen)}
           >
-            <span aria-hidden="true">▸</span>
-            {stepsOpen ? 'Hide' : toggleLabel(route)}
+            <span aria-hidden="true">{stepsOpen ? '▾' : '▸'}</span>
+            {`${stepsOpen ? 'Hide' : 'Show'} ${stepsNoun(route)}`}
           </button>
         )}
         {stepsOpen && <StepList rows={planRows(route, direction, borrow)} />}
@@ -224,9 +255,7 @@ export function RebalanceSection({
           {hold}
           {plan.shortOfEven > 0 && <Chip tone="amber">Ends as even as cash allows</Chip>}
         </div>
-        <p className="text-xs text-ink-400">
-          {moving ? 'Rebalance waits until the transfer ends.' : 'New deals and transfers wait until it ends.'}
-        </p>
+        {waitLine && <p className="text-xs text-ink-400">{waitLine}</p>}
         {spotLines}
       </>
     );
@@ -239,7 +268,12 @@ export function RebalanceSection({
           {title}
           <p className="text-xs text-ink-500">Even out your CrossEx USDT and USDC wallets</p>
         </div>
-        {mode === 'balanced' && <Chip tone="green">Balanced</Chip>}
+        {mode === 'balanced' &&
+          (isCashLimitedEven(plan) ? (
+            <Chip tone="amber">As even as cash allows</Chip>
+          ) : (
+            <Chip tone="green">Balanced</Chip>
+          ))}
         {mode !== 'balanced' && borrowed && (
           <Chip tone="amber">
             <span className="num">{`Borrowing ${num(floorCents(borrowed.borrow))} ${borrowed.coin}`}</span>

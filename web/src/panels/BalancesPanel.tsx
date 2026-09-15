@@ -3,6 +3,7 @@ import { useAccount, useTransfer } from '../api/queries';
 import type { CrossexAsset, GateAccount, SpotBalance, TransferCoin } from '../api/types';
 import { DataTable, type Column } from '../components/DataTable';
 import { EmptyState } from '../components/EmptyState';
+import { HoverCard } from '../components/HoverCard';
 import { QueryError } from '../components/QueryError';
 import { MarginBreakdown } from '../components/MarginDonut';
 import { SignedNumber } from '../components/SignedNumber';
@@ -11,8 +12,10 @@ import { num } from '../lib/fmt';
 import { HOVER } from './rebalanceCopy';
 import { Term } from './RebalanceHovers';
 import { RebalanceSection } from './RebalanceSection';
-import { NoSpotReadLine } from './TransferBits';
+import { NoSpotReadHow } from './TransferBits';
 import { TransferSection, type TransferPick } from './TransferSection';
+
+const NO_SPOT_READ_TEXT = 'Add Spot read permission to see spot balances.';
 
 type AssetRow =
   | { kind: 'crossex'; asset: CrossexAsset }
@@ -29,10 +32,21 @@ function CoinCell({ coin, account }: { coin: string; account: string }) {
   );
 }
 
+function NoSpotReadRow() {
+  return (
+    <span className="flex flex-wrap items-center gap-2">
+      <span className="text-ink-200">{NO_SPOT_READ_TEXT}</span>
+      <HoverCard label={<span className="text-link">How ▸</span>} icon={false} underline={false}>
+        <NoSpotReadHow />
+      </HoverCard>
+    </span>
+  );
+}
+
 function coinCell(row: AssetRow): ReactNode {
   if (row.kind === 'crossex') return <CoinCell coin={row.asset.coin} account={row.asset.exchangeType} />;
   if (row.kind === 'spot') return <CoinCell coin={row.spot.coin} account="SPOT" />;
-  if (row.kind === 'noSpotRead') return <NoSpotReadLine />;
+  if (row.kind === 'noSpotRead') return <NoSpotReadRow />;
   const label = <span className="text-[10px] font-semibold uppercase tracking-wider text-gold">Gate spot</span>;
   return <Term label={label} text={HOVER.gateSpotAssets} />;
 }
@@ -114,6 +128,7 @@ export function BalancesPanel() {
   const assets = (acc.assets ?? [])
     .filter((a) => Number(a.equity) !== 0 || Number(a.balance) !== 0 || Number(a.upnl) !== 0)
     .map((asset): AssetRow => ({ kind: 'crossex', asset }));
+  const rows = assets.length === 0 && spot === null ? [] : [...assets, ...spotRows(spot)];
 
   const openTransfer = (coin: TransferCoin, wallet: GateAccount) => {
     setPick((prev) => ({ coin, wallet, nonce: (prev?.nonce ?? 0) + 1 }));
@@ -136,10 +151,11 @@ export function BalancesPanel() {
         </h2>
         <DataTable
           columns={ASSET_COLUMNS}
-          rows={[...assets, ...spotRows(spot)]}
+          rows={rows}
           rowKey={rowKeyOf}
           emptyState={<EmptyState icon="○" title="No non-zero balances" hint="Deposit collateral to CrossEx to get started." />}
         />
+        {assets.length === 0 && spot === null && <NoSpotReadRow />}
       </section>
     </div>
   );

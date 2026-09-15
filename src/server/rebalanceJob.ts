@@ -1,6 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { classifyGateError } from '../core/errors';
+import { classifyGateError, plainErrorFor } from '../core/errors';
+import { floorCents } from '../core/rebalance/plan';
 import type {
   Direction,
   GateAccount,
@@ -47,6 +48,7 @@ export interface Job {
   steps: Step[];
   fundsAt: FundsAt;
   haltReason: string | null;
+  tagCount: number;
   createdAt: number;
   updatedAt: number;
 }
@@ -64,16 +66,25 @@ const LEGACY_STEP: Record<string, StepName> = { 'Pull from Hyperliquid': 'From H
 const JOB_STATUSES: readonly string[] = ['running', 'halted', 'done', 'abandoned'];
 const FUNDS_AT: readonly string[] = ['CROSSEX', 'GATE', 'SPOT', 'HYPERLIQUID'];
 const IN_TRANSIT_STATUSES: readonly JobStatus[] = ['running', 'halted', 'abandoned'];
+const MOVES_TO: Record<string, string> = {
+  'To spot': 'Gate spot',
+  'From Hyperliquid': 'Gate spot',
+  'To Hyperliquid': 'USDC · Hyperliquid',
+  'To Gate': 'USDC · Gate',
+};
+const SENDS_WHAT_ARRIVED: readonly string[] = ['To Hyperliquid', 'To Gate'];
 const TRANSFER_STATUSES: readonly string[] = ['moving', 'done', 'failed'];
 
 export const HALT_TEXT = {
-  restart: 'The app restarted during the run.',
+  restart: 'The app restarted during the run. Nothing failed. Press Resume.',
   marginTooLow: 'Free margin is too low for the next round.',
+  cashTooLow: 'Not enough cash for an 11 USDC round.',
+  unconfirmed: 'Gate did not confirm the last order. Press Resume to check again.',
   shortBuy: 'The USDC buy filled under 11 USDC.',
   poorQuote: 'Convert quote was more than 0.3% under market.',
   marginRefused: 'Gate refused the move: free margin is too low.',
   noRecord: 'Gate has no record of this transfer. Try again.',
-  timeout: 'Gate took too long on this step.',
+  timeout: 'Gate took too long on this step. Press Resume to check again.',
 } as const;
 
 export const LOCK_TEXT = {
@@ -162,6 +173,7 @@ export function newJob(
     steps: input.steps.flatMap((step) => stepsFor(input.direction, step)),
     fundsAt: input.direction === 'toUsdt' ? 'HYPERLIQUID' : 'CROSSEX',
     haltReason: null,
+    tagCount: 0,
     createdAt: now,
     updatedAt: now,
   };
@@ -193,9 +205,11 @@ export function newTransferJob(
 }
 
 export function haltReasonFor(err: unknown): string {
-  const classified = classifyGateError(err);
-  if (classified.label === 'TRANSFER_AMOUNT_INSUFFICIENT') return HALT_TEXT.marginRefused;
-  return classified.hint ? `${classified.message} ${classified.hint}` : classified.message;
+  if (classifyGateError(err).label === 'TRANSFER_AMOUNT_INSUFFICIENT') return HALT_TEXT.marginRefused;
+  const plain = plainErrorFor(err);
+  if (!plain.hint) return plain.message;
+  const message = /[.!?]$/.test(plain.message) ? plain.message : `${plain.message}.`;
+  return `${message} ${plain.hint}`;
 }
 
 export function transferFailText(reason: string): string {
@@ -203,23 +217,48 @@ export function transferFailText(reason: string): string {
   return trimmed ? `Transfer failed: ${trimmed}.` : 'Transfer failed.';
 }
 
-export function inTransitOf(job: Job): { coin: 'USDC'; qty: number } | null {
-  if (job.fundsAt !== 'SPOT' || !IN_TRANSIT_STATUSES.includes(job.status)) return null;
+export function spotShortfallFailText(message: string, coin: TransferCoin, amount: number): string {
+  const match = message.match(/transferAvailable:\s*(-?\d[\d,]*(?:\.\d+)?(?:e[-+]?\d+)?)/i);
+  const available = match ? Number(match[1].replaceAll(',', '')) : NaN;
+  if (!Number.isFinite(available)) return `Gate spot does not have ${formatMoney(amount)} ${coin}.`;
+  if (available <= 0) return `Gate spot has no ${coin}.`;
+  const cents = floorCents(available);
+  if (cents <= 0) return `Gate spot has less than 0.01 ${coin}.`;
+  return `Gate spot has only ${formatMoney(cents)} ${coin}.`;
+}
+
+const movingStep = (job: Job): Step | null => {
+  const step = job.steps[job.stepIndex];
+  return step && Object.hasOwn(MOVES_TO, step.name) && step.venueId !== null && step.status !== 'done' ? step : null;
+};
+
+export function inTransitOf(job: Job): { coin: 'USDC'; qty: number; at: 'SPOT' | 'MOVING' } | null {
+  if (!IN_TRANSIT_STATUSES.includes(job.status)) return null;
+  const moving = movingStep(job);
+  if (moving) {
+    const sent = SENDS_WHAT_ARRIVED.includes(moving.name) ? job.steps[job.stepIndex - 1]?.qty : moving.planned;
+    return sent ? { coin: 'USDC', qty: sent, at: 'MOVING' } : null;
+  }
+  if (job.fundsAt !== 'SPOT') return null;
   const last = job.steps.filter((step) => step.status === 'done').at(-1);
   if (!last || last.qty === null) return null;
-  return { coin: 'USDC', qty: last.qty };
+  return { coin: 'USDC', qty: last.qty, at: 'SPOT' };
 }
 
 export const formatMoney = (value: number): string =>
   value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 export function bannerFor(job: Job): string {
-  const { round } = job.steps[job.stepIndex];
-  if (round === null) return 'Rebalance stopped at Convert.';
+  const step = job.steps[job.stepIndex];
+  if (!step) return 'Rebalance stopped.';
+  const { round } = step;
+  if (round === null) return `Rebalance stopped at ${step.name}.`;
   const stopped = `Rebalance stopped in round ${round}.`;
   const inTransit = inTransitOf(job);
   if (!inTransit) return stopped;
-  return `${stopped} ${formatMoney(inTransit.qty)} ${inTransit.coin} is in Gate spot.`;
+  const amount = `${formatMoney(inTransit.qty)} ${inTransit.coin}`;
+  if (inTransit.at === 'SPOT') return `${stopped} ${amount} is in Gate spot.`;
+  return `${stopped} ${amount} is on the way to ${MOVES_TO[step.name]}.`;
 }
 
 export function transferLockFor(input: { rebalance: Job | null; dealWorking: boolean }): TransferLock | null {
@@ -265,6 +304,8 @@ function parseJob(value: unknown): Job | null {
   if (!Number.isInteger(index) || (index as number) < 0 || (index as number) >= job.steps.length) return null;
   if (!job.steps.every((step) => STEP_NAMES.includes(String(step.name)))) return null;
   if (!FUNDS_AT.includes(String(job.fundsAt))) return null;
+  if (job.tagCount === undefined) job.tagCount = job.steps.length;
+  if (!Number.isInteger(job.tagCount) || (job.tagCount as number) < 0) return null;
   return job as Job;
 }
 

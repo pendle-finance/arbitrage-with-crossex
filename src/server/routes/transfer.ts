@@ -1,15 +1,23 @@
 import type { FastifyInstance } from 'fastify';
 import type { SpotAccount } from 'gate-api';
-import { classifyGateError, CoreError } from '../../core/errors';
+import { classifyGateError, classifyPlain, CoreError } from '../../core/errors';
 import { pathRule, transferPaths, type SpotBalance, type TransferCoin, type TransferPath } from '../../core/rebalance/plan';
 import type { AppDeps } from '../app';
 import { TTL } from '../cache';
 import { DISCLAIMER_NOT_ACCEPTED, isDisclaimerAccepted } from '../disclaimer';
+import { sendError } from '../errorReply';
 import { formatMoney, LOCK_TEXT, newTransferJob, type TransferFile, type TransferJob } from '../rebalanceJob';
-import { runTransfer } from '../rebalanceRunner';
+import { isSendable, runTransfer } from '../rebalanceRunner';
 import { conflict, moneyLockNow, sleep, STALE_TEXT } from './rebalance';
 
 const SPOT_COINS: readonly TransferCoin[] = ['USDT', 'USDC'];
+const SPOT_REFUSED_KEY = 'spot:refused';
+const SPOT_REFUSED_MS = 60_000;
+
+const isSpotReadRefused = (err: unknown): boolean => {
+  const { httpStatus, label } = classifyGateError(err);
+  return httpStatus === 403 || label === 'FORBIDDEN';
+};
 
 const minimumText = (path: TransferPath): string =>
   `Minimum ${path.min.toLocaleString('en-US', { maximumFractionDigits: 8 })} ${path.coin}.`;
@@ -40,6 +48,7 @@ const viewOf = ({ id, coin, from, to, amount, status, received, failText, create
 
 export function transferRoutes(deps: AppDeps) {
   return async function plugin(app: FastifyInstance): Promise<void> {
+    app.setErrorHandler((err, req, reply) => sendError(err, req, reply, classifyPlain));
     const transfers = deps.transfer?.jobs ?? null;
     const now = (): number => deps.engine!.clock.now();
     let runningId: string | null = null;
@@ -73,20 +82,24 @@ export function transferRoutes(deps: AppDeps) {
       return lock === null ? null : LOCK_TEXT[lock.kind];
     };
 
-    const readSpot = (fresh: boolean) =>
-      deps.cache.get(
-        'spot:accounts',
-        TTL.live,
-        async (): Promise<SpotBalance[] | null> => {
-          try {
-            return spotBalances((await deps.getClients().spot.listSpotAccounts()).body ?? []);
-          } catch (err) {
-            if (classifyGateError(err).httpStatus === 403) return null;
-            throw err;
-          }
-        },
-        { fresh },
-      );
+    const fetchSpot = async (): Promise<SpotBalance[] | null> => {
+      try {
+        const balances = spotBalances((await deps.getClients().spot.listSpotAccounts()).body ?? []);
+        deps.cache.bust(SPOT_REFUSED_KEY);
+        return balances;
+      } catch (err) {
+        if (!isSpotReadRefused(err)) throw err;
+        deps.cache.bust(SPOT_REFUSED_KEY);
+        await deps.cache.get(SPOT_REFUSED_KEY, SPOT_REFUSED_MS, async () => true);
+        return null;
+      }
+    };
+
+    const readSpot = async (fresh: boolean): Promise<{ value: SpotBalance[] | null; stale: boolean }> => {
+      const wasRefused = !fresh && (await deps.cache.get(SPOT_REFUSED_KEY, SPOT_REFUSED_MS, async () => false)).value;
+      if (wasRefused) return { value: null, stale: false };
+      return deps.cache.get('spot:accounts', TTL.live, fetchSpot, { fresh });
+    };
 
     const loadInputs = async (fresh: boolean) => {
       const crossEx = () => deps.getClients().crossEx;
@@ -117,7 +130,11 @@ export function transferRoutes(deps: AppDeps) {
       const envPath = deps.credentials?.envPath;
       if (envPath && !isDisclaimerAccepted(envPath)) return reply.code(403).send(DISCLAIMER_NOT_ACCEPTED);
       const store = requireTransfers();
-      const body = (req.body ?? {}) as { coin?: unknown; from?: unknown; to?: unknown; amount?: unknown };
+      const body = (req.body ?? {}) as { id?: unknown; coin?: unknown; from?: unknown; to?: unknown; amount?: unknown };
+      const clientId = typeof body.id === 'string' ? body.id : null;
+      if (body.id !== undefined && !clientId) throw new CoreError('Transfer id must be text.');
+      const isDuplicate = (): boolean => clientId !== null && store.read()?.id === clientId;
+      if (isDuplicate()) return reply.code(202).ok({ id: clientId, duplicate: true });
       const rule = pathRule(String(body.coin), String(body.from), String(body.to));
       if (!rule) throw new CoreError('Unknown transfer path.');
       const amount = typeof body.amount === 'string' || typeof body.amount === 'number' ? Number(body.amount) : NaN;
@@ -127,11 +144,15 @@ export function transferRoutes(deps: AppDeps) {
       const { paths, userId, accountStale, spotStale } = await loadInputs(true);
       if (accountStale || (rule.from === 'SPOT' && spotStale)) return conflict(reply, STALE_TEXT);
       const path = paths.find((p) => p.coin === rule.coin && p.from === rule.from && p.to === rule.to)!;
-      if (amount < path.min) return conflict(reply, minimumText(path));
+      if (amount < path.min || !isSendable(amount)) {
+        throw new CoreError(minimumText(path));
+      }
       if (path.max !== null && amount > path.max) return conflict(reply, overMaxText(path, path.max));
+      if (isDuplicate()) return reply.code(202).ok({ id: clientId, duplicate: true });
       const again = lockText();
       if (again) return conflict(reply, again);
-      const transfer = newTransferJob({ coin: rule.coin, from: rule.from, to: rule.to, amount, userId }, now());
+      const job = newTransferJob({ coin: rule.coin, from: rule.from, to: rule.to, amount, userId }, now());
+      const transfer = clientId === null ? job : { ...job, id: clientId };
       store.write(transfer);
       start(store, transfer);
       return reply.code(202).ok({ id: transfer.id });

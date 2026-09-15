@@ -1,6 +1,6 @@
-import { CrossexOrderRequest, type CrossexTransferRecord } from 'gate-api';
+import { CrossexOrderRequest, type CrossexOrder, type CrossexTransferRecord } from 'gate-api';
 import type { Clients } from '../core/clients';
-import { classifyGateError, type ClassifiedError } from '../core/errors';
+import { classifyGateError, refusalReason, type ClassifiedError } from '../core/errors';
 import { roundToStep, stripZeros } from '../core/numbers';
 import {
   arrivesFor,
@@ -11,6 +11,7 @@ import {
   floorCents,
   GATE_WALLET,
   HYPERLIQUID_MIN_USDC,
+  MIN_TRANSFER,
   nearestCents,
   pathRule,
   SPOT_MIN_QUOTE_USDT,
@@ -27,6 +28,7 @@ import {
   HALT_TEXT,
   haltReasonFor,
   pendingStep,
+  spotShortfallFailText,
   TO_USDC_STEPS,
   TO_USDT_STEPS,
   transferFailText,
@@ -45,6 +47,7 @@ export interface RunnerDeps {
   now: () => number;
   sleep: (ms: number) => Promise<void>;
   onHalt: (job: Job) => void;
+  pollOnly?: boolean;
 }
 
 export interface TransferRunnerDeps {
@@ -61,8 +64,11 @@ export const POLL_MS = 1_000;
 export const LOOKUP_RETRY_MS = 10_000;
 export const LOOKUP_WINDOW_MS = 120_000;
 export const QUOTE_FLOOR = 0.997;
-export const TRANSFER_STEP = '0.00001';
+export const TRANSFER_STEP = String(MIN_TRANSFER);
 const CENT_STEP = '0.01';
+const SWEEP_PAGE_SIZE = 100;
+const SWEEP_MAX_PAGES = 50;
+const SWEEP_SKEW_MS = 600_000;
 const HYPERLIQUID_ACCOUNT: GateAccount = 'CROSSEX_HYPERLIQUID';
 const MOVES_OUT: readonly string[] = ['To spot', 'From Hyperliquid'];
 const ROUND_MOVES: readonly string[] = [...MOVES_OUT, 'To Hyperliquid'];
@@ -73,13 +79,15 @@ const TRANSFER_DEAD = /FAIL|CANCEL|REJECT|EXPIRE/i;
 
 type CrossEx = Clients['crossEx'];
 type Margins = { marginBalance: number; initialMargin: number };
+type Sending = { cash: number; equity: number };
+type WalletRef = { coin: string; venue: string };
 
 type StepSpec =
   | { kind: 'order'; side: CrossexOrderRequest.Side; dest: FundsAt }
   | { kind: 'transfer'; coin: TransferCoin; from: GateAccount; to: GateAccount; dest: FundsAt }
   | { kind: 'convert'; dest: FundsAt };
 
-const STEPS: Record<StepName, StepSpec> = {
+export const STEPS: Record<StepName, StepSpec> = {
   'Buy USDC': { kind: 'order', side: CrossexOrderRequest.Side.BUY, dest: 'GATE' },
   'To spot': { kind: 'transfer', coin: 'USDC', from: 'CROSSEX_GATE', to: 'SPOT', dest: 'SPOT' },
   'To Hyperliquid': { kind: 'transfer', coin: 'USDC', from: 'SPOT', to: HYPERLIQUID_ACCOUNT, dest: 'HYPERLIQUID' },
@@ -94,26 +102,35 @@ const timeoutFor = (spec: StepSpec): number =>
     ? HL_TRANSFER_TIMEOUT_MS
     : STEP_TIMEOUT_MS;
 
-export function tagFor(jobId: string, stepIndex: number, attempt = 0): string {
-  return attempt > 0 ? `t-rb${jobId}${stepIndex}x${attempt}` : `t-rb${jobId}${stepIndex}`;
+export function tagFor(jobId: string, n: number, attempt = 0): string {
+  return attempt > 0 ? `t-rb${jobId}${n}x${attempt}` : `t-rb${jobId}${n}`;
 }
+
+const transferAmount = (amount: number): string => stripZeros(roundToStep(amount, TRANSFER_STEP, 'down'));
+
+export const isSendable = (amount: number): boolean => Number(transferAmount(amount)) > 0;
 
 const isRefusal = (c: ClassifiedError): boolean =>
   Boolean(c.label) && c.httpStatus !== undefined && c.httpStatus >= 400 && c.httpStatus < 500;
 
-async function readAccount(crossEx: CrossEx): Promise<{ margins: Margins; cash: (wallet: { coin: string; venue: string }) => number }> {
+const isSpotShortfall = (from: string, c: ClassifiedError): boolean =>
+  from === 'SPOT' && c.label === 'TRANSFER_AMOUNT_INSUFFICIENT';
+
+async function readAccount(
+  crossEx: CrossEx,
+): Promise<{ margins: Margins; cash: (wallet: WalletRef) => number; equity: (wallet: WalletRef) => number }> {
   const { body } = await crossEx.getCrossexAccount();
   const margins = { marginBalance: Number(body.marginBalance), initialMargin: Number(body.initialMargin) };
   if (!Number.isFinite(margins.marginBalance) || !Number.isFinite(margins.initialMargin)) {
     throw new Error('account read has no margin balance');
   }
   const buckets = bucketsFrom(body, [], {});
-  const cash = (wallet: { coin: string; venue: string }): number =>
-    buckets.find((bucket) => bucket.coin === wallet.coin && bucket.venue === wallet.venue)?.cash ?? 0;
-  return { margins, cash };
+  const bucketOf = (wallet: WalletRef) =>
+    buckets.find((bucket) => bucket.coin === wallet.coin && bucket.venue === wallet.venue);
+  return { margins, cash: (wallet) => bucketOf(wallet)?.cash ?? 0, equity: (wallet) => bucketOf(wallet)?.equity ?? 0 };
 }
 
-async function transferRow(
+export async function transferRow(
   crossEx: CrossEx,
   coin: string,
   match: (row: CrossexTransferRecord) => boolean,
@@ -127,13 +144,13 @@ async function sendTransfer(
   request: { coin: string; amount: number; from: string; to: string; text: string },
 ): Promise<string> {
   const { body } = await crossEx.createCrossexTransfer({
-    crossexTransferRequest: { ...request, amount: stripZeros(roundToStep(request.amount, TRANSFER_STEP, 'down')) },
+    crossexTransferRequest: { ...request, amount: transferAmount(request.amount) },
   });
   if (!body.txId) throw new Error('transfer response has no txId');
   return String(body.txId);
 }
 
-function receivedOf(row: CrossexTransferRecord, path: { coin: string; from: string; to: string }): number {
+export function receivedOf(row: CrossexTransferRecord, path: { coin: string; from: string; to: string }): number {
   const actual = Number(row.actualReceive);
   if (actual > 0) return actual;
   const fee = pathRule(path.coin, path.from, path.to)?.feeUsd ?? 0;
@@ -191,8 +208,8 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
    * pooled CROSSEX bucket. */
   const convertSpec = () =>
     job.direction === 'toUsdt'
-      ? { fromCoin: 'USDC', toCoin: 'USDT', dest: 'CROSSEX' as FundsAt }
-      : { fromCoin: 'USDT', toCoin: 'USDC', dest: 'HYPERLIQUID' as FundsAt };
+      ? { fromCoin: 'USDC', toCoin: 'USDT', dest: 'CROSSEX' as FundsAt, symbol: 'HYPERLIQUID_CONVERT_USDC_USDT' }
+      : { fromCoin: 'USDT', toCoin: 'USDC', dest: 'HYPERLIQUID' as FundsAt, symbol: 'HYPERLIQUID_CONVERT_USDT_USDC' };
 
   const growConvert = (amount: number): void => {
     const convert = job.steps.find((step, index) => index >= job.stepIndex && step.name === 'Convert');
@@ -228,19 +245,20 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
     job.steps.splice(after, 0, ...added);
   };
 
-  const sizeRound = (step: Step, plannedMove: number, sendingCash: number, margins: Margins): number | null => {
+  const sizeRound = (step: Step, plannedMove: number, sending: Sending, margins: Margins): number | null => {
     const planned = floorCents(plannedMove);
-    const size = fit(margins, Math.min(planned, sendingCash));
+    const size = fit(margins, Math.min(planned, sending.cash), sending.equity);
     if (size >= planned) return planned;
+    const marginFit = fit(margins, planned, sending.equity);
     if (size < HYPERLIQUID_MIN_USDC) {
       if (job.route === 'mix') dropRounds();
-      else halt(HALT_TEXT.marginTooLow);
+      else halt(marginFit < HYPERLIQUID_MIN_USDC ? HALT_TEXT.marginTooLow : HALT_TEXT.cashTooLow);
       return null;
     }
     const shrink = nearestCents(planned - size);
-    if (shrink >= DUST_USDC && fit(margins, planned) < planned) {
-      if (job.route === 'mix') growConvert(shrink);
-      else appendRound(Math.max(shrink, HYPERLIQUID_MIN_USDC));
+    if (shrink >= DUST_USDC && marginFit < planned) {
+      if (job.route === 'loop' && shrink >= HYPERLIQUID_MIN_USDC) appendRound(shrink);
+      else growConvert(shrink);
     }
     for (const later of job.steps.slice(job.stepIndex)) {
       if (later.round === step.round) setRoundFigures(later, size);
@@ -261,7 +279,10 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
     const account = await readAccount(crossEx());
     const gateCash = account.cash(GATE_WALLET);
     const movable = gateCash >= DUST_USDC ? gateCash : 0;
-    const sending = Math.max(0, account.cash(USDT_WALLET)) + movable;
+    const sending = {
+      cash: Math.max(0, account.cash(USDT_WALLET)) + movable,
+      equity: Math.max(0, account.equity(USDT_WALLET)) + movable,
+    };
     const size = sizeRound(step, move.planned ?? 0, sending, account.margins);
     if (size === null) return null;
     if (movable >= size) {
@@ -283,32 +304,47 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
       halt(HALT_TEXT.shortBuy);
       return null;
     }
-    return sizeRound(step, step.planned ?? 0, gateCash, account.margins);
+    const equity = Math.max(0, account.equity(USDT_WALLET)) + (gateCash >= DUST_USDC ? gateCash : 0);
+    return sizeRound(step, step.planned ?? 0, { cash: gateCash, equity }, account.margins);
   };
 
   const prepareFromHyperliquid = async (step: Step): Promise<number | null> => {
     const account = await readAccount(crossEx());
-    return sizeRound(step, step.planned ?? 0, Math.max(0, account.cash(USDC_WALLET)), account.margins);
+    const sending = { cash: Math.max(0, account.cash(USDC_WALLET)), equity: account.equity(USDC_WALLET) };
+    return sizeRound(step, step.planned ?? 0, sending, account.margins);
   };
 
   const prepareConvert = async (step: Step): Promise<number | null> => {
     const account = await readAccount(crossEx());
-    if (job.direction === 'toUsdc') {
-      const gateCash = account.cash(GATE_WALLET);
-      if (gateCash >= DUST_USDC) {
-        const { bid } = await spotTicker();
-        if (gateCash * bid >= SPOT_MIN_QUOTE_USDT) {
-          const planned = floorCents(gateCash);
-          job.steps.splice(job.stepIndex, 0, pendingStep('Sell USDC', { round: null, planned, arrives: null, borrowLeft: null }));
-          step.status = 'pending';
-          step.startedAt = null;
-          deps.jobs.write(job);
-          return null;
-        }
+    const gateCash = account.cash(GATE_WALLET);
+    if (gateCash >= DUST_USDC) {
+      const { bid } = await spotTicker();
+      if (gateCash * bid >= SPOT_MIN_QUOTE_USDT) {
+        const planned = floorCents(gateCash);
+        job.steps.splice(job.stepIndex, 0, pendingStep('Sell USDC', { round: null, planned, arrives: null, borrowLeft: null }));
+        step.status = 'pending';
+        step.startedAt = null;
+        deps.jobs.write(job);
+        return null;
       }
     }
     const sending = account.cash(job.direction === 'toUsdc' ? USDT_WALLET : USDC_WALLET);
     return floorCents(Math.min(step.planned ?? 0, Math.max(0, sending)));
+  };
+
+  const prepareSell = async (step: Step): Promise<number | null> => {
+    const account = await readAccount(crossEx());
+    const cash = account.cash(GATE_WALLET);
+    const arrived = step.round === null ? 0 : previousQty();
+    const amount = floorCents(Math.max(0, cash - arrived >= DUST_USDC ? cash : Math.min(cash, arrived)));
+    const nothingToSell = (): null => {
+      finish(step, 0, 'CROSSEX');
+      return null;
+    };
+    if (amount < DUST_USDC) return nothingToSell();
+    const { bid } = await spotTicker();
+    const quote = Number.isFinite(bid) && bid > 0 ? amount * bid : amount;
+    return quote < SPOT_MIN_QUOTE_USDT ? nothingToSell() : amount;
   };
 
   const prepare = (step: Step): Promise<number | null> | number => {
@@ -322,7 +358,7 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
       case 'Convert':
         return prepareConvert(step);
       case 'Sell USDC':
-        return step.round === null ? (step.planned ?? 0) : previousQty();
+        return prepareSell(step);
       default:
         return previousQty();
     }
@@ -374,6 +410,31 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
       const c = classifyGateError(err);
       if (c.httpStatus === 404 || NOT_FOUND.test(c.label ?? '')) return null;
       throw err;
+    }
+  };
+
+  const sweep = async (spec: StepSpec, tag: string): Promise<string | null | undefined> => {
+    if (spec.kind === 'transfer') return null;
+    const symbol = spec.kind === 'convert' ? convertSpec().symbol : SPOT_SYMBOL;
+    const idOf = (rows: CrossexOrder[]): string | null | undefined => {
+      const hit = rows.find((row) => String(row.text ?? '') === tag);
+      if (!hit) return null;
+      return hit.orderId ? String(hit.orderId) : undefined;
+    };
+    try {
+      const open = idOf((await crossEx().listCrossexOpenOrders({ symbol })).body ?? []);
+      if (open !== null) return open;
+      const from = job.createdAt - SWEEP_SKEW_MS;
+      for (let page = 1; page <= SWEEP_MAX_PAGES; page += 1) {
+        const rows =
+          (await crossEx().listCrossexHistoryOrders({ symbol, from, limit: SWEEP_PAGE_SIZE, page })).body ?? [];
+        const hit = idOf(rows);
+        if (hit !== null) return hit;
+        if (rows.length < SWEEP_PAGE_SIZE) return null;
+      }
+      return undefined;
+    } catch {
+      return undefined;
     }
   };
 
@@ -447,6 +508,7 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
         return;
       }
       let phase: 'poll' | 'lookup' | 'read' | 'send' = 'poll';
+      let amount: number | null = null;
       try {
         if (step.venueId !== null) {
           await poll(step, spec, step.venueId);
@@ -456,18 +518,31 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
         const key = spec.kind === 'convert' ? step.quoteId : step.text;
         if (step.text !== null && key !== null) {
           phase = 'lookup';
-          const found = await lookUpInWindow(deps, () => lookup(spec, key));
+          const found = (await lookUpInWindow(deps, () => lookup(spec, key))) ?? (await sweep(spec, key));
+          if (found === undefined) {
+            halt(HALT_TEXT.unconfirmed);
+            return;
+          }
           if (found !== null) {
             step.venueId = found;
             deps.jobs.write(job);
             continue;
           }
         }
+        if (deps.pollOnly) {
+          halt(HALT_TEXT.restart);
+          return;
+        }
         phase = 'read';
-        const amount = await prepare(step);
+        amount = await prepare(step);
         if (amount === null) continue;
+        if (spec.kind === 'transfer' && !isSendable(amount)) {
+          halt(HALT_TEXT.cashTooLow);
+          return;
+        }
         if (step.text === null) {
-          step.text = tagFor(job.id, job.stepIndex, step.attempt);
+          job.tagCount += 1;
+          step.text = tagFor(job.id, job.tagCount);
           deps.jobs.write(job);
         }
         phase = 'send';
@@ -478,7 +553,12 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
         if (c.retryable || (phase === 'poll' && notFound)) {
           await deps.sleep(POLL_MS);
         } else if (phase !== 'send' || isRefusal(c)) {
-          halt(haltReasonFor(err));
+          if (phase === 'send') step.quoteId = null;
+          halt(
+            spec.kind === 'transfer' && amount !== null && isSpotShortfall(spec.from, c)
+              ? spotShortfallFailText(c.message, spec.coin, amount)
+              : haltReasonFor(err),
+          );
         } else {
           await deps.sleep(POLL_MS);
         }
@@ -514,6 +594,10 @@ export async function runTransfer(deps: TransferRunnerDeps): Promise<void> {
   };
 
   if (transfer.venueId === null && transfer.sentAt === null) {
+    if (!isSendable(transfer.amount)) {
+      end('failed', null, transferFailText(''));
+      return;
+    }
     transfer.sentAt = deps.now();
     deps.transfers.write(transfer);
     let venueId: string | null = null;
@@ -521,10 +605,14 @@ export async function runTransfer(deps: TransferRunnerDeps): Promise<void> {
       const { coin, amount, from, to, text } = transfer;
       venueId = await sendTransfer(crossEx(), { coin, amount, from, to, text });
     } catch (err) {
-      const c = classifyGateError(err);
-      if (isRefusal(c)) {
+      const classified = classifyGateError(err);
+      if (isRefusal(classified)) {
+        if (isSpotShortfall(transfer.from, classified)) {
+          end('failed', null, spotShortfallFailText(classified.message, transfer.coin, transfer.amount));
+          return;
+        }
         const reason = haltReasonFor(err);
-        end('failed', null, reason === HALT_TEXT.marginRefused ? reason : transferFailText(c.message));
+        end('failed', null, reason === HALT_TEXT.marginRefused ? reason : transferFailText(refusalReason(err)));
         return;
       }
     }

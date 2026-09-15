@@ -36,9 +36,10 @@ function InfoMark() {
 
 export function HoverCard({
   label,
-  widthPx = 460,
+  widthPx,
   icon = true,
   underline = true,
+  wrapsControl = false,
   children,
 }: {
   /** The figure itself — it keeps its own styling. */
@@ -46,6 +47,7 @@ export function HoverCard({
   widthPx?: number;
   icon?: boolean;
   underline?: boolean;
+  wrapsControl?: boolean;
   children: ReactNode;
 }) {
   const anchor = useRef<HTMLSpanElement>(null);
@@ -53,6 +55,7 @@ export function HoverCard({
   const openedByKeyboard = useRef(false);
   const closing = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [box, setBox] = useState<Box | null>(null);
+  const maxWidthPx = widthPx ?? 460;
 
   const stopClosing = () => {
     if (closing.current) clearTimeout(closing.current);
@@ -68,7 +71,7 @@ export function HoverCard({
     const r = anchor.current?.getBoundingClientRect();
     if (!r) return;
     stopClosing();
-    const left = Math.max(8, Math.min(r.left, window.innerWidth - widthPx - 8));
+    const left = Math.max(8, Math.min(r.left, window.innerWidth - maxWidthPx - 8));
     setBox(
       window.innerHeight - r.bottom < 260
         ? { left, bottom: window.innerHeight - r.top + 6 }
@@ -92,13 +95,21 @@ export function HoverCard({
       if (card.current?.contains(document.activeElement)) anchor.current?.focus();
       setBox(null);
     };
+    const onFocusIn = (e: FocusEvent) => {
+      const target = e.target as Node | null;
+      if (anchor.current?.contains(target)) return;
+      if (card.current?.contains(target)) return;
+      setBox(null);
+    };
     window.addEventListener('scroll', shut, true);
     window.addEventListener('resize', shut);
     window.addEventListener('keydown', onKey);
+    document.addEventListener('focusin', onFocusIn);
     return () => {
       window.removeEventListener('scroll', shut, true);
       window.removeEventListener('resize', shut);
       window.removeEventListener('keydown', onKey);
+      document.removeEventListener('focusin', onFocusIn);
     };
   }, [box]);
 
@@ -109,6 +120,51 @@ export function HoverCard({
   }, [box]);
 
   useEffect(() => stopClosing, []);
+
+  const portal =
+    box &&
+    createPortal(
+      <div
+        ref={card}
+        role="tooltip"
+        style={{ left: box.left, top: box.top, bottom: box.bottom, width: widthPx, maxWidth: maxWidthPx }}
+        onKeyDown={(e) => {
+          if (e.key !== 'Tab') return;
+          const items = e.currentTarget.querySelectorAll<HTMLElement>(FOCUSABLE);
+          const edge = e.shiftKey ? items[0] : items[items.length - 1];
+          if (!edge || document.activeElement !== edge) return;
+          e.preventDefault();
+          anchor.current?.focus();
+          setBox(null);
+        }}
+        onMouseEnter={stopClosing}
+        onMouseLeave={() => close(false)}
+        className="fixed z-50 rounded border border-ink-600 bg-ink-950 px-3 py-2.5 text-ink-100"
+      >
+        {children}
+      </div>,
+      document.body,
+    );
+
+  if (wrapsControl) {
+    return (
+      <span
+        ref={anchor}
+        onMouseEnter={open}
+        onMouseLeave={() => close(true)}
+        onFocus={open}
+        onBlur={(e) => {
+          const next = e.relatedTarget;
+          if (next instanceof Node && card.current?.contains(next)) return;
+          close(false);
+        }}
+        className="inline-flex"
+      >
+        {label}
+        {portal}
+      </span>
+    );
+  }
 
   return (
     <span
@@ -153,29 +209,7 @@ export function HoverCard({
     >
       {label}
       {icon && <InfoMark />}
-      {box &&
-        createPortal(
-          <div
-            ref={card}
-            role="tooltip"
-            style={{ left: box.left, top: box.top, bottom: box.bottom, width: widthPx }}
-            onKeyDown={(e) => {
-              if (e.key !== 'Tab') return;
-              const items = e.currentTarget.querySelectorAll<HTMLElement>(FOCUSABLE);
-              const edge = e.shiftKey ? items[0] : items[items.length - 1];
-              if (!edge || document.activeElement !== edge) return;
-              e.preventDefault();
-              anchor.current?.focus();
-              setBox(null);
-            }}
-            onMouseEnter={stopClosing}
-            onMouseLeave={() => close(false)}
-            className="fixed z-50 rounded border border-ink-600 bg-ink-950 px-3 py-2.5 text-ink-100"
-          >
-            {children}
-          </div>,
-          document.body,
-        )}
+      {portal}
     </span>
   );
 }

@@ -561,7 +561,7 @@ function afterOf(usdt: number, usdc: number, gate: number): WalletAfter[] {
   ];
 }
 
-function rebased(buckets: RebalanceBucket[], changes: Record<string, Partial<RebalanceBucket>>): RebalanceBucket[] {
+export function rebased(buckets: RebalanceBucket[], changes: Record<string, Partial<RebalanceBucket>>): RebalanceBucket[] {
   return buckets.map((bucket) => ({ ...bucket, ...changes[`${bucket.coin}/${bucket.venue}`] }));
 }
 
@@ -686,7 +686,7 @@ const ACCOUNT_A_RUNNING_JOB: RebalanceJob = {
     jobStep({ name: 'To Hyperliquid', round: 5, planned: 40.15, arrives: 40.1, borrowLeft: 0 }),
   ],
   fundsAt: 'SPOT', haltReason: null, createdAt: REBALANCE_NOW - 298_000, updatedAt: REBALANCE_NOW - 40_000,
-  inTransit: { coin: 'USDC', qty: 36.58 },
+  inTransit: { coin: 'USDC', qty: 36.58, at: 'SPOT' },
 };
 
 const ACCOUNT_A_HALTED_JOB: RebalanceJob = {
@@ -856,7 +856,7 @@ const ACCOUNT_A_INSIDE_PLAN: EvenPlan = {
 };
 
 const HALTED_INSIDE_JOB: RebalanceJob = {
-  ...ACCOUNT_A_HALTED_JOB, stepIndex: 7, fundsAt: 'GATE', haltReason: 'The app restarted during the run.',
+  ...ACCOUNT_A_HALTED_JOB, stepIndex: 7, fundsAt: 'GATE', haltReason: 'The app restarted during the run. Nothing failed. Press Resume.',
   inTransit: null,
   steps: [
     ...ACCOUNT_A_RUNNING_JOB.steps.slice(0, 7),
@@ -1033,7 +1033,7 @@ const MIX_DONE_BUCKETS = rebased(EXAMPLE_D_MID_BUCKETS, {
 const EXAMPLE_E_BUCKETS: RebalanceBucket[] = [
   {
     coin: 'USDT', venue: 'CROSSEX', cash: -612.35, upnl: 0, equity: -612.35, borrow: 612.35, imHeldUsd: 122.47,
-    mmHeldUsd: 61.235, interestPaidUsd: 0, interestPerDayUsd: 0,
+    mmHeldUsd: 61.235, interestPaidUsd: 0, interestPerDayUsd: 0.09,
   },
   {
     coin: 'USDC', venue: 'HYPERLIQUID', cash: 1842.16, upnl: 0, equity: 1842.16, borrow: 0, imHeldUsd: 0,
@@ -1049,7 +1049,7 @@ const EXAMPLE_E_MID_BUCKETS = rebased(EXAMPLE_E_BUCKETS, { 'USDC/HYPERLIQUID': {
 
 const EXAMPLE_E_MID_CONVERT: RoutePlan = {
   available: true, reason: null, costUsd: 1.71, seconds: 0, rounds: 0, oneMoreRoundCostUsd: null,
-  marginFreedUsd: 122.47, savesPerDayUsd: 0,
+  marginFreedUsd: 122.47, savesPerDayUsd: 0.09,
   after: afterOf(241.32, 241.33, 0),
   steps: [
     { round: null, kind: 'convert', buy: 0, move: 855.39, arrives: 853.67, borrowLeft: 0, seconds: 0 },
@@ -1085,8 +1085,8 @@ const EXAMPLE_E_JOB: RebalanceJob = {
 
 const EXAMPLE_E_ABANDONED_JOB: RebalanceJob = {
   ...EXAMPLE_E_JOB, id: 'mtzujyww', status: 'abandoned', stepIndex: 1, fundsAt: 'SPOT',
-  haltReason: 'The app restarted during the run.', createdAt: REBALANCE_NOW - 460_000,
-  updatedAt: REBALANCE_NOW - 30_000, inTransit: { coin: 'USDC', qty: 744.44 },
+  haltReason: 'The app restarted during the run. Nothing failed. Press Resume.', createdAt: REBALANCE_NOW - 460_000,
+  updatedAt: REBALANCE_NOW - 30_000, inTransit: { coin: 'USDC', qty: 744.44, at: 'SPOT' },
   steps: [
     jobStep({
       name: 'From Hyperliquid', qty: 744.44, status: 'done', startedAt: REBALANCE_NOW - 460_000,
@@ -1247,7 +1247,7 @@ export const rebalanceViews = {
       routes: {
         mix: {
           available: true, reason: null, costUsd: 2.04, seconds: 400, rounds: 1, oneMoreRoundCostUsd: 2.12,
-          marginFreedUsd: 122.47, savesPerDayUsd: 0,
+          marginFreedUsd: 122.47, savesPerDayUsd: 0.09,
           after: [
             { coin: 'USDT', venue: 'CROSSEX', cash: 613.87, equity: 613.87 },
             { coin: 'USDC', venue: 'HYPERLIQUID', cash: 613.89, equity: 613.89 },
@@ -1260,7 +1260,7 @@ export const rebalanceViews = {
         },
         loop: {
           available: true, reason: null, costUsd: 2.12, seconds: 800, rounds: 2, oneMoreRoundCostUsd: null,
-          marginFreedUsd: 122.47, savesPerDayUsd: 0,
+          marginFreedUsd: 122.47, savesPerDayUsd: 0.09,
           after: [
             { coin: 'USDT', venue: 'CROSSEX', cash: 613.83, equity: 613.83 },
             { coin: 'USDC', venue: 'HYPERLIQUID', cash: 613.85, equity: 613.85 },
@@ -1273,7 +1273,7 @@ export const rebalanceViews = {
         },
         convert: {
           available: true, reason: null, costUsd: 2.46, seconds: 0, rounds: 0, oneMoreRoundCostUsd: null,
-          marginFreedUsd: 122.47, savesPerDayUsd: 0,
+          marginFreedUsd: 122.47, savesPerDayUsd: 0.09,
           after: [
             { coin: 'USDT', venue: 'CROSSEX', cash: 613.67, equity: 613.67 },
             { coin: 'USDC', venue: 'HYPERLIQUID', cash: 613.68, equity: 613.68 },
@@ -1322,19 +1322,19 @@ const ACCOUNT_B_SPOT: SpotBalance[] = [
 ];
 
 const ACCOUNT_B_PATHS: TransferPath[] = [
-  { coin: 'USDT', from: 'SPOT', to: 'CROSSEX', max: 318.42, min: 0.00000001, feeUsd: 0, seconds: 3 },
-  { coin: 'USDT', from: 'CROSSEX', to: 'SPOT', max: 816.1, min: 0.00000001, feeUsd: 0, seconds: 3 },
-  { coin: 'USDC', from: 'SPOT', to: 'CROSSEX_GATE', max: 0, min: 0, feeUsd: 0, seconds: 5 },
-  { coin: 'USDC', from: 'CROSSEX_GATE', to: 'SPOT', max: 0.29, min: 0, feeUsd: 0, seconds: 5 },
+  { coin: 'USDT', from: 'SPOT', to: 'CROSSEX', max: 318.42, min: 0.00001, feeUsd: 0, seconds: 3 },
+  { coin: 'USDT', from: 'CROSSEX', to: 'SPOT', max: 816.1, min: 0.00001, feeUsd: 0, seconds: 3 },
+  { coin: 'USDC', from: 'SPOT', to: 'CROSSEX_GATE', max: 0, min: 0.00001, feeUsd: 0, seconds: 5 },
+  { coin: 'USDC', from: 'CROSSEX_GATE', to: 'SPOT', max: 0.29, min: 0.00001, feeUsd: 0, seconds: 5 },
   { coin: 'USDC', from: 'SPOT', to: 'CROSSEX_HYPERLIQUID', max: 0, min: 11, feeUsd: 0.05, seconds: 120 },
   { coin: 'USDC', from: 'CROSSEX_HYPERLIQUID', to: 'SPOT', max: 11.88, min: 11, feeUsd: 1, seconds: 400 },
 ];
 
 const NO_SPOT_PATHS: TransferPath[] = [
-  { coin: 'USDT', from: 'SPOT', to: 'CROSSEX', max: null, min: 0.00000001, feeUsd: 0, seconds: 3 },
-  { coin: 'USDT', from: 'CROSSEX', to: 'SPOT', max: 816.1, min: 0.00000001, feeUsd: 0, seconds: 3 },
-  { coin: 'USDC', from: 'SPOT', to: 'CROSSEX_GATE', max: null, min: 0, feeUsd: 0, seconds: 5 },
-  { coin: 'USDC', from: 'CROSSEX_GATE', to: 'SPOT', max: 0.29, min: 0, feeUsd: 0, seconds: 5 },
+  { coin: 'USDT', from: 'SPOT', to: 'CROSSEX', max: null, min: 0.00001, feeUsd: 0, seconds: 3 },
+  { coin: 'USDT', from: 'CROSSEX', to: 'SPOT', max: 816.1, min: 0.00001, feeUsd: 0, seconds: 3 },
+  { coin: 'USDC', from: 'SPOT', to: 'CROSSEX_GATE', max: null, min: 0.00001, feeUsd: 0, seconds: 5 },
+  { coin: 'USDC', from: 'CROSSEX_GATE', to: 'SPOT', max: 0.29, min: 0.00001, feeUsd: 0, seconds: 5 },
   { coin: 'USDC', from: 'SPOT', to: 'CROSSEX_HYPERLIQUID', max: null, min: 11, feeUsd: 0.05, seconds: 120 },
   { coin: 'USDC', from: 'CROSSEX_HYPERLIQUID', to: 'SPOT', max: 11.88, min: 11, feeUsd: 1, seconds: 400 },
 ];

@@ -37,7 +37,7 @@ export function RecoveryBanner({ onOpenTab }: { onOpenTab?: (tab: 'balances') =>
           <span className="inline-flex items-center gap-2">
             <Spinner className="h-3 w-3" />
             {halted
-              ? `${halted} deal${halted === 1 ? ' is' : 's are'} HALTED. Operator needed.`
+              ? `${halted} deal${halted === 1 ? ' is' : 's are'} HALTED — operator needed`
               : `A deal is still working${deals.length > 1 ? ` (+${deals.length - 1} more)` : ''}`}
           </span>
           <button

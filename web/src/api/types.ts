@@ -229,7 +229,7 @@ export interface RebalanceJob {
   haltReason: string | null;
   createdAt: number;
   updatedAt: number;
-  inTransit: { coin: 'USDC'; qty: number } | null;
+  inTransit: { coin: 'USDC'; qty: number; at: 'SPOT' | 'MOVING' } | null;
 }
 
 export interface RebalanceView {
@@ -277,6 +277,7 @@ export interface TransferView {
 }
 
 export interface StartTransferBody {
+  id?: string;
   coin: TransferCoin;
   from: GateAccount;
   to: GateAccount;

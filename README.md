@@ -107,8 +107,8 @@ for a Gate.io API key:
 3. Under **Permissions**, tick **Cross-Exchange** with **Read and Write** to trade and
    move money, and **Spot Trading** with **Read Only** to see your spot balances. Leave
    all other permissions off, including Withdrawal. A trading bot never needs to
-   withdraw your funds, and the app cannot move money off your account without this
-   permission.
+   withdraw your funds, and the app cannot move money off your account without the
+   Withdrawal permission.
 4. Under **IP Permissions**, choose **"Later"** — unless your machine has a consistent
    IP, in which case binding the key to it adds extra protection. Caveat — home IPs
    change from time to time (e.g. after a router restart), and the key stops working

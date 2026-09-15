@@ -276,8 +276,24 @@ describe('BalancesPanel spot group', () => {
   it('no CrossEx assets and no Spot read', async () => {
     await show({ ...ACCOUNT_B, transfer: transferViews.noSpot, account: accountBodies.noAssets });
     const assets = region('Assets');
-    expect(within(assets).getByRole('button', { name: 'Gate spot' })).toBeInTheDocument();
+    expect(within(assets).queryByRole('button', { name: 'Gate spot' })).toBeNull();
     expect(within(assets).getByText(NO_SPOT_READ)).toBeInTheDocument();
+    expect(within(assets).getByText('No non-zero balances')).toBeInTheDocument();
+  });
+
+  it('an empty CrossEx with no Spot read shows the deposit hint and the spot line', async () => {
+    await show({ ...ACCOUNT_B, transfer: transferViews.noSpot, account: accountBodies.noAssets });
+    const assets = region('Assets');
+    expect(within(assets).getByText('Deposit collateral to CrossEx to get started.')).toBeInTheDocument();
+    expect(within(assets).getByText(NO_SPOT_READ)).toBeInTheDocument();
+  });
+
+  it('an empty CrossEx with spot money still lists the spot rows', async () => {
+    await show({ ...ACCOUNT_B, account: accountBodies.noAssets });
+    const assets = region('Assets');
+    const rows = assetRows();
+    expect(rows.map((row) => row.Coin)).toContain('Gate spot');
+    expect(rows.find((row) => row.Coin === 'USDT SPOT')).toMatchObject({ Balance: '318.42', Available: '318.42' });
     expect(within(assets).queryByText('No non-zero balances')).toBeNull();
   });
 });

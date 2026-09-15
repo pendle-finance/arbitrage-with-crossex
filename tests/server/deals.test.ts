@@ -13,9 +13,10 @@ import nock from 'nock';
 import { afterEach, describe, expect, it } from 'vitest';
 import { tickPair, type LoopDeps } from '../../src/engine/loop';
 import { Store } from '../../src/engine/db';
+import { TTL, TtlCache } from '../../src/server/cache';
 import { JobFile, newJob, newTransferJob, TransferFile } from '../../src/server/rebalanceJob';
 import { A_CONTRACT, B_CONTRACT, FakeVenue, VirtualClock } from '../unit/engine-sim';
-import { gate, HOST, makeTestApp, mockGateGet } from './helpers/gate-nock';
+import { fixture, gate, HOST, makeTestApp, mockGateGet } from './helpers/gate-nock';
 
 let app: FastifyInstance;
 
@@ -120,7 +121,7 @@ describe('POST /api/deals', () => {
       ok: false,
       error: {
         category: 'validation',
-        message: 'a rebalance is still running — wait for it to finish before starting a deal',
+        message: 'a rebalance is still running. Wait for it to finish before starting a deal.',
         retryable: true,
       },
     });
@@ -147,7 +148,7 @@ describe('POST /api/deals', () => {
     });
     res = await app.inject({ method: 'POST', url: '/api/deals/deal-halted/resume', headers: HOST });
     expect(res.statusCode).toBe(409);
-    expect(res.json().error.message).toBe('a rebalance is still running — wait for it to finish before resuming a deal');
+    expect(res.json().error.message).toBe('a rebalance is still running. Wait for it to finish before resuming a deal.');
     expect(store.getPair('deal-halted')!.mode).toBe('HALTED');
 
     running.status = 'halted';
@@ -161,25 +162,81 @@ describe('POST /api/deals', () => {
     expect(res.json().error.message).toBe('deal id is required');
   });
 
-  it('deal starts while a transfer moves', async () => {
+  async function withMovingTransfer(acceptedMsAgo: number | null) {
     const transfers = new TransferFile(mkdtempSync(path.join(tmpdir(), 'transfer-')));
     const store = new Store(':memory:');
+    const clock = new VirtualClock();
+    const cache = new TtlCache();
     app = makeTestApp({
-      engine: { store, venue: new FakeVenue(), clock: new VirtualClock() },
+      engine: { store, venue: new FakeVenue(), clock },
+      cache,
       transfer: { jobs: transfers, sleep: () => new Promise<void>(() => undefined) },
     });
     await app.ready();
-    transfers.write(
-      newTransferJob({ coin: 'USDC', from: 'CROSSEX_HYPERLIQUID', to: 'SPOT', amount: 11.88, userId: '1' }, Date.now()),
-    );
+    const now = clock.now();
+    transfers.write({
+      ...newTransferJob({ coin: 'USDC', from: 'CROSSEX_HYPERLIQUID', to: 'SPOT', amount: 11.88, userId: '1' }, now - 10_000),
+      sentAt: now - 10_000,
+      venueId: acceptedMsAgo === null ? null : '123',
+      acceptedAt: acceptedMsAgo === null ? null : now - acceptedMsAgo,
+    });
+    const post = () => app.inject({ method: 'POST', url: '/api/deals', headers: HOST, payload: makerPayload() });
+    return { store, clock, cache, transfers, post };
+  }
+
+  const TRANSFER_SETTLING = 'Deals wait until Gate takes the transfer. Try again in a few seconds.';
+
+  it('deal starts while a transfer moves', async () => {
+    const t = await withMovingTransfer(5_000);
+    await t.cache.get('account', TTL.live, async () => fixture('account.json'));
+    let accountReads = 0;
+    mockGateGet('/rule/symbols', { body: simRules() });
+    mockGateGet('/positions', { body: [] });
+    gate().get(/positions\/leverage/).reply(200, {});
+    gate().get('/api/v4/spot/tickers').query(true).times(2).reply(200, [{ currency_pair: 'ETH_USDT', last: '2500' }]);
+    gate()
+      .get('/api/v4/crossex/accounts')
+      .query(true)
+      .reply(200, () => {
+        accountReads += 1;
+        return fixture('account.json');
+      });
+
+    const res = await t.post();
+
+    expect(res.statusCode, res.body).toBe(202);
+    expect(t.store.getPair('deal-000001')?.mode).toBe('OPENING');
+    expect(t.transfers.read()?.status).toBe('moving');
+    expect(accountReads).toBe(1);
+  });
+
+  it('deal waits before Gate accepts the transfer', async () => {
+    const t = await withMovingTransfer(null);
+
+    const res = await t.post();
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toMatchObject({ message: TRANSFER_SETTLING, retryable: true });
+    expect(t.store.getPair('deal-000001')).toBeNull();
+  });
+
+  it('deal waits 5 s after accept', async () => {
+    const t = await withMovingTransfer(4_999);
+
+    const early = await t.post();
+
+    expect(early.statusCode).toBe(409);
+    expect(early.json().error.message).toBe(TRANSFER_SETTLING);
+    expect(t.store.getPair('deal-000001')).toBeNull();
+
+    t.clock.advance(1);
     mockGateGet('/rule/symbols', { body: simRules() });
     mockGateGet('/accounts', { fixture: 'account.json' });
 
-    const res = await app.inject({ method: 'POST', url: '/api/deals', headers: HOST, payload: makerPayload() });
+    const res = await t.post();
 
     expect(res.statusCode, res.body).toBe(202);
-    expect(store.getPair('deal-000001')?.mode).toBe('OPENING');
-    expect(transfers.read()?.status).toBe('moving');
+    expect(t.store.getPair('deal-000001')?.mode).toBe('OPENING');
   });
 
   it('is idempotent on the deal id (duplicate → 202, nothing new created)', async () => {
@@ -323,6 +380,50 @@ describe('POST /api/deals', () => {
     expect(res.json().error.message).toMatch(/rebalance is still running/);
     expect(store.listPairs()).toHaveLength(0);
     // Applied 50x, then restored 10x — never left at 50x on a deal that was not created.
+    expect(levSets).toHaveLength(2);
+    expect(String((levSets[1] as { leverage?: unknown }).leverage)).toBe('10');
+  });
+
+  it('a transfer that starts during the leverage set refuses the deal and restores leverage', async () => {
+    const transfers = new TransferFile(mkdtempSync(path.join(tmpdir(), 'transfer-')));
+    const store = new Store(':memory:');
+    const clock = new VirtualClock();
+    app = makeTestApp({
+      engine: { store, venue: new FakeVenue(), clock },
+      transfer: { jobs: transfers, sleep: () => new Promise<void>(() => undefined) },
+    });
+    await app.ready();
+    mockGateGet('/rule/symbols', { body: simRules() });
+    mockGateGet('/accounts', { fixture: 'account.json' });
+    mockGateGet('/rule/risk_limits', { body: [{ symbol: A_CONTRACT, tiers: [{ leverage_max: '50' }] }] });
+    gate().get(/positions\/leverage/).reply(200, { [A_CONTRACT]: '10' });
+    const levSets: unknown[] = [];
+    gate()
+      .post('/api/v4/crossex/positions/leverage')
+      .times(2)
+      .reply(function (_uri, body) {
+        levSets.push(body);
+        if (levSets.length === 1) {
+          transfers.write({
+            ...newTransferJob(
+              { coin: 'USDC', from: 'CROSSEX_HYPERLIQUID', to: 'SPOT', amount: 11.88, userId: null },
+              clock.now(),
+            ),
+            venueId: '123',
+            acceptedAt: clock.now(),
+          });
+        }
+        return [200, {}];
+      });
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/deals',
+      headers: HOST,
+      payload: makerPayload({ leverage: { a: 50 } }),
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toMatchObject({ message: TRANSFER_SETTLING, retryable: true });
+    expect(store.listPairs()).toHaveLength(0);
     expect(levSets).toHaveLength(2);
     expect(String((levSets[1] as { leverage?: unknown }).leverage)).toBe('10');
   });

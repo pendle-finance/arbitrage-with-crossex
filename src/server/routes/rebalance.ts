@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyReply } from 'fastify';
-import { CoreError } from '../../core/errors';
+import { classifyGateError, classifyPlain, CoreError } from '../../core/errors';
 import {
   bucketsFrom,
   floorCents,
@@ -12,6 +12,7 @@ import {
 import type { AppDeps } from '../app';
 import { TTL } from '../cache';
 import { DISCLAIMER_NOT_ACCEPTED, isDisclaimerAccepted } from '../disclaimer';
+import { sendError } from '../errorReply';
 import { INTEREST_OVERFLOW, InterestFile, syncInterest } from '../interestLedger';
 import {
   bannerFor,
@@ -22,10 +23,12 @@ import {
   type Job,
   type JobFile,
   type MoneyLock,
+  type StepName,
 } from '../rebalanceJob';
-import { runJob } from '../rebalanceRunner';
+import { receivedOf, runJob, STEPS, transferRow } from '../rebalanceRunner';
 
 const ROUTE_NAMES: readonly string[] = ['mix', 'loop', 'convert'];
+const ALREADY_EVEN = 'Already even.';
 
 export const STALE_TEXT = 'Gate is rate-limiting the account read. Try again in a few seconds.';
 
@@ -50,6 +53,7 @@ const isRouteName = (value: unknown): value is RouteName => typeof value === 'st
 
 export function rebalanceRoutes(deps: AppDeps) {
   return async function plugin(app: FastifyInstance): Promise<void> {
+    app.setErrorHandler((err, req, reply) => sendError(err, req, reply, classifyPlain));
     const jobs = deps.rebalance?.jobs ?? null;
     const now = (): number => deps.engine!.clock.now();
     const alert = (pairId: string | null, message: string): void => {
@@ -58,16 +62,23 @@ export function rebalanceRoutes(deps: AppDeps) {
       if (engine) engine.store.alert('error', pairId, message, engine.clock.now(), { once: true });
     };
     const onHalt = (job: Job): void => alert(`rebalance:${job.id}`, bannerFor(job));
-    const haltedAtBoot = jobs?.haltIfRunning() ? jobs.read() : null;
-    if (haltedAtBoot) onHalt(haltedAtBoot);
     let inflight: Promise<void> | null = null;
+
+    const ackAlerts = (job: Job): void => {
+      const store = deps.engine?.store;
+      if (!store) return;
+      for (const row of store.listAlerts({ unackedOnly: true })) {
+        const pairId = 'pair_id' in row ? row.pair_id : row.pairId;
+        if (pairId === `rebalance:${job.id}`) store.ackAlert(row.id);
+      }
+    };
 
     const requireJobs = (): JobFile => {
       if (!jobs) throw new CoreError('rebalance store not configured', 'not-configured');
       return jobs;
     };
 
-    const start = (store: JobFile): void => {
+    const start = (store: JobFile, pollOnly = false): void => {
       if (inflight) return;
       inflight = runJob({
         clients: () => deps.getClients(),
@@ -76,10 +87,27 @@ export function rebalanceRoutes(deps: AppDeps) {
         now,
         sleep: deps.rebalance?.sleep ?? sleep,
         onHalt,
-      }).finally(() => {
-        inflight = null;
-      });
+        pollOnly,
+      })
+        .then(() => {
+          const job = store.read();
+          if (job?.status === 'done') ackAlerts(job);
+        })
+        .catch((err: unknown) => console.error(`rebalance stopped: ${classifyGateError(err).message}`))
+        .finally(() => {
+          inflight = null;
+        });
     };
+
+    const bootJob = jobs?.read() ?? null;
+    const bootStep = bootJob?.status === 'running' ? bootJob.steps[bootJob.stepIndex] : undefined;
+    if (jobs && bootJob && bootStep && (bootStep.venueId !== null || bootStep.text !== null)) {
+      bootStep.startedAt = now();
+      jobs.write(bootJob);
+      start(jobs, true);
+    } else if (bootJob && jobs?.haltIfRunning()) {
+      onHalt(bootJob);
+    }
 
     // All-time interest, kept on disk and topped up with the rows since the
     // last sync. The account is read first because the ledger is per account.
@@ -133,13 +161,35 @@ export function rebalanceRoutes(deps: AppDeps) {
       return { buckets, plan, stale, accountStale: account.stale, userId };
     };
 
-    const findLock = (): string | null => {
-      const lock = moneyLockNow(deps);
+    const loadInTransit = async (job: Job): Promise<ReturnType<typeof inTransitOf>> => {
+      const inTransit = inTransitOf(job);
+      const step = job.steps[job.stepIndex];
+      const spec = step ? STEPS[step.name as StepName] : undefined;
+      const venueId = step?.venueId;
+      if (job.status !== 'halted' || inTransit?.at !== 'MOVING' || spec?.kind !== 'transfer' || !venueId) return inTransit;
+      const row = await deps.cache
+        .get(`rebalance:transfer:${venueId}`, TTL.live, () =>
+          transferRow(deps.getClients().crossEx, spec.coin, (r) => String(r.id) === venueId),
+        )
+        .then(
+          ({ value }) => value,
+          () => null,
+        );
+      if (!row || String(row.status) !== 'SUCCESS') return inTransit;
+      return spec.dest === 'SPOT' ? { coin: inTransit.coin, qty: receivedOf(row, spec), at: 'SPOT' } : null;
+    };
+
+    const lockText = (lock: MoneyLock | null): string | null => {
       if (lock === null) return null;
       if (lock.kind === 'moving') return LOCK_TEXT.rebalanceWaits;
       if (lock.kind === 'deal') return `deal ${lock.id} is still working`;
       return `rebalance ${lock.id} is ${lock.kind === 'halted' ? 'halted' : 'running'}`;
     };
+
+    const findLock = (): string | null => lockText(moneyLockNow(deps));
+
+    const resumeLock = (): string | null =>
+      lockText(moneyLockFor({ rebalance: null, transfer: deps.transfer?.jobs.read() ?? null, dealId: workingDeal(deps) }));
 
     const currentUserId = async (): Promise<string | null> => {
       const { value } = await deps.cache.get(
@@ -163,7 +213,7 @@ export function rebalanceRoutes(deps: AppDeps) {
     app.get('/rebalance', async (_req, reply) => {
       const { buckets, plan, stale } = await loadView(false);
       const job = jobs?.read() ?? null;
-      return reply.ok({ buckets, plan, job: job ? { ...job, inTransit: inTransitOf(job) } : null }, { stale });
+      return reply.ok({ buckets, plan, job: job ? { ...job, inTransit: await loadInTransit(job) } : null }, { stale });
     });
 
     app.post('/rebalance', async (req, reply) => {
@@ -179,10 +229,11 @@ export function rebalanceRoutes(deps: AppDeps) {
       // because Gate rate-limited the fresh one may be seconds old, and a
       // move to USDT sized on old equity can open the borrow it promises not to.
       if (accountStale) return conflict(reply, STALE_TEXT);
-      if (plan.balanced || plan.direction === null) return conflict(reply, 'Already even.');
+      if (plan.balanced || plan.direction === null) return conflict(reply, ALREADY_EVEN);
       const name = route === 'mix' && !plan.routes.mix ? plan.recommended : route;
       const picked = name ? plan.routes[name] : null;
       if (!name || !picked?.available) return conflict(reply, picked?.reason ?? 'no route');
+      if (picked.steps.length === 0) return conflict(reply, ALREADY_EVEN);
       const lockedNow = findLock();
       if (lockedNow) return conflict(reply, lockedNow);
       const moved = picked.steps.reduce((total, step) => total + step.move, 0);
@@ -209,19 +260,25 @@ export function rebalanceRoutes(deps: AppDeps) {
       if (!job) return reply;
       // The same rule as the start: the remaining steps move cash a working
       // deal may be counting on.
-      const working = workingDeal(deps);
-      if (working) return conflict(reply, `deal ${working} is still working`);
+      const working = resumeLock();
+      if (working) return conflict(reply, working);
       // The steps hold venue ids and amounts of the account they ran on. On
       // another account they would poll ids it does not know, or send from it.
       if (job.userId !== null && (await currentUserId()) !== job.userId) {
         return conflict(reply, `rebalance ${job.id} was started on another Gate account. Abandon it.`);
       }
-      job.status = 'running';
-      job.haltReason = null;
-      job.steps[job.stepIndex].startedAt = now();
-      store.write(job);
+      const current = store.read();
+      if (current?.id !== job.id || current.status !== 'halted') {
+        return conflict(reply, `rebalance ${job.id} is no longer halted`);
+      }
+      const lockedNow = resumeLock();
+      if (lockedNow) return conflict(reply, lockedNow);
+      current.status = 'running';
+      current.haltReason = null;
+      current.steps[current.stepIndex].startedAt = now();
+      store.write(current);
       start(store);
-      return reply.ok(job);
+      return reply.ok(current);
     });
 
     app.post('/rebalance/:id/abandon', async (req, reply) => {

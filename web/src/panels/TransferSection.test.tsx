@@ -2,7 +2,7 @@ import { act, fireEvent, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { TransferView } from '../api/types';
+import type { TransferJob, TransferView } from '../api/types';
 import { REBALANCE_NOW, rebalanceHandler, rebalanceViews, transferHandler, transferViews } from '../test/fixtures';
 import { env, server } from '../test/server';
 import { renderWithClient } from '../test/utils';
@@ -10,6 +10,12 @@ import { TransferSection } from './TransferSection';
 
 const DONE_TOAST = 'Sent 11.88 USDC to Gate spot. 10.88 arrived.';
 const SENDING = 'Sending 11.88 USDC to Gate spot';
+
+const SENT_INTO_HYPERLIQUID: TransferJob = {
+  ...transferViews.moving.transfer,
+  from: 'SPOT',
+  to: 'CROSSEX_HYPERLIQUID',
+};
 
 function serve(view: TransferView = transferViews.accountB) {
   server.use(transferHandler(view), rebalanceHandler(rebalanceViews.accountB));
@@ -127,7 +133,29 @@ describe('TransferSection', () => {
     await pickInto();
     await userEvent.type(amountInput(), '150');
 
-    expect(screen.getByRole('button', { name: 'Hold to send 150.00 USDT into CrossEx' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Hold to send 150.00 USDT to USDT · CrossEx' })).toBeEnabled();
+  });
+
+  it('into hold label names the USDC wallet', async () => {
+    await renderCard(transferViews.spotBoth);
+    await pickInto();
+    await userEvent.type(amountInput(), '20');
+
+    await pickWallet('USDC · Hyperliquid');
+    expect(screen.getByRole('button', { name: 'Hold to send 20.00 USDC to USDC · Hyperliquid' })).toBeEnabled();
+    await pickWallet('USDC · Gate');
+    expect(screen.getByRole('button', { name: 'Hold to send 20.00 USDC to USDC · Gate' })).toBeEnabled();
+  });
+
+  it('sending line and done toast name the wallet', async () => {
+    await renderCard({ ...transferViews.moving, transfer: SENT_INTO_HYPERLIQUID });
+    expect(screen.getByText('Sending 11.88 USDC to USDC · Hyperliquid')).toBeInTheDocument();
+
+    serve({ ...transferViews.moving, transfer: { ...SENT_INTO_HYPERLIQUID, status: 'done', received: 10.88 } });
+
+    expect(
+      await screen.findByText('Sent 11.88 USDC to USDC · Hyperliquid. 10.88 arrived.', undefined, { timeout: 3_000 }),
+    ).toBeInTheDocument();
   });
 
   it('out hold label', async () => {
@@ -293,7 +321,7 @@ describe('TransferSection', () => {
     renderWithClient(<TransferSection holdMs={50} />);
 
     const retry = await screen.findByRole('button', { name: 'Retry' });
-    expect(screen.getByText('gate down')).toBeInTheDocument();
+    expect(screen.getByText('Could not load transfers. gate down')).toBeInTheDocument();
 
     serve();
     await userEvent.click(retry);
@@ -319,12 +347,12 @@ describe('TransferSection', () => {
     renderWithClient(<TransferSection holdMs={50} />);
 
     const retry = await screen.findByRole('button', { name: 'Retry' });
-    expect(screen.getByText('gate down')).toBeInTheDocument();
+    expect(screen.getByText('Could not load transfers. gate down')).toBeInTheDocument();
 
     await userEvent.click(retry);
 
     await waitFor(() => expect(reads).toBe(2));
-    expect(screen.getByText('gate down')).toBeInTheDocument();
+    expect(screen.getByText('Could not load transfers. gate down')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
     expect(document.querySelector('.animate-pulse')).toBeNull();
   });
@@ -386,8 +414,109 @@ describe('TransferSection', () => {
     fireEvent.pointerDown(screen.getByRole('button', { name: 'Hold to send 11.88 USDC to Gate spot' }));
 
     await waitFor(() =>
-      expect(posts).toEqual([{ coin: 'USDC', from: 'CROSSEX_HYPERLIQUID', to: 'SPOT', amount: '11.88' }]),
+      expect(posts).toEqual([
+        { id: expect.any(String), coin: 'USDC', from: 'CROSSEX_HYPERLIQUID', to: 'SPOT', amount: '11.88' },
+      ]),
     );
+  });
+
+  it('a hold after a refused POST sends the same id', async () => {
+    const ids: unknown[] = [];
+    server.use(
+      http.post('/api/transfer', async ({ request }) => {
+        ids.push(((await request.json()) as { id?: unknown }).id);
+        return HttpResponse.json(
+          { ok: false, error: { category: 'network', message: 'Gate did not answer.', retryable: true } },
+          { status: 502 },
+        );
+      }),
+    );
+    await renderCard();
+    await userEvent.type(amountInput(), '10');
+    const hold = screen.getByRole('button', { name: 'Hold to send 10.00 USDT to Gate spot' });
+
+    fireEvent.pointerDown(hold);
+    await screen.findByRole('alert');
+    await waitFor(() => expect(hold).toBeEnabled());
+    fireEvent.pointerDown(hold);
+
+    await waitFor(() => expect(ids).toHaveLength(2));
+    expect(ids[0]).toEqual(expect.any(String));
+    expect(ids[1]).toBe(ids[0]);
+  });
+
+  it('a hold after a success sends a new id', async () => {
+    const ids: unknown[] = [];
+    server.use(
+      http.post('/api/transfer', async ({ request }) => {
+        ids.push(((await request.json()) as { id?: unknown }).id);
+        return HttpResponse.json(env({ id: 'mtzur2ab' }), { status: 202 });
+      }),
+    );
+    await renderCard();
+    await userEvent.type(amountInput(), '10');
+    const hold = screen.getByRole('button', { name: 'Hold to send 10.00 USDT to Gate spot' });
+
+    fireEvent.pointerDown(hold);
+    await waitFor(() => expect(ids).toHaveLength(1));
+    await waitFor(() => expect(hold).toBeEnabled());
+    fireEvent.pointerDown(hold);
+
+    await waitFor(() => expect(ids).toHaveLength(2));
+    expect(ids[1]).toEqual(expect.any(String));
+    expect(ids[1]).not.toBe(ids[0]);
+  });
+
+  it('a changed hold after a lost response sends a new id', async () => {
+    const ids: unknown[] = [];
+    server.use(
+      http.post('/api/transfer', async ({ request }) => {
+        ids.push(((await request.json()) as { id?: unknown }).id);
+        return HttpResponse.json(
+          { ok: false, error: { category: 'network', message: 'Gate did not answer.', retryable: true } },
+          { status: 502 },
+        );
+      }),
+    );
+    await renderCard();
+    await userEvent.type(amountInput(), '10');
+    const hold = () => screen.getByRole('button', { name: /^Hold to send/ });
+
+    fireEvent.pointerDown(hold());
+    await screen.findByRole('alert');
+    await waitFor(() => expect(hold()).toBeEnabled());
+
+    await userEvent.clear(amountInput());
+    await userEvent.type(amountInput(), '20');
+    fireEvent.pointerDown(hold());
+
+    await waitFor(() => expect(ids).toHaveLength(2));
+    expect(ids[0]).toEqual(expect.any(String));
+    expect(ids[1]).not.toBe(ids[0]);
+  });
+
+  it('hold label and you get have thousands commas', async () => {
+    await renderCard(transferViews.noSpot);
+    await pickInto();
+    await userEvent.type(amountInput(), '1000');
+
+    expect(screen.getByRole('button', { name: 'Hold to send 1,000.00 USDT to USDT · CrossEx' })).toBeEnabled();
+    expect(facts()).toHaveProperty('You get', '1,000.00 USDT');
+  });
+
+  it('a locked form does not change the wallet', async () => {
+    await renderCard(transferViews.lockRebalance);
+    await userEvent.click(screen.getByText('USDC · Hyperliquid'));
+
+    expect(screen.getByRole('radio', { name: 'USDT · CrossEx' })).toBeChecked();
+    expect(screen.getByRole('radio', { name: 'USDC · Hyperliquid' })).toBeDisabled();
+  });
+
+  it('a moving transfer does not change the wallet', async () => {
+    await renderCard(transferViews.moving);
+    await userEvent.click(screen.getByText('USDC · Hyperliquid'));
+
+    expect(screen.getByRole('radio', { name: 'USDT · CrossEx' })).toBeChecked();
   });
 
   it('a refused POST shows under the hold', async () => {

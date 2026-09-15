@@ -18,9 +18,15 @@ export function BorrowChip({ onOpen }: { onOpen: () => void }) {
   return (
     <HoverCard
       icon={false}
-      widthPx={500}
+      underline={false}
       label={
-        <span className="num rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[11px] text-amber-200 transition-colors hover:border-amber-400/60 hover:bg-amber-500/20">
+        <span
+          onClick={(e) => {
+            e.stopPropagation();
+            onOpen();
+          }}
+          className="num rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[11px] text-amber-200 transition-colors hover:border-amber-400/60 hover:bg-amber-500/20"
+        >
           {`Borrowing ${num(borrow, 2)} ${borrowed.coin}`}
         </span>
       }

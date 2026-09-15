@@ -1,11 +1,21 @@
 import { fireEvent, screen } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { makeDealView } from '../test/fixtures';
 import { env, server } from '../test/server';
 import { renderWithClient } from '../test/utils';
 import { RecoveryBanner } from './RecoveryBanner';
 import { TradeFlowProvider } from './TradeFlow';
+
+const openDealMock = vi.fn();
+vi.mock('./TradeFlow', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./TradeFlow')>()),
+  useTradeFlow: () => ({ modalOpen: false, openDeal: openDealMock }),
+}));
+
+afterEach(() => {
+  vi.clearAllMocks();
+});
 
 function renderBanner(
   deals: ReturnType<typeof makeDealView>[],
@@ -41,7 +51,7 @@ describe('RecoveryBanner', () => {
       makeDealView({ pair: { id: 'ok1', mode: 'OPENING' } }),
       makeDealView({ pair: { id: 'bad1', mode: 'HALTED' } }),
     ]);
-    expect(await screen.findByRole('alert')).toHaveTextContent(/HALTED\. Operator needed\./);
+    expect(await screen.findByRole('alert')).toHaveTextContent(/HALTED — operator needed/);
   });
 
   it('standing engine alerts render with an ack control when no deal is active', async () => {
@@ -89,6 +99,15 @@ describe('RecoveryBanner', () => {
     );
     fireEvent.click(await screen.findByRole('button', { name: 'View' }));
     expect(onOpenTab).toHaveBeenCalledWith('balances');
+  });
+
+  it('an engine alert with a pair id opens that deal', async () => {
+    renderBanner(
+      [],
+      [{ id: 1, ts: 0, level: 'error', pairId: 'deal-1', message: 'hedge wall: retries failing', ack: 0 }],
+    );
+    fireEvent.click(await screen.findByRole('button', { name: 'View' }));
+    expect(openDealMock).toHaveBeenCalledWith('deal-1');
   });
 
   it('server alert row has view', async () => {

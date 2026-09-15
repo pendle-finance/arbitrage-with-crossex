@@ -122,4 +122,73 @@ describe('HoverCard', () => {
     await screen.findByRole('tooltip');
     expect(trigger).toHaveFocus();
   });
+
+  it('tab away from a card with no focusable content closes it', async () => {
+    const trigger = renderCard(<p>Fee is flat.</p>);
+    trigger.focus();
+    await userEvent.keyboard('{Enter}');
+    await screen.findByRole('tooltip');
+
+    await userEvent.tab();
+    expect(screen.queryByRole('tooltip')).toBeNull();
+    expect(screen.getByRole('button', { name: 'After' })).toHaveFocus();
+  });
+
+  it('a card around a button opens on its focus and adds no tab stop', async () => {
+    const onPress = vi.fn();
+    render(
+      <>
+        <button type="button">Before</button>
+        <HoverCard
+          wrapsControl
+          label={
+            <button type="button" onClick={onPress}>
+              Resume
+            </button>
+          }
+        >
+          <p>Continue from the stopped step.</p>
+        </HoverCard>
+        <button type="button">After</button>
+      </>,
+    );
+    expect(screen.getAllByRole('button')).toHaveLength(3);
+    screen.getByRole('button', { name: 'Before' }).focus();
+
+    await userEvent.tab();
+    expect(screen.getByRole('button', { name: 'Resume' })).toHaveFocus();
+    expect(await screen.findByRole('tooltip')).toHaveTextContent('Continue from the stopped step.');
+
+    await userEvent.keyboard('{Enter}');
+    expect(onPress).toHaveBeenCalledTimes(1);
+
+    await userEvent.tab();
+    expect(screen.getByRole('button', { name: 'After' })).toHaveFocus();
+    expect(screen.queryByRole('tooltip')).toBeNull();
+  });
+
+  it('two cards never stay open together from the keyboard', async () => {
+    render(
+      <>
+        <HoverCard label="First">
+          <p>First card.</p>
+        </HoverCard>
+        <HoverCard label="Second">
+          <p>Second card.</p>
+        </HoverCard>
+      </>,
+    );
+    const first = screen.getByRole('button', { name: 'First' });
+    const second = screen.getByRole('button', { name: 'Second' });
+    first.focus();
+    await userEvent.keyboard('{Enter}');
+    await screen.findByRole('tooltip');
+
+    await userEvent.tab();
+    expect(second).toHaveFocus();
+    expect(screen.queryByRole('tooltip')).toBeNull();
+
+    await userEvent.keyboard('{Enter}');
+    expect(screen.getAllByRole('tooltip')).toHaveLength(1);
+  });
 });

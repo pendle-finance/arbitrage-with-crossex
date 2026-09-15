@@ -8,7 +8,7 @@ import { makeClients } from '../../src/core/clients';
 import type { EvenPlan, PlannedStep } from '../../src/core/rebalance/plan';
 import { Store } from '../../src/engine/db';
 import { gateVenue } from '../../src/engine/venueGate';
-import { JobFile, newJob, type Job, type Step } from '../../src/server/rebalanceJob';
+import { HALT_TEXT, inTransitOf, JobFile, newJob, type Job, type Step } from '../../src/server/rebalanceJob';
 import { tagFor } from '../../src/server/rebalanceRunner';
 import type { AppDeps } from '../../src/server/app';
 import { gate, HOST, makeTestApp, mockGateGet, mockGatePost, TEST_KEY, TEST_SECRET } from './helpers/gate-nock';
@@ -121,8 +121,9 @@ const ONE_ROUND: PlannedStep[] = [{ round: 1, kind: 'round', buy: 300, move: 300
 function haltedLoopJob(stepIndex: number, patch: Partial<Step> = {}): Job {
   const job = newJob({ direction: 'toUsdc', route: 'loop', steps: ONE_ROUND, amount: 300, costUsd: 0.08, target: [], userId: null }, t);
   job.status = 'halted';
-  job.haltReason = 'The app restarted during the run.';
+  job.haltReason = HALT_TEXT.restart;
   job.stepIndex = stepIndex;
+  job.tagCount = stepIndex;
   job.fundsAt = (['CROSSEX', 'GATE', 'SPOT'] as const)[stepIndex];
   const venueIds = ['o1', 'x1'];
   for (let i = 0; i < stepIndex; i += 1) {
@@ -250,6 +251,54 @@ describe('1.6.0 job files', () => {
   });
 });
 
+describe('GET /api/rebalance on a halted job', () => {
+  it('a halted job drops on the way once Gate shows the transfer landed', async () => {
+    mockView();
+    const job = haltedLoopJob(2, { venueId: 'x2' });
+    expect(job.steps[2].name).toBe('To Hyperliquid');
+    expect(inTransitOf(job)).toEqual({ coin: 'USDC', qty: Number(BOUGHT), at: 'MOVING' });
+    const h = boot({ job });
+    const rows = mockGateGet('/transfers', { body: [transferRow('x2', 'SUCCESS', { actual_receive: '299.92' })] });
+
+    const { data } = await h.view();
+
+    expect(rows.isDone()).toBe(true);
+    expect(data.job).toMatchObject({ id: job.id, status: 'halted', inTransit: null });
+    expect(h.file()).toEqual(job);
+  });
+
+  it('a halted To spot that landed shows in Gate spot', async () => {
+    mockView();
+    const job = haltedLoopJob(1, { venueId: 'x1' });
+    expect(job.steps[1].name).toBe('To spot');
+    expect(inTransitOf(job)).toEqual({ coin: 'USDC', qty: 300, at: 'MOVING' });
+    const h = boot({ job });
+    const rows = mockGateGet('/transfers', { body: [transferRow('x1', 'SUCCESS', { actual_receive: BOUGHT })] });
+
+    const { data } = await h.view();
+
+    expect(rows.isDone()).toBe(true);
+    expect(data.job).toMatchObject({ id: job.id, status: 'halted' });
+    expect(data.job.inTransit).toEqual({ coin: 'USDC', qty: Number(BOUGHT), at: 'SPOT' });
+    expect(h.file()).toEqual(job);
+  });
+
+  it('a failed lookup keeps on the way', async () => {
+    mockView();
+    const job = haltedLoopJob(2, { venueId: 'x2' });
+    const h = boot({ job });
+    const rows = mockGateGet('/transfers', { status: 500, body: { label: 'SERVER_ERROR', message: 'internal error' } });
+
+    const res = await h.view();
+
+    expect(res.ok).toBe(true);
+    expect(rows.isDone()).toBe(true);
+    expect(res.data.job).toMatchObject({ id: job.id, status: 'halted' });
+    expect(res.data.job.inTransit).toEqual({ coin: 'USDC', qty: Number(BOUGHT), at: 'MOVING' });
+    expect(h.file()).toEqual(job);
+  });
+});
+
 describe('halt alerts', () => {
   it('halt alert says where the money is', async () => {
     mockView();
@@ -286,7 +335,75 @@ describe('halt alerts', () => {
         message: 'Rebalance stopped in round 3. 36.58 USDC is in Gate spot.',
       }),
     ]);
-    expect(h.file()).toMatchObject({ status: 'halted', haltReason: 'The app restarted during the run.' });
+    expect(h.file()).toMatchObject({
+      status: 'halted',
+      haltReason: 'The app restarted during the run. Nothing failed. Press Resume.',
+    });
+  });
+
+  it('boot waits for a step Gate is moving, then halts before the next send', async () => {
+    const steps: PlannedStep[] = [ONE_ROUND[0], { ...ONE_ROUND[0], round: 2 }];
+    const job = newJob({ direction: 'toUsdc', route: 'loop', steps, amount: 600, costUsd: 0.16, target: [], userId: null }, t);
+    for (const [index, venueId] of ['o1', 'x1'].entries()) {
+      Object.assign(job.steps[index], { text: tagFor(job.id, index + 1), venueId, qty: Number(BOUGHT), status: 'done', startedAt: t, doneAt: t });
+    }
+    Object.assign(job.steps[2], { text: tagFor(job.id, 3), venueId: 'x2', status: 'running', startedAt: t - 3_600_000 });
+    Object.assign(job, { stepIndex: 2, tagCount: 3, fundsAt: 'SPOT' });
+    const seen: string[] = [];
+    const sends: string[] = [];
+    let h: ReturnType<typeof boot> | null = null;
+    gate()
+      .persist()
+      .get(`${API}/crossex/transfers`)
+      .query(true)
+      .reply(200, () => {
+        seen.push(h?.file().status ?? 'not booted');
+        return seen.length === 1 ? [transferRow('x2', 'PENDING')] : [transferRow('x2', 'SUCCESS', { actual_receive: '299.92' })];
+      });
+    for (const kind of ['transfers', 'orders']) {
+      gate()
+        .persist()
+        .post(`${API}/crossex/${kind}`)
+        .query(true)
+        .reply(200, () => {
+          sends.push(kind);
+          return { tx_id: 'x9', order_id: 'o9' };
+        });
+    }
+
+    h = boot({ job });
+    const booted = h;
+    await booted.alerts();
+    await waitFor(() => booted.file().status === 'halted', 'the halt');
+
+    expect(booted.file()).toMatchObject({ stepIndex: 3, fundsAt: 'HYPERLIQUID', haltReason: HALT_TEXT.restart });
+    expect(booted.file().steps[2]).toMatchObject({ venueId: 'x2', status: 'done', qty: 299.92 });
+    expect(seen).toEqual(['running', 'running']);
+    expect(sends).toEqual([]);
+    expect(await booted.alerts()).toEqual([
+      expect.objectContaining({ pair_id: `rebalance:${job.id}`, message: 'Rebalance stopped in round 2.' }),
+    ]);
+  });
+
+  it('a job that ends done clears its halt alert and no other', async () => {
+    const store = new Store(':memory:');
+    store.alert('error', 'deal-other', 'another alert', t);
+    const job = haltedLoopJob(2, { text: null });
+    Object.assign(job, { status: 'running', haltReason: null });
+    mockGatePost('/transfers', { body: { tx_id: 'x2', text: 't' } });
+    mockGateGet('/transfers', { body: [transferRow('x2', 'SUCCESS', { actual_receive: '299.92' })] });
+    const h = boot({ job, store });
+    expect(await h.alerts()).toEqual([
+      expect.objectContaining({ pair_id: 'deal-other', ack: 0 }),
+      expect.objectContaining({ pair_id: `rebalance:${job.id}`, ack: 0 }),
+    ]);
+
+    const res = await h.post(`/api/rebalance/${job.id}/resume`);
+
+    expect(res.statusCode).toBe(200);
+    await waitFor(() => h.file().status === 'done', 'done');
+    await waitFor(() => store.listAlerts({ unackedOnly: true }).length === 1, 'the ack');
+    expect(store.listAlerts({ unackedOnly: true })).toEqual([expect.objectContaining({ pair_id: 'deal-other' })]);
   });
 });
 
@@ -406,6 +523,42 @@ describe('POST /api/rebalance/:id/resume and /abandon', () => {
     expect(res.statusCode).toBe(409);
     expect(res.json().error.message).toBe('deal deal-409 is still working');
     expect(h.file().status).toBe('halted');
+  });
+
+  it('resume refuses a deal that starts while the account is read, and the job stays halted', async () => {
+    const store = new Store(':memory:');
+    mockView({
+      onAccountRead: () => {
+        if (store.listPairs({ activeOnly: true }).length === 0) createDeal(store);
+      },
+    });
+    const job = haltedLoopJob(1, { venueId: 'x1' });
+    job.userId = '1';
+    const h = boot({ job, store });
+
+    const res = await h.post(`/api/rebalance/${job.id}/resume`);
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error.message).toBe('deal deal-409 is still working');
+    expect(h.file()).toMatchObject({ status: 'halted', haltReason: HALT_TEXT.restart });
+  });
+
+  it('resume refuses a job abandoned while the account is read', async () => {
+    let abandon = (): void => {};
+    mockView({ onAccountRead: () => abandon() });
+    const job = haltedLoopJob(1, { venueId: 'x1' });
+    job.userId = '1';
+    const h = boot({ job });
+    abandon = () => {
+      const current = h.jobs.read();
+      if (current?.status === 'halted') h.jobs.write({ ...current, status: 'abandoned' });
+    };
+
+    const res = await h.post(`/api/rebalance/${job.id}/resume`);
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error.message).toBe(`rebalance ${job.id} is no longer halted`);
+    expect(h.file().status).toBe('abandoned');
   });
 
   it('resume refuses a job started on another Gate account and runs one started on this account', async () => {

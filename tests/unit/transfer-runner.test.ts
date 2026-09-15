@@ -7,7 +7,7 @@ import { HALT_TEXT, newTransferJob, TransferFile, type TransferJob } from '../..
 import { LOOKUP_RETRY_MS, LOOKUP_WINDOW_MS, POLL_MS, runTransfer } from '../../src/server/rebalanceRunner';
 import { clientsWith } from '../helpers/fake-clients';
 
-type Handler = (arg?: any) => Promise<unknown>;
+type Handler = (arg: never) => Promise<unknown>;
 
 const START = 1_000_000;
 
@@ -47,11 +47,11 @@ function harness(
   over: Partial<TransferJob>,
   handlers: Record<string, Handler>,
 ) {
-  const calls: Record<string, any[]> = {};
+  const calls: Record<string, unknown[]> = {};
   const sequence: string[] = [];
   const crossEx: Record<string, Handler> = {};
   for (const [name, fn] of Object.entries(handlers)) {
-    crossEx[name] = async (arg?: unknown) => {
+    crossEx[name] = async (arg: never) => {
       (calls[name] ??= []).push(arg);
       sequence.push(name);
       return fn(arg);
@@ -215,6 +215,34 @@ describe('runTransfer sends once', () => {
     expect(h.count('listCrossexTransfers')).toBe(0);
   });
 
+  it('a spot send over the spot balance says what Gate spot has', async () => {
+    const h = harness(fakeClock(), { coin: 'USDT', from: 'SPOT', to: 'CROSSEX', amount: 5000 }, {
+      createCrossexTransfer: seq(
+        gateError(422, 'TRANSFER_AMOUNT_INSUFFICIENT', 'Insufficient transferAvailable, transferAvailable: 292.0185407'),
+      ),
+      listCrossexTransfers: seq(rows()),
+    });
+
+    await h.run();
+
+    expect(h.onDisk()).toMatchObject({ status: 'failed', failText: 'Gate spot has only 292.01 USDT.', venueId: null });
+    expect(h.count('createCrossexTransfer')).toBe(1);
+    expect(h.count('listCrossexTransfers')).toBe(0);
+  });
+
+  it('a spot send with nothing in spot says Gate spot has none', async () => {
+    const h = harness(fakeClock(), { coin: 'USDC', from: 'SPOT', to: 'CROSSEX_GATE', amount: 50 }, {
+      createCrossexTransfer: seq(
+        gateError(422, 'TRANSFER_AMOUNT_INSUFFICIENT', 'Insufficient transferAvailable, transferAvailable: 0'),
+      ),
+      listCrossexTransfers: seq(rows()),
+    });
+
+    await h.run();
+
+    expect(h.onDisk()).toMatchObject({ status: 'failed', failText: 'Gate spot has no USDC.', venueId: null });
+  });
+
   it('another refused send fails with the Gate message', async () => {
     const h = harness(fakeClock(), {}, {
       createCrossexTransfer: seq(
@@ -226,9 +254,20 @@ describe('runTransfer sends once', () => {
 
     expect(h.onDisk()).toMatchObject({
       status: 'failed',
-      failText:
-        'Transfer failed: Gate API error (HTTP 422) [TRANSFER_AMOUNT_MINTRANS_INVALID_ERROR]: The Minimum amount needs to be greater than 11.',
+      failText: "Transfer failed: below Gate's minimum of 11.",
     });
+  });
+
+  it('a transfer that rounds to 0 is never sent', async () => {
+    const h = harness(fakeClock(), { amount: 0.000004 }, {
+      createCrossexTransfer: seq(tx('9')),
+      listCrossexTransfers: seq(rows()),
+    });
+
+    await h.run();
+
+    expect(h.onDisk()).toMatchObject({ status: 'failed', failText: 'Transfer failed.', sentAt: null, venueId: null });
+    expect(h.sequence).toEqual([]);
   });
 });
 
@@ -273,7 +312,7 @@ describe('runTransfer after a restart', () => {
 
     expect(h.onDisk()).toMatchObject({ status: 'done', venueId: '77', received: 5, acceptedAt: START });
     expect(h.count('createCrossexTransfer')).toBe(0);
-    expect(h.calls.listCrossexTransfers.every((arg) => arg.coin === 'USDT')).toBe(true);
+    for (const arg of h.calls.listCrossexTransfers) expect(arg).toMatchObject({ coin: 'USDT' });
   });
 
   it('a lookup that fails does not count as no record', async () => {

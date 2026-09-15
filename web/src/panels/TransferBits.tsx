@@ -1,12 +1,12 @@
-import { useId, type ReactNode } from 'react';
+import { useId } from 'react';
 import type { GateAccount, RebalanceBucket, SpotBalance, TransferCoin, TransferJob, TransferPath } from '../api/types';
 import { HoverCard } from '../components/HoverCard';
-import { microLabelClass } from '../components/Th';
+import { RadioRow } from '../components/RadioRow';
 import { fmtAbout, fmtAge, fmtUsd, num, sig } from '../lib/fmt';
 import { roundToStep, stripZeros } from '../lib/ticks';
 import { Ext, GATE_API_KEYS_URL, PERMISSION_ROWS } from './onboardingBits';
 import { ProgressBar } from './RebalanceBits';
-import { keyOf, Term } from './RebalanceHovers';
+import { Facts, keyOf, Term, type Fact } from './RebalanceHovers';
 import { HOVER, WALLET_LABEL } from './rebalanceCopy';
 
 export type CrossexWallet = Exclude<GateAccount, 'SPOT'>;
@@ -24,18 +24,20 @@ export function coinOf(wallet: CrossexWallet): TransferCoin {
 }
 
 export function destinationOf(to: GateAccount): string {
-  return to === 'SPOT' ? 'to Gate spot' : 'into CrossEx';
+  return to === 'SPOT' ? 'to Gate spot' : `to ${WALLET_LABEL[keyOf(WALLET[to])]}`;
 }
 
 export function WalletList({
   side,
   wallet,
   buckets,
+  disabled,
   onPick,
 }: {
   side: 'From' | 'To';
   wallet: CrossexWallet;
   buckets: RebalanceBucket[] | undefined;
+  disabled: boolean;
   onPick: (next: CrossexWallet) => void;
 }) {
   const headerId = useId();
@@ -47,27 +49,22 @@ export function WalletList({
       </span>
       {WALLET_ORDER.map((account) => {
         const { coin, venue } = WALLET[account];
-        const label = WALLET_LABEL[keyOf({ coin, venue })];
+        const labelId = `${groupName}${account}`;
         const cash = buckets ? (buckets.find((b) => b.coin === coin && b.venue === venue)?.cash ?? 0) : null;
-        const picked = account === wallet;
         return (
-          <label
+          <RadioRow
             key={account}
-            className={`flex min-h-[38px] cursor-pointer items-center gap-3 rounded border px-3 py-1.5 text-xs ${
-              picked ? 'border-info bg-info/10' : 'border-ink-700'
-            }`}
+            name={groupName}
+            labelledBy={labelId}
+            checked={account === wallet}
+            disabled={disabled}
+            onPick={() => onPick(account)}
           >
-            <input
-              type="radio"
-              name={groupName}
-              className="chk"
-              aria-label={label}
-              checked={picked}
-              onChange={() => onPick(account)}
-            />
-            <span className="flex-1 font-semibold text-ink-100">{label}</span>
+            <span id={labelId} className="flex-1 font-semibold text-ink-100">
+              {WALLET_LABEL[keyOf({ coin, venue })]}
+            </span>
             {cash !== null && <span className="num text-ink-200">{`${num(cash)} ${coin}`}</span>}
-          </label>
+          </RadioRow>
         );
       })}
     </div>
@@ -78,10 +75,10 @@ function spotAvailable(spot: SpotBalance[], coin: TransferCoin): number {
   return spot.find((row) => row.coin === coin)?.available ?? 0;
 }
 
-export function SpotTile({ side, spot }: { side: 'From' | 'To'; spot: SpotBalance[] | null }) {
+export function SpotTile({ side, spot, disabled }: { side: 'From' | 'To'; spot: SpotBalance[] | null; disabled: boolean }) {
   const headerId = useId();
   return (
-    <div role="group" aria-labelledby={headerId} className="flex flex-col gap-1.5">
+    <div role="group" aria-labelledby={headerId} className={`flex flex-col gap-1.5 ${disabled ? 'opacity-50' : ''}`}>
       <span id={headerId} className="text-xs text-ink-400">
         {side}
       </span>
@@ -97,44 +94,36 @@ export function SpotTile({ side, spot }: { side: 'From' | 'To'; spot: SpotBalanc
   );
 }
 
-function Fact({ label, value }: { label: ReactNode; value: string }) {
-  return (
-    <div className="flex flex-col gap-0.5">
-      <dt className={microLabelClass}>{label}</dt>
-      <dd className="num text-sm text-ink-100">{value}</dd>
-    </div>
-  );
-}
-
 const SERVER_TRANSFER_STEP = '0.00001';
 
 export function fmtTransferAmount(value: number): string {
   const floored = stripZeros(roundToStep(value, SERVER_TRANSFER_STEP, 'down'));
   const [whole, frac = ''] = floored.split('.');
-  return frac.length >= 2 ? floored : `${whole}.${frac.padEnd(2, '0')}`;
+  return `${num(Number(whole), 0)}.${frac.padEnd(2, '0')}`;
 }
 
 export function TransferFacts({
   path,
   amount,
-  showYouGet = true,
+  showYouGet,
+  disabled,
 }: {
   path: TransferPath;
   amount: number;
-  showYouGet?: boolean;
+  showYouGet: boolean;
+  disabled: boolean;
 }) {
-  return (
-    <dl className="grid w-fit grid-cols-2 gap-x-7 gap-y-3">
-      <Fact label={<Term label="Fee" text={HOVER.fee} />} value={path.feeUsd === 0 ? 'free' : fmtUsd(path.feeUsd)} />
-      <Fact label={<Term label="Time" text={HOVER.time} />} value={fmtAbout(path.seconds)} />
-      {path.min >= 1 && (
-        <Fact label={<Term label="Minimum" text={HOVER.minimum} />} value={`${sig(path.min)} ${path.coin}`} />
-      )}
-      {showYouGet && (
-        <Fact label="You get" value={`${fmtTransferAmount(Math.max(0, amount - path.feeUsd))} ${path.coin}`} />
-      )}
-    </dl>
-  );
+  const items: Fact[] = [
+    { key: 'fee', label: <Term label="Fee" text={HOVER.fee} />, value: path.feeUsd === 0 ? 'free' : fmtUsd(path.feeUsd) },
+    { key: 'time', label: <Term label="Time" text={HOVER.time} />, value: fmtAbout(path.seconds) },
+  ];
+  if (path.min >= 1) {
+    items.push({ key: 'min', label: <Term label="Minimum" text={HOVER.minimum} />, value: `${sig(path.min)} ${path.coin}` });
+  }
+  if (showYouGet) {
+    items.push({ key: 'get', label: 'You get', value: `${fmtTransferAmount(Math.max(0, amount - path.feeUsd))} ${path.coin}` });
+  }
+  return <Facts items={items} className={`grid w-fit grid-cols-2 gap-x-7 gap-y-3 ${disabled ? 'opacity-50' : ''}`} />;
 }
 
 export function MovingLine({ transfer, seconds, now }: { transfer: TransferJob; seconds: number | null; now: number }) {
@@ -156,6 +145,23 @@ export function MovingLine({ transfer, seconds, now }: { transfer: TransferJob; 
   );
 }
 
+export function NoSpotReadHow() {
+  return (
+    <div className="flex flex-col gap-2 text-xs">
+      <Ext href={GATE_API_KEYS_URL}>API Management</Ext>
+      <ul className="flex flex-col gap-1">
+        {PERMISSION_ROWS.map((row) => (
+          <li key={row.label} className="grid grid-cols-3 gap-2">
+            <span className="font-semibold text-ink-100">{row.label}</span>
+            <span className="text-ink-200">{row.value}</span>
+            <span className="text-ink-400">{row.detail}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 export function NoSpotReadLine() {
   return (
     <div className="flex flex-wrap items-center gap-2 rounded border border-dashed border-ink-600 px-3 py-2 text-xs">
@@ -166,19 +172,15 @@ export function NoSpotReadLine() {
         underline={false}
         widthPx={400}
       >
-        <div className="flex flex-col gap-2 text-xs">
-          <Ext href={GATE_API_KEYS_URL}>API Management</Ext>
-          <ul className="flex flex-col gap-1">
-            {PERMISSION_ROWS.map((row) => (
-              <li key={row.label} className="grid grid-cols-3 gap-2">
-                <span className="font-semibold text-ink-100">{row.label}</span>
-                <span className="text-ink-200">{row.value}</span>
-                <span className="text-ink-400">{row.detail}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
+        <NoSpotReadHow />
       </HoverCard>
     </div>
   );
+}
+
+export function findPath(
+  paths: TransferPath[],
+  move: { from: GateAccount; to: GateAccount; coin?: TransferCoin },
+): TransferPath | undefined {
+  return paths.find((p) => p.from === move.from && p.to === move.to && (move.coin === undefined || p.coin === move.coin));
 }

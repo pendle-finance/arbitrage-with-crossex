@@ -60,12 +60,22 @@ describe('BorrowChip', () => {
     expect(within(card).getByText('Gate, Binance, OKX and Bybit legs')).toBeInTheDocument();
   });
 
+  it('a click on the pill opens Balances', async () => {
+    server.use(rebalanceHandler(rebalanceViews.accountA));
+    const onOpen = vi.fn();
+    renderWithClient(<BorrowChip onOpen={onOpen} />);
+
+    const pill = await screen.findByText('Borrowing 147.05 USDC');
+    await userEvent.click(pill);
+    expect(onOpen).toHaveBeenCalledTimes(1);
+  });
+
   it('no title no icon', async () => {
     server.use(rebalanceHandler(rebalanceViews.accountA));
     renderWithClient(<BorrowChip onOpen={vi.fn()} />);
 
     const pill = await screen.findByRole('button', { name: 'Borrowing 147.05 USDC' });
-    expect(pill.getAttribute('title')).toBeFalsy();
+    expect(pill.getAttribute('title') ?? '').toBe('');
     expect(pill.querySelector('[aria-hidden="true"]')).toBeNull();
   });
 });

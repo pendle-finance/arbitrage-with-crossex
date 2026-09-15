@@ -12,7 +12,7 @@ const PAY_DOWN_RUNNING = {
   ok: false,
   error: {
     category: 'validation',
-    message: 'a pay-down is still running. Wait for it to finish before changing credentials.',
+    message: 'A rebalance is running. Wait for it to end, then change the key.',
     retryable: true,
   },
 };
@@ -62,13 +62,12 @@ export function credentialsRoutes(deps: AppDeps) {
           ok: false,
           error: {
             category: 'validation',
-            message: 'a deal is still working. Wait for it to finish before changing credentials.',
+            message: 'a deal is still working — wait for it to finish before changing credentials',
             retryable: true,
           },
         });
       }
       if (deps.rebalance?.jobs.read()?.status === 'running') return reply.code(409).send(PAY_DOWN_RUNNING);
-      if (deps.transfer?.jobs.read()?.status === 'moving') return reply.code(409).send(TRANSFER_MOVING);
 
       // Validate with a candidate client; nothing is persisted on failure.
       const candidate = makeClients({ key, secret });
@@ -82,7 +81,7 @@ export function credentialsRoutes(deps: AppDeps) {
         const classified = classifyGateError(err);
         return reply.code(401).send({
           ok: false,
-          error: { ...classified, category: 'auth', hint: 'Gate rejected these credentials. Check key, secret, and CrossEx permission.' },
+          error: { ...classified, category: 'auth', hint: 'Gate rejected these credentials — check key, secret, and CrossEx permission.' },
         });
       }
 
@@ -96,19 +95,23 @@ export function credentialsRoutes(deps: AppDeps) {
           ok: false,
           error: {
             category: 'validation',
-            message: 'a basket started while validating the new credentials. Wait for it to finish and retry.',
+            message: 'a basket started while validating the new credentials — wait for it to finish and retry',
             retryable: true,
           },
         });
       }
+      const isOtherAccount = (userId: string | null): boolean => userId === null || userId !== candidateUserId;
       const job = deps.rebalance?.jobs.read() ?? null;
       if (job?.status === 'running') return reply.code(409).send(PAY_DOWN_RUNNING);
-      if (deps.transfer?.jobs.read()?.status === 'moving') return reply.code(409).send(TRANSFER_MOVING);
+      const transfer = deps.transfer?.jobs.read() ?? null;
+      if (transfer?.status === 'moving' && isOtherAccount(transfer.userId)) {
+        return reply.code(409).send(TRANSFER_MOVING);
+      }
       // A halted job keeps venue ids and amounts of the account it ran on, and
       // Resume would run them on the new one. A rotated key on the same
       // account is fine; a job file from before the field is treated as
       // another account's.
-      if (job?.status === 'halted' && (job.userId === null || job.userId !== candidateUserId)) {
+      if (job?.status === 'halted' && isOtherAccount(job.userId)) {
         return reply.code(409).send(REBALANCE_HALTED);
       }
 

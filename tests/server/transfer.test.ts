@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeClients } from '../../src/core/clients';
 import { Store } from '../../src/engine/db';
 import { gateVenue } from '../../src/engine/venueGate';
@@ -29,6 +29,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  vi.useRealTimers();
   for (const app of apps) await app.close();
 });
 
@@ -65,10 +66,11 @@ const SPOT_ROWS = [
 ];
 
 const RATE_LIMITED = { label: 'TOO_MANY_REQUESTS', message: 'slow down' };
+const NO_SPOT_READ = { label: 'FORBIDDEN', message: 'Request API key does not have spot permission' };
 
 function mockReads(
   opts: {
-    spot?: { status?: number; body: unknown };
+    spot?: { status?: number; body: unknown; times?: number };
     onAccountRead?: () => void;
     delayMs?: number;
     accountThen429?: boolean;
@@ -130,14 +132,12 @@ function mockReads(
       return coins;
     });
   if (!opts.spotThen429) {
-    gate()
-      .persist()
-      .get(`${API}/spot/accounts`)
-      .query(true)
-      .reply(opts.spot?.status ?? 200, () => {
-        calls.spot += 1;
-        return opts.spot?.body ?? SPOT_ROWS;
-      });
+    const spotRead = (opts.spot?.times ? gate() : gate().persist()).get(`${API}/spot/accounts`).query(true);
+    if (opts.spot?.times) spotRead.times(opts.spot.times);
+    spotRead.reply(opts.spot?.status ?? 200, () => {
+      calls.spot += 1;
+      return opts.spot?.body ?? SPOT_ROWS;
+    });
   }
   return calls;
 }
@@ -243,7 +243,7 @@ describe('GET /api/transfer', () => {
   it('spot 403 is null', async () => {
     const t = boot();
     mockReads({
-      spot: { status: 403, body: { label: 'FORBIDDEN', message: 'Request API key does not have spot permission' } },
+      spot: { status: 403, body: NO_SPOT_READ },
     });
 
     const res = await t.app.inject({ method: 'GET', url: '/api/transfer', headers: HOST });
@@ -255,6 +255,98 @@ describe('GET /api/transfer', () => {
       null,
       null,
       null,
+    ]);
+  });
+
+  it('a Spot read refusal is asked of Gate once a minute', async () => {
+    const t0 = Date.now();
+    vi.useFakeTimers({ toFake: ['Date'], now: t0 });
+    const t = boot();
+    const calls = mockReads({ spot: { status: 403, body: NO_SPOT_READ, times: 1 } });
+
+    const first = await t.view();
+    vi.setSystemTime(t0 + 5_000);
+    const second = await t.view();
+
+    expect(first.data.spot).toBeNull();
+    expect(second.data.spot).toBeNull();
+    expect(calls.spot).toBe(1);
+
+    gate()
+      .get(`${API}/spot/accounts`)
+      .query(true)
+      .reply(403, () => {
+        calls.spot += 1;
+        return NO_SPOT_READ;
+      });
+    vi.setSystemTime(t0 + 61_000);
+    const third = await t.view();
+
+    expect(third.data.spot).toBeNull();
+    expect(calls.spot).toBe(2);
+  });
+
+  it('a spot read that works clears the remembered refusal', async () => {
+    const t0 = Date.now();
+    vi.useFakeTimers({ toFake: ['Date'], now: t0 });
+    const t = boot();
+    const calls = mockReads({ spot: { status: 403, body: NO_SPOT_READ, times: 1 } });
+    const sent = mockSend();
+
+    expect((await t.view()).data.spot).toBeNull();
+    gate()
+      .persist()
+      .get(`${API}/spot/accounts`)
+      .query(true)
+      .reply(200, () => {
+        calls.spot += 1;
+        return SPOT_ROWS;
+      });
+    vi.setSystemTime(t0 + 5_000);
+    expect((await t.view()).data.spot).toBeNull();
+    expect(calls.spot).toBe(1);
+
+    const res = await t.post({ coin: 'USDT', from: 'SPOT', to: 'CROSSEX', amount: '400' });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error.message).toBe('Max 318.42 USDT. That is your Gate spot balance.');
+    expect(calls.spot).toBe(2);
+
+    vi.setSystemTime(t0 + 10_000);
+    const { data } = await t.view();
+
+    expect(data.spot).toEqual([
+      { coin: 'USDT', available: 318.42, locked: 0 },
+      { coin: 'USDC', available: 0, locked: 0 },
+    ]);
+    expect(sent).toHaveLength(0);
+  });
+
+  it('a key change asks Gate for spot again', async () => {
+    const envPath = path.join(mkdtempSync(path.join(tmpdir(), 'env-')), '.env');
+    const t = boot({ envPath });
+    const calls = mockReads({ spot: { status: 403, body: NO_SPOT_READ, times: 1 } });
+    expect((await t.view()).data.spot).toBeNull();
+    gate()
+      .get(`${API}/spot/accounts`)
+      .query(true)
+      .reply(200, () => {
+        calls.spot += 1;
+        return SPOT_ROWS;
+      });
+
+    const put = await t.app.inject({
+      method: 'PUT',
+      url: '/api/credentials',
+      headers: HOST,
+      payload: { key: 'newkey876543210', secret: 'newsecret' },
+    });
+    const { data } = await t.view();
+
+    expect(put.statusCode).toBe(200);
+    expect(calls.spot).toBe(2);
+    expect(data.spot).toEqual([
+      { coin: 'USDT', available: 318.42, locked: 0 },
+      { coin: 'USDC', available: 0, locked: 0 },
     ]);
   });
 
@@ -332,6 +424,21 @@ describe('GET /api/transfer', () => {
       ['id', 'coin', 'from', 'to', 'amount', 'status', 'received', 'failText', 'createdAt', 'doneAt'].sort(),
     );
     expect(data.transfer).toMatchObject({ coin: 'USDC', amount: 11.88, status: 'moving' });
+  });
+
+  it('a Gate error on the transfer card reads as a plain sentence', async () => {
+    gate().get(`${API}/crossex/accounts`).query(true).reply(401, { label: 'INVALID_KEY', message: 'Invalid key' });
+    gate().persist().get(`${API}/crossex/transfers/coin`).query(true).reply(200, coins);
+    gate().persist().get(`${API}/spot/accounts`).query(true).reply(200, SPOT_ROWS);
+    const t = boot();
+
+    const res = await t.app.inject({ method: 'GET', url: '/api/transfer', headers: HOST });
+
+    expect(res.statusCode).toBe(401);
+    const { error } = res.json();
+    expect(error.message).toBe('Gate refused the API key.');
+    expect(error.hint).toBe('Check it in Settings.');
+    expect(error.category).toBe('auth');
   });
 });
 
@@ -433,8 +540,40 @@ describe('POST /api/transfer refusals', () => {
 
     const res = await t.post({ coin: 'USDC', from: 'SPOT', to: 'CROSSEX_HYPERLIQUID', amount: '10' });
 
-    expect(res.statusCode).toBe(409);
+    expect(res.statusCode).toBe(400);
     expect(res.json().error.message).toBe('Minimum 11 USDC.');
+  });
+
+  it('refuses an amount that rounds to 0 before any send', async () => {
+    const t = boot();
+    mockReads();
+    const sent = mockSend();
+
+    for (const body of [
+      { coin: 'USDT', from: 'CROSSEX', to: 'SPOT', amount: '0.000001' },
+      { coin: 'USDC', from: 'SPOT', to: 'CROSSEX_GATE', amount: '0.000001' },
+    ]) {
+      const res = await t.post(body);
+      expect(res.statusCode, body.coin).toBe(400);
+      expect(res.json().error.message).toBe(`Minimum 0.00001 ${body.coin}.`);
+    }
+
+    expect(sent).toHaveLength(0);
+    expect(t.transfers.read()).toBeNull();
+  });
+
+  it('refuses an id that is not text', async () => {
+    const t = boot();
+    const calls = mockReads();
+    const sent = mockSend();
+
+    for (const id of [42, '']) {
+      const res = await t.post({ ...HL_OUT, id });
+      expect(res.statusCode, String(id)).toBe(400);
+    }
+
+    expect(calls).toEqual({ account: 0, coins: 0, spot: 0 });
+    expect(sent).toHaveLength(0);
   });
 
   it('post reads the account fresh', async () => {
@@ -596,6 +735,95 @@ describe('POST /api/transfer sends', () => {
     expect(t.file().failText).toBe('Gate refused the move: free margin is too low.');
   });
 
+  it('a refused spot send names Gate spot, not margin', async () => {
+    const t = boot({ sleep: noWait });
+    mockReads({
+      spot: { status: 403, body: NO_SPOT_READ },
+    });
+    mockSend({
+      status: 422,
+      body: {
+        label: 'TRANSFER_AMOUNT_INSUFFICIENT',
+        message: 'Insufficient transferAvailable, transferAvailable: 292.0185407',
+      },
+    });
+
+    const res = await t.post({ coin: 'USDT', from: 'SPOT', to: 'CROSSEX', amount: 5000 });
+
+    expect(res.statusCode).toBe(202);
+    await waitFor(() => t.transfers.read()?.status !== 'moving', 'the refusal');
+    expect(t.file()).toMatchObject({ status: 'failed', failText: 'Gate spot has only 292.01 USDT.' });
+  });
+
+  it('a transfer out of CrossEx sends with no Spot read', async () => {
+    const t = boot({ sleep: noWait });
+    mockReads({ spot: { status: 403, body: NO_SPOT_READ } });
+    const sent = mockSend();
+    mockRows('SUCCESS', { actual_receive: '10' });
+
+    const res = await t.post({ coin: 'USDT', from: 'CROSSEX', to: 'SPOT', amount: '10' });
+
+    expect(res.statusCode).toBe(202);
+    await waitFor(() => t.transfers.read()?.status === 'done', 'the transfer end');
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({ coin: 'USDT', amount: '10', from: 'CROSSEX', to: 'SPOT' });
+  });
+
+  it('a transfer from Gate spot sends with no Spot read', async () => {
+    const t = boot({ sleep: noWait });
+    mockReads({ spot: { status: 403, body: NO_SPOT_READ } });
+    const sent = mockSend();
+    mockRows('SUCCESS', { actual_receive: '10' });
+
+    const res = await t.post({ coin: 'USDT', from: 'SPOT', to: 'CROSSEX', amount: '10' });
+
+    expect(res.statusCode).toBe(202);
+    await waitFor(() => t.transfers.read()?.status === 'done', 'the transfer end');
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({ coin: 'USDT', amount: '10', from: 'SPOT', to: 'CROSSEX' });
+  });
+
+  it('a repeated id while the transfer moves answers 202 and sends nothing', async () => {
+    const t = boot();
+    mockReads();
+    const sent = mockSend();
+    mockRows('PENDING');
+
+    const first = await t.post({ ...HL_OUT, id: 'hold-1' });
+    await waitFor(t.parked, 'the runner poll');
+    const again = await t.post({ ...HL_OUT, id: 'hold-1' });
+
+    expect(first.statusCode).toBe(202);
+    expect(first.json().data).toEqual({ id: 'hold-1' });
+    expect(again.statusCode).toBe(202);
+    expect(again.json().data).toEqual({ id: 'hold-1', duplicate: true });
+    expect(sent).toHaveLength(1);
+    expect(t.file()).toMatchObject({ id: 'hold-1', status: 'moving' });
+  });
+
+  it('a repeated id after the transfer ends answers 202 and sends nothing', async () => {
+    const t = boot({ sleep: noWait });
+    mockReads();
+    const sent = mockSend();
+    mockRows('SUCCESS', { actual_receive: '10.88' });
+    const body = { coin: 'USDT', from: 'CROSSEX', to: 'SPOT', amount: '5' };
+
+    expect((await t.post({ ...body, id: 'hold-1' })).statusCode).toBe(202);
+    await waitFor(() => t.transfers.read()?.status === 'done', 'the transfer end');
+    const again = await t.post({ ...body, id: 'hold-1' });
+
+    expect(again.statusCode).toBe(202);
+    expect(again.json().data).toEqual({ id: 'hold-1', duplicate: true });
+    expect(sent).toHaveLength(1);
+    expect(t.file().status).toBe('done');
+
+    const next = await t.post({ ...body, id: 'hold-2' });
+
+    expect(next.statusCode).toBe(202);
+    await waitFor(() => t.transfers.read()?.id === 'hold-2' && t.transfers.read()?.status === 'done', 'the second end');
+    expect(sent).toHaveLength(2);
+  });
+
   it('boot polls a moving transfer', async () => {
     const now = Date.now();
     const t = boot({
@@ -628,6 +856,21 @@ describe('POST /api/transfer races', () => {
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(sent).toHaveLength(1);
     expect(t.file().venueId).toBe('123');
+  });
+
+  it('two posts with one id send once', async () => {
+    const t = boot();
+    mockReads({ delayMs: 50 });
+    const sent = mockSend();
+    mockRows('PENDING');
+
+    const results = await Promise.all([t.post({ ...HL_OUT, id: 'hold-1' }), t.post({ ...HL_OUT, id: 'hold-1' })]);
+
+    expect(results.map((r) => r.statusCode)).toEqual([202, 202]);
+    await waitFor(t.parked, 'the runner poll');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(sent).toHaveLength(1);
+    expect(t.file().id).toBe('hold-1');
   });
 
   it('rebalance and transfer race', async () => {

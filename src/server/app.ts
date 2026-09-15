@@ -8,10 +8,11 @@ import Fastify, { type FastifyInstance, type FastifyReply } from 'fastify';
 import type { FetchLike } from '../core/boros/client';
 import type { BorosOrderClient } from '../core/boros/orders';
 import type { Clients } from '../core/clients';
-import { classifyGateError, CoreError, type ClassifiedError } from '../core/errors';
+import { classifyGateError } from '../core/errors';
 import type { Store } from '../engine/db';
 import type { Clock, VenuePort } from '../engine/types';
 import type { TtlCache } from './cache';
+import { sendError } from './errorReply';
 import type { InterestFile } from './interestLedger';
 import type { JobFile, TransferFile } from './rebalanceJob';
 import { accountRoutes } from './routes/account';
@@ -102,30 +103,6 @@ declare module 'fastify' {
   }
 }
 
-function statusFor(classified: ClassifiedError, err: unknown): number {
-  switch (classified.category) {
-    case 'validation':
-    case 'symbol-invalid':
-      return 400;
-    case 'auth':
-      // Preserve a genuine Gate 403 (permission/IP block) rather than flattening to 401.
-      return classified.httpStatus === 403 ? 403 : 401;
-    // Not the client's fault and not an auth rejection: the server has no keys yet.
-    case 'not-configured':
-      return 503;
-    case 'rate-limited':
-      return 429;
-    case 'network':
-      return 502;
-    default: {
-      const s = classified.httpStatus ?? (err as { statusCode?: number })?.statusCode;
-      if (s && s >= 400 && s <= 599) return s;
-      // CoreErrors are domain validation (e.g. 'leverage') — always the client's fault.
-      return err instanceof CoreError ? 400 : 500;
-    }
-  }
-}
-
 export function buildApp(deps: AppDeps): FastifyInstance {
   const app = Fastify({ logger: false });
   // Any localhost port is trusted (the Vite dev server proxies from its own port);
@@ -203,20 +180,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     return this.send({ ok: true, data, meta });
   });
 
-  app.setErrorHandler((err, req, reply) => {
-    const classified = classifyGateError(err);
-    const status = statusFor(classified, err);
-    // A true 500 is an unexpected internal exception (not a Gate/Core error) — don't
-    // echo its raw message (paths/stack-ish text) to the client; log it server-side.
-    if (status === 500) {
-      req.log?.error?.(err);
-      return reply.code(500).send({
-        ok: false,
-        error: { category: 'unknown', message: 'internal server error', retryable: false },
-      });
-    }
-    reply.code(status).send({ ok: false, error: classified });
-  });
+  app.setErrorHandler((err, req, reply) => sendError(err, req, reply, classifyGateError));
 
   const routeModules = [
     healthRoutes,

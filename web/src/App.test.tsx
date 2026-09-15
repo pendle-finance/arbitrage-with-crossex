@@ -306,8 +306,14 @@ describe('borrow pill', () => {
     server.use(rebalanceHandler(makeRebalanceView({ buckets: [borrowed(8.5)] })));
     await renderApp();
 
-    const pill = await screen.findByRole('button', { name: 'Borrowing 8.50 USDC' });
+    const pill = await screen.findByText('Borrowing 8.50 USDC');
     expect(tab(/^Opportunities/)).toHaveAttribute('aria-selected', 'true');
+
+    await userEvent.click(pill);
+
+    expect(tab(/^Balances/)).toHaveAttribute('aria-selected', 'true');
+    expect(panel('balances')).toBeVisible();
+    expect(within(panel('balances')).getByRole('region', { name: 'Rebalance' })).toBeVisible();
 
     await userEvent.hover(pill);
     const card = await screen.findByRole('tooltip');
@@ -315,8 +321,6 @@ describe('borrow pill', () => {
     await userEvent.click(link);
 
     expect(tab(/^Balances/)).toHaveAttribute('aria-selected', 'true');
-    expect(panel('balances')).toBeVisible();
-    expect(within(panel('balances')).getByRole('region', { name: 'Rebalance' })).toBeVisible();
   });
 
   it('shows a USDT borrow the same way, naming the Gate, Binance, OKX and Bybit legs', async () => {

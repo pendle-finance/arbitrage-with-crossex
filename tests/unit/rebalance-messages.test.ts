@@ -10,11 +10,14 @@ import {
   JobFile,
   newJob,
   newTransferJob,
+  pendingStep,
+  spotShortfallFailText,
   transferFailText,
   TransferFile,
   transferLockFor,
   type Job,
 } from '../../src/server/rebalanceJob';
+import { tagFor } from '../../src/server/rebalanceRunner';
 
 const dir = () => fs.mkdtempSync(path.join(tmpdir(), 'rebalance-'));
 
@@ -78,8 +81,11 @@ describe('halt texts', () => {
 
     expect(jobs.haltIfRunning()).toBe(true);
 
-    expect(jobs.read()).toMatchObject({ status: 'halted', haltReason: 'The app restarted during the run.' });
-    expect(new JobFile(d).read()).toMatchObject({ status: 'halted', haltReason: 'The app restarted during the run.' });
+    expect(jobs.read()).toMatchObject({ status: 'halted', haltReason: 'The app restarted during the run. Nothing failed. Press Resume.' });
+    expect(new JobFile(d).read()).toMatchObject({
+      status: 'halted',
+      haltReason: 'The app restarted during the run. Nothing failed. Press Resume.',
+    });
     expect(jobs.haltIfRunning()).toBe(false);
 
     jobs.write({ ...accountAJob(), status: 'done' });
@@ -90,12 +96,43 @@ describe('halt texts', () => {
 
   it('any other error halts with its message, and the hint after it when there is one', () => {
     expect(haltReasonFor(gateError(400, 'TRADE_INVALID_QUOTE_ORDER_QTY', 'quote qty is required'))).toBe(
-      'Gate API error (HTTP 400) [TRADE_INVALID_QUOTE_ORDER_QTY]: quote qty is required',
+      'Quote qty is required.',
     );
     expect(haltReasonFor(gateError(401, 'INVALID_KEY', 'invalid key'))).toBe(
-      'Gate API error (HTTP 401) [INVALID_KEY]: invalid key Check the API key/secret in Settings.',
+      'Gate refused the API key. Check it in Settings.',
     );
     expect(haltReasonFor(new Error('socket hang up'))).toBe('socket hang up');
+  });
+
+  it('a refused key reads the same with or without a Gate label', () => {
+    const bare401 = Object.assign(new Error('Request failed with status code 401'), { response: { status: 401 } });
+
+    expect(haltReasonFor(bare401)).toBe('Gate refused the API key. Check it in Settings.');
+    expect(haltReasonFor(gateError(400, 'INVALID_KEY', 'invalid key'))).toBe('Gate refused the API key. Check it in Settings.');
+  });
+
+  it('a message and its hint always have a period between them', () => {
+    const bare403 = Object.assign(new Error('Request failed with status code 403'), { response: { status: 403 } });
+
+    expect(haltReasonFor(bare403)).toBe('Request failed with status code 403. Check the API key/secret in Settings.');
+    expect(haltReasonFor(gateError(403, 'FORBIDDEN', 'forbidden.'))).toBe('Forbidden. Check the API key/secret in Settings.');
+  });
+
+  it('no halt text carries the raw Gate error prefix', () => {
+    const errors = [
+      gateError(400, 'TRADE_INVALID_QUOTE_ORDER_QTY', 'quote qty is required'),
+      gateError(401, 'INVALID_KEY', 'invalid key'),
+      gateError(422, 'TRANSFER_AMOUNT_MINTRANS_INVALID_ERROR', 'The Minimum amount needs to be greater than 11.'),
+      gateError(500, 'SERVER_ERROR', 'internal error'),
+    ];
+
+    for (const err of errors) expect(haltReasonFor(err)).not.toMatch(/Gate API error|HTTP \d|\[[A-Z_]+\]/);
+  });
+
+  it("a transfer below Gate's minimum halts with the minimum Gate sent", () => {
+    const refused = gateError(422, 'TRANSFER_AMOUNT_MINTRANS_INVALID_ERROR', 'The Minimum amount needs to be greater than 11.');
+
+    expect(haltReasonFor(refused)).toBe("Below Gate's minimum of 11.");
   });
 
   it('transfer fail text ends in one period', () => {
@@ -108,6 +145,15 @@ describe('halt texts', () => {
     expect(transferFailText('')).toBe('Transfer failed.');
     expect(transferFailText('   ')).toBe('Transfer failed.');
     expect(transferFailText(' . . ')).toBe('Transfer failed.');
+  });
+
+  it('shortfall text reads commas, exponents and sub-cent amounts', () => {
+    const shortfall = (available: string): string =>
+      spotShortfallFailText(`Insufficient transferAvailable, transferAvailable: ${available}`, 'USDT', 5000);
+
+    expect(shortfall('1,234.56')).toBe('Gate spot has only 1,234.56 USDT.');
+    expect(shortfall('1.2e-5')).toBe('Gate spot has less than 0.01 USDT.');
+    expect(shortfall('0.004')).toBe('Gate spot has less than 0.01 USDT.');
   });
 });
 
@@ -264,6 +310,55 @@ describe('1.6.0 job file', () => {
     expect(new JobFile(e).read()).toMatchObject({ direction: 'toUsdc' });
   });
 
+  it('a file with no tag count starts past every tag the old scheme made', () => {
+    const d = dir();
+    writeRaw(d, 'rebalance.json', {
+      id: 'mfhq1x2k',
+      userId: '1',
+      direction: 'toUsdc',
+      route: 'loop',
+      amount: 111.96,
+      status: 'halted',
+      stepIndex: 1,
+      steps: [
+        step160('Buy USDC', { text: 't-rbmfhq1x2k0', venueId: 'o1', qty: 111.96, status: 'done' }),
+        step160('To spot', { attempt: 1, status: 'running', startedAt: 1_757_700_003_000 }),
+        step160('To Hyperliquid'),
+      ],
+      fundsAt: 'GATE',
+      haltReason: 'Gate took too long on this step.',
+      createdAt: 1_757_700_000_000,
+      updatedAt: 1_757_700_004_000,
+    });
+
+    expect(new JobFile(d).read()!.tagCount).toBe(3);
+    expect(accountAJob().tagCount).toBe(0);
+
+    const { tagCount: _tagCount, ...fifteenSteps } = stopAt(accountAJob(), 14, { status: 'halted', fundsAt: 'SPOT' });
+    const e = dir();
+    writeRaw(e, 'rebalance.json', fifteenSteps);
+    const old = new JobFile(e).read()!;
+    const oldTags = old.steps.flatMap((_, index) =>
+      [0, 1, 2, 3, 11].map((attempt) => (attempt > 0 ? `t-rb${old.id}${index}x${attempt}` : `t-rb${old.id}${index}`)),
+    );
+    const newTags = Array.from({ length: 200 }, (_, n) => tagFor(old.id, old.tagCount + 1 + n));
+    expect(old.tagCount).toBe(15);
+    expect(newTags.filter((tag) => oldTags.includes(tag))).toEqual([]);
+  });
+
+  it('reads null when the tag count is not a whole number of 0 or more', () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      for (const tagCount of [-1, 1.5, '2']) {
+        const d = dir();
+        writeRaw(d, 'rebalance.json', { ...accountAJob(), tagCount });
+        expect(new JobFile(d).read()).toBeNull();
+      }
+    } finally {
+      error.mockRestore();
+    }
+  });
+
   it('reads null and says so once when a step is not an object', () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     try {
@@ -306,14 +401,69 @@ describe('bannerFor', () => {
 
     expect(bannerFor(job)).toBe('Rebalance stopped at Convert.');
   });
+
+  it('says Sell USDC at a Sell USDC step put in before Convert', () => {
+    const job = exampleEJob();
+    job.steps.splice(3, 0, pendingStep('Sell USDC', { round: null, planned: 20.93, arrives: null, borrowLeft: null }));
+    stopAt(job, 3, { status: 'halted', fundsAt: 'CROSSEX' });
+
+    expect(bannerFor(job)).toBe('Rebalance stopped at Sell USDC.');
+  });
+
+  it('says where Gate is taking the USDC while a move is on the way', () => {
+    const fromHyperliquid = stopAt(exampleEJob(), 0, { status: 'halted', fundsAt: 'HYPERLIQUID' });
+    Object.assign(fromHyperliquid.steps[0], { venueId: 'x1', status: 'running' });
+    const toHyperliquid = stopAt(accountAJob(), 8, { status: 'halted', fundsAt: 'SPOT' });
+    Object.assign(toHyperliquid.steps[8], { venueId: 'x9', status: 'running' });
+    const toGate = stopAt(exampleEJob(), 1, { status: 'halted', fundsAt: 'SPOT' });
+    toGate.steps[0].qty = 744.44;
+    Object.assign(toGate.steps[1], { venueId: 'x2', status: 'running' });
+
+    expect(bannerFor(fromHyperliquid)).toBe('Rebalance stopped in round 1. 745.44 USDC is on the way to Gate spot.');
+    expect(bannerFor(toHyperliquid)).toBe('Rebalance stopped in round 3. 36.58 USDC is on the way to USDC · Hyperliquid.');
+    expect(bannerFor(toGate)).toBe('Rebalance stopped in round 1. 744.44 USDC is on the way to USDC · Gate.');
+  });
+
+  it('never throws on a job with no current step', () => {
+    const job = { ...exampleEJob(), stepIndex: 4 };
+
+    expect(bannerFor(job)).toBe('Rebalance stopped.');
+    expect(bannerFor({ ...exampleEJob(), steps: [] })).toBe('Rebalance stopped.');
+  });
 });
 
 describe('inTransitOf', () => {
   it('is the last done step qty while the money sits in Gate spot on a running, halted or abandoned job', () => {
     for (const status of ['running', 'halted', 'abandoned'] as const) {
       const job = stopAt(accountAJob(), 8, { status, fundsAt: 'SPOT' });
-      expect(inTransitOf(job)).toEqual({ coin: 'USDC', qty: 36.58 });
+      expect(inTransitOf(job)).toEqual({ coin: 'USDC', qty: 36.58, at: 'SPOT' });
     }
+  });
+
+  it('toward USDT is the sent amount while Gate moves it out of the Hyperliquid wallet', () => {
+    const job = stopAt(exampleEJob(), 0, { status: 'running', fundsAt: 'HYPERLIQUID' });
+    Object.assign(job.steps[0], { venueId: 'x1', status: 'running' });
+
+    expect(inTransitOf(job)).toEqual({ coin: 'USDC', qty: 745.44, at: 'MOVING' });
+  });
+
+  it('toward USDC is the sent amount while Gate moves it into the Hyperliquid wallet', () => {
+    for (const status of ['running', 'halted', 'abandoned'] as const) {
+      const job = stopAt(accountAJob(), 8, { status, fundsAt: 'SPOT' });
+      Object.assign(job.steps[8], { venueId: 'x9', status: 'running' });
+
+      expect(inTransitOf(job)).toEqual({ coin: 'USDC', qty: 36.58, at: 'MOVING' });
+    }
+  });
+
+  it('is not on the way before Gate takes the move, and sits in Gate spot once it lands', () => {
+    const sentNothing = stopAt(exampleEJob(), 0, { status: 'halted', fundsAt: 'HYPERLIQUID' });
+    sentNothing.steps[0].text = 't-rbtag1';
+    const landed = stopAt(exampleEJob(), 1, { status: 'halted', fundsAt: 'SPOT' });
+    Object.assign(landed.steps[0], { venueId: 'x1', qty: 744.44 });
+
+    expect(inTransitOf(sentNothing)).toBeNull();
+    expect(inTransitOf(landed)).toEqual({ coin: 'USDC', qty: 744.44, at: 'SPOT' });
   });
 
   it('is null on a done job or with the money elsewhere', () => {
