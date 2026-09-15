@@ -50,14 +50,28 @@ function doneText(transfer: TransferJob): string {
   return transfer.received === null ? sent : `${sent} ${num(transfer.received)} arrived.`;
 }
 
+// Zero is not a separate error from "below the minimum" — it is the most common
+// instance of it, since the field reads 0.00 before anything is typed. Both
+// functions below have to agree on that, or the message is suppressed without
+// its replacement ever being reached: limitLine only speaks when it is handed a
+// number, and parsedAmount is what decides whether there is one.
+const isZero = (trimmed: string): boolean => Number(trimmed) === 0 && amountError(trimmed) === 'Must be more than 0';
+
 function parsedAmount(text: string): number | null {
   const trimmed = text.trim();
-  if (trimmed === '' || amountError(trimmed) !== null) return null;
+  if (trimmed === '') return null;
+  // Zero is a real number for limitLine's purposes — it must fall through so the
+  // minimum line can name the floor and its coin.
+  if (isZero(trimmed)) return 0;
+  if (amountError(trimmed) !== null) return null;
   return Number(trimmed);
 }
 
 function formatLine(text: string): string | null {
   if (text.includes(',')) return 'Remove the commas.';
+  // Negatives still fall through to "Must be more than 0": a minimum is a
+  // strange reply to -5.
+  if (isZero(text.trim())) return null;
   return amountError(text);
 }
 
@@ -115,7 +129,7 @@ export function TransferSection({ holdMs, pick }: { holdMs?: number; pick?: Tran
   const header = (
     <div className="flex flex-col gap-0.5">
       <h2 className="text-xs font-semibold uppercase tracking-wider text-ink-400">
-        <HoverCard label="Transfer" widthPx={320} underline={false}>
+        <HoverCard label="Manual Transfer" widthPx={320} underline={false}>
           {HOVER.transferTitle}
         </HoverCard>
       </h2>

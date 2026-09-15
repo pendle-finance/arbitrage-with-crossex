@@ -174,6 +174,25 @@ describe('TransferSection', () => {
     expect(facts()).toHaveProperty('You get', '0.001 USDT');
   });
 
+  it('zero names the real minimum, not "more than 0"', async () => {
+    // The field starts at 0.00, so "Must be more than 0" was the message a user
+    // saw before typing anything — and it points at the wrong floor.
+    await renderCard();
+    await pickWallet('USDC · Hyperliquid');
+    await userEvent.type(amountInput(), '0');
+
+    expect(screen.getByText('Minimum 11 USDC.')).toBeInTheDocument();
+    expect(screen.queryByText('Must be more than 0')).toBeNull();
+  });
+
+  it('a negative still says more than 0 — a minimum is a strange reply to -5', async () => {
+    await renderCard();
+    await pickWallet('USDC · Hyperliquid');
+    await userEvent.type(amountInput(), '-5');
+
+    expect(screen.getByText('Must be more than 0')).toBeInTheDocument();
+  });
+
   it('over max line', async () => {
     await renderCard();
     await userEvent.type(amountInput(), '900');
@@ -284,7 +303,7 @@ describe('TransferSection', () => {
 
   it('title hover', async () => {
     await renderCard();
-    await userEvent.hover(screen.getByRole('button', { name: 'Transfer' }));
+    await userEvent.hover(screen.getByRole('button', { name: 'Manual Transfer' }));
 
     expect(await screen.findByRole('tooltip')).toHaveTextContent(
       "Move funds between Gate spot and CrossEx. Gate's website cannot do this.",

@@ -513,7 +513,7 @@ describe('RebalanceSection hovers and copy', () => {
     serve({ rebalance: rebalanceViews.accountB, transfer: transferViews.accountB, account: accountBodies.accountB });
     shown = renderWithClient(<TransferSection />);
     await check('Transfer', [
-      ['Transfer', "Move funds between Gate spot and CrossEx. Gate's website cannot do this."],
+      ['Manual Transfer', "Move funds between Gate spot and CrossEx. Gate's website cannot do this."],
       ['Fee', 'Gate fee. Into the CrossEx Hyperliquid wallet $0.05. Out of it $1.00. Others free.'],
       ['Time', 'Typical time. Moves out of the CrossEx Hyperliquid wallet can take longer.'],
       ['up to 816.10', "Free margin, capped at this wallet's cash."],
