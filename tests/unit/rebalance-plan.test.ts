@@ -770,6 +770,14 @@ describe('planFor split by notional', () => {
     expect(plan.recommended).toBe('convert');
   });
 
+  it('Convert plans no Hyperliquid to Lighter swap while USDT cash is below 0', () => {
+    const plan = splitPlan(
+      { usdt: -10, hyperliquid: 600, lighter: 0, positionIm: 150 },
+      { 'USDT/CROSSEX': 100, 'USDC/HYPERLIQUID': 1000, 'USDC/LIGHTER': 1000 },
+    );
+    expect(plan.routes.convert.steps.map(moveOf)).toEqual(['HYPERLIQUID>CROSSEX']);
+  });
+
   it('a move under 11 next to a move that loops blocks the spot loop and leaves the mix', () => {
     const plan = splitPlan(
       { usdt: 476, hyperliquid: 478, lighter: 24.5, positionIm: 150 },

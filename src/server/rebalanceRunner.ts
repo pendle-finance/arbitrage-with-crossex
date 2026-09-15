@@ -243,7 +243,7 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
       (step, index) => index >= job.stepIndex && step.round === null && step.name.startsWith('Convert') && sameMove(current)(step),
     );
     if (converts.length === 0) {
-      const at = afterLast(sameMove(current));
+      const at = Math.max(job.stepIndex, afterLast(sameMove(current)));
       job.steps.splice(at, 0, ...convertSteps(current.from, current.to, amount));
       return;
     }
@@ -370,10 +370,20 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
       }
     }
     const spec = convertSpec(step);
+    const firstHalf = step.name === 'Convert to USDT' && job.steps[job.stepIndex + 1]?.name === 'Convert to USDC';
+    if (firstHalf && account.cash(USDT_WALLET) < 0) {
+      halt(HALT_TEXT.usdtBelowZero);
+      return null;
+    }
     const sending = Math.max(0, account.cash(spec.fromCoin === 'USDT' ? USDT_WALLET : poolWallet(spec.venue)));
     const half = job.steps[job.stepIndex - 1];
     const converted = step.name === 'Convert to USDC' && half?.name === 'Convert to USDT' && half.status === 'done';
-    return floorCents(Math.min(converted ? (half.qty ?? 0) : (step.planned ?? 0), sending));
+    const amount = floorCents(Math.min(converted ? (half.qty ?? 0) : (step.planned ?? 0), sending));
+    if (step.name === 'Convert to USDC' && amount < DUST_USDC) {
+      halt(HALT_TEXT.usdtBelowZero);
+      return null;
+    }
+    return amount;
   };
 
   const prepareSell = async (step: Step): Promise<number | null> => {

@@ -500,6 +500,29 @@ describe('POST /api/transfer refusals', () => {
     expect(res.json().error.message).toBe('Transfers wait until the deal ends.');
   });
 
+  it('refuses a Lighter transfer while a rebalance runs, and while a deal is working', async () => {
+    const lighterOut = { coin: 'USDC', from: 'CROSSEX_LIGHTER', to: 'SPOT', amount: '12' };
+    const running = boot();
+    await running.app.ready();
+    running.jobs.write(rebalanceJob('running'));
+    mockReads();
+    const sent = mockSend();
+
+    const duringRun = await running.post(lighterOut);
+
+    expect(duringRun.statusCode).toBe(409);
+    expect(duringRun.json().error.message).toBe('Transfers wait until the rebalance ends.');
+
+    const dealing = boot();
+    createWorkingDeal(dealing.store);
+
+    const duringDeal = await dealing.post({ ...lighterOut, from: 'SPOT', to: 'CROSSEX_LIGHTER' });
+
+    expect(duringDeal.statusCode).toBe(409);
+    expect(duringDeal.json().error.message).toBe('Transfers wait until the deal ends.');
+    expect(sent).toHaveLength(0);
+  });
+
   it('refuses a second transfer', async () => {
     const t = boot();
     await t.app.ready();

@@ -2084,6 +2084,52 @@ describe('runJob Lighter and moves between venue wallets', () => {
     expect(h.sent('createCrossexConvertQuote').map((arg) => arg.crossexConvertQuoteRequest.fromAmount)).toEqual(['40', '25']);
   });
 
+  it('a Convert from Hyperliquid to Lighter sends nothing while USDT cash is below 0', async () => {
+    const h = harness(fakeClock(), { route: 'convert', steps: [between('HYPERLIQUID', 'LIGHTER', convert(40))] }, {
+      getCrossexAccount: seq(account({ usdt: -300, hyperliquid: 100 })),
+    });
+
+    await h.run();
+
+    expect(h.jobs.read()!).toMatchObject({ status: 'halted', stepIndex: 0, haltReason: HALT_TEXT.usdtBelowZero });
+    expect(h.count('createCrossexConvertQuote')).toBe(0);
+  });
+
+  it('the Convert to USDC half never quotes 0 when USDT cash fell below 0', async () => {
+    const h = harness(fakeClock(), { route: 'convert', steps: [between('HYPERLIQUID', 'LIGHTER', convert(40))] }, {
+      getCrossexAccount: seq(account({ usdt: 0, hyperliquid: 100 }), account({ usdt: -5, hyperliquid: 60 })),
+      createCrossexConvertQuote: seq(quote('q1', '39.92')),
+      createCrossexConvertOrder: seq({ body: { orderId: 'c1', text: 'q1' } }),
+    });
+
+    await h.run();
+
+    expect(h.jobs.read()!).toMatchObject({ status: 'halted', stepIndex: 1, haltReason: HALT_TEXT.usdtBelowZero });
+    expect(h.sent('createCrossexConvertQuote').map((arg) => arg.crossexConvertQuoteRequest.fromAmount)).toEqual(['40']);
+  });
+
+  it('a mix job that drops the rounds of its second move still runs the Convert it adds', async () => {
+    const steps = [between('CROSSEX', 'HYPERLIQUID', convert(50)), intoLighter(1, 30)];
+    const h = harness(fakeClock(), { route: 'mix', steps }, {
+      getCrossexAccount: seq(account(), account({ marginBalance: 8 }), account()),
+      createCrossexConvertQuote: seq(quote('q1', '49.9'), quote('q2', '29.94')),
+      createCrossexConvertOrder: seq({ body: { orderId: 'c1', text: 'q1' } }, { body: { orderId: 'c2', text: 'q2' } }),
+    });
+
+    await h.run();
+
+    const job = h.jobs.read()!;
+    expect(job).toMatchObject({ status: 'done', fundsAt: 'LIGHTER' });
+    expect(job.steps.map(({ name, to, status }) => [name, to, status])).toEqual([
+      ['Convert', 'HYPERLIQUID', 'done'],
+      ['Convert', 'LIGHTER', 'done'],
+    ]);
+    expect(h.sent('createCrossexConvertQuote').map(({ crossexConvertQuoteRequest: q }) => [q.exchangeType, q.fromAmount])).toEqual([
+      ['HYPERLIQUID', '50'],
+      ['LIGHTER', '30'],
+    ]);
+  });
+
   it('a mix job with two moves drops only the rounds of the move that is short, and the next move runs as round 1', async () => {
     const toHyperliquid = (step: Planned) => between('CROSSEX', 'HYPERLIQUID', step);
     const toLighter = (step: Planned) => between('CROSSEX', 'LIGHTER', step);

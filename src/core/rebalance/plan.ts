@@ -504,6 +504,7 @@ const touchesUsdt = (move: { from: Pool; to: Pool }): boolean => move.from === '
 
 function convertRest(book: Book, run: Run, move: Move, left: number): void {
   if (touchesUsdt(move) && run.gateMovable * book.bid >= SPOT_MIN_QUOTE_USDT) sellUsdc(book, run, move, 0);
+  if (!touchesUsdt(move) && run.usdt.cash < 0) return;
   const cash = move.from === 'CROSSEX' ? run.usdt.cash : run.venues[move.from].cash;
   const size = floorCents(Math.min(left, Math.max(0, cash)));
   if (size <= 0) return;

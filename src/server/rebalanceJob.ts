@@ -108,6 +108,7 @@ export const HALT_TEXT = {
   marginRefused: 'Gate refused the move: free margin is too low.',
   noRecord: 'Gate has no record of this transfer. Try again.',
   timeout: 'Gate took too long on this step. Press Resume to check again.',
+  usdtBelowZero: 'Convert between Hyperliquid and Lighter needs USDT · CrossEx cash at 0 or more.',
 } as const;
 
 export const LOCK_TEXT = {
