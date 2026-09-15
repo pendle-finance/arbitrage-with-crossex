@@ -3,6 +3,36 @@
 Only substantial releases are listed here — each one bumps `version.json` (which is what the
 in-app update check compares against).
 
+## 1.6.1 — 2026-09-15
+
+TLDR: One hold now makes your CrossEx USDT and USDC equity even. A new Transfer card moves money
+between Gate spot and your CrossEx wallets.
+
+- **Rebalance evens your USDT and USDC wallets with one hold.** You no longer pick a direction or
+  type an amount. The card shows each wallet now and after the run, each with a line at zero.
+- **A borrow no longer stops the run at "To spot".** The run moves in rounds. Each round keeps
+  margin above 112% of initial margin, because Gate refuses a move out under 110%.
+- **You see every route before you hold.** Spot loop, Convert, or both. Each route shows its
+  rounds, time and cost, and you can pick one.
+- **A new Transfer card.** It moves USDT and USDC between Gate spot and USDT · CrossEx, USDC · Gate
+  and USDC · Hyperliquid. It shows the fee, the time, the minimum and what arrives. It locks while
+  a rebalance or a deal is working.
+- **A stopped run says where your money is.** Money in transit shows once, as "On the way", in
+  both directions. Resume continues from the stopped step. Abandon leaves the funds where they
+  are. After a restart during a transfer, the app waits for Gate, then stops before the next send.
+- **Gate spot shows on the Balances tab.** The Assets table lists a Gate spot group. The Rebalance
+  card tells you when spot holds money you can move in, and a link fills the Transfer card.
+- **Borrow costs read as Gate charges them.** The Rebalance card shows the interest per day. A
+  USDT borrow pays from the first dollar. A Hyperliquid USDC borrow pays only above 10,000. The
+  Borrow pill card shows what Gate lent, for which legs, and the margin it holds.
+- **Your 1.6.0 API key keeps working.** Spot balances need Spot Trading Read Only on the Gate key.
+  Without it, every flow still works and the app says what is missing. Add it on Gate's API
+  Management page. Setup guide step 4 now asks for it.
+- **Smaller things.** A refused send from Gate spot says how much spot holds. A deal waits until
+  Gate takes a new transfer. The halt banner's View opens the stopped card. Errors on the
+  Rebalance and Transfer cards read as a sentence. The API key cannot change while a rebalance
+  runs.
+
 ## 1.6.0 — 2026-09-10
 
 TLDR: The Positions tab is rebuilt around your coins. Every perp and Boros leg in an asset sits
