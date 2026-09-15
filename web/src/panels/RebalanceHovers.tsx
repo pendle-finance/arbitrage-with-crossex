@@ -341,7 +341,7 @@ export function RebalanceInfo() {
   const card = HOVER.rebalanceTitle;
   const cell = 'whitespace-nowrap px-2 py-1';
   return (
-    <HoverCard widthPx={560} underline={false} label="Rebalance">
+    <HoverCard widthPx={600} underline={false} label="Rebalance">
       <div className="flex flex-col gap-2 text-xs leading-snug">
         <p>{card.equity}</p>
         <table className="w-full border border-ink-700">
