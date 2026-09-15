@@ -634,20 +634,22 @@ interface Wallets3 {
   hyperliquid: number;
   lighter: number;
   gate?: number;
+  usdtUpnl?: number;
+  lighterUpnl?: number;
   positionIm: number;
 }
 
 function threeWallets(f: Wallets3): AccountLike {
-  const marginBalance = f.usdt + f.hyperliquid + f.lighter + (f.gate ?? 0);
+  const marginBalance = f.usdt + (f.usdtUpnl ?? 0) + f.hyperliquid + f.lighter + (f.lighterUpnl ?? 0) + (f.gate ?? 0);
   const borrows = [f.usdt, f.hyperliquid, f.lighter].reduce((total, cash) => total + Math.max(0, -cash) / 5, 0);
   return {
     availableMargin: cents(marginBalance - f.positionIm - borrows),
     marginBalance: cents(marginBalance),
     initialMargin: cents(f.positionIm + borrows),
     assets: [
-      wallet('USDT', 'CROSSEX', f.usdt),
+      wallet('USDT', 'CROSSEX', f.usdt, f.usdtUpnl),
       wallet('USDC', 'HYPERLIQUID', f.hyperliquid),
-      wallet('USDC', 'LIGHTER', f.lighter),
+      wallet('USDC', 'LIGHTER', f.lighter, f.lighterUpnl),
       wallet('USDC', 'GATE', f.gate ?? 0),
     ],
   };
@@ -778,7 +780,7 @@ describe('planFor split by notional', () => {
     expect(plan.balanced).toBe(false);
     expect(plan.routes.convert).toMatchObject({
       available: false,
-      reason: 'USDT · CrossEx cash is below 0, so USDC cannot swap between Hyperliquid and Lighter.',
+      reason: 'A Convert between Hyperliquid and Lighter needs USDT · CrossEx cash of -1 or more.',
     });
     expect(plan.routes.convert.steps.map(moveOf)).toEqual(['HYPERLIQUID>LIGHTER', 'HYPERLIQUID>CROSSEX']);
     expect(plan.routes.loop.available).toBe(true);
@@ -791,7 +793,31 @@ describe('planFor split by notional', () => {
       { 'USDT/CROSSEX': 100, 'USDC/HYPERLIQUID': 1000, 'USDC/LIGHTER': 1000 },
     );
     expect(plan.routes.convert.available).toBe(true);
+    expect(plan.routes.convert.steps.map(moveOf)).toContain('HYPERLIQUID>LIGHTER');
     expect(plan.routes.loop.available).toBe(true);
+  });
+
+  it('Spot loop closes too while USDT cash is under -1 and its last Lighter to Hyperliquid move is a Convert', () => {
+    const plan = splitPlan(
+      { usdt: -2.08, hyperliquid: 0, lighter: 24.37, gate: 3.43, positionIm: 8.16 },
+      { 'USDT/CROSSEX': 484.66, 'USDC/HYPERLIQUID': 11287.38, 'USDC/LIGHTER': 1990.48 },
+    );
+    expect(plan.routes.loop.steps.map((step) => `${step.kind} ${moveOf(step)}`)).toEqual([
+      'round LIGHTER>HYPERLIQUID',
+      'convert LIGHTER>HYPERLIQUID',
+    ]);
+    expect(plan.routes.loop).toMatchObject({ available: false, reason: 'A Convert between Hyperliquid and Lighter needs USDT · CrossEx cash of -1 or more.' });
+    expect(plan.recommended).toBeNull();
+  });
+
+  it('USDT cash under -1 keeps a Convert from Lighter to USDT open when nothing swaps between Hyperliquid and Lighter', () => {
+    const plan = splitPlan(
+      { usdt: -3000, usdtUpnl: 3500, hyperliquid: 0, lighter: 2000, lighterUpnl: 1000, positionIm: 3120 },
+      { 'USDT/CROSSEX': 30000, 'USDC/HYPERLIQUID': 5000 },
+    );
+    expect(plan.routes.convert).toMatchObject({ available: true, reason: null });
+    expect(plan.routes.convert.steps.map(moveOf)).toEqual(['LIGHTER>CROSSEX']);
+    expect(plan.recommended).toBe('convert');
   });
 
   it('a move under 11 next to a move that loops blocks the spot loop and leaves the mix', () => {

@@ -54,7 +54,7 @@ const PAUSED_REASON = 'Gate paused USDC transfers.';
 const CLOSED_REASON = 'The spot market for USDC is closed.';
 const NO_ROUND_REASON = 'Free margin is too low for an 11 USDC round.';
 const NO_CASH_REASON = 'Not enough cash for an 11 USDC round.';
-const USDT_SHORT_REASON = 'USDT · CrossEx cash is below 0, so USDC cannot swap between Hyperliquid and Lighter.';
+const USDT_SHORT_REASON = 'A Convert between Hyperliquid and Lighter needs USDT · CrossEx cash of -1 or more.';
 const underMinimumReason = (minimum: number): string => `The move is under the ${minimum} USDC minimum.`;
 
 export type GateAccount = 'SPOT' | 'CROSSEX' | 'CROSSEX_GATE' | 'CROSSEX_HYPERLIQUID' | 'CROSSEX_LIGHTER';
@@ -506,10 +506,10 @@ const touchesUsdt = (move: { from: Pool; to: Pool }): boolean => move.from === '
 
 function convertRest(book: Book, run: Run, move: Move, left: number): void {
   if (touchesUsdt(move) && run.gateMovable * book.bid >= SPOT_MIN_QUOTE_USDT) sellUsdc(book, run, move, 0);
-  if (!touchesUsdt(move) && run.usdt.cash < -DUST_USDC) run.usdtShort = true;
   const cash = move.from === 'CROSSEX' ? run.usdt.cash : run.venues[move.from].cash;
   const size = floorCents(Math.min(left, Math.max(0, cash)));
   if (size <= 0) return;
+  if (!touchesUsdt(move) && run.usdt.cash < -DUST_USDC) run.usdtShort = true;
   const kept = touchesUsdt(move) ? 1 - CONVERT_RATE : (1 - CONVERT_RATE) ** 2;
   const arrives = floorCents(size * kept);
   shiftPool(run, move.from, -size);
@@ -778,13 +778,14 @@ export function planFor(buckets: Bucket[], account: AccountLike, inputs: PlanInp
   const mix = bestMix.rounds === 0 || !mixConverts ? null : { ...bestMix, oneMoreRoundCostUsd: oneMore };
 
   const loopRun = solve(book, moves, start, moves.map(() => Infinity), leaveMinimum);
-  const loop = routePlan(book, loopRun, blocked ?? loopReason(book, moves, loopRun));
+  const loop = routePlan(book, loopRun, blocked ?? shortReason(loopRun) ?? loopReason(book, moves, loopRun));
   const convert = routePlan(book, mixRuns[0], shortReason(mixRuns[0]));
 
   const routes = { mix, loop, convert };
   const runs: Record<RouteName, Run> = { mix: mixRuns[mixPlans.indexOf(bestMix)], loop: loopRun, convert: mixRuns[0] };
   const recommended = recommend(routes);
-  const picked = runs[recommended ?? 'convert'];
+  const firstOpen = (['mix', 'loop', 'convert'] as const).find((name) => routes[name]?.available);
+  const picked = runs[recommended ?? firstOpen ?? 'convert'];
   const moved = floorCents(sum(picked.steps.map((step) => step.move)));
   if (moved < DUST_USDC) return balancedPlan(book, picked.cashLimited ? floorCents(need) : 0, false);
   return {

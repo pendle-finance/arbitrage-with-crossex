@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useAccount, usePositions, useTransfer } from '../api/queries';
-import type { CrossexAccount, PositionsResponse, RebalanceStep, RebalanceView, TransferView } from '../api/types';
+import type { CrossexAccount, PositionsResponse, RebalanceStep, RebalanceView, RoutePlan, TransferView } from '../api/types';
 import {
   accountBodies,
   accountHandler,
@@ -1410,6 +1410,20 @@ describe('RebalanceSection Lighter and moves between wallets', () => {
     expect(within(region()).queryByText('Balanced')).toBeNull();
     expect(facts()).toEqual({});
     expect(within(region()).queryByRole('group', { name: 'Position share' })).toBeNull();
+    expect(within(region()).getByRole('button', { name: 'Hold to rebalance' })).toBeDisabled();
+  });
+
+  it('a plan with every route closed shows each reason and cannot start', async () => {
+    const view = rebalanceViews.lighterSplit;
+    const reason = 'A Convert between Hyperliquid and Lighter needs USDT · CrossEx cash of -1 or more.';
+    const close = (route: RoutePlan): RoutePlan => ({ ...route, available: false, reason });
+    const { mix, loop, convert } = view.plan.routes;
+    const routes = { mix: mix && close(mix), loop: close(loop), convert: close(convert) };
+    await show({ ...view, plan: { ...view.plan, recommended: null, routes } });
+    expect(rowOf('Spot loop')).toHaveTextContent(reason);
+    expect(rowOf('Convert')).toHaveTextContent(reason);
+    expect(screen.getByRole('radio', { name: 'Convert' })).not.toBeChecked();
+    expect(within(region()).queryByText('Recommended')).toBeNull();
     expect(within(region()).getByRole('button', { name: 'Hold to rebalance' })).toBeDisabled();
   });
 });

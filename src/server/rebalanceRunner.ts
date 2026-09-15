@@ -378,9 +378,14 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
     const sending = Math.max(0, account.cash(spec.fromCoin === 'USDT' ? USDT_WALLET : poolWallet(spec.venue)));
     const half = job.steps[job.stepIndex - 1];
     const converted = step.name === 'Convert to USDC' && half?.name === 'Convert to USDT' && half.status === 'done';
-    const amount = floorCents(Math.min(converted ? (half.qty ?? 0) : (step.planned ?? 0), sending));
-    if (converted && sending < DUST_USDC) {
+    const target = floorCents(converted ? (half.qty ?? 0) : (step.planned ?? 0));
+    const amount = floorCents(Math.min(target, sending));
+    if (converted && amount <= 0 && target > 0) {
       halt(HALT_TEXT.usdtBelowZero);
+      return null;
+    }
+    if (converted && amount <= 0) {
+      finish(step, 0, spec.dest);
       return null;
     }
     return amount;

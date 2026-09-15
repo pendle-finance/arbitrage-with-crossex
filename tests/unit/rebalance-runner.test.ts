@@ -2121,6 +2121,37 @@ describe('runJob Lighter and moves between venue wallets', () => {
     expect(h.sent('createCrossexConvertQuote').map((arg) => arg.crossexConvertQuoteRequest.fromAmount)).toEqual(['0.9', '0.89']);
   });
 
+  it('the Convert to USDC half sends what USDT cash holds when that cash is under 1 but above 0', async () => {
+    const h = harness(fakeClock(), { route: 'convert', steps: [between('HYPERLIQUID', 'LIGHTER', convert(1.2))] }, {
+      getCrossexAccount: seq(account({ usdt: -0.5, hyperliquid: 100 }), account({ usdt: 0.69, hyperliquid: 98.8 })),
+      createCrossexConvertQuote: seq(quote('q1', '1.1976'), quote('q2', '0.6886')),
+      createCrossexConvertOrder: seq({ body: { orderId: 'c1', text: 'q1' } }, { body: { orderId: 'c2', text: 'q2' } }),
+    });
+
+    await h.run();
+
+    expect(h.jobs.read()!).toMatchObject({ status: 'done', fundsAt: 'LIGHTER' });
+    expect(h.sent('createCrossexConvertQuote').map((arg) => arg.crossexConvertQuoteRequest.fromAmount)).toEqual(['1.2', '0.69']);
+  });
+
+  it('the Convert to USDC half of a 0.01 Convert finishes with 0 and never quotes 0', async () => {
+    const h = harness(fakeClock(), { route: 'convert', steps: [between('HYPERLIQUID', 'LIGHTER', convert(0.01))] }, {
+      getCrossexAccount: seq(account({ usdt: 100, hyperliquid: 50 }), account({ usdt: 100, hyperliquid: 49.99 })),
+      createCrossexConvertQuote: seq(quote('q1', '0.00998')),
+      createCrossexConvertOrder: seq({ body: { orderId: 'c1', text: 'q1' } }),
+    });
+
+    await h.run();
+
+    const job = h.jobs.read()!;
+    expect(job).toMatchObject({ status: 'done', fundsAt: 'LIGHTER' });
+    expect(job.steps.map(({ name, qty }) => [name, qty])).toEqual([
+      ['Convert to USDT', 0.00998],
+      ['Convert to USDC', 0],
+    ]);
+    expect(h.sent('createCrossexConvertQuote').map((arg) => arg.crossexConvertQuoteRequest.fromAmount)).toEqual(['0.01']);
+  });
+
   it('a mix job that drops the rounds of its second move still runs the Convert it adds', async () => {
     const steps = [between('CROSSEX', 'HYPERLIQUID', convert(50)), intoLighter(1, 30)];
     const h = harness(fakeClock(), { route: 'mix', steps }, {
