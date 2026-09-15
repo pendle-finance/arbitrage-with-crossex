@@ -467,7 +467,28 @@ describe('POST /api/rebalance', () => {
     expect(() => h.file()).toThrow();
   });
 
-  it('mix falls back to recommended', async () => {
+  it('a Spot loop post runs the capped loop when that is the Spot loop row shown', async () => {
+    const assets = [
+      asset('USDT', 'CROSSEX', { balance: '-612.35', equity: '-612.35', liability: '612.35', borrowing_initial_margin: '61.24' }),
+      asset('USDC', 'HYPERLIQUID', { balance: '1842.16', available_balance: '1842.16', equity: '1842.16' }),
+      asset('USDC', 'GATE'),
+    ];
+    mockView({ account: { ...lighterAccount, available_margin: '1100', margin_balance: '1229.81', initial_margin: '310', assets } });
+    refuseSends();
+    const h = boot();
+    const plan = await h.plan();
+    expect(plan.routes.loop).toBeNull();
+    expect(plan.routes.mix).toMatchObject({ available: true });
+    expect(plan.recommended).toBe('mix');
+
+    const res = await h.post('/api/rebalance', { route: 'loop' });
+
+    expect(res.statusCode).toBe(202);
+    expect(h.file()).toMatchObject({ route: 'mix', amount: movedBy(plan.routes.mix!.steps) });
+    await waitFor(() => h.file().status === 'halted', 'the halt');
+  });
+
+  it('a capped loop post runs the full Spot loop when that is the Spot loop row shown', async () => {
     mockView();
     refuseSends();
     const h = boot();

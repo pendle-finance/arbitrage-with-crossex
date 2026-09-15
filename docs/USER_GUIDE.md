@@ -137,7 +137,7 @@ USDC · Gate is one more CrossEx wallet for USDC. It counts as margin. Rebalance
 
 Press and hold **Hold to rebalance** to start. There is no direction to pick and no amount to type. The button moves every wallet toward its share. When more than one wallet sends or receives, one hold runs every move, one after another. Convert always shows. A Spot loop row shows only when it costs less than Convert, and it never takes more than 15 minutes. The app marks the cheapest route as **Recommended** and picks it first. You can pick another route. The routes are:
 
-- **Spot loop**: runs rounds until every wallet reaches its share, in 15 minutes or less.
+- **Spot loop**: runs rounds until every wallet reaches its share, in 15 minutes or less. A last amount under the transfer minimum moves by Convert.
 - **Spot loop, then Convert**: runs the rounds that fit in 15 minutes and give the lowest cost, then moves the rest with Convert.
 - **Convert**: an instant swap inside CrossEx. It costs 0.2% of the amount moved. USDC between Hyperliquid and Lighter swaps twice, through USDT, so it costs about 0.4%.
 

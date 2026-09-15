@@ -793,6 +793,20 @@ describe('planFor split by notional', () => {
     expect(plan.recommended).toBe('convert');
   });
 
+  it.each([
+    { hyperliquid: 1116, convert: 2.03, loop: null, recommended: 'convert' },
+    { hyperliquid: 1117, convert: 2.04, loop: 2.03, recommended: 'loop' },
+  ])('a Spot loop that costs the same as Convert hides, and one cent less shows it (Hyperliquid $hyperliquid)', (row) => {
+    const plan = splitPlan(
+      { usdt: 0, hyperliquid: row.hyperliquid, lighter: 100, positionIm: 200 },
+      { 'USDC/HYPERLIQUID': 5000, 'USDC/LIGHTER': 5000 },
+    );
+    expect(plan.routes.convert.costUsd).toBe(row.convert);
+    expect(plan.routes.loop?.costUsd ?? null).toBe(row.loop);
+    expect(plan.routes.mix).toBeNull();
+    expect(plan.recommended).toBe(row.recommended);
+  });
+
   it('Lighter to Hyperliquid pays only the 0.05 Hyperliquid fee', () => {
     const plan = splitPlan(
       { usdt: 0, hyperliquid: 100, lighter: 900, positionIm: 200 },
@@ -857,17 +871,16 @@ describe('planFor split by notional', () => {
     expect(plan.recommended).toBeNull();
   });
 
-  it('a Spot loop over 15 min never shows, so with Convert closed no route can start', () => {
+  it('a Spot loop over 15 min never shows, so with Convert closed the capped loop closes with the USDT reason', () => {
     const plan = splitPlan(
       { usdt: -10, hyperliquid: 1000, lighter: 0, positionIm: 800 },
       { 'USDT/CROSSEX': 100, 'USDC/HYPERLIQUID': 1000, 'USDC/LIGHTER': 1000 },
     );
+    const reason = 'A Convert between Hyperliquid and Lighter needs USDT · CrossEx cash of -1 or more.';
     expect(plan.routes.loop).toBeNull();
-    expect(plan.routes.mix).toBeNull();
-    expect(plan.routes.convert).toMatchObject({
-      available: false,
-      reason: 'A Convert between Hyperliquid and Lighter needs USDT · CrossEx cash of -1 or more.',
-    });
+    expect(plan.routes.mix).toMatchObject({ available: false, reason, rounds: 1 });
+    expect(plan.routes.mix!.seconds).toBeLessThanOrEqual(900);
+    expect(plan.routes.convert).toMatchObject({ available: false, reason });
     expect(plan.recommended).toBeNull();
     expect(plan.balanced).toBe(false);
     expect(plan.moves).toBe(529.52);
