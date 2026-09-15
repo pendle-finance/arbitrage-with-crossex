@@ -54,6 +54,7 @@ const PAUSED_REASON = 'Gate paused USDC transfers.';
 const CLOSED_REASON = 'The spot market for USDC is closed.';
 const NO_ROUND_REASON = 'Free margin is too low for an 11 USDC round.';
 const NO_CASH_REASON = 'Not enough cash for an 11 USDC round.';
+const USDT_SHORT_REASON = 'USDT · CrossEx cash is below 0, so USDC cannot swap between Hyperliquid and Lighter.';
 const underMinimumReason = (minimum: number): string => `The move is under the ${minimum} USDC minimum.`;
 
 export type GateAccount = 'SPOT' | 'CROSSEX' | 'CROSSEX_GATE' | 'CROSSEX_HYPERLIQUID' | 'CROSSEX_LIGHTER';
@@ -380,6 +381,7 @@ interface Run extends Wallets {
   costUsd: number;
   steps: PlannedStep[];
   cashLimited: boolean;
+  usdtShort: boolean;
 }
 
 type Sizer = (cap: number, left: number, minimum: number) => number;
@@ -504,7 +506,7 @@ const touchesUsdt = (move: { from: Pool; to: Pool }): boolean => move.from === '
 
 function convertRest(book: Book, run: Run, move: Move, left: number): void {
   if (touchesUsdt(move) && run.gateMovable * book.bid >= SPOT_MIN_QUOTE_USDT) sellUsdc(book, run, move, 0);
-  if (!touchesUsdt(move) && run.usdt.cash < 0) return;
+  if (!touchesUsdt(move) && run.usdt.cash < -DUST_USDC) run.usdtShort = true;
   const cash = move.from === 'CROSSEX' ? run.usdt.cash : run.venues[move.from].cash;
   const size = floorCents(Math.min(left, Math.max(0, cash)));
   if (size <= 0) return;
@@ -537,6 +539,7 @@ function startRun(book: Book): Run {
     costUsd: 0,
     steps: [],
     cashLimited: false,
+    usdtShort: false,
   };
 }
 
@@ -766,27 +769,29 @@ export function planFor(buckets: Bucket[], account: AccountLike, inputs: PlanInp
   const budgets = roundBudgets(moves);
   const roundCap = Math.max(...budgets.map(sum));
   const mixRuns = budgets.map((budget) => solve(book, moves, start, budget, fillCap));
-  const mixPlans = mixRuns.map((run) => routePlan(book, run, blocked));
-  const bestMix = mixPlans.reduce(cheaper);
+  const shortReason = (run: Run): string | null => (run.usdtShort ? USDT_SHORT_REASON : null);
+  const mixPlans = mixRuns.map((run) => routePlan(book, run, blocked ?? shortReason(run)));
+  const openMixes = mixPlans.filter((plan) => plan.available);
+  const bestMix = (openMixes.length > 0 ? openMixes : mixPlans).reduce(cheaper);
   const mixConverts = bestMix.steps.some((step) => step.kind === 'convert');
   const oneMore = moves.length === 1 && bestMix.rounds < roundCap ? mixPlans[bestMix.rounds + 1].costUsd : null;
   const mix = bestMix.rounds === 0 || !mixConverts ? null : { ...bestMix, oneMoreRoundCostUsd: oneMore };
 
   const loopRun = solve(book, moves, start, moves.map(() => Infinity), leaveMinimum);
   const loop = routePlan(book, loopRun, blocked ?? loopReason(book, moves, loopRun));
-  const convert = routePlan(book, mixRuns[0], null);
+  const convert = routePlan(book, mixRuns[0], shortReason(mixRuns[0]));
 
   const routes = { mix, loop, convert };
   const runs: Record<RouteName, Run> = { mix: mixRuns[mixPlans.indexOf(bestMix)], loop: loopRun, convert: mixRuns[0] };
   const recommended = recommend(routes);
-  const picked = recommended ? runs[recommended] : null;
-  const moved = floorCents(sum((picked?.steps ?? []).map((step) => step.move)));
-  if (moved < DUST_USDC) return balancedPlan(book, picked?.cashLimited ? floorCents(need) : 0, false);
+  const picked = runs[recommended ?? 'convert'];
+  const moved = floorCents(sum(picked.steps.map((step) => step.move)));
+  if (moved < DUST_USDC) return balancedPlan(book, picked.cashLimited ? floorCents(need) : 0, false);
   return {
     balanced: false,
     noLegs: false,
     moves: moved,
-    shortOfEven: picked?.cashLimited ? floorCents(Math.max(0, need - moved)) : 0,
+    shortOfEven: picked.cashLimited ? floorCents(Math.max(0, need - moved)) : 0,
     roundCap,
     split: splitOf(book),
     routes,

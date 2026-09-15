@@ -371,7 +371,7 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
     }
     const spec = convertSpec(step);
     const firstHalf = step.name === 'Convert to USDT' && job.steps[job.stepIndex + 1]?.name === 'Convert to USDC';
-    if (firstHalf && account.cash(USDT_WALLET) < 0) {
+    if (firstHalf && account.cash(USDT_WALLET) < -DUST_USDC) {
       halt(HALT_TEXT.usdtBelowZero);
       return null;
     }
@@ -379,7 +379,7 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
     const half = job.steps[job.stepIndex - 1];
     const converted = step.name === 'Convert to USDC' && half?.name === 'Convert to USDT' && half.status === 'done';
     const amount = floorCents(Math.min(converted ? (half.qty ?? 0) : (step.planned ?? 0), sending));
-    if (step.name === 'Convert to USDC' && amount < DUST_USDC) {
+    if (converted && sending < DUST_USDC) {
       halt(HALT_TEXT.usdtBelowZero);
       return null;
     }

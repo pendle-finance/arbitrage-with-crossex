@@ -770,12 +770,28 @@ describe('planFor split by notional', () => {
     expect(plan.recommended).toBe('convert');
   });
 
-  it('Convert plans no Hyperliquid to Lighter swap while USDT cash is below 0', () => {
+  it('Convert closes while USDT cash is under -1 and a Hyperliquid to Lighter swap is needed, and Spot loop stays open', () => {
     const plan = splitPlan(
       { usdt: -10, hyperliquid: 600, lighter: 0, positionIm: 150 },
       { 'USDT/CROSSEX': 100, 'USDC/HYPERLIQUID': 1000, 'USDC/LIGHTER': 1000 },
     );
-    expect(plan.routes.convert.steps.map(moveOf)).toEqual(['HYPERLIQUID>CROSSEX']);
+    expect(plan.balanced).toBe(false);
+    expect(plan.routes.convert).toMatchObject({
+      available: false,
+      reason: 'USDT · CrossEx cash is below 0, so USDC cannot swap between Hyperliquid and Lighter.',
+    });
+    expect(plan.routes.convert.steps.map(moveOf)).toEqual(['HYPERLIQUID>LIGHTER', 'HYPERLIQUID>CROSSEX']);
+    expect(plan.routes.loop.available).toBe(true);
+    expect(plan.recommended).not.toBe('convert');
+  });
+
+  it('USDT cash a few cents under 0 keeps Convert open', () => {
+    const plan = splitPlan(
+      { usdt: -0.01, hyperliquid: 900, lighter: 100, positionIm: 150 },
+      { 'USDT/CROSSEX': 100, 'USDC/HYPERLIQUID': 1000, 'USDC/LIGHTER': 1000 },
+    );
+    expect(plan.routes.convert.available).toBe(true);
+    expect(plan.routes.loop.available).toBe(true);
   });
 
   it('a move under 11 next to a move that loops blocks the spot loop and leaves the mix', () => {

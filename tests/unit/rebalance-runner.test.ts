@@ -2108,6 +2108,19 @@ describe('runJob Lighter and moves between venue wallets', () => {
     expect(h.sent('createCrossexConvertQuote').map((arg) => arg.crossexConvertQuoteRequest.fromAmount)).toEqual(['40']);
   });
 
+  it('a Convert under 1.01 between Hyperliquid and Lighter still sends its second half when USDT cash is above 0', async () => {
+    const h = harness(fakeClock(), { route: 'convert', steps: [between('HYPERLIQUID', 'LIGHTER', convert(0.9))] }, {
+      getCrossexAccount: seq(account({ usdt: 100, hyperliquid: 100 }), account({ usdt: 100.89, hyperliquid: 99.1 })),
+      createCrossexConvertQuote: seq(quote('q1', '0.8982'), quote('q2', '0.8882')),
+      createCrossexConvertOrder: seq({ body: { orderId: 'c1', text: 'q1' } }, { body: { orderId: 'c2', text: 'q2' } }),
+    });
+
+    await h.run();
+
+    expect(h.jobs.read()!).toMatchObject({ status: 'done', fundsAt: 'LIGHTER' });
+    expect(h.sent('createCrossexConvertQuote').map((arg) => arg.crossexConvertQuoteRequest.fromAmount)).toEqual(['0.9', '0.89']);
+  });
+
   it('a mix job that drops the rounds of its second move still runs the Convert it adds', async () => {
     const steps = [between('CROSSEX', 'HYPERLIQUID', convert(50)), intoLighter(1, 30)];
     const h = harness(fakeClock(), { route: 'mix', steps }, {
