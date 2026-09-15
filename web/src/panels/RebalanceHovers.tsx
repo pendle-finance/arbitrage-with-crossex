@@ -40,7 +40,7 @@ type Move = Pick<PlannedStep, 'from' | 'to'>;
 
 export const planSteps = (plan: EvenPlan): PlannedStep[] => [
   ...(plan.routes.mix?.steps ?? []),
-  ...plan.routes.loop.steps,
+  ...(plan.routes.loop?.steps ?? []),
   ...plan.routes.convert.steps,
 ];
 

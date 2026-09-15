@@ -135,10 +135,10 @@ The **Position share** column shows each wallet's share and the position size be
 
 USDC · Gate is one more CrossEx wallet for USDC. It counts as margin. Rebalance sells what is in it, in both directions, when it is worth 3 USDT or more.
 
-Press and hold **Hold to rebalance** to start. There is no direction to pick and no amount to type. The button moves every wallet toward its share. When more than one wallet sends or receives, one hold runs every move, one after another. The app marks the cheapest route that takes 15 minutes or less as **Recommended** and picks it first. You can pick another route. The three routes are:
+Press and hold **Hold to rebalance** to start. There is no direction to pick and no amount to type. The button moves every wallet toward its share. When more than one wallet sends or receives, one hold runs every move, one after another. Convert always shows. A Spot loop row shows only when it costs less than Convert and its plan takes 15 minutes or less. The app marks the cheapest route as **Recommended** and picks it first. You can pick another route. The routes are:
 
-- **Spot loop, then Convert**: runs the rounds that give the lowest cost within 15 minutes, then moves the rest with Convert.
-- **Spot loop**: runs rounds until every wallet reaches its share. There is no round limit.
+- **Spot loop**: runs rounds until every wallet reaches its share. A last amount under the transfer minimum moves by Convert. If a round comes out smaller while it runs, the job can add a round, so the run can pass 15 minutes.
+- **Spot loop, then Convert**: runs the rounds that fit in 15 minutes and give the lowest cost, then moves the rest with Convert.
 - **Convert**: an instant swap inside CrossEx. It costs 0.2% of the amount moved. USDC between Hyperliquid and Lighter swaps twice, through USDT, so it costs about 0.4%.
 
 A round moves money through Gate spot, because Gate has no direct transfer between CrossEx wallets. Time and cost are for one round. Cost adds the spot fee and spread when the round buys or sells USDC.

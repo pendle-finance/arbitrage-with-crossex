@@ -26,6 +26,9 @@ size across USDT, Hyperliquid and Lighter, and Manual Transfer reaches your Ligh
   the first dollar. There is no free allowance, unlike Hyperliquid. The Rebalance hover lists the
   interest rule for each wallet. The Borrow pill and the liquidation line count Lighter as its own
   wallet.
+- **Spot loop plans 15 min at most.** Convert always shows. A Spot loop row shows only when it
+  costs less than Convert. It runs the rounds that fit in 15 min, then Convert does the rest. A
+  loop of 100 rounds and 12 hours no longer shows.
 - **Smaller things.** The Rebalance hover shows one row per path, so no cell wraps. The Balances
   tab shows the last Assets row in full on a short window. The User guide covers the three
   wallets, every round and every transfer path.

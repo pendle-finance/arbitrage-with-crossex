@@ -156,7 +156,7 @@ export interface EvenPlan {
   shortOfEven: number;
   roundCap: number;
   split: WalletShare[];
-  routes: { mix: RoutePlan | null; loop: RoutePlan; convert: RoutePlan };
+  routes: { mix: RoutePlan | null; loop: RoutePlan | null; convert: RoutePlan };
   recommended: RouteName | null;
 }
 
@@ -772,16 +772,31 @@ export function planFor(buckets: Bucket[], account: AccountLike, inputs: PlanInp
   const shortReason = (run: Run): string | null => (run.usdtShort ? USDT_SHORT_REASON : null);
   const mixPlans = mixRuns.map((run) => routePlan(book, run, blocked ?? shortReason(run)));
   const openMixes = mixPlans.filter((plan) => plan.available);
-  const bestMix = (openMixes.length > 0 ? openMixes : mixPlans).reduce(cheaper);
+  const closedLoops = mixPlans.filter((plan) => plan.rounds > 0 && plan.steps.some((step) => step.kind === 'convert'));
+  const bestMix = (openMixes.length > 0 ? openMixes : closedLoops.length > 0 ? closedLoops : mixPlans).reduce(cheaper);
   const mixConverts = bestMix.steps.some((step) => step.kind === 'convert');
   const oneMore = moves.length === 1 && bestMix.rounds < roundCap ? mixPlans[bestMix.rounds + 1].costUsd : null;
-  const mix = bestMix.rounds === 0 || !mixConverts ? null : { ...bestMix, oneMoreRoundCostUsd: oneMore };
+  const mix = { ...bestMix, oneMoreRoundCostUsd: oneMore };
 
   const loopRun = solve(book, moves, start, moves.map(() => Infinity), leaveMinimum);
   const loop = routePlan(book, loopRun, blocked ?? shortReason(loopRun) ?? loopReason(book, moves, loopRun));
   const convert = routePlan(book, mixRuns[0], shortReason(mixRuns[0]));
 
-  const routes = { mix, loop, convert };
+  const candidates = [
+    ...(loop.seconds <= RECOMMENDED_MAX_SECONDS ? [{ name: 'loop' as const, plan: loop }] : []),
+    ...(bestMix.rounds > 0 && mixConverts ? [{ name: 'mix' as const, plan: mix }] : []),
+  ].filter((candidate) => !convert.available || candidate.plan.costUsd < convert.costUsd);
+  const openCandidates = candidates.filter((candidate) => candidate.plan.available);
+  const shown = (openCandidates.length > 0 ? openCandidates : candidates).reduce<(typeof candidates)[number] | null>(
+    (best, next) => (best === null || cheaper(best.plan, next.plan) === next.plan ? next : best),
+    null,
+  );
+
+  const routes = {
+    mix: shown?.name === 'mix' ? shown.plan : null,
+    loop: shown?.name === 'loop' ? shown.plan : null,
+    convert,
+  };
   const runs: Record<RouteName, Run> = { mix: mixRuns[mixPlans.indexOf(bestMix)], loop: loopRun, convert: mixRuns[0] };
   const recommended = recommend(routes);
   const firstOpen = (['mix', 'loop', 'convert'] as const).find((name) => routes[name]?.available);

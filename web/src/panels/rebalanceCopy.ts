@@ -104,7 +104,7 @@ export const HOVER = {
   interestLighter: 'Interest from the first dollar. About 11% a year.',
   interestUsdt: 'Interest from the first dollar.',
   interestPaid: 'Total interest paid, all time.',
-  route: 'How the money moves. Cost includes Gate fees and spot spread.',
+  route: 'How the money moves. Cost includes Gate fees and spot spread. Spot loop shows only when it costs less than Convert.',
   mix: (cap: number) => `Spot loop for up to ${roundCount(cap)}, then Convert the rest.`,
   recommended: 'Cheapest route that takes 15 min or less.',
   noDirectTransfer: 'Gate has no direct transfer between CrossEx wallets.',
@@ -117,7 +117,7 @@ export const HOVER = {
   whyMoreThanOneBorrow: (amountText: string) =>
     `Your borrow locks ${amountText} (20%) as initial margin. Each round repays some borrow and frees that margin, so the next round is bigger.`,
   whyLabel: (n: number) => `Why ${num(n, 0)}`,
-  whyMixAtCap: (cap: number) => `Recommended stops at ${roundCount(cap)}. Convert does the rest.`,
+  whyMixAtCap: (cap: number) => `Spot loop stops at ${roundCount(cap)}, the most that fit in 15 min. Convert does the rest.`,
   whyMixCheapest: (n: number) => `${roundCount(n)}, then Convert is the cheapest mix that takes 15 min or less.`,
   whyMixUnderCap: (n: number, costText: string, nextCostText: string) =>
     `${roundCount(n)}, then Convert costs ${costText}. ${roundCount(n + 1)} cost ${nextCostText}.`,

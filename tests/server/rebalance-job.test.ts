@@ -152,7 +152,7 @@ async function accountAPlan(): Promise<EvenPlan> {
 }
 
 function roundThreeInSpot(plan: EvenPlan, status: Job['status']): Job {
-  const { steps, costUsd, after } = plan.routes.loop;
+  const { steps, costUsd, after } = plan.routes.loop!;
   const job = newJob({ route: 'loop', steps, amount: plan.moves, costUsd, target: after, userId: '1' }, t);
   for (const step of job.steps.slice(0, 8)) Object.assign(step, { status: 'done', qty: step.planned, startedAt: t, doneAt: t });
   Object.assign(job.steps[8], { status: 'running', startedAt: t });

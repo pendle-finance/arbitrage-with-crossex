@@ -90,7 +90,7 @@ const FAR_AFTER_VIEW: RebalanceView = {
     routes: {
       ...rebalanceViews.accountA.plan.routes,
       loop: {
-        ...rebalanceViews.accountA.plan.routes.loop,
+        ...rebalanceViews.accountA.plan.routes.loop!,
         after: [
           { coin: 'USDT', venue: 'CROSSEX', cash: 1000, equity: 1000 },
           { coin: 'USDC', venue: 'HYPERLIQUID', cash: 0, equity: 0 },
@@ -214,9 +214,9 @@ function Loaded() {
 }
 
 describe('RebalanceSection routes', () => {
-  it('D three route rows', async () => {
+  it('D two route rows, with no Spot loop over 15 min', async () => {
     await show(rebalanceViews.exampleD);
-    expect(routeNames()).toEqual(['Spot loop, then Convert', 'Spot loop', 'Convert']);
+    expect(routeNames()).toEqual(['Spot loop, then Convert', 'Convert']);
   });
 
   it('D recommended is picked', async () => {
@@ -311,12 +311,13 @@ describe('RebalanceSection routes', () => {
   it('clicking row text picks the route', async () => {
     const user = userEvent.setup();
     await show(rebalanceViews.exampleD);
-    await user.click(within(rowOf('Spot loop')).getByText('Spot loop'));
-    expect(screen.getByRole('radio', { name: 'Spot loop' })).toBeChecked();
+    await user.click(within(rowOf('Convert')).getByText('Convert'));
+    expect(screen.getByRole('radio', { name: 'Convert' })).toBeChecked();
     await user.click(within(rowOf('Spot loop, then Convert')).getByText('Recommended'));
     expect(screen.getByRole('radio', { name: 'Spot loop, then Convert' })).toBeChecked();
-    await user.click(within(rowOf('Spot loop')).getByText('11 rounds'));
-    expect(screen.getByRole('radio', { name: 'Spot loop' })).toBeChecked();
+    await user.click(within(rowOf('Convert')).getByText('Convert'));
+    await user.click(within(rowOf('Spot loop, then Convert')).getByText('6 rounds'));
+    expect(screen.getByRole('radio', { name: 'Spot loop, then Convert' })).toBeChecked();
   });
 
   it('convert pick redraws after bars', async () => {
@@ -505,7 +506,7 @@ describe('RebalanceSection hovers and copy', () => {
       ['Now', 'Equity = cash + unrealized PnL.'],
       ['Interest', 'No interest under 10,000 USDC. Interest only on the part over.'],
       ['Interest paid', 'Total interest paid, all time.'],
-      ['Route', 'How the money moves. Cost includes Gate fees and spot spread.'],
+      ['Route', 'How the money moves. Cost includes Gate fees and spot spread. Spot loop shows only when it costs less than Convert.'],
       ['Recommended', 'Cheapest route that takes 15 min or less.'],
       [
         'Spot loop',
@@ -526,11 +527,21 @@ describe('RebalanceSection hovers and copy', () => {
     shown = renderWithClient(<RebalanceSection />);
     await check('Rebalance', [
       ['Spot loop, then Convert', 'Spot loop for up to 6 rounds, then Convert the rest.'],
-      ['6 rounds', 'Recommended stops at 6 rounds. Convert does the rest.'],
+      ['6 rounds', 'Spot loop stops at 6 rounds, the most that fit in 15 min. Convert does the rest.'],
     ]);
     shown.unmount();
 
-    serve({ rebalance: rebalanceViews.exampleC });
+    const exampleC = rebalanceViews.exampleC;
+    const outOfHyperliquid: RoutePlan = {
+      ...exampleC.plan.routes.convert,
+      costUsd: 0.03,
+      seconds: 400,
+      rounds: 1,
+      steps: [{ ...exampleC.plan.routes.convert.steps[0], round: 1, kind: 'round', arrives: 21.18, seconds: 400 }],
+    };
+    serve({
+      rebalance: { ...exampleC, plan: { ...exampleC.plan, recommended: 'loop', routes: { ...exampleC.plan.routes, loop: outOfHyperliquid } } },
+    });
     shown = renderWithClient(<RebalanceSection />);
     await check('Rebalance', [
       [
@@ -1418,7 +1429,7 @@ describe('RebalanceSection Lighter and moves between wallets', () => {
     const reason = 'A Convert between Hyperliquid and Lighter needs USDT · CrossEx cash of -1 or more.';
     const close = (route: RoutePlan): RoutePlan => ({ ...route, available: false, reason });
     const { mix, loop, convert } = view.plan.routes;
-    const routes = { mix: mix && close(mix), loop: close(loop), convert: close(convert) };
+    const routes = { mix: mix && close(mix), loop: loop && close(loop), convert: close(convert) };
     await show({ ...view, plan: { ...view.plan, recommended: null, routes } });
     expect(rowOf('Spot loop')).toHaveTextContent(reason);
     expect(rowOf('Convert')).toHaveTextContent(reason);

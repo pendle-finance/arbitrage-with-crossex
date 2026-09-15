@@ -32,6 +32,7 @@ import { receivedOf, runJob, STEPS, transferRow } from '../rebalanceRunner';
 const ROUTE_NAMES: readonly string[] = ['mix', 'loop', 'convert'];
 const ALREADY_EVEN = 'Already even.';
 const NO_LEGS = 'No open positions. Nothing to rebalance.';
+const LOOP_GONE = 'Spot loop is no longer offered. Pick a route again.';
 
 export const STALE_TEXT = 'Gate is rate-limiting the account read. Try again in a few seconds.';
 
@@ -235,9 +236,10 @@ export function rebalanceRoutes(deps: AppDeps) {
       // move to USDT sized on old equity can open the borrow it promises not to.
       if (accountStale) return conflict(reply, STALE_TEXT);
       if (plan.balanced) return conflict(reply, plan.noLegs ? NO_LEGS : ALREADY_EVEN);
-      const name = route === 'mix' && !plan.routes.mix ? plan.recommended : route;
+      const otherLoop: RouteName | null = route === 'mix' ? 'loop' : route === 'loop' ? 'mix' : null;
+      const name = plan.routes[route] || !otherLoop ? route : plan.routes[otherLoop] ? otherLoop : null;
       const picked = name ? plan.routes[name] : null;
-      if (!name || !picked?.available) return conflict(reply, picked?.reason ?? 'no route');
+      if (!name || !picked?.available) return conflict(reply, picked?.reason ?? LOOP_GONE);
       if (picked.steps.length === 0) return conflict(reply, ALREADY_EVEN);
       const lockedNow = findLock();
       if (lockedNow) return conflict(reply, lockedNow);
