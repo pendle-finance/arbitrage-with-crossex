@@ -141,13 +141,13 @@ A stopped run shows **Resume** and **Abandon**. Resume first looks up the last s
 
 When a run stops, a banner at the top of every tab shows where the money is. Click **View** to open the Balances tab.
 
-After Abandon, any money left in Gate spot is plain spot money. Move it with Transfer.
+After Abandon, any money left in Gate spot is plain spot money. Move it with Manual Transfer.
 
-#### Transfer between Gate spot and CrossEx
+#### Manual Transfer between Gate spot and CrossEx
 
-The Balances tab also shows a **Transfer** card. It moves USDT and USDC between your Gate spot wallet and your three CrossEx wallets. Gate's own website cannot do this.
+The Balances tab also shows a **Manual Transfer** card. It moves USDT and USDC between your Gate spot wallet and your three CrossEx wallets. Gate's own website cannot do this.
 
-Without Spot Trading Read Only on your key, the Transfer card and the Assets table show `Add Spot read permission to see spot balances.` The Gate spot tile then reads `balance hidden`.
+Without Spot Trading Read Only on your key, the Manual Transfer card and the Assets table show `Add Spot read permission to see spot balances.` The Gate spot tile then reads `balance hidden`.
 
 Two tabs set the direction. **Into CrossEx** moves money from Gate spot into a CrossEx wallet. **Out of CrossEx** moves money from a CrossEx wallet to Gate spot.
 

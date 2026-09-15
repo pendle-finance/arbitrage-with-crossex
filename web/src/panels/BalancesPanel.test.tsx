@@ -140,7 +140,7 @@ describe('BalancesPanel layout', () => {
       );
       expect(marks.map((mark) => mark.closest('[role="button"]')?.firstChild?.textContent), state.name).toEqual([
         'Rebalance',
-        'Transfer',
+        'Manual Transfer',
       ]);
       shown.unmount();
     }

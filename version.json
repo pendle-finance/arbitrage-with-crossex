@@ -3,7 +3,7 @@
   "highlights": [
     "Rebalance makes your CrossEx USDT and USDC equity even with one hold. A borrow no longer stops it at To spot",
     "Before you hold, you see each route: Spot loop, Convert or both, with its rounds, time and cost",
-    "A new Transfer card moves USDT and USDC between Gate spot and your three CrossEx wallets",
+    "A new Manual Transfer card moves USDT and USDC between Gate spot and your three CrossEx wallets",
     "A stopped run says where your money is, and offers Resume or Abandon",
     "To see Gate spot balances, add Spot Trading Read Only to your Gate API key. Without it, everything still works"
   ]
