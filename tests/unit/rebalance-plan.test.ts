@@ -321,9 +321,9 @@ describe('planFor Account A', () => {
 describe('planFor Account A, round 3 in Gate spot', () => {
   const plan = planOf(ACCOUNT_A_ROUND_3);
 
-  it('no free margin blocks the loop', () => {
-    expect(plan.routes.loop!.available).toBe(false);
-    expect(plan.routes.loop!.reason).toBe('Free margin is too low for an 11 USDC round.');
+  it('no free margin leaves a loop with no round, which costs the same as Convert and hides', () => {
+    expect(plan.routes.loop).toBeNull();
+    expect(plan.routes.mix).toBeNull();
   });
 
   it('convert stays open when no round fits', () => {
@@ -453,6 +453,18 @@ describe('planFor Spot loop row', () => {
     expect(plan.routes.mix!.steps.at(-1)).toMatchObject({ kind: 'convert' });
     expect(plan.routes.convert.costUsd).toBe(19.66);
     expect(plan.recommended).toBe('mix');
+  });
+
+  it.each([
+    { name: 'toward USDT hides the closed 20.43 row next to the 19.66 Convert', usdt: 10038.19, usdc: 29676.27, mix: null },
+    { name: 'toward USDC shows the closed 18.56 row with its reason', usdt: 29676.27, usdc: 10038.19, mix: 18.56 },
+  ])('with Gate spot closed, $name', (row) => {
+    const plan = planOf({ usdt: row.usdt, gate: 0, usdc: row.usdc, positionIm: 35350 }, { ...OPEN, spotRule: { state: 'halted' } });
+    expect(plan.routes.loop).toBeNull();
+    if (row.mix === null) expect(plan.routes.mix).toBeNull();
+    else expect(plan.routes.mix).toMatchObject({ available: false, reason: 'The spot market for USDC is closed.', costUsd: row.mix });
+    expect(plan.routes.convert).toMatchObject({ available: true, costUsd: 19.66 });
+    expect(plan.recommended).toBe('convert');
   });
 
   it.each([
@@ -626,10 +638,10 @@ describe('planFor blocked routes', () => {
     expect(plan.routes.loop!.reason).toBe('Gate paused USDC transfers.');
   });
 
-  it('move under 11 blocks the loop with its own reason', () => {
+  it('move under 11 hides the loop, because it costs the same as Convert', () => {
     const plan = planOf({ usdt: 510, gate: 0, usdc: 500, positionIm: 0 });
     expect(fit({ marginBalance: 1010, initialMargin: 0 }, 510)).toBeGreaterThan(11);
-    expect(plan.routes.loop).toMatchObject({ available: false, reason: 'The move is under the 11 USDC minimum.' });
+    expect(plan.routes.loop).toBeNull();
     expect(plan.routes.mix).toBeNull();
     expect(plan.recommended).toBe('convert');
   });
@@ -638,9 +650,10 @@ describe('planFor blocked routes', () => {
     expect(planOf(ACCOUNT_A, { ...OPEN, coins: [] }).routes.loop).toMatchObject({ available: true, reason: null });
   });
 
-  it('cash under 11 blocks the loop with the cash reason', () => {
+  it('cash under 11 hides the loop, because it costs the same as Convert', () => {
     const plan = planOf({ usdt: 100, gate: 0, usdc: 8, usdcUpnl: 500, positionIm: 10 });
-    expect(plan.routes.loop).toMatchObject({ available: false, reason: 'Not enough cash for an 11 USDC round.' });
+    expect(plan.routes.loop).toBeNull();
+    expect(plan.routes.mix).toBeNull();
     expect(plan.routes.convert).toMatchObject({ available: true, reason: null });
     expect(plan.recommended).toBe('convert');
   });
@@ -649,8 +662,8 @@ describe('planFor blocked routes', () => {
 describe('planFor loose Gate numbers', () => {
   it.each(['', '  ', 0, '0', 'n/a', -3])('a USDC minimum of %j falls back to 11 and never hangs the plan', (min) => {
     const plan = planOf(ACCOUNT_A_ROUND_3, { ...OPEN, coins: [{ ...USDC_RULE, minTransAmount: min }] });
-    expect(plan.routes.loop!.reason).toBe('Free margin is too low for an 11 USDC round.');
-    expect(plan.routes.loop!.steps.every((step) => step.move > 0)).toBe(true);
+    expect(plan.routes.loop).toBeNull();
+    expect(plan.routes.convert).toMatchObject({ available: true, costUsd: 0.21 });
     const rounds = planOf(ACCOUNT_A, { ...OPEN, coins: [{ ...USDC_RULE, minTransAmount: min }] }).routes.loop!.steps;
     expect(rounds.map((step) => step.move)).toEqual([24.51, 29.93, 36.58, 44.71, 40.16]);
   });
@@ -819,12 +832,13 @@ describe('planFor split by notional', () => {
     expect(plan.recommended).toBe('loop');
   });
 
-  it('a Hyperliquid to Lighter round is at least 12, so 11 still reaches Gate spot after the 1.00 fee', () => {
+  it('a Hyperliquid to Lighter round is at least 12, so an 11 move has no round and shows only Convert', () => {
     const plan = splitPlan(
       { usdt: 0, hyperliquid: 521, lighter: 500, positionIm: 0 },
       { 'USDC/HYPERLIQUID': 5000, 'USDC/LIGHTER': 5000 },
     );
-    expect(plan.routes.loop).toMatchObject({ available: false, reason: 'The move is under the 12 USDC minimum.' });
+    expect(plan.routes.loop).toBeNull();
+    expect(plan.routes.mix).toBeNull();
     expect(plan.recommended).toBe('convert');
   });
 

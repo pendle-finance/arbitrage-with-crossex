@@ -785,16 +785,12 @@ export function planFor(buckets: Bucket[], account: AccountLike, inputs: PlanInp
   const candidates = [
     ...(loop.seconds <= RECOMMENDED_MAX_SECONDS ? [{ name: 'loop' as const, plan: loop }] : []),
     ...(bestMix.rounds > 0 && mixConverts ? [{ name: 'mix' as const, plan: mix }] : []),
-  ];
+  ].filter((candidate) => !convert.available || candidate.plan.costUsd < convert.costUsd);
   const openCandidates = candidates.filter((candidate) => candidate.plan.available);
-  const spotLoop = (openCandidates.length > 0 ? openCandidates : candidates).reduce<(typeof candidates)[number] | null>(
+  const shown = (openCandidates.length > 0 ? openCandidates : candidates).reduce<(typeof candidates)[number] | null>(
     (best, next) => (best === null || cheaper(best.plan, next.plan) === next.plan ? next : best),
     null,
   );
-  const shown =
-    spotLoop && (!spotLoop.plan.available || !convert.available || spotLoop.plan.costUsd < convert.costUsd)
-      ? spotLoop
-      : null;
 
   const routes = {
     mix: shown?.name === 'mix' ? shown.plan : null,
