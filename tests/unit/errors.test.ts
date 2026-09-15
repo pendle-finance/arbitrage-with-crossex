@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { classifyGateError, CoreError } from '../../src/core/errors';
+import { classifyGateError, classifyPlain, CoreError, plainErrorFor, refusalReason } from '../../src/core/errors';
 
 const gate = (status: number, label: string) => ({ response: { status, data: { label, message: label } } });
 
@@ -41,5 +41,83 @@ describe('classifyGateError label anchoring', () => {
     const net = classifyGateError(Object.assign(new Error('socket'), { code: 'ECONNRESET' }));
     expect(net.category).toBe('network');
     expect(net.retryable).toBe(true);
+  });
+
+  it('transfer amount insufficient is margin', () => {
+    const c = classifyGateError(gate(422, 'TRANSFER_AMOUNT_INSUFFICIENT'));
+    expect(c.category).toBe('insufficient-margin');
+    expect(c.retryable).toBe(false);
+  });
+
+  it('transfer amount below minimum is still unknown', () => {
+    expect(classifyGateError(gate(422, 'TRANSFER_AMOUNT_MINTRANS_INVALID_ERROR')).category).toBe('unknown');
+  });
+});
+
+const said = (status: number, label: string, message: string) => ({ response: { status, data: { label, message } } });
+
+describe('classifyGateError message', () => {
+  it("classifyGateError keeps Gate's status and label in the message", () => {
+    const notFound = Object.assign(new Error('Request failed with status code 400'), {
+      response: { status: 400, data: { label: 'ORDER_NOT_FOUND', message: 'order not found' } },
+    });
+
+    expect(classifyGateError(notFound).message).toBe('Gate API error (HTTP 400) [ORDER_NOT_FOUND]: order not found');
+    expect(classifyGateError(said(401, 'INVALID_KEY', 'invalid key')).hint).toBe('Check the API key/secret in Settings.');
+  });
+});
+
+describe('plainErrorFor', () => {
+  it("shows Gate's message as a sentence with no status or label", () => {
+    expect(plainErrorFor(said(400, 'TRADE_INVALID_QUOTE_ORDER_QTY', 'quote qty is required'))).toEqual({
+      message: 'Quote qty is required.',
+      hint: undefined,
+    });
+  });
+
+  it('names the minimum Gate sent on a transfer below it', () => {
+    const refused = said(422, 'TRANSFER_AMOUNT_MINTRANS_INVALID_ERROR', 'The Minimum amount needs to be greater than 11.');
+
+    expect(refusalReason(refused)).toBe("below Gate's minimum of 11");
+    expect(plainErrorFor(refused).message).toBe("Below Gate's minimum of 11.");
+  });
+
+  it('a 401 or INVALID_KEY is a refused key with the Settings hint', () => {
+    const refusals = [
+      said(401, 'INVALID_KEY', 'invalid key'),
+      said(401, 'INVALID_SIGNATURE', 'signature mismatch'),
+      said(401, 'INVALID_CREDENTIALS', 'invalid credentials'),
+      { response: { status: 401 } },
+    ];
+
+    for (const refused of refusals) {
+      expect(plainErrorFor(refused)).toEqual({ message: 'Gate refused the API key.', hint: 'Check it in Settings.' });
+      expect(classifyGateError(refused)).toMatchObject({ category: 'auth', retryable: false });
+    }
+  });
+
+  it("a 401 for an expired request keeps Gate's message", () => {
+    const expired = said(401, 'REQUEST_EXPIRED', 'gap between request Timestamp and server time exceeds 60');
+
+    const plain = plainErrorFor(expired);
+
+    expect(plain.message).toBe('Gap between request Timestamp and server time exceeds 60.');
+    expect(`${plain.message} ${plain.hint ?? ''}`).not.toContain('API key');
+    expect(refusalReason(expired)).not.toContain('API key');
+  });
+
+  it('an error with no Gate envelope keeps its own message', () => {
+    expect(classifyGateError(new Error('socket hang up')).message).toBe('socket hang up');
+    expect(refusalReason(new Error('socket hang up'))).toBe('socket hang up');
+    expect(plainErrorFor(new Error('socket hang up')).message).toBe('socket hang up');
+  });
+});
+
+describe('classifyPlain', () => {
+  it('keeps a CoreError as it is', () => {
+    const classified = classifyPlain(new CoreError('Already even.'));
+
+    expect(classified.message).toBe('Already even.');
+    expect(classified.category).toBe('validation');
   });
 });

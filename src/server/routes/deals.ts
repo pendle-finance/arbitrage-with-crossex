@@ -15,8 +15,12 @@ import { commands } from '../../engine/loop';
 import type { PairRow } from '../../engine/types';
 import type { AppDeps } from '../app';
 import { TTL } from '../cache';
-import { isDisclaimerAccepted } from '../disclaimer';
+import { DISCLAIMER_NOT_ACCEPTED, isDisclaimerAccepted } from '../disclaimer';
 import { leverageMaxFor } from './leverage';
+import { conflict } from './rebalance';
+
+const TRANSFER_SETTLE_MS = 5_000;
+const TRANSFER_SETTLING_TEXT = 'Deals wait until Gate takes the transfer. Try again in a few seconds.';
 
 // deps.engine is non-null here: the deals routes are registered only when the
 // engine exists (never in the credential-free public mode — see buildApp).
@@ -39,10 +43,16 @@ export function dealsRoutes(deps: AppDeps) {
         ok: false,
         error: {
           category: 'validation',
-          message: `a rebalance is still running — wait for it to finish before ${what}`,
+          message: `a rebalance is still running. Wait for it to finish before ${what}.`,
           retryable: true,
         },
       });
+    const transferMoving = (): boolean => deps.transfer?.jobs.read()?.status === 'moving';
+    const transferSettling = (): boolean => {
+      const transfer = deps.transfer?.jobs.read() ?? null;
+      if (transfer?.status !== 'moving') return false;
+      return transfer.acceptedAt === null || deps.engine!.clock.now() - transfer.acceptedAt < TRANSFER_SETTLE_MS;
+    };
 
     app.post('/deals', async (req, reply) => {
       // First-run gate: no real order until the disclaimer is accepted. Tied to
@@ -50,17 +60,7 @@ export function dealsRoutes(deps: AppDeps) {
       // absent in unit tests, which skip the gate). The UI shows the modal
       // proactively; this 403 is the backstop against a direct API call.
       const envPath = deps.credentials?.envPath;
-      if (envPath && !isDisclaimerAccepted(envPath)) {
-        return reply.code(403).send({
-          ok: false,
-          error: {
-            category: 'validation',
-            label: 'DISCLAIMER_NOT_ACCEPTED',
-            message: 'You must accept the disclaimer before placing any order.',
-            retryable: false,
-          },
-        });
-      }
+      if (envPath && !isDisclaimerAccepted(envPath)) return reply.code(403).send(DISCLAIMER_NOT_ACCEPTED);
       const body = req.body as DealRequest & { leverage?: { a?: number; b?: number } };
       if (!body?.id) throw new CoreError('deal id is required');
       // Idempotency: the client id is the dedup key — a lost-response retry
@@ -69,9 +69,14 @@ export function dealsRoutes(deps: AppDeps) {
         return reply.code(202).ok({ id: body.id, duplicate: true });
       }
       if (rebalanceRunning()) return refuseForRebalance(reply, 'starting a deal');
+      if (transferSettling()) return conflict(reply, TRANSFER_SETTLING_TEXT);
       const clients = deps.getClients();
       const getAccount = async () =>
-        (await deps.cache.get('account', TTL.live, async () => (await clients.crossEx.getCrossexAccount()).body)).value;
+        (
+          await deps.cache.get('account', TTL.live, async () => (await clients.crossEx.getCrossexAccount()).body, {
+            fresh: transferMoving(),
+          })
+        ).value;
       // Shares the `positions` cache key with GET /positions (the UI polls it every 4s),
       // so the preflight's netting read is normally already warm.
       const getPositions = async () =>
@@ -153,6 +158,10 @@ export function dealsRoutes(deps: AppDeps) {
       if (rebalanceRunning()) {
         await restoreLeverage();
         return refuseForRebalance(reply, 'starting a deal');
+      }
+      if (transferSettling()) {
+        await restoreLeverage();
+        return conflict(reply, TRANSFER_SETTLING_TEXT);
       }
       deps.engine!.store.createPair(row);
       deps.cache.bust('account');

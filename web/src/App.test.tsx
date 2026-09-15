@@ -306,21 +306,24 @@ describe('borrow pill', () => {
     server.use(rebalanceHandler(makeRebalanceView({ buckets: [borrowed(8.5)] })));
     await renderApp();
 
-    const pill = await screen.findByRole('button', { name: 'Borrowing 8.50 USDC' });
+    const pill = await screen.findByText('Borrowing 8.50 USDC');
     expect(tab(/^Opportunities/)).toHaveAttribute('aria-selected', 'true');
-    expect(pill).toHaveAttribute(
-      'title',
-      'Gate lent you 8.50 USDC for the Hyperliquid legs. It holds $1.70 of initial margin against it. Open Balances to pay it back.',
-    );
 
     await userEvent.click(pill);
 
     expect(tab(/^Balances/)).toHaveAttribute('aria-selected', 'true');
     expect(panel('balances')).toBeVisible();
     expect(within(panel('balances')).getByRole('region', { name: 'Rebalance' })).toBeVisible();
+
+    await userEvent.hover(pill);
+    const card = await screen.findByRole('tooltip');
+    const link = within(card).getByRole('button', { name: 'Rebalance on Balances ▸' });
+    await userEvent.click(link);
+
+    expect(tab(/^Balances/)).toHaveAttribute('aria-selected', 'true');
   });
 
-  it('shows a USDT borrow the same way, naming the legs on the other venues', async () => {
+  it('shows a USDT borrow the same way, naming the Gate, Binance, OKX and Bybit legs', async () => {
     mockApp();
     const usdt: RebalanceBucket = { ...borrowed(300), coin: 'USDT', venue: 'CROSSEX' };
     const usdc: RebalanceBucket = { ...borrowed(0), cash: 500, equity: 500 };
@@ -328,10 +331,10 @@ describe('borrow pill', () => {
     await renderApp();
 
     const pill = await screen.findByRole('button', { name: 'Borrowing 300.00 USDT' });
-    expect(pill).toHaveAttribute(
-      'title',
-      'Gate lent you 300.00 USDT for the legs on the other venues. It holds $60.00 of initial margin against it. Open Balances to pay it back.',
-    );
+    await userEvent.hover(pill);
+
+    const card = await screen.findByRole('tooltip');
+    expect(within(card).getByText('Gate, Binance, OKX and Bybit legs')).toBeInTheDocument();
   });
 
   it('puts the nearest liquidation line in the margin gauges hover', async () => {

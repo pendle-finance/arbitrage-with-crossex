@@ -67,7 +67,7 @@ const LABEL_RULES: Array<{ match: RegExp; category: ErrorCategory; hint?: string
   { match: /MAX_MARKET_SIZE|MAX_LIMIT_SIZE|SIZE_TOO_LARGE|TOO_LARGE/, category: 'size-too-large' },
   { match: /SIGNIFICANT_FIGURES|PRICE/, category: 'price-limit', hint: 'Price outside the venue’s allowed band or precision.' },
   // Anchor INSUFFICIENT to a funds word so INSUFFICIENT_PERMISSION (handled above) can't reach here.
-  { match: /BALANCE|MARGIN|INSUFFICIENT_(BALANCE|MARGIN|AVAILABLE|FUND)|NOT_ENOUGH/, category: 'insufficient-margin' },
+  { match: /BALANCE|MARGIN|INSUFFICIENT_(BALANCE|MARGIN|AVAILABLE|FUND)|NOT_ENOUGH|TRANSFER_AMOUNT_INSUFFICIENT/, category: 'insufficient-margin' },
   // Order/position "not found" is a stale-state validation error, NOT a bad symbol —
   // must beat the broad SYMBOL/NOT_FOUND rule below.
   { match: /ORDER_NOT_FOUND|ORDER_CLOSED|ORDER_FINISHED|POSITION_NOT_FOUND|NO_POSITION/, category: 'validation' },
@@ -115,4 +115,45 @@ export function classifyGateError(err: unknown): ClassifiedError {
     return { category: 'network', message, retryable: true };
   }
   return { category: 'unknown', message, httpStatus: status, retryable: false };
+}
+
+type GateErrorShape = {
+  response?: { status?: number; data?: { label?: string; message?: string } };
+  message?: string;
+};
+
+const KEY_REFUSED_LABELS: readonly string[] = ['INVALID_KEY', 'INVALID_CREDENTIALS', 'INVALID_SIGNATURE'];
+
+const isKeyRefused = (e: GateErrorShape): boolean => {
+  const label = e?.response?.data?.label;
+  return label ? KEY_REFUSED_LABELS.includes(label.toUpperCase()) : e?.response?.status === 401;
+};
+
+export function refusalReason(err: unknown): string {
+  const e = err as GateErrorShape;
+  const data = e?.response?.data;
+  if (isKeyRefused(e)) return 'Gate refused the API key';
+  if (!data || !(data.label || data.message)) return e?.message ?? String(err);
+  const text = (data.message ?? '').trim().replace(/[\s.]+$/, '');
+  const minimum = /MINTRANS/.test((data.label ?? '').toUpperCase()) ? text.match(/\d+(?:\.\d+)?/g)?.at(-1) : undefined;
+  if (minimum !== undefined) return `below Gate's minimum of ${Number(minimum)}`;
+  return text || `Gate error ${data.label}`;
+}
+
+const asSentence = (text: string): string => `${text.charAt(0).toUpperCase()}${text.slice(1)}.`;
+
+export function plainErrorFor(err: unknown): Pick<ClassifiedError, 'message' | 'hint'> {
+  const e = err as GateErrorShape;
+  if (isKeyRefused(e)) return { message: 'Gate refused the API key.', hint: 'Check it in Settings.' };
+  const data = e?.response?.data;
+  const reason = refusalReason(err);
+  return {
+    message: data?.label || data?.message ? asSentence(reason) : reason,
+    hint: e?.response?.status === 401 ? undefined : classifyGateError(err).hint,
+  };
+}
+
+export function classifyPlain(err: unknown): ClassifiedError {
+  if (err instanceof CoreError) return classifyGateError(err);
+  return { ...classifyGateError(err), ...plainErrorFor(err) };
 }

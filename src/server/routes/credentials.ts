@@ -5,13 +5,14 @@ import { setClientTagContext } from '../../core/boros/client';
 import { makeClients } from '../../core/clients';
 import { classifyGateError, CoreError } from '../../core/errors';
 import type { AppDeps } from '../app';
+import { LOCK_TEXT } from '../rebalanceJob';
 import { restrictToOwner } from '../secretFile';
 
 const PAY_DOWN_RUNNING = {
   ok: false,
   error: {
     category: 'validation',
-    message: 'a pay-down is still running — wait for it to finish before changing credentials',
+    message: 'A rebalance is running. Wait for it to end, then change the key.',
     retryable: true,
   },
 };
@@ -20,9 +21,14 @@ const REBALANCE_HALTED = {
   ok: false,
   error: {
     category: 'validation',
-    message: 'a halted rebalance belongs to the current account — resume or abandon it before changing to another account',
+    message: 'a halted rebalance belongs to the current account. Resume or abandon it before changing to another account.',
     retryable: true,
   },
+};
+
+const TRANSFER_MOVING = {
+  ok: false,
+  error: { category: 'validation', message: LOCK_TEXT.moving, retryable: true },
 };
 
 /**
@@ -94,13 +100,18 @@ export function credentialsRoutes(deps: AppDeps) {
           },
         });
       }
+      const isOtherAccount = (userId: string | null): boolean => userId === null || userId !== candidateUserId;
       const job = deps.rebalance?.jobs.read() ?? null;
       if (job?.status === 'running') return reply.code(409).send(PAY_DOWN_RUNNING);
+      const transfer = deps.transfer?.jobs.read() ?? null;
+      if (transfer?.status === 'moving' && isOtherAccount(transfer.userId)) {
+        return reply.code(409).send(TRANSFER_MOVING);
+      }
       // A halted job keeps venue ids and amounts of the account it ran on, and
       // Resume would run them on the new one. A rotated key on the same
       // account is fine; a job file from before the field is treated as
       // another account's.
-      if (job?.status === 'halted' && (job.userId === null || job.userId !== candidateUserId)) {
+      if (job?.status === 'halted' && isOtherAccount(job.userId)) {
         return reply.code(409).send(REBALANCE_HALTED);
       }
 

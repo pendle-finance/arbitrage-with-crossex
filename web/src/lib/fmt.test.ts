@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { bps, feePct, fieldValue, fmtPct, fmtTokenQty, fmtUsd, num, parseSymbol, sig, sigGrouped, toDate } from './fmt';
+import { bps, feePct, fieldValue, fmtAbout, fmtPct, fmtTokenQty, fmtUsd, num, parseSymbol, sig, sigGrouped, toDate } from './fmt';
 
 // num/sig expectations are copied from tests/unit/format.test.ts in the repo
 // root — the web port must behave identically to src/core/numbers.ts.
@@ -126,6 +126,20 @@ describe('web additions', () => {
     expect(toDate('1735689600')).toEqual(fromSeconds);
     expect(toDate(undefined)).toBeNull();
     expect(toDate('nope')).toBeNull();
+  });
+});
+
+describe('fmtAbout', () => {
+  it.each([
+    [3, 'about 3s'],
+    [120, 'about 2 min'],
+    [130, 'about 2 min'],
+    [400, 'about 6.5 min'],
+    [650, 'about 11 min'],
+    [780, 'about 13 min'],
+    [1430, 'about 24 min'],
+  ])('fmtAbout(%i) -> %s', (seconds, expected) => {
+    expect(fmtAbout(seconds)).toBe(expected);
   });
 });
 

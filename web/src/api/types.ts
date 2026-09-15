@@ -153,24 +153,50 @@ export interface RebalanceBucket {
   interestPerDayUsd: number;
 }
 
-export interface RebalanceRoute {
-  costUsd: number;
-  waitSeconds: number;
-  available: boolean;
-  reason: string | null;
+export type RouteName = 'mix' | 'loop' | 'convert';
+
+export type GateAccount = 'SPOT' | 'CROSSEX' | 'CROSSEX_GATE' | 'CROSSEX_HYPERLIQUID';
+
+export type TransferCoin = 'USDT' | 'USDC';
+
+export interface WalletAfter {
+  coin: string;
+  venue: string;
+  cash: number;
+  equity: number;
 }
 
-export interface RebalancePlan {
-  direction: RebalanceDirection;
-  amount: number;
-  receives: number;
-  price: number | null;
-  borrowAfterUsd: number;
-  shortfall: { reason: 'cash' | 'margin' | 'spare'; remaining: number } | null;
-  routes: { loop: RebalanceRoute; convert: RebalanceRoute };
-  route: 'loop' | 'convert' | null;
-  savesPerDayUsd: number;
+export interface PlannedStep {
+  round: number | null;
+  kind: 'round' | 'convert';
+  buy: number;
+  move: number;
+  arrives: number;
+  borrowLeft: number;
+  seconds: number;
+}
+
+export interface RoutePlan {
+  available: boolean;
+  reason: string | null;
+  costUsd: number;
+  seconds: number;
+  rounds: number;
+  oneMoreRoundCostUsd: number | null;
   marginFreedUsd: number;
+  savesPerDayUsd: number;
+  after: WalletAfter[];
+  steps: PlannedStep[];
+}
+
+export interface EvenPlan {
+  direction: RebalanceDirection | null;
+  balanced: boolean;
+  moves: number;
+  shortOfEven: number;
+  roundCap: number;
+  routes: { mix: RoutePlan | null; loop: RoutePlan; convert: RoutePlan };
+  recommended: RouteName | null;
 }
 
 export interface RebalanceStep {
@@ -183,13 +209,19 @@ export interface RebalanceStep {
   status: 'pending' | 'running' | 'done';
   startedAt: number | null;
   doneAt: number | null;
+  round: number | null;
+  planned: number | null;
+  arrives: number | null;
+  borrowLeft: number | null;
 }
 
 export interface RebalanceJob {
   id: string;
   direction: RebalanceDirection;
-  route: 'loop' | 'convert';
+  route: RouteName;
   amount: number;
+  costUsd: number | null;
+  target: WalletAfter[] | null;
   status: 'running' | 'halted' | 'done' | 'abandoned';
   stepIndex: number;
   steps: RebalanceStep[];
@@ -197,12 +229,59 @@ export interface RebalanceJob {
   haltReason: string | null;
   createdAt: number;
   updatedAt: number;
+  inTransit: { coin: 'USDC'; qty: number; at: 'SPOT' | 'MOVING' } | null;
 }
 
 export interface RebalanceView {
   buckets: RebalanceBucket[];
-  plan: RebalancePlan;
+  plan: EvenPlan;
   job: RebalanceJob | null;
+}
+
+export interface SpotBalance {
+  coin: TransferCoin;
+  available: number;
+  locked: number;
+}
+
+export interface TransferPath {
+  coin: TransferCoin;
+  from: GateAccount;
+  to: GateAccount;
+  max: number | null;
+  min: number;
+  feeUsd: number;
+  seconds: number;
+}
+
+export interface TransferJob {
+  id: string;
+  coin: TransferCoin;
+  from: GateAccount;
+  to: GateAccount;
+  amount: number;
+  status: 'moving' | 'done' | 'failed';
+  received: number | null;
+  failText: string | null;
+  createdAt: number;
+  doneAt: number | null;
+}
+
+export type TransferLock = 'rebalance' | 'halted' | 'deal';
+
+export interface TransferView {
+  spot: SpotBalance[] | null;
+  paths: TransferPath[];
+  lock: TransferLock | null;
+  transfer: TransferJob | null;
+}
+
+export interface StartTransferBody {
+  id?: string;
+  coin: TransferCoin;
+  from: GateAccount;
+  to: GateAccount;
+  amount: string;
 }
 
 // ---------------------------------------------------------------------------

@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import type { FetchLike } from '../../core/boros/client';
 import type { AppDeps } from '../app';
 import { TTL } from '../cache';
+import { LOCK_TEXT } from '../rebalanceJob';
 import { startUpdate, updateProgress } from '../updater';
 import { compareVersions, fetchLatestVersion, type RemoteVersion } from '../version';
 import { borosExecutionsPending } from './borosPair';
@@ -59,7 +60,10 @@ export function versionRoutes(deps: AppDeps) {
         return refuse('a deal is still working — wait for it to finish, then update', true);
       }
       if (deps.rebalance?.jobs.read()?.status === 'running') {
-        return refuse('a pay-down is still running — wait for it to finish, then update', true);
+        return refuse('a rebalance is still running. Wait for it to finish, then update.', true);
+      }
+      if (deps.transfer?.jobs.read()?.status === 'moving') {
+        return refuse(`${LOCK_TEXT.moving} Wait for it to end, then update.`, true);
       }
       if (borosExecutionsPending() > 0) {
         return refuse(

@@ -8,7 +8,7 @@ import { useAckAlert, useActiveDeals, useAlerts } from '../api/queries';
 import { Spinner } from '../components/Spinner';
 import { useTradeFlow } from './TradeFlow';
 
-export function RecoveryBanner() {
+export function RecoveryBanner({ onOpenTab }: { onOpenTab?: (tab: 'balances') => void }) {
   const flow = useTradeFlow();
   const active = useActiveDeals();
   const alerts = useAlerts();
@@ -54,6 +54,7 @@ export function RecoveryBanner() {
 
   if (standing.length === 0) return null;
   const alert = standing[0];
+  const isRebalance = alert.pairId?.startsWith('rebalance:') ?? false;
   return (
     <div role="alert" className="border-b border-amber-500/30 bg-amber-500/10">
       <div className="mx-auto flex max-w-[1500px] flex-wrap items-center gap-3 px-5 py-2 text-xs text-amber-200">
@@ -61,15 +62,25 @@ export function RecoveryBanner() {
           {alert.message}
           {standing.length > 1 ? ` (+${standing.length - 1} more)` : ''}
         </span>
-        {alert.pairId && (
-          <button
-            type="button"
-            className="btn-ghost-xs border-amber-500/50 text-amber-300"
-            onClick={() => flow.openDeal(alert.pairId!)}
-          >
-            View
-          </button>
-        )}
+        {isRebalance
+          ? onOpenTab && (
+              <button
+                type="button"
+                className="btn-ghost-xs border-amber-500/50 text-amber-300"
+                onClick={() => onOpenTab('balances')}
+              >
+                View
+              </button>
+            )
+          : alert.pairId && (
+              <button
+                type="button"
+                className="btn-ghost-xs border-amber-500/50 text-amber-300"
+                onClick={() => flow.openDeal(alert.pairId!)}
+              >
+                View
+              </button>
+            )}
         <button type="button" className="btn-ghost-xs" onClick={() => ack.mutate(alert.id)}>
           ack
         </button>

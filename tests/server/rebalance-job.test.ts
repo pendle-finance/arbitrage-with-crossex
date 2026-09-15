@@ -5,31 +5,27 @@ import type { FastifyInstance } from 'fastify';
 import nock from 'nock';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { makeClients } from '../../src/core/clients';
-import { HYPERLIQUID_WITHDRAW_FEE_USD, TO_USDT_WAIT_SECONDS } from '../../src/core/rebalance/plan';
+import type { EvenPlan, PlannedStep } from '../../src/core/rebalance/plan';
 import { Store } from '../../src/engine/db';
 import { gateVenue } from '../../src/engine/venueGate';
-import { TtlCache } from '../../src/server/cache';
-import { JobFile, newJob, type Job, type Step } from '../../src/server/rebalanceJob';
-import { LOOKUP_RETRY_MS, STEP_TIMEOUT_MS, tagFor } from '../../src/server/rebalanceRunner';
+import { HALT_TEXT, inTransitOf, JobFile, newJob, type Job, type Step } from '../../src/server/rebalanceJob';
+import { tagFor } from '../../src/server/rebalanceRunner';
 import type { AppDeps } from '../../src/server/app';
 import { gate, HOST, makeTestApp, mockGateGet, mockGatePost, TEST_KEY, TEST_SECRET } from './helpers/gate-nock';
+import { accountA, waitFor } from './helpers/rebalance';
 
 const API = '/api/v4';
-const AMOUNT = 300;
 const BOUGHT = '299.97';
 
 let t: number;
-let hold: Promise<void> | null;
 let apps: FastifyInstance[];
 
 const sleep = async (ms: number): Promise<void> => {
   t += ms;
-  if (hold) await hold;
 };
 
 beforeEach(() => {
   t = Date.now();
-  hold = null;
   apps = [];
 });
 
@@ -43,67 +39,31 @@ async function reset(): Promise<void> {
   nock.cleanAll();
 }
 
-async function waitFor(pred: () => boolean, what: string, ms = 5000): Promise<void> {
-  const deadline = Date.now() + ms;
-  while (!pred()) {
-    if (Date.now() > deadline) throw new Error(`${what} did not happen within ${ms} ms`);
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-}
-
-function boot(
-  over: {
-    store?: Store;
-    sleep?: (ms: number) => Promise<void>;
-    job?: Job;
-    credentials?: AppDeps['credentials'];
-    cache?: TtlCache;
-  } = {},
-) {
+function boot(over: { store?: Store; job?: unknown; credentials?: AppDeps['credentials'] } = {}) {
   const dataDir = mkdtempSync(path.join(tmpdir(), 'rebalance-'));
   if (over.job) writeFileSync(path.join(dataDir, 'rebalance.json'), JSON.stringify(over.job));
   const getClients = () => makeClients({ key: TEST_KEY, secret: TEST_SECRET });
+  const jobs = new JobFile(dataDir);
   const app = makeTestApp({
     getClients,
-    rebalance: { jobs: new JobFile(dataDir), sleep: over.sleep ?? sleep },
+    rebalance: { jobs, sleep },
     engine: { store: over.store ?? new Store(':memory:'), venue: gateVenue(getClients), clock: { now: () => t } },
     credentials: over.credentials,
-    ...(over.cache ? { cache: over.cache } : {}),
   });
   apps.push(app);
+  const get = async (url: string) => (await app.inject({ method: 'GET', url, headers: HOST })).json();
   return {
+    jobs,
     file: () => JSON.parse(readFileSync(path.join(dataDir, 'rebalance.json'), 'utf8')) as Job,
-    post: (url = '/api/rebalance', payload: Record<string, unknown> = {}) =>
-      app.inject({ method: 'POST', url, headers: HOST, payload }),
-    view: async (query = '') => (await app.inject({ method: 'GET', url: `/api/rebalance${query}`, headers: HOST })).json(),
+    post: (url: string, payload: Record<string, unknown> = {}) => app.inject({ method: 'POST', url, headers: HOST, payload }),
+    view: () => get('/api/rebalance'),
+    alerts: async () => (await get('/api/alerts')).data as Record<string, unknown>[],
   };
 }
 
-const asset = (coin: string, venue: string, over: Record<string, string> = {}) => ({
-  coin,
-  exchange_type: venue,
-  balance: '0',
-  upnl: '0',
-  equity: '0',
-  liability: '0',
-  borrowing_initial_margin: '0',
-  ...over,
-});
-
-const account = (usdcOnHl: Record<string, string> = { equity: '-300', liability: '300', borrowing_initial_margin: '30' }) => ({
-  user_id: '1',
-  available_margin: '900',
-  margin_balance: '900',
-  account_mode: 'CROSS_EXCHANGE',
-  assets: [asset('USDT', 'CROSSEX', { balance: '1200', equity: '1200' }), asset('USDC', 'HYPERLIQUID', usdcOnHl), asset('USDC', 'GATE')],
-});
-
-function mockView(
-  opts: { ask?: string; account?: unknown; disabled?: number; accountThen429?: boolean; onAccountRead?: () => void } = {},
-): void {
-  const body = opts.account ?? account();
+function mockView(opts: { accountThen429?: boolean; onAccountRead?: () => void } = {}): void {
   if (opts.accountThen429) {
-    gate().get(`${API}/crossex/accounts`).query(true).reply(200, body);
+    gate().get(`${API}/crossex/accounts`).query(true).reply(200, accountA);
     gate().persist().get(`${API}/crossex/accounts`).query(true).reply(429, { label: 'TOO_MANY_REQUESTS', message: 'slow down' });
   } else {
     gate()
@@ -112,77 +72,58 @@ function mockView(
       .query(true)
       .reply(200, () => {
         opts.onAccountRead?.();
-        return body;
+        return accountA;
       });
   }
-  mockGateGet('/interest_rate', {
-    body: [{ coin: 'USDC', exchange_type: 'HYPERLIQUID', hour_interest_rate: '0.000005', time: String(t) }],
-  });
-  mockGateGet('/history_margin_interests', {
-    body: [{ liability_coin: 'USDC', exchange_type: 'HYPERLIQUID', interest: '0.01', create_time: String(t - 1000) }],
-  });
-  mockGateGet('/transfers/coin', {
-    body: [{ coin: 'USDC', min_trans_amount: '11', est_fee: '1', precision: 5, is_disabled: opts.disabled ?? 0 }],
-  });
-  mockGateGet('/rule/symbols', {
-    body: [{ symbol: 'GATE_SPOT_USDC_USDT', exchange_type: 'GATE', business_type: 'SPOT', state: 'live' }],
-  });
-  mockGateGet('/fee', { fixture: 'fee.json' });
+  gate()
+    .persist()
+    .get(`${API}/crossex/interest_rate`)
+    .query(true)
+    .reply(200, [{ coin: 'USDC', exchange_type: 'HYPERLIQUID', hour_interest_rate: '0.000005', time: String(t) }]);
+  gate().persist().get(`${API}/crossex/history_margin_interests`).query(true).reply(200, []);
+  gate()
+    .persist()
+    .get(`${API}/crossex/transfers/coin`)
+    .query(true)
+    .reply(200, [{ coin: 'USDC', min_trans_amount: '11', est_fee: '1', precision: 5, is_disabled: '0' }]);
+  gate()
+    .persist()
+    .get(`${API}/crossex/rule/symbols`)
+    .query(true)
+    .reply(200, [{ symbol: 'GATE_SPOT_USDC_USDT', exchange_type: 'GATE', business_type: 'SPOT', state: 'live' }]);
+  gate()
+    .persist()
+    .get(`${API}/crossex/fee`)
+    .query(true)
+    .reply(200, [{ exchange_type: 'GATE', spot_maker_fee: '0', spot_taker_fee: '0', special_fee_list: [] }]);
   gate()
     .persist()
     .get(`${API}/spot/tickers`)
     .query(true)
-    .reply(200, [{ currency_pair: 'USDC_USDT', lowest_ask: opts.ask ?? '1.0001', highest_bid: '1', last: '1' }]);
+    .reply(200, [{ currency_pair: 'USDC_USDT', lowest_ask: '1.0001', highest_bid: '0.9999', last: '1' }]);
 }
 
-const orderBody = (state: string, executedQty: string, orderId = 'o1') => ({
-  order_id: orderId,
-  text: 't',
-  state,
-  executed_qty: executedQty,
-});
-/** Gate books a convert as a filled market sell whose text is the quote id. */
-const convertOrderBody = (orderId: string, quoteId: string, received: string) => ({
-  order_id: orderId,
-  text: quoteId,
-  state: 'FILLED',
-  executed_qty: '0',
-  executed_amount: received,
-});
-const transferRow = (id: string, status: string, over: Record<string, string> = {}) => ({
-  id,
-  status,
-  coin: 'USDC',
-  amount: '299.97000',
+const step160 = (name: string, over: Record<string, unknown> = {}) => ({
+  name,
+  text: null,
+  quoteId: null,
+  venueId: null,
+  qty: null,
+  attempt: 0,
+  status: 'pending',
+  startedAt: null,
+  doneAt: null,
   ...over,
 });
-const quoteBody = (quoteId: string, toAmount: string) => ({
-  quote_id: quoteId,
-  valid_ms: '5000',
-  from_coin: 'USDT',
-  to_coin: 'USDC',
-  from_amount: String(AMOUNT),
-  to_amount: toAmount,
-  price: '0.998',
-});
 
-function mockLoopAfterBuy(): nock.Scope {
-  const poll = mockGateGet('/orders/o1', { body: orderBody('FILLED', BOUGHT) });
-  mockGatePost('/transfers', { body: { tx_id: 'x1', text: 't' } });
-  mockGateGet('/transfers', { body: [transferRow('x1', 'SUCCESS', { actual_receive: BOUGHT })] });
-  mockGatePost('/transfers', { body: { tx_id: 'x2', text: 't' } });
-  mockGateGet('/transfers', { body: [transferRow('x1', 'SUCCESS'), transferRow('x2', 'PENDING')] });
-  mockGateGet('/transfers', {
-    body: [transferRow('x1', 'SUCCESS'), transferRow('x2', 'SUCCESS', { actual_receive: '299.92' })],
-  });
-  return poll;
-}
+const ONE_ROUND: PlannedStep[] = [{ round: 1, kind: 'round', buy: 300, move: 300, arrives: 299.95, borrowLeft: 0, seconds: 130 }];
 
 function haltedLoopJob(stepIndex: number, patch: Partial<Step> = {}): Job {
-  const job = newJob('toUsdc', 'loop', AMOUNT, t);
+  const job = newJob({ direction: 'toUsdc', route: 'loop', steps: ONE_ROUND, amount: 300, costUsd: 0.08, target: [], userId: null }, t);
   job.status = 'halted';
-  job.haltReason = 'server restarted';
+  job.haltReason = HALT_TEXT.restart;
   job.stepIndex = stepIndex;
+  job.tagCount = stepIndex;
   job.fundsAt = (['CROSSEX', 'GATE', 'SPOT'] as const)[stepIndex];
   const venueIds = ['o1', 'x1'];
   for (let i = 0; i < stepIndex; i += 1) {
@@ -199,23 +140,26 @@ function haltedLoopJob(stepIndex: number, patch: Partial<Step> = {}): Job {
   return job;
 }
 
-const TO_USDT_AMOUNT = 1200;
-
-const toUsdtAccount = () => account({ balance: '5000', available_balance: '5000', equity: '5000', liability: '0' });
-
-const isTransfer = (b: Record<string, unknown>, from: string, to: string, amount: string): boolean =>
-  b.coin === 'USDC' && b.from === from && b.to === to && b.amount === amount && typeof b.text === 'string';
-
-const isSell = (b: Record<string, unknown>): boolean =>
-  b.symbol === 'GATE_SPOT_USDC_USDT' && b.side === 'SELL' && b.type === 'MARKET' && b.qty === '1199.00' && !('quote_qty' in b);
-
-function holdRunner(): () => void {
-  let release: () => void = () => undefined;
-  hold = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  return release;
+async function accountAPlan(): Promise<EvenPlan> {
+  const h = boot();
+  return (await h.view()).data.plan;
 }
+
+function roundThreeInSpot(plan: EvenPlan, status: Job['status']): Job {
+  const { steps, costUsd, after } = plan.routes.loop;
+  const job = newJob({ direction: 'toUsdc', route: 'loop', steps, amount: plan.moves, costUsd, target: after, userId: '1' }, t);
+  for (const step of job.steps.slice(0, 8)) Object.assign(step, { status: 'done', qty: step.planned, startedAt: t, doneAt: t });
+  Object.assign(job.steps[8], { status: 'running', startedAt: t });
+  return Object.assign(job, { status, stepIndex: 8, fundsAt: 'SPOT' });
+}
+
+const transferRow = (id: string, status: string, over: Record<string, string> = {}) => ({
+  id,
+  status,
+  coin: 'USDC',
+  amount: '299.97000',
+  ...over,
+});
 
 const createDeal = (store: Store): void => {
   store.createPair({
@@ -245,58 +189,245 @@ const busyDeal = () => {
   return store;
 };
 
-describe('POST /api/rebalance', () => {
-  it('starts: 202 with the id, rebalance.json running, and the order POST leaves within 2 s', async () => {
-    const release = holdRunner();
+describe('1.6.0 job files', () => {
+  it('parses a 1.6.0 job file', async () => {
+    const id = 'mfhq1x2k';
     mockView();
-    const orders = mockGatePost('/orders', { body: orderBody('OPEN', '0') });
-    mockGateGet('/orders/o1', { body: orderBody('OPEN', '0') });
-    mockGateGet('/orders/o1', { body: orderBody('REJECT', '0') });
-    const h = boot();
+    const h = boot({
+      job: {
+        id,
+        userId: '1',
+        direction: 'toUsdc',
+        route: 'loop',
+        amount: 111.96,
+        status: 'halted',
+        stepIndex: 1,
+        steps: [
+          step160('Buy USDC', { text: `t-rb${id}0`, venueId: 'o1', qty: 111.96, status: 'done', startedAt: t, doneAt: t }),
+          step160('To spot', { text: `t-rb${id}1`, status: 'running', startedAt: t }),
+          step160('To Hyperliquid'),
+        ],
+        fundsAt: 'GATE',
+        haltReason: 'Gate API error (HTTP 422) [TRANSFER_AMOUNT_INSUFFICIENT]: Insufficient transferAvailable, transferAvailable: 25.08',
+        createdAt: t,
+        updatedAt: t,
+      },
+    });
 
-    const res = await h.post();
+    const { data } = await h.view();
 
-    expect(res.statusCode).toBe(202);
-    const { id } = res.json().data;
-    expect(id).toBeTypeOf('string');
-    expect(h.file()).toMatchObject({ id, userId: '1', status: 'running', route: 'loop', amount: AMOUNT, stepIndex: 0 });
-    await waitFor(() => orders.isDone(), 'the order POST', 2000);
-    expect(h.file().status).toBe('running');
-
-    release();
-    await waitFor(() => h.file().status === 'halted', 'the halt');
-
-    await reset();
-    mockView();
-    mockGatePost('/orders', { body: orderBody('OPEN', '0') });
-    mockGateGet('/orders/o1', { body: orderBody('REJECT', '0') });
-    const capped = boot();
-    const smaller = await capped.post('/api/rebalance', { amount: 100.005, route: 'loop' });
-    expect(smaller.statusCode).toBe(202);
-    expect(capped.file()).toMatchObject({ amount: 100, route: 'loop' });
-    await waitFor(() => capped.file().status === 'halted', 'the halt');
-
-    await reset();
-    mockView();
-    mockGatePost('/orders', { body: orderBody('OPEN', '0') });
-    mockGateGet('/orders/o1', { body: orderBody('REJECT', '0') });
-    const larger = boot();
-    const capped2 = await larger.post('/api/rebalance', { amount: 5000 });
-    expect(capped2.statusCode).toBe(202);
-    expect(larger.file().amount).toBe(AMOUNT);
-    await waitFor(() => larger.file().status === 'halted', 'the halt');
+    expect(h.jobs.read()?.steps[1].planned).toBe(111.96);
+    expect(data.job).toMatchObject({ id, route: 'loop', amount: 111.96, status: 'halted', costUsd: null, target: null, inTransit: null });
+    expect(data.job.steps.map((s: Step) => [s.name, s.round, s.planned])).toEqual([
+      ['Buy USDC', 1, 111.96],
+      ['To spot', 1, 111.96],
+      ['To Hyperliquid', 1, 111.96],
+    ]);
   });
 
-  it('refuses: 409 for a running job, a working deal, no route, a changed plan, and one of two concurrent POSTs; 403 before the disclaimer', async () => {
-    const stored = newJob('toUsdc', 'loop', AMOUNT, t);
+  it('1.6.0 done job reads', async () => {
+    mockView();
+    const h = boot({
+      job: {
+        id: 'mfhq1x2k',
+        userId: '1',
+        direction: 'toUsdt',
+        route: 'convert',
+        amount: 12,
+        status: 'done',
+        stepIndex: 0,
+        steps: [step160('Convert', { quoteId: 'q3', venueId: 'c3', qty: 11.98, status: 'done' })],
+        fundsAt: 'CROSSEX',
+        haltReason: null,
+        createdAt: t,
+        updatedAt: t,
+      },
+    });
+
+    const res = await h.view();
+
+    expect(res.ok).toBe(true);
+    expect(res.data.job).toMatchObject({ route: 'convert', status: 'done', costUsd: null, target: null, inTransit: null });
+  });
+});
+
+describe('GET /api/rebalance on a halted job', () => {
+  it('a halted job drops on the way once Gate shows the transfer landed', async () => {
+    mockView();
+    const job = haltedLoopJob(2, { venueId: 'x2' });
+    expect(job.steps[2].name).toBe('To Hyperliquid');
+    expect(inTransitOf(job)).toEqual({ coin: 'USDC', qty: Number(BOUGHT), at: 'MOVING' });
+    const h = boot({ job });
+    const rows = mockGateGet('/transfers', { body: [transferRow('x2', 'SUCCESS', { actual_receive: '299.92' })] });
+
+    const { data } = await h.view();
+
+    expect(rows.isDone()).toBe(true);
+    expect(data.job).toMatchObject({ id: job.id, status: 'halted', inTransit: null });
+    expect(h.file()).toEqual(job);
+  });
+
+  it('a halted To spot that landed shows in Gate spot', async () => {
+    mockView();
+    const job = haltedLoopJob(1, { venueId: 'x1' });
+    expect(job.steps[1].name).toBe('To spot');
+    expect(inTransitOf(job)).toEqual({ coin: 'USDC', qty: 300, at: 'MOVING' });
+    const h = boot({ job });
+    const rows = mockGateGet('/transfers', { body: [transferRow('x1', 'SUCCESS', { actual_receive: BOUGHT })] });
+
+    const { data } = await h.view();
+
+    expect(rows.isDone()).toBe(true);
+    expect(data.job).toMatchObject({ id: job.id, status: 'halted' });
+    expect(data.job.inTransit).toEqual({ coin: 'USDC', qty: Number(BOUGHT), at: 'SPOT' });
+    expect(h.file()).toEqual(job);
+  });
+
+  it('a failed lookup keeps on the way', async () => {
+    mockView();
+    const job = haltedLoopJob(2, { venueId: 'x2' });
+    const h = boot({ job });
+    const rows = mockGateGet('/transfers', { status: 500, body: { label: 'SERVER_ERROR', message: 'internal error' } });
+
+    const res = await h.view();
+
+    expect(res.ok).toBe(true);
+    expect(rows.isDone()).toBe(true);
+    expect(res.data.job).toMatchObject({ id: job.id, status: 'halted' });
+    expect(res.data.job.inTransit).toEqual({ coin: 'USDC', qty: Number(BOUGHT), at: 'MOVING' });
+    expect(h.file()).toEqual(job);
+  });
+});
+
+describe('halt alerts', () => {
+  it('halt alert says where the money is', async () => {
+    mockView();
+    const plan = await accountAPlan();
+    gate().persist().post(`${API}/crossex/transfers`).query(true).reply(400, { label: 'INVALID_PARAM_VALUE', message: 'refused by the test' });
+    const h = boot();
+    const job = roundThreeInSpot(plan, 'halted');
+    h.jobs.write(job);
+
+    const res = await h.post(`/api/rebalance/${job.id}/resume`);
+
+    expect(res.statusCode).toBe(200);
+    await waitFor(() => h.jobs.read()?.status === 'halted', 'the halt');
+    expect(await h.alerts()).toEqual([
+      expect.objectContaining({
+        level: 'error',
+        pair_id: `rebalance:${job.id}`,
+        message: 'Rebalance stopped in round 3. 36.58 USDC is in Gate spot.',
+      }),
+    ]);
+  });
+
+  it('boot halt alert has pair id', async () => {
+    mockView();
+    const plan = await accountAPlan();
+    const job = roundThreeInSpot(plan, 'running');
+
+    const h = boot({ job });
+
+    expect(await h.alerts()).toEqual([
+      expect.objectContaining({
+        level: 'error',
+        pair_id: `rebalance:${job.id}`,
+        message: 'Rebalance stopped in round 3. 36.58 USDC is in Gate spot.',
+      }),
+    ]);
+    expect(h.file()).toMatchObject({
+      status: 'halted',
+      haltReason: 'The app restarted during the run. Nothing failed. Press Resume.',
+    });
+  });
+
+  it('boot waits for a step Gate is moving, then halts before the next send', async () => {
+    const steps: PlannedStep[] = [ONE_ROUND[0], { ...ONE_ROUND[0], round: 2 }];
+    const job = newJob({ direction: 'toUsdc', route: 'loop', steps, amount: 600, costUsd: 0.16, target: [], userId: null }, t);
+    for (const [index, venueId] of ['o1', 'x1'].entries()) {
+      Object.assign(job.steps[index], { text: tagFor(job.id, index + 1), venueId, qty: Number(BOUGHT), status: 'done', startedAt: t, doneAt: t });
+    }
+    Object.assign(job.steps[2], { text: tagFor(job.id, 3), venueId: 'x2', status: 'running', startedAt: t - 3_600_000 });
+    Object.assign(job, { stepIndex: 2, tagCount: 3, fundsAt: 'SPOT' });
+    const seen: string[] = [];
+    const sends: string[] = [];
+    let h: ReturnType<typeof boot> | null = null;
+    gate()
+      .persist()
+      .get(`${API}/crossex/transfers`)
+      .query(true)
+      .reply(200, () => {
+        seen.push(h?.file().status ?? 'not booted');
+        return seen.length === 1 ? [transferRow('x2', 'PENDING')] : [transferRow('x2', 'SUCCESS', { actual_receive: '299.92' })];
+      });
+    for (const kind of ['transfers', 'orders']) {
+      gate()
+        .persist()
+        .post(`${API}/crossex/${kind}`)
+        .query(true)
+        .reply(200, () => {
+          sends.push(kind);
+          return { tx_id: 'x9', order_id: 'o9' };
+        });
+    }
+
+    h = boot({ job });
+    const booted = h;
+    await booted.alerts();
+    await waitFor(() => booted.file().status === 'halted', 'the halt');
+
+    expect(booted.file()).toMatchObject({ stepIndex: 3, fundsAt: 'HYPERLIQUID', haltReason: HALT_TEXT.restart });
+    expect(booted.file().steps[2]).toMatchObject({ venueId: 'x2', status: 'done', qty: 299.92 });
+    expect(seen).toEqual(['running', 'running']);
+    expect(sends).toEqual([]);
+    expect(await booted.alerts()).toEqual([
+      expect.objectContaining({ pair_id: `rebalance:${job.id}`, message: 'Rebalance stopped in round 2.' }),
+    ]);
+  });
+
+  it('a job that ends done clears its halt alert and no other', async () => {
+    const store = new Store(':memory:');
+    store.alert('error', 'deal-other', 'another alert', t);
+    const job = haltedLoopJob(2, { text: null });
+    Object.assign(job, { status: 'running', haltReason: null });
+    mockGatePost('/transfers', { body: { tx_id: 'x2', text: 't' } });
+    mockGateGet('/transfers', { body: [transferRow('x2', 'SUCCESS', { actual_receive: '299.92' })] });
+    const h = boot({ job, store });
+    expect(await h.alerts()).toEqual([
+      expect.objectContaining({ pair_id: 'deal-other', ack: 0 }),
+      expect.objectContaining({ pair_id: `rebalance:${job.id}`, ack: 0 }),
+    ]);
+
+    const res = await h.post(`/api/rebalance/${job.id}/resume`);
+
+    expect(res.statusCode).toBe(200);
+    await waitFor(() => h.file().status === 'done', 'done');
+    await waitFor(() => store.listAlerts({ unackedOnly: true }).length === 1, 'the ack');
+    expect(store.listAlerts({ unackedOnly: true })).toEqual([expect.objectContaining({ pair_id: 'deal-other' })]);
+  });
+});
+
+describe('POST /api/rebalance refusals kept from 1.6.0', () => {
+  it('answers 400 for a route that is not mix, loop or convert', async () => {
+    const h = boot();
+
+    const res = await h.post('/api/rebalance', { route: 'fastest' });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error.message).toBe('unknown route fastest');
+    expect(() => h.file()).toThrow();
+  });
+
+  it('answers 409 for a halted job and a working deal, and 403 before the disclaimer', async () => {
+    const stored = haltedLoopJob(1, { venueId: 'x1' });
     let h = boot({ job: stored });
-    let res = await h.post();
+    let res = await h.post('/api/rebalance', { route: 'loop' });
     expect(res.statusCode).toBe(409);
     expect(res.json().error.message).toBe(`rebalance ${stored.id} is halted`);
 
     await reset();
     h = boot({ store: busyDeal() });
-    res = await h.post();
+    res = await h.post('/api/rebalance', { route: 'loop' });
     expect(res.statusCode).toBe(409);
     expect(res.json()).toEqual({
       ok: false,
@@ -306,63 +437,24 @@ describe('POST /api/rebalance', () => {
     await reset();
     const envPath = path.join(mkdtempSync(path.join(tmpdir(), 'disc-')), '.env');
     h = boot({ credentials: { envPath, setClients: () => {} } });
-    res = await h.post();
+    res = await h.post('/api/rebalance', { route: 'loop' });
     expect(res.statusCode).toBe(403);
     expect(res.json().error.label).toBe('DISCLAIMER_NOT_ACCEPTED');
-
-    await reset();
-    mockView({ disabled: 1, account: account({ equity: '0', liability: '0' }) });
-    h = boot();
-    res = await h.post();
-    expect(res.statusCode).toBe(409);
-    expect(res.json().error.message).toBe('no route');
-
-    await reset();
-    mockView();
-    h = boot();
-    res = await h.post('/api/rebalance', { route: 'convert' });
-    expect(res.statusCode).toBe(409);
-    expect(res.json().error.message).toBe('plan changed: now loop');
-    expect(() => h.file()).toThrow();
-
-    await reset();
-    const release = holdRunner();
-    mockView();
-    const orders = mockGatePost('/orders', { body: orderBody('OPEN', '0') });
-    mockGateGet('/orders/o1', { body: orderBody('OPEN', '0') });
-    mockGateGet('/orders/o1', { body: orderBody('REJECT', '0') });
-    h = boot();
-    const [first, second] = await Promise.all([h.post(), h.post()]);
-    expect([first.statusCode, second.statusCode].sort()).toEqual([202, 409]);
-    const { id } = h.file();
-    const refused = first.statusCode === 409 ? first : second;
-    expect(refused.json().error.message).toBe(`rebalance ${id} is running`);
-    res = await h.post();
-    expect(res.statusCode).toBe(409);
-    expect(res.json().error.message).toBe(`rebalance ${id} is running`);
-    await waitFor(() => orders.isDone(), 'the order POST', 2000);
-    expect(orders.isDone()).toBe(true);
-
-    release();
-    await waitFor(() => h.file().status === 'halted', 'the halt');
-    res = await h.post();
-    expect(res.statusCode).toBe(409);
-    expect(res.json().error.message).toBe(`rebalance ${id} is halted`);
   });
 
-  it('refuses: 409 when the fresh account read is rate-limited and Gate would have served the cached one', async () => {
+  it('answers 409 when the fresh account read is rate-limited and Gate would have served the cached one', async () => {
     mockView({ accountThen429: true });
     const h = boot();
     expect((await h.view()).ok).toBe(true);
 
-    const res = await h.post();
+    const res = await h.post('/api/rebalance', { route: 'loop' });
 
     expect(res.statusCode).toBe(409);
     expect(res.json().error.message).toBe('Gate is rate-limiting the account read. Try again in a few seconds.');
     expect(() => h.file()).toThrow();
   });
 
-  it('refuses: 409 when a deal starts while the plan is being read', async () => {
+  it('answers 409 when a deal starts while the plan is being read', async () => {
     const store = new Store(':memory:');
     mockView({
       onAccountRead: () => {
@@ -371,395 +463,16 @@ describe('POST /api/rebalance', () => {
     });
     const h = boot({ store });
 
-    const res = await h.post();
+    const res = await h.post('/api/rebalance', { route: 'loop' });
 
     expect(res.statusCode).toBe(409);
     expect(res.json().error.message).toBe('deal deal-409 is still working');
     expect(() => h.file()).toThrow();
   });
-
-  it('completes loop: three steps done with venue ids within 5 s of the last SUCCESS', async () => {
-    mockView();
-    const orders = mockGatePost('/orders', { body: orderBody('OPEN', '0') });
-    mockLoopAfterBuy();
-    const h = boot();
-
-    const res = await h.post();
-    expect(res.statusCode).toBe(202);
-    await waitFor(() => h.file().status === 'done', 'done');
-
-    const { job } = (await h.view()).data;
-    expect(job).toMatchObject({
-      direction: 'toUsdc',
-      status: 'done',
-      route: 'loop',
-      amount: AMOUNT,
-      stepIndex: 2,
-      fundsAt: 'HYPERLIQUID',
-      haltReason: null,
-    });
-    expect(job.steps.map((s: Step) => s.name)).toEqual(['Buy USDC', 'To spot', 'To Hyperliquid']);
-    expect(job.steps.map((s: Step) => s.status)).toEqual(['done', 'done', 'done']);
-    expect(job.steps.map((s: Step) => s.venueId)).toEqual(['o1', 'x1', 'x2']);
-    expect(job.steps.map((s: Step) => s.qty)).toEqual([299.97, 299.97, 299.92]);
-    for (const step of job.steps as Step[]) {
-      expect(step.startedAt).toBeTypeOf('number');
-      expect(step.doneAt).toBeTypeOf('number');
-      expect(step.text).toBe(tagFor(job.id, job.steps.indexOf(step)));
-    }
-    expect(orders.isDone()).toBe(true);
-    expect(nock.pendingMocks()).toEqual([]);
-  });
-
-  it('convert: quotes and sends when convert is cheaper; halted below the floor with no order sent', async () => {
-    mockView({ ask: '1.003' });
-    const quotes = mockGatePost('/convert/quote', { body: quoteBody('q1', '299.4') });
-    const orders = mockGatePost('/convert/orders', { body: { order_id: 'c1', text: 'q1' } });
-    let h = boot();
-
-    let res = await h.post();
-    expect(res.statusCode).toBe(202);
-    await waitFor(() => h.file().status === 'done', 'done');
-
-    let { job } = (await h.view()).data;
-    expect(job).toMatchObject({ status: 'done', route: 'convert', amount: AMOUNT, fundsAt: 'HYPERLIQUID' });
-    expect(job.steps).toHaveLength(1);
-    expect(job.steps[0]).toMatchObject({
-      name: 'Convert',
-      text: tagFor(job.id, 0),
-      quoteId: 'q1',
-      venueId: 'c1',
-      qty: 299.4,
-      status: 'done',
-    });
-    expect(quotes.isDone()).toBe(true);
-    expect(orders.isDone()).toBe(true);
-
-    await reset();
-    mockView({ ask: '1.003' });
-    mockGatePost('/convert/quote', { body: quoteBody('q2', '299.0') });
-    const unsent = mockGatePost('/convert/orders', { body: { order_id: 'c2', text: 'q2' } });
-    h = boot();
-
-    res = await h.post();
-    expect(res.statusCode).toBe(202);
-    await waitFor(() => h.file().status === 'halted', 'the halt');
-
-    job = (await h.view()).data.job;
-    expect(job).toMatchObject({ status: 'halted', haltReason: 'quote worse than 30 bps', fundsAt: 'CROSSEX' });
-    expect(job.steps[0]).toMatchObject({ quoteId: null, venueId: null, status: 'running' });
-    expect(unsent.isDone()).toBe(false);
-  });
-
-  it('halts: on a rejected order, a failed transfer, a labelled 400 at send, and a 600 s timeout', async () => {
-    mockView();
-    mockGatePost('/orders', { body: orderBody('OPEN', '0') });
-    mockGateGet('/orders/o1', { body: orderBody('REJECT', '0') });
-    let h = boot();
-    await h.post();
-    await waitFor(() => h.file().status === 'halted', 'the halt');
-    expect(h.file()).toMatchObject({ haltReason: 'order REJECT with nothing filled', fundsAt: 'CROSSEX', stepIndex: 0 });
-    expect(h.file().steps[0]).toMatchObject({ venueId: null, text: null });
-
-    await reset();
-    mockView();
-    mockGatePost('/orders', { body: orderBody('OPEN', '0') });
-    mockGateGet('/orders/o1', { body: orderBody('FILLED', BOUGHT) });
-    mockGatePost('/transfers', { body: { tx_id: 'x1', text: 't' } });
-    mockGateGet('/transfers', { body: [transferRow('x1', 'FAILED', { fail_reason: 'insufficient balance' })] });
-    h = boot();
-    await h.post();
-    await waitFor(() => h.file().status === 'halted', 'the halt');
-    expect(h.file()).toMatchObject({ haltReason: 'insufficient balance', fundsAt: 'GATE', stepIndex: 1 });
-    expect(h.file().steps[0].status).toBe('done');
-
-    await reset();
-    mockView();
-    mockGatePost('/orders', {
-      status: 400,
-      body: { label: 'TRADE_INVALID_QUOTE_ORDER_QTY', message: 'quote qty is required' },
-    });
-    h = boot();
-    await h.post();
-    await waitFor(() => h.file().status === 'halted', 'the halt');
-    expect(h.file().haltReason).toContain('TRADE_INVALID_QUOTE_ORDER_QTY');
-    expect(h.file()).toMatchObject({ fundsAt: 'CROSSEX', stepIndex: 0 });
-    expect(h.file().steps[0].venueId).toBeNull();
-
-    await reset();
-    mockView();
-    mockGatePost('/orders', { body: orderBody('OPEN', '0') });
-    gate().persist().get(`${API}/crossex/orders/o1`).query(true).reply(200, orderBody('OPEN', '0'));
-    h = boot({
-      sleep: async (ms) => {
-        t += ms * 100;
-      },
-    });
-    const startedAt = t;
-    await h.post();
-    await waitFor(() => h.file().status === 'halted', 'the halt');
-    expect(h.file()).toMatchObject({ haltReason: 'timeout', fundsAt: 'CROSSEX' });
-    expect(t - startedAt).toBeGreaterThan(STEP_TIMEOUT_MS);
-  });
-
-  it('halts on boot: a running job in rebalance.json is halted with server restarted before the first GET', async () => {
-    mockView();
-    const job = newJob('toUsdc', 'loop', AMOUNT, t);
-    Object.assign(job.steps[0], { text: tagFor(job.id, 0), venueId: 'o1', status: 'running', startedAt: t });
-    const h = boot({ job });
-
-    const { data } = await h.view();
-
-    expect(data.job).toMatchObject({ id: job.id, status: 'halted', haltReason: 'server restarted', stepIndex: 0 });
-    expect(data.job.steps[0]).toMatchObject({ venueId: 'o1', status: 'running' });
-    expect(h.file()).toMatchObject({ status: 'halted', haltReason: 'server restarted' });
-  });
-
-  it('toUsdt: 202 with direction toUsdt, two transfers then a market sell sized by what landed, qty from executedAmount, funds at CROSSEX', async () => {
-    const cache = new TtlCache();
-    mockView({ account: toUsdtAccount() });
-    const transfers = gate()
-      .post(`${API}/crossex/transfers`, (b) => isTransfer(b, 'CROSSEX_HYPERLIQUID', 'SPOT', '1200.00000'))
-      .query(true)
-      .reply(200, { tx_id: 'p1', text: 't' });
-    mockGateGet('/transfers', { body: [transferRow('p1', 'PENDING', { amount: '1200.00000' })] });
-    mockGateGet('/transfers', { body: [transferRow('p1', 'SUCCESS', { amount: '1200.00000', actual_receive: '1199' })] });
-    const toGate = gate()
-      .post(`${API}/crossex/transfers`, (b) => isTransfer(b, 'SPOT', 'CROSSEX_GATE', '1199.00000'))
-      .query(true)
-      .reply(200, { tx_id: 'p2', text: 't' });
-    mockGateGet('/transfers', {
-      body: [
-        transferRow('p1', 'SUCCESS', { amount: '1200.00000', actual_receive: '1199' }),
-        transferRow('p2', 'SUCCESS', { amount: '1199.00000', actual_receive: '1199' }),
-      ],
-    });
-    const sells = gate()
-      .post(`${API}/crossex/orders`, isSell)
-      .query(true)
-      .reply(200, orderBody('OPEN', '0', 's1'));
-    mockGateGet('/orders/s1', { body: orderBody('OPEN', '0', 's1') });
-    mockGateGet('/orders/s1', { body: { ...orderBody('FILLED', '1199', 's1'), executed_amount: '1197.8011' } });
-    let h = boot({ cache });
-
-    const before = (await h.view(`?direction=toUsdt&amount=${TO_USDT_AMOUNT}`)).data;
-    expect(before.plan).toMatchObject({
-      direction: 'toUsdt',
-      amount: TO_USDT_AMOUNT,
-      route: 'loop',
-      price: 1,
-      receives: 1197.8,
-      borrowAfterUsd: 0,
-      shortfall: null,
-      savesPerDayUsd: 0,
-      marginFreedUsd: 0,
-    });
-    expect(before.plan.routes.loop).toMatchObject({ waitSeconds: TO_USDT_WAIT_SECONDS, available: true, reason: null });
-    expect(before.plan.routes.loop.costUsd).toBeCloseTo(TO_USDT_AMOUNT * 0.001 + HYPERLIQUID_WITHDRAW_FEE_USD, 9);
-    expect(before.plan.routes.convert).toMatchObject({ available: true, reason: null, waitSeconds: 0 });
-    expect(before.plan.routes.convert.costUsd).toBeCloseTo(TO_USDT_AMOUNT * 0.002, 9);
-    expect(before.job).toBeNull();
-
-    const res = await h.post('/api/rebalance', { direction: 'toUsdt', amount: TO_USDT_AMOUNT, route: 'loop' });
-    expect(res.statusCode).toBe(202);
-    expect(h.file()).toMatchObject({
-      id: res.json().data.id,
-      direction: 'toUsdt',
-      route: 'loop',
-      amount: TO_USDT_AMOUNT,
-      status: 'running',
-      fundsAt: 'HYPERLIQUID',
-    });
-    expect(h.file().steps.map((s) => s.name)).toEqual(['From Hyperliquid', 'To Gate', 'Sell USDC']);
-    await waitFor(() => h.file().status === 'done', 'done');
-
-    expect(transfers.isDone()).toBe(true);
-    expect(toGate.isDone()).toBe(true);
-    expect(sells.isDone()).toBe(true);
-    const { value } = await cache.get('account', 60_000, async () => 'fresh');
-    expect(value).toBe('fresh');
-
-    const { job } = (await h.view()).data;
-    expect(job).toMatchObject({ direction: 'toUsdt', status: 'done', stepIndex: 2, fundsAt: 'CROSSEX', haltReason: null });
-    expect(job.steps.map((s: Step) => s.status)).toEqual(['done', 'done', 'done']);
-    expect(job.steps.map((s: Step) => s.venueId)).toEqual(['p1', 'p2', 's1']);
-    expect(job.steps.map((s: Step) => s.qty)).toEqual([1199, 1199, 1197.8011]);
-    for (const step of job.steps as Step[]) {
-      expect(step.text).toBe(tagFor(job.id, job.steps.indexOf(step)));
-      expect(step.doneAt).toBeTypeOf('number');
-    }
-    expect(nock.pendingMocks()).toEqual([]);
-
-    await reset();
-    mockView();
-    h = boot();
-    const empty = (await h.view('?direction=toUsdt')).data.plan;
-    expect(empty).toMatchObject({ direction: 'toUsdt', amount: 0, route: null, receives: 0, price: null });
-    expect(empty.routes.loop).toMatchObject({ available: false, reason: 'nothing to move' });
-    expect(empty.routes.convert).toMatchObject({ available: false, reason: 'nothing to move' });
-    const refused = await h.post('/api/rebalance', { direction: 'toUsdt' });
-    expect(refused.statusCode).toBe(409);
-    expect(refused.json().error.message).toBe('no route');
-  });
-
-  it('toUsdt convert: a small move picks convert, quotes USDC to USDT, sends, funds at CROSSEX; a resumed quote is found on Gate by its id', async () => {
-    mockView({ account: toUsdtAccount() });
-    const isToUsdtQuote = (b: Record<string, unknown>): boolean =>
-      b.exchange_type === 'HYPERLIQUID' && b.from_coin === 'USDC' && b.to_coin === 'USDT' && b.from_amount === '12';
-    const quotes = gate()
-      .post(`${API}/crossex/convert/quote`, isToUsdtQuote)
-      .query(true)
-      .reply(200, { ...quoteBody('q3', '11.98'), from_coin: 'USDC', to_coin: 'USDT', from_amount: '12', price: '0.9981' });
-    const orders = mockGatePost('/convert/orders', { body: { order_id: 'c3', text: 'q3' } });
-    let h = boot();
-
-    const before = (await h.view('?direction=toUsdt&amount=12')).data;
-    expect(before.plan).toMatchObject({ direction: 'toUsdt', amount: 12, route: 'convert', price: 0.998, receives: 11.97 });
-    expect(before.plan.routes.loop).toMatchObject({ available: true, reason: null });
-    expect(before.plan.routes.loop.costUsd).toBeCloseTo(12 * 0.001 + HYPERLIQUID_WITHDRAW_FEE_USD, 9);
-    expect(before.plan.routes.convert.costUsd).toBeCloseTo(0.024, 9);
-    // Gate sends min_trans_amount as the string "11"; the reason must add, not concatenate.
-    const small = (await h.view('?direction=toUsdt&amount=11.5')).data.plan;
-    expect(small.routes.loop.reason).toBe(
-      'Too small to move. Gate takes a flat $1 fee on the way out and needs at least 11 USDC to arrive. Move at least 12 USDC.',
-    );
-    expect(small.route).toBe('convert');
-
-    const res = await h.post('/api/rebalance', { direction: 'toUsdt', amount: 12, route: 'convert' });
-    expect(res.statusCode).toBe(202);
-    expect(h.file()).toMatchObject({ direction: 'toUsdt', route: 'convert', amount: 12, fundsAt: 'HYPERLIQUID' });
-    expect(h.file().steps.map((s) => s.name)).toEqual(['Convert']);
-    await waitFor(() => h.file().status === 'done', 'done');
-
-    expect(quotes.isDone()).toBe(true);
-    expect(orders.isDone()).toBe(true);
-    const { job } = (await h.view()).data;
-    expect(job).toMatchObject({ direction: 'toUsdt', route: 'convert', status: 'done', fundsAt: 'CROSSEX', haltReason: null });
-    expect(job.steps[0]).toMatchObject({
-      name: 'Convert',
-      text: tagFor(job.id, 0),
-      quoteId: 'q3',
-      venueId: 'c3',
-      qty: 11.98,
-      status: 'done',
-    });
-
-    await reset();
-    mockView({ account: toUsdtAccount() });
-    const byQuote = mockGateGet('/orders/q4', { body: convertOrderBody('c4', 'q4', '11.98') });
-    mockGateGet('/orders/c4', { body: convertOrderBody('c4', 'q4', '11.98') });
-    const unsent = mockGatePost('/convert/orders', { body: { order_id: 'c5', text: 'q5' } });
-    const resumed = newJob('toUsdt', 'convert', 12, t);
-    resumed.status = 'halted';
-    resumed.haltReason = 'server restarted';
-    Object.assign(resumed.steps[0], { text: tagFor(resumed.id, 0), quoteId: 'q4', qty: 11.98, status: 'running', startedAt: t });
-    h = boot({ job: resumed });
-
-    const again = await h.post(`/api/rebalance/${resumed.id}/resume`);
-    expect(again.statusCode).toBe(200);
-    await waitFor(() => h.file().status === 'done', 'done');
-    expect(byQuote.isDone()).toBe(true);
-    expect(unsent.isDone()).toBe(false);
-    expect(h.file()).toMatchObject({ status: 'done', fundsAt: 'CROSSEX' });
-    expect(h.file().steps[0]).toMatchObject({ quoteId: 'q4', venueId: 'c4', qty: 11.98, status: 'done' });
-  });
-
-  it('toUsdt halts and resumes like toUsdc: a FAILED transfer halts with funds at HYPERLIQUID, abandon ends it, and a resumed Sell USDC with a tag only adopts the order and sends nothing', async () => {
-    mockView({ account: toUsdtAccount() });
-    mockGatePost('/transfers', { body: { tx_id: 'p1', text: 't' } });
-    mockGateGet('/transfers', { body: [transferRow('p1', 'FAILED', { amount: '1200.00000', fail_reason: 'withdraw paused' })] });
-    let h = boot();
-    let res = await h.post('/api/rebalance', { direction: 'toUsdt', amount: TO_USDT_AMOUNT });
-    expect(res.statusCode).toBe(202);
-    await waitFor(() => h.file().status === 'halted', 'the halt');
-    expect(h.file()).toMatchObject({ direction: 'toUsdt', haltReason: 'withdraw paused', fundsAt: 'HYPERLIQUID', stepIndex: 0 });
-    expect(h.file().steps[0]).toMatchObject({ name: 'From Hyperliquid', venueId: null, text: null, status: 'running' });
-    const { id } = h.file();
-    res = await h.post(`/api/rebalance/${id}/abandon`);
-    expect(res.statusCode).toBe(200);
-    expect(res.json().data).toMatchObject({ id, direction: 'toUsdt', status: 'abandoned' });
-
-    await reset();
-    mockView({ account: toUsdtAccount() });
-    const job = newJob('toUsdt', 'loop', TO_USDT_AMOUNT, t);
-    job.status = 'halted';
-    job.haltReason = 'server restarted';
-    job.stepIndex = 2;
-    job.fundsAt = 'GATE';
-    for (const i of [0, 1]) {
-      Object.assign(job.steps[i], {
-        text: tagFor(job.id, i),
-        venueId: `p${i + 1}`,
-        qty: 11,
-        status: 'done',
-        startedAt: t,
-        doneAt: t,
-      });
-    }
-    Object.assign(job.steps[2], { text: tagFor(job.id, 2), status: 'running', startedAt: t });
-    const lookup = mockGateGet(`/orders/${tagFor(job.id, 2)}`, {
-      body: { ...orderBody('FILLED', '11', 's1'), executed_amount: '10.9989' },
-    });
-    const poll = mockGateGet('/orders/s1', { body: { ...orderBody('FILLED', '11', 's1'), executed_amount: '10.9989' } });
-    const sells = mockGatePost('/orders', { body: orderBody('OPEN', '0', 's1') });
-    h = boot({ job });
-
-    res = await h.post(`/api/rebalance/${job.id}/resume`);
-    expect(res.statusCode).toBe(200);
-    expect(res.json().data).toMatchObject({ id: job.id, direction: 'toUsdt', status: 'running', stepIndex: 2 });
-    await waitFor(() => h.file().status === 'done', 'done');
-    expect(lookup.isDone()).toBe(true);
-    expect(poll.isDone()).toBe(true);
-    expect(sells.isDone()).toBe(false);
-    expect(h.file()).toMatchObject({ status: 'done', fundsAt: 'CROSSEX' });
-    expect(h.file().steps[2]).toMatchObject({ name: 'Sell USDC', venueId: 's1', qty: 10.9989, status: 'done' });
-  });
-});
-
-describe('GET /api/rebalance', () => {
-  it('amount param: caps plan.amount at the query amount, floors it, ignores a bad value, and carries price, receives, borrowAfterUsd', async () => {
-    mockView();
-    const h = boot();
-    const planAt = async (query: string) => (await h.view(query)).data.plan;
-
-    const full = await planAt('');
-    expect(full).toMatchObject({ direction: 'toUsdc', amount: AMOUNT, route: 'loop', price: 1.0001, receives: 299.62 });
-    expect(full.borrowAfterUsd).toBeCloseTo(0.38, 9);
-
-    const capped = await planAt('?amount=100.005');
-    expect(capped).toMatchObject({ direction: 'toUsdc', amount: 100, route: 'loop', price: 1.0001, receives: 99.84 });
-    expect(capped.borrowAfterUsd).toBeCloseTo(200.16, 9);
-
-    expect((await planAt('?amount=5000')).amount).toBe(AMOUNT);
-    expect((await planAt('?amount=abc')).amount).toBe(AMOUNT);
-    expect((await planAt('?amount=0')).amount).toBe(AMOUNT);
-    expect((await planAt('?direction=toUsdc&amount=50')).amount).toBe(50);
-  });
-
-  it('old job file: a rebalance.json without direction reads as toUsdc and is written back with it', async () => {
-    mockView();
-    const { direction: _direction, ...legacy } = newJob('toUsdc', 'loop', AMOUNT, t);
-    const h = boot({ job: legacy as Job });
-
-    const { data } = await h.view();
-
-    expect(data.job).toMatchObject({ id: legacy.id, userId: null, direction: 'toUsdc', status: 'halted', haltReason: 'server restarted' });
-    expect(data.job.steps.map((s: Step) => s.name)).toEqual(['Buy USDC', 'To spot', 'To Hyperliquid']);
-    expect(h.file().direction).toBe('toUsdc');
-  });
-
-  it('accepts the direction names from before 1.5.1 on the API: pull reads as toUsdt, payDown as toUsdc', async () => {
-    mockView();
-    const h = boot();
-
-    expect((await h.view('?direction=pull')).data.plan.direction).toBe('toUsdt');
-    expect((await h.view('?direction=payDown')).data.plan.direction).toBe('toUsdc');
-  });
 });
 
 describe('POST /api/rebalance/:id/resume and /abandon', () => {
-  it('resume and abandon: resume runs a halted job at its step, abandon ends it, both refuse a done job', async () => {
-    mockView();
+  it('resume runs a halted job at its step, abandon ends it, both refuse a done job', async () => {
     const job = haltedLoopJob(1, { venueId: 'x1' });
     mockGateGet('/transfers', { body: [transferRow('x1', 'SUCCESS', { actual_receive: BOUGHT })] });
     mockGatePost('/transfers', { body: { tx_id: 'x2', text: 't' } });
@@ -774,6 +487,7 @@ describe('POST /api/rebalance/:id/resume and /abandon', () => {
     expect(res.json().data.steps[1].startedAt).toBe(t);
     await waitFor(() => h.file().status === 'done', 'done');
     expect(h.file().steps.map((s) => s.venueId)).toEqual(['o1', 'x1', 'x2']);
+    expect(h.file().steps.map((s) => s.qty)).toEqual([299.97, 299.97, 299.92]);
 
     res = await h.post(`/api/rebalance/${job.id}/resume`);
     expect(res.statusCode).toBe(409);
@@ -801,7 +515,6 @@ describe('POST /api/rebalance/:id/resume and /abandon', () => {
   });
 
   it('resume refuses while a deal is working', async () => {
-    mockView();
     const job = haltedLoopJob(1, { venueId: 'x1' });
     const h = boot({ job, store: busyDeal() });
 
@@ -810,6 +523,42 @@ describe('POST /api/rebalance/:id/resume and /abandon', () => {
     expect(res.statusCode).toBe(409);
     expect(res.json().error.message).toBe('deal deal-409 is still working');
     expect(h.file().status).toBe('halted');
+  });
+
+  it('resume refuses a deal that starts while the account is read, and the job stays halted', async () => {
+    const store = new Store(':memory:');
+    mockView({
+      onAccountRead: () => {
+        if (store.listPairs({ activeOnly: true }).length === 0) createDeal(store);
+      },
+    });
+    const job = haltedLoopJob(1, { venueId: 'x1' });
+    job.userId = '1';
+    const h = boot({ job, store });
+
+    const res = await h.post(`/api/rebalance/${job.id}/resume`);
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error.message).toBe('deal deal-409 is still working');
+    expect(h.file()).toMatchObject({ status: 'halted', haltReason: HALT_TEXT.restart });
+  });
+
+  it('resume refuses a job abandoned while the account is read', async () => {
+    let abandon = (): void => {};
+    mockView({ onAccountRead: () => abandon() });
+    const job = haltedLoopJob(1, { venueId: 'x1' });
+    job.userId = '1';
+    const h = boot({ job });
+    abandon = () => {
+      const current = h.jobs.read();
+      if (current?.status === 'halted') h.jobs.write({ ...current, status: 'abandoned' });
+    };
+
+    const res = await h.post(`/api/rebalance/${job.id}/resume`);
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error.message).toBe(`rebalance ${job.id} is no longer halted`);
+    expect(h.file().status).toBe('abandoned');
   });
 
   it('resume refuses a job started on another Gate account and runs one started on this account', async () => {
@@ -839,77 +588,5 @@ describe('POST /api/rebalance/:id/resume and /abandon', () => {
 
     expect(res.statusCode).toBe(200);
     await waitFor(() => h.file().status === 'done', 'done');
-  });
-
-  it('no double send: a venueId is polled once, a found tag is adopted, a missing tag is sent once after 10 s, a quote Gate knows needs no order', async () => {
-    mockView();
-    let orders = mockGatePost('/orders', { body: orderBody('OPEN', '0') });
-    let poll = mockLoopAfterBuy();
-    let job = haltedLoopJob(0, { venueId: 'o1' });
-    let h = boot({ job });
-    let res = await h.post(`/api/rebalance/${job.id}/resume`);
-    expect(res.statusCode).toBe(200);
-    await waitFor(() => h.file().status === 'done', 'done');
-    expect(poll.isDone()).toBe(true);
-    expect(orders.isDone()).toBe(false);
-    expect(h.file().steps[0].venueId).toBe('o1');
-
-    await reset();
-    mockView();
-    orders = mockGatePost('/orders', { body: orderBody('OPEN', '0') });
-    job = haltedLoopJob(0);
-    const lookup = mockGateGet(`/orders/${tagFor(job.id, 0)}`, { body: orderBody('FILLED', BOUGHT, 'o1') });
-    poll = mockLoopAfterBuy();
-    h = boot({ job });
-    res = await h.post(`/api/rebalance/${job.id}/resume`);
-    expect(res.statusCode).toBe(200);
-    await waitFor(() => h.file().status === 'done', 'done');
-    expect(lookup.isDone()).toBe(true);
-    expect(poll.isDone()).toBe(true);
-    expect(orders.isDone()).toBe(false);
-    expect(h.file().steps[0].venueId).toBe('o1');
-
-    await reset();
-    mockView();
-    job = haltedLoopJob(0);
-    const seen: number[] = [];
-    gate()
-      .get(`${API}/crossex/orders/${tagFor(job.id, 0)}`)
-      .query(true)
-      .times(2)
-      .reply(() => {
-        seen.push(t);
-        return [404, { label: 'ORDER_NOT_FOUND', message: 'order not found' }];
-      });
-    orders = mockGatePost('/orders', { body: orderBody('OPEN', '0') });
-    mockLoopAfterBuy();
-    h = boot({ job });
-    res = await h.post(`/api/rebalance/${job.id}/resume`);
-    expect(res.statusCode).toBe(200);
-    await waitFor(() => h.file().status === 'done', 'done');
-    expect(seen).toHaveLength(2);
-    expect(seen[1] - seen[0]).toBe(LOOKUP_RETRY_MS);
-    expect(orders.isDone()).toBe(true);
-    expect(h.file().steps[0].venueId).toBe('o1');
-
-    await reset();
-    mockView();
-    const quotes = mockGatePost('/convert/quote', { body: quoteBody('q9', '299.4') });
-    const convertOrders = mockGatePost('/convert/orders', { body: { order_id: 'c9', text: 'q9' } });
-    const known = mockGateGet('/orders/q1', { body: convertOrderBody('c1', 'q1', '299.4') });
-    mockGateGet('/orders/c1', { body: convertOrderBody('c1', 'q1', '299.4') });
-    job = newJob('toUsdc', 'convert', AMOUNT, t);
-    job.status = 'halted';
-    job.haltReason = 'server restarted';
-    Object.assign(job.steps[0], { text: tagFor(job.id, 0), quoteId: 'q1', qty: 299.4, status: 'running', startedAt: t });
-    h = boot({ job });
-    res = await h.post(`/api/rebalance/${job.id}/resume`);
-    expect(res.statusCode).toBe(200);
-    await waitFor(() => h.file().status === 'done', 'done');
-    expect(h.file()).toMatchObject({ status: 'done', fundsAt: 'HYPERLIQUID' });
-    expect(h.file().steps[0]).toMatchObject({ quoteId: 'q1', venueId: 'c1', qty: 299.4, status: 'done' });
-    expect(known.isDone()).toBe(true);
-    expect(quotes.isDone()).toBe(false);
-    expect(convertOrders.isDone()).toBe(false);
   });
 });

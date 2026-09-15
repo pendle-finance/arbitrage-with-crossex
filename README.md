@@ -104,9 +104,11 @@ for a Gate.io API key:
 2. Log in at [gate.io](https://www.gate.com) → profile icon → **API Management** →
    **Create API Key** (APIv4). When asked which account the key is for, choose
    **Trading account**.
-3. Under **Permissions**, tick only **Cross-Exchange** with **Read and Write** — that's
-   all it needs. **Leave Withdrawal OFF** (a trading bot never needs to withdraw your
-   funds; the app cannot move money off your account without it).
+3. Under **Permissions**, tick **Cross-Exchange** with **Read and Write** to trade and
+   move money, and **Spot Trading** with **Read Only** to see your spot balances. Leave
+   all other permissions off, including Withdrawal. A trading bot never needs to
+   withdraw your funds, and the app cannot move money off your account without the
+   Withdrawal permission.
 4. Under **IP Permissions**, choose **"Later"** — unless your machine has a consistent
    IP, in which case binding the key to it adds extra protection. Caveat — home IPs
    change from time to time (e.g. after a router restart), and the key stops working

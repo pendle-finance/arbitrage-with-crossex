@@ -30,6 +30,16 @@ export function isDisclaimerAccepted(envPath: string): boolean {
   return acceptedVersion(envPath) === DISCLAIMER_VERSION;
 }
 
+export const DISCLAIMER_NOT_ACCEPTED = {
+  ok: false,
+  error: {
+    category: 'validation',
+    label: 'DISCLAIMER_NOT_ACCEPTED',
+    message: 'You must accept the disclaimer before placing any order.',
+    retryable: false,
+  },
+} as const;
+
 /** Record acceptance of the current version (atomic write, owner-only). */
 export function recordAcceptance(envPath: string): void {
   const dir = path.dirname(envPath);

@@ -32,6 +32,22 @@ describe('OnboardingGuide', () => {
     expect(screen.getByLabelText('API secret')).toBeInTheDocument();
   });
 
+  it('permission checklist', () => {
+    renderWithClient(<OnboardingGuide />);
+
+    for (const [name, setting, use] of [
+      ['Cross-Exchange', 'Read and Write', 'trade and move money'],
+      ['Spot Trading', 'Read Only', 'see spot balances'],
+      ['All others', 'Off', 'including Withdrawal'],
+    ]) {
+      expect(screen.getByText(name)).toBeInTheDocument();
+      expect(screen.getByText(setting)).toBeInTheDocument();
+      expect(screen.getByText(use)).toBeInTheDocument();
+    }
+
+    expect(screen.queryByText(/leave Withdrawal off/i)).not.toBeInTheDocument();
+  });
+
   it('PUTs key+secret from step 3 and shows success on ok:true', async () => {
     let received: CredentialsInput | null = null;
     server.use(

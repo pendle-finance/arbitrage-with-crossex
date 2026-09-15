@@ -33,12 +33,14 @@ import type {
   OpenOrder,
   OpportunitiesResult,
   PositionsResponse,
-  RebalanceDirection,
   RebalanceJob,
   RebalanceView,
+  RouteName,
+  StartTransferBody,
   SymbolDetail,
   SymbolRule,
   TradesResponse,
+  TransferView,
   VenueFees,
   UpdateStatus,
   TopUpGasResponse,
@@ -73,6 +75,7 @@ export const qk = {
   activeDeals: ['deals', 'active'] as const,
   alerts: ['alerts'] as const,
   rebalance: ['rebalance'] as const,
+  transfer: ['transfer'] as const,
 };
 
 export function useCredentials() {
@@ -411,32 +414,32 @@ export function useActiveDeals() {
 export function useAlerts() {
   return useQuery({
     queryKey: qk.alerts,
-    queryFn: () => fetchJson<DealAlert[]>('/alerts?unacked=1'),
+    queryFn: async () => {
+      const rows = await fetchJson<(DealAlert & { pair_id?: string | null })[]>('/alerts?unacked=1');
+      return rows.map((row) => ({ ...row, pairId: row.pairId ?? row.pair_id ?? null }));
+    },
     refetchInterval: 10_000,
     refetchIntervalInBackground: true,
   });
 }
 
-export function useRebalance({ direction, amount }: { direction: RebalanceDirection; amount: number | null }) {
-  const params = new URLSearchParams();
-  if (direction !== 'toUsdc') params.set('direction', direction);
-  if (amount !== null) params.set('amount', String(amount));
-  const query = params.toString();
+export function useRebalance() {
   return useQuery({
-    queryKey: [...qk.rebalance, direction, amount ?? ''] as const,
-    queryFn: () => fetchJson<RebalanceView>(`/rebalance${query ? `?${query}` : ''}`),
+    queryKey: qk.rebalance,
+    queryFn: () => fetchJson<RebalanceView>('/rebalance'),
     refetchInterval: (q) => (q.state.data?.job?.status === 'running' ? 1_000 : 4_000),
     refetchIntervalInBackground: true,
-    placeholderData: keepPreviousData,
   });
 }
 
 export function useStartRebalance() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (body: { direction: RebalanceDirection; amount: number; route: 'loop' | 'convert' }) =>
-      postJson<{ id: string }>('/rebalance', body),
-    onSuccess: () => void qc.invalidateQueries({ queryKey: qk.rebalance }),
+    mutationFn: (body: { route: RouteName }) => postJson<{ id: string }>('/rebalance', body),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: qk.rebalance });
+      void qc.invalidateQueries({ queryKey: qk.transfer });
+    },
   });
 }
 
@@ -444,7 +447,44 @@ export function useRebalanceCommand(cmd: 'resume' | 'abandon') {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (id: string) => postJson<RebalanceJob>(`/rebalance/${encodeURIComponent(id)}/${cmd}`, {}),
-    onSuccess: () => void qc.invalidateQueries({ queryKey: qk.rebalance }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: qk.rebalance });
+      void qc.invalidateQueries({ queryKey: qk.transfer });
+    },
+  });
+}
+
+export function useTransfer() {
+  return useQuery({
+    queryKey: qk.transfer,
+    queryFn: () => fetchJson<TransferView>('/transfer'),
+    refetchInterval: (q) => (q.state.data?.transfer?.status === 'moving' ? 1_000 : 4_000),
+    refetchIntervalInBackground: true,
+  });
+}
+
+export function useStartTransfer() {
+  const qc = useQueryClient();
+  const heldRef = useRef<{ id: string; body: Omit<StartTransferBody, 'id'> } | null>(null);
+  return useMutation({
+    mutationFn: (body: Omit<StartTransferBody, 'id'>) => {
+      const held = heldRef.current;
+      const sameHold =
+        held !== null &&
+        held.body.coin === body.coin &&
+        held.body.from === body.from &&
+        held.body.to === body.to &&
+        held.body.amount === body.amount;
+      const id = sameHold ? held.id : uuid().replace(/-/g, '').slice(0, 16);
+      heldRef.current = { id, body };
+      return postJson<{ id: string }>('/transfer', { ...body, id });
+    },
+    onSuccess: () => {
+      heldRef.current = null;
+      void qc.invalidateQueries({ queryKey: qk.transfer });
+      void qc.invalidateQueries({ queryKey: qk.account });
+      void qc.invalidateQueries({ queryKey: qk.rebalance });
+    },
   });
 }
 

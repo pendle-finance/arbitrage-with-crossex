@@ -1,501 +1,286 @@
-import { useEffect, useRef, useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { ApiError } from '../api/client';
-import { useAccount, usePositions, useRebalance, useRebalanceCommand, useStartRebalance } from '../api/queries';
-import type { RebalanceBucket, RebalanceDirection, RebalanceJob, RebalancePlan, RebalanceStep } from '../api/types';
+import { useAccount, usePositions, useRebalance, useRebalanceCommand, useStartRebalance, useTransfer } from '../api/queries';
+import type { GateAccount, RouteName, TransferCoin, WalletAfter } from '../api/types';
+import { Chip } from '../components/Chip';
 import { HoldToConfirmButton } from '../components/HoldToConfirmButton';
-import { HoverCard } from '../components/HoverCard';
-import { SegmentedToggle } from '../components/SegmentedToggle';
 import { microLabelClass } from '../components/Th';
-import { borrowedBucket } from '../lib/borrow';
-import { fmtAge, fmtUsd, num } from '../lib/fmt';
-import { fmtLinePrice, fmtMove, lineFor, liquidationLines, nearestLiquidation, type LiquidationLine } from '../lib/liquidation';
-import { floorCents, roundToStep } from '../lib/ticks';
+import { useToast } from '../components/Toast';
+import { borrowedBucket, MIN_BORROW } from '../lib/borrow';
+import { fmtAbout, fmtAge, num } from '../lib/fmt';
+import { floorCents } from '../lib/ticks';
 import { useNow } from '../lib/useNow';
+import { useSettledError } from '../lib/useSettledError';
+import { BalanceBars, BarLegend, jobRows, planRows, ROUND_SECONDS, StepList, type BarRow } from './RebalanceBits';
+import { HOVER } from './rebalanceCopy';
+import { balancedFacts, borrowFacts, cashFacts, DUST, Facts, isCashLimitedEven, quoteFacts } from './RebalanceHovers';
+import { keyOf, RebalanceInfo, ROUTE_LABEL, roundCountOf, RouteRow, SpotLines, stepsNoun, Term, WalletTerm } from './RebalanceHovers';
 
-const FROM_HYPERLIQUID_SECONDS = 390;
-/** Under this the hold is hidden: a few-cent convert or a move to USDT that the $1 fee eats is never worth a hold. */
-const MIN_AMOUNT = 1;
-/** Gate charges interest on the borrow only past this. Server: INTEREST_THRESHOLD in core/rebalance/plan.ts. */
-const INTEREST_FREE_UNTIL = 10_000;
+const ROUTE_ORDER: RouteName[] = ['mix', 'loop', 'convert'];
+const WALLET_TONE: Record<string, BarRow['tone']> = { 'USDT/CROSSEX': 'usdt', 'USDC/HYPERLIQUID': 'usdc', 'USDC/GATE': 'gate' };
 
-const EXPECTED_SECONDS: Record<string, number> = {
-  'Buy USDC': 2,
-  'To spot': 5,
-  'To Hyperliquid': 127,
-  Convert: 2,
-  'From Hyperliquid': FROM_HYPERLIQUID_SECONDS,
-  'To Gate': 6,
-  'Sell USDC': 2,
-};
+const scaleOf = (...sets: BarRow[][]) => Math.max(0, ...sets.flat().map((row) => Math.abs(row.cash + row.gain)));
 
-/** One line under the direction toggle. The long form is in the info card.
- * The move to USDT reads as a repayment when the USDT wallet is the borrowed one. */
-function explanation(direction: RebalanceDirection, usdtBorrowed: boolean): string {
-  if (direction === 'toUsdc') return 'Pays the USDC borrow back. Each USDC frees 0.20 initial and 0.10 maintenance margin.';
-  if (usdtBorrowed) return 'Pays the USDT borrow back. Each USDT frees 0.20 initial and 0.10 maintenance margin.';
-  return 'Brings spare USDC home. Capped at what you own there, so it never borrows.';
+function barRows(wallets: WalletAfter[], showGate: boolean): BarRow[] {
+  return Object.keys(WALLET_TONE)
+    .filter((key) => showGate || key !== 'USDC/GATE')
+    .flatMap((key): BarRow[] => {
+      const w = wallets.find((wallet) => keyOf(wallet) === key);
+      if (!w) return [];
+      return [{ key, label: <WalletTerm wallet={key} />, cash: w.cash, gain: w.equity - w.cash, tone: WALLET_TONE[key] }];
+    });
 }
 
-interface Fact {
-  label: string;
-  value: string;
-}
-
-/** Labelled facts in a row, so a reader scans a label and one number
- * instead of a sentence. */
-function Facts({ items }: { items: Fact[] }) {
-  return (
-    <dl className="flex flex-wrap gap-x-7 gap-y-2">
-      {items.map((f) => (
-        <div key={f.label} className="flex flex-col gap-0.5">
-          <dt className={microLabelClass}>{f.label}</dt>
-          <dd className="num text-[12px] text-ink-200">{f.value}</dd>
-        </div>
-      ))}
-    </dl>
+function CommandButton({
+  shown,
+  text,
+  disabled,
+  onPress,
+}: {
+  shown: string;
+  text: string;
+  disabled: boolean;
+  onPress: () => void;
+}) {
+  const button = (
+    <button type="button" className="btn-ghost-xs leading-4" disabled={disabled} onClick={onPress}>
+      <span className="underline decoration-ink-600 decoration-dotted underline-offset-4">{shown}</span>
+    </button>
   );
+  return <Term wrapsControl label={button} text={text} />;
 }
 
-const ABOUT = (
-  <div className="flex flex-col gap-2 text-[12px] leading-snug">
-    <p>
-      <span className="font-semibold text-ink-100">What this is. </span>
-      Your CrossEx account has two wallets. USDT margins every venue but Hyperliquid. The Hyperliquid legs of your
-      pairs settle in their own USDC wallet. When a wallet's legs lose money or pay funding past what it holds, Gate
-      lends the coin: USDC for the Hyperliquid legs, USDT for the rest. The amber pill shows that borrow.
-    </p>
-    <p>
-      <span className="font-semibold text-ink-100">Why it matters. </span>
-      Gate holds extra margin against a borrow: 20% as initial margin and 10% as maintenance margin. Once a wallet is
-      more than {num(INTEREST_FREE_UNTIL, 0)} short, Gate also charges interest on it every hour.
-    </p>
-    <p>
-      <span className="font-semibold text-ink-100">The two moves. </span>
-      Each direction moves cash into the other wallet. USDT → Hyperliquid USDC pays a USDC borrow back. Hyperliquid
-      USDC → USDT pays a USDT borrow back, or brings spare USDC home when the Hyperliquid legs made money. Paying a
-      borrow back frees the margin and stops the interest.
-    </p>
-  </div>
-);
-
-const DIRECTION_OPTIONS: { value: RebalanceDirection; label: string }[] = [
-  { value: 'toUsdc', label: 'USDT → Hyperliquid USDC' },
-  { value: 'toUsdt', label: 'Hyperliquid USDC → USDT' },
-];
-
-const SHORTFALL_TEXT = {
-  cash: 'unrealised profit cannot move until the position closes',
-  margin: 'available margin is too low',
-  spare: 'there is no more spare USDC on Hyperliquid',
-} as const;
-
-type SegmentKind = 'done' | 'running' | 'pending' | 'halted';
-
-const SEGMENT_FILL: Record<SegmentKind, string> = {
-  done: 'bg-emerald-500',
-  running: 'bg-cyan-500',
-  pending: 'bg-transparent',
-  halted: 'bg-rose-500',
-};
-
-const SEGMENT_TEXT: Record<SegmentKind, string> = {
-  done: 'text-emerald-300',
-  running: 'text-cyan-300',
-  pending: 'text-ink-500',
-  halted: 'text-rose-300',
-};
-
-function parseAmount(text: string): number | null {
-  const n = Number(text);
-  return text.trim() !== '' && Number.isFinite(n) && n > 0 ? n : null;
-}
-
-/** The quote as facts: route, what moves, what it costs, what it changes.
- * `repays`: the wallet the cash lands in has a borrow, so the move has a
- * borrow after, margin it frees, and interest it saves. */
-function quoteFacts(
-  plan: RebalancePlan,
-  routeName: 'loop' | 'convert',
-  toUsdt: boolean,
-  repays: boolean,
-  liquidation: string | null,
-): Fact[] {
-  const route = plan.routes[routeName];
-  const price = plan.price === null ? '—' : num(plan.price, 4);
-  const convert = routeName === 'convert';
-  const facts: Fact[] = [
-    { label: 'Route', value: convert ? 'Convert · instant' : `Spot loop · about ${num(route.waitSeconds / 60, 1)} min` },
-    {
-      label: 'Sends',
-      value: toUsdt
-        ? `${num(plan.amount, 2)} USDC → ${num(plan.receives, 2)} USDT @ ${price}`
-        : `${num(plan.amount, 2)} USDT → ${num(plan.receives, 2)} USDC @ ${price}`,
-    },
-    { label: 'Cost', value: convert ? `${fmtUsd(route.costUsd)} spread` : fmtUsd(route.costUsd) },
-  ];
-  if (repays) {
-    facts.push(
-      { label: 'Borrow after', value: fmtUsd(plan.borrowAfterUsd) },
-      { label: 'Frees', value: `${fmtUsd(plan.marginFreedUsd)} margin` },
-      { label: 'Saves', value: `${fmtUsd(plan.savesPerDayUsd)} / day` },
-    );
-  }
-  if (liquidation) facts.push({ label: 'Liquidation', value: liquidation });
-  return facts;
-}
-
-/** `ETH ~$3,150 (+37%) → ~$3,290 (+43%)`: the nearest coin's liquidation
- * price before and after the move. A rebalance moves cash between the USDT
- * and USDC wallets; the liability, and so the maintenance margin, follows.
- * The after figure is the same coin's, not whichever coin is nearest after.
- * Null when the account has no line. */
-function liquidationShift(
-  acc: ReturnType<typeof useAccount>['data'],
-  positions: ReturnType<typeof usePositions>['data'],
-  plan: RebalancePlan,
-  toUsdt: boolean,
-): string | null {
-  const before = nearestLiquidation(acc, positions);
-  if (!before || !acc || !positions) return null;
-  const view = liquidationLines(
-    acc,
-    positions,
-    toUsdt
-      ? { 'USDC/HYPERLIQUID': -plan.amount, 'USDT/CROSSEX': plan.receives }
-      : { 'USDC/HYPERLIQUID': plan.receives, 'USDT/CROSSEX': -plan.amount },
-  );
-  const after = view ? lineFor(view, before.base) : null;
-  const at = (l: LiquidationLine) => `${fmtLinePrice(l.price)} (${fmtMove(l.move)})`;
-  return `${before.base} ${at(before)} → ${after && after !== 'far' ? at(after) : 'past 10x'}`;
-}
-
-/** The situation as facts: what Gate lent, what it charges for it, and what
- * it has charged so far. The same three with and without a borrow, zeros
- * shown: a row that changes shape reads as a bug.
- *
- * The margin Gate holds against the borrow is not here — the explanation
- * line under the controls already prices it per unit moved, and the header's
- * own margin card carries the account totals. Spare USDC is not here either:
- * the amount field states it as `free …` on the direction that can spend it,
- * which is the only place it is actionable. */
-function situationFacts(
-  usdc: RebalanceBucket | undefined,
-  usdt: RebalanceBucket | undefined,
-  borrowed: RebalanceBucket | null,
-): Fact[] {
-  const borrow = borrowed ? floorCents(borrowed.borrow) : 0;
-  const interest = !borrowed
-    ? `${fmtUsd(0)} / day`
-    : borrowed.interestPerDayUsd > 0
-      ? `${fmtUsd(borrowed.interestPerDayUsd)} / day`
-      : `none under ${num(INTEREST_FREE_UNTIL, 0)} ${borrowed.coin}`;
-  return [
-    { label: 'Lent by Gate', value: borrowed ? `${num(borrow, 2)} ${borrowed.coin}` : '0.00' },
-    { label: 'Interest', value: interest },
-    { label: 'Interest paid · all time', value: fmtUsd((usdc?.interestPaidUsd ?? 0) + (usdt?.interestPaidUsd ?? 0)) },
-  ];
-}
-
-function noRouteLine(plan: RebalancePlan, toUsdt: boolean, borrow: number, free: number): { text: string; warn: boolean } {
-  const reason = plan.routes.loop.reason;
-  if (reason && reason !== 'nothing to move') return { text: reason, warn: true };
-  if (toUsdt) {
-    return { text: free > 0 ? 'Nothing to move.' : 'Nothing to move. There is no spare USDC on Hyperliquid.', warn: false };
-  }
-  if (borrow === 0) return { text: 'Nothing to move. There is no USDC borrow on Hyperliquid.', warn: false };
-  if (free === 0) return { text: 'Nothing to move. There is no free USDT.', warn: false };
-  return { text: 'Nothing to move.', warn: false };
-}
-
-function tooSmallLine(toUsdt: boolean, borrow: number): string {
-  if (toUsdt) return `Nothing to move. Spare USDC is under ${MIN_AMOUNT} USDC.`;
-  if (borrow < MIN_AMOUNT) return `Nothing to move. The USDC borrow is under ${MIN_AMOUNT} USDC.`;
-  return `Under ${MIN_AMOUNT} USDT can move. Free USDT or margin is too low.`;
-}
-
-function segment(step: RebalanceStep, job: RebalanceJob, now: number): { kind: SegmentKind; pct: number; text: string } {
-  const expected = EXPECTED_SECONDS[step.name] ?? 0;
-  if (step.status === 'done' && step.startedAt !== null && step.doneAt !== null) {
-    return { kind: 'done', pct: 100, text: fmtAge(step.doneAt - step.startedAt) };
-  }
-  if (step.status === 'running' && step.startedAt !== null) {
-    const halted = job.status === 'halted';
-    const elapsed = Math.max(0, (halted ? job.updatedAt : now) - step.startedAt);
-    const ratio = expected > 0 ? elapsed / 1000 / expected : 1;
-    const pct = Math.min(95, ratio * 100);
-    if (halted) return { kind: 'halted', pct, text: `halted at ${fmtAge(elapsed)}` };
-    return { kind: 'running', pct, text: `${fmtAge(elapsed)} / ~${fmtAge(expected * 1000)}` };
-  }
-  return { kind: 'pending', pct: 0, text: `~${fmtAge(expected * 1000)}` };
-}
-
-function progressBar(job: RebalanceJob, now: number) {
-  return (
-    <ol className="flex gap-2">
-      {job.steps.map((s) => {
-        const seg = segment(s, job, now);
-        return (
-          <li key={s.name} className="flex flex-1 flex-col gap-1">
-            <div className="flex items-baseline justify-between gap-2 text-[11px]">
-              <span className="text-ink-100">{s.name}</span>
-              <span className={`num ${SEGMENT_TEXT[seg.kind]}`}>{seg.text}</span>
-            </div>
-            <div
-              role="progressbar"
-              aria-label={s.name}
-              aria-valuemin={0}
-              aria-valuemax={100}
-              aria-valuenow={Math.round(seg.pct)}
-              className="h-1.5 overflow-hidden rounded-full bg-ink-800"
-            >
-              <div className={`h-full ${SEGMENT_FILL[seg.kind]}`} style={{ width: `${seg.pct}%` }} />
-            </div>
-          </li>
-        );
-      })}
-    </ol>
-  );
-}
-
-function errorLine(error: Error | null) {
-  if (!error) return null;
-  const hint = error instanceof ApiError ? error.hint : undefined;
-  return (
-    <p role="alert" className="text-[12px] text-rose-300">
-      {error.message}
-      {hint ? <span className="text-ink-400"> {hint}</span> : null}
-    </p>
-  );
-}
-
-export function RebalanceSection({ holdMs }: { holdMs?: number }) {
-  const [chosen, setChosen] = useState<RebalanceDirection | null>(null);
-  const direction = chosen ?? 'toUsdc';
-  const [typed, setTyped] = useState<string | null>(null);
-  const [blurred, setBlurred] = useState(false);
-  const [amountParam, setAmountParam] = useState<number | null>(null);
-  const query = useRebalance({ direction, amount: amountParam });
+export function RebalanceSection({
+  holdMs,
+  onTransfer,
+}: {
+  holdMs?: number;
+  onTransfer?: (coin: TransferCoin, wallet: GateAccount) => void;
+}) {
+  const query = useRebalance();
+  const transfer = useTransfer().data;
+  const account = useAccount().data;
+  const positions = usePositions().data;
   const start = useStartRebalance();
   const resume = useRebalanceCommand('resume');
   const abandon = useRebalanceCommand('abandon');
-  const now = useNow(1_000);
-  const account = useAccount().data;
-  const positions = usePositions().data;
+  const toast = useToast();
+  const now = useNow();
+  const [chosen, setChosen] = useState<{ key: string; route: RouteName } | null>(null);
+  const [stepsOpen, setStepsOpen] = useState(false);
+  const loadError = useSettledError(query.status, query.error);
+  const view = query.data;
+  const title = (
+    <h2 className="text-xs font-semibold uppercase tracking-wider text-ink-400">
+      <RebalanceInfo />
+    </h2>
+  );
 
-  useEffect(() => {
-    if (typed === null) return;
-    const t = setTimeout(() => setAmountParam(parseAmount(typed)), 300);
-    return () => clearTimeout(t);
-  }, [typed]);
-
-  const data = query.data;
-  const usdc = data?.buckets.find((b) => b.coin === 'USDC' && b.venue === 'HYPERLIQUID');
-  const usdt = data?.buckets.find((b) => b.coin === 'USDT' && b.venue === 'CROSSEX');
-  /* Either wallet can be the borrowed one. The direction toward it repays. */
-  const borrowed = borrowedBucket(data?.buckets);
-  const borrow = floorCents(usdc?.borrow ?? 0);
-  const usdtBorrowed = borrowed?.venue === 'CROSSEX';
-  const spareUsdc = Math.max(0, floorCents(Math.min(usdc?.cash ?? 0, usdc?.equity ?? 0)));
-  const job = data?.job && (data.job.status === 'running' || data.job.status === 'halted') ? data.job : null;
-
-  /* Default to the direction that repays the borrow; with none, to bringing
-     spare USDC home when there is any. */
-  useEffect(() => {
-    if (chosen !== null || !data) return;
-    setChosen(borrow >= MIN_AMOUNT ? 'toUsdc' : usdtBorrowed || spareUsdc > 0 ? 'toUsdt' : 'toUsdc');
-  }, [chosen, data, borrow, usdtBorrowed, spareUsdc]);
-
-  /* A finished job leaves the bucket on the other side: a move to USDC leaves
-     spare USDC, a move to USDT leaves nothing. Go back to the default direction and
-     a fresh input, so the section reads for what is now possible. */
-  const activeJobId = job?.id ?? null;
-  const lastActive = useRef<string | null>(null);
-  useEffect(() => {
-    if (lastActive.current !== null && activeJobId === null) {
-      setChosen(null);
-      setTyped(null);
-      setAmountParam(null);
-      setBlurred(false);
-    }
-    lastActive.current = activeJobId;
-  }, [activeJobId]);
-
-  /* A first fetch that failed must not hide the section: the user would not
-     know the borrow exists. Say so and offer a retry. */
-  if (!data) {
-    if (!query.error) return null;
+  if (!view) {
+    if (!loadError) return null;
     return (
-      <section aria-label="Rebalance" className="flex flex-col gap-2">
-        <h2 className="text-xs font-semibold uppercase tracking-wider text-ink-400">Rebalance</h2>
-        <p role="alert" className="text-[12px] text-rose-300">
-          Could not load the rebalance view. {query.error.message}
+      <section aria-label="Rebalance" className="card flex flex-col gap-2 p-4">
+        {title}
+        <p role="alert" className="text-xs text-rose-300">
+          Could not load the rebalance view. {loadError.message}
         </p>
-        <button type="button" className="btn-ghost-xs self-start" onClick={() => void query.refetch()}>
+        <button type="button" className="btn-ghost-xs leading-4 self-start" onClick={() => void query.refetch()}>
           Retry
         </button>
       </section>
     );
   }
 
-  /* Presence must not depend on cents. Both directions end with the bucket's
-     equity near zero, where unrealised PnL flips the borrow and the spareUsdc
-     amount between 0.00 and a few cents on every poll. Show the section for
-     any Hyperliquid USDC activity at all; the floor lines say what is
-     possible. */
-  const active =
-    Boolean(usdc && (usdc.cash !== 0 || usdc.equity !== 0 || usdc.upnl !== 0)) || usdtBorrowed || data.job !== null;
-  if (!active) return null;
-
-  const plan = data.plan;
-  const toUsdt = direction === 'toUsdt';
-  const repays = toUsdt ? usdtBorrowed : borrow >= MIN_AMOUNT;
-  const situation = situationFacts(usdc, usdt, borrowed);
-
-  const pickDirection = (next: RebalanceDirection) => {
-    setChosen(next);
-    setTyped(null);
-    setAmountParam(null);
-    setBlurred(false);
-    start.reset();
+  const { plan, job, buckets } = view;
+  const onError = (error: Error) => {
+    const hint = error instanceof ApiError ? error.hint : undefined;
+    if (!hint) {
+      toast.push('error', error.message);
+      return;
+    }
+    const period = error.message.endsWith('.') ? '' : '.';
+    toast.push('error', `${error.message}${period} ${hint}`);
   };
+  const mode = job?.status === 'running' || job?.status === 'halted' ? job.status : plan.balanced ? 'balanced' : 'plan';
+  const runKey = [job?.id, job?.status, plan.direction, plan.recommended].join(':');
+  const isOpen = (name: RouteName | null): name is RouteName => name !== null && plan.routes[name]?.available === true;
+  const pick = [chosen?.key === runKey ? chosen.route : null, plan.recommended, ...ROUTE_ORDER].find(isOpen) ?? null;
+  const route = plan.routes[pick ?? plan.recommended ?? 'convert'] ?? plan.routes.convert;
+  const direction = job && (mode === 'running' || mode === 'halted') ? job.direction : (plan.direction ?? 'toUsdc');
+  const showGate = Math.abs(buckets.find((b) => keyOf(b) === 'USDC/GATE')?.cash ?? 0) >= DUST;
+  const borrowed = borrowedBucket(buckets);
+  const receiving = buckets.find((b) => keyOf(b) === (direction === 'toUsdt' ? 'USDT/CROSSEX' : 'USDC/HYPERLIQUID'));
+  const borrow = receiving && floorCents(receiving.borrow) >= MIN_BORROW ? receiving.borrow : null;
+  const moving = transfer?.transfer?.status === 'moving';
+  const dealWorking = transfer?.lock === 'deal';
+  const nowCaption = <Term label="Now" text={HOVER.now} />;
+  const nowRows = barRows(buckets, showGate);
+  const currentRound = job?.steps[job.stepIndex]?.round ?? null;
+  const withSpot = (key: string, label: string, text: string): BarRow[] =>
+    job?.inTransit
+      ? [...nowRows, { key, label: <Term label={label} text={text} />, cash: job.inTransit.qty, gain: 0, tone: 'spot' }]
+      : nowRows;
+  const hold = (
+    <HoldToConfirmButton
+      tone="cyan"
+      holdMs={holdMs}
+      disabled={mode !== 'plan' || moving || dealWorking || pick === null || start.isPending}
+      onConfirm={() => pick && start.mutate({ route: pick }, { onError })}
+    >
+      Hold to rebalance
+    </HoldToConfirmButton>
+  );
+  const spotLines = <SpotLines transfer={transfer} job={job} onTransfer={onTransfer} />;
 
-  let body;
-  if (job?.status === 'running') {
-    body = progressBar(job, now);
-  } else if (job) {
-    const cmdPending = resume.isPending || abandon.isPending;
+  let body: ReactNode;
+  if (job && mode === 'running') {
+    const rounds = roundCountOf(job);
+    const total = rounds * ROUND_SECONDS[job.direction];
+    const elapsed = fmtAge(Math.max(0, now - job.createdAt));
+    const rows = withSpot('transit', 'On the way', HOVER.onTheWay);
+    const target = job.target ? barRows(job.target, showGate) : [];
+    const roundFact = { key: 'round', label: 'Round', value: `${num(currentRound ?? 0, 0)} of ${num(rounds, 0)}` };
     body = (
       <>
-        {progressBar(job, now)}
-        <p className="text-[12px] text-rose-300">{job.haltReason}</p>
-        <p className="text-[12px] text-ink-300">Funds are in {job.fundsAt}</p>
-        <div className="flex gap-1.5">
-          <button type="button" className="btn-ghost-xs" disabled={cmdPending} onClick={() => resume.mutate(job.id)}>
-            Resume
-          </button>
-          <button type="button" className="btn-ghost-xs" disabled={cmdPending} onClick={() => abandon.mutate(job.id)}>
-            Abandon
-          </button>
+        <Facts
+          items={[
+            { key: 'route', label: 'Route', value: ROUTE_LABEL[job.route] },
+            ...(currentRound === null ? [] : [roundFact]),
+            { key: 'time', label: 'Time', value: total > 0 ? `${elapsed} of ${fmtAbout(total)}` : elapsed },
+          ]}
+        />
+        <div className="grid grid-cols-2 gap-8 border-t border-ink-800 pt-3">
+          <BalanceBars caption={nowCaption} rows={rows} scale={scaleOf(rows, target)} />
+          {target.length > 0 && <BalanceBars caption="After rebalance" rows={target} scale={scaleOf(rows, target)} />}
         </div>
-        {errorLine(resume.error ?? abandon.error)}
+        <BarLegend rows={[...rows, ...target]} />
+        <StepList rows={jobRows(job, now, borrow)} />
+        <p className="text-xs text-ink-400">New deals and transfers wait until it ends.</p>
+      </>
+    );
+  } else if (job && mode === 'halted') {
+    const rows =
+      job.inTransit?.at === 'MOVING'
+        ? withSpot('transit', 'On the way', HOVER.onTheWay)
+        : withSpot('spot', 'Gate spot', HOVER.gateSpot);
+    const busy = resume.isPending || abandon.isPending;
+    body = (
+      <>
+        <div role="alert" className="num flex flex-col gap-0.5 text-sm text-rose-300">
+          <p className="font-semibold">
+            {currentRound === null ? 'Stopped at Convert.' : `Stopped in round ${num(currentRound, 0)}.`}
+          </p>
+          {job.haltReason && <p>{job.haltReason}</p>}
+        </div>
+        <div className="grid grid-cols-2 gap-8">
+          <BalanceBars caption="Where your money is" rows={rows} scale={scaleOf(rows)} />
+        </div>
+        <BarLegend rows={rows} />
+        <div className="flex gap-2">
+          <CommandButton
+            shown={resume.isPending ? 'Resuming' : 'Resume'}
+            text={HOVER.resume}
+            disabled={busy}
+            onPress={() => resume.mutate(job.id, { onError })}
+          />
+          <CommandButton
+            shown="Abandon"
+            text={HOVER.abandon}
+            disabled={busy}
+            onPress={() => abandon.mutate(job.id, { onError })}
+          />
+        </div>
+        <StepList rows={jobRows(job, now, borrow)} />
+      </>
+    );
+  } else if (mode === 'balanced') {
+    body = (
+      <>
+        <div className="grid grid-cols-2 gap-8">
+          <BalanceBars caption={nowCaption} rows={nowRows} scale={scaleOf(nowRows)} />
+        </div>
+        <BarLegend rows={nowRows} />
+        <Facts items={balancedFacts(plan, job)} />
+        <div>{hold}</div>
+        {spotLines}
       </>
     );
   } else {
-    const inputValue = typed ?? roundToStep(plan.amount, '0.01', 'down');
-    const typedAmount = typed === null ? null : parseAmount(typed);
-    const invalid = parseAmount(inputValue) === null;
-    const showEnter = blurred && invalid;
-    const settled = !query.isPlaceholderData && amountParam === typedAmount;
-    const capped = settled && typedAmount !== null && floorCents(typedAmount) > plan.amount;
-    const free = toUsdt ? spareUsdc : floorCents(usdt?.cash ?? 0);
-    const routeName = plan.route;
-    const floorHit = settled && routeName !== null && plan.amount < MIN_AMOUNT;
-    const capTooSmall = floorHit && (typedAmount === null || floorCents(typedAmount) > plan.amount);
-    const typedTooSmall = floorHit && !capTooSmall;
+    const afterRows = barRows(route.after, showGate);
+    const waitLine = moving
+      ? 'Rebalance waits until the transfer ends.'
+      : dealWorking
+        ? 'Rebalance waits until the deal ends.'
+        : null;
     body = (
       <>
-        <div className="flex flex-wrap items-end gap-3">
-          <div className="flex flex-col gap-1">
-            <span className="text-[11px] text-ink-400">Direction</span>
-            <SegmentedToggle<RebalanceDirection>
-              ariaLabel="Direction"
-              value={direction}
-              onChange={pickDirection}
-              options={DIRECTION_OPTIONS}
-            />
-          </div>
-          <div className="flex w-[15rem] flex-col gap-1">
-            <label htmlFor="rebalance-amount" className="text-[11px] text-ink-400">
-              {`Amount (${toUsdt ? 'USDC' : 'USDT'}) · free ${num(free, 2)}`}
-            </label>
-            <input
-              id="rebalance-amount"
-              className={`input num ${showEnter ? '!border-rose-500/60' : ''}`}
-              inputMode="decimal"
-              aria-invalid={showEnter ? true : undefined}
-              aria-describedby={showEnter ? 'rebalance-amount-error' : undefined}
-              value={inputValue}
-              onChange={(e) => setTyped(e.target.value)}
-              onBlur={() => setBlurred(true)}
-            />
-          </div>
-          {routeName && !floorHit && (
-            <HoldToConfirmButton
-              tone="cyan"
-              holdMs={holdMs}
-              disabled={start.isPending || invalid || !settled}
-              onConfirm={() => start.mutate({ direction, amount: plan.amount, route: routeName })}
-            >
-              {toUsdt
-                ? `Hold to move ${num(plan.amount, 2)} USDC → USDT`
-                : `Hold to move ${num(plan.amount, 2)} USDT → USDC`}
-            </HoldToConfirmButton>
-          )}
+        <Facts items={borrowFacts(buckets)} />
+        <div className="grid grid-cols-2 gap-8 border-t border-ink-800 pt-3">
+          <BalanceBars caption={nowCaption} rows={nowRows} scale={scaleOf(nowRows, afterRows)} />
+          <BalanceBars caption="After rebalance" rows={afterRows} scale={scaleOf(nowRows, afterRows)} />
         </div>
-        {/* Directly under the toggle, because it describes the direction that
-            is SELECTED. Above it (where it used to sit) it read as a caption
-            on the facts, and changed under the reader's eyes on a toggle they
-            had not yet reached. */}
-        <p className="text-[12px] text-ink-400">{explanation(direction, usdtBorrowed)}</p>
-        {showEnter && (
-          <p id="rebalance-amount-error" role="alert" className="text-[11px] text-rose-300">
-            Enter an amount
-          </p>
+        <BarLegend rows={[...nowRows, ...afterRows]} />
+        <Facts items={cashFacts(plan)} />
+        <div className="flex flex-col gap-2">
+          <div className={microLabelClass}>
+            <Term label="Route" text={HOVER.route} />
+          </div>
+          <div role="radiogroup" aria-label="Route" className="flex flex-col gap-1.5">
+            {ROUTE_ORDER.map((name) => (
+              <RouteRow
+                key={name}
+                route={name}
+                plan={plan}
+                borrow={borrow}
+                checked={pick === name}
+                onPick={() => setChosen({ key: runKey, route: name })}
+              />
+            ))}
+          </div>
+        </div>
+        <Facts items={quoteFacts({ route, borrow, buckets, account, positions })} />
+        {route.steps.length > 0 && (
+          <button
+            type="button"
+            className="btn-link inline-flex items-center gap-1 self-start"
+            aria-expanded={stepsOpen}
+            onClick={() => setStepsOpen(!stepsOpen)}
+          >
+            <span aria-hidden="true">{stepsOpen ? '▾' : '▸'}</span>
+            {`${stepsOpen ? 'Hide' : 'Show'} ${stepsNoun(route)}`}
+          </button>
         )}
-        {typedTooSmall && (
-          <p role="alert" className="text-[11px] text-rose-300">
-            {`Enter at least ${MIN_AMOUNT} ${toUsdt ? 'USDC' : 'USDT'}`}
-          </p>
-        )}
-        {capped && !floorHit && <p className="text-[11px] text-amber-300">Capped at {num(plan.amount, 2)}</p>}
-        {capTooSmall && <p className="text-[12px] text-ink-300">{tooSmallLine(toUsdt, borrow)}</p>}
-        {floorHit ? null : routeName ? (
-          <>
-            <Facts items={quoteFacts(plan, routeName, toUsdt, repays, liquidationShift(account, positions, plan, toUsdt))} />
-            {routeName === 'convert' && (
-              <p className="text-[11px] text-ink-500">Sends on a fresh quote within 30 bps of this one.</p>
-            )}
-            {plan.shortfall && (
-              <p className="text-[12px] text-amber-300">
-                {`Only ${num(plan.amount, 2)} USDC can move. ${num(plan.shortfall.remaining, 2)} ${toUsdt ? 'USDT' : 'USDC'} stays borrowed: ${SHORTFALL_TEXT[plan.shortfall.reason]}`}
-              </p>
-            )}
-            {errorLine(start.error)}
-          </>
-        ) : (
-          (() => {
-            const line = noRouteLine(plan, toUsdt, borrow, free);
-            return <p className={`text-[12px] ${line.warn ? 'text-amber-300' : 'text-ink-300'}`}>{line.text}</p>;
-          })()
-        )}
+        {stepsOpen && <StepList rows={planRows(route, direction, borrow)} />}
+        <div className="flex flex-wrap items-center gap-3">
+          {hold}
+          {plan.shortOfEven > 0 && <Chip tone="amber">Ends as even as cash allows</Chip>}
+        </div>
+        {waitLine && <p className="text-xs text-ink-400">{waitLine}</p>}
+        {spotLines}
       </>
     );
   }
 
   return (
-    <section aria-label="Rebalance" className="card flex flex-col gap-3.5 p-4">
-      <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
-        <div>
-          <div className="flex items-center gap-1.5">
-            <h2 className="text-xs font-semibold uppercase tracking-wider text-ink-400">Rebalance</h2>
-            <HoverCard widthPx={420} label={<span className="sr-only">About rebalance</span>}>
-              {ABOUT}
-            </HoverCard>
-          </div>
-          <p className="text-[12px] text-ink-500">move cash between USDT and Hyperliquid USDC</p>
+    <section aria-label="Rebalance" className="card flex flex-col gap-4 p-4">
+      <div className="flex items-start justify-between gap-4">
+        <div className="flex flex-col gap-0.5">
+          {title}
+          <p className="text-xs text-ink-500">Even out your CrossEx USDT and USDC wallets</p>
         </div>
-        {borrowed && (
-          <span className="num rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[11px] text-amber-200">
-            {`Borrowing ${num(floorCents(borrowed.borrow), 2)} ${borrowed.coin}`}
-          </span>
+        {mode === 'balanced' &&
+          (isCashLimitedEven(plan) ? (
+            <Chip tone="amber">As even as cash allows</Chip>
+          ) : (
+            <Chip tone="green">Balanced</Chip>
+          ))}
+        {mode !== 'balanced' && borrowed && (
+          <Chip tone="amber">
+            <span className="num">{`Borrowing ${num(floorCents(borrowed.borrow))} ${borrowed.coin}`}</span>
+          </Chip>
         )}
       </div>
-      {/* THE STATE — three standing facts about the borrow — then a hairline,
-          and below it THE ACTION. They used to run together as one column of
-          rows, so a reader had to work out line by line which was a fact and
-          which a control. */}
-      {usdc && <Facts items={situation} />}
-      <div className="flex flex-col gap-3 border-t border-ink-800 pt-3.5">{body}</div>
+      {body}
     </section>
   );
 }
