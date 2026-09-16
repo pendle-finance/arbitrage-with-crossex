@@ -173,6 +173,17 @@ describe('the wallet hover', () => {
     expect(card.firstElementChild?.firstElementChild?.textContent).toBe('USDC · Lighter');
   });
 
+  it('hover title is the plain name, never the label hover', () => {
+    const rows: BarRow[] = [
+      { ...ROWS[1], label: <span className="border-b border-dotted decoration-dotted">USDC · Lighter</span>, name: 'USDC · Lighter' },
+    ];
+    const { container } = render(<BalanceBars caption={BAR_CAPTION} rows={rows} scale={100} />);
+
+    const card = openHover(container, 'USDC/LIGHTER');
+    expect(card.firstElementChild?.firstElementChild?.textContent).toBe('USDC · Lighter');
+    expect(card.querySelector('[class*="border-dotted"], [class*="decoration-dotted"]')).toBeNull();
+  });
+
   it('hover has three numbers', () => {
     const { container } = render(<BalanceBars caption={BAR_CAPTION} rows={ROWS} scale={100} />);
 

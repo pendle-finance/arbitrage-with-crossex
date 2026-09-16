@@ -19,6 +19,7 @@ import {
   HOVER,
   HYPERLIQUID_FREE_LINE,
   INTEREST_PAID_ALL_TIME,
+  LIQUIDATION_NOT_KNOWN,
   MOVE_TEXT,
   NO_FREE_PART,
   poolKey,
@@ -58,7 +59,7 @@ export const planSteps = (plan: EvenPlan): PlannedStep[] => [
   ...plan.routes.convert.steps,
 ];
 
-export function movesOf(steps: readonly Move[]): Move[] {
+function movesOf(steps: readonly Move[]): Move[] {
   const moves: Move[] = [];
   for (const { from, to } of steps) {
     if (!moves.some((move) => move.from === from && move.to === to)) moves.push({ from, to });
@@ -85,6 +86,8 @@ export function receivingHeld(buckets: RebalanceBucket[], steps: readonly Move[]
 
 export const roundCountOf = (job: RebalanceJob) =>
   new Set(job.steps.flatMap((step) => (step.round === null ? [] : [step.round]))).size;
+
+export const roundOf = (job: RebalanceJob): number | null => job.steps[job.stepIndex]?.round ?? null;
 
 export function Term({
   label,
@@ -146,6 +149,8 @@ const rateLine = (b: RebalanceBucket) =>
 
 const walletLine = (b: RebalanceBucket, text: string) => `${WALLET_SHORT[keyOf(b)]} ${text}`;
 
+const joined = (lines: string[]) => (lines.length === 0 ? [] : [lines.join(' · ')]);
+
 export function sharedCoin(wallets: readonly { coin: string }[]): string | null {
   const coins = new Set(wallets.map((w) => w.coin));
   return coins.size === 1 ? [...coins][0] : null;
@@ -178,31 +183,39 @@ export function repayOf(buckets: RebalanceBucket[], route: RoutePlan): Repay {
   };
 }
 
+export const heldLine = (borrowing: RebalanceBucket[]): string => borrowing.map((b) => walletLine(b, fmtUsd(b.imHeldUsd))).join(' · ');
+
 function borrowHover(borrowing: RebalanceBucket[]): string {
   if (borrowing.length === 0) return HOVER.rebalanceTitle.borrow;
-  return HOVER.borrowHeld(borrowing.map((b) => walletLine(b, fmtUsd(b.imHeldUsd))).join(' · '));
+  return HOVER.borrowHeld(heldLine(borrowing));
 }
 
-export function borrowFacts(buckets: RebalanceBucket[], liquidation: LiquidationLine | null): Fact[] {
+export function borrowingFact(buckets: RebalanceBucket[]): Fact {
   const borrowing = borrowingBuckets(buckets);
   const total = borrowTotalUsd(buckets);
   const coin = sharedCoin(borrowing);
+  const borrowAmount = (value: number) => (coin ? num(value) : fmtUsd(value));
+  return {
+    key: 'borrowing',
+    label: FACT_BORROWING,
+    value: total > 0 ? fmtCoinOrUsd(total, coin) : 'none',
+    sub:
+      borrowing.length === 1
+        ? [WALLET_LABEL[keyOf(borrowing[0])]]
+        : joined(borrowing.map((b) => walletLine(b, borrowAmount(floorCents(b.borrow))))),
+    warn: total > 0,
+  };
+}
+
+export function borrowFacts(buckets: RebalanceBucket[], liquidation: LiquidationLine | null | 'unknown'): Fact[] {
+  const borrowing = borrowingBuckets(buckets);
   const perDay = buckets.reduce((sum, b) => sum + b.interestPerDayUsd, 0);
   const paid = buckets.reduce((sum, b) => sum + b.interestPaidUsd, 0);
   const paidWallets = buckets.filter((b) => floorCents(b.interestPaidUsd) > 0).sort((a, b) => b.interestPaidUsd - a.interestPaidUsd);
-  const joined = (lines: string[]) => (lines.length === 0 ? [] : [lines.join(' · ')]);
-  const borrowAmount = (value: number) => (coin ? num(value) : fmtUsd(value));
+  const line = liquidation === 'unknown' ? null : liquidation;
+  const noLine = liquidation === 'unknown' ? LIQUIDATION_NOT_KNOWN : 'none';
   return [
-    {
-      key: 'borrowing',
-      label: <Term label={FACT_BORROWING} text={borrowHover(borrowing)} />,
-      value: total > 0 ? fmtCoinOrUsd(total, coin) : 'none',
-      sub:
-        borrowing.length === 1
-          ? [WALLET_LABEL[keyOf(borrowing[0])]]
-          : joined(borrowing.map((b) => walletLine(b, borrowAmount(floorCents(b.borrow))))),
-      warn: total > 0,
-    },
+    { ...borrowingFact(buckets), label: <Term label={FACT_BORROWING} text={borrowHover(borrowing)} /> },
     {
       key: 'interest',
       label: FACT_INTEREST_NOW,
@@ -218,9 +231,9 @@ export function borrowFacts(buckets: RebalanceBucket[], liquidation: Liquidation
     },
     {
       key: 'liquidation',
-      label: liquidation ? <Term label={FACT_LIQUIDATION} text={describeLine(liquidation)} /> : FACT_LIQUIDATION,
-      value: liquidation ? `${liquidation.base} ${fmtLinePrice(liquidation.price)}` : 'none',
-      sub: liquidation ? [`${fmtMove(liquidation.move)} away · ${liquidation.base} on ${liquidation.venue}`] : [],
+      label: line ? <Term label={FACT_LIQUIDATION} text={describeLine(line)} /> : FACT_LIQUIDATION,
+      value: line ? `${line.base} ${fmtLinePrice(line.price)}` : noLine,
+      sub: line ? [`${fmtMove(line.move)} away · ${line.base} on ${line.venue}`] : [],
     },
   ];
 }
@@ -248,6 +261,7 @@ export function barRowsOf(wallets: (WalletAfter | RebalanceBucket)[], keys: stri
       {
         key,
         label: <WalletTerm wallet={key} />,
+        name: WALLET_LABEL[key],
         cash: wallet.cash,
         upnl: 'upnl' in wallet ? wallet.upnl : wallet.equity - wallet.cash,
         target: target.size === 0 ? null : (target.get(key) ?? 0),

@@ -393,15 +393,12 @@ describe('borrow pill', () => {
     );
   });
 
-  it('shows no pill under 1 USDC of borrow', async () => {
+  it('shows the pill under 1 USDC of borrow', async () => {
     mockApp();
     server.use(rebalanceHandler(makeRebalanceView({ buckets: [borrowed(0.4)] })));
     await renderApp();
 
-    // The hidden Balances panel renders its section from the same response,
-    // so once it exists the pill has had its answer.
-    await screen.findByRole('region', { name: 'Rebalance', hidden: true });
-    expect(screen.queryByRole('button', { name: /^Borrowing / })).toBeNull();
+    expect(await screen.findByRole('button', { name: 'Borrowing 0.40 USDC' })).toBeInTheDocument();
   });
 });
 

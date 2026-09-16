@@ -13,6 +13,7 @@ type BarTone = 'usdt' | 'usdc' | 'lighter' | 'gate' | 'spot';
 export interface BarRow {
   key: string;
   label: ReactNode;
+  name?: string;
   cash: number;
   upnl: number;
   target: number | null;
@@ -82,7 +83,7 @@ const cssPct = (value: number): string => `${value}%`;
 function WalletHover({ row }: { row: BarRow }) {
   return (
     <div className="flex flex-col gap-2 text-xs" style={{ width: HOVER_WIDTH_PX }}>
-      <span className="font-semibold text-ink-50">{row.label}</span>
+      <span className="font-semibold text-ink-50">{row.name ?? row.label}</span>
       <div aria-hidden className="h-px bg-ink-700" />
       <div className="flex items-center gap-2.5">
         <span aria-hidden data-swatch="cash" className={`h-2.5 w-2.5 shrink-0 rounded-sm ${BAR_FILL[row.tone]}`} />

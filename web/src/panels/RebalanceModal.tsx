@@ -8,7 +8,7 @@ import { HoldToConfirmButton } from '../components/HoldToConfirmButton';
 import { Modal } from '../components/Modal';
 import { microLabelClass } from '../components/Th';
 import { useToast } from '../components/Toast';
-import { borrowingBuckets, borrowTotalUsd } from '../lib/borrow';
+import { borrowingBuckets } from '../lib/borrow';
 import { fmtAbout, fmtAge, fmtUsd, num, WALLET_SHORT } from '../lib/fmt';
 import { describeLine, fmtLinePrice, lineFor, liquidationLines, nearestLiquidation } from '../lib/liquidation';
 import { useNow } from '../lib/useNow';
@@ -17,7 +17,8 @@ import type { BarRow, StepRow } from './RebalanceBits';
 import { FACT_LIQUIDATION, GATE_SPOT, HOVER, MODAL_ABANDON, MODAL_AFTER, MODAL_CHANGE_ROUTE, MODAL_FREES } from './rebalanceCopy';
 import { MODAL_HOLD, MODAL_KEEP_ROUTE, MODAL_RESUME, MODAL_SAVES, MODAL_STEPS, WAITS_FOR_DEAL, WAITS_FOR_TRANSFER } from './rebalanceCopy';
 import { barRowsOf, Facts, fmtCoinOrUsd, keyOf, movesKey, pickedRoute, planSteps, receivingBorrow, receivingHeld } from './RebalanceHovers';
-import { ROUTE_LABEL, roundCountOf, RouteRow, sharedCoin, shownKeys, SpotLines, targetsOf, Term, type Fact } from './RebalanceHovers';
+import { repayOf, ROUTE_LABEL, roundCountOf, roundOf, RouteRow, sharedCoin, shownKeys, SpotLines, targetsOf, Term } from './RebalanceHovers';
+import type { Fact, Repay } from './RebalanceHovers';
 import { NoSpotReadLine } from './TransferBits';
 
 const COUNT_WORD: Record<number, string> = { 2: 'two', 3: 'three' };
@@ -36,23 +37,27 @@ const FINISHED_LEAD = 'Done. This is what each wallet holds now.';
 const NO_BORROW_TO_REPAY = 'no borrow to repay';
 const MARGIN_RETURNED = 'margin the repay returns';
 const NO_INTEREST_TO_STOP = 'no interest to stop';
+const REPAYS_NO_BORROW = 'repays no borrow';
+const STOPS_NO_INTEREST = 'stops no interest';
 const NOT_MARGIN_UNTIL_LANDS = 'It is not margin until it lands.';
 const NO_SPOT_READ = 'This key cannot read Gate spot.';
 
-const leadText = (plan: EvenPlan, buckets: RebalanceBucket[]): string => {
+const leadText = (plan: EvenPlan, repay: Repay): string => {
   const moved = fmtUsd(plan.moves);
-  const borrowing = borrowingBuckets(buckets);
-  if (borrowing.length === 0) return `Moves ${moved} so each wallet matches its position share.`;
-  const repaid = fmtCoinOrUsd(borrowTotalUsd(buckets), sharedCoin(borrowing));
+  const { wallets } = repay;
+  if (wallets.length === 0) return `Moves ${moved} so each wallet matches its position share.`;
+  const repaid = fmtCoinOrUsd(repay.amount, sharedCoin(wallets));
   const where =
-    borrowing.length === 1
-      ? `on ${WALLET_SHORT[keyOf(borrowing[0])]}`
-      : `across ${COUNT_WORD[borrowing.length] ?? num(borrowing.length, 0)} wallets`;
+    wallets.length === 1
+      ? `on ${WALLET_SHORT[keyOf(wallets[0])]}`
+      : `across ${COUNT_WORD[wallets.length] ?? num(wallets.length, 0)} wallets`;
   return `Moves ${moved} and repays ${repaid} ${where}.`;
 };
 
-const stampOf = (plan: EvenPlan, name: RouteName | null): string =>
-  name === null ? '' : `${name}:${movesKey(plan.routes[name]?.steps ?? [])}`;
+function stampOf(plan: EvenPlan, name: RouteName | null): string {
+  const route = name === null ? null : plan.routes[name];
+  return [plan.recommended, name, movesKey(route?.steps ?? []), route ? fmtUsd(route.costUsd) : ''].join(':');
+}
 
 function routeOrder(plan: EvenPlan): RouteName[] {
   const { recommended, routes } = plan;
@@ -70,8 +75,8 @@ function abandonNote(job: RebalanceJob, transfer: TransferView | undefined): str
   const transit = job.inTransit;
   if (!transit) return HOVER.abandon;
   if (transit.at !== 'SPOT') return `${MODAL_ABANDON} leaves ${num(transit.qty)} ${transit.coin} in transit. ${NOT_MARGIN_UNTIL_LANDS}`;
-  if (transfer?.spot === null) return `${MODAL_ABANDON} leaves this run's ${transit.coin} in ${GATE_SPOT}. ${NO_SPOT_READ}`;
-  return `${MODAL_ABANDON} leaves the ${num(transit.qty)} ${transit.coin} in ${GATE_SPOT}.`;
+  const inSpot = `${MODAL_ABANDON} leaves the ${num(transit.qty)} ${transit.coin} in ${GATE_SPOT}.`;
+  return transfer?.spot === null ? `${inSpot} ${NO_SPOT_READ}` : inSpot;
 }
 
 interface Book {
@@ -101,21 +106,28 @@ function liquidationFact(route: RoutePlan, view: RebalanceView, book: Book): Fac
   };
 }
 
+function repaySubs(buckets: RebalanceBucket[], route: RoutePlan): { frees: string; saves: string } {
+  const repay = repayOf(buckets, route);
+  if (repay.wallets.length === 0 && borrowingBuckets(buckets).length > 0) return { frees: REPAYS_NO_BORROW, saves: STOPS_NO_INTEREST };
+  if (repay.wallets.length === 0) return { frees: NO_BORROW_TO_REPAY, saves: NO_INTEREST_TO_STOP };
+  const stopping = repay.wallets.filter((b) => b.interestPerDayUsd > 0).map((b) => WALLET_SHORT[keyOf(b)]);
+  return { frees: MARGIN_RETURNED, saves: stopping.length === 0 ? NO_INTEREST_TO_STOP : `${stopping.join(' and ')} interest stops` };
+}
+
 function quoteFactsOf(route: RoutePlan, view: RebalanceView, book: Book): Fact[] {
-  const borrowing = borrowingBuckets(view.buckets);
-  const paying = borrowing.filter((b) => b.interestPerDayUsd > 0).map((b) => WALLET_SHORT[keyOf(b)]);
+  const subs = repaySubs(view.buckets, route);
   return [
     {
       key: 'frees',
       label: <Term label={MODAL_FREES} text={HOVER.frees} />,
       value: fmtUsd(route.marginFreedUsd),
-      sub: [borrowing.length === 0 ? NO_BORROW_TO_REPAY : MARGIN_RETURNED],
+      sub: [subs.frees],
     },
     {
       key: 'saves',
       label: <Term label={MODAL_SAVES} text={HOVER.saves} />,
       value: `${fmtUsd(route.savesPerDayUsd)} a day`,
-      sub: [paying.length === 0 ? NO_INTEREST_TO_STOP : `${paying.join(' and ')} interest stops`],
+      sub: [subs.saves],
     },
     liquidationFact(route, view, book),
   ];
@@ -196,6 +208,7 @@ export function RebalanceModal({
   const spotRow = (label: string, text: string, qty: number): BarRow => ({
     key: 'spot',
     label: <Term label={label} text={text} />,
+    name: label,
     cash: qty,
     upnl: 0,
     target: null,
@@ -211,7 +224,7 @@ export function RebalanceModal({
       ? [...nowRows, spotRow(moving ? ON_THE_WAY : GATE_SPOT, moving ? HOVER.onTheWay : HOVER.gateSpot, job.inTransit.qty)]
       : nowRows;
     const rounds = roundCountOf(job);
-    const round = job.steps[job.stepIndex]?.round ?? null;
+    const round = roundOf(job);
     const total = jobSeconds(job);
     const elapsed = Math.max(0, (running ? now : job.updatedAt) - job.createdAt);
     if (running) {
@@ -300,7 +313,7 @@ export function RebalanceModal({
   } else {
     body = (
       <>
-        <p className="text-xs text-ink-400">{leadText(plan, buckets)}</p>
+        <p className="text-xs text-ink-400">{leadText(plan, repayOf(buckets, route))}</p>
         <div className="flex flex-col gap-2 border-t border-ink-800 pt-3">
           <div className={microLabelClass}>
             <Term label="Route" text={HOVER.route} />

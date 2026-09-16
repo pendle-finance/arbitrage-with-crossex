@@ -5,7 +5,7 @@ import { Chip } from '../components/Chip';
 import { FreshnessButton } from '../components/FreshnessIndicator';
 import { borrowingBuckets } from '../lib/borrow';
 import { fmtAbout, fmtUsd, num } from '../lib/fmt';
-import { nearestLiquidation } from '../lib/liquidation';
+import { liquidationLines, nearestLiquidation } from '../lib/liquidation';
 import { floorCents } from '../lib/ticks';
 import { useNow } from '../lib/useNow';
 import { useSettledError } from '../lib/useSettledError';
@@ -13,7 +13,7 @@ import { BalanceBars, jobSeconds, scaleOf, ShareColumn } from './RebalanceBits';
 import { BAR_CAPTION, GATE_SPOT, HOVER, NO_LEGS, SHARE_CAPTION, VERDICT_BALANCED, VERDICT_FREE, VERDICT_NO_BORROW } from './rebalanceCopy';
 import { VERDICT_REPAYS, VERDICT_REPAYS_NOTHING, VERDICT_STOPS, VERDICT_STOPS_UNDER_A_CENT, WAITS_FOR_DEAL, WAITS_FOR_TRANSFER } from './rebalanceCopy';
 import { barRowsOf, borrowFacts, DUST, Facts, fmtCoinOrUsd, isCashLimitedEven, pickedRoute, planSteps, positionShares } from './RebalanceHovers';
-import { RebalanceInfo, repayOf, roundCountOf, sharedCoin, shownKeys, targetsOf, Term } from './RebalanceHovers';
+import { RebalanceInfo, repayOf, roundCountOf, roundOf, sharedCoin, shownKeys, targetsOf, Term } from './RebalanceHovers';
 import { RebalanceModal } from './RebalanceModal';
 import { NoSpotReadLine } from './TransferBits';
 
@@ -41,8 +41,6 @@ function borrowVerdict(view: RebalanceView, route: RoutePlan): string {
   if (floorCents(stops) === 0) return `${lead} ${VERDICT_STOPS_UNDER_A_CENT}`;
   return `${lead} ${VERDICT_STOPS(fmtUsd(stops))}`;
 }
-
-const roundOf = (job: RebalanceJob): number | null => job.steps[job.stepIndex]?.round ?? null;
 
 const minutesLeft = (seconds: number): string => fmtAbout(seconds).replace(/ 1 min$/, ' 1 minute').replace(/ min$/, ' minutes');
 
@@ -110,13 +108,12 @@ export function RebalanceSection({
   const hasBorrow = borrowingBuckets(buckets).length > 0;
   const moving = transfer?.transfer?.status === 'moving';
   const dealWorking = transfer?.lock === 'deal';
+  const liquidationKnown = account !== undefined && positions !== undefined && liquidationLines(account, positions) !== null;
 
   let chip: ReactNode = null;
   if (job?.status === 'running') chip = <Chip tone="info">Running</Chip>;
   if (job?.status === 'halted') chip = <Chip tone="red">Stopped</Chip>;
   if (!job && plan.balanced && !plan.noLegs) chip = <Chip tone="green">Balanced</Chip>;
-  if (!job && moving) chip = <Chip tone="info">{WAITS_FOR_TRANSFER}</Chip>;
-  if (!job && !moving && dealWorking) chip = <Chip tone="info">{WAITS_FOR_DEAL}</Chip>;
 
   const wouldMove = <span className="text-ink-500">{`${fmtUsd(plan.moves)} ${WOULD_MOVE}`}</span>;
   let verdict: ReactNode;
@@ -129,6 +126,8 @@ export function RebalanceSection({
 
   let label: ReactNode = REBALANCE;
   if (job) label = jobButton(job);
+  else if (moving) label = WAITS_FOR_TRANSFER;
+  else if (dealWorking) label = WAITS_FOR_DEAL;
   else if (!plan.balanced && !plan.noLegs) label = <>{REBALANCE} <span className="opacity-80">{`· ${fmtUsd(route.costUsd)}`}</span></>;
   const disabled = !job && (plan.balanced || plan.noLegs || moving || dealWorking);
 
@@ -175,7 +174,7 @@ export function RebalanceSection({
         )}
       </div>
       <div className="border-t border-ink-800 pt-3">
-        <Facts items={borrowFacts(buckets, nearestLiquidation(account, positions))} />
+        <Facts items={borrowFacts(buckets, liquidationKnown ? nearestLiquidation(account, positions) : 'unknown')} />
       </div>
       <div className="flex flex-col gap-3 border-t border-ink-800 pt-3">
         <p className="num text-xs text-ink-300">{verdict}</p>

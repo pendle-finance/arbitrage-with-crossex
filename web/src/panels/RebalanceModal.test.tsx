@@ -219,6 +219,23 @@ const FAR_AFTER_VIEW: RebalanceView = {
   },
 };
 
+function withMixCost(costUsd: number): RebalanceView {
+  const view = rebalanceViews.twoBorrows;
+  return { ...view, plan: { ...view.plan, routes: { ...view.plan.routes, mix: { ...view.plan.routes.mix!, costUsd } } } };
+}
+
+function withConvertAfter(hyperliquidEquity: number, marginFreedUsd: number): RebalanceView {
+  const view = rebalanceViews.twoBorrows;
+  const convert = view.plan.routes.convert!;
+  const after = [
+    convert.after[0],
+    { coin: 'USDC', venue: 'HYPERLIQUID', cash: hyperliquidEquity + 12, equity: hyperliquidEquity },
+    { coin: 'USDC', venue: 'LIGHTER', cash: -120, equity: -132 },
+  ];
+  const routes = { ...view.plan.routes, convert: { ...convert, marginFreedUsd, savesPerDayUsd: 0, after } };
+  return { ...view, plan: { ...view.plan, routes } };
+}
+
 const resumeButton = () => within(dialog()).getByRole('button', { name: /^Resum/ });
 
 const abandonButton = () => within(dialog()).getByRole('button', { name: 'Abandon' });
@@ -370,16 +387,36 @@ describe('RebalanceModal plan state', () => {
     expect(holdButton()).toBeEnabled();
   });
 
-  it('a cost change alone keeps the hold live', async () => {
-    const plan = rebalanceViews.twoBorrows.plan;
-    const pricier: RebalanceView = {
-      ...rebalanceViews.twoBorrows,
-      plan: { ...plan, routes: { ...plan.routes, mix: { ...plan.routes.mix!, costUsd: 4.12 } } },
-    };
-    const { next } = showPolled([rebalanceViews.twoBorrows, pricier]);
+  it('disables the hold when the plan went stale on a cost change, until the trader accepts', async () => {
+    const user = userEvent.setup();
+    const { next } = showPolled([rebalanceViews.twoBorrows, withMixCost(4.12)]);
+    expect(within(dialog()).getByText('about 2 min · $0.46')).toBeInTheDocument();
     expect(holdButton()).toBeEnabled();
     await next();
     expect(within(dialog()).getByText('about 2 min · $4.12')).toBeInTheDocument();
+    expect(holdButton()).toBeDisabled();
+    expect(screen.getByRole('alert').textContent).toBe('The plan changed. Check the new route before you rebalance.');
+    await user.click(screen.getByRole('button', { name: 'Use the new plan' }));
+    expect(holdButton()).toBeEnabled();
+  });
+
+  it('disables the hold when the plan went stale on a new recommended route, until the trader accepts', async () => {
+    const user = userEvent.setup();
+    const view = rebalanceViews.twoBorrows;
+    const { next } = showPolled([view, { ...view, plan: { ...view.plan, recommended: 'convert' } }]);
+    await user.click(changeRoute());
+    await user.click(screen.getByRole('radio', { name: 'Convert' }));
+    expect(holdButton()).toBeEnabled();
+    await next();
+    expect(holdButton()).toBeDisabled();
+    await user.click(screen.getByRole('button', { name: 'Use the new plan' }));
+    expect(holdButton()).toBeEnabled();
+  });
+
+  it('a cost change under one cent keeps the hold live', async () => {
+    const { next } = showPolled([rebalanceViews.twoBorrows, withMixCost(0.463)]);
+    await next();
+    expect(within(dialog()).getByText('about 2 min · $0.46')).toBeInTheDocument();
     expect(screen.queryByRole('alert')).toBeNull();
     expect(holdButton()).toBeEnabled();
   });
@@ -443,8 +480,8 @@ describe('RebalanceModal run states', () => {
   it('says the key cannot read Spot and shows no zero for an unknown balance', async () => {
     show(rebalanceViews.accountAHalted, { transfer: transferViews.noSpot });
     expect(await screen.findByText('Add Spot read permission to see spot balances.')).toBeInTheDocument();
-    const note = within(dialog()).getByText("Abandon leaves this run's USDC in Gate spot. This key cannot read Gate spot.");
-    expect(note.textContent).not.toMatch(/36\.58/);
+    const note = within(dialog()).getByText('Abandon leaves the 36.58 USDC in Gate spot. This key cannot read Gate spot.');
+    expect(note).toBeInTheDocument();
     expect(dialog().textContent).not.toMatch(/\$0\.00/);
   });
 
@@ -1078,6 +1115,40 @@ describe('RebalanceModal hovers and facts', () => {
       buckets: rebased(view.buckets, { 'USDC/LIGHTER': { cash: -50, equity: -50, borrow: 50, interestPerDayUsd: 0.02 } }),
     });
     expect(subs('Frees')).toEqual(['margin the repay returns']);
+    expect(subs('Saves')).toEqual(['Lighter interest stops']);
+  });
+
+  it('a picked route that repays no borrow claims no repay and no interest that stops', async () => {
+    const user = userEvent.setup();
+    show(withConvertAfter(-112, 0));
+    expect(line('Moves $868.42 and repays 244.00 USDC across two wallets.')).toBeInTheDocument();
+    await user.click(changeRoute());
+    await user.click(screen.getByRole('radio', { name: 'Convert' }));
+    expect(line('Moves $868.42 so each wallet matches its position share.')).toBeInTheDocument();
+    expect(facts().Frees).toBe('$0.00');
+    expect(subs('Frees')).toEqual(['repays no borrow']);
+    expect(subs('Saves')).toEqual(['stops no interest']);
+    expect(dialog().textContent).not.toMatch(/repays [\d$]|interest stops|No borrow|no borrow to repay|no interest to stop/);
+    cleanup();
+
+    show(rebalanceViews.accountB);
+    expect(subs('Frees')).toEqual(['no borrow to repay']);
+    expect(subs('Saves')).toEqual(['no interest to stop']);
+  });
+
+  it('the lead and the Saves line change with the route the trader picks', async () => {
+    const user = userEvent.setup();
+    show(withConvertAfter(-12, 20));
+    expect(line('Moves $868.42 and repays 244.00 USDC across two wallets.')).toBeInTheDocument();
+    expect(subs('Saves')).toEqual(['Lighter interest stops']);
+    await user.click(changeRoute());
+    await user.click(screen.getByRole('radio', { name: 'Convert' }));
+    expect(line('Moves $868.42 and repays 100.00 USDC on Hyperliquid.')).toBeInTheDocument();
+    expect(facts().Frees).toBe('$20.00');
+    expect(subs('Frees')).toEqual(['margin the repay returns']);
+    expect(subs('Saves')).toEqual(['no interest to stop']);
+    await user.click(screen.getByRole('radio', { name: 'Spot loop, then Convert' }));
+    expect(line('Moves $868.42 and repays 244.00 USDC across two wallets.')).toBeInTheDocument();
     expect(subs('Saves')).toEqual(['Lighter interest stops']);
   });
 

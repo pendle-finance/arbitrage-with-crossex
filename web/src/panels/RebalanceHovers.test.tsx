@@ -3,9 +3,9 @@ import { describe, expect, it } from 'vitest';
 import type { RebalanceBucket } from '../api/types';
 import type { LiquidationLine } from '../lib/liquidation';
 import { rebalanceViews, rebased } from '../test/fixtures';
-import { borrowFacts, Facts, pickedRoute, shownKeys, targetsOf } from './RebalanceHovers';
+import { borrowFacts, Facts, pickedRoute, roundOf, shownKeys, targetsOf } from './RebalanceHovers';
 
-function show(buckets: RebalanceBucket[], line: LiquidationLine | null = null) {
+function show(buckets: RebalanceBucket[], line: LiquidationLine | null | 'unknown' = null) {
   return render(<Facts items={borrowFacts(buckets, line)} />);
 }
 
@@ -92,6 +92,12 @@ describe('borrow facts', () => {
     expect(block.textContent).not.toMatch(/\d+ lines?/);
   });
 
+  it('liquidation reads not known without a read', () => {
+    show(rebalanceViews.twoBorrows.buckets, 'unknown');
+
+    expect(lines('Liquidation')).toEqual(['not known']);
+  });
+
   it('borrow under one dollar', () => {
     show(rebalanceViews.borrowUnderOne.buckets);
 
@@ -122,6 +128,15 @@ describe('borrow facts', () => {
     expect(lines('Interest paid')).toEqual(['$3.20', 'all time', 'Hyperliquid $3.20']);
     expect(lines('Borrowing')[0]).toBe('none');
     expect(lines('Interest now')[0]).toBe('$0.00 a day');
+  });
+});
+
+describe('the current round', () => {
+  it('round of the current step, null past the last step', () => {
+    const job = rebalanceViews.accountARunning.job!;
+
+    expect(roundOf(job)).toBe(3);
+    expect(roundOf({ ...job, stepIndex: job.steps.length })).toBeNull();
   });
 });
 

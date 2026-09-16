@@ -133,6 +133,8 @@ export const FACT_BORROWING = 'Borrowing';
 export const FACT_INTEREST_NOW = 'Interest now';
 export const FACT_INTEREST_PAID = 'Interest paid';
 export const FACT_LIQUIDATION = 'Liquidation';
+export const FACT_HELD = 'Held against the borrow';
+export const LIQUIDATION_NOT_KNOWN = 'not known';
 
 export const BAR_CAPTION = 'Now against target';
 export const SHARE_CAPTION = 'Position share';

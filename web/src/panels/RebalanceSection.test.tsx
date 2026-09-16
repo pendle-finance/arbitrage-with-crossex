@@ -1,4 +1,4 @@
-import { cleanup, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { useState } from 'react';
@@ -270,16 +270,74 @@ describe('RebalanceSection verdict', () => {
     expect(within(region()).getByText('Balanced')).toBeInTheDocument();
   });
 
-  it('waits for transfer', async () => {
+  it('the button says it waits for the transfer, with no chip', async () => {
     await show(rebalanceViews.twoBorrows, transferViews.moving);
-    expect(await within(region()).findByText('Waits for the transfer')).toBeInTheDocument();
-    expect(within(region()).getByRole('button', { name: 'Rebalance · $0.46' })).toBeDisabled();
+    const button = await within(region()).findByRole('button', { name: 'Waits for the transfer' });
+    expect(button).toBeDisabled();
+    expect(within(region()).getAllByText('Waits for the transfer')).toEqual([button]);
+    expect(cardButtons().map((el) => el.textContent)).toEqual(['Waits for the transfer']);
   });
 
-  it('waits for a deal', async () => {
+  it('the button says it waits for the deal, with no chip', async () => {
     await show(rebalanceViews.twoBorrows, transferViews.lockDeal);
-    expect(await within(region()).findByText('Waits for the deal')).toBeInTheDocument();
-    expect(within(region()).getByRole('button', { name: 'Rebalance · $0.46' })).toBeDisabled();
+    const button = await within(region()).findByRole('button', { name: 'Waits for the deal' });
+    expect(button).toBeDisabled();
+    expect(within(region()).getAllByText('Waits for the deal')).toEqual([button]);
+    expect(cardButtons().map((el) => el.textContent)).toEqual(['Waits for the deal']);
+  });
+});
+
+describe('RebalanceSection liquidation fact', () => {
+  it('liquidation reads none after both reads succeed with no line', async () => {
+    await show(rebalanceViews.twoBorrows);
+    await waitFor(() => expect(facts().Liquidation).toBe('none'));
+  });
+
+  it('liquidation reads not known when the account read fails', async () => {
+    let reads = 0;
+    serve(rebalanceViews.twoBorrows);
+    server.use(
+      http.get('/api/account', () => {
+        reads += 1;
+        return HttpResponse.json(GATE_ERROR, { status: 500 });
+      }),
+    );
+    renderWithClient(<RebalanceSection />);
+    await waitFor(() => expect(facts().Borrowing).toBe('244.00 USDC'));
+    await waitFor(() => expect(reads).toBe(1));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(facts().Liquidation).toBe('not known');
+  });
+
+  it('liquidation reads not known when the positions read fails', async () => {
+    let reads = 0;
+    serve(rebalanceViews.twoBorrows);
+    server.use(
+      http.get('/api/positions', () => {
+        reads += 1;
+        return HttpResponse.json(GATE_ERROR, { status: 500 });
+      }),
+    );
+    renderWithClient(<RebalanceSection />);
+    await waitFor(() => expect(facts().Borrowing).toBe('244.00 USDC'));
+    await waitFor(() => expect(reads).toBe(1));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(facts().Liquidation).toBe('not known');
+  });
+});
+
+describe('RebalanceSection bar tooltip', () => {
+  it('the bar tooltip names the wallet in plain text, and the label keeps its hover', async () => {
+    await show(rebalanceViews.twoBorrows);
+    const row = region().querySelector<HTMLElement>('[data-bar-row="USDC/LIGHTER"]');
+    const hit = row?.querySelector<HTMLElement>('[data-bar-hit]');
+    if (!row || !hit) throw new Error('no Lighter bar');
+    fireEvent.mouseMove(hit, { clientX: 100, clientY: 40 });
+    const tooltip = screen.getByRole('tooltip');
+    expect(tooltip.textContent?.startsWith('USDC · Lighter')).toBe(true);
+    expect(tooltip.querySelector('[class*="border-dotted"], [class*="decoration-dotted"]')).toBeNull();
+    expect(within(tooltip).queryByRole('button')).toBeNull();
+    expect(within(row).getByRole('button', { name: 'USDC · Lighter' })).toBeInTheDocument();
   });
 });
 
@@ -327,8 +385,7 @@ describe('RebalanceSection gate spot and freshness', () => {
     await show(rebalanceViews.accountAHalted, transferViews.noSpot);
     await user.click(within(region()).getByRole('button', { name: 'Stopped · open' }));
     const dialog = await screen.findByRole('dialog');
-    const note = "Abandon leaves this run's USDC in Gate spot. This key cannot read Gate spot.";
-    expect(await within(dialog).findByText(note)).toBeInTheDocument();
+    expect(await within(dialog).findByText(/^Abandon leaves .+ in Gate spot\. This key cannot read Gate spot\.$/)).toBeInTheDocument();
     expect(dialog.textContent).not.toMatch(/\$0\.00/);
   });
 

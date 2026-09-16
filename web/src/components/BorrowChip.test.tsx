@@ -8,21 +8,32 @@ import { server } from '../test/server';
 import { renderWithClient } from '../test/utils';
 import { BorrowChip } from './BorrowChip';
 
+async function hoverPill(name: string): Promise<HTMLElement> {
+  const pill = await screen.findByRole('button', { name });
+  await userEvent.hover(pill);
+  return screen.findByRole('tooltip');
+}
+
+function factLines(card: HTMLElement, label: string): string[] {
+  const dt = within(card).getByText(label).closest('dt');
+  return [...(dt?.parentElement?.querySelectorAll('dd') ?? [])].map((dd) => dd.textContent ?? '');
+}
+
+function legLines(card: HTMLElement): string[] {
+  const dt = within(card).getByText('For').closest('dt');
+  return [...(dt?.parentElement?.querySelectorAll('dd span') ?? [])].map((span) => span.textContent ?? '');
+}
+
 describe('BorrowChip', () => {
-  it('hover rows', async () => {
+  it('hover facts for one borrow', async () => {
     server.use(rebalanceHandler(rebalanceViews.accountA));
     renderWithClient(<BorrowChip onOpen={vi.fn()} />);
 
-    const pill = await screen.findByRole('button', { name: 'Borrowing 147.05 USDC' });
-    await userEvent.hover(pill);
-
-    const card = await screen.findByRole('tooltip');
-    expect(within(card).getByText('Lent by Gate')).toBeInTheDocument();
-    expect(within(card).getByText('147.05 USDC')).toBeInTheDocument();
-    expect(within(card).getByText('For')).toBeInTheDocument();
-    expect(within(card).getByText('Hyperliquid legs')).toBeInTheDocument();
-    expect(within(card).getByText('Held against the borrow')).toBeInTheDocument();
-    expect(within(card).getByText('$29.41')).toBeInTheDocument();
+    const card = await hoverPill('Borrowing 147.05 USDC');
+    expect(factLines(card, 'Borrowing')).toEqual(['147.05 USDC', 'USDC · Hyperliquid']);
+    expect(factLines(card, 'Held against the borrow')).toEqual(['$29.41']);
+    expect(legLines(card)).toEqual(['Hyperliquid legs']);
+    expect(within(card).queryByText('Lent by Gate')).toBeNull();
   });
 
   it('hover link', async () => {
@@ -30,10 +41,7 @@ describe('BorrowChip', () => {
     const onOpen = vi.fn();
     renderWithClient(<BorrowChip onOpen={onOpen} />);
 
-    const pill = await screen.findByRole('button', { name: 'Borrowing 147.05 USDC' });
-    await userEvent.hover(pill);
-
-    const card = await screen.findByRole('tooltip');
+    const card = await hoverPill('Borrowing 147.05 USDC');
     const link = within(card).getByRole('button', { name: 'Rebalance on Balances ▸' });
     await userEvent.click(link);
     expect(onOpen).toHaveBeenCalledTimes(1);
@@ -51,28 +59,25 @@ describe('BorrowChip', () => {
     expect(within(card).getByRole('button', { name: 'Rebalance on Balances ▸' })).toHaveFocus();
   });
 
-  it('USDT borrow legs', async () => {
+  it('USDT borrow names the CrossEx wallet', async () => {
     server.use(rebalanceHandler(rebalanceViews.exampleE));
     renderWithClient(<BorrowChip onOpen={vi.fn()} />);
 
-    const pill = await screen.findByRole('button', { name: 'Borrowing 612.35 USDT' });
-    await userEvent.hover(pill);
-
-    const card = await screen.findByRole('tooltip');
-    expect(within(card).getByText('Gate, Binance, OKX and Bybit legs')).toBeInTheDocument();
+    const card = await hoverPill('Borrowing 612.35 USDT');
+    expect(factLines(card, 'Borrowing')).toEqual(['612.35 USDT', 'USDT · CrossEx']);
+    expect(legLines(card)).toEqual(['Gate, Binance, OKX and Bybit legs']);
   });
 
-  it('Lighter borrow legs', async () => {
+  it('Lighter borrow names the Lighter wallet', async () => {
     const view = rebalanceViews.exampleC;
     const lighter = { coin: 'USDC', venue: 'LIGHTER', cash: -500, upnl: 0, equity: -500, borrow: 500, imHeldUsd: 100, mmHeldUsd: 50, interestPaidUsd: 0, interestPerDayUsd: 0.15 };
     server.use(rebalanceHandler({ ...view, buckets: [...view.buckets, lighter] }));
     renderWithClient(<BorrowChip onOpen={vi.fn()} />);
 
-    const pill = await screen.findByRole('button', { name: 'Borrowing 500.00 USDC' });
-    await userEvent.hover(pill);
-
-    const card = await screen.findByRole('tooltip');
-    expect(within(card).getByText('Lighter legs')).toBeInTheDocument();
+    const card = await hoverPill('Borrowing 500.00 USDC');
+    expect(factLines(card, 'Borrowing')).toEqual(['500.00 USDC', 'USDC · Lighter']);
+    expect(legLines(card)).toEqual(['Lighter legs']);
+    expect(factLines(card, 'Held against the borrow')).toEqual(['$100.00']);
   });
 
   it('a click on the pill opens Balances', async () => {
@@ -94,20 +99,24 @@ describe('BorrowChip', () => {
     expect(pill.querySelector('[aria-hidden="true"]')).toBeNull();
   });
 
-  it('pill sums every borrow', async () => {
+  it('pill sums every borrow, one line per fact, no table', async () => {
     server.use(rebalanceHandler(rebalanceViews.twoBorrows));
     renderWithClient(<BorrowChip onOpen={vi.fn()} />);
 
-    const pill = await screen.findByRole('button', { name: 'Borrowing 244.00 USDC' });
-    await userEvent.hover(pill);
+    const card = await hoverPill('Borrowing 244.00 USDC');
+    expect(factLines(card, 'Borrowing')).toEqual(['244.00 USDC', 'Lighter 132.00 · Hyperliquid 112.00']);
+    expect(factLines(card, 'Held against the borrow')).toEqual(['$48.80', 'Lighter $26.40 · Hyperliquid $22.40']);
+    expect(within(card).queryByRole('table')).toBeNull();
+  });
 
-    const card = await screen.findByRole('tooltip');
-    expect(within(card).getByText('USDC · Hyperliquid')).toBeInTheDocument();
-    expect(within(card).getByText('USDC · Lighter')).toBeInTheDocument();
-    expect(within(card).getByText('112.00 USDC')).toBeInTheDocument();
-    expect(within(card).getByText('132.00 USDC')).toBeInTheDocument();
-    expect(within(card).getByText('$22.40')).toBeInTheDocument();
-    expect(within(card).getByText('$26.40')).toBeInTheDocument();
+  it('two wallets show both legs lines in the Borrowing order', async () => {
+    server.use(rebalanceHandler(rebalanceViews.twoBorrows));
+    renderWithClient(<BorrowChip onOpen={vi.fn()} />);
+
+    const card = await hoverPill('Borrowing 244.00 USDC');
+    expect(factLines(card, 'Borrowing')[1]).toBe('Lighter 132.00 · Hyperliquid 112.00');
+    expect(legLines(card)).toEqual(['Lighter legs', 'Hyperliquid legs']);
+    expect([...card.querySelectorAll('dt')].map((dt) => dt.textContent)).toEqual(['Borrowing', 'For', 'Held against the borrow']);
   });
 
   it('two coins fall back to a dollar total', async () => {
@@ -116,27 +125,21 @@ describe('BorrowChip', () => {
     server.use(rebalanceHandler({ ...view, buckets: [...view.buckets, lighter] }));
     renderWithClient(<BorrowChip onOpen={vi.fn()} />);
 
-    const pill = await screen.findByRole('button', { name: 'Borrowing $812.35' });
-    await userEvent.hover(pill);
-
-    const card = await screen.findByRole('tooltip');
-    expect(within(card).getByText('USDT · CrossEx')).toBeInTheDocument();
-    expect(within(card).getByText('USDC · Lighter')).toBeInTheDocument();
+    const card = await hoverPill('Borrowing $812.35');
+    expect(factLines(card, 'Borrowing')).toEqual(['$812.35', 'CrossEx $612.35 · Lighter $200.00']);
   });
 
-  it('one wallet keeps the coin pill, not the two wallet table', async () => {
+  it('one wallet names the wallet under the total, no table', async () => {
     server.use(rebalanceHandler(rebalanceViews.oneBorrow));
     renderWithClient(<BorrowChip onOpen={vi.fn()} />);
 
-    const pill = await screen.findByRole('button', { name: 'Borrowing 132.00 USDC' });
-    await userEvent.hover(pill);
-
-    const card = await screen.findByRole('tooltip');
-    expect(within(card).getByText('Lent by Gate')).toBeInTheDocument();
-    expect(within(card).queryByText('Wallet')).toBeNull();
+    const card = await hoverPill('Borrowing 132.00 USDC');
+    expect(factLines(card, 'Borrowing')).toEqual(['132.00 USDC', 'USDC · Lighter']);
+    expect(factLines(card, 'Held against the borrow')).toEqual(['$26.40']);
+    expect(within(card).queryByRole('table')).toBeNull();
   });
 
-  it('pill total equals card total with a borrow under $1', async () => {
+  it('a wallet under $1 counts in the pill total and the hover line', async () => {
     const view = rebalanceViews.oneBorrow;
     const buckets = view.buckets.map((b) =>
       b.coin === 'USDC' && b.venue === 'HYPERLIQUID'
@@ -147,11 +150,20 @@ describe('BorrowChip', () => {
     renderWithClient(<BorrowChip onOpen={vi.fn()} />);
 
     const cardTotal = num(borrowTotalUsd(buckets), 2);
-    expect(await screen.findByRole('button', { name: `Borrowing ${cardTotal} USDC` })).toBeInTheDocument();
+    const card = await hoverPill(`Borrowing ${cardTotal} USDC`);
+    expect(factLines(card, 'Borrowing')).toEqual(['132.40 USDC', 'Lighter 132.00 · Hyperliquid 0.40']);
   });
 
-  it('no pill under a dollar', async () => {
+  it('pill shows when every borrow is under a dollar', async () => {
     server.use(rebalanceHandler(rebalanceViews.borrowUnderOne));
+    renderWithClient(<BorrowChip onOpen={vi.fn()} />);
+
+    const card = await hoverPill('Borrowing 0.40 USDC');
+    expect(factLines(card, 'Borrowing')).toEqual(['0.40 USDC', 'USDC · Hyperliquid']);
+  });
+
+  it('no pill without a borrow', async () => {
+    server.use(rebalanceHandler(rebalanceViews.accountB));
     renderWithClient(<BorrowChip onOpen={vi.fn()} />);
 
     await new Promise((r) => setTimeout(r, 50));
