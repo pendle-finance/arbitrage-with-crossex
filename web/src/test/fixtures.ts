@@ -1467,6 +1467,332 @@ const LIGHTER_CONVERT_DONE_JOB: RebalanceJob = {
 
 const NO_LEGS_PLAN: EvenPlan = { ...balancedPlan(afterOf(1000, 0, 0)), split: [], noLegs: true };
 
+const TWO_BORROWS_BUCKETS: RebalanceBucket[] = [
+  {
+    coin: 'USDT', venue: 'CROSSEX', cash: 1387.45, upnl: 104.47, equity: 1491.92, borrow: 0, imHeldUsd: 0,
+    mmHeldUsd: 0, interestPaidUsd: 0, interestPerDayUsd: 0,
+  },
+  {
+    coin: 'USDC', venue: 'HYPERLIQUID', cash: -100.0, upnl: -12.0, equity: -112.0, borrow: 112.0, imHeldUsd: 22.4,
+    mmHeldUsd: 11.2, interestPaidUsd: 0, interestPerDayUsd: 0,
+  },
+  {
+    coin: 'USDC', venue: 'LIGHTER', cash: -120.0, upnl: -12.0, equity: -132.0, borrow: 132.0, imHeldUsd: 26.4,
+    mmHeldUsd: 13.2, interestPaidUsd: 0, interestPerDayUsd: 0.0396,
+  },
+];
+
+const TWO_BORROWS_SPLIT: WalletShare[] = [
+  { coin: 'USDT', venue: 'CROSSEX', notionalUsd: 1890.5, share: 0.5 },
+  { coin: 'USDC', venue: 'HYPERLIQUID', notionalUsd: 1663.64, share: 0.44 },
+  { coin: 'USDC', venue: 'LIGHTER', notionalUsd: 226.86, share: 0.06 },
+];
+
+const TWO_BORROWS_TARGET: WalletAfter[] = [
+  { coin: 'USDT', venue: 'CROSSEX', cash: 519.49, equity: 623.96 },
+  { coin: 'USDC', venue: 'HYPERLIQUID', cash: 561.08, equity: 549.08 },
+  { coin: 'USDC', venue: 'LIGHTER', cash: 86.88, equity: 74.88 },
+];
+
+const TWO_BORROWS_PLAN: EvenPlan = {
+  balanced: false, noLegs: false, moves: 869.04, shortOfEven: 0, roundCap: 6, split: TWO_BORROWS_SPLIT,
+  routes: {
+    mix: {
+      available: true, reason: null, costUsd: 0.46, seconds: 130, rounds: 1, oneMoreRoundCostUsd: null,
+      marginFreedUsd: 48.8, savesPerDayUsd: 0.04, after: TWO_BORROWS_TARGET,
+      steps: [
+        {
+          round: 1, kind: 'round', buy: 661.13, move: 661.13, arrives: 661.08, borrowLeft: 132.0, seconds: 130,
+          from: 'CROSSEX', to: 'HYPERLIQUID',
+        },
+        {
+          round: null, kind: 'convert', buy: 0, move: 207.29, arrives: 206.88, borrowLeft: 0, seconds: 0,
+          from: 'CROSSEX', to: 'LIGHTER',
+        },
+      ],
+    },
+    loop: {
+      available: true, reason: null, costUsd: 1.08, seconds: 360, rounds: 2, oneMoreRoundCostUsd: null,
+      marginFreedUsd: 48.8, savesPerDayUsd: 0.04, after: TWO_BORROWS_TARGET,
+      steps: [
+        {
+          round: 1, kind: 'round', buy: 661.13, move: 661.13, arrives: 661.08, borrowLeft: 132.0, seconds: 130,
+          from: 'CROSSEX', to: 'HYPERLIQUID',
+        },
+        {
+          round: 2, kind: 'round', buy: 207.91, move: 207.91, arrives: 206.88, borrowLeft: 0, seconds: 230,
+          from: 'CROSSEX', to: 'LIGHTER',
+        },
+      ],
+    },
+    convert: {
+      available: true, reason: null, costUsd: 1.73, seconds: 0, rounds: 0, oneMoreRoundCostUsd: null,
+      marginFreedUsd: 48.8, savesPerDayUsd: 0.04, after: TWO_BORROWS_TARGET,
+      steps: [
+        {
+          round: null, kind: 'convert', buy: 0, move: 662.4, arrives: 661.08, borrowLeft: 132.0, seconds: 0,
+          from: 'CROSSEX', to: 'HYPERLIQUID',
+        },
+        {
+          round: null, kind: 'convert', buy: 0, move: 207.29, arrives: 206.88, borrowLeft: 0, seconds: 0,
+          from: 'CROSSEX', to: 'LIGHTER',
+        },
+      ],
+    },
+  },
+  recommended: 'loop',
+};
+
+const ONE_BORROW_BUCKETS: RebalanceBucket[] = [
+  {
+    coin: 'USDT', venue: 'CROSSEX', cash: 687.53, upnl: 104.47, equity: 792.0, borrow: 0, imHeldUsd: 0,
+    mmHeldUsd: 0, interestPaidUsd: 0, interestPerDayUsd: 0,
+  },
+  {
+    coin: 'USDC', venue: 'HYPERLIQUID', cash: 496.14, upnl: 91.78, equity: 587.92, borrow: 0, imHeldUsd: 0,
+    mmHeldUsd: 0, interestPaidUsd: 0, interestPerDayUsd: 0,
+  },
+  {
+    coin: 'USDC', venue: 'LIGHTER', cash: -120.0, upnl: -12.0, equity: -132.0, borrow: 132.0, imHeldUsd: 26.4,
+    mmHeldUsd: 13.2, interestPaidUsd: 0, interestPerDayUsd: 0.0396,
+  },
+];
+
+const ONE_BORROW_TARGET: WalletAfter[] = [
+  { coin: 'USDT', venue: 'CROSSEX', cash: 479.62, equity: 584.09 },
+  { coin: 'USDC', venue: 'HYPERLIQUID', cash: 496.14, equity: 587.92 },
+  { coin: 'USDC', venue: 'LIGHTER', cash: 86.88, equity: 74.88 },
+];
+
+const ONE_BORROW_PLAN: EvenPlan = {
+  balanced: false, noLegs: false, moves: 206.88, shortOfEven: 0, roundCap: 6, split: TWO_BORROWS_SPLIT,
+  routes: {
+    mix: null,
+    loop: {
+      available: true, reason: null, costUsd: 1.03, seconds: 230, rounds: 1, oneMoreRoundCostUsd: null,
+      marginFreedUsd: 26.4, savesPerDayUsd: 0.04, after: ONE_BORROW_TARGET,
+      steps: [
+        {
+          round: 1, kind: 'round', buy: 207.91, move: 207.91, arrives: 206.88, borrowLeft: 0, seconds: 230,
+          from: 'CROSSEX', to: 'LIGHTER',
+        },
+      ],
+    },
+    convert: {
+      available: true, reason: null, costUsd: 0.41, seconds: 0, rounds: 0, oneMoreRoundCostUsd: null,
+      marginFreedUsd: 26.4, savesPerDayUsd: 0.04,
+      after: [
+        { coin: 'USDT', venue: 'CROSSEX', cash: 480.24, equity: 584.71 },
+        { coin: 'USDC', venue: 'HYPERLIQUID', cash: 496.14, equity: 587.92 },
+        { coin: 'USDC', venue: 'LIGHTER', cash: 86.88, equity: 74.88 },
+      ],
+      steps: [
+        {
+          round: null, kind: 'convert', buy: 0, move: 207.29, arrives: 206.88, borrowLeft: 0, seconds: 0,
+          from: 'CROSSEX', to: 'LIGHTER',
+        },
+      ],
+    },
+  },
+  recommended: 'loop',
+};
+
+const HYPERLIQUID_FREE_BORROW_BUCKETS: RebalanceBucket[] = [
+  {
+    coin: 'USDT', venue: 'CROSSEX', cash: 8400.0, upnl: 0, equity: 8400.0, borrow: 0, imHeldUsd: 0, mmHeldUsd: 0,
+    interestPaidUsd: 0, interestPerDayUsd: 0,
+  },
+  {
+    coin: 'USDC', venue: 'HYPERLIQUID', cash: -4200.0, upnl: 0, equity: -4200.0, borrow: 4200.0, imHeldUsd: 840.0,
+    mmHeldUsd: 420.0, interestPaidUsd: 0, interestPerDayUsd: 0,
+  },
+];
+
+const HYPERLIQUID_FREE_BORROW_TARGET: WalletAfter[] = [
+  { coin: 'USDT', venue: 'CROSSEX', cash: 2800.14, equity: 2800.14 },
+  { coin: 'USDC', venue: 'HYPERLIQUID', cash: 1399.86, equity: 1399.86 },
+];
+
+const HYPERLIQUID_FREE_BORROW_PLAN: EvenPlan = {
+  balanced: false, noLegs: false, moves: 5599.91, shortOfEven: 0, roundCap: 6,
+  split: [
+    { coin: 'USDT', venue: 'CROSSEX', notionalUsd: 8400.0, share: 0.6667 },
+    { coin: 'USDC', venue: 'HYPERLIQUID', notionalUsd: 4200.0, share: 0.3333 },
+  ],
+  routes: {
+    mix: null,
+    loop: {
+      available: true, reason: null, costUsd: 0.05, seconds: 130, rounds: 1, oneMoreRoundCostUsd: null,
+      marginFreedUsd: 840.0, savesPerDayUsd: 0, after: HYPERLIQUID_FREE_BORROW_TARGET,
+      steps: [
+        {
+          round: 1, kind: 'round', buy: 5599.91, move: 5599.91, arrives: 5599.86, borrowLeft: 0, seconds: 130,
+          from: 'CROSSEX', to: 'HYPERLIQUID',
+        },
+      ],
+    },
+    convert: {
+      available: true, reason: null, costUsd: 11.2, seconds: 0, rounds: 0, oneMoreRoundCostUsd: null,
+      marginFreedUsd: 840.0, savesPerDayUsd: 0, after: HYPERLIQUID_FREE_BORROW_TARGET,
+      steps: [
+        {
+          round: null, kind: 'convert', buy: 0, move: 5611.06, arrives: 5599.86, borrowLeft: 0, seconds: 0,
+          from: 'CROSSEX', to: 'HYPERLIQUID',
+        },
+      ],
+    },
+  },
+  recommended: 'loop',
+};
+
+const GAIN_OVER_NEGATIVE_CASH_BUCKETS: RebalanceBucket[] = [
+  {
+    coin: 'USDC', venue: 'LIGHTER', cash: -40.0, upnl: 55.0, equity: 15.0, borrow: 0, imHeldUsd: 0, mmHeldUsd: 0,
+    interestPaidUsd: 0, interestPerDayUsd: 0,
+  },
+];
+
+const GAIN_OVER_NEGATIVE_CASH_PLAN: EvenPlan = {
+  balanced: true, noLegs: false, moves: 0, shortOfEven: 0, roundCap: 0,
+  split: [{ coin: 'USDC', venue: 'LIGHTER', notionalUsd: 15.0, share: 1 }],
+  routes: {
+    mix: null,
+    loop: {
+      available: false, reason: null, costUsd: 0, seconds: 0, rounds: 0, oneMoreRoundCostUsd: null,
+      marginFreedUsd: 0, savesPerDayUsd: 0, after: [{ coin: 'USDC', venue: 'LIGHTER', cash: -40.0, equity: 15.0 }],
+      steps: [],
+    },
+    convert: {
+      available: false, reason: null, costUsd: 0, seconds: 0, rounds: 0, oneMoreRoundCostUsd: null,
+      marginFreedUsd: 0, savesPerDayUsd: 0, after: [{ coin: 'USDC', venue: 'LIGHTER', cash: -40.0, equity: 15.0 }],
+      steps: [],
+    },
+  },
+  recommended: null,
+};
+
+const INTEREST_PAID_SPLIT_BUCKETS: RebalanceBucket[] = [
+  {
+    coin: 'USDT', venue: 'CROSSEX', cash: 900.0, upnl: 0, equity: 900.0, borrow: 0, imHeldUsd: 0, mmHeldUsd: 0,
+    interestPaidUsd: 0, interestPerDayUsd: 0,
+  },
+  {
+    coin: 'USDC', venue: 'HYPERLIQUID', cash: 300.0, upnl: 0, equity: 300.0, borrow: 0, imHeldUsd: 0, mmHeldUsd: 0,
+    interestPaidUsd: 0.31, interestPerDayUsd: 0,
+  },
+  {
+    coin: 'USDC', venue: 'LIGHTER', cash: 200.0, upnl: 0, equity: 200.0, borrow: 0, imHeldUsd: 0, mmHeldUsd: 0,
+    interestPaidUsd: 1.55, interestPerDayUsd: 0,
+  },
+];
+
+const INTEREST_PAID_SPLIT_AFTER: WalletAfter[] = [
+  { coin: 'USDT', venue: 'CROSSEX', cash: 900.0, equity: 900.0 },
+  { coin: 'USDC', venue: 'HYPERLIQUID', cash: 300.0, equity: 300.0 },
+  { coin: 'USDC', venue: 'LIGHTER', cash: 200.0, equity: 200.0 },
+];
+
+const INTEREST_PAID_SPLIT_PLAN: EvenPlan = {
+  balanced: true, noLegs: false, moves: 0, shortOfEven: 0, roundCap: 0,
+  split: [
+    { coin: 'USDT', venue: 'CROSSEX', notionalUsd: 899.92, share: 0.6428 },
+    { coin: 'USDC', venue: 'HYPERLIQUID', notionalUsd: 300.02, share: 0.2143 },
+    { coin: 'USDC', venue: 'LIGHTER', notionalUsd: 200.06, share: 0.1429 },
+  ],
+  routes: {
+    mix: null,
+    loop: {
+      available: false, reason: null, costUsd: 0, seconds: 0, rounds: 0, oneMoreRoundCostUsd: null,
+      marginFreedUsd: 0, savesPerDayUsd: 0, after: INTEREST_PAID_SPLIT_AFTER, steps: [],
+    },
+    convert: {
+      available: false, reason: null, costUsd: 0, seconds: 0, rounds: 0, oneMoreRoundCostUsd: null,
+      marginFreedUsd: 0, savesPerDayUsd: 0, after: INTEREST_PAID_SPLIT_AFTER, steps: [],
+    },
+  },
+  recommended: null,
+};
+
+const ONE_ROUTE_ONLY_BUCKETS: RebalanceBucket[] = [
+  {
+    coin: 'USDT', venue: 'CROSSEX', cash: 300.0, upnl: 0, equity: 300.0, borrow: 0, imHeldUsd: 0, mmHeldUsd: 0,
+    interestPaidUsd: 0, interestPerDayUsd: 0,
+  },
+  {
+    coin: 'USDC', venue: 'HYPERLIQUID', cash: 10.0, upnl: 150.0, equity: 160.0, borrow: 0, imHeldUsd: 0,
+    mmHeldUsd: 0, interestPaidUsd: 0, interestPerDayUsd: 0,
+  },
+];
+
+const ONE_ROUTE_ONLY_PLAN: EvenPlan = {
+  balanced: false, noLegs: false, moves: 10.0, shortOfEven: 5, roundCap: 1,
+  split: [
+    { coin: 'USDT', venue: 'CROSSEX', notionalUsd: 300.01, share: 0.6522 },
+    { coin: 'USDC', venue: 'HYPERLIQUID', notionalUsd: 159.99, share: 0.3478 },
+  ],
+  routes: {
+    mix: null,
+    loop: null,
+    convert: {
+      available: true, reason: null, costUsd: 0.02, seconds: 0, rounds: 0, oneMoreRoundCostUsd: null,
+      marginFreedUsd: 0, savesPerDayUsd: 0,
+      after: [
+        { coin: 'USDT', venue: 'CROSSEX', cash: 310.0, equity: 310.0 },
+        { coin: 'USDC', venue: 'HYPERLIQUID', cash: 0, equity: 150.0 },
+      ],
+      steps: [
+        {
+          round: null, kind: 'convert', buy: 0, move: 10.02, arrives: 10.0, borrowLeft: 0, seconds: 0,
+          from: 'HYPERLIQUID', to: 'CROSSEX',
+        },
+      ],
+    },
+  },
+  recommended: 'convert',
+};
+
+const HIDDEN_ROUTE_BUCKETS: RebalanceBucket[] = [
+  {
+    coin: 'USDT', venue: 'CROSSEX', cash: 400.0, upnl: 0, equity: 400.0, borrow: 0, imHeldUsd: 0, mmHeldUsd: 0,
+    interestPaidUsd: 0, interestPerDayUsd: 0,
+  },
+  {
+    coin: 'USDC', venue: 'HYPERLIQUID', cash: 100.0, upnl: 0, equity: 100.0, borrow: 0, imHeldUsd: 0, mmHeldUsd: 0,
+    interestPaidUsd: 0, interestPerDayUsd: 0,
+  },
+];
+
+const HIDDEN_ROUTE_TARGET: WalletAfter[] = [
+  { coin: 'USDT', venue: 'CROSSEX', cash: 250.0, equity: 250.0 },
+  { coin: 'USDC', venue: 'HYPERLIQUID', cash: 250.0, equity: 250.0 },
+];
+
+const HIDDEN_ROUTE_PLAN: EvenPlan = {
+  balanced: false, noLegs: false, moves: 150.0, shortOfEven: 0, roundCap: 1,
+  split: [
+    { coin: 'USDT', venue: 'CROSSEX', notionalUsd: 350.0, share: 0.7 },
+    { coin: 'USDC', venue: 'HYPERLIQUID', notionalUsd: 150.0, share: 0.3 },
+  ],
+  routes: {
+    mix: null,
+    loop: {
+      available: false, reason: 'Gate paused USDC transfers.', costUsd: 0, seconds: 0, rounds: 0,
+      oneMoreRoundCostUsd: null, marginFreedUsd: 0, savesPerDayUsd: 0, after: HIDDEN_ROUTE_TARGET, steps: [],
+    },
+    convert: {
+      available: true, reason: null, costUsd: 0.3, seconds: 0, rounds: 0, oneMoreRoundCostUsd: null,
+      marginFreedUsd: 0, savesPerDayUsd: 0, after: HIDDEN_ROUTE_TARGET,
+      steps: [
+        {
+          round: null, kind: 'convert', buy: 0, move: 150.3, arrives: 150.0, borrowLeft: 0, seconds: 0,
+          from: 'CROSSEX', to: 'HYPERLIQUID',
+        },
+      ],
+    },
+  },
+  recommended: 'convert',
+};
+
 export const rebalanceViews = {
   accountA: { buckets: ACCOUNT_A_BUCKETS, plan: ACCOUNT_A_PLAN, job: null },
   accountARunning: { buckets: ACCOUNT_A_ROUND_3_BUCKETS, plan: ACCOUNT_A_ROUND_3_PLAN, job: ACCOUNT_A_RUNNING_JOB },
@@ -1656,6 +1982,13 @@ export const rebalanceViews = {
     job: LIGHTER_CONVERT_DONE_JOB,
   },
   noLegs: { buckets: LIGHTER_SPLIT_BUCKETS, plan: NO_LEGS_PLAN, job: null },
+  twoBorrows: { buckets: TWO_BORROWS_BUCKETS, plan: TWO_BORROWS_PLAN, job: null },
+  oneBorrow: { buckets: ONE_BORROW_BUCKETS, plan: ONE_BORROW_PLAN, job: null },
+  hyperliquidFreeBorrow: { buckets: HYPERLIQUID_FREE_BORROW_BUCKETS, plan: HYPERLIQUID_FREE_BORROW_PLAN, job: null },
+  gainOverNegativeCash: { buckets: GAIN_OVER_NEGATIVE_CASH_BUCKETS, plan: GAIN_OVER_NEGATIVE_CASH_PLAN, job: null },
+  interestPaidSplit: { buckets: INTEREST_PAID_SPLIT_BUCKETS, plan: INTEREST_PAID_SPLIT_PLAN, job: null },
+  oneRouteOnly: { buckets: ONE_ROUTE_ONLY_BUCKETS, plan: ONE_ROUTE_ONLY_PLAN, job: null },
+  hiddenRoute: { buckets: HIDDEN_ROUTE_BUCKETS, plan: HIDDEN_ROUTE_PLAN, job: null },
 } satisfies Record<string, RebalanceView>;
 
 const ACCOUNT_B_SPOT: SpotBalance[] = [
@@ -1691,6 +2024,16 @@ const MOVING_TRANSFER: TransferJob = {
 };
 
 const FAILED_TRANSFER: TransferJob = { ...MOVING_TRANSFER, status: 'failed', failText: 'Transfer failed: x.' };
+
+const FAILED_OVER_CAP_TRANSFER: TransferJob = {
+  id: 'mtzwovrcap', coin: 'USDC', from: 'CROSSEX_HYPERLIQUID', to: 'SPOT', amount: 442.02, status: 'failed',
+  received: null, failText: 'Insufficient transferAvailable, transferAvailable: 292.0185407',
+  createdAt: REBALANCE_NOW - 130_000, doneAt: REBALANCE_NOW - 60_000,
+};
+
+const FAILED_OVER_CAP_PATHS: TransferPath[] = ACCOUNT_B_PATHS.map((path) =>
+  path.coin === 'USDC' && path.from === 'CROSSEX_HYPERLIQUID' && path.to === 'SPOT' ? { ...path, max: 292.02 } : path,
+);
 
 function withSpot(spot: SpotBalance[]): TransferView {
   const paths = ACCOUNT_B_PATHS.map((path) =>
@@ -1729,6 +2072,10 @@ export const transferViews = {
   ]),
   movingDeal: { spot: ACCOUNT_B_SPOT, paths: ACCOUNT_B_PATHS, lock: 'deal', transfer: MOVING_TRANSFER },
   failedLocked: { spot: ACCOUNT_B_SPOT, paths: ACCOUNT_B_PATHS, lock: 'rebalance', transfer: FAILED_TRANSFER },
+  failedOverCap: { spot: ACCOUNT_B_SPOT, paths: FAILED_OVER_CAP_PATHS, lock: null, transfer: FAILED_OVER_CAP_TRANSFER },
+  failedAndRebalanceRunning: {
+    spot: ACCOUNT_B_SPOT, paths: FAILED_OVER_CAP_PATHS, lock: 'rebalance', transfer: FAILED_OVER_CAP_TRANSFER,
+  },
 } satisfies Record<string, TransferView>;
 
 const ACCOUNT_ASSETS = {
@@ -1834,6 +2181,99 @@ const ACCOUNT_ASSETS = {
       borrowingInitialMargin: '0', borrowingMaintenanceMargin: '0',
     },
   ],
+  twoBorrows: [
+    {
+      coin: 'USDT', exchangeType: 'CROSSEX', balance: '1387.45', availableBalance: '1387.45', upnl: '104.47',
+      equity: '1491.92', liability: '0', borrowingInitialMargin: '0', borrowingMaintenanceMargin: '0',
+    },
+    {
+      coin: 'USDC', exchangeType: 'HYPERLIQUID', balance: '-100.00', availableBalance: '0', upnl: '-12.00',
+      equity: '-112.00', liability: '112.00', borrowingInitialMargin: '22.40', borrowingMaintenanceMargin: '11.20',
+    },
+    {
+      coin: 'USDC', exchangeType: 'LIGHTER', balance: '-120.00', availableBalance: '0', upnl: '-12.00',
+      equity: '-132.00', liability: '132.00', borrowingInitialMargin: '26.40', borrowingMaintenanceMargin: '13.20',
+    },
+  ],
+  oneBorrow: [
+    {
+      coin: 'USDT', exchangeType: 'CROSSEX', balance: '687.53', availableBalance: '687.53', upnl: '104.47',
+      equity: '792.00', liability: '0', borrowingInitialMargin: '0', borrowingMaintenanceMargin: '0',
+    },
+    {
+      coin: 'USDC', exchangeType: 'HYPERLIQUID', balance: '496.14', availableBalance: '496.14', upnl: '91.78',
+      equity: '587.92', liability: '0', borrowingInitialMargin: '0', borrowingMaintenanceMargin: '0',
+    },
+    {
+      coin: 'USDC', exchangeType: 'LIGHTER', balance: '-120.00', availableBalance: '0', upnl: '-12.00',
+      equity: '-132.00', liability: '132.00', borrowingInitialMargin: '26.40', borrowingMaintenanceMargin: '13.20',
+    },
+  ],
+  hyperliquidFreeBorrow: [
+    {
+      coin: 'USDT', exchangeType: 'CROSSEX', balance: '8400.00', availableBalance: '8400.00', upnl: '0',
+      equity: '8400.00', liability: '0', borrowingInitialMargin: '0', borrowingMaintenanceMargin: '0',
+    },
+    {
+      coin: 'USDC', exchangeType: 'HYPERLIQUID', balance: '-4200.00', availableBalance: '0', upnl: '0',
+      equity: '-4200.00', liability: '4200.00', borrowingInitialMargin: '840.00',
+      borrowingMaintenanceMargin: '420.00',
+    },
+  ],
+  gainOverNegativeCash: [
+    {
+      coin: 'USDC', exchangeType: 'LIGHTER', balance: '-40.00', availableBalance: '0', upnl: '55.00',
+      equity: '15.00', liability: '0', borrowingInitialMargin: '0', borrowingMaintenanceMargin: '0',
+    },
+  ],
+  interestPaidSplit: [
+    {
+      coin: 'USDT', exchangeType: 'CROSSEX', balance: '900.00', availableBalance: '900.00', upnl: '0',
+      equity: '900.00', liability: '0', borrowingInitialMargin: '0', borrowingMaintenanceMargin: '0',
+    },
+    {
+      coin: 'USDC', exchangeType: 'HYPERLIQUID', balance: '300.00', availableBalance: '300.00', upnl: '0',
+      equity: '300.00', liability: '0', borrowingInitialMargin: '0', borrowingMaintenanceMargin: '0',
+    },
+    {
+      coin: 'USDC', exchangeType: 'LIGHTER', balance: '200.00', availableBalance: '200.00', upnl: '0',
+      equity: '200.00', liability: '0', borrowingInitialMargin: '0', borrowingMaintenanceMargin: '0',
+    },
+  ],
+  oneRouteOnly: [
+    {
+      coin: 'USDT', exchangeType: 'CROSSEX', balance: '300.00', availableBalance: '300.00', upnl: '0',
+      equity: '300.00', liability: '0', borrowingInitialMargin: '0', borrowingMaintenanceMargin: '0',
+    },
+    {
+      coin: 'USDC', exchangeType: 'HYPERLIQUID', balance: '10.00', availableBalance: '10.00', upnl: '150.00',
+      equity: '160.00', liability: '0', borrowingInitialMargin: '0', borrowingMaintenanceMargin: '0',
+    },
+  ],
+  hiddenRoute: [
+    {
+      coin: 'USDT', exchangeType: 'CROSSEX', balance: '400.00', availableBalance: '400.00', upnl: '0',
+      equity: '400.00', liability: '0', borrowingInitialMargin: '0', borrowingMaintenanceMargin: '0',
+    },
+    {
+      coin: 'USDC', exchangeType: 'HYPERLIQUID', balance: '100.00', availableBalance: '100.00', upnl: '0',
+      equity: '100.00', liability: '0', borrowingInitialMargin: '0', borrowingMaintenanceMargin: '0',
+    },
+  ],
+  ethTwoVenues: [
+    {
+      coin: 'USDT', exchangeType: 'CROSSEX', balance: '500', availableBalance: '500', upnl: '0', equity: '500',
+      liability: '0', borrowingInitialMargin: '0', borrowingMaintenanceMargin: '0',
+    },
+    {
+      coin: 'USDC', exchangeType: 'HYPERLIQUID', balance: '503', availableBalance: '503', upnl: '-3', equity: '500',
+      liability: '0', borrowingInitialMargin: '0', borrowingMaintenanceMargin: '0',
+    },
+    {
+      coin: 'USDC', exchangeType: 'GATE', balance: '0', availableBalance: '0', upnl: '0', equity: '0', liability: '0',
+      borrowingInitialMargin: '0', borrowingMaintenanceMargin: '0',
+    },
+  ],
 };
 
 export const accountBodies = {
@@ -1871,4 +2311,75 @@ export const accountBodies = {
     ...account, marginBalance: '0', availableMargin: '0', initialMargin: '0', maintenanceMargin: '0',
     initialMarginRate: '0', maintenanceMarginRate: '0', assets: [],
   },
+  twoBorrows: {
+    ...account, marginBalance: '1247.92', availableMargin: '1199.12', initialMargin: '48.80', maintenanceMargin: '24.40',
+    initialMarginRate: '0.0391', maintenanceMarginRate: '0.0196', assets: ACCOUNT_ASSETS.twoBorrows,
+  },
+  oneBorrow: {
+    ...account, marginBalance: '1247.92', availableMargin: '1221.52', initialMargin: '26.40',
+    maintenanceMargin: '13.20', initialMarginRate: '0.0212', maintenanceMarginRate: '0.0106',
+    assets: ACCOUNT_ASSETS.oneBorrow,
+  },
+  hyperliquidFreeBorrow: {
+    ...account, marginBalance: '4200.00', availableMargin: '3360.00', initialMargin: '840.00',
+    maintenanceMargin: '420.00', initialMarginRate: '0.2000', maintenanceMarginRate: '0.1000',
+    assets: ACCOUNT_ASSETS.hyperliquidFreeBorrow,
+  },
+  gainOverNegativeCash: {
+    ...account, marginBalance: '15.00', availableMargin: '15.00', initialMargin: '0', maintenanceMargin: '0',
+    initialMarginRate: '0', maintenanceMarginRate: '0', assets: ACCOUNT_ASSETS.gainOverNegativeCash,
+  },
+  interestPaidSplit: {
+    ...account, marginBalance: '1400.00', availableMargin: '1400.00', initialMargin: '0', maintenanceMargin: '0',
+    initialMarginRate: '0', maintenanceMarginRate: '0', assets: ACCOUNT_ASSETS.interestPaidSplit,
+  },
+  oneRouteOnly: {
+    ...account, marginBalance: '460.00', availableMargin: '460.00', initialMargin: '0', maintenanceMargin: '0',
+    initialMarginRate: '0', maintenanceMarginRate: '0', assets: ACCOUNT_ASSETS.oneRouteOnly,
+  },
+  hiddenRoute: {
+    ...account, marginBalance: '500.00', availableMargin: '500.00', initialMargin: '0', maintenanceMargin: '0',
+    initialMarginRate: '0', maintenanceMarginRate: '0', assets: ACCOUNT_ASSETS.hiddenRoute,
+  },
+  ethTwoVenues: {
+    ...account, marginBalance: '1000', availableMargin: '775', initialMargin: '225', maintenanceMargin: '400',
+    initialMarginRate: '0.225', maintenanceMarginRate: '0.4', assets: ACCOUNT_ASSETS.ethTwoVenues,
+  },
 } satisfies Record<string, CrossexAccount>;
+
+export const positionsBodies = {
+  ethTwoVenues: {
+    positions: [
+      makeCrossexPosition({ maintenanceMargin: '200' }),
+      makeCrossexPosition({
+        symbol: 'HYPERLIQUID_FUTURE_ETH_USDC',
+        positionSide: 'SHORT',
+        positionQty: '-0.3',
+        maxLeverage: '20',
+        upnl: '-3',
+        upnlRate: '-0.004',
+        fee: '-0.3',
+        initialMargin: '75',
+        maintenanceMargin: '200',
+      }),
+    ],
+    exposure: [
+      {
+        base: 'ETH',
+        legs: [
+          { symbol: 'GATE_FUTURE_ETH_USDT', exchange: 'GATE', quote: 'USDT', side: 'LONG', qty: 0.3, value: 750 },
+          {
+            symbol: 'HYPERLIQUID_FUTURE_ETH_USDC', exchange: 'HYPERLIQUID', quote: 'USDC', side: 'SHORT', qty: 0.3,
+            value: 750,
+          },
+        ],
+        longValue: 750,
+        shortValue: 750,
+        netValue: 0,
+        grossValue: 1500,
+        neutral: true,
+        singleLeg: false,
+      },
+    ],
+  },
+} satisfies Record<string, PositionsResponse>;

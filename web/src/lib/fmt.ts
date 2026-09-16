@@ -66,6 +66,13 @@ export function prettyVenue(v: string): string {
   return v.length <= 3 ? v : v.charAt(0) + v.slice(1).toLowerCase();
 }
 
+export const WALLET_SHORT: Readonly<Record<string, string>> = {
+  'USDT/CROSSEX': 'CrossEx',
+  'USDC/HYPERLIQUID': 'Hyperliquid',
+  'USDC/LIGHTER': 'Lighter',
+  'USDC/GATE': 'Gate',
+};
+
 // ---------------------------------------------------------------------------
 // Web-only additions
 // ---------------------------------------------------------------------------

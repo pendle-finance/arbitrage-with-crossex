@@ -1,6 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import type { CrossexAccount, CrossexPosition, ExposureGroup, PositionsResponse } from '../api/types';
-import { describeLine, fmtLinePrice, fmtMove, lineFor, lineLabel, liquidationLines, nearestLiquidation } from './liquidation';
+import {
+  describeLine,
+  fmtLinePrice,
+  fmtMove,
+  lineFor,
+  lineLabel,
+  liquidationLines,
+  nearestLiquidation,
+  type LiquidationLine,
+} from './liquidation';
 
 /** The lines of a view the model could price. */
 const lines = (...args: Parameters<typeof liquidationLines>) => liquidationLines(...args)!.lines;
@@ -76,6 +85,7 @@ describe('liquidationLines', () => {
     // 20000 = 2500 f + 25000 (f - 1)  →  f = 45000 / 27500.
     const [line] = lines(account(), box());
     expect(line.base).toBe('ETH');
+    expect(line.venue).toBe('Hyperliquid');
     expect(line.move).toBeCloseTo(45000 / 27500 - 1, 4);
     expect(line.price).toBeCloseTo(2300 * (45000 / 27500), 2);
   });
@@ -86,6 +96,7 @@ describe('liquidationLines', () => {
     lighter.exposure[0].legs[1] = { ...lighter.exposure[0].legs[1], symbol: 'LIGHTER_FUTURE_ETH_USDC', exchange: 'LIGHTER' };
     const assets = account().assets.map((a) => (a.exchangeType === 'HYPERLIQUID' ? { ...a, exchangeType: 'LIGHTER' } : a));
     const [line] = lines(account({ assets }), lighter);
+    expect(line.venue).toBe('Lighter');
     expect(line.move).toBeCloseTo(45000 / 27500 - 1, 4);
     const [covered] = lines(account({ assets }), lighter, { 'USDC/LIGHTER': 20000, 'USDT/CROSSEX': -20000 });
     expect(covered.move).toBeCloseTo(47000 / 27500 - 1, 4);
@@ -133,6 +144,7 @@ describe('liquidationLines', () => {
       ],
     };
     const [line] = lines(account({ maintenanceMargin: '1250' }), lone);
+    expect(line.venue).toBe('Hyperliquid');
     // 20000 - 250000 (1 - f) = 1250 f + 25000 (1 - f) → f = 255000 / 273750, a 6.9% dump.
     expect(line.move).toBeCloseTo(255000 / 273750 - 1, 4);
     expect(line.move).toBeLessThan(0);
@@ -144,6 +156,7 @@ describe('liquidationLines', () => {
     usdt.exposure[0].legs[1] = { ...usdt.exposure[0].legs[1], symbol: 'BINANCE_FUTURE_ETH_USDT', exchange: 'BINANCE', quote: 'USDT' };
     const [line] = lines(account(), usdt);
     // 20000 = 2500 f  →  f = 8, a +700% pump.
+    expect(line.venue).toBe('CrossEx');
     expect(line.move).toBeCloseTo(7, 4);
   });
 
@@ -160,6 +173,37 @@ describe('liquidationLines', () => {
     expect(liquidationLines(account({ maintenanceMargin: undefined as unknown as string }), box())).toBeNull();
     expect(nearestLiquidation(account({ marginBalance: 'n/a' }), box())).toBeNull();
     expect(nearestLiquidation(undefined, box())).toBeNull();
+  });
+
+  it('prices a hedged coin across every venue at once', () => {
+    const view = liquidationLines(account(), box())!;
+    expect(view.lines).toHaveLength(1);
+    expect(view.lines[0].base).toBe('ETH');
+    expect(view.lines[0].move).toBeCloseTo(45000 / 27500 - 1, 4);
+    expect(view.lines[0].move).not.toBeCloseTo(17500 / 276250, 2);
+  });
+
+  it('names the venue of the losing leg', () => {
+    const [pump] = lines(account(), box());
+    expect(pump.move).toBeGreaterThan(0);
+    expect(pump.venue).toBe('Hyperliquid');
+
+    const flipped = box();
+    flipped.exposure[0].legs[0].side = 'SHORT';
+    flipped.exposure[0].legs[1].side = 'LONG';
+    const [shortOnGate] = lines(account(), flipped);
+    expect(shortOnGate.move).toBeGreaterThan(0);
+    expect(shortOnGate.venue).toBe('CrossEx');
+
+    const longOnly: PositionsResponse = {
+      positions: [position('GATE_FUTURE_ETH_USDT', { positionValue: '250000', markPrice: '2300', maintenanceMargin: '1250' })],
+      exposure: [
+        group('ETH', [{ symbol: 'GATE_FUTURE_ETH_USDT', exchange: 'GATE', quote: 'USDT', side: 'LONG', qty: 108.7, value: 250000 }]),
+      ],
+    };
+    const [dump] = lines(account({ maintenanceMargin: '1250' }), longOnly);
+    expect(dump.move).toBeLessThan(0);
+    expect(dump.venue).toBe('CrossEx');
   });
 
   it('matches the live account of 2026-09-07 within a percent', () => {
@@ -197,9 +241,10 @@ describe('liquidationLines', () => {
     const view = liquidationLines(acc, live)!;
     // By hand: 926.55 of room, eaten at 25.37 (net short) + 47.0 (legs) +
     // 152.04 (borrow) = 224.4 per 1x of ETH  →  +4.13.
-    const eth = lineFor(view, 'ETH') as { move: number; price: number };
+    const eth = lineFor(view, 'ETH') as LiquidationLine;
     expect(eth.move).toBeCloseTo(4.13, 1);
     expect(eth.price).toBeCloseTo(2492.5 * 5.13, -1);
+    expect(eth.venue).toBe('Hyperliquid');
     // HYPE: 926.55 eaten at 0.06 (net) + 13.26 (legs) + 19.94 (borrow) = 33.3 per 1x → far past 10x.
     expect(lineFor(view, 'HYPE')).toBe('far');
     expect(view.far).toEqual(['HYPE']);
@@ -213,10 +258,14 @@ describe('formatting', () => {
     expect(fmtMove(-0.2)).toBe('-20%');
     expect(fmtLinePrice(3150.4)).toBe('~$3,150');
     expect(fmtLinePrice(115.23)).toBe('~$115.23');
-    expect(lineLabel({ base: 'ETH', price: 3150, move: 0.37 })).toBe('Liquidates if ETH hits ~$3,150 (+37%)');
-    expect(lineLabel({ base: 'ETH', price: 1840, move: -0.2 })).toBe('Liquidates if ETH falls to ~$1,840 (-20%)');
-    expect(describeLine({ base: 'ETH', price: 3150, move: 0.37 })).toBe(
-      'Liquidates at about $3,150 if only ETH moves (+37%) and every other coin holds still.',
+    expect(lineLabel({ base: 'ETH', venue: 'Hyperliquid', price: 3150, move: 0.37 })).toBe(
+      'Liquidates if ETH on Hyperliquid hits ~$3,150 (+37%)',
+    );
+    expect(lineLabel({ base: 'ETH', venue: 'CrossEx', price: 1840, move: -0.2 })).toBe(
+      'Liquidates if ETH on CrossEx falls to ~$1,840 (-20%)',
+    );
+    expect(describeLine({ base: 'ETH', venue: 'Hyperliquid', price: 3150, move: 0.37 })).toBe(
+      'Liquidates at about $3,150 if only ETH on Hyperliquid moves (+37%) and every other leg holds still.',
     );
   });
 });

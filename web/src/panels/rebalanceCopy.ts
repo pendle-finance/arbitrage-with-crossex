@@ -1,5 +1,5 @@
 import type { Pool } from '../api/types';
-import { num } from '../lib/fmt';
+import { num, WALLET_SHORT } from '../lib/fmt';
 
 export const roundCount = (n: number) => `${num(n, 0)} ${n === 1 ? 'round' : 'rounds'}`;
 
@@ -10,11 +10,9 @@ export const WALLET_LABEL: Readonly<Record<string, string>> = {
   'USDC/GATE': 'USDC · Gate',
 };
 
-export const VENUE_NAME: Readonly<Record<string, string>> = { HYPERLIQUID: 'Hyperliquid', LIGHTER: 'Lighter' };
-
 export const poolKey = (pool: Pool): string => (pool === 'CROSSEX' ? 'USDT/CROSSEX' : `USDC/${pool}`);
 
-const venueWallet = (pool: Pool): string => `the CrossEx ${VENUE_NAME[pool]} wallet`;
+const venueWallet = (pool: Pool): string => `the CrossEx ${WALLET_SHORT[poolKey(pool)]} wallet`;
 
 export const LEG_TEXT: Readonly<Record<string, string>> = {
   'Buy USDC': 'Buy USDC in CrossEx',
@@ -126,13 +124,10 @@ export const HOVER = {
   whyLoopMore: (n: number) => `Spot loop runs until even. That takes ${roundCount(n)} here.`,
   frees: 'Initial margin the repaid borrow no longer locks.',
   saves: 'Borrow interest per day this stops.',
-  liquidation: 'Price where Gate liquidates the account if only this coin moves. Now → after the rebalance.',
   onTheWay: 'In transit through Gate spot. Not margin.',
   gateSpot: 'Not margin.',
   gateSpotAssets: 'Not margin. No equity or PnL.',
-  resume: 'Continue from the stopped step.',
   abandon: 'Stop the run. Funds stay where they are.',
-  shortOfEven: 'Unrealized gain. Cannot move until those positions close.',
   transferTitle: "Move funds between Gate spot and CrossEx. Gate's website cannot do this.",
   fee: 'Gate fee. CrossEx Hyperliquid wallet: in $0.05, out $1.00. CrossEx Lighter wallet: in $1.03, out free. Others free.',
   time: 'Typical time. Moves into or out of the CrossEx Hyperliquid and Lighter wallets can take longer.',
@@ -140,3 +135,35 @@ export const HOVER = {
   upToOut: "Free margin, capped at this wallet's cash.",
   upToInto: 'Your Gate spot balance.',
 } as const;
+
+export const VERDICT_NO_BORROW = 'No borrow. Rebalance saves nothing today.';
+export const VERDICT_BALANCED = 'Every wallet is on its share. Nothing to move.';
+
+export const FACT_BORROWING = 'Borrowing';
+export const FACT_INTEREST_NOW = 'Interest now';
+export const FACT_INTEREST_PAID = 'Interest paid';
+export const FACT_LIQUIDATION = 'Liquidation';
+
+export const BAR_CAPTION = 'Now against target';
+export const SHARE_CAPTION = 'Position share';
+export const GATE_SPOT = 'Gate spot';
+
+export const HOVER_CASH = 'Cash';
+export const HOVER_UPNL = 'Unrealized PnL';
+export const HOVER_TARGET = 'Balanced equity';
+
+export const MODAL_CHANGE_ROUTE = 'Change route';
+export const MODAL_KEEP_ROUTE = 'Keep the recommended one';
+export const MODAL_AFTER = 'After rebalance';
+export const MODAL_FREES = 'Frees';
+export const MODAL_SAVES = 'Saves';
+export const MODAL_STEPS = 'Show the steps';
+export const MODAL_HOLD = 'Hold to rebalance';
+export const MODAL_RESUME = 'Resume';
+export const MODAL_ABANDON = 'Abandon';
+
+export const TRANSFER_CTA = 'Move money';
+
+export const HYPERLIQUID_FREE_LINE = 'free to 10,000';
+export const INTEREST_PAID_ALL_TIME = 'all time';
+export const NO_FREE_ALLOWANCE = 'no free allowance';

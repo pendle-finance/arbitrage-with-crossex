@@ -1,8 +1,12 @@
 import { useId, type ReactNode } from 'react';
-import type { PlannedStep, Pool, RebalanceJob, RebalanceStep, RoutePlan } from '../api/types';
+import type { PlannedStep, Pool, RebalanceJob, RebalanceStep, RouteName, RoutePlan } from '../api/types';
+import { HoverCard } from '../components/HoverCard';
+import { SignedNumber } from '../components/SignedNumber';
 import { microLabelClass } from '../components/Th';
 import { fmtAbout, fmtAge, num } from '../lib/fmt';
-import { LEG_TEXT, MOVE_TEXT } from './rebalanceCopy';
+import { HOVER_CASH, HOVER_TARGET, HOVER_UPNL, LEG_TEXT, MOVE_TEXT } from './rebalanceCopy';
+
+const HOVER_WIDTH_PX = 268;
 
 type BarTone = 'usdt' | 'usdc' | 'lighter' | 'gate' | 'spot';
 
@@ -10,9 +14,24 @@ export interface BarRow {
   key: string;
   label: ReactNode;
   cash: number;
-  gain: number;
+  upnl: number;
+  target: number | null;
   tone: BarTone;
 }
+
+export const WALLET_TONE: Record<string, BarTone> = {
+  'USDT/CROSSEX': 'usdt',
+  'USDC/HYPERLIQUID': 'usdc',
+  'USDC/LIGHTER': 'lighter',
+  'USDC/GATE': 'gate',
+};
+
+export const ALWAYS_SHOWN = ['USDT/CROSSEX', 'USDC/HYPERLIQUID'];
+
+export const ROUTE_ORDER: RouteName[] = ['mix', 'loop', 'convert'];
+
+export const scaleOf = (...sets: BarRow[][]) =>
+  Math.max(0, ...sets.flat().map((row) => Math.max(row.cash, row.cash + row.upnl, row.target ?? 0)));
 
 const BAR_FILL: Record<BarTone, string> = {
   usdt: 'bg-info',
@@ -22,53 +41,128 @@ const BAR_FILL: Record<BarTone, string> = {
   spot: 'bg-gold',
 };
 
-const GAIN_FILL: Record<BarTone, string> = {
-  usdt: 'bar-gain-usdt',
-  usdc: 'bar-gain-usdc',
-  lighter: 'bar-gain-lighter',
-  gate: 'bar-gain-gate',
-  spot: 'bar-gain-spot',
-};
+const pnlFill = (upnl: number): string => (upnl >= 0 ? 'bar-pnl-gain' : 'bar-pnl-loss');
 
-function barParts(row: BarRow): { value: number; solid: number; gain: number } {
-  const value = row.cash + row.gain;
-  if (value <= 0) return { value, solid: 0, gain: 0 };
-  const solid = Math.min(value, Math.max(0, row.cash));
-  return { value, solid, gain: value - solid };
+interface BarParts {
+  equity: number;
+  zero: number;
+  cashLeft: number;
+  cashWidth: number;
+  pnlLeft: number;
+  pnlWidth: number;
+  target: number | null;
 }
 
-function widthOf(part: number, scale: number): string {
-  const pct = scale > 0 ? Math.min(100, (Math.abs(part) / scale) * 100) : 0;
-  return `${pct}%`;
+function scalePoint(rows: BarRow[], scale: number): (value: number) => number {
+  const ends = rows.flatMap((row) => [row.cash, row.cash + row.upnl, row.target ?? 0]);
+  const low = Math.min(0, ...ends);
+  const high = Math.max(scale, 0, ...ends);
+  const span = high - low > 0 ? high - low : 1;
+  return (value) => Math.min(100, Math.max(0, ((value - low) / span) * 100));
+}
+
+function barParts(row: BarRow, at: (value: number) => number): BarParts {
+  const equity = row.cash + row.upnl;
+  const cashLeft = at(Math.min(0, row.cash));
+  const pnlLeft = at(Math.min(row.cash, equity));
+  return {
+    equity,
+    zero: at(0),
+    cashLeft,
+    cashWidth: at(Math.max(0, row.cash)) - cashLeft,
+    pnlLeft,
+    pnlWidth: at(Math.max(row.cash, equity)) - pnlLeft,
+    target: row.target === null ? null : at(row.target),
+  };
+}
+
+const cssPct = (value: number): string => `${value}%`;
+
+function WalletHover({ row }: { row: BarRow }) {
+  return (
+    <div className="flex flex-col gap-2 text-xs">
+      <span className="font-semibold text-ink-50">{row.label}</span>
+      <div aria-hidden className="h-px bg-ink-700" />
+      <div className="flex items-center gap-2.5">
+        <span aria-hidden data-swatch="cash" className={`h-2.5 w-2.5 shrink-0 rounded-sm ${BAR_FILL[row.tone]}`} />
+        <span className="text-ink-400">{HOVER_CASH}</span>
+        <span className={`num ml-auto ${row.cash < 0 ? 'text-guava' : 'text-ink-100'}`}>{num(row.cash)}</span>
+      </div>
+      <div className="flex items-center gap-2.5">
+        <span aria-hidden data-swatch="pnl" className={`h-2.5 w-2.5 shrink-0 rounded-sm ${pnlFill(row.upnl)}`} />
+        <span className="text-ink-400">{HOVER_UPNL}</span>
+        <SignedNumber value={row.upnl} className="ml-auto" />
+      </div>
+      {row.target !== null && (
+        <div className="flex items-center gap-2.5">
+          <span aria-hidden data-swatch="target" className="mx-1 h-2.5 w-0.5 shrink-0 bg-gold" />
+          <span className="text-ink-400">{HOVER_TARGET}</span>
+          <span className="num ml-auto text-gold">{num(row.target)}</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function WalletBar({ row, parts }: { row: BarRow; parts: BarParts }) {
+  return (
+    <div className="grid min-w-0 flex-1">
+      <HoverCard
+        icon={false}
+        widthPx={HOVER_WIDTH_PX}
+        label={
+          <div className="relative h-3 w-full overflow-hidden rounded-sm bg-ink-950">
+            <div aria-hidden data-zero-line="" className="absolute inset-y-0 z-10 w-px bg-ink-600" style={{ left: cssPct(parts.zero) }} />
+            <div
+              aria-hidden
+              data-bar-cash=""
+              className={`absolute inset-y-0 ${BAR_FILL[row.tone]}`}
+              style={{ left: cssPct(parts.cashLeft), width: cssPct(parts.cashWidth) }}
+            />
+            <div
+              aria-hidden
+              data-bar-pnl=""
+              className={`absolute inset-y-0 z-0 ${pnlFill(row.upnl)}`}
+              style={{ left: cssPct(parts.pnlLeft), width: cssPct(parts.pnlWidth) }}
+            />
+            {parts.target !== null && (
+              <div
+                aria-hidden
+                data-bar-target=""
+                className="absolute inset-y-0 z-20 w-0.5 -translate-x-px bg-gold"
+                style={{ left: cssPct(parts.target) }}
+              />
+            )}
+          </div>
+        }
+      >
+        <WalletHover row={row} />
+      </HoverCard>
+    </div>
+  );
 }
 
 export function BalanceBars({ caption, rows, scale }: { caption: ReactNode; rows: BarRow[]; scale: number }) {
   const captionId = useId();
-  const bars = rows.map((row) => ({ row, ...barParts(row) }));
+  const at = scalePoint(rows, scale);
   return (
     <div role="group" aria-labelledby={captionId} className="flex flex-col gap-2">
       <div id={captionId} className={`h-4 ${microLabelClass}`}>
         {caption}
       </div>
       <div className="flex flex-col gap-1.5">
-        {bars.map(({ row, value, solid, gain }) => (
-          <div key={row.key} className="flex h-4 items-center gap-3 text-xs">
-            <div className="w-40 shrink-0 whitespace-nowrap text-ink-100">{row.label}</div>
-            <div className="relative h-3 min-w-0 flex-1">
-              <div aria-hidden className="flex h-3 w-full overflow-hidden rounded-sm bg-ink-950">
-                <div className="flex flex-1 justify-end">
-                  {value < 0 && <div className="h-full bg-guava" style={{ width: widthOf(value, scale) }} />}
-                </div>
-                <div className="flex flex-1">
-                  {solid > 0 && <div className={`h-full ${BAR_FILL[row.tone]}`} style={{ width: widthOf(solid, scale) }} />}
-                  {gain > 0 && <div className={`h-full ${GAIN_FILL[row.tone]}`} style={{ width: widthOf(gain, scale) }} />}
-                </div>
-              </div>
-              <div aria-hidden data-zero-line="" className="absolute left-1/2 -top-0.5 -bottom-0.5 w-px bg-ink-100" />
+        {rows.map((row) => {
+          const parts = barParts(row, at);
+          return (
+            <div key={row.key} data-bar-row={row.key} className="flex h-4 items-center gap-3 text-xs">
+              <div className="w-40 shrink-0 whitespace-nowrap text-ink-100">{row.label}</div>
+              <WalletBar row={row} parts={parts} />
+              <span className={`num w-20 shrink-0 text-right ${parts.equity < 0 ? 'text-guava' : 'text-ink-100'}`}>
+                {num(parts.equity)}
+              </span>
             </div>
-            <span className="num w-20 shrink-0 text-right text-ink-100">{num(value)}</span>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );
@@ -88,23 +182,6 @@ export function ShareColumn({ caption, rows, shares }: { caption: ReactNode; row
           </span>
         ))}
       </div>
-    </div>
-  );
-}
-
-export function BarLegend({ rows }: { rows: BarRow[] }) {
-  const tone = rows.find((row) => barParts(row).gain > 0)?.tone;
-  if (!tone) return null;
-  return (
-    <div className="flex items-center gap-4 text-xs text-ink-400">
-      <span className="inline-flex items-center gap-1.5">
-        <span aria-hidden className={`h-2 w-3 rounded-sm ${BAR_FILL[tone]}`} />
-        cash
-      </span>
-      <span className="inline-flex items-center gap-1.5">
-        <span aria-hidden className={`h-2 w-3 rounded-sm ${GAIN_FILL[tone]}`} />
-        unrealized gain
-      </span>
     </div>
   );
 }
@@ -165,12 +242,12 @@ const STEP_BAR: Record<StepRow['state'], ProgressTone> = {
 
 export function StepList({ rows }: { rows: StepRow[] }) {
   return (
-    <ol className="flex flex-col gap-3">
+    <ol className="flex flex-col gap-5">
       {rows.map((row) => (
         <li key={row.key} aria-current={row.state === 'running' ? 'step' : undefined} className="flex gap-3">
           <span className={`w-20 shrink-0 pt-0.5 ${microLabelClass}`}>{row.label}</span>
           <div className="flex min-w-0 flex-1 flex-col gap-1.5">
-            <div className="flex items-start justify-between gap-4 text-xs">
+            <div className="flex items-end justify-between gap-4 text-xs">
               <div className="flex min-w-0 flex-col">
                 <span className={STEP_TEXT[row.state]}>{row.text}</span>
                 <span className="text-ink-400">{row.sub}</span>

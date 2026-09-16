@@ -181,13 +181,16 @@ export function MarginBreakdown({
   acc,
   variant = 'full',
   liquidation,
+  borrowImUsd,
 }: {
   acc: CrossexAccount;
   variant?: 'full' | 'compact';
   /** One sentence on the nearest liquidation line, appended to the compact hover. */
   liquidation?: string | null;
+  borrowImUsd?: number | null;
 }) {
   const p = marginParts(acc);
+  const borrowIm = typeof borrowImUsd === 'number' && borrowImUsd > 0 ? borrowImUsd : null;
   // Initial margin is always green (it's expected to be the bulk of the balance);
   // maintenance margin is the risk signal — color it by how close it is to the
   // balance (green < 50%, amber < 75%, red ≥ 75% — approaching the liquidation floor).
@@ -268,8 +271,8 @@ export function MarginBreakdown({
           pctClass="text-emerald-400"
         />
         <LegendRow swatch="bg-ink-500" label="Available" usd={p.available} pct={p.hasFunds ? p.available / p.balance : 0} />
-        <div className="mt-1 border-t border-ink-700 pt-1 text-[11px] text-ink-500">
-          Utilization = margin ÷ balance
+        <div className={`num mt-1 border-t border-ink-700 pt-1 text-[11px] ${borrowIm !== null ? 'text-gold' : 'text-ink-500'}`}>
+          {borrowIm !== null ? `Includes ${fmtUsd(borrowIm)}, held against the borrow` : 'Utilization = margin ÷ balance'}
         </div>
       </div>
 

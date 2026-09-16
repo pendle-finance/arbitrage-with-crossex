@@ -113,6 +113,10 @@
     @apply rounded border border-ink-700 bg-ink-900;
   }
 
+  .alert-red {
+    @apply flex flex-col gap-1 rounded border border-guava/35 bg-guava/10 px-3 py-2.5;
+  }
+
   .input {
     @apply w-full rounded-lg border border-ink-700 bg-ink-950 px-3 py-2 text-sm text-ink-100 placeholder:text-ink-500 focus:border-ink-500 focus:outline-none focus:ring-1 focus:ring-cyan-500/30;
   }
@@ -171,29 +175,14 @@
     @apply bg-rose-500/15 text-rose-300;
   }
 
-  .bar-gain-usdt {
-    @apply bg-info/20;
-    background-image: repeating-linear-gradient(135deg, theme('colors.info.DEFAULT') 0 2px, transparent 2px 6px);
-  }
-
-  .bar-gain-usdc {
-    @apply bg-crossex/20;
-    background-image: repeating-linear-gradient(135deg, theme('colors.crossex') 0 2px, transparent 2px 6px);
-  }
-
-  .bar-gain-lighter {
+  .bar-pnl-gain {
     @apply bg-grass/20;
     background-image: repeating-linear-gradient(135deg, theme('colors.grass') 0 2px, transparent 2px 6px);
   }
 
-  .bar-gain-gate {
-    @apply bg-ink-600/20;
-    background-image: repeating-linear-gradient(135deg, theme('colors.ink.600') 0 2px, transparent 2px 6px);
-  }
-
-  .bar-gain-spot {
-    @apply bg-gold/20;
-    background-image: repeating-linear-gradient(135deg, theme('colors.gold') 0 2px, transparent 2px 6px);
+  .bar-pnl-loss {
+    @apply bg-guava/20;
+    background-image: repeating-linear-gradient(135deg, theme('colors.guava') 0 2px, transparent 2px 6px);
   }
 
   /* Ring that flashes around the credentials form when a card's Execute lands. */

@@ -1,5 +1,5 @@
 import type { CrossexAccount, PositionsResponse } from '../api/types';
-import { fmtUsd, num } from './fmt';
+import { fmtUsd, num, WALLET_SHORT } from './fmt';
 
 /**
  * Where the account liquidates if ONE coin moves and every other coin holds
@@ -20,6 +20,7 @@ import { fmtUsd, num } from './fmt';
  */
 export interface LiquidationLine {
   base: string;
+  venue: string;
   /** Price of the coin at the line. */
   price: number;
   /** Signed move from the mark: +0.37 is a 37% pump, -0.2 a 20% dump. */
@@ -137,7 +138,9 @@ export function liquidationLines(
     }
     const f = candidates.reduce((a, b) => (Math.abs(a - 1) <= Math.abs(b - 1) ? a : b));
     const biggest = mine.reduce((a, b) => (b.value > a.value ? b : a));
-    lines.push({ base, price: biggest.mark * f, move: f - 1 });
+    const losing = mine.filter((l) => (f > 1 ? l.sign === -1 : l.sign === 1));
+    const loser = (losing.length > 0 ? losing : mine).reduce((a, b) => (b.value > a.value ? b : a));
+    lines.push({ base, venue: WALLET_SHORT[loser.wallet], price: biggest.mark * f, move: f - 1 });
   }
   return { lines: lines.sort((a, b) => Math.abs(a.move) - Math.abs(b.move)), far };
 }
@@ -168,12 +171,12 @@ export function fmtLinePrice(price: number): string {
   return `~${fmtUsd(price, price >= 1000 ? 0 : 2)}`;
 }
 
-/** `Liquidates if ETH hits ~$3,150 (+37%)`, or `falls to` for a dump. The chip text. */
+/** `Liquidates if ETH on Hyperliquid hits ~$3,150 (+37%)`, or `falls to` for a dump. The chip text. */
 export function lineLabel(line: LiquidationLine): string {
-  return `Liquidates if ${line.base} ${line.move < 0 ? 'falls to' : 'hits'} ${fmtLinePrice(line.price)} (${fmtMove(line.move)})`;
+  return `Liquidates if ${line.base} on ${line.venue} ${line.move < 0 ? 'falls to' : 'hits'} ${fmtLinePrice(line.price)} (${fmtMove(line.move)})`;
 }
 
 /** One sentence for a hover. */
 export function describeLine(line: LiquidationLine): string {
-  return `Liquidates at about ${fmtUsd(line.price, line.price >= 1000 ? 0 : 2)} if only ${line.base} moves (${fmtMove(line.move)}) and every other coin holds still.`;
+  return `Liquidates at about ${fmtUsd(line.price, line.price >= 1000 ? 0 : 2)} if only ${line.base} on ${line.venue} moves (${fmtMove(line.move)}) and every other leg holds still.`;
 }

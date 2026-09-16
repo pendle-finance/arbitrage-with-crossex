@@ -1,5 +1,5 @@
 import { useRef, useState, type ReactNode } from 'react';
-import { useAccount, useTransfer } from '../api/queries';
+import { useAccount, useRebalance, useTransfer } from '../api/queries';
 import type { CrossexAsset, GateAccount, SpotBalance, TransferCoin } from '../api/types';
 import { DataTable, type Column } from '../components/DataTable';
 import { EmptyState } from '../components/EmptyState';
@@ -8,12 +8,14 @@ import { QueryError } from '../components/QueryError';
 import { MarginBreakdown } from '../components/MarginDonut';
 import { SignedNumber } from '../components/SignedNumber';
 import { TableSkeleton, TilesSkeleton } from '../components/Skeleton';
+import { borrowingBuckets } from '../lib/borrow';
 import { num } from '../lib/fmt';
 import { HOVER } from './rebalanceCopy';
 import { Term } from './RebalanceHovers';
 import { RebalanceSection } from './RebalanceSection';
 import { NoSpotReadHow } from './TransferBits';
-import { TransferSection, type TransferPick } from './TransferSection';
+import { TransferSection } from './TransferSection';
+import type { TransferPick } from './TransferModal';
 
 const NO_SPOT_READ_TEXT = 'Add Spot read permission to see spot balances.';
 
@@ -109,6 +111,7 @@ function spotRows(spot: SpotBalance[] | null | undefined): AssetRow[] {
 export function BalancesPanel() {
   const { data: acc, isPending, isError, error } = useAccount();
   const spot = useTransfer().data?.spot;
+  const buckets = useRebalance().data?.buckets;
   const [pick, setPick] = useState<TransferPick | null>(null);
   const transferCard = useRef<HTMLDivElement>(null);
 
@@ -129,6 +132,8 @@ export function BalancesPanel() {
     .filter((a) => Number(a.equity) !== 0 || Number(a.balance) !== 0 || Number(a.upnl) !== 0)
     .map((asset): AssetRow => ({ kind: 'crossex', asset }));
   const rows = assets.length === 0 && spot === null ? [] : [...assets, ...spotRows(spot)];
+  const borrowing = borrowingBuckets(buckets);
+  const borrowImUsd = borrowing.length === 0 ? null : borrowing.reduce((sum, b) => sum + b.imHeldUsd, 0);
 
   const openTransfer = (coin: TransferCoin, wallet: GateAccount) => {
     setPick((prev) => ({ coin, wallet, nonce: (prev?.nonce ?? 0) + 1 }));
@@ -137,7 +142,7 @@ export function BalancesPanel() {
 
   return (
     <div className="flex flex-col gap-6">
-      <MarginBreakdown acc={acc} />
+      <MarginBreakdown acc={acc} borrowImUsd={borrowImUsd} />
 
       <RebalanceSection onTransfer={openTransfer} />
 

@@ -1,4 +1,4 @@
-import { screen, within } from '@testing-library/react';
+import { cleanup, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -77,6 +77,13 @@ const ACCOUNT_OF: Record<keyof typeof rebalanceViews, CrossexAccount> = {
   lighterAcrossAbandoned: accountBodies.lighter,
   lighterConvertDone: accountBodies.lighter,
   noLegs: accountBodies.lighter,
+  twoBorrows: accountBodies.twoBorrows,
+  oneBorrow: accountBodies.oneBorrow,
+  hyperliquidFreeBorrow: accountBodies.hyperliquidFreeBorrow,
+  gainOverNegativeCash: accountBodies.gainOverNegativeCash,
+  interestPaidSplit: accountBodies.interestPaidSplit,
+  oneRouteOnly: accountBodies.oneRouteOnly,
+  hiddenRoute: accountBodies.hiddenRoute,
 };
 
 const isRebalanceName = (name: string): name is keyof typeof rebalanceViews => name in rebalanceViews;
@@ -100,9 +107,17 @@ async function show(state: TabState) {
   );
   const shown = renderWithClient(<BalancesPanel />);
   await screen.findByRole('region', { name: 'Rebalance' });
-  await within(region('Transfer')).findByRole('radio', { name: 'Out of CrossEx' });
-  await within(region('Transfer')).findByRole('radio', { name: 'Into CrossEx' });
+  await screen.findByRole('region', { name: 'Transfer' });
   return shown;
+}
+
+async function openRebalanceDialog(user: ReturnType<typeof userEvent.setup>) {
+  const cta = within(region('Rebalance'))
+    .getAllByRole('button', { name: /^Rebalance/ })
+    .find((el): el is HTMLButtonElement => el.tagName === 'BUTTON');
+  if (!cta) throw new Error('Rebalance CTA button not found');
+  await user.click(cta);
+  return screen.findByRole('dialog');
 }
 
 function assetRows(): Record<string, string>[] {
@@ -113,17 +128,40 @@ function assetRows(): Record<string, string>[] {
   );
 }
 
+function leafTexts(): string[] {
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+  const texts: string[] = [];
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    const value = node.textContent?.trim();
+    if (value) texts.push(value);
+  }
+  return texts;
+}
+
 async function renderedTexts() {
-  const user = userEvent.setup();
-  const texts: { name: string; text: string }[] = [];
+  const texts: { name: string; text: string; leaves: string[] }[] = [];
   for (const state of EVERY_STATE) {
     const shown = await show(state);
-    const steps = within(region('Rebalance')).queryByRole('button', { name: /^Show the / });
-    if (steps) await user.click(steps);
-    texts.push({ name: state.name, text: document.body.textContent ?? '' });
+    texts.push({ name: state.name, text: document.body.textContent ?? '', leaves: leafTexts() });
     shown.unmount();
   }
   return texts;
+}
+
+const SENTENCE_END = /[.?!](?=\s|$)/g;
+
+function sentencesOf(text: string): string[] {
+  const sentences: string[] = [];
+  let start = 0;
+  let match: RegExpExecArray | null;
+  SENTENCE_END.lastIndex = 0;
+  while ((match = SENTENCE_END.exec(text))) {
+    sentences.push(text.slice(start, match.index + 1));
+    start = match.index + 1;
+  }
+  const rest = text.slice(start).trim();
+  if (rest) sentences.push(rest);
+  return sentences.map((sentence) => sentence.trim()).filter(Boolean);
 }
 
 describe('BalancesPanel layout', () => {
@@ -141,6 +179,15 @@ describe('BalancesPanel layout', () => {
   it('assets table scrolls with the page', async () => {
     await show(ACCOUNT_B);
     expect(within(region('Assets')).getByRole('table').parentElement).toHaveClass('max-h-none');
+  });
+
+  it('margin card gets the borrow margin', async () => {
+    await show(ACCOUNT_B);
+    expect(screen.queryByText(/held against the borrow/)).toBeNull();
+    cleanup();
+
+    await show({ ...ACCOUNT_B, rebalance: rebalanceViews.twoBorrows, account: accountBodies.twoBorrows });
+    expect(screen.getByText('Includes $48.80, held against the borrow')).toBeInTheDocument();
   });
 
   it('two info marks', async () => {
@@ -168,7 +215,18 @@ describe('BalancesPanel copy in every state', () => {
   });
 
   it('no em dash', async () => {
-    for (const { name, text } of await renderedTexts()) expect(text, name).not.toContain('—');
+    for (const { name, text } of await renderedTexts()) expect(text, name).not.toMatch(/[–—]/);
+  }, 60_000);
+
+  it('no long sentence', async () => {
+    for (const { name, leaves } of await renderedTexts()) {
+      for (const leaf of leaves) {
+        for (const sentence of sentencesOf(leaf)) {
+          const words = sentence.split(/\s+/).filter(Boolean);
+          expect(words.length, `${name}: "${sentence}"`).toBeLessThanOrEqual(20);
+        }
+      }
+    }
   }, 60_000);
 
   it('no to Hyperliquid', async () => {
@@ -226,41 +284,37 @@ describe('BalancesPanel transfer pick', () => {
     const scroll = vi.spyOn(Element.prototype, 'scrollIntoView');
     await show(ACCOUNT_B);
     const transfer = region('Transfer');
-    const radio = (name: string) => within(transfer).getByRole('radio', { name });
-    const link = await within(region('Rebalance')).findByRole('button', { name: 'Transfer ▸' });
+    const rebalanceDialog = await openRebalanceDialog(user);
+    await user.click(await within(rebalanceDialog).findByRole('button', { name: 'Transfer ▸' }));
 
-    await user.click(radio('USDC · Hyperliquid'));
-    await user.click(link);
-    expect(radio('Into CrossEx')).toBeChecked();
-    expect(radio('USDT · CrossEx')).toBeChecked();
+    const transferDialog = await screen.findByRole('dialog');
+    expect(within(transferDialog).getByRole('radio', { name: 'Into CrossEx' })).toBeChecked();
+    expect(within(transferDialog).getByRole('radio', { name: 'USDT · CrossEx' })).toBeChecked();
     expect(scroll.mock.contexts.at(-1)).toContainElement(transfer);
-
-    await user.click(radio('Out of CrossEx'));
-    await user.click(radio('USDC · Hyperliquid'));
-    await user.click(link);
-    expect(radio('Into CrossEx')).toBeChecked();
-    expect(radio('USDT · CrossEx')).toBeChecked();
   });
 
   it('leftover link picks target wallet', async () => {
     const user = userEvent.setup();
     await show(LEFTOVER);
-    const transfer = region('Transfer');
-    await user.click(await within(region('Rebalance')).findByRole('button', { name: 'Transfer ▸' }));
-    expect(within(transfer).getByRole('radio', { name: 'Into CrossEx' })).toBeChecked();
-    expect(within(transfer).getByRole('radio', { name: 'USDC · Hyperliquid' })).toBeChecked();
+    const rebalanceDialog = await openRebalanceDialog(user);
+    await user.click(await within(rebalanceDialog).findByRole('button', { name: 'Transfer ▸' }));
+
+    const transferDialog = await screen.findByRole('dialog');
+    expect(within(transferDialog).getByRole('radio', { name: 'Into CrossEx' })).toBeChecked();
+    expect(within(transferDialog).getByRole('radio', { name: 'USDC · Hyperliquid' })).toBeChecked();
   });
 
   it('a USDC line picks the Hyperliquid wallet', async () => {
     const user = userEvent.setup();
     await show({ ...ACCOUNT_B, transfer: transferViews.spotBoth });
-    const transfer = region('Transfer');
-    const links = within(region('Rebalance')).getAllByRole('button', { name: 'Transfer ▸' });
+    const rebalanceDialog = await openRebalanceDialog(user);
+    const links = within(rebalanceDialog).getAllByRole('button', { name: 'Transfer ▸' });
     expect(links).toHaveLength(2);
 
     await user.click(links[1]);
-    expect(within(transfer).getByRole('radio', { name: 'Into CrossEx' })).toBeChecked();
-    expect(within(transfer).getByRole('radio', { name: 'USDC · Hyperliquid' })).toBeChecked();
+    const transferDialog = await screen.findByRole('dialog');
+    expect(within(transferDialog).getByRole('radio', { name: 'Into CrossEx' })).toBeChecked();
+    expect(within(transferDialog).getByRole('radio', { name: 'USDC · Hyperliquid' })).toBeChecked();
   });
 
   it('a toward USDT leftover picks USDC · Gate', async () => {
@@ -271,10 +325,12 @@ describe('BalancesPanel transfer pick', () => {
       transfer: transferViews.noSpot,
       account: accountBodies.exampleE,
     });
-    const transfer = region('Transfer');
-    await user.click(await within(region('Rebalance')).findByRole('button', { name: 'Transfer ▸' }));
-    expect(within(transfer).getByRole('radio', { name: 'Into CrossEx' })).toBeChecked();
-    expect(within(transfer).getByRole('radio', { name: 'USDC · Gate' })).toBeChecked();
+    const rebalanceDialog = await openRebalanceDialog(user);
+    await user.click(await within(rebalanceDialog).findByRole('button', { name: 'Transfer ▸' }));
+
+    const transferDialog = await screen.findByRole('dialog');
+    expect(within(transferDialog).getByRole('radio', { name: 'Into CrossEx' })).toBeChecked();
+    expect(within(transferDialog).getByRole('radio', { name: 'USDC · Gate' })).toBeChecked();
   });
 });
 

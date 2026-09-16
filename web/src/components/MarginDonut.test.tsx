@@ -1,6 +1,7 @@
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import type { CrossexAccount } from '../api/types';
+import { accountBodies } from '../test/fixtures';
 import { marginParts, MarginBreakdown } from './MarginDonut';
 
 /** Real-account shape where Gate's coverage-ratio fields look "reversed"
@@ -107,5 +108,31 @@ describe('MarginBreakdown', () => {
     // 800 / 969.82 = 82% → red
     const red = render(<MarginBreakdown acc={withMm('800')} />);
     expect(red.getByText('82%').className).toContain('text-rose-400');
+  });
+
+  it('borrow margin caption', () => {
+    const twoBorrows = render(<MarginBreakdown acc={accountBodies.twoBorrows} borrowImUsd={48.8} />);
+    expect(twoBorrows.getByText('Includes $48.80, held against the borrow')).toBeInTheDocument();
+    expect(twoBorrows.queryByText('Utilization = margin ÷ balance')).toBeNull();
+    twoBorrows.unmount();
+
+    const hyperliquidFreeBorrow = render(
+      <MarginBreakdown acc={accountBodies.hyperliquidFreeBorrow} borrowImUsd={840} />,
+    );
+    expect(hyperliquidFreeBorrow.getByText('Includes $840.00, held against the borrow')).toBeInTheDocument();
+    hyperliquidFreeBorrow.unmount();
+
+    render(<MarginBreakdown acc={acc} borrowImUsd={0} />);
+    expect(screen.getByText('Utilization = margin ÷ balance')).toBeInTheDocument();
+    expect(screen.queryByText(/held against the borrow/)).toBeNull();
+  });
+
+  it('strip unchanged', () => {
+    render(<MarginBreakdown acc={acc} variant="compact" borrowImUsd={500} />);
+    expect(screen.getByText('IM')).toBeInTheDocument();
+    expect(screen.getByText('MM')).toBeInTheDocument();
+    expect(screen.getByText('77%')).toBeInTheDocument();
+    expect(screen.getByText('28%')).toBeInTheDocument();
+    expect(screen.queryByText(/held against the borrow/)).toBeNull();
   });
 });

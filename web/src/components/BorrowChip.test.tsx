@@ -91,4 +91,54 @@ describe('BorrowChip', () => {
     expect(pill.getAttribute('title') ?? '').toBe('');
     expect(pill.querySelector('[aria-hidden="true"]')).toBeNull();
   });
+
+  it('pill sums every borrow', async () => {
+    server.use(rebalanceHandler(rebalanceViews.twoBorrows));
+    renderWithClient(<BorrowChip onOpen={vi.fn()} />);
+
+    const pill = await screen.findByRole('button', { name: 'Borrowing 244.00 USDC' });
+    await userEvent.hover(pill);
+
+    const card = await screen.findByRole('tooltip');
+    expect(within(card).getByText('USDC · Hyperliquid')).toBeInTheDocument();
+    expect(within(card).getByText('USDC · Lighter')).toBeInTheDocument();
+    expect(within(card).getByText('112.00 USDC')).toBeInTheDocument();
+    expect(within(card).getByText('132.00 USDC')).toBeInTheDocument();
+    expect(within(card).getByText('$22.40')).toBeInTheDocument();
+    expect(within(card).getByText('$26.40')).toBeInTheDocument();
+  });
+
+  it('two coins fall back to a dollar total', async () => {
+    const view = rebalanceViews.exampleE;
+    const lighter = { coin: 'USDC', venue: 'LIGHTER', cash: -200, upnl: 0, equity: -200, borrow: 200, imHeldUsd: 40, mmHeldUsd: 20, interestPaidUsd: 0, interestPerDayUsd: 0.06 };
+    server.use(rebalanceHandler({ ...view, buckets: [...view.buckets, lighter] }));
+    renderWithClient(<BorrowChip onOpen={vi.fn()} />);
+
+    const pill = await screen.findByRole('button', { name: 'Borrowing $812.35' });
+    await userEvent.hover(pill);
+
+    const card = await screen.findByRole('tooltip');
+    expect(within(card).getByText('USDT · CrossEx')).toBeInTheDocument();
+    expect(within(card).getByText('USDC · Lighter')).toBeInTheDocument();
+  });
+
+  it('one wallet keeps the coin pill, not the two wallet table', async () => {
+    server.use(rebalanceHandler(rebalanceViews.oneBorrow));
+    renderWithClient(<BorrowChip onOpen={vi.fn()} />);
+
+    const pill = await screen.findByRole('button', { name: 'Borrowing 132.00 USDC' });
+    await userEvent.hover(pill);
+
+    const card = await screen.findByRole('tooltip');
+    expect(within(card).getByText('Lent by Gate')).toBeInTheDocument();
+    expect(within(card).queryByText('Wallet')).toBeNull();
+  });
+
+  it('no pill under a dollar', async () => {
+    server.use(rebalanceHandler(rebalanceViews.borrowUnderOne));
+    renderWithClient(<BorrowChip onOpen={vi.fn()} />);
+
+    await new Promise((r) => setTimeout(r, 50));
+    expect(screen.queryByRole('button', { name: /^Borrowing/ })).toBeNull();
+  });
 });
