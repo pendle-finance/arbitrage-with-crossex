@@ -2,15 +2,14 @@ import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { useStartTransfer } from '../api/queries';
 import type { TransferView } from '../api/types';
-import { REBALANCE_NOW, rebalanceHandler, rebalanceViews, transferViews } from '../test/fixtures';
-import { env, server } from '../test/server';
+import { REBALANCE_NOW, rebalanceHandler, rebalanceViews, transferPostHandler, transferViews } from '../test/fixtures';
+import { server } from '../test/server';
 import { renderWithClient } from '../test/utils';
 import { TransferModal } from './TransferModal';
 
-const GATE_TEXT = 'Insufficient transferAvailable, transferAvailable: 292.0185407';
-
-const GATE_SILENT = { ok: false, error: { category: 'network', message: 'Gate did not answer.', retryable: true } };
+const FAIL_TEXT = 'Gate refused the move: free margin is too low.';
 
 const dialog = () => screen.getByRole('dialog');
 const amountInput = () => screen.getByRole('textbox');
@@ -24,22 +23,21 @@ function facts(): Record<string, string> {
   );
 }
 
+function ModalHost({ view }: { view: TransferView }) {
+  const start = useStartTransfer();
+  return <TransferModal view={view} onClose={() => {}} holdMs={50} start={start} />;
+}
+
 async function open(view: TransferView = transferViews.accountB) {
   server.use(rebalanceHandler(rebalanceViews.accountB));
-  renderWithClient(<TransferModal view={view} onClose={() => {}} holdMs={50} />);
+  const rendered = renderWithClient(<ModalHost view={view} />);
   await screen.findByRole('dialog');
+  return rendered;
 }
 
 function recordTransferPosts(answer: 'accepted' | 'silent'): { id?: unknown }[] {
   const bodies: { id?: unknown }[] = [];
-  server.use(
-    http.post('/api/transfer', async ({ request }) => {
-      bodies.push((await request.json()) as { id?: unknown });
-      return answer === 'accepted'
-        ? HttpResponse.json(env({ id: 'mtzur2ab' }), { status: 202 })
-        : HttpResponse.json(GATE_SILENT, { status: 502 });
-    }),
-  );
+  server.use(transferPostHandler(bodies, answer));
   return bodies;
 }
 
@@ -91,7 +89,7 @@ describe('TransferModal', () => {
     expect(screen.getByText('✓ Asked Gate to move it')).toBeInTheDocument();
     expect(screen.getByText('• Waiting for Gate spot to show it')).toBeInTheDocument();
     expect(screen.getByText('○ Reading your balances again')).toBeInTheDocument();
-    expect(screen.getByText('Started 2m 10s ago. You can close this. The transfer keeps going.')).toBeInTheDocument();
+    expect(screen.getByText('Started 2m 10s ago, usually about 6.5 min. You can close this.')).toBeInTheDocument();
     expect(screen.getByRole('progressbar')).toBeInTheDocument();
   });
 
@@ -99,25 +97,55 @@ describe('TransferModal', () => {
     await open(transferViews.failedOverCap);
 
     const block = within(dialog()).getByRole('alert');
-    expect(block).toHaveTextContent('Gate refused the transfer. Nothing moved.');
-    expect(within(block).getByText(GATE_TEXT)).toBeInTheDocument();
+    expect(within(block).getByText(FAIL_TEXT)).toBeInTheDocument();
+  });
+
+  it('failed headline is Transfer failed', async () => {
+    await open(transferViews.failed);
+
+    const block = within(dialog()).getByRole('alert');
+    expect(within(block).getByText('Transfer failed.')).toBeInTheDocument();
+    expect(within(block).getByText('Gate has no record of this transfer. Try again.')).toBeInTheDocument();
+    expect(screen.queryByText(/Gate refused the transfer/)).toBeNull();
   });
 
   it('failed facts read the asked amount, the fresh cap and what moved', async () => {
-    await open(transferViews.failedOverCap);
+    const overCap = await open(transferViews.failedOverCap);
 
     expect(facts()).toEqual({
       'You asked to move': '442.02 USDC',
-      'Gate allows': '292.02 USDC',
+      'Gate allows': '292.01 USDC',
       Moved: 'nothing',
     });
+    expect(screen.getByText('free margin, right now')).toBeInTheDocument();
+    overCap.unmount();
+
+    const fromSpot = await open({ ...transferViews.accountB, transfer: transferViews.failedNoSpotRead.transfer });
+    expect(facts()).toEqual({ 'You asked to move': '500.00 USDT', 'Gate allows': '318.42 USDT', Moved: 'nothing' });
+    expect(screen.getByText('Gate spot balance')).toBeInTheDocument();
+    fromSpot.unmount();
+
+    await open(transferViews.failedNoSpotRead);
+    expect(facts()).toEqual({ 'You asked to move': '500.00 USDT', 'Gate allows': 'not known', Moved: 'nothing' });
+  });
+
+  it('failed facts without spot read', async () => {
+    await open(transferViews.failedNoSpotRead);
+
+    expect(screen.getByText('this key cannot read Gate spot')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Try again with/ })).toBeNull();
+    await userEvent.click(screen.getByRole('button', { name: 'Try again' }));
+
+    expect(amountInput()).toHaveValue('');
+    expect(screen.getByRole('radio', { name: 'Into CrossEx' })).toBeChecked();
+    expect(screen.getByRole('radio', { name: 'USDT · CrossEx' })).toBeChecked();
   });
 
   it('try again clamps to the cap the path allows now', async () => {
     await open(transferViews.failedOverCap);
-    await userEvent.click(screen.getByRole('button', { name: 'Try again with 292.02' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Try again with 292.01' }));
 
-    expect(amountInput()).toHaveValue('292.02');
+    expect(amountInput()).toHaveValue('292.01');
     expect(screen.getByRole('radio', { name: 'Out of CrossEx' })).toBeChecked();
     expect(await screen.findByRole('radio', { name: 'USDC · Hyperliquid' })).toBeChecked();
   });
@@ -128,7 +156,7 @@ describe('TransferModal', () => {
     const alerts = screen.getAllByRole('alert');
     expect(alerts).toHaveLength(1);
     expect(alerts[0].closest('[role="dialog"]')).not.toBeNull();
-    expect(screen.getByText(GATE_TEXT)).toBeInTheDocument();
+    expect(screen.getByText(FAIL_TEXT)).toBeInTheDocument();
   });
 
   it('no spot read hides the balance instead of showing a zero', async () => {

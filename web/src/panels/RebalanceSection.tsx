@@ -1,82 +1,50 @@
 import { useState, type ReactNode } from 'react';
 import { useAccount, usePositions, useRebalance, useTransfer } from '../api/queries';
-import type { EvenPlan, GateAccount, RebalanceJob, RebalanceView, RoutePlan, TransferCoin } from '../api/types';
+import type { GateAccount, RebalanceJob, RebalanceView, RoutePlan, TransferCoin } from '../api/types';
 import { Chip } from '../components/Chip';
 import { FreshnessButton } from '../components/FreshnessIndicator';
-import { borrowingBuckets, borrowTotalUsd } from '../lib/borrow';
-import { FIELD_SIG_FIGS, fmtAbout, fmtUsd, num } from '../lib/fmt';
+import { borrowingBuckets } from '../lib/borrow';
+import { fmtAbout, fmtUsd, num } from '../lib/fmt';
 import { nearestLiquidation } from '../lib/liquidation';
-import { roundSigFigs } from '../lib/ticks';
+import { floorCents } from '../lib/ticks';
 import { useNow } from '../lib/useNow';
 import { useSettledError } from '../lib/useSettledError';
-import { ALWAYS_SHOWN, BalanceBars, jobSeconds, ROUTE_ORDER, scaleOf, ShareColumn, WALLET_TONE, type BarRow } from './RebalanceBits';
-import { BAR_CAPTION, GATE_SPOT, HOVER, NO_LEGS, SHARE_CAPTION, VERDICT_BALANCED, VERDICT_NO_BORROW } from './rebalanceCopy';
-import { borrowFacts, DUST, Facts, isCashLimitedEven, keyOf, positionShares, RebalanceInfo } from './RebalanceHovers';
-import { roundCountOf, targetsOf, Term, WalletTerm } from './RebalanceHovers';
+import { BalanceBars, jobSeconds, scaleOf, ShareColumn } from './RebalanceBits';
+import { BAR_CAPTION, GATE_SPOT, HOVER, NO_LEGS, SHARE_CAPTION, VERDICT_BALANCED, VERDICT_FREE, VERDICT_NO_BORROW } from './rebalanceCopy';
+import { VERDICT_REPAYS, VERDICT_REPAYS_NOTHING, VERDICT_STOPS, VERDICT_STOPS_UNDER_A_CENT, WAITS_FOR_DEAL, WAITS_FOR_TRANSFER } from './rebalanceCopy';
+import { barRowsOf, borrowFacts, DUST, Facts, fmtCoinOrUsd, isCashLimitedEven, pickedRoute, planSteps, positionShares } from './RebalanceHovers';
+import { RebalanceInfo, repayOf, roundCountOf, sharedCoin, shownKeys, targetsOf, Term } from './RebalanceHovers';
 import { RebalanceModal } from './RebalanceModal';
 import { NoSpotReadLine } from './TransferBits';
 
-const TRANSIT_WALLET = 'USDC/GATE';
-
 const SUBTITLE = 'Split your CrossEx equity by position size';
 const EQUITY_HEAD = 'Equity';
-const LOAD_FAILED = 'Could not load the rebalance view.';
+const LOAD_FAILED = 'Could not load Rebalance.';
 const RETRY = 'Retry';
-const READ_AGAIN = 'Read the rebalance view again';
+const READ_AGAIN = 'Read again';
 const REBALANCE = 'Rebalance';
 const WOULD_MOVE = 'would move.';
 const NOT_MARGIN = '· not margin';
-const WAITS_FOR_TRANSFER = 'Rebalance waits until the transfer ends.';
-const WAITS_FOR_DEAL = 'Rebalance waits until the deal ends.';
-const STOPPED_RESUME = 'Stopped · resume';
+const STOPPED_OPEN = 'Stopped · open';
 const OPEN_TO_SEE = 'Open it to see where your money is.';
-const SAVES_NO_INTEREST = 'It saves no interest today.';
+const OPEN_TO_FOLLOW = 'Open it to follow each step.';
 const AS_EVEN_AS_CASH = 'As even as cash allows.';
-const CANNOT_MOVE = 'cannot move until those positions close.';
-
-function barRows(view: RebalanceView): BarRow[] {
-  const target = targetsOf(view);
-  return Object.keys(WALLET_TONE).flatMap((key): BarRow[] => {
-    const bucket = view.buckets.find((b) => keyOf(b) === key);
-    if (!bucket) return [];
-    const transit = key === TRANSIT_WALLET;
-    const shown = transit
-      ? Math.abs(bucket.cash) >= DUST
-      : ALWAYS_SHOWN.includes(key) || target.has(key) || Math.abs(bucket.cash) >= DUST || Math.abs(bucket.equity) >= DUST;
-    if (!shown) return [];
-    const balanced = transit ? 0 : (target.get(key) ?? 0);
-    return [
-      {
-        key,
-        label: <WalletTerm wallet={key} />,
-        cash: bucket.cash,
-        upnl: bucket.upnl,
-        target: view.plan.noLegs && !transit ? null : balanced,
-        tone: WALLET_TONE[key],
-      },
-    ];
-  });
-}
-
-function cheapestRoute(plan: EvenPlan): RoutePlan {
-  const open = ROUTE_ORDER.flatMap((name) => {
-    const route = plan.routes[name];
-    return route?.available ? [route] : [];
-  });
-  return open.sort((a, b) => a.costUsd - b.costUsd)[0] ?? plan.routes.convert;
-}
+const IS_POSITION_MARGIN = 'is margin for open positions.';
 
 function borrowVerdict(view: RebalanceView, route: RoutePlan): string {
-  const coins = new Set(borrowingBuckets(view.buckets).map((b) => b.coin));
-  const total = borrowTotalUsd(view.buckets);
-  const repaid = coins.size === 1 ? `${num(total)} ${[...coins][0]}` : fmtUsd(total);
-  const lead = `Rebalance repays ${repaid} for ${fmtUsd(route.costUsd)} and frees ${fmtUsd(route.marginFreedUsd)} of margin.`;
-  if (route.savesPerDayUsd <= 0) return `${lead} ${SAVES_NO_INTEREST}`;
-  const days = Math.ceil(roundSigFigs(route.costUsd / route.savesPerDayUsd, FIELD_SIG_FIGS));
-  return `${lead} On interest alone it pays back in about ${num(days, 0)} ${days === 1 ? 'day' : 'days'}.`;
+  const repay = repayOf(view.buckets, route);
+  if (repay.wallets.length === 0) return VERDICT_REPAYS_NOTHING;
+  const lead = VERDICT_REPAYS(fmtCoinOrUsd(repay.amount, sharedCoin(repay.wallets)));
+  const stops = repay.stopsPerDayUsd;
+  if (stops === null) return lead;
+  if (stops === 0) return `${lead} ${VERDICT_FREE}`;
+  if (floorCents(stops) === 0) return `${lead} ${VERDICT_STOPS_UNDER_A_CENT}`;
+  return `${lead} ${VERDICT_STOPS(fmtUsd(stops))}`;
 }
 
 const roundOf = (job: RebalanceJob): number | null => job.steps[job.stepIndex]?.round ?? null;
+
+const minutesLeft = (seconds: number): string => fmtAbout(seconds).replace(/ 1 min$/, ' 1 minute').replace(/ min$/, ' minutes');
 
 function jobVerdict(job: RebalanceJob, now: number): string {
   const round = roundOf(job);
@@ -86,11 +54,11 @@ function jobVerdict(job: RebalanceJob, now: number): string {
   const total = jobSeconds(job);
   const left = Math.max(0, total - Math.max(0, now - job.createdAt) / 1000);
   const progress = round === null ? 'Convert' : `Round ${num(round, 0)} of ${num(roundCountOf(job), 0)}`;
-  return `A rebalance is running. ${progress}${total > 0 ? `, ${fmtAbout(left)} left` : ''}.`;
+  return `A rebalance is running. ${progress}${total > 0 ? `, ${minutesLeft(left)} left` : ''}. ${OPEN_TO_FOLLOW}`;
 }
 
 function jobButton(job: RebalanceJob): string {
-  if (job.status === 'halted') return STOPPED_RESUME;
+  if (job.status === 'halted') return STOPPED_OPEN;
   const round = roundOf(job);
   return round === null ? 'Running · Convert' : `Running · round ${num(round, 0)} of ${num(roundCountOf(job), 0)}`;
 }
@@ -135,9 +103,10 @@ export function RebalanceSection({
   const { plan, buckets } = view;
   const job = view.job && (view.job.status === 'running' || view.job.status === 'halted') ? view.job : null;
   const showAge = loadError !== null || (openedWith > 0 && query.dataUpdatedAt === openedWith);
-  const rows = barRows(view);
+  const target = targetsOf(view);
+  const rows = barRowsOf(buckets, shownKeys(view, job ? job.steps : planSteps(plan)), target);
   const shares = positionShares(plan);
-  const route = cheapestRoute(plan);
+  const route = pickedRoute(plan, null).route;
   const hasBorrow = borrowingBuckets(buckets).length > 0;
   const moving = transfer?.transfer?.status === 'moving';
   const dealWorking = transfer?.lock === 'deal';
@@ -146,20 +115,20 @@ export function RebalanceSection({
   if (job?.status === 'running') chip = <Chip tone="info">Running</Chip>;
   if (job?.status === 'halted') chip = <Chip tone="red">Stopped</Chip>;
   if (!job && plan.balanced && !plan.noLegs) chip = <Chip tone="green">Balanced</Chip>;
+  if (!job && moving) chip = <Chip tone="info">{WAITS_FOR_TRANSFER}</Chip>;
+  if (!job && !moving && dealWorking) chip = <Chip tone="info">{WAITS_FOR_DEAL}</Chip>;
 
   const wouldMove = <span className="text-ink-500">{`${fmtUsd(plan.moves)} ${WOULD_MOVE}`}</span>;
   let verdict: ReactNode;
   if (job) verdict = jobVerdict(job, now);
   else if (plan.noLegs) verdict = NO_LEGS;
-  else if (isCashLimitedEven(plan)) verdict = `${AS_EVEN_AS_CASH} ${fmtUsd(plan.shortOfEven)} ${CANNOT_MOVE}`;
+  else if (isCashLimitedEven(plan)) verdict = `${AS_EVEN_AS_CASH} ${fmtUsd(plan.shortOfEven)} ${IS_POSITION_MARGIN}`;
   else if (plan.balanced) verdict = VERDICT_BALANCED;
   else if (!hasBorrow) verdict = <>{VERDICT_NO_BORROW} {wouldMove}</>;
-  else verdict = <>{borrowVerdict(view, route)} {wouldMove}</>;
+  else verdict = borrowVerdict(view, route);
 
   let label: ReactNode = REBALANCE;
   if (job) label = jobButton(job);
-  else if (moving) label = WAITS_FOR_TRANSFER;
-  else if (dealWorking) label = WAITS_FOR_DEAL;
   else if (!plan.balanced && !plan.noLegs) label = <>{REBALANCE} <span className="opacity-80">{`· ${fmtUsd(route.costUsd)}`}</span></>;
   const disabled = !job && (plan.balanced || plan.noLegs || moving || dealWorking);
 
@@ -213,7 +182,7 @@ export function RebalanceSection({
         <div className="flex flex-wrap items-center gap-3">
           <button
             type="button"
-            className={job ? 'btn num' : 'btn btn-primary num'}
+            className={job || !hasBorrow ? 'btn num' : 'btn btn-primary num'}
             disabled={disabled}
             onClick={() => setOpen(true)}
           >

@@ -4,7 +4,7 @@ import { http, HttpResponse } from 'msw';
 import { useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useRebalance } from '../api/queries';
-import type { PositionsResponse, RebalanceView, TransferView } from '../api/types';
+import type { PositionsResponse, RebalanceView, RoutePlan, TransferView } from '../api/types';
 import {
   accountBodies,
   accountHandler,
@@ -38,15 +38,44 @@ const CASH_LIMITED_EVEN: RebalanceView = {
   plan: { ...rebalanceViews.balancedNoJob.plan, shortOfEven: 203.64 },
 };
 
-const CHEAP_MIX: RebalanceView = {
+const TWO_PLAN = rebalanceViews.twoBorrows.plan;
+
+const lighterLeft = (route: RoutePlan): RoutePlan => ({
+  ...route,
+  after: route.after.map((w) => (w.venue === 'LIGHTER' ? { ...w, cash: -20, equity: -32 } : w)),
+});
+
+const OTHER_ROUTE_LEAVES_BORROW: RebalanceView = {
   ...rebalanceViews.twoBorrows,
-  plan: {
-    ...rebalanceViews.twoBorrows.plan,
-    routes: {
-      ...rebalanceViews.twoBorrows.plan.routes,
-      mix: { ...rebalanceViews.twoBorrows.plan.routes.mix!, costUsd: 0.28 },
-    },
-  },
+  plan: { ...TWO_PLAN, routes: { ...TWO_PLAN.routes, convert: lighterLeft(TWO_PLAN.routes.convert) } },
+};
+
+const RECOMMENDED_LEAVES_BORROW: RebalanceView = {
+  ...rebalanceViews.twoBorrows,
+  plan: { ...TWO_PLAN, routes: { ...TWO_PLAN.routes, mix: lighterLeft(TWO_PLAN.routes.mix!) } },
+};
+
+const keepsBorrow = (route: RoutePlan): RoutePlan => ({
+  ...route,
+  after: route.after.map((w) => (w.coin === 'USDC' ? { ...w, cash: -100, equity: -132 } : w)),
+});
+
+const REPAYS_NOTHING: RebalanceView = {
+  ...rebalanceViews.twoBorrows,
+  plan: { ...TWO_PLAN, routes: { ...TWO_PLAN.routes, mix: keepsBorrow(TWO_PLAN.routes.mix!) } },
+};
+
+const UNDER_A_CENT: RebalanceView = {
+  ...rebalanceViews.twoBorrows,
+  buckets: rebased(rebalanceViews.twoBorrows.buckets, {
+    'USDC/HYPERLIQUID': { cash: 100, upnl: 12, equity: 112, borrow: 0, imHeldUsd: 0, mmHeldUsd: 0, interestPerDayUsd: 0 },
+    'USDC/LIGHTER': { cash: -4, upnl: -12, equity: -16, borrow: 16, imHeldUsd: 3.2, mmHeldUsd: 1.6, interestPerDayUsd: 0.0048 },
+  }),
+};
+
+const RATE_READ_FAILED: RebalanceView = {
+  ...rebalanceViews.twoBorrows,
+  buckets: rebased(rebalanceViews.twoBorrows.buckets, { 'USDC/LIGHTER': { interestPerDayUsd: 0 } }),
 };
 
 function serve(rebalance: RebalanceView, transfer: TransferView = transferViews.spotZero) {
@@ -179,22 +208,36 @@ describe('RebalanceSection card', () => {
 describe('RebalanceSection verdict', () => {
   it('no borrow verdict names the amount that would move', async () => {
     await show(NO_BORROW);
-    expect(line('No borrow. Rebalance saves nothing today. $869.04 would move.')).toBeInTheDocument();
+    expect(line('No borrow. Rebalance saves nothing today. $868.42 would move.')).toBeInTheDocument();
   });
 
-  it('borrowing verdict names repay, cost, margin freed and payback days', async () => {
-    await show(rebalanceViews.twoBorrows);
-    expect(
-      line(
-        'Rebalance repays 244.00 USDC for $0.46 and frees $48.80 of margin. On interest alone it pays back in about 12 days. $869.04 would move.',
-      ),
-    ).toBeInTheDocument();
+  it('verdict uses the recommended route', async () => {
+    await show(OTHER_ROUTE_LEAVES_BORROW);
+    expect(line('Repays 244.00 USDC. Stops $0.04 a day of interest.')).toBeInTheDocument();
+    expect(within(region()).getByRole('button', { name: 'Rebalance · $0.46' })).toBeEnabled();
+    expect(within(region()).queryByText(/\$1\.74|pays back|would move/)).toBeNull();
   });
 
-  it('payback rounds up to whole days and never past a float edge', async () => {
-    await show(CHEAP_MIX);
-    expect(within(region()).getByRole('button', { name: 'Rebalance · $0.28' })).toBeEnabled();
-    expect(region().querySelector('p.num')?.textContent).toContain('On interest alone it pays back in about 7 days.');
+  it('verdict repays what the route repays', async () => {
+    await show(RECOMMENDED_LEAVES_BORROW);
+    expect(line('Repays 212.00 USDC. Stops $0.03 a day of interest.')).toBeInTheDocument();
+  });
+
+  it('verdict under a cent a day', async () => {
+    await show(UNDER_A_CENT);
+    expect(line('Repays 16.00 USDC. Stops less than $0.01 a day of interest.')).toBeInTheDocument();
+  });
+
+  it('verdict when the route repays no borrow', async () => {
+    await show(REPAYS_NOTHING);
+    expect(line('Rebalance evens the wallets. It repays no borrow.')).toBeInTheDocument();
+    expect(within(region()).queryByText(/Repays|No borrow/)).toBeNull();
+  });
+
+  it('rate unknown on a failed rate read', async () => {
+    await show(RATE_READ_FAILED);
+    expect(line('Repays 244.00 USDC.')).toBeInTheDocument();
+    expect(within(region()).getByText('Lighter rate unknown, all of it pays interest')).toBeInTheDocument();
   });
 
   it('balanced verdict, chip and a disabled button', async () => {
@@ -208,13 +251,13 @@ describe('RebalanceSection verdict', () => {
   it('free borrow saves no interest', async () => {
     await show(rebalanceViews.hyperliquidFreeBorrow);
     expect(region().querySelector('p.num')?.textContent).toMatch(
-      /^Rebalance repays 4,200\.00 USDC for \$[\d,.]+ and frees \$[\d,.]+ of margin\. It saves no interest today\. \$[\d,.]+ would move\.$/,
+      /^Repays [\d,.]+ USDC\. This borrow is free today\.$/,
     );
   });
 
   it('balanced by cash shows as even as cash allows', async () => {
     await show(CASH_LIMITED_EVEN);
-    expect(line('As even as cash allows. $203.64 cannot move until those positions close.')).toBeInTheDocument();
+    expect(line('As even as cash allows. $203.64 is margin for open positions.')).toBeInTheDocument();
     expect(line('Every wallet is on its share. Nothing to move.')).toBeNull();
     expect(within(region()).getByText('Balanced')).toBeInTheDocument();
     expect(cardButtons()[0]).toBeDisabled();
@@ -229,14 +272,14 @@ describe('RebalanceSection verdict', () => {
 
   it('waits for transfer', async () => {
     await show(rebalanceViews.twoBorrows, transferViews.moving);
-    expect(
-      await within(region()).findByRole('button', { name: 'Rebalance waits until the transfer ends.' }),
-    ).toBeDisabled();
+    expect(await within(region()).findByText('Waits for the transfer')).toBeInTheDocument();
+    expect(within(region()).getByRole('button', { name: 'Rebalance · $0.46' })).toBeDisabled();
   });
 
   it('waits for a deal', async () => {
     await show(rebalanceViews.twoBorrows, transferViews.lockDeal);
-    expect(await within(region()).findByRole('button', { name: 'Rebalance waits until the deal ends.' })).toBeDisabled();
+    expect(await within(region()).findByText('Waits for the deal')).toBeInTheDocument();
+    expect(within(region()).getByRole('button', { name: 'Rebalance · $0.46' })).toBeDisabled();
   });
 });
 
@@ -254,14 +297,14 @@ describe('RebalanceSection run states', () => {
     expect(within(region()).getByText('Running')).toBeInTheDocument();
     expect(within(region()).getByRole('button', { name: 'Running · round 3 of 5' })).toBeEnabled();
     const verdict = region().querySelector('p.num')?.textContent ?? '';
-    expect(verdict).toMatch(/^A rebalance is running\. Round 3 of 5, about .+ left\.$/);
+    expect(verdict).toMatch(/^A rebalance is running\. Round 3 of 5, about .+ left\. Open it to follow each step\.$/);
     expect(verdict).not.toMatch(/repays|would move/);
   });
 
   it('halted chip and button', async () => {
     await show(rebalanceViews.accountAHalted);
     expect(within(region()).getByText('Stopped')).toBeInTheDocument();
-    expect(within(region()).getByRole('button', { name: 'Stopped · resume' })).toBeEnabled();
+    expect(within(region()).getByRole('button', { name: 'Stopped · open' })).toBeEnabled();
     expect(line('A rebalance stopped in round 3. Open it to see where your money is.')).toBeInTheDocument();
   });
 });
@@ -278,6 +321,15 @@ describe('RebalanceSection gate spot and freshness', () => {
     expect(await within(region()).findByText('Add Spot read permission to see spot balances.')).toBeInTheDocument();
     expect(within(region()).queryByText(/not margin/)).toBeNull();
     expect(within(region()).queryByText(/0\.00 USD/)).toBeNull();
+    cleanup();
+
+    const user = userEvent.setup();
+    await show(rebalanceViews.accountAHalted, transferViews.noSpot);
+    await user.click(within(region()).getByRole('button', { name: 'Stopped · open' }));
+    const dialog = await screen.findByRole('dialog');
+    const note = "Abandon leaves this run's USDC in Gate spot. This key cannot read Gate spot.";
+    expect(await within(dialog).findByText(note)).toBeInTheDocument();
+    expect(dialog.textContent).not.toMatch(/\$0\.00/);
   });
 
   it('stale on error', async () => {
@@ -293,7 +345,7 @@ describe('RebalanceSection gate spot and freshness', () => {
     expect(within(region()).queryByText(/ago$|retrying$/)).toBeNull();
     server.use(http.get('/api/rebalance', () => HttpResponse.json(GATE_ERROR, { status: 500 })));
     await user.click(screen.getByRole('button', { name: 'read again' }));
-    expect(await within(region()).findByText(/^stale \d+s — retrying$/)).toBeInTheDocument();
+    expect(await within(region()).findByText(/^stale \d+s · retrying$/)).toBeInTheDocument();
     expect(facts().Borrowing).toBe('244.00 USDC');
     expect(within(region()).queryByRole('alert')).toBeNull();
   });
@@ -335,11 +387,11 @@ describe('RebalanceSection gate spot and freshness', () => {
       }),
     );
     renderWithClient(<RebalanceSection />);
-    await waitFor(() => expect(line('Could not load the rebalance view. Gate did not answer.')).toBeInTheDocument());
+    await waitFor(() => expect(line('Could not load Rebalance. Gate did not answer.')).toBeInTheDocument());
     await user.click(within(region()).getByRole('button', { name: 'Retry' }));
     await waitFor(() => expect(Object.keys(facts())).toHaveLength(4));
     expect(reads).toBe(2);
-    expect(line('Could not load the rebalance view. Gate did not answer.')).toBeNull();
+    expect(line('Could not load Rebalance. Gate did not answer.')).toBeNull();
   });
 
   it('load error stays while the retry poll runs', async () => {
@@ -354,10 +406,10 @@ describe('RebalanceSection gate spot and freshness', () => {
       }),
     );
     renderWithClient(<RebalanceSection />);
-    await waitFor(() => expect(line('Could not load the rebalance view. Gate did not answer.')).toBeInTheDocument());
+    await waitFor(() => expect(line('Could not load Rebalance. Gate did not answer.')).toBeInTheDocument());
     await user.click(within(region()).getByRole('button', { name: 'Retry' }));
     await waitFor(() => expect(reads).toBe(2));
-    expect(line('Could not load the rebalance view. Gate did not answer.')).toBeInTheDocument();
+    expect(line('Could not load Rebalance. Gate did not answer.')).toBeInTheDocument();
     expect(within(region()).getByRole('button', { name: 'Retry' })).toBeInTheDocument();
   });
 });

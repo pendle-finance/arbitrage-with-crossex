@@ -1,10 +1,10 @@
-import { act, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { TransferView } from '../api/types';
-import { rebalanceHandler, rebalanceViews, transferHandler, transferViews } from '../test/fixtures';
+import { rebalanceHandler, rebalanceViews, transferHandler, transferPostHandler, transferViews } from '../test/fixtures';
 import { server } from '../test/server';
 import { renderWithClient } from '../test/utils';
 import { TransferSection } from './TransferSection';
@@ -49,10 +49,22 @@ describe('TransferSection', () => {
   });
 
   it('no should i signal', async () => {
-    await renderCard(transferViews.failedOverCap);
-
-    expect(screen.queryByText(/should/i)).toBeNull();
-    expect(screen.queryByText(/recommend/i)).toBeNull();
+    const states: { name: string; view: TransferView }[] = [
+      { name: 'at rest', view: transferViews.accountB },
+      { name: 'moving', view: transferViews.moving },
+      { name: 'failed', view: transferViews.failedOverCap },
+      { name: 'lock rebalance', view: transferViews.lockRebalance },
+      { name: 'lock halted', view: transferViews.lockHalted },
+      { name: 'lock deal', view: transferViews.lockDeal },
+      { name: 'no Spot read', view: transferViews.noSpot },
+    ];
+    for (const { name, view } of states) {
+      await renderCard(view);
+      expect(screen.queryByText(/should/i), name).toBeNull();
+      expect(screen.queryByText(/recommend/i), name).toBeNull();
+      expect(screen.queryByText(/best/i), name).toBeNull();
+      cleanup();
+    }
   });
 
   it('lock chip is short', async () => {
@@ -66,10 +78,10 @@ describe('TransferSection', () => {
     await renderCard(transferViews.moving);
 
     expect(screen.getByText('Sending')).toBeInTheDocument();
-    await userEvent.click(screen.getByRole('button', { name: '11.88 USDC' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Sending 11.88 USDC' }));
 
     const dialog = await screen.findByRole('dialog');
-    expect(within(dialog).getByText(/You can close this\. The transfer keeps going\./)).toBeInTheDocument();
+    expect(within(dialog).getByText(/You can close this\./)).toBeInTheDocument();
   });
 
   it('done toast', async () => {
@@ -112,7 +124,7 @@ describe('TransferSection', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Failed · open' }));
 
     const dialog = await screen.findByRole('dialog');
-    expect(within(dialog).getByText('Gate refused the transfer. Nothing moved.')).toBeInTheDocument();
+    expect(within(dialog).getByText('Transfer failed.')).toBeInTheDocument();
   });
 
   it('failed chip survives a running rebalance', async () => {
@@ -124,7 +136,31 @@ describe('TransferSection', () => {
     await userEvent.click(button);
 
     const dialog = await screen.findByRole('dialog');
-    expect(within(dialog).getByText('Gate refused the transfer. Nothing moved.')).toBeInTheDocument();
+    expect(within(dialog).getByText('Transfer failed.')).toBeInTheDocument();
+  });
+
+  it('retry id survives closing the modal', async () => {
+    const posts: { id?: unknown }[] = [];
+    server.use(transferPostHandler(posts, 'silent'));
+    await renderCard();
+    const holdTen = async () => {
+      await userEvent.click(screen.getByRole('button', { name: 'Move money' }));
+      const dialog = await screen.findByRole('dialog');
+      await userEvent.type(within(dialog).getByRole('textbox'), '10');
+      const hold = within(dialog).getByRole('button', { name: 'Hold to send 10.00 USDT to Gate spot' });
+      await waitFor(() => expect(hold).toBeEnabled());
+      fireEvent.pointerDown(hold);
+    };
+
+    await holdTen();
+    await screen.findByText('Gate did not answer.');
+    await userEvent.click(screen.getByRole('button', { name: 'close' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    await holdTen();
+
+    await waitFor(() => expect(posts).toHaveLength(2));
+    expect(posts[0].id).toEqual(expect.any(String));
+    expect(posts[1].id).toBe(posts[0].id);
   });
 
   it('a new pick opens the modal', async () => {

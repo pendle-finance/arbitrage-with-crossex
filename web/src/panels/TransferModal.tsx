@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { ApiError } from '../api/client';
-import { useRebalance, useStartTransfer } from '../api/queries';
+import { useRebalance, type useStartTransfer } from '../api/queries';
 import type { GateAccount, TransferCoin, TransferJob, TransferLock, TransferPath, TransferView } from '../api/types';
 import { Chip } from '../components/Chip';
 import { HoldToConfirmButton } from '../components/HoldToConfirmButton';
@@ -8,7 +8,7 @@ import { HoverCard } from '../components/HoverCard';
 import { Modal } from '../components/Modal';
 import { SegmentedToggle } from '../components/SegmentedToggle';
 import { amountError } from '../lib/amount';
-import { fmtAge, num, sig } from '../lib/fmt';
+import { fmtAbout, fmtAge, num, sig } from '../lib/fmt';
 import { floorCents, roundToStep } from '../lib/ticks';
 import { useNow } from '../lib/useNow';
 import { ProgressBar } from './RebalanceBits';
@@ -86,6 +86,7 @@ function SendingSteps({ to }: { to: GateAccount }) {
 
 function SendingBody({ job, path, now }: { job: TransferJob; path: TransferPath | undefined; now: number }) {
   const elapsedMs = Math.max(0, now - job.createdAt);
+  const usually = path ? `, usually ${fmtAbout(path.seconds)}` : '';
   const items: Fact[] = [
     { key: 'moving', label: 'Moving', value: `${num(job.amount)} ${job.coin}` },
     { key: 'from', label: 'From', value: walletName(job.from) },
@@ -94,7 +95,7 @@ function SendingBody({ job, path, now }: { job: TransferJob; path: TransferPath 
   return (
     <div className="flex flex-col gap-3.5">
       <p className="text-xs text-ink-400">
-        {`Started ${fmtAge(elapsedMs)} ago. You can close this. The transfer keeps going.`}
+        {`Started ${fmtAge(elapsedMs)} ago${usually}. You can close this.`}
       </p>
       <Facts items={items} className="flex flex-wrap gap-x-8 gap-y-3" />
       <ProgressBar ratio={path ? elapsedMs / (path.seconds * 1000) : 0} tone="running" />
@@ -102,6 +103,14 @@ function SendingBody({ job, path, now }: { job: TransferJob; path: TransferPath 
       <p className="border-t border-ink-800 pt-3.5 text-xs text-ink-400">Rebalance waits until this ends.</p>
     </div>
   );
+}
+
+function allowsFact(job: TransferJob, max: number | null): Fact {
+  if (max === null) {
+    return { key: 'allows', label: 'Gate allows', value: 'not known', sub: ['this key cannot read Gate spot'] };
+  }
+  const source = job.from === 'SPOT' ? 'Gate spot balance' : 'free margin, right now';
+  return { key: 'allows', label: 'Gate allows', value: `${num(max)} ${job.coin}`, sub: [source], warn: true };
 }
 
 function FailedBody({
@@ -112,23 +121,13 @@ function FailedBody({
 }: {
   job: TransferJob;
   max: number | null;
-  onRetry: (amount: number) => void;
+  onRetry: (amount: number | null) => void;
   onClose: () => void;
 }) {
-  const retry = max === null ? job.amount : Math.min(job.amount, max);
+  const retry = max === null ? null : Math.min(job.amount, max);
   const items: Fact[] = [
     { key: 'asked', label: 'You asked to move', value: `${num(job.amount)} ${job.coin}` },
-    ...(max === null
-      ? []
-      : [
-          {
-            key: 'allows',
-            label: 'Gate allows',
-            value: `${num(max)} ${job.coin}`,
-            sub: ['free margin, right now'],
-            warn: true,
-          },
-        ]),
+    allowsFact(job, max),
     {
       key: 'moved',
       label: 'Moved',
@@ -138,13 +137,13 @@ function FailedBody({
   return (
     <div className="flex flex-col gap-3.5">
       <div role="alert" className="alert-red">
-        <span className="text-xs font-medium text-guava">Gate refused the transfer. Nothing moved.</span>
+        <span className="text-xs font-medium text-guava">Transfer failed.</span>
         <span className="text-xs text-ink-400">{job.failText}</span>
       </div>
       <Facts items={items} className="flex flex-wrap gap-x-8 gap-y-3" />
       <div className="flex items-center gap-3 border-t border-ink-800 pt-3.5">
         <button type="button" className="btn-primary num" onClick={() => onRetry(retry)}>
-          {`Try again with ${fmtTransferAmount(retry)}`}
+          {retry === null ? 'Try again' : `Try again with ${fmtTransferAmount(retry)}`}
         </button>
         <button type="button" className="btn-ghost-xs" onClick={onClose}>
           Close
@@ -159,18 +158,19 @@ export function TransferModal({
   onClose,
   holdMs,
   pick,
+  start,
 }: {
   view: TransferView;
   onClose: () => void;
   holdMs?: number;
   pick?: TransferPick | null;
+  start: ReturnType<typeof useStartTransfer>;
 }) {
   const [tab, setTab] = useState<Tab>('out');
   const [wallet, setWallet] = useState<CrossexWallet>('CROSSEX');
   const [typed, setTyped] = useState('');
   const [retriedId, setRetriedId] = useState<string | null>(null);
   const buckets = useRebalance().data?.buckets;
-  const start = useStartTransfer();
   const now = useNow(1_000);
   const inputId = useId();
   const appliedNonce = useRef<number | null>(null);
@@ -206,7 +206,7 @@ export function TransferModal({
     );
   }
 
-  const retry = (from: GateAccount, to: GateAccount, id: string, amount: number) => {
+  const retry = (from: GateAccount, to: GateAccount, id: string, amount: number | null) => {
     setRetriedId(id);
     if (from === 'SPOT') {
       if (to !== 'SPOT') setWallet(to);
@@ -215,7 +215,7 @@ export function TransferModal({
       setWallet(from);
       setTab('out');
     }
-    setTyped(fieldAmount(amount));
+    setTyped(amount === null ? '' : fieldAmount(amount));
   };
 
   if (failed) {

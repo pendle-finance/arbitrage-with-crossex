@@ -1,19 +1,19 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { useTransfer } from '../api/queries';
+import { useStartTransfer, useTransfer } from '../api/queries';
 import type { TransferJob, TransferLock } from '../api/types';
 import { Chip } from '../components/Chip';
 import { HoverCard } from '../components/HoverCard';
 import { useToast } from '../components/Toast';
 import { num } from '../lib/fmt';
 import { useSettledError } from '../lib/useSettledError';
-import { HOVER, TRANSFER_CTA } from './rebalanceCopy';
+import { HOVER, TRANSFER_CTA, WAITS_FOR_DEAL } from './rebalanceCopy';
 import { destinationOf } from './TransferBits';
 import { TransferModal, type TransferPick } from './TransferModal';
 
 const LOCK_SHORT: Record<TransferLock, string> = {
   rebalance: 'Waits for the rebalance',
   halted: 'Waits for the rebalance',
-  deal: 'Waits for the deal',
+  deal: WAITS_FOR_DEAL,
 };
 
 function doneText(transfer: TransferJob): string {
@@ -23,6 +23,7 @@ function doneText(transfer: TransferJob): string {
 
 export function TransferSection({ holdMs, pick }: { holdMs?: number; pick?: TransferPick | null }) {
   const query = useTransfer();
+  const start = useStartTransfer();
   const [open, setOpen] = useState(false);
   const [modalPick, setModalPick] = useState<TransferPick | null>(null);
   const appliedNonce = useRef<number | null>(null);
@@ -88,13 +89,18 @@ export function TransferSection({ holdMs, pick }: { holdMs?: number; pick?: Tran
     setOpen(true);
   };
 
+  const closeModal = () => {
+    setOpen(false);
+    if (!start.isPending) start.reset();
+  };
+
   let chip: ReactNode = null;
   let button: ReactNode;
   if (moving) {
     chip = <Chip tone="info">Sending</Chip>;
     button = (
       <button type="button" className="btn ml-auto !border-info/40 !text-pastel-blue" onClick={openModal}>
-        <span className="num">{`${num(moving.amount)} ${moving.coin}`}</span>
+        <span className="num">{`Sending ${num(moving.amount)} ${moving.coin}`}</span>
       </button>
     );
   } else if (failed) {
@@ -127,7 +133,7 @@ export function TransferSection({ holdMs, pick }: { holdMs?: number; pick?: Tran
       </div>
       {chip}
       {button}
-      {open && <TransferModal view={view} onClose={() => setOpen(false)} holdMs={holdMs} pick={modalPick} />}
+      {open && <TransferModal view={view} onClose={closeModal} holdMs={holdMs} pick={modalPick} start={start} />}
     </section>
   );
 }

@@ -226,7 +226,7 @@ export function MarginBreakdown({
           />
         </span>
         <span className={`num text-[11px] ${textClass}`}>
-          {p.hasFunds ? fmtPct(pct, 0) : '—'}
+          {p.hasFunds ? fmtPct(pct, 0) : 'n/a'}
         </span>
       </span>
     );
@@ -237,7 +237,7 @@ export function MarginBreakdown({
         className="flex items-center gap-2.5"
         title={`Initial margin ${fmtUsd(p.initial)} · Available ${fmtUsd(p.available)} · Maintenance ${fmtUsd(
           p.maintenance,
-        )} — shown as a share of the ${fmtUsd(p.balance)} margin balance${liquidation ? ` · ${liquidation}` : ''}`}
+        )}, shown as a share of the ${fmtUsd(p.balance)} margin balance${liquidation ? ` · ${liquidation}` : ''}`}
       >
         {meter('IM', p.imPct, p.hasFunds ? 'bg-grass' : 'bg-ink-600', 'text-ink-100')}
         {meter(
@@ -270,10 +270,13 @@ export function MarginBreakdown({
           pct={p.imPct}
           pctClass="text-emerald-400"
         />
+        {borrowIm !== null ? (
+          <div className="num text-[11px] text-gold">{`${fmtUsd(borrowIm)} of it is for the borrow`}</div>
+        ) : null}
         <LegendRow swatch="bg-ink-500" label="Available" usd={p.available} pct={p.hasFunds ? p.available / p.balance : 0} />
-        <div className={`num mt-1 border-t border-ink-700 pt-1 text-[11px] ${borrowIm !== null ? 'text-gold' : 'text-ink-500'}`}>
-          {borrowIm !== null ? `Includes ${fmtUsd(borrowIm)}, held against the borrow` : 'Utilization = margin ÷ balance'}
-        </div>
+        {borrowIm === null ? (
+          <div className="num mt-1 border-t border-ink-700 pt-1 text-[11px] text-ink-500">Utilization = margin ÷ balance</div>
+        ) : null}
       </div>
 
       <div className="flex items-center gap-3 sm:flex-col sm:border-l sm:border-ink-700 sm:pl-6">
@@ -284,7 +287,7 @@ export function MarginBreakdown({
           segments={[mmSeg]}
           ariaLabel="Maintenance margin vs balance"
         >
-          <div className={`num text-xs font-semibold ${mmText}`}>{p.hasFunds ? fmtPct(p.mmPct, 0) : '—'}</div>
+          <div className={`num text-xs font-semibold ${mmText}`}>{p.hasFunds ? fmtPct(p.mmPct, 0) : 'n/a'}</div>
         </Donut>
         <div className="text-center leading-tight">
           <div className="text-[10px] font-semibold uppercase tracking-wider text-ink-400">Maintenance</div>

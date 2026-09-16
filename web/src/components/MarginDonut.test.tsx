@@ -112,19 +112,19 @@ describe('MarginBreakdown', () => {
 
   it('borrow margin caption', () => {
     const twoBorrows = render(<MarginBreakdown acc={accountBodies.twoBorrows} borrowImUsd={48.8} />);
-    expect(twoBorrows.getByText('Includes $48.80, held against the borrow')).toBeInTheDocument();
+    expect(twoBorrows.getByText('$48.80 of it is for the borrow')).toBeInTheDocument();
     expect(twoBorrows.queryByText('Utilization = margin ÷ balance')).toBeNull();
     twoBorrows.unmount();
 
     const hyperliquidFreeBorrow = render(
       <MarginBreakdown acc={accountBodies.hyperliquidFreeBorrow} borrowImUsd={840} />,
     );
-    expect(hyperliquidFreeBorrow.getByText('Includes $840.00, held against the borrow')).toBeInTheDocument();
+    expect(hyperliquidFreeBorrow.getByText('$840.00 of it is for the borrow')).toBeInTheDocument();
     hyperliquidFreeBorrow.unmount();
 
     render(<MarginBreakdown acc={acc} borrowImUsd={0} />);
     expect(screen.getByText('Utilization = margin ÷ balance')).toBeInTheDocument();
-    expect(screen.queryByText(/held against the borrow/)).toBeNull();
+    expect(screen.queryByText(/of it is for the borrow/)).toBeNull();
   });
 
   it('strip unchanged', () => {
@@ -133,6 +133,6 @@ describe('MarginBreakdown', () => {
     expect(screen.getByText('MM')).toBeInTheDocument();
     expect(screen.getByText('77%')).toBeInTheDocument();
     expect(screen.getByText('28%')).toBeInTheDocument();
-    expect(screen.queryByText(/held against the borrow/)).toBeNull();
+    expect(screen.queryByText(/of it is for the borrow/)).toBeNull();
   });
 });

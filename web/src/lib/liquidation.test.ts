@@ -259,13 +259,13 @@ describe('formatting', () => {
     expect(fmtLinePrice(3150.4)).toBe('~$3,150');
     expect(fmtLinePrice(115.23)).toBe('~$115.23');
     expect(lineLabel({ base: 'ETH', venue: 'Hyperliquid', price: 3150, move: 0.37 })).toBe(
-      'Liquidates if ETH on Hyperliquid hits ~$3,150 (+37%)',
+      'Liquidates if ETH hits ~$3,150 (+37%)',
     );
     expect(lineLabel({ base: 'ETH', venue: 'CrossEx', price: 1840, move: -0.2 })).toBe(
-      'Liquidates if ETH on CrossEx falls to ~$1,840 (-20%)',
+      'Liquidates if ETH falls to ~$1,840 (-20%)',
     );
     expect(describeLine({ base: 'ETH', venue: 'Hyperliquid', price: 3150, move: 0.37 })).toBe(
-      'Liquidates at about $3,150 if only ETH on Hyperliquid moves (+37%) and every other leg holds still.',
+      'Liquidates at about $3,150 if ETH moves +37% on every venue. The losing leg is on Hyperliquid.',
     );
   });
 });

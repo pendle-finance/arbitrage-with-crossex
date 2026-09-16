@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { RebalanceBucket } from '../api/types';
 import type { LiquidationLine } from '../lib/liquidation';
 import { rebalanceViews, rebased } from '../test/fixtures';
-import { borrowFacts, Facts } from './RebalanceHovers';
+import { borrowFacts, Facts, pickedRoute, shownKeys, targetsOf } from './RebalanceHovers';
 
 function show(buckets: RebalanceBucket[], line: LiquidationLine | null = null) {
   return render(<Facts items={borrowFacts(buckets, line)} />);
@@ -34,7 +34,7 @@ describe('borrow facts', () => {
   it('one borrowing wallet', () => {
     show(rebalanceViews.oneBorrow.buckets);
 
-    expect(lines('Borrowing')).toEqual(['132.00 USDC', 'Lighter 132.00']);
+    expect(lines('Borrowing')).toEqual(['132.00 USDC', 'USDC · Lighter']);
   });
 
   it('two borrowing wallets', () => {
@@ -48,23 +48,23 @@ describe('borrow facts', () => {
 
     expect(lines('Interest now')).toEqual([
       '$0.04 a day',
-      'Lighter 10.95% a year, no free allowance',
-      'Hyperliquid 5% a year, free to 10,000',
+      'Lighter 10.95% a year, all of it pays interest',
+      'Hyperliquid free to 10,000',
     ]);
   });
 
   it('hyperliquid free allowance', () => {
     show(rebalanceViews.hyperliquidFreeBorrow.buckets);
 
-    expect(lines('Borrowing')).toEqual(['4,200.00 USDC', 'Hyperliquid 4,200.00']);
-    expect(lines('Interest now')).toEqual(['$0.00 a day', 'Hyperliquid 5% a year, free to 10,000']);
+    expect(lines('Borrowing')).toEqual(['4,200.00 USDC', 'USDC · Hyperliquid']);
+    expect(lines('Interest now')).toEqual(['$0.00 a day', 'Hyperliquid free to 10,000']);
   });
 
   it('lighter charges from the first dollar', () => {
     show(rebalanceViews.oneBorrow.buckets);
 
     const lighter = lines('Interest now')[1];
-    expect(lighter).toBe('Lighter 10.95% a year, no free allowance');
+    expect(lighter).toBe('Lighter 10.95% a year, all of it pays interest');
     expect(lighter).not.toMatch(/free to/);
   });
 
@@ -95,8 +95,8 @@ describe('borrow facts', () => {
   it('borrow under one dollar', () => {
     show(rebalanceViews.borrowUnderOne.buckets);
 
-    expect(lines('Borrowing')).toEqual(['0.40 USDC', 'Hyperliquid 0.40']);
-    expect(lines('Interest now')[1]).toBe('Hyperliquid 5% a year, free to 10,000');
+    expect(lines('Borrowing')).toEqual(['0.40 USDC', 'USDC · Hyperliquid']);
+    expect(lines('Interest now')[1]).toBe('Hyperliquid free to 10,000');
   });
 
   it('USDC borrow over 10,000 shows the daily cost', () => {
@@ -112,7 +112,7 @@ describe('borrow facts', () => {
 
     expect(lines('Borrowing')[0]).toBe('2,000.00 USDT');
     expect(lines('Interest now')[0]).toBe('$0.31 a day');
-    expect(lines('Interest now')[1]).toMatch(/a year, no free allowance$/);
+    expect(lines('Interest now')[1]).toMatch(/a year, all of it pays interest$/);
     expect(lines('Interest now').join(' ')).not.toMatch(/free to/);
   });
 
@@ -122,5 +122,37 @@ describe('borrow facts', () => {
     expect(lines('Interest paid')).toEqual(['$3.20', 'all time', 'Hyperliquid $3.20']);
     expect(lines('Borrowing')[0]).toBe('none');
     expect(lines('Interest now')[0]).toBe('$0.00 a day');
+  });
+});
+
+describe('balanced targets', () => {
+  it('targets hold still during a run', () => {
+    const before = rebalanceViews.twoBorrows;
+    const running = rebalanceViews.accountARunning.job!;
+    const during = {
+      ...before,
+      job: { ...running, status: 'running' as const, inTransit: { coin: 'USDC' as const, qty: 300, at: 'MOVING' as const } },
+      buckets: rebased(before.buckets, { 'USDT/CROSSEX': { cash: 1087.45, equity: 1191.92 } }),
+    };
+    const cents = (targets: Map<string, number>) => [...targets].map(([key, value]) => [key, Math.round(value * 100)]);
+
+    expect(cents(targetsOf(during))).toEqual(cents(targetsOf(before)));
+    expect(cents(targetsOf({ ...during, job: { ...during.job, status: 'abandoned' } }))).not.toEqual(cents(targetsOf(before)));
+  });
+});
+
+describe('route and wallet rules the card and the modal share', () => {
+  it('picks the first open route, starting from the pick', () => {
+    const plan = rebalanceViews.twoBorrows.plan;
+    expect(pickedRoute(plan, null).name).toBe('mix');
+    expect(pickedRoute(plan, 'convert').route).toBe(plan.routes.convert);
+    expect(pickedRoute(rebalanceViews.hiddenRoute.plan, 'loop').name).not.toBe('loop');
+  });
+
+  it('shows the Gate wallet only while it holds a dollar of cash', () => {
+    const view = rebalanceViews.accountA;
+    expect(shownKeys(view, [])).toContain('USDC/GATE');
+    const dust = { ...view, buckets: rebased(view.buckets, { 'USDC/GATE': { cash: 0.99, equity: 0.99 } }) };
+    expect(shownKeys(dust, [])).not.toContain('USDC/GATE');
   });
 });

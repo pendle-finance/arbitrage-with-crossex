@@ -1,5 +1,4 @@
-import { render, screen, within } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { rebalanceViews } from '../test/fixtures';
 import { BAR_CAPTION, SHARE_CAPTION } from './rebalanceCopy';
@@ -25,9 +24,9 @@ const partOf = (row: HTMLElement, part: string): HTMLElement => {
 
 const edge = (el: HTMLElement): number => Number(el.style.left.replace('%', '')) + Number(el.style.width.replace('%', ''));
 
-const openHover = async (container: HTMLElement, key: string): Promise<HTMLElement> => {
-  await userEvent.hover(within(rowOf(container, key)).getByRole('button'));
-  return screen.findByRole('tooltip');
+const openHover = (container: HTMLElement, key: string): HTMLElement => {
+  fireEvent.mouseMove(partOf(rowOf(container, key), 'bar-hit'), { clientX: 100, clientY: 40 });
+  return screen.getByRole('tooltip');
 };
 
 describe('BalanceBars', () => {
@@ -36,8 +35,8 @@ describe('BalanceBars', () => {
 
     const row = rowOf(container, 'USDT/CROSSEX');
     const cash = partOf(row, 'bar-cash');
-    expect(cash.style.left).toBe('0%');
-    expect(cash.style.width).toBe('60%');
+    expect(cash.style.left).toBe('50%');
+    expect(cash.style.width).toBe('30%');
     expect(cash.className).toContain('bg-info');
     expect(partOf(row, 'zero-line').style.left).toBe(cash.style.left);
   });
@@ -47,30 +46,30 @@ describe('BalanceBars', () => {
 
     const loss = partOf(rowOf(container, 'USDT/CROSSEX'), 'bar-pnl');
     expect(loss.className).toContain('bar-pnl-loss');
-    expect(loss.style.left).toBe('50%');
-    expect(loss.style.width).toBe('10%');
+    expect(loss.style.left).toBe('75%');
+    expect(loss.style.width).toBe('5%');
     expect(edge(loss)).toBe(edge(partOf(rowOf(container, 'USDT/CROSSEX'), 'bar-cash')));
 
     const gainRow = rowOf(container, 'USDC/LIGHTER');
     const gain = partOf(gainRow, 'bar-pnl');
     expect(gain.className).toContain('bar-pnl-gain');
-    expect(gain.style.left).toBe('20%');
-    expect(gain.style.width).toBe('5%');
+    expect(gain.style.left).toBe('60%');
+    expect(gain.style.width).toBe('2.5%');
     expect(Number(gain.style.left.replace('%', ''))).toBe(edge(partOf(gainRow, 'bar-cash')));
   });
 
   it('negative cash keeps its colour', () => {
     const rows: BarRow[] = [{ key: 'USDC/LIGHTER', label: 'USDC · Lighter', cash: -40, upnl: 55, target: 15, tone: 'lighter' }];
-    const { container } = render(<BalanceBars caption={BAR_CAPTION} rows={rows} scale={60} />);
+    const { container } = render(<BalanceBars caption={BAR_CAPTION} rows={rows} scale={80} />);
 
     const row = rowOf(container, 'USDC/LIGHTER');
     const cash = partOf(row, 'bar-cash');
     expect(cash.className).toContain('bg-grass');
     expect(cash.className).not.toContain('guava');
     expect(cash.className).not.toContain('bar-pnl-loss');
-    expect(cash.style.left).toBe('0%');
-    expect(cash.style.width).toBe('40%');
-    expect(partOf(row, 'zero-line').style.left).toBe('40%');
+    expect(cash.style.left).toBe('25%');
+    expect(cash.style.width).toBe('25%');
+    expect(partOf(row, 'zero-line').style.left).toBe('50%');
   });
 
   it('target mark', () => {
@@ -79,8 +78,8 @@ describe('BalanceBars', () => {
     const mark = partOf(rowOf(container, 'USDT/CROSSEX'), 'bar-target');
     expect(mark.className).toContain('bg-gold');
     expect(mark.className).toContain('w-0.5');
-    expect(mark.style.left).toBe('45%');
-    expect(partOf(rowOf(container, 'USDC/LIGHTER'), 'bar-target').style.left).toBe('30%');
+    expect(mark.style.left).toBe('72.5%');
+    expect(partOf(rowOf(container, 'USDC/LIGHTER'), 'bar-target').style.left).toBe('65%');
   });
 
   it('no legend', () => {
@@ -95,9 +94,37 @@ describe('BalanceBars', () => {
   it('bar looks hoverable', () => {
     const { container } = render(<BalanceBars caption={BAR_CAPTION} rows={ROWS} scale={100} />);
 
-    const trigger = within(rowOf(container, 'USDC/LIGHTER')).getByRole('button');
-    expect(trigger.className).toContain('border-dotted');
-    expect(trigger.className).toContain('cursor-help');
+    const hit = partOf(rowOf(container, 'USDC/LIGHTER'), 'bar-hit');
+    expect(hit.className).toContain('cursor-pointer');
+    expect(hit.tabIndex).toBe(0);
+  });
+
+  it('zero line is centered', () => {
+    const plain = render(<BalanceBars caption={BAR_CAPTION} rows={ROWS} scale={bits.scaleOf(ROWS)} />);
+    for (const row of ROWS) expect(partOf(rowOf(plain.container, row.key), 'zero-line').style.left).toBe('50%');
+    plain.unmount();
+
+    const book: BarRow[] = [
+      { key: 'USDT/CROSSEX', label: 'USDT · CrossEx', cash: 30, upnl: 0, target: 0, tone: 'usdt' },
+      { key: 'USDC/LIGHTER', label: 'USDC · Lighter', cash: -30, upnl: 0, target: 0, tone: 'lighter' },
+    ];
+    const scale = bits.scaleOf(ROWS, book);
+    expect(scale).toBe(60);
+    const { container } = render(<BalanceBars caption={BAR_CAPTION} rows={book} scale={scale} />);
+
+    const positive = rowOf(container, 'USDT/CROSSEX');
+    const negative = rowOf(container, 'USDC/LIGHTER');
+    expect(partOf(positive, 'zero-line').style.left).toBe('50%');
+    expect(partOf(negative, 'zero-line').style.left).toBe('50%');
+    expect([partOf(positive, 'bar-cash').style.left, partOf(positive, 'bar-cash').style.width]).toEqual(['50%', '25%']);
+    expect([partOf(negative, 'bar-cash').style.left, partOf(negative, 'bar-cash').style.width]).toEqual(['25%', '25%']);
+    expect(partOf(negative, 'bar-target').style.left).toBe('50%');
+  });
+
+  it('scale takes the widest end on either side', () => {
+    const negativeOnly: BarRow[] = [{ key: 'USDC/LIGHTER', label: 'USDC · Lighter', cash: -90, upnl: 20, target: 10, tone: 'lighter' }];
+    expect(bits.scaleOf(ROWS, negativeOnly)).toBe(90);
+    expect(bits.scaleOf([])).toBe(0);
   });
 
   it('negative cash without a borrow', () => {
@@ -118,36 +145,57 @@ describe('BalanceBars', () => {
 });
 
 describe('the wallet hover', () => {
-  it('hover names the wallet', async () => {
+  it('bar tooltip follows the pointer', () => {
+    const { container } = render(<BalanceBars caption={BAR_CAPTION} rows={ROWS} scale={100} />);
+    const row = rowOf(container, 'USDC/LIGHTER');
+    const hit = partOf(row, 'bar-hit');
+
+    fireEvent.mouseMove(hit, { clientX: 100, clientY: 40 });
+    const first = screen.getByRole('tooltip');
+    expect([first.style.left, first.style.top]).toEqual(['112px', '52px']);
+
+    fireEvent.mouseMove(hit, { clientX: 220, clientY: 60 });
+    const second = screen.getByRole('tooltip');
+    expect([second.style.left, second.style.top]).toEqual(['232px', '72px']);
+
+    expect(within(row).queryByRole('button')).toBeNull();
+    expect(row.querySelector('[class*="border-dotted"]')).toBeNull();
+    expect(row.className).not.toContain('border-dotted');
+
+    fireEvent.mouseLeave(hit);
+    expect(screen.queryByRole('tooltip')).toBeNull();
+  });
+
+  it('hover names the wallet', () => {
     const { container } = render(<BalanceBars caption={BAR_CAPTION} rows={ROWS} scale={100} />);
 
-    const card = await openHover(container, 'USDC/LIGHTER');
+    const card = openHover(container, 'USDC/LIGHTER');
     expect(card.firstElementChild?.firstElementChild?.textContent).toBe('USDC · Lighter');
   });
 
-  it('hover has three numbers', async () => {
+  it('hover has three numbers', () => {
     const { container } = render(<BalanceBars caption={BAR_CAPTION} rows={ROWS} scale={100} />);
 
-    const card = await openHover(container, 'USDC/LIGHTER');
+    const card = openHover(container, 'USDC/LIGHTER');
     expect(within(card).getByText('Cash')).toBeInTheDocument();
     expect(within(card).getByText('Unrealized PnL')).toBeInTheDocument();
     expect(within(card).getByText('Balanced equity')).toBeInTheDocument();
     expect([...card.querySelectorAll('.num')].map((el) => el.textContent)).toEqual(['20.00', '+5.00', '30.00']);
   });
 
-  it('hover swatches', async () => {
+  it('hover swatches', () => {
     const { container } = render(<BalanceBars caption={BAR_CAPTION} rows={ROWS} scale={100} />);
 
-    const card = await openHover(container, 'USDC/LIGHTER');
+    const card = openHover(container, 'USDC/LIGHTER');
     expect(card.querySelector('[data-swatch="cash"]')?.className).toContain('bg-grass');
     expect(card.querySelector('[data-swatch="pnl"]')?.className).toContain('bar-pnl-gain');
     expect(card.querySelector('[data-swatch="target"]')?.className).toContain('bg-gold');
   });
 
-  it('hover omits equity', async () => {
+  it('hover omits equity', () => {
     const { container } = render(<BalanceBars caption={BAR_CAPTION} rows={ROWS} scale={100} />);
 
-    const card = await openHover(container, 'USDC/LIGHTER');
+    const card = openHover(container, 'USDC/LIGHTER');
     expect(within(card).queryByText('25.00')).toBeNull();
     expect(within(card).queryByText('Equity')).toBeNull();
   });

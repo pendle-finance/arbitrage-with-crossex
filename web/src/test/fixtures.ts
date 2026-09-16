@@ -520,6 +520,17 @@ export function transferHandler(view: TransferView = transferViews.accountB) {
   return http.get('/api/transfer', () => HttpResponse.json(env<TransferView>(view)));
 }
 
+export function transferPostHandler(bodies: { id?: unknown }[], answer: 'accepted' | 'silent') {
+  return http.post('/api/transfer', async ({ request }) => {
+    bodies.push((await request.json()) as { id?: unknown });
+    if (answer === 'accepted') return HttpResponse.json(env({ id: 'mtzur2ab' }), { status: 202 });
+    return HttpResponse.json(
+      { ok: false, error: { category: 'network', message: 'Gate did not answer.', retryable: true } },
+      { status: 502 },
+    );
+  });
+}
+
 export function accountHandler(body: CrossexAccount = accountBodies.accountB) {
   return http.get('/api/account', () => HttpResponse.json(env<CrossexAccount>(body)));
 }
@@ -1488,18 +1499,18 @@ const TWO_BORROWS_SPLIT: WalletShare[] = [
   { coin: 'USDC', venue: 'LIGHTER', notionalUsd: 226.86, share: 0.06 },
 ];
 
-const TWO_BORROWS_TARGET: WalletAfter[] = [
-  { coin: 'USDT', venue: 'CROSSEX', cash: 519.49, equity: 623.96 },
+const TWO_BORROWS_USDC_AFTER: WalletAfter[] = [
   { coin: 'USDC', venue: 'HYPERLIQUID', cash: 561.08, equity: 549.08 },
   { coin: 'USDC', venue: 'LIGHTER', cash: 86.88, equity: 74.88 },
 ];
 
 const TWO_BORROWS_PLAN: EvenPlan = {
-  balanced: false, noLegs: false, moves: 869.04, shortOfEven: 0, roundCap: 6, split: TWO_BORROWS_SPLIT,
+  balanced: false, noLegs: false, moves: 868.42, shortOfEven: 0, roundCap: 6, split: TWO_BORROWS_SPLIT,
   routes: {
     mix: {
       available: true, reason: null, costUsd: 0.46, seconds: 130, rounds: 1, oneMoreRoundCostUsd: null,
-      marginFreedUsd: 48.8, savesPerDayUsd: 0.04, after: TWO_BORROWS_TARGET,
+      marginFreedUsd: 48.8, savesPerDayUsd: 0.04,
+      after: [{ coin: 'USDT', venue: 'CROSSEX', cash: 519.03, equity: 623.5 }, ...TWO_BORROWS_USDC_AFTER],
       steps: [
         {
           round: 1, kind: 'round', buy: 661.13, move: 661.13, arrives: 661.08, borrowLeft: 132.0, seconds: 130,
@@ -1511,23 +1522,11 @@ const TWO_BORROWS_PLAN: EvenPlan = {
         },
       ],
     },
-    loop: {
-      available: true, reason: null, costUsd: 1.08, seconds: 360, rounds: 2, oneMoreRoundCostUsd: null,
-      marginFreedUsd: 48.8, savesPerDayUsd: 0.04, after: TWO_BORROWS_TARGET,
-      steps: [
-        {
-          round: 1, kind: 'round', buy: 661.13, move: 661.13, arrives: 661.08, borrowLeft: 132.0, seconds: 130,
-          from: 'CROSSEX', to: 'HYPERLIQUID',
-        },
-        {
-          round: 2, kind: 'round', buy: 207.91, move: 207.91, arrives: 206.88, borrowLeft: 0, seconds: 230,
-          from: 'CROSSEX', to: 'LIGHTER',
-        },
-      ],
-    },
+    loop: null,
     convert: {
-      available: true, reason: null, costUsd: 1.73, seconds: 0, rounds: 0, oneMoreRoundCostUsd: null,
-      marginFreedUsd: 48.8, savesPerDayUsd: 0.04, after: TWO_BORROWS_TARGET,
+      available: true, reason: null, costUsd: 1.74, seconds: 0, rounds: 0, oneMoreRoundCostUsd: null,
+      marginFreedUsd: 48.8, savesPerDayUsd: 0.04,
+      after: [{ coin: 'USDT', venue: 'CROSSEX', cash: 517.76, equity: 622.23 }, ...TWO_BORROWS_USDC_AFTER],
       steps: [
         {
           round: null, kind: 'convert', buy: 0, move: 662.4, arrives: 661.08, borrowLeft: 132.0, seconds: 0,
@@ -1540,7 +1539,7 @@ const TWO_BORROWS_PLAN: EvenPlan = {
       ],
     },
   },
-  recommended: 'loop',
+  recommended: 'mix',
 };
 
 const ONE_BORROW_BUCKETS: RebalanceBucket[] = [
@@ -2023,16 +2022,24 @@ const MOVING_TRANSFER: TransferJob = {
   received: null, failText: null, createdAt: REBALANCE_NOW - 130_000, doneAt: null,
 };
 
-const FAILED_TRANSFER: TransferJob = { ...MOVING_TRANSFER, status: 'failed', failText: 'Transfer failed: x.' };
+const FAILED_TRANSFER: TransferJob = {
+  ...MOVING_TRANSFER, status: 'failed', failText: 'Gate has no record of this transfer. Try again.',
+};
 
 const FAILED_OVER_CAP_TRANSFER: TransferJob = {
   id: 'mtzwovrcap', coin: 'USDC', from: 'CROSSEX_HYPERLIQUID', to: 'SPOT', amount: 442.02, status: 'failed',
-  received: null, failText: 'Insufficient transferAvailable, transferAvailable: 292.0185407',
+  received: null, failText: 'Gate refused the move: free margin is too low.',
+  createdAt: REBALANCE_NOW - 130_000, doneAt: REBALANCE_NOW - 60_000,
+};
+
+const FAILED_NO_SPOT_READ_TRANSFER: TransferJob = {
+  id: 'mtznospotrd', coin: 'USDT', from: 'SPOT', to: 'CROSSEX', amount: 500, status: 'failed',
+  received: null, failText: 'Gate spot has only 292.01 USDT.',
   createdAt: REBALANCE_NOW - 130_000, doneAt: REBALANCE_NOW - 60_000,
 };
 
 const FAILED_OVER_CAP_PATHS: TransferPath[] = ACCOUNT_B_PATHS.map((path) =>
-  path.coin === 'USDC' && path.from === 'CROSSEX_HYPERLIQUID' && path.to === 'SPOT' ? { ...path, max: 292.02 } : path,
+  path.coin === 'USDC' && path.from === 'CROSSEX_HYPERLIQUID' && path.to === 'SPOT' ? { ...path, max: 292.01 } : path,
 );
 
 function withSpot(spot: SpotBalance[]): TransferView {
@@ -2076,6 +2083,7 @@ export const transferViews = {
   failedAndRebalanceRunning: {
     spot: ACCOUNT_B_SPOT, paths: FAILED_OVER_CAP_PATHS, lock: 'rebalance', transfer: FAILED_OVER_CAP_TRANSFER,
   },
+  failedNoSpotRead: { spot: null, paths: NO_SPOT_PATHS, lock: null, transfer: FAILED_NO_SPOT_READ_TRANSFER },
 } satisfies Record<string, TransferView>;
 
 const ACCOUNT_ASSETS = {

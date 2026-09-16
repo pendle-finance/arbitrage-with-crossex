@@ -244,10 +244,10 @@ describe('RebalanceModal plan state', () => {
 
   it('opens with the route collapsed, its cost and time beside it', async () => {
     show(rebalanceViews.twoBorrows);
-    expect(within(dialog()).getByText('Spot loop')).toBeInTheDocument();
+    expect(within(dialog()).getByText('Spot loop, then Convert')).toBeInTheDocument();
     expect(within(dialog()).getByText('Recommended')).toBeInTheDocument();
-    expect(within(dialog()).getByText('about 6 min · $1.08')).toBeInTheDocument();
-    expect(changeRoute().textContent).toBe('Change route · 2 more');
+    expect(within(dialog()).getByText('about 2 min · $0.46')).toBeInTheDocument();
+    expect(changeRoute().textContent).toBe('Change route · 1 more');
     expect(screen.queryByRole('radiogroup')).toBeNull();
   });
 
@@ -257,8 +257,8 @@ describe('RebalanceModal plan state', () => {
     await user.click(changeRoute());
     expect(screen.getAllByRole('dialog')).toHaveLength(1);
     expect(within(dialog()).getByRole('radiogroup', { name: 'Route' })).toBeInTheDocument();
-    expect(screen.getAllByRole('radio').map((radio) => radio.getAttribute('value') ?? radio.id)).toHaveLength(3);
-    expect(screen.getByRole('radio', { name: 'Spot loop' })).toBeInTheDocument();
+    expect(screen.getAllByRole('radio').map((radio) => radio.getAttribute('value') ?? radio.id)).toHaveLength(2);
+    expect(screen.getByRole('radio', { name: 'Spot loop, then Convert' })).toBeInTheDocument();
     expect(screen.getByRole('radio', { name: 'Convert' })).toBeInTheDocument();
   });
 
@@ -278,7 +278,7 @@ describe('RebalanceModal plan state', () => {
     await user.click(changeRoute());
     await user.click(screen.getByRole('button', { name: 'Keep the recommended one' }));
     expect(screen.queryByRole('radiogroup')).toBeNull();
-    expect(within(dialog()).getByText('about 6 min · $1.08')).toBeInTheDocument();
+    expect(within(dialog()).getByText('about 2 min · $0.46')).toBeInTheDocument();
   });
 
   it('hides Change route when one route is on the wire', async () => {
@@ -292,11 +292,23 @@ describe('RebalanceModal plan state', () => {
     show(rebalanceViews.twoBorrows);
     const group = screen.getByRole('group', { name: 'After rebalance' });
     expect(barRows('After rebalance')).toEqual([
-      'USDT · CrossEx623.96',
+      'USDT · CrossEx623.50',
       'USDC · Hyperliquid549.08',
       'USDC · Lighter74.88',
     ]);
     expect(group.querySelectorAll('[data-bar-target]')).toHaveLength(3);
+  });
+
+  it('gives a wallet with no position share three numbers and a gold mark at zero', async () => {
+    show(rebalanceViews.accountARunning);
+    const row = screen.getByRole('group', { name: 'Now' }).querySelector('[data-bar-row="USDC/GATE"]') as HTMLElement;
+    expect(row.querySelector('[data-bar-target]')).not.toBeNull();
+    fireEvent.mouseMove(row.querySelector('[data-bar-hit]') as HTMLElement, { clientX: 100, clientY: 40 });
+    const tip = screen.getByRole('tooltip');
+    expect(tip.textContent).toMatch(/Cash.*Unrealized PnL.*Balanced equity/);
+    const numbers = [...tip.querySelectorAll('.num')].map((el) => el.textContent);
+    expect(numbers).toHaveLength(3);
+    expect(numbers[2]).toBe('0.00');
   });
 
   it('shows Frees, Saves and the liquidation change as three labelled facts', async () => {
@@ -336,31 +348,51 @@ describe('RebalanceModal plan state', () => {
     show(rebalanceViews.twoBorrows);
     await user.hover(screen.getByRole('button', { name: 'Show the steps' }));
     const card = await screen.findByRole('tooltip');
-    expect(card.textContent).toContain('Spot loop moves in rounds.');
-    expect(card.textContent).toContain('Gate caps each transfer by your free margin.');
-    expect(card.textContent).toContain('Your borrow locks $48.80 (20%) as initial margin.');
+    expect(card.textContent).toBe(
+      'A round is one trip through Gate spot, capped by your free margin. Gate holds $48.80 of initial margin against your borrow. Each round repays borrow, so the next is bigger.',
+    );
   });
 
-  it('disables the hold button when the plan went stale, until the trader accepts', async () => {
-    const pricier: RebalanceView = {
+  it('disables the hold when the picked route moves money differently, until the trader accepts', async () => {
+    const plan = rebalanceViews.twoBorrows.plan;
+    const mix = plan.routes.mix!;
+    const elsewhere: RebalanceView = {
       ...rebalanceViews.twoBorrows,
-      plan: {
-        ...rebalanceViews.twoBorrows.plan,
-        routes: {
-          ...rebalanceViews.twoBorrows.plan.routes,
-          loop: { ...rebalanceViews.twoBorrows.plan.routes.loop!, costUsd: 4.12 },
-        },
-      },
+      plan: { ...plan, routes: { ...plan.routes, mix: { ...mix, steps: mix.steps.map((step) => ({ ...step, to: 'HYPERLIQUID' as const })) } } },
     };
     const user = userEvent.setup();
-    const { next } = showPolled([rebalanceViews.twoBorrows, pricier]);
+    const { next } = showPolled([rebalanceViews.twoBorrows, elsewhere]);
     expect(holdButton()).toBeEnabled();
     await next();
     expect(holdButton()).toBeDisabled();
     expect(screen.getByRole('alert').textContent).toBe('The plan changed. Check the new route before you rebalance.');
     await user.click(screen.getByRole('button', { name: 'Use the new plan' }));
     expect(holdButton()).toBeEnabled();
-    expect(within(dialog()).getByText('about 6 min · $4.12')).toBeInTheDocument();
+  });
+
+  it('a cost change alone keeps the hold live', async () => {
+    const plan = rebalanceViews.twoBorrows.plan;
+    const pricier: RebalanceView = {
+      ...rebalanceViews.twoBorrows,
+      plan: { ...plan, routes: { ...plan.routes, mix: { ...plan.routes.mix!, costUsd: 4.12 } } },
+    };
+    const { next } = showPolled([rebalanceViews.twoBorrows, pricier]);
+    expect(holdButton()).toBeEnabled();
+    await next();
+    expect(within(dialog()).getByText('about 2 min · $4.12')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(holdButton()).toBeEnabled();
+  });
+
+  it('hold waits for a moving transfer or a running deal', async () => {
+    show(rebalanceViews.twoBorrows, { transfer: transferViews.moving });
+    expect(await within(dialog()).findByText('Waits for the transfer')).toBeInTheDocument();
+    expect(holdButton()).toBeDisabled();
+    cleanup();
+
+    show(rebalanceViews.twoBorrows, { transfer: transferViews.lockDeal });
+    expect(await within(dialog()).findByText('Waits for the deal')).toBeInTheDocument();
+    expect(holdButton()).toBeDisabled();
   });
 });
 
@@ -411,7 +443,8 @@ describe('RebalanceModal run states', () => {
   it('says the key cannot read Spot and shows no zero for an unknown balance', async () => {
     show(rebalanceViews.accountAHalted, { transfer: transferViews.noSpot });
     expect(await screen.findByText('Add Spot read permission to see spot balances.')).toBeInTheDocument();
-    expect(within(dialog()).getByText('Abandon leaves the 36.58 USDC in Gate spot.')).toBeInTheDocument();
+    const note = within(dialog()).getByText("Abandon leaves this run's USDC in Gate spot. This key cannot read Gate spot.");
+    expect(note.textContent).not.toMatch(/36\.58/);
     expect(dialog().textContent).not.toMatch(/\$0\.00/);
   });
 
@@ -626,7 +659,7 @@ describe('RebalanceModal where the money is', () => {
     const rows = barRows('Where your money is');
     expect(rows).toContain('On the way745.44');
     expect(rows.filter((row) => row.startsWith('Gate spot'))).toEqual([]);
-    expect(within(dialog()).getByText('Abandon leaves the 745.44 USDC on the way.')).toBeInTheDocument();
+    expect(within(dialog()).getByText('Abandon leaves 745.44 USDC in transit. It is not margin until it lands.')).toBeInTheDocument();
   });
 
   it('after abandon line', async () => {
@@ -755,7 +788,8 @@ describe('RebalanceModal route and step content', () => {
     const user = userEvent.setup();
     show(rebalanceViews.exampleD);
     await user.click(changeRoute());
-    expect(rowOf('Spot loop, then Convert')).toHaveTextContent('6 rounds, then Convert · about 13 min');
+    expect(rowOf('Spot loop, then Convert')).toHaveTextContent('about 13 min');
+    expect(rowOf('Spot loop, then Convert').textContent).not.toMatch(/\d+ rounds?/);
     expect(rowOf('Spot loop, then Convert')).toHaveTextContent('$15.68');
   });
 
@@ -763,7 +797,7 @@ describe('RebalanceModal route and step content', () => {
     const user = userEvent.setup();
     show(rebalanceViews.exampleE);
     await user.click(changeRoute());
-    expect(rowOf('Spot loop, then Convert')).toHaveTextContent('1 round, then Convert · about 6.5 min');
+    expect(rowOf('Spot loop, then Convert')).toHaveTextContent('about 6.5 min');
     expect(rowOf('Spot loop, then Convert')).toHaveTextContent('$2.04');
   });
 
@@ -776,7 +810,7 @@ describe('RebalanceModal route and step content', () => {
     await user.click(within(rowOf('Spot loop, then Convert')).getByText('Recommended'));
     expect(screen.getByRole('radio', { name: 'Spot loop, then Convert' })).toBeChecked();
     await user.click(within(rowOf('Convert')).getByText('Convert'));
-    await user.click(within(rowOf('Spot loop, then Convert')).getByText('6 rounds'));
+    await user.click(within(rowOf('Spot loop, then Convert')).getByText('about 13 min'));
     expect(screen.getByRole('radio', { name: 'Spot loop, then Convert' })).toBeChecked();
   });
 
@@ -919,34 +953,19 @@ describe('RebalanceModal route and step content', () => {
 });
 
 describe('RebalanceModal hovers and facts', () => {
-  it('rounds hover labels', async () => {
+  it('lists the recommended route first, then the rest by cost, with no rounds text', async () => {
+    const user = userEvent.setup();
+    const view = rebalanceViews.accountA;
+    show({ ...view, plan: { ...view.plan, recommended: 'convert' } });
+    await user.click(changeRoute());
+    expect(routeNames()).toEqual(['Convert', 'Spot loop']);
+    expect(dialog().textContent).not.toMatch(/\d+ rounds?/);
+  });
+
+  it('the step control names the margin the borrow holds', async () => {
     const user = userEvent.setup();
     show(rebalanceViews.exampleD);
-    await user.click(changeRoute());
-    expect((await hoverCard(user, '6 rounds')).terms).toEqual(['A round', 'Why more than one', 'Why 6']);
-  });
-
-  it('rounds hover names borrow margin', async () => {
-    const user = userEvent.setup();
-    show(rebalanceViews.exampleD);
-    await user.click(changeRoute());
-    expect((await hoverCard(user, '6 rounds')).text).toContain('Your borrow locks $1,922.48 (20%) as initial margin.');
-  });
-
-  it('one round hover', async () => {
-    const user = userEvent.setup();
-    show(rebalanceViews.exampleE);
-    await user.click(changeRoute());
-    const card = await hoverCard(user, '1 round');
-    expect(card.terms).toEqual(['A round', 'Why 1']);
-    expect(card.terms).not.toContain('Why more than one');
-  });
-
-  it('one round hover says why', async () => {
-    const user = userEvent.setup();
-    show(rebalanceViews.exampleE);
-    await user.click(changeRoute());
-    expect((await hoverCard(user, '1 round')).text).toContain('1 round, then Convert costs $2.04. 2 rounds cost $2.12.');
+    expect((await hoverCard(user, 'Show the steps')).text).toContain('Gate holds $1,922.48 of initial margin against your borrow.');
   });
 
   it('recommended hover', async () => {
@@ -991,9 +1010,6 @@ describe('RebalanceModal hovers and facts', () => {
         'Buy USDC in CrossEx, move it through Gate spot into the CrossEx Hyperliquid wallet. Gate has no direct transfer between CrossEx wallets. Repeats in rounds.',
       ],
       ['Convert', 'Instant swap between your CrossEx USDT and USDC wallets. 0.2% fee.'],
-      ['5 rounds', 'Buy USDC in CrossEx. Move it to Gate spot, then into the CrossEx Hyperliquid wallet. About 2 min.'],
-      ['5 rounds', 'Gate caps each transfer by your free margin.'],
-      ['5 rounds', 'Spot loop runs until even. That takes 5 rounds here.'],
     ]);
     cleanup();
 
@@ -1001,7 +1017,6 @@ describe('RebalanceModal hovers and facts', () => {
     await user.click(changeRoute());
     await check([
       ['Spot loop, then Convert', 'Spot loop for up to 6 rounds, then Convert the rest.'],
-      ['6 rounds', 'Spot loop stops at 6 rounds, the most that fit in 15 min. Convert does the rest.'],
     ]);
     cleanup();
 
@@ -1024,15 +1039,6 @@ describe('RebalanceModal hovers and facts', () => {
     expect((await hoverCard(user, 'Spot loop')).text).toBe(
       'Buy USDC in CrossEx, move it through Gate spot into the CrossEx Hyperliquid wallet and the CrossEx Lighter wallet. Gate has no direct transfer between CrossEx wallets. Repeats in rounds.',
     );
-    const loopRounds = await hoverCard(user, '2 rounds');
-    expect(loopRounds.terms).toEqual([
-      'A round, USDT · CrossEx to USDC · Hyperliquid',
-      'A round, USDT · CrossEx to USDC · Lighter',
-      'Why 2',
-    ]);
-    expect(loopRounds.text).toContain('Buy USDC in CrossEx. Move it to Gate spot, then into the CrossEx Lighter wallet. About 4 min.');
-    expect(loopRounds.text).toContain('One round for each wallet.');
-    expect((await hoverCard(user, '1 round')).text).toContain('1 round, then Convert is the cheapest mix that takes 15 min or less.');
   });
 
   it('hovers for a move from Hyperliquid to Lighter', async () => {
@@ -1041,9 +1047,6 @@ describe('RebalanceModal hovers and facts', () => {
     if (screen.queryByRole('button', { name: /Change route/ })) await user.click(changeRoute());
     expect((await hoverCard(user, 'Spot loop')).text).toBe(
       'Move USDC from the CrossEx Hyperliquid wallet through Gate spot into the CrossEx Lighter wallet. Gate has no direct transfer between CrossEx wallets. Repeats in rounds.',
-    );
-    expect((await hoverCard(user, '1 round')).text).toContain(
-      'Move USDC from the CrossEx Hyperliquid wallet to Gate spot, then into the CrossEx Lighter wallet. About 10 min.',
     );
     expect((await hoverCard(user, 'Convert')).text).toBe(
       'Instant swap between your CrossEx USDT and USDC wallets. 0.2% fee. USDC between Hyperliquid and Lighter swaps twice, through USDT.',

@@ -45,16 +45,10 @@ export const MOVE_TEXT = {
     const across = moves.filter((move) => move.from !== 'CROSSEX' && move.to !== 'CROSSEX');
     return [
       ...(into.length > 0 ? [`Buy USDC in CrossEx, move it through Gate spot into ${wallets(into)}.`] : []),
-      ...(out.length > 0 ? [`Move USDC from ${wallets(out)} through Gate spot, back into CrossEx, and sell it for USDT.`] : []),
+      ...(out.length > 0 ? [`Move USDC from ${wallets(out)} through Gate spot into CrossEx. Sell it for USDT.`] : []),
       ...across.map((move) => `Move USDC from ${venueWallet(move.from)} through Gate spot into ${venueWallet(move.to)}.`),
     ];
   },
-  round: (from: Pool, to: Pool, about: string): string => {
-    if (from === 'CROSSEX') return `Buy USDC in CrossEx. Move it to Gate spot, then into ${venueWallet(to)}. ${about}.`;
-    if (to === 'CROSSEX') return `Move USDC from ${venueWallet(from)} to Gate spot, then back into CrossEx. Sell it for USDT. ${about}.`;
-    return `Move USDC from ${venueWallet(from)} to Gate spot, then into ${venueWallet(to)}. ${about}.`;
-  },
-  roundTerm: (from: Pool, to: Pool): string => `A round, ${WALLET_LABEL[poolKey(from)]} to ${WALLET_LABEL[poolKey(to)]}`,
 };
 
 export const HOVER = {
@@ -67,7 +61,7 @@ export const HOVER = {
       { wallet: 'USDC · Hyperliquid', legs: 'Hyperliquid', interest: 'free up to 10,000 USDC, then about 5% a year' },
       { wallet: 'USDC · Lighter', legs: 'Lighter', interest: 'from the first dollar, about 11% a year' },
     ],
-    borrow: 'A negative wallet is a borrow. A borrow locks 20% of its size as initial margin.',
+    borrow: 'A negative wallet is a borrow. Gate holds initial margin against each borrow.',
     rounds: 'Spot loop moves in rounds. Free margin caps each round. Time and cost are per round.',
     routeHead: { route: 'Route', path: 'Path', time: 'Time', cost: 'Cost' },
     routes: [
@@ -101,7 +95,7 @@ export const HOVER = {
   interestUsdc: 'No interest under 10,000 USDC. Interest only on the part over.',
   interestLighter: 'Interest from the first dollar. About 11% a year.',
   interestUsdt: 'Interest from the first dollar.',
-  interestPaid: 'Total interest paid, all time.',
+  borrowHeld: (list: string) => `A negative wallet is a borrow. Gate holds initial margin against it: ${list}.`,
   route: 'How the money moves. Cost includes Gate fees and spot spread. Spot loop shows only when it costs less than Convert.',
   mix: (cap: number) => `Spot loop for up to ${roundCount(cap)}, then Convert the rest.`,
   recommended: 'Cheapest route that takes 15 min or less.',
@@ -109,19 +103,10 @@ export const HOVER = {
   repeats: 'Repeats in rounds.',
   convert: 'Instant swap between your CrossEx USDT and USDC wallets. 0.2% fee.',
   convertAcross: 'USDC between Hyperliquid and Lighter swaps twice, through USDT.',
-  roundLabel: 'A round',
-  whyMoreThanOneLabel: 'Why more than one',
-  whyMoreThanOne: 'Gate caps each transfer by your free margin.',
+  round: 'A round is one trip through Gate spot, capped by your free margin.',
+  whyMoreThanOne: 'A move bigger than your free margin takes more than one.',
   whyMoreThanOneBorrow: (amountText: string) =>
-    `Your borrow locks ${amountText} (20%) as initial margin. Each round repays some borrow and frees that margin, so the next round is bigger.`,
-  whyLabel: (n: number) => `Why ${num(n, 0)}`,
-  whyMixAtCap: (cap: number) => `Spot loop stops at ${roundCount(cap)}, the most that fit in 15 min. Convert does the rest.`,
-  whyMixCheapest: (n: number) => `${roundCount(n)}, then Convert is the cheapest mix that takes 15 min or less.`,
-  whyMixUnderCap: (n: number, costText: string, nextCostText: string) =>
-    `${roundCount(n)}, then Convert costs ${costText}. ${roundCount(n + 1)} cost ${nextCostText}.`,
-  whyLoopOne: 'One round moves it all.',
-  whyOnePerWallet: 'One round for each wallet.',
-  whyLoopMore: (n: number) => `Spot loop runs until even. That takes ${roundCount(n)} here.`,
+    `Gate holds ${amountText} of initial margin against your borrow. Each round repays borrow, so the next is bigger.`,
   frees: 'Initial margin the repaid borrow no longer locks.',
   saves: 'Borrow interest per day this stops.',
   onTheWay: 'In transit through Gate spot. Not margin.',
@@ -129,7 +114,7 @@ export const HOVER = {
   gateSpotAssets: 'Not margin. No equity or PnL.',
   abandon: 'Stop the run. Funds stay where they are.',
   transferTitle: "Move funds between Gate spot and CrossEx. Gate's website cannot do this.",
-  fee: 'Gate fee. CrossEx Hyperliquid wallet: in $0.05, out $1.00. CrossEx Lighter wallet: in $1.03, out free. Others free.',
+  fee: 'Gate fee for this move.',
   time: 'Typical time. Moves into or out of the CrossEx Hyperliquid and Lighter wallets can take longer.',
   minimum: 'Gate minimum for moves into or out of the CrossEx Hyperliquid and Lighter wallets. Fee included.',
   upToOut: "Free margin, capped at this wallet's cash.",
@@ -138,6 +123,11 @@ export const HOVER = {
 
 export const VERDICT_NO_BORROW = 'No borrow. Rebalance saves nothing today.';
 export const VERDICT_BALANCED = 'Every wallet is on its share. Nothing to move.';
+export const VERDICT_REPAYS = (amountText: string) => `Repays ${amountText}.`;
+export const VERDICT_STOPS = (perDayText: string) => `Stops ${perDayText} a day of interest.`;
+export const VERDICT_STOPS_UNDER_A_CENT = 'Stops less than $0.01 a day of interest.';
+export const VERDICT_FREE = 'This borrow is free today.';
+export const VERDICT_REPAYS_NOTHING = 'Rebalance evens the wallets. It repays no borrow.';
 
 export const FACT_BORROWING = 'Borrowing';
 export const FACT_INTEREST_NOW = 'Interest now';
@@ -162,8 +152,12 @@ export const MODAL_HOLD = 'Hold to rebalance';
 export const MODAL_RESUME = 'Resume';
 export const MODAL_ABANDON = 'Abandon';
 
+export const WAITS_FOR_TRANSFER = 'Waits for the transfer';
+export const WAITS_FOR_DEAL = 'Waits for the deal';
+
 export const TRANSFER_CTA = 'Move money';
 
 export const HYPERLIQUID_FREE_LINE = 'free to 10,000';
 export const INTEREST_PAID_ALL_TIME = 'all time';
-export const NO_FREE_ALLOWANCE = 'no free allowance';
+export const NO_FREE_PART = 'all of it pays interest';
+export const RATE_UNKNOWN = 'rate unknown';

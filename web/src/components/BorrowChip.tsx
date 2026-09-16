@@ -13,8 +13,9 @@ const venueName = (venue: string): string => (venue === 'CROSSEX' ? 'CrossEx' : 
 
 export function BorrowChip({ onOpen }: { onOpen: () => void }) {
   const { data } = useRebalance();
-  const wallets = borrowingBuckets(data?.buckets).filter((b) => floorCents(b.borrow) >= MIN_BORROW);
-  if (wallets.length === 0) return null;
+  const wallets = borrowingBuckets(data?.buckets);
+  const shown = wallets.filter((b) => floorCents(b.borrow) >= MIN_BORROW);
+  if (shown.length === 0) return null;
   const single = wallets.length === 1 ? wallets[0] : null;
   const oneCoin = new Set(wallets.map((b) => b.coin)).size === 1;
   const totalAmount = borrowTotalUsd(data?.buckets);
@@ -53,7 +54,7 @@ export function BorrowChip({ onOpen }: { onOpen: () => void }) {
               <dd className="whitespace-nowrap text-ink-100">{legs}</dd>
             </div>
             <div className="flex flex-col gap-0.5">
-              <dt className={`${microLabelClass} whitespace-nowrap`}>Held as margin</dt>
+              <dt className={`${microLabelClass} whitespace-nowrap`}>Held against the borrow</dt>
               <dd className="num whitespace-nowrap text-ink-100">{fmtUsd(single.imHeldUsd)}</dd>
             </div>
           </dl>
@@ -63,11 +64,11 @@ export function BorrowChip({ onOpen }: { onOpen: () => void }) {
               <tr>
                 <Th className="text-left">Wallet</Th>
                 <Th className="text-right">Borrowing</Th>
-                <Th className="text-right">Held as margin</Th>
+                <Th className="text-right">Held against the borrow</Th>
               </tr>
             </thead>
             <tbody>
-              {wallets.map((b) => (
+              {shown.map((b) => (
                 <tr key={`${b.coin}/${b.venue}`} className="border-t border-ink-700">
                   <td className={`${cell} text-ink-100`}>{`${b.coin} · ${venueName(b.venue)}`}</td>
                   <td className={`${cell} num text-right text-ink-100`}>{`${num(floorCents(b.borrow), 2)} ${b.coin}`}</td>

@@ -141,7 +141,7 @@ export function BalancesPanel() {
   };
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-6" data-testid="balances-tabpanel">
       <MarginBreakdown acc={acc} borrowImUsd={borrowImUsd} />
 
       <RebalanceSection onTransfer={openTransfer} />

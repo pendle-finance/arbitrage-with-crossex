@@ -24,7 +24,7 @@ export function FreshnessButton({
   className?: string;
 }) {
   const now = useNow(1000);
-  if (!dataUpdatedAt) return <span className="num text-xs text-ink-500">⟳ —</span>;
+  if (!dataUpdatedAt) return <span className="num text-xs text-ink-500">⟳ loading</span>;
   const age = fmtAge(now - dataUpdatedAt);
   return (
     <button
@@ -37,7 +37,7 @@ export function FreshnessButton({
           : 'border-ink-700 bg-ink-900 text-ink-400 hover:border-ink-500 hover:text-ink-200'
       }`}
     >
-      {staleError ? `stale ${age} — retrying` : `⟳ ${age} ago`}
+      {staleError ? `stale ${age} · retrying` : `⟳ ${age} ago`}
     </button>
   );
 }

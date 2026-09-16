@@ -1,6 +1,8 @@
 import { screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
+import { borrowTotalUsd } from '../lib/borrow';
+import { num } from '../lib/fmt';
 import { rebalanceHandler, rebalanceViews } from '../test/fixtures';
 import { server } from '../test/server';
 import { renderWithClient } from '../test/utils';
@@ -19,7 +21,7 @@ describe('BorrowChip', () => {
     expect(within(card).getByText('147.05 USDC')).toBeInTheDocument();
     expect(within(card).getByText('For')).toBeInTheDocument();
     expect(within(card).getByText('Hyperliquid legs')).toBeInTheDocument();
-    expect(within(card).getByText('Held as margin')).toBeInTheDocument();
+    expect(within(card).getByText('Held against the borrow')).toBeInTheDocument();
     expect(within(card).getByText('$29.41')).toBeInTheDocument();
   });
 
@@ -132,6 +134,20 @@ describe('BorrowChip', () => {
     const card = await screen.findByRole('tooltip');
     expect(within(card).getByText('Lent by Gate')).toBeInTheDocument();
     expect(within(card).queryByText('Wallet')).toBeNull();
+  });
+
+  it('pill total equals card total with a borrow under $1', async () => {
+    const view = rebalanceViews.oneBorrow;
+    const buckets = view.buckets.map((b) =>
+      b.coin === 'USDC' && b.venue === 'HYPERLIQUID'
+        ? { ...b, cash: -0.4, upnl: 0, equity: -0.4, borrow: 0.4, imHeldUsd: 0.08, mmHeldUsd: 0.04, interestPerDayUsd: 0 }
+        : b,
+    );
+    server.use(rebalanceHandler({ ...view, buckets }));
+    renderWithClient(<BorrowChip onOpen={vi.fn()} />);
+
+    const cardTotal = num(borrowTotalUsd(buckets), 2);
+    expect(await screen.findByRole('button', { name: `Borrowing ${cardTotal} USDC` })).toBeInTheDocument();
   });
 
   it('no pill under a dollar', async () => {

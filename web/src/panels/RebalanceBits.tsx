@@ -1,6 +1,6 @@
 import { useId, type ReactNode } from 'react';
 import type { PlannedStep, Pool, RebalanceJob, RebalanceStep, RouteName, RoutePlan } from '../api/types';
-import { HoverCard } from '../components/HoverCard';
+import { ChartTooltip } from '../components/ChartTooltip';
 import { SignedNumber } from '../components/SignedNumber';
 import { microLabelClass } from '../components/Th';
 import { fmtAbout, fmtAge, num } from '../lib/fmt';
@@ -30,8 +30,11 @@ export const ALWAYS_SHOWN = ['USDT/CROSSEX', 'USDC/HYPERLIQUID'];
 
 export const ROUTE_ORDER: RouteName[] = ['mix', 'loop', 'convert'];
 
-export const scaleOf = (...sets: BarRow[][]) =>
-  Math.max(0, ...sets.flat().map((row) => Math.max(row.cash, row.cash + row.upnl, row.target ?? 0)));
+const barEnds = (row: BarRow): number[] => [row.cash, row.cash + row.upnl, row.target ?? 0];
+
+const widestEnd = (rows: BarRow[]): number => Math.max(0, ...rows.flatMap(barEnds).map((end) => Math.abs(end)));
+
+export const scaleOf = (...sets: BarRow[][]) => widestEnd(sets.flat());
 
 const BAR_FILL: Record<BarTone, string> = {
   usdt: 'bg-info',
@@ -54,11 +57,9 @@ interface BarParts {
 }
 
 function scalePoint(rows: BarRow[], scale: number): (value: number) => number {
-  const ends = rows.flatMap((row) => [row.cash, row.cash + row.upnl, row.target ?? 0]);
-  const low = Math.min(0, ...ends);
-  const high = Math.max(scale, 0, ...ends);
-  const span = high - low > 0 ? high - low : 1;
-  return (value) => Math.min(100, Math.max(0, ((value - low) / span) * 100));
+  const half = Math.max(scale, widestEnd(rows));
+  if (half <= 0) return () => 50;
+  return (value) => Math.min(100, Math.max(0, 50 + (value * 50) / half));
 }
 
 function barParts(row: BarRow, at: (value: number) => number): BarParts {
@@ -80,7 +81,7 @@ const cssPct = (value: number): string => `${value}%`;
 
 function WalletHover({ row }: { row: BarRow }) {
   return (
-    <div className="flex flex-col gap-2 text-xs">
+    <div className="flex flex-col gap-2 text-xs" style={{ width: HOVER_WIDTH_PX }}>
       <span className="font-semibold text-ink-50">{row.label}</span>
       <div aria-hidden className="h-px bg-ink-700" />
       <div className="flex items-center gap-2.5">
@@ -107,37 +108,31 @@ function WalletHover({ row }: { row: BarRow }) {
 function WalletBar({ row, parts }: { row: BarRow; parts: BarParts }) {
   return (
     <div className="grid min-w-0 flex-1">
-      <HoverCard
-        icon={false}
-        widthPx={HOVER_WIDTH_PX}
-        label={
-          <div className="relative h-3 w-full overflow-hidden rounded-sm bg-ink-950">
-            <div aria-hidden data-zero-line="" className="absolute inset-y-0 z-10 w-px bg-ink-600" style={{ left: cssPct(parts.zero) }} />
+      <ChartTooltip content={<WalletHover row={row} />}>
+        <div className="relative h-3 w-full overflow-hidden rounded-sm bg-ink-950">
+          <div aria-hidden data-zero-line="" className="absolute inset-y-0 z-10 w-px bg-ink-600" style={{ left: cssPct(parts.zero) }} />
+          <div
+            aria-hidden
+            data-bar-cash=""
+            className={`absolute inset-y-0 ${BAR_FILL[row.tone]}`}
+            style={{ left: cssPct(parts.cashLeft), width: cssPct(parts.cashWidth) }}
+          />
+          <div
+            aria-hidden
+            data-bar-pnl=""
+            className={`absolute inset-y-0 z-0 ${pnlFill(row.upnl)}`}
+            style={{ left: cssPct(parts.pnlLeft), width: cssPct(parts.pnlWidth) }}
+          />
+          {parts.target !== null && (
             <div
               aria-hidden
-              data-bar-cash=""
-              className={`absolute inset-y-0 ${BAR_FILL[row.tone]}`}
-              style={{ left: cssPct(parts.cashLeft), width: cssPct(parts.cashWidth) }}
+              data-bar-target=""
+              className="absolute inset-y-0 z-20 w-0.5 -translate-x-px bg-gold"
+              style={{ left: cssPct(parts.target) }}
             />
-            <div
-              aria-hidden
-              data-bar-pnl=""
-              className={`absolute inset-y-0 z-0 ${pnlFill(row.upnl)}`}
-              style={{ left: cssPct(parts.pnlLeft), width: cssPct(parts.pnlWidth) }}
-            />
-            {parts.target !== null && (
-              <div
-                aria-hidden
-                data-bar-target=""
-                className="absolute inset-y-0 z-20 w-0.5 -translate-x-px bg-gold"
-                style={{ left: cssPct(parts.target) }}
-              />
-            )}
-          </div>
-        }
-      >
-        <WalletHover row={row} />
-      </HoverCard>
+          )}
+        </div>
+      </ChartTooltip>
     </div>
   );
 }
@@ -264,7 +259,7 @@ export function StepList({ rows }: { rows: StepRow[] }) {
 
 type StepTextInput = Pick<PlannedStep, 'kind' | 'buy' | 'move' | 'arrives' | 'from' | 'to'> & { borrowLeft: number | null };
 
-export function stepText(step: StepTextInput): { text: string; sub: string } {
+function stepText(step: StepTextInput): { text: string; sub: string } {
   const move = num(step.move);
   const arrives = num(step.arrives);
   const borrowLeft = step.borrowLeft === null ? null : num(step.borrowLeft);
