@@ -236,6 +236,16 @@ function withConvertAfter(hyperliquidEquity: number, marginFreedUsd: number): Re
   return { ...view, plan: { ...view.plan, routes } };
 }
 
+function withMixAfter(view: RebalanceView, hyperliquidEquity: number, lighterEquity: number): RebalanceView {
+  const mix = view.plan.routes.mix!;
+  const after = [
+    mix.after[0],
+    { coin: 'USDC', venue: 'HYPERLIQUID', cash: hyperliquidEquity, equity: hyperliquidEquity },
+    { coin: 'USDC', venue: 'LIGHTER', cash: lighterEquity, equity: lighterEquity },
+  ];
+  return { ...view, plan: { ...view.plan, routes: { ...view.plan.routes, mix: { ...mix, after } } } };
+}
+
 const resumeButton = () => within(dialog()).getByRole('button', { name: /^Resum/ });
 
 const abandonButton = () => within(dialog()).getByRole('button', { name: 'Abandon' });
@@ -1146,10 +1156,44 @@ describe('RebalanceModal hovers and facts', () => {
     expect(line('Moves $868.42 and repays 100.00 USDC on Hyperliquid.')).toBeInTheDocument();
     expect(facts().Frees).toBe('$20.00');
     expect(subs('Frees')).toEqual(['margin the repay returns']);
-    expect(subs('Saves')).toEqual(['no interest to stop']);
+    expect(subs('Saves')).toEqual(['stops no interest']);
     await user.click(screen.getByRole('radio', { name: 'Spot loop, then Convert' }));
     expect(line('Moves $868.42 and repays 244.00 USDC across two wallets.')).toBeInTheDocument();
     expect(subs('Saves')).toEqual(['Lighter interest stops']);
+  });
+
+  it('a route that repays only the free Hyperliquid borrow while Lighter pays stops no interest', async () => {
+    show(withMixAfter(rebalanceViews.twoBorrows, 500, -132));
+    expect(subs('Saves')).toEqual(['stops no interest']);
+  });
+
+  it('a partial repay on Lighter says its interest falls', async () => {
+    show(withMixAfter(rebalanceViews.twoBorrows, 500, -50));
+    expect(subs('Saves')).toEqual(['Lighter interest falls']);
+  });
+
+  it('one full and one partial repay name both kinds', async () => {
+    const view = rebalanceViews.twoBorrows;
+    const big = {
+      ...view,
+      buckets: rebased(view.buckets, { 'USDC/HYPERLIQUID': { cash: -12_000, equity: -12_000, borrow: 12_000, interestPerDayUsd: 0.27 } }),
+    };
+    show(withMixAfter(big, -11_000, 500));
+    expect(subs('Saves')).toEqual(['Lighter interest stops · Hyperliquid interest falls']);
+  });
+
+  it('liquidation reads not known until Gate answers, and when its margin figures are not numbers', async () => {
+    serve({ account: { ...HYPE_ACCOUNT, marginBalance: 'n/a' }, positions: HYPE_PAIR });
+    renderWithClient(
+      <>
+        <RebalanceModal view={rebalanceViews.accountA} onClose={vi.fn()} />
+        <Loaded />
+      </>,
+    );
+    expect(facts().Liquidation).toBe('not known');
+    await screen.findByText('reads loaded');
+    expect(facts().Liquidation).toBe('not known');
+    expect(subs('Liquidation')).toEqual([]);
   });
 
   it('no liquidation without a position', async () => {

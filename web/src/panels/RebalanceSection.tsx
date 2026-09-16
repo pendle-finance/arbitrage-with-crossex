@@ -5,7 +5,6 @@ import { Chip } from '../components/Chip';
 import { FreshnessButton } from '../components/FreshnessIndicator';
 import { borrowingBuckets } from '../lib/borrow';
 import { fmtAbout, fmtUsd, num } from '../lib/fmt';
-import { liquidationLines, nearestLiquidation } from '../lib/liquidation';
 import { floorCents } from '../lib/ticks';
 import { useNow } from '../lib/useNow';
 import { useSettledError } from '../lib/useSettledError';
@@ -13,7 +12,7 @@ import { BalanceBars, jobSeconds, scaleOf, ShareColumn } from './RebalanceBits';
 import { BAR_CAPTION, GATE_SPOT, HOVER, NO_LEGS, SHARE_CAPTION, VERDICT_BALANCED, VERDICT_FREE, VERDICT_NO_BORROW } from './rebalanceCopy';
 import { VERDICT_REPAYS, VERDICT_REPAYS_NOTHING, VERDICT_STOPS, VERDICT_STOPS_UNDER_A_CENT, WAITS_FOR_DEAL, WAITS_FOR_TRANSFER } from './rebalanceCopy';
 import { barRowsOf, borrowFacts, DUST, Facts, fmtCoinOrUsd, isCashLimitedEven, pickedRoute, planSteps, positionShares } from './RebalanceHovers';
-import { RebalanceInfo, repayOf, roundCountOf, roundOf, sharedCoin, shownKeys, targetsOf, Term } from './RebalanceHovers';
+import { liquidationNow, RebalanceInfo, repayOf, roundCountOf, roundOf, sharedCoin, shownKeys, targetsOf, Term } from './RebalanceHovers';
 import { RebalanceModal } from './RebalanceModal';
 import { NoSpotReadLine } from './TransferBits';
 
@@ -108,7 +107,6 @@ export function RebalanceSection({
   const hasBorrow = borrowingBuckets(buckets).length > 0;
   const moving = transfer?.transfer?.status === 'moving';
   const dealWorking = transfer?.lock === 'deal';
-  const liquidationKnown = account !== undefined && positions !== undefined && liquidationLines(account, positions) !== null;
 
   let chip: ReactNode = null;
   if (job?.status === 'running') chip = <Chip tone="info">Running</Chip>;
@@ -174,7 +172,7 @@ export function RebalanceSection({
         )}
       </div>
       <div className="border-t border-ink-800 pt-3">
-        <Facts items={borrowFacts(buckets, liquidationKnown ? nearestLiquidation(account, positions) : 'unknown')} />
+        <Facts items={borrowFacts(buckets, liquidationNow(account, positions))} />
       </div>
       <div className="flex flex-col gap-3 border-t border-ink-800 pt-3">
         <p className="num text-xs text-ink-300">{verdict}</p>

@@ -1,13 +1,13 @@
 import { useId, type ReactNode } from 'react';
-import type { EvenPlan, GateAccount, PlannedStep, Pool, RebalanceBucket, RebalanceJob, RebalanceView } from '../api/types';
-import type { RouteName, RoutePlan, TransferCoin, TransferView, WalletAfter } from '../api/types';
+import type { CrossexAccount, EvenPlan, GateAccount, PlannedStep, Pool, PositionsResponse, RebalanceBucket, RebalanceJob } from '../api/types';
+import type { RebalanceView, RouteName, RoutePlan, TransferCoin, TransferView, WalletAfter } from '../api/types';
 import { Chip } from '../components/Chip';
 import { HoverCard } from '../components/HoverCard';
 import { RadioRow } from '../components/RadioRow';
 import { microLabelClass, Th } from '../components/Th';
 import { borrowingBuckets, borrowTotalUsd, MIN_BORROW } from '../lib/borrow';
 import { fmtAbout, fmtUsd, num, WALLET_SHORT } from '../lib/fmt';
-import { describeLine, fmtLinePrice, fmtMove, type LiquidationLine } from '../lib/liquidation';
+import { describeLine, fmtLinePrice, fmtMove, liquidationLines, type LiquidationLine } from '../lib/liquidation';
 import { floorCents, stripZeros } from '../lib/ticks';
 import { ALWAYS_SHOWN, ROUTE_ORDER, WALLET_TONE, type BarRow } from './RebalanceBits';
 import {
@@ -134,7 +134,7 @@ const DAYS_PER_YEAR = 365;
 
 const freePartOf = (b: RebalanceBucket) => (b.coin === 'USDC' && b.venue === 'HYPERLIQUID' ? HYPERLIQUID_INTEREST_FREE_USDC : 0);
 
-const chargedBorrow = (b: RebalanceBucket, borrow: number) => Math.max(0, borrow - freePartOf(b));
+export const chargedBorrow = (b: RebalanceBucket, borrow: number) => Math.max(0, borrow - freePartOf(b));
 
 const isRateUnknown = (b: RebalanceBucket) => chargedBorrow(b, b.borrow) > 0 && b.interestPerDayUsd === 0;
 
@@ -162,6 +162,7 @@ export interface Repay {
   wallets: RebalanceBucket[];
   amount: number;
   stopsPerDayUsd: number | null;
+  charged: { bucket: RebalanceBucket; before: number; after: number }[];
 }
 
 export function repayOf(buckets: RebalanceBucket[], route: RoutePlan): Repay {
@@ -171,15 +172,16 @@ export function repayOf(buckets: RebalanceBucket[], route: RoutePlan): Repay {
     const amount = Math.max(0, bucket.borrow - left);
     return floorCents(amount) > 0 ? [{ bucket, amount, left }] : [];
   });
-  const stops = parts.reduce((total, { bucket, left }) => {
-    const charged = chargedBorrow(bucket, bucket.borrow);
-    if (charged === 0) return total;
-    return total + (bucket.interestPerDayUsd * (charged - chargedBorrow(bucket, left))) / charged;
-  }, 0);
+  const charged = parts.map(({ bucket, left }) => ({ bucket, before: chargedBorrow(bucket, bucket.borrow), after: chargedBorrow(bucket, left) }));
+  const stops = charged.reduce(
+    (total, { bucket, before, after }) => (before === 0 ? total : total + (bucket.interestPerDayUsd * (before - after)) / before),
+    0,
+  );
   return {
     wallets: parts.map((part) => part.bucket),
     amount: parts.reduce((total, part) => total + part.amount, 0),
     stopsPerDayUsd: parts.some((part) => isRateUnknown(part.bucket)) ? null : stops,
+    charged,
   };
 }
 
@@ -205,6 +207,11 @@ export function borrowingFact(buckets: RebalanceBucket[]): Fact {
         : joined(borrowing.map((b) => walletLine(b, borrowAmount(floorCents(b.borrow))))),
     warn: total > 0,
   };
+}
+
+export function liquidationNow(acc: CrossexAccount | undefined, pos: PositionsResponse | undefined): LiquidationLine | null | 'unknown' {
+  const view = acc && pos ? liquidationLines(acc, pos) : null;
+  return view ? (view.lines[0] ?? null) : 'unknown';
 }
 
 export function borrowFacts(buckets: RebalanceBucket[], liquidation: LiquidationLine | null | 'unknown'): Fact[] {

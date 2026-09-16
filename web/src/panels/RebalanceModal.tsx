@@ -10,14 +10,15 @@ import { microLabelClass } from '../components/Th';
 import { useToast } from '../components/Toast';
 import { borrowingBuckets } from '../lib/borrow';
 import { fmtAbout, fmtAge, fmtUsd, num, WALLET_SHORT } from '../lib/fmt';
-import { describeLine, fmtLinePrice, lineFor, liquidationLines, nearestLiquidation } from '../lib/liquidation';
+import { describeLine, fmtLinePrice, lineFor, liquidationLines } from '../lib/liquidation';
+import { floorCents } from '../lib/ticks';
 import { useNow } from '../lib/useNow';
 import { BalanceBars, jobRows, jobSeconds, planRows, ProgressBar, ROUTE_ORDER, scaleOf, StepList } from './RebalanceBits';
 import type { BarRow, StepRow } from './RebalanceBits';
-import { FACT_LIQUIDATION, GATE_SPOT, HOVER, MODAL_ABANDON, MODAL_AFTER, MODAL_CHANGE_ROUTE, MODAL_FREES } from './rebalanceCopy';
+import { FACT_LIQUIDATION, GATE_SPOT, HOVER, LIQUIDATION_NOT_KNOWN, MODAL_ABANDON, MODAL_AFTER, MODAL_CHANGE_ROUTE, MODAL_FREES } from './rebalanceCopy';
 import { MODAL_HOLD, MODAL_KEEP_ROUTE, MODAL_RESUME, MODAL_SAVES, MODAL_STEPS, WAITS_FOR_DEAL, WAITS_FOR_TRANSFER } from './rebalanceCopy';
-import { barRowsOf, Facts, fmtCoinOrUsd, keyOf, movesKey, pickedRoute, planSteps, receivingBorrow, receivingHeld } from './RebalanceHovers';
-import { repayOf, ROUTE_LABEL, roundCountOf, roundOf, RouteRow, sharedCoin, shownKeys, SpotLines, targetsOf, Term } from './RebalanceHovers';
+import { barRowsOf, chargedBorrow, Facts, fmtCoinOrUsd, keyOf, movesKey, pickedRoute, planSteps, receivingBorrow, receivingHeld } from './RebalanceHovers';
+import { liquidationNow, repayOf, ROUTE_LABEL, roundCountOf, roundOf, RouteRow, sharedCoin, shownKeys, SpotLines, targetsOf, Term } from './RebalanceHovers';
 import type { Fact, Repay } from './RebalanceHovers';
 import { NoSpotReadLine } from './TransferBits';
 
@@ -86,8 +87,9 @@ interface Book {
 
 function liquidationFact(route: RoutePlan, view: RebalanceView, book: Book): Fact {
   const { account: acc, positions: pos } = book;
-  const before = nearestLiquidation(acc, pos);
-  if (!before || !acc || !pos) return { key: 'liquidation', label: FACT_LIQUIDATION, value: 'none' };
+  const before = liquidationNow(acc, pos);
+  if (before === 'unknown' || !acc || !pos) return { key: 'liquidation', label: FACT_LIQUIDATION, value: LIQUIDATION_NOT_KNOWN };
+  if (before === null) return { key: 'liquidation', label: FACT_LIQUIDATION, value: 'none' };
   const equityOf = (wallets: (WalletAfter | RebalanceBucket)[], key: string) =>
     wallets.find((w) => keyOf(w) === key)?.equity ?? 0;
   const shiftOf = (key: string) => equityOf(route.after, key) - equityOf(view.buckets, key);
@@ -97,7 +99,7 @@ function liquidationFact(route: RoutePlan, view: RebalanceView, book: Book): Fac
     'USDC/LIGHTER': shiftOf('USDC/LIGHTER'),
   });
   const after = moved ? lineFor(moved, before.base) : null;
-  const afterText = after === 'far' ? 'none' : after ? fmtLinePrice(after.price) : 'unknown';
+  const afterText = after === 'far' ? 'none' : after ? fmtLinePrice(after.price) : LIQUIDATION_NOT_KNOWN;
   return {
     key: 'liquidation',
     label: <Term label={FACT_LIQUIDATION} text={describeLine(before)} />,
@@ -106,12 +108,21 @@ function liquidationFact(route: RoutePlan, view: RebalanceView, book: Book): Fac
   };
 }
 
+const walletNames = (wallets: { bucket: RebalanceBucket }[]) => wallets.map((w) => WALLET_SHORT[keyOf(w.bucket)]).join(' and ');
+
 function repaySubs(buckets: RebalanceBucket[], route: RoutePlan): { frees: string; saves: string } {
   const repay = repayOf(buckets, route);
-  if (repay.wallets.length === 0 && borrowingBuckets(buckets).length > 0) return { frees: REPAYS_NO_BORROW, saves: STOPS_NO_INTEREST };
-  if (repay.wallets.length === 0) return { frees: NO_BORROW_TO_REPAY, saves: NO_INTEREST_TO_STOP };
-  const stopping = repay.wallets.filter((b) => b.interestPerDayUsd > 0).map((b) => WALLET_SHORT[keyOf(b)]);
-  return { frees: MARGIN_RETURNED, saves: stopping.length === 0 ? NO_INTEREST_TO_STOP : `${stopping.join(' and ')} interest stops` };
+  const borrowing = borrowingBuckets(buckets);
+  const stops = repay.charged.filter((w) => floorCents(w.before) > 0 && floorCents(w.after) === 0);
+  const falls = repay.charged.filter((w) => floorCents(w.after) > 0 && w.after < w.before);
+  const named = [
+    ...(stops.length > 0 ? [`${walletNames(stops)} interest stops`] : []),
+    ...(falls.length > 0 ? [`${walletNames(falls)} interest falls`] : []),
+  ];
+  const paysInterest = borrowing.some((b) => floorCents(chargedBorrow(b, b.borrow)) > 0);
+  const saves = named.length > 0 ? named.join(' · ') : paysInterest ? STOPS_NO_INTEREST : NO_INTEREST_TO_STOP;
+  if (repay.wallets.length > 0) return { frees: MARGIN_RETURNED, saves };
+  return { frees: borrowing.length > 0 ? REPAYS_NO_BORROW : NO_BORROW_TO_REPAY, saves };
 }
 
 function quoteFactsOf(route: RoutePlan, view: RebalanceView, book: Book): Fact[] {

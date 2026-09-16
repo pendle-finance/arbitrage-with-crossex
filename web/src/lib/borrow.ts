@@ -1,8 +1,7 @@
 import type { RebalanceBucket } from '../api/types';
 import { floorCents } from './ticks';
 
-/** Under this a borrow is noise: unrealised PnL flips it across zero by a
- * few cents on every poll. The header pill and the section share it. */
+/** Under this a borrow is unrealised PnL noise, so the step list and its hover skip it. */
 export const MIN_BORROW = 1;
 
 export const isRebalanceWallet = (b: { coin: string; venue: string }): boolean =>
