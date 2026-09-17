@@ -167,7 +167,9 @@ function LegendRow({
       <Swatch className={swatch} />
       <span className="text-ink-300">{label}</span>
       <span className="num ml-auto font-medium text-ink-100">{fmtUsd(usd)}</span>
-      <span className={`num w-12 text-right text-xs ${pctClass ?? 'text-ink-400'}`}>{fmtPct(pct, 0)}</span>
+      <span className={`num w-12 text-right text-xs ${pctClass ?? 'text-ink-400'}`} title="Share of balance">
+        {fmtPct(pct, 0)}
+      </span>
     </div>
   );
 }
@@ -190,7 +192,8 @@ export function MarginBreakdown({
   borrowImUsd?: number | null;
 }) {
   const p = marginParts(acc);
-  const borrowIm = typeof borrowImUsd === 'number' && borrowImUsd > 0 ? borrowImUsd : null;
+  const borrowIm = typeof borrowImUsd === 'number' && borrowImUsd > 0 ? Math.min(borrowImUsd, p.initial) : null;
+  const positionsIm = p.initial - (borrowIm ?? 0);
   // Initial margin is always green (it's expected to be the bulk of the balance);
   // maintenance margin is the risk signal — color it by how close it is to the
   // balance (green < 50%, amber < 75%, red ≥ 75% — approaching the liquidation floor).
@@ -200,6 +203,16 @@ export function MarginBreakdown({
     value: p.initial,
     className: 'stroke-emerald-500',
     title: `Initial margin ${fmtUsd(p.initial)} (${fmtPct(p.imPct, 1)} of balance)`,
+  };
+  const positionsSeg: DonutSegment = {
+    value: positionsIm,
+    className: 'stroke-emerald-500',
+    title: `Initial margin for positions ${fmtUsd(positionsIm)}`,
+  };
+  const borrowSeg: DonutSegment = {
+    value: borrowIm ?? 0,
+    className: 'stroke-amber-400',
+    title: `Initial margin for the borrow ${fmtUsd(borrowIm ?? 0)}`,
   };
   const freeSeg: DonutSegment = {
     value: p.available,
@@ -252,7 +265,12 @@ export function MarginBreakdown({
 
   return (
     <div className="card flex flex-col items-center gap-6 p-5 sm:flex-row sm:gap-8">
-      <Donut size={132} thickness={20} segments={[usedSeg, freeSeg]} ariaLabel="Margin usage">
+      <Donut
+        size={132}
+        thickness={20}
+        segments={borrowIm === null ? [usedSeg, freeSeg] : [positionsSeg, borrowSeg, freeSeg]}
+        ariaLabel="Margin usage"
+      >
         <div className="text-[10px] font-semibold uppercase tracking-wider text-ink-400">Balance</div>
         {/* Whole dollars at 13px: the ring's inner diameter is 92px and the
             cents version at 16px ran ~100px wide, straight through the ring.
@@ -263,20 +281,33 @@ export function MarginBreakdown({
       </Donut>
 
       <div className="flex w-full flex-1 flex-col gap-2.5 text-sm">
-        <LegendRow
-          swatch="bg-emerald-500"
-          label="Initial margin (used)"
-          usd={p.initial}
-          pct={p.imPct}
-          pctClass="text-emerald-400"
-        />
-        {borrowIm !== null ? (
-          <div className="num text-[11px] text-gold">{`${fmtUsd(borrowIm)} of it is for the borrow`}</div>
-        ) : null}
-        <LegendRow swatch="bg-ink-500" label="Available" usd={p.available} pct={p.hasFunds ? p.available / p.balance : 0} />
         {borrowIm === null ? (
-          <div className="num mt-1 border-t border-ink-700 pt-1 text-[11px] text-ink-500">Utilization = margin ÷ balance</div>
-        ) : null}
+          <LegendRow
+            swatch="bg-emerald-500"
+            label="Initial margin (used)"
+            usd={p.initial}
+            pct={p.imPct}
+            pctClass="text-emerald-400"
+          />
+        ) : (
+          <>
+            <LegendRow
+              swatch="bg-emerald-500"
+              label="Initial margin · positions"
+              usd={positionsIm}
+              pct={p.hasFunds ? positionsIm / p.balance : 0}
+              pctClass="text-emerald-400"
+            />
+            <LegendRow
+              swatch="bg-amber-400"
+              label="Initial margin · borrow"
+              usd={borrowIm}
+              pct={p.hasFunds ? borrowIm / p.balance : 0}
+              pctClass="text-amber-300"
+            />
+          </>
+        )}
+        <LegendRow swatch="bg-ink-500" label="Available" usd={p.available} pct={p.hasFunds ? p.available / p.balance : 0} />
       </div>
 
       <div className="flex items-center gap-3 sm:flex-col sm:border-l sm:border-ink-700 sm:pl-6">

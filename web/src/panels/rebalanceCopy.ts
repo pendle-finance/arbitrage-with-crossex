@@ -92,11 +92,17 @@ export const HOVER = {
   walletGate: 'CrossEx wallet. USDC left from a spot buy. Still margin. Rebalance empties it.',
   now: 'Equity = cash + unrealized PnL.',
   positionShare: "This wallet's positions at mark price ÷ all positions. Rebalance moves equity to this share.",
-  interestUsdc: 'No interest under 10,000 USDC. Interest only on the part over.',
-  interestLighter: 'Interest from the first dollar. About 11% a year.',
-  interestUsdt: 'Interest from the first dollar.',
-  borrowHeld: (list: string) => `A negative wallet is a borrow. Gate holds initial margin against it: ${list}.`,
-  route: 'How the money moves. Cost includes Gate fees and spot spread. Spot loop shows only when it costs less than Convert.',
+  interestNow: {
+    lead: 'Gate charges interest every hour when a CrossEx wallet is negative.',
+    head: { wallet: 'Wallet', interest: 'Interest', rate: 'Rate now' },
+    wallets: [
+      { key: 'USDT/CROSSEX', interest: 'from the first dollar' },
+      { key: 'USDC/HYPERLIQUID', interest: 'free to 10,000 USDC, then on the part over' },
+      { key: 'USDC/LIGHTER', interest: 'from the first dollar' },
+    ],
+  },
+  borrowing: 'A negative wallet is a borrow. The Margin card at the top shows the initial margin it locks.',
+  route: 'How the money moves. The fee includes Gate fees and the spot spread. Spot loop shows only when it costs less than Convert.',
   mix: (cap: number) => `Spot loop for up to ${roundCount(cap)}, then Convert the rest.`,
   recommended: 'Cheapest route that takes 15 min or less.',
   noDirectTransfer: 'Gate has no direct transfer between CrossEx wallets.',
@@ -106,14 +112,13 @@ export const HOVER = {
   round: 'A round is one trip through Gate spot, capped by your free margin.',
   whyMoreThanOne: 'A move bigger than your free margin takes more than one.',
   whyMoreThanOneBorrow: (amountText: string) =>
-    `Gate holds ${amountText} of initial margin against your borrow. Each round repays borrow, so the next is bigger.`,
+    `Gate locks ${amountText} of initial margin for your borrow. Each round repays some borrow, so the next round is bigger.`,
   frees: 'Initial margin the repaid borrow no longer locks.',
   saves: 'Borrow interest per day this stops.',
   onTheWay: 'In transit through Gate spot. Not margin.',
   gateSpot: 'Not margin.',
   gateSpotAssets: 'Not margin. No equity or PnL.',
   abandon: 'Stop the run. Funds stay where they are.',
-  transferTitle: "Move funds between Gate spot and CrossEx. Gate's website cannot do this.",
   fee: 'Gate fee for this move.',
   time: 'Typical time. Moves into or out of the CrossEx Hyperliquid and Lighter wallets can take longer.',
   minimum: 'Gate minimum for moves into or out of the CrossEx Hyperliquid and Lighter wallets. Fee included.',
@@ -121,45 +126,41 @@ export const HOVER = {
   upToInto: 'Your Gate spot balance.',
 } as const;
 
-export const VERDICT_NO_BORROW = 'No borrow. Rebalance saves nothing today.';
-export const VERDICT_BALANCED = 'Every wallet is on its share. Nothing to move.';
-export const VERDICT_REPAYS = (amountText: string) => `Repays ${amountText}.`;
-export const VERDICT_STOPS = (perDayText: string) => `Stops ${perDayText} a day of interest.`;
-export const VERDICT_STOPS_UNDER_A_CENT = 'Stops less than $0.01 a day of interest.';
-export const VERDICT_FREE = 'This borrow is free today.';
-export const VERDICT_REPAYS_NOTHING = 'Rebalance evens the wallets. It repays no borrow.';
+export const VERDICT_NO_BORROW = 'No borrow. Rebalance saves no interest.';
+export const VERDICT_BALANCED = 'Wallets match their position share. Nothing to move.';
+export const VERDICT_MOVES = (usdText: string) => `It moves ${usdText}.`;
 
 export const FACT_BORROWING = 'Borrowing';
 export const FACT_INTEREST_NOW = 'Interest now';
 export const FACT_INTEREST_PAID = 'Interest paid';
 export const FACT_LIQUIDATION = 'Liquidation';
-export const FACT_HELD = 'Held against the borrow';
-export const LIQUIDATION_NOT_KNOWN = 'not known';
+export const LIQUIDATION_NOT_KNOWN = 'unknown';
 
-export const BAR_CAPTION = 'Now against target';
+export const BAR_CAPTION = 'Equity (cash + unrealized PnL)';
 export const SHARE_CAPTION = 'Position share';
 export const GATE_SPOT = 'Gate spot';
 
 export const HOVER_CASH = 'Cash';
 export const HOVER_UPNL = 'Unrealized PnL';
-export const HOVER_TARGET = 'Balanced equity';
+export const HOVER_TARGET = 'Balanced target';
 
-export const MODAL_CHANGE_ROUTE = 'Change route';
-export const MODAL_KEEP_ROUTE = 'Keep the recommended one';
+export const MODAL_ALL_ROUTES = 'Show all routes';
+export const MODAL_FEE = (usdText: string) => `Fee ${usdText}`;
 export const MODAL_AFTER = 'After rebalance';
 export const MODAL_FREES = 'Frees';
 export const MODAL_SAVES = 'Saves';
-export const MODAL_STEPS = 'Show the steps';
+export const MODAL_STEPS = 'Show steps';
 export const MODAL_HOLD = 'Hold to rebalance';
 export const MODAL_RESUME = 'Resume';
 export const MODAL_ABANDON = 'Abandon';
 
-export const WAITS_FOR_TRANSFER = 'Waits for the transfer';
-export const WAITS_FOR_DEAL = 'Waits for the deal';
+export const WAITS_FOR_TRANSFER = 'Transfer running';
+export const WAITS_FOR_DEAL = 'Deal running';
+export const WAITS_FOR_REBALANCE = 'Rebalance running';
+export const WAITS_FOR_STOPPED_REBALANCE = 'Rebalance stopped';
 
-export const TRANSFER_CTA = 'Move money';
+export const TRANSFER_CTA = 'Manual Transfer';
 
-export const HYPERLIQUID_FREE_LINE = 'free to 10,000';
-export const INTEREST_PAID_ALL_TIME = 'all time';
-export const NO_FREE_PART = 'all of it pays interest';
 export const RATE_UNKNOWN = 'rate unknown';
+export const INTEREST_PER_HOUR = (usdText: string) => `${usdText} an hour`;
+export const RATE_PER_YEAR = (pctText: string) => `${pctText}% a year`;

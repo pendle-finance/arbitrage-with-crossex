@@ -4,7 +4,10 @@ import { classifyGateError, refusalReason, type ClassifiedError } from '../core/
 import { roundToStep, stripZeros } from '../core/numbers';
 import {
   arrivesFor,
+  bookLevels,
   bucketsFrom,
+  buyableUsdc,
+  buyCostUsdt,
   ceilCents,
   CONVERT_RATE,
   DUST_USDC,
@@ -16,17 +19,20 @@ import {
   nearestCents,
   pathRule,
   poolWallet,
+  priceOrOne,
   roundMinimum,
   spotArrivalFor,
   SPOT_MIN_QUOTE_USDT,
   SPOT_PAIR,
   SPOT_SYMBOL,
+  spotOrderMax,
   USDT_WALLET,
   type GateAccount,
+  type SpotDepth,
   type TransferCoin,
 } from '../core/rebalance/plan';
 import { decodeStatus } from '../engine/loop';
-import type { TtlCache } from './cache';
+import { TTL, type TtlCache } from './cache';
 import {
   convertSteps,
   HALT_TEXT,
@@ -65,9 +71,10 @@ export interface TransferRunnerDeps {
 export const STEP_TIMEOUT_MS = 600_000;
 export const HL_TRANSFER_TIMEOUT_MS = 1_800_000;
 export const POLL_MS = 1_000;
+export const BALANCE_LAG_MS = 120_000;
 export const LOOKUP_RETRY_MS = 10_000;
 export const LOOKUP_WINDOW_MS = 120_000;
-export const QUOTE_FLOOR = 0.997;
+export const QUOTE_FLOOR = 0.9975;
 export const TRANSFER_STEP = String(MIN_TRANSFER);
 const CENT_STEP = '0.01';
 const SWEEP_PAGE_SIZE = 100;
@@ -86,11 +93,25 @@ type CrossEx = Clients['crossEx'];
 type Margins = { marginBalance: number; initialMargin: number };
 type Sending = { cash: number; equity: number };
 type WalletRef = { coin: string; venue: string };
+type AskDepth = Pick<SpotDepth, 'ask' | 'asks'>;
 
 type StepSpec =
   | { kind: 'order'; side: CrossexOrderRequest.Side; dest: FundsAt }
   | { kind: 'transfer'; coin: TransferCoin; from: GateAccount; to: GateAccount; dest: FundsAt }
   | { kind: 'convert'; dest: FundsAt };
+
+export interface SpotTicker {
+  ask: number;
+  bid: number;
+}
+
+export async function readSpotTicker(clients: Pick<Clients, 'spot'>): Promise<SpotTicker> {
+  const { body } = await clients.spot.listTickers({ currencyPair: SPOT_PAIR });
+  return { ask: Number(body?.[0]?.lowestAsk), bid: Number(body?.[0]?.highestBid) };
+}
+
+export const quoteFloor = (amount: number, gives: TransferCoin, ticker: SpotTicker | null): number =>
+  (gives === 'USDC' ? amount / priceOrOne(ticker?.ask) : amount * priceOrOne(ticker?.bid)) * QUOTE_FLOOR;
 
 export const STEPS: Record<StepName, StepSpec> = {
   'Buy USDC': { kind: 'order', side: CrossexOrderRequest.Side.BUY, dest: 'GATE' },
@@ -197,6 +218,8 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
     step.venueId = null;
     step.text = null;
     step.quoteId = null;
+    delete step.sentAt;
+    delete step.cashBefore;
     step.attempt += 1;
     halt(reason);
   };
@@ -283,9 +306,39 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
     job.steps.splice(after, 0, ...added);
   };
 
-  const sizeRound = (step: Step, plannedMove: number, sending: Sending, margins: Margins): number | null => {
+  const staticRead = async <T>(key: string, fetch: () => Promise<T>): Promise<T | null> => {
+    try {
+      return (await deps.cache.get(key, TTL.static, fetch)).value;
+    } catch {
+      return null;
+    }
+  };
+
+  const usdcMinimum = async (): Promise<number> => {
+    const coins = await staticRead('transfer:coins', async () => (await crossEx().listCrossexTransferCoins()).body);
+    const minimum = Number(coins?.find((coin) => coin.coin === 'USDC')?.minTransAmount);
+    return Number.isFinite(minimum) && minimum > 0 ? minimum : HYPERLIQUID_MIN_USDC;
+  };
+
+  const orderMax = async (price: number): Promise<number> => {
+    const rules = await staticRead('rules:all', async () => (await crossEx().listCrossexRuleSymbols()).body);
+    const size = Number(rules?.find((rule) => rule.symbol === SPOT_SYMBOL)?.maxMarketSize);
+    return spotOrderMax(price, Number.isFinite(size) && size > 0 ? size : undefined);
+  };
+
+  const sellChain = (step: Step): Step[] => {
+    const chain: Step[] = [];
+    for (let index = job.steps.indexOf(step); index >= 0; index -= 1) {
+      const earlier = job.steps[index];
+      if (earlier.name !== 'Sell USDC' || earlier.round !== step.round || !sameMove(step)(earlier)) break;
+      chain.unshift(earlier);
+    }
+    return chain;
+  };
+
+  const sizeRound = async (step: Step, plannedMove: number, sending: Sending, margins: Margins): Promise<number | null> => {
     const planned = floorCents(plannedMove);
-    const minimum = roundMinimum(step.from, step.to);
+    const minimum = roundMinimum(step.from, step.to, await usdcMinimum());
     const size = fit(margins, Math.min(planned, sending.cash), sending.equity);
     if (size >= planned) return planned;
     const marginFit = fit(margins, planned, sending.equity);
@@ -307,10 +360,37 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
     return size;
   };
 
-  const spotTicker = async (): Promise<{ ask: number; bid: number }> => {
-    const { body } = await deps.clients().spot.listTickers({ currencyPair: SPOT_PAIR });
-    return { ask: Number(body?.[0]?.lowestAsk), bid: Number(body?.[0]?.highestBid) };
+  const spotTicker = (): Promise<SpotTicker> => readSpotTicker(deps.clients());
+
+  const spotDepth = async (): Promise<Pick<SpotDepth, 'asks' | 'bids'>> => {
+    try {
+      return bookLevels((await deps.clients().spot.listOrderBook(SPOT_PAIR, { limit: 100 })).body);
+    } catch {
+      return bookLevels(null);
+    }
   };
+
+  const cashFit = (usdc: number, depth: AskDepth, budget: number): number => {
+    if (ceilCents(buyCostUsdt(usdc, depth)) <= budget) return usdc;
+    let cents = Math.floor(Math.min(usdc, buyableUsdc(budget, depth)) * 100);
+    while (cents > 0 && ceilCents(buyCostUsdt(cents / 100, depth)) > budget) cents -= 1;
+    return cents / 100;
+  };
+
+  const keepCut = async (step: Step, cut: number, bought: number): Promise<void> => {
+    if (cut < DUST_USDC) return;
+    const minimum = roundMinimum(step.from, step.to, await usdcMinimum());
+    if (job.route === 'loop' && cut >= minimum) appendRound(cut, step);
+    else growConvert(cut, step);
+    for (const later of job.steps.slice(job.stepIndex)) {
+      if (later.round === step.round) setRoundFigures(later, bought);
+      later.borrowLeft = null;
+    }
+    deps.jobs.write(job);
+  };
+
+  const sellMax = (ticker: { ask: number; bid: number }): Promise<number> =>
+    orderMax(Math.max(...[ticker.bid, ticker.ask].filter((price) => Number.isFinite(price))));
 
   const prepareBuy = async (step: Step): Promise<number | null> => {
     const move = job.steps.find((later, index) => index > job.stepIndex && later.name === 'To spot');
@@ -318,40 +398,65 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
     const account = await readAccount(crossEx());
     const gateCash = account.cash(GATE_WALLET);
     const movable = gateCash >= DUST_USDC ? gateCash : 0;
+    step.cashBefore = Number.isFinite(gateCash) ? Math.max(0, gateCash) : 0;
+    const { ask } = await spotTicker();
+    const price = Number.isFinite(ask) && ask > 0 ? ask : 1;
+    const depth = { ask: price, asks: (await spotDepth()).asks };
+    const budget = floorCents(Math.max(0, account.cash(USDT_WALLET)));
+    const buyable = budget >= SPOT_MIN_QUOTE_USDT ? floorCents(buyableUsdc(budget, depth)) : 0;
     const sending = {
-      cash: Math.max(0, account.cash(USDT_WALLET)) + movable,
+      cash: buyable + movable,
       equity: Math.max(0, account.equity(USDT_WALLET)) + movable,
     };
-    const size = sizeRound(step, move.planned ?? 0, sending, account.margins);
+    const size = await sizeRound(step, move.planned ?? 0, sending, account.margins);
     if (size === null) return null;
     if (movable >= size) {
       finish(step, 0, 'GATE');
       return null;
     }
-    const rest = size - movable;
-    const { ask } = await spotTicker();
-    const cost = Number.isFinite(ask) && ask > 0 ? rest * ask : rest;
-    return Math.max(SPOT_MIN_QUOTE_USDT, ceilCents(cost));
+    const wanted = size - movable;
+    const rest = cashFit(Math.min(wanted, await orderMax(ask)), depth, budget);
+    await keepCut(step, nearestCents(wanted - rest), floorCents(movable + rest));
+    deps.jobs.write(job);
+    return Math.min(Math.max(SPOT_MIN_QUOTE_USDT, ceilCents(buyCostUsdt(rest, depth))), budget);
+  };
+
+  const lagging = (step: Step, cash: number, before: number, arrived: number): boolean => {
+    if (cash < arrived - Number(CENT_STEP)) return true;
+    const unmoved = Math.abs(cash - before) < Number(CENT_STEP);
+    const waiting = unmoved || deps.now() - (step.startedAt ?? 0) < BALANCE_LAG_MS;
+    return waiting && cash < before + arrived - Number(CENT_STEP);
   };
 
   const prepareToSpot = async (step: Step): Promise<number | null> => {
     const account = await readAccount(crossEx());
     const gateCash = account.cash(GATE_WALLET);
     const buy = job.steps[job.stepIndex - 1];
-    const bought = buy?.name === 'Buy USDC' && buy.round === step.round && (buy.qty ?? 0) > 0;
+    const roundBuy = buy?.name === 'Buy USDC' && buy.round === step.round;
+    const boughtQty = roundBuy ? (buy.qty ?? 0) : 0;
+    const bought = boughtQty > 0;
+    const cashBefore = roundBuy ? (buy.cashBefore ?? 0) : 0;
+    if (bought && lagging(step, gateCash, cashBefore, boughtQty)) {
+      await deps.sleep(POLL_MS);
+      return null;
+    }
     if (bought && gateCash < HYPERLIQUID_MIN_USDC) {
       halt(HALT_TEXT.shortBuy);
       return null;
     }
+    if (roundBuy && gateCash <= (step.planned ?? 0) - DUST_USDC) {
+      const landed = floorCents(gateCash);
+      await keepCut(step, nearestCents((step.planned ?? 0) - landed), landed);
+    }
     const equity = Math.max(0, account.equity(USDT_WALLET)) + (gateCash >= DUST_USDC ? gateCash : 0);
-    return sizeRound(step, step.planned ?? 0, { cash: gateCash, equity }, account.margins);
+    return await sizeRound(step, step.planned ?? 0, { cash: gateCash, equity }, account.margins);
   };
 
   const prepareFromVenue = async (step: Step): Promise<number | null> => {
     const account = await readAccount(crossEx());
     const wallet = poolWallet(step.from);
     const sending = { cash: Math.max(0, account.cash(wallet)), equity: account.equity(wallet) };
-    return sizeRound(step, step.planned ?? 0, sending, account.margins);
+    return await sizeRound(step, step.planned ?? 0, sending, account.margins);
   };
 
   const prepareConvert = async (step: Step): Promise<number | null> => {
@@ -391,19 +496,50 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
     return amount;
   };
 
+  const prepareToGate = async (step: Step): Promise<number> => {
+    if (step.cashBefore === undefined) {
+      const gateCash = (await readAccount(crossEx())).cash(GATE_WALLET);
+      step.cashBefore = Number.isFinite(gateCash) ? Math.max(0, gateCash) : 0;
+      deps.jobs.write(job);
+    }
+    return previousQty();
+  };
+
   const prepareSell = async (step: Step): Promise<number | null> => {
     const account = await readAccount(crossEx());
     const cash = account.cash(GATE_WALLET);
-    const arrived = step.round === null ? 0 : previousQty();
+    const first = step.round !== null && sellChain(step).length <= 1;
+    const arrived = first ? previousQty() : 0;
+    const toGate = job.steps[job.stepIndex - 1];
+    const landed = toGate?.name === 'To Gate' && toGate.status === 'done';
+    if (first && landed && lagging(step, cash, toGate.cashBefore ?? 0, arrived)) {
+      await deps.sleep(POLL_MS);
+      return null;
+    }
     const amount = floorCents(Math.max(0, cash - arrived >= DUST_USDC ? cash : Math.min(cash, arrived)));
     const nothingToSell = (): null => {
       finish(step, 0, 'CROSSEX');
       return null;
     };
     if (amount < DUST_USDC) return nothingToSell();
-    const { bid } = await spotTicker();
-    const quote = Number.isFinite(bid) && bid > 0 ? amount * bid : amount;
-    return quote < SPOT_MIN_QUOTE_USDT ? nothingToSell() : amount;
+    const ticker = await spotTicker();
+    const quote = Number.isFinite(ticker.bid) && ticker.bid > 0 ? amount * ticker.bid : amount;
+    if (quote < SPOT_MIN_QUOTE_USDT) return nothingToSell();
+    return Math.min(amount, await sellMax(ticker));
+  };
+
+  const sellRest = async (step: Step, sold: number): Promise<boolean> => {
+    const cash = (await readAccount(crossEx())).cash(GATE_WALLET);
+    if (cash < DUST_USDC) return false;
+    const ticker = await spotTicker();
+    const quote = Number.isFinite(ticker.bid) && ticker.bid > 0 ? cash * ticker.bid : cash;
+    if (quote < SPOT_MIN_QUOTE_USDT) return false;
+    const chain = sellChain(step);
+    const start = chain[1]?.planned ?? floorCents(cash + (Number.isFinite(sold) ? sold : 0));
+    const limit = Math.ceil(start / (await sellMax(ticker))) + 2;
+    const rest = { from: step.from, to: step.to, round: step.round, planned: start, arrives: null, borrowLeft: null };
+    job.steps.splice(job.steps.indexOf(step) + 1, 0, pendingStep('Sell USDC', rest));
+    return chain.length >= limit;
   };
 
   const prepare = (step: Step): Promise<number | null> | number => {
@@ -421,6 +557,8 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
         return prepareConvert(step);
       case 'Sell USDC':
         return prepareSell(step);
+      case 'To Gate':
+        return prepareToGate(step);
       default:
         return previousQty();
     }
@@ -440,7 +578,12 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
         const fee = String(body.feeCoin ?? '') === 'USDC' ? Number(body.fee ?? 0) : 0;
         filled = Number(body.executedQty ?? 0) - (Number.isFinite(fee) ? fee : 0);
       }
-      if (filled > 0) finish(step, filled, spec.kind === 'convert' ? convertSpec(step).dest : spec.dest);
+      const sell = spec.kind === 'order' && spec.side === CrossexOrderRequest.Side.SELL;
+      if (filled > 0) {
+        const stuck = sell && (await sellRest(step, Number(body.executedQty)));
+        finish(step, filled, spec.kind === 'convert' ? convertSpec(step).dest : spec.dest);
+        if (stuck) halt(HALT_TEXT.sellStuck);
+      } else if (sell && sellChain(step).length > 1) haltDead(step, HALT_TEXT.sellStuck);
       else haltDead(step, `order ${state} with nothing filled`);
       return;
     }
@@ -500,8 +643,24 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
     }
   };
 
+  const pricedTicker = async (gives: TransferCoin): Promise<SpotTicker | null> => {
+    const ticker = await spotTicker().catch(() => null);
+    const price = Number(gives === 'USDC' ? ticker?.ask : ticker?.bid);
+    return Number.isFinite(price) && price > 0 ? ticker : null;
+  };
+
   const sendConvert = async (step: Step, amount: number): Promise<void> => {
     const spec = convertSpec(step);
+    const gives: TransferCoin = spec.toCoin === 'USDC' ? 'USDC' : 'USDT';
+    let ticker = await pricedTicker(gives);
+    if (!ticker) {
+      await deps.sleep(POLL_MS);
+      ticker = await pricedTicker(gives);
+    }
+    if (!ticker) {
+      halt(HALT_TEXT.noPrice);
+      return;
+    }
     const { body: quote } = await crossEx().createCrossexConvertQuote({
       crossexConvertQuoteRequest: {
         exchangeType: spec.venue,
@@ -511,7 +670,7 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
       },
     });
     const toAmount = Number(quote.toAmount);
-    if (!(toAmount >= amount * QUOTE_FLOOR)) {
+    if (!(toAmount >= quoteFloor(amount, gives, ticker))) {
       halt(HALT_TEXT.poorQuote);
       return;
     }
@@ -519,6 +678,7 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
     // key that finds the order on Gate, so the step is never sent twice.
     step.quoteId = String(quote.quoteId);
     step.qty = toAmount;
+    step.sentAt = deps.now();
     deps.jobs.write(job);
     const { body } = await crossEx().createCrossexConvertOrder({
       crossexConvertOrderRequest: { quoteId: step.quoteId },
@@ -530,6 +690,8 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
 
   const send = async (step: Step, spec: StepSpec, tag: string, amount: number): Promise<void> => {
     if (spec.kind === 'convert') return sendConvert(step, amount);
+    step.sentAt = deps.now();
+    deps.jobs.write(job);
     if (spec.kind === 'transfer') {
       step.venueId = await sendTransfer(crossEx(), { coin: spec.coin, amount, from: spec.from, to: spec.to, text: tag });
     } else {
@@ -590,6 +752,11 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
             deps.jobs.write(job);
             continue;
           }
+          if (step.sentAt !== undefined) {
+            delete step.sentAt;
+            halt(HALT_TEXT.notListed);
+            return;
+          }
         }
         if (deps.pollOnly) {
           halt(HALT_TEXT.restart);
@@ -612,6 +779,10 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
       } catch (err) {
         const c = classifyGateError(err);
         const notFound = c.httpStatus === 404 || NOT_FOUND.test(c.label ?? '');
+        if (phase === 'send' && (isRefusal(c) || c.category === 'rate-limited')) {
+          delete step.sentAt;
+          deps.jobs.write(job);
+        }
         if (c.retryable || (phase === 'poll' && notFound)) {
           await deps.sleep(POLL_MS);
         } else if (phase !== 'send' || isRefusal(c)) {

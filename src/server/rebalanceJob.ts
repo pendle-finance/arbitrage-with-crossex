@@ -26,6 +26,8 @@ export interface Step {
   borrowLeft: number | null;
   from: Pool;
   to: Pool;
+  cashBefore?: number;
+  sentAt?: number;
 }
 
 export interface Job {
@@ -104,11 +106,14 @@ export const HALT_TEXT = {
   cashTooLow: 'Not enough cash for an 11 USDC round.',
   unconfirmed: 'Gate did not confirm the last order. Press Resume to check again.',
   shortBuy: 'The USDC buy filled under 11 USDC.',
-  poorQuote: 'Convert quote was more than 0.3% under market.',
-  marginRefused: 'Gate refused the move: free margin is too low.',
+  poorQuote: 'Convert quote was more than 0.25% under the Gate spot price.',
+  marginRefused: 'Gate refused the move: free margin or wallet cash is too low.',
   noRecord: 'Gate has no record of this transfer. Try again.',
   timeout: 'Gate took too long on this step. Press Resume to check again.',
   usdtBelowZero: 'A Convert between Hyperliquid and Lighter needs more USDT · CrossEx cash.',
+  sellStuck: 'Gate did not sell all the USDC in USDC · Gate. Press Resume to sell the rest.',
+  noPrice: 'Could not read the Gate spot price to check the Convert quote. Press Resume to try again.',
+  notListed: 'Gate does not show the last step after 2 min. Press Resume to check again. If Gate still does not show it, Resume sends it again.',
 } as const;
 
 export const LOCK_TEXT = {
@@ -343,6 +348,8 @@ function parseJob(value: unknown): Job | null {
     if (step.planned === undefined) step.planned = job.amount ?? null;
     if (step.arrives === undefined) step.arrives = null;
     if (step.borrowLeft === undefined) step.borrowLeft = null;
+    if (step.cashBefore !== undefined && !Number.isFinite(step.cashBefore)) delete step.cashBefore;
+    if (step.sentAt !== undefined && !Number.isFinite(step.sentAt)) delete step.sentAt;
     if (step.from === undefined && step.to === undefined && legacy) Object.assign(step, legacy);
     if (!POOLS.includes(step.from as Pool) || !POOLS.includes(step.to as Pool) || step.from === step.to) return null;
   }

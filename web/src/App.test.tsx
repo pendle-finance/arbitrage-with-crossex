@@ -297,6 +297,7 @@ function borrowed(borrow: number): RebalanceBucket {
     mmHeldUsd: borrow * 0.1,
     interestPaidUsd: 0,
     interestPerDayUsd: 0,
+    ratePerYear: 0.05,
   };
 }
 
@@ -387,7 +388,7 @@ describe('borrow pill', () => {
       expect(gauges).toHaveAttribute(
         'title',
         expect.stringContaining(
-          'Nearest liquidation: ETH. Liquidates at about $3,764 if ETH moves +64% on every venue. The losing leg is on Hyperliquid.',
+          'Nearest liquidation: ETH. Gate liquidates your account if ETH rises to about $3,764 (+64%). This assumes ETH moves the same on every venue and other coins do not move. Your ETH short on Hyperliquid loses in this move.',
         ),
       ),
     );

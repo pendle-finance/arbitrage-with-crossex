@@ -113,7 +113,7 @@ export function BalancesPanel() {
   const spot = useTransfer().data?.spot;
   const buckets = useRebalance().data?.buckets;
   const [pick, setPick] = useState<TransferPick | null>(null);
-  const transferCard = useRef<HTMLDivElement>(null);
+  const assetsSection = useRef<HTMLElement>(null);
 
   if (isPending) {
     return (
@@ -137,7 +137,7 @@ export function BalancesPanel() {
 
   const openTransfer = (coin: TransferCoin, wallet: GateAccount) => {
     setPick((prev) => ({ coin, wallet, nonce: (prev?.nonce ?? 0) + 1 }));
-    transferCard.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    assetsSection.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
   };
 
   return (
@@ -146,14 +146,15 @@ export function BalancesPanel() {
 
       <RebalanceSection onTransfer={openTransfer} />
 
-      <div ref={transferCard}>
-        <TransferSection pick={pick} />
-      </div>
-
-      <section aria-label="Assets">
-        <h2 className="mb-2 text-xs font-semibold uppercase tracking-wider text-ink-400">
-          Assets <span className="normal-case text-ink-500">· non-zero only</span>
-        </h2>
+      <section ref={assetsSection} aria-label="Assets">
+        <div className="mb-2 flex items-center gap-3">
+          <h2 className="text-xs font-semibold uppercase tracking-wider text-ink-400">
+            Assets <span className="normal-case text-ink-500">· non-zero only</span>
+          </h2>
+          <div className="ml-auto">
+            <TransferSection pick={pick} />
+          </div>
+        </div>
         <DataTable
           columns={ASSET_COLUMNS}
           rows={rows}

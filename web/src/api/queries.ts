@@ -435,10 +435,13 @@ export function useRebalance() {
 export function useStartRebalance() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (body: { route: RouteName }) => postJson<{ id: string }>('/rebalance', body),
+    mutationFn: (body: { route: RouteName; costUsd: number }) => postJson<{ id: string }>('/rebalance', body),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: qk.rebalance });
       void qc.invalidateQueries({ queryKey: qk.transfer });
+    },
+    onError: () => {
+      void qc.invalidateQueries({ queryKey: qk.rebalance });
     },
   });
 }

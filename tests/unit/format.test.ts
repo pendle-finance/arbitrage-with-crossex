@@ -52,10 +52,18 @@ describe('roundToStep', () => {
     expect(roundToStep(2.0000000000000004, '0.001', 'down')).toBe('2.000');
   });
 
-  // ...but a value genuinely below the step boundary (1e-7 off, outside the 1e-9
-  // relative tolerance) must still floor.
   it('still floors values genuinely below a step boundary', () => {
     expect(roundToStep(0.29999999, '0.1', 'down')).toBe('0.2');
+  });
+
+  it('keeps the step of a one-step float result and never passes an 8-decimal value', () => {
+    expect(roundToStep(0.3 - 0.1, '0.1', 'down')).toBe('0.2');
+    expect(roundToStep(0.1 + 0.2, '0.1', 'down')).toBe('0.3');
+    expect(roundToStep(0.1 + 0.2, '0.1', 'up')).toBe('0.3');
+    expect(roundToStep(99.99999999, '10', 'down')).toBe('90');
+    expect(roundToStep(100.00000001, '10', 'up')).toBe('110');
+    expect(roundToStep(6000000.01 - 1, '0.00001', 'down')).toBe('5999999.01000');
+    expect(roundToStep(5999999.99999999, '0.00001', 'down')).toBe('5999999.99999');
   });
 });
 
@@ -77,7 +85,7 @@ describe('roundToStep up', () => {
     expect(roundToStep(2.01, '0.05', 'up')).toBe('2.05');
     expect(roundToStep(1.999, '0.1', 'up')).toBe('2.0');
     expect(roundToStep(2.0, '0.1', 'up')).toBe('2.0'); // exact multiple → snap, not 2.1
-    expect(roundToStep(2.0000000001, '0.1', 'up')).toBe('2.0'); // float-noise snap, not 2.1
+    expect(roundToStep(2.0000000001, '0.1', 'up')).toBe('2.1');
   });
 });
 

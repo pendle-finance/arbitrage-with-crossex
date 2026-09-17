@@ -187,6 +187,7 @@ describe('liquidationLines', () => {
     const [pump] = lines(account(), box());
     expect(pump.move).toBeGreaterThan(0);
     expect(pump.venue).toBe('Hyperliquid');
+    expect(pump.side).toBe('short');
 
     const flipped = box();
     flipped.exposure[0].legs[0].side = 'SHORT';
@@ -194,6 +195,7 @@ describe('liquidationLines', () => {
     const [shortOnGate] = lines(account(), flipped);
     expect(shortOnGate.move).toBeGreaterThan(0);
     expect(shortOnGate.venue).toBe('CrossEx');
+    expect(shortOnGate.side).toBe('short');
 
     const longOnly: PositionsResponse = {
       positions: [position('GATE_FUTURE_ETH_USDT', { positionValue: '250000', markPrice: '2300', maintenanceMargin: '1250' })],
@@ -204,6 +206,7 @@ describe('liquidationLines', () => {
     const [dump] = lines(account({ maintenanceMargin: '1250' }), longOnly);
     expect(dump.move).toBeLessThan(0);
     expect(dump.venue).toBe('CrossEx');
+    expect(dump.side).toBe('long');
   });
 
   it('matches the live account of 2026-09-07 within a percent', () => {
@@ -258,14 +261,20 @@ describe('formatting', () => {
     expect(fmtMove(-0.2)).toBe('-20%');
     expect(fmtLinePrice(3150.4)).toBe('~$3,150');
     expect(fmtLinePrice(115.23)).toBe('~$115.23');
-    expect(lineLabel({ base: 'ETH', venue: 'Hyperliquid', price: 3150, move: 0.37 })).toBe(
+    expect(lineLabel({ base: 'ETH', venue: 'Hyperliquid', side: 'short', price: 3150, move: 0.37 })).toBe(
       'Liquidates if ETH hits ~$3,150 (+37%)',
     );
-    expect(lineLabel({ base: 'ETH', venue: 'CrossEx', price: 1840, move: -0.2 })).toBe(
+    expect(lineLabel({ base: 'ETH', venue: 'CrossEx', side: 'long', price: 1840, move: -0.2 })).toBe(
       'Liquidates if ETH falls to ~$1,840 (-20%)',
     );
-    expect(describeLine({ base: 'ETH', venue: 'Hyperliquid', price: 3150, move: 0.37 })).toBe(
-      'Liquidates at about $3,150 if ETH moves +37% on every venue. The losing leg is on Hyperliquid.',
+    expect(describeLine({ base: 'ETH', venue: 'Hyperliquid', side: 'short', price: 3150, move: 0.37 })).toBe(
+      'Gate liquidates your account if ETH rises to about $3,150 (+37%). This assumes ETH moves the same on every venue and other coins do not move. Your ETH short on Hyperliquid loses in this move.',
+    );
+    expect(describeLine({ base: 'ETH', venue: 'CrossEx', side: 'long', price: 1840, move: -0.2 })).toBe(
+      'Gate liquidates your account if ETH falls to about $1,840 (-20%). This assumes ETH moves the same on every venue and other coins do not move. Your ETH long on CrossEx loses in this move.',
+    );
+    expect(describeLine({ base: 'ETH', venue: 'CrossEx', side: null, price: 1840, move: -0.2 })).toBe(
+      'Gate liquidates your account if ETH falls to about $1,840 (-20%). This assumes ETH moves the same on every venue and other coins do not move.',
     );
   });
 });

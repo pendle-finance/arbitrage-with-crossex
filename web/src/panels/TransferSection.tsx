@@ -1,18 +1,16 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useStartTransfer, useTransfer } from '../api/queries';
 import type { TransferJob, TransferLock } from '../api/types';
-import { Chip } from '../components/Chip';
-import { HoverCard } from '../components/HoverCard';
 import { useToast } from '../components/Toast';
 import { num } from '../lib/fmt';
 import { useSettledError } from '../lib/useSettledError';
-import { HOVER, TRANSFER_CTA, WAITS_FOR_DEAL } from './rebalanceCopy';
+import { TRANSFER_CTA, WAITS_FOR_DEAL, WAITS_FOR_REBALANCE, WAITS_FOR_STOPPED_REBALANCE } from './rebalanceCopy';
 import { destinationOf } from './TransferBits';
 import { TransferModal, type TransferPick } from './TransferModal';
 
 const LOCK_SHORT: Record<TransferLock, string> = {
-  rebalance: 'Waits for the rebalance',
-  halted: 'Waits for the rebalance',
+  rebalance: WAITS_FOR_REBALANCE,
+  halted: WAITS_FOR_STOPPED_REBALANCE,
   deal: WAITS_FOR_DEAL,
 };
 
@@ -58,26 +56,17 @@ export function TransferSection({ holdMs, pick }: { holdMs?: number; pick?: Tran
     return () => document.removeEventListener('visibilitychange', fire);
   }, [job, push]);
 
-  const title = (
-    <h2 className="text-xs font-semibold uppercase tracking-wider text-ink-400">
-      <HoverCard label="Manual Transfer" widthPx={320} underline={false}>
-        {HOVER.transferTitle}
-      </HoverCard>
-    </h2>
-  );
-
   if (!view) {
     if (!loadError) return null;
     return (
-      <section aria-label="Transfer" className="card flex flex-col gap-2 p-4">
-        {title}
+      <div role="group" aria-label="Transfer" className="flex items-center gap-2">
         <p role="alert" className="text-xs text-rose-300">
           Could not load transfers. {loadError.message}
         </p>
-        <button type="button" className="btn-ghost-xs leading-4 self-start" onClick={() => void query.refetch()}>
+        <button type="button" className="btn-ghost-xs leading-4" onClick={() => void query.refetch()}>
           Retry
         </button>
-      </section>
+      </div>
     );
   }
 
@@ -94,46 +83,34 @@ export function TransferSection({ holdMs, pick }: { holdMs?: number; pick?: Tran
     if (!start.isPending) start.reset();
   };
 
-  let chip: ReactNode = null;
+  let note: ReactNode = null;
   let button: ReactNode;
   if (moving) {
-    chip = <Chip tone="info">Sending</Chip>;
     button = (
-      <button type="button" className="btn ml-auto !border-info/40 !text-pastel-blue" onClick={openModal}>
+      <button type="button" className="btn !py-1 !text-xs !border-info/40 !text-pastel-blue" onClick={openModal}>
         <span className="num">{`Sending ${num(moving.amount)} ${moving.coin}`}</span>
       </button>
     );
   } else if (failed) {
-    chip = <Chip tone="red">Failed</Chip>;
     button = (
-      <button type="button" className="btn-primary ml-auto !bg-guava !text-ink-950 hover:!bg-guava/85" onClick={openModal}>
-        {'Failed · open'}
-      </button>
-    );
-  } else if (view.lock) {
-    chip = <Chip tone="info">{LOCK_SHORT[view.lock]}</Chip>;
-    button = (
-      <button type="button" className="btn ml-auto" disabled>
-        {TRANSFER_CTA}
+      <button type="button" className="btn !py-1 !text-xs !border-guava/60 !text-guava" onClick={openModal}>
+        {'Transfer failed · open'}
       </button>
     );
   } else {
+    if (view.lock) note = <span className="text-xs text-ink-500">{LOCK_SHORT[view.lock]}</span>;
     button = (
-      <button type="button" className="btn ml-auto" onClick={openModal}>
+      <button type="button" className="btn !py-1 !text-xs" disabled={view.lock !== null} onClick={openModal}>
         {TRANSFER_CTA}
       </button>
     );
   }
 
   return (
-    <section aria-label="Transfer" className="card flex items-center gap-3 p-4">
-      <div className="flex flex-col gap-0.5">
-        {title}
-        <p className="text-xs text-ink-500">Between Gate spot and CrossEx</p>
-      </div>
-      {chip}
+    <div role="group" aria-label="Transfer" className="flex items-center gap-2">
+      {note}
       {button}
       {open && <TransferModal view={view} onClose={closeModal} holdMs={holdMs} pick={modalPick} start={start} />}
-    </section>
+    </div>
   );
 }

@@ -16,7 +16,7 @@ function serve(view: TransferView = transferViews.accountB) {
   server.use(transferHandler(view), rebalanceHandler(rebalanceViews.accountB));
 }
 
-const loaded = () => screen.findByText('Manual Transfer');
+const loaded = () => screen.findByRole('group', { name: 'Transfer' });
 
 async function renderCard(view: TransferView = transferViews.accountB) {
   serve(view);
@@ -29,23 +29,22 @@ describe('TransferSection', () => {
     vi.restoreAllMocks();
   });
 
-  it('at rest shows a title, one line and one button, nothing else', async () => {
+  it('at rest shows just a Manual Transfer button, nothing else', async () => {
     await renderCard();
 
-    expect(screen.getByText('Between Gate spot and CrossEx')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Move money' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Manual Transfer' })).toBeEnabled();
     expect(screen.queryByRole('textbox')).toBeNull();
     expect(screen.queryByRole('radio')).toBeNull();
     expect(screen.queryByRole('dialog')).toBeNull();
   });
 
-  it('title hover', async () => {
+  it('has no title and no hover', async () => {
     await renderCard();
-    await userEvent.hover(screen.getByRole('button', { name: 'Manual Transfer' }));
+    const button = screen.getByRole('button', { name: 'Manual Transfer' });
 
-    expect(await screen.findByRole('tooltip')).toHaveTextContent(
-      "Move funds between Gate spot and CrossEx. Gate's website cannot do this.",
-    );
+    await userEvent.hover(button);
+
+    expect(screen.queryByRole('tooltip')).toBeNull();
   });
 
   it('no should i signal', async () => {
@@ -67,18 +66,27 @@ describe('TransferSection', () => {
     }
   });
 
-  it('lock chip is short', async () => {
+  it('lock note names the reason, and disables the button', async () => {
     await renderCard(transferViews.lockRebalance);
+    expect(screen.getByText('Rebalance running')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Manual Transfer' })).toBeDisabled();
+    cleanup();
 
-    expect(screen.getByText('Waits for the rebalance')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Move money' })).toBeDisabled();
+    await renderCard(transferViews.lockHalted);
+    expect(screen.getByText('Rebalance stopped')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Manual Transfer' })).toBeDisabled();
+    cleanup();
+
+    await renderCard(transferViews.lockDeal);
+    expect(screen.getByText('Deal running')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Manual Transfer' })).toBeDisabled();
   });
 
-  it('a moving transfer shows a Sending chip, and its button opens the modal on the sending view', async () => {
+  it('a moving transfer opens the modal on the sending view', async () => {
     await renderCard(transferViews.moving);
 
-    expect(screen.getByText('Sending')).toBeInTheDocument();
-    await userEvent.click(screen.getByRole('button', { name: 'Sending 11.88 USDC' }));
+    const button = screen.getByRole('button', { name: 'Sending 11.88 USDC' });
+    await userEvent.click(button);
 
     const dialog = await screen.findByRole('dialog');
     expect(within(dialog).getByText(/You can close this\./)).toBeInTheDocument();
@@ -86,7 +94,7 @@ describe('TransferSection', () => {
 
   it('done toast', async () => {
     await renderCard(transferViews.moving);
-    expect(screen.getByText('Sending')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Sending 11.88 USDC' })).toBeInTheDocument();
 
     serve(transferViews.done);
 
@@ -103,10 +111,10 @@ describe('TransferSection', () => {
   it('done toast waits for visible tab', async () => {
     const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden');
     await renderCard(transferViews.moving);
-    expect(screen.getByText('Sending')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Sending 11.88 USDC' })).toBeInTheDocument();
 
     serve(transferViews.done);
-    await waitFor(() => expect(screen.queryByText('Sending')).toBeNull(), { timeout: 3_000 });
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Sending 11.88 USDC' })).toBeNull(), { timeout: 3_000 });
     expect(screen.queryByText(DONE_TOAST)).toBeNull();
 
     visibility.mockReturnValue('visible');
@@ -117,21 +125,19 @@ describe('TransferSection', () => {
     expect(await screen.findByText(DONE_TOAST)).toBeInTheDocument();
   });
 
-  it('a failed transfer shows a Failed chip, and its button opens the modal on the failed view', async () => {
+  it('a failed transfer opens the modal on the failed view', async () => {
     await renderCard(transferViews.failedOverCap);
 
-    expect(screen.getByText('Failed')).toBeInTheDocument();
-    await userEvent.click(screen.getByRole('button', { name: 'Failed · open' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Transfer failed · open' }));
 
     const dialog = await screen.findByRole('dialog');
     expect(within(dialog).getByText('Transfer failed.')).toBeInTheDocument();
   });
 
-  it('failed chip survives a running rebalance', async () => {
+  it('a failure outranks a lock', async () => {
     await renderCard(transferViews.failedAndRebalanceRunning);
 
-    expect(screen.getByText('Failed')).toBeInTheDocument();
-    const button = screen.getByRole('button', { name: 'Failed · open' });
+    const button = screen.getByRole('button', { name: 'Transfer failed · open' });
     expect(button).toBeEnabled();
     await userEvent.click(button);
 
@@ -144,7 +150,7 @@ describe('TransferSection', () => {
     server.use(transferPostHandler(posts, 'silent'));
     await renderCard();
     const holdTen = async () => {
-      await userEvent.click(screen.getByRole('button', { name: 'Move money' }));
+      await userEvent.click(screen.getByRole('button', { name: 'Manual Transfer' }));
       const dialog = await screen.findByRole('dialog');
       await userEvent.type(within(dialog).getByRole('textbox'), '10');
       const hold = within(dialog).getByRole('button', { name: 'Hold to send 10.00 USDT to Gate spot' });
@@ -216,6 +222,6 @@ describe('TransferSection', () => {
     serve();
     await userEvent.click(retry);
 
-    expect(await screen.findByRole('button', { name: 'Move money' })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Manual Transfer' })).toBeInTheDocument();
   });
 });

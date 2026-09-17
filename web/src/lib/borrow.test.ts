@@ -14,6 +14,7 @@ function bucket(overrides: Partial<RebalanceBucket>): RebalanceBucket {
     mmHeldUsd: 0,
     interestPaidUsd: 0,
     interestPerDayUsd: 0,
+    ratePerYear: 0.0564,
     ...overrides,
   };
 }

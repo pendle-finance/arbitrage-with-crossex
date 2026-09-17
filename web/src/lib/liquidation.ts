@@ -21,6 +21,7 @@ import { fmtUsd, num, WALLET_SHORT } from './fmt';
 export interface LiquidationLine {
   base: string;
   venue: string;
+  side: 'long' | 'short' | null;
   /** Price of the coin at the line. */
   price: number;
   /** Signed move from the mark: +0.37 is a 37% pump, -0.2 a 20% dump. */
@@ -140,7 +141,8 @@ export function liquidationLines(
     const biggest = mine.reduce((a, b) => (b.value > a.value ? b : a));
     const losing = mine.filter((l) => (f > 1 ? l.sign === -1 : l.sign === 1));
     const loser = (losing.length > 0 ? losing : mine).reduce((a, b) => (b.value > a.value ? b : a));
-    lines.push({ base, venue: WALLET_SHORT[loser.wallet], price: biggest.mark * f, move: f - 1 });
+    const side = losing.length === 0 ? null : loser.sign === 1 ? 'long' : 'short';
+    lines.push({ base, venue: WALLET_SHORT[loser.wallet], side, price: biggest.mark * f, move: f - 1 });
   }
   return { lines: lines.sort((a, b) => Math.abs(a.move) - Math.abs(b.move)), far };
 }
@@ -178,5 +180,9 @@ export function lineLabel(line: LiquidationLine): string {
 
 /** One sentence for a hover. */
 export function describeLine(line: LiquidationLine): string {
-  return `Liquidates at about ${fmtUsd(line.price, line.price >= 1000 ? 0 : 2)} if ${line.base} moves ${fmtMove(line.move)} on every venue. The losing leg is on ${line.venue}.`;
+  const price = fmtUsd(line.price, line.price >= 1000 ? 0 : 2);
+  const lead = `Gate liquidates your account if ${line.base} ${line.move < 0 ? 'falls' : 'rises'} to about ${price} (${fmtMove(line.move)}).`;
+  const rule = `This assumes ${line.base} moves the same on every venue and other coins do not move.`;
+  const leg = line.side === null ? '' : ` Your ${line.base} ${line.side} on ${line.venue} loses in this move.`;
+  return `${lead} ${rule}${leg}`;
 }

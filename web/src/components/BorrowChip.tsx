@@ -1,8 +1,7 @@
 import { useRebalance } from '../api/queries';
 import { borrowingBuckets, borrowTotalUsd } from '../lib/borrow';
-import { fmtUsd } from '../lib/fmt';
-import { FACT_BORROWING, FACT_HELD } from '../panels/rebalanceCopy';
-import { borrowingFact, Facts, fmtCoinOrUsd, heldLine, sharedCoin } from '../panels/RebalanceHovers';
+import { FACT_BORROWING } from '../panels/rebalanceCopy';
+import { borrowingFact, Facts, fmtCoinOrUsd, sharedCoin } from '../panels/RebalanceHovers';
 import { HoverCard } from './HoverCard';
 
 const VENUE_LEGS: Readonly<Record<string, string>> = { HYPERLIQUID: 'Hyperliquid legs', LIGHTER: 'Lighter legs' };
@@ -23,12 +22,6 @@ export function BorrowChip({ onOpen }: { onOpen: () => void }) {
       </span>
     )),
   };
-  const held = {
-    key: 'held',
-    label: FACT_HELD,
-    value: fmtUsd(wallets.reduce((total, b) => total + b.imHeldUsd, 0)),
-    sub: wallets.length === 1 ? [] : [heldLine(wallets)],
-  };
 
   return (
     <HoverCard
@@ -47,7 +40,7 @@ export function BorrowChip({ onOpen }: { onOpen: () => void }) {
       }
     >
       <div className="flex flex-col gap-2 text-xs">
-        <Facts items={[borrowingFact(buckets), legsFact, held]} />
+        <Facts items={[borrowingFact(buckets), legsFact]} />
         <button type="button" onClick={onOpen} className="btn-link">
           Rebalance on Balances ▸
         </button>

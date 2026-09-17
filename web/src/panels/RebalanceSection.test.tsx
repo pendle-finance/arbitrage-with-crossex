@@ -104,6 +104,13 @@ const facts = (): Record<string, string | undefined> =>
 
 const line = (text: string) => screen.queryByText((_, el) => el?.tagName === 'P' && el.textContent === text);
 
+const factRows = (key: string): string[][] => {
+  const spans = [...region().querySelectorAll(`[data-fact-rows="${key}"] span`)].map((el) => el.textContent ?? '');
+  const rows: string[][] = [];
+  for (let i = 0; i < spans.length; i += 2) rows.push([spans[i], spans[i + 1]]);
+  return rows;
+};
+
 const cardButtons = () =>
   within(region())
     .getAllByRole('button')
@@ -145,14 +152,24 @@ function TabSwitch() {
 }
 
 describe('RebalanceSection card', () => {
-  it('the card holds bars, four facts, one verdict and one button, and no route, after bars or steps', async () => {
+  it('the card holds bars, four facts, no verdict while a wallet borrows, and one button, with no route, after bars or steps', async () => {
     await show(rebalanceViews.twoBorrows);
     expect(Object.keys(facts())).toEqual(['Borrowing', 'Interest now', 'Interest paid', 'Liquidation']);
-    expect(within(region()).getByRole('group', { name: /Now against target/ })).toBeInTheDocument();
+    expect(within(region()).getByRole('group', { name: /Equity \(cash \+ unrealized PnL\)/ })).toBeInTheDocument();
     expect(within(region()).getByRole('group', { name: 'Position share' })).toBeInTheDocument();
-    expect(cardButtons().map((button) => button.textContent)).toEqual(['Rebalance · $0.46']);
+    expect(cardButtons().map((button) => button.textContent)).toEqual(['Rebalance · Fee $0.46']);
     expect(within(region()).queryByRole('radiogroup')).toBeNull();
-    expect(within(region()).queryByText(/After rebalance|Hold to rebalance|Show the steps|^Frees$|^Saves$/)).toBeNull();
+    expect(region().querySelector('p.num')).toBeNull();
+    expect(within(region()).queryByText(/After rebalance|Hold to rebalance|Show steps|^Frees$|^Saves$/)).toBeNull();
+  });
+
+  it('orders the facts above the bars, and the button row last', async () => {
+    await show(rebalanceViews.twoBorrows);
+    const dl = region().querySelector('dl') as HTMLElement;
+    const bars = within(region()).getByRole('group', { name: /Equity/ });
+    const [button] = cardButtons();
+    expect(dl.compareDocumentPosition(bars) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(bars.compareDocumentPosition(button) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it('every bar carries a target', async () => {
@@ -162,23 +179,24 @@ describe('RebalanceSection card', () => {
     for (const row of rows) expect(row.querySelector('[data-bar-target]')).not.toBeNull();
   });
 
-  it('subtitle', async () => {
+  it('has no subtitle under the title', async () => {
     await show(rebalanceViews.accountA);
-    expect(within(region()).getByText('Split your CrossEx equity by position size')).toBeInTheDocument();
+    expect(within(region()).queryByText(/Match each wallet/)).toBeNull();
+    expect(within(region()).queryByText(/Split your CrossEx equity/)).toBeNull();
   });
 
   it('the button opens the modal', async () => {
     const user = userEvent.setup();
     await show(rebalanceViews.twoBorrows);
     expect(screen.queryByRole('dialog')).toBeNull();
-    await user.click(within(region()).getByRole('button', { name: 'Rebalance · $0.46' }));
+    await user.click(within(region()).getByRole('button', { name: 'Rebalance · Fee $0.46' }));
     expect(await screen.findByRole('dialog')).toBeInTheDocument();
   });
 
   it('transfer link closes the rebalance modal', async () => {
     const user = userEvent.setup();
     const onTransfer = await show(rebalanceViews.twoBorrows, transferViews.accountB);
-    await user.click(await within(region()).findByRole('button', { name: 'Rebalance · $0.46' }));
+    await user.click(await within(region()).findByRole('button', { name: 'Rebalance · Fee $0.46' }));
     const dialog = await screen.findByRole('dialog');
     await user.click(await within(dialog).findByRole('button', { name: 'Transfer ▸' }));
     expect(onTransfer).toHaveBeenCalledWith('USDT', 'CROSSEX');
@@ -208,82 +226,66 @@ describe('RebalanceSection card', () => {
 describe('RebalanceSection verdict', () => {
   it('no borrow verdict names the amount that would move', async () => {
     await show(NO_BORROW);
-    expect(line('No borrow. Rebalance saves nothing today. $868.42 would move.')).toBeInTheDocument();
+    expect(line('No borrow. Rebalance saves no interest. It moves $868.42.')).toBeInTheDocument();
   });
 
-  it('verdict uses the recommended route', async () => {
+  it('no verdict while any wallet still borrows and the plan is not balanced', async () => {
+    for (const view of [OTHER_ROUTE_LEAVES_BORROW, RECOMMENDED_LEAVES_BORROW, UNDER_A_CENT, REPAYS_NOTHING, rebalanceViews.hyperliquidFreeBorrow]) {
+      await show(view);
+      expect(region().querySelector('p.num')).toBeNull();
+      expect(within(region()).queryByText(/Repays|Stops|No borrow|This borrow is free today|would move/)).toBeNull();
+      cleanup();
+    }
     await show(OTHER_ROUTE_LEAVES_BORROW);
-    expect(line('Repays 244.00 USDC. Stops $0.04 a day of interest.')).toBeInTheDocument();
-    expect(within(region()).getByRole('button', { name: 'Rebalance · $0.46' })).toBeEnabled();
-    expect(within(region()).queryByText(/\$1\.74|pays back|would move/)).toBeNull();
+    expect(within(region()).getByRole('button', { name: 'Rebalance · Fee $0.46' })).toBeEnabled();
   });
 
-  it('verdict repays what the route repays', async () => {
-    await show(RECOMMENDED_LEAVES_BORROW);
-    expect(line('Repays 212.00 USDC. Stops $0.03 a day of interest.')).toBeInTheDocument();
-  });
-
-  it('verdict under a cent a day', async () => {
-    await show(UNDER_A_CENT);
-    expect(line('Repays 16.00 USDC. Stops less than $0.01 a day of interest.')).toBeInTheDocument();
-  });
-
-  it('verdict when the route repays no borrow', async () => {
-    await show(REPAYS_NOTHING);
-    expect(line('Rebalance evens the wallets. It repays no borrow.')).toBeInTheDocument();
-    expect(within(region()).queryByText(/Repays|No borrow/)).toBeNull();
-  });
-
-  it('rate unknown on a failed rate read', async () => {
+  it('a failed rate read shows as an Interest now row, not a verdict', async () => {
     await show(RATE_READ_FAILED);
-    expect(line('Repays 244.00 USDC.')).toBeInTheDocument();
-    expect(within(region()).getByText('Lighter rate unknown, all of it pays interest')).toBeInTheDocument();
+    expect(factRows('interest')).toEqual([
+      ['Lighter', 'rate unknown'],
+      ['Hyperliquid', '$0.00 an hour'],
+    ]);
+    expect(region().querySelector('p.num')).toBeNull();
   });
 
   it('balanced verdict, chip and a disabled button', async () => {
     await show(rebalanceViews.balancedNoJob);
-    expect(line('Every wallet is on its share. Nothing to move.')).toBeInTheDocument();
+    expect(line('Wallets match their position share. Nothing to move.')).toBeInTheDocument();
     expect(within(region()).getByText('Balanced')).toBeInTheDocument();
     expect(cardButtons().map((button) => button.textContent)).toEqual(['Rebalance']);
     expect(cardButtons()[0]).toBeDisabled();
   });
 
-  it('free borrow saves no interest', async () => {
-    await show(rebalanceViews.hyperliquidFreeBorrow);
-    expect(region().querySelector('p.num')?.textContent).toMatch(
-      /^Repays [\d,.]+ USDC\. This borrow is free today\.$/,
-    );
-  });
-
-  it('balanced by cash shows as even as cash allows', async () => {
+  it('balanced by cash names the amount stuck', async () => {
     await show(CASH_LIMITED_EVEN);
-    expect(line('As even as cash allows. $203.64 is margin for open positions.')).toBeInTheDocument();
-    expect(line('Every wallet is on its share. Nothing to move.')).toBeNull();
+    expect(line('$203.64 cannot move. It is margin for open positions.')).toBeInTheDocument();
+    expect(line('Wallets match their position share. Nothing to move.')).toBeNull();
     expect(within(region()).getByText('Balanced')).toBeInTheDocument();
     expect(cardButtons()[0]).toBeDisabled();
   });
 
   it('balanced short under 1 keeps Balanced', async () => {
     await show({ ...CASH_LIMITED_EVEN, plan: { ...CASH_LIMITED_EVEN.plan, shortOfEven: 0.99 } });
-    expect(line('Every wallet is on its share. Nothing to move.')).toBeInTheDocument();
-    expect(within(region()).queryByText(/As even as cash allows/)).toBeNull();
+    expect(line('Wallets match their position share. Nothing to move.')).toBeInTheDocument();
+    expect(within(region()).queryByText(/cannot move/)).toBeNull();
     expect(within(region()).getByText('Balanced')).toBeInTheDocument();
   });
 
   it('the button says it waits for the transfer, with no chip', async () => {
     await show(rebalanceViews.twoBorrows, transferViews.moving);
-    const button = await within(region()).findByRole('button', { name: 'Waits for the transfer' });
+    const button = await within(region()).findByRole('button', { name: 'Transfer running' });
     expect(button).toBeDisabled();
-    expect(within(region()).getAllByText('Waits for the transfer')).toEqual([button]);
-    expect(cardButtons().map((el) => el.textContent)).toEqual(['Waits for the transfer']);
+    expect(within(region()).getAllByText('Transfer running')).toEqual([button]);
+    expect(cardButtons().map((el) => el.textContent)).toEqual(['Transfer running']);
   });
 
   it('the button says it waits for the deal, with no chip', async () => {
     await show(rebalanceViews.twoBorrows, transferViews.lockDeal);
-    const button = await within(region()).findByRole('button', { name: 'Waits for the deal' });
+    const button = await within(region()).findByRole('button', { name: 'Deal running' });
     expect(button).toBeDisabled();
-    expect(within(region()).getAllByText('Waits for the deal')).toEqual([button]);
-    expect(cardButtons().map((el) => el.textContent)).toEqual(['Waits for the deal']);
+    expect(within(region()).getAllByText('Deal running')).toEqual([button]);
+    expect(cardButtons().map((el) => el.textContent)).toEqual(['Deal running']);
   });
 });
 
@@ -293,7 +295,7 @@ describe('RebalanceSection liquidation fact', () => {
     await waitFor(() => expect(facts().Liquidation).toBe('none'));
   });
 
-  it('liquidation reads not known when the account read fails', async () => {
+  it('liquidation reads unknown when the account read fails', async () => {
     let reads = 0;
     serve(rebalanceViews.twoBorrows);
     server.use(
@@ -306,10 +308,10 @@ describe('RebalanceSection liquidation fact', () => {
     await waitFor(() => expect(facts().Borrowing).toBe('244.00 USDC'));
     await waitFor(() => expect(reads).toBe(1));
     await new Promise((r) => setTimeout(r, 50));
-    expect(facts().Liquidation).toBe('not known');
+    expect(facts().Liquidation).toBe('unknown');
   });
 
-  it('liquidation reads not known when the positions read fails', async () => {
+  it('liquidation reads unknown when the positions read fails', async () => {
     let reads = 0;
     serve(rebalanceViews.twoBorrows);
     server.use(
@@ -322,7 +324,7 @@ describe('RebalanceSection liquidation fact', () => {
     await waitFor(() => expect(facts().Borrowing).toBe('244.00 USDC'));
     await waitFor(() => expect(reads).toBe(1));
     await new Promise((r) => setTimeout(r, 50));
-    expect(facts().Liquidation).toBe('not known');
+    expect(facts().Liquidation).toBe('unknown');
   });
 });
 
@@ -338,6 +340,53 @@ describe('RebalanceSection bar tooltip', () => {
     expect(tooltip.querySelector('[class*="border-dotted"], [class*="decoration-dotted"]')).toBeNull();
     expect(within(tooltip).queryByRole('button')).toBeNull();
     expect(within(row).getByRole('button', { name: 'USDC · Lighter' })).toBeInTheDocument();
+  });
+
+  it('a negative cash bar reads red, a positive one reads green, and PnL keeps its stripe', async () => {
+    await show(rebalanceViews.twoBorrows);
+    const crossex = region().querySelector('[data-bar-row="USDT/CROSSEX"]') as HTMLElement;
+    const lighter = region().querySelector('[data-bar-row="USDC/LIGHTER"]') as HTMLElement;
+    expect(crossex.querySelector('[data-bar-cash]')?.className).toContain('bg-grass');
+    expect(crossex.querySelector('[data-bar-pnl]')?.className).toContain('bar-pnl-gain');
+    expect(lighter.querySelector('[data-bar-cash]')?.className).toContain('bg-guava');
+    expect(lighter.querySelector('[data-bar-pnl]')?.className).toContain('bar-pnl-loss');
+  });
+
+  it('the zero line is a separate mark taller than the bar track', async () => {
+    await show(rebalanceViews.twoBorrows);
+    const zero = region().querySelector('[data-bar-row="USDT/CROSSEX"] [data-zero-line]');
+    expect(zero?.className).toContain('bg-ink-200');
+    expect(zero?.className).toContain('-translate-x-1/2');
+  });
+});
+
+describe('RebalanceSection facts rows', () => {
+  it('Borrowing gives one row per wallet when two or more borrow', async () => {
+    await show(rebalanceViews.twoBorrows);
+    expect(factRows('borrowing')).toEqual([
+      ['Lighter', '132.00'],
+      ['Hyperliquid', '112.00'],
+    ]);
+  });
+
+  it('Interest now gives one row per borrowing wallet, as money an hour, with the yearly rate only in the hover', async () => {
+    const user = userEvent.setup();
+    await show(rebalanceViews.twoBorrows);
+    expect(factRows('interest')).toEqual([
+      ['Lighter', '$0.0017 an hour'],
+      ['Hyperliquid', '$0.00 an hour'],
+    ]);
+    const card = await hoverCard(user, 'Interest now', region());
+    expect(card.rows).toEqual(['USDT · CrossEx', 'USDC · Hyperliquid', 'USDC · Lighter']);
+  });
+
+  it('Interest paid gives one row per wallet that has paid, with no all-time sub line', async () => {
+    await show(rebalanceViews.interestPaidSplit);
+    expect(factRows('paid')).toEqual([
+      ['Lighter', '$1.55'],
+      ['Hyperliquid', '$0.31'],
+    ]);
+    expect(within(region()).queryByText('all time')).toBeNull();
   });
 });
 
@@ -355,7 +404,7 @@ describe('RebalanceSection run states', () => {
     expect(within(region()).getByText('Running')).toBeInTheDocument();
     expect(within(region()).getByRole('button', { name: 'Running · round 3 of 5' })).toBeEnabled();
     const verdict = region().querySelector('p.num')?.textContent ?? '';
-    expect(verdict).toMatch(/^A rebalance is running\. Round 3 of 5, about .+ left\. Open it to follow each step\.$/);
+    expect(verdict).toMatch(/^Rebalance running, about .+ left\.$/);
     expect(verdict).not.toMatch(/repays|would move/);
   });
 
@@ -363,20 +412,21 @@ describe('RebalanceSection run states', () => {
     await show(rebalanceViews.accountAHalted);
     expect(within(region()).getByText('Stopped')).toBeInTheDocument();
     expect(within(region()).getByRole('button', { name: 'Stopped · open' })).toBeEnabled();
-    expect(line('A rebalance stopped in round 3. Open it to see where your money is.')).toBeInTheDocument();
+    expect(line('Rebalance stopped in round 3.')).toBeInTheDocument();
   });
 });
 
 describe('RebalanceSection gate spot and freshness', () => {
-  it('gate spot line', async () => {
+  it('the card has no Gate spot line; the Assets table owns that', async () => {
     await show(rebalanceViews.twoBorrows, transferViews.accountB);
-    const spot = await within(region()).findByText('318.42 USDT');
-    expect(spot.parentElement).toHaveTextContent('318.42 USDT in Gate spot · not margin');
+    expect(within(region()).queryByText(/318\.42 USDT/)).toBeNull();
+    expect(within(region()).queryByText(/in Gate spot/)).toBeNull();
+    expect(within(region()).queryByText(/not margin/)).toBeNull();
   });
 
-  it('no spot read', async () => {
+  it('no spot read shows nothing on the card, but still on the modal', async () => {
     await show(rebalanceViews.twoBorrows, transferViews.noSpot);
-    expect(await within(region()).findByText('Add Spot read permission to see spot balances.')).toBeInTheDocument();
+    expect(within(region()).queryByText('Add Spot read permission to see spot balances.')).toBeNull();
     expect(within(region()).queryByText(/not margin/)).toBeNull();
     expect(within(region()).queryByText(/0\.00 USD/)).toBeNull();
     cleanup();

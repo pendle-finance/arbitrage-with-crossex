@@ -231,6 +231,44 @@ describe('1.6.0 job files', () => {
     ]);
   });
 
+  it.each([
+    [2_448_286.19, 2_448_286.19],
+    [0, 0],
+    [null, undefined],
+    ['12', undefined],
+    [undefined, undefined],
+  ])('a Buy step with cashBefore %o reads back %o', (cashBefore, kept) => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'rebalance-job-'));
+    const job = haltedLoopJob(1);
+    const steps = [{ ...job.steps[0], cashBefore }, ...job.steps.slice(1)];
+    writeFileSync(path.join(dir, 'rebalance.json'), JSON.stringify({ ...job, steps }));
+
+    const read = new JobFile(dir).read();
+
+    expect(read?.steps.map((step) => step.name)).toEqual(['Buy USDC', 'To spot', 'To Hyperliquid']);
+    if (kept === undefined) expect(read?.steps[0]).not.toHaveProperty('cashBefore');
+    else expect(read?.steps[0].cashBefore).toBe(kept);
+  });
+
+  it.each([
+    [1_758_000_000_000, 1_758_000_000_000],
+    [0, 0],
+    [null, undefined],
+    ['1758000000000', undefined],
+    [undefined, undefined],
+  ])('a Buy step with sentAt %o reads back %o', (sentAt, kept) => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'rebalance-job-'));
+    const job = haltedLoopJob(1);
+    const steps = [{ ...job.steps[0], sentAt }, ...job.steps.slice(1)];
+    writeFileSync(path.join(dir, 'rebalance.json'), JSON.stringify({ ...job, steps }));
+
+    const read = new JobFile(dir).read();
+
+    expect(read?.steps.map((step) => step.name)).toEqual(['Buy USDC', 'To spot', 'To Hyperliquid']);
+    if (kept === undefined) expect(read?.steps[0]).not.toHaveProperty('sentAt');
+    else expect(read?.steps[0].sentAt).toBe(kept);
+  });
+
   it('1.6.0 done job reads', async () => {
     mockView();
     const h = boot({
@@ -427,13 +465,13 @@ describe('POST /api/rebalance refusals kept from 1.6.0', () => {
   it('answers 409 for a halted job and a working deal, and 403 before the disclaimer', async () => {
     const stored = haltedLoopJob(1, { venueId: 'x1' });
     let h = boot({ job: stored });
-    let res = await h.post('/api/rebalance', { route: 'loop' });
+    let res = await h.post('/api/rebalance', { route: 'loop', costUsd: 1000 });
     expect(res.statusCode).toBe(409);
     expect(res.json().error.message).toBe(`rebalance ${stored.id} is halted`);
 
     await reset();
     h = boot({ store: busyDeal() });
-    res = await h.post('/api/rebalance', { route: 'loop' });
+    res = await h.post('/api/rebalance', { route: 'loop', costUsd: 1000 });
     expect(res.statusCode).toBe(409);
     expect(res.json()).toEqual({
       ok: false,
@@ -443,7 +481,7 @@ describe('POST /api/rebalance refusals kept from 1.6.0', () => {
     await reset();
     const envPath = path.join(mkdtempSync(path.join(tmpdir(), 'disc-')), '.env');
     h = boot({ credentials: { envPath, setClients: () => {} } });
-    res = await h.post('/api/rebalance', { route: 'loop' });
+    res = await h.post('/api/rebalance', { route: 'loop', costUsd: 1000 });
     expect(res.statusCode).toBe(403);
     expect(res.json().error.label).toBe('DISCLAIMER_NOT_ACCEPTED');
   });
@@ -453,7 +491,7 @@ describe('POST /api/rebalance refusals kept from 1.6.0', () => {
     const h = boot();
     expect((await h.view()).ok).toBe(true);
 
-    const res = await h.post('/api/rebalance', { route: 'loop' });
+    const res = await h.post('/api/rebalance', { route: 'loop', costUsd: 1000 });
 
     expect(res.statusCode).toBe(409);
     expect(res.json().error.message).toBe('Gate is rate-limiting the account read. Try again in a few seconds.');
@@ -469,7 +507,7 @@ describe('POST /api/rebalance refusals kept from 1.6.0', () => {
     });
     const h = boot({ store });
 
-    const res = await h.post('/api/rebalance', { route: 'loop' });
+    const res = await h.post('/api/rebalance', { route: 'loop', costUsd: 1000 });
 
     expect(res.statusCode).toBe(409);
     expect(res.json().error.message).toBe('deal deal-409 is still working');

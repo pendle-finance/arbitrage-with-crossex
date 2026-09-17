@@ -84,6 +84,7 @@ const ACCOUNT_OF: Record<keyof typeof rebalanceViews, CrossexAccount> = {
   underMinimum: accountBodies.accountA,
   borrowUnderOne: accountBodies.accountB,
   accountADone: accountBodies.accountA,
+  accountADoneShort: accountBodies.accountA,
   lighterSplit: accountBodies.lighter,
   lighterAcross: accountBodies.lighter,
   lighterAcrossRunning: accountBodies.lighter,
@@ -91,6 +92,7 @@ const ACCOUNT_OF: Record<keyof typeof rebalanceViews, CrossexAccount> = {
   lighterConvertDone: accountBodies.lighter,
   noLegs: accountBodies.lighter,
   twoBorrows: accountBodies.twoBorrows,
+  bigBorrows: accountBodies.bigBorrows,
   oneBorrow: accountBodies.oneBorrow,
   hyperliquidFreeBorrow: accountBodies.hyperliquidFreeBorrow,
   gainOverNegativeCash: accountBodies.gainOverNegativeCash,
@@ -120,7 +122,7 @@ async function show(state: TabState) {
   );
   const shown = renderWithClient(<BalancesPanel />);
   await screen.findByRole('region', { name: 'Rebalance' });
-  await screen.findByRole('region', { name: 'Transfer' });
+  await screen.findByRole('group', { name: 'Transfer' });
   return shown;
 }
 
@@ -193,11 +195,18 @@ describe('BalancesPanel layout', () => {
     await show(ACCOUNT_A);
     expect(screen.getAllByRole('region').map((section) => section.getAttribute('aria-label'))).toEqual([
       'Rebalance',
-      'Transfer',
       'Assets',
     ]);
     const margin = screen.getByRole('img', { name: 'Margin usage' });
     expect(margin.compareDocumentPosition(region('Rebalance')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('the Assets header holds Transfer, above the table', async () => {
+    await show(ACCOUNT_A);
+    const assets = region('Assets');
+    const transfer = within(assets).getByRole('group', { name: 'Transfer' });
+    const table = within(assets).getByRole('table');
+    expect(transfer.compareDocumentPosition(table) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it('assets table scrolls with the page', async () => {
@@ -207,14 +216,15 @@ describe('BalancesPanel layout', () => {
 
   it('margin card gets the borrow margin', async () => {
     await show(ACCOUNT_B);
-    expect(screen.queryByText(/of it is for the borrow/)).toBeNull();
+    expect(screen.queryByText('Initial margin · borrow')).toBeNull();
     cleanup();
 
     await show({ ...ACCOUNT_B, rebalance: rebalanceViews.twoBorrows, account: accountBodies.twoBorrows });
-    expect(screen.getByText('$48.80 of it is for the borrow')).toBeInTheDocument();
+    expect(screen.getByText('Initial margin · borrow')).toBeInTheDocument();
+    expect(screen.getByText('$48.80')).toBeInTheDocument();
   });
 
-  it('two info marks', async () => {
+  it('one info mark', async () => {
     for (const state of [ACCOUNT_A, LEFTOVER]) {
       const shown = await show(state);
       const marks = Array.from(document.querySelectorAll('span[aria-hidden="true"]')).filter(
@@ -222,7 +232,6 @@ describe('BalancesPanel layout', () => {
       );
       expect(marks.map((mark) => mark.closest('[role="button"]')?.firstChild?.textContent), state.name).toEqual([
         'Rebalance',
-        'Manual Transfer',
       ]);
       shown.unmount();
     }
@@ -352,18 +361,18 @@ describe('BalancesPanel transfer pick', () => {
     vi.restoreAllMocks();
   });
 
-  it('spot link picks USDT wallet', async () => {
+  it('spot link picks USDT wallet and scrolls to Assets', async () => {
     const user = userEvent.setup();
     const scroll = vi.spyOn(Element.prototype, 'scrollIntoView');
     await show(ACCOUNT_B);
-    const transfer = region('Transfer');
+    const assets = region('Assets');
     const rebalanceDialog = await openRebalanceDialog(user);
     await user.click(await within(rebalanceDialog).findByRole('button', { name: 'Transfer ▸' }));
 
     const transferDialog = await screen.findByRole('dialog');
     expect(within(transferDialog).getByRole('radio', { name: 'Into CrossEx' })).toBeChecked();
     expect(within(transferDialog).getByRole('radio', { name: 'USDT · CrossEx' })).toBeChecked();
-    expect(scroll.mock.contexts.at(-1)).toContainElement(transfer);
+    expect(scroll.mock.contexts.at(-1)).toContainElement(assets);
   });
 
   it('leftover link picks target wallet', async () => {

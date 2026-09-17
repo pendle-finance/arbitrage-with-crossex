@@ -28,7 +28,7 @@ import {
   type Job,
   type TransferJob,
 } from '../../src/server/rebalanceJob';
-import { POLL_MS, QUOTE_FLOOR, runJob, runTransfer, tagFor, TRANSFER_STEP } from '../../src/server/rebalanceRunner';
+import { POLL_MS, quoteFloor, readSpotTicker, runJob, runTransfer, tagFor, TRANSFER_STEP } from '../../src/server/rebalanceRunner';
 import { sleep } from '../../src/server/routes/rebalance';
 import { budget, runId } from './env';
 import { assertAck, assertCredentials, assertLiveTestsEnabled } from './guards';
@@ -446,7 +446,7 @@ describe.skipIf(process.env.REBALANCE !== '1')('live rebalance recovery and tran
     });
     console.log(`  ▸ quote quoteId=${quote.quoteId} ${quote.fromAmount} USDC to ${quote.toAmount} USDT validMs=${quote.validMs}`);
     const toAmount = Number(quote.toAmount);
-    if (!(toAmount >= CONVERT_USDC * QUOTE_FLOOR)) {
+    if (!(toAmount >= quoteFloor(CONVERT_USDC, 'USDT', await readSpotTicker(clients).catch(() => null)))) {
       throw new Error(`Convert quote ${quote.toAmount} USDT for ${CONVERT_USDC} USDC is under the quote floor. Nothing was sent.`);
     }
     const quoteId = String(quote.quoteId);

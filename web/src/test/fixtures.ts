@@ -595,30 +595,30 @@ const EMPTY_PLAN: EvenPlan = balancedPlan(afterOf(0, 0, 0));
 const ACCOUNT_A_BUCKETS: RebalanceBucket[] = [
   {
     coin: 'USDT', venue: 'CROSSEX', cash: 92.54, upnl: 0, equity: 92.54, borrow: 0, imHeldUsd: 0, mmHeldUsd: 0,
-    interestPaidUsd: 0, interestPerDayUsd: 0,
+    interestPaidUsd: 0, interestPerDayUsd: 0, ratePerYear: 0.0564,
   },
   {
     coin: 'USDC', venue: 'HYPERLIQUID', cash: -147.05, upnl: 0, equity: -147.05, borrow: 147.05, imHeldUsd: 29.41,
-    mmHeldUsd: 14.705, interestPaidUsd: 0, interestPerDayUsd: 0,
+    mmHeldUsd: 14.705, interestPaidUsd: 0, interestPerDayUsd: 0, ratePerYear: 0.05,
   },
   {
     coin: 'USDC', venue: 'GATE', cash: 111.96, upnl: 0, equity: 111.96, borrow: 0, imHeldUsd: 0, mmHeldUsd: 0,
-    interestPaidUsd: 0, interestPerDayUsd: 0,
+    interestPaidUsd: 0, interestPerDayUsd: 0, ratePerYear: 0.05,
   },
 ];
 
 const ACCOUNT_A_ROUND_3_BUCKETS: RebalanceBucket[] = [
   {
     coin: 'USDT', venue: 'CROSSEX', cash: 92.54, upnl: 0, equity: 92.54, borrow: 0, imHeldUsd: 0, mmHeldUsd: 0,
-    interestPaidUsd: 0, interestPerDayUsd: 0,
+    interestPaidUsd: 0, interestPerDayUsd: 0, ratePerYear: 0.0564,
   },
   {
     coin: 'USDC', venue: 'HYPERLIQUID', cash: -92.71, upnl: 0, equity: -92.71, borrow: 92.71, imHeldUsd: 18.542,
-    mmHeldUsd: 9.271, interestPaidUsd: 0, interestPerDayUsd: 0,
+    mmHeldUsd: 9.271, interestPaidUsd: 0, interestPerDayUsd: 0, ratePerYear: 0.05,
   },
   {
     coin: 'USDC', venue: 'GATE', cash: 20.94, upnl: 0, equity: 20.94, borrow: 0, imHeldUsd: 0, mmHeldUsd: 0,
-    interestPaidUsd: 0, interestPerDayUsd: 0,
+    interestPaidUsd: 0, interestPerDayUsd: 0, ratePerYear: 0.05,
   },
 ];
 
@@ -718,30 +718,30 @@ const ACCOUNT_A_HALTED_JOB: RebalanceJob = {
 const ACCOUNT_B_BUCKETS: RebalanceBucket[] = [
   {
     coin: 'USDT', venue: 'CROSSEX', cash: 986.61, upnl: -15.39, equity: 971.22, borrow: 0, imHeldUsd: 0, mmHeldUsd: 0,
-    interestPaidUsd: 0, interestPerDayUsd: 0,
+    interestPaidUsd: 0, interestPerDayUsd: 0, ratePerYear: 0.0564,
   },
   {
     coin: 'USDC', venue: 'HYPERLIQUID', cash: 11.88, upnl: 5.03, equity: 16.91, borrow: 0, imHeldUsd: 0, mmHeldUsd: 0,
-    interestPaidUsd: 0, interestPerDayUsd: 0,
+    interestPaidUsd: 0, interestPerDayUsd: 0, ratePerYear: 0.05,
   },
   {
     coin: 'USDC', venue: 'GATE', cash: 0.29, upnl: 0, equity: 0.29, borrow: 0, imHeldUsd: 0, mmHeldUsd: 0,
-    interestPaidUsd: 0, interestPerDayUsd: 0,
+    interestPaidUsd: 0, interestPerDayUsd: 0, ratePerYear: 0.05,
   },
 ];
 
 const BALANCED_BUCKETS: RebalanceBucket[] = [
   {
     coin: 'USDT', venue: 'CROSSEX', cash: 509.27, upnl: -15.39, equity: 493.88, borrow: 0, imHeldUsd: 0, mmHeldUsd: 0,
-    interestPaidUsd: 0, interestPerDayUsd: 0,
+    interestPaidUsd: 0, interestPerDayUsd: 0, ratePerYear: 0.0564,
   },
   {
     coin: 'USDC', venue: 'HYPERLIQUID', cash: 489.12, upnl: 5.03, equity: 494.15, borrow: 0, imHeldUsd: 0, mmHeldUsd: 0,
-    interestPaidUsd: 0, interestPerDayUsd: 0,
+    interestPaidUsd: 0, interestPerDayUsd: 0, ratePerYear: 0.05,
   },
   {
     coin: 'USDC', venue: 'GATE', cash: 0.29, upnl: 0, equity: 0.29, borrow: 0, imHeldUsd: 0, mmHeldUsd: 0,
-    interestPaidUsd: 0, interestPerDayUsd: 0,
+    interestPaidUsd: 0, interestPerDayUsd: 0, ratePerYear: 0.05,
   },
 ];
 
@@ -904,6 +904,11 @@ const CONVERT_DONE_JOB: RebalanceJob = {
   inTransit: null,
 };
 
+const CONVERT_DONE_SHORT_JOB: RebalanceJob = {
+  ...CONVERT_DONE_JOB,
+  steps: CONVERT_DONE_JOB.steps.map((step): RebalanceStep => (step.name === 'Convert' ? { ...step, qty: 105.56 } : step)),
+};
+
 const CONVERT_DONE_BUCKETS = rebased(ACCOUNT_A_BUCKETS, {
   'USDT/CROSSEX': { cash: 28.548804, equity: 28.548804 },
   'USDC/HYPERLIQUID': { cash: 28.53, equity: 28.53, borrow: 0, imHeldUsd: 0, mmHeldUsd: 0 },
@@ -949,15 +954,15 @@ const BORROW_UNDER_ONE_PLAN: EvenPlan = {
 const EXAMPLE_D_BUCKETS: RebalanceBucket[] = [
   {
     coin: 'USDT', venue: 'CROSSEX', cash: 12081.77, upnl: 0, equity: 12081.77, borrow: 0, imHeldUsd: 0,
-    mmHeldUsd: 0, interestPaidUsd: 0, interestPerDayUsd: 0,
+    mmHeldUsd: 0, interestPaidUsd: 0, interestPerDayUsd: 0, ratePerYear: 0.0564,
   },
   {
     coin: 'USDC', venue: 'HYPERLIQUID', cash: -9612.4, upnl: 0, equity: -9612.4, borrow: 9612.4, imHeldUsd: 1922.48,
-    mmHeldUsd: 961.24, interestPaidUsd: 0, interestPerDayUsd: 0,
+    mmHeldUsd: 961.24, interestPaidUsd: 0, interestPerDayUsd: 0, ratePerYear: 0.05,
   },
   {
     coin: 'USDC', venue: 'GATE', cash: 0, upnl: 0, equity: 0, borrow: 0, imHeldUsd: 0, mmHeldUsd: 0,
-    interestPaidUsd: 0, interestPerDayUsd: 0,
+    interestPaidUsd: 0, interestPerDayUsd: 0, ratePerYear: 0.05,
   },
 ];
 
@@ -1054,15 +1059,15 @@ const MIX_DONE_BUCKETS = rebased(EXAMPLE_D_MID_BUCKETS, {
 const EXAMPLE_E_BUCKETS: RebalanceBucket[] = [
   {
     coin: 'USDT', venue: 'CROSSEX', cash: -612.35, upnl: 0, equity: -612.35, borrow: 612.35, imHeldUsd: 122.47,
-    mmHeldUsd: 61.235, interestPaidUsd: 0, interestPerDayUsd: 0.09,
+    mmHeldUsd: 61.235, interestPaidUsd: 0, interestPerDayUsd: 0.09, ratePerYear: 0.0564,
   },
   {
     coin: 'USDC', venue: 'HYPERLIQUID', cash: 1842.16, upnl: 0, equity: 1842.16, borrow: 0, imHeldUsd: 0,
-    mmHeldUsd: 0, interestPaidUsd: 0, interestPerDayUsd: 0,
+    mmHeldUsd: 0, interestPaidUsd: 0, interestPerDayUsd: 0, ratePerYear: 0.05,
   },
   {
     coin: 'USDC', venue: 'GATE', cash: 0, upnl: 0, equity: 0, borrow: 0, imHeldUsd: 0, mmHeldUsd: 0,
-    interestPaidUsd: 0, interestPerDayUsd: 0,
+    interestPaidUsd: 0, interestPerDayUsd: 0, ratePerYear: 0.05,
   },
 ];
 
@@ -1130,6 +1135,7 @@ const LIGHTER_SPLIT_BUCKETS: RebalanceBucket[] = [
     mmHeldUsd: 0,
     interestPaidUsd: 0,
     interestPerDayUsd: 0,
+    ratePerYear: 0.0564,
   },
   {
     coin: 'USDC',
@@ -1142,6 +1148,7 @@ const LIGHTER_SPLIT_BUCKETS: RebalanceBucket[] = [
     mmHeldUsd: 0,
     interestPaidUsd: 0,
     interestPerDayUsd: 0,
+    ratePerYear: 0.05,
   },
   {
     coin: 'USDC',
@@ -1154,6 +1161,7 @@ const LIGHTER_SPLIT_BUCKETS: RebalanceBucket[] = [
     mmHeldUsd: 0,
     interestPaidUsd: 0,
     interestPerDayUsd: 0,
+    ratePerYear: 0.1095,
   },
   {
     coin: 'USDC',
@@ -1166,6 +1174,7 @@ const LIGHTER_SPLIT_BUCKETS: RebalanceBucket[] = [
     mmHeldUsd: 0,
     interestPaidUsd: 0,
     interestPerDayUsd: 0,
+    ratePerYear: 0.05,
   },
 ];
 
@@ -1317,6 +1326,7 @@ const LIGHTER_ACROSS_BUCKETS: RebalanceBucket[] = [
     mmHeldUsd: 0,
     interestPaidUsd: 0,
     interestPerDayUsd: 0,
+    ratePerYear: 0.0564,
   },
   {
     coin: 'USDC',
@@ -1329,6 +1339,7 @@ const LIGHTER_ACROSS_BUCKETS: RebalanceBucket[] = [
     mmHeldUsd: 0,
     interestPaidUsd: 0,
     interestPerDayUsd: 0,
+    ratePerYear: 0.05,
   },
   {
     coin: 'USDC',
@@ -1341,6 +1352,7 @@ const LIGHTER_ACROSS_BUCKETS: RebalanceBucket[] = [
     mmHeldUsd: 0,
     interestPaidUsd: 0,
     interestPerDayUsd: 0,
+    ratePerYear: 0.1095,
   },
   {
     coin: 'USDC',
@@ -1353,6 +1365,7 @@ const LIGHTER_ACROSS_BUCKETS: RebalanceBucket[] = [
     mmHeldUsd: 0,
     interestPaidUsd: 0,
     interestPerDayUsd: 0,
+    ratePerYear: 0.05,
   },
 ];
 
@@ -1481,15 +1494,15 @@ const NO_LEGS_PLAN: EvenPlan = { ...balancedPlan(afterOf(1000, 0, 0)), split: []
 const TWO_BORROWS_BUCKETS: RebalanceBucket[] = [
   {
     coin: 'USDT', venue: 'CROSSEX', cash: 1387.45, upnl: 104.47, equity: 1491.92, borrow: 0, imHeldUsd: 0,
-    mmHeldUsd: 0, interestPaidUsd: 0, interestPerDayUsd: 0,
+    mmHeldUsd: 0, interestPaidUsd: 0, interestPerDayUsd: 0, ratePerYear: 0.0564,
   },
   {
     coin: 'USDC', venue: 'HYPERLIQUID', cash: -100.0, upnl: -12.0, equity: -112.0, borrow: 112.0, imHeldUsd: 22.4,
-    mmHeldUsd: 11.2, interestPaidUsd: 0, interestPerDayUsd: 0,
+    mmHeldUsd: 11.2, interestPaidUsd: 0, interestPerDayUsd: 0, ratePerYear: 0.05,
   },
   {
     coin: 'USDC', venue: 'LIGHTER', cash: -120.0, upnl: -12.0, equity: -132.0, borrow: 132.0, imHeldUsd: 26.4,
-    mmHeldUsd: 13.2, interestPaidUsd: 0, interestPerDayUsd: 0.0396,
+    mmHeldUsd: 13.2, interestPaidUsd: 0, interestPerDayUsd: 0.0396, ratePerYear: 0.1095,
   },
 ];
 
@@ -1542,18 +1555,66 @@ const TWO_BORROWS_PLAN: EvenPlan = {
   recommended: 'mix',
 };
 
+const BIG_BORROWS_BUCKETS: RebalanceBucket[] = [
+  {
+    coin: 'USDT', venue: 'CROSSEX', cash: -520000.0, upnl: -25678.9, equity: -545678.9, borrow: 545678.9,
+    imHeldUsd: 109135.78, mmHeldUsd: 54567.89, interestPaidUsd: 96512.44, interestPerDayUsd: 84.32, ratePerYear: 0.0564,
+  },
+  {
+    coin: 'USDC', venue: 'HYPERLIQUID', cash: 2850000.0, upnl: 312345.67, equity: 3162345.67, borrow: 0, imHeldUsd: 0,
+    mmHeldUsd: 0, interestPaidUsd: 31902.11, interestPerDayUsd: 0, ratePerYear: 0.05,
+  },
+  {
+    coin: 'USDC', venue: 'LIGHTER', cash: -270000.0, upnl: -17654.32, equity: -287654.32, borrow: 287654.32,
+    imHeldUsd: 57530.86, mmHeldUsd: 28765.43, interestPaidUsd: 16313.22, interestPerDayUsd: 86.3, ratePerYear: 0.1095,
+  },
+];
+
+const BIG_BORROWS_PLAN: EvenPlan = {
+  balanced: false, noLegs: false, moves: 2236247.29, shortOfEven: 0, roundCap: 6,
+  split: [
+    { coin: 'USDT', venue: 'CROSSEX', notionalUsd: 4657000, share: 0.5 },
+    { coin: 'USDC', venue: 'HYPERLIQUID', notionalUsd: 3725600, share: 0.4 },
+    { coin: 'USDC', venue: 'LIGHTER', notionalUsd: 931400, share: 0.1 },
+  ],
+  routes: {
+    mix: null,
+    loop: null,
+    convert: {
+      available: true, reason: null, costUsd: 5502.59, seconds: 0, rounds: 0, oneMoreRoundCostUsd: null,
+      marginFreedUsd: 166666.64, savesPerDayUsd: 170.62,
+      after: [
+        { coin: 'USDT', venue: 'CROSSEX', cash: 1190185.13, equity: 1164506.23 },
+        { coin: 'USDC', venue: 'HYPERLIQUID', cash: 613752.71, equity: 926098.38 },
+        { coin: 'USDC', venue: 'LIGHTER', cash: 250555.57, equity: 232901.25 },
+      ],
+      steps: [
+        {
+          round: null, kind: 'convert', buy: 0, move: 1713605.5, arrives: 1710185.13, borrowLeft: 287654.32, seconds: 0,
+          from: 'HYPERLIQUID', to: 'CROSSEX',
+        },
+        {
+          round: null, kind: 'convert', buy: 0, move: 522641.79, arrives: 520555.57, borrowLeft: 0, seconds: 0,
+          from: 'HYPERLIQUID', to: 'LIGHTER',
+        },
+      ],
+    },
+  },
+  recommended: 'convert',
+};
+
 const ONE_BORROW_BUCKETS: RebalanceBucket[] = [
   {
     coin: 'USDT', venue: 'CROSSEX', cash: 687.53, upnl: 104.47, equity: 792.0, borrow: 0, imHeldUsd: 0,
-    mmHeldUsd: 0, interestPaidUsd: 0, interestPerDayUsd: 0,
+    mmHeldUsd: 0, interestPaidUsd: 0, interestPerDayUsd: 0, ratePerYear: 0.0564,
   },
   {
     coin: 'USDC', venue: 'HYPERLIQUID', cash: 496.14, upnl: 91.78, equity: 587.92, borrow: 0, imHeldUsd: 0,
-    mmHeldUsd: 0, interestPaidUsd: 0, interestPerDayUsd: 0,
+    mmHeldUsd: 0, interestPaidUsd: 0, interestPerDayUsd: 0, ratePerYear: 0.05,
   },
   {
     coin: 'USDC', venue: 'LIGHTER', cash: -120.0, upnl: -12.0, equity: -132.0, borrow: 132.0, imHeldUsd: 26.4,
-    mmHeldUsd: 13.2, interestPaidUsd: 0, interestPerDayUsd: 0.0396,
+    mmHeldUsd: 13.2, interestPaidUsd: 0, interestPerDayUsd: 0.0396, ratePerYear: 0.1095,
   },
 ];
 
@@ -1599,11 +1660,11 @@ const ONE_BORROW_PLAN: EvenPlan = {
 const HYPERLIQUID_FREE_BORROW_BUCKETS: RebalanceBucket[] = [
   {
     coin: 'USDT', venue: 'CROSSEX', cash: 8400.0, upnl: 0, equity: 8400.0, borrow: 0, imHeldUsd: 0, mmHeldUsd: 0,
-    interestPaidUsd: 0, interestPerDayUsd: 0,
+    interestPaidUsd: 0, interestPerDayUsd: 0, ratePerYear: 0.0564,
   },
   {
     coin: 'USDC', venue: 'HYPERLIQUID', cash: -4200.0, upnl: 0, equity: -4200.0, borrow: 4200.0, imHeldUsd: 840.0,
-    mmHeldUsd: 420.0, interestPaidUsd: 0, interestPerDayUsd: 0,
+    mmHeldUsd: 420.0, interestPaidUsd: 0, interestPerDayUsd: 0, ratePerYear: 0.05,
   },
 ];
 
@@ -1647,7 +1708,7 @@ const HYPERLIQUID_FREE_BORROW_PLAN: EvenPlan = {
 const GAIN_OVER_NEGATIVE_CASH_BUCKETS: RebalanceBucket[] = [
   {
     coin: 'USDC', venue: 'LIGHTER', cash: -40.0, upnl: 55.0, equity: 15.0, borrow: 0, imHeldUsd: 0, mmHeldUsd: 0,
-    interestPaidUsd: 0, interestPerDayUsd: 0,
+    interestPaidUsd: 0, interestPerDayUsd: 0, ratePerYear: 0.1095,
   },
 ];
 
@@ -1673,15 +1734,15 @@ const GAIN_OVER_NEGATIVE_CASH_PLAN: EvenPlan = {
 const INTEREST_PAID_SPLIT_BUCKETS: RebalanceBucket[] = [
   {
     coin: 'USDT', venue: 'CROSSEX', cash: 900.0, upnl: 0, equity: 900.0, borrow: 0, imHeldUsd: 0, mmHeldUsd: 0,
-    interestPaidUsd: 0, interestPerDayUsd: 0,
+    interestPaidUsd: 0, interestPerDayUsd: 0, ratePerYear: 0.0564,
   },
   {
     coin: 'USDC', venue: 'HYPERLIQUID', cash: 300.0, upnl: 0, equity: 300.0, borrow: 0, imHeldUsd: 0, mmHeldUsd: 0,
-    interestPaidUsd: 0.31, interestPerDayUsd: 0,
+    interestPaidUsd: 0.31, interestPerDayUsd: 0, ratePerYear: 0.05,
   },
   {
     coin: 'USDC', venue: 'LIGHTER', cash: 200.0, upnl: 0, equity: 200.0, borrow: 0, imHeldUsd: 0, mmHeldUsd: 0,
-    interestPaidUsd: 1.55, interestPerDayUsd: 0,
+    interestPaidUsd: 1.55, interestPerDayUsd: 0, ratePerYear: 0.1095,
   },
 ];
 
@@ -1715,11 +1776,11 @@ const INTEREST_PAID_SPLIT_PLAN: EvenPlan = {
 const ONE_ROUTE_ONLY_BUCKETS: RebalanceBucket[] = [
   {
     coin: 'USDT', venue: 'CROSSEX', cash: 300.0, upnl: 0, equity: 300.0, borrow: 0, imHeldUsd: 0, mmHeldUsd: 0,
-    interestPaidUsd: 0, interestPerDayUsd: 0,
+    interestPaidUsd: 0, interestPerDayUsd: 0, ratePerYear: 0.0564,
   },
   {
     coin: 'USDC', venue: 'HYPERLIQUID', cash: 10.0, upnl: 150.0, equity: 160.0, borrow: 0, imHeldUsd: 0,
-    mmHeldUsd: 0, interestPaidUsd: 0, interestPerDayUsd: 0,
+    mmHeldUsd: 0, interestPaidUsd: 0, interestPerDayUsd: 0, ratePerYear: 0.05,
   },
 ];
 
@@ -1753,11 +1814,11 @@ const ONE_ROUTE_ONLY_PLAN: EvenPlan = {
 const HIDDEN_ROUTE_BUCKETS: RebalanceBucket[] = [
   {
     coin: 'USDT', venue: 'CROSSEX', cash: 400.0, upnl: 0, equity: 400.0, borrow: 0, imHeldUsd: 0, mmHeldUsd: 0,
-    interestPaidUsd: 0, interestPerDayUsd: 0,
+    interestPaidUsd: 0, interestPerDayUsd: 0, ratePerYear: 0.0564,
   },
   {
     coin: 'USDC', venue: 'HYPERLIQUID', cash: 100.0, upnl: 0, equity: 100.0, borrow: 0, imHeldUsd: 0, mmHeldUsd: 0,
-    interestPaidUsd: 0, interestPerDayUsd: 0,
+    interestPaidUsd: 0, interestPerDayUsd: 0, ratePerYear: 0.05,
   },
 ];
 
@@ -1840,15 +1901,15 @@ export const rebalanceViews = {
     buckets: [
       {
         coin: 'USDT', venue: 'CROSSEX', cash: 165.45, upnl: 0, equity: 165.45, borrow: 0, imHeldUsd: 0, mmHeldUsd: 0,
-        interestPaidUsd: 0, interestPerDayUsd: 0,
+        interestPaidUsd: 0, interestPerDayUsd: 0, ratePerYear: 0.0564,
       },
       {
         coin: 'USDC', venue: 'HYPERLIQUID', cash: 22.18, upnl: 203.64, equity: 225.82, borrow: 0, imHeldUsd: 0,
-        mmHeldUsd: 0, interestPaidUsd: 0, interestPerDayUsd: 0,
+        mmHeldUsd: 0, interestPaidUsd: 0, interestPerDayUsd: 0, ratePerYear: 0.05,
       },
       {
         coin: 'USDC', venue: 'GATE', cash: 0, upnl: 0, equity: 0, borrow: 0, imHeldUsd: 0, mmHeldUsd: 0,
-        interestPaidUsd: 0, interestPerDayUsd: 0,
+        interestPaidUsd: 0, interestPerDayUsd: 0, ratePerYear: 0.05,
       },
     ],
     plan: {
@@ -1941,7 +2002,7 @@ export const rebalanceViews = {
   exampleDHaltedConvert: {
     buckets: EXAMPLE_D_MID_BUCKETS, plan: EXAMPLE_D_MID_PLAN,
     job: {
-      ...EXAMPLE_D_CONVERT_JOB, status: 'halted', haltReason: 'Convert quote was more than 0.3% under market.',
+      ...EXAMPLE_D_CONVERT_JOB, status: 'halted', haltReason: 'Convert quote was more than 0.25% under the Gate spot price.',
       updatedAt: REBALANCE_NOW - 2_000,
     },
   },
@@ -1959,6 +2020,7 @@ export const rebalanceViews = {
   },
   borrowUnderOne: { buckets: BORROW_UNDER_ONE_BUCKETS, plan: BORROW_UNDER_ONE_PLAN, job: null },
   accountADone: { buckets: ACCOUNT_A_BUCKETS, plan: ACCOUNT_A_PLAN, job: CONVERT_DONE_JOB },
+  accountADoneShort: { buckets: ACCOUNT_A_BUCKETS, plan: ACCOUNT_A_PLAN, job: CONVERT_DONE_SHORT_JOB },
   lighterSplit: { buckets: LIGHTER_SPLIT_BUCKETS, plan: LIGHTER_SPLIT_PLAN, job: null },
   lighterAcross: { buckets: LIGHTER_ACROSS_BUCKETS, plan: LIGHTER_ACROSS_PLAN, job: null },
   lighterAcrossRunning: {
@@ -1982,6 +2044,7 @@ export const rebalanceViews = {
   },
   noLegs: { buckets: LIGHTER_SPLIT_BUCKETS, plan: NO_LEGS_PLAN, job: null },
   twoBorrows: { buckets: TWO_BORROWS_BUCKETS, plan: TWO_BORROWS_PLAN, job: null },
+  bigBorrows: { buckets: BIG_BORROWS_BUCKETS, plan: BIG_BORROWS_PLAN, job: null },
   oneBorrow: { buckets: ONE_BORROW_BUCKETS, plan: ONE_BORROW_PLAN, job: null },
   hyperliquidFreeBorrow: { buckets: HYPERLIQUID_FREE_BORROW_BUCKETS, plan: HYPERLIQUID_FREE_BORROW_PLAN, job: null },
   gainOverNegativeCash: { buckets: GAIN_OVER_NEGATIVE_CASH_BUCKETS, plan: GAIN_OVER_NEGATIVE_CASH_PLAN, job: null },
@@ -2028,7 +2091,7 @@ const FAILED_TRANSFER: TransferJob = {
 
 const FAILED_OVER_CAP_TRANSFER: TransferJob = {
   id: 'mtzwovrcap', coin: 'USDC', from: 'CROSSEX_HYPERLIQUID', to: 'SPOT', amount: 442.02, status: 'failed',
-  received: null, failText: 'Gate refused the move: free margin is too low.',
+  received: null, failText: 'Gate refused the move: free margin or wallet cash is too low.',
   createdAt: REBALANCE_NOW - 130_000, doneAt: REBALANCE_NOW - 60_000,
 };
 
@@ -2189,6 +2252,20 @@ const ACCOUNT_ASSETS = {
       borrowingInitialMargin: '0', borrowingMaintenanceMargin: '0',
     },
   ],
+  bigBorrows: [
+    {
+      coin: 'USDT', exchangeType: 'CROSSEX', balance: '-520000.00', availableBalance: '0', upnl: '-25678.90',
+      equity: '-545678.90', liability: '545678.90', borrowingInitialMargin: '109135.78', borrowingMaintenanceMargin: '54567.89',
+    },
+    {
+      coin: 'USDC', exchangeType: 'HYPERLIQUID', balance: '2850000.00', availableBalance: '2850000.00', upnl: '312345.67',
+      equity: '3162345.67', liability: '0', borrowingInitialMargin: '0', borrowingMaintenanceMargin: '0',
+    },
+    {
+      coin: 'USDC', exchangeType: 'LIGHTER', balance: '-270000.00', availableBalance: '0', upnl: '-17654.32',
+      equity: '-287654.32', liability: '287654.32', borrowingInitialMargin: '57530.86', borrowingMaintenanceMargin: '28765.43',
+    },
+  ],
   twoBorrows: [
     {
       coin: 'USDT', exchangeType: 'CROSSEX', balance: '1387.45', availableBalance: '1387.45', upnl: '104.47',
@@ -2319,9 +2396,13 @@ export const accountBodies = {
     ...account, marginBalance: '0', availableMargin: '0', initialMargin: '0', maintenanceMargin: '0',
     initialMarginRate: '0', maintenanceMarginRate: '0', assets: [],
   },
+  bigBorrows: {
+    ...account, marginBalance: '2329012.45', availableMargin: '1852345.81', initialMargin: '476666.64',
+    maintenanceMargin: '203333.32', initialMarginRate: '0.2047', maintenanceMarginRate: '0.0873', assets: ACCOUNT_ASSETS.bigBorrows,
+  },
   twoBorrows: {
-    ...account, marginBalance: '1247.92', availableMargin: '1199.12', initialMargin: '48.80', maintenanceMargin: '24.40',
-    initialMarginRate: '0.0391', maintenanceMarginRate: '0.0196', assets: ACCOUNT_ASSETS.twoBorrows,
+    ...account, marginBalance: '1247.92', availableMargin: '1047.82', initialMargin: '200.10', maintenanceMargin: '24.40',
+    initialMarginRate: '0.1603', maintenanceMarginRate: '0.0196', assets: ACCOUNT_ASSETS.twoBorrows,
   },
   oneBorrow: {
     ...account, marginBalance: '1247.92', availableMargin: '1221.52', initialMargin: '26.40',
@@ -2329,8 +2410,8 @@ export const accountBodies = {
     assets: ACCOUNT_ASSETS.oneBorrow,
   },
   hyperliquidFreeBorrow: {
-    ...account, marginBalance: '4200.00', availableMargin: '3360.00', initialMargin: '840.00',
-    maintenanceMargin: '420.00', initialMarginRate: '0.2000', maintenanceMarginRate: '0.1000',
+    ...account, marginBalance: '4200.00', availableMargin: '2856.00', initialMargin: '1344.00',
+    maintenanceMargin: '420.00', initialMarginRate: '0.3200', maintenanceMarginRate: '0.1000',
     assets: ACCOUNT_ASSETS.hyperliquidFreeBorrow,
   },
   gainOverNegativeCash: {

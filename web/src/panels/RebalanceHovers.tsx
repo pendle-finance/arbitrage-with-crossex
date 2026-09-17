@@ -1,4 +1,4 @@
-import { useId, type ReactNode } from 'react';
+import { Fragment, useId, type ReactNode } from 'react';
 import type { CrossexAccount, EvenPlan, GateAccount, PlannedStep, Pool, PositionsResponse, RebalanceBucket, RebalanceJob } from '../api/types';
 import type { RebalanceView, RouteName, RoutePlan, TransferCoin, TransferView, WalletAfter } from '../api/types';
 import { Chip } from '../components/Chip';
@@ -8,7 +8,7 @@ import { microLabelClass, Th } from '../components/Th';
 import { borrowingBuckets, borrowTotalUsd, MIN_BORROW } from '../lib/borrow';
 import { fmtAbout, fmtUsd, num, WALLET_SHORT } from '../lib/fmt';
 import { describeLine, fmtLinePrice, fmtMove, liquidationLines, type LiquidationLine } from '../lib/liquidation';
-import { floorCents, stripZeros } from '../lib/ticks';
+import { floorCents } from '../lib/ticks';
 import { ALWAYS_SHOWN, ROUTE_ORDER, WALLET_TONE, type BarRow } from './RebalanceBits';
 import {
   FACT_BORROWING,
@@ -17,12 +17,12 @@ import {
   FACT_LIQUIDATION,
   GATE_SPOT,
   HOVER,
-  HYPERLIQUID_FREE_LINE,
-  INTEREST_PAID_ALL_TIME,
   LIQUIDATION_NOT_KNOWN,
+  MODAL_FEE,
   MOVE_TEXT,
-  NO_FREE_PART,
   poolKey,
+  RATE_PER_YEAR,
+  INTEREST_PER_HOUR,
   RATE_UNKNOWN,
   WALLET_LABEL,
 } from './rebalanceCopy';
@@ -41,11 +41,17 @@ const WALLET_HOVER: Readonly<Record<string, string>> = {
   'USDC/GATE': HOVER.walletGate,
 };
 
+export interface FactRow {
+  name: string;
+  value: string;
+}
+
 export interface Fact {
   key: string;
   label: ReactNode;
   value: ReactNode;
   sub?: ReactNode[];
+  rows?: FactRow[];
   warn?: boolean;
 }
 
@@ -107,6 +113,40 @@ export function Term({
   );
 }
 
+function InterestInfo({ buckets }: { buckets: RebalanceBucket[] }) {
+  const info = HOVER.interestNow;
+  const rateOf = (key: string) => {
+    const bucket = buckets.find((b) => keyOf(b) === key);
+    return bucket ? rateText(bucket) : RATE_UNKNOWN;
+  };
+  const cell = 'whitespace-nowrap px-2 py-1';
+  return (
+    <HoverCard icon={false} widthPx={520} label={FACT_INTEREST_NOW}>
+      <div className="flex flex-col gap-2 text-xs leading-snug">
+        <p>{info.lead}</p>
+        <table className="w-full border border-ink-700">
+          <thead>
+            <tr>
+              <Th className="text-left">{info.head.wallet}</Th>
+              <Th className="text-left">{info.head.interest}</Th>
+              <Th className="text-right">{info.head.rate}</Th>
+            </tr>
+          </thead>
+          <tbody>
+            {info.wallets.map((row) => (
+              <tr key={row.key} className="border-t border-ink-700">
+                <td className={cell}>{WALLET_LABEL[row.key]}</td>
+                <td className={cell}>{row.interest}</td>
+                <td className={`${cell} num text-right`}>{rateOf(row.key)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </HoverCard>
+  );
+}
+
 export function WalletTerm({ wallet }: { wallet: string }) {
   return <Term label={<span className="text-ink-100">{WALLET_LABEL[wallet]}</span>} text={WALLET_HOVER[wallet]} />;
 }
@@ -124,13 +164,21 @@ export function Facts({ items, className = 'flex flex-wrap gap-x-7 gap-y-2' }: {
               {line}
             </dd>
           ))}
+          {fact.rows && fact.rows.length > 0 && (
+            <dd data-fact-rows={fact.key} className="grid w-fit grid-cols-[auto_auto] gap-x-3 text-xs text-ink-400">
+              {fact.rows.map((row) => (
+                <Fragment key={row.name}>
+                  <span>{row.name}</span>
+                  <span className="num whitespace-nowrap text-right">{row.value}</span>
+                </Fragment>
+              ))}
+            </dd>
+          )}
         </div>
       ))}
     </dl>
   );
 }
-
-const DAYS_PER_YEAR = 365;
 
 const freePartOf = (b: RebalanceBucket) => (b.coin === 'USDC' && b.venue === 'HYPERLIQUID' ? HYPERLIQUID_INTEREST_FREE_USDC : 0);
 
@@ -138,18 +186,22 @@ export const chargedBorrow = (b: RebalanceBucket, borrow: number) => Math.max(0,
 
 const isRateUnknown = (b: RebalanceBucket) => chargedBorrow(b, b.borrow) > 0 && b.interestPerDayUsd === 0;
 
-function rateText(b: RebalanceBucket): string | null {
-  if (isRateUnknown(b)) return RATE_UNKNOWN;
-  const charged = chargedBorrow(b, b.borrow);
-  return charged > 0 ? `${stripZeros(num((b.interestPerDayUsd * DAYS_PER_YEAR * 100) / charged))}% a year` : null;
+function rateText(b: RebalanceBucket): string {
+  if (isRateUnknown(b) || b.ratePerYear === null || b.ratePerYear <= 0) return RATE_UNKNOWN;
+  return RATE_PER_YEAR(num(b.ratePerYear * 100, 2));
 }
 
-const rateLine = (b: RebalanceBucket) =>
-  [rateText(b), freePartOf(b) > 0 ? HYPERLIQUID_FREE_LINE : NO_FREE_PART].filter((part) => part !== null).join(', ');
+function perHourText(usd: number): string {
+  if (usd <= 0) return fmtUsd(0);
+  if (usd < 0.0001) return `under ${fmtUsd(0.0001, 4)}`;
+  return fmtUsd(usd, usd < 1 ? 4 : 2);
+}
 
-const walletLine = (b: RebalanceBucket, text: string) => `${WALLET_SHORT[keyOf(b)]} ${text}`;
+const walletPerHour = (b: RebalanceBucket) =>
+  isRateUnknown(b) ? RATE_UNKNOWN : INTEREST_PER_HOUR(perHourText(b.interestPerDayUsd / 24));
 
-const joined = (lines: string[]) => (lines.length === 0 ? [] : [lines.join(' · ')]);
+const walletRows = (wallets: RebalanceBucket[], valueOf: (b: RebalanceBucket) => string): FactRow[] =>
+  wallets.map((b) => ({ name: WALLET_SHORT[keyOf(b)], value: valueOf(b) }));
 
 export function sharedCoin(wallets: readonly { coin: string }[]): string | null {
   const coins = new Set(wallets.map((w) => w.coin));
@@ -185,11 +237,8 @@ export function repayOf(buckets: RebalanceBucket[], route: RoutePlan): Repay {
   };
 }
 
-export const heldLine = (borrowing: RebalanceBucket[]): string => borrowing.map((b) => walletLine(b, fmtUsd(b.imHeldUsd))).join(' · ');
-
 function borrowHover(borrowing: RebalanceBucket[]): string {
-  if (borrowing.length === 0) return HOVER.rebalanceTitle.borrow;
-  return HOVER.borrowHeld(heldLine(borrowing));
+  return borrowing.length === 0 ? HOVER.rebalanceTitle.borrow : HOVER.borrowing;
 }
 
 export function borrowingFact(buckets: RebalanceBucket[]): Fact {
@@ -201,10 +250,8 @@ export function borrowingFact(buckets: RebalanceBucket[]): Fact {
     key: 'borrowing',
     label: FACT_BORROWING,
     value: total > 0 ? fmtCoinOrUsd(total, coin) : 'none',
-    sub:
-      borrowing.length === 1
-        ? [WALLET_LABEL[keyOf(borrowing[0])]]
-        : joined(borrowing.map((b) => walletLine(b, borrowAmount(floorCents(b.borrow))))),
+    sub: borrowing.length === 1 ? [WALLET_LABEL[keyOf(borrowing[0])]] : [],
+    rows: borrowing.length > 1 ? walletRows(borrowing, (b) => borrowAmount(floorCents(b.borrow))) : [],
     warn: total > 0,
   };
 }
@@ -216,7 +263,7 @@ export function liquidationNow(acc: CrossexAccount | undefined, pos: PositionsRe
 
 export function borrowFacts(buckets: RebalanceBucket[], liquidation: LiquidationLine | null | 'unknown'): Fact[] {
   const borrowing = borrowingBuckets(buckets);
-  const perDay = buckets.reduce((sum, b) => sum + b.interestPerDayUsd, 0);
+  const perHour = buckets.reduce((sum, b) => sum + b.interestPerDayUsd, 0) / 24;
   const paid = buckets.reduce((sum, b) => sum + b.interestPaidUsd, 0);
   const paidWallets = buckets.filter((b) => floorCents(b.interestPaidUsd) > 0).sort((a, b) => b.interestPaidUsd - a.interestPaidUsd);
   const line = liquidation === 'unknown' ? null : liquidation;
@@ -225,16 +272,16 @@ export function borrowFacts(buckets: RebalanceBucket[], liquidation: Liquidation
     { ...borrowingFact(buckets), label: <Term label={FACT_BORROWING} text={borrowHover(borrowing)} /> },
     {
       key: 'interest',
-      label: FACT_INTEREST_NOW,
-      value: `${fmtUsd(perDay)} a day`,
-      sub: borrowing.map((b) => walletLine(b, rateLine(b))),
-      warn: perDay > 0,
+      label: <InterestInfo buckets={buckets} />,
+      value: INTEREST_PER_HOUR(perHourText(perHour)),
+      rows: walletRows(borrowing, walletPerHour),
+      warn: perHour > 0,
     },
     {
       key: 'paid',
       label: FACT_INTEREST_PAID,
       value: fmtUsd(paid),
-      sub: [INTEREST_PAID_ALL_TIME, ...joined(paidWallets.map((b) => walletLine(b, fmtUsd(b.interestPaidUsd))))],
+      rows: walletRows(paidWallets, (b) => fmtUsd(b.interestPaidUsd)),
     },
     {
       key: 'liquidation',
@@ -320,7 +367,7 @@ export function RouteRow({ route, plan, checked, onPick }: { route: RouteName; p
         {plan.recommended === route && <Term label={<Chip tone="green" sm>Recommended</Chip>} text={HOVER.recommended} />}
       </span>
       <span className={`flex-1 ${blocked ? 'text-amber-300' : 'num text-ink-400'}`}>{blocked ? routePlan.reason : time}</span>
-      {!blocked && <span className="num text-ink-100">{fmtUsd(routePlan.costUsd)}</span>}
+      {!blocked && <span className="num text-ink-100">{MODAL_FEE(fmtUsd(routePlan.costUsd))}</span>}
     </RadioRow>
   );
 }

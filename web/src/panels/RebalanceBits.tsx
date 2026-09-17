@@ -37,12 +37,9 @@ const widestEnd = (rows: BarRow[]): number => Math.max(0, ...rows.flatMap(barEnd
 
 export const scaleOf = (...sets: BarRow[][]) => widestEnd(sets.flat());
 
-const BAR_FILL: Record<BarTone, string> = {
-  usdt: 'bg-info',
-  usdc: 'bg-crossex',
-  lighter: 'bg-grass',
-  gate: 'bg-ink-600',
-  spot: 'bg-gold',
+const cashFill = (row: BarRow): string => {
+  if (row.tone === 'spot') return 'bg-gold';
+  return row.cash >= 0 ? 'bg-grass' : 'bg-guava';
 };
 
 const pnlFill = (upnl: number): string => (upnl >= 0 ? 'bar-pnl-gain' : 'bar-pnl-loss');
@@ -86,7 +83,7 @@ function WalletHover({ row }: { row: BarRow }) {
       <span className="font-semibold text-ink-50">{row.name ?? row.label}</span>
       <div aria-hidden className="h-px bg-ink-700" />
       <div className="flex items-center gap-2.5">
-        <span aria-hidden data-swatch="cash" className={`h-2.5 w-2.5 shrink-0 rounded-sm ${BAR_FILL[row.tone]}`} />
+        <span aria-hidden data-swatch="cash" className={`h-2.5 w-2.5 shrink-0 rounded-sm ${cashFill(row)}`} />
         <span className="text-ink-400">{HOVER_CASH}</span>
         <span className={`num ml-auto ${row.cash < 0 ? 'text-guava' : 'text-ink-100'}`}>{num(row.cash)}</span>
       </div>
@@ -110,25 +107,32 @@ function WalletBar({ row, parts }: { row: BarRow; parts: BarParts }) {
   return (
     <div className="grid min-w-0 flex-1">
       <ChartTooltip content={<WalletHover row={row} />}>
-        <div className="relative h-3 w-full overflow-hidden rounded-sm bg-ink-950">
-          <div aria-hidden data-zero-line="" className="absolute inset-y-0 z-10 w-px bg-ink-600" style={{ left: cssPct(parts.zero) }} />
+        <div className="relative h-3 w-full">
+          <div className="absolute inset-0 overflow-hidden rounded-sm bg-ink-950">
+            <div
+              aria-hidden
+              data-bar-cash=""
+              className={`absolute inset-y-0 ${cashFill(row)}`}
+              style={{ left: cssPct(parts.cashLeft), width: cssPct(parts.cashWidth) }}
+            />
+            <div
+              aria-hidden
+              data-bar-pnl=""
+              className={`absolute inset-y-0 z-0 ${pnlFill(row.upnl)}`}
+              style={{ left: cssPct(parts.pnlLeft), width: cssPct(parts.pnlWidth) }}
+            />
+          </div>
           <div
             aria-hidden
-            data-bar-cash=""
-            className={`absolute inset-y-0 ${BAR_FILL[row.tone]}`}
-            style={{ left: cssPct(parts.cashLeft), width: cssPct(parts.cashWidth) }}
-          />
-          <div
-            aria-hidden
-            data-bar-pnl=""
-            className={`absolute inset-y-0 z-0 ${pnlFill(row.upnl)}`}
-            style={{ left: cssPct(parts.pnlLeft), width: cssPct(parts.pnlWidth) }}
+            data-zero-line=""
+            className="pointer-events-none absolute -inset-y-[5px] z-10 w-px -translate-x-1/2 bg-ink-200"
+            style={{ left: cssPct(parts.zero) }}
           />
           {parts.target !== null && (
             <div
               aria-hidden
               data-bar-target=""
-              className="absolute inset-y-0 z-20 w-0.5 -translate-x-px bg-gold"
+              className="pointer-events-none absolute inset-y-0 z-20 w-0.5 -translate-x-px bg-gold"
               style={{ left: cssPct(parts.target) }}
             />
           )}

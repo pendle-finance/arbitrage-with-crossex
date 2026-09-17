@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { rebalanceViews } from '../test/fixtures';
-import { BAR_CAPTION, SHARE_CAPTION } from './rebalanceCopy';
+import { BAR_CAPTION, HOVER_TARGET, SHARE_CAPTION } from './rebalanceCopy';
 import * as bits from './RebalanceBits';
 import { BalanceBars, ShareColumn, StepList, type BarRow, type StepRow } from './RebalanceBits';
 
@@ -37,8 +37,18 @@ describe('BalanceBars', () => {
     const cash = partOf(row, 'bar-cash');
     expect(cash.style.left).toBe('50%');
     expect(cash.style.width).toBe('30%');
-    expect(cash.className).toContain('bg-info');
+    expect(cash.className).toContain('bg-grass');
     expect(partOf(row, 'zero-line').style.left).toBe(cash.style.left);
+  });
+
+  it('a positive cash bar is grass, a negative one is guava', () => {
+    const positive = render(<BalanceBars caption={BAR_CAPTION} rows={ROWS} scale={100} />);
+    expect(partOf(rowOf(positive.container, 'USDT/CROSSEX'), 'bar-cash').className).toContain('bg-grass');
+    positive.unmount();
+
+    const rows: BarRow[] = [{ key: 'USDC/LIGHTER', label: 'USDC · Lighter', cash: -40, upnl: 5, target: 30, tone: 'lighter' }];
+    const negative = render(<BalanceBars caption={BAR_CAPTION} rows={rows} scale={100} />);
+    expect(partOf(rowOf(negative.container, 'USDC/LIGHTER'), 'bar-cash').className).toContain('bg-guava');
   });
 
   it('pnl fill', () => {
@@ -58,14 +68,14 @@ describe('BalanceBars', () => {
     expect(Number(gain.style.left.replace('%', ''))).toBe(edge(partOf(gainRow, 'bar-cash')));
   });
 
-  it('negative cash keeps its colour', () => {
+  it('negative cash bar is guava', () => {
     const rows: BarRow[] = [{ key: 'USDC/LIGHTER', label: 'USDC · Lighter', cash: -40, upnl: 55, target: 15, tone: 'lighter' }];
     const { container } = render(<BalanceBars caption={BAR_CAPTION} rows={rows} scale={80} />);
 
     const row = rowOf(container, 'USDC/LIGHTER');
     const cash = partOf(row, 'bar-cash');
-    expect(cash.className).toContain('bg-grass');
-    expect(cash.className).not.toContain('guava');
+    expect(cash.className).toContain('bg-guava');
+    expect(cash.className).not.toContain('bg-grass');
     expect(cash.className).not.toContain('bar-pnl-loss');
     expect(cash.style.left).toBe('25%');
     expect(cash.style.width).toBe('25%');
@@ -85,10 +95,18 @@ describe('BalanceBars', () => {
   it('no legend', () => {
     render(<BalanceBars caption={BAR_CAPTION} rows={ROWS} scale={100} />);
 
-    expect(screen.getByText('Now against target')).toBeInTheDocument();
+    expect(screen.getByText(BAR_CAPTION)).toBeInTheDocument();
     expect('BarLegend' in bits).toBe(false);
     expect(screen.queryByText('unrealized gain')).toBeNull();
     expect(screen.queryByText('cash')).toBeNull();
+  });
+
+  it('zero line reaches past the bar', () => {
+    const { container } = render(<BalanceBars caption={BAR_CAPTION} rows={ROWS} scale={100} />);
+
+    const line = partOf(rowOf(container, 'USDT/CROSSEX'), 'zero-line');
+    expect(line.style.left).toBe('50%');
+    expect(line.className).toContain('-inset-y-[5px]');
   });
 
   it('bar looks hoverable', () => {
@@ -127,7 +145,7 @@ describe('BalanceBars', () => {
     expect(bits.scaleOf([])).toBe(0);
   });
 
-  it('negative cash without a borrow', () => {
+  it('negative cash is guava even without a borrow', () => {
     const [bucket] = rebalanceViews.gainOverNegativeCash.buckets;
     expect(bucket.borrow).toBe(0);
     const rows: BarRow[] = [
@@ -138,7 +156,7 @@ describe('BalanceBars', () => {
     const row = rowOf(container, 'USDC/LIGHTER');
     const cash = partOf(row, 'bar-cash');
     expect(Number(cash.style.left.replace('%', ''))).toBeLessThan(Number(partOf(row, 'zero-line').style.left.replace('%', '')));
-    expect(cash.className).toContain('bg-grass');
+    expect(cash.className).toContain('bg-guava');
     expect(partOf(row, 'bar-pnl').className).toContain('bar-pnl-gain');
     expect(row.textContent).toBe('USDC · Lighter15.00');
   });
@@ -190,7 +208,7 @@ describe('the wallet hover', () => {
     const card = openHover(container, 'USDC/LIGHTER');
     expect(within(card).getByText('Cash')).toBeInTheDocument();
     expect(within(card).getByText('Unrealized PnL')).toBeInTheDocument();
-    expect(within(card).getByText('Balanced equity')).toBeInTheDocument();
+    expect(within(card).getByText(HOVER_TARGET)).toBeInTheDocument();
     expect([...card.querySelectorAll('.num')].map((el) => el.textContent)).toEqual(['20.00', '+5.00', '30.00']);
   });
 

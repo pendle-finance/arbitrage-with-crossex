@@ -3,6 +3,7 @@ import { ApiError } from '../api/client';
 import { useAccount, usePositions, useRebalanceCommand, useStartRebalance, useTransfer } from '../api/queries';
 import type { CrossexAccount, EvenPlan, GateAccount, PositionsResponse, RebalanceBucket, RebalanceJob } from '../api/types';
 import type { RebalanceView, RouteName, RoutePlan, TransferCoin, TransferView, WalletAfter } from '../api/types';
+import type { RebalanceStep } from '../api/types';
 import { Chip } from '../components/Chip';
 import { HoldToConfirmButton } from '../components/HoldToConfirmButton';
 import { Modal } from '../components/Modal';
@@ -15,18 +16,15 @@ import { floorCents } from '../lib/ticks';
 import { useNow } from '../lib/useNow';
 import { BalanceBars, jobRows, jobSeconds, planRows, ProgressBar, ROUTE_ORDER, scaleOf, StepList } from './RebalanceBits';
 import type { BarRow, StepRow } from './RebalanceBits';
-import { FACT_LIQUIDATION, GATE_SPOT, HOVER, LIQUIDATION_NOT_KNOWN, MODAL_ABANDON, MODAL_AFTER, MODAL_CHANGE_ROUTE, MODAL_FREES } from './rebalanceCopy';
-import { MODAL_HOLD, MODAL_KEEP_ROUTE, MODAL_RESUME, MODAL_SAVES, MODAL_STEPS, WAITS_FOR_DEAL, WAITS_FOR_TRANSFER } from './rebalanceCopy';
-import { barRowsOf, chargedBorrow, Facts, fmtCoinOrUsd, keyOf, movesKey, pickedRoute, planSteps, receivingBorrow, receivingHeld } from './RebalanceHovers';
-import { liquidationNow, repayOf, ROUTE_LABEL, roundCountOf, roundOf, RouteRow, sharedCoin, shownKeys, SpotLines, targetsOf, Term } from './RebalanceHovers';
-import type { Fact, Repay } from './RebalanceHovers';
+import { FACT_LIQUIDATION, GATE_SPOT, HOVER, LIQUIDATION_NOT_KNOWN, MODAL_ABANDON, MODAL_AFTER, MODAL_ALL_ROUTES } from './rebalanceCopy';
+import { MODAL_FREES, MODAL_HOLD, MODAL_RESUME, MODAL_SAVES, MODAL_STEPS, WAITS_FOR_DEAL, WAITS_FOR_TRANSFER } from './rebalanceCopy';
+import { barRowsOf, chargedBorrow, Facts, keyOf, movesKey, pickedRoute, planSteps, receivingBorrow, receivingHeld } from './RebalanceHovers';
+import { liquidationNow, repayOf, ROUTE_LABEL, roundCountOf, roundOf, RouteRow, shownKeys, SpotLines, targetsOf, Term } from './RebalanceHovers';
+import type { Fact } from './RebalanceHovers';
 import { NoSpotReadLine } from './TransferBits';
 
-const COUNT_WORD: Record<number, string> = { 2: 'two', 3: 'three' };
-
 const TITLE = 'Rebalance';
-const HIDE_STEPS = 'Hide the steps';
-const PRESS_AND_HOLD = 'press and hold';
+const HIDE_STEPS = 'Hide steps';
 const NOW_CAPTION = 'Now';
 const WHERE_CAPTION = 'Where your money is';
 const ON_THE_WAY = 'On the way';
@@ -34,26 +32,15 @@ const WAITS_LINE = 'New deals and transfers wait until it ends.';
 const KEEPS_GOING = 'You can close this. The run keeps going.';
 const PLAN_CHANGED = 'The plan changed. Check the new route before you rebalance.';
 const USE_NEW_PLAN = 'Use the new plan';
+const PLAN_CHANGED_LABEL = 'PLAN_CHANGED';
 const FINISHED_LEAD = 'Done. This is what each wallet holds now.';
 const NO_BORROW_TO_REPAY = 'no borrow to repay';
-const MARGIN_RETURNED = 'margin the repay returns';
+const MARGIN_RETURNED = 'initial margin of the borrow';
 const NO_INTEREST_TO_STOP = 'no interest to stop';
 const REPAYS_NO_BORROW = 'repays no borrow';
 const STOPS_NO_INTEREST = 'stops no interest';
 const NOT_MARGIN_UNTIL_LANDS = 'It is not margin until it lands.';
 const NO_SPOT_READ = 'This key cannot read Gate spot.';
-
-const leadText = (plan: EvenPlan, repay: Repay): string => {
-  const moved = fmtUsd(plan.moves);
-  const { wallets } = repay;
-  if (wallets.length === 0) return `Moves ${moved} so each wallet matches its position share.`;
-  const repaid = fmtCoinOrUsd(repay.amount, sharedCoin(wallets));
-  const where =
-    wallets.length === 1
-      ? `on ${WALLET_SHORT[keyOf(wallets[0])]}`
-      : `across ${COUNT_WORD[wallets.length] ?? num(wallets.length, 0)} wallets`;
-  return `Moves ${moved} and repays ${repaid} ${where}.`;
-};
 
 function stampOf(plan: EvenPlan, name: RouteName | null): string {
   const route = name === null ? null : plan.routes[name];
@@ -70,6 +57,29 @@ function routeOrder(plan: EvenPlan): RouteName[] {
 function stepsHoverOf(rounds: number, held: number | null): string | null {
   if (rounds === 0) return null;
   return [HOVER.round, held === null ? HOVER.whyMoreThanOne : HOVER.whyMoreThanOneBorrow(fmtUsd(held))].join(' ');
+}
+
+const LANDING_STEPS: readonly string[] = ['To Hyperliquid', 'To Lighter', 'Convert', 'Convert to USDC'];
+const SHORT_FLOOR_USD = 1;
+const SHORT_SHARE = 0.005;
+
+const qtyOf = (steps: RebalanceStep[]): number => steps.reduce((total, step) => total + floorCents(step.qty ?? 0), 0);
+const moveOf = (step: RebalanceStep): string => `${step.round}:${step.from}:${step.to}`;
+
+function soldOf(done: RebalanceStep[]): number {
+  const moves = new Set(done.filter((step) => step.name === 'Sell USDC' && step.round !== null).map(moveOf));
+  return [...moves].reduce((total, move) => {
+    const round = done.filter((step) => moveOf(step) === move);
+    const sold = qtyOf(round.filter((step) => step.name === 'Sell USDC'));
+    const toGate = round.find((step) => step.name === 'To Gate');
+    if (!toGate) return total + sold;
+    return total + Math.min(Math.max(0, sold - (toGate.cashBefore ?? 0)), floorCents(toGate.qty ?? 0));
+  }, 0);
+}
+
+function landedOf(job: RebalanceJob): number {
+  const done = job.steps.filter((step) => step.status === 'done');
+  return qtyOf(done.filter((step) => LANDING_STEPS.includes(step.name))) + soldOf(done);
 }
 
 function abandonNote(job: RebalanceJob, transfer: TransferView | undefined): string {
@@ -182,7 +192,7 @@ export function RebalanceModal({
   const [pick, setPick] = useState<RouteName | null>(null);
   const [routesOpen, setRoutesOpen] = useState(false);
   const [stepsOpen, setStepsOpen] = useState(false);
-  const [accepted, setAccepted] = useState(() => stampOf(plan, pickedRoute(plan, null).name));
+  const [accepted, setAccepted] = useState<string | null>(() => stampOf(plan, pickedRoute(plan, null).name));
   const [ranId, setRanId] = useState<string | null>(null);
   const running = job?.status === 'running';
   const halted = job?.status === 'halted';
@@ -197,6 +207,11 @@ export function RebalanceModal({
     toast.push('error', hint ? `${error.message}${period} ${hint}` : error.message);
   };
 
+  const onStartError = (error: Error) => {
+    if (error instanceof ApiError && error.label === PLAN_CHANGED_LABEL) setAccepted(null);
+    else onError(error);
+  };
+
   const { name: chosen, route } = pickedRoute(plan, pick);
   const choose = (name: RouteName | null) => {
     setPick(name);
@@ -209,7 +224,7 @@ export function RebalanceModal({
   const borrow = receivingBorrow(buckets, moveSteps);
   const held = receivingHeld(buckets, moveSteps);
   const stale = accepted !== stampOf(plan, chosen);
-  const others = ROUTE_ORDER.filter((name) => name !== chosen && plan.routes[name] !== null);
+  const hasOtherRoute = ROUTE_ORDER.some((name) => name !== chosen && plan.routes[name] !== null);
   let lock: string | null = null;
   if (transfer?.lock === 'deal') lock = WAITS_FOR_DEAL;
   if (transfer?.transfer?.status === 'moving') lock = WAITS_FOR_TRANSFER;
@@ -299,7 +314,9 @@ export function RebalanceModal({
       );
     }
   } else if (finished) {
-    chip = <Chip tone="green">Balanced</Chip>;
+    const landed = landedOf(job);
+    const short = landed < job.amount - (job.costUsd ?? 0) - Math.max(SHORT_FLOOR_USD, SHORT_SHARE * job.amount);
+    chip = short ? <Chip>Done</Chip> : <Chip tone="green">Balanced</Chip>;
     const took = (job.steps.at(-1)?.doneAt ?? job.updatedAt) - job.createdAt;
     body = (
       <>
@@ -307,7 +324,7 @@ export function RebalanceModal({
         <Facts
           items={[
             { key: 'route', label: 'Route', value: ROUTE_LABEL[job.route] },
-            { key: 'moved', label: 'Moved', value: fmtUsd(job.amount) },
+            { key: 'moved', label: 'Moved', value: fmtUsd(landed) },
             { key: 'took', label: 'Took', value: fmtAge(took) },
             ...(job.costUsd === null ? [] : [{ key: 'cost', label: 'Cost', value: fmtUsd(job.costUsd) }]),
           ]}
@@ -324,45 +341,28 @@ export function RebalanceModal({
   } else {
     body = (
       <>
-        <p className="text-xs text-ink-400">{leadText(plan, repayOf(buckets, route))}</p>
-        <div className="flex flex-col gap-2 border-t border-ink-800 pt-3">
-          <div className={microLabelClass}>
-            <Term label="Route" text={HOVER.route} />
+        <div className="flex flex-col gap-2">
+          <div className="flex items-center justify-between gap-3">
+            <div className={microLabelClass}>
+              <Term label="Route" text={HOVER.route} />
+            </div>
+            {!routesOpen && hasOtherRoute && (
+              <button type="button" className="btn-link" onClick={() => setRoutesOpen(true)}>
+                {MODAL_ALL_ROUTES}
+              </button>
+            )}
           </div>
           {!routesOpen && (
-            <div className="flex flex-wrap items-center gap-3 text-xs">
-              <span className="font-semibold text-ink-100">{ROUTE_LABEL[chosen ?? 'convert']}</span>
-              {plan.recommended === chosen && (
-                <Term label={<Chip tone="green" sm>Recommended</Chip>} text={HOVER.recommended} />
-              )}
-              <span className="num text-ink-400">
-                {`${route.seconds > 0 ? fmtAbout(route.seconds) : 'instant'} · ${fmtUsd(route.costUsd)}`}
-              </span>
-              {others.length > 0 && (
-                <button type="button" className="btn-ghost-xs ml-auto" onClick={() => setRoutesOpen(true)}>
-                  {MODAL_CHANGE_ROUTE} <span className="text-ink-500">{`· ${num(others.length, 0)} more`}</span>
-                </button>
-              )}
+            <div role="radiogroup" aria-label="Route">
+              <RouteRow route={chosen ?? 'convert'} plan={plan} checked onPick={() => setRoutesOpen(hasOtherRoute)} />
             </div>
           )}
           {routesOpen && (
-            <>
-              <div role="radiogroup" aria-label="Route" className="flex flex-col gap-1.5">
-                {routeOrder(plan).map((name) => (
-                  <RouteRow key={name} route={name} plan={plan} checked={chosen === name} onPick={() => choose(name)} />
-                ))}
-              </div>
-              <button
-                type="button"
-                className="btn-ghost-xs self-start"
-                onClick={() => {
-                  choose(null);
-                  setRoutesOpen(false);
-                }}
-              >
-                {MODAL_KEEP_ROUTE}
-              </button>
-            </>
+            <div role="radiogroup" aria-label="Route" className="flex flex-col gap-1.5">
+              {routeOrder(plan).map((name) => (
+                <RouteRow key={name} route={name} plan={plan} checked={chosen === name} onPick={() => choose(name)} />
+              ))}
+            </div>
           )}
         </div>
         {route.steps.length > 0 && (
@@ -394,11 +394,11 @@ export function RebalanceModal({
             tone="cyan"
             holdMs={holdMs}
             disabled={stale || lock !== null || chosen === null || start.isPending}
-            onConfirm={() => chosen && start.mutate({ route: chosen }, { onError })}
+            onConfirm={() => chosen && start.mutate({ route: chosen, costUsd: route.costUsd }, { onError: onStartError })}
           >
             {MODAL_HOLD}
           </HoldToConfirmButton>
-          <span className="text-xs text-ink-500">{lock ?? PRESS_AND_HOLD}</span>
+          {lock !== null && <span className="text-xs text-ink-500">{lock}</span>}
         </div>
         <SpotLines transfer={transfer} job={job} onTransfer={onTransfer} />
       </>

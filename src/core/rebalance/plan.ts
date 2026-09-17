@@ -1,3 +1,5 @@
+import { parseBinanceBook } from '../estimate/books';
+import { walkBook } from '../estimate/fill';
 import { roundToStep } from '../numbers';
 
 export const USDC_WALLET = { coin: 'USDC', venue: 'HYPERLIQUID' } as const;
@@ -15,6 +17,9 @@ const APP_FLOOR = 1.12;
 const BORROW_INITIAL_MARGIN = 0.2;
 export const MIN_TRANSFER = 0.00001;
 export const SPOT_MIN_QUOTE_USDT = 3;
+export const SPOT_ORDER_MAX_USDC = 4_900_000;
+export const SPOT_MARKET_MAX_USDT = 5_000_000;
+const SPOT_ORDER_SHARE = 0.98;
 const RECOMMENDED_MAX_SECONDS = 900;
 export const DUST_USDC = 1;
 const GATE_HOP_SECONDS = 5;
@@ -101,6 +106,7 @@ export interface Bucket {
   /** All time, or as far back as Gate's history reaches (2025-01-01). */
   interestPaidUsd: number;
   interestPerDayUsd: number;
+  ratePerYear: number | null;
 }
 
 export interface CoinRuleLike {
@@ -143,6 +149,7 @@ export interface RoutePlan {
   seconds: number;
   rounds: number;
   oneMoreRoundCostUsd: number | null;
+  beyondBook: boolean;
   marginFreedUsd: number;
   savesPerDayUsd: number;
   after: WalletAfter[];
@@ -162,11 +169,22 @@ export interface EvenPlan {
 
 export interface PlanInputs {
   coins: CoinRuleLike[];
-  spotRule: { state: string } | null;
+  spotRule: { state: string; maxMarketSize?: string | null } | null;
   spotTakerRate: number;
   ask: number | null;
   bid: number | null;
+  asks?: BookLevel[];
+  bids?: BookLevel[];
   notional: Readonly<Record<string, number>>;
+}
+
+export type BookLevel = [price: number, size: number];
+
+export interface SpotDepth {
+  ask: number;
+  bid: number;
+  asks: BookLevel[];
+  bids: BookLevel[];
 }
 
 export interface SpotBalance {
@@ -242,6 +260,47 @@ function positive(value: number | null): number | null {
   return value !== null && value > 0 ? value : null;
 }
 
+export function spotOrderMax(price: number, maxMarketSize?: number | null): number {
+  const quoted = Number.isFinite(price) && price > 0 ? price : 1;
+  const ruled =
+    typeof maxMarketSize === 'number' && Number.isFinite(maxMarketSize) && maxMarketSize > 0
+      ? SPOT_ORDER_SHARE * maxMarketSize
+      : Infinity;
+  return floorCents(Math.min(SPOT_ORDER_MAX_USDC, (SPOT_ORDER_SHARE * SPOT_MARKET_MAX_USDT) / quoted, ruled));
+}
+
+export function bookLevels(body: unknown): Pick<SpotDepth, 'asks' | 'bids'> {
+  const book = parseBinanceBook(body);
+  return { asks: book?.asks ?? [], bids: book?.bids ?? [] };
+}
+
+function priced(levels: BookLevel[], usdc: number, top: number): { usdt: number; beyond: boolean } {
+  const walked = levels.length > 0 ? walkBook(levels, usdc) : null;
+  return walked ? { usdt: walked.avgPrice * usdc, beyond: walked.exhausted } : { usdt: usdc * top, beyond: false };
+}
+
+export const buyCostUsdt = (usdc: number, depth: Pick<SpotDepth, 'ask' | 'asks'>): number =>
+  priced(depth.asks, usdc, depth.ask).usdt;
+
+export const sellProceedsUsdt = (usdc: number, depth: Pick<SpotDepth, 'bid' | 'bids'>): number =>
+  priced(depth.bids, usdc, depth.bid).usdt;
+
+export function buyableUsdc(usdt: number, depth: Pick<SpotDepth, 'ask' | 'asks'>): number {
+  let left = usdt;
+  let usdc = 0;
+  let last = 0;
+  for (const [price, size] of depth.asks) {
+    if (left <= 0) break;
+    if (!(price > 0) || !(size > 0)) continue;
+    const take = Math.min(size, left / price);
+    usdc += take;
+    left -= take * price;
+    last = price;
+  }
+  if (last === 0) return usdt / depth.ask;
+  return left > 0 ? usdc + left / last : usdc;
+}
+
 const outFee = (pool: Pool): number => (pool === 'CROSSEX' ? 0 : VENUE[pool].outFeeUsd);
 const inFee = (pool: Pool): number => (pool === 'CROSSEX' ? 0 : VENUE[pool].inFeeUsd);
 
@@ -287,6 +346,7 @@ export function bucketsFrom(account: AccountLike, rates: RateLike[], interestPai
       mmHeldUsd: num(asset.borrowingMaintenanceMargin),
       interestPaidUsd,
       interestPerDayUsd: chargedBorrow({ coin, venue }, borrow) * hourly * 24,
+      ratePerYear: rate ? hourly * 24 * 365 : null,
     };
   });
 }
@@ -361,7 +421,7 @@ interface Wallets {
   venues: Record<Venue, Holding>;
 }
 
-interface Book extends Wallets {
+interface Book extends Wallets, SpotDepth {
   gateMovable: number;
   buckets: Partial<Record<Pool, Bucket>>;
   pools: Pool[];
@@ -369,10 +429,10 @@ interface Book extends Wallets {
   shares: Record<Pool, number>;
   marginBalance: number;
   initialMargin: number;
-  ask: number;
-  bid: number;
   takerRate: number;
   minimum: number;
+  buyMax: number;
+  sellMax: number;
 }
 
 interface Run extends Wallets {
@@ -382,6 +442,7 @@ interface Run extends Wallets {
   steps: PlannedStep[];
   cashLimited: boolean;
   usdtShort: boolean;
+  beyondBook: boolean;
 }
 
 type Sizer = (cap: number, left: number, minimum: number) => number;
@@ -414,6 +475,19 @@ function sendingCash(run: Run, move: Move): number {
   if (move.from === 'CROSSEX') return Math.max(0, run.usdt.cash) + run.gateMovable;
   return Math.max(0, run.venues[move.from].cash);
 }
+
+function roundCash(book: Book, run: Run, move: Move): number {
+  if (move.from !== 'CROSSEX') return sendingCash(run, move);
+  const cash = Math.max(0, run.usdt.cash);
+  const buyable =
+    book.asks.length === 0
+      ? cash / Math.max(1, book.ask * (1 + book.takerRate))
+      : Math.min(cash, buyableUsdc(cash / (1 + book.takerRate), book));
+  return buyable + run.gateMovable;
+}
+
+const orderMaxOf = (book: Book, move: Move): number =>
+  move.from === 'CROSSEX' ? book.buyMax : move.to === 'CROSSEX' ? book.sellMax : Infinity;
 
 function sendingEquity(run: Run, move: Move): number {
   if (move.from === 'CROSSEX') return Math.max(0, run.usdt.equity) + run.gateMovable;
@@ -463,23 +537,32 @@ function roundInto(book: Book, run: Run, move: Move, size: number): void {
   const fromGate = Math.min(run.gateMovable, size);
   const buy = floorCents(size - fromGate);
   const arrives = arrivesFor(move.from, venue, size);
-  run.usdt = shifted(run.usdt, -buy * book.ask * (1 + book.takerRate));
+  const paid = priced(book.asks, buy, book.ask);
+  run.usdt = shifted(run.usdt, -paid.usdt * (1 + book.takerRate));
   run.gate = shifted(run.gate, -fromGate);
   run.gateMovable -= fromGate;
   run.venues[venue] = shifted(run.venues[venue], arrives);
   run.received[venue] += arrives;
-  run.costUsd += VENUE[venue].inFeeUsd + buy * Math.max(0, book.ask - 1) + buy * book.ask * book.takerRate;
+  run.beyondBook ||= paid.beyond;
+  run.costUsd +=
+    VENUE[venue].inFeeUsd +
+    buy * Math.max(0, book.ask - 1) +
+    Math.max(0, paid.usdt - buy * book.ask) +
+    paid.usdt * book.takerRate;
   pushRound(book, run, move, { buy, move: size, arrives });
 }
 
 function sellUsdc(book: Book, run: Run, move: Move, arrived: number): void {
   const sold = arrived + run.gateMovable;
-  const gained = sold * book.bid * (1 - book.takerRate);
+  const sale = priced(book.bids, sold, book.bid);
+  const gained = sale.usdt * (1 - book.takerRate);
   run.usdt = shifted(run.usdt, gained);
   run.gate = shifted(run.gate, -run.gateMovable);
   run.gateMovable = 0;
   if (move.to === 'CROSSEX') run.received.CROSSEX += gained;
-  run.costUsd += sold * Math.max(0, 1 - book.bid) + sold * book.bid * book.takerRate;
+  run.beyondBook ||= sale.beyond;
+  run.costUsd +=
+    sold * Math.max(0, 1 - book.bid) + Math.max(0, sold * book.bid - sale.usdt) + sale.usdt * book.takerRate;
 }
 
 function roundOut(book: Book, run: Run, move: Move, size: number): void {
@@ -504,6 +587,14 @@ function roundAcross(book: Book, run: Run, move: Move, size: number): void {
 
 const touchesUsdt = (move: { from: Pool; to: Pool }): boolean => move.from === 'CROSSEX' || move.to === 'CROSSEX';
 
+export const priceOrOne = (price: number | null | undefined): number =>
+  typeof price === 'number' && Number.isFinite(price) && price > 0 ? price : 1;
+
+function convertPrice(move: Move, ask: number, bid: number): number {
+  if (move.from === 'CROSSEX') return 1 / ask;
+  return move.to === 'CROSSEX' ? bid : bid / ask;
+}
+
 function convertRest(book: Book, run: Run, move: Move, left: number): void {
   if (touchesUsdt(move) && run.gateMovable * book.bid >= SPOT_MIN_QUOTE_USDT) sellUsdc(book, run, move, 0);
   const cash = move.from === 'CROSSEX' ? run.usdt.cash : run.venues[move.from].cash;
@@ -511,11 +602,14 @@ function convertRest(book: Book, run: Run, move: Move, left: number): void {
   if (size <= 0) return;
   if (!touchesUsdt(move) && run.usdt.cash < -DUST_USDC) run.usdtShort = true;
   const kept = touchesUsdt(move) ? 1 - CONVERT_RATE : (1 - CONVERT_RATE) ** 2;
-  const arrives = floorCents(size * kept);
+  const ask = priceOrOne(book.ask);
+  const bid = priceOrOne(book.bid);
+  const arrives = floorCents(size * kept * convertPrice(move, ask, bid));
+  const fee = touchesUsdt(move) ? size * CONVERT_RATE : size - size * kept;
   shiftPool(run, move.from, -size);
   shiftPool(run, move.to, arrives);
   run.received[move.to] += arrives;
-  run.costUsd += touchesUsdt(move) ? size * CONVERT_RATE : size - size * kept;
+  run.costUsd += fee + size * kept * (1 - convertPrice(move, Math.max(1, ask), Math.min(1, bid)));
   run.steps.push({
     round: null,
     kind: 'convert',
@@ -540,6 +634,7 @@ function startRun(book: Book): Run {
     steps: [],
     cashLimited: false,
     usdtShort: false,
+    beyondBook: false,
   };
 }
 
@@ -548,10 +643,12 @@ function simulate(book: Book, moves: Move[], amounts: number[], maxRounds: numbe
   moves.forEach((move, index) => {
     const round = move.from === 'CROSSEX' ? roundInto : move.to === 'CROSSEX' ? roundOut : roundAcross;
     const minimum = roundMinimum(move.from, move.to, book.minimum);
+    const orderMax = orderMaxOf(book, move);
     let left = amounts[index];
     let rounds = 0;
     while (left > 0 && rounds < maxRounds[index]) {
-      const next = size(fit(marginsOf(book, run), sendingCash(run, move), sendingEquity(run, move)), left, minimum);
+      const room = fit(marginsOf(book, run), roundCash(book, run, move), sendingEquity(run, move));
+      const next = size(Math.min(room, orderMax), left, minimum);
       if (next <= 0 || next < minimum) break;
       round(book, run, move, next);
       rounds += 1;
@@ -626,6 +723,7 @@ function routePlan(book: Book, run: Run, reason: string | null): RoutePlan {
     seconds: run.steps.reduce((total, step) => total + step.seconds, 0),
     rounds: run.steps.filter((step) => step.kind === 'round').length,
     oneMoreRoundCostUsd: null,
+    beyondBook: run.beyondBook,
     marginFreedUsd: nearestCents(freed.marginFreedUsd),
     savesPerDayUsd: nearestCents(freed.savesPerDayUsd),
     after: afterOf(book, run),
@@ -725,6 +823,9 @@ export function planFor(buckets: Bucket[], account: AccountLike, inputs: PlanInp
   };
   const gateBucket = bucketOf(GATE_WALLET);
   const gateCash = gateBucket?.cash ?? 0;
+  const ask = positive(inputs.ask) ?? 1;
+  const bid = positive(inputs.bid) ?? 1;
+  const ruleMax = finiteOrNull(inputs.spotRule?.maxMarketSize ?? '');
   const wallets: Wallets = {
     usdt: holdingOf(poolBuckets.CROSSEX),
     gate: holdingOf(gateBucket),
@@ -749,10 +850,14 @@ export function planFor(buckets: Bucket[], account: AccountLike, inputs: PlanInp
     shares,
     marginBalance: num(account.marginBalance),
     initialMargin: num(account.initialMargin),
-    ask: positive(inputs.ask) ?? 1,
-    bid: positive(inputs.bid) ?? 1,
+    ask,
+    bid,
+    asks: inputs.asks ?? [],
+    bids: inputs.bids ?? [],
     takerRate: inputs.spotTakerRate,
     minimum: coinRule(inputs.coins, 'USDC')?.min ?? HYPERLIQUID_MIN_USDC,
+    buyMax: spotOrderMax(ask, ruleMax),
+    sellMax: spotOrderMax(Math.max(ask, bid), ruleMax),
   };
 
   if (totalNotional <= 0) return balancedPlan(book, 0, true);
@@ -778,7 +883,8 @@ export function planFor(buckets: Bucket[], account: AccountLike, inputs: PlanInp
   const oneMore = moves.length === 1 && bestMix.rounds < roundCap ? mixPlans[bestMix.rounds + 1].costUsd : null;
   const mix = { ...bestMix, oneMoreRoundCostUsd: oneMore };
 
-  const loopRun = solve(book, moves, start, moves.map(() => Infinity), leaveMinimum);
+  const loopRounds = moves.map((move) => Math.floor(RECOMMENDED_MAX_SECONDS / roundSeconds(move.from, move.to)) + 1);
+  const loopRun = solve(book, moves, start, loopRounds, leaveMinimum);
   const loop = routePlan(book, loopRun, blocked ?? shortReason(loopRun) ?? loopReason(book, moves, loopRun));
   const convert = routePlan(book, mixRuns[0], shortReason(mixRuns[0]));
 

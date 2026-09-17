@@ -9,7 +9,7 @@ import { server } from '../test/server';
 import { renderWithClient } from '../test/utils';
 import { TransferModal } from './TransferModal';
 
-const FAIL_TEXT = 'Gate refused the move: free margin is too low.';
+const FAIL_TEXT = 'Gate refused the move: free margin or wallet cash is too low.';
 
 const dialog = () => screen.getByRole('dialog');
 const amountInput = () => screen.getByRole('textbox');

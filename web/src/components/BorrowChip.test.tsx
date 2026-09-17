@@ -16,7 +16,17 @@ async function hoverPill(name: string): Promise<HTMLElement> {
 
 function factLines(card: HTMLElement, label: string): string[] {
   const dt = within(card).getByText(label).closest('dt');
-  return [...(dt?.parentElement?.querySelectorAll('dd') ?? [])].map((dd) => dd.textContent ?? '');
+  return [...(dt?.parentElement?.querySelectorAll('dd:not([data-fact-rows])') ?? [])].map((dd) => dd.textContent ?? '');
+}
+
+function factRows(card: HTMLElement, label: string): { name: string; value: string }[] {
+  const dt = within(card).getByText(label).closest('dt');
+  const grid = dt?.parentElement?.querySelector('[data-fact-rows]');
+  if (!grid) return [];
+  const spans = [...grid.querySelectorAll('span')];
+  const out: { name: string; value: string }[] = [];
+  for (let i = 0; i < spans.length; i += 2) out.push({ name: spans[i].textContent ?? '', value: spans[i + 1].textContent ?? '' });
+  return out;
 }
 
 function legLines(card: HTMLElement): string[] {
@@ -31,7 +41,7 @@ describe('BorrowChip', () => {
 
     const card = await hoverPill('Borrowing 147.05 USDC');
     expect(factLines(card, 'Borrowing')).toEqual(['147.05 USDC', 'USDC · Hyperliquid']);
-    expect(factLines(card, 'Held against the borrow')).toEqual(['$29.41']);
+    expect(within(card).queryByText('Held against the borrow')).toBeNull();
     expect(legLines(card)).toEqual(['Hyperliquid legs']);
     expect(within(card).queryByText('Lent by Gate')).toBeNull();
   });
@@ -70,14 +80,14 @@ describe('BorrowChip', () => {
 
   it('Lighter borrow names the Lighter wallet', async () => {
     const view = rebalanceViews.exampleC;
-    const lighter = { coin: 'USDC', venue: 'LIGHTER', cash: -500, upnl: 0, equity: -500, borrow: 500, imHeldUsd: 100, mmHeldUsd: 50, interestPaidUsd: 0, interestPerDayUsd: 0.15 };
+    const lighter = { coin: 'USDC', venue: 'LIGHTER', cash: -500, upnl: 0, equity: -500, borrow: 500, imHeldUsd: 100, mmHeldUsd: 50, interestPaidUsd: 0, interestPerDayUsd: 0.15, ratePerYear: 0.1095 };
     server.use(rebalanceHandler({ ...view, buckets: [...view.buckets, lighter] }));
     renderWithClient(<BorrowChip onOpen={vi.fn()} />);
 
     const card = await hoverPill('Borrowing 500.00 USDC');
     expect(factLines(card, 'Borrowing')).toEqual(['500.00 USDC', 'USDC · Lighter']);
     expect(legLines(card)).toEqual(['Lighter legs']);
-    expect(factLines(card, 'Held against the borrow')).toEqual(['$100.00']);
+    expect(within(card).queryByText('Held against the borrow')).toBeNull();
   });
 
   it('a click on the pill opens Balances', async () => {
@@ -104,8 +114,12 @@ describe('BorrowChip', () => {
     renderWithClient(<BorrowChip onOpen={vi.fn()} />);
 
     const card = await hoverPill('Borrowing 244.00 USDC');
-    expect(factLines(card, 'Borrowing')).toEqual(['244.00 USDC', 'Lighter 132.00 · Hyperliquid 112.00']);
-    expect(factLines(card, 'Held against the borrow')).toEqual(['$48.80', 'Lighter $26.40 · Hyperliquid $22.40']);
+    expect(factLines(card, 'Borrowing')).toEqual(['244.00 USDC']);
+    expect(factRows(card, 'Borrowing')).toEqual([
+      { name: 'Lighter', value: '132.00' },
+      { name: 'Hyperliquid', value: '112.00' },
+    ]);
+    expect(within(card).queryByText('Held against the borrow')).toBeNull();
     expect(within(card).queryByRole('table')).toBeNull();
   });
 
@@ -114,19 +128,23 @@ describe('BorrowChip', () => {
     renderWithClient(<BorrowChip onOpen={vi.fn()} />);
 
     const card = await hoverPill('Borrowing 244.00 USDC');
-    expect(factLines(card, 'Borrowing')[1]).toBe('Lighter 132.00 · Hyperliquid 112.00');
+    expect(factRows(card, 'Borrowing').map((row) => row.name)).toEqual(['Lighter', 'Hyperliquid']);
     expect(legLines(card)).toEqual(['Lighter legs', 'Hyperliquid legs']);
-    expect([...card.querySelectorAll('dt')].map((dt) => dt.textContent)).toEqual(['Borrowing', 'For', 'Held against the borrow']);
+    expect([...card.querySelectorAll('dt')].map((dt) => dt.textContent)).toEqual(['Borrowing', 'For']);
   });
 
   it('two coins fall back to a dollar total', async () => {
     const view = rebalanceViews.exampleE;
-    const lighter = { coin: 'USDC', venue: 'LIGHTER', cash: -200, upnl: 0, equity: -200, borrow: 200, imHeldUsd: 40, mmHeldUsd: 20, interestPaidUsd: 0, interestPerDayUsd: 0.06 };
+    const lighter = { coin: 'USDC', venue: 'LIGHTER', cash: -200, upnl: 0, equity: -200, borrow: 200, imHeldUsd: 40, mmHeldUsd: 20, interestPaidUsd: 0, interestPerDayUsd: 0.06, ratePerYear: 0.1095 };
     server.use(rebalanceHandler({ ...view, buckets: [...view.buckets, lighter] }));
     renderWithClient(<BorrowChip onOpen={vi.fn()} />);
 
     const card = await hoverPill('Borrowing $812.35');
-    expect(factLines(card, 'Borrowing')).toEqual(['$812.35', 'CrossEx $612.35 · Lighter $200.00']);
+    expect(factLines(card, 'Borrowing')).toEqual(['$812.35']);
+    expect(factRows(card, 'Borrowing')).toEqual([
+      { name: 'CrossEx', value: '$612.35' },
+      { name: 'Lighter', value: '$200.00' },
+    ]);
   });
 
   it('one wallet names the wallet under the total, no table', async () => {
@@ -135,7 +153,7 @@ describe('BorrowChip', () => {
 
     const card = await hoverPill('Borrowing 132.00 USDC');
     expect(factLines(card, 'Borrowing')).toEqual(['132.00 USDC', 'USDC · Lighter']);
-    expect(factLines(card, 'Held against the borrow')).toEqual(['$26.40']);
+    expect(within(card).queryByText('Held against the borrow')).toBeNull();
     expect(within(card).queryByRole('table')).toBeNull();
   });
 
@@ -151,7 +169,11 @@ describe('BorrowChip', () => {
 
     const cardTotal = num(borrowTotalUsd(buckets), 2);
     const card = await hoverPill(`Borrowing ${cardTotal} USDC`);
-    expect(factLines(card, 'Borrowing')).toEqual(['132.40 USDC', 'Lighter 132.00 · Hyperliquid 0.40']);
+    expect(factLines(card, 'Borrowing')).toEqual(['132.40 USDC']);
+    expect(factRows(card, 'Borrowing')).toEqual([
+      { name: 'Lighter', value: '132.00' },
+      { name: 'Hyperliquid', value: '0.40' },
+    ]);
   });
 
   it('pill shows when every borrow is under a dollar', async () => {

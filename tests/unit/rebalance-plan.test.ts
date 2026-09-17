@@ -1,18 +1,35 @@
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { describe, it, expect } from 'vitest';
 import { roundToStep } from '../../src/core/numbers';
 import {
+  bookLevels,
   bucketsFrom,
+  buyableUsdc,
+  buyCostUsdt,
+  CONVERT_RATE,
   fit,
+  floorCents,
+  HYPERLIQUID_DEPOSIT_FEE_USD,
+  HYPERLIQUID_WITHDRAW_FEE_USD,
+  nearestCents,
   notionalByWallet,
   planFor,
   roundSeconds,
+  sellProceedsUsdt,
+  SPOT_ORDER_MAX_USDC,
+  spotOrderMax,
   USDC_WALLET,
   USDT_WALLET,
   type AccountLike,
   type AssetLike,
+  type BookLevel,
   type CoinRuleLike,
+  type EvenPlan,
+  type PlannedStep,
   type PlanInputs,
   type RateLike,
+  type RoutePlan,
   type WalletAfter,
 } from '../../src/core/rebalance/plan';
 
@@ -78,6 +95,14 @@ describe('bucketsFrom interest', () => {
     const [usdc] = bucketsFrom(account, LIVE_RATES, {});
     expect(usdc.interestPerDayUsd).toBeCloseTo(2000 * 0.0000057077626 * 24, 9);
     expect(cents(usdc.interestPerDayUsd)).toBe('0.27');
+    expect(usdc.ratePerYear).toBeCloseTo(0.0000057077626 * 24 * 365, 12);
+  });
+
+  it('gives the yearly rate on a USDC Hyperliquid borrow still inside the free 10000', () => {
+    const account = accountOf([asset('USDC', 'HYPERLIQUID', { equity: -5000, liability: 5000 })]);
+    const [usdc] = bucketsFrom(account, LIVE_RATES, {});
+    expect(usdc.interestPerDayUsd).toBe(0);
+    expect(cents((usdc.ratePerYear ?? 0) * 100)).toBe('5.00');
   });
 
   it('charges no interest on a USDC Hyperliquid borrow of 10000 or less', () => {
@@ -93,6 +118,7 @@ describe('bucketsFrom interest', () => {
     const other: RateLike[] = [{ coin: 'USDC', exchangeType: 'GATE', hourInterestRate: '0.5' }];
     const [usdc] = bucketsFrom(account, other, {});
     expect(usdc.interestPerDayUsd).toBe(0);
+    expect(usdc.ratePerYear).toBeNull();
   });
 
   it('reads the all-time interest paid by wallet key', () => {
@@ -116,6 +142,7 @@ describe('bucketsFrom interest', () => {
     const [lighter] = bucketsFrom(account, rates, {});
     expect(lighter.interestPerDayUsd).toBeCloseTo(500 * 0.0000125 * 24, 9);
     expect(cents(lighter.interestPerDayUsd)).toBe('0.15');
+    expect(cents((lighter.ratePerYear ?? 0) * 100)).toBe('10.95');
   });
 
   it('charges a USDT borrow from the first dollar at the USDT rate', () => {
@@ -314,7 +341,7 @@ describe('planFor Account A', () => {
   it('A convert sends one step and prices the Gate bucket sale in its cost', () => {
     expect(plan.routes.convert.steps).toHaveLength(1);
     expect(plan.routes.convert.steps[0]).toMatchObject({ round: null, kind: 'convert', buy: 0, move: 175.94, seconds: 0 });
-    expect(plan.routes.convert.costUsd).toBeCloseTo(0.36, 2);
+    expect(plan.routes.convert.costUsd).toBeCloseTo(0.38, 2);
   });
 });
 
@@ -371,7 +398,7 @@ describe('planFor Example C', () => {
     expect(plan.routes.convert.steps[0]).toMatchObject({ from: 'HYPERLIQUID', to: 'CROSSEX' });
     expect(plan.routes.mix).toBeNull();
     expect(plan.routes.loop).toBeNull();
-    expect(plan.routes.convert.costUsd).toBeCloseTo(0.04, 2);
+    expect(plan.routes.convert.costUsd).toBeCloseTo(0.05, 2);
   });
 });
 
@@ -393,7 +420,7 @@ describe('planFor Example D', () => {
     ]);
     expect(steps).toHaveLength(7);
     expect(steps[6]).toMatchObject({ kind: 'convert', round: null });
-    expect(steps[6].move).toBeCloseTo(7521.59, 2);
+    expect(steps[6].move).toBeCloseTo(7521.97, 2);
   });
 
   it('D saves nothing under the interest line', () => {
@@ -407,7 +434,7 @@ describe('planFor Example D', () => {
   it('D mix at the round cap has no one more round cost', () => {
     expect(plan.roundCap).toBe(6);
     expect(plan.routes.mix!.oneMoreRoundCostUsd).toBeNull();
-    expect(plan.routes.mix!.costUsd).toBeCloseTo(15.68, 2);
+    expect(plan.routes.mix!.costUsd).toBeCloseTo(16.43, 2);
     expect(plan.routes.mix!.marginFreedUsd).toBeCloseTo(1922.48, 2);
   });
 });
@@ -431,7 +458,7 @@ describe('planFor Example E', () => {
   it('E rounds move out of the Hyperliquid wallet less the 1.00 fee', () => {
     expect(plan.routes.mix!.steps[0]).toMatchObject({ from: 'HYPERLIQUID', to: 'CROSSEX' });
     expect(plan.routes.mix!.steps[0]).toMatchObject({ kind: 'round', buy: 0, move: 745.44, arrives: 744.44, seconds: 400 });
-    expect(plan.routes.mix!.costUsd).toBeCloseTo(2.04, 2);
+    expect(plan.routes.mix!.costUsd).toBeCloseTo(2.09, 2);
     expect(plan.routes.mix!.marginFreedUsd).toBeCloseTo(122.47, 2);
     expect(plan.recommended).toBe('mix');
   });
@@ -442,28 +469,28 @@ describe('planFor Spot loop row', () => {
     const plan = planOf({ usdt: 10038.19, gate: 0, usdc: 29676.27, positionIm: 35350 });
     expect(plan.routes.loop).toBeNull();
     expect(plan.routes.mix).toBeNull();
-    expect(plan.routes.convert).toMatchObject({ available: true, costUsd: 19.66 });
+    expect(plan.routes.convert).toMatchObject({ available: true, costUsd: 20.64 });
     expect(plan.recommended).toBe('convert');
   });
 
   it('toward USDC with rounds of 122, the loop stops at 6 rounds in 15 min and Converts the rest for less', () => {
     const plan = planOf({ usdt: 29676.27, gate: 0, usdc: 10038.19, positionIm: 35350 });
     expect(plan.routes.loop).toBeNull();
-    expect(plan.routes.mix).toMatchObject({ available: true, rounds: 6, seconds: 780, costUsd: 18.56 });
+    expect(plan.routes.mix).toMatchObject({ available: true, rounds: 6, seconds: 780, costUsd: 19.47 });
     expect(plan.routes.mix!.steps.at(-1)).toMatchObject({ kind: 'convert' });
-    expect(plan.routes.convert.costUsd).toBe(19.66);
+    expect(plan.routes.convert.costUsd).toBe(20.64);
     expect(plan.recommended).toBe('mix');
   });
 
   it.each([
-    { name: 'toward USDT hides the closed 20.43 row next to the 19.66 Convert', usdt: 10038.19, usdc: 29676.27, mix: null },
-    { name: 'toward USDC shows the closed 18.56 row with its reason', usdt: 29676.27, usdc: 10038.19, mix: 18.56 },
+    { name: 'toward USDT hides the closed row that costs more than the 20.64 Convert', usdt: 10038.19, usdc: 29676.27, mix: null },
+    { name: 'toward USDC shows the closed 19.47 row with its reason', usdt: 29676.27, usdc: 10038.19, mix: 19.47 },
   ])('with Gate spot closed, $name', (row) => {
     const plan = planOf({ usdt: row.usdt, gate: 0, usdc: row.usdc, positionIm: 35350 }, { ...OPEN, spotRule: { state: 'halted' } });
     expect(plan.routes.loop).toBeNull();
     if (row.mix === null) expect(plan.routes.mix).toBeNull();
     else expect(plan.routes.mix).toMatchObject({ available: false, reason: 'The spot market for USDC is closed.', costUsd: row.mix });
-    expect(plan.routes.convert).toMatchObject({ available: true, costUsd: 19.66 });
+    expect(plan.routes.convert).toMatchObject({ available: true, costUsd: 20.64 });
     expect(plan.recommended).toBe('convert');
   });
 
@@ -545,8 +572,8 @@ describe('planFor interest saved', () => {
     expect(walletIn(plan.routes.convert.after, 'USDC', 'HYPERLIQUID').equity).toBeGreaterThan(-10000);
     expect(plan.routes.convert.savesPerDayUsd).toBe(Number(cents(2000 * 0.00001 * 24)));
     const partial = planOf({ usdt: 1000, gate: 0, usdc: -13000, positionIm: 0 }).routes.convert;
-    expect(partial.steps).toEqual([expect.objectContaining({ move: 1000, arrives: 998 })]);
-    expect(partial.savesPerDayUsd).toBe(Number(cents((3000 - 2002) * 0.00001 * 24)));
+    expect(partial.steps).toEqual([expect.objectContaining({ move: 1000, arrives: 997.9 })]);
+    expect(partial.savesPerDayUsd).toBe(Number(cents((3000 - 2002.1) * 0.00001 * 24)));
   });
 });
 
@@ -663,7 +690,7 @@ describe('planFor loose Gate numbers', () => {
   it.each(['', '  ', 0, '0', 'n/a', -3])('a USDC minimum of %j falls back to 11 and never hangs the plan', (min) => {
     const plan = planOf(ACCOUNT_A_ROUND_3, { ...OPEN, coins: [{ ...USDC_RULE, minTransAmount: min }] });
     expect(plan.routes.loop).toBeNull();
-    expect(plan.routes.convert).toMatchObject({ available: true, costUsd: 0.21 });
+    expect(plan.routes.convert).toMatchObject({ available: true, costUsd: 0.22 });
     const rounds = planOf(ACCOUNT_A, { ...OPEN, coins: [{ ...USDC_RULE, minTransAmount: min }] }).routes.loop!.steps;
     expect(rounds.map((step) => step.move)).toEqual([24.51, 29.93, 36.58, 44.71, 40.16]);
   });
@@ -789,26 +816,26 @@ describe('planFor split by notional', () => {
     ]);
     expect(plan.routes.loop!.costUsd).toBe(2.03);
     expect(plan.routes.convert.steps).toEqual([
-      expect.objectContaining({ kind: 'convert', from: 'HYPERLIQUID', to: 'LIGHTER', move: 601.2, arrives: 598.79 }),
+      expect.objectContaining({ kind: 'convert', from: 'HYPERLIQUID', to: 'LIGHTER', move: 601.26, arrives: 598.73 }),
     ]);
-    expect(plan.routes.convert.costUsd).toBe(2.4);
+    expect(plan.routes.convert.costUsd).toBe(2.52);
     expect(plan.recommended).toBe('loop');
   });
 
-  it('a 400 Hyperliquid to Lighter move shows only Convert, because the 2.03 round costs more than 1.60', () => {
+  it('a 400 Hyperliquid to Lighter move shows only Convert, because the 2.03 round costs more than 1.68', () => {
     const plan = splitPlan(
       { usdt: 0, hyperliquid: 900, lighter: 100, positionIm: 200 },
       { 'USDC/HYPERLIQUID': 5000, 'USDC/LIGHTER': 5000 },
     );
     expect(plan.routes.loop).toBeNull();
     expect(plan.routes.mix).toBeNull();
-    expect(plan.routes.convert.costUsd).toBe(1.6);
+    expect(plan.routes.convert.costUsd).toBe(1.68);
     expect(plan.recommended).toBe('convert');
   });
 
   it.each([
-    { hyperliquid: 1116, convert: 2.03, loop: null, recommended: 'convert' },
-    { hyperliquid: 1117, convert: 2.04, loop: 2.03, recommended: 'loop' },
+    { hyperliquid: 1068, convert: 2.03, loop: null, recommended: 'convert' },
+    { hyperliquid: 1069, convert: 2.04, loop: 2.03, recommended: 'loop' },
   ])('a Spot loop that costs the same as Convert hides, and one cent less shows it (Hyperliquid $hyperliquid)', (row) => {
     const plan = splitPlan(
       { usdt: 0, hyperliquid: row.hyperliquid, lighter: 100, positionIm: 200 },
@@ -897,7 +924,7 @@ describe('planFor split by notional', () => {
     expect(plan.routes.convert).toMatchObject({ available: false, reason });
     expect(plan.recommended).toBeNull();
     expect(plan.balanced).toBe(false);
-    expect(plan.moves).toBe(529.52);
+    expect(plan.moves).toBe(529.57);
   });
 
   it('USDT cash under -1 keeps a Convert from Lighter to USDT open when nothing swaps between Hyperliquid and Lighter', () => {
@@ -947,5 +974,507 @@ describe('planFor split by notional', () => {
       { ...OPEN, spotRule: null, ask: null, bid: null, notional: { 'USDC/HYPERLIQUID': 5000, 'USDC/LIGHTER': 5000 } },
     );
     expect(plan.routes.loop).toMatchObject({ available: true, reason: null });
+  });
+});
+
+describe('spotOrderMax', () => {
+  it('caps one order at 4,896,572.39 USDC at ask 1.0007', () => {
+    expect(spotOrderMax(1.0007)).toBe(4896572.39);
+  });
+
+  it('caps one order at 4,757,281.55 USDC at price 1.03', () => {
+    expect(spotOrderMax(1.03)).toBe(4757281.55);
+  });
+
+  it('keeps the 4,900,000 ceiling at price 0.99', () => {
+    expect(SPOT_ORDER_MAX_USDC).toBe(4900000);
+    expect(spotOrderMax(0.99)).toBe(4900000);
+  });
+
+  it('caps one order at 3,920,000 under a CrossEx rule max of 4,000,000', () => {
+    expect(spotOrderMax(1, 4000000)).toBe(3920000);
+  });
+
+  it.each([NaN, 0, -1, Infinity])('counts price %s as 1', (price) => {
+    expect(spotOrderMax(price)).toBe(4900000);
+  });
+
+  it.each([null, undefined, NaN, 0, -5])('ignores a rule max of %s', (max) => {
+    expect(spotOrderMax(1, max)).toBe(4900000);
+  });
+});
+
+const SPREAD: PlanInputs = { ...OPEN, spotTakerRate: 0, ask: 1.0007, bid: 1.0006 };
+
+function scalePlan(f: Wallets3, notional: Record<string, number>, inputs: Partial<PlanInputs> = {}) {
+  const account = threeWallets(f);
+  return planFor(bucketsFrom(account, BOTH_RATES, {}), account, { ...SPREAD, ...inputs, notional });
+}
+
+const routesOf = (plan: EvenPlan): RoutePlan[] =>
+  [plan.routes.mix, plan.routes.loop, plan.routes.convert].filter((route): route is RoutePlan => route !== null);
+
+const roundsOf = (plan: EvenPlan): PlannedStep[] =>
+  routesOf(plan).flatMap((route) => route.steps.filter((step) => step.kind === 'round'));
+
+const movedBy = (route: RoutePlan): number => route.steps.reduce((total, step) => total + step.move, 0);
+
+describe('planFor at $6,000,000 keeps every Buy and Sell USDC under the order cap', () => {
+  const cap = spotOrderMax(1.0007);
+
+  it('S1: $6,000,000 USDT with every leg on Hyperliquid buys at most 4,896,572.39 a round and still ends even', () => {
+    const plan = scalePlan(
+      { usdt: 6_000_000, hyperliquid: 0, lighter: 0, positionIm: 600_000 },
+      { 'USDC/HYPERLIQUID': 6_000_000 },
+      { spotTakerRate: 0.001 },
+    );
+    const loop = plan.routes.loop!;
+    expect(plan.recommended).toBe('loop');
+    expect(loop.steps[0]).toMatchObject({ kind: 'round', buy: 4896572.39, move: 4896572.39 });
+    expect(loop.steps.filter((step) => step.kind === 'round').length).toBeGreaterThanOrEqual(2);
+    expect(loop.seconds).toBeLessThanOrEqual(900);
+    for (const step of roundsOf(plan)) {
+      expect(step.buy).toBeLessThanOrEqual(cap);
+      expect(step.move).toBeLessThanOrEqual(cap);
+    }
+    const usdt = walletIn(loop.after, 'USDT', 'CROSSEX');
+    expect(usdt.cash).toBeGreaterThanOrEqual(0);
+    expect(usdt.equity).toBeLessThan(DUST);
+    expect(walletIn(loop.after, 'USDC', 'HYPERLIQUID').equity).toBeGreaterThan(6_000_000 * (1 - 0.0018));
+    expect(plan.shortOfEven).toBe(0);
+  });
+
+  it('S2: $6,000,000 on Hyperliquid with every leg on Gate sells 4,896,572.39 then 1,103,427.60', () => {
+    const plan = scalePlan(
+      { usdt: 0, hyperliquid: 6_000_000, lighter: 0, positionIm: 600_000 },
+      { 'USDT/CROSSEX': 6_000_000 },
+      { spotTakerRate: 0.001 },
+    );
+    const loop = plan.routes.loop!;
+    expect(plan.recommended).toBe('loop');
+    expect(loop.steps.map((step) => [step.kind, step.buy, step.move])).toEqual([
+      ['round', 0, 4896572.39],
+      ['round', 0, 1103427.6],
+    ]);
+    expect(loop.seconds).toBe(800);
+    expect(walletIn(loop.after, 'USDC', 'HYPERLIQUID').equity).toBeLessThan(DUST);
+    expect(walletIn(loop.after, 'USDC', 'GATE').cash).toBe(0);
+    expect(plan.shortOfEven).toBe(0);
+  });
+
+  it('$6,000,000 of USDC · Gate cash moves to Hyperliquid in rounds of at most 4,896,572.39 and buys nothing', () => {
+    const plan = scalePlan(
+      { usdt: 0, hyperliquid: 0, lighter: 0, gate: 6_000_000, positionIm: 600_000 },
+      { 'USDC/HYPERLIQUID': 6_000_000 },
+    );
+    expect(plan.routes.loop!.steps.map((step) => [step.buy, step.move])).toEqual([
+      [0, 4896572.39],
+      [0, 1103427.6],
+    ]);
+    expect(walletIn(plan.routes.loop!.after, 'USDC', 'GATE').cash).toBeLessThan(DUST);
+  });
+
+  it('$6,000,000 of USDC · Gate cash sold next to a $1,000,000 Hyperliquid round costs what one sale would', () => {
+    const plan = scalePlan(
+      { usdt: 0, hyperliquid: 1_000_000, lighter: 0, gate: 6_000_000, positionIm: 700_000 },
+      { 'USDT/CROSSEX': 6_000_000 },
+      { ask: 1.0001, bid: 0.9999 },
+    );
+    const loop = plan.routes.loop!;
+    const sold = 999998.99 + 6_000_000;
+    expect(sold).toBeGreaterThan(spotOrderMax(1.0001));
+    expect(loop.steps).toEqual([expect.objectContaining({ kind: 'round', move: 999999.99, arrives: 999998.99 })]);
+    expect(loop.costUsd).toBe(Number(cents(HYPERLIQUID_WITHDRAW_FEE_USD + sold * 0.0001)));
+    expect(walletIn(loop.after, 'USDT', 'CROSSEX').cash).toBe(6999298.99);
+    expect(walletIn(loop.after, 'USDC', 'GATE').cash).toBe(0);
+  });
+
+  it('at price 1.03 no $6,000,000 round passes 4,757,281.55', () => {
+    const cap103 = spotOrderMax(1.03);
+    const prices = { ask: 1.03, bid: 1.0299 };
+    const buy = scalePlan({ usdt: 6_000_000, hyperliquid: 0, lighter: 0, positionIm: 600_000 }, { 'USDC/HYPERLIQUID': 6_000_000 }, prices);
+    const sell = scalePlan({ usdt: 0, hyperliquid: 6_000_000, lighter: 0, positionIm: 600_000 }, { 'USDT/CROSSEX': 6_000_000 }, prices);
+    for (const step of [...roundsOf(buy), ...roundsOf(sell)]) {
+      expect(step.buy).toBeLessThanOrEqual(cap103);
+      expect(step.move).toBeLessThanOrEqual(cap103);
+    }
+    expect(buy.recommended).toBe('loop');
+    expect(sell.routes.loop!.steps.map((step) => step.move)).toEqual([4757281.55, 1242718.44]);
+  });
+
+  it('a CrossEx rule max of 4,000,000 caps each $6,000,000 round at 3,920,000', () => {
+    const plan = scalePlan(
+      { usdt: 0, hyperliquid: 6_000_000, lighter: 0, positionIm: 600_000 },
+      { 'USDT/CROSSEX': 6_000_000 },
+      { spotRule: { state: 'live', maxMarketSize: '4000000' } },
+    );
+    expect(plan.routes.loop!.steps.map((step) => step.move)).toEqual([3920000, 2079999.99]);
+  });
+
+  it.each([
+    { hyperliquid: 4_900_000.01, shown: 'loop', kinds: ['round'] },
+    { hyperliquid: 4_900_000.02, shown: 'loop', kinds: ['round'] },
+    { hyperliquid: 4_900_000.5, shown: 'mix', kinds: ['round', 'convert'] },
+  ])('$hyperliquid on Hyperliquid at price 1 shows the $shown row with no round over 4,900,000', (row) => {
+    const plan = scalePlan(
+      { usdt: 0, hyperliquid: row.hyperliquid, lighter: 0, positionIm: 0 },
+      { 'USDT/CROSSEX': 1 },
+      { ask: 1, bid: 1 },
+    );
+    const route = row.shown === 'mix' ? plan.routes.mix! : plan.routes.loop!;
+    expect(route.steps.map((step) => step.kind)).toEqual(row.kinds);
+    for (const step of roundsOf(plan)) expect(step.move).toBeLessThanOrEqual(SPOT_ORDER_MAX_USDC);
+    expect(route.steps[0].move).toBeGreaterThanOrEqual(4_899_999.99);
+    expect(movedBy(route)).toBeCloseTo(plan.moves, 2);
+    expect(plan.moves).toBeGreaterThanOrEqual(row.hyperliquid - 0.03);
+  });
+});
+
+describe('planFor never plans a Buy USDC with more USDT than the wallet holds', () => {
+  it('$6,000,000 USDT with no USDT legs and upnl 0 ends at USDT cash and equity of 0 to 1', () => {
+    const plan = scalePlan({ usdt: 6_000_000, hyperliquid: 0, lighter: 0, positionIm: 600_000 }, { 'USDC/HYPERLIQUID': 6_000_000 });
+    for (const route of routesOf(plan)) {
+      const usdt = walletIn(route.after, 'USDT', 'CROSSEX');
+      expect(usdt.cash).toBeGreaterThanOrEqual(0);
+      expect(usdt.equity).toBeGreaterThanOrEqual(0);
+      expect(usdt.equity).toBeLessThan(DUST);
+    }
+    expect(walletIn(plan.routes.loop!.after, 'USDC', 'HYPERLIQUID').equity).toBe(5995802.82);
+  });
+
+  it('$5,000,000 USDT cash with 1,000,000 upnl ends at USDT cash 0, not -3,500', () => {
+    const plan = scalePlan(
+      { usdt: 5_000_000, usdtUpnl: 1_000_000, hyperliquid: 1_000_000, lighter: 0, positionIm: 600_000 },
+      { 'USDC/HYPERLIQUID': 6_000_000, 'USDT/CROSSEX': 60_000 },
+    );
+    for (const route of routesOf(plan)) {
+      expect(walletIn(route.after, 'USDT', 'CROSSEX').cash).toBeGreaterThanOrEqual(0);
+      for (const step of route.steps) expect(step.buy).toBeLessThanOrEqual(spotOrderMax(1.0007));
+    }
+    const usdt = walletIn(plan.routes.loop!.after, 'USDT', 'CROSSEX');
+    expect(usdt.cash).toBeLessThan(DUST);
+    expect(usdt.equity).toBeGreaterThanOrEqual(1_000_000 - DUST);
+  });
+});
+
+const RUNGS = [50, 5_000, 100_000, 1_000_000, 6_000_000];
+const HAIR = 0.000001;
+const KEPT = 1 - CONVERT_RATE;
+
+interface Prices {
+  ask: number;
+  bid: number;
+}
+
+function convertKept(step: Pick<PlannedStep, 'from' | 'to'>, prices: Prices): number {
+  if (step.from === 'CROSSEX') return KEPT / prices.ask;
+  if (step.to === 'CROSSEX') return KEPT * prices.bid;
+  return (KEPT * KEPT * prices.bid) / prices.ask;
+}
+
+const convertCostOf = (step: PlannedStep, prices: Prices): number =>
+  step.move - step.move * convertKept(step, { ask: Math.max(1, prices.ask), bid: Math.min(1, prices.bid) });
+
+function expectedCost(route: RoutePlan): number {
+  return route.steps.reduce((total, step) => {
+    if (step.kind === 'convert') return total + convertCostOf(step, { ask: SPREAD.ask!, bid: SPREAD.bid! });
+    if (step.from === 'CROSSEX') return total + step.buy * (SPREAD.ask! - 1) + HYPERLIQUID_DEPOSIT_FEE_USD;
+    return total + step.arrives * Math.max(0, 1 - SPREAD.bid!) + HYPERLIQUID_WITHDRAW_FEE_USD;
+  }, 0);
+}
+
+interface LadderCase {
+  name: string;
+  cash: number;
+  wallets: { usdt: number; hyperliquid: number };
+  notional: Record<string, number>;
+}
+
+describe('planFor size ladder at ask 1.0007, bid 1.0006 and spot taker 0', () => {
+  const cases = RUNGS.flatMap((rung) => [rung, rung - HAIR]).flatMap((cash): LadderCase[] => [
+    {
+      name: `toward USDC with ${cash} USDT`,
+      cash,
+      wallets: { usdt: cash, hyperliquid: 0 },
+      notional: { 'USDC/HYPERLIQUID': cash },
+    },
+    {
+      name: `toward USDT with ${cash} USDC on Hyperliquid`,
+      cash,
+      wallets: { usdt: 0, hyperliquid: cash },
+      notional: { 'USDT/CROSSEX': cash },
+    },
+  ]);
+
+  it.each(cases)('$name', (row) => {
+    const plan = scalePlan({ ...row.wallets, lighter: 0, positionIm: row.cash / 10 }, row.notional);
+    const cap = spotOrderMax(1.0007);
+    expect(plan.balanced).toBe(false);
+    for (const route of routesOf(plan)) {
+      expect(movedBy(route)).toBeLessThanOrEqual(row.cash);
+      for (const step of route.steps) {
+        expect(step.move).toBeLessThanOrEqual(row.cash);
+        if (step.kind !== 'round') continue;
+        expect(step.buy).toBeLessThanOrEqual(cap);
+        expect(step.move).toBeLessThanOrEqual(cap);
+      }
+      const usdt = walletIn(route.after, 'USDT', 'CROSSEX');
+      expect(usdt.cash).toBeGreaterThanOrEqual(0);
+      expect(usdt.equity).toBeGreaterThanOrEqual(0);
+      const expected = expectedCost(route);
+      expect(Math.abs(route.costUsd - expected)).toBeLessThanOrEqual(Math.max(0.005 * expected, 0.01));
+    }
+    const convert = plan.routes.convert;
+    expect(convert.steps).toHaveLength(1);
+    expect(Math.abs(convert.costUsd - convertCostOf(convert.steps[0], { ask: SPREAD.ask!, bid: SPREAD.bid! }))).toBeLessThanOrEqual(0.01);
+  });
+});
+
+describe('planFor solve time on a large Lighter wallet', () => {
+  function lighterBook(usdt: number, lighter: number, free: number, spotTakerRate: number) {
+    const marginBalance = usdt + lighter;
+    const account: AccountLike = {
+      availableMargin: '0',
+      marginBalance: String(marginBalance),
+      initialMargin: String((marginBalance - free) / 1.12),
+      assets: [
+        asset('USDT', 'CROSSEX', { balance: usdt, equity: usdt }),
+        asset('USDC', 'LIGHTER', { balance: lighter, equity: lighter }),
+      ],
+    };
+    const notional = { 'USDT/CROSSEX': 30_000_000, 'USDC/LIGHTER': 30_000_000 };
+    const started = performance.now();
+    const plan = planFor(bucketsFrom(account, [], {}), account, { ...SPREAD, spotTakerRate, notional });
+    return { plan, ms: performance.now() - started };
+  }
+
+  it.each([
+    { name: '$6,000,000 at free margin 12 and spot taker 0.0002', usdt: 2_000_000, lighter: 6_000_000, taker: 0.0002 },
+    { name: '$3,000,000 at free margin 12 and spot taker 0', usdt: 1_000_000, lighter: 3_000_000, taker: 0 },
+  ])('plans $name in under 250 ms', (row) => {
+    const { plan, ms } = lighterBook(row.usdt, row.lighter, 12, row.taker);
+    expect(ms).toBeLessThan(250);
+    expect(plan.balanced).toBe(false);
+    for (const route of routesOf(plan)) expect(route.seconds).toBeLessThanOrEqual(900);
+  });
+});
+
+const BOOK_READ = bookLevels(
+  JSON.parse(readFileSync(path.resolve(__dirname, '../fixtures/gate/spot-order-book-usdc-usdt.json'), 'utf8')),
+);
+const TOP = { ask: 1.0008, bid: 1.0007 };
+const DEPTH = { ...TOP, ...BOOK_READ };
+const BOOKED: Partial<PlanInputs> = { ...TOP, ...BOOK_READ };
+
+const WALKS: [number, number, number][] = [
+  [50, 50.04, 50.035],
+  [5_000, 5_004, 5_003.5],
+  [100_000, 100_080, 100_070],
+  [1_000_000, 1_000_800, 1_000_650.36],
+  [4_900_000, 4_904_935.4237, 4_901_987.1879],
+  [6_000_000, 6_006_365.4237, 6_002_207.1879],
+];
+
+describe('buyCostUsdt and sellProceedsUsdt on the Gate USDC_USDT book read at 2026-09-16T18:37:43Z', () => {
+  it.each(WALKS.flatMap(([usdc, buy, sell]) => [[usdc, buy, sell], [usdc - HAIR, buy, sell]]))(
+    'a market order of %d USDC buys for %d USDT and sells for %d USDT',
+    (usdc, buy, sell) => {
+      expect(Math.abs(buyCostUsdt(usdc, DEPTH) - buy)).toBeLessThanOrEqual(0.01);
+      expect(Math.abs(sellProceedsUsdt(usdc, DEPTH) - sell)).toBeLessThanOrEqual(0.01);
+    },
+  );
+
+  it.each([100_000, 1_000_000])('a Buy of %d USDC pays the top ask on every unit', (usdc) => {
+    expect(buyCostUsdt(usdc, DEPTH)).toBeCloseTo(usdc * TOP.ask, 6);
+  });
+
+  it('a Sell of 100,000 USDC gets the top bid on every unit, and 1,000,000 gets 49.64 less because the top bid holds 805,796.27', () => {
+    expect(sellProceedsUsdt(100_000, DEPTH)).toBeCloseTo(100_000 * TOP.bid, 6);
+    expect(1_000_000 * TOP.bid - sellProceedsUsdt(1_000_000, DEPTH)).toBeCloseTo(49.64, 2);
+  });
+
+  it('a Buy past the first ask level of 2,532,008.17 pays 1.0009 for the part past it', () => {
+    const level = 2_532_008.17;
+    expect(buyCostUsdt(level - HAIR, DEPTH)).toBeCloseTo((level - HAIR) * TOP.ask, 6);
+    expect(buyCostUsdt(level, DEPTH)).toBeCloseTo(level * TOP.ask, 6);
+    expect(buyCostUsdt(level + 0.01, DEPTH) - buyCostUsdt(level, DEPTH)).toBeCloseTo(0.01 * 1.0009, 6);
+  });
+
+  it.each(RUNGS.flatMap((rung) => [rung, rung - HAIR]))('buyableUsdc gives back %d USDC from its walked cost', (usdc) => {
+    expect(Math.abs(buyableUsdc(buyCostUsdt(usdc, DEPTH), DEPTH) - usdc)).toBeLessThanOrEqual(0.000001);
+  });
+
+  it('with no levels a 6,000,000 order is priced at the top price alone', () => {
+    const empty = { ...TOP, asks: [], bids: [] };
+    expect(buyCostUsdt(6_000_000, empty)).toBe(6_000_000 * TOP.ask);
+    expect(sellProceedsUsdt(6_000_000, empty)).toBe(6_000_000 * TOP.bid);
+    expect(buyableUsdc(6_000_000, empty)).toBe(6_000_000 / TOP.ask);
+  });
+
+  it('a book that holds 3,000,000 prices the rest of a 6,000,000 order at its last level and flags the plan', () => {
+    const thin: { asks: BookLevel[]; bids: BookLevel[] } = {
+      asks: [[1.0008, 1_000_000], [1.001, 2_000_000]],
+      bids: [[1.0007, 1_000_000], [1.0005, 2_000_000]],
+    };
+    expect(buyCostUsdt(6_000_000, { ...TOP, asks: thin.asks })).toBeCloseTo(1_000_800 + 5_005_000, 6);
+    expect(sellProceedsUsdt(6_000_000, { ...TOP, bids: thin.bids })).toBeCloseTo(1_000_700 + 5_002_500, 6);
+    expect(buyableUsdc(1_000_800 + 5_005_000, { ...TOP, asks: thin.asks })).toBeCloseTo(6_000_000, 6);
+    const whale = { usdt: 6_000_000, hyperliquid: 0, lighter: 0, positionIm: 600_000 };
+    const buys = scalePlan(whale, { 'USDC/HYPERLIQUID': 6_000_000 }, { ...TOP, ...thin });
+    const sells = scalePlan({ ...whale, usdt: 0, hyperliquid: 6_000_000 }, { 'USDT/CROSSEX': 6_000_000 }, { ...TOP, ...thin });
+    expect(buys.routes.loop!.beyondBook).toBe(true);
+    expect(sells.routes.loop!.beyondBook).toBe(true);
+    expect(scalePlan(whale, { 'USDC/HYPERLIQUID': 6_000_000 }, BOOKED).routes.loop!.beyondBook).toBe(false);
+  });
+
+  it('bookLevels keeps only levels with a positive price and size', () => {
+    const levels = bookLevels({ asks: [['1.0008', '5'], ['x', '1'], ['1.0009', '-1'], 'bad', ['1.001', '2']], bids: 'none' });
+    expect(levels).toEqual({ asks: [[1.0008, 5], [1.001, 2]], bids: [] });
+    expect(bookLevels(null)).toEqual({ asks: [], bids: [] });
+  });
+});
+
+describe('planFor with no book levels is the plan priced at the top price', () => {
+  const noBook = { asks: [], bids: [] };
+  it.each([ACCOUNT_A, ACCOUNT_A_ROUND_3, ACCOUNT_B, EXAMPLE_C, EXAMPLE_D, EXAMPLE_E, THIN_MARGIN])('book %#', (f) => {
+    const plan = planOf(f, OPEN);
+    expect(planOf(f, { ...OPEN, ...noBook })).toEqual(plan);
+    for (const route of routesOf(plan)) expect(route.beyondBook).toBe(false);
+  });
+
+  it.each<{ usdt: number; hyperliquid: number; notional: Record<string, number> }>([
+    { usdt: 6_000_000, hyperliquid: 0, notional: { 'USDC/HYPERLIQUID': 6_000_000 } },
+    { usdt: 0, hyperliquid: 6_000_000, notional: { 'USDT/CROSSEX': 6_000_000 } },
+  ])('the $6,000,000 book with $usdt USDT and $hyperliquid on Hyperliquid', (row) => {
+    const wallets = { usdt: row.usdt, hyperliquid: row.hyperliquid, lighter: 0, positionIm: 600_000 };
+    expect(scalePlan(wallets, row.notional, noBook)).toEqual(scalePlan(wallets, row.notional));
+  });
+});
+
+describe('planFor at $6,000,000 prices each round from the book', () => {
+  const whale = { usdt: 6_000_000, hyperliquid: 0, lighter: 0, positionIm: 600_000 };
+  const roundSteps = (route: RoutePlan) => route.steps.filter((step) => step.kind === 'round');
+  const convertCost = (route: RoutePlan) =>
+    route.steps.filter((step) => step.kind === 'convert').reduce((total, step) => total + convertCostOf(step, TOP), 0);
+
+  it('S1: a $6,000,000 Spot loop out of USDT costs the top-price cost plus the walked extra of each Buy', () => {
+    const plan = scalePlan(whale, { 'USDC/HYPERLIQUID': 6_000_000 }, BOOKED);
+    const loop = plan.routes.loop!;
+    const buys = roundSteps(loop).map((step) => step.buy);
+    const extra = buys.reduce((total, buy) => total + buyCostUsdt(buy, DEPTH) - buy * TOP.ask, 0);
+    const topCost = buys.reduce((total, buy) => total + HYPERLIQUID_DEPOSIT_FEE_USD + buy * (TOP.ask - 1), convertCost(loop));
+    expect(plan.recommended).toBe('loop');
+    expect(buys[0]).toBe(spotOrderMax(TOP.ask));
+    expect(extra).toBeGreaterThan(1_000);
+    expect(Math.abs(loop.costUsd - topCost - extra)).toBeLessThanOrEqual(1);
+    expect(loop.costUsd).toBeGreaterThan(scalePlan(whale, { 'USDC/HYPERLIQUID': 6_000_000 }, TOP).routes.loop!.costUsd + 1_000);
+  });
+
+  it('S1: every planned Buy walked through the book costs no more than the USDT cash', () => {
+    const plan = scalePlan(whale, { 'USDC/HYPERLIQUID': 6_000_000 }, { ...BOOKED, spotTakerRate: 0.001 });
+    for (const route of routesOf(plan)) {
+      const spent = roundSteps(route).reduce((total, step) => total + buyCostUsdt(step.buy, DEPTH) * 1.001, 0);
+      expect(spent).toBeLessThanOrEqual(6_000_000);
+      expect(walletIn(route.after, 'USDT', 'CROSSEX').cash).toBeGreaterThanOrEqual(0);
+    }
+    expect(roundSteps(plan.routes.loop!).length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('S2: a $6,000,000 Spot loop into USDT costs the top-price cost plus the walked shortfall of each Sell', () => {
+    const plan = scalePlan({ ...whale, usdt: 0, hyperliquid: 6_000_000 }, { 'USDT/CROSSEX': 6_000_000 }, BOOKED);
+    const loop = plan.routes.loop!;
+    const sold = roundSteps(loop).map((step) => step.arrives);
+    const extra = sold.reduce((total, usdc) => total + usdc * TOP.bid - sellProceedsUsdt(usdc, DEPTH), 0);
+    const topCost = sold.length * HYPERLIQUID_WITHDRAW_FEE_USD + convertCost(loop);
+    expect(plan.recommended).toBe('loop');
+    expect(extra).toBeGreaterThan(1_000);
+    expect(Math.abs(loop.costUsd - topCost - extra)).toBeLessThanOrEqual(1);
+    expect(walletIn(loop.after, 'USDC', 'HYPERLIQUID').equity).toBeLessThan(DUST);
+  });
+});
+
+const LIVE_TICKER: Prices = { ask: 1.0009, bid: 1.0008 };
+const LADDER = RUNGS.flatMap((rung) => [rung, rung - HAIR]);
+type ConvertMove = { from: 'CROSSEX' | 'HYPERLIQUID'; to: 'CROSSEX' | 'HYPERLIQUID' | 'LIGHTER' };
+
+function convertRoute(size: number, move: ConvertMove, prices: Partial<PlanInputs>): RoutePlan {
+  const wallets = { usdt: move.from === 'CROSSEX' ? size : 0, hyperliquid: move.from === 'HYPERLIQUID' ? size : 0, lighter: 0 };
+  const notional = { [move.to === 'CROSSEX' ? 'USDT/CROSSEX' : `USDC/${move.to}`]: size };
+  return scalePlan({ ...wallets, positionIm: size / 10 }, notional, prices).routes.convert;
+}
+
+function onlyConvert(route: RoutePlan): PlannedStep {
+  expect(route.steps).toHaveLength(1);
+  expect(route.steps[0].kind).toBe('convert');
+  return route.steps[0];
+}
+
+const HALF_CENT = 0.005 + 1e-6;
+
+describe('planFor prices a Convert from the Gate spot price', () => {
+  const toUsdc: ConvertMove = { from: 'CROSSEX', to: 'HYPERLIQUID' };
+  const toUsdt: ConvertMove = { from: 'HYPERLIQUID', to: 'CROSSEX' };
+  const halves: ConvertMove = { from: 'HYPERLIQUID', to: 'LIGHTER' };
+
+  it.each(LADDER)('a Convert of %d USDT toward USDC at ask 1.0009 arrives at size x 0.998 / 1.0009 and costs the rest', (size) => {
+    const route = convertRoute(size, toUsdc, LIVE_TICKER);
+    const step = onlyConvert(route);
+    const arrives = (step.move * KEPT) / 1.0009;
+    expect(Math.abs(step.arrives - arrives)).toBeLessThan(0.01);
+    expect(Math.abs(route.costUsd - (step.move - arrives))).toBeLessThanOrEqual(HALF_CENT);
+    expect(walletIn(route.after, 'USDC', 'HYPERLIQUID').equity).toBe(step.arrives);
+  });
+
+  it.each(LADDER)('a Convert of %d USDC toward USDT at bid 1.0008 arrives at size x 0.998 x 1.0008 and costs only the Convert fee', (size) => {
+    const route = convertRoute(size, toUsdt, LIVE_TICKER);
+    const step = onlyConvert(route);
+    expect(Math.abs(step.arrives - step.move * KEPT * 1.0008)).toBeLessThan(0.01);
+    expect(Math.abs(route.costUsd - step.move * CONVERT_RATE)).toBeLessThanOrEqual(HALF_CENT);
+    expect(walletIn(route.after, 'USDT', 'CROSSEX').equity).toBe(step.arrives);
+  });
+
+  it.each(LADDER)('a Convert of %d USDC toward USDT at bid 0.999 costs size minus size x 0.998 x 0.999', (size) => {
+    const route = convertRoute(size, toUsdt, { ask: 1.0001, bid: 0.999 });
+    const step = onlyConvert(route);
+    const arrives = step.move * KEPT * 0.999;
+    expect(Math.abs(step.arrives - arrives)).toBeLessThan(0.01);
+    expect(Math.abs(route.costUsd - (step.move - arrives))).toBeLessThanOrEqual(HALF_CENT);
+  });
+
+  it.each(LADDER)('a Convert of %d USDC from Hyperliquid to Lighter at bid 1.0008 and ask 1.0009 prices both halves', (size) => {
+    const route = convertRoute(size, halves, LIVE_TICKER);
+    const step = onlyConvert(route);
+    expect(step).toMatchObject({ from: 'HYPERLIQUID', to: 'LIGHTER' });
+    expect(Math.abs(step.arrives - (step.move * KEPT * KEPT * 1.0008) / 1.0009)).toBeLessThan(0.01);
+    expect(Math.abs(route.costUsd - (step.move - (step.move * KEPT * KEPT) / 1.0009))).toBeLessThanOrEqual(HALF_CENT);
+    expect(walletIn(route.after, 'USDC', 'LIGHTER').equity).toBe(step.arrives);
+  });
+
+  it.each([toUsdc, toUsdt, halves].flatMap((move) => LADDER.map((size) => ({ ...move, size }))))(
+    'a Convert of $size from $from to $to with no ticker, or a ticker at 1, keeps the old numbers',
+    ({ from, to, size }) => {
+      const atOne = convertRoute(size, { from, to }, { ask: 1, bid: 1 });
+      for (const ticker of [{ ask: null, bid: null }, { ask: NaN, bid: NaN }, { ask: 0, bid: -5 }, { ask: Infinity, bid: Infinity }]) {
+        expect(convertRoute(size, { from, to }, ticker)).toEqual(atOne);
+      }
+      const step = onlyConvert(atOne);
+      const touchesUsdt = from === 'CROSSEX' || to === 'CROSSEX';
+      const kept = touchesUsdt ? KEPT : KEPT ** 2;
+      expect(step.arrives).toBe(floorCents(step.move * kept));
+      expect(atOne.costUsd).toBe(nearestCents(touchesUsdt ? step.move * CONVERT_RATE : step.move - step.move * kept));
+    },
+  );
+
+  it('at ask 1.0009 a Hyperliquid to Lighter move of 480.98 picks the 2.03 loop over the 2.35 Convert, where a ticker at 1 picked the 1.92 Convert', () => {
+    const wallets = { usdt: 0, hyperliquid: 1060, lighter: 100, positionIm: 200 };
+    const notional = { 'USDC/HYPERLIQUID': 5000, 'USDC/LIGHTER': 5000 };
+    const atOne = scalePlan(wallets, notional, { ask: 1, bid: 1 });
+    const live = scalePlan(wallets, notional, LIVE_TICKER);
+    expect(atOne.routes.convert).toMatchObject({ costUsd: 1.92, steps: [expect.objectContaining({ move: 480.96 })] });
+    expect(atOne.routes.loop).toBeNull();
+    expect(atOne.recommended).toBe('convert');
+    expect(live.routes.convert).toMatchObject({ costUsd: 2.35, steps: [expect.objectContaining({ move: 480.98 })] });
+    expect(live.routes.loop).toMatchObject({ available: true, costUsd: 2.03 });
+    expect(live.recommended).toBe('loop');
   });
 });
