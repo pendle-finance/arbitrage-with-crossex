@@ -73,32 +73,43 @@ function borosBodies(): Record<string, unknown> {
         },
       ],
     },
-    '/core/v1/pnl/transactions': {
+    // The fill feed is per (marketAcc, marketId); the stub keys on the
+    // marketId query param, so the bare path is the empty default for every
+    // market the account touched but this book does not model.
+    '/apis/v1/accounts/position-update-events': { results: [], resumeToken: null },
+    '/apis/v1/accounts/position-update-events?marketId=155': {
       results: [
         {
           marketId: 155,
-          time: NOW - 12 * DAY,
+          timestamp: NOW - 12 * DAY,
           fee: raw(390),
           pnl: raw(-390),
           prevPositionS: '0',
           postPositionS: raw(-1_000_000),
-          fixedApr: 0.08,
+          tradeRate: 0.08,
         },
+      ],
+      resumeToken: null,
+    },
+    '/apis/v1/accounts/position-update-events?marketId=158': {
+      results: [
         {
           marketId: 158,
-          time: NOW - 12 * DAY,
+          timestamp: NOW - 12 * DAY,
           fee: raw(300),
           pnl: raw(-300),
           prevPositionS: '0',
           postPositionS: raw(1_000_000),
         },
       ],
-      total: 2,
-      skip: 0,
+      resumeToken: null,
     },
+    // Doubles as the fill feed's market enumerator: every row carries the
+    // (marketAcc, marketId) pair the feed is keyed by.
     '/apis/v1/accounts/settlement-events': {
       results: [
         {
+          marketAcc: CROSS_USDT,
           marketId: 155,
           timestamp: NOW - 2 * DAY,
           positionSize: raw(1_000_000),
@@ -107,6 +118,7 @@ function borosBodies(): Record<string, unknown> {
           settlementRate: 0.07,
         },
         {
+          marketAcc: CROSS_USDT,
           marketId: 155,
           timestamp: NOW - 10 * DAY,
           positionSize: raw(1_000_000),
@@ -115,6 +127,7 @@ function borosBodies(): Record<string, unknown> {
           settlementRate: 0.07,
         },
         {
+          marketAcc: CROSS_USDT,
           marketId: 158,
           timestamp: NOW - 2 * DAY,
           positionSize: raw(1_000_000),
@@ -360,6 +373,7 @@ describe('GET /api/asset-view/:address', () => {
   it('resolves a MATURED (delisted) market by id so its history keeps its asset', async () => {
     const bodies = borosBodies();
     (bodies['/apis/v1/accounts/settlement-events'] as { results: unknown[] }).results.push({
+      marketAcc: CROSS_USDT,
       marketId: 42,
       timestamp: NOW - DAY,
       positionSize: raw(500),
@@ -400,6 +414,7 @@ describe('GET /api/asset-view/:address', () => {
   it('excludes history rows on unlisted markets and says so', async () => {
     const bodies = borosBodies();
     (bodies['/apis/v1/accounts/settlement-events'] as { results: unknown[] }).results.push({
+      marketAcc: CROSS_USDT,
       marketId: 999,
       timestamp: NOW - DAY,
       positionSize: raw(500),

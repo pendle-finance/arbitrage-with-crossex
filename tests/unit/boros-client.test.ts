@@ -20,6 +20,8 @@ beforeEach(() => setClientTagContext({ version: null, active: false }));
 afterEach(() => setClientTagContext({ version: null, active: false }));
 
 const ADDR = '0x' + 'ab'.repeat(20);
+/** This account's cross USDT (tokenId 3) handle — the fill feed's key. */
+const MARKET_ACC = ADDR + '000003ffffff';
 
 function stub(handler: (url: URL) => { status?: number; body?: unknown }): FetchLike {
   return async (url: string) => {
@@ -242,59 +244,57 @@ describe('fetchBorosOrderBook', () => {
 });
 
 describe('fetchBorosTransactions pagination', () => {
-  const txn = (marketId: number, time: number) => ({
+  const txn = (marketId: number, timestamp: number) => ({
     marketId,
-    time,
+    timestamp,
     fee: '1',
     pnl: '-1',
     prevPositionS: '0',
     postPositionS: '1',
   });
 
-  it('walks skip/limit pages until total is exhausted and concatenates in order', async () => {
-    // 3 pages: 200 + 200 + 50 = 450 txns.
-    const TOTAL = 450;
-    const all = Array.from({ length: TOTAL }, (_, i) => txn(100 + i, 1_700_000_000 + i));
-    const requestedSkips: number[] = [];
-    const { txns } = await fetchBorosTransactions(
+  it('walks resumeToken pages until the feed is exhausted and concatenates in order', async () => {
+    const pages = [
+      { results: [txn(100, 1), txn(101, 2)], resumeToken: 'p2' },
+      { results: [txn(102, 3)], resumeToken: null },
+    ];
+    const tokens: Array<string | null> = [];
+    const { txns, complete } = await fetchBorosTransactions(
       stub((url) => {
-        const skip = Number(url.searchParams.get('skip'));
-        const limit = Number(url.searchParams.get('limit'));
-        requestedSkips.push(skip);
-        return { body: { results: all.slice(skip, skip + limit), total: TOTAL } };
+        tokens.push(url.searchParams.get('resumeToken'));
+        return { body: pages[tokens.length - 1] };
       }),
-      ADDR,
-      3,
+      MARKET_ACC,
+      155,
     );
-    expect(requestedSkips).toEqual([0, 200, 400]);
-    expect(txns).toHaveLength(TOTAL);
-    expect(txns[0].marketId).toBe(100);
-    expect(txns[TOTAL - 1].marketId).toBe(100 + TOTAL - 1);
+    expect(tokens).toEqual([null, 'p2']);
+    expect(txns.map((t) => t.marketId)).toEqual([100, 101, 102]);
+    expect(complete).toBe(true);
   });
 
-  it('stops after one page when total fits in the first fetch', async () => {
+  it('stops after one page when the feed returns no resumeToken', async () => {
     let calls = 0;
     const { txns } = await fetchBorosTransactions(
       stub(() => {
         calls += 1;
-        return { body: { results: [txn(1, 1)], total: 1 } };
+        return { body: { results: [txn(1, 1)], resumeToken: null } };
       }),
-      ADDR,
-      3,
+      MARKET_ACC,
+      155,
     );
     expect(calls).toBe(1);
     expect(txns).toHaveLength(1);
   });
 
-  it('stops on an empty page even if total lies, and caps runaway pagination', async () => {
+  it('stops on an empty page even if the feed still offers a resumeToken', async () => {
     let calls = 0;
     const { txns } = await fetchBorosTransactions(
       stub(() => {
         calls += 1;
-        return { body: { results: [], total: 999_999 } }; // server bug: total never reachable
+        return { body: { results: [], resumeToken: 'never-ending' } };
       }),
-      ADDR,
-      3,
+      MARKET_ACC,
+      155,
     );
     expect(calls).toBe(1); // empty page short-circuits
     expect(txns).toHaveLength(0);
@@ -302,38 +302,60 @@ describe('fetchBorosTransactions pagination', () => {
 
   it('throws (never caches "no history") when results[] is missing', async () => {
     await expect(
-      fetchBorosTransactions(stub(() => ({ body: { total: 10 } })), ADDR, 3),
+      fetchBorosTransactions(stub(() => ({ body: { resumeToken: null } })), MARKET_ACC, 155),
     ).rejects.toMatchObject({ name: 'CoreError', category: 'network' });
   });
 
-  it('reports coverage: complete when it reaches the venue count', async () => {
+  it('reports coverage: complete when the feed is exhausted', async () => {
     const { complete } = await fetchBorosTransactions(
-      stub(() => ({ body: { results: [txn(1, 1)], total: 1 } })),
-      ADDR,
-      3,
+      stub(() => ({ body: { results: [txn(1, 1)], resumeToken: null } })),
+      MARKET_ACC,
+      155,
     );
     expect(complete).toBe(true);
   });
 
   it('reports coverage: INCOMPLETE when the page cap cuts it short', async () => {
-    // 25 pages × 200 is the runaway guard. An account past it used to get a
-    // silently truncated history — and truncation fakes absence, which is what
-    // any "no counterpart nearby, so it was placed alone" reasoning rests on.
-    const { txns, complete } = await fetchBorosTransactions(
-      stub((url) => {
-        const skip = Number(url.searchParams.get('skip'));
-        return {
-          body: {
-            results: Array.from({ length: 200 }, (_, i) => txn(skip + i, 1_700_000_000 + skip + i)),
-            total: 1_000_000,
-          },
-        };
+    // An account past the guard used to get a silently truncated history —
+    // and truncation fakes absence, which is what any "no counterpart nearby,
+    // so it was placed alone" reasoning rests on.
+    let calls = 0;
+    const { complete } = await fetchBorosTransactions(
+      stub(() => {
+        calls += 1;
+        return { body: { results: [txn(calls, calls)], resumeToken: `page-${calls}` } };
       }),
-      ADDR,
-      3,
+      MARKET_ACC,
+      155,
     );
+    expect(calls).toBe(3);
     expect(complete).toBe(false);
-    expect(txns).toHaveLength(25 * 200);
+  });
+
+  it("maps the feed's own field names, and entryApr only on a reducing fill", async () => {
+    const { txns } = await fetchBorosTransactions(
+      stub(() => ({
+        body: {
+          results: [
+            // Open from flat: prevPositionF rides along but means nothing yet.
+            { marketId: 7, timestamp: 100, fee: '1', pnl: '-1', tradeRate: 0.09,
+              prevPositionS: '0', postPositionS: '5', prevPositionF: '0' },
+            // Reduces without flipping — the venue's own entry rate applies.
+            { marketId: 7, timestamp: 200, fee: '1', pnl: '3', tradeRate: 0.04,
+              prevPositionS: '5', postPositionS: '2', prevPositionF: '90000000000000000' },
+            // Closes THROUGH flat into a short: not a reduction, no entry rate.
+            { marketId: 7, timestamp: 300, fee: '1', pnl: '2', tradeRate: 0.05,
+              prevPositionS: '2', postPositionS: '-1', prevPositionF: '40000000000000000' },
+          ],
+          resumeToken: null,
+        },
+      })),
+      MARKET_ACC,
+      7,
+    );
+    expect(txns.map((t) => t.time)).toEqual([100, 200, 300]);
+    expect(txns.map((t) => t.fixedApr)).toEqual([0.09, 0.04, 0.05]);
+    expect(txns.map((t) => t.entryApr)).toEqual([undefined, 0.09, undefined]);
   });
 });
 
@@ -440,7 +462,7 @@ describe('client identification tag', () => {
     await fetchBorosMarkets(record);
     await fetchBorosOrderBook(record, 155);
     await fetchBorosCollaterals(record, ADDR);
-    await fetchBorosTransactions(record, ADDR, 3);
+    await fetchBorosTransactions(record, MARKET_ACC, 155);
 
     expect(urls.length).toBeGreaterThanOrEqual(4);
     for (const url of urls) {

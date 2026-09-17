@@ -1,7 +1,6 @@
 /**
- * Read-only client for the public Boros backend. Market and account reads go
- * to the open-api surface (https://api-boros.pendle.finance/apis/v1); only
- * `fetchBorosTransactions` is still on core, which has no equivalent there.
+ * Read-only client for the public Boros backend. Every read goes to the
+ * open-api surface (https://api-boros.pendle.finance/apis/v1).
  * No auth, no secrets — everything is keyed by a public EVM address.
  *
  * Scaling conventions (verified against live responses, 2026-07):
@@ -198,6 +197,9 @@ export interface BorosMarketPosition {
 /** A margin group: the cross account or one isolated position bucket. */
 export interface BorosMarginGroup {
   isCross: boolean;
+  /** This group's own `marketAcc` handle. The fill feed is keyed by it, so it
+   * is carried through rather than re-packed from its parts. */
+  marketAcc: string;
   netBalance: string;
   initialMargin?: string;
   marketPositions: BorosMarketPosition[];
@@ -210,16 +212,13 @@ export interface BorosCollateralZone {
 }
 
 /**
- * One fill from /pnl/transactions, projected to the fields this app reads —
- * `required` / `optional` below mirror PnlTransactionResponse in the API's own
- * OpenAPI document (https://api.boros.finance/core/docs).
+ * One fill from /v1/accounts/position-update-events, projected to the fields
+ * this app reads.
  *
- * `txType` is deliberately NOT modelled: it is required upstream and
- * enumerated 'normal' | 'liquidate' | 'force_deleverage' | 'otc_swap', but
- * every one of those MOVES the position, so nothing here may filter on it —
- * the position chain (prevPositionS → postPositionS) is the whole truth, and
- * reading it keeps a liquidation or an ADL from silently vanishing from a
- * position's history.
+ * The feed does not label a fill's KIND, and nothing here wants it to: a
+ * liquidation, an ADL and an OTC swap all MOVE the position, so the position
+ * chain (prevPositionS → postPositionS) is the whole truth, and reading it
+ * keeps any of them from silently vanishing from a position's history.
  *
  * `pnl` is net of `fee` (opens: pnl = −fee).
  */
@@ -242,9 +241,11 @@ export interface BorosTxn {
    * rate is the notional-weighted average of these, which is what lets one
    * position be split back into the strategies that built it. */
   fixedApr: number;
-  /** The average entry rate of the position being REDUCED. OPTIONAL per the
-   * API, and in practice present only on reducing fills. Verified equal to the
-   * replayed weighted average, so it doubles as a free correctness check. */
+  /** The average entry rate of the position being REDUCED — the feed's
+   * `prevPositionF`, scaled. Emitted ONLY on a fill that reduces without
+   * flipping, which is exactly when the venue's own `entryApr` used to be
+   * present. Verified equal to the replayed weighted average, so it doubles
+   * as a free correctness check. */
   entryApr?: number;
 }
 
@@ -455,6 +456,26 @@ export async function fetchBorosOrderBook(
 }
 
 /**
+ * Split a `marketAcc` into its segments: root(20B)·accountId(1B)·tokenId(2B)·
+ * marketId(3B), the marketId segment being 0xFFFFFF for a cross account. Null
+ * when the handle is too short to be one. The zone rebuild and the fill feed's
+ * account enumeration both key off this — there is only ever one decoder.
+ */
+function decodeMarketAcc(
+  marketAcc: string,
+): { accountId: number; tokenId: number; marketId: number; isCross: boolean } | null {
+  const acc = marketAcc.replace(/^0x/i, '');
+  if (acc.length < 52) return null;
+  const marketSeg = acc.slice(46, 52).toLowerCase();
+  return {
+    accountId: parseInt(acc.slice(40, 42), 16),
+    tokenId: parseInt(acc.slice(42, 46), 16),
+    marketId: parseInt(marketSeg, 16),
+    isCross: marketSeg === 'ffffff',
+  };
+}
+
+/**
  * Margin groups + positions per zone, joined from the two account reads that
  * together replace /core/v1/collaterals/summary:
  *   - market-acc-infos-by-root → one row per marketAcc: netBalance, initial
@@ -524,13 +545,13 @@ export async function fetchBorosCollaterals(
 
   const zones = new Map<number, BorosCollateralZone>();
   for (const r of infos.results) {
-    const acc = String(r.marketAcc ?? '').slice(2);
-    if (acc.length < 52) continue;
-    if (parseInt(acc.slice(40, 42), 16) !== accountId) continue;
-    const tokenId = parseInt(acc.slice(42, 46), 16);
-    const isCross = acc.slice(46, 52).toLowerCase() === 'ffffff';
+    const marketAcc = String(r.marketAcc ?? '');
+    const seg = decodeMarketAcc(marketAcc);
+    if (!seg || seg.accountId !== accountId) continue;
+    const { tokenId, isCross } = seg;
     const group: BorosMarginGroup = {
       isCross,
+      marketAcc,
       netBalance: String(r.netBalance ?? '0'),
       initialMargin: r.initialMargin as string | undefined,
       marketPositions: Array.isArray(r.positions)
@@ -548,15 +569,63 @@ export async function fetchBorosCollaterals(
 }
 
 /**
- * GET /core/v1/pnl/transactions for one collateral zone — paginates fully
- * (fees + open-time detection need the whole history; counts are small).
+ * Every (marketAcc, marketId) pair this root has ever SETTLED, all-time.
  *
- * ⚠ THE ONE CALL STILL ON CORE. The open-api surface has no equivalent: its
- * fill feed (`/v1/accounts/position-update-events`, whose rows are otherwise
- * byte-identical) requires an explicit marketId and 400s without one, so it
- * cannot answer "every fill in this collateral zone" — which is exactly what
- * the asset view needs, including markets the account no longer holds.
- * `/v1/accounts/light-event-feed` is account-wide but carries no fee or pnl.
+ * The fill feed is keyed by (marketAcc, marketId) and 400s without a marketId,
+ * so the set of markets to ask about has to be built before it can be read.
+ * The settlement ledger is the only account-wide feed carrying both ids, and
+ * it is swept here WITHOUT a time window on purpose: the asset view replays
+ * its locked rates over every opening fill regardless of the asset window, so
+ * a market that last traded before that window still has to be enumerated.
+ *
+ * ⚠ KNOWN GAP: a market opened AND fully closed inside a single settlement
+ * interval, leaving no live position, never produces a settlement row and so
+ * cannot be enumerated — its fills are missed. Closing that would mean asking
+ * every live market for every zone on every request (46 × 3 per 30s), which
+ * costs far more than the rounding error it removes.
+ */
+export async function fetchTradedMarketAccs(
+  fetchImpl: FetchLike,
+  address: string,
+  accountId = 0,
+): Promise<Array<{ marketAcc: string; tokenId: number; marketId: number }>> {
+  const seen = new Map<string, { marketAcc: string; tokenId: number; marketId: number }>();
+  let resumeToken: string | null = null;
+  // 2000 is this surface's per-page maximum and only distinct pairs are kept,
+  // so a 10-month account across 25 markets resolves in 2 pages.
+  const maxPages = 20;
+  for (let page = 0; page < maxPages; page += 1) {
+    const body = (await getJson(
+      fetchImpl,
+      `${BOROS_GATEWAY_BASE_URL}/v1/accounts/settlement-events?root=${address}` +
+        `&accountId=${accountId}&limit=2000` +
+        (resumeToken ? `&resumeToken=${encodeURIComponent(resumeToken)}` : ''),
+    )) as { results?: Array<Record<string, unknown>>; resumeToken?: string | null };
+    if (!Array.isArray(body?.results)) {
+      throw new CoreError(
+        'Boros /accounts/settlement-events: unexpected response shape (no results[])',
+        'network',
+      );
+    }
+    for (const r of body.results) {
+      const marketAcc = String(r.marketAcc ?? '');
+      const seg = decodeMarketAcc(marketAcc);
+      if (!seg || seg.accountId !== accountId) continue;
+      const marketId = Number(r.marketId);
+      if (!Number.isFinite(marketId)) continue;
+      const key = `${marketAcc.toLowerCase()}:${marketId}`;
+      if (!seen.has(key)) seen.set(key, { marketAcc, tokenId: seg.tokenId, marketId });
+    }
+    resumeToken = body.resumeToken ?? null;
+    if (!resumeToken || body.results.length === 0) break;
+  }
+  return [...seen.values()];
+}
+
+/**
+ * GET /v1/accounts/position-update-events for ONE (marketAcc, marketId) — the
+ * fills of a single market in a single collateral account, paginated fully
+ * (fees + open-time detection need the whole history; counts are small).
  *
  * ⚠ Returns its own COVERAGE, not a bare list. The page cap below is a
  * runaway guard, but an account that reaches it gets a silently truncated
@@ -569,53 +638,68 @@ export async function fetchBorosCollaterals(
  */
 export async function fetchBorosTransactions(
   fetchImpl: FetchLike,
-  address: string,
-  tokenId: number,
-  accountId = 0,
+  marketAcc: string,
+  marketId: number,
 ): Promise<{ txns: BorosTxn[]; complete: boolean }> {
-  const limit = 200;
   const all: BorosTxn[] = [];
-  // Hard page cap: 25 pages = 5k fills. Beyond that something is wrong (or the
-  // account is far outside this feature's scope) — stop rather than hammer.
-  const maxPages = 25;
+  // Hard page cap: 3 pages × 2000 = 6k fills on ONE market, already more
+  // generous than the 5k-per-zone guard this replaces. Beyond that something
+  // is wrong — stop rather than hammer.
+  const maxPages = 3;
   let complete = false;
-  for (let skip = 0, page = 0; page < maxPages; skip += limit, page += 1) {
+  let resumeToken: string | null = null;
+  for (let page = 0; page < maxPages; page += 1) {
     const body = (await getJson(
       fetchImpl,
-      `/core/v1/pnl/transactions?userAddress=${address}&accountId=${accountId}&tokenId=${tokenId}&skip=${skip}&limit=${limit}`,
-    )) as { results?: Array<Record<string, unknown>>; total?: number };
+      `${BOROS_GATEWAY_BASE_URL}/v1/accounts/position-update-events?marketAcc=${marketAcc}` +
+        `&marketId=${marketId}&limit=2000` +
+        (resumeToken ? `&resumeToken=${encodeURIComponent(resumeToken)}` : ''),
+    )) as { results?: Array<Record<string, unknown>>; resumeToken?: string | null };
     if (!Array.isArray(body?.results)) {
       // Same guard as the other fetchers — a shape change must throw, not get
       // cached as "no trade history" (which would silently zero the fees).
-      throw new CoreError('Boros /pnl/transactions: unexpected response shape (no results[])', 'network');
+      throw new CoreError(
+        'Boros /accounts/position-update-events: unexpected response shape (no results[])',
+        'network',
+      );
     }
-    const results = body.results;
-    for (const t of results) {
+    for (const t of body.results) {
       // Number(null) is 0, not NaN — so a null rate would read as a real 0%
       // OTC price. Absent must stay absent.
       const asRate = (v: unknown): number =>
         v === null || v === undefined || v === '' ? Number.NaN : Number(v);
-      const entryApr = asRate(t.entryApr);
+      const prevPositionS = String(t.prevPositionS ?? '0');
+      const postPositionS = String(t.postPositionS ?? '0');
+      // `prevPositionF` rides on EVERY row, but the venue only ever reported
+      // an entry rate on a fill that reduces the position without flipping it
+      // — and the difference is load-bearing: on an open-from-flat the field
+      // reads 0, which must never be mistaken for "cross-check says 0%".
+      const prev = Number(prevPositionS);
+      const post = Number(postPositionS);
+      const reduces = Math.abs(post) < Math.abs(prev) && (post === 0 || post > 0 === prev > 0);
+      const entryApr =
+        reduces && t.prevPositionF !== null && t.prevPositionF !== undefined
+          ? norm18(t.prevPositionF as string)
+          : Number.NaN;
       all.push({
         marketId: Number(t.marketId),
-        time: Number(t.time ?? 0),
+        time: Number(t.timestamp ?? 0),
         fee: String(t.fee ?? '0'),
         pnl: String(t.pnl ?? '0'),
-        prevPositionS: String(t.prevPositionS ?? '0'),
-        postPositionS: String(t.postPositionS ?? '0'),
+        prevPositionS,
+        postPositionS,
         // No `?? 0` on the rate: a rate of exactly 0 is a real OTC price, so a
         // missing one must stay distinguishable (NaN), not become a free trade.
-        fixedApr: asRate(t.fixedApr),
+        fixedApr: asRate(t.tradeRate),
         // Optional per the API — omitted rather than NaN so "no cross-check
         // available" and "cross-check says 0%" stay different things.
         ...(Number.isFinite(entryApr) ? { entryApr } : {}),
       });
     }
-    const total = Number(body?.total ?? 0);
-    // Only a run that reaches the end of the venue's own count is complete.
-    // Falling out of the loop on the page cap is not — that is the case this
-    // flag exists to name.
-    if (skip + limit >= total || results.length === 0) {
+    resumeToken = body.resumeToken ?? null;
+    // Only a run that exhausts the feed is complete. Falling out of the loop
+    // on the page cap is not — that is the case this flag exists to name.
+    if (!resumeToken || body.results.length === 0) {
       complete = true;
       break;
     }
