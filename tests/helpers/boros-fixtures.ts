@@ -14,16 +14,6 @@
 /** 18-dec raw string (Number-parseable scientific notation is fine). */
 export const raw = (n: number): string => String(n * 1e18);
 
-/** Pack a `marketAcc`: root(20B)·accountId(1B)·tokenId(2B)·marketId(3B). The
- * marketId segment is 0xFFFFFF for a cross account, the id for an isolated
- * one — that is how the client rebuilds collateral zones from a flat list. */
-export const marketAcc = (root: string, tokenId: number, marketId?: number): string =>
-  '0x' +
-  root.toLowerCase().replace(/^0x/, '') +
-  '00' +
-  tokenId.toString(16).padStart(4, '0') +
-  (marketId === undefined ? 'ffffff' : marketId.toString(16).padStart(6, '0'));
-
 /**
  * Initial-margin inputs of a `BorosMarket`, live-shaped from
  * HYPERLIQUID-ETH-31JUL2026 (2026-07): kIM 0.476 is the 2.1x preset, the floor

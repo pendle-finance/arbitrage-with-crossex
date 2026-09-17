@@ -254,20 +254,21 @@ interface AccountView {
 
 /**
  * A market row "holds something" when it has a netted position OR resting
- * orders. The account surface now carries the order list itself, so
- * `hasRestingOrders` is read directly; the older IM-gap signal (per-market
- * `initialMargin` includes order margin while `positionInitialMargin` is the
- * position alone) is kept as a fallback for responses that omit it.
+ * orders. The collaterals summary carries no order list, but it does carry
+ * the signal: per-market `initialMargin` includes order margin while
+ * `positionInitialMargin` is the position alone, so a gap between them means
+ * an order is resting. (Partial by construction — the venue's IM is
+ * max(long side, short side), so an opposite-side order smaller than the
+ * position's own margin stays invisible — but the case §6A exists for, an
+ * order with NO position, always shows.)
  */
 function holdsPositionOrOrders(p: {
   notionalSize: string;
   initialMargin?: string;
   positionInitialMargin: string;
-  hasRestingOrders?: boolean;
 }): boolean {
   return (
     norm18(p.notionalSize) !== 0 ||
-    p.hasRestingOrders === true ||
     (p.initialMargin !== undefined &&
       norm18(p.initialMargin) > norm18(p.positionInitialMargin) + 1e-9)
   );
@@ -400,12 +401,10 @@ export function borosPairRoutes(deps: AppDeps) {
       .value;
 
   const loadAccount = async (address: string, fresh: boolean): Promise<AccountView> => {
-    // Market config only picks the IM branch; it never needs a fresh read.
-    const markets = await loadMarkets(false);
     const { value } = await deps.cache.get(
       `boros:collaterals:${address}`,
       TTL.boros,
-      () => fetchBorosCollaterals(fetchImpl, address, markets),
+      () => fetchBorosCollaterals(fetchImpl, address),
       { fresh },
     );
     return readAccount(value);

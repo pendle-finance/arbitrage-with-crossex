@@ -15,7 +15,7 @@ import type {
   BorosOrderClient,
 } from '../../src/core/boros/orders';
 import { borosExecutionsPending } from '../../src/server/routes/borosPair';
-import { imInputs, marketAcc, raw } from '../helpers/boros-fixtures';
+import { imInputs, raw } from '../helpers/boros-fixtures';
 import { TtlCache } from '../../src/server/cache';
 import { borosStub } from '../helpers/boros-stub';
 import { HOST, makeTestApp } from './helpers/gate-nock';
@@ -32,48 +32,10 @@ const BN = 158;
 /** A third market, for the cases that need an odd one out alongside a pair. */
 const OK = 161;
 
-/** This account's cross USDT (tokenId 3) handle. */
-const CROSS_USDT = marketAcc(ADDRESS, 3);
-
-/** The two account reads the client joins into one cross USDT zone. */
-const account = (
-  netBalance: number,
-  positions: Array<{ marketId: number; size: number | string }> = [],
-) => {
-  const size = (s: number | string) => (typeof s === 'string' ? s : raw(s));
-  return {
-    '/apis/v1/accounts/market-acc-infos-by-root': {
-      results: [
-        {
-          marketAcc: CROSS_USDT,
-          netBalance: raw(netBalance),
-          initialMargin: raw(0),
-          positions: positions.map((p) => ({
-            marketId: p.marketId,
-            signedSize: size(p.size),
-            initialMargin: raw(0),
-            orders: [],
-          })),
-        },
-      ],
-    },
-    '/apis/v1/accounts/active-positions': {
-      results: positions.map((p) => ({
-        marketAcc: CROSS_USDT,
-        marketId: p.marketId,
-        side: Number(p.size) >= 0 ? 0 : 1,
-        fixedApr: 0,
-        signedSize: size(p.size),
-        unrealisedPnl: '0',
-        settlementPnl: '0',
-      })),
-    },
-  };
-};
-
 const market = (marketId: number, platformName: string, midApr: number) => ({
   marketId,
   tokenId: 3,
+  state: 'Normal',
   imData: {
     name: `${platformName} ETH 30d`,
     maturity: MATURITY,
@@ -81,14 +43,8 @@ const market = (marketId: number, platformName: string, midApr: number) => ({
     tickStep: imInputs.imTickStep,
   },
   extConfig: { settleFeeRate: '1000000000000000', paymentPeriod: 3600 },
-  platform: { platformId: platformName },
-  metadata: { underlyingSymbol: 'ETH' },
-  config: {
-    status: 2,
-    takerFee: '500000000000000',
-    kIM: raw(imInputs.kIM),
-    tThresh: imInputs.tThreshSec,
-  },
+  metadata: { platformName, assetSymbol: 'ETH' },
+  config: { takerFee: '500000000000000', kIM: raw(imInputs.kIM), tThresh: imInputs.tThreshSec },
   data: { midApr, markApr: midApr, floatingApr: 0.05, notionalOI: 12_000_000, assetMarkPrice: 1900 },
 });
 
@@ -100,10 +56,18 @@ const wireBook = (bidTick: number, askTick: number, size = 20_000_000) => ({
 
 function bodies(over: Record<string, unknown> = {}): Record<string, unknown> {
   return {
-    '/apis/v1/markets': { results: [market(HL, 'Hyperliquid', 0.09), market(BN, 'Binance', 0.045)] },
-    [`/apis/v1/markets/order-book?marketId=${HL}`]: wireBook(900, 920),
-    [`/apis/v1/markets/order-book?marketId=${BN}`]: wireBook(400, 420),
-    ...account(500_000),
+    '/core/v1/markets': { results: [market(HL, 'Hyperliquid', 0.09), market(BN, 'Binance', 0.045)] },
+    [`/core/v1/order-books/${HL}`]: wireBook(900, 920),
+    [`/core/v1/order-books/${BN}`]: wireBook(400, 420),
+    '/core/v1/collaterals/summary': {
+      collaterals: [
+        {
+          tokenId: 3,
+          crossPosition: { netBalance: raw(500_000), marketPositions: [] },
+          isolatedPositions: [],
+        },
+      ],
+    },
     ...over,
   };
 }
@@ -193,9 +157,9 @@ describe('GET /api/boros/pair/context', () => {
     // pair here the no-partner filter would empty the list and the test would
     // pass for the wrong reason.
     const synthetic = market(OK, 'Hyperliquid', 0.05);
-    synthetic.metadata.underlyingSymbol = 'xyz:BRENTOIL';
+    synthetic.metadata.assetSymbol = 'xyz:BRENTOIL';
     const res = await makeApp({
-      '/apis/v1/markets': {
+      '/core/v1/markets': {
         results: [market(HL, 'Hyperliquid', 0.09), market(BN, 'Binance', 0.07), synthetic],
       },
     }).inject({ method: 'GET', url: `/api/boros/pair/context?address=${ADDRESS}`, headers: HOST });
@@ -206,7 +170,7 @@ describe('GET /api/boros/pair/context', () => {
     const dead = market(OK, 'OKX', 0.045);
     dead.imData.maturity = NOW - 1;
     const res = await makeApp({
-      '/apis/v1/markets': {
+      '/core/v1/markets': {
         results: [market(HL, 'Hyperliquid', 0.09), market(BN, 'Binance', 0.07), dead],
       },
     }).inject({ method: 'GET', url: `/api/boros/pair/context?address=${ADDRESS}`, headers: HOST });
@@ -220,9 +184,9 @@ describe('GET /api/boros/pair/context', () => {
     // collateral, same maturity) but its only partners would be a different
     // coin, which is not a spread — so the ticket must not offer it.
     const lone = market(OK, 'OKX', 0.06);
-    lone.metadata.underlyingSymbol = 'BTC';
+    lone.metadata.assetSymbol = 'BTC';
     const res = await makeApp({
-      '/apis/v1/markets': {
+      '/core/v1/markets': {
         results: [market(HL, 'Hyperliquid', 0.09), market(BN, 'Binance', 0.07), lone],
       },
     }).inject({ method: 'GET', url: `/api/boros/pair/context?address=${ADDRESS}`, headers: HOST });
@@ -233,7 +197,7 @@ describe('GET /api/boros/pair/context', () => {
     // The guard against over-filtering: the ordinary two-venue pair this whole
     // terminal exists to trade must survive.
     const res = await makeApp({
-      '/apis/v1/markets': {
+      '/core/v1/markets': {
         results: [market(HL, 'Hyperliquid', 0.09), market(BN, 'Binance', 0.07)],
       },
     }).inject({ method: 'GET', url: `/api/boros/pair/context?address=${ADDRESS}`, headers: HOST });
@@ -290,17 +254,17 @@ describe('POST /api/boros/pair/simulate', () => {
     const calls: string[] = [];
     makeApp({}, calls);
     await post('/api/boros/pair/simulate', pairBody());
-    const bookCalls = calls.filter((c) => c.startsWith('/apis/v1/markets/order-book'));
+    const bookCalls = calls.filter((c) => c.startsWith('/core/v1/order-books/'));
     expect(bookCalls).toHaveLength(2);
     // A second simulate inside the short TTL is served from cache…
     await post('/api/boros/pair/simulate', pairBody());
-    expect(calls.filter((c) => c.startsWith('/apis/v1/markets/order-book'))).toHaveLength(2);
+    expect(calls.filter((c) => c.startsWith('/core/v1/order-books/'))).toHaveLength(2);
   });
 
   it('surfaces an ineligible pair as a reason instead of pricing it', async () => {
     const other = market(BN, 'Binance', 0.045);
     other.imData.maturity = MATURITY + DAY;
-    makeApp({ '/apis/v1/markets': { results: [market(HL, 'Hyperliquid', 0.09), other] } });
+    makeApp({ '/core/v1/markets': { results: [market(HL, 'Hyperliquid', 0.09), other] } });
     const res = await post('/api/boros/pair/simulate', pairBody());
     const { data } = res.json();
     expect(data.eligibility).toMatchObject({ eligible: false, code: 'different-maturity' });
@@ -506,7 +470,11 @@ describe('POST /api/boros/pair/execute', () => {
     // Cross bucket far too small for either leg's margin.
     makeApp(
       {
-        ...account(1),
+        '/core/v1/collaterals/summary': {
+          collaterals: [
+            { tokenId: 3, crossPosition: { netBalance: raw(1), marketPositions: [] }, isolatedPositions: [] },
+          ],
+        },
       },
       undefined,
       orderClient(place),
@@ -530,7 +498,20 @@ describe('POST /api/boros/pair/execute', () => {
     // An existing LONG on HL that leg A's short would oppose.
     makeApp(
       {
-        ...account(500_000, [{ marketId: HL, size: 150_000 }]),
+        '/core/v1/collaterals/summary': {
+          collaterals: [
+            {
+              tokenId: 3,
+              crossPosition: {
+                netBalance: raw(500_000),
+                marketPositions: [
+                  { marketId: HL, side: 0, notionalSize: raw(150_000), pnl: {}, positionInitialMargin: raw(0) },
+                ],
+              },
+              isolatedPositions: [],
+            },
+          ],
+        },
       },
       undefined,
       orderClient(place),
@@ -571,7 +552,20 @@ describe('POST /api/boros/pair/execute', () => {
     // Leg B is flat, so a CLOSE gives it nothing to do.
     makeApp(
       {
-        ...account(500_000, [{ marketId: HL, size: 100_000 }]),
+        '/core/v1/collaterals/summary': {
+          collaterals: [
+            {
+              tokenId: 3,
+              crossPosition: {
+                netBalance: raw(500_000),
+                marketPositions: [
+                  { marketId: HL, side: 0, notionalSize: raw(100_000), pnl: {}, positionInitialMargin: raw(0) },
+                ],
+              },
+              isolatedPositions: [],
+            },
+          ],
+        },
       },
       undefined,
       {
@@ -611,7 +605,20 @@ describe('POST /api/boros/pair/execute', () => {
     const sent: Array<{ marketId: number; size: number; sizeWei?: string }> = [];
     makeApp(
       {
-        ...account(500_000, [{ marketId: HL, size: '50000000000000000' }]),
+        '/core/v1/collaterals/summary': {
+          collaterals: [
+            {
+              tokenId: 3,
+              crossPosition: {
+                netBalance: raw(500_000),
+                marketPositions: [
+                  { marketId: HL, side: 0, notionalSize: '50000000000000000', pnl: {}, positionInitialMargin: raw(0) },
+                ],
+              },
+              isolatedPositions: [],
+            },
+          ],
+        },
       },
       undefined,
       {
@@ -666,7 +673,20 @@ describe('POST /api/boros/pair/execute', () => {
     const sent: BorosMarketOrderRequest[] = [];
     makeApp(
       {
-        ...account(500_000, [{ marketId: HL, size: 1_000 }]),
+        '/core/v1/collaterals/summary': {
+          collaterals: [
+            {
+              tokenId: 3,
+              crossPosition: {
+                netBalance: raw(500_000),
+                marketPositions: [
+                  { marketId: HL, side: 0, notionalSize: raw(1_000), pnl: {}, positionInitialMargin: raw(0) },
+                ],
+              },
+              isolatedPositions: [],
+            },
+          ],
+        },
       },
       undefined,
       {
@@ -853,7 +873,20 @@ describe('POST /api/boros/pair/market/:marketId/cancel-and-close', () => {
     app = makeTestApp({
       borosFetch: borosStub(
         bodies({
-          ...account(500_000, [{ marketId: HL, size: 75_000 }]),
+          '/core/v1/collaterals/summary': {
+            collaterals: [
+              {
+                tokenId: 3,
+                crossPosition: {
+                  netBalance: raw(500_000),
+                  marketPositions: [
+                    { marketId: HL, side: 0, notionalSize: raw(75_000), pnl: {}, positionInitialMargin: raw(0) },
+                  ],
+                },
+                isolatedPositions: [],
+              },
+            ],
+          },
         }),
       ),
       getBorosOrders: () => ({
@@ -887,8 +920,21 @@ describe('POST /api/boros/pair/market/:marketId/cancel-and-close', () => {
     app = makeTestApp({
       borosFetch: borosStub(
         bodies({
-          '/apis/v1/markets': { results: [{ ...hl, data: { ...hl.data, midApr } }, market(BN, 'Binance', 0.045)] },
-          ...account(500_000, [{ marketId: HL, size: 75_000 }]),
+          '/core/v1/markets': { results: [{ ...hl, data: { ...hl.data, midApr } }, market(BN, 'Binance', 0.045)] },
+          '/core/v1/collaterals/summary': {
+            collaterals: [
+              {
+                tokenId: 3,
+                crossPosition: {
+                  netBalance: raw(500_000),
+                  marketPositions: [
+                    { marketId: HL, side: 0, notionalSize: raw(75_000), pnl: {}, positionInitialMargin: raw(0) },
+                  ],
+                },
+                isolatedPositions: [],
+              },
+            ],
+          },
         }),
       ),
       getBorosOrders: () => ({
@@ -943,7 +989,20 @@ describe('POST /api/boros/pair/market/:marketId/cancel-and-close', () => {
     makeTestApp({
       borosFetch: borosStub(
         bodies({
-          ...account(500_000, [{ marketId: HL, size: 75_000 }]),
+          '/core/v1/collaterals/summary': {
+            collaterals: [
+              {
+                tokenId: 3,
+                crossPosition: {
+                  netBalance: raw(500_000),
+                  marketPositions: [
+                    { marketId: HL, side: 0, notionalSize: raw(75_000), pnl: {}, positionInitialMargin: raw(0) },
+                  ],
+                },
+                isolatedPositions: [],
+              },
+            ],
+          },
         }),
       ),
       getBorosOrders: () => ({
@@ -996,7 +1055,20 @@ describe('POST /api/boros/pair/market/:marketId/cancel-and-close', () => {
       makeTestApp({
         borosFetch: borosStub(
           bodies({
-            ...account(500_000, [{ marketId: HL, size: 75_000 }]),
+            '/core/v1/collaterals/summary': {
+              collaterals: [
+                {
+                  tokenId: 3,
+                  crossPosition: {
+                    netBalance: raw(500_000),
+                    marketPositions: [
+                      { marketId: HL, side: 0, notionalSize: raw(75_000), pnl: {}, positionInitialMargin: raw(0) },
+                    ],
+                  },
+                  isolatedPositions: [],
+                },
+              ],
+            },
           }),
         ),
         getBorosOrders: () => ({
@@ -1095,7 +1167,20 @@ describe('POST /api/boros/pair/market/:marketId/cancel-and-close', () => {
     app = makeTestApp({
       borosFetch: borosStub(
         bodies({
-          ...account(500_000, [{ marketId: HL, size: 75_000 }]),
+          '/core/v1/collaterals/summary': {
+            collaterals: [
+              {
+                tokenId: 3,
+                crossPosition: {
+                  netBalance: raw(500_000),
+                  marketPositions: [
+                    { marketId: HL, side: 0, notionalSize: raw(75_000), pnl: {}, positionInitialMargin: raw(0) },
+                  ],
+                },
+                isolatedPositions: [],
+              },
+            ],
+          },
         }),
         calls,
       ),
@@ -1109,18 +1194,15 @@ describe('POST /api/boros/pair/market/:marketId/cancel-and-close', () => {
       }),
     });
 
-    // One margin read per account read, so this counts reads the way the
-    // single /collaterals/summary call used to.
-    const accountReads = () =>
-      calls.filter((c) => c.includes('/accounts/market-acc-infos-by-root')).length;
+    const summaries = () => calls.filter((c) => c.includes('/collaterals/summary')).length;
     // Warm the cache, then confirm a second read inside the TTL is served from it.
     await post(`/api/boros/pair/market/${HL}/cancel-and-close`, { clientOrderId: 'coid-warm' });
-    const afterFirst = accountReads();
+    const afterFirst = summaries();
 
     await post(`/api/boros/pair/market/${HL}/cancel-and-close`, { clientOrderId: 'coid-second' });
     // The close busts the key, so the second call had to re-read rather than
     // sizing from a cached position that no longer exists.
-    expect(accountReads()).toBeGreaterThan(afterFirst);
+    expect(summaries()).toBeGreaterThan(afterFirst);
   });
 
   it('cancels and stops when there is no position to close', async () => {
