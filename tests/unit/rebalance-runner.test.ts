@@ -1234,7 +1234,7 @@ describe('runJob transfers', () => {
 
     const job = h.jobs.read()!;
     expect(job.status).toBe('halted');
-    expect(job.haltReason).toBe('transfer SUCCESS with nothing received');
+    expect(job.haltReason).toBe('Gate shows this transfer as done, but nothing arrived. Check your Gate wallets.');
     expect(job.fundsAt).toBe('GATE');
     expect(job.steps[1].venueId).toBe('x1');
   });
@@ -1396,7 +1396,7 @@ describe('runJob halts', () => {
 
     const job = h.jobs.read()!;
     expect(job.status).toBe('halted');
-    expect(job.haltReason).toBe('order REJECT with nothing filled');
+    expect(job.haltReason).toBe('Gate closed the order with nothing filled. Nothing moved. Press Resume to try again.');
     expect(job.fundsAt).toBe('CROSSEX');
     expect(job.stepIndex).toBe(0);
     expect(job.steps[0].venueId).toBeNull();

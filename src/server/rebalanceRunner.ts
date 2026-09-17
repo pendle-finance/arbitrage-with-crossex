@@ -595,7 +595,7 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
         finish(step, filled, spec.kind === 'convert' ? convertSpec(step).dest : spec.dest);
         if (stuck) halt(HALT_TEXT.sellStuck);
       } else if (sell && sellChain(step).length > 1) haltDead(step, HALT_TEXT.sellStuck);
-      else haltDead(step, `order ${state} with nothing filled`);
+      else haltDead(step, HALT_TEXT.nothingFilled);
       return;
     }
     const row = await transferRow(crossEx(), spec.coin, (r) => String(r.id) === venueId);
@@ -604,7 +604,7 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
     if (status === 'SUCCESS') {
       const received = receivedOf(row, spec);
       if (received > 0) finish(step, received, spec.dest);
-      else halt('transfer SUCCESS with nothing received');
+      else halt(HALT_TEXT.nothingReceived);
       return;
     }
     if (TRANSFER_DEAD.test(status)) haltDead(step, transferFailText(row.failReason ?? ''));
