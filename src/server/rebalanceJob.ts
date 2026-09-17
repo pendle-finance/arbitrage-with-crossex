@@ -111,7 +111,10 @@ export const HALT_TEXT = {
   marginRefused: 'Gate refused the move: free margin or wallet cash is too low.',
   noRecord: 'Gate has no record of this transfer. Try again.',
   timeout: 'Gate took too long on this step. Press Resume to check again.',
-  rateLimited: 'Gate is rate-limiting this account. Nothing was sent. Press Resume in a few minutes.',
+  rateLimited: 'Gate is rate-limiting this account. Nothing was sent. Press Resume in a minute.',
+  quotesUsed:
+    "Gate allows 100 Convert quotes a day, and this account has used them. Nothing was sent. Press Resume later. Gate's count clears within 24 hours.",
+  transferRateLimited: 'Gate is rate-limiting this account. Nothing was sent. Try again in a minute.',
   nothingFilled: 'Gate closed the order with nothing filled. Nothing moved. Press Resume to try again.',
   nothingReceived: 'Gate shows this transfer as done, but nothing arrived. Check your Gate wallets.',
   usdtBelowZero: 'A Convert between Hyperliquid and Lighter needs more USDT · CrossEx cash.',

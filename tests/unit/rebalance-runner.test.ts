@@ -1057,7 +1057,7 @@ describe('runJob Convert', () => {
     expect(h.sent('listCrossexHistoryOrders').map((arg) => arg.symbol)).toEqual(['HYPERLIQUID_CONVERT_USDC_USDT']);
   });
 
-  it('a refused Convert order clears its quote id, so a resume quotes again', async () => {
+  it('a refused Convert order clears its quote id and quoted amount, so a resume quotes again', async () => {
     const h = harness(fakeClock(), { route: 'convert', steps: [convert(12)] }, {
       getCrossexAccount: seq(account()),
       createCrossexConvertQuote: seq(quote('q1', '11.976'), quote('q2', '11.97')),
@@ -1070,7 +1070,7 @@ describe('runJob Convert', () => {
 
     const halted = h.jobs.read()!;
     expect(halted).toMatchObject({ status: 'halted', haltReason: 'Quote expired.' });
-    expect(halted.steps[0].quoteId).toBeNull();
+    expect(halted.steps[0]).toMatchObject({ quoteId: null, qty: null });
 
     halted.status = 'running';
     halted.haltReason = null;
@@ -1084,7 +1084,7 @@ describe('runJob Convert', () => {
     expect(h.count('createCrossexConvertOrder')).toBe(2);
   });
 
-  it('a rate-limited Convert quote halts with the rate-limit text and sends no order, and a resume quotes again', async () => {
+  it('a rate-limited Convert quote halts with the daily quote text and sends no order, and a resume quotes again', async () => {
     const h = harness(fakeClock(), { route: 'convert', steps: [convert(12)] }, {
       getCrossexAccount: seq(account()),
       createCrossexConvertQuote: seq(gateError(429, 'TOO_MANY_REQUESTS', 'Too Many Requests'), quote('q2', '11.97')),
@@ -1094,9 +1094,11 @@ describe('runJob Convert', () => {
     await h.run();
 
     const halted = h.jobs.read()!;
-    expect(halted).toMatchObject({ status: 'halted', haltReason: HALT_TEXT.rateLimited });
-    expect(halted.haltReason).toBe('Gate is rate-limiting this account. Nothing was sent. Press Resume in a few minutes.');
-    expect(halted.steps[0]).toMatchObject({ quoteId: null, venueId: null });
+    expect(halted).toMatchObject({ status: 'halted', haltReason: HALT_TEXT.quotesUsed });
+    expect(halted.haltReason).toBe(
+      "Gate allows 100 Convert quotes a day, and this account has used them. Nothing was sent. Press Resume later. Gate's count clears within 24 hours.",
+    );
+    expect(halted.steps[0]).toMatchObject({ quoteId: null, venueId: null, qty: null });
     expect(halted.steps[0]).not.toHaveProperty('sentAt');
     expect(h.count('createCrossexConvertQuote')).toBe(1);
     expect(h.count('createCrossexConvertOrder')).toBe(0);
@@ -4439,9 +4441,10 @@ describe('runJob sends no step a second time on its own after an unknown result'
 
       let job = h.jobs.read()!;
       expect(job).toMatchObject({ status: 'halted', haltReason: HALT_TEXT.rateLimited, stepIndex: 0 });
-      expect(job.steps[0]).toMatchObject({ quoteId: 'q1', venueId: null });
+      expect(job.haltReason).toBe('Gate is rate-limiting this account. Nothing was sent. Press Resume in a minute.');
+      expect(job.steps[0]).toMatchObject({ quoteId: 'q1', venueId: null, qty: null });
       expect(job.steps[0]).not.toHaveProperty('sentAt');
-      expect(h.disk[0]).toMatchObject({ quoteId: 'q1' });
+      expect(h.disk[0]).toMatchObject({ quoteId: 'q1', qty: h.firstTo });
       expect(h.disk[0].sentAt).toBeTypeOf('number');
       expect(h.count('createCrossexConvertQuote')).toBe(1);
       expect(h.count('createCrossexConvertOrder')).toBe(1);
