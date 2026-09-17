@@ -254,21 +254,20 @@ interface AccountView {
 
 /**
  * A market row "holds something" when it has a netted position OR resting
- * orders. The collaterals summary carries no order list, but it does carry
- * the signal: per-market `initialMargin` includes order margin while
- * `positionInitialMargin` is the position alone, so a gap between them means
- * an order is resting. (Partial by construction — the venue's IM is
- * max(long side, short side), so an opposite-side order smaller than the
- * position's own margin stays invisible — but the case §6A exists for, an
- * order with NO position, always shows.)
+ * orders. The account surface now carries the order list itself, so
+ * `hasRestingOrders` is read directly; the older IM-gap signal (per-market
+ * `initialMargin` includes order margin while `positionInitialMargin` is the
+ * position alone) is kept as a fallback for responses that omit it.
  */
 function holdsPositionOrOrders(p: {
   notionalSize: string;
   initialMargin?: string;
   positionInitialMargin: string;
+  hasRestingOrders?: boolean;
 }): boolean {
   return (
     norm18(p.notionalSize) !== 0 ||
+    p.hasRestingOrders === true ||
     (p.initialMargin !== undefined &&
       norm18(p.initialMargin) > norm18(p.positionInitialMargin) + 1e-9)
   );

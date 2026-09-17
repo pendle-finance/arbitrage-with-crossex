@@ -39,7 +39,8 @@ describe('fetchBorosMarkets', () => {
               tokenId: 3,
               imData: { name: 'Hyperliquid ETH 31 Jul 2026', maturity: 1785456000 },
               extConfig: { settleFeeRate: '1000000000000000', paymentPeriod: 3600 },
-              metadata: { platformName: 'Hyperliquid', assetSymbol: 'ETH' },
+              platform: { platformId: 'Hyperliquid' },
+              metadata: { underlyingSymbol: 'ETH' },
               data: { markApr: 0.076, floatingApr: 0.075, assetMarkPrice: 1880 },
             },
           ],
@@ -53,6 +54,16 @@ describe('fetchBorosMarkets', () => {
     expect(markets[0].paymentPeriod).toBe(3600);
   });
 
+  it('maps config.status to the lifecycle state, dropping anything not live', async () => {
+    const mk = (status: unknown) => ({ marketId: 155, tokenId: 3, config: { status } });
+    const states = async (status: unknown) =>
+      (await fetchBorosMarkets(stub(() => ({ body: { results: [mk(status)] } }))))[0].state;
+    expect(await states(2)).toBe('Normal');
+    expect(await states(1)).toBe('Paused');
+    // An unknown or absent status must not read as tradable.
+    expect(await states(undefined)).toBe('Paused');
+  });
+
   it('surfaces midApr, notionalOI, the 18-dec takerFee and the lifecycle state', async () => {
     const markets = await fetchBorosMarkets(
       stub(() => ({
@@ -62,9 +73,10 @@ describe('fetchBorosMarkets', () => {
               marketId: 155,
               tokenId: 3,
               imData: { name: 'Hyperliquid ETH 31 Jul 2026', maturity: 1785456000 },
-              config: { takerFee: '500000000000000', maxRateDeviationFactorBase1e4: 2500 },
+              config: { status: 2, takerFee: '500000000000000', maxRateDeviationFactorBase1e4: 2500 },
               extConfig: { settleFeeRate: '1000000000000000', paymentPeriod: 3600 },
-              metadata: { platformName: 'Hyperliquid', assetSymbol: 'ETH' },
+              platform: { platformId: 'Hyperliquid' },
+              metadata: { underlyingSymbol: 'ETH' },
               data: {
                 markApr: 0.076,
                 floatingApr: 0.075,
@@ -72,7 +84,6 @@ describe('fetchBorosMarkets', () => {
                 notionalOI: 801.005045896532,
                 assetMarkPrice: 1880,
               },
-              state: 'Normal',
             },
           ],
         },
@@ -106,7 +117,8 @@ describe('fetchBorosMarkets', () => {
               config: { kIM: '476190476190476190', tThresh: 432000 },
               // extConfig.tickStep is a decoy: the margin step must come from imData.
               extConfig: { settleFeeRate: '1000000000000000', paymentPeriod: 3600, tickStep: 7 },
-              metadata: { platformName: 'Hyperliquid', assetSymbol: 'ETH' },
+              platform: { platformId: 'Hyperliquid' },
+              metadata: { underlyingSymbol: 'ETH' },
               data: { markApr: 0.076, assetMarkPrice: 1880 },
             },
           ],
@@ -176,7 +188,9 @@ describe('fetchBorosOrderBook', () => {
       155,
     );
 
-    expect(urls).toEqual(['/core/v1/order-books/155?tickSize=0.0001&pendle_client=boroscrossex']);
+    expect(urls).toEqual([
+      '/apis/v1/markets/order-book?marketId=155&tickSize=0.0001&pendle_client=boroscrossex',
+    ]);
     expect(book.marketId).toBe(155);
     // asks (wire "short") sorted apr-ascending, bids (wire "long") apr-descending.
     expect(round(book.asks)).toEqual([
@@ -320,6 +334,80 @@ describe('fetchBorosTransactions pagination', () => {
     );
     expect(complete).toBe(false);
     expect(txns).toHaveLength(25 * 200);
+  });
+});
+
+describe('fetchBorosCollaterals', () => {
+  const ROOT = '0x' + 'ab'.repeat(20);
+  /** root · accountId(1B) · tokenId(2B) · marketId(3B); FFFFFF ⇒ cross. */
+  const CROSS = ROOT + '00' + '0003' + 'ffffff';
+  const ISO = ROOT + '00' + '0003' + '00009b'; // isolated on market 155
+  const OTHER_ACCOUNT = ROOT + '01' + '0003' + 'ffffff';
+
+  /** The surface is two reads; route each by pathname. */
+  const accountStub = (infos: unknown, actives: unknown): FetchLike =>
+    stub((url) => ({ body: url.pathname.endsWith('/active-positions') ? actives : infos }));
+
+  const infos = {
+    results: [
+      {
+        marketAcc: CROSS,
+        netBalance: '20',
+        initialMargin: '5',
+        positions: [{ marketId: 155, signedSize: '-7', initialMargin: '5', orders: [] }],
+      },
+      {
+        marketAcc: ISO,
+        netBalance: '9',
+        initialMargin: '1',
+        positions: [{ marketId: 155, signedSize: '3', initialMargin: '1', orders: [{ id: '1' }] }],
+      },
+    ],
+  };
+  const actives = {
+    results: [
+      { marketAcc: CROSS, marketId: 155, side: 1, fixedApr: 0.08, unrealisedPnl: '11', settlementPnl: '13' },
+    ],
+  };
+
+  it('rebuilds zones from the marketAcc layout and joins the live rates onto them', async () => {
+    const zones = await fetchBorosCollaterals(accountStub(infos, actives), ROOT);
+    expect(zones).toHaveLength(1);
+    expect(zones[0].tokenId).toBe(3); // decoded from the marketAcc, not a body field
+    expect(zones[0].cross?.netBalance).toBe('20');
+    expect(zones[0].isolated).toHaveLength(1);
+
+    const p = zones[0].cross!.marketPositions[0];
+    expect(p.notionalSize).toBe('-7'); // signedSize carries the sign
+    expect(p.side).toBe(1);
+    expect(p.fixedApr).toBe(0.08);
+    // settlementPnl/unrealisedPnl are the old rateSettlementPnl/unrealisedPnl.
+    expect(p.pnl.rateSettlementPnl).toBe('13');
+    expect(p.pnl.unrealisedPnl).toBe('11');
+    expect(p.positionInitialMargin).toBe('5');
+  });
+
+  it('reads resting orders from the order list instead of the initial-margin gap', async () => {
+    const zones = await fetchBorosCollaterals(accountStub(infos, actives), ROOT);
+    expect(zones[0].cross!.marketPositions[0].hasRestingOrders).toBe(false);
+    expect(zones[0].isolated[0].marketPositions[0].hasRestingOrders).toBe(true);
+  });
+
+  it('keeps only the requested accountId', async () => {
+    const zones = await fetchBorosCollaterals(
+      accountStub({ results: [{ marketAcc: OTHER_ACCOUNT, netBalance: '1', positions: [] }] }, { results: [] }),
+      ROOT,
+    );
+    expect(zones).toHaveLength(0);
+  });
+
+  it('throws a network CoreError when either read is not the documented shape', async () => {
+    await expect(
+      fetchBorosCollaterals(accountStub({ collaterals: [] }, { results: [] }), ROOT),
+    ).rejects.toMatchObject({ name: 'CoreError', category: 'network' });
+    await expect(
+      fetchBorosCollaterals(accountStub({ results: [] }, {}), ROOT),
+    ).rejects.toMatchObject({ name: 'CoreError', category: 'network' });
   });
 });
 

@@ -1,5 +1,7 @@
 /**
- * Read-only client for the public Boros backend (https://api.boros.finance).
+ * Read-only client for the public Boros backend. Market and account reads go
+ * to the open-api surface (https://api-boros.pendle.finance/apis/v1); only
+ * `fetchBorosTransactions` is still on core, which has no equivalent there.
  * No auth, no secrets — everything is keyed by a public EVM address.
  *
  * Scaling conventions (verified against live responses, 2026-07):
@@ -188,6 +190,9 @@ export interface BorosMarketPosition {
    * as a fallback for the line above, and nothing breaks if a legacy response
    * omits it. */
   initialMargin?: string;
+  /** The account has orders resting on this market. Read from the account
+   * surface's own per-market order list, which replaces the IM-gap heuristic. */
+  hasRestingOrders?: boolean;
 }
 
 /** A margin group: the cross account or one isolated position bucket. */
@@ -278,7 +283,9 @@ export function setClientTagContext(ctx: { version?: string | null; active?: boo
 async function getJson(fetchImpl: FetchLike, path: string): Promise<unknown> {
   const clientTag =
     'pendle_client=boroscrossex' + clientTagState.version + (clientTagState.active ? '_active' : '');
-  const url = `${BOROS_BASE_URL}${path}${path.includes('?') ? '&' : '?'}${clientTag}`;
+  // An absolute URL is already a gateway path; a bare path is still core.
+  const base = path.startsWith('https://') ? '' : BOROS_BASE_URL;
+  const url = `${base}${path}${path.includes('?') ? '&' : '?'}${clientTag}`;
   let resp: Awaited<ReturnType<FetchLike>>;
   try {
     resp = await fetchImpl(url, { signal: AbortSignal.timeout(15_000) });
@@ -303,32 +310,49 @@ async function getJson(fetchImpl: FetchLike, path: string): Promise<unknown> {
   }
 }
 
-/** GET /core/v1/markets → normalized markets (list is small, one page).
+/** GET {gateway}/v1/markets → normalized markets.
+ * `isMatured=false` is this surface's own liveness filter and reproduced the
+ * old `/core/v1/markets` set exactly (46/46 ids, live-diffed 2026-09-17).
+ * resumeToken-paginated (limit cap 200/page; today's set is one page).
  * ⚠ LIVE MARKETS ONLY: a matured market drops out of this listing. History
  * that references one resolves it through `fetchBorosMarket` instead. */
 export async function fetchBorosMarkets(fetchImpl: FetchLike): Promise<BorosMarket[]> {
-  const body = (await getJson(fetchImpl, '/core/v1/markets')) as {
-    results?: Array<Record<string, unknown>>;
-  };
-  if (!Array.isArray(body?.results)) {
-    throw new CoreError('Boros /markets: unexpected response shape (no results[])', 'network');
+  const out: Array<Record<string, unknown>> = [];
+  let resumeToken: string | null = null;
+  for (let page = 0; page < 10; page += 1) {
+    const cursor = resumeToken ? `&resumeToken=${encodeURIComponent(resumeToken)}` : '';
+    const body = (await getJson(
+      fetchImpl,
+      `${BOROS_GATEWAY_BASE_URL}/v1/markets?isMatured=false&limit=200${cursor}`,
+    )) as { results?: Array<Record<string, unknown>>; resumeToken?: unknown };
+    if (!Array.isArray(body?.results)) {
+      throw new CoreError('Boros /markets: unexpected response shape (no results[])', 'network');
+    }
+    out.push(...body.results);
+    resumeToken = typeof body.resumeToken === 'string' && body.resumeToken ? body.resumeToken : null;
+    if (resumeToken === null) break;
   }
-  return body.results.map(normalizeBorosMarket);
+  return out.map(normalizeBorosMarket);
 }
 
 /**
- * GET /core/v1/markets/{marketId} — one market by id, INCLUDING matured ones
- * (probed live 2026-09-03: id 155, matured 31 Jul, still served here while
+ * GET {gateway}/v1/markets/by-ids — one market by id, INCLUDING matured ones
+ * (probed live 2026-09-17: id 155, matured 31 Jul, still served here while
  * absent from the listing). This is how history rows on delisted markets get
  * their base/venue/token back. Metadata of a matured market is immutable, so
- * callers may cache it for as long as they like.
+ * callers may cache it for as long as they like. Unlike the old by-id route
+ * this wraps the market in `results[]` (max 100 ids per call).
  */
 export async function fetchBorosMarket(fetchImpl: FetchLike, marketId: number): Promise<BorosMarket> {
-  const body = (await getJson(fetchImpl, `/core/v1/markets/${marketId}`)) as Record<string, unknown>;
-  if (!body || typeof body !== 'object' || !Number.isFinite(Number(body.marketId))) {
-    throw new CoreError(`Boros /markets/${marketId}: unexpected response shape`, 'network');
+  const body = (await getJson(
+    fetchImpl,
+    `${BOROS_GATEWAY_BASE_URL}/v1/markets/by-ids?marketIds=${marketId}`,
+  )) as { results?: Array<Record<string, unknown>> };
+  const found = Array.isArray(body?.results) ? body.results[0] : undefined;
+  if (!found || !Number.isFinite(Number(found.marketId))) {
+    throw new CoreError(`Boros /markets/by-ids ${marketId}: unexpected response shape`, 'network');
   }
-  return normalizeBorosMarket(body);
+  return normalizeBorosMarket(found);
 }
 
 function normalizeBorosMarket(m: Record<string, unknown>): BorosMarket {
@@ -337,12 +361,17 @@ function normalizeBorosMarket(m: Record<string, unknown>): BorosMarket {
     const metadata = (m.metadata ?? {}) as Record<string, unknown>;
     const data = (m.data ?? {}) as Record<string, unknown>;
     const config = (m.config ?? {}) as Record<string, unknown>;
+    const platform = (m.platform ?? {}) as Record<string, unknown>;
     return {
       marketId: Number(m.marketId),
       tokenId: Number(m.tokenId),
       name: String(imData.name ?? ''),
-      venue: String(metadata.platformName ?? ''),
-      base: String(metadata.assetSymbol ?? ''),
+      // platform.platformId — NOT platform.name, which display-cases four
+      // venues ("KuCoin" vs the old surface's "Kucoin"). platformId and
+      // underlyingSymbol match the old platformName/assetSymbol byte-for-byte
+      // across all 46 live markets (diffed 2026-09-17).
+      venue: String(platform.platformId ?? ''),
+      base: String(metadata.underlyingSymbol ?? ''),
       maturity: Number(imData.maturity ?? 0),
       paymentPeriod: Number(extConfig.paymentPeriod ?? 0),
       settleFeeApr: norm18(extConfig.settleFeeRate as string),
@@ -353,7 +382,10 @@ function normalizeBorosMarket(m: Record<string, unknown>): BorosMarket {
       takerFeeRate: norm18(config.takerFee as string),
       maxRateDeviationApr:
         (Number(config.maxRateDeviationFactorBase1e4 ?? 0) / 1e4) * Number(data.markApr ?? 0),
-      state: String(m.state ?? ''),
+      // config.status carries the lifecycle the old `state` string did:
+      // 2 ⇒ Normal, 1 ⇒ Paused (38/38 and 8/8 live, 2026-09-17). Anything
+      // else stays non-Normal so an unknown status is dropped, not traded.
+      state: Number(config.status) === 2 ? 'Normal' : 'Paused',
       assetMarkPriceUsd: Number(data.assetMarkPrice ?? 0),
       kIM: norm18(config.kIM as string),
       imTickThresh: Number(imData.iTickThresh ?? 0),
@@ -380,7 +412,9 @@ export async function fetchBorosOrderBook(
   fetchImpl: FetchLike,
   marketId: number,
 ): Promise<BorosOrderBook> {
-  const path = `/core/v1/order-books/${marketId}?tickSize=${BOROS_BOOK_TICK_SIZE}`;
+  // includeAmm defaults false — the same book the old /core/v1/order-books
+  // route served, and the wire shape (long/short ia+sz) is unchanged.
+  const path = `${BOROS_GATEWAY_BASE_URL}/v1/markets/order-book?marketId=${marketId}&tickSize=${BOROS_BOOK_TICK_SIZE}`;
   const body = (await getJson(fetchImpl, path)) as {
     short?: { ia?: unknown; sz?: unknown };
     long?: { ia?: unknown; sz?: unknown };
@@ -420,64 +454,109 @@ export async function fetchBorosOrderBook(
   };
 }
 
-/** GET /core/v1/collaterals/summary — margin groups + positions per zone. */
+/**
+ * Margin groups + positions per zone, joined from the two account reads that
+ * together replace /core/v1/collaterals/summary:
+ *   - market-acc-infos-by-root → one row per marketAcc: netBalance, initial
+ *     margin, and each market's position size, margin and resting orders;
+ *   - active-positions → the rates and PnL the first read does not carry
+ *     (fixedApr, side, unrealisedPnl, settlementPnl).
+ * Every consumed field was byte-compared against the old response (3/3 live
+ * positions, 2026-09-17). `markApr` is the one drop — it has no home on this
+ * surface, and the returns layer already falls back to the market's own mark.
+ *
+ * `marketAcc` packs root(20B)·accountId(1B)·tokenId(2B)·marketId(3B), the
+ * marketId segment being 0xFFFFFF for a cross account and the market's own id
+ * for an isolated one. That is what turns this flat row list back into zones.
+ */
 export async function fetchBorosCollaterals(
   fetchImpl: FetchLike,
   address: string,
   accountId = 0,
 ): Promise<BorosCollateralZone[]> {
-  const body = (await getJson(
-    fetchImpl,
-    `/core/v1/collaterals/summary?userAddress=${address}&accountId=${accountId}`,
-  )) as { collaterals?: Array<Record<string, unknown>> };
-  if (!Array.isArray(body?.collaterals)) {
+  const [infos, actives] = (await Promise.all([
+    getJson(
+      fetchImpl,
+      `${BOROS_GATEWAY_BASE_URL}/v1/accounts/market-acc-infos-by-root?root=${address}`,
+    ),
+    getJson(
+      fetchImpl,
+      `${BOROS_GATEWAY_BASE_URL}/v1/accounts/active-positions?root=${address}&accountId=${accountId}`,
+    ),
+  ])) as Array<{ results?: Array<Record<string, unknown>> }>;
+  if (!Array.isArray(infos?.results)) {
     throw new CoreError(
-      'Boros /collaterals/summary: unexpected response shape (no collaterals[])',
+      'Boros /accounts/market-acc-infos-by-root: unexpected response shape (no results[])',
+      'network',
+    );
+  }
+  if (!Array.isArray(actives?.results)) {
+    throw new CoreError(
+      'Boros /accounts/active-positions: unexpected response shape (no results[])',
       'network',
     );
   }
 
-  const toPosition = (p: Record<string, unknown>): BorosMarketPosition => {
-    const pnl = (p.pnl ?? {}) as Record<string, unknown>;
+  const live = new Map<string, Record<string, unknown>>();
+  for (const a of actives.results) {
+    live.set(`${String(a.marketAcc ?? '').toLowerCase()}:${Number(a.marketId)}`, a);
+  }
+
+  const toPosition = (marketAcc: string, p: Record<string, unknown>): BorosMarketPosition => {
+    const a = live.get(`${marketAcc.toLowerCase()}:${Number(p.marketId)}`) ?? {};
     return {
       marketId: Number(p.marketId),
-      side: Number(p.side),
-      notionalSize: String(p.notionalSize ?? '0'),
-      fixedApr: Number(p.fixedApr ?? 0),
-      markApr: Number(p.markApr ?? 0),
+      side: Number(a.side ?? 0),
+      notionalSize: String(p.signedSize ?? '0'),
+      fixedApr: Number(a.fixedApr ?? 0),
+      markApr: 0,
       pnl: {
-        rateSettlementPnl: String(pnl.rateSettlementPnl ?? '0'),
-        unrealisedPnl: String(pnl.unrealisedPnl ?? '0'),
+        rateSettlementPnl: String(a.settlementPnl ?? '0'),
+        unrealisedPnl: String(a.unrealisedPnl ?? '0'),
       },
-      positionInitialMargin: String(p.positionInitialMargin ?? p.initialMargin ?? '0'),
+      // One combined per-market margin here (position + its resting orders),
+      // so the old IM-gap test for orders is replaced by the order list.
+      positionInitialMargin: String(p.initialMargin ?? '0'),
       initialMargin: p.initialMargin as string | undefined,
+      hasRestingOrders: Array.isArray(p.orders) && p.orders.length > 0,
     };
   };
-  const toGroup = (g: Record<string, unknown>, isCross: boolean): BorosMarginGroup => ({
-    isCross,
-    netBalance: String(g.netBalance ?? '0'),
-    initialMargin: g.initialMargin as string | undefined,
-    marketPositions: Array.isArray(g.marketPositions)
-      ? (g.marketPositions as Array<Record<string, unknown>>).map(toPosition)
-      : [],
-  });
 
-  return body.collaterals.map((zone) => {
-    const cross = zone.crossPosition as Record<string, unknown> | undefined;
-    const isolated = Array.isArray(zone.isolatedPositions)
-      ? (zone.isolatedPositions as Array<Record<string, unknown>>)
-      : [];
-    return {
-      tokenId: Number(zone.tokenId),
-      cross: cross ? toGroup(cross, true) : null,
-      isolated: isolated.map((g) => toGroup(g, false)),
+  const zones = new Map<number, BorosCollateralZone>();
+  for (const r of infos.results) {
+    const acc = String(r.marketAcc ?? '').slice(2);
+    if (acc.length < 52) continue;
+    if (parseInt(acc.slice(40, 42), 16) !== accountId) continue;
+    const tokenId = parseInt(acc.slice(42, 46), 16);
+    const isCross = acc.slice(46, 52).toLowerCase() === 'ffffff';
+    const group: BorosMarginGroup = {
+      isCross,
+      netBalance: String(r.netBalance ?? '0'),
+      initialMargin: r.initialMargin as string | undefined,
+      marketPositions: Array.isArray(r.positions)
+        ? (r.positions as Array<Record<string, unknown>>).map((p) =>
+            toPosition(String(r.marketAcc ?? ''), p),
+          )
+        : [],
     };
-  });
+    const zone = zones.get(tokenId) ?? { tokenId, cross: null, isolated: [] };
+    if (isCross) zone.cross = group;
+    else zone.isolated.push(group);
+    zones.set(tokenId, zone);
+  }
+  return [...zones.values()];
 }
 
 /**
  * GET /core/v1/pnl/transactions for one collateral zone — paginates fully
  * (fees + open-time detection need the whole history; counts are small).
+ *
+ * ⚠ THE ONE CALL STILL ON CORE. The open-api surface has no equivalent: its
+ * fill feed (`/v1/accounts/position-update-events`, whose rows are otherwise
+ * byte-identical) requires an explicit marketId and 400s without one, so it
+ * cannot answer "every fill in this collateral zone" — which is exactly what
+ * the asset view needs, including markets the account no longer holds.
+ * `/v1/accounts/light-event-feed` is account-wide but carries no fee or pnl.
  *
  * ⚠ Returns its own COVERAGE, not a bare list. The page cap below is a
  * runaway guard, but an account that reaches it gets a silently truncated
