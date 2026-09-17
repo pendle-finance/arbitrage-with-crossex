@@ -1,10 +1,7 @@
 import '@testing-library/jest-dom/vitest';
-import { cleanup, configure } from '@testing-library/react';
+import { cleanup } from '@testing-library/react';
 import { afterAll, afterEach, beforeAll } from 'vitest';
 import { server } from './server';
-
-// A hover card took over the 1 s default to open on a slow CI runner.
-configure({ asyncUtilTimeout: 3000 });
 
 // jsdom implements neither scrollIntoView nor scrollTo — the trade rail and the
 // tab switcher call them.

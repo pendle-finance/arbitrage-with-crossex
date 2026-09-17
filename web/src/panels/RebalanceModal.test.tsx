@@ -437,9 +437,7 @@ describe('RebalanceModal plan state', () => {
   it('explains a round and why more than one in the step control hover', async () => {
     const user = userEvent.setup();
     show(rebalanceViews.twoBorrows);
-    await user.hover(screen.getByRole('button', { name: 'Show steps' }));
-    const card = await screen.findByRole('tooltip');
-    expect(card.textContent).toBe(
+    expect((await hoverCard(user, 'Show steps')).text).toBe(
       'A round is one trip through Gate spot, capped by your free margin. Gate locks $48.80 of initial margin for your borrow. Each round repays some borrow, so the next round is bigger.',
     );
   });
