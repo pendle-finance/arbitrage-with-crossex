@@ -99,12 +99,31 @@ describe('resolveQty', () => {
 
 describe('isMultipleOf', () => {
   it.each<[number, string, boolean]>([
-    [0.30000000000000004, '0.1', true], // float noise within the 1e-9 tolerance
+    [0.30000000000000004, '0.1', true], // float noise stays on the step
     [0.9, '0.2', false],
     [1.23, '0', true], // non-positive step -> vacuously true
     [1.23, '', true], // Number('') === 0 -> vacuously true
     [0.007, '0.0001', true],
   ])('(%d, %j) -> %s', (qty, step, want) => {
+    expect(isMultipleOf(qty, step)).toBe(want);
+  });
+
+  it.each<[number, string, boolean]>([
+    [49.9, '0.1', true],
+    [49.95, '0.1', false],
+    [4999.9, '0.1', true],
+    [4999.95, '0.1', false],
+    [99999.9, '0.1', true],
+    [1234567.7, '0.1', true],
+    [1234567.75, '0.1', false],
+    [1234567.8 - 0.1, '0.1', true],
+    [5999999.8, '0.1', true],
+    [5999999.85, '0.1', false],
+    [5999999.99, '0.01', true],
+    [5999999.995, '0.01', false],
+    [6000000.001, '0.001', true],
+    [6000000.0015, '0.001', false],
+  ])('at size (%d, %j) -> %s', (qty, step, want) => {
     expect(isMultipleOf(qty, step)).toBe(want);
   });
 });

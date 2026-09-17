@@ -89,7 +89,7 @@ describe('halt texts', () => {
       'Insufficient transferAvailable, transferAvailable: 11.858125309999999914046',
     );
 
-    expect(haltReasonFor(refused)).toBe('Gate refused the move: free margin is too low.');
+    expect(haltReasonFor(refused)).toBe('Gate refused the move: free margin or wallet cash is too low.');
   });
 
   it('halt text for restart', () => {

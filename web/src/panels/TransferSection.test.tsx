@@ -1,50 +1,22 @@
-import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
+import { useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { TransferJob, TransferView } from '../api/types';
-import { REBALANCE_NOW, rebalanceHandler, rebalanceViews, transferHandler, transferViews } from '../test/fixtures';
-import { env, server } from '../test/server';
+import type { TransferView } from '../api/types';
+import { rebalanceHandler, rebalanceViews, transferHandler, transferPostHandler, transferViews } from '../test/fixtures';
+import { server } from '../test/server';
 import { renderWithClient } from '../test/utils';
 import { TransferSection } from './TransferSection';
+import type { TransferPick } from './TransferModal';
 
 const DONE_TOAST = 'Sent 11.88 USDC to Gate spot. 10.88 arrived.';
-const SENDING = 'Sending 11.88 USDC to Gate spot';
-
-const SENT_INTO_HYPERLIQUID: TransferJob = {
-  ...transferViews.moving.transfer,
-  from: 'SPOT',
-  to: 'CROSSEX_HYPERLIQUID',
-};
 
 function serve(view: TransferView = transferViews.accountB) {
   server.use(transferHandler(view), rebalanceHandler(rebalanceViews.accountB));
 }
 
-const loaded = () => screen.findByRole('radio', { name: 'Out of CrossEx' });
-const amountInput = () => screen.getByRole('textbox');
-
-function amountLabel(): string | null {
-  const input = amountInput();
-  if (!(input instanceof HTMLInputElement)) return null;
-  return input.labels?.[0]?.textContent ?? null;
-}
-const pickWallet = (name: string) => userEvent.click(screen.getByRole('radio', { name }));
-const pickInto = () => userEvent.click(screen.getByRole('radio', { name: 'Into CrossEx' }));
-
-function walletRows(group: HTMLElement): string[] {
-  return within(group)
-    .getAllByRole('radio')
-    .map((radio) =>
-      Array.from(radio.closest('label')?.querySelectorAll('span') ?? [], (span) => span.textContent).join(' '),
-    );
-}
-
-function facts(): Record<string, string> {
-  return Object.fromEntries(
-    Array.from(document.querySelectorAll('dt'), (dt) => [dt.textContent ?? '', dt.nextElementSibling?.textContent ?? '']),
-  );
-}
+const loaded = () => screen.findByRole('group', { name: 'Transfer' });
 
 async function renderCard(view: TransferView = transferViews.accountB) {
   serve(view);
@@ -54,188 +26,75 @@ async function renderCard(view: TransferView = transferViews.accountB) {
 
 describe('TransferSection', () => {
   afterEach(() => {
-    vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
-  it('out is default', async () => {
-    serve();
-    renderWithClient(<TransferSection holdMs={50} />);
-
-    expect(await loaded()).toBeChecked();
-    expect(screen.getByRole('radio', { name: 'Into CrossEx' })).not.toBeChecked();
-  });
-
-  it('from list balances', async () => {
+  it('at rest shows just a Manual Transfer button, nothing else', async () => {
     await renderCard();
 
-    const group = screen.getByRole('radiogroup', { name: 'From · CrossEx wallet' });
-    await waitFor(() =>
-      expect(walletRows(group)).toEqual([
-        'USDT · CrossEx 986.61 USDT',
-        'USDC · Gate 0.29 USDC',
-        'USDC · Hyperliquid 11.88 USDC',
-        'USDC · Lighter 0.00 USDC',
-      ]),
-    );
+    expect(screen.getByRole('button', { name: 'Manual Transfer' })).toBeEnabled();
+    expect(screen.queryByRole('textbox')).toBeNull();
+    expect(screen.queryByRole('radio')).toBeNull();
+    expect(screen.queryByRole('dialog')).toBeNull();
   });
 
-  it('spot tile', async () => {
+  it('has no title and no hover', async () => {
     await renderCard();
+    const button = screen.getByRole('button', { name: 'Manual Transfer' });
 
-    const to = screen.getByRole('group', { name: 'To' });
-    expect(within(to).getByText('Gate spot')).toBeInTheDocument();
-    expect(within(to).getByText('318.42 USDT · 0.00 USDC')).toBeInTheDocument();
+    await userEvent.hover(button);
+
+    expect(screen.queryByRole('tooltip')).toBeNull();
   });
 
-  it('into swaps columns', async () => {
-    await renderCard();
-    await pickInto();
-
-    expect(within(screen.getByRole('group', { name: 'From' })).getByText('Gate spot')).toBeInTheDocument();
-    expect(within(screen.getByRole('radiogroup', { name: 'To · CrossEx wallet' })).getAllByRole('radio')).toHaveLength(4);
-    expect(screen.queryByRole('radiogroup', { name: 'From · CrossEx wallet' })).toBeNull();
+  it('no should i signal', async () => {
+    const states: { name: string; view: TransferView }[] = [
+      { name: 'at rest', view: transferViews.accountB },
+      { name: 'moving', view: transferViews.moving },
+      { name: 'failed', view: transferViews.failedOverCap },
+      { name: 'lock rebalance', view: transferViews.lockRebalance },
+      { name: 'lock halted', view: transferViews.lockHalted },
+      { name: 'lock deal', view: transferViews.lockDeal },
+      { name: 'no Spot read', view: transferViews.noSpot },
+    ];
+    for (const { name, view } of states) {
+      await renderCard(view);
+      expect(screen.queryByText(/should/i), name).toBeNull();
+      expect(screen.queryByText(/recommend/i), name).toBeNull();
+      expect(screen.queryByText(/best/i), name).toBeNull();
+      cleanup();
+    }
   });
 
-  it('up to label', async () => {
-    await renderCard();
-    await pickWallet('USDC · Hyperliquid');
+  it('lock note names the reason, and disables the button', async () => {
+    await renderCard(transferViews.lockRebalance);
+    expect(screen.getByText('Rebalance running')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Manual Transfer' })).toBeDisabled();
+    cleanup();
 
-    expect(amountLabel()).toBe('Amount · up to 11.88');
+    await renderCard(transferViews.lockHalted);
+    expect(screen.getByText('Rebalance stopped')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Manual Transfer' })).toBeDisabled();
+    cleanup();
+
+    await renderCard(transferViews.lockDeal);
+    expect(screen.getByText('Deal running')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Manual Transfer' })).toBeDisabled();
   });
 
-  it('max fills', async () => {
-    await renderCard();
-    await pickWallet('USDC · Hyperliquid');
-    await userEvent.click(screen.getByRole('button', { name: 'Max' }));
-
-    expect(amountInput()).toHaveValue('11.88');
-  });
-
-  it('hyperliquid out facts', async () => {
-    await renderCard();
-    await pickWallet('USDC · Hyperliquid');
-    await userEvent.type(amountInput(), '11.88');
-
-    expect(facts()).toEqual({ Fee: '$1.00', Time: 'about 6.5 min', Minimum: '11 USDC', 'You get': '10.88 USDC' });
-  });
-
-  it('no minimum on USDT', async () => {
-    await renderCard();
-    await pickInto();
-    await userEvent.type(amountInput(), '150');
-
-    expect(facts()).not.toHaveProperty('Minimum');
-    expect(facts()).toHaveProperty('You get', '150.00 USDT');
-  });
-
-  it('into hold label', async () => {
-    await renderCard();
-    await pickInto();
-    await userEvent.type(amountInput(), '150');
-
-    expect(screen.getByRole('button', { name: 'Hold to send 150.00 USDT to USDT · CrossEx' })).toBeEnabled();
-  });
-
-  it('into hold label names the USDC wallet', async () => {
-    await renderCard(transferViews.spotBoth);
-    await pickInto();
-    await userEvent.type(amountInput(), '20');
-
-    await pickWallet('USDC · Hyperliquid');
-    expect(screen.getByRole('button', { name: 'Hold to send 20.00 USDC to USDC · Hyperliquid' })).toBeEnabled();
-    await pickWallet('USDC · Gate');
-    expect(screen.getByRole('button', { name: 'Hold to send 20.00 USDC to USDC · Gate' })).toBeEnabled();
-  });
-
-  it('sending line and done toast name the wallet', async () => {
-    await renderCard({ ...transferViews.moving, transfer: SENT_INTO_HYPERLIQUID });
-    expect(screen.getByText('Sending 11.88 USDC to USDC · Hyperliquid')).toBeInTheDocument();
-
-    serve({ ...transferViews.moving, transfer: { ...SENT_INTO_HYPERLIQUID, status: 'done', received: 10.88 } });
-
-    expect(
-      await screen.findByText('Sent 11.88 USDC to USDC · Hyperliquid. 10.88 arrived.', undefined, { timeout: 3_000 }),
-    ).toBeInTheDocument();
-  });
-
-  it('out hold label', async () => {
-    await renderCard();
-    await pickWallet('USDC · Hyperliquid');
-    await userEvent.type(amountInput(), '11.88');
-
-    expect(screen.getByRole('button', { name: 'Hold to send 11.88 USDC to Gate spot' })).toBeEnabled();
-  });
-
-  it('a tiny amount shows its real value', async () => {
-    await renderCard();
-    await userEvent.type(amountInput(), '0.001');
-
-    expect(screen.getByRole('button', { name: 'Hold to send 0.001 USDT to Gate spot' })).toBeEnabled();
-    expect(facts()).toHaveProperty('You get', '0.001 USDT');
-  });
-
-  it('zero names the real minimum, not "more than 0"', async () => {
-    // The field starts at 0.00, so "Must be more than 0" was the message a user
-    // saw before typing anything — and it points at the wrong floor.
-    await renderCard();
-    await pickWallet('USDC · Hyperliquid');
-    await userEvent.type(amountInput(), '0');
-
-    expect(screen.getByText('Minimum 11 USDC.')).toBeInTheDocument();
-    expect(screen.queryByText('Must be more than 0')).toBeNull();
-  });
-
-  it('a negative still says more than 0 — a minimum is a strange reply to -5', async () => {
-    await renderCard();
-    await pickWallet('USDC · Hyperliquid');
-    await userEvent.type(amountInput(), '-5');
-
-    expect(screen.getByText('Must be more than 0')).toBeInTheDocument();
-  });
-
-  it('over max line', async () => {
-    await renderCard();
-    await userEvent.type(amountInput(), '900');
-
-    expect(screen.getByText('Max 816.10 USDT. The rest is margin for open positions.')).toBeInTheDocument();
-  });
-
-  it('over max hold off', async () => {
-    await renderCard();
-    await userEvent.type(amountInput(), '900');
-
-    expect(screen.getByRole('button', { name: 'Hold to send 900.00 USDT to Gate spot' })).toBeDisabled();
-  });
-
-  it('over max hides you get and marks the input invalid', async () => {
-    await renderCard();
-    await userEvent.type(amountInput(), '900');
-
-    expect(facts()).not.toHaveProperty('You get');
-    expect(amountInput()).toHaveAttribute('aria-invalid', 'true');
-  });
-
-  it('moving line', async () => {
-    vi.useFakeTimers({ toFake: ['Date'] });
-    vi.setSystemTime(REBALANCE_NOW);
+  it('a moving transfer opens the modal on the sending view', async () => {
     await renderCard(transferViews.moving);
 
-    expect(screen.getByText(SENDING)).toBeInTheDocument();
-    expect(screen.getByText('2m 10s of about 6.5 min')).toBeInTheDocument();
-    expect(screen.getByRole('progressbar')).toBeInTheDocument();
-  });
+    const button = screen.getByRole('button', { name: 'Sending 11.88 USDC' });
+    await userEvent.click(button);
 
-  it('moving hold off', async () => {
-    await renderCard(transferViews.moving);
-    fireEvent.change(amountInput(), { target: { value: '10' } });
-
-    expect(screen.getByRole('button', { name: 'Hold to send 10.00 USDT to Gate spot' })).toBeDisabled();
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText(/You can close this\./)).toBeInTheDocument();
   });
 
   it('done toast', async () => {
     await renderCard(transferViews.moving);
-    expect(screen.getByText(SENDING)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Sending 11.88 USDC' })).toBeInTheDocument();
 
     serve(transferViews.done);
 
@@ -249,75 +108,13 @@ describe('TransferSection', () => {
     expect(screen.queryByText(DONE_TOAST)).toBeNull();
   });
 
-  it('failed line', async () => {
-    await renderCard(transferViews.failed);
-
-    expect(screen.getByText('Transfer failed: x.')).toBeInTheDocument();
-  });
-
-  it('rebalance lock line', async () => {
-    await renderCard(transferViews.lockRebalance);
-
-    expect(screen.getByText('Transfers wait until the rebalance ends.')).toBeInTheDocument();
-  });
-
-  it('rebalance lock hold off', async () => {
-    await renderCard(transferViews.lockRebalance);
-    fireEvent.change(amountInput(), { target: { value: '10' } });
-
-    expect(screen.getByRole('button', { name: 'Hold to send 10.00 USDT to Gate spot' })).toBeDisabled();
-  });
-
-  it('deal lock line', async () => {
-    await renderCard(transferViews.lockDeal);
-
-    expect(screen.getByText('Transfers wait until the deal ends.')).toBeInTheDocument();
-  });
-
-  it('a lock wins over a failed line', async () => {
-    await renderCard(transferViews.failedLocked);
-
-    expect(screen.getByText('Transfers wait until the rebalance ends.')).toBeInTheDocument();
-    expect(screen.queryByText('Transfer failed: x.')).toBeNull();
-  });
-
-  it('no spot read line', async () => {
-    await renderCard(transferViews.noSpot);
-
-    expect(screen.getByText('Add Spot read permission to see spot balances.')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'How ▸' })).toBeInTheDocument();
-  });
-
-  it('balance hidden', async () => {
-    await renderCard(transferViews.noSpot);
-
-    expect(within(screen.getByRole('group', { name: 'To' })).getByText('balance hidden')).toBeInTheDocument();
-  });
-
-  it('no max without spot read', async () => {
-    await renderCard(transferViews.noSpot);
-    await pickInto();
-
-    expect(screen.queryByRole('button', { name: 'Max' })).toBeNull();
-    expect(amountLabel()).toBe('Amount');
-  });
-
-  it('title hover', async () => {
-    await renderCard();
-    await userEvent.hover(screen.getByRole('button', { name: 'Manual Transfer' }));
-
-    expect(await screen.findByRole('tooltip')).toHaveTextContent(
-      "Move funds between Gate spot and CrossEx. Gate's website cannot do this.",
-    );
-  });
-
   it('done toast waits for visible tab', async () => {
     const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden');
     await renderCard(transferViews.moving);
-    expect(screen.getByText(SENDING)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Sending 11.88 USDC' })).toBeInTheDocument();
 
     serve(transferViews.done);
-    await waitFor(() => expect(screen.queryByText(SENDING)).toBeNull(), { timeout: 3_000 });
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Sending 11.88 USDC' })).toBeNull(), { timeout: 3_000 });
     expect(screen.queryByText(DONE_TOAST)).toBeNull();
 
     visibility.mockReturnValue('visible');
@@ -326,6 +123,85 @@ describe('TransferSection', () => {
     });
 
     expect(await screen.findByText(DONE_TOAST)).toBeInTheDocument();
+  });
+
+  it('a failed transfer opens the modal on the failed view', async () => {
+    await renderCard(transferViews.failedOverCap);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Transfer failed · open' }));
+
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText('Transfer failed.')).toBeInTheDocument();
+  });
+
+  it('a failure outranks a lock', async () => {
+    await renderCard(transferViews.failedAndRebalanceRunning);
+
+    const button = screen.getByRole('button', { name: 'Transfer failed · open' });
+    expect(button).toBeEnabled();
+    await userEvent.click(button);
+
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText('Transfer failed.')).toBeInTheDocument();
+  });
+
+  it('retry id survives closing the modal', async () => {
+    const posts: { id?: unknown }[] = [];
+    server.use(transferPostHandler(posts, 'silent'));
+    await renderCard();
+    const holdTen = async () => {
+      await userEvent.click(screen.getByRole('button', { name: 'Manual Transfer' }));
+      const dialog = await screen.findByRole('dialog');
+      await userEvent.type(within(dialog).getByRole('textbox'), '10');
+      const hold = within(dialog).getByRole('button', { name: 'Hold to send 10.00 USDT to Gate spot' });
+      await waitFor(() => expect(hold).toBeEnabled());
+      fireEvent.pointerDown(hold);
+    };
+
+    await holdTen();
+    await screen.findByText('Gate did not answer.');
+    await userEvent.click(screen.getByRole('button', { name: 'close' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    await holdTen();
+
+    await waitFor(() => expect(posts).toHaveLength(2));
+    expect(posts[0].id).toEqual(expect.any(String));
+    expect(posts[1].id).toBe(posts[0].id);
+  });
+
+  it('a new pick opens the modal', async () => {
+    serve();
+    const picks: TransferPick[] = [
+      { coin: 'USDT', wallet: 'CROSSEX', nonce: 1 },
+      { coin: 'USDC', wallet: 'CROSSEX_HYPERLIQUID', nonce: 2 },
+    ];
+    function PickHost() {
+      const [i, setI] = useState(0);
+      return (
+        <>
+          <button type="button" onClick={() => setI((n) => Math.min(n + 1, picks.length - 1))}>
+            next pick
+          </button>
+          <TransferSection holdMs={50} pick={picks[i]} />
+        </>
+      );
+    }
+    renderWithClient(<PickHost />);
+
+    await screen.findByRole('dialog');
+    await userEvent.click(screen.getByRole('button', { name: 'close' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+
+    await userEvent.click(screen.getByRole('button', { name: 'next pick' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByRole('radio', { name: 'Into CrossEx' })).toBeChecked();
+    expect(within(dialog).getByRole('radio', { name: 'USDC · Hyperliquid' })).toBeChecked();
+
+    await userEvent.click(within(dialog).getByRole('button', { name: 'close' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+
+    await userEvent.click(screen.getByRole('button', { name: 'next pick' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
   });
 
   it('load error retry', async () => {
@@ -346,224 +222,6 @@ describe('TransferSection', () => {
     serve();
     await userEvent.click(retry);
 
-    expect(await loaded()).toBeChecked();
-  });
-
-  it('load error stays while the retry poll runs', async () => {
-    let reads = 0;
-    server.use(
-      http.get('/api/transfer', () => {
-        reads += 1;
-        if (reads === 1) {
-          return HttpResponse.json(
-            { ok: false, error: { category: 'network', message: 'gate down', retryable: true } },
-            { status: 500 },
-          );
-        }
-        return new Promise(() => undefined);
-      }),
-      rebalanceHandler(rebalanceViews.accountB),
-    );
-    renderWithClient(<TransferSection holdMs={50} />);
-
-    const retry = await screen.findByRole('button', { name: 'Retry' });
-    expect(screen.getByText('Could not load transfers. gate down')).toBeInTheDocument();
-
-    await userEvent.click(retry);
-
-    await waitFor(() => expect(reads).toBe(2));
-    expect(screen.getByText('Could not load transfers. gate down')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
-    expect(document.querySelector('.animate-pulse')).toBeNull();
-  });
-
-  it('halted lock line', async () => {
-    await renderCard(transferViews.lockHalted);
-
-    expect(screen.getByText('Transfers wait until you resume or abandon the rebalance.')).toBeInTheDocument();
-  });
-
-  it('moving line wins', async () => {
-    await renderCard({ ...transferViews.moving, lock: 'deal' });
-
-    expect(screen.getByText(SENDING)).toBeInTheDocument();
-    expect(screen.queryByText('Transfers wait until the deal ends.')).toBeNull();
-  });
-
-  it('moving form off', async () => {
-    await renderCard(transferViews.moving);
-
-    expect(amountInput()).toBeDisabled();
-  });
-
-  it('wallet list header', async () => {
-    await renderCard();
-
-    expect(screen.getByRole('radiogroup', { name: 'From · CrossEx wallet' })).toBeInTheDocument();
-    expect(screen.getByText('From · CrossEx wallet')).toBeInTheDocument();
-  });
-
-  it('seconds under a minute', async () => {
-    await renderCard();
-    await pickInto();
-    await userEvent.type(amountInput(), '150');
-
-    expect(facts()).toHaveProperty('Time', 'about 3s');
-  });
-
-  it('free fee', async () => {
-    await renderCard();
-    await pickInto();
-    await userEvent.type(amountInput(), '150');
-
-    expect(facts()).toHaveProperty('Fee', 'free');
-  });
-
-  it('hold posts the trimmed amount text', async () => {
-    const posts: unknown[] = [];
-    server.use(
-      http.post('/api/transfer', async ({ request }) => {
-        posts.push(await request.json());
-        return HttpResponse.json(env({ id: 'mtzur2ab' }), { status: 202 });
-      }),
-    );
-    await renderCard();
-    await pickWallet('USDC · Hyperliquid');
-    await userEvent.type(amountInput(), ' 11.88 ');
-
-    fireEvent.pointerDown(screen.getByRole('button', { name: 'Hold to send 11.88 USDC to Gate spot' }));
-
-    await waitFor(() =>
-      expect(posts).toEqual([
-        { id: expect.any(String), coin: 'USDC', from: 'CROSSEX_HYPERLIQUID', to: 'SPOT', amount: '11.88' },
-      ]),
-    );
-  });
-
-  it('a hold after a refused POST sends the same id', async () => {
-    const ids: unknown[] = [];
-    server.use(
-      http.post('/api/transfer', async ({ request }) => {
-        ids.push(((await request.json()) as { id?: unknown }).id);
-        return HttpResponse.json(
-          { ok: false, error: { category: 'network', message: 'Gate did not answer.', retryable: true } },
-          { status: 502 },
-        );
-      }),
-    );
-    await renderCard();
-    await userEvent.type(amountInput(), '10');
-    const hold = screen.getByRole('button', { name: 'Hold to send 10.00 USDT to Gate spot' });
-
-    fireEvent.pointerDown(hold);
-    await screen.findByRole('alert');
-    await waitFor(() => expect(hold).toBeEnabled());
-    fireEvent.pointerDown(hold);
-
-    await waitFor(() => expect(ids).toHaveLength(2));
-    expect(ids[0]).toEqual(expect.any(String));
-    expect(ids[1]).toBe(ids[0]);
-  });
-
-  it('a hold after a success sends a new id', async () => {
-    const ids: unknown[] = [];
-    server.use(
-      http.post('/api/transfer', async ({ request }) => {
-        ids.push(((await request.json()) as { id?: unknown }).id);
-        return HttpResponse.json(env({ id: 'mtzur2ab' }), { status: 202 });
-      }),
-    );
-    await renderCard();
-    await userEvent.type(amountInput(), '10');
-    const hold = screen.getByRole('button', { name: 'Hold to send 10.00 USDT to Gate spot' });
-
-    fireEvent.pointerDown(hold);
-    await waitFor(() => expect(ids).toHaveLength(1));
-    await waitFor(() => expect(hold).toBeEnabled());
-    fireEvent.pointerDown(hold);
-
-    await waitFor(() => expect(ids).toHaveLength(2));
-    expect(ids[1]).toEqual(expect.any(String));
-    expect(ids[1]).not.toBe(ids[0]);
-  });
-
-  it('a changed hold after a lost response sends a new id', async () => {
-    const ids: unknown[] = [];
-    server.use(
-      http.post('/api/transfer', async ({ request }) => {
-        ids.push(((await request.json()) as { id?: unknown }).id);
-        return HttpResponse.json(
-          { ok: false, error: { category: 'network', message: 'Gate did not answer.', retryable: true } },
-          { status: 502 },
-        );
-      }),
-    );
-    await renderCard();
-    await userEvent.type(amountInput(), '10');
-    const hold = () => screen.getByRole('button', { name: /^Hold to send/ });
-
-    fireEvent.pointerDown(hold());
-    await screen.findByRole('alert');
-    await waitFor(() => expect(hold()).toBeEnabled());
-
-    await userEvent.clear(amountInput());
-    await userEvent.type(amountInput(), '20');
-    fireEvent.pointerDown(hold());
-
-    await waitFor(() => expect(ids).toHaveLength(2));
-    expect(ids[0]).toEqual(expect.any(String));
-    expect(ids[1]).not.toBe(ids[0]);
-  });
-
-  it('hold label and you get have thousands commas', async () => {
-    await renderCard(transferViews.noSpot);
-    await pickInto();
-    await userEvent.type(amountInput(), '1000');
-
-    expect(screen.getByRole('button', { name: 'Hold to send 1,000.00 USDT to USDT · CrossEx' })).toBeEnabled();
-    expect(facts()).toHaveProperty('You get', '1,000.00 USDT');
-  });
-
-  it('a locked form does not change the wallet', async () => {
-    await renderCard(transferViews.lockRebalance);
-    await userEvent.click(screen.getByText('USDC · Hyperliquid'));
-
-    expect(screen.getByRole('radio', { name: 'USDT · CrossEx' })).toBeChecked();
-    expect(screen.getByRole('radio', { name: 'USDC · Hyperliquid' })).toBeDisabled();
-  });
-
-  it('a moving transfer does not change the wallet', async () => {
-    await renderCard(transferViews.moving);
-    await userEvent.click(screen.getByText('USDC · Hyperliquid'));
-
-    expect(screen.getByRole('radio', { name: 'USDT · CrossEx' })).toBeChecked();
-  });
-
-  it('a refused POST shows under the hold', async () => {
-    server.use(
-      http.post('/api/transfer', () =>
-        HttpResponse.json(
-          { ok: false, error: { category: 'validation', message: 'Minimum 11 USDC.', retryable: false } },
-          { status: 409 },
-        ),
-      ),
-    );
-    await renderCard();
-    await pickWallet('USDC · Hyperliquid');
-    await userEvent.type(amountInput(), '11.88');
-
-    fireEvent.pointerDown(screen.getByRole('button', { name: 'Hold to send 11.88 USDC to Gate spot' }));
-    expect(await screen.findByRole('alert')).toHaveTextContent('Minimum 11 USDC.');
-
-    await userEvent.type(amountInput(), '5');
-    expect(screen.queryByRole('alert')).toBeNull();
-  });
-
-  it('pick opens into with the wallet', async () => {
-    serve();
-    renderWithClient(<TransferSection holdMs={50} pick={{ coin: 'USDC', wallet: 'CROSSEX_HYPERLIQUID', nonce: 1 }} />);
-
-    expect(await screen.findByRole('radio', { name: 'Into CrossEx' })).toBeChecked();
-    expect(screen.getByRole('radio', { name: 'USDC · Hyperliquid' })).toBeChecked();
+    expect(await screen.findByRole('button', { name: 'Manual Transfer' })).toBeInTheDocument();
   });
 });

@@ -297,6 +297,7 @@ function borrowed(borrow: number): RebalanceBucket {
     mmHeldUsd: borrow * 0.1,
     interestPaidUsd: 0,
     interestPerDayUsd: 0,
+    ratePerYear: 0.05,
   };
 }
 
@@ -323,7 +324,7 @@ describe('borrow pill', () => {
     expect(tab(/^Balances/)).toHaveAttribute('aria-selected', 'true');
   });
 
-  it('shows a USDT borrow the same way, naming the Gate, Binance, OKX and Bybit legs', async () => {
+  it('shows a USDT borrow the same way, naming the CrossEx wallet', async () => {
     mockApp();
     const usdt: RebalanceBucket = { ...borrowed(300), coin: 'USDT', venue: 'CROSSEX' };
     const usdc: RebalanceBucket = { ...borrowed(0), cash: 500, equity: 500 };
@@ -334,7 +335,8 @@ describe('borrow pill', () => {
     await userEvent.hover(pill);
 
     const card = await screen.findByRole('tooltip');
-    expect(within(card).getByText('Gate, Binance, OKX and Bybit legs')).toBeInTheDocument();
+    expect(within(card).getByText('USDT · CrossEx')).toBeInTheDocument();
+    expect(within(card).queryByText('For')).toBeNull();
   });
 
   it('puts the nearest liquidation line in the margin gauges hover', async () => {
@@ -387,21 +389,18 @@ describe('borrow pill', () => {
       expect(gauges).toHaveAttribute(
         'title',
         expect.stringContaining(
-          'Nearest liquidation: ETH. Liquidates at about $3,764 if only ETH moves (+64%) and every other coin holds still.',
+          'Nearest liquidation: ETH. Gate liquidates your account if ETH rises to about $3,764 (+64%). This assumes ETH moves the same on every venue and other coins do not move. Your ETH short on Hyperliquid loses in this move.',
         ),
       ),
     );
   });
 
-  it('shows no pill under 1 USDC of borrow', async () => {
+  it('shows the pill under 1 USDC of borrow', async () => {
     mockApp();
     server.use(rebalanceHandler(makeRebalanceView({ buckets: [borrowed(0.4)] })));
     await renderApp();
 
-    // The hidden Balances panel renders its section from the same response,
-    // so once it exists the pill has had its answer.
-    await screen.findByRole('region', { name: 'Rebalance', hidden: true });
-    expect(screen.queryByRole('button', { name: /^Borrowing / })).toBeNull();
+    expect(await screen.findByRole('button', { name: 'Borrowing 0.40 USDC' })).toBeInTheDocument();
   });
 });
 

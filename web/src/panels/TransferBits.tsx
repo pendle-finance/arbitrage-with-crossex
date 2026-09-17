@@ -1,13 +1,12 @@
 import { useId } from 'react';
-import type { GateAccount, RebalanceBucket, SpotBalance, TransferCoin, TransferJob, TransferPath } from '../api/types';
+import type { GateAccount, RebalanceBucket, SpotBalance, TransferCoin, TransferPath } from '../api/types';
 import { HoverCard } from '../components/HoverCard';
 import { RadioRow } from '../components/RadioRow';
-import { fmtAbout, fmtAge, fmtUsd, num, sig } from '../lib/fmt';
+import { fmtAbout, fmtUsd, num, sig } from '../lib/fmt';
 import { roundToStep, stripZeros } from '../lib/ticks';
 import { Ext, GATE_API_KEYS_URL, PERMISSION_ROWS } from './onboardingBits';
-import { ProgressBar } from './RebalanceBits';
 import { Facts, keyOf, Term, type Fact } from './RebalanceHovers';
-import { HOVER, WALLET_LABEL } from './rebalanceCopy';
+import { GATE_SPOT, HOVER, WALLET_LABEL } from './rebalanceCopy';
 
 export type CrossexWallet = Exclude<GateAccount, 'SPOT'>;
 
@@ -24,8 +23,12 @@ export function coinOf(wallet: CrossexWallet): TransferCoin {
   return WALLET[wallet].coin;
 }
 
+export function walletName(account: GateAccount): string {
+  return account === 'SPOT' ? GATE_SPOT : WALLET_LABEL[keyOf(WALLET[account])];
+}
+
 export function destinationOf(to: GateAccount): string {
-  return to === 'SPOT' ? 'to Gate spot' : `to ${WALLET_LABEL[keyOf(WALLET[to])]}`;
+  return `to ${walletName(to)}`;
 }
 
 export function WalletList({
@@ -84,7 +87,7 @@ export function SpotTile({ side, spot, disabled }: { side: 'From' | 'To'; spot: 
         {side}
       </span>
       <div className="flex flex-col items-start gap-1 rounded border border-dashed border-gold/40 px-3 py-2.5 text-xs">
-        <HoverCard label="Gate spot" icon={false} widthPx={200}>
+        <HoverCard label={GATE_SPOT} icon={false} widthPx={200}>
           {HOVER.gateSpot}
         </HoverCard>
         <span className="num text-ink-400">
@@ -117,33 +120,12 @@ export function TransferFacts({
   const items: Fact[] = [
     { key: 'fee', label: <Term label="Fee" text={HOVER.fee} />, value: path.feeUsd === 0 ? 'free' : fmtUsd(path.feeUsd) },
     { key: 'time', label: <Term label="Time" text={HOVER.time} />, value: fmtAbout(path.seconds) },
+    { key: 'min', label: <Term label="Minimum" text={HOVER.minimum} />, value: sig(path.min) },
   ];
-  if (path.min >= 1) {
-    items.push({ key: 'min', label: <Term label="Minimum" text={HOVER.minimum} />, value: `${sig(path.min)} ${path.coin}` });
-  }
   if (showYouGet) {
     items.push({ key: 'get', label: 'You get', value: `${fmtTransferAmount(Math.max(0, amount - path.feeUsd))} ${path.coin}` });
   }
   return <Facts items={items} className={`grid w-fit grid-cols-2 gap-x-7 gap-y-3 ${disabled ? 'opacity-50' : ''}`} />;
-}
-
-export function MovingLine({ transfer, seconds, now }: { transfer: TransferJob; seconds: number | null; now: number }) {
-  const elapsedMs = Math.max(0, now - transfer.createdAt);
-  const elapsed = fmtAge(elapsedMs);
-  return (
-    <div
-      role="status"
-      className="flex flex-wrap items-center gap-x-4 gap-y-1.5 rounded border border-info/40 bg-info/10 px-3 py-2 text-xs"
-    >
-      <span className="num text-pastel-blue">
-        {`Sending ${num(transfer.amount)} ${transfer.coin} ${destinationOf(transfer.to)}`}
-      </span>
-      <div className="w-24">
-        <ProgressBar ratio={seconds ? elapsedMs / (seconds * 1000) : 0} tone="running" />
-      </div>
-      <span className="num text-ink-200">{seconds === null ? elapsed : `${elapsed} of ${fmtAbout(seconds)}`}</span>
-    </div>
-  );
 }
 
 export function NoSpotReadHow() {

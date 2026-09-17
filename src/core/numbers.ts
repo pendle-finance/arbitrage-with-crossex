@@ -26,14 +26,23 @@ export function decimalsOf(step: string): number {
 export function roundToStep(value: number, step: string, dir: 'down' | 'up' | 'nearest' = 'down'): string {
   const s = Number(step);
   if (!Number.isFinite(s) || s <= 0) return String(value);
+  const decimals = decimalsOf(step);
   const r = value / s;
-  // Float guard: 0.3/0.1 === 2.9999999999999996, so a bare floor would drop a whole
-  // step (e.g. close 0.2 of a 0.3 position). Snap ratios within tolerance of an
-  // integer before rounding (also keeps ceil from over-rounding 2.0000001 → 3).
-  const nearest = Math.round(r);
-  const snapped = Math.abs(r - nearest) < 1e-9 * Math.max(1, Math.abs(r));
-  const mult = snapped ? nearest : dir === 'nearest' ? nearest : dir === 'up' ? Math.ceil(r) : Math.floor(r);
-  return (mult * s).toFixed(decimalsOf(step));
+  if (dir === 'nearest') return (Math.round(r) * s).toFixed(decimals);
+  const at = (mult: number): number => Number((mult * s).toFixed(decimals));
+  let below = Math.floor(r);
+  if (at(below) > value) below -= 1;
+  else if (at(below + 1) <= value) below += 1;
+  const noise = Math.min(1e-3 * s, Math.max(1e-9 * Math.min(1, s), 4 * Number.EPSILON * Math.abs(value)));
+  const mult =
+    dir === 'down'
+      ? at(below + 1) - value <= noise
+        ? below + 1
+        : below
+      : value - at(below) <= noise
+        ? below
+        : below + 1;
+  return (mult * s).toFixed(decimals);
 }
 
 /** The coarsest (largest) of the given lot steps; undefined when none is a

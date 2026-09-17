@@ -1,21 +1,36 @@
-import { useId, type ReactNode } from 'react';
-import type { CrossexAccount, EvenPlan, GateAccount, PlannedStep, Pool, PositionsResponse, RebalanceBucket } from '../api/types';
-import type { RebalanceJob, RouteName, RoutePlan, TransferCoin, TransferView, WalletAfter } from '../api/types';
+import { Fragment, useId, type ReactNode } from 'react';
+import type { CrossexAccount, EvenPlan, GateAccount, PlannedStep, Pool, PositionsResponse, RebalanceBucket, RebalanceJob } from '../api/types';
+import type { RebalanceView, RouteName, RoutePlan, TransferCoin, TransferView, WalletAfter } from '../api/types';
 import { Chip } from '../components/Chip';
 import { HoverCard } from '../components/HoverCard';
 import { RadioRow } from '../components/RadioRow';
 import { microLabelClass, Th } from '../components/Th';
-import { borrowedBucket, MIN_BORROW } from '../lib/borrow';
-import { fmtAbout, fmtAge, fmtUsd, num } from '../lib/fmt';
-import { fmtLinePrice, fmtMove, lineFor, liquidationLines, nearestLiquidation, type LiquidationLine } from '../lib/liquidation';
+import { borrowingBuckets, borrowTotalUsd, MIN_BORROW } from '../lib/borrow';
+import { fmtAbout, fmtUsd, num, WALLET_SHORT } from '../lib/fmt';
+import { describeLine, fmtLinePrice, fmtMove, liquidationLines, type LiquidationLine } from '../lib/liquidation';
 import { floorCents } from '../lib/ticks';
-import { roundSeconds } from './RebalanceBits';
-import { HOVER, MOVE_TEXT, poolKey, roundCount, WALLET_LABEL } from './rebalanceCopy';
+import { ALWAYS_SHOWN, ROUTE_ORDER, WALLET_TONE, type BarRow } from './RebalanceBits';
+import {
+  FACT_BORROWING,
+  FACT_INTEREST_NOW,
+  FACT_INTEREST_PAID,
+  FACT_LIQUIDATION,
+  GATE_SPOT,
+  HOVER,
+  LIQUIDATION_NOT_KNOWN,
+  MODAL_FEE,
+  MOVE_TEXT,
+  poolKey,
+  RATE_PER_YEAR,
+  INTEREST_PER_HOUR,
+  RATE_UNKNOWN,
+  WALLET_LABEL,
+} from './rebalanceCopy';
 import { findPath } from './TransferBits';
 
-const BORROW_INITIAL_MARGIN = 0.2;
 const HYPERLIQUID_INTEREST_FREE_USDC = 10_000;
 export const DUST = 1;
+const TRANSIT_WALLET = 'USDC/GATE';
 
 export const ROUTE_LABEL: Record<RouteName, string> = { mix: 'Spot loop, then Convert', loop: 'Spot loop', convert: 'Convert' };
 
@@ -26,15 +41,21 @@ const WALLET_HOVER: Readonly<Record<string, string>> = {
   'USDC/GATE': HOVER.walletGate,
 };
 
+export interface FactRow {
+  name: string;
+  value: string;
+}
+
 export interface Fact {
   key: string;
   label: ReactNode;
   value: ReactNode;
+  sub?: ReactNode[];
+  rows?: FactRow[];
   warn?: boolean;
 }
 
 export const keyOf = (wallet: { coin: string; venue: string }) => `${wallet.coin}/${wallet.venue}`;
-const equityOf = (wallets: WalletAfter[], key: string) => wallets.find((w) => keyOf(w) === key)?.equity ?? 0;
 
 type Move = Pick<PlannedStep, 'from' | 'to'>;
 
@@ -44,7 +65,7 @@ export const planSteps = (plan: EvenPlan): PlannedStep[] => [
   ...plan.routes.convert.steps,
 ];
 
-export function movesOf(steps: readonly Move[]): Move[] {
+function movesOf(steps: readonly Move[]): Move[] {
   const moves: Move[] = [];
   for (const { from, to } of steps) {
     if (!moves.some((move) => move.from === from && move.to === to)) moves.push({ from, to });
@@ -54,22 +75,25 @@ export function movesOf(steps: readonly Move[]): Move[] {
 
 export const movesKey = (steps: readonly Move[]): string => movesOf(steps).map((move) => `${move.from}>${move.to}`).join(',');
 
-export function receivingBorrow(buckets: RebalanceBucket[], steps: readonly Move[]): number | null {
+function receivingLent(buckets: RebalanceBucket[], steps: readonly Move[]): RebalanceBucket[] {
   const keys = new Set(steps.map((step) => poolKey(step.to)));
-  const lent = buckets.filter((b) => keys.has(keyOf(b)) && floorCents(b.borrow) >= MIN_BORROW);
+  return buckets.filter((b) => keys.has(keyOf(b)) && floorCents(b.borrow) >= MIN_BORROW);
+}
+
+export function receivingBorrow(buckets: RebalanceBucket[], steps: readonly Move[]): number | null {
+  const lent = receivingLent(buckets, steps);
   return lent.length === 0 ? null : lent.reduce((total, b) => total + b.borrow, 0);
+}
+
+export function receivingHeld(buckets: RebalanceBucket[], steps: readonly Move[]): number | null {
+  const lent = receivingLent(buckets, steps);
+  return lent.length === 0 ? null : lent.reduce((total, b) => total + b.imHeldUsd, 0);
 }
 
 export const roundCountOf = (job: RebalanceJob) =>
   new Set(job.steps.flatMap((step) => (step.round === null ? [] : [step.round]))).size;
 
-export function stepsNoun(route: RoutePlan): string {
-  const count = route.steps.length;
-  if (route.steps.every((step) => step.kind === 'round')) {
-    return count === 1 ? 'the round' : `the ${num(count, 0)} rounds`;
-  }
-  return count === 1 ? 'the step' : `the ${num(count, 0)} steps`;
-}
+export const roundOf = (job: RebalanceJob): number | null => job.steps[job.stepIndex]?.round ?? null;
 
 export function Term({
   label,
@@ -89,6 +113,40 @@ export function Term({
   );
 }
 
+function InterestInfo({ buckets }: { buckets: RebalanceBucket[] }) {
+  const info = HOVER.interestNow;
+  const rateOf = (key: string) => {
+    const bucket = buckets.find((b) => keyOf(b) === key);
+    return bucket ? rateText(bucket) : RATE_UNKNOWN;
+  };
+  const cell = 'whitespace-nowrap px-2 py-1';
+  return (
+    <HoverCard icon={false} widthPx={520} label={FACT_INTEREST_NOW}>
+      <div className="flex flex-col gap-2 text-xs leading-snug">
+        <p>{info.lead}</p>
+        <table className="w-full border border-ink-700">
+          <thead>
+            <tr>
+              <Th className="text-left">{info.head.wallet}</Th>
+              <Th className="text-left">{info.head.interest}</Th>
+              <Th className="text-right">{info.head.rate}</Th>
+            </tr>
+          </thead>
+          <tbody>
+            {info.wallets.map((row) => (
+              <tr key={row.key} className="border-t border-ink-700">
+                <td className={cell}>{WALLET_LABEL[row.key]}</td>
+                <td className={cell}>{row.interest}</td>
+                <td className={`${cell} num text-right`}>{rateOf(row.key)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </HoverCard>
+  );
+}
+
 export function WalletTerm({ wallet }: { wallet: string }) {
   return <Term label={<span className="text-ink-100">{WALLET_LABEL[wallet]}</span>} text={WALLET_HOVER[wallet]} />;
 }
@@ -101,44 +159,137 @@ export function Facts({ items, className = 'flex flex-wrap gap-x-7 gap-y-2' }: {
         <div key={fact.key} className="flex flex-col gap-0.5">
           <dt className={microLabelClass}>{fact.label}</dt>
           <dd className={`num text-sm ${fact.warn ? 'text-amber-300' : 'text-ink-100'}`}>{fact.value}</dd>
+          {(fact.sub ?? []).map((line, index) => (
+            <dd key={`${fact.key}-${index}`} className="num text-xs text-ink-400">
+              {line}
+            </dd>
+          ))}
+          {fact.rows && fact.rows.length > 0 && (
+            <dd data-fact-rows={fact.key} className="grid w-fit grid-cols-[auto_auto] gap-x-3 text-xs text-ink-400">
+              {fact.rows.map((row) => (
+                <Fragment key={row.name}>
+                  <span>{row.name}</span>
+                  <span className="num whitespace-nowrap text-right">{row.value}</span>
+                </Fragment>
+              ))}
+            </dd>
+          )}
         </div>
       ))}
     </dl>
   );
 }
 
-export function borrowFacts(buckets: RebalanceBucket[]): Fact[] {
-  const borrowed = borrowedBucket(buckets);
+const freePartOf = (b: RebalanceBucket) => (b.coin === 'USDC' && b.venue === 'HYPERLIQUID' ? HYPERLIQUID_INTEREST_FREE_USDC : 0);
+
+export const chargedBorrow = (b: RebalanceBucket, borrow: number) => Math.max(0, borrow - freePartOf(b));
+
+const isRateUnknown = (b: RebalanceBucket) => chargedBorrow(b, b.borrow) > 0 && b.interestPerDayUsd === 0;
+
+function rateText(b: RebalanceBucket): string {
+  if (isRateUnknown(b) || b.ratePerYear === null || b.ratePerYear <= 0) return RATE_UNKNOWN;
+  return RATE_PER_YEAR(num(b.ratePerYear * 100, 2));
+}
+
+function perHourText(usd: number): string {
+  if (usd <= 0) return fmtUsd(0);
+  if (usd < 0.0001) return `under ${fmtUsd(0.0001, 4)}`;
+  return fmtUsd(usd, usd < 1 ? 4 : 2);
+}
+
+const walletPerHour = (b: RebalanceBucket) =>
+  isRateUnknown(b) ? RATE_UNKNOWN : INTEREST_PER_HOUR(perHourText(b.interestPerDayUsd / 24));
+
+const walletRows = (wallets: RebalanceBucket[], valueOf: (b: RebalanceBucket) => string): FactRow[] =>
+  wallets.map((b) => ({ name: WALLET_SHORT[keyOf(b)], value: valueOf(b) }));
+
+export function sharedCoin(wallets: readonly { coin: string }[]): string | null {
+  const coins = new Set(wallets.map((w) => w.coin));
+  return coins.size === 1 ? [...coins][0] : null;
+}
+
+export const fmtCoinOrUsd = (value: number, coin: string | null): string => (coin ? `${num(value)} ${coin}` : fmtUsd(value));
+
+export interface Repay {
+  wallets: RebalanceBucket[];
+  amount: number;
+  stopsPerDayUsd: number | null;
+  charged: { bucket: RebalanceBucket; before: number; after: number }[];
+}
+
+export function repayOf(buckets: RebalanceBucket[], route: RoutePlan): Repay {
+  const parts = borrowingBuckets(buckets).flatMap((bucket) => {
+    const after = route.after.find((w) => keyOf(w) === keyOf(bucket));
+    const left = after ? Math.max(0, -after.equity) : bucket.borrow;
+    const amount = Math.max(0, bucket.borrow - left);
+    return floorCents(amount) > 0 ? [{ bucket, amount, left }] : [];
+  });
+  const charged = parts.map(({ bucket, left }) => ({ bucket, before: chargedBorrow(bucket, bucket.borrow), after: chargedBorrow(bucket, left) }));
+  const stops = charged.reduce(
+    (total, { bucket, before, after }) => (before === 0 ? total : total + (bucket.interestPerDayUsd * (before - after)) / before),
+    0,
+  );
+  return {
+    wallets: parts.map((part) => part.bucket),
+    amount: parts.reduce((total, part) => total + part.amount, 0),
+    stopsPerDayUsd: parts.some((part) => isRateUnknown(part.bucket)) ? null : stops,
+    charged,
+  };
+}
+
+function borrowHover(borrowing: RebalanceBucket[]): string {
+  return borrowing.length === 0 ? HOVER.rebalanceTitle.borrow : HOVER.borrowing;
+}
+
+export function borrowingFact(buckets: RebalanceBucket[]): Fact {
+  const borrowing = borrowingBuckets(buckets);
+  const total = borrowTotalUsd(buckets);
+  const coin = sharedCoin(borrowing);
+  const borrowAmount = (value: number) => (coin ? num(value) : fmtUsd(value));
+  return {
+    key: 'borrowing',
+    label: FACT_BORROWING,
+    value: total > 0 ? fmtCoinOrUsd(total, coin) : 'none',
+    sub: borrowing.length === 1 ? [WALLET_LABEL[keyOf(borrowing[0])]] : [],
+    rows: borrowing.length > 1 ? walletRows(borrowing, (b) => borrowAmount(floorCents(b.borrow))) : [],
+    warn: total > 0,
+  };
+}
+
+export function liquidationNow(acc: CrossexAccount | undefined, pos: PositionsResponse | undefined): LiquidationLine | null | 'unknown' {
+  const view = acc && pos ? liquidationLines(acc, pos) : null;
+  return view ? (view.lines[0] ?? null) : 'unknown';
+}
+
+export function borrowFacts(buckets: RebalanceBucket[], liquidation: LiquidationLine | null | 'unknown'): Fact[] {
+  const borrowing = borrowingBuckets(buckets);
+  const perHour = buckets.reduce((sum, b) => sum + b.interestPerDayUsd, 0) / 24;
   const paid = buckets.reduce((sum, b) => sum + b.interestPaidUsd, 0);
-  const paidFact: Fact = { key: 'paid', label: <Term label="Interest paid" text={HOVER.interestPaid} />, value: fmtUsd(paid) };
-  if (!borrowed) return paid >= 0.01 ? [paidFact] : [];
-  const isHyperliquid = borrowed.coin === 'USDC' && borrowed.venue === 'HYPERLIQUID';
-  const interest =
-    isHyperliquid && borrowed.borrow <= HYPERLIQUID_INTEREST_FREE_USDC
-      ? `none under ${num(HYPERLIQUID_INTEREST_FREE_USDC, 0)} USDC`
-      : `${fmtUsd(borrowed.interestPerDayUsd)} a day`;
-  const interestText = isHyperliquid
-    ? HOVER.interestUsdc
-    : borrowed.venue === 'LIGHTER'
-      ? HOVER.interestLighter
-      : HOVER.interestUsdt;
+  const paidWallets = buckets.filter((b) => floorCents(b.interestPaidUsd) > 0).sort((a, b) => b.interestPaidUsd - a.interestPaidUsd);
+  const line = liquidation === 'unknown' ? null : liquidation;
+  const noLine = liquidation === 'unknown' ? LIQUIDATION_NOT_KNOWN : 'none';
   return [
-    { key: 'lent', label: 'Lent by Gate', value: `${num(floorCents(borrowed.borrow))} ${borrowed.coin}` },
-    { key: 'interest', label: <Term label="Interest" text={interestText} />, value: interest },
-    paidFact,
+    { ...borrowingFact(buckets), label: <Term label={FACT_BORROWING} text={borrowHover(borrowing)} /> },
+    {
+      key: 'interest',
+      label: <InterestInfo buckets={buckets} />,
+      value: INTEREST_PER_HOUR(perHourText(perHour)),
+      rows: walletRows(borrowing, walletPerHour),
+      warn: perHour > 0,
+    },
+    {
+      key: 'paid',
+      label: FACT_INTEREST_PAID,
+      value: fmtUsd(paid),
+      rows: walletRows(paidWallets, (b) => fmtUsd(b.interestPaidUsd)),
+    },
+    {
+      key: 'liquidation',
+      label: line ? <Term label={FACT_LIQUIDATION} text={describeLine(line)} /> : FACT_LIQUIDATION,
+      value: line ? `${line.base} ${fmtLinePrice(line.price)}` : noLine,
+      sub: line ? [`${fmtMove(line.move)} away · ${line.base} on ${line.venue}`] : [],
+    },
   ];
-}
-
-function amountIn(plan: EvenPlan, amount: number): string {
-  const senders = new Set(planSteps(plan).map((step) => step.from));
-  if (senders.size === 0) return fmtUsd(amount);
-  if (!senders.has('CROSSEX')) return `${num(amount)} USDC`;
-  return senders.size === 1 ? `${num(amount)} USDT` : fmtUsd(amount);
-}
-
-function shortFact(plan: EvenPlan): Fact {
-  const short = <Term label="Short of even" text={HOVER.shortOfEven} />;
-  return { key: 'short', label: short, value: amountIn(plan, plan.shortOfEven), warn: true };
 }
 
 export const isCashLimitedEven = (plan: EvenPlan) => plan.balanced && plan.shortOfEven >= DUST;
@@ -148,106 +299,51 @@ export function positionShares(plan: EvenPlan): Map<string, string> {
   return new Map(plan.split.map((share) => [keyOf(share), `${num(share.share * 100, 0)}% · ${fmtUsd(share.notionalUsd, 0)}`]));
 }
 
-export function cashFacts(plan: EvenPlan): Fact[] {
-  if (plan.shortOfEven <= 0) return [];
-  return [{ key: 'moves', label: 'Moves', value: amountIn(plan, plan.moves) }, shortFact(plan)];
+export function targetsOf(view: RebalanceView): Map<string, number> {
+  if (view.plan.noLegs) return new Map();
+  const job = view.job;
+  const transit = job && (job.status === 'running' || job.status === 'halted') ? (job.inTransit?.qty ?? 0) : 0;
+  const equity = view.buckets.reduce((total, b) => total + b.equity, transit);
+  return new Map(view.plan.split.map((share) => [keyOf(share), share.share * equity]));
 }
 
-export function balancedFacts(plan: EvenPlan, job: RebalanceJob | null): Fact[] {
-  return [...(isCashLimitedEven(plan) ? [shortFact(plan)] : []), ...lastRunFacts(job)];
-}
-
-export function quoteFacts(quote: {
-  route: RoutePlan;
-  borrow: number | null;
-  buckets: RebalanceBucket[];
-  account: CrossexAccount | undefined;
-  positions: PositionsResponse | undefined;
-}): Fact[] {
-  const { route, borrow, buckets, account, positions } = quote;
-  const facts: Fact[] = [];
-  if (borrow !== null) {
-    facts.push(
-      { key: 'frees', label: <Term label="Frees" text={HOVER.frees} />, value: `${fmtUsd(route.marginFreedUsd)} margin` },
-      { key: 'saves', label: <Term label="Saves" text={HOVER.saves} />, value: `${fmtUsd(route.savesPerDayUsd)} / day` },
-    );
-  }
-  const before = nearestLiquidation(account, positions);
-  if (!before || !account || !positions) return facts;
-  const shiftOf = (key: string) => equityOf(route.after, key) - equityOf(buckets, key);
-  const moved = liquidationLines(account, positions, {
-    'USDT/CROSSEX': shiftOf('USDT/CROSSEX'),
-    'USDC/HYPERLIQUID': shiftOf('USDC/HYPERLIQUID'),
-    'USDC/LIGHTER': shiftOf('USDC/LIGHTER'),
+export function barRowsOf(wallets: (WalletAfter | RebalanceBucket)[], keys: string[], target: Map<string, number>): BarRow[] {
+  return keys.flatMap((key): BarRow[] => {
+    const wallet = wallets.find((w) => keyOf(w) === key);
+    if (!wallet) return [];
+    return [
+      {
+        key,
+        label: <WalletTerm wallet={key} />,
+        name: WALLET_LABEL[key],
+        cash: wallet.cash,
+        upnl: 'upnl' in wallet ? wallet.upnl : wallet.equity - wallet.cash,
+        target: target.size === 0 ? null : (target.get(key) ?? 0),
+        tone: WALLET_TONE[key],
+      },
+    ];
   });
-  const after = moved ? lineFor(moved, before.base) : null;
-  const at = (line: LiquidationLine) => `${fmtLinePrice(line.price)} (${fmtMove(line.move)})`;
-  const afterText = after === 'far' ? 'none' : after ? at(after) : 'unknown';
-  const value = `${before.base} ${at(before)} → ${afterText}`;
-  facts.push({ key: 'liquidation', label: <Term label="Liquidation" text={HOVER.liquidation} />, value });
-  return facts;
 }
 
-function lastRunFacts(job: RebalanceJob | null): Fact[] {
-  if (job?.status !== 'done') return [];
-  const rounds = roundCount(roundCountOf(job));
-  const text = job.route === 'convert' ? 'Convert' : job.route === 'mix' ? `${rounds}, then Convert` : `${rounds} of spot loop`;
-  const took = (job.steps.at(-1)?.doneAt ?? job.updatedAt) - job.createdAt;
-  return [
-    { key: 'last', label: 'Last run', value: text },
-    { key: 'took', label: 'Took', value: fmtAge(took) },
-    ...(job.costUsd === null ? [] : [{ key: 'cost', label: 'Cost', value: fmtUsd(job.costUsd) }]),
-  ];
+export function shownKeys(view: RebalanceView, steps: readonly Move[]): string[] {
+  const touched = new Set(steps.flatMap((step) => [poolKey(step.from), poolKey(step.to)]));
+  const target = targetsOf(view);
+  return Object.keys(WALLET_TONE).filter((key) => {
+    const bucket = view.buckets.find((b) => keyOf(b) === key);
+    if (!bucket) return false;
+    if (key === TRANSIT_WALLET) return Math.abs(bucket.cash) >= DUST;
+    if (ALWAYS_SHOWN.includes(key) || touched.has(key) || target.has(key)) return true;
+    return Math.abs(bucket.cash) >= DUST || Math.abs(bucket.equity) >= DUST;
+  });
 }
 
-function whyText(route: RouteName, routePlan: RoutePlan, cap: number, onePerWallet: boolean): string {
-  if (route === 'loop' && onePerWallet) return routePlan.rounds === 1 ? HOVER.whyLoopOne : HOVER.whyOnePerWallet;
-  if (route === 'loop') return HOVER.whyLoopMore(routePlan.rounds);
-  if (routePlan.rounds >= cap) return HOVER.whyMixAtCap(cap);
-  if (routePlan.oneMoreRoundCostUsd === null) return HOVER.whyMixCheapest(routePlan.rounds);
-  return HOVER.whyMixUnderCap(routePlan.rounds, fmtUsd(routePlan.costUsd), fmtUsd(routePlan.oneMoreRoundCostUsd));
+export function pickedRoute(plan: EvenPlan, pick: RouteName | null): { name: RouteName | null; route: RoutePlan } {
+  const isOpen = (name: RouteName | null): name is RouteName => name !== null && plan.routes[name]?.available === true;
+  const name = [pick, plan.recommended, ...ROUTE_ORDER].find(isOpen) ?? null;
+  return { name, route: (name === null ? null : plan.routes[name]) ?? plan.routes.convert };
 }
 
-interface RouteRowProps {
-  route: RouteName;
-  plan: EvenPlan;
-  borrow: number | null;
-}
-
-const aboutText = (seconds: number): string => {
-  const about = fmtAbout(seconds);
-  return `${about.charAt(0).toUpperCase()}${about.slice(1)}`;
-};
-
-function RoundsTerm({ route, routePlan, plan, borrow }: RouteRowProps & { routePlan: RoutePlan }) {
-  const n = routePlan.rounds;
-  const rounds = routePlan.steps.filter((step) => step.kind === 'round');
-  const moves = movesOf(rounds);
-  const onePerWallet = rounds.length === moves.length;
-  const lines: { term: string; text: string }[] = moves.map(({ from, to }) => ({
-    term: moves.length === 1 ? HOVER.roundLabel : MOVE_TEXT.roundTerm(from, to),
-    text: MOVE_TEXT.round(from, to, aboutText(roundSeconds(from, to))),
-  }));
-  if (n > 1 && !onePerWallet) {
-    const locks = borrow === null ? '' : ` ${HOVER.whyMoreThanOneBorrow(fmtUsd(borrow * BORROW_INITIAL_MARGIN))}`;
-    lines.push({ term: HOVER.whyMoreThanOneLabel, text: `${HOVER.whyMoreThanOne}${locks}` });
-  }
-  lines.push({ term: HOVER.whyLabel(n), text: whyText(route, routePlan, plan.roundCap, onePerWallet) });
-  return (
-    <HoverCard icon={false} widthPx={380} label={roundCount(n)}>
-      <dl className="flex flex-col gap-2 text-xs leading-snug">
-        {lines.map((line) => (
-          <div key={line.term} className="flex flex-col gap-0.5">
-            <dt className={microLabelClass}>{line.term}</dt>
-            <dd>{line.text}</dd>
-          </div>
-        ))}
-      </dl>
-    </HoverCard>
-  );
-}
-
-export function RouteRow({ route, plan, borrow, checked, onPick }: RouteRowProps & { checked: boolean; onPick: () => void }) {
+export function RouteRow({ route, plan, checked, onPick }: { route: RouteName; plan: EvenPlan; checked: boolean; onPick: () => void }) {
   const id = useId();
   const routePlan = plan.routes[route];
   if (!routePlan) return null;
@@ -261,8 +357,7 @@ export function RouteRow({ route, plan, borrow, checked, onPick }: RouteRowProps
   const across = moves.some((move) => move.from !== 'CROSSEX' && move.to !== 'CROSSEX');
   const convert = across ? `${HOVER.convert} ${HOVER.convertAcross}` : HOVER.convert;
   const nameText = route === 'mix' ? HOVER.mix(plan.roundCap) : route === 'loop' ? loop : convert;
-  const time = `${route === 'mix' ? ', then Convert' : ''} · ${fmtAbout(routePlan.seconds)}`;
-  const rounds = <RoundsTerm route={route} routePlan={routePlan} plan={plan} borrow={borrow} />;
+  const time = route === 'convert' ? 'instant' : fmtAbout(routePlan.seconds);
   return (
     <RadioRow name="rebalance-route" labelledBy={id} checked={checked} disabled={blocked} onPick={onPick}>
       <span id={id} className="w-44 shrink-0">
@@ -271,12 +366,8 @@ export function RouteRow({ route, plan, borrow, checked, onPick }: RouteRowProps
       <span className="flex h-4 w-28 shrink-0 items-center">
         {plan.recommended === route && <Term label={<Chip tone="green" sm>Recommended</Chip>} text={HOVER.recommended} />}
       </span>
-      <span className={`flex-1 ${blocked ? 'text-amber-300' : 'text-ink-400'}`}>
-        {blocked && routePlan.reason}
-        {!blocked && route === 'convert' && 'instant'}
-        {!blocked && route !== 'convert' && <>{rounds}{time}</>}
-      </span>
-      {!blocked && <span className="num text-ink-100">{fmtUsd(routePlan.costUsd)}</span>}
+      <span className={`flex-1 ${blocked ? 'text-amber-300' : 'num text-ink-400'}`}>{blocked ? routePlan.reason : time}</span>
+      {!blocked && <span className="num text-ink-100">{MODAL_FEE(fmtUsd(routePlan.costUsd))}</span>}
     </RadioRow>
   );
 }
@@ -309,7 +400,7 @@ export function SpotLines({ transfer, job, onTransfer }: { transfer?: TransferVi
         wallet: spot.coin === 'USDT' ? 'CROSSEX' : usdcWallet(spot.available, 'CROSSEX_HYPERLIQUID'),
         text: (
           <>
-            <Term label="Gate spot" text={HOVER.gateSpot} /> has {amount(`${num(spot.available)} ${spot.coin}`)}. Move it in
+            <Term label={GATE_SPOT} text={HOVER.gateSpot} /> has {amount(`${num(spot.available)} ${spot.coin}`)}. Move it in
             to use it.
           </>
         ),

@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { classifyGateError, plainErrorFor } from '../core/errors';
-import { CONVERT_RATE, floorCents, POOLS, spotArrivalFor } from '../core/rebalance/plan';
+import { CONVERT_MAX, CONVERT_RATE, floorCents, PAIR_CONVERT_MAX, POOLS, spotArrivalFor } from '../core/rebalance/plan';
 import type { GateAccount, PlannedStep, Pool, RouteName, TransferCoin, Venue, WalletAfter } from '../core/rebalance/plan';
 import { restrictToOwner } from './secretFile';
 
@@ -26,6 +26,8 @@ export interface Step {
   borrowLeft: number | null;
   from: Pool;
   to: Pool;
+  cashBefore?: number;
+  sentAt?: number;
 }
 
 export interface Job {
@@ -104,11 +106,15 @@ export const HALT_TEXT = {
   cashTooLow: 'Not enough cash for an 11 USDC round.',
   unconfirmed: 'Gate did not confirm the last order. Press Resume to check again.',
   shortBuy: 'The USDC buy filled under 11 USDC.',
-  poorQuote: 'Convert quote was more than 0.3% under market.',
-  marginRefused: 'Gate refused the move: free margin is too low.',
+  poorQuote: 'Convert quote was more than 0.3% under the Gate spot price.',
+  convertTooBig: 'Gate takes at most 500,000 in one Convert. Abandon this rebalance and start a new one.',
+  marginRefused: 'Gate refused the move: free margin or wallet cash is too low.',
   noRecord: 'Gate has no record of this transfer. Try again.',
   timeout: 'Gate took too long on this step. Press Resume to check again.',
   usdtBelowZero: 'A Convert between Hyperliquid and Lighter needs more USDT · CrossEx cash.',
+  sellStuck: 'Gate did not sell all the USDC in USDC · Gate. Press Resume to sell the rest.',
+  noPrice: 'Could not read the Gate spot price to check the Convert quote. Press Resume to try again.',
+  notListed: 'Gate does not show the last step after 2 min. Press Resume to check again. If Gate still does not show it, Resume sends it again.',
 } as const;
 
 export const LOCK_TEXT = {
@@ -158,11 +164,18 @@ export const pendingStep = (
 
 export function convertSteps(from: Pool, to: Pool, amount: number): Step[] {
   const move = { from, to, round: null, arrives: null, borrowLeft: null };
-  if (from === 'CROSSEX' || to === 'CROSSEX') return [pendingStep('Convert', { ...move, planned: amount })];
-  return [
-    pendingStep('Convert to USDT', { ...move, planned: amount }),
-    pendingStep('Convert to USDC', { ...move, planned: floorCents(amount * (1 - CONVERT_RATE)) }),
-  ];
+  const crossex = from === 'CROSSEX' || to === 'CROSSEX';
+  const cap = crossex ? CONVERT_MAX : PAIR_CONVERT_MAX;
+  const cents = Math.round(floorCents(amount) * 100);
+  const count = amount > cap ? Math.max(1, Math.ceil(cents / (cap * 100))) : 1;
+  const base = Math.floor(cents / count);
+  const extra = cents - base * count;
+  const chunks = count === 1 ? [amount] : Array.from({ length: count }, (_, index) => (base + (index < extra ? 1 : 0)) / 100);
+  if (crossex) return chunks.map((planned) => pendingStep('Convert', { ...move, planned }));
+  return chunks.flatMap((planned) => [
+    pendingStep('Convert to USDT', { ...move, planned }),
+    pendingStep('Convert to USDC', { ...move, planned: floorCents(planned * (1 - CONVERT_RATE)) }),
+  ]);
 }
 
 function stepsFor(step: PlannedStep): Step[] {
@@ -343,6 +356,8 @@ function parseJob(value: unknown): Job | null {
     if (step.planned === undefined) step.planned = job.amount ?? null;
     if (step.arrives === undefined) step.arrives = null;
     if (step.borrowLeft === undefined) step.borrowLeft = null;
+    if (step.cashBefore !== undefined && !Number.isFinite(step.cashBefore)) delete step.cashBefore;
+    if (step.sentAt !== undefined && !Number.isFinite(step.sentAt)) delete step.sentAt;
     if (step.from === undefined && step.to === undefined && legacy) Object.assign(step, legacy);
     if (!POOLS.includes(step.from as Pool) || !POOLS.includes(step.to as Pool) || step.from === step.to) return null;
   }

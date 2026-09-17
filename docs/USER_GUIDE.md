@@ -135,11 +135,11 @@ The **Position share** column shows each wallet's share and the position size be
 
 USDC · Gate is one more CrossEx wallet for USDC. It counts as margin. Rebalance sells what is in it, in both directions, when it is worth 3 USDT or more.
 
-Press and hold **Hold to rebalance** to start. There is no direction to pick and no amount to type. The button moves every wallet toward its share. When more than one wallet sends or receives, one hold runs every move, one after another. Convert always shows. A Spot loop row shows only when it costs less than Convert and its plan takes 15 minutes or less. The app marks the cheapest route as **Recommended** and picks it first. You can pick another route. The routes are:
+Press **Rebalance** on the card to open the Rebalance window. It lists the routes, and **Show steps** lists every step. Press and hold **Hold to rebalance** to start. There is no direction to pick and no amount to type. The button moves every wallet toward its share. When more than one wallet sends or receives, one hold runs every move, one after another. Convert always shows. A Spot loop row shows only when it costs less than Convert and its plan takes 15 minutes or less. The app marks the cheapest route as **Recommended** and picks it first. You can pick another route. The routes are:
 
 - **Spot loop**: runs rounds until every wallet reaches its share. A last amount under the transfer minimum moves by Convert. If a round comes out smaller while it runs, the job can add a round, so the run can pass 15 minutes.
 - **Spot loop, then Convert**: runs the rounds that fit in 15 minutes and give the lowest cost, then moves the rest with Convert.
-- **Convert**: an instant swap inside CrossEx. It costs 0.2% of the amount moved. USDC between Hyperliquid and Lighter swaps twice, through USDT, so it costs about 0.4%.
+- **Convert**: an instant swap inside CrossEx. It costs 0.2% of the amount moved. USDC between Hyperliquid and Lighter swaps twice, through USDT, so it costs about 0.4%. Gate takes at most 500,000 in one Convert, so a larger move runs as several Converts, one after another.
 
 A round moves money through Gate spot, because Gate has no direct transfer between CrossEx wallets. Time and cost are for one round. Cost adds the spot fee and spread when the round buys or sells USDC.
 
@@ -156,9 +156,11 @@ A round moves 11 USDC or more. A round from Hyperliquid to Lighter moves 12 or m
 
 Each round leaves at least 112% of initial margin in the account. With $29.41 of initial margin, at least $32.94 of margin balance stays. Gate refuses a move that would leave less than 110%. A borrow locks 20% of its size as initial margin. Early rounds are small, and later rounds grow as the borrow shrinks.
 
+A finished run shows **Moved**, the amount that landed after fees. The chip reads **Balanced**, or **Done** when less landed than planned.
+
 You cannot stop a run once it starts. A failed step stops it. An app restart stops it too. When Gate is already moving a step's money, the app first waits for that step to land, then stops. New deals and transfers wait until the run ends.
 
-A stopped run shows **Resume** and **Abandon**. Resume first looks up the last send on Gate by its tag. When that lookup misses, it sweeps Gate's order history for the same tag. When Gate cannot confirm the order, the run stays stopped. Press Resume again. No step sends twice.
+A stopped run shows **Resume** and **Abandon**. Resume first looks up the last send on Gate by its tag. When that lookup misses, it sweeps Gate's order history for the same tag. When Gate cannot confirm the order, the run stays stopped. Press Resume again. When Gate does not show a send after 2 min, the run stops. Resume looks again, and sends the step again only when Gate still does not show it. The app never sends a step twice on its own.
 
 When a run stops, a banner at the top of every tab shows where the money is. Click **View** to open the Balances tab.
 
@@ -166,9 +168,9 @@ After Abandon, any money left in Gate spot is plain spot money. Move it with Man
 
 #### Manual Transfer between Gate spot and CrossEx
 
-The Balances tab also shows a **Manual Transfer** card. It moves USDT and USDC between your Gate spot wallet and your four CrossEx wallets. Gate's own website cannot do this.
+The **Manual Transfer** button above the Assets table opens a window. It moves USDT and USDC between your Gate spot wallet and your four CrossEx wallets. Gate's own website cannot do this.
 
-Without Spot Trading Read Only on your key, the Manual Transfer card and the Assets table show `Add Spot read permission to see spot balances.` The Gate spot tile then reads `balance hidden`.
+Without Spot Trading Read Only on your key, the Assets table shows `Add Spot read permission to see spot balances.` The Gate spot tile in Manual Transfer then reads `balance hidden`.
 
 Two tabs set the direction. **Into CrossEx** moves money from Gate spot into a CrossEx wallet. **Out of CrossEx** moves money from a CrossEx wallet to Gate spot.
 

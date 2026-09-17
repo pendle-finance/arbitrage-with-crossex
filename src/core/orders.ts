@@ -123,8 +123,7 @@ export function resolveQty(opts: {
 export function isMultipleOf(qty: number, step: string): boolean {
   const s = Number(step);
   if (!Number.isFinite(s) || s <= 0) return true;
-  const r = qty / s;
-  return Math.abs(r - Math.round(r)) < 1e-9;
+  return roundToStep(qty, step, 'down') === roundToStep(qty, step, 'up');
 }
 
 /** Marketable limit price: cross the spread by `slippagePct` so the order fills now.

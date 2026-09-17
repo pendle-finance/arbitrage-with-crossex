@@ -1,6 +1,7 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import type { CrossexAccount } from '../api/types';
+import { accountBodies } from '../test/fixtures';
 import { marginParts, MarginBreakdown } from './MarginDonut';
 
 /** Real-account shape where Gate's coverage-ratio fields look "reversed"
@@ -54,6 +55,7 @@ describe('MarginBreakdown', () => {
     // Maintenance mini-pie center shows 28% (of balance), and the IM legend 77%.
     expect(screen.getByText('77%')).toBeInTheDocument();
     expect(screen.getByText('28%')).toBeInTheDocument();
+    expect(screen.getByText('77%').getAttribute('title')).toBe('Share of balance');
   });
 
   it('compact variant renders both IM and MM shares', () => {
@@ -107,5 +109,54 @@ describe('MarginBreakdown', () => {
     // 800 / 969.82 = 82% → red
     const red = render(<MarginBreakdown acc={withMm('800')} />);
     expect(red.getByText('82%').className).toContain('text-rose-400');
+  });
+
+  it('splits initial margin into positions and borrow with the right $ and %', () => {
+    const twoBorrows = render(<MarginBreakdown acc={accountBodies.twoBorrows} borrowImUsd={48.8} />);
+    const positionsRow = twoBorrows.getByText('Initial margin · positions').closest('div')!;
+    expect(within(positionsRow).getByText('$151.30')).toBeInTheDocument();
+    expect(within(positionsRow).getByText('12%')).toBeInTheDocument();
+    const borrowRow = twoBorrows.getByText('Initial margin · borrow').closest('div')!;
+    expect(within(borrowRow).getByText('$48.80')).toBeInTheDocument();
+    expect(within(borrowRow).getByText('4%')).toBeInTheDocument();
+    expect(twoBorrows.queryByText('Utilization = margin ÷ balance')).toBeNull();
+    expect(twoBorrows.queryByText(/of it is for the borrow/)).toBeNull();
+    twoBorrows.unmount();
+
+    const hyperliquidFreeBorrow = render(
+      <MarginBreakdown acc={accountBodies.hyperliquidFreeBorrow} borrowImUsd={840} />,
+    );
+    const hlPositionsRow = hyperliquidFreeBorrow.getByText('Initial margin · positions').closest('div')!;
+    expect(within(hlPositionsRow).getByText('$504.00')).toBeInTheDocument();
+    expect(within(hlPositionsRow).getByText('12%')).toBeInTheDocument();
+    const hlBorrowRow = hyperliquidFreeBorrow.getByText('Initial margin · borrow').closest('div')!;
+    expect(within(hlBorrowRow).getByText('$840.00')).toBeInTheDocument();
+    expect(within(hlBorrowRow).getByText('20%')).toBeInTheDocument();
+    hyperliquidFreeBorrow.unmount();
+
+    render(<MarginBreakdown acc={acc} borrowImUsd={0} />);
+    expect(screen.getByText('Initial margin (used)')).toBeInTheDocument();
+    expect(screen.queryByText('Utilization = margin ÷ balance')).toBeNull();
+    expect(screen.queryByText('Initial margin · borrow')).toBeNull();
+  });
+
+  it('clamps a borrow margin above the account initial margin', () => {
+    render(<MarginBreakdown acc={accountBodies.twoBorrows} borrowImUsd={9999} />);
+
+    const positionsRow = screen.getByText('Initial margin · positions').closest('div')!;
+    expect(within(positionsRow).getByText('$0.00')).toBeInTheDocument();
+    expect(within(positionsRow).getByText('0%')).toBeInTheDocument();
+    const borrowRow = screen.getByText('Initial margin · borrow').closest('div')!;
+    expect(within(borrowRow).getByText('$200.10')).toBeInTheDocument();
+    expect(within(borrowRow).getByText('16%')).toBeInTheDocument();
+  });
+
+  it('strip unchanged', () => {
+    render(<MarginBreakdown acc={acc} variant="compact" borrowImUsd={500} />);
+    expect(screen.getByText('IM')).toBeInTheDocument();
+    expect(screen.getByText('MM')).toBeInTheDocument();
+    expect(screen.getByText('77%')).toBeInTheDocument();
+    expect(screen.getByText('28%')).toBeInTheDocument();
+    expect(screen.queryByText(/of it is for the borrow/)).toBeNull();
   });
 });

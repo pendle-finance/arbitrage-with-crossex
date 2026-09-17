@@ -52,14 +52,21 @@ describe('openingOrdersSince', () => {
     return { clients, calls };
   }
 
-  it('narrows the history page via `from` = floor(startedAt/1000) − 60', async () => {
+  it('narrows the history page via `from` in ms, startedAt - 60,000, as Gate refuses seconds there', async () => {
     const { clients, calls } = clientsReturning([]);
     await openingOrdersSince(clients, 'GATE_FUTURE_ETH_USDT', startedAt);
     expect(calls[0]).toMatchObject({
       symbol: 'GATE_FUTURE_ETH_USDT',
       limit: 100,
-      from: Math.floor(startedAt / 1000) - 60,
+      from: startedAt - 60_000,
     });
+    expect(calls[0].from).toBe(1_699_999_940_000);
+  });
+
+  it('sends `from` 0 when the run started under 60 seconds after the epoch', async () => {
+    const { clients, calls } = clientsReturning([]);
+    await openingOrdersSince(clients, 'GATE_FUTURE_ETH_USDT', 30_000);
+    expect(calls[0]).toMatchObject({ from: 0 });
   });
 
   it('drops reduce-only orders and orders older than the (startedAt − 60s) window; sorts newest first', async () => {

@@ -755,7 +755,7 @@ describe('POST /api/transfer sends', () => {
     expect(res.statusCode).toBe(202);
     await waitFor(() => t.transfers.read()?.status !== 'moving', 'the refusal');
     expect(t.file()).toMatchObject({ status: 'failed', failText: HALT_TEXT.marginRefused });
-    expect(t.file().failText).toBe('Gate refused the move: free margin is too low.');
+    expect(t.file().failText).toBe('Gate refused the move: free margin or wallet cash is too low.');
   });
 
   it('a refused spot send names Gate spot, not margin', async () => {
@@ -922,9 +922,10 @@ describe('POST /api/transfer races', () => {
       .reply(200, [{ currency_pair: 'USDC_USDT', lowest_ask: '1.0001', highest_bid: '0.9999', last: '1' }]);
 
     const results = await Promise.all([
-      t.app.inject({ method: 'POST', url: '/api/rebalance', headers: HOST, payload: { route: 'convert' } }),
+      t.app.inject({ method: 'POST', url: '/api/rebalance', headers: HOST, payload: { route: 'convert', costUsd: 1000 } }),
       t.post({ coin: 'USDT', from: 'CROSSEX', to: 'SPOT', amount: '5' }),
     ]);
+    expect(results.map((r) => r.body).join('\n')).not.toMatch(/out of date|plan changed/i);
 
     expect(results.map((r) => r.statusCode).sort(), results.map((r) => r.body).join('\n')).toEqual([202, 409]);
     const started = [t.jobs.read() !== null, t.transfers.read() !== null];

@@ -151,6 +151,7 @@ export interface RebalanceBucket {
   /** All time, or as far back as Gate's history reaches (2025-01-01). */
   interestPaidUsd: number;
   interestPerDayUsd: number;
+  ratePerYear: number | null;
 }
 
 export type RouteName = 'mix' | 'loop' | 'convert';
@@ -225,6 +226,8 @@ export interface RebalanceStep {
   borrowLeft: number | null;
   from: Pool;
   to: Pool;
+  cashBefore?: number;
+  sentAt?: number;
 }
 
 export interface RebalanceJob {

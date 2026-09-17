@@ -27,7 +27,7 @@ export async function openingOrdersSince(
   symbol: string,
   startedAtMs: number,
 ): Promise<CrossexOrder[]> {
-  const from = Math.max(0, Math.floor(startedAtMs / 1000) - 60);
+  const from = Math.max(0, startedAtMs - 60_000);
   const { body } = await clients.crossEx.listCrossexHistoryOrders({ symbol, limit: 100, from });
   return (body ?? [])
     .filter((o) => createTimeMs(o) >= startedAtMs - 60_000)
