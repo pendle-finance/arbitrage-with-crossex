@@ -3,10 +3,11 @@
 Only substantial releases are listed here — each one bumps `version.json` (which is what the
 in-app update check compares against).
 
-## 1.6.2 — 2026-09-15
+## 1.6.2 — 2026-09-17
 
 TLDR: Lighter is on CrossEx, and the app trades it. Rebalance now splits your equity by position
-size across USDT, Hyperliquid and Lighter, and Manual Transfer reaches your Lighter wallet.
+size across USDT, Hyperliquid and Lighter, and Manual Transfer reaches your Lighter wallet. The
+Balances tab shows your borrow and margin first, and Rebalance is safe for accounts up to $6M.
 
 - **Lighter pairs in Opportunities.** Boros Lighter markets now pair with the Lighter perp on
   CrossEx, priced from the Lighter order book. Lighter allows up to 50x on ETH and BTC, so a pair
@@ -29,6 +30,25 @@ size across USDT, Hyperliquid and Lighter, and Manual Transfer reaches your Ligh
 - **Spot loop plans 15 min at most.** Convert always shows. A Spot loop row shows only when it
   costs less than Convert. It runs the rounds that fit in 15 min, then Convert does the rest. A
   loop of 100 rounds and 12 hours no longer shows.
+- **Balances shows the state first.** The Rebalance card shows what you borrow, the interest
+  now and paid, the liquidation line, and each wallet's equity against its share. One button
+  opens the Rebalance window, with the routes, the steps and the hold. Manual Transfer is a
+  button above the Assets table and opens its own window.
+- **The header shows every borrow.** The Borrowing pill adds up every wallet, and its hover names
+  each one. With a borrow, the margin ring splits the margin your positions hold from the margin
+  the borrow holds.
+- **Rebalance is safe for large accounts.** No Buy or Sell USDC order passes Gate's order cap. A
+  Convert over 500,000 runs as several Converts, one after another. A Convert priced more than
+  0.3% under the Gate spot price stops the run before it sends. The Spot loop cost reads the depth
+  of Gate's order book, so a large move shows its real price.
+- **A send is never repeated without you.** When Gate does not show a send after 2 min, the run
+  stops. Resume looks again, and sends the step again only when Gate still does not show it.
+- **The plan is checked again when you hold.** If the route changed, or the cost rose by more
+  than $1 or 5%, whichever is larger, the app asks you to check the new plan first.
+- **A finished run shows what landed.** Moved is the amount after fees. The chip reads Balanced,
+  or Done when less landed than planned.
+- **The liquidation hover names the move.** It says whether the coin rises or falls to the
+  price, and which leg loses in that move.
 - **Smaller things.** The Rebalance hover shows one row per path, so no cell wraps. The Balances
   tab shows the last Assets row in full on a short window. The User guide covers the three
   wallets, every round and every transfer path.

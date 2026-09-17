@@ -115,6 +115,7 @@ type Call = {
   httpStatus: number | null;
   label: string | null;
   message: string | null;
+  id?: string;
 };
 type LegOutcome = { outcome: 'done'; transfer: TransferJob; row: CrossexTransferRecord } | { outcome: 'refused' };
 
@@ -259,6 +260,13 @@ const recording = (clients: Clients, calls: Call[]): Clients => {
     calls.push(entry);
     return entry;
   };
+  const failed = (call: Call, err: unknown, what: string): void => {
+    const { label, category, message, httpStatus } = classifyGateError(err);
+    call.httpStatus = httpStatus ?? null;
+    call.label = label ?? category;
+    call.message = message;
+    console.log(`  ▸ Gate answered ${what}: ${label ?? category} HTTP ${httpStatus ?? 'none'} ${message}`);
+  };
   return withCrossEx(clients, {
     createCrossexTransfer: async (opts) => {
       const request = opts?.crossexTransferRequest;
@@ -288,18 +296,29 @@ const recording = (clients: Clients, calls: Call[]): Clients => {
     },
     createCrossexConvertQuote: async (opts) => {
       const request = opts?.crossexConvertQuoteRequest;
-      record({ kind: 'quote', key: request?.exchangeType ?? '', to: request?.toCoin ?? '', amount: Number(request?.fromAmount) });
-      const read = await crossEx.createCrossexConvertQuote(opts);
-      const { quoteId, fromAmount, toAmount } = read.body;
-      console.log(`  ▸ quote on ${request?.exchangeType}: quoteId=${quoteId} ${fromAmount} ${request?.fromCoin} to ${toAmount} ${request?.toCoin}`);
-      return read;
+      const call = record({ kind: 'quote', key: request?.exchangeType ?? '', to: request?.toCoin ?? '', amount: Number(request?.fromAmount) });
+      try {
+        const read = await crossEx.createCrossexConvertQuote(opts);
+        const { quoteId, fromAmount, toAmount } = read.body;
+        call.id = String(quoteId);
+        console.log(`  ▸ quote on ${request?.exchangeType}: quoteId=${quoteId} ${fromAmount} ${request?.fromCoin} to ${toAmount} ${request?.toCoin}`);
+        return read;
+      } catch (err) {
+        failed(call, err, `quote ${request?.fromAmount} ${request?.fromCoin} on ${request?.exchangeType}`);
+        throw err;
+      }
     },
     createCrossexConvertOrder: async (opts) => {
       const quoteId = opts?.crossexConvertOrderRequest?.quoteId ?? '';
-      record({ kind: 'convert', key: quoteId, to: '', amount: 0 });
-      const read = await crossEx.createCrossexConvertOrder(opts);
-      console.log(`  ▸ Convert quoteId=${quoteId}: orderId=${read.body.orderId}`);
-      return read;
+      const call = record({ kind: 'convert', key: quoteId, to: '', amount: 0 });
+      try {
+        const read = await crossEx.createCrossexConvertOrder(opts);
+        console.log(`  ▸ Convert quoteId=${quoteId}: orderId=${read.body.orderId}`);
+        return read;
+      } catch (err) {
+        failed(call, err, `Convert quoteId=${quoteId}`);
+        throw err;
+      }
     },
     listCrossexHistoryOrders: (opts) => {
       record({ kind: 'history', key: opts?.symbol ?? '', to: '', amount: 0 });
@@ -451,13 +470,15 @@ const runConvertParts = async (clients: Clients, move: Move, parts: number[]): P
   return { job, before, after };
 };
 
+const walletName = (wallet: { coin: string; venue: string }): string => `${wallet.coin}/${wallet.venue}`;
+
 const convertInParts = async (move: Move, part: number, symbols: string[]): Promise<void> => {
   const clients = assertCredentials();
   const before = await readAssets(clients);
   const fromWallet = move.from === 'CROSSEX' ? USDT_WALLET : poolWallet(move.from);
   const cash = balanceOf(before, fromWallet);
   if (!(cash >= 2 * part)) {
-    throw new Error(`${fromWallet} cash ${cash} is under ${2 * part}. Nothing was sent.`);
+    throw new Error(`${walletName(fromWallet)} cash ${cash} is under ${2 * part}. Nothing was sent.`);
   }
   if (!(balanceOf(before, USDT_WALLET) >= 0)) {
     throw new Error('USDT/CROSSEX cash is under 0. Nothing was sent.');
@@ -480,23 +501,40 @@ const convertInParts = async (move: Move, part: number, symbols: string[]): Prom
   const steps = await expectJob(clients, job, planned);
   const quotes = callsOf(calls, 'quote');
   const orders = callsOf(calls, 'convert');
-  expect(quotes, 'one quote per Convert step').toHaveLength(steps.length);
-  expect(orders, 'one Convert order per step').toHaveLength(steps.length);
-  expect(new Set(orders.map((call) => call.key)).size, 'no quote id sent twice').toBe(orders.length);
+  const refused = [...quotes, ...orders].filter((call) => call.httpStatus !== null);
+  const taken = orders.filter((call) => call.httpStatus === null);
+  for (const call of refused) {
+    expect(`${call.httpStatus} ${call.label}`, `only a rate limit may refuse a ${call.kind}`).toMatch(/^429 |TOO_MANY|RATE_LIMIT|rate-limited/);
+  }
+  expect(taken, 'one accepted Convert order per step').toHaveLength(steps.length);
+  expect(orders.length, 'each accepted quote gets one order call').toBe(quotes.length - refused.filter((call) => call.kind === 'quote').length);
+  expect(new Set(taken.map((call) => call.key)).size, 'no quote id sent twice').toBe(taken.length);
+  expect(taken.map((call) => call.key), 'the steps hold the accepted quote ids').toEqual(steps.map((step) => step.quoteId));
+  const from = job.createdAt - SWEEP_SKEW_MS;
+  for (const call of orders.filter((order) => order.httpStatus !== null)) {
+    expect(taken.map((order) => order.key), `refused quote id ${call.key} was not sent again`).not.toContain(call.key);
+    for (const symbol of new Set(symbols)) {
+      const { body } = await clients.crossEx.listCrossexHistoryOrders({ symbol, from, limit: HISTORY_LIMIT });
+      const rows = (body ?? []).filter((row) => row.text === call.key);
+      console.log(`  ▸ Gate ${symbol} rows with the refused quote id ${call.key}: ${rows.length}`);
+      expect(rows, `no ${symbol} order for the refused quote id ${call.key}`).toHaveLength(0);
+    }
+  }
   for (const quote of quotes) expect(quote.amount, 'each quote is at most one part').toBeLessThanOrEqual(part);
   if (twoHalves) {
-    for (const index of [1, 3]) {
-      expect(quotes[index]?.amount, `Convert to USDC ${index} sends what its own Convert to USDT returned`).toBeLessThanOrEqual(
-        floorCents(qtyOf(steps[index - 1])),
-      );
-      expect(quotes[index]?.amount).toBeGreaterThanOrEqual(floorCents(qtyOf(steps[index - 1])) - FEE_TOLERANCE);
-    }
+    steps.forEach((step, index) => {
+      if (step.name !== 'Convert to USDC') return;
+      const sent = quotes.find((quote) => quote.id === step.quoteId)?.amount;
+      const given = floorCents(qtyOf(steps[index - 1]));
+      expect(sent, `Convert to USDC ${index} sends what its own Convert to USDT returned`).toBeLessThanOrEqual(given);
+      expect(sent).toBeGreaterThanOrEqual(given - FEE_TOLERANCE);
+    });
   }
   expect(job.fundsAt).toBe(move.to);
   const landed = steps.filter((step) => step.name !== 'Convert to USDT').reduce((total, step) => total + qtyOf(step), 0);
   const toWallet = move.to === 'CROSSEX' ? USDT_WALLET : poolWallet(move.to);
-  expectNear(`${fromWallet} change`, changeOf(start, after, fromWallet), -2 * part, MOVE_TOLERANCE);
-  expectNear(`${toWallet} change`, changeOf(start, after, toWallet), landed, MOVE_TOLERANCE);
+  expectNear(`${walletName(fromWallet)} change`, changeOf(start, after, fromWallet), -2 * part, MOVE_TOLERANCE);
+  expectNear(`${walletName(toWallet)} change`, changeOf(start, after, toWallet), landed, MOVE_TOLERANCE);
   if (twoHalves) expectNear('USDT/CROSSEX change', changeOf(start, after, USDT_WALLET), 0, MOVE_TOLERANCE);
 };
 
