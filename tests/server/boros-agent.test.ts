@@ -35,7 +35,7 @@ beforeEach(() => {
   installed = undefined;
   for (const k of ENV_KEYS) delete process.env[k];
   app = makeTestApp({
-    borosFetch: borosStub({ '/apis/v1/markets': { results: [] } }),
+    borosFetch: borosStub({ '/core/v1/markets': { results: [] } }),
     getBorosOrders: () => installed,
     borosAgent: {
       envPath,

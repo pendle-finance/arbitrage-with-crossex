@@ -40,9 +40,6 @@ export const TTL = {
   /** Boros backend reads (markets, collaterals, txn history) — settlement
    * cadence is hourly at the fastest; 30s keeps the card feeling live. */
   boros: 30_000,
-  /** Fills of Boros markets the account no longer holds — they take no new
-   * fills, so there is nothing to refresh every 30s. */
-  borosHistory: 600_000,
   /** Boros order books — the levels the scan's DISPLAYED quote walks. Nothing
    * places an order off THIS key (the two-leg Boros panel has its own,
    * `borosBookTrade`; the CrossEx engine never reads Boros books at all, and settlement
