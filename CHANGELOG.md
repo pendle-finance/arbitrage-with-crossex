@@ -5,53 +5,20 @@ in-app update check compares against).
 
 ## 1.6.2 — 2026-09-17
 
-TLDR: Lighter is on CrossEx, and the app trades it. Rebalance now splits your equity by position
-size across USDT, Hyperliquid and Lighter, and Manual Transfer reaches your Lighter wallet. The
-Balances tab shows your borrow and margin first, and Rebalance is safe for accounts up to $6M.
+TLDR: Lighter is on CrossEx, and the app trades it. Rebalance splits your equity across USDT,
+Hyperliquid and Lighter, and is safe for large accounts.
 
-- **Lighter pairs in Opportunities.** Boros Lighter markets now pair with the Lighter perp on
-  CrossEx, priced from the Lighter order book. Lighter allows up to 50x on ETH and BTC, so a pair
-  needs less capital. The venue list now comes from CrossEx itself: a venue Gate adds later shows
-  up without an app update.
-- **Rebalance splits equity by position size.** Each CrossEx wallet gets the share of your equity
-  that its legs hold at mark price. Example: $500 of positions on Gate, $250 on Hyperliquid and
-  $250 on Lighter give 50%, 25% and 25%. A Position share column shows each wallet's share and
-  the positions behind it. A wallet with no open legs sends its money to the wallets that have
-  legs. With no open positions, Rebalance has nothing to do.
-- **A third wallet: USDC · Lighter.** Rebalance moves money into and out of it by Spot loop or
-  Convert, and between Hyperliquid and Lighter. One hold runs every move, one after another.
-  Into Lighter costs 1.03 USDC a round and takes about 4 min. Out is free and takes about 3 min.
-  Convert between Hyperliquid and Lighter swaps twice, through USDT, for about 0.4%.
-- **Manual Transfer reaches USDC · Lighter.** Move USDC between Gate spot and your Lighter wallet.
-- **Borrow on Lighter reads as Gate charges it.** A Lighter USDC borrow pays about 11% a year from
-  the first dollar. There is no free allowance, unlike Hyperliquid. The Rebalance hover lists the
-  interest rule for each wallet. The Borrow pill and the liquidation line count Lighter as its own
-  wallet.
-- **Spot loop plans 15 min at most.** Convert always shows. A Spot loop row shows only when it
-  costs less than Convert. It runs the rounds that fit in 15 min, then Convert does the rest. A
-  loop of 100 rounds and 12 hours no longer shows.
-- **Balances shows the state first.** The Rebalance card shows what you borrow, the interest
-  now and paid, the liquidation line, and each wallet's equity against its share. One button
-  opens the Rebalance window, with the routes, the steps and the hold. Manual Transfer is a
-  button above the Assets table and opens its own window.
-- **The header shows every borrow.** The Borrowing pill adds up every wallet, and its hover names
-  each one. With a borrow, the margin ring splits the margin your positions hold from the margin
-  the borrow holds.
-- **Rebalance is safe for large accounts.** No Buy or Sell USDC order passes Gate's order cap. A
-  Convert over 500,000 runs as several Converts, one after another. A Convert priced more than
-  0.3% under the Gate spot price stops the run before it sends. The Spot loop cost reads the depth
-  of Gate's order book, so a large move shows its real price.
-- **A send is never repeated without you.** When Gate does not show a send after 2 min, the run
-  stops. Resume looks again, and sends the step again only when Gate still does not show it.
-- **The plan is checked again when you hold.** If the route changed, or the cost rose by more
-  than $1 or 5%, whichever is larger, the app asks you to check the new plan first.
-- **A finished run shows what landed.** Moved is the amount after fees. The chip reads Balanced,
-  or Done when less landed than planned.
-- **The liquidation hover names the move.** It says whether the coin rises or falls to the
-  price, and which leg loses in that move.
-- **Smaller things.** The Rebalance hover shows one row per path, so no cell wraps. The Balances
-  tab shows the last Assets row in full on a short window. The User guide covers the three
-  wallets, every round and every transfer path.
+- **Lighter pairs in Opportunities.** Up to 50x on ETH and BTC, so a pair needs less capital.
+- **Rebalance splits equity by position size.** Each wallet gets the share its legs hold. A
+  Position share column shows it.
+- **A third wallet: USDC · Lighter.** Rebalance and Manual Transfer move money into and out of
+  it. A Lighter borrow pays about 11% a year from the first dollar.
+- **Balances shows the state first.** Borrow, interest and liquidation come first. Rebalance and
+  Manual Transfer open in their own window. The Borrowing pill adds up every wallet.
+- **Rebalance is safe for large accounts.** Big moves split under Gate's caps. A poor Convert
+  price stops the run. A step is never sent twice without you.
+- **Spot loop plans 15 min at most,** and shows only when it costs less than Convert.
+- **A finished run shows what landed,** after fees.
 
 ## 1.6.1 — 2026-09-15
 

@@ -1,12 +1,10 @@
 {
   "version": "1.6.2",
   "highlights": [
-    "Lighter pairs now show in Opportunities. Lighter allows up to 50x, so a pair needs less capital",
-    "Rebalance splits your CrossEx equity by position size across USDT, Hyperliquid and Lighter. A Position share column shows each wallet's share",
-    "One hold moves money into and out of your Lighter wallet, and between Hyperliquid and Lighter",
-    "Manual Transfer moves USDC between Gate spot and USDC · Lighter",
-    "A Lighter borrow pays about 11% a year from the first dollar. Hyperliquid stays free up to 10,000 USDC",
-    "The Balances tab shows your borrow, interest and liquidation line first. Rebalance and Manual Transfer open in their own window",
-    "Rebalance is safe for large accounts: big moves split under Gate's limits, a poor Convert price stops the run, and no step is sent twice without you"
+    "Lighter pairs in Opportunities, with up to 50x",
+    "Rebalance splits your equity by position size across USDT, Hyperliquid and Lighter",
+    "Rebalance and Manual Transfer reach your Lighter wallet",
+    "Balances shows your borrow and liquidation first. Rebalance and Manual Transfer open in their own window",
+    "Rebalance is safe for large accounts, and never sends a step twice without you"
   ]
 }
