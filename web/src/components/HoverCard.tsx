@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { FOCUSABLE } from '../lib/focusTrap';
 
@@ -19,7 +19,15 @@ interface Box {
   left: number;
   top?: number;
   bottom?: number;
+  maxHeight?: number;
+  /** The trigger's edges, kept so the card can pick a side once it has a height. */
+  anchorTop: number;
+  anchorBottom: number;
+  placed: boolean;
 }
+
+const GAP = 6;
+const EDGE = 8;
 
 /** The marker. Nothing else on a card carries it, so it reads as "more here"
  * rather than decoration. */
@@ -64,20 +72,31 @@ export function HoverCard({
 
   /**
    * Measured once, on open. The card shuts on scroll and resize, so the one
-   * measurement can never go stale — and opening upward is anchored by
-   * `bottom`, which needs no height from a panel that has not rendered yet.
+   * measurement can never go stale. It first renders below the trigger, then
+   * picks its side before paint, once it has a height: below when it fits,
+   * above when only that fits, else the roomier side with its own scroll. A
+   * tall card near the bottom of the page otherwise ran off the screen.
    */
   const open = () => {
     const r = anchor.current?.getBoundingClientRect();
     if (!r) return;
     stopClosing();
-    const left = Math.max(8, Math.min(r.left, window.innerWidth - maxWidthPx - 8));
-    setBox(
-      window.innerHeight - r.bottom < 260
-        ? { left, bottom: window.innerHeight - r.top + 6 }
-        : { left, top: r.bottom + 6 },
-    );
+    const left = Math.max(EDGE, Math.min(r.left, window.innerWidth - maxWidthPx - EDGE));
+    setBox({ left, top: r.bottom + GAP, anchorTop: r.top, anchorBottom: r.bottom, placed: false });
   };
+
+  useLayoutEffect(() => {
+    if (!box || box.placed || !card.current) return;
+    const height = card.current.scrollHeight;
+    const below = window.innerHeight - box.anchorBottom - GAP - EDGE;
+    const above = box.anchorTop - GAP - EDGE;
+    const up = height > below && (height <= above || above > below);
+    setBox(
+      up
+        ? { ...box, top: undefined, bottom: window.innerHeight - box.anchorTop + GAP, maxHeight: Math.max(0, above), placed: true }
+        : { ...box, maxHeight: Math.max(0, below), placed: true },
+    );
+  }, [box]);
 
   /** Leaving the trigger waits, so the pointer can cross the gap into the
    * card; leaving the card itself does not. */
@@ -89,7 +108,11 @@ export function HoverCard({
 
   useEffect(() => {
     if (!box) return;
-    const shut = () => setBox(null);
+    // Scrolling inside the card reads it; only a scroll elsewhere moves the trigger.
+    const shut = (e: Event) => {
+      if (e.target instanceof Node && card.current?.contains(e.target)) return;
+      setBox(null);
+    };
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
       if (card.current?.contains(document.activeElement)) anchor.current?.focus();
@@ -102,12 +125,13 @@ export function HoverCard({
       setBox(null);
     };
     window.addEventListener('scroll', shut, true);
-    window.addEventListener('resize', shut);
+    const onResize = () => setBox(null);
+    window.addEventListener('resize', onResize);
     window.addEventListener('keydown', onKey);
     document.addEventListener('focusin', onFocusIn);
     return () => {
       window.removeEventListener('scroll', shut, true);
-      window.removeEventListener('resize', shut);
+      window.removeEventListener('resize', onResize);
       window.removeEventListener('keydown', onKey);
       document.removeEventListener('focusin', onFocusIn);
     };
@@ -127,7 +151,7 @@ export function HoverCard({
       <div
         ref={card}
         role="tooltip"
-        style={{ left: box.left, top: box.top, bottom: box.bottom, width: widthPx, maxWidth: maxWidthPx }}
+        style={{ left: box.left, top: box.top, bottom: box.bottom, width: widthPx, maxWidth: maxWidthPx, maxHeight: box.maxHeight }}
         onKeyDown={(e) => {
           if (e.key !== 'Tab') return;
           const items = e.currentTarget.querySelectorAll<HTMLElement>(FOCUSABLE);
@@ -139,7 +163,7 @@ export function HoverCard({
         }}
         onMouseEnter={stopClosing}
         onMouseLeave={() => close(false)}
-        className="fixed z-50 rounded border border-ink-600 bg-ink-950 px-3 py-2.5 text-ink-100"
+        className="fixed z-50 overflow-y-auto overscroll-contain rounded border border-ink-600 bg-ink-950 px-3 py-2.5 text-ink-100"
       >
         {children}
       </div>,

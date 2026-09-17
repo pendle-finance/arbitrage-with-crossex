@@ -14,11 +14,13 @@ import { fmtAbout, fmtAge, fmtUsd, num, WALLET_SHORT } from '../lib/fmt';
 import { describeLine, fmtLinePrice, lineFor, liquidationLines } from '../lib/liquidation';
 import { floorCents } from '../lib/ticks';
 import { useNow } from '../lib/useNow';
-import { BalanceBars, jobRows, jobSeconds, planRows, ProgressBar, ROUTE_ORDER, scaleOf, StepList } from './RebalanceBits';
+import { BalanceBars, jobRows, jobSeconds, planRows, ProgressBar, ROUTE_ORDER, scaleOf, ShareColumn, StepList } from './RebalanceBits';
 import type { BarRow, StepRow } from './RebalanceBits';
 import { FACT_LIQUIDATION, GATE_SPOT, HOVER, LIQUIDATION_NOT_KNOWN, MODAL_ABANDON, MODAL_AFTER, MODAL_ALL_ROUTES } from './rebalanceCopy';
-import { MODAL_FREES, MODAL_HOLD, MODAL_RESUME, MODAL_SAVES, MODAL_STEPS, WAITS_FOR_DEAL, WAITS_FOR_TRANSFER } from './rebalanceCopy';
-import { barRowsOf, chargedBorrow, Facts, keyOf, movesKey, pickedRoute, planSteps, receivingBorrow, receivingHeld } from './RebalanceHovers';
+import { MODAL_FEE_LABEL, MODAL_FREES, MODAL_HOLD, MODAL_INTEREST, MODAL_RESUME, MODAL_STEPS, PER_MONTH } from './rebalanceCopy';
+import { RATE_UNKNOWN, SHARE_CAPTION, WAITS_FOR_DEAL, WAITS_FOR_TRANSFER } from './rebalanceCopy';
+import { barRowsOf, chargedBorrow, Facts, hasUnknownRate, keyOf, MONTH_DAYS, movesKey, pickedRoute, stopsPerDayOf, worthLine } from './RebalanceHovers';
+import { planSteps, positionShares, receivingBorrow, receivingHeld } from './RebalanceHovers';
 import { liquidationNow, repayOf, ROUTE_LABEL, roundCountOf, roundOf, RouteRow, shownKeys, SpotLines, targetsOf, Term } from './RebalanceHovers';
 import type { Fact } from './RebalanceHovers';
 import { NoSpotReadLine } from './TransferBits';
@@ -135,20 +137,28 @@ function repaySubs(buckets: RebalanceBucket[], route: RoutePlan): { frees: strin
   return { frees: borrowing.length > 0 ? REPAYS_NO_BORROW : NO_BORROW_TO_REPAY, saves };
 }
 
+function interestValue(route: RoutePlan, buckets: RebalanceBucket[]): string {
+  if (hasUnknownRate(buckets)) return RATE_UNKNOWN;
+  const perDay = buckets.reduce((sum, b) => sum + b.interestPerDayUsd, 0);
+  const after = Math.max(0, perDay - stopsPerDayOf(route, buckets));
+  return PER_MONTH(fmtUsd(perDay * MONTH_DAYS), fmtUsd(after * MONTH_DAYS));
+}
+
 function quoteFactsOf(route: RoutePlan, view: RebalanceView, book: Book): Fact[] {
   const subs = repaySubs(view.buckets, route);
   return [
+    {
+      key: 'interest',
+      label: <Term label={MODAL_INTEREST} text={HOVER.interestMonth} />,
+      value: interestValue(route, view.buckets),
+      sub: [subs.saves],
+    },
+    { key: 'fee', label: MODAL_FEE_LABEL, value: fmtUsd(route.costUsd) },
     {
       key: 'frees',
       label: <Term label={MODAL_FREES} text={HOVER.frees} />,
       value: fmtUsd(route.marginFreedUsd),
       sub: [subs.frees],
-    },
-    {
-      key: 'saves',
-      label: <Term label={MODAL_SAVES} text={HOVER.saves} />,
-      value: `${fmtUsd(route.savesPerDayUsd)} a day`,
-      sub: [subs.saves],
     },
     liquidationFact(route, view, book),
   ];
@@ -230,6 +240,8 @@ export function RebalanceModal({
   if (transfer?.transfer?.status === 'moving') lock = WAITS_FOR_TRANSFER;
   const nowRows = barRowsOf(buckets, keys, target);
   const afterRows = barRowsOf(route.after, keys, target);
+  const shares = positionShares(plan);
+  const worth = chosen === null ? null : worthLine(route, buckets);
   const scale = scaleOf(nowRows, afterRows);
   const spotRow = (label: string, text: string, qty: number): BarRow => ({
     key: 'spot',
@@ -373,11 +385,17 @@ export function RebalanceModal({
             rows={planRows(route, borrow)}
           />
         )}
-        <div className="flex flex-col gap-2 border-t border-ink-800 pt-3">
-          <BalanceBars caption={MODAL_AFTER} rows={afterRows} scale={scale} />
+        <div className="flex gap-3 border-t border-ink-800 pt-3">
+          <div className="min-w-0 flex-1">
+            <BalanceBars caption={MODAL_AFTER} rows={afterRows} scale={scale} />
+          </div>
+          {shares.size > 0 && (
+            <ShareColumn caption={<Term label={SHARE_CAPTION} text={HOVER.positionShare} />} rows={afterRows} shares={shares} />
+          )}
         </div>
-        <div className="border-t border-ink-800 pt-3">
+        <div className="flex flex-col gap-2 border-t border-ink-800 pt-3">
           <Facts items={quoteFactsOf(route, view, { account, positions })} />
+          {worth && <p className={`num text-xs ${worth.warn ? 'text-amber-300' : 'text-ink-300'}`}>{worth.text}</p>}
         </div>
         {stale && (
           <div className="flex flex-wrap items-center gap-3">

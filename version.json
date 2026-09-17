@@ -4,7 +4,8 @@
     "Lighter pairs in Opportunities, with up to 50x",
     "Rebalance splits your equity by position size across USDT, Hyperliquid and Lighter",
     "Rebalance and Manual Transfer reach your Lighter wallet",
-    "Balances shows your borrow and liquidation first. Rebalance and Manual Transfer open in their own window",
+    "Balances shows your assets, with your borrow, Rebalance and Manual Transfer under them",
+    "Rebalance says how many days of saved interest pay its fee, and when it is not worth it yet",
     "Rebalance is safe for large accounts, and never sends a step twice without you"
   ]
 }

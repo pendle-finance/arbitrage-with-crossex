@@ -87,20 +87,20 @@ export function TransferSection({ holdMs, pick }: { holdMs?: number; pick?: Tran
   let button: ReactNode;
   if (moving) {
     button = (
-      <button type="button" className="btn !py-1 !text-xs !border-info/40 !text-pastel-blue" onClick={openModal}>
+      <button type="button" className="btn !border-info/40 !text-pastel-blue" onClick={openModal}>
         <span className="num">{`Sending ${num(moving.amount)} ${moving.coin}`}</span>
       </button>
     );
   } else if (failed) {
     button = (
-      <button type="button" className="btn !py-1 !text-xs !border-guava/60 !text-guava" onClick={openModal}>
+      <button type="button" className="btn !border-guava/60 !text-guava" onClick={openModal}>
         {'Transfer failed · open'}
       </button>
     );
   } else {
     if (view.lock) note = <span className="text-xs text-ink-500">{LOCK_SHORT[view.lock]}</span>;
     button = (
-      <button type="button" className="btn !py-1 !text-xs" disabled={view.lock !== null} onClick={openModal}>
+      <button type="button" className="btn" disabled={view.lock !== null} onClick={openModal}>
         {TRANSFER_CTA}
       </button>
     );

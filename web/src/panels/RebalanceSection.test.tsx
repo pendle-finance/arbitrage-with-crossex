@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { useState } from 'react';
@@ -73,6 +73,24 @@ const UNDER_A_CENT: RebalanceView = {
   }),
 };
 
+// Lighter's borrow at a round 0.04 a day. The mix route repays all of it.
+const AT_4C: RebalanceView = {
+  ...rebalanceViews.twoBorrows,
+  buckets: rebased(rebalanceViews.twoBorrows.buckets, { 'USDC/LIGHTER': { interestPerDayUsd: 0.04 } }),
+};
+
+const feeOf = (view: RebalanceView, costUsd: number): RebalanceView => ({
+  ...view,
+  plan: {
+    ...view.plan,
+    routes: {
+      ...view.plan.routes,
+      ...(view.plan.routes.mix ? { mix: { ...view.plan.routes.mix, costUsd } } : {}),
+      convert: { ...view.plan.routes.convert, costUsd },
+    },
+  },
+});
+
 const RATE_READ_FAILED: RebalanceView = {
   ...rebalanceViews.twoBorrows,
   buckets: rebased(rebalanceViews.twoBorrows.buckets, { 'USDC/LIGHTER': { interestPerDayUsd: 0 } }),
@@ -104,12 +122,19 @@ const facts = (): Record<string, string | undefined> =>
 
 const line = (text: string) => screen.queryByText((_, el) => el?.tagName === 'P' && el.textContent === text);
 
-const factRows = (key: string): string[][] => {
-  const spans = [...region().querySelectorAll(`[data-fact-rows="${key}"] span`)].map((el) => el.textContent ?? '');
+/** The per-wallet lines of a card figure: never under it, only in its hover. */
+async function factRows(user: User, key: string, figure: string): Promise<string[][]> {
+  expect(document.querySelector(`[data-fact-rows="${key}"]`)).toBeNull();
+  const trigger = within(region()).getByRole('button', { name: figure });
+  await user.hover(trigger);
+  const card = await screen.findByRole('tooltip');
+  const spans = [...card.querySelectorAll(`[data-fact-rows="${key}"] span`)].map((el) => el.textContent ?? '');
   const rows: string[][] = [];
   for (let i = 0; i < spans.length; i += 2) rows.push([spans[i], spans[i + 1]]);
+  await user.unhover(trigger);
+  await waitFor(() => expect(screen.queryByRole('tooltip')).toBeNull());
   return rows;
-};
+}
 
 const cardButtons = () =>
   within(region())
@@ -152,31 +177,55 @@ function TabSwitch() {
 }
 
 describe('RebalanceSection card', () => {
-  it('the card holds bars, four facts, no verdict while a wallet borrows, and one button, with no route, after bars or steps', async () => {
+  it('the block holds three facts, no bars, the days the fee pays back in, and one primary button, with no route, after bars or steps', async () => {
     await show(rebalanceViews.twoBorrows);
-    expect(Object.keys(facts())).toEqual(['Borrowing', 'Interest now', 'Interest paid', 'Liquidation']);
-    expect(within(region()).getByRole('group', { name: /Equity \(cash \+ unrealized PnL\)/ })).toBeInTheDocument();
-    expect(within(region()).getByRole('group', { name: 'Position share' })).toBeInTheDocument();
+    expect(Object.keys(facts())).toEqual(['Borrowing', 'Interest now', 'Interest paid']);
+    expect(within(region()).queryByRole('group')).toBeNull();
+    expect(region().querySelector('[data-bar-row]')).toBeNull();
+    expect(within(region()).queryByText(/Position share|Equity \(cash/)).toBeNull();
     expect(cardButtons().map((button) => button.textContent)).toEqual(['Rebalance · Fee $0.46']);
+    expect(cardButtons()[0].className).toContain('btn-primary');
     expect(within(region()).queryByRole('radiogroup')).toBeNull();
-    expect(region().querySelector('p.num')).toBeNull();
+    expect([...region().querySelectorAll('p.num')].map((p) => p.textContent)).toEqual(['The fee equals 12 days of the interest it saves.']);
+    expect(region().querySelector('p.num')).toHaveClass('text-ink-300');
     expect(within(region()).queryByText(/After rebalance|Hold to rebalance|Show steps|^Frees$|^Saves$/)).toBeNull();
   });
 
-  it('orders the facts above the bars, and the button row last', async () => {
-    await show(rebalanceViews.twoBorrows);
+  it('orders the facts above the button row, and the actions after the Rebalance button', async () => {
+    serve(rebalanceViews.twoBorrows);
+    renderWithClient(<RebalanceSection actions={<button type="button" className="btn">Manual Transfer</button>} />);
+    await screen.findByRole('region', { name: 'Rebalance' });
+    const rebalance = await within(region()).findByRole('button', { name: 'Rebalance · Fee $0.46' });
     const dl = region().querySelector('dl') as HTMLElement;
-    const bars = within(region()).getByRole('group', { name: /Equity/ });
-    const [button] = cardButtons();
-    expect(dl.compareDocumentPosition(bars) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(bars.compareDocumentPosition(button) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const transfer = within(region()).getByRole('button', { name: 'Manual Transfer' });
+    expect(dl.compareDocumentPosition(rebalance) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(rebalance.compareDocumentPosition(transfer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(rebalance.parentElement).toBe(transfer.parentElement);
   });
 
-  it('every bar carries a target', async () => {
-    await show(rebalanceViews.twoBorrows);
-    const rows = [...region().querySelectorAll('[data-bar-row]')];
-    expect(rows.map((row) => row.getAttribute('data-bar-row'))).toEqual(['USDT/CROSSEX', 'USDC/HYPERLIQUID', 'USDC/LIGHTER']);
-    for (const row of rows) expect(row.querySelector('[data-bar-target]')).not.toBeNull();
+  it('shows the actions while Rebalance loads and after it fails to load', async () => {
+    const actions = <button type="button">Manual Transfer</button>;
+    serve(rebalanceViews.twoBorrows);
+    server.use(http.get('/api/rebalance', () => new Promise<Response>(() => undefined)));
+    renderWithClient(<RebalanceSection actions={actions} />);
+    expect(await within(await screen.findByRole('region', { name: 'Rebalance' })).findByRole('button', { name: 'Manual Transfer' })).toBeInTheDocument();
+    expect(within(region()).queryByRole('button', { name: /^Rebalance/ })).toBeNull();
+    cleanup();
+
+    serve(rebalanceViews.twoBorrows);
+    server.use(http.get('/api/rebalance', () => HttpResponse.json(GATE_ERROR, { status: 500 })));
+    renderWithClient(<RebalanceSection actions={actions} />);
+    await waitFor(() => expect(line('Could not load Rebalance. Gate did not answer.')).toBeInTheDocument());
+    expect(within(region()).getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+    expect(within(region()).getByRole('button', { name: 'Manual Transfer' })).toBeInTheDocument();
+  });
+
+  it('with no actions and nothing loaded yet, renders nothing', async () => {
+    serve(rebalanceViews.twoBorrows);
+    server.use(http.get('/api/rebalance', () => new Promise<Response>(() => undefined)));
+    const { container } = renderWithClient(<RebalanceSection />);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(container.textContent).toBe('');
   });
 
   it('has no subtitle under the title', async () => {
@@ -203,21 +252,10 @@ describe('RebalanceSection card', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
   });
 
-  it('gate wallet shows when cash is stuck', async () => {
-    await show(rebalanceViews.accountA);
-    const gate = region().querySelector('[data-bar-row="USDC/GATE"]');
-    expect(gate).not.toBeNull();
-    expect(gate?.querySelector('[data-bar-target]')).not.toBeNull();
-    cleanup();
-    await show({ ...rebalanceViews.accountA, buckets: rebased(rebalanceViews.accountA.buckets, { 'USDC/GATE': { cash: 0.99, equity: 0.99 } }) });
-    expect(region().querySelector('[data-bar-row="USDC/GATE"]')).toBeNull();
-  });
-
   it('no open positions says so and cannot start', async () => {
     await show(rebalanceViews.noLegs);
     expect(line('No open positions. Nothing to rebalance.')).toBeInTheDocument();
     expect(within(region()).queryByText('Balanced')).toBeNull();
-    expect(within(region()).queryByRole('group', { name: 'Position share' })).toBeNull();
     expect(cardButtons().map((button) => button.textContent)).toEqual(['Rebalance']);
     expect(cardButtons()[0]).toBeDisabled();
   });
@@ -229,20 +267,65 @@ describe('RebalanceSection verdict', () => {
     expect(line('No borrow. Rebalance saves no interest. It moves $868.42.')).toBeInTheDocument();
   });
 
-  it('no verdict while any wallet still borrows and the plan is not balanced', async () => {
-    for (const view of [OTHER_ROUTE_LEAVES_BORROW, RECOMMENDED_LEAVES_BORROW, UNDER_A_CENT, REPAYS_NOTHING, rebalanceViews.hyperliquidFreeBorrow]) {
+  it('while a wallet still borrows and the fee is worth it, the card says how many days of saved interest pay the fee', async () => {
+    for (const [view, days] of [
+      [OTHER_ROUTE_LEAVES_BORROW, '12 days'],
+      // The picked route leaves 32 of the 132 Lighter borrow, so it stops 0.03 a day, not 0.0396.
+      [RECOMMENDED_LEAVES_BORROW, '16 days'],
+      [feeOf(AT_4C, 1.2), '30 days'],
+      [feeOf(AT_4C, 0.04), '1 day'],
+      [feeOf(AT_4C, 0.03), 'less than a day'],
+    ] as const) {
       await show(view);
-      expect(region().querySelector('p.num')).toBeNull();
-      expect(within(region()).queryByText(/Repays|Stops|No borrow|This borrow is free today|would move/)).toBeNull();
+      expect([...region().querySelectorAll('p.num')].map((p) => p.textContent)).toEqual([`The fee equals ${days} of the interest it saves.`]);
+      expect(region().querySelector('p.num')).toHaveClass('text-ink-300');
+      expect(within(region()).queryByText(/Repays|Stops|No borrow|This borrow is free today|would move|worth/)).toBeNull();
+      expect(cardButtons()[0].className).toContain('btn-primary');
       cleanup();
     }
     await show(OTHER_ROUTE_LEAVES_BORROW);
     expect(within(region()).getByRole('button', { name: 'Rebalance · Fee $0.46' })).toBeEnabled();
   });
 
-  it('a failed rate read shows as an Interest now row, not a verdict', async () => {
-    await show(RATE_READ_FAILED);
-    expect(factRows('interest')).toEqual([
+  it.each([
+    ['a fee a cent over 30 days of the interest it stops', feeOf(AT_4C, 1.21), 'Rebalance · Fee $1.21'],
+    ['a $20 fee against $0.04 a day', feeOf(rebalanceViews.twoBorrows, 20), 'Rebalance · Fee $20.00'],
+    ['a Hyperliquid borrow under 10,000 USDC, which costs nothing', rebalanceViews.hyperliquidFreeBorrow, null],
+    ['a route that leaves the whole borrow', REPAYS_NOTHING, 'Rebalance · Fee $0.46'],
+    ['a $0.46 fee against a 16 USDC borrow at $0.0048 a day', UNDER_A_CENT, 'Rebalance · Fee $0.46'],
+  ])('%s says it is not worth it yet, and the button is not primary but still opens', async (_, view, name) => {
+    const user = userEvent.setup();
+    await show(view);
+    expect(line('Not worth it yet. The fee is more than 30 days of the interest it saves.')).toHaveClass('text-amber-300');
+    const [button] = cardButtons();
+    if (name !== null) expect(button.textContent).toBe(name);
+    expect(button.className).not.toContain('btn-primary');
+    expect(button).toBeEnabled();
+    await user.click(button);
+    expect(await screen.findByRole('dialog')).toBeInTheDocument();
+  });
+
+  it('with every route blocked, no verdict and no primary button', async () => {
+    const { plan } = rebalanceViews.twoBorrows;
+    const routes = Object.fromEntries(
+      Object.entries(plan.routes).map(([name, route]) => [name, route && { ...route, available: false, reason: 'Gate is closed for spot.' }]),
+    ) as typeof plan.routes;
+    await show({ ...rebalanceViews.twoBorrows, plan: { ...plan, routes } });
+    expect(region().querySelector('p.num')).toBeNull();
+    expect(cardButtons()[0].className).not.toContain('btn-primary');
+    expect(cardButtons()[0]).toBeEnabled();
+  });
+
+  it('a free route with a borrow gives no verdict', async () => {
+    await show(feeOf(AT_4C, 0));
+    expect(region().querySelector('p.num')).toBeNull();
+    expect(cardButtons()[0].textContent).toBe('Rebalance · Fee $0.00');
+  });
+
+  it('a failed rate read shows in the Interest now hover, not as a verdict', async () => {
+    const user = userEvent.setup();
+    await show(feeOf(RATE_READ_FAILED, 20));
+    expect(await factRows(user, 'interest', '$0.00 an hour')).toEqual([
       ['Lighter', 'rate unknown'],
       ['Hyperliquid', '$0.00 an hour'],
     ]);
@@ -289,90 +372,38 @@ describe('RebalanceSection verdict', () => {
   });
 });
 
-describe('RebalanceSection liquidation fact', () => {
-  it('liquidation reads none after both reads succeed with no line', async () => {
-    await show(rebalanceViews.twoBorrows);
-    await waitFor(() => expect(facts().Liquidation).toBe('none'));
-  });
-
-  it('liquidation reads unknown when the account read fails', async () => {
-    let reads = 0;
-    serve(rebalanceViews.twoBorrows);
-    server.use(
-      http.get('/api/account', () => {
-        reads += 1;
-        return HttpResponse.json(GATE_ERROR, { status: 500 });
-      }),
-    );
-    renderWithClient(<RebalanceSection />);
-    await waitFor(() => expect(facts().Borrowing).toBe('244.00 USDC'));
-    await waitFor(() => expect(reads).toBe(1));
-    await new Promise((r) => setTimeout(r, 50));
-    expect(facts().Liquidation).toBe('unknown');
-  });
-
-  it('liquidation reads unknown when the positions read fails', async () => {
+describe('RebalanceSection has no liquidation fact', () => {
+  it('shows no Liquidation fact and reads no positions for it', async () => {
     let reads = 0;
     serve(rebalanceViews.twoBorrows);
     server.use(
       http.get('/api/positions', () => {
         reads += 1;
-        return HttpResponse.json(GATE_ERROR, { status: 500 });
+        return HttpResponse.json(env(NO_POSITIONS));
       }),
     );
     renderWithClient(<RebalanceSection />);
     await waitFor(() => expect(facts().Borrowing).toBe('244.00 USDC'));
-    await waitFor(() => expect(reads).toBe(1));
     await new Promise((r) => setTimeout(r, 50));
-    expect(facts().Liquidation).toBe('unknown');
-  });
-});
-
-describe('RebalanceSection bar tooltip', () => {
-  it('the bar tooltip names the wallet in plain text, and the label keeps its hover', async () => {
-    await show(rebalanceViews.twoBorrows);
-    const row = region().querySelector<HTMLElement>('[data-bar-row="USDC/LIGHTER"]');
-    const hit = row?.querySelector<HTMLElement>('[data-bar-hit]');
-    if (!row || !hit) throw new Error('no Lighter bar');
-    fireEvent.mouseMove(hit, { clientX: 100, clientY: 40 });
-    const tooltip = screen.getByRole('tooltip');
-    expect(tooltip.textContent?.startsWith('USDC · Lighter')).toBe(true);
-    expect(tooltip.querySelector('[class*="border-dotted"], [class*="decoration-dotted"]')).toBeNull();
-    expect(within(tooltip).queryByRole('button')).toBeNull();
-    expect(within(row).getByRole('button', { name: 'USDC · Lighter' })).toBeInTheDocument();
-  });
-
-  it('a negative cash bar reads red, a positive one reads green, and PnL keeps its stripe', async () => {
-    await show(rebalanceViews.twoBorrows);
-    const crossex = region().querySelector('[data-bar-row="USDT/CROSSEX"]') as HTMLElement;
-    const lighter = region().querySelector('[data-bar-row="USDC/LIGHTER"]') as HTMLElement;
-    expect(crossex.querySelector('[data-bar-cash]')?.className).toContain('bg-grass');
-    expect(crossex.querySelector('[data-bar-pnl]')?.className).toContain('bar-pnl-gain');
-    expect(lighter.querySelector('[data-bar-cash]')?.className).toContain('bg-guava');
-    expect(lighter.querySelector('[data-bar-pnl]')?.className).toContain('bar-pnl-loss');
-  });
-
-  it('the zero line is a separate mark taller than the bar track', async () => {
-    await show(rebalanceViews.twoBorrows);
-    const zero = region().querySelector('[data-bar-row="USDT/CROSSEX"] [data-zero-line]');
-    expect(zero?.className).toContain('bg-ink-200');
-    expect(zero?.className).toContain('-translate-x-1/2');
+    expect(Object.keys(facts())).not.toContain('Liquidation');
+    expect(reads).toBe(0);
   });
 });
 
 describe('RebalanceSection facts rows', () => {
-  it('Borrowing gives one row per wallet when two or more borrow', async () => {
+  it('Borrowing gives one row per wallet in the hover when two or more borrow', async () => {
+    const user = userEvent.setup();
     await show(rebalanceViews.twoBorrows);
-    expect(factRows('borrowing')).toEqual([
+    expect(await factRows(user, 'borrowing', '244.00 USDC')).toEqual([
       ['Lighter', '132.00'],
       ['Hyperliquid', '112.00'],
     ]);
   });
 
-  it('Interest now gives one row per borrowing wallet, as money an hour, with the yearly rate only in the hover', async () => {
+  it('Interest now gives one row per borrowing wallet in the hover, as money an hour, with the yearly rate only in the label hover', async () => {
     const user = userEvent.setup();
     await show(rebalanceViews.twoBorrows);
-    expect(factRows('interest')).toEqual([
+    expect(await factRows(user, 'interest', '$0.0017 an hour')).toEqual([
       ['Lighter', '$0.0017 an hour'],
       ['Hyperliquid', '$0.00 an hour'],
     ]);
@@ -380,9 +411,11 @@ describe('RebalanceSection facts rows', () => {
     expect(card.rows).toEqual(['USDT · CrossEx', 'USDC · Hyperliquid', 'USDC · Lighter']);
   });
 
-  it('Interest paid gives one row per wallet that has paid, with no all-time sub line', async () => {
+  it('Interest paid gives one row per wallet that has paid in the hover, with no line under the figure', async () => {
+    const user = userEvent.setup();
     await show(rebalanceViews.interestPaidSplit);
-    expect(factRows('paid')).toEqual([
+    expect(facts()['Interest paid']).toBe('$1.86');
+    expect(await factRows(user, 'paid', '$1.86')).toEqual([
       ['Lighter', '$1.55'],
       ['Hyperliquid', '$0.31'],
     ]);
@@ -496,7 +529,7 @@ describe('RebalanceSection gate spot and freshness', () => {
     renderWithClient(<RebalanceSection />);
     await waitFor(() => expect(line('Could not load Rebalance. Gate did not answer.')).toBeInTheDocument());
     await user.click(within(region()).getByRole('button', { name: 'Retry' }));
-    await waitFor(() => expect(Object.keys(facts())).toHaveLength(4));
+    await waitFor(() => expect(Object.keys(facts())).toHaveLength(3));
     expect(reads).toBe(2);
     expect(line('Could not load Rebalance. Gate did not answer.')).toBeNull();
   });

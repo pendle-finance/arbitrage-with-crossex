@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { ReactNode } from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { HoverCard } from './HoverCard';
 
 function renderCard(children: ReactNode) {
@@ -190,5 +190,63 @@ describe('HoverCard', () => {
 
     await userEvent.keyboard('{Enter}');
     expect(screen.getAllByRole('tooltip')).toHaveLength(1);
+  });
+});
+
+describe('HoverCard placement', () => {
+  const VIEW_HEIGHT = 800;
+
+  /** The trigger sits at `top`, 20 px tall; the card's content is `height` px. */
+  function place(top: number, height: number) {
+    vi.spyOn(window, 'innerHeight', 'get').mockReturnValue(VIEW_HEIGHT);
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      return this.getAttribute('role') === 'button' ? new DOMRect(40, top, 60, 20) : new DOMRect(0, 0, 0, 0);
+    });
+    vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockImplementation(function (this: HTMLElement) {
+      return this.getAttribute('role') === 'tooltip' ? height : 0;
+    });
+    render(
+      <HoverCard label="How">
+        <p>A tall card.</p>
+      </HoverCard>,
+    );
+    fireEvent.mouseEnter(screen.getByRole('button', { name: 'How' }));
+    return screen.getByRole('tooltip');
+  }
+
+  afterEach(() => vi.restoreAllMocks());
+
+  it('opens below when it fits there', () => {
+    const card = place(100, 300);
+    expect(card.style.top).toBe('126px');
+    expect(card.style.bottom).toBe('');
+    expect(card.style.maxHeight).toBe('666px');
+  });
+
+  it('a card near the bottom that fits below still opens below', () => {
+    const card = place(600, 120);
+    expect(card.style.top).toBe('626px');
+  });
+
+  it('a tall card near the bottom opens above, where it fits', () => {
+    const card = place(700, 500);
+    expect(card.style.top).toBe('');
+    expect(card.style.bottom).toBe('106px');
+    expect(card.style.maxHeight).toBe('686px');
+  });
+
+  it('a card taller than either side takes the roomier side and scrolls inside', () => {
+    const card = place(500, 900);
+    expect(card.style.bottom).toBe('306px');
+    expect(card.style.maxHeight).toBe('486px');
+    expect(card).toHaveClass('overflow-y-auto');
+  });
+
+  it('scrolling inside the card keeps it open; scrolling the page closes it', () => {
+    const card = place(500, 900);
+    fireEvent.scroll(card);
+    expect(screen.getByRole('tooltip')).toBe(card);
+    fireEvent.scroll(window);
+    expect(screen.queryByRole('tooltip')).toBeNull();
   });
 });

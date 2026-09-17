@@ -1,4 +1,4 @@
-import { cleanup, screen, within } from '@testing-library/react';
+import { cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -191,22 +191,90 @@ function sentencesOf(text: string): string[] {
 }
 
 describe('BalancesPanel layout', () => {
-  it('cards in order', async () => {
+  it('cards in order: the margin card, then one Assets card that holds Rebalance', async () => {
     await show(ACCOUNT_A);
     expect(screen.getAllByRole('region').map((section) => section.getAttribute('aria-label'))).toEqual([
-      'Rebalance',
       'Assets',
+      'Rebalance',
     ]);
     const margin = screen.getByRole('img', { name: 'Margin usage' });
-    expect(margin.compareDocumentPosition(region('Rebalance')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(margin.compareDocumentPosition(region('Assets')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(region('Assets')).toContainElement(region('Rebalance'));
+    expect(region('Assets')).toHaveClass('card');
   });
 
-  it('the Assets header holds Transfer, above the table', async () => {
+  it('the Assets card shows the table first, then the borrow facts, then Rebalance and Manual Transfer side by side', async () => {
     await show(ACCOUNT_A);
     const assets = region('Assets');
-    const transfer = within(assets).getByRole('group', { name: 'Transfer' });
     const table = within(assets).getByRole('table');
-    expect(transfer.compareDocumentPosition(table) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const facts = region('Rebalance').querySelector('dl') as HTMLElement;
+    const transfer = within(region('Rebalance')).getByRole('group', { name: 'Transfer' });
+    const rebalance = within(region('Rebalance')).getByRole('button', { name: /^Rebalance · Fee/ });
+    expect(table.compareDocumentPosition(facts) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(facts.compareDocumentPosition(rebalance) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(rebalance.compareDocumentPosition(transfer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(rebalance.parentElement).toBe(transfer.parentElement);
+    expect(within(transfer).getByRole('button', { name: 'Manual Transfer' })).toBeInTheDocument();
+    expect([...facts.querySelectorAll('dt')].map((dt) => dt.textContent)).toEqual(['Borrowing', 'Interest now', 'Interest paid']);
+  });
+
+  it('shows no wallet bars and no Liquidation on the tab', async () => {
+    await show({ ...ACCOUNT_B, rebalance: rebalanceViews.twoBorrows, account: accountBodies.twoBorrows });
+    expect(tabPanel().querySelector('[data-bar-row]')).toBeNull();
+    expect(within(tabPanel()).queryByText('Liquidation')).toBeNull();
+    expect(within(tabPanel()).queryByText(/Position share|Equity \(cash/)).toBeNull();
+  });
+
+  it('Manual Transfer still shows while Rebalance cannot load', async () => {
+    server.use(
+      http.get('/api/rebalance', () => HttpResponse.json(GATE_ERROR, { status: 500 })),
+      transferHandler(transferViews.accountB),
+      accountHandler(accountBodies.accountA),
+      http.get('/api/positions', () => HttpResponse.json(env(NO_POSITIONS))),
+    );
+    renderWithClient(<BalancesPanel />);
+    const transfer = await screen.findByRole('group', { name: 'Transfer' });
+    expect(within(transfer).getByRole('button', { name: 'Manual Transfer' })).toBeEnabled();
+    expect(await within(region('Assets')).findByText(/^Could not load Rebalance\./)).toBeInTheDocument();
+    expect(transfer).toBeInTheDocument();
+  });
+
+  it('an open Manual Transfer window stays open while Rebalance loads, fails and loads again', async () => {
+    let answer: 'wait' | 'fail' | 'ok' = 'wait';
+    let release = () => {};
+    server.use(
+      http.get('/api/rebalance', async () => {
+        if (answer === 'wait') await new Promise<void>((resolve) => (release = resolve));
+        if (answer === 'fail') return HttpResponse.json(GATE_ERROR, { status: 500 });
+        return HttpResponse.json(env(rebalanceViews.twoBorrows));
+      }),
+      transferHandler(transferViews.accountB),
+      accountHandler(accountBodies.twoBorrows),
+      http.get('/api/positions', () => HttpResponse.json(env(NO_POSITIONS))),
+    );
+    const user = userEvent.setup();
+    renderWithClient(
+      <>
+        <BalancesPanel />
+        <ReadRebalanceAgain />
+      </>,
+    );
+    const transfer = await screen.findByRole('group', { name: 'Transfer' });
+    await user.click(within(transfer).getByRole('button', { name: 'Manual Transfer' }));
+    const window = await screen.findByRole('dialog');
+
+    answer = 'fail';
+    release();
+    expect(await within(region('Assets')).findByText(/^Could not load Rebalance\./)).toBeInTheDocument();
+    expect(window).toBeInTheDocument();
+    expect(transfer).toBeInTheDocument();
+
+    answer = 'ok';
+    fireEvent.click(screen.getByRole('button', { name: 'read rebalance again' }));
+    expect(await within(region('Rebalance')).findByRole('button', { name: 'Rebalance · Fee $0.46' })).toBeInTheDocument();
+    expect(window).toBeInTheDocument();
+    expect(screen.getAllByRole('dialog')).toEqual([window]);
+    expect(transfer).toBeInTheDocument();
   });
 
   it('assets table scrolls with the page', async () => {
@@ -321,7 +389,13 @@ describe('BalancesPanel assets', () => {
     await show(ACCOUNT_B);
     const rows = assetRows();
     expect(rows.map((row) => row.Coin)).toEqual(['USDT CROSSEX', 'USDC HYPERLIQUID', 'USDC GATE', 'Gate spot', 'USDT SPOT']);
-    expect(rows[4]).toMatchObject({ Balance: '318.42', Available: '318.42' });
+    expect(rows[4]).toEqual({ Coin: 'USDT SPOT', Equity: '', Balance: '318.42', uPnL: '' });
+  });
+
+  it('has no Available column', async () => {
+    await show(ACCOUNT_B);
+    const headers = [...within(region('Assets')).getByRole('table').querySelectorAll('th')].map((th) => th.textContent);
+    expect(headers).toEqual(['Coin', 'Equity', 'Balance', 'uPnL']);
   });
 
   it('spot row has no equity', async () => {
@@ -341,9 +415,22 @@ describe('BalancesPanel assets', () => {
       },
     });
     expect(assetRows().slice(4)).toEqual([
-      { Coin: 'USDT SPOT', Equity: '', Balance: '318.42', Available: '300.00', uPnL: '' },
-      { Coin: 'USDC SPOT', Equity: '', Balance: '5.00', Available: '0.00', uPnL: '' },
+      { Coin: 'USDT SPOT', Equity: '', Balance: '318.42', uPnL: '' },
+      { Coin: 'USDC SPOT', Equity: '', Balance: '5.00', uPnL: '' },
     ]);
+    const user = userEvent.setup();
+    const held = within(region('Assets')).getByRole('button', { name: '318.42' });
+    expect(held.firstElementChild).toHaveClass('text-ink-100');
+    await user.hover(held);
+    expect((await screen.findByRole('tooltip')).textContent).toBe('300.00 free. 18.42 is held by open Gate spot orders.');
+    await user.unhover(held);
+    await waitFor(() => expect(screen.queryByRole('tooltip')).toBeNull());
+    expect(within(region('Assets')).getByRole('button', { name: '5.00' })).toBeInTheDocument();
+  });
+
+  it('a spot balance with nothing held has no hover', async () => {
+    await show(ACCOUNT_B);
+    expect(within(region('Assets')).queryByRole('button', { name: '318.42' })).toBeNull();
   });
 
   it('assets no spot read', async () => {
@@ -442,7 +529,7 @@ describe('BalancesPanel spot group', () => {
     const assets = region('Assets');
     const rows = assetRows();
     expect(rows.map((row) => row.Coin)).toContain('Gate spot');
-    expect(rows.find((row) => row.Coin === 'USDT SPOT')).toMatchObject({ Balance: '318.42', Available: '318.42' });
+    expect(rows.find((row) => row.Coin === 'USDT SPOT')).toMatchObject({ Balance: '318.42' });
     expect(within(assets).queryByText('No non-zero balances')).toBeNull();
   });
 });

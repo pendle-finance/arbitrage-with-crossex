@@ -18,6 +18,7 @@ import { TransferSection } from './TransferSection';
 import type { TransferPick } from './TransferModal';
 
 const NO_SPOT_READ_TEXT = 'Add Spot read permission to see spot balances.';
+const SPOT_HELD = (free: string, held: string) => `${free} free. ${held} is held by open Gate spot orders.`;
 
 type AssetRow =
   | { kind: 'crossex'; asset: CrossexAsset }
@@ -57,6 +58,16 @@ function amountCell(value: number | string | null): ReactNode {
   return value === null ? null : <span className="num">{num(value, 2)}</span>;
 }
 
+function spotBalanceCell(spot: SpotBalance): ReactNode {
+  const total = amountCell(spot.available + spot.locked);
+  if (spot.locked <= 0) return total;
+  return (
+    <HoverCard icon={false} widthPx={320} label={<span className="text-ink-100">{total}</span>}>
+      <p className="text-xs leading-snug">{SPOT_HELD(num(spot.available, 2), num(spot.locked, 2))}</p>
+    </HoverCard>
+  );
+}
+
 const ASSET_COLUMNS: Column<AssetRow>[] = [
   { key: 'coin', header: 'Coin', render: coinCell },
   // Fixed 2dp on every money column: tabular figures only line up when the
@@ -73,16 +84,7 @@ const ASSET_COLUMNS: Column<AssetRow>[] = [
     align: 'right',
     render: (row) => {
       if (row.kind === 'crossex') return amountCell(row.asset.balance);
-      return amountCell(row.kind === 'spot' ? row.spot.available + row.spot.locked : null);
-    },
-  },
-  {
-    key: 'available',
-    header: 'Available',
-    align: 'right',
-    render: (row) => {
-      if (row.kind === 'crossex') return amountCell(row.asset.availableBalance);
-      return amountCell(row.kind === 'spot' ? row.spot.available : null);
+      return row.kind === 'spot' ? spotBalanceCell(row.spot) : null;
     },
   },
   {
@@ -107,7 +109,8 @@ function spotRows(spot: SpotBalance[] | null | undefined): AssetRow[] {
   return held.length === 0 ? [] : [{ kind: 'spotGroup' }, ...held];
 }
 
-/** Balances tab: collateral stat tiles + non-zero per-coin assets. */
+/** Balances tab: the margin card, then one Assets card. The card shows what
+ * each wallet holds first, then the borrow facts and the two actions. */
 export function BalancesPanel() {
   const { data: acc, isPending, isError, error } = useAccount();
   const spot = useTransfer().data?.spot;
@@ -119,7 +122,7 @@ export function BalancesPanel() {
     return (
       <div className="flex flex-col gap-6">
         <TilesSkeleton />
-        <TableSkeleton rows={3} cols={5} />
+        <TableSkeleton rows={3} cols={4} />
       </div>
     );
   }
@@ -144,25 +147,21 @@ export function BalancesPanel() {
     <div className="flex flex-col gap-6" data-testid="balances-tabpanel">
       <MarginBreakdown acc={acc} borrowImUsd={borrowImUsd} />
 
-      <RebalanceSection onTransfer={openTransfer} />
-
-      <section ref={assetsSection} aria-label="Assets">
-        <div className="mb-2 flex items-center gap-3">
-          <h2 className="text-xs font-semibold uppercase tracking-wider text-ink-400">
-            Assets <span className="normal-case text-ink-500">· non-zero only</span>
-          </h2>
-          <div className="ml-auto">
-            <TransferSection pick={pick} />
-          </div>
+      <section ref={assetsSection} aria-label="Assets" className="card flex flex-col gap-4 p-4">
+        <h2 className="text-xs font-semibold uppercase tracking-wider text-ink-400">
+          Assets <span className="normal-case text-ink-500">· non-zero only</span>
+        </h2>
+        <div>
+          <DataTable
+            columns={ASSET_COLUMNS}
+            rows={rows}
+            rowKey={rowKeyOf}
+            maxHeightClass="max-h-none"
+            emptyState={<EmptyState icon="○" title="No non-zero balances" hint="Deposit collateral to CrossEx to get started." />}
+          />
+          {assets.length === 0 && spot === null && <NoSpotReadRow />}
         </div>
-        <DataTable
-          columns={ASSET_COLUMNS}
-          rows={rows}
-          rowKey={rowKeyOf}
-          maxHeightClass="max-h-none"
-          emptyState={<EmptyState icon="○" title="No non-zero balances" hint="Deposit collateral to CrossEx to get started." />}
-        />
-        {assets.length === 0 && spot === null && <NoSpotReadRow />}
+        <RebalanceSection onTransfer={openTransfer} actions={<TransferSection pick={pick} />} />
       </section>
     </div>
   );
