@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from 'react';
-import { useAccount, usePositions, useRebalance, useTransfer } from '../api/queries';
+import { useRebalance, useTransfer } from '../api/queries';
 import type { RebalanceJob } from '../api/types';
 import { Chip } from '../components/Chip';
 import { FreshnessButton } from '../components/FreshnessIndicator';
@@ -7,11 +7,11 @@ import { borrowingBuckets } from '../lib/borrow';
 import { fmtAbout, fmtUsd, num } from '../lib/fmt';
 import { useNow } from '../lib/useNow';
 import { useSettledError } from '../lib/useSettledError';
-import { BalanceBars, jobSeconds, scaleOf, ShareColumn } from './RebalanceBits';
-import { BAR_CAPTION, HOVER, MODAL_FEE, NO_LEGS, SHARE_CAPTION, VERDICT_BALANCED, VERDICT_MOVES, VERDICT_NO_BORROW } from './rebalanceCopy';
+import { jobSeconds } from './RebalanceBits';
+import { MODAL_FEE, NO_LEGS, VERDICT_BALANCED, VERDICT_MOVES, VERDICT_NO_BORROW } from './rebalanceCopy';
 import { WAITS_FOR_DEAL, WAITS_FOR_TRANSFER } from './rebalanceCopy';
-import { barRowsOf, borrowFacts, Facts, isCashLimitedEven, pickedRoute, planSteps, positionShares } from './RebalanceHovers';
-import { liquidationNow, RebalanceInfo, roundCountOf, roundOf, shownKeys, targetsOf, Term } from './RebalanceHovers';
+import { borrowFacts, Facts, isCashLimitedEven, pickedRoute, worthLine } from './RebalanceHovers';
+import { RebalanceInfo, roundCountOf, roundOf } from './RebalanceHovers';
 import { RebalanceModal } from './RebalanceModal';
 import type { GateAccount, TransferCoin } from '../api/types';
 
@@ -38,17 +38,19 @@ function jobButton(job: RebalanceJob): string {
   return round === null ? 'Running · Convert' : `Running · round ${num(round, 0)} of ${num(roundCountOf(job), 0)}`;
 }
 
+/** The Rebalance part of the Assets card: borrow facts, then the Rebalance
+ * button with the card's other actions beside it. */
 export function RebalanceSection({
   holdMs,
   onTransfer,
+  actions,
 }: {
   holdMs?: number;
   onTransfer?: (coin: TransferCoin, wallet: GateAccount) => void;
+  actions?: ReactNode;
 }) {
   const query = useRebalance();
   const transfer = useTransfer().data;
-  const account = useAccount().data;
-  const positions = usePositions().data;
   const now = useNow();
   const [open, setOpen] = useState(false);
   const [openedWith] = useState(query.dataUpdatedAt);
@@ -60,53 +62,68 @@ export function RebalanceSection({
     </h2>
   );
 
+  if (!view && !loadError && !actions) return null;
+
+  // One tree in every state: `actions` always sits last in the button row, so
+  // Manual Transfer keeps its open window and its transfer id while Rebalance
+  // loads, fails or refreshes.
+  let header: ReactNode = null;
+  let facts: ReactNode = null;
+  let line: ReactNode = null;
+  let main: ReactNode = null;
+  let modal: ReactNode = null;
+
   if (!view) {
-    if (!loadError) return null;
-    return (
-      <section aria-label="Rebalance" className="card flex flex-col gap-2 p-4">
-        {title}
+    if (loadError) {
+      header = title;
+      line = (
         <p role="alert" className="text-xs text-rose-300">
           {`${LOAD_FAILED} ${loadError.message}`}
         </p>
-        <button type="button" className="btn-ghost-xs leading-4 self-start" onClick={() => void query.refetch()}>
+      );
+      main = (
+        <button type="button" className="btn-ghost-xs leading-4" onClick={() => void query.refetch()}>
           {RETRY}
         </button>
-      </section>
-    );
-  }
+      );
+    }
+  } else {
+    const { plan, buckets } = view;
+    const job = view.job && (view.job.status === 'running' || view.job.status === 'halted') ? view.job : null;
+    const showAge = loadError !== null || (openedWith > 0 && query.dataUpdatedAt === openedWith);
+    const picked = pickedRoute(plan, null);
+    const hasBorrow = borrowingBuckets(buckets).length > 0;
+    // With every route blocked, the window cannot run, so the card gives no verdict.
+    const worth = hasBorrow && picked.name !== null ? worthLine(picked.route, buckets) : null;
+    const moving = transfer?.transfer?.status === 'moving';
+    const dealWorking = transfer?.lock === 'deal';
 
-  const { plan, buckets } = view;
-  const job = view.job && (view.job.status === 'running' || view.job.status === 'halted') ? view.job : null;
-  const showAge = loadError !== null || (openedWith > 0 && query.dataUpdatedAt === openedWith);
-  const target = targetsOf(view);
-  const rows = barRowsOf(buckets, shownKeys(view, job ? job.steps : planSteps(plan)), target);
-  const shares = positionShares(plan);
-  const route = pickedRoute(plan, null).route;
-  const hasBorrow = borrowingBuckets(buckets).length > 0;
-  const moving = transfer?.transfer?.status === 'moving';
-  const dealWorking = transfer?.lock === 'deal';
+    let chip: ReactNode = null;
+    if (job?.status === 'running') chip = <Chip tone="info">Running</Chip>;
+    if (job?.status === 'halted') chip = <Chip tone="red">Stopped</Chip>;
+    if (!job && plan.balanced && !plan.noLegs) chip = <Chip tone="green">Balanced</Chip>;
 
-  let chip: ReactNode = null;
-  if (job?.status === 'running') chip = <Chip tone="info">Running</Chip>;
-  if (job?.status === 'halted') chip = <Chip tone="red">Stopped</Chip>;
-  if (!job && plan.balanced && !plan.noLegs) chip = <Chip tone="green">Balanced</Chip>;
+    let verdict: ReactNode = null;
+    let warn = false;
+    if (job) verdict = jobVerdict(job, now);
+    else if (plan.noLegs) verdict = NO_LEGS;
+    else if (isCashLimitedEven(plan)) verdict = `${fmtUsd(plan.shortOfEven)} ${IS_POSITION_MARGIN}`;
+    else if (plan.balanced) verdict = VERDICT_BALANCED;
+    else if (!hasBorrow) verdict = <>{VERDICT_NO_BORROW} <span className="text-ink-500">{VERDICT_MOVES(fmtUsd(plan.moves))}</span></>;
+    else if (worth) {
+      verdict = worth.text;
+      warn = worth.warn;
+    }
 
-  let verdict: ReactNode = null;
-  if (job) verdict = jobVerdict(job, now);
-  else if (plan.noLegs) verdict = NO_LEGS;
-  else if (isCashLimitedEven(plan)) verdict = `${fmtUsd(plan.shortOfEven)} ${IS_POSITION_MARGIN}`;
-  else if (plan.balanced) verdict = VERDICT_BALANCED;
-  else if (!hasBorrow) verdict = <>{VERDICT_NO_BORROW} <span className="text-ink-500">{VERDICT_MOVES(fmtUsd(plan.moves))}</span></>;
+    let label: ReactNode = REBALANCE;
+    if (job) label = jobButton(job);
+    else if (moving) label = WAITS_FOR_TRANSFER;
+    else if (dealWorking) label = WAITS_FOR_DEAL;
+    else if (!plan.balanced && !plan.noLegs) label = <>{REBALANCE} <span className="opacity-80">{`· ${MODAL_FEE(fmtUsd(picked.route.costUsd))}`}</span></>;
+    const disabled = !job && (plan.balanced || plan.noLegs || moving || dealWorking);
+    const primary = !job && hasBorrow && picked.name !== null && !worth?.warn;
 
-  let label: ReactNode = REBALANCE;
-  if (job) label = jobButton(job);
-  else if (moving) label = WAITS_FOR_TRANSFER;
-  else if (dealWorking) label = WAITS_FOR_DEAL;
-  else if (!plan.balanced && !plan.noLegs) label = <>{REBALANCE} <span className="opacity-80">{`· ${MODAL_FEE(fmtUsd(route.costUsd))}`}</span></>;
-  const disabled = !job && (plan.balanced || plan.noLegs || moving || dealWorking);
-
-  return (
-    <section aria-label="Rebalance" className="card flex flex-col gap-4 p-4">
+    header = (
       <div className="flex items-center gap-3">
         {title}
         <div className="ml-auto flex items-center gap-2">
@@ -122,36 +139,16 @@ export function RebalanceSection({
           {chip}
         </div>
       </div>
-      <Facts items={borrowFacts(buckets, liquidationNow(account, positions))} />
-      <div className="flex gap-3 border-t border-ink-800 pt-3">
-        <div className="min-w-0 flex-1">
-          <BalanceBars
-            caption={
-              <span className="flex gap-3">
-                <span className="w-40 shrink-0">{HOVER.rebalanceTitle.walletHead.wallet}</span>
-                <span className="flex-1">{BAR_CAPTION}</span>
-              </span>
-            }
-            rows={rows}
-            scale={scaleOf(rows)}
-          />
-        </div>
-        {shares.size > 0 && (
-          <ShareColumn caption={<Term label={SHARE_CAPTION} text={HOVER.positionShare} />} rows={rows} shares={shares} />
-        )}
-      </div>
-      <div className="flex flex-wrap items-center gap-3 border-t border-ink-800 pt-3">
-        <button
-          type="button"
-          className={job || !hasBorrow ? 'btn num' : 'btn btn-primary num'}
-          disabled={disabled}
-          onClick={() => setOpen(true)}
-        >
-          {label}
-        </button>
-        {verdict !== null && <p className="num text-xs text-ink-300">{verdict}</p>}
-      </div>
-      {open && (
+    );
+    facts = <Facts items={borrowFacts(buckets)} />;
+    if (verdict !== null) line = <p className={`num text-xs ${warn ? 'text-amber-300' : 'text-ink-300'}`}>{verdict}</p>;
+    main = (
+      <button type="button" className={primary ? 'btn btn-primary num' : 'btn num'} disabled={disabled} onClick={() => setOpen(true)}>
+        {label}
+      </button>
+    );
+    if (open) {
+      modal = (
         <RebalanceModal
           view={view}
           onClose={() => setOpen(false)}
@@ -161,7 +158,20 @@ export function RebalanceSection({
             onTransfer?.(coin, wallet);
           }}
         />
-      )}
+      );
+    }
+  }
+
+  return (
+    <section aria-label="Rebalance" className="flex flex-col gap-3 border-t border-ink-800 pt-4">
+      {header}
+      {facts}
+      {line}
+      <div className="flex flex-wrap items-center gap-3">
+        {main}
+        {actions}
+      </div>
+      {modal}
     </section>
   );
 }

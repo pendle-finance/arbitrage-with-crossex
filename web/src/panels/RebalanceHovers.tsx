@@ -7,23 +7,24 @@ import { RadioRow } from '../components/RadioRow';
 import { microLabelClass, Th } from '../components/Th';
 import { borrowingBuckets, borrowTotalUsd, MIN_BORROW } from '../lib/borrow';
 import { fmtAbout, fmtUsd, num, WALLET_SHORT } from '../lib/fmt';
-import { describeLine, fmtLinePrice, fmtMove, liquidationLines, type LiquidationLine } from '../lib/liquidation';
+import { liquidationLines, type LiquidationLine } from '../lib/liquidation';
 import { floorCents } from '../lib/ticks';
 import { ALWAYS_SHOWN, ROUTE_ORDER, WALLET_TONE, type BarRow } from './RebalanceBits';
 import {
   FACT_BORROWING,
   FACT_INTEREST_NOW,
   FACT_INTEREST_PAID,
-  FACT_LIQUIDATION,
   GATE_SPOT,
   HOVER,
-  LIQUIDATION_NOT_KNOWN,
   MODAL_FEE,
   MOVE_TEXT,
+  PAYS_BACK,
   poolKey,
   RATE_PER_YEAR,
   INTEREST_PER_HOUR,
   RATE_UNKNOWN,
+  VERDICT_NO_BORROW,
+  VERDICT_NOT_WORTH_IT,
   WALLET_LABEL,
 } from './rebalanceCopy';
 import { findPath } from './TransferBits';
@@ -184,7 +185,7 @@ const freePartOf = (b: RebalanceBucket) => (b.coin === 'USDC' && b.venue === 'HY
 
 export const chargedBorrow = (b: RebalanceBucket, borrow: number) => Math.max(0, borrow - freePartOf(b));
 
-const isRateUnknown = (b: RebalanceBucket) => chargedBorrow(b, b.borrow) > 0 && b.interestPerDayUsd === 0;
+export const isRateUnknown = (b: RebalanceBucket) => chargedBorrow(b, b.borrow) > 0 && b.interestPerDayUsd === 0;
 
 function rateText(b: RebalanceBucket): string {
   if (isRateUnknown(b) || b.ratePerYear === null || b.ratePerYear <= 0) return RATE_UNKNOWN;
@@ -220,7 +221,11 @@ export interface Repay {
 export function repayOf(buckets: RebalanceBucket[], route: RoutePlan): Repay {
   const parts = borrowingBuckets(buckets).flatMap((bucket) => {
     const after = route.after.find((w) => keyOf(w) === keyOf(bucket));
-    const left = after ? Math.max(0, -after.equity) : bucket.borrow;
+    // Gate's borrow follows cash, not equity: a wallet in profit can owe more
+    // than minus its equity. So, like the server, count what the move sends in
+    // against the borrow, not the equity after it.
+    const received = after ? Math.max(0, after.equity - bucket.equity) : 0;
+    const left = Math.max(0, bucket.borrow - received);
     const amount = Math.max(0, bucket.borrow - left);
     return floorCents(amount) > 0 ? [{ bucket, amount, left }] : [];
   });
@@ -241,7 +246,7 @@ function borrowHover(borrowing: RebalanceBucket[]): string {
   return borrowing.length === 0 ? HOVER.rebalanceTitle.borrow : HOVER.borrowing;
 }
 
-export function borrowingFact(buckets: RebalanceBucket[]): Fact {
+export function borrowingFact(buckets: RebalanceBucket[]): Fact & { value: string } {
   const borrowing = borrowingBuckets(buckets);
   const total = borrowTotalUsd(buckets);
   const coin = sharedCoin(borrowing);
@@ -261,35 +266,103 @@ export function liquidationNow(acc: CrossexAccount | undefined, pos: PositionsRe
   return view ? (view.lines[0] ?? null) : 'unknown';
 }
 
-export function borrowFacts(buckets: RebalanceBucket[], liquidation: LiquidationLine | null | 'unknown'): Fact[] {
+/** The per-wallet lines of a card figure, shown on hover. With two or three
+ * wallets, lines under the figure crowd the card. */
+function RowsHover({ factKey, value, rows, warn }: { factKey: string; value: string; rows: FactRow[]; warn?: boolean }) {
+  // The trigger's own grey would hide the figure's colour, so the figure keeps it.
+  const label = <span className={warn ? 'text-amber-300' : 'text-ink-100'}>{value}</span>;
+  return (
+    <HoverCard icon={false} widthPx={320} label={label}>
+      <div data-fact-rows={factKey} className="grid w-fit grid-cols-[auto_auto] gap-x-4 gap-y-1 text-xs">
+        {rows.map((row) => (
+          <Fragment key={row.name}>
+            <span>{row.name}</span>
+            <span className="num whitespace-nowrap text-right">{row.value}</span>
+          </Fragment>
+        ))}
+      </div>
+    </HoverCard>
+  );
+}
+
+const rowsOnHover = (fact: Fact & { value: string }): Fact =>
+  fact.rows && fact.rows.length > 0
+    ? { ...fact, value: <RowsHover factKey={fact.key} value={fact.value} rows={fact.rows} warn={fact.warn} />, rows: [] }
+    : fact;
+
+export function borrowFacts(buckets: RebalanceBucket[]): Fact[] {
   const borrowing = borrowingBuckets(buckets);
   const perHour = buckets.reduce((sum, b) => sum + b.interestPerDayUsd, 0) / 24;
   const paid = buckets.reduce((sum, b) => sum + b.interestPaidUsd, 0);
   const paidWallets = buckets.filter((b) => floorCents(b.interestPaidUsd) > 0).sort((a, b) => b.interestPaidUsd - a.interestPaidUsd);
-  const line = liquidation === 'unknown' ? null : liquidation;
-  const noLine = liquidation === 'unknown' ? LIQUIDATION_NOT_KNOWN : 'none';
+  const borrowed = borrowingFact(buckets);
   return [
-    { ...borrowingFact(buckets), label: <Term label={FACT_BORROWING} text={borrowHover(borrowing)} /> },
-    {
+    rowsOnHover({ ...borrowed, label: <Term label={FACT_BORROWING} text={borrowHover(borrowing)} /> }),
+    rowsOnHover({
       key: 'interest',
       label: <InterestInfo buckets={buckets} />,
       value: INTEREST_PER_HOUR(perHourText(perHour)),
       rows: walletRows(borrowing, walletPerHour),
       warn: perHour > 0,
-    },
-    {
+    }),
+    rowsOnHover({
       key: 'paid',
       label: FACT_INTEREST_PAID,
       value: fmtUsd(paid),
       rows: walletRows(paidWallets, (b) => fmtUsd(b.interestPaidUsd)),
-    },
-    {
-      key: 'liquidation',
-      label: line ? <Term label={FACT_LIQUIDATION} text={describeLine(line)} /> : FACT_LIQUIDATION,
-      value: line ? `${line.base} ${fmtLinePrice(line.price)}` : noLine,
-      sub: line ? [`${fmtMove(line.move)} away · ${line.base} on ${line.venue}`] : [],
-    },
+    }),
   ];
+}
+
+/** A Rebalance is not worth it yet when its fee is more than this many days
+ * of the borrow interest it stops. The owner set 30 days on 2026-09-17. */
+export const WORTH_IT_DAYS = 30;
+export const MONTH_DAYS = 30;
+
+const cents = (usd: number): number => Math.round(usd * 100);
+
+export const hasUnknownRate = (buckets: RebalanceBucket[]): boolean => borrowingBuckets(buckets).some(isRateUnknown);
+
+/** The interest a day the route stops, from the wallets it repays. The
+ * server's savesPerDayUsd is rounded to cents, which moves 30 days of it by
+ * up to $0.15 and flips the verdict on a small borrow. */
+export const stopsPerDayOf = (route: RoutePlan, buckets: RebalanceBucket[]): number => repayOf(buckets, route).stopsPerDayUsd ?? 0;
+
+/** The fee as days of stopped interest, before rounding up. Null when the
+ * route stops no interest. */
+function paybackDays(route: RoutePlan, buckets: RebalanceBucket[]): number | null {
+  const stops = stopsPerDayOf(route, buckets);
+  return stops > 0 ? Number((route.costUsd / stops).toFixed(6)) : null;
+}
+
+/** Worth it when the fee is at most 30 whole days of the interest it stops,
+ * rounded up, the same figure the line shows. A free route is always worth it. */
+export function isWorthIt(route: RoutePlan, buckets: RebalanceBucket[]): boolean {
+  if (cents(route.costUsd) <= 0) return true;
+  const days = paybackDays(route, buckets);
+  return days !== null && Math.ceil(days) <= WORTH_IT_DAYS;
+}
+
+/** A borrow whose interest is known, and a route whose fee is more than 30
+ * days of the interest it stops. */
+export const isNotWorthIt = (route: RoutePlan, buckets: RebalanceBucket[]): boolean =>
+  borrowingBuckets(buckets).length > 0 && !hasUnknownRate(buckets) && !isWorthIt(route, buckets);
+
+const daysText = (days: number): string => {
+  if (days < 1) return 'less than a day';
+  const whole = Math.ceil(days);
+  return whole === 1 ? '1 day' : `${num(whole, 0)} days`;
+};
+
+/** Whether the fee is worth the interest the route stops. Null when the app
+ * cannot tell (a borrow rate is unknown) or there is nothing to weigh (no fee). */
+export function worthLine(route: RoutePlan, buckets: RebalanceBucket[]): { text: string; warn: boolean } | null {
+  if (borrowingBuckets(buckets).length === 0) return { text: VERDICT_NO_BORROW, warn: false };
+  if (hasUnknownRate(buckets)) return null;
+  if (isNotWorthIt(route, buckets)) return { text: VERDICT_NOT_WORTH_IT, warn: true };
+  const days = paybackDays(route, buckets);
+  if (cents(route.costUsd) <= 0 || days === null) return null;
+  return { text: PAYS_BACK(daysText(days)), warn: false };
 }
 
 export const isCashLimitedEven = (plan: EvenPlan) => plan.balanced && plan.shortOfEven >= DUST;

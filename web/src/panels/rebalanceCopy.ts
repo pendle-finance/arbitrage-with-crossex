@@ -114,7 +114,7 @@ export const HOVER = {
   whyMoreThanOneBorrow: (amountText: string) =>
     `Gate locks ${amountText} of initial margin for your borrow. Each round repays some borrow, so the next round is bigger.`,
   frees: 'Initial margin the repaid borrow no longer locks.',
-  saves: 'Borrow interest per day this stops.',
+  interestMonth: "Borrow interest for 30 days at today's rates, now and after this rebalance.",
   onTheWay: 'In transit through Gate spot. Not margin.',
   gateSpot: 'Not margin.',
   gateSpotAssets: 'Not margin. No equity or PnL.',
@@ -129,6 +129,8 @@ export const HOVER = {
 export const VERDICT_NO_BORROW = 'No borrow. Rebalance saves no interest.';
 export const VERDICT_BALANCED = 'Wallets match their position share. Nothing to move.';
 export const VERDICT_MOVES = (usdText: string) => `It moves ${usdText}.`;
+export const VERDICT_NOT_WORTH_IT = 'Not worth it yet. The fee is more than 30 days of the interest it saves.';
+export const PAYS_BACK = (daysText: string) => `The fee equals ${daysText} of the interest it saves.`;
 
 export const FACT_BORROWING = 'Borrowing';
 export const FACT_INTEREST_NOW = 'Interest now';
@@ -148,7 +150,9 @@ export const MODAL_ALL_ROUTES = 'Show all routes';
 export const MODAL_FEE = (usdText: string) => `Fee ${usdText}`;
 export const MODAL_AFTER = 'After rebalance';
 export const MODAL_FREES = 'Frees';
-export const MODAL_SAVES = 'Saves';
+export const MODAL_INTEREST = 'Interest';
+export const MODAL_FEE_LABEL = 'Fee';
+export const PER_MONTH = (nowText: string, afterText: string) => `${nowText} → ${afterText} a month`;
 export const MODAL_STEPS = 'Show steps';
 export const MODAL_HOLD = 'Hold to rebalance';
 export const MODAL_RESUME = 'Resume';

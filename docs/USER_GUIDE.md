@@ -127,19 +127,21 @@ A Lighter borrow of $50 pays interest on all $50. A Hyperliquid borrow of $50 pa
 
 A hedged pair is delta-neutral, but not margin-neutral. Gate liquidates the account when the margin balance falls to the maintenance margin, and the maintenance margin grows with a move against a USDC leg on Hyperliquid or Lighter: each leg's maintenance margin scales with its notional, and the losing leg drives its wallet negative, a borrow that adds 10% of itself to the maintenance margin. Each card on the Positions tab carries a chip like `Liquidates if ETH hits ~$3,150 (+37%)`: the price of the coin at which the account liquidates if only that coin moves and every other coin holds still. It turns amber inside 30% and red inside 15%. A pair that the model priced to a 10x pump and a 98% dump without finding a line reads `Safe through a 10x HYPE pump or 98% dump`. If Gate's margin figures are missing, the chip reads `No liquidation estimate` rather than claiming safety. The same nearest line sits in the hover of the IM and MM gauges in the header, and the rebalance quote carries a `Liquidation` fact with the line before and after the move, as a price and a move (`ETH ~$3,150 (+37%) → ~$3,290 (+43%)`).
 
-The Balances tab always shows a **Rebalance** card. It splits your CrossEx equity across the three wallets by position size. Each wallet's share is its legs at mark price, divided by all legs. Equity is cash plus unrealized profit or loss.
+The Balances tab shows the margin card, then the Assets table. Under the table are your borrow, its interest now and the interest paid, then **Rebalance** and **Manual Transfer**. Hover a figure to see each wallet. Rebalance splits your CrossEx equity across the three wallets by position size. Each wallet's share is its legs at mark price, divided by all legs. Equity is cash plus unrealized profit or loss.
 
 Example: $500 of positions on Gate, $250 on Hyperliquid and $250 on Lighter give 50%, 25% and 25%. With $1,000 of equity, the wallets aim for $500, $250 and $250. A wallet with no legs sends all its money to the wallets that have legs. With no open positions, there is nothing to rebalance.
 
-The **Position share** column shows each wallet's share and the position size behind it, for example `49% · $1,774`. The USDC · Lighter row shows only when it has legs, money or a move.
+In the Rebalance window, the **Position share** column shows each wallet's share and the position size behind it, for example `49% · $1,774`. The USDC · Lighter row shows only when it has legs, money or a move.
 
 USDC · Gate is one more CrossEx wallet for USDC. It counts as margin. Rebalance sells what is in it, in both directions, when it is worth 3 USDT or more.
 
-Press **Rebalance** on the card to open the Rebalance window. It lists the routes, and **Show steps** lists every step. Press and hold **Hold to rebalance** to start. There is no direction to pick and no amount to type. The button moves every wallet toward its share. When more than one wallet sends or receives, one hold runs every move, one after another. Convert always shows. A Spot loop row shows only when it costs less than Convert and its plan takes 15 minutes or less. The app marks the cheapest route as **Recommended** and picks it first. You can pick another route. The routes are:
+Press **Rebalance** to open the Rebalance window. It lists the routes, and **Show steps** lists every step. Press and hold **Hold to rebalance** to start. There is no direction to pick and no amount to type. The button moves every wallet toward its share. When more than one wallet sends or receives, one hold runs every move, one after another. Convert always shows. A Spot loop row shows only when it costs less than Convert and its plan takes 15 minutes or less. The app marks the cheapest route as **Recommended** and picks it first. You can pick another route. The routes are:
 
 - **Spot loop**: runs rounds until every wallet reaches its share. A last amount under the transfer minimum moves by Convert. If a round comes out smaller while it runs, the job can add a round, so the run can pass 15 minutes.
 - **Spot loop, then Convert**: runs the rounds that fit in 15 minutes and give the lowest cost, then moves the rest with Convert.
 - **Convert**: an instant swap inside CrossEx. It costs 0.2% of the amount moved. USDC between Hyperliquid and Lighter swaps twice, through USDT, so it costs about 0.4%. Gate takes at most 500,000 in one Convert, so a larger move runs as several Converts, 2 s apart.
+
+The window shows the **Fee** and the **Interest** your borrow pays in 30 days, now and after the move. The Balances tab and the window say how many days of saved interest pay the fee, for example `The fee equals 12 days of the interest it saves.` When the fee is more than 30 days of that interest, they read `Not worth it yet`. You can still rebalance.
 
 A round moves money through Gate spot, because Gate has no direct transfer between CrossEx wallets. Time and cost are for one round. Cost adds the spot fee and spread when the round buys or sells USDC.
 
@@ -168,9 +170,9 @@ After Abandon, any money left in Gate spot is plain spot money. Move it with Man
 
 #### Manual Transfer between Gate spot and CrossEx
 
-The **Manual Transfer** button above the Assets table opens a window. It moves USDT and USDC between your Gate spot wallet and your four CrossEx wallets. Gate's own website cannot do this.
+The **Manual Transfer** button next to Rebalance opens a window. It moves USDT and USDC between your Gate spot wallet and your four CrossEx wallets. Gate's own website cannot do this.
 
-Without Spot Trading Read Only on your key, the Assets table shows `Add Spot read permission to see spot balances.` The Gate spot tile in Manual Transfer then reads `balance hidden`.
+Without Spot Trading Read Only on your key, the Assets table shows `Add Spot read permission to see spot balances.` The Gate spot tile in Manual Transfer then reads `balance hidden`. When an open Gate spot order holds part of a spot balance, hover the balance to see how much is free.
 
 Two tabs set the direction. **Into CrossEx** moves money from Gate spot into a CrossEx wallet. **Out of CrossEx** moves money from a CrossEx wallet to Gate spot.
 

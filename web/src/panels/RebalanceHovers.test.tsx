@@ -1,13 +1,12 @@
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 import type { PositionsResponse, RebalanceBucket } from '../api/types';
-import type { LiquidationLine } from '../lib/liquidation';
 import { accountBodies, rebalanceViews, rebased } from '../test/fixtures';
-import { borrowFacts, Facts, liquidationNow, pickedRoute, roundOf, shownKeys, targetsOf } from './RebalanceHovers';
+import { borrowFacts, Facts, isNotWorthIt, isWorthIt, liquidationNow, pickedRoute, roundOf, shownKeys, stopsPerDayOf, targetsOf, worthLine } from './RebalanceHovers';
 
-function show(buckets: RebalanceBucket[], line: LiquidationLine | null | 'unknown' = null) {
-  return render(<Facts items={borrowFacts(buckets, line)} />);
+function show(buckets: RebalanceBucket[]) {
+  return render(<Facts items={borrowFacts(buckets)} />);
 }
 
 const withBorrow = (buckets: RebalanceBucket[], key: string, borrow: number, interestPerDayUsd: number) =>
@@ -18,27 +17,39 @@ function fact(label: string): HTMLElement {
   return dt?.parentElement as HTMLElement;
 }
 
-const lines = (label: string): string[] =>
-  [...fact(label).querySelectorAll('dd:not([data-fact-rows])')].map((dd) => dd.textContent ?? '');
+const lines = (label: string): string[] => [...fact(label).querySelectorAll('dd')].map((dd) => dd.textContent ?? '');
 
-function rows(label: string): { name: string; value: string }[] {
-  const grid = fact(label).querySelector('[data-fact-rows]');
-  if (!grid) return [];
-  const spans = [...grid.querySelectorAll('span')];
+/** The per-wallet lines sit in a hover on the figure, never under it. */
+async function hoverRows(label: string): Promise<{ rows: { name: string; value: string }[]; grid: Element | null }> {
+  expect(fact(label).querySelector('[data-fact-rows]')).toBeNull();
+  const trigger = within(fact(label).querySelector('dd') as HTMLElement).queryByRole('button');
+  if (!trigger) return { rows: [], grid: null };
+  const user = userEvent.setup();
+  await user.hover(trigger);
+  const card = await screen.findByRole('tooltip');
+  const grid = card.querySelector(`[data-fact-rows]`);
+  const spans = [...(grid?.querySelectorAll('span') ?? [])];
   const out: { name: string; value: string }[] = [];
   for (let i = 0; i < spans.length; i += 2) out.push({ name: spans[i].textContent ?? '', value: spans[i + 1].textContent ?? '' });
-  return out;
+  const kept = grid?.cloneNode(true) as Element | null;
+  await user.unhover(trigger);
+  await waitFor(() => expect(screen.queryByRole('tooltip')).toBeNull());
+  return { rows: out, grid: kept };
 }
 
-describe('borrow facts', () => {
-  it('facts with no borrow', () => {
-    const { container } = show(rebalanceViews.accountB.buckets, null);
+const rows = async (label: string) => (await hoverRows(label)).rows;
 
-    expect(container.querySelectorAll('dt')).toHaveLength(4);
-    expect(lines('Borrowing')[0]).toBe('none');
+describe('borrow facts', () => {
+  it('facts with no borrow: three facts, no Liquidation, no hovers on the figures', () => {
+    const { container } = show(rebalanceViews.accountB.buckets);
+
+    expect([...container.querySelectorAll('dt')].map((dt) => dt.textContent)).toEqual(['Borrowing', 'Interest now', 'Interest paid']);
+    expect(lines('Borrowing')).toEqual(['none']);
     expect(lines('Interest now')[0]).toBe('$0.00 an hour');
-    expect(lines('Interest paid')[0]).toBe('$0.00');
-    expect(lines('Liquidation')[0]).toBe('none');
+    expect(lines('Interest paid')).toEqual(['$0.00']);
+    for (const label of ['Borrowing', 'Interest now', 'Interest paid']) {
+      expect(within(fact(label).querySelector('dd') as HTMLElement).queryByRole('button')).toBeNull();
+    }
   });
 
   it('one borrowing wallet', () => {
@@ -47,55 +58,64 @@ describe('borrow facts', () => {
     expect(lines('Borrowing')).toEqual(['132.00 USDC', 'USDC · Lighter']);
   });
 
-  it('two borrowing wallets', () => {
+  it('two borrowing wallets', async () => {
     show(rebalanceViews.twoBorrows.buckets);
 
     expect(lines('Borrowing')).toEqual(['244.00 USDC']);
-    expect(rows('Borrowing')).toEqual([
+    expect(await rows('Borrowing')).toEqual([
       { name: 'Lighter', value: '132.00' },
       { name: 'Hyperliquid', value: '112.00' },
     ]);
   });
 
-  it('two borrowing wallets render aligned rows', () => {
+  it('two borrowing wallets render aligned rows in the hover', async () => {
     show(rebalanceViews.twoBorrows.buckets);
 
-    const borrowingValues = [...fact('Borrowing').querySelectorAll('[data-fact-rows] span:nth-child(2n)')];
-    const interestValues = [...fact('Interest now').querySelectorAll('[data-fact-rows] span:nth-child(2n)')];
+    const borrowingValues = [...((await hoverRows('Borrowing')).grid?.querySelectorAll('span:nth-child(2n)') ?? [])];
+    const interestValues = [...((await hoverRows('Interest now')).grid?.querySelectorAll('span:nth-child(2n)') ?? [])];
     expect(borrowingValues).toHaveLength(2);
     expect(interestValues).toHaveLength(2);
     for (const span of borrowingValues) expect(span.className).toContain('text-right');
     for (const span of interestValues) expect(span.className).toContain('text-right');
   });
 
-  it('interest per wallet', () => {
+  it('a figure with a hover keeps its colour: amber for a borrow and its interest, white for interest paid', () => {
+    show(rebased(rebalanceViews.twoBorrows.buckets, { 'USDC/LIGHTER': { interestPaidUsd: 1.55 } }));
+
+    const figure = (label: string) => within(fact(label).querySelector('dd') as HTMLElement).getByRole('button').firstElementChild;
+    expect(figure('Borrowing')).toHaveClass('text-amber-300');
+    expect(figure('Interest now')).toHaveClass('text-amber-300');
+    expect(figure('Interest paid')).toHaveClass('text-ink-100');
+  });
+
+  it('interest per wallet', async () => {
     show(rebalanceViews.twoBorrows.buckets);
 
     expect(lines('Interest now')).toEqual(['$0.0017 an hour']);
-    expect(rows('Interest now')).toEqual([
+    expect(await rows('Interest now')).toEqual([
       { name: 'Lighter', value: '$0.0017 an hour' },
       { name: 'Hyperliquid', value: '$0.00 an hour' },
     ]);
   });
 
-  it('a Hyperliquid borrow under 10,000 USDC costs $0.00 an hour', () => {
+  it('a Hyperliquid borrow under 10,000 USDC costs $0.00 an hour', async () => {
     show(rebalanceViews.hyperliquidFreeBorrow.buckets);
 
     expect(lines('Borrowing')).toEqual(['4,200.00 USDC', 'USDC · Hyperliquid']);
     expect(lines('Interest now')).toEqual(['$0.00 an hour']);
-    expect(rows('Interest now')).toEqual([{ name: 'Hyperliquid', value: '$0.00 an hour' }]);
+    expect(await rows('Interest now')).toEqual([{ name: 'Hyperliquid', value: '$0.00 an hour' }]);
   });
 
-  it('a failed rate read on a charged borrow reads rate unknown', () => {
+  it('a failed rate read on a charged borrow reads rate unknown', async () => {
     show(rebased(rebalanceViews.oneBorrow.buckets, { 'USDC/LIGHTER': { ratePerYear: null, interestPerDayUsd: 0 } }));
 
-    expect(rows('Interest now')).toEqual([{ name: 'Lighter', value: 'rate unknown' }]);
+    expect(await rows('Interest now')).toEqual([{ name: 'Lighter', value: 'rate unknown' }]);
   });
 
-  it('a failed rate read on a Hyperliquid borrow under 10,000 USDC still costs $0.00 an hour', () => {
+  it('a failed rate read on a Hyperliquid borrow under 10,000 USDC still costs $0.00 an hour', async () => {
     show(rebased(rebalanceViews.hyperliquidFreeBorrow.buckets, { 'USDC/HYPERLIQUID': { ratePerYear: null, interestPerDayUsd: 0 } }));
 
-    expect(rows('Interest now')).toEqual([{ name: 'Hyperliquid', value: '$0.00 an hour' }]);
+    expect(await rows('Interest now')).toEqual([{ name: 'Hyperliquid', value: '$0.00 an hour' }]);
   });
 
   it('Interest now hover shows the rate for every wallet, even with no borrow', async () => {
@@ -113,68 +133,53 @@ describe('borrow facts', () => {
     expect(within(hyperliquidRow).getByText('5.00% a year')).toBeInTheDocument();
   });
 
-  it('lighter charges from the first dollar', () => {
+  it('lighter charges from the first dollar', async () => {
     show(rebalanceViews.oneBorrow.buckets);
 
-    expect(rows('Interest now')).toEqual([{ name: 'Lighter', value: '$0.0017 an hour' }]);
+    expect(await rows('Interest now')).toEqual([{ name: 'Lighter', value: '$0.0017 an hour' }]);
   });
 
-  it('borrow comes from liability', () => {
+  it('borrow comes from liability', async () => {
     const { unmount } = show(rebalanceViews.gainOverNegativeCash.buckets);
     expect(lines('Borrowing')[0]).toBe('none');
     unmount();
 
     show(rebalanceViews.twoBorrows.buckets);
-    expect(rows('Borrowing').find((row) => row.name === 'Hyperliquid')?.value).toBe('112.00');
+    expect((await rows('Borrowing')).find((row) => row.name === 'Hyperliquid')?.value).toBe('112.00');
   });
 
-  it('interest paid per wallet', () => {
+  it('interest paid per wallet', async () => {
     show(rebalanceViews.interestPaidSplit.buckets);
 
     expect(lines('Interest paid')).toEqual(['$1.86']);
     expect(lines('Interest paid').join(' ')).not.toMatch(/all time/);
-    expect(rows('Interest paid')).toEqual([
+    expect(await rows('Interest paid')).toEqual([
       { name: 'Lighter', value: '$1.55' },
       { name: 'Hyperliquid', value: '$0.31' },
     ]);
   });
 
-  it('liquidation names the venue', () => {
-    const line: LiquidationLine = { base: 'ETH', venue: 'Hyperliquid', side: 'short', price: 3150.4, move: 0.37 };
-    show(rebalanceViews.twoBorrows.buckets, line);
-
-    const block = fact('Liquidation');
-    expect(lines('Liquidation')).toEqual(['ETH ~$3,150', '+37% away · ETH on Hyperliquid']);
-    expect(block.textContent).not.toMatch(/\d+ lines?/);
-  });
-
-  it('liquidation reads unknown without a read', () => {
-    show(rebalanceViews.twoBorrows.buckets, 'unknown');
-
-    expect(lines('Liquidation')).toEqual(['unknown']);
-  });
-
-  it('borrow under one dollar', () => {
+  it('borrow under one dollar', async () => {
     show(rebalanceViews.borrowUnderOne.buckets);
 
     expect(lines('Borrowing')).toEqual(['0.40 USDC', 'USDC · Hyperliquid']);
-    expect(rows('Interest now')).toEqual([{ name: 'Hyperliquid', value: '$0.00 an hour' }]);
+    expect(await rows('Interest now')).toEqual([{ name: 'Hyperliquid', value: '$0.00 an hour' }]);
   });
 
-  it('USDC borrow over 10,000 shows the hourly cost', () => {
+  it('USDC borrow over 10,000 shows the hourly cost', async () => {
     show(withBorrow(rebalanceViews.accountA.buckets, 'USDC/HYPERLIQUID', 12_000, 0.27));
 
     expect(lines('Borrowing')[0]).toBe('12,000.00 USDC');
     expect(lines('Interest now')[0]).toBe('$0.0113 an hour');
-    expect(rows('Interest now')).toEqual([{ name: 'Hyperliquid', value: '$0.0113 an hour' }]);
+    expect(await rows('Interest now')).toEqual([{ name: 'Hyperliquid', value: '$0.0113 an hour' }]);
   });
 
-  it('a 2,000 USDT borrow shows $0.0129 an hour', () => {
+  it('a 2,000 USDT borrow shows $0.0129 an hour', async () => {
     show(withBorrow(rebalanceViews.exampleE.buckets, 'USDT/CROSSEX', 2_000, 0.31));
 
     expect(lines('Borrowing')[0]).toBe('2,000.00 USDT');
     expect(lines('Interest now')[0]).toBe('$0.0129 an hour');
-    expect(rows('Interest now')).toEqual([{ name: 'CrossEx', value: '$0.0129 an hour' }]);
+    expect(await rows('Interest now')).toEqual([{ name: 'CrossEx', value: '$0.0129 an hour' }]);
   });
 
   it('interest an hour of $1 or more shows 2 decimals', () => {
@@ -189,17 +194,17 @@ describe('borrow facts', () => {
     expect(lines('Interest now')[0]).toBe('under $0.0001 an hour');
   });
 
-  it('interest paid stays after the borrow is repaid', () => {
+  it('interest paid stays after the borrow is repaid', async () => {
     show(rebased(rebalanceViews.exampleC.buckets, { 'USDC/HYPERLIQUID': { interestPaidUsd: 3.2 } }));
 
     expect(lines('Interest paid')).toEqual(['$3.20']);
-    expect(rows('Interest paid')).toEqual([{ name: 'Hyperliquid', value: '$3.20' }]);
+    expect(await rows('Interest paid')).toEqual([{ name: 'Hyperliquid', value: '$3.20' }]);
     expect(lines('Borrowing')[0]).toBe('none');
     expect(lines('Interest now')[0]).toBe('$0.00 an hour');
   });
 });
 
-describe('the liquidation rule the card and the modal share', () => {
+describe('the liquidation rule the modal uses', () => {
   const noPositions: PositionsResponse = { positions: [], exposure: [] };
 
   it('is unknown without both reads or with margin figures that are not numbers, and null with no line', () => {
@@ -248,5 +253,76 @@ describe('route and wallet rules the card and the modal share', () => {
     expect(shownKeys(view, [])).toContain('USDC/GATE');
     const dust = { ...view, buckets: rebased(view.buckets, { 'USDC/GATE': { cash: 0.99, equity: 0.99 } }) };
     expect(shownKeys(dust, [])).not.toContain('USDC/GATE');
+  });
+});
+
+describe('the 30-day rule the card and the modal share', () => {
+  const oneBorrow = rebalanceViews.oneBorrow;
+  const route = pickedRoute(oneBorrow.plan, null).route;
+  // The route repays the whole Lighter borrow, so it stops all of its interest.
+  const lighterAt = (interestPerDayUsd: number) => rebased(oneBorrow.buckets, { 'USDC/LIGHTER': { interestPerDayUsd } });
+  const at = (costUsd: number, savesPerDayUsd = route.savesPerDayUsd) => ({ ...route, costUsd, savesPerDayUsd });
+
+  it('a fee up to 30 whole days of the interest it stops is worth it, and a cent more is not', () => {
+    expect(isWorthIt(at(3), lighterAt(0.1))).toBe(true);
+    expect(isWorthIt(at(3.01), lighterAt(0.1))).toBe(false);
+    expect(isWorthIt(at(20), lighterAt(0.1))).toBe(false);
+    expect(isWorthIt(at(12_000), lighterAt(400))).toBe(true);
+    expect(isWorthIt(at(12_000.01), lighterAt(400))).toBe(false);
+    expect(worthLine(at(3), lighterAt(0.1))).toEqual({ text: 'The fee equals 30 days of the interest it saves.', warn: false });
+  });
+
+  it('weighs the interest each wallet stops, not the daily saving the server rounds to cents', () => {
+    // 114.70 USDC borrowed on Lighter at 10.95% a year costs 0.03441 a day. The server sends 0.03.
+    const small = rebased(oneBorrow.buckets, {
+      'USDC/LIGHTER': { cash: -114.7, equity: -114.7, borrow: 114.7, interestPerDayUsd: (114.7 * 0.1095) / 365 },
+    });
+    expect(worthLine(at(1, 0.03), small)).toEqual({ text: 'The fee equals 30 days of the interest it saves.', warn: false });
+    // 16 USDC costs 0.0048 a day. The server sends 0.00.
+    const tiny = rebased(oneBorrow.buckets, { 'USDC/LIGHTER': { cash: -16, equity: -16, borrow: 16, interestPerDayUsd: 0.0048 } });
+    expect(worthLine(at(0.03, 0), tiny)).toEqual({ text: 'The fee equals 7 days of the interest it saves.', warn: false });
+  });
+
+  it('a wallet in profit owes its cash, not minus its equity: the route stops only the part it repays', () => {
+    // Cash -500 and +200 unrealized: equity -300, but Gate lends 500. Sending 300 repays 300 of 500.
+    const inProfit = rebased(oneBorrow.buckets, {
+      'USDC/LIGHTER': { cash: -500, upnl: 200, equity: -300, borrow: 500, interestPerDayUsd: 0.15 },
+    });
+    const sends300 = (costUsd: number) => ({
+      ...at(costUsd),
+      after: route.after.map((w) => (w.venue === 'LIGHTER' ? { ...w, cash: -200, equity: 0 } : w)),
+    });
+    expect(stopsPerDayOf(sends300(3.5), inProfit)).toBeCloseTo(0.09, 10);
+    expect(worthLine(sends300(3.5), inProfit)?.warn).toBe(true);
+    expect(worthLine(sends300(2.7), inProfit)).toEqual({ text: 'The fee equals 30 days of the interest it saves.', warn: false });
+  });
+
+  it('the line and the rule never disagree at the edge: a fee just past 30 days reads not worth it', () => {
+    // 1.20 against 0.03999 a day is 30.008 days, so the line would say 31 days.
+    expect(isWorthIt(at(1.2), lighterAt(0.03999))).toBe(false);
+    expect(worthLine(at(1.2), lighterAt(0.03999))?.warn).toBe(true);
+    expect(worthLine(at(1.19), lighterAt(0.03999))).toEqual({ text: 'The fee equals 30 days of the interest it saves.', warn: false });
+  });
+
+  it('a route that stops no interest is not worth any fee, and a free route gives no line', () => {
+    const free = rebased(oneBorrow.buckets, { 'USDC/LIGHTER': { cash: -16, equity: -16, borrow: 16, interestPerDayUsd: 0.0048 } });
+    const keepsBorrow = { ...at(0.46), after: route.after.map((w) => (w.venue === 'LIGHTER' ? { ...w, cash: -16, equity: -16 } : w)) };
+    expect(isNotWorthIt(keepsBorrow, free)).toBe(true);
+    expect(isWorthIt(at(0), lighterAt(0.1))).toBe(true);
+    expect(worthLine(at(0), lighterAt(0.1))).toBeNull();
+  });
+
+  it('says less than a day and 1 day', () => {
+    expect(worthLine(at(0.03), lighterAt(0.04))?.text).toBe('The fee equals less than a day of the interest it saves.');
+    expect(worthLine(at(0.04), lighterAt(0.04))?.text).toBe('The fee equals 1 day of the interest it saves.');
+    expect(worthLine(at(0.05), lighterAt(0.04))?.text).toBe('The fee equals 2 days of the interest it saves.');
+  });
+
+  it('says nothing but no borrow with no borrow, and nothing when a borrow rate is unknown', () => {
+    expect(isNotWorthIt(at(20), rebalanceViews.accountB.buckets)).toBe(false);
+    expect(worthLine(at(20), rebalanceViews.accountB.buckets)).toEqual({ text: 'No borrow. Rebalance saves no interest.', warn: false });
+    const unknown = rebased(oneBorrow.buckets, { 'USDC/LIGHTER': { ratePerYear: null, interestPerDayUsd: 0 } });
+    expect(isNotWorthIt(at(20), unknown)).toBe(false);
+    expect(worthLine(at(20), unknown)).toBeNull();
   });
 });
