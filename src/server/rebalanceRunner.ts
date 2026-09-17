@@ -798,7 +798,12 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
           delete step.sentAt;
           deps.jobs.write(job);
         }
-        if (c.retryable || (phase === 'poll' && notFound)) {
+        // A rate limit at send stops the run, so the trader sees it and Gate
+        // is not asked again each second. The tag and quote id stay, so Resume
+        // looks the send up before it sends again.
+        if (phase === 'send' && c.category === 'rate-limited') {
+          halt(HALT_TEXT.rateLimited);
+        } else if (c.retryable || (phase === 'poll' && notFound)) {
           await deps.sleep(POLL_MS);
         } else if (phase !== 'send' || isRefusal(c)) {
           if (phase === 'send') step.quoteId = null;

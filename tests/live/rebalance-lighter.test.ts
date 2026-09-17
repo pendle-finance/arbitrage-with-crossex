@@ -452,6 +452,9 @@ const runLiveJob = async (clients: Clients, input: JobInput): Promise<Ran> => {
   return { job, before, after };
 };
 
+const RATE_LIMIT_RESUMES = 3;
+const RATE_LIMIT_WAIT_MS = 60_000;
+
 const runConvertParts = async (clients: Clients, move: Move, parts: number[]): Promise<Ran> => {
   const dataDir = newDir('rebalance-lighter-');
   const jobs = new JobFile(dataDir);
@@ -465,6 +468,14 @@ const runConvertParts = async (clients: Clients, move: Move, parts: number[]): P
   jobs.write(job);
   console.log(`  ▸ job ${job.id} with ${job.steps.length} Convert steps written to ${dataDir}`);
   await runLogged(jobs, job, clients, dataDir);
+  for (let pass = 1; pass <= RATE_LIMIT_RESUMES && job.haltReason === HALT_TEXT.rateLimited; pass += 1) {
+    console.log(`  ▸ rate-limited: Resume ${pass} of ${RATE_LIMIT_RESUMES} after ${RATE_LIMIT_WAIT_MS / 1000} s`);
+    await sleep(RATE_LIMIT_WAIT_MS);
+    Object.assign(job, { status: 'running', haltReason: null });
+    job.steps[job.stepIndex].startedAt = Date.now();
+    jobs.write(job);
+    await runLogged(jobs, job, clients, dataDir);
+  }
   const after = await readAssets(clients);
   logBalances('after the job', after);
   return { job, before, after };
@@ -1201,7 +1212,7 @@ describe.skipIf(process.env.REBALANCE_LIGHTER !== '1')('live rebalance Lighter p
     await convertInParts({ from: 'LIGHTER', to: 'HYPERLIQUID' }, VENUE_PART, ['LIGHTER_CONVERT_USDC_USDT', 'HYPERLIQUID_CONVERT_USDT_USDC']);
     await convertInParts({ from: 'CROSSEX', to: 'HYPERLIQUID' }, USDT_PART, ['HYPERLIQUID_CONVERT_USDT_USDC']);
     await convertInParts({ from: 'HYPERLIQUID', to: 'CROSSEX' }, USDT_PART, ['HYPERLIQUID_CONVERT_USDC_USDT']);
-  }, 1_500_000);
+  }, 3_000_000);
 
   it('a Lighter wallet borrow is repaid by a Convert into Lighter', async () => {
     assertLiveTestsEnabled();
