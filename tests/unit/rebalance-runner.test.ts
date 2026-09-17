@@ -27,6 +27,7 @@ import {
 } from '../../src/server/rebalanceJob';
 import {
   BALANCE_LAG_MS,
+  CONVERT_GAP_MS,
   HL_TRANSFER_TIMEOUT_MS,
   LOOKUP_RETRY_MS,
   LOOKUP_WINDOW_MS,
@@ -1112,6 +1113,64 @@ describe('runJob Convert', () => {
     expect(h.count('getCrossexOrder')).toBe(0);
     expect(h.count('createCrossexConvertQuote')).toBe(2);
     expect(h.count('createCrossexConvertOrder')).toBe(1);
+  });
+});
+
+describe('runJob paces Convert quotes', () => {
+  const pacedConvert = (plan: PlanInput, account_: unknown) => {
+    const clock = fakeClock();
+    const quotedAt: number[] = [];
+    const quotes = quotesAt((from) => floorCents(from * 0.998));
+    let orders = 0;
+    const h = harness(clock, plan, {
+      getCrossexAccount: seq(account_),
+      createCrossexConvertQuote: async (arg: RequestOf<'createCrossexConvertQuote'>) => {
+        quotedAt.push(clock.now());
+        return quotes(arg as never);
+      },
+      createCrossexConvertOrder: async () => {
+        orders += 1;
+        return { body: { orderId: `c${orders}`, text: `q${orders}` } };
+      },
+    });
+    return { ...h, start: clock.now(), quotedAt };
+  };
+
+  const expectPaced = (quotedAt: number[]): void => {
+    quotedAt.slice(1).forEach((at, index) => expect(at - quotedAt[index]).toBeGreaterThanOrEqual(CONVERT_GAP_MS));
+    for (const at of quotedAt) expect(quotedAt.filter((other) => other >= at && other < at + 10_000).length).toBeLessThanOrEqual(5);
+  };
+
+  it.each(RUNGS)('a Convert of %d USDT asks for its first quote at once and each later part at least 2 s after the one before', async (amount) => {
+    const h = pacedConvert({ route: 'convert', steps: [convert(amount)] }, account({ ...WHALE, usdt: 2 * amount }));
+
+    await h.run();
+
+    const job = h.jobs.read()!;
+    expect(job).toMatchObject({ status: 'done', fundsAt: 'HYPERLIQUID' });
+    expect(h.quotedAt).toHaveLength(chunkCount(amount));
+    expect(h.quotedAt[0] - h.start).toBeLessThan(CONVERT_GAP_MS);
+    expectPaced(h.quotedAt);
+    expect(h.count('createCrossexConvertOrder')).toBe(chunkCount(amount));
+  });
+
+  it.each(RUNGS)('a Convert of %d USDC from Hyperliquid to Lighter paces each half, and each half still sends what the one before returned', async (amount) => {
+    const h = pacedConvert(
+      { route: 'convert', steps: [between('HYPERLIQUID', 'LIGHTER', convert(amount))] },
+      account({ ...WHALE, hyperliquid: 2 * amount }),
+    );
+
+    await h.run();
+
+    const job = h.jobs.read()!;
+    expect(job).toMatchObject({ status: 'done', fundsAt: 'LIGHTER' });
+    expect(h.quotedAt).toHaveLength(job.steps.length);
+    expect(h.quotedAt[0] - h.start).toBeLessThan(CONVERT_GAP_MS);
+    expectPaced(h.quotedAt);
+    job.steps.forEach((step, index) => {
+      if (step.name !== 'Convert to USDC') return;
+      expect(Number(h.sent('createCrossexConvertQuote')[index].crossexConvertQuoteRequest.fromAmount)).toBeLessThanOrEqual(job.steps[index - 1].qty!);
+    });
   });
 });
 
@@ -3165,7 +3224,7 @@ describe('runJob Convert quote floor at the Gate spot price', () => {
   };
 
   it.each(LADDER.flatMap((amount): [Direction, number][] => [['toUsdc', amount], ['toUsdt', amount]]))(
-    'a Convert %s of %d whose first ticker read throws waits one poll, reads again, and converts each chunk once',
+    'a Convert %s of %d whose first ticker read throws waits one poll, reads again, and converts each chunk once, 2 s apart',
     async (direction, amount) => {
       const h = convertAt(direction, amount, overFloor(direction), seq(networkError, liveRow));
       const sleep = vi.spyOn(h.deps, 'sleep');
@@ -3174,7 +3233,7 @@ describe('runJob Convert quote floor at the Gate spot price', () => {
 
       expectSent(h, amount);
       expect(h.count('createCrossexConvertQuote')).toBe(chunkCount(amount));
-      expect(sleep.mock.calls).toEqual([[POLL_MS]]);
+      expect(sleep.mock.calls).toEqual([[POLL_MS], ...Array(chunkCount(amount) - 1).fill([CONVERT_GAP_MS])]);
       expect(h.sequence.filter((name) => name !== 'getCrossexAccount').slice(0, 4)).toEqual([
         'listTickers',
         'listTickers',
