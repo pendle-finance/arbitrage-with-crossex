@@ -33,7 +33,9 @@ import {
   fetchBorosMarket,
   fetchBorosMarkets,
   fetchBorosTransactions,
-  fetchSettlementEvents,
+  settlementWindow,
+  syncSettlementLedger,
+  type BorosSettlementLedger,
   norm18,
   resolveBorosFetch,
   resolveCollateralPricesUsd,
@@ -326,6 +328,8 @@ async function fetchClosedPositions(
 }
 
 export function assetViewRoutes(deps: AppDeps) {
+  // Last synced ledger per address — the next sync reads only rows newer than its head.
+  const settlementLedgers = new Map<string, BorosSettlementLedger>();
   const fetchImpl: FetchLike = resolveBorosFetch(deps.borosFetch);
 
   return async function plugin(app: FastifyInstance): Promise<void> {
@@ -386,12 +390,16 @@ export function assetViewRoutes(deps: AppDeps) {
         ),
         deps.cache
           .get(
-            `boros:settlements:${address}:0:${Math.floor(sinceSec / 3600)}`,
+            `boros:settlements:${address}:0`,
             TTL.boros,
-            () => fetchSettlementEvents(fetchImpl, address, 0, sinceSec),
+            async () => {
+              const next = await syncSettlementLedger(fetchImpl, address, 0, settlementLedgers.get(address));
+              settlementLedgers.set(address, next);
+              return next;
+            },
             { fresh },
           )
-          .then((r) => r.value),
+          .then((r) => settlementWindow(r.value, sinceSec)),
       ]);
 
       const marketById = new Map<number, BorosMarket>(markets.map((m) => [m.marketId, m]));
@@ -404,7 +412,7 @@ export function assetViewRoutes(deps: AppDeps) {
       //
       // The fill feed is keyed by (marketAcc, marketId) and refuses to answer
       // without a marketId, so each zone's id set is BUILT: every market the
-      // settlement sweep above saw (the window plus the page crossing it),
+      // account ever settled (the ledger above, not just the window),
       // plus the ones it holds right now. Its coverage is that sweep's own.
       const txnsComplete: boolean[] = [];
       const txnsByToken = new Map<

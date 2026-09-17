@@ -732,43 +732,49 @@ export interface BorosSettlementEvent {
   settlementRate: number;
 }
 
+export interface BorosSettlementRow extends BorosSettlementEvent {
+  id: string;
+  marketAcc: string;
+  /** Decoded from `marketAcc`; null when it does not decode to this account. */
+  tokenId: number | null;
+}
+
+export interface BorosSettlementLedger {
+  /** Newest first — the feed's own order (eventIndex descending). */
+  rows: BorosSettlementRow[];
+  /** Oldest row read when the page cap was hit; 0 = the account's full history. */
+  coversFromSec: number;
+}
+
 /**
  * GET /v1/accounts/settlement-events (gateway) — the per-settlement ledger
- * that makes windowed Boros reconstruction EXACT: pages backward by
- * resumeToken and stops once rows predate `sinceSec` (or history is
- * exhausted). Returns its own coverage the same way the other ledger
- * fetchers do: `coversFromSec` is the oldest row read when the page cap was
- * hit, else 0 ("complete for every window that matters").
+ * that makes windowed Boros reconstruction EXACT. Settlements are immutable
+ * and the feed pages newest-first on `{root, accountId, eventIndex: -1}`, so
+ * the full history is swept once and every later call reads only the head
+ * pages until it meets `prev`'s newest row: 1 CU per refresh instead of a
+ * re-sweep per poll per window. A page is 1 CU up to limit=200.
  *
- * `pairs` is every (marketAcc, marketId) seen on any row read, including the
- * page that crosses `sinceSec` — the fill feed needs a marketId, and this is
- * the only account-wide feed that carries both ids.
+ * If `prev`'s newest row is never met (reorged away, or more new rows than
+ * the page cap) the result is a cold sweep and `prev` is dropped.
  */
-export async function fetchSettlementEvents(
+export async function syncSettlementLedger(
   fetchImpl: FetchLike,
   address: string,
   accountId = 0,
-  sinceSec = 0,
-): Promise<{
-  events: BorosSettlementEvent[];
-  coversFromSec: number;
-  pairs: Array<{ marketAcc: string; tokenId: number; marketId: number }>;
-}> {
+  prev?: BorosSettlementLedger,
+): Promise<BorosSettlementLedger> {
   const clientTag =
     'pendle_client=boroscrossex' + clientTagState.version + (clientTagState.active ? '_active' : '');
-  const events: BorosSettlementEvent[] = [];
-  const pairs = new Map<string, { marketAcc: string; tokenId: number; marketId: number }>();
+  const headId = prev?.rows[0]?.id;
+  const rows: BorosSettlementRow[] = [];
   let resumeToken: string | null = null;
-  let oldest = Number.POSITIVE_INFINITY;
-  // 60 pages × 100 ≈ 6k settlements ≈ 8 months of hourly rows on one market —
-  // a runaway guard, not an expected ceiling (the live probe read a full
-  // 10-month account in 35 pages).
-  const maxPages = 60;
-  let capped = true;
+  // 30 pages × 200 ≈ 6k settlements ≈ 8 months of hourly rows on one market —
+  // a runaway guard, not an expected ceiling.
+  const maxPages = 30;
   for (let page = 0; page < maxPages; page += 1) {
     const url =
       `${BOROS_GATEWAY_BASE_URL}/v1/accounts/settlement-events?root=${address}` +
-      `&accountId=${accountId}&limit=100` +
+      `&accountId=${accountId}&limit=200` +
       (resumeToken ? `&resumeToken=${encodeURIComponent(resumeToken)}` : '') +
       `&${clientTag}`;
     let resp: Awaited<ReturnType<FetchLike>>;
@@ -793,25 +799,19 @@ export async function fetchSettlementEvents(
     if (!Array.isArray(body?.results)) {
       throw new CoreError('Boros settlement-events: unexpected response shape (no results[])', 'network');
     }
-    let pastWindow = false;
     for (const r of body.results) {
-      const marketAcc = String(r.marketAcc ?? '');
-      const seg = decodeMarketAcc(marketAcc);
-      if (seg && seg.accountId === accountId && Number.isFinite(Number(r.marketId))) {
-        pairs.set(`${marketAcc.toLowerCase()}:${Number(r.marketId)}`, {
-          marketAcc,
-          tokenId: seg.tokenId,
-          marketId: Number(r.marketId),
-        });
+      const id = String(r.id ?? '');
+      if (prev && headId !== undefined && id === headId) {
+        return { rows: rows.concat(prev.rows), coversFromSec: prev.coversFromSec };
       }
       const timeSec = Number(r.timestamp);
       if (!Number.isFinite(timeSec) || timeSec <= 0) continue;
-      oldest = Math.min(oldest, timeSec);
-      if (timeSec < sinceSec) {
-        pastWindow = true;
-        continue;
-      }
-      events.push({
+      const marketAcc = String(r.marketAcc ?? '');
+      const seg = decodeMarketAcc(marketAcc);
+      rows.push({
+        id,
+        marketAcc,
+        tokenId: seg && seg.accountId === accountId ? seg.tokenId : null,
         marketId: Number(r.marketId),
         timeSec,
         positionAbs: Math.abs(norm18(r.positionSize as string)),
@@ -821,12 +821,49 @@ export async function fetchSettlementEvents(
       });
     }
     resumeToken = body.resumeToken ?? null;
-    if (pastWindow || !resumeToken || body.results.length === 0) {
-      capped = false;
-      break;
+    if (!resumeToken || body.results.length === 0) {
+      return { rows, coversFromSec: 0 };
     }
   }
-  return { events, coversFromSec: capped ? oldest : 0, pairs: [...pairs.values()] };
+  return { rows, coversFromSec: rows.length > 0 ? rows[rows.length - 1]!.timeSec : 0 };
+}
+
+/**
+ * The window `sinceSec..now` of a ledger. `pairs` is every (marketAcc,
+ * marketId) the account ever settled — the fill feed needs a marketId, and
+ * this is the only account-wide feed that carries both ids.
+ */
+export function settlementWindow(
+  ledger: BorosSettlementLedger,
+  sinceSec: number,
+): {
+  events: BorosSettlementEvent[];
+  coversFromSec: number;
+  pairs: Array<{ marketAcc: string; tokenId: number; marketId: number }>;
+} {
+  const pairs = new Map<string, { marketAcc: string; tokenId: number; marketId: number }>();
+  for (const r of ledger.rows) {
+    if (r.tokenId === null || !Number.isFinite(r.marketId)) continue;
+    pairs.set(`${r.marketAcc.toLowerCase()}:${r.marketId}`, {
+      marketAcc: r.marketAcc,
+      tokenId: r.tokenId,
+      marketId: r.marketId,
+    });
+  }
+  return {
+    events: ledger.rows
+      .filter((r) => r.timeSec >= sinceSec)
+      .map(({ marketId, timeSec, positionAbs, settlementToken, feeToken, settlementRate }) => ({
+        marketId,
+        timeSec,
+        positionAbs,
+        settlementToken,
+        feeToken,
+        settlementRate,
+      })),
+    coversFromSec: ledger.coversFromSec > sinceSec ? ledger.coversFromSec : 0,
+    pairs: [...pairs.values()],
+  };
 }
 
 /**
