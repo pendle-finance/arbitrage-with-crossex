@@ -400,10 +400,12 @@ export function borosPairRoutes(deps: AppDeps) {
       .value;
 
   const loadAccount = async (address: string, fresh: boolean): Promise<AccountView> => {
+    // Market config only picks the IM branch; it never needs a fresh read.
+    const markets = await loadMarkets(false);
     const { value } = await deps.cache.get(
       `boros:collaterals:${address}`,
       TTL.boros,
-      () => fetchBorosCollaterals(fetchImpl, address),
+      () => fetchBorosCollaterals(fetchImpl, address, markets),
       { fresh },
     );
     return readAccount(value);

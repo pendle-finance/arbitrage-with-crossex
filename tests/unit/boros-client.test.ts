@@ -56,14 +56,15 @@ describe('fetchBorosMarkets', () => {
     expect(markets[0].paymentPeriod).toBe(3600);
   });
 
-  it('maps config.status to the lifecycle state, dropping anything not live', async () => {
+  it('maps config.status (on-chain MarketStatus) to the lifecycle state', async () => {
     const mk = (status: unknown) => ({ marketId: 155, tokenId: 3, config: { status } });
     const states = async (status: unknown) =>
       (await fetchBorosMarkets(stub(() => ({ body: { results: [mk(status)] } }))))[0].state;
     expect(await states(2)).toBe('Normal');
-    expect(await states(1)).toBe('Paused');
+    expect(await states(1)).toBe('CloseOnly');
+    expect(await states(0)).toBe('Paused');
     // An unknown or absent status must not read as tradable.
-    expect(await states(undefined)).toBe('Paused');
+    expect(await states(undefined)).toBe('Unknown');
   });
 
   it('surfaces midApr, notionalOI, the 18-dec takerFee and the lifecycle state', async () => {
@@ -328,7 +329,7 @@ describe('fetchBorosTransactions pagination', () => {
       MARKET_ACC,
       155,
     );
-    expect(calls).toBe(3);
+    expect(calls).toBe(30);
     expect(complete).toBe(false);
   });
 
@@ -393,7 +394,7 @@ describe('fetchBorosCollaterals', () => {
   };
 
   it('rebuilds zones from the marketAcc layout and joins the live rates onto them', async () => {
-    const zones = await fetchBorosCollaterals(accountStub(infos, actives), ROOT);
+    const zones = await fetchBorosCollaterals(accountStub(infos, actives), ROOT, []);
     expect(zones).toHaveLength(1);
     expect(zones[0].tokenId).toBe(3); // decoded from the marketAcc, not a body field
     expect(zones[0].cross?.netBalance).toBe('20');
@@ -410,7 +411,7 @@ describe('fetchBorosCollaterals', () => {
   });
 
   it('reads resting orders from the order list instead of the initial-margin gap', async () => {
-    const zones = await fetchBorosCollaterals(accountStub(infos, actives), ROOT);
+    const zones = await fetchBorosCollaterals(accountStub(infos, actives), ROOT, []);
     expect(zones[0].cross!.marketPositions[0].hasRestingOrders).toBe(false);
     expect(zones[0].isolated[0].marketPositions[0].hasRestingOrders).toBe(true);
   });
@@ -419,16 +420,52 @@ describe('fetchBorosCollaterals', () => {
     const zones = await fetchBorosCollaterals(
       accountStub({ results: [{ marketAcc: OTHER_ACCOUNT, netBalance: '1', positions: [] }] }, { results: [] }),
       ROOT,
+      [],
     );
     expect(zones).toHaveLength(0);
   });
 
+  it('splits the position IM out of the combined per-market margin and takes markApr from the market', async () => {
+    // IM at mark = |size| × 10% × 1y × kIM 1 = 10 for a size of 100.
+    const market = {
+      marketId: 155, tokenId: 3, name: '', venue: '', base: '', maturity: Date.now() / 1000 + 365 * 86_400,
+      paymentPeriod: 0, settleFeeApr: 0, markApr: 0.1, floatingApr: 0, midApr: 0, notionalOi: 0, takerFeeRate: 0,
+      state: 'Normal', assetMarkPriceUsd: 1, kIM: 1, imTickThresh: 0, imTickStep: 0, tThreshSec: 0, maxRateDeviationApr: 0,
+    };
+    const e18 = (n: number) => `${n}000000000000000000`;
+    const book = (orders: Array<{ side: number; im: number }>, combined: number) => ({
+      results: [
+        {
+          marketAcc: CROSS,
+          netBalance: e18(100),
+          positions: [
+            {
+              marketId: 155,
+              signedSize: e18(100),
+              initialMargin: e18(combined),
+              orders: orders.map((o) => ({ side: o.side, initialMargin: e18(o.im) })),
+            },
+          ],
+        },
+      ],
+    });
+    const posIm = async (orders: Array<{ side: number; im: number }>, combined: number) =>
+      (await fetchBorosCollaterals(accountStub(book(orders, combined), { results: [] }), ROOT, [market]))[0].cross!
+        .marketPositions[0];
+    // Same-side orders stack on top of the position.
+    expect((await posIm([{ side: 0, im: 5 }], 15)).positionInitialMargin).toBe(e18(10));
+    // Opposite-side orders net against it: 40 − 10 = 30 also fits "30 − 0 same-side",
+    // and the IM at mark is what picks 10 over 30.
+    expect((await posIm([{ side: 1, im: 40 }], 30)).positionInitialMargin).toBe(e18(10));
+    expect((await posIm([], 10)).markApr).toBe(0.1);
+  });
+
   it('throws a network CoreError when either read is not the documented shape', async () => {
     await expect(
-      fetchBorosCollaterals(accountStub({ collaterals: [] }, { results: [] }), ROOT),
+      fetchBorosCollaterals(accountStub({ collaterals: [] }, { results: [] }), ROOT, []),
     ).rejects.toMatchObject({ name: 'CoreError', category: 'network' });
     await expect(
-      fetchBorosCollaterals(accountStub({ results: [] }, {}), ROOT),
+      fetchBorosCollaterals(accountStub({ results: [] }, {}), ROOT, []),
     ).rejects.toMatchObject({ name: 'CoreError', category: 'network' });
   });
 });
@@ -461,7 +498,7 @@ describe('client identification tag', () => {
 
     await fetchBorosMarkets(record);
     await fetchBorosOrderBook(record, 155);
-    await fetchBorosCollaterals(record, ADDR);
+    await fetchBorosCollaterals(record, ADDR, []);
     await fetchBorosTransactions(record, MARKET_ACC, 155);
 
     expect(urls.length).toBeGreaterThanOrEqual(4);

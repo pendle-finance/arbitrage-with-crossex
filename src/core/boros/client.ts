@@ -15,8 +15,8 @@
  * - List endpoints wrap results as { results, total, skip } — never a bare array.
  */
 import { CoreError } from '../errors';
+import { borosInitialMarginUsd } from './opportunities';
 
-const BOROS_BASE_URL = 'https://api.boros.finance';
 /** The api-gateway surface (`/apis` → api-gateway → open-api's `open-api-v2/…`
  * mounts). New endpoints live here — the bare `/open-api` prefix is deprecated. */
 const BOROS_GATEWAY_BASE_URL = 'https://api-boros.pendle.finance/apis';
@@ -284,9 +284,7 @@ export function setClientTagContext(ctx: { version?: string | null; active?: boo
 async function getJson(fetchImpl: FetchLike, path: string): Promise<unknown> {
   const clientTag =
     'pendle_client=boroscrossex' + clientTagState.version + (clientTagState.active ? '_active' : '');
-  // An absolute URL is already a gateway path; a bare path is still core.
-  const base = path.startsWith('https://') ? '' : BOROS_BASE_URL;
-  const url = `${base}${path}${path.includes('?') ? '&' : '?'}${clientTag}`;
+  const url = `${path}${path.includes('?') ? '&' : '?'}${clientTag}`;
   let resp: Awaited<ReturnType<FetchLike>>;
   try {
     resp = await fetchImpl(url, { signal: AbortSignal.timeout(15_000) });
@@ -356,6 +354,8 @@ export async function fetchBorosMarket(fetchImpl: FetchLike, marketId: number): 
   return normalizeBorosMarket(found);
 }
 
+const MARKET_STATUS: Record<number, string> = { 0: 'Paused', 1: 'CloseOnly', 2: 'Normal' };
+
 function normalizeBorosMarket(m: Record<string, unknown>): BorosMarket {
   const imData = (m.imData ?? {}) as Record<string, unknown>;
     const extConfig = (m.extConfig ?? {}) as Record<string, unknown>;
@@ -383,10 +383,9 @@ function normalizeBorosMarket(m: Record<string, unknown>): BorosMarket {
       takerFeeRate: norm18(config.takerFee as string),
       maxRateDeviationApr:
         (Number(config.maxRateDeviationFactorBase1e4 ?? 0) / 1e4) * Number(data.markApr ?? 0),
-      // config.status carries the lifecycle the old `state` string did:
-      // 2 ⇒ Normal, 1 ⇒ Paused (38/38 and 8/8 live, 2026-09-17). Anything
-      // else stays non-Normal so an unknown status is dropped, not traded.
-      state: Number(config.status) === 2 ? 'Normal' : 'Paused',
+      // config.status is the on-chain MarketStatus: 0 Paused, 1 CloseOnly,
+      // 2 Normal. Only Normal is tradable; old core labelled CloseOnly "Paused".
+      state: MARKET_STATUS[Number(config.status)] ?? 'Unknown',
       assetMarkPriceUsd: Number(data.assetMarkPrice ?? 0),
       kIM: norm18(config.kIM as string),
       imTickThresh: Number(imData.iTickThresh ?? 0),
@@ -482,9 +481,9 @@ function decodeMarketAcc(
  *     margin, and each market's position size, margin and resting orders;
  *   - active-positions → the rates and PnL the first read does not carry
  *     (fixedApr, side, unrealisedPnl, settlementPnl).
- * Every consumed field was byte-compared against the old response (3/3 live
- * positions, 2026-09-17). `markApr` is the one drop — it has no home on this
- * surface, and the returns layer already falls back to the market's own mark.
+ * `markApr` comes from `markets`, and so does the formula that splits the
+ * combined per-market margin back into the position's own (see
+ * `positionOnlyInitialMargin`).
  *
  * `marketAcc` packs root(20B)·accountId(1B)·tokenId(2B)·marketId(3B), the
  * marketId segment being 0xFFFFFF for a cross account and the market's own id
@@ -493,8 +492,11 @@ function decodeMarketAcc(
 export async function fetchBorosCollaterals(
   fetchImpl: FetchLike,
   address: string,
+  markets: BorosMarket[],
   accountId = 0,
 ): Promise<BorosCollateralZone[]> {
+  const marketById = new Map(markets.map((m) => [m.marketId, m]));
+  const nowSec = Date.now() / 1000;
   const [infos, actives] = (await Promise.all([
     getJson(
       fetchImpl,
@@ -530,14 +532,12 @@ export async function fetchBorosCollaterals(
       side: Number(a.side ?? 0),
       notionalSize: String(p.signedSize ?? '0'),
       fixedApr: Number(a.fixedApr ?? 0),
-      markApr: 0,
+      markApr: marketById.get(Number(p.marketId))?.markApr ?? 0,
       pnl: {
         rateSettlementPnl: String(a.settlementPnl ?? '0'),
         unrealisedPnl: String(a.unrealisedPnl ?? '0'),
       },
-      // One combined per-market margin here (position + its resting orders),
-      // so the old IM-gap test for orders is replaced by the order list.
-      positionInitialMargin: String(p.initialMargin ?? '0'),
+      positionInitialMargin: positionOnlyInitialMargin(p, marketById.get(Number(p.marketId)), nowSec),
       initialMargin: p.initialMargin as string | undefined,
       hasRestingOrders: Array.isArray(p.orders) && p.orders.length > 0,
     };
@@ -568,58 +568,43 @@ export async function fetchBorosCollaterals(
   return [...zones.values()];
 }
 
+/** A raw 18-dec integer string as bigint; exponent forms go through Number. */
+const toBig = (v: unknown): bigint => {
+  const str = String(v ?? '0');
+  if (/^-?\d+$/.test(str)) return BigInt(str);
+  const n = Math.trunc(Number(str));
+  return Number.isFinite(n) ? BigInt(n) : 0n;
+};
+
 /**
- * Every (marketAcc, marketId) pair this root has ever SETTLED, all-time.
- *
- * The fill feed is keyed by (marketAcc, marketId) and 400s without a marketId,
- * so the set of markets to ask about has to be built before it can be read.
- * The settlement ledger is the only account-wide feed carrying both ids, and
- * it is swept here WITHOUT a time window on purpose: the asset view replays
- * its locked rates over every opening fill regardless of the asset window, so
- * a market that last traded before that window still has to be enumerated.
- *
- * ⚠ KNOWN GAP: a market opened AND fully closed inside a single settlement
- * interval, leaving no live position, never produces a settlement row and so
- * cannot be enumerated — its fills are missed. Closing that would mean asking
- * every live market for every zone on every request (46 × 3 per 30s), which
- * costs far more than the rounding error it removes.
+ * The position's own IM out of the combined per-market `initialMargin`, which
+ * the venue computes as max(pos + same-side orders, opposite-side orders − pos).
+ * Both branches fit the combined number, so the whitepaper IM at mark picks the
+ * right one (96/96 exact against the old positionInitialMargin, 2026-09-17).
  */
-export async function fetchTradedMarketAccs(
-  fetchImpl: FetchLike,
-  address: string,
-  accountId = 0,
-): Promise<Array<{ marketAcc: string; tokenId: number; marketId: number }>> {
-  const seen = new Map<string, { marketAcc: string; tokenId: number; marketId: number }>();
-  let resumeToken: string | null = null;
-  // 2000 is this surface's per-page maximum and only distinct pairs are kept,
-  // so a 10-month account across 25 markets resolves in 2 pages.
-  const maxPages = 20;
-  for (let page = 0; page < maxPages; page += 1) {
-    const body = (await getJson(
-      fetchImpl,
-      `${BOROS_GATEWAY_BASE_URL}/v1/accounts/settlement-events?root=${address}` +
-        `&accountId=${accountId}&limit=2000` +
-        (resumeToken ? `&resumeToken=${encodeURIComponent(resumeToken)}` : ''),
-    )) as { results?: Array<Record<string, unknown>>; resumeToken?: string | null };
-    if (!Array.isArray(body?.results)) {
-      throw new CoreError(
-        'Boros /accounts/settlement-events: unexpected response shape (no results[])',
-        'network',
-      );
-    }
-    for (const r of body.results) {
-      const marketAcc = String(r.marketAcc ?? '');
-      const seg = decodeMarketAcc(marketAcc);
-      if (!seg || seg.accountId !== accountId) continue;
-      const marketId = Number(r.marketId);
-      if (!Number.isFinite(marketId)) continue;
-      const key = `${marketAcc.toLowerCase()}:${marketId}`;
-      if (!seen.has(key)) seen.set(key, { marketAcc, tokenId: seg.tokenId, marketId });
-    }
-    resumeToken = body.resumeToken ?? null;
-    if (!resumeToken || body.results.length === 0) break;
+function positionOnlyInitialMargin(
+  p: Record<string, unknown>,
+  market: BorosMarket | undefined,
+  nowSec: number,
+): string {
+  const combined = toBig(p.initialMargin);
+  const size = toBig(p.signedSize);
+  const orders = Array.isArray(p.orders) ? (p.orders as Array<Record<string, unknown>>) : [];
+  if (size === 0n) return '0';
+  if (orders.length === 0) return combined.toString();
+  const side = size > 0n ? 0 : 1;
+  let same = 0n;
+  let opposite = 0n;
+  for (const o of orders) {
+    if (Number(o.side) === side) same += toBig(o.initialMargin);
+    else opposite += toBig(o.initialMargin);
   }
-  return [...seen.values()];
+  const candidates = [combined - same, opposite - combined].filter((c) => c > 0n);
+  if (candidates.length === 0) return '0';
+  const est = market ? borosInitialMarginUsd(market, market.markApr, Math.abs(norm18(size.toString())), nowSec) : null;
+  if (est === null || candidates.length === 1) return candidates[0].toString();
+  const [a, b] = candidates.map((c) => Math.abs(norm18(c.toString()) - est));
+  return (a <= b ? candidates[0] : candidates[1]).toString();
 }
 
 /**
@@ -642,17 +627,16 @@ export async function fetchBorosTransactions(
   marketId: number,
 ): Promise<{ txns: BorosTxn[]; complete: boolean }> {
   const all: BorosTxn[] = [];
-  // Hard page cap: 3 pages × 2000 = 6k fills on ONE market, already more
-  // generous than the 5k-per-zone guard this replaces. Beyond that something
-  // is wrong — stop rather than hammer.
-  const maxPages = 3;
+  // Hard page cap: 30 pages × 200 = 6k fills on ONE market. 200 is one CU per
+  // page; limit=2000 bills 10 CU even when the market has a handful of fills.
+  const maxPages = 30;
   let complete = false;
   let resumeToken: string | null = null;
   for (let page = 0; page < maxPages; page += 1) {
     const body = (await getJson(
       fetchImpl,
       `${BOROS_GATEWAY_BASE_URL}/v1/accounts/position-update-events?marketAcc=${marketAcc}` +
-        `&marketId=${marketId}&limit=2000` +
+        `&marketId=${marketId}&limit=200` +
         (resumeToken ? `&resumeToken=${encodeURIComponent(resumeToken)}` : ''),
     )) as { results?: Array<Record<string, unknown>>; resumeToken?: string | null };
     if (!Array.isArray(body?.results)) {
@@ -674,9 +658,10 @@ export async function fetchBorosTransactions(
       // an entry rate on a fill that reduces the position without flipping it
       // — and the difference is load-bearing: on an open-from-flat the field
       // reads 0, which must never be mistaken for "cross-check says 0%".
-      const prev = Number(prevPositionS);
-      const post = Number(postPositionS);
-      const reduces = Math.abs(post) < Math.abs(prev) && (post === 0 || post > 0 === prev > 0);
+      const prev = toBig(prevPositionS);
+      const post = toBig(postPositionS);
+      const abs = (v: bigint): bigint => (v < 0n ? -v : v);
+      const reduces = abs(post) < abs(prev) && (post === 0n || post > 0n === prev > 0n);
       const entryApr =
         reduces && t.prevPositionF !== null && t.prevPositionF !== undefined
           ? norm18(t.prevPositionF as string)
@@ -754,16 +739,25 @@ export interface BorosSettlementEvent {
  * exhausted). Returns its own coverage the same way the other ledger
  * fetchers do: `coversFromSec` is the oldest row read when the page cap was
  * hit, else 0 ("complete for every window that matters").
+ *
+ * `pairs` is every (marketAcc, marketId) seen on any row read, including the
+ * page that crosses `sinceSec` — the fill feed needs a marketId, and this is
+ * the only account-wide feed that carries both ids.
  */
 export async function fetchSettlementEvents(
   fetchImpl: FetchLike,
   address: string,
   accountId = 0,
   sinceSec = 0,
-): Promise<{ events: BorosSettlementEvent[]; coversFromSec: number }> {
+): Promise<{
+  events: BorosSettlementEvent[];
+  coversFromSec: number;
+  pairs: Array<{ marketAcc: string; tokenId: number; marketId: number }>;
+}> {
   const clientTag =
     'pendle_client=boroscrossex' + clientTagState.version + (clientTagState.active ? '_active' : '');
   const events: BorosSettlementEvent[] = [];
+  const pairs = new Map<string, { marketAcc: string; tokenId: number; marketId: number }>();
   let resumeToken: string | null = null;
   let oldest = Number.POSITIVE_INFINITY;
   // 60 pages × 100 ≈ 6k settlements ≈ 8 months of hourly rows on one market —
@@ -801,6 +795,15 @@ export async function fetchSettlementEvents(
     }
     let pastWindow = false;
     for (const r of body.results) {
+      const marketAcc = String(r.marketAcc ?? '');
+      const seg = decodeMarketAcc(marketAcc);
+      if (seg && seg.accountId === accountId && Number.isFinite(Number(r.marketId))) {
+        pairs.set(`${marketAcc.toLowerCase()}:${Number(r.marketId)}`, {
+          marketAcc,
+          tokenId: seg.tokenId,
+          marketId: Number(r.marketId),
+        });
+      }
       const timeSec = Number(r.timestamp);
       if (!Number.isFinite(timeSec) || timeSec <= 0) continue;
       oldest = Math.min(oldest, timeSec);
@@ -823,7 +826,7 @@ export async function fetchSettlementEvents(
       break;
     }
   }
-  return { events, coversFromSec: capped ? oldest : 0 };
+  return { events, coversFromSec: capped ? oldest : 0, pairs: [...pairs.values()] };
 }
 
 /**
