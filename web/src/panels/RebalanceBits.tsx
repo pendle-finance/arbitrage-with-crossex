@@ -8,6 +8,55 @@ import { HOVER_CASH, HOVER_TARGET, HOVER_UPNL, LEG_TEXT, MOVE_TEXT } from './reb
 
 const HOVER_WIDTH_PX = 268;
 
+/** Severity of a rebalance verdict — see `VerdictTone` in RebalanceHovers. */
+const VERDICT_STYLE = {
+  info: { box: 'alert-blue', text: 'text-pastel-blue', icon: 'ⓘ', sr: null },
+  // The glyph is decorative (aria-hidden), so the level reaches a screen
+  // reader as a word instead. `info` needs none: a neutral note reads fine
+  // without a prefix, and "Note:" on every quiet line is just noise.
+  warn: { box: 'alert-amber', text: 'text-gold', icon: '⚠', sr: 'Warning:' },
+  act: { box: 'alert-red', text: 'text-guava', icon: '⚠', sr: 'Action needed:' },
+} as const;
+
+/**
+ * The verdict, boxed. One component for BOTH the Balances card and the modal,
+ * so the sentence a trader reads before opening the dialog is the same one
+ * they read inside it — they used to be able to disagree.
+ *
+ * Colour never carries the level alone: each tone brings its own glyph.
+ */
+export function VerdictAlert({
+  tone,
+  text,
+  sub,
+}: {
+  tone: 'info' | 'warn' | 'act';
+  text: ReactNode;
+  sub?: string | null;
+}) {
+  const style = VERDICT_STYLE[tone];
+  return (
+    // No `role="alert"`, at any tone. This is AMBIENT STATUS — it is on screen
+    // from first paint and re-renders on every poll — not an interruption, and
+    // an assertive live region would announce a standing fact each time the
+    // card refreshed. The level rides on the icon and the text, which a screen
+    // reader gets from the normal reading order. (A verdict that appeared in
+    // RESPONSE to an action would earn an alert; this one does not.)
+    <div className={`${style.box} !flex-row items-start gap-2.5`}>
+      <span aria-hidden className={`shrink-0 text-sm leading-5 ${style.text}`}>
+        {style.icon}
+      </span>
+      <span className="flex min-w-0 flex-col gap-0.5">
+        <span className={`text-xs leading-5 ${style.text}`}>
+          {style.sr && <span className="sr-only">{style.sr} </span>}
+          {text}
+        </span>
+        {sub && <span className="num text-[11px] leading-4 text-ink-400">{sub}</span>}
+      </span>
+    </div>
+  );
+}
+
 type BarTone = 'usdt' | 'usdc' | 'lighter' | 'gate' | 'spot';
 
 export interface BarRow {

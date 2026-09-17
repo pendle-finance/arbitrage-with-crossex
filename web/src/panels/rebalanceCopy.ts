@@ -126,10 +126,15 @@ export const HOVER = {
   upToInto: 'Your Gate spot balance.',
 } as const;
 
-export const VERDICT_NO_BORROW = 'No borrow. Rebalance saves no interest.';
+export const VERDICT_NO_BORROW = 'No borrow. No transfer or rebalancing necessary.';
 export const VERDICT_BALANCED = 'Wallets match their position share. Nothing to move.';
-export const VERDICT_MOVES = (usdText: string) => `It moves ${usdText}.`;
+/** Borrowing, but inside a wallet's interest-free allowance, so it costs
+ * nothing today. Distinct from NOT_WORTH_IT: that one weighs a fee against
+ * real interest, and weighing it against zero produced a verdict that
+ * contradicted the "$0.00 an hour" figure beside it. */
+export const VERDICT_NO_INTEREST = 'No interest payment yet. No transfer or rebalancing necessary.';
 export const VERDICT_NOT_WORTH_IT = 'Not worth it yet. The fee is more than 30 days of the interest it saves.';
+export const VERDICT_WORTH_IT = '30 day interest cost more than rebalance fee. Rebalance is recommended.';
 export const PAYS_BACK = (daysText: string) => `The fee equals ${daysText} of the interest it saves.`;
 
 export const FACT_BORROWING = 'Borrowing';
@@ -155,6 +160,9 @@ export const MODAL_FEE_LABEL = 'Fee';
 export const PER_MONTH = (nowText: string, afterText: string) => `${nowText} → ${afterText} a month`;
 export const MODAL_STEPS = 'Show steps';
 export const MODAL_HOLD = 'Hold to rebalance';
+/** Replaces the confirm while the quote is stale: the plan moved under the
+ * dialog, so the only next step is to price the new one. */
+export const MODAL_REFRESH_ROUTE = 'Refresh route';
 export const MODAL_RESUME = 'Resume';
 export const MODAL_ABANDON = 'Abandon';
 

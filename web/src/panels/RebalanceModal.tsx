@@ -1,27 +1,25 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { ApiError } from '../api/client';
-import { useAccount, usePositions, useRebalanceCommand, useStartRebalance, useTransfer } from '../api/queries';
-import type { CrossexAccount, EvenPlan, GateAccount, PositionsResponse, RebalanceBucket, RebalanceJob } from '../api/types';
-import type { RebalanceView, RouteName, RoutePlan, TransferCoin, TransferView, WalletAfter } from '../api/types';
+import { useRebalanceCommand, useStartRebalance, useTransfer } from '../api/queries';
+import type { EvenPlan, GateAccount, RebalanceBucket, RebalanceJob } from '../api/types';
+import type { RebalanceView, RouteName, RoutePlan, TransferCoin, TransferView } from '../api/types';
 import type { RebalanceStep } from '../api/types';
 import { Chip } from '../components/Chip';
 import { HoldToConfirmButton } from '../components/HoldToConfirmButton';
 import { Modal } from '../components/Modal';
 import { microLabelClass } from '../components/Th';
 import { useToast } from '../components/Toast';
-import { borrowingBuckets } from '../lib/borrow';
-import { fmtAbout, fmtAge, fmtUsd, num, WALLET_SHORT } from '../lib/fmt';
-import { describeLine, fmtLinePrice, lineFor, liquidationLines } from '../lib/liquidation';
+import { fmtAbout, fmtAge, fmtUsd, num } from '../lib/fmt';
 import { floorCents } from '../lib/ticks';
 import { useNow } from '../lib/useNow';
-import { BalanceBars, jobRows, jobSeconds, planRows, ProgressBar, ROUTE_ORDER, scaleOf, ShareColumn, StepList } from './RebalanceBits';
+import { BalanceBars, jobRows, jobSeconds, planRows, ProgressBar, ROUTE_ORDER, scaleOf, ShareColumn, StepList, VerdictAlert } from './RebalanceBits';
 import type { BarRow, StepRow } from './RebalanceBits';
-import { FACT_LIQUIDATION, GATE_SPOT, HOVER, LIQUIDATION_NOT_KNOWN, MODAL_ABANDON, MODAL_AFTER, MODAL_ALL_ROUTES } from './rebalanceCopy';
-import { MODAL_FEE_LABEL, MODAL_FREES, MODAL_HOLD, MODAL_INTEREST, MODAL_RESUME, MODAL_STEPS, PER_MONTH } from './rebalanceCopy';
+import { GATE_SPOT, HOVER, MODAL_ABANDON, MODAL_AFTER, MODAL_ALL_ROUTES } from './rebalanceCopy';
+import { MODAL_FEE_LABEL, MODAL_FREES, MODAL_HOLD, MODAL_INTEREST, MODAL_REFRESH_ROUTE, MODAL_RESUME, MODAL_STEPS, PER_MONTH } from './rebalanceCopy';
 import { RATE_UNKNOWN, SHARE_CAPTION, WAITS_FOR_DEAL, WAITS_FOR_TRANSFER } from './rebalanceCopy';
-import { barRowsOf, chargedBorrow, Facts, hasUnknownRate, keyOf, MONTH_DAYS, movesKey, pickedRoute, stopsPerDayOf, worthLine } from './RebalanceHovers';
+import { barRowsOf, Facts, hasUnknownRate, MONTH_DAYS, movesKey, pickedRoute, stopsPerDayOf, worthLine } from './RebalanceHovers';
 import { planSteps, positionShares, receivingBorrow, receivingHeld } from './RebalanceHovers';
-import { liquidationNow, repayOf, ROUTE_LABEL, roundCountOf, roundOf, RouteRow, shownKeys, SpotLines, targetsOf, Term } from './RebalanceHovers';
+import { ROUTE_LABEL, roundCountOf, roundOf, RouteRow, shownKeys, SpotLines, targetsOf, Term } from './RebalanceHovers';
 import type { Fact } from './RebalanceHovers';
 import { NoSpotReadLine } from './TransferBits';
 
@@ -32,15 +30,8 @@ const WHERE_CAPTION = 'Where your money is';
 const ON_THE_WAY = 'On the way';
 const WAITS_LINE = 'New deals and transfers wait until it ends.';
 const KEEPS_GOING = 'You can close this. The run keeps going.';
-const PLAN_CHANGED = 'The plan changed. Check the new route before you rebalance.';
-const USE_NEW_PLAN = 'Use the new plan';
 const PLAN_CHANGED_LABEL = 'PLAN_CHANGED';
 const FINISHED_LEAD = 'Done. This is what each wallet holds now.';
-const NO_BORROW_TO_REPAY = 'no borrow to repay';
-const MARGIN_RETURNED = 'initial margin of the borrow';
-const NO_INTEREST_TO_STOP = 'no interest to stop';
-const REPAYS_NO_BORROW = 'repays no borrow';
-const STOPS_NO_INTEREST = 'stops no interest';
 const NOT_MARGIN_UNTIL_LANDS = 'It is not margin until it lands.';
 const NO_SPOT_READ = 'This key cannot read Gate spot.';
 
@@ -92,51 +83,6 @@ function abandonNote(job: RebalanceJob, transfer: TransferView | undefined): str
   return transfer?.spot === null ? `${inSpot} ${NO_SPOT_READ}` : inSpot;
 }
 
-interface Book {
-  account: CrossexAccount | undefined;
-  positions: PositionsResponse | undefined;
-}
-
-function liquidationFact(route: RoutePlan, view: RebalanceView, book: Book): Fact {
-  const { account: acc, positions: pos } = book;
-  const before = liquidationNow(acc, pos);
-  if (before === 'unknown' || !acc || !pos) return { key: 'liquidation', label: FACT_LIQUIDATION, value: LIQUIDATION_NOT_KNOWN };
-  if (before === null) return { key: 'liquidation', label: FACT_LIQUIDATION, value: 'none' };
-  const equityOf = (wallets: (WalletAfter | RebalanceBucket)[], key: string) =>
-    wallets.find((w) => keyOf(w) === key)?.equity ?? 0;
-  const shiftOf = (key: string) => equityOf(route.after, key) - equityOf(view.buckets, key);
-  const moved = liquidationLines(acc, pos, {
-    'USDT/CROSSEX': shiftOf('USDT/CROSSEX'),
-    'USDC/HYPERLIQUID': shiftOf('USDC/HYPERLIQUID'),
-    'USDC/LIGHTER': shiftOf('USDC/LIGHTER'),
-  });
-  const after = moved ? lineFor(moved, before.base) : null;
-  const afterText = after === 'far' ? 'none' : after ? fmtLinePrice(after.price) : LIQUIDATION_NOT_KNOWN;
-  return {
-    key: 'liquidation',
-    label: <Term label={FACT_LIQUIDATION} text={describeLine(before)} />,
-    value: `${fmtLinePrice(before.price)} → ${afterText}`,
-    sub: [`${before.base}, if only ${before.base} moves`],
-  };
-}
-
-const walletNames = (wallets: { bucket: RebalanceBucket }[]) => wallets.map((w) => WALLET_SHORT[keyOf(w.bucket)]).join(' and ');
-
-function repaySubs(buckets: RebalanceBucket[], route: RoutePlan): { frees: string; saves: string } {
-  const repay = repayOf(buckets, route);
-  const borrowing = borrowingBuckets(buckets);
-  const stops = repay.charged.filter((w) => floorCents(w.before) > 0 && floorCents(w.after) === 0);
-  const falls = repay.charged.filter((w) => floorCents(w.after) > 0 && w.after < w.before);
-  const named = [
-    ...(stops.length > 0 ? [`${walletNames(stops)} interest stops`] : []),
-    ...(falls.length > 0 ? [`${walletNames(falls)} interest falls`] : []),
-  ];
-  const paysInterest = borrowing.some((b) => floorCents(chargedBorrow(b, b.borrow)) > 0);
-  const saves = named.length > 0 ? named.join(' · ') : paysInterest ? STOPS_NO_INTEREST : NO_INTEREST_TO_STOP;
-  if (repay.wallets.length > 0) return { frees: MARGIN_RETURNED, saves };
-  return { frees: borrowing.length > 0 ? REPAYS_NO_BORROW : NO_BORROW_TO_REPAY, saves };
-}
-
 function interestValue(route: RoutePlan, buckets: RebalanceBucket[]): string {
   if (hasUnknownRate(buckets)) return RATE_UNKNOWN;
   const perDay = buckets.reduce((sum, b) => sum + b.interestPerDayUsd, 0);
@@ -144,23 +90,26 @@ function interestValue(route: RoutePlan, buckets: RebalanceBucket[]): string {
   return PER_MONTH(fmtUsd(perDay * MONTH_DAYS), fmtUsd(after * MONTH_DAYS));
 }
 
-function quoteFactsOf(route: RoutePlan, view: RebalanceView, book: Book): Fact[] {
-  const subs = repaySubs(view.buckets, route);
+/**
+ * The quote, as three figures. No sub-lines: "no interest to stop" and "no
+ * borrow to repay" only ever restated the $0.00 directly above them. No
+ * liquidation either — it is an ACCOUNT fact, not a property of this route,
+ * and it read as a fourth cost of rebalancing (his call 2026-09-18). The
+ * verdict below now carries the recommendation instead.
+ */
+function quoteFactsOf(route: RoutePlan, view: RebalanceView): Fact[] {
   return [
     {
       key: 'interest',
       label: <Term label={MODAL_INTEREST} text={HOVER.interestMonth} />,
       value: interestValue(route, view.buckets),
-      sub: [subs.saves],
     },
     { key: 'fee', label: MODAL_FEE_LABEL, value: fmtUsd(route.costUsd) },
     {
       key: 'frees',
       label: <Term label={MODAL_FREES} text={HOVER.frees} />,
       value: fmtUsd(route.marginFreedUsd),
-      sub: [subs.frees],
     },
-    liquidationFact(route, view, book),
   ];
 }
 
@@ -190,8 +139,6 @@ export function RebalanceModal({
   holdMs?: number;
   onTransfer?: (coin: TransferCoin, wallet: GateAccount) => void;
 }) {
-  const account = useAccount().data;
-  const positions = usePositions().data;
   const transfer = useTransfer().data;
   const start = useStartRebalance();
   const resume = useRebalanceCommand('resume');
@@ -394,28 +341,31 @@ export function RebalanceModal({
           )}
         </div>
         <div className="flex flex-col gap-2 border-t border-ink-800 pt-3">
-          <Facts items={quoteFactsOf(route, view, { account, positions })} />
-          {worth && <p className={`num text-xs ${worth.warn ? 'text-amber-300' : 'text-ink-300'}`}>{worth.text}</p>}
+          <Facts items={quoteFactsOf(route, view)} />
+          {/* The SAME component and sentence the Balances card shows, so the
+              verdict a trader read before opening cannot disagree with the one
+              inside the dialog. */}
+          {worth && <VerdictAlert tone={worth.tone} text={worth.text} sub={worth.sub} />}
         </div>
-        {stale && (
-          <div className="flex flex-wrap items-center gap-3">
-            <p role="alert" className="text-xs text-gold">
-              {PLAN_CHANGED}
-            </p>
-            <button type="button" className="btn-ghost-xs" onClick={() => setAccepted(stampOf(plan, chosen))}>
-              {USE_NEW_PLAN}
-            </button>
-          </div>
-        )}
         <div className="flex flex-wrap items-center gap-3">
-          <HoldToConfirmButton
-            tone="cyan"
-            holdMs={holdMs}
-            disabled={stale || lock !== null || chosen === null || start.isPending}
-            onConfirm={() => chosen && start.mutate({ route: chosen, costUsd: route.costUsd }, { onError: onStartError })}
-          >
-            {MODAL_HOLD}
-          </HoldToConfirmButton>
+          {/* A stale plan replaces the confirm outright rather than sitting as a
+              warning above a disabled one: the only move available is to take
+              the new route, so it is one button, not a sentence plus a button
+              plus a dead control (his call 2026-09-18). */}
+          {stale ? (
+            <button type="button" className="btn btn-primary num" onClick={() => setAccepted(stampOf(plan, chosen))}>
+              {MODAL_REFRESH_ROUTE}
+            </button>
+          ) : (
+            <HoldToConfirmButton
+              tone="cyan"
+              holdMs={holdMs}
+              disabled={lock !== null || chosen === null || start.isPending}
+              onConfirm={() => chosen && start.mutate({ route: chosen, costUsd: route.costUsd }, { onError: onStartError })}
+            >
+              {MODAL_HOLD}
+            </HoldToConfirmButton>
+          )}
           {lock !== null && <span className="text-xs text-ink-500">{lock}</span>}
         </div>
         <SpotLines transfer={transfer} job={job} onTransfer={onTransfer} />

@@ -7,10 +7,10 @@ import { borrowingBuckets } from '../lib/borrow';
 import { fmtAbout, fmtUsd, num } from '../lib/fmt';
 import { useNow } from '../lib/useNow';
 import { useSettledError } from '../lib/useSettledError';
-import { jobSeconds } from './RebalanceBits';
-import { MODAL_FEE, NO_LEGS, VERDICT_BALANCED, VERDICT_MOVES, VERDICT_NO_BORROW } from './rebalanceCopy';
+import { jobSeconds, VerdictAlert } from './RebalanceBits';
+import { MODAL_FEE, NO_LEGS, VERDICT_BALANCED, VERDICT_NO_BORROW } from './rebalanceCopy';
 import { WAITS_FOR_DEAL, WAITS_FOR_TRANSFER } from './rebalanceCopy';
-import { borrowFacts, Facts, isCashLimitedEven, pickedRoute, worthLine } from './RebalanceHovers';
+import { borrowFacts, Facts, isCashLimitedEven, pickedRoute, worthLine, type VerdictTone } from './RebalanceHovers';
 import { RebalanceInfo, roundCountOf, roundOf } from './RebalanceHovers';
 import { RebalanceModal } from './RebalanceModal';
 import type { GateAccount, TransferCoin } from '../api/types';
@@ -104,15 +104,20 @@ export function RebalanceSection({
     if (!job && plan.balanced && !plan.noLegs) chip = <Chip tone="green">Balanced</Chip>;
 
     let verdict: ReactNode = null;
-    let warn = false;
+    let verdictSub: string | null = null;
+    let tone: VerdictTone = 'info';
     if (job) verdict = jobVerdict(job, now);
     else if (plan.noLegs) verdict = NO_LEGS;
     else if (isCashLimitedEven(plan)) verdict = `${fmtUsd(plan.shortOfEven)} ${IS_POSITION_MARGIN}`;
     else if (plan.balanced) verdict = VERDICT_BALANCED;
-    else if (!hasBorrow) verdict = <>{VERDICT_NO_BORROW} <span className="text-ink-500">{VERDICT_MOVES(fmtUsd(plan.moves))}</span></>;
+    // No trailing "It moves $X." here: the line now says no rebalancing is
+    // necessary, and naming the amount in the same breath argued the opposite.
+    // The figure is still on the button and inside the modal.
+    else if (!hasBorrow) verdict = VERDICT_NO_BORROW;
     else if (worth) {
       verdict = worth.text;
-      warn = worth.warn;
+      verdictSub = worth.sub ?? null;
+      tone = worth.tone;
     }
 
     let label: ReactNode = REBALANCE;
@@ -121,7 +126,10 @@ export function RebalanceSection({
     else if (dealWorking) label = WAITS_FOR_DEAL;
     else if (!plan.balanced && !plan.noLegs) label = <>{REBALANCE} <span className="opacity-80">{`· ${MODAL_FEE(fmtUsd(picked.route.costUsd))}`}</span></>;
     const disabled = !job && (plan.balanced || plan.noLegs || moving || dealWorking);
-    const primary = !job && hasBorrow && picked.name !== null && !worth?.warn;
+    // The one solid-filled control is spent on the verdict that actually asks
+    // for the move, not on "you are borrowing" generally: a free borrow and a
+    // fee that outruns its interest both leave it an outline.
+    const primary = !job && worth?.tone === 'act';
 
     header = (
       <div className="flex items-center gap-3">
@@ -141,7 +149,7 @@ export function RebalanceSection({
       </div>
     );
     facts = <Facts items={borrowFacts(buckets)} />;
-    if (verdict !== null) line = <p className={`num text-xs ${warn ? 'text-amber-300' : 'text-ink-300'}`}>{verdict}</p>;
+    if (verdict !== null) line = <VerdictAlert tone={tone} text={verdict} sub={verdictSub} />;
     main = (
       <button type="button" className={primary ? 'btn btn-primary num' : 'btn num'} disabled={disabled} onClick={() => setOpen(true)}>
         {label}

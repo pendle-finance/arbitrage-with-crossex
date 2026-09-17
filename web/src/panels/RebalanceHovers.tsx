@@ -24,7 +24,9 @@ import {
   INTEREST_PER_HOUR,
   RATE_UNKNOWN,
   VERDICT_NO_BORROW,
+  VERDICT_NO_INTEREST,
   VERDICT_NOT_WORTH_IT,
+  VERDICT_WORTH_IT,
   WALLET_LABEL,
 } from './rebalanceCopy';
 import { findPath } from './TransferBits';
@@ -354,15 +356,41 @@ const daysText = (days: number): string => {
   return whole === 1 ? '1 day' : `${num(whole, 0)} days`;
 };
 
+/** Severity of a verdict, which picks its alert ground and icon.
+ * `info` = nothing to do · `warn` = paying interest, but the fee outruns it
+ * · `act` = the interest outruns the fee, so rebalance now. */
+export type VerdictTone = 'info' | 'warn' | 'act';
+
+/** Borrowing, but every borrow sits inside its wallet's interest-free
+ * allowance, so nothing is being charged. `isRateUnknown` cannot catch this:
+ * it requires `chargedBorrow > 0`, which is exactly what a free borrow is not. */
+export const isFreeBorrow = (buckets: RebalanceBucket[]): boolean => {
+  const borrowing = borrowingBuckets(buckets);
+  return borrowing.length > 0 && borrowing.every((b) => chargedBorrow(b, b.borrow) <= 0);
+};
+
+/** A verdict: its sentence, its severity, and an optional second line that
+ * carries the arithmetic behind it. */
+export interface Verdict {
+  text: string;
+  tone: VerdictTone;
+  /** The supporting figure, e.g. "The fee equals 22 days of the interest it saves." */
+  sub?: string;
+}
+
 /** Whether the fee is worth the interest the route stops. Null when the app
  * cannot tell (a borrow rate is unknown) or there is nothing to weigh (no fee). */
-export function worthLine(route: RoutePlan, buckets: RebalanceBucket[]): { text: string; warn: boolean } | null {
-  if (borrowingBuckets(buckets).length === 0) return { text: VERDICT_NO_BORROW, warn: false };
+export function worthLine(route: RoutePlan, buckets: RebalanceBucket[]): Verdict | null {
+  if (borrowingBuckets(buckets).length === 0) return { text: VERDICT_NO_BORROW, tone: 'info' };
+  // Before any fee-vs-interest test: with no interest there is nothing to weigh,
+  // and weighing against zero is what made this print "not worth it" beside a
+  // "$0.00 an hour" reading.
+  if (isFreeBorrow(buckets)) return { text: VERDICT_NO_INTEREST, tone: 'info' };
   if (hasUnknownRate(buckets)) return null;
-  if (isNotWorthIt(route, buckets)) return { text: VERDICT_NOT_WORTH_IT, warn: true };
+  if (isNotWorthIt(route, buckets)) return { text: VERDICT_NOT_WORTH_IT, tone: 'warn' };
   const days = paybackDays(route, buckets);
   if (cents(route.costUsd) <= 0 || days === null) return null;
-  return { text: PAYS_BACK(daysText(days)), warn: false };
+  return { text: VERDICT_WORTH_IT, tone: 'act', sub: PAYS_BACK(daysText(days)) };
 }
 
 export const isCashLimitedEven = (plan: EvenPlan) => plan.balanced && plan.shortOfEven >= DUST;

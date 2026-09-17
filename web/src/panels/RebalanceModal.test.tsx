@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useAccount, usePositions, useRebalance, useTransfer } from '../api/queries';
 import type { CrossexAccount, PositionsResponse, RebalanceStep, RebalanceView, TransferView } from '../api/types';
 import type { RebalanceJob, RouteName } from '../api/types';
-import { accountBodies, accountHandler, makeCrossexPosition, positionsBodies, REBALANCE_NOW, rebalanceViews, rebased } from '../test/fixtures';
+import { accountBodies, accountHandler, positionsBodies, REBALANCE_NOW, rebalanceViews, rebased } from '../test/fixtures';
 import { transferHandler, transferViews } from '../test/fixtures';
 import { env, server } from '../test/server';
 import { renderWithClient } from '../test/utils';
@@ -173,75 +173,10 @@ async function hoverCard(user: ReturnType<typeof userEvent.setup>, name: string)
   return shown;
 }
 
-const hypeLeg = (symbol: string, positionSide: 'LONG' | 'SHORT') =>
-  makeCrossexPosition({
-    symbol,
-    positionSide,
-    positionValue: '2000',
-    markPrice: '44.35',
-    maintenanceMargin: '20',
-    initialMargin: '40',
-  });
 
-const HYPE_PAIR: PositionsResponse = {
-  positions: [hypeLeg('GATE_FUTURE_HYPE_USDT', 'LONG'), hypeLeg('HYPERLIQUID_FUTURE_HYPE_USDC', 'SHORT')],
-  exposure: [
-    {
-      base: 'HYPE',
-      legs: [
-        { symbol: 'GATE_FUTURE_HYPE_USDT', exchange: 'GATE', quote: 'USDT', side: 'LONG', qty: 45.1, value: 2000 },
-        { symbol: 'HYPERLIQUID_FUTURE_HYPE_USDC', exchange: 'HYPERLIQUID', quote: 'USDC', side: 'SHORT', qty: 45.1, value: 2000 },
-      ],
-      longValue: 2000,
-      shortValue: 2000,
-      netValue: 0,
-      grossValue: 4000,
-      neutral: true,
-      singleLeg: false,
-    },
-  ],
-};
 
-const HYPE_ACCOUNT: CrossexAccount = {
-  ...accountBodies.accountA,
-  marginBalance: '145.91',
-  initialMargin: '109.41',
-  maintenanceMargin: '54.705',
-};
 
-const FAR_AFTER_ACCOUNT: CrossexAccount = {
-  ...accountBodies.accountA,
-  marginBalance: '2140',
-  maintenanceMargin: '40',
-  assets: accountBodies.accountA.assets.map((asset) => {
-    if (asset.exchangeType === 'CROSSEX') return { ...asset, balance: '2000', equity: '2000' };
-    if (asset.exchangeType === 'HYPERLIQUID') return { ...asset, balance: '-1000', equity: '-1000' };
-    return asset;
-  }),
-};
 
-const FAR_AFTER_VIEW: RebalanceView = {
-  ...rebalanceViews.accountA,
-  buckets: rebalanceViews.accountA.buckets.map((bucket) => {
-    if (bucket.venue === 'CROSSEX') return { ...bucket, cash: 2000, equity: 2000 };
-    if (bucket.venue === 'HYPERLIQUID') return { ...bucket, cash: -1000, equity: -1000, borrow: 1000 };
-    return bucket;
-  }),
-  plan: {
-    ...rebalanceViews.accountA.plan,
-    routes: {
-      ...rebalanceViews.accountA.plan.routes,
-      loop: {
-        ...rebalanceViews.accountA.plan.routes.loop!,
-        after: [
-          { coin: 'USDT', venue: 'CROSSEX', cash: 1000, equity: 1000 },
-          { coin: 'USDC', venue: 'HYPERLIQUID', cash: 0, equity: 0 },
-          { coin: 'USDC', venue: 'GATE', cash: 0, equity: 0 },
-        ],
-      },
-    },
-  },
-};
 
 function withMixCost(costUsd: number): RebalanceView {
   const view = rebalanceViews.twoBorrows;
@@ -260,15 +195,6 @@ function withConvertAfter(hyperliquidEquity: number, marginFreedUsd: number): Re
   return { ...view, plan: { ...view.plan, routes } };
 }
 
-function withMixAfter(view: RebalanceView, hyperliquidEquity: number, lighterEquity: number): RebalanceView {
-  const mix = view.plan.routes.mix!;
-  const after = [
-    mix.after[0],
-    { coin: 'USDC', venue: 'HYPERLIQUID', cash: hyperliquidEquity, equity: hyperliquidEquity },
-    { coin: 'USDC', venue: 'LIGHTER', cash: lighterEquity, equity: lighterEquity },
-  ];
-  return { ...view, plan: { ...view.plan, routes: { ...view.plan.routes, mix: { ...mix, after } } } };
-}
 
 const resumeButton = () => within(dialog()).getByRole('button', { name: /^Resum/ });
 
@@ -402,17 +328,16 @@ describe('RebalanceModal plan state', () => {
     expect(numbers[2]).toBe('0.00');
   });
 
-  it('shows interest a month now and after, the fee, Frees and the liquidation change as four labelled facts', async () => {
+  it('shows interest a month now and after, the fee and Frees as three labelled facts, with no sub-lines', async () => {
     show(rebalanceViews.twoBorrows, { account: accountBodies.ethTwoVenues, positions: positionsBodies.ethTwoVenues });
-    await waitFor(() => expect(facts().Liquidation).toMatch(/^~\$[\d,]+ → /));
+    await waitFor(() => expect(facts().Interest).toBe('$1.19 → $0.00 a month'));
     const shown = facts();
-    expect(shown.Interest).toBe('$1.19 → $0.00 a month');
     expect(shown.Fee).toBe('$0.46');
     expect(shown.Frees).toBe('$48.80');
-    expect(subs('Interest')).toEqual(['Lighter interest stops']);
-    expect(subs('Fee')).toEqual([]);
-    expect(subs('Frees')).toEqual(['initial margin of the borrow']);
-    expect(subs('Liquidation')).toEqual(['ETH, if only ETH moves']);
+    // Liquidation is an ACCOUNT fact, not a property of this route, and it
+    // read as a fourth cost of rebalancing — so it is not here.
+    expect(shown.Liquidation).toBeUndefined();
+    for (const label of ['Interest', 'Fee', 'Frees']) expect(subs(label)).toEqual([]);
   });
 
   it('shows the position share of each wallet beside the After rebalance bars', async () => {
@@ -441,11 +366,11 @@ describe('RebalanceModal plan state', () => {
 
   it('carries only what the decision needs, never Borrowing or Interest paid', async () => {
     show(rebalanceViews.twoBorrows, { account: accountBodies.ethTwoVenues, positions: positionsBodies.ethTwoVenues });
-    await waitFor(() => expect(facts().Liquidation).toMatch(/→/));
+    await waitFor(() => expect(facts().Interest).toMatch(/→/));
     expect(screen.queryByText('Borrowing')).toBeNull();
     expect(screen.queryByText('Interest paid')).toBeNull();
     expect(screen.queryByText('Interest now')).toBeNull();
-    expect(Object.keys(facts())).toEqual(['Interest', 'Fee', 'Frees', 'Liquidation']);
+    expect(Object.keys(facts())).toEqual(['Interest', 'Fee', 'Frees']);
   });
 
   it('explains a round and why more than one in the step control hover', async () => {
@@ -456,7 +381,7 @@ describe('RebalanceModal plan state', () => {
     );
   });
 
-  it('disables the hold when the picked route moves money differently, until the trader accepts', async () => {
+  it('replaces the hold with Refresh route when the picked route moves money differently', async () => {
     const plan = rebalanceViews.twoBorrows.plan;
     const mix = plan.routes.mix!;
     const elsewhere: RebalanceView = {
@@ -467,26 +392,24 @@ describe('RebalanceModal plan state', () => {
     const { next } = showPolled([rebalanceViews.twoBorrows, elsewhere]);
     expect(holdButton()).toBeEnabled();
     await next();
-    expect(holdButton()).toBeDisabled();
-    expect(screen.getByRole('alert').textContent).toBe('The plan changed. Check the new route before you rebalance.');
-    await user.click(screen.getByRole('button', { name: 'Use the new plan' }));
+    expect(screen.queryByRole('button', { name: 'Hold to rebalance' })).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'Refresh route' }));
     expect(holdButton()).toBeEnabled();
   });
 
-  it('disables the hold when the plan went stale on a cost change, until the trader accepts', async () => {
+  it('replaces the hold with Refresh route when the plan went stale on a cost change', async () => {
     const user = userEvent.setup();
     const { next } = showPolled([rebalanceViews.twoBorrows, withMixCost(4.12)]);
     expect(pickedRow()).toHaveTextContent('Fee $0.46');
     expect(holdButton()).toBeEnabled();
     await next();
     expect(pickedRow()).toHaveTextContent('Fee $4.12');
-    expect(holdButton()).toBeDisabled();
-    expect(screen.getByRole('alert').textContent).toBe('The plan changed. Check the new route before you rebalance.');
-    await user.click(screen.getByRole('button', { name: 'Use the new plan' }));
+    expect(screen.queryByRole('button', { name: 'Hold to rebalance' })).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'Refresh route' }));
     expect(holdButton()).toBeEnabled();
   });
 
-  it('disables the hold when the plan went stale on a new recommended route, until the trader accepts', async () => {
+  it('replaces the hold with Refresh route when the plan went stale on a new recommended route', async () => {
     const user = userEvent.setup();
     const view = rebalanceViews.twoBorrows;
     const { next } = showPolled([view, { ...view, plan: { ...view.plan, recommended: 'convert' } }]);
@@ -494,8 +417,8 @@ describe('RebalanceModal plan state', () => {
     await user.click(screen.getByRole('radio', { name: 'Convert' }));
     expect(holdButton()).toBeEnabled();
     await next();
-    expect(holdButton()).toBeDisabled();
-    await user.click(screen.getByRole('button', { name: 'Use the new plan' }));
+    expect(screen.queryByRole('button', { name: 'Hold to rebalance' })).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'Refresh route' }));
     expect(holdButton()).toBeEnabled();
   });
 
@@ -704,9 +627,24 @@ const withFee = (view: RebalanceView, costUsd: number): RebalanceView => ({
   },
 });
 
+/**
+ * The verdict, now a boxed VerdictAlert shared with the Balances card rather
+ * than a bare <p>. Returns its sentence, its tone, and the supporting sub-line
+ * where the verdict has one. The `sr-only` severity prefix is dropped so
+ * expectations read as the trader sees them.
+ */
 const worth = () => {
   const facts = dialog().querySelector('dl')?.parentElement as HTMLElement;
-  return [...facts.querySelectorAll(':scope > p')].map((p) => ({ text: p.textContent, warn: p.className.includes('text-amber-300') }));
+  const TONE: Record<string, string> = { 'alert-blue': 'info', 'alert-amber': 'warn', 'alert-red': 'act' };
+  return [...facts.querySelectorAll(':scope > div[class*="alert-"]')].map((box) => {
+    const [head, sub] = [...box.querySelectorAll(':scope > span:not([aria-hidden]) > span')];
+    const visible = [...(head?.childNodes ?? [])]
+      .filter((n) => !(n instanceof HTMLElement && n.classList.contains('sr-only')))
+      .map((n) => n.textContent ?? '')
+      .join('');
+    const tone = Object.keys(TONE).find((cls) => box.className.includes(cls));
+    return { text: visible, tone: tone ? TONE[tone] : null, ...(sub ? { sub: sub.textContent } : {}) };
+  });
 };
 
 describe('RebalanceModal is it worth it', () => {
@@ -720,7 +658,7 @@ describe('RebalanceModal is it worth it', () => {
     ['a fee under 1 day', 0.03, 'The fee equals less than a day of the interest it saves.'],
   ])('%s says how many days of interest the fee equals', (_, fee, text) => {
     show(withFee(at4c, fee));
-    expect(worth()).toEqual([{ text, warn: false }]);
+    expect(worth()).toEqual([{ text: '30 day interest cost more than rebalance fee. Rebalance is recommended.', tone: 'act', sub: text }]);
     expect(facts().Fee).toBe(`$${fee.toFixed(2)}`);
     expect(facts().Interest).toBe('$1.20 → $0.00 a month');
   });
@@ -731,7 +669,7 @@ describe('RebalanceModal is it worth it', () => {
   ])('%s says it is not worth it yet, and the hold still works', async (_, fee) => {
     const sent = starts();
     show(withFee(at4c, fee), { holdMs: 50 });
-    expect(worth()).toEqual([{ text: 'Not worth it yet. The fee is more than 30 days of the interest it saves.', warn: true }]);
+    expect(worth()).toEqual([{ text: 'Not worth it yet. The fee is more than 30 days of the interest it saves.', tone: 'warn' }]);
     expect(facts().Interest).toBe('$1.20 → $0.00 a month');
     fireEvent.pointerDown(holdButton());
     await waitFor(() => expect(sent).toHaveLength(1));
@@ -751,18 +689,22 @@ describe('RebalanceModal is it worth it', () => {
     const mix = { ...view.plan.routes.mix!, savesPerDayUsd: 0.03 };
     show({ ...view, plan: { ...view.plan, routes: { ...view.plan.routes, mix } } });
     expect(facts().Interest).toBe('$1.03 → $0.00 a month');
-    expect(worth()).toEqual([{ text: 'The fee equals 30 days of the interest it saves.', warn: false }]);
+    expect(worth()).toEqual([{ text: '30 day interest cost more than rebalance fee. Rebalance is recommended.', tone: 'act', sub: 'The fee equals 30 days of the interest it saves.' }]);
   });
 
-  it('a Hyperliquid borrow under 10,000 USDC costs nothing, so no fee is worth it', () => {
+  it('a Hyperliquid borrow under 10,000 USDC costs nothing, so it says so instead of weighing the fee', () => {
     show(rebalanceViews.hyperliquidFreeBorrow);
     expect(facts().Interest).toBe('$0.00 → $0.00 a month');
-    expect(worth()).toEqual([{ text: 'Not worth it yet. The fee is more than 30 days of the interest it saves.', warn: true }]);
+    // It used to read "the fee is more than 30 days of the interest it saves"
+    // against that very $0.00 — a judgement divided by zero interest.
+    expect(worth()).toEqual([
+      { text: 'No interest payment yet. No transfer or rebalancing necessary.', tone: 'info' },
+    ]);
   });
 
   it('no borrow says so', () => {
     show(rebalanceViews.accountB);
-    expect(worth()).toEqual([{ text: 'No borrow. Rebalance saves no interest.', warn: false }]);
+    expect(worth()).toEqual([{ text: 'No borrow. No transfer or rebalancing necessary.', tone: 'info' }]);
   });
 
   it('an unknown borrow rate shows rate unknown and no verdict', () => {
@@ -791,15 +733,15 @@ describe('RebalanceModal is it worth it', () => {
     show(rebalanceViews.bigBorrows);
     expect(facts().Interest).toBe('$5,118.60 → $0.00 a month');
     expect(facts().Fee).toBe('$5,502.59');
-    expect(worth()).toEqual([{ text: 'Not worth it yet. The fee is more than 30 days of the interest it saves.', warn: true }]);
+    expect(worth()).toEqual([{ text: 'Not worth it yet. The fee is more than 30 days of the interest it saves.', tone: 'warn' }]);
     cleanup();
 
     show(withFee(rebalanceViews.bigBorrows, 5118.6));
-    expect(worth()).toEqual([{ text: 'The fee equals 30 days of the interest it saves.', warn: false }]);
+    expect(worth()).toEqual([{ text: '30 day interest cost more than rebalance fee. Rebalance is recommended.', tone: 'act', sub: 'The fee equals 30 days of the interest it saves.' }]);
     cleanup();
 
     show(withFee(rebalanceViews.bigBorrows, 5118.61));
-    expect(worth()).toEqual([{ text: 'Not worth it yet. The fee is more than 30 days of the interest it saves.', warn: true }]);
+    expect(worth()).toEqual([{ text: 'Not worth it yet. The fee is more than 30 days of the interest it saves.', tone: 'warn' }]);
   });
 });
 
@@ -856,21 +798,20 @@ describe('RebalanceModal money controls', () => {
     await waitFor(() => expect(sent).toEqual([{ route: 'mix', costUsd: 4.12 }]));
   });
 
-  it('a plan-changed refusal shows the plan-changed state and keeps the hold off', async () => {
+  it('a plan-changed refusal swaps the hold for Refresh route, so it cannot be sent twice', async () => {
     const sent = refuseStart(409, PLAN_CHANGED_ERROR);
     show(rebalanceViews.twoBorrows, { holdMs: 50 });
     fireEvent.pointerDown(holdButton());
-    expect((await screen.findByRole('alert')).textContent).toBe(PLAN_CHANGED_TEXT);
-    expect(screen.getAllByRole('alert')).toHaveLength(1);
-    expect(screen.getByRole('button', { name: 'Use the new plan' })).toBeInTheDocument();
-    expect(holdButton()).toBeDisabled();
-    fireEvent.pointerDown(holdButton());
+    // The refusal makes the quote stale, which now swaps the hold out for
+    // Refresh route — so a second submit is impossible, rather than merely
+    // disabled. The guard itself (setAccepted(null)) is unchanged.
+    expect(await screen.findByRole('button', { name: 'Refresh route' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Hold to rebalance' })).toBeNull();
     await new Promise((resolve) => setTimeout(resolve, 150));
     expect(sent).toHaveLength(1);
-    expect(holdButton()).toBeDisabled();
   });
 
-  it('after a plan-changed refusal, the new plan loads and Use the new plan holds at its cost', async () => {
+  it('after a plan-changed refusal, the new plan loads and Refresh route holds at its cost', async () => {
     const user = userEvent.setup();
     const shownCost = rebalanceViews.twoBorrows.plan.routes.mix!.costUsd;
     const sent: StartBody[] = [];
@@ -890,10 +831,9 @@ describe('RebalanceModal money controls', () => {
     expect(pickedRow()).toHaveTextContent('Fee $0.46');
     fireEvent.pointerDown(holdButton());
     await waitFor(() => expect(pickedRow()).toHaveTextContent('Fee $4.12'));
-    expect(screen.getByRole('alert').textContent).toBe(PLAN_CHANGED_TEXT);
-    expect(holdButton()).toBeDisabled();
-    await user.click(screen.getByRole('button', { name: 'Use the new plan' }));
-    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Hold to rebalance' })).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'Refresh route' }));
+    expect(screen.queryByRole('button', { name: 'Refresh route' })).toBeNull();
     expect(holdButton()).toBeEnabled();
     fireEvent.pointerDown(holdButton());
     await waitFor(() =>
@@ -1495,33 +1435,8 @@ describe('RebalanceModal hovers and facts', () => {
     );
   });
 
-  it('frees fact', async () => {
-    show(rebalanceViews.accountA);
-    expect(within(dialog()).getByText('Spot loop')).toBeInTheDocument();
-    expect(facts().Frees).toBe('$29.41');
-    expect(subs('Frees')).toEqual(['initial margin of the borrow']);
-  });
 
-  it('interest fact', async () => {
-    show(rebalanceViews.accountA);
-    expect(facts().Interest).toBe('$0.00 → $0.00 a month');
-    expect(subs('Interest')).toEqual(['no interest to stop']);
-  });
 
-  it('a borrow in a wallet the plan pays into shows what it frees', async () => {
-    show(rebalanceViews.lighterSplit);
-    expect(subs('Frees')).toEqual(['no borrow to repay']);
-    expect(subs('Interest')).toEqual(['no interest to stop']);
-    cleanup();
-
-    const view = rebalanceViews.lighterSplit;
-    show({
-      ...view,
-      buckets: rebased(view.buckets, { 'USDC/LIGHTER': { cash: -50, equity: -50, borrow: 50, interestPerDayUsd: 0.02 } }),
-    });
-    expect(subs('Frees')).toEqual(['initial margin of the borrow']);
-    expect(subs('Interest')).toEqual(['Lighter interest stops']);
-  });
 
   it('has no lead line, but still names what a picked route that repays no borrow frees and saves', async () => {
     const user = userEvent.setup();
@@ -1531,92 +1446,29 @@ describe('RebalanceModal hovers and facts', () => {
     await user.click(screen.getByRole('radio', { name: 'Convert' }));
     expect(screen.queryByText(/^Moves \$/)).toBeNull();
     expect(facts().Frees).toBe('$0.00');
-    expect(subs('Frees')).toEqual(['repays no borrow']);
-    expect(subs('Interest')).toEqual(['stops no interest']);
     expect(dialog().textContent).not.toMatch(/repays [\d$]|interest stops|No borrow|no borrow to repay|no interest to stop/);
     cleanup();
 
     show(rebalanceViews.accountB);
-    expect(subs('Frees')).toEqual(['no borrow to repay']);
-    expect(subs('Interest')).toEqual(['no interest to stop']);
   });
 
   it('the Frees and Interest facts change with the route the trader picks, with no lead line', async () => {
     const user = userEvent.setup();
     show(withConvertAfter(-12, 20));
     expect(screen.queryByText(/^Moves \$/)).toBeNull();
-    expect(subs('Interest')).toEqual(['Lighter interest stops']);
     await user.click(allRoutes());
     await user.click(screen.getByRole('radio', { name: 'Convert' }));
     expect(screen.queryByText(/^Moves \$/)).toBeNull();
     expect(facts().Frees).toBe('$20.00');
-    expect(subs('Frees')).toEqual(['initial margin of the borrow']);
-    expect(subs('Interest')).toEqual(['stops no interest']);
     await user.click(screen.getByRole('radio', { name: 'Spot loop, then Convert' }));
-    expect(subs('Interest')).toEqual(['Lighter interest stops']);
   });
 
-  it('a route that repays only the free Hyperliquid borrow while Lighter pays stops no interest', async () => {
-    show(withMixAfter(rebalanceViews.twoBorrows, 500, -132));
-    expect(subs('Interest')).toEqual(['stops no interest']);
-  });
 
-  it('a partial repay on Lighter says its interest falls', async () => {
-    show(withMixAfter(rebalanceViews.twoBorrows, 500, -50));
-    expect(subs('Interest')).toEqual(['Lighter interest falls']);
-  });
 
-  it('one full and one partial repay name both kinds', async () => {
-    const view = rebalanceViews.twoBorrows;
-    const big = {
-      ...view,
-      buckets: rebased(view.buckets, { 'USDC/HYPERLIQUID': { cash: -12_000, equity: -12_000, borrow: 12_000, interestPerDayUsd: 0.27 } }),
-    };
-    show(withMixAfter(big, -11_000, 500));
-    expect(subs('Interest')).toEqual(['Lighter interest stops · Hyperliquid interest falls']);
-  });
 
-  it('liquidation reads not known until Gate answers, and when its margin figures are not numbers', async () => {
-    serve({ account: { ...HYPE_ACCOUNT, marginBalance: 'n/a' }, positions: HYPE_PAIR });
-    renderWithClient(
-      <>
-        <RebalanceModal view={rebalanceViews.accountA} onClose={vi.fn()} />
-        <Loaded />
-      </>,
-    );
-    expect(facts().Liquidation).toBe('unknown');
-    await screen.findByText('reads loaded');
-    expect(facts().Liquidation).toBe('unknown');
-    expect(subs('Liquidation')).toEqual([]);
-  });
 
-  it('no liquidation without a position', async () => {
-    serve({ account: HYPE_ACCOUNT, positions: NO_POSITIONS });
-    renderWithClient(
-      <>
-        <RebalanceModal view={rebalanceViews.accountA} onClose={vi.fn()} />
-        <Loaded />
-      </>,
-    );
-    await screen.findByText('reads loaded');
-    expect(facts().Frees).toBe('$29.41');
-    expect(facts().Liquidation).toBe('none');
-    expect(subs('Liquidation')).toEqual([]);
-  });
 
-  it('liquidation before and after', async () => {
-    show(rebalanceViews.accountA, { account: HYPE_ACCOUNT, positions: HYPE_PAIR });
-    const pattern = /^(~\$[\d,.]+) → (~\$[\d,.]+)$/;
-    await waitFor(() => expect(facts().Liquidation).toMatch(pattern));
-    const [, before, after] = pattern.exec(facts().Liquidation) ?? [];
-    expect(before).not.toBe(after);
-    expect(subs('Liquidation')).toEqual(['HYPE, if only HYPE moves']);
-  });
 
-  it('liquidation after reads none when far', async () => {
-    show(FAR_AFTER_VIEW, { account: FAR_AFTER_ACCOUNT, positions: HYPE_PAIR });
-    await waitFor(() => expect(facts().Liquidation).toMatch(/^~\$[\d,.]+ → none$/));
-  });
 });
 
 describe('RebalanceModal Gate spot lines', () => {

@@ -113,8 +113,21 @@
     @apply rounded border border-ink-700 bg-ink-900;
   }
 
+  /* The three alert grounds, one per severity. A tinted hairline over a low
+     fill, matching `.card`'s depth recipe — no shadow, no glow. `info` is
+     neutral/FYI, `gold` is a cost you are paying but need not act on, `guava`
+     is act now. Each pairs with an icon at the call site, so the level never
+     rides on colour alone. */
   .alert-red {
     @apply flex flex-col gap-1 rounded border border-guava/35 bg-guava/10 px-3 py-2.5;
+  }
+
+  .alert-blue {
+    @apply flex flex-col gap-1 rounded border border-info/45 bg-info/10 px-3 py-2.5;
+  }
+
+  .alert-amber {
+    @apply flex flex-col gap-1 rounded border border-gold/45 bg-gold/10 px-3 py-2.5;
   }
 
   .input {

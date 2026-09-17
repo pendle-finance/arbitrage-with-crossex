@@ -120,7 +120,28 @@ const facts = (): Record<string, string | undefined> =>
     [...region().querySelectorAll('dt')].map((dt) => [dt.textContent, dt.nextElementSibling?.textContent ?? undefined]),
   );
 
-const line = (text: string) => screen.queryByText((_, el) => el?.tagName === 'P' && el.textContent === text);
+/**
+ * The card's one-line status. The verdict moved from a bare <p> into a boxed
+ * VerdictAlert, whose sentence is a <span>; the job/balanced lines are still
+ * <p>. Match either, and compare on the VISIBLE text so an `sr-only` severity
+ * prefix ("Warning:") does not have to be repeated in every expectation.
+ */
+const line = (text: string) => {
+  const hits = screen.queryAllByText((_, el) => {
+    if (el?.tagName !== 'P' && el?.tagName !== 'SPAN') return false;
+    const shown = [...el.childNodes]
+      .filter((n) => !(n instanceof HTMLElement && n.classList.contains('sr-only')))
+      .map((n) => n.textContent ?? '')
+      .join('');
+    return shown === text;
+  });
+  // A <p> and the <span> inside it can both match; take the innermost, which
+  // is the element actually carrying the sentence.
+  return hits.find((el) => !hits.some((other) => other !== el && el.contains(other))) ?? null;
+};
+
+/** The verdict's supporting sub-line, e.g. the days-to-payback figure. */
+const sub = () => region().querySelector('.num.text-\\[11px\\]')?.textContent ?? null;
 
 /** The per-wallet lines of a card figure: never under it, only in its hover. */
 async function factRows(user: User, key: string, figure: string): Promise<string[][]> {
@@ -186,8 +207,9 @@ describe('RebalanceSection card', () => {
     expect(cardButtons().map((button) => button.textContent)).toEqual(['Rebalance · Fee $0.46']);
     expect(cardButtons()[0].className).toContain('btn-primary');
     expect(within(region()).queryByRole('radiogroup')).toBeNull();
-    expect([...region().querySelectorAll('p.num')].map((p) => p.textContent)).toEqual(['The fee equals 12 days of the interest it saves.']);
-    expect(region().querySelector('p.num')).toHaveClass('text-ink-300');
+    expect(line('30 day interest cost more than rebalance fee. Rebalance is recommended.')).toBeInTheDocument();
+    // The payback figure is the supporting sub-line under the recommendation.
+    expect(sub()).toBe('The fee equals 12 days of the interest it saves.');
     expect(within(region()).queryByText(/After rebalance|Hold to rebalance|Show steps|^Frees$|^Saves$/)).toBeNull();
   });
 
@@ -262,9 +284,25 @@ describe('RebalanceSection card', () => {
 });
 
 describe('RebalanceSection verdict', () => {
-  it('no borrow verdict names the amount that would move', async () => {
+  it('no borrow verdict says no rebalancing is necessary, without naming an amount', async () => {
     await show(NO_BORROW);
-    expect(line('No borrow. Rebalance saves no interest. It moves $868.42.')).toBeInTheDocument();
+    expect(line('No borrow. No transfer or rebalancing necessary.')).toBeInTheDocument();
+    // The amount is deliberately NOT here: it argued for the move the sentence
+    // says is unnecessary. It stays on the button and in the modal.
+    expect(within(region()).queryByText(/It moves/)).toBeNull();
+  });
+
+  it('a borrow inside the interest-free allowance says so, and never weighs the fee against zero interest', async () => {
+    await show(rebalanceViews.hyperliquidFreeBorrow);
+    expect(line('No interest payment yet. No transfer or rebalancing necessary.')).toBeInTheDocument();
+    // The regression this guards: a wholly-free borrow used to fall through to
+    // isNotWorthIt and print "the fee is more than 30 days of the interest it
+    // saves" directly beneath a "$0.00 an hour" reading.
+    expect(line('Not worth it yet. The fee is more than 30 days of the interest it saves.')).toBeNull();
+    expect(line('No interest payment yet. No transfer or rebalancing necessary.')).toHaveClass('text-pastel-blue');
+    const [button] = cardButtons();
+    expect(button.className).not.toContain('btn-primary');
+    expect(button).toBeEnabled();
   });
 
   it('while a wallet still borrows and the fee is worth it, the card says how many days of saved interest pay the fee', async () => {
@@ -277,8 +315,8 @@ describe('RebalanceSection verdict', () => {
       [feeOf(AT_4C, 0.03), 'less than a day'],
     ] as const) {
       await show(view);
-      expect([...region().querySelectorAll('p.num')].map((p) => p.textContent)).toEqual([`The fee equals ${days} of the interest it saves.`]);
-      expect(region().querySelector('p.num')).toHaveClass('text-ink-300');
+      expect(sub()).toBe(`The fee equals ${days} of the interest it saves.`);
+      expect(line('30 day interest cost more than rebalance fee. Rebalance is recommended.')).toHaveClass('text-guava');
       expect(within(region()).queryByText(/Repays|Stops|No borrow|This borrow is free today|would move|worth/)).toBeNull();
       expect(cardButtons()[0].className).toContain('btn-primary');
       cleanup();
@@ -290,13 +328,12 @@ describe('RebalanceSection verdict', () => {
   it.each([
     ['a fee a cent over 30 days of the interest it stops', feeOf(AT_4C, 1.21), 'Rebalance · Fee $1.21'],
     ['a $20 fee against $0.04 a day', feeOf(rebalanceViews.twoBorrows, 20), 'Rebalance · Fee $20.00'],
-    ['a Hyperliquid borrow under 10,000 USDC, which costs nothing', rebalanceViews.hyperliquidFreeBorrow, null],
     ['a route that leaves the whole borrow', REPAYS_NOTHING, 'Rebalance · Fee $0.46'],
     ['a $0.46 fee against a 16 USDC borrow at $0.0048 a day', UNDER_A_CENT, 'Rebalance · Fee $0.46'],
   ])('%s says it is not worth it yet, and the button is not primary but still opens', async (_, view, name) => {
     const user = userEvent.setup();
     await show(view);
-    expect(line('Not worth it yet. The fee is more than 30 days of the interest it saves.')).toHaveClass('text-amber-300');
+    expect(line('Not worth it yet. The fee is more than 30 days of the interest it saves.')).toHaveClass('text-gold');
     const [button] = cardButtons();
     if (name !== null) expect(button.textContent).toBe(name);
     expect(button.className).not.toContain('btn-primary');
@@ -436,7 +473,9 @@ describe('RebalanceSection run states', () => {
     await show(rebalanceViews.accountARunning);
     expect(within(region()).getByText('Running')).toBeInTheDocument();
     expect(within(region()).getByRole('button', { name: 'Running · round 3 of 5' })).toBeEnabled();
-    const verdict = region().querySelector('p.num')?.textContent ?? '';
+    // The job line rides the same VerdictAlert as every other verdict now, so
+    // it is the box's sentence rather than a bare <p>.
+    const verdict = region().querySelector('.alert-blue span:not([aria-hidden]) span')?.textContent ?? '';
     expect(verdict).toMatch(/^Rebalance running, about .+ left\.$/);
     expect(verdict).not.toMatch(/repays|would move/);
   });
