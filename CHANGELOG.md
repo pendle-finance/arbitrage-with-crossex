@@ -16,7 +16,8 @@ Hyperliquid and Lighter, and is safe for large accounts.
 - **Balances shows the state first.** Borrow, interest and liquidation come first. Rebalance and
   Manual Transfer open in their own window. The Borrowing pill adds up every wallet.
 - **Rebalance is safe for large accounts.** Big moves split under Gate's caps. A poor Convert
-  price stops the run. A step is never sent twice without you.
+  price stops the run. So does a Gate rate limit, and the run says so. A step is never sent
+  twice without you.
 - **Spot loop plans 15 min at most,** and shows only when it costs less than Convert.
 - **A finished run shows what landed,** after fees.
 

@@ -160,7 +160,7 @@ A finished run shows **Moved**, the amount that landed after fees. The chip read
 
 You cannot stop a run once it starts. A failed step stops it. An app restart stops it too. When Gate is already moving a step's money, the app first waits for that step to land, then stops. New deals and transfers wait until the run ends.
 
-A stopped run shows **Resume** and **Abandon**. Resume first looks up the last send on Gate by its tag. When that lookup misses, it sweeps Gate's order history for the same tag. When Gate cannot confirm the order, the run stays stopped. Press Resume again. When Gate does not show a send after 2 min, the run stops. Resume looks again, and sends the step again only when Gate still does not show it. The app never sends a step twice on its own.
+A stopped run shows **Resume** and **Abandon**. Resume first looks up the last send on Gate by its tag. When that lookup misses, it sweeps Gate's order history for the same tag. When Gate cannot confirm the order, the run stays stopped. Press Resume again. When Gate does not show a send after 2 min, the run stops. Resume looks again, and sends the step again only when Gate still does not show it. When Gate rate-limits the account, the run stops with **Gate is rate-limiting this account**. Nothing was sent. Press Resume a few minutes later. The app never sends a step twice on its own.
 
 When a run stops, a banner at the top of every tab shows where the money is. Click **View** to open the Balances tab.
 

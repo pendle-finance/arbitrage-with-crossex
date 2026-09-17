@@ -1082,6 +1082,37 @@ describe('runJob Convert', () => {
     expect(h.count('getCrossexOrder')).toBe(0);
     expect(h.count('createCrossexConvertOrder')).toBe(2);
   });
+
+  it('a rate-limited Convert quote halts with the rate-limit text and sends no order, and a resume quotes again', async () => {
+    const h = harness(fakeClock(), { route: 'convert', steps: [convert(12)] }, {
+      getCrossexAccount: seq(account()),
+      createCrossexConvertQuote: seq(gateError(429, 'TOO_MANY_REQUESTS', 'Too Many Requests'), quote('q2', '11.97')),
+      createCrossexConvertOrder: seq({ body: { orderId: 'c2', text: 'q2' } }),
+    });
+
+    await h.run();
+
+    const halted = h.jobs.read()!;
+    expect(halted).toMatchObject({ status: 'halted', haltReason: HALT_TEXT.rateLimited });
+    expect(halted.haltReason).toBe('Gate is rate-limiting this account. Nothing was sent. Press Resume in a few minutes.');
+    expect(halted.steps[0]).toMatchObject({ quoteId: null, venueId: null });
+    expect(halted.steps[0]).not.toHaveProperty('sentAt');
+    expect(h.count('createCrossexConvertQuote')).toBe(1);
+    expect(h.count('createCrossexConvertOrder')).toBe(0);
+    expect(h.onHalt).toHaveBeenCalledTimes(1);
+
+    halted.status = 'running';
+    halted.haltReason = null;
+    h.jobs.write(halted);
+    await h.run();
+
+    const job = h.jobs.read()!;
+    expect(job.status).toBe('done');
+    expect(job.steps[0]).toMatchObject({ quoteId: 'q2', venueId: 'c2', qty: 11.97, status: 'done' });
+    expect(h.count('getCrossexOrder')).toBe(0);
+    expect(h.count('createCrossexConvertQuote')).toBe(2);
+    expect(h.count('createCrossexConvertOrder')).toBe(1);
+  });
 });
 
 describe('runJob transfers', () => {
@@ -1494,6 +1525,53 @@ describe('runJob halts', () => {
     expect(job.status).toBe('halted');
     expect(job.haltReason).toBe('Bad qty.');
     expect(h.count('createCrossexOrder')).toBe(1);
+  });
+
+  it('a rate-limited Buy USDC order halts with the rate-limit text, and a resume looks the tag up, then buys once', async () => {
+    const clock = fakeClock();
+    const h = harness(clock, oneRound, {
+      ...happyLoop(),
+      getCrossexAccount: seq(account({ gate: 0 }), account({ gate: 0 }), account({ gate: 11.99 })),
+      createCrossexOrder: seq(gateError(429, 'TOO_MANY_REQUESTS', 'Too Many Requests'), created('o1')),
+      getCrossexOrder: seq(
+        gateError(404, 'ORDER_NOT_FOUND', 'order not found'),
+        gateError(404, 'ORDER_NOT_FOUND', 'order not found'),
+        gateError(404, 'ORDER_NOT_FOUND', 'order not found'),
+        gateError(404, 'ORDER_NOT_FOUND', 'order not found'),
+        gateError(404, 'ORDER_NOT_FOUND', 'order not found'),
+        gateError(404, 'ORDER_NOT_FOUND', 'order not found'),
+        gateError(404, 'ORDER_NOT_FOUND', 'order not found'),
+        gateError(404, 'ORDER_NOT_FOUND', 'order not found'),
+        gateError(404, 'ORDER_NOT_FOUND', 'order not found'),
+        gateError(404, 'ORDER_NOT_FOUND', 'order not found'),
+        gateError(404, 'ORDER_NOT_FOUND', 'order not found'),
+        gateError(404, 'ORDER_NOT_FOUND', 'order not found'),
+        gateError(404, 'ORDER_NOT_FOUND', 'order not found'),
+        order('OPEN', '0'),
+        order('FILLED', '11.99'),
+      ),
+      listCrossexOpenOrders: seq({ body: [] }),
+      listCrossexHistoryOrders: seq({ body: [] }),
+    });
+
+    await h.run();
+
+    const halted = h.jobs.read()!;
+    expect(halted).toMatchObject({ status: 'halted', haltReason: HALT_TEXT.rateLimited, stepIndex: 0 });
+    expect(halted.steps[0]).toMatchObject({ text: tagFor(halted.id, 1), venueId: null });
+    expect(halted.steps[0]).not.toHaveProperty('sentAt');
+    expect(h.count('createCrossexOrder')).toBe(1);
+    expect(h.count('getCrossexOrder')).toBe(0);
+    expect(h.onHalt).toHaveBeenCalledTimes(1);
+
+    await resumeRun(h, clock);
+
+    const job = h.jobs.read()!;
+    expect(job).toMatchObject({ status: 'done', fundsAt: 'HYPERLIQUID' });
+    expect(job.steps[0]).toMatchObject({ venueId: 'o1', qty: 11.99, status: 'done' });
+    expect(h.count('createCrossexOrder')).toBe(2);
+    expect(h.sent('createCrossexOrder').map((arg) => arg.crossexOrderRequest.text)).toEqual([tagFor(job.id, 1), tagFor(job.id, 1)]);
+    expect(h.onHalt).toHaveBeenCalledTimes(1);
   });
 
   it('waits one POLL_MS after a rate-limited poll and reads again with no state change', async () => {
@@ -4265,19 +4343,63 @@ describe('runJob sends no step a second time on its own after an unknown result'
   );
 
   it.each(RUNGS)(
-    'a From Hyperliquid move of %d USDC rate-limited at send and not listed for 2 min is sent again with no not-listed halt',
+    'a From Hyperliquid move of %d USDC rate-limited at send halts with the rate-limit text, and a resume that finds no record sends it once more',
     async (amount) => {
       const h = outOfHyperliquid(amount, gateError(429, 'TOO_MANY_REQUESTS', 'slow down'), false);
 
       await h.run();
 
-      const job = h.jobs.read()!;
-      expect(job).toMatchObject({ status: 'done', fundsAt: 'CROSSEX' });
-      expect(h.onHalt).not.toHaveBeenCalled();
+      let job = h.jobs.read()!;
+      expect(job).toMatchObject({ status: 'halted', haltReason: HALT_TEXT.rateLimited, stepIndex: 0 });
+      expect(job.steps[0]).toMatchObject({ text: tagFor(job.id, 1), venueId: null });
+      expect(job.steps[0]).not.toHaveProperty('sentAt');
       expect(h.disk[0].sentAt).toBeTypeOf('number');
-      expect(h.fromVenue()).toHaveLength(2);
+      expect(h.fromVenue()).toHaveLength(1);
+      expect(h.count('listCrossexTransfers')).toBe(0);
+      expect(h.onHalt).toHaveBeenCalledTimes(1);
+
+      await h.resume();
+
+      job = h.jobs.read()!;
+      expect(job).toMatchObject({ status: 'done', fundsAt: 'CROSSEX' });
+      expect(h.onHalt).toHaveBeenCalledTimes(1);
+      expect(h.fromVenue().map((transfer) => transfer.text)).toEqual([tagFor(job.id, 1), tagFor(job.id, 1)]);
       expect(h.count('listCrossexTransfers')).toBeGreaterThanOrEqual(lookupWindow);
       expect(h.qtys()).toEqual([amount]);
+    },
+  );
+
+  it.each(RUNGS)(
+    'a Convert of %d USDT whose order Gate rate-limits halts with the rate-limit text, and a resume looks the quote id up, then sends exactly one more Convert for that chunk',
+    async (amount) => {
+      const h = convertOf(amount, (index) =>
+        index === 1 ? gateError(429, 'TOO_MANY_REQUESTS', 'Too Many Requests')() : { body: { orderId: `c${index}`, text: `q${index}` } },
+      );
+
+      await h.run();
+
+      let job = h.jobs.read()!;
+      expect(job).toMatchObject({ status: 'halted', haltReason: HALT_TEXT.rateLimited, stepIndex: 0 });
+      expect(job.steps[0]).toMatchObject({ quoteId: 'q1', venueId: null });
+      expect(job.steps[0]).not.toHaveProperty('sentAt');
+      expect(h.disk[0]).toMatchObject({ quoteId: 'q1' });
+      expect(h.disk[0].sentAt).toBeTypeOf('number');
+      expect(h.count('createCrossexConvertQuote')).toBe(1);
+      expect(h.count('createCrossexConvertOrder')).toBe(1);
+      expect(h.count('getCrossexOrder')).toBe(0);
+      expect(h.onHalt).toHaveBeenCalledTimes(1);
+
+      await h.resume();
+
+      job = h.jobs.read()!;
+      const chunks = chunkCount(amount);
+      expect(job).toMatchObject({ status: 'done', fundsAt: 'HYPERLIQUID' });
+      expect(job.steps).toHaveLength(chunks);
+      expect(job.steps[0]).toMatchObject({ quoteId: 'q2', venueId: 'c2', qty: h.firstTo, status: 'done' });
+      expect(h.count('createCrossexConvertOrder')).toBe(chunks + 1);
+      expect(h.calls.getCrossexOrder).toEqual(Array(lookupWindow).fill('q1'));
+      expect(h.fromAmounts()).toEqual([String(h.first), ...job.steps.map((step) => String(step.planned))]);
+      expect(h.onHalt).toHaveBeenCalledTimes(1);
     },
   );
 
