@@ -112,6 +112,8 @@ export const HALT_TEXT = {
   noRecord: 'Gate has no record of this transfer. Try again.',
   timeout: 'Gate took too long on this step. Press Resume to check again.',
   rateLimited: 'Gate is rate-limiting this account. Nothing was sent. Press Resume in a few minutes.',
+  nothingFilled: 'Gate closed the order with nothing filled. Nothing moved. Press Resume to try again.',
+  nothingReceived: 'Gate shows this transfer as done, but nothing arrived. Check your Gate wallets.',
   usdtBelowZero: 'A Convert between Hyperliquid and Lighter needs more USDT · CrossEx cash.',
   sellStuck: 'Gate did not sell all the USDC in USDC · Gate. Press Resume to sell the rest.',
   noPrice: 'Could not read the Gate spot price to check the Convert quote. Press Resume to try again.',
