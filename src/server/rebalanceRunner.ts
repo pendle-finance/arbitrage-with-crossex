@@ -75,6 +75,10 @@ export const BALANCE_LAG_MS = 120_000;
 export const LOOKUP_RETRY_MS = 10_000;
 export const LOOKUP_WINDOW_MS = 120_000;
 export const QUOTE_FLOOR = 0.997;
+/** Gate caps order requests at 10 per 10 s per account (spot API rules, 2023-07), and
+ * run 26 saw the 11th Convert order refused within about 6 s. 2 s between Convert
+ * quotes keeps a run at 5 quotes and 5 orders per 10 s. */
+export const CONVERT_GAP_MS = 2_000;
 export const TRANSFER_STEP = String(MIN_TRANSFER);
 const CENT_STEP = '0.01';
 const SWEEP_PAGE_SIZE = 100;
@@ -660,12 +664,16 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
     return Number.isFinite(price) && price > 0 ? ticker : null;
   };
 
+  let lastQuoteAt = Number.NEGATIVE_INFINITY;
+
   const sendConvert = async (step: Step, amount: number): Promise<void> => {
     if (amount > CONVERT_MAX) {
       halt(HALT_TEXT.convertTooBig);
       return;
     }
     const spec = convertSpec(step);
+    const wait = lastQuoteAt + CONVERT_GAP_MS - deps.now();
+    if (wait > 0) await deps.sleep(wait);
     const gives: TransferCoin = spec.toCoin === 'USDC' ? 'USDC' : 'USDT';
     let ticker = await pricedTicker(gives);
     if (!ticker) {
@@ -676,6 +684,7 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
       halt(HALT_TEXT.noPrice);
       return;
     }
+    lastQuoteAt = deps.now();
     const { body: quote } = await crossEx().createCrossexConvertQuote({
       crossexConvertQuoteRequest: {
         exchangeType: spec.venue,
