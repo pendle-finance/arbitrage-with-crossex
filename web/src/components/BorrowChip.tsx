@@ -4,24 +4,11 @@ import { FACT_BORROWING } from '../panels/rebalanceCopy';
 import { borrowingFact, Facts, fmtCoinOrUsd, sharedCoin } from '../panels/RebalanceHovers';
 import { HoverCard } from './HoverCard';
 
-const VENUE_LEGS: Readonly<Record<string, string>> = { HYPERLIQUID: 'Hyperliquid legs', LIGHTER: 'Lighter legs' };
-const OTHER_VENUE_LEGS = 'Gate, Binance, OKX and Bybit legs';
-
 export function BorrowChip({ onOpen }: { onOpen: () => void }) {
   const { data } = useRebalance();
   const buckets = data?.buckets ?? [];
   const wallets = borrowingBuckets(buckets);
   if (wallets.length === 0) return null;
-  const legs = [...new Set(wallets.map((b) => VENUE_LEGS[b.venue] ?? OTHER_VENUE_LEGS))];
-  const legsFact = {
-    key: 'legs',
-    label: 'For',
-    value: legs.map((line) => (
-      <span key={line} className="block whitespace-nowrap">
-        {line}
-      </span>
-    )),
-  };
 
   return (
     <HoverCard
@@ -40,7 +27,7 @@ export function BorrowChip({ onOpen }: { onOpen: () => void }) {
       }
     >
       <div className="flex flex-col gap-2 text-xs">
-        <Facts items={[borrowingFact(buckets), legsFact]} />
+        <Facts items={[borrowingFact(buckets)]} />
         <button type="button" onClick={onOpen} className="btn-link">
           Rebalance on Balances ▸
         </button>

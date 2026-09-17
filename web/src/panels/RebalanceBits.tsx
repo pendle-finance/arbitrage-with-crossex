@@ -303,10 +303,17 @@ function jobStepText(steps: RebalanceStep[], round: number | null) {
   const into = from === 'CROSSEX';
   const out = to === 'CROSSEX';
   const last = out ? named('Sell USDC') : named('To Hyperliquid', 'To Lighter');
-  const converts = steps.filter((step) => step.name.startsWith('Convert'));
+  const gives = steps.filter((step) => step.name === 'Convert' || step.name === 'Convert to USDT');
+  const lands = steps.filter((step) => step.name === 'Convert' || step.name === 'Convert to USDC');
+  const landed = lands.length > 0 && lands.every((step) => step.qty !== null);
   const input =
     round === null
-      ? { kind: 'convert' as const, buy: 0, move: converts[0]?.planned ?? 0, arrives: converts.at(-1)?.qty ?? null }
+      ? {
+          kind: 'convert' as const,
+          buy: 0,
+          move: gives.reduce((total, step) => total + (step.planned ?? 0), 0),
+          arrives: landed ? lands.reduce((total, step) => total + (step.qty ?? 0), 0) : null,
+        }
       : {
           kind: 'round' as const,
           buy: into ? (named('Buy USDC')?.qty ?? named('Buy USDC')?.planned ?? 0) : 0,

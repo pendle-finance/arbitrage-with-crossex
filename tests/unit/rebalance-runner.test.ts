@@ -8,13 +8,16 @@ import {
   buyableUsdc,
   buyCostUsdt,
   ceilCents,
+  CONVERT_MAX,
   floorCents,
   nearestCents,
+  PAIR_CONVERT_MAX,
   spotOrderMax,
   type PlannedStep,
 } from '../../src/core/rebalance/plan';
 import { TtlCache } from '../../src/server/cache';
 import {
+  convertSteps,
   HALT_TEXT,
   JobFile,
   newJob,
@@ -92,6 +95,31 @@ const convertRow = (orderId: string, quoteId: string, symbol: string, executedAm
   state: 'FILLED',
   executedAmount,
 });
+
+const INVALID_FROM = gateError(400, 'CONVERT_TRADE_QUOTE_FROM_AMOUNT_INVALID_ERROR', 'Invalid fromAmount');
+
+function quotesAt(toAmount: (from: number) => number): Handler {
+  let count = 0;
+  return async (arg: RequestOf<'createCrossexConvertQuote'>) => {
+    const { fromAmount } = arg.crossexConvertQuoteRequest;
+    if (Number(fromAmount) > CONVERT_MAX) return INVALID_FROM();
+    count += 1;
+    return {
+      body: { quoteId: `q${count}`, validMs: '5000', fromAmount, toAmount: String(toAmount(Number(fromAmount))), price: '0.998' },
+    };
+  };
+}
+
+function ordersInTurn(): Handler {
+  let count = 0;
+  return async (arg: RequestOf<'createCrossexConvertOrder'>) => {
+    count += 1;
+    return { body: { orderId: `c${count}`, text: arg.crossexConvertOrderRequest.quoteId } };
+  };
+}
+
+const chunkCount = (amount: number, cap = CONVERT_MAX): number => Math.max(1, Math.ceil(floorCents(amount) / cap));
+const firstChunk = (amount: number): number => floorCents(convertSteps('CROSSEX', 'HYPERLIQUID', amount)[0].planned ?? 0);
 
 const account = (
   over: {
@@ -865,7 +893,7 @@ describe('runJob Convert', () => {
 
     const job = h.jobs.read()!;
     expect(job.status).toBe('halted');
-    expect(job.haltReason).toBe('Convert quote was more than 0.25% under the Gate spot price.');
+    expect(job.haltReason).toBe('Convert quote was more than 0.3% under the Gate spot price.');
     expect(job.steps[0].quoteId).toBeNull();
     expect(job.steps[0].venueId).toBeNull();
     expect(h.count('createCrossexConvertOrder')).toBe(0);
@@ -2338,6 +2366,69 @@ function spotBook(start: number, fills: number[] = [], lost: number[] = []) {
   return { handlers, cash: () => cash, before };
 }
 
+const WALLET_OF = { CROSSEX: 'usdt', HYPERLIQUID: 'hyperliquid', LIGHTER: 'lighter' } as const;
+
+function convertBook(
+  start: { usdt?: number; hyperliquid?: number; lighter?: number },
+  lost: number[] = [],
+  rates: { USDC?: number; USDT?: number } = {},
+) {
+  const cash = { usdt: 0, hyperliquid: 0, lighter: 0, ...start };
+  const quotes = new Map<string, { exchangeType: string; fromCoin: string; from: number; to: number }>();
+  const filled = new Map<string, { orderId: string; to: number }>();
+  let orders = 0;
+  const addQuote = (exchangeType: string, fromCoin: string, from: number) => {
+    const quoteId = `q${quotes.size + 1}`;
+    const to = Number((from * (fromCoin === 'USDC' ? (rates.USDC ?? 0.998) : (rates.USDT ?? 0.998))).toFixed(6));
+    quotes.set(quoteId, { exchangeType, fromCoin, from, to });
+    return { quoteId, to };
+  };
+  const fill = (quoteId: string): string => {
+    const { exchangeType, fromCoin, from, to } = quotes.get(quoteId)!;
+    const venue = exchangeType === 'LIGHTER' ? 'lighter' : 'hyperliquid';
+    if (fromCoin === 'USDT') {
+      cash.usdt -= from;
+      cash[venue] += to;
+    } else {
+      cash[venue] -= from;
+      cash.usdt += to;
+    }
+    orders += 1;
+    const record = { orderId: `c${orders}`, to };
+    filled.set(record.orderId, record);
+    filled.set(quoteId, record);
+    return record.orderId;
+  };
+  const handlers: Record<string, Handler> = {
+    getCrossexAccount: async () => account({ ...WHALE, ...cash }),
+    createCrossexConvertQuote: async (arg: RequestOf<'createCrossexConvertQuote'>) => {
+      const { exchangeType, fromCoin, fromAmount } = arg.crossexConvertQuoteRequest;
+      if (Number(fromAmount) > CONVERT_MAX) return INVALID_FROM();
+      const { quoteId, to } = addQuote(String(exchangeType), fromCoin, Number(fromAmount));
+      return { body: { quoteId, validMs: '5000', fromAmount, toAmount: String(to), price: '0.998' } };
+    },
+    createCrossexConvertOrder: async (arg: RequestOf<'createCrossexConvertOrder'>) => {
+      const { quoteId } = arg.crossexConvertOrderRequest;
+      const orderId = fill(quoteId);
+      if (lost.includes(orders)) networkError();
+      return { body: { orderId, text: quoteId } };
+    },
+    getCrossexOrder: async (id: string) => {
+      const record = filled.get(id);
+      if (!record) return gateError(404, 'ORDER_NOT_FOUND', 'order not found')();
+      return order('FILLED', '0', record.orderId, { executedAmount: String(record.to) });
+    },
+    listCrossexOpenOrders: seq({ body: [] }),
+    listCrossexHistoryOrders: seq({ body: [] }),
+  };
+  const sentBefore = (fromCoin: string, from: number): string => {
+    const { quoteId } = addQuote('HYPERLIQUID', fromCoin, from);
+    fill(quoteId);
+    return quoteId;
+  };
+  return { handlers, cash: () => ({ ...cash }), sentBefore };
+}
+
 function atRoundSell(clock: ReturnType<typeof fakeClock>, arrived: number) {
   return (job: Job): void => {
     doneStep(job, 0, { venueId: 'x1', qty: arrived + 1, at: clock.now() });
@@ -2735,32 +2826,43 @@ describe('runJob sends no more than the balance at size', () => {
     expect(amount).toBeGreaterThan(cash - 0.01);
   });
 
-  it.each(HAIRS)('a Convert out of Hyperliquid with %d in the wallet sells at most that', async (cash) => {
-    const h = harness(fakeClock(), { direction: 'toUsdt', route: 'convert', steps: [convert(cash + 1)] }, {
-      getCrossexAccount: seq(account({ ...WHALE, hyperliquid: cash })),
-      createCrossexConvertQuote: seq(quote('q1', String(cash))),
-      createCrossexConvertOrder: seq({ body: { orderId: 'c1', text: 'q1' } }),
-    });
+  it.each(HAIRS)(
+    'a Convert out of Hyperliquid planned at %d plus 1 sells at most the wallet in chunks of at most 500,000',
+    async (cash) => {
+      const book = convertBook({ hyperliquid: cash });
+      const h = harness(fakeClock(), { direction: 'toUsdt', route: 'convert', steps: [convert(cash + 1)] }, book.handlers);
+
+      await h.run();
+
+      const job = h.jobs.read()!;
+      expect(job).toMatchObject({ status: 'done', fundsAt: 'CROSSEX' });
+      const sold = h.sent('createCrossexConvertQuote').map((arg) => Number(arg.crossexConvertQuoteRequest.fromAmount));
+      for (const amount of sold) expect(amount).toBeGreaterThan(0);
+      for (const amount of sold) expect(amount).toBeLessThanOrEqual(CONVERT_MAX);
+      expect(nearestCents(sum(sold))).toBe(floorCents(cash));
+      expect(book.cash().hyperliquid).toBeGreaterThanOrEqual(0);
+    },
+  );
+
+  it.each(HAIRS)('both Convert halves from Hyperliquid to Lighter planned at %d plus 1 sell at most what each wallet holds', async (cash) => {
+    const book = convertBook({ hyperliquid: cash });
+    const h = harness(
+      fakeClock(),
+      { route: 'convert', steps: [between('HYPERLIQUID', 'LIGHTER', convert(cash + 1))] },
+      book.handlers,
+    );
 
     await h.run();
 
-    expect(h.jobs.read()!.status).toBe('done');
-    expect(Number(h.sent('createCrossexConvertQuote')[0].crossexConvertQuoteRequest.fromAmount)).toBeLessThanOrEqual(cash);
-  });
-
-  it.each(HAIRS)('both Convert halves from Hyperliquid to Lighter with %d in each wallet sell at most that', async (cash) => {
-    const h = harness(fakeClock(), { route: 'convert', steps: [between('HYPERLIQUID', 'LIGHTER', convert(cash + 1))] }, {
-      getCrossexAccount: seq(account({ ...WHALE, hyperliquid: cash }), account({ ...WHALE, usdt: cash })),
-      createCrossexConvertQuote: seq(quote('q1', String(cash + 1)), quote('q2', String(cash))),
-      createCrossexConvertOrder: seq({ body: { orderId: 'c1', text: 'q1' } }, { body: { orderId: 'c2', text: 'q2' } }),
-    });
-
-    await h.run();
-
-    expect(h.jobs.read()!.status).toBe('done');
-    const sold = h.sent('createCrossexConvertQuote').map((arg) => Number(arg.crossexConvertQuoteRequest.fromAmount));
-    expect(sold).toHaveLength(2);
-    for (const amount of sold) expect(amount).toBeLessThanOrEqual(cash);
+    expect(h.jobs.read()!).toMatchObject({ status: 'done', fundsAt: 'LIGHTER' });
+    const requests = h.sent('createCrossexConvertQuote').map((arg) => arg.crossexConvertQuoteRequest);
+    const sold = requests.filter((q) => q.fromCoin === 'USDC').map((q) => Number(q.fromAmount));
+    expect(requests).toHaveLength(2 * sold.length);
+    for (const amount of sold) expect(amount).toBeLessThanOrEqual(PAIR_CONVERT_MAX);
+    for (const q of requests) expect(Number(q.fromAmount)).toBeLessThanOrEqual(CONVERT_MAX);
+    expect(nearestCents(sum(sold))).toBe(floorCents(cash));
+    expect(book.cash().hyperliquid).toBeGreaterThanOrEqual(0);
+    expect(book.cash().usdt).toBeGreaterThanOrEqual(0);
   });
 
   it.each([1_000_000, 6_000_000])('a From Hyperliquid move of %d that Gate refuses for its amount names free margin or wallet cash', async (amount) => {
@@ -2783,44 +2885,51 @@ describe('runJob sends no more than the balance at size', () => {
 });
 
 describe('runJob Convert quote floor at size', () => {
-  const convertJob = (amount: number, toAmount: number) =>
+  const convertJob = (amount: number, toAmount: (from: number) => number) =>
     harness(fakeClock(), { direction: 'toUsdt', route: 'convert', steps: [convert(amount)] }, {
       listTickers: tickerAt('1', '1'),
       getCrossexAccount: seq(account({ ...WHALE, hyperliquid: amount })),
-      createCrossexConvertQuote: seq(quote('q1', String(toAmount))),
-      createCrossexConvertOrder: seq({ body: { orderId: 'c1', text: 'q1' } }),
+      createCrossexConvertQuote: quotesAt(toAmount),
+      createCrossexConvertOrder: ordersInTurn(),
     });
 
-  it.each([1_000_000, 6_000_000])('a Convert of %d with a quote at 0.9975 and a spot price of 1 sends the order', async (amount) => {
-    const h = convertJob(amount, amount * 0.9975);
+  it.each(LADDER.flatMap((amount) => [[amount, 0.997], [amount, 0.9975]]))(
+    'a Convert of %d with every quote at %s of a spot price of 1 sends every chunk',
+    async (amount, rate) => {
+      const h = convertJob(amount, (from) => from * rate);
 
-    await h.run();
+      await h.run();
 
-    expect(h.jobs.read()!.status).toBe('done');
-    expect(h.count('createCrossexConvertOrder')).toBe(1);
-  });
+      expect(h.jobs.read()!.status).toBe('done');
+      expect(h.count('createCrossexConvertOrder')).toBe(chunkCount(amount));
+    },
+  );
 
-  it.each([1_000_000, 6_000_000])('a Convert of %d with a quote at 0.99749 and a spot price of 1 halts and sends no order', async (amount) => {
-    const h = convertJob(amount, amount * 0.99749);
+  it.each(LADDER)('a Convert of %d with a quote one cent under 0.3%% below a spot price of 1 halts with the 0.3%% text and sends no order', async (amount) => {
+    const h = convertJob(amount, (from) => nearestCents(from * 0.997) - 0.01);
 
     await h.run();
 
     const job = h.jobs.read()!;
-    expect(job).toMatchObject({ status: 'halted', haltReason: 'Convert quote was more than 0.25% under the Gate spot price.' });
+    expect(job).toMatchObject({ status: 'halted', stepIndex: 0, haltReason: 'Convert quote was more than 0.3% under the Gate spot price.' });
     expect(job.steps[0].quoteId).toBeNull();
+    expect(h.count('createCrossexConvertQuote')).toBe(1);
     expect(h.count('createCrossexConvertOrder')).toBe(0);
   });
 
   it.each([1_000_000, 6_000_000])(
     'a Convert of %d from Hyperliquid to Lighter at a spot price of 1 halts on a poor second quote, keeps the USDT in USDT · CrossEx, and a resume sends nothing twice',
     async (amount) => {
-      const usdt = amount * 0.998;
       const clock = fakeClock();
+      let quoted = 0;
       const h = harness(clock, { route: 'convert', steps: [between('HYPERLIQUID', 'LIGHTER', convert(amount))] }, {
         listTickers: tickerAt('1', '1'),
-        getCrossexAccount: seq(account({ ...WHALE, hyperliquid: amount }), account({ ...WHALE, usdt })),
-        createCrossexConvertQuote: seq(quote('q1', String(usdt)), quote('q2', String(usdt * 0.99749)), quote('q3', String(usdt * 0.998))),
-        createCrossexConvertOrder: seq({ body: { orderId: 'c1', text: 'q1' } }, { body: { orderId: 'c2', text: 'q3' } }),
+        getCrossexAccount: seq(account({ ...WHALE, hyperliquid: amount, usdt: amount })),
+        createCrossexConvertQuote: quotesAt((from) => {
+          quoted += 1;
+          return quoted === 2 ? from * 0.99699 : floorCents(from * 0.998);
+        }),
+        createCrossexConvertOrder: ordersInTurn(),
       });
 
       await h.run();
@@ -2834,9 +2943,12 @@ describe('runJob Convert quote floor at size', () => {
 
       job = h.jobs.read()!;
       expect(job).toMatchObject({ status: 'done', fundsAt: 'LIGHTER' });
-      expect(h.count('createCrossexConvertOrder')).toBe(2);
-      expect(h.sent('createCrossexConvertOrder').map((arg) => arg.crossexConvertOrderRequest.quoteId)).toEqual(['q1', 'q3']);
-      expect(h.sent('createCrossexConvertQuote').map((arg) => arg.crossexConvertQuoteRequest.fromCoin)).toEqual(['USDC', 'USDT', 'USDT']);
+      const sent = h.sent('createCrossexConvertOrder').map((arg) => arg.crossexConvertOrderRequest.quoteId);
+      expect(sent).toHaveLength(2 * chunkCount(amount, PAIR_CONVERT_MAX));
+      expect(sent.slice(0, 2)).toEqual(['q1', 'q3']);
+      expect(new Set(sent).size).toBe(sent.length);
+      const coins = h.sent('createCrossexConvertQuote').map((arg) => arg.crossexConvertQuoteRequest.fromCoin);
+      expect(coins.slice(0, 4)).toEqual(['USDC', 'USDT', 'USDT', 'USDC']);
     },
   );
 });
@@ -2844,12 +2956,12 @@ describe('runJob Convert quote floor at size', () => {
 describe('runJob Convert quote floor at the Gate spot price', () => {
   const LIVE = { ask: 1.0009, bid: 1.0008 };
   const liveTicker = () => tickerAt('1.0008', '1.0009');
-  const convertAt = (direction: Direction, amount: number, toAmount: string, listTickers: Handler) =>
+  const convertAt = (direction: Direction, amount: number, toAmount: string | ((from: number) => number), listTickers: Handler) =>
     harness(fakeClock(), { direction, route: 'convert', steps: [convert(amount)] }, {
       listTickers,
       getCrossexAccount: seq(account({ ...WHALE, usdt: amount, hyperliquid: amount })),
-      createCrossexConvertQuote: seq(quote('q1', toAmount)),
-      createCrossexConvertOrder: seq({ body: { orderId: 'c1', text: 'q1' } }),
+      createCrossexConvertQuote: quotesAt(typeof toAmount === 'string' ? () => Number(toAmount) : toAmount),
+      createCrossexConvertOrder: ordersInTurn(),
     });
   const halves = (toAmounts: string[]) =>
     harness(fakeClock(), { route: 'convert', steps: [between('HYPERLIQUID', 'LIGHTER', convert(12))] }, {
@@ -2858,29 +2970,30 @@ describe('runJob Convert quote floor at the Gate spot price', () => {
       createCrossexConvertQuote: seq(...toAmounts.map((toAmount, index) => quote(`q${index + 1}`, toAmount))),
       createCrossexConvertOrder: seq({ body: { orderId: 'c1', text: 'q1' } }, { body: { orderId: 'c2', text: 'q2' } }),
     });
-  const expectSent = (h: ReturnType<typeof harness>) => {
+  const expectSent = (h: ReturnType<typeof harness>, amount = 12) => {
     expect(h.jobs.read()!.status).toBe('done');
-    expect(h.count('createCrossexConvertOrder')).toBe(1);
+    expect(h.count('createCrossexConvertOrder')).toBe(chunkCount(amount));
   };
   const expectHalted = (h: ReturnType<typeof harness>) => {
     const job = h.jobs.read()!;
-    expect(job).toMatchObject({ status: 'halted', haltReason: 'Convert quote was more than 0.25% under the Gate spot price.' });
+    expect(job).toMatchObject({ status: 'halted', haltReason: 'Convert quote was more than 0.3% under the Gate spot price.' });
     expect(job.steps[0]).toMatchObject({ quoteId: null, venueId: null });
     expect(h.count('createCrossexConvertOrder')).toBe(0);
   };
 
-  it('the floor for 12 USDT toward USDC at ask 1.0009 is 12 / 1.0009 x 0.9975 = 11.9592', () => {
-    expect(quoteFloor(12, 'USDC', LIVE)).toBeCloseTo(11.9592, 4);
+  it('the floor for 12 USDT toward USDC at ask 1.0009 is 12 / 1.0009 x 0.997 = 11.9532', () => {
+    expect(quoteFloor(12, 'USDC', LIVE)).toBeCloseTo(11.9532, 4);
   });
 
-  it('the floor for 12 USDC toward USDT at bid 1.0008 is 12 x 1.0008 x 0.9975 = 11.9796, and at bid 0.999 it is 11.9580', () => {
-    expect(quoteFloor(12, 'USDT', LIVE)).toBeCloseTo(11.9796, 4);
-    expect(quoteFloor(12, 'USDT', { ask: 1.0001, bid: 0.999 })).toBeCloseTo(11.958, 4);
+  it('the floor for 12 USDC toward USDT at bid 1.0008 is 12 x 1.0008 x 0.997 = 11.9736, and at bid 0.999 it is 11.9520', () => {
+    expect(quoteFloor(12, 'USDT', LIVE)).toBeCloseTo(11.9736, 4);
+    expect(quoteFloor(12, 'USDT', { ask: 1.0001, bid: 0.999 })).toBeCloseTo(11.952, 4);
   });
 
   it.each([null, { ask: NaN, bid: NaN }, { ask: 0, bid: -1 }, { ask: Infinity, bid: Infinity }])(
-    'with no usable ticker (%o) the floor is 12 x 0.9975 both ways',
+    'with no usable ticker (%o) the floor is 12 x 0.997 both ways',
     (ticker) => {
+      expect(QUOTE_FLOOR).toBe(0.997);
       expect(quoteFloor(12, 'USDC', ticker)).toBe(12 * QUOTE_FLOOR);
       expect(quoteFloor(12, 'USDT', ticker)).toBe(12 * QUOTE_FLOOR);
     },
@@ -2917,13 +3030,31 @@ describe('runJob Convert quote floor at the Gate spot price', () => {
     expectSent(h);
   });
 
-  it('a first half from Hyperliquid is checked against the bid: 11.975 for 12 USDC halts, though it clears the ask floor of 11.9592', async () => {
-    const h = halves(['11.975']);
+  it('toward USDC at ask 1.0009, a quote of 11.9592 for 12 USDT, 0.25% under spot, now sends', async () => {
+    const h = convertAt('toUsdc', 12, '11.9592', liveTicker());
+    await h.run();
+    expectSent(h);
+  });
+
+  it('toward USDT at bid 1.0008, a quote of 11.9796 for 12 USDC, 0.25% under spot, now sends', async () => {
+    const h = convertAt('toUsdt', 12, '11.9796', liveTicker());
+    await h.run();
+    expectSent(h);
+  });
+
+  it('toward USDT at bid 1.0008, a quote of 11.9735 for 12 USDC, just under the 0.3% floor of 11.9736, halts', async () => {
+    const h = convertAt('toUsdt', 12, '11.9735', liveTicker());
     await h.run();
     expectHalted(h);
   });
 
-  it('a second half into Lighter is checked against the ask: 11.95 for 11.98 USDT sends, though it is under the bid floor of 11.9597', async () => {
+  it('a first half from Hyperliquid is checked against the bid: 11.97 for 12 USDC halts under the bid floor of 11.9736, though it clears the ask floor of 11.9532', async () => {
+    const h = halves(['11.97']);
+    await h.run();
+    expectHalted(h);
+  });
+
+  it('a second half into Lighter is checked against the ask: 11.95 for 11.98 USDT sends, though it is under the bid floor of 11.9536', async () => {
     const h = halves(['11.9856', '11.95']);
     await h.run();
     expect(h.jobs.read()!.status).toBe('done');
@@ -2931,7 +3062,7 @@ describe('runJob Convert quote floor at the Gate spot price', () => {
     expect(h.count('createCrossexConvertOrder')).toBe(2);
   });
 
-  it('a second half into Lighter at 11.93 for 11.98 USDT halts under the ask floor of 11.9393 and keeps the USDT', async () => {
+  it('a second half into Lighter at 11.93 for 11.98 USDT halts under the ask floor of 11.9333 and keeps the USDT', async () => {
     const h = halves(['11.9856', '11.93']);
     await h.run();
     const job = h.jobs.read()!;
@@ -2941,8 +3072,10 @@ describe('runJob Convert quote floor at the Gate spot price', () => {
   });
 
   const liveRow = { body: [{ highestBid: '1.0008', lowestAsk: '1.0009' }] };
-  const overFloor = (direction: Direction, amount: number): string =>
-    String(floorCents(quoteFloor(floorCents(amount), direction === 'toUsdc' ? 'USDC' : 'USDT', LIVE)) + 0.01);
+  const overFloor =
+    (direction: Direction, cents = 0.01) =>
+    (from: number): number =>
+      floorCents(quoteFloor(from, direction === 'toUsdc' ? 'USDC' : 'USDT', LIVE)) + cents;
   const expectNoPrice = (h: ReturnType<typeof harness>) => {
     const job = h.jobs.read()!;
     expect(job).toMatchObject({ status: 'halted', stepIndex: 0, haltReason: HALT_TEXT.noPrice });
@@ -2954,17 +3087,22 @@ describe('runJob Convert quote floor at the Gate spot price', () => {
   };
 
   it.each(LADDER.flatMap((amount): [Direction, number][] => [['toUsdc', amount], ['toUsdt', amount]]))(
-    'a Convert %s of %d whose first ticker read throws waits one poll, reads again, and converts once',
+    'a Convert %s of %d whose first ticker read throws waits one poll, reads again, and converts each chunk once',
     async (direction, amount) => {
-      const h = convertAt(direction, amount, overFloor(direction, amount), seq(networkError, liveRow));
+      const h = convertAt(direction, amount, overFloor(direction), seq(networkError, liveRow));
       const sleep = vi.spyOn(h.deps, 'sleep');
 
       await h.run();
 
-      expectSent(h);
-      expect(h.count('createCrossexConvertQuote')).toBe(1);
+      expectSent(h, amount);
+      expect(h.count('createCrossexConvertQuote')).toBe(chunkCount(amount));
       expect(sleep.mock.calls).toEqual([[POLL_MS]]);
-      expect(h.sequence.slice(-4)).toEqual(['listTickers', 'listTickers', 'createCrossexConvertQuote', 'createCrossexConvertOrder']);
+      expect(h.sequence.filter((name) => name !== 'getCrossexAccount').slice(0, 4)).toEqual([
+        'listTickers',
+        'listTickers',
+        'createCrossexConvertQuote',
+        'createCrossexConvertOrder',
+      ]);
     },
   );
 
@@ -2976,7 +3114,7 @@ describe('runJob Convert quote floor at the Gate spot price', () => {
       ['has no row', 'toUsdt', amount, seq({ body: [] })],
     ]),
   )('a ticker read that %s twice halts a Convert %s of %d with the price text and asks for no quote', async (_name, direction, amount, listTickers) => {
-    const h = convertAt(direction, amount, overFloor(direction, amount), listTickers);
+    const h = convertAt(direction, amount, overFloor(direction), listTickers);
 
     await h.run();
 
@@ -2992,7 +3130,7 @@ describe('runJob Convert quote floor at the Gate spot price', () => {
       ['toUsdc', amount, '1.0008', '-1'],
     ]),
   )('a Convert %s of %d halts with the price text when the price it needs is bad: bid %s, ask %s', async (direction, amount, bid, ask) => {
-    const h = convertAt(direction, amount, overFloor(direction, amount), tickerAt(bid, ask));
+    const h = convertAt(direction, amount, overFloor(direction), tickerAt(bid, ask));
 
     await h.run();
 
@@ -3002,42 +3140,42 @@ describe('runJob Convert quote floor at the Gate spot price', () => {
   it.each([
     ['toUsdc', 'NaN', '1.0009'],
     ['toUsdt', '1.0008', 'NaN'],
-  ] as [Direction, string, string][])('a Convert %s of 6000000 does not need the other price: bid %s, ask %s converts once', async (direction, bid, ask) => {
-    const h = convertAt(direction, 6_000_000, overFloor(direction, 6_000_000), tickerAt(bid, ask));
+  ] as [Direction, string, string][])('a Convert %s of 6000000 does not need the other price: bid %s, ask %s converts each chunk once', async (direction, bid, ask) => {
+    const h = convertAt(direction, 6_000_000, overFloor(direction), tickerAt(bid, ask));
 
     await h.run();
 
-    expectSent(h);
+    expectSent(h, 6_000_000);
   });
 
   it.each(LADDER.flatMap((amount): [Direction, number][] => [['toUsdc', amount], ['toUsdt', amount]]))(
-    'a Resume after the price halt on a Convert %s of %d reads the price again and converts once',
+    'a Resume after the price halt on a Convert %s of %d reads the price again and converts each chunk once',
     async (direction, amount) => {
-      const h = convertAt(direction, amount, overFloor(direction, amount), seq(networkError, networkError, liveRow));
+      const h = convertAt(direction, amount, overFloor(direction), seq(networkError, networkError, liveRow));
       await h.run();
       expectNoPrice(h);
 
       await resumeRun(h, { now: h.deps.now, sleep: h.deps.sleep });
 
-      expectSent(h);
-      expect(h.count('createCrossexConvertQuote')).toBe(1);
-      expect(h.count('listTickers')).toBe(3);
-      expect(h.sent('createCrossexConvertQuote')[0].crossexConvertQuoteRequest.fromAmount).toBe(String(floorCents(amount)));
+      expectSent(h, amount);
+      expect(h.count('createCrossexConvertQuote')).toBe(chunkCount(amount));
+      expect(h.count('listTickers')).toBe(2 + chunkCount(amount));
+      expect(h.sent('createCrossexConvertQuote')[0].crossexConvertQuoteRequest.fromAmount).toBe(String(firstChunk(amount)));
     },
   );
 
   it.each([...LADDER, ...HAIRS].flatMap((amount): [Direction, number][] => [['toUsdc', amount], ['toUsdt', amount]]))(
-    'a Convert %s of %d sends a quote a cent over the spot floor and halts one a cent under it',
+    'a Convert %s of %d sends every chunk quoted a cent over the spot floor and halts the first chunk quoted a cent under it',
     async (direction, amount) => {
       const sent = floorCents(amount);
       const floor = quoteFloor(sent, direction === 'toUsdc' ? 'USDC' : 'USDT', LIVE);
-      const formula = direction === 'toUsdc' ? (sent / 1.0009) * 0.9975 : sent * 1.0008 * 0.9975;
+      const formula = direction === 'toUsdc' ? (sent / 1.0009) * 0.997 : sent * 1.0008 * 0.997;
       expect(Math.abs(floor - formula)).toBeLessThan(0.01);
-      const over = convertAt(direction, amount, String(floorCents(floor) + 0.01), liveTicker());
+      const over = convertAt(direction, amount, overFloor(direction), liveTicker());
       await over.run();
-      expectSent(over);
-      expect(Number(over.sent('createCrossexConvertQuote')[0].crossexConvertQuoteRequest.fromAmount)).toBe(sent);
-      const under = convertAt(direction, amount, String(floorCents(floor) - 0.01), liveTicker());
+      expectSent(over, amount);
+      expect(Number(over.sent('createCrossexConvertQuote')[0].crossexConvertQuoteRequest.fromAmount)).toBe(firstChunk(amount));
+      const under = convertAt(direction, amount, overFloor(direction, -0.01), liveTicker());
       await under.run();
       expectHalted(under);
     },
@@ -3659,9 +3797,11 @@ describe('runJob Buy USDC that fills short', () => {
       expect(h.count('createCrossexOrder')).toBe(rounds.length - 1);
       expect(toSpot(job)).toEqual([held, ...rounds.slice(1)]);
       expect(moved(job)).toEqual([held, ...rounds.slice(1)]);
-      expect(named(job, 'Convert').map((step) => step.planned)).toEqual([grown]);
-      expect(h.sent('createCrossexConvertQuote').map((arg) => arg.crossexConvertQuoteRequest.fromAmount)).toEqual([String(grown)]);
-      expect(h.count('createCrossexConvertOrder')).toBe(1);
+      const chunks = convertSteps('CROSSEX', 'HYPERLIQUID', grown).map((step) => step.planned);
+      expect(named(job, 'Convert').map((step) => step.planned)).toEqual(chunks);
+      expect(nearestCents(sum(chunks.map((chunk) => chunk ?? 0)))).toBe(grown);
+      expect(h.sent('createCrossexConvertQuote').map((arg) => arg.crossexConvertQuoteRequest.fromAmount)).toEqual(chunks.map(String));
+      expect(h.count('createCrossexConvertOrder')).toBe(chunkCount(grown));
       expect(Math.abs(sum(moved(job)) + grown - 50 - amount)).toBeLessThanOrEqual(0.01);
     },
   );
@@ -3779,8 +3919,11 @@ describe('runJob Buy USDC that fills short', () => {
     const grown = nearestCents(50 + rounds[0].move - landed);
     expect(job.status).toBe('done');
     expect(named(job, 'Buy USDC')).toHaveLength(rounds.length);
-    expect(named(job, 'Convert').map((step) => step.planned)).toEqual([grown]);
-    expect(h.sent('createCrossexConvertQuote')[0].crossexConvertQuoteRequest.fromAmount).toBe(String(grown));
+    const converts = named(job, 'Convert').map((step) => step.planned ?? 0);
+    expect(converts).toEqual(convertSteps('CROSSEX', 'HYPERLIQUID', grown).map((step) => step.planned));
+    for (const planned of converts) expect(planned).toBeLessThanOrEqual(CONVERT_MAX);
+    expect(nearestCents(sum(converts))).toBe(grown);
+    expect(h.sent('createCrossexConvertQuote')[0].crossexConvertQuoteRequest.fromAmount).toBe(String(firstChunk(grown)));
     expect(Math.abs(sum(moved(job)) + grown - 50 - amount)).toBeLessThanOrEqual(0.01);
   });
 });
@@ -4012,16 +4155,17 @@ function outOfHyperliquid(amount: number, first: () => unknown, taken: boolean) 
 
 function convertOf(amount: number, orderCall: (index: number) => unknown, edit?: (job: Job, now: number) => void) {
   const clock = fakeClock();
-  const toAmount = String(floorCents(amount * 0.998));
+  const first = firstChunk(amount);
+  const firstTo = floorCents(first * 0.998);
   const disk: DiskStep[] = [];
   const h = harness(
     clock,
     { route: 'convert', steps: [convert(amount)] },
     {
       getCrossexAccount: seq(account({ ...WHALE, usdt: 2 * amount })),
-      createCrossexConvertQuote: seq(quote('q1', toAmount), quote('q2', toAmount)),
+      createCrossexConvertQuote: quotesAt((from) => floorCents(from * 0.998)),
       createCrossexConvertOrder: async () => {
-        disk.push(diskStep(h.dir, 0));
+        disk.push(diskStep(h.dir, h.jobs.read()!.stepIndex));
         return orderCall(disk.length);
       },
       getCrossexOrder: seq(gateError(404, 'ORDER_NOT_FOUND', 'order not found')),
@@ -4031,7 +4175,7 @@ function convertOf(amount: number, orderCall: (index: number) => unknown, edit?:
     edit && ((job) => edit(job, clock.now())),
   );
   const fromAmounts = () => h.sent('createCrossexConvertQuote').map((arg) => arg.crossexConvertQuoteRequest.fromAmount);
-  return { ...h, clock, disk, toAmount, fromAmounts, resume: () => resumeRun(h, clock) };
+  return { ...h, clock, disk, first, firstTo, fromAmounts, resume: () => resumeRun(h, clock) };
 }
 
 describe('runJob sends no step a second time on its own after an unknown result', () => {
@@ -4068,9 +4212,9 @@ describe('runJob sends no step a second time on its own after an unknown result'
   );
 
   it.each(RUNGS)(
-    'a Convert of %d USDT from a wallet holding twice that, with a lost order response and no record, halts, and a resume that misses again sends exactly one more Convert',
+    'a Convert of %d USDT from a wallet holding twice that, with a lost order response and no record, halts, and a resume that misses again sends exactly one more Convert for that chunk',
     async (amount) => {
-      const h = convertOf(amount, (index) => (index === 1 ? networkError() : { body: { orderId: 'c2', text: 'q2' } }));
+      const h = convertOf(amount, (index) => (index === 1 ? networkError() : { body: { orderId: `c${index}`, text: `q${index}` } }));
 
       await h.run();
 
@@ -4078,7 +4222,7 @@ describe('runJob sends no step a second time on its own after an unknown result'
       expect(job).toMatchObject({ status: 'halted', haltReason: HALT_TEXT.notListed });
       expect(job.steps[0]).toMatchObject({ quoteId: 'q1', venueId: null });
       expect(job.steps[0]).not.toHaveProperty('sentAt');
-      expect(h.disk[0]).toMatchObject({ quoteId: 'q1', qty: Number(h.toAmount) });
+      expect(h.disk[0]).toMatchObject({ quoteId: 'q1', qty: h.firstTo });
       expect(h.disk[0].sentAt).toBeTypeOf('number');
       expect(h.count('createCrossexConvertOrder')).toBe(1);
       expect(h.calls.getCrossexOrder).toEqual(Array(lookupWindow).fill('q1'));
@@ -4086,11 +4230,13 @@ describe('runJob sends no step a second time on its own after an unknown result'
       await h.resume();
 
       job = h.jobs.read()!;
+      const chunks = chunkCount(amount);
       expect(job).toMatchObject({ status: 'done', fundsAt: 'HYPERLIQUID' });
-      expect(job.steps[0]).toMatchObject({ quoteId: 'q2', venueId: 'c2', qty: Number(h.toAmount), status: 'done' });
-      expect(h.count('createCrossexConvertOrder')).toBe(2);
-      expect(h.disk.map((step) => step.quoteId)).toEqual(['q1', 'q2']);
-      expect(h.fromAmounts()).toEqual([String(amount), String(amount)]);
+      expect(job.steps).toHaveLength(chunks);
+      expect(job.steps[0]).toMatchObject({ quoteId: 'q2', venueId: 'c2', qty: h.firstTo, status: 'done' });
+      expect(h.count('createCrossexConvertOrder')).toBe(chunks + 1);
+      expect(h.disk.map((step) => step.quoteId)).toEqual(Array.from({ length: chunks + 1 }, (_, index) => `q${index + 1}`));
+      expect(h.fromAmounts()).toEqual([String(h.first), ...job.steps.map((step) => String(step.planned))]);
       expect(h.calls.getCrossexOrder).toEqual(Array(2 * lookupWindow).fill('q1'));
     },
   );
@@ -4167,7 +4313,7 @@ describe('runJob sends no step a second time on its own after an unknown result'
     },
   );
 
-  it.each(RUNGS)(
+  it.each([50, CONVERT_MAX])(
     'a 1.6.1 job file with a %d USDT Convert step, a quote id, no sentAt and no record re-quotes and sends once, as before',
     async (amount) => {
       const h = convertOf(amount, () => ({ body: { orderId: 'c2', text: 'q2' } }), (job, now) => {
@@ -4187,6 +4333,25 @@ describe('runJob sends no step a second time on its own after an unknown result'
       expect(h.count('createCrossexConvertOrder')).toBe(1);
       expect(h.fromAmounts()).toEqual([String(amount)]);
       expect(h.onHalt).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([500_000.01, RUNGS[1]])(
+    'a 1.6.1 job file with one %d USDT Convert step, a quote id, no sentAt and no record looks the quote id up, then halts with the too-big text and sends nothing',
+    async (amount) => {
+      const h = convertOf(amount, () => ({ body: { orderId: 'c2', text: 'q2' } }), (job, now) => {
+        job.steps = [job.steps[0]];
+        Object.assign(job.steps[0], { planned: amount, text: tagFor(job.id, 1), quoteId: 'q0', qty: amount, status: 'running', startedAt: now });
+        job.tagCount = 1;
+      });
+
+      await h.run();
+
+      const job = h.jobs.read()!;
+      expect(job).toMatchObject({ status: 'halted', stepIndex: 0, haltReason: HALT_TEXT.convertTooBig });
+      expect(h.calls.getCrossexOrder).toEqual(Array(lookupWindow).fill('q0'));
+      expect(h.count('createCrossexConvertQuote')).toBe(0);
+      expect(h.count('createCrossexConvertOrder')).toBe(0);
     },
   );
 });
@@ -4439,6 +4604,390 @@ describe('runJob To Gate keeps its first cash read through a refused resend', ()
       expect(job.steps[2].doneAt! - job.steps[2].startedAt!).toBe(3 * POLL_MS);
       expect(h.transfers()).toHaveLength(2);
       expect(h.onHalt).toHaveBeenCalledTimes(2);
+    },
+  );
+});
+
+type ConvertCase = [PlannedStep['from'], PlannedStep['to'], number];
+const CAP_EDGES = [499_999.99, 500_000, 500_000.01, 1_000_000.01];
+const PAIR_CAP_EDGES = [494_999.99, 495_000, 495_000.01, 990_000.01, ...CAP_EDGES];
+const CONVERT_CASES: ConvertCase[] = (
+  [
+    ['CROSSEX', 'HYPERLIQUID', CAP_EDGES],
+    ['LIGHTER', 'CROSSEX', CAP_EDGES],
+    ['HYPERLIQUID', 'LIGHTER', PAIR_CAP_EDGES],
+  ] as const
+).flatMap(([from, to, edges]) => [...LADDER, ...edges].map((amount): ConvertCase => [from, to, amount]));
+const capOf = (from: PlannedStep['from'], to: PlannedStep['to']): number =>
+  from === 'CROSSEX' || to === 'CROSSEX' ? CONVERT_MAX : PAIR_CONVERT_MAX;
+
+describe('convertSteps under the 500,000 Convert cap', () => {
+  it.each(CONVERT_CASES)(
+    'from %s to %s, %d splits into first halves of at most 500,000 that sum to the amount, in order, with each pair together',
+    (from, to, amount) => {
+      const steps = convertSteps(from, to, amount);
+      const paired = from !== 'CROSSEX' && to !== 'CROSSEX';
+      const cap = capOf(from, to);
+      const firsts = paired ? steps.filter((_, index) => index % 2 === 0) : steps;
+      expect(firsts).toHaveLength(chunkCount(amount, cap));
+      expect(steps.map((step) => step.name)).toEqual(
+        firsts.flatMap(() => (paired ? ['Convert to USDT', 'Convert to USDC'] : ['Convert'])),
+      );
+      const chunks = firsts.map((step) => step.planned ?? 0);
+      for (const chunk of chunks) expect(chunk).toBeLessThanOrEqual(cap);
+      if (chunks.length >= 2) for (const chunk of chunks) expect(chunk).toBeGreaterThanOrEqual(cap / 2);
+      for (const chunk of chunks.slice(1)) expect(nearestCents(chunks[0] - chunk)).toBeLessThanOrEqual(0.01);
+      expect([...chunks].sort((a, b) => b - a)).toEqual(chunks);
+      expect(nearestCents(sum(chunks))).toBe(amount);
+      if (paired) {
+        for (let index = 1; index < steps.length; index += 2) {
+          expect(steps[index].planned).toBe(floorCents((steps[index - 1].planned ?? 0) * 0.998));
+        }
+      }
+      for (const step of steps) expect(step).toMatchObject({ from, to, round: null, status: 'pending', text: null, quoteId: null });
+    },
+  );
+
+  it.each([
+    [50, [50]],
+    [499_999.99, [499_999.99]],
+    [500_000, [500_000]],
+    [500_000.01, [250_000.01, 250_000]],
+    [1_000_000, [500_000, 500_000]],
+    [1_000_000.01, [333_333.34, 333_333.34, 333_333.33]],
+    [1_200_000, [400_000, 400_000, 400_000]],
+    [1_469_021.72, [489_673.91, 489_673.91, 489_673.9]],
+    [1_499_999.99, [500_000, 500_000, 499_999.99]],
+    [2_300_000, Array(5).fill(460_000)],
+    [4_896_572.39, [...Array(9).fill(489_657.24), 489_657.23]],
+    [6_000_000, Array(12).fill(500_000)],
+  ])('a Convert of %d splits into %o', (amount, chunks) => {
+    expect(convertSteps('CROSSEX', 'HYPERLIQUID', amount).map((step) => step.planned)).toEqual(chunks);
+  });
+
+  it.each([
+    ['CROSSEX', 'HYPERLIQUID'],
+    ['CROSSEX', 'LIGHTER'],
+    ['HYPERLIQUID', 'CROSSEX'],
+    ['LIGHTER', 'CROSSEX'],
+  ] as [PlannedStep['from'], PlannedStep['to']][])('a Convert from %s to %s of 500,000 is still one Convert', (from, to) => {
+    expect(convertSteps(from, to, 500_000).map(({ name, planned }) => [name, planned])).toEqual([['Convert', 500_000]]);
+  });
+
+  it.each([
+    [494_999.99, [494_999.99]],
+    [495_000, [495_000]],
+    [495_000.01, [247_500.01, 247_500]],
+    [500_000, [250_000, 250_000]],
+    [500_000.01, [250_000.01, 250_000]],
+    [990_000, [495_000, 495_000]],
+    [1_000_000, [333_333.34, 333_333.33, 333_333.33]],
+    [1_200_000, [400_000, 400_000, 400_000]],
+    [6_000_000, [461_538.47, 461_538.47, ...Array(11).fill(461_538.46)]],
+  ])('a Convert between Hyperliquid and Lighter of %d splits into pairs whose Convert to USDT halves are %o', (amount, chunks) => {
+    for (const [from, to] of [
+      ['HYPERLIQUID', 'LIGHTER'],
+      ['LIGHTER', 'HYPERLIQUID'],
+    ] as const) {
+      const steps = convertSteps(from, to, amount);
+      expect(steps.filter((step) => step.name === 'Convert to USDT').map((step) => step.planned)).toEqual(chunks);
+      expect(steps.map((step) => step.name)).toEqual(chunks.flatMap(() => ['Convert to USDT', 'Convert to USDC']));
+    }
+  });
+});
+
+describe('runJob Convert over the 500,000 cap', () => {
+  const quoteSizes = (h: ReturnType<typeof harness>) =>
+    h.sent('createCrossexConvertQuote').map((arg) => arg.crossexConvertQuoteRequest.fromAmount);
+
+  it('a Convert of 1,200,000 USDT into Hyperliquid quotes 400,000 three times, sends three orders, and ends done', async () => {
+    const book = convertBook({ usdt: 1_200_000 });
+    const h = harness(fakeClock(), { route: 'convert', steps: [convert(1_200_000)] }, book.handlers);
+
+    await h.run();
+
+    const job = h.jobs.read()!;
+    expect(job).toMatchObject({ status: 'done', fundsAt: 'HYPERLIQUID' });
+    expect(quoteSizes(h)).toEqual(['400000', '400000', '400000']);
+    expect(h.sent('createCrossexConvertOrder').map((arg) => arg.crossexConvertOrderRequest.quoteId)).toEqual(['q1', 'q2', 'q3']);
+    expect(job.steps.map(({ name, planned, qty, venueId, status }) => ({ name, planned, qty, venueId, status }))).toEqual([
+      { name: 'Convert', planned: 400_000, qty: 399_200, venueId: 'c1', status: 'done' },
+      { name: 'Convert', planned: 400_000, qty: 399_200, venueId: 'c2', status: 'done' },
+      { name: 'Convert', planned: 400_000, qty: 399_200, venueId: 'c3', status: 'done' },
+    ]);
+    expect(book.cash()).toMatchObject({ usdt: 0, hyperliquid: 1_197_600 });
+    expect(h.onHalt).not.toHaveBeenCalled();
+  });
+
+  it('a Convert of 1,200,000 USDC from Hyperliquid to Lighter runs three pairs, and each Convert to USDC sends what its own Convert to USDT returned', async () => {
+    const book = convertBook({ hyperliquid: 1_200_000 });
+    const h = harness(
+      fakeClock(),
+      { route: 'convert', steps: [between('HYPERLIQUID', 'LIGHTER', convert(1_200_000))] },
+      book.handlers,
+    );
+
+    await h.run();
+
+    const job = h.jobs.read()!;
+    expect(job).toMatchObject({ status: 'done', fundsAt: 'LIGHTER' });
+    expect(job.steps.map(({ name, planned, qty }) => ({ name, planned, qty }))).toEqual(
+      Array.from({ length: 3 }, () => [
+        { name: 'Convert to USDT', planned: 400_000, qty: 399_200 },
+        { name: 'Convert to USDC', planned: 399_200, qty: 398_401.6 },
+      ]).flat(),
+    );
+    const requests = h.sent('createCrossexConvertQuote').map(({ crossexConvertQuoteRequest: q }) => [q.exchangeType, q.fromCoin, q.fromAmount]);
+    expect(requests).toEqual(
+      Array.from({ length: 3 }, () => [
+        ['HYPERLIQUID', 'USDC', '400000'],
+        ['LIGHTER', 'USDT', '399200'],
+      ]).flat(),
+    );
+    expect(h.count('createCrossexConvertOrder')).toBe(6);
+    expect(book.cash()).toMatchObject({ usdt: 0, hyperliquid: 0 });
+    expect(book.cash().lighter).toBeCloseTo(1_195_204.8, 6);
+  });
+
+  it.each(CONVERT_CASES)(
+    'a Convert route from %s to %s of %d quotes at most 500,000 at a time and converts the whole amount',
+    async (from, to, amount) => {
+      const book = convertBook({ usdt: 0, hyperliquid: 0, lighter: 0, [WALLET_OF[from]]: amount });
+      const h = harness(fakeClock(), { route: 'convert', steps: [between(from, to, convert(amount))] }, book.handlers);
+
+      await h.run();
+
+      const job = h.jobs.read()!;
+      const paired = from !== 'CROSSEX' && to !== 'CROSSEX';
+      const requests = h.sent('createCrossexConvertQuote').map((arg) => arg.crossexConvertQuoteRequest);
+      const firstCoin = from === 'CROSSEX' ? 'USDT' : 'USDC';
+      const firsts = requests.filter((_, index) => !paired || index % 2 === 0);
+      expect(job.status).toBe('done');
+      const cap = capOf(from, to);
+      expect(job.steps).toHaveLength(chunkCount(amount, cap) * (paired ? 2 : 1));
+      expect(firsts).toHaveLength(chunkCount(amount, cap));
+      for (const q of firsts) expect(q.fromCoin).toBe(firstCoin);
+      for (const q of firsts) expect(Number(q.fromAmount)).toBeLessThanOrEqual(cap);
+      for (const q of requests) expect(Number(q.fromAmount)).toBeLessThanOrEqual(CONVERT_MAX);
+      if (firsts.length >= 2) for (const q of firsts) expect(Number(q.fromAmount)).toBeGreaterThanOrEqual(cap / 2);
+      expect(nearestCents(sum(firsts.map((q) => Number(q.fromAmount))))).toBe(amount);
+      if (paired) {
+        for (let index = 1; index < requests.length; index += 2) {
+          expect(Number(requests[index].fromAmount)).toBe(floorCents(job.steps[index - 1].qty ?? 0));
+        }
+      }
+      expect(Math.abs(book.cash()[WALLET_OF[from]])).toBeLessThan(0.005);
+    },
+  );
+
+  it('a restart after the second 400,000 chunk of a 1,200,000 Convert was sent and its order response lost: Resume finds it by quote id, sends it no second time, then sends the third chunk', async () => {
+    const clock = fakeClock();
+    const book = convertBook({ usdt: 1_200_000 });
+    const q1 = book.sentBefore('USDT', 400_000);
+    const q2 = book.sentBefore('USDT', 400_000);
+    const h = harness(clock, { route: 'convert', steps: [convert(1_200_000)] }, book.handlers, (job) => {
+      doneStep(job, 0, { venueId: 'c1', qty: 399_200, at: clock.now() });
+      job.steps[0].quoteId = q1;
+      Object.assign(job.steps[1], {
+        text: tagFor(job.id, 2),
+        quoteId: q2,
+        qty: 399_200,
+        status: 'running',
+        startedAt: clock.now(),
+        sentAt: clock.now(),
+      });
+      job.tagCount = 2;
+      job.stepIndex = 1;
+      job.fundsAt = 'HYPERLIQUID';
+    });
+    expect(h.jobs.haltIfRunning()).toBe(true);
+    expect(h.jobs.read()).toMatchObject({ status: 'halted', haltReason: HALT_TEXT.restart });
+
+    await resumeRun(h, clock);
+
+    const job = h.jobs.read()!;
+    expect(job).toMatchObject({ status: 'done', fundsAt: 'HYPERLIQUID' });
+    expect(job.steps.map(({ quoteId, venueId, qty, status }) => ({ quoteId, venueId, qty, status }))).toEqual([
+      { quoteId: 'q1', venueId: 'c1', qty: 399_200, status: 'done' },
+      { quoteId: 'q2', venueId: 'c2', qty: 399_200, status: 'done' },
+      { quoteId: 'q3', venueId: 'c3', qty: 399_200, status: 'done' },
+    ]);
+    expect(h.calls.getCrossexOrder).toEqual(['q2', 'c2']);
+    expect(quoteSizes(h)).toEqual(['400000']);
+    expect(h.sent('createCrossexConvertOrder').map((arg) => arg.crossexConvertOrderRequest.quoteId)).toEqual(['q3']);
+    expect(book.cash()).toMatchObject({ usdt: 0, hyperliquid: 1_197_600 });
+  });
+
+  it('a mix job that drops rounds worth 2,000,000 into a pending Convert of 300,000 rebuilds it as 460,000 five times', async () => {
+    const h = harness(fakeClock(), { route: 'mix', steps: [round(1, 1_000_000), round(2, 1_000_000), convert(300_000)] }, {
+      getCrossexAccount: seq(account({ marginBalance: 8, usdt: 2_300_000 })),
+      createCrossexConvertQuote: quotesAt((from) => floorCents(from * 0.998)),
+      createCrossexConvertOrder: ordersInTurn(),
+    });
+
+    await h.run();
+
+    const job = h.jobs.read()!;
+    expect(job.status).toBe('done');
+    expect(job.steps.map(({ name, round: r, planned }) => ({ name, round: r, planned }))).toEqual(
+      Array.from({ length: 5 }, () => ({ name: 'Convert', round: null, planned: 460_000 })),
+    );
+    expect(quoteSizes(h)).toEqual(Array(5).fill('460000'));
+    expect(h.count('createCrossexOrder')).toBe(0);
+    expect(h.count('createCrossexTransfer')).toBe(0);
+  });
+
+  it('a mix job that drops a 700,000 round into a 500,000 Convert between Hyperliquid and Lighter rebuilds it as three pairs of 400,000, next to each other', async () => {
+    const across = (step: Planned) => between('HYPERLIQUID', 'LIGHTER', step);
+    const h = harness(fakeClock(), { route: 'mix', steps: [across(round(1, 700_000)), across(convert(500_000))] }, {
+      getCrossexAccount: seq(account({ marginBalance: 8, hyperliquid: 1_200_000, usdt: 1_200_000 })),
+      createCrossexConvertQuote: quotesAt((from) => floorCents(from * 0.998)),
+      createCrossexConvertOrder: ordersInTurn(),
+    });
+
+    await h.run();
+
+    const job = h.jobs.read()!;
+    expect(job).toMatchObject({ status: 'done', fundsAt: 'LIGHTER' });
+    expect(job.steps.map(({ name, planned }) => [name, planned])).toEqual(
+      Array.from({ length: 3 }, () => [
+        ['Convert to USDT', 400_000],
+        ['Convert to USDC', 399_200],
+      ]).flat(),
+    );
+    for (const size of quoteSizes(h)) expect(Number(size)).toBeLessThanOrEqual(CONVERT_MAX);
+  });
+
+  it('a round dropped after both 500,000 chunks of its move were sent adds a new Convert after them and leaves the sent chunks alone', async () => {
+    const clock = fakeClock();
+    const h = harness(
+      clock,
+      { route: 'mix', steps: [convert(1_000_000), round(1, 30)] },
+      {
+        getCrossexAccount: seq(account({ marginBalance: 8 })),
+        createCrossexConvertQuote: quotesAt((from) => floorCents(from * 0.998)),
+        createCrossexConvertOrder: ordersInTurn(),
+      },
+      (job) => {
+        doneStep(job, 0, { venueId: 'c-a', qty: 499_000, at: clock.now() });
+        doneStep(job, 1, { venueId: 'c-b', qty: 499_000, at: clock.now() });
+        job.stepIndex = 2;
+        job.fundsAt = 'HYPERLIQUID';
+      },
+    );
+
+    await h.run();
+
+    const job = h.jobs.read()!;
+    expect(job.status).toBe('done');
+    expect(job.steps.map(({ name, planned, venueId, qty }) => [name, planned, venueId, qty])).toEqual([
+      ['Convert', 500_000, 'c-a', 499_000],
+      ['Convert', 500_000, 'c-b', 499_000],
+      ['Convert', 30, 'c1', 29.94],
+    ]);
+    expect(quoteSizes(h)).toEqual(['30']);
+  });
+
+  it.each([
+    ['HYPERLIQUID', 'CROSSEX', 1_000_000, 500_000],
+    ['HYPERLIQUID', 'LIGHTER', 990_000, 495_000],
+  ] as [PlannedStep['from'], PlannedStep['to'], number, number][])(
+    'a Convert from %s to %s of %d with a wallet holding %d plus 0.004 sells that, and its empty second chunk ends at 0 with no quote',
+    async (from, to, amount, held) => {
+      const book = convertBook({ hyperliquid: held + 0.004 });
+      const h = harness(fakeClock(), { route: 'convert', steps: [between(from, to, convert(amount))] }, book.handlers);
+
+      await h.run();
+
+      const job = h.jobs.read()!;
+      const pair = to !== 'CROSSEX';
+      const requests = h.sent('createCrossexConvertQuote').map((arg) => arg.crossexConvertQuoteRequest);
+      expect(job).toMatchObject({ status: 'done', fundsAt: to });
+      expect(h.onHalt).not.toHaveBeenCalled();
+      expect(requests.filter((q) => q.fromCoin === 'USDC').map((q) => q.fromAmount)).toEqual([String(held)]);
+      for (const q of requests) expect(Number(q.fromAmount)).toBeGreaterThan(0);
+      expect(job.steps).toHaveLength(pair ? 4 : 2);
+      for (const step of job.steps.slice(pair ? 2 : 1)) expect(step).toMatchObject({ qty: 0, status: 'done', quoteId: null });
+    },
+  );
+
+  it('a Convert of 990,000 from Hyperliquid to Lighter at a USDC bid of 1.0121 runs two pairs of 495,000, and no Convert to USDC sends over 500,000', async () => {
+    const book = convertBook({ hyperliquid: 990_000 }, [], { USDC: 1.0121 * 0.998, USDT: 0.998 / 1.0121 });
+    const h = harness(
+      fakeClock(),
+      { route: 'convert', steps: [between('HYPERLIQUID', 'LIGHTER', convert(990_000))] },
+      { ...book.handlers, listTickers: tickerAt('1.0121', '1.0122') },
+    );
+
+    await h.run();
+
+    const job = h.jobs.read()!;
+    expect(job).toMatchObject({ status: 'done', fundsAt: 'LIGHTER' });
+    const requests = h.sent('createCrossexConvertQuote').map((arg) => arg.crossexConvertQuoteRequest);
+    expect(requests.filter((q) => q.fromCoin === 'USDC').map((q) => q.fromAmount)).toEqual(['495000', '495000']);
+    const seconds = requests.filter((q) => q.fromCoin === 'USDT').map((q) => Number(q.fromAmount));
+    expect(seconds).toEqual([499_987.52, 499_987.52]);
+    for (const amount of seconds) expect(amount).toBeLessThanOrEqual(CONVERT_MAX);
+    expect(h.count('createCrossexConvertOrder')).toBe(4);
+    expect(h.onHalt).not.toHaveBeenCalled();
+  });
+
+  it('a Convert of 990,000 from Hyperliquid to Lighter at a USDC bid of 1.0122 halts its first Convert to USDC with the too-big text and asks for no second quote', async () => {
+    const book = convertBook({ hyperliquid: 990_000 }, [], { USDC: 1.0122 * 0.998, USDT: 0.998 / 1.0122 });
+    const h = harness(
+      fakeClock(),
+      { route: 'convert', steps: [between('HYPERLIQUID', 'LIGHTER', convert(990_000))] },
+      { ...book.handlers, listTickers: tickerAt('1.0122', '1.0123') },
+    );
+
+    await h.run();
+
+    const job = h.jobs.read()!;
+    expect(job).toMatchObject({ status: 'halted', stepIndex: 1, fundsAt: 'CROSSEX', haltReason: HALT_TEXT.convertTooBig });
+    expect(job.steps[0]).toMatchObject({ status: 'done', planned: 495_000 });
+    expect(job.steps[0].qty).toBeGreaterThan(CONVERT_MAX);
+    expect(job.steps[1]).toMatchObject({ quoteId: null, venueId: null, qty: null });
+    expect(h.count('createCrossexConvertQuote')).toBe(1);
+    expect(h.count('createCrossexConvertOrder')).toBe(1);
+    expect(book.cash().usdt).toBeGreaterThan(CONVERT_MAX);
+    expect(h.onHalt).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['CROSSEX', 'HYPERLIQUID', 500_000.01],
+    ['CROSSEX', 'HYPERLIQUID', 6_000_000],
+    ['HYPERLIQUID', 'CROSSEX', 1_000_000],
+    ['HYPERLIQUID', 'LIGHTER', 500_000.01],
+    ['HYPERLIQUID', 'LIGHTER', 6_000_000],
+  ] as [PlannedStep['from'], PlannedStep['to'], number][])(
+    'a job saved by an older version with one Convert from %s to %s of %d halts with the too-big text, asks for no quote, and a Resume halts the same way',
+    async (from, to, amount) => {
+      const clock = fakeClock();
+      const book = convertBook({ usdt: 2 * amount, hyperliquid: 2 * amount });
+      const legacy = (job: Job): void => {
+        const pair = from !== 'CROSSEX' && to !== 'CROSSEX';
+        job.steps = job.steps.slice(0, pair ? 2 : 1);
+        job.steps[0].planned = amount;
+        if (pair) job.steps[1].planned = floorCents(amount * 0.998);
+      };
+      const h = harness(clock, { route: 'convert', steps: [between(from, to, convert(amount))] }, book.handlers, legacy);
+
+      await h.run();
+
+      let job = h.jobs.read()!;
+      expect(job).toMatchObject({ status: 'halted', stepIndex: 0, haltReason: HALT_TEXT.convertTooBig });
+      expect(job.haltReason).toBe('Gate takes at most 500,000 in one Convert. Abandon this rebalance and start a new one.');
+      expect(job.steps[0]).toMatchObject({ quoteId: null, venueId: null, qty: null });
+      expect(h.onHalt).toHaveBeenCalledTimes(1);
+
+      await resumeRun(h, clock);
+
+      job = h.jobs.read()!;
+      expect(job).toMatchObject({ status: 'halted', stepIndex: 0, haltReason: HALT_TEXT.convertTooBig });
+      expect(h.count('createCrossexConvertQuote')).toBe(0);
+      expect(h.count('createCrossexConvertOrder')).toBe(0);
+      expect(h.count('listTickers')).toBe(0);
+      expect(book.cash()).toMatchObject({ usdt: 2 * amount, hyperliquid: 2 * amount });
     },
   );
 });

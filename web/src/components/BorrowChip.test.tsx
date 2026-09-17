@@ -19,6 +19,10 @@ function factLines(card: HTMLElement, label: string): string[] {
   return [...(dt?.parentElement?.querySelectorAll('dd:not([data-fact-rows])') ?? [])].map((dd) => dd.textContent ?? '');
 }
 
+function labels(card: HTMLElement): string[] {
+  return [...card.querySelectorAll('dt')].map((dt) => dt.textContent ?? '');
+}
+
 function factRows(card: HTMLElement, label: string): { name: string; value: string }[] {
   const dt = within(card).getByText(label).closest('dt');
   const grid = dt?.parentElement?.querySelector('[data-fact-rows]');
@@ -29,11 +33,6 @@ function factRows(card: HTMLElement, label: string): { name: string; value: stri
   return out;
 }
 
-function legLines(card: HTMLElement): string[] {
-  const dt = within(card).getByText('For').closest('dt');
-  return [...(dt?.parentElement?.querySelectorAll('dd span') ?? [])].map((span) => span.textContent ?? '');
-}
-
 describe('BorrowChip', () => {
   it('hover facts for one borrow', async () => {
     server.use(rebalanceHandler(rebalanceViews.accountA));
@@ -42,7 +41,7 @@ describe('BorrowChip', () => {
     const card = await hoverPill('Borrowing 147.05 USDC');
     expect(factLines(card, 'Borrowing')).toEqual(['147.05 USDC', 'USDC · Hyperliquid']);
     expect(within(card).queryByText('Held against the borrow')).toBeNull();
-    expect(legLines(card)).toEqual(['Hyperliquid legs']);
+    expect(labels(card)).toEqual(['Borrowing']);
     expect(within(card).queryByText('Lent by Gate')).toBeNull();
   });
 
@@ -75,7 +74,7 @@ describe('BorrowChip', () => {
 
     const card = await hoverPill('Borrowing 612.35 USDT');
     expect(factLines(card, 'Borrowing')).toEqual(['612.35 USDT', 'USDT · CrossEx']);
-    expect(legLines(card)).toEqual(['Gate, Binance, OKX and Bybit legs']);
+    expect(labels(card)).toEqual(['Borrowing']);
   });
 
   it('Lighter borrow names the Lighter wallet', async () => {
@@ -86,7 +85,7 @@ describe('BorrowChip', () => {
 
     const card = await hoverPill('Borrowing 500.00 USDC');
     expect(factLines(card, 'Borrowing')).toEqual(['500.00 USDC', 'USDC · Lighter']);
-    expect(legLines(card)).toEqual(['Lighter legs']);
+    expect(labels(card)).toEqual(['Borrowing']);
     expect(within(card).queryByText('Held against the borrow')).toBeNull();
   });
 
@@ -123,14 +122,14 @@ describe('BorrowChip', () => {
     expect(within(card).queryByRole('table')).toBeNull();
   });
 
-  it('two wallets show both legs lines in the Borrowing order', async () => {
+  it('two wallets name each wallet in the Borrowing rows, with no For column', async () => {
     server.use(rebalanceHandler(rebalanceViews.twoBorrows));
     renderWithClient(<BorrowChip onOpen={vi.fn()} />);
 
     const card = await hoverPill('Borrowing 244.00 USDC');
     expect(factRows(card, 'Borrowing').map((row) => row.name)).toEqual(['Lighter', 'Hyperliquid']);
-    expect(legLines(card)).toEqual(['Lighter legs', 'Hyperliquid legs']);
-    expect([...card.querySelectorAll('dt')].map((dt) => dt.textContent)).toEqual(['Borrowing', 'For']);
+    expect(labels(card)).toEqual(['Borrowing']);
+    expect(within(card).queryByText(/legs$/)).toBeNull();
   });
 
   it('two coins fall back to a dollar total', async () => {

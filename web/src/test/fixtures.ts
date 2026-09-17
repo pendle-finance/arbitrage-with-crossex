@@ -2002,7 +2002,7 @@ export const rebalanceViews = {
   exampleDHaltedConvert: {
     buckets: EXAMPLE_D_MID_BUCKETS, plan: EXAMPLE_D_MID_PLAN,
     job: {
-      ...EXAMPLE_D_CONVERT_JOB, status: 'halted', haltReason: 'Convert quote was more than 0.25% under the Gate spot price.',
+      ...EXAMPLE_D_CONVERT_JOB, status: 'halted', haltReason: 'Convert quote was more than 0.3% under the Gate spot price.',
       updatedAt: REBALANCE_NOW - 2_000,
     },
   },

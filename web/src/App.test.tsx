@@ -324,7 +324,7 @@ describe('borrow pill', () => {
     expect(tab(/^Balances/)).toHaveAttribute('aria-selected', 'true');
   });
 
-  it('shows a USDT borrow the same way, naming the Gate, Binance, OKX and Bybit legs', async () => {
+  it('shows a USDT borrow the same way, naming the CrossEx wallet', async () => {
     mockApp();
     const usdt: RebalanceBucket = { ...borrowed(300), coin: 'USDT', venue: 'CROSSEX' };
     const usdc: RebalanceBucket = { ...borrowed(0), cash: 500, equity: 500 };
@@ -335,7 +335,8 @@ describe('borrow pill', () => {
     await userEvent.hover(pill);
 
     const card = await screen.findByRole('tooltip');
-    expect(within(card).getByText('Gate, Binance, OKX and Bybit legs')).toBeInTheDocument();
+    expect(within(card).getByText('USDT · CrossEx')).toBeInTheDocument();
+    expect(within(card).queryByText('For')).toBeNull();
   });
 
   it('puts the nearest liquidation line in the margin gauges hover', async () => {

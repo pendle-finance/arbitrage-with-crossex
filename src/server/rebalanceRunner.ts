@@ -9,7 +9,7 @@ import {
   buyableUsdc,
   buyCostUsdt,
   ceilCents,
-  CONVERT_RATE,
+  CONVERT_MAX,
   DUST_USDC,
   fit,
   floorCents,
@@ -74,7 +74,7 @@ export const POLL_MS = 1_000;
 export const BALANCE_LAG_MS = 120_000;
 export const LOOKUP_RETRY_MS = 10_000;
 export const LOOKUP_WINDOW_MS = 120_000;
-export const QUOTE_FLOOR = 0.9975;
+export const QUOTE_FLOOR = 0.997;
 export const TRANSFER_STEP = String(MIN_TRANSFER);
 const CENT_STEP = '0.01';
 const SWEEP_PAGE_SIZE = 100;
@@ -262,17 +262,25 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
   };
 
   const growConvert = (amount: number, current: Step): void => {
-    const converts = job.steps.filter(
-      (step, index) => index >= job.stepIndex && step.round === null && step.name.startsWith('Convert') && sameMove(current)(step),
+    const pending = job.steps.filter(
+      (step, index) =>
+        index >= job.stepIndex &&
+        step.round === null &&
+        step.name.startsWith('Convert') &&
+        step.status === 'pending' &&
+        sameMove(current)(step),
     );
-    if (converts.length === 0) {
+    if (pending.length === 0) {
       const at = Math.max(job.stepIndex, afterLast(sameMove(current)));
       job.steps.splice(at, 0, ...convertSteps(current.from, current.to, amount));
       return;
     }
-    const [first, second] = converts;
-    first.planned = nearestCents((first.planned ?? 0) + amount);
-    if (second) second.planned = floorCents(first.planned * (1 - CONVERT_RATE));
+    const given = pending
+      .filter((step) => step.name !== 'Convert to USDC')
+      .reduce((total, step) => total + (step.planned ?? 0), 0);
+    const at = job.steps.indexOf(pending[pending.length - 1]) + 1 - pending.length;
+    for (const step of pending) job.steps.splice(job.steps.indexOf(step), 1);
+    job.steps.splice(at, 0, ...convertSteps(current.from, current.to, nearestCents(given + amount)));
   };
 
   const dropRounds = (current: Step): void => {
@@ -489,7 +497,10 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
       halt(HALT_TEXT.usdtBelowZero);
       return null;
     }
-    if (converted && amount <= 0) {
+    const chunkDone = job.steps
+      .slice(0, job.stepIndex)
+      .some((earlier) => earlier.round === null && earlier.name.startsWith('Convert') && earlier.status === 'done' && sameMove(step)(earlier));
+    if (amount <= 0 && (converted || chunkDone)) {
       finish(step, 0, spec.dest);
       return null;
     }
@@ -650,6 +661,10 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
   };
 
   const sendConvert = async (step: Step, amount: number): Promise<void> => {
+    if (amount > CONVERT_MAX) {
+      halt(HALT_TEXT.convertTooBig);
+      return;
+    }
     const spec = convertSpec(step);
     const gives: TransferCoin = spec.toCoin === 'USDC' ? 'USDC' : 'USDT';
     let ticker = await pricedTicker(gives);

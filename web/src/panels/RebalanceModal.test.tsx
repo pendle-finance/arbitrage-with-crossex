@@ -636,7 +636,7 @@ const SHORT_6M = doneJob('loop', 6_000_000, 3_000, [
 
 const QUOTE_6M = doneJob('convert', 6_000_000, 12_000, [
   landedStep('Sell USDC', 250_000, null, USDC_WAY),
-  landedStep('Convert', 5_985_000, null, USDC_WAY),
+  ...Array.from({ length: 12 }, () => landedStep('Convert', 498_500, null, USDC_WAY)),
 ]);
 
 const HELD_SHORT_6M = doneJob('loop', 4_896_572.39, 1_000, [
@@ -692,7 +692,7 @@ describe('RebalanceModal moved amount', () => {
     ['$50 that all landed', 'Balanced', '$49.95', FULL_50],
     ['$50 that moved 29.97', 'Done', '$29.97', SHORT_50],
     ['$6M with a round of 4,896,572.39 unsold', 'Done', '$1,103,426.61', SHORT_6M],
-    ['$6M Convert quoted 0.25% under spot', 'Balanced', '$5,985,000.00', QUOTE_6M],
+    ['$6M Convert in 12 chunks of 500,000, each quoted 0.3% under spot', 'Balanced', '$5,982,000.00', QUOTE_6M],
     ['the short Account A fixture', 'Done', '$105.56', rebalanceViews.accountADoneShort.job],
     ['$6M round that sold held cash and left 1,958,628.96', 'Done', '$2,937,943.43', HELD_SHORT_6M],
     ['$50 round that sold held cash and left 20', 'Done', '$30.00', HELD_SHORT_50],
@@ -1027,12 +1027,12 @@ describe('RebalanceModal where the money is', () => {
         ...done.job,
         status: 'halted',
         stepIndex: 1,
-        haltReason: 'Convert quote was more than 0.25% under the Gate spot price.',
+        haltReason: 'Convert quote was more than 0.3% under the Gate spot price.',
         steps: [done.job.steps[0], { ...done.job.steps[1], qty: null, status: 'pending', startedAt: null, doneAt: null }],
       },
     };
     const { next } = showPolled([halted, done]);
-    expect(screen.getByRole('alert').textContent).toBe('Stopped at Convert.Convert quote was more than 0.25% under the Gate spot price.');
+    expect(screen.getByRole('alert').textContent).toBe('Stopped at Convert.Convert quote was more than 0.3% under the Gate spot price.');
     await next();
     expect(screen.getByText('Balanced')).toBeInTheDocument();
     expect(facts()).toEqual({ Route: 'Convert', Moved: '$498.00', Took: '2s', Cost: '$2.00' });

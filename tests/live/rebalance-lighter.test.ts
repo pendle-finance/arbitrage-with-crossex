@@ -35,6 +35,7 @@ import { gateVenue } from '../../src/engine/venueGate';
 import { buildApp } from '../../src/server/app';
 import { TtlCache } from '../../src/server/cache';
 import {
+  convertSteps,
   HALT_TEXT,
   inTransitOf,
   JobFile,
@@ -71,6 +72,8 @@ const BORROW_OVER_EQUITY_USDC = 12;
 const LIGHTER_TO_USDT_MIN = 11;
 const HL_TO_LIGHTER_MIN = 12;
 const HL_TO_LIGHTER_VAR = 'LIVE_HL_TO_LIGHTER';
+const VENUE_PART = 12;
+const USDT_PART = 6;
 const LIGHTER_TO_USDT_VAR = 'LIVE_LIGHTER_TO_USDT';
 const CONVERT_ARRIVES = 11.97;
 const MIX_COST_USD = 1.08;
@@ -428,6 +431,73 @@ const runLiveJob = async (clients: Clients, input: JobInput): Promise<Ran> => {
   const after = await readAssets(clients);
   logBalances('after the job', after);
   return { job, before, after };
+};
+
+const runConvertParts = async (clients: Clients, move: Move, parts: number[]): Promise<Ran> => {
+  const dataDir = newDir('rebalance-lighter-');
+  const jobs = new JobFile(dataDir);
+  const amount = nearestCents(parts.reduce((total, part) => total + part, 0));
+  const arrives = floorCents(amount * (1 - CONVERT_RATE) ** 2);
+  const input = { route: 'convert' as const, steps: [planConvert(amount, arrives, move)], amount, costUsd: nearestCents(amount - arrives) };
+  const job = newJob({ ...input, target: [], userId: null }, Date.now());
+  job.steps = parts.flatMap((part) => convertSteps(move.from, move.to, part));
+  const before = await readAssets(clients);
+  logBalances('before the job', before);
+  jobs.write(job);
+  console.log(`  ▸ job ${job.id} with ${job.steps.length} Convert steps written to ${dataDir}`);
+  await runLogged(jobs, job, clients, dataDir);
+  const after = await readAssets(clients);
+  logBalances('after the job', after);
+  return { job, before, after };
+};
+
+const convertInParts = async (move: Move, part: number, symbols: string[]): Promise<void> => {
+  const clients = assertCredentials();
+  const before = await readAssets(clients);
+  const fromWallet = move.from === 'CROSSEX' ? USDT_WALLET : poolWallet(move.from);
+  const cash = balanceOf(before, fromWallet);
+  if (!(cash >= 2 * part)) {
+    throw new Error(`${fromWallet} cash ${cash} is under ${2 * part}. Nothing was sent.`);
+  }
+  if (!(balanceOf(before, USDT_WALLET) >= 0)) {
+    throw new Error('USDT/CROSSEX cash is under 0. Nothing was sent.');
+  }
+  if (!(balanceOf(before, GATE_WALLET) < DUST_USDC)) {
+    throw new Error(`USDC/GATE cash is not under ${DUST_USDC}. The job would add a Sell USDC step. Nothing was sent.`);
+  }
+
+  budget.beforeOrder(2 * part, `Convert ${move.from} to ${move.to} in two parts`);
+
+  const calls: Call[] = [];
+  const { job, before: start, after } = await runConvertParts(recording(clients, calls), move, [part, part]);
+  const twoHalves = symbols.length === 2;
+  const planned: Planned[] = twoHalves
+    ? [0, 1].flatMap(() => [
+        { name: 'Convert to USDT' as const, ...move, round: null, symbol: symbols[0] },
+        { name: 'Convert to USDC' as const, ...move, round: null, symbol: symbols[1] },
+      ])
+    : [0, 1].map(() => ({ name: 'Convert' as const, ...move, round: null, symbol: symbols[0] }));
+  const steps = await expectJob(clients, job, planned);
+  const quotes = callsOf(calls, 'quote');
+  const orders = callsOf(calls, 'convert');
+  expect(quotes, 'one quote per Convert step').toHaveLength(steps.length);
+  expect(orders, 'one Convert order per step').toHaveLength(steps.length);
+  expect(new Set(orders.map((call) => call.key)).size, 'no quote id sent twice').toBe(orders.length);
+  for (const quote of quotes) expect(quote.amount, 'each quote is at most one part').toBeLessThanOrEqual(part);
+  if (twoHalves) {
+    for (const index of [1, 3]) {
+      expect(quotes[index]?.amount, `Convert to USDC ${index} sends what its own Convert to USDT returned`).toBeLessThanOrEqual(
+        floorCents(qtyOf(steps[index - 1])),
+      );
+      expect(quotes[index]?.amount).toBeGreaterThanOrEqual(floorCents(qtyOf(steps[index - 1])) - FEE_TOLERANCE);
+    }
+  }
+  expect(job.fundsAt).toBe(move.to);
+  const landed = steps.filter((step) => step.name !== 'Convert to USDT').reduce((total, step) => total + qtyOf(step), 0);
+  const toWallet = move.to === 'CROSSEX' ? USDT_WALLET : poolWallet(move.to);
+  expectNear(`${fromWallet} change`, changeOf(start, after, fromWallet), -2 * part, MOVE_TOLERANCE);
+  expectNear(`${toWallet} change`, changeOf(start, after, toWallet), landed, MOVE_TOLERANCE);
+  if (twoHalves) expectNear('USDT/CROSSEX change', changeOf(start, after, USDT_WALLET), 0, MOVE_TOLERANCE);
 };
 
 const writeRunningJob = (input: JobInput & { userId: string | null }) => {
@@ -1083,6 +1153,16 @@ describe.skipIf(process.env.REBALANCE_LIGHTER !== '1')('live rebalance Lighter p
       'LIGHTER_CONVERT_USDC_USDT',
       'HYPERLIQUID_CONVERT_USDT_USDC',
     ]);
+  }, 1_500_000);
+
+  it('Convert in two parts, each way between Hyperliquid and Lighter and between CrossEx and Hyperliquid', async () => {
+    assertLiveTestsEnabled();
+    assertAck();
+    assertNotionalCeiling();
+    await convertInParts({ from: 'HYPERLIQUID', to: 'LIGHTER' }, VENUE_PART, ['HYPERLIQUID_CONVERT_USDC_USDT', 'LIGHTER_CONVERT_USDT_USDC']);
+    await convertInParts({ from: 'LIGHTER', to: 'HYPERLIQUID' }, VENUE_PART, ['LIGHTER_CONVERT_USDC_USDT', 'HYPERLIQUID_CONVERT_USDT_USDC']);
+    await convertInParts({ from: 'CROSSEX', to: 'HYPERLIQUID' }, USDT_PART, ['HYPERLIQUID_CONVERT_USDT_USDC']);
+    await convertInParts({ from: 'HYPERLIQUID', to: 'CROSSEX' }, USDT_PART, ['HYPERLIQUID_CONVERT_USDC_USDT']);
   }, 1_500_000);
 
   it('a Lighter wallet borrow is repaid by a Convert into Lighter', async () => {

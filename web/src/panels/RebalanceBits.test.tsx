@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
+import type { RebalanceJob, RebalanceStep } from '../api/types';
 import { rebalanceViews } from '../test/fixtures';
 import { BAR_CAPTION, HOVER_TARGET, SHARE_CAPTION } from './rebalanceCopy';
 import * as bits from './RebalanceBits';
@@ -267,5 +268,87 @@ describe('ShareColumn', () => {
     expect(screen.getByText('Position share')).toBeInTheDocument();
     expect(screen.getByText('50% · $1,873')).toBeInTheDocument();
     expect(screen.getByText('6% · $240')).toBeInTheDocument();
+  });
+});
+
+describe('jobRows for a Convert in chunks', () => {
+  const base = rebalanceViews.accountADone.job!;
+  const chunk = (name: string, planned: number, qty: number | null, status: RebalanceStep['status'], to: RebalanceStep['to'] = 'HYPERLIQUID'): RebalanceStep => ({
+    ...base.steps[0],
+    name,
+    from: to === 'LIGHTER' ? 'HYPERLIQUID' : 'CROSSEX',
+    to,
+    round: null,
+    planned,
+    qty,
+    status,
+    arrives: null,
+    borrowLeft: null,
+    startedAt: status === 'pending' ? null : 1_000,
+    doneAt: status === 'done' ? 2_000 : null,
+  });
+  const jobOf = (steps: RebalanceStep[], stepIndex: number, status: RebalanceJob['status']): RebalanceJob => ({
+    ...base,
+    route: 'convert',
+    status,
+    stepIndex,
+    steps,
+    updatedAt: 2_000,
+  });
+
+  it('a done Convert of three chunks shows one row with the summed move and the summed arrival', () => {
+    const job = jobOf(
+      [chunk('Convert', 400_000, 399_200, 'done'), chunk('Convert', 400_000, 399_200, 'done'), chunk('Convert', 400_000, 399_200, 'done')],
+      2,
+      'done',
+    );
+
+    const rows = bits.jobRows(job, 3_000, null);
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ label: 'Convert', state: 'done', sub: '1,197,600.00 arrives' });
+    expect(rows[0].text).toContain('1,200,000.00');
+  });
+
+  it('a running Convert of three chunks shows the summed move and no arrival', () => {
+    const job = jobOf(
+      [chunk('Convert', 400_000, 399_200, 'done'), chunk('Convert', 400_000, 399_200, 'running'), chunk('Convert', 400_000, null, 'pending')],
+      1,
+      'running',
+    );
+
+    const rows = bits.jobRows(job, 3_000, null);
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ label: 'Convert', state: 'running', sub: '' });
+    expect(rows[0].text).toContain('1,200,000.00');
+  });
+
+  it('a done Convert of two pairs between Hyperliquid and Lighter moves the Convert to USDT sum and lands the Convert to USDC sum', () => {
+    const job = jobOf(
+      [
+        chunk('Convert to USDT', 300_000, 299_400, 'done', 'LIGHTER'),
+        chunk('Convert to USDC', 299_400, 298_801.2, 'done', 'LIGHTER'),
+        chunk('Convert to USDT', 300_000, 299_400, 'done', 'LIGHTER'),
+        chunk('Convert to USDC', 299_400, 298_801.2, 'done', 'LIGHTER'),
+      ],
+      3,
+      'done',
+    );
+
+    const rows = bits.jobRows(job, 3_000, null);
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ state: 'done', sub: '597,602.40 arrives' });
+    expect(rows[0].text).toContain('600,000.00');
+  });
+
+  it('one Convert chunk shows the same row as before chunks existed', () => {
+    const job = jobOf([chunk('Convert', 12, 11.97, 'done')], 0, 'done');
+
+    const [row] = bits.jobRows(job, 3_000, null);
+
+    expect(row).toMatchObject({ state: 'done', sub: '11.97 arrives' });
+    expect(row.text).toContain('12.00');
   });
 });
