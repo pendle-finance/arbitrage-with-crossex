@@ -75,9 +75,9 @@ export const BALANCE_LAG_MS = 120_000;
 export const LOOKUP_RETRY_MS = 10_000;
 export const LOOKUP_WINDOW_MS = 120_000;
 export const QUOTE_FLOOR = 0.997;
-/** Gate caps order requests at 10 per 10 s per account (spot API rules, 2023-07), and
- * run 26 saw the 11th Convert order refused within about 6 s. 2 s between Convert
- * quotes keeps a run at 5 quotes and 5 orders per 10 s. */
+/** Gate's CrossEx API doc caps Convert orders at 10 requests per 10 s, and run 26 saw
+ * the 11th Convert order refused within about 6 s. 2 s between Convert quotes keeps a
+ * run at 5 orders per 10 s. The same doc caps Convert quotes at 100 per day. */
 export const CONVERT_GAP_MS = 2_000;
 export const TRANSFER_STEP = String(MIN_TRANSFER);
 const CENT_STEP = '0.01';
@@ -665,6 +665,7 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
   };
 
   let lastQuoteAt = Number.NEGATIVE_INFINITY;
+  let quoting = false;
 
   const sendConvert = async (step: Step, amount: number): Promise<void> => {
     if (amount > CONVERT_MAX) {
@@ -685,6 +686,7 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
       return;
     }
     lastQuoteAt = deps.now();
+    quoting = true;
     const { body: quote } = await crossEx().createCrossexConvertQuote({
       crossexConvertQuoteRequest: {
         exchangeType: spec.venue,
@@ -693,6 +695,7 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
         fromAmount: stripZeros(roundToStep(amount, CENT_STEP, 'down')),
       },
     });
+    quoting = false;
     const toAmount = Number(quote.toAmount);
     if (!(toAmount >= quoteFloor(amount, gives, ticker))) {
       halt(HALT_TEXT.poorQuote);
@@ -757,6 +760,7 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
       }
       let phase: 'poll' | 'lookup' | 'read' | 'send' = 'poll';
       let amount: number | null = null;
+      quoting = false;
       try {
         if (step.venueId !== null) {
           await poll(step, spec, step.venueId);
@@ -805,13 +809,16 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
         const notFound = c.httpStatus === 404 || NOT_FOUND.test(c.label ?? '');
         if (phase === 'send' && (isRefusal(c) || c.category === 'rate-limited')) {
           delete step.sentAt;
+          // Gate refused the Convert, so the quoted amount never landed.
+          if (spec.kind === 'convert') step.qty = null;
           deps.jobs.write(job);
         }
         // A rate limit at send stops the run, so the trader sees it and Gate
         // is not asked again each second. The tag and quote id stay, so Resume
-        // looks the send up before it sends again.
+        // looks the send up before it sends again. A refused quote means the
+        // day's 100 Convert quotes are used up.
         if (phase === 'send' && c.category === 'rate-limited') {
-          halt(HALT_TEXT.rateLimited);
+          halt(quoting ? HALT_TEXT.quotesUsed : HALT_TEXT.rateLimited);
         } else if (c.retryable || (phase === 'poll' && notFound)) {
           await deps.sleep(POLL_MS);
         } else if (phase !== 'send' || isRefusal(c)) {
@@ -868,6 +875,10 @@ export async function runTransfer(deps: TransferRunnerDeps): Promise<void> {
       venueId = await sendTransfer(crossEx(), { coin, amount, from, to, text });
     } catch (err) {
       const classified = classifyGateError(err);
+      if (classified.category === 'rate-limited') {
+        end('failed', null, HALT_TEXT.transferRateLimited);
+        return;
+      }
       if (isRefusal(classified)) {
         if (isSpotShortfall(transfer.from, classified)) {
           end('failed', null, spotShortfallFailText(classified.message, transfer.coin, transfer.amount));

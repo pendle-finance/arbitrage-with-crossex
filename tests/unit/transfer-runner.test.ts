@@ -243,6 +243,23 @@ describe('runTransfer sends once', () => {
     expect(h.onDisk()).toMatchObject({ status: 'failed', failText: 'Gate spot has no USDC.', venueId: null });
   });
 
+  it.each([
+    ['with a label', gateError(429, 'TOO_MANY_REQUESTS', 'Too Many Requests')],
+    ['without a label', gateError(429, '', '')],
+  ])('a rate-limited send %s fails with the rate-limit text and sends once', async (_, refusal) => {
+    const h = harness(fakeClock(), {}, {
+      createCrossexTransfer: seq(refusal, tx('9')),
+      listCrossexTransfers: seq(rows()),
+    });
+
+    await h.run();
+
+    expect(h.onDisk()).toMatchObject({ status: 'failed', failText: HALT_TEXT.transferRateLimited, venueId: null });
+    expect(h.onDisk().failText).toBe('Gate is rate-limiting this account. Nothing was sent. Try again in a minute.');
+    expect(h.count('createCrossexTransfer')).toBe(1);
+    expect(h.count('listCrossexTransfers')).toBe(0);
+  });
+
   it('another refused send fails with the Gate message', async () => {
     const h = harness(fakeClock(), {}, {
       createCrossexTransfer: seq(

@@ -637,6 +637,10 @@ const QUOTE_6M = doneJob('convert', 6_000_000, 12_000, [
   ...Array.from({ length: 12 }, () => landedStep('Convert', 498_500, null, USDC_WAY)),
 ]);
 
+const QUOTE_6M_FRACTIONS = doneJob('convert', 6_000_000, 12_000, [
+  ...Array.from({ length: 12 }, () => landedStep('Convert', 498_500.009, null, USDC_WAY)),
+]);
+
 const HELD_SHORT_6M = doneJob('loop', 4_896_572.39, 1_000, [
   landedStep('From Hyperliquid', 4_896_572.39, 1, USDT_WAY),
   { ...landedStep('To Gate', 4_896_572.39, 1, USDT_WAY), cashBefore: 2_937_943.43 },
@@ -691,6 +695,7 @@ describe('RebalanceModal moved amount', () => {
     ['$50 that moved 29.97', 'Done', '$29.97', SHORT_50],
     ['$6M with a round of 4,896,572.39 unsold', 'Done', '$1,103,426.61', SHORT_6M],
     ['$6M Convert in 12 chunks of 500,000, each quoted 0.3% under spot', 'Balanced', '$5,982,000.00', QUOTE_6M],
+    ['$6M Convert in 12 chunks that each landed 498,500.009, added before rounding', 'Balanced', '$5,982,000.10', QUOTE_6M_FRACTIONS],
     ['the short Account A fixture', 'Done', '$105.56', rebalanceViews.accountADoneShort.job],
     ['$6M round that sold held cash and left 1,958,628.96', 'Done', '$2,937,943.43', HELD_SHORT_6M],
     ['$50 round that sold held cash and left 20', 'Done', '$30.00', HELD_SHORT_50],

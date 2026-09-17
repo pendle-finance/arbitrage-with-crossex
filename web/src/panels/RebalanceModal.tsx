@@ -63,7 +63,7 @@ const LANDING_STEPS: readonly string[] = ['To Hyperliquid', 'To Lighter', 'Conve
 const SHORT_FLOOR_USD = 1;
 const SHORT_SHARE = 0.005;
 
-const qtyOf = (steps: RebalanceStep[]): number => steps.reduce((total, step) => total + floorCents(step.qty ?? 0), 0);
+const qtyOf = (steps: RebalanceStep[]): number => floorCents(steps.reduce((total, step) => total + (step.qty ?? 0), 0));
 const moveOf = (step: RebalanceStep): string => `${step.round}:${step.from}:${step.to}`;
 
 function soldOf(done: RebalanceStep[]): number {
