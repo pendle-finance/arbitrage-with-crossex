@@ -11,7 +11,7 @@
  *  - Closed perps: /crossex/history_positions — the venue reports each closed
  *    position's whole-lifetime closedPnl, fundingFee and fee directly.
  *  - Boros (open AND closed, uniformly): the per-settlement event ledger plus
- *    /pnl/transactions fills, both timestamped, summed per market since the
+ *    the per-market fill feed, both timestamped, summed per market since the
  *    start instant. The live zones feed adds the open legs' MtM and IM.
  *
  * Nothing is reconstructed and nothing is stored: the response is a pure
@@ -372,15 +372,18 @@ export function assetViewRoutes(deps: AppDeps) {
       const warnings: string[] = [];
 
       // --- Boros reads (shared cache keys with the strategy feed) ----------
+      const marketsP = deps.cache
+        .get('boros:markets', TTL.boros, () => fetchBorosMarkets(fetchImpl), { fresh })
+        .then((r) => r.value);
       const [markets, zones, settlements] = await Promise.all([
-        deps.cache
-          .get('boros:markets', TTL.boros, () => fetchBorosMarkets(fetchImpl), { fresh })
-          .then((r) => r.value),
-        deps.cache
-          .get(`boros:collaterals:${address}`, TTL.boros, () => fetchBorosCollaterals(fetchImpl, address), {
-            fresh,
-          })
-          .then((r) => r.value),
+        marketsP,
+        marketsP.then((ms) =>
+          deps.cache
+            .get(`boros:collaterals:${address}`, TTL.boros, () => fetchBorosCollaterals(fetchImpl, address, ms), {
+              fresh,
+            })
+            .then((r) => r.value),
+        ),
         deps.cache
           .get(
             `boros:settlements:${address}:0:${Math.floor(sinceSec / 3600)}`,
@@ -398,6 +401,11 @@ export function assetViewRoutes(deps: AppDeps) {
       // Txns for EVERY zone the account has — history sums must include
       // markets whose positions are long gone, and a fill's zone is the
       // token it settled in, position or not.
+      //
+      // The fill feed is keyed by (marketAcc, marketId) and refuses to answer
+      // without a marketId, so each zone's id set is BUILT: every market the
+      // settlement sweep above saw (the window plus the page crossing it),
+      // plus the ones it holds right now. Its coverage is that sweep's own.
       const txnsComplete: boolean[] = [];
       const txnsByToken = new Map<
         number,
@@ -405,24 +413,49 @@ export function assetViewRoutes(deps: AppDeps) {
       >(
         await Promise.all(
           zones.map(async (z): Promise<[number, Array<{ marketId: number; time: number; pnlTok: number; feeTok: number; fixedApr: number; prev: number; post: number }>]> => {
-            const { value } = await deps.cache.get(
-              `boros:txns:${address}:${z.tokenId}`,
-              TTL.boros,
-              () => fetchBorosTransactions(fetchImpl, address, z.tokenId),
-              { fresh },
+            const pairs = new Map<string, { marketAcc: string; marketId: number; live: boolean }>();
+            for (const a of settlements.pairs) {
+              if (a.tokenId !== z.tokenId) continue;
+              pairs.set(`${a.marketAcc.toLowerCase()}:${a.marketId}`, { ...a, live: false });
+            }
+            for (const g of [z.cross, ...z.isolated]) {
+              if (!g) continue;
+              for (const p of g.marketPositions) {
+                pairs.set(`${g.marketAcc.toLowerCase()}:${p.marketId}`, {
+                  marketAcc: g.marketAcc,
+                  marketId: p.marketId,
+                  live: true,
+                });
+              }
+            }
+            // One cache entry per (marketAcc, marketId), so a newly traded
+            // market does not invalidate the rest of the zone. A market the
+            // zone no longer holds takes no new fills, so it refreshes slowly.
+            const perMarket = await Promise.all(
+              [...pairs.values()].map(async ({ marketAcc, marketId, live }) => {
+                const { value } = await deps.cache.get(
+                  `boros:txns:${marketAcc}:${marketId}:${live ? 'live' : 'past'}`,
+                  live ? TTL.boros : TTL.borosHistory,
+                  () => fetchBorosTransactions(fetchImpl, marketAcc, marketId),
+                  { fresh },
+                );
+                return value;
+              }),
             );
-            txnsComplete.push(value.complete);
+            for (const v of perMarket) txnsComplete.push(v.complete);
             return [
               z.tokenId,
-              value.txns.map((t) => ({
-                marketId: t.marketId,
-                time: t.time,
-                pnlTok: norm18(t.pnl),
-                feeTok: Math.abs(norm18(t.fee)),
-                fixedApr: Number(t.fixedApr),
-                prev: norm18(t.prevPositionS ?? '0'),
-                post: norm18(t.postPositionS ?? '0'),
-              })),
+              perMarket.flatMap((v) =>
+                v.txns.map((t) => ({
+                  marketId: t.marketId,
+                  time: t.time,
+                  pnlTok: norm18(t.pnl),
+                  feeTok: Math.abs(norm18(t.fee)),
+                  fixedApr: Number(t.fixedApr),
+                  prev: norm18(t.prevPositionS ?? '0'),
+                  post: norm18(t.postPositionS ?? '0'),
+                })),
+              ),
             ];
           }),
         ),

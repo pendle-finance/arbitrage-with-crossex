@@ -20,6 +20,8 @@ beforeEach(() => setClientTagContext({ version: null, active: false }));
 afterEach(() => setClientTagContext({ version: null, active: false }));
 
 const ADDR = '0x' + 'ab'.repeat(20);
+/** This account's cross USDT (tokenId 3) handle — the fill feed's key. */
+const MARKET_ACC = ADDR + '000003ffffff';
 
 function stub(handler: (url: URL) => { status?: number; body?: unknown }): FetchLike {
   return async (url: string) => {
@@ -39,7 +41,8 @@ describe('fetchBorosMarkets', () => {
               tokenId: 3,
               imData: { name: 'Hyperliquid ETH 31 Jul 2026', maturity: 1785456000 },
               extConfig: { settleFeeRate: '1000000000000000', paymentPeriod: 3600 },
-              metadata: { platformName: 'Hyperliquid', assetSymbol: 'ETH' },
+              platform: { platformId: 'Hyperliquid' },
+              metadata: { underlyingSymbol: 'ETH' },
               data: { markApr: 0.076, floatingApr: 0.075, assetMarkPrice: 1880 },
             },
           ],
@@ -53,6 +56,17 @@ describe('fetchBorosMarkets', () => {
     expect(markets[0].paymentPeriod).toBe(3600);
   });
 
+  it('maps config.status (on-chain MarketStatus) to the lifecycle state', async () => {
+    const mk = (status: unknown) => ({ marketId: 155, tokenId: 3, config: { status } });
+    const states = async (status: unknown) =>
+      (await fetchBorosMarkets(stub(() => ({ body: { results: [mk(status)] } }))))[0].state;
+    expect(await states(2)).toBe('Normal');
+    expect(await states(1)).toBe('CloseOnly');
+    expect(await states(0)).toBe('Paused');
+    // An unknown or absent status must not read as tradable.
+    expect(await states(undefined)).toBe('Unknown');
+  });
+
   it('surfaces midApr, notionalOI, the 18-dec takerFee and the lifecycle state', async () => {
     const markets = await fetchBorosMarkets(
       stub(() => ({
@@ -62,9 +76,10 @@ describe('fetchBorosMarkets', () => {
               marketId: 155,
               tokenId: 3,
               imData: { name: 'Hyperliquid ETH 31 Jul 2026', maturity: 1785456000 },
-              config: { takerFee: '500000000000000', maxRateDeviationFactorBase1e4: 2500 },
+              config: { status: 2, takerFee: '500000000000000', maxRateDeviationFactorBase1e4: 2500 },
               extConfig: { settleFeeRate: '1000000000000000', paymentPeriod: 3600 },
-              metadata: { platformName: 'Hyperliquid', assetSymbol: 'ETH' },
+              platform: { platformId: 'Hyperliquid' },
+              metadata: { underlyingSymbol: 'ETH' },
               data: {
                 markApr: 0.076,
                 floatingApr: 0.075,
@@ -72,7 +87,6 @@ describe('fetchBorosMarkets', () => {
                 notionalOI: 801.005045896532,
                 assetMarkPrice: 1880,
               },
-              state: 'Normal',
             },
           ],
         },
@@ -106,7 +120,8 @@ describe('fetchBorosMarkets', () => {
               config: { kIM: '476190476190476190', tThresh: 432000 },
               // extConfig.tickStep is a decoy: the margin step must come from imData.
               extConfig: { settleFeeRate: '1000000000000000', paymentPeriod: 3600, tickStep: 7 },
-              metadata: { platformName: 'Hyperliquid', assetSymbol: 'ETH' },
+              platform: { platformId: 'Hyperliquid' },
+              metadata: { underlyingSymbol: 'ETH' },
               data: { markApr: 0.076, assetMarkPrice: 1880 },
             },
           ],
@@ -176,7 +191,9 @@ describe('fetchBorosOrderBook', () => {
       155,
     );
 
-    expect(urls).toEqual(['/core/v1/order-books/155?tickSize=0.0001&pendle_client=boroscrossex']);
+    expect(urls).toEqual([
+      '/apis/v1/markets/order-book?marketId=155&tickSize=0.0001&pendle_client=boroscrossex',
+    ]);
     expect(book.marketId).toBe(155);
     // asks (wire "short") sorted apr-ascending, bids (wire "long") apr-descending.
     expect(round(book.asks)).toEqual([
@@ -228,59 +245,57 @@ describe('fetchBorosOrderBook', () => {
 });
 
 describe('fetchBorosTransactions pagination', () => {
-  const txn = (marketId: number, time: number) => ({
+  const txn = (marketId: number, timestamp: number) => ({
     marketId,
-    time,
+    timestamp,
     fee: '1',
     pnl: '-1',
     prevPositionS: '0',
     postPositionS: '1',
   });
 
-  it('walks skip/limit pages until total is exhausted and concatenates in order', async () => {
-    // 3 pages: 200 + 200 + 50 = 450 txns.
-    const TOTAL = 450;
-    const all = Array.from({ length: TOTAL }, (_, i) => txn(100 + i, 1_700_000_000 + i));
-    const requestedSkips: number[] = [];
-    const { txns } = await fetchBorosTransactions(
+  it('walks resumeToken pages until the feed is exhausted and concatenates in order', async () => {
+    const pages = [
+      { results: [txn(100, 1), txn(101, 2)], resumeToken: 'p2' },
+      { results: [txn(102, 3)], resumeToken: null },
+    ];
+    const tokens: Array<string | null> = [];
+    const { txns, complete } = await fetchBorosTransactions(
       stub((url) => {
-        const skip = Number(url.searchParams.get('skip'));
-        const limit = Number(url.searchParams.get('limit'));
-        requestedSkips.push(skip);
-        return { body: { results: all.slice(skip, skip + limit), total: TOTAL } };
+        tokens.push(url.searchParams.get('resumeToken'));
+        return { body: pages[tokens.length - 1] };
       }),
-      ADDR,
-      3,
+      MARKET_ACC,
+      155,
     );
-    expect(requestedSkips).toEqual([0, 200, 400]);
-    expect(txns).toHaveLength(TOTAL);
-    expect(txns[0].marketId).toBe(100);
-    expect(txns[TOTAL - 1].marketId).toBe(100 + TOTAL - 1);
+    expect(tokens).toEqual([null, 'p2']);
+    expect(txns.map((t) => t.marketId)).toEqual([100, 101, 102]);
+    expect(complete).toBe(true);
   });
 
-  it('stops after one page when total fits in the first fetch', async () => {
+  it('stops after one page when the feed returns no resumeToken', async () => {
     let calls = 0;
     const { txns } = await fetchBorosTransactions(
       stub(() => {
         calls += 1;
-        return { body: { results: [txn(1, 1)], total: 1 } };
+        return { body: { results: [txn(1, 1)], resumeToken: null } };
       }),
-      ADDR,
-      3,
+      MARKET_ACC,
+      155,
     );
     expect(calls).toBe(1);
     expect(txns).toHaveLength(1);
   });
 
-  it('stops on an empty page even if total lies, and caps runaway pagination', async () => {
+  it('stops on an empty page even if the feed still offers a resumeToken', async () => {
     let calls = 0;
     const { txns } = await fetchBorosTransactions(
       stub(() => {
         calls += 1;
-        return { body: { results: [], total: 999_999 } }; // server bug: total never reachable
+        return { body: { results: [], resumeToken: 'never-ending' } };
       }),
-      ADDR,
-      3,
+      MARKET_ACC,
+      155,
     );
     expect(calls).toBe(1); // empty page short-circuits
     expect(txns).toHaveLength(0);
@@ -288,38 +303,170 @@ describe('fetchBorosTransactions pagination', () => {
 
   it('throws (never caches "no history") when results[] is missing', async () => {
     await expect(
-      fetchBorosTransactions(stub(() => ({ body: { total: 10 } })), ADDR, 3),
+      fetchBorosTransactions(stub(() => ({ body: { resumeToken: null } })), MARKET_ACC, 155),
     ).rejects.toMatchObject({ name: 'CoreError', category: 'network' });
   });
 
-  it('reports coverage: complete when it reaches the venue count', async () => {
+  it('reports coverage: complete when the feed is exhausted', async () => {
     const { complete } = await fetchBorosTransactions(
-      stub(() => ({ body: { results: [txn(1, 1)], total: 1 } })),
-      ADDR,
-      3,
+      stub(() => ({ body: { results: [txn(1, 1)], resumeToken: null } })),
+      MARKET_ACC,
+      155,
     );
     expect(complete).toBe(true);
   });
 
   it('reports coverage: INCOMPLETE when the page cap cuts it short', async () => {
-    // 25 pages × 200 is the runaway guard. An account past it used to get a
-    // silently truncated history — and truncation fakes absence, which is what
-    // any "no counterpart nearby, so it was placed alone" reasoning rests on.
-    const { txns, complete } = await fetchBorosTransactions(
-      stub((url) => {
-        const skip = Number(url.searchParams.get('skip'));
-        return {
-          body: {
-            results: Array.from({ length: 200 }, (_, i) => txn(skip + i, 1_700_000_000 + skip + i)),
-            total: 1_000_000,
-          },
-        };
+    // An account past the guard used to get a silently truncated history —
+    // and truncation fakes absence, which is what any "no counterpart nearby,
+    // so it was placed alone" reasoning rests on.
+    let calls = 0;
+    const { complete } = await fetchBorosTransactions(
+      stub(() => {
+        calls += 1;
+        return { body: { results: [txn(calls, calls)], resumeToken: `page-${calls}` } };
       }),
-      ADDR,
-      3,
+      MARKET_ACC,
+      155,
     );
+    expect(calls).toBe(30);
     expect(complete).toBe(false);
-    expect(txns).toHaveLength(25 * 200);
+  });
+
+  it("maps the feed's own field names, and entryApr only on a reducing fill", async () => {
+    const { txns } = await fetchBorosTransactions(
+      stub(() => ({
+        body: {
+          results: [
+            // Open from flat: prevPositionF rides along but means nothing yet.
+            { marketId: 7, timestamp: 100, fee: '1', pnl: '-1', tradeRate: 0.09,
+              prevPositionS: '0', postPositionS: '5', prevPositionF: '0' },
+            // Reduces without flipping — the venue's own entry rate applies.
+            { marketId: 7, timestamp: 200, fee: '1', pnl: '3', tradeRate: 0.04,
+              prevPositionS: '5', postPositionS: '2', prevPositionF: '90000000000000000' },
+            // Closes THROUGH flat into a short: not a reduction, no entry rate.
+            { marketId: 7, timestamp: 300, fee: '1', pnl: '2', tradeRate: 0.05,
+              prevPositionS: '2', postPositionS: '-1', prevPositionF: '40000000000000000' },
+          ],
+          resumeToken: null,
+        },
+      })),
+      MARKET_ACC,
+      7,
+    );
+    expect(txns.map((t) => t.time)).toEqual([100, 200, 300]);
+    expect(txns.map((t) => t.fixedApr)).toEqual([0.09, 0.04, 0.05]);
+    expect(txns.map((t) => t.entryApr)).toEqual([undefined, 0.09, undefined]);
+  });
+});
+
+describe('fetchBorosCollaterals', () => {
+  const ROOT = '0x' + 'ab'.repeat(20);
+  /** root · accountId(1B) · tokenId(2B) · marketId(3B); FFFFFF ⇒ cross. */
+  const CROSS = ROOT + '00' + '0003' + 'ffffff';
+  const ISO = ROOT + '00' + '0003' + '00009b'; // isolated on market 155
+  const OTHER_ACCOUNT = ROOT + '01' + '0003' + 'ffffff';
+
+  /** The surface is two reads; route each by pathname. */
+  const accountStub = (infos: unknown, actives: unknown): FetchLike =>
+    stub((url) => ({ body: url.pathname.endsWith('/active-positions') ? actives : infos }));
+
+  const infos = {
+    results: [
+      {
+        marketAcc: CROSS,
+        netBalance: '20',
+        initialMargin: '5',
+        positions: [{ marketId: 155, signedSize: '-7', initialMargin: '5', orders: [] }],
+      },
+      {
+        marketAcc: ISO,
+        netBalance: '9',
+        initialMargin: '1',
+        positions: [{ marketId: 155, signedSize: '3', initialMargin: '1', orders: [{ id: '1' }] }],
+      },
+    ],
+  };
+  const actives = {
+    results: [
+      { marketAcc: CROSS, marketId: 155, side: 1, fixedApr: 0.08, unrealisedPnl: '11', settlementPnl: '13' },
+    ],
+  };
+
+  it('rebuilds zones from the marketAcc layout and joins the live rates onto them', async () => {
+    const zones = await fetchBorosCollaterals(accountStub(infos, actives), ROOT, []);
+    expect(zones).toHaveLength(1);
+    expect(zones[0].tokenId).toBe(3); // decoded from the marketAcc, not a body field
+    expect(zones[0].cross?.netBalance).toBe('20');
+    expect(zones[0].isolated).toHaveLength(1);
+
+    const p = zones[0].cross!.marketPositions[0];
+    expect(p.notionalSize).toBe('-7'); // signedSize carries the sign
+    expect(p.side).toBe(1);
+    expect(p.fixedApr).toBe(0.08);
+    // settlementPnl/unrealisedPnl are the old rateSettlementPnl/unrealisedPnl.
+    expect(p.pnl.rateSettlementPnl).toBe('13');
+    expect(p.pnl.unrealisedPnl).toBe('11');
+    expect(p.positionInitialMargin).toBe('5');
+  });
+
+  it('reads resting orders from the order list instead of the initial-margin gap', async () => {
+    const zones = await fetchBorosCollaterals(accountStub(infos, actives), ROOT, []);
+    expect(zones[0].cross!.marketPositions[0].hasRestingOrders).toBe(false);
+    expect(zones[0].isolated[0].marketPositions[0].hasRestingOrders).toBe(true);
+  });
+
+  it('keeps only the requested accountId', async () => {
+    const zones = await fetchBorosCollaterals(
+      accountStub({ results: [{ marketAcc: OTHER_ACCOUNT, netBalance: '1', positions: [] }] }, { results: [] }),
+      ROOT,
+      [],
+    );
+    expect(zones).toHaveLength(0);
+  });
+
+  it('splits the position IM out of the combined per-market margin and takes markApr from the market', async () => {
+    // IM at mark = |size| × 10% × 1y × kIM 1 = 10 for a size of 100.
+    const market = {
+      marketId: 155, tokenId: 3, name: '', venue: '', base: '', maturity: Date.now() / 1000 + 365 * 86_400,
+      paymentPeriod: 0, settleFeeApr: 0, markApr: 0.1, floatingApr: 0, midApr: 0, notionalOi: 0, takerFeeRate: 0,
+      state: 'Normal', assetMarkPriceUsd: 1, kIM: 1, imTickThresh: 0, imTickStep: 0, tThreshSec: 0, maxRateDeviationApr: 0,
+    };
+    const e18 = (n: number) => `${n}000000000000000000`;
+    const book = (orders: Array<{ side: number; im: number }>, combined: number) => ({
+      results: [
+        {
+          marketAcc: CROSS,
+          netBalance: e18(100),
+          positions: [
+            {
+              marketId: 155,
+              signedSize: e18(100),
+              initialMargin: e18(combined),
+              orders: orders.map((o) => ({ side: o.side, initialMargin: e18(o.im) })),
+            },
+          ],
+        },
+      ],
+    });
+    const posIm = async (orders: Array<{ side: number; im: number }>, combined: number) =>
+      (await fetchBorosCollaterals(accountStub(book(orders, combined), { results: [] }), ROOT, [market]))[0].cross!
+        .marketPositions[0];
+    // Same-side orders stack on top of the position.
+    expect((await posIm([{ side: 0, im: 5 }], 15)).positionInitialMargin).toBe(e18(10));
+    // Opposite-side orders net against it: 40 − 10 = 30 also fits "30 − 0 same-side",
+    // and the IM at mark is what picks 10 over 30.
+    expect((await posIm([{ side: 1, im: 40 }], 30)).positionInitialMargin).toBe(e18(10));
+    expect((await posIm([], 10)).markApr).toBe(0.1);
+  });
+
+  it('throws a network CoreError when either read is not the documented shape', async () => {
+    await expect(
+      fetchBorosCollaterals(accountStub({ collaterals: [] }, { results: [] }), ROOT, []),
+    ).rejects.toMatchObject({ name: 'CoreError', category: 'network' });
+    await expect(
+      fetchBorosCollaterals(accountStub({ results: [] }, {}), ROOT, []),
+    ).rejects.toMatchObject({ name: 'CoreError', category: 'network' });
   });
 });
 
@@ -351,8 +498,8 @@ describe('client identification tag', () => {
 
     await fetchBorosMarkets(record);
     await fetchBorosOrderBook(record, 155);
-    await fetchBorosCollaterals(record, ADDR);
-    await fetchBorosTransactions(record, ADDR, 3);
+    await fetchBorosCollaterals(record, ADDR, []);
+    await fetchBorosTransactions(record, MARKET_ACC, 155);
 
     expect(urls.length).toBeGreaterThanOrEqual(4);
     for (const url of urls) {
