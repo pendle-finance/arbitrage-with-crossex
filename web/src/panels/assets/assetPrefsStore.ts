@@ -56,7 +56,9 @@ const validate = (parsed: unknown): AllBooks => {
     if (p.sinceByAsset && typeof p.sinceByAsset === 'object') {
       for (const [base, q] of Object.entries(p.sinceByAsset)) {
         const n = Number(q);
-        if (Number.isFinite(n) && n > 0) sinceByAsset[base.toUpperCase()] = n;
+        // 0 survives: it is an explicit "all time", distinct from an asset
+        // with no choice (which defaults to its first perp's open).
+        if (Number.isFinite(n) && n >= 0) sinceByAsset[base.toUpperCase()] = n;
       }
     }
     // Legacy shape carried ONE app-wide sinceSec — the window is per asset

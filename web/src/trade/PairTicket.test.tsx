@@ -83,15 +83,21 @@ function previewHandler(opts: {
   });
 }
 
+/** The venues are dropdowns keyed by full symbol; the option for a symbol only
+ * exists once that base's rules have loaded, so wait for it. */
+async function pickVenues(longSymbol: string, shortSymbol: string) {
+  const longSel = (await screen.findByLabelText('LONG venue')) as HTMLSelectElement;
+  await waitFor(() => expect(longSel.querySelector(`option[value="${longSymbol}"]`)).not.toBeNull());
+  await userEvent.selectOptions(longSel, longSymbol);
+  await userEvent.selectOptions(screen.getByLabelText('SHORT venue'), shortSymbol);
+}
+
 /** Fill an already-mounted ticket: ETH via quick-pick, GATE as the LONG venue,
  * OKX as the SHORT venue, $1000/leg. Split from setupTwoVenuePair so the
  * remount-idempotency test can re-fill a SECOND freshly mounted ticket. */
 async function fillTwoVenuePair() {
   await userEvent.click(screen.getByRole('button', { name: 'ETH' }));
-  const longRow = screen.getByText('LONG venue').parentElement as HTMLElement;
-  await userEvent.click(await within(longRow).findByRole('button', { name: 'GATE' }));
-  const shortRow = screen.getByText('SHORT venue').parentElement as HTMLElement;
-  await userEvent.click(within(shortRow).getByRole('button', { name: 'OKX' }));
+  await pickVenues('GATE_FUTURE_ETH_USDT', 'OKX_FUTURE_ETH_USDT');
   // The size box now defaults to the BASE coin, so a USD figure has to say so.
   await userEvent.click(within(screen.getByRole('radiogroup', { name: 'Size unit' })).getByRole('radio', { name: 'USDT' }));
   await userEvent.type(screen.getByLabelText('Size per leg (USDT)'), '1000');
@@ -105,10 +111,10 @@ async function setupTwoVenuePair() {
 
 /** Wait for the initial preview to land (fees become known). */
 async function waitForFirstPreview() {
-  await screen.findByText(/shared qty/, undefined, { timeout: 4000 });
+  await screen.findByText(/Shared qty/, undefined, { timeout: 4000 });
 }
 
-const makerPanel = () => screen.getByText('Maker leg:').parentElement as HTMLElement;
+const makerPanel = () => screen.getByText('Maker leg').parentElement as HTMLElement;
 
 /** The book+impact graph fetches a live touch per leg via GET /api/books/:symbol.
  * A default two-sided quote (bid 2499 / ask 2501, mid 2500) for every test; a
@@ -130,10 +136,7 @@ describe('PairTicket size unit', () => {
     server.use(...baseHandlers(), ...ethSymbolHandlers(), previewHandler({ calls }));
     renderWithClient(<PairTicket />);
     await userEvent.click(await screen.findByRole('button', { name: 'ETH' }));
-    const longRow = screen.getByText('LONG venue').parentElement as HTMLElement;
-    await userEvent.click(await within(longRow).findByRole('button', { name: 'GATE' }));
-    const shortRow = screen.getByText('SHORT venue').parentElement as HTMLElement;
-    await userEvent.click(within(shortRow).getByRole('button', { name: 'OKX' }));
+    await pickVenues('GATE_FUTURE_ETH_USDT', 'OKX_FUTURE_ETH_USDT');
 
     // Base is the DEFAULT — the label says so without anything being clicked.
     await userEvent.type(screen.getByLabelText('Size per leg (ETH)'), '0.4');
@@ -235,11 +238,11 @@ describe('PairTicket execution modes', () => {
     await waitFor(() => expect(calls.at(-1)?.[0]).toMatchObject({ leverage: 10 }), { timeout: 4000 });
     expect(calls.at(-1)?.[1]).toMatchObject({ symbol: 'OKX_FUTURE_ETH_USDT', leverage: 50 });
     // Shown, not editable.
-    expect(screen.getByText('10x long / 50x short (venue max)')).toBeInTheDocument();
+    expect(await screen.findByText('10x long / 50x short', undefined, { timeout: 4000 })).toBeInTheDocument();
     expect(screen.queryByPlaceholderText(/venue max/)).not.toBeInTheDocument();
     // Total initial margin the pair posts: 1000/10 + 1000/50 = $120.
     expect(screen.getByText('Margin required')).toBeInTheDocument();
-    await waitFor(() => expect(screen.getByText('\u2248 $120')).toBeInTheDocument(), { timeout: 4000 });
+    await waitFor(() => expect(screen.getByText('\u2248 $120.00')).toBeInTheDocument(), { timeout: 4000 });
   });
 
   it('holding Execute pair in maker mode POSTs a touch-pegged maker deal (while tracking)', async () => {
@@ -409,7 +412,7 @@ describe('PairTicket execution modes', () => {
 
     await userEvent.clear(priceInput);
     await userEvent.type(priceInput, '2450');
-    expect(screen.getByText(/\(pinned/)).toBeInTheDocument();
+    expect(screen.getByText(/pinned —/)).toBeInTheDocument();
 
     // Another preview cycle completes for the typed price (its response still
     // reports the touch at 2499/2501) — the pinned input must NOT be overwritten.

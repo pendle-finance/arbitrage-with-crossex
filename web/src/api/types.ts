@@ -1050,6 +1050,10 @@ export interface BorosSimulatedLeg {
   shortfallSize: number;
   bookStatus: BorosBookStatus;
   marginRequired: number | null;
+  /** The mark rate at which the resulting position, backed by exactly its
+   * initial margin, is liquidated. Null when flat, unpriced, or the market
+   * carries no margin coefficients. Optional only for an older server. */
+  liquidationApr?: number | null;
   slippageApr: number;
   sizing: BorosLegSizing;
   /** This leg's taker fee at its traded size, collateral units (× the
@@ -1062,11 +1066,16 @@ export interface BorosPairSimulation {
   legA: BorosSimulatedLeg;
   legB: BorosSimulatedLeg;
   receiveLeg: 'A' | 'B' | null;
-  /** NET of fees. There is no gross counterpart — by design. */
+  /** Net of SETTLEMENT fees only — the taker fee is a one-off entry cost with
+   * its own line (`costToCrossSize`), not part of the rate this locks. */
   estSpreadApr: number | null;
   worstSpreadApr: number | null;
   costToCrossSize: number;
+  /** The settlement drag already subtracted from the spread figures. */
   feeDragApr: number;
+  /** `costToCrossSize` as an APR, NOT subtracted above — optional only for an
+   * older server. */
+  takerDragApr?: number;
   /** The spread at MID, same composition as estSpreadApr. Null if unknown. */
   midSpreadApr?: number | null;
   /** |midSpread − estSpread| — what crossing the books costs at this size.

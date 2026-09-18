@@ -45,7 +45,7 @@ interface Props {
   scope: string;
   /** Preview-shaped actions (NEVER with execute-only fields like pegToTouch). */
   actions: ActionInput[] | null;
-  tone?: 'green' | 'red' | 'cyan';
+  tone?: 'green' | 'red' | 'cyan' | 'buy' | 'sell';
   label: ReactNode;
   /** Only fetch the preview while hovered (for closes / server-built actions). */
   lazyPreview?: boolean;

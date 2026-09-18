@@ -22,6 +22,8 @@ export const raw = (n: number): string => String(n * 1e18);
  */
 export const imInputs = {
   kIM: 0.47619047619047616,
+  // Live near-maturity kMM (kMM / kIM ≈ 70%).
+  kMM: 0.3333333333333333,
   imTickThresh: 770,
   imTickStep: 2,
   tThreshSec: 432_000,

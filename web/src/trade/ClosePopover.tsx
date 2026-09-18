@@ -16,15 +16,14 @@ import type { ActionInput, CrossexPosition } from '../api/types';
 import { Modal } from '../components/Modal';
 import { SegmentedToggle } from '../components/SegmentedToggle';
 import { SignedNumber } from '../components/SignedNumber';
-import { SideChip, SymbolCell } from '../components/VenueChip';
-import { fieldValue, fmtUsd, parseSymbol, prettyVenue, sig } from '../lib/fmt';
+import { SideChip } from '../components/VenueChip';
+import { fieldValue, fmtUsd, fmtUsdCompact, parseSymbol, prettyVenue, sig } from '../lib/fmt';
 import { sizeUnitForBase } from '../lib/boros';
 import { ExecuteControl } from './ExecuteControl';
-import { feeText, PreviewFallback, ViolationList } from './previewBits';
+import { AffixedInput, EstimateCard, EstimateRow, LegCard, SlippageLine } from './PairTicketBits';
+import { feeAmount, feeKind, PreviewFallback, ViolationList } from './previewBits';
+import { FieldLabel } from './SymbolCombobox';
 import { usePreviewDebounced } from './usePreview';
-
-const CLOSE_INFO =
-  'The close is sent as a reduce-only IOC limit at mid ± slippage — it can never increase the position and never rests on the book.';
 
 interface Props {
   position: CrossexPosition;
@@ -224,77 +223,89 @@ export function ClosePopover({
 
 
 
+  /** The tolerance editor — closed until asked for. */
+  const [slipOpen, setSlipOpen] = useState(false);
+  const { exchange, quote } = parseSymbol(position.symbol);
+  const notionalUsd = markOk ? posQty * mark : null;
+  const heldSide: 'LONG' | 'SHORT' = Number(position.positionQty) < 0 ? 'SHORT' : 'LONG';
+  const leftAfter = Math.max(0, maxQtyBase - (Number.isFinite(qtyNum) ? qtyNum : 0));
+
   // A centred dialog, not a control anchored to the button that opened it.
   // Closing one leg and closing the pair are the same decision at different
   // sizes, so they get the same surface — and an anchored panel next to a table
   // row competes with the row it is about.
   return (
-    <Modal title={`Close ${position.symbol}`} onClose={onDismiss} widthClass="w-[420px]">
-      <div ref={dialogRef} className="p-4">
-        <div className="mb-2">
-          <SymbolCell symbol={position.symbol} />
-        </div>
+    <Modal
+      title={
+        <>
+          Close perp leg
+          <span className="ml-2 text-[12px] font-normal text-ink-400">
+            {prettyVenue(exchange)} · {base}-{quote || 'USDT'} perp
+          </span>
+        </>
+      }
+      onClose={onDismiss}
+      widthClass="w-[460px]"
+    >
+      <div ref={dialogRef} className="flex flex-col gap-4 p-4">
+        {/* What is held: the venue position, its dollar size and mark. */}
+        <LegCard
+          kind="Perp"
+          venue={prettyVenue(exchange)}
+          side={heldSide}
+          sub={position.symbol}
+          value={`${sig(wholeQty)} ${base}`}
+          valueSub={
+            markOk ? (
+              <>
+                {notionalUsd !== null ? fmtUsdCompact(notionalUsd) : '—'} · mark {sig(mark)}
+              </>
+            ) : undefined
+          }
+        />
 
-        <div className="flex flex-col gap-2 text-[11px]">
-          {/* The venue holds one position; this card may own only part of it.
-              Say so where the size is chosen, not after the fact. */}
-          {shared && (
-            <p className="leading-relaxed text-amber-400/90">
-              This position holds {sig(attributedQty ?? 0)} of the {sig(wholeQty)} on the venue; the
-              rest belongs to another position.
-            </p>
-          )}
-          {hedgedSibling && (
-            /* The consequence, not the mechanics: this pair earns because the
-               two floating legs cancel, and closing one end leaves the other
-               running as a directional funding bet. */
-            <p className="rounded-lg border border-amber-500/40 bg-amber-500/[0.08] px-2.5 py-1.5 leading-relaxed text-amber-100">
-              This leg hedges the {prettyVenue(hedgedSibling.venue)} {hedgedSibling.side.toLowerCase()}{' '}
-              leg. Closing it leaves that one unhedged — its funding stops cancelling and becomes a
-              directional position.
-            </p>
-          )}
-          {/* Same shape as the Boros and pair closes: the size leads, the max
-              sits beside its label as a button, the simulation follows. */}
-          <div className="flex flex-col gap-1">
-            <div className="flex items-baseline justify-between">
-              <label htmlFor={`close-qty-${position.symbol}`} className="text-ink-400">
-                Close size
-              </label>
-              <span className="num text-ink-400">
-                max{' '}
-                <button
-                  type="button"
-                  className="underline decoration-dotted underline-offset-2 hover:text-ink-200"
-                  title={
-                    shared
-                      ? 'Close everything this position owns on the venue'
-                      : 'Close the whole position'
-                  }
-                  onClick={() => setQtyEdited(fieldValue(maxInUnit))}
-                >
-                  {sig(maxInUnit)} {effUnit === 'usd' ? 'USDT' : base}
-                </button>
+        {/* The venue holds one position; this card may own only part of it.
+            Say so where the size is chosen, not after the fact. */}
+        {shared && (
+          <p className="text-[11px] leading-relaxed text-amber-400/90">
+            This position holds {sig(attributedQty ?? 0)} of the {sig(wholeQty)} on the venue; the
+            rest belongs to another position.
+          </p>
+        )}
+        {hedgedSibling && (
+          /* The consequence, not the mechanics: this pair earns because the
+             two floating legs cancel, and closing one end leaves the other
+             running as a directional funding bet. */
+          <p className="text-[11px] leading-relaxed text-amber-200">
+            This leg hedges the {prettyVenue(hedgedSibling.venue)} {hedgedSibling.side.toLowerCase()}{' '}
+            leg. Closing it leaves that one unhedged — its funding stops cancelling and becomes a
+            directional position.
+          </p>
+        )}
+
+        {/* Same shape as the Boros and pair closes: the size leads, the max
+            sits beside its label as a button, the simulation follows. */}
+        <div className="flex flex-col gap-1.5">
+          <div className="flex items-baseline justify-between gap-3">
+            <FieldLabel htmlFor={`close-qty-${position.symbol}`}>Close size</FieldLabel>
+            <button
+              type="button"
+              className="num text-[11px] text-ink-400 transition-colors hover:text-ink-100"
+              title={shared ? 'Close everything this position owns on the venue' : 'Close the whole position'}
+              onClick={() => setQtyEdited(fieldValue(maxInUnit))}
+            >
+              max{' '}
+              <span className="text-link underline decoration-link/40 underline-offset-2">
+                {sig(maxInUnit)} {effUnit === 'usd' ? 'USDT' : base}
               </span>
-            </div>
-            <div className="flex items-center gap-2">
-              <input
-                id={`close-qty-${position.symbol}`}
-                className={`input num h-8 flex-1 px-2 py-1 ${qtyInvalid ? 'border-rose-500' : ''}`}
-                inputMode="decimal"
-                value={qtyStr}
-                onChange={(e) => setQtyEdited(e.target.value)}
-                /* The visible label reads "Close size" in both units, but the
-                   ACCESSIBLE name still says which unit the box is in — a
-                   screen reader (and the tests that guard the fallback to coin
-                   units) would otherwise have no way to tell 50 dollars from
-                   50 coins. */
-                aria-label={effUnit === 'usd' ? 'Close value' : 'Close qty'}
-              />
-              {/* Only when a mark is available to convert with. */}
-              {markOk && (
+            </button>
+          </div>
+          <AffixedInput
+            affix={
+              markOk ? (
                 <SegmentedToggle<'base' | 'usd'>
                   ariaLabel="Close size unit"
+                  className="seg-xs"
                   value={unit}
                   onChange={(u) => {
                     // Carry the SIZE across the switch, not the digits: the box
@@ -308,81 +319,144 @@ export function ClosePopover({
                     setUnit(u);
                   }}
                   options={[
-                    { value: 'base', label: <span className="text-xs">{base}</span> },
-                    { value: 'usd', label: <span className="text-xs">USDT</span> },
+                    { value: 'base', label: base },
+                    { value: 'usd', label: 'USDT' },
                   ]}
                 />
-              )}
-            </div>
-          </div>
-          {qtyInvalid && qtyStr.trim() !== '' && (
-            <span className="text-rose-400">
+              ) : (
+                <span>{base}</span>
+              )
+            }
+          >
+            <input
+              id={`close-qty-${position.symbol}`}
+              className={`input num ${markOk ? 'pr-[124px]' : 'pr-16'} ${qtyInvalid ? '!border-rose-500/60' : ''}`}
+              inputMode="decimal"
+              value={qtyStr}
+              onChange={(e) => setQtyEdited(e.target.value)}
+              /* The visible label reads "Close size" in both units, but the
+                 ACCESSIBLE name still says which unit the box is in — a
+                 screen reader (and the tests that guard the fallback to coin
+                 units) would otherwise have no way to tell 50 dollars from
+                 50 coins. */
+              aria-label={effUnit === 'usd' ? 'Close value' : 'Close qty'}
+            />
+          </AffixedInput>
+          {qtyInvalid && qtyStr.trim() !== '' ? (
+            <span className="text-[11px] text-rose-300">
               close size exceeds {shared ? "this position's share" : 'position'} (
               {effUnit === 'usd' ? `${sig(maxInUnit)} USDT` : `${sig(maxInUnit)} ${base}`})
             </span>
-          )}
-          {effUnit === 'usd' && !qtyInvalid && qtyStr.trim() !== '' && (
-            // The converted figure is what actually goes to the venue, so it
-            // is shown rather than left to be inferred from the preview.
-            <span className="text-ink-500">
-              ≈ <span className="num">{sig(qtyNum)}</span> {base} at mark{' '}
-              <span className="num">{sig(mark)}</span>
-            </span>
-          )}
-
-          {action && (
-            <div className="flex flex-col gap-1 rounded-lg border border-ink-800 bg-ink-950/60 px-2.5 py-2">
-              {p ? (
+          ) : (
+            <span className="text-[11px] text-ink-400">
+              {closesEverything || leftAfter <= qtyEps ? (
                 <>
-                  {estimating && <span className="text-amber-400">estimating…</span>}
-                  <span className="flex items-center gap-1.5 text-ink-300">
-                    <SideChip side={p.side} />
-                    <span className="num text-ink-100">{p.qty ? sig(p.qty) : '—'}</span>
-                  </span>
-                  <span className="text-ink-400">
-                    <span title="Reduce-only IOC limit at mid ± slippage — fills what it can at once, never rests, never adds">limit px</span>{' '}
-                    <span className="num text-ink-100">{p.price ? sig(p.price) : '—'}</span>
-                  </span>
-                  <span className="text-ink-400">
-                    uPnL to realize{' '}
-                    {upnlToRealize !== null ? <SignedNumber value={upnlToRealize} format={(n) => fmtUsd(n)} /> : '—'}
-                  </span>
-                  <span className="text-ink-400">est fee {feeText(p.fees)}</span>
-                  <span className="cursor-help text-ink-500" title={CLOSE_INFO}>
-                    reduce-only ⓘ
-                  </span>
-                  <ViolationList violations={p.violations} warnings={p.warnings} />
+                  whole position · <span className="text-ink-200">flat after</span>
                 </>
               ) : (
-                <PreviewFallback isError={preview.isError} error={preview.error} />
+                <>
+                  partial · <span className="num text-ink-200">{sig(leftAfter)} {base}</span> stays open
+                </>
               )}
-            </div>
+              {effUnit === 'usd' && !qtyInvalid && qtyStr.trim() !== '' && (
+                // The converted figure is what actually goes to the venue, so it
+                // is shown rather than left to be inferred from the preview.
+                <>
+                  {' · '}≈ <span className="num">{sig(qtyNum)}</span> {base} at mark{' '}
+                  <span className="num">{sig(mark)}</span>
+                </>
+              )}
+            </span>
           )}
+        </div>
 
-          {/* A plain input, deliberately NOT the Est./Max disclosure the Boros
-              close uses: the preview above already states the limit price this
-              band produced, so an "Est." summary would restate it. Kept below
-              the simulation so the size still leads the form. */}
-          <div className="flex items-center gap-2">
-            <label htmlFor={`close-slip-${position.symbol}`} className="w-24 text-ink-400">
-              Slippage %
-            </label>
-            <input
-              id={`close-slip-${position.symbol}`}
-              className={`input num h-8 flex-1 px-2 py-1 ${slipInvalid ? 'border-rose-500' : ''}`}
-              inputMode="decimal"
-              value={slipStr}
-              onChange={(e) => setSlipStr(e.target.value)}
-            />
-          </div>
-          {slipInvalid && <span className="text-rose-400">slippage must be in (0, 10]</span>}
+        {action && (
+          <EstimateCard dataUpdatedAt={preview.dataUpdatedAt} estimating={estimating} isError={preview.isError}>
+            {p ? (
+              <>
+                <div className="flex items-end justify-between gap-3">
+                  <div className="flex flex-col">
+                    <span className="text-[12.5px] text-ink-50">uPnL to realise</span>
+                    <span className="text-[11px] text-ink-400">becomes real when this fills</span>
+                  </div>
+                  <span className="num text-lg font-semibold">
+                    {upnlToRealize !== null ? <SignedNumber value={upnlToRealize} format={(n) => fmtUsd(n)} /> : '—'}
+                  </span>
+                </div>
+                <div className="flex flex-col gap-1.5 border-t border-ink-800/80 pt-2">
+                  <EstimateRow
+                    label="Order"
+                    sub="reduce-only IOC"
+                    value={
+                      <span className="inline-flex items-center gap-1.5">
+                        <SideChip side={p.side} />
+                        {p.qty ? `${sig(p.qty)} ${base}` : '—'}
+                      </span>
+                    }
+                  />
+                  <EstimateRow
+                    label="Limit px"
+                    sub={`mark ${p.side === 'BUY' ? '+' : '−'} ${slipStr}%`}
+                    title="Reduce-only IOC limit at mid ± slippage — fills what it can at once, never rests, never adds"
+                    value={p.price ? sig(p.price) : '—'}
+                  />
+                  <EstimateRow label="Est fee" sub={feeKind(p.fees)} value={feeAmount(p.fees)} />
+                </div>
+                <div className="border-t border-ink-800/80 pt-2">
+                  <SlippageLine
+                    est={
+                      p.fillEstimate
+                        ? `${p.fillEstimate.slippagePct >= 0 ? '+' : ''}${p.fillEstimate.slippagePct.toFixed(3)}%`
+                        : null
+                    }
+                    max={`${slipStr}%`}
+                    open={slipOpen}
+                    onToggle={() => setSlipOpen((v) => !v)}
+                    value={slipStr}
+                    onChange={setSlipStr}
+                    invalid={slipInvalid}
+                    invalidText="slippage must be in (0, 10]"
+                    inputAriaLabel="Slippage %"
+                    title="The band on the limit: mid ± this much. What the book cannot fill inside it stays open."
+                    hint="Max distance from mid the limit will accept. A wider band may be needed for a large size or a thin book."
+                    quick={['0.2', '0.5', '1', '2']}
+                  />
+                </div>
+                <ViolationList violations={p.violations} warnings={p.warnings} />
+              </>
+            ) : (
+              <div className="text-[11px]">
+                <PreviewFallback isError={preview.isError} error={preview.error} />
+              </div>
+            )}
+          </EstimateCard>
+        )}
+        {/* With no action there is no estimate card to host the tolerance;
+            it still has to be reachable, or an out-of-range band could never
+            be corrected. */}
+        {!action && slipInvalid && (
+          <SlippageLine
+            est={null}
+            max={`${slipStr}%`}
+            open
+            onToggle={() => setSlipOpen((v) => !v)}
+            value={slipStr}
+            onChange={setSlipStr}
+            invalid={slipInvalid}
+            invalidText="slippage must be in (0, 10]"
+            inputAriaLabel="Slippage %"
+            hint="Max distance from mid the limit will accept."
+            quick={['0.2', '0.5', '1', '2']}
+          />
+        )}
 
+        <div className="flex flex-col gap-1.5">
           <ExecuteControl
             scope={`close-${position.symbol}`}
             actions={action ? [action] : null}
             tone="red"
             label="Close now ▸"
-            buttonClassName="mt-1 w-full"
+            buttonClassName="w-full"
             // The preview box right above already reviews this close — the hover
             // card would just repeat it on top of the popover. Errors still open it.
             hoverCard={false}
@@ -394,6 +468,10 @@ export function ClosePopover({
               onDismiss();
             }}
           />
+          <p className="text-[11px] leading-relaxed text-ink-400">
+            <span className="font-medium text-ink-200">Reduce-only</span> — can never increase the position,
+            never rests on the book. Its Boros legs stay open; the bundle shows as unhedged.
+          </p>
         </div>
       </div>
     </Modal>

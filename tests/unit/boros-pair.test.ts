@@ -62,9 +62,15 @@ const bnMarket: BorosMarket = {
   midApr: 0.045,
 };
 
-/** Both fixture markets charge 5bp taker + 10bp settle, so the pair's fee drag
- * on the spread is (0.0005 × 2) + (0.001 × 2) = 0.003. */
-const FEE_DRAG = 0.003;
+/**
+ * Both fixture markets charge 5bp taker + 10bp settle.
+ *
+ * Only SETTLEMENT is netted out of the spread — (0.001 × 2) = 0.002. The
+ * taker fee is a one-off entry cost with its own line, published as
+ * `takerDragApr` = (0.0005 × 2) = 0.001 and deliberately NOT subtracted.
+ */
+const FEE_DRAG = 0.002;
+const TAKER_DRAG = 0.001;
 
 /** Single deep level per side, so the VWAP is exactly the quoted rate. */
 const book = (marketId: number, bidApr: number, askApr: number, size = 20_000_000): BorosOrderBook => ({
@@ -280,10 +286,15 @@ describe('simulateBorosPair', () => {
     expect(sim.receiveLeg).toBe('A');
   });
 
-  it('quotes the estimated spread NET of taker and settlement fees', () => {
+  it('quotes the estimated spread net of SETTLEMENT only — the taker fee is not netted', () => {
     const sim = simulateBorosPair(simInput());
-    // 0.09 − 0.042 − 0.003 = 0.045
+    // 0.09 − 0.042 − 0.002 = 0.046. The taker drag (0.001) is published
+    // separately and stays OUT of the spread: it is a one-off entry cost
+    // with its own line, not part of the rate the pair locks.
     expect(sim.estSpreadApr).toBeCloseTo(0.09 - 0.042 - FEE_DRAG, 12);
+    expect(sim.takerDragApr).toBeCloseTo(TAKER_DRAG, 12);
+    // The all-in figure a caller can still reconstruct.
+    expect(sim.estSpreadApr! - sim.takerDragApr).toBeCloseTo(0.09 - 0.042 - 0.003, 12);
     expect(sim.feeDragApr).toBeCloseTo(FEE_DRAG, 12);
   });
 
@@ -389,6 +400,37 @@ describe('simulateBorosPair', () => {
     expect(blocker!.message).toMatch(/0\.25% max/);
   });
 
+  it('refuses a leg whose RATE BOUND falls outside the venue band, even when the fill is fine', () => {
+    /**
+     * The order is sent carrying `worstApr` as its limit, and the venue
+     * rejects a limit outside mark ± maxRateDeviationApr with "Executed Rate
+     * Out of Range". A clean fill is no defence: what matters is the bound.
+     *
+     * hlMarket marks 8.9% with a 1.6% cap ⇒ the band is 7.3%–10.5%. A short
+     * leg hitting bids at 9% with a 2% tolerance carries a bound of 7%, which
+     * is under the floor, while its own fill sits comfortably inside.
+     */
+    const sim = simulateBorosPair(
+      simInput({ legA: leg({ slippageApr: 0.02 }), size: 1_000 }),
+    );
+    expect(sim.legA.execApr).toBeCloseTo(0.09, 12);
+    expect(sim.legA.slippageExceeded).toBe(false); // the FILL is fine
+    expect(sim.legA.worstApr).toBeCloseTo(0.07, 12); // the BOUND is not
+    const g = evaluatePairGate(gateInput({ simulation: sim }));
+    const blocker = g.blockers.find((b) => b.code === 'rate-bound-out-of-range');
+    expect(blocker).toBeDefined();
+    expect(blocker!.leg).toBe('A');
+    expect(blocker!.message).toMatch(/7\.00%/);
+    expect(blocker!.message).toMatch(/7\.30%–10\.50%/);
+  });
+
+  it('allows a bound that sits inside the venue band', () => {
+    // The fixture's default 0.25% tolerance puts leg A's bound at 8.75%,
+    // inside 7.3%–10.5% — no blocker.
+    const g = evaluatePairGate(gateInput({ simulation: simulateBorosPair(simInput()) }));
+    expect(g.blockers.find((b) => b.code === 'rate-bound-out-of-range')).toBeUndefined();
+  });
+
   it('honours a per-leg slippage override', () => {
     const sim = simulateBorosPair(
       simInput({
@@ -417,6 +459,32 @@ describe('simulateBorosPair', () => {
     expect(sim.marginRequiredTotal).toBeCloseTo(imA + imB, 6);
     // Not symmetric — the point of showing it per leg.
     expect(sim.legA.marginRequired).not.toBeCloseTo(sim.legB.marginRequired!, 6);
+  });
+
+  it('reports where the RESULTING position liquidates: a (kIM − kMM) rate move away, on the losing side', () => {
+    const sim = simulateBorosPair(simInput());
+    // Δ = max(|apr|, floor) × max(DTM, tThresh)/DTM × (kIM − kMM); DTM (30d)
+    // beats the 5d threshold here, so the time factor is 1.
+    const gap = imInputs.kIM - imInputs.kMM;
+    // Leg A SHORT at 9%: receives fixed, so a RISING rate liquidates it.
+    expect(sim.legA.liquidationApr).toBeCloseTo(0.09 + 0.09 * gap, 9);
+    // Leg B LONG at 4.2%: the floor (≈8.004%) sets the margin, and the
+    // position loses when the rate FALLS.
+    const floor = 1.00005 ** (770 * 2) - 1;
+    expect(sim.legB.liquidationApr).toBeCloseTo(0.042 - floor * gap, 9);
+  });
+
+  it('has no liquidation rate for a leg that ends flat or a market without kMM', () => {
+    // A close that ends flat is not a position: nothing to liquidate.
+    // A close ORDER runs opposite to the side held: long to close a short.
+    const flat = simulateBorosPair(
+      simInput({ intent: 'close', legA: leg({ currentSize: -SIZE, direction: 'long' }) }),
+    );
+    expect(flat.legA.sizing.resultingSize).toBe(0);
+    expect(flat.legA.liquidationApr).toBeNull();
+    // A market whose config carried no maintenance coefficient cannot be modelled.
+    const noMm = simulateBorosPair(simInput({ legA: leg({ market: { ...hlMarket, kMM: 0 } }) }));
+    expect(noMm.legA.liquidationApr).toBeNull();
   });
 
   it('quotes a REDUCING target off the other half of the book', () => {

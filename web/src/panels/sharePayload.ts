@@ -6,7 +6,7 @@
  * popup DISPLAYS — this module never re-derives them, so what the viewer of
  * the link sees is exactly what the sharer saw. */
 import type { ShareLegV1, SharePayloadV1 } from '../lib/shareCodec';
-import type { PairEstimate } from './assets/assetModel';
+import { pairLockedSpread, type PairEstimate } from './assets/assetModel';
 
 /** PairEstimate → the same v1 payload, for the asset view's pair popup.
  *
@@ -79,16 +79,10 @@ export function pairSharePayload(
     cb: null,
     p: opts.netUsd,
     // The card prints this as "N% locked spread", and a spread is a rate on
-    // NOTIONAL: what the receive leg locks minus what the pay leg locks, net
-    // of settlement fees. `lockedAprFwd` is that same carry over CAPITAL —
-    // the leveraged figure the headline APR already shows — and it read as
-    // a 32% "spread" beside a 26% APR. Recover the notional basis from it:
-    // carry per year = lockedAprFwd × capital; per-leg notional = half the
-    // pair's two perp notionals.
-    sp: (() => {
-      const perLegNotional = pair.notionalUsd / 2;
-      return perLegNotional > 0 ? (opts.lockedAprFwd * pair.capitalUsd) / perLegNotional : 0;
-    })(),
+    // NOTIONAL, not the leveraged-on-capital `lockedAprFwd` (which read as a
+    // 32% "spread" beside a 26% APR). Same helper as the pair card's
+    // sub-line, so the link shows the figure the sharer saw.
+    sp: pairLockedSpread({ ...pair, lockedAprFwd: opts.lockedAprFwd }) ?? 0,
     // A pair only exists once both sides are on, and assetModel builds it from
     // legs that are open on both venues.
     h: 'h',

@@ -311,6 +311,7 @@ export function PriceImpactGraph({
   staleError,
   onRefetch,
   dim = false,
+  embedded = false,
 }: {
   long: LegImpact;
   short: LegImpact;
@@ -319,23 +320,34 @@ export function PriceImpactGraph({
   onRefetch: () => void;
   /** Dim the impact marks while the preview describes a stale input. */
   dim?: boolean;
+  /** Render inside a caller's card: no border, heading or freshness chip of
+   * its own — the estimate card around it carries those. */
+  embedded?: boolean;
 }) {
   const scale = assembleImpactMarks(long, short);
 
   return (
-    <div className="flex flex-col gap-2 rounded-lg border border-ink-800 bg-ink-950/60 px-3 py-2">
-      <div className="flex items-center justify-between">
-        <span className="text-[10px] font-semibold uppercase tracking-wider text-ink-500">
-          Book &amp; market impact
-        </span>
-        <FreshnessButton
-          dataUpdatedAt={updatedAt}
-          staleError={staleError}
-          title="Live venue books — refetch"
-          onRefetch={onRefetch}
-          dense
-        />
-      </div>
+    <div
+      className={
+        embedded
+          ? 'flex flex-col gap-2'
+          : 'flex flex-col gap-2 rounded-lg border border-ink-800 bg-ink-950/60 px-3 py-2'
+      }
+    >
+      {!embedded && (
+        <div className="flex items-center justify-between">
+          <span className="text-[10px] font-semibold uppercase tracking-wider text-ink-500">
+            Book &amp; market impact
+          </span>
+          <FreshnessButton
+            dataUpdatedAt={updatedAt}
+            staleError={staleError}
+            title="Live venue books — refetch"
+            onRefetch={onRefetch}
+            dense
+          />
+        </div>
+      )}
 
       {scale === null ? (
         <div className="py-6 text-center text-[11px] text-ink-500">book &amp; impact unavailable</div>
@@ -401,6 +413,7 @@ export function PairBookImpact({
   mode,
   makerLegPick,
   makerPriceStr,
+  embedded,
 }: {
   longSym: string | null;
   shortSym: string | null;
@@ -411,6 +424,8 @@ export function PairBookImpact({
   mode: 'market' | 'maker';
   makerLegPick: 'long' | 'short';
   makerPriceStr: string;
+  /** See PriceImpactGraph.embedded — the pair ticket's estimate card hosts it. */
+  embedded?: boolean;
 }) {
   const notionalNum = Number(notional);
   const enabled = Boolean(longSym && shortSym && Number.isFinite(notionalNum) && notionalNum > 0);
@@ -464,6 +479,7 @@ export function PairBookImpact({
       updatedAt={updatedAt}
       staleError={staleError}
       dim={estimating}
+      embedded={embedded}
       onRefetch={() => {
         void longBook.refetch();
         void shortBook.refetch();

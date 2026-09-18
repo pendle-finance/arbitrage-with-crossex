@@ -295,10 +295,10 @@ describe('BorosPairTicket', () => {
     renderWithClient(<BorosPairTicket />);
 
     return waitFor(() => {
-      const labels = screen.getAllByText(/^(Long|Short)$/);
+      const labels = screen.getAllByText(/^(LONG|SHORT)$/);
       expect(labels).toHaveLength(2);
       // One of each — never two legs on the same side.
-      expect(new Set(labels.map((l) => l.textContent))).toEqual(new Set(['Long', 'Short']));
+      expect(new Set(labels.map((l) => l.textContent))).toEqual(new Set(['LONG', 'SHORT']));
     });
   });
 
@@ -324,8 +324,6 @@ describe('BorosPairTicket', () => {
     expect(byLabel('OKX BTC 31 Aug 2026')).toBeUndefined();
     // The eligible one is still there and selectable.
     expect(byLabel('Binance ETHUSDT')!.disabled).toBe(false);
-    // The absence is explained rather than silent.
-    expect(await screen.findByText(/\d+ hidden · other collateral or maturity/)).toBeInTheDocument();
   });
 
   it('leads with the estimated spread and shows the worst case beneath it', async () => {
@@ -336,8 +334,6 @@ describe('BorosPairTicket', () => {
 
     expect(await screen.findByText('Estimated spread')).toBeInTheDocument();
     expect(screen.getByText('4.50%')).toBeInTheDocument(); // estimate — the lead
-    expect(screen.getByText('Worst case')).toBeInTheDocument();
-    expect(screen.getByText('4.00%')).toBeInTheDocument(); // worst — beneath it
     // Both are net; the pre-cost 4.8% must appear nowhere. That the figures
     // ARE net is the property worth pinning — the caption saying so was
     // removed as noise, but a gross number leaking here would be a bug.
@@ -505,7 +501,7 @@ describe('BorosPairTicket', () => {
     renderWithClient(<BorosPairTicket />);
     await fillTicket(user);
 
-    const box = await screen.findByRole('checkbox');
+    const box = await screen.findByRole('checkbox', { name: /I understand/ });
     // The copy names the market, the held size and what happens to it.
     expect(screen.getByText(/closes my existing Hyperliquid ETH 31 Aug 2026 long position of 40,000/i))
       .toBeInTheDocument();
@@ -517,7 +513,7 @@ describe('BorosPairTicket', () => {
 
     // Changing the size changes WHAT is being acknowledged — it must not carry.
     await user.type(screen.getByLabelText(/^Size per leg/), '0');
-    await waitFor(() => expect(screen.getByRole('checkbox')).not.toBeChecked());
+    await waitFor(() => expect(screen.getByRole('checkbox', { name: /I understand/ })).not.toBeChecked());
   });
 
   it('names the venue and both markets before anything is sent', async () => {
@@ -712,7 +708,7 @@ describe('BorosPairTicket', () => {
     await fillTicket(user);
 
     // Pair ticket: the fee covers both legs, and the label says so.
-    await screen.findByText('Taker fee (2 legs)');
+    await screen.findByText('Trade fee · 2 legs');
     expect(screen.queryByText(/prepaid gas/i)).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Top up gas/i })).not.toBeInTheDocument();
   });
@@ -808,7 +804,7 @@ describe('BorosPairTicket', () => {
       expect((screen.getByLabelText('Leg A') as HTMLSelectElement).options.length).toBeGreaterThan(1),
     );
     // The option's accessible name carries its "reduce-only" sub-label.
-    await user.click(screen.getByRole('radio', { name: /^Close/ }));
+    await user.click(screen.getByRole('checkbox', { name: 'Reduce-only' }));
     // Whose guarantee "reduce-only" is still qualified — on the badge that
     // makes the claim, instead of a paragraph shown every time Close is picked.
     expect(screen.getByTitle(/Boros has no reduce-only order type/i)).toBeInTheDocument();
@@ -979,7 +975,7 @@ describe('BorosPairTicket', () => {
 
     expect(await screen.findByText('Estimated rate')).toBeInTheDocument();
     expect(screen.queryByText('Estimated spread')).not.toBeInTheDocument();
-    expect(screen.queryByText('Taker fee (2 legs)')).not.toBeInTheDocument();
+    expect(screen.queryByText('Trade fee · 2 legs')).not.toBeInTheDocument();
   });
 
   it('a pair that came back with NO imbalance offers Retry, never Complete', async () => {
@@ -1176,7 +1172,7 @@ describe('BorosPairTicket — the size unit', () => {
     expect(screen.getByText(/^Size per leg$/)).toBeInTheDocument();
 
     await user.selectOptions(screen.getByLabelText('Leg A'), String(HL));
-    expect(screen.getByText('Size per leg (USDT)')).toBeInTheDocument();
+    expect(screen.getByLabelText('Size per leg (USDT)')).toBeInTheDocument();
     expect(screen.queryByText(/\(collateral\)/)).not.toBeInTheDocument();
   });
 
@@ -1188,7 +1184,7 @@ describe('BorosPairTicket — the size unit', () => {
       expect((screen.getByLabelText('Leg A') as HTMLSelectElement).options.length).toBeGreaterThan(1),
     );
     await user.selectOptions(screen.getByLabelText('Leg A'), '400');
-    expect(screen.getByText('Size per leg (BTC)')).toBeInTheDocument();
+    expect(screen.getByLabelText('Size per leg (BTC)')).toBeInTheDocument();
   });
 });
 

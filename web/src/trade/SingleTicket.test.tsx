@@ -17,19 +17,21 @@ import { SingleTicket } from './SingleTicket';
 
 const btcSymbolHandlers = () => symbolHandlers([BTC_BINANCE, BTC_HYPERLIQUID]);
 
-/** Type BTC into the combobox and pick the BINANCE venue chip. */
+/** Quick-pick BTC and pick the BINANCE venue chip. */
 async function pickBinanceBtc() {
-  await userEvent.type(screen.getByLabelText('Symbol search'), 'BTC');
+  await userEvent.click(screen.getByRole('button', { name: 'BTC' }));
   await userEvent.click(await screen.findByRole('button', { name: 'BINANCE' }));
 }
 
-/** Type BTC into the combobox and pick the HYPERLIQUID venue chip, then wait
- * for the symbol detail (tick size + leverage cap) so the blur snap has a tick. */
+/** Quick-pick BTC and pick the HYPERLIQUID venue chip, then wait for the
+ * symbol detail (tick size + leverage cap) so the blur snap has a tick — the
+ * "max" link only appears once the venue's leverage cap is known. */
 async function pickHyperliquidBtc() {
-  await userEvent.type(screen.getByLabelText('Symbol search'), 'BTC');
+  await userEvent.click(screen.getByRole('button', { name: 'BTC' }));
   // The chip's accessible name includes the non-USDT quote note ("USDC").
   await userEvent.click(await screen.findByRole('button', { name: /HYPERLIQUID/ }));
-  await screen.findByText('50x (venue max)');
+  await userEvent.click(screen.getByRole('radio', { name: 'USDT' }));
+  await screen.findByRole('button', { name: /^max / });
 }
 
 describe('SingleTicket', () => {
@@ -133,9 +135,10 @@ describe('SingleTicket', () => {
 
     expect(await screen.findByText(/Tentative avg fill/)).toBeInTheDocument();
     expect(screen.getByText('65010.5')).toBeInTheDocument();
-    expect(screen.getByText('partial depth — estimate extrapolated')).toBeInTheDocument();
+    expect(screen.getByText(/Partial depth/)).toBeInTheDocument();
     // Taker fee with bps, and actions enabled (no violations).
-    expect(screen.getByText(/0\.0488 USDT \(taker, 5\.0 bps\)/)).toBeInTheDocument();
+    expect(screen.getByText('0.0488 USDT')).toBeInTheDocument();
+    expect(screen.getByText('taker · 5.0 bps')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Execute now ▸' })).toBeEnabled();
   });
 
@@ -193,7 +196,7 @@ describe('SingleTicket', () => {
     renderWithClient(<SingleTicket />);
 
     await pickBinanceBtc();
-    await userEvent.click(screen.getByRole('radio', { name: 'LIMIT' }));
+    await userEvent.click(screen.getByRole('radio', { name: 'Limit' }));
     await userEvent.type(screen.getByLabelText('Size'), '100');
     await userEvent.type(screen.getByLabelText('Limit price'), '65000');
 
@@ -216,7 +219,7 @@ describe('SingleTicket', () => {
     renderWithClient(<SingleTicket />);
 
     await pickHyperliquidBtc();
-    await userEvent.click(screen.getByRole('radio', { name: 'LIMIT' }));
+    await userEvent.click(screen.getByRole('radio', { name: 'Limit' }));
     const price = screen.getByLabelText('Limit price');
     await userEvent.type(price, '61717.6');
     await userEvent.tab();
@@ -230,8 +233,8 @@ describe('SingleTicket', () => {
     renderWithClient(<SingleTicket />);
 
     await pickHyperliquidBtc();
-    await userEvent.click(screen.getByRole('radio', { name: 'SELL' }));
-    await userEvent.click(screen.getByRole('radio', { name: 'LIMIT' }));
+    await userEvent.click(screen.getByRole('radio', { name: 'Sell' }));
+    await userEvent.click(screen.getByRole('radio', { name: 'Limit' }));
     const price = screen.getByLabelText('Limit price');
     await userEvent.type(price, '61717.4');
     await userEvent.tab();
@@ -249,13 +252,13 @@ describe('SingleTicket', () => {
     renderWithClient(<SingleTicket />);
 
     await pickHyperliquidBtc();
-    await userEvent.click(screen.getByRole('radio', { name: 'LIMIT' }));
+    await userEvent.click(screen.getByRole('radio', { name: 'Limit' }));
     const price = screen.getByLabelText('Limit price');
     await userEvent.type(price, '61717.6');
     await userEvent.tab();
     expect(price).toHaveValue('61717'); // floored for the resting BUY
 
-    await userEvent.click(screen.getByRole('radio', { name: 'SELL' }));
+    await userEvent.click(screen.getByRole('radio', { name: 'Sell' }));
     expect(price).toHaveValue('61718'); // re-ceiled from the raw 61717.6
   });
 });
@@ -279,7 +282,7 @@ describe('no Review card on a single order', () => {
     await waitFor(() => expect(screen.queryByText('Review')).toBeNull());
     expect(screen.queryByRole('tooltip')).toBeNull();
     // The inline preview is still there — nothing was lost by removing it.
-    expect(await screen.findByText(/est fee/)).toBeInTheDocument();
+    expect(await screen.findByText('Est fee')).toBeInTheDocument();
   });
 });
 

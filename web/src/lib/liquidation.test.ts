@@ -262,10 +262,10 @@ describe('formatting', () => {
     expect(fmtLinePrice(3150.4)).toBe('~$3,150');
     expect(fmtLinePrice(115.23)).toBe('~$115.23');
     expect(lineLabel({ base: 'ETH', venue: 'Hyperliquid', side: 'short', price: 3150, move: 0.37 })).toBe(
-      'Liquidates if ETH hits ~$3,150 (+37%)',
+      'Liquidation: ETH @ ~$3,150 (+37%)',
     );
     expect(lineLabel({ base: 'ETH', venue: 'CrossEx', side: 'long', price: 1840, move: -0.2 })).toBe(
-      'Liquidates if ETH falls to ~$1,840 (-20%)',
+      'Liquidation: ETH @ ~$1,840 (-20%)',
     );
     expect(describeLine({ base: 'ETH', venue: 'Hyperliquid', side: 'short', price: 3150, move: 0.37 })).toBe(
       'Gate liquidates your account if ETH rises to about $3,150 (+37%). This assumes ETH moves the same on every venue and other coins do not move. Your ETH short on Hyperliquid loses in this move.',

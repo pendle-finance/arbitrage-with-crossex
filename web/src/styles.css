@@ -188,6 +188,24 @@
     @apply bg-rose-500/15 text-rose-300;
   }
 
+  /* Grass-active segmented control — the single ticket's Buy side. Paired
+     with seg-rose on Sell, so the side switch carries the side's colour. */
+  .seg-grass .seg-btn[data-active='true'] {
+    @apply bg-emerald-500/15 text-emerald-300;
+  }
+
+  /* Compact variant for a segmented control that sits INSIDE an input box
+     (the size-unit switch): short enough to clear the input's padding. */
+  .seg-xs .seg-btn {
+    @apply px-2 py-0.5 text-[10.5px];
+  }
+
+  /* A native select dressed as the house input: the chevron is drawn by the
+     wrapper, so the browser's own is suppressed. */
+  .select {
+    @apply w-full cursor-pointer appearance-none rounded-lg border border-ink-700 bg-ink-950 py-2 pl-3 pr-8 text-sm text-ink-100 focus:border-ink-500 focus:outline-none focus:ring-1 focus:ring-cyan-500/30;
+  }
+
   .bar-pnl-gain {
     @apply bg-grass/20;
     background-image: repeating-linear-gradient(135deg, theme('colors.grass') 0 2px, transparent 2px 6px);
