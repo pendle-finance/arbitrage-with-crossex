@@ -8,9 +8,13 @@ import type { FetchLike } from '../../src/core/boros/client';
 
 export function borosStub(bodies: Record<string, unknown>, calls?: string[]): FetchLike {
   return async (url: string) => {
-    const { pathname, search } = new URL(url);
+    const { pathname, search, searchParams } = new URL(url);
     calls?.push(pathname + search);
-    const body = bodies[pathname];
+    // The order book takes its marketId as a query param, so a bare pathname
+    // can no longer tell two markets' books apart: try the marketId-qualified
+    // key first, then the plain pathname.
+    const marketId = searchParams.get('marketId');
+    const body = (marketId !== null ? bodies[`${pathname}?marketId=${marketId}`] : undefined) ?? bodies[pathname];
     return body === undefined
       ? { ok: false, status: 404, json: async () => ({ statusCode: 404 }) }
       : { ok: true, status: 200, json: async () => body };
