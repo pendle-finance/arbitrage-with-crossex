@@ -47,9 +47,10 @@ export function createTelegramSync(opts: TelegramSyncOptions): TelegramSync {
   let inFlight: Promise<void> = Promise.resolve();
 
   const syncOnce = async (): Promise<void> => {
+    const key = readTelegramKey(opts.dataDir);
+    if (key === null) return;
+    const keyKept = (): boolean => readTelegramKey(opts.dataDir)?.keyHash === key.keyHash;
     try {
-      const key = readTelegramKey(opts.dataDir);
-      if (key === null) return;
       const coins = await opts.readCoins();
       const syncedAt = opts.now();
       const settings = await opts.bot.putTriggers(key.key, {
@@ -58,8 +59,9 @@ export function createTelegramSync(opts: TelegramSyncOptions): TelegramSync {
         version: opts.version,
         coins,
       });
-      opts.status.setSynced(syncedAt, settings);
+      if (keyKept()) opts.status.setSynced(syncedAt, settings);
     } catch (err) {
+      if (!keyKept()) return;
       if (err instanceof BotAuthError) opts.status.setAuth(err.reason);
       opts.status.setSyncError(opts.now(), err instanceof Error ? err.message : String(err));
     }

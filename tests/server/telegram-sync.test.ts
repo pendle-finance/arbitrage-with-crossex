@@ -356,6 +356,7 @@ describe('the trigger sync', () => {
       pageUrl: `${BOT_URL}/alerts`,
       version: '1.6.3',
       now: () => t,
+      status,
       onConfirmed: () => undefined,
     });
     const app = makeTestApp({ dataDir, telegram: { link: telegramLink, sync, status, bot: stub.bot } });

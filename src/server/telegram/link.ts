@@ -4,6 +4,7 @@ import type { TelegramLinkStart, TelegramLinkStatus } from '../../../web/src/api
 import { readOwnerJson, writeOwnerOnlyJson } from '../secretFile';
 import { BotAuthError, BotUnavailableError, type BotClient } from './botClient';
 import { deleteTelegramKey, newTelegramKey, readTelegramKey, writeTelegramKey, type TelegramKey } from './keyFile';
+import type { TelegramStatus } from './status';
 
 const POLL_EVERY_MS = 5_000;
 const SWAP_FILE = 'telegram-link';
@@ -23,6 +24,7 @@ export interface TelegramLinkOptions {
   pageUrl: string;
   version: string;
   now: () => number;
+  status: TelegramStatus;
   onConfirmed: () => void;
   onRestored?: () => void;
   pollMs?: number;
@@ -31,6 +33,7 @@ export interface TelegramLinkOptions {
 interface KeySwap {
   key: Pick<TelegramKey, 'keyHash'>;
   previous: TelegramKey | null;
+  previousStatus?: Pick<TelegramStatus, 'auth' | 'lastSyncError'>;
 }
 
 interface PendingLink extends KeySwap {
@@ -67,6 +70,9 @@ export function createTelegramLink(opts: TelegramLinkOptions): TelegramLink {
       return;
     }
     writeTelegramKey(opts.dataDir, swap.previous);
+    if (swap.previousStatus === undefined) return;
+    opts.status.setAuth(swap.previousStatus.auth);
+    opts.status.lastSyncError = swap.previousStatus.lastSyncError;
     opts.onRestored?.();
   };
 
@@ -130,7 +136,11 @@ export function createTelegramLink(opts: TelegramLinkOptions): TelegramLink {
   };
 
   const begin = async (): Promise<TelegramLinkStart> => {
-    const swap = { key: newTelegramKey(opts.now()), previous: readTelegramKey(opts.dataDir) };
+    const swap = {
+      key: newTelegramKey(opts.now()),
+      previous: readTelegramKey(opts.dataDir),
+      previousStatus: { auth: opts.status.auth, lastSyncError: opts.status.lastSyncError },
+    };
     writeOwnerOnlyJson(swapFile, { key: { keyHash: swap.key.keyHash }, previous: swap.previous });
     writeTelegramKey(opts.dataDir, swap.key);
     try {

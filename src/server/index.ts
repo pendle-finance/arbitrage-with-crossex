@@ -184,6 +184,7 @@ const telegramLink = createTelegramLink({
   pageUrl: `${botBaseUrl(process.env)}/alerts`,
   version: telegramVersion,
   now: Date.now,
+  status: telegramStatus,
   onConfirmed: () => {
     telegramStatus.setAuth('ok');
     telegramSync.requestSync('linked');

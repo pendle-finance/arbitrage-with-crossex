@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { TriggerCoin } from '../../src/core/alerts/triggers';
 import type { BotAuthReason } from '../../src/server/telegram/botClient';
 import { newTelegramKey, readTelegramKey, type TelegramKey, writeTelegramKey } from '../../src/server/telegram/keyFile';
 import { createTelegramLink } from '../../src/server/telegram/link';
@@ -84,6 +85,7 @@ function boot(bot: Bot = makeBot()) {
     pageUrl: `${BOT_URL}/alerts`,
     version: '1.6.3',
     now: clock,
+    status,
     onConfirmed: () => {
       status.setAuth('ok');
       sync.requestSync('linked');
@@ -234,6 +236,16 @@ describe('Telegram link', () => {
     expect(bot.to('POST', '/link-requests')).toHaveLength(2);
   });
 
+  it('a read that is the first to see a first link expired says none', async () => {
+    const { app, bot } = boot();
+    bot.behaviour.reason = 'pending';
+    await send(app, 'POST', '/api/telegram/link');
+    now += TEN_MIN;
+
+    expect((await send(app, 'GET', '/api/telegram')).body.data).toEqual(NONE);
+    expect(readTelegramKey(dataDir)).toBeNull();
+  });
+
   it('restart drops the link', async () => {
     const first = boot();
     first.bot.behaviour.reason = 'pending';
@@ -350,24 +362,76 @@ describe('Telegram link', () => {
     expect(bot.to('PUT', '/terminal/triggers')).toHaveLength(0);
   });
 
-  it('a cancelled relink syncs the old key at once and reads connected again', async () => {
+  it('a cancelled relink reads connected on the old key at once, and syncs the old key', async () => {
     fakeInterval();
     const before = linked();
-    const { app, bot, sync, status } = boot();
+    const { app, bot, sync, status, readCoins } = boot();
+    sync.requestSync('boot');
+    await vi.waitFor(() => expect(status.auth).toBe('ok'));
     await send(app, 'POST', '/api/telegram/link');
     bot.behaviour.pendingKey = keyOnDisk().key;
     sync.requestSync('deal');
     await vi.waitFor(() => expect(status.auth).toBe('pending'));
+    let release = (): void => undefined;
+    readCoins.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = () => resolve([ETH]);
+        }),
+    );
 
     await send(app, 'DELETE', '/api/telegram/link');
-    await vi.waitFor(() => expect(bot.to('PUT', '/terminal/triggers')).toHaveLength(2));
+    const after = await send(app, 'GET', '/api/telegram');
+    release();
+    await vi.waitFor(() => expect(bot.to('PUT', '/terminal/triggers')).toHaveLength(3));
     await sync.idle();
 
-    expect(readTelegramKey(dataDir)).toEqual(before);
-    expect(bot.to('PUT', '/terminal/triggers')[1].headers['x-terminal-key']).toBe(before.key);
-    expect((await send(app, 'GET', '/api/telegram')).body.data).toMatchObject({
+    expect(after.body.data).toEqual({
       connected: true,
       state: 'connected',
+      settings: { liquidation: true, interest: true },
+      lastSyncAt: T0,
+      lastSyncError: null,
+    });
+    expect(readTelegramKey(dataDir)).toEqual(before);
+    expect(bot.to('PUT', '/terminal/triggers')[2].headers['x-terminal-key']).toBe(before.key);
+  });
+
+  it('a new key sync that ends after a cancelled relink records nothing', async () => {
+    fakeInterval();
+    const before = linked();
+    const { app, bot, sync, status, readCoins } = boot();
+    sync.requestSync('boot');
+    await vi.waitFor(() => expect(status.auth).toBe('ok'));
+    await send(app, 'POST', '/api/telegram/link');
+    const fresh = keyOnDisk();
+    bot.behaviour.pendingKey = fresh.key;
+    const releases: Array<() => void> = [];
+    const held = (): Promise<TriggerCoin[]> =>
+      new Promise((resolve) => {
+        releases.push(() => resolve([ETH]));
+      });
+    readCoins.mockImplementationOnce(held).mockImplementationOnce(held);
+    sync.requestSync('deal');
+    await vi.waitFor(() => expect(readCoins).toHaveBeenCalledTimes(2));
+
+    await send(app, 'DELETE', '/api/telegram/link');
+    releases[0]();
+    await vi.waitFor(() => expect(readCoins).toHaveBeenCalledTimes(3));
+    const after = await send(app, 'GET', '/api/telegram');
+    releases[1]();
+    await vi.waitFor(() => expect(bot.to('PUT', '/terminal/triggers')).toHaveLength(3));
+    await sync.idle();
+
+    const puts = bot.to('PUT', '/terminal/triggers');
+    expect(puts[1].headers['x-terminal-key']).toBe(fresh.key);
+    expect(puts[2].headers['x-terminal-key']).toBe(before.key);
+    expect(readTelegramKey(dataDir)).toEqual(before);
+    expect(after.body.data).toEqual({
+      connected: true,
+      state: 'connected',
+      settings: { liquidation: true, interest: true },
+      lastSyncAt: T0,
       lastSyncError: null,
     });
   });
@@ -436,6 +500,24 @@ describe('Telegram link', () => {
 
     expect(readTelegramKey(dataDir)).toEqual(before);
     expect(second.status.auth).toBeNull();
+  });
+
+  it('a restart that restores the key that was there sends one sync', async () => {
+    const before = linked();
+    const first = boot();
+    await send(first.app, 'POST', '/api/telegram/link');
+    first.bot.behaviour.pendingKey = keyOnDisk().key;
+
+    const second = boot(first.bot);
+    await second.link.settled();
+    second.sync.start();
+    await second.sync.idle();
+    await second.sync.idle();
+
+    expect(readTelegramKey(dataDir)).toEqual(before);
+    expect(first.bot.to('PUT', '/terminal/triggers')).toHaveLength(1);
+    expect(first.bot.to('PUT', '/terminal/triggers')[0].headers['x-terminal-key']).toBe(before.key);
+    expect((await send(second.app, 'GET', '/api/telegram')).body.data).toMatchObject({ connected: true, state: 'connected' });
   });
 
   it('a restart during a first link leaves no key', async () => {

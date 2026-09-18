@@ -59,8 +59,9 @@ export function telegramRoutes(deps: AppDeps) {
   };
 
   const info = (t: Telegram): TelegramInfo => {
+    const linkPending = t.link.status().status === 'pending';
     const keyed = hasKey(t);
-    const state = stateOf(keyed, t.link.status().status === 'pending', t.status.auth);
+    const state = stateOf(keyed, linkPending, t.status.auth);
     if (!keyed) return { connected: false, state, settings: null, lastSyncAt: null, lastSyncError: null };
     return {
       connected: state === 'connected',
