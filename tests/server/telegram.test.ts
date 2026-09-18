@@ -397,6 +397,59 @@ describe('Telegram link', () => {
     expect(bot.to('PUT', '/terminal/triggers')[2].headers['x-terminal-key']).toBe(before.key);
   });
 
+  it('a relink cancelled while the old key already read removed still restores removed', async () => {
+    fakeInterval();
+    const before = linked();
+    const { app, bot, sync, status } = boot();
+    bot.behaviour.reason = 'removed';
+    sync.requestSync('boot');
+    await vi.waitFor(() => expect(status.auth).toBe('removed'));
+    await send(app, 'POST', '/api/telegram/link');
+    bot.behaviour.reason = null;
+    bot.behaviour.pendingKey = keyOnDisk().key;
+    sync.requestSync('deal');
+    await vi.waitFor(() => expect(status.auth).toBe('pending'));
+    bot.behaviour.reason = 'removed';
+
+    await send(app, 'DELETE', '/api/telegram/link');
+    const after = await send(app, 'GET', '/api/telegram');
+    await sync.idle();
+    await sync.idle();
+    const later = await send(app, 'GET', '/api/telegram');
+
+    expect(readTelegramKey(dataDir)).toEqual(before);
+    expect(after.body.data.state).toBe('removed');
+    expect(later.body.data.state).toBe('removed');
+  });
+
+  it('a relink cancelled after the old key was removed on the bot page reads connected, then removed once the restore sync lands', async () => {
+    fakeInterval();
+    const before = linked();
+    const { app, bot, sync, status, readCoins } = boot();
+    sync.requestSync('boot');
+    await vi.waitFor(() => expect(status.auth).toBe('ok'));
+    await send(app, 'POST', '/api/telegram/link');
+    bot.behaviour.reason = 'removed';
+    let release = (): void => undefined;
+    readCoins.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = () => resolve([ETH]);
+        }),
+    );
+
+    await send(app, 'DELETE', '/api/telegram/link');
+    const after = await send(app, 'GET', '/api/telegram');
+    release();
+    await vi.waitFor(() => expect(status.auth).toBe('removed'));
+    await sync.idle();
+    const later = await send(app, 'GET', '/api/telegram');
+
+    expect(readTelegramKey(dataDir)).toEqual(before);
+    expect(after.body.data.state).toBe('connected');
+    expect(later.body.data.state).toBe('removed');
+  });
+
   it('a new key sync that ends after a cancelled relink records nothing', async () => {
     fakeInterval();
     const before = linked();
