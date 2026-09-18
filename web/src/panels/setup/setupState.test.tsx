@@ -28,6 +28,25 @@ describe('useSetupState', () => {
     expect(result.current.doneCount).toBe(1);
   });
 
+  it('an expired approval is not done while its wallet is tracked', async () => {
+    localStorage.setItem('crossex.strategy.v1', JSON.stringify({ address: WALLET }));
+    mockWorld({ keyConfigured: true, agent: agentStatus({ configured: true, root: WALLET, expired: true }) });
+    const { result } = renderHook(() => useSetupState(), { wrapper: hookWrapper() });
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    expect(result.current.steps.borosWallet).toBe('missing');
+    expect(result.current.firstMissing).toBe('borosWallet');
+  });
+
+  it('a tracked address with no approval is done', async () => {
+    localStorage.setItem('crossex.strategy.v1', JSON.stringify({ address: WALLET }));
+    mockWorld({ keyConfigured: true });
+    const { result } = renderHook(() => useSetupState(), { wrapper: hookWrapper() });
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    expect(result.current.steps.borosWallet).toBe('done');
+  });
+
   it('a live approval is done', async () => {
     mockWorld({ keyConfigured: true, agent: agentStatus({ configured: true, root: WALLET, expired: false }) });
     const { result } = renderHook(() => useSetupState(), { wrapper: hookWrapper() });

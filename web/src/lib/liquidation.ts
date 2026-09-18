@@ -64,13 +64,17 @@ function walletOf(exchange: string): string {
 function legsOf(positions: PositionsResponse): Leg[] {
   const bySymbol = new Map(positions.positions.map((p) => [p.symbol, p]));
   const legs: Leg[] = [];
+  const unpriced = new Set<string>();
   for (const g of positions.exposure) {
     for (const l of g.legs) {
       const p = bySymbol.get(l.symbol);
       if (!p || !(l.value > 0)) continue;
       const mark = gateNumber(p.markPrice);
       const mm = gateNumber(p.maintenanceMargin);
-      if (mark === null || mark <= 0 || mm === null || mm < 0) continue;
+      if (mark === null || mark <= 0 || mm === null || mm < 0) {
+        unpriced.add(g.base);
+        continue;
+      }
       legs.push({
         base: g.base,
         exchange: l.exchange,
@@ -82,7 +86,7 @@ function legsOf(positions: PositionsResponse): Leg[] {
       });
     }
   }
-  return legs;
+  return legs.filter((l) => !unpriced.has(l.base));
 }
 
 /** Bisect g on [lo, hi] where g(lo) > 0 >= g(hi) or the reverse. */

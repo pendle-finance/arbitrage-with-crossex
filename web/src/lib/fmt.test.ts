@@ -4,6 +4,7 @@ import {
   feePct,
   fieldValue,
   fmtAbout,
+  fmtAge,
   fmtClock,
   fmtDateLocal,
   fmtDateShort,
@@ -244,5 +245,20 @@ describe('fmtUsdCompact', () => {
     [1_000_000, '$1.00M'],
   ])('fmtUsdCompact(%f) -> %s', (n, expected) => {
     expect(fmtUsdCompact(n)).toBe(expected);
+  });
+});
+
+describe('fmtAge', () => {
+  it.each([
+    [Number.NaN, '—'],
+    [-5_000, '0s'],
+    [59_999, '59s'],
+    [252_000, '4m 12s'],
+    [3_599_000, '59m 59s'],
+    [7_500_000, '2h 5m'],
+    [86_399_000, '23h 59m'],
+    [3 * 86_400_000, '3d'],
+  ])('%d ms reads %s', (ms, text) => {
+    expect(fmtAge(ms)).toBe(text);
   });
 });

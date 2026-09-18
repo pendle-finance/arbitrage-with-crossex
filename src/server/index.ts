@@ -255,7 +255,7 @@ app
     // server died just gets its next tick. Started after listen so a port
     // conflict (second instance) can never run venue mutations first.
     if (loopDeps && engine) engine.wake = startLoop(loopDeps).wake;
-    telegramSync.start();
+    void telegramLink.settled().then(() => telegramSync.start());
     const shown = host === '127.0.0.1' ? 'localhost' : host;
     console.log(`arb-tools server listening on http://${shown}:${port}`);
   })

@@ -205,7 +205,7 @@ export function SymbolCombobox({ value, onSelect, onClear }: SymbolComboboxProps
   const supportedBases = useSupportedBases();
   const recents = value
     ? []
-    : getRecentSymbols().filter((s) => supportedBases.data?.has(parseSymbol(s).base) ?? false);
+    : getRecentSymbols().filter((s) => supportedBases.data?.has(parseSymbol(s).base) ?? true);
 
   const onQuickPick = (coin: string) => {
     if (!value) return setText(coin);

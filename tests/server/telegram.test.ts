@@ -81,7 +81,7 @@ function boot(bot: Bot = makeBot()) {
     sync.stop();
     await app.close();
   });
-  return { bot, status, sync, app, readCoins };
+  return { bot, status, sync, link, app, readCoins };
 }
 
 async function send(app: FastifyInstance, method: 'GET' | 'POST' | 'PATCH' | 'DELETE', url: string, payload?: object) {
@@ -263,18 +263,51 @@ describe('Telegram link', () => {
   it('cancel stops the link and restores the key that was there', async () => {
     fakeInterval();
     const before = linked();
-    const { app, bot } = boot();
+    const { app, bot, link } = boot();
     bot.behaviour.reason = 'pending';
     await send(app, 'POST', '/api/telegram/link');
 
     const res = await app.inject({ method: 'DELETE', url: '/api/telegram/link', headers: HOST });
+    await link.settled();
     await vi.advanceTimersByTimeAsync(20_000);
 
     expect(res.statusCode).toBe(200);
     expect(res.json().data.status).toBe('none');
     expect(readTelegramKey(dataDir)).toEqual(before);
-    expect(bot.to('GET', '/terminal')).toHaveLength(0);
+    expect(bot.to('GET', '/terminal')).toHaveLength(1);
     expect((await send(app, 'GET', '/api/telegram/link')).body.data.status).toBe('none');
+  });
+
+  it('cancel after the user confirmed in the bot keeps the new key and finishes the link', async () => {
+    fakeInterval();
+    linked();
+    const { app, bot, link, status } = boot();
+    bot.behaviour.reason = 'pending';
+    await send(app, 'POST', '/api/telegram/link');
+    const key = keyOnDisk();
+    bot.behaviour.reason = null;
+
+    await app.inject({ method: 'DELETE', url: '/api/telegram/link', headers: HOST });
+    await link.settled();
+
+    expect(readTelegramKey(dataDir)).toEqual(key);
+    expect(fs.existsSync(path.join(dataDir, 'telegram-link'))).toBe(false);
+    expect(status.auth).toBe('ok');
+  });
+
+  it('cancel while the bot cannot be reached restores the key that was there', async () => {
+    fakeInterval();
+    const before = linked();
+    const { app, bot, link, status } = boot();
+    bot.behaviour.reason = 'pending';
+    await send(app, 'POST', '/api/telegram/link');
+    bot.behaviour.down = 'refused';
+
+    await app.inject({ method: 'DELETE', url: '/api/telegram/link', headers: HOST });
+    await link.settled();
+
+    expect(readTelegramKey(dataDir)).toEqual(before);
+    expect(status.auth).toBeNull();
   });
 
   it('a restart during linking restores the key that was there', async () => {
@@ -284,9 +317,39 @@ describe('Telegram link', () => {
     await send(first.app, 'POST', '/api/telegram/link');
     expect(keyOnDisk().keyHash).not.toBe(before.keyHash);
 
-    boot(first.bot);
+    await boot(first.bot).link.settled();
 
     expect(readTelegramKey(dataDir)).toEqual(before);
+  });
+
+  it('a restart after the user confirmed in the bot keeps the new key and finishes the link', async () => {
+    linked();
+    const first = boot();
+    first.bot.behaviour.reason = 'pending';
+    await send(first.app, 'POST', '/api/telegram/link');
+    const key = keyOnDisk();
+    first.bot.behaviour.reason = null;
+
+    const second = boot(first.bot);
+    await second.link.settled();
+
+    expect(readTelegramKey(dataDir)).toEqual(key);
+    expect(fs.existsSync(path.join(dataDir, 'telegram-link'))).toBe(false);
+    expect(second.status.auth).toBe('ok');
+  });
+
+  it('a restart while the bot cannot be reached restores the key that was there', async () => {
+    const before = linked();
+    const first = boot();
+    first.bot.behaviour.reason = 'pending';
+    await send(first.app, 'POST', '/api/telegram/link');
+    first.bot.behaviour.down = 'refused';
+
+    const second = boot(first.bot);
+    await second.link.settled();
+
+    expect(readTelegramKey(dataDir)).toEqual(before);
+    expect(second.status.auth).toBeNull();
   });
 
   it('a restart during a first link leaves no key', async () => {
@@ -295,6 +358,7 @@ describe('Telegram link', () => {
     await send(first.app, 'POST', '/api/telegram/link');
 
     const second = boot(first.bot);
+    await second.link.settled();
 
     expect(readTelegramKey(dataDir)).toBeNull();
     expect((await send(second.app, 'GET', '/api/telegram')).body.data).toMatchObject({ connected: false, state: 'none' });
@@ -309,7 +373,7 @@ describe('Telegram link', () => {
     await vi.advanceTimersByTimeAsync(5_000);
     const key = keyOnDisk();
 
-    boot(first.bot);
+    await boot(first.bot).link.settled();
 
     expect(readTelegramKey(dataDir)).toEqual(key);
   });

@@ -31,26 +31,26 @@ describe('SetupRowFrame', () => {
     expect(row).toHaveTextContent('1');
   });
 
-  it('gives a not set up row the amber border, and a sync failed or done row none', () => {
+  it('gives a not set up row an amber border that beats the list divider, and a sync failed or done row none', () => {
     const { rerender } = render(
       <SetupRowFrame n={3} title="Telegram alerts" row={baseRow(false)} isDone={false} state={null}>
         content
       </SetupRowFrame>,
     );
-    expect(screen.getByRole('region', { name: 'Telegram alerts' })).toHaveClass('border-gold/45');
+    expect(screen.getByRole('region', { name: 'Telegram alerts' })).toHaveClass('!border', '!border-gold/45');
 
     rerender(
       <SetupRowFrame n={3} title="Telegram alerts" row={baseRow(false)} isDone state="Last sync failed at 14:02" isWarn>
         content
       </SetupRowFrame>,
     );
-    expect(screen.getByRole('region', { name: 'Telegram alerts' })).not.toHaveClass('border-gold/45');
+    expect(screen.getByRole('region', { name: 'Telegram alerts' })).not.toHaveClass('!border-gold/45');
 
     rerender(
       <SetupRowFrame n={3} title="Telegram alerts" row={baseRow(false)} isDone state="Both on">
         content
       </SetupRowFrame>,
     );
-    expect(screen.getByRole('region', { name: 'Telegram alerts' })).not.toHaveClass('border-gold/45');
+    expect(screen.getByRole('region', { name: 'Telegram alerts' })).not.toHaveClass('!border-gold/45');
   });
 });

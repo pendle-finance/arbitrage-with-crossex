@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import type { SpotAccount } from 'gate-api';
 import { classifyGateError, classifyPlain, CoreError } from '../../core/errors';
+import { floorDecimalString } from '../../core/numbers';
 import { pathRule, transferPaths, type SpotBalance, type TransferCoin, type TransferPath } from '../../core/rebalance/plan';
 import type { AppDeps } from '../app';
 import { TTL } from '../cache';
@@ -30,7 +31,7 @@ const overMaxText = (path: TransferPath, max: number): string =>
 const spotBalances = (rows: SpotAccount[]): SpotBalance[] =>
   SPOT_COINS.map((coin) => {
     const row = rows.find((r) => r.currency === coin);
-    return { coin, available: Number(row?.available ?? 0) || 0, locked: Number(row?.locked ?? 0) || 0 };
+    return { coin, available: Number(floorDecimalString(row?.available ?? '0', '0.00001')) || 0, locked: Number(row?.locked ?? 0) || 0 };
   });
 
 const viewOf = ({ id, coin, from, to, amount, status, received, failText, createdAt, doneAt }: TransferJob) => ({

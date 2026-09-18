@@ -11,7 +11,8 @@ const SWAP_FILE = 'telegram-link';
 export interface TelegramLink {
   start(): Promise<TelegramLinkStart>;
   status(): TelegramLinkStatus;
-  cancel(): void;
+  cancel(): Promise<void>;
+  settled(): Promise<void>;
   stop(): void;
 }
 
@@ -65,8 +66,26 @@ export function createTelegramLink(opts: TelegramLinkOptions): TelegramLink {
     writeTelegramKey(opts.dataDir, swap.previous);
   };
 
+  const keepIfConfirmed = async (swap: KeySwap): Promise<void> => {
+    const key = readTelegramKey(opts.dataDir);
+    const confirmed =
+      key !== null &&
+      key.keyHash === swap.key.keyHash &&
+      (await opts.bot.getTerminal(key.key).then(
+        () => true,
+        () => false,
+      ));
+    if (!confirmed) {
+      restoreKey(swap);
+      return;
+    }
+    fs.rmSync(swapFile, { force: true });
+    opts.onConfirmed();
+  };
+
   const unconfirmed = readOwnerJson(swapFile, parseSwap);
-  if (unconfirmed !== null) restoreKey(unconfirmed);
+  let settling: Promise<void> =
+    unconfirmed === null ? Promise.resolve() : keepIfConfirmed(unconfirmed).catch(() => undefined);
 
   const settle = (current: PendingLink, state: 'confirmed' | 'expired'): void => {
     if (link !== current || current.state !== 'pending') return;
@@ -133,7 +152,7 @@ export function createTelegramLink(opts: TelegramLinkOptions): TelegramLink {
         if (opts.now() < link.expiresAt) return Promise.resolve({ url: link.url, expiresAt: link.expiresAt });
         settle(link, 'expired');
       }
-      starting = begin().finally(() => {
+      starting = settling.then(begin).finally(() => {
         starting = null;
       });
       return starting;
@@ -145,10 +164,16 @@ export function createTelegramLink(opts: TelegramLinkOptions): TelegramLink {
     },
     cancel() {
       const current = link;
-      if (current === null) return;
+      if (current === null) return settling;
       stopPolling();
       link = null;
-      if (current.state === 'pending') restoreKey(current);
+      if (current.state === 'pending') {
+        settling = settling.then(() => keepIfConfirmed(current)).catch(() => undefined);
+      }
+      return settling;
+    },
+    settled() {
+      return settling;
     },
     stop() {
       stopPolling();

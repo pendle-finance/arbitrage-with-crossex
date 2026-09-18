@@ -97,6 +97,23 @@ describe('ClosePopover', () => {
     expect(screen.getByRole('button', { name: 'Close now ▸' })).toBeDisabled();
   });
 
+  it.each([
+    ['4100', '4,100 ETH'],
+    ['12345678.9', '12,345,678.9 ETH'],
+  ])('states a %s ETH maximum with every digit and commas, never compact or exponent', async (qty, text) => {
+    server.use(...baseHandlers(), closePreviewHandler());
+    renderWithClient(
+      <ClosePopover position={makeCrossexPosition({ ...ethPosition, positionQty: qty })} onDismiss={() => {}} />,
+    );
+
+    expect(await screen.findByRole('button', { name: text })).toBeInTheDocument();
+    expect((screen.getByLabelText('Close size') as HTMLInputElement).value).not.toContain(',');
+    await userEvent.clear(screen.getByLabelText('Close size'));
+    await userEvent.type(screen.getByLabelText('Close size'), '99999999');
+    expect(await screen.findByText(`close size exceeds position (${text})`)).toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(/\d(k|M) ETH|e\+/);
+  });
+
   it('accepts the COIN maximum the dialog itself displays', async () => {
     // sig() keeps 4 dp from 1: a 151.20195 position prints as 151.202, a hair
     // ABOVE the position. Typing the hint's own figure must not be refused by

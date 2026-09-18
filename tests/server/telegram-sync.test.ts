@@ -165,6 +165,28 @@ describe('the trigger sync', () => {
     expect(stub.puts()).toHaveLength(1);
   });
 
+  it('deal halt syncs', async () => {
+    link();
+    const stub = botStub();
+    const { sync, status } = makeSync(stub.bot);
+    const w = mkWorld();
+    const finished = vi.fn(() => sync.requestSync('deal'));
+    w.deps.onFinish = finished;
+
+    await w.step();
+    const maker = w.venue.liveOrder(A_CONTRACT);
+    if (!maker) throw new Error('no maker order');
+    w.venue.fill(maker.clientText, '0.05');
+    w.venue.nextCreate = Array(20).fill('reject:BALANCE_NOT_ENOUGH');
+    await w.step(30);
+
+    expect(w.store.getPair(w.pairId)?.mode).toBe('HALTED');
+    expect(finished).toHaveBeenCalledOnce();
+    expect(finished).toHaveBeenCalledWith(w.pairId);
+    await vi.waitFor(() => expect(status.lastSyncAt).not.toBeNull());
+    expect(stub.puts()).toHaveLength(1);
+  });
+
   it('rebalance syncs', async () => {
     link();
     const stub = botStub();

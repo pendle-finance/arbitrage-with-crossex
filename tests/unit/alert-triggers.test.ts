@@ -148,6 +148,21 @@ describe('buildTriggerCoins on a book that liquidates either way', () => {
     expect(liquidation.down?.price).toBeCloseTo(100 * (1 - 850 / 1800), 2);
   });
 
+  it('sends no liquidation trigger for a coin with a blank mark on one leg, and still lists its legs', () => {
+    for (const symbol of ['GATE_FUTURE_ETH_USDT', 'HYPERLIQUID_FUTURE_ETH_USDC']) {
+      const blanked: PositionsResponse = {
+        ...book,
+        positions: book.positions.map((p) => (p.symbol === symbol ? { ...p, markPrice: '' } : p)),
+      };
+      const eth = ethOf(buildTriggerCoins(acc, blanked));
+      expect(eth.liquidation).toEqual({ down: null, up: null });
+      expect(eth.legs).toEqual([
+        { venue: 'GATE', side: 'short' },
+        { venue: 'HYPERLIQUID', side: 'long' },
+      ]);
+    }
+  });
+
   it('prices interest on both sides of the same book', () => {
     const { interest } = ethOf(buildTriggerCoins(acc, book));
     expect(interest.up?.wallet).toBe('USDT');

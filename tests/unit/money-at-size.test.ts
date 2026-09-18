@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { floorToStep, formatCrossPrice, roundToStep, stripZeros } from '../../src/core/numbers';
+import { floorDecimalString, floorToStep, formatCrossPrice, roundToStep, stripZeros } from '../../src/core/numbers';
 import { resolveQty } from '../../src/core/orders';
 import {
   ceilCents,
@@ -168,6 +168,18 @@ describe('transferPaths max at every rung', () => {
       expect(max ?? Infinity).toBeLessThanOrEqual(Number(balance));
     }
   });
+
+  it('$6,000,000: a CrossEx balance with 21 decimals a hair under 6,000,000 gives a max under it', () => {
+    const balance = '5999999.999999999999999999999';
+    const account: AccountLike = {
+      availableMargin: '60000000',
+      marginBalance: '60000000',
+      initialMargin: '6000000',
+      assets: [cashRow('USDT', 'CROSSEX', balance, 60_000_000)],
+    };
+    const paths = transferPaths({ account, spot: [], coins: COINS });
+    expect(pathOf(paths, 'USDT', 'CROSSEX', 'SPOT').max).toBe(5999999.99);
+  });
 });
 
 async function wireAmount(amount: number): Promise<string> {
@@ -225,6 +237,12 @@ describe('receivedOf at every rung', () => {
     const row: Partial<TransferRecord> = { actualReceive: '0', amount: `${x}.01` };
     const received = receivedOf(row as TransferRecord, { coin: 'USDC', from: 'CROSSEX_HYPERLIQUID', to: 'SPOT' });
     expect(received).toBe(Number(`${x - 1}.01`));
+  });
+
+  it('$6,000,000: an actualReceive with 21 decimals a hair under 6,000,000 stays under it', () => {
+    const row: Partial<TransferRecord> = { actualReceive: '5999999.999999999999999999999', amount: '6000001' };
+    const received = receivedOf(row as TransferRecord, { coin: 'USDC', from: 'CROSSEX_HYPERLIQUID', to: 'SPOT' });
+    expect(received).toBe(5999999.99999);
   });
 });
 
@@ -359,6 +377,43 @@ describe('a balance-capped amount at every rung never goes above the balance', (
     const received = receivedOf(row as TransferRecord, { coin: 'USDC', from: 'CROSSEX_HYPERLIQUID', to: 'SPOT' });
     expect(received).toBe(Number(under5));
     expect(received).toBeLessThanOrEqual(Number(row.amount) - 1);
+  });
+
+  it.each(RUNGS)('$usd: fit with cash one float step under the rung sizes $under, and its transfer stays under the cash', ({ x, under }) => {
+    for (const cash of hairsInsideNoise(x)) {
+      const size = fit({ marginBalance: 10 * x, initialMargin: x }, cash, 10 * x);
+      expect(size).toBe(Number(under));
+      expect(size).toBeLessThanOrEqual(cash);
+      expect(Number(floorToStep(size, '0.00001'))).toBeLessThanOrEqual(cash);
+    }
+  });
+
+  it.each(RUNGS)('$usd: a 21-decimal balance string one hair under the rung floors on its digits, not on the float', ({ x, under, under5 }) => {
+    const balance = `${x - 1}.${'9'.repeat(21)}`;
+    expect(Number(balance)).toBe(x);
+    expect(floorDecimalString(balance, '0.00001')).toBe(under5);
+    expect(floorDecimalString(balance, '0.01')).toBe(under);
+    expect(floorDecimalString(`${x}.${'0'.repeat(20)}1`, '0.00001')).toBe(`${x}.00000`);
+  });
+
+  it('a Gate balance of 75.757859999999999999999 floors to 75.75785, where the float floors to 75.75786', () => {
+    expect(floorDecimalString('75.757859999999999999999', '0.00001')).toBe('75.75785');
+    expect(floorToStep(Number('75.757859999999999999999'), '0.00001')).toBe('75.75786');
+    expect(floorDecimalString('75.7578611899999999999992', '0.00001')).toBe('75.75786');
+    expect(floorDecimalString('615.041881989189189461309', '0.01')).toBe('615.04');
+  });
+
+  it('$6,000,000: a 21-decimal balance floors exactly on both steps', () => {
+    expect(floorDecimalString('5999999.999999999999999999999', '0.00001')).toBe('5999999.99999');
+    expect(floorDecimalString('6000000.000009999999999999999', '0.00001')).toBe('6000000.00000');
+    expect(floorDecimalString('5999999.989999999999999999999', '0.01')).toBe('5999999.98');
+  });
+
+  it('a negative or malformed balance string floors toward less cash', () => {
+    expect(floorDecimalString('-0.000000000000000000001', '0.00001')).toBe('-0.00001');
+    expect(floorDecimalString('-12.345', '0.01')).toBe('-12.35');
+    expect(floorDecimalString('7', '0.01')).toBe('7.00');
+    expect(floorDecimalString('', '0.01')).toBe('0.00');
   });
 
   it('$6,000,000: 5999999.999999999 sends 5999999.99999, where roundToStep down gives 6000000', () => {

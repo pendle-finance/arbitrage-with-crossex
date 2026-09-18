@@ -138,7 +138,7 @@ describe('SetupPage · Gate API key', () => {
     const user = userEvent.setup();
     mockWorld();
     const { onOpenGuide } = renderSetup();
-    await user.click(await screen.findByRole('button', { name: 'How to make a key ↗' }));
+    await user.click(await screen.findByRole('button', { name: 'How to make a key' }));
     expect(onOpenGuide).toHaveBeenCalledTimes(1);
   });
 });
@@ -170,6 +170,17 @@ describe('SetupPage · Boros wallet', () => {
     expect(await screen.findByRole('button', { name: 'Connect wallet' })).toBeInTheDocument();
     expect(screen.getByText('Approval cost: free')).toBeInTheDocument();
     expect(screen.queryByText(/gas/i)).toBeNull();
+  });
+
+  it('connect tab is one line, as the artboard draws it', async () => {
+    installWallet();
+    mockWorld({ keyConfigured: true });
+    renderSetup();
+    await screen.findByRole('button', { name: 'Connect wallet' });
+    const wallet = row('Boros wallet');
+    expect(within(wallet).getByText('Connect the wallet that holds your Boros account.')).toBeInTheDocument();
+    expect(within(wallet).queryByText('Enable Boros trading')).toBeNull();
+    expect(within(wallet).queryByText(/delegated agent key|one on-chain transaction|cannot deposit or withdraw/i)).toBeNull();
   });
 
   it('paste address', async () => {
@@ -447,5 +458,80 @@ describe('setup rows in Settings', () => {
     renderWithClient(<BorosWalletRow {...settingsRow({ open: true })} />);
     await user.click(await screen.findByRole('button', { name: 'Stop tracking' }));
     expect(trackedInStorage()).toEqual({ address: null });
+  });
+
+  it('a refused disconnect shows the server message', async () => {
+    const user = userEvent.setup();
+    mockWorld({ telegram: connectedTelegram() });
+    server.use(
+      http.delete('/api/telegram', () =>
+        HttpResponse.json({ ok: false, error: { category: 'network', message: BOT_DOWN, retryable: true } }, { status: 503 }),
+      ),
+    );
+    renderWithClient(<TelegramRow {...settingsRow({ open: true })} />);
+    await user.click(await screen.findByRole('button', { name: 'Disconnect this terminal' }));
+    expect(await screen.findByText(BOT_DOWN)).toBeInTheDocument();
+  });
+
+  it('unknown settings read as alerts off, not both on', async () => {
+    mockWorld({ telegram: telegramInfo({ connected: true, state: 'connected', settings: null, lastSyncAt: null }) });
+    renderWithClient(<TelegramRow {...settingsRow()} />);
+    expect(await within(row('Telegram alerts')).findByText('Alerts off')).toBeInTheDocument();
+  });
+
+  it('unknown settings leave both switches off', async () => {
+    mockWorld({ telegram: telegramInfo({ connected: true, state: 'connected', settings: null, lastSyncAt: null }) });
+    renderWithClient(<TelegramRow {...settingsRow({ open: true })} />);
+    expect(await screen.findByRole('switch', { name: 'Close to liquidation' })).toHaveAttribute('aria-checked', 'false');
+    expect(screen.getByRole('switch', { name: 'Started paying interest' })).toHaveAttribute('aria-checked', 'false');
+  });
+
+  it('a failed status read shows the error', async () => {
+    const readFailed = 'Could not read the Telegram status.';
+    mockWorld();
+    server.use(
+      http.get('/api/telegram', () =>
+        HttpResponse.json({ ok: false, error: { category: 'network', message: readFailed, retryable: true } }, { status: 502 }),
+      ),
+    );
+    renderWithClient(<TelegramRow {...settingsRow()} />);
+    expect(await within(row('Telegram alerts')).findByText(readFailed)).toBeInTheDocument();
+  });
+});
+
+describe('TelegramRow · cancel while waiting', () => {
+  const pendingLink = () => ({ status: 'pending', url: LINK_URL, expiresAt: Date.now() + 600_000 });
+
+  async function startWaiting(onCancel: () => Response) {
+    const user = userEvent.setup();
+    openTelegramStep();
+    stubNewTab();
+    server.use(
+      http.post('/api/telegram/link', () => HttpResponse.json(env({ url: LINK_URL, expiresAt: Date.now() + 600_000 }))),
+      http.get('/api/telegram/link', () => HttpResponse.json(env(pendingLink()))),
+      http.delete('/api/telegram/link', onCancel),
+    );
+    renderSetup();
+    await user.click(await screen.findByRole('button', { name: 'Set up ↗' }));
+    await screen.findByText('Waiting for you to confirm on the Boros alerts page');
+    await user.click(within(row('Telegram alerts')).getByRole('button', { name: 'Cancel' }));
+  }
+
+  it('cancel drops the link on the server and leaves the waiting screen', async () => {
+    let cancels = 0;
+    await startWaiting(() => {
+      cancels += 1;
+      return HttpResponse.json(env({ status: 'none', url: null, expiresAt: null }));
+    });
+    await waitFor(() => expect(cancels).toBe(1));
+    await waitFor(() => expect(screen.queryByText('Waiting for you to confirm on the Boros alerts page')).toBeNull());
+  });
+
+  it('a failed cancel says why and keeps waiting', async () => {
+    await startWaiting(() =>
+      HttpResponse.json({ ok: false, error: { category: 'network', message: BOT_DOWN, retryable: true } }, { status: 503 }),
+    );
+    expect(await screen.findByText(BOT_DOWN)).toBeInTheDocument();
+    expect(screen.getByText('Waiting for you to confirm on the Boros alerts page')).toBeInTheDocument();
   });
 });

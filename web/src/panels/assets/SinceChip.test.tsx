@@ -62,9 +62,14 @@ describe('SinceChip', () => {
     expect(screen.getByRole('button', { name: 'All time' })).toBeInTheDocument();
   });
 
-  it('shows no Default hover and no stray "All time" wording when there is no first position', () => {
+  it('shows no Default hover and no stray "All time" wording in the open popover when there is no first position', async () => {
     render(<SinceChip base="HYPE" storedSec={undefined} defaultSec={null} onChange={vi.fn()} />);
-    expect(screen.queryByText(/Default/)).toBeNull();
+    await userEvent.click(screen.getByRole('button', { name: 'All time' }));
+    const card = await screen.findByRole('tooltip');
+    expect(within(card).getByLabelText('Count HYPE PnL from')).toHaveValue('');
+    expect(within(card).queryByText(/Default/)).toBeNull();
+    expect(within(card).queryByText(/All time/)).toBeNull();
+    expect(within(card).queryAllByRole('button')).toHaveLength(0);
     expect(screen.queryByText('Your first CrossEx position')).toBeNull();
   });
 

@@ -26,7 +26,7 @@ import type { BorosPairRequest, BorosSimulatedLeg, StrategyLeg } from '../api/ty
 import { SignedNumber } from '../components/SignedNumber';
 import { QueryError } from '../components/QueryError';
 import { knownRate } from '../lib/boros';
-import { fieldValue, fmtPct, fmtTokenQty, fmtUsd, prettyVenue } from '../lib/fmt';
+import { fieldValue, fmtPct, fmtTokenQty, fmtUsd, prettyVenue, sigGrouped } from '../lib/fmt';
 import {
   useBorosAgent,
   useBorosCancelAndClose,
@@ -417,13 +417,13 @@ export function CloseBorosForm({
             like, the other is not theirs at all. */}
         {residualYours > 0 && (
           <p className="text-[11px] leading-relaxed text-ink-400">
-            {fmtTokenQty(residualYours, unit)} of this position is still open — you closed part of
+            {`${sigGrouped(residualYours)} ${unit}`} of this position is still open — you closed part of
             it. Close the rest whenever you like.
           </p>
         )}
         {residualOthers > 0 && (
           <p className="text-[11px] leading-relaxed text-ink-400">
-            {fmtTokenQty(residualOthers, unit)} more is open on the venue — that is another
+            {`${sigGrouped(residualOthers)} ${unit}`} more is open on the venue — that is another
             position's share of the same leg, not yours.
           </p>
         )}
@@ -463,7 +463,7 @@ export function CloseBorosForm({
               title="Close the whole position on both legs"
               onClick={() => setSizeEdited(fieldValue(maxCloseSize))}
             >
-              {fmtTokenQty(maxCloseSize, closable[0]?.collateral ?? '')}
+              {`${sigGrouped(maxCloseSize)} ${closable[0]?.collateral ?? ''}`}
             </button>
           </span>
         </div>
@@ -525,9 +525,9 @@ export function CloseBorosForm({
                     <span className="text-emerald-300">closed ✓</span>
                   ) : (
                     <>
-                      {invalid ? '—' : fmtTokenQty(value, unit)}
+                      {invalid ? '—' : `${sigGrouped(value)} ${unit}`}
                       {!invalid && value < open - Math.max(1e-9, open * 1e-7) && (
-                        <span className="text-ink-500"> of {fmtTokenQty(open, unit)}</span>
+                        <span className="text-ink-500"> of {sigGrouped(open)} {unit}</span>
                       )}
                     </>
                   )}
@@ -536,11 +536,11 @@ export function CloseBorosForm({
               {finished ? (
                 <span className="text-ink-400">
                   This leg is closed; it will not be sent again.
-                  {finished.yours > 0 && ` ${fmtTokenQty(finished.yours, unit)} of it is still open — you closed part.`}
+                  {finished.yours > 0 && ` ${sigGrouped(finished.yours)} ${unit} of it is still open — you closed part.`}
                 </span>
               ) : invalid ? (
                 <span className="text-rose-400">
-                  size must be above 0 and at most {fmtTokenQty(maxCloseSize, unit)}
+                  size must be above 0 and at most {sigGrouped(maxCloseSize)} {unit}
                 </span>
               ) : belowMin ? (
                 /* The server's own words — a copy here could disagree at the
@@ -610,7 +610,7 @@ export function CloseBorosForm({
                       market that has plenty. */}
                   {q && q.shortfallSize > Math.max(1e-6, value * 1e-6) && (
                     <span className="text-amber-400/90">
-                      the book only supports {fmtTokenQty(q.estFillSize, unit)} of this size — it
+                      the book only supports {sigGrouped(q.estFillSize)} {unit} of this size — it
                       will fill short
                     </span>
                   )}
@@ -623,7 +623,7 @@ export function CloseBorosForm({
               )}
               {part && (
                 <span className="text-amber-400/90">
-                  filled {fmtTokenQty(part.filled, unit)} — {fmtTokenQty(part.left, unit)} of what
+                  filled {sigGrouped(part.filled)} {unit} — {sigGrouped(part.left)} {unit} of what
                   you asked for is still open. The size above is set to what is left; close again
                   to finish it.
                 </span>

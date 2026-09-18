@@ -30,7 +30,8 @@ export function useSetupState(): {
   const { address } = useTrackedAddress();
   const steps: Record<SetupStep, StepState> = {
     gateKey: credentials.data?.configured ? 'done' : 'missing',
-    borosWallet: (agent.data?.configured && !agent.data.expired) || address ? 'done' : 'missing',
+    borosWallet:
+      agent.data?.configured && agent.data.expired ? 'missing' : agent.data?.configured || address ? 'done' : 'missing',
     telegram: telegram.data?.connected && telegram.data.state === 'connected' ? 'done' : 'missing',
   };
   const missing = SETUP_STEPS.filter((step) => steps[step] === 'missing');

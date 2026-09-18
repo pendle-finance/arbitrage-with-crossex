@@ -1,6 +1,6 @@
 import { parseBinanceBook } from '../estimate/books';
 import { walkBook } from '../estimate/fill';
-import { roundToStep } from '../numbers';
+import { floorDecimalString, floorToStep, roundToStep } from '../numbers';
 
 export const USDC_WALLET = { coin: 'USDC', venue: 'HYPERLIQUID' } as const;
 export const LIGHTER_WALLET = { coin: 'USDC', venue: 'LIGHTER' } as const;
@@ -364,7 +364,7 @@ export function fit(account: { marginBalance: number; initialMargin: number }, c
   const unborrowed = Math.max(0, equity);
   const borrowFloor = APP_FLOOR * BORROW_INITIAL_MARGIN;
   const room = free <= unborrowed ? free : (free + borrowFloor * unborrowed) / (1 + borrowFloor);
-  return floorCents(Math.max(0, Math.min(cash, room)));
+  return Number(floorToStep(Math.max(0, Math.min(cash, room)), '0.01'));
 }
 
 function repayment(
@@ -935,7 +935,8 @@ function pathMax(path: PathRule, account: AccountLike, spot: SpotBalance[] | nul
     const initialMargin = finiteOrNull(account.initialMargin);
     if (marginBalance === null || initialMargin === null) return 0;
     const asset = (account.assets ?? []).find(isWallet({ coin: path.coin, venue: CROSSEX_VENUE[path.from] }));
-    return fit({ marginBalance, initialMargin }, num(asset?.balance), num(asset?.equity));
+    const cash = asset?.balance === undefined ? 0 : Number(floorDecimalString(asset.balance, '0.00001'));
+    return fit({ marginBalance, initialMargin }, cash, num(asset?.equity));
   }
   if (spot === null) return null;
   return floorCents(Math.max(0, spot.find((row) => row.coin === path.coin)?.available ?? 0));

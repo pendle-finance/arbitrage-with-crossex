@@ -12,12 +12,8 @@ export function GateKeyRow(p: SetupRowProps & { onOpenGuide?: () => void }) {
 
   return (
     <SetupRowFrame n={1} title="Gate API key" row={p} isDone={isDone} state={state} closeLabel="Close">
-      <button
-        type="button"
-        className="w-fit text-cyan-300 underline decoration-cyan-500/40 underline-offset-2 hover:text-cyan-200"
-        onClick={() => p.onOpenGuide?.()}
-      >
-        How to make a key ↗
+      <button type="button" className="btn-link" onClick={() => p.onOpenGuide?.()}>
+        How to make a key
       </button>
       <div className="flex flex-col gap-1 text-xs">
         {PERMISSION_ROWS.map((permission) => (

@@ -63,6 +63,7 @@ export function BorosWalletRow(p: SetupRowProps) {
       <SegmentedToggle value={tab} options={TABS} onChange={setTab} ariaLabel="Boros wallet source" />
       {tab === 'connect' ? (
         <BorosAgentSetup
+          compact
           onDone={(wallet) => {
             setAddress(wallet);
             p.onDone();

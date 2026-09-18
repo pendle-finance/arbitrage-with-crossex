@@ -431,6 +431,7 @@ async function perform(deps: LoopDeps, pair: PairRow, action: Action): Promise<v
         mode: action.mode,
         ...(action.haltReason ? { haltReason: action.haltReason } : {}),
       });
+      if (action.mode === 'HALTED') deps.onFinish?.(pair.id);
       return;
     case 'cancel':
       return performCancel(deps, pair, action.order);

@@ -196,13 +196,20 @@ export function toDate(epoch: number | string | undefined | null): Date | null {
 /** Compact age: "3s", "4m 12s", "2h 5m", "3d". */
 export function fmtAge(ms: number): string {
   if (!Number.isFinite(ms)) return '—';
+  const { value, unit, rest } = ageBucket(ms);
+  if (unit === 'm') return `${value}m ${rest}s`;
+  if (unit === 'h') return `${value}h ${rest}m`;
+  return `${value}${unit}`;
+}
+
+function ageBucket(ms: number): { value: number; unit: 's' | 'm' | 'h' | 'd'; rest: number } {
   const s = Math.max(0, Math.floor(ms / 1000));
-  if (s < 60) return `${s}s`;
   const m = Math.floor(s / 60);
-  if (m < 60) return `${m}m ${s % 60}s`;
   const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h ${m % 60}m`;
-  return `${Math.floor(h / 24)}d`;
+  if (s < 60) return { value: s, unit: 's', rest: 0 };
+  if (m < 60) return { value: m, unit: 'm', rest: s % 60 };
+  if (h < 24) return { value: h, unit: 'h', rest: m % 60 };
+  return { value: Math.floor(h / 24), unit: 'd', rest: 0 };
 }
 
 export function fmtAbout(seconds: number): string {
@@ -251,12 +258,9 @@ export function fmtClock(ms: number): string {
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 }
 
+const SYNC_AGE_UNIT = { s: 's', m: 'min', h: 'h', d: 'd' } as const;
+
 export function fmtSyncAge(ms: number): string {
-  const seconds = Math.max(0, Math.floor(ms / 1000));
-  if (seconds < 60) return `${seconds} s ago`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes} min ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours} h ago`;
-  return `${Math.floor(hours / 24)} d ago`;
+  const { value, unit } = ageBucket(ms);
+  return `${value} ${SYNC_AGE_UNIT[unit]} ago`;
 }

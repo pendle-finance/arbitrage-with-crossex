@@ -2229,6 +2229,21 @@ describe('runJob Lighter and moves between venue wallets', () => {
     });
   });
 
+  it('a Convert out of Lighter sizes from the digits of a 21-decimal Gate balance, never a cent above it', async () => {
+    const read = account({ hyperliquid: 500 });
+    read.body.assets[3].balance = '74.989999999999999999999';
+    const h = harness(fakeClock(), { route: 'convert', steps: [between('LIGHTER', 'CROSSEX', convert(80))] }, {
+      getCrossexAccount: seq(read),
+      createCrossexConvertQuote: seq(quote('q1', '74.83')),
+      createCrossexConvertOrder: seq({ body: { orderId: 'c1', text: 'q1' } }),
+    });
+
+    await h.run();
+
+    expect(h.jobs.read()!).toMatchObject({ status: 'done', fundsAt: 'CROSSEX' });
+    expect(h.sent('createCrossexConvertQuote')[0].crossexConvertQuoteRequest.fromAmount).toBe('74.98');
+  });
+
   it('a move from Hyperliquid to Lighter sends From Hyperliquid, then To Lighter what reached Gate spot, with no spot order', async () => {
     const steps: PlannedStep[] = [
       { round: 1, kind: 'round', buy: 0, move: 401.01, arrives: 398.98, borrowLeft: 0, seconds: 625, from: 'HYPERLIQUID', to: 'LIGHTER' },

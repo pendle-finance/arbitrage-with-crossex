@@ -17,7 +17,7 @@ import { Modal } from '../components/Modal';
 import { SegmentedToggle } from '../components/SegmentedToggle';
 import { SignedNumber } from '../components/SignedNumber';
 import { SideChip, SymbolCell } from '../components/VenueChip';
-import { fieldValue, fmtUsd, parseSymbol, prettyVenue, sig } from '../lib/fmt';
+import { fieldValue, fmtUsd, parseSymbol, prettyVenue, sig, sigGrouped } from '../lib/fmt';
 import { sizeUnitForBase } from '../lib/boros';
 import { ExecuteControl } from './ExecuteControl';
 import { feeText, PreviewFallback, ViolationList } from './previewBits';
@@ -240,7 +240,7 @@ export function ClosePopover({
               Say so where the size is chosen, not after the fact. */}
           {shared && (
             <p className="leading-relaxed text-amber-400/90">
-              This position holds {sig(attributedQty ?? 0)} of the {sig(wholeQty)} on the venue; the
+              This position holds {sigGrouped(attributedQty ?? 0)} of the {sigGrouped(wholeQty)} on the venue; the
               rest belongs to another position.
             </p>
           )}
@@ -273,7 +273,7 @@ export function ClosePopover({
                   }
                   onClick={() => setQtyEdited(fieldValue(maxInUnit))}
                 >
-                  {sig(maxInUnit)} {effUnit === 'usd' ? 'USDT' : base}
+                  {sigGrouped(maxInUnit)} {effUnit === 'usd' ? 'USDT' : base}
                 </button>
               </span>
             </div>
@@ -318,14 +318,14 @@ export function ClosePopover({
           {qtyInvalid && qtyStr.trim() !== '' && (
             <span className="text-rose-400">
               close size exceeds {shared ? "this position's share" : 'position'} (
-              {effUnit === 'usd' ? `${sig(maxInUnit)} USDT` : `${sig(maxInUnit)} ${base}`})
+              {effUnit === 'usd' ? `${sigGrouped(maxInUnit)} USDT` : `${sigGrouped(maxInUnit)} ${base}`})
             </span>
           )}
           {effUnit === 'usd' && !qtyInvalid && qtyStr.trim() !== '' && (
             // The converted figure is what actually goes to the venue, so it
             // is shown rather than left to be inferred from the preview.
             <span className="text-ink-500">
-              ≈ <span className="num">{sig(qtyNum)}</span> {base} at mark{' '}
+              ≈ <span className="num">{sigGrouped(qtyNum)}</span> {base} at mark{' '}
               <span className="num">{sig(mark)}</span>
             </span>
           )}
@@ -337,7 +337,7 @@ export function ClosePopover({
                   {estimating && <span className="text-amber-400">estimating…</span>}
                   <span className="flex items-center gap-1.5 text-ink-300">
                     <SideChip side={p.side} />
-                    <span className="num text-ink-100">{p.qty ? sig(p.qty) : '—'}</span>
+                    <span className="num text-ink-100">{p.qty ? sigGrouped(p.qty) : '—'}</span>
                   </span>
                   <span className="text-ink-400">
                     <span title="Reduce-only IOC limit at mid ± slippage — fills what it can at once, never rests, never adds">limit px</span>{' '}

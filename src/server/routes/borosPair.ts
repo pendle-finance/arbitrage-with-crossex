@@ -62,6 +62,7 @@ import { catchRateLimit, refuse } from '../errorReply';
 const EVM_ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
 
 const CLOSE_RUNNING = 'A close on this market is already running.';
+const ORDER_RUNNING = 'An order on this market is already running.';
 const CLOSE_ISOLATED = 'This position is on isolated margin. Close it on Boros.';
 const READS_LIMITED_NOTHING_SENT = 'Boros is limiting reads. Nothing was sent. Try again in a minute.';
 const READS_LIMITED_AFTER_CANCEL =
@@ -696,7 +697,7 @@ export function borosPairRoutes(deps: AppDeps) {
       if (!unlockCloses) return refuse(reply, {
         code: 409,
         category: 'validation',
-        message: CLOSE_RUNNING,
+        message: parseIntent(body.intent) === 'close' ? CLOSE_RUNNING : ORDER_RUNNING,
         retryable: false,
       });
       try {

@@ -104,10 +104,9 @@ export function TelegramRow(p: SetupRowProps) {
     });
   };
 
-  const save = (body: Partial<AlertSettings>) =>
-    saveSettings.mutate(body, {
-      onError: (err) => toast.push('error', err instanceof ApiError ? err.message : String(err)),
-    });
+  const showError = (err: unknown) => toast.push('error', err instanceof ApiError ? err.message : String(err));
+
+  const save = (body: Partial<AlertSettings>) => saveSettings.mutate(body, { onError: showError });
 
   const setupButton = (
     <button type="button" className="btn-primary w-fit" disabled={start.isPending} onClick={openBorosPage}>
@@ -159,11 +158,7 @@ export function TelegramRow(p: SetupRowProps) {
           type="button"
           className="btn-link text-ink-400"
           disabled={disconnect.isPending}
-          onClick={() =>
-            disconnect.mutate(undefined, {
-              onError: (err) => toast.push('error', err instanceof ApiError ? err.message : String(err)),
-            })
-          }
+          onClick={() => disconnect.mutate(undefined, { onError: showError })}
         >
           Disconnect this terminal
         </button>
@@ -182,7 +177,7 @@ export function TelegramRow(p: SetupRowProps) {
         type="button"
         className="btn-ghost-xs w-fit"
         disabled={cancelLink.isPending}
-        onClick={() => cancelLink.mutate(undefined, { onSuccess: () => setPhase('idle') })}
+        onClick={() => cancelLink.mutate(undefined, { onSuccess: () => setPhase('idle'), onError: showError })}
       >
         Cancel
       </button>

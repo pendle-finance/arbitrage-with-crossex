@@ -69,7 +69,7 @@ export function SetupRowFrame({
   return (
     <section
       aria-label={title}
-      className={`flex flex-col gap-3 px-4 py-3 ${showsNotSetUp ? 'rounded border border-gold/45' : ''}`}
+      className={`flex flex-col gap-3 px-4 py-3 ${showsNotSetUp ? 'rounded !border !border-gold/45' : ''}`}
     >
       <div className="flex items-center gap-3">
         <span

@@ -11,6 +11,7 @@ import {
   nearestLiquidation,
   type LiquidationLine,
 } from './liquidation';
+import { whaleBook } from '../test/fixtures';
 
 /** The lines of a view the model could price. */
 const lines = (...args: Parameters<typeof liquidationLines>) => liquidationLines(...args)!.lines;
@@ -161,13 +162,34 @@ describe('liquidationLines', () => {
     expect(line.move).toBeCloseTo(7, 4);
   });
 
-  it('drops a leg with a blank mark instead of pricing a $0 trigger', () => {
+  it('gives no line for a coin when one leg has a blank mark, rather than pricing the other leg unhedged', () => {
     const blanked = box();
     blanked.positions[0] = { ...blanked.positions[0], markPrice: '' };
     const view = liquidationLines(account(), blanked)!;
-    expect(view.lines).toHaveLength(1);
-    expect(view.lines[0].venue).toBe('Hyperliquid');
-    expect(view.lines[0].price).toBeGreaterThan(0);
+    expect(view).toEqual({ lines: [], far: [] });
+    expect(lineFor(view, 'ETH')).toBeNull();
+    expect(liquidationSides(account(), blanked, 'ETH')).toEqual({ down: null, up: null });
+  });
+
+  it('prices the $6M whale ETH hedge at +466%, and gives no line when either leg has no usable mark or maintenance', () => {
+    const whaleAccount = whaleBook.account as CrossexAccount;
+    const whalePositions = whaleBook.positions as PositionsResponse;
+    const full = liquidationLines(whaleAccount, whalePositions)!;
+    const eth = lineFor(full, 'ETH') as LiquidationLine;
+    expect(Math.round(eth.price)).toBe(14001);
+    expect(fmtMove(eth.move)).toBe('+466%');
+    for (const symbol of ['BINANCE_FUTURE_ETH_USDT', 'HYPERLIQUID_FUTURE_ETH_USDC']) {
+      for (const over of [{ markPrice: '' }, { markPrice: '0' }, { markPrice: 'NaN' }, { maintenanceMargin: '' }]) {
+        const blanked = {
+          ...whalePositions,
+          positions: whalePositions.positions.map((p) => (p.symbol === symbol ? { ...p, ...over } : p)),
+        };
+        const view = liquidationLines(whaleAccount, blanked)!;
+        expect(lineFor(view, 'ETH')).toBeNull();
+        expect(view).toEqual({ lines: full.lines.filter((l) => l.base !== 'ETH'), far: full.far });
+        expect(liquidationSides(whaleAccount, blanked, 'ETH')).toEqual({ down: null, up: null });
+      }
+    }
   });
 
   it('is unknown for the whole account when a wallet equity is blank', () => {

@@ -1,4 +1,4 @@
-import { screen } from '@testing-library/react';
+import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { describe, expect, it } from 'vitest';
@@ -64,11 +64,53 @@ describe('quick-pick coins', () => {
 });
 
 describe('Recent symbols (coin allowlist)', () => {
-  it('drops a recent symbol whose coin is no longer supported', async () => {
+  const storeRecents = () =>
     window.localStorage.setItem(
       'crossex.recentSymbols.v1',
       JSON.stringify(['GATE_FUTURE_ETH_USDT', 'GATE_FUTURE_SOL_USDT']),
     );
+
+  it('shows every recent symbol while the coin list loads, then drops the unsupported one when it arrives', async () => {
+    storeRecents();
+    let release = () => {};
+    const listed = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    server.use(
+      http.get('/api/symbols', async ({ request }) => {
+        if (new URL(request.url).searchParams.has('q')) return HttpResponse.json(env([]));
+        await listed;
+        return HttpResponse.json(env([ETH_GATE]));
+      }),
+    );
+    renderWithClient(<SingleTicket />);
+
+    expect(await screen.findByTitle('GATE_FUTURE_ETH_USDT')).toBeInTheDocument();
+    expect(screen.getByTitle('GATE_FUTURE_SOL_USDT')).toBeInTheDocument();
+    release();
+    await waitFor(() => expect(screen.queryByTitle('GATE_FUTURE_SOL_USDT')).not.toBeInTheDocument());
+    expect(screen.getByTitle('GATE_FUTURE_ETH_USDT')).toBeInTheDocument();
+  });
+
+  it('keeps every recent symbol when the coin list fails to load', async () => {
+    storeRecents();
+    let failed = false;
+    server.use(
+      http.get('/api/symbols', () => {
+        failed = true;
+        return HttpResponse.json({ ok: false, error: { code: 'GATE_DOWN', message: 'Gate is down' } }, { status: 502 });
+      }),
+    );
+    renderWithClient(<SingleTicket />);
+
+    await waitFor(() => expect(failed).toBe(true));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(screen.getByTitle('GATE_FUTURE_ETH_USDT')).toBeInTheDocument();
+    expect(screen.getByTitle('GATE_FUTURE_SOL_USDT')).toBeInTheDocument();
+  });
+
+  it('drops a recent symbol whose coin is no longer supported', async () => {
+    storeRecents();
     server.use(
       http.get('/api/symbols', ({ request }) =>
         HttpResponse.json(env(new URL(request.url).searchParams.has('q') ? [] : [ETH_GATE])),
@@ -77,6 +119,6 @@ describe('Recent symbols (coin allowlist)', () => {
     renderWithClient(<SingleTicket />);
 
     expect(await screen.findByTitle('GATE_FUTURE_ETH_USDT')).toBeInTheDocument();
-    expect(screen.queryByTitle('GATE_FUTURE_SOL_USDT')).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByTitle('GATE_FUTURE_SOL_USDT')).not.toBeInTheDocument());
   });
 });

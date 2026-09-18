@@ -1,7 +1,7 @@
 import { CrossexOrderRequest, type CrossexOrder, type CrossexTransferRecord } from 'gate-api';
 import type { Clients } from '../core/clients';
 import { classifyGateError, refusalReason, type ClassifiedError } from '../core/errors';
-import { floorToStep, roundToStep, stripZeros } from '../core/numbers';
+import { floorDecimalString, floorToStep, roundToStep, stripZeros } from '../core/numbers';
 import {
   arrivesFor,
   bookLevels,
@@ -168,7 +168,12 @@ async function readAccount(
   const buckets = bucketsFrom(body, [], {});
   const bucketOf = (wallet: WalletRef) =>
     buckets.find((bucket) => bucket.coin === wallet.coin && bucket.venue === wallet.venue);
-  return { margins, cash: (wallet) => bucketOf(wallet)?.cash ?? 0, equity: (wallet) => bucketOf(wallet)?.equity ?? 0 };
+  const cash = (wallet: WalletRef): number => {
+    const raw = body.assets?.find((asset) => asset.coin === wallet.coin && asset.exchangeType === wallet.venue)?.balance;
+    const floored = Number(floorDecimalString(raw ?? '', TRANSFER_STEP));
+    return Number.isFinite(floored) ? floored : 0;
+  };
+  return { margins, cash, equity: (wallet) => bucketOf(wallet)?.equity ?? 0 };
 }
 
 export async function transferRow(
@@ -192,7 +197,7 @@ async function sendTransfer(
 }
 
 export function receivedOf(row: CrossexTransferRecord, path: { coin: string; from: string; to: string }): number {
-  const actual = Number(row.actualReceive);
+  const actual = Number(floorDecimalString(String(row.actualReceive ?? ''), TRANSFER_STEP));
   if (actual > 0) return actual;
   const fee = pathRule(path.coin, path.from, path.to)?.feeUsd ?? 0;
   return Number(floorToStep(Number(row.amount) - fee, TRANSFER_STEP));

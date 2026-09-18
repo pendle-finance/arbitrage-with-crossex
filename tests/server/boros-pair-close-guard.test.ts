@@ -218,7 +218,51 @@ describe('cancel-and-close guards', () => {
     await closing;
     const reduce = await target('coid-target-wait');
     expect(reduce.statusCode).toBe(409);
-    expect(reduce.json().error.message).toBe('A close on this market is already running.');
+    expect(reduce.json().error.message).toBe('An order on this market is already running.');
+
+    release();
+    expect((await single).statusCode).toBe(200);
+    expect(calls).toEqual(['cancel', 'close']);
+  });
+
+  it('an open on a market with an order running gets the order text, and a close gets the close text', async () => {
+    const calls: string[] = [];
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    let entered!: () => void;
+    const closing = new Promise<void>((resolve) => (entered = resolve));
+    app = makeTestApp({
+      borosFetch: borosStub(bothHeld()),
+      getBorosOrders: () =>
+        relay(calls, async (r) => {
+          entered();
+          await held;
+          return fillFor(r);
+        }),
+    });
+
+    const single = close({ clientOrderId: 'coid-open-one' });
+    await closing;
+    const open = await app.inject({
+      method: 'POST',
+      url: '/api/boros/pair/execute',
+      headers: HOST,
+      payload: {
+        address: ADDRESS,
+        legA: { marketId: HL, direction: 'long', slippageApr: 0.0025 },
+        legB: { marketId: BN, direction: 'short', slippageApr: 0.0025 },
+        size: 1_000,
+        intent: 'open',
+        clientOrderIdA: 'coid-open-wait-a',
+        clientOrderIdB: 'coid-open-wait-b',
+      },
+    });
+    const pair = await pairClose('coid-open-close');
+
+    expect(open.statusCode).toBe(409);
+    expect(open.json().error.message).toBe('An order on this market is already running.');
+    expect(pair.statusCode).toBe(409);
+    expect(pair.json().error.message).toBe('A close on this market is already running.');
 
     release();
     expect((await single).statusCode).toBe(200);
