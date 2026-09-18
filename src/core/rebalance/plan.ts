@@ -24,6 +24,11 @@ export const SPOT_ORDER_MAX_USDC = 4_900_000;
 export const SPOT_MARKET_MAX_USDT = 5_000_000;
 const SPOT_ORDER_SHARE = 0.98;
 const RECOMMENDED_MAX_SECONDS = 900;
+/** Rounds a Spot loop may take before it stops being a route: 100 rounds is
+ * over three hours at the fastest hop. Past it the row stays, closed, with
+ * the reason, so the trader still sees what the loop would have cost. */
+const LOOP_ROUND_CAP = 100;
+const LOOP_CAP_REASON = `Spot loop would take more than ${LOOP_ROUND_CAP} rounds.`;
 export const DUST_USDC = 1;
 const GATE_HOP_SECONDS = 5;
 
@@ -68,6 +73,30 @@ const underMinimumReason = (minimum: number): string => `The move is under the $
 export type GateAccount = 'SPOT' | 'CROSSEX' | 'CROSSEX_GATE' | 'CROSSEX_HYPERLIQUID' | 'CROSSEX_LIGHTER';
 export type TransferCoin = 'USDT' | 'USDC';
 export type RouteName = 'mix' | 'loop' | 'convert';
+
+/**
+ * What the plan is for. Every stage downstream — gaps, moves, the solve,
+ * routes, costs, the after-picture — reads one thing: a target equity per
+ * pool. The goal is how that target is chosen.
+ * - `even`: each pool's share of total equity, by position size. Needs legs.
+ * - `repay`: every negative pool to 0, funded by the largest positive pool
+ *   first, each capped by its CASH (equity holds unrealised PnL that cannot
+ *   move), then the next.
+ * - `custom`: send exactly `amount` from one pool to another.
+ */
+export type Goal =
+  | { kind: 'even' }
+  | { kind: 'repay' }
+  | { kind: 'custom'; from: Pool; to: Pool; amount: number };
+export type GoalKind = Goal['kind'];
+export const EVEN_GOAL: Goal = { kind: 'even' };
+export const REPAY_GOAL: Goal = { kind: 'repay' };
+
+export interface WalletTarget {
+  coin: string;
+  venue: string;
+  equity: number;
+}
 
 export interface AssetLike {
   coin?: string;
@@ -160,12 +189,18 @@ export interface RoutePlan {
 }
 
 export interface EvenPlan {
+  goal: Goal;
+  /** Nothing to do for this goal. */
   balanced: boolean;
+  /** No open legs. Only the `even` goal has nothing to do because of it. */
   noLegs: boolean;
   moves: number;
+  /** What the goal still wants after the plan, when cash or margin capped it. */
   shortOfEven: number;
   roundCap: number;
   split: WalletShare[];
+  /** Equity per pool the goal aims at, before fees. */
+  targets: WalletTarget[];
   routes: { mix: RoutePlan | null; loop: RoutePlan | null; convert: RoutePlan };
   recommended: RouteName | null;
 }
@@ -430,6 +465,10 @@ interface Book extends Wallets, SpotDepth {
   pools: Pool[];
   notional: Record<Pool, number>;
   shares: Record<Pool, number>;
+  goal: Goal;
+  /** Fixed target equity per pool for `repay` and `custom`. The `even` goal
+   * re-derives its target from the run, so fees are shared by position size. */
+  targets: Record<Pool, number>;
   marginBalance: number;
   initialMargin: number;
   takerRate: number;
@@ -474,10 +513,13 @@ function shiftPool(run: Run, pool: Pool, delta: number): void {
   else run.venues[pool] = shifted(run.venues[pool], delta);
 }
 
-function sendingCash(run: Run, move: Move): number {
-  if (move.from === 'CROSSEX') return Math.max(0, run.usdt.cash) + run.gateMovable;
-  return Math.max(0, run.venues[move.from].cash);
+/** Cash a pool can send. Equity is not the limit: unrealised PnL cannot move. */
+function sendableCash(wallets: Wallets & { gateMovable: number }, from: Pool): number {
+  if (from === 'CROSSEX') return Math.max(0, wallets.usdt.cash) + wallets.gateMovable;
+  return Math.max(0, wallets.venues[from].cash);
 }
+
+const sendingCash = (run: Run, move: Move): number => sendableCash(run, move.from);
 
 function roundCash(book: Book, run: Run, move: Move): number {
   if (move.from !== 'CROSSEX') return sendingCash(run, move);
@@ -662,10 +704,15 @@ function simulate(book: Book, moves: Move[], amounts: number[], maxRounds: numbe
   return run;
 }
 
-function stillShort(book: Book, run: Run, move: Move): boolean {
+function targetOf(book: Book, run: Run, pool: Pool): number {
+  if (book.goal.kind !== 'even') return book.targets[pool];
   const total = book.pools.reduce((sum, pool) => sum + floorCents(equityOf(run, pool)), 0);
+  return total * book.shares[pool];
+}
+
+function stillShort(book: Book, run: Run, move: Move): boolean {
   const own = floorCents(equityOf(run, move.check));
-  const target = total * book.shares[move.check];
+  const target = targetOf(book, run, move.check);
   return move.check === move.to ? own < target : own > target;
 }
 
@@ -687,7 +734,11 @@ function solve(book: Book, moves: Move[], start: number[], maxRounds: number[], 
         if (stillShort(book, attempt(mid), move)) lo = mid;
         else hi = mid;
       }
-      amounts[index] = lo / 100;
+      // `lo` is the last cent still short of the target, `hi` the first at or
+      // past it. Even stops short so no pool overshoots its share. Repay must
+      // clear the borrow, and a cent left over is still a borrow, so it takes
+      // the first cent that does.
+      amounts[index] = (book.goal.kind === 'repay' ? hi : lo) / 100;
     });
   }
   return { ...simulate(book, moves, amounts, maxRounds, size), cashLimited: limited.some(Boolean) };
@@ -757,6 +808,10 @@ function recommend(routes: EvenPlan['routes']): RouteName | null {
 function loopReason(book: Book, moves: Move[], loopRun: Run): string | null {
   const stepsOf = (move: Move) => loopRun.steps.filter((step) => step.from === move.from && step.to === move.to);
   const onlyConverts = (move: Move) => stepsOf(move).length > 0 && stepsOf(move).every((step) => step.kind === 'convert');
+  const roundsOf = (move: Move) => stepsOf(move).filter((step) => step.kind === 'round').length;
+  // A move that used every round it may take and still had cash to Convert
+  // is not the route the row names.
+  if (moves.some((move) => roundsOf(move) >= LOOP_ROUND_CAP)) return LOOP_CAP_REASON;
   const move = loopRun.steps.some((step) => step.kind === 'round') ? moves.find(onlyConverts) : moves[0];
   if (!move) return null;
   const start = startRun(book);
@@ -779,16 +834,56 @@ function splitOf(book: Book): WalletShare[] {
 
 const idleRoute = (book: Book): RoutePlan => ({ ...routePlan(book, startRun(book), null), available: false });
 
+const targetRows = (book: Book): WalletTarget[] =>
+  book.pools.map((pool) => ({ ...poolWallet(pool), equity: nearestCents(book.targets[pool]) }));
+
 const balancedPlan = (book: Book, shortOfEven: number, noLegs: boolean): EvenPlan => ({
+  goal: book.goal,
   balanced: true,
   noLegs,
   moves: 0,
   shortOfEven,
   roundCap: 0,
   split: splitOf(book),
+  targets: targetRows(book),
   routes: { mix: null, loop: idleRoute(book), convert: idleRoute(book) },
   recommended: null,
 });
+
+const equityTargets = (wallets: Wallets, pools: Pool[]): Record<Pool, number> => ({
+  CROSSEX: pools.includes('CROSSEX') ? equityOf(wallets, 'CROSSEX') : 0,
+  HYPERLIQUID: pools.includes('HYPERLIQUID') ? equityOf(wallets, 'HYPERLIQUID') : 0,
+  LIGHTER: pools.includes('LIGHTER') ? equityOf(wallets, 'LIGHTER') : 0,
+});
+
+/** Every negative pool to 0. The largest positive pool pays first, up to its
+ * cash; what it cannot cover moves to the next. Debt past all cash stays,
+ * and the solve reports it as the short. */
+function repayTargets(wallets: Wallets & { gateMovable: number }, pools: Pool[]): Record<Pool, number> {
+  const targets = equityTargets(wallets, pools);
+  let debt = 0;
+  for (const pool of pools) {
+    if (targets[pool] < 0) {
+      debt += -targets[pool];
+      targets[pool] = 0;
+    }
+  }
+  const senders = pools.filter((pool) => targets[pool] > 0).sort((a, b) => targets[b] - targets[a]);
+  for (const pool of senders) {
+    if (debt <= 0) break;
+    const gives = floorCents(Math.min(debt, sendableCash(wallets, pool)));
+    targets[pool] -= gives;
+    debt -= gives;
+  }
+  return targets;
+}
+
+function customTargets(wallets: Wallets, pools: Pool[], goal: Extract<Goal, { kind: 'custom' }>): Record<Pool, number> {
+  const targets = equityTargets(wallets, pools);
+  targets[goal.from] -= goal.amount;
+  targets[goal.to] += goal.amount;
+  return targets;
+}
 
 function movesFor(pools: Pool[], gaps: Record<Pool, number>): Move[] {
   const bySize = (a: Pool, b: Pool): number => Math.abs(gaps[b]) - Math.abs(gaps[a]);
@@ -817,7 +912,7 @@ function roundBudgets(moves: Move[]): number[][] {
 
 const sum = (values: number[]): number => values.reduce((total, value) => total + value, 0);
 
-export function planFor(buckets: Bucket[], account: AccountLike, inputs: PlanInputs): EvenPlan {
+export function planFor(buckets: Bucket[], account: AccountLike, inputs: PlanInputs, goal: Goal = EVEN_GOAL): EvenPlan {
   const bucketOf = (wallet: { coin: string; venue: string }) => buckets.find(isWallet(wallet));
   const poolBuckets: Partial<Record<Pool, Bucket>> = {
     CROSSEX: bucketOf(USDT_WALLET),
@@ -840,17 +935,30 @@ export function planFor(buckets: Bucket[], account: AccountLike, inputs: PlanInp
     return Number.isFinite(value) ? Math.max(0, value) : 0;
   };
   const notional = { CROSSEX: notionalOf('CROSSEX'), HYPERLIQUID: notionalOf('HYPERLIQUID'), LIGHTER: notionalOf('LIGHTER') };
-  const pools = POOLS.filter((pool) => notional[pool] > 0 || Math.abs(equityOf(wallets, pool)) >= DUST_USDC);
+  // A custom move may open an empty wallet, so its two ends are always pools.
+  const touched = (pool: Pool): boolean => goal.kind === 'custom' && (goal.from === pool || goal.to === pool);
+  const pools = POOLS.filter((pool) => notional[pool] > 0 || Math.abs(equityOf(wallets, pool)) >= DUST_USDC || touched(pool));
   const totalNotional = sum(pools.map((pool) => notional[pool]));
+  const noLegs = totalNotional <= 0;
   const shareOf = (pool: Pool): number => (totalNotional > 0 && pools.includes(pool) ? notional[pool] / totalNotional : 0);
   const shares = { CROSSEX: shareOf('CROSSEX'), HYPERLIQUID: shareOf('HYPERLIQUID'), LIGHTER: shareOf('LIGHTER') };
+  const gateMovable = gateCash >= DUST_USDC ? gateCash : 0;
+  const equity = sum(pools.map((pool) => equityOf(wallets, pool)));
+  const targets: Record<Pool, number> =
+    goal.kind === 'repay'
+      ? repayTargets({ ...wallets, gateMovable }, pools)
+      : goal.kind === 'custom'
+        ? customTargets(wallets, pools, goal)
+        : { CROSSEX: equity * shares.CROSSEX, HYPERLIQUID: equity * shares.HYPERLIQUID, LIGHTER: equity * shares.LIGHTER };
   const book: Book = {
     ...wallets,
-    gateMovable: gateCash >= DUST_USDC ? gateCash : 0,
+    gateMovable,
     buckets: poolBuckets,
     pools,
     notional,
     shares,
+    goal,
+    targets,
     marginBalance: num(account.marginBalance),
     initialMargin: num(account.initialMargin),
     ask,
@@ -863,20 +971,28 @@ export function planFor(buckets: Bucket[], account: AccountLike, inputs: PlanInp
     sellMax: spotOrderMax(Math.max(ask, bid), ruleMax),
   };
 
-  if (totalNotional <= 0) return balancedPlan(book, 0, true);
+  if (goal.kind === 'even' && noLegs) return balancedPlan(book, 0, true);
+  if (goal.kind === 'custom' && (goal.from === goal.to || !(goal.amount >= DUST_USDC))) return balancedPlan(book, 0, noLegs);
 
-  const equity = sum(pools.map((pool) => equityOf(wallets, pool)));
-  const gapOf = (pool: Pool): number => (pools.includes(pool) ? equity * shares[pool] - equityOf(wallets, pool) : 0);
+  const gapOf = (pool: Pool): number => (pools.includes(pool) ? targets[pool] - equityOf(wallets, pool) : 0);
   const gaps = { CROSSEX: gapOf('CROSSEX'), HYPERLIQUID: gapOf('HYPERLIQUID'), LIGHTER: gapOf('LIGHTER') };
   const moves = movesFor(pools, gaps);
-  if (moves.length === 0) return balancedPlan(book, 0, false);
+  if (moves.length === 0) return balancedPlan(book, 0, noLegs);
 
   const start = moves.map((move) => floorCents(Math.abs(gaps[move.check])));
   const need = sum(moves.map((move) => Math.abs(gaps[move.check])));
+  // A custom amount is sent as given, not searched for: the run moves it, or
+  // as much of it as cash allows, and the rest is the short.
+  const run = (maxRounds: number[], size: Sizer): Run => {
+    if (goal.kind !== 'custom') return solve(book, moves, start, maxRounds, size);
+    const fixed = simulate(book, moves, start, maxRounds, size);
+    const moved = floorCents(sum(fixed.steps.map((step) => step.move)));
+    return { ...fixed, cashLimited: floorCents(start[0] - moved) >= DUST_USDC };
+  };
   const blocked = blockedReason(inputs, moves);
   const budgets = roundBudgets(moves);
   const roundCap = Math.max(...budgets.map(sum));
-  const mixRuns = budgets.map((budget) => solve(book, moves, start, budget, fillCap));
+  const mixRuns = budgets.map((budget) => run(budget, fillCap));
   const shortReason = (run: Run): string | null => (run.usdtShort ? USDT_SHORT_REASON : null);
   const mixPlans = mixRuns.map((run) => routePlan(book, run, blocked ?? shortReason(run)));
   const openMixes = mixPlans.filter((plan) => plan.available);
@@ -886,24 +1002,19 @@ export function planFor(buckets: Bucket[], account: AccountLike, inputs: PlanInp
   const oneMore = moves.length === 1 && bestMix.rounds < roundCap ? mixPlans[bestMix.rounds + 1].costUsd : null;
   const mix = { ...bestMix, oneMoreRoundCostUsd: oneMore };
 
-  const loopRounds = moves.map((move) => Math.floor(RECOMMENDED_MAX_SECONDS / roundSeconds(move.from, move.to)) + 1);
-  const loopRun = solve(book, moves, start, loopRounds, leaveMinimum);
+  // The pure Spot loop runs to completion, however many rounds that takes
+  // (his call 2026-09-19): the trader sees its time beside its fee and picks.
+  // The cap only guards against a round that never shrinks the remainder.
+  const loopRounds = moves.map(() => LOOP_ROUND_CAP);
+  const loopRun = run(loopRounds, leaveMinimum);
   const loop = routePlan(book, loopRun, blocked ?? shortReason(loopRun) ?? loopReason(book, moves, loopRun));
   const convert = routePlan(book, mixRuns[0], shortReason(mixRuns[0]));
 
-  const candidates = [
-    ...(loop.seconds <= RECOMMENDED_MAX_SECONDS ? [{ name: 'loop' as const, plan: loop }] : []),
-    ...(bestMix.rounds > 0 && mixConverts ? [{ name: 'mix' as const, plan: mix }] : []),
-  ].filter((candidate) => !convert.available || candidate.plan.costUsd < convert.costUsd);
-  const openCandidates = candidates.filter((candidate) => candidate.plan.available);
-  const shown = (openCandidates.length > 0 ? openCandidates : candidates).reduce<(typeof candidates)[number] | null>(
-    (best, next) => (best === null || cheaper(best.plan, next.plan) === next.plan ? next : best),
-    null,
-  );
-
+  // All three routes are offered. The mix drops out only when it is one of
+  // the others in disguise: no rounds is Convert, no Convert is the loop.
   const routes = {
-    mix: shown?.name === 'mix' ? shown.plan : null,
-    loop: shown?.name === 'loop' ? shown.plan : null,
+    mix: bestMix.rounds > 0 && mixConverts ? mix : null,
+    loop,
     convert,
   };
   const runs: Record<RouteName, Run> = { mix: mixRuns[mixPlans.indexOf(bestMix)], loop: loopRun, convert: mixRuns[0] };
@@ -911,14 +1022,16 @@ export function planFor(buckets: Bucket[], account: AccountLike, inputs: PlanInp
   const firstOpen = (['mix', 'loop', 'convert'] as const).find((name) => routes[name]?.available);
   const picked = runs[recommended ?? firstOpen ?? 'convert'];
   const moved = floorCents(sum(picked.steps.map((step) => step.move)));
-  if (moved < DUST_USDC) return balancedPlan(book, picked.cashLimited ? floorCents(need) : 0, false);
+  if (moved < DUST_USDC) return balancedPlan(book, picked.cashLimited ? floorCents(need) : 0, noLegs);
   return {
+    goal,
     balanced: false,
-    noLegs: false,
+    noLegs,
     moves: moved,
     shortOfEven: picked.cashLimited ? floorCents(Math.max(0, need - moved)) : 0,
     roundCap,
     split: splitOf(book),
+    targets: targetRows(book),
     routes,
     recommended,
   };

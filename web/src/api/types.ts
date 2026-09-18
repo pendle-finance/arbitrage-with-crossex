@@ -156,6 +156,19 @@ export interface RebalanceBucket {
 
 export type RouteName = 'mix' | 'loop' | 'convert';
 
+/** What a rebalance plan is for. See `Goal` in src/core/rebalance/plan.ts. */
+export type Goal =
+  | { kind: 'even' }
+  | { kind: 'repay' }
+  | { kind: 'custom'; from: Pool; to: Pool; amount: number };
+export type GoalKind = Goal['kind'];
+
+export interface WalletTarget {
+  coin: string;
+  venue: string;
+  equity: number;
+}
+
 export type GateAccount = 'SPOT' | 'CROSSEX' | 'CROSSEX_GATE' | 'CROSSEX_HYPERLIQUID' | 'CROSSEX_LIGHTER';
 
 export type TransferCoin = 'USDT' | 'USDC';
@@ -200,12 +213,18 @@ export interface RoutePlan {
 }
 
 export interface EvenPlan {
+  goal: Goal;
+  /** Nothing to do for this goal. */
   balanced: boolean;
+  /** No open legs. Only the `even` goal has nothing to do because of it. */
   noLegs: boolean;
   moves: number;
+  /** What the goal still wants after the plan, when cash or margin capped it. */
   shortOfEven: number;
   roundCap: number;
   split: WalletShare[];
+  /** Equity per pool the goal aims at, before fees. */
+  targets: WalletTarget[];
   routes: { mix: RoutePlan | null; loop: RoutePlan | null; convert: RoutePlan };
   recommended: RouteName | null;
 }
@@ -232,6 +251,7 @@ export interface RebalanceStep {
 
 export interface RebalanceJob {
   id: string;
+  goal: GoalKind;
   route: RouteName;
   amount: number;
   costUsd: number | null;
@@ -246,9 +266,16 @@ export interface RebalanceJob {
   inTransit: { coin: 'USDC'; qty: number; at: 'SPOT' | 'MOVING' } | null;
 }
 
+export interface RebalancePlans {
+  even: EvenPlan;
+  repay: EvenPlan;
+  /** Only when the request carried a custom move. */
+  custom: EvenPlan | null;
+}
+
 export interface RebalanceView {
   buckets: RebalanceBucket[];
-  plan: EvenPlan;
+  plans: RebalancePlans;
   job: RebalanceJob | null;
 }
 

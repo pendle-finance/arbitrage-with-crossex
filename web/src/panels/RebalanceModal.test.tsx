@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useAccount, usePositions, useRebalance, useTransfer } from '../api/queries';
 import type { CrossexAccount, PositionsResponse, RebalanceStep, RebalanceView, TransferView } from '../api/types';
 import type { RebalanceJob, RouteName } from '../api/types';
-import { accountBodies, accountHandler, positionsBodies, REBALANCE_NOW, rebalanceViews, rebased } from '../test/fixtures';
+import { plansOf, accountBodies, accountHandler, positionsBodies, REBALANCE_NOW, rebalanceViews, rebased } from '../test/fixtures';
 import { transferHandler, transferViews } from '../test/fixtures';
 import { env, server } from '../test/server';
 import { renderWithClient } from '../test/utils';
@@ -69,11 +69,12 @@ const barRows = (name: string): string[] =>
 
 const rowOf = (name: string) => screen.getByRole('radio', { name }).closest('label') as HTMLElement;
 
-const pickedRow = () => screen.getByRole('radio', { checked: true }).closest('label') as HTMLElement;
+// The preset toggle is a radiogroup too, so route radios are read inside theirs.
+const routeGroup = () => within(dialog()).getByRole('radiogroup', { name: 'Route' });
+
+const pickedRow = () => within(routeGroup()).getByRole('radio', { checked: true }).closest('label') as HTMLElement;
 
 const holdButton = () => screen.getByRole('button', { name: 'Hold to rebalance' });
-
-const allRoutes = () => screen.getByRole('button', { name: 'Show all routes' });
 
 interface StartBody {
   route: string;
@@ -136,8 +137,7 @@ const HALTED_ID = rebalanceViews.accountAHalted.job.id;
 const line = (text: string) => screen.queryByText((_, el) => el?.tagName === 'P' && el.textContent === text);
 
 const routeNames = () =>
-  screen
-    .getAllByRole('radio')
+  within(routeGroup()).getAllByRole('radio')
     .map((radio) => document.getElementById(radio.getAttribute('aria-labelledby') ?? '')?.textContent);
 
 const stepTexts = () =>
@@ -180,19 +180,19 @@ async function hoverCard(user: ReturnType<typeof userEvent.setup>, name: string)
 
 function withMixCost(costUsd: number): RebalanceView {
   const view = rebalanceViews.twoBorrows;
-  return { ...view, plan: { ...view.plan, routes: { ...view.plan.routes, mix: { ...view.plan.routes.mix!, costUsd } } } };
+  return { ...view, plans: plansOf({ ...view.plans.even, routes: { ...view.plans.even.routes, mix: { ...view.plans.even.routes.mix!, costUsd } } }) };
 }
 
 function withConvertAfter(hyperliquidEquity: number, marginFreedUsd: number): RebalanceView {
   const view = rebalanceViews.twoBorrows;
-  const convert = view.plan.routes.convert!;
+  const convert = view.plans.even.routes.convert!;
   const after = [
     convert.after[0],
     { coin: 'USDC', venue: 'HYPERLIQUID', cash: hyperliquidEquity + 12, equity: hyperliquidEquity },
     { coin: 'USDC', venue: 'LIGHTER', cash: -120, equity: -132 },
   ];
-  const routes = { ...view.plan.routes, convert: { ...convert, marginFreedUsd, savesPerDayUsd: 0, after } };
-  return { ...view, plan: { ...view.plan, routes } };
+  const routes = { ...view.plans.even.routes, convert: { ...convert, marginFreedUsd, savesPerDayUsd: 0, after } };
+  return { ...view, plans: plansOf({ ...view.plans.even, routes }) };
 }
 
 
@@ -215,44 +215,38 @@ describe('RebalanceModal plan state', () => {
     expect(modal).toHaveAttribute('aria-modal', 'true');
     expect(document.body.style.overflow).toBe('hidden');
     expect(within(modal).getByText('Route')).toBeInTheDocument();
-    expect(allRoutes()).toBeInTheDocument();
+    expect(within(modal).getByRole('radiogroup', { name: 'Route' })).toBeInTheDocument();
     expect(holdButton()).toBeInTheDocument();
   });
 
-  it('opens with the picked route as one selected route row, its time and fee in the row', async () => {
+  it('opens with every route listed, the recommended one selected with its time and fee in the row', async () => {
     show(rebalanceViews.twoBorrows);
-    expect(screen.getAllByRole('radio')).toHaveLength(1);
+    expect(within(routeGroup()).getAllByRole('radio')).toHaveLength(2);
     expect(screen.getByRole('radio', { name: 'Spot loop, then Convert' })).toBeChecked();
     expect(within(pickedRow()).getByText('Recommended')).toBeInTheDocument();
     expect(pickedRow()).toHaveTextContent('about 2 min');
     expect(pickedRow()).toHaveTextContent('Fee $0.46');
-    expect(allRoutes().textContent).toBe('Show all routes');
-    expect(allRoutes().compareDocumentPosition(pickedRow()) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it('clicking the selected route row opens every route', async () => {
     const user = userEvent.setup();
     show(rebalanceViews.twoBorrows);
     await user.click(pickedRow());
-    expect(screen.getAllByRole('radio')).toHaveLength(2);
+    expect(within(routeGroup()).getAllByRole('radio')).toHaveLength(2);
     expect(screen.getByRole('radio', { name: 'Spot loop, then Convert' })).toBeChecked();
   });
 
   it('opens every route inline in the same modal', async () => {
-    const user = userEvent.setup();
     show(rebalanceViews.twoBorrows);
-    await user.click(allRoutes());
     expect(screen.getAllByRole('dialog')).toHaveLength(1);
     expect(within(dialog()).getByRole('radiogroup', { name: 'Route' })).toBeInTheDocument();
-    expect(screen.getAllByRole('radio').map((radio) => radio.getAttribute('value') ?? radio.id)).toHaveLength(2);
+    expect(within(routeGroup()).getAllByRole('radio').map((radio) => radio.getAttribute('value') ?? radio.id)).toHaveLength(2);
     expect(screen.getByRole('radio', { name: 'Spot loop, then Convert' })).toBeInTheDocument();
     expect(screen.getByRole('radio', { name: 'Convert' })).toBeInTheDocument();
   });
 
   it('greys a hidden route and shows its reason in place of its time', async () => {
-    const user = userEvent.setup();
     show(rebalanceViews.hiddenRoute);
-    await user.click(allRoutes());
     const row = rowOf('Spot loop');
     expect(screen.getByRole('radio', { name: 'Spot loop' })).toBeDisabled();
     expect(row.textContent).toContain('Gate paused USDC transfers.');
@@ -262,15 +256,14 @@ describe('RebalanceModal plan state', () => {
   it('picking a route row keeps every route open and moves the selection, with no separate control', async () => {
     const user = userEvent.setup();
     show(rebalanceViews.twoBorrows);
-    await user.click(allRoutes());
     expect(screen.queryByRole('button', { name: 'Keep the recommended one' })).toBeNull();
     await user.click(screen.getByRole('radio', { name: 'Convert' }));
-    expect(screen.getAllByRole('radio')).toHaveLength(2);
+    expect(within(routeGroup()).getAllByRole('radio')).toHaveLength(2);
     expect(screen.getByRole('radio', { name: 'Convert' })).toBeChecked();
     expect(screen.getByRole('radio', { name: 'Spot loop, then Convert' })).not.toBeChecked();
     expect(screen.queryByRole('button', { name: 'Show all routes' })).toBeNull();
     await user.click(screen.getByRole('radio', { name: 'Spot loop, then Convert' }));
-    expect(screen.getAllByRole('radio')).toHaveLength(2);
+    expect(within(routeGroup()).getAllByRole('radio')).toHaveLength(2);
     expect(pickedRow()).toHaveTextContent('Fee $0.46');
   });
 
@@ -282,7 +275,7 @@ describe('RebalanceModal plan state', () => {
     expect(pickedRow()).toHaveTextContent('instant');
     expect(pickedRow()).toHaveTextContent('Fee $0.02');
     await user.click(pickedRow());
-    expect(screen.getAllByRole('radio')).toHaveLength(1);
+    expect(within(routeGroup()).getAllByRole('radio')).toHaveLength(1);
   });
 
   it('shows one After rebalance row per wallet, each on its gold mark', async () => {
@@ -340,19 +333,6 @@ describe('RebalanceModal plan state', () => {
     for (const label of ['Interest', 'Fee', 'Frees']) expect(subs(label)).toEqual([]);
   });
 
-  it('shows the position share of each wallet beside the After rebalance bars', async () => {
-    show(rebalanceViews.twoBorrows);
-    const share = screen.getByRole('group', { name: 'Position share' });
-    const after = screen.getByRole('group', { name: 'After rebalance' });
-    const cells = [...share.querySelectorAll('span.num')].map((el) => el.textContent);
-    expect(cells).toHaveLength(after.querySelectorAll('[data-bar-row]').length);
-    expect(cells.every((text) => /^\d+% · \$[\d,]+$/.test(text ?? ''))).toBe(true);
-    cleanup();
-
-    show(rebalanceViews.noLegs);
-    expect(screen.queryByRole('group', { name: 'Position share' })).toBeNull();
-  });
-
   it('folds the step list behind one control, over one hold to confirm button', async () => {
     const user = userEvent.setup();
     show(rebalanceViews.twoBorrows);
@@ -382,11 +362,11 @@ describe('RebalanceModal plan state', () => {
   });
 
   it('replaces the hold with Refresh route when the picked route moves money differently', async () => {
-    const plan = rebalanceViews.twoBorrows.plan;
+    const plan = rebalanceViews.twoBorrows.plans.even;
     const mix = plan.routes.mix!;
     const elsewhere: RebalanceView = {
       ...rebalanceViews.twoBorrows,
-      plan: { ...plan, routes: { ...plan.routes, mix: { ...mix, steps: mix.steps.map((step) => ({ ...step, to: 'HYPERLIQUID' as const })) } } },
+      plans: plansOf({ ...plan, routes: { ...plan.routes, mix: { ...mix, steps: mix.steps.map((step) => ({ ...step, to: 'HYPERLIQUID' as const })) } } }),
     };
     const user = userEvent.setup();
     const { next } = showPolled([rebalanceViews.twoBorrows, elsewhere]);
@@ -412,13 +392,34 @@ describe('RebalanceModal plan state', () => {
   it('replaces the hold with Refresh route when the plan went stale on a new recommended route', async () => {
     const user = userEvent.setup();
     const view = rebalanceViews.twoBorrows;
-    const { next } = showPolled([view, { ...view, plan: { ...view.plan, recommended: 'convert' } }]);
-    await user.click(allRoutes());
+    const { next } = showPolled([view, { ...view, plans: plansOf({ ...view.plans.even, recommended: 'convert' }) }]);
     await user.click(screen.getByRole('radio', { name: 'Convert' }));
     expect(holdButton()).toBeEnabled();
     await next();
     expect(screen.queryByRole('button', { name: 'Hold to rebalance' })).toBeNull();
     await user.click(screen.getByRole('button', { name: 'Refresh route' }));
+    expect(holdButton()).toBeEnabled();
+  });
+
+  it('a fee that rose inside the server band, under a dollar and 5%, keeps the hold live', async () => {
+    const { next } = showPolled([rebalanceViews.twoBorrows, withMixCost(1.4)]);
+    await next();
+    expect(pickedRow()).toHaveTextContent('Fee $1.40');
+    expect(holdButton()).toBeEnabled();
+  });
+
+  it('a fee that rose by more than a dollar is a new plan', async () => {
+    const { next } = showPolled([rebalanceViews.twoBorrows, withMixCost(1.47)]);
+    await next();
+    expect(pickedRow()).toHaveTextContent('Fee $1.47');
+    expect(screen.queryByRole('button', { name: 'Hold to rebalance' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Refresh route' })).toBeInTheDocument();
+  });
+
+  it('a fee that fell keeps the hold live', async () => {
+    const { next } = showPolled([rebalanceViews.twoBorrows, withMixCost(0.1)]);
+    await next();
+    expect(pickedRow()).toHaveTextContent('Fee $0.10');
     expect(holdButton()).toBeEnabled();
   });
 
@@ -454,8 +455,8 @@ describe('RebalanceModal run states', () => {
   it('shows the running state: route, round, time left, progress, wallets and the money on the way', async () => {
     show(rebalanceViews.accountARunning);
     expect(screen.getByText('Running')).toBeInTheDocument();
-    expect(facts()).toEqual({ Route: 'Spot loop', Round: '3 of 5', 'Time left': 'about 6 min' });
-    expect(subs('Time left')).toEqual(['4m 58s gone']);
+    expect(facts()).toEqual({ For: 'Rebalance', Route: 'Spot loop', Round: '3 of 5', 'Time left': 'about 6 min' });
+    expect(subs('Time left')).toEqual(['4m 58s passed']);
     expect(screen.getByRole('progressbar')).toBeInTheDocument();
     expect(barRows('Now')).toEqual([
       'USDT · CrossEx92.54',
@@ -514,9 +515,12 @@ describe('RebalanceModal run states', () => {
     expect(screen.getByText('Running')).toBeInTheDocument();
     await next();
     expect(screen.getByText('Balanced')).toBeInTheDocument();
-    expect(facts()).toEqual({ Route: 'Spot loop', Moved: '$175.63', Took: '4m 18s', Cost: '$0.26' });
+    expect(facts()).toEqual({ For: 'Rebalance', Route: 'Spot loop', Moved: '$175.63', Took: '4m 18s', Cost: '$0.26' });
     expect(barRows('Now')).toContain('USDT · CrossEx92.54');
     expect(onClose).not.toHaveBeenCalled();
+    // Close is the one way out once the run has finished under the dialog.
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Close' }));
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -617,14 +621,14 @@ const SELL_ONLY = doneJob('loop', 50, 0.1, [landedStep('Sell USDC', 49.9, 1, USD
 
 const withFee = (view: RebalanceView, costUsd: number): RebalanceView => ({
   ...view,
-  plan: {
-    ...view.plan,
+  plans: plansOf({
+    ...view.plans.even,
     routes: {
-      ...view.plan.routes,
-      ...(view.plan.routes.mix ? { mix: { ...view.plan.routes.mix, costUsd } } : {}),
-      convert: { ...view.plan.routes.convert, costUsd },
+      ...view.plans.even.routes,
+      ...(view.plans.even.routes.mix ? { mix: { ...view.plans.even.routes.mix, costUsd } } : {}),
+      convert: { ...view.plans.even.routes.convert, costUsd },
     },
-  },
+  }),
 });
 
 /**
@@ -658,7 +662,7 @@ describe('RebalanceModal is it worth it', () => {
     ['a fee under 1 day', 0.03, 'The fee equals less than a day of the interest it saves.'],
   ])('%s says how many days of interest the fee equals', (_, fee, text) => {
     show(withFee(at4c, fee));
-    expect(worth()).toEqual([{ text: 'Rebalance is recommended.', tone: 'act', sub: text }]);
+    expect(worth()).toEqual([{ text: 'Rebalance recommended.', tone: 'act', sub: text }]);
     expect(facts().Fee).toBe(`$${fee.toFixed(2)}`);
     expect(facts().Interest).toBe('$1.20 → $0.00 a month');
   });
@@ -686,10 +690,10 @@ describe('RebalanceModal is it worth it', () => {
       },
       1,
     );
-    const mix = { ...view.plan.routes.mix!, savesPerDayUsd: 0.03 };
-    show({ ...view, plan: { ...view.plan, routes: { ...view.plan.routes, mix } } });
+    const mix = { ...view.plans.even.routes.mix!, savesPerDayUsd: 0.03 };
+    show({ ...view, plans: plansOf({ ...view.plans.even, routes: { ...view.plans.even.routes, mix } }) });
     expect(facts().Interest).toBe('$1.03 → $0.00 a month');
-    expect(worth()).toEqual([{ text: 'Rebalance is recommended.', tone: 'act', sub: 'The fee equals 30 days of the interest it saves.' }]);
+    expect(worth()).toEqual([{ text: 'Rebalance recommended.', tone: 'act', sub: 'The fee equals 30 days of the interest it saves.' }]);
   });
 
   it('a Hyperliquid borrow under 10,000 USDC costs nothing, so it says so instead of weighing the fee', () => {
@@ -707,11 +711,13 @@ describe('RebalanceModal is it worth it', () => {
     expect(worth()).toEqual([{ text: 'No borrow. No transfer or rebalancing necessary.', tone: 'info' }]);
   });
 
-  it('an unknown borrow rate shows rate unknown and no verdict', () => {
+  it('an unknown borrow rate shows rate unknown and names the failed read', () => {
     const view = rebalanceViews.twoBorrows;
     show(withFee({ ...view, buckets: rebased(view.buckets, { 'USDC/LIGHTER': { ratePerYear: null, interestPerDayUsd: 0 } }) }, 20));
     expect(facts().Interest).toBe('rate unknown');
-    expect(worth()).toEqual([]);
+    // The dialog prices a fee, so it must not stay silent about why there is
+    // no verdict to weigh it against.
+    expect(worth()).toEqual([{ text: 'Could not read the borrow interest rate. Check the fee before you move anything.', tone: 'warn' }]);
   });
 
   it('a free route gives no verdict', () => {
@@ -721,11 +727,11 @@ describe('RebalanceModal is it worth it', () => {
   });
 
   it('with every route blocked, the window gives no verdict', () => {
-    const { plan } = at4c;
+    const plan = at4c.plans.even;
     const blocked = Object.fromEntries(
       Object.entries(plan.routes).map(([name, route]) => [name, route && { ...route, available: false, reason: 'Gate is closed for spot.' }]),
     ) as typeof plan.routes;
-    show({ ...at4c, plan: { ...plan, routes: blocked } });
+    show({ ...at4c, plans: plansOf({ ...plan, routes: blocked }) });
     expect(worth()).toEqual([]);
   });
 
@@ -737,7 +743,7 @@ describe('RebalanceModal is it worth it', () => {
     cleanup();
 
     show(withFee(rebalanceViews.bigBorrows, 5118.6));
-    expect(worth()).toEqual([{ text: 'Rebalance is recommended.', tone: 'act', sub: 'The fee equals 30 days of the interest it saves.' }]);
+    expect(worth()).toEqual([{ text: 'Rebalance recommended.', tone: 'act', sub: 'The fee equals 30 days of the interest it saves.' }]);
     cleanup();
 
     show(withFee(rebalanceViews.bigBorrows, 5118.61));
@@ -783,11 +789,10 @@ describe('RebalanceModal money controls', () => {
     const user = userEvent.setup();
     const sent = starts();
     show(rebalanceViews.exampleD, { holdMs: 50 });
-    await user.click(allRoutes());
     await user.click(screen.getByRole('radio', { name: 'Convert' }));
     expect(within(dialog()).getByText('Convert')).toBeInTheDocument();
     fireEvent.pointerDown(holdButton());
-    await waitFor(() => expect(sent).toEqual([{ route: 'convert', costUsd: rebalanceViews.exampleD.plan.routes.convert.costUsd }]));
+    await waitFor(() => expect(sent).toEqual([{ goal: 'even', route: 'convert', costUsd: rebalanceViews.exampleD.plans.even.routes.convert.costUsd }]));
   });
 
   it('the hold sends the cost of the route on screen', async () => {
@@ -795,7 +800,7 @@ describe('RebalanceModal money controls', () => {
     show(withMixCost(4.12), { holdMs: 50 });
     expect(pickedRow()).toHaveTextContent('Fee $4.12');
     fireEvent.pointerDown(holdButton());
-    await waitFor(() => expect(sent).toEqual([{ route: 'mix', costUsd: 4.12 }]));
+    await waitFor(() => expect(sent).toEqual([{ goal: 'even', route: 'mix', costUsd: 4.12 }]));
   });
 
   it('a plan-changed refusal swaps the hold for Refresh route, so it cannot be sent twice', async () => {
@@ -813,7 +818,7 @@ describe('RebalanceModal money controls', () => {
 
   it('after a plan-changed refusal, the new plan loads and Refresh route holds at its cost', async () => {
     const user = userEvent.setup();
-    const shownCost = rebalanceViews.twoBorrows.plan.routes.mix!.costUsd;
+    const shownCost = rebalanceViews.twoBorrows.plans.even.routes.mix!.costUsd;
     const sent: StartBody[] = [];
     let refused = false;
     serve({});
@@ -827,7 +832,8 @@ describe('RebalanceModal money controls', () => {
       }),
     );
     renderWithClient(<Live holdMs={50} />);
-    expect(await screen.findByRole('radio', { checked: true })).toBeInTheDocument();
+    const group = await within(await screen.findByRole('dialog')).findByRole('radiogroup', { name: 'Route' });
+    expect(within(group).getByRole('radio', { checked: true })).toBeInTheDocument();
     expect(pickedRow()).toHaveTextContent('Fee $0.46');
     fireEvent.pointerDown(holdButton());
     await waitFor(() => expect(pickedRow()).toHaveTextContent('Fee $4.12'));
@@ -838,8 +844,8 @@ describe('RebalanceModal money controls', () => {
     fireEvent.pointerDown(holdButton());
     await waitFor(() =>
       expect(sent).toEqual([
-        { route: 'mix', costUsd: shownCost },
-        { route: 'mix', costUsd: 4.12 },
+        { goal: 'even', route: 'mix', costUsd: shownCost },
+        { goal: 'even', route: 'mix', costUsd: 4.12 },
       ]),
     );
   });
@@ -858,18 +864,15 @@ describe('RebalanceModal money controls', () => {
     const user = userEvent.setup();
     const sent = starts();
     show(rebalanceViews.accountABlocked, { holdMs: 50 });
-    await user.click(allRoutes());
     await user.click(within(rowOf('Spot loop')).getByText('Spot loop'));
     expect(screen.getByRole('radio', { name: 'Spot loop' })).not.toBeChecked();
     expect(screen.getByRole('radio', { name: 'Convert' })).toBeChecked();
     fireEvent.pointerDown(holdButton());
-    await waitFor(() => expect(sent).toEqual([{ route: 'convert', costUsd: rebalanceViews.accountABlocked.plan.routes.convert.costUsd }]));
+    await waitFor(() => expect(sent).toEqual([{ goal: 'even', route: 'convert', costUsd: rebalanceViews.accountABlocked.plans.even.routes.convert.costUsd }]));
   });
 
   it('blocked row is disabled and shows its reason', async () => {
-    const user = userEvent.setup();
     show(rebalanceViews.accountABlocked);
-    await user.click(allRoutes());
     expect(screen.getByRole('radio', { name: 'Spot loop' })).toBeDisabled();
     expect(rowOf('Spot loop')).toHaveTextContent('Gate paused USDC transfers.');
     expect(rowOf('Spot loop')).not.toHaveTextContent('5 rounds');
@@ -879,17 +882,16 @@ describe('RebalanceModal money controls', () => {
     const user = userEvent.setup();
     const sent = starts();
     const { next } = showPolled([rebalanceViews.accountA, rebalanceViews.accountADone], { holdMs: 50 });
-    await user.click(allRoutes());
     await user.click(screen.getByRole('radio', { name: 'Convert' }));
     fireEvent.pointerDown(holdButton());
-    await waitFor(() => expect(sent).toEqual([{ route: 'convert', costUsd: rebalanceViews.accountA.plan.routes.convert.costUsd }]));
+    await waitFor(() => expect(sent).toEqual([{ goal: 'even', route: 'convert', costUsd: rebalanceViews.accountA.plans.even.routes.convert.costUsd }]));
     await next();
     expect(await screen.findByText('Balanced')).toBeInTheDocument();
     expect(facts().Route).toBe('Convert');
     cleanup();
 
     show(rebalanceViews.accountA);
-    expect(screen.getAllByRole('radio')).toHaveLength(1);
+    expect(within(routeGroup()).getAllByRole('radio')).toHaveLength(2);
     expect(screen.getByRole('radio', { name: 'Spot loop' })).toBeChecked();
     expect(within(dialog()).getByText('Recommended')).toBeInTheDocument();
   });
@@ -1103,7 +1105,7 @@ describe('RebalanceModal where the money is', () => {
     expect(screen.getByRole('alert').textContent).toBe('Stopped at Convert.Convert quote was more than 0.3% under the Gate spot price.');
     await next();
     expect(screen.getByText('Balanced')).toBeInTheDocument();
-    expect(facts()).toEqual({ Route: 'Convert', Moved: '$498.00', Took: '2s', Cost: '$2.00' });
+    expect(facts()).toEqual({ For: 'Rebalance', Route: 'Convert', Moved: '$498.00', Took: '2s', Cost: '$2.00' });
     await user.click(screen.getByRole('button', { name: 'Show steps' }));
     const rows = within(dialog()).getAllByRole('listitem');
     expect(rows).toHaveLength(1);
@@ -1122,60 +1124,45 @@ describe('RebalanceModal route and step content', () => {
     vi.useRealTimers();
   });
 
-  it('D two route rows, with no Spot loop over 15 min', async () => {
-    const user = userEvent.setup();
+  it('D lists its route rows, recommended first', async () => {
     show(rebalanceViews.exampleD);
-    expect(allRoutes().textContent).toBe('Show all routes');
-    await user.click(allRoutes());
     expect(routeNames()).toEqual(['Spot loop, then Convert', 'Convert']);
   });
 
   it('D recommended is picked', async () => {
-    const user = userEvent.setup();
     show(rebalanceViews.exampleD);
     expect(within(dialog()).getByText('Spot loop, then Convert')).toBeInTheDocument();
-    await user.click(allRoutes());
     expect(screen.getByRole('radio', { name: 'Spot loop, then Convert' })).toBeChecked();
   });
 
   it('D tag on mix only', async () => {
-    const user = userEvent.setup();
     show(rebalanceViews.exampleD);
-    await user.click(allRoutes());
     const tags = within(dialog()).getAllByText('Recommended');
     expect(tags).toHaveLength(1);
     expect(rowOf('Spot loop, then Convert')).toContainElement(tags[0]);
   });
 
   it('A two route rows', async () => {
-    const user = userEvent.setup();
     show(rebalanceViews.accountA);
-    await user.click(allRoutes());
     expect(routeNames()).toEqual(['Spot loop', 'Convert']);
   });
 
   it('A tag on spot loop', async () => {
-    const user = userEvent.setup();
     show(rebalanceViews.accountA);
-    await user.click(allRoutes());
     const tags = within(dialog()).getAllByText('Recommended');
     expect(tags).toHaveLength(1);
     expect(rowOf('Spot loop')).toContainElement(tags[0]);
   });
 
   it('D mix row text', async () => {
-    const user = userEvent.setup();
     show(rebalanceViews.exampleD);
-    await user.click(allRoutes());
     expect(rowOf('Spot loop, then Convert')).toHaveTextContent('about 13 min');
     expect(rowOf('Spot loop, then Convert').textContent).not.toMatch(/\d+ rounds?/);
     expect(rowOf('Spot loop, then Convert')).toHaveTextContent('$15.68');
   });
 
   it('E mix row text', async () => {
-    const user = userEvent.setup();
     show(rebalanceViews.exampleE);
-    await user.click(allRoutes());
     expect(rowOf('Spot loop, then Convert')).toHaveTextContent('about 6.5 min');
     expect(rowOf('Spot loop, then Convert')).toHaveTextContent('$2.04');
   });
@@ -1183,23 +1170,21 @@ describe('RebalanceModal route and step content', () => {
   it('clicking anywhere in a route row picks it and keeps every route open', async () => {
     const user = userEvent.setup();
     show(rebalanceViews.exampleD);
-    await user.click(allRoutes());
     await user.click(within(rowOf('Convert')).getByText('Convert'));
     expect(screen.getByRole('radio', { name: 'Convert' })).toBeChecked();
-    expect(screen.getAllByRole('radio')).toHaveLength(2);
+    expect(within(routeGroup()).getAllByRole('radio')).toHaveLength(2);
     await user.click(within(rowOf('Spot loop, then Convert')).getByText('Recommended'));
     expect(screen.getByRole('radio', { name: 'Spot loop, then Convert' })).toBeChecked();
     await user.click(within(rowOf('Convert')).getByText('instant'));
     expect(screen.getByRole('radio', { name: 'Convert' })).toBeChecked();
     await user.click(within(rowOf('Spot loop, then Convert')).getByText('about 13 min'));
     expect(screen.getByRole('radio', { name: 'Spot loop, then Convert' })).toBeChecked();
-    expect(screen.getAllByRole('radio')).toHaveLength(2);
+    expect(within(routeGroup()).getAllByRole('radio')).toHaveLength(2);
   });
 
   it('convert pick redraws after bars', async () => {
     const user = userEvent.setup();
     show(rebalanceViews.accountA);
-    await user.click(allRoutes());
     await user.click(screen.getByRole('radio', { name: 'Convert' }));
     expect(barRows('After rebalance')).toEqual(['USDT · CrossEx28.54', 'USDC · Hyperliquid28.53', 'USDC · Gate0.00']);
   });
@@ -1307,8 +1292,6 @@ describe('RebalanceModal route and step content', () => {
       ['Round 1', 'Buy 249.83 USDC, move it to the CrossEx Hyperliquid wallet', '249.78 arrives', 'about 2 min'],
       ['Convert', 'Convert 250.29 USDT to USDC in the CrossEx Lighter wallet', '249.78 arrives', 'instant'],
     ]);
-
-    await user.click(allRoutes());
     await user.click(screen.getByRole('radio', { name: 'Spot loop' }));
     expect(stepTexts()).toEqual([
       ['Round 1', 'Buy 249.63 USDC, move it to the CrossEx Hyperliquid wallet', '249.58 arrives', 'about 2 min'],
@@ -1320,7 +1303,7 @@ describe('RebalanceModal route and step content', () => {
     const user = userEvent.setup();
     show(rebalanceViews.lighterAcrossRunning);
     expect(facts()).toMatchObject({ Route: 'Spot loop', Round: '1 of 1' });
-    expect(subs('Time left')).toEqual(['6m 40s gone']);
+    expect(subs('Time left')).toEqual(['6m 40s passed']);
     await openSteps(user);
     expect(stepTexts()).toEqual([
       [
@@ -1336,10 +1319,8 @@ describe('RebalanceModal route and step content', () => {
 
 describe('RebalanceModal hovers and facts', () => {
   it('lists the recommended route first, then the rest by cost, with no rounds text', async () => {
-    const user = userEvent.setup();
     const view = rebalanceViews.accountA;
-    show({ ...view, plan: { ...view.plan, recommended: 'convert' } });
-    await user.click(allRoutes());
+    show({ ...view, plans: plansOf({ ...view.plans.even, recommended: 'convert' }) });
     expect(routeNames()).toEqual(['Convert', 'Spot loop']);
     expect(dialog().textContent).not.toMatch(/\d+ rounds?/);
   });
@@ -1354,14 +1335,11 @@ describe('RebalanceModal hovers and facts', () => {
     const user = userEvent.setup();
     show(rebalanceViews.exampleD);
     expect((await hoverCard(user, 'Recommended')).text).toBe('Cheapest route that takes 15 min or less.');
-    await user.click(allRoutes());
     expect((await hoverCard(user, 'Recommended')).text).toBe('Cheapest route that takes 15 min or less.');
   });
 
   it('blocked reason has no hover', async () => {
-    const user = userEvent.setup();
     show(rebalanceViews.accountABlocked);
-    await user.click(allRoutes());
     const reason = within(dialog()).getByText('Gate paused USDC transfers.');
     expect(reason.closest('[role="button"]')).toBeNull();
     expect(reason.closest('.border-dotted')).toBeNull();
@@ -1376,7 +1354,7 @@ describe('RebalanceModal hovers and facts', () => {
     show(rebalanceViews.accountA, { transfer: transferViews.accountB });
     await within(dialog()).findByRole('button', { name: 'Transfer ▸' });
     await check([
-      ['Route', 'How the money moves. The fee includes Gate fees and the spot spread. Spot loop shows only when it costs less than Convert.'],
+      ['Route', 'How the money moves. The fee includes Gate fees and the spot spread. Spot loop runs until the move is done, however many rounds that takes.'],
       ['Recommended', 'Cheapest route that takes 15 min or less.'],
       ['USDT · CrossEx', 'CrossEx wallet. Margin for Gate, Binance, OKX and Bybit legs.'],
       ['USDC · Hyperliquid', 'CrossEx wallet. Margin for Hyperliquid legs.'],
@@ -1385,7 +1363,6 @@ describe('RebalanceModal hovers and facts', () => {
       ['Interest', "Borrow interest for 30 days at today's rates, now and after this rebalance."],
       ['Gate spot', 'Not margin.'],
     ]);
-    await user.click(allRoutes());
     await check([
       [
         'Spot loop',
@@ -1396,7 +1373,6 @@ describe('RebalanceModal hovers and facts', () => {
     cleanup();
 
     show(rebalanceViews.exampleD);
-    await user.click(allRoutes());
     await check([
       ['Spot loop, then Convert', 'Spot loop for up to 6 rounds, then Convert the rest.'],
     ]);
@@ -1417,7 +1393,6 @@ describe('RebalanceModal hovers and facts', () => {
     const user = userEvent.setup();
     show(rebalanceViews.lighterSplit);
     expect((await hoverCard(user, 'USDC · Lighter')).text).toBe('CrossEx wallet. Margin for Lighter legs.');
-    await user.click(allRoutes());
     expect((await hoverCard(user, 'Spot loop')).text).toBe(
       'Buy USDC in CrossEx, move it through Gate spot into the CrossEx Hyperliquid wallet and the CrossEx Lighter wallet. Gate has no direct transfer between CrossEx wallets. Repeats in rounds.',
     );
@@ -1426,7 +1401,6 @@ describe('RebalanceModal hovers and facts', () => {
   it('hovers for a move from Hyperliquid to Lighter', async () => {
     const user = userEvent.setup();
     show(rebalanceViews.lighterAcross);
-    if (screen.queryByRole('button', { name: 'Show all routes' })) await user.click(allRoutes());
     expect((await hoverCard(user, 'Spot loop')).text).toBe(
       'Move USDC from the CrossEx Hyperliquid wallet through Gate spot into the CrossEx Lighter wallet. Gate has no direct transfer between CrossEx wallets. Repeats in rounds.',
     );
@@ -1442,7 +1416,6 @@ describe('RebalanceModal hovers and facts', () => {
     const user = userEvent.setup();
     show(withConvertAfter(-112, 0));
     expect(screen.queryByText(/^Moves \$/)).toBeNull();
-    await user.click(allRoutes());
     await user.click(screen.getByRole('radio', { name: 'Convert' }));
     expect(screen.queryByText(/^Moves \$/)).toBeNull();
     expect(facts().Frees).toBe('$0.00');
@@ -1456,7 +1429,6 @@ describe('RebalanceModal hovers and facts', () => {
     const user = userEvent.setup();
     show(withConvertAfter(-12, 20));
     expect(screen.queryByText(/^Moves \$/)).toBeNull();
-    await user.click(allRoutes());
     await user.click(screen.getByRole('radio', { name: 'Convert' }));
     expect(screen.queryByText(/^Moves \$/)).toBeNull();
     expect(facts().Frees).toBe('$20.00');
@@ -1506,5 +1478,102 @@ describe('RebalanceModal Gate spot lines', () => {
     await screen.findByText('reads loaded');
     expect(within(dialog()).queryByRole('button', { name: 'Transfer ▸' })).toBeNull();
     expect(within(dialog()).queryByText(/Gate spot has/)).toBeNull();
+  });
+});
+
+// No legs, one borrow: the state the Rebalance card used to answer with
+// "Nothing to rebalance" while the interest line above it kept counting.
+const EXAMPLE_C = rebalanceViews.exampleC;
+const NO_LEGS_BORROW: RebalanceView = {
+  buckets: rebased(EXAMPLE_C.buckets, {
+    'USDT/CROSSEX': { cash: -22.18, upnl: 0, equity: -22.18, borrow: 22.18, imHeldUsd: 4.44, mmHeldUsd: 2.22, interestPerDayUsd: 0.04, ratePerYear: 0.06 },
+  }),
+  plans: {
+    even: { ...EXAMPLE_C.plans.repay, goal: { kind: 'even' }, noLegs: true },
+    repay: {
+      ...EXAMPLE_C.plans.even,
+      goal: { kind: 'repay' },
+      noLegs: true,
+      targets: [
+        { coin: 'USDT', venue: 'CROSSEX', equity: 0 },
+        { coin: 'USDC', venue: 'HYPERLIQUID', equity: 203.64 },
+      ],
+    },
+    custom: null,
+  },
+  job: null,
+};
+
+describe('RebalanceModal presets and custom amount', () => {
+  const presets = () => within(dialog()).getByRole('radiogroup', { name: 'Preset' });
+
+  it('opens on Clear debt when the card leads with it, with Balance positions off and every label worded for it', () => {
+    show(NO_LEGS_BORROW);
+    expect(within(presets()).getByRole('radio', { name: 'Clear debt' })).toBeChecked();
+    const even = within(presets()).getByRole('radio', { name: 'Balance positions' });
+    expect(even).toBeDisabled();
+    expect(even).toHaveAttribute('title', 'No open positions');
+    expect(screen.getByRole('button', { name: 'Hold to clear debt' })).toBeInTheDocument();
+    expect(screen.getByRole('group', { name: 'After clearing debt' })).toBeInTheDocument();
+    expect(within(dialog()).getByText('Clear debt recommended.')).toBeInTheDocument();
+    expect(within(dialog()).getByText('Debt prevents you from withdrawing your cash.')).toBeInTheDocument();
+    expect(within(dialog()).queryByText('Position share')).toBeNull();
+  });
+
+  it('with legs, opens on Balance positions', () => {
+    show(rebalanceViews.twoBorrows);
+    expect(within(presets()).getByRole('radio', { name: 'Balance positions' })).toBeChecked();
+    expect(within(presets()).getByRole('radio', { name: 'Clear debt' })).toBeDisabled();
+    expect(holdButton()).toBeInTheDocument();
+  });
+
+  it('Custom amount turns the line into fields seeded from the preset, prices the move, and the hold sends it', async () => {
+    const user = userEvent.setup();
+    const view = NO_LEGS_BORROW;
+    const custom = { ...view.plans.repay, goal: { kind: 'custom' as const, from: 'HYPERLIQUID' as const, to: 'CROSSEX' as const, amount: 50 } };
+    server.use(
+      http.get('/api/rebalance', ({ request }) => {
+        const url = new URL(request.url);
+        return HttpResponse.json(env(url.searchParams.get('from') ? { ...view, plans: { ...view.plans, custom } } : view));
+      }),
+    );
+    const sent = starts();
+    show(view, { holdMs: 50 });
+    await user.click(screen.getByRole('button', { name: 'Custom amount' }));
+    expect(within(presets()).queryByRole('radio', { checked: true })).toBeNull();
+    expect(screen.getByRole('textbox', { name: 'Amount' })).toHaveValue('22.18');
+    expect(screen.getByRole('combobox', { name: 'From' })).toHaveValue('HYPERLIQUID');
+    expect(screen.getByRole('combobox', { name: 'To' })).toHaveValue('CROSSEX');
+    expect(screen.getByRole('button', { name: 'Use a preset' })).toBeInTheDocument();
+    await user.clear(screen.getByRole('textbox', { name: 'Amount' }));
+    await user.type(screen.getByRole('textbox', { name: 'Amount' }), '50');
+    const hold = await screen.findByRole('button', { name: 'Hold to move' }, { timeout: 3000 });
+    expect(screen.getByRole('group', { name: 'After the move' })).toBeInTheDocument();
+    expect(within(dialog()).queryByText('Position share')).toBeNull();
+    fireEvent.pointerDown(hold);
+    await waitFor(() =>
+      expect(sent).toEqual([{ goal: 'custom', route: 'convert', costUsd: 0.04, from: 'HYPERLIQUID', to: 'CROSSEX', amount: 50 }]),
+    );
+  });
+
+  it('an empty custom amount asks for one, and Use a preset goes back', async () => {
+    const user = userEvent.setup();
+    show(NO_LEGS_BORROW);
+    await user.click(screen.getByRole('button', { name: 'Custom amount' }));
+    await user.clear(screen.getByRole('textbox', { name: 'Amount' }));
+    expect(await screen.findByText('Type an amount to move.', {}, { timeout: 2000 })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Hold to/ })).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'Use a preset' }));
+    expect(within(presets()).getByRole('radio', { name: 'Clear debt' })).toBeChecked();
+    expect(screen.getByRole('button', { name: 'Hold to clear debt' })).toBeInTheDocument();
+  });
+
+  it('a running or finished job names its goal', async () => {
+    const running = rebalanceViews.accountARunning;
+    show({ ...running, job: { ...running.job, goal: 'repay' } });
+    expect(facts()).toMatchObject({ For: 'Clear debt' });
+    cleanup();
+    const done = rebalanceViews.convertDone;
+    show({ ...done, job: { ...done.job, goal: 'custom' } });
   });
 });

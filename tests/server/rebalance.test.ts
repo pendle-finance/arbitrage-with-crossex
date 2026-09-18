@@ -181,7 +181,7 @@ function boot(over: { job?: unknown } = {}) {
     get: (url: string) => app.inject({ method: 'GET', url, headers: HOST }),
     post: (url: string, payload: Record<string, unknown> = {}) => app.inject({ method: 'POST', url, headers: HOST, payload }),
     plan: async (): Promise<EvenPlan> =>
-      (await app.inject({ method: 'GET', url: '/api/rebalance', headers: HOST })).json().data.plan,
+      (await app.inject({ method: 'GET', url: '/api/rebalance', headers: HOST })).json().data.plans.even,
     view: async () => (await app.inject({ method: 'GET', url: '/api/rebalance', headers: HOST })).json(),
   };
 }
@@ -475,7 +475,7 @@ describe('POST /api/rebalance', () => {
     expect(() => h.file()).toThrow();
   });
 
-  it('refuses a Spot loop post as a changed plan when the fresh plan offers only the capped loop', async () => {
+  it('starts the full Spot loop when posted beside the recommended capped mix', async () => {
     const assets = [
       asset('USDT', 'CROSSEX', { balance: '-612.35', equity: '-612.35', liability: '612.35', borrowing_initial_margin: '61.24' }),
       asset('USDC', 'HYPERLIQUID', { balance: '1842.16', available_balance: '1842.16', equity: '1842.16' }),
@@ -485,15 +485,15 @@ describe('POST /api/rebalance', () => {
     refuseSends();
     const h = boot();
     const plan = await h.plan();
-    expect(plan.routes.loop).toBeNull();
+    expect(plan.routes.loop).toMatchObject({ available: true });
     expect(plan.routes.mix).toMatchObject({ available: true });
+    expect(plan.routes.mix!.costUsd).toBeLessThanOrEqual(plan.routes.loop!.costUsd);
     expect(plan.recommended).toBe('mix');
 
-    const res = await h.post('/api/rebalance', { route: 'loop', costUsd: plan.routes.mix!.costUsd });
+    const res = await h.post('/api/rebalance', { route: 'loop', costUsd: plan.routes.loop!.costUsd });
 
-    expect(res.statusCode).toBe(409);
-    expect(res.json().error).toMatchObject({ label: 'PLAN_CHANGED', message: PLAN_CHANGED_TEXT });
-    expect(() => h.file()).toThrow();
+    expect(res.statusCode).toBe(202);
+    expect(h.file()).toMatchObject({ route: 'loop', goal: 'even' });
   });
 
   it('refuses a capped loop post as a changed plan when the fresh plan offers only the full Spot loop', async () => {
@@ -563,7 +563,7 @@ describe('POST /api/rebalance', () => {
     expect(() => h.file()).toThrow();
   });
 
-  it('refuses a Spot loop that costs more than Convert and is no longer offered', async () => {
+  it('starts a Spot loop that costs more than Convert, and still refuses a mix that is Convert in disguise', async () => {
     const assets = [
       asset('USDT', 'CROSSEX', { balance: '40', available_balance: '40', equity: '40' }),
       asset('USDC', 'HYPERLIQUID'),
@@ -575,17 +575,19 @@ describe('POST /api/rebalance', () => {
     });
     const h = boot();
     const plan = await h.plan();
-    expect(plan.routes).toMatchObject({ mix: null, loop: null });
+    expect(plan.routes.mix).toBeNull();
+    expect(plan.routes.loop).toMatchObject({ available: true });
+    expect(plan.routes.loop!.costUsd).toBeGreaterThan(plan.routes.convert.costUsd);
     expect(plan.recommended).toBe('convert');
 
-    for (const route of ['loop', 'mix']) {
-      const res = await h.post('/api/rebalance', { route, costUsd: 0 });
-
-      expect(res.statusCode).toBe(409);
-      expect(res.json().error.message).toBe('Spot loop is no longer offered. Pick a route again.');
-      expect(res.json().error.label).toBeUndefined();
-    }
+    const mix = await h.post('/api/rebalance', { route: 'mix', costUsd: 0 });
+    expect(mix.statusCode).toBe(409);
+    expect(mix.json().error).toMatchObject({ label: 'PLAN_CHANGED', message: PLAN_CHANGED_TEXT });
     expect(() => h.file()).toThrow();
+
+    const loop = await h.post('/api/rebalance', { route: 'loop', costUsd: plan.routes.loop!.costUsd });
+    expect(loop.statusCode).toBe(202);
+    expect(h.file()).toMatchObject({ route: 'loop' });
   });
 
   it('one of two rebalance posts', async () => {
@@ -711,8 +713,8 @@ describe('GET /api/rebalance prices a $6,000,000 Spot loop from the order book',
 
     expect(bookRead.isDone()).toBe(true);
     expect(failedRead.isDone()).toBe(true);
-    const bookedLoop = (booked.data.plan as EvenPlan).routes.loop!;
-    const failedLoop = (failed.data.plan as EvenPlan).routes.loop!;
+    const bookedLoop = (booked.data.plans.even as EvenPlan).routes.loop!;
+    const failedLoop = (failed.data.plans.even as EvenPlan).routes.loop!;
     expect(movedBy(bookedLoop.steps)).toBeGreaterThan(5_990_000);
     expect(movedBy(failedLoop.steps)).toBeGreaterThan(5_990_000);
     expect(bookedLoop.costUsd).toBeGreaterThan(failedLoop.costUsd + 1_000);
@@ -723,10 +725,10 @@ describe('GET /api/rebalance prices a $6,000,000 Spot loop from the order book',
   it('prices from the top of the book, not the old book, when Gate rate-limits the book read', async () => {
     mockView({ account: whaleAccount, positions: whalePositions });
     gate().get(`${API}/spot/order_book`).query(true).reply(500, { label: 'SERVER_ERROR', message: 'server error' });
-    const topLoop = ((await boot().view()).data.plan as EvenPlan).routes.loop!;
+    const topLoop = ((await boot().view()).data.plans.even as EvenPlan).routes.loop!;
     const h = boot();
     gate().get(`${API}/spot/order_book`).query(true).reply(200, bookBody as nock.Body);
-    const bookedLoop = ((await h.view()).data.plan as EvenPlan).routes.loop!;
+    const bookedLoop = ((await h.view()).data.plans.even as EvenPlan).routes.loop!;
     const limited = gate()
       .get(`${API}/spot/order_book`)
       .query(true)
@@ -735,7 +737,7 @@ describe('GET /api/rebalance prices a $6,000,000 Spot loop from the order book',
     const clock = vi.spyOn(Date, 'now').mockReturnValue(later);
     try {
       const again = await h.view();
-      const againLoop = (again.data.plan as EvenPlan).routes.loop!;
+      const againLoop = (again.data.plans.even as EvenPlan).routes.loop!;
 
       expect(limited.isDone()).toBe(true);
       expect(bookedLoop.costUsd).toBeGreaterThan(topLoop.costUsd + 1_000);

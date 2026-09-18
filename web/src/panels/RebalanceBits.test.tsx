@@ -2,9 +2,9 @@ import { fireEvent, render, screen, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import type { RebalanceJob, RebalanceStep } from '../api/types';
 import { rebalanceViews } from '../test/fixtures';
-import { BAR_CAPTION, HOVER_TARGET, SHARE_CAPTION } from './rebalanceCopy';
+import { BAR_CAPTION, HOVER_TARGET } from './rebalanceCopy';
 import * as bits from './RebalanceBits';
-import { BalanceBars, ShareColumn, StepList, type BarRow, type StepRow } from './RebalanceBits';
+import { BalanceBars, StepList, type BarRow, type StepRow } from './RebalanceBits';
 
 const ROWS: BarRow[] = [
   { key: 'USDT/CROSSEX', label: 'USDT · CrossEx', cash: 60, upnl: -10, target: 45, tone: 'usdt' },
@@ -257,20 +257,6 @@ describe('StepList', () => {
   });
 });
 
-describe('ShareColumn', () => {
-  it('position share column', () => {
-    const shares = new Map([
-      ['USDT/CROSSEX', '50% · $1,873'],
-      ['USDC/LIGHTER', '6% · $240'],
-    ]);
-    render(<ShareColumn caption={SHARE_CAPTION} rows={ROWS} shares={shares} />);
-
-    expect(screen.getByText('Position share')).toBeInTheDocument();
-    expect(screen.getByText('50% · $1,873')).toBeInTheDocument();
-    expect(screen.getByText('6% · $240')).toBeInTheDocument();
-  });
-});
-
 describe('jobRows for a Convert in chunks', () => {
   const base = rebalanceViews.accountADone.job!;
   const chunk = (name: string, planned: number, qty: number | null, status: RebalanceStep['status'], to: RebalanceStep['to'] = 'HYPERLIQUID'): RebalanceStep => ({
@@ -289,7 +275,7 @@ describe('jobRows for a Convert in chunks', () => {
   });
   const jobOf = (steps: RebalanceStep[], stepIndex: number, status: RebalanceJob['status']): RebalanceJob => ({
     ...base,
-    route: 'convert',
+    goal: 'even', route: 'convert',
     status,
     stepIndex,
     steps,

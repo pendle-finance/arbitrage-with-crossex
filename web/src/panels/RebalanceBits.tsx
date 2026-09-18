@@ -217,24 +217,6 @@ export function BalanceBars({ caption, rows, scale }: { caption: ReactNode; rows
   );
 }
 
-export function ShareColumn({ caption, rows, shares }: { caption: ReactNode; rows: BarRow[]; shares: Map<string, string> }) {
-  const captionId = useId();
-  return (
-    <div role="group" aria-labelledby={captionId} className="flex flex-col gap-2">
-      <div id={captionId} className={`h-4 whitespace-nowrap text-right ${microLabelClass}`}>
-        {caption}
-      </div>
-      <div className="flex flex-col gap-1.5">
-        {rows.map((row) => (
-          <span key={row.key} className="num h-4 whitespace-nowrap text-right text-xs leading-4 text-ink-100">
-            {shares.get(row.key) ?? ''}
-          </span>
-        ))}
-      </div>
-    </div>
-  );
-}
-
 type ProgressTone = 'running' | 'done' | 'stopped';
 
 const PROGRESS_FILL: Record<ProgressTone, string> = {

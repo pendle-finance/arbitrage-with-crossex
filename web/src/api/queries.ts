@@ -33,6 +33,8 @@ import type {
   OpenOrder,
   OpportunitiesResult,
   PositionsResponse,
+  GoalKind,
+  Pool,
   RebalanceJob,
   RebalanceView,
   RouteName,
@@ -432,10 +434,39 @@ export function useRebalance() {
   });
 }
 
+export interface CustomMove {
+  from: Pool;
+  to: Pool;
+  amount: number;
+}
+
+/** The plan for a custom move, priced off the same read as the presets.
+ * Off until the move is complete, and the last quote stays while the next
+ * one loads so the dialog does not blank between keystrokes. */
+export function useCustomPlan(custom: CustomMove | null) {
+  const live = custom !== null && custom.amount > 0 && custom.from !== custom.to;
+  return useQuery({
+    queryKey: [...qk.rebalance, 'custom', custom?.from ?? '', custom?.to ?? '', custom?.amount ?? 0] as const,
+    queryFn: () =>
+      fetchJson<RebalanceView>(
+        `/rebalance?from=${encodeURIComponent(custom!.from)}&to=${encodeURIComponent(custom!.to)}&amount=${custom!.amount}`,
+      ),
+    enabled: live,
+    placeholderData: keepPreviousData,
+    refetchInterval: 4_000,
+  });
+}
+
+export interface StartRebalanceBody extends Partial<CustomMove> {
+  goal: GoalKind;
+  route: RouteName;
+  costUsd: number;
+}
+
 export function useStartRebalance() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (body: { route: RouteName; costUsd: number }) => postJson<{ id: string }>('/rebalance', body),
+    mutationFn: (body: StartRebalanceBody) => postJson<{ id: string }>('/rebalance', body),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: qk.rebalance });
       void qc.invalidateQueries({ queryKey: qk.transfer });
