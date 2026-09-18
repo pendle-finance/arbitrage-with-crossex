@@ -134,7 +134,7 @@ export const VERDICT_BALANCED = 'Wallets match their position share. Nothing to 
  * contradicted the "$0.00 an hour" figure beside it. */
 export const VERDICT_NO_INTEREST = 'No interest payment yet. No transfer or rebalancing necessary.';
 export const VERDICT_NOT_WORTH_IT = 'Not worth it yet. The fee is more than 30 days of the interest it saves.';
-export const VERDICT_WORTH_IT = '30 day interest cost more than rebalance fee. Rebalance is recommended.';
+export const VERDICT_WORTH_IT = 'Rebalance is recommended.';
 export const PAYS_BACK = (daysText: string) => `The fee equals ${daysText} of the interest it saves.`;
 
 export const FACT_BORROWING = 'Borrowing';

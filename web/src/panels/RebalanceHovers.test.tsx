@@ -269,7 +269,7 @@ describe('the 30-day rule the card and the modal share', () => {
     expect(isWorthIt(at(20), lighterAt(0.1))).toBe(false);
     expect(isWorthIt(at(12_000), lighterAt(400))).toBe(true);
     expect(isWorthIt(at(12_000.01), lighterAt(400))).toBe(false);
-    expect(worthLine(at(3), lighterAt(0.1))).toEqual({ text: '30 day interest cost more than rebalance fee. Rebalance is recommended.', tone: 'act', sub: 'The fee equals 30 days of the interest it saves.' });
+    expect(worthLine(at(3), lighterAt(0.1))).toEqual({ text: 'Rebalance is recommended.', tone: 'act', sub: 'The fee equals 30 days of the interest it saves.' });
   });
 
   it('weighs the interest each wallet stops, not the daily saving the server rounds to cents', () => {
@@ -277,10 +277,10 @@ describe('the 30-day rule the card and the modal share', () => {
     const small = rebased(oneBorrow.buckets, {
       'USDC/LIGHTER': { cash: -114.7, equity: -114.7, borrow: 114.7, interestPerDayUsd: (114.7 * 0.1095) / 365 },
     });
-    expect(worthLine(at(1, 0.03), small)).toEqual({ text: '30 day interest cost more than rebalance fee. Rebalance is recommended.', tone: 'act', sub: 'The fee equals 30 days of the interest it saves.' });
+    expect(worthLine(at(1, 0.03), small)).toEqual({ text: 'Rebalance is recommended.', tone: 'act', sub: 'The fee equals 30 days of the interest it saves.' });
     // 16 USDC costs 0.0048 a day. The server sends 0.00.
     const tiny = rebased(oneBorrow.buckets, { 'USDC/LIGHTER': { cash: -16, equity: -16, borrow: 16, interestPerDayUsd: 0.0048 } });
-    expect(worthLine(at(0.03, 0), tiny)).toEqual({ text: '30 day interest cost more than rebalance fee. Rebalance is recommended.', tone: 'act', sub: 'The fee equals 7 days of the interest it saves.' });
+    expect(worthLine(at(0.03, 0), tiny)).toEqual({ text: 'Rebalance is recommended.', tone: 'act', sub: 'The fee equals 7 days of the interest it saves.' });
   });
 
   it('a wallet in profit owes its cash, not minus its equity: the route stops only the part it repays', () => {
@@ -295,7 +295,7 @@ describe('the 30-day rule the card and the modal share', () => {
     expect(stopsPerDayOf(sends300(3.5), inProfit)).toBeCloseTo(0.09, 10);
     expect(worthLine(sends300(3.5), inProfit)?.tone).toBe('warn');
     expect(worthLine(sends300(2.7), inProfit)).toEqual({
-      text: '30 day interest cost more than rebalance fee. Rebalance is recommended.',
+      text: 'Rebalance is recommended.',
       tone: 'act',
       sub: 'The fee equals 30 days of the interest it saves.',
     });
@@ -306,7 +306,7 @@ describe('the 30-day rule the card and the modal share', () => {
     expect(isWorthIt(at(1.2), lighterAt(0.03999))).toBe(false);
     expect(worthLine(at(1.2), lighterAt(0.03999))?.tone).toBe('warn');
     expect(worthLine(at(1.19), lighterAt(0.03999))).toEqual({
-      text: '30 day interest cost more than rebalance fee. Rebalance is recommended.',
+      text: 'Rebalance is recommended.',
       tone: 'act',
       sub: 'The fee equals 30 days of the interest it saves.',
     });

@@ -207,7 +207,7 @@ describe('RebalanceSection card', () => {
     expect(cardButtons().map((button) => button.textContent)).toEqual(['Rebalance · Fee $0.46']);
     expect(cardButtons()[0].className).toContain('btn-primary');
     expect(within(region()).queryByRole('radiogroup')).toBeNull();
-    expect(line('30 day interest cost more than rebalance fee. Rebalance is recommended.')).toBeInTheDocument();
+    expect(line('Rebalance is recommended.')).toBeInTheDocument();
     // The payback figure is the supporting sub-line under the recommendation.
     expect(sub()).toBe('The fee equals 12 days of the interest it saves.');
     expect(within(region()).queryByText(/After rebalance|Hold to rebalance|Show steps|^Frees$|^Saves$/)).toBeNull();
@@ -316,7 +316,7 @@ describe('RebalanceSection verdict', () => {
     ] as const) {
       await show(view);
       expect(sub()).toBe(`The fee equals ${days} of the interest it saves.`);
-      expect(line('30 day interest cost more than rebalance fee. Rebalance is recommended.')).toHaveClass('text-guava');
+      expect(line('Rebalance is recommended.')).toHaveClass('text-guava');
       expect(within(region()).queryByText(/Repays|Stops|No borrow|This borrow is free today|would move|worth/)).toBeNull();
       expect(cardButtons()[0].className).toContain('btn-primary');
       cleanup();

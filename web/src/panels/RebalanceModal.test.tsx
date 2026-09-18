@@ -658,7 +658,7 @@ describe('RebalanceModal is it worth it', () => {
     ['a fee under 1 day', 0.03, 'The fee equals less than a day of the interest it saves.'],
   ])('%s says how many days of interest the fee equals', (_, fee, text) => {
     show(withFee(at4c, fee));
-    expect(worth()).toEqual([{ text: '30 day interest cost more than rebalance fee. Rebalance is recommended.', tone: 'act', sub: text }]);
+    expect(worth()).toEqual([{ text: 'Rebalance is recommended.', tone: 'act', sub: text }]);
     expect(facts().Fee).toBe(`$${fee.toFixed(2)}`);
     expect(facts().Interest).toBe('$1.20 → $0.00 a month');
   });
@@ -689,7 +689,7 @@ describe('RebalanceModal is it worth it', () => {
     const mix = { ...view.plan.routes.mix!, savesPerDayUsd: 0.03 };
     show({ ...view, plan: { ...view.plan, routes: { ...view.plan.routes, mix } } });
     expect(facts().Interest).toBe('$1.03 → $0.00 a month');
-    expect(worth()).toEqual([{ text: '30 day interest cost more than rebalance fee. Rebalance is recommended.', tone: 'act', sub: 'The fee equals 30 days of the interest it saves.' }]);
+    expect(worth()).toEqual([{ text: 'Rebalance is recommended.', tone: 'act', sub: 'The fee equals 30 days of the interest it saves.' }]);
   });
 
   it('a Hyperliquid borrow under 10,000 USDC costs nothing, so it says so instead of weighing the fee', () => {
@@ -737,7 +737,7 @@ describe('RebalanceModal is it worth it', () => {
     cleanup();
 
     show(withFee(rebalanceViews.bigBorrows, 5118.6));
-    expect(worth()).toEqual([{ text: '30 day interest cost more than rebalance fee. Rebalance is recommended.', tone: 'act', sub: 'The fee equals 30 days of the interest it saves.' }]);
+    expect(worth()).toEqual([{ text: 'Rebalance is recommended.', tone: 'act', sub: 'The fee equals 30 days of the interest it saves.' }]);
     cleanup();
 
     show(withFee(rebalanceViews.bigBorrows, 5118.61));
