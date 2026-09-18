@@ -188,6 +188,7 @@ const telegramLink = createTelegramLink({
     telegramStatus.setAuth('ok');
     telegramSync.requestSync('linked');
   },
+  onRestored: () => telegramSync.requestSync('restored'),
 });
 
 const webDist = path.join(repoRoot, 'web', 'dist');

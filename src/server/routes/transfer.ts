@@ -8,7 +8,7 @@ import { TTL } from '../cache';
 import { DISCLAIMER_NOT_ACCEPTED, isDisclaimerAccepted } from '../disclaimer';
 import { catchRateLimit, sendError } from '../errorReply';
 import { formatMoney, LOCK_TEXT, newTransferJob, type TransferFile, type TransferJob } from '../rebalanceJob';
-import { isSendable, runTransfer } from '../rebalanceRunner';
+import { isSendable, runTransfer, TRANSFER_STEP } from '../rebalanceRunner';
 import { conflict, moneyLockNow, sleep, STALE_TEXT } from './rebalance';
 
 const SPOT_COINS: readonly TransferCoin[] = ['USDT', 'USDC'];
@@ -31,7 +31,7 @@ const overMaxText = (path: TransferPath, max: number): string =>
 const spotBalances = (rows: SpotAccount[]): SpotBalance[] =>
   SPOT_COINS.map((coin) => {
     const row = rows.find((r) => r.currency === coin);
-    return { coin, available: Number(floorDecimalString(row?.available ?? '0', '0.00001')) || 0, locked: Number(row?.locked ?? 0) || 0 };
+    return { coin, available: Number(floorDecimalString(row?.available ?? '0', TRANSFER_STEP)) || 0, locked: Number(row?.locked ?? 0) || 0 };
   });
 
 const viewOf = ({ id, coin, from, to, amount, status, received, failText, createdAt, doneAt }: TransferJob) => ({

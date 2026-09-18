@@ -49,9 +49,13 @@ export function floorToStep(value: number, step: string): string {
   return (stepsBelow(value, s, decimals) * s).toFixed(decimals);
 }
 
-export function floorDecimalString(raw: string, step: string): string {
-  const parts = raw.trim().match(/^([+-]?)(\d+)(?:\.(\d*))?$/);
-  if (!parts || !(Number(step) > 0)) return floorToStep(Number(raw), step);
+export function floorDecimalString(raw: string | null | undefined, step: string): string {
+  const trimmed = String(raw ?? '').trim();
+  const parts = trimmed.match(/^([+-]?)(\d+)(?:\.(\d*))?$/);
+  if (!parts || !(Number(step) > 0)) {
+    const value = Number(trimmed);
+    return trimmed === '' || !Number.isFinite(value) ? '0' : floorToStep(value, step);
+  }
   const decimals = decimalsOf(step);
   const [, sign, whole, fraction = ''] = parts;
   const kept = BigInt(whole + fraction.slice(0, decimals).padEnd(decimals, '0'));

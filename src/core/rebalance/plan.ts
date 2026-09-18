@@ -935,7 +935,7 @@ function pathMax(path: PathRule, account: AccountLike, spot: SpotBalance[] | nul
     const initialMargin = finiteOrNull(account.initialMargin);
     if (marginBalance === null || initialMargin === null) return 0;
     const asset = (account.assets ?? []).find(isWallet({ coin: path.coin, venue: CROSSEX_VENUE[path.from] }));
-    const cash = asset?.balance === undefined ? 0 : Number(floorDecimalString(asset.balance, '0.00001'));
+    const cash = Number(floorDecimalString(asset?.balance, String(MIN_TRANSFER)));
     return fit({ marginBalance, initialMargin }, cash, num(asset?.equity));
   }
   if (spot === null) return null;

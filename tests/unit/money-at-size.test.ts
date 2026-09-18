@@ -413,7 +413,15 @@ describe('a balance-capped amount at every rung never goes above the balance', (
     expect(floorDecimalString('-0.000000000000000000001', '0.00001')).toBe('-0.00001');
     expect(floorDecimalString('-12.345', '0.01')).toBe('-12.35');
     expect(floorDecimalString('7', '0.01')).toBe('7.00');
-    expect(floorDecimalString('', '0.01')).toBe('0.00');
+  });
+
+  it('a missing, empty or non-number balance floors to 0, and an exponent string still floors at $50 and $6,000,000', () => {
+    for (const raw of [null, undefined, '', '  ', 'abc', 'Infinity', 'NaN']) {
+      expect(floorDecimalString(raw, '0.00001')).toBe('0');
+      expect(floorDecimalString(raw, '0.01')).toBe('0');
+    }
+    expect(floorDecimalString('5e1', '0.00001')).toBe('50.00000');
+    expect(floorDecimalString('6e6', '0.01')).toBe('6000000.00');
   });
 
   it('$6,000,000: 5999999.999999999 sends 5999999.99999, where roundToStep down gives 6000000', () => {

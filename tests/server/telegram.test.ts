@@ -21,6 +21,8 @@ interface BotBehaviour {
   down: 'refused' | number | null;
   reason: BotAuthReason | null;
   settings: { liquidation: boolean; interest: boolean };
+  hold: Promise<void> | null;
+  pendingKey: string | null;
 }
 
 let dataDir: string;
@@ -38,7 +40,7 @@ afterEach(async () => {
 });
 
 function makeBot() {
-  const behaviour: BotBehaviour = { down: null, reason: null, settings: { liquidation: true, interest: true } };
+  const behaviour: BotBehaviour = { down: null, reason: null, settings: { liquidation: true, interest: true }, hold: null, pendingKey: null };
   const answer: BotAnswer = (call) => {
     if (typeof behaviour.down === 'number') return { status: behaviour.down, body: { message: 'Cannot answer' } };
     const route = `${call.method} ${call.url.slice(CROSSEX.length)}`;
@@ -46,18 +48,30 @@ function makeBot() {
       return { status: 201, body: { code: CODE, expiresAt: new Date(now + TEN_MIN).toISOString() } };
     }
     if (behaviour.reason !== null) return { status: 401, body: { reason: behaviour.reason } };
+    if (call.headers['x-terminal-key'] === behaviour.pendingKey) return { status: 401, body: { reason: 'pending' } };
     if (route === 'DELETE /terminal') return { status: 200, body: { removed: true } };
     if (route === 'PATCH /terminal/settings') Object.assign(behaviour.settings, call.body);
     return { status: 200, body: { ...VIEW, settings: { ...behaviour.settings } } };
   };
-  const stub = makeBotStub((call) => {
+  const stub = makeBotStub(async (call) => {
     if (behaviour.down === 'refused') throw new Error('connect ECONNREFUSED');
+    if (behaviour.hold !== null && call.method === 'GET') await behaviour.hold;
     return answer(call);
   });
   return { ...stub, behaviour };
 }
 
 type Bot = ReturnType<typeof makeBot>;
+
+function holdChecks(bot: Bot): () => void {
+  let release = (): void => undefined;
+  bot.behaviour.hold = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  return release;
+}
+
+const NONE = { connected: false, state: 'none', settings: null, lastSyncAt: null, lastSyncError: null };
 
 function boot(bot: Bot = makeBot()) {
   const status = new TelegramStatus();
@@ -74,6 +88,7 @@ function boot(bot: Bot = makeBot()) {
       status.setAuth('ok');
       sync.requestSync('linked');
     },
+    onRestored: () => sync.requestSync('restored'),
   });
   const app = makeTestApp({ dataDir, telegram: { link, sync, status, bot: bot.bot } });
   cleanups.push(async () => {
@@ -310,6 +325,77 @@ describe('Telegram link', () => {
     expect(status.auth).toBeNull();
   });
 
+  it('a cancel answers after the bot check, and no read says connected on the unconfirmed key', async () => {
+    fakeInterval();
+    const { app, bot } = boot();
+    bot.behaviour.reason = 'pending';
+    await send(app, 'POST', '/api/telegram/link');
+    const release = holdChecks(bot);
+    let answered = false;
+    const cancel = send(app, 'DELETE', '/api/telegram/link').then((res) => {
+      answered = true;
+      return res;
+    });
+    await vi.waitFor(() => expect(bot.to('GET', '/terminal')).toHaveLength(1));
+
+    const during = await send(app, 'GET', '/api/telegram');
+    expect(during.body.data).toEqual(NONE);
+    expect(answered).toBe(false);
+    release();
+    const res = await cancel;
+
+    expect(res.body.data.status).toBe('none');
+    expect(readTelegramKey(dataDir)).toBeNull();
+    expect((await send(app, 'GET', '/api/telegram')).body.data).toEqual(NONE);
+    expect(bot.to('PUT', '/terminal/triggers')).toHaveLength(0);
+  });
+
+  it('a cancelled relink syncs the old key at once and reads connected again', async () => {
+    fakeInterval();
+    const before = linked();
+    const { app, bot, sync, status } = boot();
+    await send(app, 'POST', '/api/telegram/link');
+    bot.behaviour.pendingKey = keyOnDisk().key;
+    sync.requestSync('deal');
+    await vi.waitFor(() => expect(status.auth).toBe('pending'));
+
+    await send(app, 'DELETE', '/api/telegram/link');
+    await vi.waitFor(() => expect(bot.to('PUT', '/terminal/triggers')).toHaveLength(2));
+    await sync.idle();
+
+    expect(readTelegramKey(dataDir)).toEqual(before);
+    expect(bot.to('PUT', '/terminal/triggers')[1].headers['x-terminal-key']).toBe(before.key);
+    expect((await send(app, 'GET', '/api/telegram')).body.data).toMatchObject({
+      connected: true,
+      state: 'connected',
+      lastSyncError: null,
+    });
+  });
+
+  it('a cancel of a link the bot confirmed answers after the check, and then reads connected', async () => {
+    fakeInterval();
+    const { app, bot } = boot();
+    bot.behaviour.reason = 'pending';
+    await send(app, 'POST', '/api/telegram/link');
+    const key = keyOnDisk();
+    bot.behaviour.reason = null;
+    const release = holdChecks(bot);
+    let answered = false;
+    const cancel = send(app, 'DELETE', '/api/telegram/link').then(() => {
+      answered = true;
+    });
+    await vi.waitFor(() => expect(bot.to('GET', '/terminal')).toHaveLength(1));
+
+    const during = await send(app, 'GET', '/api/telegram');
+    expect(during.body.data).toEqual(NONE);
+    expect(answered).toBe(false);
+    release();
+    await cancel;
+
+    expect(readTelegramKey(dataDir)).toEqual(key);
+    expect((await send(app, 'GET', '/api/telegram')).body.data).toMatchObject({ connected: true, state: 'connected' });
+  });
+
   it('a restart during linking restores the key that was there', async () => {
     const before = linked();
     const first = boot();
@@ -362,6 +448,23 @@ describe('Telegram link', () => {
 
     expect(readTelegramKey(dataDir)).toBeNull();
     expect((await send(second.app, 'GET', '/api/telegram')).body.data).toMatchObject({ connected: false, state: 'none' });
+  });
+
+  it('a read during the restart check does not say connected on the unconfirmed key', async () => {
+    fakeInterval();
+    const first = boot();
+    first.bot.behaviour.reason = 'pending';
+    await send(first.app, 'POST', '/api/telegram/link');
+    const release = holdChecks(first.bot);
+
+    const second = boot(first.bot);
+    await vi.waitFor(() => expect(first.bot.to('GET', '/terminal')).toHaveLength(1));
+    const during = await send(second.app, 'GET', '/api/telegram');
+    release();
+    await second.link.settled();
+
+    expect(during.body.data).toEqual(NONE);
+    expect(readTelegramKey(dataDir)).toBeNull();
   });
 
   it('a confirmed link keeps its key after a restart', async () => {

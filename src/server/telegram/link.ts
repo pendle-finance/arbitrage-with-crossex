@@ -11,6 +11,7 @@ const SWAP_FILE = 'telegram-link';
 export interface TelegramLink {
   start(): Promise<TelegramLinkStart>;
   status(): TelegramLinkStatus;
+  checking(): { hadKey: boolean } | null;
   cancel(): Promise<void>;
   settled(): Promise<void>;
   stop(): void;
@@ -23,6 +24,7 @@ export interface TelegramLinkOptions {
   version: string;
   now: () => number;
   onConfirmed: () => void;
+  onRestored?: () => void;
   pollMs?: number;
 }
 
@@ -49,6 +51,7 @@ export function createTelegramLink(opts: TelegramLinkOptions): TelegramLink {
   let link: PendingLink | null = null;
   let starting: Promise<TelegramLinkStart> | null = null;
   let timer: ReturnType<typeof setInterval> | null = null;
+  let unsettled: KeySwap | null = null;
   const swapFile = path.join(opts.dataDir, SWAP_FILE);
 
   const stopPolling = (): void => {
@@ -64,6 +67,7 @@ export function createTelegramLink(opts: TelegramLinkOptions): TelegramLink {
       return;
     }
     writeTelegramKey(opts.dataDir, swap.previous);
+    opts.onRestored?.();
   };
 
   const keepIfConfirmed = async (swap: KeySwap): Promise<void> => {
@@ -83,9 +87,18 @@ export function createTelegramLink(opts: TelegramLinkOptions): TelegramLink {
     opts.onConfirmed();
   };
 
+  const check = (swap: KeySwap, after: Promise<void>): Promise<void> => {
+    unsettled = swap;
+    return after
+      .then(() => keepIfConfirmed(swap))
+      .catch(() => undefined)
+      .finally(() => {
+        if (unsettled === swap) unsettled = null;
+      });
+  };
+
   const unconfirmed = readOwnerJson(swapFile, parseSwap);
-  let settling: Promise<void> =
-    unconfirmed === null ? Promise.resolve() : keepIfConfirmed(unconfirmed).catch(() => undefined);
+  let settling: Promise<void> = unconfirmed === null ? Promise.resolve() : check(unconfirmed, Promise.resolve());
 
   const settle = (current: PendingLink, state: 'confirmed' | 'expired'): void => {
     if (link !== current || current.state !== 'pending') return;
@@ -162,14 +175,15 @@ export function createTelegramLink(opts: TelegramLinkOptions): TelegramLink {
       if (link.state === 'pending' && opts.now() >= link.expiresAt) settle(link, 'expired');
       return { status: link.state, url: link.url, expiresAt: link.expiresAt };
     },
+    checking() {
+      return unsettled === null ? null : { hadKey: unsettled.previous !== null };
+    },
     cancel() {
       const current = link;
       if (current === null) return settling;
       stopPolling();
       link = null;
-      if (current.state === 'pending') {
-        settling = settling.then(() => keepIfConfirmed(current)).catch(() => undefined);
-      }
+      if (current.state === 'pending') settling = check(current, settling);
       return settling;
     },
     settled() {

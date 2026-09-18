@@ -43,8 +43,13 @@ export function telegramRoutes(deps: AppDeps) {
     return deps.telegram;
   };
 
+  const hasKey = (t: Telegram): boolean => {
+    const check = t.link.checking();
+    return check === null ? readTelegramKey(deps.dataDir) !== null : check.hadKey;
+  };
+
   const awaitFirstSync = async (t: Telegram): Promise<void> => {
-    if (t.status.auth !== null || t.status.lastSyncError !== null || readTelegramKey(deps.dataDir) === null) return;
+    if (t.status.auth !== null || t.status.lastSyncError !== null || !hasKey(t)) return;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const cap = new Promise<void>((resolve) => {
       timer = setTimeout(resolve, FIRST_SYNC_WAIT_MS);
@@ -54,9 +59,9 @@ export function telegramRoutes(deps: AppDeps) {
   };
 
   const info = (t: Telegram): TelegramInfo => {
-    const hasKey = readTelegramKey(deps.dataDir) !== null;
-    const state = stateOf(hasKey, t.link.status().status === 'pending', t.status.auth);
-    if (!hasKey) return { connected: false, state, settings: null, lastSyncAt: null, lastSyncError: null };
+    const keyed = hasKey(t);
+    const state = stateOf(keyed, t.link.status().status === 'pending', t.status.auth);
+    if (!keyed) return { connected: false, state, settings: null, lastSyncAt: null, lastSyncError: null };
     return {
       connected: state === 'connected',
       state,
@@ -85,8 +90,9 @@ export function telegramRoutes(deps: AppDeps) {
     app.get('/telegram/link', async (_req, reply) => reply.ok(telegram().link.status()));
 
     app.delete('/telegram/link', async (_req, reply) => {
-      telegram().link.cancel();
-      return reply.ok(telegram().link.status());
+      const t = telegram();
+      await t.link.cancel();
+      return reply.ok(t.link.status());
     });
 
     app.patch('/telegram/settings', async (req, reply) => {
@@ -117,6 +123,7 @@ export function telegramRoutes(deps: AppDeps) {
     app.delete('/telegram', async (_req, reply) => {
       const t = telegram();
       t.link.stop();
+      await t.link.settled();
       const key = readTelegramKey(deps.dataDir);
       if (key !== null) await t.bot.deleteTerminal(key.key).catch(() => undefined);
       deleteTelegramKey(deps.dataDir);

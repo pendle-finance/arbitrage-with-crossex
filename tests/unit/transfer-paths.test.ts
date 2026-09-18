@@ -165,6 +165,13 @@ describe('transferPaths', () => {
     expect(pathOf(paths, 'USDC', 'CROSSEX_GATE', 'SPOT').max).toBe(0.29);
   });
 
+  it('a CrossEx balance that is null, empty or not a number gives a max of 0', () => {
+    for (const balance of [null, undefined, '', 'abc']) {
+      const account: AccountLike = { ...ACCOUNT, assets: [cashRow('USDT', 'CROSSEX', balance as unknown as string, '990.34')] };
+      expect(pathOf(transferPaths({ account, spot: SPOT, coins: COINS }), 'USDT', 'CROSSEX', 'SPOT').max).toBe(0);
+    }
+  });
+
   it('missing coin rules fall back to the static table', () => {
     const fallback = transferPaths({ account: ACCOUNT, spot: SPOT, coins: [] });
     expect(fallback.map((p) => p.min)).toEqual([MIN_TRANSFER, MIN_TRANSFER, MIN_TRANSFER, MIN_TRANSFER, 11, 11, 11, 11]);
