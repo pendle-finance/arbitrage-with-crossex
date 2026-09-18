@@ -9,7 +9,7 @@ import {
   useQueryClient,
 } from '@tanstack/react-query';
 import { useEffect, useRef } from 'react';
-import { del, fetchJson, postJson, putJson } from './client';
+import { del, fetchJson, patchJson, postJson, putJson } from './client';
 import { useTabActive } from '../components/TabBar';
 import { uuid } from '../lib/uuid';
 import type {
@@ -68,13 +68,8 @@ export const qk = {
     ['assetView', address, since, legSince] as const,
   borosAgent: ['boros', 'agent'] as const,
   borosPairContext: (address: string) => ['boros', 'pair', 'context', address] as const,
-  opportunities: (
-    notionalUsd: number,
-    borosEntry: BorosEntryMode,
-    entryMode: EntryMode,
-    exitMode: ExitMode,
-    feeTier: string | undefined,
-  ) => ['opportunities', notionalUsd, borosEntry, entryMode, exitMode, feeTier ?? ''] as const,
+  opportunities: (notionalUsd: number, borosEntry: BorosEntryMode, entryMode: EntryMode, exitMode: ExitMode) =>
+    ['opportunities', notionalUsd, borosEntry, entryMode, exitMode] as const,
   deal: (id: string) => ['deal', id] as const,
   activeDeals: ['deals', 'active'] as const,
   alerts: ['alerts'] as const,
@@ -219,9 +214,6 @@ export interface OpportunitiesParams {
   borosEntry: BorosEntryMode;
   entryMode: EntryMode;
   exitMode: ExitMode;
-  /** Simulate a Gate CrossEx VIP fee tier (e.g. 'vip0') instead of the
-   * account's live schedule — the unconfigured view always sends one. */
-  feeTier?: string;
 }
 
 /** Route bounds (src/server/routes/opportunities.ts): anything outside them is
@@ -252,12 +244,10 @@ export function isValidOpportunityNotional(notionalUsd: number): boolean {
  * `isPlaceholderData` to dim them). */
 export function useOpportunities(p: OpportunitiesParams) {
   const search =
-    `?notionalUsd=${p.notionalUsd}&borosEntry=${p.borosEntry}` +
-    `&entryMode=${p.entryMode}&exitMode=${p.exitMode}` +
-    (p.feeTier ? `&feeTier=${p.feeTier}` : '');
+    `?notionalUsd=${p.notionalUsd}&borosEntry=${p.borosEntry}` + `&entryMode=${p.entryMode}&exitMode=${p.exitMode}`;
   const shown = useTabActive();
   return useQuery({
-    queryKey: qk.opportunities(p.notionalUsd, p.borosEntry, p.entryMode, p.exitMode, p.feeTier),
+    queryKey: qk.opportunities(p.notionalUsd, p.borosEntry, p.entryMode, p.exitMode),
     queryFn: () => fetchJson<OpportunitiesResult>(`/opportunities${search}`),
     enabled: (query) => isValidOpportunityNotional(p.notionalUsd) && canFetch(shown, query),
     refetchInterval: shown ? 12_000 : false,
@@ -758,7 +748,7 @@ export function useTelegramSettings() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (body: { liquidation?: boolean; interest?: boolean }) =>
-      fetchJson<TelegramInfo>('/telegram/settings', { method: 'PATCH', body: JSON.stringify(body) }),
+      patchJson<TelegramInfo>('/telegram/settings', body),
     onSuccess: () => qc.invalidateQueries({ queryKey: qk.telegram }),
   });
 }
@@ -768,5 +758,16 @@ export function useDisconnectTelegram() {
   return useMutation({
     mutationFn: () => del<TelegramInfo>('/telegram'),
     onSuccess: () => qc.invalidateQueries({ queryKey: qk.telegram }),
+  });
+}
+
+export function useCancelTelegramLink() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => del<TelegramLinkStatus>('/telegram/link'),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: qk.telegram });
+      qc.invalidateQueries({ queryKey: qk.telegramLink });
+    },
   });
 }

@@ -1163,6 +1163,38 @@ describe('BorosPairTicket', () => {
   });
 });
 
+describe('BorosPairTicket — market list', () => {
+  it('keeps a held position on an unsupported coin, for closing', async () => {
+    server.use(
+      ...handlers({
+        ctx: context({
+          markets: [
+            marketRow(),
+            marketRow({ marketId: BN, name: 'Binance ETHUSDT 31 Aug 2026', venue: 'Binance', midApr: 0.045 }),
+            marketRow({
+              marketId: 500,
+              name: 'Hyperliquid SOL 31 Aug 2026',
+              venue: 'Hyperliquid',
+              base: 'SOL',
+              tokenId: 9,
+              collateral: 'SOL',
+              currentSize: 250,
+            }),
+          ],
+        }),
+      }),
+    );
+    renderWithClient(<BorosPairTicket />);
+
+    await waitFor(() =>
+      expect((screen.getByLabelText('Leg A') as HTMLSelectElement).options.length).toBeGreaterThan(1),
+    );
+    expect(
+      within(screen.getByLabelText('Leg A')).getByRole('option', { name: 'Hyperliquid SOL 31 Aug 2026' }),
+    ).toBeInTheDocument();
+  });
+});
+
 describe('BorosPairTicket — the size unit', () => {
   it('names the collateral as soon as a leg is picked, before any simulation', async () => {
     // There is no simulation until a size is typed, and a size field labelled
@@ -1196,14 +1228,20 @@ describe('BorosPairTicket — the size unit', () => {
 // Card cue prefill ("Open the Boros legs") — maturity agreement
 // ---------------------------------------------------------------------------
 
-function BorosPrefillHarness({ prefill }: { prefill: Omit<BorosOpenPrefill, 'nonce'> }) {
+function BorosPrefillHarness({
+  prefill,
+  guided,
+}: {
+  prefill: Omit<BorosOpenPrefill, 'nonce'>;
+  guided?: boolean;
+}) {
   const flow = useTradeFlow();
   return (
     <>
       <button type="button" onClick={() => flow.prefillBorosOpen(prefill)}>
         fire
       </button>
-      <BorosPairTicket />
+      <BorosPairTicket guided={guided} />
     </>
   );
 }
@@ -1272,6 +1310,34 @@ describe('BorosPairTicket — the cue prefill lands both legs on ONE maturity', 
 
     await waitFor(() => expect(screen.getByLabelText('Leg A')).toHaveValue(''));
     expect(screen.getByLabelText('Leg B')).toHaveValue('');
+  });
+});
+
+describe('BorosPairTicket — target mode and a close-only market', () => {
+  it('disables Confirm when the target would grow a close-only leg', async () => {
+    server.use(
+      ...handlers({
+        ctx: context({
+          markets: [
+            marketRow({ closeOnly: true }),
+            marketRow({ marketId: BN, name: 'Binance ETHUSDT 31 Aug 2026', venue: 'Binance' }),
+          ],
+        }),
+      }),
+    );
+    const user = userEvent.setup();
+    renderWithClient(
+      <BorosPrefillHarness
+        guided
+        prefill={{ base: 'ETH', longVenue: 'Hyperliquid', shortVenue: 'Binance', size: 1000 }}
+      />,
+    );
+    await user.click(screen.getByRole('button', { name: 'fire' }));
+
+    const btn = await screen.findByRole('button', {
+      name: 'Market A takes closes only. Switch to Close.',
+    });
+    expect(btn).toBeDisabled();
   });
 });
 

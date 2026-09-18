@@ -1,11 +1,10 @@
 import type { CrossexAccount, PositionsResponse } from '../../../web/src/api/types';
+import { F_MAX, F_MIN, gateNumber } from '../../../web/src/lib/liquidation';
 import { CoreError } from '../errors';
 import { HYPERLIQUID_FREE_BORROW_USDC, LIGHTER_WALLET, USDC_WALLET, USDT_WALLET } from '../rebalance/plan';
 import type { TriggerCoin, Wallet } from './triggers';
 
 export { HYPERLIQUID_FREE_BORROW_USDC };
-const PRICE_FLOOR = 0.02;
-const PRICE_CEILING = 10;
 
 interface WalletRule {
   wallet: Wallet;
@@ -29,11 +28,21 @@ function walletRuleOf(exchange: string): WalletRule {
 function equityOf(acc: CrossexAccount, rule: WalletRule): number {
   const asset = acc.assets.find((a) => a.coin === rule.coin && a.exchangeType === rule.venue);
   if (!asset) return 0;
-  const equity = Number(asset.equity);
-  if (!Number.isFinite(equity)) {
+  const equity = gateNumber(asset.equity);
+  if (equity === null) {
     throw new CoreError(`Gate sent a ${rule.coin} ${rule.venue} wallet equity that is not a number: ${asset.equity}`, 'unknown');
   }
   return equity;
+}
+
+function nearestBeyond(
+  mark: number,
+  candidates: Array<{ price: number; wallet: Wallet }>,
+  beyond: (price: number) => boolean,
+): { price: number; wallet: Wallet } | null {
+  if (candidates.length === 0) return null;
+  const pool = candidates.some((c) => beyond(c.price)) ? candidates.filter((c) => beyond(c.price)) : candidates;
+  return pool.reduce((best, c) => (Math.abs(c.price - mark) < Math.abs(best.price - mark) ? c : best));
 }
 
 export function interestPrices(
@@ -50,19 +59,20 @@ export function interestPrices(
   if (legs.length === 0) return prices;
   const mark = marks.get(legs.reduce((a, b) => (b.value > a.value ? b : a)).symbol) ?? 0;
   if (!(mark > 0)) return prices;
+  const downs: Array<{ price: number; wallet: Wallet }> = [];
+  const ups: Array<{ price: number; wallet: Wallet }> = [];
   for (const rule of WALLET_RULES) {
     const exposure = legs
       .filter((l) => walletRuleOf(l.exchange) === rule)
       .reduce((sum, l) => sum + (l.side === 'LONG' ? l.value : -l.value), 0);
     if (exposure === 0) continue;
     const factor = 1 + (rule.threshold - equityOf(acc, rule)) / exposure;
-    if (!(factor >= PRICE_FLOOR && factor <= PRICE_CEILING)) continue;
+    if (!(factor >= F_MIN && factor <= F_MAX)) continue;
     const price = mark * factor;
-    if (exposure > 0) {
-      if (prices.down === null || price > prices.down.price) prices.down = { price, wallet: rule.wallet };
-      continue;
-    }
-    if (prices.up === null || price < prices.up.price) prices.up = { price, wallet: rule.wallet };
+    if (exposure > 0) downs.push({ price, wallet: rule.wallet });
+    else ups.push({ price, wallet: rule.wallet });
   }
+  prices.down = nearestBeyond(mark, downs, (p) => p <= mark);
+  prices.up = nearestBeyond(mark, ups, (p) => p >= mark);
   return prices;
 }

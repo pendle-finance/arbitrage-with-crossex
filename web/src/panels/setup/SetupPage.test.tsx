@@ -45,8 +45,9 @@ function installWallet() {
 
 function renderSetup() {
   const onFinish = vi.fn();
-  renderWithClient(<SetupPage onFinish={onFinish} />);
-  return onFinish;
+  const onOpenGuide = vi.fn();
+  renderWithClient(<SetupPage onFinish={onFinish} onOpenGuide={onOpenGuide} />);
+  return { onFinish, onOpenGuide };
 }
 
 const row = (name: string) => screen.getByRole('region', { name });
@@ -131,6 +132,14 @@ describe('SetupPage · Gate API key', () => {
     renderSetup();
     await screen.findByRole('button', { name: 'Check key' });
     expect(screen.queryByRole('button', { name: /Skip/ })).toBeNull();
+  });
+
+  it('how to make a key opens the guide', async () => {
+    const user = userEvent.setup();
+    mockWorld();
+    const { onOpenGuide } = renderSetup();
+    await user.click(await screen.findByRole('button', { name: 'How to make a key ↗' }));
+    expect(onOpenGuide).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -278,7 +287,7 @@ describe('SetupPage · Telegram alerts', () => {
         return HttpResponse.json(env({ status: 'confirmed', url: null, expiresAt: null }));
       }),
     );
-    const onFinish = renderSetup();
+    const { onFinish } = renderSetup();
     await user.click(await screen.findByRole('button', { name: 'Set up ↗' }));
 
     expect(await screen.findByRole('switch', { name: 'Close to liquidation' })).toHaveAttribute('aria-checked', 'true');
@@ -288,9 +297,10 @@ describe('SetupPage · Telegram alerts', () => {
     expect(screen.getByText(/^Last synced \d+ s ago$/)).toBeInTheDocument();
     expect(
       screen.getByText(
-        'Alerts are based on the last update the terminal sent. A trade made outside the terminal counts after the next sync.',
+        'Alerts are based on the last update the terminal sent. A trade made outside the terminal counts after the next sync, within 5 min.',
       ),
     ).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Skip/ })).toBeNull();
     await user.click(screen.getByRole('button', { name: 'Finish' }));
     expect(onFinish).toHaveBeenCalledTimes(1);
   });
@@ -337,7 +347,7 @@ describe('SetupPage · Telegram alerts', () => {
         ),
       ),
     );
-    const onFinish = renderSetup();
+    const { onFinish } = renderSetup();
     await user.click(await screen.findByRole('button', { name: 'Set up ↗' }));
 
     expect(await screen.findByText(BOT_DOWN)).toBeInTheDocument();
@@ -350,7 +360,7 @@ describe('SetupPage · Telegram alerts', () => {
   it('skip telegram', async () => {
     const user = userEvent.setup();
     openTelegramStep();
-    const onFinish = renderSetup();
+    const { onFinish } = renderSetup();
     await user.click(await screen.findByRole('button', { name: 'Skip, not recommended' }));
 
     expect(

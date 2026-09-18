@@ -34,10 +34,17 @@ const UserGuideModal = lazy(() =>
   import('./components/UserGuideModal').then((m) => ({ default: m.UserGuideModal })),
 );
 
+const GATE_KEY_GUIDE_SECTION = 'How to set up Gate and make an API key';
+
 export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsFocus, setSettingsFocus] = useState<SetupStep | null>(null);
   const [guideOpen, setGuideOpen] = useState(false);
+  const [guideSection, setGuideSection] = useState<string | undefined>(undefined);
+  const openGuide = useCallback((section?: string) => {
+    setGuideSection(section);
+    setGuideOpen(true);
+  }, []);
   // null = the user has never picked a tab, so the landing tab is still up for
   // grabs: it resolves to Positions once we know they hold some, else
   // Opportunities. An explicit pick (persisted) always wins.
@@ -46,6 +53,13 @@ export default function App() {
     if (isTabId(fromUrl)) return fromUrl;
     return readJson<TabId | null>(ACTIVE_TAB_KEY, null, (parsed) => (isTabId(parsed) ? parsed : null));
   });
+
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    if (!url.searchParams.has('tab')) return;
+    url.searchParams.delete('tab');
+    window.history.replaceState(null, '', url);
+  }, []);
   const credentials = useCredentials();
   const disclaimer = useDisclaimer();
   const openOrders = useOpenOrders();
@@ -111,7 +125,7 @@ export default function App() {
         title="How to read the Opportunities scan and open a pair well"
         onClick={() => {
           markGuideHintDone();
-          setGuideOpen(true);
+          openGuide();
         }}
         className="hdr-ctl border-info/50 bg-info/[0.12] font-medium text-pastel-blue hover:bg-info/[0.22]"
       >
@@ -151,10 +165,7 @@ export default function App() {
         {/* Only once the terminal is usable: the disclaimer gate is a locked
             modal, and the first-run view already leads with its own setup
             guide — a second nudge on top of either is noise. */}
-        <UserGuideHint
-          enabled={isTrading && disclaimer.data?.accepted === true}
-          onOpen={() => setGuideOpen(true)}
-        />
+        <UserGuideHint enabled={isTrading && disclaimer.data?.accepted === true} onOpen={() => openGuide()} />
         <div className="flex min-h-full flex-col">
           {/* The tab strip lives INSIDE the sticky header so it can never be
               hidden under it — the header wraps to two rows on narrow screens,
@@ -209,7 +220,7 @@ export default function App() {
               {credentials.isPending ? (
                 <TableSkeleton rows={6} cols={7} />
               ) : showsChecklist ? (
-                <SetupPage onFinish={finishSetup} />
+                <SetupPage onFinish={finishSetup} onOpenGuide={() => openGuide(GATE_KEY_GUIDE_SECTION)} />
               ) : (
                 <>
                   {/* Every panel brings its own card chrome, so the tab panels
@@ -243,11 +254,22 @@ export default function App() {
               <OrderTicketDrawer />
             </>
           )}
-          <SettingsDrawer open={settingsOpen} focusStep={settingsFocus} onClose={() => setSettingsOpen(false)} />
+          <SettingsDrawer
+            open={settingsOpen}
+            focusStep={settingsFocus}
+            onClose={() => setSettingsOpen(false)}
+            onOpenGuide={() => openGuide(GATE_KEY_GUIDE_SECTION)}
+          />
           {/* Mounted only while open, so the guide is fetched on first request. */}
           {guideOpen && (
             <Suspense fallback={null}>
-              <UserGuideModal onClose={() => setGuideOpen(false)} />
+              <UserGuideModal
+                section={guideSection}
+                onClose={() => {
+                  setGuideOpen(false);
+                  setGuideSection(undefined);
+                }}
+              />
             </Suspense>
           )}
         </div>

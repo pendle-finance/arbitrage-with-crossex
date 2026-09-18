@@ -19,7 +19,7 @@ import type { SetupStep } from './setup/setupState';
 const WALLET = `0xab18${'0'.repeat(32)}ed9d`;
 const PASTED = `0x3f2a${'1'.repeat(32)}91c0`;
 const CAVEAT =
-  'Alerts are based on the last update the terminal sent. A trade made outside the terminal counts after the next sync.';
+  'Alerts are based on the last update the terminal sent. A trade made outside the terminal counts after the next sync, within 5 min.';
 
 const connectedTelegram = (settings = { liquidation: true, interest: true }): TelegramInfo =>
   telegramInfo({ connected: true, state: 'connected', settings, lastSyncAt: Date.now() - 180_000 });
@@ -191,7 +191,7 @@ describe('SettingsDrawer', () => {
 
     expect(await within(wallet).findByRole('radio', { name: 'Connect wallet' })).toBeInTheDocument();
     expect(within(wallet).getByRole('radio', { name: 'Paste address' })).toBeInTheDocument();
-    expect(within(wallet).getByRole('button', { name: 'Done' })).toBeInTheDocument();
+    expect(within(wallet).getByRole('button', { name: 'Close' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Replace credentials' })).toBeNull();
   });
 

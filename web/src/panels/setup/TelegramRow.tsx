@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import { ApiError } from '../../api/client';
 import {
   qk,
+  useCancelTelegramLink,
   useDisconnectTelegram,
   useStartTelegramLink,
   useTelegram,
@@ -33,10 +34,10 @@ const INTEREST_FLOORS = [
 const LIQUIDATION_CAPTION = 'a 20% move from now reaches liquidation';
 
 const CAVEAT =
-  'Alerts are based on the last update the terminal sent. A trade made outside the terminal counts after the next sync.';
+  'Alerts are based on the last update the terminal sent. A trade made outside the terminal counts after the next sync, within 5 min.';
 
 function alertSettings(info: TelegramInfo): AlertSettings {
-  return { liquidation: info.settings?.liquidation ?? true, interest: info.settings?.interest ?? true };
+  return { liquidation: info.settings?.liquidation ?? false, interest: info.settings?.interest ?? false };
 }
 
 function alertsLabel({ liquidation, interest }: AlertSettings): string {
@@ -70,6 +71,7 @@ export function TelegramRow(p: SetupRowProps) {
   const start = useStartTelegramLink();
   const saveSettings = useTelegramSettings();
   const disconnect = useDisconnectTelegram();
+  const cancelLink = useCancelTelegramLink();
   const qc = useQueryClient();
   const toast = useToast();
   const now = useNow(1000);
@@ -116,6 +118,11 @@ export function TelegramRow(p: SetupRowProps) {
 
   const line = stateLine(info, now);
   const failure = info ? syncFailure(info) : null;
+  const readError = telegram.isError
+    ? telegram.error instanceof ApiError
+      ? telegram.error.message
+      : String(telegram.error)
+    : null;
   const startError = start.error instanceof ApiError ? start.error.message : start.error ? String(start.error) : null;
   const pageUrl = link.data?.url ?? start.data?.url ?? null;
 
@@ -152,7 +159,11 @@ export function TelegramRow(p: SetupRowProps) {
           type="button"
           className="btn-link text-ink-400"
           disabled={disconnect.isPending}
-          onClick={() => disconnect.mutate()}
+          onClick={() =>
+            disconnect.mutate(undefined, {
+              onError: (err) => toast.push('error', err instanceof ApiError ? err.message : String(err)),
+            })
+          }
         >
           Disconnect this terminal
         </button>
@@ -167,7 +178,12 @@ export function TelegramRow(p: SetupRowProps) {
         <span>Waiting for you to confirm on the Boros alerts page</span>
       </div>
       {pageUrl && <Ext href={pageUrl}>Open the page again ↗</Ext>}
-      <button type="button" className="btn-ghost-xs w-fit" onClick={() => setPhase('idle')}>
+      <button
+        type="button"
+        className="btn-ghost-xs w-fit"
+        disabled={cancelLink.isPending}
+        onClick={() => cancelLink.mutate(undefined, { onSuccess: () => setPhase('idle') })}
+      >
         Cancel
       </button>
     </>
@@ -212,12 +228,12 @@ export function TelegramRow(p: SetupRowProps) {
       title="Telegram alerts"
       row={p}
       isDone={isConnected}
-      state={line.text}
+      state={p.open && isConnected ? null : line.text}
       isWarn={line.isWarn}
       alert={
-        failure && (
+        (failure || readError) && (
           <p className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
-            {failure}
+            {failure ?? readError}
           </p>
         )
       }

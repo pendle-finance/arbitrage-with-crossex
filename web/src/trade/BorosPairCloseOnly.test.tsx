@@ -181,7 +181,7 @@ describe('BorosPairTicket — close-only market', () => {
     expect(screen.getByText('close only')).toBeInTheDocument();
   });
 
-  it('Open mode refuses: Confirm is disabled and names the market', async () => {
+  it('open refused: Confirm is disabled and names the market', async () => {
     server.use(...handlers());
     const user = userEvent.setup();
     renderWithClient(<BorosPairTicket />);
@@ -193,7 +193,7 @@ describe('BorosPairTicket — close-only market', () => {
     expect(btn).toBeDisabled();
   });
 
-  it('Close mode allows it: Confirm is enabled and sends the close intent', async () => {
+  it('close allowed: Confirm is enabled and sends the close intent', async () => {
     const executes: Record<string, unknown>[] = [];
     server.use(...handlers({ onExecute: (b) => executes.push(b) }));
     const user = userEvent.setup();

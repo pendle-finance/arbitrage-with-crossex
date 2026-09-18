@@ -9,6 +9,7 @@ import { JobFile, newJob, newTransferJob, TransferFile, type TransferJob } from 
 import { runJob, runTransfer, tagFor } from '../../src/server/rebalanceRunner';
 import { BotAuthError, botBaseUrl, BotUnavailableError, createBotClient } from '../../src/server/telegram/botClient';
 import { deleteTelegramKey, newTelegramKey, readTelegramKey, writeTelegramKey } from '../../src/server/telegram/keyFile';
+import { createTelegramLink } from '../../src/server/telegram/link';
 import { TelegramStatus } from '../../src/server/telegram/status';
 import {
   createTelegramSync,
@@ -327,16 +328,41 @@ describe('the trigger sync', () => {
     );
     let t = 1_000;
     const { sync, status } = makeSync(stub.bot, { now: () => t });
+    const telegramLink = createTelegramLink({
+      dataDir,
+      bot: stub.bot,
+      pageUrl: `${BOT_URL}/alerts`,
+      version: '1.6.3',
+      now: () => t,
+      onConfirmed: () => undefined,
+    });
+    const app = makeTestApp({ dataDir, telegram: { link: telegramLink, sync, status, bot: stub.bot } });
 
     sync.requestSync('deal');
     await vi.waitFor(() => expect(status.lastSyncAt).toBe(1_000));
     t = 2_000;
     failing = true;
     sync.requestSync('deal');
-
     await vi.waitFor(() => expect(status.lastSyncError).not.toBeNull());
-    expect(status.lastSyncError).toEqual({ at: 2_000, message: 'The Telegram bot answered 500.' });
-    expect(status.lastSyncAt).toBe(1_000);
+    const res = await app.inject({ method: 'GET', url: '/api/telegram', headers: HOST });
+    await app.close();
+
+    expect(res.json().data).toMatchObject({
+      lastSyncAt: 1_000,
+      lastSyncError: { at: 2_000, message: 'The Telegram bot answered 500.' },
+    });
+  });
+
+  it('a bot answer with no settings records a failed sync', async () => {
+    link();
+    const stub = botStub(async () => ({ status: 200, body: { ...VIEW, settings: undefined } }));
+    const { sync, status } = makeSync(stub.bot);
+
+    sync.requestSync('deal');
+
+    await vi.waitFor(() => expect(status.lastSyncError?.message).toBe('The Telegram bot answered with no alert settings.'));
+    expect(status.lastSyncAt).toBeNull();
+    expect(status.settings).toBeNull();
   });
 
   it('a refused key records the reason', async () => {

@@ -175,20 +175,26 @@ describe('the default start date', () => {
     expect(fs.existsSync(startFile())).toBe(false);
   });
 
-  it('stops paging the history a year back', async () => {
+  it('reads history older than a year', async () => {
     start();
     const yearAgo = Date.now() - 400 * DAY_MS;
-    const page = Array.from({ length: 1000 }, (_, i) => ({
-      ...opened('GATE_FUTURE_ETH_USDT', '2026-07-01T00:00:00Z'),
+    const firstPage = Array.from({ length: 1000 }, (_, i) => ({
+      ...closedRow('GATE_FUTURE_ETH_USDT', String(yearAgo - i * 60_000)),
       position_id: `p${i}`,
-      update_time: String(i === 999 ? yearAgo : Date.now() - DAY_MS),
+      update_time: String(yearAgo),
     }));
+    const firstOpenMs = yearAgo - 30 * DAY_MS;
     mockGateGet('/positions', { body: [] }).persist();
-    const history = mockGateGet('/history_positions', { body: page });
+    const pageOne = mockGateGet('/history_positions', { body: firstPage });
+    const pageTwo = mockGateGet('/history_positions', {
+      body: [{ ...closedRow('HYPERLIQUID_FUTURE_HYPE_USDC', String(firstOpenMs)), update_time: String(yearAgo) }],
+    });
     mockRest();
     const data = await get();
-    expect(history.isDone()).toBe(true);
-    expect(data.warnings.join(' ')).not.toMatch(/closed-position history/);
-    expect(data.coverage.perpClosedFromSec).toBe(Math.floor(yearAgo / 1000));
+    expect(pageOne.isDone()).toBe(true);
+    expect(pageTwo.isDone()).toBe(true);
+    expect(saved()).toEqual({ userId: '1001', firstOpenMs });
+    expect(data.defaultSinceSec).toBe(Math.floor(firstOpenMs / 1000));
+    expect(data.coverage.perpClosedFromSec).toBe(0);
   });
 });

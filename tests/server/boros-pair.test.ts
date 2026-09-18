@@ -284,6 +284,25 @@ describe('POST /api/boros/pair/simulate', () => {
     expect(data.gasBalanceUsd).toBe(5);
     expect(data.gate.blockers).toEqual([]);
   });
+
+  it('reads the gas balance once for two simulates inside the Boros cache window', async () => {
+    const getGasBalance = vi.fn(async () => 5);
+    makeApp({}, undefined, { ...orderClient(), getGasBalance });
+    const first = await post('/api/boros/pair/simulate', pairBody());
+    const second = await post('/api/boros/pair/simulate', pairBody());
+    expect(first.json().data.gasBalanceUsd).toBe(5);
+    expect(second.json().data.gasBalanceUsd).toBe(5);
+    expect(getGasBalance).toHaveBeenCalledTimes(1);
+  });
+
+  it('reads the gas balance again at execute, never from the simulate cache', async () => {
+    const getGasBalance = vi.fn(async () => 5);
+    makeApp({}, undefined, { ...orderClient(), getGasBalance });
+    await post('/api/boros/pair/simulate', pairBody());
+    const res = await post('/api/boros/pair/execute', pairBody({ clientOrderIdA: 'coid-gas-a', clientOrderIdB: 'coid-gas-b' }));
+    expect(res.statusCode).toBe(200);
+    expect(getGasBalance).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe('POST /api/boros/pair/top-up-gas', () => {
@@ -1077,5 +1096,74 @@ describe('POST /api/boros/pair/market/:marketId/cancel-and-close', () => {
       clientOrderId: 'coid-close3',
     });
     expect(res.statusCode).toBe(503);
+  });
+});
+
+describe('a Boros close at $6,000,000 that fills in part', () => {
+  it('a $6,000,000 close that fills 60% reports the rest as open', async () => {
+    let state = bodies(account(500_000, [{ marketId: HL, size: 6_000_000 }]));
+    const sent: number[] = [];
+    app = makeTestApp({
+      borosFetch: (url) => borosStub(state)(url),
+      getBorosOrders: () => ({
+        placeMarketOrders: async (reqs) => reqs.map(() => okFill()),
+        cancelOrders: async () => {},
+        closePosition: async (r) => {
+          sent.push(r.size);
+          state = bodies(account(500_000, [{ marketId: HL, size: 2_400_000 }]));
+          return okFill({
+            filledSize: 3_600_000,
+            shortfallSize: 2_400_000,
+            failure: { code: 'insufficient-depth', message: 'thin' },
+          });
+        },
+      }),
+    });
+
+    const res = await post(`/api/boros/pair/market/${HL}/cancel-and-close`, { clientOrderId: 'coid-6m-part' });
+    expect(res.statusCode).toBe(200);
+    expect(sent).toEqual([6_000_000]);
+    expect(res.json().data).toMatchObject({
+      closed: false,
+      openSize: 6_000_000,
+      fill: { filledSize: 3_600_000, shortfallSize: 2_400_000 },
+    });
+
+    const context = await app.inject({ method: 'GET', url: `/api/boros/pair/context?address=${ADDRESS}`, headers: HOST });
+    const row = context.json().data.markets.find((m: { marketId: number }) => m.marketId === HL);
+    expect(row.currentSize).toBe(2_400_000);
+  });
+
+  it('a $6,000,000 pair close that fills one leg 60% reports the unhedged rest', async () => {
+    const sent: BorosMarketOrderRequest[] = [];
+    makeApp(account(500_000, [{ marketId: HL, size: 6_000_000 }, { marketId: BN, size: -6_000_000 }]), undefined, {
+      placeMarketOrders: async (reqs) => {
+        sent.push(...reqs);
+        return reqs.map((r) =>
+          r.marketId === HL
+            ? okFill({
+                marketId: HL,
+                direction: r.direction,
+                filledSize: 3_600_000,
+                shortfallSize: 2_400_000,
+                failure: { code: 'insufficient-depth', message: 'thin' },
+              })
+            : okFill({ marketId: BN, direction: r.direction, filledSize: r.size }),
+        );
+      },
+      cancelOrders: async () => {},
+      closePosition: async () => okFill(),
+    });
+
+    const res = await post(
+      '/api/boros/pair/execute',
+      pairBody({ size: 6_000_000, intent: 'close', opposingAcknowledged: true, clientOrderIdA: 'coid-6m-a', clientOrderIdB: 'coid-6m-b' }),
+    );
+    expect(res.statusCode).toBe(200);
+    expect(sent.map((r) => r.size)).toEqual([6_000_000, 6_000_000]);
+    const { result } = res.json().data;
+    expect(result.partial).toBe(true);
+    expect(result.unhedgedSize).toBe(2_400_000);
+    expect(result.unhedgedLeg).toBe('B');
   });
 });

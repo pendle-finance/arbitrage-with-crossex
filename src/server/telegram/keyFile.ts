@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { writeOwnerOnlyJson } from '../secretFile';
+import { readOwnerJson, writeOwnerOnlyJson } from '../secretFile';
 
 export interface TelegramKey {
   key: string;
@@ -29,11 +29,7 @@ function parseKey(raw: unknown): TelegramKey | null {
 }
 
 export function readTelegramKey(dataDir: string): TelegramKey | null {
-  try {
-    return parseKey(JSON.parse(fs.readFileSync(keyPath(dataDir), 'utf8')));
-  } catch {
-    return null;
-  }
+  return readOwnerJson(keyPath(dataDir), parseKey);
 }
 
 export function writeTelegramKey(dataDir: string, key: TelegramKey): void {

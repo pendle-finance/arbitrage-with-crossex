@@ -1,12 +1,17 @@
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import type { TelegramLinkStart, TelegramLinkStatus } from '../../../web/src/api/types';
+import { readOwnerJson, writeOwnerOnlyJson } from '../secretFile';
 import { BotAuthError, BotUnavailableError, type BotClient } from './botClient';
 import { deleteTelegramKey, newTelegramKey, readTelegramKey, writeTelegramKey, type TelegramKey } from './keyFile';
 
 const POLL_EVERY_MS = 5_000;
+const SWAP_FILE = 'telegram-link';
 
 export interface TelegramLink {
   start(): Promise<TelegramLinkStart>;
   status(): TelegramLinkStatus;
+  cancel(): void;
   stop(): void;
 }
 
@@ -21,21 +26,29 @@ export interface TelegramLinkOptions {
 }
 
 interface KeySwap {
-  key: TelegramKey;
+  key: Pick<TelegramKey, 'keyHash'>;
   previous: TelegramKey | null;
 }
 
 interface PendingLink extends KeySwap {
+  key: TelegramKey;
   url: string;
   expiresAt: number;
   state: 'pending' | 'confirmed' | 'expired';
   polling: boolean;
 }
 
+function parseSwap(value: unknown): KeySwap | null {
+  const raw = value as Partial<KeySwap> | null;
+  if (typeof raw?.key?.keyHash !== 'string') return null;
+  return { key: { keyHash: raw.key.keyHash }, previous: raw.previous ?? null };
+}
+
 export function createTelegramLink(opts: TelegramLinkOptions): TelegramLink {
   let link: PendingLink | null = null;
   let starting: Promise<TelegramLinkStart> | null = null;
   let timer: ReturnType<typeof setInterval> | null = null;
+  const swapFile = path.join(opts.dataDir, SWAP_FILE);
 
   const stopPolling = (): void => {
     if (timer !== null) clearInterval(timer);
@@ -43,6 +56,7 @@ export function createTelegramLink(opts: TelegramLinkOptions): TelegramLink {
   };
 
   const restoreKey = (swap: KeySwap): void => {
+    fs.rmSync(swapFile, { force: true });
     if (readTelegramKey(opts.dataDir)?.keyHash !== swap.key.keyHash) return;
     if (swap.previous === null) {
       deleteTelegramKey(opts.dataDir);
@@ -50,6 +64,9 @@ export function createTelegramLink(opts: TelegramLinkOptions): TelegramLink {
     }
     writeTelegramKey(opts.dataDir, swap.previous);
   };
+
+  const unconfirmed = readOwnerJson(swapFile, parseSwap);
+  if (unconfirmed !== null) restoreKey(unconfirmed);
 
   const settle = (current: PendingLink, state: 'confirmed' | 'expired'): void => {
     if (link !== current || current.state !== 'pending') return;
@@ -59,6 +76,7 @@ export function createTelegramLink(opts: TelegramLinkOptions): TelegramLink {
       restoreKey(current);
       return;
     }
+    fs.rmSync(swapFile, { force: true });
     opts.onConfirmed();
   };
 
@@ -80,7 +98,8 @@ export function createTelegramLink(opts: TelegramLinkOptions): TelegramLink {
   };
 
   const begin = async (): Promise<TelegramLinkStart> => {
-    const swap: KeySwap = { key: newTelegramKey(opts.now()), previous: readTelegramKey(opts.dataDir) };
+    const swap = { key: newTelegramKey(opts.now()), previous: readTelegramKey(opts.dataDir) };
+    writeOwnerOnlyJson(swapFile, { key: { keyHash: swap.key.keyHash }, previous: swap.previous });
     writeTelegramKey(opts.dataDir, swap.key);
     try {
       const answer = await opts.bot.requestLink({ keyHash: swap.key.keyHash, version: opts.version });
@@ -123,6 +142,13 @@ export function createTelegramLink(opts: TelegramLinkOptions): TelegramLink {
       if (link === null) return { status: 'none', url: null, expiresAt: null };
       if (link.state === 'pending' && opts.now() >= link.expiresAt) settle(link, 'expired');
       return { status: link.state, url: link.url, expiresAt: link.expiresAt };
+    },
+    cancel() {
+      const current = link;
+      if (current === null) return;
+      stopPolling();
+      link = null;
+      if (current.state === 'pending') restoreKey(current);
     },
     stop() {
       stopPolling();

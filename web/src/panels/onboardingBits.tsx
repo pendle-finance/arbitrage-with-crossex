@@ -20,4 +20,3 @@ export function Ext({ href, children }: { href: string; children: ReactNode }) {
     </a>
   );
 }
-

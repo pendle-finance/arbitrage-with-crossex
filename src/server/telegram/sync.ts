@@ -12,6 +12,7 @@ const SYNC_EVERY_MS = 300_000;
 export interface TelegramSync {
   start(): void;
   requestSync(reason: string): void;
+  idle(): Promise<void>;
   stop(): void;
 }
 
@@ -43,6 +44,7 @@ export function createTelegramSync(opts: TelegramSyncOptions): TelegramSync {
   let running = false;
   let again = false;
   let stopped = false;
+  let inFlight: Promise<void> = Promise.resolve();
 
   const syncOnce = async (): Promise<void> => {
     try {
@@ -50,13 +52,13 @@ export function createTelegramSync(opts: TelegramSyncOptions): TelegramSync {
       if (key === null) return;
       const coins = await opts.readCoins();
       const syncedAt = opts.now();
-      const view = await opts.bot.putTriggers(key.key, {
+      const settings = await opts.bot.putTriggers(key.key, {
         syncedAt: new Date(syncedAt).toISOString(),
         port: opts.port,
         version: opts.version,
         coins,
       });
-      opts.status.setSynced(syncedAt, view.settings);
+      opts.status.setSynced(syncedAt, settings);
     } catch (err) {
       if (err instanceof BotAuthError) opts.status.setAuth(err.reason);
       opts.status.setSyncError(opts.now(), err instanceof Error ? err.message : String(err));
@@ -70,7 +72,7 @@ export function createTelegramSync(opts: TelegramSyncOptions): TelegramSync {
       return;
     }
     running = true;
-    void syncOnce().finally(() => {
+    inFlight = syncOnce().finally(() => {
       running = false;
       if (!again) return;
       again = false;
@@ -85,6 +87,7 @@ export function createTelegramSync(opts: TelegramSyncOptions): TelegramSync {
       timer = setInterval(run, opts.everyMs ?? SYNC_EVERY_MS);
     },
     requestSync: run,
+    idle: () => inFlight,
     stop() {
       stopped = true;
       again = false;

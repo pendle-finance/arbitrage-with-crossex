@@ -89,7 +89,7 @@ describe('FinishSetupPill', () => {
 
     const drawer = await screen.findByRole('dialog', { name: 'Settings' });
     const row = (name: string) => within(drawer).getByRole('region', { name });
-    expect(within(row('Boros wallet')).getByRole('button', { name: 'Done' })).toBeInTheDocument();
+    expect(within(row('Boros wallet')).getByRole('button', { name: 'Close' })).toBeInTheDocument();
     expect(within(row('Gate API key')).getByRole('button', { name: 'Edit' })).toBeInTheDocument();
     expect(await within(row('Telegram alerts')).findByRole('button', { name: 'Edit' })).toBeInTheDocument();
   });

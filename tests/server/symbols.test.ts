@@ -52,6 +52,35 @@ describe('GET /api/symbols', () => {
     expect(res.json().data).toEqual([]);
   });
 
+  it('a live row with a real delist_time is dropped, even though state stays live', async () => {
+    app = makeTestApp();
+    mockGateGet('/rule/symbols', {
+      body: [
+        {
+          symbol: 'GATE_FUTURE_ETH_USDT',
+          exchange_type: 'GATE',
+          business_type: 'FUTURE',
+          state: 'live',
+          min_size: '0.01',
+          min_notional: '5',
+          lot_size: '0.01',
+          tick_size: '0.01',
+          max_num_orders: '100',
+          max_market_size: '10000',
+          max_limit_size: '100000',
+          contract_size: '1',
+          liquidation_fee: '0.001',
+          delist_time: '1758000000000',
+        },
+      ],
+    });
+
+    const res = await app.inject({ method: 'GET', url: '/api/symbols', headers: HOST });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().data).toEqual([]);
+  });
+
   it('?multiOnly=1 keeps multi-venue bases and drops singles', async () => {
     app = makeTestApp();
     mockGateGet('/rule/symbols', { fixture: 'rule-symbols.json' });

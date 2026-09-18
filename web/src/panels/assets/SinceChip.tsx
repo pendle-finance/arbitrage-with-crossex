@@ -28,7 +28,7 @@ export function SinceChip({
   const differsFromDefault = storedSec !== undefined && storedSec !== defaultSec;
   const effectiveSec = storedSec ?? defaultSec;
   const sinceLabel = effectiveSec !== null ? `Since ${fmtDateShort(effectiveSec, { year: 'numeric' })}` : 'All time';
-  const defaultLabel = defaultSec !== null ? fmtDateShort(defaultSec, { year: 'numeric' }) : 'All time';
+  const defaultLabel = defaultSec !== null ? fmtDateShort(defaultSec, { year: 'numeric' }) : null;
   const today = fmtDateLocal(Math.floor(Date.now() / 1000));
 
   return (
@@ -54,19 +54,22 @@ export function SinceChip({
             max={today}
             onChange={(e) => {
               const v = e.target.value;
-              if (!v) {
+              const sec = parseDateLocal(v);
+              if (!Number.isFinite(sec) || sec <= 0) return;
+              if (defaultSec !== null && v === fmtDateLocal(defaultSec)) {
                 onChange(undefined);
                 return;
               }
-              const sec = parseDateLocal(v);
-              if (Number.isFinite(sec) && sec > 0) onChange(sec);
+              onChange(sec);
             }}
           />
         </label>
         <div className="flex items-center gap-2 text-xs text-ink-400">
-          <HoverCard label={`Default ${defaultLabel}`} icon={false}>
-            Your first CrossEx position
-          </HoverCard>
+          {defaultLabel !== null && (
+            <HoverCard label={`Default ${defaultLabel}`} icon={false}>
+              Your first CrossEx position
+            </HoverCard>
+          )}
           {differsFromDefault && (
             <button type="button" className="btn-ghost-xs ml-auto" onClick={() => onChange(undefined)}>
               Use default

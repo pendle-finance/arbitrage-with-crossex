@@ -27,12 +27,9 @@ export function roundToStep(value: number, step: string, dir: 'down' | 'up' | 'n
   const s = Number(step);
   if (!Number.isFinite(s) || s <= 0) return String(value);
   const decimals = decimalsOf(step);
-  const r = value / s;
-  if (dir === 'nearest') return (Math.round(r) * s).toFixed(decimals);
-  const at = (mult: number): number => Number((mult * s).toFixed(decimals));
-  let below = Math.floor(r);
-  if (at(below) > value) below -= 1;
-  else if (at(below + 1) <= value) below += 1;
+  if (dir === 'nearest') return (Math.round(value / s) * s).toFixed(decimals);
+  const at = (mult: number): number => stepValue(mult, s, decimals);
+  const below = stepsBelow(value, s, decimals);
   const noise = Math.min(1e-3 * s, Math.max(1e-9 * Math.min(1, s), 4 * Number.EPSILON * Math.abs(value)));
   const mult =
     dir === 'down'
@@ -43,6 +40,24 @@ export function roundToStep(value: number, step: string, dir: 'down' | 'up' | 'n
         ? below
         : below + 1;
   return (mult * s).toFixed(decimals);
+}
+
+export function floorToStep(value: number, step: string): string {
+  const s = Number(step);
+  if (!Number.isFinite(s) || s <= 0) return String(value);
+  const decimals = decimalsOf(step);
+  return (stepsBelow(value, s, decimals) * s).toFixed(decimals);
+}
+
+function stepValue(mult: number, s: number, decimals: number): number {
+  return Number((mult * s).toFixed(decimals));
+}
+
+function stepsBelow(value: number, s: number, decimals: number): number {
+  const below = Math.floor(value / s);
+  if (stepValue(below, s, decimals) > value) return below - 1;
+  if (stepValue(below + 1, s, decimals) <= value) return below + 1;
+  return below;
 }
 
 /** The coarsest (largest) of the given lot steps; undefined when none is a

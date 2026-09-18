@@ -10,6 +10,7 @@
  * pair at the bottom that reads and writes the persisted selection.
  */
 import type { OpportunityGroup, OpportunityPair } from '../api/types';
+import { prettyVenue } from '../lib/fmt';
 import { readJson, writeJson } from '../lib/storage';
 
 /** One card's worth of data: the pair, plus the group context it renders in. */
@@ -294,10 +295,6 @@ export const saveFilters = (filters: OpportunityFilters): void =>
 const byFrequency = <T,>(a: { value: T; total: number }, b: { value: T; total: number }) =>
   b.total - a.total || String(a.value).localeCompare(String(b.value));
 
-/** "GATE" → "Gate", "OKX" stays upper (fmt.prettyVenue's rule, on our keys). */
-const venueLabel = (key: string): string =>
-  key.length <= 3 ? key : key.charAt(0) + key.slice(1).toLowerCase();
-
 export function facets(rows: OpportunityRow[], f: OpportunityFilters): OpportunityFacets {
   const assetPool = rowsPassing(rows, f, 'assets');
   const venuePool = rowsPassing(rows, f, 'venues');
@@ -315,7 +312,7 @@ export function facets(rows: OpportunityRow[], f: OpportunityFilters): Opportuni
       rows,
       venuePool,
       (row) => row.venueKeys,
-      venueLabel,
+      prettyVenue,
       f.venues,
       byFrequency,
     ),

@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { SinceChip } from './SinceChip';
@@ -57,18 +57,34 @@ describe('SinceChip', () => {
     expect(chip.querySelector('.chip')?.className).not.toContain('text-sky-400');
   });
 
-  it('shows no all time link on a default or a moved card, no all-time link', async () => {
-    const { rerender } = render(
-      <SinceChip base="HYPE" storedSec={undefined} defaultSec={DEFAULT_SEC} onChange={vi.fn()} />,
-    );
-    expect(screen.queryByText(/all time/i)).toBeNull();
-
-    rerender(<SinceChip base="HYPE" storedSec={MARCH_SEC} defaultSec={DEFAULT_SEC} onChange={vi.fn()} />);
-    expect(screen.queryByText(/all time/i)).toBeNull();
-  });
-
   it('reads All time when defaultSinceSec is null, no position yet', () => {
     render(<SinceChip base="HYPE" storedSec={undefined} defaultSec={null} onChange={vi.fn()} />);
     expect(screen.getByRole('button', { name: 'All time' })).toBeInTheDocument();
+  });
+
+  it('shows no Default hover and no stray "All time" wording when there is no first position', () => {
+    render(<SinceChip base="HYPE" storedSec={undefined} defaultSec={null} onChange={vi.fn()} />);
+    expect(screen.queryByText(/Default/)).toBeNull();
+    expect(screen.queryByText('Your first CrossEx position')).toBeNull();
+  });
+
+  it('keeps the default start, not local midnight, when the default day is picked again', async () => {
+    const onChange = vi.fn();
+    render(<SinceChip base="HYPE" storedSec={MARCH_SEC} defaultSec={DEFAULT_SEC} onChange={onChange} />);
+    await userEvent.click(screen.getByRole('button', { name: /Since 1 Mar 2026/ }));
+    const card = await screen.findByRole('tooltip');
+    const input = within(card).getByLabelText('Count HYPE PnL from');
+    fireEvent.change(input, { target: { value: '2026-06-23' } });
+    expect(onChange).toHaveBeenLastCalledWith(undefined);
+  });
+
+  it('does not reset the date while one part of the input is mid-edit', async () => {
+    const onChange = vi.fn();
+    render(<SinceChip base="HYPE" storedSec={MARCH_SEC} defaultSec={DEFAULT_SEC} onChange={onChange} />);
+    await userEvent.click(screen.getByRole('button', { name: /Since 1 Mar 2026/ }));
+    const card = await screen.findByRole('tooltip');
+    const input = within(card).getByLabelText('Count HYPE PnL from');
+    fireEvent.change(input, { target: { value: '' } });
+    expect(onChange).not.toHaveBeenCalled();
   });
 });

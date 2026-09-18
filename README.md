@@ -354,8 +354,10 @@ from a local archive), `BOROS_PORT`, `BOROS_ROOT`, `BOROS_REPO`, `BOROS_BRANCH`.
 Deployment-relevant env vars (all optional): `UPDATE_CHECK` (set `0` to disable the
 GitHub version check), `PORT` (default 6688), `ARB_DATA_DIR`
 (trade-journal dir; default `<repo>/data`), `DOTENV_CONFIG_PATH` (where credentials are
-read from and saved to; default `<repo>/.env`). The macOS installer sets all three so
-user data lives outside the auto-updated app directory.
+read from and saved to; default `<repo>/.env`), `CROSSEX_BOT_URL` (the Telegram alerts
+bot; default `https://boros-bot-notification.pendle.finance`). The macOS installer sets
+`PORT`, `ARB_DATA_DIR` and `DOTENV_CONFIG_PATH` so user data lives outside the
+auto-updated app directory.
 
 ## Web terminal — `yarn dev` / `yarn start`
 

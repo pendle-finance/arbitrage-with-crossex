@@ -110,11 +110,11 @@ describe('GET /api/opportunities — supported coins', () => {
       const bookCalls = () => calls.filter((c) => c.startsWith('/apis/v1/markets/order-book')).length;
 
       await app.inject({ method: 'GET', url: '/api/opportunities', headers: HOST });
-      expect(bookCalls()).toBe(2); // one read per market
+      expect(bookCalls()).toBe(2);
 
       vi.setSystemTime(Date.now() + 59_000);
       await app.inject({ method: 'GET', url: '/api/opportunities', headers: HOST });
-      expect(bookCalls()).toBe(2); // still one read per market, 59s apart
+      expect(bookCalls()).toBe(2);
     } finally {
       vi.useRealTimers();
     }

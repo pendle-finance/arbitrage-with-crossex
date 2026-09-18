@@ -1,7 +1,7 @@
 import { CrossexOrderRequest, type CrossexOrder, type CrossexTransferRecord } from 'gate-api';
 import type { Clients } from '../core/clients';
 import { classifyGateError, refusalReason, type ClassifiedError } from '../core/errors';
-import { roundToStep, stripZeros } from '../core/numbers';
+import { floorToStep, roundToStep, stripZeros } from '../core/numbers';
 import {
   arrivesFor,
   bookLevels,
@@ -144,9 +144,12 @@ export function tagFor(jobId: string, n: number, attempt = 0): string {
   return attempt > 0 ? `t-rb${jobId}${n}x${attempt}` : `t-rb${jobId}${n}`;
 }
 
-const transferAmount = (amount: number): string => stripZeros(roundToStep(amount, TRANSFER_STEP, 'down'));
+const transferAmount = (amount: number): string => stripZeros(floorToStep(amount, TRANSFER_STEP));
 
 export const isSendable = (amount: number): boolean => Number(transferAmount(amount)) > 0;
+
+const capToBalance = (wanted: number, balance: number): number =>
+  Math.min(floorCents(Math.max(0, wanted)), Number(floorToStep(Math.max(0, balance), CENT_STEP)));
 
 const isRefusal = (c: ClassifiedError): boolean =>
   Boolean(c.label) && c.httpStatus !== undefined && c.httpStatus >= 400 && c.httpStatus < 500;
@@ -192,7 +195,7 @@ export function receivedOf(row: CrossexTransferRecord, path: { coin: string; fro
   const actual = Number(row.actualReceive);
   if (actual > 0) return actual;
   const fee = pathRule(path.coin, path.from, path.to)?.feeUsd ?? 0;
-  return Number(roundToStep(Number(row.amount) - fee, TRANSFER_STEP, 'down'));
+  return Number(floorToStep(Number(row.amount) - fee, TRANSFER_STEP));
 }
 
 async function lookUpInWindow(
@@ -218,6 +221,7 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
     job.haltReason = reason;
     deps.jobs.write(job);
     deps.onHalt(job);
+    deps.onDone?.();
   };
 
   const haltDead = (step: Step, reason: string): void => {
@@ -499,7 +503,7 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
     const half = job.steps[job.stepIndex - 1];
     const converted = step.name === 'Convert to USDC' && half?.name === 'Convert to USDT' && half.status === 'done';
     const target = floorCents(converted ? (half.qty ?? 0) : (step.planned ?? 0));
-    const amount = floorCents(Math.min(target, sending));
+    const amount = capToBalance(target, sending);
     if (converted && amount <= 0 && target > 0) {
       halt(HALT_TEXT.usdtBelowZero);
       return null;
@@ -534,7 +538,7 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
       await deps.sleep(POLL_MS);
       return null;
     }
-    const amount = floorCents(Math.max(0, cash - arrived >= DUST_USDC ? cash : Math.min(cash, arrived)));
+    const amount = capToBalance(cash - arrived >= DUST_USDC ? cash : Math.min(cash, arrived), cash);
     const nothingToSell = (): null => {
       finish(step, 0, 'CROSSEX');
       return null;
@@ -695,7 +699,7 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
         exchangeType: spec.venue,
         fromCoin: spec.fromCoin,
         toCoin: spec.toCoin,
-        fromAmount: stripZeros(roundToStep(amount, CENT_STEP, 'down')),
+        fromAmount: stripZeros(floorToStep(amount, CENT_STEP)),
       },
     });
     quoting = false;
@@ -727,7 +731,7 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
     } else {
       const size =
         spec.side === CrossexOrderRequest.Side.SELL
-          ? { qty: roundToStep(amount, CENT_STEP, 'down') }
+          ? { qty: floorToStep(amount, CENT_STEP) }
           : { quoteQty: stripZeros(roundToStep(amount, CENT_STEP, 'up')) };
       const { body } = await crossEx().createCrossexOrder({
         crossexOrderRequest: {
@@ -843,6 +847,7 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
       deps.jobs.write(job);
     } catch {}
     deps.onHalt(job);
+    deps.onDone?.();
   }
 }
 
@@ -863,6 +868,7 @@ export async function runTransfer(deps: TransferRunnerDeps): Promise<void> {
     Object.assign(transfer, { status, received, failText, doneAt: deps.now() });
     deps.transfers.write(transfer);
     deps.cache.bust('account');
+    deps.onDone?.();
   };
 
   if (transfer.venueId === null && transfer.sentAt === null) {
@@ -915,7 +921,6 @@ export async function runTransfer(deps: TransferRunnerDeps): Promise<void> {
     const status = String(row?.status ?? '');
     if (row && status === 'SUCCESS') {
       end('done', receivedOf(row, transfer), null);
-      deps.onDone?.();
       return;
     }
     if (row && TRANSFER_DEAD.test(status)) {

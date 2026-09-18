@@ -60,4 +60,14 @@ describe('deep link', () => {
 
     expect(await selectedTab()).toHaveAccessibleName(/^Fees/);
   });
+
+  it('drops the tab param from the URL after reading it, so a reload trusts the stored tab', async () => {
+    window.history.replaceState(null, '', '/?tab=balances');
+    localStorage.setItem(ACTIVE_TAB_KEY, JSON.stringify('fees'));
+    mockApp();
+    renderWithClient(<App />);
+
+    await selectedTab();
+    expect(window.location.search).toBe('');
+  });
 });

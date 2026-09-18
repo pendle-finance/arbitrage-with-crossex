@@ -20,6 +20,7 @@ export function SetupRowFrame({
   alert,
   setupAction,
   skipConsequence,
+  closeLabel = 'Done',
   children,
 }: {
   n: number;
@@ -31,6 +32,7 @@ export function SetupRowFrame({
   alert?: ReactNode;
   setupAction?: ReactNode;
   skipConsequence?: string;
+  closeLabel?: string;
   children: ReactNode;
 }) {
   const [isSkipped, setIsSkipped] = useState(false);
@@ -40,11 +42,11 @@ export function SetupRowFrame({
   const line = showsNotSetUp ? 'not set up' : state;
   const isLineWarn = isWarn || showsNotSetUp;
   const dot: DotTone = isDone && !isLineWarn ? 'done' : row.open ? 'current' : isLineWarn ? 'warn' : 'later';
-  const canSkip = !isSettings && row.onSkip !== undefined && skipConsequence !== undefined;
+  const canSkip = !isSettings && !isDone && row.onSkip !== undefined && skipConsequence !== undefined;
 
   const action = row.open ? (
     <button type="button" className="btn-link" onClick={row.onClose}>
-      Done
+      {closeLabel}
     </button>
   ) : isDone ? (
     <button type="button" className="btn-link" onClick={row.onOpen}>

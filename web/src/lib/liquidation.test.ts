@@ -161,6 +161,20 @@ describe('liquidationLines', () => {
     expect(line.move).toBeCloseTo(7, 4);
   });
 
+  it('drops a leg with a blank mark instead of pricing a $0 trigger', () => {
+    const blanked = box();
+    blanked.positions[0] = { ...blanked.positions[0], markPrice: '' };
+    const view = liquidationLines(account(), blanked)!;
+    expect(view.lines).toHaveLength(1);
+    expect(view.lines[0].venue).toBe('Hyperliquid');
+    expect(view.lines[0].price).toBeGreaterThan(0);
+  });
+
+  it('is unknown for the whole account when a wallet equity is blank', () => {
+    const assets = account().assets.map((a) => (a.exchangeType === 'HYPERLIQUID' ? { ...a, equity: '' } : a));
+    expect(liquidationLines(account({ assets }), box())).toBeNull();
+  });
+
   it('lists a coin as far past a 10x pump, prices nothing with no positions, and is unknown without margin figures', () => {
     const wide = box();
     wide.positions[1].symbol = 'BINANCE_FUTURE_ETH_USDT';

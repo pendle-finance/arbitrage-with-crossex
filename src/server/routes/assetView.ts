@@ -34,10 +34,12 @@ import {
   syncSettlementLedger,
   type BorosSettlementLedger,
   norm18,
+  readSettlementHead,
   resolveBorosFetch,
   resolveCollateralPricesUsd,
   BOROS_TOKEN_SYMBOLS,
   type BorosMarket,
+  type BorosTxn,
   type FetchLike,
 } from '../../core/boros/client';
 import { normalizeVenue, type PerpPositionLike } from '../../core/boros/venue';
@@ -51,7 +53,6 @@ import { LedgerStore } from '../ledgerStore';
 import { earliestSupportedOpenMs, TrackingStartFile } from '../trackingStart';
 
 const EVM_ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
-const GATE_HISTORY_REACH_SEC = 365 * 86_400;
 
 // The venue pages newest-first at up to 1,000 rows; 100 pages is the same
 // ceiling the persisted interest ledger uses. With `from` set to the window
@@ -317,7 +318,6 @@ const oldestSec = (rows: HistoryPositionLike[]): number => {
 
 async function fetchClosedPositions(
   deps: AppDeps,
-  nowSec: number,
 ): Promise<{ rows: HistoryPositionLike[]; coversFromSec: number }> {
   const rows: HistoryPositionLike[] = [];
   let capped = false;
@@ -334,10 +334,7 @@ async function fetchClosedPositions(
     const batch = body as HistoryPositionLike[];
     rows.push(...batch);
     if (batch.length < PAGE_LIMIT) break;
-    if (page === MAX_PAGES || oldestSec(batch) <= nowSec - GATE_HISTORY_REACH_SEC) {
-      capped = true;
-      break;
-    }
+    if (page === MAX_PAGES) capped = true;
   }
   const oldest = oldestSec(rows);
   return { rows, coversFromSec: capped && Number.isFinite(oldest) ? oldest : 0 };
@@ -347,11 +344,12 @@ export function assetViewRoutes(deps: AppDeps) {
   // Last synced ledger per address — the next sync reads only rows newer than its head.
   const settlementLedgers = new Map<string, BorosSettlementLedger>();
   const backfills = new Set<string>();
+  const lastFills = new Map<string, { txns: BorosTxn[]; complete: boolean }>();
   const ledgerStore = new LedgerStore(deps.dataDir);
   const trackingStart = new TrackingStartFile(deps.dataDir);
   const pace = createRequestPacer({
     perMinute: 30,
-    now: Date.now,
+    now: () => Date.now(),
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   });
   const fetchImpl: FetchLike = resolveBorosFetch(deps.borosFetch);
@@ -370,20 +368,9 @@ export function assetViewRoutes(deps: AppDeps) {
     if (!unchanged) ledgerStore.write(address, next);
   };
 
-  const syncHead = async (address: string): Promise<BorosSettlementLedger> => {
-    const prev = settlementLedgers.get(address) ?? ledgerStore.read(address) ?? undefined;
-    const head = prev?.rows[0];
-    const next = await syncSettlementLedger(fetchImpl, address, 0, prev, {
-      floorSec: head ? head.timeSec + 1 : Number.POSITIVE_INFINITY,
-      pace,
-    });
-    if (!backfills.has(address)) keepLedger(address, prev, next);
-    return next;
-  };
-
-  const startBackfill = (address: string, floorSec: number): void => {
+  const startSync = (address: string, floorSec: number): void => {
+    if (backfills.has(address)) return;
     const prev = settlementLedgers.get(address);
-    if (!prev || backfills.has(address)) return;
     backfills.add(address);
     syncSettlementLedger(fetchImpl, address, 0, prev, { floorSec, pace })
       .then((next) => {
@@ -394,12 +381,27 @@ export function assetViewRoutes(deps: AppDeps) {
       .finally(() => backfills.delete(address));
   };
 
-  const readLedger = async (address: string, fresh: boolean): Promise<BorosSettlementLedger> => {
+  const syncHead = async (address: string, floorSec: number): Promise<BorosSettlementLedger> => {
+    const prev = settlementLedgers.get(address) ?? ledgerStore.read(address) ?? undefined;
+    const next = await readSettlementHead(fetchImpl, address, 0, prev, pace);
+    if (next !== null) {
+      if (!backfills.has(address)) keepLedger(address, prev, next);
+      return next;
+    }
+    if (prev) settlementLedgers.set(address, prev);
+    startSync(address, floorSec);
+    return prev ?? { rows: [], coversFromSec: Math.floor(Date.now() / 1000) };
+  };
+
+  const readLedger = async (address: string, floorSec: number, fresh: boolean): Promise<BorosSettlementLedger> => {
     const running = backfills.has(address) ? settlementLedgers.get(address) : undefined;
     if (running) return running;
-    const { value } = await deps.cache.get(`boros:settlements:${address}`, TTL.boros, () => syncHead(address), {
-      fresh,
-    });
+    const { value } = await deps.cache.get(
+      `boros:settlements:${address}`,
+      TTL.boros,
+      () => syncHead(address, floorSec),
+      { fresh },
+    );
     return value;
   };
 
@@ -473,7 +475,7 @@ export function assetViewRoutes(deps: AppDeps) {
           const { value } = await deps.cache.get(
             'crossex:closed-positions',
             TTL.boros,
-            () => fetchClosedPositions(deps, nowSec),
+            () => fetchClosedPositions(deps),
             { fresh },
           );
           closedRows = value.rows;
@@ -523,7 +525,7 @@ export function assetViewRoutes(deps: AppDeps) {
             })
             .then((r) => r.value),
         ),
-        readLedger(address, fresh),
+        readLedger(address, sinceSec, fresh),
       ]);
       const settlements = settlementWindow(ledger, sinceSec);
 
@@ -566,10 +568,18 @@ export function assetViewRoutes(deps: AppDeps) {
             // zone no longer holds takes no new fills, so it refreshes slowly.
             const perMarket = await Promise.all(
               [...pairs.values()].map(async ({ marketAcc, marketId, live }) => {
+                const key = `boros:txns:${marketAcc}:${marketId}:${live ? 'live' : 'past'}`;
                 const { value } = await deps.cache.get(
-                  `boros:txns:${marketAcc}:${marketId}:${live ? 'live' : 'past'}`,
+                  key,
                   live ? TTL.boros : TTL.borosHistory,
-                  () => fetchBorosTransactions(fetchImpl, marketAcc, marketId),
+                  async () => {
+                    const read = await fetchBorosTransactions(fetchImpl, marketAcc, marketId, {
+                      pace,
+                      prev: lastFills.get(key),
+                    });
+                    lastFills.set(key, read);
+                    return read;
+                  },
                   { fresh },
                 );
                 return value;
@@ -741,7 +751,7 @@ export function assetViewRoutes(deps: AppDeps) {
         if (g.earliestSec === null || t < g.earliestSec) g.earliestSec = t;
       };
 
-      // Open perps.
+      const openFeesBySymbol = new Map<string, number>();
       for (const pos of perpPositions) {
         const qty = fin(pos.positionQty);
         if (qty === 0) continue;
@@ -755,6 +765,11 @@ export function assetViewRoutes(deps: AppDeps) {
         seen(g, openedAt);
         if (g.priceUsd === 0 && absQty > 0) g.priceUsd = notionalUsd / absQty;
         const pid = (pos as { positionId?: string }).positionId ?? '';
+        const feesUsd =
+          feesWindow !== null && pos.symbol && (openedAt === null || openedAt < sinceSec)
+            ? (feesWindow.get(pos.symbol) ?? 0)
+            : Math.abs(fin(pos.fee));
+        if (pos.symbol) openFeesBySymbol.set(pos.symbol, (openFeesBySymbol.get(pos.symbol) ?? 0) + feesUsd);
         g.perpOpen.push({
           symbol: pos.symbol ?? '',
           venue: normalizeVenue(exchange),
@@ -767,10 +782,7 @@ export function assetViewRoutes(deps: AppDeps) {
           upnlUsd: fin(pos.upnl),
           fundingUsd:
             fundingWindow !== null && pid ? (fundingWindow.get(pid) ?? 0) : fin(pos.fundingFee),
-          feesUsd:
-            feesWindow !== null && pos.symbol
-              ? (feesWindow.get(pos.symbol) ?? 0)
-              : Math.abs(fin(pos.fee)),
+          feesUsd,
           imUsd: Math.abs(fin(pos.initialMargin)),
           openedAt,
         });
@@ -850,17 +862,9 @@ export function assetViewRoutes(deps: AppDeps) {
           agg.lastClosedAt = closedAt;
         }
       }
-      // Windowed fees are per-symbol fill sums with no position attribution:
-      // count each symbol's in-window fills exactly ONCE — on the open row
-      // when one exists (its symbol lookup above already holds them), else on
-      // the closed batch. This also windows closed-batch fees, which the
-      // all-time path cannot (closed rows only report whole-life fees).
       if (feesWindow !== null) {
-        const openSymbols = new Set(perpPositions.map((p) => p.symbol ?? '').filter(Boolean));
         for (const agg of closedBySymbol.values()) {
-          if (!openSymbols.has(agg.symbol)) {
-            agg.feesUsd = feesWindow.get(agg.symbol) ?? 0;
-          }
+          agg.feesUsd = Math.max(0, (feesWindow.get(agg.symbol) ?? 0) - (openFeesBySymbol.get(agg.symbol) ?? 0));
         }
       }
 
@@ -1060,7 +1064,7 @@ export function assetViewRoutes(deps: AppDeps) {
         }
       }
 
-      if (ledger.coversFromSec !== 0 && ledger.coversFromSec > sinceSec) startBackfill(address, sinceSec);
+      if (ledger.coversFromSec !== 0 && ledger.coversFromSec > sinceSec) startSync(address, sinceSec);
 
       const out: AssetViewOut = {
         sinceSec,

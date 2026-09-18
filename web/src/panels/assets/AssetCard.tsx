@@ -686,7 +686,7 @@ export function LegEditModal({
       <div role="radiogroup" aria-label="Include" className="mb-4 flex flex-col gap-2">
         <label className="flex cursor-pointer items-center gap-2 text-xs text-ink-100">
           <input type="radio" name="leg-edit-mode" className="chk" checked={mode === 'all'} onChange={() => setMode('all')} />
-          Include all — {fmtTokenQty(legQty, unit)} at {showEntry(entry)}
+          Include all — {fmtTokenQty(legQty, unit)} {entry === null ? '· entry pending' : `at ${showEntry(entry)}`}
         </label>
         <label className="flex cursor-pointer items-center gap-2 text-xs text-ink-100">
           <input type="radio" name="leg-edit-mode" className="chk" checked={mode === 'portion'} onChange={() => setMode('portion')} />

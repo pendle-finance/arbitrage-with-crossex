@@ -35,8 +35,15 @@ export type WalletShift = Partial<Record<string, number>>;
 /** Gate's maintenance margin on a borrow: 10% of the liability. */
 const BORROW_MM = 0.1;
 /** No line is reported past a 10x pump or a 98% dump. */
-const F_MAX = 10;
-const F_MIN = 0.02;
+export const F_MAX = 10;
+export const F_MIN = 0.02;
+
+export function gateNumber(raw: string | number | undefined | null): number | null {
+  if (raw === undefined || raw === null) return null;
+  if (typeof raw === 'string' && raw.trim() === '') return null;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : null;
+}
 
 interface Leg {
   base: string;
@@ -61,14 +68,17 @@ function legsOf(positions: PositionsResponse): Leg[] {
     for (const l of g.legs) {
       const p = bySymbol.get(l.symbol);
       if (!p || !(l.value > 0)) continue;
+      const mark = gateNumber(p.markPrice);
+      const mm = gateNumber(p.maintenanceMargin);
+      if (mark === null || mark <= 0 || mm === null || mm < 0) continue;
       legs.push({
         base: g.base,
         exchange: l.exchange,
         wallet: walletOf(l.exchange),
         sign: l.side === 'LONG' ? 1 : -1,
         value: l.value,
-        mm: Number(p.maintenanceMargin) || 0,
-        mark: Number(p.markPrice) || 0,
+        mm,
+        mark,
       });
     }
   }
@@ -93,13 +103,17 @@ interface MarginModel {
 }
 
 function marginModel(acc: CrossexAccount, positions: PositionsResponse, shift: WalletShift): MarginModel | null {
-  const marginBalance = Number(acc.marginBalance);
-  const maintenance = Number(acc.maintenanceMargin);
-  if (!Number.isFinite(marginBalance) || !Number.isFinite(maintenance)) return null;
+  const marginBalance = gateNumber(acc.marginBalance);
+  const maintenance = gateNumber(acc.maintenanceMargin);
+  if (marginBalance === null || maintenance === null) return null;
   const legs = legsOf(positions);
 
   const equityNow = new Map<string, number>();
-  for (const a of acc.assets) equityNow.set(`${a.coin}/${a.exchangeType}`, Number(a.equity) || 0);
+  for (const a of acc.assets) {
+    const equity = gateNumber(a.equity);
+    if (equity === null) return null;
+    equityNow.set(`${a.coin}/${a.exchangeType}`, equity);
+  }
   const wallets = [...new Set([...equityNow.keys(), ...legs.map((l) => l.wallet)])];
   const liabilityOf = (equity: (w: string) => number) =>
     wallets.reduce((sum, w) => sum + Math.max(0, -equity(w)), 0);

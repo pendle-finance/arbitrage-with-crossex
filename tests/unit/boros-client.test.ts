@@ -416,7 +416,7 @@ describe('fetchBorosCollaterals', () => {
   const ROOT = '0x' + 'ab'.repeat(20);
   /** root · accountId(1B) · tokenId(2B) · marketId(3B); FFFFFF ⇒ cross. */
   const CROSS = ROOT + '00' + '0003' + 'ffffff';
-  const ISO = ROOT + '00' + '0003' + '00009b'; // isolated on market 155
+  const ISO = ROOT + '00' + '0003' + '00009b';
   const OTHER_ACCOUNT = ROOT + '01' + '0003' + 'ffffff';
 
   /** The surface is two reads; route each by pathname. */
@@ -448,12 +448,12 @@ describe('fetchBorosCollaterals', () => {
   it('rebuilds zones from the marketAcc layout and joins the live rates onto them', async () => {
     const zones = await fetchBorosCollaterals(accountStub(infos, actives), ROOT, []);
     expect(zones).toHaveLength(1);
-    expect(zones[0].tokenId).toBe(3); // decoded from the marketAcc, not a body field
+    expect(zones[0].tokenId).toBe(3);
     expect(zones[0].cross?.netBalance).toBe('20');
     expect(zones[0].isolated).toHaveLength(1);
 
     const p = zones[0].cross!.marketPositions[0];
-    expect(p.notionalSize).toBe('-7'); // signedSize carries the sign
+    expect(p.notionalSize).toBe('-7');
     expect(p.side).toBe(1);
     expect(p.fixedApr).toBe(0.08);
     // settlementPnl/unrealisedPnl are the old rateSettlementPnl/unrealisedPnl.

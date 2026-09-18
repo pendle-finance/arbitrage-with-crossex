@@ -46,12 +46,13 @@ export const catchRateLimit = <T>(read: Promise<T>): Promise<T | null> =>
     throw err;
   });
 
-export function refuse(
-  reply: FastifyReply,
-  code: number,
-  category: ErrorCategory,
-  message: string,
-  retryable: boolean,
-): FastifyReply {
+interface Refusal {
+  code: number;
+  category: ErrorCategory;
+  message: string;
+  retryable: boolean;
+}
+
+export function refuse(reply: FastifyReply, { code, category, message, retryable }: Refusal): FastifyReply {
   return reply.code(code).send({ ok: false, error: { category, message, retryable } });
 }

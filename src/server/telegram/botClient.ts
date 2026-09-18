@@ -32,9 +32,9 @@ export interface TriggerSync {
 
 export interface BotClient {
   requestLink(body: { keyHash: string; version: string }): Promise<{ code: string; expiresAt: string }>;
-  getTerminal(key: string): Promise<TerminalView>;
-  putTriggers(key: string, body: TriggerSync): Promise<TerminalView>;
-  patchSettings(key: string, body: Partial<TelegramSettings>): Promise<TerminalView>;
+  getTerminal(key: string): Promise<void>;
+  putTriggers(key: string, body: TriggerSync): Promise<TelegramSettings>;
+  patchSettings(key: string, body: Partial<TelegramSettings>): Promise<TelegramSettings>;
   deleteTerminal(key: string): Promise<void>;
 }
 
@@ -69,6 +69,14 @@ function messageOf(body: unknown, status: number): string {
   return `The Telegram bot answered ${status}.`;
 }
 
+function settingsOf(body: unknown): TelegramSettings {
+  const settings = (body as { settings?: { liquidation?: unknown; interest?: unknown } } | null)?.settings;
+  if (typeof settings?.liquidation !== 'boolean' || typeof settings.interest !== 'boolean') {
+    throw new BotUnavailableError('The Telegram bot answered with no alert settings.');
+  }
+  return { liquidation: settings.liquidation, interest: settings.interest };
+}
+
 export function createBotClient(opts: { baseUrl: string; fetchImpl: FetchLike }): BotClient {
   const call = async (method: string, route: string, init: { key?: string; body?: unknown } = {}): Promise<unknown> => {
     const headers: Record<string, string> = {};
@@ -101,13 +109,13 @@ export function createBotClient(opts: { baseUrl: string; fetchImpl: FetchLike })
       return { code: link.code, expiresAt: link.expiresAt };
     },
     async getTerminal(key) {
-      return (await call('GET', '/terminal', { key })) as TerminalView;
+      await call('GET', '/terminal', { key });
     },
     async putTriggers(key, body) {
-      return (await call('PUT', '/terminal/triggers', { key, body })) as TerminalView;
+      return settingsOf(await call('PUT', '/terminal/triggers', { key, body }));
     },
     async patchSettings(key, body) {
-      return (await call('PATCH', '/terminal/settings', { key, body })) as TerminalView;
+      return settingsOf(await call('PATCH', '/terminal/settings', { key, body }));
     },
     async deleteTerminal(key) {
       await call('DELETE', '/terminal', { key });

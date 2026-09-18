@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import type { Clients } from '../../src/core/clients';
+import { floorToStep } from '../../src/core/numbers';
 import {
   bookLevels,
   buyableUsdc,
@@ -2525,12 +2526,13 @@ function convertBook(
   const fill = (quoteId: string): string => {
     const { exchangeType, fromCoin, from, to } = quotes.get(quoteId)!;
     const venue = exchangeType === 'LIGHTER' ? 'lighter' : 'hyperliquid';
+    const gateDecimal = (value: number): number => Number(value.toFixed(8));
     if (fromCoin === 'USDT') {
-      cash.usdt -= from;
-      cash[venue] += to;
+      cash.usdt = gateDecimal(cash.usdt - from);
+      cash[venue] = gateDecimal(cash[venue] + to);
     } else {
-      cash[venue] -= from;
-      cash.usdt += to;
+      cash[venue] = gateDecimal(cash[venue] - from);
+      cash.usdt = gateDecimal(cash.usdt + to);
     }
     orders += 1;
     const record = { orderId: `c${orders}`, to };
@@ -2712,7 +2714,7 @@ describe('runJob Sell USDC at size', () => {
     await h.resume();
 
     expect(h.qtys()).toHaveLength(limit + 1);
-    expect(h.qtys()[limit]).toBe(floorCents(left));
+    expect(h.qtys()[limit]).toBe(Number(floorToStep(left, '0.01')));
     expect(h.jobs.read()!).toMatchObject({ status: 'halted', haltReason: HALT_TEXT.sellStuck });
   });
 

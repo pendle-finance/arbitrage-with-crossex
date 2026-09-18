@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useVersion } from '../api/queries';
 import { Drawer } from '../components/Drawer';
 import type { SetupStep } from './setup/setupState';
@@ -8,23 +8,32 @@ export function SettingsDrawer({
   open,
   onClose,
   focusStep = null,
+  onOpenGuide,
 }: {
   open: boolean;
   onClose: () => void;
   focusStep?: SetupStep | null;
+  onOpenGuide?: () => void;
 }) {
   const version = useVersion(); // same query key as the header pill — deduped
   const install = version.data?.install ?? null;
-  const [openStep, setOpenStep] = useState<SetupStep | null>(focusStep);
-
-  useEffect(() => {
+  const [openStep, setOpenStep] = useState<SetupStep | null>(open ? focusStep : null);
+  const [committed, setCommitted] = useState({ open, focusStep });
+  if (committed.open !== open || committed.focusStep !== focusStep) {
+    setCommitted({ open, focusStep });
     if (open) setOpenStep(focusStep);
-  }, [open, focusStep]);
+  }
 
   return (
     <Drawer open={open} title="Settings" onClose={onClose}>
       <div className="flex flex-col gap-6">
-        <SetupRows openStep={openStep} onOpenStep={setOpenStep} onDone={() => setOpenStep(null)} variant="settings" />
+        <SetupRows
+          openStep={openStep}
+          onOpenStep={setOpenStep}
+          onDone={() => setOpenStep(null)}
+          variant="settings"
+          onOpenGuide={onOpenGuide}
+        />
         <section>
           <h3 className="mb-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-ink-400">
             About

@@ -655,8 +655,20 @@ export function BorosPairTicket({
         ]
       : []),
   ];
+  const legGrows = (sizing?: { currentSize: number; resultingSize: number }): boolean =>
+    sizing !== undefined && Math.abs(sizing.resultingSize) > Math.abs(sizing.currentSize);
   const closeOnlyLeg: 'A' | 'B' | null =
-    intent === 'open' ? (rowA?.closeOnly ? 'A' : rowB?.closeOnly ? 'B' : null) : null;
+    intent === 'open'
+      ? rowA?.closeOnly
+        ? 'A'
+        : rowB?.closeOnly
+          ? 'B'
+          : null
+      : intent === 'target' && rowA?.closeOnly && legGrows(simulation?.legA.sizing)
+        ? 'A'
+        : intent === 'target' && rowB?.closeOnly && legGrows(simulation?.legB.sizing)
+          ? 'B'
+          : null;
 
   const canConfirm =
     request !== null &&

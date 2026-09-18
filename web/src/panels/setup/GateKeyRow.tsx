@@ -1,18 +1,24 @@
 import { useCredentials } from '../../api/queries';
 import { CredentialsForm } from '../../components/CredentialsForm';
-import { Ext, GATE_API_KEYS_URL, PERMISSION_ROWS } from '../onboardingBits';
+import { PERMISSION_ROWS } from '../onboardingBits';
 import { SetupRowFrame } from './SetupRowFrame';
 import type { SetupRowProps } from './setupState';
 
-export function GateKeyRow(p: SetupRowProps) {
+export function GateKeyRow(p: SetupRowProps & { onOpenGuide?: () => void }) {
   const credentials = useCredentials();
   const info = credentials.data;
   const isDone = info?.configured === true;
   const state = info?.configured ? [info.keyMasked, 'works'].filter(Boolean).join(' · ') : null;
 
   return (
-    <SetupRowFrame n={1} title="Gate API key" row={p} isDone={isDone} state={state}>
-      <Ext href={GATE_API_KEYS_URL}>How to make a key ↗</Ext>
+    <SetupRowFrame n={1} title="Gate API key" row={p} isDone={isDone} state={state} closeLabel="Close">
+      <button
+        type="button"
+        className="w-fit text-cyan-300 underline decoration-cyan-500/40 underline-offset-2 hover:text-cyan-200"
+        onClick={() => p.onOpenGuide?.()}
+      >
+        How to make a key ↗
+      </button>
       <div className="flex flex-col gap-1 text-xs">
         {PERMISSION_ROWS.map((permission) => (
           <div key={permission.label} className="flex items-baseline gap-2">

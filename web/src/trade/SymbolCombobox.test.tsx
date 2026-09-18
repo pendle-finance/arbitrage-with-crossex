@@ -62,3 +62,21 @@ describe('quick-pick coins', () => {
     expect(await screen.findByRole('button', { name: 'GATE' })).toBeInTheDocument();
   });
 });
+
+describe('Recent symbols (coin allowlist)', () => {
+  it('drops a recent symbol whose coin is no longer supported', async () => {
+    window.localStorage.setItem(
+      'crossex.recentSymbols.v1',
+      JSON.stringify(['GATE_FUTURE_ETH_USDT', 'GATE_FUTURE_SOL_USDT']),
+    );
+    server.use(
+      http.get('/api/symbols', ({ request }) =>
+        HttpResponse.json(env(new URL(request.url).searchParams.has('q') ? [] : [ETH_GATE])),
+      ),
+    );
+    renderWithClient(<SingleTicket />);
+
+    expect(await screen.findByTitle('GATE_FUTURE_ETH_USDT')).toBeInTheDocument();
+    expect(screen.queryByTitle('GATE_FUTURE_SOL_USDT')).not.toBeInTheDocument();
+  });
+});

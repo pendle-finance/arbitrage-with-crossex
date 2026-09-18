@@ -63,7 +63,7 @@ export function parseSymbol(symbol: string): {
 /** Venue key → display casing: "GATE" → "Gate", "HYPERLIQUID" → "Hyperliquid";
  * short keys (≤3 chars, e.g. "OKX") stay upper-case. */
 export function prettyVenue(v: string): string {
-  return v.length <= 3 ? v : v.charAt(0) + v.slice(1).toLowerCase();
+  return v.length <= 3 ? v : v.charAt(0).toUpperCase() + v.slice(1).toLowerCase();
 }
 
 export const WALLET_SHORT: Readonly<Record<string, string>> = {
@@ -104,9 +104,10 @@ export function fmtUsd(value: number | string, dp = 2): string {
 /** Compact notionals ("$2.58M") so tight numeric columns never clip. */
 export function fmtUsdCompact(n: number): string {
   if (!Number.isFinite(n)) return '—';
+  const sign = n < 0 ? '-' : '';
   const abs = Math.abs(n);
-  if (abs >= 1e6) return `${n < 0 ? '-' : ''}$${(abs / 1e6).toFixed(2)}M`;
-  if (abs >= 1e4) return `${n < 0 ? '-' : ''}$${(abs / 1e3).toFixed(1)}k`;
+  if (abs >= 1e6 || +(abs / 1e3).toFixed(1) >= 1000) return `${sign}$${(abs / 1e6).toFixed(2)}M`;
+  if (abs >= 1e4) return `${sign}$${(abs / 1e3).toFixed(1)}k`;
   return fmtUsd(n, 0);
 }
 

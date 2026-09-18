@@ -48,6 +48,15 @@ function useSymbolSearch(q: string) {
   });
 }
 
+function useSupportedBases() {
+  return useQuery({
+    queryKey: qk.symbols(''),
+    queryFn: () => fetchJson<SymbolRule[]>('/symbols'),
+    staleTime: 300_000,
+    select: (rows) => new Set(rows.map((r) => r.base)),
+  });
+}
+
 /** Group matches by base, ranking exact base match > prefix > rest.
  * Ratio-pair bases (ETHBTC…) are hidden from the list — see isRatioBase. */
 function groupByBase(rules: SymbolRule[] | undefined, needle: string): Array<[string, SymbolRule[]]> {
@@ -193,7 +202,10 @@ export function SymbolCombobox({ value, onSelect, onClear }: SymbolComboboxProps
   }, [q, results.data]);
 
   const activeBase = value ? parseSymbol(value).base : null;
-  const recents = value ? [] : getRecentSymbols();
+  const supportedBases = useSupportedBases();
+  const recents = value
+    ? []
+    : getRecentSymbols().filter((s) => supportedBases.data?.has(parseSymbol(s).base) ?? false);
 
   const onQuickPick = (coin: string) => {
     if (!value) return setText(coin);

@@ -87,6 +87,17 @@ describe('interestPrices on the owner account of 2026-09-18', () => {
     expect(() => interestPrices(withEquity('USDT', 'CROSSEX', 'n/a'), positions, 'ETH')).toThrow(/not a number/);
   });
 
+  it('refuses a blank wallet equity instead of reading it as $0', () => {
+    expect(() => interestPrices(withEquity('USDT', 'CROSSEX', ''), positions, 'ETH')).toThrow(/not a number/);
+  });
+
+  it('sends the Hyperliquid line once the nearer Lighter line is crossed', () => {
+    const crossed = withEquity('USDC', 'LIGHTER', '-1');
+    const { up } = interestPrices(crossed, positions, 'ETH');
+    expect(up?.wallet).toBe('HYPERLIQUID');
+    expect(Math.abs((up?.price ?? 0) - 19472)).toBeLessThanOrEqual(1);
+  });
+
   it('counts a wallet with no asset row as $0, so interest starts at the price now', () => {
     const { up } = interestPrices(withEquity('USDC', 'LIGHTER', null), positions, 'ETH');
     expect(up).toEqual({ price: ETH_HYPERLIQUID_MARK, wallet: 'LIGHTER' });

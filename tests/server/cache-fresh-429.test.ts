@@ -8,20 +8,20 @@ const rateLimited = () => ({ response: { status: 429, data: { label: 'TOO_MANY_R
 describe('a fresh cache read never serves stale on a 429', () => {
   it('fresh read never serves stale: the primary fetch 429s with a stale value cached', async () => {
     const cache = new TtlCache();
-    await cache.get('k', 0, async () => 'cached'); // prime the cache
+    await cache.get('k', 0, async () => 'cached');
     await expect(cache.get('k', 1000, async () => Promise.reject(rateLimited()), { fresh: true })).rejects.toEqual(
       rateLimited(),
     );
   });
 
-  it('fresh read never serves stale: a fresh waiter rides a fresh inflight fetch that 429s', async () => {
+  it('fresh read never serves stale: a second fresh read during a 429 throws too', async () => {
     const cache = new TtlCache();
-    await cache.get('k', 0, async () => 'cached'); // prime the cache
+    await cache.get('k', 0, async () => 'cached');
     let reject!: (e: unknown) => void;
     const slow = new Promise<string>((_, rej) => (reject = rej));
     const fetch = vi.fn(() => slow);
     const primary = cache.get('k', 1000, fetch, { fresh: true });
-    const waiter = cache.get('k', 1000, fetch, { fresh: true }); // rides the same fresh inflight
+    const waiter = cache.get('k', 1000, fetch, { fresh: true });
     reject(rateLimited());
     await expect(primary).rejects.toEqual(rateLimited());
     await expect(waiter).rejects.toEqual(rateLimited());
@@ -53,7 +53,7 @@ describe('?fresh=1 over HTTP never serves a stale account on a 429', () => {
     const warm = await app.inject({ method: 'GET', url: '/api/account', headers: HOST });
     expect(warm.statusCode).toBe(200);
 
-    vi.setSystemTime(t0 + 3000); // past the 2s account TTL
+    vi.setSystemTime(t0 + 3000);
 
     const fresh = await app.inject({ method: 'GET', url: '/api/account?fresh=1', headers: HOST });
     expect(fresh.statusCode).toBe(429);

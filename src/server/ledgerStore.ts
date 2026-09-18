@@ -1,7 +1,6 @@
-import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { BorosSettlementLedger, BorosSettlementRow } from '../core/boros/client';
-import { writeOwnerOnlyJson } from './secretFile';
+import { readOwnerJson, writeOwnerOnlyJson } from './secretFile';
 
 const isNumber = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
 
@@ -28,13 +27,14 @@ function parseLedger(raw: unknown): BorosSettlementLedger | null {
   if (!raw || typeof raw !== 'object') return null;
   const r = raw as Record<string, unknown>;
   if (!isNumber(r.coversFromSec) || !Array.isArray(r.rows)) return null;
+  if (r.olderToken !== undefined && r.olderToken !== null && typeof r.olderToken !== 'string') return null;
   const rows: BorosSettlementRow[] = [];
   for (const item of r.rows) {
     const row = parseRow(item);
     if (!row) return null;
     rows.push(row);
   }
-  return { rows, coversFromSec: r.coversFromSec };
+  return { rows, coversFromSec: r.coversFromSec, olderToken: typeof r.olderToken === 'string' ? r.olderToken : null };
 }
 
 export class LedgerStore {
@@ -49,11 +49,7 @@ export class LedgerStore {
   }
 
   read(address: string): BorosSettlementLedger | null {
-    try {
-      return parseLedger(JSON.parse(fs.readFileSync(this.fileFor(address), 'utf8')));
-    } catch {
-      return null;
-    }
+    return readOwnerJson(this.fileFor(address), parseLedger);
   }
 
   write(address: string, ledger: BorosSettlementLedger): void {

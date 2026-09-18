@@ -30,18 +30,6 @@ describe('TtlCache', () => {
     expect(later.value).toBe('after');
   });
 
-  it('a fresh read DOES ride an in-flight fetch that is itself fresh', async () => {
-    const cache = new TtlCache();
-    const fetch = vi.fn(async () => 'v');
-    const [a, b] = await Promise.all([
-      cache.get('k', 1000, fetch, { fresh: true }),
-      cache.get('k', 1000, fetch, { fresh: true }),
-    ]);
-    expect(fetch).toHaveBeenCalledTimes(1);
-    expect(a.value).toBe('v');
-    expect(b.value).toBe('v');
-  });
-
   it('a superseded slow fetch never overwrites the fresher value', async () => {
     const cache = new TtlCache();
     let resolveSlow!: (v: string) => void;

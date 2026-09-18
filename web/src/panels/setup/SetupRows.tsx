@@ -8,11 +8,13 @@ export function SetupRows({
   onOpenStep,
   onDone,
   variant,
+  onOpenGuide,
 }: {
   openStep: SetupStep | null | undefined;
   onOpenStep: (step: SetupStep | null) => void;
   onDone: (step: SetupStep) => void;
   variant: SetupRowProps['variant'];
+  onOpenGuide?: () => void;
 }) {
   const rowProps = (step: SetupStep): SetupRowProps => ({
     open: openStep === step,
@@ -27,7 +29,7 @@ export function SetupRows({
     <div
       className={`flex flex-col divide-y divide-ink-800 rounded-lg border border-ink-700 ${variant === 'setup' ? 'bg-ink-900' : ''}`}
     >
-      <GateKeyRow {...rowProps('gateKey')} />
+      <GateKeyRow {...rowProps('gateKey')} onOpenGuide={onOpenGuide} />
       <BorosWalletRow {...rowProps('borosWallet')} />
       <TelegramRow {...rowProps('telegram')} />
     </div>

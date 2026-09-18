@@ -341,7 +341,7 @@ describe('GET /api/opportunities', () => {
       await app.inject({ method: 'GET', url: '/api/opportunities', headers: HOST });
       expect(calls.length).toBe(afterFirst);
 
-      vi.setSystemTime(Date.now() + 49_000); // 61s after the first fetch
+      vi.setSystemTime(Date.now() + 49_000);
       await app.inject({ method: 'GET', url: '/api/opportunities', headers: HOST });
       expect(calls.length).toBe(afterFirst * 2); // markets + books re-read together
     } finally {
@@ -544,7 +544,7 @@ describe('GET /api/opportunities', () => {
 
   it('degrades ONE missing Boros book to an unavailable market, not a failed request', async () => {
     const bodies = borosBodies();
-    delete bodies[`/apis/v1/markets/order-book?marketId=${BINANCE_MARKET}`]; // stub 404s it
+    delete bodies[`/apis/v1/markets/order-book?marketId=${BINANCE_MARKET}`];
     app = makeTestApp({ borosFetch: borosStub(bodies) });
     mockGate();
     mockVenueBooks();

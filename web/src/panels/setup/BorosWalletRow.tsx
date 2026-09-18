@@ -58,6 +58,7 @@ export function BorosWalletRow(p: SetupRowProps) {
       isWarn={isExpired}
       alert={nudge}
       skipConsequence="Without a Boros wallet the terminal cannot open Boros legs, and Positions cannot show them."
+      closeLabel="Close"
     >
       <SegmentedToggle value={tab} options={TABS} onChange={setTab} ariaLabel="Boros wallet source" />
       {tab === 'connect' ? (

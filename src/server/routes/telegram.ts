@@ -9,15 +9,16 @@ import type { TelegramAuth } from '../telegram/status';
 
 const BOT_NOT_AVAILABLE = 'Telegram alerts are not available yet. Try again later.';
 const BOT_SILENT = 'The Telegram bot did not answer. Try again later.';
-const NOT_CONNECTED = 'This terminal is not connected to Telegram alerts.';
+const NOT_CONNECTED = 'This terminal is not connected to Telegram alerts. Click Set up to connect it.';
 const SETTING_NAMES = ['liquidation', 'interest'] as const;
+const FIRST_SYNC_WAIT_MS = 5_000;
 
 type Telegram = NonNullable<AppDeps['telegram']>;
 
 function stateOf(hasKey: boolean, linkPending: boolean, auth: TelegramAuth | null): TelegramInfo['state'] {
   if (!hasKey || linkPending || auth === 'pending') return 'none';
   if (auth === 'replaced') return 'replaced';
-  if (auth === 'removed' || auth === 'unknown') return 'removed';
+  if (auth === 'removed') return 'removed';
   return 'connected';
 }
 
@@ -42,6 +43,16 @@ export function telegramRoutes(deps: AppDeps) {
     return deps.telegram;
   };
 
+  const awaitFirstSync = async (t: Telegram): Promise<void> => {
+    if (t.status.auth !== null || t.status.lastSyncError !== null || readTelegramKey(deps.dataDir) === null) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const cap = new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, FIRST_SYNC_WAIT_MS);
+    });
+    await Promise.race([t.sync.idle(), cap]);
+    clearTimeout(timer);
+  };
+
   const info = (t: Telegram): TelegramInfo => {
     const hasKey = readTelegramKey(deps.dataDir) !== null;
     const state = stateOf(hasKey, t.link.status().status === 'pending', t.status.auth);
@@ -56,31 +67,49 @@ export function telegramRoutes(deps: AppDeps) {
   };
 
   return async function plugin(app: FastifyInstance): Promise<void> {
-    app.get('/telegram', async (_req, reply) => reply.ok(info(telegram())));
+    app.get('/telegram', async (_req, reply) => {
+      const t = telegram();
+      await awaitFirstSync(t);
+      return reply.ok(info(t));
+    });
 
     app.post('/telegram/link', async (_req, reply) => {
       const t = telegram();
       try {
         return reply.ok(await t.link.start());
       } catch {
-        return refuse(reply, 503, 'network', BOT_NOT_AVAILABLE, true);
+        return refuse(reply, { code: 503, category: 'network', message: BOT_NOT_AVAILABLE, retryable: true });
       }
     });
 
     app.get('/telegram/link', async (_req, reply) => reply.ok(telegram().link.status()));
 
+    app.delete('/telegram/link', async (_req, reply) => {
+      telegram().link.cancel();
+      return reply.ok(telegram().link.status());
+    });
+
     app.patch('/telegram/settings', async (req, reply) => {
       const t = telegram();
       const settings = parseSettings(req.body);
       const key = readTelegramKey(deps.dataDir);
-      if (key === null) return refuse(reply, 409, 'validation', NOT_CONNECTED, false);
+      if (key === null) return refuse(reply, {
+        code: 409,
+        category: 'validation',
+        message: NOT_CONNECTED,
+        retryable: false,
+      });
       try {
-        const view = await t.bot.patchSettings(key.key, settings);
-        t.status.setSettings(view.settings);
+        t.status.setSettings(await t.bot.patchSettings(key.key, settings));
       } catch (err) {
-        if (!(err instanceof BotAuthError)) return refuse(reply, 503, 'network', BOT_SILENT, true);
+        if (!(err instanceof BotAuthError)) return refuse(reply, {
+          code: 503,
+          category: 'network',
+          message: BOT_SILENT,
+          retryable: true,
+        });
         t.status.setAuth(err.reason);
-        return refuse(reply, 409, 'validation', NOT_CONNECTED, false);
+        return refuse(reply, { code: 409, category: 'validation', message: NOT_CONNECTED, retryable: false });
       }
       return reply.ok(info(t));
     });

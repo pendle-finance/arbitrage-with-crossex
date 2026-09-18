@@ -1,8 +1,7 @@
-import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { isSupportedCoin } from '../core/coins';
 import { parseSymbol } from '../core/numbers';
-import { writeOwnerOnlyJson } from './secretFile';
+import { readOwnerJson, writeOwnerOnlyJson } from './secretFile';
 
 export interface TrackingStart {
   userId: string;
@@ -24,11 +23,7 @@ export class TrackingStartFile {
   }
 
   read(): TrackingStart | null {
-    try {
-      return parseStart(JSON.parse(fs.readFileSync(this.file, 'utf8')));
-    } catch {
-      return null;
-    }
+    return readOwnerJson(this.file, parseStart);
   }
 
   write(start: TrackingStart): void {

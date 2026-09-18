@@ -31,6 +31,8 @@ import {
   type FetchLike,
 } from '../../core/boros/client';
 import { USD_TOKEN_ID } from '../../core/boros/borosApi';
+import { normalizeUnderlying } from '../../core/boros/opportunities';
+import { COIN_NOT_SUPPORTED_TEXT, isSupportedCoin } from '../../core/coins';
 import { knownRate } from '../../core/boros/venue';
 import { isUpdating } from '../updater';
 import {
@@ -259,13 +261,6 @@ interface AccountView {
   isolatedByMarket: Map<number, BorosMarginBucket>;
 }
 
-/**
- * A market row "holds something" when it has a netted position OR resting
- * orders. The account surface now carries the order list itself, so
- * `hasRestingOrders` is read directly; the older IM-gap signal (per-market
- * `initialMargin` includes order margin while `positionInitialMargin` is the
- * position alone) is kept as a fallback for responses that omit it.
- */
 function holdsPositionOrOrders(p: {
   notionalSize: string;
   initialMargin?: string;
@@ -499,9 +494,10 @@ export function borosPairRoutes(deps: AppDeps) {
 
     let gasBalanceUsd: number | null | undefined;
     const ordersForGas = deps.getBorosOrders?.();
-    if (ordersForGas?.getGasBalance) {
+    const readGasBalance = ordersForGas?.getGasBalance?.bind(ordersForGas);
+    if (readGasBalance) {
       try {
-        gasBalanceUsd = await ordersForGas.getGasBalance();
+        gasBalanceUsd = (await deps.cache.get('boros:gas-balance', TTL.boros, readGasBalance, { fresh })).value;
       } catch {
         gasBalanceUsd = null;
       }
@@ -547,13 +543,14 @@ export function borosPairRoutes(deps: AppDeps) {
       const [markets, account] = await Promise.all([loadMarkets(fresh), loadAccount(address, fresh)]);
       const nowSec = Math.floor(Date.now() / 1000);
       const prices = resolveCollateralPricesUsd(markets);
+      const holds = (m: BorosMarket): boolean => (account.positionByMarket.get(m.marketId) ?? 0) !== 0;
 
       const rows = markets
         .filter(
           (m) =>
             m.maturity > nowSec &&
-            (m.state === 'Normal' ||
-              (m.state === 'CloseOnly' && (account.positionByMarket.get(m.marketId) ?? 0) !== 0)),
+            (m.state === 'Normal' || (m.state === 'CloseOnly' && holds(m))) &&
+            (isSupportedCoin(normalizeUnderlying(m.base)) || holds(m)),
         )
         /**
          * Drop any market this ticket could never pair — one with no partner
@@ -643,11 +640,16 @@ export function borosPairRoutes(deps: AppDeps) {
     });
 
     const closingMarkets = new Set<number>();
-    const lockCloses = (marketIds: readonly number[]): (() => void) | null => {
+    const lockCloses = (marketIds: readonly number[]): ((keep?: readonly number[]) => void) | null => {
       if (marketIds.some((id) => closingMarkets.has(id))) return null;
-      for (const id of marketIds) closingMarkets.add(id);
-      return () => {
-        for (const id of marketIds) closingMarkets.delete(id);
+      const held = new Set(marketIds);
+      for (const id of held) closingMarkets.add(id);
+      return (keep = []) => {
+        for (const id of held) {
+          if (keep.includes(id)) continue;
+          held.delete(id);
+          closingMarkets.delete(id);
+        }
       };
     };
 
@@ -690,16 +692,34 @@ export function borosPairRoutes(deps: AppDeps) {
         return reply.ok({ ...payload, replayed: true });
       }
 
-      const closeMarketIds =
-        parseIntent(body.intent) === 'close'
-          ? [parseLeg(body.legA, 'legA').marketId, parseLeg(body.legB, 'legB').marketId]
-          : [];
-      const unlockCloses = lockCloses(closeMarketIds);
-      if (!unlockCloses) return refuse(reply, 409, 'validation', CLOSE_RUNNING, false);
+      const unlockCloses = lockCloses([parseLeg(body.legA, 'legA').marketId, parseLeg(body.legB, 'legB').marketId]);
+      if (!unlockCloses) return refuse(reply, {
+        code: 409,
+        category: 'validation',
+        message: CLOSE_RUNNING,
+        retryable: false,
+      });
       try {
         // Fresh account read: margin and positions decide the gate, and a cached
         // copy could be up to TTL.boros old — far too stale to authorise an order.
-        const { simulation, gate, intent, account } = await priceRequest(body, true);
+        const { simulation, gate, intent, account, legA, legB } = await priceRequest(body, true);
+        const legs = [
+          { market: legA.market, sizing: simulation.legA.sizing },
+          { market: legB.market, sizing: simulation.legB.sizing },
+        ];
+        unlockCloses(legs.filter((l) => l.sizing.opposing).map((l) => l.market.marketId));
+        const addsToUnsupportedCoin = legs.some(
+          (l) =>
+            l.sizing.deltaSize !== 0 &&
+            !isSupportedCoin(normalizeUnderlying(l.market.base)) &&
+            (intent === 'open' || !l.sizing.opposing),
+        );
+        if (addsToUnsupportedCoin) return refuse(reply, {
+          code: 409,
+          category: 'validation',
+          message: COIN_NOT_SUPPORTED_TEXT,
+          retryable: false,
+        });
         if (gate.blockers.length > 0) {
           return reply.code(409).send({
             ok: false,
@@ -729,18 +749,6 @@ export function borosPairRoutes(deps: AppDeps) {
         ): BorosMarketOrderRequest | null => {
           const size = Math.abs(leg.sizing.deltaSize);
           if (size === 0 || leg.execApr === null) return null;
-          /**
-           * ⚠ A leg that REDUCES a position must never cross flat. Boros has no
-           * reduce-only flag, and `size` is a double that already lost the
-           * position's low-order digits: `parseUnits(decimalString(0.05))` is
-           * 50000000000000003 wei, three units above a 0.05 position, and the
-           * overshoot opens an opposing dust position too small to close (see
-           * `closePosition` in borosApi.ts, which has carried this cap since).
-           * So a reducing leg is capped at the venue's OWN integer for the
-           * position. A deliberate flip (`sizing.flips`, acknowledged in §4)
-           * is meant to cross and is left alone; an open adds and has nothing
-           * to cap against.
-           */
           const raw = account.positionRawByMarket.get(leg.marketId);
           const reducing =
             leg.sizing.opposing && !leg.sizing.flips && raw !== undefined ? reducingOrderSize(raw, size) : null;
@@ -858,6 +866,7 @@ export function borosPairRoutes(deps: AppDeps) {
           );
         }
         await orders.payTreasury!(amountUsd, usdMarket.marketId);
+        deps.cache.bust('boros:gas-balance');
         return { sentUsd: amountUsd };
       })().finally(() => {
         topUpInFlight = false;
@@ -952,13 +961,23 @@ export function borosPairRoutes(deps: AppDeps) {
       assertAgentNotExpired();
 
       const unlockClose = lockCloses([marketId]);
-      if (!unlockClose) return refuse(reply, 409, 'validation', CLOSE_RUNNING, false);
+      if (!unlockClose) return refuse(reply, {
+        code: 409,
+        category: 'validation',
+        message: CLOSE_RUNNING,
+        retryable: false,
+      });
       try {
         const pre = await catchRateLimit(Promise.all([loadMarkets(false), loadAccount(address, true)]));
-        if (pre === null) return refuse(reply, 503, 'rate-limited', READS_LIMITED_NOTHING_SENT, true);
+        if (pre === null) return refuse(reply, {
+          code: 503,
+          category: 'rate-limited',
+          message: READS_LIMITED_NOTHING_SENT,
+          retryable: true,
+        });
         const [preMarkets, preAccount] = pre;
         if (preAccount.isolatedOccupied.has(marketId)) {
-          return refuse(reply, 409, 'validation', CLOSE_ISOLATED, false);
+          return refuse(reply, { code: 409, category: 'validation', message: CLOSE_ISOLATED, retryable: false });
         }
 
         /** Refused BEFORE the cancel, which cannot be undone: Boros takes nothing
@@ -998,7 +1017,12 @@ export function borosPairRoutes(deps: AppDeps) {
           // Fresh reads AFTER the cancel: the size we close is the size that is
           // actually there once nothing can fill any more.
           const post = await catchRateLimit(Promise.all([loadMarkets(true), loadAccount(address, true)]));
-          if (post === null) return refuse(reply, 503, 'rate-limited', READS_LIMITED_AFTER_CANCEL, true);
+          if (post === null) return refuse(reply, {
+            code: 503,
+            category: 'rate-limited',
+            message: READS_LIMITED_AFTER_CANCEL,
+            retryable: true,
+          });
           const [markets, account] = post;
           const market = marketOr404(markets, marketId);
           const current = account.positionByMarket.get(marketId) ?? 0;

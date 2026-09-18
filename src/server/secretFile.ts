@@ -122,3 +122,11 @@ export function writeOwnerOnlyJson(filePath: string, data: unknown): void {
   restrictToOwner(tmp);
   fs.renameSync(tmp, filePath);
 }
+
+export function readOwnerJson<T>(filePath: string, validate: (raw: unknown) => T | null): T | null {
+  try {
+    return validate(JSON.parse(fs.readFileSync(filePath, 'utf8')));
+  } catch {
+    return null;
+  }
+}

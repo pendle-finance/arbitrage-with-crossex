@@ -130,7 +130,7 @@ const transferRow = (id: string, status: string, over: Record<string, string> = 
   ...over,
 });
 
-describe('a finished rebalance job syncs Telegram', () => {
+describe('a rebalance job that ends syncs Telegram', () => {
   it('a job that ends done calls onDone once', async () => {
     const job = haltedLoopJob(1, { venueId: 'x1' });
     mockGateGet('/transfers', { body: [transferRow('x1', 'SUCCESS', { actual_receive: BOUGHT })] });
@@ -153,7 +153,7 @@ describe('a finished rebalance job syncs Telegram', () => {
     expect(calls).toBe(1);
   });
 
-  it('a job that halts mid-run calls onDone zero times', async () => {
+  it('a job that halts mid-run calls onDone once', async () => {
     mockView();
     const plan = await accountAPlan();
     gate().persist().post(`${API}/crossex/transfers`).query(true).reply(400, { label: 'INVALID_PARAM_VALUE', message: 'refused by the test' });
@@ -170,7 +170,7 @@ describe('a finished rebalance job syncs Telegram', () => {
 
     expect(res.statusCode).toBe(200);
     await waitFor(() => h.jobs.read()?.status === 'halted', 'the halt');
-    expect(calls).toBe(0);
+    expect(calls).toBe(1);
   });
 });
 
@@ -235,7 +235,7 @@ function bootTransfer(over: { onDone?: () => void } = {}) {
   };
 }
 
-describe('a finished transfer syncs Telegram', () => {
+describe('a transfer that ends syncs Telegram', () => {
   it('a transfer that ends in success calls onDone once', async () => {
     mockTransferReads();
     mockTransferSend();
@@ -254,7 +254,7 @@ describe('a finished transfer syncs Telegram', () => {
     expect(calls).toBe(1);
   });
 
-  it('a failed transfer calls onDone zero times', async () => {
+  it('a failed transfer calls onDone once', async () => {
     mockTransferReads();
     mockTransferSend({
       status: 422,
@@ -272,6 +272,6 @@ describe('a finished transfer syncs Telegram', () => {
     expect(res.statusCode).toBe(202);
     await waitFor(() => h.transfers.read()?.status !== 'moving', 'the refusal');
     expect(h.transfers.read()?.status).toBe('failed');
-    expect(calls).toBe(0);
+    expect(calls).toBe(1);
   });
 });

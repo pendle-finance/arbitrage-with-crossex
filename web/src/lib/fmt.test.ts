@@ -11,9 +11,11 @@ import {
   fmtSyncAge,
   fmtTokenQty,
   fmtUsd,
+  fmtUsdCompact,
   num,
   parseDateLocal,
   parseSymbol,
+  prettyVenue,
   sig,
   sigGrouped,
   toDate,
@@ -219,5 +221,28 @@ describe('fmtSyncAge', () => {
     [2 * 86_400_000, '2 d ago'],
   ])('%d ms reads %s', (ms, text) => {
     expect(fmtSyncAge(ms)).toBe(text);
+  });
+});
+
+describe('prettyVenue', () => {
+  it.each([
+    ['GATE', 'Gate'],
+    ['HYPERLIQUID', 'Hyperliquid'],
+    ['LIGHTER', 'Lighter'],
+    ['lighter', 'Lighter'],
+    ['OKX', 'OKX'],
+  ])('prettyVenue(%s) -> %s', (v, expected) => {
+    expect(prettyVenue(v)).toBe(expected);
+  });
+});
+
+describe('fmtUsdCompact', () => {
+  it.each([
+    [999_949.99, '$999.9k'],
+    [999_950, '$1.00M'],
+    [999_999.995, '$1.00M'],
+    [1_000_000, '$1.00M'],
+  ])('fmtUsdCompact(%f) -> %s', (n, expected) => {
+    expect(fmtUsdCompact(n)).toBe(expected);
   });
 });
