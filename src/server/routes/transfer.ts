@@ -5,7 +5,7 @@ import { pathRule, transferPaths, type SpotBalance, type TransferCoin, type Tran
 import type { AppDeps } from '../app';
 import { TTL } from '../cache';
 import { DISCLAIMER_NOT_ACCEPTED, isDisclaimerAccepted } from '../disclaimer';
-import { sendError } from '../errorReply';
+import { catchRateLimit, sendError } from '../errorReply';
 import { formatMoney, LOCK_TEXT, newTransferJob, type TransferFile, type TransferJob } from '../rebalanceJob';
 import { isSendable, runTransfer } from '../rebalanceRunner';
 import { conflict, moneyLockNow, sleep, STALE_TEXT } from './rebalance';
@@ -67,6 +67,7 @@ export function transferRoutes(deps: AppDeps) {
         cache: deps.cache,
         now,
         sleep: deps.transfer?.sleep ?? sleep,
+        onDone: deps.transfer?.onDone,
       })
         .catch((err: unknown) => console.error(`transfer ${transfer.id} stopped: ${classifyGateError(err).message}`))
         .finally(() => {
@@ -101,25 +102,25 @@ export function transferRoutes(deps: AppDeps) {
       return deps.cache.get('spot:accounts', TTL.live, fetchSpot, { fresh });
     };
 
-    const loadInputs = async (fresh: boolean) => {
+    const loadInputs = async (fresh: { account: boolean; spot: boolean }) => {
       const crossEx = () => deps.getClients().crossEx;
       const [account, coins, spot] = await Promise.all([
-        deps.cache.get('account', TTL.live, async () => (await crossEx().getCrossexAccount()).body, { fresh }),
+        deps.cache.get('account', TTL.live, async () => (await crossEx().getCrossexAccount()).body, {
+          fresh: fresh.account,
+        }),
         deps.cache.get('transfer:coins', TTL.static, async () => (await crossEx().listCrossexTransferCoins()).body),
-        readSpot(fresh),
+        readSpot(fresh.spot),
       ]);
       return {
         spot: spot.value,
         paths: transferPaths({ account: account.value, spot: spot.value, coins: coins.value }),
         userId: account.value.userId ? String(account.value.userId) : null,
         stale: [account, coins, spot].some((read) => read.stale),
-        accountStale: account.stale,
-        spotStale: spot.stale,
       };
     };
 
     app.get('/transfer', async (_req, reply) => {
-      const { spot, paths, stale } = await loadInputs(false);
+      const { spot, paths, stale } = await loadInputs({ account: false, spot: false });
       const transfer = transfers?.read() ?? null;
       const lock = moneyLockNow(deps);
       const transferLock = lock === null || lock.kind === 'moving' ? null : lock.kind;
@@ -141,8 +142,9 @@ export function transferRoutes(deps: AppDeps) {
       if (!Number.isFinite(amount) || amount <= 0) throw new CoreError('Amount must be a number above 0.');
       const locked = lockText();
       if (locked) return conflict(reply, locked);
-      const { paths, userId, accountStale, spotStale } = await loadInputs(true);
-      if (accountStale || (rule.from === 'SPOT' && spotStale)) return conflict(reply, STALE_TEXT);
+      const inputs = await catchRateLimit(loadInputs({ account: true, spot: rule.from === 'SPOT' }));
+      if (!inputs) return conflict(reply, STALE_TEXT);
+      const { paths, userId } = inputs;
       const path = paths.find((p) => p.coin === rule.coin && p.from === rule.from && p.to === rule.to)!;
       if (amount < path.min || !isSendable(amount)) {
         throw new CoreError(minimumText(path));

@@ -57,6 +57,7 @@ export interface RunnerDeps {
   now: () => number;
   sleep: (ms: number) => Promise<void>;
   onHalt: (job: Job) => void;
+  onDone?: () => void;
   pollOnly?: boolean;
 }
 
@@ -66,6 +67,7 @@ export interface TransferRunnerDeps {
   cache: TtlCache;
   now: () => number;
   sleep: (ms: number) => Promise<void>;
+  onDone?: () => void;
 }
 
 export const STEP_TIMEOUT_MS = 600_000;
@@ -237,6 +239,7 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
     if (job.stepIndex === job.steps.length - 1) job.status = 'done';
     else job.stepIndex += 1;
     deps.jobs.write(job);
+    if (job.status === 'done') deps.onDone?.();
   };
 
   const previousQty = (): number => job.steps[job.stepIndex - 1]?.qty ?? 0;
@@ -912,6 +915,7 @@ export async function runTransfer(deps: TransferRunnerDeps): Promise<void> {
     const status = String(row?.status ?? '');
     if (row && status === 'SUCCESS') {
       end('done', receivedOf(row, transfer), null);
+      deps.onDone?.();
       return;
     }
     if (row && TRANSFER_DEAD.test(status)) {

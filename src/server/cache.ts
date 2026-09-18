@@ -51,7 +51,7 @@ export const TTL = {
    * book (25 books × 300 polls ≈ 7.5k req/h from one open tab, measured
    * 2026-07-29). Books now ride the same 30s cadence as every other Boros
    * read; a scan quote up to ~30s old ranks identically. */
-  borosBook: 30_000,
+  borosBook: 60_000,
   /** Boros books that back an ORDER rather than a displayed quote — the
    * two-leg market panel's simulate/execute path. `borosBook`'s 30s is chosen
    * for a scan whose quote "up to ~30s old ranks identically"; that reasoning
@@ -112,7 +112,7 @@ export class TtlCache {
       try {
         return { value: (await entry.inflight) as T, stale: false };
       } catch (err) {
-        if (entry.has && classifyGateError(err).category === 'rate-limited') {
+        if (!opts?.fresh && entry.has && classifyGateError(err).category === 'rate-limited') {
           return { value: entry.value as T, stale: true };
         }
         throw err;
@@ -143,7 +143,7 @@ export class TtlCache {
     } catch (err) {
       if (classifyGateError(err).category === 'rate-limited') {
         entry.cooldownUntil = Date.now() + COOLDOWN_MS;
-        if (entry.has) return { value: entry.value as T, stale: true };
+        if (!opts?.fresh && entry.has) return { value: entry.value as T, stale: true };
       }
       throw err;
     } finally {

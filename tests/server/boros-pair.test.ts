@@ -15,88 +15,12 @@ import type {
   BorosOrderClient,
 } from '../../src/core/boros/orders';
 import { borosExecutionsPending } from '../../src/server/routes/borosPair';
-import { imInputs, marketAcc, raw } from '../helpers/boros-fixtures';
+import { account, ADDRESS, BN, DAY, HL, market, MATURITY, NOW, OK, wireBook } from '../helpers/boros-pair-fixtures';
 import { TtlCache } from '../../src/server/cache';
 import { borosStub } from '../helpers/boros-stub';
 import { HOST, makeTestApp } from './helpers/gate-nock';
 
-const NOW = Math.floor(Date.now() / 1000);
-const DAY = 86_400;
-const MATURITY = NOW + 30 * DAY;
-const ADDRESS = '0x1111111111111111111111111111111111111111';
-/** The account the agent signs for. Write routes are bound to it. */
 const OTHER = '0x2222222222222222222222222222222222222222';
-
-const HL = 155;
-const BN = 158;
-/** A third market, for the cases that need an odd one out alongside a pair. */
-const OK = 161;
-
-/** This account's cross USDT (tokenId 3) handle. */
-const CROSS_USDT = marketAcc(ADDRESS, 3);
-
-/** The two account reads the client joins into one cross USDT zone. */
-const account = (
-  netBalance: number,
-  positions: Array<{ marketId: number; size: number | string }> = [],
-) => {
-  const size = (s: number | string) => (typeof s === 'string' ? s : raw(s));
-  return {
-    '/apis/v1/accounts/market-acc-infos-by-root': {
-      results: [
-        {
-          marketAcc: CROSS_USDT,
-          netBalance: raw(netBalance),
-          initialMargin: raw(0),
-          positions: positions.map((p) => ({
-            marketId: p.marketId,
-            signedSize: size(p.size),
-            initialMargin: raw(0),
-            orders: [],
-          })),
-        },
-      ],
-    },
-    '/apis/v1/accounts/active-positions': {
-      results: positions.map((p) => ({
-        marketAcc: CROSS_USDT,
-        marketId: p.marketId,
-        side: Number(p.size) >= 0 ? 0 : 1,
-        fixedApr: 0,
-        signedSize: size(p.size),
-        unrealisedPnl: '0',
-        settlementPnl: '0',
-      })),
-    },
-  };
-};
-
-const market = (marketId: number, platformName: string, midApr: number) => ({
-  marketId,
-  tokenId: 3,
-  imData: {
-    name: `${platformName} ETH 30d`,
-    maturity: MATURITY,
-    iTickThresh: imInputs.imTickThresh,
-    tickStep: imInputs.imTickStep,
-  },
-  extConfig: { settleFeeRate: '1000000000000000', paymentPeriod: 3600 },
-  platform: { platformId: platformName },
-  metadata: { underlyingSymbol: 'ETH' },
-  config: {
-    status: 2,
-    takerFee: '500000000000000',
-    kIM: raw(imInputs.kIM),
-    tThresh: imInputs.tThreshSec,
-  },
-  data: { midApr, markApr: midApr, floatingApr: 0.05, notionalOI: 12_000_000, assetMarkPrice: 1900 },
-});
-
-/** Books in Boros wire shape: `short` is the ASK side, `long` the BID side. */
-const wireBook = (bidTick: number, askTick: number, size = 20_000_000) => ({
-  short: { ia: [askTick], sz: [raw(size)] },
-  long: { ia: [bidTick], sz: [raw(size)] },
-});
 
 function bodies(over: Record<string, unknown> = {}): Record<string, unknown> {
   return {

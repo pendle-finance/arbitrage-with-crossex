@@ -24,11 +24,13 @@ import {
 import {
   buildOpportunities,
   groupBorosMarkets,
+  normalizeUnderlying,
   type BorosEntryMode,
   type EntryMode,
   type ExitMode,
 } from '../../core/boros/opportunities';
 import { normalizeVenue } from '../../core/boros/venue';
+import { isSupportedCoin } from '../../core/coins';
 import { BOOK_VENUES, fetchVenueBook, type NormalizedBook } from '../../core/estimate/books';
 import {
   feeRowsForTier,
@@ -201,12 +203,13 @@ export function opportunitiesRoutes(deps: AppDeps) {
       // "re-read upstream".
       const fresh = query.fresh === '1';
 
-      const { value: markets, stale } = await deps.cache.get(
+      const { value: allMarkets, stale } = await deps.cache.get(
         'boros:markets',
         TTL.boros,
         () => fetchBorosMarkets(fetchImpl),
         { fresh },
       );
+      const markets = allMarkets.filter((m) => isSupportedCoin(normalizeUnderlying(m.base)));
 
       // The CrossEx universe decides which Boros market can carry a perp leg.
       // Losing it (no keys, rate limit, outage) leaves the Boros spreads intact,

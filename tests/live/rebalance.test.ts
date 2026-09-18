@@ -108,6 +108,7 @@ const startTransferApp = (clients: Clients) => {
   const app = buildApp({
     getClients: () => clients,
     cache: new TtlCache(),
+    dataDir,
     authToken: TOKEN,
     engine: { store: new Store(':memory:'), venue: gateVenue(() => clients), clock: { now: Date.now } },
     transfer: { jobs: transfers, sleep },

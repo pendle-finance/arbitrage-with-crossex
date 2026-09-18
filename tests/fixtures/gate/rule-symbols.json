@@ -128,6 +128,22 @@
     "delist_time": "1752000000000"
   },
   {
+    "symbol": "GATE_FUTURE_HYPE_USDT",
+    "exchange_type": "GATE",
+    "business_type": "FUTURE",
+    "state": "delisting",
+    "min_size": "0.01",
+    "min_notional": "5",
+    "lot_size": "0.01",
+    "tick_size": "0.001",
+    "max_num_orders": "100",
+    "max_market_size": "100000",
+    "max_limit_size": "1000000",
+    "contract_size": "1",
+    "liquidation_fee": "0.001",
+    "delist_time": "1758000000000"
+  },
+  {
     "symbol": "GATE_SPOT_ETH_USDT",
     "exchange_type": "GATE",
     "business_type": "SPOT",

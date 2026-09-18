@@ -16,6 +16,7 @@ import type { PairRow } from '../../engine/types';
 import type { AppDeps } from '../app';
 import { TTL } from '../cache';
 import { DISCLAIMER_NOT_ACCEPTED, isDisclaimerAccepted } from '../disclaimer';
+import { refuse } from '../errorReply';
 import { leverageMaxFor } from './leverage';
 import { conflict } from './rebalance';
 
@@ -39,14 +40,7 @@ export function dealsRoutes(deps: AppDeps) {
        same check. */
     const rebalanceRunning = (): boolean => deps.rebalance?.jobs.read()?.status === 'running';
     const refuseForRebalance = (reply: FastifyReply, what: string): FastifyReply =>
-      reply.code(409).send({
-        ok: false,
-        error: {
-          category: 'validation',
-          message: `a rebalance is still running. Wait for it to finish before ${what}.`,
-          retryable: true,
-        },
-      });
+      refuse(reply, 409, 'validation', `a rebalance is still running. Wait for it to finish before ${what}.`, true);
     const transferMoving = (): boolean => deps.transfer?.jobs.read()?.status === 'moving';
     const transferSettling = (): boolean => {
       const transfer = deps.transfer?.jobs.read() ?? null;

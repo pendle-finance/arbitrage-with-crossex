@@ -24,6 +24,10 @@ import { InterestFile } from './interestLedger';
 import { JobFile, TransferFile } from './rebalanceJob';
 import { tokenizedIndexHtml } from './spa';
 import { restrictToOwner } from './secretFile';
+import { botBaseUrl, createBotClient } from './telegram/botClient';
+import { createTelegramLink } from './telegram/link';
+import { TelegramStatus } from './telegram/status';
+import { createTelegramSync, readTriggerCoins } from './telegram/sync';
 import { readInstallInfo, readLocalVersion } from './version';
 
 const port = Number(process.env.PORT ?? 6688);
@@ -114,7 +118,12 @@ let loopDeps: LoopDeps | undefined;
     /* best-effort */
   }
 
-  loopDeps = { store, venue: gateVenue(getClients), clock: { now: () => Date.now() } };
+  loopDeps = {
+    store,
+    venue: gateVenue(getClients),
+    clock: { now: () => Date.now() },
+    onFinish: () => telegramSync.requestSync('deal'),
+  };
   engine = { store, venue: loopDeps.venue, clock: loopDeps.clock };
 }
 
@@ -157,6 +166,30 @@ try {
   console.error(`⚠️  ${(err as Error).message}`);
 }
 
+const telegramVersion = readLocalVersion(repoRoot) ?? 'unknown';
+const telegramBot = createBotClient({ baseUrl: botBaseUrl(process.env), fetchImpl: resolveBorosFetch() });
+const telegramStatus = new TelegramStatus();
+const telegramSync = createTelegramSync({
+  dataDir,
+  bot: telegramBot,
+  status: telegramStatus,
+  readCoins: () => readTriggerCoins({ cache, getClients }),
+  port,
+  version: telegramVersion,
+  now: Date.now,
+});
+const telegramLink = createTelegramLink({
+  dataDir,
+  bot: telegramBot,
+  pageUrl: `${botBaseUrl(process.env)}/alerts`,
+  version: telegramVersion,
+  now: Date.now,
+  onConfirmed: () => {
+    telegramStatus.setAuth('ok');
+    telegramSync.requestSync('linked');
+  },
+});
+
 const webDist = path.join(repoRoot, 'web', 'dist');
 
 const appDeps = {
@@ -164,14 +197,20 @@ const appDeps = {
   // The same cache the Boros agent wiring above reads markets through, so a
   // MarketAcc pack and a priced panel can never disagree.
   cache,
+  dataDir,
   // Created on first boot beside the .env.
   authToken: readOrCreateApiToken(path.dirname(envPath)),
   engine,
   // UPDATE_CHECK=0 lets an install opt out of the GitHub read entirely.
   install: readInstallInfo(repoRoot),
   updateCheck: { current: readLocalVersion(repoRoot), disabled: process.env.UPDATE_CHECK === '0' },
-  rebalance: { jobs: new JobFile(dataDir), interest: new InterestFile(dataDir) },
-  transfer: { jobs: new TransferFile(dataDir) },
+  rebalance: {
+    jobs: new JobFile(dataDir),
+    interest: new InterestFile(dataDir),
+    onDone: () => telegramSync.requestSync('rebalance'),
+  },
+  transfer: { jobs: new TransferFile(dataDir), onDone: () => telegramSync.requestSync('transfer') },
+  telegram: { link: telegramLink, sync: telegramSync, status: telegramStatus, bot: telegramBot },
   getBorosOrders: () => borosOrdersRef.current,
   borosAgent: {
     envPath,
@@ -216,6 +255,7 @@ app
     // server died just gets its next tick. Started after listen so a port
     // conflict (second instance) can never run venue mutations first.
     if (loopDeps && engine) engine.wake = startLoop(loopDeps).wake;
+    telegramSync.start();
     const shown = host === '127.0.0.1' ? 'localhost' : host;
     console.log(`arb-tools server listening on http://${shown}:${port}`);
   })

@@ -232,7 +232,7 @@ describe('GET /api/asset-view/:address', () => {
     mockGateGet('/history_positions', { body: closedPositions });
     mockGateGet('/history_margin_interests', { body: [] });
 
-    const res = await get(`/api/asset-view/${ADDR}`);
+    const res = await get(`/api/asset-view/${ADDR}?since=0`);
     expect(res.statusCode).toBe(200);
     const { data } = res.json();
 
@@ -304,6 +304,7 @@ describe('GET /api/asset-view/:address', () => {
       settlementsFromSec: 0,
       perpClosedFromSec: 0,
       borosTxnsComplete: true,
+      backfilling: false,
     });
     expect(data.warnings).toHaveLength(0);
   });

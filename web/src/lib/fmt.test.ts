@@ -1,5 +1,23 @@
 import { describe, expect, it } from 'vitest';
-import { bps, feePct, fieldValue, fmtAbout, fmtPct, fmtTokenQty, fmtUsd, num, parseSymbol, sig, sigGrouped, toDate } from './fmt';
+import {
+  bps,
+  feePct,
+  fieldValue,
+  fmtAbout,
+  fmtClock,
+  fmtDateLocal,
+  fmtDateShort,
+  fmtPct,
+  fmtSyncAge,
+  fmtTokenQty,
+  fmtUsd,
+  num,
+  parseDateLocal,
+  parseSymbol,
+  sig,
+  sigGrouped,
+  toDate,
+} from './fmt';
 
 // num/sig expectations are copied from tests/unit/format.test.ts in the repo
 // root — the web port must behave identically to src/core/numbers.ts.
@@ -166,5 +184,40 @@ describe('fieldValue — the string an editable quantity field holds', () => {
   it('answers empty for a value that is not a number', () => {
     expect(fieldValue(Number.NaN)).toBe('');
     expect(fieldValue(Number.POSITIVE_INFINITY)).toBe('');
+  });
+});
+
+describe('local dates', () => {
+  it('reads a date input as local midnight', () => {
+    expect(parseDateLocal('2026-06-23')).toBe(new Date(2026, 5, 23).getTime() / 1000);
+    expect(fmtDateLocal(parseDateLocal('2026-06-23'))).toBe('2026-06-23');
+  });
+
+  it('answers NaN for an input that is not a date', () => {
+    expect(parseDateLocal('')).toBeNaN();
+  });
+
+  it('writes a short date with the year only when asked', () => {
+    const sec = new Date(2026, 5, 23, 10, 51).getTime() / 1000;
+    expect(fmtDateShort(sec, { year: 'numeric' })).toBe('23 Jun 2026');
+    expect(fmtDateShort(new Date(2026, 2, 1).getTime() / 1000)).toBe('1 Mar');
+  });
+
+  it('writes a local clock time as HH:MM', () => {
+    expect(fmtClock(new Date(2026, 8, 18, 9, 5, 59).getTime())).toBe('09:05');
+  });
+});
+
+describe('fmtSyncAge', () => {
+  it.each([
+    [-5_000, '0 s ago'],
+    [59_999, '59 s ago'],
+    [60_000, '1 min ago'],
+    [3_599_000, '59 min ago'],
+    [3_600_000, '1 h ago'],
+    [86_399_000, '23 h ago'],
+    [2 * 86_400_000, '2 d ago'],
+  ])('%d ms reads %s', (ms, text) => {
+    expect(fmtSyncAge(ms)).toBe(text);
   });
 });

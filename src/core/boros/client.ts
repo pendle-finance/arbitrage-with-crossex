@@ -141,14 +141,6 @@ export interface BorosMarket {
    * collateral bucket and cannot draw on the cross pool. Drives §6B of the
    * two-leg panel (a per-market shortfall that must never be summed with
    * another bucket's).
-   *
-   * ⚠ UNVERIFIED WIRE FIELD. The live payload was not observed carrying this
-   * flag when this was written, so it is read defensively from either of the
-   * two plausible homes and defaults to FALSE. False is the safe default: it
-   * routes the leg's margin check at the shared cross bucket, which is the
-   * behaviour every market had before this feature. Confirm the real field
-   * name against a live isolated-only market before relying on §6B. Optional
-   * precisely because it is unconfirmed: absent and false must behave alike.
    */
   isolatedOnly?: boolean;
 }
@@ -174,7 +166,7 @@ export interface BorosMarketPosition {
   side: number;
   /** SIGNED 18-dec string (short positions are negative). */
   notionalSize: string;
-  fixedApr: number;
+  fixedApr: number | null;
   markApr: number;
   pnl: {
     /** Cumulative funding settled for the CURRENT position — verified NET of
@@ -281,13 +273,17 @@ export function setClientTagContext(ctx: { version?: string | null; active?: boo
   }
 }
 
-async function getJson(fetchImpl: FetchLike, path: string): Promise<unknown> {
+async function requestJson(
+  fetchImpl: FetchLike,
+  path: string,
+  init: { method?: string; headers?: Record<string, string>; body?: string } = {},
+): Promise<unknown> {
   const clientTag =
     'pendle_client=boroscrossex' + clientTagState.version + (clientTagState.active ? '_active' : '');
   const url = `${path}${path.includes('?') ? '&' : '?'}${clientTag}`;
   let resp: Awaited<ReturnType<FetchLike>>;
   try {
-    resp = await fetchImpl(url, { signal: AbortSignal.timeout(15_000) });
+    resp = await fetchImpl(url, { ...init, signal: AbortSignal.timeout(15_000) });
   } catch (err) {
     throw new CoreError(
       `Boros API unreachable (${path}): ${(err as Error)?.message ?? String(err)}`,
@@ -320,7 +316,7 @@ export async function fetchBorosMarkets(fetchImpl: FetchLike): Promise<BorosMark
   let resumeToken: string | null = null;
   for (let page = 0; page < 10; page += 1) {
     const cursor = resumeToken ? `&resumeToken=${encodeURIComponent(resumeToken)}` : '';
-    const body = (await getJson(
+    const body = (await requestJson(
       fetchImpl,
       `${BOROS_GATEWAY_BASE_URL}/v1/markets?isMatured=false&limit=200${cursor}`,
     )) as { results?: Array<Record<string, unknown>>; resumeToken?: unknown };
@@ -331,7 +327,8 @@ export async function fetchBorosMarkets(fetchImpl: FetchLike): Promise<BorosMark
     resumeToken = typeof body.resumeToken === 'string' && body.resumeToken ? body.resumeToken : null;
     if (resumeToken === null) break;
   }
-  return out.map(normalizeBorosMarket);
+  const nowSec = Date.now() / 1000;
+  return out.map((m) => normalizeBorosMarket(m, nowSec));
 }
 
 /**
@@ -343,7 +340,7 @@ export async function fetchBorosMarkets(fetchImpl: FetchLike): Promise<BorosMark
  * this wraps the market in `results[]` (max 100 ids per call).
  */
 export async function fetchBorosMarket(fetchImpl: FetchLike, marketId: number): Promise<BorosMarket> {
-  const body = (await getJson(
+  const body = (await requestJson(
     fetchImpl,
     `${BOROS_GATEWAY_BASE_URL}/v1/markets/by-ids?marketIds=${marketId}`,
   )) as { results?: Array<Record<string, unknown>> };
@@ -351,13 +348,14 @@ export async function fetchBorosMarket(fetchImpl: FetchLike, marketId: number): 
   if (!found || !Number.isFinite(Number(found.marketId))) {
     throw new CoreError(`Boros /markets/by-ids ${marketId}: unexpected response shape`, 'network');
   }
-  return normalizeBorosMarket(found);
+  return normalizeBorosMarket(found, Date.now() / 1000);
 }
 
 const MARKET_STATUS: Record<number, string> = { 0: 'Paused', 1: 'CloseOnly', 2: 'Normal' };
 
-function normalizeBorosMarket(m: Record<string, unknown>): BorosMarket {
+function normalizeBorosMarket(m: Record<string, unknown>, nowSec: number): BorosMarket {
   const imData = (m.imData ?? {}) as Record<string, unknown>;
+  const maturity = Number(imData.maturity ?? 0);
     const extConfig = (m.extConfig ?? {}) as Record<string, unknown>;
     const metadata = (m.metadata ?? {}) as Record<string, unknown>;
     const data = (m.data ?? {}) as Record<string, unknown>;
@@ -373,7 +371,7 @@ function normalizeBorosMarket(m: Record<string, unknown>): BorosMarket {
       // across all 46 live markets (diffed 2026-09-17).
       venue: String(platform.platformId ?? ''),
       base: String(metadata.underlyingSymbol ?? ''),
-      maturity: Number(imData.maturity ?? 0),
+      maturity,
       paymentPeriod: Number(extConfig.paymentPeriod ?? 0),
       settleFeeApr: norm18(extConfig.settleFeeRate as string),
       markApr: Number(data.markApr ?? 0),
@@ -385,13 +383,14 @@ function normalizeBorosMarket(m: Record<string, unknown>): BorosMarket {
         (Number(config.maxRateDeviationFactorBase1e4 ?? 0) / 1e4) * Number(data.markApr ?? 0),
       // config.status is the on-chain MarketStatus: 0 Paused, 1 CloseOnly,
       // 2 Normal. Only Normal is tradable; old core labelled CloseOnly "Paused".
-      state: MARKET_STATUS[Number(config.status)] ?? 'Unknown',
+      state:
+        maturity > 0 && maturity <= nowSec ? 'Matured' : (MARKET_STATUS[Number(config.status)] ?? 'Unknown'),
       assetMarkPriceUsd: Number(data.assetMarkPrice ?? 0),
       kIM: norm18(config.kIM as string),
       imTickThresh: Number(imData.iTickThresh ?? 0),
       imTickStep: Number(imData.tickStep ?? 0),
       tThreshSec: Number(config.tThresh ?? 0),
-      isolatedOnly: Boolean(config.isolatedOnly ?? imData.isolatedOnly ?? false),
+      isolatedOnly: imData.isIsolatedOnly === true,
   };
 }
 
@@ -415,7 +414,7 @@ export async function fetchBorosOrderBook(
   // includeAmm defaults false — the same book the old /core/v1/order-books
   // route served, and the wire shape (long/short ia+sz) is unchanged.
   const path = `${BOROS_GATEWAY_BASE_URL}/v1/markets/order-book?marketId=${marketId}&tickSize=${BOROS_BOOK_TICK_SIZE}`;
-  const body = (await getJson(fetchImpl, path)) as {
+  const body = (await requestJson(fetchImpl, path)) as {
     short?: { ia?: unknown; sz?: unknown };
     long?: { ia?: unknown; sz?: unknown };
   };
@@ -498,11 +497,11 @@ export async function fetchBorosCollaterals(
   const marketById = new Map(markets.map((m) => [m.marketId, m]));
   const nowSec = Date.now() / 1000;
   const [infos, actives] = (await Promise.all([
-    getJson(
+    requestJson(
       fetchImpl,
       `${BOROS_GATEWAY_BASE_URL}/v1/accounts/market-acc-infos-by-root?root=${address}`,
     ),
-    getJson(
+    requestJson(
       fetchImpl,
       `${BOROS_GATEWAY_BASE_URL}/v1/accounts/active-positions?root=${address}&accountId=${accountId}`,
     ),
@@ -521,17 +520,25 @@ export async function fetchBorosCollaterals(
   }
 
   const live = new Map<string, Record<string, unknown>>();
+  const byRootAccs = new Set(infos.results.map((r) => String(r.marketAcc ?? '').toLowerCase()));
+  const droppedAccs = new Map<string, string>();
   for (const a of actives.results) {
-    live.set(`${String(a.marketAcc ?? '').toLowerCase()}:${Number(a.marketId)}`, a);
+    const marketAcc = String(a.marketAcc ?? '');
+    live.set(`${marketAcc.toLowerCase()}:${Number(a.marketId)}`, a);
+    if (decodeMarketAcc(marketAcc)?.accountId !== accountId || byRootAccs.has(marketAcc.toLowerCase())) continue;
+    droppedAccs.set(marketAcc.toLowerCase(), marketAcc);
   }
+  const accountRows = infos.results.concat(await fetchMarketAccInfos(fetchImpl, [...droppedAccs.values()]));
 
   const toPosition = (marketAcc: string, p: Record<string, unknown>): BorosMarketPosition => {
+    const side = toBig(p.signedSize) < 0n ? 1 : 0;
     const a = live.get(`${marketAcc.toLowerCase()}:${Number(p.marketId)}`) ?? {};
+    const rate = Number(a.side ?? side) === side ? a.fixedApr : undefined;
     return {
       marketId: Number(p.marketId),
-      side: Number(a.side ?? 0),
+      side,
       notionalSize: String(p.signedSize ?? '0'),
-      fixedApr: Number(a.fixedApr ?? 0),
+      fixedApr: typeof rate === 'number' && Number.isFinite(rate) ? rate : null,
       markApr: marketById.get(Number(p.marketId))?.markApr ?? 0,
       pnl: {
         rateSettlementPnl: String(a.settlementPnl ?? '0'),
@@ -544,7 +551,7 @@ export async function fetchBorosCollaterals(
   };
 
   const zones = new Map<number, BorosCollateralZone>();
-  for (const r of infos.results) {
+  for (const r of accountRows) {
     const marketAcc = String(r.marketAcc ?? '');
     const seg = decodeMarketAcc(marketAcc);
     if (!seg || seg.accountId !== accountId) continue;
@@ -566,6 +573,25 @@ export async function fetchBorosCollaterals(
     zones.set(tokenId, zone);
   }
   return [...zones.values()];
+}
+
+async function fetchMarketAccInfos(
+  fetchImpl: FetchLike,
+  marketAccs: string[],
+): Promise<Array<Record<string, unknown>>> {
+  const rows: Array<Record<string, unknown>> = [];
+  for (let i = 0; i < marketAccs.length; i += 100) {
+    const body = (await requestJson(fetchImpl, `${BOROS_GATEWAY_BASE_URL}/v1/accounts/market-acc-infos`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ marketAccs: marketAccs.slice(i, i + 100) }),
+    })) as { results?: Array<Record<string, unknown>> };
+    if (!Array.isArray(body?.results)) {
+      throw new CoreError('Boros /accounts/market-acc-infos: unexpected response shape (no results[])', 'network');
+    }
+    rows.push(...body.results);
+  }
+  return rows;
 }
 
 /** A raw 18-dec integer string as bigint; exponent forms go through Number. */
@@ -633,7 +659,7 @@ export async function fetchBorosTransactions(
   let complete = false;
   let resumeToken: string | null = null;
   for (let page = 0; page < maxPages; page += 1) {
-    const body = (await getJson(
+    const body = (await requestJson(
       fetchImpl,
       `${BOROS_GATEWAY_BASE_URL}/v1/accounts/position-update-events?marketAcc=${marketAcc}` +
         `&marketId=${marketId}&limit=200` +
@@ -742,8 +768,28 @@ export interface BorosSettlementRow extends BorosSettlementEvent {
 export interface BorosSettlementLedger {
   /** Newest first — the feed's own order (eventIndex descending). */
   rows: BorosSettlementRow[];
-  /** Oldest row read when the page cap was hit; 0 = the account's full history. */
   coversFromSec: number;
+}
+
+export type RequestPacer = () => Promise<void>;
+
+export function createRequestPacer(opts: {
+  perMinute: number;
+  now: () => number;
+  sleep: (ms: number) => Promise<void>;
+}): RequestPacer {
+  const sentAt: number[] = [];
+  return async () => {
+    for (;;) {
+      const now = opts.now();
+      while (sentAt.length > 0 && now - sentAt[0]! >= 60_000) sentAt.shift();
+      if (sentAt.length < opts.perMinute) {
+        sentAt.push(now);
+        return;
+      }
+      await opts.sleep(sentAt[0]! + 60_000 - now);
+    }
+  };
 }
 
 /**
@@ -753,25 +799,29 @@ export interface BorosSettlementLedger {
  * the full history is swept once and every later call reads only the head
  * pages until it meets `prev`'s newest row: 1 CU per refresh instead of a
  * re-sweep per poll per window. A page is 1 CU up to limit=200.
- *
- * If `prev`'s newest row is never met (reorged away, or more new rows than
- * the page cap) the result is a cold sweep and `prev` is dropped.
  */
 export async function syncSettlementLedger(
   fetchImpl: FetchLike,
   address: string,
-  accountId = 0,
-  prev?: BorosSettlementLedger,
+  accountId: number,
+  prev: BorosSettlementLedger | undefined,
+  opts: { floorSec: number; pace: RequestPacer },
 ): Promise<BorosSettlementLedger> {
   const clientTag =
     'pendle_client=boroscrossex' + clientTagState.version + (clientTagState.active ? '_active' : '');
   const headId = prev?.rows[0]?.id;
-  const rows: BorosSettlementRow[] = [];
+  const prevIds = new Set(prev?.rows.map((r) => r.id));
+  const fresh: BorosSettlementRow[] = [];
+  const older: BorosSettlementRow[] = [];
+  let metHead = false;
+  let oldestSec = Number.POSITIVE_INFINITY;
+  const ledgerCovering = (coversFromSec: number): BorosSettlementLedger =>
+    prev && metHead
+      ? { rows: [...fresh.filter((r) => !prevIds.has(r.id)), ...prev.rows, ...older], coversFromSec }
+      : { rows: fresh, coversFromSec };
   let resumeToken: string | null = null;
-  // 30 pages × 200 ≈ 6k settlements ≈ 8 months of hourly rows on one market —
-  // a runaway guard, not an expected ceiling.
-  const maxPages = 30;
-  for (let page = 0; page < maxPages; page += 1) {
+  for (;;) {
+    await opts.pace();
     const url =
       `${BOROS_GATEWAY_BASE_URL}/v1/accounts/settlement-events?root=${address}` +
       `&accountId=${accountId}&limit=200` +
@@ -799,16 +849,23 @@ export async function syncSettlementLedger(
     if (!Array.isArray(body?.results)) {
       throw new CoreError('Boros settlement-events: unexpected response shape (no results[])', 'network');
     }
+    let pageOldestSec = Number.POSITIVE_INFINITY;
     for (const r of body.results) {
       const id = String(r.id ?? '');
-      if (prev && headId !== undefined && id === headId) {
-        return { rows: rows.concat(prev.rows), coversFromSec: prev.coversFromSec };
-      }
       const timeSec = Number(r.timestamp);
-      if (!Number.isFinite(timeSec) || timeSec <= 0) continue;
+      const isTimed = Number.isFinite(timeSec) && timeSec > 0;
+      if (isTimed) pageOldestSec = Math.min(pageOldestSec, timeSec);
+      if (prev && !metHead && id === headId) {
+        metHead = true;
+        if (prev.coversFromSec === 0 || prev.coversFromSec < opts.floorSec) {
+          return ledgerCovering(prev.coversFromSec);
+        }
+        continue;
+      }
+      if (!isTimed || (metHead && prevIds.has(id))) continue;
       const marketAcc = String(r.marketAcc ?? '');
       const seg = decodeMarketAcc(marketAcc);
-      rows.push({
+      (metHead ? older : fresh).push({
         id,
         marketAcc,
         tokenId: seg && seg.accountId === accountId ? seg.tokenId : null,
@@ -820,12 +877,11 @@ export async function syncSettlementLedger(
         settlementRate: Number(r.settlementRate ?? Number.NaN),
       });
     }
+    oldestSec = Math.min(oldestSec, pageOldestSec);
     resumeToken = body.resumeToken ?? null;
-    if (!resumeToken || body.results.length === 0) {
-      return { rows, coversFromSec: 0 };
-    }
+    if (!resumeToken || body.results.length === 0) return ledgerCovering(0);
+    if (pageOldestSec < opts.floorSec) return ledgerCovering(oldestSec);
   }
-  return { rows, coversFromSec: rows.length > 0 ? rows[rows.length - 1]!.timeSec : 0 };
 }
 
 /**

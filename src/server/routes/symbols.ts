@@ -1,5 +1,6 @@
 import type { Symbol as RuleSymbol } from 'gate-api';
 import type { FastifyInstance } from 'fastify';
+import { isSupportedCoin } from '../../core/coins';
 import { CoreError } from '../../core/errors';
 import { parseSymbol } from '../../core/numbers';
 import type { AppDeps } from '../app';
@@ -81,7 +82,8 @@ async function livePerps(
   const list = value
     .filter((r) => r.businessType === 'FUTURE' && r.state === 'live')
     .map(toInfo)
-    .filter((s) => EXCLUDED_QUOTE_TWINS[s.exchange] !== s.quote);
+    .filter((s) => EXCLUDED_QUOTE_TWINS[s.exchange] !== s.quote)
+    .filter((s) => isSupportedCoin(s.base));
   return { list, stale };
 }
 

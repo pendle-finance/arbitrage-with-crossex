@@ -40,8 +40,16 @@ describe('GET /api/symbols', () => {
     const res = await app.inject({ method: 'GET', url: '/api/symbols?exchange=GATE', headers: HOST });
 
     const rows: SymbolRow[] = res.json().data;
-    expect(rows.map((r) => r.symbol).sort()).toEqual(['GATE_FUTURE_ETH_USDT', 'GATE_FUTURE_SOL_USDT']);
-    // GATE_FUTURE_DOGE_USDT (state=delisting) never appears.
+    expect(rows.map((r) => r.symbol).sort()).toEqual(['GATE_FUTURE_ETH_USDT']);
+  });
+
+  it('a delisting row on a supported coin is dropped for being delisting, not for its coin', async () => {
+    app = makeTestApp();
+    mockGateGet('/rule/symbols', { fixture: 'rule-symbols.json' });
+
+    const res = await app.inject({ method: 'GET', url: '/api/symbols?base=HYPE', headers: HOST });
+
+    expect(res.json().data).toEqual([]);
   });
 
   it('?multiOnly=1 keeps multi-venue bases and drops singles', async () => {

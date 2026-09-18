@@ -114,3 +114,11 @@ export function restrictToOwner(target: string): void {
     /* best-effort: never block startup or a credential write on a permissions call */
   }
 }
+
+export function writeOwnerOnlyJson(filePath: string, data: unknown): void {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
+  const tmp = `${filePath}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(data), { mode: 0o600 });
+  restrictToOwner(tmp);
+  fs.renameSync(tmp, filePath);
+}

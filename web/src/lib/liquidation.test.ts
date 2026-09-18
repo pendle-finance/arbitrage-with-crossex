@@ -7,6 +7,7 @@ import {
   lineFor,
   lineLabel,
   liquidationLines,
+  liquidationSides,
   nearestLiquidation,
   type LiquidationLine,
 } from './liquidation';
@@ -252,6 +253,31 @@ describe('liquidationLines', () => {
     expect(lineFor(view, 'HYPE')).toBe('far');
     expect(view.far).toEqual(['HYPE']);
     expect(view.lines[0].base).toBe('ETH');
+  });
+});
+
+describe('liquidationSides', () => {
+  it('gives both lines of a book that borrows either way, each with the losing leg and its exchange', () => {
+    const flipped = box();
+    flipped.exposure[0].legs[0].side = 'SHORT';
+    flipped.exposure[0].legs[1].side = 'LONG';
+    const sides = liquidationSides(account(), flipped, 'eth');
+    expect(sides?.up?.move).toBeCloseTo(47000 / 27500 - 1, 4);
+    expect(sides?.up).toMatchObject({ base: 'ETH', venue: 'CrossEx', exchange: 'GATE', side: 'short' });
+    expect(sides?.down?.move).toBeCloseTo(5000 / 22500 - 1, 4);
+    expect(sides?.down).toMatchObject({ base: 'ETH', venue: 'Hyperliquid', exchange: 'HYPERLIQUID', side: 'long' });
+    expect(lines(account(), flipped)[0].price).toBe(sides?.up?.price);
+  });
+
+  it('puts both lines at the mark when the account is at liquidation now', () => {
+    const sides = liquidationSides(account({ marginBalance: '2500' }), box(), 'ETH');
+    expect(sides?.up).toMatchObject({ price: 2300, move: 0, exchange: 'HYPERLIQUID', side: 'short' });
+    expect(sides?.down).toMatchObject({ price: 2300, move: 0, exchange: 'GATE', side: 'long' });
+  });
+
+  it('is null without margin figures, and empty for a coin not held', () => {
+    expect(liquidationSides(account({ marginBalance: 'x' }), box(), 'ETH')).toBeNull();
+    expect(liquidationSides(account(), box(), 'BTC')).toEqual({ down: null, up: null });
   });
 });
 

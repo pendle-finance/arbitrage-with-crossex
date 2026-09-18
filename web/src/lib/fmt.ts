@@ -224,6 +224,14 @@ export function fmtDateLocal(unixSec: number | null | undefined): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
+export function parseDateLocal(value: string): number {
+  return Math.floor(new Date(`${value}T00:00`).getTime() / 1000);
+}
+
+export function fmtDateShort(unixSec: number, options: { year?: 'numeric' } = {}): string {
+  return new Date(unixSec * 1000).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: options.year });
+}
+
 /** "HH:MM:SS" today, "MM-DD HH:MM:SS" otherwise. */
 export function fmtTime(d: Date | null): string {
   if (!d) return '—';
@@ -235,4 +243,19 @@ export function fmtTime(d: Date | null): string {
     d.getMonth() === now.getMonth() &&
     d.getDate() === now.getDate();
   return sameDay ? hms : `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${hms}`;
+}
+
+export function fmtClock(ms: number): string {
+  const d = new Date(ms);
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
+export function fmtSyncAge(ms: number): string {
+  const seconds = Math.max(0, Math.floor(ms / 1000));
+  if (seconds < 60) return `${seconds} s ago`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes} min ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} h ago`;
+  return `${Math.floor(hours / 24)} d ago`;
 }

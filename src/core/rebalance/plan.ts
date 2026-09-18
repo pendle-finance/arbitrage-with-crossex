@@ -7,7 +7,7 @@ export const LIGHTER_WALLET = { coin: 'USDC', venue: 'LIGHTER' } as const;
 export const USDT_WALLET = { coin: 'USDT', venue: 'CROSSEX' } as const;
 export const SPOT_SYMBOL = 'GATE_SPOT_USDC_USDT';
 export const SPOT_PAIR = 'USDC_USDT';
-const HYPERLIQUID_FREE_BORROW_USDC = 10000;
+export const HYPERLIQUID_FREE_BORROW_USDC = 10_000;
 export const CONVERT_RATE = 0.002;
 export const CONVERT_MAX = 500_000;
 /** A pair's USDT half is its USDC half x bid x 0.998, so 495,000 keeps that half under Gate's 500,000 Convert cap while the USDC bid is at most 1.0121. */

@@ -40,6 +40,7 @@ import type {
   BorosPairRequest,
   BorosPairResult,
 } from '../api/types';
+import { Chip } from '../components/Chip';
 import { HoldToConfirmButton } from '../components/HoldToConfirmButton';
 import { size as fmtSize, type SoloLeg } from './BorosPairBits';
 import { QueryError } from '../components/QueryError';
@@ -654,8 +655,15 @@ export function BorosPairTicket({
         ]
       : []),
   ];
+  const closeOnlyLeg: 'A' | 'B' | null =
+    intent === 'open' ? (rowA?.closeOnly ? 'A' : rowB?.closeOnly ? 'B' : null) : null;
+
   const canConfirm =
-    request !== null && simulation !== null && blockers.length === 0 && !execute.isPending;
+    request !== null &&
+    simulation !== null &&
+    blockers.length === 0 &&
+    !execute.isPending &&
+    closeOnlyLeg === null;
 
   const onConfirm = () => {
     if (!request) return;
@@ -768,40 +776,64 @@ export function BorosPairTicket({
       {mode === 'pair' ? (
         <div className="flex flex-col gap-2">
           <div className="grid grid-cols-2 gap-2">
-            <MarketCard
-              label="Market A"
-              row={rowA}
-              side={dirA}
-              locked={guided}
-            >
-              <MarketSelect
-                id="boros-leg-a"
-                label=""
-                ariaLabel="Leg A"
-                value={marketA}
-                markets={markets}
-                reasonFor={reasonAgainst(rowB)}
-                onPick={setMarketA}
-                disabled={context.isPending}
-              />
-            </MarketCard>
-            <MarketCard
-              label="Market B"
-              row={rowB}
-              side={dirB}
-              locked={guided}
-            >
-              <MarketSelect
-                id="boros-leg-b"
-                label=""
-                ariaLabel="Leg B"
-                value={marketB}
-                markets={markets}
-                reasonFor={reasonAgainst(rowA)}
-                onPick={setMarketB}
-                disabled={context.isPending}
-              />
-            </MarketCard>
+            <div className="relative">
+              <MarketCard
+                label="Market A"
+                row={rowA}
+                side={dirA}
+                locked={guided}
+              >
+                <MarketSelect
+                  id="boros-leg-a"
+                  label=""
+                  ariaLabel="Leg A"
+                  value={marketA}
+                  markets={markets}
+                  reasonFor={reasonAgainst(rowB)}
+                  onPick={setMarketA}
+                  disabled={context.isPending}
+                />
+              </MarketCard>
+              {rowA?.closeOnly && (
+                <Chip
+                  tone="amber"
+                  sm
+                  className="absolute right-2 top-2"
+                  title="This market only accepts orders that reduce your position."
+                >
+                  close only
+                </Chip>
+              )}
+            </div>
+            <div className="relative">
+              <MarketCard
+                label="Market B"
+                row={rowB}
+                side={dirB}
+                locked={guided}
+              >
+                <MarketSelect
+                  id="boros-leg-b"
+                  label=""
+                  ariaLabel="Leg B"
+                  value={marketB}
+                  markets={markets}
+                  reasonFor={reasonAgainst(rowA)}
+                  onPick={setMarketB}
+                  disabled={context.isPending}
+                />
+              </MarketCard>
+              {rowB?.closeOnly && (
+                <Chip
+                  tone="amber"
+                  sm
+                  className="absolute right-2 top-2"
+                  title="This market only accepts orders that reduce your position."
+                >
+                  close only
+                </Chip>
+              )}
+            </div>
           </div>
           {/* No direction control here: each card STATES its side (A short,
               B long — or the mirror when a card prefills a hedge), and which
@@ -1218,11 +1250,13 @@ export function BorosPairTicket({
           >
             {execute.isPending
               ? 'Sending…'
-              : onlyLeg
-                ? `Confirm — complete leg ${onlyLeg} ▸`
-                : mode === 'single'
-                  ? 'Confirm — 1 Boros market order ▸'
-                  : 'Confirm — 2 Boros market orders ▸'}
+              : closeOnlyLeg
+                ? `Market ${closeOnlyLeg} takes closes only. Switch to Close.`
+                : onlyLeg
+                  ? `Confirm — complete leg ${onlyLeg} ▸`
+                  : mode === 'single'
+                    ? 'Confirm — 1 Boros market order ▸'
+                    : 'Confirm — 2 Boros market orders ▸'}
           </HoldToConfirmButton>
           {/* Every market this will touch, NAMED before anything is sent —
               the names are the part the button cannot show. It already says

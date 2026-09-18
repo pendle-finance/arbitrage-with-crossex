@@ -1007,6 +1007,7 @@ export interface BorosPairMarketRow {
   /** Signed netted position on this market, collateral units (+ long fixed). */
   currentSize: number;
   collateralPriceUsd: number | null;
+  closeOnly: boolean;
 }
 
 /** GET /api/boros/pair/context */
@@ -1305,7 +1306,7 @@ export interface AssetBorosOpen {
   /** |notionalSize| in the collateral token. */
   sizeToken: number;
   notionalUsd: number;
-  entryApr: number;
+  entryApr: number | null;
   markApr: number;
   floatingApr: number;
   /** Cumulative settlement of the CURRENT position (display only — totals
@@ -1351,6 +1352,7 @@ export interface AssetBorosHistory {
 
 export interface AssetGroup {
   base: string;
+  supported: boolean;
   /** USD price of the underlying (0 = unknown). */
   priceUsd: number;
   /** Earliest activity instant in THIS asset's sums (APR clock floor). */
@@ -1364,7 +1366,9 @@ export interface AssetGroup {
 export interface AssetViewResponse {
   sinceSec: number;
   nowSec: number;
+  defaultSinceSec: number | null;
   assets: AssetGroup[];
+  supportedCoins: string[];
   /** Earliest activity instant in any sum — the APR clock floor. */
   earliestSec: number | null;
   coverage: {
@@ -1373,6 +1377,7 @@ export interface AssetViewResponse {
     /** Oldest closed-position row read when capped; 0 = complete. */
     perpClosedFromSec: number;
     borosTxnsComplete: boolean;
+    backfilling: boolean;
   };
   /** Margin-borrow interest paid by the CrossEx account inside the window —
    * account-level, so it is charged on the total and not on any card.
@@ -1384,4 +1389,23 @@ export interface AssetViewResponse {
     available: boolean;
   };
   warnings: string[];
+}
+
+export interface TelegramInfo {
+  connected: boolean;
+  state: 'none' | 'connected' | 'replaced' | 'removed';
+  settings: { liquidation: boolean; interest: boolean } | null;
+  lastSyncAt: number | null;
+  lastSyncError: { at: number; message: string } | null;
+}
+
+export interface TelegramLinkStart {
+  url: string;
+  expiresAt: number;
+}
+
+export interface TelegramLinkStatus {
+  status: 'none' | 'pending' | 'confirmed' | 'expired';
+  url: string | null;
+  expiresAt: number | null;
 }

@@ -32,6 +32,7 @@ export interface LoopDeps {
    * 'unknown' outcomes; the loop itself keeps no in-memory state, so any other
    * crash point is just "a fresh tick".) */
   crashAfterCommit?: () => boolean;
+  onFinish?: (pairId: string) => void;
 }
 
 // Open-world status decoder: known strings map; anything else is quarantined,
@@ -465,6 +466,7 @@ async function perform(deps: LoopDeps, pair: PairRow, action: Action): Promise<v
           );
         }
       }
+      deps.onFinish?.(pair.id);
       return;
     }
   }

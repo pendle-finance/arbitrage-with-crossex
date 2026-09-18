@@ -43,6 +43,7 @@ const yu = (o: Partial<AssetBorosOpen> & { venue: string; side: 'LONG' | 'SHORT'
 
 const group = (o: Partial<AssetGroup>): AssetGroup => ({
   base: 'ETH',
+  supported: true,
   priceUsd: 2500,
   earliestSec: NOW - 10 * DAY,
   perpOpen: [],
@@ -257,5 +258,38 @@ describe('pairs are 4-leg units at one maturity', () => {
     // OKX pairs against HL's OCT leg only — the bug that started this.
     expect(okx.legs.filter((l) => l.kind === 'yu').every((l) => l.maturity === OCT)).toBe(true);
     expect(d.pendingLegs).toHaveLength(0);
+  });
+});
+
+describe('a Boros leg with no entry rate yet', () => {
+  const perps = () => [perp({ venue: 'GATE', side: 'LONG', qty: 100 }), perp({ venue: 'HYPERLIQUID', side: 'SHORT', qty: 100 })];
+  const sepPair = (gateEntry: number | null) => [
+    yu({ venue: 'GATE', side: 'LONG', sizeToken: 100, maturity: SEP, entryApr: gateEntry }),
+    yu({ venue: 'HYPERLIQUID', side: 'SHORT', sizeToken: 100, maturity: SEP, entryApr: 0.08 }),
+  ];
+
+  it('leaves the locked rate unknown instead of reading the leg as 0%', () => {
+    mid = 1;
+    const known = deriveAsset(group({ perpOpen: perps(), borosOpen: sepPair(0.04) }), {}, 0, NOW);
+    expect(known.pairs[0].lockedAprFwd).not.toBeNull();
+    expect(known.lockedAprFwd).not.toBeNull();
+
+    mid = 1;
+    const d = deriveAsset(group({ perpOpen: perps(), borosOpen: sepPair(null) }), {}, 0, NOW);
+    expect(d.pairs[0].lockedAprFwd).toBeNull();
+    expect(d.pairs[0].legs.find((l) => l.kind === 'yu' && l.venue === 'GATE')?.lockedApr).toBeNull();
+    expect(d.pairs[0].legs.find((l) => l.kind === 'yu' && l.venue === 'HYPERLIQUID')?.lockedApr).toBeCloseTo(0.08, 9);
+    expect(d.lockedAprFwd).toBeNull();
+    expect(d.lockedCarryPerYearUsd).toBeNull();
+    expect(d.lockedToMaturityUsd).toBeNull();
+  });
+
+  it('a pending leg with no entry rate shows no locked rate', () => {
+    mid = 1;
+    const orphan = yu({ venue: 'HYPERLIQUID', side: 'SHORT', sizeToken: 40, maturity: OCT, entryApr: null });
+    const d = deriveAsset(group({ perpOpen: perps(), borosOpen: [...sepPair(0.04), orphan] }), {}, 0, NOW);
+    expect(d.pendingLegs).toHaveLength(1);
+    expect(d.pendingLegs[0].lockedApr).toBeNull();
+    expect(d.pairs[0].lockedAprFwd).not.toBeNull();
   });
 });

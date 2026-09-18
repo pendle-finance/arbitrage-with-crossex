@@ -39,9 +39,12 @@ import {
   AUTO_TOP_UP_BELOW_USD,
   AUTO_TOP_UP_USD,
   BOROS_TOKEN_SYMBOLS,
+  norm18,
   type BorosMarket,
   type BorosOrderBook,
 } from './client';
+import { absWei, decimalString } from './borosApi';
+import { parseUnits } from 'viem';
 
 /** Default per-leg tolerance: 25 ticks of APR. Wide enough that a normal
  * two-or-three-level walk is not rejected, tight enough that the worst-case
@@ -97,7 +100,8 @@ export type PairIneligibleCode =
   | 'different-collateral'
   | 'different-maturity'
   | 'same-market'
-  | 'not-tradable';
+  | 'not-tradable'
+  | 'close-only';
 
 export interface PairEligibility {
   eligible: boolean;
@@ -115,6 +119,7 @@ export function pairEligibility(
   a: BorosMarket,
   b: BorosMarket,
   nowSec: number,
+  intent: PairIntent = 'open',
 ): PairEligibility {
   const no = (code: PairIneligibleCode, reason: string): PairEligibility => ({
     eligible: false,
@@ -124,12 +129,17 @@ export function pairEligibility(
   if (a.marketId === b.marketId) {
     return no('same-market', 'same market — a leg cannot offset itself');
   }
-  const dead = [a, b].find((m) => m.state !== 'Normal' || m.maturity <= nowSec);
+  const dead = [a, b].find(
+    (m) => (m.state !== 'Normal' && m.state !== 'CloseOnly') || m.maturity <= nowSec,
+  );
   if (dead) {
     return no(
       'not-tradable',
       dead.maturity <= nowSec ? `${dead.name} has matured` : `${dead.name} is not trading`,
     );
+  }
+  if (intent !== 'close' && [a, b].some((m) => m.state === 'CloseOnly')) {
+    return no('close-only', 'This market takes closes only. Switch to Close.');
   }
   if (a.tokenId !== b.tokenId) {
     const nameOf = (m: BorosMarket) => BOROS_TOKEN_SYMBOLS[m.tokenId] ?? `token#${m.tokenId}`;
@@ -243,6 +253,18 @@ export function resolveLegSizing(
     clampedToClose,
     orderSide: delta === 0 ? direction : delta > 0 ? 'long' : 'short',
   };
+}
+
+export interface ReducingOrderSize {
+  size: number;
+  sizeWei: string | undefined;
+}
+
+export function reducingOrderSize(openSizeWei: string, requested: number): ReducingOrderSize {
+  const size = Math.min(requested, Math.abs(norm18(openSizeWei)));
+  const open = absWei(openSizeWei);
+  if (open === null) return { size, sizeWei: undefined };
+  return { size, sizeWei: parseUnits(decimalString(size), 18) > open ? open.toString() : undefined };
 }
 
 // ---------------------------------------------------------------------------

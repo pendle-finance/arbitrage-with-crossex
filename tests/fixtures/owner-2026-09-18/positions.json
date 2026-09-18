@@ -1,0 +1,107 @@
+{
+  "positions": [
+    {
+      "userId": "0",
+      "positionId": "1",
+      "symbol": "OKX_FUTURE_ETH_USDT",
+      "markPrice": "2472.84",
+      "maintenanceMargin": "3.276513"
+    },
+    {
+      "userId": "0",
+      "positionId": "2",
+      "symbol": "LIGHTER_FUTURE_ETH_USDC",
+      "markPrice": "2472.94",
+      "maintenanceMargin": "3.1529985"
+    },
+    {
+      "userId": "0",
+      "positionId": "3",
+      "symbol": "HYPERLIQUID_FUTURE_HYPE_USDC",
+      "markPrice": "86.585",
+      "maintenanceMargin": "10.106634125"
+    },
+    {
+      "userId": "0",
+      "positionId": "4",
+      "symbol": "GATE_FUTURE_HYPE_USDT",
+      "markPrice": "86.597",
+      "maintenanceMargin": "3.136976325"
+    },
+    {
+      "userId": "0",
+      "positionId": "5",
+      "symbol": "BINANCE_FUTURE_ETH_USDT",
+      "markPrice": "2473.01398156",
+      "maintenanceMargin": "0.7109915196985"
+    },
+    {
+      "userId": "0",
+      "positionId": "6",
+      "symbol": "GATE_FUTURE_ETH_USDT",
+      "markPrice": "2472.74",
+      "maintenanceMargin": "14.752985025"
+    },
+    {
+      "userId": "0",
+      "positionId": "7",
+      "symbol": "HYPERLIQUID_FUTURE_ETH_USDC",
+      "markPrice": "2473.41",
+      "maintenanceMargin": "31.82041965"
+    }
+  ],
+  "exposure": [
+    {
+      "base": "ETH",
+      "legs": [
+        {
+          "symbol": "OKX_FUTURE_ETH_USDT",
+          "exchange": "OKX",
+          "side": "LONG",
+          "value": 247.284
+        },
+        {
+          "symbol": "LIGHTER_FUTURE_ETH_USDC",
+          "exchange": "LIGHTER",
+          "side": "SHORT",
+          "value": 247.294
+        },
+        {
+          "symbol": "BINANCE_FUTURE_ETH_USDT",
+          "exchange": "BINANCE",
+          "side": "LONG",
+          "value": 123.650699078
+        },
+        {
+          "symbol": "GATE_FUTURE_ETH_USDT",
+          "exchange": "GATE",
+          "side": "LONG",
+          "value": 1372.3707
+        },
+        {
+          "symbol": "HYPERLIQUID_FUTURE_ETH_USDC",
+          "exchange": "HYPERLIQUID",
+          "side": "SHORT",
+          "value": 1533.5142
+        }
+      ]
+    },
+    {
+      "base": "HYPE",
+      "legs": [
+        {
+          "symbol": "HYPERLIQUID_FUTURE_HYPE_USDC",
+          "exchange": "HYPERLIQUID",
+          "side": "SHORT",
+          "value": 199.1455
+        },
+        {
+          "symbol": "GATE_FUTURE_HYPE_USDT",
+          "exchange": "GATE",
+          "side": "LONG",
+          "value": 199.1731
+        }
+      ]
+    }
+  ]
+}

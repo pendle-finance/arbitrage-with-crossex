@@ -1,5 +1,5 @@
 import type { FastifyReply, FastifyRequest } from 'fastify';
-import { CoreError, type ClassifiedError } from '../core/errors';
+import { classifyGateError, CoreError, type ClassifiedError, type ErrorCategory } from '../core/errors';
 
 function statusFor(classified: ClassifiedError, err: unknown): number {
   switch (classified.category) {
@@ -38,4 +38,20 @@ export function sendError(
     });
   }
   return reply.code(status).send({ ok: false, error: classified });
+}
+
+export const catchRateLimit = <T>(read: Promise<T>): Promise<T | null> =>
+  read.catch((err: unknown) => {
+    if (classifyGateError(err).category === 'rate-limited') return null;
+    throw err;
+  });
+
+export function refuse(
+  reply: FastifyReply,
+  code: number,
+  category: ErrorCategory,
+  message: string,
+  retryable: boolean,
+): FastifyReply {
+  return reply.code(code).send({ ok: false, error: { category, message, retryable } });
 }

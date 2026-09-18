@@ -49,7 +49,7 @@ const STEP_LABEL: Record<Exclude<Step, 'idle'>, string> = {
   saving: 'Handing the key to your terminal…',
 };
 
-export function BorosAgentSetup() {
+export function BorosAgentSetup({ onDone }: { onDone?: (root: string) => void }) {
   const status = useBorosAgent();
   const provision = useProvisionBorosAgent();
   const forget = useForgetBorosAgent();
@@ -102,6 +102,7 @@ export function BorosAgentSetup() {
       setNote(
         `Done — this terminal can place Boros orders until ${new Date(expiry * 1000).toLocaleDateString()}.`,
       );
+      onDone?.(wallet.address);
     } catch (err) {
       setError(describeWalletError(err));
     } finally {
@@ -180,6 +181,7 @@ export function BorosAgentSetup() {
         <li>2. Approve the agent — one on-chain transaction</li>
         <li>3. The key is stored on this machine only</li>
       </ol>
+      <p className="mt-1.5 text-[10.5px] leading-relaxed text-ink-300">Approval cost: free</p>
       <p className="mt-1.5 text-[10.5px] leading-relaxed text-ink-500">
         The agent can <span className="text-ink-300">trade</span> this account. It{' '}
         <span className="text-ink-300">cannot deposit or withdraw</span> — Boros requires your

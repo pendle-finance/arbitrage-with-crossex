@@ -40,6 +40,7 @@ const F_MIN = 0.02;
 
 interface Leg {
   base: string;
+  exchange: string;
   wallet: string;
   sign: 1 | -1;
   value: number;
@@ -62,6 +63,7 @@ function legsOf(positions: PositionsResponse): Leg[] {
       if (!p || !(l.value > 0)) continue;
       legs.push({
         base: g.base,
+        exchange: l.exchange,
         wallet: walletOf(l.exchange),
         sign: l.side === 'LONG' ? 1 : -1,
         value: l.value,
@@ -85,6 +87,60 @@ function root(g: (f: number) => number, lo: number, hi: number): number {
   return (a + b) / 2;
 }
 
+interface MarginModel {
+  legs: Leg[];
+  gapOf: (mine: Leg[]) => (f: number) => number;
+}
+
+function marginModel(acc: CrossexAccount, positions: PositionsResponse, shift: WalletShift): MarginModel | null {
+  const marginBalance = Number(acc.marginBalance);
+  const maintenance = Number(acc.maintenanceMargin);
+  if (!Number.isFinite(marginBalance) || !Number.isFinite(maintenance)) return null;
+  const legs = legsOf(positions);
+
+  const equityNow = new Map<string, number>();
+  for (const a of acc.assets) equityNow.set(`${a.coin}/${a.exchangeType}`, Number(a.equity) || 0);
+  const wallets = [...new Set([...equityNow.keys(), ...legs.map((l) => l.wallet)])];
+  const liabilityOf = (equity: (w: string) => number) =>
+    wallets.reduce((sum, w) => sum + Math.max(0, -equity(w)), 0);
+  const liabilityNow = liabilityOf((w) => equityNow.get(w) ?? 0);
+
+  const gapOf =
+    (mine: Leg[]) =>
+    (f: number): number => {
+      const d = f - 1;
+      const upnl = mine.reduce((s, l) => s + l.sign * l.value * d, 0);
+      const mm = mine.reduce((s, l) => s + l.mm * d, 0);
+      const liability = liabilityOf(
+        (w) =>
+          (equityNow.get(w) ?? 0) +
+          (shift[w] ?? 0) +
+          mine.filter((l) => l.wallet === w).reduce((s, l) => s + l.sign * l.value * d, 0),
+      );
+      return marginBalance + upnl - (maintenance + mm + BORROW_MM * (liability - liabilityNow));
+    };
+  return { legs, gapOf };
+}
+
+function crossings(g: (f: number) => number): { down: number | null; up: number | null } {
+  if (g(1) <= 0) return { down: 1, up: 1 };
+  return {
+    down: g(F_MIN) <= 0 ? root(g, F_MIN, 1) : null,
+    up: g(F_MAX) <= 0 ? root(g, 1, F_MAX) : null,
+  };
+}
+
+function lineAt(mine: Leg[], f: number, losingSign: 1 | -1): { line: LiquidationLine; exchange: string } {
+  const biggest = mine.reduce((a, b) => (b.value > a.value ? b : a));
+  const losing = mine.filter((l) => l.sign === losingSign);
+  const loser = (losing.length > 0 ? losing : mine).reduce((a, b) => (b.value > a.value ? b : a));
+  const side = losing.length === 0 ? null : loser.sign === 1 ? 'long' : 'short';
+  return {
+    line: { base: loser.base, venue: WALLET_SHORT[loser.wallet], side, price: biggest.mark * f, move: f - 1 },
+    exchange: loser.exchange,
+  };
+}
+
 /** The lines the model found, nearest first, and the coins it priced to
  * 10x and 2% without finding one. A coin in neither has no priced leg. */
 export interface LiquidationView {
@@ -99,52 +155,51 @@ export function liquidationLines(
   positions: PositionsResponse,
   shift: WalletShift = {},
 ): LiquidationView | null {
-  const marginBalance = Number(acc.marginBalance);
-  const maintenance = Number(acc.maintenanceMargin);
-  if (!Number.isFinite(marginBalance) || !Number.isFinite(maintenance)) return null;
-  const legs = legsOf(positions);
-
-  const equityNow = new Map<string, number>();
-  for (const a of acc.assets) equityNow.set(`${a.coin}/${a.exchangeType}`, Number(a.equity) || 0);
-  const wallets = [...new Set([...equityNow.keys(), ...legs.map((l) => l.wallet)])];
-  const liabilityOf = (equity: (w: string) => number) =>
-    wallets.reduce((sum, w) => sum + Math.max(0, -equity(w)), 0);
-  const liabilityNow = liabilityOf((w) => equityNow.get(w) ?? 0);
+  const model = marginModel(acc, positions, shift);
+  if (model === null) return null;
 
   const lines: LiquidationLine[] = [];
   const far: string[] = [];
-  for (const base of new Set(legs.map((l) => l.base))) {
-    const mine = legs.filter((l) => l.base === base);
-    const g = (f: number): number => {
-      const d = f - 1;
-      const upnl = mine.reduce((s, l) => s + l.sign * l.value * d, 0);
-      const mm = mine.reduce((s, l) => s + l.mm * d, 0);
-      const liability = liabilityOf(
-        (w) =>
-          (equityNow.get(w) ?? 0) +
-          (shift[w] ?? 0) +
-          mine.filter((l) => l.wallet === w).reduce((s, l) => s + l.sign * l.value * d, 0),
-      );
-      return marginBalance + upnl - (maintenance + mm + BORROW_MM * (liability - liabilityNow));
-    };
-    const candidates: number[] = [];
-    if (g(1) <= 0) candidates.push(1);
-    else {
-      if (g(F_MAX) <= 0) candidates.push(root(g, 1, F_MAX));
-      if (g(F_MIN) <= 0) candidates.push(root(g, F_MIN, 1));
-    }
+  for (const base of new Set(model.legs.map((l) => l.base))) {
+    const mine = model.legs.filter((l) => l.base === base);
+    const { down, up } = crossings(model.gapOf(mine));
+    const candidates = [up, down].filter((f): f is number => f !== null);
     if (candidates.length === 0) {
       far.push(base);
       continue;
     }
     const f = candidates.reduce((a, b) => (Math.abs(a - 1) <= Math.abs(b - 1) ? a : b));
-    const biggest = mine.reduce((a, b) => (b.value > a.value ? b : a));
-    const losing = mine.filter((l) => (f > 1 ? l.sign === -1 : l.sign === 1));
-    const loser = (losing.length > 0 ? losing : mine).reduce((a, b) => (b.value > a.value ? b : a));
-    const side = losing.length === 0 ? null : loser.sign === 1 ? 'long' : 'short';
-    lines.push({ base, venue: WALLET_SHORT[loser.wallet], side, price: biggest.mark * f, move: f - 1 });
+    lines.push(lineAt(mine, f, f > 1 ? -1 : 1).line);
   }
   return { lines: lines.sort((a, b) => Math.abs(a.move) - Math.abs(b.move)), far };
+}
+
+export interface LiquidationSide extends LiquidationLine {
+  exchange: string;
+}
+
+export interface LiquidationSides {
+  down: LiquidationSide | null;
+  up: LiquidationSide | null;
+}
+
+export function liquidationSides(
+  acc: CrossexAccount,
+  positions: PositionsResponse,
+  base: string,
+): LiquidationSides | null {
+  const model = marginModel(acc, positions, {});
+  if (model === null) return null;
+  const upper = base.toUpperCase();
+  const mine = model.legs.filter((l) => l.base.toUpperCase() === upper);
+  if (mine.length === 0) return { down: null, up: null };
+  const { down, up } = crossings(model.gapOf(mine));
+  const sideAt = (f: number | null, losingSign: 1 | -1): LiquidationSide | null => {
+    if (f === null) return null;
+    const { line, exchange } = lineAt(mine, f, losingSign);
+    return { ...line, exchange };
+  };
+  return { down: sideAt(down, 1), up: sideAt(up, -1) };
 }
 
 /** This coin's entry in a view: its line, 'far' when it was priced without

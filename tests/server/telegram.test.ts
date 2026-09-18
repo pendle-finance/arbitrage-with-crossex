@@ -1,0 +1,369 @@
+import { createHash } from 'node:crypto';
+import * as fs from 'node:fs';
+import { tmpdir } from 'node:os';
+import * as path from 'node:path';
+import type { FastifyInstance } from 'fastify';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { BotAuthReason } from '../../src/server/telegram/botClient';
+import { newTelegramKey, readTelegramKey, type TelegramKey, writeTelegramKey } from '../../src/server/telegram/keyFile';
+import { createTelegramLink } from '../../src/server/telegram/link';
+import { TelegramStatus } from '../../src/server/telegram/status';
+import { createTelegramSync } from '../../src/server/telegram/sync';
+import { BOT_URL, CROSSEX, ETH, makeBotStub, VIEW, type BotAnswer } from './helpers/telegram';
+import { HOST, makeTestApp } from './helpers/gate-nock';
+
+const CODE = 'q0Yx1dQ0bB8m8rP3nV2m4w';
+const T0 = Date.UTC(2026, 8, 18, 10, 0, 0);
+const TEN_MIN = 600_000;
+const BOT_DOWN = 'Telegram alerts are not available yet. Try again later.';
+
+interface BotBehaviour {
+  down: 'refused' | number | null;
+  reason: BotAuthReason | null;
+  settings: { liquidation: boolean; interest: boolean };
+}
+
+let dataDir: string;
+let now: number;
+const cleanups: Array<() => Promise<void>> = [];
+
+beforeEach(() => {
+  dataDir = fs.mkdtempSync(path.join(tmpdir(), 'telegram-routes-'));
+  now = T0;
+});
+
+afterEach(async () => {
+  for (const cleanup of cleanups.splice(0)) await cleanup();
+  vi.useRealTimers();
+});
+
+function makeBot() {
+  const behaviour: BotBehaviour = { down: null, reason: null, settings: { liquidation: true, interest: true } };
+  const answer: BotAnswer = (call) => {
+    if (typeof behaviour.down === 'number') return { status: behaviour.down, body: { message: 'Cannot answer' } };
+    const route = `${call.method} ${call.url.slice(CROSSEX.length)}`;
+    if (route === 'POST /link-requests') {
+      return { status: 201, body: { code: CODE, expiresAt: new Date(now + TEN_MIN).toISOString() } };
+    }
+    if (behaviour.reason !== null) return { status: 401, body: { reason: behaviour.reason } };
+    if (route === 'DELETE /terminal') return { status: 200, body: { removed: true } };
+    if (route === 'PATCH /terminal/settings') Object.assign(behaviour.settings, call.body);
+    return { status: 200, body: { ...VIEW, settings: { ...behaviour.settings } } };
+  };
+  const stub = makeBotStub((call) => {
+    if (behaviour.down === 'refused') throw new Error('connect ECONNREFUSED');
+    return answer(call);
+  });
+  return { ...stub, behaviour };
+}
+
+type Bot = ReturnType<typeof makeBot>;
+
+function boot(bot: Bot = makeBot()) {
+  const status = new TelegramStatus();
+  const readCoins = vi.fn(async () => [ETH]);
+  const clock = () => now;
+  const sync = createTelegramSync({ dataDir, bot: bot.bot, status, readCoins, port: 7788, version: '1.6.3', now: clock });
+  const link = createTelegramLink({
+    dataDir,
+    bot: bot.bot,
+    pageUrl: `${BOT_URL}/alerts`,
+    version: '1.6.3',
+    now: clock,
+    onConfirmed: () => {
+      status.setAuth('ok');
+      sync.requestSync('linked');
+    },
+  });
+  const app = makeTestApp({ dataDir, telegram: { link, sync, status, bot: bot.bot } });
+  cleanups.push(async () => {
+    link.stop();
+    sync.stop();
+    await app.close();
+  });
+  return { bot, status, sync, app, readCoins };
+}
+
+async function send(app: FastifyInstance, method: 'GET' | 'POST' | 'PATCH' | 'DELETE', url: string, payload?: object) {
+  const res = await app.inject({ method, url, headers: HOST, payload });
+  return { code: res.statusCode, body: res.json() };
+}
+
+function linked(): TelegramKey {
+  const key = newTelegramKey(T0);
+  writeTelegramKey(dataDir, key);
+  return key;
+}
+
+function keyOnDisk(): TelegramKey {
+  const key = readTelegramKey(dataDir);
+  if (key === null) throw new Error('no telegram-key file');
+  return key;
+}
+
+const fakeInterval = () => vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+
+describe('Telegram link', () => {
+  it('sends only the key hash', async () => {
+    const { app, bot } = boot();
+    bot.behaviour.reason = 'pending';
+
+    const res = await send(app, 'POST', '/api/telegram/link');
+
+    expect(res.code).toBe(200);
+    const key = keyOnDisk();
+    expect(Buffer.from(key.key, 'base64url')).toHaveLength(32);
+    expect(fs.statSync(path.join(dataDir, 'telegram-key')).mode & 0o777).toBe(0o600);
+    const requests = bot.to('POST', '/link-requests');
+    expect(requests).toHaveLength(1);
+    expect(requests[0].body).toEqual({
+      keyHash: createHash('sha256').update(key.key, 'utf8').digest('hex'),
+      version: '1.6.3',
+    });
+    expect(JSON.stringify(bot.calls)).not.toContain(key.key);
+  });
+
+  it('starts a link', async () => {
+    const { app, bot } = boot();
+    bot.behaviour.reason = 'pending';
+
+    const res = await send(app, 'POST', '/api/telegram/link');
+
+    const url = `${BOT_URL}/alerts?crossex=${CODE}`;
+    expect(res.body.data).toEqual({ url, expiresAt: T0 + TEN_MIN });
+    expect((await send(app, 'GET', '/api/telegram/link')).body.data).toEqual({
+      status: 'pending',
+      url,
+      expiresAt: T0 + TEN_MIN,
+    });
+  });
+
+  it('one pending link', async () => {
+    const { app, bot } = boot();
+    bot.behaviour.reason = 'pending';
+
+    const [a, b] = await Promise.all([send(app, 'POST', '/api/telegram/link'), send(app, 'POST', '/api/telegram/link')]);
+    now += 60_000;
+    const c = await send(app, 'POST', '/api/telegram/link');
+
+    expect(b.body.data).toEqual(a.body.data);
+    expect(c.body.data).toEqual(a.body.data);
+    expect(bot.to('POST', '/link-requests')).toHaveLength(1);
+  });
+
+  it('polls the bot every 5 s', async () => {
+    fakeInterval();
+    const { app, bot } = boot();
+    bot.behaviour.reason = 'pending';
+    await send(app, 'POST', '/api/telegram/link');
+    const polls = () => bot.to('GET', '/terminal');
+
+    await vi.advanceTimersByTimeAsync(4_999);
+    expect(polls()).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(polls()).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect(polls()).toHaveLength(3);
+    expect(polls()[0].headers['x-terminal-key']).toBe(keyOnDisk().key);
+    expect((await send(app, 'GET', '/api/telegram/link')).body.data.status).toBe('pending');
+  });
+
+  it('confirm syncs at once', async () => {
+    fakeInterval();
+    const { app, bot, readCoins } = boot();
+    bot.behaviour.reason = 'pending';
+    await send(app, 'POST', '/api/telegram/link');
+    bot.behaviour.reason = null;
+
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect((await send(app, 'GET', '/api/telegram/link')).body.data.status).toBe('confirmed');
+    await vi.waitFor(() => expect(bot.to('PUT', '/terminal/triggers')).toHaveLength(1));
+    expect(readCoins).toHaveBeenCalledOnce();
+    expect(bot.to('PUT', '/terminal/triggers')[0].headers['x-terminal-key']).toBe(keyOnDisk().key);
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(bot.to('GET', '/terminal')).toHaveLength(1);
+    expect((await send(app, 'GET', '/api/telegram')).body.data).toMatchObject({ connected: true, state: 'connected' });
+  });
+
+  it('expired link', async () => {
+    fakeInterval();
+    const { app, bot } = boot();
+    bot.behaviour.reason = 'pending';
+    await send(app, 'POST', '/api/telegram/link');
+    bot.behaviour.reason = 'unknown';
+
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect((await send(app, 'GET', '/api/telegram/link')).body.data).toEqual({
+      status: 'expired',
+      url: `${BOT_URL}/alerts?crossex=${CODE}`,
+      expiresAt: T0 + TEN_MIN,
+    });
+    expect(readTelegramKey(dataDir)).toBeNull();
+    expect((await send(app, 'GET', '/api/telegram')).body.data).toMatchObject({ connected: false, state: 'none' });
+  });
+
+  it('a link past its 10 min reads expired, and Set up asks again', async () => {
+    const { app, bot } = boot();
+    bot.behaviour.reason = 'pending';
+    await send(app, 'POST', '/api/telegram/link');
+    now += TEN_MIN;
+
+    expect((await send(app, 'GET', '/api/telegram/link')).body.data.status).toBe('expired');
+    expect(readTelegramKey(dataDir)).toBeNull();
+    const again = await send(app, 'POST', '/api/telegram/link');
+
+    expect(again.body.data.expiresAt).toBe(now + TEN_MIN);
+    expect(bot.to('POST', '/link-requests')).toHaveLength(2);
+  });
+
+  it('restart drops the link', async () => {
+    const first = boot();
+    first.bot.behaviour.reason = 'pending';
+    await send(first.app, 'POST', '/api/telegram/link');
+
+    const second = boot(first.bot);
+
+    expect((await send(second.app, 'GET', '/api/telegram/link')).body.data).toEqual({
+      status: 'none',
+      url: null,
+      expiresAt: null,
+    });
+  });
+
+  it('bot down', async () => {
+    const { app, bot } = boot();
+    bot.behaviour.down = 'refused';
+
+    const refused = await send(app, 'POST', '/api/telegram/link');
+    bot.behaviour.down = 404;
+    const missing = await send(app, 'POST', '/api/telegram/link');
+
+    for (const res of [refused, missing]) {
+      expect(res.code).toBe(503);
+      expect(res.body.error.message).toBe(BOT_DOWN);
+    }
+    expect(readTelegramKey(dataDir)).toBeNull();
+    expect((await send(app, 'GET', '/api/telegram/link')).body.data.status).toBe('none');
+    expect((await send(app, 'GET', '/api/telegram')).body.data.connected).toBe(false);
+  });
+
+  it('a failed link keeps the key that was there', async () => {
+    const before = linked();
+    const { app, bot } = boot();
+    bot.behaviour.down = 'refused';
+
+    expect((await send(app, 'POST', '/api/telegram/link')).code).toBe(503);
+
+    expect(readTelegramKey(dataDir)).toEqual(before);
+  });
+});
+
+describe('Telegram settings', () => {
+  it('reports state', async () => {
+    linked();
+    const { app, sync, status } = boot();
+
+    sync.requestSync('boot');
+    await vi.waitFor(() => expect(status.lastSyncAt).toBe(T0));
+
+    expect((await send(app, 'GET', '/api/telegram')).body.data).toEqual({
+      connected: true,
+      state: 'connected',
+      settings: { liquidation: true, interest: true },
+      lastSyncAt: T0,
+      lastSyncError: null,
+    });
+  });
+
+  it('saves a toggle on the bot', async () => {
+    const key = linked();
+    const { app, bot } = boot();
+
+    const res = await send(app, 'PATCH', '/api/telegram/settings', { interest: false });
+
+    expect(res.code).toBe(200);
+    const patches = bot.to('PATCH', '/terminal/settings');
+    expect(patches).toHaveLength(1);
+    expect(patches[0].body).toEqual({ interest: false });
+    expect(patches[0].headers['x-terminal-key']).toBe(key.key);
+    expect(res.body.data.settings).toEqual({ liquidation: true, interest: false });
+  });
+
+  it('refuses a setting that is not true or false', async () => {
+    linked();
+    const { app, bot } = boot();
+
+    const res = await send(app, 'PATCH', '/api/telegram/settings', { interest: 'off' });
+
+    expect(res.code).toBe(400);
+    expect(bot.calls).toHaveLength(0);
+  });
+
+  it('disconnects', async () => {
+    const key = linked();
+    const { app, bot } = boot();
+
+    const res = await send(app, 'DELETE', '/api/telegram');
+
+    expect(res.code).toBe(200);
+    expect(res.body.data.connected).toBe(false);
+    const deletes = bot.to('DELETE', '/terminal');
+    expect(deletes).toHaveLength(1);
+    expect(deletes[0].headers['x-terminal-key']).toBe(key.key);
+    expect(fs.existsSync(path.join(dataDir, 'telegram-key'))).toBe(false);
+    expect((await send(app, 'GET', '/api/telegram')).body.data).toEqual({
+      connected: false,
+      state: 'none',
+      settings: null,
+      lastSyncAt: null,
+      lastSyncError: null,
+    });
+  });
+
+  it('disconnects while the bot does not answer', async () => {
+    linked();
+    const { app, bot } = boot();
+    bot.behaviour.down = 'refused';
+
+    const res = await send(app, 'DELETE', '/api/telegram');
+
+    expect(res.code).toBe(200);
+    expect(readTelegramKey(dataDir)).toBeNull();
+  });
+
+  it('replaced by another terminal', async () => {
+    linked();
+    const { app, bot, sync, status } = boot();
+    bot.behaviour.reason = 'replaced';
+
+    sync.requestSync('boot');
+    await vi.waitFor(() => expect(status.auth).toBe('replaced'));
+
+    expect((await send(app, 'GET', '/api/telegram')).body.data).toMatchObject({ connected: false, state: 'replaced' });
+  });
+
+  it('removed on the Boros page', async () => {
+    linked();
+    const { app, bot, sync, status } = boot();
+    bot.behaviour.reason = 'removed';
+
+    sync.requestSync('boot');
+    await vi.waitFor(() => expect(status.auth).toBe('removed'));
+
+    expect((await send(app, 'GET', '/api/telegram')).body.data).toMatchObject({ connected: false, state: 'removed' });
+  });
+
+  it('bad key file', async () => {
+    fs.writeFileSync(path.join(dataDir, 'telegram-key'), '{"key":');
+    const { app, bot, sync } = boot();
+
+    sync.requestSync('boot');
+    const res = await send(app, 'GET', '/api/telegram');
+
+    expect(res.body.data).toMatchObject({ connected: false, state: 'none' });
+    expect(bot.calls).toHaveLength(0);
+  });
+});

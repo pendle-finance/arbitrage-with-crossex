@@ -14,10 +14,6 @@
  *    the per-market fill feed, both timestamped, summed per market since the
  *    start instant. The live zones feed adds the open legs' MtM and IM.
  *
- * Nothing is reconstructed and nothing is stored: the response is a pure
- * function of (address, since, venue records), so the same inputs render the
- * same numbers on any device.
- *
  * Double-count guard: a Boros OPEN leg's cumulative `rateSettlementPnl` and
  * the settlement-events sums cover the same flows. The per-leg figure is
  * returned for display only; PnL totals must be built from `borosHistory`
@@ -29,6 +25,7 @@
  */
 import type { FastifyInstance } from 'fastify';
 import {
+  createRequestPacer,
   fetchBorosCollaterals,
   fetchBorosMarket,
   fetchBorosMarkets,
@@ -44,13 +41,17 @@ import {
   type FetchLike,
 } from '../../core/boros/client';
 import { normalizeVenue, type PerpPositionLike } from '../../core/boros/venue';
+import { isSupportedCoin, SUPPORTED_COINS } from '../../core/coins';
 import { classifyGateError, CoreError } from '../../core/errors';
 import { parseSymbol } from '../../core/numbers';
 import type { AppDeps } from '../app';
 import { TTL } from '../cache';
 import { GATE_HISTORY_FLOOR_MS, INTEREST_MAX_PAGES, INTEREST_PAGE_SIZE } from '../interestLedger';
+import { LedgerStore } from '../ledgerStore';
+import { earliestSupportedOpenMs, TrackingStartFile } from '../trackingStart';
 
 const EVM_ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
+const GATE_HISTORY_REACH_SEC = 365 * 86_400;
 
 // The venue pages newest-first at up to 1,000 rows; 100 pages is the same
 // ceiling the persisted interest ledger uses. With `from` set to the window
@@ -135,7 +136,7 @@ export interface AssetBorosOpenOut {
   /** |notionalSize| in the collateral token. */
   sizeToken: number;
   notionalUsd: number;
-  entryApr: number;
+  entryApr: number | null;
   markApr: number;
   floatingApr: number;
   /** Cumulative settlement of the CURRENT position, net of settle fees.
@@ -193,6 +194,7 @@ export interface AssetBorosHistoryOut {
 
 export interface AssetGroupOut {
   base: string;
+  supported: boolean;
   /** USD price of the underlying (0 = no live market to price it from). */
   priceUsd: number;
   /** Earliest activity instant that entered THIS asset's sums (APR clock). */
@@ -206,7 +208,9 @@ export interface AssetGroupOut {
 export interface AssetViewOut {
   sinceSec: number;
   nowSec: number;
+  defaultSinceSec: number | null;
   assets: AssetGroupOut[];
+  supportedCoins: string[];
   /** Earliest activity instant that entered any sum (unix sec) — the APR
    * clock floor; null when nothing was found at all. */
   earliestSec: number | null;
@@ -216,6 +220,7 @@ export interface AssetViewOut {
     /** Oldest closed-position row read when the page cap was hit; 0 = complete. */
     perpClosedFromSec: number;
     borosTxnsComplete: boolean;
+    backfilling: boolean;
   };
   /** Margin-borrow interest the CrossEx account paid inside the window.
    * ACCOUNT-level: the venue books it per liability coin, not per market,
@@ -296,11 +301,23 @@ interface HistoryPositionLike {
   openAvgPrice?: string;
   closedAvgPrice?: string;
   closedQty?: string;
+  createTime?: string;
   updateTime?: string;
+  userId?: string;
 }
+
+const oldestSec = (rows: HistoryPositionLike[]): number => {
+  let oldest = Number.POSITIVE_INFINITY;
+  for (const r of rows) {
+    const t = fin(r.updateTime);
+    if (t > 0) oldest = Math.min(oldest, epochToSec(t));
+  }
+  return oldest;
+};
 
 async function fetchClosedPositions(
   deps: AppDeps,
+  nowSec: number,
 ): Promise<{ rows: HistoryPositionLike[]; coversFromSec: number }> {
   const rows: HistoryPositionLike[] = [];
   let capped = false;
@@ -317,20 +334,74 @@ async function fetchClosedPositions(
     const batch = body as HistoryPositionLike[];
     rows.push(...batch);
     if (batch.length < PAGE_LIMIT) break;
-    if (page === MAX_PAGES) capped = true;
+    if (page === MAX_PAGES || oldestSec(batch) <= nowSec - GATE_HISTORY_REACH_SEC) {
+      capped = true;
+      break;
+    }
   }
-  let oldest = Number.POSITIVE_INFINITY;
-  for (const r of rows) {
-    const t = fin(r.updateTime);
-    if (t > 0) oldest = Math.min(oldest, epochToSec(t));
-  }
+  const oldest = oldestSec(rows);
   return { rows, coversFromSec: capped && Number.isFinite(oldest) ? oldest : 0 };
 }
 
 export function assetViewRoutes(deps: AppDeps) {
   // Last synced ledger per address — the next sync reads only rows newer than its head.
   const settlementLedgers = new Map<string, BorosSettlementLedger>();
+  const backfills = new Set<string>();
+  const ledgerStore = new LedgerStore(deps.dataDir);
+  const trackingStart = new TrackingStartFile(deps.dataDir);
+  const pace = createRequestPacer({
+    perMinute: 30,
+    now: Date.now,
+    sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  });
   const fetchImpl: FetchLike = resolveBorosFetch(deps.borosFetch);
+
+  const keepLedger = (
+    address: string,
+    prev: BorosSettlementLedger | undefined,
+    next: BorosSettlementLedger,
+  ): void => {
+    settlementLedgers.set(address, next);
+    const unchanged =
+      prev !== undefined &&
+      prev.coversFromSec === next.coversFromSec &&
+      prev.rows.length === next.rows.length &&
+      prev.rows[0]?.id === next.rows[0]?.id;
+    if (!unchanged) ledgerStore.write(address, next);
+  };
+
+  const syncHead = async (address: string): Promise<BorosSettlementLedger> => {
+    const prev = settlementLedgers.get(address) ?? ledgerStore.read(address) ?? undefined;
+    const head = prev?.rows[0];
+    const next = await syncSettlementLedger(fetchImpl, address, 0, prev, {
+      floorSec: head ? head.timeSec + 1 : Number.POSITIVE_INFINITY,
+      pace,
+    });
+    if (!backfills.has(address)) keepLedger(address, prev, next);
+    return next;
+  };
+
+  const startBackfill = (address: string, floorSec: number): void => {
+    const prev = settlementLedgers.get(address);
+    if (!prev || backfills.has(address)) return;
+    backfills.add(address);
+    syncSettlementLedger(fetchImpl, address, 0, prev, { floorSec, pace })
+      .then((next) => {
+        keepLedger(address, prev, next);
+        deps.cache.bust(`boros:settlements:${address}`);
+      })
+      .catch(() => undefined)
+      .finally(() => backfills.delete(address));
+  };
+
+  const readLedger = async (address: string, fresh: boolean): Promise<BorosSettlementLedger> => {
+    const running = backfills.has(address) ? settlementLedgers.get(address) : undefined;
+    if (running) return running;
+    const { value } = await deps.cache.get(`boros:settlements:${address}`, TTL.boros, () => syncHead(address), {
+      fresh,
+    });
+    return value;
+  };
 
   return async function plugin(app: FastifyInstance): Promise<void> {
     app.get('/asset-view/:address', async (req, reply) => {
@@ -356,10 +427,9 @@ export function assetViewRoutes(deps: AppDeps) {
           legSince.set(Number(m[1]), Number(m[2]));
         }
       }
-      const floorFor = (marketId: number): number => Math.max(sinceSec, legSince.get(marketId) ?? 0);
       const nowSec = Math.floor(Date.now() / 1000);
 
-      let sinceSec = 0;
+      let requestedSinceSec: number | null = null;
       if (query.since !== undefined && query.since !== '') {
         const n = /^\d+$/.test(query.since)
           ? Number(query.since)
@@ -370,16 +440,81 @@ export function assetViewRoutes(deps: AppDeps) {
         if (n >= nowSec) {
           throw new CoreError('since must be in the past', 'validation');
         }
-        sinceSec = n;
+        requestedSinceSec = n;
       }
 
       const warnings: string[] = [];
+
+      let perpPositions: PerpPositionLike[] = [];
+      let perpAvailable = true;
+      try {
+        const { value } = await deps.cache.get(
+          'positions',
+          TTL.live,
+          async () => (await deps.getClients().crossEx.listCrossexPositions()).body,
+          { fresh },
+        );
+        perpPositions = value as PerpPositionLike[];
+      } catch (err) {
+        perpAvailable = false;
+        const category = classifyGateError(err).category;
+        if (category !== 'not-configured') {
+          warnings.push(
+            `Couldn't load Gate positions right now (${category}) — showing the Boros side only.`,
+          );
+        }
+      }
+
+      let closedRows: HistoryPositionLike[] = [];
+      let closedAvailable = false;
+      let perpClosedFromSec = 0;
+      if (perpAvailable) {
+        try {
+          const { value } = await deps.cache.get(
+            'crossex:closed-positions',
+            TTL.boros,
+            () => fetchClosedPositions(deps, nowSec),
+            { fresh },
+          );
+          closedRows = value.rows;
+          perpClosedFromSec = value.coversFromSec;
+          closedAvailable = true;
+        } catch (err) {
+          const category = classifyGateError(err).category;
+          warnings.push(
+            `Couldn't load closed-position history (${category}) — totals cover open positions and Boros only.`,
+          );
+        }
+      }
+
+      let defaultSinceSec: number | null = null;
+      {
+        const gateRows: Array<{ symbol?: string; createTime?: string; userId?: unknown }> = [
+          ...perpPositions,
+          ...closedRows,
+        ];
+        const owner = gateRows.find((r) => r.userId !== undefined && r.userId !== null && r.userId !== '')?.userId;
+        const userId = owner === undefined ? null : String(owner);
+        const saved = trackingStart.read();
+        if (saved && (userId === null || saved.userId === userId)) {
+          defaultSinceSec = Math.floor(saved.firstOpenMs / 1000);
+        } else if (perpAvailable && closedAvailable) {
+          const firstOpenMs = earliestSupportedOpenMs(gateRows);
+          if (firstOpenMs !== null) {
+            trackingStart.write({ userId: userId ?? '', firstOpenMs });
+            defaultSinceSec = Math.floor(firstOpenMs / 1000);
+          }
+        }
+      }
+
+      const sinceSec = requestedSinceSec ?? defaultSinceSec ?? 0;
+      const floorFor = (marketId: number): number => Math.max(sinceSec, legSince.get(marketId) ?? 0);
 
       // --- Boros reads (shared cache keys with the strategy feed) ----------
       const marketsP = deps.cache
         .get('boros:markets', TTL.boros, () => fetchBorosMarkets(fetchImpl), { fresh })
         .then((r) => r.value);
-      const [markets, zones, settlements] = await Promise.all([
+      const [markets, zones, ledger] = await Promise.all([
         marketsP,
         marketsP.then((ms) =>
           deps.cache
@@ -388,19 +523,9 @@ export function assetViewRoutes(deps: AppDeps) {
             })
             .then((r) => r.value),
         ),
-        deps.cache
-          .get(
-            `boros:settlements:${address}:0`,
-            TTL.boros,
-            async () => {
-              const next = await syncSettlementLedger(fetchImpl, address, 0, settlementLedgers.get(address));
-              settlementLedgers.set(address, next);
-              return next;
-            },
-            { fresh },
-          )
-          .then((r) => settlementWindow(r.value, sinceSec)),
+        readLedger(address, fresh),
       ]);
+      const settlements = settlementWindow(ledger, sinceSec);
 
       const marketById = new Map<number, BorosMarket>(markets.map((m) => [m.marketId, m]));
       const collateralPriceUsd = resolveCollateralPricesUsd(markets);
@@ -492,27 +617,6 @@ export function assetViewRoutes(deps: AppDeps) {
           }),
         );
         for (const m of resolved) if (m) marketById.set(m.marketId, m);
-      }
-
-      // --- Perp reads (degrade to Boros-only, same doctrine as /strategy) --
-      let perpPositions: PerpPositionLike[] = [];
-      let perpAvailable = true;
-      try {
-        const { value } = await deps.cache.get(
-          'positions',
-          TTL.live,
-          async () => (await deps.getClients().crossEx.listCrossexPositions()).body,
-          { fresh },
-        );
-        perpPositions = value as PerpPositionLike[];
-      } catch (err) {
-        perpAvailable = false;
-        const category = classifyGateError(err).category;
-        if (category !== 'not-configured') {
-          warnings.push(
-            `Couldn't load Gate positions right now (${category}) — showing the Boros side only.`,
-          );
-        }
       }
 
       /**
@@ -612,26 +716,6 @@ export function assetViewRoutes(deps: AppDeps) {
         }
       }
 
-      let closedRows: HistoryPositionLike[] = [];
-      let perpClosedFromSec = 0;
-      if (perpAvailable) {
-        try {
-          const { value } = await deps.cache.get(
-            'crossex:closed-positions',
-            TTL.boros,
-            () => fetchClosedPositions(deps),
-            { fresh },
-          );
-          closedRows = value.rows;
-          perpClosedFromSec = value.coversFromSec;
-        } catch (err) {
-          const category = classifyGateError(err).category;
-          warnings.push(
-            `Couldn't load closed-position history (${category}) — totals cover open positions and Boros only.`,
-          );
-        }
-      }
-
       // --- Group by asset --------------------------------------------------
       const groups = new Map<string, AssetGroupOut>();
       const groupFor = (base: string): AssetGroupOut => {
@@ -640,6 +724,7 @@ export function assetViewRoutes(deps: AppDeps) {
         if (!g) {
           g = {
             base: key,
+            supported: isSupportedCoin(key),
             priceUsd: 0,
             earliestSec: null,
             perpOpen: [],
@@ -651,10 +736,8 @@ export function assetViewRoutes(deps: AppDeps) {
         }
         return g;
       };
-      let earliestSec = Number.POSITIVE_INFINITY;
       const seen = (g: AssetGroupOut, t: number | null | undefined): void => {
         if (!t || !Number.isFinite(t) || t <= 0) return;
-        earliestSec = Math.min(earliestSec, t);
         if (g.earliestSec === null || t < g.earliestSec) g.earliestSec = t;
       };
 
@@ -940,12 +1023,18 @@ export function assetViewRoutes(deps: AppDeps) {
       }
 
       // Stable order: biggest live footprint first, then name.
-      const assets = [...groups.values()].sort((a, b) => {
-        const foot = (g: AssetGroupOut): number =>
-          g.perpOpen.reduce((s, l) => s + l.notionalUsd, 0) +
-          g.borosOpen.reduce((s, l) => s + l.notionalUsd, 0);
-        return foot(b) - foot(a) || a.base.localeCompare(b.base);
-      });
+      const assets = [...groups.values()]
+        .filter((g) => g.supported || g.perpOpen.length > 0 || g.borosOpen.length > 0)
+        .sort((a, b) => {
+          const foot = (g: AssetGroupOut): number =>
+            g.perpOpen.reduce((s, l) => s + l.notionalUsd, 0) +
+            g.borosOpen.reduce((s, l) => s + l.notionalUsd, 0);
+          return foot(b) - foot(a) || a.base.localeCompare(b.base);
+        });
+      const earliestSec = assets.reduce<number | null>(
+        (min, g) => (g.earliestSec !== null && (min === null || g.earliestSec < min) ? g.earliestSec : min),
+        null,
+      );
 
       // Borrow interest rides beside the per-asset sums, never inside them.
       // A failed read must not sink the view: the total is then reported
@@ -971,16 +1060,21 @@ export function assetViewRoutes(deps: AppDeps) {
         }
       }
 
+      if (ledger.coversFromSec !== 0 && ledger.coversFromSec > sinceSec) startBackfill(address, sinceSec);
+
       const out: AssetViewOut = {
         sinceSec,
         nowSec,
+        defaultSinceSec,
         assets,
+        supportedCoins: [...SUPPORTED_COINS],
         interest,
-        earliestSec: Number.isFinite(earliestSec) ? earliestSec : null,
+        earliestSec,
         coverage: {
           settlementsFromSec: settlements.coversFromSec,
           perpClosedFromSec,
           borosTxnsComplete: txnsComplete.every(Boolean),
+          backfilling: backfills.has(address),
         },
         warnings,
       };

@@ -1,0 +1,108 @@
+import { useState, type ReactNode } from 'react';
+import type { SetupRowProps } from './setupState';
+
+type DotTone = 'done' | 'current' | 'warn' | 'later';
+
+const DOT_CLASS: Record<DotTone, string> = {
+  done: 'border-emerald-500/50 bg-emerald-500/10 text-emerald-300',
+  current: 'border-cyan-500/50 bg-cyan-500/10 text-cyan-300',
+  warn: 'border-amber-500/50 bg-amber-500/10 text-amber-300',
+  later: 'border-ink-600 text-ink-400',
+};
+
+export function SetupRowFrame({
+  n,
+  title,
+  row,
+  isDone,
+  state,
+  isWarn = false,
+  alert,
+  setupAction,
+  skipConsequence,
+  children,
+}: {
+  n: number;
+  title: string;
+  row: SetupRowProps;
+  isDone: boolean;
+  state: string | null;
+  isWarn?: boolean;
+  alert?: ReactNode;
+  setupAction?: ReactNode;
+  skipConsequence?: string;
+  children: ReactNode;
+}) {
+  const [isSkipped, setIsSkipped] = useState(false);
+  const [isAsking, setIsAsking] = useState(false);
+  const isSettings = row.variant === 'settings';
+  const showsNotSetUp = !isDone && state === null && (isSettings || isSkipped);
+  const line = showsNotSetUp ? 'not set up' : state;
+  const isLineWarn = isWarn || showsNotSetUp;
+  const dot: DotTone = isDone && !isLineWarn ? 'done' : row.open ? 'current' : isLineWarn ? 'warn' : 'later';
+  const canSkip = !isSettings && row.onSkip !== undefined && skipConsequence !== undefined;
+
+  const action = row.open ? (
+    <button type="button" className="btn-link" onClick={row.onClose}>
+      Done
+    </button>
+  ) : isDone ? (
+    <button type="button" className="btn-link" onClick={row.onOpen}>
+      Edit
+    </button>
+  ) : (
+    (setupAction ?? (
+      <button type="button" className="btn-primary" onClick={row.onOpen}>
+        Set up
+      </button>
+    ))
+  );
+
+  const skipAnyway = () => {
+    setIsSkipped(true);
+    setIsAsking(false);
+    row.onSkip?.();
+  };
+
+  return (
+    <section aria-label={title} className="flex flex-col gap-3 px-4 py-3">
+      <div className="flex items-center gap-3">
+        <span
+          aria-hidden="true"
+          className={`num flex h-5 w-5 shrink-0 items-center justify-center rounded-full border text-xs font-semibold ${DOT_CLASS[dot]}`}
+        >
+          {dot === 'done' ? '✓' : dot === 'warn' ? '!' : n}
+        </span>
+        <span className="shrink-0 text-sm font-medium text-ink-100">{title}</span>
+        {line && (
+          <span className={`num min-w-0 truncate text-xs ${isLineWarn ? 'text-amber-400' : 'text-ink-400'}`}>
+            {line}
+          </span>
+        )}
+        {isSettings && <span className="ml-auto shrink-0">{action}</span>}
+      </div>
+      {alert}
+      {row.open && isAsking && (
+        <div className="flex flex-col gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
+          <p>
+            <span className="font-semibold">Not recommended.</span> <span>{skipConsequence}</span>
+          </p>
+          <div className="flex items-center gap-2">
+            <button type="button" className="btn" onClick={skipAnyway}>
+              Skip anyway
+            </button>
+            <button type="button" className="btn-ghost-xs" onClick={() => setIsAsking(false)}>
+              Back
+            </button>
+          </div>
+        </div>
+      )}
+      {row.open && !isAsking && children}
+      {row.open && !isAsking && canSkip && (
+        <button type="button" className="btn-link self-end text-ink-400" onClick={() => setIsAsking(true)}>
+          Skip, not recommended
+        </button>
+      )}
+    </section>
+  );
+}

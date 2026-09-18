@@ -325,11 +325,7 @@ describe('GET /api/opportunities', () => {
     expect(calls.length).toBe(afterFirst * 2);
   });
 
-  it('a poll one dashboard-cadence later adds NO Boros calls; past 30s it re-reads', async () => {
-    // Books must ride the same 30s cadence as every other Boros read. At the
-    // old 5s book TTL, the dashboard's 12s poll missed the cache on EVERY poll
-    // and re-fetched every mapped market's book — ~97% of all Boros traffic
-    // (25 live books × 300 polls ≈ 7.5k req/h from one open tab, 2026-07-29).
+  it('a poll one dashboard-cadence later adds NO Boros calls; past 60s it re-reads', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     try {
       const calls: string[] = [];
@@ -345,7 +341,7 @@ describe('GET /api/opportunities', () => {
       await app.inject({ method: 'GET', url: '/api/opportunities', headers: HOST });
       expect(calls.length).toBe(afterFirst);
 
-      vi.setSystemTime(Date.now() + 20_000); // 32s after the first fetch
+      vi.setSystemTime(Date.now() + 49_000); // 61s after the first fetch
       await app.inject({ method: 'GET', url: '/api/opportunities', headers: HOST });
       expect(calls.length).toBe(afterFirst * 2); // markets + books re-read together
     } finally {

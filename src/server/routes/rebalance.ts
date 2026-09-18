@@ -15,7 +15,7 @@ import {
 import type { AppDeps } from '../app';
 import { TTL } from '../cache';
 import { DISCLAIMER_NOT_ACCEPTED, isDisclaimerAccepted } from '../disclaimer';
-import { sendError } from '../errorReply';
+import { catchRateLimit, sendError } from '../errorReply';
 import { INTEREST_OVERFLOW, InterestFile, syncInterest } from '../interestLedger';
 import {
   bannerFor,
@@ -102,6 +102,7 @@ export function rebalanceRoutes(deps: AppDeps) {
         now,
         sleep: deps.rebalance?.sleep ?? sleep,
         onHalt,
+        onDone: deps.rebalance?.onDone,
         pollOnly,
       })
         .then(() => {
@@ -183,7 +184,7 @@ export function rebalanceRoutes(deps: AppDeps) {
         notional: notionalByWallet(computeExposure(positions.value ?? []).flatMap((group) => group.legs)),
       });
       const stale = [account, positions, rates, paid, coins, rules, fees, tickers].some((r) => r.stale);
-      return { buckets, plan, stale, accountStale: account.stale || positions.stale, userId };
+      return { buckets, plan, stale, userId };
     };
 
     const loadInTransit = async (job: Job): Promise<ReturnType<typeof inTransitOf>> => {
@@ -250,11 +251,9 @@ export function rebalanceRoutes(deps: AppDeps) {
       const store = requireJobs();
       const locked = findLock();
       if (locked) return conflict(reply, locked);
-      const { plan, accountStale, userId } = await loadView(true);
-      // The amount is sized from this read. A read served from the cache
-      // because Gate rate-limited the fresh one may be seconds old, and a
-      // move to USDT sized on old equity can open the borrow it promises not to.
-      if (accountStale) return conflict(reply, STALE_TEXT);
+      const view = await catchRateLimit(loadView(true));
+      if (!view) return conflict(reply, STALE_TEXT);
+      const { plan, userId } = view;
       if (plan.balanced) return conflict(reply, plan.noLegs ? NO_LEGS : ALREADY_EVEN);
       const picked = plan.routes[route];
       const otherLoop = route === 'mix' ? plan.routes.loop : route === 'loop' ? plan.routes.mix : null;

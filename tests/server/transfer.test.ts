@@ -646,6 +646,19 @@ describe('POST /api/transfer refusals', () => {
     expect(t.transfers.read()).toBeNull();
   });
 
+  it('a rate-limited spot read does not stop a transfer out of CrossEx', async () => {
+    const t = boot();
+    mockReads({ spotThen429: true });
+    mockSend();
+    mockRows('PENDING');
+    await t.view();
+
+    const res = await t.post(HL_OUT);
+
+    expect(res.statusCode).toBe(202);
+    await waitFor(t.parked, 'the runner poll');
+  });
+
   it('deal created during the transfer read', async () => {
     const t = boot();
     mockReads({ onAccountRead: () => createWorkingDeal(t.store) });

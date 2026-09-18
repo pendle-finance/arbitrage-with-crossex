@@ -77,7 +77,7 @@ describe('fetchBorosMarkets', () => {
             {
               marketId: 155,
               tokenId: 3,
-              imData: { name: 'Hyperliquid ETH 31 Jul 2026', maturity: 1785456000 },
+              imData: { name: 'Hyperliquid ETH 31 Jul 2026', maturity: Math.floor(Date.now() / 1000) + 30 * 86_400 },
               config: { status: 2, takerFee: '500000000000000', maxRateDeviationFactorBase1e4: 2500 },
               extConfig: { settleFeeRate: '1000000000000000', paymentPeriod: 3600 },
               platform: { platformId: 'Hyperliquid' },
@@ -373,6 +373,7 @@ describe('syncSettlementLedger', () => {
     fee: '0',
     settlementRate: 0.1,
   });
+  const FULL = { floorSec: 0, pace: async () => {} };
   const pagedFeed = (all: ReturnType<typeof row>[], calls: URL[]) =>
     stub((url) => {
       calls.push(url);
@@ -384,26 +385,26 @@ describe('syncSettlementLedger', () => {
   it('sweeps the full history once at limit=200, then reads only rows newer than its head', async () => {
     const calls: URL[] = [];
     const history = [row('c', 300), row('b', 200), row('a', 100)];
-    const cold = await syncSettlementLedger(pagedFeed(history, calls), ADDR);
+    const cold = await syncSettlementLedger(pagedFeed(history, calls), ADDR, 0, undefined, FULL);
     expect(cold.rows.map((r) => r.id)).toEqual(['c', 'b', 'a']);
     expect(cold.coversFromSec).toBe(0);
     expect(calls).toHaveLength(2);
     expect(calls[0]!.searchParams.get('limit')).toBe('200');
 
     calls.length = 0;
-    const warm = await syncSettlementLedger(pagedFeed([row('d', 400), ...history], calls), ADDR, 0, cold);
+    const warm = await syncSettlementLedger(pagedFeed([row('d', 400), ...history], calls), ADDR, 0, cold, FULL);
     expect(warm.rows.map((r) => r.id)).toEqual(['d', 'c', 'b', 'a']);
     expect(calls).toHaveLength(1);
   });
 
   it('falls back to a cold sweep when the previous head is gone', async () => {
-    const prev = await syncSettlementLedger(pagedFeed([row('x', 300), row('a', 100)], []), ADDR);
-    const next = await syncSettlementLedger(pagedFeed([row('b', 200), row('a', 100)], []), ADDR, 0, prev);
+    const prev = await syncSettlementLedger(pagedFeed([row('x', 300), row('a', 100)], []), ADDR, 0, undefined, FULL);
+    const next = await syncSettlementLedger(pagedFeed([row('b', 200), row('a', 100)], []), ADDR, 0, prev, FULL);
     expect(next.rows.map((r) => r.id)).toEqual(['b', 'a']);
   });
 
   it('windows events by sinceSec but keeps every settled market as a fill-feed pair', async () => {
-    const ledger = await syncSettlementLedger(pagedFeed([row('b', 200, 156), row('a', 100, 155)], []), ADDR);
+    const ledger = await syncSettlementLedger(pagedFeed([row('b', 200, 156), row('a', 100, 155)], []), ADDR, 0, undefined, FULL);
     const w = settlementWindow(ledger, 150);
     expect(w.events.map((e) => e.marketId)).toEqual([156]);
     expect(w.pairs.map((p) => p.marketId).sort()).toEqual([155, 156]);
