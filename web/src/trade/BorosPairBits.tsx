@@ -22,7 +22,7 @@ import type {
 import { Chip } from '../components/Chip';
 import { HoldToConfirmButton } from '../components/HoldToConfirmButton';
 import { amountError } from '../lib/amount';
-import { fmtDateLocal, fmtPct, fmtTokenQty, fmtUsd } from '../lib/fmt';
+import { fmtDateLocal, fmtPct, fmtUsd, sigGrouped } from '../lib/fmt';
 
 /** Was this leg actually sent to the venue? A not-submitted sentinel is
  * all-zero with no failure (orders.ts `notSubmitted`); a REJECTED leg has
@@ -425,7 +425,7 @@ export function PositionArithmetic({
    * short), so a sign beside it says the same thing twice. The two legs of
    * a spread still read as opposite because they are coloured opposite.
    */
-  const signed = (n: number) => fmtTokenQty(Math.abs(n), sim.collateral);
+  const signed = (n: number) => `${sigGrouped(Math.abs(n))} ${sim.collateral}`;
   return (
     <div className="flex flex-col gap-1 text-[11px]">
       {/* No heading: the rows name themselves by venue. What you end up

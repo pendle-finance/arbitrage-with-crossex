@@ -14,8 +14,11 @@
  * - Fee RATES in market config (settleFeeRate/takerFee) are 18-dec fractions.
  * - List endpoints wrap results as { results, total, skip } — never a bare array.
  */
+import { prettyVenue } from '../../../web/src/lib/fmt';
 import { CoreError } from '../errors';
+import { BOOK_VENUES } from '../estimate/books';
 import { borosInitialMarginUsd } from './opportunities';
+import { normalizeVenue } from './venue';
 
 /** The api-gateway surface (`/apis` → api-gateway → open-api's `open-api-v2/…`
  * mounts). New endpoints live here — the bare `/open-api` prefix is deprecated. */
@@ -87,9 +90,9 @@ export interface BorosMarket {
   tokenId: number;
   /** Human name, e.g. "Hyperliquid ETH 31 Jul 2026". */
   name: string;
-  /** Reference perp venue, e.g. "Hyperliquid" (metadata.platformName). */
+  /** Reference perp venue, e.g. "Hyperliquid" (platform.platformId, display-cased). */
   venue: string;
-  /** Underlying coin, e.g. "ETH" (metadata.assetSymbol). */
+  /** Underlying coin, e.g. "ETH" (metadata.underlyingSymbol). */
   base: string;
   /** Unix seconds. */
   maturity: number;
@@ -352,11 +355,13 @@ function normalizeBorosMarket(m: Record<string, unknown>, nowSec: number): Boros
     const data = (m.data ?? {}) as Record<string, unknown>;
     const config = (m.config ?? {}) as Record<string, unknown>;
     const platform = (m.platform ?? {}) as Record<string, unknown>;
+    const platformId = String(platform.platformId ?? '');
+    const venueKey = normalizeVenue(platformId);
     return {
       marketId: Number(m.marketId),
       tokenId: Number(m.tokenId),
       name: String(imData.name ?? ''),
-      venue: String(platform.platformId ?? ''),
+      venue: BOOK_VENUES.has(venueKey) ? prettyVenue(venueKey) : platformId,
       base: String(metadata.underlyingSymbol ?? ''),
       maturity,
       paymentPeriod: Number(extConfig.paymentPeriod ?? 0),

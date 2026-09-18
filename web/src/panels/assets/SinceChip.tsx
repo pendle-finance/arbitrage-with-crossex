@@ -54,6 +54,7 @@ export function SinceChip({
             max={today}
             onChange={(e) => {
               const v = e.target.value;
+              if (v > today) return;
               const sec = parseDateLocal(v);
               if (!Number.isFinite(sec) || sec <= 0) return;
               if (defaultSec !== null && v === fmtDateLocal(defaultSec)) {

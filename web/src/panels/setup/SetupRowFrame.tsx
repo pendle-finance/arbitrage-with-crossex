@@ -41,7 +41,7 @@ export function SetupRowFrame({
   const showsNotSetUp = !isDone && state === null && (isSettings || isSkipped);
   const line = showsNotSetUp ? 'not set up' : state;
   const isLineWarn = isWarn || showsNotSetUp;
-  const dot: DotTone = isDone && !isLineWarn ? 'done' : row.open ? 'current' : isLineWarn ? 'warn' : 'later';
+  const dot: DotTone = isDone && !isLineWarn ? 'done' : isLineWarn ? 'warn' : row.open ? 'current' : 'later';
   const canSkip = !isSettings && !isDone && row.onSkip !== undefined && skipConsequence !== undefined;
 
   const action = row.open ? (
@@ -67,7 +67,10 @@ export function SetupRowFrame({
   };
 
   return (
-    <section aria-label={title} className="flex flex-col gap-3 px-4 py-3">
+    <section
+      aria-label={title}
+      className={`flex flex-col gap-3 px-4 py-3 ${isLineWarn ? 'rounded border border-gold/45' : ''}`}
+    >
       <div className="flex items-center gap-3">
         <span
           aria-hidden="true"

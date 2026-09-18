@@ -87,4 +87,48 @@ describe('SinceChip', () => {
     fireEvent.change(input, { target: { value: '' } });
     expect(onChange).not.toHaveBeenCalled();
   });
+
+  it('ignores a date after today and keeps the stored date, no date after today', async () => {
+    const onChange = vi.fn();
+    render(<SinceChip base="HYPE" storedSec={MARCH_SEC} defaultSec={DEFAULT_SEC} onChange={onChange} />);
+    await userEvent.click(screen.getByRole('button', { name: /Since 1 Mar 2026/ }));
+    const card = await screen.findByRole('tooltip');
+    const input = within(card).getByLabelText('Count HYPE PnL from');
+    fireEvent.change(input, { target: { value: '2099-01-01' } });
+    expect(onChange).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: /Since 1 Mar 2026/ })).toBeInTheDocument();
+  });
+
+  it('opens on Tab and Enter, moves on typing, resets on Use default, stays open on an inside click, closes on Escape, keyboard walk', async () => {
+    const onChange = vi.fn();
+    render(<SinceChip base="HYPE" storedSec={MARCH_SEC} defaultSec={DEFAULT_SEC} onChange={onChange} />);
+
+    await userEvent.tab();
+    const chip = screen.getByRole('button', { name: /Since 1 Mar 2026/ });
+    expect(chip).toHaveFocus();
+
+    await userEvent.keyboard('{Enter}');
+    const card = await screen.findByRole('tooltip');
+
+    await userEvent.tab();
+    const input = within(card).getByLabelText('Count HYPE PnL from');
+    expect(input).toHaveFocus();
+
+    fireEvent.change(input, { target: { value: '2026-07-01' } });
+    expect(onChange).toHaveBeenCalledWith(Math.floor(new Date('2026-07-01T00:00').getTime() / 1000));
+
+    await userEvent.tab();
+    await userEvent.tab();
+    const useDefault = within(card).getByRole('button', { name: 'Use default' });
+    expect(useDefault).toHaveFocus();
+
+    await userEvent.keyboard('{Enter}');
+    expect(onChange).toHaveBeenLastCalledWith(undefined);
+
+    fireEvent.click(within(card).getByText('Count HYPE PnL from'));
+    expect(screen.getByRole('tooltip')).toBeInTheDocument();
+
+    await userEvent.keyboard('{Escape}');
+    expect(screen.queryByRole('tooltip')).toBeNull();
+  });
 });

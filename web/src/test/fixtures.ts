@@ -2780,13 +2780,13 @@ const WHALE_ASSETS = [
 
 const WHALE_POSITIONS = [
   makeCrossexPosition({
-    symbol: 'GATE_FUTURE_ETH_USDT', positionSide: 'LONG', positionQty: '4100', positionValue: '10138234',
-    entryPrice: '2471.9', markPrice: '2472.74', leverage: '10', upnl: '3444', upnlRate: '0.0034',
+    symbol: 'BINANCE_FUTURE_ETH_USDT', positionSide: 'SHORT', positionQty: '-4100', positionValue: '10138234',
+    entryPrice: '2473.58', markPrice: '2472.74', leverage: '10', upnl: '3444', upnlRate: '0.0034',
     fundingFee: '-2310.55', fee: '-5069.117', initialMargin: '1013823.4', maintenanceMargin: '101382.34',
   }),
   makeCrossexPosition({
-    symbol: 'HYPERLIQUID_FUTURE_ETH_USDC', positionSide: 'SHORT', positionQty: '-4100', positionValue: '10140981',
-    entryPrice: '2474.2', markPrice: '2473.41', leverage: '10', maxLeverage: '25', upnl: '3239', upnlRate: '0.0032',
+    symbol: 'HYPERLIQUID_FUTURE_ETH_USDC', positionSide: 'LONG', positionQty: '4100', positionValue: '10140981',
+    entryPrice: '2472.62', markPrice: '2473.41', leverage: '10', maxLeverage: '25', upnl: '3239', upnlRate: '0.0032',
     fundingFee: '4875.2', fee: '-5070.4905', initialMargin: '1014098.1', maintenanceMargin: '101409.81',
   }),
   makeCrossexPosition({
@@ -2801,7 +2801,7 @@ const WHALE_POSITIONS = [
   }),
 ];
 
-const [whaleGateEth, whaleHlEth, whaleGateHype, whaleHlHype] = WHALE_POSITIONS;
+const [whaleBinanceEth, whaleHlEth, whaleGateHype, whaleHlHype] = WHALE_POSITIONS;
 
 export const whaleBook = {
   account: {
@@ -2814,13 +2814,16 @@ export const whaleBook = {
       {
         base: 'ETH',
         legs: [
-          { symbol: 'GATE_FUTURE_ETH_USDT', exchange: 'GATE', quote: 'USDT', side: 'LONG', qty: 4100, value: 10_138_234 },
           {
-            symbol: 'HYPERLIQUID_FUTURE_ETH_USDC', exchange: 'HYPERLIQUID', quote: 'USDC', side: 'SHORT', qty: 4100,
+            symbol: 'BINANCE_FUTURE_ETH_USDT', exchange: 'BINANCE', quote: 'USDT', side: 'SHORT', qty: 4100,
+            value: 10_138_234,
+          },
+          {
+            symbol: 'HYPERLIQUID_FUTURE_ETH_USDC', exchange: 'HYPERLIQUID', quote: 'USDC', side: 'LONG', qty: 4100,
             value: 10_140_981,
           },
         ],
-        longValue: 10_138_234, shortValue: 10_140_981, netValue: -2_747, grossValue: 20_279_215, neutral: true,
+        longValue: 10_140_981, shortValue: 10_138_234, netValue: 2_747, grossValue: 20_279_215, neutral: true,
         singleLeg: false,
       },
       {
@@ -2843,7 +2846,7 @@ export const whaleBook = {
       assetGroup(
         'ETH',
         2472.74,
-        [perpFromPosition(whaleGateEth, 1_783_000_000), perpFromPosition(whaleHlEth, 1_783_000_000)],
+        [perpFromPosition(whaleBinanceEth, 1_783_000_000), perpFromPosition(whaleHlEth, 1_783_000_000)],
         borosLegs(4100, 2472.74, 18_234.56),
       ),
       assetGroup('HYPE', 86.597, [
@@ -2899,9 +2902,126 @@ function pairContext(closeOnly: 'A' | 'B', size: number): BorosPairContext {
   };
 }
 
+const closeOnlyABase = pairContext('A', 1.2);
+
 export const pairContextBodies = {
-  closeOnlyA: pairContext('A', 1.2),
+  closeOnlyA: closeOnlyABase,
+  closeOnlyALong: {
+    ...closeOnlyABase,
+    markets: [
+      { ...closeOnlyABase.markets[0], currentSize: 1.2 },
+      { ...closeOnlyABase.markets[1], currentSize: -1.2 },
+    ],
+  },
   closeOnlyB: pairContext('B', 1.2),
   whaleCloseOnlyA: pairContext('A', 4100),
   whaleCloseOnlyB: pairContext('B', 4100),
 } satisfies Record<string, BorosPairContext>;
+
+function roundedText(x: number): string {
+  return String(Math.round(x * 1e8) / 1e8);
+}
+
+function positionFromPerp(p: AssetPerpOpen): CrossexPosition {
+  return makeCrossexPosition({
+    symbol: p.symbol, positionSide: p.side, positionQty: roundedText(p.side === 'LONG' ? p.qty : -p.qty),
+    positionValue: roundedText(p.notionalUsd), entryPrice: roundedText(p.entryPrice),
+    markPrice: roundedText(p.markPrice),
+    leverage: roundedText(p.leverage), upnl: roundedText(p.upnlUsd), upnlRate: roundedText(p.upnlUsd / p.imUsd),
+    fundingFee: roundedText(p.fundingUsd), fee: roundedText(-p.feesUsd), initialMargin: roundedText(p.imUsd),
+    maintenanceMargin: roundedText(p.imUsd / 10),
+  });
+}
+
+function positionsWithExposure(positions: CrossexPosition[]): PositionsResponse {
+  const legs = positions.map((p) => {
+    const [exchange, , base, quote] = p.symbol.split('_');
+    const side: 'LONG' | 'SHORT' = p.positionSide === 'SHORT' ? 'SHORT' : 'LONG';
+    const qty = Math.abs(Number(p.positionQty));
+    return { base, leg: { symbol: p.symbol, exchange, quote, side, qty, value: Number(p.positionValue) } };
+  });
+  const exposure = [...new Set(legs.map((l) => l.base))].map((base) => {
+    const group = legs.filter((l) => l.base === base).map((l) => l.leg);
+    const valueOf = (side: 'LONG' | 'SHORT') => group.filter((l) => l.side === side).reduce((a, l) => a + l.value, 0);
+    const longValue = valueOf('LONG');
+    const shortValue = valueOf('SHORT');
+    const grossValue = longValue + shortValue;
+    return {
+      base, legs: group, longValue, shortValue, netValue: longValue - shortValue, grossValue,
+      neutral: grossValue > 0 && Math.abs(longValue - shortValue) / grossValue < 0.02,
+      singleLeg: group.every((l) => l.side === group[0].side),
+    };
+  });
+  return { positions, exposure: exposure.sort((a, b) => b.grossValue - a.grossValue) };
+}
+
+export const assetViewPositions = {
+  unsupported: positionsWithExposure(
+    assetViewBodies.unsupported.assets.flatMap((g) => g.perpOpen).map(positionFromPerp),
+  ),
+  whaleUnsupported: positionsWithExposure([
+    ...whaleBook.positions.positions,
+    ...solWhaleLeg.perpOpen.map(positionFromPerp),
+  ]),
+} satisfies Record<string, PositionsResponse>;
+
+function closeOnlyOpportunities(context: BorosPairContext): OpportunitiesResult {
+  const [binance, hyperliquid] = context.markets;
+  const secondsToMaturity = binance.maturity - FIXTURE_NOW_SEC;
+  const nt = OPP_NOTIONAL * (secondsToMaturity / (365 * 24 * 3600));
+  const halfSpreadApr = 0.0005;
+  const row = (m: BorosPairMarketRow, crossexSymbol: string) =>
+    makeOpportunityMarketRow({
+      marketId: m.marketId, name: m.name, venue: m.venue, crossexVenue: m.venue, crossexSymbol, base: m.base,
+      midApr: m.midApr, markApr: m.markApr, execShortApr: m.midApr - halfSpreadApr,
+      execLongApr: m.midApr + halfSpreadApr,
+    });
+  const leg = (m: BorosPairMarketRow, crossexSymbol: string, execApr: number) =>
+    makeOpportunityLeg({
+      marketId: m.marketId, venue: m.venue, crossexVenue: m.venue, crossexSymbol, base: m.base, midApr: m.midApr,
+      execApr,
+    });
+  const hyperliquidSymbol = 'HYPERLIQUID_FUTURE_ETH_USDC';
+  const binanceSymbol = 'BINANCE_FUTURE_ETH_USDT';
+  const shortExecApr = hyperliquid.midApr - halfSpreadApr;
+  const longExecApr = binance.midApr + halfSpreadApr;
+  const template = makeOpportunityPair();
+  const { perpEntryFeesUsd, perpEntrySlippageUsd, perpExitFeesUsd, perpExitSlippageUsd } = template.costs;
+  const borosTakerFeeUsd = 0.001 * nt;
+  const borosSettleFeeUsd = 0.002 * nt;
+  const totalUsd = [
+    borosTakerFeeUsd, borosSettleFeeUsd, perpEntryFeesUsd, perpEntrySlippageUsd, perpExitFeesUsd, perpExitSlippageUsd,
+  ].reduce<number>((a, x) => a + (x ?? 0), 0);
+  const grossSpreadApr = hyperliquid.midApr - binance.midApr;
+  const execSpreadApr = shortExecApr - longExecApr;
+  const netFixedApr = execSpreadApr - totalUsd / nt;
+  const estProfitUsd = netFixedApr * nt;
+  const capitalUsd = template.capitalUsd ?? 0;
+  const pair: OpportunityPair = {
+    ...template,
+    shortLeg: leg(hyperliquid, hyperliquidSymbol, shortExecApr),
+    longLeg: leg(binance, binanceSymbol, longExecApr),
+    grossSpreadApr,
+    execSpreadApr,
+    borosImpactApr: grossSpreadApr - execSpreadApr,
+    costs: { ...template.costs, borosTakerFeeUsd, borosSettleFeeUsd, totalUsd, annualizedApr: totalUsd / nt },
+    netFixedApr,
+    netFixedAprOnCapital: capitalUsd > 0 ? estProfitUsd / (capitalUsd * (nt / OPP_NOTIONAL)) : null,
+    estProfitUsd,
+    secondsToMaturity,
+  };
+  return makeOpportunitiesResult({
+    groups: [
+      makeOpportunityGroup({
+        tokenId: binance.tokenId, collateral: binance.collateral, collateralPriceUsd: binance.collateralPriceUsd,
+        maturity: binance.maturity, secondsToMaturity,
+        markets: [row(hyperliquid, hyperliquidSymbol), row(binance, binanceSymbol)], pairs: [pair],
+      }),
+    ],
+    meta: { ...makeOpportunitiesResult().meta, asOfSec: FIXTURE_NOW_SEC },
+  });
+}
+
+export const opportunitiesBodies = {
+  closeOnlyA: closeOnlyOpportunities(pairContextBodies.closeOnlyA),
+} satisfies Record<string, OpportunitiesResult>;

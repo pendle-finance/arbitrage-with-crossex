@@ -2064,7 +2064,7 @@ export function AssetCard({
                 b={b}
                 base={group.base}
                 nowSec={nowSec}
-                defaultOpen={false}
+                defaultOpen={!group.supported}
                 histByMarket={histByMarket}
                 chainLegs={chainLegs}
                 histKeep={histKeep}

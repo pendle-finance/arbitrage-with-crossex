@@ -47,7 +47,7 @@ import { QueryError } from '../components/QueryError';
 import { SegmentedToggle } from '../components/SegmentedToggle';
 import { amountError } from '../lib/amount';
 import { isUsdCollateral, knownRate } from '../lib/boros';
-import { fieldValue, fmtPct, sig } from '../lib/fmt';
+import { fieldValue, fmtPct, sigGrouped } from '../lib/fmt';
 import { useNow } from '../lib/useNow';
 import { uuid } from '../lib/uuid';
 import { useTrackedAddressOptional } from '../panels/trackedAddress';
@@ -881,7 +881,7 @@ export function BorosPairTicket({
             {simulation ? (
               <>
                 <span className="text-ink-400">
-                  {sig(Math.abs((activeLeg === 'B' ? simulation.legB : simulation.legA).sizing.currentSize))}
+                  {sigGrouped(Math.abs((activeLeg === 'B' ? simulation.legB : simulation.legA).sizing.currentSize))}
                 </span>
                 <span className="text-ink-600"> → </span>
                 {/* Single mode: this line IS the position readout (the venue
@@ -900,7 +900,7 @@ export function BorosPairTicket({
                           : undefined
                   }
                 >
-                  {sig(Math.abs((activeLeg === 'B' ? simulation.legB : simulation.legA).sizing.resultingSize))}
+                  {sigGrouped(Math.abs((activeLeg === 'B' ? simulation.legB : simulation.legA).sizing.resultingSize))}
                 </span>{' '}
                 <span className="text-ink-400">{simulation.collateral}</span>
               </>
@@ -916,7 +916,7 @@ export function BorosPairTicket({
           <span className="num text-[12px] text-ink-100">
             {availableToTrade !== null ? (
               <>
-                {sig(availableToTrade)}{' '}
+                {sigGrouped(availableToTrade)}{' '}
                 <span className="text-ink-400">{rowA?.collateral ?? ''}</span>
               </>
             ) : (

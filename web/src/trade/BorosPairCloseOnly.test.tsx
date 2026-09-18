@@ -6,11 +6,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ActionInput, PreviewResponse } from '../api/types';
 import { TabActiveContext } from '../components/TabBar';
 import { STRATEGY_STORAGE_KEY } from '../panels/HomeControls';
-import { baseHandlers, ethPosition, previewFor } from '../test/fixtures';
+import { baseHandlers, ethPosition, pairContextBodies, previewFor } from '../test/fixtures';
 import { env, server } from '../test/server';
 import { renderWithClient } from '../test/utils';
 import { BorosPairTicket } from './BorosPairTicket';
 import { ClosePopover } from './ClosePopover';
+import { useTradeFlow, type BorosOpenPrefill } from './TradeFlow';
 
 const ADDRESS = '0x1111111111111111111111111111111111111111';
 const HL = 155;
@@ -213,6 +214,83 @@ describe('BorosPairTicket — close-only market', () => {
 
     await waitFor(() => expect(executes.length).toBe(1));
     expect(executes[0]).toMatchObject({ intent: 'close' });
+  });
+});
+
+function GuidedPrefillHarness({ prefill }: { prefill: Omit<BorosOpenPrefill, 'nonce'> }) {
+  const flow = useTradeFlow();
+  return (
+    <>
+      <button type="button" onClick={() => flow.prefillBorosOpen(prefill)}>
+        fire
+      </button>
+      <BorosPairTicket guided />
+    </>
+  );
+}
+
+describe('BorosPairTicket — target mode on the closeOnlyALong fixture body', () => {
+  it('a long target on market A grows past the held size and refuses', async () => {
+    const [marketA, marketB] = pairContextBodies.closeOnlyALong.markets;
+    server.use(
+      http.get('/api/boros/agent', () => HttpResponse.json(env(agentStatus()))),
+      http.get('/api/boros/pair/context', () => HttpResponse.json(env(pairContextBodies.closeOnlyALong))),
+      http.post('/api/boros/pair/simulate', () =>
+        HttpResponse.json(
+          env({
+            simulation: {
+              ...simulation(),
+              legA: simLeg({
+                marketId: marketA.marketId,
+                marketName: marketA.name,
+                venue: marketA.venue,
+                direction: 'long',
+                sizing: {
+                  currentSize: marketA.currentSize,
+                  deltaSize: 3.8,
+                  resultingSize: 5,
+                  opposing: false,
+                  flips: false,
+                  clampedToClose: false,
+                  orderSide: 'long',
+                },
+              }),
+              legB: simLeg({
+                marketId: marketB.marketId,
+                marketName: marketB.name,
+                venue: marketB.venue,
+                direction: 'short',
+                sizing: {
+                  currentSize: marketB.currentSize,
+                  deltaSize: -3.8,
+                  resultingSize: -5,
+                  opposing: false,
+                  flips: false,
+                  clampedToClose: false,
+                  orderSide: 'short',
+                },
+              }),
+            },
+            gate: { blockers: [], warnings: [], requiresAcknowledgement: false, opposingLegs: [] },
+            eligibility: { eligible: true, code: null, reason: null },
+            simulatedAtMs: Date.now(),
+            gasBalanceUsd: null,
+          }),
+        ),
+      ),
+    );
+    const user = userEvent.setup();
+    renderWithClient(
+      <GuidedPrefillHarness
+        prefill={{ base: 'ETH', longVenue: marketA.venue, shortVenue: marketB.venue, size: 5, sizeBase: 5 }}
+      />,
+    );
+    await user.click(screen.getByRole('button', { name: 'fire' }));
+
+    const btn = await screen.findByRole('button', {
+      name: 'Market A takes closes only. Switch to Close.',
+    });
+    expect(btn).toBeDisabled();
   });
 });
 

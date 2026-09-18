@@ -289,8 +289,8 @@ function cardChips(pair: OpportunityPair): CardChip[] {
     if (!leg.crossexSymbol) {
       chips.push({
         key: `sym:${side}`,
-        label: `no CX symbol · ${leg.venue}`,
-        title: `${leg.venue} lists no CrossEx perp for ${leg.base} — that leg won't prefill`,
+        label: `no CX symbol · ${prettyVenue(leg.venue)}`,
+        title: `${prettyVenue(leg.venue)} lists no CrossEx perp for ${leg.base} — that leg won't prefill`,
       });
     }
   }
@@ -477,7 +477,7 @@ const OpportunityCard = memo(function OpportunityCard({
   const executeTitle = basesDiffer
     ? `The legs trade different assets (${pair.shortLeg.base} vs ${pair.longLeg.base}) — the pair ticket takes one base`
     : noSymbols
-      ? `Neither ${pair.shortLeg.venue} nor ${pair.longLeg.venue} lists a CrossEx perp for ${pair.base}`
+      ? `Neither ${prettyVenue(pair.shortLeg.venue)} nor ${prettyVenue(pair.longLeg.venue)} lists a CrossEx perp for ${pair.base}`
       : 'Opens this strategy step by step — lock the Boros rate first, then hedge with the perps. You confirm each order yourself.';
   const detailsDisabled =
     !canChartProfit(pair) && !canChartCapital(pair) && pair.execSpreadApr === null;

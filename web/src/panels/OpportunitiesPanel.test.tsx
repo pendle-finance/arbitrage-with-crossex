@@ -243,7 +243,7 @@ describe('OpportunitiesPanel — ranking and null tolerance', () => {
 
     await waitFor(() => expect(executeButtons()).toHaveLength(2));
     expect(executeButtons()[0]).toBeEnabled();
-    expect(screen.getByText('no CX symbol · HYPERLIQUID')).toBeInTheDocument();
+    expect(screen.getByText('no CX symbol · Hyperliquid')).toBeInTheDocument();
     expect(executeButtons()[1]).toBeDisabled();
     expect(executeButtons()[1]).toHaveAttribute(
       'title',
@@ -281,8 +281,8 @@ describe('OpportunitiesPanel — capital basis', () => {
     // The asset line names the underlying (via its badge) and both venue legs
     // by side.
     expect(screen.getByText('ETH')).toBeInTheDocument();
-    expect(screen.getByText('SHORT · HYPERLIQUID')).toBeInTheDocument();
-    expect(screen.getByText('LONG · BINANCE')).toBeInTheDocument();
+    expect(screen.getByText('SHORT · Hyperliquid')).toBeInTheDocument();
+    expect(screen.getByText('LONG · Binance')).toBeInTheDocument();
   });
 
   it('hides a loss-making group — costs can swallow the whole spread', async () => {

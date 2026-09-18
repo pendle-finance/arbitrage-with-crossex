@@ -58,6 +58,17 @@ describe('fetchBorosMarkets', () => {
     expect(markets[0].paymentPeriod).toBe(3600);
   });
 
+  it('reads a known venue the same whatever case Boros stores its platformId in', async () => {
+    const venueOf = async (platformId: string) =>
+      (await fetchBorosMarkets(stub(() => ({ body: { results: [{ marketId: 201, tokenId: 3, platform: { platformId } }] } }))))[0]
+        .venue;
+    expect(await venueOf('lighter')).toBe('Lighter');
+    expect(await venueOf('Lighter')).toBe('Lighter');
+    expect(await venueOf('HYPERLIQUID')).toBe('Hyperliquid');
+    expect(await venueOf('okx')).toBe('OKX');
+    expect(await venueOf('Kucoin')).toBe('Kucoin');
+  });
+
   it('maps config.status (on-chain MarketStatus) to the lifecycle state', async () => {
     const mk = (status: unknown) => ({ marketId: 155, tokenId: 3, config: { status } });
     const states = async (status: unknown) =>

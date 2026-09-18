@@ -72,7 +72,7 @@ export type BookStatus = 'ok' | 'insufficient-depth' | 'unavailable' | 'not-fetc
 export interface OpportunityMarketRow {
   marketId: number;
   name: string;
-  /** Boros platformName, verbatim. */
+  /** Boros platformId, display-cased. */
   venue: string;
   /** Mapped CrossEx exchange; null when the venue has no CrossEx perp. */
   crossexVenue: string | null;
@@ -110,7 +110,7 @@ export interface OpportunityCostBreakdown {
 
 export interface OpportunityLeg {
   marketId: number;
-  /** Boros platformName. */
+  /** Boros platformId, display-cased. */
   venue: string;
   crossexVenue: string;
   crossexSymbol: string;

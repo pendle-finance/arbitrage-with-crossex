@@ -4,8 +4,10 @@ import {
   agentStatus,
   assetView,
   assetViewBodies,
+  assetViewPositions,
   credentialsBodies,
   credentialsRefused,
+  opportunitiesBodies,
   pairContextBodies,
   telegramBodies,
   telegramInfo,
@@ -72,6 +74,7 @@ describe('fixture state bodies', () => {
     expect(whaleSol?.perpOpen[0]?.upnlUsd).toBe(6_000_000.37);
     expect(pairContextBodies.closeOnlyA.markets.map((m) => m.closeOnly)).toEqual([true, false]);
     expect(pairContextBodies.closeOnlyB.markets.map((m) => m.closeOnly)).toEqual([false, true]);
+    expect(pairContextBodies.closeOnlyALong.markets.map((m) => m.currentSize)).toEqual([1.2, -1.2]);
 
     const { account: acct, positions: book, assetView: av } = whaleBook;
     const { positions, exposure } = book;
@@ -126,6 +129,34 @@ describe('fixture state bodies', () => {
       for (const b of g.borosOpen) expect(units(b.sizeToken * g.priceUsd)).toBe(units(b.notionalUsd));
     }
     expect(av.interest).toMatchObject({ paidUsd: 11_834.21, byCoin: { USDT: 11_834.21 } });
+
+    for (const g of [...av.assets, ...assetViewBodies.whaleUnsupported.assets]) {
+      for (const b of g.borosOpen) {
+        const perp = g.perpOpen.find((p) => p.venue === b.venue);
+        expect(perp, `${g.base} ${b.venue} Boros leg has no perp`).toBeDefined();
+        expect(perp?.side).toBe(b.side);
+        expect(perp?.qty).toBe(b.sizeToken);
+      }
+    }
+
+    for (const key of ['unsupported', 'whaleUnsupported'] as const) {
+      const body = assetViewPositions[key];
+      const view = assetViewBodies[key];
+      const symbols = view.assets.flatMap((g) => g.perpOpen.map((p) => p.symbol)).sort();
+      expect(body.positions.map((p) => p.symbol).sort()).toEqual(symbols);
+      expect(symbols).toContain('GATE_FUTURE_SOL_USDT');
+      for (const g of body.exposure) {
+        expect(sum(g.legs.map((l) => l.value))).toBe(units(g.grossValue));
+      }
+    }
+
+    const opportunity = opportunitiesBodies.closeOnlyA.groups[0];
+    const closeOnlyMarket = pairContextBodies.closeOnlyA.markets.find((m) => m.closeOnly);
+    expect(opportunitiesBodies.closeOnlyA.groups).toHaveLength(1);
+    expect(opportunity.underlying).toBe('ETH');
+    expect(opportunity.maturity).toBe(closeOnlyMarket?.maturity);
+    expect(opportunity.pairs[0].longLeg.marketId).toBe(closeOnlyMarket?.marketId);
+    expect(opportunity.pairs[0].netFixedAprOnCapital).toBeGreaterThan(0);
 
     expect(JSON.stringify(whaleBook)).toContain('999999.995');
     expect(positions.some((p) => /^\d{8}(\.|$)/.test(p.positionValue))).toBe(true);

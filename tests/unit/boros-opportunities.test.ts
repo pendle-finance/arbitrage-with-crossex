@@ -681,6 +681,38 @@ describe('buildOpportunities — degraded modes', () => {
     );
   });
 
+  it('a Boros venue in lower case still finds its CrossEx perp', () => {
+    const LT_SYMBOL = 'LIGHTER_FUTURE_ETH_USDC';
+    const ltMarket: BorosMarket = { ...bnMarket, marketId: 187, name: 'Lighter ETH 31 Aug 2026', venue: 'lighter', midApr: 0.07 };
+    const built = buildOpportunities(
+      input({
+        markets: [hlMarket, ltMarket],
+        borosBooks: new Map([
+          [155, borosBook(155, 0.0899, 0.0901)],
+          [187, borosBook(187, 0.0699, 0.0701)],
+        ]),
+        venueBooks: new Map([
+          [HL_SYMBOL, perpBook(0.1)],
+          [LT_SYMBOL, perpBook(0.1)],
+        ]),
+        symbolsByVenueBase: new Map([
+          ['HYPERLIQUID:ETH', HL_SYMBOL],
+          ['LIGHTER:ETH', LT_SYMBOL],
+        ]),
+        leverageMaxBySymbol: new Map([
+          [HL_SYMBOL, HL_LEVERAGE],
+          [LT_SYMBOL, 50],
+        ]),
+        feeRows: [...feeRows, { exchangeType: 'LIGHTER', futureMakerFee: '0.0002', futureTakerFee: '0.0005' }],
+      }),
+      opts(),
+    );
+    const pair = built.groups[0].pairs.find((p) => p.longLeg.marketId === 187)!;
+    expect(pair.longLeg.crossexVenue).toBe('LIGHTER');
+    expect(pair.longLeg.crossexSymbol).toBe(LT_SYMBOL);
+    expect(pair.netFixedApr).not.toBeNull();
+  });
+
   it('a venue pairs as soon as CrossEx lists it, with no code change', () => {
     const LT_SYMBOL = 'LIGHTER_FUTURE_ETH_USDC';
     const ltMarket: BorosMarket = { ...bnMarket, marketId: 187, name: 'Lighter ETH 31 Aug 2026', venue: 'Lighter', midApr: 0.07 };

@@ -469,13 +469,9 @@ describe('BorosPairTicket', () => {
     // rule is still stated somewhere the user can reach it.
     expect((await screen.findAllByTitle(/whole exposure there/i)).length).toBe(2);
     expect(screen.getAllByText(/→/).length).toBeGreaterThan(0);
-    // Current and resulting share one line, "150k USDT → 50k USDT". The TRADE
-    // column is deliberately gone: it was the reader doing the addition to
-    // reach the resulting figure, which the arrow states outright. Signs are
-    // gone too — direction is the colour now — but BOTH figures must show.
     const netted = (await screen.findAllByTitle(/whole exposure there/i))[0];
-    expect(netted).toHaveTextContent(/150k/);
-    expect(netted).toHaveTextContent(/50k/);
+    expect(netted).toHaveTextContent(/150,000/);
+    expect(netted).toHaveTextContent(/50,000/);
   });
 
   it('blocks confirm behind the acknowledgement, and retracts it when the trade changes', async () => {
@@ -602,6 +598,100 @@ describe('BorosPairTicket', () => {
     const short = document.querySelectorAll('.text-rose-300');
     expect(long.length).toBeGreaterThan(0);
     expect(short.length).toBeGreaterThan(0);
+  });
+
+  it('groups whale-scale sizes with thousands commas, never bare or compact', async () => {
+    const user = userEvent.setup();
+    server.use(
+      ...handlers({
+        sim: {
+          collateral: 'ETH',
+          collateralPriceUsd: 3_000,
+          legA: simLeg({
+            sizing: {
+              currentSize: 0,
+              deltaSize: -4_100,
+              resultingSize: -4_100,
+              opposing: false,
+              flips: false,
+              clampedToClose: false,
+              orderSide: 'short',
+            },
+          }),
+          legB: simLeg({
+            marketId: BN,
+            marketName: 'Binance ETHUSDT 31 Aug 2026',
+            venue: 'Binance',
+            direction: 'long',
+            sizing: {
+              currentSize: 0,
+              deltaSize: 4_100,
+              resultingSize: 4_100,
+              opposing: false,
+              flips: false,
+              clampedToClose: false,
+              orderSide: 'long',
+            },
+          }),
+          hedgedSize: 4_100,
+        },
+      }),
+    );
+    const { container } = renderWithClient(<BorosPairTicket />);
+    await fillTicket(user);
+
+    await screen.findByText('Estimated spread');
+    expect(screen.getAllByText(/4,100/).length).toBeGreaterThan(0);
+    expect(container.textContent).not.toContain('4100');
+    expect(container.textContent).not.toContain('4.1k');
+  });
+
+  it('groups a 12,345,678.9 ETH size in full, never scientific or compact', async () => {
+    const user = userEvent.setup();
+    server.use(
+      ...handlers({
+        sim: {
+          collateral: 'ETH',
+          collateralPriceUsd: 3_000,
+          legA: simLeg({
+            sizing: {
+              currentSize: 0,
+              deltaSize: -12_345_678.9,
+              resultingSize: -12_345_678.9,
+              opposing: false,
+              flips: false,
+              clampedToClose: false,
+              orderSide: 'short',
+            },
+          }),
+          legB: simLeg({
+            marketId: BN,
+            marketName: 'Binance ETHUSDT 31 Aug 2026',
+            venue: 'Binance',
+            direction: 'long',
+            sizing: {
+              currentSize: 0,
+              deltaSize: 12_345_678.9,
+              resultingSize: 12_345_678.9,
+              opposing: false,
+              flips: false,
+              clampedToClose: false,
+              orderSide: 'long',
+            },
+          }),
+          hedgedSize: 12_345_678.9,
+        },
+      }),
+    );
+    const { container } = renderWithClient(<BorosPairTicket />);
+    await fillTicket(user);
+
+    await screen.findByText('Estimated spread');
+    expect(screen.getAllByText(/12,345,678\.9/).length).toBeGreaterThan(0);
+    expect(container.textContent).not.toMatch(/e\+/i);
+    expect(container.textContent).not.toContain('12345678.9');
+    expect(container.textContent).not.toContain('12,345,679');
+    expect(container.textContent).not.toMatch(/12M\b/);
   });
 
   it('shows the venue’s own words when a leg is rejected outright', async () => {
