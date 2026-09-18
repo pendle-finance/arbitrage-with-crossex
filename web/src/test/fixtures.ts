@@ -2568,6 +2568,18 @@ export const telegramBodies = {
     connected: true, state: 'connected', settings: { liquidation: false, interest: false },
     lastSyncAt: REBALANCE_NOW - 3 * MIN_MS,
   }),
+  liquidationOnly: telegramInfo({
+    connected: true, state: 'connected', settings: { liquidation: true, interest: false },
+    lastSyncAt: REBALANCE_NOW - 3 * MIN_MS,
+  }),
+  interestOnly: telegramInfo({
+    connected: true, state: 'connected', settings: { liquidation: false, interest: true },
+    lastSyncAt: REBALANCE_NOW - 3 * MIN_MS,
+  }),
+  bootFailed: telegramInfo({
+    connected: true, state: 'connected', settings: null, lastSyncAt: null,
+    lastSyncError: { at: REBALANCE_NOW - 2 * MIN_MS, message: 'The Telegram bot answered 503.' },
+  }),
   syncFailed: telegramInfo({
     connected: true, state: 'connected', settings: BOTH_ON, lastSyncAt: REBALANCE_NOW - 47 * MIN_MS,
     lastSyncError: { at: REBALANCE_NOW - 2 * MIN_MS, message: 'The Telegram bot answered 503.' },
@@ -2716,6 +2728,18 @@ const solLeg: AssetGroup = {
   supported: false,
 };
 
+const solWhaleLeg: AssetGroup = {
+  ...assetGroup('SOL', 181.25, [
+    { ...perpLeg('GATE_FUTURE_SOL_USDT', 'LONG', 12, 176.4, 181.25, 0.84, 1_788_000_000), upnlUsd: 6_000_000.37 },
+  ]),
+  supported: false,
+};
+
+const ownerEthEntryPending: AssetGroup = {
+  ...ownerEth,
+  borosOpen: ownerEth.borosOpen.map((leg, i) => (i === 0 ? { ...leg, entryApr: null } : leg)),
+};
+
 const avDefault: AssetViewResponse = {
   ...assetView,
   sinceSec: OWNER_DEFAULT_SINCE_SEC,
@@ -2839,9 +2863,15 @@ export const assetViewBodies = {
     sinceSec: MAR_1_2026_SEC,
     coverage: { ...avDefault.coverage, backfilling: true },
   },
+  backfillingAllTime: {
+    ...avAllTime,
+    coverage: { ...avAllTime.coverage, backfilling: true },
+  },
   unsupported: { ...avDefault, assets: [ownerEth, ownerHype, solLeg] },
   noDefault: { ...avAllTime, defaultSinceSec: null },
+  entryPending: { ...avDefault, assets: [ownerEthEntryPending, ownerHype] },
   whale: whaleBook.assetView,
+  whaleUnsupported: { ...whaleBook.assetView, assets: [...whaleBook.assetView.assets, solWhaleLeg] },
 } satisfies Record<string, AssetViewResponse>;
 
 function pairRow(over: Partial<BorosPairMarketRow>): BorosPairMarketRow {

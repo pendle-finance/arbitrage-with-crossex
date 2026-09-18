@@ -50,14 +50,26 @@ describe('fixture state bodies', () => {
 
     expect(telegramBodies.syncFailed.lastSyncError?.at).toBeGreaterThan(1e12);
     expect(telegramBodies.connectedBothOff.settings).toEqual({ liquidation: false, interest: false });
+    expect(telegramBodies.liquidationOnly.settings).toEqual({ liquidation: true, interest: false });
+    expect(telegramBodies.interestOnly.settings).toEqual({ liquidation: false, interest: true });
+    expect(telegramBodies.bootFailed.settings).toBeNull();
+    expect(telegramBodies.bootFailed.lastSyncAt).toBeNull();
+    expect(telegramBodies.bootFailed.lastSyncError?.at).toBeGreaterThan(1e12);
     expect(telegramLinkBodies.pending.url).toBe(telegramLinkStart.url);
     expect(credentialsRefused.error).toMatchObject({ category: 'auth', label: 'INVALID_KEY' });
     expect(agentBodies.expired.expired).toBe(true);
     expect(assetViewBodies.backfilling.coverage.backfilling).toBe(true);
+    expect(assetViewBodies.backfillingAllTime.sinceSec).toBe(0);
+    expect(assetViewBodies.backfillingAllTime.coverage.backfilling).toBe(true);
     expect(assetViewBodies.noDefault.defaultSinceSec).toBeNull();
     const sol = assetViewBodies.unsupported.assets.find((a) => a.base === 'SOL');
     expect(sol?.supported).toBe(false);
     expect(sol?.perpOpen.length).toBeGreaterThan(0);
+    const pendingLeg = assetViewBodies.entryPending.assets.find((a) => a.base === 'ETH')?.borosOpen[0];
+    expect(pendingLeg?.entryApr).toBeNull();
+    const whaleSol = assetViewBodies.whaleUnsupported.assets.find((a) => a.base === 'SOL');
+    expect(whaleSol?.supported).toBe(false);
+    expect(whaleSol?.perpOpen[0]?.upnlUsd).toBe(6_000_000.37);
     expect(pairContextBodies.closeOnlyA.markets.map((m) => m.closeOnly)).toEqual([true, false]);
     expect(pairContextBodies.closeOnlyB.markets.map((m) => m.closeOnly)).toEqual([false, true]);
 
