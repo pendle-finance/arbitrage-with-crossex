@@ -3,6 +3,30 @@
 Only substantial releases are listed here — each one bumps `version.json` (which is what the
 in-app update check compares against).
 
+## 1.6.3 — 2026-09-19
+
+TLDR: Rebalance now clears a borrow after your positions are closed, and moves any amount you
+type between two CrossEx wallets.
+
+- **Clear debt.** Close every perp and a USDT or USDC borrow can stay behind. Rebalance used to
+  say "No open positions. Nothing to rebalance." right above it. Clear debt brings every
+  negative wallet to zero, paid from the wallet with the most equity first. It never pays with
+  cash that covers an open loss, so a borrow is cleared, not moved to another wallet. What no
+  wallet can cover shows as the amount short.
+- **Custom amount.** Type an amount, pick a wallet to send from and one to send to. The window
+  prices it like any other move. While a new amount is being priced the hold waits and says so.
+- **Every route, always.** Spot loop + Convert, Spot loop, and Convert are all listed with time
+  and fee side by side. Spot loop runs until the move is done, however many rounds that takes.
+  The recommendation is unchanged: the cheapest route that finishes within 15 minutes.
+- **The card leads with the move worth doing.** With no positions, that is Clear debt. With
+  positions and a borrow, the cheaper of the two. Verdicts name their subject: "Rebalance
+  recommended." or "Clear debt recommended."
+- **With no positions, a borrow is not weighed against the fee.** It blocks a withdrawal
+  whatever clearing it costs, so the card says that instead.
+- **A rate the app could not read is an error,** shown in amber, instead of a silent card.
+- **Fewer "Refresh route" prompts.** A quote only goes stale when its fee rose by more than $1
+  or 5%, the same rule the app applies when you hold.
+
 ## 1.6.2 — 2026-09-17
 
 TLDR: Lighter is on CrossEx, and the app trades it. Rebalance splits your equity across USDT,
