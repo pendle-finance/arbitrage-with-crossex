@@ -307,6 +307,16 @@ export interface SimulatedLeg {
    * its own bound, so it is refused before the wire (dapp-nitro's
    * PRICE_IMPACT_EXCEEDS_SLIPPAGE), not after. */
   slippageExceeded: boolean;
+  /**
+   * The LARGEST order size (collateral units) this side of the book fills
+   * with `estSlippageApr` still inside the tolerance — the biggest slice
+   * that would not trip `slippageExceeded`. A property of the book and the
+   * tolerance, not of the size entered, so a caller can size an order to it
+   * without a search. Null without a book or a mid; 0 when even the best
+   * level sits past the bound. Not capped by the position: a close's caller
+   * takes the smaller of this and what it holds.
+   */
+  sizeWithinTolerance: number | null;
   /** Collateral units the book can actually supply; < requested on a thin book. */
   estFillSize: number;
   /** Requested − estFillSize. Non-zero means this leg alone will fall short. */
@@ -388,6 +398,41 @@ const clampSlippage = (s: number): number =>
   !Number.isFinite(s) || s < 0 ? 0 : Math.min(s, MAX_SLIPPAGE_APR);
 
 /**
+ * How much of one book side can be crossed before the fill's VWAP sits more
+ * than `toleranceApr` from `midApr` the adverse way. Levels come best-first;
+ * each is worth `size` collateral units at `apr`. A level whose own distance
+ * from mid is inside the tolerance is taken whole (the running VWAP can only
+ * be nearer mid than the worst level in it); the first level past it is taken
+ * only up to the size q at which the VWAP reaches the bound exactly:
+ *   (W + a·q) / (Q + q) = tol  ⇒  q = (tol·Q − W) / (a − tol)
+ * where W is the adverse-distance-weighted size filled so far, Q the size
+ * filled so far and a that level's adverse distance. Nothing past that
+ * level can bring the VWAP back, so the walk stops there.
+ */
+export function sizeWithinTolerance(
+  levels: Array<[number, number]>,
+  orderSide: BorosLegDirection,
+  midApr: number,
+  toleranceApr: number,
+): number {
+  if (!Array.isArray(levels) || !Number.isFinite(midApr) || !(toleranceApr >= 0)) return 0;
+  let filled = 0;
+  let weighted = 0;
+  for (const [apr, size] of levels) {
+    if (!Number.isFinite(apr) || !(size > 0)) continue;
+    const adverse = orderSide === 'long' ? apr - midApr : midApr - apr;
+    if (adverse <= toleranceApr) {
+      filled += size;
+      weighted += adverse * size;
+      continue;
+    }
+    const room = (toleranceApr * filled - weighted) / (adverse - toleranceApr);
+    return filled + Math.max(0, Math.min(size, room));
+  }
+  return filled;
+}
+
+/**
  * Walk one leg's book at the entered size. Reuses `walkBorosBook`, which never
  * extrapolates past the last level — a size the book cannot support comes back
  * as a real fill estimate plus a shortfall, not an invented rate.
@@ -444,6 +489,8 @@ function simulateLeg(
   const worstApr =
     anchor === null ? null : orderSide === 'short' ? anchor - slippageApr : anchor + slippageApr;
   const slippageExceeded = size > 0 && estSlippageApr !== null && estSlippageApr > slippageApr + 1e-12;
+  const fitSize =
+    levels && mid !== null ? sizeWithinTolerance(levels, orderSide, mid, slippageApr) : null;
 
   // Margin is charged at the rate the leg actually locks; the IM formula is
   // linear in notional, so collateral units in gives collateral units out.
@@ -481,6 +528,7 @@ function simulateLeg(
     estSlippageApr,
     worstApr,
     slippageExceeded,
+    sizeWithinTolerance: fitSize,
     estFillSize: estFill,
     shortfallSize: Math.max(0, size - estFill),
     bookStatus,

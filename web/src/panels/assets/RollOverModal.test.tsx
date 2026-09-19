@@ -99,6 +99,9 @@ const context = () => ({
   maxSlippageApr: 0.1,
 });
 const venueOf = (marketId: number) => (marketId === GATE_OLD || marketId === GATE_NEW ? 'Gate' : 'Hyperliquid');
+/** What each leg reports as the largest size inside its tolerance; unset
+ * (an older server) leaves the modal on the whole position. */
+let fitSize: number | undefined;
 const simLeg = (marketId: number, direction: 'long' | 'short', size: number, intent: string) => ({
   marketId,
   marketName: `${venueOf(marketId)} ETH ${marketId >= GATE_NEW ? '30 Oct' : '25 Sep'} 2026`,
@@ -112,6 +115,7 @@ const simLeg = (marketId: number, direction: 'long' | 'short', size: number, int
   bookStatus: 'ok',
   marginRequired: 5,
   slippageApr: 0.0025,
+  sizeWithinTolerance: fitSize,
   /**
    * A CLOSE ends flat (the exit); an OPEN adds to what the new markets
    * already hold (the re-entry). The open case matters: Boros nets to one
@@ -229,6 +233,60 @@ async function armAndHold(user: ReturnType<typeof userEvent.setup>) {
 
 beforeEach(() => {
   localStorage.setItem(STRATEGY_STORAGE_KEY, JSON.stringify({ address: ADDRESS }));
+  fitSize = undefined;
+});
+
+describe('RollOverModal — the pick page', () => {
+  it('defaults the size to the largest slice that fills inside tolerance; the shortcuts override it', async () => {
+    const user = userEvent.setup();
+    fitSize = 40;
+    install(ok);
+    renderWithClient(<RollOverModal pair={pair} base="ETH" nowSec={NOW} onClose={() => {}} />);
+    const dialog = await screen.findByRole('dialog');
+    const box = within(dialog).getByLabelText('Size to roll (ETH)');
+    // Whole position until the quotes land, then the books' own limit.
+    await waitFor(() => expect(box).toHaveValue('40'), { timeout: 4_000 });
+    expect(within(dialog).getByText('40%')).toBeInTheDocument();
+    expect(within(dialog).getByRole('note')).toHaveTextContent(/Sized to 40(\.00)? ETH \(40%\)/);
+
+    // The four grips: each sets the share and counts as the trader's choice,
+    // so the default's note goes and no later quote moves the size back.
+    const shortcuts = within(dialog).getByRole('group', { name: 'Share shortcuts' });
+    expect(within(shortcuts).getAllByRole('button').map((b) => b.textContent)).toEqual(['25%', '50%', '75%', '100%']);
+    await user.click(within(shortcuts).getByRole('button', { name: '75%' }));
+    expect(box).toHaveValue('75');
+    expect(within(dialog).queryByRole('note')).not.toBeInTheDocument();
+    await user.click(within(shortcuts).getByRole('button', { name: '25%' }));
+    expect(box).toHaveValue('25');
+    await user.click(within(shortcuts).getByRole('button', { name: '100%' }));
+    expect(box).toHaveValue('100');
+  });
+
+  it('with no fit reported, or a fit above the position, the whole position is the default', async () => {
+    fitSize = 500;
+    install(ok);
+    renderWithClient(<RollOverModal pair={pair} base="ETH" nowSec={NOW} onClose={() => {}} />);
+    const dialog = await screen.findByRole('dialog');
+    // Wait for the option to be priced (its Locked spread line), then a beat.
+    await within(dialog).findByText('Locked spread', undefined, { timeout: 4_000 });
+    await new Promise((r) => setTimeout(r, 300));
+    expect(within(dialog).getByLabelText('Size to roll (ETH)')).toHaveValue('100');
+    expect(within(dialog).queryByRole('note')).not.toBeInTheDocument();
+  });
+
+  it('prices the options at each batch\'s own seeded tolerance, not the server\'s flat default', async () => {
+    const sims: SimBody[] = [];
+    install(ok, { onSimulate: (b) => sims.push(b) });
+    renderWithClient(<RollOverModal pair={pair} base="ETH" nowSec={NOW} onClose={() => {}} />);
+    await screen.findByRole('dialog');
+    await waitFor(() => expect(sims.filter((s) => s.intent === 'open').length).toBeGreaterThan(0), { timeout: 4_000 });
+    // These fixture markets report no deviation cap, so the seed is the 1%
+    // fallback — which is NOT the context's 0.25% default.
+    for (const s of sims) {
+      expect(s.legA.slippageApr).toBeCloseTo(0.01, 9);
+      expect(s.legB.slippageApr).toBeCloseTo(0.01, 9);
+    }
+  });
 });
 
 describe('RollOverModal — the roll as two batches', () => {

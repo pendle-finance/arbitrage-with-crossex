@@ -564,14 +564,20 @@ export function useBorosPairContext(address: string | null) {
  * A POST behind useQuery rather than useMutation on purpose — this is a pure
  * read that happens to need a body, and it has to poll.
  */
-export function useBorosPairSimulation(req: BorosPairRequest | null, enabled = true) {
+export function useBorosPairSimulation(
+  req: BorosPairRequest | null,
+  enabled = true,
+  /** A slower poll for a caller that reads a signal rather than backing a
+   * confirm (the asset card's roll probes). */
+  opts: { refetchInterval?: number } = {},
+) {
   return useQuery({
     // The whole request is the key: any field change is a different quote.
     queryKey: ['boros', 'pair', 'simulate', JSON.stringify(req)] as const,
     queryFn: () => postJson<BorosPairSimulateResponse>('/boros/pair/simulate', req),
     enabled: Boolean(req) && enabled,
     placeholderData: keepPreviousData,
-    refetchInterval: 4_000,
+    refetchInterval: opts.refetchInterval ?? 4_000,
     // A stale quote must never back a confirm, so don't serve one from cache
     // across a remount.
     gcTime: 0,

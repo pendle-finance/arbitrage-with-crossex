@@ -224,6 +224,48 @@
   }
 }
 
+/* The pair card's Roll over pill: once every ten seconds the ↻ turns a full
+   circle and the pill glows for a beat — a nudge, not a siren. The action
+   is the first 8% of the loop; the other 92% is rest. Off under reduced
+   motion. */
+.roll-nudge {
+  animation: rollNudgeGlow 10s ease-in-out infinite;
+}
+.roll-nudge svg {
+  animation: rollNudgeSpin 10s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .roll-nudge,
+  .roll-nudge svg {
+    animation: none;
+  }
+}
+@keyframes rollNudgeSpin {
+  0% {
+    transform: rotate(0deg);
+  }
+  8% {
+    transform: rotate(360deg);
+  }
+  100% {
+    transform: rotate(360deg);
+  }
+}
+@keyframes rollNudgeGlow {
+  0% {
+    box-shadow: 0 0 0 0 rgba(27, 227, 194, 0);
+  }
+  3% {
+    box-shadow: 0 0 0 4px rgba(27, 227, 194, 0.28);
+  }
+  10% {
+    box-shadow: 0 0 0 0 rgba(27, 227, 194, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(27, 227, 194, 0);
+  }
+}
+
 @keyframes flashPulse {
   0% {
     opacity: 0;

@@ -1073,6 +1073,11 @@ export interface BorosSimulatedLeg {
   /** The rate bound the order carries: mid ± tolerance. */
   worstApr: number | null;
   slippageExceeded?: boolean;
+  /** The largest order size (collateral units) this side fills with its
+   * slippage still inside the tolerance — a property of the book, not of
+   * the size asked. Null without a book or a mid; optional for an older
+   * server. */
+  sizeWithinTolerance?: number | null;
   estFillSize: number;
   shortfallSize: number;
   bookStatus: BorosBookStatus;

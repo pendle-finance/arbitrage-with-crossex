@@ -336,6 +336,7 @@ export function SpreadReadout({
   sim,
   singleLeg,
   between,
+  compact = false,
 }: {
   sim: BorosPairSimulation;
   /** The one leg that trades, when only one does — the readout is then that
@@ -344,6 +345,9 @@ export function SpreadReadout({
   /** Rendered directly under the headline, before the per-leg rates — the
    * ticket puts its slippage line here. */
   between?: ReactNode;
+  /** Headline and `between` only: the per-venue liquidation rows are left
+   * to the caller (a roll's review keeps them behind "Details"). */
+  compact?: boolean;
 }) {
   const solo = soloOf(sim, singleLeg);
   const headline = solo ? solo.execApr : sim.estSpreadApr;
@@ -356,8 +360,7 @@ export function SpreadReadout({
         [sim.legA.venue, sim.legA],
         [sim.legB.venue, sim.legB],
       ];
-  const liqTitle =
-    'The mark rate at which this leg is liquidated if only its required margin backs it — extra collateral in the bucket moves it further out.';
+  const liqTitle = LIQ_TITLE;
   return (
     <div className="flex flex-col gap-1.5">
       {/* One leg has no spread to report: the headline becomes the rate that
@@ -397,26 +400,34 @@ export function SpreadReadout({
           the difference itself — they were a separate table, which made the
           reader hold one block in their head while reading another. Each
           carries the rate at which it would be liquidated on its own. */}
-      {legs.length > 0 && (
-        <div className="mt-1 flex flex-col gap-1 border-t border-ink-800/80 pt-2">
-          {/* One row per venue: two liquidation rates crammed onto a single
-              line read as one fact about the pair, when they are two
-              independent points — Boros liquidates per market (his call
-              2026-09-18). */}
-          {legs.map(([label, leg]) => (
-            <div key={label} className="flex items-baseline justify-between gap-3">
-              <span className="min-w-0 truncate text-[12px] text-ink-200" title={liqTitle}>
-                {label} liquidation APR
-              </span>
-              <span
-                className={`num shrink-0 text-[12.5px] ${leg.liquidationApr === null ? 'text-ink-500' : 'text-ink-50'}`}
-              >
-                {pct(leg.liquidationApr)}
-              </span>
-            </div>
-          ))}
+      {legs.length > 0 && !compact && <LiquidationRows sim={sim} />}
+    </div>
+  );
+}
+
+const LIQ_TITLE =
+  'The mark rate at which this leg is liquidated if only its required margin backs it — extra collateral in the bucket moves it further out.';
+
+/** One row per venue: two liquidation rates crammed onto a single line read
+ * as one fact about the pair, when they are two independent points — Boros
+ * liquidates per market (his call 2026-09-18). */
+export function LiquidationRows({ sim }: { sim: BorosPairSimulation }) {
+  const legs: Array<[string, BorosSimulatedLeg]> = [
+    [sim.legA.venue, sim.legA],
+    [sim.legB.venue, sim.legB],
+  ];
+  return (
+    <div className="mt-1 flex flex-col gap-1 border-t border-ink-800/80 pt-2">
+      {legs.map(([label, leg]) => (
+        <div key={label} className="flex items-baseline justify-between gap-3">
+          <span className="min-w-0 truncate text-[12px] text-ink-200" title={LIQ_TITLE}>
+            {label} liquidation APR
+          </span>
+          <span className={`num shrink-0 text-[12.5px] ${leg.liquidationApr === null ? 'text-ink-500' : 'text-ink-50'}`}>
+            {pct(leg.liquidationApr)}
+          </span>
         </div>
-      )}
+      ))}
     </div>
   );
 }
@@ -491,11 +502,14 @@ export function PairCosts({
    * (his call 2026-09-18).
    */
   freeing = false,
+  compact = false,
 }: {
   sim: BorosPairSimulation;
   /** Only leg A is real; leg B is a borrowed partner sized to zero. */
   singleLeg?: SoloLeg;
   freeing?: boolean;
+  /** Total and fee only — no per-bucket breakdown. */
+  compact?: boolean;
 }) {
   return (
     <div className="flex flex-col gap-1 border-t border-ink-800/80 pt-2">
@@ -515,7 +529,7 @@ export function PairCosts({
         }
         value={<CollateralAmount n={sim.marginRequiredTotal} sim={sim} />}
       />
-      {!singleLeg && !freeing && (
+      {!singleLeg && !freeing && !compact && (
         <>
           <Row
             label={sim.legA.venue}

@@ -16,6 +16,7 @@ import type {
   AssetPerpOpen,
   BorosPairBlocker,
   BorosPairContext,
+  BorosPairMarketRow,
   BorosPairRequest,
   BorosPairResult,
   BorosPairSimulation,
@@ -39,7 +40,7 @@ import {
   useTopUpGas,
 } from '../../api/queries';
 import { HoldToConfirmButton } from '../../components/HoldToConfirmButton';
-import { BlockerList, GasTopUp, LegFillLine, PairCosts, PositionArithmetic, SpreadReadout, legSubmitted } from '../../trade/BorosPairBits';
+import { BlockerList, GasTopUp, LegFillLine, LiquidationRows, PairCosts, PositionArithmetic, SpreadReadout, legSubmitted } from '../../trade/BorosPairBits';
 import { EstimateCard, EstimateRow, SlippageLine } from '../../trade/PairTicketBits';
 import { QueryError } from '../../components/QueryError';
 import { uuid } from '../../lib/uuid';
@@ -347,6 +348,8 @@ function PairCard({
   onClosePerps,
   onCloseBoros,
   onRollOver,
+  onRollSignal,
+  focusOnShow = false,
 }: {
   pair: PairEstimate;
   base: string;
@@ -354,17 +357,32 @@ function PairCard({
   defaultOpen: boolean;
   /** The roll-over banner's click counter: a rollable card opens on each bump. */
   showRollNonce?: number;
+  /** This card is the one "Show me" scrolls to — the first that can roll,
+   * with `scroll-mt-36` clearing the sticky header and the column band. */
+  focusOnShow?: boolean;
   onClosePerps: () => void;
   onCloseBoros: () => void;
   /** Opens the roll-over popup for this pair (offered inside the window). */
   onRollOver: () => void;
+  /** The card's roll signal for the asset's banner: the best maturity a
+   * fifth of this pair could roll into at a better rate than it earns now,
+   * or null. Reported whenever it changes. */
+  onRollSignal?: (opportunity: RollOpportunity | null) => void;
 }) {
   const [open, setOpen] = useState(defaultOpen);
   const canRoll = pairCanRoll(pair, nowSec);
   // "Show me" on the banner: expand every rollable pair, whatever the user
-  // last left it at. Only on the click (nonce > 0), never on mount.
+  // last left it at, and bring the one that matters to the top of the
+  // viewport — the banner sits above the hero, the pairs list under it,
+  // so a click that only switched tabs left the roll off-screen (his call
+  // 2026-09-20). Only on the click (nonce > 0), never on mount.
+  const rootRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    if (showRollNonce > 0 && canRoll) setOpen(true);
+    if (!(showRollNonce > 0 && canRoll)) return;
+    setOpen(true);
+    if (focusOnShow && typeof rootRef.current?.scrollIntoView === 'function') {
+      rootRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showRollNonce]);
   // Perp-side costs are optional because the perp legs are the part you can
@@ -423,6 +441,37 @@ function PairCard({
   const lockedAprFwd = pair.lockedAprFwd;
   const canSharePair =
     netApr !== null && netUsd !== null && lockedAprFwd !== null && soonest > nowSec;
+
+  // ---- the roll signal ----------------------------------------------------
+  /**
+   * Inside the window, each later maturity both venues list is probed at a
+   * FIFTH of the position: the entry legs alone (the round trip's fees are
+   * deliberately left out — the question is whether the market offers a
+   * better rate, not what today's exit costs), against the rate this row
+   * shows NET of the fees its own switches charge. A target that fills that
+   * fifth inside its tolerance at a better rate is an opportunity; the best
+   * one goes up to the banner (his call 2026-09-20).
+   */
+  const rollAddress = useTrackedAddressOptional()?.address ?? null;
+  const rollCtx = useBorosPairContext(canRoll ? rollAddress : null);
+  const rollMarkets = rollCtx.data?.markets;
+  const probeTargets = useMemo(
+    () => (canRoll && rollMarkets ? rollTargetsFor(rollMarkets, pair, base, soonest) : []),
+    [canRoll, rollMarkets, pair, base, soonest],
+  );
+  const { yuLegs: rollYuLegs, heldSize: rollHeldSize, pairPerpImUsd: rollPerpImUsd } = pairRollGeometry(pair);
+  const [probes, setProbes] = useState<Record<number, RollProbeResult>>({});
+  const opportunity = useMemo(
+    () => bestRollOpportunity(probes, probeTargets, netApr),
+    [probes, probeTargets, netApr],
+  );
+  const signalRef = useRef(onRollSignal);
+  signalRef.current = onRollSignal;
+  const oppKey = opportunity ? `${opportunity.maturity}:${opportunity.rate}:${opportunity.current}` : '';
+  useEffect(() => {
+    signalRef.current?.(opportunity);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [oppKey]);
   // The spread on notional — the cross-farm comparison basis, and the number
   // the share card prints; the headline % is on margin, which leverage inflates.
   const lockedSpread = pairLockedSpread(pair);
@@ -461,7 +510,28 @@ function PairCard({
   const pill = 'btn !rounded-full !bg-transparent !px-3.5 !py-1 !text-[12.5px]';
 
   return (
-    <div className="overflow-x-auto rounded-lg border border-ink-700 bg-ink-950/40">
+    <div ref={rootRef} className="scroll-mt-36 overflow-x-auto rounded-lg border border-ink-700 bg-ink-950/40">
+      {/* The roll probes render nothing; they only quote. */}
+      {probeTargets.map((t) => (
+        <RollProbe
+          key={t.maturity}
+          target={t}
+          pair={pair}
+          yuLegs={rollYuLegs}
+          heldSize={rollHeldSize}
+          pairPerpImUsd={rollPerpImUsd}
+          address={rollAddress}
+          exitSlippageApr={seedSlipPctFor(rollMarkets ?? [], rollYuLegs.map((l) => l.marketId).filter((id): id is number => id !== undefined)) / 100}
+          entrySlippageApr={seedSlipPctFor(rollMarkets ?? [], [t.longMarketId, t.shortMarketId]) / 100}
+          nowSec={nowSec}
+          onResult={(r) =>
+            setProbes((prev) => {
+              const cur = prev[t.maturity];
+              return cur && cur.ok === r.ok && cur.rate === r.rate && cur.size === r.size ? prev : { ...prev, [t.maturity]: r };
+            })
+          }
+        />
+      ))}
       {/* ONE line per pair, on the list's shared columns: the labels are in
           the header band above, so nothing here is a caption. */}
       <table className="w-full min-w-[880px] table-fixed border-collapse">
@@ -490,7 +560,17 @@ function PairCard({
                   <span className="text-[9.5px] font-semibold tracking-[0.1em] text-guava">S</span>
                   {prettyVenue(pair.shortVenue)}
                 </span>
-                {canRoll && (
+                {canRoll && opportunity !== null && (
+                  <Chip
+                    sm
+                    tone="green"
+                    className="!font-medium"
+                    title={`${fmtTokenQty(opportunity.size, (rollMarkets ?? []).find((m) => rollYuLegs.some((l) => l.marketId === m.marketId))?.collateral ?? base)} of this pair rolls into ${fmtDateLocal(opportunity.maturity)} at ${fmtPct(opportunity.rate)} on capital after the round trip's fees — the figure the roll-over opens on — against the ${fmtPct(opportunity.current)} this row earns after the fees it charges`}
+                  >
+                    roll opportunity
+                  </Chip>
+                )}
+                {canRoll && opportunity === null && (
                   <Chip
                     sm
                     tone="blue"
@@ -687,7 +767,7 @@ function PairCard({
               {canRoll && (
                 <button
                   type="button"
-                  className={`${pill} !border-grass/60 !text-grass hover:!border-grass hover:!bg-grass/10`}
+                  className={`${pill} roll-nudge !border-grass/60 !text-grass hover:!border-grass hover:!bg-grass/10`}
                   title="Roll this pair's rate legs to a later maturity — the perps stay as they are"
                   onClick={onRollOver}
                 >
@@ -815,6 +895,13 @@ const ROLL_MAX_SLIP_PCT = 10;
 /** Used when no market on a batch reports a usable deviation cap — the same
  * fallback the close form takes (CloseBorosForm's FALLBACK_SLIPPAGE_PCT). */
 const ROLL_FALLBACK_SLIP_PCT = 1;
+/** The slider's shortcuts, as shares of the position. */
+const ROLL_SHARE_STEPS = [0.25, 0.5, 0.75, 1] as const;
+/** A pair this close to settling makes the banner loud on its own. */
+const ROLL_URGENT_DAYS = 7;
+/** One key per pair, for the cards and the roll signals alike. */
+const pairKey = (p: Pick<PairEstimate, 'longVenue' | 'shortVenue' | 'soonestMaturitySec'>): string =>
+  `${p.longVenue}:${p.shortVenue}:${p.soonestMaturitySec}`;
 
 /** Largest 1-significant-figure value at or below `x` (0.8208 → 0.8) — the
  * ticket's and the close form's own rounding, so the three seed alike. Down
@@ -825,6 +912,347 @@ function floorTo1Sf(x: number): number {
   // toPrecision trims the binary noise `Math.floor(x / step) * step` leaves.
   return Number((Math.floor(x / step) * step).toPrecision(12));
 }
+
+/**
+ * The tolerance a batch is seeded with, in % APR: half each market's own
+ * max rate deviation, averaged over the batch's markets, floored to one
+ * significant figure — the same seed the ticket and the close form take
+ * (`seedFor` there). The batch's worst case is twice it, i.e. the two legs'
+ * combined deviation cap over two. The server's flat `defaultSlippageApr`
+ * was 0.25% whatever the market, which on a normal book is tighter than the
+ * fill and tripped "slippage past the bound" on rolls that were perfectly
+ * fine (his catch 2026-09-18). Markets without a usable cap fall back to
+ * the close form's 1%.
+ */
+function seedSlipPctFor(markets: ReadonlyArray<BorosPairMarketRow>, ids: number[]): number {
+  const caps = ids
+    .map((id) => markets.find((m) => m.marketId === id)?.maxRateDeviationApr)
+    .filter((c): c is number => typeof c === 'number' && c > 0);
+  if (caps.length === 0) return ROLL_FALLBACK_SLIP_PCT;
+  const meanHalf = caps.reduce((sum, c) => sum + c / 2, 0) / caps.length;
+  const pctVal = floorTo1Sf(meanHalf * 100);
+  return pctVal > 0 ? pctVal : ROLL_FALLBACK_SLIP_PCT;
+}
+
+/**
+ * The later maturities BOTH of this pair's venues list for its asset — what
+ * it can roll into, soonest first.
+ *
+ * Venue names are spelled DIFFERENTLY by the two sources: the asset view
+ * gives upper-case keys (GATE), /boros/pair/context gives display names
+ * (Gate). A strict compare silently matched nothing and the panel reported
+ * "nothing to roll into" while a real target sat in the list behind it.
+ */
+function rollTargetsFor(
+  markets: ReadonlyArray<BorosPairMarketRow>,
+  pair: Pick<PairEstimate, 'longVenue' | 'shortVenue'>,
+  base: string,
+  after: number,
+): RollTarget[] {
+  const sameVenue = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
+  const byMaturity = new Map<number, { long?: number; short?: number }>();
+  for (const m of markets) {
+    if (m.maturity <= after) continue;
+    if (m.base.toLowerCase() !== base.toLowerCase()) continue;
+    const slot = byMaturity.get(m.maturity) ?? {};
+    if (sameVenue(m.venue, pair.longVenue)) slot.long = m.marketId;
+    if (sameVenue(m.venue, pair.shortVenue)) slot.short = m.marketId;
+    byMaturity.set(m.maturity, slot);
+  }
+  return [...byMaturity.entries()]
+    .filter(([, v]) => v.long !== undefined && v.short !== undefined)
+    .map(([maturity, v]) => ({ maturity, longMarketId: v.long!, shortMarketId: v.short! }))
+    .sort((a, b) => a.maturity - b.maturity);
+}
+
+/** What a roll moves and what stays: the rate legs, the size held (the
+ * smaller leg, as every pair size is) and the perps' margin, which a roll
+ * never touches. */
+function pairRollGeometry(pair: PairEstimate): { yuLegs: PairLegDetail[]; heldSize: number; pairPerpImUsd: number } {
+  const yuLegs = pair.legs.filter((l) => l.kind === 'yu');
+  const perpLegs = pair.legs.filter((l) => l.kind === 'perp');
+  return {
+    yuLegs,
+    heldSize: yuLegs.length > 0 ? Math.min(...yuLegs.map((l) => l.sizeToken)) : 0,
+    pairPerpImUsd: perpLegs.reduce((t, l) => t + l.imUsd, 0),
+  };
+}
+
+/** The share of a pair the roll signal prices: "at least a fifth of the
+ * position rolls at a better rate" is what makes an opportunity. */
+const ROLL_OPPORTUNITY_SHARE = 0.2;
+
+/** One maturity's answer from a probe: whether the roll the modal would
+ * open on fills inside tolerance, the NET rate it locks, and that size. */
+interface RollProbeResult {
+  ok: boolean;
+  rate: number | null;
+  size: number;
+}
+
+/** The best maturity a pair could roll into at a better rate than it earns
+ * today — the banner's reason to shout. */
+export interface RollOpportunity {
+  maturity: number;
+  /** The rate the modal opens on for this maturity: NET of the round trip,
+   * at the size it defaults to. */
+  rate: number;
+  /** What the pair earns now, net of the fees its row charges. */
+  current: number;
+  /** The size that rate is quoted at, collateral tokens. */
+  size: number;
+}
+
+function bestRollOpportunity(
+  probes: Record<number, RollProbeResult>,
+  targets: RollTarget[],
+  current: number | null,
+): RollOpportunity | null {
+  if (current === null) return null;
+  let best: RollOpportunity | null = null;
+  for (const t of targets) {
+    const r = probes[t.maturity];
+    if (!r || !r.ok || r.rate === null || !(r.rate > current)) continue;
+    if (best === null || r.rate > best.rate) best = { maturity: t.maturity, rate: r.rate, current, size: r.size };
+  }
+  return best;
+}
+
+/**
+ * One maturity, priced for the banner EXACTLY as the modal will price it.
+ * Renders nothing; slow poll — it is a signal, the modal re-prices live.
+ *
+ * Two stages. First a quote at a FIFTH of the position: it says how much the
+ * books take inside tolerance (`sizeWithinTolerance`, size-independent), and
+ * so what size the modal will DEFAULT to — the smaller of that and the
+ * position. A default under a fifth is no opportunity: the market cannot
+ * take a meaningful slice. Then a quote AT that default size, both batches,
+ * through the same `rollFigures` the option card uses, so the banner's rate
+ * is the modal's opening headline to the decimal.
+ */
+function RollProbe({
+  target,
+  pair,
+  yuLegs,
+  heldSize,
+  pairPerpImUsd,
+  address,
+  exitSlippageApr,
+  entrySlippageApr,
+  nowSec,
+  onResult,
+}: {
+  target: RollTarget;
+  pair: PairEstimate;
+  yuLegs: PairLegDetail[];
+  heldSize: number;
+  pairPerpImUsd: number;
+  address: string | null;
+  exitSlippageApr: number;
+  entrySlippageApr: number;
+  nowSec: number;
+  onResult: (r: RollProbeResult) => void;
+}) {
+  const longLeg = yuLegs.find((l) => l.venue === pair.longVenue);
+  const shortLeg = yuLegs.find((l) => l.venue === pair.shortVenue);
+  const reqs = (size: number): { exit: BorosPairRequest | null; entry: BorosPairRequest | null } => {
+    if (address === null || !(size > 0) || longLeg?.marketId === undefined || shortLeg?.marketId === undefined) {
+      return { exit: null, entry: null };
+    }
+    return {
+      exit: {
+        address,
+        legA: { marketId: longLeg.marketId, direction: longLeg.side === 'LONG' ? 'short' : 'long', slippageApr: exitSlippageApr },
+        legB: { marketId: shortLeg.marketId, direction: shortLeg.side === 'LONG' ? 'short' : 'long', slippageApr: exitSlippageApr },
+        size,
+        intent: 'close',
+      },
+      entry: {
+        address,
+        legA: { marketId: target.longMarketId, direction: longLeg.side === 'LONG' ? 'long' : 'short', slippageApr: entrySlippageApr },
+        legB: { marketId: target.shortMarketId, direction: shortLeg.side === 'LONG' ? 'long' : 'short', slippageApr: entrySlippageApr },
+        size,
+        intent: 'open',
+      },
+    };
+  };
+  const opts = { refetchInterval: ROLL_PROBE_POLL_MS };
+
+  // Stage 1: a fifth, for the fit.
+  const fifth = heldSize * ROLL_OPPORTUNITY_SHARE;
+  const r1 = reqs(fifth);
+  const exit1 = useBorosPairSimulation(r1.exit, r1.exit !== null, opts);
+  const entry1 = useBorosPairSimulation(r1.entry, r1.entry !== null, opts);
+  const legs1 = [exit1.data?.simulation, entry1.data?.simulation].flatMap((x) => (x ? [x.legA, x.legB] : []));
+  const fit =
+    legs1.length === 4 && legs1.every((l) => typeof l.sizeWithinTolerance === 'number')
+      ? Math.min(...legs1.map((l) => l.sizeWithinTolerance as number))
+      : legs1.length === 4
+        ? heldSize // an older server reports no fit; the modal then opens on the whole position
+        : null;
+  const size = fit === null ? null : Math.min(fit, heldSize);
+  const enough = size !== null && size >= fifth - 1e-9;
+
+  // Stage 2: the modal's default size. When that IS the fifth, stage 1
+  // already holds the quote and the same keys are served from cache.
+  const r2 = enough ? reqs(size) : { exit: null, entry: null };
+  const exit2 = useBorosPairSimulation(r2.exit, r2.exit !== null, opts);
+  const entry2 = useBorosPairSimulation(r2.entry, r2.entry !== null, opts);
+  const exitSim = exit2.data?.simulation;
+  const entrySim = entry2.data?.simulation;
+  const legs2 = [exitSim, entrySim].flatMap((x) => (x ? [x.legA, x.legB] : []));
+  const ok =
+    enough &&
+    legs2.length === 4 &&
+    entrySim?.receiveLeg !== null &&
+    legs2.every((l) => l.bookStatus === 'ok' && !l.slippageExceeded && !(l.shortfallSize > 0));
+  const { netRate } = rollFigures({
+    entrySim,
+    exitSim,
+    size: size ?? 0,
+    perpImUsd: heldSize > 0 && size !== null ? pairPerpImUsd * (size / heldSize) : 0,
+    maturity: target.maturity,
+    longLeg,
+    shortLeg,
+    nowSec,
+  });
+  const cb = useRef(onResult);
+  cb.current = onResult;
+  const settled = size !== null && (!enough || legs2.length === 4);
+  useEffect(() => {
+    if (!settled) return;
+    cb.current({ ok, rate: ok ? netRate : null, size: size ?? 0 });
+  }, [settled, ok, netRate, size]);
+  return null;
+}
+/** The probe's poll: a signal for a banner, not a quote for an order. */
+const ROLL_PROBE_POLL_MS = 60_000;
+
+/** Everything one roll option states, from its two quotes. */
+interface RollFigures {
+  /** The APR the roll would earn on the capital it ties up, NET of the
+   * round trip (both batches' fees and the PnL of closing the old legs). */
+  netRate: number | null;
+  spreadApr: number | null;
+  netByMaturityUsd: number | null;
+  grossByMaturityUsd: number | null;
+  totalCostUsd: number | null;
+  exitCostUsd: number | null;
+  entryCostUsd: number | null;
+  exitPnlUsd: number | null;
+  capitalUsd: number | null;
+  newBorosImUsd: number | null;
+}
+
+/**
+ * The roll's arithmetic, in ONE place: the option card and the banner's
+ * probe both read it, so the rate the banner promises is the rate the
+ * modal opens on (his catch 2026-09-20: the banner said 29% gross at a
+ * fifth, the modal 20% net at the whole — two figures for one roll).
+ */
+function rollFigures({
+  entrySim,
+  exitSim,
+  size,
+  perpImUsd,
+  maturity,
+  longLeg,
+  shortLeg,
+  nowSec,
+}: {
+  entrySim: BorosPairSimulation | undefined;
+  exitSim: BorosPairSimulation | undefined;
+  /** The size being rolled, in the collateral token. */
+  size: number;
+  /** The perp margin behind THIS size (the pair's, scaled by the share rolled). */
+  perpImUsd: number;
+  maturity: number;
+  longLeg: PairLegDetail | undefined;
+  shortLeg: PairLegDetail | undefined;
+  nowSec: number;
+}): RollFigures {
+  const termYears = Math.max(0, maturity - nowSec) / SECONDS_IN_YEAR;
+
+  /**
+   * ⚠ Everything the simulation sizes is in COLLATERAL TOKENS, not dollars.
+   * `borosInitialMarginUsd` returns `N × rate × days/365 × kIM` in the units of
+   * N, and `simulateLeg` hands it `sizing.resultingSize` -- "collateral units
+   * in, collateral units out". So `marginRequiredTotal` is a TOKEN quantity
+   * despite the name, exactly as `costToCrossSize` is. Both are converted here
+   * through the simulation's own collateral price; when that price is unknown
+   * nothing is quoted, rather than publishing a figure in the wrong unit.
+   */
+  const px = entrySim?.collateralPriceUsd ?? exitSim?.collateralPriceUsd ?? null;
+  const usdOf = (tokens: number | null | undefined): number | null =>
+    tokens === null || tokens === undefined || px === null || !(px > 0) ? null : tokens * px;
+
+  // The margin this roll ADDS on the new markets, never the whole netted
+  // position's — see addedMarginOf.
+  const newBorosImUsd = usdOf(addedMarginOf(entrySim));
+  const capitalUsd = newBorosImUsd !== null ? perpImUsd + newBorosImUsd : null;
+
+  const exitCostUsd = usdOf(exitSim?.costToCrossSize);
+  const entryCostUsd = usdOf(entrySim?.costToCrossSize);
+  // Closing the old legs realises their remaining locked spread against
+  // today's book — money the roll makes or costs on day one, counted in
+  // the earnings and the rate alongside the fees (his call 2026-09-17).
+  const exitPnlUsd = usdOf(exitPnlOf(exitSim, longLeg, shortLeg, nowSec).total);
+  const totalCostUsd =
+    exitCostUsd !== null && entryCostUsd !== null ? exitCostUsd + entryCostUsd : null;
+  const dragApr =
+    totalCostUsd !== null && capitalUsd !== null && capitalUsd > 0 && termYears > 0
+      ? totalCostUsd / capitalUsd / termYears
+      : null;
+
+  /**
+   * The APR this roll would EARN, on the capital it ties up.
+   *
+   * `estSpreadApr` is a rate on NOTIONAL, and the notional being rolled is the
+   * BOROS leg's -- not `pair.notionalUsd`, which is the two PERP legs and runs
+   * several times larger. Scaling by the perp notional inflated the carry by
+   * that ratio before dividing by capital, which is how this read 20.49% while
+   * the card's own 30 Oct pair read 29.77% for the same maturity.
+   *
+   * Carry per year = spread x rolled notional; APR on capital = that / capital,
+   * then less the round-trip drag so the headline is a figure actually earned.
+   */
+  const rolledNotionalUsd = usdOf(size) ?? 0;
+  const spreadApr = entrySim?.estSpreadApr ?? null;
+  const carryPerYearUsd =
+    spreadApr !== null && rolledNotionalUsd > 0 ? spreadApr * rolledNotionalUsd : null;
+  const rateOnCapital =
+    carryPerYearUsd !== null && capitalUsd !== null && capitalUsd > 0
+      ? carryPerYearUsd / capitalUsd
+      : null;
+  const exitPnlApr =
+    exitPnlUsd !== null && capitalUsd !== null && capitalUsd > 0 && termYears > 0 ? exitPnlUsd / capitalUsd / termYears : null;
+  const netRate =
+    rateOnCapital !== null && dragApr !== null && exitPnlApr !== null ? rateOnCapital - dragApr + exitPnlApr : rateOnCapital;
+  /**
+   * What the roll is worth in dollars by the new maturity: the carry it earns
+   * over the term, less the fees paid to get into it. The percentage is the
+   * comparable figure; this is the one that reads as money.
+   */
+  const grossByMaturityUsd = carryPerYearUsd !== null ? carryPerYearUsd * termYears : null;
+  const netByMaturityUsd =
+    grossByMaturityUsd !== null && totalCostUsd !== null && exitPnlUsd !== null
+      ? grossByMaturityUsd - totalCostUsd + exitPnlUsd
+      : null;
+
+  return {
+    netRate,
+    spreadApr,
+    netByMaturityUsd,
+    grossByMaturityUsd,
+    totalCostUsd,
+    exitCostUsd,
+    entryCostUsd,
+    exitPnlUsd,
+    capitalUsd,
+    newBorosImUsd,
+  };
+}
+
 
 /**
  * The margin a trade ADDS, in collateral tokens — not what the resulting
@@ -945,54 +1373,55 @@ export function RollOverModal({
   const soonest = pair.soonestMaturitySec;
   const address = useTrackedAddressOptional()?.address ?? null;
   const ctx = useBorosPairContext(address);
-  const yuLegs = pair.legs.filter((l) => l.kind === 'yu');
-  const perpLegs = pair.legs.filter((l) => l.kind === 'perp');
-
+  const markets = ctx.data?.markets;
   /** The perps never move in a roll; the whole pair's perp margin, of which
    * a partial roll counts only its share (below). */
-  const pairPerpImUsd = perpLegs.reduce((t, l) => t + l.imUsd, 0);
+  const { yuLegs, heldSize, pairPerpImUsd } = pairRollGeometry(pair);
 
-  const targets = useMemo((): RollTarget[] => {
-    const rows = ctx.data?.markets ?? [];
-    /**
-     * Venue names are spelled DIFFERENTLY by the two sources: the asset view
-     * gives upper-case keys (GATE), /boros/pair/context gives display names
-     * (Gate). A strict compare silently matched nothing and the panel reported
-     * "nothing to roll into" while a real target sat in the list behind it.
-     */
-    const sameVenue = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
-    const byMaturity = new Map<number, { long?: number; short?: number }>();
-    for (const m of rows) {
-      if (m.maturity <= soonest) continue;
-      if (m.base.toLowerCase() !== base.toLowerCase()) continue;
-      const slot = byMaturity.get(m.maturity) ?? {};
-      if (sameVenue(m.venue, pair.longVenue)) slot.long = m.marketId;
-      if (sameVenue(m.venue, pair.shortVenue)) slot.short = m.marketId;
-      byMaturity.set(m.maturity, slot);
-    }
-    return [...byMaturity.entries()]
-      .filter(([, v]) => v.long !== undefined && v.short !== undefined)
-      .map(([maturity, v]) => ({ maturity, longMarketId: v.long!, shortMarketId: v.short! }))
-      .sort((a, b) => a.maturity - b.maturity);
-  }, [ctx.data, soonest, base, pair.longVenue, pair.shortVenue]);
+  const targets = useMemo(
+    (): RollTarget[] => rollTargetsFor(markets ?? [], pair, base, soonest),
+    [markets, soonest, base, pair],
+  );
 
   const [picked, setPicked] = useState<number | null>(null);
   const selected = picked ?? targets[0]?.maturity ?? null;
   const target = targets.find((t) => t.maturity === selected) ?? null;
   /**
-   * How much to roll, in the collateral token the legs are sized in. Whole
-   * position by default (the smaller leg, as every pair size is); anything
-   * smaller is a partial roll, anything larger is capped — there is no more
-   * to close than is held.
+   * Each batch's tolerance, seeded per market as the review page and the
+   * ticket seed theirs — so the options are priced at the bound the order
+   * will actually carry, not the server's flat default.
    */
-  const heldSize = yuLegs.length > 0 ? Math.min(...yuLegs.map((l) => l.sizeToken)) : 0;
+  const exitSlippageApr =
+    seedSlipPctFor(markets ?? [], yuLegs.map((l) => l.marketId).filter((id): id is number => id !== undefined)) / 100;
+  /**
+   * How much to roll, in the collateral token the legs are sized in.
+   * Anything larger than the position is capped — there is no more to close
+   * than is held. The DEFAULT is the largest slice that fills inside each
+   * leg's tolerance on both batches (`sizeWithinTolerance`, a property of
+   * the books), applied once the selected option has quoted and the trader
+   * has not touched the size; the whole position until then, and whenever
+   * the books take it all (his call 2026-09-20).
+   */
   const collateral =
-    (ctx.data?.markets ?? []).find((m) => yuLegs.some((l) => l.marketId === m.marketId))?.collateral ?? base;
+    (markets ?? []).find((m) => yuLegs.some((l) => l.marketId === m.marketId))?.collateral ?? base;
   const fmtSize = (v: number) => String(+v.toFixed(6));
   const [sizeStr, setSizeStr] = useState(() => fmtSize(heldSize));
+  const [touched, setTouched] = useState(false);
+  const [fits, setFits] = useState<Record<number, number>>({});
+  const [appliedFor, setAppliedFor] = useState<number | null>(null);
+  const selectedFit = selected !== null ? fits[selected] : undefined;
+  useEffect(() => {
+    if (touched || selected === null || selectedFit === undefined || appliedFor === selected) return;
+    setSizeStr(fmtSize(Math.min(selectedFit, heldSize)));
+    setAppliedFor(selected);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [touched, selected, selectedFit, appliedFor, heldSize]);
+  const setSize = (v: string) => {
+    setTouched(true);
+    setSizeStr(v);
+  };
   const parsedSize = Number(sizeStr);
   const sizeOk = Number.isFinite(parsedSize) && parsedSize > 0;
-  const capped = sizeOk && parsedSize > heldSize;
   const size = sizeOk ? Math.min(parsedSize, heldSize) : 0;
   // The slider re-simulates on every step; the options only see a size that
   // has stood still for a beat, so a drag is one quote, not forty.
@@ -1033,6 +1462,7 @@ export function RollOverModal({
           ctx={ctx.data}
           oldMaturity={soonest}
           nowSec={nowSec}
+          perpImUsd={heldSize > 0 ? pairPerpImUsd * (size / heldSize) : 0}
           onBack={() => setStep('pick')}
           onBusy={setBusy}
           onClose={onClose}
@@ -1050,7 +1480,7 @@ export function RollOverModal({
               max={heldSize}
               step={heldSize > 0 ? heldSize / 200 : 1}
               value={size}
-              onChange={(e) => setSizeStr(fmtSize(Number(e.target.value)))}
+              onChange={(e) => setSize(fmtSize(Number(e.target.value)))}
               aria-label="Share of the position to roll"
             />
             <span className="num w-10 text-right text-ink-400">{pct}%</span>
@@ -1058,15 +1488,33 @@ export function RollOverModal({
               className={`input num w-32 !py-1.5 text-xs ${sizeStr !== '' && !sizeOk ? 'border-guava/60' : ''}`}
               inputMode="decimal"
               value={sizeStr}
-              onChange={(e) => setSizeStr(e.target.value)}
+              onChange={(e) => setSize(e.target.value)}
               aria-label={`Size to roll (${collateral})`}
             />
             <span className="text-ink-400">{collateral}</span>
-            <button type="button" className="btn-ghost-xs" onClick={() => setSizeStr(fmtSize(heldSize))} title="The whole position">
-              max
-            </button>
-            {capped && (
-              <span className="num basis-full text-[11px] text-gold">capped at {fmtTokenQty(heldSize, collateral)} held</span>
+            {/* Four grips on the same value: a quarter, half, three
+                quarters, all. Each is a choice, so it counts as touching. */}
+            <span className="inline-flex gap-1" role="group" aria-label="Share shortcuts">
+              {ROLL_SHARE_STEPS.map((share) => (
+                <button
+                  key={share}
+                  type="button"
+                  className={`btn-ghost-xs num ${pct === Math.round(share * 100) && sizeOk ? '!text-ink-50' : ''}`}
+                  onClick={() => setSize(fmtSize(heldSize * share))}
+                  title={share === 1 ? 'The whole position' : `${Math.round(share * 100)}% of the position`}
+                >
+                  {Math.round(share * 100)}%
+                </button>
+              ))}
+            </span>
+            {/* Why the size is not the whole position: said once, on the
+                default the panel chose, never on a size the trader typed. */}
+            {!touched && appliedFor === selected && selectedFit !== undefined && selectedFit < heldSize && (
+              <span className="num basis-full text-[11px] text-ink-400" role="note">
+                {selectedFit > 0
+                  ? `Sized to ${fmtTokenQty(Math.min(selectedFit, heldSize), collateral)} (${pct}%) — the largest slice that fills inside each leg's max slippage on both batches today. A larger size would slip past it.`
+                  : 'No size fills inside the legs’ max slippage right now — the books are too thin. Pick a size to price it anyway.'}
+              </span>
             )}
           </div>
 
@@ -1087,10 +1535,12 @@ export function RollOverModal({
                   size={simSize}
                   perpImUsd={perpImUsd}
                   address={address}
-                  slippageApr={ctx.data?.defaultSlippageApr ?? 0}
+                  exitSlippageApr={exitSlippageApr}
+                  entrySlippageApr={seedSlipPctFor(markets ?? [], [t.longMarketId, t.shortMarketId]) / 100}
                   nowSec={nowSec}
                   selected={selected === t.maturity}
                   onSelect={() => setPicked(t.maturity)}
+                  onFit={(fit) => setFits((prev) => (prev[t.maturity] === fit ? prev : { ...prev, [t.maturity]: fit }))}
                 />
               ))}
             </div>
@@ -1196,6 +1646,14 @@ function BatchSection({
   // leg would be refused before the wire. Said here, on the batch it is
   // about, rather than as one line about "the roll".
   const exceeded = sim ? [sim.legA, sim.legB].filter((l) => l.slippageExceeded) : [];
+  const [more, setMore] = useState(false);
+  /** A quiet label/value line for the folded detail. */
+  const Row = ({ label, value, title }: { label: string; value: string; title?: string }) => (
+    <div className="flex items-baseline justify-between gap-3" title={title}>
+      <span className="pl-3 text-[11.5px] text-ink-400">{label} margin</span>
+      <span className="num text-[12px] text-ink-300">{value}</span>
+    </div>
+  );
   const slipLine = (
     <SlippageLine
       est={sim?.slippageApr !== null && sim?.slippageApr !== undefined ? fmtPct(sim.slippageApr) : null}
@@ -1221,7 +1679,7 @@ function BatchSection({
           {exitPnl ? (
             <ExitPnlReadout sim={sim} exitPnl={exitPnl} between={slipLine} />
           ) : (
-            <SpreadReadout sim={sim} between={slipLine} />
+            <SpreadReadout sim={sim} between={slipLine} compact />
           )}
           {exceeded.length > 0 && (
             <p
@@ -1232,14 +1690,46 @@ function BatchSection({
               Slippage too high on {exceeded.map((l) => prettyVenue(l.venue)).join(' and ')} leg
             </p>
           )}
-          <PairCosts sim={sim} freeing={Boolean(exitPnl)} />
-          <PositionArithmetic sim={sim} />
-          {sim.reasons.length > 0 && (
-            <ul className="flex flex-col gap-1 border-t border-ink-800/80 pt-2 text-[10.5px] leading-relaxed text-ink-400">
-              {sim.reasons.map((r) => (
-                <li key={r}>· {r}</li>
-              ))}
-            </ul>
+          {/* The batch's headline, its tolerance, the margin it moves and
+              its fee are the decision; where each position ends up, where
+              each leg liquidates and which bucket carries what are the
+              detail, folded until asked for — the two cards were a wall of
+              figures (his call 2026-09-20). */}
+          <PairCosts sim={sim} freeing={Boolean(exitPnl)} compact />
+          <button
+            type="button"
+            className="self-start text-[11px] text-ink-400 underline decoration-dotted underline-offset-2 hover:text-ink-200"
+            aria-expanded={more}
+            onClick={() => setMore((v) => !v)}
+          >
+            {more ? 'Less' : 'Details'} {more ? '‹' : '›'}
+          </button>
+          {more && (
+            <>
+              {!exitPnl && (
+                <div className="flex flex-col gap-1 border-t border-ink-800/80 pt-2">
+                  <Row
+                    label={sim.legA.venue}
+                    title="Initial margin this leg's bucket must carry"
+                    value={fmtTokenQty(sim.legA.marginRequired ?? 0, sim.collateral)}
+                  />
+                  <Row
+                    label={sim.legB.venue}
+                    title="Initial margin this leg's bucket must carry"
+                    value={fmtTokenQty(sim.legB.marginRequired ?? 0, sim.collateral)}
+                  />
+                </div>
+              )}
+              {!exitPnl && <LiquidationRows sim={sim} />}
+              <PositionArithmetic sim={sim} />
+              {sim.reasons.length > 0 && (
+                <ul className="flex flex-col gap-1 border-t border-ink-800/80 pt-2 text-[10.5px] leading-relaxed text-ink-400">
+                  {sim.reasons.map((r) => (
+                    <li key={r}>· {r}</li>
+                  ))}
+                </ul>
+              )}
+            </>
           )}
         </>
       ) : (
@@ -1329,6 +1819,7 @@ function RollReview({
   ctx,
   oldMaturity,
   nowSec,
+  perpImUsd,
   onBack,
   onBusy,
   onClose,
@@ -1342,6 +1833,8 @@ function RollReview({
   ctx: BorosPairContext;
   oldMaturity: number;
   nowSec: number;
+  /** The perp margin behind THIS size — the capital base of the headline. */
+  perpImUsd: number;
   onBack: () => void;
   onBusy: (busy: boolean) => void;
   onClose: () => void;
@@ -1370,17 +1863,7 @@ function RollReview({
    * forms never had that problem because they seed per market (his catch
    * 2026-09-18).
    */
-  const capOf = (marketId: number): number | null => {
-    const cap = ctx.markets.find((m) => m.marketId === marketId)?.maxRateDeviationApr;
-    return typeof cap === 'number' && cap > 0 ? cap : null;
-  };
-  const seedFor = (ids: number[]): number => {
-    const caps = ids.map(capOf).filter((c): c is number => c !== null);
-    if (caps.length === 0) return ROLL_FALLBACK_SLIP_PCT;
-    const meanHalf = caps.reduce((sum, c) => sum + c / 2, 0) / caps.length;
-    const pctVal = floorTo1Sf(meanHalf * 100);
-    return pctVal > 0 ? pctVal : ROLL_FALLBACK_SLIP_PCT;
-  };
+  const seedFor = (ids: number[]): number => seedSlipPctFor(ctx.markets, ids);
   const useSlip = (seedPct: number): BatchSlip => {
     const [edited, onChange] = useState<string | null>(null);
     const [open, setOpen] = useState(false);
@@ -1617,16 +2100,62 @@ function RollReview({
     );
   }
 
+  /**
+   * The strip at the top answers the only question first: what does this
+   * roll lock, for how long, and what does it cost today — the SAME figures
+   * the option card showed, re-priced at these tolerances. The two batches
+   * under it are how it executes; the margin line is whether it can. Three
+   * ranks, so the page reads top-down instead of as one wall of
+   * simulation output (his call 2026-09-20).
+   */
+  const fig = rollFigures({ entrySim: entrySim ?? undefined, exitSim: exitSim ?? undefined, size, perpImUsd, maturity: target.maturity, longLeg, shortLeg, nowSec });
+  const termDays = Math.max(0, Math.ceil((target.maturity - nowSec) / 86_400));
+  const dayOneUsd = fig.totalCostUsd !== null && fig.exitPnlUsd !== null ? fig.exitPnlUsd - fig.totalCostUsd : null;
+  const marginOk = marginNeed !== null && availableAfter !== null && marginShort === 0;
+
   return (
     <div className="flex flex-col gap-3">
-      {/* No summary line: the size was just chosen on the page behind this
-          one, the two maturities head the two batches, and the atomicity
-          promise lives on the confirm button that makes it (his call
-          2026-09-18). */}
+      <div className="rounded-lg border border-ink-700 bg-ink-850/40 px-4 py-3">
+        <div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-2">
+          <div className="min-w-0">
+            <div className={microLabelClass}>You lock</div>
+            <div className="num mt-1 text-[26px] font-semibold leading-none tracking-[-0.02em]">
+              {fig.netRate !== null ? <SignedNumber value={fig.netRate} format={fmtPct} /> : <span className="text-ink-600">{pending ? '…' : '—'}</span>}
+              <span className="ml-2 text-[13px] font-normal text-ink-300">fixed · {termDays}d</span>
+            </div>
+            <div className="num mt-1.5 text-[11.5px] text-ink-400">
+              {fmtTokenQty(size, collateral)} · {fmtDateLocal(oldMaturity)} → {fmtDateLocal(target.maturity)} · net of both batches' fees and the exit's PnL
+            </div>
+          </div>
+          <div className="grid grid-cols-3 gap-x-5">
+            <div title="Carry to the new maturity at the locked spread, less the round trip">
+              <div className={statLabel}>Est. earnings by maturity</div>
+              <div className={`${statValue} font-semibold`}>
+                {fig.netByMaturityUsd !== null ? <SignedNumber value={fig.netByMaturityUsd} format={fmtUsd} /> : <span className="text-ink-600">—</span>}
+              </div>
+            </div>
+            <div
+              title={`Exit fee ${fig.exitCostUsd !== null ? `−${fmtUsd(fig.exitCostUsd)}` : '—'} · Re-entry fee ${fig.entryCostUsd !== null ? `−${fmtUsd(fig.entryCostUsd)}` : '—'} · Exit PnL ${fig.exitPnlUsd !== null ? `${fig.exitPnlUsd >= 0 ? '+' : '−'}${fmtUsd(Math.abs(fig.exitPnlUsd))}` : '—'}`}
+            >
+              <div className={statLabel}>Cost today</div>
+              <div className={statValue}>
+                {dayOneUsd !== null ? <SignedNumber value={dayOneUsd} format={fmtUsd} /> : <span className="text-ink-600">—</span>}
+              </div>
+            </div>
+            <div title={marginOk ? 'The new legs\u2019 margin is covered once the exit has run' : 'See the margin line below'}>
+              <div className={statLabel}>Margin</div>
+              <div className={`${statValue} ${marginOk ? 'text-emerald-300' : marginShort > 0 ? 'text-amber-300' : 'text-ink-600'}`}>
+                {marginOk ? '✓ covered' : marginShort > 0 ? `short ${fmtTokenQty(marginShort, collateral)}` : '—'}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
 
-      {/* The two batches side by side: what closing realises against what
-          re-opening locks, each with its own tolerance and the margin it
-          takes. Reading them across is the decision. */}
+      {/* The two batches side by side: how the roll executes — what closing
+          realises against what re-opening locks, each with its own
+          tolerance and the margin it moves. */}
+      <div className={microLabelClass}>How it executes</div>
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2 [&>*]:min-w-0">
         <BatchSection
           label="Exit"
@@ -1654,12 +2183,14 @@ function RollReview({
       </div>
 
       {/* Margin: two numbers — what the new legs need, and what will be
-          there to pay for it once the exit has run. */}
+          there to pay for it once the exit has run. Green when it clears. */}
       <div
-        className={`flex flex-col gap-1.5 rounded-lg border px-3.5 py-3 ${marginShort > 0 ? 'border-amber-500/40 bg-amber-500/[0.05]' : 'border-ink-700 bg-ink-850/40'}`}
+        className={`flex flex-col gap-1.5 rounded-lg border px-3.5 py-3 ${
+          marginShort > 0 ? 'border-amber-500/40 bg-amber-500/[0.05]' : marginOk ? 'border-emerald-500/25 bg-emerald-500/[0.03]' : 'border-ink-700 bg-ink-850/40'
+        }`}
         role={marginShort > 0 ? 'alert' : undefined}
       >
-        <span className="text-[10.5px] font-semibold uppercase tracking-[0.14em] text-ink-400">Margin</span>
+        <span className="text-[10.5px] font-semibold uppercase tracking-[0.14em] text-ink-400">Can it fund? {marginOk ? '✓' : ''}</span>
         <EstimateRow
           label="Required margin"
           sub="for the new legs"
@@ -1753,10 +2284,12 @@ function RollOption({
   size,
   perpImUsd,
   address,
-  slippageApr,
+  exitSlippageApr,
+  entrySlippageApr,
   nowSec,
   selected,
   onSelect,
+  onFit,
 }: {
   target: { maturity: number; longMarketId: number; shortMarketId: number };
   pair: PairEstimate;
@@ -1765,10 +2298,15 @@ function RollOption({
   size: number;
   perpImUsd: number;
   address: string | null;
-  slippageApr: number;
+  /** Per-leg tolerance of each batch, as an APR fraction. */
+  exitSlippageApr: number;
+  entrySlippageApr: number;
   nowSec: number;
   selected: boolean;
   onSelect: () => void;
+  /** The largest size that fills inside tolerance on BOTH batches (the
+   * smallest of the four legs' own figures), once both have quoted. */
+  onFit: (fit: number) => void;
 }) {
   const longLeg = yuLegs.find((l) => l.venue === pair.longVenue);
   const shortLeg = yuLegs.find((l) => l.venue === pair.shortVenue);
@@ -1778,8 +2316,8 @@ function RollOption({
     address !== null && size > 0 && longLeg?.marketId !== undefined && shortLeg?.marketId !== undefined
       ? {
           address,
-          legA: { marketId: longLeg.marketId, direction: longLeg.side === 'LONG' ? 'short' : 'long', slippageApr },
-          legB: { marketId: shortLeg.marketId, direction: shortLeg.side === 'LONG' ? 'short' : 'long', slippageApr },
+          legA: { marketId: longLeg.marketId, direction: longLeg.side === 'LONG' ? 'short' : 'long', slippageApr: exitSlippageApr },
+          legB: { marketId: shortLeg.marketId, direction: shortLeg.side === 'LONG' ? 'short' : 'long', slippageApr: exitSlippageApr },
           size,
           intent: 'close',
         }
@@ -1790,8 +2328,8 @@ function RollOption({
     address !== null && size > 0 && longLeg !== undefined && shortLeg !== undefined
       ? {
           address,
-          legA: { marketId: target.longMarketId, direction: longLeg.side === 'LONG' ? 'long' : 'short', slippageApr },
-          legB: { marketId: target.shortMarketId, direction: shortLeg.side === 'LONG' ? 'long' : 'short', slippageApr },
+          legA: { marketId: target.longMarketId, direction: longLeg.side === 'LONG' ? 'long' : 'short', slippageApr: entrySlippageApr },
+          legB: { marketId: target.shortMarketId, direction: shortLeg.side === 'LONG' ? 'long' : 'short', slippageApr: entrySlippageApr },
           size,
           intent: 'open',
         }
@@ -1800,75 +2338,37 @@ function RollOption({
   const exit = useBorosPairSimulation(exitReq, exitReq !== null);
   const entry = useBorosPairSimulation(entryReq, entryReq !== null);
 
-  const termYears = Math.max(0, target.maturity - nowSec) / SECONDS_IN_YEAR;
+  /**
+   * The size the books take inside tolerance, per leg, from the freshest
+   * quote of each batch — the figure does not depend on the size asked, so
+   * any quote will do, but all four legs must have one. Reported upward so
+   * the modal can default the slider to it.
+   */
+  const fitLegs = [exit.data?.simulation, entry.data?.simulation].flatMap((s) => (s ? [s.legA, s.legB] : []));
+  const fit =
+    fitLegs.length === 4 && fitLegs.every((l) => typeof l.sizeWithinTolerance === 'number')
+      ? Math.min(...fitLegs.map((l) => l.sizeWithinTolerance as number))
+      : null;
+  const onFitRef = useRef(onFit);
+  onFitRef.current = onFit;
+  useEffect(() => {
+    if (fit !== null) onFitRef.current(fit);
+  }, [fit]);
+
   const entrySim = entry.data?.simulation;
   const exitSim = exit.data?.simulation;
-
-  /**
-   * ⚠ Everything the simulation sizes is in COLLATERAL TOKENS, not dollars.
-   * `borosInitialMarginUsd` returns `N × rate × days/365 × kIM` in the units of
-   * N, and `simulateLeg` hands it `sizing.resultingSize` -- "collateral units
-   * in, collateral units out". So `marginRequiredTotal` is a TOKEN quantity
-   * despite the name, exactly as `costToCrossSize` is. Both are converted here
-   * through the simulation's own collateral price; when that price is unknown
-   * nothing is quoted, rather than publishing a figure in the wrong unit.
-   */
-  const px = entrySim?.collateralPriceUsd ?? exitSim?.collateralPriceUsd ?? null;
-  const usdOf = (tokens: number | null | undefined): number | null =>
-    tokens === null || tokens === undefined || px === null || !(px > 0) ? null : tokens * px;
-
-  // The margin this roll ADDS on the new markets, never the whole netted
-  // position's — see addedMarginOf.
-  const newBorosImUsd = usdOf(addedMarginOf(entrySim));
-  const capitalUsd = newBorosImUsd !== null ? perpImUsd + newBorosImUsd : null;
-
-  const exitCostUsd = usdOf(exitSim?.costToCrossSize);
-  const entryCostUsd = usdOf(entrySim?.costToCrossSize);
-  // Closing the old legs realises their remaining locked spread against
-  // today's book — money the roll makes or costs on day one, counted in
-  // the earnings and the rate alongside the fees (his call 2026-09-17).
-  const exitPnlUsd = usdOf(exitPnlOf(exitSim, longLeg, shortLeg, nowSec).total);
-  const totalCostUsd =
-    exitCostUsd !== null && entryCostUsd !== null ? exitCostUsd + entryCostUsd : null;
-  const dragApr =
-    totalCostUsd !== null && capitalUsd !== null && capitalUsd > 0 && termYears > 0
-      ? totalCostUsd / capitalUsd / termYears
-      : null;
-
-  /**
-   * The APR this roll would EARN, on the capital it ties up.
-   *
-   * `estSpreadApr` is a rate on NOTIONAL, and the notional being rolled is the
-   * BOROS leg's -- not `pair.notionalUsd`, which is the two PERP legs and runs
-   * several times larger. Scaling by the perp notional inflated the carry by
-   * that ratio before dividing by capital, which is how this read 20.49% while
-   * the card's own 30 Oct pair read 29.77% for the same maturity.
-   *
-   * Carry per year = spread x rolled notional; APR on capital = that / capital,
-   * then less the round-trip drag so the headline is a figure actually earned.
-   */
-  const rolledNotionalUsd = usdOf(size) ?? 0;
-  const spreadApr = entrySim?.estSpreadApr ?? null;
-  const carryPerYearUsd =
-    spreadApr !== null && rolledNotionalUsd > 0 ? spreadApr * rolledNotionalUsd : null;
-  const rateOnCapital =
-    carryPerYearUsd !== null && capitalUsd !== null && capitalUsd > 0
-      ? carryPerYearUsd / capitalUsd
-      : null;
-  const exitPnlApr =
-    exitPnlUsd !== null && capitalUsd !== null && capitalUsd > 0 && termYears > 0 ? exitPnlUsd / capitalUsd / termYears : null;
-  const netRate =
-    rateOnCapital !== null && dragApr !== null && exitPnlApr !== null ? rateOnCapital - dragApr + exitPnlApr : rateOnCapital;
-  /**
-   * What the roll is worth in dollars by the new maturity: the carry it earns
-   * over the term, less the fees paid to get into it. The percentage is the
-   * comparable figure; this is the one that reads as money.
-   */
-  const grossByMaturityUsd = carryPerYearUsd !== null ? carryPerYearUsd * termYears : null;
-  const netByMaturityUsd =
-    grossByMaturityUsd !== null && totalCostUsd !== null && exitPnlUsd !== null
-      ? grossByMaturityUsd - totalCostUsd + exitPnlUsd
-      : null;
+  const {
+    netRate,
+    spreadApr,
+    netByMaturityUsd,
+    grossByMaturityUsd,
+    totalCostUsd,
+    exitCostUsd,
+    entryCostUsd,
+    exitPnlUsd,
+    capitalUsd,
+    newBorosImUsd,
+  } = rollFigures({ entrySim, exitSim, size, perpImUsd, maturity: target.maturity, longLeg, shortLeg, nowSec });
 
   const pending = exit.isPending || entry.isPending;
   /**
@@ -3308,10 +3808,13 @@ export function AssetCard({ group, derived, sinceSec, windowPending, onChangeSin
   /** Which projection of the book is showing: the accounting (bundles) or
    * the estimate (4-leg pairs). Per card — an ETH book open on pairs says
    * nothing about the BTC card below it. */
-  const [view, setView] = useState<'bundles' | 'pairs'>('bundles');
+  const [view, setView] = useState<'bundles' | 'pairs'>('pairs');
   /** Bumped by the roll-over banner: every rollable pair card re-opens on it,
    * even one the user folded by hand — "Show me" must show them. */
   const [showRollNonce, setShowRollNonce] = useState(0);
+  /** Each rollable pair's best roll opportunity, keyed as the cards are —
+   * what the banner shouts about, when there is one. */
+  const [rollSignals, setRollSignals] = useState<Record<string, RollOpportunity | null>>({});
   const [closedOpen, setClosedOpen] = useState(false);
   const [closePerps, setClosePerps] = useState<PairEstimate | null>(null);
   const [closeBoros, setCloseBoros] = useState<PairEstimate | null>(null);
@@ -3377,6 +3880,10 @@ export function AssetCard({ group, derived, sinceSec, windowPending, onChangeSin
   // Pairs inside the roll window — the banner's count, and the cards it
   // points at carry the same flag.
   const rollable = derived.pairs.filter((p) => pairCanRoll(p, nowSec));
+  /** Where "Show me" lands: the FIRST pair inside the window, so every
+   * rollable pair below it is in view too. Landing on the best opportunity
+   * scrolled the first pair off the top (his catch 2026-09-20). */
+  const showTarget: PairEstimate | null = rollable[0] ?? null;
   // Every close at the venue, whole or partial: a partial close's realised
   // price PnL is PnL the bundle must show, or its trade PnL reads short.
   const closedPerpRows = group.perpClosed.flatMap((r) =>
@@ -3666,26 +4173,78 @@ export function AssetCard({ group, derived, sinceSec, windowPending, onChangeSin
               </span>
             </div>
           )}
-          {/* One line, one count: the roll itself lives on the pair cards,
-              so the banner only has to send the trader there. */}
-          {rollable.length > 0 && (
-            <button
-              type="button"
-              className="flex items-center gap-2 rounded-md border border-sky-500/40 bg-sky-500/10 px-3 py-1.5 text-left text-xs text-sky-400 transition-colors hover:border-sky-400"
-              title={rollable
-                .map((p) => `${prettyVenue(p.longVenue)}/${prettyVenue(p.shortVenue)} · matures ${fmtDateLocal(p.soonestMaturitySec)}`)
-                .join(' · ')}
-              onClick={() => {
-                setView('pairs');
-                setShowRollNonce((n) => n + 1);
-              }}
-            >
-              <span className="font-semibold">
-                You have {rollable.length} pair{rollable.length === 1 ? '' : 's'} that you can roll over
-              </span>
-              <span className="ml-auto text-sky-400/80">Show Me ›</span>
-            </button>
-          )}
+          {/* One count, and the reasons that make it urgent. The roll itself
+              lives on the pair cards, so the banner only has to send the
+              trader there — QUIETLY while the window is merely open (14d to
+              7d out), LOUDLY once a pair is a week from settling or a fifth
+              of it rolls at a better rate than it earns (his call 2026-09-20). */}
+          {rollable.length > 0 &&
+            (() => {
+              /** One short line per pair that makes it loud: the roll on
+               * offer, or the days left. Terse on purpose — it is a
+               * headline, the card has the detail (his call 2026-09-20). */
+              const reasons = rollable.flatMap((p): Array<{ key: string; node: React.ReactNode }> => {
+                const name = `${prettyVenue(p.longVenue)} / ${prettyVenue(p.shortVenue)}`;
+                const days = Math.max(0, Math.ceil((p.soonestMaturitySec - nowSec) / 86_400));
+                const opp = rollSignals[pairKey(p)] ?? null;
+                if (opp) {
+                  // The new rate is the point, so it is the only bold figure;
+                  // the rate being earned sits beside it, dimmed, for contrast.
+                  return [
+                    {
+                      key: pairKey(p),
+                      node: (
+                        <>
+                          {name} → <span className="font-semibold text-emerald-300">{`${opp.rate >= 0 ? '+' : ''}${fmtPct(opp.rate)}`}</span> to{' '}
+                          {fmtDateLocal(opp.maturity)}{' '}
+                          <span className="text-emerald-200/50">vs {fmtPct(opp.current)} now</span>
+                        </>
+                      ),
+                    },
+                  ];
+                }
+                return days <= ROLL_URGENT_DAYS ? [{ key: pairKey(p), node: <>{name} matures in {days}d</> }] : [];
+              });
+              const loud = reasons.length > 0;
+              return (
+                <button
+                  type="button"
+                  data-tone={loud ? 'loud' : 'quiet'}
+                  className={`flex flex-wrap items-center gap-x-4 gap-y-1.5 rounded-md border px-3 text-left transition-colors ${
+                    loud
+                      ? 'border-emerald-400/70 bg-emerald-500/15 py-2 text-[13px] text-emerald-50 shadow-[0_0_0_1px_rgba(52,211,153,0.25)] hover:border-emerald-300 hover:bg-emerald-500/20'
+                      : 'border-ink-700 bg-ink-900/40 py-1.5 text-xs text-ink-400 hover:border-ink-500 hover:text-ink-300'
+                  }`}
+                  title={rollable
+                    .map((p) => `${prettyVenue(p.longVenue)}/${prettyVenue(p.shortVenue)} · matures ${fmtDateLocal(p.soonestMaturitySec)}`)
+                    .join(' · ')}
+                  onClick={() => {
+                    setView('pairs');
+                    setShowRollNonce((n) => n + 1);
+                  }}
+                >
+                  {loud ? (
+                    <>
+                      <span className="font-semibold">Roll over now</span>
+                      {/* A hairline between the headline and the reasons,
+                          and each reason boxed on its own — so the pairs
+                          read as separate items, not one run-on line. */}
+                      <span aria-hidden className="h-4 w-px bg-emerald-400/40" />
+                      {reasons.map((r) => (
+                        <span key={r.key} className="num rounded border border-emerald-400/30 bg-emerald-400/[0.07] px-2 py-0.5 text-[12px] text-emerald-100/90">
+                          {r.node}
+                        </span>
+                      ))}
+                    </>
+                  ) : (
+                    <span className="font-medium">
+                      {rollable.length} pair{rollable.length === 1 ? '' : 's'} can roll over
+                    </span>
+                  )}
+                  <span className={`ml-auto text-xs ${loud ? 'text-emerald-300' : 'text-ink-500'}`}>Show Me ›</span>
+                </button>
+              );
+            })()}
         </div>
       )}
 
@@ -3901,7 +4460,7 @@ null
             <PairListHeader />
             {derived.pairs.map((p) => (
               <PairCard
-                key={`${p.longVenue}:${p.shortVenue}:${p.soonestMaturitySec}`}
+                key={pairKey(p)}
                 pair={p}
                 base={group.base}
                 nowSec={nowSec}
@@ -3910,9 +4469,19 @@ null
                 // is the reason the user came to this tab.
                 defaultOpen={pairCanRoll(p, nowSec)}
                 showRollNonce={showRollNonce}
+                focusOnShow={p === showTarget}
                 onClosePerps={() => setClosePerps(p)}
                 onCloseBoros={() => setCloseBoros(p)}
                 onRollOver={() => setRollOver(p)}
+                onRollSignal={(opp) =>
+                  setRollSignals((prev) => {
+                    const k = pairKey(p);
+                    const cur = prev[k] ?? null;
+                    const same =
+                      cur === opp || (cur !== null && opp !== null && cur.maturity === opp.maturity && cur.rate === opp.rate && cur.current === opp.current);
+                    return same ? prev : { ...prev, [k]: opp };
+                  })
+                }
               />
             ))}
             {ungroupedCount > 0 && (

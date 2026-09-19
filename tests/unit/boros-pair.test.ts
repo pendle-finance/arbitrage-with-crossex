@@ -14,6 +14,7 @@ import {
   pairEligibility,
   resolveLegSizing,
   simulateBorosPair,
+  sizeWithinTolerance,
   DEFAULT_SLIPPAGE_APR,
   MIN_GAS_BALANCE_USD,
   MAX_SLIPPAGE_APR,
@@ -553,6 +554,24 @@ describe('simulateBorosPair', () => {
     expect(sim.costToCrossSize).toBeCloseTo(0.001 * SIZE * T, 8);
   });
 
+  it('reports the largest size each leg fills inside its tolerance, independent of the size entered', () => {
+    // HL asks 0.092 / 0.094 / 0.10 (100k each) against a 0.09 mid, tolerance
+    // 0.005: the first two levels sit 0.002 and 0.004 from mid, taken whole
+    // (W = 0.002×100k + 0.004×100k = 600); the third sits 0.01 past mid, so
+    // only q = (0.005×200k − 600) / (0.01 − 0.005) = 80k of it keeps the
+    // VWAP at the bound. 280k, whatever size the ticket asked for.
+    const ladder: BorosOrderBook = { marketId: 155, bids: [[0.09, 100_000]], asks: [[0.092, 100_000], [0.094, 100_000], [0.1, 100_000]] };
+    const small = simulateBorosPair(simInput({ legA: leg({ book: ladder, direction: 'long', slippageApr: 0.005 }), size: 10_000 }));
+    const large = simulateBorosPair(simInput({ legA: leg({ book: ladder, direction: 'long', slippageApr: 0.005 }), size: 500_000 }));
+    expect(small.legA.sizeWithinTolerance).toBeCloseTo(280_000, 6);
+    expect(large.legA.sizeWithinTolerance).toBeCloseTo(280_000, 6);
+    // Consistency with the walk: 280k fills at the bound, a hair more trips it.
+    expect(large.legA.slippageExceeded).toBe(true);
+    expect(small.legA.slippageExceeded).toBe(false);
+    // No book → nothing to size against.
+    expect(simulateBorosPair(simInput({ legA: leg({ book: null }) })).legA.sizeWithinTolerance).toBeNull();
+  });
+
   it('reports a thin book as a real fill plus a shortfall, never an invented rate', () => {
     const thin = book(155, 0.09, 0.092, 40_000);
     const sim = simulateBorosPair(simInput({ legA: leg({ book: thin }) }));
@@ -999,5 +1018,30 @@ describe('the no-size blocker on a reduce-only ticket', () => {
       gateInput({ legA, legB, simulation: simulateBorosPair(simInput({ legA, legB, size: 0 })) }),
     );
     expect(noSize(g)).toBe('Enter a size to trade.');
+  });
+});
+
+describe('sizeWithinTolerance', () => {
+  it('takes whole levels inside the bound and a partial of the first one past it', () => {
+    // Buy: 0.05 (0 from mid), 0.06 (0.01), 0.08 (0.03) against mid 0.05, tol 0.01.
+    // W after two levels = 0×100 + 0.01×100 = 1; q = (0.01×200 − 1)/(0.03 − 0.01) = 50.
+    expect(sizeWithinTolerance([[0.05, 100], [0.06, 100], [0.08, 100]], 'long', 0.05, 0.01)).toBeCloseTo(250, 9);
+    // Hand check: VWAP of 250 = (5 + 6 + 4)/250 = 0.06 → exactly 0.01 from mid.
+  });
+
+  it('measures the adverse way for a sell', () => {
+    // Bids 0.05 then 0.03 against mid 0.05, tol 0.005: q = (0.005×100 − 0)/(0.02 − 0.005) = 33.33…
+    expect(sizeWithinTolerance([[0.05, 100], [0.03, 100]], 'short', 0.05, 0.005)).toBeCloseTo(100 + 100 / 3, 9);
+  });
+
+  it('is zero when even the best level sits past the bound, and the whole book when nothing does', () => {
+    expect(sizeWithinTolerance([[0.09, 100]], 'long', 0.05, 0.01)).toBe(0);
+    expect(sizeWithinTolerance([[0.05, 100], [0.055, 100]], 'long', 0.05, 0.01)).toBe(200);
+    expect(sizeWithinTolerance([], 'long', 0.05, 0.01)).toBe(0);
+  });
+
+  it('a level BETTER than mid buys room for a worse one after it', () => {
+    // Asks 0.04 (−0.01 from mid, W = −1) then 0.07 (0.02): q = (0.01×100 + 1)/(0.02 − 0.01) = 200 → capped at the level's 100.
+    expect(sizeWithinTolerance([[0.04, 100], [0.07, 100]], 'long', 0.05, 0.01)).toBe(200);
   });
 });
