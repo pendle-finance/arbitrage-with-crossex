@@ -224,8 +224,9 @@ export function RebalanceModal({
   const [customText, setCustomText] = useState('');
   const [customFrom, setCustomFrom] = useState<Pool>('HYPERLIQUID');
   const [customTo, setCustomTo] = useState<Pool>('CROSSEX');
-  // A custom edit accepts whatever quote it brings back; a quote that then
-  // moves under the dialog while it polls still asks for a refresh.
+  // A custom edit accepts the quote it brings back — the one priced for the
+  // move as typed, not the last one still on screen while it loads; a quote
+  // that then moves under the dialog while it polls still asks for a refresh.
   const [acceptNext, setAcceptNext] = useState(false);
   const [pick, setPick] = useState<RouteName | null>(null);
   const [stepsOpen, setStepsOpen] = useState(false);
@@ -241,6 +242,20 @@ export function RebalanceModal({
       : null;
   const customQuery = useCustomPlan(customMove);
   const customPlan = customMove === null ? null : (customQuery.data?.plans.custom ?? null);
+  // The move as typed, ahead of the debounce: the quote on screen is only
+  // the trader's when it was priced for exactly this.
+  const typedAmount = parsedAmount(customText);
+  const typedMove: CustomMove | null =
+    goal === 'custom' && typedAmount !== null && typedAmount > 0 && customFrom !== customTo
+      ? { from: customFrom, to: customTo, amount: typedAmount }
+      : null;
+  const quotes = (candidate: EvenPlan | null, move: CustomMove | null): boolean =>
+    candidate !== null &&
+    move !== null &&
+    candidate.goal.kind === 'custom' &&
+    candidate.goal.from === move.from &&
+    candidate.goal.to === move.to &&
+    candidate.goal.amount === move.amount;
   // The preset in view, or the priced custom move. While a custom move has
   // no quote yet the dialog shows the editor alone, so `plan` falls back to
   // the card's preset only to keep the derived rows typed; nothing below the
@@ -255,18 +270,18 @@ export function RebalanceModal({
   }, [job?.id, job?.status]);
 
   useEffect(() => {
-    if (!acceptNext || active === null) return;
+    if (!acceptNext || active === null || !quotes(active, typedMove)) return;
     setAccepted(acceptedOf(active, pickedRoute(active, pick).name));
     setAcceptNext(false);
-  }, [acceptNext, active, pick]);
+  }, [acceptNext, active, pick, typedMove?.from, typedMove?.to, typedMove?.amount]);
 
   const pickGoal = (next: GoalKind) => {
     setGoal(next);
     setPick(null);
     // A preset's plan is already in hand, so its quote is accepted in the
     // same render; only a custom move has to wait for its price to land.
-    if (next === 'custom') setAcceptNext(true);
-    else setAccepted(acceptedOf(view.plans[next], pickedRoute(view.plans[next], null).name));
+    setAcceptNext(next === 'custom');
+    if (next !== 'custom') setAccepted(acceptedOf(view.plans[next], pickedRoute(view.plans[next], null).name));
   };
   const pickPreset = (next: PresetPick) => {
     if (next !== 'none') pickGoal(next);
@@ -311,7 +326,12 @@ export function RebalanceModal({
   const target = targetsOf(view, plan);
   const borrow = receivingBorrow(buckets, moveSteps);
   const held = receivingHeld(buckets, moveSteps);
-  const stale = isStale(accepted, plan, chosen);
+  // A custom move whose quote is still on its way: the rows keep the last
+  // quote so the dialog does not blank between keystrokes, but the hold
+  // waits — it must send the move as typed, and never flash Refresh route
+  // for a quote the trader has not been shown yet.
+  const pricing = goal === 'custom' && !customPending && (acceptNext || !quotes(plan, typedMove));
+  const stale = !pricing && isStale(accepted, plan, chosen);
   let lock: string | null = null;
   if (transfer?.lock === 'deal') lock = WAITS_FOR_DEAL;
   if (transfer?.transfer?.status === 'moving') lock = WAITS_FOR_TRANSFER;
@@ -560,7 +580,7 @@ export function RebalanceModal({
             <HoldToConfirmButton
               tone="cyan"
               holdMs={holdMs}
-              disabled={lock !== null || chosen === null || start.isPending}
+              disabled={lock !== null || chosen === null || start.isPending || pricing}
               onConfirm={() =>
                 chosen &&
                 start.mutate(
@@ -573,6 +593,7 @@ export function RebalanceModal({
             </HoldToConfirmButton>
           )}
           {lock !== null && <span className="text-xs text-ink-500">{lock}</span>}
+          {lock === null && pricing && <span className="text-xs text-ink-500">{PRICING}</span>}
         </div>
         <SpotLines transfer={transfer} job={job} onTransfer={onTransfer} />
       </>
