@@ -519,16 +519,22 @@ function sendableCash(wallets: Wallets & { gateMovable: number }, from: Pool): n
   return Math.max(0, wallets.venues[from].cash);
 }
 
-const sendingCash = (run: Run, move: Move): number => sendableCash(run, move.from);
+/** What a move may take from its sender. Repay stops at the sender's equity
+ * as well: cash past it is cover for an open loss, and sending it would make
+ * the sender the borrower, so the debt would only change wallets. */
+function sendingCash(book: Book, run: Run, move: Move): number {
+  const cash = sendableCash(run, move.from);
+  return book.goal.kind === 'repay' ? Math.min(cash, Math.max(0, equityOf(run, move.from))) : cash;
+}
 
 function roundCash(book: Book, run: Run, move: Move): number {
-  if (move.from !== 'CROSSEX') return sendingCash(run, move);
+  if (move.from !== 'CROSSEX') return sendingCash(book, run, move);
   const cash = Math.max(0, run.usdt.cash);
   const buyable =
     book.asks.length === 0
       ? cash / Math.max(1, book.ask * (1 + book.takerRate))
       : Math.min(cash, buyableUsdc(cash / (1 + book.takerRate), book));
-  return buyable + run.gateMovable;
+  return Math.min(buyable + run.gateMovable, sendingCash(book, run, move));
 }
 
 const orderMaxOf = (book: Book, move: Move): number =>
@@ -642,8 +648,9 @@ function convertPrice(move: Move, ask: number, bid: number): number {
 
 function convertRest(book: Book, run: Run, move: Move, left: number): void {
   if (touchesUsdt(move) && run.gateMovable * book.bid >= SPOT_MIN_QUOTE_USDT) sellUsdc(book, run, move, 0);
-  const cash = move.from === 'CROSSEX' ? run.usdt.cash : run.venues[move.from].cash;
-  const size = floorCents(Math.min(left, Math.max(0, cash)));
+  const holding = move.from === 'CROSSEX' ? run.usdt : run.venues[move.from];
+  const room = book.goal.kind === 'repay' ? Math.min(holding.cash, holding.equity) : holding.cash;
+  const size = floorCents(Math.min(left, Math.max(0, room)));
   if (size <= 0) return;
   if (!touchesUsdt(move) && run.usdt.cash < -DUST_USDC) run.usdtShort = true;
   const kept = touchesUsdt(move) ? 1 - CONVERT_RATE : (1 - CONVERT_RATE) ** 2;
@@ -726,7 +733,7 @@ function solve(book: Book, moves: Move[], start: number[], maxRounds: number[], 
         return simulate(book, moves, amounts, maxRounds, size);
       };
       let lo = 0;
-      let hi = Math.round(floorCents(sendingCash(startRun(book), move)) * 100);
+      let hi = Math.round(floorCents(sendingCash(book, startRun(book), move)) * 100);
       limited[index] = stillShort(book, attempt(hi), move);
       if (limited[index]) return;
       while (hi - lo > 1) {
@@ -815,7 +822,7 @@ function loopReason(book: Book, moves: Move[], loopRun: Run): string | null {
   const move = loopRun.steps.some((step) => step.kind === 'round') ? moves.find(onlyConverts) : moves[0];
   if (!move) return null;
   const start = startRun(book);
-  const cash = sendingCash(start, move);
+  const cash = sendingCash(book, start, move);
   const minimum = roundMinimum(move.from, move.to, book.minimum);
   if (fit(marginsOf(book, start), cash, sendingEquity(start, move)) >= minimum) {
     return underMinimumReason(minimum);
@@ -857,8 +864,8 @@ const equityTargets = (wallets: Wallets, pools: Pool[]): Record<Pool, number> =>
 });
 
 /** Every negative pool to 0. The largest positive pool pays first, up to its
- * cash; what it cannot cover moves to the next. Debt past all cash stays,
- * and the solve reports it as the short. */
+ * cash and its equity (see `sendingCash`); what it cannot cover moves to the
+ * next. Debt past that stays, and the solve reports it as the short. */
 function repayTargets(wallets: Wallets & { gateMovable: number }, pools: Pool[]): Record<Pool, number> {
   const targets = equityTargets(wallets, pools);
   let debt = 0;
@@ -871,7 +878,7 @@ function repayTargets(wallets: Wallets & { gateMovable: number }, pools: Pool[])
   const senders = pools.filter((pool) => targets[pool] > 0).sort((a, b) => targets[b] - targets[a]);
   for (const pool of senders) {
     if (debt <= 0) break;
-    const gives = floorCents(Math.min(debt, sendableCash(wallets, pool)));
+    const gives = floorCents(Math.min(debt, sendableCash(wallets, pool), targets[pool]));
     targets[pool] -= gives;
     debt -= gives;
   }

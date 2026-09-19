@@ -1542,6 +1542,29 @@ describe('planFor repay', () => {
     expect(plan.shortOfEven).toBe(0);
   });
 
+  it('caps each payer at its equity too: cash covering an open loss stays put', () => {
+    // Lighter holds 1000 cash but floats an 800 loss, so only 200 is its own.
+    // Sending more would clear the USDT borrow by opening a Lighter one.
+    const plan = goalPlan({ usdt: -300, hyperliquid: 0, lighter: 1000, lighterUpnl: -800, positionIm: 0 }, REPAY_GOAL);
+    expect(targetOf(plan, 'LIGHTER')).toBe(0);
+    expect(targetOf(plan, 'CROSSEX')).toBe(0);
+    expect(sumMoved(plan.routes.convert)).toBe(200);
+    expect(plan.shortOfEven).toBe(100);
+    for (const route of [plan.routes.convert, plan.routes.loop!]) {
+      const lighter = walletIn(route.after, 'USDC', 'LIGHTER');
+      expect(lighter.equity).toBeGreaterThanOrEqual(0);
+      expect(lighter.cash).toBeGreaterThanOrEqual(800);
+    }
+  });
+
+  it('one payer feeding two borrows never goes past its equity in total', () => {
+    const plan = goalPlan({ usdt: -300, hyperliquid: -100, lighter: 1000, lighterUpnl: -800, positionIm: 0 }, REPAY_GOAL);
+    expect(targetOf(plan, 'LIGHTER')).toBe(0);
+    expect(sumMoved(plan.routes.convert)).toBe(200);
+    expect(plan.shortOfEven).toBe(200);
+    expect(walletIn(plan.routes.convert.after, 'USDC', 'LIGHTER').equity).toBeGreaterThanOrEqual(0);
+  });
+
   it('debt past all cash is the short', () => {
     const plan = goalPlan({ usdt: -1000, hyperliquid: 300, lighter: 0, positionIm: 0 }, REPAY_GOAL);
     expect(targetOf(plan, 'HYPERLIQUID')).toBe(0);
