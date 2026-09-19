@@ -1,5 +1,5 @@
 import { Fragment, useId, type ReactNode } from 'react';
-import type { CrossexAccount, EvenPlan, GateAccount, PlannedStep, Pool, PositionsResponse, RebalanceBucket, RebalanceJob } from '../api/types';
+import type { CrossexAccount, EvenPlan, GateAccount, GoalKind, PlannedStep, Pool, PositionsResponse, RebalanceBucket, RebalanceJob } from '../api/types';
 import type { RebalanceView, RouteName, RoutePlan, TransferCoin, TransferView, WalletAfter } from '../api/types';
 import { Chip } from '../components/Chip';
 import { HoverCard } from '../components/HoverCard';
@@ -26,6 +26,9 @@ import {
   VERDICT_NO_BORROW,
   VERDICT_NO_INTEREST,
   VERDICT_NOT_WORTH_IT,
+  VERDICT_RATE_UNKNOWN,
+  VERDICT_REPAY_NO_LEGS_SUB,
+  VERDICT_REPAY_WORTH_IT,
   VERDICT_WORTH_IT,
   WALLET_LABEL,
 } from './rebalanceCopy';
@@ -68,7 +71,7 @@ export const planSteps = (plan: EvenPlan): PlannedStep[] => [
   ...plan.routes.convert.steps,
 ];
 
-function movesOf(steps: readonly Move[]): Move[] {
+export function movesOf(steps: readonly Move[]): Move[] {
   const moves: Move[] = [];
   for (const { from, to } of steps) {
     if (!moves.some((move) => move.from === from && move.to === to)) moves.push({ from, to });
@@ -380,32 +383,62 @@ export interface Verdict {
 
 /** Whether the fee is worth the interest the route stops. Null when the app
  * cannot tell (a borrow rate is unknown) or there is nothing to weigh (no fee). */
-export function worthLine(route: RoutePlan, buckets: RebalanceBucket[]): Verdict | null {
+/**
+ * The verdict on a borrow. What decides it is whether POSITIONS exist, not
+ * which goal is on screen (his catch 2026-09-19): with no legs the borrow is
+ * simply holding cash you could withdraw, so no fee is weighed against it —
+ * and that is as true of a custom move that clears the borrow as of the
+ * preset. With legs the fee-versus-interest arithmetic applies to all three.
+ */
+export function worthLine(route: RoutePlan, buckets: RebalanceBucket[], goal: GoalKind = 'even', noLegs = false): Verdict | null {
   if (borrowingBuckets(buckets).length === 0) return { text: VERDICT_NO_BORROW, tone: 'info' };
+  if (noLegs) return { text: VERDICT_REPAY_WORTH_IT, tone: 'act', sub: VERDICT_REPAY_NO_LEGS_SUB };
   // Before any fee-vs-interest test: with no interest there is nothing to weigh,
   // and weighing against zero is what made this print "not worth it" beside a
   // "$0.00 an hour" reading.
   if (isFreeBorrow(buckets)) return { text: VERDICT_NO_INTEREST, tone: 'info' };
-  if (hasUnknownRate(buckets)) return null;
+  // A rate we could not read is an ERROR, not a quiet "nothing to do": the
+  // dialog still prices a fee, so a silent card contradicted it.
+  if (hasUnknownRate(buckets)) return { text: VERDICT_RATE_UNKNOWN, tone: 'warn' };
   if (isNotWorthIt(route, buckets)) return { text: VERDICT_NOT_WORTH_IT, tone: 'warn' };
   const days = paybackDays(route, buckets);
   if (cents(route.costUsd) <= 0 || days === null) return null;
-  return { text: VERDICT_WORTH_IT, tone: 'act', sub: PAYS_BACK(daysText(days)) };
+  return { text: goal === 'repay' ? VERDICT_REPAY_WORTH_IT : VERDICT_WORTH_IT, tone: 'act', sub: PAYS_BACK(daysText(days)) };
 }
 
 export const isCashLimitedEven = (plan: EvenPlan) => plan.balanced && plan.shortOfEven >= DUST;
 
-export function positionShares(plan: EvenPlan): Map<string, string> {
-  if (plan.noLegs) return new Map();
-  return new Map(plan.split.map((share) => [keyOf(share), `${num(share.share * 100, 0)}% · ${fmtUsd(share.notionalUsd, 0)}`]));
+/**
+ * The preset the card leads with, and the one its button opens: whichever is
+ * actually WORTH DOING (his ruling 2026-09-19, superseding "even whenever
+ * there are legs"). With a borrow the two presets clear the same interest, so
+ * the cheaper move wins — leading with a $141 rebalance while a $13 debt
+ * clear sat hidden in the dialog is what made the card and the dialog read as
+ * contradicting each other. Ties and the no-borrow case keep `even`, which is
+ * the feature's own name.
+ */
+export function defaultGoal(view: RebalanceView): 'even' | 'repay' {
+  const { even, repay } = view.plans;
+  if (even.balanced && !repay.balanced) return 'repay';
+  if (repay.balanced) return 'even';
+  // Both have something to do. The verdict decides: a preset that is not
+  // worth its fee never leads over one that is.
+  const verdictOf = (goal: 'even' | 'repay') => {
+    const { name, route } = pickedRoute(view.plans[goal], null);
+    return name === null ? null : worthLine(route, view.buckets, goal, view.plans[goal].noLegs);
+  };
+  return verdictOf('even')?.tone === 'act' || verdictOf('repay')?.tone !== 'act' ? 'even' : 'repay';
 }
 
-export function targetsOf(view: RebalanceView): Map<string, number> {
-  if (view.plan.noLegs) return new Map();
+/** The equity each wallet is heading for. The even goal re-derives it from
+ * the live equity (money in transit counts), the others aim at fixed figures. */
+export function targetsOf(view: RebalanceView, plan: EvenPlan = view.plans.even): Map<string, number> {
+  if (plan.goal.kind !== 'even') return new Map(plan.targets.map((target) => [keyOf(target), target.equity]));
+  if (plan.noLegs) return new Map();
   const job = view.job;
   const transit = job && (job.status === 'running' || job.status === 'halted') ? (job.inTransit?.qty ?? 0) : 0;
   const equity = view.buckets.reduce((total, b) => total + b.equity, transit);
-  return new Map(view.plan.split.map((share) => [keyOf(share), share.share * equity]));
+  return new Map(plan.split.map((share) => [keyOf(share), share.share * equity]));
 }
 
 export function barRowsOf(wallets: (WalletAfter | RebalanceBucket)[], keys: string[], target: Map<string, number>): BarRow[] {
@@ -426,9 +459,9 @@ export function barRowsOf(wallets: (WalletAfter | RebalanceBucket)[], keys: stri
   });
 }
 
-export function shownKeys(view: RebalanceView, steps: readonly Move[]): string[] {
+export function shownKeys(view: RebalanceView, steps: readonly Move[], plan: EvenPlan = view.plans.even): string[] {
   const touched = new Set(steps.flatMap((step) => [poolKey(step.from), poolKey(step.to)]));
-  const target = targetsOf(view);
+  const target = targetsOf(view, plan);
   return Object.keys(WALLET_TONE).filter((key) => {
     const bucket = view.buckets.find((b) => keyOf(b) === key);
     if (!bucket) return false;

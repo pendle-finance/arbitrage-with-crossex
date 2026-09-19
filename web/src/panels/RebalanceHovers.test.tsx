@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 import type { PositionsResponse, RebalanceBucket } from '../api/types';
 import { accountBodies, rebalanceViews, rebased } from '../test/fixtures';
-import { borrowFacts, Facts, isNotWorthIt, isWorthIt, liquidationNow, pickedRoute, roundOf, shownKeys, stopsPerDayOf, targetsOf, worthLine } from './RebalanceHovers';
+import { borrowFacts, defaultGoal, Facts, isNotWorthIt, isWorthIt, liquidationNow, pickedRoute, roundOf, shownKeys, stopsPerDayOf, targetsOf, worthLine } from './RebalanceHovers';
 
 function show(buckets: RebalanceBucket[]) {
   return render(<Facts items={borrowFacts(buckets)} />);
@@ -242,10 +242,10 @@ describe('balanced targets', () => {
 
 describe('route and wallet rules the card and the modal share', () => {
   it('picks the first open route, starting from the pick', () => {
-    const plan = rebalanceViews.twoBorrows.plan;
+    const plan = rebalanceViews.twoBorrows.plans.even;
     expect(pickedRoute(plan, null).name).toBe('mix');
     expect(pickedRoute(plan, 'convert').route).toBe(plan.routes.convert);
-    expect(pickedRoute(rebalanceViews.hiddenRoute.plan, 'loop').name).not.toBe('loop');
+    expect(pickedRoute(rebalanceViews.hiddenRoute.plans.even, 'loop').name).not.toBe('loop');
   });
 
   it('shows the Gate wallet only while it holds a dollar of cash', () => {
@@ -258,7 +258,7 @@ describe('route and wallet rules the card and the modal share', () => {
 
 describe('the 30-day rule the card and the modal share', () => {
   const oneBorrow = rebalanceViews.oneBorrow;
-  const route = pickedRoute(oneBorrow.plan, null).route;
+  const route = pickedRoute(oneBorrow.plans.even, null).route;
   // The route repays the whole Lighter borrow, so it stops all of its interest.
   const lighterAt = (interestPerDayUsd: number) => rebased(oneBorrow.buckets, { 'USDC/LIGHTER': { interestPerDayUsd } });
   const at = (costUsd: number, savesPerDayUsd = route.savesPerDayUsd) => ({ ...route, costUsd, savesPerDayUsd });
@@ -269,7 +269,7 @@ describe('the 30-day rule the card and the modal share', () => {
     expect(isWorthIt(at(20), lighterAt(0.1))).toBe(false);
     expect(isWorthIt(at(12_000), lighterAt(400))).toBe(true);
     expect(isWorthIt(at(12_000.01), lighterAt(400))).toBe(false);
-    expect(worthLine(at(3), lighterAt(0.1))).toEqual({ text: 'Rebalance is recommended.', tone: 'act', sub: 'The fee equals 30 days of the interest it saves.' });
+    expect(worthLine(at(3), lighterAt(0.1))).toEqual({ text: 'Rebalance recommended.', tone: 'act', sub: 'The fee equals 30 days of the interest it saves.' });
   });
 
   it('weighs the interest each wallet stops, not the daily saving the server rounds to cents', () => {
@@ -277,10 +277,10 @@ describe('the 30-day rule the card and the modal share', () => {
     const small = rebased(oneBorrow.buckets, {
       'USDC/LIGHTER': { cash: -114.7, equity: -114.7, borrow: 114.7, interestPerDayUsd: (114.7 * 0.1095) / 365 },
     });
-    expect(worthLine(at(1, 0.03), small)).toEqual({ text: 'Rebalance is recommended.', tone: 'act', sub: 'The fee equals 30 days of the interest it saves.' });
+    expect(worthLine(at(1, 0.03), small)).toEqual({ text: 'Rebalance recommended.', tone: 'act', sub: 'The fee equals 30 days of the interest it saves.' });
     // 16 USDC costs 0.0048 a day. The server sends 0.00.
     const tiny = rebased(oneBorrow.buckets, { 'USDC/LIGHTER': { cash: -16, equity: -16, borrow: 16, interestPerDayUsd: 0.0048 } });
-    expect(worthLine(at(0.03, 0), tiny)).toEqual({ text: 'Rebalance is recommended.', tone: 'act', sub: 'The fee equals 7 days of the interest it saves.' });
+    expect(worthLine(at(0.03, 0), tiny)).toEqual({ text: 'Rebalance recommended.', tone: 'act', sub: 'The fee equals 7 days of the interest it saves.' });
   });
 
   it('a wallet in profit owes its cash, not minus its equity: the route stops only the part it repays', () => {
@@ -295,7 +295,7 @@ describe('the 30-day rule the card and the modal share', () => {
     expect(stopsPerDayOf(sends300(3.5), inProfit)).toBeCloseTo(0.09, 10);
     expect(worthLine(sends300(3.5), inProfit)?.tone).toBe('warn');
     expect(worthLine(sends300(2.7), inProfit)).toEqual({
-      text: 'Rebalance is recommended.',
+      text: 'Rebalance recommended.',
       tone: 'act',
       sub: 'The fee equals 30 days of the interest it saves.',
     });
@@ -306,7 +306,7 @@ describe('the 30-day rule the card and the modal share', () => {
     expect(isWorthIt(at(1.2), lighterAt(0.03999))).toBe(false);
     expect(worthLine(at(1.2), lighterAt(0.03999))?.tone).toBe('warn');
     expect(worthLine(at(1.19), lighterAt(0.03999))).toEqual({
-      text: 'Rebalance is recommended.',
+      text: 'Rebalance recommended.',
       tone: 'act',
       sub: 'The fee equals 30 days of the interest it saves.',
     });
@@ -326,11 +326,71 @@ describe('the 30-day rule the card and the modal share', () => {
     expect(worthLine(at(0.05), lighterAt(0.04))?.sub).toBe('The fee equals 2 days of the interest it saves.');
   });
 
-  it('says nothing but no borrow with no borrow, and nothing when a borrow rate is unknown', () => {
+  it('a borrow inside its free allowance keeps the blue no-interest line, whatever the goal', () => {
+    const free = rebased(oneBorrow.buckets, {
+      'USDC/HYPERLIQUID': { borrow: 5000, equity: -5000, cash: -5000, interestPerDayUsd: 0, ratePerYear: 0.05 },
+      'USDC/LIGHTER': { borrow: 0, equity: 100, cash: 100, interestPerDayUsd: 0, imHeldUsd: 0, mmHeldUsd: 0 },
+    });
+    for (const goal of ['even', 'repay'] as const) {
+      expect(worthLine(at(20), free, goal)).toEqual({ text: 'No interest payment yet. No transfer or rebalancing necessary.', tone: 'info' });
+    }
+  });
+
+  it('says no borrow with no borrow, and names the failure when a borrow rate cannot be read', () => {
     expect(isNotWorthIt(at(20), rebalanceViews.accountB.buckets)).toBe(false);
     expect(worthLine(at(20), rebalanceViews.accountB.buckets)).toEqual({ text: 'No borrow. No transfer or rebalancing necessary.', tone: 'info' });
     const unknown = rebased(oneBorrow.buckets, { 'USDC/LIGHTER': { ratePerYear: null, interestPerDayUsd: 0 } });
     expect(isNotWorthIt(at(20), unknown)).toBe(false);
-    expect(worthLine(at(20), unknown)).toBeNull();
+    // An unreadable rate is an error, not silence: the dialog still prices a fee.
+    expect(worthLine(at(20), unknown)).toEqual({ text: 'Could not read the borrow interest rate. Check the fee before you move anything.', tone: 'warn' });
+  });
+
+  it('with no legs the borrow blocks a withdrawal, so no fee is weighed — whatever goal asks', () => {
+    const withdrawBlocked = { text: 'Clear debt recommended.', tone: 'act', sub: 'Debt prevents you from withdrawing your cash.' };
+    for (const goal of ['repay', 'custom', 'even'] as const) {
+      expect(worthLine(at(3), lighterAt(0.1), goal, true)).toEqual(withdrawBlocked);
+    }
+    // A fee that dwarfs the interest still says repay: the cash is stuck either way.
+    expect(worthLine(at(500), lighterAt(0.1), 'repay', true)).toEqual(withdrawBlocked);
+  });
+
+  it('with legs the fee-versus-interest weighing applies to a custom move as well', () => {
+    expect(worthLine(at(3), lighterAt(0.1), 'custom', false)?.sub).toBe('The fee equals 30 days of the interest it saves.');
+    expect(worthLine(at(500), lighterAt(0.1), 'custom', false)?.tone).toBe('warn');
+  });
+});
+
+describe('defaultGoal — the card leads with whatever is worth doing', () => {
+  const view = rebalanceViews.twoBorrows;
+  const dear = (plan: typeof view.plans.even, costUsd: number) => ({
+    ...plan,
+    routes: Object.fromEntries(
+      Object.entries(plan.routes).map(([k, r]) => [k, r && { ...r, costUsd }]),
+    ) as typeof plan.routes,
+  });
+
+  it('leads with the preset whose verdict asks for the move', () => {
+    // Both have work; only clearing the debt is worth its fee.
+    const plans = { ...view.plans, even: dear(view.plans.even, 500), repay: dear(view.plans.even, 0.5) };
+    expect(defaultGoal({ ...view, plans })).toBe('repay');
+  });
+
+  it('keeps Rebalance when it is worth doing', () => {
+    const plans = { ...view.plans, even: dear(view.plans.even, 0.5), repay: dear(view.plans.even, 0.5) };
+    expect(defaultGoal({ ...view, plans })).toBe('even');
+  });
+
+  it('keeps Rebalance when neither is worth doing', () => {
+    const plans = { ...view.plans, even: dear(view.plans.even, 500), repay: dear(view.plans.even, 500) };
+    expect(defaultGoal({ ...view, plans })).toBe('even');
+  });
+
+  it('falls to the preset that has anything to do at all', () => {
+    const idle = { ...view.plans.even, balanced: true };
+    const busy = dear(view.plans.even, 0.5);
+    expect(defaultGoal({ ...view, plans: { ...view.plans, even: idle, repay: busy } })).toBe('repay');
+    expect(defaultGoal({ ...view, plans: { ...view.plans, even: busy, repay: idle } })).toBe('even');
+    // Nothing to do anywhere keeps the feature's own name.
+    expect(defaultGoal({ ...view, plans: { ...view.plans, even: idle, repay: idle } })).toBe('even');
   });
 });

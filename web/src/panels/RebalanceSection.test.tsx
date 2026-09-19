@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useRebalance } from '../api/queries';
 import type { PositionsResponse, RebalanceView, RoutePlan, TransferView } from '../api/types';
 import {
+  plansOf,
   accountBodies,
   accountHandler,
   REBALANCE_NOW,
@@ -35,10 +36,10 @@ const NO_BORROW: RebalanceView = {
 
 const CASH_LIMITED_EVEN: RebalanceView = {
   ...rebalanceViews.balancedNoJob,
-  plan: { ...rebalanceViews.balancedNoJob.plan, shortOfEven: 203.64 },
+  plans: plansOf({ ...rebalanceViews.balancedNoJob.plans.even, shortOfEven: 203.64 }),
 };
 
-const TWO_PLAN = rebalanceViews.twoBorrows.plan;
+const TWO_PLAN = rebalanceViews.twoBorrows.plans.even;
 
 const lighterLeft = (route: RoutePlan): RoutePlan => ({
   ...route,
@@ -47,12 +48,12 @@ const lighterLeft = (route: RoutePlan): RoutePlan => ({
 
 const OTHER_ROUTE_LEAVES_BORROW: RebalanceView = {
   ...rebalanceViews.twoBorrows,
-  plan: { ...TWO_PLAN, routes: { ...TWO_PLAN.routes, convert: lighterLeft(TWO_PLAN.routes.convert) } },
+  plans: plansOf({ ...TWO_PLAN, routes: { ...TWO_PLAN.routes, convert: lighterLeft(TWO_PLAN.routes.convert) } }),
 };
 
 const RECOMMENDED_LEAVES_BORROW: RebalanceView = {
   ...rebalanceViews.twoBorrows,
-  plan: { ...TWO_PLAN, routes: { ...TWO_PLAN.routes, mix: lighterLeft(TWO_PLAN.routes.mix!) } },
+  plans: plansOf({ ...TWO_PLAN, routes: { ...TWO_PLAN.routes, mix: lighterLeft(TWO_PLAN.routes.mix!) } }),
 };
 
 const keepsBorrow = (route: RoutePlan): RoutePlan => ({
@@ -62,7 +63,7 @@ const keepsBorrow = (route: RoutePlan): RoutePlan => ({
 
 const REPAYS_NOTHING: RebalanceView = {
   ...rebalanceViews.twoBorrows,
-  plan: { ...TWO_PLAN, routes: { ...TWO_PLAN.routes, mix: keepsBorrow(TWO_PLAN.routes.mix!) } },
+  plans: plansOf({ ...TWO_PLAN, routes: { ...TWO_PLAN.routes, mix: keepsBorrow(TWO_PLAN.routes.mix!) } }),
 };
 
 const UNDER_A_CENT: RebalanceView = {
@@ -81,14 +82,14 @@ const AT_4C: RebalanceView = {
 
 const feeOf = (view: RebalanceView, costUsd: number): RebalanceView => ({
   ...view,
-  plan: {
-    ...view.plan,
+  plans: plansOf({
+    ...view.plans.even,
     routes: {
-      ...view.plan.routes,
-      ...(view.plan.routes.mix ? { mix: { ...view.plan.routes.mix, costUsd } } : {}),
-      convert: { ...view.plan.routes.convert, costUsd },
+      ...view.plans.even.routes,
+      ...(view.plans.even.routes.mix ? { mix: { ...view.plans.even.routes.mix, costUsd } } : {}),
+      convert: { ...view.plans.even.routes.convert, costUsd },
     },
-  },
+  }),
 });
 
 const RATE_READ_FAILED: RebalanceView = {
@@ -204,10 +205,10 @@ describe('RebalanceSection card', () => {
     expect(within(region()).queryByRole('group')).toBeNull();
     expect(region().querySelector('[data-bar-row]')).toBeNull();
     expect(within(region()).queryByText(/Position share|Equity \(cash/)).toBeNull();
-    expect(cardButtons().map((button) => button.textContent)).toEqual(['Rebalance · Fee $0.46']);
+    expect(cardButtons().map((button) => button.textContent)).toEqual(['Rebalance']);
     expect(cardButtons()[0].className).toContain('btn-primary');
     expect(within(region()).queryByRole('radiogroup')).toBeNull();
-    expect(line('Rebalance is recommended.')).toBeInTheDocument();
+    expect(line('Rebalance recommended.')).toBeInTheDocument();
     // The payback figure is the supporting sub-line under the recommendation.
     expect(sub()).toBe('The fee equals 12 days of the interest it saves.');
     expect(within(region()).queryByText(/After rebalance|Hold to rebalance|Show steps|^Frees$|^Saves$/)).toBeNull();
@@ -217,7 +218,8 @@ describe('RebalanceSection card', () => {
     serve(rebalanceViews.twoBorrows);
     renderWithClient(<RebalanceSection actions={<button type="button" className="btn">Manual Transfer</button>} />);
     await screen.findByRole('region', { name: 'Rebalance' });
-    const rebalance = await within(region()).findByRole('button', { name: 'Rebalance · Fee $0.46' });
+    await within(region()).findByRole('button', { name: 'Manual Transfer' });
+    const [rebalance] = cardButtons();
     const dl = region().querySelector('dl') as HTMLElement;
     const transfer = within(region()).getByRole('button', { name: 'Manual Transfer' });
     expect(dl.compareDocumentPosition(rebalance) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -260,26 +262,27 @@ describe('RebalanceSection card', () => {
     const user = userEvent.setup();
     await show(rebalanceViews.twoBorrows);
     expect(screen.queryByRole('dialog')).toBeNull();
-    await user.click(within(region()).getByRole('button', { name: 'Rebalance · Fee $0.46' }));
+    await user.click(cardButtons()[0]);
     expect(await screen.findByRole('dialog')).toBeInTheDocument();
   });
 
   it('transfer link closes the rebalance modal', async () => {
     const user = userEvent.setup();
     const onTransfer = await show(rebalanceViews.twoBorrows, transferViews.accountB);
-    await user.click(await within(region()).findByRole('button', { name: 'Rebalance · Fee $0.46' }));
+    await waitFor(() => expect(cardButtons().length).toBeGreaterThan(0));
+    await user.click(cardButtons()[0]);
     const dialog = await screen.findByRole('dialog');
     await user.click(await within(dialog).findByRole('button', { name: 'Transfer ▸' }));
     expect(onTransfer).toHaveBeenCalledWith('USDT', 'CROSSEX');
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
   });
 
-  it('no open positions says so and cannot start', async () => {
+  it('no open positions says so, and the button still opens the dialog', async () => {
     await show(rebalanceViews.noLegs);
     expect(line('No open positions. Nothing to rebalance.')).toBeInTheDocument();
     expect(within(region()).queryByText('Balanced')).toBeNull();
     expect(cardButtons().map((button) => button.textContent)).toEqual(['Rebalance']);
-    expect(cardButtons()[0]).toBeDisabled();
+    expect(cardButtons()[0]).toBeEnabled();
   });
 });
 
@@ -316,20 +319,20 @@ describe('RebalanceSection verdict', () => {
     ] as const) {
       await show(view);
       expect(sub()).toBe(`The fee equals ${days} of the interest it saves.`);
-      expect(line('Rebalance is recommended.')).toHaveClass('text-guava');
+      expect(line('Rebalance recommended.')).toHaveClass('text-guava');
       expect(within(region()).queryByText(/Repays|Stops|No borrow|This borrow is free today|would move|worth/)).toBeNull();
       expect(cardButtons()[0].className).toContain('btn-primary');
       cleanup();
     }
     await show(OTHER_ROUTE_LEAVES_BORROW);
-    expect(within(region()).getByRole('button', { name: 'Rebalance · Fee $0.46' })).toBeEnabled();
+    expect(cardButtons()[0]).toBeEnabled();
   });
 
   it.each([
-    ['a fee a cent over 30 days of the interest it stops', feeOf(AT_4C, 1.21), 'Rebalance · Fee $1.21'],
-    ['a $20 fee against $0.04 a day', feeOf(rebalanceViews.twoBorrows, 20), 'Rebalance · Fee $20.00'],
-    ['a route that leaves the whole borrow', REPAYS_NOTHING, 'Rebalance · Fee $0.46'],
-    ['a $0.46 fee against a 16 USDC borrow at $0.0048 a day', UNDER_A_CENT, 'Rebalance · Fee $0.46'],
+    ['a fee a cent over 30 days of the interest it stops', feeOf(AT_4C, 1.21), 'Rebalance'],
+    ['a $20 fee against $0.04 a day', feeOf(rebalanceViews.twoBorrows, 20), 'Rebalance'],
+    ['a route that leaves the whole borrow', REPAYS_NOTHING, 'Rebalance'],
+    ['a $0.46 fee against a 16 USDC borrow at $0.0048 a day', UNDER_A_CENT, 'Rebalance'],
   ])('%s says it is not worth it yet, and the button is not primary but still opens', async (_, view, name) => {
     const user = userEvent.setup();
     await show(view);
@@ -343,11 +346,11 @@ describe('RebalanceSection verdict', () => {
   });
 
   it('with every route blocked, no verdict and no primary button', async () => {
-    const { plan } = rebalanceViews.twoBorrows;
+    const plan = rebalanceViews.twoBorrows.plans.even;
     const routes = Object.fromEntries(
       Object.entries(plan.routes).map(([name, route]) => [name, route && { ...route, available: false, reason: 'Gate is closed for spot.' }]),
     ) as typeof plan.routes;
-    await show({ ...rebalanceViews.twoBorrows, plan: { ...plan, routes } });
+    await show({ ...rebalanceViews.twoBorrows, plans: plansOf({ ...plan, routes }) });
     expect(region().querySelector('p.num')).toBeNull();
     expect(cardButtons()[0].className).not.toContain('btn-primary');
     expect(cardButtons()[0]).toBeEnabled();
@@ -356,25 +359,25 @@ describe('RebalanceSection verdict', () => {
   it('a free route with a borrow gives no verdict', async () => {
     await show(feeOf(AT_4C, 0));
     expect(region().querySelector('p.num')).toBeNull();
-    expect(cardButtons()[0].textContent).toBe('Rebalance · Fee $0.00');
+    expect(cardButtons()[0].textContent).toBe('Rebalance');
   });
 
-  it('a failed rate read shows in the Interest now hover, not as a verdict', async () => {
+  it('a failed rate read shows in the Interest now hover AND says so on the card', async () => {
     const user = userEvent.setup();
     await show(feeOf(RATE_READ_FAILED, 20));
     expect(await factRows(user, 'interest', '$0.00 an hour')).toEqual([
       ['Lighter', 'rate unknown'],
       ['Hyperliquid', '$0.00 an hour'],
     ]);
-    expect(region().querySelector('p.num')).toBeNull();
+    expect(line('Could not read the borrow interest rate. Check the fee before you move anything.')).toHaveClass('text-gold');
   });
 
-  it('balanced verdict, chip and a disabled button', async () => {
+  it('balanced verdict, chip, and the button still opens the dialog', async () => {
     await show(rebalanceViews.balancedNoJob);
     expect(line('Wallets match their position share. Nothing to move.')).toBeInTheDocument();
     expect(within(region()).getByText('Balanced')).toBeInTheDocument();
     expect(cardButtons().map((button) => button.textContent)).toEqual(['Rebalance']);
-    expect(cardButtons()[0]).toBeDisabled();
+    expect(cardButtons()[0]).toBeEnabled();
   });
 
   it('balanced by cash names the amount stuck', async () => {
@@ -382,11 +385,11 @@ describe('RebalanceSection verdict', () => {
     expect(line('$203.64 cannot move. It is margin for open positions.')).toBeInTheDocument();
     expect(line('Wallets match their position share. Nothing to move.')).toBeNull();
     expect(within(region()).getByText('Balanced')).toBeInTheDocument();
-    expect(cardButtons()[0]).toBeDisabled();
+    expect(cardButtons()[0]).toBeEnabled();
   });
 
   it('balanced short under 1 keeps Balanced', async () => {
-    await show({ ...CASH_LIMITED_EVEN, plan: { ...CASH_LIMITED_EVEN.plan, shortOfEven: 0.99 } });
+    await show({ ...CASH_LIMITED_EVEN, plans: plansOf({ ...CASH_LIMITED_EVEN.plans.even, shortOfEven: 0.99 }) });
     expect(line('Wallets match their position share. Nothing to move.')).toBeInTheDocument();
     expect(within(region()).queryByText(/cannot move/)).toBeNull();
     expect(within(region()).getByText('Balanced')).toBeInTheDocument();
@@ -629,5 +632,50 @@ describe('RebalanceSection info card', () => {
     expect(card.text).toContain('USDC · HyperliquidHyperliquidfree up to 10,000 USDC, then about 5% a year');
     expect(card.text).toContain('USDC · LighterLighterfrom the first dollar, about 11% a year');
     expect(card.text).toContain('USDT · CrossExGate, Binance, OKX, Bybitfrom the first dollar');
+  });
+});
+
+// No legs, one borrow: the state the Rebalance card used to answer with
+// "Nothing to rebalance" while the interest line above it kept counting.
+const EXAMPLE_C = rebalanceViews.exampleC;
+const NO_LEGS_BORROW: RebalanceView = {
+  buckets: rebased(EXAMPLE_C.buckets, {
+    'USDT/CROSSEX': { cash: -22.18, upnl: 0, equity: -22.18, borrow: 22.18, imHeldUsd: 4.44, mmHeldUsd: 2.22, interestPerDayUsd: 0.04, ratePerYear: 0.06 },
+  }),
+  plans: {
+    even: { ...EXAMPLE_C.plans.repay, goal: { kind: 'even' }, noLegs: true },
+    repay: {
+      ...EXAMPLE_C.plans.even,
+      goal: { kind: 'repay' },
+      noLegs: true,
+      targets: [
+        { coin: 'USDT', venue: 'CROSSEX', equity: 0 },
+        { coin: 'USDC', venue: 'HYPERLIQUID', equity: 203.64 },
+      ],
+    },
+    custom: null,
+  },
+  job: null,
+};
+
+describe('RebalanceSection presets', () => {
+  it('with no legs and a borrow, leads with Clear debt and its fee, and the button opens', async () => {
+    await show(NO_LEGS_BORROW);
+    expect(line('No open positions. Nothing to rebalance.')).toBeNull();
+    expect(line('Clear debt recommended.')).toBeInTheDocument();
+    expect(within(region()).getByText('Debt prevents you from withdrawing your cash.')).toBeInTheDocument();
+    expect(cardButtons().map((button) => button.textContent)).toEqual(['Clear debt']);
+    expect(cardButtons()[0]).toBeEnabled();
+  });
+
+  it('with legs and a borrow, leads with whichever preset is worth doing', async () => {
+    await show(rebalanceViews.twoBorrows);
+    expect(cardButtons()[0].textContent).toBe('Rebalance');
+  });
+
+  it('a running repay says so on the card', async () => {
+    const running = rebalanceViews.accountARunning;
+    await show({ ...running, job: { ...running.job, goal: 'repay' } });
+    expect(within(region()).getByText(/^Clear debt running, about .+ left\.$/)).toBeInTheDocument();
   });
 });

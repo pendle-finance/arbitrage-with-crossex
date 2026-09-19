@@ -148,7 +148,7 @@ function haltedLoopJob(stepIndex: number, patch: Partial<Step> = {}): Job {
 
 async function accountAPlan(): Promise<EvenPlan> {
   const h = boot();
-  return (await h.view()).data.plan;
+  return (await h.view()).data.plans.even;
 }
 
 function roundThreeInSpot(plan: EvenPlan, status: Job['status']): Job {

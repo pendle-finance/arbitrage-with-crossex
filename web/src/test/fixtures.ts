@@ -9,6 +9,7 @@ import type {
   CrossexAccount,
   CrossexPosition,
   EvenPlan,
+  Goal,
   OpportunitiesResult,
   OpportunityGroup,
   OpportunityLeg,
@@ -19,6 +20,7 @@ import type {
   PreviewResult,
   RebalanceBucket,
   RebalanceJob,
+  RebalancePlans,
   RebalanceStep,
   RebalanceView,
   RoutePlan,
@@ -509,7 +511,7 @@ export function opportunitiesHandler(
 
 /** GET /api/rebalance with nothing to move; pass `buckets` for a borrow. */
 export function makeRebalanceView(over: Partial<RebalanceView> = {}): RebalanceView {
-  return { buckets: [], plan: EMPTY_PLAN, job: null, ...over };
+  return { buckets: [], plans: plansOf(EMPTY_PLAN), job: null, ...over };
 }
 
 export function rebalanceHandler(view: RebalanceView = makeRebalanceView()) {
@@ -540,6 +542,15 @@ export const REBALANCE_NOW = 1_789_306_394_208;
 const TO_HYPERLIQUID = { from: 'CROSSEX', to: 'HYPERLIQUID' } as const;
 const FROM_HYPERLIQUID = { from: 'HYPERLIQUID', to: 'CROSSEX' } as const;
 
+const EVEN: Goal = { kind: 'even' };
+
+/** Both presets off one even plan: tests that build a view name only the
+ * plan the card leads with, and repay idles beside it. */
+export function plansOf(even: EvenPlan): RebalancePlans {
+  const repay: EvenPlan = { ...balancedPlan(even.routes.convert.after), goal: { kind: 'repay' }, noLegs: even.noLegs };
+  return { even, repay, custom: null };
+}
+
 const EVEN_SPLIT: WalletShare[] = [
   { coin: 'USDT', venue: 'CROSSEX', notionalUsd: 1000, share: 0.5 },
   { coin: 'USDC', venue: 'HYPERLIQUID', notionalUsd: 1000, share: 0.5 },
@@ -568,7 +579,7 @@ function balancedPlan(after: WalletAfter[]): EvenPlan {
     savesPerDayUsd: 0, after, steps: [],
   };
   return {
-    balanced: true, noLegs: false, moves: 0, shortOfEven: 0, roundCap: 0, split: EVEN_SPLIT,
+    goal: EVEN, targets: [], balanced: true, noLegs: false, moves: 0, shortOfEven: 0, roundCap: 0, split: EVEN_SPLIT,
     routes: { mix: null, loop: idle, convert: idle },
     recommended: null,
   };
@@ -623,7 +634,7 @@ const ACCOUNT_A_ROUND_3_BUCKETS: RebalanceBucket[] = [
 ];
 
 const ACCOUNT_A_ROUND_3_PLAN: EvenPlan = {
-  balanced: false, noLegs: false, moves: 103.19, shortOfEven: 0, roundCap: 6, split: EVEN_SPLIT,
+  goal: EVEN, targets: [], balanced: false, noLegs: false, moves: 103.19, shortOfEven: 0, roundCap: 6, split: EVEN_SPLIT,
   routes: {
     mix: null,
     loop: {
@@ -655,7 +666,7 @@ const ACCOUNT_A_ROUND_3_PLAN: EvenPlan = {
 };
 
 const ACCOUNT_A_RUNNING_JOB: RebalanceJob = {
-  id: 'mtzunfww', route: 'loop', amount: 175.88, costUsd: 0.26,
+  id: 'mtzunfww', goal: 'even', route: 'loop', amount: 175.88, costUsd: 0.26,
   target: [
     { coin: 'USDT', venue: 'CROSSEX', cash: 28.61, equity: 28.61 },
     { coin: 'USDC', venue: 'HYPERLIQUID', cash: 28.58, equity: 28.58 },
@@ -752,7 +763,7 @@ const BALANCED_PLAN: EvenPlan = balancedPlan([
 ]);
 
 const BALANCED_DONE_JOB: RebalanceJob = {
-  id: 'mtzuqygg', route: 'loop', amount: 477.29, costUsd: 0.1,
+  id: 'mtzuqygg', goal: 'even', route: 'loop', amount: 477.29, costUsd: 0.1,
   target: [
     { coin: 'USDT', venue: 'CROSSEX', cash: 509.27, equity: 493.88 },
     { coin: 'USDC', venue: 'HYPERLIQUID', cash: 489.12, equity: 494.15 },
@@ -778,7 +789,7 @@ const BALANCED_DONE_JOB: RebalanceJob = {
 };
 
 const OLD_DONE_JOB: RebalanceJob = {
-  id: 'mtzuqygg', route: 'loop', amount: 111.96, status: 'done', stepIndex: 2,
+  id: 'mtzuqygg', goal: 'even', route: 'loop', amount: 111.96, status: 'done', stepIndex: 2,
   steps: [
     jobStep({
       name: 'Buy USDC', qty: 111.96, status: 'done', startedAt: REBALANCE_NOW - 134_000,
@@ -807,7 +818,7 @@ const ACCOUNT_A_CONVERT: RoutePlan = {
 };
 
 const ACCOUNT_A_PLAN: EvenPlan = {
-  balanced: false, noLegs: false, moves: 175.89, shortOfEven: 0, roundCap: 6, split: EVEN_SPLIT,
+  goal: EVEN, targets: [], balanced: false, noLegs: false, moves: 175.89, shortOfEven: 0, roundCap: 6, split: EVEN_SPLIT,
   routes: {
     mix: null,
     loop: {
@@ -828,7 +839,7 @@ const ACCOUNT_A_PLAN: EvenPlan = {
 };
 
 const ACCOUNT_A_PAUSED_PLAN: EvenPlan = {
-  balanced: false, noLegs: false, moves: 175.94, shortOfEven: 0, roundCap: 6, split: EVEN_SPLIT,
+  goal: EVEN, targets: [], balanced: false, noLegs: false, moves: 175.94, shortOfEven: 0, roundCap: 6, split: EVEN_SPLIT,
   routes: {
     mix: null,
     loop: {
@@ -851,7 +862,7 @@ const ACCOUNT_A_PAUSED_PLAN: EvenPlan = {
 const ACCOUNT_A_INSIDE_BUCKETS = rebased(ACCOUNT_A_ROUND_3_BUCKETS, { 'USDC/GATE': { cash: 57.52, equity: 57.52 } });
 
 const ACCOUNT_A_INSIDE_PLAN: EvenPlan = {
-  balanced: false, noLegs: false, moves: 121.45, shortOfEven: 0, roundCap: 6, split: EVEN_SPLIT,
+  goal: EVEN, targets: [], balanced: false, noLegs: false, moves: 121.45, shortOfEven: 0, roundCap: 6, split: EVEN_SPLIT,
   routes: {
     mix: null,
     loop: {
@@ -888,7 +899,7 @@ const HALTED_INSIDE_JOB: RebalanceJob = {
 };
 
 const CONVERT_DONE_JOB: RebalanceJob = {
-  id: 'mtzutp80', route: 'convert', amount: 175.94, costUsd: 0.36,
+  id: 'mtzutp80', goal: 'even', route: 'convert', amount: 175.94, costUsd: 0.36,
   target: ACCOUNT_A_CONVERT.after, status: 'done', stepIndex: 1,
   steps: [
     jobStep({
@@ -920,7 +931,7 @@ const BORROW_UNDER_ONE_BUCKETS = rebased(ACCOUNT_B_BUCKETS, {
 });
 
 const BORROW_UNDER_ONE_PLAN: EvenPlan = {
-  balanced: false, noLegs: false, moves: 483.43, shortOfEven: 0, roundCap: 6, split: EVEN_SPLIT,
+  goal: EVEN, targets: [], balanced: false, noLegs: false, moves: 483.43, shortOfEven: 0, roundCap: 6, split: EVEN_SPLIT,
   routes: {
     mix: null,
     loop: {
@@ -987,7 +998,7 @@ const EXAMPLE_D_MID_BUCKETS = rebased(EXAMPLE_D_BUCKETS, {
 });
 
 const EXAMPLE_D_MID_PLAN: EvenPlan = {
-  balanced: false, noLegs: false, moves: 7513.82, shortOfEven: 0, roundCap: 6, split: EVEN_SPLIT,
+  goal: EVEN, targets: [], balanced: false, noLegs: false, moves: 7513.82, shortOfEven: 0, roundCap: 6, split: EVEN_SPLIT,
   routes: {
     mix: null,
     loop: {
@@ -1017,7 +1028,7 @@ const EXAMPLE_D_MID_PLAN: EvenPlan = {
 const EXAMPLE_D_STARTED = REBALANCE_NOW - 783_000;
 
 const EXAMPLE_D_CONVERT_JOB: RebalanceJob = {
-  id: 'mtzud1oo', route: 'mix', amount: 10854.58, costUsd: EXAMPLE_D_MIX.costUsd,
+  id: 'mtzud1oo', goal: 'even', route: 'mix', amount: 10854.58, costUsd: EXAMPLE_D_MIX.costUsd,
   target: EXAMPLE_D_MIX.after, status: 'running', stepIndex: 18,
   steps: EXAMPLE_D_MIX.steps.flatMap((step, index): RebalanceStep[] => {
     const start = EXAMPLE_D_STARTED + index * 130_000;
@@ -1083,7 +1094,7 @@ const EXAMPLE_E_MID_CONVERT: RoutePlan = {
 };
 
 const EXAMPLE_E_MID_PLAN: EvenPlan = {
-  balanced: false, noLegs: false, moves: 855.39, shortOfEven: 0, roundCap: 2, split: EVEN_SPLIT,
+  goal: EVEN, targets: [], balanced: false, noLegs: false, moves: 855.39, shortOfEven: 0, roundCap: 2, split: EVEN_SPLIT,
   routes: {
     mix: null,
     loop: { ...EXAMPLE_E_MID_CONVERT, available: false, reason: 'Free margin is too low for an 11 USDC round.' },
@@ -1093,7 +1104,7 @@ const EXAMPLE_E_MID_PLAN: EvenPlan = {
 };
 
 const EXAMPLE_E_JOB: RebalanceJob = {
-  id: 'mtzuqm40', route: 'loop', amount: 1228.31, costUsd: 2.12,
+  id: 'mtzuqm40', goal: 'even', route: 'loop', amount: 1228.31, costUsd: 2.12,
   target: afterOf(613.83, 613.85, 0), status: 'running', stepIndex: 0,
   steps: [
     jobStep({ ...FROM_HYPERLIQUID,
@@ -1179,7 +1190,7 @@ const LIGHTER_SPLIT_BUCKETS: RebalanceBucket[] = [
 ];
 
 const LIGHTER_SPLIT_PLAN: EvenPlan = {
-  balanced: false,
+  goal: EVEN, targets: [], balanced: false,
   noLegs: false,
   moves: 500.12,
   shortOfEven: 0,
@@ -1370,7 +1381,7 @@ const LIGHTER_ACROSS_BUCKETS: RebalanceBucket[] = [
 ];
 
 const LIGHTER_ACROSS_PLAN: EvenPlan = {
-  balanced: false,
+  goal: EVEN, targets: [], balanced: false,
   noLegs: false,
   moves: 500,
   shortOfEven: 0,
@@ -1447,7 +1458,7 @@ const LIGHTER_ACROSS_PLAN: EvenPlan = {
 const ACROSS = { from: 'HYPERLIQUID', to: 'LIGHTER' } as const;
 
 const LIGHTER_ACROSS_RUNNING_JOB: RebalanceJob = {
-  id: 'mtzv1l7g', route: 'loop', amount: 500, costUsd: 2.03, target: LIGHTER_ACROSS_PLAN.routes.loop!.after,
+  id: 'mtzv1l7g', goal: 'even', route: 'loop', amount: 500, costUsd: 2.03, target: LIGHTER_ACROSS_PLAN.routes.loop!.after,
   status: 'running', stepIndex: 1,
   steps: [
     jobStep({
@@ -1473,7 +1484,7 @@ const LIGHTER_ACROSS_ABANDONED_JOB: RebalanceJob = {
 };
 
 const LIGHTER_CONVERT_DONE_JOB: RebalanceJob = {
-  id: 'mtzv2c1q', route: 'convert', amount: 500, costUsd: 2, target: LIGHTER_ACROSS_PLAN.routes.convert.after,
+  id: 'mtzv2c1q', goal: 'even', route: 'convert', amount: 500, costUsd: 2, target: LIGHTER_ACROSS_PLAN.routes.convert.after,
   status: 'done', stepIndex: 1,
   steps: [
     jobStep({
@@ -1518,7 +1529,7 @@ const TWO_BORROWS_USDC_AFTER: WalletAfter[] = [
 ];
 
 const TWO_BORROWS_PLAN: EvenPlan = {
-  balanced: false, noLegs: false, moves: 868.42, shortOfEven: 0, roundCap: 6, split: TWO_BORROWS_SPLIT,
+  goal: EVEN, targets: [], balanced: false, noLegs: false, moves: 868.42, shortOfEven: 0, roundCap: 6, split: TWO_BORROWS_SPLIT,
   routes: {
     mix: {
       available: true, reason: null, costUsd: 0.46, seconds: 130, rounds: 1, oneMoreRoundCostUsd: null,
@@ -1571,7 +1582,7 @@ const BIG_BORROWS_BUCKETS: RebalanceBucket[] = [
 ];
 
 const BIG_BORROWS_PLAN: EvenPlan = {
-  balanced: false, noLegs: false, moves: 2236247.29, shortOfEven: 0, roundCap: 6,
+  goal: EVEN, targets: [], balanced: false, noLegs: false, moves: 2236247.29, shortOfEven: 0, roundCap: 6,
   split: [
     { coin: 'USDT', venue: 'CROSSEX', notionalUsd: 4657000, share: 0.5 },
     { coin: 'USDC', venue: 'HYPERLIQUID', notionalUsd: 3725600, share: 0.4 },
@@ -1625,7 +1636,7 @@ const ONE_BORROW_TARGET: WalletAfter[] = [
 ];
 
 const ONE_BORROW_PLAN: EvenPlan = {
-  balanced: false, noLegs: false, moves: 206.88, shortOfEven: 0, roundCap: 6, split: TWO_BORROWS_SPLIT,
+  goal: EVEN, targets: [], balanced: false, noLegs: false, moves: 206.88, shortOfEven: 0, roundCap: 6, split: TWO_BORROWS_SPLIT,
   routes: {
     mix: null,
     loop: {
@@ -1674,7 +1685,7 @@ const HYPERLIQUID_FREE_BORROW_TARGET: WalletAfter[] = [
 ];
 
 const HYPERLIQUID_FREE_BORROW_PLAN: EvenPlan = {
-  balanced: false, noLegs: false, moves: 5599.91, shortOfEven: 0, roundCap: 6,
+  goal: EVEN, targets: [], balanced: false, noLegs: false, moves: 5599.91, shortOfEven: 0, roundCap: 6,
   split: [
     { coin: 'USDT', venue: 'CROSSEX', notionalUsd: 8400.0, share: 0.6667 },
     { coin: 'USDC', venue: 'HYPERLIQUID', notionalUsd: 4200.0, share: 0.3333 },
@@ -1713,7 +1724,7 @@ const GAIN_OVER_NEGATIVE_CASH_BUCKETS: RebalanceBucket[] = [
 ];
 
 const GAIN_OVER_NEGATIVE_CASH_PLAN: EvenPlan = {
-  balanced: true, noLegs: false, moves: 0, shortOfEven: 0, roundCap: 0,
+  goal: EVEN, targets: [], balanced: true, noLegs: false, moves: 0, shortOfEven: 0, roundCap: 0,
   split: [{ coin: 'USDC', venue: 'LIGHTER', notionalUsd: 15.0, share: 1 }],
   routes: {
     mix: null,
@@ -1753,7 +1764,7 @@ const INTEREST_PAID_SPLIT_AFTER: WalletAfter[] = [
 ];
 
 const INTEREST_PAID_SPLIT_PLAN: EvenPlan = {
-  balanced: true, noLegs: false, moves: 0, shortOfEven: 0, roundCap: 0,
+  goal: EVEN, targets: [], balanced: true, noLegs: false, moves: 0, shortOfEven: 0, roundCap: 0,
   split: [
     { coin: 'USDT', venue: 'CROSSEX', notionalUsd: 899.92, share: 0.6428 },
     { coin: 'USDC', venue: 'HYPERLIQUID', notionalUsd: 300.02, share: 0.2143 },
@@ -1785,7 +1796,7 @@ const ONE_ROUTE_ONLY_BUCKETS: RebalanceBucket[] = [
 ];
 
 const ONE_ROUTE_ONLY_PLAN: EvenPlan = {
-  balanced: false, noLegs: false, moves: 10.0, shortOfEven: 5, roundCap: 1,
+  goal: EVEN, targets: [], balanced: false, noLegs: false, moves: 10.0, shortOfEven: 5, roundCap: 1,
   split: [
     { coin: 'USDT', venue: 'CROSSEX', notionalUsd: 300.01, share: 0.6522 },
     { coin: 'USDC', venue: 'HYPERLIQUID', notionalUsd: 159.99, share: 0.3478 },
@@ -1828,7 +1839,7 @@ const HIDDEN_ROUTE_TARGET: WalletAfter[] = [
 ];
 
 const HIDDEN_ROUTE_PLAN: EvenPlan = {
-  balanced: false, noLegs: false, moves: 150.0, shortOfEven: 0, roundCap: 1,
+  goal: EVEN, targets: [], balanced: false, noLegs: false, moves: 150.0, shortOfEven: 0, roundCap: 1,
   split: [
     { coin: 'USDT', venue: 'CROSSEX', notionalUsd: 350.0, share: 0.7 },
     { coin: 'USDC', venue: 'HYPERLIQUID', notionalUsd: 150.0, share: 0.3 },
@@ -1854,18 +1865,18 @@ const HIDDEN_ROUTE_PLAN: EvenPlan = {
 };
 
 export const rebalanceViews = {
-  accountA: { buckets: ACCOUNT_A_BUCKETS, plan: ACCOUNT_A_PLAN, job: null },
-  accountARunning: { buckets: ACCOUNT_A_ROUND_3_BUCKETS, plan: ACCOUNT_A_ROUND_3_PLAN, job: ACCOUNT_A_RUNNING_JOB },
-  accountAHalted: { buckets: ACCOUNT_A_ROUND_3_BUCKETS, plan: ACCOUNT_A_ROUND_3_PLAN, job: ACCOUNT_A_HALTED_JOB },
+  accountA: { buckets: ACCOUNT_A_BUCKETS, plans: plansOf(ACCOUNT_A_PLAN), job: null },
+  accountARunning: { buckets: ACCOUNT_A_ROUND_3_BUCKETS, plans: plansOf(ACCOUNT_A_ROUND_3_PLAN), job: ACCOUNT_A_RUNNING_JOB },
+  accountAHalted: { buckets: ACCOUNT_A_ROUND_3_BUCKETS, plans: plansOf(ACCOUNT_A_ROUND_3_PLAN), job: ACCOUNT_A_HALTED_JOB },
   accountAAbandoned: {
-    buckets: ACCOUNT_A_ROUND_3_BUCKETS, plan: ACCOUNT_A_ROUND_3_PLAN,
+    buckets: ACCOUNT_A_ROUND_3_BUCKETS, plans: plansOf(ACCOUNT_A_ROUND_3_PLAN),
     job: { ...ACCOUNT_A_HALTED_JOB, status: 'abandoned' },
   },
-  accountABlocked: { buckets: ACCOUNT_A_BUCKETS, plan: ACCOUNT_A_PAUSED_PLAN, job: null },
+  accountABlocked: { buckets: ACCOUNT_A_BUCKETS, plans: plansOf(ACCOUNT_A_PAUSED_PLAN), job: null },
   accountB: {
     buckets: ACCOUNT_B_BUCKETS,
-    plan: {
-      balanced: false, noLegs: false, moves: 477.29, shortOfEven: 0, roundCap: 6, split: EVEN_SPLIT,
+    plans: plansOf({
+      goal: EVEN, targets: [], balanced: false, noLegs: false, moves: 477.29, shortOfEven: 0, roundCap: 6, split: EVEN_SPLIT,
       routes: {
         mix: null,
         loop: {
@@ -1894,7 +1905,7 @@ export const rebalanceViews = {
         },
       },
       recommended: 'loop',
-    },
+    }),
     job: null,
   },
   exampleC: {
@@ -1912,8 +1923,8 @@ export const rebalanceViews = {
         interestPaidUsd: 0, interestPerDayUsd: 0, ratePerYear: 0.05,
       },
     ],
-    plan: {
-      balanced: false, noLegs: false, moves: 22.18, shortOfEven: 8, roundCap: 2, split: EVEN_SPLIT,
+    plans: plansOf({
+      goal: EVEN, targets: [], balanced: false, noLegs: false, moves: 22.18, shortOfEven: 8, roundCap: 2, split: EVEN_SPLIT,
       routes: {
         mix: null,
         loop: null,
@@ -1931,13 +1942,13 @@ export const rebalanceViews = {
         },
       },
       recommended: 'convert',
-    },
+    }),
     job: null,
   },
   exampleD: {
     buckets: EXAMPLE_D_BUCKETS,
-    plan: {
-      balanced: false, noLegs: false, moves: 10854.58, shortOfEven: 0, roundCap: 6, split: EVEN_SPLIT,
+    plans: plansOf({
+      goal: EVEN, targets: [], balanced: false, noLegs: false, moves: 10854.58, shortOfEven: 0, roundCap: 6, split: EVEN_SPLIT,
       routes: {
         mix: EXAMPLE_D_MIX,
         loop: null,
@@ -1955,13 +1966,13 @@ export const rebalanceViews = {
         },
       },
       recommended: 'mix',
-    },
+    }),
     job: null,
   },
   exampleE: {
     buckets: EXAMPLE_E_BUCKETS,
-    plan: {
-      balanced: false, noLegs: false, moves: 1228.27, shortOfEven: 0, roundCap: 2, split: EVEN_SPLIT,
+    plans: plansOf({
+      goal: EVEN, targets: [], balanced: false, noLegs: false, moves: 1228.27, shortOfEven: 0, roundCap: 2, split: EVEN_SPLIT,
       routes: {
         mix: {
           available: true, reason: null, costUsd: 2.04, seconds: 400, rounds: 1, oneMoreRoundCostUsd: 2.12,
@@ -1991,44 +2002,44 @@ export const rebalanceViews = {
         },
       },
       recommended: 'mix',
-    },
+    }),
     job: null,
   },
-  balancedDone: { buckets: BALANCED_BUCKETS, plan: BALANCED_PLAN, job: BALANCED_DONE_JOB },
-  oldDone: { buckets: BALANCED_BUCKETS, plan: BALANCED_PLAN, job: OLD_DONE_JOB },
-  exampleERunning: { buckets: EXAMPLE_E_MID_BUCKETS, plan: EXAMPLE_E_MID_PLAN, job: EXAMPLE_E_JOB },
-  exampleEAbandoned: { buckets: EXAMPLE_E_MID_BUCKETS, plan: EXAMPLE_E_MID_PLAN, job: EXAMPLE_E_ABANDONED_JOB },
-  exampleDRunningConvert: { buckets: EXAMPLE_D_MID_BUCKETS, plan: EXAMPLE_D_MID_PLAN, job: EXAMPLE_D_CONVERT_JOB },
+  balancedDone: { buckets: BALANCED_BUCKETS, plans: plansOf(BALANCED_PLAN), job: BALANCED_DONE_JOB },
+  oldDone: { buckets: BALANCED_BUCKETS, plans: plansOf(BALANCED_PLAN), job: OLD_DONE_JOB },
+  exampleERunning: { buckets: EXAMPLE_E_MID_BUCKETS, plans: plansOf(EXAMPLE_E_MID_PLAN), job: EXAMPLE_E_JOB },
+  exampleEAbandoned: { buckets: EXAMPLE_E_MID_BUCKETS, plans: plansOf(EXAMPLE_E_MID_PLAN), job: EXAMPLE_E_ABANDONED_JOB },
+  exampleDRunningConvert: { buckets: EXAMPLE_D_MID_BUCKETS, plans: plansOf(EXAMPLE_D_MID_PLAN), job: EXAMPLE_D_CONVERT_JOB },
   exampleDHaltedConvert: {
-    buckets: EXAMPLE_D_MID_BUCKETS, plan: EXAMPLE_D_MID_PLAN,
+    buckets: EXAMPLE_D_MID_BUCKETS, plans: plansOf(EXAMPLE_D_MID_PLAN),
     job: {
       ...EXAMPLE_D_CONVERT_JOB, status: 'halted', haltReason: 'Convert quote was more than 0.3% under the Gate spot price.',
       updatedAt: REBALANCE_NOW - 2_000,
     },
   },
-  haltedInside: { buckets: ACCOUNT_A_INSIDE_BUCKETS, plan: ACCOUNT_A_INSIDE_PLAN, job: HALTED_INSIDE_JOB },
-  mixDone: { buckets: MIX_DONE_BUCKETS, plan: balancedPlan(EXAMPLE_D_MIX.after), job: MIX_DONE_JOB },
-  convertDone: { buckets: CONVERT_DONE_BUCKETS, plan: balancedPlan(ACCOUNT_A_CONVERT.after), job: CONVERT_DONE_JOB },
-  balancedNoJob: { buckets: BALANCED_BUCKETS, plan: BALANCED_PLAN, job: null },
+  haltedInside: { buckets: ACCOUNT_A_INSIDE_BUCKETS, plans: plansOf(ACCOUNT_A_INSIDE_PLAN), job: HALTED_INSIDE_JOB },
+  mixDone: { buckets: MIX_DONE_BUCKETS, plans: plansOf(balancedPlan(EXAMPLE_D_MIX.after)), job: MIX_DONE_JOB },
+  convertDone: { buckets: CONVERT_DONE_BUCKETS, plans: plansOf(balancedPlan(ACCOUNT_A_CONVERT.after)), job: CONVERT_DONE_JOB },
+  balancedNoJob: { buckets: BALANCED_BUCKETS, plans: plansOf(BALANCED_PLAN), job: null },
   spotClosed: {
-    buckets: ACCOUNT_A_BUCKETS, plan: withLoopReason(ACCOUNT_A_PAUSED_PLAN, 'The spot market for USDC is closed.'),
+    buckets: ACCOUNT_A_BUCKETS, plans: plansOf(withLoopReason(ACCOUNT_A_PAUSED_PLAN, 'The spot market for USDC is closed.')),
     job: null,
   },
   underMinimum: {
-    buckets: ACCOUNT_A_BUCKETS, plan: withLoopReason(ACCOUNT_A_PAUSED_PLAN, 'The move is under the 11 USDC minimum.'),
+    buckets: ACCOUNT_A_BUCKETS, plans: plansOf(withLoopReason(ACCOUNT_A_PAUSED_PLAN, 'The move is under the 11 USDC minimum.')),
     job: null,
   },
-  borrowUnderOne: { buckets: BORROW_UNDER_ONE_BUCKETS, plan: BORROW_UNDER_ONE_PLAN, job: null },
-  accountADone: { buckets: ACCOUNT_A_BUCKETS, plan: ACCOUNT_A_PLAN, job: CONVERT_DONE_JOB },
-  accountADoneShort: { buckets: ACCOUNT_A_BUCKETS, plan: ACCOUNT_A_PLAN, job: CONVERT_DONE_SHORT_JOB },
-  lighterSplit: { buckets: LIGHTER_SPLIT_BUCKETS, plan: LIGHTER_SPLIT_PLAN, job: null },
-  lighterAcross: { buckets: LIGHTER_ACROSS_BUCKETS, plan: LIGHTER_ACROSS_PLAN, job: null },
+  borrowUnderOne: { buckets: BORROW_UNDER_ONE_BUCKETS, plans: plansOf(BORROW_UNDER_ONE_PLAN), job: null },
+  accountADone: { buckets: ACCOUNT_A_BUCKETS, plans: plansOf(ACCOUNT_A_PLAN), job: CONVERT_DONE_JOB },
+  accountADoneShort: { buckets: ACCOUNT_A_BUCKETS, plans: plansOf(ACCOUNT_A_PLAN), job: CONVERT_DONE_SHORT_JOB },
+  lighterSplit: { buckets: LIGHTER_SPLIT_BUCKETS, plans: plansOf(LIGHTER_SPLIT_PLAN), job: null },
+  lighterAcross: { buckets: LIGHTER_ACROSS_BUCKETS, plans: plansOf(LIGHTER_ACROSS_PLAN), job: null },
   lighterAcrossRunning: {
-    buckets: rebased(LIGHTER_ACROSS_BUCKETS, { 'USDC/HYPERLIQUID': { cash: 0, equity: 0 } }), plan: LIGHTER_ACROSS_PLAN,
+    buckets: rebased(LIGHTER_ACROSS_BUCKETS, { 'USDC/HYPERLIQUID': { cash: 0, equity: 0 } }), plans: plansOf(LIGHTER_ACROSS_PLAN),
     job: LIGHTER_ACROSS_RUNNING_JOB,
   },
   lighterAcrossAbandoned: {
-    buckets: rebased(LIGHTER_ACROSS_BUCKETS, { 'USDC/HYPERLIQUID': { cash: 0, equity: 0 } }), plan: LIGHTER_ACROSS_PLAN,
+    buckets: rebased(LIGHTER_ACROSS_BUCKETS, { 'USDC/HYPERLIQUID': { cash: 0, equity: 0 } }), plans: plansOf(LIGHTER_ACROSS_PLAN),
     job: LIGHTER_ACROSS_ABANDONED_JOB,
   },
   lighterConvertDone: {
@@ -2036,21 +2047,21 @@ export const rebalanceViews = {
       'USDC/HYPERLIQUID': { cash: 0, equity: 0 },
       'USDC/LIGHTER': { cash: 498, equity: 498 },
     }),
-    plan: {
+    plans: plansOf({
       ...balancedPlan(LIGHTER_ACROSS_PLAN.routes.convert.after),
       split: LIGHTER_ACROSS_PLAN.split.filter((share) => share.share > 0),
-    },
+    }),
     job: LIGHTER_CONVERT_DONE_JOB,
   },
-  noLegs: { buckets: LIGHTER_SPLIT_BUCKETS, plan: NO_LEGS_PLAN, job: null },
-  twoBorrows: { buckets: TWO_BORROWS_BUCKETS, plan: TWO_BORROWS_PLAN, job: null },
-  bigBorrows: { buckets: BIG_BORROWS_BUCKETS, plan: BIG_BORROWS_PLAN, job: null },
-  oneBorrow: { buckets: ONE_BORROW_BUCKETS, plan: ONE_BORROW_PLAN, job: null },
-  hyperliquidFreeBorrow: { buckets: HYPERLIQUID_FREE_BORROW_BUCKETS, plan: HYPERLIQUID_FREE_BORROW_PLAN, job: null },
-  gainOverNegativeCash: { buckets: GAIN_OVER_NEGATIVE_CASH_BUCKETS, plan: GAIN_OVER_NEGATIVE_CASH_PLAN, job: null },
-  interestPaidSplit: { buckets: INTEREST_PAID_SPLIT_BUCKETS, plan: INTEREST_PAID_SPLIT_PLAN, job: null },
-  oneRouteOnly: { buckets: ONE_ROUTE_ONLY_BUCKETS, plan: ONE_ROUTE_ONLY_PLAN, job: null },
-  hiddenRoute: { buckets: HIDDEN_ROUTE_BUCKETS, plan: HIDDEN_ROUTE_PLAN, job: null },
+  noLegs: { buckets: LIGHTER_SPLIT_BUCKETS, plans: plansOf(NO_LEGS_PLAN), job: null },
+  twoBorrows: { buckets: TWO_BORROWS_BUCKETS, plans: plansOf(TWO_BORROWS_PLAN), job: null },
+  bigBorrows: { buckets: BIG_BORROWS_BUCKETS, plans: plansOf(BIG_BORROWS_PLAN), job: null },
+  oneBorrow: { buckets: ONE_BORROW_BUCKETS, plans: plansOf(ONE_BORROW_PLAN), job: null },
+  hyperliquidFreeBorrow: { buckets: HYPERLIQUID_FREE_BORROW_BUCKETS, plans: plansOf(HYPERLIQUID_FREE_BORROW_PLAN), job: null },
+  gainOverNegativeCash: { buckets: GAIN_OVER_NEGATIVE_CASH_BUCKETS, plans: plansOf(GAIN_OVER_NEGATIVE_CASH_PLAN), job: null },
+  interestPaidSplit: { buckets: INTEREST_PAID_SPLIT_BUCKETS, plans: plansOf(INTEREST_PAID_SPLIT_PLAN), job: null },
+  oneRouteOnly: { buckets: ONE_ROUTE_ONLY_BUCKETS, plans: plansOf(ONE_ROUTE_ONLY_PLAN), job: null },
+  hiddenRoute: { buckets: HIDDEN_ROUTE_BUCKETS, plans: plansOf(HIDDEN_ROUTE_PLAN), job: null },
 } satisfies Record<string, RebalanceView>;
 
 const ACCOUNT_B_SPOT: SpotBalance[] = [

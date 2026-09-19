@@ -8,9 +8,9 @@ import { fmtAbout, fmtUsd, num } from '../lib/fmt';
 import { useNow } from '../lib/useNow';
 import { useSettledError } from '../lib/useSettledError';
 import { jobSeconds, VerdictAlert } from './RebalanceBits';
-import { MODAL_FEE, NO_LEGS, VERDICT_BALANCED, VERDICT_NO_BORROW } from './rebalanceCopy';
+import { CARD_LABEL, NO_LEGS, SHORT_OF_CASH, VERDICT_BALANCED, VERDICT_NO_BORROW } from './rebalanceCopy';
 import { WAITS_FOR_DEAL, WAITS_FOR_TRANSFER } from './rebalanceCopy';
-import { borrowFacts, Facts, isCashLimitedEven, pickedRoute, worthLine, type VerdictTone } from './RebalanceHovers';
+import { borrowFacts, defaultGoal, Facts, isCashLimitedEven, pickedRoute, worthLine, type VerdictTone } from './RebalanceHovers';
 import { RebalanceInfo, roundCountOf, roundOf } from './RebalanceHovers';
 import { RebalanceModal } from './RebalanceModal';
 import type { GateAccount, TransferCoin } from '../api/types';
@@ -18,7 +18,6 @@ import type { GateAccount, TransferCoin } from '../api/types';
 const LOAD_FAILED = 'Could not load Rebalance.';
 const RETRY = 'Retry';
 const READ_AGAIN = 'Read again';
-const REBALANCE = 'Rebalance';
 const STOPPED_OPEN = 'Stopped · open';
 const IS_POSITION_MARGIN = 'cannot move. It is margin for open positions.';
 
@@ -26,10 +25,11 @@ const minutesLeft = (seconds: number): string => fmtAbout(seconds).replace(/ 1 m
 
 function jobVerdict(job: RebalanceJob, now: number): string {
   const round = roundOf(job);
-  if (job.status === 'halted') return `Rebalance stopped ${round === null ? 'at Convert' : `in round ${num(round, 0)}`}.`;
+  const what = CARD_LABEL[job.goal];
+  if (job.status === 'halted') return `${what} stopped ${round === null ? 'at Convert' : `in round ${num(round, 0)}`}.`;
   const total = jobSeconds(job);
   const left = Math.max(0, total - Math.max(0, now - job.createdAt) / 1000);
-  return total > 0 ? `Rebalance running, ${minutesLeft(left)} left.` : 'Rebalance running.';
+  return total > 0 ? `${what} running, ${minutesLeft(left)} left.` : `${what} running.`;
 }
 
 function jobButton(job: RebalanceJob): string {
@@ -88,27 +88,36 @@ export function RebalanceSection({
       );
     }
   } else {
-    const { plan, buckets } = view;
+    const { buckets } = view;
+    // The card leads with one preset. The dialog holds the other, and the
+    // custom move, so the button opens it even when this preset has nothing
+    // to do.
+    const goal = defaultGoal(view);
+    const plan = view.plans[goal];
+    const cta = CARD_LABEL[goal];
     const job = view.job && (view.job.status === 'running' || view.job.status === 'halted') ? view.job : null;
     const showAge = loadError !== null || (openedWith > 0 && query.dataUpdatedAt === openedWith);
     const picked = pickedRoute(plan, null);
     const hasBorrow = borrowingBuckets(buckets).length > 0;
     // With every route blocked, the window cannot run, so the card gives no verdict.
-    const worth = hasBorrow && picked.name !== null ? worthLine(picked.route, buckets) : null;
+    const worth = hasBorrow && picked.name !== null ? worthLine(picked.route, buckets, goal, plan.noLegs) : null;
     const moving = transfer?.transfer?.status === 'moving';
     const dealWorking = transfer?.lock === 'deal';
 
     let chip: ReactNode = null;
     if (job?.status === 'running') chip = <Chip tone="info">Running</Chip>;
     if (job?.status === 'halted') chip = <Chip tone="red">Stopped</Chip>;
-    if (!job && plan.balanced && !plan.noLegs) chip = <Chip tone="green">Balanced</Chip>;
+    if (!job && goal === 'even' && plan.balanced && !plan.noLegs) chip = <Chip tone="green">Balanced</Chip>;
 
     let verdict: ReactNode = null;
     let verdictSub: string | null = null;
     let tone: VerdictTone = 'info';
     if (job) verdict = jobVerdict(job, now);
-    else if (plan.noLegs) verdict = NO_LEGS;
-    else if (isCashLimitedEven(plan)) verdict = `${fmtUsd(plan.shortOfEven)} ${IS_POSITION_MARGIN}`;
+    // What caps a move is cash when there are no positions, and position
+    // margin when there are — the goal on screen does not decide it.
+    else if (isCashLimitedEven(plan)) verdict = `${fmtUsd(plan.shortOfEven)} ${plan.noLegs ? SHORT_OF_CASH : IS_POSITION_MARGIN}`;
+    else if (goal === 'repay' && plan.balanced) verdict = VERDICT_NO_BORROW;
+    else if (plan.noLegs && goal === 'even') verdict = NO_LEGS;
     else if (plan.balanced) verdict = VERDICT_BALANCED;
     // No trailing "It moves $X." here: the line now says no rebalancing is
     // necessary, and naming the amount in the same breath argued the opposite.
@@ -120,12 +129,13 @@ export function RebalanceSection({
       tone = worth.tone;
     }
 
-    let label: ReactNode = REBALANCE;
+    let label: ReactNode = cta;
     if (job) label = jobButton(job);
     else if (moving) label = WAITS_FOR_TRANSFER;
     else if (dealWorking) label = WAITS_FOR_DEAL;
-    else if (!plan.balanced && !plan.noLegs) label = <>{REBALANCE} <span className="opacity-80">{`· ${MODAL_FEE(fmtUsd(picked.route.costUsd))}`}</span></>;
-    const disabled = !job && (plan.balanced || plan.noLegs || moving || dealWorking);
+    // No fee on the card (his ruling 2026-09-19): it is the fee of ONE preset,
+    // and the dialog prices every route beside it anyway.
+    const disabled = !job && (moving || dealWorking);
     // The one solid-filled control is spent on the verdict that actually asks
     // for the move, not on "you are borrowing" generally: a free borrow and a
     // fee that outruns its interest both leave it an outline.
