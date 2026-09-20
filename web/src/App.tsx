@@ -19,6 +19,8 @@ import { OpportunitiesPanel } from './panels/OpportunitiesPanel';
 import { AssetsHome } from './panels/assets/AssetsHome';
 import { SettingsDrawer } from './panels/SettingsDrawer';
 import { TrackedAddressProvider } from './panels/trackedAddress';
+import { RollSignalProvider } from './panels/rollSignal';
+import { RollOverBanner } from './panels/RollOverBanner';
 import { TradesPanel } from './panels/TradesPanel';
 import { Drawer } from './components/Drawer';
 import { RecoveryBanner } from './trade/RecoveryBanner';
@@ -126,6 +128,7 @@ export default function App() {
 
   return (
     <TradeFlowProvider>
+      <RollSignalProvider>
       <TrackedAddressProvider onOpenSettings={openSettings}>
         <DisclaimerGate />
         {/* Only once the terminal is usable: the disclaimer gate is a locked
@@ -178,6 +181,10 @@ export default function App() {
                 ]}
               />
             )}
+            {/* INSIDE the sticky header: a hedge about to mature must stay on
+                screen while the trader scrolls a long tab, and it is news for
+                every tab, not just Positions (his call 2026-09-20). */}
+            {configured && <RollOverBanner onShowPositions={() => selectTab('positions')} />}
           </header>
 
           {credentials.data?.configured && <RecoveryBanner onOpenTab={selectTab} />}
@@ -239,6 +246,7 @@ export default function App() {
           )}
         </div>
       </TrackedAddressProvider>
+      </RollSignalProvider>
     </TradeFlowProvider>
   );
 }

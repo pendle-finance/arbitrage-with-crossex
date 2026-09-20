@@ -12,6 +12,8 @@ import type { AssetBorosOpen, AssetGroup, AssetPerpOpen } from '../../api/types'
 import { server } from '../../test/server';
 import { renderWithClient } from '../../test/utils';
 import { AssetCard } from './AssetCard';
+import { RollOverBanner } from '../RollOverBanner';
+import { RollSignalProvider } from '../rollSignal';
 import { deriveAsset } from './assetModel';
 
 const DAY = 86_400;
@@ -59,17 +61,25 @@ const book = (days: number): AssetGroup => {
   };
 };
 
+/**
+ * The card and the APP-WIDE banner together: the banner moved to the shell
+ * (RollOverBanner reads what cards publish), so a test about "the banner and
+ * its card" has to mount both inside the provider that wires them.
+ */
 const renderCard = (group: AssetGroup) =>
   renderWithClient(
-    <AssetCard
-      group={group}
-      derived={deriveAsset(group, {}, 0, Math.floor(Date.now() / 1000))}
-      sinceSec={0}
-      windowPending={false}
-      onChangeSince={() => {}}
-      exclusions={{}}
-      onExclude={() => {}}
-    />,
+    <RollSignalProvider>
+      <RollOverBanner onShowPositions={() => {}} />
+      <AssetCard
+        group={group}
+        derived={deriveAsset(group, {}, 0, Math.floor(Date.now() / 1000))}
+        sinceSec={0}
+        windowPending={false}
+        onChangeSince={() => {}}
+        exclusions={{}}
+        onExclude={() => {}}
+      />
+    </RollSignalProvider>,
   );
 
 beforeEach(() => {
@@ -95,7 +105,7 @@ describe('AssetCard — roll over', () => {
       scrolled.push(this);
     };
     renderCard(book(10));
-    await userEvent.click(screen.getByRole('button', { name: /pair can roll over/ }));
+    await userEvent.click(await screen.findByRole('button', { name: /pair can roll over/ }));
     const panel = screen.getByRole('tabpanel', { name: /4 Leg Pairs/ });
     // The pair's card is what lands at the top of the viewport.
     expect(scrolled).toHaveLength(1);
@@ -113,7 +123,7 @@ describe('AssetCard — roll over', () => {
     renderCard(book(10));
     // The banner counts pairs and sends the trader to the pairs tab — which
     // is the tab a card opens on (his call 2026-09-20), so leave it first.
-    const banner = screen.getByRole('button', { name: /^1 pair can roll over/ });
+    const banner = await screen.findByRole('button', { name: /^1 pair can roll over/ });
     expect(screen.getByRole('tab', { name: /4 Leg Pairs/ })).toHaveAttribute('aria-selected', 'true');
     await userEvent.click(screen.getByRole('tab', { name: /Funding Bundles/ }));
     expect(screen.getByRole('tab', { name: /Funding Bundles/ })).toHaveAttribute('aria-selected', 'true');
@@ -140,19 +150,52 @@ describe('AssetCard — roll over', () => {
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 
-  it('the banner is quiet between 14 and 7 days out, loud a week from settlement', () => {
+  it('the banner is quiet between 14 and 7 days out, loud a week from settlement', async () => {
     renderCard(book(10));
-    const quiet = screen.getByRole('button', { name: /pair can roll over/ });
+    const quiet = (await screen.findByRole('button', { name: /pair can roll over/ })).closest('[data-tone]')!;
     expect(quiet).toHaveAttribute('data-tone', 'quiet');
-    expect(within(quiet).queryByText(/matures in/)).not.toBeInTheDocument();
+    expect(within(quiet as HTMLElement).queryByText(/matures in/)).not.toBeInTheDocument();
     cleanup();
 
     // Loud says what to do and why, nothing else — no count, no "you have".
     renderCard(book(5));
-    const loud = screen.getByRole('button', { name: /Roll over now/ });
+    const loudBtn = await screen.findByRole('button', { name: /Roll over now/ });
+    const loud = loudBtn.closest('[data-tone]')! as HTMLElement;
     expect(loud).toHaveAttribute('data-tone', 'loud');
-    expect(within(loud).getByText('Gate / Hyperliquid matures in 5d')).toBeInTheDocument();
+    expect(within(loud).getByText(/Gate \/ Hyperliquid matures in 5d/)).toBeInTheDocument();
     expect(within(loud).queryByText(/can roll over/)).not.toBeInTheDocument();
+  });
+
+  it('the guide pill explains the roll, the fee saving and when to do it', async () => {
+    renderCard(book(5));
+    const pill = await screen.findByRole('button', { name: 'Explain rollover to me' });
+    const guide = () => screen.queryByRole('note', { name: 'How rolling over works' });
+    expect(guide()).not.toBeInTheDocument();
+
+    // Hover alone opens it — the reader is already scanning the banner.
+    await userEvent.hover(pill);
+    expect(guide()).toBeInTheDocument();
+    await userEvent.unhover(pill);
+    expect(guide()).not.toBeInTheDocument();
+
+    // A click pins it open, so it survives the pointer leaving.
+    await userEvent.click(pill);
+    await userEvent.unhover(pill);
+    const note = guide()!;
+    expect(within(note).getByText('Rolling a hedge over')).toBeInTheDocument();
+    // The mechanic, the saving, and the three "when" cases.
+    expect(note).toHaveTextContent(/Your perps never move/);
+    expect(note).toHaveTextContent(/two perp entry fees plus slippage/);
+    // The three "when" cases, including the DCA reason for rolling early.
+    expect(note).toHaveTextContent(/In the last two weeks/);
+    expect(note).toHaveTextContent(/DCA into the longer maturity/);
+    expect(note).toHaveTextContent(/When the next maturity pays more/);
+    expect(note).toHaveTextContent(/Right when it matures/);
+    // "matures", never "settles" (his call 2026-09-20).
+    expect(note.textContent).not.toMatch(/settl/i);
+
+    await userEvent.keyboard('{Escape}');
+    expect(guide()).not.toBeInTheDocument();
   });
 
   it('a fifth of the pair rolling at a better rate makes the banner loud and flags the card', async () => {
@@ -247,13 +290,14 @@ describe('AssetCard — roll over', () => {
     // full suite runs this file under load.
     expect(await within(panel).findByText('roll opportunity', undefined, { timeout: 10_000 })).toBeInTheDocument();
     expect(within(panel).queryByText('ready to roll')).not.toBeInTheDocument();
-    const banner = screen.getByRole('button', { name: /Roll over now/ });
-    expect(banner).toHaveAttribute('data-tone', 'loud');
+    const banner = await screen.findByRole('button', { name: /Roll over now/ }, { timeout: 10_000 });
+    expect(banner.closest('[data-tone]')).toHaveAttribute('data-tone', 'loud');
     // The new rate is the bold figure; the current one sits dimmed beside it.
     const promised = within(banner).getByText(/^\+?\d+\.\d+%$/);
     expect(promised).toHaveClass('font-semibold');
-    expect(within(banner).getByText('vs 14.29% now')).toBeInTheDocument();
-    expect(within(banner).getByText(/^Gate \/ Hyperliquid →/)).toBeInTheDocument();
+    // Each rate with the days it runs: the roll's 45 against the 10 held.
+    expect(within(banner).getByText('vs 14.29% (10 days) now')).toBeInTheDocument();
+    expect(within(banner).getByText(/^Gate \/ Hyperliquid: .*\(45 days\)/)).toBeInTheDocument();
     // The probe first priced a FIFTH of the 100 ETH held at the markets' own
     // seeded tolerance (half of 2%, floored to 1 s.f.) …
     const first = sims.find((b) => b.intent === 'open');
@@ -272,6 +316,54 @@ describe('AssetCard — roll over', () => {
     );
     expect(headline.textContent).toBe(`${promised.textContent}fixed`);
   }, 20_000);
+
+  it('offsetting perps with no rate legs are ONE pair with its Boros side missing, not loose legs', () => {
+    // The book after a missed roll: both perps still on, both rate legs gone.
+    const g = { ...book(10), borosOpen: [] };
+    renderCard(g);
+    const panel = screen.getByRole('tabpanel', { name: /4 Leg Pairs/ });
+    const row = within(panel).getByRole('button', { name: /Gate \/ S Hyperliquid Boros legs missing/ });
+    expect(row).toHaveAttribute('aria-expanded', 'true');
+    // Both gaps are named, each with its own action, plus the one for both.
+    expect(within(panel).getAllByText('missing')).toHaveLength(2);
+    expect(within(panel).getAllByRole('button', { name: 'Open leg' })).toHaveLength(2);
+    expect(within(panel).getByRole('button', { name: 'Open both Boros legs' })).toBeInTheDocument();
+    // … and the other way out: stop farming it.
+    expect(within(panel).getByRole('button', { name: 'Close perps' })).toBeEnabled();
+    // Nothing is left over, so there is no "Ungrouped legs" card at all.
+    expect(within(panel).queryByText('Ungrouped legs')).not.toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /4 Leg Pairs/ })).toHaveTextContent('1');
+  });
+
+  it('with ONE rate leg still on, only the other side is missing — and only it can be opened', () => {
+    const base = book(10);
+    const g = { ...base, borosOpen: base.borosOpen.filter((l) => l.venue === 'GATE') };
+    renderCard(g);
+    const panel = screen.getByRole('tabpanel', { name: /4 Leg Pairs/ });
+    expect(within(panel).getByRole('button', { name: /Gate \/ S Hyperliquid Boros leg missing/ })).toBeInTheDocument();
+    expect(within(panel).getAllByText('missing')).toHaveLength(1);
+    expect(within(panel).getAllByRole('button', { name: 'Open leg' })).toHaveLength(1);
+    expect(within(panel).queryByRole('button', { name: 'Open both Boros legs' })).not.toBeInTheDocument();
+    expect(within(panel).getByRole('button', { name: 'Close perps' })).toBeEnabled();
+  });
+
+  it('a LONE perp, or a LONE rate leg, still lands in the ungrouped list', () => {
+    const base = book(10);
+    // One perp with nothing opposite it: no pair to form, so it stays loose.
+    renderCard({ ...base, perpOpen: base.perpOpen.filter((p) => p.venue === 'GATE'), borosOpen: [] });
+    let panel = screen.getByRole('tabpanel', { name: /4 Leg Pairs/ });
+    expect(within(panel).getByText('Ungrouped legs')).toBeInTheDocument();
+    expect(within(panel).getByText('1 perp')).toBeInTheDocument();
+    expect(within(panel).queryByText(/Boros legs? missing/)).not.toBeInTheDocument();
+    cleanup();
+
+    // One rate leg with no perps at all behind it.
+    renderCard({ ...base, perpOpen: [], borosOpen: base.borosOpen.filter((l) => l.venue === 'GATE') });
+    panel = screen.getByRole('tabpanel', { name: /4 Leg Pairs/ });
+    expect(within(panel).getByText('Ungrouped legs')).toBeInTheDocument();
+    expect(within(panel).getByText('1 YU')).toBeInTheDocument();
+    expect(within(panel).queryByText(/Boros legs? missing/)).not.toBeInTheDocument();
+  });
 
   it('a pair maturing in 40 days: no banner, no flag, no button', () => {
     renderCard(book(40));

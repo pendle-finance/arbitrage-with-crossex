@@ -247,7 +247,8 @@ describe('RollOverModal — the pick page', () => {
     // Whole position until the quotes land, then the books' own limit.
     await waitFor(() => expect(box).toHaveValue('40'), { timeout: 4_000 });
     expect(within(dialog).getByText('40%')).toBeInTheDocument();
-    expect(within(dialog).getByRole('note')).toHaveTextContent(/Sized to 40(\.00)? ETH \(40%\)/);
+    // The size speaks for itself: no sentence explaining it (his call 2026-09-20).
+    expect(within(dialog).queryByRole('note')).not.toBeInTheDocument();
 
     // The four grips: each sets the share and counts as the trader's choice,
     // so the default's note goes and no later quote moves the size back.
@@ -255,7 +256,6 @@ describe('RollOverModal — the pick page', () => {
     expect(within(shortcuts).getAllByRole('button').map((b) => b.textContent)).toEqual(['25%', '50%', '75%', '100%']);
     await user.click(within(shortcuts).getByRole('button', { name: '75%' }));
     expect(box).toHaveValue('75');
-    expect(within(dialog).queryByRole('note')).not.toBeInTheDocument();
     await user.click(within(shortcuts).getByRole('button', { name: '25%' }));
     expect(box).toHaveValue('25');
     await user.click(within(shortcuts).getByRole('button', { name: '100%' }));
@@ -271,7 +271,6 @@ describe('RollOverModal — the pick page', () => {
     await within(dialog).findByText('Locked spread', undefined, { timeout: 4_000 });
     await new Promise((r) => setTimeout(r, 300));
     expect(within(dialog).getByLabelText('Size to roll (ETH)')).toHaveValue('100');
-    expect(within(dialog).queryByRole('note')).not.toBeInTheDocument();
   });
 
   it('prices the options at each batch\'s own seeded tolerance, not the server\'s flat default', async () => {

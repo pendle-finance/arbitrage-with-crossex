@@ -22,7 +22,7 @@ import { lineFor as lineIn, liquidationLines } from '../../lib/liquidation';
 import { useBookId } from '../bookId';
 import { AddressForm, short } from '../HomeControls';
 import { useTrackedAddress } from '../trackedAddress';
-import { deriveAsset, SECONDS_IN_YEAR } from './assetModel';
+import { assetIsActive, deriveAsset, SECONDS_IN_YEAR } from './assetModel';
 import { legSinceParam, loadPrefs, savePrefs, type AssetViewPrefs } from './assetPrefsStore';
 import { AssetCard } from './AssetCard';
 
@@ -117,6 +117,16 @@ export function AssetsHome() {
       Math.abs(a.derived.totals.pnlUsd) >= 1,
   );
   const dust = allDerived.filter((a) => !derived.includes(a));
+  /**
+   * "Hide inactive pairs": on by default, the list shows only assets with
+   * an open leg the farm counts (see assetIsActive). A VIEW filter only —
+   * the account totals above still sum every asset, closed ones included,
+   * because the money they made or lost is still the account's (his call
+   * 2026-09-20). Not persisted: the default is the right start every time.
+   */
+  const [hideInactive, setHideInactive] = useState(true);
+  const inactive = derived.filter((a) => !assetIsActive(a.group, prefs.exclusions));
+  const shown = hideInactive ? derived.filter((a) => !inactive.includes(a)) : derived;
 
   /* Where each coin's move liquidates the ACCOUNT. Needs margin balance,
      maintenance and the wallet equities, which the header already polls, so
@@ -171,6 +181,16 @@ export function AssetsHome() {
         Funding farm by asset
       </h2>
       {address && <span className="num text-xs text-ink-500">{short(address)}</span>}
+      {address && (
+        <label
+          className="ml-auto flex cursor-pointer items-center gap-2 whitespace-nowrap text-xs text-ink-300"
+          title="Show only assets with an open leg — hedged or not. A Boros leg you excluded does not count. Account totals still include every asset."
+        >
+          <input type="checkbox" className="chk" checked={hideInactive} onChange={(e) => setHideInactive(e.target.checked)} />
+          <span>Hide inactive pairs</span>
+          {hideInactive && inactive.length > 0 && <span className="num text-ink-500">({inactive.length})</span>}
+        </label>
+      )}
     </div>
   );
 
@@ -279,7 +299,12 @@ export function AssetsHome() {
         />
       ) : (
         <div className="flex flex-col gap-3">
-          {derived.map(({ group, derived: d, sinceSec, windowPending }) => (
+          {shown.length === 0 && (
+            <p className="rounded-md border border-dashed border-ink-700 px-3 py-3 text-center text-sm text-ink-500">
+              No active pairs — {inactive.length} inactive hidden.
+            </p>
+          )}
+          {shown.map(({ group, derived: d, sinceSec, windowPending }) => (
             <AssetCard
               key={group.base}
               group={group}

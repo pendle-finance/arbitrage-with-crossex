@@ -30,7 +30,9 @@ import {
   OPPORTUNITY_NOTIONAL_MAX,
   OPPORTUNITY_NOTIONAL_MIN,
   OPPORTUNITY_FEE_TIERS,
+  useBorosPairContext,
   useOpportunities,
+  usePositions,
   type OpportunityFeeTier,
 } from '../api/queries';
 import type {
@@ -65,6 +67,8 @@ import { useTradeFlowOptional } from '../trade/TradeFlow';
 import { StrategyFreshness } from './HomeControls';
 import { OpportunityFilterBar } from './OpportunityFilterBar';
 import { canChartCapital, canChartProfit, OpportunityWaterfall } from './OpportunityWaterfall';
+import { heldPerpsOf, repriceHeld, type HeldBook, type HeldTag } from './heldPerps';
+import { useTrackedAddressOptional } from './trackedAddress';
 import {
   applyFilters,
   hasActiveFilter,
@@ -433,11 +437,15 @@ function VenueBox({
 
 const OpportunityCard = memo(function OpportunityCard({
   group,
-  pair,
+  pair: served,
   notionalUsd,
   onOpenStrategy,
   unconfigured,
+  held = null,
 }: {
+  /** Set when this row is a later maturity of a hedge the reader runs: the
+   * band says so, and the "existing perp position" toggle starts ON. */
+  held?: HeldTag | null;
   /** The cohort the pair belongs to — collateral, maturity, underlying. */
   group: OpportunityGroup;
   /** THE trade this card is about. One group serves several: every viable venue
@@ -458,6 +466,17 @@ const OpportunityCard = memo(function OpportunityCard({
   unconfigured: boolean;
 }) {
   const [open, setOpen] = useState(false);
+  /**
+   * "I have existing perp position": prices THIS row with no perp entry cost
+   * (see heldPerps.repriceHeld). On by default exactly when the row was
+   * detected as a rollover opportunity, off otherwise — and the reader's own
+   * click wins from then on. `null` = untouched, so a detection that lands
+   * AFTER mount (the positions feed warms up a beat behind the list) still
+   * turns the default on (his call 2026-09-20).
+   */
+  const [hasPerpsChoice, setHasPerpsChoice] = useState<boolean | null>(null);
+  const hasPerps = hasPerpsChoice ?? held === 'rollover';
+  const pair = useMemo(() => (hasPerps ? repriceHeld(served, notionalUsd) : served), [hasPerps, served, notionalUsd]);
   const chips = cardChips(pair);
   // Only the PAIR's own reasons — they explain this card's own numbers. The
   // group's warnings are about the other markets in the cohort ("… has no
@@ -514,7 +533,7 @@ const OpportunityCard = memo(function OpportunityCard({
   // toggle through the Details button's aria-expanded.
   const toggleFromCard = (e: MouseEvent<HTMLDivElement>) => {
     if (detailsDisabled) return;
-    if ((e.target as HTMLElement).closest('button, a, input, select')) return;
+    if ((e.target as HTMLElement).closest('button, a, input, select, label')) return;
     if (window.getSelection()?.toString()) return;
     setOpen((v) => !v);
   };
@@ -539,6 +558,21 @@ const OpportunityCard = memo(function OpportunityCard({
         </span>
         <SideVenue side="SHORT" venue={pair.shortLeg.venue} />
         <SideVenue side="LONG" venue={pair.longLeg.venue} />
+        {/* On the LEFT with the trade's identity, not beside "matures": the
+            date is the band's one right-hand fact. No separate "rollover
+            opportunity" chip — a box that starts ticked says the same thing
+            (his call 2026-09-20). */}
+        <label
+          className="ml-1 flex cursor-pointer items-center gap-1.5 whitespace-nowrap text-[11px] text-ink-300"
+          title={
+            held
+              ? 'You hold this pair at a sooner maturity, so this starts ticked. Prices the row with no perp entry cost.'
+              : 'Prices this row with no perp entry cost — you add only the Boros legs.'
+          }
+        >
+          <input type="checkbox" className="chk" checked={hasPerps} onChange={(e) => setHasPerpsChoice(e.target.checked)} />
+          I have existing perp position
+        </label>
         <span className="ml-auto flex flex-wrap items-center gap-2">
           {chips.map((c) => (
             <Chip key={c.key} sm tone={c.tone ?? 'amber'} title={c.title}>
@@ -931,9 +965,34 @@ export function OpportunitiesPanel({ unconfigured = false }: { unconfigured?: bo
   // still real trades — often on the only venue a given reader can reach.
   // `data.groups`, not `data`: meta.asOfSec moves on every poll, so keying on
   // the whole response would rebuild every card even when no number changed.
+  /**
+   * What the reader already holds, from the two light feeds the app polls
+   * anyway: the live perp exposure and the Boros markets carrying a position.
+   * Only with a tracked address — the landing build has neither.
+   */
+  const trackedAddress = useTrackedAddressOptional()?.address ?? null;
+  const exposure = usePositions(trackedAddress !== null).data?.exposure;
+  const borosMarkets = useBorosPairContext(trackedAddress).data?.markets;
+  const held = useMemo(() => {
+    if (!exposure) return undefined;
+    const books: HeldBook[] = exposure.map((g) => ({
+      base: g.base,
+      perps: g.legs.map((l) => ({ venue: l.exchange, side: l.side })),
+      boros: (borosMarkets ?? [])
+        .filter((m) => m.currentSize !== 0 && m.base.toUpperCase() === g.base.toUpperCase())
+        .map((m) => ({ venue: m.venue, maturity: m.maturity })),
+    }));
+    return heldPerpsOf(books);
+  }, [exposure, borosMarkets]);
+  const pricedAtUsd = data?.meta.notionalUsd;
   const rows = useMemo(
-    () => toRows(data?.groups ?? [], shownKeysRef.current),
-    [data?.groups],
+    () =>
+      toRows(
+        data?.groups ?? [],
+        shownKeysRef.current,
+        held && pricedAtUsd !== undefined ? { held, notionalUsd: pricedAtUsd } : undefined,
+      ),
+    [data?.groups, held, pricedAtUsd],
   );
   const visible = useMemo(() => applyFilters(rows, filters), [rows, filters]);
 
@@ -1197,6 +1256,7 @@ export function OpportunitiesPanel({ unconfigured = false }: { unconfigured?: bo
               key={row.key}
               group={row.group}
               pair={row.pair}
+              held={row.held}
               notionalUsd={pricedNotionalUsd}
               onOpenStrategy={flow ? openStrategy : null}
               unconfigured={unconfigured}

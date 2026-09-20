@@ -186,6 +186,17 @@ export function excludedFraction(ex: Exclusions, key: string, legQty: number): n
 }
 
 /**
+ * An asset is ACTIVE while it still carries an open leg the farm counts: any
+ * open perp (perps are never excluded), or an open Boros leg that is not
+ * wholly set aside. Hedged or not makes no difference — an unhedged leg is
+ * the one most worth seeing. History alone does not make an asset active.
+ */
+export function assetIsActive(group: Pick<AssetGroup, 'perpOpen' | 'borosOpen'>, ex: Exclusions): boolean {
+  if (group.perpOpen.length > 0) return true;
+  return group.borosOpen.some((l) => excludedFraction(ex, borosKey(l.marketId), l.sizeToken) < 1);
+}
+
+/**
  * What remains of a leg after its exclusion: the kept fraction and the entry
  * (price or rate) of that remainder. With a slice price the remainder's entry
  * is the weighted residual `(entry − f·at) / (1 − f)`; without one the slice
@@ -443,6 +454,125 @@ export interface UnpairedPerp {
   imUsd: number;
   /** As PendingLeg.share. */
   share: number;
+}
+
+/**
+ * Two unpaired perps that OFFSET each other — a long at one venue, a short
+ * at another — with the rate side missing behind them: the hedge a roll was
+ * missed on, or perps opened ahead of their Boros legs. Price risk is
+ * cancelled; what the unit lacks is one or both YU legs. Grouped so the card
+ * can say exactly that, and offer to open what is missing, instead of
+ * listing four anonymous rows under "ungrouped" (his call 2026-09-20).
+ */
+export interface PerpOnlyPair {
+  longVenue: string;
+  shortVenue: string;
+  /** The two perp SLICES this unit is made of, both sized to `size`. */
+  long: UnpairedPerp;
+  short: UnpairedPerp;
+  /** In the asset's unit (coin quantity, or dollars). */
+  size: number;
+  unit: 'base' | 'usd';
+  /** Both perp slices, as PairEstimate.notionalUsd counts them. */
+  notionalUsd: number;
+  /** Perp margin plus whatever rate leg is already there. */
+  imUsd: number;
+  /** A rate leg ALREADY behind one of the perps (sliced to this unit): the
+   * other side is then the only one missing, at this leg's maturity. Never
+   * both — two pending legs at the same maturity would have formed a pair. */
+  longYu: PendingLeg | null;
+  shortYu: PendingLeg | null;
+  /** What each side still has to open, in the asset's unit (0 = covered). */
+  missingLong: number;
+  missingShort: number;
+}
+
+/** A perp-only pair's two perps as the close form's rows: each SLICE, not
+ * the venue's whole position — Hyperliquid's short may be shared with
+ * another unit, and closing all of it would strip that one's hedge too. */
+export function perpOnlyCloseLegs(pair: Pick<PerpOnlyPair, 'long' | 'short'>): PerpCloseLeg[] {
+  return [pair.long, pair.short].map((l) => ({ symbol: l.symbol, qty: l.sizeBase, venue: l.venue, partial: l.share < 0.9995 }));
+}
+
+/** A pair this small is rounding, not a position: left among the ungrouped. */
+const PERP_ONLY_DUST_USD = 50;
+/** Below this share of its leg, a remainder is rounding and is not listed. */
+const PERP_ONLY_REST_SHARE = 0.005;
+
+/**
+ * Match the unpaired perps into offsetting units, largest first, and hang
+ * any pending rate leg at a matched venue on its unit. Whatever is left —
+ * an unmatched remainder, a YU with no perp — comes back as `restPerps` /
+ * `restYus`, re-scaled, for the ungrouped card.
+ */
+export function perpOnlyPairs(
+  perps: ReadonlyArray<UnpairedPerp>,
+  yus: ReadonlyArray<PendingLeg>,
+): { pairs: PerpOnlyPair[]; restPerps: UnpairedPerp[]; restYus: PendingLeg[] } {
+  const left = new Map<UnpairedPerp, number>(perps.map((l) => [l, sizeIn(l, l.unit)]));
+  const yuLeft = new Map<PendingLeg, number>(yus.map((l) => [l, sizeIn(l, l.unit)]));
+  const slice = <T extends { sizeBase: number; notionalUsd: number; imUsd: number; share: number; unit: 'base' | 'usd' }>(l: T, take: number): T => {
+    const whole = sizeIn(l, l.unit);
+    const f = whole > 0 ? take / whole : 0;
+    return { ...l, sizeBase: l.sizeBase * f, notionalUsd: l.notionalUsd * f, imUsd: l.imUsd * f, share: l.share * f };
+  };
+  const bySize = (a: UnpairedPerp, b: UnpairedPerp) => b.notionalUsd - a.notionalUsd || a.venue.localeCompare(b.venue);
+  const longs = perps.filter((l) => l.side === 'LONG').sort(bySize);
+  const shorts = perps.filter((l) => l.side === 'SHORT').sort(bySize);
+
+  const pairs: PerpOnlyPair[] = [];
+  for (const s of shorts) {
+    for (const l of longs) {
+      if (l.venue === s.venue || l.unit !== s.unit) continue;
+      const take = Math.min(left.get(l) ?? 0, left.get(s) ?? 0);
+      if (!(take > 0)) continue;
+      const long = slice(l, take);
+      const short = slice(s, take);
+      if (long.notionalUsd + short.notionalUsd < PERP_ONLY_DUST_USD) continue;
+      left.set(l, (left.get(l) ?? 0) - take);
+      left.set(s, (left.get(s) ?? 0) - take);
+
+      // A pending rate leg at one of the two venues, on the perp's own side.
+      const yuAt = (venue: string, side: 'LONG' | 'SHORT'): PendingLeg | null => {
+        const found = yus
+          .filter((y) => y.venue === venue && y.side === side && (yuLeft.get(y) ?? 0) > 0)
+          .sort((a, b) => a.maturity - b.maturity)[0];
+        if (!found) return null;
+        const t = Math.min(take, yuLeft.get(found) ?? 0);
+        yuLeft.set(found, (yuLeft.get(found) ?? 0) - t);
+        return slice(found, t);
+      };
+      const longYu = yuAt(l.venue, 'LONG');
+      // Only ONE side may already be there; a second pending leg stays
+      // ungrouped rather than dressing two maturities up as one unit.
+      const shortYu = longYu ? null : yuAt(s.venue, 'SHORT');
+      pairs.push({
+        longVenue: l.venue,
+        shortVenue: s.venue,
+        long,
+        short,
+        size: take,
+        unit: l.unit,
+        notionalUsd: long.notionalUsd + short.notionalUsd,
+        imUsd: long.imUsd + short.imUsd + (longYu?.imUsd ?? 0) + (shortYu?.imUsd ?? 0),
+        longYu,
+        shortYu,
+        missingLong: take - (longYu ? sizeIn(longYu, longYu.unit) : 0),
+        missingShort: take - (shortYu ? sizeIn(shortYu, shortYu.unit) : 0),
+      });
+    }
+  }
+  const restOf = <T extends UnpairedPerp | PendingLeg>(all: ReadonlyArray<T>, m: Map<T, number>): T[] =>
+    all.flatMap((l) => {
+      const rem = m.get(l) ?? 0;
+      const whole = sizeIn(l, l.unit);
+      // A sliver of a leg the units all but consumed (a 325 YU against a
+      // 324.87 perp) is rounding between two venues' sizes, not a loose leg
+      // worth a card of its own: under half a percent of the leg is dropped.
+      if (!(rem > 0) || (whole > 0 && rem / whole < PERP_ONLY_REST_SHARE)) return [];
+      return [rem >= whole ? l : slice(l, rem)];
+    });
+  return { pairs, restPerps: restOf(perps, left), restYus: restOf(yus, yuLeft) };
 }
 
 export interface AssetDerived {

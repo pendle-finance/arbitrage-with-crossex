@@ -58,6 +58,7 @@ import {
   type PairEstimate,
   type PairLegDetail,
   type PendingLeg,
+  type PerpOnlyPair,
   type UnpairedPerp,
   type VenueHedge,
   SECONDS_IN_YEAR,
@@ -73,11 +74,14 @@ import {
   pairCanRoll,
   pairLockedSpread,
   pairPerpCloseLegs,
+  perpOnlyCloseLegs,
+  perpOnlyPairs,
   sizeIn,
 } from './assetModel';
 import { knownRate } from '../../lib/boros';
 import { useDebounced } from '../../lib/useDebounced';
 import { AssetBars } from './AssetBars';
+import { useRollPublisher, useRollSignalsOptional } from '../rollSignal';
 
 interface Props {
   group: AssetGroup;
@@ -462,12 +466,12 @@ function PairCard({
   const { yuLegs: rollYuLegs, heldSize: rollHeldSize, pairPerpImUsd: rollPerpImUsd } = pairRollGeometry(pair);
   const [probes, setProbes] = useState<Record<number, RollProbeResult>>({});
   const opportunity = useMemo(
-    () => bestRollOpportunity(probes, probeTargets, netApr),
-    [probes, probeTargets, netApr],
+    () => bestRollOpportunity(probes, probeTargets, netApr, soonest),
+    [probes, probeTargets, netApr, soonest],
   );
   const signalRef = useRef(onRollSignal);
   signalRef.current = onRollSignal;
-  const oppKey = opportunity ? `${opportunity.maturity}:${opportunity.rate}:${opportunity.current}` : '';
+  const oppKey = opportunity ? `${opportunity.maturity}:${opportunity.rate}:${opportunity.current}:${opportunity.currentMaturity}` : '';
   useEffect(() => {
     signalRef.current?.(opportunity);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -565,7 +569,7 @@ function PairCard({
                     sm
                     tone="green"
                     className="!font-medium"
-                    title={`${fmtTokenQty(opportunity.size, (rollMarkets ?? []).find((m) => rollYuLegs.some((l) => l.marketId === m.marketId))?.collateral ?? base)} of this pair rolls into ${fmtDateLocal(opportunity.maturity)} at ${fmtPct(opportunity.rate)} on capital after the round trip's fees — the figure the roll-over opens on — against the ${fmtPct(opportunity.current)} this row earns after the fees it charges`}
+                    title={`${fmtTokenQty(opportunity.size, (rollMarkets ?? []).find((m) => rollYuLegs.some((l) => l.marketId === m.marketId))?.collateral ?? base)} of this pair rolls into ${fmtDateLocal(opportunity.maturity)} at ${fmtPct(opportunity.rate)} on capital after the round trip's fees — the figure the roll-over opens on — against the ${fmtPct(opportunity.current)} this row earns after the fees it charges, with ${daysLeftText(opportunity.currentMaturity, nowSec)}`}
                   >
                     roll opportunity
                   </Chip>
@@ -897,8 +901,6 @@ const ROLL_MAX_SLIP_PCT = 10;
 const ROLL_FALLBACK_SLIP_PCT = 1;
 /** The slider's shortcuts, as shares of the position. */
 const ROLL_SHARE_STEPS = [0.25, 0.5, 0.75, 1] as const;
-/** A pair this close to settling makes the banner loud on its own. */
-const ROLL_URGENT_DAYS = 7;
 /** One key per pair, for the cards and the roll signals alike. */
 const pairKey = (p: Pick<PairEstimate, 'longVenue' | 'shortVenue' | 'soonestMaturitySec'>): string =>
   `${p.longVenue}:${p.shortVenue}:${p.soonestMaturitySec}`;
@@ -999,6 +1001,10 @@ export interface RollOpportunity {
   rate: number;
   /** What the pair earns now, net of the fees its row charges. */
   current: number;
+  /** When the pair being held settles — the banner reads the two rates with
+   * the days each one runs for, so a bigger number over a shorter term
+   * cannot masquerade as the better deal. */
+  currentMaturity: number;
   /** The size that rate is quoted at, collateral tokens. */
   size: number;
 }
@@ -1007,13 +1013,14 @@ function bestRollOpportunity(
   probes: Record<number, RollProbeResult>,
   targets: RollTarget[],
   current: number | null,
+  currentMaturity: number,
 ): RollOpportunity | null {
   if (current === null) return null;
   let best: RollOpportunity | null = null;
   for (const t of targets) {
     const r = probes[t.maturity];
     if (!r || !r.ok || r.rate === null || !(r.rate > current)) continue;
-    if (best === null || r.rate > best.rate) best = { maturity: t.maturity, rate: r.rate, current, size: r.size };
+    if (best === null || r.rate > best.rate) best = { maturity: t.maturity, rate: r.rate, current, currentMaturity, size: r.size };
   }
   return best;
 }
@@ -1507,15 +1514,6 @@ export function RollOverModal({
                 </button>
               ))}
             </span>
-            {/* Why the size is not the whole position: said once, on the
-                default the panel chose, never on a size the trader typed. */}
-            {!touched && appliedFor === selected && selectedFit !== undefined && selectedFit < heldSize && (
-              <span className="num basis-full text-[11px] text-ink-400" role="note">
-                {selectedFit > 0
-                  ? `Sized to ${fmtTokenQty(Math.min(selectedFit, heldSize), collateral)} (${pct}%) — the largest slice that fills inside each leg's max slippage on both batches today. A larger size would slip past it.`
-                  : 'No size fills inside the legs’ max slippage right now — the books are too thin. Pick a size to price it anyway.'}
-              </span>
-            )}
           </div>
 
           {targets.length === 0 ? (
@@ -1629,8 +1627,12 @@ function BatchSection({
   exitPnl,
   slip,
   step,
+  heading,
 }: {
   label: string;
+  /** What the card's header SAYS, when that differs from the batch's name
+   * (`label` still names it in the tolerance box and the blockers). */
+  heading?: string;
   sub: string;
   step?: number;
   sim: BorosPairSimulation | null;
@@ -1673,7 +1675,7 @@ function BatchSection({
     />
   );
   return (
-    <EstimateCard label={label} sub={sub} step={step} dataUpdatedAt={dataUpdatedAt} estimating={estimating} isError={Boolean(error)}>
+    <EstimateCard label={heading ?? label} sub={sub} step={step} dataUpdatedAt={dataUpdatedAt} estimating={estimating} isError={Boolean(error)}>
       {error ? (
         <QueryError title={`Couldn’t price the ${label.toLowerCase()}`} error={error} onRetry={onRetry} />
       ) : sim ? (
@@ -2172,6 +2174,8 @@ function RollReview({
         />
         <BatchSection
           label="Re-entry"
+          // Reads as one phrase with the maturity beside it: "Renew to 2026-10-30".
+          heading="Renew to"
           step={2}
           sub={fmtDateLocal(target.maturity)}
           sim={entrySim}
@@ -2500,6 +2504,202 @@ function RollOption({
                 ⓘ
               </span>
             </span>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Two perps that offset each other with the rate side missing behind them:
+ * the hedge a roll was missed on. Drawn on the pairs list's own columns so
+ * it reads as a pair that is INCOMPLETE, not as loose legs — and its one job
+ * is to get the missing Boros legs opened: both at once, or the single one
+ * a side still lacks (his call 2026-09-20).
+ */
+function PerpOnlyPairCard({
+  pair,
+  base,
+  nowSec,
+  onOpenBoros,
+  onClosePerps,
+}: {
+  pair: PerpOnlyPair;
+  base: string;
+  nowSec: number;
+  /** Opens the close form on this unit's two perp slices — the other way
+   * out of a hedge with no rate side: stop farming it. */
+  onClosePerps: () => void;
+  /** Arms the Boros ticket for the named side(s) at this size; null when
+   * there is no trade flow to arm (a provider-less render). */
+  onOpenBoros: ((sides: { long: boolean; short: boolean }) => void) | null;
+}) {
+  const [open, setOpen] = useState(true);
+  const needLong = pair.missingLong > 0;
+  const needShort = pair.missingShort > 0;
+  const both = needLong && needShort;
+  const held = pair.longYu ?? pair.shortYu;
+  const cell = 'border-b border-ink-850 px-2.5 py-2';
+  const pill = 'btn !rounded-full !bg-transparent !px-3.5 !py-1 !text-[12.5px]';
+  const sizeText = (n: number) => sizeLabel(n, pair.unit, base);
+  const sideChip = (side: 'LONG' | 'SHORT') => (
+    <Chip sm tone={side === 'LONG' ? 'green' : 'red'}>
+      {side}
+    </Chip>
+  );
+  const legName = (venue: string, kind: 'perp' | 'yu', side: 'LONG' | 'SHORT') => (
+    <span className="inline-flex items-center gap-[7px]">
+      <span className="font-medium text-ink-50">{prettyVenue(venue)}</span>
+      <span className={`text-[10px] font-semibold uppercase tracking-[0.1em] ${kind === 'yu' ? 'text-link' : 'text-ink-400'}`}>
+        {kind === 'yu' ? 'Boros' : 'CrossEx'}
+      </span>
+      {sideChip(side)}
+    </span>
+  );
+  /** One rate-leg row: the leg that is there, or the gap where one belongs. */
+  const yuRow = (venue: string, side: 'LONG' | 'SHORT', yu: PendingLeg | null, missing: number) =>
+    yu && !(missing > 0) ? (
+      <tr key={`yu-${venue}`}>
+        <td className={`${cell} whitespace-nowrap`}>{legName(venue, 'yu', side)}</td>
+        <td className={`${cell} num whitespace-nowrap text-right text-ink-100`}>{sizeText(sizeIn(yu, yu.unit))}</td>
+        <td className={`${cell} num whitespace-nowrap text-right`}>
+          <SignedNumber value={yu.lockedApr} format={fmtPct} />
+        </td>
+        <td className={`${cell} num whitespace-nowrap text-right text-ink-100`}>{fmtUsdCompact(yu.imUsd)}</td>
+      </tr>
+    ) : (
+      <tr key={`yu-${venue}`} className="bg-amber-500/[0.04]">
+        <td className={`${cell} whitespace-nowrap`}>
+          <span className="inline-flex items-center gap-[7px]">
+            {legName(venue, 'yu', side)}
+            <Chip sm tone="amber">
+              missing
+            </Chip>
+          </span>
+        </td>
+        <td className={`${cell} num whitespace-nowrap text-right text-amber-200/90`}>{sizeText(missing)}</td>
+        <td className={`${cell} num text-right text-ink-600`}>—</td>
+        <td className={`${cell} whitespace-nowrap text-right`}>
+          <button
+            type="button"
+            className="btn-ghost-xs !py-[5px] !text-grass hover:!border-grass/60"
+            disabled={!onOpenBoros}
+            title={`Open only the ${prettyVenue(venue)} ${side} Boros leg, at ${sizeText(missing)}`}
+            onClick={() => onOpenBoros?.({ long: side === 'LONG', short: side === 'SHORT' })}
+          >
+            Open leg
+          </button>
+        </td>
+      </tr>
+    );
+  return (
+    <div className="overflow-x-auto rounded-lg border border-amber-500/40 bg-ink-950/40">
+      <table className="w-full min-w-[880px] table-fixed border-collapse">
+        <PairColGroup />
+        <tbody>
+          <tr className="cursor-pointer transition-colors hover:bg-ink-850/30 [&>td]:py-3 [&>td]:align-middle" onClick={() => setOpen((v) => !v)}>
+            <td className="pl-4 pr-3">
+              <button
+                type="button"
+                aria-expanded={open}
+                className="inline-flex min-w-0 flex-wrap items-center gap-[7px] text-left text-[13.5px] font-semibold leading-none text-ink-50"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setOpen((v) => !v);
+                }}
+              >
+                <span className="inline-flex items-baseline gap-[5px]">
+                  <span className="text-[9.5px] font-semibold tracking-[0.1em] text-grass">L</span>
+                  {prettyVenue(pair.longVenue)}
+                </span>
+                <span className="text-ink-600">/</span>
+                <span className="inline-flex items-baseline gap-[5px]">
+                  <span className="text-[9.5px] font-semibold tracking-[0.1em] text-guava">S</span>
+                  {prettyVenue(pair.shortVenue)}
+                </span>
+                <Chip
+                  sm
+                  tone="amber"
+                  className="!font-medium"
+                  title="These two perps cancel each other's price risk, but the rate side behind them is not there — so they pay and receive FLOATING funding and lock nothing"
+                >
+                  {both ? 'Boros legs missing' : 'Boros leg missing'}
+                </Chip>
+              </button>
+            </td>
+            <td className="num whitespace-nowrap px-3 text-[13px] text-ink-200">
+              {held ? (
+                <span title="The one rate leg this unit still has settles here">
+                  {fmtDateLocal(held.maturity)} <span className="text-ink-400">· {daysLeftText(held.maturity, nowSec)}</span>
+                </span>
+              ) : (
+                <span className="text-ink-600">—</span>
+              )}
+            </td>
+            <td className="num whitespace-nowrap px-3 text-right text-[13px] text-ink-50" title={`${exactUsd(pair.notionalUsd)} — ${exactSize(pair.size, pair.unit, base)} per side`}>
+              {fmtUsdCompact(pair.notionalUsd)}
+            </td>
+            <td className="num whitespace-nowrap px-3 text-right text-[13px] text-ink-50" title={`${exactUsd(pair.imUsd)} — today's initial margin on these legs`}>
+              {fmtUsdCompact(pair.imUsd)}
+            </td>
+            <td className="px-3 text-right text-[13px] text-ink-600" title="No rate is locked until both Boros legs are open">—</td>
+            <td className="px-3 text-right text-[13px] text-ink-600" title="No rate is locked, so there is no profit to estimate">—</td>
+            <td className="whitespace-nowrap pl-3 pr-4 text-right">
+              <span aria-hidden className={`inline-block text-ink-400 transition-transform ${open ? 'rotate-180' : ''}`}>
+                <ChevronIcon />
+              </span>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+      {open && (
+        <div className="border-t border-ink-800 px-4 pb-4 pt-3">
+          <div className="overflow-x-auto rounded border border-ink-700">
+            <table className="w-full border-collapse text-[12.5px]">
+              <thead>
+                <tr>
+                  <th className="th text-left">Leg</th>
+                  <th className="th text-right">Size</th>
+                  <th className="th text-right">Locked</th>
+                  <th className="th text-right">Initial margin</th>
+                </tr>
+              </thead>
+              <tbody>
+                {[pair.long, pair.short].map((l) => (
+                  <tr key={`p-${l.symbol}`}>
+                    <td className={`${cell} whitespace-nowrap`}>{legName(l.venue, 'perp', l.side)}</td>
+                    <td className={`${cell} num whitespace-nowrap text-right text-ink-100`}>{sizeText(sizeIn(l, l.unit))}</td>
+                    <td className={`${cell} num text-right text-ink-600`}>—</td>
+                    <td className={`${cell} num whitespace-nowrap text-right text-ink-100`}>{fmtUsdCompact(l.imUsd)}</td>
+                  </tr>
+                ))}
+                {yuRow(pair.longVenue, 'LONG', pair.longYu, pair.missingLong)}
+                {yuRow(pair.shortVenue, 'SHORT', pair.shortYu, pair.missingShort)}
+              </tbody>
+            </table>
+          </div>
+          {/* The two ways out: finish the hedge, or stop farming it. */}
+          <div className="mt-3 flex items-center justify-end gap-2">
+            <button
+              type="button"
+              className={`${pill} hover:!border-guava/50 hover:!text-guava`}
+              title={`Close both perps of this unit — ${sizeText(pair.size)} on each side`}
+              onClick={onClosePerps}
+            >
+              Close perps
+            </button>
+            {both && (
+              <button
+                type="button"
+                className={`${pill} !border-grass/60 !text-grass hover:!border-grass hover:!bg-grass/10`}
+                disabled={!onOpenBoros}
+                title={`Open both Boros legs together — long ${prettyVenue(pair.longVenue)}, short ${prettyVenue(pair.shortVenue)}, ${sizeText(Math.min(pair.missingLong, pair.missingShort))} each`}
+                onClick={() => onOpenBoros?.({ long: true, short: true })}
+              >
+                Open both Boros legs
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -3820,8 +4020,23 @@ export function AssetCard({ group, derived, sinceSec, windowPending, onChangeSin
   /** Each rollable pair's best roll opportunity, keyed as the cards are —
    * what the banner shouts about, when there is one. */
   const [rollSignals, setRollSignals] = useState<Record<string, RollOpportunity | null>>({});
+  /** Publish every rollable pair to the app-wide banner, and take its
+   * "Show me" as the cue to open them here. */
+  const publishRoll = useRollPublisher();
+  const rollApi = useRollSignalsOptional();
+  const appShowNonce = rollApi?.showNonce ?? 0;
+  useEffect(() => {
+    // Only on a real click: the provider starts at 0, and opening every
+    // rollable card on mount would fight the user's own folding. The tab
+    // moves with it — the banner's job is to put the roll on screen, and
+    // the actions live in the pairs view.
+    if (appShowNonce === 0) return;
+    setView('pairs');
+    setShowRollNonce((n) => n + 1);
+  }, [appShowNonce]);
   const [closedOpen, setClosedOpen] = useState(false);
   const [closePerps, setClosePerps] = useState<PairEstimate | null>(null);
+  const [closePerpOnly, setClosePerpOnly] = useState<PerpOnlyPair | null>(null);
   const [closeBoros, setCloseBoros] = useState<PairEstimate | null>(null);
   const [rollOver, setRollOver] = useState<PairEstimate | null>(null);
   /** One leg's close, from its row's ✕. */
@@ -3889,6 +4104,33 @@ export function AssetCard({ group, derived, sinceSec, windowPending, onChangeSin
    * rollable pair below it is in view too. Landing on the best opportunity
    * scrolled the first pair off the top (his catch 2026-09-20). */
   const showTarget: PairEstimate | null = rollable[0] ?? null;
+  /**
+   * What this asset contributes to the app-wide banner: one entry per
+   * rollable pair, carrying its opportunity when a card found one. Keyed by
+   * asset + pair so two assets never collide, and cleared on unmount — a
+   * card that stops rendering must not leave a stale line in the banner.
+   */
+  const rollKeys = rollable.map((p) => `${group.base}:${pairKey(p)}`).join('|');
+  const rollJson = JSON.stringify(rollable.map((p) => rollSignals[pairKey(p)] ?? null));
+  useEffect(() => {
+    const live = new Set<string>();
+    for (const p of rollable) {
+      const key = `${group.base}:${pairKey(p)}`;
+      live.add(key);
+      publishRoll(key, {
+        key,
+        asset: group.base,
+        longVenue: p.longVenue,
+        shortVenue: p.shortVenue,
+        maturity: p.soonestMaturitySec,
+        opportunity: rollSignals[pairKey(p)] ?? null,
+      });
+    }
+    return () => {
+      for (const key of live) publishRoll(key, null);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rollKeys, rollJson, group.base, publishRoll]);
   // Every close at the venue, whole or partial: a partial close's realised
   // price PnL is PnL the bundle must show, or its trade PnL reads short.
   const closedPerpRows = group.perpClosed.flatMap((r) =>
@@ -3980,7 +4222,39 @@ export function AssetCard({ group, derived, sinceSec, windowPending, onChangeSin
   const closedBundles = bundles.filter((b) => !b.active);
   // Several asset cards share the page, so the tab/panel ids carry the coin.
   const tabsId = `asset-${group.base}`;
-  const ungroupedCount = derived.unpairedPerps.length + derived.pendingLegs.length;
+  /**
+   * Offsetting perps with no rate side are PAIRS with something missing, not
+   * loose legs: they are lifted out of the ungrouped list into cards of their
+   * own, and only what they did not claim stays ungrouped.
+   */
+  const perpOnly = useMemo(
+    () => perpOnlyPairs(derived.unpairedPerps, derived.pendingLegs),
+    [derived.unpairedPerps, derived.pendingLegs],
+  );
+  const ungroupedCount = perpOnly.restPerps.length + perpOnly.restYus.length;
+  /**
+   * Arm the Boros ticket for a perp-only pair's missing side(s). The
+   * maturity is the one rate leg the unit still holds, when it has one —
+   * the missing leg must settle with it; otherwise the latest maturity this
+   * asset already farms, so the new legs join the ladder rather than landing
+   * on whichever market the ticket lists first.
+   */
+  const openBorosFor = (p: PerpOnlyPair, sides: { long: boolean; short: boolean }) => {
+    if (!flow) return;
+    const held = p.longYu ?? p.shortYu;
+    const laddered = derived.pairs.map((x) => x.soonestMaturitySec).filter((m) => m > nowSec);
+    const size = sides.long && sides.short ? Math.min(p.missingLong, p.missingShort) : sides.long ? p.missingLong : p.missingShort;
+    const perSideUsd = p.size > 0 ? (p.notionalUsd / 2) * (size / p.size) : 0;
+    flow.prefillBorosOpen({
+      base: group.base,
+      longVenue: sides.long ? p.longVenue : null,
+      shortVenue: sides.short ? p.shortVenue : null,
+      maturity: held ? held.maturity : laddered.length > 0 ? Math.max(...laddered) : undefined,
+      size: perSideUsd,
+      sizeBase: p.unit === 'base' ? size : undefined,
+    });
+    flow.openRail();
+  };
   // The bundles foot to the totals by construction (checked 2026-09-09:
   // Σ settlement = fixed funding, Σ fees = perp + trade fees, Σ (settlement −
   // fees + trade PnL) = total PnL, to the cent, on every asset).
@@ -4163,7 +4437,11 @@ export function AssetCard({ group, derived, sinceSec, windowPending, onChangeSin
 
       {/* Hedge status — only what needs doing. A perfect hedge says so in
           the header badge; a ribbon repeating it was a box for nothing. */}
-      {hasLegs && (!derived.deltaNeutral || rollable.length > 0) && (
+      {/* The roll-over banner moved to the app shell (RollOverBanner) — a
+          hedge about to settle is not news for the Positions tab alone. This
+          card PUBLISHES its pairs' signals; only the hedge warning is drawn
+          here (his call 2026-09-20). */}
+      {hasLegs && !derived.deltaNeutral && (
         <div className="mb-3 flex flex-col gap-1.5">
           {!derived.deltaNeutral && (
             <div className="flex items-center gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-1.5 text-xs text-amber-400">
@@ -4178,78 +4456,6 @@ export function AssetCard({ group, derived, sinceSec, windowPending, onChangeSin
               </span>
             </div>
           )}
-          {/* One count, and the reasons that make it urgent. The roll itself
-              lives on the pair cards, so the banner only has to send the
-              trader there — QUIETLY while the window is merely open (14d to
-              7d out), LOUDLY once a pair is a week from settling or a fifth
-              of it rolls at a better rate than it earns (his call 2026-09-20). */}
-          {rollable.length > 0 &&
-            (() => {
-              /** One short line per pair that makes it loud: the roll on
-               * offer, or the days left. Terse on purpose — it is a
-               * headline, the card has the detail (his call 2026-09-20). */
-              const reasons = rollable.flatMap((p): Array<{ key: string; node: React.ReactNode }> => {
-                const name = `${prettyVenue(p.longVenue)} / ${prettyVenue(p.shortVenue)}`;
-                const days = Math.max(0, Math.ceil((p.soonestMaturitySec - nowSec) / 86_400));
-                const opp = rollSignals[pairKey(p)] ?? null;
-                if (opp) {
-                  // The new rate is the point, so it is the only bold figure;
-                  // the rate being earned sits beside it, dimmed, for contrast.
-                  return [
-                    {
-                      key: pairKey(p),
-                      node: (
-                        <>
-                          {name} → <span className="font-semibold text-emerald-300">{`${opp.rate >= 0 ? '+' : ''}${fmtPct(opp.rate)}`}</span> to{' '}
-                          {fmtDateLocal(opp.maturity)}{' '}
-                          <span className="text-emerald-200/50">vs {fmtPct(opp.current)} now</span>
-                        </>
-                      ),
-                    },
-                  ];
-                }
-                return days <= ROLL_URGENT_DAYS ? [{ key: pairKey(p), node: <>{name} matures in {days}d</> }] : [];
-              });
-              const loud = reasons.length > 0;
-              return (
-                <button
-                  type="button"
-                  data-tone={loud ? 'loud' : 'quiet'}
-                  className={`flex flex-wrap items-center gap-x-4 gap-y-1.5 rounded-md border px-3 text-left transition-colors ${
-                    loud
-                      ? 'border-emerald-400/70 bg-emerald-500/15 py-2 text-[13px] text-emerald-50 shadow-[0_0_0_1px_rgba(52,211,153,0.25)] hover:border-emerald-300 hover:bg-emerald-500/20'
-                      : 'border-ink-700 bg-ink-900/40 py-1.5 text-xs text-ink-400 hover:border-ink-500 hover:text-ink-300'
-                  }`}
-                  title={rollable
-                    .map((p) => `${prettyVenue(p.longVenue)}/${prettyVenue(p.shortVenue)} · matures ${fmtDateLocal(p.soonestMaturitySec)}`)
-                    .join(' · ')}
-                  onClick={() => {
-                    setView('pairs');
-                    setShowRollNonce((n) => n + 1);
-                  }}
-                >
-                  {loud ? (
-                    <>
-                      <span className="font-semibold">Roll over now</span>
-                      {/* A hairline between the headline and the reasons,
-                          and each reason boxed on its own — so the pairs
-                          read as separate items, not one run-on line. */}
-                      <span aria-hidden className="h-4 w-px bg-emerald-400/40" />
-                      {reasons.map((r) => (
-                        <span key={r.key} className="num rounded border border-emerald-400/30 bg-emerald-400/[0.07] px-2 py-0.5 text-[12px] text-emerald-100/90">
-                          {r.node}
-                        </span>
-                      ))}
-                    </>
-                  ) : (
-                    <span className="font-medium">
-                      {rollable.length} pair{rollable.length === 1 ? '' : 's'} can roll over
-                    </span>
-                  )}
-                  <span className={`ml-auto text-xs ${loud ? 'text-emerald-300' : 'text-ink-500'}`}>Show Me ›</span>
-                </button>
-              );
-            })()}
         </div>
       )}
 
@@ -4263,7 +4469,7 @@ export function AssetCard({ group, derived, sinceSec, windowPending, onChangeSin
         onChange={setView}
         options={[
           { value: 'bundles', label: 'Funding Bundles', count: activeBundles.length },
-          { value: 'pairs', label: '4 Leg Pairs', count: derived.pairs.length },
+          { value: 'pairs', label: '4 Leg Pairs', count: derived.pairs.length + perpOnly.pairs.length },
         ]}
         right={
           view === 'bundles' ? (
@@ -4460,7 +4666,7 @@ null
         hidden={view !== 'pairs'}
         className="mb-3"
       >
-        {derived.pairs.length > 0 || ungroupedCount > 0 ? (
+        {derived.pairs.length > 0 || perpOnly.pairs.length > 0 || ungroupedCount > 0 ? (
           <div className="flex flex-col gap-2">
             <PairListHeader />
             {derived.pairs.map((p) => (
@@ -4489,10 +4695,20 @@ null
                 }
               />
             ))}
+            {perpOnly.pairs.map((p) => (
+              <PerpOnlyPairCard
+                key={`po:${p.longVenue}:${p.shortVenue}`}
+                pair={p}
+                base={group.base}
+                nowSec={nowSec}
+                onOpenBoros={flow ? (sides) => openBorosFor(p, sides) : null}
+                onClosePerps={() => setClosePerpOnly(p)}
+              />
+            ))}
             {ungroupedCount > 0 && (
               <UngroupedCard
-                perps={derived.unpairedPerps}
-                yus={derived.pendingLegs}
+                perps={perpOnly.restPerps}
+                yus={perpOnly.restYus}
                 group={group}
                 base={group.base}
                 nowSec={nowSec}
@@ -4531,6 +4747,24 @@ null
               legs={pairPerpCloseLegs(closePerps)}
               livePositions={livePositions}
             />
+          </div>
+        </Modal>
+      )}
+      {closePerpOnly !== null && (
+        <Modal
+          title={
+            <>
+              Close pair
+              <span className="ml-2 text-[12px] font-normal text-ink-400">
+                {group.base} · {prettyVenue(closePerpOnly.longVenue)} ⇄ {prettyVenue(closePerpOnly.shortVenue)} · no rate legs
+              </span>
+            </>
+          }
+          onClose={() => setClosePerpOnly(null)}
+          widthClass="w-[620px]"
+        >
+          <div className="flex flex-col gap-3">
+            <ClosePairForm base={group.base} legs={perpOnlyCloseLegs(closePerpOnly)} livePositions={livePositions} />
           </div>
         </Modal>
       )}

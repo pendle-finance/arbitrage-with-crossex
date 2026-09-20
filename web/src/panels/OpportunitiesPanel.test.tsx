@@ -529,18 +529,20 @@ describe('OpportunitiesPanel — breakdown waterfalls', () => {
 
   const seg = (c: HTMLElement, key: string) => c.querySelector(`[data-segment="${key}"]`);
 
-  it('steps the gross spread down through every cost and lands ON the profit', async () => {
+  it('steps the LOCKED spread down through every cost and lands ON the profit', async () => {
     const container = await expandOne();
 
-    // Gross return = 4.5% × NT; the opening total carries no tone (like the
-    // strategy card's spread bar), the closing one does.
+    // Opens on what the pair locks AFTER price impact — 8.95% − 4.55% = 4.4%
+    // × NT — not the 4.5% mid spread: every rate on the card is post-impact,
+    // so there is no "Boros impact" bar to step down. The opening total
+    // carries no tone (like the strategy card's spread bar), the closing does.
     const spread = seg(container, 'spread')!;
-    expect(spread.getAttribute('data-level')).toBe((0.045 * OPP_NT).toFixed(2));
+    expect(spread.getAttribute('data-level')).toBe(((0.0895 - 0.0455) * OPP_NT).toFixed(2));
     expect(spread.getAttribute('data-tone')).toBeNull();
+    expect(seg(container, 'opp-boros-impact')).toBeNull();
 
     // Every cost column is present and steps DOWN.
     for (const key of [
-      'opp-boros-impact',
       'opp-boros-taker',
       'opp-boros-settle',
       'opp-perp-entry-fees',
@@ -617,12 +619,11 @@ describe('OpportunitiesPanel — breakdown waterfalls', () => {
     expect(container.querySelector('[data-axis="zero"]')).not.toBeNull();
   });
 
-  it('shows a NEGATIVE gross spread in rose, not as an upward emerald gain', async () => {
-    // Under borosEntry 'mark' the server orders pairs by markApr while the gross
-    // spread stays mid-based, so the two can disagree in sign.
+  it('shows a NEGATIVE locked spread in rose, not as an upward emerald gain', async () => {
+    // The mid spread can be positive while the books lock a negative one.
     const base = makeOpportunityPair();
-    const gross = 0.045 - 0.0453; // mid-based: negative
-    const exec = 0.047 - 0.0461; // mark-based: positive
+    const gross = 0.047 - 0.0461; // mid: positive
+    const exec = 0.045 - 0.0453; // what the books give: negative
     const netFixedApr = exec - (base.costs.totalUsd as number) / OPP_NT;
     const container = await expandOne(
       makeOpportunitiesResult({
@@ -647,17 +648,39 @@ describe('OpportunitiesPanel — breakdown waterfalls', () => {
     expect(Number(spread.getAttribute('data-level'))).toBeLessThan(0);
     expect(spread.className).toContain('rose');
     expect(spread.getAttribute('data-dir')).toBe('down');
-    // A favorable (negative) impact steps back UP in emerald.
-    const impact = seg(container, 'opp-boros-impact')!;
-    expect(impact.getAttribute('data-dir')).toBe('up');
-    expect(impact.className).toContain('emerald');
+    expect(seg(container, 'opp-boros-impact')).toBeNull();
+  });
+
+  it('"I have existing perp position" re-prices the row with no perp entry cost, off by default', async () => {
+    const container = await expandOne();
+    const hero = () => container.querySelector('.text-\\[30px\\]')!.textContent!;
+    const box = screen.getByRole('checkbox', { name: 'I have existing perp position' });
+    // Nothing held (no tracked address here) → a new position, full cost.
+    expect(box).not.toBeChecked();
+    const before = parseFloat(hero());
+    expect(seg(container, 'opp-perp-entry-fees')).not.toBeNull();
+
+    await userEvent.click(box);
+    expect(box).toBeChecked();
+    // The entry columns leave the chart, and the rate rises by what they cost.
+    expect(seg(container, 'opp-perp-entry-fees')).toBeNull();
+    expect(seg(container, 'opp-entry-slip')).toBeNull();
+    expect(parseFloat(hero())).toBeGreaterThan(before);
+    // The identity still closes on the re-priced profit.
+    const costs = [...container.querySelectorAll('[data-kind^="cost"]')];
+    expect(costs.at(-1)!.getAttribute('data-level')).toBe(seg(container, 'profit')!.getAttribute('data-level'));
+
+    // Ticking the box is not a click on the card: the details stay open.
+    expect(seg(container, 'profit')).not.toBeNull();
+    await userEvent.click(box);
+    expect(parseFloat(hero())).toBe(before);
   });
 
   it('describes both plots in one aria-label', async () => {
     await expandOne();
     expect(
       screen.getByRole('img', {
-        name: /gross spread return .* modelled minimum capital/i,
+        name: /locked spread return .* modelled minimum capital/i,
       }),
     ).toBeInTheDocument();
   });

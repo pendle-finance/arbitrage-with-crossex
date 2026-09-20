@@ -1579,6 +1579,26 @@ describe('planFor repay', () => {
     expect(plan).toMatchObject({ goal: { kind: 'repay' }, balanced: true, noLegs: true, moves: 0, shortOfEven: 0 });
   });
 
+  it('clears a borrow under a dollar with one Convert', () => {
+    // His book on 2026-09-20: every leg closed, 0.22 USDT left, 0.18 USDC owed.
+    const plan = goalPlan({ usdt: 0.22, hyperliquid: -0.18, lighter: 0, positionIm: 0 }, REPAY_GOAL);
+    expect(plan).toMatchObject({ goal: { kind: 'repay' }, balanced: false, noLegs: true, shortOfEven: 0 });
+    expect(plan.routes.convert.available).toBe(true);
+    expect(plan.routes.convert.steps.map((step) => `${step.kind}:${moveOf(step)}`)).toEqual(['convert:CROSSEX>HYPERLIQUID']);
+    expect(sumMoved(plan.routes.convert)).toBeLessThanOrEqual(0.22);
+    const usdc = walletIn(plan.routes.convert.after, 'USDC', 'HYPERLIQUID');
+    expect(usdc.equity).toBeGreaterThanOrEqual(0);
+    expect(usdc.equity).toBeLessThan(0.01);
+    expect(plan.routes.convert.steps.at(-1)?.borrowLeft).toBe(0);
+  });
+
+  it('keeps the dollar floor for the other goals', () => {
+    const wallets = { usdt: 0.22, hyperliquid: -0.18, lighter: 0, positionIm: 0 };
+    expect(goalPlan(wallets, EVEN_GOAL)).toMatchObject({ balanced: true, moves: 0 });
+    const custom = goalPlan(wallets, { kind: 'custom', from: 'CROSSEX', to: 'HYPERLIQUID', amount: 0.19 });
+    expect(custom).toMatchObject({ balanced: true, moves: 0 });
+  });
+
   it('with legs, repays the borrow and ignores position share', () => {
     const notional = { 'USDT/CROSSEX': 1000, 'USDC/HYPERLIQUID': 1000 };
     const even = goalPlan({ usdt: -300, hyperliquid: 2000, lighter: 0, positionIm: 100 }, EVEN_GOAL, notional);

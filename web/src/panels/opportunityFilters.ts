@@ -11,6 +11,7 @@
  */
 import type { OpportunityGroup, OpportunityPair } from '../api/types';
 import { readJson, writeJson } from '../lib/storage';
+import { heldTagFor, repriceHeld, type HeldPerps, type HeldTag } from './heldPerps';
 
 /** One card's worth of data: the pair, plus the group context it renders in. */
 export interface OpportunityRow {
@@ -26,6 +27,11 @@ export interface OpportunityRow {
   venueKeys: string[];
   /** Days to maturity, rounded exactly as the card's "(35 days)" is. */
   days: number;
+  /** Set when this row is a later maturity of a hedge the reader runs: it is
+   * RANKED as if perp entry were free and pinned above the rest (see
+   * heldPerps). `pair` stays as the server priced it — the card owns the
+   * "I have existing perp position" toggle, which this only defaults on. */
+  held: HeldTag | null;
 }
 
 /** Boros platformName → one venue key space ("Hyperliquid" and "HYPERLIQUID"
@@ -68,11 +74,20 @@ export function toRows(
   groups: OpportunityGroup[],
   /** Keys shown on the previous render — see `HYSTERESIS_APR`. */
   shownKeys?: ReadonlySet<string>,
+  /** The perps the reader holds, and the notional the response was priced
+   * at (the re-pricing needs N × T). Absent: every row is a new position. */
+  holdings?: { held: HeldPerps; notionalUsd: number },
 ): OpportunityRow[] {
   const rows: OpportunityRow[] = [];
   for (const group of groups) {
-    for (const pair of group.pairs) {
-      const apr = pair.netFixedAprOnCapital;
+    for (const served of group.pairs) {
+      const held = holdings ? heldTagFor(holdings.held, group.underlying, served, group.maturity) : null;
+      // RANKED on the re-priced figure, and tested for viability on it: a pair
+      // the full entry cost sinks below zero can still be worth farming for
+      // someone already in it. The row carries the pair AS SERVED, though —
+      // the card re-prices it under its own toggle.
+      const pair = served;
+      const apr = (held && holdings ? repriceHeld(served, holdings.notionalUsd) : served).netFixedAprOnCapital;
       if (apr === null || !Number.isFinite(apr)) continue;
       const key = `${group.tokenId}:${group.maturity}:${pair.shortLeg.marketId}:${pair.longLeg.marketId}`;
       // A pair already on screen holds its place down to the band; a new one
@@ -90,11 +105,15 @@ export function toRows(
         asset: group.underlying,
         venueKeys: [...new Set([venueKey(pair.shortLeg.venue), venueKey(pair.longLeg.venue)])],
         days: maturityDays(group.secondsToMaturity),
+        held,
       });
     }
   }
   return rows.sort(
     (x, y) =>
+      // The reader's own pairs lead: they are the rows they came for, and
+      // the server ranked them on a cost they will not pay.
+      Number(y.held !== null) - Number(x.held !== null) ||
       y.apr - x.apr ||
       byValueDesc(x.pair.netFixedApr, y.pair.netFixedApr) ||
       byValueDesc(x.pair.execSpreadApr, y.pair.execSpreadApr) ||

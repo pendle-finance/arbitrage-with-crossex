@@ -29,11 +29,11 @@ import { fmtPct, fmtUsd } from '../lib/fmt';
 
 const SECONDS_IN_YEAR = 365 * 86_400;
 
-/** The profit chart needs the whole chain from the gross spread to the profit;
- * any missing link leaves the text ledger to explain itself. */
+/** The profit chart needs the whole chain from the locked spread to the
+ * profit; any missing link leaves the text ledger to explain itself. */
 export function canChartProfit(pair: OpportunityPair): boolean {
   return (
-    pair.estProfitUsd !== null && pair.borosImpactApr !== null && pair.costs.totalUsd !== null
+    pair.estProfitUsd !== null && pair.execSpreadApr !== null && pair.costs.totalUsd !== null
   );
 }
 
@@ -45,22 +45,9 @@ export function canChartCapital(pair: OpportunityPair): boolean {
 /** [key, usd, className, axisLabel, title] — the profit chart's decrements, in
  * the order they are incurred. At-entry costs are solid amber; costs paid over
  * the life or at maturity are dashed amber (pattern, not colour alone). */
-function costRows(
-  pair: OpportunityPair,
-  impactUsd: number,
-): Array<[string, number | null, string, string, string]> {
+function costRows(pair: OpportunityPair): Array<[string, number | null, string, string, string]> {
   const c = pair.costs;
   return [
-    [
-      'opp-boros-impact',
-      impactUsd,
-      'bg-amber-500',
-      'Boros impact',
-      // Mode-agnostic: under `market` this is the book walk, under `mark` it is
-      // mark-vs-mid. Either way it is the gap between the mid spread and what
-      // the pair actually locks.
-      `Boros price impact ${costText(impactUsd)} — the pair locks ${fmtPct(pair.execSpreadApr ?? 0)} rather than the ${fmtPct(pair.grossSpreadApr)} mid spread`,
-    ],
     [
       'opp-boros-taker',
       c.borosTakerFeeUsd,
@@ -114,8 +101,15 @@ function costRows(
 
 function buildProfitSteps(pair: OpportunityPair, notionalUsd: number): WaterfallStep[] {
   const nt = (notionalUsd * pair.secondsToMaturity) / SECONDS_IN_YEAR;
-  const grossUsd = pair.grossSpreadApr * nt;
-  const impactUsd = (pair.borosImpactApr ?? 0) * nt;
+  /**
+   * The chart OPENS on the spread the pair actually locks — post price
+   * impact, the same rates the leg cards above it quote ("at 8.1% after
+   * impact"). It used to open on the MID spread and step down a "Boros
+   * impact" bar to get here: a cost for a number shown nowhere else on the
+   * card, since every rate on it is already after impact (his call
+   * 2026-09-20). The mid spread rides on the bar's hover.
+   */
+  const grossUsd = (pair.execSpreadApr as number) * nt;
   const profitUsd = pair.estProfitUsd as number;
 
   const steps: WaterfallStep[] = [
@@ -124,20 +118,18 @@ function buildProfitSteps(pair: OpportunityPair, notionalUsd: number): Waterfall
       // exactly as it does on the strategy card.
       key: 'spread',
       kind: 'total',
-      // Pairs are ordered by markApr under `borosEntry: 'mark'` while the gross
-      // spread is mid-based, so the two can disagree in sign — a negative gross
-      // must not read as an upward emerald gain.
+      // A negative locked spread must not read as an upward emerald gain.
       dir: grossUsd >= 0 ? 'up' : 'down',
       from: 0,
       to: grossUsd,
       className: grossUsd >= 0 ? 'bg-emerald-500' : 'bg-rose-500',
-      title: `Gross spread return ${fmtUsd(grossUsd)} — ${fmtPct(pair.grossSpreadApr)} on the notional to maturity`,
-      axisLabel: 'Gross spread',
+      title: `Spread return ${fmtUsd(grossUsd)} — the ${fmtPct(pair.execSpreadApr as number)} the pair locks after Boros price impact, on the notional to maturity (mid spread ${fmtPct(pair.grossSpreadApr)})`,
+      axisLabel: 'Locked spread',
     },
   ];
 
   let level = grossUsd;
-  for (const [key, usd, cls, axisLabel, title] of costRows(pair, impactUsd)) {
+  for (const [key, usd, cls, axisLabel, title] of costRows(pair)) {
     // Zero is skipped, not drawn: under `roll` the server sends 0 exit costs,
     // which is what removes those columns (never the exitMode prop — data and
     // mode disagree mid-refetch, and the identity must always close).
@@ -279,7 +271,7 @@ export function OpportunityWaterfall({
 
   const label = [
     showProfit
-      ? `gross spread return ${fmtUsd(profitSteps![0].to, 0)} minus Boros impact and costs to an estimated profit of ${fmtUsd(pair.estProfitUsd ?? 0, 0)}`
+      ? `locked spread return ${fmtUsd(profitSteps![0].to, 0)} minus costs to an estimated profit of ${fmtUsd(pair.estProfitUsd ?? 0, 0)}`
       : null,
     showCapital
       ? `modelled minimum capital ${fmtUsd(pair.capitalUsd ?? 0, 0)} built from the Boros and perp initial margins`

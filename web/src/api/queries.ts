@@ -103,10 +103,11 @@ export function useAccount() {
   });
 }
 
-export function usePositions() {
+export function usePositions(enabled = true) {
   return useQuery({
     queryKey: qk.positions,
     queryFn: () => fetchJson<PositionsResponse>('/positions'),
+    enabled,
     refetchInterval: 4_000,
     placeholderData: keepPreviousData,
   });
