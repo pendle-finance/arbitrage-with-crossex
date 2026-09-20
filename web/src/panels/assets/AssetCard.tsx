@@ -61,6 +61,7 @@ import {
   type PerpOnlyPair,
   type UnpairedPerp,
   type VenueHedge,
+  EXPIRY_WARN_DAYS,
   SECONDS_IN_YEAR,
   borosKey,
   defaultChargePerpFees,
@@ -579,7 +580,7 @@ function PairCard({
                     sm
                     tone="blue"
                     className="!font-medium"
-                    title={`The rate legs settle ${fmtDateLocal(soonest)} — inside the 14-day window, so this pair can be rolled to a later maturity now to stay hedged past it`}
+                    title={`The rate legs mature ${fmtDateLocal(soonest)} — inside the ${EXPIRY_WARN_DAYS}-day window, so this pair can be rolled to a later maturity now to stay hedged past it`}
                   >
                     ready to roll
                   </Chip>

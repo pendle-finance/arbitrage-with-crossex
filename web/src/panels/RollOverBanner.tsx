@@ -14,6 +14,7 @@
  */
 import { useEffect, useId, useRef, useState } from 'react';
 import { fmtDateLocal, fmtPct, prettyVenue } from '../lib/fmt';
+import { EXPIRY_WARN_DAYS } from './assets/assetModel';
 import { useRollSignalsOptional, type RollSignal } from './rollSignal';
 
 /** A pair this close to maturing makes the banner loud on its own. */
@@ -209,7 +210,7 @@ function RollGuidePill({
           <p className="mb-1.5 text-[12.5px] font-semibold text-ink-50">When to roll</p>
           <ul className="flex list-disc flex-col gap-1.5 pl-4">
             <li>
-              <span className="text-ink-50">In the last two weeks.</span> Rolling early lets you{' '}
+              <span className="text-ink-50">In the last {EXPIRY_WARN_DAYS} days.</span> Rolling early lets you{' '}
               <span className="text-emerald-300">DCA into the longer maturity</span> — several entries at different
               rates instead of one, which smooths the yield you lock in.
             </li>

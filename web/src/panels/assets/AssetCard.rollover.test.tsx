@@ -1,6 +1,6 @@
 /**
  * The roll-over path through the asset card: a pair whose rate legs mature
- * inside the 14-day window is counted once in the banner, flagged on its
+ * inside the roll window (EXPIRY_WARN_SEC) is counted once in the banner, flagged on its
  * card in the 4 Leg Pairs tab, and offered a Roll over button that opens
  * the popup. A pair outside the window gets none of it.
  */
@@ -14,7 +14,7 @@ import { renderWithClient } from '../../test/utils';
 import { AssetCard } from './AssetCard';
 import { RollOverBanner } from '../RollOverBanner';
 import { RollSignalProvider } from '../rollSignal';
-import { deriveAsset } from './assetModel';
+import { deriveAsset, EXPIRY_WARN_DAYS } from './assetModel';
 
 const DAY = 86_400;
 
@@ -104,7 +104,7 @@ describe('AssetCard — roll over', () => {
     Element.prototype.scrollIntoView = function (this: Element) {
       scrolled.push(this);
     };
-    renderCard(book(10));
+    renderCard(book(8));
     await userEvent.click(await screen.findByRole('button', { name: /pair can roll over/ }));
     const panel = screen.getByRole('tabpanel', { name: /4 Leg Pairs/ });
     // The pair's card is what lands at the top of the viewport.
@@ -119,8 +119,8 @@ describe('AssetCard — roll over', () => {
     expect(within(panel).getByRole('button', { name: 'Roll over' })).toBeInTheDocument();
   });
 
-  it('a pair maturing in 10 days: one banner, a flag and a button on its card, a placeholder popup', async () => {
-    renderCard(book(10));
+  it('a pair maturing in 8 days: one banner, a flag and a button on its card, a placeholder popup', async () => {
+    renderCard(book(8));
     // The banner counts pairs and sends the trader to the pairs tab — which
     // is the tab a card opens on (his call 2026-09-20), so leave it first.
     const banner = await screen.findByRole('button', { name: /^1 pair can roll over/ });
@@ -150,8 +150,8 @@ describe('AssetCard — roll over', () => {
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 
-  it('the banner is quiet between 14 and 7 days out, loud a week from settlement', async () => {
-    renderCard(book(10));
+  it('the banner is quiet between 10 and 7 days out, loud a week from settlement', async () => {
+    renderCard(book(8));
     const quiet = (await screen.findByRole('button', { name: /pair can roll over/ })).closest('[data-tone]')!;
     expect(quiet).toHaveAttribute('data-tone', 'quiet');
     expect(within(quiet as HTMLElement).queryByText(/matures in/)).not.toBeInTheDocument();
@@ -187,7 +187,7 @@ describe('AssetCard — roll over', () => {
     expect(note).toHaveTextContent(/Your perps never move/);
     expect(note).toHaveTextContent(/two perp entry fees plus slippage/);
     // The three "when" cases, including the DCA reason for rolling early.
-    expect(note).toHaveTextContent(/In the last two weeks/);
+    expect(note).toHaveTextContent(`In the last ${EXPIRY_WARN_DAYS} days`);
     expect(note).toHaveTextContent(/DCA into the longer maturity/);
     expect(note).toHaveTextContent(/When the next maturity pays more/);
     expect(note).toHaveTextContent(/Right when it matures/);
@@ -224,7 +224,9 @@ describe('AssetCard — roll over', () => {
         HttpResponse.json({
           ok: true,
           data: {
-            markets: [row(1, 'Gate', now + 10 * DAY), row(2, 'Hyperliquid', now + 10 * DAY), row(11, 'Gate', LATER), row(12, 'Hyperliquid', LATER)],
+            // The markets the pair HOLDS (its own 8-day maturity), plus the
+            // one later maturity it can roll into.
+            markets: [row(1, 'Gate', now + 8 * DAY), row(2, 'Hyperliquid', now + 8 * DAY), row(11, 'Gate', LATER), row(12, 'Hyperliquid', LATER)],
             crossByToken: [],
             isolatedByMarket: [],
             defaultSlippageApr: 0.0025,
@@ -283,7 +285,7 @@ describe('AssetCard — roll over', () => {
       }),
     );
     localStorage.setItem('crossex.strategy.v1', JSON.stringify({ address: '0x1111111111111111111111111111111111111111' }));
-    renderCard(book(10));
+    renderCard(book(8));
 
     const panel = screen.getByRole('tabpanel', { name: /4 Leg Pairs/ });
     // A generous wait: the context and the probe are two round trips, and the
@@ -295,9 +297,9 @@ describe('AssetCard — roll over', () => {
     // The new rate is the bold figure; the current one sits dimmed beside it.
     const promised = within(banner).getByText(/^\+?\d+\.\d+%$/);
     expect(promised).toHaveClass('font-semibold');
-    // Each rate with the days it runs: the roll's 45 against the 10 held.
-    expect(within(banner).getByText('vs 14.29% (10 days) now')).toBeInTheDocument();
-    expect(within(banner).getByText(/^Gate \/ Hyperliquid: .*\(45 days\)/)).toBeInTheDocument();
+    // Each rate with the days it runs: the roll's 45 against the 8 held.
+    expect(within(banner).getByText('vs 14.29% (8 days) now')).toBeInTheDocument();
+    expect(banner).toHaveTextContent(/ETH Gate \/ Hyperliquid: .*\(45 days\)/);
     // The probe first priced a FIFTH of the 100 ETH held at the markets' own
     // seeded tolerance (half of 2%, floored to 1 s.f.) …
     const first = sims.find((b) => b.intent === 'open');
@@ -319,7 +321,7 @@ describe('AssetCard — roll over', () => {
 
   it('offsetting perps with no rate legs are ONE pair with its Boros side missing, not loose legs', () => {
     // The book after a missed roll: both perps still on, both rate legs gone.
-    const g = { ...book(10), borosOpen: [] };
+    const g = { ...book(8), borosOpen: [] };
     renderCard(g);
     const panel = screen.getByRole('tabpanel', { name: /4 Leg Pairs/ });
     const row = within(panel).getByRole('button', { name: /Gate \/ S Hyperliquid Boros legs missing/ });
@@ -336,7 +338,7 @@ describe('AssetCard — roll over', () => {
   });
 
   it('with ONE rate leg still on, only the other side is missing — and only it can be opened', () => {
-    const base = book(10);
+    const base = book(8);
     const g = { ...base, borosOpen: base.borosOpen.filter((l) => l.venue === 'GATE') };
     renderCard(g);
     const panel = screen.getByRole('tabpanel', { name: /4 Leg Pairs/ });
@@ -348,7 +350,7 @@ describe('AssetCard — roll over', () => {
   });
 
   it('a LONE perp, or a LONE rate leg, still lands in the ungrouped list', () => {
-    const base = book(10);
+    const base = book(8);
     // One perp with nothing opposite it: no pair to form, so it stays loose.
     renderCard({ ...base, perpOpen: base.perpOpen.filter((p) => p.venue === 'GATE'), borosOpen: [] });
     let panel = screen.getByRole('tabpanel', { name: /4 Leg Pairs/ });

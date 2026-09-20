@@ -32,8 +32,13 @@ export const SECONDS_IN_YEAR = 365 * 24 * 3600;
 /** |net|/gross under this is "hedged" — mirrors the exposure feed's 2%. */
 export const HEDGE_TOLERANCE = 0.02;
 
-/** Boros coverage that lapses within this window gets an expiry warning. */
-export const EXPIRY_WARN_SEC = 14 * 24 * 3600;
+/** Boros coverage that lapses within this window gets an expiry warning —
+ * and is the window a pair may be rolled in. 10 days, not the original 14:
+ * his call 2026-09-20. Change it HERE only; the guide copy, the chip and
+ * the tests all read this one number. */
+export const EXPIRY_WARN_SEC = 10 * 24 * 3600;
+/** The same window in days, for copy that has to name it. */
+export const EXPIRY_WARN_DAYS = EXPIRY_WARN_SEC / 86_400;
 
 /** No APR below this capital: annualizing dust yields three-digit noise
  * percentages (−587% on $4.41 of margin) that read as alarms. */

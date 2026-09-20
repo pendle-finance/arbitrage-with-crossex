@@ -261,10 +261,11 @@ describe('pairs are 4-leg units at one maturity', () => {
   });
 });
 
-describe('a pair can roll over inside the 14-day window, never once matured', () => {
-  it('flags 13d out, not 15d out, not yesterday', () => {
-    expect(pairCanRoll({ soonestMaturitySec: NOW + 13 * DAY }, NOW)).toBe(true);
-    expect(pairCanRoll({ soonestMaturitySec: NOW + 15 * DAY }, NOW)).toBe(false);
+describe('a pair can roll over inside the roll window, never once matured', () => {
+  it('flags 9d out, not 11d out, not yesterday', () => {
+    // The window is EXPIRY_WARN_SEC — 10 days since his call 2026-09-20.
+    expect(pairCanRoll({ soonestMaturitySec: NOW + 9 * DAY }, NOW)).toBe(true);
+    expect(pairCanRoll({ soonestMaturitySec: NOW + 11 * DAY }, NOW)).toBe(false);
     expect(pairCanRoll({ soonestMaturitySec: NOW - DAY }, NOW)).toBe(false);
     expect(pairCanRoll({ soonestMaturitySec: 0 }, NOW)).toBe(false);
   });
