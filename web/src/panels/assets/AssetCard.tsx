@@ -41,7 +41,7 @@ import {
 } from '../../api/queries';
 import { HoldToConfirmButton } from '../../components/HoldToConfirmButton';
 import { BlockerList, GasTopUp, LegFillLine, LiquidationRows, PairCosts, PositionArithmetic, SpreadReadout, legSubmitted } from '../../trade/BorosPairBits';
-import { EstimateCard, EstimateRow, SlippageLine } from '../../trade/PairTicketBits';
+import { EstimateCard, EstimateRow, SlippageLine, StepBadge } from '../../trade/PairTicketBits';
 import { QueryError } from '../../components/QueryError';
 import { uuid } from '../../lib/uuid';
 import { useNow } from '../../lib/useNow';
@@ -1628,9 +1628,11 @@ function BatchSection({
   onRetry,
   exitPnl,
   slip,
+  step,
 }: {
   label: string;
   sub: string;
+  step?: number;
   sim: BorosPairSimulation | null;
   dataUpdatedAt: number;
   estimating: boolean;
@@ -1671,7 +1673,7 @@ function BatchSection({
     />
   );
   return (
-    <EstimateCard label={label} sub={sub} dataUpdatedAt={dataUpdatedAt} estimating={estimating} isError={Boolean(error)}>
+    <EstimateCard label={label} sub={sub} step={step} dataUpdatedAt={dataUpdatedAt} estimating={estimating} isError={Boolean(error)}>
       {error ? (
         <QueryError title={`Couldn’t price the ${label.toLowerCase()}`} error={error} onRetry={onRetry} />
       ) : sim ? (
@@ -2121,13 +2123,15 @@ function RollReview({
             <div className={microLabelClass}>You lock</div>
             <div className="num mt-1 text-[26px] font-semibold leading-none tracking-[-0.02em]">
               {fig.netRate !== null ? <SignedNumber value={fig.netRate} format={fmtPct} /> : <span className="text-ink-600">{pending ? '…' : '—'}</span>}
-              <span className="ml-2 text-[13px] font-normal text-ink-300">fixed · {termDays}d</span>
+              <span className="ml-2 text-[13px] font-normal text-ink-300">{termDays}d</span>
             </div>
-            <div className="num mt-1.5 text-[11.5px] text-ink-400">
-              {fmtTokenQty(size, collateral)} · {fmtDateLocal(oldMaturity)} → {fmtDateLocal(target.maturity)} · net of both batches' fees and the exit's PnL
-            </div>
+            <div className="mt-1.5 text-[11.5px] text-ink-400">net of fees and exit P&L</div>
           </div>
           <div className="grid grid-cols-3 gap-x-5">
+            <div title="The size being rolled — the smaller of the two rate legs' fills, closed at the old maturity and re-opened at the new">
+              <div className={statLabel}>Size</div>
+              <div className={`${statValue} font-semibold text-ink-50`}>{fmtTokenQty(size, collateral)}</div>
+            </div>
             <div title="Carry to the new maturity at the locked spread, less the round trip">
               <div className={statLabel}>Est. earnings by maturity</div>
               <div className={`${statValue} font-semibold`}>
@@ -2142,12 +2146,6 @@ function RollReview({
                 {dayOneUsd !== null ? <SignedNumber value={dayOneUsd} format={fmtUsd} /> : <span className="text-ink-600">—</span>}
               </div>
             </div>
-            <div title={marginOk ? 'The new legs\u2019 margin is covered once the exit has run' : 'See the margin line below'}>
-              <div className={statLabel}>Margin</div>
-              <div className={`${statValue} ${marginOk ? 'text-emerald-300' : marginShort > 0 ? 'text-amber-300' : 'text-ink-600'}`}>
-                {marginOk ? '✓ covered' : marginShort > 0 ? `short ${fmtTokenQty(marginShort, collateral)}` : '—'}
-              </div>
-            </div>
           </div>
         </div>
       </div>
@@ -2156,9 +2154,12 @@ function RollReview({
           realises against what re-opening locks, each with its own
           tolerance and the margin it moves. */}
       <div className={microLabelClass}>How it executes</div>
+      {/* 1 then 2: the order the two batches are sent in, a numbered disc
+          on each card. */}
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2 [&>*]:min-w-0">
         <BatchSection
           label="Exit"
+          step={1}
           sub={fmtDateLocal(oldMaturity)}
           sim={exitSim}
           dataUpdatedAt={exit.dataUpdatedAt}
@@ -2171,6 +2172,7 @@ function RollReview({
         />
         <BatchSection
           label="Re-entry"
+          step={2}
           sub={fmtDateLocal(target.maturity)}
           sim={entrySim}
           dataUpdatedAt={entry.dataUpdatedAt}
@@ -2190,7 +2192,10 @@ function RollReview({
         }`}
         role={marginShort > 0 ? 'alert' : undefined}
       >
-        <span className="text-[10.5px] font-semibold uppercase tracking-[0.14em] text-ink-400">Can it fund? {marginOk ? '✓' : ''}</span>
+        <span className="flex items-center gap-2 text-[10.5px] font-semibold uppercase tracking-[0.14em] text-ink-400">
+          <StepBadge n={3} />
+          Can it fund? {marginOk ? '✓' : ''}
+        </span>
         <EstimateRow
           label="Required margin"
           sub="for the new legs"

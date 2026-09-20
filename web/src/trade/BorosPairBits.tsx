@@ -384,7 +384,7 @@ export function SpreadReadout({
           {singleLeg ? 'Estimated rate' : 'Estimated spread'}
           {legs.length > 0 && <span className="ml-1 text-ink-400">ⓘ</span>}
         </span>
-        <span className={`num text-lg font-semibold ${negative ? 'text-rose-300' : 'text-cyan-300'}`}>
+        <span className={`num text-lg font-semibold ${negative ? 'text-rose-300' : 'text-emerald-400'}`}>
           {pct(headline)}
         </span>
       </div>
@@ -551,8 +551,8 @@ export function PairCosts({
         label={singleLeg ? 'Trade fee' : 'Trade fee · 2 legs'}
         title={
           singleLeg
-            ? 'Boros taker fee at this size, charged over the time to maturity'
-            : 'Boros taker fee on both legs at this size, charged over the time to maturity'
+            ? 'Boros taker fee at this size — charged once, when the order fills'
+            : 'Boros taker fee on both legs at this size — charged once, when the orders fill'
         }
         value={`${size(sim.costToCrossSize)} ${sim.collateral}`}
       />

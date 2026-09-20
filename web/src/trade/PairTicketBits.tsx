@@ -65,6 +65,18 @@ export function EstimateRow({
   );
 }
 
+/** A small numbered disc — the order of things, without a word of prose. */
+export function StepBadge({ n }: { n: number }) {
+  return (
+    <span
+      aria-hidden
+      className="num inline-flex h-[18px] w-[18px] shrink-0 -translate-y-px items-center justify-center rounded-full border border-info/60 bg-info/15 text-[10.5px] font-semibold leading-none text-pastel-blue"
+    >
+      {n}
+    </span>
+  );
+}
+
 /** The estimate card's frame: an "ESTIMATE" caption, the preview's age, and
  * whatever the caller puts in the top-right (the pair's Book toggle). */
 export function EstimateCard({
@@ -74,12 +86,16 @@ export function EstimateCard({
   aside,
   label = 'Estimate',
   sub,
+  step,
   children,
 }: {
   dataUpdatedAt: number;
   estimating: boolean;
   isError: boolean;
   aside?: ReactNode;
+  /** A step number before the caption, when the card is one of an ordered
+   * sequence (a roll's 1 Exit → 2 Re-entry). */
+  step?: number;
   /** The caption — "Estimate" unless the card is one of several (a roll's
    * Exit / Re-entry). */
   label?: string;
@@ -93,6 +109,7 @@ export function EstimateCard({
     <div className="flex flex-col gap-2.5 rounded-lg border border-ink-700 bg-ink-850/40 px-3.5 py-3">
       <div className="flex items-center justify-between gap-2">
         <span className="flex items-baseline gap-2">
+          {step !== undefined && <StepBadge n={step} />}
           {/* A card that is one of SEVERAL (a roll's Exit / Re-entry) leads
               with its name at full weight — it is what tells the two columns
               apart. A lone "Estimate" stays a quiet caption. */}
