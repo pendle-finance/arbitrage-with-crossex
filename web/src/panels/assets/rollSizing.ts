@@ -130,17 +130,21 @@ export function planBatch(
   capApr: number,
 ): BatchPlan | null {
   if (legs.length === 0 || legs.some((l) => !Array.isArray(l.depth))) return null;
+  // The two legs carry ONE tolerance, so the band that binds is the tighter
+  // leg's: a leg judged against its own, wider band would pass a size the
+  // shared bound cannot reach, and the venue would refuse the batch with no
+  // limit ever shown (the Gate / Hyperliquid pair, whose bands differ ~2x).
+  const allowedBatch = Math.min(...legs.map((l) => allowedOf(l, capApr)));
   let needed = 0;
   let limit: BatchLimit | null = null;
   for (const leg of legs) {
     const depth = leg.depth as DepthLadder;
-    const allowed = allowedOf(leg, capApr);
-    const maxSize = capacityAt(depth, allowed);
+    const maxSize = capacityAt(depth, allowedBatch);
     const need = toleranceFor(depth, size);
     const found: BatchLimit | null =
       need === null
         ? { kind: 'liquidity', marketName: leg.marketName, maxSize }
-        : need > allowed + EPS
+        : need > allowedBatch + EPS
           ? { kind: 'rate-limit', marketName: leg.marketName, maxSize }
           : null;
     // The tightest leg names the limit: it is the one that decides the size.
@@ -153,7 +157,6 @@ export function planBatch(
     needed <= seedApr + EPS ? seedApr : Math.ceil((needed * TOLERANCE_HEADROOM) / TOLERANCE_STEP - EPS) * TOLERANCE_STEP;
   // Never past the venue's band — rounded DOWN into it, but not below what
   // the size needs (the headroom is what gives way, not the fill).
-  const allowedBatch = Math.min(...legs.map((l) => allowedOf(l, capApr)));
   if (toleranceApr > allowedBatch + EPS) {
     const inside = Math.floor(allowedBatch / TOLERANCE_STEP + EPS) * TOLERANCE_STEP;
     toleranceApr = inside + EPS >= needed ? inside : allowedBatch;

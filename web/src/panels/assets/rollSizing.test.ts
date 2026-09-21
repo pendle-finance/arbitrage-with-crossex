@@ -98,6 +98,16 @@ describe('planBatch', () => {
     expect(plan!.toleranceApr).toBeLessThanOrEqual(0.013 * 0.9 + 1e-9);
   });
 
+  it("judges every leg against the batch's ONE tolerance, which the tighter band bounds", () => {
+    // The HL leg needs 1.30% and its own band (2% × 0.9) would allow it; the
+    // other leg's band stops at 1.2% (1.08% usable). One tolerance serves
+    // both, so the HL leg cannot get its 1.30% — a rate limit, at the size
+    // the shared bound does reach, not a silent clamp the venue then refuses.
+    const plan = planBatch([leg({}), leg({ depth: DEEP, maxToleranceApr: 0.012 })], 1000, SEED, CAP);
+    expect(plan?.limit).toEqual({ kind: 'rate-limit', marketName: 'Hyperliquid ETH 25 Sep 2026', maxSize: 389.95 });
+    expect(plan!.toleranceApr).toBeLessThanOrEqual(0.012 * 0.9 + 1e-9);
+  });
+
   it('has nothing to say until both legs carry a ladder', () => {
     expect(planBatch([leg({}), leg({ depth: null })], 100, SEED, CAP)).toBeNull();
     expect(planBatch([], 100, SEED, CAP)).toBeNull();
