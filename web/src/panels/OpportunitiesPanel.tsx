@@ -585,36 +585,11 @@ const OpportunityCard = memo(function OpportunityCard({
             {c.label}
           </Chip>
         ))}
-        {/* Line 1 ends on what it pays — the mock's placement: who, then how
-            much, on one line; the figures and the actions on the line below. */}
-        <span className="ml-auto flex items-baseline gap-2 whitespace-nowrap">
-              {capitalApr === null || !Number.isFinite(capitalApr) ? (
-                <span
-                  className="num text-[28px] font-bold leading-none text-ink-400"
-                  title={reasons.length > 0 ? reasons.join('\n') : CAPITAL_WHY}
-                >
-                  —%
-                </span>
-              ) : (
-                <span
-                  className={`num text-[28px] font-bold leading-none ${
-                    capitalApr < 0 ? 'text-guava' : 'text-grass'
-                  }`}
-                  title={
-                    reasons.length > 0
-                      ? `${CAPITAL_APR_TITLE}\n\n${reasons.join('\n')}`
-                      : CAPITAL_APR_TITLE
-                  }
-                >
-                  {(capitalApr * 100).toFixed(1)}%
-                </span>
-              )}
-              {/* "APR" is its own muted label in the mock, not part of the
-                  number — the figure stays the loudest thing on the card. */}
-              <span className="text-sm font-medium text-ink-200">APR</span>
-              <span className="text-[12.5px] text-ink-400" title={maturityTitle}>
-                ({days}d)
-              </span>
+        {/* Line 1 ends on WHEN it settles; the rate leads line 2, next to the
+            asset and the legs it belongs to (his call 2026-09-21 — the APR
+            reads better close to what it is the rate OF). */}
+        <span className="num ml-auto whitespace-nowrap text-[12px] text-ink-400" title={maturityTitle}>
+          matures {fmtDateLocal(group.maturity)}
         </span>
       </div>
 
@@ -629,10 +604,57 @@ const OpportunityCard = memo(function OpportunityCard({
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between sm:gap-5">
           {/* Hero + stats share one baseline (items-end): the APR leads, the
               labelled figures columnize across cards. */}
-          <div className="flex min-w-0 flex-wrap items-start gap-x-[34px] gap-y-4">
+          <div className="flex min-w-0 flex-wrap items-center gap-x-[34px] gap-y-4">
             {/* One row: the APR leads and CAPITAL / RETURN / NOTIONAL sit beside
                 it, so a column of cards reads as a table. They wrap together
                 only when the viewport actually runs out. */}
+            <span className="flex flex-col items-start gap-1.5">
+              <span className="flex items-baseline gap-2">
+            {capitalApr === null || !Number.isFinite(capitalApr) ? (
+              <span
+                className="num text-[28px] font-bold leading-none text-ink-400"
+                title={reasons.length > 0 ? reasons.join('\n') : CAPITAL_WHY}
+              >
+                —%
+              </span>
+            ) : (
+              <span
+                className={`num text-[28px] font-bold leading-none ${
+                  capitalApr < 0 ? 'text-guava' : 'text-grass'
+                }`}
+                title={
+                  reasons.length > 0
+                    ? `${CAPITAL_APR_TITLE}\n\n${reasons.join('\n')}`
+                    : CAPITAL_APR_TITLE
+                }
+              >
+                {(capitalApr * 100).toFixed(1)}%
+              </span>
+            )}
+            {/* "APR" is its own muted label in the mock, not part of the
+                number — the figure stays the loudest thing on the card. */}
+            <span className="text-sm font-medium text-ink-200">APR</span>
+            <span className="text-[12.5px] text-ink-400" title={maturityTitle}>
+              ({days}d)
+            </span>
+              </span>
+            {/* Details as a dotted-underline text link rather than a button:
+                expanding is the quiet, reversible move and should not carry
+                the weight of the one that opens a position. Still a real
+                <button> — it owns aria-expanded and must stay keyboard- and
+                screen-reader-addressable; only its chrome is gone. */}
+            <button
+            type="button"
+              className="text-[12px] text-ink-300 underline decoration-ink-400 decoration-dotted underline-offset-[3px] transition-colors hover:text-ink-50 hover:decoration-ink-200 disabled:cursor-not-allowed disabled:no-underline disabled:opacity-50 disabled:hover:text-ink-300"
+              aria-expanded={open}
+              aria-label={`${open ? 'Hide' : 'Show'} details for ${base} short ${prettyVenue(pair.shortLeg.venue)} / long ${prettyVenue(pair.longLeg.venue)}, ${group.collateral}-margined ${fmtDateLocal(group.maturity)}`}
+              disabled={detailsDisabled}
+              title={detailsTitle}
+              onClick={() => setOpen((v) => !v)}
+            >
+              {open ? 'Hide details' : 'More details'}
+            </button>
+            </span>
             <Stat label="Capital" tip>
               {capitalUsd === null ? (
                 <Dash why={CAPITAL_WHY} />
@@ -688,25 +710,6 @@ const OpportunityCard = memo(function OpportunityCard({
               both it and Details are gone from this row now, so the two sides
               are naturally the same height. */}
           <div className="flex shrink-0 items-center gap-3">
-            <span className="num whitespace-nowrap text-[12px] text-ink-400" title={maturityTitle}>
-              matures {fmtDateLocal(group.maturity)}
-            </span>
-            {/* Details as a dotted-underline text link rather than a button:
-                expanding is the quiet, reversible move and should not carry
-                the weight of the one that opens a position. Still a real
-                <button> — it owns aria-expanded and must stay keyboard- and
-                screen-reader-addressable; only its chrome is gone. */}
-            <button
-            type="button"
-              className="text-[12px] text-ink-300 underline decoration-ink-400 decoration-dotted underline-offset-[3px] transition-colors hover:text-ink-50 hover:decoration-ink-200 disabled:cursor-not-allowed disabled:no-underline disabled:opacity-50 disabled:hover:text-ink-300"
-              aria-expanded={open}
-              aria-label={`${open ? 'Hide' : 'Show'} details for ${base} short ${prettyVenue(pair.shortLeg.venue)} / long ${prettyVenue(pair.longLeg.venue)}, ${group.collateral}-margined ${fmtDateLocal(group.maturity)}`}
-              disabled={detailsDisabled}
-              title={detailsTitle}
-              onClick={() => setOpen((v) => !v)}
-            >
-              {open ? 'Hide details' : 'More details'}
-            </button>
 
             {/* ONE action: the strategy is two ordered executions, and two
                 side-by-side buttons styled primary/secondary read as
