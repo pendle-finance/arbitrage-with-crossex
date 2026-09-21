@@ -179,6 +179,21 @@ describe('evaluateRollGate', () => {
     );
   });
 
+  it('names how much the book DOES fill whole when the venue refuses a leg for liquidity', () => {
+    const venue = venueOk({
+      status: 'Refused',
+      reason: { code: 'MARKET_ORDER_FOK_NOT_FILLED', message: 'Insufficient liquidity' },
+      orders: venueOk().orders.map((o, i) => ({ ...o, filled: false, matchedSize: null, error: i === 2 ? 'Insufficient liquidity' : null })),
+      availableAfter: null,
+    });
+    const input = rollInput();
+    input.entry.simulation.legA.sizeWithinTolerance = 562.6;
+    const g = evaluateRollGate({ ...input, venue });
+    expect(g.blockers[0].message).toBe(
+      'The venue refuses this roll — Re-entry Hyperliquid ETH new: Insufficient liquidity (about 562.6 fills whole inside the bound). Widen the tolerance or reduce the size.',
+    );
+  });
+
   it("blocks on the venue's margin refusal and reports the shortfall it simulated", () => {
     const venue = venueOk({ status: 'Refused', reason: { code: 'INSUFFICIENT_MARGIN', message: 'InsufficientMargin' }, availableAfter: -250 });
     const g = evaluateRollGate({ ...rollInput(), venue });

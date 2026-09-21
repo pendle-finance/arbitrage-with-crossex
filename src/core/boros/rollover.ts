@@ -168,15 +168,28 @@ export function evaluateRollGate(input: EvaluateRollInput): RollGate {
   // The venue's preview is the only judge of the batch as a whole: FOK fills
   // are decided level by level up to the bound, and the opens' margin only
   // after the closes have freed theirs.
+  const legs = [exit.simulation.legA, exit.simulation.legB, entry.simulation.legA, entry.simulation.legB];
   const marketName = (marketId: number): string =>
-    [exit.simulation.legA, exit.simulation.legB, entry.simulation.legA, entry.simulation.legB].find((l) => l.marketId === marketId)
-      ?.marketName ?? `market ${marketId}`;
+    legs.find((l) => l.marketId === marketId)?.marketName ?? `market ${marketId}`;
+  /** A FOK the book cannot fill whole: say how much it CAN, so the size to
+   * roll instead is on the screen rather than found by trial — only when
+   * this side's book agrees it is short; a book that has moved since it
+   * was read has nothing truthful to add. */
+  const depthNote = (o: { marketId: number; error: string | null }): string => {
+    const leg = legs.find((l) => l.marketId === o.marketId);
+    const fit = leg?.sizeWithinTolerance;
+    return leg && /liquidity/i.test(o.error ?? '') && typeof fit === 'number' && fit < Math.abs(leg.sizing.deltaSize)
+      ? ` (about ${fit.toLocaleString('en-US', { maximumFractionDigits: 2 })} fills whole inside the bound)`
+      : '';
+  };
   if (venue === null) {
     blockers.push({ code: 'roll-unpriced', message: 'The venue could not preview this roll — waiting for a quote.' });
   } else if (venue.status === 'Refused') {
     const named = venue.orders.filter((o) => o.error !== null);
     const detail = named.length
-      ? named.map((o) => `${o.action === 'close' ? 'Exit' : 'Re-entry'} ${marketName(o.marketId)}: ${o.error}`).join('; ')
+      ? named
+          .map((o) => `${o.action === 'close' ? 'Exit' : 'Re-entry'} ${marketName(o.marketId)}: ${o.error}${depthNote(o)}`)
+          .join('; ')
       : venue.reason?.message ?? 'refused';
     blockers.push({
       code: 'venue-refused',
