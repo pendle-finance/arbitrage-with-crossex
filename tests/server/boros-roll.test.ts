@@ -11,41 +11,26 @@
 import type { FastifyInstance } from 'fastify';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BorosLegFill, BorosOrderClient, BorosRollLeg, BorosRollSimulation } from '../../src/core/boros/orders';
-import { imInputs, raw } from '../helpers/boros-fixtures';
+import { raw } from '../helpers/boros-fixtures';
+import { ADDRESS, BN, DAY, HL, MATURITY, NOW, account, market as pairMarket } from '../helpers/boros-pair-fixtures';
 import { TtlCache } from '../../src/server/cache';
 import { borosStub } from '../helpers/boros-stub';
 import { HOST, makeTestApp } from './helpers/gate-nock';
 
-const NOW = Math.floor(Date.now() / 1000);
-const DAY = 86_400;
-/** The pair being LEFT (30d) and the pair being ROLLED INTO (60d). */
-const MATURITY = NOW + 30 * DAY;
+/** The pair being LEFT matures at MATURITY (30d); the pair being ROLLED INTO at 60d. */
 const MATURITY2 = NOW + 60 * DAY;
-const ADDRESS = '0x1111111111111111111111111111111111111111';
 /** The account the agent signs for; write routes are bound to it. */
 const OTHER = '0x2222222222222222222222222222222222222222';
 
-const HL = 155;
-const BN = 158;
 /** The later-maturity twins: same tokenId, same base, same venues. */
 const HL2 = 156;
 const BN2 = 159;
 
-const market = (marketId: number, platformName: string, midApr: number, maturity = MATURITY) => ({
-  marketId,
-  tokenId: 3,
-  state: 'Normal',
-  imData: {
-    name: `${platformName} ETH ${maturity === MATURITY ? '30d' : '60d'}`,
-    maturity,
-    iTickThresh: imInputs.imTickThresh,
-    tickStep: imInputs.imTickStep,
-  },
-  extConfig: { settleFeeRate: '1000000000000000', paymentPeriod: 3600 },
-  metadata: { platformName, assetSymbol: 'ETH' },
-  config: { takerFee: '500000000000000', kIM: raw(imInputs.kIM), tThresh: imInputs.tThreshSec },
-  data: { midApr, markApr: midApr, floatingApr: 0.05, notionalOI: 12_000_000, assetMarkPrice: 1900 },
-});
+/** The shared fixture's market, at a chosen maturity. */
+const market = (marketId: number, platformName: string, midApr: number, maturity = MATURITY) => {
+  const m = pairMarket(marketId, platformName, midApr);
+  return { ...m, imData: { ...m.imData, maturity, name: `${platformName} ETH ${maturity === MATURITY ? '30d' : '60d'}` } };
+};
 
 /**
  * A book 0.1% off `midApr` each side (ticks are APR × 10⁴). Both sides sit
@@ -60,7 +45,7 @@ const wireBook = (midApr: number, size = 20_000_000) => ({
 /** Default account: FLAT everywhere. Seed positions via the `over` on rollBodies. */
 function rollBodies(over: Record<string, unknown> = {}): Record<string, unknown> {
   return {
-    '/core/v1/markets': {
+    '/apis/v1/markets': {
       results: [
         market(HL, 'Hyperliquid', 0.09),
         market(BN, 'Binance', 0.045),
@@ -68,35 +53,20 @@ function rollBodies(over: Record<string, unknown> = {}): Record<string, unknown>
         market(BN2, 'Binance', 0.05, MATURITY2),
       ],
     },
-    [`/core/v1/order-books/${HL}`]: wireBook(0.09),
-    [`/core/v1/order-books/${BN}`]: wireBook(0.045),
-    [`/core/v1/order-books/${HL2}`]: wireBook(0.1),
-    [`/core/v1/order-books/${BN2}`]: wireBook(0.05),
-    '/core/v1/collaterals/summary': {
-      collaterals: [{ tokenId: 3, crossPosition: { netBalance: raw(500_000), marketPositions: [] }, isolatedPositions: [] }],
-    },
+    [`/apis/v1/markets/order-book?marketId=${HL}`]: wireBook(0.09),
+    [`/apis/v1/markets/order-book?marketId=${BN}`]: wireBook(0.045),
+    [`/apis/v1/markets/order-book?marketId=${HL2}`]: wireBook(0.1),
+    [`/apis/v1/markets/order-book?marketId=${BN2}`]: wireBook(0.05),
+    ...account(500_000),
     ...over,
   };
 }
 
-/** The account holds the OLD pair: SHORT Hyperliquid @9%, LONG Binance @4.5%. */
-const heldPair = {
-  '/core/v1/collaterals/summary': {
-    collaterals: [
-      {
-        tokenId: 3,
-        crossPosition: {
-          netBalance: raw(500_000),
-          marketPositions: [
-            { marketId: HL, side: 1, notionalSize: raw(-100_000), fixedApr: 0.09, pnl: {}, positionInitialMargin: raw(1_000) },
-            { marketId: BN, side: 0, notionalSize: raw(100_000), fixedApr: 0.045, pnl: {}, positionInitialMargin: raw(800) },
-          ],
-        },
-        isolatedPositions: [],
-      },
-    ],
-  },
-};
+/** The account holds the OLD pair: SHORT Hyperliquid, LONG Binance. */
+const heldPair = account(500_000, [
+  { marketId: HL, size: -100_000 },
+  { marketId: BN, size: 100_000 },
+]);
 
 const okFill = (over: Partial<BorosLegFill> = {}): BorosLegFill => ({
   marketId: HL,
@@ -108,6 +78,7 @@ const okFill = (over: Partial<BorosLegFill> = {}): BorosLegFill => ({
   failure: null,
   ...over,
 });
+
 /** The venue's four answers to a roll — closes then opens — every one whole. */
 const rolledFills = (legs: BorosRollLeg[]): BorosLegFill[] => [
   ...legs.map((l) => okFill({ marketId: l.fromMarketId, direction: 'long', filledSize: l.size, shortfallSize: 0 })),

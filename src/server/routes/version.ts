@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import type { FetchLike } from '../../core/boros/client';
 import type { AppDeps } from '../app';
 import { TTL } from '../cache';
+import { refuse } from '../errorReply';
 import { LOCK_TEXT } from '../rebalanceJob';
 import { startUpdate, updateProgress } from '../updater';
 import { compareVersions, fetchLatestVersion, type RemoteVersion } from '../version';
@@ -50,32 +51,45 @@ export function versionRoutes(deps: AppDeps) {
     app.get('/version/update/log', async (_req, reply) => reply.ok(updateProgress()));
 
     app.post('/version/update', async (_req, reply) => {
-      const refuse = (message: string, retryable: boolean) =>
-        reply.code(409).send({
-          ok: false,
-          error: { category: 'validation', message, retryable },
-        });
-
       if ((deps.engine?.store.listPairs({ activeOnly: true }).length ?? 0) > 0) {
-        return refuse('a deal is still working — wait for it to finish, then update', true);
+        return refuse(reply, {
+          code: 409,
+          category: 'validation',
+          message: 'a deal is still working — wait for it to finish, then update',
+          retryable: true,
+        });
       }
       if (deps.rebalance?.jobs.read()?.status === 'running') {
-        return refuse('a rebalance is still running. Wait for it to finish, then update.', true);
+        return refuse(reply, {
+          code: 409,
+          category: 'validation',
+          message: 'a rebalance is still running. Wait for it to finish, then update.',
+          retryable: true,
+        });
       }
       if (deps.transfer?.jobs.read()?.status === 'moving') {
-        return refuse(`${LOCK_TEXT.moving} Wait for it to end, then update.`, true);
+        return refuse(reply, {
+          code: 409,
+          category: 'validation',
+          message: `${LOCK_TEXT.moving} Wait for it to end, then update.`,
+          retryable: true,
+        });
       }
       if (borosExecutionsPending() > 0) {
-        return refuse(
-          'a Boros order may still be settling — wait a few minutes, then update',
-          true,
-        );
+        return refuse(reply, {
+          code: 409,
+          category: 'validation',
+          message: 'a Boros order may still be settling — wait a few minutes, then update',
+          retryable: true,
+        });
       }
       if (!deps.install) {
-        return refuse(
-          'this is a source checkout, not an installed copy — update it with git',
-          false,
-        );
+        return refuse(reply, {
+          code: 409,
+          category: 'validation',
+          message: 'this is a source checkout, not an installed copy — update it with git',
+          retryable: false,
+        });
       }
 
       let pin: string | null = null;
@@ -93,7 +107,12 @@ export function versionRoutes(deps: AppDeps) {
       try {
         logPath = await startUpdate(pin);
       } catch (err) {
-        return refuse(`could not start the update: ${(err as Error).message}`, true);
+        return refuse(reply, {
+          code: 409,
+          category: 'validation',
+          message: `could not start the update: ${(err as Error).message}`,
+          retryable: true,
+        });
       }
       return reply.ok({ started: true, logPath, ref: pin });
     });

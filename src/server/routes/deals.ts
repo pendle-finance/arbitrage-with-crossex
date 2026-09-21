@@ -6,8 +6,9 @@
  * edits (levels, not events).
  */
 import type { FastifyInstance, FastifyReply } from 'fastify';
+import { COIN_NOT_SUPPORTED_TEXT, isSupportedCoin } from '../../core/coins';
 import { CoreError } from '../../core/errors';
-import { formatRestPrice } from '../../core/numbers';
+import { formatRestPrice, parseSymbol } from '../../core/numbers';
 import { setLeverage } from '../../core/orders';
 import { resolveDeal, type DealRequest } from '../../engine/create';
 import { project } from '../../engine/decide';
@@ -16,6 +17,7 @@ import type { PairRow } from '../../engine/types';
 import type { AppDeps } from '../app';
 import { TTL } from '../cache';
 import { DISCLAIMER_NOT_ACCEPTED, isDisclaimerAccepted } from '../disclaimer';
+import { refuse } from '../errorReply';
 import { leverageMaxFor } from './leverage';
 import { conflict } from './rebalance';
 
@@ -39,13 +41,11 @@ export function dealsRoutes(deps: AppDeps) {
        same check. */
     const rebalanceRunning = (): boolean => deps.rebalance?.jobs.read()?.status === 'running';
     const refuseForRebalance = (reply: FastifyReply, what: string): FastifyReply =>
-      reply.code(409).send({
-        ok: false,
-        error: {
-          category: 'validation',
-          message: `a rebalance is still running. Wait for it to finish before ${what}.`,
-          retryable: true,
-        },
+      refuse(reply, {
+        code: 409,
+        category: 'validation',
+        message: `a rebalance is still running. Wait for it to finish before ${what}.`,
+        retryable: true,
       });
     const transferMoving = (): boolean => deps.transfer?.jobs.read()?.status === 'moving';
     const transferSettling = (): boolean => {
@@ -67,6 +67,15 @@ export function dealsRoutes(deps: AppDeps) {
       // must never create a second deal.
       if (deps.engine!.store.getPair(body.id)) {
         return reply.code(202).ok({ id: body.id, duplicate: true });
+      }
+      const legSymbols = [body.a?.symbol, body.b?.symbol].filter((s): s is string => Boolean(s));
+      if (legSymbols.some((s) => !isSupportedCoin(parseSymbol(s).base))) {
+        return refuse(reply, {
+          code: 400,
+          category: 'symbol-invalid',
+          message: COIN_NOT_SUPPORTED_TEXT,
+          retryable: false,
+        });
       }
       if (rebalanceRunning()) return refuseForRebalance(reply, 'starting a deal');
       if (transferSettling()) return conflict(reply, TRANSFER_SETTLING_TEXT);

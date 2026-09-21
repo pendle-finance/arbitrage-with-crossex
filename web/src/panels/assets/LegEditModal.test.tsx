@@ -57,6 +57,20 @@ describe('LegEditModal', () => {
     expect(onExclude).toHaveBeenCalledWith('perp:HL', undefined);
   });
 
+  it('reads entry pending instead of "at pending" when the rate is unknown', () => {
+    render(
+      <LegEditModal
+        {...base}
+        entry={null}
+        entryKind="rate"
+        current={undefined}
+        onExclude={vi.fn()}
+        onClose={() => {}}
+      />,
+    );
+    expect(screen.getByRole('radio', { name: /Include all/ }).closest('label')).toHaveTextContent('· entry pending');
+  });
+
   it('a Boros leg takes the rate in percent and saves it as a fraction', async () => {
     const onExclude = vi.fn();
     render(

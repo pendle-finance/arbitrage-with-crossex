@@ -465,13 +465,9 @@ describe('BorosPairTicket', () => {
     // rule is still stated somewhere the user can reach it.
     expect((await screen.findAllByTitle(/whole exposure there/i)).length).toBe(2);
     expect(screen.getAllByText(/→/).length).toBeGreaterThan(0);
-    // Current and resulting share one line, "150k USDT → 50k USDT". The TRADE
-    // column is deliberately gone: it was the reader doing the addition to
-    // reach the resulting figure, which the arrow states outright. Signs are
-    // gone too — direction is the colour now — but BOTH figures must show.
     const netted = (await screen.findAllByTitle(/whole exposure there/i))[0];
-    expect(netted).toHaveTextContent(/150k/);
-    expect(netted).toHaveTextContent(/50k/);
+    expect(netted).toHaveTextContent(/150,000/);
+    expect(netted).toHaveTextContent(/50,000/);
   });
 
   it('blocks confirm behind the acknowledgement, and retracts it when the trade changes', async () => {
@@ -598,6 +594,100 @@ describe('BorosPairTicket', () => {
     const short = document.querySelectorAll('.text-rose-300');
     expect(long.length).toBeGreaterThan(0);
     expect(short.length).toBeGreaterThan(0);
+  });
+
+  it('groups whale-scale sizes with thousands commas, never bare or compact', async () => {
+    const user = userEvent.setup();
+    server.use(
+      ...handlers({
+        sim: {
+          collateral: 'ETH',
+          collateralPriceUsd: 3_000,
+          legA: simLeg({
+            sizing: {
+              currentSize: 0,
+              deltaSize: -4_100,
+              resultingSize: -4_100,
+              opposing: false,
+              flips: false,
+              clampedToClose: false,
+              orderSide: 'short',
+            },
+          }),
+          legB: simLeg({
+            marketId: BN,
+            marketName: 'Binance ETHUSDT 31 Aug 2026',
+            venue: 'Binance',
+            direction: 'long',
+            sizing: {
+              currentSize: 0,
+              deltaSize: 4_100,
+              resultingSize: 4_100,
+              opposing: false,
+              flips: false,
+              clampedToClose: false,
+              orderSide: 'long',
+            },
+          }),
+          hedgedSize: 4_100,
+        },
+      }),
+    );
+    const { container } = renderWithClient(<BorosPairTicket />);
+    await fillTicket(user);
+
+    await screen.findByText('Estimated spread');
+    expect(screen.getAllByText(/4,100/).length).toBeGreaterThan(0);
+    expect(container.textContent).not.toContain('4100');
+    expect(container.textContent).not.toContain('4.1k');
+  });
+
+  it('groups a 12,345,678.9 ETH size in full, never scientific or compact', async () => {
+    const user = userEvent.setup();
+    server.use(
+      ...handlers({
+        sim: {
+          collateral: 'ETH',
+          collateralPriceUsd: 3_000,
+          legA: simLeg({
+            sizing: {
+              currentSize: 0,
+              deltaSize: -12_345_678.9,
+              resultingSize: -12_345_678.9,
+              opposing: false,
+              flips: false,
+              clampedToClose: false,
+              orderSide: 'short',
+            },
+          }),
+          legB: simLeg({
+            marketId: BN,
+            marketName: 'Binance ETHUSDT 31 Aug 2026',
+            venue: 'Binance',
+            direction: 'long',
+            sizing: {
+              currentSize: 0,
+              deltaSize: 12_345_678.9,
+              resultingSize: 12_345_678.9,
+              opposing: false,
+              flips: false,
+              clampedToClose: false,
+              orderSide: 'long',
+            },
+          }),
+          hedgedSize: 12_345_678.9,
+        },
+      }),
+    );
+    const { container } = renderWithClient(<BorosPairTicket />);
+    await fillTicket(user);
+
+    await screen.findByText('Estimated spread');
+    expect(screen.getAllByText(/12,345,678\.9/).length).toBeGreaterThan(0);
+    expect(container.textContent).not.toMatch(/e\+/i);
+    expect(container.textContent).not.toContain('12345678.9');
+    expect(container.textContent).not.toContain('12,345,679');
+    expect(container.textContent).not.toMatch(/12M\b/);
   });
 
   it('shows the venue’s own words when a leg is rejected outright', async () => {
@@ -1159,6 +1249,38 @@ describe('BorosPairTicket', () => {
   });
 });
 
+describe('BorosPairTicket — market list', () => {
+  it('keeps a held position on an unsupported coin, for closing', async () => {
+    server.use(
+      ...handlers({
+        ctx: context({
+          markets: [
+            marketRow(),
+            marketRow({ marketId: BN, name: 'Binance ETHUSDT 31 Aug 2026', venue: 'Binance', midApr: 0.045 }),
+            marketRow({
+              marketId: 500,
+              name: 'Hyperliquid SOL 31 Aug 2026',
+              venue: 'Hyperliquid',
+              base: 'SOL',
+              tokenId: 9,
+              collateral: 'SOL',
+              currentSize: 250,
+            }),
+          ],
+        }),
+      }),
+    );
+    renderWithClient(<BorosPairTicket />);
+
+    await waitFor(() =>
+      expect((screen.getByLabelText('Leg A') as HTMLSelectElement).options.length).toBeGreaterThan(1),
+    );
+    expect(
+      within(screen.getByLabelText('Leg A')).getByRole('option', { name: 'Hyperliquid SOL 31 Aug 2026' }),
+    ).toBeInTheDocument();
+  });
+});
+
 describe('BorosPairTicket — the size unit', () => {
   it('names the collateral as soon as a leg is picked, before any simulation', async () => {
     // There is no simulation until a size is typed, and a size field labelled
@@ -1192,14 +1314,20 @@ describe('BorosPairTicket — the size unit', () => {
 // Card cue prefill ("Open the Boros legs") — maturity agreement
 // ---------------------------------------------------------------------------
 
-function BorosPrefillHarness({ prefill }: { prefill: Omit<BorosOpenPrefill, 'nonce'> }) {
+function BorosPrefillHarness({
+  prefill,
+  guided,
+}: {
+  prefill: Omit<BorosOpenPrefill, 'nonce'>;
+  guided?: boolean;
+}) {
   const flow = useTradeFlow();
   return (
     <>
       <button type="button" onClick={() => flow.prefillBorosOpen(prefill)}>
         fire
       </button>
-      <BorosPairTicket />
+      <BorosPairTicket guided={guided} />
     </>
   );
 }
@@ -1268,6 +1396,34 @@ describe('BorosPairTicket — the cue prefill lands both legs on ONE maturity', 
 
     await waitFor(() => expect(screen.getByLabelText('Leg A')).toHaveValue(''));
     expect(screen.getByLabelText('Leg B')).toHaveValue('');
+  });
+});
+
+describe('BorosPairTicket — target mode and a close-only market', () => {
+  it('disables Confirm when the target would grow a close-only leg', async () => {
+    server.use(
+      ...handlers({
+        ctx: context({
+          markets: [
+            marketRow({ closeOnly: true }),
+            marketRow({ marketId: BN, name: 'Binance ETHUSDT 31 Aug 2026', venue: 'Binance' }),
+          ],
+        }),
+      }),
+    );
+    const user = userEvent.setup();
+    renderWithClient(
+      <BorosPrefillHarness
+        guided
+        prefill={{ base: 'ETH', longVenue: 'Hyperliquid', shortVenue: 'Binance', size: 1000 }}
+      />,
+    );
+    await user.click(screen.getByRole('button', { name: 'fire' }));
+
+    const btn = await screen.findByRole('button', {
+      name: 'Market A takes closes only. Switch to Close.',
+    });
+    expect(btn).toBeDisabled();
   });
 });
 

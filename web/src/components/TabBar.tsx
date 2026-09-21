@@ -11,12 +11,18 @@
  * The strip itself is PpTabsNav's `glow` variant: the chosen tab is marked by
  * an underline inside its own box plus an info wash rising from that edge.
  */
-import { Fragment, type ReactNode } from 'react';
+import { createContext, Fragment, useContext, type ReactNode } from 'react';
 
 export const ACTIVE_TAB_KEY = 'crossex:activeTab:v1';
 
 export const TAB_IDS = ['opportunities', 'positions', 'balances', 'orders', 'trades', 'fees'] as const;
 export type TabId = (typeof TAB_IDS)[number];
+
+export const TabActiveContext = createContext(true);
+
+export function useTabActive(): boolean {
+  return useContext(TabActiveContext);
+}
 
 export function isTabId(v: unknown): v is TabId {
   return typeof v === 'string' && (TAB_IDS as readonly string[]).includes(v);
@@ -118,7 +124,7 @@ export function TabPanel({
 }) {
   return (
     <div role="tabpanel" id={`panel-${id}`} aria-labelledby={`tab-${id}`} hidden={!active}>
-      {children}
+      <TabActiveContext.Provider value={active}>{children}</TabActiveContext.Provider>
     </div>
   );
 }

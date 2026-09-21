@@ -49,7 +49,7 @@ const STEP_LABEL: Record<Exclude<Step, 'idle'>, string> = {
   saving: 'Handing the key to your terminal…',
 };
 
-export function BorosAgentSetup() {
+export function BorosAgentSetup({ onDone, compact = false }: { onDone?: (root: string) => void; compact?: boolean }) {
   const status = useBorosAgent();
   const provision = useProvisionBorosAgent();
   const forget = useForgetBorosAgent();
@@ -102,6 +102,7 @@ export function BorosAgentSetup() {
       setNote(
         `Done — this terminal can place Boros orders until ${new Date(expiry * 1000).toLocaleDateString()}.`,
       );
+      onDone?.(wallet.address);
     } catch (err) {
       setError(describeWalletError(err));
     } finally {
@@ -169,22 +170,31 @@ export function BorosAgentSetup() {
 
   return (
     <div className="rounded-lg border border-cyan-500/25 bg-cyan-500/5 px-3 py-2.5">
-      <p className="text-[12px] font-medium text-ink-100">Enable Boros trading</p>
-      <p className="mt-1 text-[10.5px] leading-relaxed text-ink-400">
-        Connect once to approve a <span className="text-ink-200">delegated agent key</span>. The
-        terminal then trades with that key — your wallet is not needed again, so a fill can be
-        completed even with this tab closed.
-      </p>
-      <ol className="mt-1.5 flex flex-col gap-0.5 text-[10.5px] leading-relaxed text-ink-400">
-        <li>1. Connect your wallet ({BOROS_CHAIN.name})</li>
-        <li>2. Approve the agent — one on-chain transaction</li>
-        <li>3. The key is stored on this machine only</li>
-      </ol>
-      <p className="mt-1.5 text-[10.5px] leading-relaxed text-ink-500">
-        The agent can <span className="text-ink-300">trade</span> this account. It{' '}
-        <span className="text-ink-300">cannot deposit or withdraw</span> — Boros requires your
-        wallet for that, and this tool never asks for your wallet's key.
-      </p>
+      {compact ? (
+        <p className="text-xs text-ink-400">Connect the wallet that holds your Boros account.</p>
+      ) : (
+        <>
+          <p className="text-[12px] font-medium text-ink-100">Enable Boros trading</p>
+          <p className="mt-1 text-[10.5px] leading-relaxed text-ink-400">
+            Connect once to approve a <span className="text-ink-200">delegated agent key</span>. The
+            terminal then trades with that key — your wallet is not needed again, so a fill can be
+            completed even with this tab closed.
+          </p>
+          <ol className="mt-1.5 flex flex-col gap-0.5 text-[10.5px] leading-relaxed text-ink-400">
+            <li>1. Connect your wallet ({BOROS_CHAIN.name})</li>
+            <li>2. Approve the agent — one on-chain transaction</li>
+            <li>3. The key is stored on this machine only</li>
+          </ol>
+        </>
+      )}
+      <p className="mt-1.5 text-[10.5px] leading-relaxed text-ink-300">Approval cost: free</p>
+      {!compact && (
+        <p className="mt-1.5 text-[10.5px] leading-relaxed text-ink-500">
+          The agent can <span className="text-ink-300">trade</span> this account. It{' '}
+          <span className="text-ink-300">cannot deposit or withdraw</span> — Boros requires your
+          wallet for that, and this tool never asks for your wallet's key.
+        </p>
+      )}
 
       {!hasInjectedWallet() ? (
         <p className="mt-2 text-[11px] leading-relaxed text-amber-300">

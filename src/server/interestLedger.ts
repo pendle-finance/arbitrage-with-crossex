@@ -14,6 +14,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { CoreError } from '../core/errors';
 import { walletKey, type InterestPaidLike } from '../core/rebalance/plan';
+import { readOwnerJson } from './secretFile';
 
 /** 2025-01-01T00:00:00Z. Gate: `[from] must be greater than or equal to 1735689600000`. */
 export const GATE_HISTORY_FLOOR_MS = 1_735_689_600_000;
@@ -72,11 +73,7 @@ export class InterestFile {
    * counts from the floor again, which is slow once and never wrong. */
   read(): Ledger | null {
     if (this.file === null) return this.memory;
-    try {
-      return parseLedger(JSON.parse(fs.readFileSync(this.file, 'utf8')));
-    } catch {
-      return null;
-    }
+    return readOwnerJson(this.file, parseLedger);
   }
 
   write(ledger: Ledger): void {

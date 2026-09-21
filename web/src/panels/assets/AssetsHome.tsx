@@ -17,7 +17,7 @@ import { EmptyState } from '../../components/EmptyState';
 import { QueryError } from '../../components/QueryError';
 import { TableSkeleton } from '../../components/Skeleton';
 import { SignedNumber } from '../../components/SignedNumber';
-import { fmtPct, fmtUsd } from '../../lib/fmt';
+import { fmtPct, fmtUsd, num } from '../../lib/fmt';
 import { lineFor as lineIn, liquidationLines } from '../../lib/liquidation';
 import { useBookId } from '../bookId';
 import { AddressForm, short } from '../HomeControls';
@@ -51,72 +51,38 @@ export function AssetsHome() {
     });
   };
 
-  // Base query (all time) enumerates the assets; each asset with its OWN
-  // start date reads from the extra window(s) — one request per distinct
-  // date, shared across assets that agree.
   const legSince = legSinceParam(prefs.legSince);
-  const query = useAssetView(address, 0, legSince);
+  const query = useAssetView(address, undefined, legSince);
   const data = query.data;
   // The account's own fee schedule (VIP tier) — prices the pairs' exit-fee
   // estimate; the model falls back to a flat rate while it loads.
   const feeRows = useFees().data;
-  /**
-   * Each asset's start date: the one chosen, else the DEFAULT — when its
-   * first CrossEx perp was opened. A 4-leg farm starts when its perps do,
-   * so the venues' lifetime sums before that day belong to something else
-   * (his call 2026-09-18). Lifetime (0) only when no perp is open.
-   */
-  const sinceFor = useMemo(() => {
-    const out = new Map<string, number>();
-    for (const g of data?.assets ?? []) {
-      // A stored 0 is an explicit "all time" — the default only fills a
-      // gap, never overrides a choice.
-      const chosen = prefs.sinceByAsset[g.base];
-      if (chosen !== undefined) {
-        out.set(g.base, chosen);
-        continue;
-      }
-      const opens = g.perpOpen.map((l) => l.openedAt).filter((t): t is number => t !== null && t > 0);
-      out.set(g.base, opens.length > 0 ? Math.min(...opens) : 0);
-    }
-    return out;
-  }, [data, prefs.sinceByAsset]);
   const extraSinces = useMemo(
-    () => [...new Set([...sinceFor.values()].filter((n) => n > 0))],
-    [sinceFor],
+    () => [...new Set(Object.values(prefs.sinceByAsset).filter((n) => n > 0))],
+    [prefs.sinceByAsset],
   );
   const windows = useAssetViewWindows(address, extraSinces, legSince);
 
-  const allDerived = useMemo(
+  const derived = useMemo(
     () =>
       (data?.assets ?? []).map((g) => {
-        const since = sinceFor.get(g.base) ?? 0;
-        const win = since > 0 ? windows.bySince.get(since) : undefined;
-        // A window whose fetch FAILED is not pending: the all-time numbers
-        // stand in, and the "updating window…" hint must not spin forever.
-        const windowFailed = since > 0 && !win && windows.errorBySince.has(since);
-        // Until that window's fetch lands, the all-time numbers stand in;
-        // an asset absent from a narrower window is genuinely empty there.
+        const stored: number | undefined = prefs.sinceByAsset[g.base];
+        const win = stored !== undefined ? windows.bySince.get(stored) : undefined;
+        const windowFailed = stored !== undefined && !win && windows.errorBySince.has(stored);
         const group = win ? (win.assets.find((a) => a.base === g.base) ?? { ...g, perpClosed: [], borosHistory: [] }) : g;
         const meta = win ?? data;
+        const sinceSec = meta?.sinceSec ?? 0;
         return {
           group,
-          sinceSec: since,
-          windowPending: since > 0 && !win && !windowFailed,
-          derived: deriveAsset(group, prefs.exclusions, meta?.sinceSec ?? 0, meta?.nowSec ?? 0, feeRows),
+          sinceSec,
+          storedSinceSec: stored,
+          backfilling: meta?.coverage.backfilling === true,
+          windowPending: stored !== undefined && !win && !windowFailed,
+          derived: deriveAsset(group, prefs.exclusions, sinceSec, meta?.nowSec ?? 0, feeRows),
         };
       }),
-    [data, windows.bySince, windows.errorBySince, prefs.exclusions, sinceFor, feeRows],
+    [data, windows.bySince, windows.errorBySince, prefs.exclusions, prefs.sinceByAsset, feeRows],
   );
-  // Dust fold: an asset with nothing open and a negligible history total is
-  // real (the sums keep it) but not worth a card — one muted line names them.
-  const derived = allDerived.filter(
-    (a) =>
-      a.group.perpOpen.length > 0 ||
-      a.group.borosOpen.length > 0 ||
-      Math.abs(a.derived.totals.pnlUsd) >= 1,
-  );
-  const dust = allDerived.filter((a) => !derived.includes(a));
   /**
    * "Hide inactive pairs": on by default, the list shows only assets with
    * an open leg the farm counts (see assetIsActive). A VIEW filter only —
@@ -134,7 +100,10 @@ export function AssetsHome() {
   const accountData = useAccount().data;
   const positionsData = usePositions().data;
   const liquidation = useMemo(
-    () => (accountData && positionsData ? liquidationLines(accountData, positionsData) : undefined),
+    () =>
+      accountData && positionsData
+        ? liquidationLines(accountData, positionsData, {}, positionsData.marginTiers)
+        : undefined,
     [accountData, positionsData],
   );
   /* null while the account or positions are not loaded, and for a coin with
@@ -145,6 +114,11 @@ export function AssetsHome() {
   const lineFor = (base: string) => {
     if (liquidation === undefined) return null;
     if (liquidation === null) return 'unknown' as const;
+    for (const stale of liquidation.unknown) {
+      if (stale.base.toUpperCase() === base.toUpperCase() && stale.sinceMs !== null) {
+        return { base: stale.base, venue: stale.venue, sinceMs: stale.sinceMs };
+      }
+    }
     return lineIn(liquidation, base);
   };
 
@@ -269,7 +243,7 @@ export function AssetsHome() {
                   return byCoin.length > 0
                     ? [
                         'Borrow interest paid',
-                        ...byCoin.map(([c, n]) => `${c}\t${n.toFixed(2)}`),
+                        ...byCoin.map(([c, n]) => `${c}\t${num(n, 2)}`),
                         '---',
                         `Total\t${fmtUsd(interestUsd)}`,
                       ].join('\n')
@@ -316,18 +290,22 @@ export function AssetsHome() {
               No active pairs — {inactive.length} inactive hidden.
             </p>
           )}
-          {shown.map(({ group, derived: d, sinceSec, windowPending }) => (
+          {shown.map(({ group, derived: d, sinceSec, storedSinceSec, backfilling, windowPending }) => (
             <AssetCard
               key={group.base}
               group={group}
               derived={d}
               sinceSec={sinceSec}
               windowPending={windowPending}
-              onChangeSince={(sec: number) => {
+              storedSinceSec={storedSinceSec}
+              defaultSinceSec={data.defaultSinceSec}
+              backfilling={backfilling}
+              supportedCoins={data.supportedCoins}
+              onChangeSince={(sec) => {
                 update((prev) => {
-                  // 0 is KEPT: "all time" is a choice, and dropping the key
-                  // would hand the asset back to the first-perp default.
-                  const sinceByAsset = { ...prev.sinceByAsset, [group.base]: Math.max(0, sec) };
+                  const sinceByAsset = { ...prev.sinceByAsset };
+                  if (sec !== undefined && sec > 0) sinceByAsset[group.base] = sec;
+                  else delete sinceByAsset[group.base];
                   return { ...prev, sinceByAsset };
                 });
               }}
@@ -352,18 +330,6 @@ export function AssetsHome() {
               }}
             />
           ))}
-          {dust.length > 0 && (
-            <p
-              className="text-xs text-ink-600"
-              title={`Nothing open and under $1 of history — left out of the totals above: ${dust
-                .map(
-                  (a) => `${a.group.base} ${a.derived.totals.pnlUsd < 0 ? '−' : '+'}$${Math.abs(a.derived.totals.pnlUsd).toFixed(2)}`,
-                )
-                .join(' · ')}`}
-            >
-              + {dust.length} dust asset{dust.length === 1 ? '' : 's'} ⓘ
-            </p>
-          )}
         </div>
       )}
     </section>

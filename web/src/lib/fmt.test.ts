@@ -1,5 +1,26 @@
 import { describe, expect, it } from 'vitest';
-import { bps, feePct, fieldValue, fmtAbout, fmtPct, fmtTokenQty, fmtUsd, num, parseSymbol, sig, sigGrouped, toDate } from './fmt';
+import {
+  bps,
+  feePct,
+  fieldValue,
+  fmtAbout,
+  fmtAge,
+  fmtClock,
+  fmtDateLocal,
+  fmtDateShort,
+  fmtPct,
+  fmtSyncAge,
+  fmtTokenQty,
+  fmtUsd,
+  fmtUsdCompact,
+  num,
+  parseDateLocal,
+  parseSymbol,
+  prettyVenue,
+  sig,
+  sigGrouped,
+  toDate,
+} from './fmt';
 
 // num/sig expectations are copied from tests/unit/format.test.ts in the repo
 // root — the web port must behave identically to src/core/numbers.ts.
@@ -138,6 +159,10 @@ describe('fmtAbout', () => {
     [650, 'about 11 min'],
     [780, 'about 13 min'],
     [1430, 'about 24 min'],
+    [3570, 'about 1 h'],
+    [3600, 'about 1 h'],
+    [3601, 'about 1 h'],
+    [62520, 'about 17 h 22 m'],
   ])('fmtAbout(%i) -> %s', (seconds, expected) => {
     expect(fmtAbout(seconds)).toBe(expected);
   });
@@ -166,5 +191,78 @@ describe('fieldValue — the string an editable quantity field holds', () => {
   it('answers empty for a value that is not a number', () => {
     expect(fieldValue(Number.NaN)).toBe('');
     expect(fieldValue(Number.POSITIVE_INFINITY)).toBe('');
+  });
+});
+
+describe('local dates', () => {
+  it('reads a date input as local midnight', () => {
+    expect(parseDateLocal('2026-06-23')).toBe(new Date(2026, 5, 23).getTime() / 1000);
+    expect(fmtDateLocal(parseDateLocal('2026-06-23'))).toBe('2026-06-23');
+  });
+
+  it('answers NaN for an input that is not a date', () => {
+    expect(parseDateLocal('')).toBeNaN();
+  });
+
+  it('writes a short date with the year only when asked', () => {
+    const sec = new Date(2026, 5, 23, 10, 51).getTime() / 1000;
+    expect(fmtDateShort(sec, { year: 'numeric' })).toBe('23 Jun 2026');
+    expect(fmtDateShort(new Date(2026, 2, 1).getTime() / 1000)).toBe('1 Mar');
+  });
+
+  it('writes a local clock time as HH:MM', () => {
+    expect(fmtClock(new Date(2026, 8, 18, 9, 5, 59).getTime())).toBe('09:05');
+  });
+});
+
+describe('fmtSyncAge', () => {
+  it.each([
+    [-5_000, '0 s ago'],
+    [59_999, '59 s ago'],
+    [60_000, '1 min ago'],
+    [3_599_000, '59 min ago'],
+    [3_600_000, '1 h ago'],
+    [86_399_000, '23 h ago'],
+    [2 * 86_400_000, '2 d ago'],
+  ])('%d ms reads %s', (ms, text) => {
+    expect(fmtSyncAge(ms)).toBe(text);
+  });
+});
+
+describe('prettyVenue', () => {
+  it.each([
+    ['GATE', 'Gate'],
+    ['HYPERLIQUID', 'Hyperliquid'],
+    ['LIGHTER', 'Lighter'],
+    ['lighter', 'Lighter'],
+    ['OKX', 'OKX'],
+  ])('prettyVenue(%s) -> %s', (v, expected) => {
+    expect(prettyVenue(v)).toBe(expected);
+  });
+});
+
+describe('fmtUsdCompact', () => {
+  it.each([
+    [999_949.99, '$999.9k'],
+    [999_950, '$1.00M'],
+    [999_999.995, '$1.00M'],
+    [1_000_000, '$1.00M'],
+  ])('fmtUsdCompact(%f) -> %s', (n, expected) => {
+    expect(fmtUsdCompact(n)).toBe(expected);
+  });
+});
+
+describe('fmtAge', () => {
+  it.each([
+    [Number.NaN, '—'],
+    [-5_000, '0s'],
+    [59_999, '59s'],
+    [252_000, '4m 12s'],
+    [3_599_000, '59m 59s'],
+    [7_500_000, '2h 5m'],
+    [86_399_000, '23h 59m'],
+    [3 * 86_400_000, '3d'],
+  ])('%d ms reads %s', (ms, text) => {
+    expect(fmtAge(ms)).toBe(text);
   });
 });

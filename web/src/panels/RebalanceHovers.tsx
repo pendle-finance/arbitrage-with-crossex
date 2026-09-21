@@ -1,5 +1,5 @@
 import { Fragment, useId, type ReactNode } from 'react';
-import type { CrossexAccount, EvenPlan, GateAccount, GoalKind, PlannedStep, Pool, PositionsResponse, RebalanceBucket, RebalanceJob } from '../api/types';
+import type { EvenPlan, GateAccount, GoalKind, PlannedStep, Pool, RebalanceBucket, RebalanceJob } from '../api/types';
 import type { RebalanceView, RouteName, RoutePlan, TransferCoin, TransferView, WalletAfter } from '../api/types';
 import { Chip } from '../components/Chip';
 import { HoverCard } from '../components/HoverCard';
@@ -7,7 +7,6 @@ import { RadioRow } from '../components/RadioRow';
 import { microLabelClass, Th } from '../components/Th';
 import { borrowingBuckets, borrowTotalUsd, MIN_BORROW } from '../lib/borrow';
 import { fmtAbout, fmtUsd, num, WALLET_SHORT } from '../lib/fmt';
-import { liquidationLines, type LiquidationLine } from '../lib/liquidation';
 import { floorCents } from '../lib/ticks';
 import { ALWAYS_SHOWN, ROUTE_ORDER, WALLET_TONE, type BarRow } from './RebalanceBits';
 import {
@@ -266,11 +265,6 @@ export function borrowingFact(buckets: RebalanceBucket[]): Fact & { value: strin
   };
 }
 
-export function liquidationNow(acc: CrossexAccount | undefined, pos: PositionsResponse | undefined): LiquidationLine | null | 'unknown' {
-  const view = acc && pos ? liquidationLines(acc, pos) : null;
-  return view ? (view.lines[0] ?? null) : 'unknown';
-}
-
 /** The per-wallet lines of a card figure, shown on hover. With two or three
  * wallets, lines under the figure crowd the card. */
 function RowsHover({ factKey, value, rows, warn }: { factKey: string; value: string; rows: FactRow[]; warn?: boolean }) {
@@ -477,6 +471,9 @@ export function pickedRoute(plan: EvenPlan, pick: RouteName | null): { name: Rou
   return { name, route: (name === null ? null : plan.routes[name]) ?? plan.routes.convert };
 }
 
+export const routeTime = (route: RouteName, plan: RoutePlan): string =>
+  route === 'convert' ? 'instant' : fmtAbout(plan.seconds);
+
 export function RouteRow({ route, plan, checked, onPick }: { route: RouteName; plan: EvenPlan; checked: boolean; onPick: () => void }) {
   const id = useId();
   const routePlan = plan.routes[route];
@@ -491,7 +488,7 @@ export function RouteRow({ route, plan, checked, onPick }: { route: RouteName; p
   const across = moves.some((move) => move.from !== 'CROSSEX' && move.to !== 'CROSSEX');
   const convert = across ? `${HOVER.convert} ${HOVER.convertAcross}` : HOVER.convert;
   const nameText = route === 'mix' ? HOVER.mix(plan.roundCap) : route === 'loop' ? loop : convert;
-  const time = route === 'convert' ? 'instant' : fmtAbout(routePlan.seconds);
+  const time = routeTime(route, routePlan);
   return (
     <RadioRow name="rebalance-route" labelledBy={id} checked={checked} disabled={blocked} onPick={onPick}>
       <span id={id} className="w-44 shrink-0">

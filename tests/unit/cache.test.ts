@@ -1,7 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
-import { TtlCache } from '../../src/server/cache';
+import { TTL, TtlCache } from '../../src/server/cache';
 
 const rateLimited = () => ({ response: { status: 429, data: { label: 'TOO_MANY_REQUESTS' } } });
+
+describe('TTL.borosBook', () => {
+  it('is 90s: 37 markets at 2 units each stays under the 200 CU/min IP limit', () => {
+    expect(TTL.borosBook).toBe(90_000);
+  });
+});
 
 describe('TtlCache', () => {
   it('coalesces concurrent callers onto one fetch', async () => {
@@ -28,18 +34,6 @@ describe('TtlCache', () => {
     // And the cache keeps the fresher answer, whichever landed last.
     const later = await cache.get('k', 10_000, async () => 'unexpected');
     expect(later.value).toBe('after');
-  });
-
-  it('a fresh read DOES ride an in-flight fetch that is itself fresh', async () => {
-    const cache = new TtlCache();
-    const fetch = vi.fn(async () => 'v');
-    const [a, b] = await Promise.all([
-      cache.get('k', 1000, fetch, { fresh: true }),
-      cache.get('k', 1000, fetch, { fresh: true }),
-    ]);
-    expect(fetch).toHaveBeenCalledTimes(1);
-    expect(a.value).toBe('v');
-    expect(b.value).toBe('v');
   });
 
   it('a superseded slow fetch never overwrites the fresher value', async () => {

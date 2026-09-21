@@ -724,6 +724,7 @@ const bootApp = async (clients: Clients, rebalanceDir: string) => {
   const app = buildApp({
     getClients: () => clients,
     cache: new TtlCache(),
+    dataDir: rebalanceDir,
     authToken: TOKEN,
     engine: { store: new Store(':memory:'), venue: gateVenue(() => clients), clock: { now: Date.now } },
     rebalance: { jobs, sleep },

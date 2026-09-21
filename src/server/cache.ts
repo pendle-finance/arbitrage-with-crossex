@@ -2,9 +2,6 @@
  * In-memory TTL cache for Gate reads. Coalesces concurrent callers onto one
  * inflight fetch, and on a 429 enters a short PER-KEY cooldown during which cached
  * values (even expired) are served as `stale` instead of hammering the API again.
- * A `fresh` request bypasses both the TTL and the cooldown (it still rides an
- * inflight fetch and still degrades to stale if its own fetch 429s). Entry count is
- * LRU-capped so a long-running server with high-cardinality keys can't leak memory.
  * Uses Date.now() directly so tests can drive it with fake time.
  */
 import { classifyGateError } from '../core/errors';
@@ -17,9 +14,6 @@ interface Entry {
   /** Per-key rate-limit cooldown — a 429 on one key must not stall unrelated keys. */
   cooldownUntil: number;
   inflight?: Promise<unknown>;
-  /** Whether `inflight` was started by a `fresh` caller — a fresh read may
-   * only coalesce onto a fetch that is itself fresh. */
-  inflightFresh?: boolean;
   /** Bumped per fetch start; a fetch only writes back if it is still the
    * latest, so a slow stale fetch cannot overwrite a fresher value. */
   gen?: number;
@@ -40,23 +34,10 @@ export const TTL = {
   /** Boros backend reads (markets, collaterals, txn history) — settlement
    * cadence is hourly at the fastest; 30s keeps the card feeling live. */
   boros: 30_000,
-  /** Boros order books — the levels the scan's DISPLAYED quote walks. Nothing
-   * places an order off THIS key (the two-leg Boros panel has its own,
-   * `borosBookTrade`; the CrossEx engine never reads Boros books at all, and settlement
-   * cadence on Boros is hourly). At 5s this was ~97% of all Boros traffic: the
-   * dashboard polls every 12s, so every poll re-fetched every mapped market's
-   * book (25 books × 300 polls ≈ 7.5k req/h from one open tab, measured
-   * 2026-07-29). Books now ride the same 30s cadence as every other Boros
-   * read; a scan quote up to ~30s old ranks identically. */
-  borosBook: 30_000,
-  /** Boros books that back an ORDER rather than a displayed quote — the
-   * two-leg market panel's simulate/execute path. `borosBook`'s 30s is chosen
-   * for a scan whose quote "up to ~30s old ranks identically"; that reasoning
-   * does not survive contact with a market order, where a 30s-old book sets
-   * the rate bound the order actually carries. Deliberately its own key, so
-   * the scan can never serve this path a stale entry (or vice versa). Kept
-   * comfortably under `SIMULATION_MAX_AGE_MS`, which refuses a confirm behind
-   * a quote older than 12s. */
+  /** Fills of Boros markets the account no longer holds — they take no new
+   * fills, so there is nothing to refresh every 30s. */
+  borosHistory: 600_000,
+  borosBook: 90_000,
   borosBookTrade: 3_000,
   /** Public venue-book touch for the re-peg UI — price display, not a feed. */
   book: 2_000,
@@ -98,14 +79,7 @@ export class TtlCache {
     if (entry?.has && !opts?.fresh && now < entry.cooldownUntil) {
       return { value: entry.value as T, stale: true };
     }
-    // A plain read rides any in-flight fetch. A `fresh` read rides one only if
-    // that fetch is itself fresh: a fetch that started BEFORE a write (the
-    // cancel-and-close route reads the position after cancelling its orders)
-    // answers with the pre-write state, which is exactly what `fresh` exists
-    // to refuse. The waiter degrades like the primary if the shared fetch
-    // 429s (a waiter must not get a raw 429 thrown while the primary is
-    // served stale).
-    if (entry?.inflight && (!opts?.fresh || entry.inflightFresh)) {
+    if (entry?.inflight && !opts?.fresh) {
       try {
         return { value: (await entry.inflight) as T, stale: false };
       } catch (err) {
@@ -122,7 +96,6 @@ export class TtlCache {
     }
     const inflight = fetch();
     entry.inflight = inflight;
-    entry.inflightFresh = !!opts?.fresh;
     const gen = (entry.gen = (entry.gen ?? 0) + 1);
     try {
       const value = await inflight;
@@ -140,14 +113,11 @@ export class TtlCache {
     } catch (err) {
       if (classifyGateError(err).category === 'rate-limited') {
         entry.cooldownUntil = Date.now() + COOLDOWN_MS;
-        if (entry.has) return { value: entry.value as T, stale: true };
+        if (!opts?.fresh && entry.has) return { value: entry.value as T, stale: true };
       }
       throw err;
     } finally {
-      if (entry.inflight === inflight) {
-        entry.inflight = undefined;
-        entry.inflightFresh = undefined;
-      }
+      if (entry.inflight === inflight) entry.inflight = undefined;
     }
   }
 

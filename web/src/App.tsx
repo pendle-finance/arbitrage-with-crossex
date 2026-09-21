@@ -1,10 +1,11 @@
-import { lazy, Suspense, useCallback, useEffect, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { useCredentials, useDisclaimer, useOpenOrders, usePositions } from './api/queries';
 import { AccountHealthStrip } from './components/AccountHealthStrip';
 import { BorrowChip } from './components/BorrowChip';
 import { BrandMark } from './components/BrandMark';
 import { Chip } from './components/Chip';
 import { DisclaimerGate } from './components/DisclaimerGate';
+import { FinishSetupPill } from './components/FinishSetupPill';
 import { FreshnessIndicator } from './components/FreshnessIndicator';
 import { TooltipLayer } from './components/TooltipLayer';
 import { UpdateIndicator } from './components/UpdateIndicator';
@@ -14,11 +15,12 @@ import { ACTIVE_TAB_KEY, isTabId, TabBar, TabPanel, type TabId } from './compone
 import { readJson, writeJson } from './lib/storage';
 import { BalancesPanel } from './panels/BalancesPanel';
 import { FeesPanel } from './panels/FeesPanel';
-import { OnboardingGuide } from './panels/OnboardingGuide';
 import { OpenOrdersPanel } from './panels/OpenOrdersPanel';
 import { OpportunitiesPanel } from './panels/OpportunitiesPanel';
 import { AssetsHome } from './panels/assets/AssetsHome';
 import { SettingsDrawer } from './panels/SettingsDrawer';
+import { SetupPage } from './panels/setup/SetupPage';
+import { SETUP_SHOWN_KEY, useSetupState, type SetupStep } from './panels/setup/setupState';
 import { TrackedAddressProvider } from './panels/trackedAddress';
 import { RollSignalProvider } from './panels/rollSignal';
 import { RollOverBanner } from './panels/RollOverBanner';
@@ -35,15 +37,32 @@ const UserGuideModal = lazy(() =>
   import('./components/UserGuideModal').then((m) => ({ default: m.UserGuideModal })),
 );
 
+const GATE_KEY_GUIDE_SECTION = 'How to set up Gate and make an API key';
+
 export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsFocus, setSettingsFocus] = useState<SetupStep | null>(null);
   const [guideOpen, setGuideOpen] = useState(false);
+  const [guideSection, setGuideSection] = useState<string | undefined>(undefined);
+  const openGuide = useCallback((section?: string) => {
+    setGuideSection(section);
+    setGuideOpen(true);
+  }, []);
   // null = the user has never picked a tab, so the landing tab is still up for
   // grabs: it resolves to Positions once we know they hold some, else
   // Opportunities. An explicit pick (persisted) always wins.
-  const [chosenTab, setChosenTab] = useState<TabId | null>(() =>
-    readJson<TabId | null>(ACTIVE_TAB_KEY, null, (parsed) => (isTabId(parsed) ? parsed : null)),
-  );
+  const [chosenTab, setChosenTab] = useState<TabId | null>(() => {
+    const fromUrl = new URLSearchParams(window.location.search).get('tab');
+    if (isTabId(fromUrl)) return fromUrl;
+    return readJson<TabId | null>(ACTIVE_TAB_KEY, null, (parsed) => (isTabId(parsed) ? parsed : null));
+  });
+
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    if (!url.searchParams.has('tab')) return;
+    url.searchParams.delete('tab');
+    window.history.replaceState(null, '', url);
+  }, []);
   const credentials = useCredentials();
   const disclaimer = useDisclaimer();
   const openOrders = useOpenOrders();
@@ -58,12 +77,13 @@ export default function App() {
 
   const activeTab = chosenTab ?? 'opportunities';
 
-  // Once the credentials query settles (not pending), anything short of a
-  // confirmed `configured: true` — including a load ERROR (data undefined) —
-  // means we must NOT expose the live trading UI. Fall back to the first-run
-  // view: live opportunities on the left, the setup guide on the right.
   const setupNeeded = !credentials.isPending && !credentials.data?.configured;
-  const configured = !credentials.isPending && !setupNeeded;
+  const [isChecklistKept, setIsChecklistKept] = useState(false);
+  useEffect(() => {
+    if (setupNeeded) setIsChecklistKept(true);
+  }, [setupNeeded]);
+  const showsChecklist = setupNeeded || isChecklistKept;
+  const isTrading = !credentials.isPending && !showsChecklist;
   const orderCount = openOrders.data?.length ?? 0;
   const ordersBadge =
     orderCount > 0 ? (
@@ -77,7 +97,14 @@ export default function App() {
       </Chip>
     ) : undefined;
 
-  const openSettings = useCallback(() => setSettingsOpen(true), []);
+  const openSettings = useCallback(() => {
+    setSettingsFocus(null);
+    setSettingsOpen(true);
+  }, []);
+  const openSettingsAt = useCallback((step: SetupStep) => {
+    setSettingsFocus(step);
+    setSettingsOpen(true);
+  }, []);
 
   // Freshness + settings ride the tab row once it exists, and fall back to the
   // brand row in the states that have no tabs (loading, first-run).
@@ -89,6 +116,11 @@ export default function App() {
   const accountControls = (
     <>
       <UpdateIndicator />
+      {/* Setup-progress pill (from dev): shows how many setup steps remain and
+          opens Settings at the first missing one. The Order-ticket and
+          User-guide buttons dev kept up here now ride the tab strip instead
+          (see stripActions), per the split header. */}
+      {isTrading && <SetupPrompt onOpen={openSettingsAt} />}
       <FreshnessIndicator />
       <button
         type="button"
@@ -129,7 +161,7 @@ export default function App() {
   // strip only exists once configured, so when it does not the guide falls
   // back to row 1 — a first-run reader is exactly who it is written for, and
   // gating it on `configured` put it out of reach (audit 2026-09-21).
-  const stripActions = configured ? (
+  const stripActions = isTrading ? (
     <>
       <OrderTicketButton />
       {guideButton}
@@ -144,6 +176,12 @@ export default function App() {
     window.scrollTo({ top: 0 });
   };
 
+  const finishSetup = () => {
+    writeJson(SETUP_SHOWN_KEY, true);
+    setIsChecklistKept(false);
+    selectTab('opportunities');
+  };
+
   return (
     <TradeFlowProvider>
       <RollSignalProvider>
@@ -153,10 +191,7 @@ export default function App() {
         {/* Only once the terminal is usable: the disclaimer gate is a locked
             modal, and the first-run view already leads with its own setup
             guide — a second nudge on top of either is noise. */}
-        <UserGuideHint
-          enabled={configured && disclaimer.data?.accepted === true}
-          onOpen={() => setGuideOpen(true)}
-        />
+        <UserGuideHint enabled={isTrading && disclaimer.data?.accepted === true} onOpen={() => openGuide()} />
         <div className="flex min-h-full flex-col">
           {/* The tab strip lives INSIDE the sticky header so it can never be
               hidden under it — the header wraps to two rows on narrow screens,
@@ -166,22 +201,23 @@ export default function App() {
               <BrandMark />
               {/* Unconfigured, /api/account 503s forever and the strip would
                   sit on its loading skeleton — hide it until keys exist. */}
-              {!setupNeeded && (
+              {!showsChecklist && (
                 <AccountHealthStrip>
                   {/* The borrow, on every tab: the Rebalance section lives on
                       Balances, and a trader on Positions would never learn
                       about it otherwise. */}
-                  {configured && <BorrowChip onOpen={() => selectTab('balances')} />}
+                  {isTrading && <BorrowChip onOpen={() => selectTab('balances')} />}
                 </AccountHealthStrip>
               )}
               {/* Row 1 is the account only — status, then settings. `ml-auto`
-                  when the strip is hidden so they still sit right. */}
-              <div className={`flex items-center gap-2 ${setupNeeded ? 'ml-auto' : ''}`}>
-                {!configured && guideButton}
+                  when the strip is hidden so they still sit right (hidden while
+                  the setup checklist is up, hence `showsChecklist`). */}
+              <div className={`flex items-center gap-2 ${showsChecklist ? 'ml-auto' : ''}`}>
+                {!isTrading && guideButton}
                 {accountControls}
               </div>
             </div>
-            {configured && (
+            {isTrading && (
               /* The strip's own rule, so the tabs read as a band under the
                  account row rather than as part of it. */
               <div className="border-t border-ink-700/60">
@@ -204,7 +240,7 @@ export default function App() {
             {/* INSIDE the sticky header: a hedge about to mature must stay on
                 screen while the trader scrolls a long tab, and it is news for
                 every tab, not just Positions (his call 2026-09-20). */}
-            {configured && <RollOverBanner onShowPositions={() => selectTab('positions')} />}
+            {isTrading && <RollOverBanner onShowPositions={() => selectTab('positions')} />}
           </header>
 
           {credentials.data?.configured && <RecoveryBanner onOpenTab={selectTab} />}
@@ -215,13 +251,8 @@ export default function App() {
             <section className="min-w-0 flex-1">
               {credentials.isPending ? (
                 <TableSkeleton rows={6} cols={7} />
-              ) : setupNeeded ? (
-                <>
-                  <h2 className="mb-3 text-[34px] font-bold leading-tight tracking-tight text-ink-100">
-                    Live fixed rates, up for grabs
-                  </h2>
-                  <OpportunitiesPanel unconfigured />
-                </>
+              ) : showsChecklist ? (
+                <SetupPage onFinish={finishSetup} onOpenGuide={() => openGuide(GATE_KEY_GUIDE_SECTION)} />
               ) : (
                 <>
                   {/* Every panel brings its own card chrome, so the tab panels
@@ -247,21 +278,30 @@ export default function App() {
                 </>
               )}
             </section>
-
-            {setupNeeded && <OnboardingGuide />}
           </main>
 
-          {configured && (
+          {isTrading && (
             <>
               <StrategyWizard onViewPositions={() => selectTab('positions')} />
               <OrderTicketDrawer />
             </>
           )}
-          <SettingsDrawer open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+          <SettingsDrawer
+            open={settingsOpen}
+            focusStep={settingsFocus}
+            onClose={() => setSettingsOpen(false)}
+            onOpenGuide={() => openGuide(GATE_KEY_GUIDE_SECTION)}
+          />
           {/* Mounted only while open, so the guide is fetched on first request. */}
           {guideOpen && (
             <Suspense fallback={null}>
-              <UserGuideModal onClose={() => setGuideOpen(false)} />
+              <UserGuideModal
+                section={guideSection}
+                onClose={() => {
+                  setGuideOpen(false);
+                  setGuideSection(undefined);
+                }}
+              />
             </Suspense>
           )}
         </div>
@@ -269,6 +309,24 @@ export default function App() {
       </RollSignalProvider>
     </TradeFlowProvider>
   );
+}
+
+function SetupPrompt({ onOpen }: { onOpen: (step: SetupStep) => void }) {
+  const { doneCount, firstMissing, isLoading } = useSetupState();
+  const disclaimer = useDisclaimer();
+  const hasChecked = useRef(false);
+  const isReady = !isLoading && disclaimer.data?.accepted === true;
+
+  useEffect(() => {
+    if (!isReady || hasChecked.current) return;
+    hasChecked.current = true;
+    if (firstMissing === null || readJson(SETUP_SHOWN_KEY, false, (parsed) => parsed === true)) return;
+    writeJson(SETUP_SHOWN_KEY, true);
+    onOpen(firstMissing);
+  }, [isReady, firstMissing, onOpen]);
+
+  if (isLoading || firstMissing === null) return null;
+  return <FinishSetupPill doneCount={doneCount} onOpen={() => onOpen(firstMissing)} />;
 }
 
 /** Opens the manual order-ticket drawer. Must render inside TradeFlowProvider. */

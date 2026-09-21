@@ -62,6 +62,7 @@ const yu = (marketId: number, venue: string, side: 'LONG' | 'SHORT'): AssetBoros
 });
 const group: AssetGroup = {
   base: 'ETH',
+  supported: true,
   priceUsd: 2500,
   earliestSec: NOW - 10 * DAY,
   perpOpen: [perp('GATE', 'LONG'), perp('HYPERLIQUID', 'SHORT')],

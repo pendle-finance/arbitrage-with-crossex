@@ -16,8 +16,6 @@ import type { Exclusions } from './assetModel';
 const KEY = 'crossex.assetView.v1';
 
 export interface AssetViewPrefs {
-  /** Per-ASSET start dates (base → unix sec; absent = all time). The window
-   * is a property of a strategy, not of the app — his call 2026-09-04. */
   sinceByAsset: Record<string, number>;
   exclusions: Exclusions;
   /** Per-Boros-leg "counted from" (borosKey → unix sec): history before it

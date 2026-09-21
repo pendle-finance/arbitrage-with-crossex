@@ -1,10 +1,10 @@
 {
-  "version": "1.6.3",
+  "version": "1.6.4",
   "highlights": [
-    "Rebalance clears a borrow after your positions are closed: Clear debt brings every negative wallet to zero",
-    "Custom amount moves what you type from one CrossEx wallet to another",
-    "Every route is listed, with its time and fee side by side, and Spot loop runs until the move is done",
-    "The Rebalance card leads with whichever move is worth doing, and its verdict names it",
-    "A borrow rate the app could not read is said out loud instead of hidden"
+    "Telegram alerts: connect this terminal to the Boros alerts bot and it warns you before a leg liquidates",
+    "The liquidation line now reads Gate's real margin table, so it is right on a large account",
+    "A coin Gate stops pricing says so, instead of quietly dropping off the card",
+    "A setup checklist on first run, and only coins both venues support",
+    "The Spot loop shows its time at the confirm step, and Boros reads cost less"
   ]
 }

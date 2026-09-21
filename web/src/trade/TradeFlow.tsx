@@ -159,16 +159,6 @@ export interface TradeFlowApi {
   openWizard: (w: StrategyWizardIntent) => void;
   closeWizard: () => void;
   /**
-   * Bumped when a strategy is requested that cannot be executed yet because
-   * credentials are unconfigured. The wizard deliberately does NOT open — a
-   * two-step execution modal with no keys behind it is a dead end — so this
-   * counter is the click's only trace, and the setup guide answers it by
-   * scrolling to and flashing the API-key form.
-   */
-  setupNonce: number;
-  /** Ask for setup instead of opening the wizard (first-run cards). */
-  requestSetup: () => void;
-  /**
    * The manual order ticket, now an on-demand drawer rather than a permanent
    * column. Any prefill fired while the wizard is closed opens it — a form
    * must never be populated out of sight.
@@ -207,7 +197,6 @@ export function TradeFlowProvider({ children }: { children: ReactNode }) {
   const [singlePerpPrefill, setSinglePerpPrefill] = useState<SinglePerpPrefill | null>(null);
   const [wizard, setWizard] = useState<StrategyWizardIntent | null>(null);
   const [railOpen, setRailOpen] = useState(false);
-  const [setupNonce, setSetupNonce] = useState(0);
   const prefillNonce = useRef(0);
   // Read by the prefill callbacks, which must stay referentially stable: a
   // wizard-fired prefill arms the wizard's own tickets and must NOT pop the
@@ -268,7 +257,6 @@ export function TradeFlowProvider({ children }: { children: ReactNode }) {
     setWizard(null);
     clearPrefills();
   }, []);
-  const requestSetup = useCallback(() => setSetupNonce((n) => n + 1), []);
   const openRail = useCallback(() => setRailOpen(true), []);
   const closeRail = useCallback(() => {
     setRailOpen(false);
@@ -282,8 +270,6 @@ export function TradeFlowProvider({ children }: { children: ReactNode }) {
       wizard,
       openWizard,
       closeWizard,
-      setupNonce,
-      requestSetup,
       railOpen,
       openRail,
       closeRail,
@@ -294,7 +280,7 @@ export function TradeFlowProvider({ children }: { children: ReactNode }) {
       singlePerpPrefill,
       prefillSinglePerp,
     }),
-    [dealId, openDeal, wizard, openWizard, closeWizard, setupNonce, requestSetup, railOpen, openRail, closeRail, pairPrefill, prefillPair, borosOpenPrefill, prefillBorosOpen, singlePerpPrefill, prefillSinglePerp],
+    [dealId, openDeal, wizard, openWizard, closeWizard, railOpen, openRail, closeRail, pairPrefill, prefillPair, borosOpenPrefill, prefillBorosOpen, singlePerpPrefill, prefillSinglePerp],
   );
 
   return (

@@ -32,13 +32,19 @@ import { previewRoutes } from './routes/preview';
 import { rebalanceRoutes } from './routes/rebalance';
 import { symbolsRoutes } from './routes/symbols';
 import { shareLinkRoutes } from './routes/shareLink';
+import { telegramRoutes } from './routes/telegram';
 import { transferRoutes } from './routes/transfer';
 import { versionRoutes } from './routes/version';
 import { tradesRoutes } from './routes/trades';
+import type { BotClient } from './telegram/botClient';
+import type { TelegramLink } from './telegram/link';
+import type { TelegramStatus } from './telegram/status';
+import type { TelegramSync } from './telegram/sync';
 
 export interface AppDeps {
   getClients(): Clients;
   cache: TtlCache;
+  dataDir: string;
   /** The execution engine's store + venue port + clock. Absent in public mode.
    * The route layer only writes intent rows / command levels; the reconcile loop
    * (started by the entry point, driven manually in tests) owns every venue
@@ -92,8 +98,9 @@ export interface AppDeps {
    * disables the remote read entirely — plus the UPDATE_CHECK=0 opt-out. */
   updateCheck?: { current: string | null; disabled?: boolean };
   /** `interest` absent keeps the all-time interest ledger in memory: tests only. */
-  rebalance?: { jobs: JobFile; interest?: InterestFile; sleep?: (ms: number) => Promise<void> };
-  transfer?: { jobs: TransferFile; sleep?: (ms: number) => Promise<void> };
+  rebalance?: { jobs: JobFile; interest?: InterestFile; sleep?: (ms: number) => Promise<void>; onDone?: () => void };
+  transfer?: { jobs: TransferFile; sleep?: (ms: number) => Promise<void>; onDone?: () => void };
+  telegram?: { link: TelegramLink; sync: TelegramSync; status: TelegramStatus; bot: BotClient };
 }
 
 declare module 'fastify' {
@@ -203,6 +210,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     transferRoutes,
     versionRoutes,
     shareLinkRoutes,
+    telegramRoutes,
   ];
   for (const routes of routeModules) {
     app.register(routes(deps), { prefix: '/api' });

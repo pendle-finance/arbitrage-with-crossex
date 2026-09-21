@@ -49,6 +49,7 @@ const book = (days: number): AssetGroup => {
   const now = Math.floor(Date.now() / 1000);
   return {
     base: 'ETH',
+    supported: true,
     priceUsd: 2500,
     earliestSec: now - 10 * DAY,
     perpOpen: [perp({ venue: 'GATE', side: 'LONG', qty: 100 }), perp({ venue: 'HYPERLIQUID', side: 'SHORT', qty: 100 })],
@@ -74,6 +75,10 @@ const renderCard = (group: AssetGroup) =>
         group={group}
         derived={deriveAsset(group, {}, 0, Math.floor(Date.now() / 1000))}
         sinceSec={0}
+        storedSinceSec={undefined}
+        defaultSinceSec={null}
+        backfilling={false}
+        supportedCoins={['ETH']}
         windowPending={false}
         onChangeSince={() => {}}
         exclusions={{}}
