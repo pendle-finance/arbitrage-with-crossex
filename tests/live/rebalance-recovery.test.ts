@@ -163,6 +163,7 @@ const postTransfer = async (clients: Clients, leg: TransferLeg): Promise<Posted>
   const app = buildApp({
     getClients: () => clients,
     cache: new TtlCache(),
+    dataDir,
     authToken: TOKEN,
     engine: { store: new Store(':memory:'), venue: gateVenue(() => clients), clock: { now: Date.now } },
     transfer: { jobs: transfers, sleep },

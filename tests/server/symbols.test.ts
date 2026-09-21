@@ -40,8 +40,45 @@ describe('GET /api/symbols', () => {
     const res = await app.inject({ method: 'GET', url: '/api/symbols?exchange=GATE', headers: HOST });
 
     const rows: SymbolRow[] = res.json().data;
-    expect(rows.map((r) => r.symbol).sort()).toEqual(['GATE_FUTURE_ETH_USDT', 'GATE_FUTURE_SOL_USDT']);
-    // GATE_FUTURE_DOGE_USDT (state=delisting) never appears.
+    expect(rows.map((r) => r.symbol).sort()).toEqual(['GATE_FUTURE_ETH_USDT']);
+  });
+
+  it('a delisting row on a supported coin is dropped for being delisting, not for its coin', async () => {
+    app = makeTestApp();
+    mockGateGet('/rule/symbols', { fixture: 'rule-symbols.json' });
+
+    const res = await app.inject({ method: 'GET', url: '/api/symbols?base=HYPE', headers: HOST });
+
+    expect(res.json().data).toEqual([]);
+  });
+
+  it('a live row with a real delist_time is dropped, even though state stays live', async () => {
+    app = makeTestApp();
+    mockGateGet('/rule/symbols', {
+      body: [
+        {
+          symbol: 'GATE_FUTURE_ETH_USDT',
+          exchange_type: 'GATE',
+          business_type: 'FUTURE',
+          state: 'live',
+          min_size: '0.01',
+          min_notional: '5',
+          lot_size: '0.01',
+          tick_size: '0.01',
+          max_num_orders: '100',
+          max_market_size: '10000',
+          max_limit_size: '100000',
+          contract_size: '1',
+          liquidation_fee: '0.001',
+          delist_time: '1758000000000',
+        },
+      ],
+    });
+
+    const res = await app.inject({ method: 'GET', url: '/api/symbols', headers: HOST });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().data).toEqual([]);
   });
 
   it('?multiOnly=1 keeps multi-venue bases and drops singles', async () => {
@@ -73,7 +110,7 @@ describe('GET /api/symbols', () => {
     expect(data.symbol).toBe('GATE_FUTURE_ETH_USDT');
     expect(data.exchange).toBe('GATE');
     expect(data.tickSize).toBe('0.01');
-    expect(data.leverageMax).toBe(50); // max over the tiers' leverage_max (50, 20)
+    expect(data.leverageMax).toBe(25); // max over the tiers' leverage_max (25 on tiers 1-4, 5 on 5-6)
   });
 
   it('GET /api/symbols/:symbol unknown → 400 symbol-invalid envelope', async () => {

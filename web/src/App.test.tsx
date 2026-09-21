@@ -1,6 +1,3 @@
-/** Left-pane shell: one tab panel visible at a time, switched from the sticky
- * header tab strip. Inactive panels stay MOUNTED but hidden so their queries
- * keep polling; the active tab persists to localStorage. */
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
@@ -11,15 +8,15 @@ import { ACTIVE_TAB_KEY } from './components/TabBar';
 import { USER_GUIDE_RAW_URL } from './components/UserGuideModal';
 import {
   account,
+  agentStatus,
   baseHandlers,
   ethPosition,
   makeOpportunitiesResult,
-  makeOpportunityGroup,
-  makeOpportunityLeg,
-  makeOpportunityPair,
   makeRebalanceView,
   opportunitiesHandler,
   rebalanceHandler,
+  setupHandlers,
+  telegramInfo,
   versionHandler,
 } from './test/fixtures';
 import { env, server } from './test/server';
@@ -43,9 +40,15 @@ function order(id: string): OpenOrder {
   };
 }
 
-/** Everything a configured App shell fetches on mount. */
+const agentOff = agentStatus();
+const telegramOff = telegramInfo();
+
 function mockApp({ orders = [] as OpenOrder[] } = {}) {
   server.use(
+    ...setupHandlers(
+      agentStatus({ configured: true, root: `0x${'ab'.repeat(20)}` }),
+      telegramInfo({ connected: true, state: 'connected', settings: { liquidation: true, interest: true } }),
+    ),
     http.get('/api/credentials', () =>
       HttpResponse.json(env({ configured: true, keyMasked: 'gk_****abcd' })),
     ),
@@ -183,9 +186,7 @@ describe('App tab shell', () => {
     expect(await within(panel('orders')).findAllByText('Cancel')).toHaveLength(2);
   });
 
-  it('falls back to the first-run view (not the trading panels) when /credentials errors', async () => {
-    // A persistent /credentials failure must NOT leak the live trading UI —
-    // `data` is undefined, so we cannot confirm the account is configured.
+  it('falls back to the setup checklist (not the trading panels) when /credentials errors', async () => {
     server.use(
       http.get('/api/credentials', () =>
         HttpResponse.json(
@@ -194,93 +195,29 @@ describe('App tab shell', () => {
         ),
       ),
       ...baseHandlers(),
-      opportunitiesHandler(makeOpportunitiesResult()),
+      ...setupHandlers(agentOff, telegramOff),
       http.get('/api/orders/open', () => HttpResponse.json(env<OpenOrder[]>([]))),
     );
     renderWithClient(<App />);
 
-    expect(await screen.findByRole('complementary', { name: 'Setup guide' })).toBeInTheDocument();
-    // Neither the tab strip nor the Positions home base is rendered.
+    expect(await screen.findByText('Set up the terminal')).toBeInTheDocument();
     expect(screen.queryByRole('tablist')).not.toBeInTheDocument();
     expect(screen.queryByText('Track an address to see your farm by asset')).not.toBeInTheDocument();
   });
 
-  it('replaces the trading shell (tabs included) with opportunities + guide when unconfigured', async () => {
+  it('replaces the trading shell (tabs included) with the setup checklist when unconfigured', async () => {
     server.use(
-      http.get('/api/credentials', () =>
-        HttpResponse.json(env({ configured: false, keyMasked: null })),
-      ),
+      http.get('/api/credentials', () => HttpResponse.json(env({ configured: false, keyMasked: null }))),
       ...baseHandlers(),
-      opportunitiesHandler(makeOpportunitiesResult()),
+      ...setupHandlers(agentOff, telegramOff),
       http.get('/api/orders/open', () => HttpResponse.json(env<OpenOrder[]>([]))),
     );
     renderWithClient(<App />);
 
-    expect(await screen.findByRole('complementary', { name: 'Setup guide' })).toBeInTheDocument();
-    expect(
-      screen.getByRole('heading', { name: 'Live fixed rates, up for grabs' }),
-    ).toBeInTheDocument();
+    expect(await screen.findByText('Set up the terminal')).toBeInTheDocument();
     expect(screen.queryByRole('tablist')).not.toBeInTheDocument();
-    // The order ticket only exists once credentials do.
-    expect(screen.queryByRole('complementary', { name: 'Order ticket' })).not.toBeInTheDocument();
-  });
-
-  it('unconfigured: shows degraded live opportunities and Execute nudges the API-key form', async () => {
-    // The unconfigured wire shape: legs without CrossEx symbols (no keys → no
-    // mapping) but APRs still priced via the simulated VIP tier, the server's
-    // fee-simulation warning on top. (A group with NO priced APR would be
-    // filtered out of the list entirely.)
-    const degraded = makeOpportunitiesResult({
-      groups: [
-        makeOpportunityGroup({
-          pairs: [
-            makeOpportunityPair({
-              shortLeg: makeOpportunityLeg({ crossexSymbol: '' }),
-              longLeg: makeOpportunityLeg({
-                marketId: 102,
-                venue: 'BINANCE',
-                crossexVenue: 'BINANCE',
-                crossexSymbol: '',
-                midApr: 0.045,
-                execApr: 0.0455,
-              }),
-            }),
-          ],
-        }),
-      ],
-      warnings: [
-        'Perp fees assume the VIP 0 Gate CrossEx schedule — everything else here is live. Your real rates follow your Gate VIP tier; connect Gate keys to price from them.',
-      ],
-    });
-    server.use(
-      http.get('/api/credentials', () =>
-        HttpResponse.json(env({ configured: false, keyMasked: null })),
-      ),
-      ...baseHandlers(),
-      opportunitiesHandler(degraded),
-      http.get('/api/orders/open', () => HttpResponse.json(env<OpenOrder[]>([]))),
-    );
-    renderWithClient(<App />);
-
-    expect(await screen.findByText(/Perp fees assume the VIP 0 Gate CrossEx schedule/)).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Fund Gate' })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Execute' })).toBeInTheDocument();
-
-    // The VIP simulator only exists while unconfigured, and it sits on the
-    // always-visible assumptions row — nothing to open first.
-    expect(screen.getByLabelText('Gate VIP tier')).toBeInTheDocument();
-
-    // Symbols are expectedly absent — the button stays enabled as the guide's
-    // nudge. It does NOT open the wizard here: with no keys there is nothing to
-    // execute, so the click asks for setup instead.
-    const execute = screen.getByRole('button', { name: /^Open this strategy — ETH short/ });
-    expect(execute).toBeEnabled();
-    await userEvent.click(execute);
-    await waitFor(() => expect(screen.getByLabelText('API key')).toHaveFocus());
-    // The guide flashes the key form's ring on the same nonce bump.
-    expect(document.querySelector('.flash-ring')).not.toBeNull();
-    // And the execution wizard stays shut — it could not trade without keys.
-    expect(screen.queryByRole('heading', { name: /Open this strategy/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Order ticket' })).not.toBeInTheDocument();
+    expect(screen.queryByText('How to execute')).not.toBeInTheDocument();
   });
 });
 

@@ -17,12 +17,24 @@ const focusables = (root: HTMLElement): HTMLElement[] =>
     (el) => !el.hasAttribute('hidden') && el.getClientRects().length > 0,
   );
 
+const openTraps: HTMLElement[] = [];
+const claimedEscapes = new WeakSet<KeyboardEvent>();
+
+const isTopTrap = (root: HTMLElement): boolean => openTraps[openTraps.length - 1] === root;
+
+export function claimEscape(e: KeyboardEvent, root: HTMLElement | null): boolean {
+  if (root === null || !isTopTrap(root) || claimedEscapes.has(e)) return false;
+  claimedEscapes.add(e);
+  return true;
+}
+
 export function useFocusTrap(ref: RefObject<HTMLElement>, active: boolean): void {
   useEffect(() => {
     if (!active) return;
     const root = ref.current;
     if (!root) return;
     const previous = document.activeElement as HTMLElement | null;
+    openTraps.push(root);
     // Focus the first control on the next frame: the panel may still be
     // laying out on the same tick it mounted.
     const raf = requestAnimationFrame(() => {
@@ -38,7 +50,7 @@ export function useFocusTrap(ref: RefObject<HTMLElement>, active: boolean): void
       }
     });
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Tab') return;
+      if (e.key !== 'Tab' || !isTopTrap(root)) return;
       const items = focusables(root);
       if (items.length === 0) {
         e.preventDefault();
@@ -60,6 +72,7 @@ export function useFocusTrap(ref: RefObject<HTMLElement>, active: boolean): void
     return () => {
       cancelAnimationFrame(raf);
       document.removeEventListener('keydown', onKey, true);
+      openTraps.splice(openTraps.lastIndexOf(root), 1);
       if (previous && document.contains(previous)) previous.focus();
     };
   }, [ref, active]);

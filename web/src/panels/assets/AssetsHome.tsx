@@ -17,7 +17,7 @@ import { EmptyState } from '../../components/EmptyState';
 import { QueryError } from '../../components/QueryError';
 import { TableSkeleton } from '../../components/Skeleton';
 import { SignedNumber } from '../../components/SignedNumber';
-import { fmtPct, fmtUsd } from '../../lib/fmt';
+import { fmtPct, fmtUsd, num } from '../../lib/fmt';
 import { lineFor as lineIn, liquidationLines } from '../../lib/liquidation';
 import { useBookId } from '../bookId';
 import { AddressForm, short } from '../HomeControls';
@@ -51,11 +51,8 @@ export function AssetsHome() {
     });
   };
 
-  // Base query (all time) enumerates the assets; each asset with its OWN
-  // start date reads from the extra window(s) — one request per distinct
-  // date, shared across assets that agree.
   const legSince = legSinceParam(prefs.legSince);
-  const query = useAssetView(address, 0, legSince);
+  const query = useAssetView(address, undefined, legSince);
   const data = query.data;
   // The account's own fee schedule (VIP tier) — prices the pairs' exit-fee
   // estimate; the model falls back to a flat rate while it loads.
@@ -66,36 +63,26 @@ export function AssetsHome() {
   );
   const windows = useAssetViewWindows(address, extraSinces, legSince);
 
-  const allDerived = useMemo(
+  const derived = useMemo(
     () =>
       (data?.assets ?? []).map((g) => {
-        const since = prefs.sinceByAsset[g.base] ?? 0;
-        const win = since > 0 ? windows.bySince.get(since) : undefined;
-        // A window whose fetch FAILED is not pending: the all-time numbers
-        // stand in, and the "updating window…" hint must not spin forever.
-        const windowFailed = since > 0 && !win && windows.errorBySince.has(since);
-        // Until that window's fetch lands, the all-time numbers stand in;
-        // an asset absent from a narrower window is genuinely empty there.
+        const stored: number | undefined = prefs.sinceByAsset[g.base];
+        const win = stored !== undefined ? windows.bySince.get(stored) : undefined;
+        const windowFailed = stored !== undefined && !win && windows.errorBySince.has(stored);
         const group = win ? (win.assets.find((a) => a.base === g.base) ?? { ...g, perpClosed: [], borosHistory: [] }) : g;
         const meta = win ?? data;
+        const sinceSec = meta?.sinceSec ?? 0;
         return {
           group,
-          sinceSec: since,
-          windowPending: since > 0 && !win && !windowFailed,
-          derived: deriveAsset(group, prefs.exclusions, meta?.sinceSec ?? 0, meta?.nowSec ?? 0, feeRows),
+          sinceSec,
+          storedSinceSec: stored,
+          backfilling: meta?.coverage.backfilling === true,
+          windowPending: stored !== undefined && !win && !windowFailed,
+          derived: deriveAsset(group, prefs.exclusions, sinceSec, meta?.nowSec ?? 0, feeRows),
         };
       }),
     [data, windows.bySince, windows.errorBySince, prefs.exclusions, prefs.sinceByAsset, feeRows],
   );
-  // Dust fold: an asset with nothing open and a negligible history total is
-  // real (the sums keep it) but not worth a card — one muted line names them.
-  const derived = allDerived.filter(
-    (a) =>
-      a.group.perpOpen.length > 0 ||
-      a.group.borosOpen.length > 0 ||
-      Math.abs(a.derived.totals.pnlUsd) >= 1,
-  );
-  const dust = allDerived.filter((a) => !derived.includes(a));
 
   /* Where each coin's move liquidates the ACCOUNT. Needs margin balance,
      maintenance and the wallet equities, which the header already polls, so
@@ -103,7 +90,10 @@ export function AssetsHome() {
   const accountData = useAccount().data;
   const positionsData = usePositions().data;
   const liquidation = useMemo(
-    () => (accountData && positionsData ? liquidationLines(accountData, positionsData) : undefined),
+    () =>
+      accountData && positionsData
+        ? liquidationLines(accountData, positionsData, {}, positionsData.marginTiers)
+        : undefined,
     [accountData, positionsData],
   );
   /* null while the account or positions are not loaded, and for a coin with
@@ -114,6 +104,11 @@ export function AssetsHome() {
   const lineFor = (base: string) => {
     if (liquidation === undefined) return null;
     if (liquidation === null) return 'unknown' as const;
+    for (const stale of liquidation.unknown) {
+      if (stale.base.toUpperCase() === base.toUpperCase() && stale.sinceMs !== null) {
+        return { base: stale.base, venue: stale.venue, sinceMs: stale.sinceMs };
+      }
+    }
     return lineIn(liquidation, base);
   };
 
@@ -246,7 +241,7 @@ export function AssetsHome() {
               title={`Margin-borrow interest the CrossEx account paid inside this window${
                 data?.interest && Object.keys(data.interest.byCoin).length > 0
                   ? ` — ${Object.entries(data.interest.byCoin)
-                      .map(([c, n]) => `${n.toFixed(2)} ${c}`)
+                      .map(([c, n]) => `${num(n, 2)} ${c}`)
                       .join(', ')}`
                   : ''
               }. Charged on the account, not on any one position, so it is subtracted once here and appears on no card.`}
@@ -300,17 +295,21 @@ export function AssetsHome() {
         />
       ) : (
         <div className="flex flex-col gap-3">
-          {derived.map(({ group, derived: d, sinceSec, windowPending }) => (
+          {derived.map(({ group, derived: d, sinceSec, storedSinceSec, backfilling, windowPending }) => (
             <AssetCard
               key={group.base}
               group={group}
               derived={d}
               sinceSec={sinceSec}
               windowPending={windowPending}
-              onChangeSince={(sec: number) => {
+              storedSinceSec={storedSinceSec}
+              defaultSinceSec={data.defaultSinceSec}
+              backfilling={backfilling}
+              supportedCoins={data.supportedCoins}
+              onChangeSince={(sec) => {
                 update((prev) => {
                   const sinceByAsset = { ...prev.sinceByAsset };
-                  if (sec > 0) sinceByAsset[group.base] = sec;
+                  if (sec !== undefined && sec > 0) sinceByAsset[group.base] = sec;
                   else delete sinceByAsset[group.base];
                   return { ...prev, sinceByAsset };
                 });
@@ -336,18 +335,6 @@ export function AssetsHome() {
               }}
             />
           ))}
-          {dust.length > 0 && (
-            <p
-              className="text-xs text-ink-600"
-              title={`Nothing open and under $1 of history — left out of the totals above: ${dust
-                .map(
-                  (a) => `${a.group.base} ${a.derived.totals.pnlUsd < 0 ? '−' : '+'}$${Math.abs(a.derived.totals.pnlUsd).toFixed(2)}`,
-                )
-                .join(' · ')}`}
-            >
-              + {dust.length} dust asset{dust.length === 1 ? '' : 's'} ⓘ
-            </p>
-          )}
         </div>
       )}
     </section>

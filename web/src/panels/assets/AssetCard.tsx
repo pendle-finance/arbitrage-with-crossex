@@ -16,6 +16,8 @@ import type {
   AssetPerpOpen,
 } from '../../api/types';
 import { Chip } from '../../components/Chip';
+import { HoverCard } from '../../components/HoverCard';
+import { Spinner } from '../../components/Spinner';
 import { microLabelClass } from '../../components/Th';
 import { SharePositionModal } from '../SharePositionModal';
 import { ClosePairForm } from '../PerpOnlyBox';
@@ -26,8 +28,19 @@ import { usePositions } from '../../api/queries';
 import { pairSharePayload } from '../sharePayload';
 import type { SharePayloadV1 } from '../../lib/shareCodec';
 import { SignedNumber } from '../../components/SignedNumber';
-import { fmtDateLocal, fmtPct, fmtTokenQty, fmtUsd, fmtUsdCompact, num, prettyVenue, signedClass } from '../../lib/fmt';
-import { describeLine, lineLabel, type LiquidationLine } from '../../lib/liquidation';
+import {
+  fmtDateLocal,
+  fmtDateShort,
+  fmtPct,
+  fmtTokenQty,
+  fmtUsd,
+  fmtUsdCompact,
+  num,
+  parseDateLocal,
+  prettyVenue,
+  signedClass,
+} from '../../lib/fmt';
+import { describeLine, lineLabel, unknownLabel, type LiquidationLine } from '../../lib/liquidation';
 import {
   type AssetDerived,
   type ExclusionEntry,
@@ -50,6 +63,7 @@ import {
 } from './assetModel';
 import { knownRate } from '../../lib/boros';
 import { AssetBars } from './AssetBars';
+import { SinceChip } from './SinceChip';
 
 interface Props {
   group: AssetGroup;
@@ -59,7 +73,11 @@ interface Props {
   /** True while a newly-chosen window's fetch is still in flight (the
    * all-time numbers stand in meanwhile). */
   windowPending: boolean;
-  onChangeSince: (sec: number) => void;
+  storedSinceSec: number | undefined;
+  defaultSinceSec: number | null;
+  onChangeSince: (sec: number | undefined) => void;
+  backfilling: boolean;
+  supportedCoins: string[];
   exclusions: Exclusions;
   /** value: the excluded slice ({qty, at?} in the leg's unit), 'all', or
    * undefined to include the whole leg again. */
@@ -71,14 +89,23 @@ interface Props {
   /** Where the ACCOUNT liquidates if only this coin moves. 'far' = no line
    * within 10x, 'unknown' = Gate sent no margin figures, null = not loaded
    * or this coin has no priced leg in the connected account. */
-  liquidation?: LiquidationLine | 'far' | 'unknown' | null;
+  liquidation?: LiquidationLine | StaleLeg | 'far' | 'unknown' | null;
 }
+
+type StaleLeg = { base: string; venue: string; sinceMs: number };
 
 /** Where this coin's move liquidates the account. Red inside 15%, amber
  * inside 30%: a hedged asset is delta-neutral but not margin-neutral — the
  * losing Hyperliquid leg drives its USDC wallet into a borrow, and Gate
  * charges maintenance margin on that. */
-function LiquidationChip({ line, base }: { line: LiquidationLine | 'far' | 'unknown'; base: string }) {
+function LiquidationChip({ line, base }: { line: LiquidationLine | StaleLeg | 'far' | 'unknown'; base: string }) {
+  if (typeof line !== 'string' && 'sinceMs' in line) {
+    return (
+      <Chip sm title={unknownLabel(line)}>
+        No liquidation estimate
+      </Chip>
+    );
+  }
   if (line === 'unknown') {
     return (
       <Chip sm title="Gate did not send the account's margin figures, so the line cannot be estimated.">
@@ -104,12 +131,8 @@ function LiquidationChip({ line, base }: { line: LiquidationLine | 'far' | 'unkn
   );
 }
 
-/** Unix seconds → the value an <input type="date"> wants (local). */
-const toDateInput = (sec: number): string => {
-  const d = new Date(sec * 1000);
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-};
+const listCoins = (coins: string[]): string =>
+  coins.length > 1 ? `${coins.slice(0, -1).join(', ')} and ${coins[coins.length - 1]}` : (coins[0] ?? '');
 
 const sizeLabel = (size: number, unit: 'base' | 'usd', base: string): string =>
   unit === 'base' ? fmtTokenQty(size, base) : fmtUsdCompact(size);
@@ -623,7 +646,7 @@ export function LegEditModal({
   label: string;
   unit: string;
   legQty: number;
-  entry: number;
+  entry: number | null;
   entryKind: 'price' | 'rate';
   current: ExclusionEntry | undefined;
   onExclude: Props['onExclude'];
@@ -632,32 +655,33 @@ export function LegEditModal({
   legSince?: number;
   onLegSince?: (sec: number | undefined) => void;
 }) {
-  const [sinceStr, setSinceStr] = useState(legSince && legSince > 0 ? toDateInput(legSince) : '');
+  const [sinceStr, setSinceStr] = useState(legSince && legSince > 0 ? fmtDateLocal(legSince) : '');
   const curQty = current === 'all' ? legQty : exclusionQty(current);
   const curAt = exclusionAt(current);
   const [mode, setMode] = useState<'all' | 'portion'>(current === undefined ? 'all' : 'portion');
   const [qtyStr, setQtyStr] = useState(curQty !== null ? String(curQty) : '');
   const fmtAt = (v: number) => (entryKind === 'rate' ? String(+(v * 100).toFixed(4)) : String(+v.toFixed(2)));
-  const [atStr, setAtStr] = useState(fmtAt(curAt ?? entry));
+  const startAt = curAt ?? entry;
+  const [atStr, setAtStr] = useState(startAt !== null ? fmtAt(startAt) : '');
   const qty = Number(qtyStr);
   const qtyOk = Number.isFinite(qty) && qty > 0;
   const atRaw = Number(atStr);
   // A rate may be negative (negative funding); a price may not.
-  const at = Number.isFinite(atRaw) && (entryKind === 'rate' || atRaw >= 0) ? (entryKind === 'rate' ? atRaw / 100 : atRaw) : null;
+  const at = atStr.trim() !== '' && Number.isFinite(atRaw) && (entryKind === 'rate' || atRaw >= 0) ? (entryKind === 'rate' ? atRaw / 100 : atRaw) : null;
   const whole = mode === 'all' ? false : qtyOk && qty >= legQty;
   // Live preview of what the farm keeps.
   const preview =
     mode === 'portion' && qtyOk && !whole
       ? keptSlice({ [exKey]: at !== null ? { qty, at } : qty }, exKey, legQty, entry)
       : null;
-  const showEntry = (v: number) => (entryKind === 'rate' ? fmtPct(v) : fmtUsd(v));
+  const showEntry = (v: number | null) => (v === null ? 'pending' : entryKind === 'rate' ? fmtPct(v) : fmtUsd(v));
   const save = () => {
     if (mode === 'all') onExclude(exKey, undefined);
     else if (!qtyOk) return;
     else if (whole) onExclude(exKey, 'all');
     else onExclude(exKey, at !== null ? { qty, at } : qty);
     if (onLegSince) {
-      const sec = sinceStr ? Math.floor(new Date(`${sinceStr}T00:00`).getTime() / 1000) : 0;
+      const sec = sinceStr ? parseDateLocal(sinceStr) : 0;
       onLegSince(Number.isFinite(sec) && sec > 0 ? sec : undefined);
     }
     onClose();
@@ -671,7 +695,7 @@ export function LegEditModal({
       <div role="radiogroup" aria-label="Include" className="mb-4 flex flex-col gap-2">
         <label className="flex cursor-pointer items-center gap-2 text-xs text-ink-100">
           <input type="radio" name="leg-edit-mode" className="chk" checked={mode === 'all'} onChange={() => setMode('all')} />
-          Include all — {fmtTokenQty(legQty, unit)} at {showEntry(entry)}
+          Include all — {fmtTokenQty(legQty, unit)} {entry === null ? '· entry pending' : `at ${showEntry(entry)}`}
         </label>
         <label className="flex cursor-pointer items-center gap-2 text-xs text-ink-100">
           <input type="radio" name="leg-edit-mode" className="chk" checked={mode === 'portion'} onChange={() => setMode('portion')} />
@@ -721,7 +745,7 @@ export function LegEditModal({
               type="date"
               className="input w-40 px-2 py-1 text-xs"
               value={sinceStr}
-              max={toDateInput(Math.floor(Date.now() / 1000))}
+              max={fmtDateLocal(Math.floor(Date.now() / 1000))}
               onChange={(e) => setSinceStr(e.target.value)}
               aria-label="Date this position is counted from"
               title="History on this market before this date (local midnight) belongs to an earlier position and is left out. Empty = from the asset's start date."
@@ -1037,8 +1061,8 @@ function BorosRow({
         <span className="ml-1 text-ink-500">({fmtUsdCompact(leg.notionalUsd * slice.keep)})</span>
         {exFrac > 0 && <span className="ml-1 text-gold" title="Part of this leg is excluded from the farm">of {fmtTokenQty(leg.sizeToken, leg.collateral)}</span>}
       </td>
-      <td className="num text-right text-ink-100" title={slice.at !== null && slice.entry !== leg.entryApr ? `Venue average ${fmtPct(leg.entryApr)} — the remainder's rate after carving out ${fmtTokenQty(exFrac * leg.sizeToken, leg.collateral)} at ${fmtPct(slice.at)}` : undefined}>
-        {fmtPct(slice.entry)} → {fmtPct(leg.markApr)}
+      <td className="num text-right text-ink-100" title={leg.entryApr !== null && slice.at !== null && slice.entry !== leg.entryApr ? `Venue average ${fmtPct(leg.entryApr)} — the remainder's rate after carving out ${fmtTokenQty(exFrac * leg.sizeToken, leg.collateral)} at ${fmtPct(slice.at)}` : undefined}>
+        {slice.entry !== null ? fmtPct(slice.entry) : <span className="text-ink-500">pending</span>} → {fmtPct(leg.markApr)}
 
       </td>
       <td
@@ -1183,7 +1207,7 @@ function InactiveBorosRow({
           label={`${prettyVenue(h.venue)} YU · ${fmtDateLocal(h.maturity)}`}
           unit={base}
           legQty={h.peakSizeToken ?? 0}
-          entry={entryApr ?? 0}
+          entry={entryApr}
           entryKind="rate"
           current={exclusions[key]}
           onExclude={onExclude}
@@ -1249,6 +1273,7 @@ interface Bundle {
   /** Signed blended fixed rate on the live YU legs, net of settle fees;
    * + receives, − pays. Null without YU. */
   fixedApr: number | null;
+  ratePending: boolean;
   /** Perp funding + Boros settlements, live and finished — this venue's
    * share of the Fixed funding bar. */
   settleUsd: number;
@@ -1381,7 +1406,10 @@ function BundleCard({
                 </button>
               </div>
             </td>
-            <td className="px-3 text-right" title="Notional of the live perp (or of the YU legs when there is no perp)">
+            <td
+              className="px-3 text-right"
+              title={`Notional of the live perp (or of the YU legs when there is no perp)${b.notionalUsd > 0 ? `: ${exactUsd(b.notionalUsd)}${b.sizeToken > 0 ? ` on ${exactQty(b.sizeToken, b.sizeUnit)}` : ''}` : ''}`}
+            >
               <div className={statLabel}>Notional</div>
               <div className={`${statValue} text-ink-50`}>
                 {b.notionalUsd > 0 ? fmtUsdCompact(b.notionalUsd) : <span className="text-ink-600">—</span>}
@@ -1401,6 +1429,8 @@ function BundleCard({
                     {b.fixedApr >= 0 ? 'receive ' : 'pay '}
                     {fmtPct(Math.abs(b.fixedApr))}
                   </span>
+                ) : b.ratePending ? (
+                  <span className="text-ink-500">pending</span>
                 ) : (
                   <span className="text-ink-600">—</span>
                 )}
@@ -1413,7 +1443,7 @@ function BundleCard({
                     : undefined
                 }
               >
-                {b.floatingApr !== null ? `float now ${fmtPct(b.floatingApr)}` : b.fixedApr === null ? 'no Boros leg' : '\u00a0'}
+                {b.floatingApr !== null ? `float now ${fmtPct(b.floatingApr)}` : b.fixedApr === null && !b.ratePending ? 'no Boros leg' : '\u00a0'}
               </div>
             </td>
             <td
@@ -1555,7 +1585,22 @@ function BundleCard({
 }
 
 
-export function AssetCard({ group, derived, sinceSec, windowPending, onChangeSince, exclusions, onExclude, legSince, onLegSince, liquidation = null }: Props) {
+export function AssetCard({
+  group,
+  derived,
+  sinceSec,
+  windowPending,
+  storedSinceSec,
+  defaultSinceSec,
+  onChangeSince,
+  backfilling,
+  supportedCoins,
+  exclusions,
+  onExclude,
+  legSince,
+  onLegSince,
+  liquidation = null,
+}: Props) {
   const { totals, gaps, venues } = derived;
   const flow = useTradeFlowOptional();
   /**
@@ -1736,10 +1781,12 @@ export function AssetCard({ group, derived, sinceSec, windowPending, onChangeSin
       let apr = 0;
       let yuNotional = 0;
       let yuQty = 0;
+      let ratePending = false;
       for (const l of boros) {
         const slice = keptSlice(exclusions, borosKey(l.marketId), l.sizeToken, l.entryApr);
         const n = l.notionalUsd * slice.keep;
-        apr += ((l.side === 'SHORT' ? 1 : -1) * slice.entry - (l.settleFeeApr ?? 0)) * n;
+        if (slice.entry === null) ratePending = true;
+        else apr += ((l.side === 'SHORT' ? 1 : -1) * slice.entry - (l.settleFeeApr ?? 0)) * n;
         w += n;
         yuNotional += n;
         yuQty += l.sizeToken * slice.keep;
@@ -1778,7 +1825,8 @@ export function AssetCard({ group, derived, sinceSec, windowPending, onChangeSin
         sizeUnit: perpNotional > 0 ? group.base : boros[0]?.collateral ?? group.base,
         sizeKind: perpNotional > 0 ? 'perp' : 'yu',
         floatingApr,
-        fixedApr: w > 0 ? apr / w : null,
+        fixedApr: w > 0 && !ratePending ? apr / w : null,
+        ratePending,
         settleUsd,
         tradePnlUsd,
         feesUsd,
@@ -1852,31 +1900,22 @@ export function AssetCard({ group, derived, sinceSec, windowPending, onChangeSin
         {hasLegs && liquidation && <LiquidationChip line={liquidation} base={group.base} />}
         <span className="ml-auto" />
         {windowPending && <span className="text-xs text-ink-600">updating window…</span>}
-        <label className="flex items-center gap-1.5 text-xs text-ink-500">
-          since
-          <input
-            type="date"
-            className="input w-32 px-2 py-1 text-xs"
-            value={sinceSec > 0 ? toDateInput(sinceSec) : ''}
-            max={toDateInput(Math.floor(Date.now() / 1000))}
-            title={`Count THIS asset's PnL from this date (local midnight). Empty = all time${derived.clockStartSec !== null ? ` — activity starts ${fmtDateLocal(derived.clockStartSec)}` : ''}.`}
-            onChange={(e) => {
-              const v = e.target.value;
-              const sec = v ? Math.floor(new Date(`${v}T00:00`).getTime() / 1000) : 0;
-              onChangeSince(Number.isFinite(sec) && sec > 0 ? sec : 0);
-            }}
-          />
-          {sinceSec > 0 && (
-            <button type="button" className="btn-ghost-xs" onClick={() => onChangeSince(0)}>
-              all time
-            </button>
-          )}
-        </label>
+        <SinceChip base={group.base} storedSec={storedSinceSec} defaultSec={defaultSinceSec} onChange={onChangeSince} />
       </div>
+
+      {!group.supported && (
+        <div className="mb-3 flex items-center gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-1.5 text-xs text-amber-400">
+          <span className="font-semibold">
+            {group.base} is{' '}
+            <HoverCard label="not supported">{`The terminal supports ${listCoins(supportedCoins)}.`}</HoverCard>
+          </span>
+          <span>No Telegram alerts and no new trades. Close its legs to clear this card.</span>
+        </div>
+      )}
 
       {/* The hero in its own panel, bordered in the accent so it reads as
           the ONE set of numbers; the ledgers below wear the plain hairline. */}
-      <div className="mb-3 rounded border border-info/30 bg-info/[0.04] px-4 pb-1 pt-3.5">
+      <div className={`mb-3 rounded border border-info/30 bg-info/[0.04] px-4 pb-1 pt-3.5 ${backfilling ? 'opacity-50' : ''}`}>
         {/* Hero — exactly what he asked to know: PnL (ROI in brackets),
             the CURRENT locked APR, and capital. Carry lives on the stats
             strip below; nothing else competes up here. */}
@@ -1975,6 +2014,15 @@ export function AssetCard({ group, derived, sinceSec, windowPending, onChangeSin
         {!wfOpen && <div className="h-2" />}
       </div>
 
+      {backfilling && (
+        <div className="mb-3 flex items-center gap-2 px-1 text-xs text-ink-400">
+          <Spinner />
+          <span>
+            {sinceSec > 0 ? `Reading Boros payments since ${fmtDateShort(sinceSec)}…` : 'Reading all Boros payments…'}
+          </span>
+        </div>
+      )}
+
       {/* Hedge status — only what needs doing. A perfect hedge says so in
           the header badge; a ribbon repeating it was a box for nothing. */}
       {hasLegs && (!derived.deltaNeutral || expiring.length > 0) && (
@@ -2028,7 +2076,7 @@ export function AssetCard({ group, derived, sinceSec, windowPending, onChangeSin
                 b={b}
                 base={group.base}
                 nowSec={nowSec}
-                defaultOpen={false}
+                defaultOpen={!group.supported}
                 histByMarket={histByMarket}
                 chainLegs={chainLegs}
                 histKeep={histKeep}
@@ -2081,7 +2129,7 @@ export function AssetCard({ group, derived, sinceSec, windowPending, onChangeSin
                           </span>
                         ) : (
                           <span className="text-ink-500" title="No level given — split pro-rata at the leg's average">
-                            at avg {show(r.entry)}
+                            at avg {r.entry !== null ? show(r.entry) : 'pending'}
                           </span>
                         )}
                       </td>
@@ -2399,7 +2447,11 @@ export function AssetCard({ group, derived, sinceSec, windowPending, onChangeSin
                     <span title={exactUsd(l.notionalUsd)}>{fmtUsdCompact(l.notionalUsd)}</span>
                   </td>
                   <td className="num whitespace-nowrap px-2.5 py-2 text-right font-semibold">
-                    <SignedNumber value={l.lockedApr} format={fmtPct} />
+                    {l.lockedApr !== null ? (
+                      <SignedNumber value={l.lockedApr} format={fmtPct} />
+                    ) : (
+                      <span className="font-normal text-ink-500">pending</span>
+                    )}
                   </td>
                   <td className="num whitespace-nowrap px-2.5 py-2 text-right text-ink-200">
                     <span title={daysLeftText(l.maturity, nowSec)}>{fmtDateLocal(l.maturity)}</span>
@@ -2514,7 +2566,7 @@ export function AssetCard({ group, derived, sinceSec, windowPending, onChangeSin
                 collateral: closeLeg.leg.collateral,
                 notionalToken: closeLeg.leg.sizeToken,
                 marketId: closeLeg.leg.marketId,
-                entryApr: closeLeg.leg.entryApr,
+                entryApr: closeLeg.leg.entryApr ?? undefined,
                 markApr: closeLeg.leg.markApr,
                 maturity: closeLeg.leg.maturity,
                 share: 1,

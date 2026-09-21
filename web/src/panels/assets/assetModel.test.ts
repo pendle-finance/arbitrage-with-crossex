@@ -55,6 +55,7 @@ const boros = (over: Partial<AssetBorosOpen>): AssetBorosOpen => ({
 
 const group = (over: Partial<AssetGroup>): AssetGroup => ({
   base: 'ETH',
+  supported: true,
   priceUsd: 1900,
   earliestSec: NOW - 30 * DAY,
   perpOpen: [],

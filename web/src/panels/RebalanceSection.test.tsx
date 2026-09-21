@@ -4,7 +4,7 @@ import { http, HttpResponse } from 'msw';
 import { useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useRebalance } from '../api/queries';
-import type { PositionsResponse, RebalanceView, RoutePlan, TransferView } from '../api/types';
+import type { PositionsResponse, RebalanceJob, RebalanceView, RoutePlan, TransferView } from '../api/types';
 import {
   plansOf,
   accountBodies,
@@ -463,6 +463,18 @@ describe('RebalanceSection facts rows', () => {
   });
 });
 
+const verdictLine = (): string =>
+  region().querySelector('.alert-blue span:not([aria-hidden]) span')?.textContent ?? '';
+
+const slowJob = (job: RebalanceJob, rounds: number): RebalanceJob => ({
+  ...job,
+  createdAt: REBALANCE_NOW,
+  stepIndex: 0,
+  steps: Array.from({ length: rounds }, (_, i) => ({
+    ...job.steps[0], round: i + 1, from: 'HYPERLIQUID' as const, to: 'CROSSEX' as const,
+  })),
+});
+
 describe('RebalanceSection run states', () => {
   beforeEach(() => {
     vi.setSystemTime(REBALANCE_NOW);
@@ -478,9 +490,21 @@ describe('RebalanceSection run states', () => {
     expect(within(region()).getByRole('button', { name: 'Running · round 3 of 5' })).toBeEnabled();
     // The job line rides the same VerdictAlert as every other verdict now, so
     // it is the box's sentence rather than a bare <p>.
-    const verdict = region().querySelector('.alert-blue span:not([aria-hidden]) span')?.textContent ?? '';
+    const verdict = verdictLine();
     expect(verdict).toMatch(/^Rebalance running, about .+ left\.$/);
     expect(verdict).not.toMatch(/repays|would move/);
+  });
+
+  it('past an hour the running line says hours and minutes in the same words as the minutes form', async () => {
+    const running = rebalanceViews.accountARunning;
+    await show({ ...running, job: slowJob(running.job, 10) });
+    expect(verdictLine()).toBe('Rebalance running, about 1 hour 7 minutes left.');
+  });
+
+  it('a whole hour left says the hour and no zero minutes', async () => {
+    const running = rebalanceViews.accountARunning;
+    await show({ ...running, job: slowJob(running.job, 9) });
+    expect(verdictLine()).toBe('Rebalance running, about 1 hour left.');
   });
 
   it('halted chip and button', async () => {

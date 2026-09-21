@@ -12,7 +12,7 @@ import type { PreviewResult } from '../../src/core/actions';
 import { gate, HOST, makeTestApp, mockGateGet } from './helpers/gate-nock';
 
 const NULLS = 'rule-symbols-nulls.json';
-const SYMBOL = 'GATE_FUTURE_NULLY_USDT';
+const SYMBOL = 'GATE_FUTURE_HYPE_USDT';
 let app: FastifyInstance;
 
 afterEach(async () => {
@@ -50,7 +50,7 @@ describe('null rule limits', () => {
     app = makeTestApp();
     mockGateGet('/rule/symbols', { fixture: NULLS });
     mockGateGet('/fee', { fixture: 'fee.json' });
-    mockSpotTicker('NULLY_USDT', '10');
+    mockSpotTicker('HYPE_USDT', '10');
 
     const previews = await preview([{ kind: 'open-market', symbol: SYMBOL, side: 'BUY', qty: '0.05' }]);
     // null min_notional → 0 → no below-min-notional; null max → 0 → no size cap.
@@ -62,7 +62,7 @@ describe('null rule limits', () => {
     app = makeTestApp();
     mockGateGet('/rule/symbols', { fixture: NULLS });
     mockGateGet('/fee', { fixture: 'fee.json' });
-    mockSpotTicker('NULLY_USDT', '10');
+    mockSpotTicker('HYPE_USDT', '10');
 
     const previews = await preview([{ kind: 'open-market', symbol: SYMBOL, side: 'BUY', qty: '999999999' }]);
     // Documented behavior: the null max is treated as "no cap", so the oversize is NOT caught.

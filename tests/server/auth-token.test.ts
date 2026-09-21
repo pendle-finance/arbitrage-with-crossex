@@ -97,6 +97,7 @@ describe('API token gate', () => {
       buildApp({
         getClients: () => makeClients({ key: 'k', secret: 's' }),
         cache: new TtlCache(),
+        dataDir: fs.mkdtempSync(path.join(os.tmpdir(), 'app-')),
       }),
     ).toThrow(/authToken is required/);
   });

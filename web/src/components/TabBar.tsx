@@ -1,19 +1,19 @@
 /**
  * Top-level view switcher: one horizontal tab strip instead of a fixed-width
  * left sidebar, so narrow viewports spend their width on content.
- *
- * Opportunities and Positions are the primary tabs (what the terminal is FOR)
- * and are rendered large and cyan-highlighted; Balances / Open Orders / Trades /
- * Fees are reference views, rendered small and dim after a divider. Panels stay
- * MOUNTED while inactive (hidden via the `hidden` attribute) so react-query
- * polling and live count badges keep working off-screen.
  */
-import { Fragment, type ReactNode } from 'react';
+import { createContext, Fragment, useContext, type ReactNode } from 'react';
 
 export const ACTIVE_TAB_KEY = 'crossex:activeTab:v1';
 
 export const TAB_IDS = ['opportunities', 'positions', 'balances', 'orders', 'trades', 'fees'] as const;
 export type TabId = (typeof TAB_IDS)[number];
+
+export const TabActiveContext = createContext(true);
+
+export function useTabActive(): boolean {
+  return useContext(TabActiveContext);
+}
 
 export function isTabId(v: unknown): v is TabId {
   return typeof v === 'string' && (TAB_IDS as readonly string[]).includes(v);
@@ -127,7 +127,7 @@ export function TabPanel({
 }) {
   return (
     <div role="tabpanel" id={`panel-${id}`} aria-labelledby={`tab-${id}`} hidden={!active}>
-      {children}
+      <TabActiveContext.Provider value={active}>{children}</TabActiveContext.Provider>
     </div>
   );
 }

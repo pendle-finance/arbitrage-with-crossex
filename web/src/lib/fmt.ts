@@ -63,7 +63,7 @@ export function parseSymbol(symbol: string): {
 /** Venue key → display casing: "GATE" → "Gate", "HYPERLIQUID" → "Hyperliquid";
  * short keys (≤3 chars, e.g. "OKX") stay upper-case. */
 export function prettyVenue(v: string): string {
-  return v.length <= 3 ? v : v.charAt(0) + v.slice(1).toLowerCase();
+  return v.length <= 3 ? v : v.charAt(0).toUpperCase() + v.slice(1).toLowerCase();
 }
 
 export const WALLET_SHORT: Readonly<Record<string, string>> = {
@@ -104,9 +104,10 @@ export function fmtUsd(value: number | string, dp = 2): string {
 /** Compact notionals ("$2.58M") so tight numeric columns never clip. */
 export function fmtUsdCompact(n: number): string {
   if (!Number.isFinite(n)) return '—';
+  const sign = n < 0 ? '-' : '';
   const abs = Math.abs(n);
-  if (abs >= 1e6) return `${n < 0 ? '-' : ''}$${(abs / 1e6).toFixed(2)}M`;
-  if (abs >= 1e4) return `${n < 0 ? '-' : ''}$${(abs / 1e3).toFixed(1)}k`;
+  if (abs >= 1e6 || +(abs / 1e3).toFixed(1) >= 1000) return `${sign}$${(abs / 1e6).toFixed(2)}M`;
+  if (abs >= 1e4) return `${sign}$${(abs / 1e3).toFixed(1)}k`;
   return fmtUsd(n, 0);
 }
 
@@ -195,19 +196,29 @@ export function toDate(epoch: number | string | undefined | null): Date | null {
 /** Compact age: "3s", "4m 12s", "2h 5m", "3d". */
 export function fmtAge(ms: number): string {
   if (!Number.isFinite(ms)) return '—';
+  const { value, unit, rest } = ageBucket(ms);
+  if (unit === 'm') return `${value}m ${rest}s`;
+  if (unit === 'h') return `${value}h ${rest}m`;
+  return `${value}${unit}`;
+}
+
+function ageBucket(ms: number): { value: number; unit: 's' | 'm' | 'h' | 'd'; rest: number } {
   const s = Math.max(0, Math.floor(ms / 1000));
-  if (s < 60) return `${s}s`;
   const m = Math.floor(s / 60);
-  if (m < 60) return `${m}m ${s % 60}s`;
   const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h ${m % 60}m`;
-  return `${Math.floor(h / 24)}d`;
+  if (s < 60) return { value: s, unit: 's', rest: 0 };
+  if (m < 60) return { value: m, unit: 'm', rest: s % 60 };
+  if (h < 24) return { value: h, unit: 'h', rest: m % 60 };
+  return { value: Math.floor(h / 24), unit: 'd', rest: 0 };
 }
 
 export function fmtAbout(seconds: number): string {
   if (seconds < 60) return `about ${Math.round(seconds)}s`;
   if (seconds < 600) return `about ${Math.round(seconds / 30) / 2} min`;
-  return `about ${Math.round(seconds / 60)} min`;
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `about ${minutes} min`;
+  const rest = minutes % 60;
+  return rest === 0 ? `about ${minutes / 60} h` : `about ${Math.floor(minutes / 60)} h ${rest} m`;
 }
 
 /** Unix seconds → UTC "YYYY-MM-DD" (maturities are quoted in UTC). */
@@ -224,6 +235,14 @@ export function fmtDateLocal(unixSec: number | null | undefined): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
+export function parseDateLocal(value: string): number {
+  return Math.floor(new Date(`${value}T00:00`).getTime() / 1000);
+}
+
+export function fmtDateShort(unixSec: number, options: { year?: 'numeric' } = {}): string {
+  return new Date(unixSec * 1000).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: options.year });
+}
+
 /** "HH:MM:SS" today, "MM-DD HH:MM:SS" otherwise. */
 export function fmtTime(d: Date | null): string {
   if (!d) return '—';
@@ -235,4 +254,16 @@ export function fmtTime(d: Date | null): string {
     d.getMonth() === now.getMonth() &&
     d.getDate() === now.getDate();
   return sameDay ? hms : `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${hms}`;
+}
+
+export function fmtClock(ms: number): string {
+  const d = new Date(ms);
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
+const SYNC_AGE_UNIT = { s: 's', m: 'min', h: 'h', d: 'd' } as const;
+
+export function fmtSyncAge(ms: number): string {
+  const { value, unit } = ageBucket(ms);
+  return `${value} ${SYNC_AGE_UNIT[unit]} ago`;
 }

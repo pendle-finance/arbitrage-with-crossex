@@ -40,13 +40,14 @@ import type {
   BorosPairRequest,
   BorosPairResult,
 } from '../api/types';
+import { Chip } from '../components/Chip';
 import { HoldToConfirmButton } from '../components/HoldToConfirmButton';
 import { size as fmtSize, type SoloLeg } from './BorosPairBits';
 import { QueryError } from '../components/QueryError';
 import { SegmentedToggle } from '../components/SegmentedToggle';
 import { amountError } from '../lib/amount';
 import { isUsdCollateral, knownRate } from '../lib/boros';
-import { fieldValue, fmtPct, sig } from '../lib/fmt';
+import { fieldValue, fmtPct, sigGrouped } from '../lib/fmt';
 import { useNow } from '../lib/useNow';
 import { uuid } from '../lib/uuid';
 import { useTrackedAddressOptional } from '../panels/trackedAddress';
@@ -171,7 +172,7 @@ export function BorosPairTicket({
   const addressMismatch = Boolean(
     agentRoot && trackedAddress && agentRoot.toLowerCase() !== trackedAddress.toLowerCase(),
   );
-  const context = useBorosPairContext(address);
+  const context = useBorosPairContext(address, active);
 
   const [marketA, setMarketA] = useState<number | null>(null);
   const [marketB, setMarketB] = useState<number | null>(null);
@@ -654,8 +655,27 @@ export function BorosPairTicket({
         ]
       : []),
   ];
+  const legGrows = (sizing?: { currentSize: number; resultingSize: number }): boolean =>
+    sizing !== undefined && Math.abs(sizing.resultingSize) > Math.abs(sizing.currentSize);
+  const closeOnlyLeg: 'A' | 'B' | null =
+    intent === 'open'
+      ? rowA?.closeOnly
+        ? 'A'
+        : rowB?.closeOnly
+          ? 'B'
+          : null
+      : intent === 'target' && rowA?.closeOnly && legGrows(simulation?.legA.sizing)
+        ? 'A'
+        : intent === 'target' && rowB?.closeOnly && legGrows(simulation?.legB.sizing)
+          ? 'B'
+          : null;
+
   const canConfirm =
-    request !== null && simulation !== null && blockers.length === 0 && !execute.isPending;
+    request !== null &&
+    simulation !== null &&
+    blockers.length === 0 &&
+    !execute.isPending &&
+    closeOnlyLeg === null;
 
   const onConfirm = () => {
     if (!request) return;
@@ -768,40 +788,64 @@ export function BorosPairTicket({
       {mode === 'pair' ? (
         <div className="flex flex-col gap-2">
           <div className="grid grid-cols-2 gap-2">
-            <MarketCard
-              label="Market A"
-              row={rowA}
-              side={dirA}
-              locked={guided}
-            >
-              <MarketSelect
-                id="boros-leg-a"
-                label=""
-                ariaLabel="Leg A"
-                value={marketA}
-                markets={markets}
-                reasonFor={reasonAgainst(rowB)}
-                onPick={setMarketA}
-                disabled={context.isPending}
-              />
-            </MarketCard>
-            <MarketCard
-              label="Market B"
-              row={rowB}
-              side={dirB}
-              locked={guided}
-            >
-              <MarketSelect
-                id="boros-leg-b"
-                label=""
-                ariaLabel="Leg B"
-                value={marketB}
-                markets={markets}
-                reasonFor={reasonAgainst(rowA)}
-                onPick={setMarketB}
-                disabled={context.isPending}
-              />
-            </MarketCard>
+            <div className="relative">
+              <MarketCard
+                label="Market A"
+                row={rowA}
+                side={dirA}
+                locked={guided}
+              >
+                <MarketSelect
+                  id="boros-leg-a"
+                  label=""
+                  ariaLabel="Leg A"
+                  value={marketA}
+                  markets={markets}
+                  reasonFor={reasonAgainst(rowB)}
+                  onPick={setMarketA}
+                  disabled={context.isPending}
+                />
+              </MarketCard>
+              {rowA?.closeOnly && (
+                <Chip
+                  tone="amber"
+                  sm
+                  className="absolute right-2 top-2"
+                  title="This market only accepts orders that reduce your position."
+                >
+                  close only
+                </Chip>
+              )}
+            </div>
+            <div className="relative">
+              <MarketCard
+                label="Market B"
+                row={rowB}
+                side={dirB}
+                locked={guided}
+              >
+                <MarketSelect
+                  id="boros-leg-b"
+                  label=""
+                  ariaLabel="Leg B"
+                  value={marketB}
+                  markets={markets}
+                  reasonFor={reasonAgainst(rowA)}
+                  onPick={setMarketB}
+                  disabled={context.isPending}
+                />
+              </MarketCard>
+              {rowB?.closeOnly && (
+                <Chip
+                  tone="amber"
+                  sm
+                  className="absolute right-2 top-2"
+                  title="This market only accepts orders that reduce your position."
+                >
+                  close only
+                </Chip>
+              )}
+            </div>
           </div>
           {/* No direction control here: each card STATES its side (A short,
               B long — or the mirror when a card prefills a hedge), and which
@@ -837,7 +881,7 @@ export function BorosPairTicket({
             {simulation ? (
               <>
                 <span className="text-ink-400">
-                  {sig(Math.abs((activeLeg === 'B' ? simulation.legB : simulation.legA).sizing.currentSize))}
+                  {sigGrouped(Math.abs((activeLeg === 'B' ? simulation.legB : simulation.legA).sizing.currentSize))}
                 </span>
                 <span className="text-ink-600"> → </span>
                 {/* Single mode: this line IS the position readout (the venue
@@ -856,7 +900,7 @@ export function BorosPairTicket({
                           : undefined
                   }
                 >
-                  {sig(Math.abs((activeLeg === 'B' ? simulation.legB : simulation.legA).sizing.resultingSize))}
+                  {sigGrouped(Math.abs((activeLeg === 'B' ? simulation.legB : simulation.legA).sizing.resultingSize))}
                 </span>{' '}
                 <span className="text-ink-400">{simulation.collateral}</span>
               </>
@@ -872,7 +916,7 @@ export function BorosPairTicket({
           <span className="num text-[12px] text-ink-100">
             {availableToTrade !== null ? (
               <>
-                {sig(availableToTrade)}{' '}
+                {sigGrouped(availableToTrade)}{' '}
                 <span className="text-ink-400">{rowA?.collateral ?? ''}</span>
               </>
             ) : (
@@ -1218,11 +1262,13 @@ export function BorosPairTicket({
           >
             {execute.isPending
               ? 'Sending…'
-              : onlyLeg
-                ? `Confirm — complete leg ${onlyLeg} ▸`
-                : mode === 'single'
-                  ? 'Confirm — 1 Boros market order ▸'
-                  : 'Confirm — 2 Boros market orders ▸'}
+              : closeOnlyLeg
+                ? `Market ${closeOnlyLeg} takes closes only. Switch to Close.`
+                : onlyLeg
+                  ? `Confirm — complete leg ${onlyLeg} ▸`
+                  : mode === 'single'
+                    ? 'Confirm — 1 Boros market order ▸'
+                    : 'Confirm — 2 Boros market orders ▸'}
           </HoldToConfirmButton>
           {/* Every market this will touch, NAMED before anything is sent —
               the names are the part the button cannot show. It already says

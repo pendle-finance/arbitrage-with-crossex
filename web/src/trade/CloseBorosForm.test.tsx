@@ -385,3 +385,23 @@ describe('CloseBorosForm — the venue minimum', () => {
     expect(screen.queryByText(/flip one to trade a spread/)).not.toBeInTheDocument();
   });
 });
+
+describe('CloseBorosForm — full sizes on a large book', () => {
+  it.each([
+    [4100, '4,100 ETH'],
+    [12_345_678.9, '12,345,678.9 ETH'],
+  ])('states a %d ETH close with every digit and commas, never compact or exponent', async (size, text) => {
+    server.use(...ready());
+    renderWithClient(<CloseBorosForm legs={[{ ...leg(), notionalToken: size }]} />);
+
+    expect(await screen.findByRole('button', { name: text })).toBeInTheDocument();
+    const input = screen.getByLabelText(/Close size, applied to both legs/) as HTMLInputElement;
+    expect(input.value).not.toContain(',');
+    fireEvent.change(input, { target: { value: '100' } });
+    expect(await screen.findByText(`of ${text}`)).toBeInTheDocument();
+    expect(screen.getByText('100 ETH')).toBeInTheDocument();
+    fireEvent.change(input, { target: { value: '99999999' } });
+    expect(await screen.findByText(`size must be above 0 and at most ${text}`)).toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(/\d(k|M) ETH|e\+/);
+  });
+});

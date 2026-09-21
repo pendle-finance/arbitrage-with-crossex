@@ -1,13 +1,13 @@
 import { parseBinanceBook } from '../estimate/books';
 import { walkBook } from '../estimate/fill';
-import { roundToStep } from '../numbers';
+import { floorDecimalString, floorToStep, roundToStep } from '../numbers';
 
 export const USDC_WALLET = { coin: 'USDC', venue: 'HYPERLIQUID' } as const;
 export const LIGHTER_WALLET = { coin: 'USDC', venue: 'LIGHTER' } as const;
 export const USDT_WALLET = { coin: 'USDT', venue: 'CROSSEX' } as const;
 export const SPOT_SYMBOL = 'GATE_SPOT_USDC_USDT';
 export const SPOT_PAIR = 'USDC_USDT';
-const HYPERLIQUID_FREE_BORROW_USDC = 10000;
+export const HYPERLIQUID_FREE_BORROW_USDC = 10_000;
 export const CONVERT_RATE = 0.002;
 export const CONVERT_MAX = 500_000;
 /** A pair's USDT half is its USDC half x bid x 0.998, so 495,000 keeps that half under Gate's 500,000 Convert cap while the USDC bid is at most 1.0121. */
@@ -399,7 +399,7 @@ export function fit(account: { marginBalance: number; initialMargin: number }, c
   const unborrowed = Math.max(0, equity);
   const borrowFloor = APP_FLOOR * BORROW_INITIAL_MARGIN;
   const room = free <= unborrowed ? free : (free + borrowFloor * unborrowed) / (1 + borrowFloor);
-  return floorCents(Math.max(0, Math.min(cash, room)));
+  return Number(floorToStep(Math.max(0, Math.min(cash, room)), '0.01'));
 }
 
 function repayment(
@@ -1055,7 +1055,8 @@ function pathMax(path: PathRule, account: AccountLike, spot: SpotBalance[] | nul
     const initialMargin = finiteOrNull(account.initialMargin);
     if (marginBalance === null || initialMargin === null) return 0;
     const asset = (account.assets ?? []).find(isWallet({ coin: path.coin, venue: CROSSEX_VENUE[path.from] }));
-    return fit({ marginBalance, initialMargin }, num(asset?.balance), num(asset?.equity));
+    const cash = Number(floorDecimalString(asset?.balance, String(MIN_TRANSFER)));
+    return fit({ marginBalance, initialMargin }, cash, num(asset?.equity));
   }
   if (spot === null) return null;
   return floorCents(Math.max(0, spot.find((row) => row.coin === path.coin)?.available ?? 0));

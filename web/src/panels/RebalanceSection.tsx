@@ -21,7 +21,12 @@ const READ_AGAIN = 'Read again';
 const STOPPED_OPEN = 'Stopped · open';
 const IS_POSITION_MARGIN = 'cannot move. It is margin for open positions.';
 
-const minutesLeft = (seconds: number): string => fmtAbout(seconds).replace(/ 1 min$/, ' 1 minute').replace(/ min$/, ' minutes');
+const plural = (n: string, word: string): string => `${n} ${word}${n === '1' ? '' : 's'}`;
+
+const timeLeft = (seconds: number): string =>
+  fmtAbout(seconds)
+    .replace(/(\d+) h\b/, (_all, n: string) => plural(n, 'hour'))
+    .replace(/(\d+(?:\.\d+)?) (?:min|m)\b/, (_all, n: string) => plural(n, 'minute'));
 
 function jobVerdict(job: RebalanceJob, now: number): string {
   const round = roundOf(job);
@@ -29,7 +34,7 @@ function jobVerdict(job: RebalanceJob, now: number): string {
   if (job.status === 'halted') return `${what} stopped ${round === null ? 'at Convert' : `in round ${num(round, 0)}`}.`;
   const total = jobSeconds(job);
   const left = Math.max(0, total - Math.max(0, now - job.createdAt) / 1000);
-  return total > 0 ? `${what} running, ${minutesLeft(left)} left.` : `${what} running.`;
+  return total > 0 ? `${what} running, ${timeLeft(left)} left.` : `${what} running.`;
 }
 
 function jobButton(job: RebalanceJob): string {

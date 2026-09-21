@@ -2,6 +2,16 @@
 import { http, HttpResponse } from 'msw';
 import type {
   ActionInput,
+  AssetBorosHistory,
+  AssetBorosOpen,
+  AssetGroup,
+  AssetPerpOpen,
+  AssetViewResponse,
+  BorosAgentStatus,
+  BorosPairContext,
+  BorosPairMarketRow,
+  ClassifiedError,
+  CredentialsInfo,
   DealOrder,
   DealPair,
   DealProjection,
@@ -27,6 +37,9 @@ import type {
   SpotBalance,
   StrategyLeg,
   SymbolRule,
+  TelegramInfo,
+  TelegramLinkStart,
+  TelegramLinkStatus,
   TransferJob,
   TransferPath,
   TransferView,
@@ -34,8 +47,9 @@ import type {
   WalletAfter,
   WalletShare,
 } from '../api/types';
+import type { MarginTiers } from '../lib/liquidation';
 import type { SharePayloadV1 } from '../lib/shareCodec';
-import { env } from './server';
+import { env, server } from './server';
 
 // Re-exported so the imports above stay live for the upcoming opportunity
 // fixtures (keeps `tsc --noEmit` green while they land).
@@ -245,6 +259,8 @@ export function baseHandlers() {
     rebalanceHandler(),
     transferHandler(),
     http.get('/api/alerts', () => HttpResponse.json(env([]))),
+    http.get('/api/telegram', () => HttpResponse.json(env(telegramInfo()))),
+    http.get('/api/boros/agent', () => HttpResponse.json(env(agentStatus()))),
     // Default: disclaimer already accepted, so the gate stays out of the way.
     // Tests that exercise the gate override this with accepted:false.
     http.get('/api/disclaimer', () =>
@@ -318,6 +334,66 @@ export function makeSharePayload(overrides: Partial<SharePayloadV1> = {}): Share
 export function makeCrossexPosition(overrides: Partial<CrossexPosition> = {}): CrossexPosition {
   return { ...ethPosition, ...overrides };
 }
+
+export function agentStatus(over: Partial<BorosAgentStatus> = {}): BorosAgentStatus {
+  return {
+    configured: false,
+    root: null,
+    rootMasked: null,
+    accountId: null,
+    expiry: null,
+    expired: false,
+    canProvision: true,
+    ...over,
+  };
+}
+
+export function telegramInfo(over: Partial<TelegramInfo> = {}): TelegramInfo {
+  return {
+    connected: false,
+    state: 'none',
+    settings: null,
+    lastSyncAt: null,
+    lastSyncError: null,
+    ...over,
+  };
+}
+
+export function setupHandlers(agent: BorosAgentStatus, telegram: TelegramInfo) {
+  return [
+    http.get('/api/boros/agent', () => HttpResponse.json(env(agent))),
+    http.get('/api/telegram', () => HttpResponse.json(env(telegram))),
+  ];
+}
+
+export interface SetupWorld {
+  keyConfigured: boolean;
+  agent: BorosAgentStatus;
+  telegram: TelegramInfo;
+}
+
+export function mockWorld(over: Partial<SetupWorld> = {}): SetupWorld {
+  const world: SetupWorld = { keyConfigured: false, agent: agentStatus(), telegram: telegramInfo(), ...over };
+  server.use(
+    http.get('/api/credentials', () =>
+      HttpResponse.json(env(world.keyConfigured ? credentialsBodies.set : credentialsBodies.unset)),
+    ),
+    http.get('/api/boros/agent', () => HttpResponse.json(env(world.agent))),
+    http.get('/api/telegram', () => HttpResponse.json(env(world.telegram))),
+  );
+  return world;
+}
+
+export const assetView: AssetViewResponse = {
+  sinceSec: 0,
+  nowSec: 1_760_000_000,
+  defaultSinceSec: null,
+  assets: [],
+  supportedCoins: ['ETH', 'HYPE', 'BTC'],
+  earliestSec: null,
+  coverage: { settlementsFromSec: 0, perpClosedFromSec: 0, borosTxnsComplete: true, backfilling: false },
+  warnings: [],
+};
 
 export const OPP_NOW = 1_752_000_000;
 export const OPP_MATURITY = OPP_NOW + 30 * 86_400;
@@ -2447,6 +2523,29 @@ export const accountBodies = {
   },
 } satisfies Record<string, CrossexAccount>;
 
+/** Gate's /crossex/rule/risk_limits, read live 2026-09-21, mirrored in tests/fixtures/gate/risk-limits.json. */
+const GATE_RISK_TIERS: MarginTiers = {
+  GATE_FUTURE_ETH_USDT: [
+    { from: 0, rate: 0.01, deduction: 0 },
+    { from: 15_000_000, rate: 0.012, deduction: 30_000 },
+    { from: 20_000_000, rate: 0.016, deduction: 110_000 },
+    { from: 30_000_000, rate: 0.02, deduction: 230_000 },
+    { from: 50_000_000, rate: 0.07, deduction: 2_730_000 },
+    { from: 300_000_000, rate: 0.1, deduction: 11_730_000 },
+  ],
+  GATE_FUTURE_HYPE_USDT: [
+    { from: 0, rate: 0.015, deduction: 0 },
+    { from: 200_000, rate: 0.018, deduction: 600 },
+    { from: 300_000, rate: 0.02, deduction: 1_200 },
+    { from: 500_000, rate: 0.025, deduction: 3_700 },
+    { from: 1_000_000, rate: 0.08, deduction: 58_700 },
+    { from: 6_000_000, rate: 0.1, deduction: 178_700 },
+  ],
+  HYPERLIQUID_FUTURE_HYPE_USDC: [{ from: 0, rate: 0.05, deduction: 0 }],
+};
+
+const HYPE_MARK_STALE_AT = new Date(2026, 8, 21, 14, 32).getTime();
+
 export const positionsBodies = {
   ethTwoVenues: {
     positions: [
@@ -2481,5 +2580,569 @@ export const positionsBodies = {
         singleLeg: false,
       },
     ],
+    marginTiers: GATE_RISK_TIERS,
+  },
+  hypeMarkStale: {
+    positions: [
+      makeCrossexPosition({ maintenanceMargin: '200' }),
+      makeCrossexPosition({
+        symbol: 'HYPERLIQUID_FUTURE_ETH_USDC',
+        positionSide: 'SHORT',
+        positionQty: '-0.3',
+        maxLeverage: '20',
+        upnl: '-3',
+        upnlRate: '-0.004',
+        fee: '-0.3',
+        initialMargin: '75',
+        maintenanceMargin: '200',
+      }),
+      makeCrossexPosition({
+        symbol: 'GATE_FUTURE_HYPE_USDT',
+        positionSide: 'LONG',
+        positionQty: '10',
+        positionValue: '860',
+        entryPrice: '85',
+        markPrice: '86',
+        leverage: '10',
+        maxLeverage: '10',
+        upnl: '10',
+        upnlRate: '0.012',
+        fundingFee: '0',
+        fee: '-0.43',
+        initialMargin: '86',
+        maintenanceMargin: '13',
+      }),
+      makeCrossexPosition({
+        symbol: 'HYPERLIQUID_FUTURE_HYPE_USDC',
+        positionSide: 'SHORT',
+        positionQty: '-10',
+        positionValue: '860',
+        entryPrice: '85',
+        markPrice: '',
+        leverage: '10',
+        maxLeverage: '10',
+        upnl: '0',
+        upnlRate: '0',
+        fundingFee: '0',
+        fee: '-0.43',
+        initialMargin: '86',
+        maintenanceMargin: '43',
+        markStaleSinceMs: HYPE_MARK_STALE_AT,
+      }),
+    ],
+    exposure: [
+      {
+        base: 'ETH',
+        legs: [
+          { symbol: 'GATE_FUTURE_ETH_USDT', exchange: 'GATE', quote: 'USDT', side: 'LONG', qty: 0.3, value: 750 },
+          {
+            symbol: 'HYPERLIQUID_FUTURE_ETH_USDC', exchange: 'HYPERLIQUID', quote: 'USDC', side: 'SHORT', qty: 0.3,
+            value: 750,
+          },
+        ],
+        longValue: 750,
+        shortValue: 750,
+        netValue: 0,
+        grossValue: 1500,
+        neutral: true,
+        singleLeg: false,
+      },
+      {
+        base: 'HYPE',
+        legs: [
+          { symbol: 'GATE_FUTURE_HYPE_USDT', exchange: 'GATE', quote: 'USDT', side: 'LONG', qty: 10, value: 860 },
+          {
+            symbol: 'HYPERLIQUID_FUTURE_HYPE_USDC', exchange: 'HYPERLIQUID', quote: 'USDC', side: 'SHORT', qty: 10,
+            value: 860,
+          },
+        ],
+        longValue: 860,
+        shortValue: 860,
+        netValue: 0,
+        grossValue: 1720,
+        neutral: true,
+        singleLeg: false,
+      },
+    ],
+    marginTiers: GATE_RISK_TIERS,
   },
 } satisfies Record<string, PositionsResponse>;
+
+const MIN_MS = 60_000;
+const FIXTURE_NOW_SEC = Math.floor(REBALANCE_NOW / 1000);
+const OWNER_WALLET = '0xab184fe7cc01f11bf80078b5bd2ac11f00c1ed9d';
+export const OWNER_DEFAULT_SINCE_SEC = 1_782_211_868;
+const MAR_1_2026_SEC = 1_772_323_200;
+const DEC_2026_MATURITY = 1_798_156_800;
+export const LINK_CODE = 'q3Jv0cX9mT2bL8wYp5nK4A';
+const LINK_URL = `https://boros-bot-notification.pendle.finance/alerts?crossex=${LINK_CODE}`;
+const BOTH_ON = { liquidation: true, interest: true };
+
+export const telegramBodies = {
+  none: telegramInfo(),
+  pending: telegramInfo(),
+  connected: telegramInfo({
+    connected: true, state: 'connected', settings: BOTH_ON, lastSyncAt: REBALANCE_NOW - 3 * MIN_MS,
+  }),
+  connectedBothOff: telegramInfo({
+    connected: true, state: 'connected', settings: { liquidation: false, interest: false },
+    lastSyncAt: REBALANCE_NOW - 3 * MIN_MS,
+  }),
+  liquidationOnly: telegramInfo({
+    connected: true, state: 'connected', settings: { liquidation: true, interest: false },
+    lastSyncAt: REBALANCE_NOW - 3 * MIN_MS,
+  }),
+  interestOnly: telegramInfo({
+    connected: true, state: 'connected', settings: { liquidation: false, interest: true },
+    lastSyncAt: REBALANCE_NOW - 3 * MIN_MS,
+  }),
+  bootFailed: telegramInfo({
+    connected: true, state: 'connected', settings: null, lastSyncAt: null,
+    lastSyncError: { at: REBALANCE_NOW - 2 * MIN_MS, message: 'The Telegram bot answered 503.' },
+  }),
+  syncFailed: telegramInfo({
+    connected: true, state: 'connected', settings: BOTH_ON, lastSyncAt: REBALANCE_NOW - 47 * MIN_MS,
+    lastSyncError: { at: REBALANCE_NOW - 2 * MIN_MS, message: 'The Telegram bot answered 503.' },
+  }),
+  replaced: telegramInfo({ state: 'replaced', lastSyncAt: REBALANCE_NOW - 26 * 60 * MIN_MS }),
+  removed: telegramInfo({ state: 'removed', lastSyncAt: REBALANCE_NOW - 26 * 60 * MIN_MS }),
+} satisfies Record<string, TelegramInfo>;
+
+export const telegramLinkStart: TelegramLinkStart = { url: LINK_URL, expiresAt: REBALANCE_NOW + 10 * MIN_MS };
+
+export const telegramLinkBodies = {
+  none: { status: 'none', url: null, expiresAt: null },
+  pending: { status: 'pending', ...telegramLinkStart },
+  confirmed: { status: 'confirmed', ...telegramLinkStart },
+  expired: { status: 'expired', url: LINK_URL, expiresAt: REBALANCE_NOW - MIN_MS },
+} satisfies Record<string, TelegramLinkStatus>;
+
+export const credentialsBodies = {
+  unset: { configured: false, keyMasked: null },
+  set: { configured: true, keyMasked: '160e…4f80' },
+} satisfies Record<string, CredentialsInfo>;
+
+export const credentialsRefused: { ok: false; error: ClassifiedError } = {
+  ok: false,
+  error: {
+    category: 'auth',
+    label: 'INVALID_KEY',
+    message: 'Gate API error (HTTP 401) [INVALID_KEY]: Invalid key',
+    httpStatus: 401,
+    retryable: false,
+    hint: 'Gate rejected these credentials — check key, secret, and CrossEx permission.',
+  },
+};
+
+export const agentBodies = {
+  none: agentStatus(),
+  set: agentStatus({
+    configured: true, root: OWNER_WALLET, rootMasked: '0xab18…ed9d', accountId: 0,
+    expiry: FIXTURE_NOW_SEC + 180 * 86_400,
+  }),
+  expired: agentStatus({
+    configured: true, root: OWNER_WALLET, rootMasked: '0xab18…ed9d', accountId: 0,
+    expiry: FIXTURE_NOW_SEC - 86_400, expired: true,
+  }),
+} satisfies Record<string, BorosAgentStatus>;
+
+function perpLeg(
+  symbol: string, side: 'LONG' | 'SHORT', qty: number, entryPrice: number, markPrice: number, fundingUsd: number,
+  openedAt: number,
+): AssetPerpOpen {
+  const notionalUsd = qty * markPrice;
+  return {
+    symbol, venue: symbol.split('_')[0], side, qty, notionalUsd, entryPrice, markPrice, leverage: 10,
+    upnlUsd: (side === 'LONG' ? 1 : -1) * (markPrice - entryPrice) * qty, fundingUsd, feesUsd: notionalUsd * 0.0005,
+    imUsd: notionalUsd / 10, openedAt,
+  };
+}
+
+function perpFromPosition(p: CrossexPosition, openedAt: number): AssetPerpOpen {
+  return {
+    symbol: p.symbol, venue: p.symbol.split('_')[0], side: p.positionSide === 'SHORT' ? 'SHORT' : 'LONG',
+    qty: Math.abs(Number(p.positionQty)), notionalUsd: Number(p.positionValue), entryPrice: Number(p.entryPrice),
+    markPrice: Number(p.markPrice), leverage: Number(p.leverage), upnlUsd: Number(p.upnl),
+    fundingUsd: Number(p.fundingFee), feesUsd: -Number(p.fee), imUsd: Number(p.initialMargin), openedAt,
+  };
+}
+
+function borosLegs(sizeToken: number, priceUsd: number, settleUsd: number): {
+  open: AssetBorosOpen[]; history: AssetBorosHistory[];
+} {
+  const notionalUsd = sizeToken * priceUsd;
+  const leg = { maturity: DEC_2026_MATURITY, collateral: 'ETH', sizeToken, notionalUsd, settleFeeApr: 0.001 };
+  return {
+    open: [
+      {
+        ...leg, marketId: 214, venue: 'BINANCE', side: 'SHORT', entryApr: 0.0712, markApr: 0.0685, floatingApr: 0.0641,
+        settleUsd, mtmUsd: notionalUsd * 0.0003, imUsd: notionalUsd * 0.03,
+      },
+      {
+        ...leg, marketId: 215, venue: 'HYPERLIQUID', side: 'LONG', entryApr: 0.0874, markApr: 0.0928, floatingApr: 0.0955,
+        settleUsd: -settleUsd / 2, mtmUsd: notionalUsd * 0.0002, imUsd: notionalUsd * 0.03,
+      },
+    ],
+    history: [
+      {
+        marketId: 214, venue: 'BINANCE', maturity: DEC_2026_MATURITY, settleUsd, settleFeeUsd: settleUsd * 0.025,
+        tradePnlUsd: -notionalUsd * 0.0004, tradeFeeUsd: notionalUsd * 0.00025, peakSizeToken: sizeToken,
+        peakNotionalUsd: notionalUsd, firstEventSec: 1_783_004_000, entryApr: 0.0712, side: 'SHORT',
+      },
+      {
+        marketId: 215, venue: 'HYPERLIQUID', maturity: DEC_2026_MATURITY, settleUsd: -settleUsd / 2,
+        settleFeeUsd: settleUsd * 0.0125, tradePnlUsd: -notionalUsd * 0.0003, tradeFeeUsd: notionalUsd * 0.00025,
+        peakSizeToken: sizeToken, peakNotionalUsd: notionalUsd, firstEventSec: 1_783_004_000, entryApr: 0.0874,
+        side: 'LONG',
+      },
+    ],
+  };
+}
+
+function assetGroup(
+  base: string, priceUsd: number, perpOpen: AssetPerpOpen[], boros?: { open: AssetBorosOpen[]; history: AssetBorosHistory[] },
+): AssetGroup {
+  return {
+    base, supported: true, priceUsd, earliestSec: Math.min(...perpOpen.map((p) => p.openedAt ?? FIXTURE_NOW_SEC)),
+    perpOpen, perpClosed: [], borosOpen: boros?.open ?? [], borosHistory: boros?.history ?? [],
+  };
+}
+
+const ownerEth = assetGroup(
+  'ETH',
+  2472.74,
+  [
+    perpLeg('GATE_FUTURE_ETH_USDT', 'LONG', 0.555, 2438.6, 2472.74, 3.18, 1_783_000_000),
+    perpLeg('OKX_FUTURE_ETH_USDT', 'LONG', 0.1, 2451.2, 2472.84, 0.61, 1_785_400_000),
+    perpLeg('BINANCE_FUTURE_ETH_USDT', 'LONG', 0.05, 2466.02, 2473.01398156, 0.12, 1_787_900_000),
+    perpLeg('HYPERLIQUID_FUTURE_ETH_USDC', 'SHORT', 0.62, 2441.75, 2473.41, 4.87, 1_783_000_000),
+    perpLeg('LIGHTER_FUTURE_ETH_USDC', 'SHORT', 0.1, 2449.9, 2472.94, 0.35, 1_785_400_000),
+  ],
+  borosLegs(1.2, 2472.74, 4.38),
+);
+
+const ownerHype = assetGroup('HYPE', 86.597, [
+  perpLeg('HYPERLIQUID_FUTURE_HYPE_USDC', 'SHORT', 2.3, 41.62, 86.585, 2.95, OWNER_DEFAULT_SINCE_SEC),
+  perpLeg('GATE_FUTURE_HYPE_USDT', 'LONG', 2.3, 41.7, 86.597, -1.12, OWNER_DEFAULT_SINCE_SEC + 40),
+]);
+
+const ownerEthClosed: AssetGroup = {
+  ...ownerEth,
+  earliestSec: 1_776_500_000,
+  perpClosed: [
+    {
+      symbol: 'GATE_FUTURE_ETH_USDT', venue: 'GATE', closedPnlUsd: 18.24, fundingUsd: 1.9, feesUsd: 0.93, count: 1,
+      lastClosedAt: 1_778_000_000,
+      rows: [
+        {
+          closedAt: 1_778_000_000, qty: 0.4, openPx: 2310.5, closePx: 2356.1, priceUsd: 18.24, fundingUsd: 1.9,
+          feesUsd: 0.93, complete: true, dedupedIntoOpen: false,
+        },
+      ],
+    },
+  ],
+};
+
+const solLeg: AssetGroup = {
+  ...assetGroup('SOL', 181.25, [perpLeg('GATE_FUTURE_SOL_USDT', 'LONG', 12, 176.4, 181.25, 0.84, 1_788_000_000)]),
+  supported: false,
+};
+
+const solWhaleLeg: AssetGroup = {
+  ...assetGroup('SOL', 181.25, [
+    { ...perpLeg('GATE_FUTURE_SOL_USDT', 'LONG', 12, 176.4, 181.25, 0.84, 1_788_000_000), upnlUsd: 6_000_000.37 },
+  ]),
+  supported: false,
+};
+
+const ownerEthEntryPending: AssetGroup = {
+  ...ownerEth,
+  borosOpen: ownerEth.borosOpen.map((leg, i) => (i === 0 ? { ...leg, entryApr: null } : leg)),
+};
+
+const avDefault: AssetViewResponse = {
+  ...assetView,
+  sinceSec: OWNER_DEFAULT_SINCE_SEC,
+  nowSec: FIXTURE_NOW_SEC,
+  defaultSinceSec: OWNER_DEFAULT_SINCE_SEC,
+  assets: [ownerEth, ownerHype],
+  earliestSec: OWNER_DEFAULT_SINCE_SEC,
+  interest: { paidUsd: 3.41, byCoin: { USDT: 3.41 }, coversFromSec: 0, available: true },
+};
+
+const avAllTime: AssetViewResponse = {
+  ...avDefault,
+  sinceSec: 0,
+  assets: [ownerEthClosed, ownerHype],
+  earliestSec: 1_776_500_000,
+  interest: { paidUsd: 5.02, byCoin: { USDT: 5.02 }, coversFromSec: 0, available: true },
+};
+
+const WHALE_ASSETS = [
+  {
+    coin: 'USDT', exchangeType: 'CROSSEX', balance: '-999999.995', availableBalance: '0', upnl: '3283',
+    equity: '-996716.995', liability: '999999.995', borrowingInitialMargin: '199999.999',
+    borrowingMaintenanceMargin: '99999.9995',
+  },
+  {
+    coin: 'USDC', exchangeType: 'HYPERLIQUID', balance: '6493799.995', availableBalance: '3373759.901', upnl: '2917',
+    equity: '6496716.995', liability: '0', borrowingInitialMargin: '0', borrowingMaintenanceMargin: '0',
+  },
+  {
+    coin: 'USDC', exchangeType: 'LIGHTER', balance: '500000', availableBalance: '500000', upnl: '0', equity: '500000',
+    liability: '0', borrowingInitialMargin: '0', borrowingMaintenanceMargin: '0',
+  },
+  {
+    coin: 'USDC', exchangeType: 'GATE', balance: '0', availableBalance: '0', upnl: '0', equity: '0', liability: '0',
+    borrowingInitialMargin: '0', borrowingMaintenanceMargin: '0',
+  },
+];
+
+const WHALE_POSITIONS = [
+  makeCrossexPosition({
+    symbol: 'BINANCE_FUTURE_ETH_USDT', positionSide: 'SHORT', positionQty: '-4100', positionValue: '10138234',
+    entryPrice: '2473.58', markPrice: '2472.74', leverage: '10', upnl: '3444', upnlRate: '0.0034',
+    fundingFee: '-2310.55', fee: '-5069.117', initialMargin: '1013823.4', maintenanceMargin: '101382.34',
+  }),
+  makeCrossexPosition({
+    symbol: 'HYPERLIQUID_FUTURE_ETH_USDC', positionSide: 'LONG', positionQty: '4100', positionValue: '10140981',
+    entryPrice: '2472.62', markPrice: '2473.41', leverage: '10', maxLeverage: '25', upnl: '3239', upnlRate: '0.0032',
+    fundingFee: '4875.2', fee: '-5070.4905', initialMargin: '1014098.1', maintenanceMargin: '101409.81',
+  }),
+  makeCrossexPosition({
+    symbol: 'GATE_FUTURE_HYPE_USDT', positionSide: 'LONG', positionQty: '23000', positionValue: '1991731',
+    entryPrice: '86.604', markPrice: '86.597', leverage: '10', maxLeverage: '10', upnl: '-161', upnlRate: '-0.0008',
+    fundingFee: '-410.12', fee: '-995.8655', initialMargin: '199173.1', maintenanceMargin: '19917.31',
+  }),
+  makeCrossexPosition({
+    symbol: 'HYPERLIQUID_FUTURE_HYPE_USDC', positionSide: 'SHORT', positionQty: '-23000', positionValue: '1991455',
+    entryPrice: '86.571', markPrice: '86.585', leverage: '10', maxLeverage: '10', upnl: '-322', upnlRate: '-0.0016',
+    fundingFee: '655.34', fee: '-995.7275', initialMargin: '199145.5', maintenanceMargin: '19914.55',
+  }),
+];
+
+const [whaleBinanceEth, whaleHlEth, whaleGateHype, whaleHlHype] = WHALE_POSITIONS;
+
+export const whaleBook = {
+  account: {
+    ...account, marginBalance: '6000000', availableMargin: '3373759.901', initialMargin: '2626240.099',
+    maintenanceMargin: '342624.0095', initialMarginRate: '0.4377', maintenanceMarginRate: '0.0571', assets: WHALE_ASSETS,
+  },
+  positions: {
+    positions: WHALE_POSITIONS,
+    exposure: [
+      {
+        base: 'ETH',
+        legs: [
+          {
+            symbol: 'BINANCE_FUTURE_ETH_USDT', exchange: 'BINANCE', quote: 'USDT', side: 'SHORT', qty: 4100,
+            value: 10_138_234,
+          },
+          {
+            symbol: 'HYPERLIQUID_FUTURE_ETH_USDC', exchange: 'HYPERLIQUID', quote: 'USDC', side: 'LONG', qty: 4100,
+            value: 10_140_981,
+          },
+        ],
+        longValue: 10_140_981, shortValue: 10_138_234, netValue: 2_747, grossValue: 20_279_215, neutral: true,
+        singleLeg: false,
+      },
+      {
+        base: 'HYPE',
+        legs: [
+          { symbol: 'GATE_FUTURE_HYPE_USDT', exchange: 'GATE', quote: 'USDT', side: 'LONG', qty: 23_000, value: 1_991_731 },
+          {
+            symbol: 'HYPERLIQUID_FUTURE_HYPE_USDC', exchange: 'HYPERLIQUID', quote: 'USDC', side: 'SHORT', qty: 23_000,
+            value: 1_991_455,
+          },
+        ],
+        longValue: 1_991_731, shortValue: 1_991_455, netValue: 276, grossValue: 3_983_186, neutral: true,
+        singleLeg: false,
+      },
+    ],
+    marginTiers: GATE_RISK_TIERS,
+  },
+  assetView: {
+    ...avDefault,
+    assets: [
+      assetGroup(
+        'ETH',
+        2472.74,
+        [perpFromPosition(whaleBinanceEth, 1_783_000_000), perpFromPosition(whaleHlEth, 1_783_000_000)],
+        borosLegs(4100, 2472.74, 18_234.56),
+      ),
+      assetGroup('HYPE', 86.597, [
+        perpFromPosition(whaleHlHype, OWNER_DEFAULT_SINCE_SEC),
+        perpFromPosition(whaleGateHype, OWNER_DEFAULT_SINCE_SEC + 40),
+      ]),
+    ],
+    interest: { paidUsd: 11_834.21, byCoin: { USDT: 11_834.21 }, coversFromSec: 0, available: true },
+  },
+} satisfies { account: CrossexAccount; positions: PositionsResponse; assetView: AssetViewResponse };
+
+export const assetViewBodies = {
+  default: avDefault,
+  allTime: avAllTime,
+  backfilling: {
+    ...avDefault,
+    sinceSec: MAR_1_2026_SEC,
+    coverage: { ...avDefault.coverage, backfilling: true },
+  },
+  backfillingAllTime: {
+    ...avAllTime,
+    coverage: { ...avAllTime.coverage, backfilling: true },
+  },
+  unsupported: { ...avDefault, assets: [ownerEth, ownerHype, solLeg] },
+  noDefault: { ...avAllTime, defaultSinceSec: null },
+  entryPending: { ...avDefault, assets: [ownerEthEntryPending, ownerHype] },
+  whale: whaleBook.assetView,
+  whaleUnsupported: { ...whaleBook.assetView, assets: [...whaleBook.assetView.assets, solWhaleLeg] },
+} satisfies Record<string, AssetViewResponse>;
+
+function pairRow(over: Partial<BorosPairMarketRow>): BorosPairMarketRow {
+  return {
+    marketId: 214, name: 'Binance ETHUSDT 25 Dec 2026', venue: 'BINANCE', base: 'ETH', tokenId: 2, collateral: 'ETH',
+    maturity: DEC_2026_MATURITY, midApr: 0.0688, markApr: 0.0685, maxRateDeviationApr: 0.0137, isolatedOnly: false,
+    onIsolatedMargin: false, isolatedHasPositionOrOrders: false, currentSize: 0, collateralPriceUsd: 2472.74,
+    closeOnly: false, ...over,
+  };
+}
+
+function pairContext(closeOnly: 'A' | 'B', size: number): BorosPairContext {
+  return {
+    markets: [
+      pairRow({ currentSize: -size, closeOnly: closeOnly === 'A' }),
+      pairRow({
+        marketId: 215, name: 'Hyperliquid ETH 25 Dec 2026', venue: 'HYPERLIQUID', midApr: 0.0931, markApr: 0.0928,
+        maxRateDeviationApr: 0.01856, currentSize: size, closeOnly: closeOnly === 'B',
+      }),
+    ],
+    crossByToken: [{ tokenId: 2, available: size / 4 }],
+    isolatedByMarket: [],
+    defaultSlippageApr: 0.0025,
+    maxSlippageApr: 0.1,
+  };
+}
+
+const closeOnlyABase = pairContext('A', 1.2);
+
+export const pairContextBodies = {
+  closeOnlyA: closeOnlyABase,
+  closeOnlyALong: {
+    ...closeOnlyABase,
+    markets: [
+      { ...closeOnlyABase.markets[0], currentSize: 1.2 },
+      { ...closeOnlyABase.markets[1], currentSize: -1.2 },
+    ],
+  },
+  closeOnlyB: pairContext('B', 1.2),
+  whaleCloseOnlyA: pairContext('A', 4100),
+  whaleCloseOnlyB: pairContext('B', 4100),
+} satisfies Record<string, BorosPairContext>;
+
+function roundedText(x: number): string {
+  return String(Math.round(x * 1e8) / 1e8);
+}
+
+function positionFromPerp(p: AssetPerpOpen): CrossexPosition {
+  return makeCrossexPosition({
+    symbol: p.symbol, positionSide: p.side, positionQty: roundedText(p.side === 'LONG' ? p.qty : -p.qty),
+    positionValue: roundedText(p.notionalUsd), entryPrice: roundedText(p.entryPrice),
+    markPrice: roundedText(p.markPrice),
+    leverage: roundedText(p.leverage), upnl: roundedText(p.upnlUsd), upnlRate: roundedText(p.upnlUsd / p.imUsd),
+    fundingFee: roundedText(p.fundingUsd), fee: roundedText(-p.feesUsd), initialMargin: roundedText(p.imUsd),
+    maintenanceMargin: roundedText(p.imUsd / 10),
+  });
+}
+
+function positionsWithExposure(positions: CrossexPosition[]): PositionsResponse {
+  const legs = positions.map((p) => {
+    const [exchange, , base, quote] = p.symbol.split('_');
+    const side: 'LONG' | 'SHORT' = p.positionSide === 'SHORT' ? 'SHORT' : 'LONG';
+    const qty = Math.abs(Number(p.positionQty));
+    return { base, leg: { symbol: p.symbol, exchange, quote, side, qty, value: Number(p.positionValue) } };
+  });
+  const exposure = [...new Set(legs.map((l) => l.base))].map((base) => {
+    const group = legs.filter((l) => l.base === base).map((l) => l.leg);
+    const valueOf = (side: 'LONG' | 'SHORT') => group.filter((l) => l.side === side).reduce((a, l) => a + l.value, 0);
+    const longValue = valueOf('LONG');
+    const shortValue = valueOf('SHORT');
+    const grossValue = longValue + shortValue;
+    return {
+      base, legs: group, longValue, shortValue, netValue: longValue - shortValue, grossValue,
+      neutral: grossValue > 0 && Math.abs(longValue - shortValue) / grossValue < 0.02,
+      singleLeg: group.every((l) => l.side === group[0].side),
+    };
+  });
+  return { positions, exposure: exposure.sort((a, b) => b.grossValue - a.grossValue) };
+}
+
+export const assetViewPositions = {
+  unsupported: positionsWithExposure(
+    assetViewBodies.unsupported.assets.flatMap((g) => g.perpOpen).map(positionFromPerp),
+  ),
+  whaleUnsupported: positionsWithExposure([
+    ...whaleBook.positions.positions,
+    ...solWhaleLeg.perpOpen.map(positionFromPerp),
+  ]),
+} satisfies Record<string, PositionsResponse>;
+
+function closeOnlyOpportunities(context: BorosPairContext): OpportunitiesResult {
+  const [binance, hyperliquid] = context.markets;
+  const secondsToMaturity = binance.maturity - FIXTURE_NOW_SEC;
+  const nt = OPP_NOTIONAL * (secondsToMaturity / (365 * 24 * 3600));
+  const halfSpreadApr = 0.0005;
+  const row = (m: BorosPairMarketRow, crossexSymbol: string) =>
+    makeOpportunityMarketRow({
+      marketId: m.marketId, name: m.name, venue: m.venue, crossexVenue: m.venue, crossexSymbol, base: m.base,
+      midApr: m.midApr, markApr: m.markApr, execShortApr: m.midApr - halfSpreadApr,
+      execLongApr: m.midApr + halfSpreadApr,
+    });
+  const leg = (m: BorosPairMarketRow, crossexSymbol: string, execApr: number) =>
+    makeOpportunityLeg({
+      marketId: m.marketId, venue: m.venue, crossexVenue: m.venue, crossexSymbol, base: m.base, midApr: m.midApr,
+      execApr,
+    });
+  const hyperliquidSymbol = 'HYPERLIQUID_FUTURE_ETH_USDC';
+  const binanceSymbol = 'BINANCE_FUTURE_ETH_USDT';
+  const shortExecApr = hyperliquid.midApr - halfSpreadApr;
+  const longExecApr = binance.midApr + halfSpreadApr;
+  const template = makeOpportunityPair();
+  const { perpEntryFeesUsd, perpEntrySlippageUsd, perpExitFeesUsd, perpExitSlippageUsd } = template.costs;
+  const borosTakerFeeUsd = 0.001 * nt;
+  const borosSettleFeeUsd = 0.002 * nt;
+  const totalUsd = [
+    borosTakerFeeUsd, borosSettleFeeUsd, perpEntryFeesUsd, perpEntrySlippageUsd, perpExitFeesUsd, perpExitSlippageUsd,
+  ].reduce<number>((a, x) => a + (x ?? 0), 0);
+  const grossSpreadApr = hyperliquid.midApr - binance.midApr;
+  const execSpreadApr = shortExecApr - longExecApr;
+  const netFixedApr = execSpreadApr - totalUsd / nt;
+  const estProfitUsd = netFixedApr * nt;
+  const capitalUsd = template.capitalUsd ?? 0;
+  const pair: OpportunityPair = {
+    ...template,
+    shortLeg: leg(hyperliquid, hyperliquidSymbol, shortExecApr),
+    longLeg: leg(binance, binanceSymbol, longExecApr),
+    grossSpreadApr,
+    execSpreadApr,
+    borosImpactApr: grossSpreadApr - execSpreadApr,
+    costs: { ...template.costs, borosTakerFeeUsd, borosSettleFeeUsd, totalUsd, annualizedApr: totalUsd / nt },
+    netFixedApr,
+    netFixedAprOnCapital: capitalUsd > 0 ? estProfitUsd / (capitalUsd * (nt / OPP_NOTIONAL)) : null,
+    estProfitUsd,
+    secondsToMaturity,
+  };
+  return makeOpportunitiesResult({
+    groups: [
+      makeOpportunityGroup({
+        tokenId: binance.tokenId, collateral: binance.collateral, collateralPriceUsd: binance.collateralPriceUsd,
+        maturity: binance.maturity, secondsToMaturity,
+        markets: [row(hyperliquid, hyperliquidSymbol), row(binance, binanceSymbol)], pairs: [pair],
+      }),
+    ],
+    meta: { ...makeOpportunitiesResult().meta, asOfSec: FIXTURE_NOW_SEC },
+  });
+}
+
+export const opportunitiesBodies = {
+  closeOnlyA: closeOnlyOpportunities(pairContextBodies.closeOnlyA),
+} satisfies Record<string, OpportunitiesResult>;

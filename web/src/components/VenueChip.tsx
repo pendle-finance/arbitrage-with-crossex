@@ -1,4 +1,4 @@
-import { parseSymbol } from '../lib/fmt';
+import { parseSymbol, prettyVenue } from '../lib/fmt';
 import { Chip } from './Chip';
 
 /** USDT-quoted perp venues get the cyan house tone; USD/USDC venues stay neutral. */
@@ -57,7 +57,7 @@ export function SideVenue({ side, venue }: { side: 'SHORT' | 'LONG'; venue: stri
     <span
       className={`num self-start rounded-md border px-2 py-0.5 text-[10px] font-medium tracking-wide ${tone}`}
     >
-      {side} · {venue}
+      {side} · {prettyVenue(venue)}
     </span>
   );
 }

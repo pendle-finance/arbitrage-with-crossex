@@ -91,3 +91,6 @@ export const putJson = <T>(path: string, body: unknown): Promise<T> =>
 
 export const postJson = <T>(path: string, body: unknown): Promise<T> =>
   fetchJson<T>(path, { method: 'POST', body: JSON.stringify(body) });
+
+export const patchJson = <T>(path: string, body: unknown): Promise<T> =>
+  fetchJson<T>(path, { method: 'PATCH', body: JSON.stringify(body) });

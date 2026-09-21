@@ -178,8 +178,8 @@ trade journal out from under a live process that is still placing orders.
   (this-machine-only) and additionally rejects any request whose Host/Origin isn't
   localhost. Nobody on your Wi-Fi can see it.
 - **No telemetry, no analytics.** The app's only outbound requests are: `api.gateio.ws`
-  (signed, your account and orders); `api.boros.finance` (public market data, keyed only
-  by an EVM address you choose to enter); the venues' public order-book endpoints
+  (signed, your account and orders); `api-boros.pendle.finance`
+  (public market data, keyed only by an EVM address you choose to enter); the venues' public order-book endpoints
   (`fapi.binance.com`, `api.bybit.com`, `www.okx.com`, `futures.kraken.com`,
   `api.hyperliquid.xyz`, `api.gateio.ws`) — public data, nothing about you; and
   `raw.githubusercontent.com` — a 6-hourly read of this repo's one-line `version.json`
@@ -354,8 +354,10 @@ from a local archive), `BOROS_PORT`, `BOROS_ROOT`, `BOROS_REPO`, `BOROS_BRANCH`.
 Deployment-relevant env vars (all optional): `UPDATE_CHECK` (set `0` to disable the
 GitHub version check), `PORT` (default 6688), `ARB_DATA_DIR`
 (trade-journal dir; default `<repo>/data`), `DOTENV_CONFIG_PATH` (where credentials are
-read from and saved to; default `<repo>/.env`). The macOS installer sets all three so
-user data lives outside the auto-updated app directory.
+read from and saved to; default `<repo>/.env`), `CROSSEX_BOT_URL` (the Telegram alerts
+bot; default `https://boros-bot-notification.pendle.finance`). The macOS installer sets
+`PORT`, `ARB_DATA_DIR` and `DOTENV_CONFIG_PATH` so user data lives outside the
+auto-updated app directory.
 
 ## Web terminal — `yarn dev` / `yarn start`
 
