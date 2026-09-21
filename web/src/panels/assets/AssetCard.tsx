@@ -1406,7 +1406,10 @@ function BundleCard({
                 </button>
               </div>
             </td>
-            <td className="px-3 text-right" title="Notional of the live perp (or of the YU legs when there is no perp)">
+            <td
+              className="px-3 text-right"
+              title={`Notional of the live perp (or of the YU legs when there is no perp)${b.notionalUsd > 0 ? `: ${exactUsd(b.notionalUsd)}${b.sizeToken > 0 ? ` on ${exactQty(b.sizeToken, b.sizeUnit)}` : ''}` : ''}`}
+            >
               <div className={statLabel}>Notional</div>
               <div className={`${statValue} text-ink-50`}>
                 {b.notionalUsd > 0 ? fmtUsdCompact(b.notionalUsd) : <span className="text-ink-600">—</span>}

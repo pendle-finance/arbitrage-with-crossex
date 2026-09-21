@@ -40,7 +40,7 @@ export function rememberMarks<T extends MarkRow>(rows: readonly T[], nowMs: numb
       out.push({ ...row, markPrice: String(last.mark), markHeldSinceMs: last.atMs });
       continue;
     }
-    const sinceMs = last ? last.atMs : nowMs;
+    const sinceMs = last ? Math.min(last.atMs, nowMs) : nowMs;
     if (!last) store.set(symbol, { mark: null, atMs: nowMs });
     unknown.set(symbol, sinceMs);
     out.push({ ...row, markStaleSinceMs: sinceMs });

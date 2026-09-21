@@ -1,5 +1,5 @@
 import type { CrossexAccount, CrossexPosition, PositionsResponse } from '../api/types';
-import { fmtClock, fmtUsd, num, prettyVenue, WALLET_SHORT } from './fmt';
+import { fmtClock, fmtUsd, num, prettyVenue } from './fmt';
 
 /**
  * Where the account liquidates if ONE coin moves and every other coin holds
@@ -148,8 +148,9 @@ function mmChange(l: Leg, f: number): number {
   const flat = l.mm * (f - 1);
   if (l.tiers === undefined || l.tiers.length === 0) return flat;
   const mmNow = maintenanceAt(l.tiers, l.value);
-  if (Math.abs(mmNow - l.mm) > MM_TABLE_TOLERANCE * l.mm) return flat;
-  return maintenanceAt(l.tiers, l.value * f) - mmNow;
+  const tiered = maintenanceAt(l.tiers, l.value * f) - mmNow;
+  const disagrees = Math.abs(mmNow - l.mm) > MM_TABLE_TOLERANCE * l.mm;
+  return disagrees ? Math.max(flat, tiered) : tiered;
 }
 
 function marginModel(
@@ -205,7 +206,7 @@ function lineAt(mine: Leg[], f: number, losingSign: 1 | -1): { line: Liquidation
   const loser = (losing.length > 0 ? losing : mine).reduce((a, b) => (b.value > a.value ? b : a));
   const side = losing.length === 0 ? null : loser.sign === 1 ? 'long' : 'short';
   return {
-    line: { base: loser.base, venue: WALLET_SHORT[loser.wallet], side, price: biggest.mark * f, move: f - 1 },
+    line: { base: loser.base, venue: prettyVenue(loser.exchange), side, price: biggest.mark * f, move: f - 1 },
     exchange: loser.exchange,
   };
 }

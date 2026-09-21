@@ -30,13 +30,14 @@ describe('the last mark Gate sent', () => {
     expect(unknown.get('GATE_FUTURE_ETH_USDT')).toBe(t0);
   });
 
-  it('refuses a remembered mark when the clock has stepped backwards', () => {
+  it('refuses a remembered mark when the clock has stepped backwards, and never reports a time in the future', () => {
     rememberMarks([eth('2300')], t0);
-    const { rows, unknown } = rememberMarks([eth('')], t0 - 1_000);
+    const back = t0 - 1_000;
+    const { rows, unknown } = rememberMarks([eth('')], back);
     expect(rows[0].markPrice).toBe('');
     expect(rows[0].markHeldSinceMs).toBeUndefined();
-    expect(rows[0].markStaleSinceMs).toBe(t0);
-    expect(unknown.get('GATE_FUTURE_ETH_USDT')).toBe(t0);
+    expect(rows[0].markStaleSinceMs).toBe(back);
+    expect(unknown.get('GATE_FUTURE_ETH_USDT')).toBe(back);
   });
 
   it('is unknown at once for a leg that never had a price', () => {

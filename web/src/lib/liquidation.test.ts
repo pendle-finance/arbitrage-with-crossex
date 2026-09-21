@@ -160,7 +160,7 @@ describe('liquidationLines', () => {
     usdt.exposure[0].legs[1] = { ...usdt.exposure[0].legs[1], symbol: 'BINANCE_FUTURE_ETH_USDT', exchange: 'BINANCE', quote: 'USDT' };
     const [line] = lines(account(), usdt);
     // 20000 = 2500 f  →  f = 8, a +700% pump.
-    expect(line.venue).toBe('CrossEx');
+    expect(line.venue).toBe('Binance');
     expect(line.move).toBeCloseTo(7, 4);
   });
 
@@ -235,7 +235,7 @@ describe('liquidationLines', () => {
     flipped.exposure[0].legs[1].side = 'LONG';
     const [shortOnGate] = lines(account(), flipped);
     expect(shortOnGate.move).toBeGreaterThan(0);
-    expect(shortOnGate.venue).toBe('CrossEx');
+    expect(shortOnGate.venue).toBe('Gate');
     expect(shortOnGate.side).toBe('short');
 
     const longOnly: PositionsResponse = {
@@ -246,8 +246,28 @@ describe('liquidationLines', () => {
     };
     const [dump] = lines(account({ maintenanceMargin: '1250' }), longOnly);
     expect(dump.move).toBeLessThan(0);
-    expect(dump.venue).toBe('CrossEx');
+    expect(dump.venue).toBe('Gate');
     expect(dump.side).toBe('long');
+  });
+
+  it('names the venue of the losing leg in the sentence, not the wallet it margins in', () => {
+    const [pump] = lines(account(), box());
+    expect(describeLine(pump)).toContain('Your ETH short on Hyperliquid loses in this move.');
+
+    const flipped = box();
+    flipped.exposure[0].legs[0].side = 'SHORT';
+    flipped.exposure[0].legs[1].side = 'LONG';
+    expect(describeLine(lines(account(), flipped)[0])).toContain('Your ETH short on Gate loses in this move.');
+
+    const binance = box();
+    binance.positions[1].symbol = 'BINANCE_FUTURE_ETH_USDT';
+    binance.exposure[0].legs[1] = {
+      ...binance.exposure[0].legs[1],
+      symbol: 'BINANCE_FUTURE_ETH_USDT',
+      exchange: 'BINANCE',
+      quote: 'USDT',
+    };
+    expect(describeLine(lines(account(), binance)[0])).toContain('Your ETH short on Binance loses in this move.');
   });
 
   it('matches the live account of 2026-09-07 within a percent', () => {
@@ -303,7 +323,7 @@ describe('liquidationSides', () => {
     flipped.exposure[0].legs[1].side = 'LONG';
     const sides = liquidationSides(account(), flipped, 'eth');
     expect(sides?.up?.move).toBeCloseTo(47000 / 27500 - 1, 4);
-    expect(sides?.up).toMatchObject({ base: 'ETH', venue: 'CrossEx', exchange: 'GATE', side: 'short' });
+    expect(sides?.up).toMatchObject({ base: 'ETH', venue: 'Gate', exchange: 'GATE', side: 'short' });
     expect(sides?.down?.move).toBeCloseTo(5000 / 22500 - 1, 4);
     expect(sides?.down).toMatchObject({ base: 'ETH', venue: 'Hyperliquid', exchange: 'HYPERLIQUID', side: 'long' });
     expect(lines(account(), flipped)[0].price).toBe(sides?.up?.price);
@@ -330,16 +350,16 @@ describe('formatting', () => {
     expect(lineLabel({ base: 'ETH', venue: 'Hyperliquid', side: 'short', price: 3150, move: 0.37 })).toBe(
       'Liquidates if ETH hits ~$3,150 (+37%)',
     );
-    expect(lineLabel({ base: 'ETH', venue: 'CrossEx', side: 'long', price: 1840, move: -0.2 })).toBe(
+    expect(lineLabel({ base: 'ETH', venue: 'Gate', side: 'long', price: 1840, move: -0.2 })).toBe(
       'Liquidates if ETH falls to ~$1,840 (-20%)',
     );
     expect(describeLine({ base: 'ETH', venue: 'Hyperliquid', side: 'short', price: 3150, move: 0.37 })).toBe(
       'Gate liquidates your account if ETH rises to about $3,150 (+37%). This assumes ETH moves the same on every venue and other coins do not move. Your ETH short on Hyperliquid loses in this move.',
     );
-    expect(describeLine({ base: 'ETH', venue: 'CrossEx', side: 'long', price: 1840, move: -0.2 })).toBe(
-      'Gate liquidates your account if ETH falls to about $1,840 (-20%). This assumes ETH moves the same on every venue and other coins do not move. Your ETH long on CrossEx loses in this move.',
+    expect(describeLine({ base: 'ETH', venue: 'Gate', side: 'long', price: 1840, move: -0.2 })).toBe(
+      'Gate liquidates your account if ETH falls to about $1,840 (-20%). This assumes ETH moves the same on every venue and other coins do not move. Your ETH long on Gate loses in this move.',
     );
-    expect(describeLine({ base: 'ETH', venue: 'CrossEx', side: null, price: 1840, move: -0.2 })).toBe(
+    expect(describeLine({ base: 'ETH', venue: 'Gate', side: null, price: 1840, move: -0.2 })).toBe(
       'Gate liquidates your account if ETH falls to about $1,840 (-20%). This assumes ETH moves the same on every venue and other coins do not move.',
     );
   });
@@ -415,10 +435,15 @@ describe("Gate's maintenance margin tiers", () => {
     );
   });
 
-  it('falls back to the flat line when the table disagrees with what Gate charges the leg', () => {
-    const acc = hypeAccount(400_000, 53_302.5);
-    const box = hypeBox(750_000, 15_802.5);
-    expect(lines(acc, box, {}, HYPE_TIERS)[0].price).toBeCloseTo(lines(acc, box)[0].price, 6);
+  it('takes the nearer of the two lines when the table disagrees with what Gate charges the leg', () => {
+    const tableLow = { acc: hypeAccount(400_000, 53_302.5), box: hypeBox(750_000, 15_802.5) };
+    const tableHigh = { acc: hypeAccount(400_000, 51_797.5), box: hypeBox(750_000, 14_297.5) };
+    for (const { acc, box } of [tableLow, tableHigh]) {
+      const flat = lines(acc, box)[0].price;
+      const shown = lines(acc, box, {}, HYPE_TIERS)[0].price;
+      expect(shown).toBeLessThanOrEqual(flat);
+      expect(flat - shown).toBeGreaterThan(10);
+    }
   });
 
   it('keeps the tiered line when the table is within 1% of what Gate charges', () => {
@@ -428,12 +453,12 @@ describe("Gate's maintenance margin tiers", () => {
     expect(lines(acc, box, {}, HYPE_TIERS)[0].price).toBeLessThan(lines(acc, box)[0].price - 20);
   });
 
-  it('prices a leg whose maintenance margin is zero without a NaN', () => {
+  it('keeps the table on a leg Gate prices at zero maintenance, without a NaN', () => {
     const acc = hypeAccount(400_000, 37_500);
     const box = hypeBox(750_000, 0);
     const tiered = lines(acc, box, {}, HYPE_TIERS)[0].price;
     expect(Number.isFinite(tiered)).toBe(true);
-    expect(tiered).toBeCloseTo(lines(acc, box)[0].price, 6);
+    expect(tiered).toBeLessThan(lines(acc, box)[0].price - 10);
   });
 
   it('gives the Telegram side the same tiered line as the card', () => {
