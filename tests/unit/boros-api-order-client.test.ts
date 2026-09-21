@@ -36,6 +36,14 @@ function fakeApi(
   over: {
     status?: unknown;
     submit?: (body: Record<string, unknown>) => unknown;
+    /** A non-2xx HTTP response the ORDER submission answers with, so `call`
+     * throws a CoreError carrying the status — the 4xx-vs-5xx split. */
+    submitHttp?: { status: number; body?: unknown };
+    /** Body the place-order calldata builder answers with, to drive the
+     * "returned no calldata" refusal before anything reaches the chain. */
+    orderBuildReturns?: unknown;
+    /** A non-2xx answer from the roll-over builder. */
+    rollBuildHttp?: { status: number; body?: unknown };
     failEnter?: string;
     /** Raw body the ENTER submission answers with, for the shapes that are
      * neither a clean success nor a per-call error. */
@@ -63,7 +71,22 @@ function fakeApi(
       return ok({ calls: [{ calldata: '0xe0' }] });
     }
     if (path.startsWith('/v1/calldata-builder/agent/place-order')) {
+      if (over.orderBuildReturns !== undefined) return ok(over.orderBuildReturns);
       return ok({ calls: [{ calldata: `0xda${calls.length.toString(16).padStart(2, '0')}` }] });
+    }
+    if (path.startsWith('/v1/calldata-builder/agent/roll-over')) {
+      if (over.rollBuildHttp) {
+        return { ok: false, status: over.rollBuildHttp.status, json: async () => over.rollBuildHttp!.body ?? {} };
+      }
+      // Closes then opens, each naming its market, side (0 long / 1 short) and size.
+      const legs = body.legs as Array<{ fromMarketId: number; toMarketId: number; size: string; closeRate?: number; openRate?: number }>;
+      const closeSide = (i: number) => (i === 0 ? 0 : 1); // HL was SHORT (closes long), BN was LONG (closes short)
+      return ok({
+        calls: [
+          ...legs.map((l, i) => ({ calldata: `0xc${i + 1}`, accountId: 0, action: 'close', marketId: l.fromMarketId, size: l.size, resolved: { side: closeSide(i), requestedRate: l.closeRate } })),
+          ...legs.map((l, i) => ({ calldata: `0xo${i + 1}`, accountId: 0, action: 'open', marketId: l.toMarketId, size: l.size, resolved: { side: 1 - closeSide(i), requestedRate: l.openRate } })),
+        ],
+      });
     }
     if (path.startsWith('/v1/calldata-builder/agent/cancel-orders')) {
       return ok({ calls: [{ calldata: '0xca' }] });
@@ -87,6 +110,11 @@ function fakeApi(
             ? [{ error: over.failEnter }]
             : datas.map((_, i) => ({ txHash: '0xenter', index: i, status: 'success' })),
         );
+      }
+      // A non-2xx answer to the ORDER submission — `call` turns it into a
+      // CoreError carrying the status, which is the 4xx-vs-5xx branch point.
+      if (over.submitHttp) {
+        return { ok: false, status: over.submitHttp.status, json: async () => over.submitHttp!.body ?? {} };
       }
       if (over.submit) return ok(over.submit(body));
       return ok(datas.map((_, i) => ({ txHash: '0xtx', index: i, status: 'success' })));
@@ -385,6 +413,64 @@ describe('makeBorosApiOrderClient — the order on the wire', () => {
     const build = api.calls.find((c) => c.path === '/v1/calldata-builder/agent/place-order')!;
     expect(build.body).toMatchObject({ side: 0, marketId: BN });
   });
+
+});
+
+describe('makeBorosApiOrderClient — rollOver', () => {
+  const legs = [
+    { fromMarketId: HL, toMarketId: HL + 1, size: 100, closeRate: 0.0925, openRate: 0.0975 },
+    { fromMarketId: BN, toMarketId: BN + 1, size: 100, closeRate: 0.0425, openRate: 0.0525 },
+  ];
+
+  it('asks the venue for the whole roll once, on the cross account, orderbook-only, sizes in wei', async () => {
+    const api = fakeApi();
+    await client(api).rollOver!(legs);
+    const build = api.calls.filter((c) => c.path === '/v1/calldata-builder/agent/roll-over');
+    expect(build).toHaveLength(1);
+    expect(build[0].body).toMatchObject({
+      marketAcc: packMarketAcc(ROOT, 0, 2, CROSS_MARKET_ID),
+      legs: [
+        { fromMarketId: HL, toMarketId: HL + 1, size: (100n * 10n ** 18n).toString(), closeRate: 0.0925, openRate: 0.0975, ammId: 0 },
+        { fromMarketId: BN, toMarketId: BN + 1, size: (100n * 10n ** 18n).toString(), closeRate: 0.0425, openRate: 0.0525, ammId: 0 },
+      ],
+    });
+    // No per-leg place-order builds: the venue built all four.
+    expect(api.calls.some((c) => c.path === '/v1/calldata-builder/agent/place-order')).toBe(false);
+  });
+
+  it("submits the venue's calls as ONE batch, closes then opens, top-up between them, and reads a fill per call", async () => {
+    const api = fakeApi({
+      gasBalance: { balanceInUSD: 0.1 },
+      status: {
+        status: 'success',
+        statuses: [0, 1, 2, 3, 4].map((index) => ({
+          index,
+          status: 'success',
+          marketOrdersExecuted: index === 2 ? [] : [{ marketId: [HL, BN, 0, HL + 1, BN + 1][index], size: (100n * 10n ** 18n).toString() }],
+        })),
+      },
+    });
+    const fills = await client(api).rollOver!(legs);
+    const submit = api.calls.find((c) => c.path === '/v1/send-txs/bulk-calls' && (c.body.datas as unknown[]).length === 5)!;
+    expect(submit.body.requireSuccess).toBe(true);
+    // [closeHL, closeBN, payTreasury, openHL', openBN'] — the top-up after the closes.
+    expect((submit.body.datas as Array<{ calldata: string }>).map((d) => d.calldata)).toEqual(['0xc1', '0xc2', '0x7a', '0xo1', '0xo2']);
+    expect(fills.map((f) => [f.marketId, f.direction, f.filledSize, f.failure])).toEqual([
+      [HL, 'long', 100, null],
+      [BN, 'short', 100, null],
+      [HL + 1, 'short', 100, null],
+      [BN + 1, 'long', 100, null],
+    ]);
+  });
+
+  it('reports a builder refusal as four rejected legs — nothing was sent', async () => {
+    const api = fakeApi({ rollBuildHttp: { status: 404, body: { message: 'Market position not found' } } });
+    const fills = await client(api).rollOver!(legs);
+    expect(fills).toHaveLength(4);
+    expect(fills.map((f) => f.marketId)).toEqual([HL, BN, HL + 1, BN + 1]);
+    expect(fills.every((f) => f.failure?.code === 'rejected' && /Market position not found/.test(f.failure.message))).toBe(true);
+    expect(api.calls.some((c) => c.path === '/v1/send-txs/bulk-calls')).toBe(false);
+  });
 });
 
 describe('makeBorosApiOrderClient — fills', () => {
@@ -636,4 +722,156 @@ describe('makeBorosApiOrderClient — the gas top-up', () => {
     }
   });
 
+});
+
+/**
+ * `topUpAfter` decides where the auto gas top-up sits in the submission. The
+ * relayer sums the whole batch and checks it once, so the credit counts
+ * wherever it sits — what the position decides is when `payTreasury`'s own
+ * strict margin check runs. A roll places it after the closes (index 2).
+ */
+describe('makeBorosApiOrderClient — topUpAfter positions the gas top-up', () => {
+  const orderSubmit = (api: ReturnType<typeof fakeApi>) =>
+    api.calls
+      .filter((c) => c.path === '/v1/send-txs/bulk-calls')
+      .map((c) => c.body.datas as Array<{ calldata: string }>)
+      .pop()!;
+  const M3 = 200;
+  const M4 = 201;
+
+  it('inserts the top-up at submission index 2 on a four-leg batch, and reads each leg from its own status index', async () => {
+    const api = fakeApi({
+      gasBalance: { balanceInUSD: 0.05 },
+      status: {
+        status: 'success',
+        statuses: [
+          { index: 0, marketOrdersExecuted: [filled(HL, '10000000000000000000')] },
+          { index: 1, marketOrdersExecuted: [filled(BN, '20000000000000000000')] },
+          { index: 2 }, // the top-up — carries no fill
+          { index: 3, marketOrdersExecuted: [filled(M3, '30000000000000000000')] },
+          { index: 4, marketOrdersExecuted: [filled(M4, '40000000000000000000')] },
+        ],
+      },
+    });
+    const fills = await client(api).placeMarketOrders(
+      [
+        leg({ marketId: HL, size: 10 }),
+        leg({ marketId: BN, direction: 'long', size: 20 }),
+        leg({ marketId: M3, size: 30 }),
+        leg({ marketId: M4, direction: 'long', size: 40 }),
+      ],
+      { reducing: false, topUpAfter: 2 },
+    );
+
+    const submission = orderSubmit(api);
+    expect(submission).toHaveLength(5); // four legs + the shifted top-up
+    expect(submission[2].calldata).toBe('0x7a'); // payTreasury at submission index 2
+    // Each leg reads ITS OWN status entry across the shifted slot — no leg takes
+    // the top-up's outcome, and no leg reads its neighbour's fill.
+    expect(fills.map((f) => f.marketId)).toEqual([HL, BN, M3, M4]);
+    expect(fills.map((f) => f.filledSize)).toEqual([10, 20, 30, 40]);
+    expect(fills.some((f) => f.failure)).toBe(false);
+  });
+
+  it('places the reducing top-up LAST when topUpAfter = reqs.length', async () => {
+    // The reducing floor is unchanged (a negative budget still funds the close),
+    // but the call now sits AFTER the legs it is funded behind.
+    const api = fakeApi({ gasBalance: { balanceInUSD: -0.4 } });
+    await client(api).placeMarketOrders(
+      [leg({ marketId: HL }), leg({ marketId: BN, direction: 'long' })],
+      { reducing: true, topUpAfter: 2 },
+    );
+    const submission = orderSubmit(api);
+    expect(submission).toHaveLength(3);
+    expect(submission[2].calldata).toBe('0x7a'); // top-up LAST (reqs.length = 2)
+    expect(submission.slice(0, 2).every((d) => d.calldata.startsWith('0xda'))).toBe(true);
+  });
+});
+
+/**
+ * Under `requireSuccess` EVERY call in a refused batch carries an error: the one
+ * that failed carries the reason, the rest "Batch aborted". The client reports
+ * the SPECIFIC reason on every leg and marks which leg the venue actually named.
+ */
+describe('makeBorosApiOrderClient — requireSuccess failure attribution', () => {
+  const ABORT = '[SIMULATE] Batch aborted: requireSuccess=true but some calls failed';
+  const REASON = '[SIMULATE] Not enough margin';
+
+  it('reports the specific reason on both legs and names the one the venue refused', async () => {
+    // Low gas prepends a top-up, so the submission is [topUp, legA, legB]; the
+    // backend refuses legB and aborts the rest.
+    const api = fakeApi({
+      gasBalance: { balanceInUSD: 0.05 },
+      submit: () => [{ error: ABORT }, { error: ABORT }, { error: REASON }],
+    });
+    const [a, b] = await client(api).placeMarketOrders([
+      leg({ marketId: HL }),
+      leg({ marketId: BN, direction: 'long' }),
+    ]);
+    expect(a.failure).toMatchObject({ code: 'insufficient-margin', message: REASON, cause: 'batch' });
+    expect(b.failure).toMatchObject({ code: 'insufficient-margin', message: REASON, cause: 'this-leg' });
+  });
+
+  it('marks every leg batch when the top-up itself is the failing call', async () => {
+    const api = fakeApi({
+      gasBalance: { balanceInUSD: 0.05 },
+      submit: () => [{ error: REASON }, { error: ABORT }, { error: ABORT }],
+    });
+    const fills = await client(api).placeMarketOrders([
+      leg({ marketId: HL }),
+      leg({ marketId: BN, direction: 'long' }),
+    ]);
+    expect(fills.every((f) => f.failure?.message === REASON)).toBe(true);
+    expect(fills.every((f) => f.failure?.code === 'insufficient-margin')).toBe(true);
+    expect(fills.every((f) => f.failure?.cause === 'batch')).toBe(true);
+  });
+});
+
+/**
+ * A leg refused BEFORE the chain — calldata could not be built, or the
+ * submission was turned away with a 4xx — has a CERTAIN fill state (nothing
+ * traded), so its 'unknown' is demoted to 'rejected'. A 5xx/timeout is not
+ * certain and still throws.
+ */
+describe('makeBorosApiOrderClient — a refusal before the chain never reads as unknown', () => {
+  it('fails every leg rejected (never unknown) when the calldata builder returns nothing', async () => {
+    const api = fakeApi({ orderBuildReturns: { calls: [] } });
+    const fills = await client(api).placeMarketOrders([leg(), leg({ marketId: BN, direction: 'long' })]);
+    expect(fills).toHaveLength(2);
+    expect(fills.every((f) => f.failure?.code === 'rejected')).toBe(true);
+  });
+
+  it('fails every leg rejected (never unknown) when the transport rejects while building', async () => {
+    // A dropped connection while building/signing ran nothing, so the state is
+    // CERTAIN — the network-shaped 'unknown' is demoted to 'rejected'.
+    const c = makeBorosApiOrderClient({
+      root: ROOT,
+      accountId: 0,
+      agentPrivateKey: AGENT_KEY,
+      tokenIdForMarket: () => 2,
+      usdMarketId: () => USD_MARKET,
+      fetchImpl: async () => {
+        throw new Error('ECONNRESET');
+      },
+      statusAttempts: 1,
+      sleep: async () => {},
+    });
+    const fills = await c.placeMarketOrders([leg(), leg({ marketId: BN, direction: 'long' })]);
+    expect(fills.every((f) => f.failure?.code === 'rejected')).toBe(true);
+    expect(fills.some((f) => /ECONNRESET|unreachable/i.test(f.failure!.message))).toBe(true);
+  });
+
+  it('fails a 429 from bulk-calls rejected (never unknown), with the HTTP text in the message', async () => {
+    const api = fakeApi({ submitHttp: { status: 429, body: { message: 'rate limited, back off' } } });
+    const fills = await client(api).placeMarketOrders([leg(), leg({ marketId: BN, direction: 'long' })]);
+    expect(fills.every((f) => f.failure?.code === 'rejected')).toBe(true);
+    expect(fills.every((f) => /429/.test(f.failure!.message))).toBe(true);
+  });
+
+  it('throws on a 503 from bulk-calls — a 5xx leaves the fill state genuinely unknown', async () => {
+    const api = fakeApi({ submitHttp: { status: 503, body: { message: 'upstream unavailable' } } });
+    await expect(
+      client(api).placeMarketOrders([leg(), leg({ marketId: BN, direction: 'long' })]),
+    ).rejects.toThrow(/503/);
+  });
 });

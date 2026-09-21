@@ -48,13 +48,17 @@
 import { keccak256, formatUnits, parseUnits, type Hex } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { CoreError } from '../errors';
+import type { BorosLegDirection } from './pair';
 import {
   classifyLegFailure,
+  describeLegFailure,
   extractApiDetail,
   type BorosClosePositionRequest,
   type BorosLegFill,
   type BorosMarketOrderRequest,
   type BorosOrderClient,
+  type BorosRollLeg,
+  type PlaceOrdersOptions,
 } from './orders';
 
 /** The documented production host (the spec's only `servers` entry). */
@@ -85,6 +89,8 @@ const SIDE_SHORT = 1;
  * Time-in-force 1 = IOC: take what the book gives, cancel the rest. GTC would
  * leave a resting order nobody asked for; FOK turns every thin book into a
  * total miss rather than a partial fill the panel can report and complete.
+ * (The roll-over is the exception — the venue's own builder makes its legs
+ * FOK, because there a total miss is the point.)
  */
 const TIF_IOC = 1;
 
@@ -97,6 +103,10 @@ const AMM_ORDERBOOK_ONLY = 0;
 
 /** How long one submission may take before the fill state is UNKNOWN. */
 const SUBMIT_TIMEOUT_MS = 60_000;
+
+/** The backend's per-call error for the calls that did NOT fail when a
+ * `requireSuccess` batch is refused in simulation (send-txs.service). */
+const BATCH_ABORTED = /Batch aborted: requireSuccess=true/i;
 
 /** The EIP-712 message an agent signs to authorise one call. Field names and
  * types come from the router ABI's `agentExecute` message struct. */
@@ -233,6 +243,15 @@ interface SignedCall {
   signature: Hex;
   calldata: Hex;
 }
+/** One call of the venue's roll-over builder: a `place-order` call plus what it trades. */
+interface RollOverCall extends PlaceOrderCall {
+  action: 'close' | 'open';
+  marketId: number;
+  /** 18-decimal integer string. */
+  size: string;
+  resolved?: { side?: number; requestedRate?: number };
+}
+
 interface TxResponse {
   txHash?: string;
   status?: string;
@@ -299,6 +318,7 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
       throw new CoreError(
         `Boros API ${path} — ${describeApiError(resp.status, json)}`,
         resp.status === 429 ? 'rate-limited' : 'venue-rejected',
+        { status: resp.status },
       );
     }
     return json as T;
@@ -511,7 +531,7 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
     execApr: null,
     feeSize: null,
   });
-  const failedLeg = (req: BorosMarketOrderRequest, message: string): BorosLegFill => ({
+  const failedLeg = (req: BorosMarketOrderRequest, message: string, cause?: 'this-leg' | 'batch'): BorosLegFill => ({
     ...emptyLeg(req),
     failure: {
       // This used to pass `marketEntered: true`, arguing that since every order
@@ -520,8 +540,20 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
       // check. The classifier reads the sentence itself now.
       code: classifyLegFailure(new Error(message)),
       message,
+      ...(cause ? { cause } : {}),
     },
   });
+  /**
+   * A leg refused before anything reached the chain — calldata could not be
+   * built, or the submission itself was turned away with a status code. The
+   * fill state is CERTAIN (nothing traded), so a transport-style error here
+   * is reported as a plain refusal, never as "may or may not have filled".
+   */
+  const neverSentLeg = (req: BorosMarketOrderRequest, err: unknown): BorosLegFill => {
+    const message = describeLegFailure(err);
+    const code = classifyLegFailure(err);
+    return { ...emptyLeg(req), failure: { code: code === 'unknown' ? 'rejected' : code, message } };
+  };
   /**
    * A leg whose outcome the venue never told us. NOT a zero fill: it may have
    * traded, so the message has to send the user to look rather than to retry.
@@ -533,36 +565,122 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
 
   const placeMarketOrders = async (
     reqs: BorosMarketOrderRequest[],
-    opts?: { reducing?: boolean },
+    opts?: PlaceOrdersOptions,
   ): Promise<BorosLegFill[]> => {
     if (reqs.length === 0) return [];
+    let legs: Hex[];
+    try {
+      legs = await Promise.all(reqs.map(buildOrderCalldata));
+    } catch (err) {
+      return reqs.map((req) => neverSentLeg(req, err));
+    }
+    return execute(reqs, legs, opts);
+  };
 
-    // Prepended, which is what the backend's own builders do (payTreasury goes
-    // first in getPositionTransferCallData and getCancelOrderCallData).
-    //
-    // Position does NOT decide whether the batch is funded: the relayer sums
-    // the whole submission and checks it once, before anything executes
-    // (gas-tracking.service), so the credit counts wherever the call sits.
-    // What position does decide is when `payTreasury`'s own `_checkIMStrict`
-    // runs (MarginManager.sol) — first means before the batch frees any margin.
-    // That is only reachable on a close whose budget is already at or below
-    // zero, because `autoTopUpCalldata` leaves any solvent close alone.
-    const topUp = await autoTopUpCalldata(opts?.reducing === true);
-    const calldatas = [...topUp, ...(await Promise.all(reqs.map(buildOrderCalldata)))];
-    const signed = await signCalls(calldatas);
-    const responses = await submitCalls(signed);
-    // Everything below indexes BY LEG, and the top-up occupies the first
-    // `topUp.length` slots of the submission. Read leg results off the shifted
-    // view, and shift the positional fallback too, or leg 0 reads the top-up's
-    // outcome as its own fill.
-    const legResponses = responses.slice(topUp.length);
+  /**
+   * The venue builds the whole roll — every close sized from the on-chain
+   * position and every open at that size, all FOK — and reports each call's
+   * market, side and size, which is what the fills are read against. The
+   * top-up goes between the closes and the opens: funded like an open, its
+   * strict margin check after the closes freed their margin.
+   */
+  const rollOver = async (legs: BorosRollLeg[]): Promise<BorosLegFill[]> => {
+    if (legs.length === 0) return [];
+    let calls: RollOverCall[];
+    try {
+      const res = await call<{ calls: RollOverCall[] }>('/v1/calldata-builder/agent/roll-over', {
+        marketAcc: await marketAccFor(legs[0].fromMarketId),
+        legs: legs.map((l) => ({
+          fromMarketId: l.fromMarketId,
+          toMarketId: l.toMarketId,
+          size: parseUnits(decimalString(l.size), DECIMALS).toString(),
+          closeRate: l.closeRate,
+          openRate: l.openRate,
+          ammId: AMM_ORDERBOOK_ONLY,
+        })),
+      });
+      calls = res?.calls ?? [];
+      if (calls.length !== legs.length * 2) throw new CoreError('Boros returned an unexpected number of roll-over calls', 'venue-rejected');
+    } catch (err) {
+      // Closes then opens, the order the venue would have answered in.
+      const refused = (marketId: number, direction: BorosLegDirection, size: number) =>
+        neverSentLeg({ marketId, direction, size, limitApr: 0, clientOrderId: '' }, err);
+      return [
+        ...legs.map((l) => refused(l.fromMarketId, 'short', l.size)),
+        ...legs.map((l) => refused(l.toMarketId, 'long', l.size)),
+      ];
+    }
+    const reqs = calls.map((c) => ({
+      marketId: c.marketId,
+      direction: (c.resolved?.side === SIDE_SHORT ? 'short' : 'long') as BorosLegDirection,
+      size: Number(formatUnits(BigInt(c.size), DECIMALS)),
+      limitApr: c.resolved?.requestedRate ?? 0,
+      clientOrderId: '',
+    }));
+    return execute(reqs, calls.map((c) => c.calldata as Hex), { reducing: false, topUpAfter: legs.length });
+  };
+
+  /**
+   * Sign and submit one batch, then read a fill per leg.
+   *
+   * The top-up sits at `topUpAfter` (default first, which is what the
+   * backend's own builders do — payTreasury goes first in
+   * getPositionTransferCallData and getCancelOrderCallData).
+   *
+   * Position does NOT decide whether the batch is funded: the relayer sums
+   * the whole submission and checks it once, before anything executes
+   * (gas-tracking.service), so the credit counts wherever the call sits.
+   * What position does decide is when `payTreasury`'s own `_checkIMStrict`
+   * runs (MarginManager.sol) — a caller whose leading legs CLOSE positions
+   * places it after them, so that check sees the margin they free.
+   */
+  const execute = async (
+    reqs: BorosMarketOrderRequest[],
+    legCalldatas: Hex[],
+    opts?: PlaceOrdersOptions,
+  ): Promise<BorosLegFill[]> => {
+    let signed: SignedCall[];
+    let topUpCount: number;
+    const at = Math.max(0, Math.min(reqs.length, opts?.topUpAfter ?? 0));
+    try {
+      const topUp = await autoTopUpCalldata(opts?.reducing === true);
+      topUpCount = topUp.length;
+      signed = await signCalls([...legCalldatas.slice(0, at), ...topUp, ...legCalldatas.slice(at)]);
+    } catch (err) {
+      return reqs.map((req) => neverSentLeg(req, err));
+    }
+    let responses: TxResponse[];
+    try {
+      responses = await submitCalls(signed);
+    } catch (err) {
+      // A 4xx is a refusal at the door (nothing ran). A 5xx, a timeout or a
+      // dropped connection is not — the batch may have gone through.
+      const status = err instanceof CoreError ? (err.details as { status?: number } | undefined)?.status : undefined;
+      if (status !== undefined && status < 500) return reqs.map((req) => neverSentLeg(req, err));
+      throw err;
+    }
+    // Everything below indexes BY LEG, and the top-up occupies `topUpCount`
+    // slots of the submission starting at `at`. Read leg results off a view
+    // with those slots removed, or a leg reads the top-up's outcome as its own.
+    const legResponses = [...responses.slice(0, at), ...responses.slice(at + topUpCount)];
+    const submissionIndex = (i: number): number => (i < at ? i : i + topUpCount);
 
     // With `requireSuccess` the legs stand or fall together, so one error is
     // the whole batch's — the top-up's included: it is in the same submission,
     // so if it reverted nothing else traded either. Report every leg failed
     // rather than implying the others might have traded.
-    const failure = responses.find((r) => r?.error);
-    if (failure) return reqs.map((req) => failedLeg(req, failure.error as string));
+    //
+    // ⚠ Under `requireSuccess` EVERY call carries an error: the one that
+    // failed carries the reason, the rest "Batch aborted". Report the reason,
+    // wherever it sits — the first error in the array is the top-up's or leg
+    // A's "aborted" whenever the real failure is behind it.
+    const failure =
+      responses.find((r) => r?.error && !BATCH_ABORTED.test(r.error)) ?? responses.find((r) => r?.error);
+    if (failure) {
+      return reqs.map((req, i) =>
+        failedLeg(req, failure.error as string, legResponses[i] === failure ? 'this-leg' : 'batch'),
+      );
+    }
 
     const txHash = responses.find((r) => r?.txHash)?.txHash;
     if (!txHash) {
@@ -582,7 +700,7 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
           `Submitted as ${txHash} but no status came back, so this leg may or may not have filled. Check the position on Boros before re-issuing.`,
         );
       }
-      const status = byIndex.get(legResponses[i]?.index ?? i + topUp.length);
+      const status = byIndex.get(legResponses[i]?.index ?? submissionIndex(i));
       // A status array that skips this call says nothing about it — exactly
       // the uncertainty the `!byIndex` branch above reports. Falling through
       // would compute `filled` as 0 and claim "nothing matched", telling the
@@ -635,6 +753,7 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
 
   return {
     placeMarketOrders,
+    rollOver,
 
     async cancelOrders(marketId: number): Promise<void> {
       const marketAcc = await marketAccFor(marketId);
@@ -713,7 +832,7 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
           // this is a shape change on their side, not a routine case.
           ...(open === null ? {} : { sizeWei: (asked < open ? asked : open).toString() }),
         },
-      ], { reducing: true });
+      ], { reducing: true, topUpAfter: 1 });
       return fill;
     },
   };
