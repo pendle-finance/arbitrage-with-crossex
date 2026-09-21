@@ -11,7 +11,7 @@ import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HttpResponse, http } from 'msw';
 import { beforeEach, describe, expect, it } from 'vitest';
-import type { AssetBorosOpen, AssetGroup, AssetPerpOpen } from '../../api/types';
+import type { AssetBorosOpen, AssetGroup, AssetPerpOpen, BorosRollGate } from '../../api/types';
 import { server } from '../../test/server';
 import { renderWithClient } from '../../test/utils';
 import { STRATEGY_STORAGE_KEY } from '../HomeControls';
@@ -170,7 +170,7 @@ const rollGate = (o: Partial<ReturnType<typeof rollGateBase>> = {}) => ({ ...rol
 const rollGateBase = () => ({
   blockers: [] as Array<{ code: string; message: string; step?: string; leg?: string; marketId?: number }>,
   warnings: [] as string[],
-  margin: { need: 5, availableBefore: 895, availableAfter: 900, shortfall: 0 },
+  margin: { need: 5, availableBefore: 895, availableAfter: 900, shortfall: 0 } as BorosRollGate['margin'],
 });
 
 type Leg = { marketId: number; direction: 'long' | 'short'; slippageApr: number };
@@ -629,6 +629,28 @@ describe('RollOverModal — the review page', () => {
     // Before → after, as the venue simulated it.
     expect(within(dialog).getByText(/4 ETH → -2 ETH/)).toBeInTheDocument();
     expect(within(dialog).getByText(/About 2 ETH short — the venue refuses the roll/)).toBeInTheDocument();
+  });
+
+  it('a batch the venue refused for margin shows the account once the old legs are closed, and the shortfall from it', async () => {
+    const user = userEvent.setup();
+    install({
+      gate: () =>
+        rollGate({
+          blockers: [{ code: 'venue-refused', message: 'The venue refuses this roll:\nRe-entry · Hyperliquid ETH 30 Oct 2026 — Not enough margin. Add margin or roll a smaller size.' }],
+          // The batch reverted: no after — but the venue reports the state between the closes and the opens.
+          margin: { need: 0.113, availableBefore: 0.0525, availableAfter: null, availableAfterExit: 0.084, shortfall: 0.029 },
+        }),
+    });
+    renderWithClient(<RollOverModal pair={pair} base="ETH" nowSec={NOW} onClose={() => {}} />);
+    const dialog = await screen.findByRole('dialog');
+    const next = await within(dialog).findByRole('button', { name: 'Roll over →' });
+    await waitFor(() => expect(next).not.toBeDisabled(), { timeout: 4_000 });
+    await user.click(next);
+    expect(await within(dialog).findByText(/Not enough margin/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/0\.0525 ETH → 0\.084 ETH/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/once the old legs are closed/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/About 0\.029 ETH short — the venue refuses the roll/)).toBeInTheDocument();
+    expect(within(dialog).queryByText('Simulation failed')).not.toBeInTheDocument();
   });
 
   it('a comfortably funded roll shows the required and available margin with no shortfall', async () => {

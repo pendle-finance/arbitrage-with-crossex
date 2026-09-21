@@ -110,6 +110,10 @@ export interface BorosRollSimulation {
   /** Initial margin still spendable before and after the batch; negative = short. */
   availableBefore: number;
   availableAfter: number | null;
+  /** …and between the closes and the opens — what the opens are judged on.
+   * On a refused batch the venue simulates the closes alone for it; null
+   * when it cannot, or on a venue that does not report it. */
+  availableAfterExit: number | null;
   /** Initial margin the opens require, with the account's leverage. */
   marginRequired: number;
 }

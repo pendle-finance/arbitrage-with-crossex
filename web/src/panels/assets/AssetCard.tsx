@@ -2007,6 +2007,9 @@ function RollReview({
   const marginNeed = margin?.need ?? null;
   const availableBefore = margin?.availableBefore ?? null;
   const availableAfter = margin?.availableAfter ?? null;
+  // A refused batch has no after — but the venue still reports the account
+  // between the closes and the opens, which is what the opens were judged on.
+  const availableAfterExit = margin?.availableAfterExit ?? null;
   const marginShort = margin?.shortfall ?? 0;
   const px = exitSim?.collateralPriceUsd ?? entrySim?.collateralPriceUsd ?? null;
   const usdNote = (tokens: number) =>
@@ -2254,17 +2257,30 @@ function RollReview({
         />
         <EstimateRow
           label="Available margin"
-          sub={availableAfter === null ? undefined : 'before → after, as the venue simulates it'}
+          sub={
+            availableAfter !== null
+              ? 'before → after, as the venue simulates it'
+              : availableAfterExit !== null
+                ? 'before → once the old legs are closed, as the venue simulates it'
+                : undefined
+          }
           title={
-            availableAfter === null
-              ? undefined
-              : 'Initial margin spendable before the batch, and after it — the closes run first, so the new legs are judged on the margin the old ones free.'
+            availableAfter !== null
+              ? 'Initial margin spendable before the batch, and after it — the closes run first, so the new legs are judged on the margin the old ones free.'
+              : availableAfterExit !== null
+                ? 'Initial margin spendable before the batch, and once the closes have run — the figure the new legs were judged on. The batch itself was refused, so there is no after.'
+                : undefined
           }
           value={
             availableBefore !== null && availableAfter !== null ? (
               <>
                 {fmtTokenQty(availableBefore, collateral)} → {fmtTokenQty(availableAfter, collateral)}
                 {usdNote(availableAfter)}
+              </>
+            ) : availableBefore !== null && availableAfterExit !== null ? (
+              <>
+                {fmtTokenQty(availableBefore, collateral)} → {fmtTokenQty(availableAfterExit, collateral)}
+                {usdNote(availableAfterExit)}
               </>
             ) : (
               // The venue reports no post-batch state when it refuses: nothing

@@ -249,6 +249,7 @@ interface RollOverSimulationWire {
   status?: string;
   reason?: { errorCode: string; message: string } | null;
   preState?: { availableInitialMargin?: string };
+  exitState?: { availableInitialMargin?: string } | null;
   postState?: { availableInitialMargin?: string } | null;
   marginRequired?: string;
   orders?: Array<{
@@ -633,6 +634,7 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
       })),
       availableBefore: units(res.preState?.availableInitialMargin) ?? 0,
       availableAfter: units(res.postState?.availableInitialMargin),
+      availableAfterExit: units(res.exitState?.availableInitialMargin),
       marginRequired: units(res.marginRequired) ?? 0,
     };
   };

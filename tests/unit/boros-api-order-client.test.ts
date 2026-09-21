@@ -98,6 +98,7 @@ function fakeApi(
         status: 'Succeed',
         reason: null,
         preState: { availableInitialMargin: wei(5_000) },
+        exitState: { availableInitialMargin: wei(5_300) },
         postState: { availableInitialMargin: wei(4_100) },
         marginRequired: wei(700),
         orders: [
@@ -488,6 +489,7 @@ describe('makeBorosApiOrderClient — rollOver', () => {
     expect(sim.status).toBe('Succeed');
     expect(sim.availableBefore).toBe(5_000);
     expect(sim.availableAfter).toBe(4_100);
+    expect(sim.availableAfterExit).toBe(5_300);
     expect(sim.marginRequired).toBe(700);
     expect(sim.orders.map((o) => [o.action, o.marketId, o.filled, o.matchedSize, o.matchedApr, o.fee, o.error])).toEqual([
       ['close', HL, true, 100, 0.091, 4, null],
@@ -507,7 +509,8 @@ describe('makeBorosApiOrderClient — rollOver', () => {
       },
     });
     const refused = await client(refusedApi).simulateRollOver!(legs);
-    expect(refused).toMatchObject({ status: 'Refused', reason: { code: 'MARKET_ORDER_FOK_NOT_FILLED' }, availableAfter: null });
+    // A venue that reports no exit state (older, or the closes could not run) reads as unknown, not 0.
+    expect(refused).toMatchObject({ status: 'Refused', reason: { code: 'MARKET_ORDER_FOK_NOT_FILLED' }, availableAfter: null, availableAfterExit: null });
     expect(refused.orders[0]).toEqual({ action: 'open', marketId: HL + 1, filled: false, matchedSize: null, matchedApr: null, fee: null, error: 'Insufficient liquidity' });
   });
 

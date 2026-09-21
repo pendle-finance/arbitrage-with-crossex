@@ -1322,7 +1322,11 @@ export interface BorosRollMargin {
   availableBefore: number | null;
   /** …and after; negative means the venue refuses the batch for margin. */
   availableAfter: number | null;
-  /** −availableAfter when negative, else 0; 0 when unknown. */
+  /** …and between the closes and the opens — what the opens are judged on;
+   * the figure a refused batch still has. Absent on an older server. */
+  availableAfterExit?: number | null;
+  /** How far short of the opens' margin the account is (−availableAfter, or
+   * need − availableAfterExit on a batch refused for margin); 0 when unknown. */
   shortfall: number;
 }
 
