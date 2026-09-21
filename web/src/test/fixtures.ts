@@ -47,6 +47,7 @@ import type {
   WalletAfter,
   WalletShare,
 } from '../api/types';
+import type { MarginTiers } from '../lib/liquidation';
 import type { SharePayloadV1 } from '../lib/shareCodec';
 import { env, server } from './server';
 
@@ -2522,6 +2523,29 @@ export const accountBodies = {
   },
 } satisfies Record<string, CrossexAccount>;
 
+/** Gate's /crossex/rule/risk_limits, read live 2026-09-21, mirrored in tests/fixtures/gate/risk-limits.json. */
+const GATE_RISK_TIERS: MarginTiers = {
+  GATE_FUTURE_ETH_USDT: [
+    { from: 0, rate: 0.01, deduction: 0 },
+    { from: 15_000_000, rate: 0.012, deduction: 30_000 },
+    { from: 20_000_000, rate: 0.016, deduction: 110_000 },
+    { from: 30_000_000, rate: 0.02, deduction: 230_000 },
+    { from: 50_000_000, rate: 0.07, deduction: 2_730_000 },
+    { from: 300_000_000, rate: 0.1, deduction: 11_730_000 },
+  ],
+  GATE_FUTURE_HYPE_USDT: [
+    { from: 0, rate: 0.015, deduction: 0 },
+    { from: 200_000, rate: 0.018, deduction: 600 },
+    { from: 300_000, rate: 0.02, deduction: 1_200 },
+    { from: 500_000, rate: 0.025, deduction: 3_700 },
+    { from: 1_000_000, rate: 0.08, deduction: 58_700 },
+    { from: 6_000_000, rate: 0.1, deduction: 178_700 },
+  ],
+  HYPERLIQUID_FUTURE_HYPE_USDC: [{ from: 0, rate: 0.05, deduction: 0 }],
+};
+
+const HYPE_MARK_STALE_AT = new Date(2026, 8, 21, 14, 32).getTime();
+
 export const positionsBodies = {
   ethTwoVenues: {
     positions: [
@@ -2556,6 +2580,91 @@ export const positionsBodies = {
         singleLeg: false,
       },
     ],
+    marginTiers: GATE_RISK_TIERS,
+  },
+  hypeMarkStale: {
+    positions: [
+      makeCrossexPosition({ maintenanceMargin: '200' }),
+      makeCrossexPosition({
+        symbol: 'HYPERLIQUID_FUTURE_ETH_USDC',
+        positionSide: 'SHORT',
+        positionQty: '-0.3',
+        maxLeverage: '20',
+        upnl: '-3',
+        upnlRate: '-0.004',
+        fee: '-0.3',
+        initialMargin: '75',
+        maintenanceMargin: '200',
+      }),
+      makeCrossexPosition({
+        symbol: 'GATE_FUTURE_HYPE_USDT',
+        positionSide: 'LONG',
+        positionQty: '10',
+        positionValue: '860',
+        entryPrice: '85',
+        markPrice: '86',
+        leverage: '10',
+        maxLeverage: '10',
+        upnl: '10',
+        upnlRate: '0.012',
+        fundingFee: '0',
+        fee: '-0.43',
+        initialMargin: '86',
+        maintenanceMargin: '13',
+      }),
+      makeCrossexPosition({
+        symbol: 'HYPERLIQUID_FUTURE_HYPE_USDC',
+        positionSide: 'SHORT',
+        positionQty: '-10',
+        positionValue: '860',
+        entryPrice: '85',
+        markPrice: '',
+        leverage: '10',
+        maxLeverage: '10',
+        upnl: '0',
+        upnlRate: '0',
+        fundingFee: '0',
+        fee: '-0.43',
+        initialMargin: '86',
+        maintenanceMargin: '43',
+        markStaleSinceMs: HYPE_MARK_STALE_AT,
+      }),
+    ],
+    exposure: [
+      {
+        base: 'ETH',
+        legs: [
+          { symbol: 'GATE_FUTURE_ETH_USDT', exchange: 'GATE', quote: 'USDT', side: 'LONG', qty: 0.3, value: 750 },
+          {
+            symbol: 'HYPERLIQUID_FUTURE_ETH_USDC', exchange: 'HYPERLIQUID', quote: 'USDC', side: 'SHORT', qty: 0.3,
+            value: 750,
+          },
+        ],
+        longValue: 750,
+        shortValue: 750,
+        netValue: 0,
+        grossValue: 1500,
+        neutral: true,
+        singleLeg: false,
+      },
+      {
+        base: 'HYPE',
+        legs: [
+          { symbol: 'GATE_FUTURE_HYPE_USDT', exchange: 'GATE', quote: 'USDT', side: 'LONG', qty: 10, value: 860 },
+          {
+            symbol: 'HYPERLIQUID_FUTURE_HYPE_USDC', exchange: 'HYPERLIQUID', quote: 'USDC', side: 'SHORT', qty: 10,
+            value: 860,
+          },
+        ],
+        longValue: 860,
+        shortValue: 860,
+        netValue: 0,
+        grossValue: 1720,
+        neutral: true,
+        singleLeg: false,
+      },
+    ],
+    marginTiers: GATE_RISK_TIERS,
   },
 } satisfies Record<string, PositionsResponse>;
 
@@ -2850,6 +2959,7 @@ export const whaleBook = {
         singleLeg: false,
       },
     ],
+    marginTiers: GATE_RISK_TIERS,
   },
   assetView: {
     ...avDefault,
