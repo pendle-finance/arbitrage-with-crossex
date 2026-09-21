@@ -4,7 +4,9 @@ interface Props<T extends string> {
   value: T;
   /** `subTitle` is hover text for `sub` — for a badge whose claim needs a
    * qualification that does not deserve a permanent paragraph. */
-  options: { value: T; label: ReactNode; sub?: ReactNode; subTitle?: string }[];
+  /** A `disabled` option stays in the row so the choice set reads the same in
+   * every state; `title` says why it is off. */
+  options: { value: T; label: ReactNode; sub?: ReactNode; subTitle?: string; disabled?: boolean; title?: string }[];
   onChange: (next: T) => void;
   ariaLabel?: string;
   /** Extra classes on the track — e.g. `seg-info` for the info-active variant. */
@@ -41,7 +43,9 @@ export function SegmentedToggle<T extends string>({
           role="radio"
           aria-checked={value === opt.value}
           data-active={value === opt.value}
-          className={`seg-btn${fill ? ' flex-1 justify-center' : ''}`}
+          className={`seg-btn${fill ? ' flex-1 justify-center' : ''}${opt.disabled ? ' cursor-not-allowed opacity-40' : ''}`}
+          disabled={opt.disabled}
+          title={opt.title}
           onClick={() => onChange(opt.value)}
         >
           <span>{opt.label}</span>

@@ -1,11 +1,10 @@
 {
-  "version": "1.6.2",
+  "version": "1.6.3",
   "highlights": [
-    "Lighter pairs in Opportunities, with up to 50x",
-    "Rebalance splits your equity by position size across USDT, Hyperliquid and Lighter",
-    "Rebalance and Manual Transfer reach your Lighter wallet",
-    "Balances shows your assets, with your borrow, Rebalance and Manual Transfer under them",
-    "Rebalance says how many days of saved interest pay its fee, and when it is not worth it yet",
-    "Rebalance is safe for large accounts, and never sends a step twice without you"
+    "Rebalance clears a borrow after your positions are closed: Clear debt brings every negative wallet to zero",
+    "Custom amount moves what you type from one CrossEx wallet to another",
+    "Every route is listed, with its time and fee side by side, and Spot loop runs until the move is done",
+    "The Rebalance card leads with whichever move is worth doing, and its verdict names it",
+    "A borrow rate the app could not read is said out loud instead of hidden"
   ]
 }

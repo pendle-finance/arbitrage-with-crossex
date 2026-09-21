@@ -209,7 +209,9 @@ describe('BalancesPanel layout', () => {
     const table = within(assets).getByRole('table');
     const facts = region('Rebalance').querySelector('dl') as HTMLElement;
     const transfer = within(region('Rebalance')).getByRole('group', { name: 'Transfer' });
-    const rebalance = within(region('Rebalance')).getByRole('button', { name: /^Rebalance · Fee/ });
+    const rebalance = within(region('Rebalance'))
+      .getAllByRole('button', { name: 'Rebalance' })
+      .find((el) => el.className.includes('btn')) as HTMLElement;
     expect(table.compareDocumentPosition(facts) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(facts.compareDocumentPosition(rebalance) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(rebalance.compareDocumentPosition(transfer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -271,7 +273,9 @@ describe('BalancesPanel layout', () => {
 
     answer = 'ok';
     fireEvent.click(screen.getByRole('button', { name: 'read rebalance again' }));
-    expect(await within(region('Rebalance')).findByRole('button', { name: 'Rebalance · Fee $0.46' })).toBeInTheDocument();
+    await waitFor(() =>
+      expect(within(region('Rebalance')).getAllByRole('button', { name: 'Rebalance' }).some((el) => el.className.includes('btn'))).toBe(true),
+    );
     expect(window).toBeInTheDocument();
     expect(screen.getAllByRole('dialog')).toEqual([window]);
     expect(transfer).toBeInTheDocument();

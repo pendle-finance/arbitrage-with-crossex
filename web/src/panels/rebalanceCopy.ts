@@ -1,4 +1,4 @@
-import type { Pool } from '../api/types';
+import type { GoalKind, Pool } from '../api/types';
 import { num, WALLET_SHORT } from '../lib/fmt';
 
 export const roundCount = (n: number) => `${num(n, 0)} ${n === 1 ? 'round' : 'rounds'}`;
@@ -26,6 +26,22 @@ export const LEG_TEXT: Readonly<Record<string, string>> = {
 };
 
 export const NO_LEGS = 'No open positions. Nothing to rebalance.';
+
+/** The two presets and the custom move, as the dialog names them: what each
+ * one does to the wallets, since "Rebalance" is the dialog they sit in. */
+export const GOAL_LABEL: Readonly<Record<GoalKind, string>> = { even: 'Balance positions', repay: 'Clear debt', custom: 'Custom amount' };
+/** The card's button and its job lines: the feature's own name when it leads
+ * with the position split, the preset's when it leads with the debt. */
+export const CARD_LABEL: Readonly<Record<GoalKind, string>> = { even: 'Rebalance', repay: 'Clear debt', custom: 'Custom move' };
+export const PRESET_OFF: Readonly<Record<'even' | 'repay', string>> = { even: 'No open positions', repay: 'No borrow' };
+export const USE_PRESET = 'Use a preset';
+export const MOVE = 'Move';
+export const MOVE_FROM = 'from';
+export const MOVE_TO = 'to';
+export const NOTHING_TO_MOVE = 'Nothing to move.';
+export const SHORT_OF_CASH = 'more than the wallet holds.';
+export const HOLD_LABEL: Readonly<Record<GoalKind, string>> = { even: 'Hold to rebalance', repay: 'Hold to clear debt', custom: 'Hold to move' };
+export const AFTER_LABEL: Readonly<Record<GoalKind, string>> = { even: 'After rebalance', repay: 'After clearing debt', custom: 'After the move' };
 
 export const MOVE_TEXT = {
   step: (from: Pool, to: Pool, move: string, arrives: string): string => {
@@ -86,12 +102,14 @@ export const HOVER = {
     ],
     recommended: 'Recommended: cheapest route that takes 15 min or less.',
   },
+  presets:
+    'Balance positions splits equity by position size. Clear debt moves just enough to bring every negative wallet to zero, from the wallet with the most equity. Custom amount moves what you type.',
+  custom: 'Moves this amount out of one CrossEx wallet into another. Fees come off what lands.',
   walletUsdt: 'CrossEx wallet. Margin for Gate, Binance, OKX and Bybit legs.',
   walletUsdc: 'CrossEx wallet. Margin for Hyperliquid legs.',
   walletLighter: 'CrossEx wallet. Margin for Lighter legs.',
   walletGate: 'CrossEx wallet. USDC left from a spot buy. Still margin. Rebalance empties it.',
   now: 'Equity = cash + unrealized PnL.',
-  positionShare: "This wallet's positions at mark price ÷ all positions. Rebalance moves equity to this share.",
   interestNow: {
     lead: 'Gate charges interest every hour when a CrossEx wallet is negative.',
     head: { wallet: 'Wallet', interest: 'Interest', rate: 'Rate now' },
@@ -102,7 +120,7 @@ export const HOVER = {
     ],
   },
   borrowing: 'A negative wallet is a borrow. The Margin card at the top shows the initial margin it locks.',
-  route: 'How the money moves. The fee includes Gate fees and the spot spread. Spot loop shows only when it costs less than Convert.',
+  route: 'How the money moves. The fee includes Gate fees and the spot spread. Spot loop runs until the move is done, however many rounds that takes.',
   mix: (cap: number) => `Spot loop for up to ${roundCount(cap)}, then Convert the rest.`,
   recommended: 'Cheapest route that takes 15 min or less.',
   noDirectTransfer: 'Gate has no direct transfer between CrossEx wallets.',
@@ -133,8 +151,19 @@ export const VERDICT_BALANCED = 'Wallets match their position share. Nothing to 
  * real interest, and weighing it against zero produced a verdict that
  * contradicted the "$0.00 an hour" figure beside it. */
 export const VERDICT_NO_INTEREST = 'No interest payment yet. No transfer or rebalancing necessary.';
+/** A borrow whose rate Gate did not return. Silence here read as "nothing to
+ * do" while the dialog still priced a fee beside it, so the card says plainly
+ * that the reading failed (his call 2026-09-19). */
+export const VERDICT_RATE_UNKNOWN = 'Could not read the borrow interest rate. Check the fee before you move anything.';
 export const VERDICT_NOT_WORTH_IT = 'Not worth it yet. The fee is more than 30 days of the interest it saves.';
-export const VERDICT_WORTH_IT = 'Rebalance is recommended.';
+/** Each verdict names WHICH move it judges. Two presets move different amounts
+ * for the same interest, so an unsubjected sentence on the card read as a
+ * contradiction of the dialog's (his catch 2026-09-19). */
+export const VERDICT_WORTH_IT = 'Rebalance recommended.';
+export const VERDICT_REPAY_WORTH_IT = 'Clear debt recommended.';
+/** With no legs there is no fee-versus-interest question: the borrow locks
+ * the cash, so it is repaid regardless of what the move costs. */
+export const VERDICT_REPAY_NO_LEGS_SUB = 'Debt prevents you from withdrawing your cash.';
 export const PAYS_BACK = (daysText: string) => `The fee equals ${daysText} of the interest it saves.`;
 
 export const FACT_BORROWING = 'Borrowing';
@@ -144,7 +173,6 @@ export const FACT_LIQUIDATION = 'Liquidation';
 export const LIQUIDATION_NOT_KNOWN = 'unknown';
 
 export const BAR_CAPTION = 'Equity (cash + unrealized PnL)';
-export const SHARE_CAPTION = 'Position share';
 export const GATE_SPOT = 'Gate spot';
 
 export const HOVER_CASH = 'Cash';

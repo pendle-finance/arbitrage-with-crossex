@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { classifyGateError, plainErrorFor } from '../core/errors';
 import { CONVERT_MAX, CONVERT_RATE, floorCents, PAIR_CONVERT_MAX, POOLS, spotArrivalFor } from '../core/rebalance/plan';
-import type { GateAccount, PlannedStep, Pool, RouteName, TransferCoin, Venue, WalletAfter } from '../core/rebalance/plan';
+import type { GateAccount, GoalKind, PlannedStep, Pool, RouteName, TransferCoin, Venue, WalletAfter } from '../core/rebalance/plan';
 import { restrictToOwner } from './secretFile';
 
 export type { Pool, RouteName };
@@ -35,6 +35,9 @@ export interface Job {
   /** Gate user id the job was started on. A resume on another account is
    * refused; null on files written before this field existed. */
   userId: string | null;
+  /** What the run is for. Files written before this field existed were all
+   * `even`, the only goal there was. */
+  goal: GoalKind;
   route: RouteName;
   amount: number;
   costUsd: number | null;
@@ -215,6 +218,7 @@ function stepsFor(step: PlannedStep): Step[] {
 
 export function newJob(
   input: {
+    goal?: GoalKind;
     route: RouteName;
     steps: PlannedStep[];
     amount: number;
@@ -227,6 +231,7 @@ export function newJob(
   return {
     id: now.toString(36),
     userId: input.userId,
+    goal: input.goal ?? 'even',
     route: input.route,
     amount: input.amount,
     costUsd: input.costUsd,
@@ -351,6 +356,7 @@ function parseJob(value: unknown): Job | null {
   const legacy = Object.hasOwn(LEGACY_MOVE, String(direction)) ? LEGACY_MOVE[String(direction)] : null;
   delete (job as { direction?: unknown }).direction;
   if (job.userId === undefined) job.userId = null;
+  if (job.goal === undefined) job.goal = 'even';
   if (job.costUsd === undefined) job.costUsd = null;
   if (job.target === undefined) job.target = null;
   if (!JOB_STATUSES.includes(String(job.status))) return null;
