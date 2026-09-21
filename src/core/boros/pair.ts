@@ -309,12 +309,15 @@ export interface SimulatedLeg {
   slippageExceeded: boolean;
   /**
    * The LARGEST order size (collateral units) this side of the book fills
-   * with `estSlippageApr` still inside the tolerance — the biggest slice
-   * that would not trip `slippageExceeded`. A property of the book and the
-   * tolerance, not of the size entered, so a caller can size an order to it
-   * without a search. Null without a book or a mid; 0 when even the best
-   * level sits past the bound. Not capped by the position: a close's caller
-   * takes the smaller of this and what it holds.
+   * WHOLE: the depth at levels inside `worstApr`, and inside the venue's
+   * mark ± max-rate-deviation band when that is nearer — a market order is
+   * matched level by level up to its limit tick, and the venue refuses one
+   * whose last level sits past the band, so no averaging can reach a level
+   * past either edge. A property of the book and the tolerance, not of the
+   * size entered, so a caller can size an order to it without a search.
+   * Null without a book or a mid; 0 when even the best level sits past the
+   * bound. Not capped by the position: a close's caller takes the smaller
+   * of this and what it holds.
    */
   sizeWithinTolerance: number | null;
   /** Collateral units the book can actually supply; < requested on a thin book. */
@@ -398,38 +401,26 @@ const clampSlippage = (s: number): number =>
   !Number.isFinite(s) || s < 0 ? 0 : Math.min(s, MAX_SLIPPAGE_APR);
 
 /**
- * How much of one book side can be crossed before the fill's VWAP sits more
- * than `toleranceApr` from `midApr` the adverse way. Levels come best-first;
- * each is worth `size` collateral units at `apr`. A level whose own distance
- * from mid is inside the tolerance is taken whole (the running VWAP can only
- * be nearer mid than the worst level in it); the first level past it is taken
- * only up to the size q at which the VWAP reaches the bound exactly:
- *   (W + a·q) / (Q + q) = tol  ⇒  q = (tol·Q − W) / (a − tol)
- * where W is the adverse-distance-weighted size filled so far, Q the size
- * filled so far and a that level's adverse distance. Nothing past that
- * level can bring the VWAP back, so the walk stops there.
+ * The largest size a market order fills WHOLE inside a rate bound: the depth
+ * at the levels on the near side of it, summed. Boros matches a market order
+ * level by level up to its limit tick and never averages — a level past the
+ * tick is untouched however good the ones before it were — so the VWAP
+ * version of this over-promised on a lumpy book: it sized a roll at 648 ETH
+ * with the average inside the tolerance, and the venue refused the FOK for
+ * want of the last 87 ETH sitting one level past the bound (2026-09-21).
  */
-export function sizeWithinTolerance(
+export function sizeWithinBound(
   levels: Array<[number, number]>,
   orderSide: BorosLegDirection,
-  midApr: number,
-  toleranceApr: number,
+  boundApr: number,
 ): number {
-  if (!Array.isArray(levels) || !Number.isFinite(midApr) || !(toleranceApr >= 0)) return 0;
-  let filled = 0;
-  let weighted = 0;
+  if (!Array.isArray(levels) || !Number.isFinite(boundApr)) return 0;
+  let depth = 0;
   for (const [apr, size] of levels) {
     if (!Number.isFinite(apr) || !(size > 0)) continue;
-    const adverse = orderSide === 'long' ? apr - midApr : midApr - apr;
-    if (adverse <= toleranceApr) {
-      filled += size;
-      weighted += adverse * size;
-      continue;
-    }
-    const room = (toleranceApr * filled - weighted) / (adverse - toleranceApr);
-    return filled + Math.max(0, Math.min(size, room));
+    if (orderSide === 'long' ? apr <= boundApr : apr >= boundApr) depth += size;
   }
-  return filled;
+  return depth;
 }
 
 /**
@@ -489,8 +480,22 @@ function simulateLeg(
   const worstApr =
     anchor === null ? null : orderSide === 'short' ? anchor - slippageApr : anchor + slippageApr;
   const slippageExceeded = size > 0 && estSlippageApr !== null && estSlippageApr > slippageApr + 1e-12;
-  const fitSize =
-    levels && mid !== null ? sizeWithinTolerance(levels, orderSide, mid, slippageApr) : null;
+  // The venue refuses a market order whose last matched level sits past
+  // mark ± its max rate deviation, whatever bound the order carries — so
+  // what fills whole is the depth inside the NEARER of the two edges.
+  const cap = leg.market.maxRateDeviationApr;
+  const mark = leg.market.markApr;
+  const bandEdge =
+    knownRate(mark) && Number.isFinite(cap) && cap > 0 ? (orderSide === 'short' ? mark - cap : mark + cap) : null;
+  const fitEdge =
+    worstApr === null || mid === null
+      ? null
+      : bandEdge === null
+        ? worstApr
+        : orderSide === 'short'
+          ? Math.max(worstApr, bandEdge)
+          : Math.min(worstApr, bandEdge);
+  const fitSize = levels && fitEdge !== null ? sizeWithinBound(levels, orderSide, fitEdge) : null;
 
   // Margin is charged at the rate the leg actually locks; the IM formula is
   // linear in notional, so collateral units in gives collateral units out.
