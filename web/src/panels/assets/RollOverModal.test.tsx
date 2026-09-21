@@ -162,7 +162,7 @@ const rollGate = (o: Partial<ReturnType<typeof rollGateBase>> = {}) => ({ ...rol
 const rollGateBase = () => ({
   blockers: [] as Array<{ code: string; message: string; step?: string; leg?: string; marketId?: number }>,
   warnings: [] as string[],
-  margin: { need: 5, freed: 5, worstExitPnl: 0, exitFee: 0.02, availableAfter: 900, shortfall: 0 },
+  margin: { need: 5, availableBefore: 895, availableAfter: 900, shortfall: 0 },
 });
 
 type Leg = { marketId: number; direction: 'long' | 'short'; slippageApr: number };
@@ -519,9 +519,9 @@ describe('RollOverModal — the review page', () => {
     install({
       gate: () =>
         rollGate({
-          blockers: [{ code: 'partial-depth', message: 'Re-entry: Gate ETH 30 Oct 2026 can fill only 60 of 100 — reduce the size.', step: 'entry', leg: 'A', marketId: GATE_NEW }],
+          blockers: [{ code: 'venue-refused', message: 'The venue refuses this roll — Re-entry Gate ETH 30 Oct 2026: Insufficient liquidity. Widen the tolerance or reduce the size.' }],
           warnings: ['Rolling will auto-top-up gas by about $2 — it is billed to your prepaid gas pot.'],
-          margin: { need: 5, freed: 5, worstExitPnl: 0, exitFee: 0.02, availableAfter: 3, shortfall: 2 },
+          margin: { need: 5, availableBefore: 4, availableAfter: -2, shortfall: 2 },
         }),
     });
     renderWithClient(<RollOverModal pair={pair} base="ETH" nowSec={NOW} onClose={() => {}} />);
@@ -531,7 +531,7 @@ describe('RollOverModal — the review page', () => {
     await user.click(next);
 
     // The blocker is listed and holds the confirm shut.
-    expect(await within(dialog).findByText(/can fill only 60 of 100/)).toBeInTheDocument();
+    expect(await within(dialog).findByText(/Re-entry Gate ETH 30 Oct 2026: Insufficient liquidity/)).toBeInTheDocument();
     expect(within(dialog).getByRole('button', { name: 'Roll over' })).toBeDisabled();
     // The gate warning renders (the two-batch flow dropped these).
     expect(within(dialog).getByText(/auto-top-up gas by about \$2/)).toBeInTheDocument();
@@ -539,8 +539,9 @@ describe('RollOverModal — the review page', () => {
     const required = within(dialog).getByText('Required margin');
     const row = required.parentElement!.parentElement as HTMLElement;
     expect(within(row).getByText('5 ETH')).toBeInTheDocument();
-    expect(within(dialog).getByText('Available margin after exit')).toBeInTheDocument();
-    expect(within(dialog).getByText(/About 2 ETH short/)).toBeInTheDocument();
+    // Before → after, as the venue simulated it.
+    expect(within(dialog).getByText(/4 ETH → -2 ETH/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/About 2 ETH short — the venue refuses the roll/)).toBeInTheDocument();
   });
 
   it('a comfortably funded roll shows the required and available margin with no shortfall', async () => {
@@ -554,8 +555,8 @@ describe('RollOverModal — the review page', () => {
     const required = await within(dialog).findByText('Required margin');
     const row = required.parentElement!.parentElement as HTMLElement;
     expect(within(row).getByText('5 ETH')).toBeInTheDocument();
-    expect(within(dialog).getByText('Available margin after exit')).toBeInTheDocument();
-    expect(within(dialog).queryByText(/short\. Top up/)).not.toBeInTheDocument();
+    expect(within(dialog).getByText(/895 ETH → 900 ETH/)).toBeInTheDocument();
+    expect(within(dialog).queryByText(/short — the venue refuses/)).not.toBeInTheDocument();
     expect(within(dialog).queryByRole('alert')).not.toBeInTheDocument();
   });
 

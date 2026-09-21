@@ -278,13 +278,6 @@ export interface BorosPairLegInput {
    * to 0, which is exactly right for a leg opening from flat.
    */
   committedMargin?: number;
-  /**
-   * The fixed rate the position on this market locked (the venue's own
-   * `fixedApr` for it), a plain APR fraction whatever the side. Only a
-   * REDUCING leg reads it: closing realises the locked rate against today's
-   * book over what is left of the term, and the roll gate prices that.
-   */
-  positionApr?: number;
 }
 
 export interface SimulatedLeg {

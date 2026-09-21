@@ -275,8 +275,6 @@ interface AccountView {
   positionRawByMarket: Map<number, string>;
   /** marketId → initial margin that position already posts, collateral units. */
   committedMarginByMarket: Map<number, number>;
-  /** marketId → the fixed rate the position locked (the venue's `fixedApr`). */
-  positionAprByMarket: Map<number, number>;
   /** marketId → true when that market currently sits in an ISOLATED bucket. */
   isolatedMarkets: Set<number>;
   /** marketId → whether that isolated bucket holds anything at all. */
@@ -314,7 +312,6 @@ function readAccount(zones: BorosCollateralZone[]): AccountView {
     positionByMarket: new Map(),
     positionRawByMarket: new Map(),
     committedMarginByMarket: new Map(),
-    positionAprByMarket: new Map(),
     isolatedMarkets: new Set(),
     isolatedOccupied: new Set(),
     crossByToken: new Map(),
@@ -337,7 +334,6 @@ function readAccount(zones: BorosCollateralZone[]): AccountView {
           p.marketId,
           norm18(p.positionInitialMargin ?? p.initialMargin),
         );
-        view.positionAprByMarket.set(p.marketId, p.fixedApr);
       }
     }
     for (const group of zone.isolated) {
@@ -354,7 +350,6 @@ function readAccount(zones: BorosCollateralZone[]): AccountView {
           p.marketId,
           norm18(p.positionInitialMargin ?? p.initialMargin),
         );
-        view.positionAprByMarket.set(p.marketId, p.fixedApr);
         view.isolatedMarkets.add(p.marketId);
         if (occupied) view.isolatedOccupied.add(p.marketId);
         view.isolatedByMarket.set(p.marketId, {
@@ -553,7 +548,6 @@ export function borosPairRoutes(deps: AppDeps) {
       slippageApr: parsed.slippageApr,
       currentSize: account.positionByMarket.get(market.marketId) ?? 0,
       committedMargin: account.committedMarginByMarket.get(market.marketId) ?? 0,
-      positionApr: account.positionAprByMarket.get(market.marketId),
       isolatedOnly: market.isolatedOnly,
       onIsolatedMargin: account.isolatedMarkets.has(market.marketId),
       isolatedHasPositionOrOrders: account.isolatedOccupied.has(market.marketId),
@@ -872,26 +866,28 @@ export function borosPairRoutes(deps: AppDeps) {
         step(body.exit, 'close', true),
         step(body.entry, 'open', body.opposingAcknowledged === true),
       ]);
-      const nowSec = Math.floor(Date.now() / 1000);
+      // The venue previews the batch as it would run it. A preview that
+      // cannot be had is a blocker, not a guess — nothing else can vouch for
+      // a FOK fill or for the margin after the closes.
+      const legs = rollLegsFor(exit.simulation, entry.simulation);
+      const orders = deps.getBorosOrders?.();
+      const venue =
+        legs && orders?.simulateRollOver ? await orders.simulateRollOver(legs).catch(() => null) : null;
       const gate = evaluateRollGate({
         exit: { simulation: exit.simulation, gate: exit.gate, legA: exit.legA, legB: exit.legB },
         entry: { simulation: entry.simulation, gate: entry.gate, legA: entry.legA, legB: entry.legB },
-        account: {
-          cross: account.crossByToken.get(entry.legA.market.tokenId) ?? null,
-          isolatedByMarket: account.isolatedByMarket,
-          gasBalanceUsd: entry.gasBalanceUsd,
-        },
-        nowSec,
+        venue,
       });
-      return { exit, entry, gate, account, simulatedAtMs: Math.min(exit.simulatedAtMs, entry.simulatedAtMs) };
+      return { exit, entry, gate, venue, simulatedAtMs: Math.min(exit.simulatedAtMs, entry.simulatedAtMs) };
     };
 
     app.post('/boros/roll/simulate', async (req, reply) => {
-      const { exit, entry, gate, simulatedAtMs } = await priceRoll(req.body as RollBody, false);
+      const { exit, entry, gate, venue, simulatedAtMs } = await priceRoll(req.body as RollBody, false);
       return reply.ok({
         exit: { simulation: exit.simulation, gate: exit.gate },
         entry: { simulation: entry.simulation, gate: entry.gate },
         gate,
+        venue,
         simulatedAtMs,
         gasBalanceUsd: entry.gasBalanceUsd ?? null,
       });

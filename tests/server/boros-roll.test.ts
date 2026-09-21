@@ -10,7 +10,7 @@
  */
 import type { FastifyInstance } from 'fastify';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { BorosLegFill, BorosOrderClient, BorosRollLeg } from '../../src/core/boros/orders';
+import type { BorosLegFill, BorosOrderClient, BorosRollLeg, BorosRollSimulation } from '../../src/core/boros/orders';
 import { imInputs, raw } from '../helpers/boros-fixtures';
 import { TtlCache } from '../../src/server/cache';
 import { borosStub } from '../helpers/boros-stub';
@@ -114,8 +114,26 @@ const rolledFills = (legs: BorosRollLeg[]): BorosLegFill[] => [
   ...legs.map((l) => okFill({ marketId: l.toMarketId, direction: 'short', filledSize: l.size, shortfallSize: 0 })),
 ];
 
-/** A client that records its ONE rollOver call and scripts the fills. */
-function capturingClient(calls: BorosRollLeg[][], roll?: (legs: BorosRollLeg[]) => BorosLegFill[]): BorosOrderClient {
+/** The venue's preview of a roll that goes through. */
+const venueOk = (legs: BorosRollLeg[], over: Partial<BorosRollSimulation> = {}): BorosRollSimulation => ({
+  status: 'Succeed',
+  reason: null,
+  orders: [
+    ...legs.map((l) => ({ action: 'close' as const, marketId: l.fromMarketId, filled: true, matchedSize: l.size, matchedApr: 0.09, fee: 4, error: null })),
+    ...legs.map((l) => ({ action: 'open' as const, marketId: l.toMarketId, filled: true, matchedSize: l.size, matchedApr: 0.1, fee: 4, error: null })),
+  ],
+  availableBefore: 500_000,
+  availableAfter: 480_000,
+  marginRequired: 9_000,
+  ...over,
+});
+
+/** A client that records its ONE rollOver call and scripts the fills; the venue's preview says yes unless told otherwise. */
+function capturingClient(
+  calls: BorosRollLeg[][],
+  roll?: (legs: BorosRollLeg[]) => BorosLegFill[],
+  preview?: (legs: BorosRollLeg[]) => Promise<BorosRollSimulation>,
+): BorosOrderClient {
   return {
     placeMarketOrders: async () => {
       throw new Error('a roll must not go through placeMarketOrders');
@@ -124,6 +142,7 @@ function capturingClient(calls: BorosRollLeg[][], roll?: (legs: BorosRollLeg[]) 
       calls.push(legs);
       return roll ? roll(legs) : rolledFills(legs);
     },
+    simulateRollOver: async (legs) => (preview ? preview(legs) : venueOk(legs)),
     cancelOrders: async () => {},
     closePosition: async () => okFill(),
   };
@@ -133,6 +152,7 @@ const spyClient = (roll: NonNullable<BorosOrderClient['rollOver']>): BorosOrderC
     throw new Error('a roll must not go through placeMarketOrders');
   },
   rollOver: roll,
+  simulateRollOver: async (legs) => venueOk(legs),
   cancelOrders: async () => {},
   closePosition: async () => okFill(),
 });
@@ -177,9 +197,13 @@ const post = (url: string, payload: unknown) =>
   app!.inject({ method: 'POST', url, headers: HOST, payload: payload as object });
 
 describe('POST /api/boros/roll/simulate', () => {
-  it('prices both steps and returns a post-exit margin with positionApr reaching the exit legs', async () => {
+  it("prices both steps, asks the venue to preview the batch, and returns its verdict and margin", async () => {
     const calls: BorosRollLeg[][] = [];
-    makeRollApp(heldPair, capturingClient(calls));
+    const previews: BorosRollLeg[][] = [];
+    makeRollApp(heldPair, capturingClient(calls, undefined, async (legs) => {
+      previews.push(legs);
+      return venueOk(legs);
+    }));
     const res = await post('/api/boros/roll/simulate', rollBody());
     expect(res.statusCode).toBe(200);
     const { data } = res.json();
@@ -187,28 +211,43 @@ describe('POST /api/boros/roll/simulate', () => {
     // Both steps priced against ONE account read.
     expect(data.exit.simulation.legA.execApr).toBeGreaterThan(0);
     expect(data.entry.simulation.legA.execApr).toBeGreaterThan(0);
-    // A clean roll — no blockers, and the margin object is populated.
+    // The venue previewed the same legs the execute would send.
+    expect(previews).toHaveLength(1);
+    expect(previews[0].map((l) => [l.fromMarketId, l.toMarketId])).toEqual([[HL, HL2], [BN, BN2]]);
+    // A clean roll — no blockers; the margin is the venue's, not an estimate.
     expect(data.gate.blockers).toEqual([]);
-    // A full close frees every unit the old legs committed (1000 + 800).
-    expect(data.gate.margin.freed).toBeCloseTo(1_800, 6);
-    expect(data.gate.margin.need).toBeGreaterThan(0);
-    // positionApr reached the exit legs, so the exit PnL could be priced —
-    // it is null the moment the locked rate does not flow through.
-    expect(data.gate.margin.worstExitPnl).not.toBeNull();
-    // Simulating never touches the venue.
+    expect(data.gate.margin).toEqual({ need: 9_000, availableBefore: 500_000, availableAfter: 480_000, shortfall: 0 });
+    expect(data.venue.status).toBe('Succeed');
+    // Simulating never sends anything.
     expect(calls).toHaveLength(0);
   });
 
-  it('prefixes a step blocker with the step it belongs to', async () => {
-    // A thin re-entry book: the leg cannot fill whole, and FOK would revert the
-    // batch — a roll-only blocker, named "Re-entry:" so the panel says which step.
-    const calls: BorosRollLeg[][] = [];
-    makeRollApp({ ...heldPair, [`/core/v1/order-books/${HL2}`]: wireBook(0.1, 40_000) }, capturingClient(calls));
+  it("blocks on the venue's refusal, naming the step and market the book cannot fill", async () => {
+    const refused = (legs: BorosRollLeg[]) =>
+      venueOk(legs, {
+        status: 'Refused',
+        reason: { code: 'MARKET_ORDER_FOK_NOT_FILLED', message: 'Insufficient liquidity' },
+        orders: venueOk(legs).orders.map((o) => ({ ...o, filled: false, matchedSize: null, error: o.marketId === HL2 ? 'Insufficient liquidity' : null })),
+        availableAfter: null,
+      });
+    makeRollApp(heldPair, capturingClient([], undefined, async (legs) => refused(legs)));
     const res = await post('/api/boros/roll/simulate', rollBody());
     expect(res.statusCode).toBe(200);
-    const blocker = res.json().data.gate.blockers.find((b: { code: string }) => b.code === 'partial-depth');
-    expect(blocker).toMatchObject({ step: 'entry', leg: 'A', marketId: HL2 });
-    expect(blocker.message).toMatch(/^Re-entry: .* has 40000 of 100000 inside the rate bound/);
+    const blocker = res.json().data.gate.blockers.find((b: { code: string }) => b.code === 'venue-refused');
+    expect(blocker.message).toMatch(/^The venue refuses this roll — Re-entry Hyperliquid ETH 60d: Insufficient liquidity/);
+  });
+
+  it('blocks when the venue cannot preview the batch — and execute refuses with a 409', async () => {
+    const calls: BorosRollLeg[][] = [];
+    makeRollApp(heldPair, capturingClient(calls, undefined, async () => {
+      throw new Error('boom');
+    }));
+    const sim = await post('/api/boros/roll/simulate', rollBody());
+    expect(sim.json().data.gate.blockers.map((b: { code: string }) => b.code)).toEqual(['roll-unpriced']);
+    expect(sim.json().data.venue).toBeNull();
+    const exec = await post('/api/boros/roll/execute', rollBody());
+    expect(exec.statusCode).toBe(409);
+    expect(calls).toHaveLength(0);
   });
 });
 

@@ -16,20 +16,18 @@
  * one of three states: rolled in full, nothing happened, or the venue never
  * confirmed (`unknown`).
  *
- * What this module does NOT do: size legs, walk books or judge each step's
- * margin — that is `simulateBorosPair` + `evaluatePairGate`, run once per
- * step by the caller. It combines the two verdicts, adds the checks that
- * only exist because the two steps are one batch, names the legs for the
- * venue, and reads its answer.
+ * What this module does NOT do: size legs, walk books or judge margin —
+ * each step is priced by `simulateBorosPair` + `evaluatePairGate`, and the
+ * batch as a whole by the venue's own preview (`simulations/roll-over`),
+ * which runs the four orders in order on one account state and is the only
+ * thing that can say whether a FOK fills whole and whether the account
+ * still clears its initial margin once the closes have freed theirs. This
+ * module combines those verdicts, adds the checks that only exist because
+ * the two steps are one batch, names the legs for the venue, and reads its
+ * answer.
  */
-import type { BorosLegFailureCode, BorosLegFill, BorosOrderClient, BorosRollLeg } from './orders';
-import type { BlockerCode, BorosPairAccountState, BorosPairLegInput, BorosPairSimulation, PairGate, SimulatedLeg } from './pair';
-import { SECONDS_IN_YEAR, knownRate } from './venue';
-
-/** The post-exit margin estimate is scaled by this before it is compared
- * with what the re-entry needs: room for a fill at the bound and a mark
- * that moved while the batch was in flight. */
-export const ROLL_MARGIN_HAIRCUT = 0.95;
+import type { BorosLegFailureCode, BorosLegFill, BorosOrderClient, BorosRollLeg, BorosRollSimulation } from './orders';
+import type { BlockerCode, BorosPairLegInput, BorosPairSimulation, PairGate } from './pair';
 
 /** Fills with a relative shortfall under this are whole (an 18-decimal size
  * does not survive a float round-trip exactly — see borosApi). */
@@ -50,8 +48,8 @@ export interface EvaluateRollInput {
   exit: RollStepInput;
   /** The new pair, priced with intent `open` at the same size. */
   entry: RollStepInput;
-  account: BorosPairAccountState;
-  nowSec: number;
+  /** The venue's preview of the batch; null when it could not be obtained. */
+  venue: BorosRollSimulation | null;
 }
 
 export type RollBlockerCode =
@@ -66,8 +64,10 @@ export type RollBlockerCode =
   | 'sides-mismatch'
   /** The four legs are not the same size — the exit was clamped to the position. */
   | 'size-mismatch'
-  /** The book cannot fill a leg's whole size inside its rate bound; FOK would revert. */
-  | 'partial-depth';
+  /** The venue could not preview the batch, so nothing can vouch for it. */
+  | 'roll-unpriced'
+  /** The venue's preview refuses the batch — a leg the book cannot fill whole, or margin. */
+  | 'venue-refused';
 
 export interface RollBlocker {
   code: RollBlockerCode;
@@ -78,25 +78,18 @@ export interface RollBlocker {
 }
 
 /**
- * The re-entry's margin, judged AFTER the exit rather than against today's
- * balance: the pair gate priced the entry before the old legs' margin was
- * freed, so its own shortfall would refuse every near-capacity roll. A
- * predicted shortfall is a warning, not a blocker — the venue judges the
- * real thing when it simulates the batch, and a refusal there executes
- * nothing.
+ * The account's margin around the batch, as the venue simulated it: the
+ * pair gate priced the re-entry before the old legs' margin was freed, so
+ * its own margin blockers are replaced by this. Collateral units.
  */
 export interface RollMargin {
-  /** Margin the re-entry ADDS on the new markets, collateral units. */
+  /** Initial margin the opens require, with the account's leverage. */
   need: number | null;
-  /** The old legs' margin the exit frees. */
-  freed: number | null;
-  /** What closing realises if every leg fills at its bound, before fees. */
-  worstExitPnl: number | null;
-  /** The exit's taker fees. */
-  exitFee: number | null;
-  /** Spendable once the exit has run, after the haircut. */
+  /** Initial margin spendable before the batch. */
+  availableBefore: number | null;
+  /** …and after it; negative means the venue refuses the batch for margin. */
   availableAfter: number | null;
-  /** need − availableAfter when positive, else 0; 0 when unknown. */
+  /** −availableAfter when negative, else 0; 0 when unknown. */
   shortfall: number;
 }
 
@@ -111,28 +104,8 @@ const same = (a: number, b: number): boolean => Math.abs(a - b) <= FULL_FILL_TOL
 const sum = (xs: Array<number | null>): number | null =>
   xs.every((x): x is number => x !== null) ? xs.reduce((t, x) => t + x, 0) : null;
 
-/**
- * What a FOK order can actually take: the size resting at levels INSIDE its
- * rate bound. The venue matches level by level up to the limit tick and
- * fills nothing past it, so this is strictly per level — unlike the VWAP
- * figures (`estSlippageApr`, `sizeWithinTolerance`), which let a level past
- * the bound count as long as the average stays inside. Null without a book
- * or an anchor.
- */
-export function depthWithinBound(leg: BorosPairLegInput, sim: SimulatedLeg): number | null {
-  const anchor = knownRate(sim.midApr) ? sim.midApr : sim.execApr;
-  if (!leg.book || anchor === null) return null;
-  const { orderSide } = sim.sizing;
-  const levels = orderSide === 'long' ? leg.book.asks : leg.book.bids;
-  const tol = sim.slippageApr + 1e-12;
-  return levels.reduce((t, [apr, size]) => {
-    const adverse = orderSide === 'long' ? apr - anchor : anchor - apr;
-    return adverse <= tol && size > 0 ? t + size : t;
-  }, 0);
-}
-
 export function evaluateRollGate(input: EvaluateRollInput): RollGate {
-  const { exit, entry } = input;
+  const { exit, entry, venue } = input;
   const blockers: RollBlocker[] = [];
   const warnings = [...exit.gate.warnings, ...entry.gate.warnings];
 
@@ -189,95 +162,37 @@ export function evaluateRollGate(input: EvaluateRollInput): RollGate {
     }
   }
 
-  // FOK: a leg that cannot fill whole inside its rate bound reverts, and
-  // takes the batch with it. Judged per level, the way the venue matches —
-  // `slippage-exceeds-max` is a VWAP test and can pass a book whose last
-  // levels sit past the bound.
-  const legs: Array<[RollStep, 'A' | 'B', BorosPairLegInput, SimulatedLeg]> = [
-    ['exit', 'A', exit.legA, exit.simulation.legA],
-    ['exit', 'B', exit.legB, exit.simulation.legB],
-    ['entry', 'A', entry.legA, entry.simulation.legA],
-    ['entry', 'B', entry.legB, entry.simulation.legB],
-  ];
-  for (const [step, leg, input, sim] of legs) {
-    const size = Math.abs(sim.sizing.deltaSize);
-    const depth = depthWithinBound(input, sim);
-    if (size > 0 && depth !== null && depth < size * (1 - FULL_FILL_TOLERANCE)) {
-      blockers.push({
-        code: 'partial-depth',
-        step,
-        leg,
-        marketId: sim.marketId,
-        message:
-          `${step === 'exit' ? 'Exit' : 'Re-entry'}: ${sim.marketName} has ${depth} of ${size} inside the rate bound — ` +
-          'a roll fills whole or not at all; widen the tolerance or reduce the size.',
-      });
-    }
+  // The venue's preview is the only judge of the batch as a whole: FOK fills
+  // are decided level by level up to the bound, and the opens' margin only
+  // after the closes have freed theirs.
+  const marketName = (marketId: number): string =>
+    [exit.simulation.legA, exit.simulation.legB, entry.simulation.legA, entry.simulation.legB].find((l) => l.marketId === marketId)
+      ?.marketName ?? `market ${marketId}`;
+  if (venue === null) {
+    blockers.push({ code: 'roll-unpriced', message: 'The venue could not preview this roll — waiting for a quote.' });
+  } else if (venue.status === 'Refused') {
+    const named = venue.orders.filter((o) => o.error !== null);
+    const detail = named.length
+      ? named.map((o) => `${o.action === 'close' ? 'Exit' : 'Re-entry'} ${marketName(o.marketId)}: ${o.error}`).join('; ')
+      : venue.reason?.message ?? 'refused';
+    blockers.push({
+      code: 'venue-refused',
+      message: `The venue refuses this roll — ${detail}. ${
+        venue.reason?.code === 'INSUFFICIENT_MARGIN'
+          ? 'Add margin or roll a smaller size.'
+          : 'Widen the tolerance or reduce the size.'
+      }`,
+    });
   }
 
-  const margin = rollMargin(input);
-  if (margin.shortfall > 0) {
-    warnings.push(
-      `The re-entry needs about ${margin.shortfall.toFixed(4)} ${entry.simulation.collateral} more than the exit ` +
-        'is expected to leave spendable. The venue checks the real figure and refuses the whole roll if it is short.',
-    );
-  }
+  const margin: RollMargin = {
+    need: venue?.marginRequired ?? null,
+    availableBefore: venue?.availableBefore ?? null,
+    availableAfter: venue?.availableAfter ?? null,
+    shortfall: venue && venue.availableAfter !== null && venue.availableAfter < 0 ? -venue.availableAfter : 0,
+  };
   // Account-level notices (gas) come from both steps' gates; say them once.
   return { blockers, warnings: [...new Set(warnings)], margin };
-}
-
-/**
- * The CROSS pool, which every leg of this panel's pairs draws on:
- *   available now
- *   + the old legs' margin the exit frees (this slice's share of it)
- *   + what the exit realises, priced at the WORST rate its bounds allow
- *   − the exit's own taker fees
- * then the haircut. An isolated-only market keeps its own bucket, which the
- * exit cannot feed (§6B), so such a leg is judged alone against it and its
- * shortfall added. Unknown when any input is.
- */
-export function rollMargin({ exit, entry, account, nowSec }: EvaluateRollInput): RollMargin {
-  const share = (delta: number, base: number): number => (base > 0 ? Math.min(1, Math.abs(delta) / base) : 0);
-  // What a trade ADDS: `marginRequired` is quoted on the resulting netted
-  // position (open 0.4 on 42 held answers for 42.4), so scale it by the
-  // share of that position this trade opens.
-  const added = (l: SimulatedLeg): number | null =>
-    l.marginRequired === null ? null : l.marginRequired * share(l.sizing.deltaSize, Math.abs(l.sizing.resultingSize));
-  const newLegs = [
-    { sim: entry.simulation.legA, input: entry.legA },
-    { sim: entry.simulation.legB, input: entry.legB },
-  ];
-  const oldLegs = [
-    { sim: exit.simulation.legA, input: exit.legA },
-    { sim: exit.simulation.legB, input: exit.legB },
-  ];
-  const cross = <T extends { input: BorosPairLegInput }>(legs: T[]): T[] => legs.filter((l) => !l.input.isolatedOnly);
-
-  const need = sum(cross(newLegs).map((l) => added(l.sim)));
-  const freed = sum(cross(oldLegs).map(({ sim, input }) => (input.committedMargin ?? 0) * share(sim.sizing.deltaSize, Math.abs(sim.sizing.currentSize))));
-  // Closing realises the locked rate against the rate the close fills at,
-  // over what is left of the old term: a LONG (pays fixed) gains when the
-  // rate rose, a SHORT (receives fixed) when it fell.
-  const worstExitPnl = sum(
-    cross(oldLegs).map(({ sim, input }) => {
-      const locked = input.positionApr;
-      if (locked === undefined || !Number.isFinite(locked) || sim.worstApr === null || sim.sizing.deltaSize === 0) return null;
-      const years = Math.max(0, input.market.maturity - nowSec) / SECONDS_IN_YEAR;
-      const held = sim.sizing.currentSize > 0 ? 'long' : 'short';
-      return (held === 'long' ? sim.worstApr - locked : locked - sim.worstApr) * Math.abs(sim.sizing.deltaSize) * years;
-    }),
-  );
-  const exitFee = cross(oldLegs).reduce((t, l) => t + l.sim.takerFeeCost, 0);
-  const available = account.cross?.available ?? null;
-  const availableAfter =
-    available !== null && freed !== null && worstExitPnl !== null
-      ? Math.max(0, (available + freed + worstExitPnl - exitFee) * ROLL_MARGIN_HAIRCUT)
-      : null;
-  const crossShort = need !== null && availableAfter !== null ? Math.max(0, need - availableAfter) : 0;
-  const isolatedShort = newLegs
-    .filter((l) => l.input.isolatedOnly)
-    .reduce((t, l) => t + Math.max(0, (added(l.sim) ?? 0) - (account.isolatedByMarket.get(l.sim.marketId)?.available ?? 0)), 0);
-  return { need, freed, worstExitPnl, exitFee, availableAfter, shortfall: crossShort + isolatedShort };
 }
 
 export type RollOrderIds = Record<RollLegKey, string>;

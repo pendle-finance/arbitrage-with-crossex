@@ -44,6 +44,8 @@ function fakeApi(
     orderBuildReturns?: unknown;
     /** A non-2xx answer from the roll-over builder. */
     rollBuildHttp?: { status: number; body?: unknown };
+    /** Body the roll-over preview answers with. */
+    rollSimReturns?: unknown;
     failEnter?: string;
     /** Raw body the ENTER submission answers with, for the shapes that are
      * neither a clean success nor a per-call error. */
@@ -85,6 +87,22 @@ function fakeApi(
         calls: [
           ...legs.map((l, i) => ({ calldata: `0xc${i + 1}`, accountId: 0, action: 'close', marketId: l.fromMarketId, size: l.size, resolved: { side: closeSide(i), requestedRate: l.closeRate } })),
           ...legs.map((l, i) => ({ calldata: `0xo${i + 1}`, accountId: 0, action: 'open', marketId: l.toMarketId, size: l.size, resolved: { side: 1 - closeSide(i), requestedRate: l.openRate } })),
+        ],
+      });
+    }
+    if (path.startsWith('/v1/simulations/roll-over')) {
+      if (over.rollSimReturns !== undefined) return ok(over.rollSimReturns);
+      const legs = body.legs as Array<{ fromMarketId: number; toMarketId: number; size: string }>;
+      const wei = (n: number) => (BigInt(n) * 10n ** 18n).toString();
+      return ok({
+        status: 'Succeed',
+        reason: null,
+        preState: { availableInitialMargin: wei(5_000) },
+        postState: { availableInitialMargin: wei(4_100) },
+        marginRequired: wei(700),
+        orders: [
+          ...legs.map((l) => ({ action: 'close', marketId: l.fromMarketId, filled: true, matched: { size: `-${l.size}`, cost: '0', rate: 0.091 }, fee: wei(4), error: null })),
+          ...legs.map((l) => ({ action: 'open', marketId: l.toMarketId, filled: true, matched: { size: l.size, cost: '0', rate: 0.099 }, fee: wei(4), error: null })),
         ],
       });
     }
@@ -461,6 +479,36 @@ describe('makeBorosApiOrderClient — rollOver', () => {
       [HL + 1, 'short', 100, null],
       [BN + 1, 'long', 100, null],
     ]);
+  });
+
+  it("reads the venue's preview into collateral units, sizes unsigned", async () => {
+    const api = fakeApi();
+    const sim = await client(api).simulateRollOver!(legs);
+    expect((api.calls.find((c) => c.path === '/v1/simulations/roll-over')!.body.legs as Array<{ fromMarketId: number }>).map((l) => l.fromMarketId)).toEqual([HL, BN]);
+    expect(sim.status).toBe('Succeed');
+    expect(sim.availableBefore).toBe(5_000);
+    expect(sim.availableAfter).toBe(4_100);
+    expect(sim.marginRequired).toBe(700);
+    expect(sim.orders.map((o) => [o.action, o.marketId, o.filled, o.matchedSize, o.matchedApr, o.fee, o.error])).toEqual([
+      ['close', HL, true, 100, 0.091, 4, null],
+      ['close', BN, true, 100, 0.091, 4, null],
+      ['open', HL + 1, true, 100, 0.099, 4, null],
+      ['open', BN + 1, true, 100, 0.099, 4, null],
+    ]);
+    // A refusal keeps its reason and the per-order errors; no post state.
+    const refusedApi = fakeApi({
+      rollSimReturns: {
+        status: 'Refused',
+        reason: { errorCode: 'MARKET_ORDER_FOK_NOT_FILLED', message: 'Insufficient liquidity' },
+        preState: { availableInitialMargin: '0' },
+        postState: null,
+        marginRequired: '0',
+        orders: [{ action: 'open', marketId: HL + 1, filled: false, matched: null, fee: null, error: 'Insufficient liquidity' }],
+      },
+    });
+    const refused = await client(refusedApi).simulateRollOver!(legs);
+    expect(refused).toMatchObject({ status: 'Refused', reason: { code: 'MARKET_ORDER_FOK_NOT_FILLED' }, availableAfter: null });
+    expect(refused.orders[0]).toEqual({ action: 'open', marketId: HL + 1, filled: false, matchedSize: null, matchedApr: null, fee: null, error: 'Insufficient liquidity' });
   });
 
   it('reports a builder refusal as four rejected legs — nothing was sent', async () => {

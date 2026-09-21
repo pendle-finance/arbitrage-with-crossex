@@ -1,13 +1,13 @@
 /**
  * The all-or-nothing roll (src/core/boros/rollover.ts): the checks that only
- * exist because two pairs go out as one batch, the post-exit margin figure,
- * the four FOK wire orders, and how the venue's four answers become one
- * verdict. Simulations and pair gates are produced by the real pair module —
+ * exist because two pairs go out as one batch, how the venue's preview
+ * becomes the gate's verdict and margin figures, the legs handed to the
+ * venue, and how its four fills become one outcome. Simulations and pair gates are produced by the real pair module —
  * they are inputs here, not the code under test.
  */
 import { describe, expect, it, vi } from 'vitest';
 import type { BorosMarket, BorosOrderBook } from '../../src/core/boros/client';
-import type { BorosLegFill, BorosOrderClient, BorosRollLeg } from '../../src/core/boros/orders';
+import type { BorosLegFill, BorosOrderClient, BorosRollLeg, BorosRollSimulation } from '../../src/core/boros/orders';
 import {
   DEFAULT_SLIPPAGE_APR,
   evaluatePairGate,
@@ -17,7 +17,6 @@ import {
   type BorosPairLegInput,
 } from '../../src/core/boros/pair';
 import {
-  ROLL_MARGIN_HAIRCUT,
   evaluateRollGate,
   readRollFills,
   rollLegsFor,
@@ -25,15 +24,12 @@ import {
   type EvaluateRollInput,
   type RollStepInput,
 } from '../../src/core/boros/rollover';
-import { SECONDS_IN_YEAR } from '../../src/core/boros/venue';
 import { imInputs } from '../helpers/boros-fixtures';
 
 const NOW = 1_752_000_000;
 const DAY = 86_400;
 const OLD = NOW + 30 * DAY;
 const NEW = NOW + 60 * DAY;
-/** Years left on the OLD legs. */
-const T = (30 * DAY) / SECONDS_IN_YEAR;
 const SIZE = 100_000;
 
 const market = (over: Partial<BorosMarket>): BorosMarket => ({
@@ -99,133 +95,116 @@ function step(legA: BorosPairLegInput, legB: BorosPairLegInput, intent: 'close' 
   return { simulation, gate, legA, legB };
 }
 
-/** The account holds the old pair: SHORT Hyperliquid (receives 10%), LONG Binance (pays 4%). */
+/** The account holds the old pair: SHORT Hyperliquid, LONG Binance. */
 const exitLegs = () => ({
-  legA: leg(hlOld, 'long', { currentSize: -SIZE, committedMargin: 1_000, positionApr: 0.1 }),
-  legB: leg(bnOld, 'short', { currentSize: SIZE, committedMargin: 800, positionApr: 0.04 }),
+  legA: leg(hlOld, 'long', { currentSize: -SIZE, committedMargin: 1_000 }),
+  legB: leg(bnOld, 'short', { currentSize: SIZE, committedMargin: 800 }),
 });
 const entryLegs = () => ({ legA: leg(hlNew, 'short'), legB: leg(bnNew, 'long') });
 
-function rollInput(over: { exit?: RollStepInput; entry?: RollStepInput; account?: BorosPairAccountState } = {}): EvaluateRollInput {
+function rollInput(over: { exit?: RollStepInput; entry?: RollStepInput } = {}): Omit<EvaluateRollInput, 'venue'> {
   const x = exitLegs();
   const e = entryLegs();
   return {
     exit: over.exit ?? step(x.legA, x.legB, 'close'),
     entry: over.entry ?? step(e.legA, e.legB, 'open'),
-    account: over.account ?? account,
-    nowSec: NOW,
   };
 }
 
+/** What the venue's preview says for a roll that goes through. */
+const venueOk = (over: Partial<BorosRollSimulation> = {}): BorosRollSimulation => ({
+  status: 'Succeed',
+  reason: null,
+  orders: [
+    { action: 'close', marketId: 155, filled: true, matchedSize: SIZE, matchedApr: 0.091, fee: 4, error: null },
+    { action: 'close', marketId: 101, filled: true, matchedSize: SIZE, matchedApr: 0.044, fee: 4, error: null },
+    { action: 'open', marketId: 156, filled: true, matchedSize: SIZE, matchedApr: 0.099, fee: 4, error: null },
+    { action: 'open', marketId: 102, filled: true, matchedSize: SIZE, matchedApr: 0.051, fee: 4, error: null },
+  ],
+  availableBefore: 5_000,
+  availableAfter: 4_100,
+  marginRequired: 700,
+  ...over,
+});
+
 describe('evaluateRollGate', () => {
-  it('passes a clean roll and prices the post-exit margin', () => {
-    const input = rollInput();
-    const g = evaluateRollGate(input);
+  it('passes a clean roll and reports the margin the venue simulated', () => {
+    const g = evaluateRollGate({ ...rollInput(), venue: venueOk() });
     expect(g.blockers).toEqual([]);
     expect(g.warnings).toEqual([]);
-
-    // The re-entry opens from flat, so it adds its whole margin.
-    const { legA, legB } = input.entry.simulation;
-    expect(g.margin.need).toBeCloseTo(legA.marginRequired! + legB.marginRequired!, 9);
-    // A full close frees every unit the old legs committed.
-    expect(g.margin.freed).toBeCloseTo(1_800, 9);
-    // At the bound: the short closes by buying at mid + tol = 9.25% against
-    // its locked 10%, the long by selling at 4.25% against its 4%.
-    expect(g.margin.worstExitPnl).toBeCloseTo((0.1 - 0.0925) * SIZE * T + (0.0425 - 0.04) * SIZE * T, 9);
-    expect(g.margin.exitFee).toBeCloseTo(2 * 0.0005 * SIZE * T, 9);
-    expect(g.margin.availableAfter).toBeCloseTo((5_000 + 1_800 + 1_000 * T - 100 * T) * ROLL_MARGIN_HAIRCUT, 9);
-    expect(g.margin.shortfall).toBe(0);
+    expect(g.margin).toEqual({ need: 700, availableBefore: 5_000, availableAfter: 4_100, shortfall: 0 });
   });
 
   it('keeps every exit blocker, drops the entry margin blockers, and prefixes both', () => {
     // A cross bucket with nothing spendable: the pair gate refuses the entry
-    // for margin, but that verdict predates the exit freeing its margin.
+    // for margin, but that verdict predates the exit freeing its margin — the
+    // venue's preview, which runs the closes first, is the judge.
     const broke = { ...account, cross: { available: 0, hasPositionOrOrders: true } };
-    // …and the old legs posted next to nothing, so the exit frees little.
-    const x = exitLegs();
-    const input = rollInput({
-      account: broke,
-      exit: step({ ...x.legA, committedMargin: 50 }, { ...x.legB, committedMargin: 50 }, 'close'),
-    });
     const e = entryLegs();
-    input.entry = (() => {
+    const entry = (() => {
       const simulation = simulateBorosPair({ ...e, size: SIZE, intent: 'open', collateralPriceUsd: 1, nowSec: NOW });
       const gate = evaluatePairGate({ simulation, ...e, account: broke, eligibility: pairEligibility(hlNew, bnNew, NOW), opposingAcknowledged: true, simulatedAtMs: NOW * 1000, nowMs: NOW * 1000 });
       return { simulation, gate, ...e };
     })();
-    expect(input.entry.gate.blockers.map((b) => b.code)).toContain('cross-short-margin');
-    const g = evaluateRollGate(input);
-    expect(g.blockers.find((b) => b.code === 'cross-short-margin')).toBeUndefined();
-    // …and the roll's own margin figure says how short it really is.
-    expect(g.margin.shortfall).toBeGreaterThan(0);
-    expect(g.warnings.some((w) => /refuses the whole roll/.test(w))).toBe(true);
+    expect(entry.gate.blockers.map((b) => b.code)).toContain('cross-short-margin');
+    const g = evaluateRollGate({ ...rollInput({ entry }), venue: venueOk() });
+    expect(g.blockers).toEqual([]);
 
     // An exit blocker survives with its step named.
+    const x = exitLegs();
     const stale = step(x.legA, x.legB, 'close');
     stale.gate = { ...stale.gate, blockers: [{ code: 'stale-simulation', message: 'old quote' }] };
-    const g2 = evaluateRollGate(rollInput({ exit: stale }));
+    const g2 = evaluateRollGate({ ...rollInput({ exit: stale }), venue: venueOk() });
     expect(g2.blockers).toEqual([{ code: 'stale-simulation', message: 'Exit: old quote', step: 'exit', leg: undefined, marketId: undefined }]);
+  });
+
+  it('blocks when the venue could not preview the batch — nothing else can vouch for it', () => {
+    const g = evaluateRollGate({ ...rollInput(), venue: null });
+    expect(g.blockers.map((b) => b.code)).toEqual(['roll-unpriced']);
+    expect(g.margin).toEqual({ need: null, availableBefore: null, availableAfter: null, shortfall: 0 });
+  });
+
+  it("blocks on the venue's refusal, naming the legs the book cannot fill", () => {
+    const venue = venueOk({
+      status: 'Refused',
+      reason: { code: 'MARKET_ORDER_FOK_NOT_FILLED', message: 'Insufficient liquidity' },
+      orders: venueOk().orders.map((o, i) => ({ ...o, filled: false, matchedSize: null, error: i === 2 ? 'Insufficient liquidity' : null })),
+      availableAfter: null,
+    });
+    const g = evaluateRollGate({ ...rollInput(), venue });
+    expect(g.blockers).toHaveLength(1);
+    expect(g.blockers[0].code).toBe('venue-refused');
+    expect(g.blockers[0].message).toBe(
+      'The venue refuses this roll — Re-entry Hyperliquid ETH new: Insufficient liquidity. Widen the tolerance or reduce the size.',
+    );
+  });
+
+  it("blocks on the venue's margin refusal and reports the shortfall it simulated", () => {
+    const venue = venueOk({ status: 'Refused', reason: { code: 'INSUFFICIENT_MARGIN', message: 'InsufficientMargin' }, availableAfter: -250 });
+    const g = evaluateRollGate({ ...rollInput(), venue });
+    expect(g.blockers[0].message).toBe('The venue refuses this roll — InsufficientMargin. Add margin or roll a smaller size.');
+    expect(g.margin.shortfall).toBe(250);
   });
 
   it('refuses a roll into the same or an earlier maturity', () => {
     const e = entryLegs();
     const sameMaturity = step({ ...e.legA, market: { ...hlNew, maturity: OLD } }, { ...e.legB, market: { ...bnNew, maturity: OLD } }, 'open');
-    const g = evaluateRollGate(rollInput({ entry: sameMaturity }));
+    const g = evaluateRollGate({ ...rollInput({ entry: sameMaturity }), venue: venueOk() });
     expect(g.blockers.map((b) => b.code)).toContain('maturity-not-later');
   });
 
   it('refuses legs that do not share one collateral token', () => {
     const e = entryLegs();
     const btcMargined = step({ ...e.legA, market: { ...hlNew, tokenId: 1 } }, { ...e.legB, market: { ...bnNew, tokenId: 1 } }, 'open');
-    const g = evaluateRollGate(rollInput({ entry: btcMargined }));
+    const g = evaluateRollGate({ ...rollInput({ entry: btcMargined }), venue: venueOk() });
     expect(g.blockers.map((b) => b.code)).toContain('collateral-mismatch');
   });
 
   it('refuses a new leg that would not hold the side the old one holds', () => {
     // Re-entering LONG on Hyperliquid where the account is SHORT flips the hedge.
-    const e = entryLegs();
     const flipped = step(leg(hlNew, 'long'), leg(bnNew, 'short'), 'open');
-    void e;
-    const g = evaluateRollGate(rollInput({ entry: flipped }));
-    const codes = g.blockers.map((b) => b.code);
-    expect(codes.filter((c) => c === 'sides-mismatch')).toHaveLength(2);
-  });
-
-  it('refuses when the exit was clamped to the position but the entry was not', () => {
-    // Asked to roll 150k on a 100k position: the close clamps, the open would not.
-    const x = exitLegs();
-    const e = entryLegs();
-    const g = evaluateRollGate(rollInput({ exit: step(x.legA, x.legB, 'close', 150_000), entry: step(e.legA, e.legB, 'open', 150_000) }));
-    const mismatch = g.blockers.filter((b) => b.code === 'size-mismatch');
-    expect(mismatch).toHaveLength(2);
-    expect(mismatch[0].message).toMatch(/closes 100000 but .* would open 150000/);
-  });
-
-  it('refuses a leg the book cannot fill whole — FOK would revert the batch', () => {
-    const e = entryLegs();
-    const thin = step({ ...e.legA, book: book(hlNew, 40_000) }, e.legB, 'open');
-    const g = evaluateRollGate(rollInput({ entry: thin }));
-    const b = g.blockers.find((x) => x.code === 'partial-depth');
-    expect(b).toMatchObject({ step: 'entry', leg: 'A', marketId: 156 });
-    expect(b!.message).toMatch(/has 40000 of 100000 inside the rate bound/);
-  });
-
-  it('judges FOK depth per level, not by the VWAP the slippage gate uses', () => {
-    // The new Hyperliquid leg SELLS 100k into bids 9.98% × 60k then 9.60% ×
-    // 60k against a 10% mid with a 0.25% tolerance (bound 9.75%): the VWAP
-    // over 100k is 9.828% — inside the tolerance, so `slippage-exceeds-max`
-    // is silent — but the venue matches level by level down to the bound and
-    // never touches the 9.60% level, so a FOK for 100k reverts. Only 60k sits
-    // inside the bound.
-    const e = entryLegs();
-    const ladder: BorosOrderBook = { marketId: 156, bids: [[0.0998, 60_000], [0.096, 60_000]], asks: [[0.101, 20_000_000]] };
-    const marginal = step({ ...e.legA, book: ladder }, e.legB, 'open');
-    expect(marginal.simulation.legA.slippageExceeded).toBe(false);
-    expect(marginal.simulation.legA.shortfallSize).toBe(0);
-    const g = evaluateRollGate(rollInput({ entry: marginal }));
-    const b = g.blockers.find((x) => x.code === 'partial-depth');
-    expect(b).toMatchObject({ step: 'entry', leg: 'A' });
-    expect(b!.message).toMatch(/has 60000 of 100000 inside the rate bound/);
+    const g = evaluateRollGate({ ...rollInput({ entry: flipped }), venue: venueOk() });
+    expect(g.blockers.filter((b) => b.code === 'sides-mismatch')).toHaveLength(2);
   });
 
   it('refuses a new leg that is not the old leg one maturity later', () => {
@@ -233,18 +212,18 @@ describe('evaluateRollGate', () => {
     // the collateral but changes the hedge; a roll is the same shape later.
     const e = entryLegs();
     const swapped = step({ ...e.legA, market: { ...hlNew, venue: 'Binance' } }, e.legB, 'open');
-    const g = evaluateRollGate(rollInput({ entry: swapped }));
+    const g = evaluateRollGate({ ...rollInput({ entry: swapped }), venue: venueOk() });
     expect(g.blockers.filter((b) => b.code === 'market-mismatch').map((b) => b.leg)).toEqual(['A']);
   });
 
-  it('judges an isolated-only new leg against its own bucket — the exit cannot feed it', () => {
+  it('refuses when the exit was clamped to the position but the entry was not', () => {
+    // Asked to roll 150k on a 100k position: the close clamps, the open would not.
+    const x = exitLegs();
     const e = entryLegs();
-    const isolated = step({ ...e.legA, market: { ...hlNew, isolatedOnly: true }, isolatedOnly: true }, e.legB, 'open');
-    const g = evaluateRollGate(rollInput({ entry: isolated }));
-    // The cross figure now carries only leg B…
-    expect(g.margin.need).toBeCloseTo(isolated.simulation.legB.marginRequired!, 9);
-    // …and leg A's whole margin is short, because its isolated bucket is empty.
-    expect(g.margin.shortfall).toBeCloseTo(isolated.simulation.legA.marginRequired!, 9);
+    const g = evaluateRollGate({ ...rollInput({ exit: step(x.legA, x.legB, 'close', 150_000), entry: step(e.legA, e.legB, 'open', 150_000) }), venue: venueOk() });
+    const mismatch = g.blockers.filter((b) => b.code === 'size-mismatch');
+    expect(mismatch).toHaveLength(2);
+    expect(mismatch[0].message).toMatch(/closes 100000 but .* would open 150000/);
   });
 
   it('says an account-level warning once, not once per step', () => {
@@ -257,19 +236,8 @@ describe('evaluateRollGate', () => {
       const gate = evaluatePairGate({ simulation, legA, legB, account: low, eligibility: pairEligibility(legA.market, legB.market, NOW), opposingAcknowledged: true, simulatedAtMs: NOW * 1000, nowMs: NOW * 1000 });
       return { simulation, gate, legA, legB };
     };
-    const g = evaluateRollGate({ exit: stepWith(x.legA, x.legB, 'close'), entry: stepWith(e.legA, e.legB, 'open'), account: low, nowSec: NOW });
+    const g = evaluateRollGate({ exit: stepWith(x.legA, x.legB, 'close'), entry: stepWith(e.legA, e.legB, 'open'), venue: venueOk() });
     expect(g.warnings.filter((w) => /tops it up as it sends/.test(w))).toHaveLength(1);
-  });
-
-  it('reports the margin as unknown, not short, when an input is missing', () => {
-    // No locked rate on the old legs: the exit PnL cannot be priced.
-    const x = exitLegs();
-    const noRate = step({ ...x.legA, positionApr: undefined }, { ...x.legB, positionApr: undefined }, 'close');
-    const g = evaluateRollGate(rollInput({ exit: noRate }));
-    expect(g.margin.worstExitPnl).toBeNull();
-    expect(g.margin.availableAfter).toBeNull();
-    expect(g.margin.shortfall).toBe(0);
-    expect(g.warnings).toEqual([]);
   });
 });
 

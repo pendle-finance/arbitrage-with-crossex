@@ -84,6 +84,36 @@ export interface BorosRollLeg {
   openRate?: number;
 }
 
+/**
+ * The venue's preview of a roll: the batch run in order on one simulated
+ * account, so it answers the two things no book walk can — does every FOK
+ * order fill whole inside its bound, and does the account still clear its
+ * initial margin once the closes have freed theirs and the opens taken
+ * theirs. Sizes in collateral units.
+ */
+export interface BorosRollSimulation {
+  /** `Refused` = the batch would not go through; `reason` says why. */
+  status: 'Succeed' | 'Refused';
+  reason: { code: string; message: string } | null;
+  /** Every close, then every open, in leg order. */
+  orders: Array<{
+    action: 'close' | 'open';
+    marketId: number;
+    /** The whole size fills inside the bound. */
+    filled: boolean;
+    matchedSize: number | null;
+    matchedApr: number | null;
+    fee: number | null;
+    /** This order's own revert when simulated alone (the book cannot fill it), else null. */
+    error: string | null;
+  }>;
+  /** Initial margin still spendable before and after the batch; negative = short. */
+  availableBefore: number;
+  availableAfter: number | null;
+  /** Initial margin the opens require, with the account's leverage. */
+  marginRequired: number;
+}
+
 export type BorosLegFailureCode =
   /** The book ran out inside the rate bound — size too large for this market. */
   | 'insufficient-depth'
@@ -199,6 +229,8 @@ export interface BorosOrderClient {
    * then every open, in leg order.
    */
   rollOver?(legs: BorosRollLeg[]): Promise<BorosLegFill[]>;
+  /** The same batch previewed by the venue on one simulated account state. */
+  simulateRollOver?(legs: BorosRollLeg[]): Promise<BorosRollSimulation>;
   /** Force-cancel every resting order on one market (§6A remediation). */
   cancelOrders(marketId: number): Promise<void>;
   /** Force-close the whole netted position on one market (§6A remediation). */

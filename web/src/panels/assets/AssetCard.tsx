@@ -1928,17 +1928,16 @@ function RollReview({
   const entrySim = roll.data?.entry.simulation ?? null;
   const pending = roll.isPending;
 
-  // ---- margin (server-owned) --------------------------------------------
+  // ---- margin (the venue's) -----------------------------------------------
   /**
-   * The re-entry's margin is judged by the SERVER, after the exit frees the
-   * old legs' margin, so a predicted shortfall is a warning there rather than
-   * a blocker — the venue checks the real figure when it simulates the batch,
-   * and a refusal executes nothing. The panel only renders `gate.margin`; the
-   * whole "available now + freed − worst-case exit, haircut" model lives in
-   * core now (src/core/boros/rollover.ts rollMargin).
+   * The VENUE previews the whole batch — closes first, then the opens on the
+   * margin those closes free — so the figures here are what the roll is
+   * actually judged on, not an estimate. A shortfall is a blocker (the
+   * venue refuses the batch), surfaced in `gate.blockers` as `venue-refused`.
    */
   const margin = roll.data?.gate.margin ?? null;
   const marginNeed = margin?.need ?? null;
+  const availableBefore = margin?.availableBefore ?? null;
   const availableAfter = margin?.availableAfter ?? null;
   const marginShort = margin?.shortfall ?? 0;
   const px = exitSim?.collateralPriceUsd ?? entrySim?.collateralPriceUsd ?? null;
@@ -2186,13 +2185,13 @@ function RollReview({
           strong
         />
         <EstimateRow
-          label="Available margin after exit"
-          sub="worst-case exit, 5% buffer"
-          title="Spendable now + margin the exit frees + worst-case exit PnL − exit fee, less 5% for safety."
+          label="Available margin"
+          sub="before → after, as the venue simulates it"
+          title="Initial margin spendable before the batch, and after it — the closes run first, so the new legs are judged on the margin the old ones free."
           value={
-            availableAfter !== null ? (
+            availableBefore !== null && availableAfter !== null ? (
               <>
-                {fmtTokenQty(availableAfter, collateral)}
+                {fmtTokenQty(availableBefore, collateral)} → {fmtTokenQty(availableAfter, collateral)}
                 {usdNote(availableAfter)}
               </>
             ) : (
@@ -2203,7 +2202,7 @@ function RollReview({
         />
         {marginShort > 0 && (
           <p className="text-[11.5px] leading-relaxed text-amber-100">
-            About {fmtTokenQty(marginShort, collateral)} short. Top up before rolling, or roll a smaller size.
+            About {fmtTokenQty(marginShort, collateral)} short — the venue refuses the roll. Top up before rolling, or roll a smaller size.
           </p>
         )}
       </div>

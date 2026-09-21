@@ -1292,10 +1292,11 @@ export interface BorosRollRequest {
   clientOrderIds?: Record<BorosRollLegKey, string>;
 }
 
-/** A roll blocker. `code` is a pair blocker code OR one of the six checks
- * that exist only because the two steps are one batch: 'maturity-not-later',
+/** A roll blocker. `code` is a pair blocker code OR one of the checks that
+ * exist only because the two steps are one batch: 'maturity-not-later',
  * 'collateral-mismatch', 'market-mismatch', 'sides-mismatch', 'size-mismatch',
- * 'partial-depth'. */
+ * 'roll-unpriced' (the venue could not preview it), 'venue-refused' (its
+ * preview says a leg cannot fill whole, or margin). */
 export interface BorosRollBlocker {
   code: string;
   message: string;
@@ -1304,16 +1305,17 @@ export interface BorosRollBlocker {
   marketId?: number;
 }
 
-/** The re-entry's margin, judged AFTER the exit frees the old legs'. A
- * predicted shortfall is a warning, not a blocker — the venue checks the real
- * figure when it simulates the batch. All figures in collateral units. */
+/** The account's margin around the batch, as the VENUE simulated it — the
+ * closes run first, so this is the figure the batch is actually judged on.
+ * Collateral units. */
 export interface BorosRollMargin {
+  /** Initial margin the opens require, with the account's leverage. */
   need: number | null;
-  freed: number | null;
-  worstExitPnl: number | null;
-  exitFee: number | null;
+  /** Initial margin spendable before the batch, as the venue simulated it… */
+  availableBefore: number | null;
+  /** …and after; negative means the venue refuses the batch for margin. */
   availableAfter: number | null;
-  /** need − availableAfter when positive, else 0; 0 when unknown. */
+  /** −availableAfter when negative, else 0; 0 when unknown. */
   shortfall: number;
 }
 
