@@ -320,6 +320,21 @@ export interface SimulatedLeg {
    * of this and what it holds.
    */
   sizeWithinTolerance: number | null;
+  /**
+   * The order's side of the book as a cumulative ladder (`bookDepthLadder`):
+   * `[adverseApr from mid, cumSize]`, best-first. Lets a caller answer "what
+   * tolerance does size s need" and "how much fills at tolerance t" for ANY s
+   * and t off one quote. Null without a book or a mid.
+   */
+  depth: Array<[number, number]> | null;
+  /**
+   * The WIDEST tolerance whose rate bound (mid ± tolerance) still sits inside
+   * the venue's max-rate-deviation band (mark ± cap) — past it the order is
+   * refused whatever the book holds (the gate's `rate-bound-out-of-range`).
+   * 0 when mid already sits at or past the band's edge; null when the market
+   * reports no cap, mark or mid.
+   */
+  maxToleranceApr: number | null;
   /** Collateral units the book can actually supply; < requested on a thin book. */
   estFillSize: number;
   /** Requested − estFillSize. Non-zero means this leg alone will fall short. */
@@ -399,6 +414,32 @@ export interface BorosPairSimulation {
 
 const clampSlippage = (s: number): number =>
   !Number.isFinite(s) || s < 0 ? 0 : Math.min(s, MAX_SLIPPAGE_APR);
+
+/**
+ * One book side as a cumulative ladder, best-first: `[adverseApr, cumSize]`
+ * per level, where `adverseApr` is how far that level's rate sits from
+ * `midApr` the WRONG way for the order (negative = better than mid) and
+ * `cumSize` the collateral units available down to and including it.
+ *
+ * A property of the book and the mid alone — not of the size or tolerance
+ * asked — so one quote answers both "how much fills inside tolerance t" and
+ * "what tolerance does size s need" without another round trip.
+ */
+export function bookDepthLadder(
+  levels: Array<[number, number]>,
+  orderSide: BorosLegDirection,
+  midApr: number,
+): Array<[number, number]> {
+  if (!Array.isArray(levels) || !Number.isFinite(midApr)) return [];
+  const ladder: Array<[number, number]> = [];
+  let cum = 0;
+  for (const [apr, size] of levels) {
+    if (!Number.isFinite(apr) || !(size > 0)) continue;
+    cum += size;
+    ladder.push([orderSide === 'long' ? apr - midApr : midApr - apr, cum]);
+  }
+  return ladder;
+}
 
 /**
  * The largest size a market order fills WHOLE inside a rate bound: the depth
@@ -496,6 +537,11 @@ function simulateLeg(
           ? Math.max(worstApr, bandEdge)
           : Math.min(worstApr, bandEdge);
   const fitSize = levels && fitEdge !== null ? sizeWithinBound(levels, orderSide, fitEdge) : null;
+  const depth = levels && mid !== null ? bookDepthLadder(levels, orderSide, mid) : null;
+  // The band is around MARK, the bound around MID: the room left is the
+  // band's far edge minus mid, the order's adverse way.
+  const maxToleranceApr =
+    mid !== null && bandEdge !== null ? Math.max(0, orderSide === 'long' ? bandEdge - mid : mid - bandEdge) : null;
 
   // Margin is charged at the rate the leg actually locks; the IM formula is
   // linear in notional, so collateral units in gives collateral units out.
@@ -534,6 +580,8 @@ function simulateLeg(
     worstApr,
     slippageExceeded,
     sizeWithinTolerance: fitSize,
+    depth,
+    maxToleranceApr,
     estFillSize: estFill,
     shortfallSize: Math.max(0, size - estFill),
     bookStatus,
@@ -1094,7 +1142,7 @@ export function evaluatePairGate(input: EvaluatePairInput): PairGate {
  * is worse than useless — it reads as "you need nothing" on the exact screen
  * that is blocking the trade. Scale the precision to the magnitude instead.
  */
-const fmtSize = (n: number): string => {
+export const fmtSize = (n: number): string => {
   const abs = Math.abs(n);
   if (abs > 0 && abs < 1e-6) return '<0.000001';
   const dp = abs >= 100 ? 2 : abs >= 1 ? 4 : 6;

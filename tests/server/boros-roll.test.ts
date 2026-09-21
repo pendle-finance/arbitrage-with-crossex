@@ -234,7 +234,7 @@ describe('POST /api/boros/roll/simulate', () => {
     const res = await post('/api/boros/roll/simulate', rollBody());
     expect(res.statusCode).toBe(200);
     const blocker = res.json().data.gate.blockers.find((b: { code: string }) => b.code === 'venue-refused');
-    expect(blocker.message).toMatch(/^The venue refuses this roll — Re-entry Hyperliquid ETH 60d: Insufficient liquidity/);
+    expect(blocker.message).toMatch(/^The venue refuses this roll:\nRe-entry · Hyperliquid ETH 60d — /);
   });
 
   it('blocks when the venue cannot preview the batch — and execute refuses with a 409', async () => {

@@ -39,6 +39,7 @@ import { parseUnits } from 'viem';
 import { knownRate } from '../../core/boros/venue';
 import { isUpdating } from '../updater';
 import {
+  describeLegFailure,
   limitAprFor,
   submitBorosPair,
   type BorosMarketOrderRequest,
@@ -871,12 +872,22 @@ export function borosPairRoutes(deps: AppDeps) {
       // a FOK fill or for the margin after the closes.
       const legs = rollLegsFor(exit.simulation, entry.simulation);
       const orders = deps.getBorosOrders?.();
+      // A preview that throws is still "no preview", but the reason is kept:
+      // the bare null could only ever say "waiting for a quote", whatever
+      // had actually gone wrong.
+      let venueError: string | null = null;
       const venue =
-        legs && orders?.simulateRollOver ? await orders.simulateRollOver(legs).catch(() => null) : null;
+        legs && orders?.simulateRollOver
+          ? await orders.simulateRollOver(legs).catch((err: unknown) => {
+              venueError = describeLegFailure(err);
+              return null;
+            })
+          : null;
       const gate = evaluateRollGate({
         exit: { simulation: exit.simulation, gate: exit.gate, legA: exit.legA, legB: exit.legB },
         entry: { simulation: entry.simulation, gate: entry.gate, legA: entry.legA, legB: entry.legB },
         venue,
+        venueError,
       });
       return { exit, entry, gate, venue, simulatedAtMs: Math.min(exit.simulatedAtMs, entry.simulatedAtMs) };
     };

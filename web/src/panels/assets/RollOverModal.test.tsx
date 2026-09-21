@@ -100,9 +100,16 @@ const context = () => ({
   maxSlippageApr: 0.1,
 });
 const venueOf = (marketId: number) => (marketId === GATE_OLD || marketId === GATE_NEW ? 'Gate' : 'Hyperliquid');
-/** What each leg reports as the largest size inside its tolerance; unset
- * (an older server) leaves the modal on the whole position. */
+/**
+ * Each leg's book, as the depth ladder the server quotes: `fitSize` sits 0.1%
+ * from mid (inside the 1% seed), `deepSize` more sits 1.3% out — reachable
+ * only by widening. Unset (an older server) quotes no ladder and leaves the
+ * modal on the whole position. `bandApr` is the venue's rate band, as the
+ * widest tolerance it allows; unset = no cap reported.
+ */
 let fitSize: number | undefined;
+let deepSize = 60;
+let bandApr: number | undefined;
 const simLeg = (marketId: number, direction: 'long' | 'short', size: number, intent: string) => ({
   marketId,
   marketName: `${venueOf(marketId)} ETH ${marketId >= GATE_NEW ? '30 Oct' : '25 Sep'} 2026`,
@@ -116,7 +123,8 @@ const simLeg = (marketId: number, direction: 'long' | 'short', size: number, int
   bookStatus: 'ok',
   marginRequired: 5,
   slippageApr: 0.0025,
-  sizeWithinTolerance: fitSize,
+  depth: fitSize === undefined ? undefined : [[0.001, fitSize], [0.013, fitSize + deepSize]],
+  maxToleranceApr: bandApr ?? null,
   /**
    * A CLOSE ends flat (the exit); an OPEN adds to what the new markets
    * already hold (the re-entry). The open case matters: Boros nets to one
@@ -296,19 +304,23 @@ async function armAndHold(user: ReturnType<typeof userEvent.setup>) {
 beforeEach(() => {
   localStorage.setItem(STRATEGY_STORAGE_KEY, JSON.stringify({ address: ADDRESS }));
   fitSize = undefined;
+  deepSize = 60;
+  bandApr = undefined;
 });
 
 describe('RollOverModal — the pick page', () => {
-  it('defaults the size to the largest slice that fills inside tolerance; the shortcuts override it', async () => {
+  it('defaults the size to what fills inside the seed tolerance, LESS a 5% buffer; the shortcuts override it', async () => {
     const user = userEvent.setup();
     fitSize = 40;
     install();
     renderWithClient(<RollOverModal pair={pair} base="ETH" nowSec={NOW} onClose={() => {}} />);
     const dialog = await screen.findByRole('dialog');
     const box = within(dialog).getByLabelText('Size to roll (ETH)');
-    // Whole position until the quotes land, then the books' own limit.
-    await waitFor(() => expect(box).toHaveValue('40'), { timeout: 4_000 });
-    expect(within(dialog).getByText('40%')).toBeInTheDocument();
+    // Whole position until the quotes land, then the books' own limit — 40
+    // fills inside the seed, and a size ON the limit is one cancelled lot
+    // from a refused batch, so 5% is kept back: 38.
+    await waitFor(() => expect(box).toHaveValue('38'), { timeout: 4_000 });
+    expect(within(dialog).getByText('38%')).toBeInTheDocument();
     // The size speaks for itself: no sentence explaining it (his call 2026-09-20).
     expect(within(dialog).queryByRole('note')).not.toBeInTheDocument();
 
@@ -324,7 +336,82 @@ describe('RollOverModal — the pick page', () => {
     expect(box).toHaveValue('100');
   });
 
-  it('with no fit reported, or a fit above the position, the whole position is the default', async () => {
+  it('the buffer never shaves a position the books hold with room to spare', async () => {
+    // 106 inside the seed: 106 × 0.95 = 100.7 still covers the 100 held.
+    fitSize = 106;
+    install();
+    renderWithClient(<RollOverModal pair={pair} base="ETH" nowSec={NOW} onClose={() => {}} />);
+    const dialog = await screen.findByRole('dialog');
+    await within(dialog).findByText('Locked spread', undefined, { timeout: 4_000 });
+    await new Promise((r) => setTimeout(r, 300));
+    expect(within(dialog).getByLabelText('Size to roll (ETH)')).toHaveValue('100');
+  });
+
+  it('sizing up past the seed WIDENS the tolerance silently, and the review opens on it', async () => {
+    const user = userEvent.setup();
+    const pairSims: PairSimBody[] = [];
+    const rollSims: RollBody[] = [];
+    fitSize = 40;
+    install({ onPairSimulate: (b) => pairSims.push(b), onRollSimulate: (b) => rollSims.push(b) });
+    renderWithClient(<RollOverModal pair={pair} base="ETH" nowSec={NOW} onClose={() => {}} />);
+    const dialog = await screen.findByRole('dialog');
+    const box = within(dialog).getByLabelText('Size to roll (ETH)');
+    await waitFor(() => expect(box).toHaveValue('38'), { timeout: 4_000 });
+
+    // 75 needs the level 1.3% out: 1.3% × 1.1 headroom = 1.43%, on BOTH
+    // batches (both books are this ladder). No warning — it is just done.
+    await user.click(within(dialog).getByRole('button', { name: '75%' }));
+    await waitFor(() => {
+      const last = pairSims.at(-1)!;
+      expect(last.size).toBe(75);
+      expect(last.legA.slippageApr).toBeCloseTo(0.0143, 9);
+      expect(last.legB.slippageApr).toBeCloseTo(0.0143, 9);
+    }, { timeout: 4_000 });
+    expect(within(dialog).queryByRole('alert')).not.toBeInTheDocument();
+
+    // The review inherits it rather than falling back to the 1% seed.
+    await user.click(within(dialog).getByRole('button', { name: 'Roll over →' }));
+    await waitFor(() => {
+      const last = rollSims.at(-1)!;
+      expect(last.exit.legA.slippageApr).toBeCloseTo(0.0143, 9);
+      expect(last.entry.legB.slippageApr).toBeCloseTo(0.0143, 9);
+    }, { timeout: 4_000 });
+  });
+
+  it('warns when the book does not hold the size, and offers the most that rolls', async () => {
+    const user = userEvent.setup();
+    fitSize = 40;
+    deepSize = 30; // the whole side holds 70
+    install();
+    renderWithClient(<RollOverModal pair={pair} base="ETH" nowSec={NOW} onClose={() => {}} />);
+    const dialog = await screen.findByRole('dialog');
+    const box = within(dialog).getByLabelText('Size to roll (ETH)');
+    await waitFor(() => expect(box).toHaveValue('38'), { timeout: 4_000 });
+    await user.click(within(dialog).getByRole('button', { name: '75%' }));
+    const alert = await within(dialog).findByRole('alert');
+    expect(alert).toHaveTextContent(/Size too big: .+ does not hold this much liquidity\. The most that rolls now is 70 ETH\./);
+    // One click takes the most that rolls, less the buffer: 70 × 0.95.
+    await user.click(within(alert).getByRole('button', { name: /Roll 66\.5 ETH instead/ }));
+    expect(box).toHaveValue('66.5');
+    await waitFor(() => expect(within(dialog).queryByRole('alert')).not.toBeInTheDocument());
+  });
+
+  it("warns when the size only fills past the venue's rate limit", async () => {
+    const user = userEvent.setup();
+    fitSize = 40;
+    bandApr = 0.012; // the level 1.3% out is past the band
+    install();
+    renderWithClient(<RollOverModal pair={pair} base="ETH" nowSec={NOW} onClose={() => {}} />);
+    const dialog = await screen.findByRole('dialog');
+    const box = within(dialog).getByLabelText('Size to roll (ETH)');
+    await waitFor(() => expect(box).toHaveValue('38'), { timeout: 4_000 });
+    await user.click(within(dialog).getByRole('button', { name: '75%' }));
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent(
+      /Size too big: .+ only fills it past the venue's rate limit\. The most that rolls now is 40 ETH\./,
+    );
+  });
+
+  it('with no ladder reported, or one that holds the position many times over, the whole position is the default', async () => {
     fitSize = 500;
     install();
     renderWithClient(<RollOverModal pair={pair} base="ETH" nowSec={NOW} onClose={() => {}} />);

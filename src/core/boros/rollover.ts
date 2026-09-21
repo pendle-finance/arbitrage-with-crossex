@@ -26,8 +26,10 @@
  * the two steps are one batch, names the legs for the venue, and reads its
  * answer.
  */
+import { classifyLegFailure } from './orders';
 import type { BorosLegFailureCode, BorosLegFill, BorosOrderClient, BorosRollLeg, BorosRollSimulation } from './orders';
-import type { BlockerCode, BorosPairLegInput, BorosPairSimulation, PairGate } from './pair';
+import { fmtSize } from './pair';
+import type { BlockerCode, BorosPairLegInput, BorosPairSimulation, PairGate, SimulatedLeg } from './pair';
 
 /** Fills with a relative shortfall under this are whole (an 18-decimal size
  * does not survive a float round-trip exactly — see borosApi). */
@@ -50,6 +52,8 @@ export interface EvaluateRollInput {
   entry: RollStepInput;
   /** The venue's preview of the batch; null when it could not be obtained. */
   venue: BorosRollSimulation | null;
+  /** Why the preview could not be obtained, when the call itself failed. */
+  venueError?: string | null;
 }
 
 export type RollBlockerCode =
@@ -107,6 +111,59 @@ const same = (a: number, b: number): boolean => Math.abs(a - b) <= FULL_FILL_TOL
 const sum = (xs: Array<number | null>): number | null =>
   xs.every((x): x is number => x !== null) ? xs.reduce((t, x) => t + x, 0) : null;
 
+/**
+ * Why the venue refused ONE leg, in the trader's terms, with that cause's own
+ * remedy.
+ *
+ * ⚠ The venue's "Insufficient liquidity" is `MarketOrderFOKNotFilled`: the
+ * whole size did not fill INSIDE THE RATE BOUND. That is two different
+ * problems with two different remedies, and the venue's wording names the
+ * rarer one. Measured live 2026-09-22: a 670 ETH leg was refused
+ * "Insufficient liquidity" against 7,136 ETH of book — only 390 of it sat
+ * inside the 1% bound. So the leg's own book walk decides which it is: a book
+ * that cannot supply the size at ANY rate is liquidity; one that can, but not
+ * inside the bound, is slippage. Every other cause keeps the venue's words.
+ */
+function refusalCause(error: string, sim: SimulatedLeg | null, collateral: string): string {
+  const pct = (n: number) => `${(n * 100).toFixed(2)}%`;
+  switch (classifyLegFailure(error)) {
+    case 'insufficient-depth': {
+      if (sim === null || sim.shortfallSize > 0 || sim.bookStatus !== 'ok') {
+        return sim !== null && sim.bookStatus !== 'unavailable'
+          ? `Insufficient liquidity: the whole book holds ${fmtSize(sim.estFillSize)} ${collateral}. Reduce the size.`
+          : 'Insufficient liquidity. Reduce the size.';
+      }
+      // Widening only helps while the venue's rate band has room for the
+      // bound. When even the widest tolerance the band allows does not hold
+      // the size, the band is what binds — and "widen" would be wrong advice.
+      const size = Math.abs(sim.sizing.deltaSize);
+      if (sim.depth !== null && sim.maxToleranceApr !== null) {
+        let withinBand = 0;
+        for (const [adverse, cum] of sim.depth) {
+          if (adverse > sim.maxToleranceApr) break;
+          withinBand = cum;
+        }
+        if (withinBand < size) {
+          return `Rate limit exceeded: only ${fmtSize(withinBand)} ${collateral} fills inside the venue's max rate deviation. Reduce the size.`;
+        }
+      }
+      // Only when this side's book AGREES it is short: one that has moved
+      // since it was read has nothing truthful to add (nerax1s, e79d672).
+      return sim.sizeWithinTolerance !== null && sim.sizeWithinTolerance < size
+        ? `Slippage too high: only ${fmtSize(sim.sizeWithinTolerance)} ${collateral} fills inside the ${pct(sim.slippageApr)} tolerance. Widen the tolerance or reduce the size.`
+        : 'Slippage too high: the size does not fill inside the tolerance. Widen the tolerance or reduce the size.';
+    }
+    case 'rate-deviation':
+      return `Rate limit exceeded (${error}): the rate sits too far from the venue's mark. Reduce the size.`;
+    case 'insufficient-margin':
+      return `${error}. Add margin or roll a smaller size.`;
+    case 'no-gas':
+      return `${error}. Top up the gas balance.`;
+    default:
+      return `${error}.`;
+  }
+}
+
 export function evaluateRollGate(input: EvaluateRollInput): RollGate {
   const { exit, entry, venue } = input;
   const blockers: RollBlocker[] = [];
@@ -121,6 +178,7 @@ export function evaluateRollGate(input: EvaluateRollInput): RollGate {
   };
   prefixed('exit', exit.gate, 'Exit');
   prefixed('entry', entry.gate, 'Re-entry');
+  const stepBlockers = [...blockers];
 
   const oldMaturity = Math.max(exit.legA.market.maturity, exit.legB.market.maturity);
   const newMaturity = Math.min(entry.legA.market.maturity, entry.legB.market.maturity);
@@ -171,34 +229,61 @@ export function evaluateRollGate(input: EvaluateRollInput): RollGate {
   const legs = [exit.simulation.legA, exit.simulation.legB, entry.simulation.legA, entry.simulation.legB];
   const marketName = (marketId: number): string =>
     legs.find((l) => l.marketId === marketId)?.marketName ?? `market ${marketId}`;
-  /** A FOK the book cannot fill whole: say how much it CAN, so the size to
-   * roll instead is on the screen rather than found by trial — only when
-   * this side's book agrees it is short; a book that has moved since it
-   * was read has nothing truthful to add. */
-  const depthNote = (o: { marketId: number; error: string | null }): string => {
-    const leg = legs.find((l) => l.marketId === o.marketId);
-    const fit = leg?.sizeWithinTolerance;
-    return leg && /liquidity/i.test(o.error ?? '') && typeof fit === 'number' && fit < Math.abs(leg.sizing.deltaSize)
-      ? ` (about ${fit.toLocaleString('en-US', { maximumFractionDigits: 2 })} fills whole inside the bound)`
-      : '';
-  };
   if (venue === null) {
-    blockers.push({ code: 'roll-unpriced', message: 'The venue could not preview this roll — waiting for a quote.' });
+    blockers.push({
+      code: 'roll-unpriced',
+      message: input.venueError
+        ? `The venue could not preview this roll — ${input.venueError}`
+        : 'The venue could not preview this roll — waiting for a quote.',
+    });
   } else if (venue.status === 'Refused') {
     const named = venue.orders.filter((o) => o.error !== null);
-    const detail = named.length
-      ? named
-          .map((o) => `${o.action === 'close' ? 'Exit' : 'Re-entry'} ${marketName(o.marketId)}: ${o.error}${depthNote(o)}`)
-          .join('; ')
-      : venue.reason?.message ?? 'refused';
-    blockers.push({
-      code: 'venue-refused',
-      message: `The venue refuses this roll — ${detail}. ${
-        VENUE_MARGIN_CODE.test(venue.reason?.code ?? '')
-          ? 'Add margin or roll a smaller size.'
-          : 'Widen the tolerance or reduce the size.'
-      }`,
-    });
+    if (named.length > 0) {
+      // One line per leg the venue named, each with ITS cause and ITS remedy:
+      // the four legs can fail for four different reasons, and one shared
+      // "widen the tolerance" is wrong advice for the margin one (his call
+      // 2026-09-22). Newline-separated; the panel renders them stacked.
+      const lines = named.map((o) => {
+        const step = o.action === 'close' ? exit : entry;
+        const sim = [step.simulation.legA, step.simulation.legB].find((l) => l.marketId === o.marketId) ?? null;
+        return `${o.action === 'close' ? 'Exit' : 'Re-entry'} · ${marketName(o.marketId)} — ${refusalCause(o.error ?? '', sim, step.simulation.collateral)}`;
+      });
+      /**
+       * ONE error per leg, in one list (his call 2026-09-22). The pair gates
+       * above judged each leg before the wire; the venue then judged the same
+       * legs — and two boxes about one leg read as two problems. The venue's
+       * line wins for a leg it named (it is the concrete one); a leg only the
+       * pair gate flagged keeps that, folded into the same list. Blockers
+       * that carry their own control or readout stay as they are.
+       */
+      const OWN_UI: ReadonlySet<string> = new Set(['isolated-must-switch', 'slippage-exceeds-max']);
+      const stepOf = (o: { action: 'close' | 'open' }): RollStep => (o.action === 'close' ? 'exit' : 'entry');
+      const venueNamed = new Set(named.map((o) => `${stepOf(o)}:${o.marketId}`));
+      const seen = new Set<string>();
+      const folded: string[] = [];
+      for (let i = blockers.length - 1; i >= 0; i -= 1) {
+        const b = blockers[i];
+        if (b.step === undefined || b.marketId === undefined || OWN_UI.has(b.code)) continue;
+        blockers.splice(i, 1);
+      }
+      for (const b of stepBlockers) {
+        if (b.step === undefined || b.marketId === undefined || OWN_UI.has(b.code)) continue;
+        const key = `${b.step}:${b.marketId}`;
+        if (venueNamed.has(key) || seen.has(key)) continue;
+        seen.add(key);
+        folded.push(b.message.replace(/^(Exit|Re-entry): /, '$1 · '));
+      }
+      blockers.push({ code: 'venue-refused', message: ['The venue refuses this roll:', ...lines, ...folded].join('\n') });
+    } else {
+      blockers.push({
+        code: 'venue-refused',
+        message: `The venue refuses this roll — ${venue.reason?.message ?? 'refused'}. ${
+          VENUE_MARGIN_CODE.test(venue.reason?.code ?? '')
+            ? 'Add margin or roll a smaller size.'
+            : 'Widen the tolerance or reduce the size.'
+        }`,
+      });
+    }
   }
 
   const margin: RollMargin = {

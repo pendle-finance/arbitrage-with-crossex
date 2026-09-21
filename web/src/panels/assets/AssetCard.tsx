@@ -87,6 +87,7 @@ import {
 import { knownRate } from '../../lib/boros';
 import { useDebounced } from '../../lib/useDebounced';
 import { AssetBars } from './AssetBars';
+import { fitAcross, maxRollSize, planBatch, suggestedRollSize, type BatchLimit } from './rollSizing';
 import { useRollPublisher, useRollSignalsOptional } from '../rollSignal';
 
 interface Props {
@@ -1129,13 +1130,14 @@ function RollProbe({
   const exit1 = useBorosPairSimulation(r1.exit, r1.exit !== null, opts);
   const entry1 = useBorosPairSimulation(r1.entry, r1.entry !== null, opts);
   const legs1 = [exit1.data?.simulation, entry1.data?.simulation].flatMap((x) => (x ? [x.legA, x.legB] : []));
+  // The same two calls the modal makes for its default size, so the banner's
+  // rate and the modal's headline are one number.
   const fit =
-    legs1.length === 4 && legs1.every((l) => typeof l.sizeWithinTolerance === 'number')
-      ? Math.min(...legs1.map((l) => l.sizeWithinTolerance as number))
-      : legs1.length === 4
-        ? heldSize // an older server reports no fit; the modal then opens on the whole position
-        : null;
-  const size = fit === null ? null : Math.min(fit, heldSize);
+    legs1.length === 4
+      ? // An older server reports no ladder; the modal then opens on the whole position.
+        (fitAcross(legs1.slice(0, 2), legs1.slice(2), exitSlippageApr, entrySlippageApr, ROLL_MAX_SLIP_PCT / 100) ?? Infinity)
+      : null;
+  const size = fit === null ? null : suggestedRollSize(fit, heldSize);
   const enough = size !== null && size >= fifth - 1e-9;
 
   // Stage 2: the modal's default size. When that IS the fifth, stage 1
@@ -1369,6 +1371,14 @@ function exitPnlOf(
   return { legs, total };
 }
 
+/** One roll option's four legs as last quoted; `key` changes only when their
+ * depth ladders do, so storing it never loops a render. */
+interface RollLegs {
+  key: string;
+  exit: BorosSimulatedLeg[];
+  entry: BorosSimulatedLeg[];
+}
+
 interface RollTarget {
   maturity: number;
   longMarketId: number;
@@ -1433,12 +1443,24 @@ export function RollOverModal({
   const fmtSize = (v: number) => String(+v.toFixed(6));
   const [sizeStr, setSizeStr] = useState(() => fmtSize(heldSize));
   const [touched, setTouched] = useState(false);
-  const [fits, setFits] = useState<Record<number, number>>({});
+  const [legsBy, setLegsBy] = useState<Record<number, RollLegs>>({});
   const [appliedFor, setAppliedFor] = useState<number | null>(null);
-  const selectedFit = selected !== null ? fits[selected] : undefined;
+  const capApr = ROLL_MAX_SLIP_PCT / 100;
+  const entrySeedFor = (t: RollTarget): number => seedSlipPctFor(markets ?? [], [t.longMarketId, t.shortMarketId]) / 100;
+  /**
+   * The default size: what fills on all four legs AT THE SEED tolerance, less
+   * a buffer (`suggestedRollSize`) — the books move between this quote and
+   * the order, and a size equal to the capacity is refused by one cancelled
+   * lot. The whole position whenever the books hold it with that to spare.
+   */
+  const selectedQuote = selected !== null ? legsBy[selected] : undefined;
+  const selectedFit =
+    selectedQuote && target
+      ? (fitAcross(selectedQuote.exit, selectedQuote.entry, exitSlippageApr, entrySeedFor(target), capApr) ?? undefined)
+      : undefined;
   useEffect(() => {
     if (touched || selected === null || selectedFit === undefined || appliedFor === selected) return;
-    setSizeStr(fmtSize(Math.min(selectedFit, heldSize)));
+    setSizeStr(fmtSize(suggestedRollSize(selectedFit, heldSize)));
     setAppliedFor(selected);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [touched, selected, selectedFit, appliedFor, heldSize]);
@@ -1461,6 +1483,29 @@ export function RollOverModal({
    */
   const perpImUsd = heldSize > 0 ? pairPerpImUsd * (simSize / heldSize) : 0;
   const pct = heldSize > 0 ? Math.round((size / heldSize) * 100) : 0;
+
+  /**
+   * Each batch's tolerance FOLLOWS THE SIZE: the seed while the size fills
+   * inside it, wider when the size needs it and the venue's rate band still
+   * allows the bound (`planBatch`). Slippage is therefore never something
+   * the trader is warned about here — it is set for them, and carried into
+   * the review. What no tolerance can fix (the book does not hold the size,
+   * or holds it only past the venue's max rate deviation) is the warning
+   * below (his call 2026-09-22).
+   */
+  const plansFor = (t: RollTarget, forSize: number) => {
+    const q = legsBy[t.maturity];
+    return {
+      exit: q ? planBatch(q.exit, forSize, exitSlippageApr, capApr) : null,
+      entry: q ? planBatch(q.entry, forSize, entrySeedFor(t), capApr) : null,
+    };
+  };
+  const plans = target !== null ? plansFor(target, size) : null;
+  const sizeLimit: BatchLimit | null =
+    [plans?.exit?.limit ?? null, plans?.entry?.limit ?? null]
+      .filter((l): l is BatchLimit => l !== null)
+      .sort((a, b) => a.maxSize - b.maxSize)[0] ?? null;
+  const maxRoll = maxRollSize([plans?.exit?.limit ?? null, plans?.entry?.limit ?? null]);
 
   const [step, setStep] = useState<'pick' | 'review'>('pick');
   // The review page locks the modal while a batch is in flight.
@@ -1489,6 +1534,8 @@ export function RollOverModal({
           oldMaturity={soonest}
           nowSec={nowSec}
           perpImUsd={heldSize > 0 ? pairPerpImUsd * (size / heldSize) : 0}
+          exitSeedPct={plans?.exit ? +(plans.exit.toleranceApr * 100).toFixed(2) : undefined}
+          entrySeedPct={plans?.entry ? +(plans.entry.toleranceApr * 100).toFixed(2) : undefined}
           onBack={() => setStep('pick')}
           onBusy={setBusy}
           onClose={onClose}
@@ -1535,6 +1582,20 @@ export function RollOverModal({
             </span>
           </div>
 
+          {/* Only what a tolerance cannot fix. A size that merely needs a
+              wider tolerance has been given one, silently. */}
+          {sizeLimit !== null && maxRoll !== null && (
+            <p role="alert" className="mb-3 rounded border border-amber-500/40 bg-amber-500/[0.05] px-3 py-2 text-[11.5px] leading-relaxed text-amber-100">
+              {sizeLimit.kind === 'liquidity'
+                ? `Size too big: ${sizeLimit.marketName} does not hold this much liquidity.`
+                : `Size too big: ${sizeLimit.marketName} only fills it past the venue's rate limit.`}{' '}
+              The most that rolls now is {fmtTokenQty(maxRoll, collateral)}.{' '}
+              <button type="button" className="btn-link" onClick={() => setSize(fmtSize(suggestedRollSize(maxRoll, heldSize)))}>
+                Roll {fmtTokenQty(suggestedRollSize(maxRoll, heldSize), collateral)} instead
+              </button>
+            </p>
+          )}
+
           {targets.length === 0 ? (
             <div className="rounded border border-dashed border-ink-700 px-3 py-4 text-center text-xs text-ink-500">
               {ctx.isLoading
@@ -1552,12 +1613,12 @@ export function RollOverModal({
                   size={simSize}
                   perpImUsd={perpImUsd}
                   address={address}
-                  exitSlippageApr={exitSlippageApr}
-                  entrySlippageApr={seedSlipPctFor(markets ?? [], [t.longMarketId, t.shortMarketId]) / 100}
+                  exitSlippageApr={plansFor(t, simSize).exit?.toleranceApr ?? exitSlippageApr}
+                  entrySlippageApr={plansFor(t, simSize).entry?.toleranceApr ?? entrySeedFor(t)}
                   nowSec={nowSec}
                   selected={selected === t.maturity}
                   onSelect={() => setPicked(t.maturity)}
-                  onFit={(fit) => setFits((prev) => (prev[t.maturity] === fit ? prev : { ...prev, [t.maturity]: fit }))}
+                  onLegs={(q) => setLegsBy((prev) => (prev[t.maturity]?.key === q.key ? prev : { ...prev, [t.maturity]: q }))}
                 />
               ))}
             </div>
@@ -1837,6 +1898,8 @@ function RollReview({
   oldMaturity,
   nowSec,
   perpImUsd,
+  exitSeedPct,
+  entrySeedPct,
   onBack,
   onBusy,
   onClose,
@@ -1852,6 +1915,11 @@ function RollReview({
   nowSec: number;
   /** The perp margin behind THIS size — the capital base of the headline. */
   perpImUsd: number;
+  /** The tolerance the pick page settled on for each batch at this size, in
+   * % APR — wider than the per-market seed when the size needed it. Absent
+   * (no ladder quoted yet) falls back to the seed. */
+  exitSeedPct?: number;
+  entrySeedPct?: number;
   onBack: () => void;
   onBusy: (busy: boolean) => void;
   onClose: () => void;
@@ -1891,8 +1959,8 @@ function RollReview({
   };
   // Each batch from ITS OWN two markets: the exit closes the old maturity,
   // the re-entry opens the new one.
-  const exitSlip = useSlip(seedFor([longLeg?.marketId, shortLeg?.marketId].filter((id): id is number => id !== undefined)));
-  const entrySlip = useSlip(seedFor([target.longMarketId, target.shortMarketId]));
+  const exitSlip = useSlip(exitSeedPct ?? seedFor([longLeg?.marketId, shortLeg?.marketId].filter((id): id is number => id !== undefined)));
+  const entrySlip = useSlip(entrySeedPct ?? seedFor([target.longMarketId, target.shortMarketId]));
   const slipInvalid = exitSlip.invalid || entrySlip.invalid;
 
   // ---- the one roll request ---------------------------------------------
@@ -2186,8 +2254,12 @@ function RollReview({
         />
         <EstimateRow
           label="Available margin"
-          sub="before → after, as the venue simulates it"
-          title="Initial margin spendable before the batch, and after it — the closes run first, so the new legs are judged on the margin the old ones free."
+          sub={availableAfter === null ? undefined : 'before → after, as the venue simulates it'}
+          title={
+            availableAfter === null
+              ? undefined
+              : 'Initial margin spendable before the batch, and after it — the closes run first, so the new legs are judged on the margin the old ones free.'
+          }
           value={
             availableBefore !== null && availableAfter !== null ? (
               <>
@@ -2195,7 +2267,10 @@ function RollReview({
                 {usdNote(availableAfter)}
               </>
             ) : (
-              '—'
+              // The venue reports no post-batch state when it refuses: nothing
+              // executed, so there is nothing to quote. Naming that beats a "—"
+              // that reads as a figure we failed to fetch.
+              <span className="text-ink-400">Simulation failed</span>
             )
           }
           strong
@@ -2277,7 +2352,7 @@ function RollOption({
   nowSec,
   selected,
   onSelect,
-  onFit,
+  onLegs,
 }: {
   target: { maturity: number; longMarketId: number; shortMarketId: number };
   pair: PairEstimate;
@@ -2292,9 +2367,9 @@ function RollOption({
   nowSec: number;
   selected: boolean;
   onSelect: () => void;
-  /** The largest size that fills inside tolerance on BOTH batches (the
-   * smallest of the four legs' own figures), once both have quoted. */
-  onFit: (fit: number) => void;
+  /** The four legs as quoted, once both batches have — the modal reads their
+   * depth ladders to default the size and to set each batch's tolerance. */
+  onLegs: (legs: RollLegs) => void;
 }) {
   const longLeg = yuLegs.find((l) => l.venue === pair.longVenue);
   const shortLeg = yuLegs.find((l) => l.venue === pair.shortVenue);
@@ -2327,21 +2402,24 @@ function RollOption({
   const entry = useBorosPairSimulation(entryReq, entryReq !== null);
 
   /**
-   * The size the books take inside tolerance, per leg, from the freshest
-   * quote of each batch — the figure does not depend on the size asked, so
-   * any quote will do, but all four legs must have one. Reported upward so
-   * the modal can default the slider to it.
+   * Each leg's depth ladder, from the freshest quote of each batch — a
+   * property of the books, not of the size or tolerance asked, so any quote
+   * will do, but all four legs must have one. Reported upward (only when the
+   * ladders actually changed) so the modal can size and price off them.
    */
-  const fitLegs = [exit.data?.simulation, entry.data?.simulation].flatMap((s) => (s ? [s.legA, s.legB] : []));
-  const fit =
-    fitLegs.length === 4 && fitLegs.every((l) => typeof l.sizeWithinTolerance === 'number')
-      ? Math.min(...fitLegs.map((l) => l.sizeWithinTolerance as number))
+  const exitData = exit.data?.simulation;
+  const entryData = entry.data?.simulation;
+  const legsKey =
+    exitData && entryData
+      ? JSON.stringify([exitData.legA, exitData.legB, entryData.legA, entryData.legB].map((l) => [l.marketId, l.depth ?? null, l.maxToleranceApr ?? null]))
       : null;
-  const onFitRef = useRef(onFit);
-  onFitRef.current = onFit;
+  const onLegsRef = useRef(onLegs);
+  onLegsRef.current = onLegs;
   useEffect(() => {
-    if (fit !== null) onFitRef.current(fit);
-  }, [fit]);
+    if (legsKey === null || !exitData || !entryData) return;
+    onLegsRef.current({ key: legsKey, exit: [exitData.legA, exitData.legB], entry: [entryData.legA, entryData.legB] });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [legsKey]);
 
   const entrySim = entry.data?.simulation;
   const exitSim = exit.data?.simulation;

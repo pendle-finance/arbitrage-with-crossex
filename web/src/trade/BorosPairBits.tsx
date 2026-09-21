@@ -639,7 +639,8 @@ export function BlockerList({
       {blockers.map((b, i) => (
         <li
           key={`${b.code}-${b.leg ?? ''}-${i}`}
-          className="rounded border border-guava/30 bg-guava/10 px-2.5 py-2 text-[11px] leading-relaxed text-rose-200"
+          // pre-line: a roll's refusal carries one line per rejected leg.
+          className="whitespace-pre-line rounded border border-guava/30 bg-guava/10 px-2.5 py-2 text-[11px] leading-relaxed text-rose-200"
         >
           {b.message}
           {b.code === 'isolated-must-switch' && onCancelAndClose && b.marketId !== undefined && (

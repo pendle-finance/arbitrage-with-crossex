@@ -15,6 +15,7 @@ import {
   resolveLegSizing,
   simulateBorosPair,
   sizeWithinBound,
+  bookDepthLadder,
   DEFAULT_SLIPPAGE_APR,
   MIN_GAS_BALANCE_USD,
   MAX_SLIPPAGE_APR,
@@ -565,11 +566,31 @@ describe('simulateBorosPair', () => {
     const large = simulateBorosPair(simInput({ legA: leg({ book: ladder, direction: 'long', slippageApr: 0.005 }), size: 500_000 }));
     expect(small.legA.sizeWithinTolerance).toBe(200_000);
     expect(large.legA.sizeWithinTolerance).toBe(200_000);
-    // Consistency with the walk: 280k fills at the bound, a hair more trips it.
     expect(large.legA.slippageExceeded).toBe(true);
     expect(small.legA.slippageExceeded).toBe(false);
+    // The ladder the figure is read off: the same whatever was asked, so a
+    // caller can answer "what tolerance does size s need" for any s.
+    const rungs = small.legA.depth as Array<[number, number]>;
+    expect(rungs.map(([a]) => +a.toFixed(6))).toEqual([0.002, 0.004, 0.01]);
+    expect(rungs.map(([, c]) => c)).toEqual([100_000, 200_000, 300_000]);
+    expect(large.legA.depth).toEqual(small.legA.depth);
     // No book → nothing to size against.
-    expect(simulateBorosPair(simInput({ legA: leg({ book: null }) })).legA.sizeWithinTolerance).toBeNull();
+    const bookless = simulateBorosPair(simInput({ legA: leg({ book: null }) })).legA;
+    expect(bookless.sizeWithinTolerance).toBeNull();
+    expect(bookless.depth).toBeNull();
+  });
+
+  it("reports the widest tolerance whose bound stays inside the venue's rate band", () => {
+    // Band = mark ± cap, bound = mid ± tolerance. A BUY's bound moves up, so
+    // its room is (mark + cap) − mid; a SELL's moves down: mid − (mark − cap).
+    const market = { ...leg().market, markApr: 0.09, midApr: 0.092, maxRateDeviationApr: 0.02 };
+    const buy = simulateBorosPair(simInput({ legA: leg({ market, direction: 'long' }) })).legA;
+    const sell = simulateBorosPair(simInput({ legA: leg({ market, direction: 'short' }) })).legA;
+    expect(buy.maxToleranceApr).toBeCloseTo(0.018, 12);
+    expect(sell.maxToleranceApr).toBeCloseTo(0.022, 12);
+    // No cap reported → left to the venue, not guessed.
+    const capless = simulateBorosPair(simInput({ legA: leg({ market: { ...market, maxRateDeviationApr: 0 } }) })).legA;
+    expect(capless.maxToleranceApr).toBeNull();
   });
 
 
@@ -1039,6 +1060,14 @@ describe('sizeWithinBound', () => {
     expect(sizeWithinBound([[0.05, 100], [0.06, 100], [0.08, 100]], 'long', 0.06)).toBe(200);
   });
 
+  it('reproduces the live book the VWAP rule got wrong (HL ETH 25 Sep, 2026-09-22)', () => {
+    // Asks against mid 0.15198 at 1% → bound 0.16198: five levels inside it,
+    // then 2,033 ETH at 0.1650. The venue's FOK ceiling bisected to
+    // 389.2–390.1; the VWAP rule said 1,128.5.
+    const asks: Array<[number, number]> = [[0.1525, 9.44], [0.156, 329.31], [0.1582, 2], [0.1583, 40], [0.1603, 9.2], [0.165, 2033.1], [0.1654, 200]];
+    expect(sizeWithinBound(asks, 'long', 0.16198)).toBeCloseTo(389.95, 2);
+  });
+
   it('measures the adverse way for a sell', () => {
     expect(sizeWithinBound([[0.05, 100], [0.03, 100]], 'short', 0.045)).toBe(100);
     expect(sizeWithinBound([[0.05, 100], [0.03, 100]], 'short', 0.03)).toBe(200);
@@ -1052,5 +1081,15 @@ describe('sizeWithinBound', () => {
 
   it('a level better than mid buys NO room for one past the bound', () => {
     expect(sizeWithinBound([[0.04, 100], [0.07, 100]], 'long', 0.06)).toBe(100);
+  });
+});
+
+describe('bookDepthLadder', () => {
+  it('is cumulative, best-first, signed the adverse way, and skips junk levels', () => {
+    const buy = bookDepthLadder([[0.04, 100], [0.05, 0], [0.07, 50]], 'long', 0.05);
+    expect(buy.map(([a, c]) => [+a.toFixed(6), c])).toEqual([[-0.01, 100], [0.02, 150]]);
+    const sell = bookDepthLadder([[0.05, 10], [0.03, 20]], 'short', 0.05);
+    expect(sell.map(([a, c]) => [+a.toFixed(6), c])).toEqual([[0, 10], [0.02, 30]]);
+    expect(bookDepthLadder([], 'long', 0.05)).toEqual([]);
   });
 });

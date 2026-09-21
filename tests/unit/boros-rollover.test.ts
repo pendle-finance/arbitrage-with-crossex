@@ -174,9 +174,74 @@ describe('evaluateRollGate', () => {
     const g = evaluateRollGate({ ...rollInput(), venue });
     expect(g.blockers).toHaveLength(1);
     expect(g.blockers[0].code).toBe('venue-refused');
-    expect(g.blockers[0].message).toBe(
-      'The venue refuses this roll — Re-entry Hyperliquid ETH new: Insufficient liquidity. Widen the tolerance or reduce the size.',
+    // The fixture book holds the size many times over, so the venue's
+    // "Insufficient liquidity" (FOK not filled INSIDE THE BOUND) is slippage.
+    const [head, line, ...rest] = g.blockers[0].message.split('\n');
+    expect(head).toBe('The venue refuses this roll:');
+    // …and this side's book does NOT agree it is short, so no depth is quoted:
+    // a book that moved since it was read has nothing truthful to add.
+    expect(line).toBe(
+      'Re-entry · Hyperliquid ETH new — Slippage too high: the size does not fill inside the tolerance. Widen the tolerance or reduce the size.',
     );
+    expect(rest).toEqual([]);
+  });
+
+  it('gives each refused leg its own line, cause and remedy', () => {
+    const errors = [null, 'Insufficient liquidity', 'Large Rate Deviation', 'Not enough margin'];
+    const venue = venueOk({
+      status: 'Refused',
+      reason: { code: 'MARKET_ORDER_FOK_NOT_FILLED', message: 'Insufficient liquidity' },
+      orders: venueOk().orders.map((o, i) => ({ ...o, filled: false, matchedSize: null, error: errors[i] })),
+      availableAfter: null,
+    });
+    const lines = evaluateRollGate({ ...rollInput(), venue }).blockers[0].message.split('\n');
+    // The leg the venue did not name (it simply never ran) gets no line.
+    expect(lines).toHaveLength(4);
+    expect(lines[1]).toMatch(/^Exit · .+ — Slippage too high: /);
+    expect(lines[2]).toMatch(/^Re-entry · .+ — Rate limit exceeded \(Large Rate Deviation\): .+ Reduce the size\.$/);
+    expect(lines[3]).toMatch(/^Re-entry · .+ — Not enough margin\. Add margin or roll a smaller size\.$/);
+  });
+
+  it("reports ONE error per leg: the venue's line replaces the pair gate's for a leg both flagged", () => {
+    const e = entryLegs();
+    const flagged = step(e.legA, e.legB, 'open');
+    const [mA, mB] = [flagged.simulation.legA.marketId, flagged.simulation.legB.marketId];
+    flagged.gate = {
+      ...flagged.gate,
+      blockers: [
+        { code: 'rate-bound-out-of-range', leg: 'A', marketId: mA, message: 'A: bound outside the band' },
+        { code: 'rate-bound-out-of-range', leg: 'B', marketId: mB, message: 'B: bound outside the band' },
+      ],
+    };
+    // The venue names entry leg A only (orders: close A, close B, open A, open B).
+    const venue = venueOk({
+      status: 'Refused',
+      reason: { code: 'MARKET_ORDER_FOK_NOT_FILLED', message: 'Insufficient liquidity' },
+      orders: venueOk().orders.map((o, i) => ({ ...o, filled: false, matchedSize: null, error: i === 2 ? 'Insufficient liquidity' : null })),
+      availableAfter: null,
+    });
+    const g = evaluateRollGate({ ...rollInput({ entry: flagged }), venue });
+    // One box, one line per leg: A in the venue's words, B in the gate's.
+    expect(g.blockers.map((b) => b.code)).toEqual(['venue-refused']);
+    const lines = g.blockers[0].message.split('\n');
+    expect(lines).toHaveLength(3);
+    expect(lines[1]).toMatch(/^Re-entry · .+ — Slippage too high: /);
+    expect(lines[2]).toBe('Re-entry · B: bound outside the band');
+  });
+
+  it('calls it liquidity only when the whole book cannot supply the size', () => {
+    // A thin exit book: the walk itself falls short, at any rate.
+    const x = exitLegs();
+    const thin = step({ ...x.legA, book: { ...x.legA.book!, bids: [[0.05, 1]], asks: [[0.051, 1]] } }, x.legB, 'close');
+    const venue = venueOk({
+      status: 'Refused',
+      reason: { code: 'MARKET_ORDER_FOK_NOT_FILLED', message: 'Insufficient liquidity' },
+      orders: venueOk().orders.map((o, i) => ({ ...o, filled: false, matchedSize: null, error: i === 0 ? 'Insufficient liquidity' : null })),
+      availableAfter: null,
+    });
+    const g = evaluateRollGate({ ...rollInput({ exit: thin }), venue });
+    const refused = g.blockers.find((b) => b.code === 'venue-refused');
+    expect(refused?.message.split('\n')[1]).toMatch(/^Exit · .+ — Insufficient liquidity: the whole book holds 1 \w+\. Reduce the size\.$/);
   });
 
   it('names how much the book DOES fill whole when the venue refuses a leg for liquidity', () => {
@@ -189,9 +254,13 @@ describe('evaluateRollGate', () => {
     const input = rollInput();
     input.entry.simulation.legA.sizeWithinTolerance = 562.6;
     const g = evaluateRollGate({ ...input, venue });
-    expect(g.blockers[0].message).toBe(
-      'The venue refuses this roll — Re-entry Hyperliquid ETH new: Insufficient liquidity (about 562.6 fills whole inside the bound). Widen the tolerance or reduce the size.',
-    );
+    // The venue's "Insufficient liquidity" is a FOK not filled INSIDE THE
+    // BOUND; this side's book agrees it is short (562.6 < the size), so the
+    // line names the cause as slippage and the depth that does fill.
+    expect(g.blockers[0].message.split('\n')).toEqual([
+      'The venue refuses this roll:',
+      'Re-entry · Hyperliquid ETH new — Slippage too high: only 562.6 USDT fills inside the 0.25% tolerance. Widen the tolerance or reduce the size.',
+    ]);
   });
 
   it("blocks on the venue's margin refusal and reports the shortfall it simulated", () => {

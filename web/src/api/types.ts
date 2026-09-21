@@ -1073,11 +1073,18 @@ export interface BorosSimulatedLeg {
   /** The rate bound the order carries: mid ± tolerance. */
   worstApr: number | null;
   slippageExceeded?: boolean;
-  /** The largest order size (collateral units) this side fills with its
-   * slippage still inside the tolerance — a property of the book, not of
-   * the size asked. Null without a book or a mid; optional for an older
-   * server. */
+  /** The largest order size (collateral units) this side fills inside the
+   * rate bound the order carries — the levels whose own rate sits inside it,
+   * which is what the venue fills. A property of the book, not of the size
+   * asked. Null without a book or a mid; optional for an older server. */
   sizeWithinTolerance?: number | null;
+  /** The order's side of the book, cumulative and best-first:
+   * `[adverse distance from mid (APR fraction), cumulative size]`. Answers
+   * "what tolerance does size s need" for any s off one quote. */
+  depth?: Array<[number, number]> | null;
+  /** The widest tolerance whose rate bound stays inside the venue's max rate
+   * deviation band; null when the market reports no cap. */
+  maxToleranceApr?: number | null;
   estFillSize: number;
   shortfallSize: number;
   bookStatus: BorosBookStatus;
