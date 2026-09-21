@@ -1,6 +1,7 @@
 import { useRef, useState, type ReactNode } from 'react';
 import { useAccount, useRebalance, useTransfer } from '../api/queries';
 import type { CrossexAsset, GateAccount, SpotBalance, TransferCoin } from '../api/types';
+import { TokenIcon } from '../components/AssetIcon';
 import { DataTable, type Column } from '../components/DataTable';
 import { EmptyState } from '../components/EmptyState';
 import { HoverCard } from '../components/HoverCard';
@@ -28,9 +29,10 @@ type AssetRow =
 
 function CoinCell({ coin, account }: { coin: string; account: string }) {
   return (
-    <span className="inline-flex items-baseline gap-2">
-      <span className="font-semibold text-ink-100">{coin}</span>{' '}
-      <span className="text-[10px] text-ink-500">{account}</span>
+    <span className="inline-flex items-center gap-2">
+      <TokenIcon symbol={coin} size={16} />
+      <span className="font-medium text-ink-50">{coin}</span>{' '}
+      <span className="text-[11px] text-ink-500">{account}</span>
     </span>
   );
 }
@@ -50,7 +52,7 @@ function coinCell(row: AssetRow): ReactNode {
   if (row.kind === 'crossex') return <CoinCell coin={row.asset.coin} account={row.asset.exchangeType} />;
   if (row.kind === 'spot') return <CoinCell coin={row.spot.coin} account="SPOT" />;
   if (row.kind === 'noSpotRead') return <NoSpotReadRow />;
-  const label = <span className="text-[10px] font-semibold uppercase tracking-wider text-gold">Gate spot</span>;
+  const label = <span className="text-[11px] font-semibold text-gold">Gate spot</span>;
   return <Term label={label} text={HOVER.gateSpotAssets} />;
 }
 
@@ -148,7 +150,7 @@ export function BalancesPanel() {
       <MarginBreakdown acc={acc} borrowImUsd={borrowImUsd} />
 
       <section ref={assetsSection} aria-label="Assets" className="card flex flex-col gap-4 p-4">
-        <h2 className="text-xs font-semibold uppercase tracking-wider text-ink-400">
+        <h2 className="text-[14px] font-semibold text-ink-50">
           Assets <span className="normal-case text-ink-500">· non-zero only</span>
         </h2>
         <div>

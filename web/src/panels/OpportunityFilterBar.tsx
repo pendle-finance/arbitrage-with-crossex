@@ -335,7 +335,7 @@ export function OpportunityFilterBar({
               placeholder="any"
               value={minDaysText}
               onChange={(e) => setMinDaysText(e.target.value)}
-              title="Shortest tenor to keep, in days — a plain number, e.g. 30. A card printing exactly that many days is not more than it, so it is cut too."
+              title="Keep only cards maturing in MORE than this many days."
               aria-invalid={minDaysBad}
               aria-describedby={minDaysBad ? `${minDaysId}-err` : undefined}
               className={`input num h-[26px] w-16 !px-2 !py-0 text-[11px] ${

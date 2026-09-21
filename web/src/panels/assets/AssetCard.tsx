@@ -22,6 +22,7 @@ import type {
   BorosPairSimulation,
   BorosSimulatedLeg,
 } from '../../api/types';
+import { TokenIcon, VenueIcon } from '../../components/AssetIcon';
 import { Chip } from '../../components/Chip';
 import { microLabelClass } from '../../components/Th';
 import { SharePositionModal } from '../SharePositionModal';
@@ -114,7 +115,7 @@ interface Props {
 function LiquidationChip({ line, base }: { line: LiquidationLine | 'far' | 'unknown'; base: string }) {
   if (line === 'unknown') {
     return (
-      <Chip sm title="Gate did not send the account's margin figures, so the line cannot be estimated.">
+      <Chip sm title="Gate did not send the account's margin figures.">
         No liquidation estimate
       </Chip>
     );
@@ -190,7 +191,7 @@ function PairTimeline({
     <div className="mb-4 flex flex-col gap-1.5">
       <div className="relative h-1 rounded-full bg-ink-800">
         <div
-          className="absolute inset-y-0 left-0 rounded-full bg-grass/70"
+          className="absolute inset-y-0 left-0 rounded-full bg-info/60"
           style={{ width: `${pct}%` }}
         />
         {/* The "now" marker rides the same axis rather than sitting in a
@@ -225,8 +226,9 @@ const statSub = 'num mt-1.5 text-[10.5px] leading-none text-ink-500';
 function PairColGroup() {
   return (
     <colgroup>
-      <col style={{ width: '28%' }} />
-      <col style={{ width: '13%' }} />
+      {/* Pair carries its own maturity on a second line (the mock's pattern),
+          so the list has no Matures column of its own — its 13% went here. */}
+      <col style={{ width: '41%' }} />
       <col style={{ width: '11%' }} />
       <col style={{ width: '11%' }} />
       <col style={{ width: '17%' }} />
@@ -245,15 +247,24 @@ function PairListHeader() {
       <table className="w-full min-w-[880px] table-fixed border-collapse">
         <PairColGroup />
         <thead>
-          <tr className="[&>th]:px-3 [&>th]:pb-1.5 [&>th]:text-[10px] [&>th]:font-semibold [&>th]:uppercase [&>th]:tracking-[0.12em] [&>th]:text-ink-500 [&>th:first-child]:pl-4 [&>th:last-child]:pr-4">
+          <tr className="[&>th]:h-9 [&>th]:px-3 [&>th]:text-[12px] [&>th]:font-normal [&>th]:text-ink-300 [&>th:first-child]:pl-4 [&>th:last-child]:pr-4">
             <th className="text-left">Pair</th>
-            <th className="text-left">Matures</th>
             <th className="text-right">Notional</th>
-            <th className="text-right" title="Today's initial margin across all four legs (a Boros leg's margin decays toward maturity)">Capital</th>
-            <th className="text-right" title="The locked rate with every charged fee taken out, on the pair's capital over the hedge's life; beside it in grey, the same lock as a SPREAD on notional (receive leg minus pay leg, net of settlement fees) — the cross-farm comparison basis, which leverage does not inflate">
-              Est. fixed APR
+            <th className="text-right">
+              <span className="tip-label" title="Today's initial margin across all four legs.">
+                Capital
+              </span>
             </th>
-            <th className="text-right" title="Carry over the whole hedge at the locked rate minus the fees charged (see each row's fees popup)">Profit at maturity</th>
+            <th className="text-right">
+              <span className="tip-label" title="The locked rate net of the fees charged, on the pair's capital. In grey: the same lock as a spread on notional.">
+                Est. fixed APR
+              </span>
+            </th>
+            <th className="text-right">
+              <span className="tip-label" title="Carry over the whole hedge at the locked rate, minus the fees charged.">
+                Profit at maturity
+              </span>
+            </th>
             <th />
           </tr>
         </thead>
@@ -306,8 +317,8 @@ function SectionTabs<T extends string>({
   right?: React.ReactNode;
 }) {
   return (
-    <div className="mb-3 flex flex-wrap items-end gap-x-3 gap-y-1 border-b border-ink-800 px-1">
-      <div role="tablist" aria-label="Position views" className="-mb-px flex items-stretch gap-1">
+    <div className="flex flex-wrap items-end gap-x-3 gap-y-1 border-b border-ink-700">
+      <div role="tablist" aria-label="Position views" className="flex items-stretch">
         {options.map((o) => {
           const active = o.value === value;
           return (
@@ -319,14 +330,20 @@ function SectionTabs<T extends string>({
               aria-selected={active}
               aria-controls={`${id}-panel-${o.value}`}
               onClick={() => onChange(o.value)}
-              className={`inline-flex items-center gap-2 border-b-2 px-2.5 pb-2 pt-1 text-[13px] font-semibold transition-colors ${
-                active ? 'border-info text-ink-50' : 'border-transparent text-ink-400 hover:text-ink-200'
+              className={`relative inline-flex h-[38px] items-center gap-1.5 px-5 text-[12px] transition-all duration-300 ease-in after:absolute after:inset-x-0 after:bottom-0 after:h-px after:bg-info after:transition-transform after:duration-300 after:content-[''] ${
+                active ? 'font-medium text-ink-50 after:scale-x-100' : 'text-ink-500 after:scale-x-0 hover:text-ink-400'
               }`}
+              style={{
+                backgroundImage: 'linear-gradient(to top, rgba(96,120,255,0.25) 0%, transparent 50%, transparent 100%)',
+                backgroundSize: '200% 200%',
+                backgroundPosition: active ? '99% 99%' : '1% 1%',
+              }}
             >
               {o.label}
-              <Chip sm tone="info" className="!px-1.5 !py-0 !text-[10px]">
-                {o.count}
-              </Chip>
+              {/* The mock writes a tab's count as a plain number in brackets —
+                  it is a quantity, not a status, so it takes no tag. The one
+                  blue tag on this row is "N ready to roll", which IS news. */}
+              <span className="num font-normal">({o.count})</span>
             </button>
           );
         })}
@@ -509,13 +526,16 @@ function PairCard({
   };
   const carryTitle =
     earnedSoFarUsd !== null && carryUsd !== null && earnedSoFarUsd > 0
-      ? `What the hedge earns over its full life at the locked rate — hedged date to maturity, on the pair's capital. Earned so far ≈ ${fmtUsd(earnedSoFarUsd)} · remaining ≈ ${fmtUsd(carryUsd - earnedSoFarUsd)}.`
-      : "What the hedge earns over its full life at the locked rate — hedged date to maturity, on the pair's capital.";
+      ? `Fixed earning over the hedge's life\nEarned so far\t≈ ${fmtUsd(earnedSoFarUsd)}\nRemaining\t≈ ${fmtUsd(carryUsd - earnedSoFarUsd)}\n---\nTotal\t${fmtUsd(carryUsd)}`
+      : "What the hedge earns at the locked rate, hedged date to maturity.";
   const [feesOpen, setFeesOpen] = useState(false);
-  const pill = 'btn !rounded-full !bg-transparent !px-3.5 !py-1 !text-[12.5px]';
+  // The mock's row actions: the house outline at the compact size. The old
+  // full-round pill was this app's own shape; dapp-nitro keeps the 5px radius
+  // on every button, and reserves colour for what the action does.
+  const pill = 'btn !h-[30px] !px-3 !text-[12px]';
 
   return (
-    <div ref={rootRef} className="scroll-mt-36 overflow-x-auto rounded-lg border border-ink-700 bg-ink-950/40">
+    <div ref={rootRef} className="scroll-mt-36 overflow-x-auto rounded border border-wash/[0.16] bg-wash/[0.03]">
       {/* The roll probes render nothing; they only quote. */}
       {probeTargets.map((t) => (
         <RollProbe
@@ -550,27 +570,37 @@ function PairCard({
               <button
                 type="button"
                 aria-expanded={open}
-                className="inline-flex min-w-0 flex-wrap items-center gap-[7px] text-left text-[13.5px] font-semibold leading-none text-ink-50"
+                className="flex min-w-0 flex-col items-start gap-1.5 text-left text-[13.5px] font-semibold leading-none text-ink-50"
                 onClick={(e) => {
                   e.stopPropagation();
                   setOpen((v) => !v);
                 }}
               >
-                <span className="inline-flex items-baseline gap-[5px]">
-                  <span className="text-[9.5px] font-semibold tracking-[0.1em] text-grass">L</span>
+                <span className="inline-flex min-w-0 flex-wrap items-center gap-[7px]">
+                <span className="inline-flex items-center gap-[6px]">
+                  <VenueIcon venue={pair.longVenue} size={18} />
                   {prettyVenue(pair.longVenue)}
+                  <span className="text-[9.5px] font-semibold tracking-[0.1em] text-grass">LONG</span>
                 </span>
                 <span className="text-ink-600">/</span>
-                <span className="inline-flex items-baseline gap-[5px]">
-                  <span className="text-[9.5px] font-semibold tracking-[0.1em] text-guava">S</span>
+                <span className="inline-flex items-center gap-[6px]">
+                  <VenueIcon venue={pair.shortVenue} size={18} />
                   {prettyVenue(pair.shortVenue)}
+                  <span className="text-[9.5px] font-semibold tracking-[0.1em] text-guava">SHORT</span>
                 </span>
                 {canRoll && opportunity !== null && (
                   <Chip
                     sm
                     tone="green"
                     className="!font-medium"
-                    title={`${fmtTokenQty(opportunity.size, (rollMarkets ?? []).find((m) => rollYuLegs.some((l) => l.marketId === m.marketId))?.collateral ?? base)} of this pair rolls into ${fmtDateLocal(opportunity.maturity)} at ${fmtPct(opportunity.rate)} on capital after the round trip's fees — the figure the roll-over opens on — against the ${fmtPct(opportunity.current)} this row earns after the fees it charges, with ${daysLeftText(opportunity.currentMaturity, nowSec)}`}
+                    title={[
+                      'Roll opportunity',
+                      `Size\t${fmtTokenQty(opportunity.size, (rollMarkets ?? []).find((m) => rollYuLegs.some((l) => l.marketId === m.marketId))?.collateral ?? base)}`,
+                      `Rolls into\t${fmtDateLocal(opportunity.maturity)}`,
+                      `APR after fees\t${fmtPct(opportunity.rate)}`,
+                      `APR now\t${fmtPct(opportunity.current)}`,
+                      `Now matures in\t${daysLeftText(opportunity.currentMaturity, nowSec)}`,
+                    ].join('\n')}
                   >
                     roll opportunity
                   </Chip>
@@ -580,45 +610,48 @@ function PairCard({
                     sm
                     tone="blue"
                     className="!font-medium"
-                    title={`The rate legs mature ${fmtDateLocal(soonest)} — inside the ${EXPIRY_WARN_DAYS}-day window, so this pair can be rolled to a later maturity now to stay hedged past it`}
+                    title={`Matures ${fmtDateLocal(soonest)}, inside the ${EXPIRY_WARN_DAYS}-day roll window.`}
                   >
                     ready to roll
                   </Chip>
                 )}
+                </span>
+                {/* One maturity per pair, by construction: a 4-leg unit settles
+                    on a single day, and a laddered book is several rows. It
+                    rides under the venues as the pair's own sub-line (the
+                    mock's pattern) rather than taking a column of its own. */}
+                <span className="num text-[11.5px] font-normal leading-none text-ink-400">
+                  {soonest > 0 ? (
+                    <span title="Every leg of this pair settles here">
+                      matures {fmtDateLocal(soonest)} · {daysLeftText(soonest, nowSec)}
+                    </span>
+                  ) : (
+                    <span className="text-ink-600">no maturity</span>
+                  )}
+                </span>
               </button>
             </td>
-            {/* One maturity per pair, by construction: a 4-leg unit settles
-                on a single day, and a laddered book is several rows. */}
-            <td className="num whitespace-nowrap px-3 text-[13px] text-ink-200">
-              {soonest > 0 ? (
-                <span title="Every leg of this pair settles here">
-                  {fmtDateLocal(soonest)} <span className="text-ink-400">· {daysLeftText(soonest, nowSec)}</span>
-                </span>
-              ) : (
-                <span className="text-ink-600">—</span>
-              )}
-            </td>
-            <td className="num whitespace-nowrap px-3 text-right text-[13px] text-ink-50" title={`${exactUsd(pair.notionalUsd)} — ${exactSize(pair.size, pair.unit, base)} paired`}>
+            <td className="num whitespace-nowrap px-3 text-right text-[14px] font-medium text-ink-50" title={`Notional\t${exactUsd(pair.notionalUsd)}\nPaired size\t${exactSize(pair.size, pair.unit, base)}`}>
               {fmtUsdCompact(pair.notionalUsd)}
             </td>
-            <td className="num whitespace-nowrap px-3 text-right text-[13px] text-ink-50" title={`${exactUsd(pair.capitalUsd)} — today's initial margin across all four legs`}>
+            <td className="num whitespace-nowrap px-3 text-right text-[14px] font-medium text-ink-50" title={`Initial margin, all four legs\t${exactUsd(pair.capitalUsd)}`}>
               {fmtUsdCompact(pair.capitalUsd)}
             </td>
             {/* The APR on capital, then the same lock as a spread on
                 notional in grey — one line, two bases (his call 2026-09-17). */}
-            <td className="num whitespace-nowrap px-3 text-right text-[13px]">
+            <td className="num whitespace-nowrap px-3 text-right text-[14px] font-medium">
               {netApr !== null ? (
                 <SignedNumber value={netApr} format={fmtPct} />
               ) : (
                 <span className="text-ink-600">—</span>
               )}
               {lockedSpread !== null && (
-                <span className="ml-2 text-[11.5px] text-ink-400" title="The same lock as a spread on notional: what the receive leg locks minus what the pay leg locks, net of settlement fees">
+                <span className="ml-2 text-[11.5px] text-ink-400" title="Receive leg minus pay leg, on notional, net of settlement fees.">
                   <SignedNumber value={lockedSpread} format={fmtPct} className="!text-ink-400" /> spread
                 </span>
               )}
             </td>
-            <td className="num whitespace-nowrap px-3 text-right text-[13px]">
+            <td className="num whitespace-nowrap px-3 text-right text-[14px] font-medium">
               {netUsd !== null ? (
                 <SignedNumber value={netUsd} format={fmtUsd} />
               ) : (
@@ -630,7 +663,7 @@ function PairCard({
               <button
                 type="button"
                 className="ml-2 text-[11px] text-ink-400 underline decoration-dotted underline-offset-2 hover:text-ink-200"
-                title={`Fees charged −${fmtUsd(chargedUsd)} — open the breakdown and the charge switches`}
+                title={`Fees charged\t−${fmtUsd(chargedUsd)}`}
                 onClick={(e) => {
                   e.stopPropagation();
                   setFeesOpen(true);
@@ -640,7 +673,7 @@ function PairCard({
               </button>
             </td>
             <td className="whitespace-nowrap pl-3 pr-4 text-right">
-              <span aria-hidden className={`inline-block text-ink-400 transition-transform ${open ? 'rotate-180' : ''}`}>
+              <span aria-hidden className={`pp-chevron transition-transform ${open ? 'rotate-180' : ''}`}>
                 <ChevronIcon />
               </span>
             </td>
@@ -649,7 +682,7 @@ function PairCard({
       </table>
 
       {open && (
-        <div className="border-t border-ink-800 px-4 pb-4 pt-3">
+        <div className="px-4 pb-5 pt-3">
           <PairTimeline openedSec={pair.hedgedSinceSec} maturitySec={soonest} nowSec={nowSec} />
 
           {/* No Fees and no Matures column: fees are behind the row's popup,
@@ -671,8 +704,8 @@ function PairCard({
                       <span className="inline-flex items-center gap-[7px]">
                         <span className="font-medium text-ink-50">{prettyVenue(l.venue)}</span>
                         <span
-                          className={`text-[10px] font-semibold uppercase tracking-[0.1em] ${
-                            l.kind === 'yu' ? 'text-link' : 'text-ink-400'
+                          className={`rounded-full px-2 py-[3px] text-[10px] font-semibold tracking-[0.06em] ${
+                            l.kind === 'yu' ? 'bg-info/[0.16] text-pastel-blue' : 'bg-wash/[0.10] text-ink-300'
                           }`}
                         >
                           {l.kind === 'yu' ? 'Boros' : 'CrossEx'}
@@ -687,7 +720,7 @@ function PairCard({
                       {l.share < 0.9995 && (
                         <span
                           className="text-ink-500"
-                          title="This leg is shared with another pair in the book; only this slice counts here."
+                          title="Shared with another pair. Only this slice counts here."
                         >
                           {' '}
                           ({fmtPct(l.share)})
@@ -707,7 +740,7 @@ function PairCard({
                           it. A Boros leg's margin decays toward maturity;
                           that is the number, not a defect (his call
                           2026-09-09). */}
-                      <span title={l.kind === 'yu' ? "Today's requirement — Boros margin decays toward maturity, and this is what the leg ties up now" : 'Initial margin this slice consumes'}>
+                      <span title={l.kind === 'yu' ? "Initial margin this leg ties up today." : 'Initial margin this slice consumes'}>
                         {fmtUsdCompact(l.imUsd)}
                       </span>
                     </td>
@@ -728,7 +761,7 @@ function PairCard({
                 <button
                   type="button"
                   className="btn-ghost-xs inline-flex items-center gap-1.5 !py-[4px] !text-ink-200"
-                  title="Share this pair — a public link + image; your wallet address is not included"
+                  title="A public link and image. Your wallet address is not included."
                   onClick={() =>
                     setSharePayload(
                       pairSharePayload(pair, base, {
@@ -754,8 +787,8 @@ function PairCard({
                 disabled={pair.unit !== 'base'}
                 title={
                   pair.unit === 'base'
-                    ? "Close both perp legs of this pair as one reduce-only action — you confirm in the form. A leg shared with another pair closes only this pair's share."
-                    : 'This market sizes in USD; close its perps from the funding bundles instead'
+                    ? "Close both perp legs, reduce-only. A shared leg closes only this pair's share."
+                    : 'This market sizes in USD. Close its perps from the funding bundles.'
                 }
                 onClick={onClosePerps}
               >
@@ -764,7 +797,7 @@ function PairCard({
               <button
                 type="button"
                 className={`${pill} hover:!border-guava/60 hover:!text-guava`}
-                title="Close both Boros rate legs of this pair — you confirm in the form. A leg shared with another pair closes only this pair's share."
+                title="Close both Boros legs. A shared leg closes only this pair's share."
                 onClick={onCloseBoros}
               >
                 Close Boros
@@ -773,7 +806,7 @@ function PairCard({
                 <button
                   type="button"
                   className={`${pill} roll-nudge !border-grass/60 !text-grass hover:!border-grass hover:!bg-grass/10`}
-                  title="Roll this pair's rate legs to a later maturity — the perps stay as they are"
+                  title="Move the Boros legs to a later maturity."
                   onClick={onRollOver}
                 >
                   <RollIcon />
@@ -798,7 +831,7 @@ function PairCard({
             What this pair's fixed earning is charged with. The switches change the row's Est. fixed APR and profit at maturity.
           </p>
           <div className="flex flex-col rounded border border-ink-700">
-            <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-ink-800 bg-ink-100/[0.03] px-3 py-2 text-xs">
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-ink-800 bg-wash/[0.03] px-3 py-2 text-xs">
               <span className={microLabelClass}>Charge</span>
               {feeSwitch(
                 'Perp Entry Fees',
@@ -854,7 +887,7 @@ function PairCard({
               )}
               <div
                 className="col-span-2 flex items-baseline justify-between gap-3 border-t border-ink-800 pt-3 sm:col-span-4"
-                title="Carry over the whole hedge minus the fees charged above — dollars first, the APR is the same figure on capital over the hedge's life"
+                title="Carry over the whole hedge, minus the fees charged above."
               >
                 <span className={microLabelClass}>Profit at Maturity (est.)</span>
                 <span className="num text-base font-semibold">
@@ -1671,7 +1704,7 @@ function BatchSection({
       invalid={slip.invalid}
       invalidText={`Must be greater than 0 and at most ${ROLL_MAX_SLIP_PCT}%.`}
       inputAriaLabel={`${label} max slippage, % APR`}
-      title={`How far this size walks the ${label.toLowerCase()}'s two books away from mid, against the bound that caps it. Set per leg (${slip.str}% each), so the batch's worst case is twice it. The bound caps the RATE, not the fill — a leg that cannot fill inside it simply stops filling.`}
+      title={`How far this size moves the two books from mid. Capped at ${slip.str}% per leg.`}
       hint="Max rate each leg of this batch will accept. A wider tolerance may be needed for a large size or a thin book."
     />
   );
@@ -1690,7 +1723,7 @@ function BatchSection({
             <p
               className="alert-amber text-[11px] leading-relaxed text-amber-100"
               role="alert"
-              title="That leg's fill sits past the Max above, so it would be refused before it is sent. Widen the tolerance, or roll a smaller size."
+              title="This fill is past the Max, so it would be refused. Widen the tolerance or roll a smaller size."
             >
               Slippage too high on {exceeded.map((l) => prettyVenue(l.venue)).join(' and ')} leg
             </p>
@@ -1774,8 +1807,8 @@ function ExitPnlReadout({
   const breakdown = exitPnl.legs
     .map(
       (l) =>
-        `${prettyVenue(l.venue)} ${l.pnl !== null ? plain(l.pnl) : '—'} · locked ${fmtPct(l.lockedApr)} → ${
-          l.execApr !== null ? fmtPct(l.execApr) : '—'
+        `${prettyVenue(l.venue)} · ${fmtPct(l.lockedApr)} → ${l.execApr !== null ? fmtPct(l.execApr) : '—'}\t${
+          l.pnl !== null ? plain(l.pnl) : '—'
         }`,
     )
     .join('\n');
@@ -1784,8 +1817,8 @@ function ExitPnlReadout({
       <div className="flex items-baseline justify-between gap-3">
         <span
           className="cursor-help text-[12.5px] text-ink-50"
-          title={`(locked − execution rate) × size × time to maturity on each leg closed, before fees.${
-            breakdown ? `\n\n${breakdown}` : ''
+          title={`(locked − execution rate) × size × time to maturity, per leg, before fees.${
+            breakdown ? `\n${breakdown}` : ''
           }`}
         >
           Est. total trade PnL <span className="text-ink-400">ⓘ</span>
@@ -2091,12 +2124,12 @@ function RollReview({
             Close
           </button>
           {canRetryExit && (
-            <HoldToConfirmButton tone="cyan" onConfirm={run} title="Press and hold: sends the exit batch again with fresh order ids">
+            <HoldToConfirmButton tone="cyan" onConfirm={run} title="Press and hold to send the exit batch again.">
               Retry exit
             </HoldToConfirmButton>
           )}
           {canRetryEntry && (
-            <HoldToConfirmButton tone="cyan" onConfirm={retryEntry} title="Press and hold: opens the new legs again, at the size the exit closed, with fresh order ids — the exit is not re-sent">
+            <HoldToConfirmButton tone="cyan" onConfirm={retryEntry} title="Press and hold to open the new legs again, at the size the exit closed.">
               Retry re-entry
             </HoldToConfirmButton>
           )}
@@ -2131,18 +2164,18 @@ function RollReview({
             <div className="mt-1.5 text-[11.5px] text-ink-400">net of fees and exit P&L</div>
           </div>
           <div className="grid grid-cols-3 gap-x-5">
-            <div title="The size being rolled — the smaller of the two rate legs' fills, closed at the old maturity and re-opened at the new">
+            <div title="The size being rolled: the smaller of the two legs' fills.">
               <div className={statLabel}>Size</div>
               <div className={`${statValue} font-semibold text-ink-50`}>{fmtTokenQty(size, collateral)}</div>
             </div>
-            <div title="Carry to the new maturity at the locked spread, less the round trip">
+            <div title="Carry to the new maturity, minus the round trip's fees.">
               <div className={statLabel}>Est. earnings by maturity</div>
               <div className={`${statValue} font-semibold`}>
                 {fig.netByMaturityUsd !== null ? <SignedNumber value={fig.netByMaturityUsd} format={fmtUsd} /> : <span className="text-ink-600">—</span>}
               </div>
             </div>
             <div
-              title={`Exit fee ${fig.exitCostUsd !== null ? `−${fmtUsd(fig.exitCostUsd)}` : '—'} · Re-entry fee ${fig.entryCostUsd !== null ? `−${fmtUsd(fig.entryCostUsd)}` : '—'} · Exit PnL ${fig.exitPnlUsd !== null ? `${fig.exitPnlUsd >= 0 ? '+' : '−'}${fmtUsd(Math.abs(fig.exitPnlUsd))}` : '—'}`}
+              title={`Exit fee\t${fig.exitCostUsd !== null ? `−${fmtUsd(fig.exitCostUsd)}` : '—'}\nRe-entry fee\t${fig.entryCostUsd !== null ? `−${fmtUsd(fig.entryCostUsd)}` : '—'}\nExit PnL\t${fig.exitPnlUsd !== null ? `${fig.exitPnlUsd >= 0 ? '+' : '−'}${fmtUsd(Math.abs(fig.exitPnlUsd))}` : '—'}`}
             >
               <div className={statLabel}>Cost today</div>
               <div className={statValue}>
@@ -2197,14 +2230,14 @@ function RollReview({
         }`}
         role={marginShort > 0 ? 'alert' : undefined}
       >
-        <span className="flex items-center gap-2 text-[10.5px] font-semibold uppercase tracking-[0.14em] text-ink-400">
+        <span className="flex items-center gap-2 text-[12px] font-normal leading-[14.52px] text-ink-300">
           <StepBadge n={3} />
           Can it fund? {marginOk ? '✓' : ''}
         </span>
         <EstimateRow
           label="Required margin"
           sub="for the new legs"
-          title="Initial margin the two new legs post at the rates they lock, summed — each bucket must carry its own."
+          title="Initial margin the two new legs post, summed."
           value={
             marginNeed !== null ? (
               <>
@@ -2220,7 +2253,7 @@ function RollReview({
         <EstimateRow
           label="Available margin after exit"
           sub="worst-case exit, 5% buffer"
-          title="What is spendable now, plus the margin the exit frees from the old legs, plus what the exit realises if every leg fills at the worst rate its tolerance allows, less the exit's fee — then 5% off for safety."
+          title="Spendable now + margin the exit frees + worst-case exit PnL − exit fee, less 5% for safety."
           value={
             availableAfter !== null ? (
               <>
@@ -2269,7 +2302,7 @@ function RollReview({
           tone="cyan"
           disabled={!canConfirm}
           onConfirm={run}
-          title="Press and hold: closes the two rate legs at market, then opens them at the new maturity"
+          title="Press and hold to close the two Boros legs and reopen them at the new maturity."
         >
           {busy ? 'Rolling…' : 'Roll over'}
         </HoldToConfirmButton>
@@ -2433,7 +2466,7 @@ function RollOption({
             )}
             <span className="ml-1.5 text-[12px] font-normal text-ink-300">fixed</span>
           </span>
-          <span className="num text-[11.5px] text-ink-400" title="The new maturity — how long the rolled legs run, and the day they settle">
+          <span className="num text-[11.5px] text-ink-400" title="The day the rolled legs settle.">
             {Math.max(0, Math.ceil((target.maturity - nowSec) / 86_400))}d ({fmtDateLocal(target.maturity)})
           </span>
         </span>
@@ -2446,7 +2479,7 @@ function RollOption({
       {selected && (
         <div className={`border-t border-ink-800 px-3 pb-3 pt-2.5 ${settling}`}>
           <div className="grid grid-cols-3 gap-x-4">
-            <div title="The spread the new legs would lock, on notional, from the live books: what the receive leg locks minus what the pay leg locks">
+            <div title="Receive leg minus pay leg, on notional, from the live books.">
               <div className={statLabel}>Locked spread</div>
               <div className={statValue}>
                 {v.spreadApr !== null ? (
@@ -2459,8 +2492,8 @@ function RollOption({
             <div
               title={
                 v.grossByMaturityUsd !== null
-                  ? `${fmtUsd(v.grossByMaturityUsd)} of carry to ${fmtDateLocal(target.maturity)}, less ${v.totalCostUsd !== null ? fmtUsd(v.totalCostUsd) : 'the'} of fees, ${v.exitPnlUsd !== null ? `${v.exitPnlUsd >= 0 ? 'plus' : 'less'} ${fmtUsd(Math.abs(v.exitPnlUsd))} realised closing the old legs` : 'plus the PnL of closing the old legs'}`
-                  : 'Carry to the new maturity, less the fees paid to get into it, plus the PnL of closing the old legs'
+                  ? `Carry to ${fmtDateLocal(target.maturity)}\t${fmtUsd(v.grossByMaturityUsd)}\nFees\t${v.totalCostUsd !== null ? `−${fmtUsd(v.totalCostUsd)}` : '—'}\nExit PnL\t${v.exitPnlUsd !== null ? `${v.exitPnlUsd >= 0 ? '+' : '−'}${fmtUsd(Math.abs(v.exitPnlUsd))}` : '—'}`
+                  : 'Carry to the new maturity − fees + exit PnL.'
               }
             >
               <div className={statLabel}>Est. earnings by maturity</div>
@@ -2475,8 +2508,8 @@ function RollOption({
             <div
               title={
                 v.newBorosImUsd !== null
-                  ? `Perp margin behind this size ${fmtUsd(v.perpImUsd)} (the perps themselves are untouched) + fresh Boros margin ${fmtUsd(v.newBorosImUsd)}`
-                  : 'Perp margin behind this size (the perps themselves are untouched) + the fresh Boros margin the new legs need'
+                  ? `Perp margin\t${fmtUsd(v.perpImUsd)}\nNew Boros margin\t${fmtUsd(v.newBorosImUsd)}`
+                  : 'Perp margin + new Boros margin.'
               }
             >
               <div className={statLabel}>Capital</div>
@@ -2500,7 +2533,7 @@ function RollOption({
               )}
               <span
                 className="ml-1 cursor-help text-ink-500"
-                title={`Exit fee ${v.exitCostUsd !== null ? `−${fmtUsd(v.exitCostUsd)}` : '—'} · Re-entry fee ${v.entryCostUsd !== null ? `−${fmtUsd(v.entryCostUsd)}` : '—'} · Exit PnL ${v.exitPnlUsd !== null ? `${v.exitPnlUsd >= 0 ? '+' : '−'}${fmtUsd(Math.abs(v.exitPnlUsd))}` : '—'} (what closing the old legs at today's rates realises of their remaining locked spread). All counted in the rate and the earnings above.`}
+                title={`Exit fee\t${v.exitCostUsd !== null ? `−${fmtUsd(v.exitCostUsd)}` : '—'}\nRe-entry fee\t${v.entryCostUsd !== null ? `−${fmtUsd(v.entryCostUsd)}` : '—'}\nExit PnL\t${v.exitPnlUsd !== null ? `${v.exitPnlUsd >= 0 ? '+' : '−'}${fmtUsd(Math.abs(v.exitPnlUsd))}` : '—'}\n* All counted in the rate and the earnings above.`}
               >
                 ⓘ
               </span>
@@ -2542,7 +2575,10 @@ function PerpOnlyPairCard({
   const both = needLong && needShort;
   const held = pair.longYu ?? pair.shortYu;
   const cell = 'border-b border-ink-850 px-2.5 py-2';
-  const pill = 'btn !rounded-full !bg-transparent !px-3.5 !py-1 !text-[12.5px]';
+  // The mock's row actions: the house outline at the compact size. The old
+  // full-round pill was this app's own shape; dapp-nitro keeps the 5px radius
+  // on every button, and reserves colour for what the action does.
+  const pill = 'btn !h-[30px] !px-3 !text-[12px]';
   const sizeText = (n: number) => sizeLabel(n, pair.unit, base);
   const sideChip = (side: 'LONG' | 'SHORT') => (
     <Chip sm tone={side === 'LONG' ? 'green' : 'red'}>
@@ -2552,7 +2588,7 @@ function PerpOnlyPairCard({
   const legName = (venue: string, kind: 'perp' | 'yu', side: 'LONG' | 'SHORT') => (
     <span className="inline-flex items-center gap-[7px]">
       <span className="font-medium text-ink-50">{prettyVenue(venue)}</span>
-      <span className={`text-[10px] font-semibold uppercase tracking-[0.1em] ${kind === 'yu' ? 'text-link' : 'text-ink-400'}`}>
+      <span className={`rounded-full px-2 py-[3px] text-[10px] font-semibold tracking-[0.06em] ${kind === 'yu' ? 'bg-info/[0.16] text-pastel-blue' : 'bg-wash/[0.10] text-ink-300'}`}>
         {kind === 'yu' ? 'Boros' : 'CrossEx'}
       </span>
       {sideChip(side)}
@@ -2604,50 +2640,55 @@ function PerpOnlyPairCard({
               <button
                 type="button"
                 aria-expanded={open}
-                className="inline-flex min-w-0 flex-wrap items-center gap-[7px] text-left text-[13.5px] font-semibold leading-none text-ink-50"
+                className="flex min-w-0 flex-col items-start gap-1.5 text-left text-[13.5px] font-semibold leading-none text-ink-50"
                 onClick={(e) => {
                   e.stopPropagation();
                   setOpen((v) => !v);
                 }}
               >
-                <span className="inline-flex items-baseline gap-[5px]">
-                  <span className="text-[9.5px] font-semibold tracking-[0.1em] text-grass">L</span>
+                <span className="inline-flex min-w-0 flex-wrap items-center gap-[7px]">
+                <span className="inline-flex items-center gap-[6px]">
+                  <VenueIcon venue={pair.longVenue} size={18} />
                   {prettyVenue(pair.longVenue)}
+                  <span className="text-[9.5px] font-semibold tracking-[0.1em] text-grass">LONG</span>
                 </span>
                 <span className="text-ink-600">/</span>
-                <span className="inline-flex items-baseline gap-[5px]">
-                  <span className="text-[9.5px] font-semibold tracking-[0.1em] text-guava">S</span>
+                <span className="inline-flex items-center gap-[6px]">
+                  <VenueIcon venue={pair.shortVenue} size={18} />
                   {prettyVenue(pair.shortVenue)}
+                  <span className="text-[9.5px] font-semibold tracking-[0.1em] text-guava">SHORT</span>
                 </span>
                 <Chip
                   sm
                   tone="amber"
                   className="!font-medium"
-                  title="These two perps cancel each other's price risk, but the rate side behind them is not there — so they pay and receive FLOATING funding and lock nothing"
+                  title="No Boros leg behind these perps, so no rate is locked."
                 >
                   {both ? 'Boros legs missing' : 'Boros leg missing'}
                 </Chip>
+                </span>
+                {/* The maturity rides under the venues, as on a full pair. */}
+                <span className="num text-[11.5px] font-normal leading-none text-ink-400">
+                  {held ? (
+                    <span title="The one rate leg this unit still has settles here">
+                      matures {fmtDateLocal(held.maturity)} · {daysLeftText(held.maturity, nowSec)}
+                    </span>
+                  ) : (
+                    <span className="text-ink-600">no rate leg</span>
+                  )}
+                </span>
               </button>
             </td>
-            <td className="num whitespace-nowrap px-3 text-[13px] text-ink-200">
-              {held ? (
-                <span title="The one rate leg this unit still has settles here">
-                  {fmtDateLocal(held.maturity)} <span className="text-ink-400">· {daysLeftText(held.maturity, nowSec)}</span>
-                </span>
-              ) : (
-                <span className="text-ink-600">—</span>
-              )}
-            </td>
-            <td className="num whitespace-nowrap px-3 text-right text-[13px] text-ink-50" title={`${exactUsd(pair.notionalUsd)} — ${exactSize(pair.size, pair.unit, base)} per side`}>
+            <td className="num whitespace-nowrap px-3 text-right text-[14px] font-medium text-ink-50" title={`Notional\t${exactUsd(pair.notionalUsd)}\nSize per side\t${exactSize(pair.size, pair.unit, base)}`}>
               {fmtUsdCompact(pair.notionalUsd)}
             </td>
-            <td className="num whitespace-nowrap px-3 text-right text-[13px] text-ink-50" title={`${exactUsd(pair.imUsd)} — today's initial margin on these legs`}>
+            <td className="num whitespace-nowrap px-3 text-right text-[14px] font-medium text-ink-50" title={`Initial margin\t${exactUsd(pair.imUsd)}`}>
               {fmtUsdCompact(pair.imUsd)}
             </td>
             <td className="px-3 text-right text-[13px] text-ink-600" title="No rate is locked until both Boros legs are open">—</td>
-            <td className="px-3 text-right text-[13px] text-ink-600" title="No rate is locked, so there is no profit to estimate">—</td>
+            <td className="px-3 text-right text-[13px] text-ink-600" title="No rate is locked.">—</td>
             <td className="whitespace-nowrap pl-3 pr-4 text-right">
-              <span aria-hidden className={`inline-block text-ink-400 transition-transform ${open ? 'rotate-180' : ''}`}>
+              <span aria-hidden className={`pp-chevron transition-transform ${open ? 'rotate-180' : ''}`}>
                 <ChevronIcon />
               </span>
             </td>
@@ -2655,7 +2696,7 @@ function PerpOnlyPairCard({
         </tbody>
       </table>
       {open && (
-        <div className="border-t border-ink-800 px-4 pb-4 pt-3">
+        <div className="px-4 pb-5 pt-3">
           <div className="overflow-x-auto rounded border border-ink-700">
             <table className="w-full border-collapse text-[12.5px]">
               <thead>
@@ -2781,7 +2822,7 @@ function UngroupedCard({
                 }}
               >
                 <span className="text-[13.5px] font-semibold leading-none text-ink-50">Ungrouped legs</span>
-                <Chip sm tone="amber" title="These legs are in no 4-leg pair: no counterpart at their venue or maturity to lock a rate against">
+                <Chip sm tone="amber" title="No counterpart at the same venue or maturity to pair with.">
                   not in a pair
                 </Chip>
                 <span className="num text-[11.5px] leading-none text-ink-400">
@@ -2792,19 +2833,24 @@ function UngroupedCard({
                     .filter(Boolean)
                     .join(' · ')}
                 </span>
+                {/* Where the dropped "Matures" column used to say it: these
+                    legs share no settlement day, so the fact belongs on the
+                    identity's own line, as the pair rows carry theirs. */}
+                <span className="num text-[11.5px] leading-none text-ink-500" title="Each leg matures on its own day.">
+                  no single maturity
+                </span>
               </button>
             </td>
-            <td className="px-3 text-[13px] text-ink-600" title="No single settlement day: each leg matures on its own">—</td>
-            <td className="num whitespace-nowrap px-3 text-right text-[13px] text-ink-50" title={`${exactUsd(notionalUsd)} — ${exactSize(size, unit, base)} unpaired`}>
+            <td className="num whitespace-nowrap px-3 text-right text-[14px] font-medium text-ink-50" title={`Notional\t${exactUsd(notionalUsd)}\nUnpaired size\t${exactSize(size, unit, base)}`}>
               {fmtUsdCompact(notionalUsd)}
             </td>
-            <td className="num whitespace-nowrap px-3 text-right text-[13px] text-ink-50" title={`${exactUsd(imUsd)} — today's initial margin on these legs`}>
+            <td className="num whitespace-nowrap px-3 text-right text-[14px] font-medium text-ink-50" title={`Initial margin\t${exactUsd(imUsd)}`}>
               {fmtUsdCompact(imUsd)}
             </td>
-            <td className="px-3 text-right text-[13px] text-ink-600" title="No 4-leg unit, no locked rate: a lone YU earns its own fixed rate, a lone perp pays floating funding">—</td>
-            <td className="px-3 text-right text-[13px] text-ink-600" title="No 4-leg unit, so there is no profit to estimate">—</td>
+            <td className="px-3 text-right text-[13px] text-ink-600" title="Not in a pair, so no rate is locked.">—</td>
+            <td className="px-3 text-right text-[13px] text-ink-600" title="Not in a pair.">—</td>
             <td className="pl-3 pr-4 text-right">
-              <span aria-hidden className={`inline-block text-ink-400 transition-transform ${open ? 'rotate-180' : ''}`}>
+              <span aria-hidden className={`pp-chevron transition-transform ${open ? 'rotate-180' : ''}`}>
                 <ChevronIcon />
               </span>
             </td>
@@ -2813,7 +2859,7 @@ function UngroupedCard({
       </table>
 
       {open && (
-        <div className="border-t border-ink-800">
+        <div>
           <table className="w-full min-w-[880px] table-fixed border-collapse text-[12.5px] [&_td]:border-b [&_td]:border-ink-800/70 [&_td]:px-3 [&_td]:py-[9px] [&_td:first-child]:pl-4 [&_td:last-child]:pr-4 [&_tr:last-child_td]:border-b-0">
             <colgroup>
               <col style={{ width: '30%' }} />
@@ -2823,7 +2869,7 @@ function UngroupedCard({
               <col style={{ width: '18%' }} />
             </colgroup>
             <thead>
-              <tr className="bg-ink-900/60 [&>th]:px-3 [&>th]:py-2 [&>th]:text-[10px] [&>th]:font-semibold [&>th]:uppercase [&>th]:tracking-[0.12em] [&>th]:text-ink-500 [&>th:first-child]:pl-4 [&>th:last-child]:pr-4">
+              <tr className="bg-ink-900/60 [&>th]:px-3 [&>th]:py-2.5 [&>th]:text-[12px] [&>th]:font-normal [&>th]:text-ink-300 [&>th:first-child]:pl-4 [&>th:last-child]:pr-4">
                 <th className="text-left">Leg</th>
                 <th className="text-right">Size</th>
                 <th className="text-right">Locked</th>
@@ -2850,7 +2896,7 @@ function UngroupedCard({
                       <span title={exactSize(sizeIn(l, l.unit), l.unit, base)}>{sizeLabel(sizeIn(l, l.unit), l.unit, base)}</span>
                       <span className="ml-1 text-ink-500">({fmtUsdCompact(l.notionalUsd)})</span>
                     </td>
-                    <td className="num text-right text-ink-600" title="A perp locks no rate — it pays or receives floating funding">
+                    <td className="num text-right text-ink-600" title="A perp locks no rate.">
                       —
                     </td>
                     <td className="num text-right text-ink-100" title={exactUsd(l.imUsd)}>
@@ -2864,7 +2910,7 @@ function UngroupedCard({
                           ? 'Part of this leg is in a pair — close it from its funding bundle'
                           : !live
                             ? 'Live position not loaded yet'
-                            : 'Close this perp leg — reduce-only at mark',
+                            : 'Close this perp leg, reduce-only.',
                       )}
                     </td>
                   </tr>
@@ -2881,7 +2927,7 @@ function UngroupedCard({
                         kind="boros"
                         name={prettyVenue(l.venue)}
                         sub={
-                          <span title="Maturity — no counterpart at the other venue settles on this day">
+                          <span title="Maturity. No counterpart settles on this day.">
                             {fmtDateLocal(l.maturity)}
                             {days > 0 && (
                               <>
@@ -2898,12 +2944,12 @@ function UngroupedCard({
                       <span title={exactSize(sizeIn(l, l.unit), l.unit, base)}>{sizeLabel(sizeIn(l, l.unit), l.unit, base)}</span>
                       <span className="ml-1 text-ink-500">({fmtUsdCompact(l.notionalUsd)})</span>
                       {!whole(l.share) && (
-                        <span className="ml-1 text-ink-500" title="The rest of this leg is in a pair; only this slice is unpaired">
+                        <span className="ml-1 text-ink-500" title="Only this slice is unpaired.">
                           ({fmtPct(l.share)})
                         </span>
                       )}
                     </td>
-                    <td className="num text-right font-semibold" title="The fixed rate this leg locks on its own, signed by side (+ receives, − pays), net of settlement fees">
+                    <td className="num text-right font-semibold" title="The fixed rate this leg locks, net of settlement fees. + receives, − pays.">
                       <SignedNumber value={l.lockedApr} format={fmtPct} />
                     </td>
                     <td className="num text-right text-ink-100" title={exactUsd(l.imUsd)}>
@@ -2942,9 +2988,10 @@ function DeficitChip({ gap, base }: { gap: HedgeGapRow; base: string }) {
     <Chip
       sm
       tone="amber"
+      className="num"
       title={`This leg is ${sizeLabel(gap.size, gap.unit, base)} short of its partner (${sizeLabel(gap.want, gap.unit, base)}) — open ${gapAsk(gap, base)} to cover it`}
     >
-      deficit {sizeLabel(gap.size, gap.unit, base)}
+      missing {sizeLabel(gap.size, gap.unit, base)}
     </Chip>
   );
 }
@@ -2960,9 +3007,9 @@ function MissingRow({ gap, base, onOpen, asPair }: { gap: HedgeGapRow; base: str
     <tr className="opacity-50">
       <td className="whitespace-nowrap">
         <LegIdentity
+          name={prettyVenue(gap.venue)}
           kind={gap.leg}
           dim
-          name={prettyVenue(gap.venue)}
           sub="not open yet"
           chips={<Chip sm tone="amber">missing</Chip>}
         />
@@ -2979,7 +3026,7 @@ function MissingRow({ gap, base, onOpen, asPair }: { gap: HedgeGapRow; base: str
           type="button"
           className="btn-ghost-xs !text-gold hover:!border-gold/50"
           disabled={!onOpen}
-          title={onOpen ? (asPair ? 'Both legs of this side are missing — arms the PAIR ticket with the two of them' : `Arms the order ticket with ${gapAsk(gap, base)}`) : 'Order ticket unavailable here'}
+          title={onOpen ? (asPair ? 'Opens the pair ticket with both missing legs.' : `Opens the order ticket with ${gapAsk(gap, base)}.`) : 'Order ticket unavailable here'}
           onClick={onOpen}
         >
           {asPair ? `open both ${boros ? 'Boros' : 'perp'} legs →` : `open ${boros ? 'Boros' : 'perp'} leg →`}
@@ -3055,47 +3102,64 @@ export function LegEditModal({
   };
   return (
     <Modal title={`Edit leg — ${label}`} onClose={onClose} widthClass="w-[460px]">
-      <p className="mb-4 text-[11.5px] text-ink-300">
+      <p className="mb-5 text-[12px] leading-[1.6] text-ink-300">
         What part of this leg is the funding farm. Everything else is set aside in the
         Excluded section and leaves the hedge, PnL and capital.
       </p>
-      <div role="radiogroup" aria-label="Include" className="mb-4 flex flex-col gap-2">
-        <label className="flex cursor-pointer items-center gap-2 text-xs text-ink-100">
-          <input type="radio" name="leg-edit-mode" className="chk" checked={mode === 'all'} onChange={() => setMode('all')} />
-          Include all — {fmtTokenQty(legQty, unit)} at {showEntry(entry)}
-        </label>
-        <label className="flex cursor-pointer items-center gap-2 text-xs text-ink-100">
-          <input type="radio" name="leg-edit-mode" className="chk" checked={mode === 'portion'} onChange={() => setMode('portion')} />
-          Exclude a portion
-        </label>
+      <div role="radiogroup" aria-label="Include" className="seg seg-fill seg-lg mb-5 flex w-full">
+        {(
+          [
+            ['all', 'Include all'],
+            ['portion', 'Exclude a portion'],
+          ] as const
+        ).map(([value, text]) => (
+          <label
+            key={value}
+            data-active={mode === value}
+            className="seg-btn flex-1 cursor-pointer has-[:focus-visible]:ring-1 has-[:focus-visible]:ring-ink-300"
+          >
+            <input
+              type="radio"
+              name="leg-edit-mode"
+              className="sr-only"
+              checked={mode === value}
+              onChange={() => setMode(value)}
+            />
+            {text}
+          </label>
+        ))}
       </div>
       {mode === 'portion' && (
-        <div className="mb-4 grid grid-cols-2 gap-3">
+        <div className="mb-5 grid grid-cols-2 gap-3">
           <label className="flex flex-col gap-1.5">
-            <span className={microLabelClass}>Exclude ({unit})</span>
-            <span className="flex items-center gap-1.5">
+            <span className="text-[12px] text-ink-50">Exclude ({unit})</span>
+            <span
+              className={`flex h-9 items-center gap-1 rounded border bg-wash/[0.05] px-2.5 focus-within:border-info/70 ${
+                qtyStr !== '' && !qtyOk ? 'border-guava/60' : 'border-ink-800/50'
+              }`}
+            >
               <input
-                className={`input num !py-1.5 text-xs ${qtyStr !== '' && !qtyOk ? 'border-guava/60' : ''}`}
+                className="num min-w-0 flex-1 bg-transparent text-[14px] font-semibold text-ink-50 outline-none placeholder:text-ink-500"
                 inputMode="decimal"
                 autoFocus
                 value={qtyStr}
                 onChange={(e) => setQtyStr(e.target.value)}
                 aria-label={`Quantity to exclude (${unit})`}
               />
-              <button type="button" className="btn-ghost-xs whitespace-nowrap" onClick={() => setQtyStr(String(legQty))} title="Exclude the whole leg">
+              <button type="button" className="btn-link shrink-0 !text-[12px] font-medium" onClick={() => setQtyStr(String(legQty))} title="Exclude the whole leg">
                 all
               </button>
             </span>
           </label>
           <label className="flex flex-col gap-1.5">
-            <span className={microLabelClass}>{entryKind === 'rate' ? 'at fixed rate (%)' : 'at price (USD)'}</span>
+            <span className="text-[12px] text-ink-50">{entryKind === 'rate' ? 'at fixed rate (%)' : 'at price (USD)'}</span>
             <input
-              className="input num !py-1.5 text-xs"
+              className="num h-9 w-full rounded border border-ink-800/50 bg-wash/[0.05] px-2.5 text-[14px] font-semibold text-ink-50 outline-none focus:border-info/70"
               inputMode="decimal"
               value={atStr}
               onChange={(e) => setAtStr(e.target.value)}
               aria-label={entryKind === 'rate' ? 'Rate the excluded slice was locked at' : 'Price the excluded slice was opened at'}
-              title="The remainder's entry becomes the weighted residual once this slice is carved out at its own level. Leave it at the leg's average for a plain pro-rata split."
+              title="The level the excluded slice was opened at. The rest of the leg re-averages around it."
             />
           </label>
         </div>
@@ -3105,35 +3169,40 @@ export function LegEditModal({
            settlements the farm never earned. The date says where this
            position starts; everything earlier on this market is dropped
            from its history — settlements, fees and trade PnL alike. */
-        <label className="mb-4 flex flex-col gap-1.5">
-          <span className={microLabelClass}>Counted from (optional)</span>
-          <span className="flex items-center gap-2">
+        <label className="mb-5 flex flex-col gap-2">
+          <span className="text-[12px] text-ink-50">
+            Counted from <span className="text-ink-500">(optional)</span>
+          </span>
+          <span className="flex items-center gap-3">
             <input
               type="date"
-              className="input w-40 px-2 py-1 text-xs"
+              className="input !w-[170px]"
               value={sinceStr}
               max={toDateInput(Math.floor(Date.now() / 1000))}
               onChange={(e) => setSinceStr(e.target.value)}
               aria-label="Date this position is counted from"
-              title="History on this market before this date (local midnight) belongs to an earlier position and is left out. Empty = from the asset's start date."
+              title="History before this date is left out. Empty = the asset's start date."
             />
             {sinceStr && (
-              <button type="button" className="btn-ghost-xs" onClick={() => setSinceStr('')}>
+              <button type="button" className="btn-link !text-ink-300 hover:!text-ink-200" onClick={() => setSinceStr('')}>
                 clear
               </button>
             )}
           </span>
         </label>
       )}
-      <div className="mb-4 rounded border border-ink-700 bg-ink-100/[0.03] px-3 py-2 text-xs">
+      <div className="mb-5 rounded bg-wash/[0.05] px-4 py-3 text-[12px] leading-[1.5]">
         {mode === 'all' ? (
-          <span className="text-ink-200">The farm keeps the whole leg.</span>
+          <span className="num text-ink-100">
+            The farm keeps the whole leg — <span className="font-semibold text-ink-50">{fmtTokenQty(legQty, unit)}</span> at{' '}
+            <span className="font-semibold text-ink-50">{showEntry(entry)}</span>.
+          </span>
         ) : whole ? (
           <span className="text-gold">The whole leg is excluded — it moves to the Excluded section.</span>
         ) : preview ? (
-          <span className="num text-ink-200">
-            Farm keeps <span className="text-ink-50">{fmtTokenQty(legQty * preview.keep, unit)}</span> at{' '}
-            <span className="text-ink-50">{showEntry(preview.entry)}</span>
+          <span className="num text-ink-100">
+            Farm keeps <span className="font-semibold text-ink-50">{fmtTokenQty(legQty * preview.keep, unit)}</span> at{' '}
+            <span className="font-semibold text-ink-50">{showEntry(preview.entry)}</span>
             {preview.at !== null && preview.entry !== entry && (
               <span className="text-ink-400"> (was {showEntry(entry)})</span>
             )}
@@ -3142,11 +3211,11 @@ export function LegEditModal({
           <span className="text-ink-400">Enter how much to exclude.</span>
         )}
       </div>
-      <div className="flex items-center justify-end gap-2">
-        <button type="button" className="btn" onClick={onClose}>
+      <div className="flex items-center gap-2">
+        <button type="button" className="btn flex-1 !border-transparent !bg-wash/10 hover:!bg-wash/[0.15]" onClick={onClose}>
           Cancel
         </button>
-        <button type="button" className="btn-primary" disabled={mode === 'portion' && !qtyOk} onClick={save}>
+        <button type="button" className="btn-primary flex-1" disabled={mode === 'portion' && !qtyOk} onClick={save}>
           Save
         </button>
       </div>
@@ -3180,7 +3249,7 @@ function EditCell({
         type="button"
         aria-label={`Edit ${props.label}`}
         className={`btn-ghost-xs !py-[5px] ${has ? '!text-gold' : ''}`}
-        title={has ? 'Part of this leg is excluded — edit or restore' : 'Exclude some or all of this leg from the farm'}
+        title={has ? 'Part of this leg is excluded.' : 'Exclude some or all of this leg from the farm'}
         onClick={() => setOpen(true)}
       >
         Edit
@@ -3208,7 +3277,7 @@ function OpenMoreButton({ gap, base, onOpen }: { gap: HedgeGapRow; base: string;
       type="button"
       className="btn-ghost-xs !text-gold hover:!border-gold/50"
       disabled={!onOpen}
-      title={onOpen ? `Arms the order ticket with ${gapAsk(gap, base)}` : 'Order ticket unavailable here'}
+      title={onOpen ? `Opens the order ticket with ${gapAsk(gap, base)}.` : 'Order ticket unavailable here'}
       onClick={onOpen}
     >
       open more
@@ -3230,28 +3299,72 @@ function LegIdentity({
   kind: 'perp' | 'boros';
   /** A finished or absent leg — drawn quieter. */
   dim?: boolean;
-  name: string;
+  /** The venue, for rows that sit in a MIXED list (ungrouped legs, closed
+   * bundles). Omitted inside a bundle: every leg there is the same exchange,
+   * which the bundle row above already names, so repeating it per row said
+   * nothing new — the same argument as the side chip. With no name the
+   * sub-line is promoted, so the cell never leads with a blank line. */
+  name?: string;
   sub: React.ReactNode;
   chips?: React.ReactNode;
 }) {
   const boros = kind === 'boros';
+  const named = Boolean(name);
   return (
     <span className="inline-flex items-center gap-3 leading-none">
-      <Chip
-        sm
-        tone={boros ? 'link' : 'neutral'}
-        className={`w-[52px] justify-center !px-0 !py-[3px] !text-[11px] ${dim ? 'opacity-60' : ''}`}
+      {/* The mock's leg-kind marker is a NEUTRAL grey pill — it says which
+          kind of leg this row is, it is not a status, so it carries no tone.
+          A leg that isn't there yet gets the dashed outline instead of a
+          fill, which is how the mock draws an absent thing. */}
+      <span
+        className={`pp-pill w-[52px] shrink-0 justify-center ${
+          dim ? 'border border-dashed border-ink-300/50 bg-transparent text-ink-400' : ''
+        }`}
       >
         {boros ? 'Boros' : 'Perp'}
-      </Chip>
+      </span>
       <span className="flex flex-col gap-1">
         <span className="inline-flex items-center gap-[7px]">
-          <span className={`text-[12.5px] font-medium leading-none ${dim ? 'text-ink-200' : 'text-ink-50'}`}>{name}</span>
+          {named ? (
+            <span className={`text-[12.5px] font-medium leading-none ${dim ? 'text-ink-200' : 'text-ink-50'}`}>{name}</span>
+          ) : (
+            <span className={`num text-[12.5px] font-medium leading-none ${dim ? 'text-ink-200' : 'text-ink-50'}`}>{sub}</span>
+          )}
           {chips}
         </span>
-        <span className="num text-[11px] leading-none text-ink-400">{sub}</span>
+        {named && <span className="num text-[11px] leading-none text-ink-400">{sub}</span>}
       </span>
     </span>
+  );
+}
+
+/** The one header row over a bundles list — the mock's flat table: the column
+ * names live here once, and each bundle under it is a plain hairline row. */
+function BundleListHeader() {
+  return (
+    <div className="overflow-x-auto px-px">
+      <table className="w-full min-w-[880px] table-fixed border-collapse">
+        <BundleColGroup />
+        <thead>
+          <tr className="[&>th]:h-9 [&>th]:px-3 [&>th]:text-[12px] [&>th]:font-normal [&>th]:text-ink-300 [&>th:first-child]:pl-4 [&>th:last-child]:pr-4">
+            <th className="text-left">Venue</th>
+            <th className="text-right">
+              <span className="tip-label" title="Notional of the live perp, or of the Boros legs when there is no perp.">Notional</span>
+            </th>
+            <th className="text-right">
+              <span className="tip-label" title="The fixed rate this venue is hedged at, blended across its live Boros legs, net of settlement fees.">Fixed APR</span>
+            </th>
+            <th className="text-right">
+              <span className="tip-label" title="Perp funding + Boros settlements, net of settlement fees.">Funding settlement</span>
+            </th>
+            <th className="text-right">
+              <span className="tip-label" title="Boros realised rate PnL + perp realised price PnL + perp uPnL.">Trade PnL</span>
+            </th>
+            <th />
+          </tr>
+        </thead>
+      </table>
+    </div>
   );
 }
 
@@ -3261,12 +3374,12 @@ function LegIdentity({
 function BundleColGroup() {
   return (
     <colgroup>
-      <col style={{ width: '25%' }} />
-      <col style={{ width: '13%' }} />
+      <col style={{ width: '24%' }} />
+      <col style={{ width: '12%' }} />
+      <col style={{ width: '14%' }} />
       <col style={{ width: '15%' }} />
-      <col style={{ width: '16%' }} />
-      <col style={{ width: '16%' }} />
-      <col style={{ width: '15%' }} />
+      <col style={{ width: '14%' }} />
+      <col style={{ width: '21%' }} />
     </colgroup>
   );
 }
@@ -3318,31 +3431,31 @@ function PerpRow({
         {/* The side is on the bundle row above; every leg of a bundle
             shares it, so repeating it per row said nothing new. */}
         <LegIdentity
-          kind="perp"
           name={prettyVenue(leg.venue)}
-          sub="CrossEx · hedge"
+          kind="perp"
+          sub="CrossEx"
           chips={deficit && <DeficitChip gap={deficit} base={base} />}
         />
       </td>
       {/* The KEPT slice: the farm's size and its entry once any excluded
           slice is carved out at its own price. The whole leg is on hover. */}
-      <td className="num text-right" title={exFrac > 0 ? `Whole leg ${fmtTokenQty(leg.qty, base)} (${fmtUsdCompact(leg.notionalUsd)}) — ${fmtTokenQty(exFrac * leg.qty, base)} excluded` : undefined}>
+      <td className="num text-right" title={exFrac > 0 ? `Whole leg\t${fmtTokenQty(leg.qty, base)} (${fmtUsdCompact(leg.notionalUsd)})\nExcluded\t${fmtTokenQty(exFrac * leg.qty, base)}` : undefined}>
         {fmtTokenQty(leg.qty * slice.keep, base)}
         <span className="ml-1 text-ink-500">({fmtUsdCompact(leg.notionalUsd * slice.keep)})</span>
         {exFrac > 0 && <span className="ml-1 text-gold" title="Part of this leg is excluded from the farm">of {fmtTokenQty(leg.qty, base)}</span>}
       </td>
-      <td className="num text-right text-ink-100" title={slice.at !== null && slice.entry !== leg.entryPrice ? `Venue average ${fmtUsd(leg.entryPrice)} — the remainder's entry after carving out ${fmtTokenQty(exFrac * leg.qty, base)} at ${fmtUsd(slice.at)}` : undefined}>
+      <td className="num text-right text-ink-100" title={slice.at !== null && slice.entry !== leg.entryPrice ? `Venue average\t${fmtUsd(leg.entryPrice)}\nExcluded\t${fmtTokenQty(exFrac * leg.qty, base)} at ${fmtUsd(slice.at)}` : undefined}>
         {leg.entryPrice > 0 && leg.markPrice > 0
           ? `${fmtUsd(slice.entry)} → ${fmtUsd(leg.markPrice)}`
           : '—'}
       </td>
       <td
         className="num text-right"
-        title={`Venue cumulative funding on this position · fees ${fmtUsd(leg.feesUsd)} · IM ${fmtUsd(leg.imUsd)}`}
+        title={`Funding\t${fmtUsd(leg.fundingUsd)}\nFees\t${fmtUsd(leg.feesUsd)}\nInitial margin\t${fmtUsd(leg.imUsd)}`}
       >
         <SignedNumber value={leg.fundingUsd} format={fmtUsd} />
       </td>
-      <td className="num text-right" title="Unrealised price PnL at today's mark — part of the perp basis, not of funding">
+      <td className="num text-right" title="Unrealised price PnL at today's mark.">
         <SignedNumber value={leg.upnlUsd} format={fmtUsd} />
       </td>
       <td className="whitespace-nowrap text-right">
@@ -3355,7 +3468,7 @@ function PerpRow({
             type="button"
             aria-label={`Close ${prettyVenue(leg.venue)} ${leg.side} perp`}
             className="btn-ghost-xs !py-[5px] hover:!border-guava/50 hover:!text-guava"
-            title={onClose ? 'Close this perp leg — reduce-only at mark' : 'Live position not loaded yet'}
+            title={onClose ? 'Close this perp leg, reduce-only.' : 'Live position not loaded yet'}
             disabled={!onClose}
             onClick={onClose}
           >
@@ -3404,11 +3517,11 @@ function BorosRow({
     <tr className="group">
       <td className="whitespace-nowrap">
         <LegIdentity
-          kind="boros"
           name={prettyVenue(leg.venue)}
+          kind="boros"
           chips={deficit && <DeficitChip gap={deficit} base={base} />}
           sub={
-            <span title="Maturity — coverage lapses here; the position itself just settles and ends">
+            <span title="Maturity. The leg settles and ends here.">
               {fmtDateLocal(leg.maturity)}
               {(() => {
                 const days = Math.ceil((leg.maturity - Date.now() / 1000) / 86400);
@@ -3423,12 +3536,12 @@ function BorosRow({
           }
         />
       </td>
-      <td className="num text-right" title={exFrac > 0 ? `Whole leg ${fmtTokenQty(leg.sizeToken, leg.collateral)} (${fmtUsdCompact(leg.notionalUsd)}) — ${fmtTokenQty(exFrac * leg.sizeToken, leg.collateral)} excluded` : undefined}>
+      <td className="num text-right" title={exFrac > 0 ? `Whole leg\t${fmtTokenQty(leg.sizeToken, leg.collateral)} (${fmtUsdCompact(leg.notionalUsd)})\nExcluded\t${fmtTokenQty(exFrac * leg.sizeToken, leg.collateral)}` : undefined}>
         {fmtTokenQty(leg.sizeToken * slice.keep, leg.collateral)}
         <span className="ml-1 text-ink-500">({fmtUsdCompact(leg.notionalUsd * slice.keep)})</span>
         {exFrac > 0 && <span className="ml-1 text-gold" title="Part of this leg is excluded from the farm">of {fmtTokenQty(leg.sizeToken, leg.collateral)}</span>}
       </td>
-      <td className="num text-right text-ink-100" title={slice.at !== null && slice.entry !== leg.entryApr ? `Venue average ${fmtPct(leg.entryApr)} — the remainder's rate after carving out ${fmtTokenQty(exFrac * leg.sizeToken, leg.collateral)} at ${fmtPct(slice.at)}` : undefined}>
+      <td className="num text-right text-ink-100" title={slice.at !== null && slice.entry !== leg.entryApr ? `Venue average\t${fmtPct(leg.entryApr)}\nExcluded\t${fmtTokenQty(exFrac * leg.sizeToken, leg.collateral)} at ${fmtPct(slice.at)}` : undefined}>
         {fmtPct(slice.entry)} → {fmtPct(leg.markApr)}
 
       </td>
@@ -3436,8 +3549,8 @@ function BorosRow({
         className="num text-right"
         title={
           windowedGrossUsd === null
-            ? `No settlements or trades inside this window · MtM ${fmtUsd(leg.mtmUsd)} · IM ${fmtUsd(leg.imUsd)}`
-            : `Funding settlements inside your window, net of their settlement fees — the part of this leg in the Fixed funding bar. Position-lifetime settled ${fmtUsd(leg.settleUsd)} · MtM ${fmtUsd(leg.mtmUsd)} · IM ${fmtUsd(leg.imUsd)}`
+            ? `No settlements in this window\nMtM\t${fmtUsd(leg.mtmUsd)}\nInitial margin\t${fmtUsd(leg.imUsd)}`
+            : `Settled in your window, net of settlement fees\nLifetime settled\t${fmtUsd(leg.settleUsd)}\nMtM\t${fmtUsd(leg.mtmUsd)}\nInitial margin\t${fmtUsd(leg.imUsd)}`
         }
       >
         {windowedGrossUsd === null ? (
@@ -3448,7 +3561,7 @@ function BorosRow({
         {windowedFeesUsd !== null && windowedFeesUsd > 0 && (
           <div
             className="text-[10px] text-ink-500"
-            title="Settlement fees this market charged inside your window — already taken out of the figure above, and out of the locked rate. Shown so the deduction is visible; trade fees are separate and sit in Cost."
+            title="Settlement fees charged in your window. Already taken out of the figure above."
           >
             settle fees −{fmtUsd(windowedFeesUsd)}
           </div>
@@ -3457,7 +3570,7 @@ function BorosRow({
       {/* Realised rate PnL from a partial close — its own column, never
           folded into the settlement figure, so the settled column sums to
           the Fixed funding bar and this one to the Boros trade bar. */}
-      <td className="num text-right" title="Realised rate PnL from closing part of this leg early, before its trade fee (the fee sits in Cost)">
+      <td className="num text-right" title="Realised rate PnL from closing part of this leg early, before its trade fee.">
         {windowedGrossUsd !== null && Math.abs(windowedGrossUsd.trade) >= 0.005 ? (
           <SignedNumber value={windowedGrossUsd.trade} format={fmtUsd} />
         ) : (
@@ -3519,18 +3632,18 @@ function InactiveBorosRow({
     <tr className="text-ink-300">
       <td className="whitespace-nowrap">
         <LegIdentity
+          name={prettyVenue(h.venue)}
           kind="boros"
           dim
-          name={prettyVenue(h.venue)}
           sub={fmtDateLocal(h.maturity)}
           chips={
-            <Chip sm tone="neutral" title={matured ? `Matured ${fmtDateLocal(h.maturity)}` : `Closed early — was due ${fmtDateLocal(h.maturity)}`}>
+            <Chip sm tone="neutral" title={matured ? `Matured ${fmtDateLocal(h.maturity)}` : `Closed early. Was due ${fmtDateLocal(h.maturity)}`}>
               {matured ? 'matured' : 'closed'}
             </Chip>
           }
         />
       </td>
-      <td className="num text-right" title="Largest position seen at any settlement in the window">
+      <td className="num text-right" title="Largest size held in the window.">
         {(h.peakNotionalUsd ?? 0) > 0 ? (
           <>
             {fmtTokenQty((h.peakSizeToken ?? 0) * keep, unit)}
@@ -3543,7 +3656,7 @@ function InactiveBorosRow({
       {/* The rate it was locked at — the number a matured leg is judged by.
           Known while the chain still lists the position; a market closed
           early and gone from the account has no record left to read. */}
-      <td className="num text-right" title={entryApr !== null ? `Locked ${fmtPct(entryApr)} fixed${side ? `, ${side === 'SHORT' ? 'received' : 'paid'} to maturity` : ''} — size-weighted over the opening fills` : 'No opening fill inside this window, so the locked rate cannot be replayed'}>
+      <td className="num text-right" title={entryApr !== null ? `Locked ${fmtPct(entryApr)} fixed${side ? `, ${side === 'SHORT' ? 'received' : 'paid'}` : ''}.` : 'No opening fill in this window.'}>
         {entryApr !== null ? (
           <>
             {fmtPct(entryApr)}
@@ -3553,13 +3666,13 @@ function InactiveBorosRow({
           <span className="text-ink-600">—</span>
         )}
       </td>
-      <td className="num text-right" title="Funding settlements, net of their settlement fees">
+      <td className="num text-right" title="Settlements, net of settlement fees.">
         <SignedNumber value={h.settleUsd * keep} format={fmtUsd} />
         {h.settleFeeUsd * keep > 0 && (
           <div className="text-[10px] text-ink-500">settle fees −{fmtUsd(h.settleFeeUsd * keep)}</div>
         )}
       </td>
-      <td className="num text-right" title="Realised rate PnL from closing early or partially, before its trade fee">
+      <td className="num text-right" title="Realised rate PnL from closing early, before its trade fee.">
         {Math.abs((h.tradePnlUsd + h.tradeFeeUsd) * keep) >= 0.005 ? (
           <SignedNumber value={(h.tradePnlUsd + h.tradeFeeUsd) * keep} format={fmtUsd} />
         ) : (
@@ -3590,12 +3703,12 @@ function ClosedPerpRow({ row, base }: { row: AssetPerpClosedRow & { symbol: stri
     <tr className="text-ink-300">
       <td className="whitespace-nowrap">
         <LegIdentity
+          name={prettyVenue(row.venue)}
           kind="perp"
           dim
-          name={prettyVenue(row.venue)}
           sub={`CrossEx · ${row.closedAt !== null ? fmtDateLocal(row.closedAt) : '—'}`}
           chips={
-            <Chip sm tone="neutral" title={row.complete ? 'The whole position was closed' : 'Part of the position was closed; the rest is the live row above'}>
+            <Chip sm tone="neutral" title={row.complete ? 'The whole position was closed' : 'Part of the position was closed.'}>
               {row.complete ? 'closed' : 'partial close'}
             </Chip>
           }
@@ -3603,14 +3716,14 @@ function ClosedPerpRow({ row, base }: { row: AssetPerpClosedRow & { symbol: stri
       </td>
       <td className="num text-right">{fmtTokenQty(row.qty, base)}</td>
       <td className="num text-right">{fmtUsd(row.openPx)} → {fmtUsd(row.closePx)}</td>
-      <td className="num text-right" title={`Funding over the position's life · fees ${fmtUsd(row.feesUsd)}`}>
+      <td className="num text-right" title={`Funding\t${fmtUsd(row.fundingUsd)}\nFees\t${fmtUsd(row.feesUsd)}`}>
         {row.dedupedIntoOpen ? (
-          <span className="text-ink-600" title="This slice's funding and fees are booked on the surviving open row">in open ↑</span>
+          <span className="text-ink-600" title="Booked on the open row above.">in open ↑</span>
         ) : (
           <SignedNumber value={row.fundingUsd} format={fmtUsd} />
         )}
       </td>
-      <td className="num text-right" title="Realised price PnL on the close — part of the perp basis">
+      <td className="num text-right" title="Realised price PnL on the close.">
         <SignedNumber value={row.priceUsd} format={fmtUsd} />
       </td>
       <td />
@@ -3707,7 +3820,7 @@ function BundleCard({
   const inactiveCount = b.inactiveBoros.length + b.closedPerps.length;
   const maturities = [...new Set(b.boros.map((l) => l.maturity))].sort((x, y) => x - y);
   return (
-    <div className={`overflow-x-auto rounded-lg border ${b.active ? 'border-ink-700' : 'border-ink-800'} bg-ink-950/40`}>
+    <div className="overflow-x-auto rounded border border-wash/[0.16] bg-wash/[0.03]">
       {/* The bundle row is a one-row table on the SAME column widths as the
           leg table below, so each figure sits over the leg column it sums:
           Notional over Size, Fixed APR over Entry → Mark, and so on. */}
@@ -3715,20 +3828,16 @@ function BundleCard({
         <BundleColGroup />
         <tbody>
           <tr
-            className="cursor-pointer transition-colors hover:bg-ink-850/30 [&>td]:py-3 [&>td]:align-middle"
+            className="cursor-pointer transition-colors hover:bg-wash/[0.03] [&>td]:py-3 [&>td]:align-middle"
             onClick={() => setOpen((v) => !v)}
           >
             <td className="pl-4 pr-3">
+              {/* The VENUE is the row's subject, so it leads at full weight with
+                  its mark; the side rides beside it as a small coloured word
+                  (the mock's `dir-label`). It used to be a boxed chip in a
+                  fixed 64px column ahead of the name, which made the side look
+                  like the subject and pushed every venue off the left edge. */}
               <div className="flex min-w-0 items-center gap-3">
-                {side && (
-                  <Chip
-                    sm
-                    tone={side === 'LONG' ? 'green' : 'red'}
-                    className="w-[64px] shrink-0 justify-center !px-0 !py-[5px] !text-[11px] !font-semibold uppercase tracking-[0.08em]"
-                  >
-                    {side}
-                  </Chip>
-                )}
                 <button
                   type="button"
                   aria-expanded={open}
@@ -3739,13 +3848,27 @@ function BundleCard({
                   }}
                 >
                   <span className="inline-flex flex-wrap items-center gap-[7px]">
+                    <span className={b.active ? undefined : 'opacity-70'}>
+                      <VenueIcon venue={b.venue} size={20} />
+                    </span>
                     <span className={`text-[13.5px] font-semibold leading-none ${b.active ? 'text-ink-50' : 'text-ink-200'}`}>
                       {prettyVenue(b.venue)}
                     </span>
+                    {side && (
+                      <b
+                        className={`text-[11px] font-semibold leading-none tracking-[0.04em] ${
+                          side === 'LONG' ? 'text-grass' : 'text-guava'
+                        }`}
+                      >
+                        {side}
+                      </b>
+                    )}
                     {/* Badges only for a PROBLEM: the card's own "hedged ✓" already
-                        covers the healthy case, and a tick on every row is noise. */}
+                        covers the healthy case, and a tick on every row is noise.
+                        Tags, not a sub-line of amber words — a second line of
+                        text per row cost height for nothing (his call). */}
                     {missing.map((g) => (
-                      <Chip key={g.leg} sm tone="amber" title={`Open ${gapAsk(g, base)} to complete this bundle`}>
+                      <Chip key={g.leg} sm tone="amber" title={`Open ${gapAsk(g, base)} to complete this bundle.`}>
                         {g.leg === 'boros' ? 'Boros leg missing' : 'perp leg missing'}
                       </Chip>
                     ))}
@@ -3769,18 +3892,16 @@ function BundleCard({
                 </button>
               </div>
             </td>
-            <td className="px-3 text-right" title="Notional of the live perp (or of the YU legs when there is no perp)">
-              <div className={statLabel}>Notional</div>
-              <div className={`${statValue} text-ink-50`}>
+            <td className="px-3 text-right" title="Notional of the live perp, or of the Boros legs when there is no perp.">
+              <div className="num text-[14px] font-medium leading-none text-ink-50">
                 {b.notionalUsd > 0 ? fmtUsdCompact(b.notionalUsd) : <span className="text-ink-600">—</span>}
               </div>
             </td>
             <td
               className="px-3 text-right"
-              title="The fixed rate this venue is hedged at, blended across its live YU legs and net of settlement fees. Receive = the YU is short (you receive fixed); pay = long."
+              title="The fixed rate this venue is hedged at, blended across its live Boros legs, net of settlement fees."
             >
-              <div className={statLabel}>Fixed APR</div>
-              <div className={statValue}>
+              <div className="num text-[14px] font-medium leading-none">
                 {b.fixedApr !== null ? (
                   <span className={b.fixedApr >= 0 ? 'text-emerald-300' : 'text-rose-300'}>
                     {b.fixedApr >= 0 ? 'receive ' : 'pay '}
@@ -3793,25 +3914,19 @@ function BundleCard({
             </td>
             <td
               className="px-3 text-right"
-              title={`Perp funding + Boros settlements (net of settle fees), live and finished legs — this venue's share of the Fixed funding bar.${
-                b.feesUsd > 0
-                  ? ` Trading fees on this venue's legs: −${fmtUsd(b.feesUsd)} (perp fees + Boros trade fees), itemised per leg below.`
-                  : ' No trading fees on this venue.'
-              }`}
+              title={`Funding settlement\t${fmtUsd(b.settleUsd)}\nTrading fees\t${b.feesUsd > 0 ? `−${fmtUsd(b.feesUsd)}` : fmtUsd(0)}`}
             >
-              <div className={statLabel}>Funding settlement</div>
-              <div className={statValue}>
+              <div className="num text-[14px] font-medium leading-none">
                 <SignedNumber value={b.settleUsd} format={fmtUsd} />
               </div>
             </td>
             <td
               className="px-3 text-right"
-              title={`Not funding: Boros realised rate PnL + perp realised price PnL on closes + perp uPnL. Funding settlement − fees + this = the bundle's PnL.${
-                multiVenue && Math.abs(b.tradePnlUsd) >= 0.005 ? ' Offsets across venues — the pairs tab reads it per unit.' : ''
+              title={`Boros realised rate PnL + perp realised price PnL + perp uPnL.${
+                multiVenue && Math.abs(b.tradePnlUsd) >= 0.005 ? '\n* Offsets across venues.' : ''
               }`}
             >
-              <div className={statLabel}>Trade PnL</div>
-              <div className={statValue}>
+              <div className="num text-[14px] font-medium leading-none">
                 {Math.abs(b.tradePnlUsd) >= 0.005 ? (
                   <SignedNumber value={b.tradePnlUsd} format={fmtUsd} />
                 ) : (
@@ -3820,7 +3935,7 @@ function BundleCard({
               </div>
             </td>
             <td className="pl-3 pr-4 text-right">
-              <span aria-hidden className={`inline-block text-ink-400 transition-transform ${open ? 'rotate-180' : ''}`}>
+              <span aria-hidden className={`pp-chevron transition-transform ${open ? 'rotate-180' : ''}`}>
                 <ChevronIcon />
               </span>
             </td>
@@ -3829,14 +3944,16 @@ function BundleCard({
       </table>
 
       {open && (
-        <div className="border-t border-ink-800">
+        // The legs hang off their venue: indented, and tied to it by one
+        // continuous rule down the left (the mock's leg sub-rows).
+        <div className="relative border-t border-wash/10 before:absolute before:bottom-3 before:left-[25px] before:top-3 before:w-0.5 before:bg-ink-700 before:content-['']">
           {/* The legs: a nested table on the card's own ground, its header
               on a darker band. Finished legs stay inside their bundle,
               behind the footer's toggle. */}
-          <table className="w-full min-w-[880px] table-fixed border-collapse text-[12.5px] [&_td]:border-b [&_td]:border-ink-800/70 [&_td]:px-3 [&_td]:py-[9px] [&_td:first-child]:pl-4 [&_td:last-child]:pr-4 [&_tr:last-child_td]:border-b-0">
+          <table className="w-full min-w-[880px] table-fixed border-collapse text-[12.5px] [&_td]:border-b [&_td]:border-ink-800/70 [&_td]:px-3 [&_td]:py-[9px] [&_td:first-child]:pl-[46px] [&_td:last-child]:pr-4 [&_tr:last-child_td]:border-b-0">
             <BundleColGroup />
             <thead>
-              <tr className="bg-ink-900/60 [&>th]:px-3 [&>th]:py-2 [&>th]:text-[10px] [&>th]:font-semibold [&>th]:uppercase [&>th]:tracking-[0.12em] [&>th]:text-ink-500 [&>th:first-child]:pl-4 [&>th:last-child]:pr-4">
+              <tr className="[&>th]:px-3 [&>th]:py-2.5 [&>th]:text-[12px] [&>th]:font-normal [&>th]:text-ink-300 [&>th:first-child]:pl-[46px] [&>th:last-child]:pr-4">
                 <th className="text-left">Leg</th>
                 <th className="text-right">Size</th>
                 <th className="text-right">Entry → Mark</th>
@@ -4284,13 +4401,20 @@ export function AssetCard({ group, derived, sinceSec, windowPending, onChangeSin
   })();
 
   return (
-    <div className="card p-4">
+    <div className="rounded border border-wash/[0.16] bg-wash/[0.05] p-5">
       {/* Header */}
       <div className="mb-3 flex flex-wrap items-center gap-2">
-        <span className="rounded-md border border-ink-600 px-2 py-0.5 text-sm font-semibold text-ink-100">
-          {group.base}
+        {/* The mock leads an asset with its coin mark and the ticker at 18px —
+            the card's own title — with the spot price as a quiet note beside
+            it. The old bordered pill made the ticker look like a chip among
+            the status chips that follow it. */}
+        <span className="flex items-center gap-2.5">
+          <TokenIcon symbol={group.base} size={32} />
+          <span className="text-[18px] font-bold leading-none text-ink-50">{group.base}</span>
         </span>
-        {group.priceUsd > 0 && <span className="num text-xs text-ink-500">{fmtUsd(group.priceUsd)}</span>}
+        {group.priceUsd > 0 && (
+          <span className="num text-[12px] text-ink-300">{fmtUsd(group.priceUsd)}</span>
+        )}
         {hasLegs &&
           (derived.perfect ? (
             <Chip
@@ -4298,8 +4422,8 @@ export function AssetCard({ group, derived, sinceSec, windowPending, onChangeSin
               tone="green"
               title={
                 derived.grossPerp > 0 && derived.netPerp !== 0
-                  ? `Every floating leg is covered and the perps cancel within the 2% tolerance. Residual price exposure: net ${derived.netPerp > 0 ? 'LONG' : 'SHORT'} ${sizeLabel(Math.abs(derived.netPerp), venues[0]?.unit ?? 'usd', group.base)}${venues[0]?.unit === 'base' && group.priceUsd > 0 ? ` ≈ ${fmtUsdCompact(Math.abs(derived.netPerp) * group.priceUsd)}` : ''} — live exposure, not zero.`
-                  : 'Every floating leg is covered and the perps cancel each other exactly.'
+                  ? `Every leg is covered and the perps cancel within 2%.\nResidual exposure\t${derived.netPerp > 0 ? 'LONG' : 'SHORT'} ${sizeLabel(Math.abs(derived.netPerp), venues[0]?.unit ?? 'usd', group.base)}${venues[0]?.unit === 'base' && group.priceUsd > 0 ? ` ≈ ${fmtUsdCompact(Math.abs(derived.netPerp) * group.priceUsd)}` : ''}`
+                  : 'Every leg is covered and the perps cancel exactly.'
               }
             >
               hedged ✓
@@ -4308,12 +4432,12 @@ export function AssetCard({ group, derived, sinceSec, windowPending, onChangeSin
             <Chip
               sm
               tone="amber"
-              title={gaps.map((g) => `${prettyVenue(g.venue)}: ${g.kind} — open ${gapAsk(g, group.base)}`).join(' · ')}
+              title={['To complete the hedge', ...gaps.map((g) => `${prettyVenue(g.venue)}\topen ${gapAsk(g, group.base)}`)].join('\n')}
             >
               missing hedge
             </Chip>
           ) : (
-            <Chip sm tone="amber" title="Every floating leg is covered but the perps do not cancel across venues — price risk is live">
+            <Chip sm tone="amber" title="The perps do not cancel across venues. Price risk is live.">
               perps don’t cancel
             </Chip>
           ))}
@@ -4327,7 +4451,7 @@ export function AssetCard({ group, derived, sinceSec, windowPending, onChangeSin
             className="input w-32 px-2 py-1 text-xs"
             value={sinceSec > 0 ? toDateInput(sinceSec) : ''}
             max={toDateInput(Math.floor(Date.now() / 1000))}
-            title={`Count THIS asset's PnL from this date (local midnight). Empty = all time${derived.clockStartSec !== null ? ` — activity starts ${fmtDateLocal(derived.clockStartSec)}` : ''}.`}
+            title={`Count this asset's PnL from this date. Empty = all time.${derived.clockStartSec !== null ? `\nActivity starts\t${fmtDateLocal(derived.clockStartSec)}` : ''}`}
             onChange={(e) => {
               const v = e.target.value;
               const sec = v ? Math.floor(new Date(`${v}T00:00`).getTime() / 1000) : 0;
@@ -4344,28 +4468,45 @@ export function AssetCard({ group, derived, sinceSec, windowPending, onChangeSin
 
       {/* The hero in its own panel, bordered in the accent so it reads as
           the ONE set of numbers; the ledgers below wear the plain hairline. */}
-      <div className="mb-3 rounded border border-info/30 bg-info/[0.04] px-4 pb-1 pt-3.5">
+      <div className="mb-4 rounded border border-wash/[0.07] bg-ink-950/40 px-5 py-[18px]">
         {/* Hero — exactly what he asked to know: PnL (ROI in brackets),
             the CURRENT locked APR, and capital. Carry lives on the stats
             strip below; nothing else competes up here. */}
-        <div className="flex items-end gap-6">
-        <div className="grid min-w-0 flex-1 grid-cols-[repeat(auto-fit,minmax(200px,1fr))] gap-x-7 gap-y-4">
+        {/* Two zones, as the mock has it: the ONE result (Total PnL) leads on
+            the left edge, and the supporting figures sit right-aligned in a
+            row divided by hairlines — so the eye lands on the result first
+            instead of scanning three equal-weight tiles. Liquidation is NOT
+            here: it keeps its badge up in the card header (his call). */}
+        <div className="flex flex-wrap items-end justify-between gap-x-10 gap-y-5">
+        <div className="flex min-w-0 flex-wrap items-end gap-x-10 gap-y-5">
           <div>
-            <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-ink-400" title="Lifetime PnL since the start date (ROI = PnL over current capital, in brackets)">
-              Total PnL
+            <div className="text-[12px] font-normal leading-[14.52px] text-ink-300" title="PnL since the start date.">
+              <span className="tip-label">Total PnL</span>
             </div>
             <button
               type="button"
-              className="num mt-2 text-left text-2xl font-semibold leading-none tracking-[-0.02em] hover:opacity-80"
-              title={`Click for the full breakdown. Carry − fees ${fmtUsd(totals.pnlUsd - totals.priceResidualUsd)} (settled — doesn't move with the tick) + price basis ${fmtUsd(totals.priceResidualUsd)} (open marks ${fmtUsd(totals.breakdown.perpUpnlUsd)} + closed realized price ${fmtUsd(totals.priceResidualUsd - totals.breakdown.perpUpnlUsd)} — the two sides of the hedge; expected near 0 on a delta-neutral book, and the only part that breathes with the market).`}
+              className="group/pnl num mt-1.5 flex items-center text-left text-[28px] font-bold leading-[1.1]"
+              title={`Carry − fees\t${fmtUsd(totals.pnlUsd - totals.priceResidualUsd)}\nOpen marks\t${fmtUsd(totals.breakdown.perpUpnlUsd)}\nClosed realized price\t${fmtUsd(totals.priceResidualUsd - totals.breakdown.perpUpnlUsd)}\n---\nTotal PnL\t${fmtUsd(totals.pnlUsd)}\n* Click for the full breakdown.`}
               onClick={() => setFeesOpen(true)}
             >
               <SignedNumber value={totals.pnlUsd} format={fmtUsd} plus={false} />
-              {derived.roi !== null && (
-                <span className="ml-2 text-[12.5px] font-normal text-ink-300">
-                  (<SignedNumber value={derived.roi} format={fmtPct} className="!text-ink-400" plus={false} />)
-                </span>
-              )}
+              {/* The mock's "value + breakdown" trigger: a quiet round pie
+                  beside the figure, so the breakdown is a visible control and
+                  not a secret of the number. */}
+              <span
+                aria-hidden="true"
+                className="ml-2 inline-flex h-7 w-7 items-center justify-center rounded-full align-middle text-ink-500 transition-colors group-hover/pnl:bg-wash/10 group-hover/pnl:text-ink-300"
+              >
+                <svg viewBox="0 0 14 14" width="16" height="16" fill="none">
+                  <path
+                    transform="translate(.5 0)"
+                    fillRule="evenodd"
+                    clipRule="evenodd"
+                    d="M5.889,0.75L5.889,7.611L12.75,7.611C12.436,10.777 9.764,13.25 6.515,13.25C3.055,13.25 0.25,10.445 0.25,6.985C0.25,3.736 2.723,1.064 5.889,0.75ZM7.142,0.75C10.102,1.044 12.456,3.398 12.75,6.358L7.142,6.358L7.142,0.75Z"
+                    fill="currentColor"
+                  />
+                </svg>
+              </span>
             </button>
             {/* Cost is a COMPONENT of PnL (PnL = carry − cost), not a peer of
                 it, so it reads as this figure's sub-line rather than a fourth
@@ -4374,16 +4515,24 @@ export function AssetCard({ group, derived, sinceSec, windowPending, onChangeSin
                 breakdown, which already itemises these fees per leg. */}
             <div
               className="num mt-2 text-[11px] leading-none text-ink-400"
-              title={`Everything that eats into the carry, whenever it was paid: perp fees ${fmtUsd(totals.perpFeesAllUsd)} + Boros fees ${fmtUsd(totals.borosFeesAllUsd)} − price basis ${fmtUsd(totals.priceResidualUsd)}. PnL = carry − cost.`}
+              title={`Perp fees\t${fmtUsd(totals.perpFeesAllUsd)}\nBoros fees\t${fmtUsd(totals.borosFeesAllUsd)}\nPrice basis\t${fmtUsd(-totals.priceResidualUsd)}\n---\nAll time cost\t${fmtUsd(Math.abs(totals.costUsd))}`}
             >
-              All time Cost {fmtUsd(Math.abs(totals.costUsd))}
+              {derived.roi !== null && (
+                <>
+                  <SignedNumber value={derived.roi} format={fmtPct} className="!text-ink-400" plus={false} /> ROI{' '}
+                  <span aria-hidden="true">·</span>{' '}
+                </>
+              )}
+              <span className="tip-label">All time Cost {fmtUsd(Math.abs(totals.costUsd))}</span>
             </div>
           </div>
+        </div>
+        <div className="ml-auto flex flex-wrap items-start justify-end gap-x-7 gap-y-4 text-right">
           <div>
-            <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-ink-400" title="The rate the hedge locks RIGHT NOW, net of Boros settlement fees: on covered venues the floating sides cancel, leaving each Boros leg's fixed side minus the settlement fee it pays to maturity — unavoidable however you enter or roll, so it is part of the rate you actually keep. Deterministic while the hedge holds; steps down as legs mature. Dash = the hedge isn't complete.">
-              Current APR (Fixed)
+            <div className="text-[12px] font-normal leading-[14.52px] text-ink-300" title="The rate the hedge locks now, net of Boros settlement fees. A dash means the hedge is incomplete.">
+              <span className="tip-label">Current APR (Fixed)</span>
             </div>
-            <div className="num mt-2 text-2xl font-semibold leading-none tracking-[-0.02em]">
+            <div className="num mt-1.5 text-[20px] font-bold leading-[24.2px]">
               {derived.lockedAprFwd !== null ? (
                 <SignedNumber value={derived.lockedAprFwd} format={fmtPct} plus={false} />
               ) : (
@@ -4396,28 +4545,29 @@ export function AssetCard({ group, derived, sinceSec, windowPending, onChangeSin
             {derived.lockedAprFwd !== null && derived.lockedCarryPerYearUsd !== null && (
               <div
                 className="num mt-2 text-[11px] leading-none text-ink-400"
-                title={`The locked rate in dollars per day at today's notionals — deterministic while the hedge holds; steps down as legs mature.${derived.lockedNotionalUsd !== null ? ` Quoted on the Boros legs' notional it is ${fmtPct(derived.lockedCarryPerYearUsd / derived.lockedNotionalUsd)} on ${fmtUsdCompact(derived.lockedNotionalUsd)} (the cross-farm comparison basis; the headline % is on margin, which leverage inflates).` : ''}`}
+                title={`The locked rate in dollars per day.${derived.lockedNotionalUsd !== null ? `\nOn notional\t${fmtPct(derived.lockedCarryPerYearUsd / derived.lockedNotionalUsd)}\nNotional\t${fmtUsdCompact(derived.lockedNotionalUsd)}` : ''}`}
               >
                 ≈ <SignedNumber value={derived.lockedCarryPerYearUsd / 365} format={fmtUsd} className="!text-ink-400" plus={false} />
                 /day
               </div>
             )}
           </div>
-          <div>
-            <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-ink-400" title="Initial margin currently required across every counted leg">
-              Current Capital
+          <div className="border-l border-ink-700 pl-7">
+            <div className="text-[12px] font-normal leading-[14.52px] text-ink-300" title="Initial margin required across every counted leg.">
+              <span className="tip-label">Current Capital</span>
             </div>
-            <div className="num mt-2 text-2xl font-semibold leading-none tracking-[-0.02em] text-ink-50">
+            <div className="num mt-1.5 text-[20px] font-semibold leading-[24.2px] text-ink-50">
               {fmtUsd(totals.capitalUsd)}
             </div>
           </div>
         </div>
-        {/* The waterfall is the hero drawn as bars, so its toggle lives on
-            the hero: a bordered button at the right edge, the bars opening
-            underneath. */}
+        {/* The waterfall is the hero drawn as bars, so its toggle lives on the
+            hero's right edge. It sat in the header for a round, but next to
+            "since" + "all time" the row read as three competing controls (his
+            call 2026-09-21). */}
         <button
           type="button"
-          className="btn-ghost-xs mb-0.5 inline-flex shrink-0 items-center gap-2 !px-3 !py-1.5 !text-[12.5px] !text-ink-100"
+          className="btn !h-[30px] shrink-0 self-end !px-2.5"
           aria-expanded={wfOpen}
           onClick={() => setWfOpen((v) => !v)}
         >
@@ -4433,7 +4583,6 @@ export function AssetCard({ group, derived, sinceSec, windowPending, onChangeSin
             <AssetBars totals={totals} />
           </div>
         )}
-        {!wfOpen && <div className="h-2" />}
       </div>
 
       {/* Hedge status — only what needs doing. A perfect hedge says so in
@@ -4476,7 +4625,7 @@ export function AssetCard({ group, derived, sinceSec, windowPending, onChangeSin
           view === 'bundles' ? (
             <>
               <span className={microLabelClass}>Funding bundles</span>
-              <span className="num text-sm font-semibold" title="Perp funding + Boros settlements, live and finished legs — the Fixed funding bar">
+              <span className="num text-sm font-semibold" title="Perp funding + Boros settlements, live and finished legs.">
                 <SignedNumber value={fixedFundingUsd} format={fmtUsd} />
               </span>
             </>
@@ -4501,6 +4650,7 @@ null
       >
         {activeBundles.length > 0 ? (
           <div className="flex flex-col gap-2">
+            <BundleListHeader />
             {activeBundles.map((b) => (
               <BundleCard
                 key={b.venue}
@@ -4535,7 +4685,7 @@ null
             so what left the hedge/PnL/capital is never out of sight. */}
         {excludedRows.length > 0 && (
           <div className="mt-3 overflow-hidden rounded border border-ink-700">
-            <div className="flex flex-wrap items-center gap-2 border-b border-ink-850 bg-ink-100/[0.04] px-3.5 py-2">
+            <div className="flex flex-wrap items-center gap-2 border-b border-ink-850 bg-wash/[0.04] px-3.5 py-2">
               <span className={microLabelClass}>Excluded</span>
               <span className="text-[11px] text-ink-400">
                 set aside from the farm — not in any bundle, the hedge, PnL or capital
@@ -4555,11 +4705,11 @@ null
                       </td>
                       <td className="num whitespace-nowrap text-right text-ink-300">
                         {at !== null ? (
-                          <span title="The level this slice was carved out at; the remainder's entry is the weighted residual">
+                          <span title="The level this slice was excluded at.">
                             at {show(at)}
                           </span>
                         ) : (
-                          <span className="text-ink-500" title="No level given — split pro-rata at the leg's average">
+                          <span className="text-ink-500" title="Split at the leg's average.">
                             at avg {show(r.entry)}
                           </span>
                         )}
@@ -4569,7 +4719,7 @@ null
                           <button
                             type="button"
                             className="btn-ghost-xs"
-                            title="Count this leg in the farm again, whole"
+                            title="Count the whole leg in the farm again."
                             onClick={() => onExclude(r.key, undefined)}
                           >
                             restore
@@ -4604,7 +4754,7 @@ null
             type="button"
             onClick={() => setClosedOpen(true)}
             className="mt-3 flex w-full flex-wrap items-center gap-2 rounded border border-ink-700 bg-ink-950/60 px-3.5 py-2.5 text-left text-xs transition-colors hover:border-ink-500"
-            title="Every exchange whose perp and YU legs are all closed or matured — click for the legs"
+            title="Exchanges where every leg is closed or matured."
           >
             <span className={microLabelClass}>Closed Funding Bundles</span>
             <span className="text-ink-400">
@@ -4627,6 +4777,7 @@ null
                 Exchanges where every leg is closed or matured. Their funding settlement and realised PnL stay in this asset's totals.
               </p>
               <div className="flex flex-col gap-2">
+                <BundleListHeader />
                 {closedBundles.map((b) => (
                   <BundleCard
                     key={b.venue}
@@ -4856,7 +5007,7 @@ null
         <Modal title={`${group.base} — PnL breakdown`} onClose={() => setFeesOpen(false)} widthClass="w-[640px]">
           {(() => {
             const cell = 'px-2 py-1.5';
-            const th = 'px-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-ink-600';
+            const th = 'px-2 pb-1 text-[11px] font-normal text-ink-500';
             const perpRows = [
               ...group.perpOpen.map((l) => ({
                 key: `o:${l.symbol}`,
@@ -4918,7 +5069,7 @@ null
               <>
                 <div
                   className="mb-3 flex flex-wrap items-baseline gap-x-4 gap-y-1 rounded-md border border-ink-800 px-3 py-2 text-xs text-ink-400"
-                  title="Carry − fees is the settled part (doesn't move with the tick); price basis is open marks + closed realized price — the two sides of the hedge, expected near 0 and the only part that breathes with the market."
+                  title="Carry − fees is settled. Price basis is open marks + closed realized price."
                 >
                   <span>
                     carry − fees{' '}
@@ -4934,7 +5085,7 @@ null
                   </span>
                   <span
                     className="text-ink-600"
-                    title="Mark value of the open Boros rate streams — converges to zero at maturity; excluded from PnL"
+                    title="Mark value of the open Boros legs. Not counted in PnL."
                   >
                     Boros MtM{' '}
                     <span className="num">
@@ -4951,9 +5102,9 @@ null
                 {venueCarry.length > 1 && (
                   <div
                     className="mb-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-ink-500"
-                    title="Per venue: perp funding (open + closed) + its Boros settle & trade (gross, open + completed markets) inside the window. On a working farm each venue's floating flows cancel and this nets to roughly the venue's fixed leg — a venue deeply negative here without its Boros offset is the mis-setup signal. Fees and price basis not included."
+                    title="Per venue: perp funding + Boros settlement and trade PnL in the window. Before fees and price basis."
                   >
-                    <span className="text-[10px] uppercase tracking-wider text-ink-600">
+                    <span className="text-[11px] font-normal text-ink-500">
                       Net carry by venue
                     </span>
                     {venueCarry.map(([v, usd]) => (
@@ -4963,7 +5114,7 @@ null
                     ))}
                   </div>
                 )}
-                <p className="mb-1 text-xs font-semibold uppercase tracking-wider text-ink-400">
+                <p className="mb-1 text-[14px] font-semibold text-ink-50">
                   Perps — by venue
                 </p>
                 {perpRows.length ? (
@@ -4990,7 +5141,7 @@ null
                             {r.fundingUsd === null ? (
                               <span
                                 className="text-ink-600"
-                                title={r.deduped ? 'Carried in the open position’s cumulative funding above (split-position dedupe).' : undefined}
+                                title={r.deduped ? 'Carried in the open position’s funding above.' : undefined}
                               >
                                 {r.deduped ? 'in open ↑' : '—'}
                               </span>
@@ -5000,7 +5151,7 @@ null
                           </td>
                           <td
                             className={`${cell} text-right`}
-                            title={r.priceIsUpnl ? 'Live uPnL — unrealized' : undefined}
+                            title={r.priceIsUpnl ? 'Unrealized.' : undefined}
                           >
                             {r.priceUsd === null ? (
                               <span className="text-ink-600">—</span>
@@ -5012,7 +5163,7 @@ null
                             {r.deduped ? (
                               <span
                                 className="text-ink-600"
-                                title="Not free — this venue reports whole-life fees and funding on the SURVIVING open position's row (the close's ~costs are inside the open line above); shown once to avoid double-counting."
+                                title="Counted in the open position's row above."
                               >
                                 in open ↑
                               </span>
@@ -5023,7 +5174,7 @@ null
                         </tr>
                       ))}
                       <tr className="border-t border-ink-700 font-semibold">
-                        <td className={`${cell} text-[10px] font-semibold uppercase tracking-[0.16em] text-ink-400`} colSpan={2}>
+                        <td className={`${cell} text-[12px] font-normal leading-[14.52px] text-ink-300`} colSpan={2}>
                           Total
                         </td>
                         <td className={`${cell} text-right`}>
@@ -5040,7 +5191,7 @@ null
                   <p className="text-sm text-ink-600">No perp activity in this window.</p>
                 )}
 
-                <p className="mb-1 mt-5 text-xs font-semibold uppercase tracking-wider text-ink-400">
+                <p className="mb-1 mt-5 text-[14px] font-semibold text-ink-50">
                   Boros — by market
                 </p>
                 {borosRows.length ? (
@@ -5072,7 +5223,7 @@ null
                         </tr>
                       ))}
                       <tr className="border-t border-ink-700 font-semibold">
-                        <td className={`${cell} text-[10px] font-semibold uppercase tracking-[0.16em] text-ink-400`} colSpan={2}>
+                        <td className={`${cell} text-[12px] font-normal leading-[14.52px] text-ink-300`} colSpan={2}>
                           Total
                         </td>
                         <td className={`${cell} text-right`}>

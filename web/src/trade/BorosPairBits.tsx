@@ -20,6 +20,7 @@ import type {
   BorosSimulatedLeg,
 } from '../api/types';
 import { Chip } from '../components/Chip';
+import { VenueIcon } from '../components/AssetIcon';
 import { HoldToConfirmButton } from '../components/HoldToConfirmButton';
 import { amountError } from '../lib/amount';
 import { fmtDateLocal, fmtPct, fmtTokenQty, fmtUsd } from '../lib/fmt';
@@ -192,7 +193,7 @@ export function MarketCard({
             {side === 'long' ? 'LONG' : 'SHORT'}
           </Chip>
         )}
-        <span className="text-[10px] uppercase tracking-wider text-ink-400">{label}</span>
+        <span className="text-[12px] font-normal text-ink-300">{label}</span>
       </div>
       {/* The picker is ALWAYS the control — no change/done state to enter or
           leave. It was a disclosure so the card could show a tidy summary,
@@ -464,14 +465,17 @@ export function PositionArithmetic({
     leg.sizing.resultingSize > 0 ? 'long' : leg.sizing.resultingSize < 0 ? 'short' : leg.direction;
   return (
     <div className="flex flex-col gap-1 border-t border-ink-800/80 pt-2">
-      <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-400">Position after</span>
+      <span className="text-[12px] font-normal leading-[14.52px] text-ink-300">Position after</span>
       {legs.map((leg) => {
         const side = sideOf(leg);
         const flat = leg.sizing.resultingSize === 0;
         return (
           <div key={leg.marketId} className="flex items-baseline justify-between gap-3">
             {/* Venue only: the colour of the figure carries the side. */}
-            <span className="truncate text-[12px] text-ink-200">{leg.venue}</span>
+            <span className="flex min-w-0 items-center gap-1.5 text-[12px] text-ink-200">
+              <VenueIcon venue={leg.venue} size={16} />
+              <span className="truncate">{leg.venue}</span>
+            </span>
             <span
               className="num shrink-0 text-[12px] text-ink-400"
               title="Boros nets to one position per market, so this is your WHOLE exposure there — not just the part this ticket opens."
@@ -586,7 +590,7 @@ export function GasTopUp({
   if (gasBalanceUsd >= LOW_GAS_USD) return null;
   const err = amountError(amount ?? '', { min: MIN_TOP_UP_USD, max: MAX_TOP_UP_USD });
   return (
-    <div className="flex flex-wrap items-center gap-1.5 rounded-lg border border-ink-700 bg-ink-900/40 px-2.5 py-2 text-[11px] text-ink-300">
+    <div className="flex flex-wrap items-center gap-1.5 card px-2.5 py-2 text-[11px] text-ink-300">
       <label htmlFor="boros-gas-topup" className="text-ink-400">
         Top up gas by hand (USD)
       </label>
@@ -635,7 +639,7 @@ export function BlockerList({
       {blockers.map((b, i) => (
         <li
           key={`${b.code}-${b.leg ?? ''}-${i}`}
-          className="rounded-lg border border-rose-500/25 bg-rose-500/5 px-2.5 py-2 text-[11px] leading-relaxed text-rose-200"
+          className="rounded border border-guava/30 bg-guava/10 px-2.5 py-2 text-[11px] leading-relaxed text-rose-200"
         >
           {b.message}
           {b.code === 'isolated-must-switch' && onCancelAndClose && b.marketId !== undefined && (
@@ -712,7 +716,7 @@ export function PairResultReport({
   const shortfall = !nothing && result.partial;
   return (
     <div
-      className={`rounded-lg border px-3 py-2.5 ${
+      className={`rounded border px-3 py-2.5 ${
         nothing
           ? 'border-rose-500/30 bg-rose-500/[0.04]'
           : shortfall
@@ -783,14 +787,14 @@ export function PairResultReport({
             type="button"
             disabled={busy}
             onClick={onRetry}
-            className="rounded border border-ink-600 px-2 py-0.5 text-[11px] text-ink-300 hover:border-ink-400 disabled:opacity-50"
+            className="btn-ghost-xs"
           >
             Retry the rest
           </button>
           <button
             type="button"
             onClick={onDismiss}
-            className="rounded border border-ink-600 px-2 py-0.5 text-[11px] text-ink-300 hover:border-ink-400"
+            className="btn-ghost-xs"
           >
             Dismiss
           </button>
@@ -808,7 +812,7 @@ export function PairResultReport({
               type="button"
               disabled={busy}
               onClick={onComplete}
-              className="rounded border border-cyan-500/50 px-2 py-0.5 text-[11px] text-cyan-200 hover:bg-cyan-500/15 disabled:opacity-50"
+              className="btn-ghost-xs !border-info/50 !text-pastel-blue hover:!bg-info/15"
             >
               Complete now at market
             </button>
@@ -817,14 +821,14 @@ export function PairResultReport({
             type="button"
             disabled={busy}
             onClick={onRetry}
-            className="rounded border border-ink-600 px-2 py-0.5 text-[11px] text-ink-300 hover:border-ink-400 disabled:opacity-50"
+            className="btn-ghost-xs"
           >
             Retry
           </button>
           <button
             type="button"
             onClick={onDismiss}
-            className="rounded border border-ink-600 px-2 py-0.5 text-[11px] text-ink-300 hover:border-ink-400"
+            className="btn-ghost-xs"
           >
             Leave it
           </button>
@@ -833,7 +837,7 @@ export function PairResultReport({
         <button
           type="button"
           onClick={onDismiss}
-          className="mt-2 rounded border border-ink-600 px-2 py-0.5 text-[11px] text-ink-300 hover:border-ink-400"
+          className="btn-ghost-xs mt-2"
         >
           Dismiss
         </button>

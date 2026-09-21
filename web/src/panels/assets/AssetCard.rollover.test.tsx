@@ -109,10 +109,10 @@ describe('AssetCard — roll over', () => {
     const panel = screen.getByRole('tabpanel', { name: /4 Leg Pairs/ });
     // The pair's card is what lands at the top of the viewport.
     expect(scrolled).toHaveLength(1);
-    expect(scrolled[0]).toContainElement(within(panel).getByRole('button', { name: /Gate \/ S Hyperliquid/ }));
+    expect(scrolled[0]).toContainElement(within(panel).getByRole('button', { name: /Gate LONG \/ Hyperliquid SHORT/ }));
     // Opened by default (it can roll) — fold it by hand.
     expect(within(panel).getByRole('button', { name: 'Roll over' })).toBeInTheDocument();
-    await userEvent.click(within(panel).getByRole('button', { name: /Gate \/ S Hyperliquid/ }));
+    await userEvent.click(within(panel).getByRole('button', { name: /Gate LONG \/ Hyperliquid SHORT/ }));
     expect(within(panel).queryByRole('button', { name: 'Roll over' })).not.toBeInTheDocument();
     // The banner must show it again, not leave the fold as the user left it.
     await userEvent.click(screen.getByRole('button', { name: /pair can roll over/ }));
@@ -324,7 +324,7 @@ describe('AssetCard — roll over', () => {
     const g = { ...book(8), borosOpen: [] };
     renderCard(g);
     const panel = screen.getByRole('tabpanel', { name: /4 Leg Pairs/ });
-    const row = within(panel).getByRole('button', { name: /Gate \/ S Hyperliquid Boros legs missing/ });
+    const row = within(panel).getByRole('button', { name: /Gate LONG \/ Hyperliquid SHORT Boros legs missing/ });
     expect(row).toHaveAttribute('aria-expanded', 'true');
     // Both gaps are named, each with its own action, plus the one for both.
     expect(within(panel).getAllByText('missing')).toHaveLength(2);
@@ -342,7 +342,7 @@ describe('AssetCard — roll over', () => {
     const g = { ...base, borosOpen: base.borosOpen.filter((l) => l.venue === 'GATE') };
     renderCard(g);
     const panel = screen.getByRole('tabpanel', { name: /4 Leg Pairs/ });
-    expect(within(panel).getByRole('button', { name: /Gate \/ S Hyperliquid Boros leg missing/ })).toBeInTheDocument();
+    expect(within(panel).getByRole('button', { name: /Gate LONG \/ Hyperliquid SHORT Boros leg missing/ })).toBeInTheDocument();
     expect(within(panel).getAllByText('missing')).toHaveLength(1);
     expect(within(panel).getAllByRole('button', { name: 'Open leg' })).toHaveLength(1);
     expect(within(panel).queryByRole('button', { name: 'Open both Boros legs' })).not.toBeInTheDocument();

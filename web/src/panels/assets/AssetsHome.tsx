@@ -173,10 +173,10 @@ export function AssetsHome() {
   );
   const blendedApr = aprAgg.capYears > 0 ? (aprAgg.pnl - interestUsd) / aprAgg.capYears : null;
   const header = (
-    <div className="mb-3 flex flex-wrap items-center gap-2">
+    <div className="mb-4 flex flex-wrap items-baseline gap-2">
       <h2
-        className="text-xs font-semibold uppercase tracking-wider text-ink-400"
-        title="Every leg grouped by its underlying asset; PnL and capital are the venues' own records since your start date. Nothing here places orders."
+        className="text-[16px] font-semibold leading-[19.36px] text-ink-50"
+        title="Every leg grouped by its underlying asset."
       >
         Funding farm by asset
       </h2>
@@ -184,7 +184,7 @@ export function AssetsHome() {
       {address && (
         <label
           className="ml-auto flex cursor-pointer items-center gap-2 whitespace-nowrap text-xs text-ink-300"
-          title="Show only assets with an open leg — hedged or not. A Boros leg you excluded does not count. Account totals still include every asset."
+          title="Show only assets with an open leg. Account totals still include every asset."
         >
           <input type="checkbox" className="chk" checked={hideInactive} onChange={(e) => setHideInactive(e.target.checked)} />
           <span>Hide inactive pairs</span>
@@ -228,28 +228,32 @@ export function AssetsHome() {
 
   return (
     <section>
-      {header}
-
       {/* Account hero. ONE result — what the farm kept — ranked by position:
           the figure sits left of a hairline, its supports right of it. No
           hedge status here: every asset row already carries its own hedged
           checklist, so an account-wide aggregate only repeated it (his call
           2026-09-15). */}
+      {/* The mock gives the account summary the one info border and inner glow
+          no other card wears, so it leads the tab instead of reading as the
+          first of the per-asset cards. */}
       {derived.length > 0 && (
-      <div className="card mb-3 flex flex-wrap items-center gap-x-8 gap-y-4 p-4">
+      <div
+        className="mb-9 flex flex-wrap items-center justify-between gap-x-10 gap-y-6 rounded border border-info/60 bg-info/[0.06] px-8 py-[30px]"
+        style={{ boxShadow: 'inset 0 0 92px rgba(96,121,255,0.14)' }}
+      >
         <div className="flex min-w-0 flex-col gap-2">
           <div
-            className="text-[10px] font-semibold uppercase tracking-[0.16em] text-ink-400"
+            className="tip-label w-fit text-[14px] font-normal leading-[16.94px] text-ink-300"
             title={
               interestAvailable
-                ? 'What the farm kept, after borrow interest. This is the number to compare against your own record.'
-                : 'Borrow interest could not be read, so it is NOT subtracted here — this is the cards summed.'
+                ? 'What the farm kept, after borrow interest.'
+                : 'The cards summed. Borrow interest could not be read, so it is not subtracted.'
             }
           >
             Total Account PnL
           </div>
           <div className="flex flex-wrap items-baseline gap-x-2.5 gap-y-1">
-            <span className="num text-[34px] font-semibold leading-none tracking-[-0.025em]">
+            <span className="num text-[34px] font-bold leading-none tracking-[-0.01em]">
               <SignedNumber value={totalPnl} format={fmtUsd} plus={false} />
             </span>
             {/* Only stated when the interest is actually known: with it
@@ -257,14 +261,20 @@ export function AssetsHome() {
                 would assert an arithmetic that did not happen. */}
             {interestAvailable && interestUsd > 0 && (
               <span
-                className="num text-xs text-ink-400"
-                title={`Margin-borrow interest the CrossEx account paid inside this window${
-                  data?.interest && Object.keys(data.interest.byCoin).length > 0
-                    ? ` — ${Object.entries(data.interest.byCoin)
-                        .map(([c, n]) => `${n.toFixed(2)} ${c}`)
-                        .join(', ')}`
-                    : ''
-                }. Charged on the account, not on any one position, so it is subtracted once here and appears on no card.`}
+                className="tip-label num text-[14px] text-ink-300"
+                title={(() => {
+                  // Per-coin rows only when there ARE any: the rule and the
+                  // total on their own read as a breakdown with nothing in it.
+                  const byCoin = Object.entries(data?.interest?.byCoin ?? {});
+                  return byCoin.length > 0
+                    ? [
+                        'Borrow interest paid',
+                        ...byCoin.map(([c, n]) => `${c}\t${n.toFixed(2)}`),
+                        '---',
+                        `Total\t${fmtUsd(interestUsd)}`,
+                      ].join('\n')
+                    : `Borrow interest paid\t${fmtUsd(interestUsd)}`;
+                })()}
               >
                 after {fmtUsd(interestUsd)} borrow interest
               </span>
@@ -274,22 +284,24 @@ export function AssetsHome() {
         <div className="ml-auto flex flex-wrap items-center gap-x-9 gap-y-4 self-stretch border-ink-700 pl-0 sm:border-l sm:pl-9">
           <div className="flex flex-col gap-2">
             <div
-              className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-400"
-              title="REALIZED so far: Σ PnL over Σ (capital × each asset's own elapsed time), annualized — approximate: capital is today's requirement. Each card's Current APR (Fixed) is the different, forward-looking number."
+              className="tip-label w-fit text-[14px] font-normal leading-[16.94px] text-ink-300"
+              title="PnL so far over capital × time, annualized. Approximate: capital is today's requirement."
             >
               Realized APR ≈
             </div>
-            <div className="num text-[21px] font-semibold leading-none">
+            <div className="num text-[24px] font-bold leading-[29.05px]">
               {blendedApr !== null ? <SignedNumber value={blendedApr} format={fmtPct} plus={false} /> : '—'}
             </div>
           </div>
-          <div className="flex flex-col gap-2">
-            <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-400">Capital at work</div>
-            <div className="num text-[21px] font-semibold leading-none text-ink-50">{fmtUsd(totalCapital)}</div>
+          <div className="flex flex-col gap-2 border-l border-ink-700 pl-9">
+            <div className="text-[14px] font-normal leading-[16.94px] text-ink-300">Capital at work</div>
+            <div className="num text-[24px] font-semibold leading-[29.05px] text-ink-50">{fmtUsd(totalCapital)}</div>
           </div>
         </div>
       </div>
       )}
+
+      {header}
 
       {derived.length === 0 ? (
         <EmptyState
@@ -298,7 +310,7 @@ export function AssetsHome() {
           hint="Open a position (or move the start date back) and the assets will appear here."
         />
       ) : (
-        <div className="flex flex-col gap-3">
+        <div className="flex flex-col gap-8">
           {shown.length === 0 && (
             <p className="rounded-md border border-dashed border-ink-700 px-3 py-3 text-center text-sm text-ink-500">
               No active pairs — {inactive.length} inactive hidden.

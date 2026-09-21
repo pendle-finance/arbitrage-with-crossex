@@ -16,7 +16,7 @@ export function SettingsDrawer({ open, onClose }: { open: boolean; onClose: () =
     <Drawer open={open} title="Settings" onClose={onClose}>
       <div className="flex flex-col gap-6">
         <section>
-          <h3 className="mb-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-ink-400">
+          <h3 className="mb-2 text-[12px] font-normal leading-[14.52px] text-ink-300">
             Tracked Boros address
           </h3>
           <p className="mb-2 text-xs leading-relaxed text-ink-400">
@@ -48,7 +48,7 @@ export function SettingsDrawer({ open, onClose }: { open: boolean; onClose: () =
         </section>
 
         <section>
-          <h3 className="mb-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-ink-400">
+          <h3 className="mb-2 text-[12px] font-normal leading-[14.52px] text-ink-300">
             Gate API key
           </h3>
           <div className="card num px-4 py-3 text-sm text-ink-200">
@@ -57,13 +57,13 @@ export function SettingsDrawer({ open, onClose }: { open: boolean; onClose: () =
         </section>
 
         <section>
-          <h3 className="mb-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-ink-400">
+          <h3 className="mb-2 text-[12px] font-normal leading-[14.52px] text-ink-300">
             Replace credentials
           </h3>
           <CredentialsForm submitLabel="Replace credentials" />
         </section>
         <section>
-          <h3 className="mb-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-ink-400">
+          <h3 className="mb-2 text-[12px] font-normal leading-[14.52px] text-ink-300">
             About
           </h3>
           <div className="flex flex-col gap-[5px] rounded border border-ink-700 px-3 py-[11px] text-[11.5px] text-ink-100">

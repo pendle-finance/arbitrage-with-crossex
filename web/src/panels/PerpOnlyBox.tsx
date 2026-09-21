@@ -210,7 +210,7 @@ export function ClosePairForm({
             </div>
             <table className="w-full">
               <thead>
-                <tr className="text-[10px] uppercase tracking-[0.14em] text-ink-400">
+                <tr className="text-[12px] font-normal text-ink-300">
                   <th className="pb-1 text-left font-medium">leg</th>
                   <th className="pb-1 text-right font-medium">limit px</th>
                   <th className="pb-1 text-right font-medium">slip</th>
@@ -236,7 +236,7 @@ export function ClosePairForm({
                       {i > 0 ? (
                         <span
                           className="text-[11px] text-ink-400"
-                          title="The hedge leg is sent as a plain market IOC, inside the venue's own price-limit band — no limit price of its own"
+                          title="Sent as a market IOC inside the venue's price-limit band."
                         >
                           market IOC
                         </span>

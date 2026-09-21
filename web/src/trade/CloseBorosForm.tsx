@@ -23,6 +23,7 @@
  */
 import { useMemo, useState } from 'react';
 import type { BorosPairRequest, BorosSimulatedLeg, StrategyLeg } from '../api/types';
+import { VenueIcon } from '../components/AssetIcon';
 import { SignedNumber } from '../components/SignedNumber';
 import { QueryError } from '../components/QueryError';
 import { knownRate } from '../lib/boros';
@@ -553,7 +554,7 @@ export function CloseBorosForm({
             {closable.length === 1 && (
               <>
                 {' · '}
-                <span title="Boros has no reduce-only flag; the server caps the size at what is open once the cancel lands, so it can never cross past flat">
+                <span title="The size is capped at what is open, so it can never cross past flat.">
                   capped at open size
                 </span>
               </>
@@ -668,7 +669,7 @@ export function CloseBorosForm({
             <div className="flex flex-col gap-1">
               <table className="w-full">
                 <thead>
-                  <tr className="text-[10px] uppercase tracking-[0.14em] text-ink-400">
+                  <tr className="text-[12px] font-normal text-ink-300">
                     <th className="pb-1 text-left font-medium">leg</th>
                     <th className="pb-1 text-right font-medium">est rate</th>
                     <th className="pb-1 text-right font-medium">pnl</th>
@@ -682,7 +683,10 @@ export function CloseBorosForm({
                     return (
                       <tr key={id} className="border-t border-ink-800/80">
                         <td className="py-1.5 text-[12px] text-ink-50">
-                          {prettyVenue(f.l.venue)}
+                          <span className="inline-flex items-center gap-1.5">
+                            <VenueIcon venue={f.l.venue} size={14} />
+                            {prettyVenue(f.l.venue)}
+                          </span>
                           {finished && <span className="ml-1.5 text-[11px] text-emerald-300">closed ✓</span>}
                         </td>
                         <td className="num py-1.5 text-right text-[12.5px] text-ink-50">{rateOf(f.q)}</td>
@@ -720,7 +724,7 @@ export function CloseBorosForm({
             invalid={slipInvalid}
             invalidText={`slippage must be in (0, ${MAX_SLIP_PCT}]`}
             inputAriaLabel="Close slippage tolerance, APR percent"
-            title="A rate bound: the worst APR this close will accept, per leg. A close that keeps missing it leaves the position open. Size is capped at what is open once the cancel lands — Boros has no reduce-only flag, so it can never cross past flat."
+            title="The worst APR this close accepts, per leg. A close that misses it leaves the position open."
             hint="Max rate this close will accept. A wider tolerance may be needed for a large size or a thin book."
           />
         </div>

@@ -13,6 +13,7 @@
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ActionInput, CrossexPosition } from '../api/types';
+import { VenueIcon } from '../components/AssetIcon';
 import { Modal } from '../components/Modal';
 import { SegmentedToggle } from '../components/SegmentedToggle';
 import { SignedNumber } from '../components/SignedNumber';
@@ -239,7 +240,8 @@ export function ClosePopover({
       title={
         <>
           Close perp leg
-          <span className="ml-2 text-[12px] font-normal text-ink-400">
+          <span className="ml-2 inline-flex items-center gap-1.5 text-[12px] font-normal text-ink-300">
+            <VenueIcon venue={exchange} size={14} />
             {prettyVenue(exchange)} · {base}-{quote || 'USDT'} perp
           </span>
         </>

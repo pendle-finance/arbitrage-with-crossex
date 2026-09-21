@@ -5,6 +5,7 @@
 import { useMemo, useState, type ReactNode } from 'react';
 import type { PreviewResult, SymbolRule } from '../api/types';
 import { Chip } from '../components/Chip';
+import { VenueIcon } from '../components/AssetIcon';
 import { SegmentedToggle } from '../components/SegmentedToggle';
 import { bpsOf, fmtAge, fmtUsd, parseSymbol, prettyVenue, sig } from '../lib/fmt';
 import { useNow } from '../lib/useNow';
@@ -106,7 +107,7 @@ export function EstimateCard({
   const now = useNow(1_000);
   const age = dataUpdatedAt > 0 ? fmtAge(now - dataUpdatedAt) : null;
   return (
-    <div className="flex flex-col gap-2.5 rounded-lg border border-ink-700 bg-ink-850/40 px-3.5 py-3">
+    <div className="flex flex-col gap-2.5 card px-3.5 py-3">
       <div className="flex items-center justify-between gap-2">
         <span className="flex items-baseline gap-2">
           {step !== undefined && <StepBadge n={step} />}
@@ -117,7 +118,7 @@ export function EstimateCard({
             className={
               sub
                 ? 'text-[13px] font-semibold text-ink-50'
-                : 'text-[10.5px] font-semibold uppercase tracking-[0.14em] text-ink-400'
+                : 'text-[12px] font-normal leading-[14.52px] text-ink-300'
             }
           >
             {label}
@@ -157,12 +158,13 @@ export function LegCard({
   valueSub?: ReactNode;
 }) {
   return (
-    <div className="flex items-center gap-3 rounded-lg border border-ink-700 bg-ink-900/60 px-3 py-2">
+    <div className="flex items-center gap-3 card px-3 py-2">
       <Chip tone={kind === 'Boros' ? 'blue' : 'neutral'} className="shrink-0 font-semibold">
         {kind}
       </Chip>
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
         <span className="flex items-center gap-1.5 text-[12.5px] font-semibold text-ink-50">
+          <VenueIcon venue={venue} size={16} />
           <span className="truncate">{venue}</span>
           <Chip sm tone={side === 'LONG' ? 'green' : 'red'} className="font-semibold">
             {side}
@@ -307,7 +309,7 @@ function VenueSelect({
         <Chip sm tone={long ? 'green' : 'red'} className="font-semibold">
           {long ? 'LONG' : 'SHORT'}
         </Chip>
-        <span className="text-[10px] uppercase tracking-wider text-ink-400">
+        <span className="text-[12px] font-normal text-ink-300">
           {long ? 'pays funding' : 'receives funding'}
         </span>
       </div>
@@ -434,7 +436,7 @@ export function MakerHedgeControls({
           <FieldLabel htmlFor="pair-maker-price">Maker price</FieldLabel>
           <span
             className="text-[11px] text-ink-400"
-            title="Defaults to one bid–ask gap behind the touch (bid − gap for a BUY, ask + gap for a SELL) and follows the book until you type a price"
+            title="Defaults to one bid–ask gap behind the touch and follows the book until you type a price."
           >
             {pricePinned ? (
               <>
@@ -449,7 +451,7 @@ export function MakerHedgeControls({
             {!pricePinned && touchIsFallback && (
               <span
                 className="ml-1 text-amber-400/90"
-                title="The maker venue's order book is unavailable — the price is seeded from a cross-venue mid estimate. Verify before executing."
+                title="Order book unavailable. The price is a cross-venue mid estimate — verify before executing."
               >
                 ≈ est. (book unavailable)
               </span>
@@ -498,6 +500,7 @@ function LegRow({ label, tone, p }: { label: string; tone: 'green' | 'red'; p: P
       <tr className="border-t border-ink-800/80">
         <td className="py-1.5">
           <span className="inline-flex items-center gap-1.5">
+            <VenueIcon venue={parseSymbol(p.symbol).exchange} size={16} />
             <Chip sm tone={tone} className="font-semibold">
               {parseSymbol(p.symbol).exchange}
             </Chip>
@@ -603,10 +606,10 @@ export function PairEstimate({
           aria-pressed={showBook}
           onClick={() => setShowBook((v) => !v)}
           title="Show or hide the live book and market-impact graph"
-          className={`inline-flex items-center gap-1 rounded border px-2 py-0.5 text-[11px] font-medium transition-colors ${
+          className={`btn-ghost-xs ${
             showBook
-              ? 'border-info/50 bg-info/[0.14] text-pastel-blue'
-              : 'border-ink-600 text-ink-300 hover:border-ink-400 hover:text-ink-100'
+              ? '!border-info/50 bg-info/[0.14] !text-pastel-blue'
+              : ''
           }`}
         >
           <span aria-hidden>▤</span> Book
@@ -631,11 +634,11 @@ export function PairEstimate({
 
           <table className="w-full">
             <thead>
-              <tr className="text-[10px] uppercase tracking-[0.14em] text-ink-400">
-                <th className="pb-1 text-left font-medium">leg</th>
-                <th className="pb-1 text-right font-medium">est price</th>
-                <th className="pb-1 text-right font-medium">slip</th>
-                <th className="pb-1 text-right font-medium">est fee</th>
+              <tr className="text-[12px] font-normal text-ink-300">
+                <th className="pb-1 text-left">leg</th>
+                <th className="pb-1 text-right">est price</th>
+                <th className="pb-1 text-right">slip</th>
+                <th className="pb-1 text-right">est fee</th>
               </tr>
             </thead>
             <tbody>

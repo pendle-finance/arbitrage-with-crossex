@@ -829,7 +829,7 @@ export function BorosPairTicket({
               </Chip>
               {/* The rates reading of the side, stated beside it: long pays
                   the fixed rate, short receives it. */}
-              <span className="text-[10px] uppercase tracking-wider text-ink-400">
+              <span className="text-[12px] font-normal text-ink-300">
                 Market · {dirA === 'long' ? 'pay fixed' : 'receive fixed'}
               </span>
             </span>
@@ -864,7 +864,7 @@ export function BorosPairTicket({
             <button
               type="button"
               className="num text-[11px] text-ink-400 transition-colors hover:text-ink-100"
-              title="What this collateral bucket can still fund — cross balance, or the market's own isolated bucket. Click to size to it."
+              title="What this collateral bucket can still fund. Click to size to it."
               onClick={() => setSizeStr(fieldValue(availableToTrade))}
             >
               available{' '}

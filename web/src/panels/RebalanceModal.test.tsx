@@ -778,7 +778,9 @@ describe('RebalanceModal moved amount', () => {
     ['a round Sell with no To Gate', 'Balanced', '$49.90', SELL_ONLY],
   ])('%s: chip %s, Moved %s', async (_, chip, moved, job) => {
     await finish(job);
-    expect(screen.getByText(chip).className.includes('emerald')).toBe(chip === 'Balanced');
+    // "Balanced" is the green chip, "Done" is not. The tone token is `grass`
+    // (the house green) — the chip no longer spells it `emerald`.
+    expect(screen.getByText(chip).className.includes('grass')).toBe(chip === 'Balanced');
     expect(screen.queryByText(chip === 'Done' ? 'Balanced' : 'Done')).toBeNull();
     expect(facts().Moved).toBe(moved);
   });

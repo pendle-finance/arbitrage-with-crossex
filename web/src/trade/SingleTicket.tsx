@@ -299,7 +299,7 @@ export function SingleTicket() {
           {maxLabel && (
             <button
               type="button"
-              title="The largest order the available margin carries at the venue max leverage (after the preflight's buffer and fee reserve)"
+              title="The largest order your available margin carries at max leverage."
               onClick={() => setSizeStr(fieldValue(maxSize as number))}
               className="num text-[11px] text-link underline decoration-link/40 underline-offset-2 hover:text-ink-50"
             >

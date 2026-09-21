@@ -323,10 +323,15 @@ describe('OpportunitiesPanel — capital basis', () => {
     );
     expect(screen.getByTitle('$10,000 per leg')).toHaveTextContent('$10k');
     // The asset line names the underlying (via its badge) and both venue legs
-    // by side.
+    // by side. The leg capsule writes the venue and its direction as separate
+    // elements, so each is asserted on its own row rather than as one string.
     expect(screen.getByText('ETH')).toBeInTheDocument();
-    expect(screen.getByText('SHORT · HYPERLIQUID')).toBeInTheDocument();
-    expect(screen.getByText('LONG · BINANCE')).toBeInTheDocument();
+    const shortLeg = screen.getByText('Hyperliquid').closest('.leg-cap');
+    expect(shortLeg).not.toBeNull();
+    expect(shortLeg).toHaveTextContent('SHORT');
+    const longLeg = screen.getByText('Binance').closest('.leg-cap');
+    expect(longLeg).not.toBeNull();
+    expect(longLeg).toHaveTextContent('LONG');
   });
 
   it('hides a loss-making group — costs can swallow the whole spread', async () => {
@@ -653,7 +658,7 @@ describe('OpportunitiesPanel — breakdown waterfalls', () => {
 
   it('"I have existing perp position" re-prices the row with no perp entry cost, off by default', async () => {
     const container = await expandOne();
-    const hero = () => container.querySelector('.text-\\[30px\\]')!.textContent!;
+    const hero = () => container.querySelector('.text-\\[28px\\]')!.textContent!;
     const box = screen.getByRole('checkbox', { name: 'I have existing perp position' });
     // Nothing held (no tracked address here) → a new position, full cost.
     expect(box).not.toBeChecked();

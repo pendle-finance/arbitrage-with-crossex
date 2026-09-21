@@ -87,7 +87,7 @@ export function PickChip({
       onClick={onClick}
       className={`inline-flex items-center gap-1 rounded border px-2.5 py-[3px] text-[11px] font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-35 ${
         active
-          ? 'border-ink-200/70 bg-ink-100/[0.08] text-ink-50'
+          ? 'border-ink-200/70 bg-wash/[0.08] text-ink-50'
           : 'border-ink-600 text-ink-300 hover:border-ink-400 hover:text-ink-100'
       }`}
     >

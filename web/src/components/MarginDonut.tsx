@@ -271,7 +271,7 @@ export function MarginBreakdown({
         segments={borrowIm === null ? [usedSeg, freeSeg] : [positionsSeg, borrowSeg, freeSeg]}
         ariaLabel="Margin usage"
       >
-        <div className="text-[10px] font-semibold uppercase tracking-wider text-ink-400">Balance</div>
+        <div className="text-[12px] font-normal leading-[14.52px] text-ink-300">Balance</div>
         {/* Whole dollars at 13px: the ring's inner diameter is 92px and the
             cents version at 16px ran ~100px wide, straight through the ring.
             The exact figure stays one hover away. */}
@@ -321,7 +321,7 @@ export function MarginBreakdown({
           <div className={`num text-xs font-semibold ${mmText}`}>{p.hasFunds ? fmtPct(p.mmPct, 0) : 'n/a'}</div>
         </Donut>
         <div className="text-center leading-tight">
-          <div className="text-[10px] font-semibold uppercase tracking-wider text-ink-400">Maintenance</div>
+          <div className="text-[12px] font-normal leading-[14.52px] text-ink-300">Maintenance</div>
           <div className="num text-sm text-ink-200">{fmtUsd(p.maintenance)}</div>
           <div className="text-[10px] text-ink-500">of balance</div>
         </div>

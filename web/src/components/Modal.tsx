@@ -46,9 +46,9 @@ export function Modal({ title, locked = false, onClose, widthClass = 'w-[700px]'
         className="absolute inset-0 bg-black/80"
         onClick={locked ? undefined : onClose}
       />
-      <div ref={panel} className={`relative mt-12 max-w-[95vw] rounded-xl border border-ink-700 bg-ink-900 ${widthClass}`}>
-        <div className="flex items-center justify-between border-b border-ink-800 px-5 py-3.5">
-          <h2 className="text-sm font-semibold text-ink-100">{title}</h2>
+      <div ref={panel} className={`relative mt-12 max-w-[95vw] rounded-xl border border-ink-700 bg-ink-950 ${widthClass}`}>
+        <div className="flex items-center justify-between gap-3 px-5 pt-5">
+          <h2 className="text-[20px] font-bold leading-[24.2px] text-ink-50">{title}</h2>
           {!locked && (
             <button
               type="button"
@@ -60,7 +60,7 @@ export function Modal({ title, locked = false, onClose, widthClass = 'w-[700px]'
             </button>
           )}
         </div>
-        <div className="max-h-[78vh] overflow-y-auto px-5 py-4">{children}</div>
+        <div className="max-h-[78vh] overflow-y-auto p-5">{children}</div>
       </div>
     </div>,
     document.body,

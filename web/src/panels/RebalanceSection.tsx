@@ -57,7 +57,7 @@ export function RebalanceSection({
   const loadError = useSettledError(query.status, query.error);
   const view = query.data;
   const title = (
-    <h2 className="text-xs font-semibold uppercase tracking-wider text-ink-400">
+    <h2 className="text-[14px] font-semibold text-ink-50">
       <RebalanceInfo />
     </h2>
   );

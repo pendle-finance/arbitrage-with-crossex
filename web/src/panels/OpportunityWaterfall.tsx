@@ -24,7 +24,6 @@ import {
   WaterfallPlot,
   type WaterfallStep,
 } from '../components/Waterfall';
-import { microLabelClass } from '../components/Th';
 import { fmtPct, fmtUsd } from '../lib/fmt';
 
 const SECONDS_IN_YEAR = 365 * 86_400;
@@ -179,28 +178,28 @@ function buildCapitalSteps(pair: OpportunityPair): WaterfallStep[] {
     [
       'cap-boros-short',
       cap.borosShortImUsd,
-      'bg-info/80',
+      'bg-info/45',
       'Boros short IM',
       `Boros initial margin · ${pair.shortLeg.venue} (short) +${fmtUsd(cap.borosShortImUsd ?? 0)}`,
     ],
     [
       'cap-boros-long',
       cap.borosLongImUsd,
-      'bg-info/60',
+      'bg-info/45',
       'Boros long IM',
       `Boros initial margin · ${pair.longLeg.venue} (long) +${fmtUsd(cap.borosLongImUsd ?? 0)}`,
     ],
     [
       'cap-perp-short',
       cap.perpShortImUsd,
-      'bg-info/45',
+      'bg-ink-300/30',
       `Perp short IM${lev(cap.shortLeverageMax)}`,
       `Perp initial margin · ${pair.shortLeg.venue} (short) — notional over the venue's max leverage${lev(cap.shortLeverageMax)} +${fmtUsd(cap.perpShortImUsd ?? 0)}`,
     ],
     [
       'cap-perp-long',
       cap.perpLongImUsd,
-      'bg-info/30',
+      'bg-ink-300/30',
       `Perp long IM${lev(cap.longLeverageMax)}`,
       `Perp initial margin · ${pair.longLeg.venue} (long) — notional over the venue's max leverage${lev(cap.longLeverageMax)} +${fmtUsd(cap.perpLongImUsd ?? 0)}`,
     ],
@@ -293,8 +292,8 @@ export function OpportunityWaterfall({
             which smeared them into each other. */}
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-[repeat(auto-fit,minmax(280px,1fr))]">
           {showProfit && (
-            <div className="flex min-w-0 flex-col gap-3 rounded border border-ink-700 p-3.5">
-              <span className={microLabelClass}>Profit by maturity</span>
+            <div className="flex min-w-0 flex-col gap-3 rounded border border-wash/10 px-4 py-3.5">
+              <span className="text-[14px] font-semibold text-ink-50">Profit by maturity</span>
               <WaterfallPlot
                 steps={profitSteps!}
                 y={left.y}
@@ -317,8 +316,8 @@ export function OpportunityWaterfall({
             </div>
           )}
           {showCapital && (
-            <div className="flex min-w-0 flex-col gap-3 rounded border border-ink-700 p-3.5">
-              <span className={microLabelClass}>Capital (modelled min)</span>
+            <div className="flex min-w-0 flex-col gap-3 rounded border border-wash/10 px-4 py-3.5">
+              <span className="text-[14px] font-semibold text-ink-50">Capital (modelled min)</span>
               <WaterfallPlot
                 steps={capitalSteps!}
                 y={right.y}
@@ -329,7 +328,7 @@ export function OpportunityWaterfall({
               />
               <span className="flex items-baseline justify-between gap-3 border-t border-ink-700 pt-[9px]">
                 <span className="text-[11.5px] text-ink-200">Total capital</span>
-                <span className="num whitespace-nowrap text-sm font-semibold text-info">
+                <span className="num whitespace-nowrap text-sm font-semibold text-ink-50">
                   {fmtUsd(pair.capitalUsd ?? 0, 0)}
                 </span>
               </span>

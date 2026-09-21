@@ -237,7 +237,7 @@ export function ClosePreviewPanel({
             </span>
             {hedgeAtMarket && i > 0 ? (
               <span className="flex justify-between text-ink-400">
-                <span title="The hedge leg is sent as a plain market IOC, inside the venue's own price-limit band — no limit price of its own">order</span>
+                <span title="Sent as a market IOC inside the venue's price-limit band.">order</span>
                 <span className="text-ink-100">market IOC</span>
               </span>
             ) : (

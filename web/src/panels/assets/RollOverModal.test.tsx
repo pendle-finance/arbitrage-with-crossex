@@ -494,7 +494,8 @@ describe('RollOverModal — the review page', () => {
      * of the $219.18, with the rate move that produced it.
      */
     const title = label.getAttribute('title') ?? '';
-    expect(title).toMatch(/Gate \$109\.59 · locked 4\.00% → 6\.00%/);
-    expect(title).toMatch(/Hyperliquid \$109\.59 · locked 8\.00% → 6\.00%/);
+    // One row per leg: "venue · locked → exec" on the left, its PnL on the right.
+    expect(title).toMatch(/Gate · 4\.00% → 6\.00%\t\$109\.59/);
+    expect(title).toMatch(/Hyperliquid · 8\.00% → 6\.00%\t\$109\.59/);
   });
 });

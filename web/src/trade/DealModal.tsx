@@ -330,7 +330,7 @@ export function DealModal({ dealId, onClose }: { dealId: string; onClose: () => 
             {orders.length > 0 && (
               <div className="max-h-48 overflow-y-auto rounded-lg border border-ink-800">
                 <table className="w-full text-[11px]">
-                  <thead className="text-left text-[10px] uppercase tracking-wider text-ink-500">
+                  <thead className="text-left text-[12px] font-normal text-ink-300">
                     <tr>
                       <th className="px-2 py-1">leg</th>
                       <th className="px-2 py-1">kind</th>
@@ -405,7 +405,7 @@ export function DealModal({ dealId, onClose }: { dealId: string; onClose: () => 
                 data-testid="deal-report"
                 className="rounded-lg border border-ink-800 bg-ink-950/60 px-3 py-2 text-[11px] text-ink-300"
               >
-                <div className="mb-1 text-[10px] uppercase tracking-wider text-ink-500">Report</div>
+                <div className="mb-1 text-[12px] font-normal text-ink-300">Report</div>
                 <div className="flex flex-wrap gap-x-4 gap-y-0.5">
                   <span>
                     A filled <span className="num text-ink-100">{sig(report.aFilled)}</span>
@@ -445,7 +445,7 @@ export function DealModal({ dealId, onClose }: { dealId: string; onClose: () => 
                     />
                     <div
                       className="flex flex-wrap items-baseline gap-x-2 pt-0.5"
-                      title="short-leg avg − long-leg avg: positive means the pair entered at a favorable basis (sold higher than it bought)"
+                      title="Short-leg average − long-leg average. Positive = sold higher than it bought."
                     >
                       <span className="w-14 shrink-0 text-ink-500">slippage</span>
                       <span className={`num ${signedClass(slip.diff)}`}>

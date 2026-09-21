@@ -135,7 +135,7 @@ export function BorosAgentSetup() {
         </div>
         <p
           className="mt-1 text-[10.5px] leading-relaxed text-ink-500"
-          title="A delegated agent key signs your orders. It can trade this account but cannot deposit or withdraw — those need your wallet."
+          title="A delegated key that signs your orders. It cannot deposit or withdraw."
         >
           Agent key — trades only, <span className="text-ink-300">cannot deposit or withdraw</span>
           {status.data.expiry !== null && !status.data.expired

@@ -18,6 +18,7 @@
 import type { ReactNode } from 'react';
 import { useVenueBook } from '../api/queries';
 import type { ActionInput, BookTouch, PreviewResult } from '../api/types';
+import { VenueIcon } from '../components/AssetIcon';
 import { FreshnessButton } from '../components/FreshnessIndicator';
 import { parseSymbol, prettyVenue, sig } from '../lib/fmt';
 import { usePreviewDebounced } from './usePreview';
@@ -336,7 +337,7 @@ export function PriceImpactGraph({
     >
       {!embedded && (
         <div className="flex items-center justify-between">
-          <span className="text-[10px] font-semibold uppercase tracking-wider text-ink-500">
+          <span className="text-[12px] font-normal leading-[14.52px] text-ink-300">
             Book &amp; market impact
           </span>
           <FreshnessButton
@@ -373,8 +374,12 @@ export function PriceImpactGraph({
               <div className="relative h-40 border-l border-ink-800">
                 <LegColumn leg={long} marks={scale.long} dim={dim} />
               </div>
-              <div className="truncate pt-0.5 text-center text-[10px] font-medium text-emerald-300" title={`${long.venue} (long)`}>
-                {prettyVenue(long.venue)}
+              <div
+                className="flex items-center justify-center gap-1 truncate pt-0.5 text-center text-[10px] font-medium text-emerald-300"
+                title={`${long.venue} (long)`}
+              >
+                <VenueIcon venue={long.venue} size={12} />
+                <span className="truncate">{prettyVenue(long.venue)}</span>
               </div>
               {long.subLabel && (
                 <div className="truncate text-center text-[9px] text-ink-500">{long.subLabel}</div>
@@ -384,8 +389,12 @@ export function PriceImpactGraph({
               <div className="relative h-40 border-l border-ink-800">
                 <LegColumn leg={short} marks={scale.short} dim={dim} />
               </div>
-              <div className="truncate pt-0.5 text-center text-[10px] font-medium text-rose-300" title={`${short.venue} (short)`}>
-                {prettyVenue(short.venue)}
+              <div
+                className="flex items-center justify-center gap-1 truncate pt-0.5 text-center text-[10px] font-medium text-rose-300"
+                title={`${short.venue} (short)`}
+              >
+                <VenueIcon venue={short.venue} size={12} />
+                <span className="truncate">{prettyVenue(short.venue)}</span>
               </div>
               {short.subLabel && (
                 <div className="truncate text-center text-[9px] text-ink-500">{short.subLabel}</div>

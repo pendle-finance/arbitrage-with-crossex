@@ -49,6 +49,7 @@ import { QueryError } from '../components/QueryError';
 import { SegmentedToggle } from '../components/SegmentedToggle';
 import { Skeleton } from '../components/Skeleton';
 import { microLabelClass } from '../components/Th';
+import { TokenIcon, VenueIcon } from '../components/AssetIcon';
 import { SideVenue } from '../components/VenueChip';
 import { borosMarketUrl, isUsdCollateral } from '../lib/boros';
 import {
@@ -260,16 +261,16 @@ function Dash({ why }: { why: string }) {
 /** One labelled figure of the collapsed card's stat row. Label over value puts
  * every card's CAPITAL / RETURN / NOTIONAL at the same x, so a column of cards
  * reads as a table — the inline sentence it replaces couldn't line up. */
-function Stat({ label, children }: { label: string; children: ReactNode }) {
+function Stat({ label, tip, children }: { label: string; tip?: boolean; children: ReactNode }) {
   // Measured against the mock: the label's TOP lines up with the APR's top and
   // the value's baseline then lands within ~3px of the APR's, because a 30px
   // number and a 10px label + 7px gap + 14px value happen to span the same box.
   // So this is plain top-alignment — no height box, which only pushed the
   // values a full line below the APR.
   return (
-    <span className="flex flex-col items-start gap-[7px]">
-      <span className={microLabelClass}>{label}</span>
-      <span className="num text-sm leading-none text-ink-50">{children}</span>
+    <span className="flex flex-col items-start gap-1.5">
+      <span className={`${microLabelClass}${tip ? ' tip-label' : ''}`}>{label}</span>
+      <span className="num text-[14px] font-medium leading-[16.94px] text-ink-50">{children}</span>
     </span>
   );
 }
@@ -283,7 +284,7 @@ interface CardChip {
 }
 
 /** The one sentence a thin Boros book puts on every number it nulls. */
-const THIN_BOOK_WHY = "The Boros books can't lock this size — no net APR is quoted";
+const THIN_BOOK_WHY = "The Boros books can't lock this size.";
 
 /**
  * Warning chips for one card, derived only from the pair's own field status.
@@ -319,12 +320,12 @@ function cardChips(pair: OpportunityPair): CardChip[] {
 
 /** The one sentence every null capital number carries. */
 const CAPITAL_WHY =
-  "The capital can't be modelled — a leg's locked rate, a Boros margin input, or a venue's max leverage is missing; see the pair's notes";
+  "The capital can't be modelled. A rate, margin input or max leverage is missing.";
 
 /** The hero's title: same wording as the Positions card, plus what "capital"
  * means for a trade that isn't open yet. */
 const CAPITAL_APR_TITLE =
-  'Locked fixed spread annualized on the capital this strategy consumes. Capital here is MODELLED — the minimum this trade would post: Boros initial margin on both legs plus perp initial margin at each venue’s max leverage.';
+  'Locked fixed spread annualized on the minimum capital this trade posts.';
 
 /** One "$10k · Short ETH · BYBIT · <note>" row of the 4-leg explainer. The four
  * cells are a fragment so the parent grid keeps both rows aligned. */
@@ -347,50 +348,53 @@ function LegRow({
   /** Link the label out (the Boros legs → the market page, side prefilled). */
   href?: string;
 }) {
-  const labelEl = (
-    <>
-      {label}{' '}
-      <span
-        className={`text-[10px] font-normal uppercase tracking-[0.1em] ${
-          kind === 'Boros' ? 'text-link' : 'text-ink-400'
-        }`}
-      >
-        {kind}
-      </span>
-    </>
+  // The mock's leg box: a dark inset per leg — number, what it is, and WHERE it
+  // trades as a rounded tag at the right (CrossEx grey, Boros the brand blue) —
+  // with the leg's one note on a line underneath, indented under the label.
+  const tag = (
+    <span
+      className={`ml-auto whitespace-nowrap rounded-full px-2.5 py-[3px] text-[11px] font-semibold tracking-[0.06em] ${
+        kind === 'Boros' ? 'bg-info/[0.16] text-pastel-blue' : 'bg-wash/[0.10] text-ink-300'
+      }`}
+    >
+      {kind}
+      {href && <span aria-hidden="true"> ↗</span>}
+    </span>
   );
   return (
-    // `sm:contents` hands the three cells back to the parent grid on real
-    // screens. Below that the grid's max-content tracks have a floor no phone
-    // can pay, so the row becomes a plain wrapping line instead.
-    <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 sm:contents">
-      {/* The leg's number, tinted by its direction — the mock's 17px square. */}
-      <span
-        aria-hidden="true"
-        className={`num grid h-[17px] w-[17px] shrink-0 place-items-center rounded-sm text-[10px] font-semibold ${
-          side === 'short' ? 'bg-guava/[0.14] text-guava' : 'bg-grass/[0.14] text-grass'
-        }`}
-      >
-        {n}
-      </span>
-      {href ? (
-        <a
-          href={href}
-          target="_blank"
-          rel="noreferrer"
-          title={`Open this market on Boros with the ${side} side prefilled`}
-          /* The visible label is the mock's bare "Short BTC" + a Boros tag; the
-             tag disambiguates it on screen, but a link's accessible name has to
-             stand alone, so it says which book and which rate it is. */
-          aria-label={`${label} funding on Boros`}
-          className="num min-w-0 text-[12.5px] font-medium text-ink-50 underline decoration-ink-500 underline-offset-2 transition-opacity hover:opacity-80"
+    <div className="rounded border border-wash/[0.07] bg-ink-950/60 px-4 py-3.5">
+      <div className="flex items-center gap-2.5">
+        <span
+          aria-hidden="true"
+          className={`num inline-flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded text-[12px] font-bold ${
+            side === 'short' ? 'bg-guava/10 text-guava' : 'bg-grass/[0.12] text-grass'
+          }`}
         >
-          {labelEl} <span aria-hidden="true">↗</span>
-        </a>
-      ) : (
-        <span className="num min-w-0 text-[12.5px] font-medium text-ink-50">{labelEl}</span>
-      )}
-      <span className="whitespace-nowrap text-[11.5px] text-ink-300">{note}</span>
+          {n}
+        </span>
+        {href ? (
+          <a
+            href={href}
+            target="_blank"
+            rel="noreferrer"
+            title={`Open this market on Boros with the ${side} side prefilled`}
+            /* The visible label is the mock's bare "Short BTC" + a Boros tag; the
+               tag disambiguates it on screen, but a link's accessible name has to
+               stand alone, so it says which book and which rate it is. */
+            aria-label={`${label} funding on Boros`}
+            className="flex min-w-0 flex-1 items-center gap-2.5 text-[14px] font-semibold leading-[16.94px] text-ink-50 transition-opacity hover:opacity-80"
+          >
+            <span className="num min-w-0">{label}</span>
+            {tag}
+          </a>
+        ) : (
+          <span className="flex min-w-0 flex-1 items-center gap-2.5 text-[14px] font-semibold leading-[16.94px] text-ink-50">
+            <span className="num min-w-0">{label}</span>
+            {tag}
+          </span>
+        )}
+      </div>
+      <div className="mt-2.5 pl-8 text-[12px] text-ink-300">{note}</div>
     </div>
   );
 }
@@ -413,24 +417,26 @@ function VenueBox({
   children: ReactNode;
 }) {
   return (
-    <div className="flex min-w-0 flex-col gap-[11px] rounded border border-ink-700 bg-ink-950/50 p-3.5">
-      <span className="flex flex-wrap items-center gap-2">
-        <span className="whitespace-nowrap text-[13.5px] font-semibold text-ink-50">{venue}</span>
-        <span className="whitespace-nowrap text-[11.5px] text-ink-300">{why}</span>
+    <div className="min-w-0 rounded border border-wash/10 p-5">
+      <div className="mb-4 flex flex-wrap items-center gap-x-2.5 gap-y-1.5">
+        <VenueIcon venue={venue} size={20} />
+        <span className="whitespace-nowrap text-[16px] font-bold leading-[19.36px] text-ink-50">{venue}</span>
+        <span className="whitespace-nowrap text-[12px] text-ink-500">{why}</span>
         {fixedApr !== null && Number.isFinite(fixedApr) && (
           <span
-            className={`num ml-auto whitespace-nowrap rounded px-2.5 py-1 text-[11.5px] font-semibold ${
-              positive ? 'bg-grass/[0.14] text-grass' : 'bg-guava/[0.14] text-guava'
+            className={`num ml-auto whitespace-nowrap rounded px-3 py-1.5 text-[14px] font-bold ${
+              positive ? 'bg-grass/10 text-grass' : 'bg-guava/10 text-guava'
             }`}
           >
             {positive ? '+' : '−'}
             {fmtPct(Math.abs(fixedApr), 1)} Fixed
           </span>
         )}
-      </span>
-      <span className="grid grid-cols-1 items-center gap-x-2.5 gap-y-2 sm:grid-cols-[auto_minmax(0,1fr)_auto]">
+      </div>
+      {/* One inset box per leg, joined by a short dashed connector. */}
+      <div className="flex flex-col [&>*+*]:relative [&>*+*]:mt-[18px] [&>*+*]:before:absolute [&>*+*]:before:-top-[18px] [&>*+*]:before:left-[26px] [&>*+*]:before:h-[18px] [&>*+*]:before:border-l [&>*+*]:before:border-dashed [&>*+*]:before:border-ink-300/30 [&>*+*]:before:content-['']">
         {children}
-      </span>
+      </div>
     </div>
   );
 }
@@ -542,18 +548,19 @@ const OpportunityCard = memo(function OpportunityCard({
     <div
       // overflow-hidden lets the identity band's darker ground clip cleanly at
       // the card's rounded corners.
-      className={`card overflow-hidden ${detailsDisabled ? '' : 'cursor-pointer transition-colors hover:border-ink-600'}`}
+      className={`overflow-hidden rounded bg-wash/[0.05] ${detailsDisabled ? '' : 'cursor-pointer transition-colors hover:bg-wash/[0.08]'}`}
       onClick={toggleFromCard}
     >
       {/* Identity band — WHAT the trade is, before how much it pays: ticker,
           the two legs, warnings pushed right. Its darker ground and hairline
           give the list a ledger rhythm and keep warnings out of the hero's
           way. */}
-      <div className="flex flex-wrap items-center gap-x-2.5 gap-y-2 border-b border-ink-850 bg-ink-100/[0.04] px-3.5 py-[9px]">
+      <div className="flex flex-wrap items-center gap-x-2.5 gap-y-2 px-5 pt-[18px]">
         <span
-          className="num text-[12.5px] font-semibold tracking-[0.03em] text-ink-50"
+          className="num inline-flex items-center gap-2 text-[16px] font-bold leading-[19.36px] text-ink-50"
           title={`${base} funding rate`}
         >
+          <TokenIcon symbol={base} size={20} />
           {base}
         </span>
         <SideVenue side="SHORT" venue={pair.shortLeg.venue} />
@@ -566,51 +573,31 @@ const OpportunityCard = memo(function OpportunityCard({
           className="ml-1 flex cursor-pointer items-center gap-1.5 whitespace-nowrap text-[11px] text-ink-300"
           title={
             held
-              ? 'You hold this pair at a sooner maturity, so this starts ticked. Prices the row with no perp entry cost.'
-              : 'Prices this row with no perp entry cost — you add only the Boros legs.'
+              ? 'You hold this pair at a sooner maturity. Prices the row with no perp entry cost.'
+              : 'Prices this row with no perp entry cost.'
           }
         >
           <input type="checkbox" className="chk" checked={hasPerps} onChange={(e) => setHasPerpsChoice(e.target.checked)} />
           I have existing perp position
         </label>
-        <span className="ml-auto flex flex-wrap items-center gap-2">
-          {chips.map((c) => (
-            <Chip key={c.key} sm tone={c.tone ?? 'amber'} title={c.title}>
-              {c.label}
-            </Chip>
-          ))}
-          <span className="num whitespace-nowrap text-[11px] text-ink-400" title={maturityTitle}>
-            matures {fmtDateLocal(group.maturity)}
-          </span>
-        </span>
-      </div>
-
-      <div className="p-3.5">
-        {/* Stacked on phones: the shrink-0 action column is 184px, which left
-            the APR hero and the stat row ~112px to fight over and spilling.
-            items-CENTER, not items-end: the action column runs ~22px taller
-            than the figures (two buttons over their caption), and ending them
-            together dropped that whole gap above the APR, which read as a
-            bloated top margin on every card. */}
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between sm:gap-5">
-          {/* Hero + stats share one baseline (items-end): the APR leads, the
-              labelled figures columnize across cards. */}
-          <div className="flex min-w-0 flex-wrap items-start gap-x-[34px] gap-y-4">
-            {/* One row: the APR leads and CAPITAL / RETURN / NOTIONAL sit beside
-                it, so a column of cards reads as a table. They wrap together
-                only when the viewport actually runs out. */}
-            <span className="flex flex-col gap-[7px]">
-            <span className="flex items-baseline gap-2">
+        {chips.map((c) => (
+          <Chip key={c.key} sm tone={c.tone ?? 'amber'} title={c.title}>
+            {c.label}
+          </Chip>
+        ))}
+        {/* Line 1 ends on what it pays — the mock's placement: who, then how
+            much, on one line; the figures and the actions on the line below. */}
+        <span className="ml-auto flex items-baseline gap-2 whitespace-nowrap">
               {capitalApr === null || !Number.isFinite(capitalApr) ? (
                 <span
-                  className="num text-[30px] font-semibold leading-none tracking-[-0.03em] text-ink-400"
+                  className="num text-[28px] font-bold leading-none text-ink-400"
                   title={reasons.length > 0 ? reasons.join('\n') : CAPITAL_WHY}
                 >
                   —%
                 </span>
               ) : (
                 <span
-                  className={`num text-[30px] font-semibold leading-none tracking-[-0.03em] ${
+                  className={`num text-[28px] font-bold leading-none ${
                     capitalApr < 0 ? 'text-guava' : 'text-grass'
                   }`}
                   title={
@@ -628,35 +615,34 @@ const OpportunityCard = memo(function OpportunityCard({
               <span className="text-[12.5px] text-ink-400" title={maturityTitle}>
                 ({days}d)
               </span>
-            </span>
-            {/* Details as a dotted-underline text link rather than a button:
-                expanding is the quiet, reversible move and should not carry
-                the weight of the one that opens a position. Still a real
-                <button> — it owns aria-expanded and must stay keyboard- and
-                screen-reader-addressable; only its chrome is gone. */}
-            <button
-            type="button"
-              className="self-start text-[11.5px] text-ink-300 underline decoration-ink-400 decoration-dotted underline-offset-[3px] transition-colors hover:text-ink-50 hover:decoration-ink-200 disabled:cursor-not-allowed disabled:no-underline disabled:opacity-50 disabled:hover:text-ink-300"
-              aria-expanded={open}
-              aria-label={`${open ? 'Hide' : 'Show'} details for ${base} short ${prettyVenue(pair.shortLeg.venue)} / long ${prettyVenue(pair.longLeg.venue)}, ${group.collateral}-margined ${fmtDateLocal(group.maturity)}`}
-              disabled={detailsDisabled}
-              title={detailsTitle}
-              onClick={() => setOpen((v) => !v)}
-            >
-              {open ? 'Hide details' : 'More details'}
-            </button>
-            </span>
+        </span>
+      </div>
 
-            <Stat label="Capital">
+      <div className="px-5 pb-[18px]">
+        <div className="mt-4 border-t border-wash/10 pt-4" />
+        {/* Stacked on phones: the shrink-0 action column is 184px, which left
+            the APR hero and the stat row ~112px to fight over and spilling.
+            items-CENTER, not items-end: the action column runs ~22px taller
+            than the figures (two buttons over their caption), and ending them
+            together dropped that whole gap above the APR, which read as a
+            bloated top margin on every card. */}
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between sm:gap-5">
+          {/* Hero + stats share one baseline (items-end): the APR leads, the
+              labelled figures columnize across cards. */}
+          <div className="flex min-w-0 flex-wrap items-start gap-x-[34px] gap-y-4">
+            {/* One row: the APR leads and CAPITAL / RETURN / NOTIONAL sit beside
+                it, so a column of cards reads as a table. They wrap together
+                only when the viewport actually runs out. */}
+            <Stat label="Capital" tip>
               {capitalUsd === null ? (
                 <Dash why={CAPITAL_WHY} />
               ) : (
-                <span title="The modelled minimum this trade posts across the four legs — expand for the breakdown">
+                <span title="The minimum capital this trade posts across the four legs.">
                   ~{fmtUsd(capitalUsd, 0)}
                 </span>
               )}
             </Stat>
-            <Stat label="Return">
+            <Stat label="Return" tip>
               {estProfitUsd === null ? (
                 <Dash why="No net APR — nothing to project" />
               ) : (
@@ -670,12 +656,11 @@ const OpportunityCard = memo(function OpportunityCard({
             </Stat>
             <Stat label="Notional">
               <span
-                className="text-pastel-blue"
                 title={`${fmtUsd(notionalUsd, 0)} per leg${collateralQty ? ` ≈ ${sig(collateralQty.qty)} ${collateralQty.symbol}` : ''}`}
               >
                 {fmtNotionalShort(notionalUsd)}
                 {collateralQty && (
-                  <span className="text-pastel-blue/70">
+                  <span className="text-[12px] font-normal text-ink-300">
                     {' '}
                     ({fmtTokenQty(collateralQty.qty, collateralQty.symbol)})
                   </span>
@@ -689,7 +674,7 @@ const OpportunityCard = memo(function OpportunityCard({
               <Stat label="Gross spread">
                 <span
                   className="text-amber-400"
-                  title="midApr(short) − midApr(long) — the raw Boros spread, before execution and costs"
+                  title="Short mid rate − long mid rate, before execution and costs."
                 >
                   {fmtPct(pair.grossSpreadApr, 1)}
                 </span>{' '}
@@ -702,7 +687,27 @@ const OpportunityCard = memo(function OpportunityCard({
               figures beside it and left that much dead band inside the row;
               both it and Details are gone from this row now, so the two sides
               are naturally the same height. */}
-          <div className="flex shrink-0 items-center gap-2">
+          <div className="flex shrink-0 items-center gap-3">
+            <span className="num whitespace-nowrap text-[12px] text-ink-400" title={maturityTitle}>
+              matures {fmtDateLocal(group.maturity)}
+            </span>
+            {/* Details as a dotted-underline text link rather than a button:
+                expanding is the quiet, reversible move and should not carry
+                the weight of the one that opens a position. Still a real
+                <button> — it owns aria-expanded and must stay keyboard- and
+                screen-reader-addressable; only its chrome is gone. */}
+            <button
+            type="button"
+              className="text-[12px] text-ink-300 underline decoration-ink-400 decoration-dotted underline-offset-[3px] transition-colors hover:text-ink-50 hover:decoration-ink-200 disabled:cursor-not-allowed disabled:no-underline disabled:opacity-50 disabled:hover:text-ink-300"
+              aria-expanded={open}
+              aria-label={`${open ? 'Hide' : 'Show'} details for ${base} short ${prettyVenue(pair.shortLeg.venue)} / long ${prettyVenue(pair.longLeg.venue)}, ${group.collateral}-margined ${fmtDateLocal(group.maturity)}`}
+              disabled={detailsDisabled}
+              title={detailsTitle}
+              onClick={() => setOpen((v) => !v)}
+            >
+              {open ? 'Hide details' : 'More details'}
+            </button>
+
             {/* ONE action: the strategy is two ordered executions, and two
                 side-by-side buttons styled primary/secondary read as
                 alternatives — the opposite of the truth. The wizard this opens
@@ -758,8 +763,8 @@ const OpportunityCard = memo(function OpportunityCard({
                   notional each
                 </span>
               </span>
-              <span aria-hidden="true" className="h-px min-w-[24px] flex-1 bg-ink-700" />
-              <span className="whitespace-nowrap rounded-full border border-ink-600 px-3 py-[5px] text-[11px] text-ink-200">
+              <span aria-hidden="true" className="min-w-[24px] flex-1 border-t border-dashed border-ink-300/25" />
+              <span className="whitespace-nowrap rounded-full border border-wash/[0.15] bg-ink-950/60 px-4 py-[5px] text-[12px] text-ink-300">
                 nets to 0 · no price risk
               </span>
             </div>
@@ -836,8 +841,8 @@ const OpportunityCard = memo(function OpportunityCard({
                 // The strip's own colour is `info` in every state: it frames
                 // the summary rather than grading it, and the sign already
                 // lives on the APR inside it.
-                <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 rounded border border-info/30 bg-info/[0.06] px-3.5 py-3 text-[12.5px] text-ink-200">
-                  <span className={`${microLabelClass} mr-1 !text-pastel-blue`}>Net effect</span>
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 rounded bg-info/10 px-4 py-3 text-[12px] leading-[1.5] text-ink-100">
+                  <span className={'mr-1.5 font-semibold text-ink-50'}>Net effect</span>
                   <span className="whitespace-nowrap">
                     Locks a{' '}
                     <span className="num font-semibold text-ink-50">
@@ -1045,7 +1050,7 @@ export function OpportunitiesPanel({ unconfigured = false }: { unconfigured?: bo
   );
 
   const controls = (
-    <div className="mb-4 flex flex-wrap items-start gap-x-6 gap-y-3 rounded border border-ink-700 bg-ink-100/[0.03] px-4 py-3.5">
+    <div className="mb-5 flex flex-wrap items-end gap-x-8 gap-y-5 rounded border border-wash/[0.14] bg-wash/[0.07] p-5">
       {/* One row, nothing folded away: the size every card is priced at, the
           two execution assumptions, the clock. With the account connected
           there is no fee tier to simulate, and two knobs do not earn a panel
@@ -1054,7 +1059,7 @@ export function OpportunitiesPanel({ unconfigured = false }: { unconfigured?: bo
         <div className={microLabelClass}>Notional per leg</div>
         <div className="flex flex-wrap items-center gap-2">
         <span
-          className={`flex h-8 items-center gap-2 rounded border bg-ink-950/60 px-3 ${
+          className={`flex h-9 items-center gap-1 rounded border border-ink-800/50 bg-wash/[0.05] px-2.5 focus-within:border-info/70 ${
             sizeBad ? 'border-guava/60' : 'border-ink-600'
           }`}
         >
@@ -1068,7 +1073,7 @@ export function OpportunitiesPanel({ unconfigured = false }: { unconfigured?: bo
               aria-label="Custom notional (USD)"
               value={sizeStr}
               onChange={(e) => setSizeStr(e.target.value)}
-              title="The notional every card is priced at — both Boros legs and both perp legs"
+              title="The notional each leg is priced at."
               className="num w-24 bg-transparent text-sm font-semibold text-ink-50 outline-none placeholder:text-ink-500"
             />
           ) : (
@@ -1079,7 +1084,7 @@ export function OpportunitiesPanel({ unconfigured = false }: { unconfigured?: bo
         </span>
         {/* The one and only notional control. It used to be repeated inside
             the advanced panel as a second segmented toggle. */}
-        <span role="radiogroup" aria-label="Notional" className="flex flex-wrap items-center gap-1.5">
+        <span role="radiogroup" aria-label="Notional" className="inline-flex items-center">
           {NOTIONAL_OPTIONS.map((o) => {
             const on = notionalChoice === o.value;
             return (
@@ -1092,10 +1097,10 @@ export function OpportunitiesPanel({ unconfigured = false }: { unconfigured?: bo
                   setNotionalChoice(o.value);
                   persist({ notionalChoice: o.value });
                 }}
-                className={`num whitespace-nowrap rounded-full border px-3 py-1.5 text-[11.5px] font-medium transition-colors ${
+                className={`num -mr-px inline-flex h-[35px] items-center whitespace-nowrap border px-5 text-[12px] transition-colors first:rounded-l last:mr-0 last:rounded-r ${
                   on
-                    ? 'border-info/50 bg-info/[0.14] text-pastel-blue'
-                    : 'border-ink-600 text-ink-200 hover:border-ink-500 hover:text-ink-50'
+                    ? 'relative z-[1] border-ink-700 bg-wash/[0.15] font-medium text-ink-300'
+                    : 'border-ink-700 text-ink-500 hover:bg-wash/[0.05]'
                 }`}
               >
                 {o.label}
@@ -1123,7 +1128,7 @@ export function OpportunitiesPanel({ unconfigured = false }: { unconfigured?: bo
               setFeeTier(next);
               persist({ feeTier: next });
             }}
-            title="Perp fees assume this Gate CrossEx VIP tier — connect Gate keys to price from your real schedule"
+            title="Perp fees assume this Gate CrossEx VIP tier."
             className="input num h-[30px] w-24 !py-0 text-xs"
           >
             {OPPORTUNITY_FEE_TIERS.map((t) => (
@@ -1137,7 +1142,7 @@ export function OpportunitiesPanel({ unconfigured = false }: { unconfigured?: bo
       <div className="flex flex-col items-start gap-1.5">
         <div className={microLabelClass}>Perp entry</div>
         <SegmentedToggle<EntryMode>
-          className="seg-info"
+          className="seg-info seg-lg"
           ariaLabel="Perp entry mode"
           value={entryMode}
           onChange={(next) => {
@@ -1154,7 +1159,7 @@ export function OpportunitiesPanel({ unconfigured = false }: { unconfigured?: bo
       <div className="flex flex-col items-start gap-1.5">
         <div className={microLabelClass}>Perp exit cost</div>
         <SegmentedToggle<ExitMode>
-          className="seg-info"
+          className="seg-info seg-lg"
           ariaLabel="Perp legs at maturity"
           value={exitMode}
           onChange={(next) => {
