@@ -6,7 +6,7 @@ export interface MarkRow {
   markPrice?: string;
 }
 
-export type MarkedRow<T> = T & { markStaleSinceMs?: number };
+export type MarkedRow<T> = T & { markStaleSinceMs?: number; markHeldSinceMs?: number };
 
 export interface MarkPatch<T> {
   rows: Array<MarkedRow<T>>;
@@ -36,8 +36,8 @@ export function rememberMarks<T extends MarkRow>(rows: readonly T[], nowMs: numb
       continue;
     }
     const last = store.get(symbol);
-    if (last && last.mark !== null && nowMs - last.atMs <= MARK_MEMORY_MS) {
-      out.push({ ...row, markPrice: String(last.mark) });
+    if (last && last.mark !== null && nowMs >= last.atMs && nowMs - last.atMs <= MARK_MEMORY_MS) {
+      out.push({ ...row, markPrice: String(last.mark), markHeldSinceMs: last.atMs });
       continue;
     }
     const sinceMs = last ? last.atMs : nowMs;

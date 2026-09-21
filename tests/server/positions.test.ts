@@ -105,12 +105,14 @@ describe('GET /api/positions', () => {
     const first = await app.inject({ method: 'GET', url: '/api/positions?fresh=1', headers: HOST });
     expect(first.json().data.positions[0].markPrice).toBe('40');
     expect(first.json().data.positions[0].markStaleSinceMs).toBeUndefined();
+    expect(first.json().data.positions[0].markHeldSinceMs).toBeUndefined();
 
     mockGateGet('/positions', { body: hypeBook(''), times: 2 });
     vi.setSystemTime(t0 + 59_000);
     const held = await app.inject({ method: 'GET', url: '/api/positions?fresh=1', headers: HOST });
     expect(held.json().data.positions[0].markPrice).toBe('40');
     expect(held.json().data.positions[0].markStaleSinceMs).toBeUndefined();
+    expect(held.json().data.positions[0].markHeldSinceMs).toBe(t0);
 
     vi.setSystemTime(t0 + 61_000);
     const gone = await app.inject({ method: 'GET', url: '/api/positions?fresh=1', headers: HOST });

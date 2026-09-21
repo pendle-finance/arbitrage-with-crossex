@@ -17,6 +17,7 @@ describe('the last mark Gate sent', () => {
       const { rows, unknown } = rememberMarks([eth(bad)], t0 + at);
       expect(rows[0].markPrice).toBe('2300');
       expect(rows[0].markStaleSinceMs).toBeUndefined();
+      expect(rows[0].markHeldSinceMs).toBe(t0);
       expect(unknown.size).toBe(0);
     }
   });
@@ -25,6 +26,15 @@ describe('the last mark Gate sent', () => {
     rememberMarks([eth('2300')], t0);
     const { rows, unknown } = rememberMarks([eth('')], t0 + MARK_MEMORY_MS + 1);
     expect(rows[0].markPrice).toBe('');
+    expect(rows[0].markStaleSinceMs).toBe(t0);
+    expect(unknown.get('GATE_FUTURE_ETH_USDT')).toBe(t0);
+  });
+
+  it('refuses a remembered mark when the clock has stepped backwards', () => {
+    rememberMarks([eth('2300')], t0);
+    const { rows, unknown } = rememberMarks([eth('')], t0 - 1_000);
+    expect(rows[0].markPrice).toBe('');
+    expect(rows[0].markHeldSinceMs).toBeUndefined();
     expect(rows[0].markStaleSinceMs).toBe(t0);
     expect(unknown.get('GATE_FUTURE_ETH_USDT')).toBe(t0);
   });

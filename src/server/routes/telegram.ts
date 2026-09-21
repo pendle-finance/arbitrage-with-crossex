@@ -3,7 +3,7 @@ import type { TelegramInfo } from '../../../web/src/api/types';
 import { CoreError } from '../../core/errors';
 import type { AppDeps } from '../app';
 import { refuse } from '../errorReply';
-import { BotAuthError, botBaseUrl, BotUnavailableError, type TelegramSettings } from '../telegram/botClient';
+import { BotAuthError, botBaseUrl, type TelegramSettings } from '../telegram/botClient';
 import { deleteTelegramKey, readTelegramKey } from '../telegram/keyFile';
 import type { TelegramAuth } from '../telegram/status';
 
@@ -133,7 +133,7 @@ export function telegramRoutes(deps: AppDeps) {
         try {
           await t.bot.deleteTerminal(key.key);
         } catch (err) {
-          if (err instanceof BotUnavailableError) return refuse(reply, {
+          if (!(err instanceof BotAuthError)) return refuse(reply, {
             code: 503,
             category: 'network',
             message: BOT_UNREACHABLE,

@@ -16,7 +16,8 @@ export function marginTiersOf(rows: readonly RiskLimitRow[]): MarginTiers {
   const table: Record<string, MarginTier[]> = {};
   for (const r of rows) {
     if (!r.symbol) continue;
-    const tiers = (r.tiers ?? [])
+    const sent = r.tiers ?? [];
+    const tiers = sent
       .map((t) => ({
         from: Number(t.minRiskLimitValue),
         rate: Number(t.maintenanceRate),
@@ -24,7 +25,7 @@ export function marginTiersOf(rows: readonly RiskLimitRow[]): MarginTiers {
       }))
       .filter((t) => Number.isFinite(t.from) && Number.isFinite(t.deduction) && t.rate > 0)
       .sort((a, b) => a.from - b.from);
-    if (tiers.length > 0) table[r.symbol] = tiers;
+    if (tiers.length === sent.length && tiers.length > 0 && tiers[0].from === 0) table[r.symbol] = tiers;
   }
   return table;
 }

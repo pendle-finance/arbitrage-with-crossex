@@ -116,7 +116,8 @@ export function ClosePopover({
    * live prices server-side.
    */
   const [mark] = useState(() => Number(position.markPrice));
-  const markOk = Number.isFinite(mark) && mark > 0;
+  const [markHeld] = useState(() => position.markHeldSinceMs !== undefined);
+  const markOk = Number.isFinite(mark) && mark > 0 && !markHeld;
   /**
    * ⚠ USD is only a legal unit while there is a mark to convert AT.
    *

@@ -706,6 +706,18 @@ describe('Telegram settings', () => {
     expect((await send(app, 'GET', '/api/telegram')).body.data).toMatchObject({ connected: true, state: 'connected' });
   });
 
+  it('a disconnect the bot answers 404 keeps the key', async () => {
+    const key = linked();
+    const { app, bot } = boot();
+    bot.behaviour.down = 404;
+
+    const res = await send(app, 'DELETE', '/api/telegram');
+
+    expect(res.code).toBe(503);
+    expect(res.body.error.message).toBe(BOT_UNREACHABLE);
+    expect(keyOnDisk().key).toBe(key.key);
+  });
+
   it('a disconnect the bot refuses for a reason clears the key', async () => {
     linked();
     const { app, bot } = boot();

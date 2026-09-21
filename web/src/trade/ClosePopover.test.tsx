@@ -346,6 +346,24 @@ describe('ClosePopover — sizing a close in dollars', () => {
     expect(await screen.findByText(/close size exceeds position \(1\.89 HYPE\)/)).toBeInTheDocument();
   });
 
+  it('drops the USD unit when the mark is one the server remembered', async () => {
+    server.use(...baseHandlers(), closePreviewHandler());
+    renderWithClient(
+      <ClosePopover
+        position={makeCrossexPosition({ ...hypePosition, markHeldSinceMs: Date.parse('2026-09-21T14:32:00Z') })}
+        onDismiss={() => {}}
+      />,
+    );
+    await screen.findByText(/limit px/);
+
+    expect(screen.getByLabelText('Close qty')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Close value')).not.toBeInTheDocument();
+    expect(screen.queryByRole('radiogroup', { name: 'Close size unit' })).not.toBeInTheDocument();
+    await userEvent.clear(screen.getByLabelText('Close qty'));
+    await userEvent.type(screen.getByLabelText('Close qty'), '2');
+    expect(await screen.findByText(/close size exceeds position \(1\.89 HYPE\)/)).toBeInTheDocument();
+  });
+
   it('keeps the SIZE when the unit is toggled, not the digits', async () => {
     // Relabelling 0.63 as $0.63 would silently resize the close by the mark.
     server.use(...baseHandlers(), closePreviewHandler());

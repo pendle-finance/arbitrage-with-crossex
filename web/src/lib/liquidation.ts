@@ -1,5 +1,5 @@
 import type { CrossexAccount, CrossexPosition, PositionsResponse } from '../api/types';
-import { fmtClock, fmtUsd, num, WALLET_SHORT } from './fmt';
+import { fmtClock, fmtUsd, num, prettyVenue, WALLET_SHORT } from './fmt';
 
 /**
  * Where the account liquidates if ONE coin moves and every other coin holds
@@ -103,7 +103,7 @@ function legsOf(positions: PositionsResponse, tiers: MarginTiers): { legs: Leg[]
         if (!unpriced.has(g.base)) {
           unpriced.set(g.base, {
             base: g.base,
-            venue: WALLET_SHORT[walletOf(l.exchange)] ?? l.exchange,
+            venue: prettyVenue(l.exchange),
             sinceMs: staleSinceOf(p),
           });
         }
@@ -142,9 +142,14 @@ interface MarginModel {
   gapOf: (mine: Leg[]) => (f: number) => number;
 }
 
+const MM_TABLE_TOLERANCE = 0.01;
+
 function mmChange(l: Leg, f: number): number {
-  if (l.tiers === undefined || l.tiers.length === 0) return l.mm * (f - 1);
-  return maintenanceAt(l.tiers, l.value * f) - maintenanceAt(l.tiers, l.value);
+  const flat = l.mm * (f - 1);
+  if (l.tiers === undefined || l.tiers.length === 0) return flat;
+  const mmNow = maintenanceAt(l.tiers, l.value);
+  if (Math.abs(mmNow - l.mm) > MM_TABLE_TOLERANCE * l.mm) return flat;
+  return maintenanceAt(l.tiers, l.value * f) - mmNow;
 }
 
 function marginModel(
@@ -274,16 +279,6 @@ export function liquidationSides(
 export function lineFor(view: LiquidationView, base: string): LiquidationLine | 'far' | null {
   const up = base.toUpperCase();
   return view.lines.find((l) => l.base.toUpperCase() === up) ?? (view.far.some((b) => b.toUpperCase() === up) ? 'far' : null);
-}
-
-export function nearestLiquidation(
-  acc: CrossexAccount | undefined,
-  positions: PositionsResponse | undefined,
-  shift?: WalletShift,
-  tiers: MarginTiers = {},
-): LiquidationLine | null {
-  if (!acc || !positions) return null;
-  return liquidationLines(acc, positions, shift, tiers)?.lines[0] ?? null;
 }
 
 /** `+37%`, `-20%`. Whole percents: the line is a model, not a quote. */

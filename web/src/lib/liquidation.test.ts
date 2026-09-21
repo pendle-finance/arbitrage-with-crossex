@@ -9,7 +9,6 @@ import {
   liquidationLines,
   liquidationSides,
   maintenanceAt,
-  nearestLiquidation,
   unknownLabel,
   type LiquidationLine,
   type MarginTiers,
@@ -169,7 +168,7 @@ describe('liquidationLines', () => {
     const blanked = box();
     blanked.positions[0] = { ...blanked.positions[0], markPrice: '' };
     const view = liquidationLines(account(), blanked)!;
-    expect(view).toEqual({ lines: [], far: [], unknown: [{ base: 'ETH', venue: 'CrossEx', sinceMs: null }] });
+    expect(view).toEqual({ lines: [], far: [], unknown: [{ base: 'ETH', venue: 'Gate', sinceMs: null }] });
     expect(lineFor(view, 'ETH')).toBeNull();
     expect(liquidationSides(account(), blanked, 'ETH')).toEqual({ down: null, up: null });
   });
@@ -192,7 +191,7 @@ describe('liquidationLines', () => {
         expect(view).toEqual({
           lines: full.lines.filter((l) => l.base !== 'ETH'),
           far: full.far,
-          unknown: [{ base: 'ETH', venue: symbol.startsWith('HYPERLIQUID') ? 'Hyperliquid' : 'CrossEx', sinceMs: null }],
+          unknown: [{ base: 'ETH', venue: symbol.startsWith('HYPERLIQUID') ? 'Hyperliquid' : 'Binance', sinceMs: null }],
         });
         expect(liquidationSides(whaleAccount, blanked, 'ETH')).toEqual({ down: null, up: null });
       }
@@ -215,8 +214,6 @@ describe('liquidationLines', () => {
     expect(liquidationLines(account(), { positions: [], exposure: [] })).toEqual({ lines: [], far: [], unknown: [] });
     expect(liquidationLines(account({ marginBalance: 'n/a' }), box())).toBeNull();
     expect(liquidationLines(account({ maintenanceMargin: undefined as unknown as string }), box())).toBeNull();
-    expect(nearestLiquidation(account({ marginBalance: 'n/a' }), box())).toBeNull();
-    expect(nearestLiquidation(undefined, box())).toBeNull();
   });
 
   it('prices a hedged coin across every venue at once', () => {
@@ -418,6 +415,27 @@ describe("Gate's maintenance margin tiers", () => {
     );
   });
 
+  it('falls back to the flat line when the table disagrees with what Gate charges the leg', () => {
+    const acc = hypeAccount(400_000, 53_302.5);
+    const box = hypeBox(750_000, 15_802.5);
+    expect(lines(acc, box, {}, HYPE_TIERS)[0].price).toBeCloseTo(lines(acc, box)[0].price, 6);
+  });
+
+  it('keeps the tiered line when the table is within 1% of what Gate charges', () => {
+    const gateMm = 15_050 * 1.005;
+    const acc = hypeAccount(400_000, 37_500 + gateMm);
+    const box = hypeBox(750_000, gateMm);
+    expect(lines(acc, box, {}, HYPE_TIERS)[0].price).toBeLessThan(lines(acc, box)[0].price - 20);
+  });
+
+  it('prices a leg whose maintenance margin is zero without a NaN', () => {
+    const acc = hypeAccount(400_000, 37_500);
+    const box = hypeBox(750_000, 0);
+    const tiered = lines(acc, box, {}, HYPE_TIERS)[0].price;
+    expect(Number.isFinite(tiered)).toBe(true);
+    expect(tiered).toBeCloseTo(lines(acc, box)[0].price, 6);
+  });
+
   it('gives the Telegram side the same tiered line as the card', () => {
     const acc = hypeAccount(400_000, 52_550);
     const box = hypeBox(750_000, 15_050);
@@ -458,5 +476,32 @@ describe('a coin with no usable mark', () => {
 
   it('leaves a priced coin out of the unknown list', () => {
     expect(liquidationLines(account(), box())!.unknown).toEqual([]);
+  });
+
+  it('names the venue of the blind leg, not the wallet it margins in', () => {
+    const gate = box();
+    gate.positions[0] = { ...gate.positions[0], markPrice: '' };
+    expect(liquidationLines(account(), gate)!.unknown[0].venue).toBe('Gate');
+
+    const hyperliquid = box();
+    hyperliquid.positions[1] = { ...hyperliquid.positions[1], markPrice: '' };
+    expect(liquidationLines(account(), hyperliquid)!.unknown[0].venue).toBe('Hyperliquid');
+
+    const binance = box();
+    binance.positions[0] = { ...binance.positions[0], symbol: 'BINANCE_FUTURE_ETH_USDT', markPrice: '' };
+    binance.exposure[0].legs[0] = {
+      ...binance.exposure[0].legs[0],
+      symbol: 'BINANCE_FUTURE_ETH_USDT',
+      exchange: 'BINANCE',
+    };
+    expect(liquidationLines(account(), binance)!.unknown[0].venue).toBe('Binance');
+  });
+
+  it('still draws the line from a mark the server remembered', () => {
+    const held = box();
+    held.positions[0] = { ...held.positions[0], markHeldSinceMs: Date.parse('2026-09-21T14:32:00Z') };
+    const view = liquidationLines(account(), held)!;
+    expect(view.unknown).toEqual([]);
+    expect(view.lines[0].price).toBeCloseTo(lines(account(), box())[0].price, 6);
   });
 });

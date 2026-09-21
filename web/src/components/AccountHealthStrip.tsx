@@ -29,12 +29,10 @@ export function AccountHealthStrip({ children }: { children?: ReactNode }) {
     u.sinceMs === null ? [] : [`${u.base}. ${unknownLabel({ venue: u.venue, sinceMs: u.sinceMs })}`],
   );
   const nearest = view?.lines[0] ?? null;
-  const liquidation =
-    stale.length > 0
-      ? stale.join(' ')
-      : nearest
-        ? `Nearest liquidation: ${nearest.base}. ${describeLine(nearest)}`
-        : null;
+  const parts = nearest === null
+    ? stale
+    : [`Nearest liquidation: ${nearest.base}. ${describeLine(nearest)}`, ...stale];
+  const liquidation = parts.length > 0 ? parts.join(' ') : null;
   return (
     <div className="ml-auto flex flex-wrap items-center justify-end gap-x-4 gap-y-2">
       <span className="flex items-baseline gap-1.5 whitespace-nowrap text-xs">

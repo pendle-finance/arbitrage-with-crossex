@@ -55,7 +55,7 @@ import { earliestSupportedOpenMs, TrackingStartFile } from '../trackingStart';
 
 const EVM_ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
 
-/** Boros allows 200 computing units per IP per minute. */
+/** Boros allows 200 computing units per IP per minute, measured against its live rate-limit headers on 2026-09-21. */
 export const BOROS_LIVE_TTL_MS = 60_000;
 
 // The venue pages newest-first at up to 1,000 rows; 100 pages is the same

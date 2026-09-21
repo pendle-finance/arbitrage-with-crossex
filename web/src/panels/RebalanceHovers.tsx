@@ -1,5 +1,5 @@
 import { Fragment, useId, type ReactNode } from 'react';
-import type { CrossexAccount, EvenPlan, GateAccount, GoalKind, PlannedStep, Pool, PositionsResponse, RebalanceBucket, RebalanceJob } from '../api/types';
+import type { EvenPlan, GateAccount, GoalKind, PlannedStep, Pool, RebalanceBucket, RebalanceJob } from '../api/types';
 import type { RebalanceView, RouteName, RoutePlan, TransferCoin, TransferView, WalletAfter } from '../api/types';
 import { Chip } from '../components/Chip';
 import { HoverCard } from '../components/HoverCard';
@@ -7,7 +7,6 @@ import { RadioRow } from '../components/RadioRow';
 import { microLabelClass, Th } from '../components/Th';
 import { borrowingBuckets, borrowTotalUsd, MIN_BORROW } from '../lib/borrow';
 import { fmtAbout, fmtUsd, num, WALLET_SHORT } from '../lib/fmt';
-import { liquidationLines, type LiquidationLine } from '../lib/liquidation';
 import { floorCents } from '../lib/ticks';
 import { ALWAYS_SHOWN, ROUTE_ORDER, WALLET_TONE, type BarRow } from './RebalanceBits';
 import {
@@ -264,20 +263,6 @@ export function borrowingFact(buckets: RebalanceBucket[]): Fact & { value: strin
     rows: borrowing.length > 1 ? walletRows(borrowing, (b) => borrowAmount(floorCents(b.borrow))) : [],
     warn: total > 0,
   };
-}
-
-type StaleLeg = { base: string; venue: string; sinceMs: number };
-
-export function liquidationNow(
-  acc: CrossexAccount | undefined,
-  pos: PositionsResponse | undefined,
-): LiquidationLine | StaleLeg | null | 'unknown' {
-  const view = acc && pos ? liquidationLines(acc, pos, {}, pos.marginTiers) : null;
-  if (!view) return 'unknown';
-  for (const stale of view.unknown) {
-    if (stale.sinceMs !== null) return { base: stale.base, venue: stale.venue, sinceMs: stale.sinceMs };
-  }
-  return view.lines[0] ?? null;
 }
 
 /** The per-wallet lines of a card figure, shown on hover. With two or three

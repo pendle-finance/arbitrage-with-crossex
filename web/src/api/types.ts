@@ -334,6 +334,7 @@ export interface StartTransferBody {
 export interface CrossexPosition {
   symbol: string;
   markStaleSinceMs?: number;
+  markHeldSinceMs?: number;
   positionSide: string;
   positionQty: string;
   positionValue: string;

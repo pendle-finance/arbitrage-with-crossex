@@ -217,7 +217,8 @@ export function fmtAbout(seconds: number): string {
   if (seconds < 600) return `about ${Math.round(seconds / 30) / 2} min`;
   const minutes = Math.round(seconds / 60);
   if (minutes < 60) return `about ${minutes} min`;
-  return `about ${Math.floor(minutes / 60)} h ${minutes % 60} m`;
+  const rest = minutes % 60;
+  return rest === 0 ? `about ${minutes / 60} h` : `about ${Math.floor(minutes / 60)} h ${rest} m`;
 }
 
 /** Unix seconds → UTC "YYYY-MM-DD" (maturities are quoted in UTC). */

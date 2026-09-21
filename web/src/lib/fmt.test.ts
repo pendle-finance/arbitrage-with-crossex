@@ -159,6 +159,10 @@ describe('fmtAbout', () => {
     [650, 'about 11 min'],
     [780, 'about 13 min'],
     [1430, 'about 24 min'],
+    [3570, 'about 1 h'],
+    [3600, 'about 1 h'],
+    [3601, 'about 1 h'],
+    [62520, 'about 17 h 22 m'],
   ])('fmtAbout(%i) -> %s', (seconds, expected) => {
     expect(fmtAbout(seconds)).toBe(expected);
   });
