@@ -755,7 +755,7 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
           `Submitted as ${txHash} but no status came back for this leg, so it may or may not have filled. Check the position on Boros before re-issuing.`,
         );
       }
-      if (status.error) return failedLeg(req, status.error);
+      if (status.error) return failedLeg(req, status.error, 'this-leg');
 
       // Already grouped by the call that emitted them; filtered by market so a
       // merged submission cannot lend one leg another's fill.

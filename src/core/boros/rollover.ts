@@ -100,6 +100,9 @@ export interface RollGate {
 }
 
 const MARGIN_CODES: ReadonlySet<BlockerCode> = new Set(['cross-short-margin', 'isolated-short-margin']);
+/** The venue's margin refusals: its own post-batch check (`INSUFFICIENT_MARGIN`)
+ * and the contract's revert mid-batch (`MM_INSUFFICIENT_IM`). */
+const VENUE_MARGIN_CODE = /INSUFFICIENT_(MARGIN|IM)\b/;
 const same = (a: number, b: number): boolean => Math.abs(a - b) <= FULL_FILL_TOLERANCE * Math.max(1, Math.abs(a), Math.abs(b));
 const sum = (xs: Array<number | null>): number | null =>
   xs.every((x): x is number => x !== null) ? xs.reduce((t, x) => t + x, 0) : null;
@@ -178,7 +181,7 @@ export function evaluateRollGate(input: EvaluateRollInput): RollGate {
     blockers.push({
       code: 'venue-refused',
       message: `The venue refuses this roll — ${detail}. ${
-        venue.reason?.code === 'INSUFFICIENT_MARGIN'
+        VENUE_MARGIN_CODE.test(venue.reason?.code ?? '')
           ? 'Add margin or roll a smaller size.'
           : 'Widen the tolerance or reduce the size.'
       }`,

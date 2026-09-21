@@ -559,6 +559,20 @@ describe('makeBorosApiOrderClient — fills', () => {
     expect(f.failure).toBeNull();
   });
 
+  it('names the leg whose call reverted on-chain', async () => {
+    const api = fakeApi({
+      status: {
+        statuses: [
+          { index: 0, marketOrdersExecuted: [filled(HL, '10000000000000000000')] },
+          { index: 1, error: 'MarketOrderFOKNotFilled' },
+        ],
+      },
+    });
+    const [a, b] = await client(api).placeMarketOrders([leg({ size: 10 }), leg({ marketId: BN, direction: 'long', size: 10 })]);
+    expect(a.failure).toBeNull();
+    expect(b.failure).toMatchObject({ code: 'insufficient-depth', cause: 'this-leg' });
+  });
+
   it('never lends one leg another leg\'s fill', async () => {
     const api = fakeApi({
       status: {
