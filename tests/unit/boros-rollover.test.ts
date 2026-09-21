@@ -186,6 +186,14 @@ describe('evaluateRollGate', () => {
     expect(g.margin.shortfall).toBe(250);
   });
 
+  it("reads the contract's mid-batch margin revert as a margin refusal too", () => {
+    // Reverts before the venue's own post-batch check: no after-state, so no shortfall figure — but still margin advice.
+    const venue = venueOk({ status: 'Refused', reason: { code: 'MM_INSUFFICIENT_IM', message: 'Not enough margin' }, availableAfter: null });
+    const g = evaluateRollGate({ ...rollInput(), venue });
+    expect(g.blockers[0].message).toBe('The venue refuses this roll — Not enough margin. Add margin or roll a smaller size.');
+    expect(g.margin.shortfall).toBe(0);
+  });
+
   it('refuses a roll into the same or an earlier maturity', () => {
     const e = entryLegs();
     const sameMaturity = step({ ...e.legA, market: { ...hlNew, maturity: OLD } }, { ...e.legB, market: { ...bnNew, maturity: OLD } }, 'open');
