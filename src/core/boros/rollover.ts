@@ -93,7 +93,12 @@ export interface RollMargin {
   availableBefore: number | null;
   /** …and after it; negative means the venue refuses the batch for margin. */
   availableAfter: number | null;
-  /** −availableAfter when negative, else 0; 0 when unknown. */
+  /** …and between the closes and the opens: what the opens are judged on.
+   * The figure a refused batch still has, when the venue reports it. */
+  availableAfterExit: number | null;
+  /** How far short of the opens' margin the account is: −availableAfter when
+   * that is negative; on a batch the venue refused for margin without an
+   * after-state, `need − availableAfterExit`; else 0; 0 when unknown. */
   shortfall: number;
 }
 
@@ -269,8 +274,10 @@ export function evaluateRollGate(input: EvaluateRollInput): RollGate {
       for (const b of stepBlockers) {
         if (b.step === undefined || b.marketId === undefined || OWN_UI.has(b.code)) continue;
         const key = `${b.step}:${b.marketId}`;
-        if (venueNamed.has(key) || seen.has(key)) continue;
-        seen.add(key);
+        // Every distinct cause a leg carries, once — a leg can be short of
+        // margin AND carry a bound outside the band, and both are its to know.
+        if (venueNamed.has(key) || seen.has(`${key}:${b.code}`)) continue;
+        seen.add(`${key}:${b.code}`);
         folded.push(b.message.replace(/^(Exit|Re-entry): /, '$1 · '));
       }
       blockers.push({ code: 'venue-refused', message: ['The venue refuses this roll:', ...lines, ...folded].join('\n') });
@@ -286,11 +293,20 @@ export function evaluateRollGate(input: EvaluateRollInput): RollGate {
     }
   }
 
+  const shortfall = (): number => {
+    if (!venue) return 0;
+    if (venue.availableAfter !== null) return venue.availableAfter < 0 ? -venue.availableAfter : 0;
+    // The batch reverted, so there is no after; the opens were judged on
+    // the margin left once the closes ran, which the venue does report.
+    const forMargin = venue.status === 'Refused' && VENUE_MARGIN_CODE.test(venue.reason?.code ?? '');
+    return forMargin && venue.availableAfterExit !== null ? Math.max(0, venue.marginRequired - venue.availableAfterExit) : 0;
+  };
   const margin: RollMargin = {
     need: venue?.marginRequired ?? null,
     availableBefore: venue?.availableBefore ?? null,
     availableAfter: venue?.availableAfter ?? null,
-    shortfall: venue && venue.availableAfter !== null && venue.availableAfter < 0 ? -venue.availableAfter : 0,
+    availableAfterExit: venue?.availableAfterExit ?? null,
+    shortfall: shortfall(),
   };
   // Account-level notices (gas) come from both steps' gates; say them once.
   return { blockers, warnings: [...new Set(warnings)], margin };

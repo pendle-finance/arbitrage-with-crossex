@@ -123,6 +123,7 @@ const venueOk = (over: Partial<BorosRollSimulation> = {}): BorosRollSimulation =
   ],
   availableBefore: 5_000,
   availableAfter: 4_100,
+  availableAfterExit: 5_300,
   marginRequired: 700,
   ...over,
 });
@@ -132,7 +133,7 @@ describe('evaluateRollGate', () => {
     const g = evaluateRollGate({ ...rollInput(), venue: venueOk() });
     expect(g.blockers).toEqual([]);
     expect(g.warnings).toEqual([]);
-    expect(g.margin).toEqual({ need: 700, availableBefore: 5_000, availableAfter: 4_100, shortfall: 0 });
+    expect(g.margin).toEqual({ need: 700, availableBefore: 5_000, availableAfter: 4_100, availableAfterExit: 5_300, shortfall: 0 });
   });
 
   it('keeps every exit blocker, drops the entry margin blockers, and prefixes both', () => {
@@ -161,7 +162,7 @@ describe('evaluateRollGate', () => {
   it('blocks when the venue could not preview the batch — nothing else can vouch for it', () => {
     const g = evaluateRollGate({ ...rollInput(), venue: null });
     expect(g.blockers.map((b) => b.code)).toEqual(['roll-unpriced']);
-    expect(g.margin).toEqual({ need: null, availableBefore: null, availableAfter: null, shortfall: 0 });
+    expect(g.margin).toEqual({ need: null, availableBefore: null, availableAfter: null, availableAfterExit: null, shortfall: 0 });
   });
 
   it("blocks on the venue's refusal, naming the legs the book cannot fill", () => {
@@ -229,6 +230,27 @@ describe('evaluateRollGate', () => {
     expect(lines[2]).toBe('Re-entry · B: bound outside the band');
   });
 
+  it('keeps every distinct cause a leg the venue did not name carries', () => {
+    const e = entryLegs();
+    const flagged = step(e.legA, e.legB, 'open');
+    const mB = flagged.simulation.legB.marketId;
+    flagged.gate = {
+      ...flagged.gate,
+      blockers: [
+        { code: 'rate-bound-out-of-range', leg: 'B', marketId: mB, message: 'B: bound outside the band' },
+        { code: 'margin-unknown', leg: 'B', marketId: mB, message: 'B: margin unknown' },
+      ],
+    };
+    const venue = venueOk({
+      status: 'Refused',
+      reason: { code: 'MARKET_ORDER_FOK_NOT_FILLED', message: 'Insufficient liquidity' },
+      orders: venueOk().orders.map((o, i) => ({ ...o, filled: false, matchedSize: null, error: i === 2 ? 'Insufficient liquidity' : null })),
+      availableAfter: null,
+    });
+    const lines = evaluateRollGate({ ...rollInput({ entry: flagged }), venue }).blockers[0].message.split('\n');
+    expect(lines.slice(2)).toEqual(['Re-entry · B: bound outside the band', 'Re-entry · B: margin unknown']);
+  });
+
   it('calls it liquidity only when the whole book cannot supply the size', () => {
     // A thin exit book: the walk itself falls short, at any rate.
     const x = exitLegs();
@@ -270,12 +292,27 @@ describe('evaluateRollGate', () => {
     expect(g.margin.shortfall).toBe(250);
   });
 
-  it("reads the contract's mid-batch margin revert as a margin refusal too", () => {
-    // Reverts before the venue's own post-batch check: no after-state, so no shortfall figure — but still margin advice.
-    const venue = venueOk({ status: 'Refused', reason: { code: 'MM_INSUFFICIENT_IM', message: 'Not enough margin' }, availableAfter: null });
+  it("reads the contract's mid-batch margin revert as a margin refusal, sized off the account once the closes ran", () => {
+    // Reverts before the venue's own post-batch check: no after-state. The
+    // opens were judged on the margin left once the closes ran, which the
+    // venue still reports — the shortfall is what they need beyond it.
+    const venue = venueOk({
+      status: 'Refused',
+      reason: { code: 'MM_INSUFFICIENT_IM', message: 'Not enough margin' },
+      availableAfter: null,
+      availableAfterExit: 700,
+      marginRequired: 1_000,
+    });
     const g = evaluateRollGate({ ...rollInput(), venue });
     expect(g.blockers[0].message).toBe('The venue refuses this roll — Not enough margin. Add margin or roll a smaller size.');
-    expect(g.margin.shortfall).toBe(0);
+    expect(g.margin).toEqual({ need: 1_000, availableBefore: 5_000, availableAfter: null, availableAfterExit: 700, shortfall: 300 });
+  });
+
+  it('has no shortfall figure for a refusal that is not about margin, or from a venue that reports no exit state', () => {
+    const liquidity = venueOk({ status: 'Refused', reason: { code: 'MARKET_ORDER_FOK_NOT_FILLED', message: 'Insufficient liquidity' }, availableAfter: null, availableAfterExit: 700, marginRequired: 1_000 });
+    expect(evaluateRollGate({ ...rollInput(), venue: liquidity }).margin.shortfall).toBe(0);
+    const older = venueOk({ status: 'Refused', reason: { code: 'MM_INSUFFICIENT_IM', message: 'Not enough margin' }, availableAfter: null, availableAfterExit: null });
+    expect(evaluateRollGate({ ...rollInput(), venue: older }).margin.shortfall).toBe(0);
   });
 
   it('refuses a roll into the same or an earlier maturity', () => {

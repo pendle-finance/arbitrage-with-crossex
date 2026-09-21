@@ -872,14 +872,16 @@ export function borosPairRoutes(deps: AppDeps) {
       // a FOK fill or for the margin after the closes.
       const legs = rollLegsFor(exit.simulation, entry.simulation);
       const orders = deps.getBorosOrders?.();
-      // A preview that throws is still "no preview", but the reason is kept:
-      // the bare null could only ever say "waiting for a quote", whatever
-      // had actually gone wrong.
+      // A preview that throws is still "no preview", but a refusal with a
+      // status code is a fact worth showing (a position the venue no longer
+      // finds, an input it rejects). A 429, a 5xx or a dropped connection is
+      // the next poll's problem: for those "waiting for a quote" is the truth.
       let venueError: string | null = null;
       const venue =
         legs && orders?.simulateRollOver
           ? await orders.simulateRollOver(legs).catch((err: unknown) => {
-              venueError = describeLegFailure(err);
+              const status = err instanceof CoreError ? (err.details as { status?: number } | undefined)?.status : undefined;
+              venueError = status !== undefined && status < 500 && status !== 429 ? describeLegFailure(err) : null;
               return null;
             })
           : null;

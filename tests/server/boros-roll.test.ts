@@ -8,6 +8,7 @@
  * The core roll arithmetic (gate, margin, four wire orders, verdict) is pinned
  * in tests/unit/boros-rollover.test.ts; this file is the route seam only.
  */
+import { CoreError } from '../../src/core/errors';
 import type { FastifyInstance } from 'fastify';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BorosLegFill, BorosOrderClient, BorosRollLeg, BorosRollSimulation } from '../../src/core/boros/orders';
@@ -124,6 +125,7 @@ const venueOk = (legs: BorosRollLeg[], over: Partial<BorosRollSimulation> = {}):
   ],
   availableBefore: 500_000,
   availableAfter: 480_000,
+  availableAfterExit: 489_000,
   marginRequired: 9_000,
   ...over,
 });
@@ -216,7 +218,7 @@ describe('POST /api/boros/roll/simulate', () => {
     expect(previews[0].map((l) => [l.fromMarketId, l.toMarketId])).toEqual([[HL, HL2], [BN, BN2]]);
     // A clean roll — no blockers; the margin is the venue's, not an estimate.
     expect(data.gate.blockers).toEqual([]);
-    expect(data.gate.margin).toEqual({ need: 9_000, availableBefore: 500_000, availableAfter: 480_000, shortfall: 0 });
+    expect(data.gate.margin).toEqual({ need: 9_000, availableBefore: 500_000, availableAfter: 480_000, availableAfterExit: 489_000, shortfall: 0 });
     expect(data.venue.status).toBe('Succeed');
     // Simulating never sends anything.
     expect(calls).toHaveLength(0);
@@ -248,6 +250,28 @@ describe('POST /api/boros/roll/simulate', () => {
     const exec = await post('/api/boros/roll/execute', rollBody());
     expect(exec.statusCode).toBe(409);
     expect(calls).toHaveLength(0);
+  });
+
+  it("says why when the venue turns the preview away, and only 'waiting' when it is the wire", async () => {
+    const unpriced = async (err: unknown) => {
+      makeRollApp(heldPair, capturingClient([], undefined, async () => {
+        throw err;
+      }));
+      const res = await post('/api/boros/roll/simulate', rollBody());
+      return res.json().data.gate.blockers.find((b: { code: string }) => b.code === 'roll-unpriced').message as string;
+    };
+    // A refusal with a status code is a fact: the venue no longer finds the position.
+    expect(await unpriced(new CoreError('Boros API /v1/simulations/roll-over — HTTP 404: Position not found', 'venue-rejected', { status: 404 }))).toMatch(
+      /^The venue could not preview this roll — .*Position not found/,
+    );
+    // A rate limit or an outage is the next poll's problem.
+    for (const err of [
+      new CoreError('Boros API — HTTP 429: Too Many Requests', 'rate-limited', { status: 429 }),
+      new CoreError('Boros API — HTTP 503: upstream unavailable', 'venue-rejected', { status: 503 }),
+      new Error('fetch failed'),
+    ]) {
+      expect(await unpriced(err)).toBe('The venue could not preview this roll — waiting for a quote.');
+    }
   });
 });
 
