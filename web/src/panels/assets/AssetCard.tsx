@@ -14,12 +14,15 @@ import type {
   AssetGroup,
   AssetPerpClosedRow,
   AssetPerpOpen,
-  BorosPairBlocker,
+  BorosLegFill,
   BorosPairContext,
   BorosPairMarketRow,
   BorosPairRequest,
-  BorosPairResult,
   BorosPairSimulation,
+  BorosRollBlocker,
+  BorosRollExecuteResponse,
+  BorosRollLegKey,
+  BorosRollRequest,
   BorosSimulatedLeg,
 } from '../../api/types';
 import { TokenIcon, VenueIcon } from '../../components/AssetIcon';
@@ -36,12 +39,13 @@ import {
   useBorosCancelAndClose,
   useBorosPairContext,
   useBorosPairSimulation,
-  useExecuteBorosPair,
+  useBorosRollSimulation,
+  useExecuteBorosRoll,
   usePositions,
   useTopUpGas,
 } from '../../api/queries';
 import { HoldToConfirmButton } from '../../components/HoldToConfirmButton';
-import { BlockerList, GasTopUp, LegFillLine, LiquidationRows, PairCosts, PositionArithmetic, SpreadReadout, legSubmitted } from '../../trade/BorosPairBits';
+import { BlockerList, GasTopUp, LegFillLine, LiquidationRows, PairCosts, PositionArithmetic, SpreadReadout } from '../../trade/BorosPairBits';
 import { EstimateCard, EstimateRow, SlippageLine, StepBadge } from '../../trade/PairTicketBits';
 import { QueryError } from '../../components/QueryError';
 import { uuid } from '../../lib/uuid';
@@ -1322,9 +1326,6 @@ function addedMarginOf(sim: BorosPairSimulation | null | undefined): number | nu
   }
   return total;
 }
-/** What the projected post-exit margin is scaled by before it is compared
- * with what the re-entry needs: room for a bad fill or a moved mark. */
-const ROLL_MARGIN_HAIRCUT = 0.95;
 
 /** One leg of the exit as PnL: the rate the position locked against the
  * rate the book would close it at, over what is left of its life. */
@@ -1367,22 +1368,6 @@ function exitPnlOf(
   const total = legs.length > 0 && legs.every((x) => x.pnl !== null) ? legs.reduce((a, x) => a + (x.pnl ?? 0), 0) : null;
   return { legs, total };
 }
-
-/** One step's outcome: the venue's result, or the reason nothing was sent. */
-type RollStep = { result: BorosPairResult } | { error: string };
-
-/** Four order ids per roll — two batches, each replay-protected on its own. */
-const newRollIds = () => ({ xa: `xa-${uuid()}`, xb: `xb-${uuid()}`, ea: `ea-${uuid()}`, eb: `eb-${uuid()}` });
-
-/** What the exit actually closed: the smaller fill of the legs that were
- * sent — the size the entry can honestly re-open. */
-const filledOf = (r: BorosPairResult): number => {
-  const sent = [r.legA, r.legB].filter(legSubmitted);
-  return sent.length === 0 ? 0 : Math.min(...sent.map((l) => l.filledSize));
-};
-const unknownOutcome = (r: BorosPairResult): boolean =>
-  [r.legA, r.legB].some((l) => l.failure?.code === 'unknown');
-const errorText = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
 interface RollTarget {
   maturity: number;
@@ -1600,35 +1585,32 @@ export function RollOverModal({
   );
 }
 
-/** One batch of the roll as the venue reported it, or why it was not sent. */
-function RollStepReport({ label, step, collateral }: { label: string; step: RollStep; collateral: string }) {
-  if ('error' in step) {
-    return (
-      <div className="rounded-lg border border-rose-500/30 bg-rose-500/[0.04] px-3 py-2.5 text-[11.5px]" role="status">
-        <span className="font-semibold text-rose-200">{label} — not sent.</span>{' '}
-        <span className="text-rose-200/80">{step.error}</span>
-      </div>
-    );
-  }
-  const r = step.result;
-  const nothing = r.filledNothing;
-  const short = !nothing && r.partial;
+/** One side of a roll (its two legs) as the venue reported them, coloured by
+ * the roll's single all-or-nothing verdict — a roll fills whole or not at all,
+ * so both sides share one status rather than each carrying its own. */
+function RollLegReport({
+  label,
+  legs,
+  collateral,
+  tone,
+}: {
+  label: string;
+  legs: [BorosLegFill, BorosLegFill];
+  collateral: string;
+  tone: 'green' | 'amber' | 'rose';
+}) {
+  const box =
+    tone === 'green'
+      ? 'border-emerald-500/25 bg-emerald-500/5'
+      : tone === 'amber'
+        ? 'border-amber-500/30 bg-amber-500/[0.04]'
+        : 'border-rose-500/30 bg-rose-500/[0.04]';
   return (
-    <div
-      className={`rounded-lg border px-3 py-2.5 ${
-        nothing ? 'border-rose-500/30 bg-rose-500/[0.04]' : short ? 'border-amber-500/30 bg-amber-500/[0.04]' : 'border-emerald-500/25 bg-emerald-500/5'
-      }`}
-      role="status"
-    >
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="text-[12px] font-semibold text-ink-100">{label}</span>
-        <Chip sm tone={nothing ? 'red' : short ? 'amber' : 'green'}>
-          {nothing ? 'nothing filled' : short ? 'partially filled' : 'filled'}
-        </Chip>
-      </div>
+    <div className={`rounded-lg border px-3 py-2.5 ${box}`} role="status">
+      <span className="text-[12px] font-semibold text-ink-100">{label}</span>
       <div className="mt-1.5 flex flex-col gap-0.5 text-[11px] text-ink-300">
-        <LegFillLine label="Leg A" fill={r.legA} collateral={collateral} />
-        <LegFillLine label="Leg B" fill={r.legB} collateral={collateral} />
+        <LegFillLine label="Leg A" fill={legs[0]} collateral={collateral} />
+        <LegFillLine label="Leg B" fill={legs[1]} collateral={collateral} />
       </div>
     </div>
   );
@@ -1830,22 +1812,19 @@ function ExitPnlReadout({
   );
 }
 
-/** Entry-side blockers that describe margin the EXIT has not freed yet. */
-const MARGIN_CODES = new Set(['cross-short-margin', 'isolated-short-margin']);
-
 /**
  * The review page: both batches priced at the chosen tolerance, the margin
- * check, the acknowledgement, the blockers, and the roll itself.
+ * check, the blockers, and the roll itself — a THIN adapter over the server's
+ * atomic roll (see src/core/boros/rollover.ts).
  *
- * The roll is EXIT first, then ENTRY sized to what the exit filled. Exit
- * first because the entry's margin check depends on the old legs' margin
- * being freed (open-first would trip cross-short-margin on a full book).
- * The cost is the window between the two batches: an entry that fails after
- * a good exit leaves the perps' rate side short, which the report says
- * outright and offers to retry — the exit is never re-sent. Each batch is
- * accepted atomically by Boros (both legs or neither) but can still fill
- * short; a leg with no confirmation stops everything, as the venue's own
- * wording asks (his calls 2026-09-17).
+ * The four legs — close both, open both — go out as ONE all-or-nothing batch:
+ * either every leg fills or nothing changes. The old flow sent the exit, then
+ * the entry sized to what the exit filled, which left the perps' rate side
+ * naked whenever the entry failed after a good exit; and each leg was IOC, so
+ * the two could fill to different sizes. Under the atomic batch (every leg
+ * FOK, the whole thing reverting on any failure) that window is gone, so the
+ * page has one gate, one confirm, and one of three verdicts to read back:
+ * rolled in full, nothing traded, or unconfirmed.
  */
 function RollReview({
   pair,
@@ -1878,7 +1857,7 @@ function RollReview({
   onClose: () => void;
 }) {
   const agent = useBorosAgent();
-  const execute = useExecuteBorosPair();
+  const executeRoll = useExecuteBorosRoll();
   const cancelClose = useBorosCancelAndClose();
   const topUpGas = useTopUpGas();
   const [gasTopUpStr, setGasTopUpStr] = useState('5');
@@ -1916,104 +1895,74 @@ function RollReview({
   const entrySlip = useSlip(seedFor([target.longMarketId, target.shortMarketId]));
   const slipInvalid = exitSlip.invalid || entrySlip.invalid;
 
-  // ---- the two requests -------------------------------------------------
-  /** Closing reverses each leg: a LONG position is closed by selling. The
-   * close is acknowledged up front: a roll is, by its name, closing these
-   * legs — asking the trader to tick that they know so was a box with one
-   * possible answer. */
-  const exitReq: BorosPairRequest | null =
+  // ---- the one roll request ---------------------------------------------
+  /**
+   * ONE request for the whole roll. Closing reverses each held leg (a LONG is
+   * closed by selling); re-opening takes the same sides at the new maturity.
+   * The exit is a close, acknowledged by construction — a roll IS closing
+   * these legs — and the entry acknowledges nothing, exactly as the old
+   * two-request flow passed nothing for it: a fresh maturity holds no position
+   * to oppose.
+   */
+  const rollReq: BorosRollRequest | null =
     size > 0 && longLeg?.marketId !== undefined && shortLeg?.marketId !== undefined
       ? {
           address,
-          legA: { marketId: longLeg.marketId, direction: longLeg.side === 'LONG' ? 'short' : 'long', slippageApr: exitSlip.apr },
-          legB: { marketId: shortLeg.marketId, direction: shortLeg.side === 'LONG' ? 'short' : 'long', slippageApr: exitSlip.apr },
-          size,
-          intent: 'close',
-          opposingAcknowledged: true,
+          exit: {
+            legA: { marketId: longLeg.marketId, direction: longLeg.side === 'LONG' ? 'short' : 'long', slippageApr: exitSlip.apr },
+            legB: { marketId: shortLeg.marketId, direction: shortLeg.side === 'LONG' ? 'short' : 'long', slippageApr: exitSlip.apr },
+            size,
+          },
+          entry: {
+            legA: { marketId: target.longMarketId, direction: longLeg.side === 'LONG' ? 'long' : 'short', slippageApr: entrySlip.apr },
+            legB: { marketId: target.shortMarketId, direction: shortLeg.side === 'LONG' ? 'long' : 'short', slippageApr: entrySlip.apr },
+            size,
+          },
         }
       : null;
-  /** Re-opening takes the same sides the pair holds today, at the new maturity. */
-  const entryReq: BorosPairRequest | null =
-    size > 0 && longLeg !== undefined && shortLeg !== undefined
-      ? {
-          address,
-          legA: { marketId: target.longMarketId, direction: longLeg.side === 'LONG' ? 'long' : 'short', slippageApr: entrySlip.apr },
-          legB: { marketId: target.shortMarketId, direction: shortLeg.side === 'LONG' ? 'long' : 'short', slippageApr: entrySlip.apr },
-          size,
-          intent: 'open',
-        }
-      : null;
-  const exit = useBorosPairSimulation(exitReq, exitReq !== null);
-  const entry = useBorosPairSimulation(entryReq, entryReq !== null);
-  const exitSim = exit.data?.simulation ?? null;
-  const entrySim = entry.data?.simulation ?? null;
-  const pending = exit.isPending || entry.isPending;
+  // The report page reads the execute response, not the quote — so once the
+  // roll has been sent the poll stops rather than re-pricing a closed pair.
+  const [out, setOut] = useState<{ payload: BorosRollExecuteResponse } | { error: string } | null>(null);
+  const roll = useBorosRollSimulation(rollReq, rollReq !== null && out === null);
+  const exitSim = roll.data?.exit.simulation ?? null;
+  const entrySim = roll.data?.entry.simulation ?? null;
+  const pending = roll.isPending;
 
-  // ---- margin -----------------------------------------------------------
+  // ---- margin (server-owned) --------------------------------------------
   /**
-   * What the re-entry needs against what the account can spend NOW. The
-   * exit frees the old legs' margin first, so a shortfall here is a warning
-   * — the venue re-checks at the moment the entry is sent, and a refusal
-   * then lands in the "retry the re-entry" path with the same figures. The
-   * entry sim's own margin blockers are read the same way: they were judged
-   * before the exit ran.
+   * The re-entry's margin is judged by the SERVER, after the exit frees the
+   * old legs' margin, so a predicted shortfall is a warning there rather than
+   * a blocker — the venue checks the real figure when it simulates the batch,
+   * and a refusal executes nothing. The panel only renders `gate.margin`; the
+   * whole "available now + freed − worst-case exit, haircut" model lives in
+   * core now (src/core/boros/rollover.ts rollMargin).
    */
-  const byId = new Map(ctx.markets.map((m) => [m.marketId, m]));
-  const availableFor = (marketId: number): number | null => {
-    const row = byId.get(marketId);
-    if (!row) return null;
-    if (row.onIsolatedMargin) return ctx.isolatedByMarket.find((i) => i.marketId === marketId)?.available ?? null;
-    return ctx.crossByToken.find((c) => c.tokenId === row.tokenId)?.available ?? null;
-  };
-  const availA = availableFor(target.longMarketId);
-  const availB = availableFor(target.shortMarketId);
-  const available = availA === null ? availB : availB === null ? availA : Math.min(availA, availB);
-  // What the re-entry ADDS on those markets — the netted total counts margin
-  // the account already posts there (see addedMarginOf).
-  const marginNeed = addedMarginOf(entrySim);
-  /**
-   * What will be spendable once the exit has run, in collateral tokens —
-   * the figure the re-entry is actually checked against:
-   *   available now
-   *   + the old legs' margin the exit frees (this slice's share)
-   *   + what the exit realises, priced at the WORST rate its bound allows
-   *   − the exit's own trade fee
-   * then a 5% haircut, so a bad fill or a moved mark does not turn "enough"
-   * into a refused re-entry. The old legs' margin is known in dollars (the
-   * asset view's figure) and comes back to tokens at the quote's price.
-   */
+  const margin = roll.data?.gate.margin ?? null;
+  const marginNeed = margin?.need ?? null;
+  const availableAfter = margin?.availableAfter ?? null;
+  const marginShort = margin?.shortfall ?? 0;
   const px = exitSim?.collateralPriceUsd ?? entrySim?.collateralPriceUsd ?? null;
-  const freedByExit =
-    px !== null && px > 0
-      ? [longLeg, shortLeg].reduce(
-          (t, l) => t + (l && l.sizeToken > 0 ? (l.imUsd / px) * Math.min(1, size / l.sizeToken) : 0),
-          0,
-        )
-      : null;
-  const worstExitPnl = exitPnlOf(exitSim, longLeg, shortLeg, nowSec, 'worst').total;
-  const exitFee = exitSim?.costToCrossSize ?? null;
-  const availableAfter =
-    available !== null && freedByExit !== null && worstExitPnl !== null && exitFee !== null
-      ? Math.max(0, (available + freedByExit + worstExitPnl - exitFee) * ROLL_MARGIN_HAIRCUT)
-      : null;
-  const marginShort =
-    marginNeed !== null && availableAfter !== null && marginNeed > availableAfter ? marginNeed - availableAfter : 0;
   const usdNote = (tokens: number) =>
     px !== null && px > 0 ? <span className="text-[11px] text-ink-400"> ≈ {fmtUsd(tokens * px)}</span> : null;
 
   // ---- blockers ---------------------------------------------------------
+  /**
+   * The server's gate is the whole margin / eligibility / acknowledgement
+   * verdict — already prefixed "Exit:"/"Re-entry:" and with the entry's stale
+   * margin blockers replaced by `gate.margin`. Everything added here is
+   * CLIENT-ONLY UX the server cannot know: a tolerance typed out of range, a
+   * quote that failed, is missing, or has aged out, and an expired agent key.
+   */
   const now = useNow(1_000);
   const ageOf = (at: number) => (at > 0 ? Math.max(0, now - at) : Number.POSITIVE_INFINITY);
-  const stale = ageOf(exit.dataUpdatedAt) > ROLL_QUOTE_MAX_AGE_MS || ageOf(entry.dataUpdatedAt) > ROLL_QUOTE_MAX_AGE_MS;
-  const entryGate = entry.data?.gate.blockers ?? [];
-  const blockers: BorosPairBlocker[] = [
-    ...(exit.data?.gate.blockers ?? []).map((b) => ({ ...b, message: `Exit: ${b.message}` })),
-    ...entryGate.filter((b) => !MARGIN_CODES.has(b.code)).map((b) => ({ ...b, message: `Re-entry: ${b.message}` })),
+  const stale = ageOf(roll.dataUpdatedAt) > ROLL_QUOTE_MAX_AGE_MS;
+  const blockers: BorosRollBlocker[] = [
+    ...(roll.data?.gate.blockers ?? []),
     ...(slipInvalid
       ? [{ code: 'slippage-out-of-range', message: `Max slippage must be greater than 0 and at most ${ROLL_MAX_SLIP_PCT}% APR — the order would otherwise carry a rate bound you did not choose.` }]
       : []),
-    ...(exit.isError || entry.isError ? [{ code: 'quote-failed', message: 'Could not price this roll.' }] : []),
-    ...(!exit.data || !entry.data
+    ...(roll.isError ? [{ code: 'quote-failed', message: 'Could not price this roll.' }] : []),
+    ...(!roll.data
       ? [{ code: 'no-quote', message: 'Waiting for a quote.' }]
       : stale
         ? [{ code: 'stale-simulation', message: 'The quote is out of date — waiting for a fresh one.' }]
@@ -2024,113 +1973,99 @@ function RollReview({
   ];
 
   // ---- execution --------------------------------------------------------
-  const [exitOut, setExitOut] = useState<RollStep | null>(null);
-  const [entryOut, setEntryOut] = useState<RollStep | null>(null);
-  /** The size the entry re-opens: what the exit filled, not what was asked. */
-  const [entrySize, setEntrySize] = useState<number | null>(null);
   const [busy, setBusyState] = useState(false);
   const setBusy = (b: boolean) => {
     setBusyState(b);
     onBusy(b);
   };
-  const ids = useRef(newRollIds());
-  const canConfirm = exitReq !== null && entryReq !== null && blockers.length === 0 && !busy && exitOut === null;
+  /**
+   * Four ids minted ONCE and reused for every retry — that is the whole
+   * contract of the server's replay memo: a lost response is answered from it
+   * with the SAME ids, and a roll the venue refused is dropped from it so the
+   * same ids execute again. Re-minting on a retry would defeat both, so `run`
+   * never touches them.
+   */
+  const ids = useRef<Record<BorosRollLegKey, string>>({
+    exitA: `xa-${uuid()}`,
+    exitB: `xb-${uuid()}`,
+    entryA: `ea-${uuid()}`,
+    entryB: `eb-${uuid()}`,
+  });
+  const canConfirm = rollReq !== null && blockers.length === 0 && !busy && out === null;
 
-  const runEntry = async (req: BorosPairRequest, sizeToOpen: number) => {
-    setEntryOut(null);
-    try {
-      const res = await execute.mutateAsync({ ...req, size: sizeToOpen, clientOrderIdA: ids.current.ea, clientOrderIdB: ids.current.eb });
-      setEntryOut({ result: res.result });
-    } catch (e) {
-      setEntryOut({ error: errorText(e) });
-    }
-  };
   const run = async () => {
-    if (!exitReq || !entryReq) return;
-    ids.current = newRollIds();
+    if (!rollReq) return;
     setBusy(true);
-    setExitOut(null);
-    setEntryOut(null);
-    setEntrySize(null);
+    setOut(null);
     try {
-      let exitRes: BorosPairResult;
-      try {
-        const res = await execute.mutateAsync({ ...exitReq, clientOrderIdA: ids.current.xa, clientOrderIdB: ids.current.xb });
-        exitRes = res.result;
-        setExitOut({ result: exitRes });
-      } catch (e) {
-        setExitOut({ error: errorText(e) });
-        return;
-      }
-      const filled = filledOf(exitRes);
-      if (unknownOutcome(exitRes) || !(filled > 0)) return;
-      setEntrySize(filled);
-      await runEntry(entryReq, filled);
+      const payload = await executeRoll.mutateAsync({ ...rollReq, clientOrderIds: ids.current });
+      setOut({ payload });
+    } catch (e) {
+      setOut({ error: e instanceof Error ? e.message : String(e) });
     } finally {
       setBusy(false);
     }
   };
-  const retryEntry = async () => {
-    if (!entryReq || entrySize === null) return;
-    // Fresh ids: the failed attempt's memo (if any) must not swallow the retry.
-    ids.current = { ...ids.current, ea: `ea-${uuid()}`, eb: `eb-${uuid()}` };
-    setBusy(true);
-    try {
-      await runEntry(entryReq, entrySize);
-    } finally {
-      setBusy(false);
-    }
-  };
-  const exitFilled = exitOut !== null && 'result' in exitOut ? filledOf(exitOut.result) : 0;
-  const exitUnknown = exitOut !== null && 'result' in exitOut && unknownOutcome(exitOut.result);
-  const entryOk = entryOut !== null && 'result' in entryOut && !entryOut.result.filledNothing && !unknownOutcome(entryOut.result);
-  const entryUnknown = entryOut !== null && 'result' in entryOut && unknownOutcome(entryOut.result);
-  // The rate side is short exactly when the exit closed something and the
-  // entry did not re-open it (failed, refused, or filled nothing).
-  const rateSideShort = exitFilled > 0 && !exitUnknown && !entryOk && !entryUnknown && !busy;
-  const canRetryEntry = rateSideShort && entryReq !== null && entrySize !== null;
-  const canRetryExit = exitOut !== null && !busy && exitFilled === 0 && !exitUnknown;
 
-  if (exitOut !== null) {
-    /* The roll has been sent: what the venue did with each batch is the
-       whole screen. */
+  if (out !== null) {
+    // The roll has been sent (or the request threw): the four legs and one
+    // status line are the whole screen.
+    const payload = 'payload' in out ? out.payload : null;
+    const result = payload?.result ?? null;
+    const status = result?.status ?? null;
+    const tone = status === 'rolled' ? 'green' : status === 'unknown' ? 'amber' : 'rose';
+    /** The market a named leg trades, from the priced legs by key. */
+    const legMarketName = (key: BorosRollLegKey): string | null => {
+      if (!payload) return null;
+      const sim = key.startsWith('exit') ? payload.exit.simulation : payload.entry.simulation;
+      return key.endsWith('A') ? sim.legA.marketName : sim.legB.marketName;
+    };
+    const reason = result?.reason ?? null;
+    const namedMarket = reason?.leg != null ? legMarketName(reason.leg) : null;
+    const refusedText = reason ? (namedMarket ? `${namedMarket}: ${reason.message}` : reason.message) : '';
+    const canRetry = 'error' in out || status === 'refused';
     return (
       <div className="flex flex-col gap-2">
-        <RollStepReport label="Exit" step={exitOut} collateral={collateral} />
-        {entryOut !== null && <RollStepReport label="Re-entry" step={entryOut} collateral={collateral} />}
-        {busy && entryOut === null && exitFilled > 0 && (
-          <p className="text-[11.5px] text-ink-300" role="status">Opening the new legs…</p>
+        {result && (
+          <>
+            <RollLegReport label="Exit" legs={[result.legs.exitA, result.legs.exitB]} collateral={collateral} tone={tone} />
+            <RollLegReport label="Re-entry" legs={[result.legs.entryA, result.legs.entryB]} collateral={collateral} tone={tone} />
+          </>
         )}
-        {rateSideShort && (
-          <p className="rounded border border-amber-500/30 bg-amber-500/[0.06] px-2.5 py-2 text-[11.5px] leading-relaxed text-amber-200" role="alert">
-            The old legs are closed and the new ones are not open — the perps’ rate side is short by{' '}
-            {fmtTokenQty(entrySize ?? exitFilled, collateral)} until you retry the re-entry.
-            {marginShort > 0 && ` If the venue refused it for margin, add about ${fmtTokenQty(marginShort, collateral)} of cross margin first.`}
-          </p>
-        )}
-        {(exitUnknown || entryUnknown) && (
-          <p className="rounded border border-rose-500/30 bg-rose-500/[0.04] px-2.5 py-2 text-[11.5px] leading-relaxed text-rose-200" role="alert">
-            A leg came back without confirmation — it may or may not have filled. Check Boros before re-issuing anything.
-          </p>
-        )}
-        {entryOk && exitFilled > 0 && (
+        {status === 'rolled' && (
           <p className="text-[11.5px] text-ink-300" role="status">
-            Rolled {fmtTokenQty(entrySize ?? exitFilled, collateral)} to {fmtDateLocal(target.maturity)}.
-            {exitFilled < size - 1e-9 && ` ${fmtTokenQty(size - exitFilled, collateral)} of the old legs stayed open at ${fmtDateLocal(oldMaturity)}.`}
+            Rolled {fmtTokenQty(result!.rolledSize, collateral)} to {fmtDateLocal(target.maturity)}.
+          </p>
+        )}
+        {status === 'refused' && (
+          <p className="rounded border border-amber-500/30 bg-amber-500/[0.06] px-2.5 py-2 text-[11.5px] leading-relaxed text-amber-200" role="alert">
+            Nothing was traded — {refusedText}
+          </p>
+        )}
+        {status === 'unknown' && (
+          <p className="rounded border border-rose-500/30 bg-rose-500/[0.04] px-2.5 py-2 text-[11.5px] leading-relaxed text-rose-200" role="alert">
+            The venue did not confirm this roll — it may or may not have gone through. Check the position on Boros
+            before sending anything.
+          </p>
+        )}
+        {'error' in out && (
+          <p className="rounded-lg border border-rose-500/30 bg-rose-500/[0.04] px-3 py-2.5 text-[11.5px]" role="alert">
+            <span className="font-semibold text-rose-200">Roll — not sent.</span>{' '}
+            <span className="text-rose-200/80">{out.error}</span>
+          </p>
+        )}
+        {payload?.replayed && (
+          <p className="text-[11px] text-ink-400" role="status">
+            Answered from the earlier submission — nothing was sent twice.
           </p>
         )}
         <div className="mt-2 flex items-center justify-end gap-2">
           <button type="button" className="btn" onClick={onClose} disabled={busy}>
             Close
           </button>
-          {canRetryExit && (
-            <HoldToConfirmButton tone="cyan" onConfirm={run} title="Press and hold to send the exit batch again.">
-              Retry exit
-            </HoldToConfirmButton>
-          )}
-          {canRetryEntry && (
-            <HoldToConfirmButton tone="cyan" onConfirm={retryEntry} title="Press and hold to open the new legs again, at the size the exit closed.">
-              Retry re-entry
+          {canRetry && (
+            <HoldToConfirmButton tone="cyan" disabled={busy} onConfirm={run} title="Press and hold to send the same roll again.">
+              Retry
             </HoldToConfirmButton>
           )}
         </div>
@@ -2198,11 +2133,11 @@ function RollReview({
           step={1}
           sub={fmtDateLocal(oldMaturity)}
           sim={exitSim}
-          dataUpdatedAt={exit.dataUpdatedAt}
-          estimating={exit.isPlaceholderData}
+          dataUpdatedAt={roll.dataUpdatedAt}
+          estimating={roll.isPlaceholderData}
           pending={pending}
-          error={exit.isError ? exit.error : null}
-          onRetry={() => exit.refetch()}
+          error={roll.isError ? roll.error : null}
+          onRetry={() => roll.refetch()}
           exitPnl={exitPnlOf(exitSim, longLeg, shortLeg, nowSec)}
           slip={exitSlip}
         />
@@ -2213,11 +2148,11 @@ function RollReview({
           step={2}
           sub={fmtDateLocal(target.maturity)}
           sim={entrySim}
-          dataUpdatedAt={entry.dataUpdatedAt}
-          estimating={entry.isPlaceholderData}
+          dataUpdatedAt={roll.dataUpdatedAt}
+          estimating={roll.isPlaceholderData}
           pending={pending}
-          error={entry.isError ? entry.error : null}
-          onRetry={() => entry.refetch()}
+          error={roll.isError ? roll.error : null}
+          onRetry={() => roll.refetch()}
           slip={entrySlip}
         />
       </div>
@@ -2272,6 +2207,17 @@ function RollReview({
           </p>
         )}
       </div>
+      {/* The roll gate's warnings — the auto-top-up cost notice among them,
+          which the two-batch flow dropped. Rendered exactly as the ticket
+          renders gate warnings (BorosPairTicket). */}
+      {(roll.data?.gate.warnings ?? []).map((w) => (
+        <p
+          key={w}
+          className="rounded-lg border border-amber-500/25 bg-amber-500/[0.04] px-2.5 py-1.5 text-[11px] leading-relaxed text-amber-200"
+        >
+          {w}
+        </p>
+      ))}
       <BlockerList
         // A fill past the tolerance still blocks (it is in `blockers`), but
         // its batch already says so, in amber, next to the Max that fixes
@@ -2281,7 +2227,7 @@ function RollReview({
         onCancelAndClose={(marketId) => cancelClose.mutate({ marketId })}
       />
       <GasTopUp
-        gasBalanceUsd={entry.data?.gasBalanceUsd ?? exit.data?.gasBalanceUsd}
+        gasBalanceUsd={roll.data?.gasBalanceUsd}
         amount={gasTopUpStr}
         onAmountChange={setGasTopUpStr}
         onTopUp={() => topUpGas.mutate(Number(gasTopUpStr))}
@@ -2302,7 +2248,7 @@ function RollReview({
           tone="cyan"
           disabled={!canConfirm}
           onConfirm={run}
-          title="Press and hold to close the two Boros legs and reopen them at the new maturity."
+          title="Press and hold to close the two Boros legs and reopen them at the new maturity, in one all-or-nothing batch."
         >
           {busy ? 'Rolling…' : 'Roll over'}
         </HoldToConfirmButton>

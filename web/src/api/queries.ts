@@ -24,6 +24,9 @@ import type {
   BorosPairExecuteResponse,
   BorosPairRequest,
   BorosPairSimulateResponse,
+  BorosRollExecuteResponse,
+  BorosRollRequest,
+  BorosRollSimulateResponse,
   CredentialsInfo,
   CredentialsInput,
   DisclaimerStatus,
@@ -593,6 +596,40 @@ export function useExecuteBorosPair() {
     // ⚠ Same contract as the close below: the CARD reads the ASSET VIEW,
     // not the pair context. Without ['assetView'] a leg that had just been
     // opened did not appear until some other refetch happened to pull it in.
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['boros', 'pair', 'context'] });
+      void qc.invalidateQueries({ queryKey: ['assetView'] });
+      void qc.invalidateQueries({ queryKey: qk.positions });
+    },
+  });
+}
+
+/**
+ * Live roll simulation — the pair simulation's twin, for the atomic roll
+ * (close a pair here, re-open it at a later maturity, as one batch). A POST
+ * behind useQuery: a pure read that happens to need a body and has to poll.
+ * The whole request is the key, so any field change is a different quote, and
+ * a stale quote never survives a remount (gcTime 0).
+ */
+export function useBorosRollSimulation(req: BorosRollRequest | null, enabled = true) {
+  return useQuery({
+    queryKey: ['boros', 'roll', 'simulate', JSON.stringify(req)] as const,
+    queryFn: () => postJson<BorosRollSimulateResponse>('/boros/roll/simulate', req),
+    enabled: Boolean(req) && enabled,
+    placeholderData: keepPreviousData,
+    refetchInterval: 4_000,
+    gcTime: 0,
+  });
+}
+
+export function useExecuteBorosRoll() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (req: BorosRollRequest) =>
+      postJson<BorosRollExecuteResponse>('/boros/roll/execute', req),
+    // Same contract as useExecuteBorosPair: the CARD reads the ASSET VIEW, not
+    // the pair context, so a rolled leg only appears once ['assetView'] is
+    // invalidated too.
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['boros', 'pair', 'context'] });
       void qc.invalidateQueries({ queryKey: ['assetView'] });

@@ -1196,7 +1196,14 @@ export interface BorosLegFill {
   shortfallSize: number;
   execApr: number | null;
   feeSize: number | null;
-  failure: { code: BorosLegFailureCode; message: string } | null;
+  failure: {
+    code: BorosLegFailureCode;
+    message: string;
+    /** Under `requireSuccess` every leg fails together: `this-leg` marks the
+     * leg the venue named, `batch` one that only went down with it. Absent on
+     * a transport failure. Mirrors src/core/boros/orders.ts. */
+    cause?: 'this-leg' | 'batch';
+  } | null;
 }
 
 /**
@@ -1256,6 +1263,96 @@ export interface BorosPairRequest {
   opposingAcknowledged?: boolean;
   clientOrderIdA?: string;
   clientOrderIdB?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Boros roll-over — close a pair at one maturity and re-open it at a later one
+// as ONE all-or-nothing batch (mirrors src/core/boros/rollover.ts +
+// src/server/routes/borosPair.ts). The web is a thin adapter: it builds the
+// request, renders the one gate the server returns, and reads the verdict.
+// ---------------------------------------------------------------------------
+
+export type BorosRollLegKey = 'exitA' | 'exitB' | 'entryA' | 'entryB';
+
+/** One leg of a roll step — the same shape as a pair leg. */
+type BorosRollLeg = { marketId: number; direction: BorosLegDirection; slippageApr: number };
+
+/** Request body shared by roll simulate and execute. `size` is in collateral
+ * units, same as the pair routes; the server prices the exit `close` and the
+ * entry `open` off ONE read of the account. */
+export interface BorosRollRequest {
+  address: string;
+  exit: { legA: BorosRollLeg; legB: BorosRollLeg; size: number };
+  entry: { legA: BorosRollLeg; legB: BorosRollLeg; size: number };
+  /** §4 acknowledgement for the ENTRY only — the exit is a close, acknowledged
+   * by construction. */
+  opposingAcknowledged?: boolean;
+  /** Four replay keys, deduped as ONE (see recentRolls). Minted once per
+   * review and reused for a retry — never re-minted. */
+  clientOrderIds?: Record<BorosRollLegKey, string>;
+}
+
+/** A roll blocker. `code` is a pair blocker code OR one of the six checks
+ * that exist only because the two steps are one batch: 'maturity-not-later',
+ * 'collateral-mismatch', 'market-mismatch', 'sides-mismatch', 'size-mismatch',
+ * 'partial-depth'. */
+export interface BorosRollBlocker {
+  code: string;
+  message: string;
+  step?: 'exit' | 'entry';
+  leg?: 'A' | 'B';
+  marketId?: number;
+}
+
+/** The re-entry's margin, judged AFTER the exit frees the old legs'. A
+ * predicted shortfall is a warning, not a blocker — the venue checks the real
+ * figure when it simulates the batch. All figures in collateral units. */
+export interface BorosRollMargin {
+  need: number | null;
+  freed: number | null;
+  worstExitPnl: number | null;
+  exitFee: number | null;
+  availableAfter: number | null;
+  /** need − availableAfter when positive, else 0; 0 when unknown. */
+  shortfall: number;
+}
+
+export interface BorosRollGate {
+  blockers: BorosRollBlocker[];
+  warnings: string[];
+  margin: BorosRollMargin;
+}
+
+/** POST /api/boros/roll/simulate — each step carries its own pair simulation
+ * + gate, so the review reads each batch as the ticket reads a pair. */
+export interface BorosRollSimulateResponse {
+  exit: { simulation: BorosPairSimulation; gate: BorosPairGate };
+  entry: { simulation: BorosPairSimulation; gate: BorosPairGate };
+  gate: BorosRollGate;
+  simulatedAtMs: number;
+  gasBalanceUsd: number | null;
+}
+
+export interface BorosRollResult {
+  /** `rolled`: every leg filled whole. `refused`: nothing traded, safe to
+   * resend. `unknown`: no confirmation — check the position on Boros first. */
+  status: 'rolled' | 'refused' | 'unknown';
+  legs: Record<BorosRollLegKey, BorosLegFill>;
+  /** Why, for `refused`/`unknown`; the leg the venue named, when it named one. */
+  reason: { code: BorosLegFailureCode; message: string; leg: BorosRollLegKey | null } | null;
+  /** Collateral units moved to the new maturity; 0 unless `rolled`. */
+  rolledSize: number;
+}
+
+/** POST /api/boros/roll/execute */
+export interface BorosRollExecuteResponse {
+  result: BorosRollResult;
+  exit: { simulation: BorosPairSimulation; gate: BorosPairGate };
+  entry: { simulation: BorosPairSimulation; gate: BorosPairGate };
+  gate: BorosRollGate;
+  /** True when this replays an earlier submission with the same ids rather
+   * than a fresh roll. */
+  replayed: boolean;
 }
 
 /** GET /api/boros/agent — the delegated trading key's status. Never carries the

@@ -1,10 +1,11 @@
 /**
- * The roll-over as two batches: exit the legs held now, then re-open the same
- * sides at the new maturity, sized to what the exit actually closed. These pin
- * the order of the two sends, the sizing between them, the four distinct order
- * ids, and the two ways it stops — an exit that filled nothing sends no entry;
- * an entry that failed after a good exit says the rate side is short and
- * retries only the entry.
+ * The roll-over as ONE atomic batch: close both rate legs at the old maturity
+ * and open both at the new one, all-or-nothing. These pin the single execute
+ * call and the four distinct ids it carries, the three verdicts read back
+ * (rolled / refused / unconfirmed), that a retry re-sends the SAME ids, the
+ * replay note, and that the server's gate — blockers, warnings and margin —
+ * drives the review. The pick page still prices its options over
+ * /boros/pair/simulate, so those mocks stay.
  */
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -135,7 +136,8 @@ const simLeg = (marketId: number, direction: 'long' | 'short', size: number, int
           orderSide: direction,
         },
 });
-const simulation = (body: { legA: { marketId: number; direction: 'long' | 'short' }; legB: { marketId: number; direction: 'long' | 'short' }; size: number; intent: string }) => ({
+type StepInput = { legA: { marketId: number; direction: 'long' | 'short' }; legB: { marketId: number; direction: 'long' | 'short' }; size: number };
+const simulation = (body: StepInput & { intent: string }) => ({
   legA: simLeg(body.legA.marketId, body.legA.direction, body.size, body.intent),
   legB: simLeg(body.legB.marketId, body.legB.direction, body.size, body.intent),
   receiveLeg: 'B',
@@ -151,70 +153,130 @@ const simulation = (body: { legA: { marketId: number; direction: 'long' | 'short
   secondsToMaturity: 45 * DAY,
   reasons: [],
 });
-const fill = (marketId: number, direction: string, filledSize: number, shortfallSize = 0) => ({
+/** A clean pair gate — the exit/entry gates the server nests under each roll
+ * step. The roll's own gate is the one that matters, so these stay empty. */
+const pairGate = () => ({ blockers: [], warnings: [], requiresAcknowledgement: false, opposingLegs: [] });
+/** The roll gate: the whole margin/eligibility verdict. `margin` is comfortably
+ * funded by default (1,000 ETH available, 5 needed). */
+const rollGate = (o: Partial<ReturnType<typeof rollGateBase>> = {}) => ({ ...rollGateBase(), ...o });
+const rollGateBase = () => ({
+  blockers: [] as Array<{ code: string; message: string; step?: string; leg?: string; marketId?: number }>,
+  warnings: [] as string[],
+  margin: { need: 5, freed: 5, worstExitPnl: 0, exitFee: 0.02, availableAfter: 900, shortfall: 0 },
+});
+
+type Leg = { marketId: number; direction: 'long' | 'short'; slippageApr: number };
+type Step = { legA: Leg; legB: Leg; size: number };
+type RollBody = {
+  address: string;
+  exit: Step;
+  entry: Step;
+  opposingAcknowledged?: boolean;
+  clientOrderIds: { exitA: string; exitB: string; entryA: string; entryB: string };
+};
+type LegFailure = { code: string; message: string; cause?: 'this-leg' | 'batch' } | null;
+const legFill = (marketId: number, direction: string, filledSize: number, shortfallSize = 0, failure: LegFailure = null) => ({
   marketId,
   direction,
   filledSize,
   shortfallSize,
-  execApr: 0.06,
-  feeSize: 0.01,
-  failure: null,
+  execApr: filledSize > 0 ? 0.06 : null,
+  feeSize: filledSize > 0 ? 0.01 : null,
+  failure,
 });
-/** A full fill of whatever was asked. */
-const filledResult = (body: { legA: { marketId: number; direction: string }; legB: { marketId: number; direction: string }; size: number }) => ({
-  legA: fill(body.legA.marketId, body.legA.direction, body.size),
-  legB: fill(body.legB.marketId, body.legB.direction, body.size),
-  hedgedSize: body.size,
-  unhedgedSize: 0,
-  unhedgedLeg: null,
-  realisedSpreadApr: 0.04,
-  partial: false,
-  filledNothing: false,
-  bothLegsSubmitted: true,
+type RollLegKey = 'exitA' | 'exitB' | 'entryA' | 'entryB';
+/** Build the four legs from a per-leg maker. */
+const legsOf = (body: RollBody, make: (key: RollLegKey, leg: Leg, size: number) => ReturnType<typeof legFill>) => ({
+  exitA: make('exitA', body.exit.legA, body.exit.size),
+  exitB: make('exitB', body.exit.legB, body.exit.size),
+  entryA: make('entryA', body.entry.legA, body.entry.size),
+  entryB: make('entryB', body.entry.legB, body.entry.size),
 });
+const rolledResult = (body: RollBody) => ({
+  status: 'rolled',
+  legs: legsOf(body, (_k, leg, size) => legFill(leg.marketId, leg.direction, size)),
+  reason: null,
+  rolledSize: body.exit.size,
+});
+const refusedResult = (body: RollBody, named: RollLegKey, code: string, message: string) => ({
+  status: 'refused',
+  legs: legsOf(body, (k, leg, size) => legFill(leg.marketId, leg.direction, 0, size, { code, message, cause: k === named ? 'this-leg' : 'batch' })),
+  reason: { code, message, leg: named },
+  rolledSize: 0,
+});
+const unknownResult = (body: RollBody) => {
+  const message = 'the venue never answered';
+  return {
+    status: 'unknown',
+    legs: legsOf(body, (_k, leg, size) => legFill(leg.marketId, leg.direction, 0, size, { code: 'unknown', message })),
+    reason: { code: 'unknown', message, leg: null },
+    rolledSize: 0,
+  };
+};
+const executeBody = (body: RollBody, result: unknown, replayed = false) =>
+  env({
+    result,
+    exit: { simulation: simulation({ ...body.exit, intent: 'close' }), gate: pairGate() },
+    entry: { simulation: simulation({ ...body.entry, intent: 'open' }), gate: pairGate() },
+    gate: rollGate(),
+    replayed,
+  });
+const okRoll = (body: RollBody) => HttpResponse.json(executeBody(body, rolledResult(body)));
 
-type SimBody = Body & { opposingAcknowledged?: boolean; legA: Body['legA'] & { slippageApr: number }; legB: Body['legB'] & { slippageApr: number } };
-type Body = { intent: string; size: number; legA: { marketId: number; direction: 'long' | 'short' }; legB: { marketId: number; direction: 'long' | 'short' }; clientOrderIdA: string; clientOrderIdB: string };
+type PairSimBody = { intent: string; size: number; legA: Leg; legB: Leg };
 
 function install(
-  onExecute: (body: Body, n: number) => Response | Promise<Response>,
-  opts: { onSimulate?: (body: SimBody) => void; requiresAck?: boolean } = {},
+  opts: {
+    onRollExecute?: (body: RollBody, n: number) => Response | Promise<Response>;
+    onRollSimulate?: (body: RollBody) => void;
+    onPairSimulate?: (body: PairSimBody) => void;
+    /** Override the roll gate the review reads (blockers, warnings, margin). */
+    gate?: () => ReturnType<typeof rollGate>;
+    /** Held roll simulations wait on this before answering — for the
+     * "confirm stays disabled until a fresh quote lands" case. */
+    rollSimGate?: Promise<void>;
+  } = {},
 ) {
   let n = 0;
+  const onRollExecute = opts.onRollExecute ?? ((body) => okRoll(body));
   server.use(
     http.get('/api/boros/agent', () =>
       HttpResponse.json(env({ configured: true, root: ADDRESS, rootMasked: '0x1111…1111', accountId: 0, expiry: null, expired: false, canProvision: true })),
     ),
     http.get('/api/boros/pair/context', () => HttpResponse.json(env(context()))),
     http.post('/api/boros/pair/simulate', async ({ request }) => {
-      const body = (await request.json()) as SimBody;
-      opts.onSimulate?.(body);
-      // A close that has not been acknowledged is blocked, as the server does it.
-      const wantsAck = Boolean(opts.requiresAck) && body.intent === 'close';
-      const blocked = wantsAck && !body.opposingAcknowledged;
+      const body = (await request.json()) as PairSimBody;
+      opts.onPairSimulate?.(body);
       return HttpResponse.json(
         env({
           simulation: simulation(body),
-          gate: {
-            blockers: blocked ? [{ code: 'flip-unacknowledged', message: 'Tick the acknowledgement to confirm what happens to your existing position.' }] : [],
-            warnings: [],
-            requiresAcknowledgement: wantsAck,
-            opposingLegs: wantsAck ? ['A', 'B'] : [],
-          },
+          gate: pairGate(),
           eligibility: { eligible: true, code: null, reason: null },
           simulatedAtMs: Date.now(),
           gasBalanceUsd: 5,
         }),
       );
     }),
-    http.post('/api/boros/pair/execute', async ({ request }) => {
+    http.post('/api/boros/roll/simulate', async ({ request }) => {
+      const body = (await request.json()) as RollBody;
+      opts.onRollSimulate?.(body);
+      if (opts.rollSimGate) await opts.rollSimGate;
+      return HttpResponse.json(
+        env({
+          exit: { simulation: simulation({ ...body.exit, intent: 'close' }), gate: pairGate() },
+          entry: { simulation: simulation({ ...body.entry, intent: 'open' }), gate: pairGate() },
+          gate: opts.gate ? opts.gate() : rollGate(),
+          simulatedAtMs: Date.now(),
+          gasBalanceUsd: 5,
+        }),
+      );
+    }),
+    http.post('/api/boros/roll/execute', async ({ request }) => {
       n += 1;
-      return onExecute((await request.json()) as Body, n);
+      return onRollExecute((await request.json()) as RollBody, n);
     }),
   );
 }
-
-const ok = (body: Body) => HttpResponse.json(env({ result: filledResult(body), estimate: simulation(body), warnings: [] }));
 
 async function armAndHold(user: ReturnType<typeof userEvent.setup>) {
   renderWithClient(<RollOverModal pair={pair} base="ETH" nowSec={NOW} onClose={() => {}} />);
@@ -224,7 +286,7 @@ async function armAndHold(user: ReturnType<typeof userEvent.setup>) {
   const next = await within(dialog).findByRole('button', { name: 'Roll over →' });
   await waitFor(() => expect(next).not.toBeDisabled(), { timeout: 4_000 });
   await user.click(next);
-  // REVIEW: the hold unlocks once both batches are quoted and the agent is live.
+  // REVIEW: the hold unlocks once the roll is quoted and the agent is live.
   const confirm = await within(dialog).findByRole('button', { name: 'Roll over' });
   await waitFor(() => expect(confirm).not.toBeDisabled(), { timeout: 4_000 });
   await user.pointer({ keys: '[MouseLeft>]', target: confirm });
@@ -240,7 +302,7 @@ describe('RollOverModal — the pick page', () => {
   it('defaults the size to the largest slice that fills inside tolerance; the shortcuts override it', async () => {
     const user = userEvent.setup();
     fitSize = 40;
-    install(ok);
+    install();
     renderWithClient(<RollOverModal pair={pair} base="ETH" nowSec={NOW} onClose={() => {}} />);
     const dialog = await screen.findByRole('dialog');
     const box = within(dialog).getByLabelText('Size to roll (ETH)');
@@ -264,7 +326,7 @@ describe('RollOverModal — the pick page', () => {
 
   it('with no fit reported, or a fit above the position, the whole position is the default', async () => {
     fitSize = 500;
-    install(ok);
+    install();
     renderWithClient(<RollOverModal pair={pair} base="ETH" nowSec={NOW} onClose={() => {}} />);
     const dialog = await screen.findByRole('dialog');
     // Wait for the option to be priced (its Locked spread line), then a beat.
@@ -274,8 +336,8 @@ describe('RollOverModal — the pick page', () => {
   });
 
   it('prices the options at each batch\'s own seeded tolerance, not the server\'s flat default', async () => {
-    const sims: SimBody[] = [];
-    install(ok, { onSimulate: (b) => sims.push(b) });
+    const sims: PairSimBody[] = [];
+    install({ onPairSimulate: (b) => sims.push(b) });
     renderWithClient(<RollOverModal pair={pair} base="ETH" nowSec={NOW} onClose={() => {}} />);
     await screen.findByRole('dialog');
     await waitFor(() => expect(sims.filter((s) => s.intent === 'open').length).toBeGreaterThan(0), { timeout: 4_000 });
@@ -288,196 +350,236 @@ describe('RollOverModal — the pick page', () => {
   });
 });
 
-describe('RollOverModal — the roll as two batches', () => {
-  it('sends the exit, then the entry sized to what the exit filled, with four distinct ids', async () => {
+describe('RollOverModal — the atomic roll', () => {
+  it('sends ONE roll carrying both steps, the size and four distinct ids, then shows the rolled line', async () => {
     const user = userEvent.setup();
-    const sent: Body[] = [];
-    install((body) => {
-      sent.push(body);
-      // The exit fills 60 of the 100 asked; the entry must then ask for 60.
-      if (body.intent === 'close') {
-        const r = filledResult(body);
-        r.legA = fill(body.legA.marketId, body.legA.direction, 60, 40);
-        r.legB = fill(body.legB.marketId, body.legB.direction, 60, 40);
-        r.partial = true;
-        r.hedgedSize = 60;
-        return HttpResponse.json(env({ result: r, estimate: simulation(body), warnings: [] }));
-      }
-      return ok(body);
-    });
+    const sent: RollBody[] = [];
+    install({ onRollExecute: (body) => { sent.push(body); return okRoll(body); } });
     const dialog = await armAndHold(user);
-    await waitFor(() => expect(sent).toHaveLength(2), { timeout: 4_000 });
+    await waitFor(() => expect(sent).toHaveLength(1), { timeout: 4_000 });
 
-    const [exit, entry] = sent;
-    expect(exit.intent).toBe('close');
-    expect(exit.size).toBe(100);
-    // Closing reverses the held sides: Gate LONG is sold, Hyperliquid SHORT is bought.
-    expect(exit.legA).toMatchObject({ marketId: GATE_OLD, direction: 'short' });
-    expect(exit.legB).toMatchObject({ marketId: HL_OLD, direction: 'long' });
+    const [body] = sent;
+    // Closing reverses the held sides: Gate LONG is sold, Hyperliquid SHORT bought.
+    expect(body.exit.legA).toMatchObject({ marketId: GATE_OLD, direction: 'short' });
+    expect(body.exit.legB).toMatchObject({ marketId: HL_OLD, direction: 'long' });
+    // The re-entry takes the pair's own sides at the new maturity.
+    expect(body.entry.legA).toMatchObject({ marketId: GATE_NEW, direction: 'long' });
+    expect(body.entry.legB).toMatchObject({ marketId: HL_NEW, direction: 'short' });
+    expect(body.exit.size).toBe(100);
+    expect(body.entry.size).toBe(100);
 
-    expect(entry.intent).toBe('open');
-    expect(entry.size).toBe(60);
-    expect(entry.legA).toMatchObject({ marketId: GATE_NEW, direction: 'long' });
-    expect(entry.legB).toMatchObject({ marketId: HL_NEW, direction: 'short' });
-
-    const ids = [exit.clientOrderIdA, exit.clientOrderIdB, entry.clientOrderIdA, entry.clientOrderIdB];
+    const ids = [body.clientOrderIds.exitA, body.clientOrderIds.exitB, body.clientOrderIds.entryA, body.clientOrderIds.entryB];
     expect(new Set(ids).size).toBe(4);
     expect(ids.every(Boolean)).toBe(true);
 
-    // Both steps reported; the partial exit's remainder is named as still open.
-    expect(await within(dialog).findByText(/Rolled 60 ETH/)).toBeInTheDocument();
-    expect(within(dialog).getByText(/40 ETH of the old legs stayed open/)).toBeInTheDocument();
-    expect(within(dialog).queryByRole('alert')).not.toBeInTheDocument();
-  });
-
-  it('an exit that fills nothing sends no entry and offers to retry the exit', async () => {
-    const user = userEvent.setup();
-    const sent: Body[] = [];
-    install((body) => {
-      sent.push(body);
-      const r = filledResult(body);
-      r.legA = fill(body.legA.marketId, body.legA.direction, 0, body.size);
-      r.legB = fill(body.legB.marketId, body.legB.direction, 0, body.size);
-      r.partial = true;
-      r.filledNothing = true;
-      r.hedgedSize = 0;
-      return HttpResponse.json(env({ result: r, estimate: simulation(body), warnings: [] }));
-    });
-    const dialog = await armAndHold(user);
-    expect(await within(dialog).findByText('nothing filled')).toBeInTheDocument();
-    expect(within(dialog).getByRole('button', { name: 'Retry exit' })).toBeInTheDocument();
-    // Give a straggling second send every chance to show up — there is none.
-    await new Promise((r) => setTimeout(r, 300));
+    expect(await within(dialog).findByText(/Rolled 100 ETH/)).toBeInTheDocument();
+    // No second send, and no alert on a clean roll.
+    await new Promise((r) => setTimeout(r, 250));
     expect(sent).toHaveLength(1);
-    expect(sent[0].intent).toBe('close');
     expect(within(dialog).queryByRole('alert')).not.toBeInTheDocument();
   });
 
-  it('an entry that fails after a good exit says the rate side is short and retries only the entry', async () => {
+  it('a refused roll trades nothing: it names the leg and Retry re-sends the SAME four ids', async () => {
     const user = userEvent.setup();
-    const sent: Body[] = [];
-    install((body, n) => {
-      sent.push(body);
-      if (n === 2) {
-        return HttpResponse.json(
-          { ok: false, error: { category: 'validation', message: 'the book moved', retryable: true } },
-          { status: 409 },
-        );
-      }
-      return ok(body);
+    const sent: RollBody[] = [];
+    install({
+      onRollExecute: (body, n) => {
+        sent.push(body);
+        if (n === 1) return HttpResponse.json(executeBody(body, refusedResult(body, 'entryA', 'insufficient-margin', 'not enough margin')));
+        return okRoll(body);
+      },
     });
     const dialog = await armAndHold(user);
-    await waitFor(() => expect(sent).toHaveLength(2), { timeout: 4_000 });
-    expect(await within(dialog).findByRole('alert')).toHaveTextContent(/rate side is short by 100 ETH/);
-    expect(within(dialog).getByText(/Re-entry — not sent/)).toBeInTheDocument();
-    expect(within(dialog).getByText(/the book moved/)).toBeInTheDocument();
+    await waitFor(() => expect(sent).toHaveLength(1), { timeout: 4_000 });
 
-    const retry = within(dialog).getByRole('button', { name: 'Retry re-entry' });
+    // Nothing traded, and the reason is prefixed with the named leg's market.
+    const alert = await within(dialog).findByRole('alert');
+    expect(alert).toHaveTextContent(/Nothing was traded/);
+    expect(alert).toHaveTextContent(/Gate ETH 30 Oct 2026: not enough margin/);
+    // Both sides are reported, grouped Exit / Re-entry.
+    expect(within(dialog).getByText('Exit')).toBeInTheDocument();
+    expect(within(dialog).getByText('Re-entry')).toBeInTheDocument();
+
+    const retry = within(dialog).getByRole('button', { name: 'Retry' });
     await user.pointer({ keys: '[MouseLeft>]', target: retry });
-    await waitFor(() => expect(sent).toHaveLength(3), { timeout: 4_000 });
-    // The third send is the entry again — never the exit — with fresh ids.
-    expect(sent[2].intent).toBe('open');
-    expect(sent[2].size).toBe(100);
-    expect(sent[2].clientOrderIdA).not.toBe(sent[1].clientOrderIdA);
-    expect(sent[2].clientOrderIdB).not.toBe(sent[1].clientOrderIdB);
+    await waitFor(() => expect(sent).toHaveLength(2), { timeout: 4_000 });
+    // The whole point of the memo: the same four ids, never re-minted.
+    expect(sent[1].clientOrderIds).toEqual(sent[0].clientOrderIds);
     expect(await within(dialog).findByText(/Rolled 100 ETH/)).toBeInTheDocument();
     expect(within(dialog).queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('an unconfirmed roll shows a rose warning and offers no retry', async () => {
+    const user = userEvent.setup();
+    const sent: RollBody[] = [];
+    install({ onRollExecute: (body) => { sent.push(body); return HttpResponse.json(executeBody(body, unknownResult(body))); } });
+    const dialog = await armAndHold(user);
+    await waitFor(() => expect(sent).toHaveLength(1), { timeout: 4_000 });
+
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent(/did not confirm this roll/);
+    expect(within(dialog).queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: 'Close' })).toBeInTheDocument();
+    // No straggling resend from the unknown verdict.
+    await new Promise((r) => setTimeout(r, 250));
+    expect(sent).toHaveLength(1);
+  });
+
+  it('a 409 from execute is "not sent", and Retry re-sends the same ids', async () => {
+    const user = userEvent.setup();
+    const sent: RollBody[] = [];
+    install({
+      onRollExecute: (body, n) => {
+        sent.push(body);
+        if (n === 1) {
+          return HttpResponse.json(
+            { ok: false, error: { category: 'validation', message: 'the book moved', retryable: false }, data: { blockers: [] } },
+            { status: 409 },
+          );
+        }
+        return okRoll(body);
+      },
+    });
+    const dialog = await armAndHold(user);
+    await waitFor(() => expect(sent).toHaveLength(1), { timeout: 4_000 });
+
+    expect(await within(dialog).findByText(/Roll — not sent/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/the book moved/)).toBeInTheDocument();
+
+    const retry = within(dialog).getByRole('button', { name: 'Retry' });
+    await user.pointer({ keys: '[MouseLeft>]', target: retry });
+    await waitFor(() => expect(sent).toHaveLength(2), { timeout: 4_000 });
+    // A thrown request must reuse the ids too: a lost response is answered
+    // from the memo, a 409 or refusal executes again.
+    expect(sent[1].clientOrderIds).toEqual(sent[0].clientOrderIds);
+    expect(await within(dialog).findByText(/Rolled 100 ETH/)).toBeInTheDocument();
+  });
+
+  it('a replayed response notes that nothing was sent twice', async () => {
+    const user = userEvent.setup();
+    install({ onRollExecute: (body) => HttpResponse.json(executeBody(body, rolledResult(body), true)) });
+    const dialog = await armAndHold(user);
+    expect(await within(dialog).findByText(/Rolled 100 ETH/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/Answered from the earlier submission/)).toBeInTheDocument();
   });
 });
 
 describe('RollOverModal — the review page', () => {
-  it('each batch has its own tolerance, and a close that asks for acknowledgement gets it up front', async () => {
+  it('carries a per-batch tolerance into the one roll request and its execute body, with no acknowledgement box', async () => {
     const user = userEvent.setup();
-    const sims: SimBody[] = [];
-    const sent: Body[] = [];
-    install((body) => { sent.push(body); return ok(body); }, { onSimulate: (b) => sims.push(b), requiresAck: true });
+    const sims: RollBody[] = [];
+    const sent: RollBody[] = [];
+    install({ onRollExecute: (body) => { sent.push(body); return okRoll(body); }, onRollSimulate: (b) => sims.push(b) });
     renderWithClient(<RollOverModal pair={pair} base="ETH" nowSec={NOW} onClose={() => {}} />);
     const dialog = await screen.findByRole('dialog');
     const next = await within(dialog).findByRole('button', { name: 'Roll over →' });
     await waitFor(() => expect(next).not.toBeDisabled(), { timeout: 4_000 });
     await user.click(next);
 
-    // A roll IS a close of these legs: no box to tick, no "Exit: Tick the
-    // acknowledgement" blocker — the exit is quoted acknowledged from the
-    // first request and the confirm arms as soon as both quotes land.
+    // A roll IS a close of these legs: no box to tick, no acknowledgement blocker.
     const confirm = await within(dialog).findByRole('button', { name: 'Roll over' });
     await waitFor(() => expect(confirm).not.toBeDisabled(), { timeout: 4_000 });
     expect(within(dialog).queryByText(/Tick the acknowledgement/)).not.toBeInTheDocument();
     expect(within(dialog).queryByRole('checkbox')).not.toBeInTheDocument();
-    expect(sims.filter((s) => s.intent === 'close').at(-1)?.opposingAcknowledged).toBe(true);
 
     // Two tolerances, one per batch: widening the EXIT re-quotes only the
-    // close with it; the re-entry keeps the default until its own box moves.
+    // close side of the roll; the re-entry keeps its seed.
     const [exitMax, entryMax] = within(dialog).getAllByTitle(/Change the tolerance/);
     await user.click(exitMax);
     const exitSlip = within(dialog).getByLabelText('Exit max slippage, % APR');
     await user.clear(exitSlip);
     await user.type(exitSlip, '1');
     await waitFor(() => {
-      const close = sims.filter((s) => s.intent === 'close').at(-1)!;
-      expect(close.legA.slippageApr).toBeCloseTo(0.01, 9);
-      expect(close.legB.slippageApr).toBeCloseTo(0.01, 9);
+      const last = sims.at(-1)!;
+      expect(last.exit.legA.slippageApr).toBeCloseTo(0.01, 9);
+      expect(last.exit.legB.slippageApr).toBeCloseTo(0.01, 9);
+      // Untouched, so still on its seed (the 1% fallback for these markets).
+      expect(last.entry.legA.slippageApr).toBeCloseTo(0.01, 9);
     }, { timeout: 4_000 });
-    /**
-     * Untouched, so still on its SEED — which comes from the markets' own
-     * max rate deviation, exactly as the ticket and the close form seed
-     * theirs. These fixture markets report no cap, so the seed is the 1%
-     * fallback; the point is that widening the exit did not move it.
-     */
-    expect(sims.filter((s) => s.intent === 'open').at(-1)!.legA.slippageApr).toBeCloseTo(0.01, 9);
 
     await user.click(entryMax);
     const entrySlip = within(dialog).getByLabelText('Re-entry max slippage, % APR');
     await user.clear(entrySlip);
     await user.type(entrySlip, '2');
     await waitFor(() => {
-      const open = sims.filter((s) => s.intent === 'open').at(-1)!;
-      expect(open.legA.slippageApr).toBeCloseTo(0.02, 9);
-      expect(open.legB.slippageApr).toBeCloseTo(0.02, 9);
+      const last = sims.at(-1)!;
+      expect(last.entry.legA.slippageApr).toBeCloseTo(0.02, 9);
+      expect(last.entry.legB.slippageApr).toBeCloseTo(0.02, 9);
     }, { timeout: 4_000 });
 
-    // The hold sends the exit acknowledged, each batch at its own tolerance.
+    // The hold sends ONE roll, each batch at its own tolerance.
     await waitFor(() => expect(confirm).not.toBeDisabled(), { timeout: 4_000 });
     await user.pointer({ keys: '[MouseLeft>]', target: confirm });
-    await waitFor(() => expect(sent).toHaveLength(2), { timeout: 4_000 });
-    const [exit, entry] = sent as SimBody[];
-    expect(exit.opposingAcknowledged).toBe(true);
-    expect(exit.legA.slippageApr).toBeCloseTo(0.01, 9);
-    expect(entry.legB.slippageApr).toBeCloseTo(0.02, 9);
+    await waitFor(() => expect(sent).toHaveLength(1), { timeout: 4_000 });
+    expect(sent[0].exit.legA.slippageApr).toBeCloseTo(0.01, 9);
+    expect(sent[0].entry.legB.slippageApr).toBeCloseTo(0.02, 9);
   });
 
-  it('shows the margin the re-entry needs against what is available, and warns when short', async () => {
+  it('reads the margin, the warnings and the blockers straight from the roll gate', async () => {
     const user = userEvent.setup();
-    // The context says 1,000 ETH is available; the sim asks for 8 → fine.
-    install((body) => ok(body));
+    install({
+      gate: () =>
+        rollGate({
+          blockers: [{ code: 'partial-depth', message: 'Re-entry: Gate ETH 30 Oct 2026 can fill only 60 of 100 — reduce the size.', step: 'entry', leg: 'A', marketId: GATE_NEW }],
+          warnings: ['Rolling will auto-top-up gas by about $2 — it is billed to your prepaid gas pot.'],
+          margin: { need: 5, freed: 5, worstExitPnl: 0, exitFee: 0.02, availableAfter: 3, shortfall: 2 },
+        }),
+    });
     renderWithClient(<RollOverModal pair={pair} base="ETH" nowSec={NOW} onClose={() => {}} />);
     const dialog = await screen.findByRole('dialog');
     const next = await within(dialog).findByRole('button', { name: 'Roll over →' });
     await waitFor(() => expect(next).not.toBeDisabled(), { timeout: 4_000 });
     await user.click(next);
-    // Two figures: what the new legs need, and what will be there after the
-    // exit (1,000 ETH now plus what the exit frees, less its worst case and a
-    // 5% haircut) — comfortably above 8, so no shortfall line.
-    const required = await within(dialog).findByText('Required margin');
-    // The row: label span → its wrapper → the flex row that also holds the value.
+
+    // The blocker is listed and holds the confirm shut.
+    expect(await within(dialog).findByText(/can fill only 60 of 100/)).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: 'Roll over' })).toBeDisabled();
+    // The gate warning renders (the two-batch flow dropped these).
+    expect(within(dialog).getByText(/auto-top-up gas by about \$2/)).toBeInTheDocument();
+    // The margin figures and the shortfall line come straight from gate.margin.
+    const required = within(dialog).getByText('Required margin');
     const row = required.parentElement!.parentElement as HTMLElement;
-    /**
-     * The margin the roll ADDS, not the netted total.
-     *
-     * Each re-entry leg opens onto a position of the same size, so it needs
-     * 5 ETH on a resulting position of double the size ⇒ it adds half, 2.5
-     * per leg, 5 for the pair. Charging the netted `marginRequiredTotal` (8)
-     * is what made a 13% roll read nearly the same capital as a 100% one.
-     */
+    expect(within(row).getByText('5 ETH')).toBeInTheDocument();
+    expect(within(dialog).getByText('Available margin after exit')).toBeInTheDocument();
+    expect(within(dialog).getByText(/About 2 ETH short/)).toBeInTheDocument();
+  });
+
+  it('a comfortably funded roll shows the required and available margin with no shortfall', async () => {
+    const user = userEvent.setup();
+    install();
+    renderWithClient(<RollOverModal pair={pair} base="ETH" nowSec={NOW} onClose={() => {}} />);
+    const dialog = await screen.findByRole('dialog');
+    const next = await within(dialog).findByRole('button', { name: 'Roll over →' });
+    await waitFor(() => expect(next).not.toBeDisabled(), { timeout: 4_000 });
+    await user.click(next);
+    const required = await within(dialog).findByText('Required margin');
+    const row = required.parentElement!.parentElement as HTMLElement;
     expect(within(row).getByText('5 ETH')).toBeInTheDocument();
     expect(within(dialog).getByText('Available margin after exit')).toBeInTheDocument();
     expect(within(dialog).queryByText(/short\. Top up/)).not.toBeInTheDocument();
     expect(within(dialog).queryByRole('alert')).not.toBeInTheDocument();
   });
 
+  it('the confirm stays disabled until a fresh quote lands', async () => {
+    const user = userEvent.setup();
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    install({ rollSimGate: gate });
+    renderWithClient(<RollOverModal pair={pair} base="ETH" nowSec={NOW} onClose={() => {}} />);
+    const dialog = await screen.findByRole('dialog');
+    const next = await within(dialog).findByRole('button', { name: 'Roll over →' });
+    await waitFor(() => expect(next).not.toBeDisabled(), { timeout: 4_000 });
+    await user.click(next);
+    const confirm = await within(dialog).findByRole('button', { name: 'Roll over' });
+    // No quote yet → the "Waiting for a quote" blocker holds it shut.
+    expect(confirm).toBeDisabled();
+    expect(within(dialog).getByText('Waiting for a quote.')).toBeInTheDocument();
+    release();
+    await waitFor(() => expect(confirm).not.toBeDisabled(), { timeout: 4_000 });
+  });
+
   it('the exit shows the PnL of closing, not a spread: (locked − exec) × size × years, per leg', async () => {
     const user = userEvent.setup();
-    install((body) => ok(body));
+    install();
     renderWithClient(<RollOverModal pair={pair} base="ETH" nowSec={NOW} onClose={() => {}} />);
     const dialog = await screen.findByRole('dialog');
     const next = await within(dialog).findByRole('button', { name: 'Roll over →' });
@@ -488,11 +590,6 @@ describe('RollOverModal — the review page', () => {
     // at $2,500 = $219.18, before the fees PairCosts lists.
     const label = await within(dialog).findByText(/Est\. total trade PnL/);
     expect(within(dialog).getByText('+$219.18')).toBeInTheDocument();
-    /**
-     * The per-leg split is HOVER TEXT now, not rows: the total is the figure
-     * a roll is judged on (his call 2026-09-18). Each leg contributes half
-     * of the $219.18, with the rate move that produced it.
-     */
     const title = label.getAttribute('title') ?? '';
     // One row per leg: "venue · locked → exec" on the left, its PnL on the right.
     expect(title).toMatch(/Gate · 4\.00% → 6\.00%\t\$109\.59/);
