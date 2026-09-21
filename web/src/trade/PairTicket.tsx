@@ -10,7 +10,7 @@
  * confirm — no review modal — so the maker price stays live until t=submit.
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useAccount, usePositions, useSymbolDetail, useSymbolsByBase } from '../api/queries';
+import { useAccount, usePositions, useSymbolDetail, useSymbolsByBase, useVenueBook } from '../api/queries';
 import type { ActionInput, PreviewResult, RestEstimate } from '../api/types';
 import { SegmentedToggle } from '../components/SegmentedToggle';
 import { amountError } from '../lib/amount';
@@ -20,14 +20,15 @@ import { uuid } from '../lib/uuid';
 import { ExecuteControl } from './ExecuteControl';
 import { estimateMargin } from './previewBits';
 import {
+  AffixedInput,
   MakerHedgeControls,
-  PairPreview,
-  VenueRow,
+  PairEstimate,
+  PairVenues,
   type ExecMode,
   type TimeoutChoice,
 } from './PairTicketBits';
 import { PairBookImpact } from './PriceImpactGraph';
-import { CoinCombobox } from './SymbolCombobox';
+import { CoinCombobox, FieldLabel } from './SymbolCombobox';
 import { useTradeFlowOptional } from './TradeFlow';
 import { usePreviewDebounced } from './usePreview';
 
@@ -318,10 +319,38 @@ export function PairTicket({ onExecuted }: { onExecuted?: () => void } = {}) {
     ? estimateMargin(preview.previews, positions.data?.positions, account.data?.positionMode).required
     : null;
 
+  // The coin's live price beside the "Coin" caption: the preview's reference
+  // once a size is typed, else the long (or short) venue's own mid.
+  const priceSym = longSym ?? shortSym;
+  const priceBook = useVenueBook(priceSym, Boolean(priceSym) && !legLong && !legShort);
+  const coinPx = legLong?.refPrice?.value ?? legShort?.refPrice?.value ?? priceBook.data?.mid ?? null;
+
+  const swapVenues = () => {
+    setLongSym(shortSym);
+    setShortSym(longSym);
+    // The maker price belonged to the leg that just changed sides — resume
+    // tracking the book, as a mode switch does.
+    setPricePinned(false);
+  };
+
+  const leverageText =
+    levLong !== undefined && levShort !== undefined
+      ? `${levLong}x long / ${levShort}x short`
+      : longSym && shortSym
+        ? 'loading…'
+        : null;
+
   return (
-    <div className="flex flex-col gap-3">
+    <div className="flex flex-col gap-4">
       <CoinCombobox
         value={base}
+        aside={
+          base && coinPx !== null ? (
+            <span className="num text-[11px] text-ink-400">
+              {base} {fmtUsd(coinPx)}
+            </span>
+          ) : undefined
+        }
         onSelect={(b) => {
           setBase(b);
           setLongSym(null);
@@ -349,69 +378,65 @@ export function PairTicket({ onExecuted }: { onExecuted?: () => void } = {}) {
       />
 
       {base && (
-        <>
-          <VenueRow
-            label="LONG venue"
-            tone="long"
-            value={longSym}
-            otherValue={shortSym}
-            onPick={(s) => setLongSym(s || null)}
-            venues={venues.data}
-            loading={venues.isPending}
-          />
-          <VenueRow
-            label="SHORT venue"
-            tone="short"
-            value={shortSym}
-            otherValue={longSym}
-            onPick={(s) => setShortSym(s || null)}
-            venues={venues.data}
-            loading={venues.isPending}
-          />
-        </>
+        <PairVenues
+          longSym={longSym}
+          shortSym={shortSym}
+          venues={venues.data}
+          loading={venues.isPending}
+          onLong={(s) => setLongSym(s || null)}
+          onShort={(s) => setShortSym(s || null)}
+          onSwap={swapVenues}
+        />
       )}
 
-      <div className="flex flex-col gap-1">
-        <div className="flex items-baseline justify-between gap-2">
-          <label htmlFor="pair-notional" className="text-[11px] text-ink-400">
-            Size per leg{base || sizeUnit === 'usd' ? ` (${sizeUnit === 'base' ? base : 'USDT'})` : ''}
-          </label>
-          {/* The unit follows the coin (see sizeUnitForBase): ETH/BTC are
-              coin-margined on Boros, so the perp is sized in the coin and the
-              hedge is exact; every other coin is USDT-collateral there, so the
-              dollar figure is the one both legs share. The toggle stays because
-              some users think in notional regardless — and once used, it pins. */}
-          {/* No coin picked yet ⇒ nothing sensible to call the base unit, so
-              the choice is withheld rather than shown as "Base". */}
-          {base && (
-          <SegmentedToggle<'base' | 'usd'>
-            ariaLabel="Size unit"
-            value={sizeUnit}
-            onChange={(u) => {
-              // An explicit choice wins over the coin's default from here on.
-              setUnitPinned(true);
-              setSizeUnit(u);
-            }}
-            options={[
-              // Always the actual coin (ETH / BTC) — "Base" is jargon that
-              // names a role rather than the unit the number is in. Before a
-              // coin is picked the toggle is not shown at all.
-              { value: 'base', label: base ?? '' },
-              { value: 'usd', label: 'USDT' },
-            ]}
+      <div className="flex flex-col gap-1.5">
+        <FieldLabel htmlFor="pair-notional">Size per leg</FieldLabel>
+        {/* The unit follows the coin (see sizeUnitForBase): ETH/BTC are
+            coin-margined on Boros, so the perp is sized in the coin and the
+            hedge is exact; every other coin is USDT-collateral there, so the
+            dollar figure is the one both legs share. The toggle sits INSIDE
+            the box, and stays because some users think in notional
+            regardless — and once used, it pins. */}
+        {/* No coin picked yet ⇒ nothing sensible to call the base unit, so
+            the choice is withheld and the box states its unit in the affix. */}
+        <AffixedInput
+          affix={
+            base ? (
+              <SegmentedToggle<'base' | 'usd'>
+                ariaLabel="Size unit"
+                className="seg-xs"
+                value={sizeUnit}
+                onChange={(u) => {
+                  // An explicit choice wins over the coin's default from here on.
+                  setUnitPinned(true);
+                  setSizeUnit(u);
+                }}
+                options={[
+                  // Always the actual coin (ETH / BTC) — "Base" is jargon that
+                  // names a role rather than the unit the number is in.
+                  { value: 'base', label: base },
+                  { value: 'usd', label: 'USDT' },
+                ]}
+              />
+            ) : (
+              <span>USDT</span>
+            )
+          }
+        >
+          <input
+            id="pair-notional"
+            // The accessible name carries the unit — the visible caption does
+            // not, because the unit switch inside the box already shows it.
+            aria-label={`Size per leg (${sizeUnit === 'base' && base ? base : 'USDT'})`}
+            className={`input num ${base ? 'pr-[124px]' : 'pr-14'} ${notionalErr ? '!border-rose-500/60' : ''}`}
+            inputMode="decimal"
+            placeholder={sizeUnit === 'base' && base ? `size in ${base}` : 'size per leg'}
+            aria-invalid={notionalErr ? true : undefined}
+            aria-describedby={notionalErr ? 'pair-notional-error' : undefined}
+            value={notionalStr}
+            onChange={(e) => setNotionalStr(e.target.value)}
           />
-          )}
-        </div>
-        <input
-          id="pair-notional"
-          className={`input num ${notionalErr ? '!border-rose-500/60' : ''}`}
-          inputMode="decimal"
-          placeholder={sizeUnit === 'base' && base ? `size in ${base}` : 'size per leg'}
-          aria-invalid={notionalErr ? true : undefined}
-          aria-describedby={notionalErr ? 'pair-notional-error' : undefined}
-          value={notionalStr}
-          onChange={(e) => setNotionalStr(e.target.value)}
-        />
+        </AffixedInput>
         {notionalErr && (
           <p id="pair-notional-error" role="alert" className="text-[11px] text-rose-300">
             {notionalErr}
@@ -419,28 +444,8 @@ export function PairTicket({ onExecuted }: { onExecuted?: () => void } = {}) {
         )}
       </div>
 
-      <div className="flex items-center justify-between text-[11px] text-ink-400">
-        <span>Leverage</span>
-        <span className="num text-ink-200">
-          {levLong !== undefined && levShort !== undefined
-            ? `${levLong}x long / ${levShort}x short (venue max)`
-            : longSym && shortSym
-              ? 'loading…'
-              : '— (venue max)'}
-        </span>
-      </div>
-
-      <div className="flex items-center justify-between text-[11px] text-ink-400">
-        <span title="Initial margin the two legs post together — each leg's notional over its leverage">
-          Margin required
-        </span>
-        <span className="num text-ink-200">
-          {marginRequired !== null ? `≈ ${fmtUsd(marginRequired, 0)}` : '—'}
-        </span>
-      </div>
-
-      <div className="flex flex-col gap-1">
-        <span className="text-[11px] text-ink-400">Execution</span>
+      <div className="flex flex-col gap-1.5">
+        <FieldLabel>Execution</FieldLabel>
         <SegmentedToggle<ExecMode>
           ariaLabel="Pair execution mode"
           fill
@@ -475,27 +480,32 @@ export function PairTicket({ onExecuted }: { onExecuted?: () => void } = {}) {
         />
       )}
 
-      <PairBookImpact
-        longSym={longSym}
-        shortSym={shortSym}
-        notional={notionalStr}
-        legLong={legLong}
-        legShort={legShort}
-        estimating={estimating}
-        mode={mode}
-        makerLegPick={makerLegPick}
-        makerPriceStr={makerPriceStr}
-      />
-
       {actions && (
-        <PairPreview
+        <PairEstimate
           previews={preview.previews}
           isError={preview.isError}
           error={preview.error}
           estimating={estimating}
+          dataUpdatedAt={preview.dataUpdatedAt}
           legLong={legLong}
           legShort={legShort}
           mode={mode}
+          leverage={leverageText}
+          marginRequired={marginRequired}
+          book={
+            <PairBookImpact
+              longSym={longSym}
+              shortSym={shortSym}
+              notional={notionalStr}
+              legLong={legLong}
+              legShort={legShort}
+              estimating={estimating}
+              mode={mode}
+              makerLegPick={makerLegPick}
+              makerPriceStr={makerPriceStr}
+              embedded
+            />
+          }
         />
       )}
 
@@ -505,7 +515,7 @@ export function PairTicket({ onExecuted }: { onExecuted?: () => void } = {}) {
         tone="cyan"
         label="Execute pair ▸"
         buttonClassName="w-full"
-        // The ticket's own preview box reviews the legs — no hover card.
+        // The ticket's own estimate card reviews the legs — no hover card.
         hoverCard={false}
         decorate={decorate}
         // The maker price auto-tracks the touch every preview cycle; exclude it

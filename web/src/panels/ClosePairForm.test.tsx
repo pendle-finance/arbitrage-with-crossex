@@ -57,6 +57,7 @@ describe('ClosePairForm — the slippage the user sets is the slippage sent', ()
       as.map((a) => (a.kind === 'close-position' ? a.slippagePct : undefined));
     expect(slipOf(seen.at(-1)!)).toEqual([0.5, 0.5]);
 
+    await userEvent.click(await screen.findByRole('button', { name: /^0\.5%$/ }));
     const slip = screen.getByLabelText('Slippage %');
     await userEvent.clear(slip);
     await userEvent.type(slip, '2');
@@ -102,6 +103,7 @@ describe('ClosePairForm — the slippage the user sets is the slippage sent', ()
     renderWithClient(<ClosePairForm base="HYPE" legs={LEGS} />);
     await waitFor(() => expect(seen.length).toBeGreaterThan(0), { timeout: 4000 });
 
+    await userEvent.click(await screen.findByRole('button', { name: /^0\.5%$/ }));
     const slip = screen.getByLabelText('Slippage %');
     await userEvent.clear(slip);
     await userEvent.type(slip, '50');
@@ -118,9 +120,9 @@ describe('ClosePairForm — the slippage the user sets is the slippage sent', ()
     // book-mid limit band gets price-limit-rejected and would strand it.
     server.use(...baseHandlers(), previewSpy([]));
     renderWithClient(<ClosePairForm base="HYPE" legs={LEGS} />);
-    // The note rides as the tooltip on the "reduce-only IOC marketable limit"
-    // affordance, so assert the title rather than visible text.
-    const badge = await screen.findByText(/reduce-only ⓘ/);
+    // The full note rides as the tooltip on the footer line under the
+    // button, so assert the title rather than visible text.
+    const badge = (await screen.findByText(/^Reduce-only$/)).closest('p') as HTMLElement;
     expect(badge).toHaveAttribute(
       'title',
       expect.stringContaining("the hedge leg is sent at market, inside the venue's own price band"),
@@ -180,6 +182,7 @@ describe('ClosePairForm — slippage is part of the close intent', () => {
     fireEvent.pointerDown(btn);
     await waitFor(() => expect(dealCalls).toHaveLength(1), { timeout: 2_000 });
 
+    await userEvent.click(await screen.findByRole('button', { name: /^0\.5%$/ }));
     const slip = screen.getByLabelText('Slippage %');
     await userEvent.clear(slip);
     await userEvent.type(slip, '2');

@@ -35,7 +35,8 @@ describe('SinceChip', () => {
     render(<SinceChip base="HYPE" storedSec={MARCH_SEC} defaultSec={DEFAULT_SEC} onChange={vi.fn()} />);
     const chip = screen.getByRole('button', { name: /Since 1 Mar 2026/ });
     const pill = chip.querySelector('.chip');
-    expect(pill?.className).toContain('text-sky-400');
+    // MERGE 2026-09-21: blue tone now flows through Chip tone="blue" (text-info), not dev's raw text-sky-400.
+    expect(pill?.className).toContain('text-info');
 
     await userEvent.click(chip);
     const card = await screen.findByRole('tooltip');

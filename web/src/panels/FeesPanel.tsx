@@ -20,7 +20,7 @@ function FeeCell({ rate }: { rate: string }) {
 }
 
 const SPECIAL_COLUMNS: Column<SpecialFee>[] = [
-  { key: 'symbol', header: 'Symbol', render: (s) => <span className="num text-xs">{s.symbol}</span> },
+  { key: 'symbol', header: 'Symbol', render: (s) => <span className="num text-[12px] text-ink-50">{s.symbol}</span> },
   { key: 'maker', header: 'Maker', align: 'right', render: (s) => <FeeCell rate={s.makerFeeRate} /> },
   { key: 'taker', header: 'Taker', align: 'right', render: (s) => <FeeCell rate={s.takerFeeRate} /> },
 ];
@@ -31,9 +31,11 @@ const COLUMNS: Column<VenueFees>[] = [
     header: 'Venue',
     render: (v) => (
       <span className="inline-flex items-center gap-2">
+        {/* VenueChip already carries the venue's mark — a second one here read
+            as two logos for one exchange. */}
         <VenueChip exchange={v.exchangeType} />
         {VENUE_QUOTE_NOTE[v.exchangeType] && (
-          <span className="text-[10px] text-ink-500">{VENUE_QUOTE_NOTE[v.exchangeType]}</span>
+          <span className="text-[11px] text-ink-500">{VENUE_QUOTE_NOTE[v.exchangeType]}</span>
         )}
       </span>
     ),
@@ -70,7 +72,7 @@ export function FeesPanel() {
 
   return (
     <section aria-label="Fee rates">
-      <h2 className="mb-2 text-xs font-semibold uppercase tracking-wider text-ink-400">
+      <h2 className="mb-2 text-[14px] font-semibold text-ink-50">
         Your CrossEx fee rates{' '}
         <span className="normal-case text-ink-500">— per venue · negative maker = rebate</span>
       </h2>
@@ -82,7 +84,7 @@ export function FeesPanel() {
         renderExpanded={(v) =>
           v.specialFeeList?.length ? (
             <div>
-              <div className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-ink-400">
+              <div className="mb-2 text-[12px] font-normal leading-[14.52px] text-ink-300">
                 Per-symbol overrides ({v.specialFeeList.length})
               </div>
               <DataTable

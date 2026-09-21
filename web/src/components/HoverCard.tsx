@@ -163,7 +163,7 @@ export function HoverCard({
         }}
         onMouseEnter={stopClosing}
         onMouseLeave={() => close(false)}
-        className="fixed z-50 overflow-y-auto overscroll-contain rounded border border-ink-600 bg-ink-950 px-3 py-2.5 text-ink-100"
+        className="pp-tooltip fixed z-50 overflow-y-auto overscroll-contain"
       >
         {children}
       </div>,
@@ -227,8 +227,11 @@ export function HoverCard({
          card hero is a button titled "Show the waterfall breakdown", and that
          native tooltip otherwise opens on top of this card's first row. */
       title=""
-      className={`inline-flex cursor-help items-center gap-1 text-ink-400 transition-colors hover:text-cyan-200 ${
-        underline ? 'border-b border-dotted border-ink-600 hover:border-cyan-400/70' : ''
+      // The mock marks a label that carries a tooltip with a dotted rule at a
+      // 4px offset — an underline on the TEXT, not a border on the box, so a
+      // wrapped label stays marked on every line.
+      className={`inline-flex cursor-help items-center gap-1 text-ink-400 transition-colors hover:text-ink-200 ${
+        underline ? 'underline decoration-dotted underline-offset-4' : ''
       }`}
     >
       {label}

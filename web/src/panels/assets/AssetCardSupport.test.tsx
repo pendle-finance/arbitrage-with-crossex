@@ -88,6 +88,8 @@ describe('AssetCard for a held coin the terminal does not support', () => {
 
   it('keeps Close leg on the SOL leg row, close leg stays', async () => {
     renderSol();
+    // MERGE 2026-09-21: the unpaired SOL perp now lives in Hubert's collapsed "Ungrouped legs" card (pairs view); expand it to reach the per-leg Close leg control.
+    await userEvent.click(screen.getByRole('button', { name: /Ungrouped legs/ }));
     const close = screen.getByRole('button', { name: /^Close .* LONG perp$/ });
     expect(close).toHaveTextContent('Close leg');
     await vi.waitFor(() =>

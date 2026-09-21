@@ -279,7 +279,7 @@ describe('StrategyWizard — the hedge is sized off the EXECUTED collateral', ()
     // With no `sizeBase` the prefill leaves the size empty (it has no coin
     // quantity to put there) — the user types the ETH size themselves. That
     // is precisely the path that produced the mis-sized hedge.
-    fireEvent.change(screen.getByLabelText(/^Target size per leg/), { target: { value: '2' } });
+    fireEvent.change(screen.getByLabelText(/^Size per leg/), { target: { value: '2' } });
 
     const confirm = await screen.findByRole('button', { name: /Confirm — 2 Boros market orders/ });
     await waitFor(() => expect(confirm).toBeEnabled(), { timeout: 4000 });
@@ -326,7 +326,7 @@ describe('StrategyWizard — step 1 becomes a receipt once the rate is locked', 
     await waitFor(() =>
       expect(screen.queryByRole('button', { name: /Confirm — 2 Boros market orders/ })).not.toBeInTheDocument(),
     );
-    expect(screen.queryByLabelText(/^Target size per leg/)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/^Size per leg/)).not.toBeInTheDocument();
     // Exactly one way forward.
     expect(screen.getByRole('button', { name: /Rate locked ✓ — hedge the perps/ })).toBeInTheDocument();
     // And no Dismiss — the receipt IS the step; hiding it would blank it.

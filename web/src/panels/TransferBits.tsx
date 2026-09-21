@@ -1,5 +1,6 @@
 import { useId } from 'react';
 import type { GateAccount, RebalanceBucket, SpotBalance, TransferCoin, TransferPath } from '../api/types';
+import { TokenIcon, VenueIcon } from '../components/AssetIcon';
 import { HoverCard } from '../components/HoverCard';
 import { RadioRow } from '../components/RadioRow';
 import { fmtAbout, fmtUsd, num, sig } from '../lib/fmt';
@@ -48,7 +49,7 @@ export function WalletList({
   const groupName = useId();
   return (
     <div role="radiogroup" aria-labelledby={headerId} className="flex flex-col gap-1.5">
-      <span id={headerId} className="text-xs text-ink-400">
+      <span id={headerId} className="text-[12px] font-normal leading-[14.52px] text-ink-300">
         {`${side} · CrossEx wallet`}
       </span>
       {WALLET_ORDER.map((account) => {
@@ -64,7 +65,8 @@ export function WalletList({
             disabled={disabled}
             onPick={() => onPick(account)}
           >
-            <span id={labelId} className="flex-1 font-semibold text-ink-100">
+            <span id={labelId} className="flex flex-1 items-center gap-2 font-medium text-ink-50">
+              <VenueIcon venue={venue} size={16} />
               {WALLET_LABEL[keyOf({ coin, venue })]}
             </span>
             {cash !== null && <span className="num text-ink-200">{`${num(cash)} ${coin}`}</span>}
@@ -83,16 +85,24 @@ export function SpotTile({ side, spot, disabled }: { side: 'From' | 'To'; spot: 
   const headerId = useId();
   return (
     <div role="group" aria-labelledby={headerId} className={`flex flex-col gap-1.5 ${disabled ? 'opacity-50' : ''}`}>
-      <span id={headerId} className="text-xs text-ink-400">
+      <span id={headerId} className="text-[12px] font-normal leading-[14.52px] text-ink-300">
         {side}
       </span>
       <div className="flex flex-col items-start gap-1 rounded border border-dashed border-gold/40 px-3 py-2.5 text-xs">
         <HoverCard label={GATE_SPOT} icon={false} widthPx={200}>
           {HOVER.gateSpot}
         </HoverCard>
-        <span className="num text-ink-400">
-          {spot ? `${num(spotAvailable(spot, 'USDT'))} USDT · ${num(spotAvailable(spot, 'USDC'))} USDC` : 'balance hidden'}
-        </span>
+        {spot ? (
+          <span className="num inline-flex items-center gap-1.5 text-ink-300">
+            <TokenIcon symbol="USDT" size={14} />
+            {`${num(spotAvailable(spot, 'USDT'))} USDT`}
+            <span aria-hidden>·</span>
+            <TokenIcon symbol="USDC" size={14} />
+            {`${num(spotAvailable(spot, 'USDC'))} USDC`}
+          </span>
+        ) : (
+          <span className="num text-ink-300">balance hidden</span>
+        )}
       </div>
     </div>
   );

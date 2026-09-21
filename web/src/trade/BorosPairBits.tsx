@@ -6,8 +6,8 @@
  *  - No gross spread. Every spread rendered here comes from the simulation's
  *    NET fields; there is no pre-cost number to render even by accident.
  *  - The ESTIMATE leads — it is what the book says this size actually gets,
- *    so it is the number the decision is made on. Worst case sits directly
- *    under it and still colours the box rose when it is negative.
+ *    so it is the number the decision is made on, and it turns rose when it
+ *    is negative.
  */
 import type { ReactNode } from 'react';
 import type {
@@ -20,6 +20,7 @@ import type {
   BorosSimulatedLeg,
 } from '../api/types';
 import { Chip } from '../components/Chip';
+import { VenueIcon } from '../components/AssetIcon';
 import { HoldToConfirmButton } from '../components/HoldToConfirmButton';
 import { amountError } from '../lib/amount';
 import { fmtDateLocal, fmtPct, fmtUsd, sigGrouped } from '../lib/fmt';
@@ -87,15 +88,23 @@ export function DirectionToggle({
   value,
   onChange,
   idPrefix,
+  compact,
 }: {
   value: BorosLegDirection;
   onChange: (d: BorosLegDirection) => void;
   idPrefix: string;
+  /** Shrink-to-fit, for the single ticket's market header where it sits
+   * beside the caption rather than on a row of its own. */
+  compact?: boolean;
 }) {
   return (
-    // Full width: the two options are the whole choice, so they take the whole
-    // row rather than huddling left with dead space beside them.
-    <div className="seg flex w-full" role="radiogroup" aria-label={`${idPrefix} direction`}>
+    // Full width by default: the two options are the whole choice, so they
+    // take the whole row rather than huddling left with dead space beside them.
+    <div
+      className={compact ? 'seg seg-xs inline-flex' : 'seg flex w-full'}
+      role="radiogroup"
+      aria-label={`${idPrefix} direction`}
+    >
       {(['long', 'short'] as const).map((d) => {
         const active = value === d;
         const long = d === 'long';
@@ -110,7 +119,7 @@ export function DirectionToggle({
             // cards — the direction must read the same on both surfaces. Only
             // the ACTIVE side carries colour; an inactive one stays neutral so
             // the chosen side is unambiguous at a glance.
-            className={`seg-btn flex-1 text-center ${
+            className={`seg-btn ${compact ? '' : 'flex-1'} text-center ${
               active
                 ? long
                   ? '!bg-emerald-500/15 !text-emerald-300'
@@ -173,22 +182,18 @@ export function MarketCard({
   locked?: boolean;
 }) {
   return (
-    <div className="flex flex-col gap-1.5 rounded border border-ink-700 px-2.5 py-2">
-      {/* The side sits WITH its label, not across the card: "Market A ·
-          Short" is one fact, and pushing the two apart made them read as
+    <div className="flex min-w-0 flex-col gap-1.5">
+      {/* The side sits WITH its label, not across the card: "LONG · Market
+          A" is one fact, and pushing the two apart made them read as
           unrelated. Stated, never chosen — which side each leg takes
           follows from the pair being a spread. */}
-      <div className="flex items-baseline gap-2">
-        <span className="text-[10.5px] uppercase tracking-wider text-ink-400">{label}</span>
+      <div className="flex items-center gap-2">
         {side && (
-          <span
-            className={`text-[10.5px] font-semibold uppercase tracking-wider ${
-              side === 'long' ? 'text-emerald-400' : 'text-rose-400'
-            }`}
-          >
-            {side === 'long' ? 'Long' : 'Short'}
-          </span>
+          <Chip sm tone={side === 'long' ? 'green' : 'red'} className="font-semibold">
+            {side === 'long' ? 'LONG' : 'SHORT'}
+          </Chip>
         )}
+        <span className="text-[12px] font-normal text-ink-300">{label}</span>
       </div>
       {/* The picker is ALWAYS the control — no change/done state to enter or
           leave. It was a disclosure so the card could show a tidy summary,
@@ -204,10 +209,12 @@ export function MarketCard({
           control's accessible name, so which market a leg holds stays
           readable rather than existing only as styled text. */}
       <div hidden={locked}>{children}</div>
-      {row && (
+      {/* Maturity and collateral are in the market's own name and on the
+          size box; the mark rate is not repeated here — the estimate quotes
+          the rate this size actually gets. */}
+      {locked && row && (
         <span className="num text-[11px] text-ink-400">
-          {fmtDateLocal(row.maturity)} · {row.collateral || `token${row.tokenId}`} · mark{' '}
-          {pct(row.markApr)}
+          {fmtDateLocal(row.maturity)} · {row.collateral || `token${row.tokenId}`}
         </span>
       )}
     </div>
@@ -238,34 +245,35 @@ export function MarketSelect({
   ariaLabel?: string;
 }) {
   const eligible = markets.filter((m) => reasonFor(m) === null);
-  const hidden = markets.length - eligible.length;
   return (
     <div className="flex flex-col gap-1">
       {label ? (
-        <label htmlFor={id} className="text-[11px] text-ink-400">
+        <label htmlFor={id} className="text-[11.5px] text-ink-200">
           {label}
         </label>
       ) : null}
-      <select
-        id={id}
-        className="input"
-        aria-label={label ? undefined : ariaLabel}
-        value={value ?? ''}
-        disabled={disabled}
-        onChange={(e) => onPick(e.target.value === '' ? null : Number(e.target.value))}
-      >
-        <option value="">select a market…</option>
-        {eligible.map((m) => (
-          <option key={m.marketId} value={m.marketId}>
-            {m.name}
-          </option>
-        ))}
-      </select>
-      {hidden > 0 && (
-        <span className="text-[10px] text-ink-500">
-          {hidden} hidden · other collateral or maturity
+      <div className="relative">
+        <select
+          id={id}
+          className="select"
+          aria-label={label ? undefined : ariaLabel}
+          value={value ?? ''}
+          disabled={disabled}
+          onChange={(e) => onPick(e.target.value === '' ? null : Number(e.target.value))}
+        >
+          <option value="">select a market…</option>
+          {eligible.map((m) => (
+            <option key={m.marketId} value={m.marketId}>
+              {m.name}
+            </option>
+          ))}
+        </select>
+        <span aria-hidden className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-ink-400">
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5">
+            <path d="M2.5 4.5 6 8l3.5-3.5" />
+          </svg>
         </span>
-      )}
+      </div>
     </div>
   );
 }
@@ -285,9 +293,9 @@ function Row({
   dim?: boolean;
 }) {
   return (
-    <div className="flex items-baseline justify-between gap-3 text-[11px]" title={title}>
-      <span className={`shrink-0 ${dim ? 'text-ink-500' : 'text-ink-400'}`}>{label}</span>
-      <span className={`num truncate text-right ${dim ? 'text-ink-300' : 'text-ink-100'}`}>
+    <div className="flex items-baseline justify-between gap-3" title={title}>
+      <span className={`shrink-0 ${dim ? 'pl-3 text-[11.5px] text-ink-400' : 'text-[12px] text-ink-200'}`}>{label}</span>
+      <span className={`num truncate text-right ${dim ? 'text-[12px] text-ink-300' : 'text-[12.5px] text-ink-50'}`}>
         {value}
       </span>
     </div>
@@ -295,12 +303,29 @@ function Row({
 }
 
 /**
+ * "0.026175 ETH ($64.78)" — the dollar figure bracketed beside the
+ * collateral, which is the unit the order is actually in. `bare` drops the
+ * dollars entirely, for a breakdown line under a total that already carries
+ * them (his call 2026-09-18).
+ */
+function CollateralAmount({ n, sim, bare }: { n: number | null; sim: BorosPairSimulation; bare?: boolean }) {
+  if (n === null) return <>—</>;
+  const usd = sim.collateralPriceUsd === null ? null : n * sim.collateralPriceUsd;
+  return (
+    <>
+      {size(n)} {sim.collateral}
+      {!bare && usd !== null && <span className="text-[11px] text-ink-400"> ({usdAt(usd)})</span>}
+    </>
+  );
+}
+
+/**
  * §3's headline: the spread this pair locks.
  *
  * Estimated leads — it is what the book says this size actually gets, and so
- * the number the decision is made on. Worst case stays directly beneath it,
- * and the box turns rose when THAT one is negative, so a trade that can lose
- * money says so however the two are ordered.
+ * the number the decision is made on. It turns rose when negative, so a trade
+ * that loses money says so. The rate bound (worst case) is not printed: the
+ * slippage line states the tolerance the order carries.
  */
 /** Which leg trades alone: Single mode (A, against a borrowed partner) or a
  * one-leg completion of a half-filled pair (A or B). null = both trade. */
@@ -311,95 +336,112 @@ const soloOf = (sim: BorosPairSimulation, solo: SoloLeg | undefined): BorosSimul
 export function SpreadReadout({
   sim,
   singleLeg,
+  between,
+  compact = false,
 }: {
   sim: BorosPairSimulation;
   /** The one leg that trades, when only one does — the readout is then that
    * leg's rate, whichever slot it sits in. */
   singleLeg?: SoloLeg;
+  /** Rendered directly under the headline, before the per-leg rates — the
+   * ticket puts its slippage line here. */
+  between?: ReactNode;
+  /** Headline and `between` only: the per-venue liquidation rows are left
+   * to the caller (a roll's review keeps them behind "Details"). */
+  compact?: boolean;
 }) {
-  const worst = sim.worstSpreadApr;
-  const est = sim.estSpreadApr;
   const solo = soloOf(sim, singleLeg);
-  const negative = solo ? solo.worstApr !== null && solo.worstApr < 0 : worst !== null && worst < 0;
+  const headline = solo ? solo.execApr : sim.estSpreadApr;
+  const negative = headline !== null && headline < 0;
   const legs: Array<[string, BorosSimulatedLeg]> = solo
-    ? [[solo.marketName, solo]]
+    ? []
+    // The venue alone names a leg: both share the coin and maturity, and
+    // the side chip beside it says which way it faces.
     : [
-        [`Leg A · ${sim.legA.venue}`, sim.legA],
-        [`Leg B · ${sim.legB.venue}`, sim.legB],
+        [sim.legA.venue, sim.legA],
+        [sim.legB.venue, sim.legB],
       ];
+  const liqTitle = LIQ_TITLE;
   return (
-    <div
-      className={`rounded-lg border px-3 py-2.5 ${
-        negative ? 'border-rose-500/25 bg-rose-500/5' : 'border-cyan-500/25 bg-cyan-500/5'
-      }`}
-    >
+    <div className="flex flex-col gap-1.5">
       {/* One leg has no spread to report: the headline becomes the rate that
           leg locks, which is the same question ("what do I get?") answered for
-          a trade that has only one side. */}
-      <div className="flex items-baseline justify-between">
-        <span className="text-[11px] uppercase tracking-wider text-ink-300">
-          {singleLeg ? 'Estimated rate' : 'Estimated spread'}
-        </span>
-        <span className={`num text-lg font-semibold ${negative ? 'text-rose-300' : 'text-cyan-300'}`}>
-          {solo ? pct(solo.execApr) : pct(est)}
-        </span>
-      </div>
-      <div className="mt-0.5 flex items-baseline justify-between">
+          a trade that has only one side. Net of fees either way; a negative
+          figure turns rose so a trade that loses money says so. */}
+      <div className="flex items-baseline justify-between gap-3">
+        {/* The two execution rates the spread is the difference of ride on
+            HOVER: the spread is the figure, its parts are detail (his call
+            2026-09-18). */}
         <span
-          className="text-[11px] text-ink-400"
+          className={legs.length > 0 ? 'cursor-help text-[12.5px] text-ink-50' : 'text-[12.5px] text-ink-50'}
           title={
-            singleLeg
-              ? 'Assumes the leg uses its full slippage tolerance.'
-              : 'Assumes BOTH legs use their full tolerance at once — they cross in opposite directions, so the two give-ups add.'
+            legs.length > 0
+              ? `Net of settlement fees. Execution rates at this size:\n${legs
+                  .map(([label, leg]) => `${label} ${pct(leg.execApr)}`)
+                  .join('\n')}`
+              : undefined
           }
         >
-          Worst case
+          {singleLeg ? 'Estimated rate' : 'Estimated spread'}
+          {legs.length > 0 && <span className="ml-1 text-ink-400">ⓘ</span>}
         </span>
-        <span className={`num text-[12.5px] ${negative ? 'text-rose-300' : 'text-ink-200'}`}>
-          {solo ? pct(solo.worstApr) : pct(worst)}
+        <span className={`num text-lg font-semibold ${negative ? 'text-rose-300' : 'text-emerald-400'}`}>
+          {pct(headline)}
         </span>
       </div>
+      {solo && (
+        <Row
+          label="Liquidation APR"
+          title={liqTitle}
+          value={<span className={solo.liquidationApr === null ? 'text-ink-500' : undefined}>{pct(solo.liquidationApr)}</span>}
+        />
+      )}
+      {between}
       {/* The two rates the spread is the difference OF, in the same box as
           the difference itself — they were a separate table, which made the
-          reader hold one block in their head while reading another. */}
-      {!singleLeg && (
-        <div className="mt-2 flex flex-col gap-0.5 border-t border-ink-700/60 pt-1.5">
-          {legs.map(([label, leg]) => (
-            <div key={label} className="flex items-baseline justify-between gap-3">
-              <span className="truncate text-[11px] text-ink-400">
-                {label}
-                {/* The side each leg takes, in the colours it takes them:
-                    a spread is one long and one short, and which is which
-                    is the first thing to read. */}
-                <span
-                  className={`ml-1.5 text-[10px] font-semibold uppercase ${
-                    leg.direction === 'long' ? 'text-emerald-400' : 'text-rose-400'
-                  }`}
-                >
-                  {leg.direction === 'long' ? 'Long' : 'Short'}
-                </span>
-              </span>
-              <span className="num shrink-0 text-[12px] text-ink-100">{pct(leg.execApr)}</span>
-            </div>
-          ))}
+          reader hold one block in their head while reading another. Each
+          carries the rate at which it would be liquidated on its own. */}
+      {legs.length > 0 && !compact && <LiquidationRows sim={sim} />}
+    </div>
+  );
+}
+
+const LIQ_TITLE =
+  'The mark rate at which this leg is liquidated if only its required margin backs it — extra collateral in the bucket moves it further out.';
+
+/** One row per venue: two liquidation rates crammed onto a single line read
+ * as one fact about the pair, when they are two independent points — Boros
+ * liquidates per market (his call 2026-09-18). */
+export function LiquidationRows({ sim }: { sim: BorosPairSimulation }) {
+  const legs: Array<[string, BorosSimulatedLeg]> = [
+    [sim.legA.venue, sim.legA],
+    [sim.legB.venue, sim.legB],
+  ];
+  return (
+    <div className="mt-1 flex flex-col gap-1 border-t border-ink-800/80 pt-2">
+      {legs.map(([label, leg]) => (
+        <div key={label} className="flex items-baseline justify-between gap-3">
+          <span className="min-w-0 truncate text-[12px] text-ink-200" title={LIQ_TITLE}>
+            {label} liquidation APR
+          </span>
+          <span className={`num shrink-0 text-[12.5px] ${leg.liquidationApr === null ? 'text-ink-500' : 'text-ink-50'}`}>
+            {pct(leg.liquidationApr)}
+          </span>
         </div>
-      )}
-      {/* One line, and only the facts the numbers cannot state themselves: that
-          they are net of fees, and that slippage bounds the RATE rather than
-          guaranteeing a fill. */}
+      ))}
     </div>
   );
 }
 
 /**
- * §4's arithmetic: where each market's position ENDS UP.
+ * Where each market's position ENDS UP.
  *
  * Presented as `current → resulting`, the way the Boros app itself shows it.
  * The old three-column Current/Trade/Resulting grid made the reader do the
  * addition to answer the only question actually being asked — "what will I be
- * holding?" — and spent a heading plus a footer sentence explaining that these
- * are netted account positions rather than this ticket's slice. An arrow says
- * that on its own: a number you already hold, becoming a number you will hold.
+ * holding?". An arrow says that on its own: a number you already hold,
+ * becoming a number you will hold. Boros nets to one position per market, so
+ * each row is the WHOLE exposure there, not just this ticket's slice.
  */
 export function PositionArithmetic({
   sim,
@@ -408,52 +450,49 @@ export function PositionArithmetic({
   sim: BorosPairSimulation;
   singleLeg?: SoloLeg;
 }) {
-  // Named by venue, not by slot: "Gate notional size" is the row a trader
-  // scans for, where "Leg A" makes them remember which leg Gate was.
-  //
-  // SINGLE mode renders nothing here: the "My notional size" line in the
-  // form already states that one leg's before → after, so a venue row under
-  // the readouts would say it twice.
-  const legs: Array<[string, BorosSimulatedLeg]> = singleLeg
-    ? []
-    : [
-        [`${sim.legA.venue} notional size`, sim.legA],
-        [`${sim.legB.venue} notional size`, sim.legB],
-      ];
+  // Named by venue, not by slot: "Binance · short" is the row a trader scans
+  // for, where "Leg A" makes them remember which leg Binance was. A one-leg
+  // trade lists that one leg — this block is the only position readout.
+  const solo = soloOf(sim, singleLeg);
+  const legs: BorosSimulatedLeg[] = solo ? [solo] : [sim.legA, sim.legB];
   /**
    * Magnitude only — the COLOUR carries the direction (green long, red
    * short), so a sign beside it says the same thing twice. The two legs of
    * a spread still read as opposite because they are coloured opposite.
    */
-  const signed = (n: number) => `${sigGrouped(Math.abs(n))} ${sim.collateral}`;
+  const mag = (n: number) => `${sigGrouped(Math.abs(n))} ${sim.collateral}`;
+  const sideOf = (leg: BorosSimulatedLeg): BorosLegDirection =>
+    leg.sizing.resultingSize > 0 ? 'long' : leg.sizing.resultingSize < 0 ? 'short' : leg.direction;
   return (
-    <div className="flex flex-col gap-1 text-[11px]">
-      {/* No heading: the rows name themselves by venue. What you end up
-          holding, as `before → after`, with the RESULT coloured by side —
-          long green, short red, the way the Boros app shows a position. */}
-      {legs.map(([label, leg]) => (
-        <div key={label} className="flex items-baseline justify-between gap-3">
-          <span className="truncate text-ink-400">{label}</span>
-          <span
-            className="num shrink-0 text-ink-500"
-            title="Boros nets to one position per market, so this is your WHOLE exposure there — not just the part this ticket opens."
-          >
-            {signed(leg.sizing.currentSize)}
-            <span className="mx-1 text-ink-600">→</span>
-            <span
-              className={`font-semibold ${
-                leg.sizing.resultingSize > 0
-                  ? 'text-emerald-300'
-                  : leg.sizing.resultingSize < 0
-                    ? 'text-rose-300'
-                    : 'text-ink-100'
-              }`}
-            >
-              {signed(leg.sizing.resultingSize)}
+    <div className="flex flex-col gap-1 border-t border-ink-800/80 pt-2">
+      <span className="text-[12px] font-normal leading-[14.52px] text-ink-300">Position after</span>
+      {legs.map((leg) => {
+        const side = sideOf(leg);
+        const flat = leg.sizing.resultingSize === 0;
+        return (
+          <div key={leg.marketId} className="flex items-baseline justify-between gap-3">
+            {/* Venue only: the colour of the figure carries the side. */}
+            <span className="flex min-w-0 items-center gap-1.5 text-[12px] text-ink-200">
+              <VenueIcon venue={leg.venue} size={16} />
+              <span className="truncate">{leg.venue}</span>
             </span>
-          </span>
-        </div>
-      ))}
+            <span
+              className="num shrink-0 text-[12px] text-ink-400"
+              title="Boros nets to one position per market, so this is your WHOLE exposure there — not just the part this ticket opens."
+            >
+              {mag(leg.sizing.currentSize)}
+              <span className="mx-1 text-ink-600">→</span>
+              <span
+                className={`font-semibold ${
+                  flat ? 'text-ink-100' : side === 'long' ? 'text-emerald-300' : 'text-rose-300'
+                }`}
+              >
+                {mag(leg.sizing.resultingSize)}
+              </span>
+            </span>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -461,78 +500,69 @@ export function PositionArithmetic({
 export function PairCosts({
   sim,
   singleLeg,
+  /**
+   * A CLOSING batch: the margin is being RELEASED, not posted, and which
+   * bucket it comes back to is not a decision — so one line, no breakdown
+   * (his call 2026-09-18).
+   */
+  freeing = false,
+  compact = false,
 }: {
   sim: BorosPairSimulation;
   /** Only leg A is real; leg B is a borrowed partner sized to zero. */
   singleLeg?: SoloLeg;
+  freeing?: boolean;
+  /** Total and fee only — no per-bucket breakdown. */
+  compact?: boolean;
 }) {
-  const usd = (n: number | null) =>
-    n === null || sim.collateralPriceUsd === null ? null : n * sim.collateralPriceUsd;
-  const marginUsd = usd(sim.marginRequiredTotal);
-  const amount = (n: number | null): string =>
-    n === null
-      ? '—'
-      : `${size(n)} ${sim.collateral}${usd(n) !== null ? ` (≈ ${usdAt(usd(n)!)})` : ''}`;
   return (
-    <div className="flex flex-col gap-2">
-      {/* Three answers, three groups: what it ties up, what it costs, and
-          (in PositionArithmetic) what you end up holding. They were one flat
-          list, which left the reader to work out which line answered what. */}
-      <div className="flex flex-col gap-0.5">
+    <div className="flex flex-col gap-1 border-t border-ink-800/80 pt-2">
       {/* The total LEADS and the legs hang off it as a breakdown: what the
           trade ties up is the figure being read, and which bucket carries
           which share is the detail behind it. Summed, never netted — a long
           and a short on different markets do not offset each other's
           margin. */}
       <Row
-        label={singleLeg ? 'Margin required' : 'Total margin'}
+        label={freeing ? 'Margin freed' : singleLeg ? 'Margin required' : 'Total margin'}
         title={
-          singleLeg
-            ? 'Initial margin this leg consumes'
-            : 'The two legs summed, not netted: each bucket must carry its own margin.'
+          freeing
+            ? 'Initial margin these legs stop posting once they are closed — it returns to the bucket each one sits in.'
+            : singleLeg
+              ? 'Initial margin this leg consumes'
+              : 'The two legs summed, not netted: each bucket must carry its own margin.'
         }
-        value={
-          sim.marginRequiredTotal === null
-            ? '—'
-            : `${size(sim.marginRequiredTotal)} ${sim.collateral}${
-                marginUsd !== null ? ` (≈ ${usdAt(marginUsd)})` : ''
-              }`
-        }
+        value={<CollateralAmount n={sim.marginRequiredTotal} sim={sim} />}
       />
-      {!singleLeg && (
+      {!singleLeg && !freeing && !compact && (
         <>
           <Row
-            label={`├─ ${sim.legA.venue}`}
+            label={sim.legA.venue}
             title="Initial margin this leg's bucket must carry"
-            value={amount(sim.legA.marginRequired)}
+            value={<CollateralAmount n={sim.legA.marginRequired} sim={sim} bare />}
             dim
           />
           <Row
-            label={`└─ ${sim.legB.venue}`}
+            label={sim.legB.venue}
             title="Initial margin this leg's bucket must carry"
-            value={amount(sim.legB.marginRequired)}
+            value={<CollateralAmount n={sim.legB.marginRequired} sim={sim} bare />}
             dim
           />
         </>
       )}
-      </div>
-      <div className="flex flex-col gap-0.5 border-t border-ink-800 pt-1.5">
       <Row
         // "Cost to cross" named the ACTION (crossing the spread) rather than
         // the charge, which reads as jargon to anyone who has not met it.
-        label={singleLeg ? 'Taker fee' : 'Taker fee (2 legs)'}
+        label={singleLeg ? 'Trade fee' : 'Trade fee · 2 legs'}
         title={
           singleLeg
-            ? 'Boros taker fee at this size, charged over the time to maturity'
-            : 'Boros taker fee on both legs at this size, charged over the time to maturity'
+            ? 'Boros taker fee at this size — charged once, when the order fills'
+            : 'Boros taker fee on both legs at this size — charged once, when the orders fill'
         }
         value={`${size(sim.costToCrossSize)} ${sim.collateral}`}
       />
-      </div>
     </div>
   );
 }
-
 /**
  * The manual gas top-up.
  *
@@ -560,7 +590,7 @@ export function GasTopUp({
   if (gasBalanceUsd >= LOW_GAS_USD) return null;
   const err = amountError(amount ?? '', { min: MIN_TOP_UP_USD, max: MAX_TOP_UP_USD });
   return (
-    <div className="flex flex-wrap items-center gap-1.5 rounded-lg border border-ink-700 bg-ink-900/40 px-2.5 py-2 text-[11px] text-ink-300">
+    <div className="flex flex-wrap items-center gap-1.5 card px-2.5 py-2 text-[11px] text-ink-300">
       <label htmlFor="boros-gas-topup" className="text-ink-400">
         Top up gas by hand (USD)
       </label>
@@ -609,7 +639,7 @@ export function BlockerList({
       {blockers.map((b, i) => (
         <li
           key={`${b.code}-${b.leg ?? ''}-${i}`}
-          className="rounded-lg border border-rose-500/25 bg-rose-500/5 px-2.5 py-2 text-[11px] leading-relaxed text-rose-200"
+          className="rounded border border-guava/30 bg-guava/10 px-2.5 py-2 text-[11px] leading-relaxed text-rose-200"
         >
           {b.message}
           {b.code === 'isolated-must-switch' && onCancelAndClose && b.marketId !== undefined && (
@@ -686,7 +716,7 @@ export function PairResultReport({
   const shortfall = !nothing && result.partial;
   return (
     <div
-      className={`rounded-lg border px-3 py-2.5 ${
+      className={`rounded border px-3 py-2.5 ${
         nothing
           ? 'border-rose-500/30 bg-rose-500/[0.04]'
           : shortfall
@@ -757,14 +787,14 @@ export function PairResultReport({
             type="button"
             disabled={busy}
             onClick={onRetry}
-            className="rounded border border-ink-600 px-2 py-0.5 text-[11px] text-ink-300 hover:border-ink-400 disabled:opacity-50"
+            className="btn-ghost-xs"
           >
             Retry the rest
           </button>
           <button
             type="button"
             onClick={onDismiss}
-            className="rounded border border-ink-600 px-2 py-0.5 text-[11px] text-ink-300 hover:border-ink-400"
+            className="btn-ghost-xs"
           >
             Dismiss
           </button>
@@ -782,7 +812,7 @@ export function PairResultReport({
               type="button"
               disabled={busy}
               onClick={onComplete}
-              className="rounded border border-cyan-500/50 px-2 py-0.5 text-[11px] text-cyan-200 hover:bg-cyan-500/15 disabled:opacity-50"
+              className="btn-ghost-xs !border-info/50 !text-pastel-blue hover:!bg-info/15"
             >
               Complete now at market
             </button>
@@ -791,14 +821,14 @@ export function PairResultReport({
             type="button"
             disabled={busy}
             onClick={onRetry}
-            className="rounded border border-ink-600 px-2 py-0.5 text-[11px] text-ink-300 hover:border-ink-400 disabled:opacity-50"
+            className="btn-ghost-xs"
           >
             Retry
           </button>
           <button
             type="button"
             onClick={onDismiss}
-            className="rounded border border-ink-600 px-2 py-0.5 text-[11px] text-ink-300 hover:border-ink-400"
+            className="btn-ghost-xs"
           >
             Leave it
           </button>
@@ -807,7 +837,7 @@ export function PairResultReport({
         <button
           type="button"
           onClick={onDismiss}
-          className="mt-2 rounded border border-ink-600 px-2 py-0.5 text-[11px] text-ink-300 hover:border-ink-400"
+          className="btn-ghost-xs mt-2"
         >
           Dismiss
         </button>
@@ -827,7 +857,7 @@ const FAILURE_LABEL: Record<NonNullable<BorosLegFill['failure']>['code'], string
   unknown: 'no confirmation',
 };
 
-function LegFillLine({
+export function LegFillLine({
   label,
   fill,
   collateral,

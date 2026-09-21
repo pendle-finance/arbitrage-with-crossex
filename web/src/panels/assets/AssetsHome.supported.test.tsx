@@ -1,4 +1,4 @@
-import { screen } from '@testing-library/react';
+import { fireEvent, screen } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { AssetGroup, AssetPerpOpen, AssetViewResponse, VenueFees } from '../../api/types';
@@ -89,7 +89,8 @@ describe('AssetsHome with a held coin the terminal does not support', () => {
   it('adds the SOL leg PnL to the totals strip, held coin counts in totals', async () => {
     renderWithClient(<AssetsHome />);
     await screen.findByText('SOL');
-    const strip = screen.getAllByText('Total PnL')[0].nextElementSibling!;
+    // MERGE 2026-09-21: Hubert renamed the hero label "Total PnL" -> "Total Account PnL"; value still its next sibling.
+    const strip = screen.getAllByText('Total Account PnL')[0].nextElementSibling!;
     expect(strip).toHaveTextContent('$17.20');
   });
 
@@ -98,7 +99,8 @@ describe('AssetsHome with a held coin the terminal does not support', () => {
     server.use(http.get('/api/asset-view/:address', () => HttpResponse.json(env({ ...assetView, assets: [whale] }))));
     renderWithClient(<AssetsHome />);
     await screen.findByText('SOL');
-    const strip = screen.getAllByText('Total PnL')[0].nextElementSibling!;
+    // MERGE 2026-09-21: hero label renamed "Total PnL" -> "Total Account PnL"; value still its next sibling.
+    const strip = screen.getAllByText('Total Account PnL')[0].nextElementSibling!;
     expect(strip).toHaveTextContent('$6,000,000.37');
   });
 
@@ -111,6 +113,11 @@ describe('AssetsHome with a held coin the terminal does not support', () => {
 
   it('shows every coin as a card with no dust line, no dust fold', async () => {
     renderWithClient(<AssetsHome />);
+    await screen.findByText('SOL');
+    // MERGE 2026-09-21: Hubert added "Hide inactive pairs" (default on), which folds the closed-only
+    // BTC out of the list (a view filter — totals still count it). Uncheck it to assert dev's behaviour:
+    // every coin, closed-only BTC included, gets a full card and is never collapsed into a dust line.
+    fireEvent.click(screen.getByRole('checkbox', { name: /hide inactive pairs/i }));
     await screen.findByText('BTC');
     expect(screen.queryByText(/dust asset/)).toBeNull();
   });

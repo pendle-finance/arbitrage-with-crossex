@@ -56,7 +56,7 @@ export function ChartTooltip({ content, children }: { content: ReactNode; childr
             ref={tip}
             id={tooltipId}
             role="tooltip"
-            className="pointer-events-none fixed z-[60] rounded border border-ink-600 bg-ink-950 px-3 py-2.5 text-ink-100"
+            className="pp-tooltip pointer-events-none fixed z-[60]"
           >
             {content}
           </div>,

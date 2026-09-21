@@ -8,6 +8,9 @@ import type { AssetBorosOpen, AssetGroup, AssetPerpOpen } from '../../api/types'
 import {
   borosKey,
   defaultChargePerpFees,
+  assetIsActive,
+  perpOnlyCloseLegs,
+  perpOnlyPairs,
   deriveAsset,
   keptSlice,
   pairBorosCloseLegs,
@@ -510,5 +513,114 @@ describe('exclusions and maturity — his 2026-09-09 rules', () => {
     expect(d.gaps[0]).toMatchObject({ venue: 'HYPERLIQUID', leg: 'boros', kind: 'missing' });
     expect(d.totals.capitalUsd).toBe(10_000);
     expect(d.pairs).toHaveLength(0);
+  });
+});
+
+describe('assetIsActive', () => {
+  const yuLeg = (marketId: number, sizeToken: number) => ({ marketId, sizeToken }) as never;
+  it('an open perp makes the asset active, hedged or not', () => {
+    expect(assetIsActive({ perpOpen: [{} as never], borosOpen: [] }, {})).toBe(true);
+  });
+  it('history alone does not: nothing open is inactive', () => {
+    expect(assetIsActive({ perpOpen: [], borosOpen: [] }, {})).toBe(false);
+  });
+  it('an open Boros leg counts unless it is WHOLLY excluded', () => {
+    const group = { perpOpen: [], borosOpen: [yuLeg(7, 100)] };
+    expect(assetIsActive(group, {})).toBe(true);
+    // Half set aside: the other half is still the farm's.
+    expect(assetIsActive(group, { 'boros:7': 50 })).toBe(true);
+    expect(assetIsActive(group, { 'boros:7': 'all' })).toBe(false);
+    expect(assetIsActive(group, { 'boros:7': 100 })).toBe(false);
+    // Another market's exclusion says nothing about this leg.
+    expect(assetIsActive(group, { 'boros:8': 'all' })).toBe(true);
+  });
+});
+
+describe('perpOnlyPairs', () => {
+  const perpLeg = (venue: string, side: 'LONG' | 'SHORT', sizeBase: number) => ({
+    venue,
+    side,
+    symbol: `${venue}_FUTURE_ETH_USDT`,
+    sizeBase,
+    notionalUsd: sizeBase * 2500,
+    unit: 'base' as const,
+    imUsd: sizeBase * 100,
+    share: 1,
+  });
+  const yuLeg = (venue: string, side: 'LONG' | 'SHORT', sizeBase: number, maturity: number) => ({
+    venue,
+    side,
+    marketId: 7,
+    maturity,
+    sizeBase,
+    notionalUsd: sizeBase * 2500,
+    unit: 'base' as const,
+    lockedApr: -0.066,
+    imUsd: sizeBase * 3,
+    share: 1,
+  });
+
+  it('matches his book after a missed roll: one short against two longs, largest first', () => {
+    // HL short 1665 against Gate long 1340 + OKX long 325; OKX still has its
+    // September rate leg, Hyperliquid's and Gate's have matured.
+    const { pairs, restPerps, restYus } = perpOnlyPairs(
+      [perpLeg('HYPERLIQUID', 'SHORT', 1665), perpLeg('GATE', 'LONG', 1340), perpLeg('OKX', 'LONG', 325)],
+      [yuLeg('OKX', 'LONG', 325, 1_790_000_000)],
+    );
+    expect(pairs.map((p) => `${p.longVenue}/${p.shortVenue}:${p.size}`)).toEqual(['GATE/HYPERLIQUID:1340', 'OKX/HYPERLIQUID:325']);
+    // Gate/HL has NO rate legs: both are missing, at the full size.
+    expect(pairs[0].longYu).toBeNull();
+    expect(pairs[0].shortYu).toBeNull();
+    expect(pairs[0].missingLong).toBe(1340);
+    expect(pairs[0].missingShort).toBe(1340);
+    // The short perp is SLICED to the unit: 1340 of HL's 1665, pro rata.
+    expect(pairs[0].short.sizeBase).toBe(1340);
+    expect(pairs[0].short.imUsd).toBeCloseTo(1340 * 100, 6);
+    expect(pairs[0].notionalUsd).toBeCloseTo(2 * 1340 * 2500, 6);
+    // OKX/HL keeps OKX's rate leg; only Hyperliquid's is missing.
+    expect(pairs[1].longYu?.venue).toBe('OKX');
+    expect(pairs[1].missingLong).toBe(0);
+    expect(pairs[1].missingShort).toBe(325);
+    expect(pairs[1].imUsd).toBeCloseTo(325 * 100 * 2 + 325 * 3, 6);
+    // Closing the unit closes its SLICES: all of Gate's long, but only 1340
+    // of Hyperliquid's 1665 short — the rest hedges the OKX unit.
+    expect(perpOnlyCloseLegs(pairs[0])).toEqual([
+      { symbol: 'GATE_FUTURE_ETH_USDT', qty: 1340, venue: 'GATE', partial: false },
+      { symbol: 'HYPERLIQUID_FUTURE_ETH_USDT', qty: 1340, venue: 'HYPERLIQUID', partial: true },
+    ]);
+    // Everything was claimed: nothing is left ungrouped.
+    expect(restPerps).toEqual([]);
+    expect(restYus).toEqual([]);
+  });
+
+  it('leaves an unmatched remainder, and a rate leg with no perp, among the ungrouped', () => {
+    const { pairs, restPerps, restYus } = perpOnlyPairs(
+      [perpLeg('GATE', 'LONG', 100), perpLeg('HYPERLIQUID', 'SHORT', 60)],
+      [yuLeg('BINANCE', 'LONG', 10, 1_790_000_000)],
+    );
+    expect(pairs).toHaveLength(1);
+    expect(pairs[0].size).toBe(60);
+    expect(restPerps).toHaveLength(1);
+    expect(restPerps[0].venue).toBe('GATE');
+    expect(restPerps[0].sizeBase).toBe(40);
+    expect(restPerps[0].share).toBeCloseTo(0.4, 9);
+    expect(restYus).toHaveLength(1);
+  });
+
+  it('drops a rounding sliver between two venues\' sizes instead of listing it as a loose leg', () => {
+    // His real book: OKX perp 324.865 against a 325 rate leg, and HL's short
+    // 0.135 over the two longs — each well under half a percent of its leg.
+    const { pairs, restPerps, restYus } = perpOnlyPairs(
+      [perpLeg('HYPERLIQUID', 'SHORT', 1665), perpLeg('GATE', 'LONG', 1340), perpLeg('OKX', 'LONG', 324.865)],
+      [yuLeg('OKX', 'LONG', 325, 1_790_000_000)],
+    );
+    expect(pairs).toHaveLength(2);
+    expect(restPerps).toEqual([]);
+    expect(restYus).toEqual([]);
+  });
+
+  it('never pairs a venue with itself, nor two perps on the same side', () => {
+    expect(perpOnlyPairs([perpLeg('GATE', 'LONG', 10), perpLeg('OKX', 'LONG', 10)], []).pairs).toEqual([]);
+    expect(perpOnlyPairs([perpLeg('GATE', 'LONG', 10), perpLeg('GATE', 'SHORT', 10)], []).pairs).toEqual([]);
   });
 });

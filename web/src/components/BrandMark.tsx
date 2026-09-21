@@ -7,12 +7,12 @@ import { BorosLogo } from './BorosLogo';
 export function BrandMark() {
   return (
     <>
-      <BorosLogo className="block h-[18px] w-auto shrink-0" />
-      <span aria-hidden="true" className="h-[18px] w-px shrink-0 bg-ink-600" />
+      <BorosLogo className="block h-8 w-auto shrink-0" />
+      <span aria-hidden="true" className="mx-1.5 h-[21px] w-px shrink-0 bg-ink-300" />
       {/* Two-tone wordmark: the leading "Arbitrage" carries the accent, the
        * rest stays neutral. Mirrored on the canvas share card
        * (lib/shareCard.ts) — keep the two in step. */}
-      <h1 className="flex items-baseline gap-1.5 whitespace-nowrap text-[13px] font-semibold tracking-tight text-ink-50">
+      <h1 className="flex items-baseline gap-1.5 whitespace-nowrap text-[16px] font-normal text-ink-300">
         <span className="text-pastel-blue">Arbitrage</span>
         with CrossEx
       </h1>

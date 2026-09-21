@@ -25,6 +25,9 @@ import type {
   BorosPairExecuteResponse,
   BorosPairRequest,
   BorosPairSimulateResponse,
+  BorosRollExecuteResponse,
+  BorosRollRequest,
+  BorosRollSimulateResponse,
   CredentialsInfo,
   CredentialsInput,
   DisclaimerStatus,
@@ -110,12 +113,12 @@ export function useAccount() {
   });
 }
 
-export function usePositions() {
+export function usePositions(enabled = true) {
   const shown = useTabActive();
   return useQuery({
     queryKey: qk.positions,
     queryFn: () => fetchJson<PositionsResponse>('/positions'),
-    enabled: (query) => canFetch(shown, query),
+    enabled: (query) => enabled && canFetch(shown, query),
     refetchInterval: shown ? 4_000 : false,
     placeholderData: keepPreviousData,
   });
@@ -599,7 +602,13 @@ export function useBorosPairContext(address: string | null, active = true) {
  * A POST behind useQuery rather than useMutation on purpose — this is a pure
  * read that happens to need a body, and it has to poll.
  */
-export function useBorosPairSimulation(req: BorosPairRequest | null, enabled = true) {
+export function useBorosPairSimulation(
+  req: BorosPairRequest | null,
+  enabled = true,
+  /** A slower poll for a caller that reads a signal rather than backing a
+   * confirm (the asset card's roll probes). */
+  opts: { refetchInterval?: number } = {},
+) {
   const shown = useTabActive();
   return useQuery({
     // The whole request is the key: any field change is a different quote.
@@ -607,7 +616,7 @@ export function useBorosPairSimulation(req: BorosPairRequest | null, enabled = t
     queryFn: () => postJson<BorosPairSimulateResponse>('/boros/pair/simulate', req),
     enabled: (query) => Boolean(req) && enabled && canFetch(shown, query),
     placeholderData: keepPreviousData,
-    refetchInterval: shown ? 4_000 : false,
+    refetchInterval: shown ? (opts.refetchInterval ?? 4_000) : false,
     // A stale quote must never back a confirm, so don't serve one from cache
     // across a remount.
     gcTime: 0,
@@ -622,6 +631,41 @@ export function useExecuteBorosPair() {
     // ⚠ Same contract as the close below: the CARD reads the ASSET VIEW,
     // not the pair context. Without ['assetView'] a leg that had just been
     // opened did not appear until some other refetch happened to pull it in.
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['boros', 'pair', 'context'] });
+      void qc.invalidateQueries({ queryKey: ['assetView'] });
+      void qc.invalidateQueries({ queryKey: qk.positions });
+    },
+  });
+}
+
+/**
+ * Live roll simulation — the pair simulation's twin, for the atomic roll
+ * (close a pair here, re-open it at a later maturity, as one batch). A POST
+ * behind useQuery: a pure read that happens to need a body and has to poll.
+ * The whole request is the key, so any field change is a different quote, and
+ * a stale quote never survives a remount (gcTime 0).
+ */
+export function useBorosRollSimulation(req: BorosRollRequest | null, enabled = true) {
+  const shown = useTabActive();
+  return useQuery({
+    queryKey: ['boros', 'roll', 'simulate', JSON.stringify(req)] as const,
+    queryFn: () => postJson<BorosRollSimulateResponse>('/boros/roll/simulate', req),
+    enabled: (query) => Boolean(req) && enabled && canFetch(shown, query),
+    placeholderData: keepPreviousData,
+    refetchInterval: shown ? 4_000 : false,
+    gcTime: 0,
+  });
+}
+
+export function useExecuteBorosRoll() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (req: BorosRollRequest) =>
+      postJson<BorosRollExecuteResponse>('/boros/roll/execute', req),
+    // Same contract as useExecuteBorosPair: the CARD reads the ASSET VIEW, not
+    // the pair context, so a rolled leg only appears once ['assetView'] is
+    // invalidated too.
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['boros', 'pair', 'context'] });
       void qc.invalidateQueries({ queryKey: ['assetView'] });

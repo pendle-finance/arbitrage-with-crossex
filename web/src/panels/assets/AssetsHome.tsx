@@ -22,7 +22,7 @@ import { lineFor as lineIn, liquidationLines } from '../../lib/liquidation';
 import { useBookId } from '../bookId';
 import { AddressForm, short } from '../HomeControls';
 import { useTrackedAddress } from '../trackedAddress';
-import { deriveAsset, SECONDS_IN_YEAR } from './assetModel';
+import { assetIsActive, deriveAsset, SECONDS_IN_YEAR } from './assetModel';
 import { legSinceParam, loadPrefs, savePrefs, type AssetViewPrefs } from './assetPrefsStore';
 import { AssetCard } from './AssetCard';
 
@@ -83,6 +83,16 @@ export function AssetsHome() {
       }),
     [data, windows.bySince, windows.errorBySince, prefs.exclusions, prefs.sinceByAsset, feeRows],
   );
+  /**
+   * "Hide inactive pairs": on by default, the list shows only assets with
+   * an open leg the farm counts (see assetIsActive). A VIEW filter only —
+   * the account totals above still sum every asset, closed ones included,
+   * because the money they made or lost is still the account's (his call
+   * 2026-09-20). Not persisted: the default is the right start every time.
+   */
+  const [hideInactive, setHideInactive] = useState(true);
+  const inactive = derived.filter((a) => !assetIsActive(a.group, prefs.exclusions));
+  const shown = hideInactive ? derived.filter((a) => !inactive.includes(a)) : derived;
 
   /* Where each coin's move liquidates the ACCOUNT. Needs margin balance,
      maintenance and the wallet equities, which the header already polls, so
@@ -136,21 +146,25 @@ export function AssetsHome() {
     { pnl: 0, capYears: 0 },
   );
   const blendedApr = aprAgg.capYears > 0 ? (aprAgg.pnl - interestUsd) / aprAgg.capYears : null;
-  // Legs to open (missing or short), counted the way the cards show them.
-  // A book whose perps do not cancel is a second, different fact — it gets
-  // its own words rather than an invisible +1 in the count.
-  const gapCount = derived.reduce((s, a) => s + a.derived.gaps.length, 0);
-  const nonNeutral = derived.some((a) => !a.derived.deltaNeutral);
-
   const header = (
-    <div className="mb-3 flex flex-wrap items-center gap-2">
+    <div className="mb-4 flex flex-wrap items-baseline gap-2">
       <h2
-        className="text-xs font-semibold uppercase tracking-wider text-ink-400"
-        title="Every leg grouped by its underlying asset; PnL and capital are the venues' own records since your start date. Nothing here places orders."
+        className="text-[16px] font-semibold leading-[19.36px] text-ink-50"
+        title="Every leg grouped by its underlying asset."
       >
         Funding farm by asset
       </h2>
       {address && <span className="num text-xs text-ink-500">{short(address)}</span>}
+      {address && (
+        <label
+          className="ml-auto flex cursor-pointer items-center gap-2 whitespace-nowrap text-xs text-ink-300"
+          title="Show only assets with an open leg. Account totals still include every asset."
+        >
+          <input type="checkbox" className="chk" checked={hideInactive} onChange={(e) => setHideInactive(e.target.checked)} />
+          <span>Hide inactive pairs</span>
+          {hideInactive && inactive.length > 0 && <span className="num text-ink-500">({inactive.length})</span>}
+        </label>
+      )}
     </div>
   );
 
@@ -188,104 +202,80 @@ export function AssetsHome() {
 
   return (
     <section>
-      {header}
-
-      {/* Totals strip. It used to hide behind a single card as a duplicate
-          of that card's hero; it now carries what no card can — borrow
-          interest and the account-wide hedge status — so it always shows
-          once there is anything to sum. */}
+      {/* Account hero. ONE result — what the farm kept — ranked by position:
+          the figure sits left of a hairline, its supports right of it. No
+          hedge status here: every asset row already carries its own hedged
+          checklist, so an account-wide aggregate only repeated it (his call
+          2026-09-15). */}
+      {/* The mock gives the account summary the one info border and inner glow
+          no other card wears, so it leads the tab instead of reading as the
+          first of the per-asset cards. */}
       {derived.length > 0 && (
-      <div className="card mb-3 flex flex-wrap items-center gap-x-8 gap-y-2 p-4">
-        {/* The two figures ARE an equation — total = earnings − interest —
-            so they are written as one, boxed together. Side by side with no
-            operator they read as two unrelated numbers, and the reader is
-            left to guess whether the total already has the interest in it
-            (it does). Each term says what it is on hover. */}
-        <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 rounded border border-ink-700 bg-ink-950/40 px-3 py-2">
-          <div>
-            <div
-              className="text-xs uppercase tracking-wider text-ink-500"
-              title={
-                interestAvailable
-                  ? 'What the farm kept, after the borrow interest below. This is the number to compare against your own record.'
-                  : 'Borrow interest could not be read, so it is NOT subtracted here — this is the cards summed.'
-              }
-            >
-              Total PnL
-            </div>
-            <div className="num text-xl font-semibold">
-              <SignedNumber value={totalPnl} format={fmtUsd} plus={false} />
-            </div>
-          </div>
-          {/* Only an equation when the right-hand side is known: with the
-              interest unreadable the total IS just the cards summed, and
-              "X = X − —" would assert an arithmetic that did not happen. */}
-          {interestAvailable && (
-          <>
-          <span className="num pb-0.5 self-end text-lg text-ink-500">=</span>
-          <div>
-            <div
-              className="text-xs uppercase tracking-wider text-ink-500"
-              title="Every card's PnL added up: funding and settlements earned, less the trading fees and price basis on those legs. Borrow interest is NOT in here — it is the term to the right."
-            >
-              Earnings
-            </div>
-            <div className="num text-xl font-semibold text-ink-200">
-              <SignedNumber value={totalPnl + interestUsd} format={fmtUsd} plus={false} />
-            </div>
-          </div>
-          <span className="num pb-0.5 self-end text-lg text-ink-500">−</span>
-          <div>
-            <div
-              className="text-xs uppercase tracking-wider text-ink-500"
-              title={`Margin-borrow interest the CrossEx account paid inside this window${
-                data?.interest && Object.keys(data.interest.byCoin).length > 0
-                  ? ` — ${Object.entries(data.interest.byCoin)
-                      .map(([c, n]) => `${num(n, 2)} ${c}`)
-                      .join(', ')}`
-                  : ''
-              }. Charged on the account, not on any one position, so it is subtracted once here and appears on no card.`}
-            >
-              Borrow interest
-            </div>
-            <div className={`num text-xl font-semibold ${interestUsd > 0 ? 'text-guava' : 'text-ink-200'}`}>
-              {fmtUsd(interestUsd)}
-            </div>
-          </div>
-          </>
-          )}
-        </div>
-        <div>
-          <div className="text-xs uppercase tracking-wider text-ink-500">Capital at work</div>
-          <div className="num text-xl font-semibold text-ink-200">{fmtUsd(totalCapital)}</div>
-        </div>
-        <div>
+      <div
+        className="mb-9 flex flex-wrap items-center justify-between gap-x-10 gap-y-6 rounded border border-info/60 bg-info/[0.06] px-8 py-[30px]"
+        style={{ boxShadow: 'inset 0 0 92px rgba(96,121,255,0.14)' }}
+      >
+        <div className="flex min-w-0 flex-col gap-2">
           <div
-            className="text-xs uppercase tracking-wider text-ink-500"
-            title="REALIZED so far: Σ PnL over Σ (capital × each asset's own elapsed time), annualized — approximate: capital is today's requirement. Each card's Current APR (Fixed) is the different, forward-looking number."
+            className="tip-label w-fit text-[14px] font-normal leading-[16.94px] text-ink-300"
+            title={
+              interestAvailable
+                ? 'What the farm kept, after borrow interest.'
+                : 'The cards summed. Borrow interest could not be read, so it is not subtracted.'
+            }
           >
-            Realized APR ≈
+            Total Account PnL
           </div>
-          <div className="num text-xl font-semibold">
-            {blendedApr !== null ? <SignedNumber value={blendedApr} format={fmtPct} plus={false} /> : '—'}
+          <div className="flex flex-wrap items-baseline gap-x-2.5 gap-y-1">
+            <span className="num text-[34px] font-bold leading-none tracking-[-0.01em]">
+              <SignedNumber value={totalPnl} format={fmtUsd} plus={false} />
+            </span>
+            {/* Only stated when the interest is actually known: with it
+                unreadable the total IS just the cards summed, and the phrase
+                would assert an arithmetic that did not happen. */}
+            {interestAvailable && interestUsd > 0 && (
+              <span
+                className="tip-label num text-[14px] text-ink-300"
+                title={(() => {
+                  // Per-coin rows only when there ARE any: the rule and the
+                  // total on their own read as a breakdown with nothing in it.
+                  const byCoin = Object.entries(data?.interest?.byCoin ?? {});
+                  return byCoin.length > 0
+                    ? [
+                        'Borrow interest paid',
+                        ...byCoin.map(([c, n]) => `${c}\t${num(n, 2)}`),
+                        '---',
+                        `Total\t${fmtUsd(interestUsd)}`,
+                      ].join('\n')
+                    : `Borrow interest paid\t${fmtUsd(interestUsd)}`;
+                })()}
+              >
+                after {fmtUsd(interestUsd)} borrow interest
+              </span>
+            )}
           </div>
         </div>
-        {/* The HEDGE label stays; both states are plain text under it, green
-            or gold — a badge here shouted next to the figures (his call). */}
-        <div className="ml-auto text-right">
-          <div className="text-xs uppercase tracking-wider text-ink-500">Hedge</div>
-          {gapCount === 0 && !nonNeutral ? (
-            <span className="text-[13px] text-grass">fully covered ✓</span>
-          ) : (
-            <span className="text-[13px] text-gold">
-              {gapCount > 0 && `${gapCount} leg${gapCount === 1 ? '' : 's'} to fix`}
-              {gapCount > 0 && nonNeutral && ' · '}
-              {nonNeutral && 'perps don’t cancel'}
-            </span>
-          )}
+        <div className="ml-auto flex flex-wrap items-center gap-x-9 gap-y-4 self-stretch border-ink-700 pl-0 sm:border-l sm:pl-9">
+          <div className="flex flex-col gap-2">
+            <div
+              className="tip-label w-fit text-[14px] font-normal leading-[16.94px] text-ink-300"
+              title="PnL so far over capital × time, annualized. Approximate: capital is today's requirement."
+            >
+              Realized APR ≈
+            </div>
+            <div className="num text-[24px] font-bold leading-[29.05px]">
+              {blendedApr !== null ? <SignedNumber value={blendedApr} format={fmtPct} plus={false} /> : '—'}
+            </div>
+          </div>
+          <div className="flex flex-col gap-2 border-l border-ink-700 pl-9">
+            <div className="text-[14px] font-normal leading-[16.94px] text-ink-300">Capital at work</div>
+            <div className="num text-[24px] font-semibold leading-[29.05px] text-ink-50">{fmtUsd(totalCapital)}</div>
+          </div>
         </div>
       </div>
       )}
+
+      {header}
 
       {derived.length === 0 ? (
         <EmptyState
@@ -294,8 +284,13 @@ export function AssetsHome() {
           hint="Open a position (or move the start date back) and the assets will appear here."
         />
       ) : (
-        <div className="flex flex-col gap-3">
-          {derived.map(({ group, derived: d, sinceSec, storedSinceSec, backfilling, windowPending }) => (
+        <div className="flex flex-col gap-8">
+          {shown.length === 0 && (
+            <p className="rounded-md border border-dashed border-ink-700 px-3 py-3 text-center text-sm text-ink-500">
+              No active pairs — {inactive.length} inactive hidden.
+            </p>
+          )}
+          {shown.map(({ group, derived: d, sinceSec, storedSinceSec, backfilling, windowPending }) => (
             <AssetCard
               key={group.base}
               group={group}

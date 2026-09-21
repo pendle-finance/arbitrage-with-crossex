@@ -61,11 +61,14 @@ describe('AssetCard since chip on the full card', () => {
   beforeEach(() => server.use(...baseHandlers()));
 
   it('shows no all time link on a default or a moved card, no all-time link', () => {
+    // MERGE 2026-09-21: scope the check to the since chip CONTROL (role=button)
+    // instead of raw text — Hubert's redesigned card added an unrelated
+    // "All time Cost" metric label that a broad /all time/i text query catches.
     const { unmount } = renderCard(undefined);
-    expect(screen.queryByText(/all time/i)).toBeNull();
+    expect(screen.queryByRole('button', { name: /all time/i })).toBeNull();
     unmount();
 
     renderCard(MARCH);
-    expect(screen.queryByText(/all time/i)).toBeNull();
+    expect(screen.queryByRole('button', { name: /all time/i })).toBeNull();
   });
 });

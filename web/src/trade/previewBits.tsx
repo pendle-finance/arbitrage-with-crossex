@@ -40,6 +40,27 @@ export function feeText(fees: FeeEstimate | undefined): string {
   return '—';
 }
 
+/** "taker · 5.0 bps" / "maker-only · 2.0 bps" / "maker–taker" — the fee
+ * row's qualification, beside a bare amount (see feeAmount). */
+export function feeKind(fees: FeeEstimate | undefined): string {
+  if (!fees) return '';
+  const { est } = fees;
+  if (est.maker !== undefined && est.taker !== undefined) return 'maker–taker';
+  if (est.taker !== undefined) return `taker · ${bps(fees.takerRate)}`;
+  if (est.maker !== undefined) return `maker-only · ${bps(fees.makerRate)}`;
+  return '';
+}
+
+/** The fee amount alone ("0.0488 USDT", or a maker–taker range). */
+export function feeAmount(fees: FeeEstimate | undefined): string {
+  if (!fees) return '—';
+  const { est, quote } = fees;
+  if (est.maker !== undefined && est.taker !== undefined) return `${sig(est.maker)}–${sig(est.taker)} ${quote}`;
+  if (est.taker !== undefined) return `${sig(est.taker)} ${quote}`;
+  if (est.maker !== undefined) return `${sig(est.maker)} ${quote}`;
+  return '—';
+}
+
 /** Single number used for fee totals (taker when crossing, maker otherwise). */
 export function estFeeOf(p: PreviewResult): number {
   return p.fees?.est.taker ?? p.fees?.est.maker ?? 0;
@@ -216,7 +237,7 @@ export function ClosePreviewPanel({
             </span>
             {hedgeAtMarket && i > 0 ? (
               <span className="flex justify-between text-ink-400">
-                <span title="The hedge leg is sent as a plain market IOC, inside the venue's own price-limit band — no limit price of its own">order</span>
+                <span title="Sent as a market IOC inside the venue's price-limit band.">order</span>
                 <span className="text-ink-100">market IOC</span>
               </span>
             ) : (

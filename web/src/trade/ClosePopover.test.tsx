@@ -62,7 +62,7 @@ describe('ClosePopover', () => {
     // The box opens on this card's own share, and the stated max is that
     // share — not the 0.3 the venue holds.
     expect(await screen.findByLabelText('Close size')).toHaveValue('0.1');
-    expect(screen.getByRole('button', { name: '0.1 ETH' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /0\.1 ETH/ })).toBeInTheDocument();
     expect(screen.getByText(/holds 0.1 of the 0.3 on the venue/)).toBeInTheDocument();
   });
 
@@ -77,16 +77,16 @@ describe('ClosePopover', () => {
     server.use(...baseHandlers(), closePreviewHandler());
     renderWithClient(<ClosePopover position={ethPosition} onDismiss={() => {}} />);
 
-    expect(await screen.findByText(/limit px/)).toBeInTheDocument();
+    expect(await screen.findByText(/limit px/i)).toBeInTheDocument();
     expect(screen.getByText('2497.45')).toBeInTheDocument();
-    expect(screen.getByText(/reduce-only ⓘ/)).toBeInTheDocument();
+    expect(screen.getByText(/Reduce-only/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Close now ▸' })).toBeEnabled();
   });
 
   it('a size above the position shows an inline error and disables Close', async () => {
     server.use(...baseHandlers(), closePreviewHandler());
     renderWithClient(<ClosePopover position={ethPosition} onDismiss={() => {}} />);
-    await screen.findByText(/limit px/);
+    await screen.findByText(/limit px/i);
 
     await userEvent.clear(screen.getByLabelText('Close size'));
     await userEvent.type(screen.getByLabelText('Close size'), '0.5'); // position is 0.3
@@ -106,7 +106,10 @@ describe('ClosePopover', () => {
       <ClosePopover position={makeCrossexPosition({ ...ethPosition, positionQty: qty })} onDismiss={() => {}} />,
     );
 
-    expect(await screen.findByRole('button', { name: text })).toBeInTheDocument();
+    // Hubert's max button reads "max <size>" — assert the stated size within its name.
+    expect(
+      await screen.findByRole('button', { name: new RegExp(`max ${text.replace(/\./g, '\\.')}`) }),
+    ).toBeInTheDocument();
     expect((screen.getByLabelText('Close size') as HTMLInputElement).value).not.toContain(',');
     await userEvent.clear(screen.getByLabelText('Close size'));
     await userEvent.type(screen.getByLabelText('Close size'), '99999999');
@@ -122,7 +125,7 @@ describe('ClosePopover', () => {
     renderWithClient(
       <ClosePopover position={makeCrossexPosition({ ...ethPosition, positionQty: '151.20195' })} onDismiss={() => {}} />,
     );
-    await screen.findByText(/limit px/);
+    await screen.findByText(/limit px/i);
     expect(sig(151.20195)).toBe('151.202');
 
     await userEvent.clear(screen.getByLabelText('Close size'));
@@ -294,7 +297,7 @@ describe('ClosePopover — sizing a close in dollars', () => {
   it('defaults a non-coin-margined position to USDT and converts at the mark', async () => {
     server.use(...baseHandlers(), closePreviewHandler());
     renderWithClient(<ClosePopover position={hypePosition} onDismiss={() => {}} />);
-    await screen.findByText(/limit px/);
+    await screen.findByText(/limit px/i);
 
     // Dollars, not coins — the box says so.
     const box = screen.getByLabelText('Close value');
@@ -315,7 +318,7 @@ describe('ClosePopover — sizing a close in dollars', () => {
     // wrongly ACCEPTED as if it were 1 coin.
     server.use(...baseHandlers(), closePreviewHandler());
     renderWithClient(<ClosePopover position={hypePosition} onDismiss={() => {}} />);
-    await screen.findByText(/limit px/);
+    await screen.findByText(/limit px/i);
 
     await userEvent.clear(screen.getByLabelText('Close value'));
     await userEvent.type(screen.getByLabelText('Close value'), '200');
@@ -334,7 +337,7 @@ describe('ClosePopover — sizing a close in dollars', () => {
     renderWithClient(
       <ClosePopover position={makeCrossexPosition({ ...hypePosition, markPrice: '0' })} onDismiss={() => {}} />,
     );
-    await screen.findByText(/limit px/);
+    await screen.findByText(/limit px/i);
 
     // Coin units, and the USD toggle is not offered at all.
     expect(screen.getByLabelText('Close qty')).toBeInTheDocument();
@@ -354,7 +357,7 @@ describe('ClosePopover — sizing a close in dollars', () => {
         onDismiss={() => {}}
       />,
     );
-    await screen.findByText(/limit px/);
+    await screen.findByText(/limit px/i); // merged copy is "Limit px" (capitalised)
 
     expect(screen.getByLabelText('Close qty')).toBeInTheDocument();
     expect(screen.queryByLabelText('Close value')).not.toBeInTheDocument();
@@ -368,7 +371,7 @@ describe('ClosePopover — sizing a close in dollars', () => {
     // Relabelling 0.63 as $0.63 would silently resize the close by the mark.
     server.use(...baseHandlers(), closePreviewHandler());
     renderWithClient(<ClosePopover position={hypePosition} onDismiss={() => {}} />);
-    await screen.findByText(/limit px/);
+    await screen.findByText(/limit px/i);
 
     await userEvent.clear(screen.getByLabelText('Close value'));
     await userEvent.type(screen.getByLabelText('Close value'), '80');
@@ -400,7 +403,7 @@ describe('ClosePopover — closing one side of a hedge', () => {
 
     // No sibling (an unpaired leg) ⇒ nothing to un-hedge, so no noise.
     renderWithClient(<ClosePopover position={ethPosition} onDismiss={() => {}} />);
-    await screen.findByText(/limit px/);
+    await screen.findByText(/limit px/i);
     expect(screen.queryByText(/leaves that one unhedged/)).not.toBeInTheDocument();
   });
 });
@@ -436,7 +439,7 @@ describe('ClosePopover — the conversion mark is latched at open', () => {
      */
     server.use(...baseHandlers(), closePreviewHandler());
     renderWithClient(<MarkFlipHarness />);
-    await screen.findByText(/limit px/);
+    await screen.findByText(/limit px/i);
 
     await userEvent.clear(screen.getByLabelText('Close value'));
     await userEvent.type(screen.getByLabelText('Close value'), '50');
@@ -460,7 +463,7 @@ describe('ClosePopover — the conversion mark is latched at open', () => {
     renderWithClient(
       <ClosePopover position={makeCrossexPosition({ ...hype, markPrice: '80.001' })} onDismiss={() => {}} />,
     );
-    await screen.findByText(/limit px/);
+    await screen.findByText(/limit px/i);
 
     // The placeholder's own stated max: sig(1.89 × 80.001) rounds UP.
     const max = sig(1.89 * 80.001);

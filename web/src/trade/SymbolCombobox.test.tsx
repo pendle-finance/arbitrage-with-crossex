@@ -43,13 +43,13 @@ describe('quick-pick coins', () => {
 
     await userEvent.click(screen.getByRole('button', { name: 'HYPE' }));
 
-    expect(await screen.findByText('LONG venue')).toBeInTheDocument();
-    expect(screen.getByText('SHORT venue')).toBeInTheDocument();
-    // One venue chip per row for each fixture venue.
-    expect(await screen.findAllByRole('button', { name: 'GATE' })).toHaveLength(2);
-    expect(screen.getAllByRole('button', { name: 'BINANCE' })).toHaveLength(2);
-    // The active quick-pick is highlighted.
-    expect(screen.getByRole('button', { name: 'HYPE' })).toHaveClass('text-cyan-300');
+    expect(await screen.findByLabelText('LONG venue')).toBeInTheDocument();
+    expect(screen.getByLabelText('SHORT venue')).toBeInTheDocument();
+    // One venue option per dropdown for each fixture venue.
+    expect(await screen.findAllByRole('option', { name: 'Gate' })).toHaveLength(2);
+    expect(screen.getAllByRole('option', { name: 'Binance' })).toHaveLength(2);
+    // The active quick-pick is marked as pressed.
+    expect(screen.getByRole('button', { name: 'HYPE' })).toHaveAttribute('aria-pressed', 'true');
   });
 
   it("single mode: clicking ETH shows ETH's venue chips", async () => {
@@ -63,7 +63,8 @@ describe('quick-pick coins', () => {
   });
 });
 
-describe('Recent symbols (coin allowlist)', () => {
+// MERGE 2026-09-21: recent-symbol chips (localStorage crossex.recentSymbols.v1, shown while nothing is picked, dropped once a recent's coin fails the supported-coins allowlist) — no longer exists in the merged UI (Hubert's MarketPicker redesign replaced SymbolCombobox's recents row with the venue×coin picker, which has no recents; the key is read nowhere); Hubert to decide whether to port it.
+describe.skip('Recent symbols (coin allowlist)', () => {
   const storeRecents = () =>
     window.localStorage.setItem(
       'crossex.recentSymbols.v1',

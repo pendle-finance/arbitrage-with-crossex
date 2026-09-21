@@ -130,6 +130,10 @@ export interface BorosMarket {
   /** Margin coefficient (config.kIM / 1e18). Its reciprocal is the venue's
    * leverage preset — live kIM 0.476 ⇒ 2.1x, 0.909 ⇒ 1.1x. */
   kIM: number;
+  /** Maintenance-margin coefficient (config.kMM / 1e18), the same formula as
+   * kIM. `kIM − kMM` is the rate move a position posting exactly its initial
+   * margin survives before liquidation. 0 when absent. */
+  kMM: number;
   /** imData.iTickThresh — with `imTickStep`, sets the APR floor the IM formula
    * charges when the entry rate is smaller. */
   imTickThresh: number;
@@ -377,6 +381,7 @@ function normalizeBorosMarket(m: Record<string, unknown>, nowSec: number): Boros
         maturity > 0 && maturity <= nowSec ? 'Matured' : (MARKET_STATUS[Number(config.status)] ?? 'Unknown'),
       assetMarkPriceUsd: Number(data.assetMarkPrice ?? 0),
       kIM: norm18(config.kIM as string),
+      kMM: norm18(config.kMM as string),
       imTickThresh: Number(imData.iTickThresh ?? 0),
       imTickStep: Number(imData.tickStep ?? 0),
       tThreshSec: Number(config.tThresh ?? 0),

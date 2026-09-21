@@ -63,7 +63,7 @@ const components = {
     <h1 className="mb-3 text-lg font-bold tracking-tight text-ink-100">{children}</h1>
   ),
   h2: ({ children }: { children?: ReactNode }) => (
-    <h2 className="mb-2 mt-6 text-[13px] font-semibold uppercase tracking-wider text-cyan-300">
+    <h2 className="mb-2 mt-6 text-[14px] font-semibold text-pastel-blue">
       {children}
     </h2>
   ),
@@ -137,7 +137,7 @@ const components = {
     </div>
   ),
   th: ({ children }: { children?: ReactNode }) => (
-    <th className="border border-ink-700 bg-ink-950 px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wider text-ink-400">
+    <th className="border border-ink-700 bg-ink-950 px-2 py-1 text-left text-[12px] font-normal text-ink-300">
       {children}
     </th>
   ),

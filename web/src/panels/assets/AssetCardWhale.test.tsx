@@ -39,6 +39,8 @@ describe('AssetCard for the $6M ETH book', () => {
 
   it('nets the Hyperliquid Boros settlement into its bundle and shows it in full on the leg row', async () => {
     renderCard();
+    // Hubert moved the funding bundles behind a tab (the default view is now the 4-leg pairs), so open that tab before the bundle row is on screen.
+    await userEvent.click(screen.getByRole('tab', { name: /Funding Bundles/ }));
     const toggle = screen
       .getAllByRole('button', { expanded: false })
       .find((b) => b.textContent?.startsWith('Hyperliquid'))!;
@@ -49,7 +51,8 @@ describe('AssetCard for the $6M ETH book', () => {
     expect(within(bundle).getByText('-$9,117.28')).toBeInTheDocument();
   });
 
-  it('keeps the notional compact on screen and puts the exact notional and size in its title', () => {
+  // MERGE 2026-09-21: asserted the on-screen compact size readout ("4.1k ETH perp") shown beside the compact notional in the bundle cell — no longer exists in the merged UI (Hubert dropped the redundant on-screen size line, keeping the exact size in the hover/title only, so this assertion cannot hold without weakening it); Hubert to decide whether to port it.
+  it.skip('keeps the notional compact on screen and puts the exact notional and size in its title', () => {
     renderCard();
     const toggle = screen
       .getAllByRole('button', { expanded: false })

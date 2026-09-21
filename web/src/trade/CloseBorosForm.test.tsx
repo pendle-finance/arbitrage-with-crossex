@@ -387,7 +387,12 @@ describe('CloseBorosForm — the venue minimum', () => {
 });
 
 describe('CloseBorosForm — full sizes on a large book', () => {
-  it.each([
+  // MERGE 2026-09-21: asserted dev's per-leg "closes X of Y" close-size readout — the
+  // typed close size ("100 ETH") shown " of 4,100 ETH" — rendered with every digit and
+  // commas, never compact/exponent. That per-leg readout no longer exists in the merged
+  // UI (Hubert's redesign replaced it with the EstimateCard rate/fee rows; only the max
+  // button and the over-max error still print the grouped size). Hubert to decide whether to port it.
+  it.skip.each([
     [4100, '4,100 ETH'],
     [12_345_678.9, '12,345,678.9 ETH'],
   ])('states a %d ETH close with every digit and commas, never compact or exponent', async (size, text) => {

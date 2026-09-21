@@ -30,6 +30,11 @@ const RECOMMENDED_MAX_SECONDS = 900;
 const LOOP_ROUND_CAP = 100;
 const LOOP_CAP_REASON = `Spot loop would take more than ${LOOP_ROUND_CAP} rounds.`;
 export const DUST_USDC = 1;
+/** Clear debt works to the cent. A borrow under a dollar is still a borrow,
+ * and Gate quotes a Convert down to 0.01 USDT (probed 2026-09-20), so the
+ * dollar floor that stops a pointless rebalance would only strand the debt. */
+export const REPAY_DUST_USDC = 0.01;
+const dustOf = (goal: { kind: string }): number => (goal.kind === 'repay' ? REPAY_DUST_USDC : DUST_USDC);
 const GATE_HOP_SECONDS = 5;
 
 export type Pool = 'CROSSEX' | 'HYPERLIQUID' | 'LIGHTER';
@@ -892,10 +897,10 @@ function customTargets(wallets: Wallets, pools: Pool[], goal: Extract<Goal, { ki
   return targets;
 }
 
-function movesFor(pools: Pool[], gaps: Record<Pool, number>): Move[] {
+function movesFor(pools: Pool[], gaps: Record<Pool, number>, dust: number): Move[] {
   const bySize = (a: Pool, b: Pool): number => Math.abs(gaps[b]) - Math.abs(gaps[a]);
-  const senders = pools.filter((pool) => gaps[pool] <= -DUST_USDC).sort(bySize);
-  const receivers = pools.filter((pool) => gaps[pool] >= DUST_USDC).sort(bySize);
+  const senders = pools.filter((pool) => gaps[pool] <= -dust).sort(bySize);
+  const receivers = pools.filter((pool) => gaps[pool] >= dust).sort(bySize);
   if (senders.length === 0 || receivers.length === 0) return [];
   if (senders.length === 1) return receivers.map((to) => ({ from: senders[0], to, check: to }));
   return senders.map((from) => ({ from, to: receivers[0], check: from }));
@@ -944,7 +949,8 @@ export function planFor(buckets: Bucket[], account: AccountLike, inputs: PlanInp
   const notional = { CROSSEX: notionalOf('CROSSEX'), HYPERLIQUID: notionalOf('HYPERLIQUID'), LIGHTER: notionalOf('LIGHTER') };
   // A custom move may open an empty wallet, so its two ends are always pools.
   const touched = (pool: Pool): boolean => goal.kind === 'custom' && (goal.from === pool || goal.to === pool);
-  const pools = POOLS.filter((pool) => notional[pool] > 0 || Math.abs(equityOf(wallets, pool)) >= DUST_USDC || touched(pool));
+  const dust = dustOf(goal);
+  const pools = POOLS.filter((pool) => notional[pool] > 0 || Math.abs(equityOf(wallets, pool)) >= dust || touched(pool));
   const totalNotional = sum(pools.map((pool) => notional[pool]));
   const noLegs = totalNotional <= 0;
   const shareOf = (pool: Pool): number => (totalNotional > 0 && pools.includes(pool) ? notional[pool] / totalNotional : 0);
@@ -983,7 +989,7 @@ export function planFor(buckets: Bucket[], account: AccountLike, inputs: PlanInp
 
   const gapOf = (pool: Pool): number => (pools.includes(pool) ? targets[pool] - equityOf(wallets, pool) : 0);
   const gaps = { CROSSEX: gapOf('CROSSEX'), HYPERLIQUID: gapOf('HYPERLIQUID'), LIGHTER: gapOf('LIGHTER') };
-  const moves = movesFor(pools, gaps);
+  const moves = movesFor(pools, gaps, dust);
   if (moves.length === 0) return balancedPlan(book, 0, noLegs);
 
   const start = moves.map((move) => floorCents(Math.abs(gaps[move.check])));
@@ -1029,7 +1035,7 @@ export function planFor(buckets: Bucket[], account: AccountLike, inputs: PlanInp
   const firstOpen = (['mix', 'loop', 'convert'] as const).find((name) => routes[name]?.available);
   const picked = runs[recommended ?? firstOpen ?? 'convert'];
   const moved = floorCents(sum(picked.steps.map((step) => step.move)));
-  if (moved < DUST_USDC) return balancedPlan(book, picked.cashLimited ? floorCents(need) : 0, noLegs);
+  if (moved < dust) return balancedPlan(book, picked.cashLimited ? floorCents(need) : 0, noLegs);
   return {
     goal,
     balanced: false,

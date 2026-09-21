@@ -200,7 +200,8 @@ describe('BorosPairTicket — close-only market', () => {
     const user = userEvent.setup();
     renderWithClient(<BorosPairTicket />);
     await fillTicket(user);
-    await user.click(screen.getByRole('radio', { name: /^Close/ }));
+    // MERGE 2026-09-21: dev's Open/Close radio is now Hubert's "Reduce-only" checkbox (both set intent='close').
+    await user.click(screen.getByRole('checkbox', { name: 'Reduce-only' }));
 
     const btn = await waitFor(() => {
       const b = screen.getByRole('button', { name: /Confirm/ });

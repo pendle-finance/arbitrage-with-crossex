@@ -1,6 +1,15 @@
 /**
  * Top-level view switcher: one horizontal tab strip instead of a fixed-width
  * left sidebar, so narrow viewports spend their width on content.
+ *
+ * Opportunities and Positions are the primary tabs (what the terminal is FOR)
+ * and are rendered large and cyan-highlighted; Balances / Open Orders / Trades /
+ * Fees are reference views, rendered small and dim after a divider. Panels stay
+ * MOUNTED while inactive (hidden via the `hidden` attribute) so react-query
+ * polling and live count badges keep working off-screen.
+ *
+ * The strip itself is PpTabsNav's `glow` variant: the chosen tab is marked by
+ * an underline inside its own box plus an info wash rising from that edge.
  */
 import { createContext, Fragment, useContext, type ReactNode } from 'react';
 
@@ -41,77 +50,65 @@ export function TabBar({
   right?: ReactNode;
 }) {
   return (
-    // Mirrors <main>'s grid in App.tsx (max-w, px-5, gap-5, w-[340px] rail) so
-    // the cyan shelf below lines up with the content column exactly.
+    // Mirrors <main>'s grid in App.tsx (max-w, px-5, gap-5) so the strip's
+    // rule and the content column share one left edge.
     <div className="mx-auto flex max-w-[1500px] items-stretch gap-5 px-5">
-      {/* The folder's surface: a cyan hairline spanning the content column and
-          stopping at the order ticket, which every tab shows. -mb-px pulls it
-          over the header's grey border-b, which a child's border paints above. */}
-      <div className="-mb-px min-w-0 flex-1 border-b border-info/35">
-        {/* The second -mb-px pulls the tabs down over the hairline. Children
-            paint above their parent's border, so the active tab's opaque
-            background cuts the shelf; transparent tabs let it show through. */}
-        <div
-          role="tablist"
-          aria-label="Sections"
-          className="-mb-px flex items-stretch overflow-x-auto"
-        >
-          {tabs.map((t, i) => {
-            const activeTab = t.id === active;
-            const opensSecondary = !t.primary && Boolean(tabs[i - 1]?.primary);
-            return (
-              <Fragment key={t.id}>
-                {opensSecondary && (
-                  <span aria-hidden="true" className="mx-3 h-4 w-px shrink-0 self-center bg-ink-700" />
-                )}
-                <button
-                  type="button"
-                  role="tab"
-                  id={`tab-${t.id}`}
-                  aria-selected={activeTab}
-                  aria-controls={`panel-${t.id}`}
-                  data-active={activeTab}
-                  onClick={() => onSelect(t.id)}
-                  // Active = a folder tab, machined flat: square corners,
-                  // opaque surface, hairline sides, a 2px cyan signal cap, and
-                  // no bottom border so it cuts the shelf and reads as one
-                  // surface with the content. Colour is a signal, not paint —
-                  // the label goes bright white; only the cap is cyan. Inactive
-                  // keeps the same box (transparent borders) so nothing shifts.
-                  // Metrics from the mock's TAB_BASE / TAB_ON. The mock's
-                  // sub-tabs changed only their label colour; here they wear
-                  // the same folder box and info cap as the primaries, at
-                  // their own size — one selection marker for every tab.
-                  style={t.primary ? { letterSpacing: '0.08em' } : { letterSpacing: '0.12em' }}
-                  className={`flex shrink-0 items-center gap-1.5 whitespace-nowrap uppercase transition-colors ${
-                    t.primary
-                      ? `border-x border-t-2 px-[18px] pb-[9px] pt-[7px] text-[13px] font-semibold ${
-                          activeTab
-                            ? 'border-x-ink-700 border-t-info bg-ink-100/[0.06] text-ink-50'
-                            : 'border-transparent text-ink-400 hover:border-t-ink-500 hover:text-ink-200'
-                        }`
-                      : `border-x border-t-2 px-3 pb-[11px] pt-[9px] text-[10px] font-medium ${
-                          activeTab
-                            ? 'border-x-ink-700 border-t-info bg-ink-100/[0.06] text-ink-50'
-                            : 'border-transparent text-ink-400 hover:border-t-ink-500 hover:text-ink-100'
-                        }`
-                  }`}
-                >
-                  {t.label}
-                  {t.badge}
-                </button>
-              </Fragment>
-            );
-          })}
-        </div>
+      <div
+        role="tablist"
+        aria-label="Sections"
+        className="flex min-w-0 flex-1 items-stretch overflow-x-auto"
+      >
+        {tabs.map((t, i) => {
+          const activeTab = t.id === active;
+          const opensSecondary = !t.primary && Boolean(tabs[i - 1]?.primary);
+          return (
+            <Fragment key={t.id}>
+              {opensSecondary && (
+                <span aria-hidden="true" className="mx-3 h-4 w-px shrink-0 self-center bg-ink-700" />
+              )}
+              <button
+                type="button"
+                role="tab"
+                id={`tab-${t.id}`}
+                aria-selected={activeTab}
+                aria-controls={`panel-${t.id}`}
+                data-active={activeTab}
+                onClick={() => onSelect(t.id)}
+                // PpTabsNav, `glow` variant. The selection marker is a 2px info
+                // underline INSIDE the tab (so a scrolling strip can never clip
+                // it) plus a soft info wash rising from that edge — the wash is
+                // a 200% background whose position animates, which is what
+                // makes the change read as a sweep rather than a repaint. The
+                // primaries keep their larger type; nothing is upper-cased,
+                // because the mock's tabs are sentence case.
+                className={`relative flex shrink-0 items-center justify-center gap-1.5 whitespace-nowrap border-0 bg-transparent transition-all duration-300 ease-in after:absolute after:inset-x-0 after:bottom-0 after:h-px after:bg-info after:transition-transform after:duration-300 after:content-[''] ${
+                  activeTab
+                    ? 'text-ink-50 after:scale-x-100'
+                    : 'text-ink-500 after:scale-x-0 hover:text-ink-400'
+                } ${
+                  t.primary
+                    ? 'px-5 py-[15px] text-[13px] font-medium'
+                    : 'px-4 py-[13px] text-[12px] font-normal'
+                }`}
+                style={{
+                  backgroundImage:
+                    'linear-gradient(to top, rgba(96,120,255,0.25) 0%, transparent 50%, transparent 100%)',
+                  backgroundSize: '200% 200%',
+                  backgroundPosition: activeTab ? '99% 99%' : '1% 1%',
+                }}
+              >
+                {t.label}
+                {t.badge}
+              </button>
+            </Fragment>
+          );
+        })}
       </div>
       {/* Sized to its controls. This used to reserve a fixed 340px for the
           order-ticket rail, but the ticket is an overlay drawer now and <main>
           has no rail column — so the reservation only squeezed the controls
           into wrapping, which is what made the row four different heights. */}
-      {right && (
-        <div className="flex shrink-0 items-center justify-end gap-2 pb-1.5">{right}</div>
-      )}
+      {right && <div className="flex shrink-0 items-center justify-end gap-2 py-2">{right}</div>}
     </div>
   );
 }

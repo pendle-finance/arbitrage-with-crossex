@@ -217,6 +217,27 @@ describe('submitBorosPair', () => {
     await submitBorosPair({ client, legA, legB, feeDragApr: FEE_DRAG, receiveLeg: 'A' });
     expect(place.mock.calls[0][0].map((r) => r.clientOrderId)).toEqual(['coid-a', 'coid-b']);
   });
+
+  it('sends the gas top-up AFTER both legs when reducing, and before them otherwise', async () => {
+    // A close frees margin; a top-up it might need runs its own strict margin
+    // check, so it goes after the legs that free it — topUpAfter = reqs.length.
+    // An open frees nothing, so the top-up leads (0).
+    const opts: Array<{ reducing?: boolean; topUpAfter?: number }> = [];
+    const place = vi.fn(
+      async (reqs: BorosMarketOrderRequest[], o?: { reducing?: boolean; topUpAfter?: number }) => {
+        opts.push(o ?? {});
+        return reqs.map((r) => fill({ marketId: r.marketId, direction: r.direction }));
+      },
+    );
+    const client: BorosOrderClient = { placeMarketOrders: place, cancelOrders: async () => {}, closePosition: async () => fill() };
+
+    await submitBorosPair({ client, legA, legB, feeDragApr: FEE_DRAG, receiveLeg: 'A', reducing: true });
+    expect(opts[0].reducing).toBe(true);
+    expect(opts[0].topUpAfter).toBe(2); // both legs submitted → after both
+
+    await submitBorosPair({ client, legA, legB, feeDragApr: FEE_DRAG, receiveLeg: 'A' });
+    expect(opts[1].topUpAfter).toBe(0);
+  });
 });
 
 describe('describeLegFailure', () => {
@@ -326,5 +347,29 @@ describe('classifyLegFailure', () => {
     });
     // Sniffing `.message` alone would have called this a plain rejection.
     expect(classifyLegFailure(axiosErr)).toBe('rate-deviation');
+  });
+
+  /** The SDK renders the contract errors as prose with spaces; the classifier
+   * normalises whitespace to `_` before matching, so these read the same as
+   * their error-code spellings above. */
+  it('classifies the SDK prose spellings, not just the error-code ones', () => {
+    expect(classifyLegFailure(new Error('Rate Too Far Off'))).toBe('rate-deviation');
+    expect(classifyLegFailure(new Error('Insufficient liquidity'))).toBe('insufficient-depth');
+    expect(classifyLegFailure(new Error('Not enough margin'))).toBe('insufficient-margin');
+    expect(classifyLegFailure(new Error('Top up at least ~$10 to trade'))).toBe('min-cash');
+  });
+
+  /** "[SIMULATE] …" is the backend refusing the batch BEFORE submission: it ran
+   * nothing and charged no gas. Its "Batch aborted" wording would otherwise
+   * read as a lost response (unknown), and a provable no-op must never do that. */
+  it('reads a [SIMULATE] batch-abort as a plain rejection, and keeps the specific reasons', () => {
+    expect(
+      classifyLegFailure(new Error('[SIMULATE] Batch aborted: requireSuccess=true but some calls failed')),
+    ).toBe('rejected');
+    expect(classifyLegFailure(new Error('[SIMULATE] Large Rate Deviation'))).toBe('rate-deviation');
+    expect(classifyLegFailure(new Error('[SIMULATE] Not enough margin'))).toBe('insufficient-margin');
+    // Nothing prefixed [SIMULATE] can ever be 'unknown' — it provably ran nothing,
+    // so even transport-shaped wording falls through to a plain rejection.
+    expect(classifyLegFailure(new Error('[SIMULATE] connection timeout'))).toBe('rejected');
   });
 });
