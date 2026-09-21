@@ -8,6 +8,8 @@
 import type { FastifyInstance } from 'fastify';
 import { afterEach, describe, expect, it } from 'vitest';
 import { CoreError } from '../../src/core/errors';
+import { BOROS_LIVE_TTL_MS } from '../../src/server/routes/assetView';
+import { TtlCache } from '../../src/server/cache';
 import { marketAcc, raw } from '../helpers/boros-fixtures';
 import { borosStub } from '../helpers/boros-stub';
 import { HOST, makeTestApp, mockGateGet } from './helpers/gate-nock';
@@ -435,5 +437,38 @@ describe('GET /api/asset-view/:address', () => {
     );
     expect(allSettle.reduce((s: number, v: number) => s + v, 0)).toBeCloseTo(160, 6);
     expect(data.warnings.join(' ')).toMatch(/no longer listed/);
+  });
+});
+
+class TtlSpy extends TtlCache {
+  readonly ttls = new Map<string, number>();
+
+  override async get<T>(
+    key: string,
+    ttlMs: number,
+    fetch: () => Promise<T>,
+    opts?: { fresh?: boolean },
+  ): Promise<{ value: T; stale: boolean }> {
+    this.ttls.set(key, ttlMs);
+    return super.get(key, ttlMs, fetch, opts);
+  }
+}
+
+describe('what the asset view costs Boros in computing units', () => {
+  it('caches the settlement head and the live fill history for 60 s', async () => {
+    const cache = new TtlSpy();
+    app = makeTestApp({ borosFetch: borosStub(borosBodies()), cache });
+    mockGateGet('/positions', { body: gatePositions });
+    mockGateGet('/history_positions', { body: closedPositions });
+    mockGateGet('/history_margin_interests', { body: [] });
+
+    expect((await get(`/api/asset-view/${ADDR}?since=0`)).statusCode).toBe(200);
+
+    const ttlOf = (match: (key: string) => boolean): number[] =>
+      [...cache.ttls].filter(([key]) => match(key)).map(([, ttl]) => ttl);
+    expect(ttlOf((k) => k.startsWith('boros:settlements:'))).toEqual([BOROS_LIVE_TTL_MS]);
+    expect(ttlOf((k) => k.startsWith('boros:txns:') && k.endsWith(':live')).length).toBeGreaterThan(0);
+    for (const ttl of ttlOf((k) => k.startsWith('boros:txns:') && k.endsWith(':live'))) expect(ttl).toBe(60_000);
+    expect(BOROS_LIVE_TTL_MS).toBe(60_000);
   });
 });

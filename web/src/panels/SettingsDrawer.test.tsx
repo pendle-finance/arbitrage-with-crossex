@@ -148,7 +148,7 @@ describe('SettingsDrawer', () => {
 
     expect(await within(telegram).findByText('last sync failed')).toBeInTheDocument();
     expect(
-      within(telegram).getByText('The bot did not answer at 14:02. Alerts still use the sync from 11:40. Retrying.'),
+      within(telegram).getByText('Last sync failed at 14:02. Alerts still use the sync from 11:40. Retrying.'),
     ).toBeInTheDocument();
     expect(screen.getAllByText('last sync failed')).toHaveLength(1);
   });

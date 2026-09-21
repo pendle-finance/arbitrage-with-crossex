@@ -183,6 +183,12 @@ function withMixCost(costUsd: number): RebalanceView {
   return { ...view, plans: plansOf({ ...view.plans.even, routes: { ...view.plans.even.routes, mix: { ...view.plans.even.routes.mix!, costUsd } } }) };
 }
 
+function withLoopTime(seconds: number): RebalanceView {
+  const view = rebalanceViews.twoBorrows;
+  const loop = { ...view.plans.even.routes.mix!, seconds, costUsd: 3.41 };
+  return { ...view, plans: plansOf({ ...view.plans.even, recommended: 'loop', routes: { ...view.plans.even.routes, loop } }) };
+}
+
 function withConvertAfter(hyperliquidEquity: number, marginFreedUsd: number): RebalanceView {
   const view = rebalanceViews.twoBorrows;
   const convert = view.plans.even.routes.convert!;
@@ -226,6 +232,21 @@ describe('RebalanceModal plan state', () => {
     expect(within(pickedRow()).getByText('Recommended')).toBeInTheDocument();
     expect(pickedRow()).toHaveTextContent('about 2 min');
     expect(pickedRow()).toHaveTextContent('Fee $0.46');
+  });
+
+  it.each([
+    [30, 'about 30s'],
+    [900, 'about 15 min'],
+    [62520, 'about 17 h 22 m'],
+  ])('names the route, the fee and the %i second estimate beside the hold', (seconds, time) => {
+    show(withLoopTime(seconds));
+    expect(within(dialog()).getByText(`Spot loop · Fee $3.41 · ${time}`)).toBeInTheDocument();
+  });
+
+  it('keeps the estimate in the same block as the hold', () => {
+    show(withLoopTime(62520));
+    const line = within(dialog()).getByText('Spot loop · Fee $3.41 · about 17 h 22 m');
+    expect(line.parentElement).toContainElement(holdButton());
   });
 
   it('clicking the selected route row opens every route', async () => {

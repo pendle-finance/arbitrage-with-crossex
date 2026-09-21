@@ -215,7 +215,9 @@ function ageBucket(ms: number): { value: number; unit: 's' | 'm' | 'h' | 'd'; re
 export function fmtAbout(seconds: number): string {
   if (seconds < 60) return `about ${Math.round(seconds)}s`;
   if (seconds < 600) return `about ${Math.round(seconds / 30) / 2} min`;
-  return `about ${Math.round(seconds / 60)} min`;
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `about ${minutes} min`;
+  return `about ${Math.floor(minutes / 60)} h ${minutes % 60} m`;
 }
 
 /** Unix seconds → UTC "YYYY-MM-DD" (maturities are quoted in UTC). */

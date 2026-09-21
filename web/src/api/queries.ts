@@ -579,8 +579,9 @@ export function usePutCredentials() {
 
 /** The pairable Boros universe plus this address's per-market state. Keyed by
  * address: two addresses must never share positions or margin buckets. */
-export function useBorosPairContext(address: string | null) {
-  const shown = useTabActive();
+export function useBorosPairContext(address: string | null, active = true) {
+  const tabShown = useTabActive();
+  const shown = tabShown && active;
   return useQuery({
     queryKey: qk.borosPairContext(address ?? ''),
     queryFn: () => fetchJson<BorosPairContext>(`/boros/pair/context?address=${address}`),

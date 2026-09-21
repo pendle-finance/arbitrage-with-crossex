@@ -20,6 +20,8 @@
 // Envelope
 // ---------------------------------------------------------------------------
 
+import type { MarginTiers } from '../lib/liquidation';
+
 export interface ApiMeta {
   ts: number;
   stale?: boolean;
@@ -331,6 +333,7 @@ export interface StartTransferBody {
 
 export interface CrossexPosition {
   symbol: string;
+  markStaleSinceMs?: number;
   positionSide: string;
   positionQty: string;
   positionValue: string;
@@ -373,6 +376,7 @@ export interface ExposureGroup {
 export interface PositionsResponse {
   positions: CrossexPosition[];
   exposure: ExposureGroup[];
+  marginTiers?: MarginTiers;
 }
 
 // ---------------------------------------------------------------------------
@@ -1424,6 +1428,7 @@ export interface TelegramInfo {
   settings: { liquidation: boolean; interest: boolean } | null;
   lastSyncAt: number | null;
   lastSyncError: { at: number; message: string } | null;
+  alertsPageUrl?: string;
 }
 
 export interface TelegramLinkStart {

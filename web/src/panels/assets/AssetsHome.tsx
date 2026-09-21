@@ -90,7 +90,10 @@ export function AssetsHome() {
   const accountData = useAccount().data;
   const positionsData = usePositions().data;
   const liquidation = useMemo(
-    () => (accountData && positionsData ? liquidationLines(accountData, positionsData) : undefined),
+    () =>
+      accountData && positionsData
+        ? liquidationLines(accountData, positionsData, {}, positionsData.marginTiers)
+        : undefined,
     [accountData, positionsData],
   );
   /* null while the account or positions are not loaded, and for a coin with
@@ -101,6 +104,11 @@ export function AssetsHome() {
   const lineFor = (base: string) => {
     if (liquidation === undefined) return null;
     if (liquidation === null) return 'unknown' as const;
+    for (const stale of liquidation.unknown) {
+      if (stale.base.toUpperCase() === base.toUpperCase() && stale.sinceMs !== null) {
+        return { base: stale.base, venue: stale.venue, sinceMs: stale.sinceMs };
+      }
+    }
     return lineIn(liquidation, base);
   };
 

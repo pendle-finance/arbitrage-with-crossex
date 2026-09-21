@@ -266,9 +266,18 @@ export function borrowingFact(buckets: RebalanceBucket[]): Fact & { value: strin
   };
 }
 
-export function liquidationNow(acc: CrossexAccount | undefined, pos: PositionsResponse | undefined): LiquidationLine | null | 'unknown' {
-  const view = acc && pos ? liquidationLines(acc, pos) : null;
-  return view ? (view.lines[0] ?? null) : 'unknown';
+type StaleLeg = { base: string; venue: string; sinceMs: number };
+
+export function liquidationNow(
+  acc: CrossexAccount | undefined,
+  pos: PositionsResponse | undefined,
+): LiquidationLine | StaleLeg | null | 'unknown' {
+  const view = acc && pos ? liquidationLines(acc, pos, {}, pos.marginTiers) : null;
+  if (!view) return 'unknown';
+  for (const stale of view.unknown) {
+    if (stale.sinceMs !== null) return { base: stale.base, venue: stale.venue, sinceMs: stale.sinceMs };
+  }
+  return view.lines[0] ?? null;
 }
 
 /** The per-wallet lines of a card figure, shown on hover. With two or three
@@ -477,6 +486,9 @@ export function pickedRoute(plan: EvenPlan, pick: RouteName | null): { name: Rou
   return { name, route: (name === null ? null : plan.routes[name]) ?? plan.routes.convert };
 }
 
+export const routeTime = (route: RouteName, plan: RoutePlan): string =>
+  route === 'convert' ? 'instant' : fmtAbout(plan.seconds);
+
 export function RouteRow({ route, plan, checked, onPick }: { route: RouteName; plan: EvenPlan; checked: boolean; onPick: () => void }) {
   const id = useId();
   const routePlan = plan.routes[route];
@@ -491,7 +503,7 @@ export function RouteRow({ route, plan, checked, onPick }: { route: RouteName; p
   const across = moves.some((move) => move.from !== 'CROSSEX' && move.to !== 'CROSSEX');
   const convert = across ? `${HOVER.convert} ${HOVER.convertAcross}` : HOVER.convert;
   const nameText = route === 'mix' ? HOVER.mix(plan.roundCap) : route === 'loop' ? loop : convert;
-  const time = route === 'convert' ? 'instant' : fmtAbout(routePlan.seconds);
+  const time = routeTime(route, routePlan);
   return (
     <RadioRow name="rebalance-route" labelledBy={id} checked={checked} disabled={blocked} onPick={onPick}>
       <span id={id} className="w-44 shrink-0">

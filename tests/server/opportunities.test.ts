@@ -325,7 +325,7 @@ describe('GET /api/opportunities', () => {
     expect(calls.length).toBe(afterFirst * 2);
   });
 
-  it('a poll one dashboard-cadence later adds NO Boros calls; past 60s it re-reads', async () => {
+  it('a poll one dashboard-cadence later adds NO Boros calls; past 90s it re-reads', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     try {
       const calls: string[] = [];
@@ -337,13 +337,20 @@ describe('GET /api/opportunities', () => {
       const afterFirst = calls.length; // markets + both order books
       expect(afterFirst).toBe(3);
 
+      const books = () => calls.filter((c) => c.startsWith('/apis/v1/markets/order-book')).length;
+      expect(books()).toBe(2);
+
       vi.setSystemTime(Date.now() + 12_000); // the next dashboard poll
       await app.inject({ method: 'GET', url: '/api/opportunities', headers: HOST });
       expect(calls.length).toBe(afterFirst);
 
-      vi.setSystemTime(Date.now() + 49_000);
+      vi.setSystemTime(Date.now() + 49_000); // 61s in, inside the 90s scan cache
       await app.inject({ method: 'GET', url: '/api/opportunities', headers: HOST });
-      expect(calls.length).toBe(afterFirst * 2); // markets + books re-read together
+      expect(books()).toBe(2);
+
+      vi.setSystemTime(Date.now() + 30_000); // 91s in, the scan cache has expired
+      await app.inject({ method: 'GET', url: '/api/opportunities', headers: HOST });
+      expect(books()).toBe(4);
     } finally {
       vi.useRealTimers();
     }

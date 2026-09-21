@@ -2,7 +2,7 @@ import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 import type { PositionsResponse, RebalanceBucket } from '../api/types';
-import { accountBodies, rebalanceViews, rebased } from '../test/fixtures';
+import { accountBodies, makeCrossexPosition, positionsBodies, rebalanceViews, rebased } from '../test/fixtures';
 import { borrowFacts, defaultGoal, Facts, isNotWorthIt, isWorthIt, liquidationNow, pickedRoute, roundOf, shownKeys, stopsPerDayOf, targetsOf, worthLine } from './RebalanceHovers';
 
 function show(buckets: RebalanceBucket[]) {
@@ -212,6 +212,24 @@ describe('the liquidation rule the modal uses', () => {
     expect(liquidationNow(accountBodies.accountA, undefined)).toBe('unknown');
     expect(liquidationNow({ ...accountBodies.accountA, maintenanceMargin: 'n/a' }, noPositions)).toBe('unknown');
     expect(liquidationNow(accountBodies.accountA, noPositions)).toBeNull();
+  });
+
+  it('names the leg Gate stopped pricing instead of a line for the coin', () => {
+    const staleAt = new Date(2026, 8, 21, 14, 32).getTime();
+    const book = positionsBodies.ethTwoVenues;
+    const blind: PositionsResponse = {
+      positions: [
+        book.positions[0],
+        makeCrossexPosition({ ...book.positions[1], markPrice: '', markStaleSinceMs: staleAt }),
+      ],
+      exposure: book.exposure,
+    };
+
+    expect(liquidationNow(accountBodies.accountA, blind)).toEqual({
+      base: 'ETH',
+      venue: 'Hyperliquid',
+      sinceMs: staleAt,
+    });
   });
 });
 

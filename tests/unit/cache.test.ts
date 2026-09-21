@@ -1,7 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
-import { TtlCache } from '../../src/server/cache';
+import { TTL, TtlCache } from '../../src/server/cache';
 
 const rateLimited = () => ({ response: { status: 429, data: { label: 'TOO_MANY_REQUESTS' } } });
+
+describe('TTL.borosBook', () => {
+  it('is 90s: 37 markets at 2 units each stays under the 200 CU/min IP limit', () => {
+    expect(TTL.borosBook).toBe(90_000);
+  });
+});
 
 describe('TtlCache', () => {
   it('coalesces concurrent callers onto one fetch', async () => {

@@ -172,7 +172,7 @@ export function BorosPairTicket({
   const addressMismatch = Boolean(
     agentRoot && trackedAddress && agentRoot.toLowerCase() !== trackedAddress.toLowerCase(),
   );
-  const context = useBorosPairContext(address);
+  const context = useBorosPairContext(address, active);
 
   const [marketA, setMarketA] = useState<number | null>(null);
   const [marketB, setMarketB] = useState<number | null>(null);

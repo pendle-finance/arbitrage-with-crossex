@@ -40,7 +40,7 @@ import {
   prettyVenue,
   signedClass,
 } from '../../lib/fmt';
-import { describeLine, lineLabel, type LiquidationLine } from '../../lib/liquidation';
+import { describeLine, lineLabel, unknownLabel, type LiquidationLine } from '../../lib/liquidation';
 import {
   type AssetDerived,
   type ExclusionEntry,
@@ -89,14 +89,23 @@ interface Props {
   /** Where the ACCOUNT liquidates if only this coin moves. 'far' = no line
    * within 10x, 'unknown' = Gate sent no margin figures, null = not loaded
    * or this coin has no priced leg in the connected account. */
-  liquidation?: LiquidationLine | 'far' | 'unknown' | null;
+  liquidation?: LiquidationLine | StaleLeg | 'far' | 'unknown' | null;
 }
+
+type StaleLeg = { base: string; venue: string; sinceMs: number };
 
 /** Where this coin's move liquidates the account. Red inside 15%, amber
  * inside 30%: a hedged asset is delta-neutral but not margin-neutral — the
  * losing Hyperliquid leg drives its USDC wallet into a borrow, and Gate
  * charges maintenance margin on that. */
-function LiquidationChip({ line, base }: { line: LiquidationLine | 'far' | 'unknown'; base: string }) {
+function LiquidationChip({ line, base }: { line: LiquidationLine | StaleLeg | 'far' | 'unknown'; base: string }) {
+  if (typeof line !== 'string' && 'sinceMs' in line) {
+    return (
+      <Chip sm title={unknownLabel(line)}>
+        No liquidation estimate
+      </Chip>
+    );
+  }
   if (line === 'unknown') {
     return (
       <Chip sm title="Gate did not send the account's margin figures, so the line cannot be estimated.">

@@ -17,6 +17,7 @@ const CODE = 'q0Yx1dQ0bB8m8rP3nV2m4w';
 const T0 = Date.UTC(2026, 8, 18, 10, 0, 0);
 const TEN_MIN = 600_000;
 const BOT_DOWN = 'Telegram alerts are not available yet. Try again later.';
+const BOT_UNREACHABLE = 'Could not reach the bot. Try again, or remove this terminal on the Boros alerts page.';
 
 interface BotBehaviour {
   down: 'refused' | number | null;
@@ -38,6 +39,7 @@ beforeEach(() => {
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0)) await cleanup();
   vi.useRealTimers();
+  delete process.env.CROSSEX_BOT_URL;
 });
 
 function makeBot() {
@@ -72,7 +74,14 @@ function holdChecks(bot: Bot): () => void {
   return release;
 }
 
-const NONE = { connected: false, state: 'none', settings: null, lastSyncAt: null, lastSyncError: null };
+const NONE = {
+  connected: false,
+  state: 'none',
+  settings: null,
+  lastSyncAt: null,
+  lastSyncError: null,
+  alertsPageUrl: `${BOT_URL}/alerts`,
+};
 
 function boot(bot: Bot = makeBot()) {
   const status = new TelegramStatus();
@@ -392,6 +401,7 @@ describe('Telegram link', () => {
       settings: { liquidation: true, interest: true },
       lastSyncAt: T0,
       lastSyncError: null,
+      alertsPageUrl: `${BOT_URL}/alerts`,
     });
     expect(readTelegramKey(dataDir)).toEqual(before);
     expect(bot.to('PUT', '/terminal/triggers')[2].headers['x-terminal-key']).toBe(before.key);
@@ -486,6 +496,7 @@ describe('Telegram link', () => {
       settings: { liquidation: true, interest: true },
       lastSyncAt: T0,
       lastSyncError: null,
+      alertsPageUrl: `${BOT_URL}/alerts`,
     });
   });
 
@@ -631,6 +642,7 @@ describe('Telegram settings', () => {
       settings: { liquidation: true, interest: true },
       lastSyncAt: T0,
       lastSyncError: null,
+      alertsPageUrl: `${BOT_URL}/alerts`,
     });
   });
 
@@ -676,17 +688,33 @@ describe('Telegram settings', () => {
       settings: null,
       lastSyncAt: null,
       lastSyncError: null,
+      alertsPageUrl: `${BOT_URL}/alerts`,
     });
   });
 
-  it('disconnects while the bot does not answer', async () => {
-    linked();
+  it('a disconnect the bot cannot answer keeps the key and stays connected', async () => {
+    const key = linked();
     const { app, bot } = boot();
     bot.behaviour.down = 'refused';
 
     const res = await send(app, 'DELETE', '/api/telegram');
 
+    expect(res.code).toBe(503);
+    expect(res.body.error.message).toBe(BOT_UNREACHABLE);
+    expect(keyOnDisk().key).toBe(key.key);
+    bot.behaviour.down = null;
+    expect((await send(app, 'GET', '/api/telegram')).body.data).toMatchObject({ connected: true, state: 'connected' });
+  });
+
+  it('a disconnect the bot refuses for a reason clears the key', async () => {
+    linked();
+    const { app, bot } = boot();
+    bot.behaviour.reason = 'unknown';
+
+    const res = await send(app, 'DELETE', '/api/telegram');
+
     expect(res.code).toBe(200);
+    expect(res.body.data.connected).toBe(false);
     expect(readTelegramKey(dataDir)).toBeNull();
   });
 
@@ -756,5 +784,20 @@ describe('Telegram settings', () => {
 
     expect(res.body.data).toMatchObject({ connected: false, state: 'none' });
     expect(bot.calls).toHaveLength(0);
+  });
+});
+
+describe('Telegram alerts page URL', () => {
+  it('is the production default with no bot base configured', async () => {
+    const { app } = boot();
+
+    expect((await send(app, 'GET', '/api/telegram')).body.data.alertsPageUrl).toBe(`${BOT_URL}/alerts`);
+  });
+
+  it('follows a staging bot base set through CROSSEX_BOT_URL', async () => {
+    process.env.CROSSEX_BOT_URL = 'https://staging.boros-bot.example/';
+    const { app } = boot();
+
+    expect((await send(app, 'GET', '/api/telegram')).body.data.alertsPageUrl).toBe('https://staging.boros-bot.example/alerts');
   });
 });

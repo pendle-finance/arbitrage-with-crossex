@@ -26,9 +26,9 @@ type Phase = 'idle' | 'waiting' | 'expired';
 type AlertSettings = { liquidation: boolean; interest: boolean };
 
 const INTEREST_FLOORS = [
-  { wallet: 'USDT CrossEx', equityUsd: 0 },
-  { wallet: 'USDC Lighter', equityUsd: 0 },
-  { wallet: 'USDC Hyperliquid', equityUsd: -10_000 },
+  { wallet: 'USDT CrossEx wallet', equityUsd: 0 },
+  { wallet: 'USDC Lighter wallet', equityUsd: 0 },
+  { wallet: 'USDC Hyperliquid wallet', equityUsd: -10_000 },
 ];
 
 const LIQUIDATION_CAPTION = 'a 20% move from now reaches liquidation';
@@ -52,7 +52,7 @@ function syncFailure(info: TelegramInfo): string | null {
   if (!info.connected || error === null) return null;
   if (info.lastSyncAt !== null && info.lastSyncAt >= error.at) return null;
   const since = info.lastSyncAt === null ? null : `Alerts still use the sync from ${fmtClock(info.lastSyncAt)}.`;
-  return [`The bot did not answer at ${fmtClock(error.at)}.`, since, 'Retrying.'].filter(Boolean).join(' ');
+  return [`Last sync failed at ${fmtClock(error.at)}.`, since, 'Retrying.'].filter(Boolean).join(' ');
 }
 
 function stateLine(info: TelegramInfo | undefined, now: number): { text: string | null; isWarn: boolean } {
@@ -154,14 +154,25 @@ export function TelegramRow(p: SetupRowProps) {
           Finish
         </button>
       ) : (
-        <button
-          type="button"
-          className="btn-link text-ink-400"
-          disabled={disconnect.isPending}
-          onClick={() => disconnect.mutate(undefined, { onError: showError })}
-        >
-          Disconnect this terminal
-        </button>
+        <>
+          <button
+            type="button"
+            className="btn-link text-ink-400"
+            disabled={disconnect.isPending}
+            onClick={() => disconnect.mutate()}
+          >
+            Disconnect this terminal
+          </button>
+          {disconnect.isError && (
+            <p role="alert" className="text-xs text-amber-300">
+              Could not reach the bot. Try again, or remove this terminal on the{' '}
+              <Ext href={info?.alertsPageUrl ?? 'https://boros-bot-notification.pendle.finance/alerts'}>
+                Boros alerts page
+              </Ext>
+              .
+            </p>
+          )}
+        </>
       )}
     </>
   );

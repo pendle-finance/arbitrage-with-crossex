@@ -37,7 +37,7 @@ export const TTL = {
   /** Fills of Boros markets the account no longer holds — they take no new
    * fills, so there is nothing to refresh every 30s. */
   borosHistory: 600_000,
-  borosBook: 60_000,
+  borosBook: 90_000,
   borosBookTrade: 3_000,
   /** Public venue-book touch for the re-peg UI — price display, not a feed. */
   book: 2_000,

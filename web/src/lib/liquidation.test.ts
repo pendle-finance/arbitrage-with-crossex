@@ -8,8 +8,11 @@ import {
   lineLabel,
   liquidationLines,
   liquidationSides,
+  maintenanceAt,
   nearestLiquidation,
+  unknownLabel,
   type LiquidationLine,
+  type MarginTiers,
 } from './liquidation';
 import { whaleBook } from '../test/fixtures';
 
@@ -166,7 +169,7 @@ describe('liquidationLines', () => {
     const blanked = box();
     blanked.positions[0] = { ...blanked.positions[0], markPrice: '' };
     const view = liquidationLines(account(), blanked)!;
-    expect(view).toEqual({ lines: [], far: [] });
+    expect(view).toEqual({ lines: [], far: [], unknown: [{ base: 'ETH', venue: 'CrossEx', sinceMs: null }] });
     expect(lineFor(view, 'ETH')).toBeNull();
     expect(liquidationSides(account(), blanked, 'ETH')).toEqual({ down: null, up: null });
   });
@@ -186,7 +189,11 @@ describe('liquidationLines', () => {
         };
         const view = liquidationLines(whaleAccount, blanked)!;
         expect(lineFor(view, 'ETH')).toBeNull();
-        expect(view).toEqual({ lines: full.lines.filter((l) => l.base !== 'ETH'), far: full.far });
+        expect(view).toEqual({
+          lines: full.lines.filter((l) => l.base !== 'ETH'),
+          far: full.far,
+          unknown: [{ base: 'ETH', venue: symbol.startsWith('HYPERLIQUID') ? 'Hyperliquid' : 'CrossEx', sinceMs: null }],
+        });
         expect(liquidationSides(whaleAccount, blanked, 'ETH')).toEqual({ down: null, up: null });
       }
     }
@@ -202,10 +209,10 @@ describe('liquidationLines', () => {
     wide.positions[1].symbol = 'BINANCE_FUTURE_ETH_USDT';
     wide.exposure[0].legs[1] = { ...wide.exposure[0].legs[1], symbol: 'BINANCE_FUTURE_ETH_USDT', exchange: 'BINANCE', quote: 'USDT' };
     const far = liquidationLines(account({ marginBalance: '30000' }), wide);
-    expect(far).toEqual({ lines: [], far: ['ETH'] });
+    expect(far).toEqual({ lines: [], far: ['ETH'], unknown: [] });
     expect(lineFor(far!, 'eth')).toBe('far');
     expect(lineFor(far!, 'HYPE')).toBeNull();
-    expect(liquidationLines(account(), { positions: [], exposure: [] })).toEqual({ lines: [], far: [] });
+    expect(liquidationLines(account(), { positions: [], exposure: [] })).toEqual({ lines: [], far: [], unknown: [] });
     expect(liquidationLines(account({ marginBalance: 'n/a' }), box())).toBeNull();
     expect(liquidationLines(account({ maintenanceMargin: undefined as unknown as string }), box())).toBeNull();
     expect(nearestLiquidation(account({ marginBalance: 'n/a' }), box())).toBeNull();
@@ -338,5 +345,118 @@ describe('formatting', () => {
     expect(describeLine({ base: 'ETH', venue: 'CrossEx', side: null, price: 1840, move: -0.2 })).toBe(
       'Gate liquidates your account if ETH falls to about $1,840 (-20%). This assumes ETH moves the same on every venue and other coins do not move.',
     );
+  });
+});
+
+const HYPE_GATE_TIERS = [
+  { from: 0, rate: 0.015, deduction: 0 },
+  { from: 200_000, rate: 0.018, deduction: 600 },
+  { from: 300_000, rate: 0.02, deduction: 1_200 },
+  { from: 500_000, rate: 0.025, deduction: 3_700 },
+  { from: 1_000_000, rate: 0.08, deduction: 58_700 },
+  { from: 6_000_000, rate: 0.1, deduction: 178_700 },
+];
+
+const HYPE_TIERS: MarginTiers = {
+  GATE_FUTURE_HYPE_USDT: HYPE_GATE_TIERS,
+  HYPERLIQUID_FUTURE_HYPE_USDC: [{ from: 0, rate: 0.05, deduction: 0 }],
+};
+
+const hypeBox = (leg: number, gateMm: number): PositionsResponse => ({
+  positions: [
+    position('GATE_FUTURE_HYPE_USDT', { positionValue: String(leg), markPrice: '40', maintenanceMargin: String(gateMm) }),
+    position('HYPERLIQUID_FUTURE_HYPE_USDC', { positionValue: String(leg), markPrice: '40', maintenanceMargin: String(leg * 0.05) }),
+  ],
+  exposure: [
+    group('HYPE', [
+      { symbol: 'GATE_FUTURE_HYPE_USDT', exchange: 'GATE', quote: 'USDT', side: 'LONG', qty: leg / 40, value: leg },
+      { symbol: 'HYPERLIQUID_FUTURE_HYPE_USDC', exchange: 'HYPERLIQUID', quote: 'USDC', side: 'SHORT', qty: leg / 40, value: leg },
+    ]),
+  ],
+});
+
+const hypeAccount = (capital: number, maintenance: number): CrossexAccount =>
+  account({
+    marginBalance: String(capital),
+    maintenanceMargin: String(maintenance),
+    assets: [
+      { coin: 'USDT', exchangeType: 'CROSSEX', balance: String(capital), equity: String(capital), availableBalance: String(capital), upnl: '0', liability: '0' },
+      { coin: 'USDC', exchangeType: 'HYPERLIQUID', balance: '0', equity: '0', availableBalance: '0', upnl: '0', liability: '0' },
+    ],
+  });
+
+describe("Gate's maintenance margin tiers", () => {
+  it('charges the same at the tier edge from either side: Gate HYPE steps to 8% at $1,000,000', () => {
+    expect(maintenanceAt(HYPE_GATE_TIERS, 1_000_000)).toBeCloseTo(21_300, 6);
+    expect(maintenanceAt(HYPE_GATE_TIERS, 999_999)).toBeCloseTo(21_299.975, 3);
+    expect(maintenanceAt(HYPE_GATE_TIERS, 1_000_001)).toBeCloseTo(21_300.08, 2);
+    expect(maintenanceAt(HYPE_GATE_TIERS, 6_000_000)).toBeCloseTo(421_300, 6);
+    expect(maintenanceAt([], 1_000_000)).toBe(0);
+  });
+
+  it('pulls the line in on a $400,000 account whose Gate HYPE leg crosses the $1,000,000 tier', () => {
+    const acc = hypeAccount(400_000, 52_550);
+    const box = hypeBox(750_000, 15_050);
+    expect(lines(acc, box)[0].price).toBeCloseTo(148.96, 1);
+    expect(lines(acc, box, {}, HYPE_TIERS)[0].price).toBeCloseTo(123.76, 1);
+  });
+
+  it('pulls the line in on a $6,000,000 account, where every dollar of the move is charged at 10%', () => {
+    const acc = hypeAccount(6_000_000, 721_300);
+    const box = hypeBox(6_000_000, 421_300);
+    expect(lines(acc, box)[0].price).toBeCloseTo(199.8, 1);
+    expect(lines(acc, box, {}, HYPE_TIERS)[0].price).toBeCloseTo(180.77, 1);
+  });
+
+  it('keeps the flat line when the table has no row for the coin', () => {
+    const acc = hypeAccount(400_000, 52_550);
+    const box = hypeBox(750_000, 15_050);
+    expect(lines(acc, box, {}, {})[0].price).toBeCloseTo(lines(acc, box)[0].price, 6);
+    expect(lines(acc, box, {}, { GATE_FUTURE_ETH_USDT: HYPE_GATE_TIERS })[0].price).toBeCloseTo(
+      lines(acc, box)[0].price,
+      6,
+    );
+  });
+
+  it('gives the Telegram side the same tiered line as the card', () => {
+    const acc = hypeAccount(400_000, 52_550);
+    const box = hypeBox(750_000, 15_050);
+    expect(liquidationSides(acc, box, 'HYPE', HYPE_TIERS)!.up!.price).toBeCloseTo(
+      lines(acc, box, {}, HYPE_TIERS)[0].price,
+      6,
+    );
+  });
+});
+
+describe('a coin with no usable mark', () => {
+  const blind = (): PositionsResponse => {
+    const b = box();
+    b.positions[1] = position('HYPERLIQUID_FUTURE_ETH_USDC', {
+      positionValue: '250000',
+      markPrice: '',
+      maintenanceMargin: '1250',
+    });
+    return b;
+  };
+
+  it('names the coin, the venue of the leg and the time, instead of dropping it', () => {
+    const view = liquidationLines(account(), blind())!;
+    expect(view.lines).toEqual([]);
+    expect(view.unknown).toEqual([{ base: 'ETH', venue: 'Hyperliquid', sinceMs: null }]);
+  });
+
+  it('carries the time the server last had a price for that leg', () => {
+    const positions = blind();
+    const since = new Date(2026, 8, 21, 14, 32).getTime();
+    (positions.positions[1] as unknown as { markStaleSinceMs: number }).markStaleSinceMs = since;
+    const view = liquidationLines(account(), positions)!;
+    expect(view.unknown[0].sinceMs).toBe(since);
+    expect(unknownLabel({ venue: view.unknown[0].venue, sinceMs: since })).toBe(
+      'No liquidation estimate: Gate has not sent a price for the Hyperliquid leg since 14:32.',
+    );
+  });
+
+  it('leaves a priced coin out of the unknown list', () => {
+    expect(liquidationLines(account(), box())!.unknown).toEqual([]);
   });
 });

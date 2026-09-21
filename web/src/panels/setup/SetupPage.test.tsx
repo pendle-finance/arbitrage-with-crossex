@@ -16,6 +16,8 @@ const PASTED = `0x3f2a${'1'.repeat(32)}91c0`;
 const OTHER = `0x5c1f${'2'.repeat(32)}a2e0`;
 const LINK_URL = 'https://boros-bot-notification.pendle.finance/alerts?crossex=abc123';
 const BOT_DOWN = 'Telegram alerts are not available yet. Try again later.';
+const ALERTS_URL = 'https://boros-bot-notification.pendle.finance/alerts';
+const BOT_UNREACHABLE = 'Could not reach the bot. Try again, or remove this terminal on the Boros alerts page.';
 
 const approveAgent = vi.fn(async () => ({ txHash: '0xtx' }));
 vi.mock('../../lib/borosAgentApi', () => ({
@@ -23,12 +25,13 @@ vi.mock('../../lib/borosAgentApi', () => ({
   approveAgent,
 }));
 
-const connectedTelegram = (): TelegramInfo =>
+const connectedTelegram = (over: Partial<TelegramInfo> = {}): TelegramInfo =>
   telegramInfo({
     connected: true,
     state: 'connected',
     settings: { liquidation: true, interest: true },
     lastSyncAt: Date.now() - 12_000,
+    ...over,
   });
 
 const trackedInStorage = (): unknown => JSON.parse(localStorage.getItem('crossex.strategy.v1') ?? 'null');
@@ -263,9 +266,9 @@ describe('SetupPage · Telegram alerts', () => {
     await screen.findByRole('button', { name: 'Set up ↗' });
     await user.hover(screen.getByText('interest price'));
 
-    expect(await screen.findByText('USDT CrossEx · equity under $0')).toBeInTheDocument();
-    expect(screen.getByText('USDC Lighter · equity under $0')).toBeInTheDocument();
-    expect(screen.getByText('USDC Hyperliquid · equity under -$10,000')).toBeInTheDocument();
+    expect(await screen.findByText('USDT CrossEx wallet · equity under $0')).toBeInTheDocument();
+    expect(screen.getByText('USDC Lighter wallet · equity under $0')).toBeInTheDocument();
+    expect(screen.getByText('USDC Hyperliquid wallet · equity under -$10,000')).toBeInTheDocument();
   });
 
   it('waiting state', async () => {
@@ -408,19 +411,23 @@ describe('setup rows in Settings', () => {
     expect(screen.getByRole('button', { name: action })).toBeInTheDocument();
   });
 
-  it('sync failed names both times', async () => {
+  it.each([
+    ['the bot did not answer', 'The Telegram bot did not answer: fetch failed'],
+    ['the terminal could not read Gate', 'Gate did not answer.'],
+    ['the bot refused a stale sync', 'syncedAt is not newer than the last sync'],
+  ])('sync failed names both times when %s', async (_cause, message) => {
     mockWorld({
       telegram: telegramInfo({
         connected: true,
         state: 'connected',
         settings: { liquidation: true, interest: true },
         lastSyncAt: at(11, 40),
-        lastSyncError: { at: at(14, 2), message: 'timeout' },
+        lastSyncError: { at: at(14, 2), message },
       }),
     });
     renderWithClient(<TelegramRow {...settingsRow()} />);
     expect(
-      await screen.findByText('The bot did not answer at 14:02. Alerts still use the sync from 11:40. Retrying.'),
+      await screen.findByText('Last sync failed at 14:02. Alerts still use the sync from 11:40. Retrying.'),
     ).toBeInTheDocument();
   });
 
@@ -460,17 +467,42 @@ describe('setup rows in Settings', () => {
     expect(trackedInStorage()).toEqual({ address: null });
   });
 
-  it('a refused disconnect shows the server message', async () => {
+  it('a disconnect the bot could not answer keeps the row connected', async () => {
     const user = userEvent.setup();
     mockWorld({ telegram: connectedTelegram() });
     server.use(
       http.delete('/api/telegram', () =>
-        HttpResponse.json({ ok: false, error: { category: 'network', message: BOT_DOWN, retryable: true } }, { status: 503 }),
+        HttpResponse.json(
+          { ok: false, error: { category: 'network', message: BOT_UNREACHABLE, retryable: true } },
+          { status: 503 },
+        ),
       ),
     );
     renderWithClient(<TelegramRow {...settingsRow({ open: true })} />);
     await user.click(await screen.findByRole('button', { name: 'Disconnect this terminal' }));
-    expect(await screen.findByText(BOT_DOWN)).toBeInTheDocument();
+
+    expect((await screen.findByRole('alert')).textContent).toBe(BOT_UNREACHABLE);
+    expect(screen.getByRole('link', { name: 'Boros alerts page' })).toHaveAttribute('href', ALERTS_URL);
+    expect(screen.getByRole('button', { name: 'Disconnect this terminal' })).toBeInTheDocument();
+  });
+
+  it('a disconnect error links to the alerts page the API configured', async () => {
+    const user = userEvent.setup();
+    const STAGING_ALERTS_URL = 'https://staging.boros-bot.example/alerts';
+    mockWorld({ telegram: connectedTelegram({ alertsPageUrl: STAGING_ALERTS_URL }) });
+    server.use(
+      http.delete('/api/telegram', () =>
+        HttpResponse.json(
+          { ok: false, error: { category: 'network', message: BOT_UNREACHABLE, retryable: true } },
+          { status: 503 },
+        ),
+      ),
+    );
+    renderWithClient(<TelegramRow {...settingsRow({ open: true })} />);
+    await user.click(await screen.findByRole('button', { name: 'Disconnect this terminal' }));
+
+    expect(await screen.findByRole('alert')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Boros alerts page' })).toHaveAttribute('href', STAGING_ALERTS_URL);
   });
 
   it('unknown settings read as alerts off, not both on', async () => {

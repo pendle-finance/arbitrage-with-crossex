@@ -45,6 +45,7 @@ import {
 import { normalizeVenue, type PerpPositionLike } from '../../core/boros/venue';
 import { isSupportedCoin, SUPPORTED_COINS } from '../../core/coins';
 import { classifyGateError, CoreError } from '../../core/errors';
+import { rememberMarks } from '../../core/marks';
 import { parseSymbol } from '../../core/numbers';
 import type { AppDeps } from '../app';
 import { TTL } from '../cache';
@@ -53,6 +54,9 @@ import { LedgerStore } from '../ledgerStore';
 import { earliestSupportedOpenMs, TrackingStartFile } from '../trackingStart';
 
 const EVM_ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
+
+/** Boros allows 200 computing units per IP per minute. */
+export const BOROS_LIVE_TTL_MS = 60_000;
 
 // The venue pages newest-first at up to 1,000 rows; 100 pages is the same
 // ceiling the persisted interest ledger uses. With `from` set to the window
@@ -398,7 +402,7 @@ export function assetViewRoutes(deps: AppDeps) {
     if (running) return running;
     const { value } = await deps.cache.get(
       `boros:settlements:${address}`,
-      TTL.boros,
+      BOROS_LIVE_TTL_MS,
       () => syncHead(address, floorSec),
       { fresh },
     );
@@ -456,7 +460,7 @@ export function assetViewRoutes(deps: AppDeps) {
           async () => (await deps.getClients().crossEx.listCrossexPositions()).body,
           { fresh },
         );
-        perpPositions = value as PerpPositionLike[];
+        perpPositions = rememberMarks(value as PerpPositionLike[]).rows;
       } catch (err) {
         perpAvailable = false;
         const category = classifyGateError(err).category;
@@ -571,7 +575,7 @@ export function assetViewRoutes(deps: AppDeps) {
                 const key = `boros:txns:${marketAcc}:${marketId}:${live ? 'live' : 'past'}`;
                 const { value } = await deps.cache.get(
                   key,
-                  live ? TTL.boros : TTL.borosHistory,
+                  live ? BOROS_LIVE_TTL_MS : TTL.borosHistory,
                   async () => {
                     const read = await fetchBorosTransactions(fetchImpl, marketAcc, marketId, {
                       pace,

@@ -1,5 +1,5 @@
-import type { CrossexAccount, PositionsResponse } from '../api/types';
-import { fmtUsd, num, WALLET_SHORT } from './fmt';
+import type { CrossexAccount, CrossexPosition, PositionsResponse } from '../api/types';
+import { fmtClock, fmtUsd, num, WALLET_SHORT } from './fmt';
 
 /**
  * Where the account liquidates if ONE coin moves and every other coin holds
@@ -15,8 +15,9 @@ import { fmtUsd, num, WALLET_SHORT } from './fmt';
  * that adds 10% of itself to maintenance margin.
  *
  * Both curves are anchored on Gate's own current figures and only the CHANGE
- * is modelled, so tiered rates and rounding on the venue side cancel out at
- * the mark.
+ * is modelled. The change in a leg's maintenance margin follows Gate's risk
+ * limit tiers when the table for that symbol is known, and the flat rate Gate
+ * charges today when it is not.
  */
 export interface LiquidationLine {
   base: string;
@@ -38,6 +39,27 @@ const BORROW_MM = 0.1;
 export const F_MAX = 10;
 export const F_MIN = 0.02;
 
+/** Gate's quick_cal_amount is a deduction, not a charge: on a live read of /crossex/rule/risk_limits on 2026-09-21, HYPE tier 4 and tier 5 both give $21,300 at $1M. */
+export interface MarginTier {
+  from: number;
+  rate: number;
+  deduction: number;
+}
+
+export type MarginTiers = Readonly<Record<string, readonly MarginTier[]>>;
+
+export function maintenanceAt(tiers: readonly MarginTier[], notional: number): number {
+  if (tiers.length === 0) return 0;
+  const row = tiers.reduce((best, t) => (t.from <= notional && t.from >= best.from ? t : best), tiers[0]);
+  return Math.max(0, notional * row.rate - row.deduction);
+}
+
+export interface LiquidationUnknown {
+  base: string;
+  venue: string;
+  sinceMs: number | null;
+}
+
 export function gateNumber(raw: string | number | undefined | null): number | null {
   if (raw === undefined || raw === null) return null;
   if (typeof raw === 'string' && raw.trim() === '') return null;
@@ -53,6 +75,7 @@ interface Leg {
   value: number;
   mm: number;
   mark: number;
+  tiers?: readonly MarginTier[];
 }
 
 const USDC_WALLET_VENUES: readonly string[] = ['HYPERLIQUID', 'LIGHTER'];
@@ -61,10 +84,15 @@ function walletOf(exchange: string): string {
   return USDC_WALLET_VENUES.includes(exchange) ? `USDC/${exchange}` : 'USDT/CROSSEX';
 }
 
-function legsOf(positions: PositionsResponse): Leg[] {
+function staleSinceOf(p: CrossexPosition): number | null {
+  const ms = gateNumber((p as { markStaleSinceMs?: number }).markStaleSinceMs);
+  return ms !== null && ms > 0 ? ms : null;
+}
+
+function legsOf(positions: PositionsResponse, tiers: MarginTiers): { legs: Leg[]; unknown: LiquidationUnknown[] } {
   const bySymbol = new Map(positions.positions.map((p) => [p.symbol, p]));
   const legs: Leg[] = [];
-  const unpriced = new Set<string>();
+  const unpriced = new Map<string, LiquidationUnknown>();
   for (const g of positions.exposure) {
     for (const l of g.legs) {
       const p = bySymbol.get(l.symbol);
@@ -72,7 +100,13 @@ function legsOf(positions: PositionsResponse): Leg[] {
       const mark = gateNumber(p.markPrice);
       const mm = gateNumber(p.maintenanceMargin);
       if (mark === null || mark <= 0 || mm === null || mm < 0) {
-        unpriced.add(g.base);
+        if (!unpriced.has(g.base)) {
+          unpriced.set(g.base, {
+            base: g.base,
+            venue: WALLET_SHORT[walletOf(l.exchange)] ?? l.exchange,
+            sinceMs: staleSinceOf(p),
+          });
+        }
         continue;
       }
       legs.push({
@@ -83,10 +117,11 @@ function legsOf(positions: PositionsResponse): Leg[] {
         value: l.value,
         mm,
         mark,
+        tiers: tiers[l.symbol],
       });
     }
   }
-  return legs.filter((l) => !unpriced.has(l.base));
+  return { legs: legs.filter((l) => !unpriced.has(l.base)), unknown: [...unpriced.values()] };
 }
 
 /** Bisect g on [lo, hi] where g(lo) > 0 >= g(hi) or the reverse. */
@@ -103,14 +138,25 @@ function root(g: (f: number) => number, lo: number, hi: number): number {
 
 interface MarginModel {
   legs: Leg[];
+  unknown: LiquidationUnknown[];
   gapOf: (mine: Leg[]) => (f: number) => number;
 }
 
-function marginModel(acc: CrossexAccount, positions: PositionsResponse, shift: WalletShift): MarginModel | null {
+function mmChange(l: Leg, f: number): number {
+  if (l.tiers === undefined || l.tiers.length === 0) return l.mm * (f - 1);
+  return maintenanceAt(l.tiers, l.value * f) - maintenanceAt(l.tiers, l.value);
+}
+
+function marginModel(
+  acc: CrossexAccount,
+  positions: PositionsResponse,
+  shift: WalletShift,
+  tiers: MarginTiers,
+): MarginModel | null {
   const marginBalance = gateNumber(acc.marginBalance);
   const maintenance = gateNumber(acc.maintenanceMargin);
   if (marginBalance === null || maintenance === null) return null;
-  const legs = legsOf(positions);
+  const { legs, unknown } = legsOf(positions, tiers);
 
   const equityNow = new Map<string, number>();
   for (const a of acc.assets) {
@@ -128,7 +174,7 @@ function marginModel(acc: CrossexAccount, positions: PositionsResponse, shift: W
     (f: number): number => {
       const d = f - 1;
       const upnl = mine.reduce((s, l) => s + l.sign * l.value * d, 0);
-      const mm = mine.reduce((s, l) => s + l.mm * d, 0);
+      const mm = mine.reduce((s, l) => s + mmChange(l, f), 0);
       const liability = liabilityOf(
         (w) =>
           (equityNow.get(w) ?? 0) +
@@ -137,7 +183,7 @@ function marginModel(acc: CrossexAccount, positions: PositionsResponse, shift: W
       );
       return marginBalance + upnl - (maintenance + mm + BORROW_MM * (liability - liabilityNow));
     };
-  return { legs, gapOf };
+  return { legs, unknown, gapOf };
 }
 
 function crossings(g: (f: number) => number): { down: number | null; up: number | null } {
@@ -164,6 +210,7 @@ function lineAt(mine: Leg[], f: number, losingSign: 1 | -1): { line: Liquidation
 export interface LiquidationView {
   lines: LiquidationLine[];
   far: string[];
+  unknown: LiquidationUnknown[];
 }
 
 /** One line per coin held. Null when Gate's margin figures are not numbers:
@@ -172,8 +219,9 @@ export function liquidationLines(
   acc: CrossexAccount,
   positions: PositionsResponse,
   shift: WalletShift = {},
+  tiers: MarginTiers = {},
 ): LiquidationView | null {
-  const model = marginModel(acc, positions, shift);
+  const model = marginModel(acc, positions, shift, tiers);
   if (model === null) return null;
 
   const lines: LiquidationLine[] = [];
@@ -189,7 +237,7 @@ export function liquidationLines(
     const f = candidates.reduce((a, b) => (Math.abs(a - 1) <= Math.abs(b - 1) ? a : b));
     lines.push(lineAt(mine, f, f > 1 ? -1 : 1).line);
   }
-  return { lines: lines.sort((a, b) => Math.abs(a.move) - Math.abs(b.move)), far };
+  return { lines: lines.sort((a, b) => Math.abs(a.move) - Math.abs(b.move)), far, unknown: model.unknown };
 }
 
 export interface LiquidationSide extends LiquidationLine {
@@ -205,8 +253,9 @@ export function liquidationSides(
   acc: CrossexAccount,
   positions: PositionsResponse,
   base: string,
+  tiers: MarginTiers = {},
 ): LiquidationSides | null {
-  const model = marginModel(acc, positions, {});
+  const model = marginModel(acc, positions, {}, tiers);
   if (model === null) return null;
   const upper = base.toUpperCase();
   const mine = model.legs.filter((l) => l.base.toUpperCase() === upper);
@@ -231,9 +280,10 @@ export function nearestLiquidation(
   acc: CrossexAccount | undefined,
   positions: PositionsResponse | undefined,
   shift?: WalletShift,
+  tiers: MarginTiers = {},
 ): LiquidationLine | null {
   if (!acc || !positions) return null;
-  return liquidationLines(acc, positions, shift)?.lines[0] ?? null;
+  return liquidationLines(acc, positions, shift, tiers)?.lines[0] ?? null;
 }
 
 /** `+37%`, `-20%`. Whole percents: the line is a model, not a quote. */
@@ -258,4 +308,8 @@ export function describeLine(line: LiquidationLine): string {
   const rule = `This assumes ${line.base} moves the same on every venue and other coins do not move.`;
   const leg = line.side === null ? '' : ` Your ${line.base} ${line.side} on ${line.venue} loses in this move.`;
   return `${lead} ${rule}${leg}`;
+}
+
+export function unknownLabel(unknown: { venue: string; sinceMs: number }): string {
+  return `No liquidation estimate: Gate has not sent a price for the ${unknown.venue} leg since ${fmtClock(unknown.sinceMs)}.`;
 }

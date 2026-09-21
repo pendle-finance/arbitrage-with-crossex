@@ -1,12 +1,15 @@
 import { readFileSync } from 'node:fs';
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import type { CrossexAccount, CrossexPosition, ExposureGroup, PositionsResponse } from '../../web/src/api/types';
 import { buildTriggerCoins, type TriggerCoin } from '../../src/core/alerts/triggers';
 import { isSupportedCoin, SUPPORTED_COINS } from '../../src/core/coins';
+import { MARK_MEMORY_MS, rememberMarks, resetMarkMemory } from '../../src/core/marks';
 
 const dir = new URL('../fixtures/owner-2026-09-18/', import.meta.url);
 const account = JSON.parse(readFileSync(new URL('account.json', dir), 'utf8')) as CrossexAccount;
 const positions = JSON.parse(readFileSync(new URL('positions.json', dir), 'utf8')) as PositionsResponse;
+
+beforeEach(resetMarkMemory);
 
 function ethOf(coins: TriggerCoin[]): TriggerCoin {
   const eth = coins.find((c) => c.coin === 'ETH');
@@ -148,19 +151,48 @@ describe('buildTriggerCoins on a book that liquidates either way', () => {
     expect(liquidation.down?.price).toBeCloseTo(100 * (1 - 850 / 1800), 2);
   });
 
-  it('sends no liquidation trigger for a coin with a blank mark on one leg, and still lists its legs', () => {
+  it('sends no liquidation trigger for a coin whose leg has never had a mark, and still lists its legs', () => {
     for (const symbol of ['GATE_FUTURE_ETH_USDT', 'HYPERLIQUID_FUTURE_ETH_USDC']) {
+      resetMarkMemory();
       const blanked: PositionsResponse = {
         ...book,
         positions: book.positions.map((p) => (p.symbol === symbol ? { ...p, markPrice: '' } : p)),
       };
       const eth = ethOf(buildTriggerCoins(acc, blanked));
       expect(eth.liquidation).toEqual({ down: null, up: null });
+      expect(eth.liquidationUnknown).toBe(true);
       expect(eth.legs).toEqual([
         { venue: 'GATE', side: 'short' },
         { venue: 'HYPERLIQUID', side: 'long' },
       ]);
     }
+  });
+
+  it('keeps the line on the last price Gate sent when a mark goes blank inside 60 s', () => {
+    const blanked: PositionsResponse = {
+      ...book,
+      positions: book.positions.map((p) =>
+        p.symbol === 'GATE_FUTURE_ETH_USDT' ? { ...p, markPrice: '' } : p,
+      ),
+    };
+    rememberMarks(book.positions, Date.now() - (MARK_MEMORY_MS - 5_000));
+    const eth = ethOf(buildTriggerCoins(acc, blanked));
+    expect(eth.liquidationUnknown).toBeUndefined();
+    expect(eth.liquidation.up?.price).toBeCloseTo(100 * (1 + 850 / 2200), 2);
+  });
+
+  it('says the liquidation is unknown once the last price is over 60 s old', () => {
+    const blanked: PositionsResponse = {
+      ...book,
+      positions: book.positions.map((p) =>
+        p.symbol === 'GATE_FUTURE_ETH_USDT' ? { ...p, markPrice: '' } : p,
+      ),
+    };
+    rememberMarks(book.positions, Date.now() - (MARK_MEMORY_MS + 5_000));
+    const eth = ethOf(buildTriggerCoins(acc, blanked));
+    expect(eth.liquidationUnknown).toBe(true);
+    expect(eth.liquidation).toEqual({ down: null, up: null });
+    expect(eth.legs.length).toBe(2);
   });
 
   it('prices interest on both sides of the same book', () => {
@@ -169,5 +201,57 @@ describe('buildTriggerCoins on a book that liquidates either way', () => {
     expect(interest.up?.price).toBeCloseTo(102.5, 6);
     expect(interest.down?.wallet).toBe('HYPERLIQUID');
     expect(interest.down?.price).toBeCloseTo(47.5, 6);
+  });
+});
+
+describe('buildTriggerCoins with Gate risk limit tiers', () => {
+  const template = positions.positions[0];
+  const asset = account.assets[0];
+  const acc: CrossexAccount = {
+    ...account,
+    marginBalance: '400000',
+    maintenanceMargin: '52550',
+    assets: [
+      { ...asset, coin: 'USDT', exchangeType: 'CROSSEX', equity: '400000' },
+      { ...asset, coin: 'USDC', exchangeType: 'HYPERLIQUID', equity: '0' },
+    ],
+  };
+  const book: PositionsResponse = {
+    positions: [
+      { ...template, symbol: 'GATE_FUTURE_HYPE_USDT', markPrice: '40', maintenanceMargin: '15050' },
+      { ...template, symbol: 'HYPERLIQUID_FUTURE_HYPE_USDC', markPrice: '40', maintenanceMargin: '37500' },
+    ],
+    exposure: [
+      {
+        ...positions.exposure[0],
+        base: 'HYPE',
+        legs: [
+          { symbol: 'GATE_FUTURE_HYPE_USDT', exchange: 'GATE', quote: 'USDT', side: 'LONG', qty: 18_750, value: 750_000 },
+          { symbol: 'HYPERLIQUID_FUTURE_HYPE_USDC', exchange: 'HYPERLIQUID', quote: 'USDC', side: 'SHORT', qty: 18_750, value: 750_000 },
+        ],
+      },
+    ],
+  };
+  const tiers = {
+    GATE_FUTURE_HYPE_USDT: [
+      { from: 0, rate: 0.015, deduction: 0 },
+      { from: 200_000, rate: 0.018, deduction: 600 },
+      { from: 300_000, rate: 0.02, deduction: 1_200 },
+      { from: 500_000, rate: 0.025, deduction: 3_700 },
+      { from: 1_000_000, rate: 0.08, deduction: 58_700 },
+      { from: 6_000_000, rate: 0.1, deduction: 178_700 },
+    ],
+    HYPERLIQUID_FUTURE_HYPE_USDC: [{ from: 0, rate: 0.05, deduction: 0 }],
+  };
+
+  const hypeOf = (coins: TriggerCoin[]): TriggerCoin => {
+    const hype = coins.find((c) => c.coin === 'HYPE');
+    if (!hype) throw new Error('no HYPE entry');
+    return hype;
+  };
+
+  it('sends the tiered line, nearer than the flat one, on a $400,000 account', () => {
+    expect(hypeOf(buildTriggerCoins(acc, book)).liquidation.up?.price).toBeCloseTo(148.96, 1);
+    expect(hypeOf(buildTriggerCoins(acc, book, tiers)).liquidation.up?.price).toBeCloseTo(123.76, 1);
   });
 });

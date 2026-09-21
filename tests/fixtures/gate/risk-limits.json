@@ -2,22 +2,29 @@
   {
     "symbol": "GATE_FUTURE_ETH_USDT",
     "tiers": [
-      {
-        "tier": "1",
-        "min_risk_limit_value": "0",
-        "max_risk_limit_value": "500000",
-        "quick_cal_amount": "0",
-        "leverage_max": "50",
-        "maintenance_rate": "0.005"
-      },
-      {
-        "tier": "2",
-        "min_risk_limit_value": "500000",
-        "max_risk_limit_value": "1000000",
-        "quick_cal_amount": "2500",
-        "leverage_max": "20",
-        "maintenance_rate": "0.01"
-      }
+      { "tier": "1", "min_risk_limit_value": "0", "max_risk_limit_value": "15000000", "quick_cal_amount": "0", "leverage_max": "25", "maintenance_rate": "0.01" },
+      { "tier": "2", "min_risk_limit_value": "15000000", "max_risk_limit_value": "20000000", "quick_cal_amount": "30000", "leverage_max": "25", "maintenance_rate": "0.012" },
+      { "tier": "3", "min_risk_limit_value": "20000000", "max_risk_limit_value": "30000000", "quick_cal_amount": "110000", "leverage_max": "25", "maintenance_rate": "0.016" },
+      { "tier": "4", "min_risk_limit_value": "30000000", "max_risk_limit_value": "50000000", "quick_cal_amount": "230000", "leverage_max": "25", "maintenance_rate": "0.02" },
+      { "tier": "5", "min_risk_limit_value": "50000000", "max_risk_limit_value": "300000000", "quick_cal_amount": "2730000", "leverage_max": "5", "maintenance_rate": "0.07" },
+      { "tier": "6", "min_risk_limit_value": "300000000", "max_risk_limit_value": "500000000", "quick_cal_amount": "11730000", "leverage_max": "5", "maintenance_rate": "0.1" }
+    ]
+  },
+  {
+    "symbol": "GATE_FUTURE_HYPE_USDT",
+    "tiers": [
+      { "tier": "1", "min_risk_limit_value": "0", "max_risk_limit_value": "200000", "quick_cal_amount": "0", "leverage_max": "25", "maintenance_rate": "0.015" },
+      { "tier": "2", "min_risk_limit_value": "200000", "max_risk_limit_value": "300000", "quick_cal_amount": "600", "leverage_max": "25", "maintenance_rate": "0.018" },
+      { "tier": "3", "min_risk_limit_value": "300000", "max_risk_limit_value": "500000", "quick_cal_amount": "1200", "leverage_max": "25", "maintenance_rate": "0.02" },
+      { "tier": "4", "min_risk_limit_value": "500000", "max_risk_limit_value": "1000000", "quick_cal_amount": "3700", "leverage_max": "25", "maintenance_rate": "0.025" },
+      { "tier": "5", "min_risk_limit_value": "1000000", "max_risk_limit_value": "6000000", "quick_cal_amount": "58700", "leverage_max": "5", "maintenance_rate": "0.08" },
+      { "tier": "6", "min_risk_limit_value": "6000000", "max_risk_limit_value": "7000000", "quick_cal_amount": "178700", "leverage_max": "5", "maintenance_rate": "0.1" }
+    ]
+  },
+  {
+    "symbol": "HYPERLIQUID_FUTURE_HYPE_USDC",
+    "tiers": [
+      { "tier": "1", "min_risk_limit_value": "0", "max_risk_limit_value": "20000000", "quick_cal_amount": "0", "leverage_max": "10", "maintenance_rate": "0.05" }
     ]
   }
 ]

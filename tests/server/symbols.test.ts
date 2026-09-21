@@ -110,7 +110,7 @@ describe('GET /api/symbols', () => {
     expect(data.symbol).toBe('GATE_FUTURE_ETH_USDT');
     expect(data.exchange).toBe('GATE');
     expect(data.tickSize).toBe('0.01');
-    expect(data.leverageMax).toBe(50); // max over the tiers' leverage_max (50, 20)
+    expect(data.leverageMax).toBe(25); // max over the tiers' leverage_max (25 on tiers 1-4, 5 on 5-6)
   });
 
   it('GET /api/symbols/:symbol unknown → 400 symbol-invalid envelope', async () => {

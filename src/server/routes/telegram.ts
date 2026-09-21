@@ -3,13 +3,14 @@ import type { TelegramInfo } from '../../../web/src/api/types';
 import { CoreError } from '../../core/errors';
 import type { AppDeps } from '../app';
 import { refuse } from '../errorReply';
-import { BotAuthError, type TelegramSettings } from '../telegram/botClient';
+import { BotAuthError, botBaseUrl, BotUnavailableError, type TelegramSettings } from '../telegram/botClient';
 import { deleteTelegramKey, readTelegramKey } from '../telegram/keyFile';
 import type { TelegramAuth } from '../telegram/status';
 
 const BOT_NOT_AVAILABLE = 'Telegram alerts are not available yet. Try again later.';
 const BOT_SILENT = 'The Telegram bot did not answer. Try again later.';
 const NOT_CONNECTED = 'This terminal is not connected to Telegram alerts. Click Set up to connect it.';
+const BOT_UNREACHABLE = 'Could not reach the bot. Try again, or remove this terminal on the Boros alerts page.';
 const SETTING_NAMES = ['liquidation', 'interest'] as const;
 const FIRST_SYNC_WAIT_MS = 5_000;
 
@@ -62,13 +63,15 @@ export function telegramRoutes(deps: AppDeps) {
     const linkPending = t.link.status().status === 'pending';
     const keyed = hasKey(t);
     const state = stateOf(keyed, linkPending, t.status.auth);
-    if (!keyed) return { connected: false, state, settings: null, lastSyncAt: null, lastSyncError: null };
+    const alertsPageUrl = `${botBaseUrl(process.env)}/alerts`;
+    if (!keyed) return { connected: false, state, settings: null, lastSyncAt: null, lastSyncError: null, alertsPageUrl };
     return {
       connected: state === 'connected',
       state,
       settings: state === 'connected' ? t.status.settings : null,
       lastSyncAt: t.status.lastSyncAt,
       lastSyncError: t.status.lastSyncError,
+      alertsPageUrl,
     };
   };
 
@@ -126,7 +129,18 @@ export function telegramRoutes(deps: AppDeps) {
       t.link.stop();
       await t.link.settled();
       const key = readTelegramKey(deps.dataDir);
-      if (key !== null) await t.bot.deleteTerminal(key.key).catch(() => undefined);
+      if (key !== null) {
+        try {
+          await t.bot.deleteTerminal(key.key);
+        } catch (err) {
+          if (err instanceof BotUnavailableError) return refuse(reply, {
+            code: 503,
+            category: 'network',
+            message: BOT_UNREACHABLE,
+            retryable: true,
+          });
+        }
+      }
       deleteTelegramKey(deps.dataDir);
       t.status.setAuth(null);
       t.status.setSettings(null);

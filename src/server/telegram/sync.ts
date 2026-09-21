@@ -3,6 +3,7 @@ import { buildTriggerCoins, type TriggerCoin } from '../../core/alerts/triggers'
 import type { Clients } from '../../core/clients';
 import { computeExposure } from '../../core/positions';
 import { TTL, type TtlCache } from '../cache';
+import { marginTiersFor } from '../routes/positions';
 import { BotAuthError, type BotClient } from './botClient';
 import { readTelegramKey } from './keyFile';
 import type { TelegramStatus } from './status';
@@ -33,10 +34,17 @@ export async function readTriggerCoins(deps: { cache: TtlCache; getClients: () =
     deps.cache.get('account', TTL.live, async () => (await crossEx.getCrossexAccount()).body, { fresh: true }),
     deps.cache.get('positions', TTL.live, async () => (await crossEx.listCrossexPositions()).body, { fresh: true }),
   ]);
-  return buildTriggerCoins(account.value as unknown as CrossexAccount, {
-    positions: positions.value as unknown as CrossexPosition[],
-    exposure: computeExposure(positions.value),
-  });
+  const rows = positions.value as unknown as CrossexPosition[];
+  const tiers = await marginTiersFor(
+    deps.cache,
+    rows.map((p) => p.symbol),
+    false,
+  );
+  return buildTriggerCoins(
+    account.value as unknown as CrossexAccount,
+    { positions: rows, exposure: computeExposure(positions.value) },
+    tiers,
+  );
 }
 
 export function createTelegramSync(opts: TelegramSyncOptions): TelegramSync {
