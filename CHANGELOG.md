@@ -3,6 +3,51 @@
 Only substantial releases are listed here — each one bumps `version.json` (which is what the
 in-app update check compares against).
 
+## 1.7.0 — 2026-09-21
+
+TLDR: Roll a 4-legged position into the next maturity from the app, as one all-or-nothing
+batch. Every trade form shares one look, and a Boros order that fails says why on the leg that
+failed.
+
+- **Roll over.** Positions flags a pair inside 10 days of maturity as *ready to roll*, and as a
+  *roll opportunity* when a later maturity pays more than the one you hold; a banner at the top
+  says which pairs and by how much. Roll over opens the pair on every later maturity, priced
+  live, and the review shows the Exit and the Re-entry side by side: what you lock, for how
+  long, what it earns and what it costs today, then each batch's estimated slippage against its
+  own Max, seeded from that market's max rate deviation.
+- **One batch, or nothing.** The old rate legs close and the new ones open in a single batch the
+  venue builds: every order fills whole or the whole roll is refused, so a roll can no longer
+  leave the old legs closed and the new ones half open. The venue previews the batch while you
+  look at it — the hold is blocked, with the reason, when a leg cannot fill whole inside its
+  bound or the account would run short of margin once the old legs are closed. After the hold
+  there are three answers: *Rolled N to <date>*, *Nothing was traded — <why>*, or the rare
+  *the venue did not confirm* — check the position on Boros before sending again.
+- **The roll defaults to a size the book fills whole.** A market order is matched level by
+  level up to its rate bound, and the venue refuses a last level past its own band, so the
+  default size is the depth inside the nearer of the two — not an average that a lumpy book
+  flatters. A refusal for liquidity says how much *does* fill.
+- **Margin the roll is judged on.** *Can it fund?* shows the margin the new legs need against
+  what is spendable before and after the batch, as the venue simulates it — the old legs free
+  theirs first. Two figures fixed: a rolled slice was charged the whole position's Boros margin
+  (rolling 13% read like rolling all of it), and the perp margin behind a slice is now the
+  slice's.
+- **Trade forms share one look.** Order tickets and close forms — CrossEx pair and single, Boros
+  pair and single, close a perp leg, close a Boros leg, close a pair — use the same market
+  picker, size box with the unit inside it, and one Estimate card each.
+- **A Boros failure names its leg and its reason.** A batch the venue refuses says on each leg
+  what stopped it — *Insufficient liquidity*, *Rate Too Far Off*, *Not enough margin* — instead of
+  the first "batch aborted" read as *unknown — check Boros*. An order refused before it was
+  sent, or turned away with a status code, reads as nothing traded, never as "may or may not
+  have filled". The gas top-up that rides with a close now runs after it, so its margin check
+  sees the margin the close frees.
+- **A rate bound outside the venue's band is refused before sending.** An order whose bound
+  falls outside mark ± the market's max rate deviation used to reach the venue and come back
+  *Executed Rate Out of Range*; the form now says so and blocks the hold.
+- **Hide inactive pairs.** On by default, Positions shows only assets with something open; a
+  pair whose every leg has matured hides with the rest.
+- **Smaller things.** The maturity reminder starts 10 days out. The simulation window is
+  tidier, and the roll-over controls sit where the pair's own actions are.
+
 ## 1.6.3 — 2026-09-19
 
 TLDR: Rebalance now clears a borrow after your positions are closed, and moves any amount you

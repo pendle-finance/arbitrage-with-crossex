@@ -1,10 +1,11 @@
 {
-  "version": "1.6.3",
+  "version": "1.7.0",
   "highlights": [
-    "Rebalance clears a borrow after your positions are closed: Clear debt brings every negative wallet to zero",
-    "Custom amount moves what you type from one CrossEx wallet to another",
-    "Every route is listed, with its time and fee side by side, and Spot loop runs until the move is done",
-    "The Rebalance card leads with whichever move is worth doing, and its verdict names it",
-    "A borrow rate the app could not read is said out loud instead of hidden"
+    "Roll over: move a pair into the next maturity from Positions, as one all-or-nothing batch",
+    "The banner says which pairs are ready to roll and which later maturity pays more",
+    "The venue previews the roll: a leg that cannot fill whole, or margin that runs short, blocks the hold",
+    "Can it fund? shows what the new legs need against what is spendable before and after",
+    "Every trade form shares one look: the same market picker, size box and Estimate card",
+    "A Boros order that fails names the leg and the reason; hide inactive pairs is on by default"
   ]
 }
