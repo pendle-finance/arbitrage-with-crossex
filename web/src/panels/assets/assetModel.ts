@@ -195,10 +195,22 @@ export function excludedFraction(ex: Exclusions, key: string, legQty: number): n
  * open perp (perps are never excluded), or an open Boros leg that is not
  * wholly set aside. Hedged or not makes no difference — an unhedged leg is
  * the one most worth seeing. History alone does not make an asset active.
+ *
+ * `nowSec` is required because the chain keeps listing a MATURED leg in
+ * `borosOpen` forever: it hedges nothing and earns nothing, so `deriveAsset`
+ * drops it from the card (same rule, his call 2026-09-09). Reading the raw
+ * list here made an asset whose every leg had matured render as fully closed
+ * and still refuse to hide (his catch 2026-09-21).
  */
-export function assetIsActive(group: Pick<AssetGroup, 'perpOpen' | 'borosOpen'>, ex: Exclusions): boolean {
+export function assetIsActive(
+  group: Pick<AssetGroup, 'perpOpen' | 'borosOpen'>,
+  ex: Exclusions,
+  nowSec: number,
+): boolean {
   if (group.perpOpen.length > 0) return true;
-  return group.borosOpen.some((l) => excludedFraction(ex, borosKey(l.marketId), l.sizeToken) < 1);
+  return group.borosOpen.some(
+    (l) => l.maturity > nowSec && excludedFraction(ex, borosKey(l.marketId), l.sizeToken) < 1,
+  );
 }
 
 /**

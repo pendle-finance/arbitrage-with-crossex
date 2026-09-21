@@ -516,24 +516,42 @@ describe('exclusions and maturity — his 2026-09-09 rules', () => {
 });
 
 describe('assetIsActive', () => {
-  const yuLeg = (marketId: number, sizeToken: number) => ({ marketId, sizeToken }) as never;
+  const NOW = 1_000_000;
+  // A leg is open only while it is UNMATURED, so the fixture dates ahead of NOW.
+  const yuLeg = (marketId: number, sizeToken: number, maturity = NOW + 86_400) =>
+    ({ marketId, sizeToken, maturity }) as never;
   it('an open perp makes the asset active, hedged or not', () => {
-    expect(assetIsActive({ perpOpen: [{} as never], borosOpen: [] }, {})).toBe(true);
+    expect(assetIsActive({ perpOpen: [{} as never], borosOpen: [] }, {}, NOW)).toBe(true);
   });
   it('history alone does not: nothing open is inactive', () => {
-    expect(assetIsActive({ perpOpen: [], borosOpen: [] }, {})).toBe(false);
+    expect(assetIsActive({ perpOpen: [], borosOpen: [] }, {}, NOW)).toBe(false);
   });
   it('an open Boros leg counts unless it is WHOLLY excluded', () => {
     const group = { perpOpen: [], borosOpen: [yuLeg(7, 100)] };
-    expect(assetIsActive(group, {})).toBe(true);
+    expect(assetIsActive(group, {}, NOW)).toBe(true);
     // Half set aside: the other half is still the farm's.
-    expect(assetIsActive(group, { 'boros:7': 50 })).toBe(true);
-    expect(assetIsActive(group, { 'boros:7': 'all' })).toBe(false);
-    expect(assetIsActive(group, { 'boros:7': 100 })).toBe(false);
+    expect(assetIsActive(group, { 'boros:7': 50 }, NOW)).toBe(true);
+    expect(assetIsActive(group, { 'boros:7': 'all' }, NOW)).toBe(false);
+    expect(assetIsActive(group, { 'boros:7': 100 }, NOW)).toBe(false);
     // Another market's exclusion says nothing about this leg.
-    expect(assetIsActive(group, { 'boros:8': 'all' })).toBe(true);
+    expect(assetIsActive(group, { 'boros:8': 'all' }, NOW)).toBe(true);
+  });
+  /**
+   * The chain keeps listing a matured leg in `borosOpen` forever. It hedges
+   * nothing and earns nothing, `deriveAsset` already drops it from the card,
+   * and an asset whose every leg has matured must be able to hide.
+   */
+  it('a MATURED Boros leg does not keep an asset active', () => {
+    expect(assetIsActive({ perpOpen: [], borosOpen: [yuLeg(7, 100, NOW - 1)] }, {}, NOW)).toBe(false);
+    // Its own maturity instant is the edge: settled, so no longer open.
+    expect(assetIsActive({ perpOpen: [], borosOpen: [yuLeg(7, 100, NOW)] }, {}, NOW)).toBe(false);
+    // One live leg beside a matured one still counts.
+    expect(
+      assetIsActive({ perpOpen: [], borosOpen: [yuLeg(7, 100, NOW - 1), yuLeg(8, 100)] }, {}, NOW),
+    ).toBe(true);
   });
 });
+
 
 describe('perpOnlyPairs', () => {
   const perpLeg = (venue: string, side: 'LONG' | 'SHORT', sizeBase: number) => ({

@@ -125,7 +125,7 @@ export function AssetsHome() {
    * 2026-09-20). Not persisted: the default is the right start every time.
    */
   const [hideInactive, setHideInactive] = useState(true);
-  const inactive = derived.filter((a) => !assetIsActive(a.group, prefs.exclusions));
+  const inactive = derived.filter((a) => !assetIsActive(a.group, prefs.exclusions, data?.nowSec ?? 0));
   const shown = hideInactive ? derived.filter((a) => !inactive.includes(a)) : derived;
 
   /* Where each coin's move liquidates the ACCOUNT. Needs margin balance,
