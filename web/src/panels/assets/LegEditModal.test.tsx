@@ -68,7 +68,8 @@ describe('LegEditModal', () => {
         onClose={() => {}}
       />,
     );
-    expect(screen.getByRole('radio', { name: /Include all/ }).closest('label')).toHaveTextContent('· entry pending');
+    expect(screen.getByText(/The farm keeps the whole leg/)).toHaveTextContent('· entry pending');
+    expect(document.body).not.toHaveTextContent('at pending');
   });
 
   it('a Boros leg takes the rate in percent and saves it as a fraction', async () => {

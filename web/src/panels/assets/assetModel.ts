@@ -32,8 +32,13 @@ export const SECONDS_IN_YEAR = 365 * 24 * 3600;
 /** |net|/gross under this is "hedged" — mirrors the exposure feed's 2%. */
 export const HEDGE_TOLERANCE = 0.02;
 
-/** Boros coverage that lapses within this window gets an expiry warning. */
-export const EXPIRY_WARN_SEC = 14 * 24 * 3600;
+/** Boros coverage that lapses within this window gets an expiry warning —
+ * and is the window a pair may be rolled in. 10 days, not the original 14:
+ * his call 2026-09-20. Change it HERE only; the guide copy, the chip and
+ * the tests all read this one number. */
+export const EXPIRY_WARN_SEC = 10 * 24 * 3600;
+/** The same window in days, for copy that has to name it. */
+export const EXPIRY_WARN_DAYS = EXPIRY_WARN_SEC / 86_400;
 
 /** No APR below this capital: annualizing dust yields three-digit noise
  * percentages (−587% on $4.41 of margin) that read as alarms. */
@@ -128,6 +133,31 @@ export function pairBorosCloseLegs(pair: Pick<PairEstimate, 'legs'>, group: Pick
     });
 }
 
+/**
+ * The pair's locked SPREAD: the rate on NOTIONAL — what the receive leg
+ * locks minus what the pay leg locks, net of settlement fees. `lockedAprFwd`
+ * is that same carry over CAPITAL (the leveraged figure the headline shows),
+ * so the spread is recovered from it: carry per year = lockedAprFwd ×
+ * capital; per-leg notional = half the pair's two perp notionals. Null when
+ * either input is missing.
+ */
+export function pairLockedSpread(pair: Pick<PairEstimate, 'lockedAprFwd' | 'capitalUsd' | 'notionalUsd'>): number | null {
+  const perLegNotional = pair.notionalUsd / 2;
+  return pair.lockedAprFwd !== null && perLegNotional > 0
+    ? (pair.lockedAprFwd * pair.capitalUsd) / perLegNotional
+    : null;
+}
+
+/**
+ * A pair whose rate legs mature inside the expiry-warn window and have not
+ * matured yet — what the roll-over banner counts and the pair card flags.
+ * Same window as a venue's `expiresSoon`, read per unit.
+ */
+export function pairCanRoll(pair: Pick<PairEstimate, 'soonestMaturitySec'>, nowSec: number): boolean {
+  const m = pair.soonestMaturitySec;
+  return m > nowSec && m - nowSec < EXPIRY_WARN_SEC;
+}
+
 /** A leg's size in the unit a card displays: coin quantity or dollars. */
 export const sizeIn = (l: { sizeBase: number; notionalUsd: number }, unit: 'base' | 'usd'): number =>
   unit === 'base' ? l.sizeBase : l.notionalUsd;
@@ -158,6 +188,29 @@ export function excludedFraction(ex: Exclusions, key: string, legQty: number): n
   const q = exclusionQty(v);
   if (!(legQty > 0) || q === null) return 0;
   return Math.min(1, q / legQty);
+}
+
+/**
+ * An asset is ACTIVE while it still carries an open leg the farm counts: any
+ * open perp (perps are never excluded), or an open Boros leg that is not
+ * wholly set aside. Hedged or not makes no difference — an unhedged leg is
+ * the one most worth seeing. History alone does not make an asset active.
+ *
+ * `nowSec` is required because the chain keeps listing a MATURED leg in
+ * `borosOpen` forever: it hedges nothing and earns nothing, so `deriveAsset`
+ * drops it from the card (same rule, his call 2026-09-09). Reading the raw
+ * list here made an asset whose every leg had matured render as fully closed
+ * and still refuse to hide (his catch 2026-09-21).
+ */
+export function assetIsActive(
+  group: Pick<AssetGroup, 'perpOpen' | 'borosOpen'>,
+  ex: Exclusions,
+  nowSec: number,
+): boolean {
+  if (group.perpOpen.length > 0) return true;
+  return group.borosOpen.some(
+    (l) => l.maturity > nowSec && excludedFraction(ex, borosKey(l.marketId), l.sizeToken) < 1,
+  );
 }
 
 /**
@@ -405,6 +458,150 @@ export interface PendingLeg {
   /** Signed by side, as PairLegDetail.lockedApr. */
   lockedApr: number | null;
   imUsd: number;
+  /** Fraction of the venue leg (after exclusions) that no unit claimed —
+   * 1 when the whole leg is pending. A close from the ungrouped list is
+   * only offered for a whole leg: the close forms size against the venue
+   * position, and closing all of a leg that is partly paired would break
+   * the pair it belongs to. */
+  share: number;
+}
+
+/**
+ * A perp leg — or the slice of one — that no 4-leg unit claimed: a venue
+ * with no YU behind it, or what is left once its YU ran out. It still
+ * cancels price against the other side's perps, but earns no fixed rate
+ * and pays floating funding on its own.
+ */
+export interface UnpairedPerp {
+  venue: string;
+  side: 'LONG' | 'SHORT';
+  /** The exact CrossEx symbol — the join key to the live position. */
+  symbol: string;
+  sizeBase: number;
+  notionalUsd: number;
+  unit: 'base' | 'usd';
+  imUsd: number;
+  /** As PendingLeg.share. */
+  share: number;
+}
+
+/**
+ * Two unpaired perps that OFFSET each other — a long at one venue, a short
+ * at another — with the rate side missing behind them: the hedge a roll was
+ * missed on, or perps opened ahead of their Boros legs. Price risk is
+ * cancelled; what the unit lacks is one or both YU legs. Grouped so the card
+ * can say exactly that, and offer to open what is missing, instead of
+ * listing four anonymous rows under "ungrouped" (his call 2026-09-20).
+ */
+export interface PerpOnlyPair {
+  longVenue: string;
+  shortVenue: string;
+  /** The two perp SLICES this unit is made of, both sized to `size`. */
+  long: UnpairedPerp;
+  short: UnpairedPerp;
+  /** In the asset's unit (coin quantity, or dollars). */
+  size: number;
+  unit: 'base' | 'usd';
+  /** Both perp slices, as PairEstimate.notionalUsd counts them. */
+  notionalUsd: number;
+  /** Perp margin plus whatever rate leg is already there. */
+  imUsd: number;
+  /** A rate leg ALREADY behind one of the perps (sliced to this unit): the
+   * other side is then the only one missing, at this leg's maturity. Never
+   * both — two pending legs at the same maturity would have formed a pair. */
+  longYu: PendingLeg | null;
+  shortYu: PendingLeg | null;
+  /** What each side still has to open, in the asset's unit (0 = covered). */
+  missingLong: number;
+  missingShort: number;
+}
+
+/** A perp-only pair's two perps as the close form's rows: each SLICE, not
+ * the venue's whole position — Hyperliquid's short may be shared with
+ * another unit, and closing all of it would strip that one's hedge too. */
+export function perpOnlyCloseLegs(pair: Pick<PerpOnlyPair, 'long' | 'short'>): PerpCloseLeg[] {
+  return [pair.long, pair.short].map((l) => ({ symbol: l.symbol, qty: l.sizeBase, venue: l.venue, partial: l.share < 0.9995 }));
+}
+
+/** A pair this small is rounding, not a position: left among the ungrouped. */
+const PERP_ONLY_DUST_USD = 50;
+/** Below this share of its leg, a remainder is rounding and is not listed. */
+const PERP_ONLY_REST_SHARE = 0.005;
+
+/**
+ * Match the unpaired perps into offsetting units, largest first, and hang
+ * any pending rate leg at a matched venue on its unit. Whatever is left —
+ * an unmatched remainder, a YU with no perp — comes back as `restPerps` /
+ * `restYus`, re-scaled, for the ungrouped card.
+ */
+export function perpOnlyPairs(
+  perps: ReadonlyArray<UnpairedPerp>,
+  yus: ReadonlyArray<PendingLeg>,
+): { pairs: PerpOnlyPair[]; restPerps: UnpairedPerp[]; restYus: PendingLeg[] } {
+  const left = new Map<UnpairedPerp, number>(perps.map((l) => [l, sizeIn(l, l.unit)]));
+  const yuLeft = new Map<PendingLeg, number>(yus.map((l) => [l, sizeIn(l, l.unit)]));
+  const slice = <T extends { sizeBase: number; notionalUsd: number; imUsd: number; share: number; unit: 'base' | 'usd' }>(l: T, take: number): T => {
+    const whole = sizeIn(l, l.unit);
+    const f = whole > 0 ? take / whole : 0;
+    return { ...l, sizeBase: l.sizeBase * f, notionalUsd: l.notionalUsd * f, imUsd: l.imUsd * f, share: l.share * f };
+  };
+  const bySize = (a: UnpairedPerp, b: UnpairedPerp) => b.notionalUsd - a.notionalUsd || a.venue.localeCompare(b.venue);
+  const longs = perps.filter((l) => l.side === 'LONG').sort(bySize);
+  const shorts = perps.filter((l) => l.side === 'SHORT').sort(bySize);
+
+  const pairs: PerpOnlyPair[] = [];
+  for (const s of shorts) {
+    for (const l of longs) {
+      if (l.venue === s.venue || l.unit !== s.unit) continue;
+      const take = Math.min(left.get(l) ?? 0, left.get(s) ?? 0);
+      if (!(take > 0)) continue;
+      const long = slice(l, take);
+      const short = slice(s, take);
+      if (long.notionalUsd + short.notionalUsd < PERP_ONLY_DUST_USD) continue;
+      left.set(l, (left.get(l) ?? 0) - take);
+      left.set(s, (left.get(s) ?? 0) - take);
+
+      // A pending rate leg at one of the two venues, on the perp's own side.
+      const yuAt = (venue: string, side: 'LONG' | 'SHORT'): PendingLeg | null => {
+        const found = yus
+          .filter((y) => y.venue === venue && y.side === side && (yuLeft.get(y) ?? 0) > 0)
+          .sort((a, b) => a.maturity - b.maturity)[0];
+        if (!found) return null;
+        const t = Math.min(take, yuLeft.get(found) ?? 0);
+        yuLeft.set(found, (yuLeft.get(found) ?? 0) - t);
+        return slice(found, t);
+      };
+      const longYu = yuAt(l.venue, 'LONG');
+      // Only ONE side may already be there; a second pending leg stays
+      // ungrouped rather than dressing two maturities up as one unit.
+      const shortYu = longYu ? null : yuAt(s.venue, 'SHORT');
+      pairs.push({
+        longVenue: l.venue,
+        shortVenue: s.venue,
+        long,
+        short,
+        size: take,
+        unit: l.unit,
+        notionalUsd: long.notionalUsd + short.notionalUsd,
+        imUsd: long.imUsd + short.imUsd + (longYu?.imUsd ?? 0) + (shortYu?.imUsd ?? 0),
+        longYu,
+        shortYu,
+        missingLong: take - (longYu ? sizeIn(longYu, longYu.unit) : 0),
+        missingShort: take - (shortYu ? sizeIn(shortYu, shortYu.unit) : 0),
+      });
+    }
+  }
+  const restOf = <T extends UnpairedPerp | PendingLeg>(all: ReadonlyArray<T>, m: Map<T, number>): T[] =>
+    all.flatMap((l) => {
+      const rem = m.get(l) ?? 0;
+      const whole = sizeIn(l, l.unit);
+      // A sliver of a leg the units all but consumed (a 325 YU against a
+      // 324.87 perp) is rounding between two venues' sizes, not a loose leg
+      // worth a card of its own: under half a percent of the leg is dropped.
+      if (!(rem > 0) || (whole > 0 && rem / whole < PERP_ONLY_REST_SHARE)) return [];
+      return [rem >= whole ? l : slice(l, rem)];
+    });
+  return { pairs, restPerps: restOf(perps, left), restYus: restOf(yus, yuLeft) };
 }
 
 export interface AssetDerived {
@@ -450,6 +647,8 @@ export interface AssetDerived {
   pairs: PairEstimate[];
   /** YU legs left over once every 4-leg unit is formed (see PendingLeg). */
   pendingLegs: PendingLeg[];
+  /** Perp legs (or slices) left over the same way (see UnpairedPerp). */
+  unpairedPerps: UnpairedPerp[];
 }
 
 // ---------------------------------------------------------------------------
@@ -928,6 +1127,23 @@ export function deriveAsset(
   const shortTotal = shorts.reduce((t, l) => t + legSize(l), 0);
   const pairs: PairEstimate[] = [];
   const pendingLegs: PendingLeg[] = [];
+  const unpairedPerps: UnpairedPerp[] = [];
+  /**
+   * What each YU leg still has to give, drawn down as pairs claim it.
+   * Shared across the whole loop so a leg can never be allocated twice —
+   * the old flat `share` could, whenever the perp shares summed past 1.
+   * Declared outside the pairing block: a book that forms no pair at all
+   * (one perp side, or none) leaves EVERY leg unclaimed, and the ungrouped
+   * list below must still say so.
+   */
+  const yuRemaining = new Map<number, number>(
+    group.borosOpen.map((b) => [
+      b.marketId,
+      yuSize(b) * borosKeepOf(b),
+    ]),
+  );
+  /** Σ share of each perp symbol the pairs claimed — the rest is unpaired. */
+  const perpClaimed = new Map<string, number>();
   /**
    * Every long × short combination, sized L·S / max(ΣL, ΣS): each long is
    * spread over the shorts in proportion and vice versa, no leg is ever
@@ -938,17 +1154,6 @@ export function deriveAsset(
   const pool = Math.max(longTotal, shortTotal);
   if (longs.length > 0 && shorts.length > 0 && pool > 0) {
     const histByMarket = new Map(group.borosHistory.map((h) => [h.marketId, h]));
-    /**
-     * What each YU leg still has to give, drawn down as pairs claim it.
-     * Shared across the whole loop so a leg can never be allocated twice —
-     * the old flat `share` could, whenever the perp shares summed past 1.
-     */
-    const yuRemaining = new Map<number, number>(
-      group.borosOpen.map((b) => [
-        b.marketId,
-        yuSize(b) * borosKeepOf(b),
-      ]),
-    );
     const yuSlicesFor = (venue: string): YuSlice[] =>
       group.borosOpen
         .filter((b) => b.venue === venue && borosKeepOf(b) > 0)
@@ -1123,6 +1328,8 @@ export function deriveAsset(
       // quoting them as a "pair" would lend a locked rate to a book that has
       // none yet — the missing-leg rows already say what to open.
       if (longBoros.length === 0 || shortBoros.length === 0) continue;
+      perpClaimed.set(lLeg.symbol, (perpClaimed.get(lLeg.symbol) ?? 0) + lShare);
+      perpClaimed.set(sLeg.symbol, (perpClaimed.get(sLeg.symbol) ?? 0) + share);
       pairs.push({
         longVenue: lLeg.venue,
         shortVenue: sLeg.venue,
@@ -1183,31 +1390,48 @@ export function deriveAsset(
     pairs.length = 0;
     pairs.push(...merged.values());
     pairs.sort((a, b) => b.notionalUsd - a.notionalUsd || a.soonestMaturitySec - b.soonestMaturitySec);
-    /**
-     * Whatever no 4-leg unit could claim: the far end of a ladder mid-roll,
-     * or a rate leg opened before its hedge. Dust below 0.1% of the leg is
-     * a rounding residual, not a position — it would read as a phantom
-     * "pending" row on a book that is fully paired.
-     */
-    for (const b of group.borosOpen) {
-      const left = yuRemaining.get(b.marketId) ?? 0;
-      const whole = yuSize(b) * borosKeepOf(b);
-      if (whole <= 0 || left <= whole * 0.001) continue;
-      const pendingEntry = keptSlice(exclusions, borosKey(b.marketId), b.sizeToken, b.entryApr).entry;
-      pendingLegs.push({
-        venue: b.venue,
-        side: b.side,
-        marketId: b.marketId,
-        maturity: b.maturity,
-        sizeBase: borosSizeIn(b, 'base', group.base, group.priceUsd) * (left / (yuSize(b) || 1)),
-        notionalUsd: b.notionalUsd * (left / (yuSize(b) || 1)),
-        unit,
-        lockedApr: pendingEntry === null ? null : (b.side === 'SHORT' ? 1 : -1) * pendingEntry,
-        imUsd: b.imUsd * (left / whole),
-      });
-    }
-    pendingLegs.sort((a, b) => a.maturity - b.maturity || b.notionalUsd - a.notionalUsd);
   }
+  /**
+   * Whatever no 4-leg unit could claim: the far end of a ladder mid-roll,
+   * a rate leg opened before its hedge, a perp at a venue with no YU. Dust
+   * below 0.1% of the leg is a rounding residual, not a position — it would
+   * read as a phantom "pending" row on a book that is fully paired.
+   */
+  for (const b of group.borosOpen) {
+    const left = yuRemaining.get(b.marketId) ?? 0;
+    const whole = yuSize(b) * borosKeepOf(b);
+    if (whole <= 0 || left <= whole * 0.001) continue;
+    const pendingEntry = keptSlice(exclusions, borosKey(b.marketId), b.sizeToken, b.entryApr).entry;
+    pendingLegs.push({
+      venue: b.venue,
+      side: b.side,
+      marketId: b.marketId,
+      maturity: b.maturity,
+      sizeBase: borosSizeIn(b, 'base', group.base, group.priceUsd) * (left / (yuSize(b) || 1)),
+      notionalUsd: b.notionalUsd * (left / (yuSize(b) || 1)),
+      unit,
+      lockedApr: pendingEntry === null ? null : (b.side === 'SHORT' ? 1 : -1) * pendingEntry,
+      imUsd: b.imUsd * (left / whole),
+      share: left / whole,
+    });
+  }
+  pendingLegs.sort((a, b) => a.maturity - b.maturity || b.notionalUsd - a.notionalUsd);
+  for (const l of [...longs, ...shorts]) {
+    const keep = keepOf(l);
+    const left = 1 - Math.min(1, perpClaimed.get(l.symbol) ?? 0);
+    if (keep <= 0 || left <= 0.001) continue;
+    unpairedPerps.push({
+      venue: l.venue,
+      side: l.side,
+      symbol: l.symbol,
+      sizeBase: l.qty * keep * left,
+      notionalUsd: l.notionalUsd * keep * left,
+      unit,
+      imUsd: l.imUsd * keep * left,
+      share: left,
+    });
+  }
+  unpairedPerps.sort((a, b) => b.notionalUsd - a.notionalUsd || a.venue.localeCompare(b.venue));
 
   return {
     base: group.base,
@@ -1251,5 +1475,6 @@ export function deriveAsset(
     lockedNotionalUsd: lockedOk && lockedNotionalUsd > 0 ? lockedNotionalUsd : null,
     pairs,
     pendingLegs,
+    unpairedPerps,
   };
 }

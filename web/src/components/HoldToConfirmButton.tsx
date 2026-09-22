@@ -5,8 +5,10 @@ interface Props {
   disabled?: boolean;
   /** Hold duration. The product gate is 800ms; tests may shorten. */
   holdMs?: number;
-  /** Side coloring: green (buy), red (sell), cyan (mixed/neutral). */
-  tone?: 'green' | 'red' | 'cyan';
+  /** Side coloring: green (buy), red (sell), cyan (mixed/neutral). `buy` and
+   * `sell` are the SOLID fills of the same two sides — the single ticket's
+   * primary action, where the tinted outline read as secondary. */
+  tone?: 'green' | 'red' | 'cyan' | 'buy' | 'sell';
   /** Extra classes appended to the base button (e.g. width/margin). */
   className?: string;
   /** Extra hover text, appended to the press-and-hold instruction — for a
@@ -20,6 +22,8 @@ const TONES: Record<NonNullable<Props['tone']>, string> = {
   red: 'border-rose-500/60 bg-rose-500/15 text-rose-300 hover:bg-rose-500/25',
   // The mock's execute button: the one solid info fill in the ticket.
   cyan: 'border-transparent bg-info text-ink-50 hover:bg-info/75',
+  buy: 'border-transparent bg-grass text-ink-950 hover:bg-grass/80',
+  sell: 'border-transparent bg-guava text-ink-950 hover:bg-guava/80',
 };
 
 const R = 7;

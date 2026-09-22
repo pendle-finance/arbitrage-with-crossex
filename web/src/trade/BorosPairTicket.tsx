@@ -43,6 +43,7 @@ import type {
 import { Chip } from '../components/Chip';
 import { HoldToConfirmButton } from '../components/HoldToConfirmButton';
 import { size as fmtSize, type SoloLeg } from './BorosPairBits';
+import { AffixedInput, EstimateCard } from './PairTicketBits';
 import { QueryError } from '../components/QueryError';
 import { SegmentedToggle } from '../components/SegmentedToggle';
 import { amountError } from '../lib/amount';
@@ -181,11 +182,17 @@ export function BorosPairTicket({
   const [sizeStr, setSizeStr] = useState('');
   const [intentRaw, setIntent] = useState<BorosPairIntent>('open');
   /**
-   * Guided (wizard): the size box is a TARGET per leg, so the request aims at
-   * an end state and a leg already there reports no change. That is what lets
-   * a half-filled step 1 be repaired by re-submitting the same number.
+   * The guided form opens the size typed, exactly like the free ticket.
+   *
+   * It used to send `target` (the size box as an END STATE), so a half-filled
+   * step 1 could be repaired by re-submitting the same number. That bought a
+   * repair path at the cost of the box meaning something different here than
+   * everywhere else in the app — "open 100" opening 40 because 60 was already
+   * there. Simpler wins: the box is the size to open, and a short fill is
+   * repaired by the report's own Complete/Retry, which arm the shortfall (his
+   * call 2026-09-18).
    */
-  const intent: BorosPairIntent = guided ? 'target' : intentRaw;
+  const intent: BorosPairIntent = intentRaw;
   const [gasTopUpStr, setGasTopUpStr] = useState('5');
 
   /**
@@ -781,170 +788,154 @@ export function BorosPairTicket({
       )}
 
       {/* --- Legs (§2) ----------------------------------------------------
-          A PAIR shows both markets as cards side by side with one direction
-          control under them — the spread is one decision, and the legs were
+          A PAIR shows both markets side by side, each stating its side, with
+          a swap between them — the spread is one decision, and the legs were
           already coupled. A SINGLE leg keeps the plain picker and its own
-          toggle: there is no spread to be long or short of. */}
+          direction toggle: there is no spread to be long or short of. */}
       {mode === 'pair' ? (
-        <div className="flex flex-col gap-2">
-          <div className="grid grid-cols-2 gap-2">
-            <div className="relative">
-              <MarketCard
-                label="Market A"
-                row={rowA}
-                side={dirA}
-                locked={guided}
+        <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-end gap-2">
+          <div className="relative min-w-0">
+            <MarketCard label="Market A" row={rowA} side={dirA} locked={guided}>
+              <MarketSelect
+                id="boros-leg-a"
+                label=""
+                ariaLabel="Leg A"
+                value={marketA}
+                markets={markets}
+                reasonFor={reasonAgainst(rowB)}
+                onPick={setMarketA}
+                disabled={context.isPending}
+              />
+            </MarketCard>
+            {rowA?.closeOnly && (
+              <Chip
+                tone="amber"
+                sm
+                className="absolute right-2 top-2"
+                title="This market only accepts orders that reduce your position."
               >
-                <MarketSelect
-                  id="boros-leg-a"
-                  label=""
-                  ariaLabel="Leg A"
-                  value={marketA}
-                  markets={markets}
-                  reasonFor={reasonAgainst(rowB)}
-                  onPick={setMarketA}
-                  disabled={context.isPending}
-                />
-              </MarketCard>
-              {rowA?.closeOnly && (
-                <Chip
-                  tone="amber"
-                  sm
-                  className="absolute right-2 top-2"
-                  title="This market only accepts orders that reduce your position."
-                >
-                  close only
-                </Chip>
-              )}
-            </div>
-            <div className="relative">
-              <MarketCard
-                label="Market B"
-                row={rowB}
-                side={dirB}
-                locked={guided}
-              >
-                <MarketSelect
-                  id="boros-leg-b"
-                  label=""
-                  ariaLabel="Leg B"
-                  value={marketB}
-                  markets={markets}
-                  reasonFor={reasonAgainst(rowA)}
-                  onPick={setMarketB}
-                  disabled={context.isPending}
-                />
-              </MarketCard>
-              {rowB?.closeOnly && (
-                <Chip
-                  tone="amber"
-                  sm
-                  className="absolute right-2 top-2"
-                  title="This market only accepts orders that reduce your position."
-                >
-                  close only
-                </Chip>
-              )}
-            </div>
+                close only
+              </Chip>
+            )}
           </div>
-          {/* No direction control here: each card STATES its side (A short,
-              B long — or the mirror when a card prefills a hedge), and which
-              leg is which is chosen by which market goes in which slot. */}
+          {/* Which leg is which is chosen by which market goes in which
+              slot — the swap moves the markets, and each slot's side stays
+              put. The wizard fixes both, so it has nothing to swap. */}
+          {guided ? (
+            <span aria-hidden className="w-2" />
+          ) : (
+          <button
+            type="button"
+            aria-label="Swap markets"
+            title="Swap the two markets between their slots"
+            disabled={marketA === null && marketB === null}
+            onClick={() => {
+              setMarketA(marketB);
+              setMarketB(marketA);
+            }}
+            className="mb-[7px] flex h-6 w-6 items-center justify-center rounded-full border border-ink-600 bg-ink-900 text-[11px] text-ink-300 transition-colors hover:border-ink-400 hover:text-ink-50 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            ⇄
+          </button>
+          )}
+          <div className="relative min-w-0">
+            <MarketCard label="Market B" row={rowB} side={dirB} locked={guided}>
+              <MarketSelect
+                id="boros-leg-b"
+                label=""
+                ariaLabel="Leg B"
+                value={marketB}
+                markets={markets}
+                reasonFor={reasonAgainst(rowA)}
+                onPick={setMarketB}
+                disabled={context.isPending}
+              />
+            </MarketCard>
+            {rowB?.closeOnly && (
+              <Chip
+                tone="amber"
+                sm
+                className="absolute right-2 top-2"
+                title="This market only accepts orders that reduce your position."
+              >
+                close only
+              </Chip>
+            )}
+          </div>
         </div>
       ) : (
-      <div className="flex flex-col gap-1.5">
-        <MarketSelect
-          id="boros-leg-a"
-          label="Market"
-          value={marketA}
-          markets={markets}
-          // Single mode trades leg A alone, so nothing constrains it: the
-          // collateral/maturity rules exist to keep a PAIR compatible.
-          reasonFor={reasonAgainst(null)}
-          onPick={setMarketA}
-          disabled={context.isPending}
-        />
-        <DirectionToggle value={dirA} onChange={setDirA} idPrefix="Leg A" />
-      </div>
+        <div className="flex flex-col gap-1.5">
+          <div className="flex items-center justify-between gap-2">
+            <span className="flex items-center gap-2">
+              <Chip sm tone={dirA === 'long' ? 'green' : 'red'} className="font-semibold">
+                {dirA === 'long' ? 'LONG' : 'SHORT'}
+              </Chip>
+              {/* The rates reading of the side, stated beside it: long pays
+                  the fixed rate, short receives it. */}
+              <span className="text-[12px] font-normal text-ink-300">
+                Market · {dirA === 'long' ? 'pay fixed' : 'receive fixed'}
+              </span>
+            </span>
+            <DirectionToggle value={dirA} onChange={setDirA} idPrefix="Leg A" compact />
+          </div>
+          <MarketSelect
+            id="boros-leg-a"
+            label=""
+            ariaLabel="Market"
+            value={marketA}
+            markets={markets}
+            // Single mode trades leg A alone, so nothing constrains it: the
+            // collateral/maturity rules exist to keep a PAIR compatible.
+            reasonFor={reasonAgainst(null)}
+            onPick={setMarketA}
+            disabled={context.isPending}
+          />
+        </div>
       )}
 
       {/* --- Size + intent (§4) -------------------------------------------
-          Laid out as the Boros app's trade form: what you hold and what the
-          order makes it, then what the bucket can fund, then the size box
-          with a percentage ladder off that figure. */}
+          The size box, with what the bucket can fund beside its caption (a
+          click sizes to it) and the collateral unit inside the box. What the
+          position becomes is stated once, in the estimate's "Position after". */}
       <div className="flex flex-col gap-1.5">
         <div className="flex items-baseline justify-between gap-3">
-          <span className="text-[11px] text-ink-400">
-            {mode === 'single' ? 'My notional size' : 'My notional size (per leg)'}
-          </span>
-          <span className="num text-[12px] text-ink-100">
-            {simulation ? (
-              <>
-                <span className="text-ink-400">
-                  {sigGrouped(Math.abs((activeLeg === 'B' ? simulation.legB : simulation.legA).sizing.currentSize))}
-                </span>
-                <span className="text-ink-600"> → </span>
-                {/* Single mode: this line IS the position readout (the venue
-                    row below is suppressed as a duplicate), so it carries the
-                    side's colour. Magnitude only — the colour says which way,
-                    and a sign beside it would repeat that. A pair states each
-                    leg's side on its own card, so its figure stays neutral. */}
-                <span
-                  className={
-                    mode !== 'single'
-                      ? undefined
-                      : simulation.legA.sizing.resultingSize > 0
-                        ? 'font-semibold text-emerald-300'
-                        : simulation.legA.sizing.resultingSize < 0
-                          ? 'font-semibold text-rose-300'
-                          : undefined
-                  }
-                >
-                  {sigGrouped(Math.abs((activeLeg === 'B' ? simulation.legB : simulation.legA).sizing.resultingSize))}
-                </span>{' '}
-                <span className="text-ink-400">{simulation.collateral}</span>
-              </>
-            ) : (
-              <span className="text-ink-500">—</span>
-            )}
-          </span>
+          <label htmlFor="boros-size" className="text-[11.5px] text-ink-200">
+            {/* "per leg" only means something when there are two. */}
+            {mode === 'single' ? 'Size' : 'Size per leg'}
+          </label>
+          {availableToTrade !== null && (
+            <button
+              type="button"
+              className="num text-[11px] text-ink-400 transition-colors hover:text-ink-100"
+              title="What this collateral bucket can still fund. Click to size to it."
+              onClick={() => setSizeStr(fieldValue(availableToTrade))}
+            >
+              available{' '}
+              <span className="text-link underline decoration-link/40 underline-offset-2">
+                {sigGrouped(availableToTrade)} {rowA?.collateral ?? ''}
+              </span>
+            </button>
+          )}
         </div>
-        <div className="flex items-baseline justify-between gap-3">
-          <span className="text-[11px] text-ink-400" title="What this collateral bucket can still fund — cross balance, or the market's own isolated bucket.">
-            Available to trade
-          </span>
-          <span className="num text-[12px] text-ink-100">
-            {availableToTrade !== null ? (
-              <>
-                {sigGrouped(availableToTrade)}{' '}
-                <span className="text-ink-400">{rowA?.collateral ?? ''}</span>
-              </>
-            ) : (
-              <span className="text-ink-500">—</span>
-            )}
-          </span>
-        </div>
-        <label htmlFor="boros-size" className="mt-0.5 text-[11px] text-ink-400">
-          {/* The unit comes off the picked market, not the simulation: there
-              is no simulation until a size is typed, and "(collateral)" is
-              not a unit anyone can size against. */}
-          {/* "per leg" only means something when there are two. */}
-          {guided ? 'Target size per leg' : mode === 'single' ? 'Size' : 'Size per leg'}
-          {rowA ? ` (${simulation?.collateral || rowA.collateral || 'collateral'})` : ''}
-        </label>
-        <input
-          id="boros-size"
-          className={`input num ${sizeErr ? '!border-rose-500/60' : ''}`}
-          inputMode="decimal"
-          placeholder={mode === 'single' ? 'size' : 'size per leg'}
-          aria-invalid={sizeErr ? true : undefined}
-          aria-describedby={sizeErr ? 'boros-size-error' : undefined}
-          value={sizeStr}
-          onChange={(e) => setSizeStr(e.target.value)}
-        />
-        {/* Percentages of what the bucket can fund. Buttons rather than the
-            app's slider: at these decimal sizes a drag cannot land on the
-            number a hedge needs, and the box above still takes an exact one. */}
+        {/* The unit comes off the picked market, not the simulation: there
+            is no simulation until a size is typed, and "(collateral)" is
+            not a unit anyone can size against. The accessible name carries
+            it; the visible caption leaves it to the affix. */}
+        <AffixedInput affix={rowA ? <span>{simulation?.collateral || rowA.collateral || ''}</span> : null}>
+          <input
+            id="boros-size"
+            aria-label={`${mode === 'single' ? 'Size' : 'Size per leg'}${
+              rowA ? ` (${simulation?.collateral || rowA.collateral || 'collateral'})` : ''
+            }`}
+            className={`input num pr-16 ${sizeErr ? '!border-rose-500/60' : ''}`}
+            inputMode="decimal"
+            placeholder={mode === 'single' ? 'size' : 'size per leg'}
+            aria-invalid={sizeErr ? true : undefined}
+            aria-describedby={sizeErr ? 'boros-size-error' : undefined}
+            value={sizeStr}
+            onChange={(e) => setSizeStr(e.target.value)}
+          />
+        </AffixedInput>
         {sizeErr && (
           <p id="boros-size-error" role="alert" className="text-[11px] text-rose-300">
             {sizeErr}
@@ -952,7 +943,7 @@ export function BorosPairTicket({
         )}
       </div>
 
-      {/* The wizard has no intent toggle: it always sends `target`, the END
+      {/* The wizard has no intent control: it always sends `target`, the END
           STATE, so step 1 can be re-run at a new notional without the
           operator working out the remainder. `target` is not "only opens" —
           a notional BELOW what the leg holds reduces it, and the order side
@@ -960,128 +951,26 @@ export function BorosPairTicket({
           held. A reduce-only `close` here would be a different trade: it
           could never grow a leg that is short of its target. */}
       {!guided && (
-      <SegmentedToggle<BorosPairIntent>
-        ariaLabel="Pair intent"
-        value={intent}
-        onChange={setIntent}
-        fill
-        // Only Close is tinted, and only while active. Open is the ordinary
-        // thing to be doing, so it stays neutral; rose is reserved for the
-        // side that reduces a position, not spent on both.
-        className={intent === 'close' ? 'seg-rose' : undefined}
-        options={[
-          { value: 'open', label: 'Open' },
-          {
-            value: 'close',
-            label: 'Close',
-            sub: 'reduce-only',
-            // Boros has no reduce-only order type: the cap is applied HERE, by
-            // us, not guaranteed by the venue. Whose promise it is matters, so
-            // the qualification survives — on the badge that makes the claim.
-            subTitle:
-              'Enforced here by capping the size at your current position — Boros has no reduce-only order type, so check the resulting-position row.',
-          },
-        ]}
-      />
+        <label className="flex cursor-pointer items-center gap-2 text-[11.5px] text-ink-200">
+          <input
+            type="checkbox"
+            className="chk"
+            aria-label="Reduce-only"
+            checked={intent === 'close'}
+            onChange={(e) => setIntent(e.target.checked ? 'close' : 'open')}
+          />
+          <span>Reduce-only</span>
+          {/* Boros has no reduce-only order type: the cap is applied HERE, by
+              us, not guaranteed by the venue. Whose promise it is matters, so
+              the qualification survives — on the caption that makes the claim. */}
+          <span
+            className="text-[11px] text-ink-400"
+            title="Enforced here by capping the size at your current position — Boros has no reduce-only order type, so check the resulting-position row."
+          >
+            caps the size at your open position
+          </span>
+        </label>
       )}
-
-      {/* --- Slippage (§2) --------------------------------------------------
-          Guided: one line, the way the Boros app states it — what the book
-          is expected to give up, against the bound that caps it. The bound
-          is the automatic seed (half each market's max rate deviation);
-          nothing to set, so nothing to show but the two numbers. */}
-      <div className="flex flex-col gap-1.5">
-          <div className="flex items-baseline justify-between gap-3">
-            <span
-              className="text-[11px] text-ink-400"
-              title="How far this size walks the two books away from mid: the mid spread less the spread you actually get, both legs together. The bound below caps the RATE, not the fill — a leg that cannot fill inside it simply stops filling."
-            >
-              Total slippage
-            </span>
-            <span className="num text-[12px] text-ink-100">
-              {estSlippageApr !== null ? (
-                <>Est. {fmtPct(estSlippageApr)}</>
-              ) : (
-                <span className="text-ink-500">Est. —</span>
-              )}
-              <span className="text-ink-500"> / Max: </span>
-              <button
-                type="button"
-                className="underline decoration-dotted underline-offset-2 hover:text-white"
-                title={`Change the tolerance — set per leg (${slipStrShared}% each), so the pair's worst case is twice it`}
-                onClick={() => setSlipOpen((v) => !v)}
-              >
-                {/* The estimate beside this is BOTH legs, so the bound has to
-                    be both legs too: a per-leg number here read as though the
-                    pair could only give up half what it can. Built from the
-                    per-leg tolerances actually sent (aprA/aprB), so a per-leg
-                    override moves it, and a single-leg ticket — Single mode
-                    or a one-leg completion — shows that leg's bound alone. */}
-                {fmtPct(activeLeg === 'A' ? aprA : activeLeg === 'B' ? aprB : aprA + aprB)}
-              </button>
-            </span>
-          </div>
-          {/* Adjustable, but out of the way until asked for: the seeded bound
-              is right for almost every trade, and a wider one is a deliberate
-              act for a large size or a thin book. */}
-          {slipOpen && (
-            <div className="flex flex-col gap-1.5 rounded border border-ink-700 bg-ink-900/60 px-2.5 py-2">
-              <span className="text-[10.5px] leading-relaxed text-ink-400">
-                Max rate the order will accept. A wider tolerance may be needed for a large size or
-                a thin book.
-              </span>
-              <div className="flex items-center gap-1.5">
-                {['0.2', '0.4', '1', '2'].map((q) => (
-                  <button
-                    key={q}
-                    type="button"
-                    className={`btn-ghost-xs ${slipStrShared === q ? '!border-info/60 !text-pastel-blue' : ''}`}
-                    onClick={() => setSharedSlip(q)}
-                  >
-                    {q}%
-                  </button>
-                ))}
-                <input
-                  className="input num h-7 flex-1 px-2 py-0.5 text-[12px]"
-                  inputMode="decimal"
-                  aria-label="Max slippage, % APR"
-                  value={slipStrShared}
-                  onChange={(e) => setSharedSlip(e.target.value)}
-                />
-                <span className="text-[11px] text-ink-400">%</span>
-              </div>
-              {slipInvalid && (
-                <span className="text-[11px] text-rose-300">
-                  Must be greater than 0 and at most {MAX_SLIP_PCT}%.
-                </span>
-              )}
-              {/* Per-leg tolerances: a thin book on one venue can need more
-                  room than the other. Only meaningful with two legs, and
-                  only in the free-form ticket. */}
-              {!guided && mode === 'pair' && onlyLeg === null && (
-                <>
-                  <button
-                    type="button"
-                    className="self-start text-[10.5px] text-ink-400 underline decoration-dotted hover:text-ink-200"
-                    onClick={() => {
-                      setPerLeg((v) => !v);
-                      setSlipA(slipStrShared);
-                      setSlipB(slipStrShared);
-                    }}
-                  >
-                    {perLeg ? 'use one value for both legs' : 'set each leg separately'}
-                  </button>
-                  {perLeg && (
-                    <div className="grid grid-cols-2 gap-2">
-                      <SlipInput id="boros-slip-a" label="Leg A %" value={slipStrA} onChange={setSlipA} />
-                      <SlipInput id="boros-slip-b" label="Leg B %" value={slipStrB} onChange={setSlipB} />
-                    </div>
-                  )}
-                </>
-              )}
-            </div>
-          )}
-      </div>
 
       {/* --- Simulation (§3) ---------------------------------------------- */}
       </div>
@@ -1089,7 +978,11 @@ export function BorosPairTicket({
       <div className={twoColumn ? 'flex flex-col gap-3' : 'contents'}>
       {sim.isError && <QueryError title="Couldn’t price this pair" error={sim.error} onRetry={() => sim.refetch()} />}
       {simulation && (
-        <>
+        <EstimateCard
+          dataUpdatedAt={sim.dataUpdatedAt}
+          estimating={sim.isPlaceholderData}
+          isError={sim.isError}
+        >
           {/* Renders in BOTH modes now that it carries the per-leg rates: on
               one leg it is that leg's Est. APR, and the spread lines above it
               are suppressed, since a "spread" against a borrowed partner
@@ -1097,20 +990,124 @@ export function BorosPairTicket({
           {/* `singleLeg` (not `mode`): a one-leg completion after a half fill
               is single-leg too, and reading it as a pair printed dashes for
               the spread beside an enabled Confirm. */}
-          <SpreadReadout sim={simulation} singleLeg={activeLeg} />
+          <SpreadReadout
+            sim={simulation}
+            singleLeg={activeLeg}
+            between={
+              <>
+              {/* --- Slippage (§2) ------------------------------------------
+                  One line, the way the Boros app states it — what the book is
+                  expected to give up, against the bound that caps it. The bound
+                  is the automatic seed (half each market's max rate deviation);
+                  the editor behind "Max" is for a large size or a thin book. */}
+              <div className="flex flex-col gap-1.5">
+                <div className="flex items-baseline justify-between gap-3">
+                  <span
+                    className="text-[12px] text-ink-200"
+                    title="How far this size walks the books away from mid: the mid spread less the spread you actually get, both legs together. The bound caps the RATE, not the fill — a leg that cannot fill inside it simply stops filling."
+                  >
+                    Slippage
+                  </span>
+                  <span className="num text-[12px] text-ink-400">
+                    Est.{' '}
+                    <span className="text-ink-50">
+                      {estSlippageApr !== null ? fmtPct(estSlippageApr) : '—'}
+                    </span>
+                    {' / '}Max:{' '}
+                    <button
+                      type="button"
+                      className="text-link underline decoration-link/40 underline-offset-2 hover:text-ink-50"
+                      title={`Change the tolerance — set per leg (${slipStrShared}% each), so the pair's worst case is twice it`}
+                      onClick={() => setSlipOpen((v) => !v)}
+                    >
+                      {/* The estimate beside this is BOTH legs, so the bound has to
+                          be both legs too: a per-leg number here read as though the
+                          pair could only give up half what it can. Built from the
+                          per-leg tolerances actually sent (aprA/aprB), so a per-leg
+                          override moves it, and a single-leg ticket — Single mode
+                          or a one-leg completion — shows that leg's bound alone. */}
+                      {fmtPct(activeLeg === 'A' ? aprA : activeLeg === 'B' ? aprB : aprA + aprB)}
+                    </button>
+                    {' '}APR
+                  </span>
+                </div>
+                {/* Adjustable, but out of the way until asked for: the seeded bound
+                    is right for almost every trade, and a wider one is a deliberate
+                    act for a large size or a thin book. */}
+                {slipOpen && (
+                  <div className="flex flex-col gap-1.5 rounded border border-ink-700 bg-ink-900/60 px-2.5 py-2">
+                    <span className="text-[10.5px] leading-relaxed text-ink-400">
+                      Max rate the order will accept. A wider tolerance may be needed for a large size or
+                      a thin book.
+                    </span>
+                    <div className="flex items-center gap-1.5">
+                      {['0.2', '0.4', '1', '2'].map((q) => (
+                        <button
+                          key={q}
+                          type="button"
+                          className={`btn-ghost-xs ${slipStrShared === q ? '!border-info/60 !text-pastel-blue' : ''}`}
+                          onClick={() => setSharedSlip(q)}
+                        >
+                          {q}%
+                        </button>
+                      ))}
+                      <input
+                        className="input num h-7 flex-1 px-2 py-0.5 text-[12px]"
+                        inputMode="decimal"
+                        aria-label="Max slippage, % APR"
+                        value={slipStrShared}
+                        onChange={(e) => setSharedSlip(e.target.value)}
+                      />
+                      <span className="text-[11px] text-ink-400">%</span>
+                    </div>
+                    {slipInvalid && (
+                      <span className="text-[11px] text-rose-300">
+                        Must be greater than 0 and at most {MAX_SLIP_PCT}%.
+                      </span>
+                    )}
+                    {/* Per-leg tolerances: a thin book on one venue can need more
+                        room than the other. Only meaningful with two legs, and
+                        only in the free-form ticket. */}
+                    {!guided && mode === 'pair' && onlyLeg === null && (
+                      <>
+                        <button
+                          type="button"
+                          className="self-start text-[10.5px] text-ink-400 underline decoration-dotted hover:text-ink-200"
+                          onClick={() => {
+                            setPerLeg((v) => !v);
+                            setSlipA(slipStrShared);
+                            setSlipB(slipStrShared);
+                          }}
+                        >
+                          {perLeg ? 'use one value for both legs' : 'set each leg separately'}
+                        </button>
+                        {perLeg && (
+                          <div className="grid grid-cols-2 gap-2">
+                            <SlipInput id="boros-slip-a" label="Leg A %" value={slipStrA} onChange={setSlipA} />
+                            <SlipInput id="boros-slip-b" label="Leg B %" value={slipStrB} onChange={setSlipB} />
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
+              </>
+            }
+          />
+
           <PairCosts sim={simulation} singleLeg={activeLeg} />
           <PositionArithmetic sim={simulation} singleLeg={activeLeg} />
-        </>
+
+          {simulation.reasons.length ? (
+            <ul className="flex flex-col gap-1 border-t border-ink-800/80 pt-2 text-[10.5px] leading-relaxed text-ink-400">
+              {simulation.reasons.map((r) => (
+                <li key={r}>· {r}</li>
+              ))}
+            </ul>
+          ) : null}
+        </EstimateCard>
       )}
-
-      {simulation?.reasons.length ? (
-        <ul className="flex flex-col gap-1 text-[10.5px] leading-relaxed text-ink-400">
-          {simulation.reasons.map((r) => (
-            <li key={r}>· {r}</li>
-          ))}
-        </ul>
-      ) : null}
-
       {/* --- §4 acknowledgement ------------------------------------------- */}
       {gate?.requiresAcknowledgement && simulation && (
         <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/[0.05] px-2.5 py-2 text-[11px] leading-relaxed text-amber-100">
@@ -1187,15 +1184,9 @@ export function BorosPairTicket({
             if (report.unhedgedLeg === null || report.unhedgedSize <= 0) return;
             const deficient = report.unhedgedLeg === 'A' ? 'B' : 'A';
             setOnlyLeg(deficient);
-            /**
-             * ⚠ The size box means different things per intent. Under `open`
-             * it is an INCREMENT, so it takes the shortfall. Under the wizard's
-             * `target` it is the END STATE — the same number that produced
-             * this report — and writing the shortfall into it would aim the
-             * leg at a smaller position than it already holds and BUY BACK the
-             * difference. There the target stays, and the delta is the rest.
-             */
-            if (!guided) setSizeStr(String(report.unhedgedSize));
+            // The size box is an INCREMENT everywhere now (the wizard no
+            // longer sends a target), so it takes the shortfall.
+            setSizeStr(String(report.unhedgedSize));
             setOrderIds(newOrderIds());
             setReport(null);
           }}
@@ -1211,10 +1202,9 @@ export function BorosPairTicket({
             const sB = report.legB.shortfallSize;
             const shared = Math.min(sA, sB);
             const size = shared > 0 ? shared : Math.max(sA, sB);
-            // Same rule as Complete: under `target` the box already holds the
-            // end state, and a shortfall written into it would aim lower than
-            // the legs already are.
-            if (size > 0 && !guided) setSizeStr(String(size));
+            // Same rule as Complete: the box is an increment, so re-arm it
+            // with what did not fill.
+            if (size > 0) setSizeStr(String(size));
             setOnlyLeg(shared > 0 || size === 0 ? null : sA > sB ? 'A' : 'B');
             setOrderIds(newOrderIds());
             setReport(null);
@@ -1232,11 +1222,8 @@ export function BorosPairTicket({
              * dismissing rather than using Complete or Retry, which set their
              * own sizes.
              *
-             * Under `target` the opposite holds: the size is the end state,
-             * re-confirming it sends only what is still missing, and clearing
-             * it would throw away the one number the repair needs.
              */
-            if (!guided) setSizeStr('');
+            setSizeStr('');
             setReport(null);
           }}
         />
@@ -1250,7 +1237,10 @@ export function BorosPairTicket({
               what pressing this does. Acceptance is atomic; a full fill is
               NOT promised, and both halves matter. */}
           <HoldToConfirmButton
-            tone="cyan"
+            // A pair is the neutral info fill; one leg is a directional
+            // position, so its button carries the side — grass long, guava
+            // short — the way the perp single ticket's does.
+            tone={mode === 'single' && !onlyLeg ? (dirA === 'long' ? 'buy' : 'sell') : 'cyan'}
             className="w-full"
             disabled={!canConfirm}
             onConfirm={onConfirm}
@@ -1263,7 +1253,7 @@ export function BorosPairTicket({
             {execute.isPending
               ? 'Sending…'
               : closeOnlyLeg
-                ? `Market ${closeOnlyLeg} takes closes only. Switch to Close.`
+                ? `Market ${closeOnlyLeg} takes closes only. Tick Reduce-only.`
                 : onlyLeg
                   ? `Confirm — complete leg ${onlyLeg} ▸`
                   : mode === 'single'

@@ -67,6 +67,57 @@ export interface BorosMarketOrderRequest {
   sizeWei?: string;
 }
 
+/**
+ * One leg of a roll-over, as the venue's own builder takes it: the position on
+ * `fromMarketId` is closed (opposite side, capped at what is held — sized by
+ * the venue from the on-chain position, never from this float) and the same
+ * side re-opened at the same size on `toMarketId`. Every order is FOK, so a
+ * batch of these submitted with `requireSuccess` moves every leg in full or
+ * nothing. `closeRate` / `openRate` are the worst rates each order accepts.
+ */
+export interface BorosRollLeg {
+  fromMarketId: number;
+  toMarketId: number;
+  /** Collateral units, positive. */
+  size: number;
+  closeRate?: number;
+  openRate?: number;
+}
+
+/**
+ * The venue's preview of a roll: the batch run in order on one simulated
+ * account, so it answers the two things no book walk can — does every FOK
+ * order fill whole inside its bound, and does the account still clear its
+ * initial margin once the closes have freed theirs and the opens taken
+ * theirs. Sizes in collateral units.
+ */
+export interface BorosRollSimulation {
+  /** `Refused` = the batch would not go through; `reason` says why. */
+  status: 'Succeed' | 'Refused';
+  reason: { code: string; message: string } | null;
+  /** Every close, then every open, in leg order. */
+  orders: Array<{
+    action: 'close' | 'open';
+    marketId: number;
+    /** The whole size fills inside the bound. */
+    filled: boolean;
+    matchedSize: number | null;
+    matchedApr: number | null;
+    fee: number | null;
+    /** This order's own revert when simulated alone (the book cannot fill it), else null. */
+    error: string | null;
+  }>;
+  /** Initial margin still spendable before and after the batch; negative = short. */
+  availableBefore: number;
+  availableAfter: number | null;
+  /** …and between the closes and the opens — what the opens are judged on.
+   * On a refused batch the venue simulates the closes alone for it; null
+   * when it cannot, or on a venue that does not report it. */
+  availableAfterExit: number | null;
+  /** Initial margin the opens require, with the account's leverage. */
+  marginRequired: number;
+}
+
 export type BorosLegFailureCode =
   /** The book ran out inside the rate bound — size too large for this market. */
   | 'insufficient-depth'
@@ -97,7 +148,17 @@ export interface BorosLegFill {
   /** Fee actually charged, collateral units; null when the venue did not say. */
   feeSize: number | null;
   /** Set when the leg did not fill in full. */
-  failure: { code: BorosLegFailureCode; message: string } | null;
+  failure: {
+    code: BorosLegFailureCode;
+    message: string;
+    /**
+     * Under `requireSuccess` every leg fails together, and the message on
+     * all of them is the ONE call the venue actually refused. `this-leg`
+     * marks the leg the venue named; `batch` a leg that only went down with
+     * it. Absent when the distinction is not known (a transport failure).
+     */
+    cause?: 'this-leg' | 'batch';
+  } | null;
 }
 
 /**
@@ -164,16 +225,37 @@ export interface BorosOrderClient {
    *
    * Returns one fill per request, in the same order.
    */
-  placeMarketOrders(
-    reqs: BorosMarketOrderRequest[],
-    opts?: { reducing?: boolean },
-  ): Promise<BorosLegFill[]>;
+  placeMarketOrders(reqs: BorosMarketOrderRequest[], opts?: PlaceOrdersOptions): Promise<BorosLegFill[]>;
+  /**
+   * Roll positions to a later maturity as ONE all-or-nothing batch: the
+   * venue builds every close and open (FOK), this signs and submits them
+   * with `requireSuccess`. Returns one fill per order, every close first
+   * then every open, in leg order.
+   */
+  rollOver?(legs: BorosRollLeg[]): Promise<BorosLegFill[]>;
+  /** The same batch previewed by the venue on one simulated account state. */
+  simulateRollOver?(legs: BorosRollLeg[]): Promise<BorosRollSimulation>;
   /** Force-cancel every resting order on one market (§6A remediation). */
   cancelOrders(marketId: number): Promise<void>;
   /** Force-close the whole netted position on one market (§6A remediation). */
   closePosition(req: BorosClosePositionRequest): Promise<BorosLegFill>;
   getGasBalance?(): Promise<number | null>;
   payTreasury?(amountUsd: number, marketId: number): Promise<void>;
+}
+
+export interface PlaceOrdersOptions {
+  /** Every leg only reduces what the account holds. Decides how hard the gas
+   * top-up tries: an exit is funded only when it truly cannot pay. */
+  reducing?: boolean;
+  /**
+   * Where the automatic gas top-up (a `payTreasury` call) sits in the batch:
+   * BEFORE the leg at this index; default 0 (first). The relayer sums the
+   * whole submission's gas and checks it once before anything executes, so
+   * the credit counts wherever the call sits — what the position decides is
+   * when `payTreasury`'s own strict margin check runs. Placing it after the
+   * legs that CLOSE lets that check see the margin those closes free.
+   */
+  topUpAfter?: number;
 }
 
 /** The rate bound one leg carries, from its estimate and its tolerance. */
@@ -279,8 +361,12 @@ export async function submitBorosPair(input: SubmitBorosPairInput): Promise<Boro
   const byKey = new Map<'A' | 'B', BorosLegFill>();
   if (submitted.length > 0) {
     try {
-      const fills = await input.client.placeMarketOrders(submitted.map((x) => x.req), {
+      const reqs = submitted.map((x) => x.req);
+      const fills = await input.client.placeMarketOrders(reqs, {
         reducing: input.reducing,
+        // A close frees margin; a top-up it might need (a negative budget)
+        // runs its own strict margin check, so it goes after the closes.
+        topUpAfter: input.reducing ? reqs.length : 0,
       });
       submitted.forEach(({ key, req }, i) => {
         byKey.set(key, fills[i] ?? failed(req, new Error(`no result returned for leg ${key}`)));
@@ -334,11 +420,29 @@ export async function submitBorosPair(input: SubmitBorosPairInput): Promise<Boro
  * every other, and a generic price/limit rule would otherwise swallow it.
  */
 export function classifyLegFailure(err: unknown): BorosLegFailureCode {
-  const text = describeLegFailure(err).toUpperCase();
-  if (/RATE_DEVIATION|DEVIATION|RATE_OUT_OF_(RANGE|BOUND)|MARK_DEVIATION/.test(text)) {
+  // Venue texts come in two spellings — error-code style (INSUFFICIENT_LIQUIDITY)
+  // and the SDK's prose ("Insufficient liquidity") — so the rules below read
+  // them through one.
+  const text = describeLegFailure(err).toUpperCase().replace(/\s+/g, '_');
+  /**
+   * "[SIMULATE] …" is the backend refusing the batch BEFORE submission: it
+   * simulated the calls, one failed, nothing was sent and no gas was charged.
+   * Its own wording ("Batch aborted") would otherwise read as a lost
+   * response below, and a refusal that provably executed nothing must never
+   * be reported as "may or may not have filled".
+   */
+  const simulated = text.startsWith('[SIMULATE]');
+  if (simulated && /BATCH_ABORTED/.test(text)) return 'rejected';
+  // `MarketOrderRateOutOfBound` ("Rate Too Far Off") is the limit bound on an
+  // unfilled remainder; `MarketLastTradedRateTooFar` ("Large Rate Deviation")
+  // is the taker band. Both mean the same thing to the user: the rate this
+  // order carried sits too far from mark.
+  if (/RATE_DEVIATION|DEVIATION|RATE_OUT_OF_(RANGE|BOUND)|MARK_DEVIATION|RATE_TOO_FAR/.test(text)) {
     return 'rate-deviation';
   }
-  if (/INSUFFICIENT_LIQUIDITY|NO_LIQUIDITY|NOT_ENOUGH_(DEPTH|LIQUIDITY)|BOOK_EMPTY|DEPTH/.test(text)) {
+  // `MarketOrderFOKNotFilled` renders as "Insufficient liquidity": the book
+  // could not fill the whole size inside the bound.
+  if (/INSUFFICIENT_LIQUIDITY|NO_LIQUIDITY|NOT_ENOUGH_(DEPTH|LIQUIDITY)|BOOK_EMPTY|DEPTH|FOK_?NOT_?FILLED/.test(text)) {
     return 'insufficient-depth';
   }
   /**
@@ -354,7 +458,7 @@ export function classifyLegFailure(err: unknown): BorosLegFailureCode {
    * Match the stable words, not the dollar figure. Other "top up" text falls
    * through to `rejected` and keeps the venue's own wording.
    */
-  if (/TOP UP AT LEAST/.test(text)) return 'min-cash';
+  if (/TOP_UP_AT_LEAST/.test(text)) return 'min-cash';
   if (/INSUFFICIENT[ _]GAS|GAS[ _]BALANCE/.test(text)) {
     return 'no-gas';
   }
@@ -368,7 +472,7 @@ export function classifyLegFailure(err: unknown): BorosLegFailureCode {
     if (err.category === 'insufficient-margin') return 'insufficient-margin';
     if (err.category === 'network' || err.category === 'rate-limited') return 'unknown';
   }
-  if (/TIMEOUT|NETWORK|UNREACHABLE|ECONN|ABORT/.test(text)) return 'unknown';
+  if (!simulated && /TIMEOUT|NETWORK|UNREACHABLE|ECONN|ABORT/.test(text)) return 'unknown';
   return 'rejected';
 }
 

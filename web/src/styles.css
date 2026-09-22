@@ -34,21 +34,13 @@
     @apply bg-ink-950 font-sans antialiased;
     color: #ffffff;
     font-size: 12px;
+    line-height: 14.52px;
     font-feature-settings: 'cv11', 'ss01';
-    /* A quiet ground in Boros's own palette: two soft glows (info at the
-       top-left, grass at the bottom-right) over a faint dot grid, all well
-       under 10% so every hairline and number keeps its contrast. The glows
-       stay fixed so long pages don't scroll a bright patch past the eye. */
+    /* Flat, like the dapp: depth is hairlines and translucent fills only.
+       The old two-glow + dot-grid ground was this app's own invention and it
+       fought the mock's cards, which rely on a dead-even ground for their
+       5–10% white fills to read as "lifted". */
     background-color: #090d18;
-    background-image:
-      radial-gradient(ellipse 70% 45% at 8% -10%, rgba(96, 121, 255, 0.11), transparent 62%),
-      radial-gradient(ellipse 60% 40% at 100% 108%, rgba(27, 227, 194, 0.07), transparent 60%),
-      radial-gradient(circle, rgba(157, 175, 205, 0.045) 1px, transparent 1.2px);
-    background-size:
-      100% 100%,
-      100% 100%,
-      28px 28px;
-    background-attachment: fixed, fixed, scroll;
   }
 
   /* Numerals align in columns without changing typeface — the app is Inter
@@ -73,32 +65,43 @@
 }
 
 @layer components {
+  /* PpTag. The mock's tag is small, semibold and tinted: a hairline of the
+     tone at full strength over a 20% fill of the same tone, 2px radius. */
   .chip {
-    @apply inline-flex items-center gap-1.5 rounded-sm border border-ink-700 bg-ink-900 px-2.5 py-1 text-[11px] font-medium text-ink-200;
+    @apply inline-flex items-center justify-center gap-1 whitespace-nowrap rounded-sm border border-ink-700 bg-wash/[0.06] px-1.5 py-[3px] text-[10px] font-semibold leading-none text-ink-200;
   }
 
   .chip-sm {
-    @apply px-1.5 py-0.5 text-[10px];
+    @apply px-1 py-[2.5px] text-[9.5px];
   }
 
+  /* PpSegmentedControlV2 — the mock's control is a row of BUTTED cells, each
+     with its own hairline overlapping its neighbour by 1px, not a padded pill
+     holding loose buttons. The wrapper therefore carries no border of its own. */
   .seg {
-    @apply inline-flex rounded border border-ink-600 bg-transparent p-0.5;
+    @apply inline-flex items-center;
   }
 
   .seg-btn {
-    @apply rounded px-3 py-1 text-[11.5px] font-medium text-ink-300 transition-colors;
+    @apply -mr-px inline-flex items-center justify-center whitespace-nowrap border border-ink-700 bg-transparent px-4 py-[5px] text-[12px] font-normal text-ink-500 transition-colors first:rounded-l last:-mr-0 last:rounded-r hover:bg-wash/[0.05];
   }
 
   /* Selected = the same blue every other "this is chosen" signal uses; a
      grey fill read as disabled next to the info-tinted tabs and chips. */
+  /* The mock's chosen cell: a neutral white fill and medium weight — the
+     selection reads by weight + fill, so the blue stays reserved for actions. */
   .seg-btn[data-active='true'] {
-    @apply bg-info/[0.16] text-pastel-blue;
+    @apply relative z-[1] bg-wash/[0.15] font-medium text-ink-300;
   }
 
   /* Full-row variant (SegmentedToggle `fill`): the mock's ticket switches are
      a two-column grid with 8px-tall options, not a shrink-to-fit pill. */
+  .seg-lg .seg-btn {
+    @apply h-[35px] px-5 py-0;
+  }
+
   .seg-fill .seg-btn {
-    @apply py-1.5 text-[12.5px];
+    @apply py-[7px] text-[12px];
   }
 
   /* The first styled checkbox in the app: native input, house colours. Native
@@ -109,9 +112,14 @@
     accent-color: theme('colors.info.DEFAULT');
   }
 
+  /* PpCard. The mock's card is a hairline over a *translucent white* fill
+     (water/5), not an opaque panel — so cards nest without each level going
+     darker. A surface that must NOT let the page through (a popover, a menu)
+     states its own opaque ground at the call site. */
   .card {
-    @apply rounded border border-ink-700 bg-ink-900;
+    @apply rounded border border-ink-700 bg-wash/[0.05];
   }
+
 
   /* The three alert grounds, one per severity. A tinted hairline over a low
      fill, matching `.card`'s depth recipe — no shadow, no glow. `info` is
@@ -130,12 +138,16 @@
     @apply flex flex-col gap-1 rounded border border-gold/45 bg-gold/10 px-3 py-2.5;
   }
 
+  /* PpInput. */
   .input {
-    @apply w-full rounded-lg border border-ink-700 bg-ink-950 px-3 py-2 text-sm text-ink-100 placeholder:text-ink-500 focus:border-ink-500 focus:outline-none focus:ring-1 focus:ring-cyan-500/30;
+    @apply w-full rounded-md border border-ink-600 bg-ink-950 px-3 py-2 text-[12px] text-ink-300 transition-colors placeholder:text-ink-500 focus:border-ink-300 focus:outline-none focus:ring-1 focus:ring-ink-300;
   }
 
+  /* PpOutlineButton, `secondary` at size lg. The mock's default button is an
+     OUTLINE on nothing — no grey fill — so a filled button always means "this
+     is the primary action". 36px tall, 5px radius, 12px/500 label. */
   .btn {
-    @apply inline-flex items-center justify-center gap-2 rounded-lg border border-ink-600 bg-ink-800 px-3 py-1.5 text-sm font-medium text-ink-100 transition-colors hover:border-ink-500 hover:bg-ink-700 disabled:cursor-not-allowed disabled:opacity-40;
+    @apply inline-flex h-9 items-center justify-center gap-1.5 whitespace-nowrap rounded border border-ink-700 bg-transparent px-4 text-[12px] font-medium text-ink-50 transition-colors hover:bg-ink-700/20 disabled:cursor-not-allowed disabled:opacity-40;
   }
 
   /* The one solid-filled control in the app. The mock reserves a filled
@@ -149,7 +161,7 @@
      callers remembering a second class will keep losing that bet. Applying
      `btn` here is harmless where both are present (same declarations). */
   .btn-primary {
-    @apply inline-flex items-center justify-center gap-2 rounded border border-transparent bg-info px-3 py-1.5 text-sm font-medium text-ink-50 transition-colors hover:border-transparent hover:bg-info/75 disabled:cursor-not-allowed disabled:opacity-40;
+    @apply inline-flex h-9 items-center justify-center gap-1.5 whitespace-nowrap rounded border border-transparent bg-info px-4 text-[12px] font-medium text-ink-50 transition-colors hover:border-transparent hover:bg-info/75 disabled:cursor-not-allowed disabled:bg-[#828282]/75 disabled:opacity-100;
   }
 
   /* Every control in the header row. These had drifted into three different
@@ -157,27 +169,32 @@
      same strip rendered at 26px, 42px, 58px and 28px at once. The BOX lives
      here; each control still brings its own colour. */
   .hdr-ctl {
-    @apply inline-flex h-[26px] shrink-0 items-center whitespace-nowrap rounded-md border px-2.5 text-xs font-semibold transition-colors;
+    @apply inline-flex h-6 shrink-0 items-center whitespace-nowrap rounded border px-2 text-[12px] font-medium transition-colors;
   }
 
+  /* The row-action size (the mock's `sm` outline, at half-strength border —
+     a button inside a table row is quieter than one on the page). */
   .btn-ghost-xs {
-    @apply rounded-md border border-ink-700 bg-transparent px-2 py-0.5 text-[11px] font-medium text-ink-400 transition-colors hover:border-ink-500 hover:text-ink-200 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-ink-700 disabled:hover:text-ink-400;
+    @apply inline-flex h-6 items-center justify-center gap-1.5 whitespace-nowrap rounded border border-ink-700/60 bg-transparent px-2 text-[11px] font-medium text-ink-200 transition-colors hover:border-ink-700 hover:bg-ink-700/20 hover:text-ink-50 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-ink-700/60 disabled:hover:bg-transparent;
   }
 
+  /* PpUnderlineButton, `pastel-blue`. */
   .btn-link {
-    @apply w-fit text-left text-xs text-cyan-300 underline decoration-cyan-500/40 underline-offset-2 hover:text-cyan-200;
+    @apply w-fit text-left text-[12px] text-pastel-blue underline underline-offset-[3px] transition-colors hover:text-pastel-blue/80;
   }
 
+  /* The mock's table header is a plain 12px sentence-case grey label — no
+     uppercase, no tracking, no semibold. The column name is meant to be read,
+     not to act as a rule. */
   .th {
-    @apply sticky top-0 z-10 whitespace-nowrap border-b border-ink-700 bg-ink-900 px-2.5 py-1.5 text-[10px] font-semibold uppercase text-ink-400;
-    letter-spacing: 0.14em;
+    @apply sticky top-0 z-10 whitespace-nowrap border-b border-ink-700 bg-ink-950 px-2.5 py-2.5 text-[12px] font-normal text-ink-300;
   }
 
   /* Info-active segmented control — the opportunity assumptions knobs. The
      mock tints a chosen option with the same blue it uses for every other
      "this is selected" signal. */
   .seg-info .seg-btn[data-active='true'] {
-    @apply bg-info/[0.16] text-pastel-blue;
+    @apply bg-wash/[0.15] font-medium text-ink-300;
   }
 
   /* Rose-active segmented control — a control whose ACTIVE option reduces a
@@ -186,6 +203,60 @@
      the control permanently. */
   .seg-rose .seg-btn[data-active='true'] {
     @apply bg-rose-500/15 text-rose-300;
+  }
+
+  /* Grass-active segmented control — the single ticket's Buy side. Paired
+     with seg-rose on Sell, so the side switch carries the side's colour. */
+  .seg-grass .seg-btn[data-active='true'] {
+    @apply bg-emerald-500/15 text-emerald-300;
+  }
+
+  /* Compact variant for a segmented control that sits INSIDE an input box
+     (the size-unit switch): short enough to clear the input's padding. */
+  .seg-xs .seg-btn {
+    @apply px-2 py-0.5 text-[10.5px];
+  }
+
+  /* A native select dressed as the house input: the chevron is drawn by the
+     wrapper, so the browser's own is suppressed. */
+  .select {
+    @apply w-full cursor-pointer appearance-none rounded-md border border-ink-600 bg-ink-950 py-2 pl-3 pr-8 text-[12px] text-ink-300 transition-colors focus:border-ink-300 focus:outline-none focus:ring-1 focus:ring-ink-300;
+  }
+
+  /* ---- recipes the mock adds ------------------------------------------- */
+
+  /* UiTooltipContent — shared verbatim by HoverCard and ChartTooltip. */
+  .pp-tooltip {
+    @apply rounded-md border border-ink-600 bg-[#1B202C] px-3 py-1.5 text-[12px] leading-[1.5] text-ink-50;
+    box-shadow:
+      0 4px 6px -1px rgb(0 0 0 / 0.1),
+      0 2px 4px -2px rgb(0 0 0 / 0.1);
+  }
+
+  /* A label that carries a tooltip: the mock marks it with a dotted rule at a
+     4px offset, and nothing else. */
+  .tip-label {
+    @apply cursor-help underline decoration-dotted underline-offset-4;
+  }
+
+  /* One outlined capsule per leg — logo · venue · direction. No tint: the APR
+     stays the only strong colour on the row. */
+  .leg-cap {
+    @apply inline-flex items-center gap-1.5 whitespace-nowrap rounded border border-wash/[0.15] py-1 pl-[5px] pr-2 text-[14px] font-medium leading-[16.94px];
+  }
+
+
+
+
+  /* The mock's neutral rounded pill (the leg-kind marker in a table row). */
+  .pp-pill {
+    @apply inline-flex items-center justify-center whitespace-nowrap rounded bg-ink-300/25 px-1 py-0.5 text-[10px] leading-[12.1px] text-ink-200;
+  }
+
+
+  /* The round chevron that opens a card (PpCard's disclosure). */
+  .pp-chevron {
+    @apply inline-flex shrink-0 items-center justify-center rounded-full bg-wash/[0.15] p-2 text-ink-50 transition-colors;
   }
 
   .bar-pnl-gain {
@@ -203,6 +274,48 @@
     @apply pointer-events-none absolute rounded border border-grass;
     inset: -6px;
     animation: flashPulse 1.8s ease-out both;
+  }
+}
+
+/* The pair card's Roll over pill: once every ten seconds the ↻ turns a full
+   circle and the pill glows for a beat — a nudge, not a siren. The action
+   is the first 8% of the loop; the other 92% is rest. Off under reduced
+   motion. */
+.roll-nudge {
+  animation: rollNudgeGlow 10s ease-in-out infinite;
+}
+.roll-nudge svg {
+  animation: rollNudgeSpin 10s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .roll-nudge,
+  .roll-nudge svg {
+    animation: none;
+  }
+}
+@keyframes rollNudgeSpin {
+  0% {
+    transform: rotate(0deg);
+  }
+  8% {
+    transform: rotate(360deg);
+  }
+  100% {
+    transform: rotate(360deg);
+  }
+}
+@keyframes rollNudgeGlow {
+  0% {
+    box-shadow: 0 0 0 0 rgba(27, 227, 194, 0);
+  }
+  3% {
+    box-shadow: 0 0 0 4px rgba(27, 227, 194, 0.28);
+  }
+  10% {
+    box-shadow: 0 0 0 0 rgba(27, 227, 194, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(27, 227, 194, 0);
   }
 }
 

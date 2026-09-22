@@ -45,7 +45,7 @@ interface Props {
   scope: string;
   /** Preview-shaped actions (NEVER with execute-only fields like pegToTouch). */
   actions: ActionInput[] | null;
-  tone?: 'green' | 'red' | 'cyan';
+  tone?: 'green' | 'red' | 'cyan' | 'buy' | 'sell';
   label: ReactNode;
   /** Only fetch the preview while hovered (for closes / server-built actions). */
   lazyPreview?: boolean;
@@ -473,7 +473,7 @@ function HoverCard({
           {execError}
         </div>
       )}
-      <div className="mb-1.5 flex items-center justify-between text-[10px] uppercase tracking-wider text-ink-500">
+      <div className="mb-1.5 flex items-center justify-between text-[12px] font-normal text-ink-300">
         <span>Review</span>
         <span className="num">
           {isError ? 'preview failed' : estimating ? 'previewing…' : Number.isFinite(ageMs) ? `${Math.floor(ageMs / 1000)}s ago` : '—'}

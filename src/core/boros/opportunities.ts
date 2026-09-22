@@ -312,6 +312,43 @@ export function borosInitialMarginUsd(
 }
 
 /**
+ * The mark rate at which a Boros position backed by EXACTLY its initial
+ * margin is liquidated.
+ *
+ * A fixed-rate position's mark-to-market is linear in the rate move —
+ * ΔPnL ≈ −Δrate × N × DTM/365 for a short (receive fixed), the mirror for a
+ * long — and the IM and MM formulas are the same expression scaled by kIM and
+ * kMM. So the loss that eats the equity down to maintenance is
+ * N × max(|apr|, floor) × max(DTM, tThresh)/365 × (kIM − kMM), and the rate
+ * move that produces it is
+ *   Δ = max(|apr|, floor) × max(DTM, tThresh)/DTM × (kIM − kMM).
+ * A short (receives fixed) loses when the rate RISES: liq = apr + Δ. A long
+ * loses when it falls: liq = apr − Δ. Discounting is ignored, as it is in the
+ * IM formula itself.
+ *
+ * This is the FLOOR of the distance, not the account's actual one: cross
+ * collateral beyond the IM, or a fatter isolated bucket, moves it further
+ * out. Null when either coefficient is missing, kMM is not below kIM, or the
+ * market has matured.
+ */
+export function borosLiquidationApr(
+  m: BorosMarket,
+  execApr: number,
+  side: 'long' | 'short',
+  nowSec: number,
+): number | null {
+  if (!Number.isFinite(m.kIM) || m.kIM <= 0) return null;
+  if (!Number.isFinite(m.kMM) || m.kMM <= 0 || m.kMM >= m.kIM) return null;
+  if (!Number.isFinite(execApr)) return null;
+  const dtmDays = (m.maturity - nowSec) / DAY_SECONDS;
+  if (!(dtmDays > 0)) return null;
+  const tThreshDays = (Number.isFinite(m.tThreshSec) ? m.tThreshSec : 0) / DAY_SECONDS;
+  const rate = Math.max(Math.abs(execApr), borosAprFloor(m));
+  const move = (rate * Math.max(dtmDays, tThreshDays) * (m.kIM - m.kMM)) / dtmDays;
+  return side === 'short' ? execApr + move : execApr - move;
+}
+
+/**
  * Initial margin one perp leg posts at the venue's max leverage — what
  * `PairTicket` actually opens at. Deliberately EXCLUDES preflight's
  * `PREFLIGHT_MARGIN_BUFFER` and `TAKER_FEE_RESERVE`: those make preflight a

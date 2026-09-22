@@ -23,10 +23,13 @@
  */
 import { useMemo, useState } from 'react';
 import type { BorosPairRequest, BorosSimulatedLeg, StrategyLeg } from '../api/types';
+import { VenueIcon } from '../components/AssetIcon';
 import { SignedNumber } from '../components/SignedNumber';
 import { QueryError } from '../components/QueryError';
 import { knownRate } from '../lib/boros';
-import { fieldValue, fmtPct, fmtTokenQty, fmtUsd, prettyVenue, sigGrouped } from '../lib/fmt';
+import { fieldValue, fmtDateLocal, fmtPct, fmtTokenQty, fmtUsd, prettyVenue, sigGrouped } from '../lib/fmt';
+import { AffixedInput, EstimateCard, EstimateRow, LegCard, SlippageLine } from './PairTicketBits';
+import { FieldLabel } from './SymbolCombobox';
 import {
   useBorosAgent,
   useBorosCancelAndClose,
@@ -434,8 +437,33 @@ export function CloseBorosForm({
     );
   }
 
+  const unit0 = closable[0]?.collateral ?? '';
+  const px = sim.data?.simulation.collateralPriceUsd;
+  const inUsd = px != null && px > 0;
+  /** A collateral figure, in dollars when the quote carries a price. */
+  const money = (n: number) =>
+    inUsd ? <SignedNumber value={n * (px as number)} format={(v) => fmtUsd(v)} /> : <SignedNumber value={n} format={(v) => fmtTokenQty(v, unit0)} />;
+  const nowSec = Date.now() / 1000;
+  const legFacts = closable.map((l, i) => {
+    const q = simLegFor(i);
+    const { value, invalid } = sizeOf(l);
+    // PnL at the rate the book would actually give, over the leg's life:
+    // (locked − exec) × size × years, signed by the side being closed.
+    const years = l.maturity ? Math.max(0, l.maturity - nowSec) / 31_536_000 : null;
+    const estPnl =
+      q?.execApr != null && l.entryApr !== undefined && years !== null
+        ? (l.side === 'LONG' ? q.execApr - l.entryApr : l.entryApr - q.execApr) * value * years
+        : null;
+    return { l, q, value, invalid, estPnl };
+  });
+  const totalPnl = legFacts.some((f) => f.estPnl !== null)
+    ? legFacts.reduce((s, f) => s + (f.estPnl ?? 0), 0)
+    : null;
+  const sizeShown = Number(shownSize());
+  const flatAfter = Number.isFinite(sizeShown) && sizeShown >= maxCloseSize - Math.max(1e-9, maxCloseSize * 1e-7);
+
   return (
-    <div className="flex flex-col gap-3">
+    <div className="flex flex-col gap-4">
       {agentBlocked && (
         <p className="rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-[11px] leading-relaxed text-amber-300/90">
           {agentReason}
@@ -447,272 +475,280 @@ export function CloseBorosForm({
         </p>
       )}
 
+      {/* What is held, leg by leg: the market, its size, the rate it locked
+          and where the mark is now. */}
+      <div className="flex flex-col gap-1.5">
+        {closable.map((l) => {
+          const days = l.maturity ? Math.max(0, Math.round((l.maturity - nowSec) / 86_400)) : null;
+          return (
+            <LegCard
+              key={l.marketId}
+              kind="Boros"
+              venue={prettyVenue(l.venue)}
+              side={l.side}
+              sub={`${l.base}${l.maturity ? ` · ${fmtDateLocal(l.maturity)}` : ''}${days !== null ? ` · ${days}d` : ''}`}
+              value={`${sigGrouped(l.notionalToken ?? 0)} ${l.collateral ?? ''}`}
+              valueSub={
+                l.entryApr !== undefined || knownRate(l.markApr) ? (
+                  <>
+                    {l.entryApr !== undefined ? `locked ${fmtPct(l.entryApr)}` : ''}
+                    {l.entryApr !== undefined && knownRate(l.markApr) ? ' · ' : ''}
+                    {knownRate(l.markApr) ? `mark ${fmtPct(l.markApr)}` : ''}
+                  </>
+                ) : undefined
+              }
+            />
+          );
+        })}
+      </div>
+
       {/* One size for the close, applied to both legs: they are one hedge,
           and the request already sends the smaller of the two. Capped at the
           smallest leg — past that the bigger leg would be left naked. */}
-      <div className="flex flex-col gap-1">
-        <div className="flex items-baseline justify-between text-[11px] text-ink-400">
-          <span>Close size</span>
+      <div className="flex flex-col gap-1.5">
+        <div className="flex items-baseline justify-between gap-3">
+          <FieldLabel htmlFor="boros-close-size">{closable.length > 1 ? 'Close size · both legs' : 'Close size'}</FieldLabel>
           {/* The ceiling, stated where the number is typed — and clickable.
               It was only discoverable by overshooting and reading an error. */}
-          <span className="num">
+          <button
+            type="button"
+            className="num text-[11px] text-ink-400 transition-colors hover:text-ink-100"
+            title={closable.length > 1 ? 'Close the whole position on both legs' : 'Close the whole position'}
+            onClick={() => setSizeEdited(fieldValue(maxCloseSize))}
+          >
             max{' '}
-            <button
-              type="button"
-              className="underline decoration-dotted underline-offset-2 hover:text-ink-200"
-              title="Close the whole position on both legs"
-              onClick={() => setSizeEdited(fieldValue(maxCloseSize))}
-            >
-              {`${sigGrouped(maxCloseSize)} ${closable[0]?.collateral ?? ''}`}
-            </button>
-          </span>
+            <span className="text-link underline decoration-link/40 underline-offset-2">
+              {`${sigGrouped(maxCloseSize)} ${unit0}`}
+            </span>
+          </button>
         </div>
-        <label className="flex items-center gap-2 text-[11px] text-ink-400">
+        <AffixedInput affix={unit0 ? <span>{unit0}</span> : null}>
           <input
-            className={`input num h-7 flex-1 px-2 py-0.5 ${anySizeInvalid ? 'border-rose-500' : ''}`}
+            id="boros-close-size"
+            className={`input num pr-16 ${anySizeInvalid ? '!border-rose-500/60' : ''}`}
             inputMode="decimal"
             value={shownSize()}
             onChange={(e) => setSizeEdited(e.target.value)}
             aria-label="Close size, applied to both legs"
           />
-          {closable[0]?.collateral && <span className="text-ink-500">{closable[0].collateral}</span>}
-        </label>
-      </div>
-
-      {sim.isError && <QueryError title="Couldn’t quote this close" error={sim.error} onRetry={() => sim.refetch()} />}
-      <div className="flex flex-col gap-2.5 rounded-lg border border-ink-800 bg-ink-950/60 px-3 py-2.5 text-[11px]">
-        {closable.map((l, i) => {
-          const id = l.marketId as number;
-          const unit = l.collateral ?? '';
-          const open = l.notionalToken ?? 0;
-          const { value, invalid } = sizeOf(l);
-          /** Read off the quote, not recomputed: the gate owns the threshold,
-           * the collateral price and the flatten exemption. Matched on
-           * marketId — the quote is a pair, and its other blockers are about
-           * the partner leg. */
-          const belowMin = sim.data?.gate.blockers.find(
-            (b) => b.code === 'below-min-order-value' && b.marketId === id,
-          );
-          const q = simLegFor(i);
-          const err = failed.find((f) => f.marketId === id);
-          const part = partial.find((x) => x.marketId === id);
-          const finished = done.find((d) => d.marketId === id);
-          // PnL at the rate the book would actually give, over the leg's life:
-          // (locked − exec) × size × years, signed by the side being closed.
-          const years = l.maturity ? Math.max(0, l.maturity - Date.now() / 1000) / 31_536_000 : null;
-          const estPnl =
-            q?.execApr != null && l.entryApr !== undefined && years !== null
-              ? (l.side === 'LONG' ? q.execApr - l.entryApr : l.entryApr - q.execApr) * value * years
-              : null;
-          return (
-            <div key={id} className="flex flex-col gap-0.5">
-              <span className="flex items-center gap-1.5 text-ink-300">
-                <span className="text-ink-200">
-                  {prettyVenue(l.venue)} <span className="text-ink-500">{l.side}</span>
-                </span>
-                {/* The size THIS leg closes, not what it holds. An open-size
-                    figure sitting where every other number is a simulation of
-                    the close read as a quote that had not moved. Open size is
-                    still shown, as the "of N" it is being taken out of, and
-                    only when the close is partial. */}
-                <span className="num ml-auto text-ink-200">
-                  {finished ? (
-                    // A leg that CLOSED says so, in the slot where every other
-                    // figure is a size still to be sent. Without this a
-                    // one-closed / one-failed press showed the closed leg as
-                    // an armed size — nothing on screen said the hedge was
-                    // now half gone.
-                    <span className="text-emerald-300">closed ✓</span>
-                  ) : (
-                    <>
-                      {invalid ? '—' : `${sigGrouped(value)} ${unit}`}
-                      {!invalid && value < open - Math.max(1e-9, open * 1e-7) && (
-                        <span className="text-ink-500"> of {sigGrouped(open)} {unit}</span>
-                      )}
-                    </>
-                  )}
-                </span>
-              </span>
-              {finished ? (
-                <span className="text-ink-400">
-                  This leg is closed; it will not be sent again.
-                  {finished.yours > 0 && ` ${sigGrouped(finished.yours)} ${unit} of it is still open — you closed part.`}
-                </span>
-              ) : invalid ? (
-                <span className="text-rose-400">
-                  size must be above 0 and at most {sigGrouped(maxCloseSize)} {unit}
-                </span>
-              ) : belowMin ? (
-                /* The server's own words — a copy here could disagree at the
-                   boundary. */
-                <span className="text-rose-400">{belowMin.message}</span>
+        </AffixedInput>
+        {anySizeInvalid ? (
+          <span className="text-[11px] text-rose-300">
+            size must be above 0 and at most {sigGrouped(maxCloseSize)} {unit0}
+          </span>
+        ) : (
+          <span className="text-[11px] text-ink-400">
+            {flatAfter ? (
+              closable.length > 1 ? (
+                <>
+                  whole pair · <span className="text-ink-200">flat after</span> on both markets
+                </>
               ) : (
                 <>
-                  <span className="flex justify-between text-ink-400">
-                    <span title="Market order after cancelling any resting orders on this market">est. rate</span>
-                    <span className="num text-ink-100">
-                      {q?.execApr != null ? fmtPct(q.execApr) : sim.isFetching ? 'quoting…' : '—'}
-                      {/* The bound the order carries: book mid ± the tolerance
-                          (the server derives it the same way). The simulation's
-                          own `worstApr` is exec ± tolerance, which is not what
-                          this close sends. */}
-                      {(() => {
-                        const mid = ctx.data?.markets.find((m) => m.marketId === id)?.midApr;
-                        if (!knownRate(mid) || slipInvalid) return null;
-                        const bound = l.side === 'LONG' ? mid - slipPct / 100 : mid + slipPct / 100;
-                        return <span className="text-ink-500"> (worst {fmtPct(bound)})</span>;
-                      })()}
-                    </span>
-                  </span>
-                  <span className="flex justify-between text-ink-400">
-                    {/* "before fees" because it IS: estPnl is
-                        (locked − exec) × size × years, with no fee term. The
-                        drag is quoted once below rather than subtracted here,
-                        which would need a per-leg apportionment the simulation
-                        does not return. */}
-                    <span title="(locked − execution rate) × size × time to maturity, before the fee below">est. PnL</span>
-                    {/* estPnl is in COLLATERAL units (rate × size × years, size
-                        in the market's collateral). Priced in dollars the same
-                        way the fee line below is; without a price it is shown
-                        in the token, never as dollars it is not. */}
-                    {estPnl !== null ? (
-                      (() => {
-                        const px = sim.data?.simulation.collateralPriceUsd;
-                        return px != null && px > 0 ? (
-                          <SignedNumber value={estPnl * px} format={(n) => fmtUsd(n)} />
-                        ) : (
-                          <SignedNumber value={estPnl} format={(n) => fmtTokenQty(n, unit)} />
-                        );
-                      })()
-                    ) : (
-                      <span className="text-ink-500">—</span>
-                    )}
-                  </span>
-                  {/* The taker fee THIS order pays, from the simulation: rate ×
-                      size × years to maturity. Settlement fees are not here —
-                      a close ends the settlements that would have paid them. */}
-                  {q?.takerFeeCost !== undefined && (
-                    <span className="flex justify-between text-ink-400">
-                      <span title="Boros taker fee on this order: rate × size × time to maturity">est. fee</span>
-                      {(() => {
-                        const px = sim.data?.simulation.collateralPriceUsd;
-                        return px != null && px > 0 ? (
-                          <span className="num text-guava">−{fmtUsd(q.takerFeeCost * px)}</span>
-                        ) : (
-                          <span className="num text-guava">−{fmtTokenQty(q.takerFeeCost, unit)}</span>
-                        );
-                      })()}
-                    </span>
-                  )}
-                  {/* A dust residual is not a shortfall: the walk returns
-                      sizes like 419.49999999 for a book that fully covers
-                      419.5, and warning on that reads as "no depth" on a
-                      market that has plenty. */}
-                  {q && q.shortfallSize > Math.max(1e-6, value * 1e-6) && (
-                    <span className="text-amber-400/90">
-                      the book only supports {sigGrouped(q.estFillSize)} {unit} of this size — it
-                      will fill short
-                    </span>
-                  )}
-                  {q && q.bookStatus === 'unavailable' && (
-                    <span className="text-amber-400/90">
-                      order book unavailable — no rate can be quoted for this leg
-                    </span>
-                  )}
+                  whole position · <span className="text-ink-200">flat after</span>
                 </>
-              )}
-              {part && (
-                <span className="text-amber-400/90">
-                  filled {sigGrouped(part.filled)} {unit} — {sigGrouped(part.left)} {unit} of what
-                  you asked for is still open. The size above is set to what is left; close again
-                  to finish it.
-                </span>
-              )}
-              {err && <span className="text-rose-400">{err.message}</span>}
-            </div>
-          );
-        })}
-      </div>
-
-      {/* One line, once, from the figure the simulation already returns — the
-          per-leg PnL above is a rate difference and carries no fee term, so
-          without this the screen showed only the flattering half. */}
-
-      {/* Same shape as the Boros ticket: the bound is stated inline and only
-          becomes editable when asked for. A close differs in that the bound
-          applies to EACH leg being closed — there is no spread here, just one
-          rate per market — so it is never summed. */}
-      <div className="flex flex-col gap-1.5">
-        <div className="flex items-baseline justify-between gap-3">
-          <span
-            className="text-[11px] text-ink-400"
-            title="A rate bound: the worst APR this close will accept, per leg. A close that keeps missing it leaves the position open. Size is capped at what is open once the cancel lands — Boros has no reduce-only flag, so it can never cross past flat."
-          >
-            Slippage
-          </span>
-          <span className="num text-[12px] text-ink-100">
-            {estSlippageApr !== null ? (
-              <>Est. {fmtPct(estSlippageApr)}</>
+              )
             ) : (
-              <span className="text-ink-500">Est. —</span>
+              'partial close'
             )}
-            <span className="text-ink-500"> / Max: </span>
-            <button
-              type="button"
-              className="underline decoration-dotted underline-offset-2 hover:text-white"
-              title="Change the tolerance"
-              onClick={() => setSlipOpen((v) => !v)}
-            >
-              {slipStr}%
-            </button>
-            <span className="text-ink-500"> APR</span>
+            {closable.length === 1 && (
+              <>
+                {' · '}
+                <span title="The size is capped at what is open, so it can never cross past flat.">
+                  capped at open size
+                </span>
+              </>
+            )}
           </span>
-        </div>
-        {slipOpen && (
-          <div className="flex flex-col gap-1.5 rounded border border-ink-700 bg-ink-900/60 px-2.5 py-2">
-            <span className="text-[10.5px] leading-relaxed text-ink-400">
-              Max rate this close will accept. A wider tolerance may be needed for a large size or a
-              thin book.
-            </span>
-            <div className="flex items-center gap-1.5">
-              {['0.2', '0.4', '1', '2'].map((q) => (
-                <button
-                  key={q}
-                  type="button"
-                  className={`btn-ghost-xs ${slipStr === q ? '!border-info/60 !text-pastel-blue' : ''}`}
-                  onClick={() => setSlipEdited(q)}
-                >
-                  {q}%
-                </button>
-              ))}
-              <input
-                className={`input num h-7 flex-1 px-2 py-0.5 text-[12px] ${slipInvalid ? 'border-rose-500' : ''}`}
-                inputMode="decimal"
-                value={slipStr}
-                onChange={(e) => setSlipEdited(e.target.value)}
-                aria-label="Close slippage tolerance, APR percent"
-              />
-              <span className="text-[11px] text-ink-400">%</span>
-            </div>
-            {slipInvalid && (
-              <span className="text-[11px] text-rose-400">slippage must be in (0, {MAX_SLIP_PCT}]</span>
-            )}
-          </div>
         )}
       </div>
 
-      <HoldToConfirmButton
-        tone="red"
-        // No quote, no close: a hold with the numbers blank sends a bound
-        // nothing on screen describes.
-        disabled={close.isPending || slipInvalid || anySizeInvalid || agentBlocked || legsBlocked || sim.isError || (simReq !== null && !sim.data) || anyBelowMin}
-        onConfirm={run}
-        className="w-full"
+      {sim.isError && <QueryError title="Couldn’t quote this close" error={sim.error} onRetry={() => sim.refetch()} />}
+      <EstimateCard
+        dataUpdatedAt={sim.dataUpdatedAt}
+        estimating={sim.isPlaceholderData || (sim.isFetching && !sim.data)}
+        isError={sim.isError}
       >
-        {close.isPending
-          ? 'Closing…'
-          : `Close ${closable.length === 1 ? 'leg' : `${closable.length} legs`} ▸`}
-      </HoldToConfirmButton>
+        {/* The PnL this close realises — (locked − execution rate) × size ×
+            time to maturity, before the fee — summed over the legs. */}
+        <div className="flex items-end justify-between gap-3">
+          <div className="flex flex-col">
+            <span className="text-[12.5px] text-ink-50">Est. PnL</span>
+            <span className="text-[11px] text-ink-400">before fee</span>
+          </div>
+          <span className="num text-lg font-semibold">
+            {totalPnl !== null ? money(totalPnl) : <span className="text-ink-500">—</span>}
+          </span>
+        </div>
+        {/* Per-leg simulation. One leg: plain rows. Two legs: a table, one
+            row per market, with any per-leg notice under it. */}
+        {(() => {
+          const noticeFor = (f: (typeof legFacts)[number]) => {
+            const id = f.l.marketId as number;
+            const unit = f.l.collateral ?? '';
+            /** Read off the quote, not recomputed: the gate owns the threshold,
+             * the collateral price and the flatten exemption. Matched on
+             * marketId — the quote is a pair, and its other blockers are about
+             * the partner leg. */
+            const belowMin = sim.data?.gate.blockers.find(
+              (b) => b.code === 'below-min-order-value' && b.marketId === id,
+            );
+            const err = failed.find((x) => x.marketId === id);
+            const part = partial.find((x) => x.marketId === id);
+            const finished = done.find((d) => d.marketId === id);
+            const q = f.q;
+            const prefix = closable.length > 1 ? `${prettyVenue(f.l.venue)}: ` : '';
+            return (
+              <>
+                {finished && (
+                  <span className="text-[11px] text-ink-400">
+                    {prefix}This leg is closed; it will not be sent again.
+                    {finished.yours > 0 && ` ${sigGrouped(finished.yours)} ${unit} of it is still open — you closed part.`}
+                  </span>
+                )}
+                {/* The server's own words — a copy here could disagree at the boundary. */}
+                {!finished && belowMin && <span className="text-[11px] text-rose-400">{prefix}{belowMin.message}</span>}
+                {/* A dust residual is not a shortfall: the walk returns sizes
+                    like 419.49999999 for a book that fully covers 419.5, and
+                    warning on that reads as "no depth" on a market that has
+                    plenty. */}
+                {!finished && q && q.shortfallSize > Math.max(1e-6, f.value * 1e-6) && (
+                  <span className="text-[11px] text-amber-400/90">
+                    {prefix}the book only supports {sigGrouped(q.estFillSize)} {unit} of this size — it
+                    will fill short
+                  </span>
+                )}
+                {!finished && q && q.bookStatus === 'unavailable' && (
+                  <span className="text-[11px] text-amber-400/90">
+                    {prefix}order book unavailable — no rate can be quoted for this leg
+                  </span>
+                )}
+                {part && (
+                  <span className="text-[11px] text-amber-400/90">
+                    {prefix}filled {sigGrouped(part.filled)} {unit} — {sigGrouped(part.left)} {unit} of what
+                    you asked for is still open. The size above is set to what is left; close again
+                    to finish it.
+                  </span>
+                )}
+                {err && <span className="text-[11px] text-rose-400">{prefix}{err.message}</span>}
+              </>
+            );
+          };
+          const rateOf = (q: BorosSimulatedLeg | null) =>
+            q?.execApr != null ? fmtPct(q.execApr) : sim.isFetching ? 'quoting…' : '—';
+          const feeOf = (q: BorosSimulatedLeg | null, unit: string) =>
+            q?.takerFeeCost !== undefined ? (
+              <span className="text-guava">
+                −{inUsd ? fmtUsd(q.takerFeeCost * (px as number)) : fmtTokenQty(q.takerFeeCost, unit)}
+              </span>
+            ) : (
+              '—'
+            );
+          if (closable.length === 1) {
+            const f = legFacts[0];
+            return (
+              <div className="flex flex-col gap-1.5 border-t border-ink-800/80 pt-2">
+                <EstimateRow
+                  label="Est. rate"
+                  title="Market order after cancelling any resting orders on this market"
+                  value={rateOf(f.q)}
+                />
+                {/* The taker fee THIS order pays, from the simulation: rate ×
+                    size × years to maturity. Settlement fees are not here —
+                    a close ends the settlements that would have paid them. */}
+                <EstimateRow
+                  label="Est. fee"
+                  title="Boros taker fee on this order: rate × size × time to maturity"
+                  value={feeOf(f.q, f.l.collateral ?? '')}
+                />
+                {noticeFor(f)}
+              </div>
+            );
+          }
+          return (
+            <div className="flex flex-col gap-1">
+              <table className="w-full">
+                <thead>
+                  <tr className="text-[12px] font-normal text-ink-300">
+                    <th className="pb-1 text-left font-medium">leg</th>
+                    <th className="pb-1 text-right font-medium">est rate</th>
+                    <th className="pb-1 text-right font-medium">pnl</th>
+                    <th className="pb-1 text-right font-medium">est fee</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {legFacts.map((f) => {
+                    const id = f.l.marketId as number;
+                    const finished = done.find((d) => d.marketId === id);
+                    return (
+                      <tr key={id} className="border-t border-ink-800/80">
+                        <td className="py-1.5 text-[12px] text-ink-50">
+                          <span className="inline-flex items-center gap-1.5">
+                            <VenueIcon venue={f.l.venue} size={14} />
+                            {prettyVenue(f.l.venue)}
+                          </span>
+                          {finished && <span className="ml-1.5 text-[11px] text-emerald-300">closed ✓</span>}
+                        </td>
+                        <td className="num py-1.5 text-right text-[12.5px] text-ink-50">{rateOf(f.q)}</td>
+                        <td className="num py-1.5 text-right text-[12px]">
+                          {f.estPnl !== null ? money(f.estPnl) : <span className="text-ink-500">—</span>}
+                        </td>
+                        <td className="num py-1.5 text-right text-[12px] text-ink-50">{feeOf(f.q, f.l.collateral ?? '')}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+              {legFacts.map((f) => (
+                <span key={f.l.marketId} className="contents">
+                  {noticeFor(f)}
+                </span>
+              ))}
+            </div>
+          );
+        })()}
+
+        {/* Same shape as the Boros ticket: the bound is stated inline and only
+            becomes editable when asked for. A close differs in that the bound
+            applies to EACH leg being closed — there is no spread here, just one
+            rate per market — so it is never summed. */}
+        <div className="border-t border-ink-800/80 pt-2">
+          <SlippageLine
+            est={estSlippageApr !== null ? fmtPct(estSlippageApr) : null}
+            max={`${slipStr}%`}
+            unit="APR"
+            open={slipOpen}
+            onToggle={() => setSlipOpen((v) => !v)}
+            value={slipStr}
+            onChange={setSlipEdited}
+            invalid={slipInvalid}
+            invalidText={`slippage must be in (0, ${MAX_SLIP_PCT}]`}
+            inputAriaLabel="Close slippage tolerance, APR percent"
+            title="The worst APR this close accepts, per leg. A close that misses it leaves the position open."
+            hint="Max rate this close will accept. A wider tolerance may be needed for a large size or a thin book."
+          />
+        </div>
+      </EstimateCard>
+
+      <div className="flex flex-col gap-1.5">
+        <HoldToConfirmButton
+          tone="red"
+          // No quote, no close: a hold with the numbers blank sends a bound
+          // nothing on screen describes.
+          disabled={close.isPending || slipInvalid || anySizeInvalid || agentBlocked || legsBlocked || sim.isError || (simReq !== null && !sim.data) || anyBelowMin}
+          onConfirm={run}
+          className="w-full"
+        >
+          {close.isPending
+            ? 'Closing…'
+            : `Close ${closable.length === 1 ? 'leg' : `${closable.length} legs`} ▸`}
+        </HoldToConfirmButton>
+        <p className="text-[11px] leading-relaxed text-ink-400">
+          {closable.length === 1
+            ? 'Cancels any resting orders on this market first, then sends one market order. The perp leg stays open.'
+            : `Cancels resting orders on both markets, then ${closable.length === 2 ? 'two' : closable.length} market orders. Size is capped at what is open once the cancel lands.`}
+        </p>
+      </div>
     </div>
   );
 }

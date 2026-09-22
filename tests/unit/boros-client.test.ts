@@ -493,7 +493,7 @@ describe('fetchBorosCollaterals', () => {
     const market = {
       marketId: 155, tokenId: 3, name: '', venue: '', base: '', maturity: Date.now() / 1000 + 365 * 86_400,
       paymentPeriod: 0, settleFeeApr: 0, markApr: 0.1, floatingApr: 0, midApr: 0, notionalOi: 0, takerFeeRate: 0,
-      state: 'Normal', assetMarkPriceUsd: 1, kIM: 1, imTickThresh: 0, imTickStep: 0, tThreshSec: 0, maxRateDeviationApr: 0,
+      state: 'Normal', assetMarkPriceUsd: 1, kIM: 1, kMM: 0, imTickThresh: 0, imTickStep: 0, tThreshSec: 0, maxRateDeviationApr: 0,
     };
     const e18 = (n: number) => `${n}000000000000000000`;
     const book = (orders: Array<{ side: number; im: number }>, combined: number) => ({
@@ -536,7 +536,7 @@ describe('fetchBorosCollaterals', () => {
 describe('resolveCollateralPricesUsd', () => {
   it('prices stables at 1, token collateral via a same-asset market, unknown as null', () => {
     const mk = (tokenId: number, base: string, px: number) =>
-      ({ marketId: tokenId * 100, tokenId, name: '', venue: '', base, maturity: 0, paymentPeriod: 0, settleFeeApr: 0, markApr: 0, floatingApr: 0, midApr: 0, notionalOi: 0, takerFeeRate: 0, state: 'Normal', assetMarkPriceUsd: px, kIM: 0, imTickThresh: 0, imTickStep: 0, tThreshSec: 0, maxRateDeviationApr: 0 }) as const;
+      ({ marketId: tokenId * 100, tokenId, name: '', venue: '', base, maturity: 0, paymentPeriod: 0, settleFeeApr: 0, markApr: 0, floatingApr: 0, midApr: 0, notionalOi: 0, takerFeeRate: 0, state: 'Normal', assetMarkPriceUsd: px, kIM: 0, kMM: 0, imTickThresh: 0, imTickStep: 0, tThreshSec: 0, maxRateDeviationApr: 0 }) as const;
     const prices = resolveCollateralPricesUsd([
       { ...mk(3, 'HYPE', 40) }, // USDT-margined HYPE book
       { ...mk(1, 'BTC', 118_000) }, // BTC-margined BTC book

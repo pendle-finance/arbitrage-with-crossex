@@ -1,4 +1,5 @@
 import { screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { AssetGroup, AssetPerpOpen, AssetViewResponse, VenueFees } from '../../api/types';
@@ -89,7 +90,7 @@ describe('AssetsHome with a held coin the terminal does not support', () => {
   it('adds the SOL leg PnL to the totals strip, held coin counts in totals', async () => {
     renderWithClient(<AssetsHome />);
     await screen.findByText('SOL');
-    const strip = screen.getAllByText('Total PnL')[0].nextElementSibling!;
+    const strip = screen.getAllByText('Total Account PnL')[0].nextElementSibling!;
     expect(strip).toHaveTextContent('$17.20');
   });
 
@@ -98,7 +99,7 @@ describe('AssetsHome with a held coin the terminal does not support', () => {
     server.use(http.get('/api/asset-view/:address', () => HttpResponse.json(env({ ...assetView, assets: [whale] }))));
     renderWithClient(<AssetsHome />);
     await screen.findByText('SOL');
-    const strip = screen.getAllByText('Total PnL')[0].nextElementSibling!;
+    const strip = screen.getAllByText('Total Account PnL')[0].nextElementSibling!;
     expect(strip).toHaveTextContent('$6,000,000.37');
   });
 
@@ -111,6 +112,8 @@ describe('AssetsHome with a held coin the terminal does not support', () => {
 
   it('shows every coin as a card with no dust line, no dust fold', async () => {
     renderWithClient(<AssetsHome />);
+    await screen.findByText('ETH');
+    await userEvent.click(screen.getByRole('checkbox', { name: /Hide inactive pairs/ }));
     await screen.findByText('BTC');
     expect(screen.queryByText(/dust asset/)).toBeNull();
   });

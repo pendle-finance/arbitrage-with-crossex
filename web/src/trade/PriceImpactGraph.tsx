@@ -18,6 +18,7 @@
 import type { ReactNode } from 'react';
 import { useVenueBook } from '../api/queries';
 import type { ActionInput, BookTouch, PreviewResult } from '../api/types';
+import { VenueIcon } from '../components/AssetIcon';
 import { FreshnessButton } from '../components/FreshnessIndicator';
 import { parseSymbol, prettyVenue, sig } from '../lib/fmt';
 import { usePreviewDebounced } from './usePreview';
@@ -311,6 +312,7 @@ export function PriceImpactGraph({
   staleError,
   onRefetch,
   dim = false,
+  embedded = false,
 }: {
   long: LegImpact;
   short: LegImpact;
@@ -319,23 +321,34 @@ export function PriceImpactGraph({
   onRefetch: () => void;
   /** Dim the impact marks while the preview describes a stale input. */
   dim?: boolean;
+  /** Render inside a caller's card: no border, heading or freshness chip of
+   * its own — the estimate card around it carries those. */
+  embedded?: boolean;
 }) {
   const scale = assembleImpactMarks(long, short);
 
   return (
-    <div className="flex flex-col gap-2 rounded-lg border border-ink-800 bg-ink-950/60 px-3 py-2">
-      <div className="flex items-center justify-between">
-        <span className="text-[10px] font-semibold uppercase tracking-wider text-ink-500">
-          Book &amp; market impact
-        </span>
-        <FreshnessButton
-          dataUpdatedAt={updatedAt}
-          staleError={staleError}
-          title="Live venue books — refetch"
-          onRefetch={onRefetch}
-          dense
-        />
-      </div>
+    <div
+      className={
+        embedded
+          ? 'flex flex-col gap-2'
+          : 'flex flex-col gap-2 rounded-lg border border-ink-800 bg-ink-950/60 px-3 py-2'
+      }
+    >
+      {!embedded && (
+        <div className="flex items-center justify-between">
+          <span className="text-[12px] font-normal leading-[14.52px] text-ink-300">
+            Book &amp; market impact
+          </span>
+          <FreshnessButton
+            dataUpdatedAt={updatedAt}
+            staleError={staleError}
+            title="Live venue books — refetch"
+            onRefetch={onRefetch}
+            dense
+          />
+        </div>
+      )}
 
       {scale === null ? (
         <div className="py-6 text-center text-[11px] text-ink-500">book &amp; impact unavailable</div>
@@ -361,8 +374,12 @@ export function PriceImpactGraph({
               <div className="relative h-40 border-l border-ink-800">
                 <LegColumn leg={long} marks={scale.long} dim={dim} />
               </div>
-              <div className="truncate pt-0.5 text-center text-[10px] font-medium text-emerald-300" title={`${long.venue} (long)`}>
-                {prettyVenue(long.venue)}
+              <div
+                className="flex items-center justify-center gap-1 truncate pt-0.5 text-center text-[10px] font-medium text-emerald-300"
+                title={`${long.venue} (long)`}
+              >
+                <VenueIcon venue={long.venue} size={12} />
+                <span className="truncate">{prettyVenue(long.venue)}</span>
               </div>
               {long.subLabel && (
                 <div className="truncate text-center text-[9px] text-ink-500">{long.subLabel}</div>
@@ -372,8 +389,12 @@ export function PriceImpactGraph({
               <div className="relative h-40 border-l border-ink-800">
                 <LegColumn leg={short} marks={scale.short} dim={dim} />
               </div>
-              <div className="truncate pt-0.5 text-center text-[10px] font-medium text-rose-300" title={`${short.venue} (short)`}>
-                {prettyVenue(short.venue)}
+              <div
+                className="flex items-center justify-center gap-1 truncate pt-0.5 text-center text-[10px] font-medium text-rose-300"
+                title={`${short.venue} (short)`}
+              >
+                <VenueIcon venue={short.venue} size={12} />
+                <span className="truncate">{prettyVenue(short.venue)}</span>
               </div>
               {short.subLabel && (
                 <div className="truncate text-center text-[9px] text-ink-500">{short.subLabel}</div>
@@ -401,6 +422,7 @@ export function PairBookImpact({
   mode,
   makerLegPick,
   makerPriceStr,
+  embedded,
 }: {
   longSym: string | null;
   shortSym: string | null;
@@ -411,6 +433,8 @@ export function PairBookImpact({
   mode: 'market' | 'maker';
   makerLegPick: 'long' | 'short';
   makerPriceStr: string;
+  /** See PriceImpactGraph.embedded — the pair ticket's estimate card hosts it. */
+  embedded?: boolean;
 }) {
   const notionalNum = Number(notional);
   const enabled = Boolean(longSym && shortSym && Number.isFinite(notionalNum) && notionalNum > 0);
@@ -464,6 +488,7 @@ export function PairBookImpact({
       updatedAt={updatedAt}
       staleError={staleError}
       dim={estimating}
+      embedded={embedded}
       onRefetch={() => {
         void longBook.refetch();
         void shortBook.refetch();

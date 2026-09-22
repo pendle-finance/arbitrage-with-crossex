@@ -88,6 +88,7 @@ describe('AssetCard for a held coin the terminal does not support', () => {
 
   it('keeps Close leg on the SOL leg row, close leg stays', async () => {
     renderSol();
+    await userEvent.click(screen.getByRole('button', { name: /^Ungrouped legs/ }));
     const close = screen.getByRole('button', { name: /^Close .* LONG perp$/ });
     expect(close).toHaveTextContent('Close leg');
     await vi.waitFor(() =>

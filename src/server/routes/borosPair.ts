@@ -5,6 +5,10 @@
  *                                    netted positions and margin buckets
  *   POST /api/boros/pair/simulate  — price a pair at a size (fresh books)
  *   POST /api/boros/pair/execute   — send both legs as ONE atomic batch
+ *   POST /api/boros/roll/simulate  — price a roll: the old pair's close and
+ *                                    the new pair's open, judged as one
+ *   POST /api/boros/roll/execute   — send all four legs as ONE all-or-nothing
+ *                                    batch (see core/boros/rollover.ts)
  *
  * ⚠ THE GATE IS RE-RUN SERVER-SIDE AT EXECUTE. The client's blockers are UX;
  * these are the failsafes. `/execute` re-fetches the books, re-simulates and
@@ -36,10 +40,19 @@ import { COIN_NOT_SUPPORTED_TEXT, isSupportedCoin } from '../../core/coins';
 import { knownRate } from '../../core/boros/venue';
 import { isUpdating } from '../updater';
 import {
+  describeLegFailure,
   limitAprFor,
   submitBorosPair,
   type BorosMarketOrderRequest,
 } from '../../core/boros/orders';
+import {
+  evaluateRollGate,
+  rollLegsFor,
+  submitBorosRoll,
+  type BorosRollResult,
+  type RollGate,
+  type RollOrderIds,
+} from '../../core/boros/rollover';
 import {
   evaluatePairGate,
   pairEligibility,
@@ -123,6 +136,27 @@ interface PairBody {
    */
   clientOrderIdA?: unknown;
   clientOrderIdB?: unknown;
+}
+
+/** One step of a roll, as the panel sends it: the pair and its size. */
+interface RollStepBody {
+  legA?: LegBody;
+  legB?: LegBody;
+  size?: unknown;
+}
+
+interface RollBody {
+  address?: unknown;
+  /** The pair being left. Priced as a close, acknowledged by construction —
+   * a roll IS closing these legs. */
+  exit?: RollStepBody;
+  /** The pair being entered, at the same size. */
+  entry?: RollStepBody;
+  /** §4 acknowledgement for the ENTRY, when a new leg opposes something
+   * already held at the new maturity. */
+  opposingAcknowledged?: unknown;
+  /** Replay keys, one per leg, deduped as one (see `recentRolls`). */
+  clientOrderIds?: Partial<Record<keyof RollOrderIds, unknown>>;
 }
 
 function parseOnlyLeg(raw: unknown): 'A' | 'B' | undefined {
@@ -344,13 +378,40 @@ const sweepExecutions = (): void => {
   }
 };
 
+interface RollPayload {
+  result: BorosRollResult;
+  exit: { simulation: ReturnType<typeof simulateBorosPair>; gate: ReturnType<typeof evaluatePairGate> };
+  entry: { simulation: ReturnType<typeof simulateBorosPair>; gate: ReturnType<typeof evaluatePairGate> };
+  gate: RollGate;
+}
+const recentRolls = new Map<string, { at: number; result: Promise<RollPayload> }>();
+const sweepRolls = (): void => {
+  const now = Date.now();
+  for (const [k, v] of recentRolls) {
+    if (now - v.at > EXECUTION_MEMO_MS) recentRolls.delete(k);
+  }
+};
+
 export function borosExecutionsPending(): number {
   sweepExecutions();
-  return recentExecutions.size;
+  sweepRolls();
+  return recentExecutions.size + recentRolls.size;
 }
 
 export function borosPairRoutes(deps: AppDeps) {
   recentExecutions.clear();
+  recentRolls.clear();
+  /** A roll the venue REFUSED provably traded nothing, so its ids may be
+   * reused for an honest retry; one that rolled or was never confirmed is
+   * remembered, so a lost response answers from here instead of trading. */
+  const rememberRoll = (key: string, pending: Promise<RollPayload>): void => {
+    recentRolls.set(key, { at: Date.now(), result: pending });
+    pending
+      .then(({ result }) => {
+        if (result.status === 'refused') recentRolls.delete(key);
+      })
+      .catch(() => recentRolls.delete(key));
+  };
   const rememberExecution = (key: string, pending: Promise<ExecutionPayload>): void => {
     recentExecutions.set(key, { at: Date.now(), result: pending });
     // A submission that provably left NO position — every submitted leg failed
@@ -437,12 +498,30 @@ export function borosPairRoutes(deps: AppDeps) {
     return m;
   };
 
+  /** undefined = this install cannot read it; null = the read failed. */
+  const readGasBalance = async (fresh: boolean): Promise<number | null | undefined> => {
+    const ordersForGas = deps.getBorosOrders?.();
+    const read = ordersForGas?.getGasBalance?.bind(ordersForGas);
+    if (!read) return undefined;
+    try {
+      return (await deps.cache.get('boros:gas-balance', TTL.boros, read, { fresh })).value;
+    } catch {
+      return null;
+    }
+  };
+
   /**
    * Everything from a validated body up to (but not including) submission —
    * shared verbatim by /simulate and /execute so the two can never price the
    * same request differently.
    */
-  const priceRequest = async (body: PairBody, fresh: boolean) => {
+  const priceRequest = async (
+    body: PairBody,
+    fresh: boolean,
+    /** A roll prices two steps off ONE read of the account and the gas
+     * budget, so both are judged against the same state. */
+    preloaded?: { markets: BorosMarket[]; account: AccountView; gasBalanceUsd: number | null | undefined },
+  ) => {
     const address = parseAddress(body.address);
     const a = parseLeg(body.legA, 'legA');
     const b = parseLeg(body.legB, 'legB');
@@ -450,7 +529,9 @@ export function borosPairRoutes(deps: AppDeps) {
     const intent = parseIntent(body.intent);
     const onlyLeg = parseOnlyLeg(body.onlyLeg);
 
-    const [markets, account] = await Promise.all([loadMarkets(fresh), loadAccount(address, fresh)]);
+    const [markets, account] = preloaded
+      ? [preloaded.markets, preloaded.account]
+      : await Promise.all([loadMarkets(fresh), loadAccount(address, fresh)]);
     const marketA = marketOr404(markets, a.marketId);
     const marketB = marketOr404(markets, b.marketId);
     const nowSec = Math.floor(Date.now() / 1000);
@@ -493,16 +574,7 @@ export function borosPairRoutes(deps: AppDeps) {
       takerFeeOverride,
     });
 
-    let gasBalanceUsd: number | null | undefined;
-    const ordersForGas = deps.getBorosOrders?.();
-    const readGasBalance = ordersForGas?.getGasBalance?.bind(ordersForGas);
-    if (readGasBalance) {
-      try {
-        gasBalanceUsd = (await deps.cache.get('boros:gas-balance', TTL.boros, readGasBalance, { fresh })).value;
-      } catch {
-        gasBalanceUsd = null;
-      }
-    }
+    const gasBalanceUsd = preloaded ? preloaded.gasBalanceUsd : await readGasBalance(fresh);
 
     const accountState: BorosPairAccountState = {
       cross: account.crossByToken.get(marketA.tokenId) ?? null,
@@ -818,6 +890,118 @@ export function borosPairRoutes(deps: AppDeps) {
       } finally {
         unlockCloses();
       }
+    });
+
+    /**
+     * Price a roll: the old pair as a close and the new pair as an open, off
+     * ONE read of the account, judged as one batch (core/boros/rollover.ts).
+     */
+    const priceRoll = async (body: RollBody, fresh: boolean) => {
+      const address = parseAddress(body.address);
+      const [markets, account, gasBalanceUsd] = await Promise.all([loadMarkets(fresh), loadAccount(address, fresh), readGasBalance(fresh)]);
+      const step = (raw: RollStepBody | undefined, intent: 'close' | 'open', acknowledged: boolean) =>
+        priceRequest(
+          { address, legA: raw?.legA, legB: raw?.legB, size: raw?.size, intent, opposingAcknowledged: acknowledged },
+          fresh,
+          { markets, account, gasBalanceUsd },
+        );
+      const [exit, entry] = await Promise.all([
+        step(body.exit, 'close', true),
+        step(body.entry, 'open', body.opposingAcknowledged === true),
+      ]);
+      // The venue previews the batch as it would run it. A preview that
+      // cannot be had is a blocker, not a guess — nothing else can vouch for
+      // a FOK fill or for the margin after the closes.
+      const legs = rollLegsFor(exit.simulation, entry.simulation);
+      const orders = deps.getBorosOrders?.();
+      // A preview that throws is still "no preview", but a refusal with a
+      // status code is a fact worth showing (a position the venue no longer
+      // finds, an input it rejects). A 429, a 5xx or a dropped connection is
+      // the next poll's problem: for those "waiting for a quote" is the truth.
+      let venueError: string | null = null;
+      const venue =
+        legs && orders?.simulateRollOver
+          ? await orders.simulateRollOver(legs).catch((err: unknown) => {
+              const status = err instanceof CoreError ? (err.details as { status?: number } | undefined)?.status : undefined;
+              venueError = status !== undefined && status < 500 && status !== 429 ? describeLegFailure(err) : null;
+              return null;
+            })
+          : null;
+      const gate = evaluateRollGate({
+        exit: { simulation: exit.simulation, gate: exit.gate, legA: exit.legA, legB: exit.legB },
+        entry: { simulation: entry.simulation, gate: entry.gate, legA: entry.legA, legB: entry.legB },
+        venue,
+        venueError,
+      });
+      return { exit, entry, gate, venue, simulatedAtMs: Math.min(exit.simulatedAtMs, entry.simulatedAtMs) };
+    };
+
+    app.post('/boros/roll/simulate', async (req, reply) => {
+      const { exit, entry, gate, venue, simulatedAtMs } = await priceRoll(req.body as RollBody, false);
+      return reply.ok({
+        exit: { simulation: exit.simulation, gate: exit.gate },
+        entry: { simulation: entry.simulation, gate: entry.gate },
+        gate,
+        venue,
+        simulatedAtMs,
+        gasBalanceUsd: entry.gasBalanceUsd ?? null,
+      });
+    });
+
+    /**
+     * Send the four legs as ONE all-or-nothing batch. Re-priced from scratch
+     * first, exactly as /pair/execute: the client's gate is UX, this one is
+     * the failsafe.
+     */
+    app.post('/boros/roll/execute', async (req, reply) => {
+      const body = req.body as RollBody;
+      assertTradableAddress(parseAddress(body.address));
+      const keys = ['exitA', 'exitB', 'entryA', 'entryB'] as const;
+      const ids = Object.fromEntries(
+        keys.map((k) => [k, parseClientOrderId(body.clientOrderIds?.[k], `clientOrderIds.${k}`)]),
+      ) as RollOrderIds;
+      if (new Set(Object.values(ids)).size !== keys.length) {
+        throw new CoreError('the four legs need distinct clientOrderIds', 'validation');
+      }
+      const orders = deps.getBorosOrders?.();
+      if (!orders?.rollOver) {
+        throw new CoreError('Boros roll-over is not configured on this install.', 'not-configured');
+      }
+      assertNotUpdating();
+      assertAgentNotExpired();
+
+      // Memo BEFORE re-pricing, for the same reason as /pair/execute: a
+      // lost-response retry must get the original outcome, and a roll that
+      // went through changed the very state the gate would now re-judge.
+      const memoKey = keys.map((k) => ids[k]).join('|');
+      sweepRolls();
+      const replay = recentRolls.get(memoKey);
+      if (replay) return reply.ok({ ...(await replay.result), replayed: true });
+
+      const { exit, entry, gate } = await priceRoll(body, true);
+      if (gate.blockers.length > 0) {
+        return reply.code(409).send({
+          ok: false,
+          error: { category: 'validation', message: gate.blockers[0].message, retryable: false },
+          data: { blockers: gate.blockers },
+        });
+      }
+      const legs = rollLegsFor(exit.simulation, entry.simulation);
+      if (!legs) throw new CoreError('a leg of this roll has nothing to trade', 'validation');
+
+      const raced = recentRolls.get(memoKey);
+      if (raced) return reply.ok({ ...(await raced.result), replayed: true });
+      const pending: Promise<RollPayload> = submitBorosRoll(orders, legs).then((result) => ({
+        result,
+        exit: { simulation: exit.simulation, gate: exit.gate },
+        entry: { simulation: entry.simulation, gate: entry.gate },
+        gate,
+      }));
+      rememberRoll(memoKey, pending);
+      const payload = await pending;
+      deps.cache.bust('boros:collaterals');
+      deps.cache.bust('boros:txns');
+      return reply.ok({ ...payload, replayed: false });
     });
 
     /**

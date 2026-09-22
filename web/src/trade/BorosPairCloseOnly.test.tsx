@@ -189,7 +189,7 @@ describe('BorosPairTicket — close-only market', () => {
     await fillTicket(user);
 
     const btn = await screen.findByRole('button', {
-      name: 'Market A takes closes only. Switch to Close.',
+      name: 'Market A takes closes only. Tick Reduce-only.',
     });
     expect(btn).toBeDisabled();
   });
@@ -200,7 +200,7 @@ describe('BorosPairTicket — close-only market', () => {
     const user = userEvent.setup();
     renderWithClient(<BorosPairTicket />);
     await fillTicket(user);
-    await user.click(screen.getByRole('radio', { name: /^Close/ }));
+    await user.click(screen.getByRole('checkbox', { name: 'Reduce-only' }));
 
     const btn = await waitFor(() => {
       const b = screen.getByRole('button', { name: /Confirm/ });
@@ -288,7 +288,7 @@ describe('BorosPairTicket — target mode on the closeOnlyALong fixture body', (
     await user.click(screen.getByRole('button', { name: 'fire' }));
 
     const btn = await screen.findByRole('button', {
-      name: 'Market A takes closes only. Switch to Close.',
+      name: 'Market A takes closes only. Tick Reduce-only.',
     });
     expect(btn).toBeDisabled();
   });

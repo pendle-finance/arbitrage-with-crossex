@@ -6,7 +6,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import type { AssetBorosOpen, AssetGroup, AssetPerpOpen } from '../../api/types';
-import { deriveAsset } from './assetModel';
+import { deriveAsset, pairCanRoll } from './assetModel';
 
 const NOW = 1_760_000_000;
 const DAY = 86_400;
@@ -258,6 +258,73 @@ describe('pairs are 4-leg units at one maturity', () => {
     // OKX pairs against HL's OCT leg only — the bug that started this.
     expect(okx.legs.filter((l) => l.kind === 'yu').every((l) => l.maturity === OCT)).toBe(true);
     expect(d.pendingLegs).toHaveLength(0);
+    expect(d.unpairedPerps).toHaveLength(0);
+  });
+});
+
+describe('a pair can roll over inside the roll window, never once matured', () => {
+  it('flags 9d out, not 11d out, not yesterday', () => {
+    // The window is EXPIRY_WARN_SEC — 10 days since his call 2026-09-20.
+    expect(pairCanRoll({ soonestMaturitySec: NOW + 9 * DAY }, NOW)).toBe(true);
+    expect(pairCanRoll({ soonestMaturitySec: NOW + 11 * DAY }, NOW)).toBe(false);
+    expect(pairCanRoll({ soonestMaturitySec: NOW - DAY }, NOW)).toBe(false);
+    expect(pairCanRoll({ soonestMaturitySec: 0 }, NOW)).toBe(false);
+  });
+});
+
+describe('ungrouped legs: what no 4-leg unit claimed', () => {
+  it('a perp at a venue with no YU is unpaired whole; the paired venues leave nothing', () => {
+    mid = 1;
+    const g = group({
+      perpOpen: [
+        perp({ venue: 'GATE', side: 'LONG', qty: 100 }),
+        perp({ venue: 'OKX', side: 'LONG', qty: 40 }),
+        perp({ venue: 'HYPERLIQUID', side: 'SHORT', qty: 140 }),
+      ],
+      borosOpen: [
+        yu({ venue: 'GATE', side: 'LONG', sizeToken: 100, maturity: SEP }),
+        yu({ venue: 'HYPERLIQUID', side: 'SHORT', sizeToken: 100, maturity: SEP }),
+      ],
+    });
+    const d = deriveAsset(g, {}, 0, NOW);
+    expect(d.pairs).toHaveLength(1);
+    // OKX has no YU: its whole perp is ungrouped. Hyperliquid's short pairs
+    // 100 of its 140 against Gate; the other 40 has nothing to pair with.
+    const okx = d.unpairedPerps.find((l) => l.venue === 'OKX')!;
+    expect(okx).toMatchObject({ side: 'LONG', share: 1, sizeBase: 40, notionalUsd: 40 * 2500, imUsd: 40 * 250 });
+    const hl = d.unpairedPerps.find((l) => l.venue === 'HYPERLIQUID')!;
+    expect(hl.sizeBase).toBeCloseTo(40, 6);
+    expect(hl.share).toBeCloseTo(40 / 140, 9);
+    expect(d.unpairedPerps.find((l) => l.venue === 'GATE')).toBeUndefined();
+    expect(d.pendingLegs).toHaveLength(0);
+  });
+
+  it('a book with one perp side forms no unit, so every leg is ungrouped — YU included', () => {
+    mid = 1;
+    const g = group({
+      perpOpen: [perp({ venue: 'GATE', side: 'LONG', qty: 100 })],
+      borosOpen: [yu({ venue: 'GATE', side: 'LONG', sizeToken: 100, maturity: SEP })],
+    });
+    const d = deriveAsset(g, {}, 0, NOW);
+    expect(d.pairs).toHaveLength(0);
+    expect(d.unpairedPerps).toMatchObject([{ venue: 'GATE', share: 1, sizeBase: 100 }]);
+    expect(d.pendingLegs).toMatchObject([{ venue: 'GATE', maturity: SEP, sizeBase: 100, share: 1 }]);
+  });
+
+  it('a pending YU slice carries its share of the leg, so a partial one cannot be closed whole', () => {
+    mid = 1;
+    const g = group({
+      perpOpen: [perp({ venue: 'GATE', side: 'LONG', qty: 100 }), perp({ venue: 'HYPERLIQUID', side: 'SHORT', qty: 100 })],
+      borosOpen: [
+        yu({ venue: 'GATE', side: 'LONG', sizeToken: 100, maturity: SEP }),
+        yu({ venue: 'HYPERLIQUID', side: 'SHORT', sizeToken: 60, maturity: SEP }),
+      ],
+    });
+    const d = deriveAsset(g, {}, 0, NOW);
+    expect(d.pendingLegs[0]).toMatchObject({ venue: 'GATE', sizeBase: 40 });
+    expect(d.pendingLegs[0].share).toBeCloseTo(0.4, 9);
+    // Both perps are 60% paired; the other 40% of each is ungrouped.
+    expect(d.unpairedPerps.map((l) => l.share)).toEqual([0.4, 0.4].map((v) => expect.closeTo(v, 9)));
   });
 });
 

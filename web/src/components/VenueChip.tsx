@@ -1,4 +1,5 @@
 import { parseSymbol, prettyVenue } from '../lib/fmt';
+import { TokenIcon, VenueIcon } from './AssetIcon';
 import { Chip } from './Chip';
 
 /** USDT-quoted perp venues get the cyan house tone; USD/USDC venues stay neutral. */
@@ -19,8 +20,9 @@ export function VenueChip({ exchange, crossex }: { exchange: string; crossex?: b
   if (crossex) {
     return (
       <Chip sm tone="crossex" title="via CrossEx (connected Gate account)">
+        <VenueIcon venue={exchange} size={12} />
         {exchange}
-        <span className="ml-1 text-[9px] font-semibold text-crossex">·CX</span>
+        <span className="ml-0.5 text-[9px] font-semibold text-crossex">·CX</span>
       </Chip>
     );
   }
@@ -28,6 +30,7 @@ export function VenueChip({ exchange, crossex }: { exchange: string; crossex?: b
   // different hue from the CrossEx cyan above.
   return (
     <Chip sm tone={USDT_PERP_VENUES.has(exchange) ? 'link' : 'neutral'}>
+      <VenueIcon venue={exchange} size={12} />
       {exchange}
     </Chip>
   );
@@ -39,7 +42,10 @@ export function SymbolCell({ symbol }: { symbol: string }) {
   return (
     <span className="inline-flex items-center gap-2">
       <VenueChip exchange={exchange} />
-      <span className="font-medium text-ink-100">{base || symbol}</span>
+      <span className="inline-flex items-center gap-1.5 font-medium text-ink-100">
+        <TokenIcon symbol={base} size={14} />
+        {base || symbol}
+      </span>
       {quote && quote !== 'USDT' && <span className="text-[10px] text-ink-400">{quote}</span>}
     </span>
   );
@@ -49,15 +55,16 @@ export function SymbolCell({ symbol }: { symbol: string }) {
  * the opportunity card's compact pair block, shared with the position page's
  * hero. Muted tones: it identifies, the side chips elsewhere emphasise. */
 export function SideVenue({ side, venue }: { side: 'SHORT' | 'LONG'; venue: string }) {
-  const tone =
-    side === 'SHORT'
-      ? 'border-rose-500/15 bg-rose-500/[0.04] text-rose-400/70'
-      : 'border-emerald-500/15 bg-emerald-500/[0.04] text-emerald-400/70';
+  // The mock's leg capsule: an untinted outline holding the venue's mark, its
+  // name at full contrast, and the direction as a small coloured word. The
+  // direction is the only colour, so a row of these never competes with the
+  // APR figure beside them.
+  const dir = side === 'SHORT' ? 'text-guava' : 'text-grass';
   return (
-    <span
-      className={`num self-start rounded-md border px-2 py-0.5 text-[10px] font-medium tracking-wide ${tone}`}
-    >
-      {side} · {prettyVenue(venue)}
+    <span className="leg-cap self-start">
+      <VenueIcon venue={venue} size={18} />
+      <span className="min-w-0 truncate text-ink-50">{prettyVenue(venue)}</span>
+      <b className={`text-[11px] font-semibold tracking-[0.04em] ${dir}`}>{side}</b>
     </span>
   );
 }

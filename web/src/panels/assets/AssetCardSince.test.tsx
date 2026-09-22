@@ -62,10 +62,10 @@ describe('AssetCard since chip on the full card', () => {
 
   it('shows no all time link on a default or a moved card, no all-time link', () => {
     const { unmount } = renderCard(undefined);
-    expect(screen.queryByText(/all time/i)).toBeNull();
+    expect(screen.queryByRole('button', { name: /all time/i })).toBeNull();
     unmount();
 
     renderCard(MARCH);
-    expect(screen.queryByText(/all time/i)).toBeNull();
+    expect(screen.queryByRole('button', { name: /all time/i })).toBeNull();
   });
 });

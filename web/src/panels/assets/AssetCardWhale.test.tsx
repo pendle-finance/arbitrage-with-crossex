@@ -39,6 +39,7 @@ describe('AssetCard for the $6M ETH book', () => {
 
   it('nets the Hyperliquid Boros settlement into its bundle and shows it in full on the leg row', async () => {
     renderCard();
+    await userEvent.click(screen.getByRole('tab', { name: /Funding Bundles/ }));
     const toggle = screen
       .getAllByRole('button', { expanded: false })
       .find((b) => b.textContent?.startsWith('Hyperliquid'))!;
@@ -49,17 +50,17 @@ describe('AssetCard for the $6M ETH book', () => {
     expect(within(bundle).getByText('-$9,117.28')).toBeInTheDocument();
   });
 
-  it('keeps the notional compact on screen and puts the exact notional and size in its title', () => {
+  it('keeps the notional compact on screen and puts the exact notional and size in its title', async () => {
     renderCard();
+    await userEvent.click(screen.getByRole('tab', { name: /Funding Bundles/ }));
     const toggle = screen
       .getAllByRole('button', { expanded: false })
       .find((b) => b.textContent?.startsWith('Hyperliquid'))!;
     const cell = toggle.closest('tr')!.querySelector('td[title^="Notional of the live perp"]')!;
     expect(cell.getAttribute('title')).toBe(
-      'Notional of the live perp (or of the YU legs when there is no perp): $10,140,981.00 on 4,100 ETH',
+      'Notional of the live perp, or of the Boros legs when there is no perp.\n$10,140,981.00 on 4,100 ETH',
     );
     expect(cell.textContent).toContain('$10.14M');
-    expect(cell.textContent).toContain('4.1k ETH perp');
     expect(cell.textContent).not.toContain('10,140,981');
   });
 });

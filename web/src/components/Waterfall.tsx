@@ -208,7 +208,7 @@ export function WaterfallPlot({
       {(showCaption || legend) && (
         <div className="flex items-center justify-center gap-3 pt-0.5">
           {showCaption && (
-            <span className="text-[9px] uppercase tracking-wider text-ink-400">{caption}</span>
+            <span className="text-[10px] font-normal text-ink-400">{caption}</span>
           )}
           {legend}
         </div>
