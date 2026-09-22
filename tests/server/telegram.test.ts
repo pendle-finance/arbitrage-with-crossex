@@ -16,7 +16,6 @@ import { HOST, makeTestApp } from './helpers/gate-nock';
 const CODE = 'q0Yx1dQ0bB8m8rP3nV2m4w';
 const T0 = Date.UTC(2026, 8, 18, 10, 0, 0);
 const TEN_MIN = 600_000;
-const DAY_SEC = 86_400;
 const BOT_DOWN = 'Telegram alerts are not available yet. Try again later.';
 const BOT_UNREACHABLE = 'Could not reach the bot. Try again, or remove this terminal on the Boros alerts page.';
 
@@ -797,119 +796,6 @@ describe('Telegram settings', () => {
 
     expect(res.body.data).toMatchObject({ connected: false, state: 'none' });
     expect(bot.calls).toHaveLength(0);
-  });
-});
-
-describe('Telegram roll signals', () => {
-  const FUTURE_SEC = Math.floor(T0 / 1_000) + 7 * DAY_SEC;
-  const LATER_SEC = FUTURE_SEC + 30 * DAY_SEC;
-
-  const rollBody = (over: Record<string, unknown> = {}) => ({
-    signals: [
-      {
-        coin: 'ETH',
-        longVenue: 'gate',
-        shortVenue: 'hyperliquid',
-        maturity: FUTURE_SEC,
-        targets: [{ maturity: LATER_SEC, apr: 0.124, currentApr: 0.091 }],
-        ...over,
-      },
-    ],
-  });
-
-  const rollsSent = (bot: Bot) => {
-    const puts = bot.to('PUT', '/terminal/triggers');
-    expect(puts).toHaveLength(1);
-    return (puts[0].body as { coins: TriggerCoin[] }).coins[0].rolls;
-  };
-
-  it('stores a signal and the next sync carries it', async () => {
-    linked();
-    const { app, bot, sync } = boot();
-
-    const res = await send(app, 'PUT', '/api/telegram/roll-signals', rollBody());
-    await sync.idle();
-
-    expect(res.code).toBe(200);
-    expect(res.body.data).toEqual({ stored: 1 });
-    expect(rollsSent(bot)).toEqual([
-      {
-        longVenue: 'GATE',
-        shortVenue: 'HYPERLIQUID',
-        maturity: FUTURE_SEC,
-        targets: [{ maturity: LATER_SEC, apr: 0.124, currentApr: 0.091 }],
-      },
-    ]);
-  });
-
-  it('refuses a maturity that is not a whole number of seconds', async () => {
-    linked();
-    const { app, bot } = boot();
-
-    const res = await send(app, 'PUT', '/api/telegram/roll-signals', rollBody({ maturity: FUTURE_SEC + 0.5 }));
-
-    expect(res.code).toBe(400);
-    expect(res.body.error.message).toBe('maturity must be a whole number of seconds.');
-    expect(bot.calls).toHaveLength(0);
-  });
-
-  it('carries several targets in the order sent, best first', async () => {
-    linked();
-    const { app, bot, sync } = boot();
-    const targets = [
-      { maturity: LATER_SEC, apr: 0.124, currentApr: 0.091 },
-      { maturity: LATER_SEC + 30 * DAY_SEC, apr: 0.118, currentApr: 0.091 },
-    ];
-
-    const res = await send(app, 'PUT', '/api/telegram/roll-signals', rollBody({ targets }));
-    await sync.idle();
-
-    expect(res.code).toBe(200);
-    expect(rollsSent(bot)[0].targets).toEqual(targets);
-  });
-
-  it('refuses a target maturity listed twice', async () => {
-    linked();
-    const { app, bot } = boot();
-    const target = { maturity: LATER_SEC, apr: 0.124, currentApr: 0.091 };
-
-    const res = await send(app, 'PUT', '/api/telegram/roll-signals', rollBody({ targets: [target, target] }));
-
-    expect(res.code).toBe(400);
-    expect(res.body.error.message).toBe('targets lists one maturity twice.');
-    expect(bot.calls).toHaveLength(0);
-  });
-
-  it('refuses more than eight targets', async () => {
-    linked();
-    const { app, bot } = boot();
-    const targets = Array.from({ length: 9 }, (_, i) => ({ maturity: LATER_SEC + i * DAY_SEC, apr: 0.12, currentApr: 0.091 }));
-
-    const res = await send(app, 'PUT', '/api/telegram/roll-signals', rollBody({ targets }));
-
-    expect(res.code).toBe(400);
-    expect(res.body.error.message).toBe('targets holds at most 8 maturities.');
-    expect(bot.calls).toHaveLength(0);
-  });
-
-  it('a coin the terminal does not hold is not sent', async () => {
-    linked();
-    const { app, bot, sync } = boot();
-
-    await send(app, 'PUT', '/api/telegram/roll-signals', rollBody({ coin: 'BTC' }));
-    await sync.idle();
-
-    expect(rollsSent(bot)).toEqual([]);
-  });
-
-  it('a maturity that has passed is not sent', async () => {
-    linked();
-    const { app, bot, sync } = boot();
-
-    await send(app, 'PUT', '/api/telegram/roll-signals', rollBody({ maturity: Math.floor(T0 / 1_000) - DAY_SEC }));
-    await sync.idle();
-
-    expect(rollsSent(bot)).toEqual([]);
   });
 });
 

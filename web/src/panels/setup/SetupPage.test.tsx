@@ -312,7 +312,7 @@ describe('SetupPage · Telegram alerts', () => {
     expect(screen.getByText(/^Last synced \d+ s ago$/)).toBeInTheDocument();
     expect(
       screen.getByText(
-        "Alerts use the terminal's last sync, at most 5 min old. A trade made outside the terminal reaches the alerts after the next sync. Maturity and roll-over alerts need the terminal open in your browser.",
+        "Alerts use the terminal's last sync, at most 5 min old. A trade made outside the terminal reaches the alerts after the next sync.",
       ),
     ).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Skip/ })).toBeNull();

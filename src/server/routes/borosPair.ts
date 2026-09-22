@@ -176,7 +176,7 @@ function parseOnlyLeg(raw: unknown): 'A' | 'B' | undefined {
  * a capability only the server holds, which is exactly what this module's
  * header claims a hand-rolled request cannot do.
  */
-function configuredRoot(): string | null {
+export function configuredRoot(): string | null {
   const root = process.env.BOROS_ROOT_ADDRESS?.trim();
   return root && EVM_ADDRESS_RE.test(root) ? root.toLowerCase() : null;
 }
@@ -398,63 +398,7 @@ export function borosExecutionsPending(): number {
   return recentExecutions.size + recentRolls.size;
 }
 
-export function borosPairRoutes(deps: AppDeps) {
-  recentExecutions.clear();
-  recentRolls.clear();
-  /** A roll the venue REFUSED provably traded nothing, so its ids may be
-   * reused for an honest retry; one that rolled or was never confirmed is
-   * remembered, so a lost response answers from here instead of trading. */
-  const rememberRoll = (key: string, pending: Promise<RollPayload>): void => {
-    recentRolls.set(key, { at: Date.now(), result: pending });
-    pending
-      .then(({ result }) => {
-        if (result.status === 'refused') recentRolls.delete(key);
-      })
-      .catch(() => recentRolls.delete(key));
-  };
-  const rememberExecution = (key: string, pending: Promise<ExecutionPayload>): void => {
-    recentExecutions.set(key, { at: Date.now(), result: pending });
-    // A submission that provably left NO position — every submitted leg failed
-    // outright with nothing filled and none 'unknown' — is dropped, so an
-    // honest retry is not refused a second attempt. `submitBorosPair` folds
-    // errors into resolved fills rather than rejecting, so this has to be
-    // judged from the RESULT; an 'unknown' leg may have filled, which is
-    // exactly what the memo exists to protect.
-    pending
-      .then(({ result }) => {
-        const legs = [result.legA, result.legB];
-        const anyFailed = legs.some((l) => l.failure !== null);
-        const mayHaveFilled = legs.some((l) => l.filledSize > 0 || l.failure?.code === 'unknown');
-        if (anyFailed && !mayHaveFilled) recentExecutions.delete(key);
-      })
-      .catch(() => recentExecutions.delete(key));
-  };
-
-  /**
-   * BOROS_AGENT_EXPIRY is absolute unix seconds (see routes/borosAgent.ts).
-   * An expired approval otherwise fails at the venue as AuthAgentExpired —
-   * AFTER a confirm the user already committed to — so the write routes
-   * refuse up front instead.
-   */
-  const assertNotUpdating = (): void => {
-    if (isUpdating()) {
-      throw new CoreError(
-        'the app is updating — it will restart shortly, then you can send this again',
-        'validation',
-      );
-    }
-  };
-
-  const assertAgentNotExpired = (): void => {
-    const raw = Number(process.env.BOROS_AGENT_EXPIRY);
-    if (Number.isFinite(raw) && raw > 0 && raw <= Math.floor(Date.now() / 1000)) {
-      throw new CoreError(
-        'the Boros agent approval has expired — approve a new agent key before trading.',
-        'auth',
-      );
-    }
-  };
-
+export function createPairPricer(deps: AppDeps) {
   const fetchImpl: FetchLike = resolveBorosFetch(deps.borosFetch);
   const envTakerFee = Number(process.env.BOROS_TAKER_FEE_OVERRIDE);
   const takerFeeOverride = Number.isFinite(envTakerFee) ? envTakerFee : undefined;
@@ -606,6 +550,69 @@ export function borosPairRoutes(deps: AppDeps) {
       account,
     };
   };
+
+  return { loadMarkets, loadAccount, marketOr404, readGasBalance, priceRequest };
+}
+
+export function borosPairRoutes(deps: AppDeps) {
+  recentExecutions.clear();
+  recentRolls.clear();
+  /** A roll the venue REFUSED provably traded nothing, so its ids may be
+   * reused for an honest retry; one that rolled or was never confirmed is
+   * remembered, so a lost response answers from here instead of trading. */
+  const rememberRoll = (key: string, pending: Promise<RollPayload>): void => {
+    recentRolls.set(key, { at: Date.now(), result: pending });
+    pending
+      .then(({ result }) => {
+        if (result.status === 'refused') recentRolls.delete(key);
+      })
+      .catch(() => recentRolls.delete(key));
+  };
+  const rememberExecution = (key: string, pending: Promise<ExecutionPayload>): void => {
+    recentExecutions.set(key, { at: Date.now(), result: pending });
+    // A submission that provably left NO position — every submitted leg failed
+    // outright with nothing filled and none 'unknown' — is dropped, so an
+    // honest retry is not refused a second attempt. `submitBorosPair` folds
+    // errors into resolved fills rather than rejecting, so this has to be
+    // judged from the RESULT; an 'unknown' leg may have filled, which is
+    // exactly what the memo exists to protect.
+    pending
+      .then(({ result }) => {
+        const legs = [result.legA, result.legB];
+        const anyFailed = legs.some((l) => l.failure !== null);
+        const mayHaveFilled = legs.some((l) => l.filledSize > 0 || l.failure?.code === 'unknown');
+        if (anyFailed && !mayHaveFilled) recentExecutions.delete(key);
+      })
+      .catch(() => recentExecutions.delete(key));
+  };
+
+  /**
+   * BOROS_AGENT_EXPIRY is absolute unix seconds (see routes/borosAgent.ts).
+   * An expired approval otherwise fails at the venue as AuthAgentExpired —
+   * AFTER a confirm the user already committed to — so the write routes
+   * refuse up front instead.
+   */
+  const assertNotUpdating = (): void => {
+    if (isUpdating()) {
+      throw new CoreError(
+        'the app is updating — it will restart shortly, then you can send this again',
+        'validation',
+      );
+    }
+  };
+
+  const assertAgentNotExpired = (): void => {
+    const raw = Number(process.env.BOROS_AGENT_EXPIRY);
+    if (Number.isFinite(raw) && raw > 0 && raw <= Math.floor(Date.now() / 1000)) {
+      throw new CoreError(
+        'the Boros agent approval has expired — approve a new agent key before trading.',
+        'auth',
+      );
+    }
+  };
+
+  const { loadMarkets, loadAccount, marketOr404, readGasBalance, priceRequest } = createPairPricer(deps);
+
 
   return async function plugin(app: FastifyInstance): Promise<void> {
     /** The pairable universe for one account, plus its per-market state. */
