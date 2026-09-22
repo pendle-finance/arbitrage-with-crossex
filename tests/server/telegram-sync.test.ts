@@ -197,6 +197,30 @@ describe('the trigger sync', () => {
     expect(rollsOf(second.puts()[0])).toHaveLength(1);
   });
 
+  it('a target older than an hour is dropped, the maturity stays', async () => {
+    link();
+    const stub = botStub();
+    let clock = Date.now();
+    const { sync } = makeSync(stub.bot, { now: () => clock });
+    const signal = rollSignal();
+
+    sync.setRollSignals([signal]);
+    await vi.waitFor(() => expect(stub.puts()).toHaveLength(1));
+    clock += 59 * 60_000;
+    sync.requestSync('check');
+    await vi.waitFor(() => expect(stub.puts()).toHaveLength(2));
+    clock += 2 * 60_000;
+    sync.requestSync('check');
+    await vi.waitFor(() => expect(stub.puts()).toHaveLength(3));
+
+    expect(rollsOf(stub.puts()[1])).toEqual([
+      { longVenue: 'GATE', shortVenue: 'HYPERLIQUID', maturity: signal.maturity, to: signal.to },
+    ]);
+    expect(rollsOf(stub.puts()[2])).toEqual([
+      { longVenue: 'GATE', shortVenue: 'HYPERLIQUID', maturity: signal.maturity, to: null },
+    ]);
+  });
+
   it('deal finish syncs', async () => {
     link();
     const stub = botStub();

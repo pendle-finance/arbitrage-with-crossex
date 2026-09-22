@@ -39,6 +39,7 @@ interface RollSignalApi {
 const Ctx = createContext<RollSignalApi | null>(null);
 
 const SEND_AFTER_MS = 1_500;
+const RESEND_EVERY_MS = 20 * 60_000;
 
 export function RollSignalProvider({ children }: { children: ReactNode }) {
   const [byKey, setByKey] = useState<Record<string, RollSignal>>({});
@@ -68,7 +69,7 @@ export function RollSignalProvider({ children }: { children: ReactNode }) {
   const sent = useRef(false);
   useEffect(() => {
     if (signals.length === 0 && !sent.current) return;
-    const timer = setTimeout(() => {
+    const send = (): void => {
       sent.current = true;
       void putJson('/telegram/roll-signals', {
         signals: signals.map((s) => ({
@@ -83,8 +84,13 @@ export function RollSignalProvider({ children }: { children: ReactNode }) {
           },
         })),
       }).catch(() => undefined);
-    }, SEND_AFTER_MS);
-    return () => clearTimeout(timer);
+    };
+    const timer = setTimeout(send, SEND_AFTER_MS);
+    const again = setInterval(send, RESEND_EVERY_MS);
+    return () => {
+      clearTimeout(timer);
+      clearInterval(again);
+    };
   }, [signals]);
   const value = useMemo(() => ({ signals, publish, showNonce, requestShow }), [signals, publish, showNonce, requestShow]);
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

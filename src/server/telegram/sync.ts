@@ -13,6 +13,12 @@ import type { TelegramStatus } from './status';
 const SYNC_EVERY_MS = 300_000;
 const ROLL_FILE = 'roll-signals.json';
 const MAX_ROLLS_PER_COIN = 16;
+const ROLL_TARGET_TTL_MS = 60 * 60_000;
+
+interface RollFile {
+  at: number;
+  signals: RollSignalInput[];
+}
 
 export type RollSignalInput = TriggerRoll & { coin: string };
 
@@ -75,6 +81,18 @@ function parseRollSignals(raw: unknown): RollSignalInput[] | null {
   return signals;
 }
 
+function parseRollFile(raw: unknown): RollFile | null {
+  if (Array.isArray(raw)) {
+    const signals = parseRollSignals(raw);
+    return signals && { at: 0, signals };
+  }
+  if (typeof raw !== 'object' || raw === null) return null;
+  const { at, signals } = raw as Record<string, unknown>;
+  if (typeof at !== 'number' || !Number.isFinite(at)) return null;
+  const parsed = parseRollSignals(signals);
+  return parsed && { at, signals: parsed };
+}
+
 function rollKeys(signals: RollSignalInput[]): Set<string> {
   const keys = new Set<string>();
   for (const signal of signals) {
@@ -93,14 +111,18 @@ export function createTelegramSync(opts: TelegramSyncOptions): TelegramSync {
   let stopped = false;
   let inFlight: Promise<void> = Promise.resolve();
   const rollPath = path.join(opts.dataDir, ROLL_FILE);
-  let rollSignals: RollSignalInput[] = readOwnerJson(rollPath, parseRollSignals) ?? [];
+  const stored = readOwnerJson(rollPath, parseRollFile);
+  let rollSignals: RollSignalInput[] = stored?.signals ?? [];
+  let rollsAt = stored?.at ?? 0;
   let rollKeySet = rollKeys(rollSignals);
 
-  const rollsFor = (coin: string, at: number): TriggerRoll[] =>
-    rollSignals
+  const rollsFor = (coin: string, at: number): TriggerRoll[] => {
+    const fresh = at - rollsAt <= ROLL_TARGET_TTL_MS;
+    return rollSignals
       .filter((s) => s.coin.toUpperCase() === coin.toUpperCase() && s.maturity * 1_000 > at)
       .slice(0, MAX_ROLLS_PER_COIN)
-      .map((s) => ({ longVenue: s.longVenue, shortVenue: s.shortVenue, maturity: s.maturity, to: s.to }));
+      .map((s) => ({ longVenue: s.longVenue, shortVenue: s.shortVenue, maturity: s.maturity, to: fresh ? s.to : null }));
+  };
 
   const syncOnce = async (): Promise<void> => {
     const key = readTelegramKey(opts.dataDir);
@@ -155,10 +177,10 @@ export function createTelegramSync(opts: TelegramSyncOptions): TelegramSync {
       }));
       const keys = rollKeys(next);
       const gained = [...keys].some((key) => !rollKeySet.has(key));
-      const changed = JSON.stringify(next) !== JSON.stringify(rollSignals);
       rollSignals = next;
+      rollsAt = opts.now();
       rollKeySet = keys;
-      if (changed) writeOwnerOnlyJson(rollPath, next);
+      writeOwnerOnlyJson(rollPath, { at: rollsAt, signals: next });
       if (gained) run();
     },
     idle: () => inFlight,
