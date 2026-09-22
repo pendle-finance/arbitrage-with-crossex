@@ -3,7 +3,8 @@
  * Fixtures are RAW snake_case bodies (see tests/fixtures/gate/README.md) — the
  * SDK deserializes them to camelCase, so route tests assert camelCase fields.
  */
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import nock from 'nock';
@@ -94,6 +95,7 @@ export function makeTestApp(overrides?: Partial<AppDeps>): FastifyInstance {
   return buildApp({
     getClients,
     cache: new TtlCache(),
+    dataDir: overrides?.dataDir ?? mkdtempSync(path.join(tmpdir(), 'app-')),
     authToken: TEST_TOKEN,
     // In-memory engine store per app; the loop is never started here — deal tests
     // drive tickPair() themselves for deterministic engine behavior.

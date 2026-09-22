@@ -1,6 +1,8 @@
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { postJson } from '../api/client';
+import { canFetch } from '../api/queries';
 import type { ActionInput, PreviewResponse } from '../api/types';
+import { useTabActive } from '../components/TabBar';
 import { useDebounced } from '../lib/useDebounced';
 
 /**
@@ -21,14 +23,15 @@ export function usePreviewDebounced(
   actions: ActionInput[] | null,
   opts: { debounceMs?: number; refetchInterval?: number | false } = {},
 ) {
+  const active = useTabActive();
   const json = actions && actions.length > 0 ? JSON.stringify(actions) : '';
   const debounced = useDebounced(json, opts.debounceMs ?? 400);
 
   const query = useQuery({
     queryKey: ['preview', scope, debounced],
     queryFn: () => postJson<PreviewResponse>('/preview', { actions: JSON.parse(debounced) as ActionInput[] }),
-    enabled: debounced !== '',
-    refetchInterval: opts.refetchInterval ?? false,
+    enabled: (q) => debounced !== '' && canFetch(active, q),
+    refetchInterval: active ? (opts.refetchInterval ?? false) : false,
     refetchIntervalInBackground: true,
     placeholderData: keepPreviousData,
     staleTime: 0,

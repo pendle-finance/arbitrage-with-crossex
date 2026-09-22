@@ -1,0 +1,31 @@
+{
+  "userId": "0",
+  "marginBalance": "1223.66345094890928098682527628236",
+  "maintenanceMargin": "66.9883605912413615",
+  "assets": [
+    {
+      "userId": "0",
+      "coin": "USDC",
+      "exchangeType": "GATE",
+      "equity": "0"
+    },
+    {
+      "userId": "0",
+      "coin": "USDC",
+      "exchangeType": "LIGHTER",
+      "equity": "76.8913141299999999999992"
+    },
+    {
+      "userId": "0",
+      "coin": "USDT",
+      "exchangeType": "CROSSEX",
+      "equity": "607.182078328000000274119"
+    },
+    {
+      "userId": "0",
+      "coin": "USDC",
+      "exchangeType": "HYPERLIQUID",
+      "equity": "539.164361479999999912766"
+    }
+  ]
+}

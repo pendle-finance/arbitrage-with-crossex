@@ -31,7 +31,6 @@ function borosBodies(): Record<string, unknown> {
   ) => ({
     marketId,
     tokenId: 3,
-    state: 'Normal',
     imData: {
       name: `${platformName} ETH 30d`,
       maturity: MATURITY,
@@ -39,8 +38,14 @@ function borosBodies(): Record<string, unknown> {
       tickStep: imInputs.imTickStep,
     },
     extConfig: { settleFeeRate: '1000000000000000', paymentPeriod: 3600 },
-    metadata: { platformName, assetSymbol: 'ETH' },
-    config: { takerFee: '500000000000000', kIM: raw(imInputs.kIM), tThresh: imInputs.tThreshSec },
+    platform: { platformId: platformName },
+    metadata: { underlyingSymbol: 'ETH' },
+    config: {
+      status: 2,
+      takerFee: '500000000000000',
+      kIM: raw(imInputs.kIM),
+      tThresh: imInputs.tThreshSec,
+    },
     data: {
       midApr,
       markApr,
@@ -56,7 +61,7 @@ function borosBodies(): Record<string, unknown> {
     short: { ia: [askTick], sz: [raw(5_000_000)] },
   });
   return {
-    '/core/v1/markets': {
+    '/apis/v1/markets': {
       results: [
         market(HL_MARKET, 'Hyperliquid', 0.09, 0.091),
         market(BINANCE_MARKET, 'Binance', 0.045, 0.044),
@@ -64,8 +69,8 @@ function borosBodies(): Record<string, unknown> {
       total: 2,
       skip: 0,
     },
-    [`/core/v1/order-books/${HL_MARKET}`]: book(899, 901),
-    [`/core/v1/order-books/${BINANCE_MARKET}`]: book(449, 451),
+    [`/apis/v1/markets/order-book?marketId=${HL_MARKET}`]: book(899, 901),
+    [`/apis/v1/markets/order-book?marketId=${BINANCE_MARKET}`]: book(449, 451),
   };
 }
 
@@ -291,7 +296,7 @@ describe('GET /api/opportunities', () => {
       headers: HOST,
     });
     expect(res.statusCode).toBe(200);
-    expect(calls.some((c) => c.startsWith('/core/v1/order-books'))).toBe(false);
+    expect(calls.some((c) => c.startsWith('/apis/v1/markets/order-book'))).toBe(false);
 
     const { data } = res.json();
     expect(data.meta.borosEntry).toBe('mark');
@@ -320,11 +325,7 @@ describe('GET /api/opportunities', () => {
     expect(calls.length).toBe(afterFirst * 2);
   });
 
-  it('a poll one dashboard-cadence later adds NO Boros calls; past 30s it re-reads', async () => {
-    // Books must ride the same 30s cadence as every other Boros read. At the
-    // old 5s book TTL, the dashboard's 12s poll missed the cache on EVERY poll
-    // and re-fetched every mapped market's book — ~97% of all Boros traffic
-    // (25 live books × 300 polls ≈ 7.5k req/h from one open tab, 2026-07-29).
+  it('a poll one dashboard-cadence later adds NO Boros calls; past 90s it re-reads', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     try {
       const calls: string[] = [];
@@ -336,13 +337,20 @@ describe('GET /api/opportunities', () => {
       const afterFirst = calls.length; // markets + both order books
       expect(afterFirst).toBe(3);
 
+      const books = () => calls.filter((c) => c.startsWith('/apis/v1/markets/order-book')).length;
+      expect(books()).toBe(2);
+
       vi.setSystemTime(Date.now() + 12_000); // the next dashboard poll
       await app.inject({ method: 'GET', url: '/api/opportunities', headers: HOST });
       expect(calls.length).toBe(afterFirst);
 
-      vi.setSystemTime(Date.now() + 20_000); // 32s after the first fetch
+      vi.setSystemTime(Date.now() + 49_000); // 61s in, inside the 90s scan cache
       await app.inject({ method: 'GET', url: '/api/opportunities', headers: HOST });
-      expect(calls.length).toBe(afterFirst * 2); // markets + books re-read together
+      expect(books()).toBe(2);
+
+      vi.setSystemTime(Date.now() + 30_000); // 91s in, the scan cache has expired
+      await app.inject({ method: 'GET', url: '/api/opportunities', headers: HOST });
+      expect(books()).toBe(4);
     } finally {
       vi.useRealTimers();
     }
@@ -404,8 +412,8 @@ describe('GET /api/opportunities', () => {
 
   it('pairs a Lighter market once the CrossEx symbol list names Lighter, priced from the Lighter book', async () => {
     const bodies = borosBodies();
-    const listed = bodies['/core/v1/markets'] as { results: { metadata: { platformName: string } }[] };
-    listed.results[1].metadata.platformName = 'Lighter';
+    const listed = bodies['/apis/v1/markets'] as { results: { platform: { platformId: string } }[] };
+    listed.results[1].platform.platformId = 'Lighter';
     app = makeTestApp({ borosFetch: borosStub(bodies) });
     mockGateGet('/rule/symbols', {
       body: [
@@ -543,7 +551,7 @@ describe('GET /api/opportunities', () => {
 
   it('degrades ONE missing Boros book to an unavailable market, not a failed request', async () => {
     const bodies = borosBodies();
-    delete bodies[`/core/v1/order-books/${BINANCE_MARKET}`]; // stub 404s it
+    delete bodies[`/apis/v1/markets/order-book?marketId=${BINANCE_MARKET}`];
     app = makeTestApp({ borosFetch: borosStub(bodies) });
     mockGate();
     mockVenueBooks();

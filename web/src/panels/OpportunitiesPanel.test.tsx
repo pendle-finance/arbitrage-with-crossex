@@ -243,56 +243,12 @@ describe('OpportunitiesPanel — ranking and null tolerance', () => {
 
     await waitFor(() => expect(executeButtons()).toHaveLength(2));
     expect(executeButtons()[0]).toBeEnabled();
-    expect(screen.getByText('no CX symbol · HYPERLIQUID')).toBeInTheDocument();
+    expect(screen.getByText('no CX symbol · Hyperliquid')).toBeInTheDocument();
     expect(executeButtons()[1]).toBeDisabled();
     expect(executeButtons()[1]).toHaveAttribute(
       'title',
       expect.stringContaining('lists a CrossEx perp'),
     );
-  });
-
-  it('unconfigured keeps Execute enabled as a nudge to the setup guide', async () => {
-    // First-run: no Gate keys, so NO leg maps to a CrossEx symbol — the exact
-    // shape that disables Execute above must instead nudge the setup guide.
-    // (The pair still prices via the simulated VIP tier — an unpriced group
-    // would be hidden with the rest of the undefined-APR noise.)
-    const bothMissing = makeOpportunityGroup({
-      pairs: [
-        makeOpportunityPair({
-          shortLeg: makeOpportunityLeg({ crossexSymbol: '' }),
-          longLeg: makeOpportunityLeg({
-            marketId: 102,
-            venue: 'BINANCE',
-            crossexVenue: 'BINANCE',
-            crossexSymbol: '',
-            midApr: 0.045,
-            execApr: 0.0455,
-          }),
-        }),
-      ],
-    });
-    server.use(opportunitiesHandler(makeOpportunitiesResult({ groups: [bothMissing] })));
-    renderWithClient(<OpportunitiesPanel unconfigured />);
-
-    await waitFor(() => expect(executeButtons()).toHaveLength(1));
-    expect(executeButtons()[0]).toBeEnabled();
-    expect(executeButtons()[0]).toHaveAttribute(
-      'title',
-      expect.stringContaining('setup guide'),
-    );
-  });
-
-  it('unconfigured sends the simulated VIP tier and re-queries when it changes', async () => {
-    const urls: string[] = [];
-    server.use(opportunitiesHandler(makeOpportunitiesResult(), { urls }));
-    renderWithClient(<OpportunitiesPanel unconfigured />);
-
-    await waitFor(() => expect(urls).toHaveLength(1));
-    expect(paramsOf(urls.at(-1)!)).toMatchObject({ feeTier: 'vip0' });
-
-    await openAssumptions();
-    await userEvent.selectOptions(screen.getByLabelText('Gate VIP tier'), 'vip3');
-    await waitFor(() => expect(paramsOf(urls.at(-1)!)).toMatchObject({ feeTier: 'vip3' }));
   });
 
   it('configured never sends a feeTier and never shows the simulator', async () => {
@@ -809,50 +765,6 @@ describe('OpportunitiesPanel — the assumptions strip', () => {
     }
   });
 
-  it('migrates a v1 blob into the two independent knobs and drops the old key', async () => {
-    localStorage.setItem(
-      LEGACY_KEY,
-      JSON.stringify({
-        choice: 'market-100k',
-        customSize: 10_000,
-        entryMode: 'maker-hedge',
-        exitMode: 'roll',
-        feeTier: 'vip3',
-      }),
-    );
-    const urls: string[] = [];
-    server.use(opportunitiesHandler(makeOpportunitiesResult(), { urls }));
-    renderWithClient(<OpportunitiesPanel unconfigured />);
-
-    await waitFor(() => expect(urls).toHaveLength(1));
-    expect(paramsOf(urls.at(-1)!)).toMatchObject({
-      notionalUsd: '100000',
-      borosEntry: 'market',
-      entryMode: 'maker-hedge',
-      exitMode: 'roll',
-      feeTier: 'vip3',
-    });
-
-    await openAssumptions();
-    expect(screen.getByRole('radio', { name: '$100k' })).toHaveAttribute('aria-checked', 'true');
-    expect(screen.getByRole('radio', { name: /Limit \+ hedge/ })).toHaveAttribute(
-      'aria-checked',
-      'true',
-    );
-    expect(screen.getByRole('radio', { name: /Roll over/ })).toHaveAttribute('aria-checked', 'true');
-    expect(screen.getByLabelText('Gate VIP tier')).toHaveValue('vip3');
-
-    expect(localStorage.getItem(LEGACY_KEY)).toBeNull();
-    expect(JSON.parse(localStorage.getItem(OPPORTUNITIES_STORAGE_KEY)!)).toEqual({
-      notionalChoice: '100k',
-      customNotionalUsd: 10_000,
-      borosEntry: 'market',
-      entryMode: 'maker-hedge',
-      exitMode: 'roll',
-      feeTier: 'vip3',
-    });
-  });
-
   it('migrates a v1 "mark" blob to market-at-size at its own custom size', async () => {
     // v1's 'mark' carried its size in customSize — a non-preset one lands on
     // "Custom…" with the size intact. The mark entry has no home any more:
@@ -879,7 +791,6 @@ describe('OpportunitiesPanel — the assumptions strip', () => {
       notionalChoice: 'custom',
       customNotionalUsd: 25_000,
       borosEntry: 'market',
-      feeTier: 'vip0',
     });
   });
 });

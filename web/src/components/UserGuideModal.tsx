@@ -9,7 +9,7 @@
  * document safe. Keep it that way.
  */
 import { useQuery } from '@tanstack/react-query';
-import type { ReactNode } from 'react';
+import { useEffect, useRef, type ReactNode } from 'react';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Modal } from './Modal';
@@ -146,7 +146,7 @@ const components = {
   ),
 };
 
-export function UserGuideModal({ onClose }: { onClose: () => void }) {
+export function UserGuideModal({ onClose, section }: { onClose: () => void; section?: string }) {
   const guide = useQuery({
     queryKey: ['user-guide', USER_GUIDE_RAW_URL] as const,
     queryFn: async () => {
@@ -157,6 +157,15 @@ export function UserGuideModal({ onClose }: { onClose: () => void }) {
     staleTime: Infinity,
     gcTime: Infinity,
   });
+  const bodyRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!section || !guide.data) return;
+    const heading = Array.from(bodyRef.current?.querySelectorAll('h2') ?? []).find((h) =>
+      h.textContent?.includes(section),
+    );
+    heading?.scrollIntoView({ block: 'start' });
+  }, [section, guide.data]);
 
   return (
     <Modal title="User guide" onClose={onClose} widthClass="w-[760px]">
@@ -181,14 +190,14 @@ export function UserGuideModal({ onClose }: { onClose: () => void }) {
           </button>
         </div>
       ) : (
-        <>
+        <div ref={bodyRef}>
           <Markdown remarkPlugins={[remarkGfm]} components={components}>
             {guide.data}
           </Markdown>
           <div className="mt-5 border-t border-ink-800 pt-3 text-[11px] text-ink-500">
             Rendered from <Ext href={USER_GUIDE_HTML_URL}>{DOC}</Ext> on GitHub.
           </div>
-        </>
+        </div>
       )}
     </Modal>
   );

@@ -12,7 +12,7 @@ import { CoreError } from '../../src/core/errors';
 import type { FastifyInstance } from 'fastify';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BorosLegFill, BorosOrderClient, BorosRollLeg, BorosRollSimulation } from '../../src/core/boros/orders';
-import { imInputs, raw } from '../helpers/boros-fixtures';
+import { imInputs, marketAcc, raw } from '../helpers/boros-fixtures';
 import { TtlCache } from '../../src/server/cache';
 import { borosStub } from '../helpers/boros-stub';
 import { HOST, makeTestApp } from './helpers/gate-nock';
@@ -35,7 +35,6 @@ const BN2 = 159;
 const market = (marketId: number, platformName: string, midApr: number, maturity = MATURITY) => ({
   marketId,
   tokenId: 3,
-  state: 'Normal',
   imData: {
     name: `${platformName} ETH ${maturity === MATURITY ? '30d' : '60d'}`,
     maturity,
@@ -43,8 +42,9 @@ const market = (marketId: number, platformName: string, midApr: number, maturity
     tickStep: imInputs.imTickStep,
   },
   extConfig: { settleFeeRate: '1000000000000000', paymentPeriod: 3600 },
-  metadata: { platformName, assetSymbol: 'ETH' },
-  config: { takerFee: '500000000000000', kIM: raw(imInputs.kIM), tThresh: imInputs.tThreshSec },
+  platform: { platformId: platformName },
+  metadata: { underlyingSymbol: 'ETH' },
+  config: { status: 2, takerFee: '500000000000000', kIM: raw(imInputs.kIM), tThresh: imInputs.tThreshSec },
   data: { midApr, markApr: midApr, floatingApr: 0.05, notionalOI: 12_000_000, assetMarkPrice: 1900 },
 });
 
@@ -58,10 +58,44 @@ const wireBook = (midApr: number, size = 20_000_000) => ({
   long: { ia: [Math.round((midApr - 0.001) * 10_000)], sz: [raw(size)] },
 });
 
+type HeldLeg = { marketId: number; size: number; fixedApr: number; im: number };
+
+function accountBodies(netBalance: number, legs: HeldLeg[] = []): Record<string, unknown> {
+  const acc = marketAcc(ADDRESS, 3);
+  return {
+    '/apis/v1/accounts/market-acc-infos-by-root': {
+      results: [
+        {
+          marketAcc: acc,
+          netBalance: raw(netBalance),
+          initialMargin: raw(legs.reduce((s, l) => s + l.im, 0)),
+          positions: legs.map((l) => ({
+            marketId: l.marketId,
+            signedSize: raw(l.size),
+            initialMargin: raw(l.im),
+            orders: [],
+          })),
+        },
+      ],
+    },
+    '/apis/v1/accounts/active-positions': {
+      results: legs.map((l) => ({
+        marketAcc: acc,
+        marketId: l.marketId,
+        side: l.size >= 0 ? 0 : 1,
+        fixedApr: l.fixedApr,
+        signedSize: raw(l.size),
+        unrealisedPnl: '0',
+        settlementPnl: '0',
+      })),
+    },
+  };
+}
+
 /** Default account: FLAT everywhere. Seed positions via the `over` on rollBodies. */
 function rollBodies(over: Record<string, unknown> = {}): Record<string, unknown> {
   return {
-    '/core/v1/markets': {
+    '/apis/v1/markets': {
       results: [
         market(HL, 'Hyperliquid', 0.09),
         market(BN, 'Binance', 0.045),
@@ -69,35 +103,20 @@ function rollBodies(over: Record<string, unknown> = {}): Record<string, unknown>
         market(BN2, 'Binance', 0.05, MATURITY2),
       ],
     },
-    [`/core/v1/order-books/${HL}`]: wireBook(0.09),
-    [`/core/v1/order-books/${BN}`]: wireBook(0.045),
-    [`/core/v1/order-books/${HL2}`]: wireBook(0.1),
-    [`/core/v1/order-books/${BN2}`]: wireBook(0.05),
-    '/core/v1/collaterals/summary': {
-      collaterals: [{ tokenId: 3, crossPosition: { netBalance: raw(500_000), marketPositions: [] }, isolatedPositions: [] }],
-    },
+    [`/apis/v1/markets/order-book?marketId=${HL}`]: wireBook(0.09),
+    [`/apis/v1/markets/order-book?marketId=${BN}`]: wireBook(0.045),
+    [`/apis/v1/markets/order-book?marketId=${HL2}`]: wireBook(0.1),
+    [`/apis/v1/markets/order-book?marketId=${BN2}`]: wireBook(0.05),
+    ...accountBodies(500_000),
     ...over,
   };
 }
 
 /** The account holds the OLD pair: SHORT Hyperliquid @9%, LONG Binance @4.5%. */
-const heldPair = {
-  '/core/v1/collaterals/summary': {
-    collaterals: [
-      {
-        tokenId: 3,
-        crossPosition: {
-          netBalance: raw(500_000),
-          marketPositions: [
-            { marketId: HL, side: 1, notionalSize: raw(-100_000), fixedApr: 0.09, pnl: {}, positionInitialMargin: raw(1_000) },
-            { marketId: BN, side: 0, notionalSize: raw(100_000), fixedApr: 0.045, pnl: {}, positionInitialMargin: raw(800) },
-          ],
-        },
-        isolatedPositions: [],
-      },
-    ],
-  },
-};
+const heldPair = accountBodies(500_000, [
+  { marketId: HL, size: -100_000, fixedApr: 0.09, im: 1_000 },
+  { marketId: BN, size: 100_000, fixedApr: 0.045, im: 800 },
+]);
 
 const okFill = (over: Partial<BorosLegFill> = {}): BorosLegFill => ({
   marketId: HL,

@@ -27,12 +27,9 @@ export function roundToStep(value: number, step: string, dir: 'down' | 'up' | 'n
   const s = Number(step);
   if (!Number.isFinite(s) || s <= 0) return String(value);
   const decimals = decimalsOf(step);
-  const r = value / s;
-  if (dir === 'nearest') return (Math.round(r) * s).toFixed(decimals);
-  const at = (mult: number): number => Number((mult * s).toFixed(decimals));
-  let below = Math.floor(r);
-  if (at(below) > value) below -= 1;
-  else if (at(below + 1) <= value) below += 1;
+  if (dir === 'nearest') return (Math.round(value / s) * s).toFixed(decimals);
+  const at = (mult: number): number => stepValue(mult, s, decimals);
+  const below = stepsBelow(value, s, decimals);
   const noise = Math.min(1e-3 * s, Math.max(1e-9 * Math.min(1, s), 4 * Number.EPSILON * Math.abs(value)));
   const mult =
     dir === 'down'
@@ -43,6 +40,43 @@ export function roundToStep(value: number, step: string, dir: 'down' | 'up' | 'n
         ? below
         : below + 1;
   return (mult * s).toFixed(decimals);
+}
+
+export function floorToStep(value: number, step: string): string {
+  const s = Number(step);
+  if (!Number.isFinite(s) || s <= 0) return String(value);
+  const decimals = decimalsOf(step);
+  return (stepsBelow(value, s, decimals) * s).toFixed(decimals);
+}
+
+export function floorDecimalString(raw: string | null | undefined, step: string): string {
+  const trimmed = String(raw ?? '').trim();
+  const parts = trimmed.match(/^([+-]?)(\d+)(?:\.(\d*))?$/);
+  if (!parts || !(Number(step) > 0)) {
+    const value = Number(trimmed);
+    return trimmed === '' || !Number.isFinite(value) ? '0' : floorToStep(value, step);
+  }
+  const decimals = decimalsOf(step);
+  const [, sign, whole, fraction = ''] = parts;
+  const kept = BigInt(whole + fraction.slice(0, decimals).padEnd(decimals, '0'));
+  const cut = /[1-9]/.test(fraction.slice(decimals)) ? 1n : 0n;
+  const units = sign === '-' ? -kept - cut : kept;
+  const stepUnits = BigInt(Math.round(Number(step) * 10 ** decimals));
+  const floored = units - (((units % stepUnits) + stepUnits) % stepUnits);
+  const digits = (floored < 0n ? -floored : floored).toString().padStart(decimals + 1, '0');
+  const text = decimals > 0 ? `${digits.slice(0, -decimals)}.${digits.slice(-decimals)}` : digits;
+  return floored < 0n ? `-${text}` : text;
+}
+
+function stepValue(mult: number, s: number, decimals: number): number {
+  return Number((mult * s).toFixed(decimals));
+}
+
+function stepsBelow(value: number, s: number, decimals: number): number {
+  const below = Math.floor(value / s);
+  if (stepValue(below, s, decimals) > value) return below - 1;
+  if (stepValue(below + 1, s, decimals) <= value) return below + 1;
+  return below;
 }
 
 /** The coarsest (largest) of the given lot steps; undefined when none is a

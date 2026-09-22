@@ -22,7 +22,7 @@ import {
 import type { AppDeps } from '../app';
 import { TTL } from '../cache';
 import { DISCLAIMER_NOT_ACCEPTED, isDisclaimerAccepted } from '../disclaimer';
-import { sendError } from '../errorReply';
+import { catchRateLimit, sendError } from '../errorReply';
 import { INTEREST_OVERFLOW, InterestFile, syncInterest } from '../interestLedger';
 import {
   bannerFor,
@@ -44,7 +44,6 @@ const NO_LEGS = 'No open positions. Nothing to rebalance.';
 const NO_BORROW = 'No borrow to repay.';
 const NOTHING_TO_MOVE = 'Nothing to move.';
 const CUSTOM_NEEDS = 'A custom move needs from, to and amount.';
-const LOOP_GONE = 'Spot loop is no longer offered. Pick a route again.';
 const RELOAD_TEXT = 'This page is out of date. Reload it and check the plan before you rebalance.';
 const PLAN_CHANGED_TEXT = 'The plan changed. Check the new route before you rebalance.';
 const PLAN_CHANGED_LABEL = 'PLAN_CHANGED';
@@ -137,6 +136,7 @@ export function rebalanceRoutes(deps: AppDeps) {
         now,
         sleep: deps.rebalance?.sleep ?? sleep,
         onHalt,
+        onDone: deps.rebalance?.onDone,
         pollOnly,
       })
         .then(() => {
@@ -225,7 +225,7 @@ export function rebalanceRoutes(deps: AppDeps) {
         custom: custom ? planFor(buckets, account.value, inputs, custom) : null,
       };
       const stale = [account, positions, rates, paid, coins, rules, fees, tickers].some((r) => r.stale);
-      return { buckets, plans, stale, accountStale: account.stale || positions.stale, userId };
+      return { buckets, plans, stale, userId };
     };
 
     const loadInTransit = async (job: Job): Promise<ReturnType<typeof inTransitOf>> => {
@@ -299,18 +299,15 @@ export function rebalanceRoutes(deps: AppDeps) {
       const store = requireJobs();
       const locked = findLock();
       if (locked) return conflict(reply, locked);
-      const { plans, accountStale, userId } = await loadView(true, custom);
-      // The amount is sized from this read. A read served from the cache
-      // because Gate rate-limited the fresh one may be seconds old, and a
-      // move to USDT sized on old equity can open the borrow it promises not to.
-      if (accountStale) return conflict(reply, STALE_TEXT);
+      const view = await catchRateLimit(loadView(true, custom));
+      if (!view) return conflict(reply, STALE_TEXT);
+      const { plans, userId } = view;
       const plan = plans[goal];
       if (!plan) throw new CoreError(CUSTOM_NEEDS);
       if (plan.balanced) return conflict(reply, nothingText(plan));
       const picked = plan.routes[route];
-      const otherLoop = route === 'mix' ? plan.routes.loop : route === 'loop' ? plan.routes.mix : null;
-      if (!picked && otherLoop) return conflict(reply, PLAN_CHANGED_TEXT, PLAN_CHANGED_LABEL);
-      if (!picked?.available) return conflict(reply, picked?.reason ?? LOOP_GONE);
+      if (!picked) return conflict(reply, PLAN_CHANGED_TEXT, PLAN_CHANGED_LABEL);
+      if (!picked.available) return conflict(reply, picked.reason ?? PLAN_CHANGED_TEXT);
       if (picked.steps.length === 0) return conflict(reply, nothingText(plan));
       if (costRoseTooMuch(picked.costUsd, costUsd)) return conflict(reply, PLAN_CHANGED_TEXT, PLAN_CHANGED_LABEL);
       const lockedNow = findLock();

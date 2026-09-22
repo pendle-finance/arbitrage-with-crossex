@@ -250,6 +250,41 @@ describe('POST /api/deals', () => {
     expect(w.store.listPairs()).toHaveLength(1);
   });
 
+  it('refuses a coin outside the supported set before it ever reads a venue rule', async () => {
+    const w = mkApp();
+    app = w.app;
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/deals',
+      headers: HOST,
+      payload: makerPayload({ a: { symbol: 'GATE_FUTURE_SOL_USDT', side: 'BUY' }, b: null }),
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toEqual({
+      ok: false,
+      error: {
+        category: 'symbol-invalid',
+        message: 'This coin is not supported. Pick ETH, HYPE or BTC.',
+        retryable: false,
+      },
+    });
+    expect(w.store.listPairs()).toHaveLength(0);
+  });
+
+  it('refuses when only the hedge leg is on an unsupported coin', async () => {
+    const w = mkApp();
+    app = w.app;
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/deals',
+      headers: HOST,
+      payload: makerPayload({ b: { symbol: 'GATE_FUTURE_SOL_USDT', side: 'SELL' } }),
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error.category).toBe('symbol-invalid');
+    expect(w.store.listPairs()).toHaveLength(0);
+  });
+
   it('rejects a same-contract pair, a bad qty, and a maker without a price (400, nothing created)', async () => {
     const w = mkApp();
     app = w.app;

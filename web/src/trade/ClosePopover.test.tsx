@@ -97,6 +97,23 @@ describe('ClosePopover', () => {
     expect(screen.getByRole('button', { name: 'Close now ▸' })).toBeDisabled();
   });
 
+  it.each([
+    ['4100', '4,100 ETH'],
+    ['12345678.9', '12,345,678.9 ETH'],
+  ])('states a %s ETH maximum with every digit and commas, never compact or exponent', async (qty, text) => {
+    server.use(...baseHandlers(), closePreviewHandler());
+    renderWithClient(
+      <ClosePopover position={makeCrossexPosition({ ...ethPosition, positionQty: qty })} onDismiss={() => {}} />,
+    );
+
+    expect(await screen.findByRole('button', { name: `max ${text}` })).toBeInTheDocument();
+    expect((screen.getByLabelText('Close size') as HTMLInputElement).value).not.toContain(',');
+    await userEvent.clear(screen.getByLabelText('Close size'));
+    await userEvent.type(screen.getByLabelText('Close size'), '99999999');
+    expect(await screen.findByText(`close size exceeds position (${text})`)).toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(/\d(k|M) ETH|e\+/);
+  });
+
   it('accepts the COIN maximum the dialog itself displays', async () => {
     // sig() keeps 4 dp from 1: a 151.20195 position prints as 151.202, a hair
     // ABOVE the position. Typing the hint's own figure must not be refused by
@@ -324,6 +341,24 @@ describe('ClosePopover — sizing a close in dollars', () => {
     expect(screen.queryByLabelText('Close value')).not.toBeInTheDocument();
     expect(screen.queryByRole('radiogroup', { name: 'Close size unit' })).not.toBeInTheDocument();
     // And the limit is stated in coins, so 2 (> 1.89) is refused.
+    await userEvent.clear(screen.getByLabelText('Close qty'));
+    await userEvent.type(screen.getByLabelText('Close qty'), '2');
+    expect(await screen.findByText(/close size exceeds position \(1\.89 HYPE\)/)).toBeInTheDocument();
+  });
+
+  it('drops the USD unit when the mark is one the server remembered', async () => {
+    server.use(...baseHandlers(), closePreviewHandler());
+    renderWithClient(
+      <ClosePopover
+        position={makeCrossexPosition({ ...hypePosition, markHeldSinceMs: Date.parse('2026-09-21T14:32:00Z') })}
+        onDismiss={() => {}}
+      />,
+    );
+    await screen.findByText(/limit px/i);
+
+    expect(screen.getByLabelText('Close qty')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Close value')).not.toBeInTheDocument();
+    expect(screen.queryByRole('radiogroup', { name: 'Close size unit' })).not.toBeInTheDocument();
     await userEvent.clear(screen.getByLabelText('Close qty'));
     await userEvent.type(screen.getByLabelText('Close qty'), '2');
     expect(await screen.findByText(/close size exceeds position \(1\.89 HYPE\)/)).toBeInTheDocument();

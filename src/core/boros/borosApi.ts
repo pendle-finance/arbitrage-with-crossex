@@ -852,12 +852,6 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
      * an order one unit larger than the position crosses it and opens a fresh
      * one the other way. The route already clamps the size to what is open,
      * but it clamps two DOUBLES — and the order is not built from a double.
-     * `parseUnits(decimalString(50000000000000000 / 1e18))` is
-     * 50000000000000003, so a clean 0.05 close asked for three units more
-     * than existed and left a 3-unit opposing position behind. Too small to
-     * see, too small to close again (the venue refuses orders under $10 of
-     * notional), and reported as "closed" because in float space the two
-     * numbers were equal.
      *
      * So the float is only ever allowed to make the order SMALLER here. The
      * venue's own integer is the ceiling, and it is never re-derived.

@@ -23,7 +23,7 @@ import { Chip } from '../components/Chip';
 import { VenueIcon } from '../components/AssetIcon';
 import { HoldToConfirmButton } from '../components/HoldToConfirmButton';
 import { amountError } from '../lib/amount';
-import { fmtDateLocal, fmtPct, fmtTokenQty, fmtUsd } from '../lib/fmt';
+import { fmtDateLocal, fmtPct, fmtUsd, sigGrouped } from '../lib/fmt';
 
 /** Was this leg actually sent to the venue? A not-submitted sentinel is
  * all-zero with no failure (orders.ts `notSubmitted`); a REJECTED leg has
@@ -460,7 +460,7 @@ export function PositionArithmetic({
    * short), so a sign beside it says the same thing twice. The two legs of
    * a spread still read as opposite because they are coloured opposite.
    */
-  const mag = (n: number) => fmtTokenQty(Math.abs(n), sim.collateral);
+  const mag = (n: number) => `${sigGrouped(Math.abs(n))} ${sim.collateral}`;
   const sideOf = (leg: BorosSimulatedLeg): BorosLegDirection =>
     leg.sizing.resultingSize > 0 ? 'long' : leg.sizing.resultingSize < 0 ? 'short' : leg.direction;
   return (

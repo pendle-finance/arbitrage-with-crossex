@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import { useAccount, usePositions } from '../api/queries';
 import { fmtUsd } from '../lib/fmt';
-import { describeLine, nearestLiquidation } from '../lib/liquidation';
+import { describeLine, liquidationLines, unknownLabel } from '../lib/liquidation';
 import { MarginBreakdown } from './MarginDonut';
 import { Skeleton } from './Skeleton';
 
@@ -24,7 +24,15 @@ export function AccountHealthStrip({ children }: { children?: ReactNode }) {
   // the controls — beside the wordmark it read as part of the product name.
   // Whole dollars: cents in a 12px header are unreadable and never actionable;
   // the exact figures are one hover away on the Balances tab.
-  const nearest = nearestLiquidation(acc, positions);
+  const view = positions ? liquidationLines(acc, positions, {}, positions.marginTiers) : null;
+  const stale = (view?.unknown ?? []).flatMap((u) =>
+    u.sinceMs === null ? [] : [`${u.base}. ${unknownLabel({ venue: u.venue, sinceMs: u.sinceMs })}`],
+  );
+  const nearest = view?.lines[0] ?? null;
+  const parts = nearest === null
+    ? stale
+    : [`Nearest liquidation: ${nearest.base}. ${describeLine(nearest)}`, ...stale];
+  const liquidation = parts.length > 0 ? parts.join(' ') : null;
   return (
     <div className="ml-auto flex flex-wrap items-center justify-end gap-x-4 gap-y-2">
       <span className="flex items-baseline gap-1.5 whitespace-nowrap text-xs">
@@ -37,9 +45,7 @@ export function AccountHealthStrip({ children }: { children?: ReactNode }) {
       <MarginBreakdown
         acc={acc}
         variant="compact"
-        liquidation={
-          nearest ? `Nearest liquidation: ${nearest.base}. ${describeLine(nearest)}` : null
-        }
+        liquidation={liquidation}
       />
       {children}
     </div>

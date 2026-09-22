@@ -1,5 +1,5 @@
 import { useEffect, useRef, type ReactNode } from 'react';
-import { useFocusTrap } from '../lib/focusTrap';
+import { claimEscape, useFocusTrap } from '../lib/focusTrap';
 
 interface Props {
   open: boolean;
@@ -44,7 +44,7 @@ export function Drawer({
     const onKey = (e: KeyboardEvent) => {
       // e.repeat: a HELD Escape auto-repeats, and surfaces with an arm-then-
       // confirm close guard would see the repeat as the confirming second call.
-      if (e.key === 'Escape' && !e.repeat) onClose();
+      if (e.key === 'Escape' && !e.repeat && claimEscape(e, panel.current)) onClose();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);

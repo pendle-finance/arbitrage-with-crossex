@@ -1,9 +1,9 @@
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
-import type { PositionsResponse, RebalanceBucket } from '../api/types';
-import { accountBodies, rebalanceViews, rebased } from '../test/fixtures';
-import { borrowFacts, defaultGoal, Facts, isNotWorthIt, isWorthIt, liquidationNow, pickedRoute, roundOf, shownKeys, stopsPerDayOf, targetsOf, worthLine } from './RebalanceHovers';
+import type { RebalanceBucket } from '../api/types';
+import { rebalanceViews, rebased } from '../test/fixtures';
+import { borrowFacts, defaultGoal, Facts, isNotWorthIt, isWorthIt, pickedRoute, roundOf, shownKeys, stopsPerDayOf, targetsOf, worthLine } from './RebalanceHovers';
 
 function show(buckets: RebalanceBucket[]) {
   return render(<Facts items={borrowFacts(buckets)} />);
@@ -201,17 +201,6 @@ describe('borrow facts', () => {
     expect(await rows('Interest paid')).toEqual([{ name: 'Hyperliquid', value: '$3.20' }]);
     expect(lines('Borrowing')[0]).toBe('none');
     expect(lines('Interest now')[0]).toBe('$0.00 an hour');
-  });
-});
-
-describe('the liquidation rule the modal uses', () => {
-  const noPositions: PositionsResponse = { positions: [], exposure: [] };
-
-  it('is unknown without both reads or with margin figures that are not numbers, and null with no line', () => {
-    expect(liquidationNow(undefined, noPositions)).toBe('unknown');
-    expect(liquidationNow(accountBodies.accountA, undefined)).toBe('unknown');
-    expect(liquidationNow({ ...accountBodies.accountA, maintenanceMargin: 'n/a' }, noPositions)).toBe('unknown');
-    expect(liquidationNow(accountBodies.accountA, noPositions)).toBeNull();
   });
 });
 

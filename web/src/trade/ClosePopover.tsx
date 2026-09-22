@@ -18,7 +18,7 @@ import { Modal } from '../components/Modal';
 import { SegmentedToggle } from '../components/SegmentedToggle';
 import { SignedNumber } from '../components/SignedNumber';
 import { SideChip } from '../components/VenueChip';
-import { fieldValue, fmtUsd, fmtUsdCompact, parseSymbol, prettyVenue, sig } from '../lib/fmt';
+import { fieldValue, fmtUsd, fmtUsdCompact, parseSymbol, prettyVenue, sig, sigGrouped } from '../lib/fmt';
 import { sizeUnitForBase } from '../lib/boros';
 import { ExecuteControl } from './ExecuteControl';
 import { AffixedInput, EstimateCard, EstimateRow, LegCard, SlippageLine } from './PairTicketBits';
@@ -116,7 +116,8 @@ export function ClosePopover({
    * live prices server-side.
    */
   const [mark] = useState(() => Number(position.markPrice));
-  const markOk = Number.isFinite(mark) && mark > 0;
+  const [markHeld] = useState(() => position.markHeldSinceMs !== undefined);
+  const markOk = Number.isFinite(mark) && mark > 0 && !markHeld;
   /**
    * ⚠ USD is only a legal unit while there is a mark to convert AT.
    *
@@ -256,7 +257,7 @@ export function ClosePopover({
           venue={prettyVenue(exchange)}
           side={heldSide}
           sub={position.symbol}
-          value={`${sig(wholeQty)} ${base}`}
+          value={`${sigGrouped(wholeQty)} ${base}`}
           valueSub={
             markOk ? (
               <>
@@ -270,7 +271,7 @@ export function ClosePopover({
             Say so where the size is chosen, not after the fact. */}
         {shared && (
           <p className="text-[11px] leading-relaxed text-amber-400/90">
-            This position holds {sig(attributedQty ?? 0)} of the {sig(wholeQty)} on the venue; the
+            This position holds {sigGrouped(attributedQty ?? 0)} of the {sigGrouped(wholeQty)} on the venue; the
             rest belongs to another position.
           </p>
         )}
@@ -298,7 +299,7 @@ export function ClosePopover({
             >
               max{' '}
               <span className="text-link underline decoration-link/40 underline-offset-2">
-                {sig(maxInUnit)} {effUnit === 'usd' ? 'USDT' : base}
+                {sigGrouped(maxInUnit)} {effUnit === 'usd' ? 'USDT' : base}
               </span>
             </button>
           </div>
@@ -347,7 +348,7 @@ export function ClosePopover({
           {qtyInvalid && qtyStr.trim() !== '' ? (
             <span className="text-[11px] text-rose-300">
               close size exceeds {shared ? "this position's share" : 'position'} (
-              {effUnit === 'usd' ? `${sig(maxInUnit)} USDT` : `${sig(maxInUnit)} ${base}`})
+              {effUnit === 'usd' ? `${sigGrouped(maxInUnit)} USDT` : `${sigGrouped(maxInUnit)} ${base}`})
             </span>
           ) : (
             <span className="text-[11px] text-ink-400">
@@ -357,14 +358,14 @@ export function ClosePopover({
                 </>
               ) : (
                 <>
-                  partial · <span className="num text-ink-200">{sig(leftAfter)} {base}</span> stays open
+                  partial · <span className="num text-ink-200">{sigGrouped(leftAfter)} {base}</span> stays open
                 </>
               )}
               {effUnit === 'usd' && !qtyInvalid && qtyStr.trim() !== '' && (
                 // The converted figure is what actually goes to the venue, so it
                 // is shown rather than left to be inferred from the preview.
                 <>
-                  {' · '}≈ <span className="num">{sig(qtyNum)}</span> {base} at mark{' '}
+                  {' · '}≈ <span className="num">{sigGrouped(qtyNum)}</span> {base} at mark{' '}
                   <span className="num">{sig(mark)}</span>
                 </>
               )}
@@ -392,7 +393,7 @@ export function ClosePopover({
                     value={
                       <span className="inline-flex items-center gap-1.5">
                         <SideChip side={p.side} />
-                        {p.qty ? `${sig(p.qty)} ${base}` : '—'}
+                        {p.qty ? `${sigGrouped(p.qty)} ${base}` : '—'}
                       </span>
                     }
                   />

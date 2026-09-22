@@ -48,6 +48,43 @@ failed.
 - **Smaller things.** The maturity reminder starts 10 days out. The simulation window is
   tidier, and the roll-over controls sit where the pair's own actions are.
 
+## 1.6.4 — 2026-09-21
+
+TLDR: Telegram alerts. Connect this terminal to the Boros alerts bot and it warns you before a
+leg liquidates. The liquidation line itself is now read from Gate's real margin table, so it is
+right on a large account.
+
+- **Telegram alerts.** Settings has a Set up button. It opens the Boros alerts page, you confirm
+  the terminal there, and the bot watches your legs from then on. Two alerts: a leg nearing
+  liquidation, and a borrow whose interest is worth clearing. Each names the coin, the leg and
+  the direction, so "Liquidation: $3,410 if the price rises (Gate short)" tells you which side
+  to fix. Turn either alert off in Settings.
+- **The liquidation line reads Gate's margin table.** Gate raises the margin rate in steps as a
+  position grows, so a $400k HYPE leg is liquidated nearer than a flat rate says. The app now
+  reads the table per coin and uses the rate for your size. On a $400k account at 3x that moves
+  the line by $25.
+- **A coin Gate stops pricing says so.** The last good price is kept for 60 seconds, marked as
+  held. Past that the card says "No liquidation estimate" and names the leg Gate stopped pricing,
+  instead of showing nothing. A held price can no longer size a close: the close window drops its
+  USD field until a real price arrives.
+- **A setup checklist on first run.** Each step says what it needs and what is missing, so a new
+  install reaches a working terminal without reading the guide.
+- **Only coins both venues support.** A coin one venue lists and the other does not is no longer
+  offered, on Opportunities and in the order ticket.
+- **A close-only market closes.** The order ticket on a close-only market offers the close and
+  refuses the open, and says which it is.
+- **Your tracking start date has a sensible default.** Funding and interest are counted from
+  when you started, not from the beginning of the account.
+- **Boros payment history is no longer capped.** The full settlement history loads.
+- **Lighter reads on the Boros API cost less.** The order book is read every 90 seconds instead
+  of 60, fill history and the settlement head every 60 instead of 30, and a hidden ticket stops
+  polling. The worst minute now fits inside the Boros allowance instead of running past it.
+- **The Spot loop says how long it will take.** The confirm step shows the route, the fee and
+  the time, "Spot loop · Fee $3.41 · about 17 h 22 m", before you hold.
+- **Smaller things.** Long waits read as "about 17 h 22 m" instead of "about 1042 min". The
+  Positions health strip names the nearest line first. Venue names read as Gate and Hyperliquid,
+  not as codes. A bundle's Notional hover carries the exact figure beside the short one.
+
 ## 1.6.3 — 2026-09-19
 
 TLDR: Rebalance now clears a borrow after your positions are closed, and moves any amount you

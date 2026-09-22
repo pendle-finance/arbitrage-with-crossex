@@ -71,6 +71,21 @@ describe('BorosAgentSetup', () => {
     expect(screen.getByText(/never asks for your wallet's key/i)).toBeInTheDocument();
     // And that there IS an on-chain transaction coming.
     expect(screen.getByText(/one on-chain transaction/i)).toBeInTheDocument();
+    expect(screen.getByText('Enable Boros trading')).toBeInTheDocument();
+    expect(screen.queryByText('Connect the wallet that holds your Boros account.')).toBeNull();
+  });
+
+  it('compact shows one line, the cost and the button, and no paragraphs', async () => {
+    installWallet();
+    server.use(http.get('/api/boros/agent', () => HttpResponse.json(env(status()))));
+    renderWithClient(<BorosAgentSetup compact />);
+
+    expect(await screen.findByRole('button', { name: 'Connect wallet' })).toBeInTheDocument();
+    expect(screen.getByText('Connect the wallet that holds your Boros account.')).toBeInTheDocument();
+    expect(screen.getByText('Approval cost: free')).toBeInTheDocument();
+    expect(screen.queryByText('Enable Boros trading')).toBeNull();
+    expect(screen.queryByText(/one on-chain transaction/i)).toBeNull();
+    expect(screen.queryByText(/cannot deposit or withdraw/i)).toBeNull();
   });
 
   it('sends the generated key to localhost and never renders it', async () => {

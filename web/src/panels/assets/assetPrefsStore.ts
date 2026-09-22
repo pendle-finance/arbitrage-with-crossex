@@ -16,8 +16,6 @@ import type { Exclusions } from './assetModel';
 const KEY = 'crossex.assetView.v1';
 
 export interface AssetViewPrefs {
-  /** Per-ASSET start dates (base → unix sec; absent = all time). The window
-   * is a property of a strategy, not of the app — his call 2026-09-04. */
   sinceByAsset: Record<string, number>;
   exclusions: Exclusions;
   /** Per-Boros-leg "counted from" (borosKey → unix sec): history before it
@@ -56,9 +54,7 @@ const validate = (parsed: unknown): AllBooks => {
     if (p.sinceByAsset && typeof p.sinceByAsset === 'object') {
       for (const [base, q] of Object.entries(p.sinceByAsset)) {
         const n = Number(q);
-        // 0 survives: it is an explicit "all time", distinct from an asset
-        // with no choice (which defaults to its first perp's open).
-        if (Number.isFinite(n) && n >= 0) sinceByAsset[base.toUpperCase()] = n;
+        if (Number.isFinite(n) && n > 0) sinceByAsset[base.toUpperCase()] = n;
       }
     }
     // Legacy shape carried ONE app-wide sinceSec — the window is per asset

@@ -181,6 +181,8 @@ export const HOVER_TARGET = 'Balanced target';
 
 export const MODAL_ALL_ROUTES = 'Show all routes';
 export const MODAL_FEE = (usdText: string) => `Fee ${usdText}`;
+export const CONFIRM_ROUTE = (route: string, feeText: string, timeText: string): string =>
+  `${route} · ${MODAL_FEE(feeText)} · ${timeText}`;
 export const MODAL_AFTER = 'After rebalance';
 export const MODAL_FREES = 'Frees';
 export const MODAL_INTEREST = 'Interest';
