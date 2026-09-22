@@ -31,10 +31,25 @@ const INTEREST_FLOORS = [
   { wallet: 'USDC Hyperliquid wallet', equityUsd: -10_000 },
 ];
 
-const LIQUIDATION_CAPTION = 'a 20% move from now reaches liquidation';
+const LIQUIDATION_CAPTION = 'a 20% price move would liquidate a leg';
+
+const interestCaption = (
+  <>
+    borrowing starts at your{' '}
+    <HoverCard label="interest price" widthPx={280}>
+      <div className="flex flex-col gap-1 text-xs">
+        {INTEREST_FLOORS.map((floor) => (
+          <div key={floor.wallet} className="num text-ink-200">
+            {`${floor.wallet} · equity under ${fmtUsd(floor.equityUsd, 0)}`}
+          </div>
+        ))}
+      </div>
+    </HoverCard>
+  </>
+);
 
 const CAVEAT =
-  'Alerts are based on the last update the terminal sent. A trade made outside the terminal counts after the next sync, within 5 min.';
+  "Alerts use the terminal's last sync, at most 5 min old. A trade made elsewhere counts after the next one.";
 
 function alertSettings(info: TelegramInfo): AlertSettings {
   return { liquidation: info.settings?.liquidation ?? false, interest: info.settings?.interest ?? false };
@@ -143,7 +158,7 @@ export function TelegramRow(p: SetupRowProps) {
           disabled={saveSettings.isPending}
           onChange={(next) => save({ interest: next })}
         />
-        <p className="pl-9 text-xs text-ink-500">a wallet starts paying borrow interest</p>
+        <p className="pl-9 text-xs text-ink-500">{interestCaption}</p>
       </div>
       {lastSyncAt !== null && (
         <p className="num text-xs text-ink-400">{`Last synced ${fmtSyncAge(now - lastSyncAt)}`}</p>
@@ -204,18 +219,7 @@ export function TelegramRow(p: SetupRowProps) {
         </div>
         <div className="flex gap-3">
           <span className="w-40 shrink-0 text-ink-100">Started paying interest</span>
-          <span className="text-ink-400">
-            price reaches your{' '}
-            <HoverCard label="interest price" widthPx={280}>
-              <div className="flex flex-col gap-1 text-xs">
-                {INTEREST_FLOORS.map((floor) => (
-                  <div key={floor.wallet} className="num text-ink-200">
-                    {`${floor.wallet} · equity under ${fmtUsd(floor.equityUsd, 0)}`}
-                  </div>
-                ))}
-              </div>
-            </HoverCard>
-          </span>
+          <span className="text-ink-400">{interestCaption}</span>
         </div>
       </div>
       {phase === 'expired' && <p className="text-xs text-amber-300">Link expired. Set up again.</p>}

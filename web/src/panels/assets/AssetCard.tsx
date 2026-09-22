@@ -124,8 +124,8 @@ interface Props {
    * is an earlier use of the market, not this farm's. */
   legSince?: Record<string, number>;
   onLegSince?: (key: string, sec: number | undefined) => void;
-  /** Where the ACCOUNT liquidates if only this coin moves. 'far' = no line
-   * within 10x, 'unknown' = Gate sent no margin figures, null = not loaded
+  /** Where the ACCOUNT liquidates if only this coin moves. 'far' = no price
+   * liquidates it, 'unknown' = Gate sent no margin figures, null = not loaded
    * or this coin has no priced leg in the connected account. */
   liquidation?: LiquidationLine | StaleLeg | 'far' | 'unknown' | null;
 }
@@ -139,33 +139,44 @@ type StaleLeg = { base: string; venue: string; sinceMs: number };
 function LiquidationChip({ line, base }: { line: LiquidationLine | StaleLeg | 'far' | 'unknown'; base: string }) {
   if (typeof line !== 'string' && 'sinceMs' in line) {
     return (
-      <Chip sm title={unknownLabel(line)}>
-        No liquidation estimate
-      </Chip>
+      <HoverCard icon={false} underline={false} widthPx={320} label={<Chip sm>No liquidation estimate</Chip>}>
+        {unknownLabel(line)}
+      </HoverCard>
     );
   }
   if (line === 'unknown') {
     return (
-      <Chip sm title="Gate did not send the account's margin figures.">
-        No liquidation estimate
-      </Chip>
+      <HoverCard icon={false} underline={false} widthPx={320} label={<Chip sm>No liquidation estimate</Chip>}>
+        Gate did not send the account&apos;s margin figures.
+      </HoverCard>
     );
   }
   if (line === 'far') {
     return (
-      <Chip
-        sm
-        title={`Estimate: the account is not liquidated if ${base} rises 10x or falls 98% and every other coin holds still.`}
+      <HoverCard
+        icon={false}
+        underline={false}
+        widthPx={320}
+        label={<Chip sm>{`No ${base} price liquidates the account`}</Chip>}
       >
-        {`Safe through a 10x ${base} pump or 98% dump`}
-      </Chip>
+        {`Estimate: ${base} can fall to $0 or rise without limit and the account is not liquidated, if every other coin holds still.`}
+      </HoverCard>
     );
   }
   const near = Math.abs(line.move);
   return (
-    <Chip sm tone={near < 0.15 ? 'red' : near < 0.3 ? 'amber' : 'neutral'} className="num" title={describeLine(line)}>
-      {lineLabel(line)}
-    </Chip>
+    <HoverCard
+      icon={false}
+      underline={false}
+      widthPx={320}
+      label={
+        <Chip sm tone={near < 0.15 ? 'red' : near < 0.3 ? 'amber' : 'neutral'} className="num">
+          {lineLabel(line)}
+        </Chip>
+      }
+    >
+      {describeLine(line)}
+    </HoverCard>
   );
 }
 
@@ -4560,7 +4571,6 @@ export function AssetCard({
             {group.base} is{' '}
             <HoverCard label="not supported">{`The terminal supports ${listCoins(supportedCoins)}.`}</HoverCard>
           </span>
-          <span>No Telegram alerts and no new trades. Close its legs to clear this card.</span>
         </div>
       )}
 

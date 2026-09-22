@@ -68,10 +68,14 @@ describe('buildTriggerCoins on the owner account of 2026-09-18', () => {
     ]);
   });
 
-  it('owner HYPE: held, with no line within 0.02x to 10x', () => {
+  it('owner HYPE: never on a fall, and the true price on the far pump', () => {
     const hype = buildTriggerCoins(account, positions).find((c) => c.coin === 'HYPE');
-    expect(hype?.liquidation).toEqual({ down: null, up: null });
-    expect(hype?.interest).toEqual({ down: null, up: null });
+    expect(hype?.liquidation.down).toBeNull();
+    expect(hype?.liquidation.up?.venue).toBe('HYPERLIQUID');
+    expect(hype?.liquidation.up?.price ?? 0).toBeGreaterThan(86.597 * 10);
+    expect(hype?.interest.down).toBeNull();
+    expect(hype?.interest.up?.wallet).toBe('HYPERLIQUID');
+    expect(hype?.interest.up?.price ?? 0).toBeCloseTo(86.597 * (1 + (10_000 + 539.16436148) / 199.1455), 2);
   });
 
   it('minimal fields: coin, legs, liquidation and interest, nothing else', () => {

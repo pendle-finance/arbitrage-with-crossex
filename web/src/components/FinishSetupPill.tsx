@@ -6,7 +6,7 @@ export function FinishSetupPill({ doneCount, onOpen }: { doneCount: number; onOp
     <button
       type="button"
       onClick={onOpen}
-      className="hdr-ctl border-amber-500/40 bg-amber-500/10 font-medium text-amber-400 hover:bg-amber-500/20"
+      className="hdr-ctl gap-1 border-amber-500/40 bg-amber-500/10 font-medium text-amber-400 hover:bg-amber-500/20"
     >
       Finish setup{' '}
       <span className="num">

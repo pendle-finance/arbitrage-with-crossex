@@ -1,5 +1,5 @@
 import type { CrossexAccount, PositionsResponse } from '../../../web/src/api/types';
-import { F_MAX, F_MIN, gateNumber } from '../../../web/src/lib/liquidation';
+import { gateNumber } from '../../../web/src/lib/liquidation';
 import { CoreError } from '../errors';
 import { HYPERLIQUID_FREE_BORROW_USDC, LIGHTER_WALLET, USDC_WALLET, USDT_WALLET } from '../rebalance/plan';
 import type { TriggerCoin, Wallet } from './triggers';
@@ -67,7 +67,7 @@ export function interestPrices(
       .reduce((sum, l) => sum + (l.side === 'LONG' ? l.value : -l.value), 0);
     if (exposure === 0) continue;
     const factor = 1 + (rule.threshold - equityOf(acc, rule)) / exposure;
-    if (!(factor >= F_MIN && factor <= F_MAX)) continue;
+    if (!(factor > 0)) continue;
     const price = mark * factor;
     if (exposure > 0) downs.push({ price, wallet: rule.wallet });
     else ups.push({ price, wallet: rule.wallet });

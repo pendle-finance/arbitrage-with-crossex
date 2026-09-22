@@ -73,10 +73,11 @@ describe('AssetCard for a held coin the terminal does not support', () => {
     ),
   );
 
-  it('shows the amber line with what SOL loses and how to clear it, not supported line', () => {
+  it('shows the amber not supported line, not supported line', () => {
     renderSol();
-    const line = screen.getByText('No Telegram alerts and no new trades. Close its legs to clear this card.').parentElement!;
+    const line = screen.getByRole('button', { name: /not supported/ }).closest('div')!;
     expect(line).toHaveTextContent(/SOL is not supported/);
+    expect(line).not.toHaveTextContent(/No Telegram alerts/);
     expect(line).toHaveClass('border-amber-500/40', 'bg-amber-500/10', 'text-amber-400');
   });
 
