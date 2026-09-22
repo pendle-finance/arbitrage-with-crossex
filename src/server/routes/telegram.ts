@@ -6,13 +6,15 @@ import { refuse } from '../errorReply';
 import { BotAuthError, botBaseUrl, type TelegramSettings } from '../telegram/botClient';
 import { deleteTelegramKey, readTelegramKey } from '../telegram/keyFile';
 import type { TelegramAuth } from '../telegram/status';
+import type { RollSignalInput } from '../telegram/sync';
 
 const BOT_NOT_AVAILABLE = 'Telegram alerts are not available yet. Try again later.';
 const BOT_SILENT = 'The Telegram bot did not answer. Try again later.';
 const NOT_CONNECTED = 'This terminal is not connected to Telegram alerts. Click Set up to connect it.';
 const BOT_UNREACHABLE = 'Could not reach the bot. Try again, or remove this terminal on the Boros alerts page.';
-const SETTING_NAMES = ['liquidation', 'interest'] as const;
+const SETTING_NAMES = ['liquidation', 'interest', 'maturity', 'rollover'] as const;
 const FIRST_SYNC_WAIT_MS = 5_000;
+const MAX_ROLL_SIGNALS = 64;
 
 type Telegram = NonNullable<AppDeps['telegram']>;
 
@@ -33,9 +35,50 @@ function parseSettings(body: unknown): Partial<TelegramSettings> {
     settings[name] = value;
   }
   if (Object.keys(settings).length === 0) {
-    throw new CoreError('Send liquidation or interest as true or false.', 'validation');
+    throw new CoreError('Send liquidation, interest, maturity or rollover as true or false.', 'validation');
   }
   return settings;
+}
+
+function parseRollTarget(raw: unknown, maturity: number): RollSignalInput['to'] {
+  if (raw === null || raw === undefined) return null;
+  if (typeof raw !== 'object') throw new CoreError('to must be null or an object.', 'validation');
+  const { maturity: to, apr, currentApr } = raw as Record<string, unknown>;
+  if (typeof to !== 'number' || !Number.isInteger(to) || to <= maturity) {
+    throw new CoreError('to.maturity must be a whole number of seconds after maturity.', 'validation');
+  }
+  if (!Number.isFinite(apr) || !Number.isFinite(currentApr)) {
+    throw new CoreError('to.apr and to.currentApr must be numbers.', 'validation');
+  }
+  return { maturity: to, apr: apr as number, currentApr: currentApr as number };
+}
+
+function parseRollSignal(raw: unknown): RollSignalInput {
+  if (typeof raw !== 'object' || raw === null) throw new CoreError('Every roll signal must be an object.', 'validation');
+  const { coin, longVenue, shortVenue, maturity, to } = raw as Record<string, unknown>;
+  const names = [coin, longVenue, shortVenue];
+  if (names.some((name) => typeof name !== 'string' || name.trim() === '')) {
+    throw new CoreError('Every roll signal needs a coin, a longVenue and a shortVenue.', 'validation');
+  }
+  if (typeof maturity !== 'number' || !Number.isInteger(maturity) || maturity <= 0) {
+    throw new CoreError('maturity must be a whole number of seconds.', 'validation');
+  }
+  return {
+    coin: coin as string,
+    longVenue: (longVenue as string).toUpperCase(),
+    shortVenue: (shortVenue as string).toUpperCase(),
+    maturity,
+    to: parseRollTarget(to, maturity),
+  };
+}
+
+function parseRollSignals(body: unknown): RollSignalInput[] {
+  const raw = typeof body === 'object' && body !== null ? (body as Record<string, unknown>).signals : undefined;
+  if (!Array.isArray(raw)) throw new CoreError('Send signals as a list.', 'validation');
+  if (raw.length > MAX_ROLL_SIGNALS) {
+    throw new CoreError(`Send at most ${MAX_ROLL_SIGNALS} roll signals.`, 'validation');
+  }
+  return raw.map(parseRollSignal);
 }
 
 export function telegramRoutes(deps: AppDeps) {
@@ -122,6 +165,13 @@ export function telegramRoutes(deps: AppDeps) {
         return refuse(reply, { code: 409, category: 'validation', message: NOT_CONNECTED, retryable: false });
       }
       return reply.ok(info(t));
+    });
+
+    app.put('/telegram/roll-signals', async (req, reply) => {
+      const t = telegram();
+      const signals = parseRollSignals(req.body);
+      t.sync.setRollSignals(signals);
+      return reply.ok({ stored: signals.length });
     });
 
     app.delete('/telegram', async (_req, reply) => {

@@ -11,6 +11,8 @@ export type BotAuthReason = (typeof AUTH_REASONS)[number];
 export interface TelegramSettings {
   liquidation: boolean;
   interest: boolean;
+  maturity: boolean;
+  rollover: boolean;
 }
 
 export interface TerminalView {
@@ -69,12 +71,21 @@ function messageOf(body: unknown, status: number): string {
   return `The Telegram bot answered ${status}.`;
 }
 
+type SettingsBody = { liquidation?: unknown; interest?: unknown; maturity?: unknown; rollover?: unknown };
+
+const flagOf = (value: unknown): boolean => (typeof value === 'boolean' ? value : false);
+
 function settingsOf(body: unknown): TelegramSettings {
-  const settings = (body as { settings?: { liquidation?: unknown; interest?: unknown } } | null)?.settings;
+  const settings = (body as { settings?: SettingsBody } | null)?.settings;
   if (typeof settings?.liquidation !== 'boolean' || typeof settings.interest !== 'boolean') {
     throw new BotUnavailableError('The Telegram bot answered with no alert settings.');
   }
-  return { liquidation: settings.liquidation, interest: settings.interest };
+  return {
+    liquidation: settings.liquidation,
+    interest: settings.interest,
+    maturity: flagOf(settings.maturity),
+    rollover: flagOf(settings.rollover),
+  };
 }
 
 export function createBotClient(opts: { baseUrl: string; fetchImpl: FetchLike }): BotClient {

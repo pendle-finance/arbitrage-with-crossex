@@ -2676,24 +2676,24 @@ const MAR_1_2026_SEC = 1_772_323_200;
 const DEC_2026_MATURITY = 1_798_156_800;
 export const LINK_CODE = 'q3Jv0cX9mT2bL8wYp5nK4A';
 const LINK_URL = `https://boros-bot-notification.pendle.finance/alerts?crossex=${LINK_CODE}`;
-const BOTH_ON = { liquidation: true, interest: true };
+const ALL_ON = { liquidation: true, interest: true, maturity: true, rollover: true };
 
 export const telegramBodies = {
   none: telegramInfo(),
   pending: telegramInfo(),
   connected: telegramInfo({
-    connected: true, state: 'connected', settings: BOTH_ON, lastSyncAt: REBALANCE_NOW - 3 * MIN_MS,
+    connected: true, state: 'connected', settings: ALL_ON, lastSyncAt: REBALANCE_NOW - 3 * MIN_MS,
   }),
   connectedBothOff: telegramInfo({
-    connected: true, state: 'connected', settings: { liquidation: false, interest: false },
+    connected: true, state: 'connected', settings: { liquidation: false, interest: false, maturity: false, rollover: false },
     lastSyncAt: REBALANCE_NOW - 3 * MIN_MS,
   }),
   liquidationOnly: telegramInfo({
-    connected: true, state: 'connected', settings: { liquidation: true, interest: false },
+    connected: true, state: 'connected', settings: { liquidation: true, interest: false, maturity: false, rollover: false },
     lastSyncAt: REBALANCE_NOW - 3 * MIN_MS,
   }),
   interestOnly: telegramInfo({
-    connected: true, state: 'connected', settings: { liquidation: false, interest: true },
+    connected: true, state: 'connected', settings: { liquidation: false, interest: true, maturity: false, rollover: false },
     lastSyncAt: REBALANCE_NOW - 3 * MIN_MS,
   }),
   bootFailed: telegramInfo({
@@ -2701,7 +2701,7 @@ export const telegramBodies = {
     lastSyncError: { at: REBALANCE_NOW - 2 * MIN_MS, message: 'The Telegram bot answered 503.' },
   }),
   syncFailed: telegramInfo({
-    connected: true, state: 'connected', settings: BOTH_ON, lastSyncAt: REBALANCE_NOW - 47 * MIN_MS,
+    connected: true, state: 'connected', settings: ALL_ON, lastSyncAt: REBALANCE_NOW - 47 * MIN_MS,
     lastSyncError: { at: REBALANCE_NOW - 2 * MIN_MS, message: 'The Telegram bot answered 503.' },
   }),
   replaced: telegramInfo({ state: 'replaced', lastSyncAt: REBALANCE_NOW - 26 * 60 * MIN_MS }),

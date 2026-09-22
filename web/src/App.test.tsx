@@ -47,7 +47,7 @@ function mockApp({ orders = [] as OpenOrder[] } = {}) {
   server.use(
     ...setupHandlers(
       agentStatus({ configured: true, root: `0x${'ab'.repeat(20)}` }),
-      telegramInfo({ connected: true, state: 'connected', settings: { liquidation: true, interest: true } }),
+      telegramInfo({ connected: true, state: 'connected', settings: { liquidation: true, interest: true, maturity: true, rollover: true } }),
     ),
     http.get('/api/credentials', () =>
       HttpResponse.json(env({ configured: true, keyMasked: 'gk_****abcd' })),

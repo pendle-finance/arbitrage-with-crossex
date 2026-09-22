@@ -9,12 +9,20 @@ export type Venue = string;
 
 export type Wallet = 'USDT' | 'HYPERLIQUID' | 'LIGHTER';
 
+export interface TriggerRoll {
+  longVenue: string;
+  shortVenue: string;
+  maturity: number;
+  to: { maturity: number; apr: number; currentApr: number } | null;
+}
+
 export interface TriggerCoin {
   coin: SupportedCoin;
   legs: Array<{ venue: Venue; side: 'long' | 'short' }>;
   liquidation: { down: { price: number; venue: Venue } | null; up: { price: number; venue: Venue } | null };
   liquidationUnknown?: boolean;
   interest: { down: { price: number; wallet: Wallet } | null; up: { price: number; wallet: Wallet } | null };
+  rolls: TriggerRoll[];
 }
 
 const BOROS_EXCHANGE = 'BOROS';
@@ -52,6 +60,7 @@ export function buildTriggerCoins(
       liquidation: blind ? { down: null, up: null } : { down: triggerOf(sides.down), up: triggerOf(sides.up) },
       ...(blind ? { liquidationUnknown: true as const } : {}),
       interest: interestPrices(acc, crossex, group.base),
+      rolls: [],
     });
   }
   return coins;

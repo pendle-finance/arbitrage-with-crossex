@@ -21,7 +21,7 @@ const PASTED = `0x3f2a${'1'.repeat(32)}91c0`;
 const CAVEAT =
   "Alerts use the terminal's last sync, at most 5 min old. A trade made elsewhere counts after the next one.";
 
-const connectedTelegram = (settings = { liquidation: true, interest: true }): TelegramInfo =>
+const connectedTelegram = (settings = { liquidation: true, interest: true, maturity: true, rollover: true }): TelegramInfo =>
   telegramInfo({ connected: true, state: 'connected', settings, lastSyncAt: Date.now() - 180_000 });
 
 const at = (hours: number, minutes: number) => new Date(2026, 8, 18, hours, minutes).getTime();
@@ -75,7 +75,7 @@ describe('SettingsDrawer', () => {
     ]);
     expect(await within(row('Gate API key')).findByText('160e…4f80 · works')).toBeInTheDocument();
     expect(await within(row('Boros wallet')).findByText('0xab18…ed9d · trading enabled · tracked')).toBeInTheDocument();
-    expect(await within(row('Telegram alerts')).findByText('Both on · synced 3 min ago')).toBeInTheDocument();
+    expect(await within(row('Telegram alerts')).findByText('All on · synced 3 min ago')).toBeInTheDocument();
     for (const name of ['Gate API key', 'Boros wallet', 'Telegram alerts']) {
       expect(within(row(name)).getByRole('button', { name: 'Edit' })).toBeInTheDocument();
     }
@@ -87,13 +87,13 @@ describe('SettingsDrawer', () => {
   it('telegram state line', async () => {
     mockAllDone();
     renderDrawer();
-    expect(await within(row('Telegram alerts')).findByText('Both on · synced 3 min ago')).toBeInTheDocument();
+    expect(await within(row('Telegram alerts')).findByText('All on · synced 3 min ago')).toBeInTheDocument();
   });
 
-  it('one alert on', async () => {
-    mockAllDone(connectedTelegram({ liquidation: true, interest: false }));
+  it('one alert off', async () => {
+    mockAllDone(connectedTelegram({ liquidation: true, interest: false, maturity: true, rollover: true }));
     renderDrawer();
-    expect(await within(row('Telegram alerts')).findByText('Liquidation only · synced 3 min ago')).toBeInTheDocument();
+    expect(await within(row('Telegram alerts')).findByText('3 of 4 on · synced 3 min ago')).toBeInTheDocument();
   });
 
   it('edit telegram', async () => {
@@ -123,7 +123,7 @@ describe('SettingsDrawer', () => {
     server.use(
       http.patch('/api/telegram/settings', async ({ request }) => {
         patched = await request.json();
-        return HttpResponse.json(env(connectedTelegram({ liquidation: true, interest: false })));
+        return HttpResponse.json(env(connectedTelegram({ liquidation: true, interest: false, maturity: true, rollover: true })));
       }),
     );
     renderDrawer();
@@ -133,12 +133,43 @@ describe('SettingsDrawer', () => {
     await waitFor(() => expect(patched).toEqual({ interest: false }));
   });
 
+  it('four switches, and roll-over saves', async () => {
+    let patched: unknown = null;
+    mockAllDone();
+    server.use(
+      http.patch('/api/telegram/settings', async ({ request }) => {
+        patched = await request.json();
+        return HttpResponse.json(
+          env(connectedTelegram({ liquidation: true, interest: true, maturity: true, rollover: false })),
+        );
+      }),
+    );
+    renderDrawer();
+    const user = await clickEdit('Telegram alerts');
+    const telegram = row('Telegram alerts');
+
+    await within(telegram).findByRole('switch', { name: 'Close to liquidation' });
+    expect(within(telegram).getAllByRole('switch').map((s) => s.textContent)).toEqual([
+      'Close to liquidation',
+      'Started paying interest',
+      'Close to maturity',
+      'Roll-over opportunity',
+    ]);
+    expect(within(telegram).getByText('7 days before a pair settles')).toBeInTheDocument();
+    expect(
+      within(telegram).getByText('a later maturity pays a better rate, checked while this tab is open'),
+    ).toBeInTheDocument();
+    await user.click(within(telegram).getByRole('switch', { name: 'Roll-over opportunity' }));
+
+    await waitFor(() => expect(patched).toEqual({ rollover: false }));
+  });
+
   it('sync failed', async () => {
     mockAllDone(
       telegramInfo({
         connected: true,
         state: 'connected',
-        settings: { liquidation: true, interest: true },
+        settings: { liquidation: true, interest: true, maturity: true, rollover: true },
         lastSyncAt: at(11, 40),
         lastSyncError: { at: at(14, 2), message: 'timeout' },
       }),

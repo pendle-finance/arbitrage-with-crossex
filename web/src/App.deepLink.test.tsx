@@ -22,7 +22,7 @@ function mockApp() {
     http.get('/api/credentials', () => HttpResponse.json(env({ configured: true, keyMasked: '160e…4f80' }))),
     ...setupHandlers(
       agentStatus({ configured: true, root: `0xab18${'0'.repeat(32)}ed9d` }),
-      telegramInfo({ connected: true, state: 'connected', settings: { liquidation: true, interest: true } }),
+      telegramInfo({ connected: true, state: 'connected', settings: { liquidation: true, interest: true, maturity: true, rollover: true } }),
     ),
     ...baseHandlers(),
     opportunitiesHandler(makeOpportunitiesResult()),

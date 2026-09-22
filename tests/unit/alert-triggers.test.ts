@@ -82,7 +82,7 @@ describe('buildTriggerCoins on the owner account of 2026-09-18', () => {
     const coins = buildTriggerCoins(account, positions);
     expect(coins.length).toBeGreaterThan(0);
     for (const coin of coins) {
-      expect(Object.keys(coin).sort()).toEqual(['coin', 'interest', 'legs', 'liquidation']);
+      expect(Object.keys(coin).sort()).toEqual(['coin', 'interest', 'legs', 'liquidation', 'rolls']);
       for (const leg of coin.legs) expect(Object.keys(leg).sort()).toEqual(['side', 'venue']);
       expect(Object.keys(coin.liquidation).sort()).toEqual(['down', 'up']);
       expect(Object.keys(coin.interest).sort()).toEqual(['down', 'up']);
@@ -94,6 +94,7 @@ describe('buildTriggerCoins on the owner account of 2026-09-18', () => {
       }
     }
     const eth = ethOf(coins);
+    expect(eth.rolls).toEqual([]);
     expect(eth.liquidation.up).not.toBeNull();
     expect(eth.interest.down).not.toBeNull();
     expect(eth.interest.up).not.toBeNull();

@@ -51,9 +51,9 @@ describe('fixture state bodies', () => {
     }
 
     expect(telegramBodies.syncFailed.lastSyncError?.at).toBeGreaterThan(1e12);
-    expect(telegramBodies.connectedBothOff.settings).toEqual({ liquidation: false, interest: false });
-    expect(telegramBodies.liquidationOnly.settings).toEqual({ liquidation: true, interest: false });
-    expect(telegramBodies.interestOnly.settings).toEqual({ liquidation: false, interest: true });
+    expect(telegramBodies.connectedBothOff.settings).toEqual({ liquidation: false, interest: false, maturity: false, rollover: false });
+    expect(telegramBodies.liquidationOnly.settings).toEqual({ liquidation: true, interest: false, maturity: false, rollover: false });
+    expect(telegramBodies.interestOnly.settings).toEqual({ liquidation: false, interest: true, maturity: false, rollover: false });
     expect(telegramBodies.bootFailed.settings).toBeNull();
     expect(telegramBodies.bootFailed.lastSyncAt).toBeNull();
     expect(telegramBodies.bootFailed.lastSyncError?.at).toBeGreaterThan(1e12);

@@ -1550,7 +1550,7 @@ export interface AssetViewResponse {
 export interface TelegramInfo {
   connected: boolean;
   state: 'none' | 'connected' | 'replaced' | 'removed';
-  settings: { liquidation: boolean; interest: boolean } | null;
+  settings: { liquidation: boolean; interest: boolean; maturity: boolean; rollover: boolean } | null;
   lastSyncAt: number | null;
   lastSyncError: { at: number; message: string } | null;
   alertsPageUrl?: string;

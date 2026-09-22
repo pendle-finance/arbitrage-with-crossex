@@ -822,7 +822,7 @@ export function useStartTelegramLink() {
 export function useTelegramSettings() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (body: { liquidation?: boolean; interest?: boolean }) =>
+    mutationFn: (body: { liquidation?: boolean; interest?: boolean; maturity?: boolean; rollover?: boolean }) =>
       patchJson<TelegramInfo>('/telegram/settings', body),
     onSuccess: () => qc.invalidateQueries({ queryKey: qk.telegram }),
   });
