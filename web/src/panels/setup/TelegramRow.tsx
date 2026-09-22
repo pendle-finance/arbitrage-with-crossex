@@ -42,8 +42,8 @@ const ROLLOVER_CAPTION = 'a later maturity pays a better APR';
 
 const interestCaption = (floors: readonly InterestFloor[]) => (
   <>
-    a wallet's equity goes under its{' '}
-    <HoverCard label="floor" widthPx={300}>
+    a wallet starts{' '}
+    <HoverCard label="borrowing" widthPx={300}>
       <div className="flex flex-col gap-1 text-xs">
         {floors.length === 0 && <div className="text-ink-200">Floors load with the terminal.</div>}
         {floors.map((floor) => (
@@ -52,8 +52,7 @@ const interestCaption = (floors: readonly InterestFloor[]) => (
           </div>
         ))}
       </div>
-    </HoverCard>{' '}
-    and it borrows
+    </HoverCard>
   </>
 );
 
@@ -192,10 +191,15 @@ export function TelegramRow(p: SetupRowProps) {
         />
         <p className="pl-9 text-xs text-ink-500">{ROLLOVER_CAPTION}</p>
       </div>
-      {lastSyncAt !== null && (
-        <p className="num text-xs text-ink-400">{`Last synced ${fmtSyncAge(now - lastSyncAt)}`}</p>
+      {lastSyncAt !== null ? (
+        <p className="num text-xs text-ink-400">
+          <HoverCard label={`Last synced ${fmtSyncAge(now - lastSyncAt)}`} widthPx={300}>
+            <div className="text-xs text-ink-200">{CAVEAT}</div>
+          </HoverCard>
+        </p>
+      ) : (
+        <p className="text-xs text-ink-500">{CAVEAT}</p>
       )}
-      <p className="text-xs text-ink-500">{CAVEAT}</p>
       {p.variant === 'setup' ? (
         <button type="button" className="btn-primary w-fit" onClick={p.onDone}>
           Finish
@@ -212,7 +216,7 @@ export function TelegramRow(p: SetupRowProps) {
           </button>
           {disconnect.isError && (
             <p role="alert" className="text-xs text-amber-300">
-              Could not reach the bot. Try again, or use Remove terminal on the{' '}
+              Could not reach the bot. Try again, or use Disconnect terminal on the{' '}
               <Ext href={info?.alertsPageUrl ?? 'https://boros-bot-notification.pendle.finance/alerts'}>
                 Boros notifications page
               </Ext>

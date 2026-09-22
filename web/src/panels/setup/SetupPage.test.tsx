@@ -17,7 +17,7 @@ const OTHER = `0x5c1f${'2'.repeat(32)}a2e0`;
 const LINK_URL = 'https://boros-bot-notification.pendle.finance/alerts?crossex=abc123';
 const BOT_DOWN = 'Telegram alerts are not available yet. Try again later.';
 const ALERTS_URL = 'https://boros-bot-notification.pendle.finance/alerts';
-const BOT_UNREACHABLE = 'Could not reach the bot. Try again, or use Remove terminal on the Boros notifications page.';
+const BOT_UNREACHABLE = 'Could not reach the bot. Try again, or use Disconnect terminal on the Boros notifications page.';
 
 const approveAgent = vi.fn(async () => ({ txHash: '0xtx' }));
 vi.mock('../../lib/borosAgentApi', () => ({
@@ -264,7 +264,7 @@ describe('SetupPage · Telegram alerts', () => {
     openTelegramStep();
     renderSetup();
     await screen.findByRole('button', { name: 'Set up ↗' });
-    await user.hover(screen.getByText('floor'));
+    await user.hover(screen.getByText('borrowing'));
 
     expect(await screen.findByText('USDT CrossEx wallet · equity under $0')).toBeInTheDocument();
     expect(screen.getByText('USDC Lighter wallet · equity under $0')).toBeInTheDocument();
@@ -307,11 +307,11 @@ describe('SetupPage · Telegram alerts', () => {
     expect(await screen.findByRole('switch', { name: 'Close to liquidation' })).toHaveAttribute('aria-checked', 'true');
     expect(screen.getByRole('switch', { name: 'Started paying interest' })).toHaveAttribute('aria-checked', 'true');
     expect(screen.getByText('a 20% price move would liquidate a leg')).toBeInTheDocument();
-    expect(screen.getAllByText('floor').length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/a wallet's equity goes under its/).length).toBeGreaterThan(0);
-    expect(screen.getByText(/^Last synced \d+ s ago$/)).toBeInTheDocument();
+    expect(screen.getAllByText('borrowing').length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/a wallet starts/).length).toBeGreaterThan(0);
+    await user.hover(screen.getByText(/^Last synced \d+ s ago$/));
     expect(
-      screen.getByText(
+      await screen.findByText(
         "Alerts use the terminal's last sync, at most 5 min old. A trade made outside the terminal reaches the alerts after the next sync.",
       ),
     ).toBeInTheDocument();
