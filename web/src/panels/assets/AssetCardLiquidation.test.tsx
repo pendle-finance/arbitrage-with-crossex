@@ -10,6 +10,8 @@ import { deriveAsset } from './assetModel';
 
 const NOW = Date.UTC(2026, 8, 21, 12) / 1000;
 const SINCE = Date.UTC(2026, 5, 23, 12) / 1000;
+vi.mock('../../lib/useNow', () => ({ useNow: () => new Date(2026, 8, 21, 14, 32).getTime() + 4 * 3_600_000 + 12 * 60_000 }));
+
 const STALE_AT = new Date(2026, 8, 21, 14, 32).getTime();
 
 const eth: AssetGroup = {
@@ -70,7 +72,7 @@ describe('the asset card when Gate stops sending a mark', () => {
     await userEvent.hover(trigger);
     expect(
       await screen.findByText(
-        'No liquidation estimate: Gate has not sent a price for the Hyperliquid leg since 14:32.',
+        'No liquidation estimate: Gate has not sent a price for the Hyperliquid leg for 4h 12m.',
       ),
     ).toBeInTheDocument();
   });

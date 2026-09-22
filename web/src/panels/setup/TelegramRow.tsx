@@ -10,7 +10,7 @@ import {
   useTelegramLink,
   useTelegramSettings,
 } from '../../api/queries';
-import type { TelegramInfo, TelegramLinkStatus } from '../../api/types';
+import type { InterestFloor, TelegramInfo, TelegramLinkStatus } from '../../api/types';
 import { HoverCard } from '../../components/HoverCard';
 import { Spinner } from '../../components/Spinner';
 import { Switch } from '../../components/Switch';
@@ -25,11 +25,14 @@ type Phase = 'idle' | 'waiting' | 'expired';
 
 type AlertSettings = { liquidation: boolean; interest: boolean; maturity: boolean; rollover: boolean };
 
-const INTEREST_FLOORS = [
-  { wallet: 'USDT CrossEx wallet', equityUsd: 0 },
-  { wallet: 'USDC Lighter wallet', equityUsd: 0 },
-  { wallet: 'USDC Hyperliquid wallet', equityUsd: -10_000 },
-];
+const WALLET_NAME: Record<string, string> = { USDT: 'CrossEx', HYPERLIQUID: 'Hyperliquid', LIGHTER: 'Lighter' };
+
+const floorLine = (floor: InterestFloor): string => {
+  const name = `${floor.coin} ${WALLET_NAME[floor.wallet] ?? floor.wallet} wallet`;
+  return floor.floorUsd < 0
+    ? `${name} · borrows more than ${fmtUsd(-floor.floorUsd, 0)}, the first ${fmtUsd(-floor.floorUsd, 0)} is free`
+    : `${name} · equity under ${fmtUsd(floor.floorUsd, 0)}`;
+};
 
 const LIQUIDATION_CAPTION = 'a 20% price move would liquidate a leg';
 
@@ -37,14 +40,15 @@ const MATURITY_CAPTION = 'daily in the last 7 days before a pair settles, with t
 
 const ROLLOVER_CAPTION = 'a later maturity pays a better APR';
 
-const interestCaption = (
+const interestCaption = (floors: readonly InterestFloor[]) => (
   <>
     a wallet's equity goes under its{' '}
-    <HoverCard label="floor" widthPx={280}>
+    <HoverCard label="floor" widthPx={300}>
       <div className="flex flex-col gap-1 text-xs">
-        {INTEREST_FLOORS.map((floor) => (
+        {floors.length === 0 && <div className="text-ink-200">Floors load with the terminal.</div>}
+        {floors.map((floor) => (
           <div key={floor.wallet} className="num text-ink-200">
-            {`${floor.wallet} · equity under ${fmtUsd(floor.equityUsd, 0)}`}
+            {floorLine(floor)}
           </div>
         ))}
       </div>
@@ -159,7 +163,7 @@ export function TelegramRow(p: SetupRowProps) {
           disabled={saveSettings.isPending}
           onChange={(next) => save({ liquidation: next })}
         />
-        <p className="num pl-9 text-xs text-ink-500">{LIQUIDATION_CAPTION}</p>
+        <p className="pl-9 text-xs text-ink-500">{LIQUIDATION_CAPTION}</p>
       </div>
       <div className="flex flex-col gap-0.5">
         <Switch
@@ -168,7 +172,7 @@ export function TelegramRow(p: SetupRowProps) {
           disabled={saveSettings.isPending}
           onChange={(next) => save({ interest: next })}
         />
-        <p className="pl-9 text-xs text-ink-500">{interestCaption}</p>
+        <p className="pl-9 text-xs text-ink-500">{interestCaption(info?.floors ?? [])}</p>
       </div>
       <div className="flex flex-col gap-0.5">
         <Switch
@@ -177,7 +181,7 @@ export function TelegramRow(p: SetupRowProps) {
           disabled={saveSettings.isPending}
           onChange={(next) => save({ maturity: next })}
         />
-        <p className="num pl-9 text-xs text-ink-500">{MATURITY_CAPTION}</p>
+        <p className="pl-9 text-xs text-ink-500">{MATURITY_CAPTION}</p>
       </div>
       <div className="flex flex-col gap-0.5">
         <Switch
@@ -243,15 +247,15 @@ export function TelegramRow(p: SetupRowProps) {
       <div className="flex flex-col gap-2 text-xs">
         <div className="flex flex-col gap-0.5">
           <span className="text-ink-100">Close to liquidation</span>
-          <span className="num text-ink-500">{LIQUIDATION_CAPTION}</span>
+          <span className="text-ink-500">{LIQUIDATION_CAPTION}</span>
         </div>
         <div className="flex flex-col gap-0.5">
           <span className="text-ink-100">Started paying interest</span>
-          <span className="text-ink-500">{interestCaption}</span>
+          <span className="text-ink-500">{interestCaption(info?.floors ?? [])}</span>
         </div>
         <div className="flex flex-col gap-0.5">
           <span className="text-ink-100">Close to maturity</span>
-          <span className="num text-ink-500">{MATURITY_CAPTION}</span>
+          <span className="text-ink-500">{MATURITY_CAPTION}</span>
         </div>
         <div className="flex flex-col gap-0.5">
           <span className="text-ink-100">Roll-over opportunity</span>
@@ -277,7 +281,7 @@ export function TelegramRow(p: SetupRowProps) {
       state={p.open && isConnected ? null : line.text}
       isWarn={line.isWarn}
       alert={
-        (failure || readError) && (
+        ((failure && p.open) || readError) && (
           <p className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
             {failure ?? readError}
           </p>
@@ -285,6 +289,7 @@ export function TelegramRow(p: SetupRowProps) {
       }
       setupAction={setupButton}
       skipConsequence="Without Telegram alerts nothing warns you near liquidation, when interest starts, or before a pair matures."
+      closeLabel="Close"
     >
       {info && isConnected
         ? connectedBody(

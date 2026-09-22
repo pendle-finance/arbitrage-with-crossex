@@ -1,4 +1,4 @@
-import type { CrossexAccount, PositionsResponse } from '../../../web/src/api/types';
+import type { CrossexAccount, InterestFloor, PositionsResponse } from '../../../web/src/api/types';
 import { gateNumber } from '../../../web/src/lib/liquidation';
 import { CoreError } from '../errors';
 import { HYPERLIQUID_FREE_BORROW_USDC, LIGHTER_WALLET, USDC_WALLET, USDT_WALLET } from '../rebalance/plan';
@@ -20,6 +20,10 @@ const WALLET_RULES: readonly WalletRule[] = [
   { wallet: 'HYPERLIQUID', ...USDC_WALLET, threshold: -HYPERLIQUID_FREE_BORROW_USDC },
   { wallet: 'LIGHTER', ...LIGHTER_WALLET, threshold: 0 },
 ];
+
+export function interestFloors(): InterestFloor[] {
+  return WALLET_RULES.map((rule) => ({ wallet: rule.wallet, coin: rule.coin, floorUsd: rule.threshold }));
+}
 
 function walletRuleOf(exchange: string): WalletRule {
   return WALLET_RULES.find((rule) => rule.venue === exchange) ?? USDT_RULE;

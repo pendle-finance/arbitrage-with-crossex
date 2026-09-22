@@ -101,7 +101,7 @@ export function CredentialsForm({
         </p>
       )}
 
-      <button type="submit" className="btn btn-primary" disabled={put.isPending || !key.trim() || !secret.trim()}>
+      <button type="submit" className="btn btn-primary self-start" disabled={put.isPending || !key.trim() || !secret.trim()}>
         {put.isPending && <Spinner />}
         {put.isPending ? 'Checking with Gate…' : submitLabel}
       </button>

@@ -160,7 +160,7 @@ describe('SetupPage · Boros wallet', () => {
     renderSetup();
     await user.click(await screen.findByRole('button', { name: 'Connect wallet' }));
 
-    expect(await within(row('Boros wallet')).findByText('0xab18…ed9d · trading enabled · tracked')).toBeInTheDocument();
+    expect(await within(row('Boros wallet')).findByText('0xab18…ed9d · can trade · tracked')).toBeInTheDocument();
     expect(approveAgent).toHaveBeenCalledTimes(1);
     expect(trackedInStorage()).toEqual({ address: WALLET });
     expect(await screen.findByRole('button', { name: 'Set up ↗' })).toBeInTheDocument();
@@ -216,7 +216,7 @@ describe('SetupPage · Boros wallet', () => {
 
     expect(await screen.findByText('Boros legs you open here will not show on Positions.')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Track 0xab18…ed9d' }));
-    expect(await within(row('Boros wallet')).findByText('0xab18…ed9d · trading enabled · tracked')).toBeInTheDocument();
+    expect(await within(row('Boros wallet')).findByText('0xab18…ed9d · can trade · tracked')).toBeInTheDocument();
     expect(screen.queryByText('Boros legs you open here will not show on Positions.')).toBeNull();
   });
 
@@ -268,7 +268,7 @@ describe('SetupPage · Telegram alerts', () => {
 
     expect(await screen.findByText('USDT CrossEx wallet · equity under $0')).toBeInTheDocument();
     expect(screen.getByText('USDC Lighter wallet · equity under $0')).toBeInTheDocument();
-    expect(screen.getByText('USDC Hyperliquid wallet · equity under -$10,000')).toBeInTheDocument();
+    expect(screen.getByText('USDC Hyperliquid wallet · borrows more than $10,000, the first $10,000 is free')).toBeInTheDocument();
   });
 
   it('waiting state', async () => {
@@ -426,7 +426,7 @@ describe('setup rows in Settings', () => {
         lastSyncError: { at: at(14, 2), message },
       }),
     });
-    renderWithClient(<TelegramRow {...settingsRow()} />);
+    renderWithClient(<TelegramRow {...settingsRow({ open: true })} />);
     expect(
       await screen.findByText('Last sync failed at 14:02. Alerts still use the sync from 11:40. Retrying.'),
     ).toBeInTheDocument();
@@ -448,7 +448,7 @@ describe('setup rows in Settings', () => {
     await waitFor(() => expect(patched).toEqual({ interest: false }));
     expect(screen.getByRole('button', { name: 'Disconnect this terminal' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Skip/ })).toBeNull();
-    await user.click(screen.getByRole('button', { name: 'Done' }));
+    await user.click(screen.getByRole('button', { name: 'Close' }));
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 

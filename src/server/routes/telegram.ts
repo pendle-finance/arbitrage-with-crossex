@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify';
+import { interestFloors } from '../../core/alerts/interestPrice';
 import type { TelegramInfo } from '../../../web/src/api/types';
 import { CoreError } from '../../core/errors';
 import type { AppDeps } from '../app';
@@ -64,7 +65,8 @@ export function telegramRoutes(deps: AppDeps) {
     const keyed = hasKey(t);
     const state = stateOf(keyed, linkPending, t.status.auth);
     const alertsPageUrl = `${botBaseUrl(process.env)}/alerts`;
-    if (!keyed) return { connected: false, state, settings: null, lastSyncAt: null, lastSyncError: null, alertsPageUrl };
+    const floors = interestFloors();
+    if (!keyed) return { connected: false, state, settings: null, lastSyncAt: null, lastSyncError: null, alertsPageUrl, floors };
     return {
       connected: state === 'connected',
       state,
@@ -72,6 +74,7 @@ export function telegramRoutes(deps: AppDeps) {
       lastSyncAt: t.status.lastSyncAt,
       lastSyncError: t.status.lastSyncError,
       alertsPageUrl,
+      floors,
     };
   };
 

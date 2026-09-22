@@ -499,8 +499,8 @@ describe('a coin with no usable mark', () => {
     (positions.positions[1] as unknown as { markStaleSinceMs: number }).markStaleSinceMs = since;
     const view = liquidationLines(account(), positions)!;
     expect(view.unknown[0].sinceMs).toBe(since);
-    expect(unknownLabel({ venue: view.unknown[0].venue, sinceMs: since })).toBe(
-      'No liquidation estimate: Gate has not sent a price for the Hyperliquid leg since 14:32.',
+    expect(unknownLabel({ venue: view.unknown[0].venue, sinceMs: since }, since + 4 * 3_600_000 + 12 * 60_000)).toBe(
+      'No liquidation estimate: Gate has not sent a price for the Hyperliquid leg for 4h 12m.',
     );
   });
 
