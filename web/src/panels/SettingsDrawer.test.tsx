@@ -155,7 +155,7 @@ describe('SettingsDrawer', () => {
       'Close to maturity',
       'Roll-over opportunity',
     ]);
-    expect(within(telegram).getByText('7 days and 1 day before a pair settles')).toBeInTheDocument();
+    expect(within(telegram).getByText('daily in the last 7 days before a pair settles, with where it can roll')).toBeInTheDocument();
     expect(
       within(telegram).getByText('a later maturity pays a better rate, checked while this tab is open'),
     ).toBeInTheDocument();

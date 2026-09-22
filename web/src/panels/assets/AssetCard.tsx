@@ -427,7 +427,7 @@ function PairCard({
   /** The card's roll signal for the asset's banner: the best maturity a
    * fifth of this pair could roll into at a better rate than it earns now,
    * or null. Reported whenever it changes. */
-  onRollSignal?: (opportunity: RollOpportunity | null) => void;
+  onRollSignal?: (opportunities: RollOpportunity[]) => void;
 }) {
   const [open, setOpen] = useState(defaultOpen);
   const canRoll = pairCanRoll(pair, nowSec);
@@ -521,15 +521,16 @@ function PairCard({
   );
   const { yuLegs: rollYuLegs, heldSize: rollHeldSize, pairPerpImUsd: rollPerpImUsd } = pairRollGeometry(pair);
   const [probes, setProbes] = useState<Record<number, RollProbeResult>>({});
-  const opportunity = useMemo(
-    () => bestRollOpportunity(probes, probeTargets, netApr, soonest),
+  const opportunities = useMemo(
+    () => rollOpportunities(probes, probeTargets, netApr, soonest),
     [probes, probeTargets, netApr, soonest],
   );
+  const opportunity = opportunities[0] ?? null;
   const signalRef = useRef(onRollSignal);
   signalRef.current = onRollSignal;
-  const oppKey = opportunity ? `${opportunity.maturity}:${opportunity.rate}:${opportunity.current}:${opportunity.currentMaturity}` : '';
+  const oppKey = opportunities.map((o) => `${o.maturity}:${o.rate}:${o.current}:${o.currentMaturity}`).join('|');
   useEffect(() => {
-    signalRef.current?.(opportunity);
+    signalRef.current?.(opportunities);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [oppKey]);
   // The spread on notional — the cross-farm comparison basis, and the number
@@ -1081,20 +1082,20 @@ export interface RollOpportunity {
   size: number;
 }
 
-function bestRollOpportunity(
+function rollOpportunities(
   probes: Record<number, RollProbeResult>,
   targets: RollTarget[],
   current: number | null,
   currentMaturity: number,
-): RollOpportunity | null {
-  if (current === null) return null;
-  let best: RollOpportunity | null = null;
+): RollOpportunity[] {
+  if (current === null) return [];
+  const found: RollOpportunity[] = [];
   for (const t of targets) {
     const r = probes[t.maturity];
     if (!r || !r.ok || r.rate === null || !(r.rate > current)) continue;
-    if (best === null || r.rate > best.rate) best = { maturity: t.maturity, rate: r.rate, current, currentMaturity, size: r.size };
+    found.push({ maturity: t.maturity, rate: r.rate, current, currentMaturity, size: r.size });
   }
-  return best;
+  return found.sort((a, b) => b.rate - a.rate);
 }
 
 /**
@@ -4252,7 +4253,7 @@ export function AssetCard({
   const [showRollNonce, setShowRollNonce] = useState(0);
   /** Each rollable pair's best roll opportunity, keyed as the cards are —
    * what the banner shouts about, when there is one. */
-  const [rollSignals, setRollSignals] = useState<Record<string, RollOpportunity | null>>({});
+  const [rollSignals, setRollSignals] = useState<Record<string, RollOpportunity[]>>({});
   /** Publish every rollable pair to the app-wide banner, and take its
    * "Show me" as the cue to open them here. */
   const publishRoll = useRollPublisher();
@@ -4344,7 +4345,7 @@ export function AssetCard({
    * card that stops rendering must not leave a stale line in the banner.
    */
   const rollKeys = rollable.map((p) => `${group.base}:${pairKey(p)}`).join('|');
-  const rollJson = JSON.stringify(rollable.map((p) => rollSignals[pairKey(p)] ?? null));
+  const rollJson = JSON.stringify(rollable.map((p) => rollSignals[pairKey(p)] ?? []));
   useEffect(() => {
     const live = new Set<string>();
     for (const p of rollable) {
@@ -4356,7 +4357,8 @@ export function AssetCard({
         longVenue: p.longVenue,
         shortVenue: p.shortVenue,
         maturity: p.soonestMaturitySec,
-        opportunity: rollSignals[pairKey(p)] ?? null,
+        opportunity: rollSignals[pairKey(p)]?.[0] ?? null,
+        opportunities: rollSignals[pairKey(p)] ?? [],
       });
     }
     return () => {
@@ -4953,13 +4955,14 @@ null
                 onClosePerps={() => setClosePerps(p)}
                 onCloseBoros={() => setCloseBoros(p)}
                 onRollOver={() => setRollOver(p)}
-                onRollSignal={(opp) =>
+                onRollSignal={(opps) =>
                   setRollSignals((prev) => {
                     const k = pairKey(p);
-                    const cur = prev[k] ?? null;
+                    const cur = prev[k] ?? [];
                     const same =
-                      cur === opp || (cur !== null && opp !== null && cur.maturity === opp.maturity && cur.rate === opp.rate && cur.current === opp.current);
-                    return same ? prev : { ...prev, [k]: opp };
+                      cur.length === opps.length &&
+                      cur.every((c, i) => c.maturity === opps[i].maturity && c.rate === opps[i].rate && c.current === opps[i].current);
+                    return same ? prev : { ...prev, [k]: opps };
                   })
                 }
               />

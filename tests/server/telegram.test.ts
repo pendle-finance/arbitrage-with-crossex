@@ -811,7 +811,7 @@ describe('Telegram roll signals', () => {
         longVenue: 'gate',
         shortVenue: 'hyperliquid',
         maturity: FUTURE_SEC,
-        to: { maturity: LATER_SEC, apr: 0.124, currentApr: 0.091 },
+        targets: [{ maturity: LATER_SEC, apr: 0.124, currentApr: 0.091 }],
         ...over,
       },
     ],
@@ -837,7 +837,7 @@ describe('Telegram roll signals', () => {
         longVenue: 'GATE',
         shortVenue: 'HYPERLIQUID',
         maturity: FUTURE_SEC,
-        to: { maturity: LATER_SEC, apr: 0.124, currentApr: 0.091 },
+        targets: [{ maturity: LATER_SEC, apr: 0.124, currentApr: 0.091 }],
       },
     ]);
   });
@@ -850,6 +850,45 @@ describe('Telegram roll signals', () => {
 
     expect(res.code).toBe(400);
     expect(res.body.error.message).toBe('maturity must be a whole number of seconds.');
+    expect(bot.calls).toHaveLength(0);
+  });
+
+  it('carries several targets in the order sent, best first', async () => {
+    linked();
+    const { app, bot, sync } = boot();
+    const targets = [
+      { maturity: LATER_SEC, apr: 0.124, currentApr: 0.091 },
+      { maturity: LATER_SEC + 30 * DAY_SEC, apr: 0.118, currentApr: 0.091 },
+    ];
+
+    const res = await send(app, 'PUT', '/api/telegram/roll-signals', rollBody({ targets }));
+    await sync.idle();
+
+    expect(res.code).toBe(200);
+    expect(rollsSent(bot)[0].targets).toEqual(targets);
+  });
+
+  it('refuses a target maturity listed twice', async () => {
+    linked();
+    const { app, bot } = boot();
+    const target = { maturity: LATER_SEC, apr: 0.124, currentApr: 0.091 };
+
+    const res = await send(app, 'PUT', '/api/telegram/roll-signals', rollBody({ targets: [target, target] }));
+
+    expect(res.code).toBe(400);
+    expect(res.body.error.message).toBe('targets lists one maturity twice.');
+    expect(bot.calls).toHaveLength(0);
+  });
+
+  it('refuses more than eight targets', async () => {
+    linked();
+    const { app, bot } = boot();
+    const targets = Array.from({ length: 9 }, (_, i) => ({ maturity: LATER_SEC + i * DAY_SEC, apr: 0.12, currentApr: 0.091 }));
+
+    const res = await send(app, 'PUT', '/api/telegram/roll-signals', rollBody({ targets }));
+
+    expect(res.code).toBe(400);
+    expect(res.body.error.message).toBe('targets holds at most 8 maturities.');
     expect(bot.calls).toHaveLength(0);
   });
 
