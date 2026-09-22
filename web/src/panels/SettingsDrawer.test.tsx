@@ -97,6 +97,7 @@ describe('SettingsDrawer', () => {
   });
 
   it('edit telegram', async () => {
+    const user = userEvent.setup();
     mockAllDone();
     renderDrawer();
     await clickEdit('Telegram alerts');
@@ -110,8 +111,8 @@ describe('SettingsDrawer', () => {
       'aria-checked',
       'true',
     );
-    expect(within(telegram).getByText('Last synced 3 min ago')).toBeInTheDocument();
-    expect(within(telegram).getByText(CAVEAT)).toBeInTheDocument();
+    await user.hover(within(telegram).getByText('Last synced 3 min ago'));
+    expect(await screen.findByText(CAVEAT)).toBeInTheDocument();
     expect(within(telegram).getByRole('button', { name: 'Disconnect this terminal' })).toBeInTheDocument();
     expect(within(telegram).getByRole('button', { name: 'Close' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Skip/ })).toBeNull();
