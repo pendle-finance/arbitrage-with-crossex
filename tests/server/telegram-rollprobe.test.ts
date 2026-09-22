@@ -166,8 +166,19 @@ describe('the roll probe on the server', () => {
       }),
     );
     const signals = await probe();
-    expect(signals.map((s) => s.coin)).toEqual(['ETH']);
+    expect(signals.map((s) => s.coin)).toEqual(['ETH', 'BTC']);
     expect(signals[0].targets).toHaveLength(1);
+    expect(signals[1].maturity).toBe(SOON);
+    expect(signals[1].targets).toEqual([]);
+  });
+
+  it('reports a pair with no later maturity so the bot still learns when it matures', async () => {
+    const probe = createRollProbe({ ...deps({}), loadMarkets: async () => markets.slice(0, 2) });
+    const signals = await probe();
+    expect(signals).toHaveLength(1);
+    expect(signals[0].coin).toBe('ETH');
+    expect(signals[0].maturity).toBe(SOON);
+    expect(signals[0].targets).toEqual([]);
   });
 
   it('reports nothing when this install has no Boros account', async () => {
