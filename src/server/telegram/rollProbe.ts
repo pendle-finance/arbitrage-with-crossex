@@ -140,22 +140,23 @@ export function createRollProbe(deps: RollProbeDeps): () => Promise<RollSignalIn
       const derived = deriveAsset(group as unknown as AssetGroup, {}, view.sinceSec, nowSec);
       for (const pair of derived.pairs) {
         if (!pairCanRoll(pair, nowSec)) continue;
+        let targets: RollSignalInput['targets'] = [];
         try {
-          const targets = await probePair(pair, group.base, markets, nowSec);
-          if (targets.length === 0) continue;
-          signals.push({
-            coin: group.base,
-            longVenue: pair.longVenue,
-            shortVenue: pair.shortVenue,
-            maturity: pair.soonestMaturitySec,
-            targets,
-          });
+          targets = await probePair(pair, group.base, markets, nowSec);
         } catch (err) {
-          if (logged) continue;
-          logged = true;
-          const message = err instanceof Error ? err.message : String(err);
-          (deps.log ?? console.warn)(`Roll probe skipped ${group.base}: ${message}`);
+          if (!logged) {
+            logged = true;
+            const message = err instanceof Error ? err.message : String(err);
+            (deps.log ?? console.warn)(`Roll probe skipped ${group.base}: ${message}`);
+          }
         }
+        signals.push({
+          coin: group.base,
+          longVenue: pair.longVenue,
+          shortVenue: pair.shortVenue,
+          maturity: pair.soonestMaturitySec,
+          targets,
+        });
       }
     }
     return signals;
