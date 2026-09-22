@@ -19,7 +19,7 @@ import type { SetupStep } from './setup/setupState';
 const WALLET = `0xab18${'0'.repeat(32)}ed9d`;
 const PASTED = `0x3f2a${'1'.repeat(32)}91c0`;
 const CAVEAT =
-  "Alerts use the terminal's last sync, at most 5 min old. A trade made elsewhere counts after the next one.";
+  "Alerts use the terminal's last sync, at most 5 min old. A trade made outside the terminal reaches the alerts after the next sync. Maturity and roll-over alerts need the terminal open in your browser.";
 
 const connectedTelegram = (settings = { liquidation: true, interest: true, maturity: true, rollover: true }): TelegramInfo =>
   telegramInfo({ connected: true, state: 'connected', settings, lastSyncAt: Date.now() - 180_000 });
@@ -155,9 +155,9 @@ describe('SettingsDrawer', () => {
       'Close to maturity',
       'Roll-over opportunity',
     ]);
-    expect(within(telegram).getByText('daily in the last 7 days before a pair settles, with where it can roll')).toBeInTheDocument();
+    expect(within(telegram).getByText('daily in the last 7 days before a pair settles, with the better maturities to roll to')).toBeInTheDocument();
     expect(
-      within(telegram).getByText('a later maturity pays a better rate, checked while this tab is open'),
+      within(telegram).getByText('a later maturity pays a better APR'),
     ).toBeInTheDocument();
     await user.click(within(telegram).getByRole('switch', { name: 'Roll-over opportunity' }));
 
@@ -177,11 +177,11 @@ describe('SettingsDrawer', () => {
     renderDrawer();
     const telegram = row('Telegram alerts');
 
-    expect(await within(telegram).findByText('last sync failed')).toBeInTheDocument();
+    expect(await within(telegram).findByText('Last sync failed')).toBeInTheDocument();
     expect(
       within(telegram).getByText('Last sync failed at 14:02. Alerts still use the sync from 11:40. Retrying.'),
     ).toBeInTheDocument();
-    expect(screen.getAllByText('last sync failed')).toHaveLength(1);
+    expect(screen.getAllByText('Last sync failed')).toHaveLength(1);
   });
 
   it('not set up row', async () => {
@@ -209,7 +209,7 @@ describe('SettingsDrawer', () => {
     renderDrawer();
     const telegram = row('Telegram alerts');
 
-    expect(await within(telegram).findByText('Removed on the Boros alerts page')).toBeInTheDocument();
+    expect(await within(telegram).findByText('Removed on the Boros notifications page')).toBeInTheDocument();
     expect(within(telegram).getByRole('button', { name: 'Set up ↗' })).toBeInTheDocument();
     expect(within(telegram).queryByRole('button', { name: 'Edit' })).toBeNull();
   });

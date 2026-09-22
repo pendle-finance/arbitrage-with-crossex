@@ -17,7 +17,7 @@ const OTHER = `0x5c1f${'2'.repeat(32)}a2e0`;
 const LINK_URL = 'https://boros-bot-notification.pendle.finance/alerts?crossex=abc123';
 const BOT_DOWN = 'Telegram alerts are not available yet. Try again later.';
 const ALERTS_URL = 'https://boros-bot-notification.pendle.finance/alerts';
-const BOT_UNREACHABLE = 'Could not reach the bot. Try again, or remove this terminal on the Boros alerts page.';
+const BOT_UNREACHABLE = 'Could not reach the bot. Try again, or use Remove terminal on the Boros notifications page.';
 
 const approveAgent = vi.fn(async () => ({ txHash: '0xtx' }));
 vi.mock('../../lib/borosAgentApi', () => ({
@@ -264,7 +264,7 @@ describe('SetupPage · Telegram alerts', () => {
     openTelegramStep();
     renderSetup();
     await screen.findByRole('button', { name: 'Set up ↗' });
-    await user.hover(screen.getByText('interest price'));
+    await user.hover(screen.getByText('floor'));
 
     expect(await screen.findByText('USDT CrossEx wallet · equity under $0')).toBeInTheDocument();
     expect(screen.getByText('USDC Lighter wallet · equity under $0')).toBeInTheDocument();
@@ -284,7 +284,7 @@ describe('SetupPage · Telegram alerts', () => {
     renderSetup();
     await user.click(await screen.findByRole('button', { name: 'Set up ↗' }));
 
-    expect(await screen.findByText('Waiting for you to confirm on the Boros alerts page')).toBeInTheDocument();
+    expect(await screen.findByText('Waiting for you to confirm on the Boros notifications page')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Open the page again ↗' })).toHaveAttribute('href', LINK_URL);
     expect(tab.location.href).toBe(LINK_URL);
     expect(within(row('Telegram alerts')).queryByText(/\d+:\d{2}|expires|left/i)).toBeNull();
@@ -307,12 +307,12 @@ describe('SetupPage · Telegram alerts', () => {
     expect(await screen.findByRole('switch', { name: 'Close to liquidation' })).toHaveAttribute('aria-checked', 'true');
     expect(screen.getByRole('switch', { name: 'Started paying interest' })).toHaveAttribute('aria-checked', 'true');
     expect(screen.getByText('a 20% price move would liquidate a leg')).toBeInTheDocument();
-    expect(screen.getAllByText('interest price').length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/borrowing starts at your/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText('floor').length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/a wallet's equity goes under its/).length).toBeGreaterThan(0);
     expect(screen.getByText(/^Last synced \d+ s ago$/)).toBeInTheDocument();
     expect(
       screen.getByText(
-        "Alerts use the terminal's last sync, at most 5 min old. A trade made elsewhere counts after the next one.",
+        "Alerts use the terminal's last sync, at most 5 min old. A trade made outside the terminal reaches the alerts after the next sync. Maturity and roll-over alerts need the terminal open in your browser.",
       ),
     ).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Skip/ })).toBeNull();
@@ -346,7 +346,7 @@ describe('SetupPage · Telegram alerts', () => {
     renderSetup();
     await user.click(await screen.findByRole('button', { name: 'Set up ↗' }));
 
-    await waitFor(() => expect(screen.queryByText('Waiting for you to confirm on the Boros alerts page')).toBeNull());
+    await waitFor(() => expect(screen.queryByText('Waiting for you to confirm on the Boros notifications page')).toBeNull());
     expect(screen.getByRole('button', { name: 'Set up ↗' })).toBeInTheDocument();
   });
 
@@ -367,7 +367,7 @@ describe('SetupPage · Telegram alerts', () => {
 
     expect(await screen.findByText(BOT_DOWN)).toBeInTheDocument();
     expect(tab.close).toHaveBeenCalled();
-    expect(screen.queryByText('Waiting for you to confirm on the Boros alerts page')).toBeNull();
+    expect(screen.queryByText('Waiting for you to confirm on the Boros notifications page')).toBeNull();
     expect(screen.queryByRole('button', { name: 'Finish' })).toBeNull();
     expect(onFinish).not.toHaveBeenCalled();
   });
@@ -379,7 +379,7 @@ describe('SetupPage · Telegram alerts', () => {
     await user.click(await screen.findByRole('button', { name: 'Skip, not recommended' }));
 
     expect(
-      screen.getByText('Without Telegram alerts nothing warns you near liquidation or when interest starts.'),
+      screen.getByText('Without Telegram alerts nothing warns you near liquidation, when interest starts, or before a pair matures.'),
     ).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Skip anyway' }));
     expect(onFinish).toHaveBeenCalledTimes(1);
@@ -400,9 +400,9 @@ describe('setup rows in Settings', () => {
   it.each([
     [{ connected: true, state: 'connected', settings: { liquidation: true, interest: true, maturity: true, rollover: true }, lastSyncAt: Date.now() - 180_000 }, 'All on · synced 3 min ago'],
     [{ connected: true, state: 'connected', settings: { liquidation: true, interest: false, maturity: true, rollover: false }, lastSyncAt: Date.now() - 180_000 }, '2 of 4 on · synced 3 min ago'],
-    [{ connected: true, state: 'connected', settings: { liquidation: true, interest: true, maturity: true, rollover: true }, lastSyncAt: at(11, 40), lastSyncError: { at: at(14, 2), message: 'timeout' } }, 'last sync failed'],
+    [{ connected: true, state: 'connected', settings: { liquidation: true, interest: true, maturity: true, rollover: true }, lastSyncAt: at(11, 40), lastSyncError: { at: at(14, 2), message: 'timeout' } }, 'Last sync failed'],
     [{ state: 'replaced' }, 'Connected on another terminal'],
-    [{ state: 'removed' }, 'Removed on the Boros alerts page'],
+    [{ state: 'removed' }, 'Removed on the Boros notifications page'],
     [{}, 'not set up'],
   ] as [Partial<TelegramInfo>, string][])('telegram state line %#', async (over, line) => {
     mockWorld({ telegram: telegramInfo(over) });
@@ -483,7 +483,7 @@ describe('setup rows in Settings', () => {
     await user.click(await screen.findByRole('button', { name: 'Disconnect this terminal' }));
 
     expect((await screen.findByRole('alert')).textContent).toBe(BOT_UNREACHABLE);
-    expect(screen.getByRole('link', { name: 'Boros alerts page' })).toHaveAttribute('href', ALERTS_URL);
+    expect(screen.getByRole('link', { name: 'Boros notifications page' })).toHaveAttribute('href', ALERTS_URL);
     expect(screen.getByRole('button', { name: 'Disconnect this terminal' })).toBeInTheDocument();
   });
 
@@ -503,13 +503,13 @@ describe('setup rows in Settings', () => {
     await user.click(await screen.findByRole('button', { name: 'Disconnect this terminal' }));
 
     expect(await screen.findByRole('alert')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Boros alerts page' })).toHaveAttribute('href', STAGING_ALERTS_URL);
+    expect(screen.getByRole('link', { name: 'Boros notifications page' })).toHaveAttribute('href', STAGING_ALERTS_URL);
   });
 
   it('unknown settings read as alerts off, not both on', async () => {
     mockWorld({ telegram: telegramInfo({ connected: true, state: 'connected', settings: null, lastSyncAt: null }) });
     renderWithClient(<TelegramRow {...settingsRow()} />);
-    expect(await within(row('Telegram alerts')).findByText('Alerts off')).toBeInTheDocument();
+    expect(await within(row('Telegram alerts')).findByText('None on')).toBeInTheDocument();
   });
 
   it('unknown settings leave both switches off', async () => {
@@ -546,7 +546,7 @@ describe('TelegramRow · cancel while waiting', () => {
     );
     renderSetup();
     await user.click(await screen.findByRole('button', { name: 'Set up ↗' }));
-    await screen.findByText('Waiting for you to confirm on the Boros alerts page');
+    await screen.findByText('Waiting for you to confirm on the Boros notifications page');
     await user.click(within(row('Telegram alerts')).getByRole('button', { name: 'Cancel' }));
   }
 
@@ -557,7 +557,7 @@ describe('TelegramRow · cancel while waiting', () => {
       return HttpResponse.json(env({ status: 'none', url: null, expiresAt: null }));
     });
     await waitFor(() => expect(cancels).toBe(1));
-    await waitFor(() => expect(screen.queryByText('Waiting for you to confirm on the Boros alerts page')).toBeNull());
+    await waitFor(() => expect(screen.queryByText('Waiting for you to confirm on the Boros notifications page')).toBeNull());
   });
 
   it('a failed cancel says why and keeps waiting', async () => {
@@ -565,6 +565,6 @@ describe('TelegramRow · cancel while waiting', () => {
       HttpResponse.json({ ok: false, error: { category: 'network', message: BOT_DOWN, retryable: true } }, { status: 503 }),
     );
     expect(await screen.findByText(BOT_DOWN)).toBeInTheDocument();
-    expect(screen.getByText('Waiting for you to confirm on the Boros alerts page')).toBeInTheDocument();
+    expect(screen.getByText('Waiting for you to confirm on the Boros notifications page')).toBeInTheDocument();
   });
 });
