@@ -29,7 +29,7 @@ const connectedTelegram = (over: Partial<TelegramInfo> = {}): TelegramInfo =>
   telegramInfo({
     connected: true,
     state: 'connected',
-    settings: { liquidation: true, interest: true },
+    settings: { liquidation: true, interest: true, maturity: true, rollover: true },
     lastSyncAt: Date.now() - 12_000,
     ...over,
   });
@@ -398,9 +398,9 @@ describe('setup rows in Settings', () => {
   const at = (hours: number, minutes: number) => new Date(2026, 8, 18, hours, minutes).getTime();
 
   it.each([
-    [{ connected: true, state: 'connected', settings: { liquidation: true, interest: true }, lastSyncAt: Date.now() - 180_000 }, 'Both on · synced 3 min ago'],
-    [{ connected: true, state: 'connected', settings: { liquidation: true, interest: false }, lastSyncAt: Date.now() - 180_000 }, 'Liquidation only · synced 3 min ago'],
-    [{ connected: true, state: 'connected', settings: { liquidation: true, interest: true }, lastSyncAt: at(11, 40), lastSyncError: { at: at(14, 2), message: 'timeout' } }, 'last sync failed'],
+    [{ connected: true, state: 'connected', settings: { liquidation: true, interest: true, maturity: true, rollover: true }, lastSyncAt: Date.now() - 180_000 }, 'All on · synced 3 min ago'],
+    [{ connected: true, state: 'connected', settings: { liquidation: true, interest: false, maturity: true, rollover: false }, lastSyncAt: Date.now() - 180_000 }, '2 of 4 on · synced 3 min ago'],
+    [{ connected: true, state: 'connected', settings: { liquidation: true, interest: true, maturity: true, rollover: true }, lastSyncAt: at(11, 40), lastSyncError: { at: at(14, 2), message: 'timeout' } }, 'last sync failed'],
     [{ state: 'replaced' }, 'Connected on another terminal'],
     [{ state: 'removed' }, 'Removed on the Boros alerts page'],
     [{}, 'not set up'],
@@ -421,7 +421,7 @@ describe('setup rows in Settings', () => {
       telegram: telegramInfo({
         connected: true,
         state: 'connected',
-        settings: { liquidation: true, interest: true },
+        settings: { liquidation: true, interest: true, maturity: true, rollover: true },
         lastSyncAt: at(11, 40),
         lastSyncError: { at: at(14, 2), message },
       }),

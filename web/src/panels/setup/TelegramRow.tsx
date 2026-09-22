@@ -23,7 +23,7 @@ import type { SetupRowProps } from './setupState';
 
 type Phase = 'idle' | 'waiting' | 'expired';
 
-type AlertSettings = { liquidation: boolean; interest: boolean };
+type AlertSettings = { liquidation: boolean; interest: boolean; maturity: boolean; rollover: boolean };
 
 const INTEREST_FLOORS = [
   { wallet: 'USDT CrossEx wallet', equityUsd: 0 },
@@ -32,6 +32,10 @@ const INTEREST_FLOORS = [
 ];
 
 const LIQUIDATION_CAPTION = 'a 20% price move would liquidate a leg';
+
+const MATURITY_CAPTION = '7 days before a pair settles';
+
+const ROLLOVER_CAPTION = 'a later maturity pays a better rate, checked while this tab is open';
 
 const interestCaption = (
   <>
@@ -52,14 +56,19 @@ const CAVEAT =
   "Alerts use the terminal's last sync, at most 5 min old. A trade made elsewhere counts after the next one.";
 
 function alertSettings(info: TelegramInfo): AlertSettings {
-  return { liquidation: info.settings?.liquidation ?? false, interest: info.settings?.interest ?? false };
+  return {
+    liquidation: info.settings?.liquidation ?? false,
+    interest: info.settings?.interest ?? false,
+    maturity: info.settings?.maturity ?? false,
+    rollover: info.settings?.rollover ?? false,
+  };
 }
 
-function alertsLabel({ liquidation, interest }: AlertSettings): string {
-  if (liquidation && interest) return 'Both on';
-  if (liquidation) return 'Liquidation only';
-  if (interest) return 'Interest only';
-  return 'Alerts off';
+function alertsLabel(settings: AlertSettings): string {
+  const on = Object.values(settings).filter(Boolean).length;
+  if (on === 4) return 'All on';
+  if (on === 0) return 'Alerts off';
+  return `${on} of 4 on`;
 }
 
 function syncFailure(info: TelegramInfo): string | null {
@@ -160,6 +169,24 @@ export function TelegramRow(p: SetupRowProps) {
         />
         <p className="pl-9 text-xs text-ink-500">{interestCaption}</p>
       </div>
+      <div className="flex flex-col gap-0.5">
+        <Switch
+          on={settings.maturity}
+          label="Close to maturity"
+          disabled={saveSettings.isPending}
+          onChange={(next) => save({ maturity: next })}
+        />
+        <p className="num pl-9 text-xs text-ink-500">{MATURITY_CAPTION}</p>
+      </div>
+      <div className="flex flex-col gap-0.5">
+        <Switch
+          on={settings.rollover}
+          label="Roll-over opportunity"
+          disabled={saveSettings.isPending}
+          onChange={(next) => save({ rollover: next })}
+        />
+        <p className="pl-9 text-xs text-ink-500">{ROLLOVER_CAPTION}</p>
+      </div>
       {lastSyncAt !== null && (
         <p className="num text-xs text-ink-400">{`Last synced ${fmtSyncAge(now - lastSyncAt)}`}</p>
       )}
@@ -220,6 +247,14 @@ export function TelegramRow(p: SetupRowProps) {
         <div className="flex gap-3">
           <span className="w-40 shrink-0 text-ink-100">Started paying interest</span>
           <span className="text-ink-400">{interestCaption}</span>
+        </div>
+        <div className="flex gap-3">
+          <span className="w-40 shrink-0 text-ink-100">Close to maturity</span>
+          <span className="num text-ink-400">{MATURITY_CAPTION}</span>
+        </div>
+        <div className="flex gap-3">
+          <span className="w-40 shrink-0 text-ink-100">Roll-over opportunity</span>
+          <span className="text-ink-400">{ROLLOVER_CAPTION}</span>
         </div>
       </div>
       {phase === 'expired' && <p className="text-xs text-amber-300">Link expired. Set up again.</p>}

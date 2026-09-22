@@ -14,6 +14,7 @@ import { TelegramStatus } from '../../src/server/telegram/status';
 import {
   createTelegramSync,
   readTriggerCoins,
+  type RollSignalInput,
   type TelegramSync,
   type TelegramSyncOptions,
 } from '../../src/server/telegram/sync';
@@ -64,6 +65,20 @@ function makeSync(bot: ReturnType<typeof botStub>['bot'], over: Partial<Telegram
 
 const macrotask = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
 
+function rollSignal(): RollSignalInput {
+  const nowSec = Math.floor(Date.now() / 1_000);
+  return {
+    coin: 'eth',
+    longVenue: 'GATE',
+    shortVenue: 'HYPERLIQUID',
+    maturity: nowSec + 30 * 86_400,
+    to: { maturity: nowSec + 60 * 86_400, apr: 0.124, currentApr: 0.091 },
+  };
+}
+
+const rollsOf = (call: { body: unknown }): unknown =>
+  (call.body as { coins: Array<{ rolls: unknown }> }).coins[0].rolls;
+
 describe('the Telegram key file', () => {
   it('writes the key owner-only and hashes the key string', () => {
     const key = newTelegramKey(1_000);
@@ -112,7 +127,7 @@ describe('the trigger sync', () => {
     expect(stub.puts()[0].url).toBe(`${BOT_URL}/noti/boros/crossex/terminal/triggers`);
     expect(stub.puts()[0].headers['x-terminal-key']).toBe(readTelegramKey(dataDir)?.key);
     expect(status.auth).toBe('ok');
-    expect(status.settings).toEqual({ liquidation: true, interest: true });
+    expect(status.settings).toEqual({ liquidation: true, interest: true, maturity: true, rollover: true });
   });
 
   it('boot does not wait on the bot', async () => {
@@ -142,6 +157,44 @@ describe('the trigger sync', () => {
     expect(stub.puts()).toHaveLength(4);
     expect(readCoins).toHaveBeenCalledTimes(4);
     expect(new Set(stub.puts().map((c) => JSON.stringify((c.body as { coins: unknown }).coins))).size).toBe(1);
+  });
+
+  it('a new roll opportunity syncs at once, and the same set again does not', async () => {
+    link();
+    const stub = botStub();
+    const { sync } = makeSync(stub.bot);
+    const signals = [rollSignal()];
+
+    sync.start();
+    await vi.waitFor(() => expect(stub.puts()).toHaveLength(1));
+    sync.setRollSignals(signals);
+    await vi.waitFor(() => expect(stub.puts()).toHaveLength(2));
+    sync.setRollSignals(signals);
+    await macrotask();
+
+    expect(stub.puts()).toHaveLength(2);
+    expect(rollsOf(stub.puts()[0])).toEqual([]);
+    expect(rollsOf(stub.puts()[1])).toEqual([
+      { longVenue: 'GATE', shortVenue: 'HYPERLIQUID', maturity: signals[0].maturity, to: signals[0].to },
+    ]);
+  });
+
+  it('a restart still sends the stored signals', async () => {
+    link();
+    const first = botStub();
+    const started = makeSync(first.bot);
+    started.sync.setRollSignals([rollSignal()]);
+    await vi.waitFor(() => expect(first.puts()).toHaveLength(1));
+    started.sync.stop();
+
+    const second = botStub();
+    const restarted = makeSync(second.bot);
+    restarted.sync.start();
+    await vi.waitFor(() => expect(second.puts()).toHaveLength(1));
+
+    expect(fs.statSync(path.join(dataDir, 'roll-signals.json')).mode & 0o777).toBe(0o600);
+    expect(rollsOf(second.puts()[0])).toEqual(rollsOf(first.puts()[0]));
+    expect(rollsOf(second.puts()[0])).toHaveLength(1);
   });
 
   it('deal finish syncs', async () => {

@@ -16,13 +16,14 @@ import { HOST, makeTestApp } from './helpers/gate-nock';
 const CODE = 'q0Yx1dQ0bB8m8rP3nV2m4w';
 const T0 = Date.UTC(2026, 8, 18, 10, 0, 0);
 const TEN_MIN = 600_000;
+const DAY_SEC = 86_400;
 const BOT_DOWN = 'Telegram alerts are not available yet. Try again later.';
 const BOT_UNREACHABLE = 'Could not reach the bot. Try again, or remove this terminal on the Boros alerts page.';
 
 interface BotBehaviour {
   down: 'refused' | number | null;
   reason: BotAuthReason | null;
-  settings: { liquidation: boolean; interest: boolean };
+  settings: { liquidation: boolean; interest: boolean; maturity: boolean; rollover: boolean };
   hold: Promise<void> | null;
   pendingKey: string | null;
 }
@@ -43,7 +44,7 @@ afterEach(async () => {
 });
 
 function makeBot() {
-  const behaviour: BotBehaviour = { down: null, reason: null, settings: { liquidation: true, interest: true }, hold: null, pendingKey: null };
+  const behaviour: BotBehaviour = { down: null, reason: null, settings: { liquidation: true, interest: true, maturity: true, rollover: true }, hold: null, pendingKey: null };
   const answer: BotAnswer = (call) => {
     if (typeof behaviour.down === 'number') return { status: behaviour.down, body: { message: 'Cannot answer' } };
     const route = `${call.method} ${call.url.slice(CROSSEX.length)}`;
@@ -110,7 +111,7 @@ function boot(bot: Bot = makeBot()) {
   return { bot, status, sync, link, app, readCoins };
 }
 
-async function send(app: FastifyInstance, method: 'GET' | 'POST' | 'PATCH' | 'DELETE', url: string, payload?: object) {
+async function send(app: FastifyInstance, method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE', url: string, payload?: object) {
   const res = await app.inject({ method, url, headers: HOST, payload });
   return { code: res.statusCode, body: res.json() };
 }
@@ -398,7 +399,7 @@ describe('Telegram link', () => {
     expect(after.body.data).toEqual({
       connected: true,
       state: 'connected',
-      settings: { liquidation: true, interest: true },
+      settings: { liquidation: true, interest: true, maturity: true, rollover: true },
       lastSyncAt: T0,
       lastSyncError: null,
       alertsPageUrl: `${BOT_URL}/alerts`,
@@ -493,7 +494,7 @@ describe('Telegram link', () => {
     expect(after.body.data).toEqual({
       connected: true,
       state: 'connected',
-      settings: { liquidation: true, interest: true },
+      settings: { liquidation: true, interest: true, maturity: true, rollover: true },
       lastSyncAt: T0,
       lastSyncError: null,
       alertsPageUrl: `${BOT_URL}/alerts`,
@@ -639,7 +640,7 @@ describe('Telegram settings', () => {
     expect((await send(app, 'GET', '/api/telegram')).body.data).toEqual({
       connected: true,
       state: 'connected',
-      settings: { liquidation: true, interest: true },
+      settings: { liquidation: true, interest: true, maturity: true, rollover: true },
       lastSyncAt: T0,
       lastSyncError: null,
       alertsPageUrl: `${BOT_URL}/alerts`,
@@ -657,7 +658,7 @@ describe('Telegram settings', () => {
     expect(patches).toHaveLength(1);
     expect(patches[0].body).toEqual({ interest: false });
     expect(patches[0].headers['x-terminal-key']).toBe(key.key);
-    expect(res.body.data.settings).toEqual({ liquidation: true, interest: false });
+    expect(res.body.data.settings).toEqual({ liquidation: true, interest: false, maturity: true, rollover: true });
   });
 
   it('refuses a setting that is not true or false', async () => {
@@ -796,6 +797,80 @@ describe('Telegram settings', () => {
 
     expect(res.body.data).toMatchObject({ connected: false, state: 'none' });
     expect(bot.calls).toHaveLength(0);
+  });
+});
+
+describe('Telegram roll signals', () => {
+  const FUTURE_SEC = Math.floor(T0 / 1_000) + 7 * DAY_SEC;
+  const LATER_SEC = FUTURE_SEC + 30 * DAY_SEC;
+
+  const rollBody = (over: Record<string, unknown> = {}) => ({
+    signals: [
+      {
+        coin: 'ETH',
+        longVenue: 'gate',
+        shortVenue: 'hyperliquid',
+        maturity: FUTURE_SEC,
+        to: { maturity: LATER_SEC, apr: 0.124, currentApr: 0.091 },
+        ...over,
+      },
+    ],
+  });
+
+  const rollsSent = (bot: Bot) => {
+    const puts = bot.to('PUT', '/terminal/triggers');
+    expect(puts).toHaveLength(1);
+    return (puts[0].body as { coins: TriggerCoin[] }).coins[0].rolls;
+  };
+
+  it('stores a signal and the next sync carries it', async () => {
+    linked();
+    const { app, bot, sync } = boot();
+
+    const res = await send(app, 'PUT', '/api/telegram/roll-signals', rollBody());
+    await sync.idle();
+
+    expect(res.code).toBe(200);
+    expect(res.body.data).toEqual({ stored: 1 });
+    expect(rollsSent(bot)).toEqual([
+      {
+        longVenue: 'GATE',
+        shortVenue: 'HYPERLIQUID',
+        maturity: FUTURE_SEC,
+        to: { maturity: LATER_SEC, apr: 0.124, currentApr: 0.091 },
+      },
+    ]);
+  });
+
+  it('refuses a maturity that is not a whole number of seconds', async () => {
+    linked();
+    const { app, bot } = boot();
+
+    const res = await send(app, 'PUT', '/api/telegram/roll-signals', rollBody({ maturity: FUTURE_SEC + 0.5 }));
+
+    expect(res.code).toBe(400);
+    expect(res.body.error.message).toBe('maturity must be a whole number of seconds.');
+    expect(bot.calls).toHaveLength(0);
+  });
+
+  it('a coin the terminal does not hold is not sent', async () => {
+    linked();
+    const { app, bot, sync } = boot();
+
+    await send(app, 'PUT', '/api/telegram/roll-signals', rollBody({ coin: 'BTC' }));
+    await sync.idle();
+
+    expect(rollsSent(bot)).toEqual([]);
+  });
+
+  it('a maturity that has passed is not sent', async () => {
+    linked();
+    const { app, bot, sync } = boot();
+
+    await send(app, 'PUT', '/api/telegram/roll-signals', rollBody({ maturity: Math.floor(T0 / 1_000) - DAY_SEC }));
+    await sync.idle();
+
+    expect(rollsSent(bot)).toEqual([]);
   });
 });
 

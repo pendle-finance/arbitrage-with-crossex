@@ -1,8 +1,11 @@
+import { HttpResponse, http } from 'msw';
 import { setupServer } from 'msw/node';
 import type { ApiMeta } from '../api/types';
 
 /** Shared msw server — tests add handlers per-case with server.use(...). */
-export const server = setupServer();
+export const server = setupServer(
+  http.put('/api/telegram/roll-signals', () => HttpResponse.json(env({ stored: 0 }))),
+);
 
 /** Wrap data in the backend's success envelope. */
 export function env<T>(data: T, meta: Partial<ApiMeta> = {}): { ok: true; data: T; meta: ApiMeta } {

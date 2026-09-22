@@ -17,7 +17,7 @@ const agentOff = agentStatus();
 const agentOn = agentStatus({ configured: true, root: `0xab18${'0'.repeat(32)}ed9d` });
 
 const telegramOff = telegramInfo();
-const telegramOn = telegramInfo({ connected: true, state: 'connected', settings: { liquidation: true, interest: true } });
+const telegramOn = telegramInfo({ connected: true, state: 'connected', settings: { liquidation: true, interest: true, maturity: true, rollover: true } });
 
 let served = new Set<string>();
 

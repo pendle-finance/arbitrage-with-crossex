@@ -13,6 +13,7 @@ export const ETH: TriggerCoin = {
   ],
   liquidation: { down: null, up: { price: 13_663, venue: 'GATE' } },
   interest: { down: { price: 1_612, wallet: 'USDT' }, up: { price: 19_470, wallet: 'HYPERLIQUID' } },
+  rolls: [],
 };
 
 export const VIEW: TerminalView = {
@@ -21,7 +22,7 @@ export const VIEW: TerminalView = {
   connectedAt: '2026-09-18T00:00:00.000Z',
   lastSyncAt: null,
   port: 7788,
-  settings: { liquidation: true, interest: true },
+  settings: { liquidation: true, interest: true, maturity: true, rollover: true },
   coins: [],
 };
 
