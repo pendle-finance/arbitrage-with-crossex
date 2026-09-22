@@ -178,7 +178,7 @@ trade journal out from under a live process that is still placing orders.
   (this-machine-only) and additionally rejects any request whose Host/Origin isn't
   localhost. Nobody on your Wi-Fi can see it.
 - **No telemetry, no analytics.** The app's only outbound requests are: `api.gateio.ws`
-  (signed, your account and orders); `api.boros.finance` (public market data, keyed only
+  (signed, your account and orders); `api-boros.pendle.finance` (public market data, keyed only
   by an EVM address you choose to enter); the venues' public order-book endpoints
   (`fapi.binance.com`, `api.bybit.com`, `www.okx.com`, `futures.kraken.com`,
   `api.hyperliquid.xyz`, `api.gateio.ws`) — public data, nothing about you; and

@@ -1,5 +1,5 @@
 /**
- * Read-only client for the public Boros backend (https://api.boros.finance).
+ * Read-only client for the public Boros backend (https://api-boros.pendle.finance).
  * No auth, no secrets — everything is keyed by a public EVM address.
  *
  * Scaling conventions (verified against live responses, 2026-07):
@@ -15,7 +15,7 @@
  */
 import { CoreError } from '../errors';
 
-const BOROS_BASE_URL = 'https://api.boros.finance';
+const BOROS_BASE_URL = 'https://api-boros.pendle.finance';
 /** The api-gateway surface (`/apis` → api-gateway → open-api's `open-api-v2/…`
  * mounts). New endpoints live here — the bare `/open-api` prefix is deprecated. */
 const BOROS_GATEWAY_BASE_URL = 'https://api-boros.pendle.finance/apis';
@@ -211,7 +211,7 @@ export interface BorosCollateralZone {
 /**
  * One fill from /pnl/transactions, projected to the fields this app reads —
  * `required` / `optional` below mirror PnlTransactionResponse in the API's own
- * OpenAPI document (https://api.boros.finance/core/docs).
+ * OpenAPI document (https://api-boros.pendle.finance/core/docs).
  *
  * `txType` is deliberately NOT modelled: it is required upstream and
  * enumerated 'normal' | 'liquidate' | 'force_deleverage' | 'otc_swap', but
