@@ -19,7 +19,7 @@ import type { SetupStep } from './setup/setupState';
 const WALLET = `0xab18${'0'.repeat(32)}ed9d`;
 const PASTED = `0x3f2a${'1'.repeat(32)}91c0`;
 const CAVEAT =
-  "Alerts use the terminal's last sync, at most 5 min old. A trade made outside the terminal reaches the alerts after the next sync. Maturity and roll-over alerts need the terminal open in your browser.";
+  "Alerts use the terminal's last sync, at most 5 min old. A trade made outside the terminal reaches the alerts after the next sync.";
 
 const connectedTelegram = (settings = { liquidation: true, interest: true, maturity: true, rollover: true }): TelegramInfo =>
   telegramInfo({ connected: true, state: 'connected', settings, lastSyncAt: Date.now() - 180_000 });

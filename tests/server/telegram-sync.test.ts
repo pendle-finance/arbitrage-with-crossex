@@ -179,6 +179,42 @@ describe('the trigger sync', () => {
     ]);
   });
 
+  it('sends the targets the server probed, with no browser open', async () => {
+    link();
+    const stub = botStub();
+    const signal = rollSignal();
+    const probeRolls = vi.fn(async () => [signal]);
+    const { sync } = makeSync(stub.bot, { probeRolls });
+
+    sync.start();
+    await vi.waitFor(() => expect(stub.puts()).toHaveLength(1));
+
+    expect(probeRolls).toHaveBeenCalledTimes(1);
+    expect(rollsOf(stub.puts()[0])).toEqual([
+      { longVenue: 'GATE', shortVenue: 'HYPERLIQUID', maturity: signal.maturity, targets: signal.targets },
+    ]);
+  });
+
+  it('a probe that throws still syncs, on the last stored set', async () => {
+    link();
+    const stub = botStub();
+    const signal = rollSignal();
+    const probeRolls = vi.fn(async () => {
+      throw new Error('Boros is limiting reads');
+    });
+    const { sync } = makeSync(stub.bot, { probeRolls });
+    sync.setRollSignals([signal]);
+    await vi.waitFor(() => expect(stub.puts()).toHaveLength(1));
+
+    sync.requestSync('check');
+    await vi.waitFor(() => expect(stub.puts()).toHaveLength(2));
+
+    expect(probeRolls).toHaveBeenCalled();
+    expect(rollsOf(stub.puts()[1])).toEqual([
+      { longVenue: 'GATE', shortVenue: 'HYPERLIQUID', maturity: signal.maturity, targets: signal.targets },
+    ]);
+  });
+
   it('a restart still sends the stored signals', async () => {
     link();
     const first = botStub();

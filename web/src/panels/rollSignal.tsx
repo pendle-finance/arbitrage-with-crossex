@@ -10,8 +10,7 @@
  * matter (his call 2026-09-20 — the banner belonged on every tab, not buried
  * in one asset's card).
  */
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { putJson } from '../api/client';
+import { createContext, useCallback, useContext, useMemo, useRef, useState, type ReactNode } from 'react';
 
 /** What one pair is offering, as the card worked it out. */
 export interface RollChance {
@@ -46,9 +45,6 @@ interface RollSignalApi {
 
 const Ctx = createContext<RollSignalApi | null>(null);
 
-const SEND_AFTER_MS = 1_500;
-const RESEND_EVERY_MS = 20 * 60_000;
-
 export function RollSignalProvider({ children }: { children: ReactNode }) {
   const [byKey, setByKey] = useState<Record<string, RollSignal>>({});
   const [showNonce, setShowNonce] = useState(0);
@@ -74,28 +70,6 @@ export function RollSignalProvider({ children }: { children: ReactNode }) {
       ),
     [byKey],
   );
-  const sent = useRef(false);
-  useEffect(() => {
-    if (signals.length === 0 && !sent.current) return;
-    const send = (): void => {
-      sent.current = true;
-      void putJson('/telegram/roll-signals', {
-        signals: signals.map((s) => ({
-          coin: s.asset,
-          longVenue: s.longVenue,
-          shortVenue: s.shortVenue,
-          maturity: s.maturity,
-          targets: s.opportunities.map((o) => ({ maturity: o.maturity, apr: o.rate, currentApr: o.current })),
-        })),
-      }).catch(() => undefined);
-    };
-    const timer = setTimeout(send, SEND_AFTER_MS);
-    const again = setInterval(send, RESEND_EVERY_MS);
-    return () => {
-      clearTimeout(timer);
-      clearInterval(again);
-    };
-  }, [signals]);
   const value = useMemo(() => ({ signals, publish, showNonce, requestShow }), [signals, publish, showNonce, requestShow]);
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

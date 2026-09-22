@@ -39,6 +39,7 @@ export interface TelegramSyncOptions {
   version: string;
   now: () => number;
   everyMs?: number;
+  probeRolls?: () => Promise<RollSignalInput[]>;
 }
 
 export async function readTriggerCoins(deps: { cache: TtlCache; getClients: () => Clients }): Promise<TriggerCoin[]> {
@@ -130,12 +131,39 @@ export function createTelegramSync(opts: TelegramSyncOptions): TelegramSync {
       .map((s) => ({ longVenue: s.longVenue, shortVenue: s.shortVenue, maturity: s.maturity, targets: fresh ? s.targets : [] }));
   };
 
+  const storeRollSignals = (signals: RollSignalInput[]): boolean => {
+    const next = signals.map((s) => ({
+      coin: s.coin,
+      longVenue: s.longVenue,
+      shortVenue: s.shortVenue,
+      maturity: s.maturity,
+      targets: s.targets,
+    }));
+    const keys = rollKeys(next);
+    const gained = [...keys].some((key) => !rollKeySet.has(key));
+    rollSignals = next;
+    rollsAt = opts.now();
+    rollKeySet = keys;
+    writeOwnerOnlyJson(rollPath, { at: rollsAt, signals: next });
+    return gained;
+  };
+
+  const probeRolls = async (): Promise<void> => {
+    if (!opts.probeRolls) return;
+    try {
+      storeRollSignals(await opts.probeRolls());
+    } catch (err) {
+      console.warn(`Roll probe failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  };
+
   const syncOnce = async (): Promise<void> => {
     const key = readTelegramKey(opts.dataDir);
     if (key === null) return;
     const keyKept = (): boolean => readTelegramKey(opts.dataDir)?.keyHash === key.keyHash;
     try {
       const coins = await opts.readCoins();
+      await probeRolls();
       const syncedAt = opts.now();
       const settings = await opts.bot.putTriggers(key.key, {
         syncedAt: new Date(syncedAt).toISOString(),
@@ -174,20 +202,7 @@ export function createTelegramSync(opts: TelegramSyncOptions): TelegramSync {
     },
     requestSync: run,
     setRollSignals(signals) {
-      const next = signals.map((s) => ({
-        coin: s.coin,
-        longVenue: s.longVenue,
-        shortVenue: s.shortVenue,
-        maturity: s.maturity,
-        targets: s.targets,
-      }));
-      const keys = rollKeys(next);
-      const gained = [...keys].some((key) => !rollKeySet.has(key));
-      rollSignals = next;
-      rollsAt = opts.now();
-      rollKeySet = keys;
-      writeOwnerOnlyJson(rollPath, { at: rollsAt, signals: next });
-      if (gained) run();
+      if (storeRollSignals(signals)) run();
     },
     idle: () => inFlight,
     stop() {

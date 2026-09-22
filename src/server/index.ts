@@ -27,7 +27,10 @@ import { restrictToOwner } from './secretFile';
 import { botBaseUrl, createBotClient } from './telegram/botClient';
 import { createTelegramLink } from './telegram/link';
 import { TelegramStatus } from './telegram/status';
+import { createRollProbe } from './telegram/rollProbe';
 import { createTelegramSync, readTriggerCoins } from './telegram/sync';
+import { createAssetViewBuilder } from './routes/assetView';
+import { configuredRoot, createPairPricer } from './routes/borosPair';
 import { readInstallInfo, readLocalVersion } from './version';
 
 const port = Number(process.env.PORT ?? 6688);
@@ -169,11 +172,20 @@ try {
 const telegramVersion = readLocalVersion(repoRoot) ?? 'unknown';
 const telegramBot = createBotClient({ baseUrl: botBaseUrl(process.env), fetchImpl: resolveBorosFetch() });
 const telegramStatus = new TelegramStatus();
+let assetViewBuilder: ReturnType<typeof createAssetViewBuilder> | null = null;
+let pairPricer: ReturnType<typeof createPairPricer> | null = null;
 const telegramSync = createTelegramSync({
   dataDir,
   bot: telegramBot,
   status: telegramStatus,
   readCoins: () => readTriggerCoins({ cache, getClients }),
+  probeRolls: createRollProbe({
+    borosAddress: configuredRoot,
+    buildAssetView: (params) => (assetViewBuilder ??= createAssetViewBuilder(appDeps))(params),
+    loadMarkets: (fresh) => (pairPricer ??= createPairPricer(appDeps)).loadMarkets(fresh),
+    price: (body, fresh) => (pairPricer ??= createPairPricer(appDeps)).priceRequest(body, fresh),
+    now: Date.now,
+  }),
   port,
   version: telegramVersion,
   now: Date.now,
