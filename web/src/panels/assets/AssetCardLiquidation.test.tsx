@@ -1,4 +1,5 @@
 import { screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AssetGroup } from '../../api/types';
 import { baseHandlers } from '../../test/fixtures';
@@ -60,11 +61,17 @@ function renderCard(liquidation: { base: string; venue: string; sinceMs: number 
 describe('the asset card when Gate stops sending a mark', () => {
   beforeEach(() => server.use(...baseHandlers()));
 
-  it('says there is no estimate, and names the venue and the time on hover', () => {
+  it('says there is no estimate, and names the venue and the time on hover', async () => {
     renderCard({ base: 'ETH', venue: 'Hyperliquid', sinceMs: STALE_AT });
 
+    const trigger = screen.getByRole('button', { name: /No liquidation estimate/ });
+    expect(trigger).toHaveTextContent('No liquidation estimate');
+
+    await userEvent.hover(trigger);
     expect(
-      screen.getByTitle('No liquidation estimate: Gate has not sent a price for the Hyperliquid leg since 14:32.'),
-    ).toHaveTextContent('No liquidation estimate');
+      await screen.findByText(
+        'No liquidation estimate: Gate has not sent a price for the Hyperliquid leg since 14:32.',
+      ),
+    ).toBeInTheDocument();
   });
 });

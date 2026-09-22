@@ -19,7 +19,7 @@ import type { SetupStep } from './setup/setupState';
 const WALLET = `0xab18${'0'.repeat(32)}ed9d`;
 const PASTED = `0x3f2a${'1'.repeat(32)}91c0`;
 const CAVEAT =
-  'Alerts are based on the last update the terminal sent. A trade made outside the terminal counts after the next sync, within 5 min.';
+  "Alerts use the terminal's last sync, at most 5 min old. A trade made elsewhere counts after the next one.";
 
 const connectedTelegram = (settings = { liquidation: true, interest: true }): TelegramInfo =>
   telegramInfo({ connected: true, state: 'connected', settings, lastSyncAt: Date.now() - 180_000 });
@@ -253,7 +253,7 @@ describe('SettingsDrawer · focus step', () => {
     renderWithClient(<FocusHarness initial="telegram" />);
     const telegram = row('Telegram alerts');
 
-    expect(await within(telegram).findByText('a 20% move from now reaches liquidation')).toBeInTheDocument();
+    expect(await within(telegram).findByText('a 20% price move would liquidate a leg')).toBeInTheDocument();
     expect(within(telegram).getByRole('button', { name: 'Done' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Replace credentials' })).toBeNull();
     expect(screen.queryByRole('radio', { name: 'Paste address' })).toBeNull();
@@ -262,11 +262,11 @@ describe('SettingsDrawer · focus step', () => {
   it('new focus step opens the new row', async () => {
     mockAllDone(telegramInfo());
     renderWithClient(<FocusHarness initial="telegram" />);
-    await within(row('Telegram alerts')).findByText('a 20% move from now reaches liquidation');
+    await within(row('Telegram alerts')).findByText('a 20% price move would liquidate a leg');
     act(() => drive.focus('gateKey'));
 
     expect(await screen.findByRole('button', { name: 'Replace credentials' })).toBeInTheDocument();
-    expect(within(row('Telegram alerts')).queryByText('a 20% move from now reaches liquidation')).toBeNull();
+    expect(within(row('Telegram alerts')).queryByText('a 20% price move would liquidate a leg')).toBeNull();
   });
 
   it('reopening opens the focus step again', async () => {
@@ -277,7 +277,7 @@ describe('SettingsDrawer · focus step', () => {
     await user.click(screen.getByRole('button', { name: 'close' }));
     act(() => drive.setOpen(true));
 
-    expect(await within(row('Telegram alerts')).findByText('a 20% move from now reaches liquidation')).toBeInTheDocument();
+    expect(await within(row('Telegram alerts')).findByText('a 20% price move would liquidate a leg')).toBeInTheDocument();
     expect(screen.queryByRole('radio', { name: 'Paste address' })).toBeNull();
   });
 

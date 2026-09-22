@@ -110,7 +110,7 @@ export function AssetsHome() {
      no priced leg in the CONNECTED account (a tracked address's history can
      name coins this account does not hold); 'unknown' when Gate's margin
      figures are not numbers, so the card says the estimate is missing rather
-     than claiming safety; 'far' when priced to 10x and 2% with no line. */
+     than claiming safety; 'far' when no price of its own liquidates it. */
   const lineFor = (base: string) => {
     if (liquidation === undefined) return null;
     if (liquidation === null) return 'unknown' as const;

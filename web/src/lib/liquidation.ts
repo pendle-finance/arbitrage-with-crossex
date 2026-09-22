@@ -35,9 +35,6 @@ export type WalletShift = Partial<Record<string, number>>;
 
 /** Gate's maintenance margin on a borrow: 10% of the liability. */
 const BORROW_MM = 0.1;
-/** No line is reported past a 10x pump or a 98% dump. */
-export const F_MAX = 10;
-export const F_MIN = 0.02;
 
 /** Gate's quick_cal_amount is a deduction, not a charge: on a live read of /crossex/rule/risk_limits on 2026-09-21, HYPE tier 4 and tier 5 both give $21,300 at $1M. */
 export interface MarginTier {
@@ -194,10 +191,14 @@ function marginModel(
 
 function crossings(g: (f: number) => number): { down: number | null; up: number | null } {
   if (g(1) <= 0) return { down: 1, up: 1 };
-  return {
-    down: g(F_MIN) <= 0 ? root(g, F_MIN, 1) : null,
-    up: g(F_MAX) <= 0 ? root(g, 1, F_MAX) : null,
-  };
+  return { down: g(0) <= 0 ? root(g, 0, 1) : null, up: upCrossing(g) };
+}
+
+function upCrossing(g: (f: number) => number): number | null {
+  for (let hi = 2; hi <= Number.MAX_SAFE_INTEGER; hi *= 2) {
+    if (g(hi) <= 0) return root(g, hi / 2, hi);
+  }
+  return null;
 }
 
 function lineAt(mine: Leg[], f: number, losingSign: 1 | -1): { line: LiquidationLine; exchange: string } {
@@ -211,8 +212,8 @@ function lineAt(mine: Leg[], f: number, losingSign: 1 | -1): { line: Liquidation
   };
 }
 
-/** The lines the model found, nearest first, and the coins it priced to
- * 10x and 2% without finding one. A coin in neither has no priced leg. */
+/** The lines the model found, nearest first, and the coins no price of
+ * their own liquidates. A coin in neither has no priced leg. */
 export interface LiquidationView {
   lines: LiquidationLine[];
   far: string[];

@@ -203,12 +203,17 @@ describe('liquidationLines', () => {
     expect(liquidationLines(account({ assets }), box())).toBeNull();
   });
 
-  it('lists a coin as far past a 10x pump, prices nothing with no positions, and is unknown without margin figures', () => {
+  it('prices a line past a 10x pump, lists a coin no price liquidates as far, prices nothing with no positions, and is unknown without margin figures', () => {
     const wide = box();
     wide.positions[1].symbol = 'BINANCE_FUTURE_ETH_USDT';
     wide.exposure[0].legs[1] = { ...wide.exposure[0].legs[1], symbol: 'BINANCE_FUTURE_ETH_USDT', exchange: 'BINANCE', quote: 'USDT' };
-    const far = liquidationLines(account({ marginBalance: '30000' }), wide);
+    const [pump] = lines(account({ marginBalance: '30000' }), wide);
+    expect(pump.move).toBeCloseTo(30000 / 2500 - 1, 4);
+    expect(pump.price).toBeCloseTo(2300 * 12, 0);
+    const flat = { ...wide, positions: wide.positions.map((p) => ({ ...p, maintenanceMargin: '0' })) };
+    const far = liquidationLines(account({ marginBalance: '30000' }), flat);
     expect(far).toEqual({ lines: [], far: ['ETH'], unknown: [] });
+    expect(liquidationSides(account({ marginBalance: '30000' }), flat, 'ETH')).toEqual({ down: null, up: null });
     expect(lineFor(far!, 'eth')).toBe('far');
     expect(lineFor(far!, 'HYPE')).toBeNull();
     expect(liquidationLines(account(), { positions: [], exposure: [] })).toEqual({ lines: [], far: [], unknown: [] });
@@ -309,9 +314,9 @@ describe('liquidationLines', () => {
     expect(eth.move).toBeCloseTo(4.13, 1);
     expect(eth.price).toBeCloseTo(2492.5 * 5.13, -1);
     expect(eth.venue).toBe('Hyperliquid');
-    // HYPE: 926.55 eaten at 0.06 (net) + 13.26 (legs) + 19.94 (borrow) = 33.3 per 1x → far past 10x.
-    expect(lineFor(view, 'HYPE')).toBe('far');
-    expect(view.far).toEqual(['HYPE']);
+    // HYPE: 926.55 eaten at 0.06 (net) + 13.26 (legs) + 19.94 (borrow) = 33.3 per 1x → +27.9.
+    expect((lineFor(view, 'HYPE') as LiquidationLine).move).toBeCloseTo(926.55 / 33.26, 0);
+    expect(view.far).toEqual([]);
     expect(view.lines[0].base).toBe('ETH');
   });
 });

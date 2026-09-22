@@ -255,7 +255,7 @@ describe('SetupPage · Telegram alerts', () => {
     expect(await screen.findByRole('button', { name: 'Set up ↗' })).toBeInTheDocument();
     const telegram = row('Telegram alerts');
     expect(within(telegram).getByText('Close to liquidation')).toBeInTheDocument();
-    expect(within(telegram).getByText('a 20% move from now reaches liquidation')).toBeInTheDocument();
+    expect(within(telegram).getByText('a 20% price move would liquidate a leg')).toBeInTheDocument();
     expect(within(telegram).getByText('Started paying interest')).toBeInTheDocument();
   });
 
@@ -306,12 +306,13 @@ describe('SetupPage · Telegram alerts', () => {
 
     expect(await screen.findByRole('switch', { name: 'Close to liquidation' })).toHaveAttribute('aria-checked', 'true');
     expect(screen.getByRole('switch', { name: 'Started paying interest' })).toHaveAttribute('aria-checked', 'true');
-    expect(screen.getByText('a 20% move from now reaches liquidation')).toBeInTheDocument();
-    expect(screen.getByText('a wallet starts paying borrow interest')).toBeInTheDocument();
+    expect(screen.getByText('a 20% price move would liquidate a leg')).toBeInTheDocument();
+    expect(screen.getAllByText('interest price').length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/borrowing starts at your/).length).toBeGreaterThan(0);
     expect(screen.getByText(/^Last synced \d+ s ago$/)).toBeInTheDocument();
     expect(
       screen.getByText(
-        'Alerts are based on the last update the terminal sent. A trade made outside the terminal counts after the next sync, within 5 min.',
+        "Alerts use the terminal's last sync, at most 5 min old. A trade made elsewhere counts after the next one.",
       ),
     ).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Skip/ })).toBeNull();

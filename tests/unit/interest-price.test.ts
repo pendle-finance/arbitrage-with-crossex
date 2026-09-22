@@ -59,8 +59,11 @@ describe('interestPrices on the owner account of 2026-09-18', () => {
     expect(Math.abs((up?.price ?? 0) - 19472)).toBeLessThanOrEqual(1);
   });
 
-  it('none within range: HYPE crosses no line from 0.02x to 10x', () => {
-    expect(interestPrices(account, positions, 'HYPE')).toEqual({ down: null, up: null });
+  it('HYPE never borrows on a fall, and the Hyperliquid wallet borrows past its free 10,000 on a 53.9x pump', () => {
+    const { down, up } = interestPrices(account, positions, 'HYPE');
+    expect(down).toBeNull();
+    expect(up?.wallet).toBe('HYPERLIQUID');
+    expect(up?.price ?? 0).toBeCloseTo(86.597 * (1 + (10_000 + 539.16436148) / 199.1455), 2);
   });
 
   it('reads the coin in any case', () => {
