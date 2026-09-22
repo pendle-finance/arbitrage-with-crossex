@@ -33,14 +33,14 @@ const INTEREST_FLOORS = [
 
 const LIQUIDATION_CAPTION = 'a 20% price move would liquidate a leg';
 
-const MATURITY_CAPTION = 'daily in the last 7 days before a pair settles, with where it can roll';
+const MATURITY_CAPTION = 'daily in the last 7 days before a pair settles, with the better maturities to roll to';
 
-const ROLLOVER_CAPTION = 'a later maturity pays a better rate, checked while this tab is open';
+const ROLLOVER_CAPTION = 'a later maturity pays a better APR';
 
 const interestCaption = (
   <>
-    borrowing starts at your{' '}
-    <HoverCard label="interest price" widthPx={280}>
+    a wallet's equity goes under its{' '}
+    <HoverCard label="floor" widthPx={280}>
       <div className="flex flex-col gap-1 text-xs">
         {INTEREST_FLOORS.map((floor) => (
           <div key={floor.wallet} className="num text-ink-200">
@@ -48,12 +48,13 @@ const interestCaption = (
           </div>
         ))}
       </div>
-    </HoverCard>
+    </HoverCard>{' '}
+    and it borrows
   </>
 );
 
 const CAVEAT =
-  "Alerts use the terminal's last sync, at most 5 min old. A trade made elsewhere counts after the next one.";
+  "Alerts use the terminal's last sync, at most 5 min old. A trade made outside the terminal reaches the alerts after the next sync. Maturity and roll-over alerts need the terminal open in your browser.";
 
 function alertSettings(info: TelegramInfo): AlertSettings {
   return {
@@ -67,7 +68,7 @@ function alertSettings(info: TelegramInfo): AlertSettings {
 function alertsLabel(settings: AlertSettings): string {
   const on = Object.values(settings).filter(Boolean).length;
   if (on === 4) return 'All on';
-  if (on === 0) return 'Alerts off';
+  if (on === 0) return 'None on';
   return `${on} of 4 on`;
 }
 
@@ -82,9 +83,9 @@ function syncFailure(info: TelegramInfo): string | null {
 function stateLine(info: TelegramInfo | undefined, now: number): { text: string | null; isWarn: boolean } {
   if (!info) return { text: null, isWarn: false };
   if (info.state === 'replaced') return { text: 'Connected on another terminal', isWarn: true };
-  if (info.state === 'removed') return { text: 'Removed on the Boros alerts page', isWarn: true };
+  if (info.state === 'removed') return { text: 'Removed on the Boros notifications page', isWarn: true };
   if (!info.connected) return { text: null, isWarn: false };
-  if (syncFailure(info)) return { text: 'last sync failed', isWarn: true };
+  if (syncFailure(info)) return { text: 'Last sync failed', isWarn: true };
   const synced = info.lastSyncAt === null ? '' : ` · synced ${fmtSyncAge(now - info.lastSyncAt)}`;
   return { text: `${alertsLabel(alertSettings(info))}${synced}`, isWarn: false };
 }
@@ -207,9 +208,9 @@ export function TelegramRow(p: SetupRowProps) {
           </button>
           {disconnect.isError && (
             <p role="alert" className="text-xs text-amber-300">
-              Could not reach the bot. Try again, or remove this terminal on the{' '}
+              Could not reach the bot. Try again, or use Remove terminal on the{' '}
               <Ext href={info?.alertsPageUrl ?? 'https://boros-bot-notification.pendle.finance/alerts'}>
-                Boros alerts page
+                Boros notifications page
               </Ext>
               .
             </p>
@@ -223,7 +224,7 @@ export function TelegramRow(p: SetupRowProps) {
     <>
       <div className="flex items-center gap-2 text-xs text-ink-300">
         <Spinner />
-        <span>Waiting for you to confirm on the Boros alerts page</span>
+        <span>Waiting for you to confirm on the Boros notifications page</span>
       </div>
       {pageUrl && <Ext href={pageUrl}>Open the page again ↗</Ext>}
       <button
@@ -239,22 +240,22 @@ export function TelegramRow(p: SetupRowProps) {
 
   const idleBody = (
     <>
-      <div className="flex flex-col gap-1.5 text-xs">
-        <div className="flex gap-3">
-          <span className="w-40 shrink-0 text-ink-100">Close to liquidation</span>
-          <span className="num text-ink-400">{LIQUIDATION_CAPTION}</span>
+      <div className="flex flex-col gap-2 text-xs">
+        <div className="flex flex-col gap-0.5">
+          <span className="text-ink-100">Close to liquidation</span>
+          <span className="num text-ink-500">{LIQUIDATION_CAPTION}</span>
         </div>
-        <div className="flex gap-3">
-          <span className="w-40 shrink-0 text-ink-100">Started paying interest</span>
-          <span className="text-ink-400">{interestCaption}</span>
+        <div className="flex flex-col gap-0.5">
+          <span className="text-ink-100">Started paying interest</span>
+          <span className="text-ink-500">{interestCaption}</span>
         </div>
-        <div className="flex gap-3">
-          <span className="w-40 shrink-0 text-ink-100">Close to maturity</span>
-          <span className="num text-ink-400">{MATURITY_CAPTION}</span>
+        <div className="flex flex-col gap-0.5">
+          <span className="text-ink-100">Close to maturity</span>
+          <span className="num text-ink-500">{MATURITY_CAPTION}</span>
         </div>
-        <div className="flex gap-3">
-          <span className="w-40 shrink-0 text-ink-100">Roll-over opportunity</span>
-          <span className="text-ink-400">{ROLLOVER_CAPTION}</span>
+        <div className="flex flex-col gap-0.5">
+          <span className="text-ink-100">Roll-over opportunity</span>
+          <span className="text-ink-500">{ROLLOVER_CAPTION}</span>
         </div>
       </div>
       {phase === 'expired' && <p className="text-xs text-amber-300">Link expired. Set up again.</p>}
@@ -283,7 +284,7 @@ export function TelegramRow(p: SetupRowProps) {
         )
       }
       setupAction={setupButton}
-      skipConsequence="Without Telegram alerts nothing warns you near liquidation or when interest starts."
+      skipConsequence="Without Telegram alerts nothing warns you near liquidation, when interest starts, or before a pair matures."
     >
       {info && isConnected
         ? connectedBody(
