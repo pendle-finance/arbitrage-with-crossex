@@ -13,7 +13,7 @@ export interface TriggerRoll {
   longVenue: string;
   shortVenue: string;
   maturity: number;
-  to: { maturity: number; apr: number; currentApr: number } | null;
+  targets: Array<{ maturity: number; apr: number; currentApr: number }>;
 }
 
 export interface TriggerCoin {

@@ -13,6 +13,10 @@ const SIGNAL: RollSignal = {
   shortVenue: 'HYPERLIQUID',
   maturity: 1790294400,
   opportunity: { maturity: 1793318400, rate: 0.124, current: 0.091, currentMaturity: 1790294400 },
+  opportunities: [
+    { maturity: 1793318400, rate: 0.124, current: 0.091, currentMaturity: 1790294400 },
+    { maturity: 1795737600, rate: 0.118, current: 0.091, currentMaturity: 1790294400 },
+  ],
 };
 
 function Publisher() {
@@ -50,7 +54,10 @@ describe('roll signals reach the terminal server', () => {
             longVenue: 'GATE',
             shortVenue: 'HYPERLIQUID',
             maturity: 1790294400,
-            to: { maturity: 1793318400, apr: 0.124, currentApr: 0.091 },
+            targets: [
+              { maturity: 1793318400, apr: 0.124, currentApr: 0.091 },
+              { maturity: 1795737600, apr: 0.118, currentApr: 0.091 },
+            ],
           },
         ],
       },

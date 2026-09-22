@@ -72,7 +72,7 @@ function rollSignal(): RollSignalInput {
     longVenue: 'GATE',
     shortVenue: 'HYPERLIQUID',
     maturity: nowSec + 30 * 86_400,
-    to: { maturity: nowSec + 60 * 86_400, apr: 0.124, currentApr: 0.091 },
+    targets: [{ maturity: nowSec + 60 * 86_400, apr: 0.124, currentApr: 0.091 }],
   };
 }
 
@@ -175,7 +175,7 @@ describe('the trigger sync', () => {
     expect(stub.puts()).toHaveLength(2);
     expect(rollsOf(stub.puts()[0])).toEqual([]);
     expect(rollsOf(stub.puts()[1])).toEqual([
-      { longVenue: 'GATE', shortVenue: 'HYPERLIQUID', maturity: signals[0].maturity, to: signals[0].to },
+      { longVenue: 'GATE', shortVenue: 'HYPERLIQUID', maturity: signals[0].maturity, targets: signals[0].targets },
     ]);
   });
 
@@ -214,10 +214,10 @@ describe('the trigger sync', () => {
     await vi.waitFor(() => expect(stub.puts()).toHaveLength(3));
 
     expect(rollsOf(stub.puts()[1])).toEqual([
-      { longVenue: 'GATE', shortVenue: 'HYPERLIQUID', maturity: signal.maturity, to: signal.to },
+      { longVenue: 'GATE', shortVenue: 'HYPERLIQUID', maturity: signal.maturity, targets: signal.targets },
     ]);
     expect(rollsOf(stub.puts()[2])).toEqual([
-      { longVenue: 'GATE', shortVenue: 'HYPERLIQUID', maturity: signal.maturity, to: null },
+      { longVenue: 'GATE', shortVenue: 'HYPERLIQUID', maturity: signal.maturity, targets: [] },
     ]);
   });
 

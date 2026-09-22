@@ -40,22 +40,31 @@ function parseSettings(body: unknown): Partial<TelegramSettings> {
   return settings;
 }
 
-function parseRollTarget(raw: unknown, maturity: number): RollSignalInput['to'] {
-  if (raw === null || raw === undefined) return null;
-  if (typeof raw !== 'object') throw new CoreError('to must be null or an object.', 'validation');
-  const { maturity: to, apr, currentApr } = raw as Record<string, unknown>;
-  if (typeof to !== 'number' || !Number.isInteger(to) || to <= maturity) {
-    throw new CoreError('to.maturity must be a whole number of seconds after maturity.', 'validation');
-  }
-  if (!Number.isFinite(apr) || !Number.isFinite(currentApr)) {
-    throw new CoreError('to.apr and to.currentApr must be numbers.', 'validation');
-  }
-  return { maturity: to, apr: apr as number, currentApr: currentApr as number };
+const TARGETS_MAX = 8;
+
+function parseRollTargets(raw: unknown, maturity: number): RollSignalInput['targets'] {
+  if (raw === undefined) return [];
+  if (!Array.isArray(raw)) throw new CoreError('targets must be a list.', 'validation');
+  if (raw.length > TARGETS_MAX) throw new CoreError(`targets holds at most ${TARGETS_MAX} maturities.`, 'validation');
+  const seen = new Set<number>();
+  return raw.map((item) => {
+    if (typeof item !== 'object' || item === null) throw new CoreError('Every target must be an object.', 'validation');
+    const { maturity: to, apr, currentApr } = item as Record<string, unknown>;
+    if (typeof to !== 'number' || !Number.isInteger(to) || to <= maturity) {
+      throw new CoreError('targets[].maturity must be a whole number of seconds after maturity.', 'validation');
+    }
+    if (seen.has(to)) throw new CoreError('targets lists one maturity twice.', 'validation');
+    seen.add(to);
+    if (!Number.isFinite(apr) || !Number.isFinite(currentApr)) {
+      throw new CoreError('targets[].apr and targets[].currentApr must be numbers.', 'validation');
+    }
+    return { maturity: to, apr: apr as number, currentApr: currentApr as number };
+  });
 }
 
 function parseRollSignal(raw: unknown): RollSignalInput {
   if (typeof raw !== 'object' || raw === null) throw new CoreError('Every roll signal must be an object.', 'validation');
-  const { coin, longVenue, shortVenue, maturity, to } = raw as Record<string, unknown>;
+  const { coin, longVenue, shortVenue, maturity, targets } = raw as Record<string, unknown>;
   const names = [coin, longVenue, shortVenue];
   if (names.some((name) => typeof name !== 'string' || name.trim() === '')) {
     throw new CoreError('Every roll signal needs a coin, a longVenue and a shortVenue.', 'validation');
@@ -68,7 +77,7 @@ function parseRollSignal(raw: unknown): RollSignalInput {
     longVenue: (longVenue as string).toUpperCase(),
     shortVenue: (shortVenue as string).toUpperCase(),
     maturity,
-    to: parseRollTarget(to, maturity),
+    targets: parseRollTargets(targets, maturity),
   };
 }
 

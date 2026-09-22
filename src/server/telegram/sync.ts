@@ -60,12 +60,17 @@ export async function readTriggerCoins(deps: { cache: TtlCache; getClients: () =
   );
 }
 
-function parseRollTarget(raw: unknown): TriggerRoll['to'] {
-  if (typeof raw !== 'object' || raw === null) return null;
-  const { maturity, apr, currentApr } = raw as Record<string, unknown>;
-  if (typeof maturity !== 'number' || !Number.isInteger(maturity)) return null;
-  if (typeof apr !== 'number' || typeof currentApr !== 'number') return null;
-  return { maturity, apr, currentApr };
+function parseRollTargets(raw: unknown): TriggerRoll['targets'] {
+  if (!Array.isArray(raw)) return [];
+  const targets: TriggerRoll['targets'] = [];
+  for (const item of raw) {
+    if (typeof item !== 'object' || item === null) continue;
+    const { maturity, apr, currentApr } = item as Record<string, unknown>;
+    if (typeof maturity !== 'number' || !Number.isInteger(maturity)) continue;
+    if (typeof apr !== 'number' || typeof currentApr !== 'number') continue;
+    targets.push({ maturity, apr, currentApr });
+  }
+  return targets;
 }
 
 function parseRollSignals(raw: unknown): RollSignalInput[] | null {
@@ -73,10 +78,10 @@ function parseRollSignals(raw: unknown): RollSignalInput[] | null {
   const signals: RollSignalInput[] = [];
   for (const item of raw) {
     if (typeof item !== 'object' || item === null) return null;
-    const { coin, longVenue, shortVenue, maturity, to } = item as Record<string, unknown>;
+    const { coin, longVenue, shortVenue, maturity, targets } = item as Record<string, unknown>;
     if (typeof coin !== 'string' || typeof longVenue !== 'string' || typeof shortVenue !== 'string') return null;
     if (typeof maturity !== 'number' || !Number.isInteger(maturity)) return null;
-    signals.push({ coin, longVenue, shortVenue, maturity, to: parseRollTarget(to) });
+    signals.push({ coin, longVenue, shortVenue, maturity, targets: parseRollTargets(targets) });
   }
   return signals;
 }
@@ -98,8 +103,9 @@ function rollKeys(signals: RollSignalInput[]): Set<string> {
   for (const signal of signals) {
     const coin = signal.coin.toUpperCase();
     keys.add(`${coin}:${signal.maturity}`);
-    if (signal.to === null) continue;
-    keys.add(`${coin}:${signal.longVenue}-${signal.shortVenue}:${signal.maturity}:${signal.to.maturity}`);
+    for (const target of signal.targets) {
+      keys.add(`${coin}:${signal.longVenue}-${signal.shortVenue}:${signal.maturity}:${target.maturity}`);
+    }
   }
   return keys;
 }
@@ -121,7 +127,7 @@ export function createTelegramSync(opts: TelegramSyncOptions): TelegramSync {
     return rollSignals
       .filter((s) => s.coin.toUpperCase() === coin.toUpperCase() && s.maturity * 1_000 > at)
       .slice(0, MAX_ROLLS_PER_COIN)
-      .map((s) => ({ longVenue: s.longVenue, shortVenue: s.shortVenue, maturity: s.maturity, to: fresh ? s.to : null }));
+      .map((s) => ({ longVenue: s.longVenue, shortVenue: s.shortVenue, maturity: s.maturity, targets: fresh ? s.targets : [] }));
   };
 
   const syncOnce = async (): Promise<void> => {
@@ -173,7 +179,7 @@ export function createTelegramSync(opts: TelegramSyncOptions): TelegramSync {
         longVenue: s.longVenue,
         shortVenue: s.shortVenue,
         maturity: s.maturity,
-        to: s.to,
+        targets: s.targets,
       }));
       const keys = rollKeys(next);
       const gained = [...keys].some((key) => !rollKeySet.has(key));

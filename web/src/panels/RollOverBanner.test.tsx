@@ -21,6 +21,7 @@ const signal = (asset: string, days: number, opportunity: RollSignal['opportunit
   shortVenue: 'HYPERLIQUID',
   maturity: NOW() + days * DAY,
   opportunity,
+  opportunities: opportunity ? [opportunity] : [],
 });
 
 function Publish({ signals }: { signals: RollSignal[] }) {
