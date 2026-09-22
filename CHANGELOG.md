@@ -6,13 +6,21 @@ in-app update check compares against).
 ## 1.7.1 — 2026-09-22
 
 TLDR: Telegram alerts. Connect this terminal to the Boros alerts bot and it warns you before a
-leg liquidates or a wallet starts paying interest. The liquidation line is the real price,
-however far away, read from Gate's real margin table, so it is right on a large account.
+leg liquidates, when a wallet starts paying interest, when a pair is a week from maturity, and
+when a later maturity pays a better APR. The liquidation line is the real price, however far
+away, read from Gate's real margin table, so it is right on a large account.
 
 - **Telegram alerts.** Settings has a Set up button. It opens the Boros alerts page, you confirm
-  the terminal there, and the bot watches your legs from then on. Two alerts: a leg nearing
-  liquidation, and a wallet that starts paying interest. Each names the coin, the leg or the
-  wallet, and the price, so you know which side to fix. Turn either alert off in Settings.
+  the terminal there, and the bot watches your legs from then on. Four alerts: a leg nearing
+  liquidation, a wallet that starts paying interest, a pair within 7 days of maturity, and a
+  roll-over opportunity where a later maturity pays a better APR after fees. Each names the
+  coin, the leg or the wallet, and the price or the maturity, so you know which side to fix.
+  Turn any alert off in Settings. The terminal checks roll targets itself every 5 minutes, so
+  the alerts work with the browser closed.
+- **Every 1.7.1 setting reads the same way.** The Telegram row closes with Close, like the other
+  rows. The interest caption says when a wallet starts borrowing, with the exact floors in a
+  hover. The sync note sits behind "Last synced". A stale price says how long it has been
+  missing instead of a clock time.
 - **The liquidation line reads Gate's margin table.** Gate raises the margin rate in steps as a
   position grows, so a $400k HYPE leg is liquidated nearer than a flat rate says. The app now
   reads the table per coin and uses the rate for your size. On a $400k account at 3x that moves

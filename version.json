@@ -1,7 +1,7 @@
 {
   "version": "1.7.1",
   "highlights": [
-    "Telegram alerts: connect this terminal to the Boros alerts bot and it warns you before a leg liquidates or a wallet starts paying interest",
+    "Telegram alerts: connect this terminal to the Boros alerts bot and it warns you before a leg liquidates, when a wallet starts paying interest, a week before a pair matures, and when a later maturity pays a better APR",
     "The liquidation price is the real one, however far away, and it reads Gate's margin table so it is right on a large account",
     "A coin Gate stops pricing says so, instead of quietly dropping off the card",
     "A setup checklist on first run, and only coins both venues support",
