@@ -38,7 +38,7 @@ describe('settings after an update', () => {
 
     const drawer = await screen.findByRole('dialog', { name: 'Settings' });
     const row = (name: string) => within(drawer).getByRole('region', { name });
-    expect(within(row('Telegram alerts')).getByRole('button', { name: 'Done' })).toBeInTheDocument();
+    expect(within(row('Telegram alerts')).getByRole('button', { name: 'Close' })).toBeInTheDocument();
     expect(within(row('Boros wallet')).getByRole('button', { name: 'Edit' })).toBeInTheDocument();
     expect(localStorage.getItem(SETUP_SHOWN_KEY)).toBe('true');
   });

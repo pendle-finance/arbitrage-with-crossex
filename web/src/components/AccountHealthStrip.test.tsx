@@ -1,11 +1,13 @@
 import { cleanup, screen } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CrossexPosition, PositionsResponse } from '../api/types';
 import { accountBodies, accountHandler, baseHandlers, makeCrossexPosition } from '../test/fixtures';
 import { env, server } from '../test/server';
 import { renderWithClient } from '../test/utils';
 import { AccountHealthStrip } from './AccountHealthStrip';
+
+vi.mock('../lib/useNow', () => ({ useNow: () => new Date(2026, 8, 21, 14, 32).getTime() + 4 * 3_600_000 + 12 * 60_000 }));
 
 const STALE_AT = new Date(2026, 8, 21, 14, 32).getTime();
 
@@ -62,7 +64,7 @@ describe('the account strip when Gate stops sending a mark', () => {
 
     expect(
       await screen.findByTitle(
-        /· Nearest liquidation: ETH\..* HYPE\. No liquidation estimate: Gate has not sent a price for the Hyperliquid leg since 14:32\.$/,
+        /· Nearest liquidation: ETH\..* HYPE\. No liquidation estimate: Gate has not sent a price for the Hyperliquid leg for 4h 12m\.$/,
       ),
     ).toBeInTheDocument();
   });
@@ -72,7 +74,7 @@ describe('the account strip when Gate stops sending a mark', () => {
 
     expect(
       await screen.findByTitle(
-        /· ETH\. No liquidation estimate: Gate has not sent a price for the Hyperliquid leg since 14:32\.$/,
+        /· ETH\. No liquidation estimate: Gate has not sent a price for the Hyperliquid leg for 4h 12m\.$/,
       ),
     ).toBeInTheDocument();
     expect(screen.queryByTitle(/Nearest liquidation/)).toBeNull();

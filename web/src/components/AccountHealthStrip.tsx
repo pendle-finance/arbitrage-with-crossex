@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import { useAccount, usePositions } from '../api/queries';
 import { fmtUsd } from '../lib/fmt';
 import { describeLine, liquidationLines, unknownLabel } from '../lib/liquidation';
+import { useNow } from '../lib/useNow';
 import { MarginBreakdown } from './MarginDonut';
 import { Skeleton } from './Skeleton';
 
@@ -9,6 +10,7 @@ import { Skeleton } from './Skeleton';
  * borrow pill). (Account uPnL used to sit here; on a delta-neutral book it is
  * noise — the asset cards carry the PnL that means something.) */
 export function AccountHealthStrip({ children }: { children?: ReactNode }) {
+  const now = useNow(60_000);
   const { data: acc } = useAccount();
   const { data: positions } = usePositions();
   if (!acc) {
@@ -26,7 +28,7 @@ export function AccountHealthStrip({ children }: { children?: ReactNode }) {
   // the exact figures are one hover away on the Balances tab.
   const view = positions ? liquidationLines(acc, positions, {}, positions.marginTiers) : null;
   const stale = (view?.unknown ?? []).flatMap((u) =>
-    u.sinceMs === null ? [] : [`${u.base}. ${unknownLabel({ venue: u.venue, sinceMs: u.sinceMs })}`],
+    u.sinceMs === null ? [] : [`${u.base}. ${unknownLabel({ venue: u.venue, sinceMs: u.sinceMs }, now)}`],
   );
   const nearest = view?.lines[0] ?? null;
   const parts = nearest === null

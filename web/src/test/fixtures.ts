@@ -355,6 +355,11 @@ export function telegramInfo(over: Partial<TelegramInfo> = {}): TelegramInfo {
     settings: null,
     lastSyncAt: null,
     lastSyncError: null,
+    floors: [
+      { wallet: 'USDT', coin: 'USDT', floorUsd: 0 },
+      { wallet: 'HYPERLIQUID', coin: 'USDC', floorUsd: -10_000 },
+      { wallet: 'LIGHTER', coin: 'USDC', floorUsd: 0 },
+    ],
     ...over,
   };
 }

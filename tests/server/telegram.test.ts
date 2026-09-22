@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { interestFloors } from '../../src/core/alerts/interestPrice';
 import * as fs from 'node:fs';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
@@ -74,6 +75,8 @@ function holdChecks(bot: Bot): () => void {
   return release;
 }
 
+const FLOORS = interestFloors();
+
 const NONE = {
   connected: false,
   state: 'none',
@@ -81,6 +84,7 @@ const NONE = {
   lastSyncAt: null,
   lastSyncError: null,
   alertsPageUrl: `${BOT_URL}/alerts`,
+  floors: FLOORS,
 };
 
 function boot(bot: Bot = makeBot()) {
@@ -402,6 +406,7 @@ describe('Telegram link', () => {
       lastSyncAt: T0,
       lastSyncError: null,
       alertsPageUrl: `${BOT_URL}/alerts`,
+      floors: FLOORS,
     });
     expect(readTelegramKey(dataDir)).toEqual(before);
     expect(bot.to('PUT', '/terminal/triggers')[2].headers['x-terminal-key']).toBe(before.key);
@@ -497,6 +502,7 @@ describe('Telegram link', () => {
       lastSyncAt: T0,
       lastSyncError: null,
       alertsPageUrl: `${BOT_URL}/alerts`,
+      floors: FLOORS,
     });
   });
 
@@ -643,6 +649,7 @@ describe('Telegram settings', () => {
       lastSyncAt: T0,
       lastSyncError: null,
       alertsPageUrl: `${BOT_URL}/alerts`,
+      floors: FLOORS,
     });
   });
 
@@ -689,6 +696,7 @@ describe('Telegram settings', () => {
       lastSyncAt: null,
       lastSyncError: null,
       alertsPageUrl: `${BOT_URL}/alerts`,
+      floors: FLOORS,
     });
   });
 

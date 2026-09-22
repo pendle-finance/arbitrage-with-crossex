@@ -1,5 +1,5 @@
 import type { CrossexAccount, CrossexPosition, PositionsResponse } from '../api/types';
-import { fmtClock, fmtUsd, num, prettyVenue } from './fmt';
+import { fmtAge, fmtUsd, num, prettyVenue } from './fmt';
 
 /**
  * Where the account liquidates if ONE coin moves and every other coin holds
@@ -307,6 +307,6 @@ export function describeLine(line: LiquidationLine): string {
   return `${lead} ${rule}${leg}`;
 }
 
-export function unknownLabel(unknown: { venue: string; sinceMs: number }): string {
-  return `No liquidation estimate: Gate has not sent a price for the ${unknown.venue} leg since ${fmtClock(unknown.sinceMs)}.`;
+export function unknownLabel(unknown: { venue: string; sinceMs: number }, nowMs: number): string {
+  return `No liquidation estimate: Gate has not sent a price for the ${unknown.venue} leg for ${fmtAge(nowMs - unknown.sinceMs)}.`;
 }

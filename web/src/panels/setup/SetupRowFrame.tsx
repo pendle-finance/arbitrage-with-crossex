@@ -80,8 +80,11 @@ export function SetupRowFrame({
         </span>
         <span className="shrink-0 text-sm font-medium text-ink-100">{title}</span>
         {line && (
-          <span className={`num min-w-0 truncate text-xs ${isLineWarn ? 'text-amber-400' : 'text-ink-400'}`}>
-            {line}
+          <span className={`num min-w-0 text-xs ${isLineWarn ? 'text-amber-400' : 'text-ink-400'}`}>
+            {line
+              .split(' · ')
+              .map((part) => part.replace(/ /g, '\u00a0'))
+              .join(' · ')}
           </span>
         )}
         {isSettings && <span className="ml-auto shrink-0">{action}</span>}

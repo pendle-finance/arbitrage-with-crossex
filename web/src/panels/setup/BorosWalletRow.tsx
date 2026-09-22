@@ -18,7 +18,7 @@ const isSameAddress = (a: string, b: string): boolean => a.toLowerCase() === b.t
 
 function walletLine(root: string | null, isExpired: boolean, tracked: string | null): string | null {
   if (root && isExpired) return 'Approval expired';
-  if (root) return `${short(root)} · trading enabled${tracked && isSameAddress(root, tracked) ? ' · tracked' : ''}`;
+  if (root) return `${short(root)} · can trade${tracked && isSameAddress(root, tracked) ? ' · tracked' : ''}`;
   if (tracked) return `${short(tracked)} · tracked`;
   return null;
 }

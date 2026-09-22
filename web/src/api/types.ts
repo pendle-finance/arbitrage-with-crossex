@@ -1547,6 +1547,12 @@ export interface AssetViewResponse {
   warnings: string[];
 }
 
+export interface InterestFloor {
+  wallet: 'USDT' | 'HYPERLIQUID' | 'LIGHTER';
+  coin: string;
+  floorUsd: number;
+}
+
 export interface TelegramInfo {
   connected: boolean;
   state: 'none' | 'connected' | 'replaced' | 'removed';
@@ -1554,6 +1560,7 @@ export interface TelegramInfo {
   lastSyncAt: number | null;
   lastSyncError: { at: number; message: string } | null;
   alertsPageUrl?: string;
+  floors?: InterestFloor[];
 }
 
 export interface TelegramLinkStart {

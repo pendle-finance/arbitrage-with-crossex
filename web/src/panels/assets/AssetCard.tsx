@@ -137,16 +137,17 @@ type StaleLeg = { base: string; venue: string; sinceMs: number };
  * losing Hyperliquid leg drives its USDC wallet into a borrow, and Gate
  * charges maintenance margin on that. */
 function LiquidationChip({ line, base }: { line: LiquidationLine | StaleLeg | 'far' | 'unknown'; base: string }) {
+  const now = useNow(60_000);
   if (typeof line !== 'string' && 'sinceMs' in line) {
     return (
-      <HoverCard icon={false} underline={false} widthPx={320} label={<Chip sm>No liquidation estimate</Chip>}>
-        {unknownLabel(line)}
+      <HoverCard underline={false} widthPx={320} label={<Chip sm>No liquidation estimate</Chip>}>
+        {unknownLabel(line, now)}
       </HoverCard>
     );
   }
   if (line === 'unknown') {
     return (
-      <HoverCard icon={false} underline={false} widthPx={320} label={<Chip sm>No liquidation estimate</Chip>}>
+      <HoverCard underline={false} widthPx={320} label={<Chip sm>No liquidation estimate</Chip>}>
         Gate did not send the account&apos;s margin figures.
       </HoverCard>
     );
@@ -154,7 +155,6 @@ function LiquidationChip({ line, base }: { line: LiquidationLine | StaleLeg | 'f
   if (line === 'far') {
     return (
       <HoverCard
-        icon={false}
         underline={false}
         widthPx={320}
         label={<Chip sm>{`No ${base} price liquidates the account`}</Chip>}
@@ -166,7 +166,6 @@ function LiquidationChip({ line, base }: { line: LiquidationLine | StaleLeg | 'f
   const near = Math.abs(line.move);
   return (
     <HoverCard
-      icon={false}
       underline={false}
       widthPx={320}
       label={
