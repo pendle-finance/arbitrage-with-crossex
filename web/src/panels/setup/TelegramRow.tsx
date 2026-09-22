@@ -33,7 +33,7 @@ const INTEREST_FLOORS = [
 
 const LIQUIDATION_CAPTION = 'a 20% price move would liquidate a leg';
 
-const MATURITY_CAPTION = '7 days before a pair settles';
+const MATURITY_CAPTION = '7 days and 1 day before a pair settles';
 
 const ROLLOVER_CAPTION = 'a later maturity pays a better rate, checked while this tab is open';
 
