@@ -63,7 +63,8 @@ account.
 - **A close-only market says so.** The order ticket marks a close-only market and asks you to
   tick Reduce-only before it sends.
 - **Your tracking start date has a sensible default.** Funding and interest are counted from
-  when you started, not from the beginning of the account.
+  when you started, not from the beginning of the account. Click the date to change it. The
+  arrow beside it has "All time" and "Use default".
 - **Boros payment history is no longer capped.** The full settlement history loads.
 - **Lighter reads on the Boros API cost less.** The order book is read every 90 seconds instead
   of 60, fill history and the settlement head every 60 instead of 30, and a hidden ticket stops

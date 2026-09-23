@@ -1,10 +1,17 @@
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it, vi } from 'vitest';
-import { SinceChip } from './SinceChip';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { ALL_TIME_SEC, SinceChip } from './SinceChip';
 
 const DEFAULT_SEC = Date.UTC(2026, 5, 23, 12, 0, 0) / 1000;
 const MARCH_SEC = Date.UTC(2026, 2, 1, 12, 0, 0) / 1000;
+
+const dateField = () => screen.getByLabelText('Count HYPE PnL from');
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  delete (HTMLInputElement.prototype as { showPicker?: unknown }).showPicker;
+});
 
 describe('SinceChip', () => {
   it('reads Since 23 Jun 2026 with the calendar icon on its left, default date', () => {
@@ -13,136 +20,106 @@ describe('SinceChip', () => {
     expect(chip.firstElementChild?.tagName).toBe('svg');
     // The same 30px control as the waterfall toggle, not a small chip.
     expect(chip.className).toContain('!h-[30px]');
+    expect(dateField()).toHaveValue('2026-06-23');
   });
 
-  it('shows only Count HYPE PnL from and a date input, popover at default', async () => {
+  it('opens the date picker in one click', async () => {
+    const showPicker = vi.fn();
+    (HTMLInputElement.prototype as { showPicker?: unknown }).showPicker = showPicker;
     render(<SinceChip base="HYPE" storedSec={undefined} defaultSec={DEFAULT_SEC} onChange={vi.fn()} />);
     await userEvent.click(screen.getByRole('button', { name: /Since 23 Jun 2026/ }));
-    const card = await screen.findByRole('tooltip');
-    expect(within(card).getByLabelText('Count HYPE PnL from')).toHaveValue('2026-06-23');
-    expect(within(card).queryByText(/Default/)).toBeNull();
-    expect(within(card).queryByText(/23 Jun 2026/)).toBeNull();
-    expect(within(card).queryAllByRole('button')).toHaveLength(0);
+    expect(showPicker).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('tooltip')).toBeNull();
   });
 
-  it('turns the chip text blue and shows Use default with the first position date, moved date', async () => {
-    render(<SinceChip base="HYPE" storedSec={MARCH_SEC} defaultSec={DEFAULT_SEC} onChange={vi.fn()} />);
-    const chip = screen.getByRole('button', { name: /Since 1 Mar 2026/ });
-    expect(chip.className).toContain('!text-info');
-
-    await userEvent.click(chip);
-    const card = await screen.findByRole('tooltip');
-    expect(within(card).getByRole('button', { name: 'Use default (first position, 23 Jun 2026)' })).toBeInTheDocument();
+  it('focuses the field when the browser has no showPicker', async () => {
+    render(<SinceChip base="HYPE" storedSec={undefined} defaultSec={DEFAULT_SEC} onChange={vi.fn()} />);
+    await userEvent.click(screen.getByRole('button', { name: /Since 23 Jun 2026/ }));
+    expect(dateField()).toHaveFocus();
   });
 
-  it('removes the stored date and reads Since 23 Jun 2026 again, use default resets', async () => {
+  it('saves a picked date', () => {
     const onChange = vi.fn();
-    const { rerender } = render(
-      <SinceChip base="HYPE" storedSec={MARCH_SEC} defaultSec={DEFAULT_SEC} onChange={onChange} />,
-    );
-    await userEvent.click(screen.getByRole('button', { name: /Since 1 Mar 2026/ }));
+    render(<SinceChip base="HYPE" storedSec={undefined} defaultSec={DEFAULT_SEC} onChange={onChange} />);
+    fireEvent.change(dateField(), { target: { value: '2026-07-01' } });
+    expect(onChange).toHaveBeenCalledWith(Math.floor(new Date('2026-07-01T00:00').getTime() / 1000));
+  });
+
+  it('offers All time from the arrow at the default date', async () => {
+    const onChange = vi.fn();
+    render(<SinceChip base="HYPE" storedSec={undefined} defaultSec={DEFAULT_SEC} onChange={onChange} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Date options' }));
     const card = await screen.findByRole('tooltip');
+    expect(within(card).queryByRole('button', { name: /Use default/ })).toBeNull();
+    await userEvent.click(within(card).getByRole('button', { name: 'All time' }));
+    expect(onChange).toHaveBeenCalledWith(ALL_TIME_SEC);
+  });
+
+  it('reads All time for a stored 0, and offers Use default', async () => {
+    const onChange = vi.fn();
+    render(<SinceChip base="HYPE" storedSec={ALL_TIME_SEC} defaultSec={DEFAULT_SEC} onChange={onChange} />);
+    const chip = screen.getByRole('button', { name: /^All time$/ });
+    expect(chip.className).toContain('!text-info');
+    expect(dateField()).toHaveValue('');
+    await userEvent.click(screen.getByRole('button', { name: 'Date options' }));
+    const card = await screen.findByRole('tooltip');
+    expect(within(card).queryByRole('button', { name: 'All time' })).toBeNull();
     await userEvent.click(within(card).getByRole('button', { name: 'Use default (first position, 23 Jun 2026)' }));
     expect(onChange).toHaveBeenCalledWith(undefined);
-
-    rerender(<SinceChip base="HYPE" storedSec={undefined} defaultSec={DEFAULT_SEC} onChange={onChange} />);
-    const chip = screen.getByRole('button', { name: /Since 23 Jun 2026/ });
-    expect(chip.className).not.toContain('!text-info');
   });
 
-  it('opens on click, stays open when the pointer leaves, and shuts on a click outside', async () => {
-    render(
-      <>
-        <SinceChip base="HYPE" storedSec={undefined} defaultSec={DEFAULT_SEC} onChange={vi.fn()} />
-        <p>outside</p>
-      </>,
-    );
-    const chip = screen.getByRole('button', { name: /Since 23 Jun 2026/ });
-    await userEvent.hover(chip);
-    expect(screen.queryByRole('tooltip')).toBeNull();
-    await userEvent.click(chip);
-    await screen.findByRole('tooltip');
-    await userEvent.unhover(chip);
-    expect(screen.getByRole('tooltip')).toBeInTheDocument();
-    await userEvent.click(screen.getByText('outside'));
-    expect(screen.queryByRole('tooltip')).toBeNull();
+  it('turns the chip blue and offers both resets on a moved date', async () => {
+    render(<SinceChip base="HYPE" storedSec={MARCH_SEC} defaultSec={DEFAULT_SEC} onChange={vi.fn()} />);
+    expect(screen.getByRole('button', { name: /Since 1 Mar 2026/ }).className).toContain('!text-info');
+    await userEvent.click(screen.getByRole('button', { name: 'Date options' }));
+    const card = await screen.findByRole('tooltip');
+    expect(within(card).getAllByRole('button').map((b) => b.textContent)).toEqual([
+      'All time',
+      'Use default (first position, 23 Jun 2026)',
+    ]);
   });
 
-  it('reads All time when defaultSinceSec is null, no position yet', () => {
+  it('reads All time with no arrow when there is no first position yet', () => {
     render(<SinceChip base="HYPE" storedSec={undefined} defaultSec={null} onChange={vi.fn()} />);
     expect(screen.getByRole('button', { name: 'All time' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Date options' })).toBeNull();
   });
 
-  it('shows no Default hover and no stray "All time" wording in the open popover when there is no first position', async () => {
-    render(<SinceChip base="HYPE" storedSec={undefined} defaultSec={null} onChange={vi.fn()} />);
-    await userEvent.click(screen.getByRole('button', { name: 'All time' }));
-    const card = await screen.findByRole('tooltip');
-    expect(within(card).getByLabelText('Count HYPE PnL from')).toHaveValue('');
-    expect(within(card).queryByText(/Default/)).toBeNull();
-    expect(within(card).queryByText(/All time/)).toBeNull();
-    expect(within(card).queryAllByRole('button')).toHaveLength(0);
-    expect(screen.queryByText('Your first CrossEx position')).toBeNull();
-  });
-
-  it('keeps the default start, not local midnight, when the default day is picked again', async () => {
+  it('keeps the default start, not local midnight, when the default day is picked again', () => {
     const onChange = vi.fn();
     render(<SinceChip base="HYPE" storedSec={MARCH_SEC} defaultSec={DEFAULT_SEC} onChange={onChange} />);
-    await userEvent.click(screen.getByRole('button', { name: /Since 1 Mar 2026/ }));
-    const card = await screen.findByRole('tooltip');
-    const input = within(card).getByLabelText('Count HYPE PnL from');
-    fireEvent.change(input, { target: { value: '2026-06-23' } });
+    fireEvent.change(dateField(), { target: { value: '2026-06-23' } });
     expect(onChange).toHaveBeenLastCalledWith(undefined);
   });
 
-  it('does not reset the date while one part of the input is mid-edit', async () => {
+  it('does not reset the date while one part of the input is mid-edit', () => {
     const onChange = vi.fn();
     render(<SinceChip base="HYPE" storedSec={MARCH_SEC} defaultSec={DEFAULT_SEC} onChange={onChange} />);
-    await userEvent.click(screen.getByRole('button', { name: /Since 1 Mar 2026/ }));
-    const card = await screen.findByRole('tooltip');
-    const input = within(card).getByLabelText('Count HYPE PnL from');
-    fireEvent.change(input, { target: { value: '' } });
+    fireEvent.change(dateField(), { target: { value: '' } });
     expect(onChange).not.toHaveBeenCalled();
   });
 
-  it('ignores a date after today and keeps the stored date, no date after today', async () => {
+  it('ignores a date after today and keeps the stored date', () => {
     const onChange = vi.fn();
     render(<SinceChip base="HYPE" storedSec={MARCH_SEC} defaultSec={DEFAULT_SEC} onChange={onChange} />);
-    await userEvent.click(screen.getByRole('button', { name: /Since 1 Mar 2026/ }));
-    const card = await screen.findByRole('tooltip');
-    const input = within(card).getByLabelText('Count HYPE PnL from');
-    fireEvent.change(input, { target: { value: '2099-01-01' } });
+    fireEvent.change(dateField(), { target: { value: '2099-01-01' } });
     expect(onChange).not.toHaveBeenCalled();
     expect(screen.getByRole('button', { name: /Since 1 Mar 2026/ })).toBeInTheDocument();
   });
 
-  it('opens on Tab and Enter, moves on typing, resets on Use default, stays open on an inside click, closes on Escape, keyboard walk', async () => {
-    const onChange = vi.fn();
-    render(<SinceChip base="HYPE" storedSec={MARCH_SEC} defaultSec={DEFAULT_SEC} onChange={onChange} />);
-
+  it('keyboard: Enter on the chip opens the picker, the arrow menu closes on Escape', async () => {
+    const showPicker = vi.fn();
+    (HTMLInputElement.prototype as { showPicker?: unknown }).showPicker = showPicker;
+    render(<SinceChip base="HYPE" storedSec={MARCH_SEC} defaultSec={DEFAULT_SEC} onChange={vi.fn()} />);
     await userEvent.tab();
-    const chip = screen.getByRole('button', { name: /Since 1 Mar 2026/ });
-    expect(chip).toHaveFocus();
-
+    expect(screen.getByRole('button', { name: /Since 1 Mar 2026/ })).toHaveFocus();
     await userEvent.keyboard('{Enter}');
-    const card = await screen.findByRole('tooltip');
+    expect(showPicker).toHaveBeenCalledTimes(1);
 
     await userEvent.tab();
-    const input = within(card).getByLabelText('Count HYPE PnL from');
-    expect(input).toHaveFocus();
-
-    fireEvent.change(input, { target: { value: '2026-07-01' } });
-    expect(onChange).toHaveBeenCalledWith(Math.floor(new Date('2026-07-01T00:00').getTime() / 1000));
-
-    await userEvent.tab();
-    const useDefault = within(card).getByRole('button', { name: 'Use default (first position, 23 Jun 2026)' });
-    expect(useDefault).toHaveFocus();
-
+    expect(screen.getByRole('button', { name: 'Date options' })).toHaveFocus();
     await userEvent.keyboard('{Enter}');
-    expect(onChange).toHaveBeenLastCalledWith(undefined);
-
-    fireEvent.click(within(card).getByText('Count HYPE PnL from'));
-    expect(screen.getByRole('tooltip')).toBeInTheDocument();
-
+    await screen.findByRole('tooltip');
     await userEvent.keyboard('{Escape}');
     expect(screen.queryByRole('tooltip')).toBeNull();
   });
