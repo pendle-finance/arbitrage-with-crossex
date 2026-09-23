@@ -194,7 +194,7 @@ describe('SettingsDrawer', () => {
     const telegram = row('Telegram alerts');
 
     expect(await within(telegram).findByText('not set up')).toHaveClass('text-amber-400');
-    expect(within(telegram).getByRole('button', { name: 'Set up ↗' })).toBeInTheDocument();
+    expect(within(telegram).getByRole('button', { name: 'Set up' })).toBeInTheDocument();
     expect(within(telegram).queryByRole('button', { name: 'Expand' })).toBeNull();
   });
 
@@ -204,7 +204,7 @@ describe('SettingsDrawer', () => {
     const telegram = row('Telegram alerts');
 
     expect(await within(telegram).findByText('not set up')).toBeInTheDocument();
-    expect(within(telegram).getByRole('button', { name: 'Set up ↗' })).toBeInTheDocument();
+    expect(within(telegram).getByRole('button', { name: 'Set up' })).toBeInTheDocument();
     expect(within(telegram).queryByRole('button', { name: 'Expand' })).toBeNull();
   });
 
@@ -214,7 +214,7 @@ describe('SettingsDrawer', () => {
     const telegram = row('Telegram alerts');
 
     expect(await within(telegram).findByText('not set up')).toBeInTheDocument();
-    expect(within(telegram).getByRole('button', { name: 'Set up ↗' })).toBeInTheDocument();
+    expect(within(telegram).getByRole('button', { name: 'Set up' })).toBeInTheDocument();
     expect(within(telegram).queryByRole('button', { name: 'Expand' })).toBeNull();
   });
 
@@ -397,7 +397,7 @@ describe('SettingsDrawer · focus step', () => {
     mockAllDone(telegramInfo());
     renderWithClient(<FocusHarness initial={null} />);
 
-    expect(await within(row('Telegram alerts')).findByRole('button', { name: 'Set up ↗' })).toBeInTheDocument();
+    expect(await within(row('Telegram alerts')).findByRole('button', { name: 'Set up' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Collapse' })).toBeNull();
   });
 });

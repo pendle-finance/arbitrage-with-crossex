@@ -2,6 +2,7 @@
  * `placeholderData: keepPreviousData` so background refetches never blank tables. */
 import {
   keepPreviousData,
+  type QueryClient,
   useInfiniteQuery,
   useMutation,
   useQueries,
@@ -799,6 +800,14 @@ export function useTelegram() {
     enabled: (query) => canFetch(shown, query),
     refetchInterval: shown ? 30_000 : false,
   });
+}
+
+/** Asks the bot now (GET /telegram?fresh=1). The answer can take seconds, so
+ * it is dropped when the cache changed meanwhile (a toggle saved, a poll). */
+export async function refreshTelegramFresh(qc: QueryClient): Promise<void> {
+  const before = qc.getQueryState(qk.telegram)?.dataUpdatedAt;
+  const fresh = await fetchJson<TelegramInfo>('/telegram?fresh=1');
+  if (qc.getQueryState(qk.telegram)?.dataUpdatedAt === before) qc.setQueryData(qk.telegram, fresh);
 }
 
 /** Is Telegram linked? Read from the cache only, never fetched: for copy that

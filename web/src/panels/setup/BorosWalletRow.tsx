@@ -4,6 +4,7 @@
  * trade the wallet on screen? Then it offers the one action that changes that.
  */
 import { useState, type ReactNode } from 'react';
+import { ApiError } from '../../api/client';
 import { useBorosAgent, useForgetBorosAgent, useTelegramLinked } from '../../api/queries';
 import { WalletStateTag } from '../../components/ActiveWalletChip';
 import { ConnectWalletButton } from '../../components/ConnectWalletButton';
@@ -170,7 +171,13 @@ export function BorosWalletRow(p: SetupRowProps) {
           busyLabel="Logging out…"
           busy={forget.isPending}
           onConfirm={async () => {
-            await forget.mutateAsync();
+            setError(null);
+            try {
+              await forget.mutateAsync();
+            } catch (err) {
+              setError(err instanceof ApiError ? err.message : String(err));
+              return;
+            }
             setAskLogOut(false);
             setNote('Logged out. The approval stays live on-chain until you revoke it in the Boros app.');
           }}

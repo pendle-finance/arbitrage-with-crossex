@@ -1,9 +1,10 @@
 import { ArrowUpRight } from 'lucide-react';
 import { useQueryClient } from '@tanstack/react-query';
-import { useEffect, useState } from 'react';
-import { ApiError, fetchJson } from '../../api/client';
+import { useEffect, useRef, useState } from 'react';
+import { ApiError } from '../../api/client';
 import {
   qk,
+  refreshTelegramFresh,
   useCancelTelegramLink,
   useDisconnectTelegram,
   useStartTelegramLink,
@@ -120,12 +121,15 @@ export function TelegramRow(p: SetupRowProps) {
   const cancelLink = useCancelTelegramLink();
   const qc = useQueryClient();
   // Opening the row asks the bot once, so a wallet stopped on the bot page
-  // shows here now, not at the next 5-minute sync.
+  // shows here now, not at the next 5-minute sync. It waits for the mount read
+  // to land first: a read landing after it would make it drop its answer.
+  const askedBot = useRef(false);
+  const reading = telegram.isFetching;
   useEffect(() => {
-    fetchJson<TelegramInfo>('/telegram?fresh=1')
-      .then((fresh) => qc.setQueryData(qk.telegram, fresh))
-      .catch(() => undefined);
-  }, [qc]);
+    if (reading || askedBot.current) return;
+    askedBot.current = true;
+    refreshTelegramFresh(qc).catch(() => undefined);
+  }, [reading, qc]);
   const toast = useToast();
   const now = useNow(1000);
   const [phase, setPhase] = useState<Phase>('idle');
@@ -166,7 +170,8 @@ export function TelegramRow(p: SetupRowProps) {
   const setupButton = (
     <button type="button" className="btn-primary w-fit" disabled={start.isPending} onClick={() => openBorosPage(false)}>
       {start.isPending && <Spinner />}
-      Set up ↗
+      Set up
+      <ArrowUpRight size={12} aria-hidden className="inline" />
     </button>
   );
 

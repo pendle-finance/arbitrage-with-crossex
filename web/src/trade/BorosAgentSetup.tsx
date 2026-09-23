@@ -21,7 +21,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Hex } from 'viem';
 import { fetchJson, postJson } from '../api/client';
-import { qk, useBorosAgent, useProvisionBorosAgent, useTelegramLinked } from '../api/queries';
+import { qk, refreshTelegramFresh, useBorosAgent, useProvisionBorosAgent, useTelegramLinked } from '../api/queries';
 import type { BorosAgentStatus } from '../api/types';
 import { WalletStateTag } from '../components/ActiveWalletChip';
 import { ConnectWalletButton } from '../components/ConnectWalletButton';
@@ -193,23 +193,24 @@ function useBorosLogIn(onDone?: (root: string) => void, expected?: string | null
         return;
       }
       // The server moves Telegram alerts to this wallet on its next sync, which
-      // the approval starts. Re-read the Telegram row once that has had time.
-      setTimeout(() => void qc.invalidateQueries({ queryKey: qk.telegram }), TELEGRAM_REFRESH_MS);
+      // the approval starts. Ask the bot once that has had time to start.
+      setTimeout(() => void refreshTelegramFresh(qc).catch(() => undefined), TELEGRAM_REFRESH_MS);
       const done = `Logged in. This terminal can trade ${short(wallet.address)} until ${day(expiry)}.`;
       setNote(done);
       toast?.push('success', done);
       tracked?.followBrowserWallet(wallet.address);
       onDone?.(wallet.address);
     } catch (err) {
-      let restored = false;
+      // The server restores its saved login, which can be older than `prev`.
+      let restored: string | null = null;
       if (provisioned) {
-        restored = await postJson('/boros/agent/rollback', {}).then(
-          () => true,
-          () => false,
+        restored = await postJson<BorosAgentStatus>('/boros/agent/rollback', {}).then(
+          (back) => back?.root || prev,
+          () => null,
         );
         void qc.invalidateQueries({ queryKey: qk.borosAgent });
       }
-      setError(`${describeWalletError(err)}${restored && prev ? ` ${short(prev)} is still logged in.` : ''}`);
+      setError(`${describeWalletError(err)}${restored ? ` ${short(restored)} is still logged in.` : ''}`);
     } finally {
       setStep('idle');
       setLoginInFlight(false);

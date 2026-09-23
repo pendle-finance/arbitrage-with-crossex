@@ -87,7 +87,7 @@ describe('SetupPage · Gate API key', () => {
     expect(row('Telegram alerts')).toBeInTheDocument();
     expect(await screen.findByRole('button', { name: 'Check key' })).toBeInTheDocument();
     expect(screen.queryByRole('radio', { name: 'Paste address' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Set up ↗' })).toBeNull();
+    expect(within(row('Telegram alerts')).queryByRole('button', { name: 'Set up' })).toBeNull();
   });
 
   it('checked key opens step 2', async () => {
@@ -166,7 +166,7 @@ describe('SetupPage · Boros wallet', () => {
     expect(methods.filter((m) => m !== 'eth_requestAccounts' && m !== 'eth_accounts')).toEqual([]);
     expect(trackedInStorage()).toEqual({ address: WALLET, followWallet: true });
     expect(within(wallet).getByRole('button', { name: 'Log in to trade 0xab18…ed9d' })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Set up ↗' })).toBeNull();
+    expect(within(row('Telegram alerts')).queryByRole('button', { name: 'Set up' })).toBeNull();
   });
 
   it('the row has no paste form and no approval cost', async () => {
@@ -250,7 +250,7 @@ describe('SetupPage · Boros wallet', () => {
     await user.click(screen.getByRole('button', { name: 'Skip anyway' }));
 
     expect(within(row('Boros wallet')).getByText('not set up')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Set up ↗' })).toBeInTheDocument();
+    expect(within(row('Telegram alerts')).getByRole('button', { name: 'Set up' })).toBeInTheDocument();
     expect(screen.queryByText('Install Rabby or MetaMask, then reload.')).toBeNull();
   });
 });
@@ -259,7 +259,7 @@ describe('SetupPage · Telegram alerts', () => {
   it('step 3 names the alerts', async () => {
     openTelegramStep();
     renderSetup();
-    expect(await screen.findByRole('button', { name: 'Set up ↗' })).toBeInTheDocument();
+    expect(await within(row('Telegram alerts')).findByRole('button', { name: 'Set up' })).toBeInTheDocument();
     const telegram = row('Telegram alerts');
     expect(within(telegram).getByText('Close to liquidation')).toBeInTheDocument();
     expect(within(telegram).getByText('a 20% price move would liquidate a leg')).toBeInTheDocument();
@@ -270,7 +270,7 @@ describe('SetupPage · Telegram alerts', () => {
     const user = userEvent.setup();
     openTelegramStep();
     renderSetup();
-    await screen.findByRole('button', { name: 'Set up ↗' });
+    await within(row('Telegram alerts')).findByRole('button', { name: 'Set up' });
     await user.hover(screen.getByText('borrowing'));
 
     expect(await screen.findByText('USDT CrossEx wallet · equity under $0')).toBeInTheDocument();
@@ -289,7 +289,7 @@ describe('SetupPage · Telegram alerts', () => {
       ),
     );
     renderSetup();
-    await user.click(await screen.findByRole('button', { name: 'Set up ↗' }));
+    await user.click(await within(row('Telegram alerts')).findByRole('button', { name: 'Set up' }));
 
     expect(await screen.findByText('Waiting for you to confirm on the Boros notifications page')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Open the page again' })).toHaveAttribute('href', LINK_URL);
@@ -309,7 +309,7 @@ describe('SetupPage · Telegram alerts', () => {
       }),
     );
     const { onFinish } = renderSetup();
-    await user.click(await screen.findByRole('button', { name: 'Set up ↗' }));
+    await user.click(await within(row('Telegram alerts')).findByRole('button', { name: 'Set up' }));
 
     expect(await screen.findByRole('switch', { name: 'Close to liquidation' })).toHaveAttribute('aria-checked', 'true');
     expect(screen.getByRole('switch', { name: 'Started paying interest' })).toHaveAttribute('aria-checked', 'true');
@@ -336,10 +336,10 @@ describe('SetupPage · Telegram alerts', () => {
       http.get('/api/telegram/link', () => HttpResponse.json(env({ status: 'expired', url: null, expiresAt: null }))),
     );
     renderSetup();
-    await user.click(await screen.findByRole('button', { name: 'Set up ↗' }));
+    await user.click(await within(row('Telegram alerts')).findByRole('button', { name: 'Set up' }));
 
     expect(await screen.findByText('Link expired. Set up again.')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Set up ↗' })).toBeInTheDocument();
+    expect(within(row('Telegram alerts')).getByRole('button', { name: 'Set up' })).toBeInTheDocument();
   });
 
   it('lost link', async () => {
@@ -351,10 +351,10 @@ describe('SetupPage · Telegram alerts', () => {
       http.get('/api/telegram/link', () => HttpResponse.json(env({ status: 'none', url: null, expiresAt: null }))),
     );
     renderSetup();
-    await user.click(await screen.findByRole('button', { name: 'Set up ↗' }));
+    await user.click(await within(row('Telegram alerts')).findByRole('button', { name: 'Set up' }));
 
     await waitFor(() => expect(screen.queryByText('Waiting for you to confirm on the Boros notifications page')).toBeNull());
-    expect(screen.getByRole('button', { name: 'Set up ↗' })).toBeInTheDocument();
+    expect(within(row('Telegram alerts')).getByRole('button', { name: 'Set up' })).toBeInTheDocument();
   });
 
   it('bot down', async () => {
@@ -370,7 +370,7 @@ describe('SetupPage · Telegram alerts', () => {
       ),
     );
     const { onFinish } = renderSetup();
-    await user.click(await screen.findByRole('button', { name: 'Set up ↗' }));
+    await user.click(await within(row('Telegram alerts')).findByRole('button', { name: 'Set up' }));
 
     expect(await screen.findByText(BOT_DOWN)).toBeInTheDocument();
     expect(tab.close).toHaveBeenCalled();
@@ -415,8 +415,8 @@ describe('setup rows in Settings', () => {
     mockWorld({ telegram: telegramInfo(over) });
     renderWithClient(<TelegramRow {...settingsRow()} />);
     expect(await within(row('Telegram alerts')).findByText(line)).toBeInTheDocument();
-    const action = over.connected ? 'Expand' : 'Set up ↗';
-    expect(screen.getByRole('button', { name: action })).toBeInTheDocument();
+    const action = over.connected ? 'Expand' : 'Set up';
+    expect(within(row('Telegram alerts')).getByRole('button', { name: action })).toBeInTheDocument();
   });
 
   it.each([
@@ -520,6 +520,22 @@ describe('setup rows in Settings', () => {
     expect(
       await screen.findByText('Logged out. The approval stays live on-chain until you revoke it in the Boros app.'),
     ).toBeInTheDocument();
+  });
+
+  it('a failed log-out shows the error and keeps the question open', async () => {
+    const user = userEvent.setup();
+    mockWorld({ agent: agentStatus({ configured: true, root: WALLET, expiry: 2_000_000_000 }) });
+    server.use(
+      http.delete('/api/boros/agent', () =>
+        HttpResponse.json({ ok: false, error: { category: 'network', message: 'Could not write .env', retryable: true } }, { status: 503 }),
+      ),
+    );
+    renderWithClient(<BorosWalletRow {...settingsRow({ open: true })} />);
+    await user.click(await screen.findByRole('button', { name: 'Log out' }));
+    await user.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Log out' }));
+    expect(await within(row('Boros wallet')).findByRole('alert')).toHaveTextContent('Could not write .env');
+    expect(screen.getByRole('alertdialog')).toBeInTheDocument();
+    expect(screen.queryByText(/^Logged out\./)).toBeNull();
   });
 
   it('Cancel on the log-out question keeps the login', async () => {
@@ -704,7 +720,7 @@ describe('TelegramRow · cancel while waiting', () => {
       http.delete('/api/telegram/link', onCancel),
     );
     renderSetup();
-    await user.click(await screen.findByRole('button', { name: 'Set up ↗' }));
+    await user.click(await within(row('Telegram alerts')).findByRole('button', { name: 'Set up' }));
     await screen.findByText('Waiting for you to confirm on the Boros notifications page');
     await user.click(within(row('Telegram alerts')).getByRole('button', { name: 'Cancel' }));
   }

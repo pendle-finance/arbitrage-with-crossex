@@ -581,6 +581,32 @@ describe('BorosAgentSetup — a failed approval rolls back', () => {
     expect(screen.getByRole('button', { name: 'Log in to trade 0x1111…1111' })).toBeEnabled();
   });
 
+  it('names the login the server restored, not the one on screen before', async () => {
+    const user = userEvent.setup();
+    installWallet();
+    localStorage.setItem('crossex.strategy.v1', JSON.stringify({ address: ROOT, walletUpgraded: true }));
+    approveAgent.mockImplementationOnce(async () => {
+      throw rejected();
+    });
+    const OLDER = '0x4444444444444444444444444444444444444444';
+    server.use(
+      http.get('/api/boros/agent', () =>
+        HttpResponse.json(env(status({ configured: true, root: OTHER, rootMasked: '0x3333…3333', approval: 'approved' }))),
+      ),
+      http.put('/api/boros/agent', () => HttpResponse.json(env(status({ configured: true, root: ROOT })))),
+      http.post('/api/boros/agent/rollback', () =>
+        HttpResponse.json(env(status({ configured: true, root: OLDER, approval: 'approved' }))),
+      ),
+    );
+    renderWithClient(<BorosLogInButton />);
+    await user.click(await screen.findByRole('button', { name: 'Log in to trade 0x1111…1111' }));
+    await user.click(await screen.findByRole('button', { name: 'Log in 0x1111…1111' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'You rejected the request in your wallet. 0x4444…4444 is still logged in.',
+    );
+  });
+
   it('with no previous login, a 409 from the rollback is ignored and only the error shows', async () => {
     const user = userEvent.setup();
     installWallet();

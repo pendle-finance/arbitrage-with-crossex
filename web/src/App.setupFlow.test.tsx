@@ -64,7 +64,7 @@ describe('first run', () => {
     expect(screen.queryByRole('tablist')).toBeNull();
 
     await skipOpenRow(user);
-    expect(await screen.findByRole('button', { name: 'Set up ↗' })).toBeInTheDocument();
+    expect(await within(screen.getByRole('region', { name: 'Telegram alerts' })).findByRole('button', { name: 'Set up' })).toBeInTheDocument();
     expect(screen.queryByRole('tablist')).toBeNull();
 
     await skipOpenRow(user);
