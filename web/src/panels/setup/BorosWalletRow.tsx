@@ -127,7 +127,7 @@ export function BorosWalletRow(p: SetupRowProps) {
       stateNode={
         address ? (
           <>
-            <span className="num">{short(address)}</span>
+            <span className="num whitespace-nowrap">{short(address)}</span>
             <WalletStateTag wallet={active} />
           </>
         ) : undefined
