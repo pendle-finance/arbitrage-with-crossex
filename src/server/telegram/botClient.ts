@@ -35,6 +35,7 @@ export interface TriggerSync {
 }
 
 export interface BotClient {
+  /** The bot links the code only for the wallet on screen, so the link names it. */
   requestLink(body: { keyHash: string; version: string }, key?: string): Promise<{ code: string; expiresAt: string }>;
   getTerminal(key: string): Promise<void>;
   putTriggers(key: string, body: TriggerSync): Promise<TelegramSettings>;
@@ -126,7 +127,12 @@ export function createBotClient(opts: BotClientOptions): BotClient {
 
   return {
     async requestLink(body, key) {
-      const answer = await call('POST', '/link-requests', { body, key, withoutWallet: true });
+      const wallet = opts.wallet?.() ?? null;
+      const answer = await call('POST', '/link-requests', {
+        body: wallet === null ? body : { ...body, wallet: wallet.toLowerCase() },
+        key,
+        withoutWallet: true,
+      });
       const link = answer as { code?: unknown; expiresAt?: unknown } | null;
       if (typeof link?.code !== 'string' || typeof link.expiresAt !== 'string') {
         throw new BotUnavailableError('The Telegram bot answered a link request with no code.');

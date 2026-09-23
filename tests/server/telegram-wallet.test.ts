@@ -65,6 +65,16 @@ describe('x-terminal-wallet header', () => {
     expect(link.calls[0].headers).not.toHaveProperty('x-terminal-key');
   });
 
+  it('the link request names the wallet on screen, and no wallet when there is none', async () => {
+    const named = stubWith(async () => linkBody());
+    await named.bot.requestLink({ keyHash: 'h', version: '1' });
+    expect(named.calls[0].body).toEqual({ keyHash: 'h', version: '1', wallet: ROOT.toLowerCase() });
+
+    const none = stubWith(async () => linkBody(), () => null);
+    await none.bot.requestLink({ keyHash: 'h', version: '1' });
+    expect(none.calls[0].body).toEqual({ keyHash: 'h', version: '1' });
+  });
+
   it('a wallet-unlinked answer is thrown once, with no proof call', async () => {
     const stub = stubWith(async () => unlinkedBody);
     await expect(stub.bot.getTerminal('k')).rejects.toEqual(new BotAuthError('wallet-unlinked'));
@@ -161,7 +171,7 @@ describe('add-wallet link', () => {
     const started = await link.start({ addWallet: true });
     expect(started.url).toBe(`${BOT_URL}/alerts?crossex=the-code`);
     const request = stub.to('POST', '/link-requests')[0];
-    expect(request.body).toEqual({ keyHash: key.keyHash, version: '1.7.1' });
+    expect(request.body).toEqual({ keyHash: key.keyHash, version: '1.7.1', wallet: ROOT.toLowerCase() });
     expect(request.headers['x-terminal-key']).toBe(key.key);
     expect(request.headers).not.toHaveProperty('x-terminal-wallet');
     expect(readTelegramKey(dataDir)).toEqual(key);
@@ -218,7 +228,7 @@ describe('add-wallet link', () => {
     const written = readTelegramKey(dataDir);
     expect(written).not.toBeNull();
     const request = stub.to('POST', '/link-requests')[0];
-    expect(request.body).toEqual({ keyHash: written?.keyHash, version: '1.7.1' });
+    expect(request.body).toEqual({ keyHash: written?.keyHash, version: '1.7.1', wallet: ROOT.toLowerCase() });
     expect(request.headers).not.toHaveProperty('x-terminal-key');
   });
 });
