@@ -14,6 +14,7 @@
  * - Fee RATES in market config (settleFeeRate/takerFee) are 18-dec fractions.
  * - List endpoints wrap results as { results, total, skip } — never a bare array.
  */
+import { BOROS_NETWORK } from '../../../web/src/lib/borosNetwork';
 import { prettyVenue } from '../../../web/src/lib/fmt';
 import { CoreError } from '../errors';
 import { BOOK_VENUES } from '../estimate/books';
@@ -22,7 +23,7 @@ import { normalizeVenue } from './venue';
 
 /** The api-gateway surface (`/apis` → api-gateway → open-api's `open-api-v2/…`
  * mounts). New endpoints live here — the bare `/open-api` prefix is deprecated. */
-const BOROS_GATEWAY_BASE_URL = 'https://api-boros.pendle.finance/apis';
+const BOROS_GATEWAY_BASE_URL = BOROS_NETWORK.apiBase;
 
 /**
  * Gas the order pays for itself.
