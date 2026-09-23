@@ -302,7 +302,7 @@ export function lineLabel(line: LiquidationLine): string {
 /** The losing leg and the model, for the hover on a chip that already shows the price. */
 export function lineDetail(line: LiquidationLine): string {
   const leg = line.side === null ? '' : `Losing leg: ${line.venue} ${line.side}. `;
-  return `${leg}Estimate: other coins flat.`;
+  return `${leg}Assumes other coins do not move.`;
 }
 
 /** The full line, for a hover that does not show the price. */

@@ -166,7 +166,7 @@ function LiquidationChip({ line, base }: { line: LiquidationLine | StaleLeg | 'f
         widthPx={320}
         label={<Chip className={HEAD_CHIP}>No liquidation price</Chip>}
       >
-        {`No ${base} price liquidates the Gate account. Estimate: other coins flat.`}
+        {`No ${base} price liquidates the Gate account. Assumes other coins do not move.`}
       </HoverCard>
     );
   }
