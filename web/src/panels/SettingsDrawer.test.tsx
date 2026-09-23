@@ -270,6 +270,15 @@ describe('SettingsDrawer', () => {
     expect(await within(row('Telegram alerts')).findByText('Alerts for 0xab18…ed9d ·')).toBeInTheDocument();
   });
 
+  it('telegram before the first sync reads "Checking…", not a green "None on"', async () => {
+    mockAllDone({ ...connectedTelegram(), settings: null, lastSyncAt: null, lastSyncError: null });
+    renderDrawer();
+    const telegram = row('Telegram alerts');
+    expect(await within(telegram).findByText('Checking…')).toBeInTheDocument();
+    expect(within(telegram).queryByText(/None on/)).toBeNull();
+    expect(within(telegram).queryByRole('button', { name: /Set up/ })).toBeNull();
+  });
+
   it('telegram links to the Boros notifications page', async () => {
     mockAllDone({ ...connectedTelegram(), alertWallet: WALLET, alertsPageUrl: 'https://bot.example/alerts' });
     renderDrawer();

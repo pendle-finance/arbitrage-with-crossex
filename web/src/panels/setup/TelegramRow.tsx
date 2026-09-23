@@ -89,6 +89,11 @@ function syncFailure(info: TelegramInfo): string | null {
   return [`Last sync failed at ${fmtClock(error.at)}.`, since, 'Retrying.'].filter(Boolean).join(' ');
 }
 
+/** A stored key the bot has not answered for yet (the server just started):
+ * not "connected", which would read as a green tick and "None on". */
+const isChecking = (info: TelegramInfo | undefined): boolean =>
+  info?.state === 'connected' && info.settings === null && info.lastSyncAt === null && info.lastSyncError === null;
+
 const unlinkedOf = (info: TelegramInfo | undefined): string | null =>
   info?.connected === true && info.state === 'connected' && info.unlinkedWallet ? info.unlinkedWallet : null;
 
@@ -99,6 +104,7 @@ function stateLine(info: TelegramInfo | undefined, now: number): { text: string 
   if (info.state === 'replaced') return { text: 'Connected on another terminal', isWarn: true };
   if (info.state === 'removed') return { text: 'Removed on the Boros notifications page', isWarn: true };
   if (!info.connected) return { text: null, isWarn: false };
+  if (isChecking(info)) return { text: 'Checking…', isWarn: false };
   if (syncFailure(info)) return { text: 'Last sync failed', isWarn: true };
   const synced = info.lastSyncAt === null ? '' : ` · synced ${fmtSyncAge(now - info.lastSyncAt)}`;
   return { text: `${alertsLabel(alertSettings(info))}${synced}`, isWarn: false };
@@ -126,7 +132,8 @@ export function TelegramRow(p: SetupRowProps) {
   const link = useTelegramLink(phase === 'waiting');
   const linkStatus = phase === 'waiting' ? link.data?.status : undefined;
   const unlinked = unlinkedOf(info);
-  const isConnected = info?.connected === true && info.state === 'connected' && unlinked === null;
+  const checking = isChecking(info);
+  const isConnected = info?.connected === true && info.state === 'connected' && unlinked === null && !checking;
 
   useEffect(() => {
     if (linkStatus === 'confirmed') {
@@ -384,10 +391,15 @@ export function TelegramRow(p: SetupRowProps) {
           </p>
         )
       }
-      setupAction={unlinked ? addWalletButton(unlinked, true) : setupButton}
+      setupAction={checking ? <span /> : unlinked ? addWalletButton(unlinked, true) : setupButton}
       skipConsequence="Without Telegram alerts nothing warns you near liquidation, when interest starts, or before a pair matures."
     >
-      {unlinked && phase !== 'waiting'
+      {checking ? (
+        <div className="flex items-center gap-2 text-xs text-ink-300">
+          <Spinner />
+          <span>Checking with the Telegram bot…</span>
+        </div>
+      ) : unlinked && phase !== 'waiting'
         ? unlinkedBody(unlinked)
         : info && isConnected
           ? connectedBody(
