@@ -299,15 +299,18 @@ export function lineLabel(line: LiquidationLine): string {
   return `Liquidation ${fmtLinePrice(line.price)} (${fmtMove(line.move)})`;
 }
 
-/** One sentence for a hover. */
+/** The losing leg and the model, for the hover on a chip that already shows the price. */
+export function lineDetail(line: LiquidationLine): string {
+  const leg = line.side === null ? '' : `Losing leg: ${line.venue} ${line.side}. `;
+  return `${leg}Estimate: other coins flat.`;
+}
+
+/** The full line, for a hover that does not show the price. */
 export function describeLine(line: LiquidationLine): string {
   const price = fmtUsd(line.price, line.price >= 1000 ? 0 : 2);
-  const lead = `Gate liquidates your account if ${line.base} ${line.move < 0 ? 'falls' : 'rises'} to about ${price} (${fmtMove(line.move)}).`;
-  const rule = `This assumes ${line.base} moves the same on every venue and other coins do not move.`;
-  const leg = line.side === null ? '' : ` Your ${line.base} ${line.side} on ${line.venue} loses in this move.`;
-  return `${lead} ${rule}${leg}`;
+  return `${line.base} ${line.move < 0 ? 'falls' : 'rises'} to ${price} (${fmtMove(line.move)}). ${lineDetail(line)}`;
 }
 
 export function unknownLabel(unknown: { venue: string; sinceMs: number }, nowMs: number): string {
-  return `No liquidation estimate: Gate has not sent a price for the ${unknown.venue} leg for ${fmtAge(nowMs - unknown.sinceMs)}.`;
+  return `No ${unknown.venue} price from Gate for ${fmtAge(nowMs - unknown.sinceMs)}.`;
 }

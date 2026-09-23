@@ -19,7 +19,7 @@ import type { SetupStep } from './setup/setupState';
 const WALLET = `0xab18${'0'.repeat(32)}ed9d`;
 const PASTED = `0x3f2a${'1'.repeat(32)}91c0`;
 const CAVEAT =
-  "Alerts use the terminal's last sync, at most 5 min old. A trade made outside the terminal reaches the alerts after the next sync.";
+  'Alerts use data up to 5 min old. Trades outside the terminal count after the next sync.';
 
 const connectedTelegram = (settings = { liquidation: true, interest: true, maturity: true, rollover: true }): TelegramInfo =>
   telegramInfo({ connected: true, state: 'connected', settings, lastSyncAt: Date.now() - 180_000 });
@@ -166,7 +166,7 @@ describe('SettingsDrawer', () => {
       'Close to maturity',
       'Roll-over opportunity',
     ]);
-    expect(within(telegram).getByText('daily in the last 7 days before a pair settles, with the better maturities to roll to')).toBeInTheDocument();
+    expect(within(telegram).getByText('daily in the last 7 days, with maturities to roll to')).toBeInTheDocument();
     expect(
       within(telegram).getByText('a later maturity pays a better APR'),
     ).toBeInTheDocument();
@@ -189,10 +189,10 @@ describe('SettingsDrawer', () => {
     const telegram = row('Telegram alerts');
 
     expect(await within(telegram).findByText('Last sync failed')).toBeInTheDocument();
-    expect(within(telegram).queryByText(/Last sync failed at/)).toBeNull();
+    expect(within(telegram).queryByText(/Sync failed at/)).toBeNull();
     await clickEdit('Telegram alerts');
     expect(
-      await within(telegram).findByText('Last sync failed at 14:02. Alerts still use the sync from 11:40. Retrying.'),
+      await within(telegram).findByText('Sync failed at 14:02. Alerts use the 11:40 sync. Retrying.'),
     ).toBeInTheDocument();
     expect(within(telegram).queryByText('Last sync failed')).toBeNull();
   });
@@ -233,7 +233,7 @@ describe('SettingsDrawer', () => {
     await clickEdit('Boros wallet');
     const wallet = row('Boros wallet');
 
-    expect(await within(wallet).findByText('Trades only. Cannot deposit or withdraw.')).toBeInTheDocument();
+    expect(await within(wallet).findByText(/The key cannot withdraw\.$/)).toBeInTheDocument();
     expect(within(wallet).getByRole('button', { name: 'Log out' })).toBeInTheDocument();
     expect(within(wallet).queryByRole('radio')).toBeNull();
     expect(within(wallet).getByRole('button', { name: 'Collapse' })).toBeInTheDocument();
@@ -306,7 +306,7 @@ describe('SettingsDrawer', () => {
       const telegram = row('Telegram alerts');
       expect(
         await within(telegram).findByText(
-          'Telegram alerts are set up per wallet. Set up once for 0x3f2a…91c0. You can use the same Telegram chat.',
+          'Alerts are per wallet. The same Telegram chat works.',
         ),
       ).toBeInTheDocument();
       expect(within(telegram).getByRole('button', { name: 'Disconnect this terminal' })).toBeInTheDocument();

@@ -5,7 +5,7 @@
  */
 import { useState, type ReactNode } from 'react';
 import { ApiError } from '../../api/client';
-import { useBorosAgent, useForgetBorosAgent, useTelegramLinked } from '../../api/queries';
+import { useBorosAgent, useForgetBorosAgent } from '../../api/queries';
 import { WalletStateTag } from '../../components/ActiveWalletChip';
 import { ConnectWalletButton } from '../../components/ConnectWalletButton';
 import { InlineConfirm } from '../../components/InlineConfirm';
@@ -26,7 +26,6 @@ export function BorosWalletRow(p: SetupRowProps) {
   const [note, setNote] = useState<string | null>(null);
   const [askLogOut, setAskLogOut] = useState(false);
   const hasWallet = hasInjectedWallet();
-  const alertsLinked = useTelegramLinked();
 
   const loggedIn = agent?.configured ? agent.root : null;
   const isOwnLogin = loggedIn !== null && address !== null && isSameAddress(loggedIn, address);
@@ -58,8 +57,7 @@ export function BorosWalletRow(p: SetupRowProps) {
     body = (
       <>
         <p className="text-xs text-ink-400">
-          Trades only. Cannot deposit or withdraw.
-          {agent?.expiry ? ` Login ends ${fmtDateShort(agent.expiry, { year: 'numeric' })}.` : ''}
+          {agent?.expiry ? `Login ends ${fmtDateShort(agent.expiry, { year: 'numeric' })}. ` : ''}The key cannot withdraw.
         </p>
         {active.endsSoon !== null && logIn}
       </>
@@ -86,17 +84,11 @@ export function BorosWalletRow(p: SetupRowProps) {
     body = (
       <>
         {otherLoggedIn ? (
-          <div className="text-xs text-ink-400">
-            <p>
-              Logged in here: <span className="num text-ink-200">{short(otherLoggedIn)}</span>
-            </p>
-            <ul className="mt-0.5 flex list-disc flex-col gap-0.5 pl-4">
-              <li>It trades on this terminal.</li>
-              {alertsLinked && <li>It gets the Telegram alerts.</li>}
-            </ul>
-          </div>
+          <p className="text-xs text-ink-400">
+            Logged in here: <span className="num text-ink-200">{short(otherLoggedIn)}</span>
+          </p>
         ) : (
-          <p className="text-xs text-ink-400">Log in once to trade. The agent key cannot deposit or withdraw.</p>
+          <p className="text-xs text-ink-400">One free signature. The key cannot withdraw.</p>
         )}
         {logIn}
       </>
@@ -125,7 +117,7 @@ export function BorosWalletRow(p: SetupRowProps) {
       }
       isWarn={active.state === 'expired' || active.state === 'not-approved'}
       alert={upgrade}
-      skipConsequence="Without a Boros wallet the terminal cannot open Boros legs, and Positions cannot show them."
+      skipConsequence="No Boros trades, and Positions shows no Boros legs."
     >
       {body}
       {error && (
@@ -147,8 +139,7 @@ export function BorosWalletRow(p: SetupRowProps) {
           label={`Log out ${short(loggedIn)}?`}
           question={
             <>
-              Log out <span className="num">{short(loggedIn)}</span>? This terminal stops trading it. Open positions
-              stay open.
+              Log out <span className="num">{short(loggedIn)}</span>? Positions stay open.
             </>
           }
           confirmLabel="Log out"
@@ -163,7 +154,7 @@ export function BorosWalletRow(p: SetupRowProps) {
               return;
             }
             setAskLogOut(false);
-            setNote('Logged out. The approval stays live on-chain until you revoke it in the Boros app.');
+            setNote('Logged out. The on-chain approval stays until you revoke it in Boros.');
           }}
           onCancel={() => setAskLogOut(false)}
         />

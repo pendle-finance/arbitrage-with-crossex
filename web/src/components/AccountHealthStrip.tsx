@@ -33,7 +33,7 @@ export function AccountHealthStrip({ children }: { children?: ReactNode }) {
   const nearest = view?.lines[0] ?? null;
   const parts = nearest === null
     ? stale
-    : [`Nearest liquidation: ${nearest.base}. ${describeLine(nearest)}`, ...stale];
+    : [`Nearest liquidation: ${describeLine(nearest)}`, ...stale];
   const liquidation = parts.length > 0 ? parts.join(' ') : null;
   return (
     <div className="ml-auto flex flex-wrap items-center justify-end gap-x-4 gap-y-2">

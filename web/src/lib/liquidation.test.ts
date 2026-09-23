@@ -257,12 +257,12 @@ describe('liquidationLines', () => {
 
   it('names the venue of the losing leg in the sentence, not the wallet it margins in', () => {
     const [pump] = lines(account(), box());
-    expect(describeLine(pump)).toContain('Your ETH short on Hyperliquid loses in this move.');
+    expect(describeLine(pump)).toContain('Losing leg: Hyperliquid short.');
 
     const flipped = box();
     flipped.exposure[0].legs[0].side = 'SHORT';
     flipped.exposure[0].legs[1].side = 'LONG';
-    expect(describeLine(lines(account(), flipped)[0])).toContain('Your ETH short on Gate loses in this move.');
+    expect(describeLine(lines(account(), flipped)[0])).toContain('Losing leg: Gate short.');
 
     const binance = box();
     binance.positions[1].symbol = 'BINANCE_FUTURE_ETH_USDT';
@@ -272,7 +272,7 @@ describe('liquidationLines', () => {
       exchange: 'BINANCE',
       quote: 'USDT',
     };
-    expect(describeLine(lines(account(), binance)[0])).toContain('Your ETH short on Binance loses in this move.');
+    expect(describeLine(lines(account(), binance)[0])).toContain('Losing leg: Binance short.');
   });
 
   it('matches the live account of 2026-09-07 within a percent', () => {
@@ -359,13 +359,13 @@ describe('formatting', () => {
       'Liquidation ~$1,840 (-20%)',
     );
     expect(describeLine({ base: 'ETH', venue: 'Hyperliquid', side: 'short', price: 3150, move: 0.37 })).toBe(
-      'Gate liquidates your account if ETH rises to about $3,150 (+37%). This assumes ETH moves the same on every venue and other coins do not move. Your ETH short on Hyperliquid loses in this move.',
+      'ETH rises to $3,150 (+37%). Losing leg: Hyperliquid short. Estimate: other coins flat.',
     );
     expect(describeLine({ base: 'ETH', venue: 'Gate', side: 'long', price: 1840, move: -0.2 })).toBe(
-      'Gate liquidates your account if ETH falls to about $1,840 (-20%). This assumes ETH moves the same on every venue and other coins do not move. Your ETH long on Gate loses in this move.',
+      'ETH falls to $1,840 (-20%). Losing leg: Gate long. Estimate: other coins flat.',
     );
     expect(describeLine({ base: 'ETH', venue: 'Gate', side: null, price: 1840, move: -0.2 })).toBe(
-      'Gate liquidates your account if ETH falls to about $1,840 (-20%). This assumes ETH moves the same on every venue and other coins do not move.',
+      'ETH falls to $1,840 (-20%). Estimate: other coins flat.',
     );
   });
 });
@@ -500,7 +500,7 @@ describe('a coin with no usable mark', () => {
     const view = liquidationLines(account(), positions)!;
     expect(view.unknown[0].sinceMs).toBe(since);
     expect(unknownLabel({ venue: view.unknown[0].venue, sinceMs: since }, since + 4 * 3_600_000 + 12 * 60_000)).toBe(
-      'No liquidation estimate: Gate has not sent a price for the Hyperliquid leg for 4h 12m.',
+      'No Hyperliquid price from Gate for 4h 12m.',
     );
   });
 

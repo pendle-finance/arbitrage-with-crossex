@@ -67,7 +67,7 @@ import {
   parseDateLocal,
   prettyVenue,
 } from '../../lib/fmt';
-import { describeLine, lineLabel, unknownLabel, type LiquidationLine } from '../../lib/liquidation';
+import { lineDetail, lineLabel, unknownLabel, type LiquidationLine } from '../../lib/liquidation';
 import {
   type AssetDerived,
   type ExclusionEntry,
@@ -154,7 +154,7 @@ function LiquidationChip({ line, base }: { line: LiquidationLine | StaleLeg | 'f
   if (line === 'unknown') {
     return (
       <HoverCard underline={false} icon={false} widthPx={320} label={<Chip className={HEAD_CHIP}>No liquidation estimate</Chip>}>
-        Gate did not send the account&apos;s margin figures.
+        No margin data from Gate.
       </HoverCard>
     );
   }
@@ -164,9 +164,9 @@ function LiquidationChip({ line, base }: { line: LiquidationLine | StaleLeg | 'f
         underline={false}
         icon={false}
         widthPx={320}
-        label={<Chip className={HEAD_CHIP}>{`No ${base} price liquidates the account`}</Chip>}
+        label={<Chip className={HEAD_CHIP}>No liquidation price</Chip>}
       >
-        {`Estimate: ${base} can fall to $0 or rise without limit and the account is not liquidated, if every other coin holds still.`}
+        {`No ${base} price liquidates the Gate account. Estimate: other coins flat.`}
       </HoverCard>
     );
   }
@@ -182,7 +182,7 @@ function LiquidationChip({ line, base }: { line: LiquidationLine | StaleLeg | 'f
         </Chip>
       }
     >
-      {describeLine(line)}
+      {lineDetail(line)}
     </HoverCard>
   );
 }
@@ -2062,7 +2062,7 @@ function RollReview({
         ? [{ code: 'stale-simulation', message: 'The quote is out of date — waiting for a fresh one.' }]
         : []),
     ...(agent.data?.expired
-      ? [{ code: 'agent-expired', message: 'The Boros agent approval has expired — approve a new agent key before trading.' }]
+      ? [{ code: 'agent-expired', message: 'Boros login expired.' }]
       : []),
   ];
 
@@ -4561,7 +4561,21 @@ export function AssetCard({
 
       {/* The hero in its own panel, bordered in the accent so it reads as
           the ONE set of numbers; the ledgers below wear the plain hairline. */}
-      <div className={`mb-4 rounded border border-wash/[0.07] bg-ink-950/40 px-5 py-[18px] ${backfilling ? 'opacity-50' : ''}`}>
+      <div
+        className="relative mb-4 rounded border border-wash/[0.07] bg-ink-950/40 px-5 py-[18px]"
+        aria-busy={backfilling || undefined}
+      >
+        {/* While the Boros payments load, the totals are partial, so the
+            overlay covers them. Positions, hedge and liquidation below are
+            already right and stay in view. */}
+        {backfilling && (
+          <div className="absolute inset-0 z-10 flex items-center justify-center gap-2.5 rounded bg-ink-950/90 text-sm text-ink-100">
+            <Spinner />
+            <span>
+              {sinceSec > 0 ? `Reading Boros payments since ${fmtDateShort(sinceSec)}…` : 'Reading all Boros payments…'}
+            </span>
+          </div>
+        )}
         {/* Hero — exactly what he asked to know: PnL (ROI in brackets),
             the CURRENT locked APR, and capital. Carry lives on the stats
             strip below; nothing else competes up here. */}
@@ -4669,15 +4683,6 @@ export function AssetCard({
           </div>
         )}
       </div>
-
-      {backfilling && (
-        <div className="mb-3 flex items-center gap-2 px-1 text-xs text-ink-400">
-          <Spinner />
-          <span>
-            {sinceSec > 0 ? `Reading Boros payments since ${fmtDateShort(sinceSec)}…` : 'Reading all Boros payments…'}
-          </span>
-        </div>
-      )}
 
       {/* Hedge status — only what needs doing. A perfect hedge says so in
           the header badge; a ribbon repeating it was a box for nothing. */}

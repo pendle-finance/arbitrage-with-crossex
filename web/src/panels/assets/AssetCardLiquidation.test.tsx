@@ -72,7 +72,7 @@ describe('the asset card when Gate stops sending a mark', () => {
     await userEvent.hover(trigger);
     expect(
       await screen.findByText(
-        'No liquidation estimate: Gate has not sent a price for the Hyperliquid leg for 4h 12m.',
+        'No Hyperliquid price from Gate for 4h 12m.',
       ),
     ).toBeInTheDocument();
   });

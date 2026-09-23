@@ -94,7 +94,7 @@ describe.each([50, 6_000_000])('Positions for a view-only wallet at $%d', (size)
     renderWithClient(<AssetsHome />);
     expect(
       await screen.findByText(
-        (_, el) => el?.tagName === 'P' && el.textContent === 'Boros legs only. Your Gate perps show when you view 0x1111…1111.',
+        (_, el) => el?.tagName === 'P' && el.textContent === 'Boros legs only. Gate perps show for 0x1111…1111.',
       ),
     ).toBeInTheDocument();
     expect(screen.getByText((_, el) => el?.tagName === 'DIV' && el.textContent === 'Boros PnL · 0x2222…2222')).toHaveAttribute(
@@ -122,7 +122,7 @@ describe('Positions for the wallet that trades', () => {
     renderWithClient(<AssetsHome />);
     expect(await screen.findByText('SOL')).toBeInTheDocument();
     expect(screen.getByText('ETH')).toBeInTheDocument();
-    expect(screen.queryByText(/Your Gate perps show when you view/)).toBeNull();
+    expect(screen.queryByText(/Gate perps show for/)).toBeNull();
     expect(screen.getByText('Total Account PnL')).toBeInTheDocument();
     expect(screen.getByText(/after .* borrow interest/)).toBeInTheDocument();
   });

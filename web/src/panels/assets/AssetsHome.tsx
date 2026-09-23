@@ -216,7 +216,7 @@ export function AssetsHome() {
     <section>
       {gateHidden && loggedInRoot && (
         <p className="mb-4 text-xs text-ink-400">
-          Boros legs only. Your Gate perps show when you view{' '}
+          Boros legs only. Gate perps show for{' '}
           <span className="num text-ink-200">{short(loggedInRoot)}</span>.
         </p>
       )}

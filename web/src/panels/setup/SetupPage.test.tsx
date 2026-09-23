@@ -18,7 +18,7 @@ const OTHER = `0x5c1f${'2'.repeat(32)}a2e0`;
 const LINK_URL = 'https://boros-bot-notification.pendle.finance/alerts?crossex=abc123';
 const BOT_DOWN = 'Telegram alerts are not available yet. Try again later.';
 const ALERTS_URL = 'https://boros-bot-notification.pendle.finance/alerts';
-const BOT_UNREACHABLE = 'Could not reach the bot. Try again, or stop alerts for each wallet on the Boros notifications page.';
+const BOT_UNREACHABLE = "Bot not reached. Retry, or stop each wallet's alerts on the Boros notifications page.";
 
 const approveAgent = vi.fn(async () => ({ txHash: '0xtx' }));
 vi.mock('../../lib/borosAgentApi', () => ({
@@ -258,7 +258,7 @@ describe('SetupPage · Boros wallet', () => {
 
     expect(screen.getByText('Not recommended.')).toBeInTheDocument();
     expect(
-      screen.getByText('Without a Boros wallet the terminal cannot open Boros legs, and Positions cannot show them.'),
+      screen.getByText('No Boros trades, and Positions shows no Boros legs.'),
     ).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Skip anyway' })).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Back' }));
@@ -342,7 +342,7 @@ describe('SetupPage · Telegram alerts', () => {
     await user.hover(screen.getByText(/^synced \d+ s ago$/));
     expect(
       await screen.findByText(
-        "Alerts use the terminal's last sync, at most 5 min old. A trade made outside the terminal reaches the alerts after the next sync.",
+        'Alerts use data up to 5 min old. Trades outside the terminal count after the next sync.',
       ),
     ).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Skip/ })).toBeNull();
@@ -409,7 +409,7 @@ describe('SetupPage · Telegram alerts', () => {
     await user.click(await screen.findByRole('button', { name: 'Skip, not recommended' }));
 
     expect(
-      screen.getByText('Without Telegram alerts nothing warns you near liquidation, when interest starts, or before a pair matures.'),
+      screen.getByText('No warning near liquidation, interest or maturity.'),
     ).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Skip anyway' }));
     expect(onFinish).toHaveBeenCalledTimes(1);
@@ -458,7 +458,7 @@ describe('setup rows in Settings', () => {
     });
     renderWithClient(<TelegramRow {...settingsRow({ open: true })} />);
     expect(
-      await screen.findByText('Last sync failed at 14:02. Alerts still use the sync from 11:40. Retrying.'),
+      await screen.findByText('Sync failed at 14:02. Alerts use the 11:40 sync. Retrying.'),
     ).toBeInTheDocument();
   });
 
@@ -531,17 +531,17 @@ describe('setup rows in Settings', () => {
     renderWithClient(<BorosWalletRow {...settingsRow({ open: true })} />);
     expect(await within(row('Boros wallet')).findByText('Logged in')).toBeInTheDocument();
     expect(
-      screen.getByText(`Trades only. Cannot deposit or withdraw. Login ends ${day(2_000_000_000)}.`),
+      screen.getByText(`Login ends ${day(2_000_000_000)}. The key cannot withdraw.`),
     ).toBeInTheDocument();
     expect(dot('Boros wallet')).toBe('✓');
     expect(screen.queryByRole('button', { name: 'Remove key' })).toBeNull();
     await user.click(screen.getByRole('button', { name: 'Log out' }));
     const ask = screen.getByRole('alertdialog', { name: 'Log out 0xab18…ed9d?' });
-    expect(ask).toHaveTextContent('Log out 0xab18…ed9d? This terminal stops trading it. Open positions stay open.');
+    expect(ask).toHaveTextContent('Log out 0xab18…ed9d? Positions stay open.');
     expect(world.agent.configured).toBe(true);
     await user.click(within(ask).getByRole('button', { name: 'Log out' }));
     expect(
-      await screen.findByText('Logged out. The approval stays live on-chain until you revoke it in the Boros app.'),
+      await screen.findByText('Logged out. The on-chain approval stays until you revoke it in Boros.'),
     ).toBeInTheDocument();
   });
 
@@ -583,7 +583,7 @@ describe('setup rows in Settings', () => {
     mockWorld({ agent: agentStatus({ configured: true, root: WALLET, expiry: 2_000_000_000, approval: 'unknown' }) });
     renderWithClient(<BorosWalletRow {...settingsRow({ open: true })} />);
     expect(await within(row('Boros wallet')).findByText('Login not checked')).toBeInTheDocument();
-    expect(screen.getByText(`Trades only. Cannot deposit or withdraw. Login ends ${day(2_000_000_000)}.`)).toBeInTheDocument();
+    expect(screen.getByText(`Login ends ${day(2_000_000_000)}. The key cannot withdraw.`)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Log in to trade/ })).toBeNull();
   });
 
@@ -607,24 +607,8 @@ describe('setup rows in Settings', () => {
     mockWorld({ agent: agentStatus({ configured: true, root: WALLET, expiry: 2_000_000_000 }) });
     renderWithClient(<BorosWalletRow {...settingsRow({ open: true })} />);
     expect(await screen.findByText(/^Logged in here:/)).toHaveTextContent('Logged in here: 0xab18…ed9d');
-    expect(screen.getByText('It trades on this terminal.')).toBeInTheDocument();
-    expect(screen.queryByText('It gets the Telegram alerts.')).toBeNull();
     expect(screen.getByRole('button', { name: 'Log in to trade 0x5c1f…a2e0' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Log out' })).toBeNull();
-  });
-
-  it('view only says the other login syncs Telegram alerts when they are linked', async () => {
-    installWallet();
-    localStorage.setItem('crossex.strategy.v1', JSON.stringify({ address: OTHER, walletUpgraded: true }));
-    mockWorld({ agent: agentStatus({ configured: true, root: WALLET, expiry: 2_000_000_000 }), telegram: connectedTelegram() });
-    renderWithClient(
-      <>
-        <BorosWalletRow {...settingsRow({ open: true })} />
-        <TelegramRow {...settingsRow()} />
-      </>,
-    );
-    expect(await screen.findByText('It gets the Telegram alerts.')).toBeInTheDocument();
-    expect(screen.getByText('It trades on this terminal.')).toBeInTheDocument();
   });
 
   it('view only with no login asks to log in once', async () => {
@@ -633,7 +617,7 @@ describe('setup rows in Settings', () => {
     mockWorld();
     renderWithClient(<BorosWalletRow {...settingsRow({ open: true })} />);
     expect(await screen.findByRole('button', { name: 'Log in to trade 0x3f2a…91c0' })).toBeInTheDocument();
-    expect(screen.getByText('Log in once to trade. The agent key cannot deposit or withdraw.')).toBeInTheDocument();
+    expect(screen.getByText('One free signature. The key cannot withdraw.')).toBeInTheDocument();
   });
 
   it('no wallet installed asks for one to log in', async () => {

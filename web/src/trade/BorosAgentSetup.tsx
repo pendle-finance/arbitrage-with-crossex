@@ -23,7 +23,6 @@ import type { Hex } from 'viem';
 import { fetchJson, postJson } from '../api/client';
 import { qk, refreshTelegramFresh, useBorosAgent, useProvisionBorosAgent, useTelegramLinked } from '../api/queries';
 import type { BorosAgentStatus } from '../api/types';
-import { WalletStateTag } from '../components/ActiveWalletChip';
 import { ConnectWalletButton } from '../components/ConnectWalletButton';
 import { InlineConfirm } from '../components/InlineConfirm';
 import { useToastOptional } from '../components/Toast';
@@ -185,17 +184,17 @@ function useBorosLogIn(onDone?: (root: string) => void, expected?: string | null
       const confirmed = await waitForApproval(wallet.address);
       void qc.invalidateQueries({ queryKey: qk.borosAgent });
       if (confirmed === 'timeout') {
-        setError('Boros has not confirmed the approval yet. Wait a minute. If Log in still shows, log in again.');
+        setError('Boros has not confirmed yet. If Log in still shows in a minute, log in again.');
         return;
       }
       if (confirmed === 'unchecked') {
-        setError('Boros did not answer. If Log in shows again, the approval did not land.');
+        setError('Boros did not answer. If Log in shows again, log in again.');
         return;
       }
       // The server moves Telegram alerts to this wallet on its next sync, which
       // the approval starts. Ask the bot once that has had time to start.
       setTimeout(() => void refreshTelegramFresh(qc).catch(() => undefined), TELEGRAM_REFRESH_MS);
-      const done = `Logged in. This terminal can trade ${short(wallet.address)} until ${day(expiry)}.`;
+      const done = `Logged in ${short(wallet.address)} until ${day(expiry)}.`;
       setNote(done);
       toast?.push('success', done);
       tracked?.followBrowserWallet(wallet.address);
@@ -254,24 +253,11 @@ function ReplaceConfirm({ login }: { login: LogIn }) {
       onConfirm={() => login.answerReplace(true)}
       onCancel={() => login.answerReplace(false)}
     >
-      <ul className="flex list-disc flex-col gap-0.5 pl-4">
-        <li>
-          This terminal trades <span className="num">{short(to)}</span>.
-        </li>
-        {alertsLinked && (
-          <li>
-            Telegram alerts are per wallet. If <span className="num">{short(to)}</span> has none, set them up once in
-            Settings.
-          </li>
-        )}
-        <li>
-          <span className="num">{short(from)}</span> positions stay open. Close them in the Boros app.
-        </li>
-        <li>
-          Your Gate perps stay open. They show as unhedged until you log in <span className="num">{short(from)}</span>{' '}
-          again.
-        </li>
-      </ul>
+      <p>
+        <span className="num">{short(from)}</span> Boros legs stay open. Its Gate perps show unhedged until you log
+        it back in.
+      </p>
+      {alertsLinked && <p>Telegram alerts are per wallet.</p>}
     </InlineConfirm>
   );
 }
@@ -315,70 +301,30 @@ export function BorosLogInButton({
 }
 
 /**
- * The ticket's Boros status card. Status only: the ticket's own
- * "Log in to trade 0x…" button, where Confirm sits, is the one login.
+ * The ticket's Boros notice, only for what its Confirm button cannot say: no
+ * wallet to trade, or a build that cannot place Boros orders. The button
+ * carries every login state ("Log in to trade 0x…", "Renew login for 0x…"),
+ * and the header chip carries view only and a login that ends soon.
  */
-export function BorosAgentSetup() {
+export function BorosAgentSetup({ className = '' }: { className?: string }) {
   const status = useBorosAgent();
   const active = useActiveWallet();
 
-  if (status.isPending) {
-    return <p className="text-[11px] text-ink-400">Checking Boros trading setup…</p>;
+  if (status.data && !status.data.configured && !status.data.canProvision) {
+    return (
+      <p className={`rounded-lg border border-ink-700 bg-ink-950 px-3 py-2 text-[11px] text-ink-400 ${className}`}>
+        This build cannot place Boros orders. Trade the pair in the Boros app.
+      </p>
+    );
   }
 
-  if (status.data?.configured) {
-    const { expired, expiry, approval } = status.data;
-    const notApproved = !expired && approval === 'not-approved';
-    const tagState = expired
-      ? 'expired'
-      : notApproved
-        ? 'not-approved'
-        : approval === 'unknown'
-          ? 'unchecked'
-          : 'can-trade';
-    const warning = expired
-      ? `Login ended${expiry ? ` ${day(expiry)}` : ''}. Boros refuses orders.`
-      : notApproved
-        ? NOT_APPROVED_TEXT
-        : active.endsSoon !== null
-          ? `Login ends ${day(active.endsSoon)}. Renew it in Settings.`
-          : null;
+  if (active.address === null) {
     return (
-      <div className="rounded-lg border border-ink-700 bg-ink-950 px-3 py-2.5">
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="num text-[11px] text-ink-300">{status.data.rootMasked}</span>
-          <WalletStateTag wallet={{ state: tagState, endsSoon: active.endsSoon }} />
-        </div>
-        {warning && (
-          <p
-            className={`mt-1 text-[10.5px] leading-relaxed ${expired || notApproved ? 'text-rose-300' : 'text-amber-300'}`}
-          >
-            {warning}
-          </p>
-        )}
+      <div className={className}>
+        <ConnectWalletButton />
       </div>
     );
   }
 
-  if (!status.data?.canProvision) {
-    return (
-      <p className="rounded-lg border border-ink-700 bg-ink-950 px-3 py-2 text-[11px] leading-relaxed text-ink-400">
-        This build cannot place Boros orders. You can still price a pair here and trade it in the
-        Boros app.
-      </p>
-    );
-  }
-
-  return (
-    <div className="rounded-lg border border-cyan-500/25 bg-cyan-500/5 px-3 py-2.5">
-      <p className="text-[10.5px] leading-relaxed text-ink-300">
-        Log in once to trade. One free wallet signature. The key trades only. It cannot deposit or withdraw.
-      </p>
-      {active.address === null && (
-        <div className="mt-2">
-          <ConnectWalletButton />
-        </div>
-      )}
-    </div>
-  );
+  return null;
 }
