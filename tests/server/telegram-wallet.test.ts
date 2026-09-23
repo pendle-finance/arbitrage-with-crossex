@@ -14,6 +14,7 @@ const OTHER = '0x1111000000000000000000000000000000002222';
 
 const settingsBody = { status: 200, body: VIEW };
 const unlinkedBody = { status: 401, body: { reason: 'wallet-unlinked' } };
+const echoWallet = (wallet: string) => ({ status: 200, body: { ...VIEW, wallet: wallet.toLowerCase() } });
 const linkBody = () => ({ status: 201, body: { code: 'the-code', expiresAt: new Date(Date.now() + 600_000).toISOString() } });
 
 const stubWith = (answer: BotAnswer, wallet: () => string | null = () => ROOT) => makeBotStub(answer, { wallet });
@@ -131,7 +132,7 @@ describe('sync and an unlinked wallet', () => {
     writeTelegramKey(dataDir, newTelegramKey(Date.now()));
     let wallet = ROOT;
     const stub = stubWith(
-      async (call) => (call.headers['x-terminal-wallet'] === ROOT.toLowerCase() ? unlinkedBody : settingsBody),
+      async (call) => (call.headers['x-terminal-wallet'] === ROOT.toLowerCase() ? unlinkedBody : echoWallet(wallet)),
       () => wallet,
     );
     const status = new TelegramStatus();
@@ -150,9 +151,52 @@ describe('sync and an unlinked wallet', () => {
     expect(status.auth).toBe('ok');
   });
 
+  it('the timer and other reasons skip an unlinked wallet; settings, login and linked ask the bot again', async () => {
+    writeTelegramKey(dataDir, newTelegramKey(Date.now()));
+    let linkedNow = false;
+    const stub = stubWith(async () => (linkedNow ? echoWallet(ROOT) : unlinkedBody));
+    const status = new TelegramStatus();
+    const sync = makeSync(stub, status, () => ROOT);
+    await syncOnce(sync);
+    expect(status.unlinkedWallet).toBe(ROOT.toLowerCase());
+
+    for (const reason of ['deal', 'rebalance', 'transfer', 'restored']) sync.requestSync(reason);
+    await sync.idle();
+    expect(stub.to('PUT', '/terminal/triggers')).toHaveLength(1);
+
+    for (const [i, reason] of ['settings', 'login', 'linked'].entries()) {
+      sync.requestSync(reason);
+      await sync.idle();
+      expect(stub.to('PUT', '/terminal/triggers')).toHaveLength(2 + i);
+      expect(status.unlinkedWallet).toBe(ROOT.toLowerCase());
+    }
+
+    linkedNow = true;
+    sync.requestSync('settings');
+    await sync.idle();
+    sync.stop();
+    expect(status.unlinkedWallet).toBeNull();
+    expect(status.alertWallet).toBe(ROOT.toLowerCase());
+  });
+
+  it('records the wallet the bot names as the alert wallet, else the terminal wallet', async () => {
+    writeTelegramKey(dataDir, newTelegramKey(Date.now()));
+    let body: unknown = { ...VIEW, wallet: OTHER };
+    const stub = stubWith(async () => ({ status: 200, body }));
+    const status = new TelegramStatus();
+    const sync = makeSync(stub, status, () => ROOT);
+    await syncOnce(sync);
+    expect(status.alertWallet).toBe(OTHER.toLowerCase());
+
+    body = { settings: VIEW.settings };
+    await syncOnce(sync);
+    sync.stop();
+    expect(status.alertWallet).toBe(ROOT.toLowerCase());
+  });
+
   it('a successful sync clears the unlinked wallet', async () => {
     writeTelegramKey(dataDir, newTelegramKey(Date.now()));
-    const stub = stubWith(async () => settingsBody);
+    const stub = stubWith(async () => echoWallet(ROOT));
     const status = new TelegramStatus();
     status.setUnlinkedWallet(OTHER.toLowerCase());
     const sync = makeSync(stub, status, () => ROOT);

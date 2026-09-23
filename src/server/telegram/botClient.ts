@@ -38,7 +38,8 @@ export interface BotClient {
   /** The bot links the code only for the wallet on screen, so the link names it. */
   requestLink(body: { keyHash: string; version: string }, key?: string): Promise<{ code: string; expiresAt: string }>;
   getTerminal(key: string): Promise<void>;
-  putTriggers(key: string, body: TriggerSync): Promise<TelegramSettings>;
+  /** `wallet` is the wallet the bot sends alerts for, when its reply names one. */
+  putTriggers(key: string, body: TriggerSync): Promise<{ settings: TelegramSettings; wallet: string | null }>;
   patchSettings(key: string, body: Partial<TelegramSettings>): Promise<TelegramSettings>;
   deleteTerminal(key: string): Promise<void>;
 }
@@ -92,6 +93,11 @@ function settingsOf(body: unknown): TelegramSettings {
     maturity: flagOf(settings.maturity),
     rollover: flagOf(settings.rollover),
   };
+}
+
+function walletOf(body: unknown): string | null {
+  const wallet = (body as { wallet?: unknown } | null)?.wallet;
+  return typeof wallet === 'string' && wallet !== '' ? wallet.toLowerCase() : null;
 }
 
 export interface BotClientOptions {
@@ -153,7 +159,8 @@ export function createBotClient(opts: BotClientOptions): BotClient {
       await call('GET', '/terminal', { key });
     },
     async putTriggers(key, body) {
-      return settingsOf(await call('PUT', '/terminal/triggers', { key, body }));
+      const reply = await call('PUT', '/terminal/triggers', { key, body });
+      return { settings: settingsOf(reply), wallet: walletOf(reply) };
     },
     async patchSettings(key, body) {
       return settingsOf(await call('PATCH', '/terminal/settings', { key, body }));

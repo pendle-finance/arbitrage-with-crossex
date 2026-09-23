@@ -163,7 +163,54 @@ describe('Telegram per-wallet link', () => {
     expect(status.unlinkedWallet).toBeNull();
     expect(readTelegramKey(dataDir)).toBeNull();
   });
+
+  it('a settings change refused as wallet-unlinked records the wallet, so the row stops showing toggles', async () => {
+    linked();
+    const bot = makeBot();
+    const { app, status } = bootWithWallet(bot, '0xAbC');
+    status.setAuth('ok');
+    bot.behaviour.reason = 'wallet-unlinked';
+
+    const res = await send(app, 'PATCH', '/api/telegram/settings', { interest: false });
+    expect(res.code).toBe(409);
+    expect(status.unlinkedWallet).toBe('0xabc');
+    expect(status.auth).toBe('ok');
+
+    const info = await send(app, 'GET', '/api/telegram');
+    expect(info.body.data).toMatchObject({ state: 'connected', unlinkedWallet: '0xabc' });
+  });
+
+  it('GET fresh=1 asks the bot again for an unlinked wallet and clears it once linked', async () => {
+    linked();
+    const bot = makeBot();
+    const { app, status } = bootWithWallet(bot, '0xabc');
+    status.setAuth('ok');
+    status.setUnlinkedWallet('0xabc');
+
+    const cached = await send(app, 'GET', '/api/telegram');
+    expect(cached.body.data).toMatchObject({ unlinkedWallet: '0xabc' });
+    expect(bot.to('PUT', '/terminal/triggers')).toHaveLength(0);
+
+    const fresh = await send(app, 'GET', '/api/telegram?fresh=1');
+    expect(bot.to('PUT', '/terminal/triggers')).toHaveLength(1);
+    expect(fresh.body.data).not.toHaveProperty('unlinkedWallet');
+    expect(status.unlinkedWallet).toBeNull();
+  });
 });
+
+function bootWithWallet(bot: Bot, root: string) {
+  const status = new TelegramStatus();
+  const wallet = () => root;
+  const sync = createTelegramSync({ dataDir, bot: bot.bot, status, readCoins: async () => [ETH], port: 7788, version: '1.6.3', now: () => now, wallet });
+  const link = createTelegramLink({ dataDir, bot: bot.bot, pageUrl: `${BOT_URL}/alerts`, version: '1.6.3', now: () => now, status, onConfirmed: () => undefined });
+  const app = makeTestApp({ dataDir, telegram: { link, sync, status, bot: bot.bot, wallet } });
+  cleanups.push(async () => {
+    link.stop();
+    sync.stop();
+    await app.close();
+  });
+  return { status, app };
+}
 
 describe('Telegram link', () => {
   it('sends only the key hash', async () => {
@@ -454,6 +501,7 @@ describe('Telegram link', () => {
       settings: { liquidation: true, interest: true, maturity: true, rollover: true },
       lastSyncAt: T0,
       lastSyncError: null,
+      alertWallet: VIEW.wallet,
       alertsPageUrl: `${BOT_URL}/alerts`,
       floors: FLOORS,
     });
@@ -550,6 +598,7 @@ describe('Telegram link', () => {
       settings: { liquidation: true, interest: true, maturity: true, rollover: true },
       lastSyncAt: T0,
       lastSyncError: null,
+      alertWallet: VIEW.wallet,
       alertsPageUrl: `${BOT_URL}/alerts`,
       floors: FLOORS,
     });
@@ -697,6 +746,7 @@ describe('Telegram settings', () => {
       settings: { liquidation: true, interest: true, maturity: true, rollover: true },
       lastSyncAt: T0,
       lastSyncError: null,
+      alertWallet: VIEW.wallet,
       alertsPageUrl: `${BOT_URL}/alerts`,
       floors: FLOORS,
     });

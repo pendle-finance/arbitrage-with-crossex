@@ -137,7 +137,9 @@ export function telegramRoutes(deps: AppDeps) {
           message: BOT_SILENT,
           retryable: true,
         });
-        t.status.setAuth(err.reason);
+        const wallet = t.wallet?.()?.toLowerCase() ?? null;
+        if (err.reason === 'wallet-unlinked' && wallet !== null) t.status.setUnlinkedWallet(wallet);
+        else t.status.setAuth(err.reason);
         return refuse(reply, { code: 409, category: 'validation', message: NOT_CONNECTED, retryable: false });
       }
       return reply.ok(info(t));

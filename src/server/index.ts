@@ -229,7 +229,7 @@ const appDeps = {
     onDone: () => telegramSync.requestSync('rebalance'),
   },
   transfer: { jobs: new TransferFile(dataDir), onDone: () => telegramSync.requestSync('transfer') },
-  telegram: { link: telegramLink, sync: telegramSync, status: telegramStatus, bot: telegramBot },
+  telegram: { link: telegramLink, sync: telegramSync, status: telegramStatus, bot: telegramBot, wallet: configuredRoot },
   getBorosOrders: () => borosOrdersRef.current,
   borosAgent: {
     envPath,
