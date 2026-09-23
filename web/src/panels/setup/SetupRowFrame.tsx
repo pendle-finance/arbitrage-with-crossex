@@ -113,7 +113,7 @@ export function SetupRowFrame({
         </span>
         <span className="shrink-0 text-sm font-medium text-ink-100">{title}</span>
         {stateNode && !showsNotSetUp ? (
-          <span className="flex min-w-0 items-center gap-2 text-xs text-ink-300">{stateNode}</span>
+          <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-ink-300">{stateNode}</span>
         ) : line && (
           <span className={`num min-w-0 text-xs ${isLineWarn ? 'text-amber-400' : 'text-ink-400'}`}>
             {line
