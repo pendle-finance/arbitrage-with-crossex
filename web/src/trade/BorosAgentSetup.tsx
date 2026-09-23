@@ -18,13 +18,17 @@
  * the local server and nowhere else. It is not logged, not put in a URL, and
  * not rendered.
  */
-import { useState } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { Hex } from 'viem';
-import { useBorosAgent, useForgetBorosAgent, useProvisionBorosAgent } from '../api/queries';
+import { fetchJson } from '../api/client';
+import { qk, useBorosAgent, useForgetBorosAgent, useProvisionBorosAgent } from '../api/queries';
+import type { BorosAgentStatus } from '../api/types';
 import { Chip } from '../components/Chip';
+import { useToastOptional } from '../components/Toast';
 import { short } from '../panels/HomeControls';
 import { isSameAddress, useActiveWallet, useTrackedAddressOptional } from '../panels/trackedAddress';
 import { connectWallet, describeWalletError, hasInjectedWallet, BOROS_CHAIN } from '../lib/wallet';
+import { useQueryClient } from '@tanstack/react-query';
 
 /**
  * How long the on-chain approval lasts, as a DURATION. A year: long enough that
@@ -43,22 +47,75 @@ const APPROVAL_SECONDS = 365 * 24 * 3600;
 /** Absolute unix-second expiry for a fresh approval. */
 const approvalExpiryAt = (): number => Math.floor(Date.now() / 1000) + APPROVAL_SECONDS;
 
-type Step = 'idle' | 'connecting' | 'approving' | 'saving';
+/** How long to wait for Boros to show the new approval, and how often to ask. */
+const CONFIRM_TRIES = 20;
+const CONFIRM_EVERY_MS = 1500;
+
+type Step = 'idle' | 'connecting' | 'replace' | 'approving' | 'saving' | 'confirming';
 
 const STEP_LABEL: Record<Exclude<Step, 'idle'>, string> = {
   connecting: 'Waiting for your wallet…',
+  replace: 'Answer the note below',
   approving: 'Approving the agent on-chain…',
   saving: 'Handing the key to your terminal…',
+  confirming: 'Checking the approval on Boros…',
 };
+
+/**
+ * One login at a time, across every Log in button on screen. The pair ticket,
+ * the close form and Settings can all show one, and two clicks must not open
+ * two wallet prompts.
+ */
+let loginInFlight = false;
+const inFlightListeners = new Set<() => void>();
+const setLoginInFlight = (value: boolean) => {
+  loginInFlight = value;
+  for (const l of inFlightListeners) l();
+};
+const subscribeInFlight = (l: () => void) => {
+  inFlightListeners.add(l);
+  return () => inFlightListeners.delete(l);
+};
+const useLoginInFlight = () => useSyncExternalStore(subscribeInFlight, () => loginInFlight);
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** Wait until Boros shows the approval on-chain. True when it does, or when
+ * this server cannot tell (Boros unreachable, or an older server). */
+async function waitForApproval(): Promise<boolean> {
+  for (let i = 0; i < CONFIRM_TRIES; i++) {
+    const s = await fetchJson<BorosAgentStatus>('/boros/agent?fresh=1').catch(() => null);
+    const approval = s?.approval;
+    if (approval === 'approved' || approval === 'unknown' || approval === undefined) return true;
+    await sleep(CONFIRM_EVERY_MS);
+  }
+  return false;
+}
+
+export interface ReplaceNotice {
+  from: string;
+  to: string;
+}
 
 function useBorosLogIn(onDone?: (root: string) => void, expected?: string | null) {
   const provision = useProvisionBorosAgent();
+  const status = useBorosAgent();
+  const qc = useQueryClient();
+  const toast = useToastOptional();
   const tracked = useTrackedAddressOptional();
+  const inFlight = useLoginInFlight();
   const [step, setStep] = useState<Step>('idle');
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
+  const [replacing, setReplacing] = useState<ReplaceNotice | null>(null);
+  const answer = useRef<((go: boolean) => void) | null>(null);
+  // A button that unmounts while asking (the ticket closes) must not leave the
+  // login waiting forever: that would hold every Log in button busy.
+  useEffect(() => () => answer.current?.(false), []);
 
   const run = async () => {
+    if (loginInFlight) return;
+    setLoginInFlight(true);
     setError(null);
     setNote(null);
     try {
@@ -67,6 +124,26 @@ function useBorosLogIn(onDone?: (root: string) => void, expected?: string | null
       if (expected && !isSameAddress(wallet.address, expected)) {
         setError(`Your browser wallet is ${short(wallet.address)}. Switch it to ${short(expected)} to log in.`);
         return;
+      }
+
+      // The terminal holds ONE agent. Logging in this wallet logs out the one
+      // that can trade now, so ask first. No need when that login is dead.
+      const current = status.data;
+      if (
+        current?.configured &&
+        current.root &&
+        !isSameAddress(current.root, wallet.address) &&
+        !current.expired &&
+        current.approval !== 'not-approved'
+      ) {
+        setReplacing({ from: current.root, to: wallet.address });
+        setStep('replace');
+        const go = await new Promise<boolean>((resolve) => {
+          answer.current = resolve;
+        });
+        answer.current = null;
+        setReplacing(null);
+        if (!go) return;
       }
 
       // Generate the delegated key IN THE BROWSER. The root key never leaves
@@ -85,7 +162,8 @@ function useBorosLogIn(onDone?: (root: string) => void, expected?: string | null
       // without an approval is inert and the next attempt overwrites it, while
       // approving first and failing to store would strand a live, year-long
       // on-chain approval for a key the browser is about to forget — costing
-      // gas, and revocable only by hand in the Boros app.
+      // gas, and revocable only by hand in the Boros app. The server reads the
+      // chain, so an inert key shows as "not approved", never as "can trade".
       setStep('saving');
       await provision.mutateAsync({
         root: wallet.address,
@@ -102,40 +180,99 @@ function useBorosLogIn(onDone?: (root: string) => void, expected?: string | null
         agentAddress,
         expiry,
       });
-      setNote(
-        `Done — this terminal can place Boros orders until ${new Date(expiry * 1000).toLocaleDateString()}.`,
-      );
+
+      // Not done until Boros shows the approval.
+      setStep('confirming');
+      const confirmed = await waitForApproval();
+      void qc.invalidateQueries({ queryKey: qk.borosAgent });
+      if (!confirmed) {
+        setError('Boros has not confirmed the approval yet. Wait a minute. If Log in still shows, log in again.');
+        return;
+      }
+      const done = `Logged in. This terminal can trade ${short(wallet.address)} until ${new Date(expiry * 1000).toLocaleDateString()}.`;
+      setNote(done);
+      toast?.push('success', done);
       tracked?.followBrowserWallet(wallet.address);
       onDone?.(wallet.address);
     } catch (err) {
       setError(describeWalletError(err));
     } finally {
       setStep('idle');
+      setLoginInFlight(false);
     }
   };
 
-  return { run, step, busy: step !== 'idle', error, note, setNote };
+  const answerReplace = (go: boolean) => answer.current?.(go);
+
+  return {
+    run,
+    step,
+    busy: step !== 'idle' || inFlight,
+    error,
+    note,
+    setNote,
+    replacing,
+    answerReplace,
+  };
 }
 
-export function BorosLogInButton({ className }: { className?: string }) {
+type LogIn = ReturnType<typeof useBorosLogIn>;
+
+const buttonText = (login: LogIn, idle: string): string =>
+  login.step !== 'idle' ? STEP_LABEL[login.step] : login.busy ? 'Logging in…' : idle;
+
+/** Asked before a login that logs out the wallet that can trade now. */
+function ReplaceConfirm({ login }: { login: LogIn }) {
+  if (!login.replacing) return null;
+  const { from, to } = login.replacing;
+  return (
+    <div role="alertdialog" aria-label="Log out the other wallet?" className="mt-2 rounded border border-amber-500/40 bg-amber-500/5 px-2.5 py-2">
+      <p className="text-[11px] leading-relaxed text-amber-200">
+        <span className="num">{short(from)}</span> is logged in here. Logging in{' '}
+        <span className="num">{short(to)}</span> logs it out. You will then need the Boros app to close{' '}
+        <span className="num">{short(from)}</span> positions.
+      </p>
+      <div className="mt-2 flex gap-2">
+        <button type="button" className="btn-primary num flex-1" onClick={() => login.answerReplace(true)}>
+          Log in {short(to)}
+        </button>
+        <button
+          type="button"
+          className="rounded border border-ink-600 px-3 text-[11px] text-ink-300 hover:border-ink-400"
+          onClick={() => login.answerReplace(false)}
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
+export function BorosLogInButton({ className, renew = false }: { className?: string; renew?: boolean }) {
   const { address, loginLabel, openLogin } = useActiveWallet();
   const login = useBorosLogIn(undefined, address);
-  if (!loginLabel) return null;
+  // `renew`: the login still works but ends soon, so there is no loginLabel.
+  const label = loginLabel ?? (renew && address ? `Renew login for ${short(address)}` : null);
+  if (!label && !login.note) return null;
   return (
     <div className={`flex flex-col gap-1.5 ${className ?? ''}`}>
-      <button
-        type="button"
-        className="btn-primary num w-full"
-        disabled={login.busy}
-        onClick={hasInjectedWallet() ? login.run : openLogin}
-      >
-        {login.busy ? STEP_LABEL[login.step as Exclude<Step, 'idle'>] : loginLabel}
-      </button>
+      {label && (
+        <button
+          type="button"
+          className="btn-primary num w-full"
+          disabled={login.busy}
+          onClick={hasInjectedWallet() ? login.run : openLogin}
+        >
+          {buttonText(login, label)}
+        </button>
+      )}
+      <ReplaceConfirm login={login} />
       {login.error && (
         <p role="alert" className="text-[11px] leading-relaxed text-rose-300">
           {login.error}
         </p>
       )}
+      {login.note && <p className="text-[11px] leading-relaxed text-emerald-300">{login.note}</p>}
     </div>
   );
 }
@@ -152,7 +289,9 @@ export function BorosAgentSetup({
   const status = useBorosAgent();
   const forget = useForgetBorosAgent();
   const tracked = useTrackedAddressOptional();
-  const { run, step, busy, error, note, setNote } = useBorosLogIn(onDone);
+  const login = useBorosLogIn(onDone);
+  const { run, busy, error, note, setNote } = login;
+  const active = useActiveWallet();
 
   const connectButton = hideConnect ? null : !hasInjectedWallet() ? (
     <p className="mt-2 text-[11px] leading-relaxed text-amber-300">
@@ -165,7 +304,7 @@ export function BorosAgentSetup({
       onClick={run}
       className="mt-2 w-full rounded border border-cyan-500/60 bg-cyan-500/15 px-2 py-1.5 text-[12px] font-medium text-cyan-200 hover:bg-cyan-500/25 disabled:opacity-60"
     >
-      {busy ? STEP_LABEL[step as Exclude<Step, 'idle'>] : 'Connect wallet'}
+      {buttonText(login, 'Connect wallet')}
     </button>
   );
 
@@ -174,14 +313,21 @@ export function BorosAgentSetup({
   }
 
   if (status.data?.configured) {
-    const active = tracked?.address ?? null;
+    const activeAddress = tracked?.address ?? null;
     const root = status.data.root;
-    const otherWallet = active && root && !isSameAddress(active, root) ? short(active) : null;
+    const otherWallet = activeAddress && root && !isSameAddress(activeAddress, root) ? short(activeAddress) : null;
+    const notApproved = status.data.approval === 'not-approved';
+    const expiryDate = status.data.expiry ? new Date(status.data.expiry * 1000).toLocaleDateString() : null;
+    const chip = status.data.expired
+      ? { tone: 'red' as const, text: 'login expired' }
+      : notApproved
+        ? { tone: 'red' as const, text: 'not approved' }
+        : { tone: 'green' as const, text: 'trading enabled' };
     return (
       <div className="rounded-lg border border-ink-700 bg-ink-950 px-3 py-2.5">
         <div className="flex flex-wrap items-center gap-2">
-          <Chip sm tone={status.data.expired ? 'red' : 'green'}>
-            {status.data.expired ? 'approval expired' : 'trading enabled'}
+          <Chip sm tone={chip.tone}>
+            {chip.text}
           </Chip>
           <span className="num text-[11px] text-ink-300">{status.data.rootMasked}</span>
           <button
@@ -201,20 +347,28 @@ export function BorosAgentSetup({
           title="A delegated key that signs your orders. It cannot deposit or withdraw."
         >
           Agent key — trades only, <span className="text-ink-300">cannot deposit or withdraw</span>
-          {status.data.expiry !== null && !status.data.expired
-            ? ` · expires ${new Date(status.data.expiry * 1000).toLocaleDateString()}`
-            : ''}
+          {expiryDate && !status.data.expired && !notApproved ? ` · expires ${expiryDate}` : ''}
         </p>
-        {status.data.expired ? (
+        {status.data.expired && (
           // Otherwise this only shows up as AuthAgentExpired() on a confirm the
           // user has already committed to.
           <p className="mt-1 text-[10.5px] leading-relaxed text-rose-300">
-            The on-chain approval lapsed
-            {status.data.expiry ? ` on ${new Date(status.data.expiry * 1000).toLocaleDateString()}` : ''} —
-            every order will be refused. Remove the key and connect again to re-approve.
+            Your login ended{expiryDate ? ` on ${expiryDate}` : ''}. Boros refuses every order until you renew it.
           </p>
-        ) : (
-          null
+        )}
+        {notApproved && !status.data.expired && (
+          <p className="mt-1 text-[10.5px] leading-relaxed text-rose-300">
+            Boros has no approval for this key. The wallet prompt was rejected, or the login was revoked in the
+            Boros app. Log in again to trade.
+          </p>
+        )}
+        {active.endsSoon !== null && (
+          <p className="mt-1 text-[10.5px] leading-relaxed text-amber-300">
+            Your login ends on {new Date(active.endsSoon * 1000).toLocaleDateString()}. Renew it to keep trading.
+          </p>
+        )}
+        {!otherWallet && (status.data.expired || notApproved || active.endsSoon !== null) && (
+          <BorosLogInButton className="mt-2" renew={active.endsSoon !== null} />
         )}
         {note && <p className="mt-1 text-[10.5px] leading-relaxed text-amber-300">{note}</p>}
         {otherWallet && (
@@ -223,6 +377,7 @@ export function BorosAgentSetup({
               Connect <span className="num text-ink-200">{otherWallet}</span> to trade it.
             </p>
             {connectButton}
+            <ReplaceConfirm login={login} />
             {error && (
               <p role="alert" className="mt-1.5 text-[11px] leading-relaxed text-rose-300">
                 {error}

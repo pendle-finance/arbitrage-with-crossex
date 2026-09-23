@@ -1,6 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { useCredentials, useDisclaimer, useOpenOrders, usePositions } from './api/queries';
 import { AccountHealthStrip } from './components/AccountHealthStrip';
+import { ActiveWalletChip } from './components/ActiveWalletChip';
 import { BorrowChip } from './components/BorrowChip';
 import { BrandMark } from './components/BrandMark';
 import { Chip } from './components/Chip';
@@ -118,6 +119,7 @@ export default function App() {
     <>
       <UpdateIndicator />
       {isTrading && <SetupPrompt onOpen={openSettingsAt} />}
+      {isTrading && <ActiveWalletChip />}
       <FreshnessIndicator />
       <button
         type="button"

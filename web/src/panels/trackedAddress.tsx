@@ -120,10 +120,26 @@ export function useTrackedAddressOptional(): TrackedAddressApi | null {
   return useContext(TrackedAddressCtx);
 }
 
+/** Warn this long before the login ends. The login lasts a year. */
+export const RENEW_WARN_SECONDS = 14 * 24 * 3600;
+
+export type ActiveWalletState =
+  /** Logged in, and the chain shows a live approval. */
+  | 'can-trade'
+  /** Another wallet is logged in, or none is. */
+  | 'view-only'
+  /** This wallet's login ended. */
+  | 'expired'
+  /** This wallet's key is stored but the chain has no approval for it. */
+  | 'not-approved';
+
 export interface ActiveWallet {
   address: string | null;
+  state: ActiveWalletState | null;
   canTrade: boolean;
   viewOnly: boolean;
+  /** Unix seconds, when a live login ends within RENEW_WARN_SECONDS. */
+  endsSoon: number | null;
   loginLabel: string | null;
   openLogin: () => void;
 }
@@ -133,20 +149,37 @@ export function useActiveWallet(): ActiveWallet {
   const agent = useBorosAgent();
   const address = tracked?.address ?? null;
   const status = agent.data;
-  const canTrade =
-    status?.configured === true &&
-    !status.expired &&
-    status.root !== null &&
-    address !== null &&
-    isSameAddress(status.root, address);
+  const isRoot =
+    status?.configured === true && status.root !== null && address !== null && isSameAddress(status.root, address);
+  const state: ActiveWalletState | null =
+    address === null || status === undefined
+      ? null
+      : !isRoot
+        ? 'view-only'
+        : status.expired
+          ? 'expired'
+          : status.approval === 'not-approved'
+            ? 'not-approved'
+            : 'can-trade';
+  const canTrade = state === 'can-trade';
   const viewOnly =
-    status?.configured === true && status.root !== null && address !== null && !isSameAddress(status.root, address);
+    status?.configured === true && status.root !== null && address !== null && !isRoot;
   const canLogIn = status !== undefined && (status.configured || status.canProvision);
+  const nowSec = Math.floor(Date.now() / 1000);
+  const endsSoon =
+    canTrade && status?.expiry != null && status.expiry - nowSec < RENEW_WARN_SECONDS ? status.expiry : null;
   return {
     address,
+    state,
     canTrade,
     viewOnly,
-    loginLabel: address && !canTrade && canLogIn ? `Log in to trade ${short(address)}` : null,
+    endsSoon,
+    loginLabel:
+      address && !canTrade && canLogIn
+        ? state === 'expired'
+          ? `Renew login for ${short(address)}`
+          : `Log in to trade ${short(address)}`
+        : null,
     openLogin: () => tracked?.openLogin(),
   };
 }

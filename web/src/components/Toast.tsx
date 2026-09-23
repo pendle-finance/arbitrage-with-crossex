@@ -20,6 +20,11 @@ export function useToast(): ToastApi {
   return ctx;
 }
 
+/** For components that also render in provider-less unit tests. */
+export function useToastOptional(): ToastApi | null {
+  return useContext(ToastCtx);
+}
+
 const KIND_CLASSES: Record<ToastKind, string> = {
   error: 'border-rose-500/50 text-rose-200',
   success: 'border-emerald-500/50 text-emerald-200',

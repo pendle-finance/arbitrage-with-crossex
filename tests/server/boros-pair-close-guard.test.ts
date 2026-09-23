@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { marketAcc, raw } from '../helpers/boros-fixtures';
 import { account, ADDRESS, BN, fillFor, HL, market, relay, wei, wireBook } from '../helpers/boros-pair-fixtures';
+import { resetAgentApprovalCache } from '../../src/server/borosAgentApproval';
 import { borosStub } from '../helpers/boros-stub';
 import { HOST, makeTestApp } from './helpers/gate-nock';
 
@@ -351,5 +352,42 @@ describe('cancel-and-close guards', () => {
 
     const again = await close({ clientOrderId: 'coid-isolated-2' });
     expect(again.json().error.message).toBe('This position is on isolated margin. Close it on Boros.');
+  });
+});
+
+describe('agent approval on-chain', () => {
+  const KEY = `0x${'a'.repeat(64)}`;
+  afterEach(() => {
+    delete process.env.BOROS_AGENT_PRIVATE_KEY;
+    resetAgentApprovalCache();
+  });
+
+  it('refuses a close when the chain shows no approval, and sends nothing', async () => {
+    // The key is stored, but the wallet prompt was rejected or the agent was revoked.
+    process.env.BOROS_AGENT_PRIVATE_KEY = KEY;
+    resetAgentApprovalCache();
+    const calls: string[] = [];
+    app = makeTestApp({
+      borosFetch: borosStub({ ...bodies(false), '/apis/v1/agents/expiry-time': { expiryTime: 0 } }),
+      getBorosOrders: () => relay(calls, async (r) => fillFor(r)),
+    });
+    const res = await close({ clientOrderId: 'coid-unapproved' });
+    expect(res.statusCode).toBeGreaterThanOrEqual(400);
+    expect(res.json().error.message).toMatch(/not approved on-chain/);
+    expect(calls).toEqual([]);
+  });
+
+  it('lets the close through when the chain shows a live approval', async () => {
+    process.env.BOROS_AGENT_PRIVATE_KEY = KEY;
+    resetAgentApprovalCache();
+    const calls: string[] = [];
+    app = makeTestApp({
+      borosFetch: borosStub({
+        ...bodies(false),
+        '/apis/v1/agents/expiry-time': { expiryTime: Math.floor(Date.now() / 1000) + 86400 },
+      }),
+      getBorosOrders: () => relay(calls, async (r) => fillFor(r)),
+    });
+    expect((await close({ clientOrderId: 'coid-approved' })).statusCode).toBe(200);
   });
 });

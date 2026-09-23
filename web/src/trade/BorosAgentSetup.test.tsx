@@ -182,8 +182,10 @@ describe('BorosAgentSetup', () => {
       ),
     );
     renderWithClient(<BorosAgentSetup />);
-    expect(await screen.findByText('approval expired')).toBeInTheDocument();
-    expect(screen.getByText(/every order will be refused/i)).toBeInTheDocument();
+    expect(await screen.findByText('login expired')).toBeInTheDocument();
+    expect(screen.getByText(/Boros refuses every order until you renew it/)).toBeInTheDocument();
+    // One click, not "remove the key and connect again".
+    expect(screen.queryByText(/Remove the key and connect again/)).toBeNull();
   });
 
   it('reports a rejected wallet prompt without leaving the button spinning', async () => {
@@ -279,6 +281,10 @@ describe('BorosAgentSetup — no gas balance on the strip', () => {
     renderWithClient(<BorosLogInButton />);
 
     await user.click(await screen.findByRole('button', { name: 'Log in to trade 0x1111…1111' }));
+    // 0x2222 can trade now, so the terminal asks before logging it out.
+    expect(await screen.findByRole('alertdialog')).toHaveTextContent('0x2222…2222 is logged in here.');
+    expect(body).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'Log in 0x1111…1111' }));
     await waitFor(() => expect(body).not.toBeNull());
     expect(body).toMatchObject({ root: ROOT, accountId: 0 });
     await waitFor(() => expect(approveAgent).toHaveBeenCalledTimes(1));
@@ -309,5 +315,131 @@ describe('BorosAgentSetup — no gas balance on the strip', () => {
     expect(stored).toBe(false);
     expect(approveAgent).not.toHaveBeenCalled();
     localStorage.clear();
+  });
+});
+
+describe('BorosAgentSetup — the chain decides "logged in"', () => {
+  const OTHER = '0x3333333333333333333333333333333333333333';
+  afterEach(() => localStorage.clear());
+
+  it('Cancel on the log-out question stores nothing and frees the button', async () => {
+    const user = userEvent.setup();
+    installWallet();
+    localStorage.setItem('crossex.strategy.v1', JSON.stringify({ address: ROOT, walletUpgraded: true }));
+    let stored = false;
+    server.use(
+      http.get('/api/boros/agent', () =>
+        HttpResponse.json(env(status({ configured: true, root: OTHER, rootMasked: '0x3333…3333', approval: 'approved' }))),
+      ),
+      http.put('/api/boros/agent', () => {
+        stored = true;
+        return HttpResponse.json(env(status()));
+      }),
+    );
+    renderWithClient(<BorosLogInButton />);
+    await user.click(await screen.findByRole('button', { name: 'Log in to trade 0x1111…1111' }));
+    await user.click(await screen.findByRole('button', { name: 'Cancel' }));
+    expect(await screen.findByRole('button', { name: 'Log in to trade 0x1111…1111' })).toBeEnabled();
+    expect(stored).toBe(false);
+    expect(approveAgent).not.toHaveBeenCalled();
+  });
+
+  it('does not ask when the other login is already dead', async () => {
+    const user = userEvent.setup();
+    installWallet();
+    localStorage.setItem('crossex.strategy.v1', JSON.stringify({ address: ROOT, walletUpgraded: true }));
+    let stored = false;
+    server.use(
+      http.get('/api/boros/agent', () =>
+        HttpResponse.json(
+          env(
+            stored
+              ? status({ configured: true, root: ROOT, approval: 'approved' })
+              : status({ configured: true, root: OTHER, rootMasked: '0x3333…3333', approval: 'not-approved' }),
+          ),
+        ),
+      ),
+      http.put('/api/boros/agent', () => {
+        stored = true;
+        return HttpResponse.json(env(status({ configured: true, root: ROOT })));
+      }),
+    );
+    renderWithClient(<BorosLogInButton />);
+    await user.click(await screen.findByRole('button', { name: 'Log in to trade 0x1111…1111' }));
+    await waitFor(() => expect(stored).toBe(true));
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    // Inline under the button, and as a toast.
+    expect(await screen.findAllByText(/^Logged in\./)).toHaveLength(2);
+  });
+
+  it('says "Logged in" only once Boros shows the approval', async () => {
+    const user = userEvent.setup();
+    installWallet();
+    localStorage.setItem('crossex.strategy.v1', JSON.stringify({ address: ROOT, walletUpgraded: true }));
+    let reads = 0;
+    server.use(
+      http.get('/api/boros/agent', ({ request }) => {
+        const fresh = new URL(request.url).searchParams.get('fresh') === '1';
+        if (fresh) reads += 1;
+        // The first fresh read comes before the relay lands.
+        const approval = fresh && reads > 1 ? 'approved' : 'not-approved';
+        return HttpResponse.json(
+          env(status({ configured: reads > 0, root: reads > 0 ? ROOT : null, approval: reads > 0 ? approval : null })),
+        );
+      }),
+      http.put('/api/boros/agent', () => HttpResponse.json(env(status({ configured: true, root: ROOT })))),
+    );
+    renderWithClient(<BorosLogInButton />);
+    await user.click(await screen.findByRole('button', { name: 'Log in to trade 0x1111…1111' }));
+    expect(
+      await screen.findAllByText(/^Logged in\. This terminal can trade 0x1111…1111 until/, {}, { timeout: 4000 }),
+    ).toHaveLength(2);
+    expect(reads).toBe(2);
+  });
+
+  it('a stored key the chain never approved shows "not approved" and a Log in button', async () => {
+    localStorage.setItem('crossex.strategy.v1', JSON.stringify({ address: ROOT, walletUpgraded: true }));
+    installWallet();
+    server.use(
+      http.get('/api/boros/agent', () =>
+        HttpResponse.json(
+          env(status({ configured: true, root: ROOT, rootMasked: '0x1111…1111', expiry: 2_000_000_000, approval: 'not-approved' })),
+        ),
+      ),
+    );
+    renderWithClient(<BorosAgentSetup />);
+    expect(await screen.findByText('not approved')).toBeInTheDocument();
+    expect(screen.getByText(/The wallet prompt was rejected, or the login was revoked/)).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Log in to trade 0x1111…1111' })).toBeInTheDocument();
+  });
+
+  it('an expired login offers one-click Renew', async () => {
+    localStorage.setItem('crossex.strategy.v1', JSON.stringify({ address: ROOT, walletUpgraded: true }));
+    installWallet();
+    server.use(
+      http.get('/api/boros/agent', () =>
+        HttpResponse.json(
+          env(status({ configured: true, root: ROOT, rootMasked: '0x1111…1111', expiry: 1_700_000_000, expired: true, approval: 'expired' })),
+        ),
+      ),
+    );
+    renderWithClient(<BorosAgentSetup />);
+    expect(await screen.findByRole('button', { name: 'Renew login for 0x1111…1111' })).toBeInTheDocument();
+  });
+
+  it('warns 14 days before the login ends, with a Renew button', async () => {
+    localStorage.setItem('crossex.strategy.v1', JSON.stringify({ address: ROOT, walletUpgraded: true }));
+    installWallet();
+    const soon = Math.floor(Date.now() / 1000) + 5 * 86400;
+    server.use(
+      http.get('/api/boros/agent', () =>
+        HttpResponse.json(
+          env(status({ configured: true, root: ROOT, rootMasked: '0x1111…1111', expiry: soon, approval: 'approved' })),
+        ),
+      ),
+    );
+    renderWithClient(<BorosAgentSetup />);
+    expect(await screen.findByText(/Your login ends on .*\. Renew it to keep trading\./)).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Renew login for 0x1111…1111' })).toBeInTheDocument();
   });
 });
