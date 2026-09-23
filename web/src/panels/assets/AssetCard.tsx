@@ -26,7 +26,6 @@ import type {
   BorosSimulatedLeg,
 } from '../../api/types';
 import { TokenIcon, VenueIcon } from '../../components/AssetIcon';
-import { ChevronIcon } from '../../components/ChevronIcon';
 import { Chip } from '../../components/Chip';
 import { HoverCard } from '../../components/HoverCard';
 import { Spinner } from '../../components/Spinner';
@@ -104,6 +103,7 @@ import { AssetBars } from './AssetBars';
 import { SinceChip } from './SinceChip';
 import { fitAcross, maxRollSize, planBatch, suggestedRollSize, type BatchLimit } from './rollSizing';
 import { useRollPublisher, useRollSignalsOptional } from '../rollSignal';
+import { ChartColumnDecreasing, ChartPie, ChevronDown, RotateCw, Share } from 'lucide-react';
 
 interface Props {
   group: AssetGroup;
@@ -313,26 +313,7 @@ function PairListHeader() {
   );
 }
 
-/** ↻ — the roll-over pill's mark. */
-function RollIcon() {
-  return (
-    <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-      <path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9" />
-      <path d="M13.5 2.5v3h-3" />
-    </svg>
-  );
-}
 
-/** ⤴ — the share pill's mark. */
-function ShareIcon() {
-  return (
-    <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-      <path d="M8 10V2.5" />
-      <path d="M5 5.5 8 2.5l3 3" />
-      <path d="M3 9v4h10V9" />
-    </svg>
-  );
-}
 
 /**
  * The card's two projections of one book, as tabs under the hero: the
@@ -715,7 +696,7 @@ function PairCard({
             </td>
             <td className="whitespace-nowrap pl-3 pr-4 text-right">
               <span aria-hidden className={`pp-chevron transition-transform ${open ? 'rotate-180' : ''}`}>
-                <ChevronIcon />
+                <ChevronDown size={14} aria-hidden />
               </span>
             </td>
           </tr>
@@ -816,7 +797,7 @@ function PairCard({
                     )
                   }
                 >
-                  <ShareIcon />
+                  <Share size={12} aria-hidden />
                   Share
                 </button>
               )}
@@ -850,7 +831,7 @@ function PairCard({
                   title="Move the Boros legs to a later maturity."
                   onClick={onRollOver}
                 >
-                  <RollIcon />
+                  <RotateCw size={13} aria-hidden />
                   Roll over
                 </button>
               )}
@@ -2773,7 +2754,7 @@ function PerpOnlyPairCard({
             <td className="px-3 text-right text-[13px] text-ink-600" title="No rate is locked.">—</td>
             <td className="whitespace-nowrap pl-3 pr-4 text-right">
               <span aria-hidden className={`pp-chevron transition-transform ${open ? 'rotate-180' : ''}`}>
-                <ChevronIcon />
+                <ChevronDown size={14} aria-hidden />
               </span>
             </td>
           </tr>
@@ -2935,7 +2916,7 @@ function UngroupedCard({
             <td className="px-3 text-right text-[13px] text-ink-600" title="Not in a pair.">—</td>
             <td className="pl-3 pr-4 text-right">
               <span aria-hidden className={`pp-chevron transition-transform ${open ? 'rotate-180' : ''}`}>
-                <ChevronIcon />
+                <ChevronDown size={14} aria-hidden />
               </span>
             </td>
           </tr>
@@ -3487,17 +3468,6 @@ function BundleColGroup() {
 }
 
 
-/** Four bars of falling height — the waterfall, at 12px. */
-function WaterfallIcon() {
-  return (
-    <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" aria-hidden className="text-ink-400">
-      <rect x="1" y="2" width="3" height="12" rx="0.5" />
-      <rect x="5.5" y="5" width="3" height="9" rx="0.5" />
-      <rect x="10" y="8" width="3" height="6" rx="0.5" />
-      <rect x="14" y="11" width="1.5" height="3" rx="0.5" />
-    </svg>
-  );
-}
 
 function PerpRow({
   leg,
@@ -4037,7 +4007,7 @@ function BundleCard({
             </td>
             <td className="pl-3 pr-4 text-right">
               <span aria-hidden className={`pp-chevron transition-transform ${open ? 'rotate-180' : ''}`}>
-                <ChevronIcon />
+                <ChevronDown size={14} aria-hidden />
               </span>
             </td>
           </tr>
@@ -4609,15 +4579,7 @@ export function AssetCard({
                 aria-hidden="true"
                 className="ml-2 inline-flex h-7 w-7 items-center justify-center rounded-full align-middle text-ink-500 transition-colors group-hover/pnl:bg-wash/10 group-hover/pnl:text-ink-300"
               >
-                <svg viewBox="0 0 14 14" width="16" height="16" fill="none">
-                  <path
-                    transform="translate(.5 0)"
-                    fillRule="evenodd"
-                    clipRule="evenodd"
-                    d="M5.889,0.75L5.889,7.611L12.75,7.611C12.436,10.777 9.764,13.25 6.515,13.25C3.055,13.25 0.25,10.445 0.25,6.985C0.25,3.736 2.723,1.064 5.889,0.75ZM7.142,0.75C10.102,1.044 12.456,3.398 12.75,6.358L7.142,6.358L7.142,0.75Z"
-                    fill="currentColor"
-                  />
-                </svg>
+                <ChartPie size={16} strokeWidth={1.8} aria-hidden />
               </span>
             </button>
             {/* Cost is a COMPONENT of PnL (PnL = carry − cost), not a peer of
@@ -4683,7 +4645,7 @@ export function AssetCard({
           aria-expanded={wfOpen}
           onClick={() => setWfOpen((v) => !v)}
         >
-          <WaterfallIcon />
+          <ChartColumnDecreasing size={13} aria-hidden className="text-ink-400" />
           {wfOpen ? 'Hide waterfall' : 'PnL waterfall'}
         </button>
         </div>

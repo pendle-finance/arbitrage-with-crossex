@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react';
-import { ChevronIcon } from '../../components/ChevronIcon';
 import type { SetupRowProps } from './setupState';
+import { ChevronDown } from 'lucide-react';
 
 type DotTone = 'done' | 'current' | 'warn' | 'later';
 
@@ -51,7 +51,7 @@ export function SetupRowFrame({
   const isDisclosure = isSettings && (isDone || row.open);
   const chevron = (
     <span aria-hidden className={`pp-chevron !p-1.5 transition-transform ${row.open ? 'rotate-180' : ''}`}>
-      <ChevronIcon />
+      <ChevronDown size={14} aria-hidden />
     </span>
   );
   const action = isDisclosure ? (

@@ -34,6 +34,7 @@ import {
   type OpportunityFilters,
   type OpportunityRow,
 } from './opportunityFilters';
+import { Funnel } from 'lucide-react';
 
 function FilterChip<T extends string | number>({
   option,
@@ -301,9 +302,7 @@ export function OpportunityFilterBar({
                 : 'border-ink-700 bg-ink-900 text-ink-300 hover:border-ink-500 hover:text-ink-100'
             }`}
           >
-            <svg viewBox="0 0 16 16" className="h-3 w-3" fill="currentColor" aria-hidden="true">
-              <path d="M2 3h12L9.5 8.6V14L6.5 12.4V8.6z" />
-            </svg>
+            <Funnel size={12} aria-hidden />
             Filters
             {hiddenActive > 0 && (
               <span className="num rounded bg-cyan-500/20 px-1 text-[10px] leading-4 text-cyan-200">
