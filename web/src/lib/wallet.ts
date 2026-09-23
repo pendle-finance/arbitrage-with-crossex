@@ -99,7 +99,9 @@ export interface ConnectedWallet {
  * somewhere else either fails confusingly or approves on a chain Boros does not
  * read. `4902` means the chain is unknown to the wallet, so it is added first.
  */
-export async function connectWallet(): Promise<ConnectedWallet> {
+/** Prompt for the wallet's account, and nothing else: no chain switch and no
+ * signature. Connecting only picks which account the terminal shows. */
+export async function requestWalletAccount(): Promise<Address> {
   const provider = typeof window !== 'undefined' ? window.ethereum : undefined;
   if (!provider) {
     throw new WalletError(
@@ -119,6 +121,12 @@ export async function connectWallet(): Promise<ConnectedWallet> {
   }
   const address = accounts?.[0] as Address | undefined;
   if (!address) throw new WalletError('failed', 'The wallet returned no account.');
+  return address;
+}
+
+export async function connectWallet(): Promise<ConnectedWallet> {
+  const address = await requestWalletAccount();
+  const provider = window.ethereum!;
 
   const chainId = Number(await provider.request({ method: 'eth_chainId' }));
   if (chainId !== BOROS_CHAIN.id) {

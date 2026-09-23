@@ -104,7 +104,7 @@ describe('SetupPage · Gate API key', () => {
     await user.click(screen.getByRole('button', { name: 'Check key' }));
 
     expect(await within(row('Gate API key')).findByText('160e…4f80 · works')).toBeInTheDocument();
-    expect(await screen.findByRole('radio', { name: 'Paste address' })).toBeInTheDocument();
+    expect(await screen.findByText('Install Rabby or MetaMask, then reload.')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Check key' })).toBeNull();
   });
 
@@ -147,32 +147,44 @@ describe('SetupPage · Gate API key', () => {
 });
 
 describe('SetupPage · Boros wallet', () => {
-  it('wallet becomes tracked', async () => {
+  it('connect wallet only reads the account and follows it', async () => {
     const user = userEvent.setup();
     installWallet();
-    const world = mockWorld({ keyConfigured: true });
-    server.use(
-      http.put('/api/boros/agent', () => {
-        world.agent = agentStatus({ configured: true, root: WALLET, rootMasked: '0xab18…ed9d', accountId: 0 });
-        return HttpResponse.json(env(world.agent));
-      }),
-    );
+    mockWorld({ keyConfigured: true });
     renderSetup();
     await user.click(await screen.findByRole('button', { name: 'Connect wallet' }));
 
-    expect(await within(row('Boros wallet')).findByText('0xab18…ed9d · can trade · follows your wallet')).toBeInTheDocument();
-    expect(approveAgent).toHaveBeenCalledTimes(1);
-    expect(trackedInStorage()).toEqual({ address: WALLET, walletUpgraded: true, followWallet: true });
-    expect(await screen.findByRole('button', { name: 'Set up ↗' })).toBeInTheDocument();
+    const wallet = row('Boros wallet');
+    expect(await within(wallet).findByText('0xab18…ed9d')).toBeInTheDocument();
+    expect(within(wallet).getByText('View only')).toBeInTheDocument();
+    expect(approveAgent).not.toHaveBeenCalled();
+    const request = (window as unknown as { ethereum: { request: ReturnType<typeof vi.fn> } }).ethereum.request;
+    const methods = request.mock.calls.map(([arg]) => (arg as { method: string }).method);
+    expect(methods).toContain('eth_requestAccounts');
+    expect(methods.filter((m) => m !== 'eth_requestAccounts' && m !== 'eth_accounts')).toEqual([]);
+    expect(trackedInStorage()).toEqual({ address: WALLET, followWallet: true });
+    expect(within(wallet).getByRole('button', { name: 'Log in to trade 0xab18…ed9d' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Set up ↗' })).toBeNull();
   });
 
-  it('approval cost free', async () => {
+  it('the row has no paste form and no approval cost', async () => {
     installWallet();
     mockWorld({ keyConfigured: true });
     renderSetup();
     expect(await screen.findByRole('button', { name: 'Connect wallet' })).toBeInTheDocument();
-    expect(screen.getByText('Approval cost: free')).toBeInTheDocument();
+    expect(screen.queryByRole('radio', { name: 'Paste address' })).toBeNull();
+    expect(screen.queryByRole('radio', { name: 'Connect wallet' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Track address' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Stop tracking' })).toBeNull();
+    expect(screen.queryByText('Approval cost: free')).toBeNull();
     expect(screen.queryByText(/gas/i)).toBeNull();
+  });
+
+  it('no wallet installed asks for one', async () => {
+    mockWorld({ keyConfigured: true });
+    renderSetup();
+    expect(await within(row('Boros wallet')).findByText('Install Rabby or MetaMask, then reload.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Connect wallet' })).toBeNull();
   });
 
   it('connect tab is one line, as the artboard draws it', async () => {
@@ -186,36 +198,16 @@ describe('SetupPage · Boros wallet', () => {
     expect(within(wallet).queryByText(/delegated agent key|one on-chain transaction|cannot deposit or withdraw/i)).toBeNull();
   });
 
-  it('paste address', async () => {
-    const user = userEvent.setup();
-    mockWorld({ keyConfigured: true });
-    renderSetup();
-    await user.click(await screen.findByRole('radio', { name: 'Paste address' }));
-    expect(screen.getByText('View only. Log in to trade.')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Track address' })).toBeInTheDocument();
-  });
-
-  it('paste address done', async () => {
-    const user = userEvent.setup();
-    mockWorld({ keyConfigured: true });
-    renderSetup();
-    await user.click(await screen.findByRole('radio', { name: 'Paste address' }));
-    await user.type(screen.getByPlaceholderText('0x…'), PASTED);
-    await user.click(screen.getByRole('button', { name: 'Track address' }));
-
-    expect(await within(row('Boros wallet')).findByText('0x3f2a…91c0 · view only')).toBeInTheDocument();
-    expect(trackedInStorage()).toEqual({ address: PASTED });
-    expect(screen.queryByRole('button', { name: 'Track address' })).toBeNull();
-  });
-
   it('upgrade switches to the trading wallet once', async () => {
     const user = userEvent.setup();
     localStorage.setItem('crossex.strategy.v1', JSON.stringify({ address: OTHER }));
     mockWorld({ keyConfigured: true, agent: agentStatus({ configured: true, root: WALLET }) });
     renderSetup();
 
-    expect(await within(row('Boros wallet')).findByText('0xab18…ed9d · can trade')).toBeInTheDocument();
-    expect(screen.getByText('0xab18…ed9d', { selector: 'span.num' })).toBeInTheDocument();
+    const wallet = row('Boros wallet');
+    expect(await within(wallet).findByText('Can trade')).toBeInTheDocument();
+    expect(within(wallet).getAllByText('0xab18…ed9d', { selector: 'span.num' }).length).toBeGreaterThan(0);
+    expect(screen.getByText(/the wallet that trades/)).toBeInTheDocument();
     expect(trackedInStorage()).toEqual({ address: WALLET, walletUpgraded: true, walletUpgradeNote: WALLET });
     await user.click(screen.getByRole('button', { name: 'Dismiss' }));
     expect(screen.queryByText(/the wallet that trades/)).toBeNull();
@@ -227,10 +219,11 @@ describe('SetupPage · Boros wallet', () => {
     mockWorld({ keyConfigured: true, agent: agentStatus({ configured: true, root: WALLET }) });
     renderSetup();
 
-    expect(await within(row('Boros wallet')).findByText('0x5c1f…a2e0 · view only')).toBeInTheDocument();
+    const wallet = row('Boros wallet');
+    expect(await within(wallet).findByText('View only')).toBeInTheDocument();
+    expect(within(wallet).getByText('0x5c1f…a2e0')).toBeInTheDocument();
     expect(screen.queryByText(/the wallet that trades/)).toBeNull();
   });
-
 
   it('skip asks once', async () => {
     const user = userEvent.setup();
@@ -244,7 +237,7 @@ describe('SetupPage · Boros wallet', () => {
     ).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Skip anyway' })).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Back' }));
-    expect(screen.getByRole('radio', { name: 'Paste address' })).toBeInTheDocument();
+    expect(screen.getByText('Install Rabby or MetaMask, then reload.')).toBeInTheDocument();
   });
 
   it('skip anyway', async () => {
@@ -256,7 +249,7 @@ describe('SetupPage · Boros wallet', () => {
 
     expect(within(row('Boros wallet')).getByText('not set up')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Set up ↗' })).toBeInTheDocument();
-    expect(screen.queryByRole('radio', { name: 'Paste address' })).toBeNull();
+    expect(screen.queryByText('Install Rabby or MetaMask, then reload.')).toBeNull();
   });
 });
 
@@ -464,26 +457,108 @@ describe('setup rows in Settings', () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
+  const day = (unix: number) => new Date(unix * 1000).toLocaleDateString();
+  const header = (name: string) => within(row(name)).getByText(name).parentElement as HTMLElement;
+  const dot = (name: string) => header(name).firstElementChild?.textContent;
+
   it('approval expired', async () => {
     mockWorld({ agent: agentStatus({ configured: true, root: WALLET, expired: true, expiry: 1_700_000_000 }) });
     renderWithClient(<BorosWalletRow {...settingsRow()} />);
-    expect(await within(row('Boros wallet')).findByText(/· login expired$/)).toBeInTheDocument();
+    expect(await within(row('Boros wallet')).findByText('Login expired')).toBeInTheDocument();
+    expect(within(header('Boros wallet')).getByText('0xab18…ed9d')).toBeInTheDocument();
+    expect(dot('Boros wallet')).toBe('!');
     expect(screen.getByRole('button', { name: 'Edit' })).toBeInTheDocument();
+  });
+
+  it('an expired login offers a renewal', async () => {
+    installWallet();
+    mockWorld({ agent: agentStatus({ configured: true, root: WALLET, expired: true, expiry: 1_700_000_000 }) });
+    renderWithClient(<BorosWalletRow {...settingsRow({ open: true })} />);
+    expect(await screen.findByText(`Login ended ${day(1_700_000_000)}. Boros refuses orders.`)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Renew login for 0xab18…ed9d' })).toBeInTheDocument();
   });
 
   it('a key the chain never approved reads "not approved", not "can trade"', async () => {
     mockWorld({ agent: agentStatus({ configured: true, root: WALLET, approval: 'not-approved', expiry: 2_000_000_000 }) });
     renderWithClient(<BorosWalletRow {...settingsRow()} />);
-    expect(await within(row('Boros wallet')).findByText(/· not approved$/)).toBeInTheDocument();
+    expect(await within(row('Boros wallet')).findByText('Not approved')).toBeInTheDocument();
+    expect(within(row('Boros wallet')).queryByText('Can trade')).toBeNull();
+    expect(dot('Boros wallet')).toBe('!');
   });
 
-  it('stop tracking clears the address', async () => {
+  it('a key the chain never approved offers a login', async () => {
+    installWallet();
+    mockWorld({ agent: agentStatus({ configured: true, root: WALLET, approval: 'not-approved', expiry: 2_000_000_000 }) });
+    renderWithClient(<BorosWalletRow {...settingsRow({ open: true })} />);
+    expect(await screen.findByText(/^Boros has no approval for this login/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Log in to trade 0xab18…ed9d' })).toBeInTheDocument();
+  });
+
+  it('can trade names the key limits and logs out', async () => {
     const user = userEvent.setup();
+    const world = mockWorld({ agent: agentStatus({ configured: true, root: WALLET, expiry: 2_000_000_000 }) });
+    server.use(
+      http.delete('/api/boros/agent', () => {
+        world.agent = agentStatus();
+        return HttpResponse.json(env({ configured: false, note: '' }));
+      }),
+    );
+    renderWithClient(<BorosWalletRow {...settingsRow({ open: true })} />);
+    expect(await within(row('Boros wallet')).findByText('Can trade')).toBeInTheDocument();
+    expect(
+      screen.getByText(`Agent key: trades only, cannot deposit or withdraw. Login ends ${day(2_000_000_000)}.`),
+    ).toBeInTheDocument();
+    expect(dot('Boros wallet')).toBe('✓');
+    expect(screen.queryByRole('button', { name: 'Remove key' })).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'Log out' }));
+    expect(
+      await screen.findByText('Logged out. The approval stays live on-chain until you revoke it in the Boros app.'),
+    ).toBeInTheDocument();
+  });
+
+  it('view only names the wallet logged in here', async () => {
+    installWallet();
+    localStorage.setItem('crossex.strategy.v1', JSON.stringify({ address: OTHER, walletUpgraded: true }));
+    mockWorld({ agent: agentStatus({ configured: true, root: WALLET, expiry: 2_000_000_000 }) });
+    renderWithClient(<BorosWalletRow {...settingsRow({ open: true })} />);
+    expect(await screen.findByText(/is still logged in/)).toHaveTextContent(
+      /^0xab18…ed9d is still logged in\. This terminal trades it\.$/,
+    );
+    expect(screen.getByRole('button', { name: 'Log in to trade 0x5c1f…a2e0' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Use my browser wallet' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Log out' })).toBeNull();
+  });
+
+  it('view only says the other login syncs Telegram alerts when they are linked', async () => {
+    installWallet();
+    localStorage.setItem('crossex.strategy.v1', JSON.stringify({ address: OTHER, walletUpgraded: true }));
+    mockWorld({ agent: agentStatus({ configured: true, root: WALLET, expiry: 2_000_000_000 }), telegram: connectedTelegram() });
+    renderWithClient(
+      <>
+        <BorosWalletRow {...settingsRow({ open: true })} />
+        <TelegramRow {...settingsRow()} />
+      </>,
+    );
+    expect(await screen.findByText(/and syncs its Telegram alerts/)).toHaveTextContent(
+      /^0xab18…ed9d is still logged in\. This terminal trades it and syncs its Telegram alerts\.$/,
+    );
+  });
+
+  it('view only with no login asks to log in once', async () => {
+    installWallet();
     localStorage.setItem('crossex.strategy.v1', JSON.stringify({ address: PASTED }));
     mockWorld();
     renderWithClient(<BorosWalletRow {...settingsRow({ open: true })} />);
-    await user.click(await screen.findByRole('button', { name: 'Stop tracking' }));
-    expect(trackedInStorage()).toEqual({ address: null });
+    expect(await screen.findByRole('button', { name: 'Log in to trade 0x3f2a…91c0' })).toBeInTheDocument();
+    expect(screen.getByText('Log in once to trade. The agent key cannot deposit or withdraw.')).toBeInTheDocument();
+  });
+
+  it('use my browser wallet hides without a wallet or while following', async () => {
+    localStorage.setItem('crossex.strategy.v1', JSON.stringify({ address: PASTED }));
+    mockWorld();
+    renderWithClient(<BorosWalletRow {...settingsRow({ open: true })} />);
+    expect(await screen.findByText('Install Rabby or MetaMask to log in.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Use my browser wallet' })).toBeNull();
   });
 
   it('a disconnect the bot could not answer keeps the row connected', async () => {

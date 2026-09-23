@@ -74,7 +74,8 @@ describe('SettingsDrawer', () => {
       'Telegram alerts',
     ]);
     expect(await within(row('Gate API key')).findByText('160e…4f80 · works')).toBeInTheDocument();
-    expect(await within(row('Boros wallet')).findByText('0xab18…ed9d · can trade')).toBeInTheDocument();
+    expect(await within(row('Boros wallet')).findByText('Can trade')).toBeInTheDocument();
+    expect(within(row('Boros wallet')).getByText('0xab18…ed9d')).toBeInTheDocument();
     expect(await within(row('Telegram alerts')).findByText('All on · synced 3 min ago')).toBeInTheDocument();
     for (const name of ['Gate API key', 'Boros wallet', 'Telegram alerts']) {
       expect(within(row(name)).getByRole('button', { name: 'Edit' })).toBeInTheDocument();
@@ -217,27 +218,17 @@ describe('SettingsDrawer', () => {
     expect(within(telegram).queryByRole('button', { name: 'Edit' })).toBeNull();
   });
 
-  it('edit wallet opens the setup form', async () => {
+  it('edit wallet shows the login and log out', async () => {
     mockAllDone();
     renderDrawer();
     await clickEdit('Boros wallet');
     const wallet = row('Boros wallet');
 
-    expect(await within(wallet).findByRole('radio', { name: 'Connect wallet' })).toBeInTheDocument();
-    expect(within(wallet).getByRole('radio', { name: 'Paste address' })).toBeInTheDocument();
+    expect(await within(wallet).findByText('Agent key: trades only, cannot deposit or withdraw.')).toBeInTheDocument();
+    expect(within(wallet).getByRole('button', { name: 'Log out' })).toBeInTheDocument();
+    expect(within(wallet).queryByRole('radio')).toBeNull();
     expect(within(wallet).getByRole('button', { name: 'Close' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Replace credentials' })).toBeNull();
-  });
-
-  it('stop tracking stays', async () => {
-    localStorage.setItem('crossex.strategy.v1', JSON.stringify({ address: PASTED }));
-    mockWorld({ keyConfigured: true, telegram: connectedTelegram() });
-    renderDrawer();
-    const user = await clickEdit('Boros wallet');
-    await user.click(await within(row('Boros wallet')).findByRole('button', { name: 'Stop tracking' }));
-
-    expect(trackedInStorage()).toEqual({ address: null });
-    expect(await within(row('Boros wallet')).findByText('not set up')).toBeInTheDocument();
   });
 
   it('approval expired', async () => {
@@ -250,23 +241,26 @@ describe('SettingsDrawer', () => {
     renderDrawer();
     const wallet = row('Boros wallet');
 
-    expect(await within(wallet).findByText(/· login expired$/)).toBeInTheDocument();
+    expect(await within(wallet).findByText('Login expired')).toBeInTheDocument();
     expect(within(wallet).getByRole('button', { name: 'Edit' })).toBeInTheDocument();
   });
 
-  it('paste switches the active wallet to view only', async () => {
+  it('use my browser wallet switches the active wallet to view only', async () => {
     const user = userEvent.setup();
-    mockAllDone();
-    renderDrawer();
-    expect(await within(row('Boros wallet')).findByText('0xab18…ed9d · can trade')).toBeInTheDocument();
-    await clickEdit('Boros wallet');
-    await user.click(await within(row('Boros wallet')).findByRole('radio', { name: 'Paste address' }));
-    const input = within(row('Boros wallet')).getByPlaceholderText('0x…');
-    await user.clear(input);
-    await user.type(input, PASTED);
-    await user.click(within(row('Boros wallet')).getByRole('button', { name: 'Track address' }));
-    expect(await within(row('Boros wallet')).findByText('0x3f2a…91c0 · view only')).toBeInTheDocument();
-    expect(trackedInStorage()).toEqual({ address: PASTED, walletUpgraded: true });
+    const request = vi.fn(async ({ method }: { method: string }) => (method === 'eth_requestAccounts' ? [PASTED] : null));
+    (window as unknown as { ethereum?: unknown }).ethereum = { request };
+    try {
+      mockAllDone();
+      renderDrawer();
+      expect(await within(row('Boros wallet')).findByText('Can trade')).toBeInTheDocument();
+      await clickEdit('Boros wallet');
+      await user.click(await within(row('Boros wallet')).findByRole('button', { name: 'Use my browser wallet' }));
+      expect(await within(row('Boros wallet')).findByText('0x3f2a…91c0')).toBeInTheDocument();
+      expect(within(row('Boros wallet')).getByText('View only')).toBeInTheDocument();
+      expect(trackedInStorage()).toEqual({ address: PASTED, walletUpgraded: true, followWallet: true });
+    } finally {
+      delete (window as unknown as { ethereum?: unknown }).ethereum;
+    }
   });
 
   it('telegram says which wallet alerts follow', async () => {
@@ -337,12 +331,12 @@ describe('SettingsDrawer · focus step', () => {
     mockAllDone(telegramInfo());
     renderWithClient(<FocusHarness initial="telegram" />);
     const user = await clickEdit('Boros wallet');
-    expect(await screen.findByRole('radio', { name: 'Paste address' })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Log out' })).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'close' }));
     act(() => drive.setOpen(true));
 
     expect(await within(row('Telegram alerts')).findByText('a 20% price move would liquidate a leg')).toBeInTheDocument();
-    expect(screen.queryByRole('radio', { name: 'Paste address' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Log out' })).toBeNull();
   });
 
   it('no focus step opens no row', async () => {

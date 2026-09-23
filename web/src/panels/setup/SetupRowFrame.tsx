@@ -16,6 +16,7 @@ export function SetupRowFrame({
   row,
   isDone,
   state,
+  stateNode,
   isWarn = false,
   alert,
   setupAction,
@@ -28,6 +29,8 @@ export function SetupRowFrame({
   row: SetupRowProps;
   isDone: boolean;
   state: string | null;
+  /** Shown in place of `state`'s text, e.g. an address and a tag. */
+  stateNode?: ReactNode;
   isWarn?: boolean;
   alert?: ReactNode;
   setupAction?: ReactNode;
@@ -79,7 +82,9 @@ export function SetupRowFrame({
           {dot === 'done' ? '✓' : dot === 'warn' ? '!' : n}
         </span>
         <span className="shrink-0 text-sm font-medium text-ink-100">{title}</span>
-        {line && (
+        {stateNode && !showsNotSetUp ? (
+          <span className="flex min-w-0 items-center gap-2 text-xs text-ink-300">{stateNode}</span>
+        ) : line && (
           <span className={`num min-w-0 text-xs ${isLineWarn ? 'text-amber-400' : 'text-ink-400'}`}>
             {line
               .split(' · ')

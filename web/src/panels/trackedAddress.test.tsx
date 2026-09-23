@@ -1,13 +1,10 @@
 import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { HttpResponse, http } from 'msw';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { agentStatus, mockWorld, telegramInfo, versionHandler } from '../test/fixtures';
+import { agentStatus, mockWorld } from '../test/fixtures';
 import { installFakeWallet, removeFakeWallet } from '../test/fakeWallet';
-import { env, server } from '../test/server';
 import { renderWithClient } from '../test/utils';
 import { STRATEGY_STORAGE_KEY } from './HomeControls';
-import { SettingsDrawer } from './SettingsDrawer';
 import { SetupPage } from './setup/SetupPage';
 import { useTrackedAddress } from './trackedAddress';
 
@@ -39,21 +36,18 @@ afterEach(() => {
 });
 
 describe('follow the browser wallet', () => {
-  it('Connect wallet turns follow on and the row says so', async () => {
+  it('Connect wallet only asks for the account and turns follow on', async () => {
     const user = userEvent.setup();
-    installFakeWallet({ accounts: [WALLET] });
-    const world = mockWorld({ keyConfigured: true });
-    server.use(
-      http.put('/api/boros/agent', () => {
-        world.agent = agentStatus({ configured: true, root: WALLET, rootMasked: '0xab18…ed9d', accountId: 0 });
-        return HttpResponse.json(env(world.agent));
-      }),
-    );
+    const wallet = installFakeWallet({ accounts: [WALLET] });
+    mockWorld({ keyConfigured: true });
     renderWithClient(<SetupPage onFinish={vi.fn()} onOpenGuide={vi.fn()} />);
     await user.click(await screen.findByRole('button', { name: 'Connect wallet' }));
 
-    expect(await within(row()).findByText('0xab18…ed9d · can trade · follows your wallet')).toBeInTheDocument();
-    expect(stored()).toEqual({ address: WALLET, walletUpgraded: true, followWallet: true });
+    expect(await within(row()).findByText('0xab18…ed9d')).toBeInTheDocument();
+    expect(within(row()).getByText('View only')).toBeInTheDocument();
+    expect(within(row()).queryByRole('button', { name: 'Use my browser wallet' })).toBeNull();
+    expect(stored()).toEqual({ address: WALLET, followWallet: true });
+    expect(wallet.methods().filter((m) => m !== 'eth_accounts')).toEqual(['eth_requestAccounts']);
   });
 
   it('accountsChanged switches the active wallet, lowercase', async () => {
@@ -78,34 +72,6 @@ describe('follow the browser wallet', () => {
     act(() => wallet.emitAccounts([]));
     expect(screen.getByTestId('probe')).toHaveTextContent(`${WALLET}|follow`);
     expect(stored()).toMatchObject({ address: WALLET, followWallet: true });
-  });
-
-  it('Paste address turns follow off and later wallet switches are ignored', async () => {
-    const user = userEvent.setup();
-    const wallet = installFakeWallet({ accounts: [WALLET] });
-    seed({ address: WALLET, walletUpgraded: true, followWallet: true });
-    mockWorld({ keyConfigured: true, agent: agentStatus({ configured: true, root: WALLET }), telegram: telegramInfo() });
-    server.use(versionHandler({ current: '1.6.3', latest: '1.6.3' }));
-    renderWithClient(
-      <>
-        <SettingsDrawer open onClose={vi.fn()} />
-        <Probe />
-      </>,
-    );
-    expect(await within(row()).findByText('0xab18…ed9d · can trade · follows your wallet')).toBeInTheDocument();
-    await waitFor(() => expect(wallet.listenerCount()).toBe(1));
-    await user.click(within(row()).getByRole('button', { name: 'Edit' }));
-    await user.click(await within(row()).findByRole('radio', { name: 'Paste address' }));
-    const input = within(row()).getByPlaceholderText('0x…');
-    await user.clear(input);
-    await user.type(input, PASTED);
-    await user.click(within(row()).getByRole('button', { name: 'Track address' }));
-
-    expect(await within(row()).findByText('0x3f2a…91c0 · view only')).toBeInTheDocument();
-    expect(stored()).toEqual({ address: PASTED, walletUpgraded: true });
-    expect(wallet.listenerCount()).toBe(0);
-    act(() => wallet.emitAccounts([SECOND]));
-    expect(screen.getByTestId('probe')).toHaveTextContent(`${PASTED}|fixed`);
   });
 
   it('on load, eth_accounts switches to the browser account without a prompt', async () => {

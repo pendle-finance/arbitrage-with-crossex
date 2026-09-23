@@ -21,7 +21,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { Hex } from 'viem';
 import { fetchJson } from '../api/client';
-import { qk, useBorosAgent, useForgetBorosAgent, useProvisionBorosAgent } from '../api/queries';
+import { qk, useBorosAgent, useForgetBorosAgent, useProvisionBorosAgent, useTelegramLinked } from '../api/queries';
 import type { BorosAgentStatus } from '../api/types';
 import { Chip } from '../components/Chip';
 import { useToastOptional } from '../components/Toast';
@@ -223,14 +223,15 @@ const buttonText = (login: LogIn, idle: string): string =>
 
 /** Asked before a login that logs out the wallet that can trade now. */
 function ReplaceConfirm({ login }: { login: LogIn }) {
+  const alertsLinked = useTelegramLinked();
   if (!login.replacing) return null;
   const { from, to } = login.replacing;
   return (
     <div role="alertdialog" aria-label="Log out the other wallet?" className="mt-2 rounded border border-amber-500/40 bg-amber-500/5 px-2.5 py-2">
       <p className="text-[11px] leading-relaxed text-amber-200">
-        <span className="num">{short(from)}</span> is logged in here. Logging in{' '}
-        <span className="num">{short(to)}</span> logs it out. You will then need the Boros app to close{' '}
-        <span className="num">{short(from)}</span> positions.
+        Logging in <span className="num">{short(to)}</span> logs out <span className="num">{short(from)}</span>.
+        Trading{alertsLinked ? ' and Telegram alerts' : ''} move to <span className="num">{short(to)}</span>. To
+        close <span className="num">{short(from)}</span> positions after that, use the Boros app.
       </p>
       <div className="mt-2 flex gap-2">
         <button type="button" className="btn-primary num flex-1" onClick={() => login.answerReplace(true)}>
@@ -248,9 +249,17 @@ function ReplaceConfirm({ login }: { login: LogIn }) {
   );
 }
 
-export function BorosLogInButton({ className, renew = false }: { className?: string; renew?: boolean }) {
+export function BorosLogInButton({
+  className,
+  renew = false,
+  onDone,
+}: {
+  className?: string;
+  renew?: boolean;
+  onDone?: (root: string) => void;
+}) {
   const { address, loginLabel, openLogin } = useActiveWallet();
-  const login = useBorosLogIn(undefined, address);
+  const login = useBorosLogIn(onDone, address);
   // `renew`: the login still works but ends soon, so there is no loginLabel.
   const label = loginLabel ?? (renew && address ? `Renew login for ${short(address)}` : null);
   if (!label && !login.note) return null;

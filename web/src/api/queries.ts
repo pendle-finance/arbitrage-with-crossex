@@ -801,6 +801,17 @@ export function useTelegram() {
   });
 }
 
+/** Is Telegram linked? Read from the cache only, never fetched: for copy that
+ * mentions alerts when the Telegram row has already loaded them. */
+export function useTelegramLinked(): boolean {
+  const { data } = useQuery({
+    queryKey: qk.telegram,
+    queryFn: () => fetchJson<TelegramInfo>('/telegram'),
+    enabled: false,
+  });
+  return data?.connected === true;
+}
+
 export function useTelegramLink(enabled: boolean) {
   const shown = useTabActive();
   return useQuery({
