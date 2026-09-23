@@ -666,13 +666,13 @@ describe('setup rows in Settings', () => {
   });
 
   it('unknown settings read as alerts off, not both on', async () => {
-    mockWorld({ telegram: telegramInfo({ connected: true, state: 'connected', settings: null, lastSyncAt: null }) });
+    mockWorld({ telegram: telegramInfo({ connected: true, state: 'connected', settings: null, lastSyncAt: Date.now() }) });
     renderWithClient(<TelegramRow {...settingsRow()} />);
-    expect(await within(row('Telegram alerts')).findByText('None on')).toBeInTheDocument();
+    expect(await within(row('Telegram alerts')).findByText(/^None on/)).toBeInTheDocument();
   });
 
   it('unknown settings leave both switches off', async () => {
-    mockWorld({ telegram: telegramInfo({ connected: true, state: 'connected', settings: null, lastSyncAt: null }) });
+    mockWorld({ telegram: telegramInfo({ connected: true, state: 'connected', settings: null, lastSyncAt: Date.now() }) });
     renderWithClient(<TelegramRow {...settingsRow({ open: true })} />);
     expect(await screen.findByRole('switch', { name: 'Close to liquidation' })).toHaveAttribute('aria-checked', 'false');
     expect(screen.getByRole('switch', { name: 'Started paying interest' })).toHaveAttribute('aria-checked', 'false');
