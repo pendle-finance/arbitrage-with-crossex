@@ -1,3 +1,4 @@
+import userEvent from '@testing-library/user-event';
 import { screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AssetGroup } from '../../api/types';
@@ -60,12 +61,10 @@ function renderCard(storedSinceSec: number | undefined) {
 describe('AssetCard since chip on the full card', () => {
   beforeEach(() => server.use(...baseHandlers()));
 
-  it('shows no all time link on a default or a moved card, no all-time link', () => {
-    const { unmount } = renderCard(undefined);
-    expect(screen.queryByRole('button', { name: /all time/i })).toBeNull();
-    unmount();
-
+  it('keeps All time behind the date arrow, not as a link on the card', async () => {
     renderCard(MARCH);
-    expect(screen.queryByRole('button', { name: /all time/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^all time$/i })).toBeNull();
+    await userEvent.click(screen.getByRole('button', { name: 'Date options' }));
+    expect(await screen.findByRole('button', { name: 'All time' })).toBeInTheDocument();
   });
 });
