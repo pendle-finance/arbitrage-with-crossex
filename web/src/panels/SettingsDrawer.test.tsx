@@ -203,7 +203,7 @@ describe('SettingsDrawer', () => {
     renderDrawer();
     const telegram = row('Telegram alerts');
 
-    expect(await within(telegram).findByText('Connected on another terminal')).toBeInTheDocument();
+    expect(await within(telegram).findByText('not set up')).toBeInTheDocument();
     expect(within(telegram).getByRole('button', { name: 'Set up ↗' })).toBeInTheDocument();
     expect(within(telegram).queryByRole('button', { name: 'Expand' })).toBeNull();
   });
@@ -213,7 +213,7 @@ describe('SettingsDrawer', () => {
     renderDrawer();
     const telegram = row('Telegram alerts');
 
-    expect(await within(telegram).findByText('Removed in Boros notifications')).toBeInTheDocument();
+    expect(await within(telegram).findByText('not set up')).toBeInTheDocument();
     expect(within(telegram).getByRole('button', { name: 'Set up ↗' })).toBeInTheDocument();
     expect(within(telegram).queryByRole('button', { name: 'Expand' })).toBeNull();
   });
@@ -292,9 +292,9 @@ describe('SettingsDrawer', () => {
     mockAllDone({ ...connectedTelegram(), alertWallet: WALLET, unlinkedWallet: PASTED });
     renderDrawer();
     const telegram = row('Telegram alerts');
-    expect(await within(telegram).findByText('Not set up for 0x3f2a…91c0')).toBeInTheDocument();
-    // Closed row: the state names the wallet, so the button is short.
-    expect(within(telegram).getByRole('button', { name: 'Set up' })).toBeInTheDocument();
+    // Closed row: it reads like a row never set up; the opened row names the wallet.
+    expect(await within(telegram).findByRole('button', { name: 'Set up' })).toBeInTheDocument();
+    expect(within(telegram).getByText('not set up')).toBeInTheDocument();
   });
 
   it('telegram sets up alerts for the new wallet with the same key', async () => {

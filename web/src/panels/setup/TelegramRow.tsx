@@ -99,10 +99,10 @@ const unlinkedOf = (info: TelegramInfo | undefined): string | null =>
 
 function stateLine(info: TelegramInfo | undefined, now: number): { text: string | null; isWarn: boolean } {
   if (!info) return { text: null, isWarn: false };
-  const unlinked = unlinkedOf(info);
-  if (unlinked) return { text: `Not set up for ${short(unlinked)}`, isWarn: true };
-  if (info.state === 'replaced') return { text: 'Connected on another terminal', isWarn: true };
-  if (info.state === 'removed') return { text: 'Removed in Boros notifications', isWarn: true };
+  // Not set up for this wallet, moved to another terminal, or removed on the
+  // bot page: each needs Set up, so each reads as a row never set up. The
+  // opened row says which wallet.
+  if (unlinkedOf(info) || info.state === 'replaced' || info.state === 'removed') return { text: null, isWarn: false };
   if (!info.connected) return { text: null, isWarn: false };
   if (isChecking(info)) return { text: 'Checking…', isWarn: false };
   if (syncFailure(info)) return { text: 'Last sync failed', isWarn: true };

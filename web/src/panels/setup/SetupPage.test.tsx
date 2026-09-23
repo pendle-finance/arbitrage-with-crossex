@@ -408,8 +408,8 @@ describe('setup rows in Settings', () => {
     [{ connected: true, state: 'connected', settings: { liquidation: true, interest: true, maturity: true, rollover: true }, lastSyncAt: Date.now() - 180_000 }, 'All on · synced 3 min ago'],
     [{ connected: true, state: 'connected', settings: { liquidation: true, interest: false, maturity: true, rollover: false }, lastSyncAt: Date.now() - 180_000 }, '2 of 4 on · synced 3 min ago'],
     [{ connected: true, state: 'connected', settings: { liquidation: true, interest: true, maturity: true, rollover: true }, lastSyncAt: at(11, 40), lastSyncError: { at: at(14, 2), message: 'timeout' } }, 'Last sync failed'],
-    [{ state: 'replaced' }, 'Connected on another terminal'],
-    [{ state: 'removed' }, 'Removed in Boros notifications'],
+    [{ state: 'replaced' }, 'not set up'],
+    [{ state: 'removed' }, 'not set up'],
     [{}, 'not set up'],
   ] as [Partial<TelegramInfo>, string][])('telegram state line %#', async (over, line) => {
     mockWorld({ telegram: telegramInfo(over) });
