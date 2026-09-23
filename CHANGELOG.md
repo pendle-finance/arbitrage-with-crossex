@@ -54,7 +54,8 @@ account.
   instead of showing nothing. A held price can no longer size a close: the close window drops its
   USD field until a real price arrives.
 - **A setup checklist on first run.** Each step says what it needs and what is missing, so a new
-  install reaches a working terminal without reading the guide.
+  install reaches a working terminal without reading the guide. The Gate key step lists what
+  comes first on Gate: fund Gate, enable CrossEx, fund CrossEx. Point at a step for the detail.
 - **Only coins both venues support.** A coin one venue lists and the other does not is no longer
   offered, on Opportunities and in the order ticket.
 - **A close-only market says so.** The order ticket marks a close-only market and asks you to
