@@ -78,7 +78,7 @@ export function ActiveWalletChip() {
       onClick={wallet.openLogin}
       title="Boros wallet. Click to manage."
       aria-label={`Boros wallet ${wallet.address}`}
-      className="flex h-[30px] items-center gap-2 rounded border border-ink-700 px-2 text-[11.5px] text-ink-200 hover:border-ink-500"
+      className="hdr-ctl gap-2 border-ink-700 font-normal text-ink-200 hover:border-ink-500"
     >
       <span aria-hidden className="inline-flex h-3 w-2.5 shrink-0 overflow-hidden">
         <BorosLogo className="h-3 w-auto max-w-none shrink-0" />
