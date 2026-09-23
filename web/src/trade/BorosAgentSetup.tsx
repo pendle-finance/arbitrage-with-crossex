@@ -55,7 +55,7 @@ type Step = 'idle' | 'connecting' | 'replace' | 'approving' | 'saving' | 'confir
 
 const STEP_LABEL: Record<Exclude<Step, 'idle'>, string> = {
   connecting: 'Waiting for your wallet…',
-  replace: 'Answer the note below',
+  replace: 'Waiting for your answer…',
   approving: 'Approving the agent on-chain…',
   saving: 'Handing the key to your terminal…',
   confirming: 'Checking the approval on Boros…',
@@ -227,12 +227,27 @@ function ReplaceConfirm({ login }: { login: LogIn }) {
   if (!login.replacing) return null;
   const { from, to } = login.replacing;
   return (
-    <div role="alertdialog" aria-label="Log out the other wallet?" className="mt-2 rounded border border-amber-500/40 bg-amber-500/5 px-2.5 py-2">
-      <p className="text-[11px] leading-relaxed text-amber-200">
-        Logging in <span className="num">{short(to)}</span> logs out <span className="num">{short(from)}</span>.
-        Trading{alertsLinked ? ' and Telegram alerts' : ''} move to <span className="num">{short(to)}</span>. To
-        close <span className="num">{short(from)}</span> positions after that, use the Boros app.
+    <div
+      role="alertdialog"
+      aria-label={`Log out ${short(from)}?`}
+      className="rounded border border-amber-500/40 bg-amber-500/5 px-2.5 py-2"
+    >
+      <p className="text-[12px] font-medium text-amber-200">
+        Log out <span className="num">{short(from)}</span>?
       </p>
+      <ul className="mt-1 flex list-disc flex-col gap-0.5 pl-4 text-[11px] leading-relaxed text-amber-200/90">
+        <li>
+          Trading moves to <span className="num">{short(to)}</span>.
+        </li>
+        {alertsLinked && (
+          <li>
+            Telegram alerts move to <span className="num">{short(to)}</span>.
+          </li>
+        )}
+        <li>
+          To close <span className="num">{short(from)}</span> positions, use the Boros app.
+        </li>
+      </ul>
       <div className="mt-2 flex gap-2">
         <button type="button" className="btn-primary num flex-1" onClick={() => login.answerReplace(true)}>
           Log in {short(to)}
@@ -265,7 +280,8 @@ export function BorosLogInButton({
   if (!label && !login.note) return null;
   return (
     <div className={`flex flex-col gap-1.5 ${className ?? ''}`}>
-      {label && (
+      {/* While the log-out question is open, its two buttons are the only choices. */}
+      {label && !login.replacing && (
         <button
           type="button"
           className="btn-primary num w-full"
@@ -385,8 +401,7 @@ export function BorosAgentSetup({
             <p className="mt-1 text-[10.5px] leading-relaxed text-ink-400">
               Connect <span className="num text-ink-200">{otherWallet}</span> to trade it.
             </p>
-            {connectButton}
-            <ReplaceConfirm login={login} />
+            {login.replacing ? <ReplaceConfirm login={login} /> : connectButton}
             {error && (
               <p role="alert" className="mt-1.5 text-[11px] leading-relaxed text-rose-300">
                 {error}

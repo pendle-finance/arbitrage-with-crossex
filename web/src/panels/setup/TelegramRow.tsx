@@ -299,7 +299,6 @@ export function TelegramRow(p: SetupRowProps) {
       }
       setupAction={setupButton}
       skipConsequence="Without Telegram alerts nothing warns you near liquidation, when interest starts, or before a pair matures."
-      closeLabel="Close"
     >
       {info && isConnected
         ? connectedBody(

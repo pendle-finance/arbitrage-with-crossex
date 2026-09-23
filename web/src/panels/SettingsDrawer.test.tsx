@@ -45,7 +45,7 @@ const trackedInStorage = (): unknown => JSON.parse(localStorage.getItem('crossex
 
 async function clickEdit(name: string) {
   const user = userEvent.setup();
-  await user.click(await within(row(name)).findByRole('button', { name: 'Edit' }));
+  await user.click(await within(row(name)).findByRole('button', { name: 'Expand' }));
   return user;
 }
 
@@ -78,7 +78,7 @@ describe('SettingsDrawer', () => {
     expect(within(row('Boros wallet')).getByText('0xab18…ed9d')).toBeInTheDocument();
     expect(await within(row('Telegram alerts')).findByText('All on · synced 3 min ago')).toBeInTheDocument();
     for (const name of ['Gate API key', 'Boros wallet', 'Telegram alerts']) {
-      expect(within(row(name)).getByRole('button', { name: 'Edit' })).toBeInTheDocument();
+      expect(within(row(name)).getByRole('button', { name: 'Expand' })).toBeInTheDocument();
     }
     expect(row('Telegram alerts').compareDocumentPosition(version) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Replace credentials' })).toBeNull();
@@ -115,7 +115,7 @@ describe('SettingsDrawer', () => {
     await user.hover(within(telegram).getByText('Last synced 3 min ago'));
     expect(await screen.findByText(CAVEAT)).toBeInTheDocument();
     expect(within(telegram).getByRole('button', { name: 'Disconnect this terminal' })).toBeInTheDocument();
-    expect(within(telegram).getByRole('button', { name: 'Close' })).toBeInTheDocument();
+    expect(within(telegram).getByRole('button', { name: 'Collapse' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Skip/ })).toBeNull();
   });
 
@@ -195,7 +195,7 @@ describe('SettingsDrawer', () => {
 
     expect(await within(telegram).findByText('not set up')).toHaveClass('text-amber-400');
     expect(within(telegram).getByRole('button', { name: 'Set up ↗' })).toBeInTheDocument();
-    expect(within(telegram).queryByRole('button', { name: 'Edit' })).toBeNull();
+    expect(within(telegram).queryByRole('button', { name: 'Expand' })).toBeNull();
   });
 
   it('replaced', async () => {
@@ -205,7 +205,7 @@ describe('SettingsDrawer', () => {
 
     expect(await within(telegram).findByText('Connected on another terminal')).toBeInTheDocument();
     expect(within(telegram).getByRole('button', { name: 'Set up ↗' })).toBeInTheDocument();
-    expect(within(telegram).queryByRole('button', { name: 'Edit' })).toBeNull();
+    expect(within(telegram).queryByRole('button', { name: 'Expand' })).toBeNull();
   });
 
   it('removed', async () => {
@@ -215,7 +215,7 @@ describe('SettingsDrawer', () => {
 
     expect(await within(telegram).findByText('Removed on the Boros notifications page')).toBeInTheDocument();
     expect(within(telegram).getByRole('button', { name: 'Set up ↗' })).toBeInTheDocument();
-    expect(within(telegram).queryByRole('button', { name: 'Edit' })).toBeNull();
+    expect(within(telegram).queryByRole('button', { name: 'Expand' })).toBeNull();
   });
 
   it('edit wallet shows the login and log out', async () => {
@@ -227,7 +227,7 @@ describe('SettingsDrawer', () => {
     expect(await within(wallet).findByText('Agent key: trades only, cannot deposit or withdraw.')).toBeInTheDocument();
     expect(within(wallet).getByRole('button', { name: 'Log out' })).toBeInTheDocument();
     expect(within(wallet).queryByRole('radio')).toBeNull();
-    expect(within(wallet).getByRole('button', { name: 'Close' })).toBeInTheDocument();
+    expect(within(wallet).getByRole('button', { name: 'Collapse' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Replace credentials' })).toBeNull();
   });
 
@@ -242,7 +242,7 @@ describe('SettingsDrawer', () => {
     const wallet = row('Boros wallet');
 
     expect(await within(wallet).findByText('Login expired')).toBeInTheDocument();
-    expect(within(wallet).getByRole('button', { name: 'Edit' })).toBeInTheDocument();
+    expect(within(wallet).getByRole('button', { name: 'Expand' })).toBeInTheDocument();
   });
 
   it('use my browser wallet switches the active wallet to view only', async () => {
@@ -301,7 +301,7 @@ describe('SettingsDrawer', () => {
     await user.click(screen.getByRole('button', { name: 'Replace credentials' }));
 
     await waitFor(() => expect(screen.queryByRole('button', { name: 'Replace credentials' })).toBeNull());
-    expect(within(row('Gate API key')).getByRole('button', { name: 'Edit' })).toBeInTheDocument();
+    expect(within(row('Gate API key')).getByRole('button', { name: 'Expand' })).toBeInTheDocument();
   });
 });
 
@@ -312,7 +312,7 @@ describe('SettingsDrawer · focus step', () => {
     const telegram = row('Telegram alerts');
 
     expect(await within(telegram).findByText('a 20% price move would liquidate a leg')).toBeInTheDocument();
-    expect(within(telegram).getByRole('button', { name: 'Close' })).toBeInTheDocument();
+    expect(within(telegram).getByRole('button', { name: 'Collapse' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Replace credentials' })).toBeNull();
     expect(screen.queryByRole('radio', { name: 'Paste address' })).toBeNull();
   });
@@ -344,6 +344,6 @@ describe('SettingsDrawer · focus step', () => {
     renderWithClient(<FocusHarness initial={null} />);
 
     expect(await within(row('Telegram alerts')).findByRole('button', { name: 'Set up ↗' })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Close' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Collapse' })).toBeNull();
   });
 });

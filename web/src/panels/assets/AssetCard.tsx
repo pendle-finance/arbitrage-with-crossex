@@ -26,6 +26,7 @@ import type {
   BorosSimulatedLeg,
 } from '../../api/types';
 import { TokenIcon, VenueIcon } from '../../components/AssetIcon';
+import { ChevronIcon } from '../../components/ChevronIcon';
 import { Chip } from '../../components/Chip';
 import { HoverCard } from '../../components/HoverCard';
 import { Spinner } from '../../components/Spinner';
@@ -3498,13 +3499,6 @@ function WaterfallIcon() {
   );
 }
 
-function ChevronIcon() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-      <path d="M4 6l4 4 4-4" />
-    </svg>
-  );
-}
 function PerpRow({
   leg,
   base,

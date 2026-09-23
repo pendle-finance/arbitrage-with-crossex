@@ -413,7 +413,7 @@ describe('setup rows in Settings', () => {
     mockWorld({ telegram: telegramInfo(over) });
     renderWithClient(<TelegramRow {...settingsRow()} />);
     expect(await within(row('Telegram alerts')).findByText(line)).toBeInTheDocument();
-    const action = over.connected ? 'Edit' : 'Set up ↗';
+    const action = over.connected ? 'Expand' : 'Set up ↗';
     expect(screen.getByRole('button', { name: action })).toBeInTheDocument();
   });
 
@@ -453,7 +453,7 @@ describe('setup rows in Settings', () => {
     await waitFor(() => expect(patched).toEqual({ interest: false }));
     expect(screen.getByRole('button', { name: 'Disconnect this terminal' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Skip/ })).toBeNull();
-    await user.click(screen.getByRole('button', { name: 'Close' }));
+    await user.click(screen.getByRole('button', { name: 'Collapse' }));
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
@@ -467,7 +467,7 @@ describe('setup rows in Settings', () => {
     expect(await within(row('Boros wallet')).findByText('Login expired')).toBeInTheDocument();
     expect(within(header('Boros wallet')).getByText('0xab18…ed9d')).toBeInTheDocument();
     expect(dot('Boros wallet')).toBe('!');
-    expect(screen.getByRole('button', { name: 'Edit' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Expand' })).toBeInTheDocument();
   });
 
   it('an expired login offers a renewal', async () => {
@@ -521,9 +521,9 @@ describe('setup rows in Settings', () => {
     localStorage.setItem('crossex.strategy.v1', JSON.stringify({ address: OTHER, walletUpgraded: true }));
     mockWorld({ agent: agentStatus({ configured: true, root: WALLET, expiry: 2_000_000_000 }) });
     renderWithClient(<BorosWalletRow {...settingsRow({ open: true })} />);
-    expect(await screen.findByText(/is still logged in/)).toHaveTextContent(
-      /^0xab18…ed9d is still logged in\. This terminal trades it\.$/,
-    );
+    expect(await screen.findByText(/^Logged in here:/)).toHaveTextContent('Logged in here: 0xab18…ed9d');
+    expect(screen.getByText('It trades on this terminal.')).toBeInTheDocument();
+    expect(screen.queryByText('It gets the Telegram alerts.')).toBeNull();
     expect(screen.getByRole('button', { name: 'Log in to trade 0x5c1f…a2e0' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Use my browser wallet' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Log out' })).toBeNull();
@@ -539,9 +539,8 @@ describe('setup rows in Settings', () => {
         <TelegramRow {...settingsRow()} />
       </>,
     );
-    expect(await screen.findByText(/and syncs its Telegram alerts/)).toHaveTextContent(
-      /^0xab18…ed9d is still logged in\. This terminal trades it and syncs its Telegram alerts\.$/,
-    );
+    expect(await screen.findByText('It gets the Telegram alerts.')).toBeInTheDocument();
+    expect(screen.getByText('It trades on this terminal.')).toBeInTheDocument();
   });
 
   it('view only with no login asks to log in once', async () => {

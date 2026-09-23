@@ -11,7 +11,7 @@ export function GateKeyRow(p: SetupRowProps & { onOpenGuide?: () => void }) {
   const state = info?.configured ? [info.keyMasked, 'works'].filter(Boolean).join(' · ') : null;
 
   return (
-    <SetupRowFrame n={1} title="Gate API key" row={p} isDone={isDone} state={state} closeLabel="Close">
+    <SetupRowFrame n={1} title="Gate API key" row={p} isDone={isDone} state={state}>
       <button type="button" className="btn-link" onClick={() => p.onOpenGuide?.()}>
         How to make a key
       </button>

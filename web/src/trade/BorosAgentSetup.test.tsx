@@ -282,7 +282,11 @@ describe('BorosAgentSetup — no gas balance on the strip', () => {
 
     await user.click(await screen.findByRole('button', { name: 'Log in to trade 0x1111…1111' }));
     // 0x2222 can trade now, so the terminal asks before logging it out.
-    expect(await screen.findByRole('alertdialog')).toHaveTextContent('Logging in 0x1111…1111 logs out 0x2222…2222.');
+    const ask = await screen.findByRole('alertdialog', { name: 'Log out 0x2222…2222?' });
+    expect(ask).toHaveTextContent('Trading moves to 0x1111…1111.');
+    expect(ask).toHaveTextContent('To close 0x2222…2222 positions, use the Boros app.');
+    // The question's buttons are the only choices while it is open.
+    expect(screen.queryByRole('button', { name: /Waiting for your answer/ })).toBeNull();
     expect(body).toBeNull();
     await user.click(screen.getByRole('button', { name: 'Log in 0x1111…1111' }));
     await waitFor(() => expect(body).not.toBeNull());

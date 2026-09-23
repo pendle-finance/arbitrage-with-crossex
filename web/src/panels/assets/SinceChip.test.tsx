@@ -10,8 +10,9 @@ describe('SinceChip', () => {
   it('reads Since 23 Jun 2026 with the calendar icon on its left, default date', () => {
     render(<SinceChip base="HYPE" storedSec={undefined} defaultSec={DEFAULT_SEC} onChange={vi.fn()} />);
     const chip = screen.getByRole('button', { name: /Since 23 Jun 2026/ });
-    const pill = chip.querySelector('.chip');
-    expect(pill?.firstElementChild?.tagName).toBe('svg');
+    expect(chip.firstElementChild?.tagName).toBe('svg');
+    // The same 30px control as the waterfall toggle, not a small chip.
+    expect(chip.className).toContain('!h-[30px]');
   });
 
   it('shows Count HYPE PnL from, a date input and Default 23 Jun 2026 with no Use default, popover at default', async () => {
@@ -34,8 +35,7 @@ describe('SinceChip', () => {
   it('turns the chip text blue and shows Use default, moved date', async () => {
     render(<SinceChip base="HYPE" storedSec={MARCH_SEC} defaultSec={DEFAULT_SEC} onChange={vi.fn()} />);
     const chip = screen.getByRole('button', { name: /Since 1 Mar 2026/ });
-    const pill = chip.querySelector('.chip');
-    expect(pill?.className).toContain('text-info');
+    expect(chip.className).toContain('!text-info');
 
     await userEvent.click(chip);
     const card = await screen.findByRole('tooltip');
@@ -54,7 +54,25 @@ describe('SinceChip', () => {
 
     rerender(<SinceChip base="HYPE" storedSec={undefined} defaultSec={DEFAULT_SEC} onChange={onChange} />);
     const chip = screen.getByRole('button', { name: /Since 23 Jun 2026/ });
-    expect(chip.querySelector('.chip')?.className).not.toContain('text-sky-400');
+    expect(chip.className).not.toContain('!text-info');
+  });
+
+  it('opens on click, stays open when the pointer leaves, and shuts on a click outside', async () => {
+    render(
+      <>
+        <SinceChip base="HYPE" storedSec={undefined} defaultSec={DEFAULT_SEC} onChange={vi.fn()} />
+        <p>outside</p>
+      </>,
+    );
+    const chip = screen.getByRole('button', { name: /Since 23 Jun 2026/ });
+    await userEvent.hover(chip);
+    expect(screen.queryByRole('tooltip')).toBeNull();
+    await userEvent.click(chip);
+    await screen.findByRole('tooltip');
+    await userEvent.unhover(chip);
+    expect(screen.getByRole('tooltip')).toBeInTheDocument();
+    await userEvent.click(screen.getByText('outside'));
+    expect(screen.queryByRole('tooltip')).toBeNull();
   });
 
   it('reads All time when defaultSinceSec is null, no position yet', () => {

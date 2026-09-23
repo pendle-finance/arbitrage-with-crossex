@@ -100,16 +100,19 @@ export function BorosWalletRow(p: SetupRowProps) {
   } else {
     body = (
       <>
-        <p className="text-xs text-ink-400">
-          {otherLoggedIn ? (
-            <>
-              <span className="num text-ink-200">{short(otherLoggedIn)}</span> is still logged in. This terminal
-              trades it{alertsLinked ? ' and syncs its Telegram alerts' : ''}.
-            </>
-          ) : (
-            'Log in once to trade. The agent key cannot deposit or withdraw.'
-          )}
-        </p>
+        {otherLoggedIn ? (
+          <div className="text-xs text-ink-400">
+            <p>
+              Logged in here: <span className="num text-ink-200">{short(otherLoggedIn)}</span>
+            </p>
+            <ul className="mt-0.5 flex list-disc flex-col gap-0.5 pl-4">
+              <li>It trades on this terminal.</li>
+              {alertsLinked && <li>It gets the Telegram alerts.</li>}
+            </ul>
+          </div>
+        ) : (
+          <p className="text-xs text-ink-400">Log in once to trade. The agent key cannot deposit or withdraw.</p>
+        )}
         {logIn}
       </>
     );
@@ -133,7 +136,6 @@ export function BorosWalletRow(p: SetupRowProps) {
       isWarn={active.state === 'expired' || active.state === 'not-approved'}
       alert={upgrade}
       skipConsequence="Without a Boros wallet the terminal cannot open Boros legs, and Positions cannot show them."
-      closeLabel="Close"
     >
       {body}
       {error && (
