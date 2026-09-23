@@ -95,12 +95,12 @@ export function SinceChip({
         >
           <div className="flex flex-col items-start gap-2 text-xs">
             {offersAllTime && (
-              <button type="button" className="btn-link" onClick={() => onChange(ALL_TIME_SEC)}>
+              <button type="button" data-close-card className="btn-link whitespace-nowrap" onClick={() => onChange(ALL_TIME_SEC)}>
                 All time
               </button>
             )}
             {offersDefault && (
-              <button type="button" className="btn-link" onClick={() => onChange(undefined)}>
+              <button type="button" data-close-card className="btn-link whitespace-nowrap" onClick={() => onChange(undefined)}>
                 {`Use default (first position, ${defaultLabel})`}
               </button>
             )}

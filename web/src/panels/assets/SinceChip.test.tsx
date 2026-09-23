@@ -53,6 +53,9 @@ describe('SinceChip', () => {
     expect(within(card).queryByRole('button', { name: /Use default/ })).toBeNull();
     await userEvent.click(within(card).getByRole('button', { name: 'All time' }));
     expect(onChange).toHaveBeenCalledWith(ALL_TIME_SEC);
+    // Picked, so the menu shuts; reopened, it is placed for its new text.
+    expect(screen.queryByRole('tooltip')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Date options' })).toHaveFocus();
   });
 
   it('reads All time for a stored 0, and offers Use default', async () => {
