@@ -793,11 +793,19 @@ export function useForgetBorosAgent() {
 
 export function useTelegram() {
   const shown = useTabActive();
+  const root = useBorosAgent().data?.root ?? null;
   return useQuery({
     queryKey: qk.telegram,
     queryFn: () => fetchJson<TelegramInfo>('/telegram'),
     enabled: (query) => canFetch(shown, query),
-    refetchInterval: shown ? 30_000 : false,
+    // After a login the server moves alerts to the new wallet on its next
+    // sync, a few seconds later. Until the row names that wallet, ask often,
+    // so it does not show the old wallet for up to 30 s.
+    refetchInterval: (query) => {
+      if (!shown) return false;
+      const alertWallet = query.state.data?.alertWallet ?? null;
+      return root && alertWallet && root.toLowerCase() !== alertWallet.toLowerCase() ? 2_000 : 30_000;
+    },
   });
 }
 
