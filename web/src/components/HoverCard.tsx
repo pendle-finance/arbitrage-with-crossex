@@ -191,6 +191,14 @@ export function HoverCard({
           anchor.current?.focus();
           setBox(null);
         }}
+        // A menu item marked data-close-card shuts the card once it has acted.
+        // Its content can change on that click, and the card is placed only on
+        // open, so leaving it open squeezed the new text into the old box.
+        onClick={(e) => {
+          if (!(e.target instanceof Element) || !e.target.closest('[data-close-card]')) return;
+          (anchor.current?.querySelector<HTMLElement>(FOCUSABLE) ?? anchor.current)?.focus();
+          setBox(null);
+        }}
         onMouseEnter={stopClosing}
         onMouseLeave={openOn === 'click' ? undefined : () => close(false)}
         className="pp-tooltip fixed z-50 overflow-y-auto overscroll-contain"
