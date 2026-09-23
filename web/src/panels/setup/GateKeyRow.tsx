@@ -59,9 +59,9 @@ const GATE_STEPS: { title: string; href: string; site: string; detail: ReactNode
 /**
  * The steps and the key settings share one grid, so a step's name lines up
  * with a permission's name, and its link with the permission's value. Columns
- * size to their text, so nothing wraps in the 420 px Settings drawer. The
- * list and row wrappers are `contents`: they keep the list semantics without
- * boxes of their own.
+ * size to their text, and no cell wraps: the widest row fits the 420 px
+ * Settings drawer. The list and row wrappers are `contents`: they keep the
+ * list semantics without boxes of their own.
  */
 function KeyGuide({ showSteps }: { showSteps: boolean }) {
   return (
@@ -93,7 +93,7 @@ function KeyGuide({ showSteps }: { showSteps: boolean }) {
           </span>
           <span className="whitespace-nowrap font-medium text-ink-100">{permission.label}</span>
           <span className="whitespace-nowrap text-ink-300">{permission.value}</span>
-          <span className="text-ink-500">{permission.detail}</span>
+          <span className="whitespace-nowrap text-ink-500">{permission.detail}</span>
         </Fragment>
       ))}
     </div>

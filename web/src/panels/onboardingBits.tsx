@@ -5,7 +5,7 @@ export const GATE_SIGNUP_URL = 'https://www.gate.com/signup';
 export const GATE_CROSSEX_URL = 'https://www.gate.com/crossex';
 
 export const PERMISSION_ROWS = [
-  { on: true, label: 'Cross-Exchange', value: 'Read and Write', detail: 'trade and move money' },
+  { on: true, label: 'Cross-Exchange', value: 'Read and Write', detail: 'trade and transfer' },
   { on: true, label: 'Spot Trading', value: 'Read Only', detail: 'see spot balances' },
   { on: false, label: 'All others', value: 'Off', detail: 'including Withdrawal' },
 ] as const;
