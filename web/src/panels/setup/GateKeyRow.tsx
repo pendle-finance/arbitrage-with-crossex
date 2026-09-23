@@ -1,6 +1,6 @@
 import { Check, X } from 'lucide-react';
 import { useCredentials } from '../../api/queries';
-import type { ReactNode } from 'react';
+import { Fragment, type ReactNode } from 'react';
 import { CredentialsForm } from '../../components/CredentialsForm';
 import { HoverCard } from '../../components/HoverCard';
 import { Ext, GATE_API_KEYS_URL, GATE_CROSSEX_URL, GATE_SIGNUP_URL, PERMISSION_ROWS } from '../onboardingBits';
@@ -56,38 +56,45 @@ const GATE_STEPS: { title: string; href: string; site: string; detail: ReactNode
   },
 ];
 
-function GateSteps() {
+/**
+ * The steps and the key settings share one grid, so a step's name lines up
+ * with a permission's name, and its link with the permission's value. Columns
+ * size to their text, so nothing wraps in the 420 px Settings drawer. The
+ * list and row wrappers are `contents`: they keep the list semantics without
+ * boxes of their own.
+ */
+function KeyGuide({ showSteps }: { showSteps: boolean }) {
   return (
-    <ol aria-label="Steps to a key" className="flex flex-col gap-1 text-xs">
-      {GATE_STEPS.map((step, i) => (
-        <li key={step.title} className="flex items-baseline gap-2">
-          <span className="num w-3 shrink-0 text-ink-500">{i + 1}</span>
-          <span className="w-28 shrink-0 font-medium text-ink-100">
-            <HoverCard label={step.title} icon={false} widthPx={300}>
-              <p className="text-xs leading-relaxed text-ink-200">{step.detail}</p>
-            </HoverCard>
-          </span>
-          <Ext href={step.href}>{step.site}</Ext>
-        </li>
-      ))}
-    </ol>
-  );
-}
-
-/** Step 4's settings: the key type, then the permissions to tick. */
-function KeySettings() {
-  return (
-    <div className="flex flex-col gap-1 pl-5 text-xs">
-      <div className="text-ink-300">APIv4 key · Trading account · IP Permissions: Later</div>
+    <div className="grid grid-cols-[auto_auto_auto_1fr] items-baseline gap-x-2 gap-y-1 text-xs">
+      {showSteps && (
+        <ol aria-label="Steps to a key" className="contents">
+          {GATE_STEPS.map((step, i) => (
+            <li key={step.title} className="contents">
+              <span className="num text-ink-500">{i + 1}</span>
+              <span className="whitespace-nowrap font-medium text-ink-100">
+                <HoverCard label={step.title} icon={false} widthPx={300}>
+                  <p className="text-xs leading-relaxed text-ink-200">{step.detail}</p>
+                </HoverCard>
+              </span>
+              <span className="col-span-2 whitespace-nowrap">
+                <Ext href={step.href}>{step.site}</Ext>
+              </span>
+            </li>
+          ))}
+        </ol>
+      )}
+      <div className={`col-span-4 text-ink-300 ${showSteps ? 'mt-1' : ''}`}>
+        APIv4 key · Trading account · IP Permissions: Later
+      </div>
       {PERMISSION_ROWS.map((permission) => (
-        <div key={permission.label} className="flex items-baseline gap-2">
+        <Fragment key={permission.label}>
           <span aria-hidden="true" className={permission.on ? 'text-emerald-400' : 'text-rose-400'}>
             {permission.on ? <Check size={12} aria-hidden className="inline" /> : <X size={12} aria-hidden className="inline" />}
           </span>
-          <span className="w-28 shrink-0 font-medium text-ink-100">{permission.label}</span>
-          <span className="w-24 shrink-0 text-ink-300">{permission.value}</span>
+          <span className="whitespace-nowrap font-medium text-ink-100">{permission.label}</span>
+          <span className="whitespace-nowrap text-ink-300">{permission.value}</span>
           <span className="text-ink-500">{permission.detail}</span>
-        </div>
+        </Fragment>
       ))}
     </div>
   );
@@ -102,8 +109,7 @@ export function GateKeyRow(p: SetupRowProps) {
   return (
     <SetupRowFrame n={1} title="Gate API key" row={p} isDone={isDone} state={state}>
       {/* A set-up terminal replacing its key needs only the settings. */}
-      {!isDone && <GateSteps />}
-      <KeySettings />
+      <KeyGuide showSteps={!isDone} />
       <CredentialsForm
         submitLabel={p.variant === 'settings' ? 'Replace credentials' : 'Check key'}
         onSaved={p.onDone}
