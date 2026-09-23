@@ -1,3 +1,4 @@
+import { ChevronRight } from 'lucide-react';
 import { useId } from 'react';
 import type { GateAccount, RebalanceBucket, SpotBalance, TransferCoin, TransferPath } from '../api/types';
 import { TokenIcon, VenueIcon } from '../components/AssetIcon';
@@ -160,7 +161,7 @@ export function NoSpotReadLine() {
     <div className="flex flex-wrap items-center gap-2 rounded border border-dashed border-ink-600 px-3 py-2 text-xs">
       <span className="text-ink-200">Add Spot read permission to see spot balances.</span>
       <HoverCard
-        label={<span className="text-link">How ▸</span>}
+        label={<span className="text-link">How <ChevronRight size={12} aria-hidden className="inline" /></span>}
         icon={false}
         underline={false}
         widthPx={400}

@@ -345,7 +345,7 @@ describe('BalancesPanel copy in every state', () => {
     const loading = renderWithClient(
       <FreshnessButton dataUpdatedAt={0} staleError={false} title="Refetch all panels" onRefetch={() => {}} />,
     );
-    expect(screen.getByText('⟳ loading').textContent, 'before the first read').not.toMatch(/[–—]/);
+    expect(screen.getByText('loading').textContent, 'before the first read').not.toMatch(/[–—]/);
     loading.unmount();
 
     const noFunds = await show({ ...ACCOUNT_B, account: accountBodies.noAssets });
@@ -458,7 +458,7 @@ describe('BalancesPanel transfer pick', () => {
     await show(ACCOUNT_B);
     const assets = region('Assets');
     const rebalanceDialog = await openRebalanceDialog(user);
-    await user.click(await within(rebalanceDialog).findByRole('button', { name: 'Transfer ▸' }));
+    await user.click(await within(rebalanceDialog).findByRole('button', { name: 'Transfer' }));
 
     const transferDialog = await screen.findByRole('dialog');
     expect(within(transferDialog).getByRole('radio', { name: 'Into CrossEx' })).toBeChecked();
@@ -470,7 +470,7 @@ describe('BalancesPanel transfer pick', () => {
     const user = userEvent.setup();
     await show(LEFTOVER);
     const rebalanceDialog = await openRebalanceDialog(user);
-    await user.click(await within(rebalanceDialog).findByRole('button', { name: 'Transfer ▸' }));
+    await user.click(await within(rebalanceDialog).findByRole('button', { name: 'Transfer' }));
 
     const transferDialog = await screen.findByRole('dialog');
     expect(within(transferDialog).getByRole('radio', { name: 'Into CrossEx' })).toBeChecked();
@@ -481,7 +481,7 @@ describe('BalancesPanel transfer pick', () => {
     const user = userEvent.setup();
     await show({ ...ACCOUNT_B, transfer: transferViews.spotBoth });
     const rebalanceDialog = await openRebalanceDialog(user);
-    const links = within(rebalanceDialog).getAllByRole('button', { name: 'Transfer ▸' });
+    const links = within(rebalanceDialog).getAllByRole('button', { name: 'Transfer' });
     expect(links).toHaveLength(2);
 
     await user.click(links[1]);
@@ -499,7 +499,7 @@ describe('BalancesPanel transfer pick', () => {
       account: accountBodies.exampleE,
     });
     const rebalanceDialog = await openRebalanceDialog(user);
-    await user.click(await within(rebalanceDialog).findByRole('button', { name: 'Transfer ▸' }));
+    await user.click(await within(rebalanceDialog).findByRole('button', { name: 'Transfer' }));
 
     const transferDialog = await screen.findByRole('dialog');
     expect(within(transferDialog).getByRole('radio', { name: 'Into CrossEx' })).toBeChecked();

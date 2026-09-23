@@ -4,7 +4,13 @@ import type { TelegramInfo } from '../../../web/src/api/types';
 import { CoreError } from '../../core/errors';
 import type { AppDeps } from '../app';
 import { refuse } from '../errorReply';
-import { BotAuthError, botBaseUrl, type TelegramSettings } from '../telegram/botClient';
+import {
+  BotAuthError,
+  botBaseUrl,
+  BotWalletRefusedError,
+  type BotCallOptions,
+  type TelegramSettings,
+} from '../telegram/botClient';
 import { deleteTelegramKey, readTelegramKey } from '../telegram/keyFile';
 import type { TelegramAuth } from '../telegram/status';
 
@@ -12,10 +18,20 @@ const BOT_NOT_AVAILABLE = 'Telegram alerts are not available yet. Try again late
 const BOT_SILENT = 'The Telegram bot did not answer. Try again later.';
 const NOT_CONNECTED = 'This terminal is not connected to Telegram alerts. Click Set up to connect it.';
 const BOT_UNREACHABLE = 'Could not reach the bot. Try again, or remove this terminal on the Boros alerts page.';
+const WALLET_REFUSED = 'The bot refused the logged-in wallet: its login is not approved yet. Try again once it is.';
 const SETTING_NAMES = ['liquidation', 'interest', 'maturity', 'rollover'] as const;
 const FIRST_SYNC_WAIT_MS = 5_000;
 
 type Telegram = NonNullable<AppDeps['telegram']>;
+
+async function retryWithoutWallet<T>(run: (call?: BotCallOptions) => Promise<T>): Promise<T> {
+  try {
+    return await run();
+  } catch (err) {
+    if (!(err instanceof BotWalletRefusedError)) throw err;
+    return run({ withoutWallet: true });
+  }
+}
 
 function stateOf(hasKey: boolean, linkPending: boolean, auth: TelegramAuth | null): TelegramInfo['state'] {
   if (!hasKey || linkPending || auth === 'pending') return 'none';
@@ -115,8 +131,11 @@ export function telegramRoutes(deps: AppDeps) {
         retryable: false,
       });
       try {
-        t.status.setSettings(await t.bot.patchSettings(key.key, settings));
+        t.status.setSettings(await retryWithoutWallet((call) => t.bot.patchSettings(key.key, settings, call)));
       } catch (err) {
+        if (err instanceof BotWalletRefusedError) {
+          return refuse(reply, { code: 409, category: 'validation', message: WALLET_REFUSED, retryable: true });
+        }
         if (!(err instanceof BotAuthError)) return refuse(reply, {
           code: 503,
           category: 'network',
@@ -136,8 +155,11 @@ export function telegramRoutes(deps: AppDeps) {
       const key = readTelegramKey(deps.dataDir);
       if (key !== null) {
         try {
-          await t.bot.deleteTerminal(key.key);
+          await retryWithoutWallet((call) => t.bot.deleteTerminal(key.key, call));
         } catch (err) {
+          if (err instanceof BotWalletRefusedError) {
+            return refuse(reply, { code: 409, category: 'validation', message: WALLET_REFUSED, retryable: true });
+          }
           if (!(err instanceof BotAuthError)) return refuse(reply, {
             code: 503,
             category: 'network',

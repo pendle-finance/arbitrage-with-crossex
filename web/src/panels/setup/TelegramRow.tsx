@@ -1,3 +1,4 @@
+import { ArrowUpRight } from 'lucide-react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
 import { ApiError } from '../../api/client';
@@ -195,7 +196,7 @@ export function TelegramRow(p: SetupRowProps) {
       {info?.walletRefused ? (
         <p className="num text-xs text-amber-300">{`Log in to move alerts to ${short(info.walletRefused)}.`}</p>
       ) : (
-        info?.alertWallet && <p className="num text-xs text-ink-500">{`Alerts follow ${short(info.alertWallet)}`}</p>
+        info?.alertWallet && <p className="num text-xs text-ink-500">{`Alerts for ${short(info.alertWallet)}`}</p>
       )}
       {lastSyncAt !== null ? (
         <p className="num text-xs text-ink-400">
@@ -240,7 +241,9 @@ export function TelegramRow(p: SetupRowProps) {
         <Spinner />
         <span>Waiting for you to confirm on the Boros notifications page</span>
       </div>
-      {pageUrl && <Ext href={pageUrl}>Open the page again ↗</Ext>}
+      {pageUrl && <Ext href={pageUrl}>
+          Open the page again <ArrowUpRight size={12} aria-hidden className="inline" />
+        </Ext>}
       <button
         type="button"
         className="btn-ghost-xs w-fit"

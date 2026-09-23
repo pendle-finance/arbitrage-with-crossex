@@ -8,6 +8,7 @@
  * dismissed, and never appears at all for someone who has been using the
  * terminal for longer than the window.
  */
+import { X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { readJson, writeJson } from '../lib/storage';
 
@@ -69,7 +70,7 @@ export function UserGuideHint({ enabled, onOpen }: { enabled: boolean; onOpen: (
           onClick={close}
           className="-mt-1 px-1 text-lg leading-none text-ink-500 transition-colors hover:text-ink-200"
         >
-          ×
+          <X size={14} aria-hidden />
         </button>
       </div>
       <p className="mt-1.5 text-xs leading-relaxed text-ink-300">

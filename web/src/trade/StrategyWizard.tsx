@@ -22,6 +22,7 @@
  * because the Positions page derives "rate locked, unhedged" from live legs
  * (the asset card's missing-perp cue) and re-enters here at step 2.
  */
+import { ArrowRight, Check, ChevronRight } from 'lucide-react';
 import { Fragment, useEffect, useState } from 'react';
 import type { BorosLegFill, BorosLegSizing, BorosPairResult, BorosPairSimulation } from '../api/types';
 import { Modal } from '../components/Modal';
@@ -379,7 +380,10 @@ function WizardBody({
             <div className="flex flex-col gap-3">
               <StepOneReceipt book={book} hedged={hedged} />
               <button type="button" className="btn btn-primary w-full" onClick={continueToHedge}>
-                Rate locked ✓ — hedge the perps ▸
+                Rate locked
+                <Check size={14} aria-hidden />
+                — hedge the perps
+                <ChevronRight size={14} aria-hidden />
               </button>
             </div>
           ) : (
@@ -404,7 +408,8 @@ function WizardBody({
                     close it.
                   </p>
                   <button type="button" className="btn btn-primary w-full" onClick={continueToHedge}>
-                    Continue anyway — hedge the perps ▸
+                    Continue anyway — hedge the perps
+                    <ChevronRight size={14} aria-hidden />
                   </button>
                 </div>
               )}
@@ -458,7 +463,7 @@ function WizardBody({
         {step === 'done' && (
           <div className="flex flex-col gap-3">
             <div className="rounded-lg border border-emerald-500/25 bg-emerald-500/[0.05] px-3 py-2.5 text-[12.5px] leading-relaxed text-ink-100">
-              <span className="mr-2 font-semibold text-emerald-400">✓ Strategy submitted.</span>
+              <span className="mr-2 inline-flex items-center gap-1 font-semibold text-emerald-400"><Check size={14} aria-hidden />Strategy submitted.</span>
               The perp legs are executing — the deal view tracks their fills. Your position appears
               on the Positions page, which watches all four legs from here on.
             </div>
@@ -470,7 +475,8 @@ function WizardBody({
                 onViewPositions?.();
               }}
             >
-              View my position →
+              View my position
+              <ArrowRight size={14} aria-hidden />
             </button>
             <button
               type="button"
@@ -577,7 +583,7 @@ function StepStrip({ step, locked }: { step: Step; locked: boolean }) {
                   : 'border-ink-700 bg-ink-900 text-ink-500'
             }`}
           >
-            {it.done ? '✓' : it.n}
+            {it.done ? <Check size={12} aria-hidden /> : it.n}
           </span>
           <span className="flex min-w-0 flex-col leading-tight">
             <span

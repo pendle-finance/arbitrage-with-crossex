@@ -16,6 +16,7 @@ export function SetupRowFrame({
   title,
   row,
   isDone,
+  doneTone = 'done',
   state,
   stateNode,
   isWarn = false,
@@ -28,6 +29,7 @@ export function SetupRowFrame({
   title: string;
   row: SetupRowProps;
   isDone: boolean;
+  doneTone?: 'done' | 'neutral';
   state: string | null;
   /** Shown in place of `state`'s text, e.g. an address and a tag. */
   stateNode?: ReactNode;
@@ -43,7 +45,7 @@ export function SetupRowFrame({
   const showsNotSetUp = !isDone && state === null && (isSettings || isSkipped);
   const line = showsNotSetUp ? 'not set up' : state;
   const isLineWarn = isWarn || showsNotSetUp;
-  const dot: DotTone = isDone && !isLineWarn ? 'done' : isLineWarn ? 'warn' : row.open ? 'current' : 'later';
+  const dot: DotTone = isDone && !isLineWarn ? (doneTone === 'done' ? 'done' : 'later') : isLineWarn ? 'warn' : row.open ? 'current' : 'later';
   const canSkip = !isSettings && !isDone && row.onSkip !== undefined && skipConsequence !== undefined;
 
   // Settings: a set-up row opens and closes like a card, by its chevron. A row

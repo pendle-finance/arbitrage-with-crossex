@@ -103,7 +103,7 @@ import { AssetBars } from './AssetBars';
 import { SinceChip } from './SinceChip';
 import { fitAcross, maxRollSize, planBatch, suggestedRollSize, type BatchLimit } from './rollSizing';
 import { useRollPublisher, useRollSignalsOptional } from '../rollSignal';
-import { ChartColumnDecreasing, ChartPie, ChevronDown, RotateCw, Share } from 'lucide-react';
+import { ArrowLeft, ArrowRight, ChartColumnDecreasing, ChartPie, Check, ChevronDown, RotateCw, Share } from 'lucide-react';
 
 interface Props {
   group: AssetGroup;
@@ -1654,7 +1654,8 @@ export function RollOverModal({
               title={target === null ? 'Pick a maturity to roll into' : 'Review the two batches, the tolerance and the margin before confirming'}
               onClick={() => setStep('review')}
             >
-              Roll over →
+              Roll over
+              <ArrowRight size={14} aria-hidden />
             </button>
           </div>
         </>
@@ -2255,7 +2256,8 @@ function RollReview({
       >
         <span className="flex items-center gap-2 text-[12px] font-normal leading-[14.52px] text-ink-300">
           <StepBadge n={3} />
-          Can it fund? {marginOk ? '✓' : ''}
+          Can it fund?
+          {marginOk && <Check size={12} aria-hidden className="text-emerald-300" />}
         </span>
         <EstimateRow
           label="Required margin"
@@ -2338,7 +2340,7 @@ function RollReview({
         gasBalanceUsd={roll.data?.gasBalanceUsd}
         amount={gasTopUpStr}
         onAmountChange={setGasTopUpStr}
-        onTopUp={() => topUpGas.mutate(Number(gasTopUpStr))}
+        onTopUp={canTrade ? () => topUpGas.mutate({ amountUsd: Number(gasTopUpStr), address }) : undefined}
         busy={topUpGas.isPending}
       />
       {topUpGas.isSuccess && (
@@ -2350,7 +2352,8 @@ function RollReview({
 
       <div className="mt-1 flex items-center justify-between gap-2">
         <button type="button" className="btn" onClick={onBack} disabled={busy}>
-          ← Back
+          <ArrowLeft size={14} aria-hidden />
+          Back
         </button>
         {loginLabel ? (
           <BorosLogInButton />
@@ -3098,7 +3101,8 @@ function MissingRow({ gap, base, onOpen, asPair }: { gap: HedgeGapRow; base: str
           title={onOpen ? (asPair ? 'Opens the pair ticket with both missing legs.' : `Opens the order ticket with ${gapAsk(gap, base)}.`) : 'Order ticket unavailable here'}
           onClick={onOpen}
         >
-          {asPair ? `open both ${boros ? 'Boros' : 'perp'} legs →` : `open ${boros ? 'Boros' : 'perp'} leg →`}
+          {asPair ? `open both ${boros ? 'Boros' : 'perp'} legs` : `open ${boros ? 'Boros' : 'perp'} leg`}
+          <ArrowRight size={12} aria-hidden />
         </button>
       </td>
     </tr>
@@ -4518,7 +4522,7 @@ export function AssetCard({
                   : 'Every leg is covered and the perps cancel exactly.'
               }
             >
-              hedged ✓
+              hedged <Check size={12} aria-hidden className="inline" />
             </Chip>
           ) : gaps.length > 0 ? (
             <Chip

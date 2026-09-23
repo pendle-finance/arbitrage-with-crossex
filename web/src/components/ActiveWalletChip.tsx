@@ -3,8 +3,10 @@
  * whether this terminal can trade it. A click opens the Boros wallet row in
  * Settings.
  */
+import { fmtDateShort } from '../lib/fmt';
 import { short } from '../panels/HomeControls';
 import { useActiveWallet, type ActiveWallet } from '../panels/trackedAddress';
+import { BorosLogo } from './BorosLogo';
 import { Chip } from './Chip';
 import { ViewOnlyChip } from './ViewOnlyChip';
 
@@ -21,6 +23,12 @@ export function WalletStateTag({
 }) {
   if (!wallet.state) return null;
   if (wallet.state === 'view-only') return <ViewOnlyChip />;
+  if (wallet.state === 'not-logged-in')
+    return (
+      <Chip sm tone="neutral">
+        Not logged in
+      </Chip>
+    );
   if (wallet.state === 'expired')
     return (
       <Chip sm tone="red">
@@ -33,10 +41,16 @@ export function WalletStateTag({
         Not approved
       </Chip>
     );
+  if (wallet.state === 'unchecked')
+    return (
+      <Chip sm tone="neutral" title="Boros did not answer. The venue still checks the login.">
+        Login not checked
+      </Chip>
+    );
   if (wallet.endsSoon !== null)
     return (
       <Chip sm tone="amber">
-        Renew by {new Date(wallet.endsSoon * 1000).toLocaleDateString()}
+        Renew by {fmtDateShort(wallet.endsSoon, { year: 'numeric' })}
       </Chip>
     );
   if (quiet) {
@@ -60,6 +74,9 @@ export function ActiveWalletChip() {
       aria-label={`Boros wallet ${wallet.address}`}
       className="flex h-[30px] items-center gap-2 rounded border border-ink-700 px-2 text-[11.5px] text-ink-200 hover:border-ink-500"
     >
+      <span aria-hidden className="inline-flex h-3 w-2.5 shrink-0 overflow-hidden">
+        <BorosLogo className="h-3 w-auto max-w-none shrink-0" />
+      </span>
       <span className="num">{short(wallet.address)}</span>
       <WalletStateTag wallet={wallet} quiet />
     </button>

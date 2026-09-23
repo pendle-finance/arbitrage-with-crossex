@@ -1070,7 +1070,7 @@ describe('RebalanceModal where the money is', () => {
     const user = userEvent.setup();
     const { onTransfer } = show(rebalanceViews.accountAAbandoned, { transfer: transferViews.noSpot });
     await waitFor(() => expect(line('Last run left 36.58 USDC in Gate spot.')).toBeInTheDocument());
-    await user.click(within(dialog()).getByRole('button', { name: 'Transfer ▸' }));
+    await user.click(within(dialog()).getByRole('button', { name: 'Transfer' }));
     expect(onTransfer).toHaveBeenCalledWith('USDC', 'CROSSEX_HYPERLIQUID');
   });
 
@@ -1083,7 +1083,7 @@ describe('RebalanceModal where the money is', () => {
       { transfer: transferViews.noSpot },
     );
     await waitFor(() => expect(line('Last run left 745.44 USDC in Gate spot.')).toBeInTheDocument());
-    await user.click(within(dialog()).getByRole('button', { name: 'Transfer ▸' }));
+    await user.click(within(dialog()).getByRole('button', { name: 'Transfer' }));
     expect(onTransfer).toHaveBeenCalledWith('USDC', 'CROSSEX_GATE');
     cleanup();
 
@@ -1107,7 +1107,7 @@ describe('RebalanceModal where the money is', () => {
     const user = userEvent.setup();
     const { onTransfer } = show(rebalanceViews.lighterAcrossAbandoned, { transfer: transferViews.noSpot });
     await waitFor(() => expect(line('Last run left 499.00 USDC in Gate spot.')).toBeInTheDocument());
-    await user.click(within(dialog()).getByRole('button', { name: 'Transfer ▸' }));
+    await user.click(within(dialog()).getByRole('button', { name: 'Transfer' }));
     expect(onTransfer).toHaveBeenCalledWith('USDC', 'CROSSEX_LIGHTER');
   });
 
@@ -1375,7 +1375,7 @@ describe('RebalanceModal hovers and facts', () => {
     };
 
     show(rebalanceViews.accountA, { transfer: transferViews.accountB });
-    await within(dialog()).findByRole('button', { name: 'Transfer ▸' });
+    await within(dialog()).findByRole('button', { name: 'Transfer' });
     await check([
       ['Route', 'How the money moves. The fee includes Gate fees and the spot spread. Spot loop runs until the move is done, however many rounds that takes.'],
       ['Recommended', 'Cheapest route that takes 15 min or less.'],
@@ -1470,7 +1470,7 @@ describe('RebalanceModal Gate spot lines', () => {
   it('one spot line per coin', async () => {
     const user = userEvent.setup();
     const { onTransfer } = show(rebalanceViews.accountB, { transfer: transferViews.spotBoth });
-    await waitFor(() => expect(within(dialog()).getAllByRole('button', { name: 'Transfer ▸' })).toHaveLength(2));
+    await waitFor(() => expect(within(dialog()).getAllByRole('button', { name: 'Transfer' })).toHaveLength(2));
     const lines = [...dialog().querySelectorAll('p')]
       .map((p) => p.textContent)
       .filter((text) => text?.startsWith('Gate spot has'));
@@ -1478,7 +1478,7 @@ describe('RebalanceModal Gate spot lines', () => {
       'Gate spot has 318.42 USDT. Move it in to use it.',
       'Gate spot has 25.00 USDC. Move it in to use it.',
     ]);
-    await user.click(within(dialog()).getAllByRole('button', { name: 'Transfer ▸' })[1]);
+    await user.click(within(dialog()).getAllByRole('button', { name: 'Transfer' })[1]);
     expect(onTransfer).toHaveBeenCalledWith('USDC', 'CROSSEX_HYPERLIQUID');
   });
 
@@ -1486,7 +1486,7 @@ describe('RebalanceModal Gate spot lines', () => {
     const user = userEvent.setup();
     const { onTransfer } = show(rebalanceViews.accountB, { transfer: transferViews.accountB });
     await waitFor(() => expect(line('Gate spot has 318.42 USDT. Move it in to use it.')).toBeInTheDocument());
-    await user.click(within(dialog()).getByRole('button', { name: 'Transfer ▸' }));
+    await user.click(within(dialog()).getByRole('button', { name: 'Transfer' }));
     expect(onTransfer).toHaveBeenCalledWith('USDT', 'CROSSEX');
   });
 
@@ -1499,7 +1499,7 @@ describe('RebalanceModal Gate spot lines', () => {
       </>,
     );
     await screen.findByText('reads loaded');
-    expect(within(dialog()).queryByRole('button', { name: 'Transfer ▸' })).toBeNull();
+    expect(within(dialog()).queryByRole('button', { name: 'Transfer' })).toBeNull();
     expect(within(dialog()).queryByText(/Gate spot has/)).toBeNull();
   });
 });

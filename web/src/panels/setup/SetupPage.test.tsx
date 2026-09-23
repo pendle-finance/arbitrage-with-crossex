@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { HttpResponse, http } from 'msw';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TelegramInfo } from '../../api/types';
+import { fmtDateShort } from '../../lib/fmt';
 import { agentStatus, mockWorld, telegramInfo, type SetupWorld } from '../../test/fixtures';
 import { env, server } from '../../test/server';
 import { renderWithClient } from '../../test/utils';
@@ -156,7 +157,8 @@ describe('SetupPage · Boros wallet', () => {
 
     const wallet = row('Boros wallet');
     expect(await within(wallet).findByText('0xab18…ed9d')).toBeInTheDocument();
-    expect(within(wallet).getByText('View only')).toBeInTheDocument();
+    expect(within(wallet).getByText('Not logged in')).toBeInTheDocument();
+    expect(within(wallet).queryByText('View only')).toBeNull();
     expect(approveAgent).not.toHaveBeenCalled();
     const request = (window as unknown as { ethereum: { request: ReturnType<typeof vi.fn> } }).ethereum.request;
     const methods = request.mock.calls.map(([arg]) => (arg as { method: string }).method);
@@ -290,7 +292,7 @@ describe('SetupPage · Telegram alerts', () => {
     await user.click(await screen.findByRole('button', { name: 'Set up ↗' }));
 
     expect(await screen.findByText('Waiting for you to confirm on the Boros notifications page')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Open the page again ↗' })).toHaveAttribute('href', LINK_URL);
+    expect(screen.getByRole('link', { name: 'Open the page again' })).toHaveAttribute('href', LINK_URL);
     expect(tab.location.href).toBe(LINK_URL);
     expect(within(row('Telegram alerts')).queryByText(/\d+:\d{2}|expires|left/i)).toBeNull();
   });
@@ -457,7 +459,7 @@ describe('setup rows in Settings', () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  const day = (unix: number) => new Date(unix * 1000).toLocaleDateString();
+  const day = (unix: number) => fmtDateShort(unix, { year: 'numeric' });
   const header = (name: string) => within(row(name)).getByText(name).parentElement as HTMLElement;
   const dot = (name: string) => header(name).firstElementChild?.textContent;
 
@@ -490,7 +492,7 @@ describe('setup rows in Settings', () => {
     installWallet();
     mockWorld({ agent: agentStatus({ configured: true, root: WALLET, approval: 'not-approved', expiry: 2_000_000_000 }) });
     renderWithClient(<BorosWalletRow {...settingsRow({ open: true })} />);
-    expect(await screen.findByText(/^Boros has no approval for this login/)).toBeInTheDocument();
+    expect(await screen.findByText('Boros shows no approval for this login. Log in again.')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Log in to trade 0xab18…ed9d' })).toBeInTheDocument();
   });
 
@@ -506,14 +508,58 @@ describe('setup rows in Settings', () => {
     renderWithClient(<BorosWalletRow {...settingsRow({ open: true })} />);
     expect(await within(row('Boros wallet')).findByText('Logged in')).toBeInTheDocument();
     expect(
-      screen.getByText(`Agent key: trades only, cannot deposit or withdraw. Login ends ${day(2_000_000_000)}.`),
+      screen.getByText(`Trades only. Cannot deposit or withdraw. Login ends ${day(2_000_000_000)}.`),
     ).toBeInTheDocument();
     expect(dot('Boros wallet')).toBe('✓');
     expect(screen.queryByRole('button', { name: 'Remove key' })).toBeNull();
     await user.click(screen.getByRole('button', { name: 'Log out' }));
+    const ask = screen.getByRole('alertdialog', { name: 'Log out 0xab18…ed9d?' });
+    expect(ask).toHaveTextContent('Log out 0xab18…ed9d? This terminal stops trading it. Open positions stay open.');
+    expect(world.agent.configured).toBe(true);
+    await user.click(within(ask).getByRole('button', { name: 'Log out' }));
     expect(
       await screen.findByText('Logged out. The approval stays live on-chain until you revoke it in the Boros app.'),
     ).toBeInTheDocument();
+  });
+
+  it('Cancel on the log-out question keeps the login', async () => {
+    const user = userEvent.setup();
+    let deleted = false;
+    mockWorld({ agent: agentStatus({ configured: true, root: WALLET, expiry: 2_000_000_000 }) });
+    server.use(
+      http.delete('/api/boros/agent', () => {
+        deleted = true;
+        return HttpResponse.json(env({ configured: false, note: '' }));
+      }),
+    );
+    renderWithClient(<BorosWalletRow {...settingsRow({ open: true })} />);
+    await user.click(await screen.findByRole('button', { name: 'Log out' }));
+    await user.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Log out' })).toBeInTheDocument();
+    expect(deleted).toBe(false);
+  });
+
+  it('Boros could not be read: "Login not checked", still trades', async () => {
+    mockWorld({ agent: agentStatus({ configured: true, root: WALLET, expiry: 2_000_000_000, approval: 'unknown' }) });
+    renderWithClient(<BorosWalletRow {...settingsRow({ open: true })} />);
+    expect(await within(row('Boros wallet')).findByText('Login not checked')).toBeInTheDocument();
+    expect(screen.getByText(`Trades only. Cannot deposit or withdraw. Login ends ${day(2_000_000_000)}.`)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Log in to trade/ })).toBeNull();
+  });
+
+  it('a wallet that cannot trade gets no green check in Settings', async () => {
+    localStorage.setItem('crossex.strategy.v1', JSON.stringify({ address: OTHER, walletUpgraded: true }));
+    const world = mockWorld({ agent: agentStatus({ configured: true, root: WALLET, expiry: 2_000_000_000 }) });
+    const { unmount } = renderWithClient(<BorosWalletRow {...settingsRow()} />);
+    expect(await within(row('Boros wallet')).findByText('View only')).toBeInTheDocument();
+    expect(dot('Boros wallet')).toBe('2');
+    unmount();
+
+    world.agent = agentStatus();
+    renderWithClient(<BorosWalletRow {...settingsRow()} />);
+    expect(await within(row('Boros wallet')).findByText('Not logged in')).toBeInTheDocument();
+    expect(dot('Boros wallet')).toBe('2');
   });
 
   it('view only names the wallet logged in here', async () => {

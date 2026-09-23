@@ -93,8 +93,15 @@ describe.each([50, 6_000_000])('Positions for a view-only wallet at $%d', (size)
   it('says whose legs these are and hides every Gate leg', async () => {
     renderWithClient(<AssetsHome />);
     expect(
-      await screen.findByText((_, el) => el?.tagName === 'P' && el.textContent === 'View onlyViewing 0x2222…2222. Your Gate positions are hidden.'),
+      await screen.findByText(
+        (_, el) => el?.tagName === 'P' && el.textContent === 'Boros legs only. Your Gate perps show when you view 0x1111…1111.',
+      ),
     ).toBeInTheDocument();
+    expect(screen.getByText((_, el) => el?.tagName === 'DIV' && el.textContent === 'Boros PnL · 0x2222…2222')).toHaveAttribute(
+      'title',
+      'Boros legs only. Gate is not included.',
+    );
+    expect(screen.queryByText('Total Account PnL')).toBeNull();
     expect(await screen.findByText('ETH')).toBeInTheDocument();
     expect(screen.queryByText('SOL')).toBeNull();
   });
@@ -115,8 +122,8 @@ describe('Positions for the wallet that trades', () => {
     renderWithClient(<AssetsHome />);
     expect(await screen.findByText('SOL')).toBeInTheDocument();
     expect(screen.getByText('ETH')).toBeInTheDocument();
-    expect(screen.queryByText(/Your Gate positions are hidden/)).toBeNull();
-    expect(screen.queryByText(/^Viewing/)).toBeNull();
+    expect(screen.queryByText(/Your Gate perps show when you view/)).toBeNull();
+    expect(screen.getByText('Total Account PnL')).toBeInTheDocument();
     expect(screen.getByText(/after .* borrow interest/)).toBeInTheDocument();
   });
 });

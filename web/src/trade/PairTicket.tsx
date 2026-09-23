@@ -9,6 +9,7 @@
  * Both legs run at their own venue's max leverage. Execute is inline hold-to-
  * confirm — no review modal — so the maker price stays live until t=submit.
  */
+import { ChevronRight } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useAccount, usePositions, useSymbolDetail, useSymbolsByBase, useVenueBook } from '../api/queries';
 import type { ActionInput, PreviewResult, RestEstimate } from '../api/types';
@@ -513,7 +514,12 @@ export function PairTicket({ onExecuted }: { onExecuted?: () => void } = {}) {
         scope="ticket-pair"
         actions={actions}
         tone="cyan"
-        label="Execute pair ▸"
+        label={
+            <>
+              Execute pair
+              <ChevronRight size={14} aria-hidden />
+            </>
+          }
         buttonClassName="w-full"
         // The ticket's own estimate card reviews the legs — no hover card.
         hoverCard={false}

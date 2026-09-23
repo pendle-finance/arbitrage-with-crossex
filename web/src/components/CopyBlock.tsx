@@ -1,3 +1,4 @@
+import { Check } from 'lucide-react';
 import { useEffect, useState } from 'react';
 
 /** Copyable command block (the landing install step, and the LLM audit prompt).
@@ -43,7 +44,14 @@ export function CopyBlock({
           );
         }}
       >
-        {copied ? 'Copied ✓' : label}
+        {copied ? (
+          <>
+            Copied
+            <Check size={14} aria-hidden />
+          </>
+        ) : (
+          label
+        )}
       </button>
     </div>
   );

@@ -328,7 +328,7 @@ describe('StrategyWizard — step 1 becomes a receipt once the rate is locked', 
     );
     expect(screen.queryByLabelText(/^Size per leg/)).not.toBeInTheDocument();
     // Exactly one way forward.
-    expect(screen.getByRole('button', { name: /Rate locked ✓ — hedge the perps/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Rate locked\s*— hedge the perps/ })).toBeInTheDocument();
     // And no Dismiss — the receipt IS the step; hiding it would blank it.
     expect(screen.queryByRole('button', { name: 'Dismiss' })).not.toBeInTheDocument();
   });

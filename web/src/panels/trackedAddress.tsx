@@ -126,12 +126,14 @@ export const RENEW_WARN_SECONDS = 14 * 24 * 3600;
 export type ActiveWalletState =
   /** Logged in, and the chain shows a live approval. */
   | 'can-trade'
-  /** Another wallet is logged in, or none is. */
+  /** Another wallet is logged in. */
   | 'view-only'
   /** This wallet's login ended. */
   | 'expired'
   /** This wallet's key is stored but the chain has no approval for it. */
-  | 'not-approved';
+  | 'not-approved'
+  | 'unchecked'
+  | 'not-logged-in';
 
 export interface ActiveWallet {
   address: string | null;
@@ -154,14 +156,18 @@ export function useActiveWallet(): ActiveWallet {
   const state: ActiveWalletState | null =
     address === null || status === undefined
       ? null
-      : !isRoot
-        ? 'view-only'
-        : status.expired
-          ? 'expired'
-          : status.approval === 'not-approved'
-            ? 'not-approved'
-            : 'can-trade';
-  const canTrade = state === 'can-trade';
+      : !status.configured
+        ? 'not-logged-in'
+        : !isRoot
+          ? 'view-only'
+          : status.expired
+            ? 'expired'
+            : status.approval === 'not-approved'
+              ? 'not-approved'
+              : status.approval === 'unknown'
+                ? 'unchecked'
+                : 'can-trade';
+  const canTrade = state === 'can-trade' || state === 'unchecked';
   const viewOnly =
     status?.configured === true && status.root !== null && address !== null && !isRoot;
   const canLogIn = status !== undefined && (status.configured || status.canProvision);

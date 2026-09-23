@@ -7,14 +7,13 @@ import { useState, type ReactNode } from 'react';
 import { useBorosAgent, useForgetBorosAgent, useTelegramLinked } from '../../api/queries';
 import { WalletStateTag } from '../../components/ActiveWalletChip';
 import { ConnectWalletButton } from '../../components/ConnectWalletButton';
-import { BorosLogInButton } from '../../trade/BorosAgentSetup';
+import { BorosLogInButton, NOT_APPROVED_TEXT } from '../../trade/BorosAgentSetup';
+import { fmtDateShort } from '../../lib/fmt';
 import { describeWalletError, hasInjectedWallet, requestWalletAccount } from '../../lib/wallet';
 import { short } from '../HomeControls';
 import { isSameAddress, useActiveWallet, useTrackedAddress } from '../trackedAddress';
 import { SetupRowFrame } from './SetupRowFrame';
 import type { SetupRowProps } from './setupState';
-
-const day = (unix: number): string => new Date(unix * 1000).toLocaleDateString();
 
 export function BorosWalletRow(p: SetupRowProps) {
   const { address, followWallet, followBrowserWallet, upgradeNote, dismissUpgradeNote } = useTrackedAddress();
@@ -23,6 +22,7 @@ export function BorosWalletRow(p: SetupRowProps) {
   const forget = useForgetBorosAgent();
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
+  const [askLogOut, setAskLogOut] = useState(false);
   const hasWallet = hasInjectedWallet();
   const alertsLinked = useTelegramLinked();
 
@@ -61,12 +61,12 @@ export function BorosWalletRow(p: SetupRowProps) {
   let body: ReactNode;
   if (!address) {
     body = <ConnectWalletButton />;
-  } else if (active.state === 'can-trade') {
+  } else if (active.state === 'can-trade' || active.state === 'unchecked') {
     body = (
       <>
         <p className="text-xs text-ink-400">
-          Agent key: trades only, cannot deposit or withdraw.
-          {agent?.expiry ? ` Login ends ${day(agent.expiry)}.` : ''}
+          Trades only. Cannot deposit or withdraw.
+          {agent?.expiry ? ` Login ends ${fmtDateShort(agent.expiry, { year: 'numeric' })}.` : ''}
         </p>
         {active.endsSoon !== null && logIn}
       </>
@@ -75,7 +75,7 @@ export function BorosWalletRow(p: SetupRowProps) {
     body = (
       <>
         <p className="text-xs text-rose-300">
-          Login ended{agent?.expiry ? ` ${day(agent.expiry)}` : ''}. Boros refuses orders.
+          Login ended{agent?.expiry ? ` ${fmtDateShort(agent.expiry, { year: 'numeric' })}` : ''}. Boros refuses orders.
         </p>
         {logIn}
       </>
@@ -83,9 +83,7 @@ export function BorosWalletRow(p: SetupRowProps) {
   } else if (active.state === 'not-approved') {
     body = (
       <>
-        <p className="text-xs text-rose-300">
-          Boros has no approval for this login. The wallet prompt was rejected, or the login was revoked.
-        </p>
+        <p className="text-xs text-rose-300">{NOT_APPROVED_TEXT}</p>
         {logIn}
       </>
     );
@@ -116,6 +114,11 @@ export function BorosWalletRow(p: SetupRowProps) {
       title="Boros wallet"
       row={p}
       isDone={address !== null}
+      doneTone={
+        p.variant === 'settings' && (active.state === 'view-only' || active.state === 'not-logged-in')
+          ? 'neutral'
+          : 'done'
+      }
       state={address ? short(address) : null}
       stateNode={
         address ? (
@@ -143,21 +146,42 @@ export function BorosWalletRow(p: SetupRowProps) {
               Use my browser wallet
             </button>
           )}
-          {isOwnLogin && (
+          {isOwnLogin && !askLogOut && (
+            <button type="button" className="btn-link ml-auto text-ink-400" onClick={() => setAskLogOut(true)}>
+              Log out
+            </button>
+          )}
+        </div>
+      ) : null}
+      {isOwnLogin && askLogOut && loggedIn && (
+        <div
+          role="alertdialog"
+          aria-label={`Log out ${short(loggedIn)}?`}
+          className="flex flex-col gap-2 rounded-lg border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs text-amber-200"
+        >
+          <p>
+            Log out <span className="num">{short(loggedIn)}</span>? This terminal stops trading it. Open positions
+            stay open.
+          </p>
+          <div className="flex items-center gap-2">
             <button
               type="button"
-              className="btn-link ml-auto text-ink-400"
+              className="btn"
               disabled={forget.isPending}
               onClick={async () => {
                 await forget.mutateAsync();
+                setAskLogOut(false);
                 setNote('Logged out. The approval stays live on-chain until you revoke it in the Boros app.');
               }}
             >
               {forget.isPending ? 'Logging out…' : 'Log out'}
             </button>
-          )}
+            <button type="button" className="btn-ghost-xs" onClick={() => setAskLogOut(false)}>
+              Cancel
+            </button>
+          </div>
         </div>
-      ) : null}
+      )}
     </SetupRowFrame>
   );
 }

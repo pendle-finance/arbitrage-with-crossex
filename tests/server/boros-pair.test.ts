@@ -14,6 +14,7 @@ import type {
   BorosMarketOrderRequest,
   BorosOrderClient,
 } from '../../src/core/boros/orders';
+import { resetAgentApprovalCache } from '../../src/server/borosAgentApproval';
 import { borosExecutionsPending } from '../../src/server/routes/borosPair';
 import { account, ADDRESS, BN, DAY, HL, market, MATURITY, NOW, OK, wireBook } from '../helpers/boros-pair-fixtures';
 import { TtlCache } from '../../src/server/cache';
@@ -1166,4 +1167,63 @@ describe('a Boros close at $6,000,000 that fills in part', () => {
     expect(result.unhedgedSize).toBe(2_400_000);
     expect(result.unhedgedLeg).toBe('B');
   });
+});
+
+describe('POST /api/boros/pair/top-up-gas — only the logged-in wallet', () => {
+  it('refuses a top-up for a wallet that is not logged in, and pays nothing', async () => {
+    const payTreasury = vi.fn(async () => {});
+    makeApp({}, undefined, { ...orderClient(), payTreasury });
+    const res = await post('/api/boros/pair/top-up-gas', { amountUsd: 5, address: OTHER });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error.message).toBe(
+      'Top up works only for the logged-in wallet 0x1111…1111. Log in to 0x2222…2222 first.',
+    );
+    expect(payTreasury).not.toHaveBeenCalled();
+  });
+
+  it('pays for the logged-in wallet in any letter case', async () => {
+    const paid: number[] = [];
+    makeApp({}, undefined, {
+      ...orderClient(),
+      payTreasury: async (amountUsd) => {
+        paid.push(amountUsd);
+      },
+    });
+    const res = await post('/api/boros/pair/top-up-gas', { amountUsd: 5, address: ADDRESS.toUpperCase().replace('0X', '0x') });
+    expect(res.statusCode).toBe(200);
+    expect(paid).toEqual([5]);
+  });
+});
+
+describe('the approval read on a write route', () => {
+  afterEach(() => {
+    delete process.env.BOROS_AGENT_PRIVATE_KEY;
+    resetAgentApprovalCache();
+  });
+
+  it('gives up after 2 s and lets the write through when Boros does not answer', async () => {
+    resetAgentApprovalCache();
+    process.env.BOROS_AGENT_PRIVATE_KEY = `0x${'a'.repeat(64)}`;
+    const stub = borosStub(bodies());
+    const paid: number[] = [];
+    app = makeTestApp({
+      borosFetch: (url, init) =>
+        url.includes('/agents/expiry-time')
+          ? new Promise((_resolve, reject) => {
+              init?.signal?.addEventListener('abort', () => reject(new Error('aborted')));
+            })
+          : stub(url, init),
+      getBorosOrders: () => ({
+        ...orderClient(),
+        payTreasury: async (amountUsd: number) => {
+          paid.push(amountUsd);
+        },
+      }),
+    });
+    const started = Date.now();
+    const res = await post('/api/boros/pair/top-up-gas', { amountUsd: 5 });
+    expect(res.statusCode).toBe(200);
+    expect(paid).toEqual([5]);
+    expect(Date.now() - started).toBeLessThan(4_000);
+  }, 8_000);
 });

@@ -1,3 +1,4 @@
+import { ArrowRight } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { ApiError } from '../api/client';
 import { useInstallWatch, useRunUpdate, useUpdateLog, useVersion } from '../api/queries';
@@ -322,10 +323,10 @@ export function UpdateIndicator() {
 
             <div className="flex flex-wrap gap-x-4 gap-y-1">
               <a href={changesUrl} target="_blank" rel="noreferrer" className={LINK_CLASS}>
-                Read the code changes →
+                Read the code changes <ArrowRight size={12} aria-hidden className="inline" />
               </a>
               <a href={CHANGELOG_URL} target="_blank" rel="noreferrer" className={LINK_CLASS}>
-                Full changelog on GitHub →
+                Full changelog on GitHub <ArrowRight size={12} aria-hidden className="inline" />
               </a>
             </div>
           </div>

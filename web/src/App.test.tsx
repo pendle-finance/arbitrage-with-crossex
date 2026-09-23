@@ -256,7 +256,7 @@ describe('borrow pill', () => {
 
     await userEvent.hover(pill);
     const card = await screen.findByRole('tooltip');
-    const link = within(card).getByRole('button', { name: 'Rebalance on Balances ▸' });
+    const link = within(card).getByRole('button', { name: 'Rebalance on Balances' });
     await userEvent.click(link);
 
     expect(tab(/^Balances/)).toHaveAttribute('aria-selected', 'true');

@@ -680,9 +680,9 @@ export function useTopUpGas() {
   // again. A success mints a fresh id for the next top-up.
   const idRef = useRef<string | null>(null);
   return useMutation({
-    mutationFn: (amountUsd: number) => {
+    mutationFn: ({ amountUsd, address }: { amountUsd: number; address: string }) => {
       idRef.current ??= `gas-${uuid()}`.slice(0, 64);
-      return postJson<TopUpGasResponse>('/boros/pair/top-up-gas', { amountUsd, clientOrderId: idRef.current });
+      return postJson<TopUpGasResponse>('/boros/pair/top-up-gas', { amountUsd, address, clientOrderId: idRef.current });
     },
     onSuccess: () => {
       idRef.current = null;

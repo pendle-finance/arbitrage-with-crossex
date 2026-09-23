@@ -1,3 +1,4 @@
+import { RotateCw } from 'lucide-react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useAccount, useOpenOrders, usePositions } from '../api/queries';
 import { fmtAge } from '../lib/fmt';
@@ -24,7 +25,7 @@ export function FreshnessButton({
   className?: string;
 }) {
   const now = useNow(1000);
-  if (!dataUpdatedAt) return <span className="num text-xs text-ink-500">⟳ loading</span>;
+  if (!dataUpdatedAt) return <span className="num text-xs text-ink-500"><RotateCw size={12} aria-hidden className="inline" /> loading</span>;
   const age = fmtAge(now - dataUpdatedAt);
   return (
     <button
@@ -37,7 +38,13 @@ export function FreshnessButton({
           : 'border-ink-700 bg-ink-900 text-ink-400 hover:border-ink-500 hover:text-ink-200'
       }`}
     >
-      {staleError ? `stale ${age} · retrying` : `⟳ ${age} ago`}
+      {staleError ? (
+        `stale ${age} · retrying`
+      ) : (
+        <>
+          <RotateCw size={12} aria-hidden className="inline" /> {age} ago
+        </>
+      )}
     </button>
   );
 }

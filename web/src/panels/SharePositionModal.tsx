@@ -2,6 +2,7 @@
  * IS the shared bytes — one canvas, one toDataURL), the public link, and the
  * X intent. The payload was frozen when Share was clicked, so the 4s position
  * poll can't mutate an open modal. */
+import { ArrowRight } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { postJson } from '../api/client';
 import { Modal } from '../components/Modal';
@@ -198,7 +199,8 @@ export function SharePositionModal({ payload, onClose }: { payload: SharePayload
               rel="noopener noreferrer"
               className="btn-primary"
             >
-              Share on X →
+              Share on X
+              <ArrowRight size={14} aria-hidden />
             </a>
           )}
           {dataUrl && (

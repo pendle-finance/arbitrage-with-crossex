@@ -39,6 +39,7 @@ import { normalizeUnderlying } from '../../core/boros/opportunities';
 import { COIN_NOT_SUPPORTED_TEXT, isSupportedCoin } from '../../core/coins';
 import { knownRate } from '../../core/boros/venue';
 import { readAgentApproval } from '../borosAgentApproval';
+import { maskAddress } from './borosAgent';
 import { isUpdating } from '../updater';
 import {
   describeLegFailure,
@@ -617,11 +618,12 @@ export function borosPairRoutes(deps: AppDeps) {
     const root = process.env.BOROS_ROOT_ADDRESS;
     const agentPrivateKey = process.env.BOROS_AGENT_PRIVATE_KEY;
     if (!root || !agentPrivateKey) return;
-    const approval = await readAgentApproval(resolveBorosFetch(deps.borosFetch), {
-      root,
-      accountId: Number(process.env.BOROS_ACCOUNT_ID ?? 0) || 0,
-      agentPrivateKey,
-    });
+    // A short read: a slow Boros must not stall a close.
+    const approval = await readAgentApproval(
+      resolveBorosFetch(deps.borosFetch),
+      { root, accountId: Number(process.env.BOROS_ACCOUNT_ID ?? 0) || 0, agentPrivateKey },
+      { timeoutMs: 2_000 },
+    );
     if (approval.state === 'expired') refuseExpired();
     if (approval.state === 'not-approved') {
       throw new CoreError(
@@ -1041,13 +1043,25 @@ export function borosPairRoutes(deps: AppDeps) {
     const topUps = new Map<string, Promise<{ sentUsd: number }>>();
     let topUpInFlight = false;
     app.post('/boros/pair/top-up-gas', async (req, reply) => {
-      const body = (req.body ?? {}) as { amountUsd?: unknown; clientOrderId?: unknown };
+      const body = (req.body ?? {}) as { amountUsd?: unknown; clientOrderId?: unknown; address?: unknown };
       const amountUsd = Number(body.amountUsd);
       if (!Number.isFinite(amountUsd) || amountUsd < MIN_TOP_UP_USD || amountUsd > MAX_TOP_UP_USD) {
         throw new CoreError(
           `amountUsd must be between $${MIN_TOP_UP_USD} and $${MAX_TOP_UP_USD}`,
           'validation',
         );
+      }
+      // The top-up always pays from the logged-in wallet. A tracked wallet
+      // that is not logged in must not get a payment it never made.
+      if (body.address !== undefined) {
+        const address = parseAddress(body.address);
+        const root = configuredRoot();
+        if (root && address !== root) {
+          throw new CoreError(
+            `Top up works only for the logged-in wallet ${maskAddress(root)}. Log in to ${maskAddress(address)} first.`,
+            'validation',
+          );
+        }
       }
       const clientOrderId =
         body.clientOrderId === undefined ? null : parseClientOrderId(body.clientOrderId, 'clientOrderId');

@@ -40,8 +40,12 @@ export interface BotClient {
   requestLink(body: { keyHash: string; version: string }): Promise<{ code: string; expiresAt: string }>;
   getTerminal(key: string): Promise<void>;
   putTriggers(key: string, body: TriggerSync): Promise<TelegramSettings>;
-  patchSettings(key: string, body: Partial<TelegramSettings>): Promise<TelegramSettings>;
-  deleteTerminal(key: string): Promise<void>;
+  patchSettings(key: string, body: Partial<TelegramSettings>, call?: BotCallOptions): Promise<TelegramSettings>;
+  deleteTerminal(key: string, call?: BotCallOptions): Promise<void>;
+}
+
+export interface BotCallOptions {
+  withoutWallet?: boolean;
 }
 
 export class BotAuthError extends Error {
@@ -107,11 +111,12 @@ export interface BotClientOptions {
 }
 
 export function createBotClient(opts: BotClientOptions): BotClient {
-  const send = async (method: string, route: string, init: { key?: string; body?: unknown } = {}): Promise<unknown> => {
+  type Init = { key?: string; body?: unknown } & BotCallOptions;
+  const send = async (method: string, route: string, init: Init = {}): Promise<unknown> => {
     const headers: Record<string, string> = {};
     if (init.key !== undefined) {
       headers['x-terminal-key'] = init.key;
-      const wallet = opts.wallet?.() ?? null;
+      const wallet = init.withoutWallet ? null : (opts.wallet?.() ?? null);
       if (wallet !== null) headers['x-terminal-wallet'] = wallet.toLowerCase();
     }
     if (init.body !== undefined) headers['content-type'] = 'application/json';
@@ -136,12 +141,13 @@ export function createBotClient(opts: BotClientOptions): BotClient {
     return body;
   };
 
-  const call = async (method: string, route: string, init: { key?: string; body?: unknown } = {}): Promise<unknown> => {
+  const call = async (method: string, route: string, init: Init = {}): Promise<unknown> => {
     try {
       return await send(method, route, init);
     } catch (err) {
       const key = init.key;
       if (!(err instanceof BotAuthError) || err.reason !== 'wallet-unlinked' || key === undefined) throw err;
+      if (init.withoutWallet) throw err;
       const wallet = opts.wallet?.() ?? null;
       const proof = wallet === null ? null : await opts.proveWallet?.(hashKey(key), wallet.toLowerCase());
       if (!proof) throw err;
@@ -164,11 +170,11 @@ export function createBotClient(opts: BotClientOptions): BotClient {
     async putTriggers(key, body) {
       return settingsOf(await call('PUT', '/terminal/triggers', { key, body }));
     },
-    async patchSettings(key, body) {
-      return settingsOf(await call('PATCH', '/terminal/settings', { key, body }));
+    async patchSettings(key, body, options) {
+      return settingsOf(await call('PATCH', '/terminal/settings', { key, body, ...options }));
     },
-    async deleteTerminal(key) {
-      await call('DELETE', '/terminal', { key });
+    async deleteTerminal(key, options) {
+      await call('DELETE', '/terminal', { key, ...options });
     },
   };
 }

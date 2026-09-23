@@ -276,14 +276,15 @@ export function setClientTagContext(ctx: { version?: string | null; active?: boo
 async function requestJson(
   fetchImpl: FetchLike,
   path: string,
-  init: { method?: string; headers?: Record<string, string>; body?: string } = {},
+  init: { method?: string; headers?: Record<string, string>; body?: string; timeoutMs?: number } = {},
 ): Promise<unknown> {
+  const { timeoutMs = 15_000, ...fetchInit } = init;
   const clientTag =
     'pendle_client=boroscrossex' + clientTagState.version + (clientTagState.active ? '_active' : '');
   const url = `${path}${path.includes('?') ? '&' : '?'}${clientTag}`;
   let resp: Awaited<ReturnType<FetchLike>>;
   try {
-    resp = await fetchImpl(url, { ...init, signal: AbortSignal.timeout(15_000) });
+    resp = await fetchImpl(url, { ...fetchInit, signal: AbortSignal.timeout(timeoutMs) });
   } catch (err) {
     throw new CoreError(
       `Boros API unreachable (${path}): ${(err as Error)?.message ?? String(err)}`,
@@ -313,10 +314,12 @@ async function requestJson(
 export async function fetchBorosAgentExpiry(
   fetchImpl: FetchLike,
   query: { root: string; accountId: number; agent: string },
+  opts: { timeoutMs?: number } = {},
 ): Promise<number> {
   const body = (await requestJson(
     fetchImpl,
     `${BOROS_GATEWAY_BASE_URL}/v1/agents/expiry-time?root=${query.root}&accountId=${query.accountId}&agentAddress=${query.agent}`,
+    { timeoutMs: opts.timeoutMs },
   )) as { expiryTime?: unknown };
   const expiry = Number(body?.expiryTime);
   if (!Number.isFinite(expiry) || expiry < 0) {

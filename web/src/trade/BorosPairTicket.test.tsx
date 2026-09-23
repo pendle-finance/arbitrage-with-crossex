@@ -291,8 +291,9 @@ describe('BorosPairTicket', () => {
     server.use(...handlers({ agent: { configured: false, root: null, rootMasked: null } }));
     renderWithClient(<BorosPairTicket />);
 
-    expect(await screen.findByText('Enable Boros trading')).toBeInTheDocument();
-    expect(screen.getByText(/one on-chain transaction/i)).toBeInTheDocument();
+    expect(
+      await screen.findByText('Log in once to trade. One free wallet signature. The key trades only. It cannot deposit or withdraw.'),
+    ).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Connect wallet' })).toBeNull();
     expect(screen.queryByText(/No browser wallet detected/)).toBeNull();
     expect(screen.getAllByRole('button', { name: /Log in to trade/ })).toHaveLength(1);
@@ -323,7 +324,8 @@ describe('BorosPairTicket', () => {
 
     expect(await screen.findByText('Logged in')).toBeInTheDocument();
     expect(screen.getByText('0x1111…1111')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Log out' })).toBeInTheDocument();
+    // Log out lives in Settings, not in the ticket.
+    expect(screen.queryByRole('button', { name: 'Log out' })).toBeNull();
     expect(screen.queryByText(/view only/i)).toBeNull();
     expect(screen.queryByRole('button', { name: /Log in to trade/ })).toBeNull();
   });
@@ -949,7 +951,7 @@ describe('BorosPairTicket', () => {
     // A hold, not a click: it moves margin.
     await user.pointer({ keys: '[MouseLeft>]', target: button });
     await waitFor(() => expect(bodies.length).toBe(1), { timeout: 3_000 });
-    expect(bodies[0]).toMatchObject({ amountUsd: 20, clientOrderId: expect.stringMatching(/^gas-/) });
+    expect(bodies[0]).toMatchObject({ amountUsd: 20, address: ADDRESS, clientOrderId: expect.stringMatching(/^gas-/) });
   });
 
   it('says reduce-only is enforced by sizing, not by the venue', async () => {

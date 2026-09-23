@@ -19,6 +19,7 @@
  * REUSED across error-retries (the server dedupes on it, so a lost-response
  * resend is a no-op), cleared only on a 202.
  */
+import { Check, X } from 'lucide-react';
 import { useMutation } from '@tanstack/react-query';
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
@@ -345,7 +346,7 @@ export function ExecuteControl({
             className="px-1 leading-none text-emerald-400/70 transition-colors hover:text-emerald-200"
             onClick={() => setPlacedResting(null)}
           >
-            ×
+            <X size={12} aria-hidden />
           </button>
         </div>
       )}
@@ -361,7 +362,7 @@ export function ExecuteControl({
             className="px-1 leading-none text-amber-400/70 transition-colors hover:text-amber-200"
             onClick={() => setReplayedDeal(null)}
           >
-            ×
+            <X size={12} aria-hidden />
           </button>
         </div>
       )}
@@ -385,7 +386,7 @@ export function ExecuteControl({
         <div role="alert" className="mt-1 flex flex-col gap-0.5 text-[11px]">
           {splitLegs.map((l) => (
             <div key={l.symbol} className={l.state === 'done' ? 'text-emerald-300' : l.state === 'failed' ? 'text-rose-300' : 'text-ink-400'}>
-              {l.state === 'done' ? '✓' : l.state === 'failed' ? '✗' : '…'} {parseSymbol(l.symbol).exchange} leg{' '}
+              {l.state === 'done' ? <Check size={12} aria-hidden className="inline" /> : l.state === 'failed' ? <X size={12} aria-hidden className="inline" /> : '…'} {parseSymbol(l.symbol).exchange} leg{' '}
               {l.state === 'done' ? 'closed' : l.state === 'failed' ? `not closed — ${l.message ?? 'failed'}` : 'sending'}
             </div>
           ))}

@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { TelegramLinkStart, TelegramLinkStatus } from '../../../web/src/api/types';
 import { readOwnerJson, writeOwnerOnlyJson } from '../secretFile';
-import { BotAuthError, BotUnavailableError, type BotClient } from './botClient';
+import { BotAuthError, BotUnavailableError, BotWalletRefusedError, type BotClient } from './botClient';
 import { deleteTelegramKey, newTelegramKey, readTelegramKey, writeTelegramKey, type TelegramKey } from './keyFile';
 import type { TelegramStatus } from './status';
 
@@ -83,7 +83,13 @@ export function createTelegramLink(opts: TelegramLinkOptions): TelegramLink {
       key.keyHash === swap.key.keyHash &&
       (await opts.bot.getTerminal(key.key).then(
         () => true,
-        (err: unknown) => err instanceof BotAuthError && err.reason === 'wallet-unlinked',
+        (err: unknown) => {
+          if (err instanceof BotWalletRefusedError) {
+            opts.status.setWalletRefused(err.wallet);
+            return true;
+          }
+          return err instanceof BotAuthError && err.reason === 'wallet-unlinked';
+        },
       ));
     if (!confirmed) {
       restoreKey(swap);
@@ -130,6 +136,10 @@ export function createTelegramLink(opts: TelegramLinkOptions): TelegramLink {
       settle(current, 'confirmed');
     } catch (err) {
       if (err instanceof BotAuthError && err.reason === 'wallet-unlinked') settle(current, 'confirmed');
+      else if (err instanceof BotWalletRefusedError) {
+        opts.status.setWalletRefused(err.wallet);
+        settle(current, 'confirmed');
+      }
       else if (err instanceof BotAuthError && err.reason !== 'pending') settle(current, 'expired');
     } finally {
       current.polling = false;

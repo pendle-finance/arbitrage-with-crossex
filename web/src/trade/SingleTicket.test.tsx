@@ -62,7 +62,7 @@ describe('SingleTicket', () => {
     await userEvent.type(screen.getByLabelText('Size'), '5');
 
     expect(await screen.findByText(/below venue min 10/)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Execute now ▸' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Execute now' })).toBeDisabled();
   });
 
   it('blocks execute until the venue leverage cap loads (never silently omits leverage)', async () => {
@@ -88,7 +88,7 @@ describe('SingleTicket', () => {
     // max" can't be honored — execute stays disabled and the row says loading.
     await screen.findByText('loading…');
     await new Promise((r) => setTimeout(r, 250));
-    expect(screen.getByRole('button', { name: 'Execute now ▸' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Execute now' })).toBeDisabled();
   });
 
   it('MARKET preview shows the tentative avg fill and the partial-depth warning', async () => {
@@ -139,7 +139,7 @@ describe('SingleTicket', () => {
     // Taker fee with bps, and actions enabled (no violations).
     expect(screen.getByText('0.0488 USDT')).toBeInTheDocument();
     expect(screen.getByText('taker · 5.0 bps')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Execute now ▸' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Execute now' })).toBeEnabled();
   });
 
   it('does not keep an action enabled off a stale preview while a size edit is estimating', async () => {
@@ -152,7 +152,7 @@ describe('SingleTicket', () => {
 
     await pickBinanceBtc();
     await userEvent.type(screen.getByLabelText('Size'), '100');
-    const exec = screen.getByRole('button', { name: 'Execute now ▸' });
+    const exec = screen.getByRole('button', { name: 'Execute now' });
     await waitFor(() => expect(exec).toBeEnabled());
 
     // Edit the size — the debounced preview still describes the OLD "100" input,

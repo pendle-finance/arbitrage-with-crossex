@@ -21,6 +21,7 @@
  * Each leg is its own request: the route takes one marketId, and a partial
  * failure must leave the other leg's outcome legible.
  */
+import { Check, ChevronRight } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import type { BorosPairRequest, BorosSimulatedLeg, StrategyLeg } from '../api/types';
 import { VenueIcon } from '../components/AssetIcon';
@@ -276,9 +277,7 @@ export function CloseBorosForm({
 
 
   const agentBlocked = agent.isSuccess && !canTrade;
-  const agentReason = !agent.data?.configured
-    ? 'No Boros wallet is connected on this install — connect one and approve an agent key before closing Boros legs.'
-    : 'The Boros agent approval has expired — approve a new agent key before closing Boros legs.';
+  const agentReason = 'This build cannot close Boros legs. Close them in the Boros app.';
 
   const allDone = closable.length > 0 && done.length === closable.length;
   /**
@@ -675,7 +674,7 @@ export function CloseBorosForm({
                             <VenueIcon venue={f.l.venue} size={14} />
                             {prettyVenue(f.l.venue)}
                           </span>
-                          {finished && <span className="ml-1.5 text-[11px] text-emerald-300">closed ✓</span>}
+                          {finished && <span className="ml-1.5 inline-flex items-center gap-1 text-[11px] text-emerald-300">closed<Check size={12} aria-hidden /></span>}
                         </td>
                         <td className="num py-1.5 text-right text-[12.5px] text-ink-50">{rateOf(f.q)}</td>
                         <td className="num py-1.5 text-right text-[12px]">
@@ -730,16 +729,23 @@ export function CloseBorosForm({
           onConfirm={run}
           className="w-full"
         >
-          {close.isPending
-            ? 'Closing…'
-            : `Close ${closable.length === 1 ? 'leg' : `${closable.length} legs`} ▸`}
+          {close.isPending ? (
+            'Closing…'
+          ) : (
+            <>
+              {`Close ${closable.length === 1 ? 'leg' : `${closable.length} legs`}`}
+              <ChevronRight size={14} aria-hidden />
+            </>
+          )}
         </HoldToConfirmButton>
         )}
-        <p className="text-[11px] leading-relaxed text-ink-400">
-          {closable.length === 1
-            ? 'Cancels any resting orders on this market first, then sends one market order. The perp leg stays open.'
-            : `Cancels resting orders on both markets, then ${closable.length === 2 ? 'two' : closable.length} market orders. Size is capped at what is open once the cancel lands.`}
-        </p>
+        {!loginLabel && (
+          <p className="text-[11px] leading-relaxed text-ink-400">
+            {closable.length === 1
+              ? 'Cancels any resting orders on this market first, then sends one market order. The perp leg stays open.'
+              : `Cancels resting orders on both markets, then ${closable.length === 2 ? 'two' : closable.length} market orders. Size is capped at what is open once the cancel lands.`}
+          </p>
+        )}
       </div>
     </div>
   );

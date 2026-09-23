@@ -15,31 +15,24 @@ describe('SinceChip', () => {
     expect(chip.className).toContain('!h-[30px]');
   });
 
-  it('shows Count HYPE PnL from, a date input and Default 23 Jun 2026 with no Use default, popover at default', async () => {
+  it('shows only Count HYPE PnL from and a date input, popover at default', async () => {
     render(<SinceChip base="HYPE" storedSec={undefined} defaultSec={DEFAULT_SEC} onChange={vi.fn()} />);
     await userEvent.click(screen.getByRole('button', { name: /Since 23 Jun 2026/ }));
     const card = await screen.findByRole('tooltip');
     expect(within(card).getByLabelText('Count HYPE PnL from')).toHaveValue('2026-06-23');
-    expect(within(card).getByText('Default 23 Jun 2026')).toBeInTheDocument();
-    expect(within(card).queryByRole('button', { name: 'Use default' })).toBeNull();
+    expect(within(card).queryByText(/Default/)).toBeNull();
+    expect(within(card).queryByText(/23 Jun 2026/)).toBeNull();
+    expect(within(card).queryAllByRole('button')).toHaveLength(0);
   });
 
-  it('reads Your first CrossEx position on hover, default hover', async () => {
-    render(<SinceChip base="HYPE" storedSec={undefined} defaultSec={DEFAULT_SEC} onChange={vi.fn()} />);
-    await userEvent.click(screen.getByRole('button', { name: /Since 23 Jun 2026/ }));
-    await screen.findByRole('tooltip');
-    await userEvent.hover(screen.getByRole('button', { name: 'Default 23 Jun 2026' }));
-    expect(await screen.findByText('Your first CrossEx position')).toBeInTheDocument();
-  });
-
-  it('turns the chip text blue and shows Use default, moved date', async () => {
+  it('turns the chip text blue and shows Use default with the first position date, moved date', async () => {
     render(<SinceChip base="HYPE" storedSec={MARCH_SEC} defaultSec={DEFAULT_SEC} onChange={vi.fn()} />);
     const chip = screen.getByRole('button', { name: /Since 1 Mar 2026/ });
     expect(chip.className).toContain('!text-info');
 
     await userEvent.click(chip);
     const card = await screen.findByRole('tooltip');
-    expect(within(card).getByRole('button', { name: 'Use default' })).toBeInTheDocument();
+    expect(within(card).getByRole('button', { name: 'Use default (first position, 23 Jun 2026)' })).toBeInTheDocument();
   });
 
   it('removes the stored date and reads Since 23 Jun 2026 again, use default resets', async () => {
@@ -49,7 +42,7 @@ describe('SinceChip', () => {
     );
     await userEvent.click(screen.getByRole('button', { name: /Since 1 Mar 2026/ }));
     const card = await screen.findByRole('tooltip');
-    await userEvent.click(within(card).getByRole('button', { name: 'Use default' }));
+    await userEvent.click(within(card).getByRole('button', { name: 'Use default (first position, 23 Jun 2026)' }));
     expect(onChange).toHaveBeenCalledWith(undefined);
 
     rerender(<SinceChip base="HYPE" storedSec={undefined} defaultSec={DEFAULT_SEC} onChange={onChange} />);
@@ -141,8 +134,7 @@ describe('SinceChip', () => {
     expect(onChange).toHaveBeenCalledWith(Math.floor(new Date('2026-07-01T00:00').getTime() / 1000));
 
     await userEvent.tab();
-    await userEvent.tab();
-    const useDefault = within(card).getByRole('button', { name: 'Use default' });
+    const useDefault = within(card).getByRole('button', { name: 'Use default (first position, 23 Jun 2026)' });
     expect(useDefault).toHaveFocus();
 
     await userEvent.keyboard('{Enter}');

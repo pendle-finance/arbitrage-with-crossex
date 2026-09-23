@@ -34,7 +34,7 @@ import {
   type OpportunityFilters,
   type OpportunityRow,
 } from './opportunityFilters';
-import { Funnel } from 'lucide-react';
+import { Check, Funnel, X } from 'lucide-react';
 
 function FilterChip<T extends string | number>({
   option,
@@ -71,8 +71,8 @@ function FilterChip<T extends string | number>({
       {/* Shape marks the selection alongside the cyan; hidden from the
           accessible name — aria-pressed already says it. */}
       {selected && (
-        <span aria-hidden="true" className="mr-1 text-[9px] text-cyan-400">
-          ✓
+        <span aria-hidden="true" className="mr-1 text-cyan-400">
+          <Check size={12} aria-hidden className="inline" />
         </span>
       )}
       {label}{' '}
@@ -200,7 +200,7 @@ function FilterPopover({
         <div className="mb-2.5 flex items-center justify-between gap-2">
           <span className="text-xs font-semibold text-ink-100">Filters</span>
           <button type="button" aria-label="dismiss" className="btn-ghost-xs px-1.5" onClick={onDismiss}>
-            ✕
+            <X size={12} aria-hidden />
           </button>
         </div>
         <div className="flex flex-col gap-3">{children}</div>

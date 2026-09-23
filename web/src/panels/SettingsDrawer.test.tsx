@@ -224,7 +224,7 @@ describe('SettingsDrawer', () => {
     await clickEdit('Boros wallet');
     const wallet = row('Boros wallet');
 
-    expect(await within(wallet).findByText('Agent key: trades only, cannot deposit or withdraw.')).toBeInTheDocument();
+    expect(await within(wallet).findByText('Trades only. Cannot deposit or withdraw.')).toBeInTheDocument();
     expect(within(wallet).getByRole('button', { name: 'Log out' })).toBeInTheDocument();
     expect(within(wallet).queryByRole('radio')).toBeNull();
     expect(within(wallet).getByRole('button', { name: 'Collapse' })).toBeInTheDocument();
@@ -267,7 +267,7 @@ describe('SettingsDrawer', () => {
     mockAllDone({ ...connectedTelegram(), alertWallet: WALLET });
     renderDrawer();
     await clickEdit('Telegram alerts');
-    expect(await within(row('Telegram alerts')).findByText('Alerts follow 0xab18…ed9d')).toBeInTheDocument();
+    expect(await within(row('Telegram alerts')).findByText('Alerts for 0xab18…ed9d')).toBeInTheDocument();
   });
 
   it('telegram asks to log in when the bot refuses the wallet', async () => {
@@ -275,7 +275,7 @@ describe('SettingsDrawer', () => {
     renderDrawer();
     await clickEdit('Telegram alerts');
     expect(await within(row('Telegram alerts')).findByText('Log in to move alerts to 0x3f2a…91c0.')).toBeInTheDocument();
-    expect(within(row('Telegram alerts')).queryByText(/Alerts follow/)).toBeNull();
+    expect(within(row('Telegram alerts')).queryByText(/Alerts for 0x/)).toBeNull();
   });
 
   it('edit key', async () => {
