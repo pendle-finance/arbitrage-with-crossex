@@ -18,7 +18,7 @@ const OTHER = `0x5c1f${'2'.repeat(32)}a2e0`;
 const LINK_URL = 'https://boros-bot-notification.pendle.finance/alerts?crossex=abc123';
 const BOT_DOWN = 'Telegram alerts are not available yet. Try again later.';
 const ALERTS_URL = 'https://boros-bot-notification.pendle.finance/alerts';
-const BOT_UNREACHABLE = 'Could not reach the bot. Try again, or stop alerts for each wallet on the Boros notifications page.';
+const BOT_UNREACHABLE = "Bot not reached. Retry, or stop each wallet's alerts on the Boros notifications page.";
 
 const approveAgent = vi.fn(async () => ({ txHash: '0xtx' }));
 vi.mock('../../lib/borosAgentApi', () => ({
@@ -342,7 +342,7 @@ describe('SetupPage · Telegram alerts', () => {
     await user.hover(screen.getByText(/^synced \d+ s ago$/));
     expect(
       await screen.findByText(
-        "Alerts use the terminal's last sync, at most 5 min old. A trade made outside the terminal reaches the alerts after the next sync.",
+        'Alerts use data up to 5 min old. Trades outside the terminal count after the next sync.',
       ),
     ).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Skip/ })).toBeNull();
@@ -458,7 +458,7 @@ describe('setup rows in Settings', () => {
     });
     renderWithClient(<TelegramRow {...settingsRow({ open: true })} />);
     expect(
-      await screen.findByText('Last sync failed at 14:02. Alerts still use the sync from 11:40. Retrying.'),
+      await screen.findByText('Sync failed at 14:02. Alerts use the 11:40 sync. Retrying.'),
     ).toBeInTheDocument();
   });
 

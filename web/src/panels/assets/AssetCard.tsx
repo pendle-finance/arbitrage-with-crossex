@@ -2062,7 +2062,7 @@ function RollReview({
         ? [{ code: 'stale-simulation', message: 'The quote is out of date — waiting for a fresh one.' }]
         : []),
     ...(agent.data?.expired
-      ? [{ code: 'agent-expired', message: 'The Boros agent approval has expired — approve a new agent key before trading.' }]
+      ? [{ code: 'agent-expired', message: 'Boros login expired.' }]
       : []),
   ];
 

@@ -630,7 +630,7 @@ export function BorosPairTicket({
       ? [
           {
             code: 'agent-expired',
-            message: 'The Boros agent approval has expired — approve a new agent key before trading.',
+            message: 'Boros login expired.',
           },
         ]
       : []),

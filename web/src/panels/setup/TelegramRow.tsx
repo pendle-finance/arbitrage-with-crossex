@@ -43,7 +43,7 @@ const floorLine = (floor: InterestFloor): string => {
 
 const LIQUIDATION_CAPTION = 'a 20% price move would liquidate a leg';
 
-const MATURITY_CAPTION = 'daily in the last 7 days before a pair settles, with the better maturities to roll to';
+const MATURITY_CAPTION = 'daily in the last 7 days, with maturities to roll to';
 
 const ROLLOVER_CAPTION = 'a later maturity pays a better APR';
 
@@ -64,7 +64,7 @@ const interestCaption = (floors: readonly InterestFloor[]) => (
 );
 
 const CAVEAT =
-  "Alerts use the terminal's last sync, at most 5 min old. A trade made outside the terminal reaches the alerts after the next sync.";
+  'Alerts use data up to 5 min old. Trades outside the terminal count after the next sync.';
 
 function alertSettings(info: TelegramInfo): AlertSettings {
   return {
@@ -86,8 +86,8 @@ function syncFailure(info: TelegramInfo): string | null {
   const error = info.lastSyncError;
   if (!info.connected || error === null) return null;
   if (info.lastSyncAt !== null && info.lastSyncAt >= error.at) return null;
-  const since = info.lastSyncAt === null ? null : `Alerts still use the sync from ${fmtClock(info.lastSyncAt)}.`;
-  return [`Last sync failed at ${fmtClock(error.at)}.`, since, 'Retrying.'].filter(Boolean).join(' ');
+  const since = info.lastSyncAt === null ? null : `Alerts use the ${fmtClock(info.lastSyncAt)} sync.`;
+  return [`Sync failed at ${fmtClock(error.at)}.`, since, 'Retrying.'].filter(Boolean).join(' ');
 }
 
 /** A stored key the bot has not answered for yet (the server just started):
@@ -228,7 +228,7 @@ export function TelegramRow(p: SetupRowProps) {
       )}
       {disconnect.isError && (
         <p role="alert" className="text-xs text-amber-300">
-          Could not reach the bot. Try again, or stop alerts for each wallet on the{' '}
+          Bot not reached. Retry, or stop each wallet&apos;s alerts on the{' '}
           <Ext href={info?.alertsPageUrl ?? ALERTS_PAGE_FALLBACK}>
             Boros notifications page
           </Ext>
@@ -315,7 +315,7 @@ export function TelegramRow(p: SetupRowProps) {
   const unlinkedBody = (wallet: string) => (
     <>
       <p className="num text-xs text-ink-300">
-        {`Telegram alerts are set up per wallet. Set up once for ${short(wallet)}. You can use the same Telegram chat.`}
+        {'Alerts are per wallet. The same Telegram chat works.'}
       </p>
       {phase === 'expired' && <p className="text-xs text-amber-300">Link expired. Set up again.</p>}
       {startError && (
