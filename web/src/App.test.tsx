@@ -327,7 +327,7 @@ describe('borrow pill', () => {
       expect(gauges).toHaveAttribute(
         'title',
         expect.stringContaining(
-          'Nearest liquidation: ETH rises to $3,764 (+64%). Losing leg: Hyperliquid short. Estimate: other coins flat.',
+          'Nearest liquidation: ETH rises to $3,764 (+64%). Losing leg: Hyperliquid short. Assumes other coins do not move.',
         ),
       ),
     );
