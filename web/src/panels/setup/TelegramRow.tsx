@@ -397,7 +397,7 @@ export function TelegramRow(p: SetupRowProps) {
         )
       }
       setupAction={checking ? <span /> : unlinked ? addWalletButton(unlinked, true) : setupButton}
-      skipConsequence="Without Telegram alerts nothing warns you near liquidation, when interest starts, or before a pair matures."
+      skipConsequence="No warning near liquidation, interest or maturity."
     >
       {checking ? (
         <div className="flex items-center gap-2 text-xs text-ink-300">

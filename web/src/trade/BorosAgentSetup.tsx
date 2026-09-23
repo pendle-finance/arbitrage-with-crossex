@@ -184,17 +184,17 @@ function useBorosLogIn(onDone?: (root: string) => void, expected?: string | null
       const confirmed = await waitForApproval(wallet.address);
       void qc.invalidateQueries({ queryKey: qk.borosAgent });
       if (confirmed === 'timeout') {
-        setError('Boros has not confirmed the approval yet. Wait a minute. If Log in still shows, log in again.');
+        setError('Boros has not confirmed yet. If Log in still shows in a minute, log in again.');
         return;
       }
       if (confirmed === 'unchecked') {
-        setError('Boros did not answer. If Log in shows again, the approval did not land.');
+        setError('Boros did not answer. If Log in shows again, log in again.');
         return;
       }
       // The server moves Telegram alerts to this wallet on its next sync, which
       // the approval starts. Ask the bot once that has had time to start.
       setTimeout(() => void refreshTelegramFresh(qc).catch(() => undefined), TELEGRAM_REFRESH_MS);
-      const done = `Logged in. This terminal can trade ${short(wallet.address)} until ${day(expiry)}.`;
+      const done = `Logged in ${short(wallet.address)} until ${day(expiry)}.`;
       setNote(done);
       toast?.push('success', done);
       tracked?.followBrowserWallet(wallet.address);
@@ -253,24 +253,11 @@ function ReplaceConfirm({ login }: { login: LogIn }) {
       onConfirm={() => login.answerReplace(true)}
       onCancel={() => login.answerReplace(false)}
     >
-      <ul className="flex list-disc flex-col gap-0.5 pl-4">
-        <li>
-          This terminal trades <span className="num">{short(to)}</span>.
-        </li>
-        {alertsLinked && (
-          <li>
-            Telegram alerts are per wallet. If <span className="num">{short(to)}</span> has none, set them up once in
-            Settings.
-          </li>
-        )}
-        <li>
-          <span className="num">{short(from)}</span> positions stay open. Close them in the Boros app.
-        </li>
-        <li>
-          Your Gate perps stay open. They show as unhedged until you log in <span className="num">{short(from)}</span>{' '}
-          again.
-        </li>
-      </ul>
+      <p>
+        <span className="num">{short(from)}</span> Boros legs stay open. Its Gate perps show unhedged until you log
+        it back in.
+      </p>
+      {alertsLinked && <p>Telegram alerts are per wallet.</p>}
     </InlineConfirm>
   );
 }

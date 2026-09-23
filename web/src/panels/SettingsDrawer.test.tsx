@@ -233,7 +233,7 @@ describe('SettingsDrawer', () => {
     await clickEdit('Boros wallet');
     const wallet = row('Boros wallet');
 
-    expect(await within(wallet).findByText('Trades only. Cannot deposit or withdraw.')).toBeInTheDocument();
+    expect(await within(wallet).findByText(/The key cannot withdraw\.$/)).toBeInTheDocument();
     expect(within(wallet).getByRole('button', { name: 'Log out' })).toBeInTheDocument();
     expect(within(wallet).queryByRole('radio')).toBeNull();
     expect(within(wallet).getByRole('button', { name: 'Collapse' })).toBeInTheDocument();

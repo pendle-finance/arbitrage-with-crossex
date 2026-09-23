@@ -274,10 +274,9 @@ describe('BorosAgentSetup — no gas balance on the strip', () => {
     // 0x2222 can trade now, so the terminal asks before logging it out.
     const ask = await screen.findByRole('alertdialog', { name: 'Log out 0x2222…2222 and log in 0x1111…1111?' });
     expect(ask).toHaveTextContent('Log out 0x2222…2222 and log in 0x1111…1111?');
-    expect(ask).toHaveTextContent('This terminal trades 0x1111…1111.');
     expect(ask).not.toHaveTextContent('Telegram alerts');
-    expect(ask).toHaveTextContent('0x2222…2222 positions stay open. Close them in the Boros app.');
-    expect(ask).toHaveTextContent('Your Gate perps stay open. They show as unhedged until you log in 0x2222…2222 again.');
+    expect(ask).toHaveTextContent('0x2222…2222 Boros legs stay open. Its Gate perps show unhedged until you log it back in.');
+    expect(ask).not.toHaveTextContent('Close them in the Boros app');
     // The question's buttons are the only choices while it is open.
     expect(screen.queryByRole('button', { name: /Waiting for your answer/ })).toBeNull();
     expect(body).toBeNull();
@@ -314,7 +313,7 @@ describe('BorosAgentSetup — no gas balance on the strip', () => {
     await user.click(await screen.findByRole('button', { name: 'Log in to trade 0x1111…1111' }));
     const ask = await screen.findByRole('alertdialog', { name: 'Log out 0x2222…2222 and log in 0x1111…1111?' });
     await waitFor(() =>
-      expect(ask).toHaveTextContent('Telegram alerts are per wallet. If 0x1111…1111 has none, set them up once in Settings.'),
+      expect(ask).toHaveTextContent('Telegram alerts are per wallet.'),
     );
     expect(ask).not.toHaveTextContent('same chat');
   });
@@ -397,7 +396,7 @@ describe('BorosAgentSetup — the chain decides "logged in"', () => {
     await waitFor(() => expect(stored).toBe(true));
     expect(screen.queryByRole('alertdialog')).toBeNull();
     // Inline under the button, and as a toast.
-    expect(await screen.findAllByText(/^Logged in\./)).toHaveLength(2);
+    expect(await screen.findAllByText(/^Logged in 0x/)).toHaveLength(2);
   });
 
   it('says "Logged in" only once Boros shows the approval', async () => {
@@ -420,7 +419,7 @@ describe('BorosAgentSetup — the chain decides "logged in"', () => {
     renderWithClient(<BorosLogInButton />);
     await user.click(await screen.findByRole('button', { name: 'Log in to trade 0x1111…1111' }));
     expect(
-      await screen.findAllByText(/^Logged in\. This terminal can trade 0x1111…1111 until/, {}, { timeout: 4000 }),
+      await screen.findAllByText(/^Logged in 0x1111…1111 until/, {}, { timeout: 4000 }),
     ).toHaveLength(2);
     expect(reads).toBe(2);
   });
@@ -503,7 +502,7 @@ describe('BorosAgentSetup — a failed approval rolls back', () => {
       'You rejected the request in your wallet. 0x3333…3333 is still logged in.',
     );
     expect(order).toEqual(['store', 'rollback']);
-    expect(screen.queryByText(/^Logged in\./)).toBeNull();
+    expect(screen.queryByText(/^Logged in 0x/)).toBeNull();
     expect(screen.getByRole('button', { name: 'Log in to trade 0x1111…1111' })).toBeEnabled();
   });
 
@@ -584,7 +583,7 @@ describe('BorosAgentSetup — waiting for Boros', () => {
     );
     renderWithClient(<BorosLogInButton />);
     await user.click(await screen.findByRole('button', { name: 'Log in to trade 0x1111…1111' }));
-    expect(await screen.findAllByText(/^Logged in\./, {}, { timeout: 6000 })).toHaveLength(2);
+    expect(await screen.findAllByText(/^Logged in 0x/, {}, { timeout: 6000 })).toHaveLength(2);
     expect(fresh).toBe(3);
   }, 10_000);
 
@@ -604,13 +603,13 @@ describe('BorosAgentSetup — waiting for Boros', () => {
     );
     renderWithClient(<BorosLogInButton />);
     await user.click(await screen.findByRole('button', { name: 'Log in to trade 0x1111…1111' }));
-    const expiryText = await screen.findAllByText(/^Logged in\. This terminal can trade 0x1111…1111 until \d{1,2} \w+ \d{4}\.$/);
+    const expiryText = await screen.findAllByText(/^Logged in 0x1111…1111 until \d{1,2} \w+ \d{4}\.$/);
     expect(expiryText).toHaveLength(2);
   });
 
   it.each([
-    ['unknown', 'Boros did not answer. If Log in shows again, the approval did not land.'],
-    ['not-approved', 'Boros has not confirmed the approval yet. Wait a minute. If Log in still shows, log in again.'],
+    ['unknown', 'Boros did not answer. If Log in shows again, log in again.'],
+    ['not-approved', 'Boros has not confirmed yet. If Log in still shows in a minute, log in again.'],
   ] as const)('approval stays %s: says so, no "Logged in"', async (approval, text) => {
     vi.useFakeTimers({ shouldAdvanceTime: true, toFake: ['setTimeout'] });
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
@@ -633,7 +632,7 @@ describe('BorosAgentSetup — waiting for Boros', () => {
       await vi.advanceTimersByTimeAsync(1500);
     }
     expect(await screen.findByRole('alert')).toHaveTextContent(text);
-    expect(screen.queryByText(/^Logged in\./)).toBeNull();
+    expect(screen.queryByText(/^Logged in 0x/)).toBeNull();
   });
 
   it('labels each step in the order it happens', async () => {
@@ -678,6 +677,6 @@ describe('BorosAgentSetup — waiting for Boros', () => {
     finishApprove();
     expect(await screen.findByRole('button', { name: 'Waiting for Boros…' })).toBeDisabled();
     finishRead();
-    expect(await screen.findAllByText(/^Logged in\./)).toHaveLength(2);
+    expect(await screen.findAllByText(/^Logged in 0x/)).toHaveLength(2);
   });
 });
