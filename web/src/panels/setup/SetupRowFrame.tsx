@@ -12,6 +12,12 @@ const DOT_CLASS: Record<DotTone, string> = {
   later: 'border-ink-600 text-ink-400',
 };
 
+/** A short part of the state line ("synced 3 min ago") never breaks. A long
+ * one wraps by word, so it cannot run under the row's action. */
+const WHOLE_PART_MAX = 20;
+const keepShortPartWhole = (part: string): string =>
+  part.length <= WHOLE_PART_MAX ? part.replace(/ /g, '\u00a0') : part;
+
 export function SetupRowFrame({
   n,
   title,
@@ -112,7 +118,7 @@ export function SetupRowFrame({
           <span className={`num min-w-0 text-xs ${isLineWarn ? 'text-amber-400' : 'text-ink-400'}`}>
             {line
               .split(' · ')
-              .map((part) => part.replace(/ /g, '\u00a0'))
+              .map(keepShortPartWhole)
               .join(' · ')}
           </span>
         )}

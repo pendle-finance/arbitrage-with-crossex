@@ -102,7 +102,7 @@ function stateLine(info: TelegramInfo | undefined, now: number): { text: string 
   const unlinked = unlinkedOf(info);
   if (unlinked) return { text: `Not set up for ${short(unlinked)}`, isWarn: true };
   if (info.state === 'replaced') return { text: 'Connected on another terminal', isWarn: true };
-  if (info.state === 'removed') return { text: 'Removed on the Boros notifications page', isWarn: true };
+  if (info.state === 'removed') return { text: 'Removed in Boros notifications', isWarn: true };
   if (!info.connected) return { text: null, isWarn: false };
   if (isChecking(info)) return { text: 'Checking…', isWarn: false };
   if (syncFailure(info)) return { text: 'Last sync failed', isWarn: true };

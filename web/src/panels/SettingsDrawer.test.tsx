@@ -213,7 +213,7 @@ describe('SettingsDrawer', () => {
     renderDrawer();
     const telegram = row('Telegram alerts');
 
-    expect(await within(telegram).findByText('Removed on the Boros notifications page')).toBeInTheDocument();
+    expect(await within(telegram).findByText('Removed in Boros notifications')).toBeInTheDocument();
     expect(within(telegram).getByRole('button', { name: 'Set up ↗' })).toBeInTheDocument();
     expect(within(telegram).queryByRole('button', { name: 'Expand' })).toBeNull();
   });
