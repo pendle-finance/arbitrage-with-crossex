@@ -96,8 +96,8 @@ export function PickChip({
   );
 }
 
-/** Majors pinned as quick picks in both tickets. */
-const QUICK_PICK_COINS = ['ETH', 'BTC', 'HYPE', 'SOL'];
+/** The coins the terminal supports (src/core/coins.ts), pinned as quick picks in both tickets. */
+const QUICK_PICK_COINS = ['ETH', 'BTC', 'HYPE'];
 
 /**
  * The coin chip row: the majors, plus the chosen coin as an extra chip when it
