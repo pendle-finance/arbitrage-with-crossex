@@ -3,7 +3,7 @@
 Only substantial releases are listed here — each one bumps `version.json` (which is what the
 in-app update check compares against).
 
-## 1.7.1 — 2026-09-23
+## 1.7.1 — 2026-09-24
 
 TLDR: One Boros wallet at a time, like the Boros app, and Telegram alerts for each wallet. The
 bot warns you before a leg liquidates, when a wallet starts paying interest, when a pair is a
@@ -12,8 +12,8 @@ real price, however far away, read from Gate's real margin table, so it is right
 account.
 
 - **One Boros wallet, like the Boros app.** The terminal shows one wallet everywhere and
-  follows the account in Rabby or MetaMask. A chip in the header shows that wallet and its
-  login on every tab. A wallet you are not logged in to is view only: it shows "Boros PnL ·
+  follows the account in Rabby or MetaMask. A chip in the header shows that wallet on every
+  tab, with a green dot when you are logged in to it. A wallet you are not logged in to is view only: it shows "Boros PnL ·
   0x…", hides your Gate positions, and every trade button reads "Log in to trade 0x…".
 - **Login is checked on the chain.** Log in waits for Boros to confirm, then says "Logged in".
   While it waits, the wallet reads "Logging in…". A rejected prompt keeps your old login. An
@@ -58,6 +58,17 @@ account.
   four steps to a key, as the 1.7.0 guide did: fund Gate, enable CrossEx, fund CrossEx, make the
   key with its permissions. Point at a step for the detail.
 - **About links to the code.** Settings › About has a GitHub link to the terminal's source.
+- **A roll-over sizes to what the book fills.** The default roll size, and the size a roll-over
+  alert quotes, now fill the book up to the slippage band, not only its first price level. A
+  small first level no longer shrinks the default to almost nothing on a large pair, so more
+  pairs can qualify for a roll-over alert.
+- **Exit PnL is right for a leg entered at a negative rate.** A long entered at −5% and closed at
+  −3% showed an 8% loss. It now shows the 2% gain.
+- **Rebalance says when no cash can move.** When the wallets are uneven but the gap is margin for
+  open positions, the card and the dialog say "Equity unbalanced but no available cash to move",
+  not "Balanced".
+- **First-run setup does not need a login.** "Continue without logging in" goes on to the next
+  step with the wallet in view only.
 - **Only coins both venues support.** A coin one venue lists and the other does not is no longer
   offered, on Opportunities and in the order ticket.
 - **A close-only market says so.** The order ticket marks a close-only market and asks you to
