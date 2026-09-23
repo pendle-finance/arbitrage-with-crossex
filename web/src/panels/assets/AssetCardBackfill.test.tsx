@@ -62,15 +62,17 @@ function renderCard(over: Partial<ComponentProps<typeof AssetCard>> = {}) {
 describe('AssetCard while older Boros history loads', () => {
   beforeEach(() => server.use(...baseHandlers()));
 
-  it('greys the numbers and shows the reading line, reading line', () => {
+  it('covers the PnL box with the reading overlay, and only that box', () => {
     renderCard({ backfilling: true });
-    expect(screen.getByText('Reading Boros payments since 1 Mar…')).toBeInTheDocument();
-    expect(screen.getByText('Total PnL').closest('.opacity-50')).not.toBeNull();
+    const reading = screen.getByText('Reading Boros payments since 1 Mar…');
+    const box = screen.getByText('Total PnL').closest('[aria-busy="true"]');
+    expect(box).not.toBeNull();
+    expect(box).toContainElement(reading);
   });
 
-  it('shows no reading line and full numbers once the read is done, reading line', () => {
+  it('shows no overlay once the read is done', () => {
     renderCard({ backfilling: false });
     expect(screen.queryByText(/Reading Boros payments/)).toBeNull();
-    expect(screen.getByText('Total PnL').closest('.opacity-50')).toBeNull();
+    expect(screen.getByText('Total PnL').closest('[aria-busy]')).toBeNull();
   });
 });

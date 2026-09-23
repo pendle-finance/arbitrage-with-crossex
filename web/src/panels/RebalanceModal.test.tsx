@@ -238,15 +238,15 @@ describe('RebalanceModal plan state', () => {
     [30, 'about 30s'],
     [900, 'about 15 min'],
     [62520, 'about 17 h 22 m'],
-  ])('names the route, the fee and the %i second estimate beside the hold', (seconds, time) => {
+  ])('the picked route row carries the fee and the %i second estimate', (seconds, time) => {
     show(withLoopTime(seconds));
-    expect(within(dialog()).getByText(`Spot loop · Fee $3.41 · ${time}`)).toBeInTheDocument();
+    expect(pickedRow()).toHaveTextContent('Fee $3.41');
+    expect(pickedRow()).toHaveTextContent(time);
   });
 
-  it('keeps the estimate in the same block as the hold', () => {
+  it('says the route once: no summary line above the hold', () => {
     show(withLoopTime(62520));
-    const line = within(dialog()).getByText('Spot loop · Fee $3.41 · about 17 h 22 m');
-    expect(line.parentElement).toContainElement(holdButton());
+    expect(within(dialog()).queryByText(/^Spot loop · Fee/)).toBeNull();
   });
 
   it('clicking the selected route row opens every route', async () => {

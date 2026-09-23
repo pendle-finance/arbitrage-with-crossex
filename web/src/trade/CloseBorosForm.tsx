@@ -742,8 +742,8 @@ export function CloseBorosForm({
         {!loginLabel && (
           <p className="text-[11px] leading-relaxed text-ink-400">
             {closable.length === 1
-              ? 'Cancels any resting orders on this market first, then sends one market order. The perp leg stays open.'
-              : `Cancels resting orders on both markets, then ${closable.length === 2 ? 'two' : closable.length} market orders. Size is capped at what is open once the cancel lands.`}
+              ? 'Cancels resting orders, then sends 1 market order. The perp stays open.'
+              : `Cancels resting orders, then sends ${closable.length} market orders. Size is capped at the open size.`}
           </p>
         )}
       </div>
