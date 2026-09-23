@@ -56,6 +56,7 @@ account.
 - **A setup checklist on first run.** Each step says what it needs and what is missing, so a new
   install reaches a working terminal without reading the guide. The Gate key step lists what
   comes first on Gate: fund Gate, enable CrossEx, fund CrossEx. Point at a step for the detail.
+- **About links to the code.** Settings › About has a GitHub link to the terminal's source.
 - **Only coins both venues support.** A coin one venue lists and the other does not is no longer
   offered, on Opportunities and in the order ticket.
 - **A close-only market says so.** The order ticket marks a close-only market and asks you to

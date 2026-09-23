@@ -63,6 +63,16 @@ function FocusHarness({ initial }: { initial: SetupStep | null }) {
 }
 
 describe('SettingsDrawer', () => {
+  it('about links to the source on GitHub', async () => {
+    mockAllDone();
+    renderDrawer();
+    await screen.findByText('Version 1.6.3');
+    expect(screen.getByRole('link', { name: 'GitHub' })).toHaveAttribute(
+      'href',
+      'https://github.com/pendle-finance/arbitrage-with-crossex',
+    );
+  });
+
   it('setup rows', async () => {
     mockAllDone();
     renderDrawer();
