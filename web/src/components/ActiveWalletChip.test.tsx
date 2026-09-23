@@ -3,6 +3,7 @@ import { HttpResponse, http } from 'msw';
 import { afterEach, describe, expect, it } from 'vitest';
 import { server } from '../test/server';
 import { fmtDateShort } from '../lib/fmt';
+import { setLoginInFlight } from '../lib/loginInFlight';
 import { renderWithClient } from '../test/utils';
 import { ActiveWalletChip } from './ActiveWalletChip';
 
@@ -23,7 +24,10 @@ const show = (active: string, agent: Record<string, unknown>) => {
   renderWithClient(<ActiveWalletChip />);
 };
 
-afterEach(() => localStorage.clear());
+afterEach(() => {
+  localStorage.clear();
+  setLoginInFlight(false);
+});
 
 describe('ActiveWalletChip', () => {
   it('logged-in wallet: the address and a green dot, no word', async () => {
@@ -43,6 +47,13 @@ describe('ActiveWalletChip', () => {
     show(ROOT, { approval: 'not-approved', expiry: nowSec() + 300 * 86400 });
     expect(await screen.findByText('Not approved')).toBeInTheDocument();
     expect(screen.queryByRole('img', { name: 'Logged in' })).toBeNull();
+  });
+
+  it('a login still signing: "Logging in…", not the "Not approved" error', async () => {
+    setLoginInFlight(true);
+    show(ROOT, { approval: 'not-approved', expiry: nowSec() + 300 * 86400 });
+    expect(await screen.findByText('Logging in…')).toBeInTheDocument();
+    expect(screen.queryByText('Not approved')).toBeNull();
   });
 
   it('an ended login: "Login expired"', async () => {

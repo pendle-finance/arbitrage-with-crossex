@@ -275,7 +275,8 @@ describe('SettingsDrawer', () => {
     renderDrawer();
     const telegram = row('Telegram alerts');
     expect(await within(telegram).findByText('Not set up for 0x3f2a…91c0')).toBeInTheDocument();
-    expect(within(telegram).getByRole('button', { name: 'Set up alerts for 0x3f2a…91c0' })).toBeInTheDocument();
+    // Closed row: the state names the wallet, so the button is short.
+    expect(within(telegram).getByRole('button', { name: 'Set up' })).toBeInTheDocument();
   });
 
   it('telegram sets up alerts for the new wallet with the same key', async () => {

@@ -4508,8 +4508,10 @@ export function AssetCard({
             the card's own title — with the spot price as a quiet note beside
             it. The old bordered pill made the ticker look like a chip among
             the status chips that follow it. */}
-        <span className="flex items-center gap-2.5">
-          <TokenIcon symbol={group.base} size={32} />
+        {/* The mark matches the ticker's height: a 32px mark beside 18px text
+            outweighed the name it labels. */}
+        <span className="flex items-center gap-2">
+          <TokenIcon symbol={group.base} size={20} />
           <span className="text-[18px] font-bold leading-none text-ink-50">{group.base}</span>
         </span>
         {group.priceUsd > 0 && (

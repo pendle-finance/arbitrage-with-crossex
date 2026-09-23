@@ -7,6 +7,7 @@ import { useBorosAgent } from '../api/queries';
 import { writeJson } from '../lib/storage';
 import { readWalletAccount, watchWalletAccount } from '../lib/wallet';
 import { loadStored, short, STRATEGY_STORAGE_KEY, type Stored } from './HomeControls';
+import { useLoginInFlight } from '../lib/loginInFlight';
 
 interface TrackedAddressApi {
   address: string | null;
@@ -132,6 +133,9 @@ export type ActiveWalletState =
   | 'expired'
   /** This wallet's key is stored but the chain has no approval for it. */
   | 'not-approved'
+  /** A login for this wallet is running: the key is saved, the signature or
+   * Boros's confirmation is still to come. */
+  | 'logging-in'
   | 'unchecked'
   | 'not-logged-in';
 
@@ -151,6 +155,7 @@ export function useActiveWallet(): ActiveWallet {
   const agent = useBorosAgent();
   const address = tracked?.address ?? null;
   const status = agent.data;
+  const inFlight = useLoginInFlight();
   const isRoot =
     status?.configured === true && status.root !== null && address !== null && isSameAddress(status.root, address);
   const state: ActiveWalletState | null =
@@ -160,7 +165,9 @@ export function useActiveWallet(): ActiveWallet {
         ? 'not-logged-in'
         : !isRoot
           ? 'view-only'
-          : status.expired
+          : inFlight && (status.expired || status.approval !== 'approved')
+            ? 'logging-in'
+            : status.expired
             ? 'expired'
             : status.approval === 'not-approved'
               ? 'not-approved'

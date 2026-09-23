@@ -18,7 +18,7 @@
  * the local server and nowhere else. It is not logged, not put in a URL, and
  * not rendered.
  */
-import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { Hex } from 'viem';
 import { fetchJson, postJson } from '../api/client';
 import { qk, useBorosAgent, useProvisionBorosAgent, useTelegramLinked } from '../api/queries';
@@ -27,6 +27,7 @@ import { WalletStateTag } from '../components/ActiveWalletChip';
 import { ConnectWalletButton } from '../components/ConnectWalletButton';
 import { useToastOptional } from '../components/Toast';
 import { fmtDateShort } from '../lib/fmt';
+import { isLoginInFlight, setLoginInFlight, useLoginInFlight } from '../lib/loginInFlight';
 import { short } from '../panels/HomeControls';
 import { isSameAddress, useActiveWallet, useTrackedAddressOptional } from '../panels/trackedAddress';
 import { connectWallet, describeWalletError, hasInjectedWallet } from '../lib/wallet';
@@ -66,23 +67,6 @@ const STEP_LABEL: Record<Exclude<Step, 'idle'>, string> = {
 export const NOT_APPROVED_TEXT = 'Boros shows no approval for this login. Log in again.';
 
 const day = (unix: number): string => fmtDateShort(unix, { year: 'numeric' });
-
-/**
- * One login at a time, across every Log in button on screen. The pair ticket,
- * the close form and Settings can all show one, and two clicks must not open
- * two wallet prompts.
- */
-let loginInFlight = false;
-const inFlightListeners = new Set<() => void>();
-const setLoginInFlight = (value: boolean) => {
-  loginInFlight = value;
-  for (const l of inFlightListeners) l();
-};
-const subscribeInFlight = (l: () => void) => {
-  inFlightListeners.add(l);
-  return () => inFlightListeners.delete(l);
-};
-const useLoginInFlight = () => useSyncExternalStore(subscribeInFlight, () => loginInFlight);
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -124,7 +108,7 @@ function useBorosLogIn(onDone?: (root: string) => void, expected?: string | null
   useEffect(() => () => answer.current?.(false), []);
 
   const run = async () => {
-    if (loginInFlight) return;
+    if (isLoginInFlight()) return;
     setLoginInFlight(true);
     setError(null);
     setNote(null);

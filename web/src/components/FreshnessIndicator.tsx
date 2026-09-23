@@ -25,7 +25,12 @@ export function FreshnessButton({
   className?: string;
 }) {
   const now = useNow(1000);
-  if (!dataUpdatedAt) return <span className="num text-xs text-ink-500"><RotateCw size={12} aria-hidden className="inline" /> loading</span>;
+  if (!dataUpdatedAt)
+    return (
+      <span className="num inline-flex items-center gap-1.5 text-xs text-ink-500">
+        <RotateCw size={12} aria-hidden /> loading
+      </span>
+    );
   const age = fmtAge(now - dataUpdatedAt);
   return (
     <button
@@ -41,9 +46,9 @@ export function FreshnessButton({
       {staleError ? (
         `stale ${age} · retrying`
       ) : (
-        <>
-          <RotateCw size={12} aria-hidden className="inline" /> {age} ago
-        </>
+        <span className="inline-flex items-center gap-1.5">
+          <RotateCw size={12} aria-hidden /> {age} ago
+        </span>
       )}
     </button>
   );

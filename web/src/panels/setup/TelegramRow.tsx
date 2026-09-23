@@ -152,7 +152,9 @@ export function TelegramRow(p: SetupRowProps) {
     </button>
   );
 
-  const addWalletButton = (wallet: string) => (
+  // In the closed row the state already names the wallet, so the button is
+  // short: the long label covered the state text in the narrow Settings panel.
+  const addWalletButton = (wallet: string, compact = false) => (
     <button
       type="button"
       className="btn-primary num w-fit"
@@ -160,7 +162,7 @@ export function TelegramRow(p: SetupRowProps) {
       onClick={() => openBorosPage(true)}
     >
       {start.isPending && <Spinner />}
-      {`Set up alerts for ${short(wallet)}`}
+      {compact ? 'Set up' : `Set up alerts for ${short(wallet)}`}
       <ArrowUpRight size={12} aria-hidden className="inline" />
     </button>
   );
@@ -272,7 +274,7 @@ export function TelegramRow(p: SetupRowProps) {
         ) : (
           <span className="text-ink-500">{CAVEAT}</span>
         )}
-        {p.variant !== 'setup' && disconnectLink}
+        {p.variant !== 'setup' && !askDisconnect && disconnectLink}
       </div>
       {p.variant === 'setup' ? (
         <button type="button" className="btn-primary w-fit" onClick={p.onDone}>
@@ -297,7 +299,7 @@ export function TelegramRow(p: SetupRowProps) {
       )}
       <div className="flex flex-wrap items-center gap-3">
         {addWalletButton(wallet)}
-        {p.variant !== 'setup' && disconnectLink}
+        {p.variant !== 'setup' && !askDisconnect && disconnectLink}
       </div>
       {p.variant !== 'setup' && disconnectBlock}
     </>
@@ -368,7 +370,7 @@ export function TelegramRow(p: SetupRowProps) {
           </p>
         )
       }
-      setupAction={unlinked ? addWalletButton(unlinked) : setupButton}
+      setupAction={unlinked ? addWalletButton(unlinked, true) : setupButton}
       skipConsequence="Without Telegram alerts nothing warns you near liquidation, when interest starts, or before a pair matures."
     >
       {unlinked && phase !== 'waiting'

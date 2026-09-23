@@ -71,6 +71,8 @@ export function BorosWalletRow(p: SetupRowProps) {
         {active.endsSoon !== null && logIn}
       </>
     );
+  } else if (active.state === 'logging-in') {
+    body = logIn;
   } else if (active.state === 'expired') {
     body = (
       <>
@@ -146,7 +148,7 @@ export function BorosWalletRow(p: SetupRowProps) {
               Use my browser wallet
             </button>
           )}
-          {isOwnLogin && !askLogOut && (
+          {isOwnLogin && !askLogOut && active.state !== 'logging-in' && (
             <button type="button" className="btn-link ml-auto text-ink-400" onClick={() => setAskLogOut(true)}>
               Log out
             </button>

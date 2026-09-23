@@ -35,6 +35,12 @@ export function WalletStateTag({
         Login expired
       </Chip>
     );
+  if (wallet.state === 'logging-in')
+    return (
+      <Chip sm tone="neutral">
+        Logging in…
+      </Chip>
+    );
   if (wallet.state === 'not-approved')
     return (
       <Chip sm tone="red">
