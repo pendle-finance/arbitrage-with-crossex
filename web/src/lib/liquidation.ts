@@ -293,9 +293,10 @@ export function fmtLinePrice(price: number): string {
   return `~${fmtUsd(price, price >= 1000 ? 0 : 2)}`;
 }
 
-/** `Liquidation: ETH @ ~$3,150 (+37%)` — the signed move carries the direction. The chip text. */
+/** `Liquidation ~$3,150 (+37%)` — the signed move carries the direction. The chip sits in the coin's
+ *  own card, so it does not repeat the coin. */
 export function lineLabel(line: LiquidationLine): string {
-  return `Liquidation: ${line.base} @ ${fmtLinePrice(line.price)} (${fmtMove(line.move)})`;
+  return `Liquidation ${fmtLinePrice(line.price)} (${fmtMove(line.move)})`;
 }
 
 /** One sentence for a hover. */

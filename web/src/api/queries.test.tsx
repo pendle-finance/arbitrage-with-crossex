@@ -4,7 +4,8 @@ import { http, HttpResponse } from 'msw';
 import type { ReactNode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { env, server } from '../test/server';
-import { useBorosPairContext } from './queries';
+import { qk, refreshTelegramFresh, useBorosPairContext } from './queries';
+import { telegramInfo } from '../test/fixtures';
 
 const ADDRESS = '0x' + 'ab'.repeat(20);
 
@@ -54,5 +55,43 @@ describe('useBorosPairContext', () => {
 
     rerender({ active: true });
     await waitFor(() => expect(reads).toBeGreaterThan(1));
+  });
+});
+
+describe('refreshTelegramFresh', () => {
+  const heldFresh = () => {
+    let release = (): void => undefined;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    server.use(
+      http.get('/api/telegram', async ({ request }) => {
+        if (new URL(request.url).searchParams.get('fresh') === '1') await held;
+        return HttpResponse.json(env(telegramInfo({ connected: true, state: 'connected', unlinkedWallet: '0xabc' })));
+      }),
+    );
+    return () => release();
+  };
+
+  it('writes the bot answer when the cache did not change meanwhile', async () => {
+    const qc = new QueryClient();
+    qc.setQueryData(qk.telegram, telegramInfo({ connected: true, state: 'connected' }));
+    const release = heldFresh();
+    const done = refreshTelegramFresh(qc);
+    release();
+    await done;
+    expect(qc.getQueryData(qk.telegram)).toMatchObject({ unlinkedWallet: '0xabc' });
+  });
+
+  it('drops the bot answer when a newer write landed while it was asked', async () => {
+    const qc = new QueryClient();
+    qc.setQueryData(qk.telegram, telegramInfo({ connected: true, state: 'connected' }), { updatedAt: 1 });
+    const release = heldFresh();
+    const done = refreshTelegramFresh(qc);
+    const saved = telegramInfo({ connected: true, state: 'connected', lastSyncAt: 42 });
+    qc.setQueryData(qk.telegram, saved, { updatedAt: 2 });
+    release();
+    await done;
+    expect(qc.getQueryData(qk.telegram)).toEqual(saved);
   });
 });

@@ -263,7 +263,7 @@ describe('PairTicket execution modes', () => {
     // Price auto-tracks one gap behind the bid (unpinned): 2499 − 2 = 2497.
     await waitFor(() => expect(screen.getByLabelText(/Maker price/)).toHaveValue('2497'), { timeout: 4000 });
 
-    const btn = screen.getByRole('button', { name: 'Execute pair ▸' });
+    const btn = screen.getByRole('button', { name: 'Execute pair' });
     await waitFor(() => expect(btn).toBeEnabled(), { timeout: 4000 });
     fireEvent.pointerDown(btn); // hold-to-confirm (default 800ms)
     await waitFor(() => expect(dealCalls).toHaveLength(1), { timeout: 2_000 });
@@ -473,7 +473,7 @@ describe('PairTicket idempotency across remount', () => {
     const first = renderWithClient(<PairTicket />);
     await fillTwoVenuePair();
     await waitFor(() => expect(screen.getByLabelText(/Maker price/)).toHaveValue('2497'), { timeout: 4000 });
-    const btn1 = screen.getByRole('button', { name: 'Execute pair ▸' });
+    const btn1 = screen.getByRole('button', { name: 'Execute pair' });
     await waitFor(() => expect(btn1).toBeEnabled(), { timeout: 4000 });
     fireEvent.pointerDown(btn1); // hold-to-confirm (default 800ms)
     await waitFor(() => expect(dealCalls).toHaveLength(1), { timeout: 2_000 });
@@ -484,7 +484,7 @@ describe('PairTicket idempotency across remount', () => {
     renderWithClient(<PairTicket />);
     await fillTwoVenuePair();
     await waitFor(() => expect(screen.getByLabelText(/Maker price/)).toHaveValue('2497'), { timeout: 4000 });
-    const btn2 = screen.getByRole('button', { name: 'Execute pair ▸' });
+    const btn2 = screen.getByRole('button', { name: 'Execute pair' });
     await waitFor(() => expect(btn2).toBeEnabled(), { timeout: 4000 });
     fireEvent.pointerDown(btn2);
     await waitFor(() => expect(dealCalls).toHaveLength(2), { timeout: 2_000 });
@@ -523,7 +523,7 @@ describe('PairTicket idempotency across remount', () => {
     renderWithClient(<PairTicket />);
     await fillTwoVenuePair(); // leaves the box in USDT at 1000
     await waitFor(() => expect(screen.getByLabelText(/Maker price/)).toHaveValue('2497'), { timeout: 4000 });
-    const btn = screen.getByRole('button', { name: 'Execute pair ▸' });
+    const btn = screen.getByRole('button', { name: 'Execute pair' });
     await waitFor(() => expect(btn).toBeEnabled(), { timeout: 4000 });
     fireEvent.pointerDown(btn);
     await waitFor(() => expect(dealCalls).toHaveLength(1), { timeout: 2_000 });
@@ -534,7 +534,7 @@ describe('PairTicket idempotency across remount', () => {
     );
     expect(screen.getByLabelText('Size per leg (ETH)')).toHaveValue('1000');
 
-    const btn2 = screen.getByRole('button', { name: 'Execute pair ▸' });
+    const btn2 = screen.getByRole('button', { name: 'Execute pair' });
     await waitFor(() => expect(btn2).toBeEnabled(), { timeout: 4000 });
     fireEvent.pointerDown(btn2);
     await waitFor(() => expect(dealCalls).toHaveLength(2), { timeout: 2_000 });

@@ -5,6 +5,7 @@
  * Leverage is always the venue max (shown in the estimate, not editable).
  * "Execute now" is a hold-to-confirm inline execute (no review modal).
  */
+import { ChevronRight, TriangleAlert } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useAccount, usePositions, useSymbolDetail, useSymbolsByBase, useVenueBook } from '../api/queries';
 import { useTradeFlowOptional } from './TradeFlow';
@@ -429,7 +430,7 @@ export function SingleTicket() {
                   className="flex items-start gap-2 rounded border border-dashed border-amber-500/50 bg-amber-500/[0.06] px-2.5 py-1.5 text-[11px] text-amber-200"
                 >
                   <span aria-hidden className="text-amber-400">
-                    ⚠
+                    <TriangleAlert size={12} aria-hidden />
                   </span>
                   <span>
                     <span className="font-medium">Partial depth</span> — the estimate is extrapolated past what the book
@@ -481,7 +482,12 @@ export function SingleTicket() {
           // still open it — same as the pair ticket and close popover.)
           hoverCard={false}
           tone={side === 'BUY' ? 'buy' : 'sell'}
-          label="Execute now ▸"
+          label={
+            <>
+              Execute now
+              <ChevronRight size={14} aria-hidden />
+            </>
+          }
           buttonClassName="w-full"
           // Block until the venue's leverage cap is known — executing before it
           // loads would silently open at the account's current leverage, not the

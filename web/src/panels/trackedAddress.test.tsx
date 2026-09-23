@@ -6,7 +6,7 @@ import { installFakeWallet, removeFakeWallet } from '../test/fakeWallet';
 import { renderWithClient } from '../test/utils';
 import { STRATEGY_STORAGE_KEY } from './HomeControls';
 import { SetupPage } from './setup/SetupPage';
-import { useTrackedAddress } from './trackedAddress';
+import { useActiveWallet, useTrackedAddress } from './trackedAddress';
 
 const WALLET = `0xab18${'0'.repeat(32)}ed9d`;
 const SECOND = `0x7f11${'4'.repeat(32)}5444`;
@@ -24,6 +24,11 @@ const row = () => screen.getByRole('region', { name: 'Boros wallet' });
 function Probe() {
   const { address, followWallet } = useTrackedAddress();
   return <p data-testid="probe">{`${address ?? 'none'}|${followWallet ? 'follow' : 'fixed'}`}</p>;
+}
+
+function StateProbe() {
+  const w = useActiveWallet();
+  return <p data-testid="state">{`${w.state}|${w.canTrade ? 'trade' : 'no-trade'}|${w.viewOnly ? 'hide-gate' : 'show-gate'}|${w.loginLabel ?? '-'}`}</p>;
 }
 
 beforeEach(() => {
@@ -44,7 +49,7 @@ describe('follow the browser wallet', () => {
     await user.click(await screen.findByRole('button', { name: 'Connect wallet' }));
 
     expect(await within(row()).findByText('0xab18…ed9d')).toBeInTheDocument();
-    expect(within(row()).getByText('View only')).toBeInTheDocument();
+    expect(within(row()).getByText('Not logged in')).toBeInTheDocument();
     expect(within(row()).queryByRole('button', { name: 'Use my browser wallet' })).toBeNull();
     expect(stored()).toEqual({ address: WALLET, followWallet: true });
     expect(wallet.methods().filter((m) => m !== 'eth_accounts')).toEqual(['eth_requestAccounts']);
@@ -134,5 +139,21 @@ describe('follow the browser wallet', () => {
     await waitFor(() => expect(wallet.methods()).toContain('eth_accounts'));
     expect(screen.getByTestId('probe')).toHaveTextContent(`${WALLET}|fixed`);
     expect(wallet.methods()).not.toContain('eth_requestAccounts');
+  });
+});
+
+describe('useActiveWallet states', () => {
+  afterEach(() => localStorage.clear());
+
+  it.each([
+    ['own login, Boros read ok', { configured: true, root: WALLET, approval: 'approved' as const }, 'can-trade|trade|show-gate|-'],
+    ['own login, Boros not read', { configured: true, root: WALLET, approval: 'unknown' as const }, 'unchecked|trade|show-gate|-'],
+    ['another wallet logged in', { configured: true, root: SECOND, approval: 'approved' as const }, 'view-only|no-trade|hide-gate|Log in to trade 0xab18…ed9d'],
+    ['no login at all', { configured: false }, 'not-logged-in|no-trade|show-gate|Log in to trade 0xab18…ed9d'],
+  ])('%s', async (_name, agent, expected) => {
+    seed({ address: WALLET, walletUpgraded: true });
+    mockWorld({ agent: agentStatus(agent) });
+    renderWithClient(<StateProbe />);
+    await waitFor(() => expect(screen.getByTestId('state')).toHaveTextContent(expected));
   });
 });

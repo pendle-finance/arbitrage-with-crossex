@@ -1,3 +1,4 @@
+import { ChevronRight } from 'lucide-react';
 import { useRef, useState, type ReactNode } from 'react';
 import { useAccount, useRebalance, useTransfer } from '../api/queries';
 import type { CrossexAsset, GateAccount, SpotBalance, TransferCoin } from '../api/types';
@@ -41,7 +42,7 @@ function NoSpotReadRow() {
   return (
     <span className="flex flex-wrap items-center gap-2">
       <span className="text-ink-200">{NO_SPOT_READ_TEXT}</span>
-      <HoverCard label={<span className="text-link">How ▸</span>} icon={false} underline={false}>
+      <HoverCard label={<span className="text-link">How <ChevronRight size={12} aria-hidden className="inline" /></span>} icon={false} underline={false}>
         <NoSpotReadHow />
       </HoverCard>
     </span>

@@ -11,9 +11,8 @@
  * Durable state is ONLY `crossex.assetView.v1` (start date + exclusions);
  * every number is a pure function of the venue feeds.
  */
-import { ViewOnlyChip } from '../../components/ViewOnlyChip';
 import { useMemo, useState } from 'react';
-import { useAccount, useAssetView, useAssetViewWindows, useFees, usePositions } from '../../api/queries';
+import { useAccount, useAssetView, useAssetViewWindows, useBorosAgent, useFees, usePositions } from '../../api/queries';
 import { EmptyState } from '../../components/EmptyState';
 import { QueryError } from '../../components/QueryError';
 import { TableSkeleton } from '../../components/Skeleton';
@@ -30,6 +29,7 @@ import { AssetCard } from './AssetCard';
 export function AssetsHome() {
   const { address, setAddress } = useTrackedAddress();
   const gateHidden = useActiveWallet().viewOnly;
+  const loggedInRoot = useBorosAgent().data?.root ?? null;
   const bookId = useBookId(address);
 
   const [prefs, setPrefs] = useState<AssetViewPrefs>(() => loadPrefs(bookId));
@@ -132,7 +132,7 @@ export function AssetsHome() {
   // Borrow interest is booked by the venue per LIABILITY COIN, not per
   // market, so it cannot sit on a card: it is charged once, here, and the
   // total then differs from the cards' sum by exactly this line.
-  const interestAvailable = gateHidden || data?.interest?.available === true;
+  const interestAvailable = data?.interest?.available === true;
   const interestUsd = !gateHidden && interestAvailable ? data!.interest!.paidUsd : 0;
   const totalPnl = derived.reduce((s, a) => s + a.derived.totals.pnlUsd, 0) - interestUsd;
   const totalCapital = derived.reduce((s, a) => s + a.derived.totals.capitalUsd, 0);
@@ -209,12 +209,10 @@ export function AssetsHome() {
 
   return (
     <section>
-      {gateHidden && (
-        <p className="mb-4 flex items-center gap-2 text-xs text-ink-400">
-          <ViewOnlyChip />
-          <span>
-            Viewing <span className="num text-ink-200">{short(address)}</span>. Your Gate positions are hidden.
-          </span>
+      {gateHidden && loggedInRoot && (
+        <p className="mb-4 text-xs text-ink-400">
+          Boros legs only. Your Gate perps show when you view{' '}
+          <span className="num text-ink-200">{short(loggedInRoot)}</span>.
         </p>
       )}
 
@@ -235,12 +233,20 @@ export function AssetsHome() {
           <div
             className="tip-label w-fit text-[14px] font-normal leading-[16.94px] text-ink-300"
             title={
-              interestAvailable
-                ? 'What the farm kept, after borrow interest.'
-                : 'The cards summed. Borrow interest could not be read, so it is not subtracted.'
+              gateHidden
+                ? 'Boros legs only. Gate is not included.'
+                : interestAvailable
+                  ? 'What the farm kept, after borrow interest.'
+                  : 'The cards summed. Borrow interest could not be read, so it is not subtracted.'
             }
           >
-            Total Account PnL
+            {gateHidden ? (
+              <>
+                Boros PnL · <span className="num">{short(address)}</span>
+              </>
+            ) : (
+              'Total Account PnL'
+            )}
           </div>
           <div className="flex flex-wrap items-baseline gap-x-2.5 gap-y-1">
             <span className="num text-[34px] font-bold leading-none tracking-[-0.01em]">

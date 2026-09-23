@@ -1,3 +1,4 @@
+import { Check, X } from 'lucide-react';
 import { useCredentials } from '../../api/queries';
 import { CredentialsForm } from '../../components/CredentialsForm';
 import { PERMISSION_ROWS } from '../onboardingBits';
@@ -19,7 +20,7 @@ export function GateKeyRow(p: SetupRowProps & { onOpenGuide?: () => void }) {
         {PERMISSION_ROWS.map((permission) => (
           <div key={permission.label} className="flex items-baseline gap-2">
             <span aria-hidden="true" className={permission.on ? 'text-emerald-400' : 'text-rose-400'}>
-              {permission.on ? '✓' : '✕'}
+              {permission.on ? <Check size={12} aria-hidden className="inline" /> : <X size={12} aria-hidden className="inline" />}
             </span>
             <span className="w-28 shrink-0 font-medium text-ink-100">{permission.label}</span>
             <span className="w-24 shrink-0 text-ink-300">{permission.value}</span>

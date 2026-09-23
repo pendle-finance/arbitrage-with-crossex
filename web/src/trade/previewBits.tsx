@@ -1,4 +1,5 @@
 /** Shared render helpers for preview estimates (ticket, pair, basket, review). */
+import { X } from 'lucide-react';
 import type {
   ActionInput,
   CrossexPosition,
@@ -73,7 +74,7 @@ export function ViolationList({ violations, warnings }: { violations: Violation[
     <ul className="flex flex-col gap-0.5 text-[11px]">
       {violations.map((v, i) => (
         <li key={`v-${i}`} className="text-rose-400">
-          ✕ {v.message}
+          <X size={12} aria-hidden className="inline" /> {v.message}
         </li>
       ))}
       {(warnings ?? []).map((w, i) => (

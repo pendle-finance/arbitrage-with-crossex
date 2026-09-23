@@ -3,23 +3,43 @@
 Only substantial releases are listed here — each one bumps `version.json` (which is what the
 in-app update check compares against).
 
-## 1.7.1 — 2026-09-22
+## 1.7.1 — 2026-09-23
 
-TLDR: Telegram alerts. Connect this terminal to the Boros alerts bot and it warns you before a
-leg liquidates, when a wallet starts paying interest, when a pair is a week from maturity, and
-when a later maturity pays a better APR. The liquidation line is the real price, however far
-away, read from Gate's real margin table, so it is right on a large account.
+TLDR: One Boros wallet at a time, like the Boros app, and Telegram alerts for each wallet. The
+bot warns you before a leg liquidates, when a wallet starts paying interest, when a pair is a
+week from maturity, and when a later maturity pays a better APR. The liquidation line is the
+real price, however far away, read from Gate's real margin table, so it is right on a large
+account.
 
-- **Telegram alerts.** Settings has a Set up button. It opens the Boros alerts page, you confirm
-  the terminal there, and the bot watches your legs from then on. Four alerts: a leg nearing
+- **One Boros wallet, like the Boros app.** The terminal shows one wallet everywhere and
+  follows the account in Rabby or MetaMask. A chip in the header shows that wallet and its
+  login on every tab. A wallet you are not logged in to is view only: it shows "Boros PnL ·
+  0x…", hides your Gate positions, and every trade button reads "Log in to trade 0x…".
+- **Login is checked on the chain.** Log in waits for Boros to confirm, then says "Logged in".
+  While it waits, the wallet reads "Logging in…". A rejected prompt keeps your old login. An
+  expired or revoked login says so and offers "Renew login". Settings warns 14 days before a
+  login ends.
+- **One login per terminal.** Logging in a second wallet asks first. The question names both
+  wallets and warns about unhedged Gate perps. Gas top-up works only for the logged-in wallet.
+- **After the update.** If the saved wallet is not the logged-in one, the terminal switches to
+  the logged-in wallet once.
+
+- **Telegram alerts for each wallet.** Settings has a Set up button. It opens the Boros
+  notifications page. Confirm the terminal there, and the bot watches your legs from then on.
+  Each wallet sets up once, and many wallets can use the same Telegram chat. Alerts cover the
+  logged-in wallet. The alerts of your other wallets pause until you log in to them again. Four alerts: a leg nearing
   liquidation, a wallet that starts paying interest, a pair within 7 days of maturity, and a
   roll-over opportunity where a later maturity pays a better APR after fees. Each names the
   coin, the leg or the wallet, and the price or the maturity, so you know which side to fix.
-  Turn any alert off in Settings. The terminal checks roll targets itself every 5 minutes, so
-  the alerts work with the browser closed.
-- **Every 1.7.1 setting reads the same way.** The Telegram row closes with Close, like the other
-  rows. The interest caption says when a wallet starts borrowing, with the exact floors in a
-  hover. The sync note sits behind "Last synced". A stale price says how long it has been
+  Turn any alert off in Settings. Each wallet keeps its own settings. The terminal checks roll
+  targets itself every 5 minutes, so the alerts work with the browser closed.
+- **The Telegram row says what is true now.** It reads "Checking…" until the first sync, and
+  "not set up" for a wallet with no alerts. It links to the Boros notifications page. Opening
+  it asks the bot at once, so a change made on that page shows here. "Disconnect this
+  terminal" asks first.
+- **Every 1.7.1 setting reads the same way.** Each Settings row opens and closes with its
+  arrow. The interest caption says when a wallet starts borrowing, with the exact floors in a
+  hover. The sync note is in the hover on "synced 3 min ago". A stale price says how long it has been
   missing instead of a clock time.
 - **The liquidation line reads Gate's margin table.** Gate raises the margin rate in steps as a
   position grows, so a $400k HYPE leg is liquidated nearer than a flat rate says. The app now
@@ -48,7 +68,8 @@ away, read from Gate's real margin table, so it is right on a large account.
   the time, "Spot loop · Fee $3.41 · about 17 h 22 m", before you hold.
 - **Smaller things.** Long waits read as "about 17 h 22 m" instead of "about 1042 min". The
   Positions health strip names the nearest line first. Venue names read as Gate and Hyperliquid,
-  not as codes. A bundle's Notional hover carries the exact figure beside the short one.
+  not as codes. A bundle's Notional hover carries the exact figure beside the short one. Icons
+  match the Boros app. Buttons in one row have one height.
 
 ## 1.7.0 — 2026-09-21
 

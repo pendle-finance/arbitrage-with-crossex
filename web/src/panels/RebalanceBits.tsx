@@ -1,3 +1,4 @@
+import { Info, TriangleAlert } from 'lucide-react';
 import { useId, type ReactNode } from 'react';
 import type { PlannedStep, Pool, RebalanceJob, RebalanceStep, RouteName, RoutePlan } from '../api/types';
 import { ChartTooltip } from '../components/ChartTooltip';
@@ -10,12 +11,12 @@ const HOVER_WIDTH_PX = 268;
 
 /** Severity of a rebalance verdict — see `VerdictTone` in RebalanceHovers. */
 const VERDICT_STYLE = {
-  info: { box: 'alert-blue', text: 'text-pastel-blue', icon: 'ⓘ', sr: null },
+  info: { box: 'alert-blue', text: 'text-pastel-blue', icon: <Info size={14} aria-hidden className="inline" />, sr: null },
   // The glyph is decorative (aria-hidden), so the level reaches a screen
   // reader as a word instead. `info` needs none: a neutral note reads fine
   // without a prefix, and "Note:" on every quiet line is just noise.
-  warn: { box: 'alert-amber', text: 'text-gold', icon: '⚠', sr: 'Warning:' },
-  act: { box: 'alert-red', text: 'text-guava', icon: '⚠', sr: 'Action needed:' },
+  warn: { box: 'alert-amber', text: 'text-gold', icon: <TriangleAlert size={14} aria-hidden className="inline" />, sr: 'Warning:' },
+  act: { box: 'alert-red', text: 'text-guava', icon: <TriangleAlert size={14} aria-hidden className="inline" />, sr: 'Action needed:' },
 } as const;
 
 /**

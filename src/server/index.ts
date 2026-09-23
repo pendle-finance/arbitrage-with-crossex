@@ -29,7 +29,6 @@ import { createTelegramLink } from './telegram/link';
 import { TelegramStatus } from './telegram/status';
 import { createRollProbe } from './telegram/rollProbe';
 import { createTelegramSync, readTriggerCoins } from './telegram/sync';
-import { signWalletProof } from './telegram/walletProof';
 import { createAssetViewBuilder } from './routes/assetView';
 import { configuredRoot, createPairPricer } from './routes/borosPair';
 import { readInstallInfo, readLocalVersion } from './version';
@@ -171,21 +170,10 @@ try {
 }
 
 const telegramVersion = readLocalVersion(repoRoot) ?? 'unknown';
-const agentKeyForProof = (): `0x${string}` | null => {
-  try {
-    return readBorosAgentConfig()?.agentPrivateKey ?? null;
-  } catch {
-    return null;
-  }
-};
 const telegramBot = createBotClient({
   baseUrl: botBaseUrl(process.env),
   fetchImpl: resolveBorosFetch(),
   wallet: configuredRoot,
-  proveWallet: async (keyHash, wallet) => {
-    const agentPrivateKey = agentKeyForProof();
-    return agentPrivateKey ? signWalletProof({ keyHash, wallet, agentPrivateKey, nowMs: Date.now() }) : null;
-  },
 });
 const telegramStatus = new TelegramStatus();
 let assetViewBuilder: ReturnType<typeof createAssetViewBuilder> | null = null;
@@ -241,7 +229,7 @@ const appDeps = {
     onDone: () => telegramSync.requestSync('rebalance'),
   },
   transfer: { jobs: new TransferFile(dataDir), onDone: () => telegramSync.requestSync('transfer') },
-  telegram: { link: telegramLink, sync: telegramSync, status: telegramStatus, bot: telegramBot },
+  telegram: { link: telegramLink, sync: telegramSync, status: telegramStatus, bot: telegramBot, wallet: configuredRoot },
   getBorosOrders: () => borosOrdersRef.current,
   borosAgent: {
     envPath,
@@ -249,7 +237,7 @@ const appDeps = {
     setOrderClient: (client: BorosOrderClient | undefined) => {
       borosOrdersRef.current = client;
     },
-    // A new login moves Telegram alerts to this wallet now, not at the next
+    // A new login syncs Telegram alerts for this wallet now, not at the next
     // 5-minute sync.
     onApproved: () => telegramSync.requestSync('login'),
   },

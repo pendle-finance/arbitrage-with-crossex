@@ -1,3 +1,4 @@
+import { X } from 'lucide-react';
 import { useEffect, useRef, type ReactNode } from 'react';
 import { claimEscape, useFocusTrap } from '../lib/focusTrap';
 
@@ -67,7 +68,7 @@ export function Drawer({
               aria-label="close"
               className="rounded-md px-2 py-0.5 text-ink-400 transition-colors hover:bg-ink-800 hover:text-ink-100"
             >
-              ✕
+              <X size={14} aria-hidden />
             </button>
           )}
         </div>

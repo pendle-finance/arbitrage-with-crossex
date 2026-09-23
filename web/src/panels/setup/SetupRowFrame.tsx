@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from 'react';
 import type { SetupRowProps } from './setupState';
+import { InlineConfirm } from '../../components/InlineConfirm';
 import { ChevronDown } from 'lucide-react';
 
 type DotTone = 'done' | 'current' | 'warn' | 'later';
@@ -11,11 +12,18 @@ const DOT_CLASS: Record<DotTone, string> = {
   later: 'border-ink-600 text-ink-400',
 };
 
+/** A short part of the state line ("synced 3 min ago") never breaks. A long
+ * one wraps by word, so it cannot run under the row's action. */
+const WHOLE_PART_MAX = 20;
+const keepShortPartWhole = (part: string): string =>
+  part.length <= WHOLE_PART_MAX ? part.replace(/ /g, '\u00a0') : part;
+
 export function SetupRowFrame({
   n,
   title,
   row,
   isDone,
+  doneTone = 'done',
   state,
   stateNode,
   isWarn = false,
@@ -28,6 +36,7 @@ export function SetupRowFrame({
   title: string;
   row: SetupRowProps;
   isDone: boolean;
+  doneTone?: 'done' | 'neutral';
   state: string | null;
   /** Shown in place of `state`'s text, e.g. an address and a tag. */
   stateNode?: ReactNode;
@@ -43,7 +52,7 @@ export function SetupRowFrame({
   const showsNotSetUp = !isDone && state === null && (isSettings || isSkipped);
   const line = showsNotSetUp ? 'not set up' : state;
   const isLineWarn = isWarn || showsNotSetUp;
-  const dot: DotTone = isDone && !isLineWarn ? 'done' : isLineWarn ? 'warn' : row.open ? 'current' : 'later';
+  const dot: DotTone = isDone && !isLineWarn ? (doneTone === 'done' ? 'done' : 'later') : isLineWarn ? 'warn' : row.open ? 'current' : 'later';
   const canSkip = !isSettings && !isDone && row.onSkip !== undefined && skipConsequence !== undefined;
 
   // Settings: a set-up row opens and closes like a card, by its chevron. A row
@@ -109,7 +118,7 @@ export function SetupRowFrame({
           <span className={`num min-w-0 text-xs ${isLineWarn ? 'text-amber-400' : 'text-ink-400'}`}>
             {line
               .split(' · ')
-              .map((part) => part.replace(/ /g, '\u00a0'))
+              .map(keepShortPartWhole)
               .join(' · ')}
           </span>
         )}
@@ -117,19 +126,20 @@ export function SetupRowFrame({
       </div>
       {alert}
       {row.open && isAsking && (
-        <div className="flex flex-col gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
-          <p>
-            <span className="font-semibold">Not recommended.</span> <span>{skipConsequence}</span>
-          </p>
-          <div className="flex items-center gap-2">
-            <button type="button" className="btn" onClick={skipAnyway}>
-              Skip anyway
-            </button>
-            <button type="button" className="btn-ghost-xs" onClick={() => setIsAsking(false)}>
-              Back
-            </button>
-          </div>
-        </div>
+        <InlineConfirm
+          tone="warn"
+          label={`Skip ${title}?`}
+          question={
+            <>
+              <span className="font-semibold">Not recommended.</span> <span>{skipConsequence}</span>
+            </>
+          }
+          confirmLabel="Skip anyway"
+          confirmKind="neutral"
+          cancelLabel="Back"
+          onConfirm={skipAnyway}
+          onCancel={() => setIsAsking(false)}
+        />
       )}
       {row.open && !isAsking && children}
       {row.open && !isAsking && canSkip && (

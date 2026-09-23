@@ -3,7 +3,6 @@ import { microLabelClass } from '../../components/Th';
 import { fmtDateLocal, fmtDateShort, parseDateLocal } from '../../lib/fmt';
 import { Calendar, ChevronDown } from 'lucide-react';
 
-
 export function SinceChip({
   base,
   storedSec,
@@ -58,18 +57,11 @@ export function SinceChip({
             }}
           />
         </label>
-        <div className="flex items-center gap-2 text-xs text-ink-400">
-          {defaultLabel !== null && (
-            <HoverCard label={`Default ${defaultLabel}`} icon={false}>
-              Your first CrossEx position
-            </HoverCard>
-          )}
-          {differsFromDefault && (
-            <button type="button" className="btn-ghost-xs ml-auto" onClick={() => onChange(undefined)}>
-              Use default
-            </button>
-          )}
-        </div>
+        {differsFromDefault && defaultLabel !== null && (
+          <button type="button" className="btn-ghost-xs self-start" onClick={() => onChange(undefined)}>
+            {`Use default (first position, ${defaultLabel})`}
+          </button>
+        )}
       </div>
     </HoverCard>
   );

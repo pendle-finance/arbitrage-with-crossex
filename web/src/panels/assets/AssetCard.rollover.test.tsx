@@ -147,7 +147,7 @@ describe('AssetCard — roll over', () => {
     const dialog = screen.getByRole('dialog');
     // Venues only — the maturity heads the Exit card inside (his call 2026-09-18).
     expect(within(dialog).getByRole('heading', { name: 'Roll over — Gate / Hyperliquid' })).toBeInTheDocument();
-    expect(within(dialog).getByRole('button', { name: 'Roll over →' })).toBeDisabled();
+    expect(within(dialog).getByRole('button', { name: 'Roll over' })).toBeDisabled();
     // No maturity lists a market at BOTH venues, so there is nothing to roll
     // into -- the table says so rather than inventing a target.
     expect(await within(dialog).findByText(/No later maturity lists a market at BOTH venues/)).toBeInTheDocument();

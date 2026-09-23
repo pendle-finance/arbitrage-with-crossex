@@ -7,6 +7,7 @@ import { useBorosAgent } from '../api/queries';
 import { writeJson } from '../lib/storage';
 import { readWalletAccount, watchWalletAccount } from '../lib/wallet';
 import { loadStored, short, STRATEGY_STORAGE_KEY, type Stored } from './HomeControls';
+import { useLoginInFlight } from '../lib/loginInFlight';
 
 interface TrackedAddressApi {
   address: string | null;
@@ -126,12 +127,17 @@ export const RENEW_WARN_SECONDS = 14 * 24 * 3600;
 export type ActiveWalletState =
   /** Logged in, and the chain shows a live approval. */
   | 'can-trade'
-  /** Another wallet is logged in, or none is. */
+  /** Another wallet is logged in. */
   | 'view-only'
   /** This wallet's login ended. */
   | 'expired'
   /** This wallet's key is stored but the chain has no approval for it. */
-  | 'not-approved';
+  | 'not-approved'
+  /** A login for this wallet is running: the key is saved, the signature or
+   * Boros's confirmation is still to come. */
+  | 'logging-in'
+  | 'unchecked'
+  | 'not-logged-in';
 
 export interface ActiveWallet {
   address: string | null;
@@ -149,19 +155,26 @@ export function useActiveWallet(): ActiveWallet {
   const agent = useBorosAgent();
   const address = tracked?.address ?? null;
   const status = agent.data;
+  const inFlight = useLoginInFlight();
   const isRoot =
     status?.configured === true && status.root !== null && address !== null && isSameAddress(status.root, address);
   const state: ActiveWalletState | null =
     address === null || status === undefined
       ? null
-      : !isRoot
-        ? 'view-only'
-        : status.expired
-          ? 'expired'
-          : status.approval === 'not-approved'
-            ? 'not-approved'
-            : 'can-trade';
-  const canTrade = state === 'can-trade';
+      : !status.configured
+        ? 'not-logged-in'
+        : !isRoot
+          ? 'view-only'
+          : inFlight && (status.expired || status.approval !== 'approved')
+            ? 'logging-in'
+            : status.expired
+            ? 'expired'
+            : status.approval === 'not-approved'
+              ? 'not-approved'
+              : status.approval === 'unknown'
+                ? 'unchecked'
+                : 'can-trade';
+  const canTrade = state === 'can-trade' || state === 'unchecked';
   const viewOnly =
     status?.configured === true && status.root !== null && address !== null && !isRoot;
   const canLogIn = status !== undefined && (status.configured || status.canProvision);

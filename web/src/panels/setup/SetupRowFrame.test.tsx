@@ -53,4 +53,22 @@ describe('SetupRowFrame', () => {
     );
     expect(screen.getByRole('region', { name: 'Telegram alerts' })).not.toHaveClass('!border-gold/45');
   });
+
+  it('a done row with a neutral tone shows the step number, not a check', () => {
+    const { rerender } = render(
+      <SetupRowFrame n={2} title="Boros wallet" row={baseRow(false)} isDone doneTone="neutral" state="0xab18…ed9d">
+        content
+      </SetupRowFrame>,
+    );
+    const dot = () => screen.getByText('Boros wallet').previousElementSibling as HTMLElement;
+    expect(dot()).toHaveTextContent('2');
+    expect(dot()).not.toHaveClass('text-emerald-300');
+
+    rerender(
+      <SetupRowFrame n={2} title="Boros wallet" row={baseRow(false)} isDone state="0xab18…ed9d">
+        content
+      </SetupRowFrame>,
+    );
+    expect(dot()).toHaveTextContent('✓');
+  });
 });
