@@ -23,7 +23,7 @@ import type { Hex } from 'viem';
 import { fetchJson } from '../api/client';
 import { qk, useBorosAgent, useForgetBorosAgent, useProvisionBorosAgent, useTelegramLinked } from '../api/queries';
 import type { BorosAgentStatus } from '../api/types';
-import { Chip } from '../components/Chip';
+import { WalletStateTag } from '../components/ActiveWalletChip';
 import { ConnectWalletButton } from '../components/ConnectWalletButton';
 import { useToastOptional } from '../components/Toast';
 import { short } from '../panels/HomeControls';
@@ -320,18 +320,13 @@ export function BorosAgentSetup() {
   if (status.data?.configured) {
     const notApproved = status.data.approval === 'not-approved';
     const expiryDate = status.data.expiry ? new Date(status.data.expiry * 1000).toLocaleDateString() : null;
-    const chip = status.data.expired
-      ? { tone: 'red' as const, text: 'login expired' }
-      : notApproved
-        ? { tone: 'red' as const, text: 'not approved' }
-        : { tone: 'green' as const, text: 'trading enabled' };
+    // The same tag as the header chip and Settings, so one state has one name.
+    const tagState = status.data.expired ? 'expired' : notApproved ? 'not-approved' : 'can-trade';
     return (
       <div className="rounded-lg border border-ink-700 bg-ink-950 px-3 py-2.5">
         <div className="flex flex-wrap items-center gap-2">
-          <Chip sm tone={chip.tone}>
-            {chip.text}
-          </Chip>
           <span className="num text-[11px] text-ink-300">{status.data.rootMasked}</span>
+          <WalletStateTag wallet={{ state: tagState, endsSoon: active.endsSoon }} />
           <button
             type="button"
             className="ml-auto rounded border border-ink-600 px-2 py-0.5 text-[10.5px] text-ink-300 hover:border-ink-400 disabled:opacity-50"

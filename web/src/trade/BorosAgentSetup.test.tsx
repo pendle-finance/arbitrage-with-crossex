@@ -191,7 +191,7 @@ describe('BorosAgentSetup', () => {
       ),
     );
     renderWithClient(<BorosAgentSetup />);
-    expect(await screen.findByText('login expired')).toBeInTheDocument();
+    expect(await screen.findByText('Login expired')).toBeInTheDocument();
     expect(screen.getByText(/Boros refuses every order until you renew it/)).toBeInTheDocument();
     expect(screen.queryByText(/Remove the key and connect again/)).toBeNull();
     // Status only: the ticket's own Log in button, where Confirm sits, is the
@@ -233,7 +233,7 @@ describe('BorosAgentSetup', () => {
     );
     renderWithClient(<BorosAgentSetup />);
 
-    expect(await screen.findByText('trading enabled')).toBeInTheDocument();
+    expect(await screen.findByText('Can trade')).toBeInTheDocument();
     expect(screen.getByText('0x1111…1111')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Log out' })).toBeInTheDocument();
     expect(document.body.textContent).not.toContain(AGENT_KEY);
@@ -429,7 +429,7 @@ describe('BorosAgentSetup — the chain decides "logged in"', () => {
         <BorosLogInButton />
       </>,
     );
-    expect(await screen.findByText('not approved')).toBeInTheDocument();
+    expect(await screen.findByText('Not approved')).toBeInTheDocument();
     expect(screen.getByText(/The wallet prompt was rejected, or the login was revoked/)).toBeInTheDocument();
     expect(await screen.findAllByRole('button', { name: 'Log in to trade 0x1111…1111' })).toHaveLength(1);
   });
