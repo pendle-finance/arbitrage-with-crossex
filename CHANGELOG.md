@@ -21,8 +21,9 @@ account.
   login ends.
 - **One login per terminal.** Logging in a second wallet asks first. The question names both
   wallets and warns about unhedged Gate perps. Gas top-up works only for the logged-in wallet.
-- **After the update.** If the saved wallet is not the logged-in one, the terminal switches to
-  the logged-in wallet once.
+- **After the update.** The terminal shows the account in Rabby or MetaMask, and switches when
+  you switch there. With no wallet account, it shows the logged-in wallet once. A wallet you
+  track by hand stays until you switch accounts in the wallet.
 
 - **Telegram alerts for each wallet.** Settings has a Set up button. It opens the Boros
   notifications page. Confirm the terminal there, and the bot watches your legs from then on.

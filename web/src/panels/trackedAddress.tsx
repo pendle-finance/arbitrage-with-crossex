@@ -29,8 +29,22 @@ function persist(prev: Stored, next: Partial<Stored>): Stored {
   const merged: Stored = { ...prev, ...next };
   if (merged.walletUpgradeNote === undefined) delete merged.walletUpgradeNote;
   if (merged.followWallet === undefined) delete merged.followWallet;
+  if (merged.manual === undefined) delete merged.manual;
   writeJson(STRATEGY_STORAGE_KEY, merged);
   return merged;
+}
+
+function followed(prev: Stored, address: string): Stored {
+  const already =
+    prev.followWallet &&
+    prev.walletUpgraded &&
+    !prev.manual &&
+    prev.walletUpgradeNote === undefined &&
+    prev.address !== null &&
+    isSameAddress(prev.address, address);
+  return already
+    ? prev
+    : persist(prev, { address, followWallet: true, walletUpgraded: true, walletUpgradeNote: undefined, manual: undefined });
 }
 
 export function TrackedAddressProvider({
@@ -43,59 +57,45 @@ export function TrackedAddressProvider({
   children: ReactNode;
 }) {
   const [stored, setStored] = useState<Stored>(loadStored);
+  const [walletRead, setWalletRead] = useState<'pending' | 'account' | 'none'>('pending');
   const agent = useBorosAgent();
   const root = agent.data?.configured ? (agent.data.root ?? null) : null;
 
   const update = useCallback((next: Partial<Stored>) => setStored((prev) => persist(prev, next)), []);
 
-  const followTo = useCallback(
-    (address: string) =>
-      setStored((prev) =>
-        prev.followWallet && !(prev.address && isSameAddress(prev.address, address))
-          ? persist(prev, { address, walletUpgradeNote: undefined })
-          : prev,
-      ),
-    [],
-  );
+  useEffect(() => {
+    let live = true;
+    void readWalletAccount().then((account) => {
+      if (!live) return;
+      if (account) setStored((prev) => (prev.manual ? prev : followed(prev, account)));
+      setWalletRead(account ? 'account' : 'none');
+    });
+    const stop = watchWalletAccount((account) => setStored((prev) => followed(prev, account)));
+    return () => {
+      live = false;
+      stop();
+    };
+  }, []);
 
   useEffect(() => {
-    if (stored.walletUpgraded || !root) return;
+    if (walletRead !== 'none' || stored.walletUpgraded || stored.manual || !root) return;
     const sameAsRoot = stored.address !== null && isSameAddress(stored.address, root);
     update(
       sameAsRoot
         ? { walletUpgraded: true }
         : { address: root, walletUpgraded: true, walletUpgradeNote: stored.address ? root : undefined },
     );
-    if (stored.followWallet) return;
-    void readWalletAccount().then((account) => {
-      if (!account || !isSameAddress(account, root)) return;
-      setStored((prev) =>
-        prev.address && isSameAddress(prev.address, root) && !prev.followWallet
-          ? persist(prev, { followWallet: true })
-          : prev,
-      );
-    });
-  }, [stored.walletUpgraded, stored.address, stored.followWallet, root, update]);
+  }, [walletRead, stored.walletUpgraded, stored.manual, stored.address, root, update]);
 
   const following = stored.followWallet === true;
-  useEffect(() => {
-    if (!following) return;
-    let live = true;
-    void readWalletAccount().then((account) => {
-      if (live && account) followTo(account);
-    });
-    const stop = watchWalletAccount(followTo);
-    return () => {
-      live = false;
-      stop();
-    };
-  }, [following, followTo]);
 
   const api = useMemo<TrackedAddressApi>(
     () => ({
       address: stored.address,
-      setAddress: (address) => update({ address, walletUpgradeNote: undefined, followWallet: undefined }),
-      followBrowserWallet: (address) => update({ address, walletUpgradeNote: undefined, followWallet: true }),
+      setAddress: (address) =>
+        update({ address, walletUpgradeNote: undefined, followWallet: undefined, manual: address ? true : undefined }),
+      followBrowserWallet: (address) =>
+        update({ address, walletUpgradeNote: undefined, followWallet: true, manual: undefined }),
       followWallet: following,
       openSettings: () => onOpenSettings?.(),
       openLogin: () => (onOpenLogin ?? onOpenSettings)?.(),
