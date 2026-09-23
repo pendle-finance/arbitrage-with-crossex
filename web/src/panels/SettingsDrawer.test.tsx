@@ -74,7 +74,7 @@ describe('SettingsDrawer', () => {
       'Telegram alerts',
     ]);
     expect(await within(row('Gate API key')).findByText('160e…4f80 · works')).toBeInTheDocument();
-    expect(await within(row('Boros wallet')).findByText('Can trade')).toBeInTheDocument();
+    expect(await within(row('Boros wallet')).findByText('Logged in')).toBeInTheDocument();
     expect(within(row('Boros wallet')).getByText('0xab18…ed9d')).toBeInTheDocument();
     expect(await within(row('Telegram alerts')).findByText('All on · synced 3 min ago')).toBeInTheDocument();
     for (const name of ['Gate API key', 'Boros wallet', 'Telegram alerts']) {
@@ -252,7 +252,7 @@ describe('SettingsDrawer', () => {
     try {
       mockAllDone();
       renderDrawer();
-      expect(await within(row('Boros wallet')).findByText('Can trade')).toBeInTheDocument();
+      expect(await within(row('Boros wallet')).findByText('Logged in')).toBeInTheDocument();
       await clickEdit('Boros wallet');
       await user.click(await within(row('Boros wallet')).findByRole('button', { name: 'Use my browser wallet' }));
       expect(await within(row('Boros wallet')).findByText('0x3f2a…91c0')).toBeInTheDocument();

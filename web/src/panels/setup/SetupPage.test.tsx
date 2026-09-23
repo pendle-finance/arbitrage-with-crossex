@@ -205,7 +205,7 @@ describe('SetupPage · Boros wallet', () => {
     renderSetup();
 
     const wallet = row('Boros wallet');
-    expect(await within(wallet).findByText('Can trade')).toBeInTheDocument();
+    expect(await within(wallet).findByText('Logged in')).toBeInTheDocument();
     expect(within(wallet).getAllByText('0xab18…ed9d', { selector: 'span.num' }).length).toBeGreaterThan(0);
     expect(screen.getByText(/the wallet that trades/)).toBeInTheDocument();
     expect(trackedInStorage()).toEqual({ address: WALLET, walletUpgraded: true, walletUpgradeNote: WALLET });
@@ -482,7 +482,7 @@ describe('setup rows in Settings', () => {
     mockWorld({ agent: agentStatus({ configured: true, root: WALLET, approval: 'not-approved', expiry: 2_000_000_000 }) });
     renderWithClient(<BorosWalletRow {...settingsRow()} />);
     expect(await within(row('Boros wallet')).findByText('Not approved')).toBeInTheDocument();
-    expect(within(row('Boros wallet')).queryByText('Can trade')).toBeNull();
+    expect(within(row('Boros wallet')).queryByText('Logged in')).toBeNull();
     expect(dot('Boros wallet')).toBe('!');
   });
 
@@ -504,7 +504,7 @@ describe('setup rows in Settings', () => {
       }),
     );
     renderWithClient(<BorosWalletRow {...settingsRow({ open: true })} />);
-    expect(await within(row('Boros wallet')).findByText('Can trade')).toBeInTheDocument();
+    expect(await within(row('Boros wallet')).findByText('Logged in')).toBeInTheDocument();
     expect(
       screen.getByText(`Agent key: trades only, cannot deposit or withdraw. Login ends ${day(2_000_000_000)}.`),
     ).toBeInTheDocument();

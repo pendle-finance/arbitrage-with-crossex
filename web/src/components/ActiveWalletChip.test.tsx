@@ -25,9 +25,10 @@ const show = (active: string, agent: Record<string, unknown>) => {
 afterEach(() => localStorage.clear());
 
 describe('ActiveWalletChip', () => {
-  it('logged-in wallet: "Can trade"', async () => {
+  it('logged-in wallet: the address and a green dot, no word', async () => {
     show(ROOT, { approval: 'approved', expiry: nowSec() + 200 * 86400 });
-    expect(await screen.findByText('Can trade')).toBeInTheDocument();
+    expect(await screen.findByRole('img', { name: 'Logged in' })).toBeInTheDocument();
+    expect(screen.queryByText('Logged in')).toBeNull();
     expect(screen.getByRole('button')).toHaveTextContent('0x1111…1111');
   });
 
@@ -37,10 +38,10 @@ describe('ActiveWalletChip', () => {
     expect(screen.getByRole('button')).toHaveTextContent('0x3333…3333');
   });
 
-  it('a key the chain never approved: "Not approved", never "Can trade"', async () => {
+  it('a key the chain never approved: "Not approved", never the logged-in dot', async () => {
     show(ROOT, { approval: 'not-approved', expiry: nowSec() + 300 * 86400 });
     expect(await screen.findByText('Not approved')).toBeInTheDocument();
-    expect(screen.queryByText('Can trade')).toBeNull();
+    expect(screen.queryByRole('img', { name: 'Logged in' })).toBeNull();
   });
 
   it('an ended login: "Login expired"', async () => {

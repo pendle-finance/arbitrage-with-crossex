@@ -273,7 +273,7 @@ describe('BorosPairTicket', () => {
 
     expect(await screen.findByText('View only')).toBeInTheDocument();
     expect(screen.getByText('0x2222…2222')).toBeInTheDocument();
-    expect(screen.queryByText('Can trade')).toBeNull();
+    expect(screen.queryByText('Logged in')).toBeNull();
     expect(screen.queryByText('0x1111…1111')).toBeNull();
     expect(screen.queryByText(/expires/)).toBeNull();
     expect(screen.queryByRole('button', { name: 'Log out' })).toBeNull();
@@ -308,12 +308,12 @@ describe('BorosPairTicket', () => {
     server.use(...handlers({ agent: { expiry: 1_900_000_000 } }));
     renderWithClient(<BorosPairTicket />);
 
-    expect(await screen.findByText('Can trade')).toBeInTheDocument();
+    expect(await screen.findByText('Logged in')).toBeInTheDocument();
     await waitFor(() => expect(wallet.listenerCount()).toBe(1));
     act(() => wallet.emitAccounts([other]));
 
     expect(await screen.findByRole('button', { name: 'Log in to trade 0x2222…2222' })).toBeInTheDocument();
-    expect(screen.queryByText('Can trade')).toBeNull();
+    expect(screen.queryByText('Logged in')).toBeNull();
     removeFakeWallet();
   });
 
@@ -321,7 +321,7 @@ describe('BorosPairTicket', () => {
     server.use(...handlers({ agent: { expiry: 1_900_000_000 } }));
     renderWithClient(<BorosPairTicket />);
 
-    expect(await screen.findByText('Can trade')).toBeInTheDocument();
+    expect(await screen.findByText('Logged in')).toBeInTheDocument();
     expect(screen.getByText('0x1111…1111')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Log out' })).toBeInTheDocument();
     expect(screen.queryByText(/view only/i)).toBeNull();

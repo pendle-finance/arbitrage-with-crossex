@@ -10,7 +10,15 @@ import { ViewOnlyChip } from './ViewOnlyChip';
 
 /** The wallet's state as one tag. The header chip and the Settings row use
  * the same tags, so a state reads the same everywhere. */
-export function WalletStateTag({ wallet }: { wallet: Pick<ActiveWallet, 'state' | 'endsSoon'> }) {
+export function WalletStateTag({
+  wallet,
+  quiet = false,
+}: {
+  wallet: Pick<ActiveWallet, 'state' | 'endsSoon'>;
+  /** The header: the normal state is a green dot, not a word. Only a state
+   * that needs attention gets a tag there. */
+  quiet?: boolean;
+}) {
   if (!wallet.state) return null;
   if (wallet.state === 'view-only') return <ViewOnlyChip />;
   if (wallet.state === 'expired')
@@ -31,9 +39,12 @@ export function WalletStateTag({ wallet }: { wallet: Pick<ActiveWallet, 'state' 
         Renew by {new Date(wallet.endsSoon * 1000).toLocaleDateString()}
       </Chip>
     );
+  if (quiet) {
+    return <span role="img" aria-label="Logged in" title="Logged in" className="h-1.5 w-1.5 rounded-full bg-grass" />;
+  }
   return (
     <Chip sm tone="green">
-      Can trade
+      Logged in
     </Chip>
   );
 }
@@ -50,7 +61,7 @@ export function ActiveWalletChip() {
       className="flex h-[30px] items-center gap-2 rounded border border-ink-700 px-2 text-[11.5px] text-ink-200 hover:border-ink-500"
     >
       <span className="num">{short(wallet.address)}</span>
-      <WalletStateTag wallet={wallet} />
+      <WalletStateTag wallet={wallet} quiet />
     </button>
   );
 }

@@ -233,7 +233,7 @@ describe('BorosAgentSetup', () => {
     );
     renderWithClient(<BorosAgentSetup />);
 
-    expect(await screen.findByText('Can trade')).toBeInTheDocument();
+    expect(await screen.findByText('Logged in')).toBeInTheDocument();
     expect(screen.getByText('0x1111…1111')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Log out' })).toBeInTheDocument();
     expect(document.body.textContent).not.toContain(AGENT_KEY);
