@@ -74,7 +74,7 @@ describe('SettingsDrawer', () => {
       'Telegram alerts',
     ]);
     expect(await within(row('Gate API key')).findByText('160e…4f80 · works')).toBeInTheDocument();
-    expect(await within(row('Boros wallet')).findByText('Can trade')).toBeInTheDocument();
+    expect(await within(row('Boros wallet')).findByText('Logged in')).toBeInTheDocument();
     expect(within(row('Boros wallet')).getByText('0xab18…ed9d')).toBeInTheDocument();
     expect(await within(row('Telegram alerts')).findByText('All on · synced 3 min ago')).toBeInTheDocument();
     for (const name of ['Gate API key', 'Boros wallet', 'Telegram alerts']) {
@@ -112,7 +112,7 @@ describe('SettingsDrawer', () => {
       'aria-checked',
       'true',
     );
-    await user.hover(within(telegram).getByText('Last synced 3 min ago'));
+    await user.hover(within(telegram).getByText('synced 3 min ago'));
     expect(await screen.findByText(CAVEAT)).toBeInTheDocument();
     expect(within(telegram).getByRole('button', { name: 'Disconnect this terminal' })).toBeInTheDocument();
     expect(within(telegram).getByRole('button', { name: 'Collapse' })).toBeInTheDocument();
@@ -194,7 +194,7 @@ describe('SettingsDrawer', () => {
     const telegram = row('Telegram alerts');
 
     expect(await within(telegram).findByText('not set up')).toHaveClass('text-amber-400');
-    expect(within(telegram).getByRole('button', { name: 'Set up ↗' })).toBeInTheDocument();
+    expect(within(telegram).getByRole('button', { name: 'Set up' })).toBeInTheDocument();
     expect(within(telegram).queryByRole('button', { name: 'Expand' })).toBeNull();
   });
 
@@ -203,8 +203,8 @@ describe('SettingsDrawer', () => {
     renderDrawer();
     const telegram = row('Telegram alerts');
 
-    expect(await within(telegram).findByText('Connected on another terminal')).toBeInTheDocument();
-    expect(within(telegram).getByRole('button', { name: 'Set up ↗' })).toBeInTheDocument();
+    expect(await within(telegram).findByText('not set up')).toBeInTheDocument();
+    expect(within(telegram).getByRole('button', { name: 'Set up' })).toBeInTheDocument();
     expect(within(telegram).queryByRole('button', { name: 'Expand' })).toBeNull();
   });
 
@@ -213,8 +213,8 @@ describe('SettingsDrawer', () => {
     renderDrawer();
     const telegram = row('Telegram alerts');
 
-    expect(await within(telegram).findByText('Removed on the Boros notifications page')).toBeInTheDocument();
-    expect(within(telegram).getByRole('button', { name: 'Set up ↗' })).toBeInTheDocument();
+    expect(await within(telegram).findByText('not set up')).toBeInTheDocument();
+    expect(within(telegram).getByRole('button', { name: 'Set up' })).toBeInTheDocument();
     expect(within(telegram).queryByRole('button', { name: 'Expand' })).toBeNull();
   });
 
@@ -224,7 +224,7 @@ describe('SettingsDrawer', () => {
     await clickEdit('Boros wallet');
     const wallet = row('Boros wallet');
 
-    expect(await within(wallet).findByText('Agent key: trades only, cannot deposit or withdraw.')).toBeInTheDocument();
+    expect(await within(wallet).findByText('Trades only. Cannot deposit or withdraw.')).toBeInTheDocument();
     expect(within(wallet).getByRole('button', { name: 'Log out' })).toBeInTheDocument();
     expect(within(wallet).queryByRole('radio')).toBeNull();
     expect(within(wallet).getByRole('button', { name: 'Collapse' })).toBeInTheDocument();
@@ -252,7 +252,7 @@ describe('SettingsDrawer', () => {
     try {
       mockAllDone();
       renderDrawer();
-      expect(await within(row('Boros wallet')).findByText('Can trade')).toBeInTheDocument();
+      expect(await within(row('Boros wallet')).findByText('Logged in')).toBeInTheDocument();
       await clickEdit('Boros wallet');
       await user.click(await within(row('Boros wallet')).findByRole('button', { name: 'Use my browser wallet' }));
       expect(await within(row('Boros wallet')).findByText('0x3f2a…91c0')).toBeInTheDocument();
@@ -267,15 +267,69 @@ describe('SettingsDrawer', () => {
     mockAllDone({ ...connectedTelegram(), alertWallet: WALLET });
     renderDrawer();
     await clickEdit('Telegram alerts');
-    expect(await within(row('Telegram alerts')).findByText('Alerts follow 0xab18…ed9d')).toBeInTheDocument();
+    expect(await within(row('Telegram alerts')).findByText('Alerts for 0xab18…ed9d ·')).toBeInTheDocument();
   });
 
-  it('telegram asks to log in when the bot refuses the wallet', async () => {
-    mockAllDone({ ...connectedTelegram(), alertWallet: WALLET, walletRefused: PASTED });
+  it('telegram before the first sync reads "Checking…", not a green "None on"', async () => {
+    mockAllDone({ ...connectedTelegram(), settings: null, lastSyncAt: null, lastSyncError: null });
+    renderDrawer();
+    const telegram = row('Telegram alerts');
+    expect(await within(telegram).findByText('Checking…')).toBeInTheDocument();
+    expect(within(telegram).queryByText(/None on/)).toBeNull();
+    expect(within(telegram).queryByRole('button', { name: /Set up/ })).toBeNull();
+  });
+
+  it('telegram links to the Boros notifications page', async () => {
+    mockAllDone({ ...connectedTelegram(), alertWallet: WALLET, alertsPageUrl: 'https://bot.example/alerts' });
     renderDrawer();
     await clickEdit('Telegram alerts');
-    expect(await within(row('Telegram alerts')).findByText('Log in to move alerts to 0x3f2a…91c0.')).toBeInTheDocument();
-    expect(within(row('Telegram alerts')).queryByText(/Alerts follow/)).toBeNull();
+    const link = await within(row('Telegram alerts')).findByRole('link', { name: 'Boros notifications' });
+    expect(link).toHaveAttribute('href', 'https://bot.example/alerts');
+    expect(link).toHaveAttribute('target', '_blank');
+  });
+
+  it('telegram is not set up for a wallet the bot has no link for', async () => {
+    mockAllDone({ ...connectedTelegram(), alertWallet: WALLET, unlinkedWallet: PASTED });
+    renderDrawer();
+    const telegram = row('Telegram alerts');
+    // Closed row: it reads like a row never set up; the opened row names the wallet.
+    expect(await within(telegram).findByRole('button', { name: 'Set up' })).toBeInTheDocument();
+    expect(within(telegram).getByText('not set up')).toBeInTheDocument();
+  });
+
+  it('telegram sets up alerts for the new wallet with the same key', async () => {
+    const user = userEvent.setup();
+    const open = vi.spyOn(window, 'open').mockReturnValue(null);
+    let linkBody: unknown = null;
+    mockAllDone({ ...connectedTelegram(), alertWallet: WALLET, unlinkedWallet: PASTED });
+    const url = 'https://bot.test/alerts?crossex=c';
+    server.use(
+      http.post('/api/telegram/link', async ({ request }) => {
+        linkBody = await request.json();
+        return HttpResponse.json(env({ url, expiresAt: Date.now() + 600_000 }));
+      }),
+      http.get('/api/telegram/link', () => HttpResponse.json(env({ status: 'pending', url, expiresAt: Date.now() + 600_000 }))),
+    );
+    try {
+      renderWithClient(<FocusHarness initial="telegram" />);
+      const telegram = row('Telegram alerts');
+      expect(
+        await within(telegram).findByText(
+          'Telegram alerts are set up per wallet. Set up once for 0x3f2a…91c0. You can use the same Telegram chat.',
+        ),
+      ).toBeInTheDocument();
+      expect(within(telegram).getByRole('button', { name: 'Disconnect this terminal' })).toBeInTheDocument();
+      expect(within(telegram).queryByText(/Alerts for 0x/)).toBeNull();
+      expect(within(telegram).queryByRole('switch')).toBeNull();
+      await user.click(within(telegram).getByRole('button', { name: 'Set up alerts for 0x3f2a…91c0' }));
+      await waitFor(() => expect(linkBody).toEqual({ addWallet: true }));
+      expect(open).toHaveBeenCalledTimes(1);
+      expect(
+        await within(telegram).findByText('Waiting for you to confirm on the Boros notifications page'),
+      ).toBeInTheDocument();
+    } finally {
+      open.mockRestore();
+    }
   });
 
   it('edit key', async () => {
@@ -343,7 +397,7 @@ describe('SettingsDrawer · focus step', () => {
     mockAllDone(telegramInfo());
     renderWithClient(<FocusHarness initial={null} />);
 
-    expect(await within(row('Telegram alerts')).findByRole('button', { name: 'Set up ↗' })).toBeInTheDocument();
+    expect(await within(row('Telegram alerts')).findByRole('button', { name: 'Set up' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Collapse' })).toBeNull();
   });
 });

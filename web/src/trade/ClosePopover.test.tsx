@@ -80,7 +80,7 @@ describe('ClosePopover', () => {
     expect(await screen.findByText(/limit px/i)).toBeInTheDocument();
     expect(screen.getByText('2497.45')).toBeInTheDocument();
     expect(screen.getByText(/Reduce-only/)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Close now ▸' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Close now' })).toBeEnabled();
   });
 
   it('a size above the position shows an inline error and disables Close', async () => {
@@ -94,7 +94,7 @@ describe('ClosePopover', () => {
     // ETH is coin-margined, so the box defaults to the coin and the error
     // names the limit in that unit.
     expect(await screen.findByText(/close size exceeds position \(0\.3 ETH\)/)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Close now ▸' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Close now' })).toBeDisabled();
   });
 
   it.each([
@@ -129,7 +129,7 @@ describe('ClosePopover', () => {
     await userEvent.type(screen.getByLabelText('Close size'), '151.202');
 
     expect(screen.queryByText(/close size exceeds position/)).not.toBeInTheDocument();
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Close now ▸' })).toBeEnabled());
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Close now' })).toBeEnabled());
   });
 
   it('holding "Close now" POSTs a reduce-only banded close deal (no review modal)', async () => {
@@ -144,7 +144,7 @@ describe('ClosePopover', () => {
     );
     renderWithClient(<ClosePopover position={ethPosition} onDismiss={() => {}} />);
 
-    const btn = await screen.findByRole('button', { name: 'Close now ▸' });
+    const btn = await screen.findByRole('button', { name: 'Close now' });
     await waitFor(() => expect(btn).toBeEnabled());
     fireEvent.pointerDown(btn);
     await waitFor(() => expect(dealCalls).toHaveLength(1), { timeout: 2_000 });
@@ -166,7 +166,7 @@ describe('ClosePopover', () => {
    */
   describe('reporting what it closed', () => {
     const executed = async () => {
-      const btn = await screen.findByRole('button', { name: 'Close now ▸' });
+      const btn = await screen.findByRole('button', { name: 'Close now' });
       await waitFor(() => expect(btn).toBeEnabled());
       fireEvent.pointerDown(btn);
     };
@@ -247,7 +247,7 @@ describe('ClosePopover', () => {
     server.use(...baseHandlers(), closePreviewHandler());
     renderWithClient(<ClosePopover position={ethPosition} onDismiss={() => {}} />);
 
-    const btn = await screen.findByRole('button', { name: 'Close now ▸' });
+    const btn = await screen.findByRole('button', { name: 'Close now' });
     await waitFor(() => expect(btn).toBeEnabled());
     await userEvent.hover(btn);
 
@@ -267,7 +267,7 @@ describe('ClosePopover', () => {
     );
     renderWithClient(<ClosePopover position={ethPosition} onDismiss={() => {}} />);
 
-    const btn = await screen.findByRole('button', { name: 'Close now ▸' });
+    const btn = await screen.findByRole('button', { name: 'Close now' });
     await waitFor(() => expect(btn).toBeEnabled());
     fireEvent.pointerDown(btn);
 
@@ -320,7 +320,7 @@ describe('ClosePopover — sizing a close in dollars', () => {
     await userEvent.clear(screen.getByLabelText('Close value'));
     await userEvent.type(screen.getByLabelText('Close value'), '200');
     expect(await screen.findByText(/close size exceeds position/)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Close now ▸' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Close now' })).toBeDisabled();
   });
 
   it('falls back to COIN units when the mark is unusable — never sends dollars as qty', async () => {
@@ -468,6 +468,6 @@ describe('ClosePopover — the conversion mark is latched at open', () => {
     await userEvent.type(screen.getByLabelText('Close value'), max);
 
     expect(screen.queryByText(/close size exceeds position/)).not.toBeInTheDocument();
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Close now ▸' })).toBeEnabled());
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Close now' })).toBeEnabled());
   });
 });

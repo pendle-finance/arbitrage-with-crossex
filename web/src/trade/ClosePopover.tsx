@@ -11,6 +11,7 @@
  * closing the whole pair are the same decision at different sizes, so they now
  * share one surface, and the anchoring machinery is gone with it.
  */
+import { ChevronRight } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ActionInput, CrossexPosition } from '../api/types';
 import { VenueIcon } from '../components/AssetIcon';
@@ -458,7 +459,12 @@ export function ClosePopover({
             scope={`close-${position.symbol}`}
             actions={action ? [action] : null}
             tone="red"
-            label="Close now ▸"
+            label={
+            <>
+              Close now
+              <ChevronRight size={14} aria-hidden />
+            </>
+          }
             buttonClassName="w-full"
             // The preview box right above already reviews this close — the hover
             // card would just repeat it on top of the popover. Errors still open it.

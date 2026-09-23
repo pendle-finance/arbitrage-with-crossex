@@ -2,6 +2,8 @@ import { screen } from '@testing-library/react';
 import { HttpResponse, http } from 'msw';
 import { afterEach, describe, expect, it } from 'vitest';
 import { server } from '../test/server';
+import { fmtDateShort } from '../lib/fmt';
+import { setLoginInFlight } from '../lib/loginInFlight';
 import { renderWithClient } from '../test/utils';
 import { ActiveWalletChip } from './ActiveWalletChip';
 
@@ -22,12 +24,16 @@ const show = (active: string, agent: Record<string, unknown>) => {
   renderWithClient(<ActiveWalletChip />);
 };
 
-afterEach(() => localStorage.clear());
+afterEach(() => {
+  localStorage.clear();
+  setLoginInFlight(false);
+});
 
 describe('ActiveWalletChip', () => {
-  it('logged-in wallet: "Can trade"', async () => {
+  it('logged-in wallet: the address and a green dot, no word', async () => {
     show(ROOT, { approval: 'approved', expiry: nowSec() + 200 * 86400 });
-    expect(await screen.findByText('Can trade')).toBeInTheDocument();
+    expect(await screen.findByRole('img', { name: 'Logged in' })).toBeInTheDocument();
+    expect(screen.queryByText('Logged in')).toBeNull();
     expect(screen.getByRole('button')).toHaveTextContent('0x1111…1111');
   });
 
@@ -37,10 +43,17 @@ describe('ActiveWalletChip', () => {
     expect(screen.getByRole('button')).toHaveTextContent('0x3333…3333');
   });
 
-  it('a key the chain never approved: "Not approved", never "Can trade"', async () => {
+  it('a key the chain never approved: "Not approved", never the logged-in dot', async () => {
     show(ROOT, { approval: 'not-approved', expiry: nowSec() + 300 * 86400 });
     expect(await screen.findByText('Not approved')).toBeInTheDocument();
-    expect(screen.queryByText('Can trade')).toBeNull();
+    expect(screen.queryByRole('img', { name: 'Logged in' })).toBeNull();
+  });
+
+  it('a login still signing: "Logging in…", not the "Not approved" error', async () => {
+    setLoginInFlight(true);
+    show(ROOT, { approval: 'not-approved', expiry: nowSec() + 300 * 86400 });
+    expect(await screen.findByText('Logging in…')).toBeInTheDocument();
+    expect(screen.queryByText('Not approved')).toBeNull();
   });
 
   it('an ended login: "Login expired"', async () => {
@@ -48,8 +61,34 @@ describe('ActiveWalletChip', () => {
     expect(await screen.findByText('Login expired')).toBeInTheDocument();
   });
 
-  it('a login ending within 14 days: "Renew by …"', async () => {
-    show(ROOT, { approval: 'approved', expiry: nowSec() + 3 * 86400 });
-    expect(await screen.findByText(/^Renew by /)).toBeInTheDocument();
+  it('a login ending within 14 days: "Renew by {date}"', async () => {
+    const soon = nowSec() + 3 * 86400;
+    show(ROOT, { approval: 'approved', expiry: soon });
+    expect(await screen.findByText(`Renew by ${fmtDateShort(soon, { year: 'numeric' })}`)).toBeInTheDocument();
+  });
+
+  it('Boros could not be read: "Login not checked", not the dot', async () => {
+    show(ROOT, { approval: 'unknown', expiry: nowSec() + 200 * 86400 });
+    expect(await screen.findByText('Login not checked')).toHaveAttribute(
+      'title',
+      'Boros did not answer. The venue still checks the login.',
+    );
+    expect(screen.queryByRole('img', { name: 'Logged in' })).toBeNull();
+  });
+
+  it('no login at all: "Not logged in", no eye', async () => {
+    show(OTHER, { configured: false, root: null, rootMasked: null });
+    expect(await screen.findByText('Not logged in')).toBeInTheDocument();
+    expect(screen.queryByText('View only')).toBeNull();
+    expect(screen.getByRole('button').querySelector('.lucide-eye')).toBeNull();
+  });
+
+  it('a hidden Boros mark sits before the address', async () => {
+    show(ROOT, { approval: 'approved', expiry: nowSec() + 200 * 86400 });
+    const button = await screen.findByRole('button', { name: `Boros wallet ${ROOT}` });
+    const mark = button.firstElementChild as HTMLElement;
+    expect(mark).toHaveAttribute('aria-hidden');
+    expect(mark.querySelector('svg')).not.toBeNull();
+    expect(mark.nextElementSibling).toHaveTextContent('0x1111…1111');
   });
 });

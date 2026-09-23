@@ -8,12 +8,12 @@ export class TelegramStatus {
   auth: TelegramAuth | null = null;
   settings: TelegramSettings | null = null;
   alertWallet: string | null = null;
-  walletRefused: string | null = null;
+  unlinkedWallet: string | null = null;
 
   setSynced(at: number, settings: TelegramSettings, wallet: string | null = null): void {
     this.lastSyncAt = at;
     this.alertWallet = wallet;
-    this.walletRefused = null;
+    this.unlinkedWallet = null;
     this.lastSyncError = null;
     this.auth = 'ok';
     this.settings = settings;
@@ -23,8 +23,8 @@ export class TelegramStatus {
     this.lastSyncError = { at, message };
   }
 
-  setWalletRefused(wallet: string): void {
-    this.walletRefused = wallet;
+  setUnlinkedWallet(wallet: string | null): void {
+    this.unlinkedWallet = wallet;
   }
 
   setAuth(auth: TelegramAuth | null): void {

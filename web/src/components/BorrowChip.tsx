@@ -1,3 +1,4 @@
+import { ChevronRight } from 'lucide-react';
 import { useRebalance } from '../api/queries';
 import { borrowingBuckets, borrowTotalUsd } from '../lib/borrow';
 import { FACT_BORROWING } from '../panels/rebalanceCopy';
@@ -29,7 +30,7 @@ export function BorrowChip({ onOpen }: { onOpen: () => void }) {
       <div className="flex flex-col gap-2 text-xs">
         <Facts items={[borrowingFact(buckets)]} />
         <button type="button" onClick={onOpen} className="btn-link">
-          Rebalance on Balances ▸
+          Rebalance on Balances <ChevronRight size={12} aria-hidden className="inline" />
         </button>
       </div>
     </HoverCard>

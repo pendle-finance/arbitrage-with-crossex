@@ -133,6 +133,85 @@ function keyOnDisk(): TelegramKey {
 
 const fakeInterval = () => vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
 
+describe('Telegram per-wallet link', () => {
+  it('GET shows the unlinked wallet as connected, and POST addWallet reuses the key', async () => {
+    const key = linked();
+    const { app, bot, status } = boot();
+    status.setAuth('ok');
+    status.setUnlinkedWallet('0xabc');
+
+    const info = await send(app, 'GET', '/api/telegram');
+    expect(info.body.data).toMatchObject({ connected: true, state: 'connected', unlinkedWallet: '0xabc' });
+
+    const started = await send(app, 'POST', '/api/telegram/link', { addWallet: true });
+    expect(started.code).toBe(200);
+    expect(bot.to('POST', '/link-requests')[0].body).toEqual({ keyHash: key.keyHash, version: '1.6.3' });
+    expect(bot.to('POST', '/link-requests')[0].headers['x-terminal-key']).toBe(key.key);
+    expect(keyOnDisk()).toEqual(key);
+
+    const pending = await send(app, 'GET', '/api/telegram');
+    expect(pending.body.data).toMatchObject({ connected: true, state: 'connected', unlinkedWallet: '0xabc' });
+  });
+
+  it('Disconnect clears the unlinked wallet with the key', async () => {
+    linked();
+    const { app, status } = boot();
+    status.setUnlinkedWallet('0xabc');
+    const res = await send(app, 'DELETE', '/api/telegram');
+    expect(res.code).toBe(200);
+    expect(res.body.data).not.toHaveProperty('unlinkedWallet');
+    expect(status.unlinkedWallet).toBeNull();
+    expect(readTelegramKey(dataDir)).toBeNull();
+  });
+
+  it('a settings change refused as wallet-unlinked records the wallet, so the row stops showing toggles', async () => {
+    linked();
+    const bot = makeBot();
+    const { app, status } = bootWithWallet(bot, '0xAbC');
+    status.setAuth('ok');
+    bot.behaviour.reason = 'wallet-unlinked';
+
+    const res = await send(app, 'PATCH', '/api/telegram/settings', { interest: false });
+    expect(res.code).toBe(409);
+    expect(status.unlinkedWallet).toBe('0xabc');
+    expect(status.auth).toBe('ok');
+
+    const info = await send(app, 'GET', '/api/telegram');
+    expect(info.body.data).toMatchObject({ state: 'connected', unlinkedWallet: '0xabc' });
+  });
+
+  it('GET fresh=1 asks the bot again for an unlinked wallet and clears it once linked', async () => {
+    linked();
+    const bot = makeBot();
+    const { app, status } = bootWithWallet(bot, '0xabc');
+    status.setAuth('ok');
+    status.setUnlinkedWallet('0xabc');
+
+    const cached = await send(app, 'GET', '/api/telegram');
+    expect(cached.body.data).toMatchObject({ unlinkedWallet: '0xabc' });
+    expect(bot.to('PUT', '/terminal/triggers')).toHaveLength(0);
+
+    const fresh = await send(app, 'GET', '/api/telegram?fresh=1');
+    expect(bot.to('PUT', '/terminal/triggers')).toHaveLength(1);
+    expect(fresh.body.data).not.toHaveProperty('unlinkedWallet');
+    expect(status.unlinkedWallet).toBeNull();
+  });
+});
+
+function bootWithWallet(bot: Bot, root: string) {
+  const status = new TelegramStatus();
+  const wallet = () => root;
+  const sync = createTelegramSync({ dataDir, bot: bot.bot, status, readCoins: async () => [ETH], port: 7788, version: '1.6.3', now: () => now, wallet });
+  const link = createTelegramLink({ dataDir, bot: bot.bot, pageUrl: `${BOT_URL}/alerts`, version: '1.6.3', now: () => now, status, onConfirmed: () => undefined });
+  const app = makeTestApp({ dataDir, telegram: { link, sync, status, bot: bot.bot, wallet } });
+  cleanups.push(async () => {
+    link.stop();
+    sync.stop();
+    await app.close();
+  });
+  return { status, app };
+}
+
 describe('Telegram link', () => {
   it('sends only the key hash', async () => {
     const { app, bot } = boot();
@@ -215,6 +294,23 @@ describe('Telegram link', () => {
     await vi.advanceTimersByTimeAsync(20_000);
     expect(bot.to('GET', '/terminal')).toHaveLength(1);
     expect((await send(app, 'GET', '/api/telegram')).body.data).toMatchObject({ connected: true, state: 'connected' });
+  });
+
+  it('?fresh=1 asks the bot now: a wallet stopped on the bot page shows at once', async () => {
+    linked();
+    const { bot, app, sync, status } = boot();
+    status.setAuth('ok');
+    sync.requestSync('boot');
+    await sync.idle();
+    const before = bot.to('PUT', '/terminal/triggers').length;
+    bot.behaviour.reason = 'removed';
+
+    expect((await send(app, 'GET', '/api/telegram')).body.data.connected).toBe(true);
+    expect(bot.to('PUT', '/terminal/triggers')).toHaveLength(before);
+
+    const fresh = (await send(app, 'GET', '/api/telegram?fresh=1')).body.data;
+    expect(bot.to('PUT', '/terminal/triggers')).toHaveLength(before + 1);
+    expect(fresh.connected).toBe(false);
   });
 
   it('expired link', async () => {
@@ -405,6 +501,7 @@ describe('Telegram link', () => {
       settings: { liquidation: true, interest: true, maturity: true, rollover: true },
       lastSyncAt: T0,
       lastSyncError: null,
+      alertWallet: VIEW.wallet,
       alertsPageUrl: `${BOT_URL}/alerts`,
       floors: FLOORS,
     });
@@ -501,6 +598,7 @@ describe('Telegram link', () => {
       settings: { liquidation: true, interest: true, maturity: true, rollover: true },
       lastSyncAt: T0,
       lastSyncError: null,
+      alertWallet: VIEW.wallet,
       alertsPageUrl: `${BOT_URL}/alerts`,
       floors: FLOORS,
     });
@@ -648,6 +746,7 @@ describe('Telegram settings', () => {
       settings: { liquidation: true, interest: true, maturity: true, rollover: true },
       lastSyncAt: T0,
       lastSyncError: null,
+      alertWallet: VIEW.wallet,
       alertsPageUrl: `${BOT_URL}/alerts`,
       floors: FLOORS,
     });

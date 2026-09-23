@@ -150,6 +150,11 @@
     @apply inline-flex h-9 items-center justify-center gap-1.5 whitespace-nowrap rounded border border-ink-700 bg-transparent px-4 text-[12px] font-medium text-ink-50 transition-colors hover:bg-ink-700/20 disabled:cursor-not-allowed disabled:opacity-40;
   }
 
+  /* The same box as .btn, for an action that stops or removes something. */
+  .btn-danger {
+    @apply inline-flex h-9 items-center justify-center gap-1.5 whitespace-nowrap rounded border border-rose-500/60 bg-transparent px-4 text-[12px] font-medium text-rose-300 transition-colors hover:bg-rose-500/10 disabled:cursor-not-allowed disabled:opacity-40;
+  }
+
   /* The one solid-filled control in the app. The mock reserves a filled
      `info` button for the action that starts something (Open this strategy)
      and leaves every other control an outline, so the fill is what makes the

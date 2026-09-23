@@ -7,6 +7,9 @@ import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HttpResponse, http } from 'msw';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { useTelegram } from '../api/queries';
+import { fmtDateShort } from '../lib/fmt';
+import { telegramInfo } from '../test/fixtures';
 import { server } from '../test/server';
 import { renderWithClient } from '../test/utils';
 import { BorosAgentSetup, BorosLogInButton } from './BorosAgentSetup';
@@ -15,6 +18,8 @@ const ROOT = '0x1111111111111111111111111111111111111111';
 const AGENT_KEY = `0x${'a'.repeat(64)}`;
 const AGENT_ADDRESS = '0x2222222222222222222222222222222222222222';
 const env = <T,>(data: T) => ({ ok: true, data, meta: { ts: Date.now() } });
+const day = (unix: number) => fmtDateShort(unix, { year: 'numeric' });
+const NOTHING_TO_RESTORE = { ok: false, error: { category: 'unknown', message: 'Nothing to restore.', retryable: false } };
 
 const status = (over: Record<string, unknown> = {}) => ({
   configured: false,
@@ -66,12 +71,11 @@ describe('BorosAgentSetup', () => {
     renderWithClient(<BorosAgentSetup />);
 
     expect(await screen.findByRole('button', { name: 'Connect wallet' })).toBeInTheDocument();
-    // The two things a user must know before signing anything.
-    expect(screen.getByText(/cannot deposit or withdraw/i)).toBeInTheDocument();
-    expect(screen.getByText(/never asks for your wallet's key/i)).toBeInTheDocument();
-    // And that there IS an on-chain transaction coming.
-    expect(screen.getByText(/one on-chain transaction/i)).toBeInTheDocument();
-    expect(screen.getByText('Enable Boros trading')).toBeInTheDocument();
+    expect(
+      screen.getByText('Log in once to trade. One free wallet signature. The key trades only. It cannot deposit or withdraw.'),
+    ).toBeInTheDocument();
+    expect(screen.queryByText('Enable Boros trading')).toBeNull();
+    expect(screen.queryByText(/one on-chain transaction|Approval cost/i)).toBeNull();
     expect(screen.getByText('Connect the wallet that holds your Boros account.')).toBeInTheDocument();
   });
 
@@ -99,7 +103,9 @@ describe('BorosAgentSetup', () => {
     installWallet();
     let body: Record<string, unknown> | null = null;
     server.use(
-      http.get('/api/boros/agent', () => HttpResponse.json(env(status()))),
+      http.get('/api/boros/agent', () =>
+        HttpResponse.json(env(body ? status({ configured: true, root: ROOT, approval: 'approved' }) : status())),
+      ),
       http.put('/api/boros/agent', async ({ request }) => {
         body = (await request.json()) as Record<string, unknown>;
         calls.push('store');
@@ -123,7 +129,9 @@ describe('BorosAgentSetup', () => {
     installWallet();
     let body: Record<string, unknown> | null = null;
     server.use(
-      http.get('/api/boros/agent', () => HttpResponse.json(env(status()))),
+      http.get('/api/boros/agent', () =>
+        HttpResponse.json(env(body ? status({ configured: true, root: ROOT, approval: 'approved' }) : status())),
+      ),
       http.put('/api/boros/agent', async ({ request }) => {
         body = (await request.json()) as Record<string, unknown>;
         calls.push('store');
@@ -161,7 +169,11 @@ describe('BorosAgentSetup', () => {
     const user = userEvent.setup();
     installWallet();
     server.use(
-      http.get('/api/boros/agent', () => HttpResponse.json(env(status()))),
+      http.get('/api/boros/agent', () =>
+        HttpResponse.json(
+          env(calls.includes('store') ? status({ configured: true, root: ROOT, approval: 'approved' }) : status()),
+        ),
+      ),
       http.put('/api/boros/agent', async () => {
         calls.push('store');
         return HttpResponse.json(env(status({ configured: true, root: ROOT })));
@@ -191,8 +203,8 @@ describe('BorosAgentSetup', () => {
       ),
     );
     renderWithClient(<BorosAgentSetup />);
-    expect(await screen.findByText('login expired')).toBeInTheDocument();
-    expect(screen.getByText(/Boros refuses every order until you renew it/)).toBeInTheDocument();
+    expect(await screen.findByText('Login expired')).toBeInTheDocument();
+    expect(screen.getByText(`Login ended ${day(1_700_000_000)}. Boros refuses orders.`)).toBeInTheDocument();
     expect(screen.queryByText(/Remove the key and connect again/)).toBeNull();
     // Status only: the ticket's own Log in button, where Confirm sits, is the
     // one login. A second one here showed two buttons for one action.
@@ -206,7 +218,14 @@ describe('BorosAgentSetup', () => {
         throw Object.assign(new Error('User rejected the request'), { code: 4001 });
       }),
     };
-    server.use(http.get('/api/boros/agent', () => HttpResponse.json(env(status()))));
+    let rolledBack = false;
+    server.use(
+      http.get('/api/boros/agent', () => HttpResponse.json(env(status()))),
+      http.post('/api/boros/agent/rollback', () => {
+        rolledBack = true;
+        return HttpResponse.json(NOTHING_TO_RESTORE, { status: 409 });
+      }),
+    );
     localStorage.setItem('crossex.strategy.v1', JSON.stringify({ address: ROOT, walletUpgraded: true }));
     renderWithClient(<BorosLogInButton />);
 
@@ -214,6 +233,7 @@ describe('BorosAgentSetup', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(/rejected/i);
     // Recoverable: the button is live again, not stuck mid-step.
     expect(screen.getByRole('button', { name: 'Log in to trade 0x1111…1111' })).not.toBeDisabled();
+    expect(rolledBack).toBe(false);
   });
 
   it('tells the user when there is no wallet at all, instead of offering a dead button', async () => {
@@ -233,25 +253,38 @@ describe('BorosAgentSetup', () => {
     );
     renderWithClient(<BorosAgentSetup />);
 
-    expect(await screen.findByText('trading enabled')).toBeInTheDocument();
+    expect(await screen.findByText('Logged in')).toBeInTheDocument();
     expect(screen.getByText('0x1111…1111')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Log out' })).toBeInTheDocument();
     expect(document.body.textContent).not.toContain(AGENT_KEY);
   });
 
-  it('says that logging out does not revoke the approval', async () => {
-    const user = userEvent.setup();
-    const note = 'The key is gone from this machine. The on-chain approval is still live until you revoke it in the Boros app or it expires.';
+  it('a logged-in card is one line: no Log out, no agent key line, no warning', async () => {
     server.use(
       http.get('/api/boros/agent', () =>
-        HttpResponse.json(env(status({ configured: true, root: ROOT, rootMasked: '0x1111…1111' }))),
+        HttpResponse.json(
+          env(status({ configured: true, root: ROOT, rootMasked: '0x1111…1111', expiry: 2_000_000_000, approval: 'approved' })),
+        ),
       ),
-      http.delete('/api/boros/agent', () => HttpResponse.json(env({ configured: false, note }))),
     );
     renderWithClient(<BorosAgentSetup />);
+    expect(await screen.findByText('Logged in')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Log out' })).toBeNull();
+    expect(screen.queryByText(/Agent key/)).toBeNull();
+    expect(screen.queryByText(/Login ends|Login ended|no approval/)).toBeNull();
+  });
 
-    await user.click(await screen.findByRole('button', { name: 'Log out' }));
-    expect(await screen.findByText(/stays live on-chain until you revoke it/i)).toBeInTheDocument();
+  it('Boros could not be read: the card says "Login not checked"', async () => {
+    server.use(
+      http.get('/api/boros/agent', () =>
+        HttpResponse.json(env(status({ configured: true, root: ROOT, rootMasked: '0x1111…1111', approval: 'unknown' }))),
+      ),
+    );
+    renderWithClient(<BorosAgentSetup />);
+    expect(await screen.findByText('Login not checked')).toHaveAttribute(
+      'title',
+      'Boros did not answer. The venue still checks the login.',
+    );
+    expect(screen.queryByText('Logged in')).toBeNull();
   });
 
   it('says so plainly when the build cannot place orders at all', async () => {
@@ -283,7 +316,13 @@ describe('BorosAgentSetup — no gas balance on the strip', () => {
     let body: Record<string, unknown> | null = null;
     server.use(
       http.get('/api/boros/agent', () =>
-        HttpResponse.json(env(status({ configured: true, root: AGENT_ADDRESS, rootMasked: '0x2222…2222' }))),
+        HttpResponse.json(
+          env(
+            body
+              ? status({ configured: true, root: ROOT, approval: 'approved' })
+              : status({ configured: true, root: AGENT_ADDRESS, rootMasked: '0x2222…2222' }),
+          ),
+        ),
       ),
       http.put('/api/boros/agent', async ({ request }) => {
         body = (await request.json()) as Record<string, unknown>;
@@ -294,9 +333,12 @@ describe('BorosAgentSetup — no gas balance on the strip', () => {
 
     await user.click(await screen.findByRole('button', { name: 'Log in to trade 0x1111…1111' }));
     // 0x2222 can trade now, so the terminal asks before logging it out.
-    const ask = await screen.findByRole('alertdialog', { name: 'Log out 0x2222…2222?' });
-    expect(ask).toHaveTextContent('Trading moves to 0x1111…1111.');
-    expect(ask).toHaveTextContent('To close 0x2222…2222 positions, use the Boros app.');
+    const ask = await screen.findByRole('alertdialog', { name: 'Log out 0x2222…2222 and log in 0x1111…1111?' });
+    expect(ask).toHaveTextContent('Log out 0x2222…2222 and log in 0x1111…1111?');
+    expect(ask).toHaveTextContent('This terminal trades 0x1111…1111.');
+    expect(ask).not.toHaveTextContent('Telegram alerts');
+    expect(ask).toHaveTextContent('0x2222…2222 positions stay open. Close them in the Boros app.');
+    expect(ask).toHaveTextContent('Your Gate perps stay open. They show as unhedged until you log in 0x2222…2222 again.');
     // The question's buttons are the only choices while it is open.
     expect(screen.queryByRole('button', { name: /Waiting for your answer/ })).toBeNull();
     expect(body).toBeNull();
@@ -305,6 +347,37 @@ describe('BorosAgentSetup — no gas balance on the strip', () => {
     expect(body).toMatchObject({ root: ROOT, accountId: 0 });
     await waitFor(() => expect(approveAgent).toHaveBeenCalledTimes(1));
     localStorage.clear();
+  });
+
+  it('with Telegram alerts linked, the question says alerts are per wallet', async () => {
+    const user = userEvent.setup();
+    installWallet();
+    localStorage.setItem('crossex.strategy.v1', JSON.stringify({ address: ROOT, walletUpgraded: true }));
+    server.use(
+      http.get('/api/boros/agent', () =>
+        HttpResponse.json(env(status({ configured: true, root: AGENT_ADDRESS, rootMasked: '0x2222…2222' }))),
+      ),
+      http.get('/api/telegram', () =>
+        HttpResponse.json(env(telegramInfo({ connected: true, state: 'connected', alertWallet: AGENT_ADDRESS }))),
+      ),
+    );
+    function TelegramRead() {
+      useTelegram();
+      return null;
+    }
+    renderWithClient(
+      <>
+        <TelegramRead />
+        <BorosLogInButton />
+      </>,
+    );
+
+    await user.click(await screen.findByRole('button', { name: 'Log in to trade 0x1111…1111' }));
+    const ask = await screen.findByRole('alertdialog', { name: 'Log out 0x2222…2222 and log in 0x1111…1111?' });
+    await waitFor(() =>
+      expect(ask).toHaveTextContent('Telegram alerts are per wallet. If 0x1111…1111 has none, set them up once in Settings.'),
+    );
+    expect(ask).not.toHaveTextContent('same chat');
   });
 
   it('Log in to trade refuses a browser wallet other than the one it names', async () => {
@@ -429,8 +502,8 @@ describe('BorosAgentSetup — the chain decides "logged in"', () => {
         <BorosLogInButton />
       </>,
     );
-    expect(await screen.findByText('not approved')).toBeInTheDocument();
-    expect(screen.getByText(/The wallet prompt was rejected, or the login was revoked/)).toBeInTheDocument();
+    expect(await screen.findByText('Not approved')).toBeInTheDocument();
+    expect(screen.getByText('Boros shows no approval for this login. Log in again.')).toBeInTheDocument();
     expect(await screen.findAllByRole('button', { name: 'Log in to trade 0x1111…1111' })).toHaveLength(1);
   });
 
@@ -465,7 +538,220 @@ describe('BorosAgentSetup — the chain decides "logged in"', () => {
         <BorosLogInButton renew />
       </>,
     );
-    expect(await screen.findByText(/Your login ends on .*\. Renew it in Settings to keep trading\./)).toBeInTheDocument();
+    expect(await screen.findByText(`Login ends ${day(soon)}. Renew it in Settings.`)).toBeInTheDocument();
     expect(await screen.findByRole('button', { name: 'Renew login for 0x1111…1111' })).toBeInTheDocument();
+  });
+});
+
+describe('BorosAgentSetup — a failed approval rolls back', () => {
+  const OTHER = '0x3333333333333333333333333333333333333333';
+  const rejected = () => Object.assign(new Error('User rejected the request'), { code: 4001 });
+  afterEach(() => localStorage.clear());
+
+  it('restores the previous login and says it is still logged in', async () => {
+    const user = userEvent.setup();
+    installWallet();
+    localStorage.setItem('crossex.strategy.v1', JSON.stringify({ address: ROOT, walletUpgraded: true }));
+    approveAgent.mockImplementationOnce(async () => {
+      throw rejected();
+    });
+    const order: string[] = [];
+    server.use(
+      http.get('/api/boros/agent', () =>
+        HttpResponse.json(env(status({ configured: true, root: OTHER, rootMasked: '0x3333…3333', approval: 'approved' }))),
+      ),
+      http.put('/api/boros/agent', () => {
+        order.push('store');
+        return HttpResponse.json(env(status({ configured: true, root: ROOT })));
+      }),
+      http.post('/api/boros/agent/rollback', () => {
+        order.push('rollback');
+        return HttpResponse.json(env(status({ configured: true, root: OTHER, approval: 'approved' })));
+      }),
+    );
+    renderWithClient(<BorosLogInButton />);
+    await user.click(await screen.findByRole('button', { name: 'Log in to trade 0x1111…1111' }));
+    await user.click(await screen.findByRole('button', { name: 'Log in 0x1111…1111' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'You rejected the request in your wallet. 0x3333…3333 is still logged in.',
+    );
+    expect(order).toEqual(['store', 'rollback']);
+    expect(screen.queryByText(/^Logged in\./)).toBeNull();
+    expect(screen.getByRole('button', { name: 'Log in to trade 0x1111…1111' })).toBeEnabled();
+  });
+
+  it('names the login the server restored, not the one on screen before', async () => {
+    const user = userEvent.setup();
+    installWallet();
+    localStorage.setItem('crossex.strategy.v1', JSON.stringify({ address: ROOT, walletUpgraded: true }));
+    approveAgent.mockImplementationOnce(async () => {
+      throw rejected();
+    });
+    const OLDER = '0x4444444444444444444444444444444444444444';
+    server.use(
+      http.get('/api/boros/agent', () =>
+        HttpResponse.json(env(status({ configured: true, root: OTHER, rootMasked: '0x3333…3333', approval: 'approved' }))),
+      ),
+      http.put('/api/boros/agent', () => HttpResponse.json(env(status({ configured: true, root: ROOT })))),
+      http.post('/api/boros/agent/rollback', () =>
+        HttpResponse.json(env(status({ configured: true, root: OLDER, approval: 'approved' }))),
+      ),
+    );
+    renderWithClient(<BorosLogInButton />);
+    await user.click(await screen.findByRole('button', { name: 'Log in to trade 0x1111…1111' }));
+    await user.click(await screen.findByRole('button', { name: 'Log in 0x1111…1111' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'You rejected the request in your wallet. 0x4444…4444 is still logged in.',
+    );
+  });
+
+  it('with no previous login, a 409 from the rollback is ignored and only the error shows', async () => {
+    const user = userEvent.setup();
+    installWallet();
+    localStorage.setItem('crossex.strategy.v1', JSON.stringify({ address: ROOT, walletUpgraded: true }));
+    approveAgent.mockImplementationOnce(async () => {
+      throw rejected();
+    });
+    let rollbacks = 0;
+    server.use(
+      http.get('/api/boros/agent', () => HttpResponse.json(env(status()))),
+      http.put('/api/boros/agent', () => HttpResponse.json(env(status({ configured: true, root: ROOT })))),
+      http.post('/api/boros/agent/rollback', () => {
+        rollbacks += 1;
+        return HttpResponse.json(NOTHING_TO_RESTORE, { status: 409 });
+      }),
+    );
+    renderWithClient(<BorosLogInButton />);
+    await user.click(await screen.findByRole('button', { name: 'Log in to trade 0x1111…1111' }));
+
+    await waitFor(() => expect(rollbacks).toBe(1));
+    expect(await screen.findByRole('alert')).toHaveTextContent(/^You rejected the request in your wallet\.$/);
+  });
+});
+
+describe('BorosAgentSetup — waiting for Boros', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    localStorage.clear();
+  });
+
+  const seedRoot = () =>
+    localStorage.setItem('crossex.strategy.v1', JSON.stringify({ address: ROOT, walletUpgraded: true }));
+
+  it('keeps polling past a failed read and a read for another wallet', async () => {
+    const user = userEvent.setup();
+    installWallet();
+    seedRoot();
+    let fresh = 0;
+    server.use(
+      http.get('/api/boros/agent', ({ request }) => {
+        if (new URL(request.url).searchParams.get('fresh') !== '1') return HttpResponse.json(env(status()));
+        fresh += 1;
+        if (fresh === 1) return HttpResponse.error();
+        if (fresh === 2)
+          return HttpResponse.json(env(status({ configured: true, root: AGENT_ADDRESS, approval: 'approved' })));
+        return HttpResponse.json(env(status({ configured: true, root: ROOT.toUpperCase().replace('0X', '0x'), approval: 'approved' })));
+      }),
+      http.put('/api/boros/agent', () => HttpResponse.json(env(status({ configured: true, root: ROOT })))),
+    );
+    renderWithClient(<BorosLogInButton />);
+    await user.click(await screen.findByRole('button', { name: 'Log in to trade 0x1111…1111' }));
+    expect(await screen.findAllByText(/^Logged in\./, {}, { timeout: 6000 })).toHaveLength(2);
+    expect(fresh).toBe(3);
+  }, 10_000);
+
+  it('an older server (no approval field) counts as logged in', async () => {
+    const user = userEvent.setup();
+    installWallet();
+    seedRoot();
+    let stored = false;
+    server.use(
+      http.get('/api/boros/agent', () =>
+        HttpResponse.json(env(stored ? status({ configured: true, root: ROOT }) : status())),
+      ),
+      http.put('/api/boros/agent', () => {
+        stored = true;
+        return HttpResponse.json(env(status({ configured: true, root: ROOT })));
+      }),
+    );
+    renderWithClient(<BorosLogInButton />);
+    await user.click(await screen.findByRole('button', { name: 'Log in to trade 0x1111…1111' }));
+    const expiryText = await screen.findAllByText(/^Logged in\. This terminal can trade 0x1111…1111 until \d{1,2} \w+ \d{4}\.$/);
+    expect(expiryText).toHaveLength(2);
+  });
+
+  it.each([
+    ['unknown', 'Boros did not answer. If Log in shows again, the approval did not land.'],
+    ['not-approved', 'Boros has not confirmed the approval yet. Wait a minute. If Log in still shows, log in again.'],
+  ] as const)('approval stays %s: says so, no "Logged in"', async (approval, text) => {
+    vi.useFakeTimers({ shouldAdvanceTime: true, toFake: ['setTimeout'] });
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    installWallet();
+    seedRoot();
+    let stored = false;
+    server.use(
+      http.get('/api/boros/agent', () =>
+        HttpResponse.json(env(stored ? status({ configured: true, root: ROOT, approval }) : status())),
+      ),
+      http.put('/api/boros/agent', () => {
+        stored = true;
+        return HttpResponse.json(env(status({ configured: true, root: ROOT })));
+      }),
+    );
+    renderWithClient(<BorosLogInButton />);
+    await user.click(await screen.findByRole('button', { name: 'Log in to trade 0x1111…1111' }));
+    await waitFor(() => expect(stored).toBe(true));
+    for (let i = 0; i < 25 && !screen.queryByRole('alert'); i++) {
+      await vi.advanceTimersByTimeAsync(1500);
+    }
+    expect(await screen.findByRole('alert')).toHaveTextContent(text);
+    expect(screen.queryByText(/^Logged in\./)).toBeNull();
+  });
+
+  it('labels each step in the order it happens', async () => {
+    const user = userEvent.setup();
+    let giveAccount: (a: string[]) => void = () => {};
+    installWallet({
+      request: vi.fn(({ method }: { method: string }) => {
+        if (method === 'eth_requestAccounts') return new Promise((r) => (giveAccount = r));
+        if (method === 'eth_chainId') return Promise.resolve('0xa4b1');
+        return Promise.resolve(null);
+      }),
+    });
+    seedRoot();
+    let finishStore: () => void = () => {};
+    let finishApprove: () => void = () => {};
+    let finishRead: () => void = () => {};
+    let stored = false;
+    approveAgent.mockImplementationOnce(
+      () => new Promise((r) => (finishApprove = () => r({ txHash: '0xtx' }))),
+    );
+    server.use(
+      http.get('/api/boros/agent', async ({ request }) => {
+        const fresh = new URL(request.url).searchParams.get('fresh') === '1';
+        if (fresh) await new Promise<void>((r) => (finishRead = r));
+        const approval = fresh ? 'approved' : 'not-approved';
+        return HttpResponse.json(env(stored ? status({ configured: true, root: ROOT, approval }) : status()));
+      }),
+      http.put('/api/boros/agent', async () => {
+        await new Promise<void>((r) => (finishStore = r));
+        stored = true;
+        return HttpResponse.json(env(status({ configured: true, root: ROOT })));
+      }),
+    );
+    renderWithClient(<BorosLogInButton />);
+    await user.click(await screen.findByRole('button', { name: 'Log in to trade 0x1111…1111' }));
+
+    expect(await screen.findByRole('button', { name: 'Open your wallet…' })).toBeDisabled();
+    giveAccount([ROOT]);
+    expect(await screen.findByRole('button', { name: 'Saving the key on this machine…' })).toBeDisabled();
+    finishStore();
+    expect(await screen.findByRole('button', { name: 'Sign in your wallet…' })).toBeDisabled();
+    finishApprove();
+    expect(await screen.findByRole('button', { name: 'Waiting for Boros…' })).toBeDisabled();
+    finishRead();
+    expect(await screen.findAllByText(/^Logged in\./)).toHaveLength(2);
   });
 });

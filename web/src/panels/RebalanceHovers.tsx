@@ -1,3 +1,4 @@
+import { ChevronRight } from 'lucide-react';
 import { Fragment, useId, type ReactNode } from 'react';
 import type { EvenPlan, GateAccount, GoalKind, PlannedStep, Pool, RebalanceBucket, RebalanceJob } from '../api/types';
 import type { RebalanceView, RouteName, RoutePlan, TransferCoin, TransferView, WalletAfter } from '../api/types';
@@ -551,7 +552,7 @@ export function SpotLines({ transfer, job, onTransfer }: { transfer?: TransferVi
         <div key={line.coin} className="flex flex-wrap items-center gap-3 rounded border border-dashed border-ink-700 px-3 py-2 text-xs text-ink-300">
           <p>{line.text}</p>
           <button type="button" className="btn-link" onClick={() => onTransfer?.(line.coin, line.wallet)}>
-            Transfer ▸
+            Transfer <ChevronRight size={12} aria-hidden className="inline" />
           </button>
         </div>
       ))}

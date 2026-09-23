@@ -35,7 +35,7 @@ export const resetAgentApprovalCache = (): void => {
 export async function readAgentApproval(
   fetchImpl: FetchLike,
   input: { root: string; accountId: number; agentPrivateKey: string },
-  opts: { fresh?: boolean; now?: number; onApproved?: () => void } = {},
+  opts: { fresh?: boolean; now?: number; onApproved?: () => void; timeoutMs?: number } = {},
 ): Promise<AgentApproval> {
   let agent: string;
   try {
@@ -49,7 +49,11 @@ export async function readAgentApproval(
 
   let value: AgentApproval;
   try {
-    const expiry = await fetchBorosAgentExpiry(fetchImpl, { root: input.root, accountId: input.accountId, agent });
+    const expiry = await fetchBorosAgentExpiry(
+      fetchImpl,
+      { root: input.root, accountId: input.accountId, agent },
+      { timeoutMs: opts.timeoutMs },
+    );
     if (expiry === 0) value = { state: 'not-approved', expiry: null };
     else if (expiry <= Math.floor(nowMs / 1000)) value = { state: 'expired', expiry };
     else value = { state: 'approved', expiry };
@@ -57,11 +61,12 @@ export async function readAgentApproval(
     return { state: 'unknown', expiry: null };
   }
   cached = value.state === 'not-approved' ? null : { key, at: nowMs, value };
-  if (value.state === 'approved' && announced !== key) {
+  if (value.state === 'approved' && announced !== key && opts.onApproved) {
     // The first read of a new approval. On startup this fires once for the
-    // key already in place, which is a harmless extra sync.
+    // key already in place, which is a harmless extra sync. A read with no
+    // listener (the write-route gate) must not use up the announcement.
     announced = key;
-    opts.onApproved?.();
+    opts.onApproved();
   }
   return value;
 }

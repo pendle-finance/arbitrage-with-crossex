@@ -51,7 +51,7 @@ describe('BorrowChip', () => {
     renderWithClient(<BorrowChip onOpen={onOpen} />);
 
     const card = await hoverPill('Borrowing 147.05 USDC');
-    const link = within(card).getByRole('button', { name: 'Rebalance on Balances ▸' });
+    const link = within(card).getByRole('button', { name: 'Rebalance on Balances' });
     await userEvent.click(link);
     expect(onOpen).toHaveBeenCalledTimes(1);
   });
@@ -65,7 +65,7 @@ describe('BorrowChip', () => {
     await userEvent.keyboard('{Enter}');
 
     const card = await screen.findByRole('tooltip');
-    expect(within(card).getByRole('button', { name: 'Rebalance on Balances ▸' })).toHaveFocus();
+    expect(within(card).getByRole('button', { name: 'Rebalance on Balances' })).toHaveFocus();
   });
 
   it('USDT borrow names the CrossEx wallet', async () => {

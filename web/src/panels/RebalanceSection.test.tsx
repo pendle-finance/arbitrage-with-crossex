@@ -272,7 +272,7 @@ describe('RebalanceSection card', () => {
     await waitFor(() => expect(cardButtons().length).toBeGreaterThan(0));
     await user.click(cardButtons()[0]);
     const dialog = await screen.findByRole('dialog');
-    await user.click(await within(dialog).findByRole('button', { name: 'Transfer ▸' }));
+    await user.click(await within(dialog).findByRole('button', { name: 'Transfer' }));
     expect(onTransfer).toHaveBeenCalledWith('USDT', 'CROSSEX');
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
   });
@@ -575,10 +575,10 @@ describe('RebalanceSection gate spot and freshness', () => {
     );
     await user.click(screen.getByRole('button', { name: 'switch tab' }));
     expect(facts().Borrowing).toBe('244.00 USDC');
-    expect(within(region()).getByText(/^⟳ \d+s ago$/)).toBeInTheDocument();
+    expect(within(region()).getByText(/^\d+s ago$/)).toBeInTheDocument();
     await waitFor(() => expect(pending.land).toBeDefined());
     pending.land?.();
-    await waitFor(() => expect(within(region()).queryByText(/^⟳ \d+s ago$/)).toBeNull());
+    await waitFor(() => expect(within(region()).queryByText(/^\d+s ago$/)).toBeNull());
   });
 
   it('load error shows the message and Retry reads again', async () => {

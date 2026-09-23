@@ -22,6 +22,7 @@
  * distance on the book; "0.25% of the rate" would be a different number of
  * ticks on a 3% book than on a 30% one, which is not what a tolerance means.
  */
+import { ChevronRight } from 'lucide-react';
 import { ViewOnlyChip } from '../components/ViewOnlyChip';
 import { useEffect, useMemo, useState } from 'react';
 import { useTradeFlowOptional } from './TradeFlow';
@@ -1104,7 +1105,7 @@ export function BorosPairTicket({
         gasBalanceUsd={sim.data?.gasBalanceUsd}
         amount={gasTopUpStr}
         onAmountChange={setGasTopUpStr}
-        onTopUp={() => topUpGas.mutate(Number(gasTopUpStr))}
+        onTopUp={canTrade && address ? () => topUpGas.mutate({ amountUsd: Number(gasTopUpStr), address }) : undefined}
         busy={topUpGas.isPending}
       />
       {topUpGas.isSuccess && (
@@ -1218,11 +1219,16 @@ export function BorosPairTicket({
               ? 'Sending…'
               : closeOnlyLeg
                 ? `Market ${closeOnlyLeg} takes closes only. Tick Reduce-only.`
-                : onlyLeg
-                  ? `Confirm — complete leg ${onlyLeg} ▸`
-                  : mode === 'single'
-                    ? 'Confirm — 1 Boros market order ▸'
-                    : 'Confirm — 2 Boros market orders ▸'}
+                : (
+                    <>
+                      {onlyLeg
+                        ? `Confirm — complete leg ${onlyLeg}`
+                        : mode === 'single'
+                          ? 'Confirm — 1 Boros market order'
+                          : 'Confirm — 2 Boros market orders'}
+                      <ChevronRight size={14} aria-hidden />
+                    </>
+                  )}
           </HoldToConfirmButton>
           )}
           {/* Every market this will touch, NAMED before anything is sent —

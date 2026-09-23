@@ -1,8 +1,10 @@
+import { ArrowUpRight } from 'lucide-react';
 import { useQueryClient } from '@tanstack/react-query';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ApiError } from '../../api/client';
 import {
   qk,
+  refreshTelegramFresh,
   useCancelTelegramLink,
   useDisconnectTelegram,
   useStartTelegramLink,
@@ -12,6 +14,7 @@ import {
 } from '../../api/queries';
 import type { InterestFloor, TelegramInfo, TelegramLinkStatus } from '../../api/types';
 import { HoverCard } from '../../components/HoverCard';
+import { InlineConfirm } from '../../components/InlineConfirm';
 import { Spinner } from '../../components/Spinner';
 import { Switch } from '../../components/Switch';
 import { useToast } from '../../components/Toast';
@@ -21,6 +24,9 @@ import { short } from '../HomeControls';
 import { Ext } from '../onboardingBits';
 import { SetupRowFrame } from './SetupRowFrame';
 import type { SetupRowProps } from './setupState';
+
+/** The bot's page, where alert settings live per wallet. */
+const ALERTS_PAGE_FALLBACK = 'https://boros-bot-notification.pendle.finance/alerts';
 
 type Phase = 'idle' | 'waiting' | 'expired';
 
@@ -84,11 +90,22 @@ function syncFailure(info: TelegramInfo): string | null {
   return [`Last sync failed at ${fmtClock(error.at)}.`, since, 'Retrying.'].filter(Boolean).join(' ');
 }
 
+/** A stored key the bot has not answered for yet (the server just started):
+ * not "connected", which would read as a green tick and "None on". */
+const isChecking = (info: TelegramInfo | undefined): boolean =>
+  info?.state === 'connected' && info.settings === null && info.lastSyncAt === null && info.lastSyncError === null;
+
+const unlinkedOf = (info: TelegramInfo | undefined): string | null =>
+  info?.connected === true && info.state === 'connected' && info.unlinkedWallet ? info.unlinkedWallet : null;
+
 function stateLine(info: TelegramInfo | undefined, now: number): { text: string | null; isWarn: boolean } {
   if (!info) return { text: null, isWarn: false };
-  if (info.state === 'replaced') return { text: 'Connected on another terminal', isWarn: true };
-  if (info.state === 'removed') return { text: 'Removed on the Boros notifications page', isWarn: true };
+  // Not set up for this wallet, moved to another terminal, or removed on the
+  // bot page: each needs Set up, so each reads as a row never set up. The
+  // opened row says which wallet.
+  if (unlinkedOf(info) || info.state === 'replaced' || info.state === 'removed') return { text: null, isWarn: false };
   if (!info.connected) return { text: null, isWarn: false };
+  if (isChecking(info)) return { text: 'Checking…', isWarn: false };
   if (syncFailure(info)) return { text: 'Last sync failed', isWarn: true };
   const synced = info.lastSyncAt === null ? '' : ` · synced ${fmtSyncAge(now - info.lastSyncAt)}`;
   return { text: `${alertsLabel(alertSettings(info))}${synced}`, isWarn: false };
@@ -100,14 +117,27 @@ export function TelegramRow(p: SetupRowProps) {
   const start = useStartTelegramLink();
   const saveSettings = useTelegramSettings();
   const disconnect = useDisconnectTelegram();
+  const [askDisconnect, setAskDisconnect] = useState(false);
   const cancelLink = useCancelTelegramLink();
   const qc = useQueryClient();
+  // Opening the row asks the bot once, so a wallet stopped on the bot page
+  // shows here now, not at the next 5-minute sync. It waits for the mount read
+  // to land first: a read landing after it would make it drop its answer.
+  const askedBot = useRef(false);
+  const reading = telegram.isFetching;
+  useEffect(() => {
+    if (reading || askedBot.current) return;
+    askedBot.current = true;
+    refreshTelegramFresh(qc).catch(() => undefined);
+  }, [reading, qc]);
   const toast = useToast();
   const now = useNow(1000);
   const [phase, setPhase] = useState<Phase>('idle');
   const link = useTelegramLink(phase === 'waiting');
   const linkStatus = phase === 'waiting' ? link.data?.status : undefined;
-  const isConnected = info?.connected === true && info.state === 'connected';
+  const unlinked = unlinkedOf(info);
+  const checking = isChecking(info);
+  const isConnected = info?.connected === true && info.state === 'connected' && unlinked === null && !checking;
 
   useEffect(() => {
     if (linkStatus === 'confirmed') {
@@ -118,11 +148,11 @@ export function TelegramRow(p: SetupRowProps) {
     if (linkStatus === 'none') setPhase('idle');
   }, [linkStatus, qc]);
 
-  const openBorosPage = () => {
+  const openBorosPage = (addWallet: boolean) => {
     p.onOpen();
     const tab = window.open('', '_blank');
     if (tab) tab.opener = null;
-    start.mutate(undefined, {
+    start.mutate(addWallet ? { addWallet: true } : undefined, {
       onSuccess: (started) => {
         const pending: TelegramLinkStatus = { status: 'pending', url: started.url, expiresAt: started.expiresAt };
         qc.setQueryData(qk.telegramLink, pending);
@@ -138,9 +168,25 @@ export function TelegramRow(p: SetupRowProps) {
   const save = (body: Partial<AlertSettings>) => saveSettings.mutate(body, { onError: showError });
 
   const setupButton = (
-    <button type="button" className="btn-primary w-fit" disabled={start.isPending} onClick={openBorosPage}>
+    <button type="button" className="btn-primary w-fit" disabled={start.isPending} onClick={() => openBorosPage(false)}>
       {start.isPending && <Spinner />}
-      Set up ↗
+      Set up
+      <ArrowUpRight size={12} aria-hidden className="inline" />
+    </button>
+  );
+
+  // In the closed row the state already names the wallet, so the button is
+  // short: the long label covered the state text in the narrow Settings panel.
+  const addWalletButton = (wallet: string, compact = false) => (
+    <button
+      type="button"
+      className="btn-primary num w-fit"
+      disabled={start.isPending}
+      onClick={() => openBorosPage(true)}
+    >
+      {start.isPending && <Spinner />}
+      {compact ? 'Set up' : `Set up alerts for ${short(wallet)}`}
+      <ArrowUpRight size={12} aria-hidden className="inline" />
     </button>
   );
 
@@ -153,6 +199,44 @@ export function TelegramRow(p: SetupRowProps) {
     : null;
   const startError = start.error instanceof ApiError ? start.error.message : start.error ? String(start.error) : null;
   const pageUrl = link.data?.url ?? start.data?.url ?? null;
+
+  const disconnectLink = (
+    <button
+      type="button"
+      className="btn-link ml-auto text-ink-400"
+      disabled={disconnect.isPending || askDisconnect}
+      onClick={() => setAskDisconnect(true)}
+    >
+      Disconnect this terminal
+    </button>
+  );
+
+  // Asks first, like Log out: this stops alerts for every wallet on the terminal.
+  const disconnectBlock = (
+    <>
+      {askDisconnect && (
+        <InlineConfirm
+          tone="danger"
+          label="Disconnect this terminal?"
+          question="Disconnect this terminal? Telegram alerts stop for every wallet on it."
+          confirmLabel="Disconnect"
+          busyLabel="Disconnecting…"
+          busy={disconnect.isPending}
+          onConfirm={() => disconnect.mutate(undefined, { onSettled: () => setAskDisconnect(false) })}
+          onCancel={() => setAskDisconnect(false)}
+        />
+      )}
+      {disconnect.isError && (
+        <p role="alert" className="text-xs text-amber-300">
+          Could not reach the bot. Try again, or stop alerts for each wallet on the{' '}
+          <Ext href={info?.alertsPageUrl ?? ALERTS_PAGE_FALLBACK}>
+            Boros notifications page
+          </Ext>
+          .
+        </p>
+      )}
+    </>
+  );
 
   const connectedBody = (settings: AlertSettings, lastSyncAt: number | null) => (
     <>
@@ -192,45 +276,58 @@ export function TelegramRow(p: SetupRowProps) {
         />
         <p className="pl-9 text-xs text-ink-500">{ROLLOVER_CAPTION}</p>
       </div>
-      {info?.walletRefused ? (
-        <p className="num text-xs text-amber-300">{`Log in to move alerts to ${short(info.walletRefused)}.`}</p>
-      ) : (
-        info?.alertWallet && <p className="num text-xs text-ink-500">{`Alerts follow ${short(info.alertWallet)}`}</p>
-      )}
-      {lastSyncAt !== null ? (
-        <p className="num text-xs text-ink-400">
-          <HoverCard label={`Last synced ${fmtSyncAge(now - lastSyncAt)}`} widthPx={300}>
-            <div className="text-xs text-ink-200">{CAVEAT}</div>
-          </HoverCard>
-        </p>
-      ) : (
-        <p className="text-xs text-ink-500">{CAVEAT}</p>
+      <div className="flex flex-wrap items-center gap-x-1 gap-y-1 text-xs text-ink-400">
+        {info?.alertWallet && <span className="num">{`Alerts for ${short(info.alertWallet)} ·`}</span>}
+        {lastSyncAt !== null ? (
+          <span className="num">
+            <HoverCard label={`synced ${fmtSyncAge(now - lastSyncAt)}`} widthPx={300}>
+              <div className="text-xs text-ink-200">{CAVEAT}</div>
+            </HoverCard>
+          </span>
+        ) : (
+          <span className="text-ink-500">{CAVEAT}</span>
+        )}
+      </div>
+      {p.variant !== 'setup' && !askDisconnect && (
+        <div className="flex items-center gap-3">
+          <a
+            href={info?.alertsPageUrl ?? ALERTS_PAGE_FALLBACK}
+            target="_blank"
+            rel="noreferrer"
+            className="btn-link inline-flex items-center gap-1"
+          >
+            Boros notifications
+            <ArrowUpRight size={12} aria-hidden />
+          </a>
+          {disconnectLink}
+        </div>
       )}
       {p.variant === 'setup' ? (
         <button type="button" className="btn-primary w-fit" onClick={p.onDone}>
           Finish
         </button>
       ) : (
-        <>
-          <button
-            type="button"
-            className="btn-link text-ink-400"
-            disabled={disconnect.isPending}
-            onClick={() => disconnect.mutate()}
-          >
-            Disconnect this terminal
-          </button>
-          {disconnect.isError && (
-            <p role="alert" className="text-xs text-amber-300">
-              Could not reach the bot. Try again, or use Disconnect terminal on the{' '}
-              <Ext href={info?.alertsPageUrl ?? 'https://boros-bot-notification.pendle.finance/alerts'}>
-                Boros notifications page
-              </Ext>
-              .
-            </p>
-          )}
-        </>
+        disconnectBlock
       )}
+    </>
+  );
+
+  const unlinkedBody = (wallet: string) => (
+    <>
+      <p className="num text-xs text-ink-300">
+        {`Telegram alerts are set up per wallet. Set up once for ${short(wallet)}. You can use the same Telegram chat.`}
+      </p>
+      {phase === 'expired' && <p className="text-xs text-amber-300">Link expired. Set up again.</p>}
+      {startError && (
+        <p role="alert" className="text-xs text-amber-300">
+          {startError}
+        </p>
+      )}
+      <div className="flex flex-wrap items-center gap-3">
+        {addWalletButton(wallet)}
+        {p.variant !== 'setup' && !askDisconnect && disconnectLink}
+      </div>
+      {p.variant !== 'setup' && disconnectBlock}
     </>
   );
 
@@ -240,7 +337,9 @@ export function TelegramRow(p: SetupRowProps) {
         <Spinner />
         <span>Waiting for you to confirm on the Boros notifications page</span>
       </div>
-      {pageUrl && <Ext href={pageUrl}>Open the page again ↗</Ext>}
+      {pageUrl && <Ext href={pageUrl}>
+          Open the page again <ArrowUpRight size={12} aria-hidden className="inline" />
+        </Ext>}
       <button
         type="button"
         className="btn-ghost-xs w-fit"
@@ -297,17 +396,24 @@ export function TelegramRow(p: SetupRowProps) {
           </p>
         )
       }
-      setupAction={setupButton}
+      setupAction={checking ? <span /> : unlinked ? addWalletButton(unlinked, true) : setupButton}
       skipConsequence="Without Telegram alerts nothing warns you near liquidation, when interest starts, or before a pair matures."
     >
-      {info && isConnected
-        ? connectedBody(
-            { ...alertSettings(info), ...(saveSettings.isPending ? saveSettings.variables : {}) },
-            info.lastSyncAt,
-          )
-        : phase === 'waiting'
-          ? waitingBody
-          : idleBody}
+      {checking ? (
+        <div className="flex items-center gap-2 text-xs text-ink-300">
+          <Spinner />
+          <span>Checking with the Telegram bot…</span>
+        </div>
+      ) : unlinked && phase !== 'waiting'
+        ? unlinkedBody(unlinked)
+        : info && isConnected
+          ? connectedBody(
+              { ...alertSettings(info), ...(saveSettings.isPending ? saveSettings.variables : {}) },
+              info.lastSyncAt,
+            )
+          : phase === 'waiting'
+            ? waitingBody
+            : idleBody}
     </SetupRowFrame>
   );
 }

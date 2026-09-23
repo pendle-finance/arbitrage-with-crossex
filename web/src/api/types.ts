@@ -1564,7 +1564,7 @@ export interface TelegramInfo {
   lastSyncAt: number | null;
   lastSyncError: { at: number; message: string } | null;
   alertWallet?: string | null;
-  walletRefused?: string | null;
+  unlinkedWallet?: string | null;
   alertsPageUrl?: string;
   floors?: InterestFloor[];
 }

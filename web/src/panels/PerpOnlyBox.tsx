@@ -3,6 +3,7 @@
  * asset card's pairs table. (The strategy-box that once surrounded it is
  * gone; this is the one piece the asset view still needs.)
  */
+import { ChevronRight } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import type { ActionInput, CrossexPosition, PreviewResult } from '../api/types';
 import { Chip } from '../components/Chip';
@@ -305,7 +306,12 @@ export function ClosePairForm({
           scope={`close-both-${base}`}
           actions={actions}
           tone="red"
-          label="Close both ▸"
+          label={
+            <>
+              Close both
+              <ChevronRight size={14} aria-hidden />
+            </>
+          }
           // See CloseBoth: the per-mount pairGroupId would otherwise change the
           // intent identity on every remount and break idempotent recovery.
           // ⚠ `slip` is part of the intent — it rides the wire as `slippagePct`

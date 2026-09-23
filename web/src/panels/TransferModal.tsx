@@ -145,7 +145,7 @@ function FailedBody({
         <button type="button" className="btn-primary num" onClick={() => onRetry(retry)}>
           {retry === null ? 'Try again' : `Try again with ${fmtTransferAmount(retry)}`}
         </button>
-        <button type="button" className="btn-ghost-xs" onClick={onClose}>
+        <button type="button" className="btn" onClick={onClose}>
           Close
         </button>
       </div>

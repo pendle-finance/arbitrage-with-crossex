@@ -1,3 +1,4 @@
+import { Check } from 'lucide-react';
 import { useId, useState, type FormEvent } from 'react';
 import { ApiError } from '../api/client';
 import { usePutCredentials } from '../api/queries';
@@ -97,7 +98,7 @@ export function CredentialsForm({
 
       {saved && !put.isPending && err == null && (
         <p className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-300">
-          Credentials saved ✓
+          Credentials saved <Check size={12} aria-hidden className="inline" />
         </p>
       )}
 

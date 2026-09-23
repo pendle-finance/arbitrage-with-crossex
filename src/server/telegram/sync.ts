@@ -6,7 +6,7 @@ import { computeExposure } from '../../core/positions';
 import { TTL, type TtlCache } from '../cache';
 import { marginTiersFor } from '../routes/positions';
 import { readOwnerJson, writeOwnerOnlyJson } from '../secretFile';
-import { BotAuthError, BotWalletRefusedError, type BotClient } from './botClient';
+import { BotAuthError, type BotClient } from './botClient';
 import { readTelegramKey } from './keyFile';
 import type { TelegramStatus } from './status';
 
@@ -14,6 +14,8 @@ const SYNC_EVERY_MS = 300_000;
 const ROLL_FILE = 'roll-signals.json';
 const MAX_ROLLS_PER_COIN = 16;
 const ROLL_TARGET_TTL_MS = 60 * 60_000;
+/** Reasons that ask the bot again for a wallet it last called unlinked. */
+const RECHECK_REASONS = new Set(['settings', 'login', 'linked']);
 
 interface RollFile {
   at: number;
@@ -116,6 +118,7 @@ export function createTelegramSync(opts: TelegramSyncOptions): TelegramSync {
   let timer: ReturnType<typeof setInterval> | null = null;
   let running = false;
   let again = false;
+  let againRecheck = false;
   let stopped = false;
   let inFlight: Promise<void> = Promise.resolve();
   const rollPath = path.join(opts.dataDir, ROLL_FILE);
@@ -158,41 +161,51 @@ export function createTelegramSync(opts: TelegramSyncOptions): TelegramSync {
     }
   };
 
-  const syncOnce = async (): Promise<void> => {
+  const syncOnce = async (recheck: boolean): Promise<void> => {
     const key = readTelegramKey(opts.dataDir);
     if (key === null) return;
     const keyKept = (): boolean => readTelegramKey(opts.dataDir)?.keyHash === key.keyHash;
+    const wallet = opts.wallet?.()?.toLowerCase() ?? null;
+    const unlinked = opts.status.unlinkedWallet;
+    if (unlinked !== null && unlinked === wallet && !recheck) return;
+    if (unlinked !== null && unlinked !== wallet) opts.status.setUnlinkedWallet(null);
     try {
       const coins = await opts.readCoins();
       await probeRolls();
       const syncedAt = opts.now();
-      const settings = await opts.bot.putTriggers(key.key, {
+      const reply = await opts.bot.putTriggers(key.key, {
         syncedAt: new Date(syncedAt).toISOString(),
         port: opts.port,
         version: opts.version,
         coins: coins.map((coin) => ({ ...coin, rolls: rollsFor(coin.coin, syncedAt) })),
       });
-      if (keyKept()) opts.status.setSynced(syncedAt, settings, opts.wallet?.()?.toLowerCase() ?? null);
+      if (keyKept()) opts.status.setSynced(syncedAt, reply.settings, reply.wallet ?? wallet);
     } catch (err) {
       if (!keyKept()) return;
+      if (err instanceof BotAuthError && err.reason === 'wallet-unlinked' && wallet !== null) {
+        opts.status.setUnlinkedWallet(wallet);
+        return;
+      }
       if (err instanceof BotAuthError) opts.status.setAuth(err.reason);
-      if (err instanceof BotWalletRefusedError) opts.status.setWalletRefused(err.wallet);
       opts.status.setSyncError(opts.now(), err instanceof Error ? err.message : String(err));
     }
   };
 
-  const run = (): void => {
+  const run = (recheck = false): void => {
     if (stopped) return;
     if (running) {
       again = true;
+      againRecheck ||= recheck;
       return;
     }
     running = true;
-    inFlight = syncOnce().finally(() => {
+    inFlight = syncOnce(recheck).finally(() => {
       running = false;
       if (!again) return;
+      const next = againRecheck;
       again = false;
-      run();
+      againRecheck = false;
+      run(next);
     });
   };
 
@@ -200,9 +213,9 @@ export function createTelegramSync(opts: TelegramSyncOptions): TelegramSync {
     start() {
       if (timer !== null || stopped) return;
       run();
-      timer = setInterval(run, opts.everyMs ?? SYNC_EVERY_MS);
+      timer = setInterval(() => run(), opts.everyMs ?? SYNC_EVERY_MS);
     },
-    requestSync: run,
+    requestSync: (reason) => run(RECHECK_REASONS.has(reason)),
     setRollSignals(signals) {
       if (storeRollSignals(signals)) run();
     },
@@ -210,6 +223,7 @@ export function createTelegramSync(opts: TelegramSyncOptions): TelegramSync {
     stop() {
       stopped = true;
       again = false;
+      againRecheck = false;
       if (timer !== null) clearInterval(timer);
       timer = null;
     },

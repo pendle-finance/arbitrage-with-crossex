@@ -11,7 +11,7 @@ import { bpsOf, fmtAge, fmtUsd, parseSymbol, prettyVenue, sig } from '../lib/fmt
 import { useNow } from '../lib/useNow';
 import { estFeeOf, PreviewFallback, SlippageBadge, ViolationList } from './previewBits';
 import { FieldLabel } from './SymbolCombobox';
-import { ChevronDown } from 'lucide-react';
+import { ChevronDown, RotateCw } from 'lucide-react';
 
 export type ExecMode = 'market' | 'maker';
 export const TIMEOUT_CHOICES = [
@@ -128,7 +128,11 @@ export function EstimateCard({
         </span>
         <span className="flex items-center gap-2 text-[11px] text-ink-400">
           <span className="num">
-            {isError ? 'preview failed' : estimating ? 'estimating…' : age !== null ? `⟳ ${age} ago` : '⟳ —'}
+            {isError ? 'preview failed' : estimating ? 'estimating…' : (
+              <>
+                <RotateCw size={12} aria-hidden className="inline" /> {age !== null ? `${age} ago` : '—'}
+              </>
+            )}
           </span>
           {aside}
         </span>

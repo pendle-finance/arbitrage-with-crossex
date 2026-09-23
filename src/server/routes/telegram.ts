@@ -60,8 +60,18 @@ export function telegramRoutes(deps: AppDeps) {
     clearTimeout(timer);
   };
 
+  const syncNow = async (t: Telegram): Promise<void> => {
+    t.sync.requestSync('settings');
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const cap = new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, FIRST_SYNC_WAIT_MS);
+    });
+    await Promise.race([t.sync.idle(), cap]);
+    clearTimeout(timer);
+  };
+
   const info = (t: Telegram): TelegramInfo => {
-    const linkPending = t.link.status().status === 'pending';
+    const linkPending = t.link.status().status === 'pending' && t.status.unlinkedWallet === null;
     const keyed = hasKey(t);
     const state = stateOf(keyed, linkPending, t.status.auth);
     const alertsPageUrl = `${botBaseUrl(process.env)}/alerts`;
@@ -74,23 +84,27 @@ export function telegramRoutes(deps: AppDeps) {
       lastSyncAt: t.status.lastSyncAt,
       lastSyncError: t.status.lastSyncError,
       ...(t.status.alertWallet ? { alertWallet: t.status.alertWallet } : {}),
-      ...(t.status.walletRefused ? { walletRefused: t.status.walletRefused } : {}),
+      ...(t.status.unlinkedWallet ? { unlinkedWallet: t.status.unlinkedWallet } : {}),
       alertsPageUrl,
       floors,
     };
   };
 
   return async function plugin(app: FastifyInstance): Promise<void> {
-    app.get('/telegram', async (_req, reply) => {
+    app.get('/telegram', async (req, reply) => {
       const t = telegram();
-      await awaitFirstSync(t);
+      // ?fresh=1 (the Telegram row opening): ask the bot now, not at the next
+      // 5-minute sync, so a wallet stopped on the bot page shows here at once.
+      if ((req.query as { fresh?: string } | undefined)?.fresh === '1' && hasKey(t)) await syncNow(t);
+      else await awaitFirstSync(t);
       return reply.ok(info(t));
     });
 
-    app.post('/telegram/link', async (_req, reply) => {
+    app.post('/telegram/link', async (req, reply) => {
       const t = telegram();
+      const addWallet = (req.body as { addWallet?: unknown } | null)?.addWallet === true;
       try {
-        return reply.ok(await t.link.start());
+        return reply.ok(await t.link.start({ addWallet }));
       } catch {
         return refuse(reply, { code: 503, category: 'network', message: BOT_NOT_AVAILABLE, retryable: true });
       }
@@ -123,7 +137,9 @@ export function telegramRoutes(deps: AppDeps) {
           message: BOT_SILENT,
           retryable: true,
         });
-        t.status.setAuth(err.reason);
+        const wallet = t.wallet?.()?.toLowerCase() ?? null;
+        if (err.reason === 'wallet-unlinked' && wallet !== null) t.status.setUnlinkedWallet(wallet);
+        else t.status.setAuth(err.reason);
         return refuse(reply, { code: 409, category: 'validation', message: NOT_CONNECTED, retryable: false });
       }
       return reply.ok(info(t));
@@ -149,6 +165,7 @@ export function telegramRoutes(deps: AppDeps) {
       deleteTelegramKey(deps.dataDir);
       t.status.setAuth(null);
       t.status.setSettings(null);
+      t.status.setUnlinkedWallet(null);
       return reply.ok(info(t));
     });
   };

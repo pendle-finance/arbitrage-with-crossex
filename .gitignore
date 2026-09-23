@@ -1,4 +1,4 @@
-node_modules/
+node_modules
 # secrets — ignore every .env variant, but keep the placeholder template
 .env*
 !.env.example

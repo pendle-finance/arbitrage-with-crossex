@@ -13,6 +13,7 @@
  * drive. Executing only PREFILLS the pair ticket — submission stays behind its
  * hold-to-confirm control.
  */
+import { ArrowRight, ArrowUpRight } from 'lucide-react';
 import {
   memo,
   useCallback,
@@ -342,7 +343,7 @@ function LegRow({
       }`}
     >
       {kind}
-      {href && <span aria-hidden="true"> ↗</span>}
+      {href && <ArrowUpRight size={12} aria-hidden className="ml-0.5 inline" />}
     </span>
   );
   return (
@@ -718,7 +719,7 @@ const OpportunityCard = memo(function OpportunityCard({
                 )
               }
             >
-              Open this strategy →
+              Open this strategy <ArrowRight size={14} aria-hidden className="inline" />
             </button>
           </div>
         </div>

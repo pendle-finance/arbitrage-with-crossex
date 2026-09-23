@@ -89,7 +89,7 @@ export function AddressForm({
           {submitLabel}
         </button>
         {onCancel && (
-          <button type="button" className="btn-ghost-xs" onClick={onCancel}>
+          <button type="button" className="btn" onClick={onCancel}>
             Cancel
           </button>
         )}

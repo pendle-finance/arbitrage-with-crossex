@@ -12,7 +12,7 @@ import * as path from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { BorosOrderClient } from '../../src/core/boros/orders';
-import { resetAgentApprovalCache } from '../../src/server/borosAgentApproval';
+import { readAgentApproval, resetAgentApprovalCache } from '../../src/server/borosAgentApproval';
 import { borosStub } from '../helpers/boros-stub';
 import { HOST, makeTestApp } from './helpers/gate-nock';
 
@@ -29,6 +29,10 @@ const ENV_KEYS = [
   'BOROS_AGENT_PRIVATE_KEY',
   'BOROS_RPC_URLS',
   'BOROS_AGENT_EXPIRY',
+  'BOROS_PREV_ROOT_ADDRESS',
+  'BOROS_PREV_ACCOUNT_ID',
+  'BOROS_PREV_AGENT_PRIVATE_KEY',
+  'BOROS_PREV_AGENT_EXPIRY',
 ];
 
 beforeEach(() => {
@@ -266,5 +270,150 @@ describe('GET /api/boros/agent — sync alerts when a login lands', () => {
     await get();
     await get();
     expect(approvedCalls).toBe(1);
+  });
+});
+
+describe('keep the previous login until the new one is approved', () => {
+  const ROOT_B = `0x${'2'.repeat(40)}`;
+  const KEY_B = `0x${'b'.repeat(64)}`;
+  const EXPIRY_A = Math.floor(Date.now() / 1000) + 30 * 86400;
+  const rollback = () => app!.inject({ method: 'POST', url: '/api/boros/agent/rollback', headers: HOST });
+  const envFile = () => fs.readFileSync(envPath, 'utf8');
+
+  it('PUT stashes the login it replaces, and the reply carries no key', async () => {
+    await put({ ...good, accountId: 3, expiry: EXPIRY_A });
+    const res = await put({ root: ROOT_B, accountId: 0, agentPrivateKey: KEY_B });
+    expect(res.statusCode).toBe(200);
+    expect(envFile()).toContain(`BOROS_PREV_ROOT_ADDRESS=${ROOT}`);
+    expect(envFile()).toContain('BOROS_PREV_ACCOUNT_ID=3');
+    expect(envFile()).toContain(`BOROS_PREV_AGENT_PRIVATE_KEY=${AGENT_KEY}`);
+    expect(envFile()).toContain(`BOROS_PREV_AGENT_EXPIRY=${EXPIRY_A}`);
+    expect(process.env.BOROS_PREV_AGENT_PRIVATE_KEY).toBe(AGENT_KEY);
+    expect(process.env.BOROS_AGENT_PRIVATE_KEY).toBe(KEY_B);
+    expect(res.payload).not.toContain(AGENT_KEY);
+    expect(res.payload).not.toContain(KEY_B);
+  });
+
+  it('PUT with no login in place stashes nothing', async () => {
+    await put(good);
+    expect(envFile()).toContain('BOROS_PREV_AGENT_PRIVATE_KEY=\n');
+    expect(process.env.BOROS_PREV_AGENT_PRIVATE_KEY).toBeUndefined();
+  });
+
+  it('a second PUT before any approval keeps the first stash, the last login that worked', async () => {
+    await put(good);
+    await put({ root: ROOT_B, accountId: 0, agentPrivateKey: KEY_B });
+    await put({ root: ROOT_B, accountId: 0, agentPrivateKey: `0x${'c'.repeat(64)}` });
+    expect(process.env.BOROS_PREV_AGENT_PRIVATE_KEY).toBe(AGENT_KEY);
+  });
+
+  it('rollback restores the stash and hot-swaps the order client', async () => {
+    await put({ ...good, accountId: 3, expiry: EXPIRY_A });
+    await put({ root: ROOT_B, accountId: 0, agentPrivateKey: KEY_B });
+    const before = installed;
+
+    const res = await rollback();
+    expect(res.statusCode).toBe(200);
+    expect(res.json().data).toEqual({
+      configured: true,
+      root: ROOT,
+      rootMasked: '0x1111…1111',
+      accountId: 3,
+      expiry: EXPIRY_A,
+    });
+    expect(res.payload).not.toContain(AGENT_KEY);
+    expect(res.payload).not.toContain(KEY_B);
+    expect(installed).toBeDefined();
+    expect(installed).not.toBe(before);
+    expect(process.env.BOROS_ROOT_ADDRESS).toBe(ROOT);
+    expect(process.env.BOROS_AGENT_PRIVATE_KEY).toBe(AGENT_KEY);
+    expect(process.env.BOROS_ACCOUNT_ID).toBe('3');
+    expect(process.env.BOROS_AGENT_EXPIRY).toBe(String(EXPIRY_A));
+    expect(process.env.BOROS_PREV_AGENT_PRIVATE_KEY).toBeUndefined();
+    expect(envFile()).toContain(`BOROS_AGENT_PRIVATE_KEY=${AGENT_KEY}`);
+    expect(envFile()).not.toContain(KEY_B);
+  });
+
+  it('rollback with nothing stashed is refused and changes nothing', async () => {
+    await put(good);
+    const before = installed;
+    const res = await rollback();
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error.message).toBe('Nothing to restore.');
+    expect(installed).toBe(before);
+    expect(process.env.BOROS_AGENT_PRIVATE_KEY).toBe(AGENT_KEY);
+  });
+
+  it('DELETE clears the stash', async () => {
+    await put(good);
+    await put({ root: ROOT_B, accountId: 0, agentPrivateKey: KEY_B });
+    await app!.inject({ method: 'DELETE', url: '/api/boros/agent', headers: HOST });
+    expect(process.env.BOROS_PREV_AGENT_PRIVATE_KEY).toBeUndefined();
+    expect(envFile()).not.toContain(AGENT_KEY);
+    expect((await rollback()).statusCode).toBe(409);
+  });
+
+  it('clears the stash when the chain first shows the new key approved', async () => {
+    await app?.close();
+    resetAgentApprovalCache();
+    let expiryTime = 0;
+    let approvedCalls = 0;
+    app = makeTestApp({
+      borosFetch: async (url: string) => ({
+        ok: true,
+        status: 200,
+        json: async () => (url.includes('/agents/expiry-time') ? { expiryTime } : { results: [] }),
+      }),
+      getBorosOrders: () => installed,
+      borosAgent: {
+        envPath,
+        hardenConfigDir: true,
+        setOrderClient: (c) => (installed = c),
+        onApproved: () => (approvedCalls += 1),
+      },
+    });
+    await put(good);
+    await put({ root: ROOT_B, accountId: 0, agentPrivateKey: KEY_B });
+    const get = () => app!.inject({ method: 'GET', url: '/api/boros/agent?fresh=1', headers: HOST });
+
+    const pending = await get();
+    expect(process.env.BOROS_PREV_AGENT_PRIVATE_KEY).toBe(AGENT_KEY);
+    expect(pending.payload).not.toContain(AGENT_KEY);
+    expect(pending.payload).not.toContain(KEY_B);
+
+    expiryTime = Math.floor(Date.now() / 1000) + 86400;
+    await get();
+    expect(approvedCalls).toBe(1);
+    expect(process.env.BOROS_PREV_AGENT_PRIVATE_KEY).toBeUndefined();
+    expect(envFile()).not.toContain(AGENT_KEY);
+    expect((await rollback()).statusCode).toBe(409);
+  });
+});
+
+describe('readAgentApproval — a slow Boros', () => {
+  it('answers unknown when the read passes its timeout', async () => {
+    resetAgentApprovalCache();
+    const started = Date.now();
+    const approval = await readAgentApproval(
+      (_url, init) =>
+        new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => reject(new Error('aborted')));
+        }),
+      { root: ROOT, accountId: 0, agentPrivateKey: AGENT_KEY },
+      { timeoutMs: 50 },
+    );
+    expect(approval).toEqual({ state: 'unknown', expiry: null });
+    expect(Date.now() - started).toBeLessThan(2_000);
+  });
+
+  it('does not use up the approval announcement when read with no listener', async () => {
+    resetAgentApprovalCache();
+    const expiryTime = Math.floor(Date.now() / 1000) + 86400;
+    const fetchImpl = async () => ({ ok: true, status: 200, json: async () => ({ expiryTime }) });
+    const input = { root: ROOT, accountId: 0, agentPrivateKey: AGENT_KEY };
+    await readAgentApproval(fetchImpl, input, { fresh: true });
+    let calls = 0;
+    await readAgentApproval(fetchImpl, input, { fresh: true, onApproved: () => (calls += 1) });
+    expect(calls).toBe(1);
   });
 });
