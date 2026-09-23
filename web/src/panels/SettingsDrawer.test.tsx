@@ -112,7 +112,7 @@ describe('SettingsDrawer', () => {
       'aria-checked',
       'true',
     );
-    await user.hover(within(telegram).getByText('Last synced 3 min ago'));
+    await user.hover(within(telegram).getByText('synced 3 min ago'));
     expect(await screen.findByText(CAVEAT)).toBeInTheDocument();
     expect(within(telegram).getByRole('button', { name: 'Disconnect this terminal' })).toBeInTheDocument();
     expect(within(telegram).getByRole('button', { name: 'Collapse' })).toBeInTheDocument();
@@ -267,7 +267,7 @@ describe('SettingsDrawer', () => {
     mockAllDone({ ...connectedTelegram(), alertWallet: WALLET });
     renderDrawer();
     await clickEdit('Telegram alerts');
-    expect(await within(row('Telegram alerts')).findByText('Alerts for 0xab18…ed9d')).toBeInTheDocument();
+    expect(await within(row('Telegram alerts')).findByText('Alerts for 0xab18…ed9d ·')).toBeInTheDocument();
   });
 
   it('telegram is not set up for a wallet the bot has no link for', async () => {

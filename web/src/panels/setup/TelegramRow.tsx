@@ -106,6 +106,7 @@ export function TelegramRow(p: SetupRowProps) {
   const start = useStartTelegramLink();
   const saveSettings = useTelegramSettings();
   const disconnect = useDisconnectTelegram();
+  const [askDisconnect, setAskDisconnect] = useState(false);
   const cancelLink = useCancelTelegramLink();
   const qc = useQueryClient();
   const toast = useToast();
@@ -174,19 +175,45 @@ export function TelegramRow(p: SetupRowProps) {
   const startError = start.error instanceof ApiError ? start.error.message : start.error ? String(start.error) : null;
   const pageUrl = link.data?.url ?? start.data?.url ?? null;
 
+  const disconnectLink = (
+    <button
+      type="button"
+      className="btn-link ml-auto text-ink-400"
+      disabled={disconnect.isPending || askDisconnect}
+      onClick={() => setAskDisconnect(true)}
+    >
+      Disconnect this terminal
+    </button>
+  );
+
+  // Asks first, like Log out: this stops alerts for every wallet on the terminal.
   const disconnectBlock = (
     <>
-      <button
-        type="button"
-        className="btn-link text-ink-400"
-        disabled={disconnect.isPending}
-        onClick={() => disconnect.mutate()}
-      >
-        Disconnect this terminal
-      </button>
+      {askDisconnect && (
+        <div
+          role="alertdialog"
+          aria-label="Disconnect this terminal?"
+          className="flex flex-col gap-2 rounded-lg border border-rose-500/40 bg-rose-500/5 px-3 py-2 text-xs text-rose-200"
+        >
+          <p>Disconnect this terminal? Telegram alerts stop for every wallet on it.</p>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              className="btn !border-rose-500/60 !text-rose-300"
+              disabled={disconnect.isPending}
+              onClick={() => disconnect.mutate(undefined, { onSettled: () => setAskDisconnect(false) })}
+            >
+              {disconnect.isPending ? 'Disconnecting…' : 'Disconnect'}
+            </button>
+            <button type="button" className="btn-ghost-xs" onClick={() => setAskDisconnect(false)}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
       {disconnect.isError && (
         <p role="alert" className="text-xs text-amber-300">
-          Could not reach the bot. Try again, or use Disconnect terminal on the{' '}
+          Could not reach the bot. Try again, or stop alerts for each wallet on the{' '}
           <Ext href={info?.alertsPageUrl ?? 'https://boros-bot-notification.pendle.finance/alerts'}>
             Boros notifications page
           </Ext>
@@ -234,16 +261,19 @@ export function TelegramRow(p: SetupRowProps) {
         />
         <p className="pl-9 text-xs text-ink-500">{ROLLOVER_CAPTION}</p>
       </div>
-      {info?.alertWallet && <p className="num text-xs text-ink-500">{`Alerts for ${short(info.alertWallet)}`}</p>}
-      {lastSyncAt !== null ? (
-        <p className="num text-xs text-ink-400">
-          <HoverCard label={`Last synced ${fmtSyncAge(now - lastSyncAt)}`} widthPx={300}>
-            <div className="text-xs text-ink-200">{CAVEAT}</div>
-          </HoverCard>
-        </p>
-      ) : (
-        <p className="text-xs text-ink-500">{CAVEAT}</p>
-      )}
+      <div className="flex flex-wrap items-center gap-x-1 gap-y-1 text-xs text-ink-400">
+        {info?.alertWallet && <span className="num">{`Alerts for ${short(info.alertWallet)} ·`}</span>}
+        {lastSyncAt !== null ? (
+          <span className="num">
+            <HoverCard label={`synced ${fmtSyncAge(now - lastSyncAt)}`} widthPx={300}>
+              <div className="text-xs text-ink-200">{CAVEAT}</div>
+            </HoverCard>
+          </span>
+        ) : (
+          <span className="text-ink-500">{CAVEAT}</span>
+        )}
+        {p.variant !== 'setup' && disconnectLink}
+      </div>
       {p.variant === 'setup' ? (
         <button type="button" className="btn-primary w-fit" onClick={p.onDone}>
           Finish
@@ -265,7 +295,10 @@ export function TelegramRow(p: SetupRowProps) {
           {startError}
         </p>
       )}
-      {addWalletButton(wallet)}
+      <div className="flex flex-wrap items-center gap-3">
+        {addWalletButton(wallet)}
+        {p.variant !== 'setup' && disconnectLink}
+      </div>
       {p.variant !== 'setup' && disconnectBlock}
     </>
   );

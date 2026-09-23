@@ -18,7 +18,7 @@ const OTHER = `0x5c1f${'2'.repeat(32)}a2e0`;
 const LINK_URL = 'https://boros-bot-notification.pendle.finance/alerts?crossex=abc123';
 const BOT_DOWN = 'Telegram alerts are not available yet. Try again later.';
 const ALERTS_URL = 'https://boros-bot-notification.pendle.finance/alerts';
-const BOT_UNREACHABLE = 'Could not reach the bot. Try again, or use Disconnect terminal on the Boros notifications page.';
+const BOT_UNREACHABLE = 'Could not reach the bot. Try again, or stop alerts for each wallet on the Boros notifications page.';
 
 const approveAgent = vi.fn(async () => ({ txHash: '0xtx' }));
 vi.mock('../../lib/borosAgentApi', () => ({
@@ -316,7 +316,7 @@ describe('SetupPage · Telegram alerts', () => {
     expect(screen.getByText('a 20% price move would liquidate a leg')).toBeInTheDocument();
     expect(screen.getAllByText('borrowing').length).toBeGreaterThan(0);
     expect(screen.getAllByText(/a wallet starts/).length).toBeGreaterThan(0);
-    await user.hover(screen.getByText(/^Last synced \d+ s ago$/));
+    await user.hover(screen.getByText(/^synced \d+ s ago$/));
     expect(
       await screen.findByText(
         "Alerts use the terminal's last sync, at most 5 min old. A trade made outside the terminal reaches the alerts after the next sync.",
@@ -619,10 +619,30 @@ describe('setup rows in Settings', () => {
     );
     renderWithClient(<TelegramRow {...settingsRow({ open: true })} />);
     await user.click(await screen.findByRole('button', { name: 'Disconnect this terminal' }));
+    await user.click(within(screen.getByRole('alertdialog', { name: 'Disconnect this terminal?' })).getByRole('button', { name: 'Disconnect' }));
 
     expect((await screen.findByRole('alert')).textContent).toBe(BOT_UNREACHABLE);
     expect(screen.getByRole('link', { name: 'Boros notifications page' })).toHaveAttribute('href', ALERTS_URL);
     expect(screen.getByRole('button', { name: 'Disconnect this terminal' })).toBeInTheDocument();
+  });
+
+  it('Disconnect asks first; Cancel sends nothing', async () => {
+    const user = userEvent.setup();
+    let deletes = 0;
+    mockWorld({ telegram: connectedTelegram() });
+    server.use(
+      http.delete('/api/telegram', () => {
+        deletes += 1;
+        return HttpResponse.json({ ok: true, data: null });
+      }),
+    );
+    renderWithClient(<TelegramRow {...settingsRow({ open: true })} />);
+    await user.click(await screen.findByRole('button', { name: 'Disconnect this terminal' }));
+    const ask = screen.getByRole('alertdialog', { name: 'Disconnect this terminal?' });
+    expect(ask).toHaveTextContent('Disconnect this terminal? Telegram alerts stop for every wallet on it.');
+    await user.click(within(ask).getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(deletes).toBe(0);
   });
 
   it('a disconnect error links to the alerts page the API configured', async () => {
@@ -639,6 +659,7 @@ describe('setup rows in Settings', () => {
     );
     renderWithClient(<TelegramRow {...settingsRow({ open: true })} />);
     await user.click(await screen.findByRole('button', { name: 'Disconnect this terminal' }));
+    await user.click(within(screen.getByRole('alertdialog', { name: 'Disconnect this terminal?' })).getByRole('button', { name: 'Disconnect' }));
 
     expect(await screen.findByRole('alert')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Boros notifications page' })).toHaveAttribute('href', STAGING_ALERTS_URL);
