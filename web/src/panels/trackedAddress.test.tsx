@@ -21,8 +21,11 @@ const stored = (): Record<string, unknown> | null => JSON.parse(localStorage.get
 const seed = (value: Record<string, unknown>) => localStorage.setItem(STRATEGY_STORAGE_KEY, JSON.stringify(value));
 const row = () => screen.getByRole('region', { name: 'Boros wallet' });
 
+let tracked: ReturnType<typeof useTrackedAddress> | null = null;
+
 function Probe() {
-  const { address, followWallet } = useTrackedAddress();
+  tracked = useTrackedAddress();
+  const { address, followWallet } = tracked;
   return <p data-testid="probe">{`${address ?? 'none'}|${followWallet ? 'follow' : 'fixed'}`}</p>;
 }
 
@@ -36,6 +39,8 @@ beforeEach(() => {
 });
 afterEach(() => {
   removeFakeWallet();
+  tracked = null;
+  localStorage.clear();
   vi.useRealTimers();
   vi.restoreAllMocks();
 });
@@ -43,7 +48,7 @@ afterEach(() => {
 describe('follow the browser wallet', () => {
   it('Connect wallet only asks for the account and turns follow on', async () => {
     const user = userEvent.setup();
-    const wallet = installFakeWallet({ accounts: [WALLET] });
+    const wallet = installFakeWallet({ accounts: [WALLET], ethAccounts: async () => [] });
     mockWorld({ keyConfigured: true });
     renderWithClient(<SetupPage onFinish={vi.fn()} onOpenGuide={vi.fn()} />);
     await user.click(await screen.findByRole('button', { name: 'Connect wallet' }));
@@ -108,37 +113,124 @@ describe('follow the browser wallet', () => {
     expect(await screen.findByText(`${SECOND}|follow`)).toBeInTheDocument();
   });
 
-  it('with follow off, nothing listens and nothing is read on load', async () => {
+  it('an old pin with no manual flag follows the browser account on load', async () => {
     const wallet = installFakeWallet({ accounts: [SECOND] });
     seed({ address: WALLET, walletUpgraded: true });
     mockWorld({ keyConfigured: true, agent: agentStatus({ configured: true, root: WALLET }) });
     renderWithClient(<Probe />);
 
-    expect(await screen.findByText(`${WALLET}|fixed`)).toBeInTheDocument();
-    expect(wallet.listenerCount()).toBe(0);
-    expect(wallet.methods()).toEqual([]);
+    expect(await screen.findByText(`${SECOND}|follow`)).toBeInTheDocument();
+    expect(stored()).toEqual({ address: SECOND, walletUpgraded: true, followWallet: true });
+    expect(wallet.methods()).not.toContain('eth_requestAccounts');
   });
 
-  it('the one-time upgrade turns follow on when the browser account is the root', async () => {
+  it('the upgrade follows the browser account when it is not the root, with no note', async () => {
+    const wallet = installFakeWallet({ accounts: [SECOND] });
+    seed({ address: PASTED });
+    mockWorld({ keyConfigured: true, agent: agentStatus({ configured: true, root: WALLET }) });
+    renderWithClient(<Probe />);
+
+    expect(await screen.findByText(`${SECOND}|follow`)).toBeInTheDocument();
+    expect(stored()).toEqual({ address: SECOND, walletUpgraded: true, followWallet: true });
+    expect(tracked?.upgradeNote).toBeNull();
+    expect(wallet.methods()).not.toContain('eth_requestAccounts');
+  });
+
+  it('the upgrade follows the browser account when it is the root, with no note', async () => {
     installFakeWallet({ accounts: [WALLET] });
     seed({ address: PASTED });
     mockWorld({ keyConfigured: true, agent: agentStatus({ configured: true, root: WALLET }) });
     renderWithClient(<Probe />);
 
     expect(await screen.findByText(`${WALLET}|follow`)).toBeInTheDocument();
-    expect(stored()).toEqual({ address: WALLET, walletUpgraded: true, walletUpgradeNote: WALLET, followWallet: true });
+    expect(stored()).toEqual({ address: WALLET, walletUpgraded: true, followWallet: true });
   });
 
-  it('the one-time upgrade leaves follow off when the browser shows another account', async () => {
-    const wallet = installFakeWallet({ accounts: [SECOND] });
+  it('with no browser account, the upgrade shows the root once, with the note', async () => {
+    installFakeWallet({ accounts: [] });
+    seed({ address: PASTED });
+    mockWorld({ keyConfigured: true, agent: agentStatus({ configured: true, root: WALLET }) });
+    const first = renderWithClient(<Probe />);
+
+    expect(await screen.findByText(`${WALLET}|fixed`)).toBeInTheDocument();
+    expect(stored()).toEqual({ address: WALLET, walletUpgraded: true, walletUpgradeNote: WALLET });
+    expect(tracked?.upgradeNote).toBe(WALLET);
+    first.unmount();
+
+    seed({ address: PASTED, walletUpgraded: true });
+    renderWithClient(<Probe />);
+    await waitFor(() => expect(tracked?.address).toBe(PASTED));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(screen.getByTestId('probe')).toHaveTextContent(`${PASTED}|fixed`);
+    expect(stored()).toEqual({ address: PASTED, walletUpgraded: true });
+  });
+
+  it('with no browser wallet at all, the upgrade shows the root with the note', async () => {
     seed({ address: PASTED });
     mockWorld({ keyConfigured: true, agent: agentStatus({ configured: true, root: WALLET }) });
     renderWithClient(<Probe />);
 
     expect(await screen.findByText(`${WALLET}|fixed`)).toBeInTheDocument();
+    expect(stored()).toEqual({ address: WALLET, walletUpgraded: true, walletUpgradeNote: WALLET });
+  });
+
+  it('a wallet locked at load follows the account it switches to', async () => {
+    const wallet = installFakeWallet({ accounts: [] });
+    seed({ address: WALLET, walletUpgraded: true });
+    mockWorld({ keyConfigured: true, agent: agentStatus({ configured: true, root: WALLET }) });
+    renderWithClient(<Probe />);
+    await waitFor(() => expect(wallet.listenerCount()).toBe(1));
     await waitFor(() => expect(wallet.methods()).toContain('eth_accounts'));
     expect(screen.getByTestId('probe')).toHaveTextContent(`${WALLET}|fixed`);
-    expect(wallet.methods()).not.toContain('eth_requestAccounts');
+
+    act(() => wallet.emitAccounts([SECOND]));
+    expect(await screen.findByText(`${SECOND}|follow`)).toBeInTheDocument();
+    expect(stored()).toEqual({ address: SECOND, walletUpgraded: true, followWallet: true });
+  });
+
+  it('a manual Track ends when the browser wallet switches account', async () => {
+    const wallet = installFakeWallet({ accounts: [WALLET] });
+    seed({ address: WALLET, walletUpgraded: true, followWallet: true });
+    mockWorld({ keyConfigured: true, agent: agentStatus({ configured: true, root: WALLET }) });
+    renderWithClient(<Probe />);
+    await waitFor(() => expect(wallet.listenerCount()).toBe(1));
+
+    act(() => tracked?.setAddress(PASTED));
+    expect(await screen.findByText(`${PASTED}|fixed`)).toBeInTheDocument();
+    expect(stored()).toEqual({ address: PASTED, walletUpgraded: true, manual: true });
+
+    act(() => wallet.emitAccounts([SECOND]));
+    expect(await screen.findByText(`${SECOND}|follow`)).toBeInTheDocument();
+    expect(stored()).toEqual({ address: SECOND, walletUpgraded: true, followWallet: true });
+  });
+
+  it('a manual Track survives a reload while the wallet stays on its account', async () => {
+    const wallet = installFakeWallet({ accounts: [SECOND] });
+    seed({ address: PASTED, walletUpgraded: true, manual: true });
+    mockWorld({ keyConfigured: true, agent: agentStatus({ configured: true, root: WALLET }) });
+    renderWithClient(<Probe />);
+    await waitFor(() => expect(wallet.methods()).toContain('eth_accounts'));
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(screen.getByTestId('probe')).toHaveTextContent(`${PASTED}|fixed`);
+    expect(stored()).toEqual({ address: PASTED, walletUpgraded: true, manual: true });
+    expect(wallet.listenerCount()).toBe(1);
+  });
+
+  it('Use my browser wallet clears a manual Track', async () => {
+    installFakeWallet({ accounts: [SECOND] });
+    seed({ address: PASTED, walletUpgraded: true, manual: true });
+    mockWorld({ keyConfigured: true, agent: agentStatus({ configured: true, root: WALLET }) });
+    renderWithClient(<Probe />);
+    expect(await screen.findByText(`${PASTED}|fixed`)).toBeInTheDocument();
+
+    act(() => tracked?.followBrowserWallet(SECOND));
+    expect(await screen.findByText(`${SECOND}|follow`)).toBeInTheDocument();
+    expect(stored()).toEqual({ address: SECOND, walletUpgraded: true, followWallet: true });
   });
 });
 

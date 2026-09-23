@@ -15,6 +15,7 @@ export interface Stored {
   walletUpgraded?: true;
   walletUpgradeNote?: string;
   followWallet?: true;
+  manual?: true;
 }
 
 /** Read the persisted shape. Older builds also wrote `since` / `sinceByAddress`
@@ -23,7 +24,7 @@ export interface Stored {
  * — so unknown fields are simply ignored. */
 export function loadStored(): Stored {
   return readJson<Stored>(STRATEGY_STORAGE_KEY, { address: null }, (parsed) => {
-    const p = parsed as { address?: unknown; walletUpgraded?: unknown; walletUpgradeNote?: unknown; followWallet?: unknown } | null;
+    const p = parsed as { address?: unknown; walletUpgraded?: unknown; walletUpgradeNote?: unknown; followWallet?: unknown; manual?: unknown } | null;
     const address =
       typeof p?.address === 'string' && EVM_ADDRESS_RE.test(p.address) ? p.address : null;
     return {
@@ -33,6 +34,7 @@ export function loadStored(): Stored {
         ? { walletUpgradeNote: p.walletUpgradeNote }
         : {}),
       ...(p?.followWallet === true ? { followWallet: true as const } : {}),
+      ...(p?.manual === true ? { manual: true as const } : {}),
     };
   });
 }
