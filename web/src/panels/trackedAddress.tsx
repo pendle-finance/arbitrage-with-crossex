@@ -11,9 +11,7 @@ import { useLoginInFlight } from '../lib/loginInFlight';
 
 interface TrackedAddressApi {
   address: string | null;
-  setAddress: (address: string | null) => void;
   followBrowserWallet: (address: string) => void;
-  followWallet: boolean;
   /** Open the settings drawer — the one place the address is edited. */
   openSettings: () => void;
   openLogin: () => void;
@@ -29,7 +27,6 @@ function persist(prev: Stored, next: Partial<Stored>): Stored {
   const merged: Stored = { ...prev, ...next };
   if (merged.walletUpgradeNote === undefined) delete merged.walletUpgradeNote;
   if (merged.followWallet === undefined) delete merged.followWallet;
-  if (merged.manual === undefined) delete merged.manual;
   writeJson(STRATEGY_STORAGE_KEY, merged);
   return merged;
 }
@@ -38,13 +35,12 @@ function followed(prev: Stored, address: string): Stored {
   const already =
     prev.followWallet &&
     prev.walletUpgraded &&
-    !prev.manual &&
     prev.walletUpgradeNote === undefined &&
     prev.address !== null &&
     isSameAddress(prev.address, address);
   return already
     ? prev
-    : persist(prev, { address, followWallet: true, walletUpgraded: true, walletUpgradeNote: undefined, manual: undefined });
+    : persist(prev, { address, followWallet: true, walletUpgraded: true, walletUpgradeNote: undefined });
 }
 
 export function TrackedAddressProvider({
@@ -67,7 +63,7 @@ export function TrackedAddressProvider({
     let live = true;
     void readWalletAccount().then((account) => {
       if (!live) return;
-      if (account) setStored((prev) => (prev.manual ? prev : followed(prev, account)));
+      if (account) setStored((prev) => followed(prev, account));
       setWalletRead(account ? 'account' : 'none');
     });
     const stop = watchWalletAccount((account) => setStored((prev) => followed(prev, account)));
@@ -78,31 +74,26 @@ export function TrackedAddressProvider({
   }, []);
 
   useEffect(() => {
-    if (walletRead !== 'none' || stored.walletUpgraded || stored.manual || !root) return;
+    if (walletRead !== 'none' || stored.walletUpgraded || !root) return;
     const sameAsRoot = stored.address !== null && isSameAddress(stored.address, root);
     update(
       sameAsRoot
         ? { walletUpgraded: true }
         : { address: root, walletUpgraded: true, walletUpgradeNote: stored.address ? root : undefined },
     );
-  }, [walletRead, stored.walletUpgraded, stored.manual, stored.address, root, update]);
-
-  const following = stored.followWallet === true;
+  }, [walletRead, stored.walletUpgraded, stored.address, root, update]);
 
   const api = useMemo<TrackedAddressApi>(
     () => ({
       address: stored.address,
-      setAddress: (address) =>
-        update({ address, walletUpgradeNote: undefined, followWallet: undefined, manual: address ? true : undefined }),
       followBrowserWallet: (address) =>
-        update({ address, walletUpgradeNote: undefined, followWallet: true, manual: undefined }),
-      followWallet: following,
+        update({ address, walletUpgradeNote: undefined, followWallet: true }),
       openSettings: () => onOpenSettings?.(),
       openLogin: () => (onOpenLogin ?? onOpenSettings)?.(),
       upgradeNote: stored.walletUpgradeNote ?? null,
       dismissUpgradeNote: () => update({ walletUpgradeNote: undefined }),
     }),
-    [stored, following, update, onOpenSettings, onOpenLogin],
+    [stored, update, onOpenSettings, onOpenLogin],
   );
 
   return <TrackedAddressCtx.Provider value={api}>{children}</TrackedAddressCtx.Provider>;
