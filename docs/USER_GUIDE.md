@@ -13,7 +13,7 @@ In this guide, we will cover:
 2. **Enable CrossEx** - switch on the CrossEx feature at [gate.com/crossex](https://www.gate.com/crossex). The API key permission and the transfer step both need it enabled first.
 3. **Fund CrossEx** - move funds into [CrossEx](https://www.gate.com/crossex), Gate's cross-exchange margin account.
 4. **Make an API key** - in [API Management](https://www.gate.com/myaccount/api_key_manage), create an APIv4 key for your Trading account. Set IP Permissions to "Later" unless your machine has a consistent IP. Under Permissions, turn on:
-   - **Cross-Exchange**: Read and Write - trade and move money
+   - **Cross-Exchange**: Read and Write - trade and transfer
    - **Spot Trading**: Read Only - see spot balances
    - Leave all others off, including Withdrawal
 
