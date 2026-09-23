@@ -43,6 +43,9 @@ export interface BotClient {
   deleteTerminal(key: string): Promise<void>;
 }
 
+/** How a bot without the link wallet check refuses the field (Nest's whitelist). */
+const OLD_BOT_NO_WALLET = /property wallet should not exist/;
+
 export class BotAuthError extends Error {
   constructor(readonly reason: BotAuthReason) {
     super(`The Telegram bot refused this terminal's key (${reason}).`);
@@ -128,10 +131,17 @@ export function createBotClient(opts: BotClientOptions): BotClient {
   return {
     async requestLink(body, key) {
       const wallet = opts.wallet?.() ?? null;
-      const answer = await call('POST', '/link-requests', {
-        body: wallet === null ? body : { ...body, wallet: wallet.toLowerCase() },
-        key,
-        withoutWallet: true,
+      const send = (withWallet: boolean) =>
+        call('POST', '/link-requests', {
+          body: withWallet && wallet !== null ? { ...body, wallet: wallet.toLowerCase() } : body,
+          key,
+          withoutWallet: true,
+        });
+      // A bot older than the wallet check refuses the unknown field. Linking
+      // without it still works there; that bot just does not check the wallet.
+      const answer = await send(true).catch((err: unknown) => {
+        if (wallet !== null && err instanceof Error && OLD_BOT_NO_WALLET.test(err.message)) return send(false);
+        throw err;
       });
       const link = answer as { code?: unknown; expiresAt?: unknown } | null;
       if (typeof link?.code !== 'string' || typeof link.expiresAt !== 'string') {

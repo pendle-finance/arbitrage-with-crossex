@@ -75,6 +75,25 @@ describe('x-terminal-wallet header', () => {
     expect(none.calls[0].body).toEqual({ keyHash: 'h', version: '1' });
   });
 
+  it('an older bot that refuses the wallet field gets the request again without it', async () => {
+    const stub = stubWith(async (call) =>
+      (call.body as { wallet?: string } | undefined)?.wallet
+        ? { status: 400, body: { message: ['property wallet should not exist'], error: 'Bad Request', statusCode: 400 } }
+        : linkBody(),
+    );
+    await expect(stub.bot.requestLink({ keyHash: 'h', version: '1' })).resolves.toMatchObject({ code: 'the-code' });
+    expect(stub.calls.map((c) => c.body)).toEqual([
+      { keyHash: 'h', version: '1', wallet: ROOT.toLowerCase() },
+      { keyHash: 'h', version: '1' },
+    ]);
+  });
+
+  it('any other 400 is not retried', async () => {
+    const stub = stubWith(async () => ({ status: 400, body: { message: 'keyHash must be 64 lowercase hex characters' } }));
+    await expect(stub.bot.requestLink({ keyHash: 'h', version: '1' })).rejects.toThrow();
+    expect(stub.calls).toHaveLength(1);
+  });
+
   it('a wallet-unlinked answer is thrown once, with no proof call', async () => {
     const stub = stubWith(async () => unlinkedBody);
     await expect(stub.bot.getTerminal('k')).rejects.toEqual(new BotAuthError('wallet-unlinked'));
