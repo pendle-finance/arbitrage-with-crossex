@@ -10,12 +10,10 @@ export function SettingsDrawer({
   open,
   onClose,
   focusStep = null,
-  onOpenGuide,
 }: {
   open: boolean;
   onClose: () => void;
   focusStep?: SetupStep | null;
-  onOpenGuide?: () => void;
 }) {
   const version = useVersion(); // same query key as the header pill — deduped
   const install = version.data?.install ?? null;
@@ -34,7 +32,6 @@ export function SettingsDrawer({
           onOpenStep={setOpenStep}
           onDone={() => setOpenStep(null)}
           variant="settings"
-          onOpenGuide={onOpenGuide}
         />
         <section>
           <h3 className="mb-2 text-[12px] font-normal leading-[14.52px] text-ink-300">
