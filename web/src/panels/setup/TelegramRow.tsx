@@ -13,6 +13,7 @@ import {
 } from '../../api/queries';
 import type { InterestFloor, TelegramInfo, TelegramLinkStatus } from '../../api/types';
 import { HoverCard } from '../../components/HoverCard';
+import { InlineConfirm } from '../../components/InlineConfirm';
 import { Spinner } from '../../components/Spinner';
 import { Switch } from '../../components/Switch';
 import { useToast } from '../../components/Toast';
@@ -192,26 +193,16 @@ export function TelegramRow(p: SetupRowProps) {
   const disconnectBlock = (
     <>
       {askDisconnect && (
-        <div
-          role="alertdialog"
-          aria-label="Disconnect this terminal?"
-          className="flex flex-col gap-2 rounded-lg border border-rose-500/40 bg-rose-500/5 px-3 py-2 text-xs text-rose-200"
-        >
-          <p>Disconnect this terminal? Telegram alerts stop for every wallet on it.</p>
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              className="btn !border-rose-500/60 !text-rose-300"
-              disabled={disconnect.isPending}
-              onClick={() => disconnect.mutate(undefined, { onSettled: () => setAskDisconnect(false) })}
-            >
-              {disconnect.isPending ? 'Disconnecting…' : 'Disconnect'}
-            </button>
-            <button type="button" className="btn-ghost-xs" onClick={() => setAskDisconnect(false)}>
-              Cancel
-            </button>
-          </div>
-        </div>
+        <InlineConfirm
+          tone="danger"
+          label="Disconnect this terminal?"
+          question="Disconnect this terminal? Telegram alerts stop for every wallet on it."
+          confirmLabel="Disconnect"
+          busyLabel="Disconnecting…"
+          busy={disconnect.isPending}
+          onConfirm={() => disconnect.mutate(undefined, { onSettled: () => setAskDisconnect(false) })}
+          onCancel={() => setAskDisconnect(false)}
+        />
       )}
       {disconnect.isError && (
         <p role="alert" className="text-xs text-amber-300">

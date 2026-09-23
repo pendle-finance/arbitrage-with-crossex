@@ -25,6 +25,7 @@ import { qk, useBorosAgent, useProvisionBorosAgent, useTelegramLinked } from '..
 import type { BorosAgentStatus } from '../api/types';
 import { WalletStateTag } from '../components/ActiveWalletChip';
 import { ConnectWalletButton } from '../components/ConnectWalletButton';
+import { InlineConfirm } from '../components/InlineConfirm';
 import { useToastOptional } from '../components/Toast';
 import { fmtDateShort } from '../lib/fmt';
 import { isLoginInFlight, setLoginInFlight, useLoginInFlight } from '../lib/loginInFlight';
@@ -240,15 +241,19 @@ function ReplaceConfirm({ login }: { login: LogIn }) {
   if (!login.replacing) return null;
   const { from, to } = login.replacing;
   return (
-    <div
-      role="alertdialog"
-      aria-label={`Log out ${short(from)} and log in ${short(to)}?`}
-      className="rounded border border-amber-500/40 bg-amber-500/5 px-2.5 py-2"
+    <InlineConfirm
+      tone="warn"
+      label={`Log out ${short(from)} and log in ${short(to)}?`}
+      question={
+        <span className="font-medium">
+          Log out <span className="num">{short(from)}</span> and log in <span className="num">{short(to)}</span>?
+        </span>
+      }
+      confirmLabel={`Log in ${short(to)}`}
+      onConfirm={() => login.answerReplace(true)}
+      onCancel={() => login.answerReplace(false)}
     >
-      <p className="text-[12px] font-medium text-amber-200">
-        Log out <span className="num">{short(from)}</span> and log in <span className="num">{short(to)}</span>?
-      </p>
-      <ul className="mt-1 flex list-disc flex-col gap-0.5 pl-4 text-[11px] leading-relaxed text-amber-200/90">
+      <ul className="flex list-disc flex-col gap-0.5 pl-4">
         <li>
           This terminal trades <span className="num">{short(to)}</span>.
         </li>
@@ -266,19 +271,7 @@ function ReplaceConfirm({ login }: { login: LogIn }) {
           again.
         </li>
       </ul>
-      <div className="mt-2 flex gap-2">
-        <button type="button" className="btn-primary num flex-1" onClick={() => login.answerReplace(true)}>
-          Log in {short(to)}
-        </button>
-        <button
-          type="button"
-          className="rounded border border-ink-600 px-3 text-[11px] text-ink-300 hover:border-ink-400"
-          onClick={() => login.answerReplace(false)}
-        >
-          Cancel
-        </button>
-      </div>
-    </div>
+    </InlineConfirm>
   );
 }
 

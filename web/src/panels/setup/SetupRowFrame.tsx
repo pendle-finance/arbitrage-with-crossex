@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from 'react';
 import type { SetupRowProps } from './setupState';
+import { InlineConfirm } from '../../components/InlineConfirm';
 import { ChevronDown } from 'lucide-react';
 
 type DotTone = 'done' | 'current' | 'warn' | 'later';
@@ -119,19 +120,20 @@ export function SetupRowFrame({
       </div>
       {alert}
       {row.open && isAsking && (
-        <div className="flex flex-col gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
-          <p>
-            <span className="font-semibold">Not recommended.</span> <span>{skipConsequence}</span>
-          </p>
-          <div className="flex items-center gap-2">
-            <button type="button" className="btn" onClick={skipAnyway}>
-              Skip anyway
-            </button>
-            <button type="button" className="btn-ghost-xs" onClick={() => setIsAsking(false)}>
-              Back
-            </button>
-          </div>
-        </div>
+        <InlineConfirm
+          tone="warn"
+          label={`Skip ${title}?`}
+          question={
+            <>
+              <span className="font-semibold">Not recommended.</span> <span>{skipConsequence}</span>
+            </>
+          }
+          confirmLabel="Skip anyway"
+          confirmKind="neutral"
+          cancelLabel="Back"
+          onConfirm={skipAnyway}
+          onCancel={() => setIsAsking(false)}
+        />
       )}
       {row.open && !isAsking && children}
       {row.open && !isAsking && canSkip && (

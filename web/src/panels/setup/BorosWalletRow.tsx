@@ -7,6 +7,7 @@ import { useState, type ReactNode } from 'react';
 import { useBorosAgent, useForgetBorosAgent, useTelegramLinked } from '../../api/queries';
 import { WalletStateTag } from '../../components/ActiveWalletChip';
 import { ConnectWalletButton } from '../../components/ConnectWalletButton';
+import { InlineConfirm } from '../../components/InlineConfirm';
 import { BorosLogInButton, NOT_APPROVED_TEXT } from '../../trade/BorosAgentSetup';
 import { fmtDateShort } from '../../lib/fmt';
 import { describeWalletError, hasInjectedWallet, requestWalletAccount } from '../../lib/wallet';
@@ -156,33 +157,26 @@ export function BorosWalletRow(p: SetupRowProps) {
         </div>
       ) : null}
       {isOwnLogin && askLogOut && loggedIn && (
-        <div
-          role="alertdialog"
-          aria-label={`Log out ${short(loggedIn)}?`}
-          className="flex flex-col gap-2 rounded-lg border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs text-amber-200"
-        >
-          <p>
-            Log out <span className="num">{short(loggedIn)}</span>? This terminal stops trading it. Open positions
-            stay open.
-          </p>
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              className="btn"
-              disabled={forget.isPending}
-              onClick={async () => {
-                await forget.mutateAsync();
-                setAskLogOut(false);
-                setNote('Logged out. The approval stays live on-chain until you revoke it in the Boros app.');
-              }}
-            >
-              {forget.isPending ? 'Logging out…' : 'Log out'}
-            </button>
-            <button type="button" className="btn-ghost-xs" onClick={() => setAskLogOut(false)}>
-              Cancel
-            </button>
-          </div>
-        </div>
+        <InlineConfirm
+          tone="warn"
+          label={`Log out ${short(loggedIn)}?`}
+          question={
+            <>
+              Log out <span className="num">{short(loggedIn)}</span>? This terminal stops trading it. Open positions
+              stay open.
+            </>
+          }
+          confirmLabel="Log out"
+          busyLabel="Logging out…"
+          busy={forget.isPending}
+          confirmKind="neutral"
+          onConfirm={async () => {
+            await forget.mutateAsync();
+            setAskLogOut(false);
+            setNote('Logged out. The approval stays live on-chain until you revoke it in the Boros app.');
+          }}
+          onCancel={() => setAskLogOut(false)}
+        />
       )}
     </SetupRowFrame>
   );
