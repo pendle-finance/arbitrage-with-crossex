@@ -54,8 +54,9 @@ account.
   instead of showing nothing. A held price can no longer size a close: the close window drops its
   USD field until a real price arrives.
 - **A setup checklist on first run.** Each step says what it needs and what is missing, so a new
-  install reaches a working terminal without reading the guide. The Gate key step lists what
-  comes first on Gate: fund Gate, enable CrossEx, fund CrossEx. Point at a step for the detail.
+  install reaches a working terminal without reading the guide. The Gate key step lists the
+  four steps to a key, as the 1.7.0 guide did: fund Gate, enable CrossEx, fund CrossEx, make the
+  key with its permissions. Point at a step for the detail.
 - **About links to the code.** Settings › About has a GitHub link to the terminal's source.
 - **Only coins both venues support.** A coin one venue lists and the other does not is no longer
   offered, on Opportunities and in the order ticket.

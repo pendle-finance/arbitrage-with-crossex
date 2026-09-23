@@ -39,7 +39,6 @@ const UserGuideModal = lazy(() =>
   import('./components/UserGuideModal').then((m) => ({ default: m.UserGuideModal })),
 );
 
-const GATE_KEY_GUIDE_SECTION = 'How to set up Gate and make an API key';
 
 export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -243,7 +242,7 @@ export default function App() {
               {credentials.isPending ? (
                 <TableSkeleton rows={6} cols={7} />
               ) : showsChecklist ? (
-                <SetupPage onFinish={finishSetup} onOpenGuide={() => openGuide(GATE_KEY_GUIDE_SECTION)} />
+                <SetupPage onFinish={finishSetup} />
               ) : (
                 <>
                   {/* Every panel brings its own card chrome, so the tab panels
@@ -281,7 +280,6 @@ export default function App() {
             open={settingsOpen}
             focusStep={settingsFocus}
             onClose={() => setSettingsOpen(false)}
-            onOpenGuide={() => openGuide(GATE_KEY_GUIDE_SECTION)}
           />
           {/* Mounted only while open, so the guide is fetched on first request. */}
           {guideOpen && (
