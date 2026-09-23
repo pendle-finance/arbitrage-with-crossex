@@ -168,8 +168,28 @@ describe('the roll probe on the server', () => {
     const signals = await probe();
     expect(signals.map((s) => s.coin)).toEqual(['ETH', 'BTC']);
     expect(signals[0].targets).toHaveLength(1);
+    expect(signals[0].unpriced).toBeUndefined();
     expect(signals[1].maturity).toBe(SOON);
     expect(signals[1].targets).toEqual([]);
+    // Unknown, not "nothing to roll into": the sync keeps its last targets.
+    expect(signals[1].unpriced).toBe(true);
+  });
+
+  it('a leg whose book did not load marks the pair unpriced, not opportunity-free', async () => {
+    const probe = createRollProbe(
+      deps({
+        price: async (body) => ({
+          simulation: simulation({
+            intent: body.intent,
+            legA: leg({ bookStatus: 'unavailable', execApr: null, estFillSize: 0 }),
+          }),
+        }),
+      }),
+    );
+    const signals = await probe();
+    expect(signals).toHaveLength(1);
+    expect(signals[0].targets).toEqual([]);
+    expect(signals[0].unpriced).toBe(true);
   });
 
   it('reports a pair with no later maturity so the bot still learns when it matures', async () => {

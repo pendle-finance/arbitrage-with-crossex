@@ -1,4 +1,4 @@
-import { defaultChargePerpFees } from '../../../web/src/panels/assets/assetModel';
+import { defaultChargePerpFees, entryAprOf } from '../../../web/src/panels/assets/assetModel';
 import { fitAtBand, planBatch, suggestedRollSize } from '../../../web/src/panels/assets/rollSizing';
 import type { BorosMarket } from './client';
 import type { BorosPairSimulation, SimulatedLeg } from './pair';
@@ -143,7 +143,7 @@ export function exitPnlOf(
 ): number | null {
   const one = (s: SimulatedLeg | undefined, l: RollLegDetail | undefined): number | null | undefined => {
     if (!s || !l || l.lockedApr === null) return undefined;
-    const locked = Math.abs(l.lockedApr);
+    const locked = entryAprOf(l.side, l.lockedApr);
     const years = Math.max(0, l.maturity - nowSec) / SECONDS_IN_YEAR;
     const rate = s.execApr;
     return rate !== null ? (l.side === 'LONG' ? rate - locked : locked - rate) * s.estFillSize * years : null;

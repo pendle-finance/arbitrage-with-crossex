@@ -215,6 +215,79 @@ describe('the trigger sync', () => {
     ]);
   });
 
+  it('a pair the probe could not price keeps its last targets, on their old clock', async () => {
+    // A Boros 429 mid-probe used to store the pair as "no targets" and stamp
+    // it fresh: a real opportunity vanished for five minutes, then flapped
+    // back. Now the pair keeps what it had, and that ages on the stamp of the
+    // probe that found it, not the one that failed.
+    link();
+    const stub = botStub();
+    let clock = Date.now();
+    const signal = rollSignal();
+    let priced = true;
+    const probeRolls = vi.fn(async () => [priced ? signal : { ...signal, targets: [], unpriced: true }]);
+    const { sync } = makeSync(stub.bot, { probeRolls, now: () => clock });
+
+    sync.start();
+    await vi.waitFor(() => expect(stub.puts()).toHaveLength(1));
+    priced = false;
+    clock += 5 * 60_000;
+    sync.requestSync('check');
+    await vi.waitFor(() => expect(stub.puts()).toHaveLength(2));
+    clock += 56 * 60_000;
+    sync.requestSync('check');
+    await vi.waitFor(() => expect(stub.puts()).toHaveLength(3));
+
+    const expected = [{ longVenue: 'GATE', shortVenue: 'HYPERLIQUID', maturity: signal.maturity, targets: signal.targets }];
+    expect(rollsOf(stub.puts()[0])).toEqual(expected);
+    expect(rollsOf(stub.puts()[1])).toEqual(expected);
+    // 61 min after the probe that priced it: aged out, though the failed
+    // probe five minutes in did not renew it.
+    expect(rollsOf(stub.puts()[2])).toEqual([{ ...expected[0], targets: [] }]);
+  });
+
+  it('a pair the probe could not price, with nothing stored, sends no targets', async () => {
+    link();
+    const stub = botStub();
+    const signal = rollSignal();
+    const probeRolls = vi.fn(async () => [{ ...signal, targets: [], unpriced: true }]);
+    const { sync } = makeSync(stub.bot, { probeRolls });
+    sync.start();
+    await vi.waitFor(() => expect(stub.puts()).toHaveLength(1));
+    expect(rollsOf(stub.puts()[0])).toEqual([
+      { longVenue: 'GATE', shortVenue: 'HYPERLIQUID', maturity: signal.maturity, targets: [] },
+    ]);
+  });
+
+  it('a wallet switch drops the targets probed for the previous wallet', async () => {
+    link();
+    const stub = botStub();
+    let wallet = '0xAAAA000000000000000000000000000000000001';
+    const signal = rollSignal();
+    let calls = 0;
+    // The first probe finds a target for wallet A; the next one (wallet B,
+    // after the login switch) fails at the top. B must not inherit A's roll.
+    const probeRolls = vi.fn(async () => {
+      calls += 1;
+      if (calls === 1) return [signal];
+      throw new Error('Boros is limiting reads');
+    });
+    const { sync } = makeSync(stub.bot, { probeRolls, wallet: () => wallet });
+
+    sync.start();
+    await vi.waitFor(() => expect(stub.puts()).toHaveLength(1));
+    expect(rollsOf(stub.puts()[0])).toHaveLength(1);
+    expect(rollsOf(stub.puts()[0])).toEqual([expect.objectContaining({ targets: signal.targets })]);
+
+    wallet = '0xBBBB000000000000000000000000000000000002';
+    sync.requestSync('login');
+    await vi.waitFor(() => expect(stub.puts()).toHaveLength(2));
+    expect(rollsOf(stub.puts()[1])).toEqual([]);
+
+    const file = JSON.parse(fs.readFileSync(path.join(dataDir, 'roll-signals.json'), 'utf8')) as { wallet: string };
+    expect(file.wallet).toBe(wallet.toLowerCase());
+  });
+
   it('a restart still sends the stored signals', async () => {
     link();
     const first = botStub();

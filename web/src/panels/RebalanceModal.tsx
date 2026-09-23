@@ -19,7 +19,19 @@ import { BalanceBars, jobRows, jobSeconds, planRows, ProgressBar, ROUTE_ORDER, s
 import type { BarRow, StepRow } from './RebalanceBits';
 import { AFTER_LABEL, GATE_SPOT, GOAL_LABEL, HOLD_LABEL, HOVER, MODAL_ABANDON } from './rebalanceCopy';
 import { MODAL_FEE_LABEL, MODAL_FREES, MODAL_INTEREST, MODAL_REFRESH_ROUTE, MODAL_RESUME, MODAL_STEPS, PER_MONTH } from './rebalanceCopy';
-import { CARD_LABEL, MOVE, MOVE_FROM, MOVE_TO, NOTHING_TO_MOVE, poolKey, PRESET_OFF, SHORT_OF_CASH, USE_PRESET, VERDICT_BALANCED } from './rebalanceCopy';
+import {
+  CARD_LABEL,
+  MOVE,
+  MOVE_FROM,
+  MOVE_TO,
+  NOTHING_TO_MOVE,
+  poolKey,
+  PRESET_OFF,
+  SHORT_OF_CASH,
+  USE_PRESET,
+  VERDICT_BALANCED,
+  VERDICT_NO_CASH_TO_MOVE,
+} from './rebalanceCopy';
 import { RATE_UNKNOWN, WAITS_FOR_DEAL, WAITS_FOR_TRANSFER, WALLET_LABEL } from './rebalanceCopy';
 import { barRowsOf, Facts, hasUnknownRate, isCashLimitedEven, keyOf, MONTH_DAYS, movesKey, movesOf, pickedRoute, stopsPerDayOf, worthLine } from './RebalanceHovers';
 import { defaultGoal, planSteps, receivingBorrow, receivingHeld } from './RebalanceHovers';
@@ -56,11 +68,17 @@ function initialGoal(view: RebalanceView): GoalKind {
   return 'custom';
 }
 
+/** Nothing moves although the wallets are uneven. With no positions the
+ * wallet is short of cash; with positions the cash is their margin — the
+ * card's wording, so the dialog never names a different cause. */
+const cashLimitedText = (plan: EvenPlan): string =>
+  plan.noLegs ? `${fmtUsd(plan.shortOfEven)} ${SHORT_OF_CASH}` : VERDICT_NO_CASH_TO_MOVE;
+
 /** Why a preset is off, for its hover. */
 function presetOffText(preset: Preset, plan: EvenPlan): string | undefined {
   if (!plan.balanced) return undefined;
   if (preset === 'even' && plan.noLegs) return PRESET_OFF.even;
-  if (isCashLimitedEven(plan)) return `${fmtUsd(plan.shortOfEven)} ${SHORT_OF_CASH}`;
+  if (isCashLimitedEven(plan)) return cashLimitedText(plan);
   return preset === 'even' ? VERDICT_BALANCED : PRESET_OFF.repay;
 }
 
@@ -530,7 +548,7 @@ export function RebalanceModal({
       body = (
         <>
           {header}
-          <p className="text-xs text-ink-400">{isCashLimitedEven(plan) ? `${fmtUsd(plan.shortOfEven)} ${SHORT_OF_CASH}` : NOTHING_TO_MOVE}</p>
+          <p className="text-xs text-ink-400">{isCashLimitedEven(plan) ? cashLimitedText(plan) : NOTHING_TO_MOVE}</p>
         </>
       );
     } else body = (

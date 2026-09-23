@@ -114,8 +114,9 @@ export function RebalanceSection({
     // "Balanced" only when the wallets really match their position share. The
     // planner also reports a plan with nothing to move when what it WOULD move
     // is stuck as position margin (`shortOfEven`); that case gets no chip —
-    // the verdict line names the stuck amount (his call 2026-09-23: a green
-    // "Balanced" over a $354k gap lied, an amber one read as a to-do).
+    // the verdict line says the cash cannot move, with no amount (his call
+    // 2026-09-23: a green "Balanced" over a $354k gap lied, an amber chip
+    // read as a to-do, and a figure read as a to-do too).
     if (!job && goal === 'even' && plan.balanced && !plan.noLegs && !isCashLimitedEven(plan)) {
       chip = <Chip tone="green">Balanced</Chip>;
     }

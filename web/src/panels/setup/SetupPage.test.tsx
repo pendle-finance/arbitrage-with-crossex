@@ -192,6 +192,25 @@ describe('SetupPage · Boros wallet', () => {
     expect(within(row('Telegram alerts')).queryByRole('button', { name: 'Set up' })).toBeNull();
   });
 
+  it('a connected wallet that is not logged in can still continue to step 3', async () => {
+    // Connecting counts the step as done and takes the Skip link away; a
+    // trader who only wants to watch must not be stuck behind the login.
+    const user = userEvent.setup();
+    installWallet();
+    mockWorld({ keyConfigured: true });
+    const { onFinish } = renderSetup();
+    await user.click(await screen.findByRole('button', { name: 'Connect wallet' }));
+    const wallet = row('Boros wallet');
+    await within(wallet).findByText('0xab18…ed9d');
+    expect(screen.queryByRole('button', { name: /Skip/ })).toBeNull();
+
+    await user.click(within(wallet).getByRole('button', { name: 'Continue without logging in' }));
+
+    expect(within(row('Telegram alerts')).getByRole('button', { name: 'Set up' })).toBeInTheDocument();
+    expect(within(wallet).queryByRole('button', { name: 'Continue without logging in' })).toBeNull();
+    expect(onFinish).not.toHaveBeenCalled();
+  });
+
   it('the row has no paste form and no approval cost', async () => {
     installWallet();
     mockWorld({ keyConfigured: true });
