@@ -53,6 +53,38 @@ function isUserRejection(err: unknown): boolean {
   );
 }
 
+const ACCOUNT_READ_TIMEOUT_MS = 3_000;
+
+export async function readWalletAccount(): Promise<string | null> {
+  const provider = typeof window !== 'undefined' ? window.ethereum : undefined;
+  if (!provider) return null;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<null>((resolve) => {
+    timer = setTimeout(() => resolve(null), ACCOUNT_READ_TIMEOUT_MS);
+  });
+  try {
+    const accounts = await Promise.race([provider.request({ method: 'eth_accounts' }), timeout]);
+    const first = Array.isArray(accounts) ? accounts[0] : undefined;
+    return typeof first === 'string' && first ? first.toLowerCase() : null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export function watchWalletAccount(onAccount: (address: string) => void): () => void {
+  const provider = typeof window !== 'undefined' ? window.ethereum : undefined;
+  if (!provider?.on) return () => {};
+  const handler = (...args: unknown[]) => {
+    const accounts = args[0];
+    const first = Array.isArray(accounts) ? accounts[0] : undefined;
+    if (typeof first === 'string' && first) onAccount(first.toLowerCase());
+  };
+  provider.on('accountsChanged', handler);
+  return () => provider.removeListener?.('accountsChanged', handler);
+}
+
 export interface ConnectedWallet {
   address: Address;
   chainId: number;

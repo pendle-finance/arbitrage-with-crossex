@@ -160,9 +160,9 @@ describe('SetupPage · Boros wallet', () => {
     renderSetup();
     await user.click(await screen.findByRole('button', { name: 'Connect wallet' }));
 
-    expect(await within(row('Boros wallet')).findByText('0xab18…ed9d · can trade')).toBeInTheDocument();
+    expect(await within(row('Boros wallet')).findByText('0xab18…ed9d · can trade · follows your wallet')).toBeInTheDocument();
     expect(approveAgent).toHaveBeenCalledTimes(1);
-    expect(trackedInStorage()).toEqual({ address: WALLET, walletUpgraded: true });
+    expect(trackedInStorage()).toEqual({ address: WALLET, walletUpgraded: true, followWallet: true });
     expect(await screen.findByRole('button', { name: 'Set up ↗' })).toBeInTheDocument();
   });
 

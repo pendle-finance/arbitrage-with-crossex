@@ -14,15 +14,15 @@ const TABS: { value: Tab; label: string }[] = [
   { value: 'paste', label: 'Paste address' },
 ];
 
-function walletLine(address: string | null, isExpired: boolean, canTrade: boolean): string | null {
+function walletLine(address: string | null, isExpired: boolean, canTrade: boolean, follows: boolean): string | null {
   if (!address) return null;
-  if (isExpired) return 'Approval expired';
-  return `${short(address)} · ${canTrade ? 'can trade' : 'view only'}`;
+  const line = isExpired ? 'Approval expired' : `${short(address)} · ${canTrade ? 'can trade' : 'view only'}`;
+  return follows ? `${line} · follows your wallet` : line;
 }
 
 export function BorosWalletRow(p: SetupRowProps) {
   const agent = useBorosAgent();
-  const { address, setAddress, upgradeNote, dismissUpgradeNote } = useTrackedAddress();
+  const { address, setAddress, followWallet, upgradeNote, dismissUpgradeNote } = useTrackedAddress();
   const { canTrade } = useActiveWallet();
   const root = agent.data?.configured ? agent.data.root : null;
   const isExpired = root !== null && address !== null && isSameAddress(root, address) && agent.data?.expired === true;
@@ -45,7 +45,7 @@ export function BorosWalletRow(p: SetupRowProps) {
       title="Boros wallet"
       row={p}
       isDone={address !== null}
-      state={walletLine(address, isExpired, canTrade)}
+      state={walletLine(address, isExpired, canTrade, followWallet)}
       isWarn={isExpired}
       alert={note}
       skipConsequence="Without a Boros wallet the terminal cannot open Boros legs, and Positions cannot show them."

@@ -22,6 +22,7 @@
  * distance on the book; "0.25% of the rate" would be a different number of
  * ticks on a 3% book than on a 30% one, which is not what a tolerance means.
  */
+import { ViewOnlyChip } from '../components/ViewOnlyChip';
 import { useEffect, useMemo, useState } from 'react';
 import { useTradeFlowOptional } from './TradeFlow';
 import {
@@ -712,7 +713,10 @@ export function BorosPairTicket({
       <div className={twoColumn ? 'lg:col-span-2' : undefined}>
         {viewOnly ? (
           <div className="rounded-lg border border-ink-700 bg-ink-950 px-3 py-2.5">
-            <span className="num text-[11px] text-ink-300">{short(address)} · view only</span>
+            <div className="flex items-center gap-2">
+              <ViewOnlyChip />
+              <span className="num text-[11px] text-ink-300">{short(address)}</span>
+            </div>
           </div>
         ) : (
           <BorosAgentSetup hideConnect={loginLabel !== null} />

@@ -5,11 +5,12 @@
  * §4 acknowledgement gates confirm and retracts when the trade changes, and a
  * partial fill is reported as a residual rather than a success.
  */
-import { screen, waitFor, within } from '@testing-library/react';
+import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HttpResponse, http } from 'msw';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { STRATEGY_STORAGE_KEY } from '../panels/HomeControls';
+import { installFakeWallet, removeFakeWallet } from '../test/fakeWallet';
 import { server } from '../test/server';
 import { renderWithClient } from '../test/utils';
 import { BorosPairTicket } from './BorosPairTicket';
@@ -270,7 +271,8 @@ describe('BorosPairTicket', () => {
     server.use(...handlers({ agent: { expiry: 1_900_000_000 } }));
     renderWithClient(<BorosPairTicket />);
 
-    expect(await screen.findByText('0x2222…2222 · view only')).toBeInTheDocument();
+    expect(await screen.findByText('View only')).toBeInTheDocument();
+    expect(screen.getByText('0x2222…2222')).toBeInTheDocument();
     expect(screen.queryByText('trading enabled')).toBeNull();
     expect(screen.queryByText('0x1111…1111')).toBeNull();
     expect(screen.queryByText(/expires/)).toBeNull();
@@ -296,6 +298,25 @@ describe('BorosPairTicket', () => {
     expect(screen.getAllByRole('button', { name: /Log in to trade/ })).toHaveLength(1);
   });
 
+  it('a browser wallet switch with no agent turns the ticket to Log in', async () => {
+    const other = '0x2222222222222222222222222222222222222222';
+    window.localStorage.setItem(
+      STRATEGY_STORAGE_KEY,
+      JSON.stringify({ address: ADDRESS, walletUpgraded: true, followWallet: true }),
+    );
+    const wallet = installFakeWallet({ accounts: [ADDRESS] });
+    server.use(...handlers({ agent: { expiry: 1_900_000_000 } }));
+    renderWithClient(<BorosPairTicket />);
+
+    expect(await screen.findByText('trading enabled')).toBeInTheDocument();
+    await waitFor(() => expect(wallet.listenerCount()).toBe(1));
+    act(() => wallet.emitAccounts([other]));
+
+    expect(await screen.findByRole('button', { name: 'Log in to trade 0x2222…2222' })).toBeInTheDocument();
+    expect(screen.queryByText('trading enabled')).toBeNull();
+    removeFakeWallet();
+  });
+
   it('the wallet that trades keeps its agent box', async () => {
     server.use(...handlers({ agent: { expiry: 1_900_000_000 } }));
     renderWithClient(<BorosPairTicket />);
@@ -303,7 +324,7 @@ describe('BorosPairTicket', () => {
     expect(await screen.findByText('trading enabled')).toBeInTheDocument();
     expect(screen.getByText('0x1111…1111')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Remove key' })).toBeInTheDocument();
-    expect(screen.queryByText(/view only/)).toBeNull();
+    expect(screen.queryByText(/view only/i)).toBeNull();
     expect(screen.queryByRole('button', { name: /Log in to trade/ })).toBeNull();
   });
 

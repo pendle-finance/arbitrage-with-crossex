@@ -11,6 +11,7 @@
  * Durable state is ONLY `crossex.assetView.v1` (start date + exclusions);
  * every number is a pure function of the venue feeds.
  */
+import { ViewOnlyChip } from '../../components/ViewOnlyChip';
 import { useMemo, useState } from 'react';
 import { useAccount, useAssetView, useAssetViewWindows, useFees, usePositions } from '../../api/queries';
 import { EmptyState } from '../../components/EmptyState';
@@ -209,8 +210,11 @@ export function AssetsHome() {
   return (
     <section>
       {gateHidden && (
-        <p className="mb-4 text-xs text-ink-400">
-          Viewing <span className="num text-ink-200">{short(address)}</span>. Your Gate positions are hidden.
+        <p className="mb-4 flex items-center gap-2 text-xs text-ink-400">
+          <ViewOnlyChip />
+          <span>
+            Viewing <span className="num text-ink-200">{short(address)}</span>. Your Gate positions are hidden.
+          </span>
         </p>
       )}
 

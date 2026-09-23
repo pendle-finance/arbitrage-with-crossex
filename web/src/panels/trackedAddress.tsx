@@ -5,11 +5,14 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useBorosAgent } from '../api/queries';
 import { writeJson } from '../lib/storage';
+import { readWalletAccount, watchWalletAccount } from '../lib/wallet';
 import { loadStored, short, STRATEGY_STORAGE_KEY, type Stored } from './HomeControls';
 
 interface TrackedAddressApi {
   address: string | null;
   setAddress: (address: string | null) => void;
+  followBrowserWallet: (address: string) => void;
+  followWallet: boolean;
   /** Open the settings drawer — the one place the address is edited. */
   openSettings: () => void;
   openLogin: () => void;
@@ -20,6 +23,14 @@ interface TrackedAddressApi {
 const TrackedAddressCtx = createContext<TrackedAddressApi | null>(null);
 
 export const isSameAddress = (a: string, b: string): boolean => a.toLowerCase() === b.toLowerCase();
+
+function persist(prev: Stored, next: Partial<Stored>): Stored {
+  const merged: Stored = { ...prev, ...next };
+  if (merged.walletUpgradeNote === undefined) delete merged.walletUpgradeNote;
+  if (merged.followWallet === undefined) delete merged.followWallet;
+  writeJson(STRATEGY_STORAGE_KEY, merged);
+  return merged;
+}
 
 export function TrackedAddressProvider({
   onOpenSettings,
@@ -34,38 +45,63 @@ export function TrackedAddressProvider({
   const agent = useBorosAgent();
   const root = agent.data?.configured ? (agent.data.root ?? null) : null;
 
-  const update = useCallback((next: Partial<Stored>) => {
-    setStored((prev) => {
-      const merged: Stored = { ...prev, ...next };
-      if (merged.walletUpgradeNote === undefined) delete merged.walletUpgradeNote;
-      writeJson(STRATEGY_STORAGE_KEY, merged);
-      return merged;
-    });
-  }, []);
+  const update = useCallback((next: Partial<Stored>) => setStored((prev) => persist(prev, next)), []);
+
+  const followTo = useCallback(
+    (address: string) =>
+      setStored((prev) =>
+        prev.followWallet && !(prev.address && isSameAddress(prev.address, address))
+          ? persist(prev, { address, walletUpgradeNote: undefined })
+          : prev,
+      ),
+    [],
+  );
 
   useEffect(() => {
     if (stored.walletUpgraded || !root) return;
-    if (stored.address && isSameAddress(stored.address, root)) {
-      update({ walletUpgraded: true });
-      return;
-    }
-    update({
-      address: root,
-      walletUpgraded: true,
-      walletUpgradeNote: stored.address ? root : undefined,
+    const sameAsRoot = stored.address !== null && isSameAddress(stored.address, root);
+    update(
+      sameAsRoot
+        ? { walletUpgraded: true }
+        : { address: root, walletUpgraded: true, walletUpgradeNote: stored.address ? root : undefined },
+    );
+    if (stored.followWallet) return;
+    void readWalletAccount().then((account) => {
+      if (!account || !isSameAddress(account, root)) return;
+      setStored((prev) =>
+        prev.address && isSameAddress(prev.address, root) && !prev.followWallet
+          ? persist(prev, { followWallet: true })
+          : prev,
+      );
     });
-  }, [stored.walletUpgraded, stored.address, root, update]);
+  }, [stored.walletUpgraded, stored.address, stored.followWallet, root, update]);
+
+  const following = stored.followWallet === true;
+  useEffect(() => {
+    if (!following) return;
+    let live = true;
+    void readWalletAccount().then((account) => {
+      if (live && account) followTo(account);
+    });
+    const stop = watchWalletAccount(followTo);
+    return () => {
+      live = false;
+      stop();
+    };
+  }, [following, followTo]);
 
   const api = useMemo<TrackedAddressApi>(
     () => ({
       address: stored.address,
-      setAddress: (address) => update({ address, walletUpgradeNote: undefined }),
+      setAddress: (address) => update({ address, walletUpgradeNote: undefined, followWallet: undefined }),
+      followBrowserWallet: (address) => update({ address, walletUpgradeNote: undefined, followWallet: true }),
+      followWallet: following,
       openSettings: () => onOpenSettings?.(),
       openLogin: () => (onOpenLogin ?? onOpenSettings)?.(),
       upgradeNote: stored.walletUpgradeNote ?? null,
       dismissUpgradeNote: () => update({ walletUpgradeNote: undefined }),
     }),
-    [stored, update, onOpenSettings, onOpenLogin],
+    [stored, following, update, onOpenSettings, onOpenLogin],
   );
 
   return <TrackedAddressCtx.Provider value={api}>{children}</TrackedAddressCtx.Provider>;

@@ -105,7 +105,7 @@ function useBorosLogIn(onDone?: (root: string) => void, expected?: string | null
       setNote(
         `Done — this terminal can place Boros orders until ${new Date(expiry * 1000).toLocaleDateString()}.`,
       );
-      tracked?.setAddress(wallet.address);
+      tracked?.followBrowserWallet(wallet.address);
       onDone?.(wallet.address);
     } catch (err) {
       setError(describeWalletError(err));

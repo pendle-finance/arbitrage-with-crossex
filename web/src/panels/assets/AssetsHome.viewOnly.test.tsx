@@ -93,7 +93,7 @@ describe.each([50, 6_000_000])('Positions for a view-only wallet at $%d', (size)
   it('says whose legs these are and hides every Gate leg', async () => {
     renderWithClient(<AssetsHome />);
     expect(
-      await screen.findByText((_, el) => el?.tagName === 'P' && el.textContent === 'Viewing 0x2222…2222. Your Gate positions are hidden.'),
+      await screen.findByText((_, el) => el?.tagName === 'P' && el.textContent === 'View onlyViewing 0x2222…2222. Your Gate positions are hidden.'),
     ).toBeInTheDocument();
     expect(await screen.findByText('ETH')).toBeInTheDocument();
     expect(screen.queryByText('SOL')).toBeNull();
