@@ -243,13 +243,11 @@ describe('BorosPairTicket', () => {
     expect((bodies[0] as { address: string }).address).toBe(ADDRESS);
   });
 
-  it('prices the AGENT\'s account, not a different tracked address', async () => {
-    // The dangerous case: tracking A while the agent trades B would show A's
-    // positions, margin and blockers for orders that hit B.
+  it('a view-only wallet prices itself and asks to log in', async () => {
     const other = '0x2222222222222222222222222222222222222222';
     window.localStorage.setItem(
       STRATEGY_STORAGE_KEY,
-      JSON.stringify({ address: other }),
+      JSON.stringify({ address: other, walletUpgraded: true }),
     );
     const bodies: Record<string, unknown>[] = [];
     server.use(...handlers({ onSimulate: (b) => bodies.push(b) }));
@@ -258,9 +256,9 @@ describe('BorosPairTicket', () => {
 
     await fillTicket(user);
     await waitFor(() => expect(bodies.length).toBeGreaterThan(0));
-    expect((bodies[0] as { address: string }).address).toBe(ADDRESS);
-    // And the divergence is stated, because the Positions view shows the other.
-    expect(screen.getByText(/the account your agent key signs for/i)).toBeInTheDocument();
+    expect((bodies[0] as { address: string }).address).toBe(other);
+    expect(screen.getByRole('button', { name: 'Log in to trade 0x2222…2222' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Confirm/ })).toBeNull();
   });
 
   it('falls back to the tracked address when no agent is configured', async () => {

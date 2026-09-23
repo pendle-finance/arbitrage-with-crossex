@@ -22,6 +22,8 @@ import { useState } from 'react';
 import type { Hex } from 'viem';
 import { useBorosAgent, useForgetBorosAgent, useProvisionBorosAgent } from '../api/queries';
 import { Chip } from '../components/Chip';
+import { short } from '../panels/HomeControls';
+import { isSameAddress, useTrackedAddressOptional } from '../panels/trackedAddress';
 import { connectWallet, describeWalletError, hasInjectedWallet, BOROS_CHAIN } from '../lib/wallet';
 
 /**
@@ -53,6 +55,7 @@ export function BorosAgentSetup({ onDone, compact = false }: { onDone?: (root: s
   const status = useBorosAgent();
   const provision = useProvisionBorosAgent();
   const forget = useForgetBorosAgent();
+  const tracked = useTrackedAddressOptional();
   const [step, setStep] = useState<Step>('idle');
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
@@ -102,6 +105,7 @@ export function BorosAgentSetup({ onDone, compact = false }: { onDone?: (root: s
       setNote(
         `Done — this terminal can place Boros orders until ${new Date(expiry * 1000).toLocaleDateString()}.`,
       );
+      tracked?.setAddress(wallet.address);
       onDone?.(wallet.address);
     } catch (err) {
       setError(describeWalletError(err));
@@ -110,11 +114,29 @@ export function BorosAgentSetup({ onDone, compact = false }: { onDone?: (root: s
     }
   };
 
+  const connectButton = !hasInjectedWallet() ? (
+    <p className="mt-2 text-[11px] leading-relaxed text-amber-300">
+      No browser wallet detected. Install MetaMask (or another injected wallet) and reload.
+    </p>
+  ) : (
+    <button
+      type="button"
+      disabled={busy}
+      onClick={run}
+      className="mt-2 w-full rounded border border-cyan-500/60 bg-cyan-500/15 px-2 py-1.5 text-[12px] font-medium text-cyan-200 hover:bg-cyan-500/25 disabled:opacity-60"
+    >
+      {busy ? STEP_LABEL[step as Exclude<Step, 'idle'>] : 'Connect wallet'}
+    </button>
+  );
+
   if (status.isPending) {
     return <p className="text-[11px] text-ink-400">Checking Boros trading setup…</p>;
   }
 
   if (status.data?.configured) {
+    const active = tracked?.address ?? null;
+    const root = status.data.root;
+    const otherWallet = active && root && !isSameAddress(active, root) ? short(active) : null;
     return (
       <div className="rounded-lg border border-ink-700 bg-ink-950 px-3 py-2.5">
         <div className="flex flex-wrap items-center gap-2">
@@ -155,6 +177,19 @@ export function BorosAgentSetup({ onDone, compact = false }: { onDone?: (root: s
           null
         )}
         {note && <p className="mt-1 text-[10.5px] leading-relaxed text-amber-300">{note}</p>}
+        {otherWallet && (
+          <>
+            <p className="mt-1 text-[10.5px] leading-relaxed text-ink-400">
+              Connect <span className="num text-ink-200">{otherWallet}</span> to trade it.
+            </p>
+            {connectButton}
+            {error && (
+              <p role="alert" className="mt-1.5 text-[11px] leading-relaxed text-rose-300">
+                {error}
+              </p>
+            )}
+          </>
+        )}
       </div>
     );
   }
@@ -196,21 +231,7 @@ export function BorosAgentSetup({ onDone, compact = false }: { onDone?: (root: s
         </p>
       )}
 
-      {!hasInjectedWallet() ? (
-        <p className="mt-2 text-[11px] leading-relaxed text-amber-300">
-          No browser wallet detected. Install MetaMask (or another injected wallet) and reload.
-        </p>
-      ) : (
-        <button
-          type="button"
-          disabled={busy}
-          onClick={run}
-          className="mt-2 w-full rounded border border-cyan-500/60 bg-cyan-500/15 px-2 py-1.5 text-[12px] font-medium text-cyan-200 hover:bg-cyan-500/25 disabled:opacity-60"
-        >
-          {busy ? STEP_LABEL[step as Exclude<Step, 'idle'>] : 'Connect wallet'}
-        </button>
-      )}
-
+      {connectButton}
       {error && (
         <p role="alert" className="mt-1.5 text-[11px] leading-relaxed text-rose-300">
           {error}

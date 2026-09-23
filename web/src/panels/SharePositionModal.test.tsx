@@ -1,3 +1,4 @@
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
@@ -38,11 +39,13 @@ const mount = () =>
 const mountTracked = () => {
   writeJson(STRATEGY_STORAGE_KEY, { ...loadStored(), address: TRACKED });
   return render(
-    <ToastProvider>
-      <TrackedAddressProvider>
-        <SharePositionModal payload={payload} onClose={() => {}} />
-      </TrackedAddressProvider>
-    </ToastProvider>,
+    <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+      <ToastProvider>
+        <TrackedAddressProvider>
+          <SharePositionModal payload={payload} onClose={() => {}} />
+        </TrackedAddressProvider>
+      </ToastProvider>
+    </QueryClientProvider>,
   );
 };
 

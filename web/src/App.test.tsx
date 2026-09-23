@@ -81,6 +81,7 @@ afterEach(() => vi.restoreAllMocks());
 
 describe('App tab shell', () => {
   it('defaults to Opportunities; the other panels are mounted but hidden', async () => {
+    localStorage.setItem('crossex.strategy.v1', JSON.stringify({ address: null, walletUpgraded: true }));
     mockApp();
     await renderApp();
 

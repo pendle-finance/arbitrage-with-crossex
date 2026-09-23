@@ -1,5 +1,5 @@
 import { useBorosAgent, useCredentials, useTelegram } from '../../api/queries';
-import { useTrackedAddress } from '../trackedAddress';
+import { isSameAddress, useTrackedAddress } from '../trackedAddress';
 
 export type SetupStep = 'gateKey' | 'borosWallet' | 'telegram';
 
@@ -31,7 +31,10 @@ export function useSetupState(): {
   const steps: Record<SetupStep, StepState> = {
     gateKey: credentials.data?.configured ? 'done' : 'missing',
     borosWallet:
-      agent.data?.configured && agent.data.expired ? 'missing' : agent.data?.configured || address ? 'done' : 'missing',
+      !address ||
+      (agent.data?.configured && agent.data.expired && agent.data.root !== null && isSameAddress(agent.data.root, address))
+        ? 'missing'
+        : 'done',
     telegram: telegram.data?.connected && telegram.data.state === 'connected' ? 'done' : 'missing',
   };
   const missing = SETUP_STEPS.filter((step) => steps[step] === 'missing');

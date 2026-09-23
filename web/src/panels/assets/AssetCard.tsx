@@ -35,7 +35,7 @@ import { ClosePairForm } from '../PerpOnlyBox';
 import { CloseBorosForm } from '../../trade/CloseBorosForm';
 import { ClosePopover } from '../../trade/ClosePopover';
 import { useTradeFlowOptional } from '../../trade/TradeFlow';
-import { useTrackedAddressOptional } from '../trackedAddress';
+import { useActiveWallet, useTrackedAddressOptional } from '../trackedAddress';
 import {
   useBorosAgent,
   useBorosCancelAndClose,
@@ -1958,6 +1958,7 @@ function RollReview({
   onClose: () => void;
 }) {
   const agent = useBorosAgent();
+  const { canTrade, loginLabel, openLogin } = useActiveWallet();
   const executeRoll = useExecuteBorosRoll();
   const cancelClose = useBorosCancelAndClose();
   const topUpGas = useTopUpGas();
@@ -2094,7 +2095,7 @@ function RollReview({
     entryA: `ea-${uuid()}`,
     entryB: `eb-${uuid()}`,
   });
-  const canConfirm = rollReq !== null && blockers.length === 0 && !busy && out === null;
+  const canConfirm = rollReq !== null && blockers.length === 0 && !busy && out === null && canTrade;
 
   const run = async () => {
     if (!rollReq) return;
@@ -2347,7 +2348,7 @@ function RollReview({
         // it — a second, red copy here explained nothing new.
         blockers={blockers.filter((b) => b.code !== 'slippage-exceeds-max')}
         busyMarketId={cancelClose.isPending ? (cancelClose.variables?.marketId ?? null) : null}
-        onCancelAndClose={(marketId) => cancelClose.mutate({ marketId })}
+        onCancelAndClose={canTrade ? (marketId) => cancelClose.mutate({ marketId }) : undefined}
       />
       <GasTopUp
         gasBalanceUsd={roll.data?.gasBalanceUsd}
@@ -2367,6 +2368,11 @@ function RollReview({
         <button type="button" className="btn" onClick={onBack} disabled={busy}>
           ← Back
         </button>
+        {loginLabel ? (
+          <button type="button" className="btn-primary num" onClick={openLogin}>
+            {loginLabel}
+          </button>
+        ) : (
         <HoldToConfirmButton
           tone="cyan"
           disabled={!canConfirm}
@@ -2375,6 +2381,7 @@ function RollReview({
         >
           {busy ? 'Rolling…' : 'Roll over'}
         </HoldToConfirmButton>
+        )}
       </div>
     </div>
   );

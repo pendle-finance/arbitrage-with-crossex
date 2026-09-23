@@ -74,7 +74,7 @@ describe('SettingsDrawer', () => {
       'Telegram alerts',
     ]);
     expect(await within(row('Gate API key')).findByText('160e…4f80 · works')).toBeInTheDocument();
-    expect(await within(row('Boros wallet')).findByText('0xab18…ed9d · can trade · tracked')).toBeInTheDocument();
+    expect(await within(row('Boros wallet')).findByText('0xab18…ed9d · can trade')).toBeInTheDocument();
     expect(await within(row('Telegram alerts')).findByText('All on · synced 3 min ago')).toBeInTheDocument();
     for (const name of ['Gate API key', 'Boros wallet', 'Telegram alerts']) {
       expect(within(row(name)).getByRole('button', { name: 'Edit' })).toBeInTheDocument();
@@ -252,6 +252,36 @@ describe('SettingsDrawer', () => {
 
     expect(await within(wallet).findByText('Approval expired')).toBeInTheDocument();
     expect(within(wallet).getByRole('button', { name: 'Edit' })).toBeInTheDocument();
+  });
+
+  it('paste switches the active wallet to view only', async () => {
+    const user = userEvent.setup();
+    mockAllDone();
+    renderDrawer();
+    expect(await within(row('Boros wallet')).findByText('0xab18…ed9d · can trade')).toBeInTheDocument();
+    await clickEdit('Boros wallet');
+    await user.click(await within(row('Boros wallet')).findByRole('radio', { name: 'Paste address' }));
+    const input = within(row('Boros wallet')).getByPlaceholderText('0x…');
+    await user.clear(input);
+    await user.type(input, PASTED);
+    await user.click(within(row('Boros wallet')).getByRole('button', { name: 'Track address' }));
+    expect(await within(row('Boros wallet')).findByText('0x3f2a…91c0 · view only')).toBeInTheDocument();
+    expect(trackedInStorage()).toEqual({ address: PASTED, walletUpgraded: true });
+  });
+
+  it('telegram says which wallet alerts follow', async () => {
+    mockAllDone({ ...connectedTelegram(), alertWallet: WALLET });
+    renderDrawer();
+    await clickEdit('Telegram alerts');
+    expect(await within(row('Telegram alerts')).findByText('Alerts follow 0xab18…ed9d')).toBeInTheDocument();
+  });
+
+  it('telegram asks to log in when the bot refuses the wallet', async () => {
+    mockAllDone({ ...connectedTelegram(), alertWallet: WALLET, walletRefused: PASTED });
+    renderDrawer();
+    await clickEdit('Telegram alerts');
+    expect(await within(row('Telegram alerts')).findByText('Log in to move alerts to 0x3f2a…91c0.')).toBeInTheDocument();
+    expect(within(row('Telegram alerts')).queryByText(/Alerts follow/)).toBeNull();
   });
 
   it('edit key', async () => {

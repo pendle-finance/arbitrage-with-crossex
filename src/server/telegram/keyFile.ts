@@ -13,7 +13,7 @@ const KEY_FILE = 'telegram-key';
 
 const keyPath = (dataDir: string): string => path.join(dataDir, KEY_FILE);
 
-const hashKey = (key: string): string => createHash('sha256').update(key, 'utf8').digest('hex');
+export const hashKey = (key: string): string => createHash('sha256').update(key, 'utf8').digest('hex');
 
 export function newTelegramKey(now: number): TelegramKey {
   const key = randomBytes(32).toString('base64url');

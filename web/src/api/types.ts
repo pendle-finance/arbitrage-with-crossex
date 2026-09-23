@@ -1559,6 +1559,8 @@ export interface TelegramInfo {
   settings: { liquidation: boolean; interest: boolean; maturity: boolean; rollover: boolean } | null;
   lastSyncAt: number | null;
   lastSyncError: { at: number; message: string } | null;
+  alertWallet?: string | null;
+  walletRefused?: string | null;
   alertsPageUrl?: string;
   floors?: InterestFloor[];
 }

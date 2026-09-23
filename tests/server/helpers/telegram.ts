@@ -24,6 +24,8 @@ export const VIEW: TerminalView = {
   port: 7788,
   settings: { liquidation: true, interest: true, maturity: true, rollover: true },
   coins: [],
+  active: true,
+  alertTo: null,
 };
 
 export interface BotCall {
@@ -35,7 +37,10 @@ export interface BotCall {
 
 export type BotAnswer = (call: BotCall) => { status: number; body: unknown } | Promise<{ status: number; body: unknown }>;
 
-export function makeBotStub(answer: BotAnswer = async () => ({ status: 200, body: VIEW })) {
+export function makeBotStub(
+  answer: BotAnswer = async () => ({ status: 200, body: VIEW }),
+  over: Partial<Parameters<typeof createBotClient>[0]> = {},
+) {
   const calls: BotCall[] = [];
   const fetchImpl: FetchLike = async (url, init) => {
     const call: BotCall = {
@@ -51,6 +56,6 @@ export function makeBotStub(answer: BotAnswer = async () => ({ status: 200, body
   return {
     calls,
     to: (method: string, route: string) => calls.filter((c) => c.method === method && c.url === `${CROSSEX}${route}`),
-    bot: createBotClient({ baseUrl: botBaseUrl({}), fetchImpl }),
+    bot: createBotClient({ baseUrl: botBaseUrl({}), fetchImpl, ...over }),
   };
 }

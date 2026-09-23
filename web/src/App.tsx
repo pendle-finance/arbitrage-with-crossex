@@ -105,6 +105,7 @@ export default function App() {
     setSettingsFocus(step);
     setSettingsOpen(true);
   }, []);
+  const openLogin = useCallback(() => openSettingsAt('borosWallet'), [openSettingsAt]);
 
   // Freshness + settings ride the tab row once it exists, and fall back to the
   // brand row in the states that have no tabs (loading, first-run).
@@ -181,7 +182,7 @@ export default function App() {
   return (
     <TradeFlowProvider>
       <RollSignalProvider>
-      <TrackedAddressProvider onOpenSettings={openSettings}>
+      <TrackedAddressProvider onOpenSettings={openSettings} onOpenLogin={openLogin}>
         <TooltipLayer />
         <DisclaimerGate />
         {/* Only once the terminal is usable: the disclaimer gate is a locked

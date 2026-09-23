@@ -160,9 +160,9 @@ describe('SetupPage · Boros wallet', () => {
     renderSetup();
     await user.click(await screen.findByRole('button', { name: 'Connect wallet' }));
 
-    expect(await within(row('Boros wallet')).findByText('0xab18…ed9d · can trade · tracked')).toBeInTheDocument();
+    expect(await within(row('Boros wallet')).findByText('0xab18…ed9d · can trade')).toBeInTheDocument();
     expect(approveAgent).toHaveBeenCalledTimes(1);
-    expect(trackedInStorage()).toEqual({ address: WALLET });
+    expect(trackedInStorage()).toEqual({ address: WALLET, walletUpgraded: true });
     expect(await screen.findByRole('button', { name: 'Set up ↗' })).toBeInTheDocument();
   });
 
@@ -191,7 +191,7 @@ describe('SetupPage · Boros wallet', () => {
     mockWorld({ keyConfigured: true });
     renderSetup();
     await user.click(await screen.findByRole('radio', { name: 'Paste address' }));
-    expect(screen.getByText('Tracks positions only. The terminal cannot place Boros orders.')).toBeInTheDocument();
+    expect(screen.getByText('View only. Log in to trade.')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Track address' })).toBeInTheDocument();
   });
 
@@ -203,22 +203,34 @@ describe('SetupPage · Boros wallet', () => {
     await user.type(screen.getByPlaceholderText('0x…'), PASTED);
     await user.click(screen.getByRole('button', { name: 'Track address' }));
 
-    expect(await within(row('Boros wallet')).findByText('0x3f2a…91c0 · tracked')).toBeInTheDocument();
+    expect(await within(row('Boros wallet')).findByText('0x3f2a…91c0 · view only')).toBeInTheDocument();
     expect(trackedInStorage()).toEqual({ address: PASTED });
     expect(screen.queryByRole('button', { name: 'Track address' })).toBeNull();
   });
 
-  it('differs nudge', async () => {
+  it('upgrade switches to the trading wallet once', async () => {
     const user = userEvent.setup();
     localStorage.setItem('crossex.strategy.v1', JSON.stringify({ address: OTHER }));
     mockWorld({ keyConfigured: true, agent: agentStatus({ configured: true, root: WALLET }) });
     renderSetup();
 
-    expect(await screen.findByText('Boros legs you open here will not show on Positions.')).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: 'Track 0xab18…ed9d' }));
-    expect(await within(row('Boros wallet')).findByText('0xab18…ed9d · can trade · tracked')).toBeInTheDocument();
-    expect(screen.queryByText('Boros legs you open here will not show on Positions.')).toBeNull();
+    expect(await within(row('Boros wallet')).findByText('0xab18…ed9d · can trade')).toBeInTheDocument();
+    expect(screen.getByText('0xab18…ed9d', { selector: 'span.num' })).toBeInTheDocument();
+    expect(trackedInStorage()).toEqual({ address: WALLET, walletUpgraded: true, walletUpgradeNote: WALLET });
+    await user.click(screen.getByRole('button', { name: 'Dismiss' }));
+    expect(screen.queryByText(/the wallet that trades/)).toBeNull();
+    expect(trackedInStorage()).toEqual({ address: WALLET, walletUpgraded: true });
   });
+
+  it('upgrade does not run twice', async () => {
+    localStorage.setItem('crossex.strategy.v1', JSON.stringify({ address: OTHER, walletUpgraded: true }));
+    mockWorld({ keyConfigured: true, agent: agentStatus({ configured: true, root: WALLET }) });
+    renderSetup();
+
+    expect(await within(row('Boros wallet')).findByText('0x5c1f…a2e0 · view only')).toBeInTheDocument();
+    expect(screen.queryByText(/the wallet that trades/)).toBeNull();
+  });
+
 
   it('skip asks once', async () => {
     const user = userEvent.setup();
