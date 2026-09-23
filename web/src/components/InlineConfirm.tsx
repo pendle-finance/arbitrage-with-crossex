@@ -34,7 +34,8 @@ export function InlineConfirm({
   confirmLabel: ReactNode;
   busyLabel?: ReactNode;
   busy?: boolean;
-  /** 'neutral' for an action that is not the page's main one, such as Skip. */
+  /** 'neutral' only for a not-recommended action, such as Skip: it then looks
+   * like Back, so the page does not push it. */
   confirmKind?: 'primary' | 'danger' | 'neutral';
   cancelLabel?: string;
   onConfirm: () => void;

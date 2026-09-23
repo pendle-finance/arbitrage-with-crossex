@@ -169,7 +169,6 @@ export function BorosWalletRow(p: SetupRowProps) {
           confirmLabel="Log out"
           busyLabel="Logging out…"
           busy={forget.isPending}
-          confirmKind="neutral"
           onConfirm={async () => {
             await forget.mutateAsync();
             setAskLogOut(false);
