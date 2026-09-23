@@ -261,6 +261,52 @@ describe('BorosPairTicket', () => {
     expect(screen.queryByRole('button', { name: /Confirm/ })).toBeNull();
   });
 
+  it('a view-only wallet shows itself in the agent box, and the submit is the one action', async () => {
+    const other = '0x2222222222222222222222222222222222222222';
+    window.localStorage.setItem(
+      STRATEGY_STORAGE_KEY,
+      JSON.stringify({ address: other, walletUpgraded: true }),
+    );
+    server.use(...handlers({ agent: { expiry: 1_900_000_000 } }));
+    renderWithClient(<BorosPairTicket />);
+
+    expect(await screen.findByText('0x2222…2222 · view only')).toBeInTheDocument();
+    expect(screen.queryByText('trading enabled')).toBeNull();
+    expect(screen.queryByText('0x1111…1111')).toBeNull();
+    expect(screen.queryByText(/expires/)).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Remove key' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Connect wallet' })).toBeNull();
+    expect(screen.queryByText(/to trade it/)).toBeNull();
+    expect(screen.getAllByRole('button', { name: /Log in to trade/ })).toHaveLength(1);
+  });
+
+  it('a pasted wallet with no agent keeps the explanation, and the submit is the one action', async () => {
+    const other = '0x2222222222222222222222222222222222222222';
+    window.localStorage.setItem(
+      STRATEGY_STORAGE_KEY,
+      JSON.stringify({ address: other, walletUpgraded: true }),
+    );
+    server.use(...handlers({ agent: { configured: false, root: null, rootMasked: null } }));
+    renderWithClient(<BorosPairTicket />);
+
+    expect(await screen.findByText('Enable Boros trading')).toBeInTheDocument();
+    expect(screen.getByText(/one on-chain transaction/i)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Connect wallet' })).toBeNull();
+    expect(screen.queryByText(/No browser wallet detected/)).toBeNull();
+    expect(screen.getAllByRole('button', { name: /Log in to trade/ })).toHaveLength(1);
+  });
+
+  it('the wallet that trades keeps its agent box', async () => {
+    server.use(...handlers({ agent: { expiry: 1_900_000_000 } }));
+    renderWithClient(<BorosPairTicket />);
+
+    expect(await screen.findByText('trading enabled')).toBeInTheDocument();
+    expect(screen.getByText('0x1111…1111')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Remove key' })).toBeInTheDocument();
+    expect(screen.queryByText(/view only/)).toBeNull();
+    expect(screen.queryByRole('button', { name: /Log in to trade/ })).toBeNull();
+  });
+
   it('falls back to the tracked address when no agent is configured', async () => {
     const bodies: Record<string, unknown>[] = [];
     server.use(

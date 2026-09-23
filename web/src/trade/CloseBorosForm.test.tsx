@@ -208,6 +208,7 @@ describe('CloseBorosForm — whose legs these are', () => {
     renderWithClient(<CloseBorosForm legs={[leg()]} />);
     expect(await screen.findByRole('button', { name: 'Log in to trade 0x2222…2222' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Close leg/ })).toBeNull();
+    expect(screen.getAllByRole('button', { name: /Log in to trade|Connect wallet/ })).toHaveLength(1);
     localStorage.clear();
   });
 

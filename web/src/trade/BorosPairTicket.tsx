@@ -51,8 +51,9 @@ import { isUsdCollateral, knownRate } from '../lib/boros';
 import { fieldValue, fmtPct, sigGrouped } from '../lib/fmt';
 import { useNow } from '../lib/useNow';
 import { uuid } from '../lib/uuid';
+import { short } from '../panels/HomeControls';
 import { useActiveWallet, useTrackedAddressOptional } from '../panels/trackedAddress';
-import { BorosAgentSetup } from './BorosAgentSetup';
+import { BorosAgentSetup, BorosLogInButton } from './BorosAgentSetup';
 import {
   BlockerList,
   GasTopUp,
@@ -145,7 +146,7 @@ export function BorosPairTicket({
 } = {}) {
   const tracked = useTrackedAddressOptional();
   const agent = useBorosAgent();
-  const { address, canTrade, loginLabel, openLogin } = useActiveWallet();
+  const { address, canTrade, viewOnly, loginLabel } = useActiveWallet();
   const context = useBorosPairContext(address, active);
 
   const [marketA, setMarketA] = useState<number | null>(null);
@@ -709,7 +710,13 @@ export function BorosPairTicket({
       {/* Setup sits ABOVE the form, not behind the confirm: finding out the
           terminal cannot send only after pricing a pair wastes the quote. */}
       <div className={twoColumn ? 'lg:col-span-2' : undefined}>
-        <BorosAgentSetup />
+        {viewOnly ? (
+          <div className="rounded-lg border border-ink-700 bg-ink-950 px-3 py-2.5">
+            <span className="num text-[11px] text-ink-300">{short(address)} · view only</span>
+          </div>
+        ) : (
+          <BorosAgentSetup hideConnect={loginLabel !== null} />
+        )}
       </div>
 
       <div className={twoColumn ? 'flex flex-col gap-3' : 'contents'}>
@@ -1198,9 +1205,7 @@ export function BorosPairTicket({
               what pressing this does. Acceptance is atomic; a full fill is
               NOT promised, and both halves matter. */}
           {loginLabel ? (
-            <button type="button" className="btn-primary num w-full" onClick={openLogin}>
-              {loginLabel}
-            </button>
+            <BorosLogInButton />
           ) : (
           <HoldToConfirmButton
             // A pair is the neutral info fill; one leg is a directional

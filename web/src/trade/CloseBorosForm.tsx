@@ -38,6 +38,7 @@ import {
 } from '../api/queries';
 import { HoldToConfirmButton } from '../components/HoldToConfirmButton';
 import { useActiveWallet } from '../panels/trackedAddress';
+import { BorosLogInButton } from './BorosAgentSetup';
 
 /** Used until the market's own deviation cap is known, or if it is degenerate. */
 const FALLBACK_SLIPPAGE_PCT = 1;
@@ -71,7 +72,7 @@ export function CloseBorosForm({
 }) {
   const close = useBorosCancelAndClose();
   const agent = useBorosAgent();
-  const { address, canTrade, loginLabel, openLogin } = useActiveWallet();
+  const { address, canTrade, loginLabel } = useActiveWallet();
   /**
    * Legs whose close filled everything it ASKED for, with whatever the venue
    * still holds afterwards.
@@ -719,9 +720,7 @@ export function CloseBorosForm({
 
       <div className="flex flex-col gap-1.5">
         {loginLabel ? (
-          <button type="button" className="btn-primary num w-full" onClick={openLogin}>
-            {loginLabel}
-          </button>
+          <BorosLogInButton />
         ) : (
         <HoldToConfirmButton
           tone="red"

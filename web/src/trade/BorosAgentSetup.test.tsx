@@ -9,7 +9,7 @@ import { HttpResponse, http } from 'msw';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { server } from '../test/server';
 import { renderWithClient } from '../test/utils';
-import { BorosAgentSetup } from './BorosAgentSetup';
+import { BorosAgentSetup, BorosLogInButton } from './BorosAgentSetup';
 
 const ROOT = '0x1111111111111111111111111111111111111111';
 const AGENT_KEY = `0x${'a'.repeat(64)}`;
@@ -260,5 +260,54 @@ describe('BorosAgentSetup — no gas balance on the strip', () => {
     renderWithClient(<BorosAgentSetup />);
     expect(await screen.findByText('0x1111…1111')).toBeInTheDocument();
     expect(screen.queryByText(/gas/i)).toBeNull();
+  });
+
+  it('Log in to trade runs the approval in place for the wallet it names', async () => {
+    const user = userEvent.setup();
+    installWallet();
+    localStorage.setItem('crossex.strategy.v1', JSON.stringify({ address: ROOT, walletUpgraded: true }));
+    let body: Record<string, unknown> | null = null;
+    server.use(
+      http.get('/api/boros/agent', () =>
+        HttpResponse.json(env(status({ configured: true, root: AGENT_ADDRESS, rootMasked: '0x2222…2222' }))),
+      ),
+      http.put('/api/boros/agent', async ({ request }) => {
+        body = (await request.json()) as Record<string, unknown>;
+        return HttpResponse.json(env(status({ configured: true, root: ROOT, rootMasked: '0x1111…1111' })));
+      }),
+    );
+    renderWithClient(<BorosLogInButton />);
+
+    await user.click(await screen.findByRole('button', { name: 'Log in to trade 0x1111…1111' }));
+    await waitFor(() => expect(body).not.toBeNull());
+    expect(body).toMatchObject({ root: ROOT, accountId: 0 });
+    await waitFor(() => expect(approveAgent).toHaveBeenCalledTimes(1));
+    localStorage.clear();
+  });
+
+  it('Log in to trade refuses a browser wallet other than the one it names', async () => {
+    const user = userEvent.setup();
+    installWallet();
+    const OTHER = '0x3333333333333333333333333333333333333333';
+    localStorage.setItem('crossex.strategy.v1', JSON.stringify({ address: OTHER, walletUpgraded: true }));
+    let stored = false;
+    server.use(
+      http.get('/api/boros/agent', () =>
+        HttpResponse.json(env(status({ configured: true, root: AGENT_ADDRESS, rootMasked: '0x2222…2222' }))),
+      ),
+      http.put('/api/boros/agent', () => {
+        stored = true;
+        return HttpResponse.json(env(status()));
+      }),
+    );
+    renderWithClient(<BorosLogInButton />);
+
+    await user.click(await screen.findByRole('button', { name: 'Log in to trade 0x3333…3333' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Your browser wallet is 0x1111…1111. Switch it to 0x3333…3333 to log in.',
+    );
+    expect(stored).toBe(false);
+    expect(approveAgent).not.toHaveBeenCalled();
+    localStorage.clear();
   });
 });

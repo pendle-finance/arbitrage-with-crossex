@@ -87,6 +87,7 @@ export function useTrackedAddressOptional(): TrackedAddressApi | null {
 export interface ActiveWallet {
   address: string | null;
   canTrade: boolean;
+  viewOnly: boolean;
   loginLabel: string | null;
   openLogin: () => void;
 }
@@ -102,10 +103,13 @@ export function useActiveWallet(): ActiveWallet {
     status.root !== null &&
     address !== null &&
     isSameAddress(status.root, address);
+  const viewOnly =
+    status?.configured === true && status.root !== null && address !== null && !isSameAddress(status.root, address);
   const canLogIn = status !== undefined && (status.configured || status.canProvision);
   return {
     address,
     canTrade,
+    viewOnly,
     loginLabel: address && !canTrade && canLogIn ? `Log in to trade ${short(address)}` : null,
     openLogin: () => tracked?.openLogin(),
   };

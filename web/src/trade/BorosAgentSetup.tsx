@@ -23,7 +23,7 @@ import type { Hex } from 'viem';
 import { useBorosAgent, useForgetBorosAgent, useProvisionBorosAgent } from '../api/queries';
 import { Chip } from '../components/Chip';
 import { short } from '../panels/HomeControls';
-import { isSameAddress, useTrackedAddressOptional } from '../panels/trackedAddress';
+import { isSameAddress, useActiveWallet, useTrackedAddressOptional } from '../panels/trackedAddress';
 import { connectWallet, describeWalletError, hasInjectedWallet, BOROS_CHAIN } from '../lib/wallet';
 
 /**
@@ -51,16 +51,12 @@ const STEP_LABEL: Record<Exclude<Step, 'idle'>, string> = {
   saving: 'Handing the key to your terminal…',
 };
 
-export function BorosAgentSetup({ onDone, compact = false }: { onDone?: (root: string) => void; compact?: boolean }) {
-  const status = useBorosAgent();
+function useBorosLogIn(onDone?: (root: string) => void, expected?: string | null) {
   const provision = useProvisionBorosAgent();
-  const forget = useForgetBorosAgent();
   const tracked = useTrackedAddressOptional();
   const [step, setStep] = useState<Step>('idle');
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
-
-  const busy = step !== 'idle';
 
   const run = async () => {
     setError(null);
@@ -68,6 +64,10 @@ export function BorosAgentSetup({ onDone, compact = false }: { onDone?: (root: s
     try {
       setStep('connecting');
       const wallet = await connectWallet();
+      if (expected && !isSameAddress(wallet.address, expected)) {
+        setError(`Your browser wallet is ${short(wallet.address)}. Switch it to ${short(expected)} to log in.`);
+        return;
+      }
 
       // Generate the delegated key IN THE BROWSER. The root key never leaves
       // the wallet; this tool never sees it.
@@ -114,7 +114,47 @@ export function BorosAgentSetup({ onDone, compact = false }: { onDone?: (root: s
     }
   };
 
-  const connectButton = !hasInjectedWallet() ? (
+  return { run, step, busy: step !== 'idle', error, note, setNote };
+}
+
+export function BorosLogInButton({ className }: { className?: string }) {
+  const { address, loginLabel, openLogin } = useActiveWallet();
+  const login = useBorosLogIn(undefined, address);
+  if (!loginLabel) return null;
+  return (
+    <div className={`flex flex-col gap-1.5 ${className ?? ''}`}>
+      <button
+        type="button"
+        className="btn-primary num w-full"
+        disabled={login.busy}
+        onClick={hasInjectedWallet() ? login.run : openLogin}
+      >
+        {login.busy ? STEP_LABEL[login.step as Exclude<Step, 'idle'>] : loginLabel}
+      </button>
+      {login.error && (
+        <p role="alert" className="text-[11px] leading-relaxed text-rose-300">
+          {login.error}
+        </p>
+      )}
+    </div>
+  );
+}
+
+export function BorosAgentSetup({
+  onDone,
+  compact = false,
+  hideConnect = false,
+}: {
+  onDone?: (root: string) => void;
+  compact?: boolean;
+  hideConnect?: boolean;
+}) {
+  const status = useBorosAgent();
+  const forget = useForgetBorosAgent();
+  const tracked = useTrackedAddressOptional();
+  const { run, step, busy, error, note, setNote } = useBorosLogIn(onDone);
+
+  const connectButton = hideConnect ? null : !hasInjectedWallet() ? (
     <p className="mt-2 text-[11px] leading-relaxed text-amber-300">
       No browser wallet detected. Install MetaMask (or another injected wallet) and reload.
     </p>

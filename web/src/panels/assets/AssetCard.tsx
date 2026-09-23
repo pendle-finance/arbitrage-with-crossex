@@ -32,6 +32,7 @@ import { Spinner } from '../../components/Spinner';
 import { microLabelClass } from '../../components/Th';
 import { SharePositionModal } from '../SharePositionModal';
 import { ClosePairForm } from '../PerpOnlyBox';
+import { BorosLogInButton } from '../../trade/BorosAgentSetup';
 import { CloseBorosForm } from '../../trade/CloseBorosForm';
 import { ClosePopover } from '../../trade/ClosePopover';
 import { useTradeFlowOptional } from '../../trade/TradeFlow';
@@ -128,6 +129,7 @@ interface Props {
    * liquidates it, 'unknown' = Gate sent no margin figures, null = not loaded
    * or this coin has no priced leg in the connected account. */
   liquidation?: LiquidationLine | StaleLeg | 'far' | 'unknown' | null;
+  gateHidden?: boolean;
 }
 
 type StaleLeg = { base: string; venue: string; sinceMs: number };
@@ -1958,7 +1960,7 @@ function RollReview({
   onClose: () => void;
 }) {
   const agent = useBorosAgent();
-  const { canTrade, loginLabel, openLogin } = useActiveWallet();
+  const { canTrade, loginLabel } = useActiveWallet();
   const executeRoll = useExecuteBorosRoll();
   const cancelClose = useBorosCancelAndClose();
   const topUpGas = useTopUpGas();
@@ -2369,9 +2371,7 @@ function RollReview({
           ← Back
         </button>
         {loginLabel ? (
-          <button type="button" className="btn-primary num" onClick={openLogin}>
-            {loginLabel}
-          </button>
+          <BorosLogInButton />
         ) : (
         <HoldToConfirmButton
           tone="cyan"
@@ -4171,6 +4171,7 @@ export function AssetCard({
   legSince,
   onLegSince,
   liquidation = null,
+  gateHidden = false,
 }: Props) {
   const { totals, gaps, venues } = derived;
   const flow = useTradeFlowOptional();
@@ -4542,6 +4543,7 @@ export function AssetCard({
           <span className="num text-[12px] text-ink-300">{fmtUsd(group.priceUsd)}</span>
         )}
         {hasLegs &&
+          !gateHidden &&
           (derived.perfect ? (
             <Chip
               sm
