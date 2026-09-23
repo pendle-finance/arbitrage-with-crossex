@@ -61,7 +61,7 @@ export function AssetsHome() {
   // estimate; the model falls back to a flat rate while it loads.
   const feeRows = useFees().data;
   const extraSinces = useMemo(
-    () => [...new Set(Object.values(prefs.sinceByAsset).filter((n) => n > 0))],
+    () => [...new Set(Object.values(prefs.sinceByAsset).filter((n) => n >= 0))],
     [prefs.sinceByAsset],
   );
   const windows = useAssetViewWindows(address, extraSinces, legSince);
@@ -331,7 +331,7 @@ export function AssetsHome() {
               onChangeSince={(sec) => {
                 update((prev) => {
                   const sinceByAsset = { ...prev.sinceByAsset };
-                  if (sec !== undefined && sec > 0) sinceByAsset[group.base] = sec;
+                  if (sec !== undefined && sec >= 0) sinceByAsset[group.base] = sec;
                   else delete sinceByAsset[group.base];
                   return { ...prev, sinceByAsset };
                 });
