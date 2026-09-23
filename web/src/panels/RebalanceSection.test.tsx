@@ -380,19 +380,23 @@ describe('RebalanceSection verdict', () => {
     expect(cardButtons()[0]).toBeEnabled();
   });
 
-  it('balanced by cash names the amount stuck', async () => {
+  it('stuck by margin is a warning with no amount, and no chip: never "Balanced"', async () => {
     await show(CASH_LIMITED_EVEN);
-    expect(line('$203.64 cannot move. It is margin for open positions.')).toBeInTheDocument();
+    expect(line('Equity unbalanced but no available cash to move')).toHaveClass('text-gold');
+    expect(within(region()).queryByText(/\$203\.64/)).toBeNull();
     expect(line('Wallets match their position share. Nothing to move.')).toBeNull();
-    expect(within(region()).getByText('Balanced')).toBeInTheDocument();
+    // Nothing moves, but the wallets do not match: the chip must not say so.
+    expect(within(region()).queryByText('Balanced')).toBeNull();
+    expect(within(region()).queryByText('Uneven')).toBeNull();
     expect(cardButtons()[0]).toBeEnabled();
   });
 
   it('balanced short under 1 keeps Balanced', async () => {
     await show({ ...CASH_LIMITED_EVEN, plans: plansOf({ ...CASH_LIMITED_EVEN.plans.even, shortOfEven: 0.99 }) });
     expect(line('Wallets match their position share. Nothing to move.')).toBeInTheDocument();
-    expect(within(region()).queryByText(/cannot move/)).toBeNull();
+    expect(line('Equity unbalanced but no available cash to move')).toBeNull();
     expect(within(region()).getByText('Balanced')).toBeInTheDocument();
+    expect(within(region()).queryByText('Uneven')).toBeNull();
   });
 
   it('the button says it waits for the transfer, with no chip', async () => {

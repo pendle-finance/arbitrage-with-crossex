@@ -8,7 +8,7 @@ import { fmtAbout, fmtUsd, num } from '../lib/fmt';
 import { useNow } from '../lib/useNow';
 import { useSettledError } from '../lib/useSettledError';
 import { jobSeconds, VerdictAlert } from './RebalanceBits';
-import { CARD_LABEL, NO_LEGS, SHORT_OF_CASH, VERDICT_BALANCED, VERDICT_NO_BORROW } from './rebalanceCopy';
+import { CARD_LABEL, NO_LEGS, SHORT_OF_CASH, VERDICT_BALANCED, VERDICT_NO_BORROW, VERDICT_NO_CASH_TO_MOVE } from './rebalanceCopy';
 import { WAITS_FOR_DEAL, WAITS_FOR_TRANSFER } from './rebalanceCopy';
 import { borrowFacts, defaultGoal, Facts, isCashLimitedEven, pickedRoute, worthLine, type VerdictTone } from './RebalanceHovers';
 import { RebalanceInfo, roundCountOf, roundOf } from './RebalanceHovers';
@@ -19,7 +19,6 @@ const LOAD_FAILED = 'Could not load Rebalance.';
 const RETRY = 'Retry';
 const READ_AGAIN = 'Read again';
 const STOPPED_OPEN = 'Stopped · open';
-const IS_POSITION_MARGIN = 'cannot move. It is margin for open positions.';
 
 const plural = (n: string, word: string): string => `${n} ${word}${n === '1' ? '' : 's'}`;
 
@@ -112,7 +111,14 @@ export function RebalanceSection({
     let chip: ReactNode = null;
     if (job?.status === 'running') chip = <Chip tone="info">Running</Chip>;
     if (job?.status === 'halted') chip = <Chip tone="red">Stopped</Chip>;
-    if (!job && goal === 'even' && plan.balanced && !plan.noLegs) chip = <Chip tone="green">Balanced</Chip>;
+    // "Balanced" only when the wallets really match their position share. The
+    // planner also reports a plan with nothing to move when what it WOULD move
+    // is stuck as position margin (`shortOfEven`); that case gets no chip —
+    // the verdict line names the stuck amount (his call 2026-09-23: a green
+    // "Balanced" over a $354k gap lied, an amber one read as a to-do).
+    if (!job && goal === 'even' && plan.balanced && !plan.noLegs && !isCashLimitedEven(plan)) {
+      chip = <Chip tone="green">Balanced</Chip>;
+    }
 
     let verdict: ReactNode = null;
     let verdictSub: string | null = null;
@@ -120,7 +126,11 @@ export function RebalanceSection({
     if (job) verdict = jobVerdict(job, now);
     // What caps a move is cash when there are no positions, and position
     // margin when there are — the goal on screen does not decide it.
-    else if (isCashLimitedEven(plan)) verdict = `${fmtUsd(plan.shortOfEven)} ${plan.noLegs ? SHORT_OF_CASH : IS_POSITION_MARGIN}`;
+    else if (isCashLimitedEven(plan) && plan.noLegs) verdict = `${fmtUsd(plan.shortOfEven)} ${SHORT_OF_CASH}`;
+    else if (isCashLimitedEven(plan)) {
+      verdict = VERDICT_NO_CASH_TO_MOVE;
+      tone = 'warn';
+    }
     else if (goal === 'repay' && plan.balanced) verdict = VERDICT_NO_BORROW;
     else if (plan.noLegs && goal === 'even') verdict = NO_LEGS;
     else if (plan.balanced) verdict = VERDICT_BALANCED;
