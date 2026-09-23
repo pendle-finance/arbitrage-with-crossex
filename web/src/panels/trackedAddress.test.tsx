@@ -50,7 +50,7 @@ describe('follow the browser wallet', () => {
     const user = userEvent.setup();
     const wallet = installFakeWallet({ accounts: [WALLET], ethAccounts: async () => [] });
     mockWorld({ keyConfigured: true });
-    renderWithClient(<SetupPage onFinish={vi.fn()} onOpenGuide={vi.fn()} />);
+    renderWithClient(<SetupPage onFinish={vi.fn()} />);
     await user.click(await screen.findByRole('button', { name: 'Connect wallet' }));
 
     expect(await within(row()).findByText('0xab18…ed9d')).toBeInTheDocument();

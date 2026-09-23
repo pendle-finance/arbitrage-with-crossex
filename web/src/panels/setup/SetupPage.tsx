@@ -2,13 +2,7 @@ import { useEffect, useState } from 'react';
 import { SETUP_STEPS, useSetupState, type SetupStep } from './setupState';
 import { SetupRows } from './SetupRows';
 
-export function SetupPage({
-  onFinish,
-  onOpenGuide,
-}: {
-  onFinish: () => void;
-  onOpenGuide?: () => void;
-}) {
+export function SetupPage({ onFinish }: { onFinish: () => void }) {
   const { steps, firstMissing, isLoading } = useSetupState();
   const [openStep, setOpenStep] = useState<SetupStep | null | undefined>(undefined);
 
@@ -33,7 +27,6 @@ export function SetupPage({
         onOpenStep={setOpenStep}
         onDone={advance}
         variant="setup"
-        onOpenGuide={onOpenGuide}
       />
     </div>
   );

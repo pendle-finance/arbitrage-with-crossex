@@ -49,9 +49,8 @@ function installWallet() {
 
 function renderSetup() {
   const onFinish = vi.fn();
-  const onOpenGuide = vi.fn();
-  renderWithClient(<SetupPage onFinish={onFinish} onOpenGuide={onOpenGuide} />);
-  return { onFinish, onOpenGuide };
+  renderWithClient(<SetupPage onFinish={onFinish} />);
+  return { onFinish };
 }
 
 const row = (name: string) => screen.getByRole('region', { name });
@@ -138,26 +137,27 @@ describe('SetupPage · Gate API key', () => {
     expect(screen.queryByRole('button', { name: /Skip/ })).toBeNull();
   });
 
-  it('how to make a key opens the guide', async () => {
-    const user = userEvent.setup();
-    mockWorld();
-    const { onOpenGuide } = renderSetup();
-    await user.click(await screen.findByRole('button', { name: 'How to make a key' }));
-    expect(onOpenGuide).toHaveBeenCalledTimes(1);
-  });
-
-  it('lists the Gate steps before the key, with the detail on hover', async () => {
-    const user = userEvent.setup();
+  it('lists the four steps to a key, with the key settings under them', async () => {
     mockWorld();
     renderSetup();
     await screen.findByRole('button', { name: 'Check key' });
-    const steps = within(screen.getByRole('list', { name: 'Before the key' }));
+    const steps = within(screen.getByRole('list', { name: 'Steps to a key' }));
     expect(steps.getAllByRole('listitem').map((item) => item.textContent)).toEqual([
       '1Fund Gategate.com/signup',
       '2Enable CrossExgate.com/crossex',
       '3Fund CrossExgate.com/crossex',
+      '4Make an API keyAPI Management',
     ]);
+    expect(screen.getByText('APIv4 key · Trading account · IP Permissions: Later')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'How to make a key' })).toBeNull();
+  });
 
+  it("shows a step's detail on hover", async () => {
+    const user = userEvent.setup();
+    mockWorld();
+    renderSetup();
+    await screen.findByRole('button', { name: 'Check key' });
+    const steps = within(screen.getByRole('list', { name: 'Steps to a key' }));
     await user.hover(steps.getByText('Enable CrossEx'));
     expect(await screen.findByText(/The Cross-Exchange key permission and transfers need it first\./)).toBeInTheDocument();
   });
@@ -166,7 +166,7 @@ describe('SetupPage · Gate API key', () => {
     mockWorld({ keyConfigured: true });
     renderSetup();
     expect(await within(row('Gate API key')).findByText(/works/)).toBeInTheDocument();
-    expect(screen.queryByRole('list', { name: 'Before the key' })).toBeNull();
+    expect(screen.queryByRole('list', { name: 'Steps to a key' })).toBeNull();
   });
 });
 
