@@ -203,7 +203,16 @@ describe('AssetCard — roll over', () => {
     expect(guide()).not.toBeInTheDocument();
   });
 
-  it('a fifth of the pair rolling at a better rate makes the banner loud and flags the card', async () => {
+  it.each([
+    // An older server: no ladder, so the modal opens on the whole position
+    // at the seed.
+    ['a fifth of the pair rolling at a better rate makes the banner loud and flags the card', undefined, 0.01],
+    // A stray 0.01 ETH inside the 1% seed ahead of 1,000 ETH at 1.3%: at the
+    // seed the fit was 0.0095 ETH, under a fifth, and the banner stayed quiet
+    // (his catch 2026-09-23). Sized at the band the whole 100 rolls, quoted
+    // at the tolerance the modal widens to: 1.3% × 1.1 headroom.
+    ['a stray level inside the seed does not hide the opportunity: sized at the band', [[0.004, 0.01], [0.013, 1000]], 0.0143],
+  ] as const)('%s', async (_name, depth, wantSlip) => {
     const now = Math.floor(Date.now() / 1000);
     const LATER = now + 45 * DAY;
     const row = (marketId: number, venue: string, maturity: number) => ({
@@ -257,6 +266,8 @@ describe('AssetCard — roll over', () => {
           slippageExceeded: false,
           marginRequired: 1,
           slippageApr: 0.01,
+          depth,
+          maxToleranceApr: depth ? 0.05 : undefined,
           sizing: { currentSize: 0, deltaSize: body.size, resultingSize: body.size, opposing: false, flips: false, clampedToClose: false, orderSide: direction },
         });
         return HttpResponse.json({
@@ -310,9 +321,16 @@ describe('AssetCard — roll over', () => {
     const first = sims.find((b) => b.intent === 'open');
     expect(first?.size).toBe(20);
     expect(first?.legA.slippageApr).toBeCloseTo(0.01, 9);
-    // … then the size the modal opens on (no fit reported → the whole
-    // position), both batches, so the promise IS the modal's headline.
-    await waitFor(() => expect(sims.some((b) => b.intent === 'close' && b.size === 100)).toBe(true), { timeout: 10_000 });
+    // … then the size the modal opens on (the whole position here), both
+    // batches, at the tolerance the modal gives that size, so the promise IS
+    // the modal's headline.
+    await waitFor(
+      () =>
+        expect(
+          sims.some((b) => b.intent === 'close' && b.size === 100 && Math.abs(b.legA.slippageApr - wantSlip) < 1e-9),
+        ).toBe(true),
+      { timeout: 10_000 },
+    );
     await userEvent.click(within(panel).getByRole('button', { name: 'Roll over' }));
     const dialog = screen.getByRole('dialog');
     // The first option's headline: the 20px figure with "fixed" beside it.

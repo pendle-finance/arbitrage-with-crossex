@@ -112,18 +112,26 @@ describe('the two-stage sizing', () => {
   it('is no opportunity when the books take less than a fifth', () => {
     const exit = [ladder(fifth), ladder(1_000)];
     const entry = [ladder(1_000), ladder(1_000)];
-    expect(rollFitSize(exit, entry, 0.01, 0.01, held)).toBeNull();
+    expect(rollFitSize(exit, entry, held)).toBeNull();
   });
 
   it('suggests the capacity less the buffer once a fifth fits', () => {
     const exit = [ladder(25), ladder(1_000)];
     const entry = [ladder(1_000), ladder(1_000)];
-    expect(rollFitSize(exit, entry, 0.01, 0.01, held)).toBeCloseTo(23.75, 9);
+    expect(rollFitSize(exit, entry, held)).toBeCloseTo(23.75, 9);
+  });
+
+  it('sizes at the band, so a stray level inside the seed does not zero the opportunity', () => {
+    // 0.01 at 0.4%, then 1,000 at 1.1%: past a 1% seed, inside the 5% band.
+    const stray = leg({ depth: [[0.004, 0.01], [0.011, 1_000]], maxToleranceApr: 0.05 });
+    const exit = [stray, ladder(1_000)];
+    const entry = [ladder(1_000), ladder(1_000)];
+    expect(rollFitSize(exit, entry, held)).toBe(held);
   });
 
   it('never suggests more than the position', () => {
     const legs = [ladder(1_000), ladder(1_000)];
-    expect(rollFitSize(legs, legs, 0.01, 0.01, held)).toBe(held);
+    expect(rollFitSize(legs, legs, held)).toBe(held);
   });
 });
 

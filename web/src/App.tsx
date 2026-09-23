@@ -31,7 +31,6 @@ import { RecoveryBanner } from './trade/RecoveryBanner';
 import { StrategyWizard } from './trade/StrategyWizard';
 import { TradeFlowProvider, useTradeFlow } from './trade/TradeFlow';
 import { TradeRail } from './trade/TradeRail';
-import { Settings } from 'lucide-react';
 
 // The markdown renderer is ~160kB and only the guide needs it — split it out so
 // opening the terminal doesn't pay for a document most sessions never read.
@@ -119,17 +118,8 @@ export default function App() {
     <>
       <UpdateIndicator />
       {isTrading && <SetupPrompt onOpen={openSettingsAt} />}
-      {isTrading && <ActiveWalletChip />}
       <FreshnessIndicator />
-      <button
-        type="button"
-        aria-label="Settings"
-        title="Settings"
-        onClick={openSettings}
-        className="pp-chevron h-[30px] w-[30px] !p-0 text-ink-200 hover:bg-ink-600/25 hover:text-ink-50"
-      >
-        <Settings size={16} strokeWidth={1.6} aria-hidden />
-      </button>
+      <ActiveWalletChip onOpen={openSettings} showWallet={isTrading} />
     </>
   );
 

@@ -17,6 +17,11 @@ import type { BorosSimulatedLeg } from '../../api/types';
 /** `[adverse distance from mid, cumulative size]`, best-first. */
 export type DepthLadder = ReadonlyArray<readonly [number, number]>;
 
+/** What sizing reads off a quoted leg. Structural, so the server's own
+ * `SimulatedLeg` fits as well as the client's `BorosSimulatedLeg` — the
+ * Telegram probe sizes with these same functions. */
+export type LadderLeg = Pick<BorosSimulatedLeg, 'marketName' | 'depth' | 'maxToleranceApr'>;
+
 /** Float noise allowed when a figure sits exactly on a level. */
 const EPS = 1e-9;
 
@@ -48,7 +53,7 @@ const BAND_USE = 0.9;
 
 /** The widest tolerance a leg may carry: the venue's band (less the margin
  * above), under the app's cap. */
-const allowedOf = (leg: BorosSimulatedLeg, capApr: number): number =>
+const allowedOf = (leg: LadderLeg, capApr: number): number =>
   Math.min(capApr, typeof leg.maxToleranceApr === 'number' ? leg.maxToleranceApr * BAND_USE : capApr);
 
 /** How much fills at `tolerance`: the levels whose own rate sits inside it. */
@@ -72,19 +77,31 @@ export function toleranceFor(depth: DepthLadder, size: number): number | null {
 }
 
 /**
- * The most that fills across all four legs with each batch at its own
- * tolerance (never past a leg's band). Null until every leg carries a ladder.
+ * The most that fills across all four legs at the WIDEST tolerance the roll
+ * may carry: each batch's shared band (the tighter leg's, as `planBatch`
+ * judges it), under the app's cap. Null until every leg carries a ladder.
+ *
+ * The default roll size is sized off this, not off the seed. `planBatch`
+ * widens a batch's tolerance for any size the band reaches, so the seed was
+ * never the limit — sizing at it let one stray level decide: a 0.01 ETH ask
+ * at 0.37% ahead of 1,000 ETH at 1.10% under a 1.0% seed defaulted the roll
+ * to 0.0095 ETH of an 870 ETH pair (his catch 2026-09-23).
  */
-export function fitAcross(
-  exitLegs: ReadonlyArray<BorosSimulatedLeg>,
-  entryLegs: ReadonlyArray<BorosSimulatedLeg>,
-  exitToleranceApr: number,
-  entryToleranceApr: number,
+export function fitAtBand(
+  exitLegs: ReadonlyArray<LadderLeg>,
+  entryLegs: ReadonlyArray<LadderLeg>,
   capApr: number,
 ): number | null {
-  const all = [...exitLegs.map((l) => [l, exitToleranceApr] as const), ...entryLegs.map((l) => [l, entryToleranceApr] as const)];
-  if (all.length !== 4 || all.some(([l]) => !Array.isArray(l.depth))) return null;
-  return Math.min(...all.map(([l, tol]) => capacityAt(l.depth as DepthLadder, Math.min(tol, allowedOf(l, capApr)))));
+  const batches = [exitLegs, entryLegs];
+  if (batches.some((b) => b.length !== 2) || [...exitLegs, ...entryLegs].some((l) => !Array.isArray(l.depth))) {
+    return null;
+  }
+  return Math.min(
+    ...batches.map((legs) => {
+      const band = Math.min(...legs.map((l) => allowedOf(l, capApr)));
+      return Math.min(...legs.map((l) => capacityAt(l.depth as DepthLadder, band)));
+    }),
+  );
 }
 
 /** The size to suggest for a position of `held`, off a book that fills
@@ -124,7 +141,7 @@ export interface BatchPlan {
  * Null until both legs carry a ladder — nothing to plan against yet.
  */
 export function planBatch(
-  legs: ReadonlyArray<BorosSimulatedLeg>,
+  legs: ReadonlyArray<LadderLeg>,
   size: number,
   seedApr: number,
   capApr: number,

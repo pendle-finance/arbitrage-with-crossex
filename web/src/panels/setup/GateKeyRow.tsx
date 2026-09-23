@@ -44,7 +44,7 @@ const GATE_STEPS: { title: string; href: string; site: string; detail: ReactNode
     ),
   },
   {
-    title: 'Make an API key',
+    title: 'Create an API key',
     href: GATE_API_KEYS_URL,
     site: 'API Management',
     detail: (
