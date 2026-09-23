@@ -60,6 +60,16 @@ export function telegramRoutes(deps: AppDeps) {
     clearTimeout(timer);
   };
 
+  const syncNow = async (t: Telegram): Promise<void> => {
+    t.sync.requestSync('settings');
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const cap = new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, FIRST_SYNC_WAIT_MS);
+    });
+    await Promise.race([t.sync.idle(), cap]);
+    clearTimeout(timer);
+  };
+
   const info = (t: Telegram): TelegramInfo => {
     const linkPending = t.link.status().status === 'pending' && t.status.unlinkedWallet === null;
     const keyed = hasKey(t);
@@ -81,9 +91,12 @@ export function telegramRoutes(deps: AppDeps) {
   };
 
   return async function plugin(app: FastifyInstance): Promise<void> {
-    app.get('/telegram', async (_req, reply) => {
+    app.get('/telegram', async (req, reply) => {
       const t = telegram();
-      await awaitFirstSync(t);
+      // ?fresh=1 (the Telegram row opening): ask the bot now, not at the next
+      // 5-minute sync, so a wallet stopped on the bot page shows here at once.
+      if ((req.query as { fresh?: string } | undefined)?.fresh === '1' && hasKey(t)) await syncNow(t);
+      else await awaitFirstSync(t);
       return reply.ok(info(t));
     });
 

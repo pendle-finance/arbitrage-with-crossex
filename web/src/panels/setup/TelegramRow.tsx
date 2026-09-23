@@ -1,7 +1,7 @@
 import { ArrowUpRight } from 'lucide-react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
-import { ApiError } from '../../api/client';
+import { ApiError, fetchJson } from '../../api/client';
 import {
   qk,
   useCancelTelegramLink,
@@ -113,6 +113,13 @@ export function TelegramRow(p: SetupRowProps) {
   const [askDisconnect, setAskDisconnect] = useState(false);
   const cancelLink = useCancelTelegramLink();
   const qc = useQueryClient();
+  // Opening the row asks the bot once, so a wallet stopped on the bot page
+  // shows here now, not at the next 5-minute sync.
+  useEffect(() => {
+    fetchJson<TelegramInfo>('/telegram?fresh=1')
+      .then((fresh) => qc.setQueryData(qk.telegram, fresh))
+      .catch(() => undefined);
+  }, [qc]);
   const toast = useToast();
   const now = useNow(1000);
   const [phase, setPhase] = useState<Phase>('idle');

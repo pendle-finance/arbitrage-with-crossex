@@ -249,6 +249,23 @@ describe('Telegram link', () => {
     expect((await send(app, 'GET', '/api/telegram')).body.data).toMatchObject({ connected: true, state: 'connected' });
   });
 
+  it('?fresh=1 asks the bot now: a wallet stopped on the bot page shows at once', async () => {
+    linked();
+    const { bot, app, sync, status } = boot();
+    status.setAuth('ok');
+    sync.requestSync('boot');
+    await sync.idle();
+    const before = bot.to('PUT', '/terminal/triggers').length;
+    bot.behaviour.reason = 'removed';
+
+    expect((await send(app, 'GET', '/api/telegram')).body.data.connected).toBe(true);
+    expect(bot.to('PUT', '/terminal/triggers')).toHaveLength(before);
+
+    const fresh = (await send(app, 'GET', '/api/telegram?fresh=1')).body.data;
+    expect(bot.to('PUT', '/terminal/triggers')).toHaveLength(before + 1);
+    expect(fresh.connected).toBe(false);
+  });
+
   it('expired link', async () => {
     fakeInterval();
     const { app, bot } = boot();
