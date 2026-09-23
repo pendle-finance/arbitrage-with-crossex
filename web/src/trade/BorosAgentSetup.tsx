@@ -69,6 +69,7 @@ export const NOT_APPROVED_TEXT = 'Boros shows no approval for this login. Log in
 const day = (unix: number): string => fmtDateShort(unix, { year: 'numeric' });
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const TELEGRAM_REFRESH_MS = 2_000;
 
 type Confirmed = 'approved' | 'older-server' | 'timeout' | 'unchecked';
 
@@ -190,6 +191,9 @@ function useBorosLogIn(onDone?: (root: string) => void, expected?: string | null
         setError('Boros did not answer. If Log in shows again, the approval did not land.');
         return;
       }
+      // The server moves Telegram alerts to this wallet on its next sync, which
+      // the approval starts. Re-read the Telegram row once that has had time.
+      setTimeout(() => void qc.invalidateQueries({ queryKey: qk.telegram }), TELEGRAM_REFRESH_MS);
       const done = `Logged in. This terminal can trade ${short(wallet.address)} until ${day(expiry)}.`;
       setNote(done);
       toast?.push('success', done);
