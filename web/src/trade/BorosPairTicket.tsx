@@ -53,7 +53,7 @@ import { fieldValue, fmtPct, sigGrouped } from '../lib/fmt';
 import { useNow } from '../lib/useNow';
 import { uuid } from '../lib/uuid';
 import { short } from '../panels/HomeControls';
-import { useActiveWallet, useTrackedAddressOptional } from '../panels/trackedAddress';
+import { useActiveWallet } from '../panels/trackedAddress';
 import { BorosAgentSetup, BorosLogInButton } from './BorosAgentSetup';
 import {
   BlockerList,
@@ -145,7 +145,6 @@ export function BorosPairTicket({
    */
   onBusyChange?: (busy: boolean) => void;
 } = {}) {
-  const tracked = useTrackedAddressOptional();
   const agent = useBorosAgent();
   const { address, canTrade, viewOnly, loginLabel } = useActiveWallet();
   const context = useBorosPairContext(address, active);
@@ -686,16 +685,6 @@ export function BorosPairTicket({
     return (
       <div className="flex flex-col gap-3">
         <BorosAgentSetup />
-        <div className="flex flex-col gap-2 text-[12px] text-ink-300">
-        <p>Connect a wallet above, or set a Boros address to price rate legs.</p>
-        <button
-          type="button"
-          className="self-start rounded border border-ink-600 px-2 py-1 text-[11px] text-ink-200 hover:border-ink-400"
-          onClick={() => tracked?.openSettings()}
-        >
-          Open settings
-        </button>
-        </div>
       </div>
     );
   }
@@ -719,7 +708,7 @@ export function BorosPairTicket({
             </div>
           </div>
         ) : (
-          <BorosAgentSetup hideConnect={loginLabel !== null} />
+          <BorosAgentSetup />
         )}
       </div>
 

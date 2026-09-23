@@ -72,20 +72,26 @@ describe('BorosAgentSetup', () => {
     // And that there IS an on-chain transaction coming.
     expect(screen.getByText(/one on-chain transaction/i)).toBeInTheDocument();
     expect(screen.getByText('Enable Boros trading')).toBeInTheDocument();
-    expect(screen.queryByText('Connect the wallet that holds your Boros account.')).toBeNull();
+    expect(screen.getByText('Connect the wallet that holds your Boros account.')).toBeInTheDocument();
   });
 
-  it('compact shows one line, the cost and the button, and no paragraphs', async () => {
-    installWallet();
-    server.use(http.get('/api/boros/agent', () => HttpResponse.json(env(status()))));
-    renderWithClient(<BorosAgentSetup compact />);
-
-    expect(await screen.findByRole('button', { name: 'Connect wallet' })).toBeInTheDocument();
-    expect(screen.getByText('Connect the wallet that holds your Boros account.')).toBeInTheDocument();
-    expect(screen.getByText('Approval cost: free')).toBeInTheDocument();
-    expect(screen.queryByText('Enable Boros trading')).toBeNull();
-    expect(screen.queryByText(/one on-chain transaction/i)).toBeNull();
-    expect(screen.queryByText(/cannot deposit or withdraw/i)).toBeNull();
+  it('Connect wallet only asks for the account: no chain switch, no signature, no key', async () => {
+    const user = userEvent.setup();
+    const request = installWallet();
+    let stored = false;
+    server.use(
+      http.get('/api/boros/agent', () => HttpResponse.json(env(status()))),
+      http.put('/api/boros/agent', () => {
+        stored = true;
+        return HttpResponse.json(env(status()));
+      }),
+    );
+    renderWithClient(<BorosAgentSetup />);
+    await user.click(await screen.findByRole('button', { name: 'Connect wallet' }));
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Connect wallet' })).toBeNull());
+    expect(request.mock.calls.map(([a]) => a.method)).not.toContain('eth_chainId');
+    expect(stored).toBe(false);
+    expect(approveAgent).not.toHaveBeenCalled();
   });
 
   it('sends the generated key to localhost and never renders it', async () => {
@@ -100,9 +106,10 @@ describe('BorosAgentSetup', () => {
         return HttpResponse.json(env(status({ configured: true, root: ROOT, rootMasked: '0x1111…1111' })));
       }),
     );
-    renderWithClient(<BorosAgentSetup />);
+    localStorage.setItem('crossex.strategy.v1', JSON.stringify({ address: ROOT, walletUpgraded: true }));
+    renderWithClient(<BorosLogInButton />);
 
-    await user.click(await screen.findByRole('button', { name: 'Connect wallet' }));
+    await user.click(await screen.findByRole('button', { name: 'Log in to trade 0x1111…1111' }));
     await waitFor(() => expect(body).not.toBeNull());
 
     expect(body).toMatchObject({ root: ROOT, accountId: 0, agentPrivateKey: AGENT_KEY });
@@ -123,8 +130,9 @@ describe('BorosAgentSetup', () => {
         return HttpResponse.json(env(status({ configured: true, root: ROOT })));
       }),
     );
-    renderWithClient(<BorosAgentSetup />);
-    await user.click(await screen.findByRole('button', { name: 'Connect wallet' }));
+    localStorage.setItem('crossex.strategy.v1', JSON.stringify({ address: ROOT, walletUpgraded: true }));
+    renderWithClient(<BorosLogInButton />);
+    await user.click(await screen.findByRole('button', { name: 'Log in to trade 0x1111…1111' }));
     await waitFor(() => expect(body).not.toBeNull());
 
     // A duration (31,536,000) is 1971 as a timestamp — the contract stores it
@@ -159,8 +167,9 @@ describe('BorosAgentSetup', () => {
         return HttpResponse.json(env(status({ configured: true, root: ROOT })));
       }),
     );
-    renderWithClient(<BorosAgentSetup />);
-    await user.click(await screen.findByRole('button', { name: 'Connect wallet' }));
+    localStorage.setItem('crossex.strategy.v1', JSON.stringify({ address: ROOT, walletUpgraded: true }));
+    renderWithClient(<BorosLogInButton />);
+    await user.click(await screen.findByRole('button', { name: 'Log in to trade 0x1111…1111' }));
 
     await waitFor(() => expect(calls).toEqual(['store', 'approve']));
   });
@@ -184,8 +193,10 @@ describe('BorosAgentSetup', () => {
     renderWithClient(<BorosAgentSetup />);
     expect(await screen.findByText('login expired')).toBeInTheDocument();
     expect(screen.getByText(/Boros refuses every order until you renew it/)).toBeInTheDocument();
-    // One click, not "remove the key and connect again".
     expect(screen.queryByText(/Remove the key and connect again/)).toBeNull();
+    // Status only: the ticket's own Log in button, where Confirm sits, is the
+    // one login. A second one here showed two buttons for one action.
+    expect(screen.queryByRole('button', { name: /Log in|Renew login/ })).toBeNull();
   });
 
   it('reports a rejected wallet prompt without leaving the button spinning', async () => {
@@ -196,18 +207,19 @@ describe('BorosAgentSetup', () => {
       }),
     };
     server.use(http.get('/api/boros/agent', () => HttpResponse.json(env(status()))));
-    renderWithClient(<BorosAgentSetup />);
+    localStorage.setItem('crossex.strategy.v1', JSON.stringify({ address: ROOT, walletUpgraded: true }));
+    renderWithClient(<BorosLogInButton />);
 
-    await user.click(await screen.findByRole('button', { name: 'Connect wallet' }));
+    await user.click(await screen.findByRole('button', { name: 'Log in to trade 0x1111…1111' }));
     expect(await screen.findByRole('alert')).toHaveTextContent(/rejected/i);
     // Recoverable: the button is live again, not stuck mid-step.
-    expect(screen.getByRole('button', { name: 'Connect wallet' })).not.toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Log in to trade 0x1111…1111' })).not.toBeDisabled();
   });
 
   it('tells the user when there is no wallet at all, instead of offering a dead button', async () => {
     server.use(http.get('/api/boros/agent', () => HttpResponse.json(env(status()))));
     renderWithClient(<BorosAgentSetup />);
-    expect(await screen.findByText(/No browser wallet detected/i)).toBeInTheDocument();
+    expect(await screen.findByText('Install Rabby or MetaMask, then reload.')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Connect wallet' })).not.toBeInTheDocument();
   });
 
@@ -223,11 +235,11 @@ describe('BorosAgentSetup', () => {
 
     expect(await screen.findByText('trading enabled')).toBeInTheDocument();
     expect(screen.getByText('0x1111…1111')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Remove key' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Log out' })).toBeInTheDocument();
     expect(document.body.textContent).not.toContain(AGENT_KEY);
   });
 
-  it('repeats the server’s warning that removing the key does not revoke it', async () => {
+  it('says that logging out does not revoke the approval', async () => {
     const user = userEvent.setup();
     const note = 'The key is gone from this machine. The on-chain approval is still live until you revoke it in the Boros app or it expires.';
     server.use(
@@ -238,8 +250,8 @@ describe('BorosAgentSetup', () => {
     );
     renderWithClient(<BorosAgentSetup />);
 
-    await user.click(await screen.findByRole('button', { name: 'Remove key' }));
-    expect(await screen.findByText(/still live until you revoke it/i)).toBeInTheDocument();
+    await user.click(await screen.findByRole('button', { name: 'Log out' }));
+    expect(await screen.findByText(/stays live on-chain until you revoke it/i)).toBeInTheDocument();
   });
 
   it('says so plainly when the build cannot place orders at all', async () => {
@@ -401,7 +413,7 @@ describe('BorosAgentSetup — the chain decides "logged in"', () => {
     expect(reads).toBe(2);
   });
 
-  it('a stored key the chain never approved shows "not approved" and a Log in button', async () => {
+  it('a stored key the chain never approved: the card says "not approved", the login button says Log in', async () => {
     localStorage.setItem('crossex.strategy.v1', JSON.stringify({ address: ROOT, walletUpgraded: true }));
     installWallet();
     server.use(
@@ -411,13 +423,18 @@ describe('BorosAgentSetup — the chain decides "logged in"', () => {
         ),
       ),
     );
-    renderWithClient(<BorosAgentSetup />);
+    renderWithClient(
+      <>
+        <BorosAgentSetup />
+        <BorosLogInButton />
+      </>,
+    );
     expect(await screen.findByText('not approved')).toBeInTheDocument();
     expect(screen.getByText(/The wallet prompt was rejected, or the login was revoked/)).toBeInTheDocument();
-    expect(await screen.findByRole('button', { name: 'Log in to trade 0x1111…1111' })).toBeInTheDocument();
+    expect(await screen.findAllByRole('button', { name: 'Log in to trade 0x1111…1111' })).toHaveLength(1);
   });
 
-  it('an expired login offers one-click Renew', async () => {
+  it('an expired login: the login button reads Renew', async () => {
     localStorage.setItem('crossex.strategy.v1', JSON.stringify({ address: ROOT, walletUpgraded: true }));
     installWallet();
     server.use(
@@ -427,7 +444,7 @@ describe('BorosAgentSetup — the chain decides "logged in"', () => {
         ),
       ),
     );
-    renderWithClient(<BorosAgentSetup />);
+    renderWithClient(<BorosLogInButton />);
     expect(await screen.findByRole('button', { name: 'Renew login for 0x1111…1111' })).toBeInTheDocument();
   });
 
@@ -442,8 +459,13 @@ describe('BorosAgentSetup — the chain decides "logged in"', () => {
         ),
       ),
     );
-    renderWithClient(<BorosAgentSetup />);
-    expect(await screen.findByText(/Your login ends on .*\. Renew it to keep trading\./)).toBeInTheDocument();
+    renderWithClient(
+      <>
+        <BorosAgentSetup />
+        <BorosLogInButton renew />
+      </>,
+    );
+    expect(await screen.findByText(/Your login ends on .*\. Renew it in Settings to keep trading\./)).toBeInTheDocument();
     expect(await screen.findByRole('button', { name: 'Renew login for 0x1111…1111' })).toBeInTheDocument();
   });
 });

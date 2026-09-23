@@ -276,7 +276,7 @@ describe('BorosPairTicket', () => {
     expect(screen.queryByText('trading enabled')).toBeNull();
     expect(screen.queryByText('0x1111…1111')).toBeNull();
     expect(screen.queryByText(/expires/)).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Remove key' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Log out' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Connect wallet' })).toBeNull();
     expect(screen.queryByText(/to trade it/)).toBeNull();
     expect(screen.getAllByRole('button', { name: /Log in to trade/ })).toHaveLength(1);
@@ -323,7 +323,7 @@ describe('BorosPairTicket', () => {
 
     expect(await screen.findByText('trading enabled')).toBeInTheDocument();
     expect(screen.getByText('0x1111…1111')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Remove key' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Log out' })).toBeInTheDocument();
     expect(screen.queryByText(/view only/i)).toBeNull();
     expect(screen.queryByRole('button', { name: /Log in to trade/ })).toBeNull();
   });
@@ -348,7 +348,8 @@ describe('BorosPairTicket', () => {
     window.localStorage.clear();
     server.use(...handlers({ agent: { configured: false, root: null, rootMasked: null } }));
     renderWithClient(<BorosPairTicket />);
-    expect(await screen.findByText(/Connect a wallet above, or set a Boros address/i)).toBeInTheDocument();
+    // No browser wallet in this test, so the card says how to get one.
+    expect(await screen.findByText('Install Rabby or MetaMask, then reload.')).toBeInTheDocument();
     expect(screen.queryByLabelText('Leg A')).not.toBeInTheDocument();
   });
 

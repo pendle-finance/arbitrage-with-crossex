@@ -6,6 +6,7 @@
 import { useState, type ReactNode } from 'react';
 import { useBorosAgent, useForgetBorosAgent, useTelegramLinked } from '../../api/queries';
 import { WalletStateTag } from '../../components/ActiveWalletChip';
+import { ConnectWalletButton } from '../../components/ConnectWalletButton';
 import { BorosLogInButton } from '../../trade/BorosAgentSetup';
 import { describeWalletError, hasInjectedWallet, requestWalletAccount } from '../../lib/wallet';
 import { short } from '../HomeControls';
@@ -59,16 +60,7 @@ export function BorosWalletRow(p: SetupRowProps) {
 
   let body: ReactNode;
   if (!address) {
-    body = hasWallet ? (
-      <>
-        <p className="text-xs text-ink-400">Connect the wallet that holds your Boros account.</p>
-        <button type="button" className="btn-primary w-full" onClick={connect}>
-          Connect wallet
-        </button>
-      </>
-    ) : (
-      <p className="text-xs text-ink-400">Install Rabby or MetaMask, then reload.</p>
-    );
+    body = <ConnectWalletButton />;
   } else if (active.state === 'can-trade') {
     body = (
       <>

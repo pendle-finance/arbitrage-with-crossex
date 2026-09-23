@@ -24,6 +24,7 @@ import { fetchJson } from '../api/client';
 import { qk, useBorosAgent, useForgetBorosAgent, useProvisionBorosAgent, useTelegramLinked } from '../api/queries';
 import type { BorosAgentStatus } from '../api/types';
 import { Chip } from '../components/Chip';
+import { ConnectWalletButton } from '../components/ConnectWalletButton';
 import { useToastOptional } from '../components/Toast';
 import { short } from '../panels/HomeControls';
 import { isSameAddress, useActiveWallet, useTrackedAddressOptional } from '../panels/trackedAddress';
@@ -302,45 +303,21 @@ export function BorosLogInButton({
   );
 }
 
-export function BorosAgentSetup({
-  onDone,
-  compact = false,
-  hideConnect = false,
-}: {
-  onDone?: (root: string) => void;
-  compact?: boolean;
-  hideConnect?: boolean;
-}) {
+/**
+ * The ticket's Boros status card. Status only: the ticket's own
+ * "Log in to trade 0x…" button, where Confirm sits, is the one login.
+ */
+export function BorosAgentSetup() {
   const status = useBorosAgent();
   const forget = useForgetBorosAgent();
-  const tracked = useTrackedAddressOptional();
-  const login = useBorosLogIn(onDone);
-  const { run, busy, error, note, setNote } = login;
   const active = useActiveWallet();
-
-  const connectButton = hideConnect ? null : !hasInjectedWallet() ? (
-    <p className="mt-2 text-[11px] leading-relaxed text-amber-300">
-      No browser wallet detected. Install MetaMask (or another injected wallet) and reload.
-    </p>
-  ) : (
-    <button
-      type="button"
-      disabled={busy}
-      onClick={run}
-      className="mt-2 w-full rounded border border-cyan-500/60 bg-cyan-500/15 px-2 py-1.5 text-[12px] font-medium text-cyan-200 hover:bg-cyan-500/25 disabled:opacity-60"
-    >
-      {buttonText(login, 'Connect wallet')}
-    </button>
-  );
+  const [note, setNote] = useState<string | null>(null);
 
   if (status.isPending) {
     return <p className="text-[11px] text-ink-400">Checking Boros trading setup…</p>;
   }
 
   if (status.data?.configured) {
-    const activeAddress = tracked?.address ?? null;
-    const root = status.data.root;
-    const otherWallet = activeAddress && root && !isSameAddress(activeAddress, root) ? short(activeAddress) : null;
     const notApproved = status.data.approval === 'not-approved';
     const expiryDate = status.data.expiry ? new Date(status.data.expiry * 1000).toLocaleDateString() : null;
     const chip = status.data.expired
@@ -360,11 +337,11 @@ export function BorosAgentSetup({
             className="ml-auto rounded border border-ink-600 px-2 py-0.5 text-[10.5px] text-ink-300 hover:border-ink-400 disabled:opacity-50"
             disabled={forget.isPending}
             onClick={async () => {
-              const res = await forget.mutateAsync();
-              setNote(res.note);
+              await forget.mutateAsync();
+              setNote('Logged out. The approval stays live on-chain until you revoke it in the Boros app.');
             }}
           >
-            {forget.isPending ? 'Removing…' : 'Remove key'}
+            {forget.isPending ? 'Logging out…' : 'Log out'}
           </button>
         </div>
         <p
@@ -389,26 +366,11 @@ export function BorosAgentSetup({
         )}
         {active.endsSoon !== null && (
           <p className="mt-1 text-[10.5px] leading-relaxed text-amber-300">
-            Your login ends on {new Date(active.endsSoon * 1000).toLocaleDateString()}. Renew it to keep trading.
+            Your login ends on {new Date(active.endsSoon * 1000).toLocaleDateString()}. Renew it in Settings to keep
+            trading.
           </p>
         )}
-        {!otherWallet && (status.data.expired || notApproved || active.endsSoon !== null) && (
-          <BorosLogInButton className="mt-2" renew={active.endsSoon !== null} />
-        )}
         {note && <p className="mt-1 text-[10.5px] leading-relaxed text-amber-300">{note}</p>}
-        {otherWallet && (
-          <>
-            <p className="mt-1 text-[10.5px] leading-relaxed text-ink-400">
-              Connect <span className="num text-ink-200">{otherWallet}</span> to trade it.
-            </p>
-            {login.replacing ? <ReplaceConfirm login={login} /> : connectButton}
-            {error && (
-              <p role="alert" className="mt-1.5 text-[11px] leading-relaxed text-rose-300">
-                {error}
-              </p>
-            )}
-          </>
-        )}
       </div>
     );
   }
@@ -424,39 +386,28 @@ export function BorosAgentSetup({
 
   return (
     <div className="rounded-lg border border-cyan-500/25 bg-cyan-500/5 px-3 py-2.5">
-      {compact ? (
-        <p className="text-xs text-ink-400">Connect the wallet that holds your Boros account.</p>
-      ) : (
-        <>
-          <p className="text-[12px] font-medium text-ink-100">Enable Boros trading</p>
-          <p className="mt-1 text-[10.5px] leading-relaxed text-ink-400">
-            Connect once to approve a <span className="text-ink-200">delegated agent key</span>. The
-            terminal then trades with that key — your wallet is not needed again, so a fill can be
-            completed even with this tab closed.
-          </p>
-          <ol className="mt-1.5 flex flex-col gap-0.5 text-[10.5px] leading-relaxed text-ink-400">
-            <li>1. Connect your wallet ({BOROS_CHAIN.name})</li>
-            <li>2. Approve the agent — one on-chain transaction</li>
-            <li>3. The key is stored on this machine only</li>
-          </ol>
-        </>
-      )}
+      <p className="text-[12px] font-medium text-ink-100">Enable Boros trading</p>
+      <p className="mt-1 text-[10.5px] leading-relaxed text-ink-400">
+        Log in once to approve a <span className="text-ink-200">delegated agent key</span>. The terminal then
+        trades with that key — your wallet is not needed again, so a fill can be completed even with this tab
+        closed.
+      </p>
+      <ol className="mt-1.5 flex flex-col gap-0.5 text-[10.5px] leading-relaxed text-ink-400">
+        <li>1. Connect your wallet ({BOROS_CHAIN.name})</li>
+        <li>2. Approve the agent — one on-chain transaction</li>
+        <li>3. The key is stored on this machine only</li>
+      </ol>
       <p className="mt-1.5 text-[10.5px] leading-relaxed text-ink-300">Approval cost: free</p>
-      {!compact && (
-        <p className="mt-1.5 text-[10.5px] leading-relaxed text-ink-500">
-          The agent can <span className="text-ink-300">trade</span> this account. It{' '}
-          <span className="text-ink-300">cannot deposit or withdraw</span> — Boros requires your
-          wallet for that, and this tool never asks for your wallet's key.
-        </p>
+      <p className="mt-1.5 text-[10.5px] leading-relaxed text-ink-500">
+        The agent can <span className="text-ink-300">trade</span> this account. It{' '}
+        <span className="text-ink-300">cannot deposit or withdraw</span> — Boros requires your wallet for that,
+        and this tool never asks for your wallet's key.
+      </p>
+      {active.address === null && (
+        <div className="mt-2">
+          <ConnectWalletButton />
+        </div>
       )}
-
-      {connectButton}
-      {error && (
-        <p role="alert" className="mt-1.5 text-[11px] leading-relaxed text-rose-300">
-          {error}
-        </p>
-      )}
-      {note && <p className="mt-1.5 text-[11px] leading-relaxed text-emerald-300">{note}</p>}
     </div>
   );
 }
