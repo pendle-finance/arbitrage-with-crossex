@@ -41,7 +41,6 @@ const renderDrawer = () => renderWithClient(<SettingsDrawer open onClose={vi.fn(
 
 const row = (name: string) => screen.getByRole('region', { name });
 
-const trackedInStorage = (): unknown => JSON.parse(localStorage.getItem('crossex.strategy.v1') ?? 'null');
 
 async function clickEdit(name: string) {
   const user = userEvent.setup();
@@ -253,24 +252,6 @@ describe('SettingsDrawer', () => {
 
     expect(await within(wallet).findByText('Login expired')).toBeInTheDocument();
     expect(within(wallet).getByRole('button', { name: 'Expand' })).toBeInTheDocument();
-  });
-
-  it('use my browser wallet switches the active wallet to view only', async () => {
-    const user = userEvent.setup();
-    const request = vi.fn(async ({ method }: { method: string }) => (method === 'eth_requestAccounts' ? [PASTED] : null));
-    (window as unknown as { ethereum?: unknown }).ethereum = { request };
-    try {
-      mockAllDone();
-      renderDrawer();
-      expect(await within(row('Boros wallet')).findByText('Logged in')).toBeInTheDocument();
-      await clickEdit('Boros wallet');
-      await user.click(await within(row('Boros wallet')).findByRole('button', { name: 'Use my browser wallet' }));
-      expect(await within(row('Boros wallet')).findByText('0x3f2a…91c0')).toBeInTheDocument();
-      expect(within(row('Boros wallet')).getByText('View only')).toBeInTheDocument();
-      expect(trackedInStorage()).toEqual({ address: PASTED, walletUpgraded: true, followWallet: true });
-    } finally {
-      delete (window as unknown as { ethereum?: unknown }).ethereum;
-    }
   });
 
   it('telegram says which wallet alerts follow', async () => {

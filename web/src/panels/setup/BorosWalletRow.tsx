@@ -11,14 +11,14 @@ import { ConnectWalletButton } from '../../components/ConnectWalletButton';
 import { InlineConfirm } from '../../components/InlineConfirm';
 import { BorosLogInButton, NOT_APPROVED_TEXT } from '../../trade/BorosAgentSetup';
 import { fmtDateShort } from '../../lib/fmt';
-import { describeWalletError, hasInjectedWallet, requestWalletAccount } from '../../lib/wallet';
+import { hasInjectedWallet } from '../../lib/wallet';
 import { short } from '../HomeControls';
 import { isSameAddress, useActiveWallet, useTrackedAddress } from '../trackedAddress';
 import { SetupRowFrame } from './SetupRowFrame';
 import type { SetupRowProps } from './setupState';
 
 export function BorosWalletRow(p: SetupRowProps) {
-  const { address, followWallet, followBrowserWallet, upgradeNote, dismissUpgradeNote } = useTrackedAddress();
+  const { address, upgradeNote, dismissUpgradeNote } = useTrackedAddress();
   const active = useActiveWallet();
   const agent = useBorosAgent().data;
   const forget = useForgetBorosAgent();
@@ -33,15 +33,6 @@ export function BorosWalletRow(p: SetupRowProps) {
   // The other wallet's login still works, so logging in here would end it.
   const otherLoggedIn =
     loggedIn !== null && !isOwnLogin && !agent?.expired && agent?.approval !== 'not-approved' ? loggedIn : null;
-
-  const connect = async () => {
-    setError(null);
-    try {
-      followBrowserWallet(await requestWalletAccount());
-    } catch (err) {
-      setError(describeWalletError(err));
-    }
-  };
 
   const upgrade = upgradeNote ? (
     <div className="flex items-center gap-3 rounded-lg border border-ink-700 px-3 py-2 text-xs text-ink-300">
@@ -143,20 +134,13 @@ export function BorosWalletRow(p: SetupRowProps) {
         </p>
       )}
       {note && <p className="text-[11px] text-ink-400">{note}</p>}
-      {(address && !followWallet && hasWallet) || isOwnLogin ? (
+      {isOwnLogin && !askLogOut && active.state !== 'logging-in' && (
         <div className="flex items-center gap-4">
-          {address && !followWallet && hasWallet && (
-            <button type="button" className="btn-link" onClick={connect}>
-              Use my browser wallet
-            </button>
-          )}
-          {isOwnLogin && !askLogOut && active.state !== 'logging-in' && (
-            <button type="button" className="btn-link ml-auto text-ink-400" onClick={() => setAskLogOut(true)}>
-              Log out
-            </button>
-          )}
+          <button type="button" className="btn-link ml-auto text-ink-400" onClick={() => setAskLogOut(true)}>
+            Log out
+          </button>
         </div>
-      ) : null}
+      )}
       {isOwnLogin && askLogOut && loggedIn && (
         <InlineConfirm
           tone="warn"

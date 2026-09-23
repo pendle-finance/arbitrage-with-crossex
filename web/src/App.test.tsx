@@ -92,7 +92,7 @@ describe('App tab shell', () => {
     expect(await screen.findByText(/Your CrossEx fee rates/)).not.toBeVisible();
     // The positions home (asset view): with no tracked address it shows the
     // track-an-address empty state.
-    expect(await screen.findByText('Track an address to see your farm by asset')).not.toBeVisible();
+    expect(await screen.findByText('Connect your wallet to see your farm by asset')).not.toBeVisible();
   });
 
   it('lands on Positions instead when the account already holds some', async () => {
@@ -203,7 +203,7 @@ describe('App tab shell', () => {
 
     expect(await screen.findByText('Set up the terminal')).toBeInTheDocument();
     expect(screen.queryByRole('tablist')).not.toBeInTheDocument();
-    expect(screen.queryByText('Track an address to see your farm by asset')).not.toBeInTheDocument();
+    expect(screen.queryByText('Connect your wallet to see your farm by asset')).not.toBeInTheDocument();
   });
 
   it('replaces the trading shell (tabs included) with the setup checklist when unconfigured', async () => {

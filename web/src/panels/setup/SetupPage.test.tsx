@@ -610,7 +610,6 @@ describe('setup rows in Settings', () => {
     expect(screen.getByText('It trades on this terminal.')).toBeInTheDocument();
     expect(screen.queryByText('It gets the Telegram alerts.')).toBeNull();
     expect(screen.getByRole('button', { name: 'Log in to trade 0x5c1f…a2e0' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Use my browser wallet' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Log out' })).toBeNull();
   });
 
@@ -637,12 +636,11 @@ describe('setup rows in Settings', () => {
     expect(screen.getByText('Log in once to trade. The agent key cannot deposit or withdraw.')).toBeInTheDocument();
   });
 
-  it('use my browser wallet hides without a wallet or while following', async () => {
+  it('no wallet installed asks for one to log in', async () => {
     localStorage.setItem('crossex.strategy.v1', JSON.stringify({ address: PASTED }));
     mockWorld();
     renderWithClient(<BorosWalletRow {...settingsRow({ open: true })} />);
     expect(await screen.findByText('Install Rabby or MetaMask to log in.')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Use my browser wallet' })).toBeNull();
   });
 
   it('a disconnect the bot could not answer keeps the row connected', async () => {

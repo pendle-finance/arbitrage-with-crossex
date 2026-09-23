@@ -25,8 +25,8 @@ let tracked: ReturnType<typeof useTrackedAddress> | null = null;
 
 function Probe() {
   tracked = useTrackedAddress();
-  const { address, followWallet } = tracked;
-  return <p data-testid="probe">{`${address ?? 'none'}|${followWallet ? 'follow' : 'fixed'}`}</p>;
+  const followWallet = stored()?.followWallet === true;
+  return <p data-testid="probe">{`${tracked.address ?? 'none'}|${followWallet ? 'follow' : 'fixed'}`}</p>;
 }
 
 function StateProbe() {
@@ -190,45 +190,11 @@ describe('follow the browser wallet', () => {
     expect(stored()).toEqual({ address: SECOND, walletUpgraded: true, followWallet: true });
   });
 
-  it('a manual Track ends when the browser wallet switches account', async () => {
-    const wallet = installFakeWallet({ accounts: [WALLET] });
-    seed({ address: WALLET, walletUpgraded: true, followWallet: true });
-    mockWorld({ keyConfigured: true, agent: agentStatus({ configured: true, root: WALLET }) });
-    renderWithClient(<Probe />);
-    await waitFor(() => expect(wallet.listenerCount()).toBe(1));
-
-    act(() => tracked?.setAddress(PASTED));
-    expect(await screen.findByText(`${PASTED}|fixed`)).toBeInTheDocument();
-    expect(stored()).toEqual({ address: PASTED, walletUpgraded: true, manual: true });
-
-    act(() => wallet.emitAccounts([SECOND]));
-    expect(await screen.findByText(`${SECOND}|follow`)).toBeInTheDocument();
-    expect(stored()).toEqual({ address: SECOND, walletUpgraded: true, followWallet: true });
-  });
-
-  it('a manual Track survives a reload while the wallet stays on its account', async () => {
-    const wallet = installFakeWallet({ accounts: [SECOND] });
-    seed({ address: PASTED, walletUpgraded: true, manual: true });
-    mockWorld({ keyConfigured: true, agent: agentStatus({ configured: true, root: WALLET }) });
-    renderWithClient(<Probe />);
-    await waitFor(() => expect(wallet.methods()).toContain('eth_accounts'));
-    await act(async () => {
-      await Promise.resolve();
-    });
-
-    expect(screen.getByTestId('probe')).toHaveTextContent(`${PASTED}|fixed`);
-    expect(stored()).toEqual({ address: PASTED, walletUpgraded: true, manual: true });
-    expect(wallet.listenerCount()).toBe(1);
-  });
-
-  it('Use my browser wallet clears a manual Track', async () => {
+  it('a typed address from a dev build gives way to the wallet account on load', async () => {
     installFakeWallet({ accounts: [SECOND] });
     seed({ address: PASTED, walletUpgraded: true, manual: true });
     mockWorld({ keyConfigured: true, agent: agentStatus({ configured: true, root: WALLET }) });
     renderWithClient(<Probe />);
-    expect(await screen.findByText(`${PASTED}|fixed`)).toBeInTheDocument();
-
-    act(() => tracked?.followBrowserWallet(SECOND));
     expect(await screen.findByText(`${SECOND}|follow`)).toBeInTheDocument();
     expect(stored()).toEqual({ address: SECOND, walletUpgraded: true, followWallet: true });
   });
