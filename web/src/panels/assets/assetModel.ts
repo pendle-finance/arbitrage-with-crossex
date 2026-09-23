@@ -149,6 +149,15 @@ export function pairLockedSpread(pair: Pick<PairEstimate, 'lockedAprFwd' | 'capi
 }
 
 /**
+ * The rate a rate leg was entered at, recovered from `lockedApr`, which is
+ * signed by side (SHORT +, LONG −). NOT its magnitude: a leg entered while
+ * the market's fixed rate was negative has a negative entry rate, and
+ * `Math.abs` would price its exit against the wrong number (audit 2026-09-24).
+ */
+export const entryAprOf = (side: 'LONG' | 'SHORT', lockedApr: number): number =>
+  side === 'SHORT' ? lockedApr : -lockedApr;
+
+/**
  * A pair whose rate legs mature inside the expiry-warn window and have not
  * matured yet — what the roll-over banner counts and the pair card flags.
  * Same window as a venue's `expiresSoon`, read per unit.

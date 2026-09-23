@@ -94,6 +94,7 @@ export function createRollProbe(deps: RollProbeDeps): () => Promise<RollSignalIn
       ]);
       const exitLegs = [exitFifth.simulation.legA, exitFifth.simulation.legB];
       const entryLegs = [entryFifth.simulation.legA, entryFifth.simulation.legB];
+      assertBooksRead([...exitLegs, ...entryLegs]);
       const size = rollFitSize(exitLegs, entryLegs, heldSize);
       if (size === null) {
         probes[target.maturity] = { ok: false, rate: null, size: 0 };
@@ -110,6 +111,7 @@ export function createRollProbe(deps: RollProbeDeps): () => Promise<RollSignalIn
       const [exit, entry] = await Promise.all([deps.price(atSize.exit, false), deps.price(atSize.entry, false)]);
       const exitSim = exit.simulation;
       const entrySim = entry.simulation;
+      assertBooksRead([exitSim.legA, exitSim.legB, entrySim.legA, entrySim.legB]);
       const ok = rollQuoteIsFillable(exitSim, entrySim);
       const { netRate } = rollFigures({
         entrySim,
@@ -147,25 +149,37 @@ export function createRollProbe(deps: RollProbeDeps): () => Promise<RollSignalIn
       const derived = deriveAsset(group as unknown as AssetGroup, {}, view.sinceSec, nowSec);
       for (const pair of derived.pairs) {
         if (!pairCanRoll(pair, nowSec)) continue;
-        let targets: RollSignalInput['targets'] = [];
+        const signal: RollSignalInput = {
+          coin: group.base,
+          longVenue: pair.longVenue,
+          shortVenue: pair.shortVenue,
+          maturity: pair.soonestMaturitySec,
+          targets: [],
+        };
         try {
-          targets = await probePair(pair, group.base, markets, nowSec);
+          signal.targets = await probePair(pair, group.base, markets, nowSec);
         } catch (err) {
+          // A pair that could not be priced (a Boros 429, a book that did
+          // not load) is NOT a pair with nothing to roll into: it is marked
+          // so the sync keeps the targets it last had for it, instead of
+          // blanking a real opportunity for the next five minutes.
+          signal.unpriced = true;
           if (!logged) {
             logged = true;
             const message = err instanceof Error ? err.message : String(err);
             (deps.log ?? console.warn)(`Roll probe skipped ${group.base}: ${message}`);
           }
         }
-        signals.push({
-          coin: group.base,
-          longVenue: pair.longVenue,
-          shortVenue: pair.shortVenue,
-          maturity: pair.soonestMaturitySec,
-          targets,
-        });
+        signals.push(signal);
       }
     }
     return signals;
   };
+}
+
+/** A leg whose book did not load quotes as unfillable, which reads exactly
+ * like "nothing to roll into". It is a failed read, so it is thrown. */
+function assertBooksRead(legs: BorosPairSimulation['legA'][]): void {
+  const dark = legs.find((l) => l.bookStatus === 'unavailable');
+  if (dark) throw new Error(`${dark.marketName}: order book unavailable`);
 }

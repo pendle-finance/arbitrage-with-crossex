@@ -1543,6 +1543,22 @@ describe('RebalanceModal presets and custom amount', () => {
     expect(within(dialog()).queryByText('Position share')).toBeNull();
   });
 
+  it('stuck by margin with legs: the dialog names the cause the card names, never a short wallet', () => {
+    // The even split is off and nothing moves, but the wallets are not
+    // short: what would move is margin for open positions. The card says
+    // so; the preset hover and the body must not say "$203.64 more than the
+    // wallet holds." (audit 2026-09-24).
+    show({
+      ...rebalanceViews.balancedNoJob,
+      plans: plansOf({ ...rebalanceViews.balancedNoJob.plans.even, shortOfEven: 203.64 }),
+    });
+    const even = within(presets()).getByRole('radio', { name: 'Balance positions' });
+    expect(even).toBeDisabled();
+    expect(even).toHaveAttribute('title', 'Equity unbalanced but no available cash to move.');
+    expect(within(dialog()).queryByText(/more than the wallet holds/)).toBeNull();
+    expect(within(dialog()).queryByText(/\$203\.64/)).toBeNull();
+  });
+
   it('with legs, opens on Balance positions', () => {
     show(rebalanceViews.twoBorrows);
     expect(within(presets()).getByRole('radio', { name: 'Balance positions' })).toBeChecked();

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { BorosPairSimulation, SimulatedLeg } from '../../src/core/boros/pair';
 import {
   ROLL_OPPORTUNITY_SHARE,
+  exitPnlOf,
   rollFigures,
   rollFitSize,
   rollOpportunities,
@@ -170,6 +171,19 @@ describe('the roll rate', () => {
     expect(figures.totalCostUsd).toBeCloseTo(6, 9);
     expect(figures.exitPnlUsd).toBeCloseTo(3, 9);
     expect(figures.netRate).toBeCloseTo(0.05, 9);
+  });
+
+  it('prices the exit of a leg entered at a NEGATIVE rate against that rate, not its magnitude', () => {
+    // lockedApr is signed by side: a LONG entered at −5% stores +0.05. The
+    // old `Math.abs` read that as an entry at +5%, so closing at −3% showed
+    // a loss of 8% × size × years where the truth is a gain of 2%.
+    const held = { kind: 'yu' as const, sizeToken: 1_000, imUsd: 0, maturity: NOW + YEAR };
+    const exitSim = sim({ intent: 'close', legA: leg({ execApr: -0.03, estFillSize: 1_000 }), legB: leg({ execApr: -0.03, estFillSize: 1_000 }) });
+    const long = exitPnlOf(exitSim, { ...held, venue: 'Gate', side: 'LONG', lockedApr: 0.05 }, undefined, NOW);
+    expect(long).toBeCloseTo((-0.03 - -0.05) * 1_000, 9);
+    // A SHORT entered at −5% stores −0.05; closing at −3% loses 2%.
+    const short = exitPnlOf(exitSim, { ...held, venue: 'Gate', side: 'SHORT', lockedApr: -0.05 }, undefined, NOW);
+    expect(short).toBeCloseTo((-0.05 - -0.03) * 1_000, 9);
   });
 
   it('is quoted per $6,000,000 exactly as per $50', () => {

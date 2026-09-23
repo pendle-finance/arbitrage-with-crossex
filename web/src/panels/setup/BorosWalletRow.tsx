@@ -120,6 +120,15 @@ export function BorosWalletRow(p: SetupRowProps) {
       skipConsequence="No Boros trades, and Positions shows no Boros legs."
     >
       {body}
+      {/* A connected wallet counts the step as done, which takes the Skip
+          link away — but the first-run page still needs a way past the
+          login for a trader who only wants to watch, or cannot sign right
+          now. Without this the page was a dead end (audit 2026-09-24). */}
+      {p.variant === 'setup' && address && !active.canTrade && active.state !== 'logging-in' && (
+        <button type="button" className="btn-link self-end text-ink-400" onClick={() => p.onDone()}>
+          Continue without logging in
+        </button>
+      )}
       {error && (
         <p role="alert" className="text-[11px] text-rose-300">
           {error}

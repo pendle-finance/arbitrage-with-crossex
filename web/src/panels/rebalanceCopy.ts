@@ -149,7 +149,7 @@ export const VERDICT_BALANCED = 'Wallets match their position share. Nothing to 
 /** The even split is off, but what would move is margin for open positions,
  * so nothing can. A warning, and no amount: the figure read as a to-do (his
  * call 2026-09-23). */
-export const VERDICT_NO_CASH_TO_MOVE = 'Equity unbalanced but no available cash to move';
+export const VERDICT_NO_CASH_TO_MOVE = 'Equity unbalanced but no available cash to move.';
 /** Borrowing, but inside a wallet's interest-free allowance, so it costs
  * nothing today. Distinct from NOT_WORTH_IT: that one weighs a fee against
  * real interest, and weighing it against zero produced a verdict that

@@ -93,6 +93,7 @@ import {
   pairCanRoll,
   pairLockedSpread,
   pairPerpCloseLegs,
+  entryAprOf,
   perpOnlyCloseLegs,
   perpOnlyPairs,
   sizeIn,
@@ -1367,6 +1368,7 @@ function addedMarginOf(sim: BorosPairSimulation | null | undefined): number | nu
 interface ExitPnlLeg {
   venue: string;
   side: 'LONG' | 'SHORT';
+  /** The rate the leg was entered at, sign included. */
   lockedApr: number;
   execApr: number | null;
   /** Collateral units, before fees — null without an execution rate. */
@@ -1379,7 +1381,9 @@ interface ExitPnlLeg {
  * maturity, signed by the side held (a LONG gains when rates rose, a SHORT
  * when they fell), in COLLATERAL units and BEFORE fees — the fee is in
  * costToCrossSize, charged once. `PairLegDetail.lockedApr` is signed by
- * side (SHORT +, LONG −); the rate itself is its magnitude.
+ * side (SHORT +, LONG −); `entryAprOf` recovers the rate the leg was entered
+ * at, sign included — never its magnitude, or a leg entered at a negative
+ * rate would be priced against the wrong number.
  */
 function exitPnlOf(
   sim: BorosPairSimulation | null | undefined,
@@ -1393,7 +1397,7 @@ function exitPnlOf(
 ): { legs: ExitPnlLeg[]; total: number | null } {
   const one = (s: BorosSimulatedLeg | undefined, l: PairLegDetail | undefined): ExitPnlLeg | null => {
     if (!s || !l || l.lockedApr === null) return null;
-    const locked = Math.abs(l.lockedApr);
+    const locked = entryAprOf(l.side, l.lockedApr);
     const years = Math.max(0, l.maturity - nowSec) / SECONDS_IN_YEAR;
     const rate = at === 'worst' ? s.worstApr : s.execApr;
     const pnl = rate !== null ? (l.side === 'LONG' ? rate - locked : locked - rate) * s.estFillSize * years : null;
