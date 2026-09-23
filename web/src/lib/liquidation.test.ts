@@ -359,13 +359,13 @@ describe('formatting', () => {
       'Liquidation ~$1,840 (-20%)',
     );
     expect(describeLine({ base: 'ETH', venue: 'Hyperliquid', side: 'short', price: 3150, move: 0.37 })).toBe(
-      'ETH rises to $3,150 (+37%). Losing leg: Hyperliquid short. Estimate: other coins flat.',
+      'ETH rises to $3,150 (+37%). Losing leg: Hyperliquid short. Assumes other coins do not move.',
     );
     expect(describeLine({ base: 'ETH', venue: 'Gate', side: 'long', price: 1840, move: -0.2 })).toBe(
-      'ETH falls to $1,840 (-20%). Losing leg: Gate long. Estimate: other coins flat.',
+      'ETH falls to $1,840 (-20%). Losing leg: Gate long. Assumes other coins do not move.',
     );
     expect(describeLine({ base: 'ETH', venue: 'Gate', side: null, price: 1840, move: -0.2 })).toBe(
-      'ETH falls to $1,840 (-20%). Estimate: other coins flat.',
+      'ETH falls to $1,840 (-20%). Assumes other coins do not move.',
     );
   });
 });
