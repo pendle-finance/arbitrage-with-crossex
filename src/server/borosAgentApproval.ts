@@ -23,16 +23,19 @@ export type AgentApproval =
 const APPROVED_TTL_MS = 60_000;
 
 let cached: { key: string; at: number; value: AgentApproval } | null = null;
+/** The last key seen approved, so `onApproved` fires once per login. */
+let announced: string | null = null;
 
 /** For tests. */
 export const resetAgentApprovalCache = (): void => {
   cached = null;
+  announced = null;
 };
 
 export async function readAgentApproval(
   fetchImpl: FetchLike,
   input: { root: string; accountId: number; agentPrivateKey: string },
-  opts: { fresh?: boolean; now?: number } = {},
+  opts: { fresh?: boolean; now?: number; onApproved?: () => void } = {},
 ): Promise<AgentApproval> {
   let agent: string;
   try {
@@ -54,5 +57,11 @@ export async function readAgentApproval(
     return { state: 'unknown', expiry: null };
   }
   cached = value.state === 'not-approved' ? null : { key, at: nowMs, value };
+  if (value.state === 'approved' && announced !== key) {
+    // The first read of a new approval. On startup this fires once for the
+    // key already in place, which is a harmless extra sync.
+    announced = key;
+    opts.onApproved?.();
+  }
   return value;
 }

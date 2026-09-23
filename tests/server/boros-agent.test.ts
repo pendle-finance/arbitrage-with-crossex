@@ -235,3 +235,36 @@ describe('GET /api/boros/agent — the on-chain approval', () => {
     expect(data).toMatchObject({ configured: false, approval: null });
   });
 });
+
+describe('GET /api/boros/agent — sync alerts when a login lands', () => {
+  it('calls onApproved once, when the chain first shows the new key approved', async () => {
+    await app?.close();
+    resetAgentApprovalCache();
+    let expiryTime = 0;
+    let approvedCalls = 0;
+    app = makeTestApp({
+      borosFetch: async (url: string) => ({
+        ok: true,
+        status: 200,
+        json: async () => (url.includes('/agents/expiry-time') ? { expiryTime } : { results: [] }),
+      }),
+      getBorosOrders: () => installed,
+      borosAgent: {
+        envPath,
+        hardenConfigDir: true,
+        setOrderClient: (c) => (installed = c),
+        onApproved: () => (approvedCalls += 1),
+      },
+    });
+    process.env.BOROS_ROOT_ADDRESS = ROOT;
+    process.env.BOROS_AGENT_PRIVATE_KEY = AGENT_KEY;
+    const get = () => app!.inject({ method: 'GET', url: '/api/boros/agent?fresh=1', headers: HOST });
+
+    await get(); // the relay has not landed yet
+    expect(approvedCalls).toBe(0);
+    expiryTime = Math.floor(Date.now() / 1000) + 86400;
+    await get();
+    await get();
+    expect(approvedCalls).toBe(1);
+  });
+});

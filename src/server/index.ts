@@ -249,6 +249,9 @@ const appDeps = {
     setOrderClient: (client: BorosOrderClient | undefined) => {
       borosOrdersRef.current = client;
     },
+    // A new login moves Telegram alerts to this wallet now, not at the next
+    // 5-minute sync.
+    onApproved: () => telegramSync.requestSync('login'),
   },
   credentials: {
     envPath,

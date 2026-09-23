@@ -56,7 +56,10 @@ export function borosAgentRoutes(deps: AppDeps) {
           ? await readAgentApproval(
               resolveBorosFetch(deps.borosFetch),
               { root, accountId, agentPrivateKey },
-              { fresh: (req.query as { fresh?: string } | undefined)?.fresh === '1' },
+              {
+                fresh: (req.query as { fresh?: string } | undefined)?.fresh === '1',
+                onApproved: () => deps.borosAgent?.onApproved?.(),
+              },
             )
           : null;
       const expiry = approval?.expiry ?? askedExpiry;
