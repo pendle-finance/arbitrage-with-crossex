@@ -467,8 +467,14 @@ describe('setup rows in Settings', () => {
   it('approval expired', async () => {
     mockWorld({ agent: agentStatus({ configured: true, root: WALLET, expired: true, expiry: 1_700_000_000 }) });
     renderWithClient(<BorosWalletRow {...settingsRow()} />);
-    expect(await within(row('Boros wallet')).findByText('Approval expired')).toBeInTheDocument();
+    expect(await within(row('Boros wallet')).findByText(/· login expired$/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Edit' })).toBeInTheDocument();
+  });
+
+  it('a key the chain never approved reads "not approved", not "can trade"', async () => {
+    mockWorld({ agent: agentStatus({ configured: true, root: WALLET, approval: 'not-approved', expiry: 2_000_000_000 }) });
+    renderWithClient(<BorosWalletRow {...settingsRow()} />);
+    expect(await within(row('Boros wallet')).findByText(/· not approved$/)).toBeInTheDocument();
   });
 
   it('stop tracking clears the address', async () => {

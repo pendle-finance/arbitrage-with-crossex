@@ -250,7 +250,7 @@ describe('SettingsDrawer', () => {
     renderDrawer();
     const wallet = row('Boros wallet');
 
-    expect(await within(wallet).findByText('Approval expired')).toBeInTheDocument();
+    expect(await within(wallet).findByText(/· login expired$/)).toBeInTheDocument();
     expect(within(wallet).getByRole('button', { name: 'Edit' })).toBeInTheDocument();
   });
 
