@@ -20,14 +20,15 @@ import { SignedNumber } from '../../components/SignedNumber';
 import { fmtPct, fmtUsd, num } from '../../lib/fmt';
 import { lineFor as lineIn, liquidationLines } from '../../lib/liquidation';
 import { useBookId } from '../bookId';
-import { AddressForm, short } from '../HomeControls';
+import { short } from '../HomeControls';
+import { ConnectWalletButton } from '../../components/ConnectWalletButton';
 import { useActiveWallet, useTrackedAddress } from '../trackedAddress';
 import { assetIsActive, deriveAsset, SECONDS_IN_YEAR, type AssetDerived } from './assetModel';
 import { legSinceParam, loadPrefs, savePrefs, type AssetViewPrefs } from './assetPrefsStore';
 import { AssetCard } from './AssetCard';
 
 export function AssetsHome() {
-  const { address, setAddress } = useTrackedAddress();
+  const { address } = useTrackedAddress();
   const gateHidden = useActiveWallet().viewOnly;
   const loggedInRoot = useBorosAgent().data?.root ?? null;
   const bookId = useBookId(address);
@@ -181,9 +182,13 @@ export function AssetsHome() {
         {header}
         <EmptyState
           icon="✦"
-          title="Track an address to see your farm by asset"
+          title="Connect your wallet to see your farm by asset"
           hint="The asset view groups every perp and Boros leg by its underlying coin and reports the venues' own lifetime numbers."
-          action={<AddressForm submitLabel="Track" onTrack={setAddress} />}
+          action={
+            <div className="w-72 max-w-full">
+              <ConnectWalletButton />
+            </div>
+          }
         />
       </section>
     );
