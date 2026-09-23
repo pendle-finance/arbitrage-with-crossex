@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { useVersion } from '../api/queries';
 import { Drawer } from '../components/Drawer';
+import { GithubMark } from '../components/GithubMark';
+import { REPO_URL } from '../lib/app';
 import type { SetupStep } from './setup/setupState';
 import { SetupRows } from './setup/SetupRows';
 
@@ -39,14 +41,25 @@ export function SettingsDrawer({
             About
           </h3>
           <div className="flex flex-col gap-[5px] rounded border border-ink-700 px-3 py-[11px] text-[11.5px] text-ink-100">
-            <div className="num">
-              Version {version.data?.current ?? 'unknown'}
-              {/* Gold, not a button: an available update is a FACT about this
-                  install, and the upgrade runs through the installer, not from
-                  in here. Colouring it is what makes it noticed. */}
-              {version.data?.updateAvailable && version.data.latest ? (
-                <span className="text-gold"> — v{version.data.latest} available</span>
-              ) : null}
+            <div className="flex items-baseline justify-between gap-3">
+              <div className="num">
+                Version {version.data?.current ?? 'unknown'}
+                {/* Gold, not a button: an available update is a FACT about this
+                    install, and the upgrade runs through the installer, not from
+                    in here. Colouring it is what makes it noticed. */}
+                {version.data?.updateAvailable && version.data.latest ? (
+                  <span className="text-gold"> — v{version.data.latest} available</span>
+                ) : null}
+              </div>
+              <a
+                href={REPO_URL}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex shrink-0 items-center gap-1.5 text-ink-300 hover:text-ink-100"
+              >
+                <GithubMark size={13} />
+                GitHub
+              </a>
             </div>
             {/* Which code is actually running: the installer records the exact
                 commit it laid down, so "did I install what I audited?" has an
