@@ -133,6 +133,38 @@ function keyOnDisk(): TelegramKey {
 
 const fakeInterval = () => vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
 
+describe('Telegram per-wallet link', () => {
+  it('GET shows the unlinked wallet as connected, and POST addWallet reuses the key', async () => {
+    const key = linked();
+    const { app, bot, status } = boot();
+    status.setAuth('ok');
+    status.setUnlinkedWallet('0xabc');
+
+    const info = await send(app, 'GET', '/api/telegram');
+    expect(info.body.data).toMatchObject({ connected: true, state: 'connected', unlinkedWallet: '0xabc' });
+
+    const started = await send(app, 'POST', '/api/telegram/link', { addWallet: true });
+    expect(started.code).toBe(200);
+    expect(bot.to('POST', '/link-requests')[0].body).toEqual({ keyHash: key.keyHash, version: '1.6.3' });
+    expect(bot.to('POST', '/link-requests')[0].headers['x-terminal-key']).toBe(key.key);
+    expect(keyOnDisk()).toEqual(key);
+
+    const pending = await send(app, 'GET', '/api/telegram');
+    expect(pending.body.data).toMatchObject({ connected: true, state: 'connected', unlinkedWallet: '0xabc' });
+  });
+
+  it('Disconnect clears the unlinked wallet with the key', async () => {
+    linked();
+    const { app, status } = boot();
+    status.setUnlinkedWallet('0xabc');
+    const res = await send(app, 'DELETE', '/api/telegram');
+    expect(res.code).toBe(200);
+    expect(res.body.data).not.toHaveProperty('unlinkedWallet');
+    expect(status.unlinkedWallet).toBeNull();
+    expect(readTelegramKey(dataDir)).toBeNull();
+  });
+});
+
 describe('Telegram link', () => {
   it('sends only the key hash', async () => {
     const { app, bot } = boot();

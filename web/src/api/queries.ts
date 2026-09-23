@@ -825,7 +825,7 @@ export function useTelegramLink(enabled: boolean) {
 export function useStartTelegramLink() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: () => postJson<TelegramLinkStart>('/telegram/link', {}),
+    mutationFn: (body: { addWallet?: boolean } | void) => postJson<TelegramLinkStart>('/telegram/link', body ?? {}),
     onSuccess: () => qc.invalidateQueries({ queryKey: qk.telegram }),
   });
 }

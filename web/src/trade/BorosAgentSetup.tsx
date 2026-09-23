@@ -266,7 +266,8 @@ function ReplaceConfirm({ login }: { login: LogIn }) {
         </li>
         {alertsLinked && (
           <li>
-            Telegram alerts watch <span className="num">{short(to)}</span>. They go to the same chat.
+            Telegram alerts are per wallet. If <span className="num">{short(to)}</span> has none, set them up once in
+            Settings.
           </li>
         )}
         <li>

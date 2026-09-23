@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { TelegramLinkStart, TelegramLinkStatus } from '../../../web/src/api/types';
 import { readOwnerJson, writeOwnerOnlyJson } from '../secretFile';
-import { BotAuthError, BotUnavailableError, BotWalletRefusedError, type BotClient } from './botClient';
+import { BotAuthError, BotUnavailableError, type BotClient } from './botClient';
 import { deleteTelegramKey, newTelegramKey, readTelegramKey, writeTelegramKey, type TelegramKey } from './keyFile';
 import type { TelegramStatus } from './status';
 
@@ -10,7 +10,7 @@ const POLL_EVERY_MS = 5_000;
 const SWAP_FILE = 'telegram-link';
 
 export interface TelegramLink {
-  start(): Promise<TelegramLinkStart>;
+  start(options?: { addWallet?: boolean }): Promise<TelegramLinkStart>;
   status(): TelegramLinkStatus;
   checking(): { hadKey: boolean } | null;
   cancel(): Promise<void>;
@@ -38,6 +38,7 @@ interface KeySwap {
 
 interface PendingLink extends KeySwap {
   key: TelegramKey;
+  adding: boolean;
   url: string;
   expiresAt: number;
   state: 'pending' | 'confirmed' | 'expired';
@@ -83,13 +84,7 @@ export function createTelegramLink(opts: TelegramLinkOptions): TelegramLink {
       key.keyHash === swap.key.keyHash &&
       (await opts.bot.getTerminal(key.key).then(
         () => true,
-        (err: unknown) => {
-          if (err instanceof BotWalletRefusedError) {
-            opts.status.setWalletRefused(err.wallet);
-            return true;
-          }
-          return err instanceof BotAuthError && err.reason === 'wallet-unlinked';
-        },
+        (err: unknown) => err instanceof BotAuthError && err.reason === 'wallet-unlinked',
       ));
     if (!confirmed) {
       restoreKey(swap);
@@ -117,10 +112,11 @@ export function createTelegramLink(opts: TelegramLinkOptions): TelegramLink {
     current.state = state;
     stopPolling();
     if (state === 'expired') {
-      restoreKey(current);
+      if (!current.adding) restoreKey(current);
       return;
     }
-    fs.rmSync(swapFile, { force: true });
+    if (current.adding) opts.status.setUnlinkedWallet(null);
+    else fs.rmSync(swapFile, { force: true });
     opts.onConfirmed();
   };
 
@@ -135,18 +131,43 @@ export function createTelegramLink(opts: TelegramLinkOptions): TelegramLink {
       await opts.bot.getTerminal(current.key.key);
       settle(current, 'confirmed');
     } catch (err) {
-      if (err instanceof BotAuthError && err.reason === 'wallet-unlinked') settle(current, 'confirmed');
-      else if (err instanceof BotWalletRefusedError) {
-        opts.status.setWalletRefused(err.wallet);
-        settle(current, 'confirmed');
-      }
-      else if (err instanceof BotAuthError && err.reason !== 'pending') settle(current, 'expired');
+      if (!(err instanceof BotAuthError) || err.reason === 'pending') return;
+      if (err.reason !== 'wallet-unlinked') settle(current, 'expired');
+      else if (!current.adding) settle(current, 'confirmed');
     } finally {
       current.polling = false;
     }
   };
 
-  const begin = async (): Promise<TelegramLinkStart> => {
+  const follow = (
+    pending: Pick<PendingLink, 'key' | 'previous' | 'previousStatus' | 'adding'>,
+    answer: { code: string; expiresAt: string },
+  ): TelegramLinkStart => {
+    const expiresAt = Date.parse(answer.expiresAt);
+    if (!Number.isFinite(expiresAt)) {
+      throw new BotUnavailableError('The Telegram bot answered a link request with no expiry.');
+    }
+    const current: PendingLink = {
+      ...pending,
+      url: `${opts.pageUrl}?crossex=${encodeURIComponent(answer.code)}`,
+      expiresAt,
+      state: 'pending',
+      polling: false,
+    };
+    stopPolling();
+    link = current;
+    timer = setInterval(() => {
+      poll(current).catch(() => undefined);
+    }, opts.pollMs ?? POLL_EVERY_MS);
+    return { url: current.url, expiresAt };
+  };
+
+  const begin = async (addWallet: boolean): Promise<TelegramLinkStart> => {
+    const existing = addWallet ? readTelegramKey(opts.dataDir) : null;
+    if (existing !== null) {
+      const answer = await opts.bot.requestLink({ keyHash: existing.keyHash, version: opts.version }, existing.key);
+      return follow({ key: existing, previous: existing, adding: true }, answer);
+    }
     const swap = {
       key: newTelegramKey(opts.now()),
       previous: readTelegramKey(opts.dataDir),
@@ -156,23 +177,7 @@ export function createTelegramLink(opts: TelegramLinkOptions): TelegramLink {
     writeTelegramKey(opts.dataDir, swap.key);
     try {
       const answer = await opts.bot.requestLink({ keyHash: swap.key.keyHash, version: opts.version });
-      const expiresAt = Date.parse(answer.expiresAt);
-      if (!Number.isFinite(expiresAt)) {
-        throw new BotUnavailableError('The Telegram bot answered a link request with no expiry.');
-      }
-      const current: PendingLink = {
-        ...swap,
-        url: `${opts.pageUrl}?crossex=${encodeURIComponent(answer.code)}`,
-        expiresAt,
-        state: 'pending',
-        polling: false,
-      };
-      stopPolling();
-      link = current;
-      timer = setInterval(() => {
-        poll(current).catch(() => undefined);
-      }, opts.pollMs ?? POLL_EVERY_MS);
-      return { url: current.url, expiresAt };
+      return follow({ ...swap, adding: false }, answer);
     } catch (err) {
       restoreKey(swap);
       throw err;
@@ -180,13 +185,13 @@ export function createTelegramLink(opts: TelegramLinkOptions): TelegramLink {
   };
 
   return {
-    start() {
+    start(options) {
       if (starting !== null) return starting;
       if (link?.state === 'pending') {
         if (opts.now() < link.expiresAt) return Promise.resolve({ url: link.url, expiresAt: link.expiresAt });
         settle(link, 'expired');
       }
-      starting = settling.then(begin).finally(() => {
+      starting = settling.then(() => begin(options?.addWallet === true)).finally(() => {
         starting = null;
       });
       return starting;
@@ -204,7 +209,7 @@ export function createTelegramLink(opts: TelegramLinkOptions): TelegramLink {
       if (current === null) return settling;
       stopPolling();
       link = null;
-      if (current.state === 'pending') settling = check(current, settling);
+      if (current.state === 'pending' && !current.adding) settling = check(current, settling);
       return settling;
     },
     settled() {

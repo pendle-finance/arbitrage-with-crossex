@@ -6,7 +6,7 @@ import { computeExposure } from '../../core/positions';
 import { TTL, type TtlCache } from '../cache';
 import { marginTiersFor } from '../routes/positions';
 import { readOwnerJson, writeOwnerOnlyJson } from '../secretFile';
-import { BotAuthError, BotWalletRefusedError, type BotClient } from './botClient';
+import { BotAuthError, type BotClient } from './botClient';
 import { readTelegramKey } from './keyFile';
 import type { TelegramStatus } from './status';
 
@@ -162,6 +162,10 @@ export function createTelegramSync(opts: TelegramSyncOptions): TelegramSync {
     const key = readTelegramKey(opts.dataDir);
     if (key === null) return;
     const keyKept = (): boolean => readTelegramKey(opts.dataDir)?.keyHash === key.keyHash;
+    const wallet = opts.wallet?.()?.toLowerCase() ?? null;
+    const unlinked = opts.status.unlinkedWallet;
+    if (unlinked !== null && unlinked === wallet) return;
+    if (unlinked !== null) opts.status.setUnlinkedWallet(null);
     try {
       const coins = await opts.readCoins();
       await probeRolls();
@@ -172,11 +176,14 @@ export function createTelegramSync(opts: TelegramSyncOptions): TelegramSync {
         version: opts.version,
         coins: coins.map((coin) => ({ ...coin, rolls: rollsFor(coin.coin, syncedAt) })),
       });
-      if (keyKept()) opts.status.setSynced(syncedAt, settings, opts.wallet?.()?.toLowerCase() ?? null);
+      if (keyKept()) opts.status.setSynced(syncedAt, settings, wallet);
     } catch (err) {
       if (!keyKept()) return;
+      if (err instanceof BotAuthError && err.reason === 'wallet-unlinked' && wallet !== null) {
+        opts.status.setUnlinkedWallet(wallet);
+        return;
+      }
       if (err instanceof BotAuthError) opts.status.setAuth(err.reason);
-      if (err instanceof BotWalletRefusedError) opts.status.setWalletRefused(err.wallet);
       opts.status.setSyncError(opts.now(), err instanceof Error ? err.message : String(err));
     }
   };

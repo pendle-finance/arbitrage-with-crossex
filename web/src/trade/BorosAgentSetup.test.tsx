@@ -7,7 +7,9 @@ import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HttpResponse, http } from 'msw';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { useTelegram } from '../api/queries';
 import { fmtDateShort } from '../lib/fmt';
+import { telegramInfo } from '../test/fixtures';
 import { server } from '../test/server';
 import { renderWithClient } from '../test/utils';
 import { BorosAgentSetup, BorosLogInButton } from './BorosAgentSetup';
@@ -345,6 +347,37 @@ describe('BorosAgentSetup — no gas balance on the strip', () => {
     expect(body).toMatchObject({ root: ROOT, accountId: 0 });
     await waitFor(() => expect(approveAgent).toHaveBeenCalledTimes(1));
     localStorage.clear();
+  });
+
+  it('with Telegram alerts linked, the question says alerts are per wallet', async () => {
+    const user = userEvent.setup();
+    installWallet();
+    localStorage.setItem('crossex.strategy.v1', JSON.stringify({ address: ROOT, walletUpgraded: true }));
+    server.use(
+      http.get('/api/boros/agent', () =>
+        HttpResponse.json(env(status({ configured: true, root: AGENT_ADDRESS, rootMasked: '0x2222…2222' }))),
+      ),
+      http.get('/api/telegram', () =>
+        HttpResponse.json(env(telegramInfo({ connected: true, state: 'connected', alertWallet: AGENT_ADDRESS }))),
+      ),
+    );
+    function TelegramRead() {
+      useTelegram();
+      return null;
+    }
+    renderWithClient(
+      <>
+        <TelegramRead />
+        <BorosLogInButton />
+      </>,
+    );
+
+    await user.click(await screen.findByRole('button', { name: 'Log in to trade 0x1111…1111' }));
+    const ask = await screen.findByRole('alertdialog', { name: 'Log out 0x2222…2222 and log in 0x1111…1111?' });
+    await waitFor(() =>
+      expect(ask).toHaveTextContent('Telegram alerts are per wallet. If 0x1111…1111 has none, set them up once in Settings.'),
+    );
+    expect(ask).not.toHaveTextContent('same chat');
   });
 
   it('Log in to trade refuses a browser wallet other than the one it names', async () => {

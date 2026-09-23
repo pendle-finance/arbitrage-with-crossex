@@ -85,8 +85,13 @@ function syncFailure(info: TelegramInfo): string | null {
   return [`Last sync failed at ${fmtClock(error.at)}.`, since, 'Retrying.'].filter(Boolean).join(' ');
 }
 
+const unlinkedOf = (info: TelegramInfo | undefined): string | null =>
+  info?.connected === true && info.state === 'connected' && info.unlinkedWallet ? info.unlinkedWallet : null;
+
 function stateLine(info: TelegramInfo | undefined, now: number): { text: string | null; isWarn: boolean } {
   if (!info) return { text: null, isWarn: false };
+  const unlinked = unlinkedOf(info);
+  if (unlinked) return { text: `Not set up for ${short(unlinked)}`, isWarn: true };
   if (info.state === 'replaced') return { text: 'Connected on another terminal', isWarn: true };
   if (info.state === 'removed') return { text: 'Removed on the Boros notifications page', isWarn: true };
   if (!info.connected) return { text: null, isWarn: false };
@@ -108,7 +113,8 @@ export function TelegramRow(p: SetupRowProps) {
   const [phase, setPhase] = useState<Phase>('idle');
   const link = useTelegramLink(phase === 'waiting');
   const linkStatus = phase === 'waiting' ? link.data?.status : undefined;
-  const isConnected = info?.connected === true && info.state === 'connected';
+  const unlinked = unlinkedOf(info);
+  const isConnected = info?.connected === true && info.state === 'connected' && unlinked === null;
 
   useEffect(() => {
     if (linkStatus === 'confirmed') {
@@ -119,11 +125,11 @@ export function TelegramRow(p: SetupRowProps) {
     if (linkStatus === 'none') setPhase('idle');
   }, [linkStatus, qc]);
 
-  const openBorosPage = () => {
+  const openBorosPage = (addWallet: boolean) => {
     p.onOpen();
     const tab = window.open('', '_blank');
     if (tab) tab.opener = null;
-    start.mutate(undefined, {
+    start.mutate(addWallet ? { addWallet: true } : undefined, {
       onSuccess: (started) => {
         const pending: TelegramLinkStatus = { status: 'pending', url: started.url, expiresAt: started.expiresAt };
         qc.setQueryData(qk.telegramLink, pending);
@@ -139,9 +145,22 @@ export function TelegramRow(p: SetupRowProps) {
   const save = (body: Partial<AlertSettings>) => saveSettings.mutate(body, { onError: showError });
 
   const setupButton = (
-    <button type="button" className="btn-primary w-fit" disabled={start.isPending} onClick={openBorosPage}>
+    <button type="button" className="btn-primary w-fit" disabled={start.isPending} onClick={() => openBorosPage(false)}>
       {start.isPending && <Spinner />}
       Set up ↗
+    </button>
+  );
+
+  const addWalletButton = (wallet: string) => (
+    <button
+      type="button"
+      className="btn-primary num w-fit"
+      disabled={start.isPending}
+      onClick={() => openBorosPage(true)}
+    >
+      {start.isPending && <Spinner />}
+      {`Set up alerts for ${short(wallet)}`}
+      <ArrowUpRight size={12} aria-hidden className="inline" />
     </button>
   );
 
@@ -154,6 +173,28 @@ export function TelegramRow(p: SetupRowProps) {
     : null;
   const startError = start.error instanceof ApiError ? start.error.message : start.error ? String(start.error) : null;
   const pageUrl = link.data?.url ?? start.data?.url ?? null;
+
+  const disconnectBlock = (
+    <>
+      <button
+        type="button"
+        className="btn-link text-ink-400"
+        disabled={disconnect.isPending}
+        onClick={() => disconnect.mutate()}
+      >
+        Disconnect this terminal
+      </button>
+      {disconnect.isError && (
+        <p role="alert" className="text-xs text-amber-300">
+          Could not reach the bot. Try again, or use Disconnect terminal on the{' '}
+          <Ext href={info?.alertsPageUrl ?? 'https://boros-bot-notification.pendle.finance/alerts'}>
+            Boros notifications page
+          </Ext>
+          .
+        </p>
+      )}
+    </>
+  );
 
   const connectedBody = (settings: AlertSettings, lastSyncAt: number | null) => (
     <>
@@ -193,11 +234,7 @@ export function TelegramRow(p: SetupRowProps) {
         />
         <p className="pl-9 text-xs text-ink-500">{ROLLOVER_CAPTION}</p>
       </div>
-      {info?.walletRefused ? (
-        <p className="num text-xs text-amber-300">{`Log in to move alerts to ${short(info.walletRefused)}.`}</p>
-      ) : (
-        info?.alertWallet && <p className="num text-xs text-ink-500">{`Alerts for ${short(info.alertWallet)}`}</p>
-      )}
+      {info?.alertWallet && <p className="num text-xs text-ink-500">{`Alerts for ${short(info.alertWallet)}`}</p>}
       {lastSyncAt !== null ? (
         <p className="num text-xs text-ink-400">
           <HoverCard label={`Last synced ${fmtSyncAge(now - lastSyncAt)}`} widthPx={300}>
@@ -212,26 +249,24 @@ export function TelegramRow(p: SetupRowProps) {
           Finish
         </button>
       ) : (
-        <>
-          <button
-            type="button"
-            className="btn-link text-ink-400"
-            disabled={disconnect.isPending}
-            onClick={() => disconnect.mutate()}
-          >
-            Disconnect this terminal
-          </button>
-          {disconnect.isError && (
-            <p role="alert" className="text-xs text-amber-300">
-              Could not reach the bot. Try again, or use Disconnect terminal on the{' '}
-              <Ext href={info?.alertsPageUrl ?? 'https://boros-bot-notification.pendle.finance/alerts'}>
-                Boros notifications page
-              </Ext>
-              .
-            </p>
-          )}
-        </>
+        disconnectBlock
       )}
+    </>
+  );
+
+  const unlinkedBody = (wallet: string) => (
+    <>
+      <p className="num text-xs text-ink-300">
+        {`Telegram alerts are set up per wallet. Set up once for ${short(wallet)}. You can use the same Telegram chat.`}
+      </p>
+      {phase === 'expired' && <p className="text-xs text-amber-300">Link expired. Set up again.</p>}
+      {startError && (
+        <p role="alert" className="text-xs text-amber-300">
+          {startError}
+        </p>
+      )}
+      {addWalletButton(wallet)}
+      {p.variant !== 'setup' && disconnectBlock}
     </>
   );
 
@@ -300,17 +335,19 @@ export function TelegramRow(p: SetupRowProps) {
           </p>
         )
       }
-      setupAction={setupButton}
+      setupAction={unlinked ? addWalletButton(unlinked) : setupButton}
       skipConsequence="Without Telegram alerts nothing warns you near liquidation, when interest starts, or before a pair matures."
     >
-      {info && isConnected
-        ? connectedBody(
-            { ...alertSettings(info), ...(saveSettings.isPending ? saveSettings.variables : {}) },
-            info.lastSyncAt,
-          )
-        : phase === 'waiting'
-          ? waitingBody
-          : idleBody}
+      {unlinked && phase !== 'waiting'
+        ? unlinkedBody(unlinked)
+        : info && isConnected
+          ? connectedBody(
+              { ...alertSettings(info), ...(saveSettings.isPending ? saveSettings.variables : {}) },
+              info.lastSyncAt,
+            )
+          : phase === 'waiting'
+            ? waitingBody
+            : idleBody}
     </SetupRowFrame>
   );
 }
