@@ -1,4 +1,5 @@
 import { Fragment, useState, type ReactNode } from 'react';
+import { ChevronDown, ChevronRight } from 'lucide-react';
 
 export interface Column<T> {
   key: string;
@@ -88,7 +89,7 @@ export function DataTable<T>({
                             onClick={() => toggle(k)}
                             className="rounded px-1 text-ink-400 transition-colors hover:text-ink-100"
                           >
-                            {isOpen ? '▾' : '▸'}
+                            {isOpen ? <ChevronDown size={14} aria-hidden /> : <ChevronRight size={14} aria-hidden />}
                           </button>
                         )}
                       </td>

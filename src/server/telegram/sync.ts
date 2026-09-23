@@ -6,7 +6,7 @@ import { computeExposure } from '../../core/positions';
 import { TTL, type TtlCache } from '../cache';
 import { marginTiersFor } from '../routes/positions';
 import { readOwnerJson, writeOwnerOnlyJson } from '../secretFile';
-import { BotAuthError, type BotClient } from './botClient';
+import { BotAuthError, BotWalletRefusedError, type BotClient } from './botClient';
 import { readTelegramKey } from './keyFile';
 import type { TelegramStatus } from './status';
 
@@ -40,6 +40,7 @@ export interface TelegramSyncOptions {
   now: () => number;
   everyMs?: number;
   probeRolls?: () => Promise<RollSignalInput[]>;
+  wallet?: () => string | null;
 }
 
 export async function readTriggerCoins(deps: { cache: TtlCache; getClients: () => Clients }): Promise<TriggerCoin[]> {
@@ -171,10 +172,11 @@ export function createTelegramSync(opts: TelegramSyncOptions): TelegramSync {
         version: opts.version,
         coins: coins.map((coin) => ({ ...coin, rolls: rollsFor(coin.coin, syncedAt) })),
       });
-      if (keyKept()) opts.status.setSynced(syncedAt, settings);
+      if (keyKept()) opts.status.setSynced(syncedAt, settings, opts.wallet?.()?.toLowerCase() ?? null);
     } catch (err) {
       if (!keyKept()) return;
       if (err instanceof BotAuthError) opts.status.setAuth(err.reason);
+      if (err instanceof BotWalletRefusedError) opts.status.setWalletRefused(err.wallet);
       opts.status.setSyncError(opts.now(), err instanceof Error ? err.message : String(err));
     }
   };

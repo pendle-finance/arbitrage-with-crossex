@@ -87,6 +87,9 @@ export interface AppDeps {
     hardenConfigDir?: boolean;
     /** Install (or clear) the live order client after a successful write. */
     setOrderClient(client: BorosOrderClient | undefined): void;
+    /** Called once per key, when the chain first shows it approved. The bot
+     * checks the approval before it moves alerts, so this is the moment to sync. */
+    onApproved?(): void;
   };
   /** Test seam for the GitHub update check (defaults to global fetch). */
   versionFetch?: FetchLike;

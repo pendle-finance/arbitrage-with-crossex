@@ -22,6 +22,7 @@
  * distance on the book; "0.25% of the rate" would be a different number of
  * ticks on a 3% book than on a 30% one, which is not what a tolerance means.
  */
+import { ViewOnlyChip } from '../components/ViewOnlyChip';
 import { useEffect, useMemo, useState } from 'react';
 import { useTradeFlowOptional } from './TradeFlow';
 import {
@@ -51,8 +52,9 @@ import { isUsdCollateral, knownRate } from '../lib/boros';
 import { fieldValue, fmtPct, sigGrouped } from '../lib/fmt';
 import { useNow } from '../lib/useNow';
 import { uuid } from '../lib/uuid';
-import { useTrackedAddressOptional } from '../panels/trackedAddress';
-import { BorosAgentSetup } from './BorosAgentSetup';
+import { short } from '../panels/HomeControls';
+import { useActiveWallet } from '../panels/trackedAddress';
+import { BorosAgentSetup, BorosLogInButton } from './BorosAgentSetup';
 import {
   BlockerList,
   GasTopUp,
@@ -143,36 +145,8 @@ export function BorosPairTicket({
    */
   onBusyChange?: (busy: boolean) => void;
 } = {}) {
-  const tracked = useTrackedAddressOptional();
   const agent = useBorosAgent();
-
-  /**
-   * Which account this ticket prices against.
-   *
-   * The AGENT'S ROOT WINS whenever one is configured, because that is the
-   * account the orders will actually hit. The tracked address is a
-   * watch-anything setting for the read-only Positions view; letting it drive
-   * the ticket would price the pair against one account's positions, margin
-   * and blockers while trading a different one — the resulting-position rows
-   * and the margin gate would all describe the wrong account.
-   *
-   * The tracked address is only a fallback for an install with no agent, where
-   * nothing can be sent anyway and the panel is pure pricing.
-   */
-  const agentRoot = agent.data?.configured ? agent.data.root : null;
-  const trackedAddress = tracked?.address ?? null;
-  /**
-   * Until the agent status has RESOLVED we do not know whether a root exists,
-   * and falling back to the tracked address in that window would price a
-   * different account than the one about to be traded — the server now refuses
-   * that outright, so this is also what keeps the panel from flashing an error
-   * on every load.
-   */
-  const agentKnown = !agent.isPending;
-  const address = agentRoot ?? (agentKnown ? trackedAddress : null);
-  const addressMismatch = Boolean(
-    agentRoot && trackedAddress && agentRoot.toLowerCase() !== trackedAddress.toLowerCase(),
-  );
+  const { address, canTrade, viewOnly, loginLabel } = useActiveWallet();
   const context = useBorosPairContext(address, active);
 
   const [marketA, setMarketA] = useState<number | null>(null);
@@ -711,16 +685,6 @@ export function BorosPairTicket({
     return (
       <div className="flex flex-col gap-3">
         <BorosAgentSetup />
-        <div className="flex flex-col gap-2 text-[12px] text-ink-300">
-        <p>Connect a wallet above, or set a Boros address to price rate legs.</p>
-        <button
-          type="button"
-          className="self-start rounded border border-ink-600 px-2 py-1 text-[11px] text-ink-200 hover:border-ink-400"
-          onClick={() => tracked?.openSettings()}
-        >
-          Open settings
-        </button>
-        </div>
       </div>
     );
   }
@@ -736,7 +700,16 @@ export function BorosPairTicket({
       {/* Setup sits ABOVE the form, not behind the confirm: finding out the
           terminal cannot send only after pricing a pair wastes the quote. */}
       <div className={twoColumn ? 'lg:col-span-2' : undefined}>
-        <BorosAgentSetup />
+        {viewOnly ? (
+          <div className="rounded-lg border border-ink-700 bg-ink-950 px-3 py-2.5">
+            <div className="flex items-center gap-2">
+              <ViewOnlyChip />
+              <span className="num text-[11px] text-ink-300">{short(address)}</span>
+            </div>
+          </div>
+        ) : (
+          <BorosAgentSetup />
+        )}
       </div>
 
       <div className={twoColumn ? 'flex flex-col gap-3' : 'contents'}>
@@ -755,18 +728,6 @@ export function BorosPairTicket({
             Trade both legs instead
           </button>
         </div>
-      )}
-
-      {addressMismatch && (
-        // Not a blocker — the ticket is already using the right account — but
-        // the Positions view below is showing a DIFFERENT one, and two sets of
-        // numbers for "your Boros position" is exactly how someone ends up
-        // reasoning about the wrong account.
-        <p className="rounded-lg border border-amber-500/30 bg-amber-500/[0.05] px-2.5 py-2 text-[11px] leading-relaxed text-amber-200">
-          Trades <span className="num">{shortAddr(agentRoot)}</span> (the account your agent key
-          signs for); Positions tracks <span className="num">{shortAddr(trackedAddress)}</span> — a
-          different account.
-        </p>
       )}
 
       {context.isError && <QueryError title="Couldn’t load the Boros markets" error={context.error} onRetry={() => context.refetch()} />}
@@ -1137,7 +1098,7 @@ export function BorosPairTicket({
       <BlockerList
         blockers={blockers}
         busyMarketId={cancelClose.isPending ? cancelClose.variables?.marketId ?? null : null}
-        onCancelAndClose={(marketId) => cancelClose.mutate({ marketId })}
+        onCancelAndClose={canTrade ? (marketId) => cancelClose.mutate({ marketId }) : undefined}
       />
       <GasTopUp
         gasBalanceUsd={sim.data?.gasBalanceUsd}
@@ -1236,13 +1197,16 @@ export function BorosPairTicket({
               that the footer naming the markets is gone: it is a fact about
               what pressing this does. Acceptance is atomic; a full fill is
               NOT promised, and both halves matter. */}
+          {loginLabel ? (
+            <BorosLogInButton />
+          ) : (
           <HoldToConfirmButton
             // A pair is the neutral info fill; one leg is a directional
             // position, so its button carries the side — grass long, guava
             // short — the way the perp single ticket's does.
             tone={mode === 'single' && !onlyLeg ? (dirA === 'long' ? 'buy' : 'sell') : 'cyan'}
             className="w-full"
-            disabled={!canConfirm}
+            disabled={!canConfirm || !canTrade}
             onConfirm={onConfirm}
             title={
               mode === 'pair' && !onlyLeg
@@ -1260,6 +1224,7 @@ export function BorosPairTicket({
                     ? 'Confirm — 1 Boros market order ▸'
                     : 'Confirm — 2 Boros market orders ▸'}
           </HoldToConfirmButton>
+          )}
           {/* Every market this will touch, NAMED before anything is sent —
               the names are the part the button cannot show. It already says
               how many orders go out ("2 Boros market orders"), so the prose
@@ -1271,10 +1236,6 @@ export function BorosPairTicket({
     </div>
   );
 }
-
-/** 0x1234…abcd */
-const shortAddr = (a: string | null): string =>
-  a ? `${a.slice(0, 6)}…${a.slice(-4)}` : '—';
 
 function acknowledgementText(
   leg: { marketName: string; sizing: { currentSize: number; resultingSize: number; flips: boolean } },

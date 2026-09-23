@@ -5,11 +5,12 @@
  * §4 acknowledgement gates confirm and retracts when the trade changes, and a
  * partial fill is reported as a residual rather than a success.
  */
-import { screen, waitFor, within } from '@testing-library/react';
+import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HttpResponse, http } from 'msw';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { STRATEGY_STORAGE_KEY } from '../panels/HomeControls';
+import { installFakeWallet, removeFakeWallet } from '../test/fakeWallet';
 import { server } from '../test/server';
 import { renderWithClient } from '../test/utils';
 import { BorosPairTicket } from './BorosPairTicket';
@@ -243,13 +244,11 @@ describe('BorosPairTicket', () => {
     expect((bodies[0] as { address: string }).address).toBe(ADDRESS);
   });
 
-  it('prices the AGENT\'s account, not a different tracked address', async () => {
-    // The dangerous case: tracking A while the agent trades B would show A's
-    // positions, margin and blockers for orders that hit B.
+  it('a view-only wallet prices itself and asks to log in', async () => {
     const other = '0x2222222222222222222222222222222222222222';
     window.localStorage.setItem(
       STRATEGY_STORAGE_KEY,
-      JSON.stringify({ address: other }),
+      JSON.stringify({ address: other, walletUpgraded: true }),
     );
     const bodies: Record<string, unknown>[] = [];
     server.use(...handlers({ onSimulate: (b) => bodies.push(b) }));
@@ -258,9 +257,75 @@ describe('BorosPairTicket', () => {
 
     await fillTicket(user);
     await waitFor(() => expect(bodies.length).toBeGreaterThan(0));
-    expect((bodies[0] as { address: string }).address).toBe(ADDRESS);
-    // And the divergence is stated, because the Positions view shows the other.
-    expect(screen.getByText(/the account your agent key signs for/i)).toBeInTheDocument();
+    expect((bodies[0] as { address: string }).address).toBe(other);
+    expect(screen.getByRole('button', { name: 'Log in to trade 0x2222…2222' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Confirm/ })).toBeNull();
+  });
+
+  it('a view-only wallet shows itself in the agent box, and the submit is the one action', async () => {
+    const other = '0x2222222222222222222222222222222222222222';
+    window.localStorage.setItem(
+      STRATEGY_STORAGE_KEY,
+      JSON.stringify({ address: other, walletUpgraded: true }),
+    );
+    server.use(...handlers({ agent: { expiry: 1_900_000_000 } }));
+    renderWithClient(<BorosPairTicket />);
+
+    expect(await screen.findByText('View only')).toBeInTheDocument();
+    expect(screen.getByText('0x2222…2222')).toBeInTheDocument();
+    expect(screen.queryByText('trading enabled')).toBeNull();
+    expect(screen.queryByText('0x1111…1111')).toBeNull();
+    expect(screen.queryByText(/expires/)).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Log out' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Connect wallet' })).toBeNull();
+    expect(screen.queryByText(/to trade it/)).toBeNull();
+    expect(screen.getAllByRole('button', { name: /Log in to trade/ })).toHaveLength(1);
+  });
+
+  it('a pasted wallet with no agent keeps the explanation, and the submit is the one action', async () => {
+    const other = '0x2222222222222222222222222222222222222222';
+    window.localStorage.setItem(
+      STRATEGY_STORAGE_KEY,
+      JSON.stringify({ address: other, walletUpgraded: true }),
+    );
+    server.use(...handlers({ agent: { configured: false, root: null, rootMasked: null } }));
+    renderWithClient(<BorosPairTicket />);
+
+    expect(await screen.findByText('Enable Boros trading')).toBeInTheDocument();
+    expect(screen.getByText(/one on-chain transaction/i)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Connect wallet' })).toBeNull();
+    expect(screen.queryByText(/No browser wallet detected/)).toBeNull();
+    expect(screen.getAllByRole('button', { name: /Log in to trade/ })).toHaveLength(1);
+  });
+
+  it('a browser wallet switch with no agent turns the ticket to Log in', async () => {
+    const other = '0x2222222222222222222222222222222222222222';
+    window.localStorage.setItem(
+      STRATEGY_STORAGE_KEY,
+      JSON.stringify({ address: ADDRESS, walletUpgraded: true, followWallet: true }),
+    );
+    const wallet = installFakeWallet({ accounts: [ADDRESS] });
+    server.use(...handlers({ agent: { expiry: 1_900_000_000 } }));
+    renderWithClient(<BorosPairTicket />);
+
+    expect(await screen.findByText('trading enabled')).toBeInTheDocument();
+    await waitFor(() => expect(wallet.listenerCount()).toBe(1));
+    act(() => wallet.emitAccounts([other]));
+
+    expect(await screen.findByRole('button', { name: 'Log in to trade 0x2222…2222' })).toBeInTheDocument();
+    expect(screen.queryByText('trading enabled')).toBeNull();
+    removeFakeWallet();
+  });
+
+  it('the wallet that trades keeps its agent box', async () => {
+    server.use(...handlers({ agent: { expiry: 1_900_000_000 } }));
+    renderWithClient(<BorosPairTicket />);
+
+    expect(await screen.findByText('trading enabled')).toBeInTheDocument();
+    expect(screen.getByText('0x1111…1111')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Log out' })).toBeInTheDocument();
+    expect(screen.queryByText(/view only/i)).toBeNull();
+    expect(screen.queryByRole('button', { name: /Log in to trade/ })).toBeNull();
   });
 
   it('falls back to the tracked address when no agent is configured', async () => {
@@ -283,7 +348,8 @@ describe('BorosPairTicket', () => {
     window.localStorage.clear();
     server.use(...handlers({ agent: { configured: false, root: null, rootMasked: null } }));
     renderWithClient(<BorosPairTicket />);
-    expect(await screen.findByText(/Connect a wallet above, or set a Boros address/i)).toBeInTheDocument();
+    // No browser wallet in this test, so the card says how to get one.
+    expect(await screen.findByText('Install Rabby or MetaMask, then reload.')).toBeInTheDocument();
     expect(screen.queryByLabelText('Leg A')).not.toBeInTheDocument();
   });
 

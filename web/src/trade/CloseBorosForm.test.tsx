@@ -26,10 +26,22 @@ const leg = (): StrategyLeg =>
 
 /** An approved agent and nothing else: the confirm gate gets its clearance,
  * the quote panel gets no context and simply shows no rate. */
+const ACTIVE = '0x1111111111111111111111111111111111111111';
+
+const agentReady = () =>
+  http.get('/api/boros/agent', () => HttpResponse.json(env({ configured: true, expired: false, root: ACTIVE })));
+
+beforeEach(() => {
+  localStorage.setItem('crossex.strategy.v1', JSON.stringify({ address: ACTIVE, walletUpgraded: true }));
+});
+
 const ready = () => [
   versionHandler(),
-  http.get('/api/boros/agent', () =>
-    HttpResponse.json(env({ configured: true, expired: false, address: '0xagent' })),
+  agentReady(),
+  http.get('/api/boros/pair/context', () =>
+    HttpResponse.json(
+      env({ markets: [], crossByToken: [], isolatedByMarket: [], defaultSlippageApr: 0.0025, maxSlippageApr: 0.1 }),
+    ),
   ),
 ];
 
@@ -190,13 +202,13 @@ describe('CloseBorosForm — whose legs these are', () => {
   const agentFor = (root: string) =>
     http.get('/api/boros/agent', () => HttpResponse.json(env({ configured: true, expired: false, root })));
 
-  it('refuses to close when the tracked address is not the account the agent signs for', async () => {
-    localStorage.setItem('crossex.strategy.v1', JSON.stringify({ address: OTHER }));
+  it('a view-only wallet shows Log in to trade instead of the close', async () => {
+    localStorage.setItem('crossex.strategy.v1', JSON.stringify({ address: OTHER, walletUpgraded: true }));
     server.use(versionHandler(), agentFor(ROOT), closeReturns({}));
     renderWithClient(<CloseBorosForm legs={[leg()]} />);
-    expect(await screen.findByText(/a different account from the one your agent key signs for/)).toBeInTheDocument();
-    const btn = await screen.findByRole('button', { name: /Close leg/ });
-    expect(btn).toBeDisabled();
+    expect(await screen.findByRole('button', { name: 'Log in to trade 0x2222…2222' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Close leg/ })).toBeNull();
+    expect(screen.getAllByRole('button', { name: /Log in to trade|Connect wallet/ })).toHaveLength(1);
     localStorage.clear();
   });
 
@@ -329,7 +341,8 @@ describe('CloseBorosForm — the venue minimum', () => {
 
   /** A partner sharing collateral and maturity, so the quote is eligible. */
   const quoting = (blockers: unknown[]) => [
-    ...ready(),
+    versionHandler(),
+    agentReady(),
     http.get('/api/boros/pair/context', () =>
       HttpResponse.json(
         env({

@@ -37,7 +37,8 @@ import {
   useBorosPairSimulation,
 } from '../api/queries';
 import { HoldToConfirmButton } from '../components/HoldToConfirmButton';
-import { useTrackedAddress } from '../panels/trackedAddress';
+import { useActiveWallet } from '../panels/trackedAddress';
+import { BorosLogInButton } from './BorosAgentSetup';
 
 /** Used until the market's own deviation cap is known, or if it is degenerate. */
 const FALLBACK_SLIPPAGE_PCT = 1;
@@ -71,7 +72,7 @@ export function CloseBorosForm({
 }) {
   const close = useBorosCancelAndClose();
   const agent = useBorosAgent();
-  const { address } = useTrackedAddress();
+  const { address, canTrade, loginLabel } = useActiveWallet();
   /**
    * Legs whose close filled everything it ASKED for, with whatever the venue
    * still holds afterwards.
@@ -274,23 +275,10 @@ export function CloseBorosForm({
   })();
 
 
-  const agentReady = agent.data?.configured === true && agent.data.expired === false;
-  /**
-   * ⚠ The legs on this form belong to the TRACKED address; the server closes
-   * the account the agent key signs for. Those are the same account for a
-   * user watching their own book and DIFFERENT ones for someone tracking
-   * another wallet — and a close from that card would act on the agent's
-   * own position, sized off the other book. Refused here (and again server
-   * side, which is why the request names the address).
-   */
-  const agentRoot = agent.data?.configured ? agent.data.root : null;
-  const addressMismatch = Boolean(agentRoot && address && agentRoot.toLowerCase() !== address.toLowerCase());
-  const agentBlocked = agent.isSuccess && (!agentReady || addressMismatch);
+  const agentBlocked = agent.isSuccess && !canTrade;
   const agentReason = !agent.data?.configured
     ? 'No Boros wallet is connected on this install — connect one and approve an agent key before closing Boros legs.'
-    : agent.data.expired
-      ? 'The Boros agent approval has expired — approve a new agent key before closing Boros legs.'
-      : `These legs belong to ${address} — a different account from the one your agent key signs for (${agentRoot}). Track that address to close its legs.`;
+    : 'The Boros agent approval has expired — approve a new agent key before closing Boros legs.';
 
   const allDone = closable.length > 0 && done.length === closable.length;
   /**
@@ -464,7 +452,7 @@ export function CloseBorosForm({
 
   return (
     <div className="flex flex-col gap-4">
-      {agentBlocked && (
+      {agentBlocked && !loginLabel && (
         <p className="rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-[11px] leading-relaxed text-amber-300/90">
           {agentReason}
         </p>
@@ -731,6 +719,9 @@ export function CloseBorosForm({
       </EstimateCard>
 
       <div className="flex flex-col gap-1.5">
+        {loginLabel ? (
+          <BorosLogInButton />
+        ) : (
         <HoldToConfirmButton
           tone="red"
           // No quote, no close: a hold with the numbers blank sends a bound
@@ -743,6 +734,7 @@ export function CloseBorosForm({
             ? 'Closing…'
             : `Close ${closable.length === 1 ? 'leg' : `${closable.length} legs`} ▸`}
         </HoldToConfirmButton>
+        )}
         <p className="text-[11px] leading-relaxed text-ink-400">
           {closable.length === 1
             ? 'Cancels any resting orders on this market first, then sends one market order. The perp leg stays open.'

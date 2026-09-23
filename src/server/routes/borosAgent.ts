@@ -29,6 +29,7 @@ import { makeBorosApiOrderClient, USD_TOKEN_ID } from '../../core/boros/borosApi
 import { fetchBorosMarkets, resolveBorosFetch } from '../../core/boros/client';
 import type { AppDeps } from '../app';
 import { TTL } from '../cache';
+import { readAgentApproval, resetAgentApprovalCache } from '../borosAgentApproval';
 import { rewriteEnvFile } from './credentials';
 
 const PRIVATE_KEY_RE = /^0x[0-9a-fA-F]{64}$/;
@@ -39,21 +40,43 @@ const maskAddress = (a: string): string => `${a.slice(0, 6)}…${a.slice(-4)}`;
 
 export function borosAgentRoutes(deps: AppDeps) {
   return async function plugin(app: FastifyInstance): Promise<void> {
-    app.get('/boros/agent', async (_req, reply) => {
+    app.get('/boros/agent', async (req, reply) => {
       const root = process.env.BOROS_ROOT_ADDRESS;
-      const configured = Boolean(root && process.env.BOROS_AGENT_PRIVATE_KEY);
+      const agentPrivateKey = process.env.BOROS_AGENT_PRIVATE_KEY;
+      const configured = Boolean(root && agentPrivateKey);
+      const accountId = Number(process.env.BOROS_ACCOUNT_ID ?? 0) || 0;
       const rawExpiry = Number(process.env.BOROS_AGENT_EXPIRY);
-      const expiry = configured && Number.isFinite(rawExpiry) && rawExpiry > 0 ? rawExpiry : null;
+      const askedExpiry = configured && Number.isFinite(rawExpiry) && rawExpiry > 0 ? rawExpiry : null;
+      const nowSec = Math.floor(Date.now() / 1000);
+
+      // The .env expiry is what the terminal asked for, not what the chain
+      // holds: a rejected approval or a revoke leaves it in place.
+      const approval =
+        configured && root && agentPrivateKey
+          ? await readAgentApproval(
+              resolveBorosFetch(deps.borosFetch),
+              { root, accountId, agentPrivateKey },
+              {
+                fresh: (req.query as { fresh?: string } | undefined)?.fresh === '1',
+                onApproved: () => deps.borosAgent?.onApproved?.(),
+              },
+            )
+          : null;
+      const expiry = approval?.expiry ?? askedExpiry;
 
       return reply.ok({
         configured,
         root: configured ? root : null,
         rootMasked: configured && root ? maskAddress(root) : null,
-        accountId: configured ? Number(process.env.BOROS_ACCOUNT_ID ?? 0) : null,
+        accountId: configured ? accountId : null,
         expiry,
         // Surfaced rather than left to show up as AuthAgentExpired() on a
         // confirm the user has already committed to.
-        expired: expiry !== null && expiry <= Math.floor(Date.now() / 1000),
+        expired:
+          approval?.state === 'expired' ||
+          (approval?.state === 'unknown' && askedExpiry !== null && askedExpiry <= nowSec),
+        // null when no key is stored. 'unknown' when Boros could not be read.
+        approval: approval?.state ?? null,
         // The panel needs to know whether provisioning is even possible here.
         canProvision: Boolean(deps.borosAgent),
       });
@@ -146,6 +169,7 @@ export function borosAgentRoutes(deps: AppDeps) {
       if (expiry === undefined) delete process.env.BOROS_AGENT_EXPIRY;
       else process.env.BOROS_AGENT_EXPIRY = String(expiry);
       svc.setOrderClient(client);
+      resetAgentApprovalCache();
 
       return reply.ok({
         configured: true,
@@ -181,6 +205,7 @@ export function borosAgentRoutes(deps: AppDeps) {
       delete process.env.BOROS_RPC_URLS;
       delete process.env.BOROS_AGENT_EXPIRY;
       svc.setOrderClient(undefined);
+      resetAgentApprovalCache();
 
       // Forgetting the key locally does NOT revoke the on-chain approval — the
       // agent stays authorised until the user revokes it in the Boros app or it

@@ -26,6 +26,7 @@ import { defaultGoal, planSteps, receivingBorrow, receivingHeld } from './Rebala
 import { ROUTE_LABEL, roundCountOf, roundOf, RouteRow, routeTime, shownKeys, SpotLines, targetsOf, Term } from './RebalanceHovers';
 import type { Fact } from './RebalanceHovers';
 import { NoSpotReadLine } from './TransferBits';
+import { ChevronDown, ChevronRight } from 'lucide-react';
 
 const TITLE = 'Rebalance';
 const FOR_LABEL = 'For';
@@ -190,7 +191,7 @@ function quoteFactsOf(route: RoutePlan, view: RebalanceView): Fact[] {
 function StepsFold({ open, onToggle, hover, rows }: { open: boolean; onToggle: () => void; hover: string | null; rows: StepRow[] }) {
   const toggle = (
     <button type="button" className="btn-link inline-flex items-center gap-1" aria-expanded={open} onClick={onToggle}>
-      <span aria-hidden="true">{open ? '▾' : '▸'}</span>
+      {open ? <ChevronDown size={14} aria-hidden /> : <ChevronRight size={14} aria-hidden />}
       {open ? HIDE_STEPS : MODAL_STEPS}
     </button>
   );

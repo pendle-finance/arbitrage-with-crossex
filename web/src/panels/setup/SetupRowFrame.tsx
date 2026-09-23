@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from 'react';
 import type { SetupRowProps } from './setupState';
+import { ChevronDown } from 'lucide-react';
 
 type DotTone = 'done' | 'current' | 'warn' | 'later';
 
@@ -16,11 +17,11 @@ export function SetupRowFrame({
   row,
   isDone,
   state,
+  stateNode,
   isWarn = false,
   alert,
   setupAction,
   skipConsequence,
-  closeLabel = 'Done',
   children,
 }: {
   n: number;
@@ -28,11 +29,12 @@ export function SetupRowFrame({
   row: SetupRowProps;
   isDone: boolean;
   state: string | null;
+  /** Shown in place of `state`'s text, e.g. an address and a tag. */
+  stateNode?: ReactNode;
   isWarn?: boolean;
   alert?: ReactNode;
   setupAction?: ReactNode;
   skipConsequence?: string;
-  closeLabel?: string;
   children: ReactNode;
 }) {
   const [isSkipped, setIsSkipped] = useState(false);
@@ -44,13 +46,23 @@ export function SetupRowFrame({
   const dot: DotTone = isDone && !isLineWarn ? 'done' : isLineWarn ? 'warn' : row.open ? 'current' : 'later';
   const canSkip = !isSettings && !isDone && row.onSkip !== undefined && skipConsequence !== undefined;
 
-  const action = row.open ? (
-    <button type="button" className="btn-link" onClick={row.onClose}>
-      {closeLabel}
-    </button>
-  ) : isDone ? (
-    <button type="button" className="btn-link" onClick={row.onOpen}>
-      Edit
+  // Settings: a set-up row opens and closes like a card, by its chevron. A row
+  // not set up yet keeps its "Set up" call to action.
+  const isDisclosure = isSettings && (isDone || row.open);
+  const chevron = (
+    <span aria-hidden className={`pp-chevron !p-1.5 transition-transform ${row.open ? 'rotate-180' : ''}`}>
+      <ChevronDown size={14} aria-hidden />
+    </span>
+  );
+  const action = isDisclosure ? (
+    <button
+      type="button"
+      aria-label={row.open ? 'Collapse' : 'Expand'}
+      aria-expanded={row.open}
+      onClick={row.open ? row.onClose : row.onOpen}
+      className="rounded-full hover:text-ink-50"
+    >
+      {chevron}
     </button>
   ) : (
     (setupAction ?? (
@@ -71,7 +83,19 @@ export function SetupRowFrame({
       aria-label={title}
       className={`flex flex-col gap-3 px-4 py-3 ${showsNotSetUp ? 'rounded !border !border-gold/45' : ''}`}
     >
-      <div className="flex items-center gap-3">
+      <div
+        className={`flex items-center gap-3 ${isDisclosure ? 'cursor-pointer' : ''}`}
+        // The whole header toggles, not only the chevron. Keyboard users get
+        // the chevron button, so this div needs no role of its own.
+        onClick={
+          isDisclosure
+            ? (e) => {
+                if ((e.target as HTMLElement).closest('button')) return;
+                (row.open ? row.onClose : row.onOpen)?.();
+              }
+            : undefined
+        }
+      >
         <span
           aria-hidden="true"
           className={`num flex h-5 w-5 shrink-0 items-center justify-center rounded-full border text-xs font-semibold ${DOT_CLASS[dot]}`}
@@ -79,7 +103,9 @@ export function SetupRowFrame({
           {dot === 'done' ? '✓' : dot === 'warn' ? '!' : n}
         </span>
         <span className="shrink-0 text-sm font-medium text-ink-100">{title}</span>
-        {line && (
+        {stateNode && !showsNotSetUp ? (
+          <span className="flex min-w-0 items-center gap-2 text-xs text-ink-300">{stateNode}</span>
+        ) : line && (
           <span className={`num min-w-0 text-xs ${isLineWarn ? 'text-amber-400' : 'text-ink-400'}`}>
             {line
               .split(' · ')

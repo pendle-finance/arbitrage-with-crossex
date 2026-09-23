@@ -11,6 +11,7 @@
  * Durable state is ONLY `crossex.assetView.v1` (start date + exclusions);
  * every number is a pure function of the venue feeds.
  */
+import { ViewOnlyChip } from '../../components/ViewOnlyChip';
 import { useMemo, useState } from 'react';
 import { useAccount, useAssetView, useAssetViewWindows, useFees, usePositions } from '../../api/queries';
 import { EmptyState } from '../../components/EmptyState';
@@ -21,13 +22,14 @@ import { fmtPct, fmtUsd, num } from '../../lib/fmt';
 import { lineFor as lineIn, liquidationLines } from '../../lib/liquidation';
 import { useBookId } from '../bookId';
 import { AddressForm, short } from '../HomeControls';
-import { useTrackedAddress } from '../trackedAddress';
-import { assetIsActive, deriveAsset, SECONDS_IN_YEAR } from './assetModel';
+import { useActiveWallet, useTrackedAddress } from '../trackedAddress';
+import { assetIsActive, deriveAsset, SECONDS_IN_YEAR, type AssetDerived } from './assetModel';
 import { legSinceParam, loadPrefs, savePrefs, type AssetViewPrefs } from './assetPrefsStore';
 import { AssetCard } from './AssetCard';
 
 export function AssetsHome() {
   const { address, setAddress } = useTrackedAddress();
+  const gateHidden = useActiveWallet().viewOnly;
   const bookId = useBookId(address);
 
   const [prefs, setPrefs] = useState<AssetViewPrefs>(() => loadPrefs(bookId));
@@ -65,23 +67,28 @@ export function AssetsHome() {
 
   const derived = useMemo(
     () =>
-      (data?.assets ?? []).map((g) => {
-        const stored: number | undefined = prefs.sinceByAsset[g.base];
-        const win = stored !== undefined ? windows.bySince.get(stored) : undefined;
-        const windowFailed = stored !== undefined && !win && windows.errorBySince.has(stored);
-        const group = win ? (win.assets.find((a) => a.base === g.base) ?? { ...g, perpClosed: [], borosHistory: [] }) : g;
-        const meta = win ?? data;
-        const sinceSec = meta?.sinceSec ?? 0;
-        return {
-          group,
-          sinceSec,
-          storedSinceSec: stored,
-          backfilling: meta?.coverage.backfilling === true,
-          windowPending: stored !== undefined && !win && !windowFailed,
-          derived: deriveAsset(group, prefs.exclusions, sinceSec, meta?.nowSec ?? 0, feeRows),
-        };
-      }),
-    [data, windows.bySince, windows.errorBySince, prefs.exclusions, prefs.sinceByAsset, feeRows],
+      (data?.assets ?? [])
+        .map((g) => {
+          const stored: number | undefined = prefs.sinceByAsset[g.base];
+          const win = stored !== undefined ? windows.bySince.get(stored) : undefined;
+          const windowFailed = stored !== undefined && !win && windows.errorBySince.has(stored);
+          const full = win ? (win.assets.find((a) => a.base === g.base) ?? { ...g, perpClosed: [], borosHistory: [] }) : g;
+          const group = gateHidden ? { ...full, perpOpen: [], perpClosed: [] } : full;
+          const meta = win ?? data;
+          const sinceSec = meta?.sinceSec ?? 0;
+          const d = deriveAsset(group, prefs.exclusions, sinceSec, meta?.nowSec ?? 0, feeRows);
+          const shown: AssetDerived = gateHidden ? { ...d, gaps: d.gaps.filter((gap) => gap.leg !== 'perp') } : d;
+          return {
+            group,
+            sinceSec,
+            storedSinceSec: stored,
+            backfilling: meta?.coverage.backfilling === true,
+            windowPending: stored !== undefined && !win && !windowFailed,
+            derived: shown,
+          };
+        })
+        .filter((a) => !gateHidden || a.group.borosOpen.length > 0 || a.group.borosHistory.length > 0),
+    [data, windows.bySince, windows.errorBySince, prefs.exclusions, prefs.sinceByAsset, feeRows, gateHidden],
   );
   /**
    * "Hide inactive pairs": on by default, the list shows only assets with
@@ -125,8 +132,8 @@ export function AssetsHome() {
   // Borrow interest is booked by the venue per LIABILITY COIN, not per
   // market, so it cannot sit on a card: it is charged once, here, and the
   // total then differs from the cards' sum by exactly this line.
-  const interestAvailable = data?.interest?.available === true;
-  const interestUsd = interestAvailable ? data!.interest!.paidUsd : 0;
+  const interestAvailable = gateHidden || data?.interest?.available === true;
+  const interestUsd = !gateHidden && interestAvailable ? data!.interest!.paidUsd : 0;
   const totalPnl = derived.reduce((s, a) => s + a.derived.totals.pnlUsd, 0) - interestUsd;
   const totalCapital = derived.reduce((s, a) => s + a.derived.totals.capitalUsd, 0);
   // Blended APR: Σpnl over Σ(capital · its own elapsed clock) — each asset
@@ -202,6 +209,15 @@ export function AssetsHome() {
 
   return (
     <section>
+      {gateHidden && (
+        <p className="mb-4 flex items-center gap-2 text-xs text-ink-400">
+          <ViewOnlyChip />
+          <span>
+            Viewing <span className="num text-ink-200">{short(address)}</span>. Your Gate positions are hidden.
+          </span>
+        </p>
+      )}
+
       {/* Account hero. ONE result — what the farm kept — ranked by position:
           the figure sits left of a hairline, its supports right of it. No
           hedge status here: every asset row already carries its own hedged
@@ -309,7 +325,8 @@ export function AssetsHome() {
                   return { ...prev, sinceByAsset };
                 });
               }}
-              liquidation={lineFor(group.base)}
+              liquidation={gateHidden ? null : lineFor(group.base)}
+              gateHidden={gateHidden}
               exclusions={prefs.exclusions}
               onExclude={(key, value) => {
                 update((prev) => {
