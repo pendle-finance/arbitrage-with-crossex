@@ -11,12 +11,12 @@ const HOVER_WIDTH_PX = 268;
 
 /** Severity of a rebalance verdict — see `VerdictTone` in RebalanceHovers. */
 const VERDICT_STYLE = {
-  info: { box: 'alert-blue', text: 'text-pastel-blue', icon: <Info size={14} aria-hidden className="inline" />, sr: null },
+  info: { box: 'alert-blue', text: 'text-pastel-blue', icon: <Info size={14} aria-hidden className="block" />, sr: null },
   // The glyph is decorative (aria-hidden), so the level reaches a screen
   // reader as a word instead. `info` needs none: a neutral note reads fine
   // without a prefix, and "Note:" on every quiet line is just noise.
-  warn: { box: 'alert-amber', text: 'text-gold', icon: <TriangleAlert size={14} aria-hidden className="inline" />, sr: 'Warning:' },
-  act: { box: 'alert-red', text: 'text-guava', icon: <TriangleAlert size={14} aria-hidden className="inline" />, sr: 'Action needed:' },
+  warn: { box: 'alert-amber', text: 'text-gold', icon: <TriangleAlert size={14} aria-hidden className="block" />, sr: 'Warning:' },
+  act: { box: 'alert-red', text: 'text-guava', icon: <TriangleAlert size={14} aria-hidden className="block" />, sr: 'Action needed:' },
 } as const;
 
 /**
@@ -44,7 +44,10 @@ export function VerdictAlert({
     // reader gets from the normal reading order. (A verdict that appeared in
     // RESPONSE to an action would earn an alert; this one does not.)
     <div className={`${style.box} !flex-row items-start gap-2.5`}>
-      <span aria-hidden className={`shrink-0 text-sm leading-5 ${style.text}`}>
+      {/* One text line tall, the glyph centred in it: an inline svg sat on the
+          baseline and read off-centre beside the 12px text. Top-aligned with
+          the first line, so a wrapped verdict keeps its icon at the top. */}
+      <span aria-hidden className={`flex h-5 shrink-0 items-center ${style.text}`}>
         {style.icon}
       </span>
       <span className="flex min-w-0 flex-col gap-0.5">

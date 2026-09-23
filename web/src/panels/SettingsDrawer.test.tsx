@@ -90,6 +90,9 @@ describe('SettingsDrawer', () => {
       expect(within(row(name)).getByRole('button', { name: 'Expand' })).toBeInTheDocument();
     }
     expect(row('Telegram alerts').compareDocumentPosition(version) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // Titled like the first-run checklist, above the three rows.
+    const title = screen.getByRole('heading', { name: 'Terminal setup' });
+    expect(title.compareDocumentPosition(row('Gate API key')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Replace credentials' })).toBeNull();
     expect(screen.queryByRole('switch')).toBeNull();
   });

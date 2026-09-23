@@ -27,12 +27,19 @@ export function SettingsDrawer({
   return (
     <Drawer open={open} title="Settings" onClose={onClose}>
       <div className="flex flex-col gap-6">
-        <SetupRows
-          openStep={openStep}
-          onOpenStep={setOpenStep}
-          onDone={() => setOpenStep(null)}
-          variant="settings"
-        />
+        {/* Named like the first-run checklist ("Set up the terminal"), so the
+            three rows read as the same setup, reopened (his call 2026-09-23). */}
+        <section>
+          <h3 className="mb-2 text-[12px] font-normal leading-[14.52px] text-ink-300">
+            Terminal setup
+          </h3>
+          <SetupRows
+            openStep={openStep}
+            onOpenStep={setOpenStep}
+            onDone={() => setOpenStep(null)}
+            variant="settings"
+          />
+        </section>
         <section>
           <h3 className="mb-2 text-[12px] font-normal leading-[14.52px] text-ink-300">
             About
