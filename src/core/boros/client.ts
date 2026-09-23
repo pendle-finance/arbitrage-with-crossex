@@ -14,6 +14,7 @@
  * - Fee RATES in market config (settleFeeRate/takerFee) are 18-dec fractions.
  * - List endpoints wrap results as { results, total, skip } — never a bare array.
  */
+import { BOROS_NETWORK } from '../../../web/src/lib/borosNetwork';
 import { prettyVenue } from '../../../web/src/lib/fmt';
 import { CoreError } from '../errors';
 import { BOOK_VENUES } from '../estimate/books';
@@ -22,7 +23,7 @@ import { normalizeVenue } from './venue';
 
 /** The api-gateway surface (`/apis` → api-gateway → open-api's `open-api-v2/…`
  * mounts). New endpoints live here — the bare `/open-api` prefix is deprecated. */
-const BOROS_GATEWAY_BASE_URL = 'https://api-boros.pendle.finance/apis';
+const BOROS_GATEWAY_BASE_URL = BOROS_NETWORK.apiBase;
 
 /**
  * Gas the order pays for itself.
@@ -304,6 +305,26 @@ async function requestJson(
   }
 }
 
+/**
+ * GET {gateway}/v1/agents/expiry-time — when the on-chain approval of `agent`
+ * for `root` ends, in unix seconds. `0` means never approved, or revoked.
+ * This is the chain's answer, not the expiry the terminal asked for.
+ */
+export async function fetchBorosAgentExpiry(
+  fetchImpl: FetchLike,
+  query: { root: string; accountId: number; agent: string },
+): Promise<number> {
+  const body = (await requestJson(
+    fetchImpl,
+    `${BOROS_GATEWAY_BASE_URL}/v1/agents/expiry-time?root=${query.root}&accountId=${query.accountId}&agentAddress=${query.agent}`,
+  )) as { expiryTime?: unknown };
+  const expiry = Number(body?.expiryTime);
+  if (!Number.isFinite(expiry) || expiry < 0) {
+    throw new CoreError('Boros /agents/expiry-time: unexpected response shape', 'network');
+  }
+  return expiry;
+}
+
 /** GET {gateway}/v1/markets → normalized markets.
  * ⚠ LIVE MARKETS ONLY: a matured market drops out of this listing. History
  * that references one resolves it through `fetchBorosMarket` instead. */
@@ -390,7 +411,7 @@ function normalizeBorosMarket(m: Record<string, unknown>, nowSec: number): Boros
 }
 
 /**
- * GET /core/v1/order-books/{marketId} → normalized book, best-first.
+ * GET {gateway}/v1/markets/order-book?marketId= → normalized book, best-first.
  *
  * ⚠ SIGN CONVENTION — the wire side names are the COUNTERPARTY's side, so they
  * read backwards. The wire `short` side is the ASK side: you LIFT those to go

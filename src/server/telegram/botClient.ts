@@ -1,10 +1,12 @@
 import type { TriggerCoin } from '../../core/alerts/triggers';
 import type { FetchLike } from '../../core/boros/client';
+import { hashKey } from './keyFile';
+import type { WalletProof } from './walletProof';
 
 const DEFAULT_BOT_URL = 'https://boros-bot-notification.pendle.finance';
 const BOT_PATH = '/noti/boros/crossex';
 const BOT_TIMEOUT_MS = 5_000;
-const AUTH_REASONS = ['pending', 'replaced', 'removed', 'unknown'] as const;
+const AUTH_REASONS = ['pending', 'replaced', 'removed', 'wallet-unlinked', 'unknown'] as const;
 
 export type BotAuthReason = (typeof AUTH_REASONS)[number];
 
@@ -23,6 +25,8 @@ export interface TerminalView {
   port: number | null;
   settings: TelegramSettings;
   coins: Array<TriggerCoin & { priceNow: number | null }>;
+  active: boolean;
+  alertTo: string | null;
 }
 
 export interface TriggerSync {
@@ -44,6 +48,13 @@ export class BotAuthError extends Error {
   constructor(readonly reason: BotAuthReason) {
     super(`The Telegram bot refused this terminal's key (${reason}).`);
     this.name = 'BotAuthError';
+  }
+}
+
+export class BotWalletRefusedError extends Error {
+  constructor(readonly wallet: string) {
+    super(`The Telegram bot refused to move alerts to ${wallet}: the agent key is not approved for it.`);
+    this.name = 'BotWalletRefusedError';
   }
 }
 
@@ -88,10 +99,21 @@ function settingsOf(body: unknown): TelegramSettings {
   };
 }
 
-export function createBotClient(opts: { baseUrl: string; fetchImpl: FetchLike }): BotClient {
-  const call = async (method: string, route: string, init: { key?: string; body?: unknown } = {}): Promise<unknown> => {
+export interface BotClientOptions {
+  baseUrl: string;
+  fetchImpl: FetchLike;
+  wallet?: () => string | null;
+  proveWallet?: (keyHash: string, wallet: string) => Promise<WalletProof | null>;
+}
+
+export function createBotClient(opts: BotClientOptions): BotClient {
+  const send = async (method: string, route: string, init: { key?: string; body?: unknown } = {}): Promise<unknown> => {
     const headers: Record<string, string> = {};
-    if (init.key !== undefined) headers['x-terminal-key'] = init.key;
+    if (init.key !== undefined) {
+      headers['x-terminal-key'] = init.key;
+      const wallet = opts.wallet?.() ?? null;
+      if (wallet !== null) headers['x-terminal-wallet'] = wallet.toLowerCase();
+    }
     if (init.body !== undefined) headers['content-type'] = 'application/json';
     let res: Awaited<ReturnType<FetchLike>>;
     try {
@@ -107,8 +129,25 @@ export function createBotClient(opts: { baseUrl: string; fetchImpl: FetchLike })
     if (res.status >= 500) throw new BotUnavailableError(`The Telegram bot answered ${res.status}.`);
     const body = await res.json().catch(() => null);
     if (res.status === 401) throw new BotAuthError(reasonOf(body));
+    if (res.status === 403 && (body as { reason?: unknown } | null)?.reason === 'agent-not-approved') {
+      throw new BotWalletRefusedError(String((init.body as { wallet?: unknown } | undefined)?.wallet ?? ''));
+    }
     if (!res.ok) throw new Error(messageOf(body, res.status));
     return body;
+  };
+
+  const call = async (method: string, route: string, init: { key?: string; body?: unknown } = {}): Promise<unknown> => {
+    try {
+      return await send(method, route, init);
+    } catch (err) {
+      const key = init.key;
+      if (!(err instanceof BotAuthError) || err.reason !== 'wallet-unlinked' || key === undefined) throw err;
+      const wallet = opts.wallet?.() ?? null;
+      const proof = wallet === null ? null : await opts.proveWallet?.(hashKey(key), wallet.toLowerCase());
+      if (!proof) throw err;
+      await send('POST', '/terminal/wallets', { key, body: proof });
+      return send(method, route, init);
+    }
   };
 
   return {

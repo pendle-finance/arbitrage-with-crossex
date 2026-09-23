@@ -1385,6 +1385,10 @@ export interface BorosAgentStatus {
    * every order fails with AuthAgentExpired(). */
   expiry: number | null;
   expired: boolean;
+  /** What the chain says about the stored key. 'not-approved' covers a
+   * rejected wallet prompt and a revoke in the Boros app. 'unknown' when Boros
+   * could not be read. null when no key is stored. Absent on older servers. */
+  approval?: 'approved' | 'expired' | 'not-approved' | 'unknown' | null;
   /** False on an install with no agent service (e.g. public mode). */
   canProvision: boolean;
 }
@@ -1559,6 +1563,8 @@ export interface TelegramInfo {
   settings: { liquidation: boolean; interest: boolean; maturity: boolean; rollover: boolean } | null;
   lastSyncAt: number | null;
   lastSyncError: { at: number; message: string } | null;
+  alertWallet?: string | null;
+  walletRefused?: string | null;
   alertsPageUrl?: string;
   floors?: InterestFloor[];
 }

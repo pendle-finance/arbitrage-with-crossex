@@ -73,6 +73,8 @@ export function telegramRoutes(deps: AppDeps) {
       settings: state === 'connected' ? t.status.settings : null,
       lastSyncAt: t.status.lastSyncAt,
       lastSyncError: t.status.lastSyncError,
+      ...(t.status.alertWallet ? { alertWallet: t.status.alertWallet } : {}),
+      ...(t.status.walletRefused ? { walletRefused: t.status.walletRefused } : {}),
       alertsPageUrl,
       floors,
     };

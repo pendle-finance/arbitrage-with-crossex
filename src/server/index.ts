@@ -29,6 +29,7 @@ import { createTelegramLink } from './telegram/link';
 import { TelegramStatus } from './telegram/status';
 import { createRollProbe } from './telegram/rollProbe';
 import { createTelegramSync, readTriggerCoins } from './telegram/sync';
+import { signWalletProof } from './telegram/walletProof';
 import { createAssetViewBuilder } from './routes/assetView';
 import { configuredRoot, createPairPricer } from './routes/borosPair';
 import { readInstallInfo, readLocalVersion } from './version';
@@ -170,7 +171,22 @@ try {
 }
 
 const telegramVersion = readLocalVersion(repoRoot) ?? 'unknown';
-const telegramBot = createBotClient({ baseUrl: botBaseUrl(process.env), fetchImpl: resolveBorosFetch() });
+const agentKeyForProof = (): `0x${string}` | null => {
+  try {
+    return readBorosAgentConfig()?.agentPrivateKey ?? null;
+  } catch {
+    return null;
+  }
+};
+const telegramBot = createBotClient({
+  baseUrl: botBaseUrl(process.env),
+  fetchImpl: resolveBorosFetch(),
+  wallet: configuredRoot,
+  proveWallet: async (keyHash, wallet) => {
+    const agentPrivateKey = agentKeyForProof();
+    return agentPrivateKey ? signWalletProof({ keyHash, wallet, agentPrivateKey, nowMs: Date.now() }) : null;
+  },
+});
 const telegramStatus = new TelegramStatus();
 let assetViewBuilder: ReturnType<typeof createAssetViewBuilder> | null = null;
 let pairPricer: ReturnType<typeof createPairPricer> | null = null;
@@ -189,6 +205,7 @@ const telegramSync = createTelegramSync({
   port,
   version: telegramVersion,
   now: Date.now,
+  wallet: configuredRoot,
 });
 const telegramLink = createTelegramLink({
   dataDir,
@@ -232,6 +249,9 @@ const appDeps = {
     setOrderClient: (client: BorosOrderClient | undefined) => {
       borosOrdersRef.current = client;
     },
+    // A new login moves Telegram alerts to this wallet now, not at the next
+    // 5-minute sync.
+    onApproved: () => telegramSync.requestSync('login'),
   },
   credentials: {
     envPath,

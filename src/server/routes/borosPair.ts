@@ -38,6 +38,7 @@ import { USD_TOKEN_ID } from '../../core/boros/borosApi';
 import { normalizeUnderlying } from '../../core/boros/opportunities';
 import { COIN_NOT_SUPPORTED_TEXT, isSupportedCoin } from '../../core/coins';
 import { knownRate } from '../../core/boros/venue';
+import { readAgentApproval } from '../borosAgentApproval';
 import { isUpdating } from '../updater';
 import {
   describeLegFailure,
@@ -601,11 +602,30 @@ export function borosPairRoutes(deps: AppDeps) {
     }
   };
 
-  const assertAgentNotExpired = (): void => {
-    const raw = Number(process.env.BOROS_AGENT_EXPIRY);
-    if (Number.isFinite(raw) && raw > 0 && raw <= Math.floor(Date.now() / 1000)) {
+  const assertAgentNotExpired = async (): Promise<void> => {
+    const refuseExpired = (): never => {
       throw new CoreError(
         'the Boros agent approval has expired — approve a new agent key before trading.',
+        'auth',
+      );
+    };
+    const raw = Number(process.env.BOROS_AGENT_EXPIRY);
+    if (Number.isFinite(raw) && raw > 0 && raw <= Math.floor(Date.now() / 1000)) refuseExpired();
+    // The chain's answer too: a rejected approval or a revoke leaves the .env
+    // expiry in the future. A failed read lets the order through, and the venue
+    // still refuses an unapproved agent.
+    const root = process.env.BOROS_ROOT_ADDRESS;
+    const agentPrivateKey = process.env.BOROS_AGENT_PRIVATE_KEY;
+    if (!root || !agentPrivateKey) return;
+    const approval = await readAgentApproval(resolveBorosFetch(deps.borosFetch), {
+      root,
+      accountId: Number(process.env.BOROS_ACCOUNT_ID ?? 0) || 0,
+      agentPrivateKey,
+    });
+    if (approval.state === 'expired') refuseExpired();
+    if (approval.state === 'not-approved') {
+      throw new CoreError(
+        'the Boros agent key is not approved on-chain (the approval was rejected or revoked) — log in again before trading.',
         'auth',
       );
     }
@@ -755,7 +775,7 @@ export function borosPairRoutes(deps: AppDeps) {
         );
       }
       assertNotUpdating();
-      assertAgentNotExpired();
+      await assertAgentNotExpired();
 
       // The memo is consulted BEFORE re-pricing. A lost-response retry must
       // get the ORIGINAL outcome, and the first execution changed the very
@@ -975,7 +995,7 @@ export function borosPairRoutes(deps: AppDeps) {
         throw new CoreError('Boros roll-over is not configured on this install.', 'not-configured');
       }
       assertNotUpdating();
-      assertAgentNotExpired();
+      await assertAgentNotExpired();
 
       // Memo BEFORE re-pricing, for the same reason as /pair/execute: a
       // lost-response retry must get the original outcome, and a roll that
@@ -1041,7 +1061,7 @@ export function borosPairRoutes(deps: AppDeps) {
         );
       }
       assertNotUpdating();
-      assertAgentNotExpired();
+      await assertAgentNotExpired();
       if (topUpInFlight) {
         throw new CoreError(
           'a gas top-up is already in flight — wait for it to land before sending another.',
@@ -1150,7 +1170,7 @@ export function borosPairRoutes(deps: AppDeps) {
       }
 
       assertNotUpdating();
-      assertAgentNotExpired();
+      await assertAgentNotExpired();
 
       const unlockClose = lockCloses([marketId]);
       if (!unlockClose) return refuse(reply, {

@@ -17,6 +17,7 @@ import { Switch } from '../../components/Switch';
 import { useToast } from '../../components/Toast';
 import { fmtClock, fmtSyncAge, fmtUsd } from '../../lib/fmt';
 import { useNow } from '../../lib/useNow';
+import { short } from '../HomeControls';
 import { Ext } from '../onboardingBits';
 import { SetupRowFrame } from './SetupRowFrame';
 import type { SetupRowProps } from './setupState';
@@ -191,6 +192,11 @@ export function TelegramRow(p: SetupRowProps) {
         />
         <p className="pl-9 text-xs text-ink-500">{ROLLOVER_CAPTION}</p>
       </div>
+      {info?.walletRefused ? (
+        <p className="num text-xs text-amber-300">{`Log in to move alerts to ${short(info.walletRefused)}.`}</p>
+      ) : (
+        info?.alertWallet && <p className="num text-xs text-ink-500">{`Alerts follow ${short(info.alertWallet)}`}</p>
+      )}
       {lastSyncAt !== null ? (
         <p className="num text-xs text-ink-400">
           <HoverCard label={`Last synced ${fmtSyncAge(now - lastSyncAt)}`} widthPx={300}>
@@ -293,7 +299,6 @@ export function TelegramRow(p: SetupRowProps) {
       }
       setupAction={setupButton}
       skipConsequence="Without Telegram alerts nothing warns you near liquidation, when interest starts, or before a pair matures."
-      closeLabel="Close"
     >
       {info && isConnected
         ? connectedBody(

@@ -12,6 +12,7 @@ import * as path from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { BorosOrderClient } from '../../src/core/boros/orders';
+import { resetAgentApprovalCache } from '../../src/server/borosAgentApproval';
 import { borosStub } from '../helpers/boros-stub';
 import { HOST, makeTestApp } from './helpers/gate-nock';
 
@@ -31,6 +32,7 @@ const ENV_KEYS = [
 ];
 
 beforeEach(() => {
+  resetAgentApprovalCache();
   envPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'boros-agent-')), '.env');
   installed = undefined;
   for (const k of ENV_KEYS) delete process.env[k];
@@ -185,5 +187,84 @@ describe('GET /api/boros/agent — no gas balance', () => {
     expect(reads).toBe(0);
     expect('gasBalanceUsd' in data).toBe(false);
     expect(data.configured).toBe(true);
+  });
+});
+
+describe('GET /api/boros/agent — the on-chain approval', () => {
+  const withChainExpiry = async (expiryTime: number | undefined) => {
+    await app?.close();
+    resetAgentApprovalCache();
+    const bodies: Record<string, unknown> = { '/apis/v1/markets': { results: [] } };
+    if (expiryTime !== undefined) bodies['/apis/v1/agents/expiry-time'] = { expiryTime };
+    app = makeTestApp({
+      borosFetch: borosStub(bodies),
+      getBorosOrders: () => installed,
+      borosAgent: { envPath, hardenConfigDir: true, setOrderClient: (c) => (installed = c) },
+    });
+    process.env.BOROS_ROOT_ADDRESS = ROOT;
+    process.env.BOROS_AGENT_PRIVATE_KEY = AGENT_KEY;
+    // What the terminal asked for: a year out.
+    process.env.BOROS_AGENT_EXPIRY = String(Math.floor(Date.now() / 1000) + 365 * 86400);
+    return (await app.inject({ method: 'GET', url: '/api/boros/agent', headers: HOST })).json().data;
+  };
+
+  it('says not-approved when the chain has no approval, though the .env expiry is a year out', async () => {
+    // A rejected wallet prompt, or a revoke in the Boros app.
+    const data = await withChainExpiry(0);
+    expect(data).toMatchObject({ configured: true, approval: 'not-approved', expired: false });
+  });
+
+  it('reports the chain expiry, not the one the terminal asked for', async () => {
+    const onChain = Math.floor(Date.now() / 1000) + 30 * 86400;
+    expect(await withChainExpiry(onChain)).toMatchObject({ approval: 'approved', expiry: onChain, expired: false });
+  });
+
+  it('says expired when the chain expiry has passed', async () => {
+    const onChain = Math.floor(Date.now() / 1000) - 60;
+    expect(await withChainExpiry(onChain)).toMatchObject({ approval: 'expired', expiry: onChain, expired: true });
+  });
+
+  it('falls back to the .env expiry when Boros cannot be read', async () => {
+    expect(await withChainExpiry(undefined)).toMatchObject({ approval: 'unknown', expired: false });
+  });
+
+  it('has no approval field when no key is stored', async () => {
+    await withChainExpiry(0);
+    delete process.env.BOROS_AGENT_PRIVATE_KEY;
+    const data = (await app!.inject({ method: 'GET', url: '/api/boros/agent', headers: HOST })).json().data;
+    expect(data).toMatchObject({ configured: false, approval: null });
+  });
+});
+
+describe('GET /api/boros/agent — sync alerts when a login lands', () => {
+  it('calls onApproved once, when the chain first shows the new key approved', async () => {
+    await app?.close();
+    resetAgentApprovalCache();
+    let expiryTime = 0;
+    let approvedCalls = 0;
+    app = makeTestApp({
+      borosFetch: async (url: string) => ({
+        ok: true,
+        status: 200,
+        json: async () => (url.includes('/agents/expiry-time') ? { expiryTime } : { results: [] }),
+      }),
+      getBorosOrders: () => installed,
+      borosAgent: {
+        envPath,
+        hardenConfigDir: true,
+        setOrderClient: (c) => (installed = c),
+        onApproved: () => (approvedCalls += 1),
+      },
+    });
+    process.env.BOROS_ROOT_ADDRESS = ROOT;
+    process.env.BOROS_AGENT_PRIVATE_KEY = AGENT_KEY;
+    const get = () => app!.inject({ method: 'GET', url: '/api/boros/agent?fresh=1', headers: HOST });
+
+    await get(); // the relay has not landed yet
+    expect(approvedCalls).toBe(0);
+    expiryTime = Math.floor(Date.now() / 1000) + 86400;
+    await get();
+    await get();
+    expect(approvedCalls).toBe(1);
   });
 });

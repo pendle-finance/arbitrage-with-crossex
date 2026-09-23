@@ -20,17 +20,18 @@
  * The generated key never leaves this machine: it goes from here to the local
  * server and nowhere else. It is not logged, not put in a URL, not rendered.
  */
+import { BOROS_NETWORK } from './borosNetwork';
 import { encodeFunctionData, toHex, type Address, type Hex, type WalletClient } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 
 /** The documented production host (the OpenAPI spec's only `servers` entry). */
-export const BOROS_API_BASE = 'https://api-boros.pendle.finance/apis';
+export const BOROS_API_BASE = BOROS_NETWORK.apiBase;
 
 /** Arbitrum One, and the router the approval is bound to. Both are part of the
  * EIP-712 domain, so a wrong value yields a signature the contract rejects
  * rather than an approval that silently does the wrong thing. */
-const CHAIN_ID = 42161;
-const ROUTER_ADDRESS = '0x8080808080daB95eFED788a9214e400ba552DEf6' as const;
+const CHAIN_ID = BOROS_NETWORK.chainId;
+const ROUTER_ADDRESS = BOROS_NETWORK.routerAddress;
 
 const EIP712_DOMAIN = {
   name: 'Pendle Boros Router',

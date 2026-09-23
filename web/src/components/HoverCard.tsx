@@ -23,6 +23,8 @@ interface Box {
   /** The trigger's edges, kept so the card can pick a side once it has a height. */
   anchorTop: number;
   anchorBottom: number;
+  anchorLeft: number;
+  anchorRight: number;
   placed: boolean;
 }
 
@@ -48,6 +50,7 @@ export function HoverCard({
   icon = true,
   underline = true,
   wrapsControl = false,
+  openOn = 'hover',
   children,
 }: {
   /** The figure itself — it keeps its own styling. */
@@ -56,6 +59,10 @@ export function HoverCard({
   icon?: boolean;
   underline?: boolean;
   wrapsControl?: boolean;
+  /** 'click' for a card that holds a form (a date input): it opens on click and
+   * stays open until a click outside, Escape, or a second click. Hover would
+   * shut it the moment the pointer drifts. Only with `wrapsControl`. */
+  openOn?: 'hover' | 'click';
   children: ReactNode;
 }) {
   const anchor = useRef<HTMLSpanElement>(null);
@@ -82,19 +89,35 @@ export function HoverCard({
     if (!r) return;
     stopClosing();
     const left = Math.max(EDGE, Math.min(r.left, window.innerWidth - maxWidthPx - EDGE));
-    setBox({ left, top: r.bottom + GAP, anchorTop: r.top, anchorBottom: r.bottom, placed: false });
+    setBox({
+      left,
+      top: r.bottom + GAP,
+      anchorTop: r.top,
+      anchorBottom: r.bottom,
+      anchorLeft: r.left,
+      anchorRight: r.right,
+      placed: false,
+    });
   };
 
   useLayoutEffect(() => {
     if (!box || box.placed || !card.current) return;
     const height = card.current.scrollHeight;
+    // The card's REAL width, now that it has rendered. Clamping by the widest
+    // allowed card pushed a narrow card far left of a trigger near the right
+    // edge. Start under the trigger; if that overflows, end at its right edge.
+    const width = card.current.offsetWidth;
+    const left =
+      box.anchorLeft + width <= window.innerWidth - EDGE
+        ? box.anchorLeft
+        : Math.max(EDGE, Math.min(box.anchorRight, window.innerWidth - EDGE) - width);
     const below = window.innerHeight - box.anchorBottom - GAP - EDGE;
     const above = box.anchorTop - GAP - EDGE;
     const up = height > below && (height <= above || above > below);
     setBox(
       up
-        ? { ...box, top: undefined, bottom: window.innerHeight - box.anchorTop + GAP, maxHeight: Math.max(0, above), placed: true }
-        : { ...box, maxHeight: Math.max(0, below), placed: true },
+        ? { ...box, left, top: undefined, bottom: window.innerHeight - box.anchorTop + GAP, maxHeight: Math.max(0, above), placed: true }
+        : { ...box, left, maxHeight: Math.max(0, below), placed: true },
     );
   }, [box]);
 
@@ -124,6 +147,12 @@ export function HoverCard({
       if (card.current?.contains(target)) return;
       setBox(null);
     };
+    const onOutside = (e: MouseEvent) => {
+      const target = e.target as Node | null;
+      if (anchor.current?.contains(target) || card.current?.contains(target)) return;
+      setBox(null);
+    };
+    if (openOn === 'click') document.addEventListener('mousedown', onOutside);
     window.addEventListener('scroll', shut, true);
     const onResize = () => setBox(null);
     window.addEventListener('resize', onResize);
@@ -134,8 +163,9 @@ export function HoverCard({
       window.removeEventListener('resize', onResize);
       window.removeEventListener('keydown', onKey);
       document.removeEventListener('focusin', onFocusIn);
+      document.removeEventListener('mousedown', onOutside);
     };
-  }, [box]);
+  }, [box, openOn]);
 
   useEffect(() => {
     if (!box || !openedByKeyboard.current) return;
@@ -162,13 +192,30 @@ export function HoverCard({
           setBox(null);
         }}
         onMouseEnter={stopClosing}
-        onMouseLeave={() => close(false)}
+        onMouseLeave={openOn === 'click' ? undefined : () => close(false)}
         className="pp-tooltip fixed z-50 overflow-y-auto overscroll-contain"
       >
         {children}
       </div>,
       document.body,
     );
+
+  if (wrapsControl && openOn === 'click') {
+    return (
+      <span
+        ref={anchor}
+        onClick={(e) => {
+          if (e.target instanceof Node && card.current?.contains(e.target)) return;
+          if (box) setBox(null);
+          else open();
+        }}
+        className="inline-flex"
+      >
+        {label}
+        {portal}
+      </span>
+    );
+  }
 
   if (wrapsControl) {
     return (

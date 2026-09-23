@@ -57,7 +57,9 @@ describe('first run', () => {
     renderWithClient(<App />);
 
     await saveKey(user);
-    expect(await screen.findByRole('radio', { name: 'Paste address' })).toBeInTheDocument();
+    expect(
+      await within(screen.getByRole('region', { name: 'Boros wallet' })).findByText('Install Rabby or MetaMask, then reload.'),
+    ).toBeInTheDocument();
     expect(screen.getByText('Set up the terminal')).toBeInTheDocument();
     expect(screen.queryByRole('tablist')).toBeNull();
 

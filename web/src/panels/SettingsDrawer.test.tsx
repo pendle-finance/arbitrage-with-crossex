@@ -45,7 +45,7 @@ const trackedInStorage = (): unknown => JSON.parse(localStorage.getItem('crossex
 
 async function clickEdit(name: string) {
   const user = userEvent.setup();
-  await user.click(await within(row(name)).findByRole('button', { name: 'Edit' }));
+  await user.click(await within(row(name)).findByRole('button', { name: 'Expand' }));
   return user;
 }
 
@@ -74,10 +74,11 @@ describe('SettingsDrawer', () => {
       'Telegram alerts',
     ]);
     expect(await within(row('Gate API key')).findByText('160e…4f80 · works')).toBeInTheDocument();
-    expect(await within(row('Boros wallet')).findByText('0xab18…ed9d · can trade · tracked')).toBeInTheDocument();
+    expect(await within(row('Boros wallet')).findByText('Can trade')).toBeInTheDocument();
+    expect(within(row('Boros wallet')).getByText('0xab18…ed9d')).toBeInTheDocument();
     expect(await within(row('Telegram alerts')).findByText('All on · synced 3 min ago')).toBeInTheDocument();
     for (const name of ['Gate API key', 'Boros wallet', 'Telegram alerts']) {
-      expect(within(row(name)).getByRole('button', { name: 'Edit' })).toBeInTheDocument();
+      expect(within(row(name)).getByRole('button', { name: 'Expand' })).toBeInTheDocument();
     }
     expect(row('Telegram alerts').compareDocumentPosition(version) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Replace credentials' })).toBeNull();
@@ -114,7 +115,7 @@ describe('SettingsDrawer', () => {
     await user.hover(within(telegram).getByText('Last synced 3 min ago'));
     expect(await screen.findByText(CAVEAT)).toBeInTheDocument();
     expect(within(telegram).getByRole('button', { name: 'Disconnect this terminal' })).toBeInTheDocument();
-    expect(within(telegram).getByRole('button', { name: 'Close' })).toBeInTheDocument();
+    expect(within(telegram).getByRole('button', { name: 'Collapse' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Skip/ })).toBeNull();
   });
 
@@ -194,7 +195,7 @@ describe('SettingsDrawer', () => {
 
     expect(await within(telegram).findByText('not set up')).toHaveClass('text-amber-400');
     expect(within(telegram).getByRole('button', { name: 'Set up ↗' })).toBeInTheDocument();
-    expect(within(telegram).queryByRole('button', { name: 'Edit' })).toBeNull();
+    expect(within(telegram).queryByRole('button', { name: 'Expand' })).toBeNull();
   });
 
   it('replaced', async () => {
@@ -204,7 +205,7 @@ describe('SettingsDrawer', () => {
 
     expect(await within(telegram).findByText('Connected on another terminal')).toBeInTheDocument();
     expect(within(telegram).getByRole('button', { name: 'Set up ↗' })).toBeInTheDocument();
-    expect(within(telegram).queryByRole('button', { name: 'Edit' })).toBeNull();
+    expect(within(telegram).queryByRole('button', { name: 'Expand' })).toBeNull();
   });
 
   it('removed', async () => {
@@ -214,30 +215,20 @@ describe('SettingsDrawer', () => {
 
     expect(await within(telegram).findByText('Removed on the Boros notifications page')).toBeInTheDocument();
     expect(within(telegram).getByRole('button', { name: 'Set up ↗' })).toBeInTheDocument();
-    expect(within(telegram).queryByRole('button', { name: 'Edit' })).toBeNull();
+    expect(within(telegram).queryByRole('button', { name: 'Expand' })).toBeNull();
   });
 
-  it('edit wallet opens the setup form', async () => {
+  it('edit wallet shows the login and log out', async () => {
     mockAllDone();
     renderDrawer();
     await clickEdit('Boros wallet');
     const wallet = row('Boros wallet');
 
-    expect(await within(wallet).findByRole('radio', { name: 'Connect wallet' })).toBeInTheDocument();
-    expect(within(wallet).getByRole('radio', { name: 'Paste address' })).toBeInTheDocument();
-    expect(within(wallet).getByRole('button', { name: 'Close' })).toBeInTheDocument();
+    expect(await within(wallet).findByText('Agent key: trades only, cannot deposit or withdraw.')).toBeInTheDocument();
+    expect(within(wallet).getByRole('button', { name: 'Log out' })).toBeInTheDocument();
+    expect(within(wallet).queryByRole('radio')).toBeNull();
+    expect(within(wallet).getByRole('button', { name: 'Collapse' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Replace credentials' })).toBeNull();
-  });
-
-  it('stop tracking stays', async () => {
-    localStorage.setItem('crossex.strategy.v1', JSON.stringify({ address: PASTED }));
-    mockWorld({ keyConfigured: true, telegram: connectedTelegram() });
-    renderDrawer();
-    const user = await clickEdit('Boros wallet');
-    await user.click(await within(row('Boros wallet')).findByRole('button', { name: 'Stop tracking' }));
-
-    expect(trackedInStorage()).toEqual({ address: null });
-    expect(await within(row('Boros wallet')).findByText('not set up')).toBeInTheDocument();
   });
 
   it('approval expired', async () => {
@@ -250,8 +241,41 @@ describe('SettingsDrawer', () => {
     renderDrawer();
     const wallet = row('Boros wallet');
 
-    expect(await within(wallet).findByText('Approval expired')).toBeInTheDocument();
-    expect(within(wallet).getByRole('button', { name: 'Edit' })).toBeInTheDocument();
+    expect(await within(wallet).findByText('Login expired')).toBeInTheDocument();
+    expect(within(wallet).getByRole('button', { name: 'Expand' })).toBeInTheDocument();
+  });
+
+  it('use my browser wallet switches the active wallet to view only', async () => {
+    const user = userEvent.setup();
+    const request = vi.fn(async ({ method }: { method: string }) => (method === 'eth_requestAccounts' ? [PASTED] : null));
+    (window as unknown as { ethereum?: unknown }).ethereum = { request };
+    try {
+      mockAllDone();
+      renderDrawer();
+      expect(await within(row('Boros wallet')).findByText('Can trade')).toBeInTheDocument();
+      await clickEdit('Boros wallet');
+      await user.click(await within(row('Boros wallet')).findByRole('button', { name: 'Use my browser wallet' }));
+      expect(await within(row('Boros wallet')).findByText('0x3f2a…91c0')).toBeInTheDocument();
+      expect(within(row('Boros wallet')).getByText('View only')).toBeInTheDocument();
+      expect(trackedInStorage()).toEqual({ address: PASTED, walletUpgraded: true, followWallet: true });
+    } finally {
+      delete (window as unknown as { ethereum?: unknown }).ethereum;
+    }
+  });
+
+  it('telegram says which wallet alerts follow', async () => {
+    mockAllDone({ ...connectedTelegram(), alertWallet: WALLET });
+    renderDrawer();
+    await clickEdit('Telegram alerts');
+    expect(await within(row('Telegram alerts')).findByText('Alerts follow 0xab18…ed9d')).toBeInTheDocument();
+  });
+
+  it('telegram asks to log in when the bot refuses the wallet', async () => {
+    mockAllDone({ ...connectedTelegram(), alertWallet: WALLET, walletRefused: PASTED });
+    renderDrawer();
+    await clickEdit('Telegram alerts');
+    expect(await within(row('Telegram alerts')).findByText('Log in to move alerts to 0x3f2a…91c0.')).toBeInTheDocument();
+    expect(within(row('Telegram alerts')).queryByText(/Alerts follow/)).toBeNull();
   });
 
   it('edit key', async () => {
@@ -277,7 +301,7 @@ describe('SettingsDrawer', () => {
     await user.click(screen.getByRole('button', { name: 'Replace credentials' }));
 
     await waitFor(() => expect(screen.queryByRole('button', { name: 'Replace credentials' })).toBeNull());
-    expect(within(row('Gate API key')).getByRole('button', { name: 'Edit' })).toBeInTheDocument();
+    expect(within(row('Gate API key')).getByRole('button', { name: 'Expand' })).toBeInTheDocument();
   });
 });
 
@@ -288,7 +312,7 @@ describe('SettingsDrawer · focus step', () => {
     const telegram = row('Telegram alerts');
 
     expect(await within(telegram).findByText('a 20% price move would liquidate a leg')).toBeInTheDocument();
-    expect(within(telegram).getByRole('button', { name: 'Close' })).toBeInTheDocument();
+    expect(within(telegram).getByRole('button', { name: 'Collapse' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Replace credentials' })).toBeNull();
     expect(screen.queryByRole('radio', { name: 'Paste address' })).toBeNull();
   });
@@ -307,12 +331,12 @@ describe('SettingsDrawer · focus step', () => {
     mockAllDone(telegramInfo());
     renderWithClient(<FocusHarness initial="telegram" />);
     const user = await clickEdit('Boros wallet');
-    expect(await screen.findByRole('radio', { name: 'Paste address' })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Log out' })).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'close' }));
     act(() => drive.setOpen(true));
 
     expect(await within(row('Telegram alerts')).findByText('a 20% price move would liquidate a leg')).toBeInTheDocument();
-    expect(screen.queryByRole('radio', { name: 'Paste address' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Log out' })).toBeNull();
   });
 
   it('no focus step opens no row', async () => {
@@ -320,6 +344,6 @@ describe('SettingsDrawer · focus step', () => {
     renderWithClient(<FocusHarness initial={null} />);
 
     expect(await within(row('Telegram alerts')).findByRole('button', { name: 'Set up ↗' })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Close' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Collapse' })).toBeNull();
   });
 });

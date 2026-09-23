@@ -83,7 +83,7 @@ export function createTelegramLink(opts: TelegramLinkOptions): TelegramLink {
       key.keyHash === swap.key.keyHash &&
       (await opts.bot.getTerminal(key.key).then(
         () => true,
-        () => false,
+        (err: unknown) => err instanceof BotAuthError && err.reason === 'wallet-unlinked',
       ));
     if (!confirmed) {
       restoreKey(swap);
@@ -129,7 +129,8 @@ export function createTelegramLink(opts: TelegramLinkOptions): TelegramLink {
       await opts.bot.getTerminal(current.key.key);
       settle(current, 'confirmed');
     } catch (err) {
-      if (err instanceof BotAuthError && err.reason !== 'pending') settle(current, 'expired');
+      if (err instanceof BotAuthError && err.reason === 'wallet-unlinked') settle(current, 'confirmed');
+      else if (err instanceof BotAuthError && err.reason !== 'pending') settle(current, 'expired');
     } finally {
       current.polling = false;
     }

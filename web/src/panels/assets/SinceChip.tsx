@@ -1,18 +1,8 @@
-import { Chip } from '../../components/Chip';
 import { HoverCard } from '../../components/HoverCard';
 import { microLabelClass } from '../../components/Th';
 import { fmtDateLocal, fmtDateShort, parseDateLocal } from '../../lib/fmt';
+import { Calendar, ChevronDown } from 'lucide-react';
 
-function CalendarMark() {
-  return (
-    <svg aria-hidden viewBox="0 0 12 12" className="h-3 w-3 shrink-0">
-      <rect x="1.5" y="2.5" width="9" height="8" rx="1.2" fill="none" stroke="currentColor" />
-      <line x1="1.5" y1="5" x2="10.5" y2="5" stroke="currentColor" />
-      <line x1="4" y1="1.2" x2="4" y2="3.6" stroke="currentColor" />
-      <line x1="8" y1="1.2" x2="8" y2="3.6" stroke="currentColor" />
-    </svg>
-  );
-}
 
 export function SinceChip({
   base,
@@ -34,13 +24,16 @@ export function SinceChip({
   return (
     <HoverCard
       wrapsControl
+      openOn="click"
       label={
-        <button type="button" className="inline-flex cursor-pointer border-0 bg-transparent p-0 text-left">
-          <Chip tone={differsFromDefault ? 'blue' : 'neutral'}>
-            <CalendarMark />
-            {sinceLabel}
-            <span aria-hidden>▾</span>
-          </Chip>
+        <button
+          type="button"
+          aria-haspopup="dialog"
+          className={`btn !h-[30px] shrink-0 !px-2.5 ${differsFromDefault ? '!border-info/60 !text-info' : ''}`}
+        >
+          <Calendar size={14} aria-hidden />
+          {sinceLabel}
+          <ChevronDown size={14} aria-hidden className="text-ink-400" />
         </button>
       }
     >
