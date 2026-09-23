@@ -262,7 +262,7 @@ describe('BorosPairTicket', () => {
     expect(screen.queryByRole('button', { name: /Confirm/ })).toBeNull();
   });
 
-  it('a view-only wallet shows itself in the agent box, and the submit is the one action', async () => {
+  it('a view-only wallet: no wallet card, the Log in button is the one action', async () => {
     const other = '0x2222222222222222222222222222222222222222';
     window.localStorage.setItem(
       STRATEGY_STORAGE_KEY,
@@ -271,18 +271,16 @@ describe('BorosPairTicket', () => {
     server.use(...handlers({ agent: { expiry: 1_900_000_000 } }));
     renderWithClient(<BorosPairTicket />);
 
-    expect(await screen.findByText('View only')).toBeInTheDocument();
-    expect(screen.getByText('0x2222…2222')).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Log in to trade 0x2222…2222' })).toBeInTheDocument();
+    // The header chip says View only; the ticket does not repeat it.
+    expect(screen.queryByText('View only')).toBeNull();
     expect(screen.queryByText('Logged in')).toBeNull();
     expect(screen.queryByText('0x1111…1111')).toBeNull();
-    expect(screen.queryByText(/expires/)).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Log out' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Connect wallet' })).toBeNull();
-    expect(screen.queryByText(/to trade it/)).toBeNull();
     expect(screen.getAllByRole('button', { name: /Log in to trade/ })).toHaveLength(1);
   });
 
-  it('a pasted wallet with no agent keeps the explanation, and the submit is the one action', async () => {
+  it('a wallet with no agent: the Log in button is the one action, no card', async () => {
     const other = '0x2222222222222222222222222222222222222222';
     window.localStorage.setItem(
       STRATEGY_STORAGE_KEY,
@@ -291,11 +289,9 @@ describe('BorosPairTicket', () => {
     server.use(...handlers({ agent: { configured: false, root: null, rootMasked: null } }));
     renderWithClient(<BorosPairTicket />);
 
-    expect(
-      await screen.findByText('Log in once to trade. One free wallet signature. The key trades only. It cannot deposit or withdraw.'),
-    ).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Log in to trade 0x2222…2222' })).toBeInTheDocument();
+    expect(screen.queryByText(/Log in once/)).toBeNull();
     expect(screen.queryByRole('button', { name: 'Connect wallet' })).toBeNull();
-    expect(screen.queryByText(/No browser wallet detected/)).toBeNull();
     expect(screen.getAllByRole('button', { name: /Log in to trade/ })).toHaveLength(1);
   });
 
@@ -309,24 +305,24 @@ describe('BorosPairTicket', () => {
     server.use(...handlers({ agent: { expiry: 1_900_000_000 } }));
     renderWithClient(<BorosPairTicket />);
 
-    expect(await screen.findByText('Logged in')).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: /Confirm/ })).toBeInTheDocument();
     await waitFor(() => expect(wallet.listenerCount()).toBe(1));
     act(() => wallet.emitAccounts([other]));
 
     expect(await screen.findByRole('button', { name: 'Log in to trade 0x2222…2222' })).toBeInTheDocument();
-    expect(screen.queryByText('Logged in')).toBeNull();
+    expect(screen.queryByRole('button', { name: /Confirm/ })).toBeNull();
     removeFakeWallet();
   });
 
-  it('the wallet that trades keeps its agent box', async () => {
+  it('the wallet that trades shows no wallet card: Confirm is the action', async () => {
     server.use(...handlers({ agent: { expiry: 1_900_000_000 } }));
     renderWithClient(<BorosPairTicket />);
 
-    expect(await screen.findByText('Logged in')).toBeInTheDocument();
-    expect(screen.getByText('0x1111…1111')).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: /Confirm/ })).toBeInTheDocument();
+    expect(screen.queryByText('Logged in')).toBeNull();
+    expect(screen.queryByText('0x1111…1111')).toBeNull();
     // Log out lives in Settings, not in the ticket.
     expect(screen.queryByRole('button', { name: 'Log out' })).toBeNull();
-    expect(screen.queryByText(/view only/i)).toBeNull();
     expect(screen.queryByRole('button', { name: /Log in to trade/ })).toBeNull();
   });
 

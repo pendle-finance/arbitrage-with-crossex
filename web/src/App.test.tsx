@@ -327,7 +327,7 @@ describe('borrow pill', () => {
       expect(gauges).toHaveAttribute(
         'title',
         expect.stringContaining(
-          'Nearest liquidation: ETH. Gate liquidates your account if ETH rises to about $3,764 (+64%). This assumes ETH moves the same on every venue and other coins do not move. Your ETH short on Hyperliquid loses in this move.',
+          'Nearest liquidation: ETH rises to $3,764 (+64%). Losing leg: Hyperliquid short. Estimate: other coins flat.',
         ),
       ),
     );

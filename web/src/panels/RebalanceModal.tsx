@@ -17,13 +17,13 @@ import { useDebounced } from '../lib/useDebounced';
 import { useNow } from '../lib/useNow';
 import { BalanceBars, jobRows, jobSeconds, planRows, ProgressBar, ROUTE_ORDER, scaleOf, StepList, VerdictAlert } from './RebalanceBits';
 import type { BarRow, StepRow } from './RebalanceBits';
-import { AFTER_LABEL, CONFIRM_ROUTE, GATE_SPOT, GOAL_LABEL, HOLD_LABEL, HOVER, MODAL_ABANDON } from './rebalanceCopy';
+import { AFTER_LABEL, GATE_SPOT, GOAL_LABEL, HOLD_LABEL, HOVER, MODAL_ABANDON } from './rebalanceCopy';
 import { MODAL_FEE_LABEL, MODAL_FREES, MODAL_INTEREST, MODAL_REFRESH_ROUTE, MODAL_RESUME, MODAL_STEPS, PER_MONTH } from './rebalanceCopy';
 import { CARD_LABEL, MOVE, MOVE_FROM, MOVE_TO, NOTHING_TO_MOVE, poolKey, PRESET_OFF, SHORT_OF_CASH, USE_PRESET, VERDICT_BALANCED } from './rebalanceCopy';
 import { RATE_UNKNOWN, WAITS_FOR_DEAL, WAITS_FOR_TRANSFER, WALLET_LABEL } from './rebalanceCopy';
 import { barRowsOf, Facts, hasUnknownRate, isCashLimitedEven, keyOf, MONTH_DAYS, movesKey, movesOf, pickedRoute, stopsPerDayOf, worthLine } from './RebalanceHovers';
 import { defaultGoal, planSteps, receivingBorrow, receivingHeld } from './RebalanceHovers';
-import { ROUTE_LABEL, roundCountOf, roundOf, RouteRow, routeTime, shownKeys, SpotLines, targetsOf, Term } from './RebalanceHovers';
+import { ROUTE_LABEL, roundCountOf, roundOf, RouteRow, shownKeys, SpotLines, targetsOf, Term } from './RebalanceHovers';
 import type { Fact } from './RebalanceHovers';
 import { NoSpotReadLine } from './TransferBits';
 import { ChevronDown, ChevronRight } from 'lucide-react';
@@ -569,11 +569,6 @@ export function RebalanceModal({
           {worth && <VerdictAlert tone={worth.tone} text={worth.text} sub={worth.sub} />}
         </div>
         <div className="flex flex-col gap-2">
-          {chosen !== null && !stale && (
-            <p className="num text-xs text-ink-200">
-              {CONFIRM_ROUTE(ROUTE_LABEL[chosen], fmtUsd(route.costUsd), routeTime(chosen, route))}
-            </p>
-          )}
           <div className="flex flex-wrap items-center gap-3">
             {/* A stale plan replaces the confirm outright rather than sitting as a
                 warning above a disabled one: the only move available is to take

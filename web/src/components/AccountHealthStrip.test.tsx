@@ -64,7 +64,7 @@ describe('the account strip when Gate stops sending a mark', () => {
 
     expect(
       await screen.findByTitle(
-        /· Nearest liquidation: ETH\..* HYPE\. No liquidation estimate: Gate has not sent a price for the Hyperliquid leg for 4h 12m\.$/,
+        /· Nearest liquidation: ETH .* HYPE\. No Hyperliquid price from Gate for 4h 12m\.$/,
       ),
     ).toBeInTheDocument();
   });
@@ -74,7 +74,7 @@ describe('the account strip when Gate stops sending a mark', () => {
 
     expect(
       await screen.findByTitle(
-        /· ETH\. No liquidation estimate: Gate has not sent a price for the Hyperliquid leg for 4h 12m\.$/,
+        /· ETH\. No Hyperliquid price from Gate for 4h 12m\.$/,
       ),
     ).toBeInTheDocument();
     expect(screen.queryByTitle(/Nearest liquidation/)).toBeNull();
@@ -85,9 +85,9 @@ describe('the account strip when Gate stops sending a mark', () => {
 
     expect(
       await screen.findByTitle(
-        /· Nearest liquidation: ETH\. Gate liquidates your account if ETH (rises|falls) to about \$[\d,.]+ \([+-]\d+%\)\./,
+        /· Nearest liquidation: ETH (rises|falls) to \$[\d,.]+ \([+-]\d+%\)\./,
       ),
     ).toBeInTheDocument();
-    expect(screen.queryByTitle(/No liquidation estimate/)).toBeNull();
+    expect(screen.queryByTitle(/price from Gate/)).toBeNull();
   });
 });

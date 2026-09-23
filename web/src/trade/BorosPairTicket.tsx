@@ -23,7 +23,6 @@
  * ticks on a 3% book than on a 30% one, which is not what a tolerance means.
  */
 import { ChevronRight } from 'lucide-react';
-import { ViewOnlyChip } from '../components/ViewOnlyChip';
 import { useEffect, useMemo, useState } from 'react';
 import { useTradeFlowOptional } from './TradeFlow';
 import {
@@ -53,7 +52,6 @@ import { isUsdCollateral, knownRate } from '../lib/boros';
 import { fieldValue, fmtPct, sigGrouped } from '../lib/fmt';
 import { useNow } from '../lib/useNow';
 import { uuid } from '../lib/uuid';
-import { short } from '../panels/HomeControls';
 import { useActiveWallet } from '../panels/trackedAddress';
 import { BorosAgentSetup, BorosLogInButton } from './BorosAgentSetup';
 import {
@@ -147,7 +145,7 @@ export function BorosPairTicket({
   onBusyChange?: (busy: boolean) => void;
 } = {}) {
   const agent = useBorosAgent();
-  const { address, canTrade, viewOnly, loginLabel } = useActiveWallet();
+  const { address, canTrade, loginLabel } = useActiveWallet();
   const context = useBorosPairContext(address, active);
 
   const [marketA, setMarketA] = useState<number | null>(null);
@@ -698,20 +696,9 @@ export function BorosPairTicket({
           : 'flex flex-col gap-3'
       }
     >
-      {/* Setup sits ABOVE the form, not behind the confirm: finding out the
+      {/* A notice above the form, not behind the confirm: finding out the
           terminal cannot send only after pricing a pair wastes the quote. */}
-      <div className={twoColumn ? 'lg:col-span-2' : undefined}>
-        {viewOnly ? (
-          <div className="rounded-lg border border-ink-700 bg-ink-950 px-3 py-2.5">
-            <div className="flex items-center gap-2">
-              <ViewOnlyChip />
-              <span className="num text-[11px] text-ink-300">{short(address)}</span>
-            </div>
-          </div>
-        ) : (
-          <BorosAgentSetup />
-        )}
-      </div>
+      <BorosAgentSetup className={twoColumn ? 'lg:col-span-2' : undefined} />
 
       <div className={twoColumn ? 'flex flex-col gap-3' : 'contents'}>
       {onlyLeg && (
