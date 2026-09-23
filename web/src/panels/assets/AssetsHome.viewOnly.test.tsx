@@ -109,7 +109,7 @@ describe.each([50, 6_000_000])('Positions for a view-only wallet at $%d', (size)
   it('does not call the Boros leg unhedged because the perps are hidden', async () => {
     renderWithClient(<AssetsHome />);
     await screen.findByText('ETH');
-    expect(screen.queryByText('missing hedge')).toBeNull();
+    expect(screen.queryByText('Missing hedge')).toBeNull();
     expect(screen.queryByText(/Boros legs? missing/)).toBeNull();
     expect(screen.queryByText(/borrow interest/)).toBeNull();
   });
