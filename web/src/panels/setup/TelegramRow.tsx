@@ -24,6 +24,9 @@ import { Ext } from '../onboardingBits';
 import { SetupRowFrame } from './SetupRowFrame';
 import type { SetupRowProps } from './setupState';
 
+/** The bot's page, where alert settings live per wallet. */
+const ALERTS_PAGE_FALLBACK = 'https://boros-bot-notification.pendle.finance/alerts';
+
 type Phase = 'idle' | 'waiting' | 'expired';
 
 type AlertSettings = { liquidation: boolean; interest: boolean; maturity: boolean; rollover: boolean };
@@ -207,7 +210,7 @@ export function TelegramRow(p: SetupRowProps) {
       {disconnect.isError && (
         <p role="alert" className="text-xs text-amber-300">
           Could not reach the bot. Try again, or stop alerts for each wallet on the{' '}
-          <Ext href={info?.alertsPageUrl ?? 'https://boros-bot-notification.pendle.finance/alerts'}>
+          <Ext href={info?.alertsPageUrl ?? ALERTS_PAGE_FALLBACK}>
             Boros notifications page
           </Ext>
           .
@@ -265,8 +268,21 @@ export function TelegramRow(p: SetupRowProps) {
         ) : (
           <span className="text-ink-500">{CAVEAT}</span>
         )}
-        {p.variant !== 'setup' && !askDisconnect && disconnectLink}
       </div>
+      {p.variant !== 'setup' && !askDisconnect && (
+        <div className="flex items-center gap-3">
+          <a
+            href={info?.alertsPageUrl ?? ALERTS_PAGE_FALLBACK}
+            target="_blank"
+            rel="noreferrer"
+            className="btn-link inline-flex items-center gap-1"
+          >
+            Boros notifications
+            <ArrowUpRight size={12} aria-hidden />
+          </a>
+          {disconnectLink}
+        </div>
+      )}
       {p.variant === 'setup' ? (
         <button type="button" className="btn-primary w-fit" onClick={p.onDone}>
           Finish

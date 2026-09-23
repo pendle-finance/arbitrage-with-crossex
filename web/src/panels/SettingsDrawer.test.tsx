@@ -270,6 +270,15 @@ describe('SettingsDrawer', () => {
     expect(await within(row('Telegram alerts')).findByText('Alerts for 0xab18…ed9d ·')).toBeInTheDocument();
   });
 
+  it('telegram links to the Boros notifications page', async () => {
+    mockAllDone({ ...connectedTelegram(), alertWallet: WALLET, alertsPageUrl: 'https://bot.example/alerts' });
+    renderDrawer();
+    await clickEdit('Telegram alerts');
+    const link = await within(row('Telegram alerts')).findByRole('link', { name: 'Boros notifications' });
+    expect(link).toHaveAttribute('href', 'https://bot.example/alerts');
+    expect(link).toHaveAttribute('target', '_blank');
+  });
+
   it('telegram is not set up for a wallet the bot has no link for', async () => {
     mockAllDone({ ...connectedTelegram(), alertWallet: WALLET, unlinkedWallet: PASTED });
     renderDrawer();
