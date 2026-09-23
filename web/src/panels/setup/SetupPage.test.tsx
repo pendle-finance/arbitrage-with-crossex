@@ -145,6 +145,29 @@ describe('SetupPage · Gate API key', () => {
     await user.click(await screen.findByRole('button', { name: 'How to make a key' }));
     expect(onOpenGuide).toHaveBeenCalledTimes(1);
   });
+
+  it('lists the Gate steps before the key, with the detail on hover', async () => {
+    const user = userEvent.setup();
+    mockWorld();
+    renderSetup();
+    await screen.findByRole('button', { name: 'Check key' });
+    const steps = within(screen.getByRole('list', { name: 'Before the key' }));
+    expect(steps.getAllByRole('listitem').map((item) => item.textContent)).toEqual([
+      '1Fund Gategate.com/signup',
+      '2Enable CrossExgate.com/crossex',
+      '3Fund CrossExgate.com/crossex',
+    ]);
+
+    await user.hover(steps.getByText('Enable CrossEx'));
+    expect(await screen.findByText(/The Cross-Exchange key permission and transfers need it first\./)).toBeInTheDocument();
+  });
+
+  it('hides the Gate steps once the key works', async () => {
+    mockWorld({ keyConfigured: true });
+    renderSetup();
+    expect(await within(row('Gate API key')).findByText(/works/)).toBeInTheDocument();
+    expect(screen.queryByRole('list', { name: 'Before the key' })).toBeNull();
+  });
 });
 
 describe('SetupPage · Boros wallet', () => {

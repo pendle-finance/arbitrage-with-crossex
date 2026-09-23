@@ -1,6 +1,8 @@
 import type { ReactNode } from 'react';
 
 export const GATE_API_KEYS_URL = 'https://www.gate.com/myaccount/api_key_manage';
+export const GATE_SIGNUP_URL = 'https://www.gate.com/signup';
+export const GATE_CROSSEX_URL = 'https://www.gate.com/crossex';
 
 export const PERMISSION_ROWS = [
   { on: true, label: 'Cross-Exchange', value: 'Read and Write', detail: 'trade and move money' },
