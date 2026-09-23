@@ -146,7 +146,7 @@ describe('SetupPage · Gate API key', () => {
       '1Fund Gategate.com/signup',
       '2Enable CrossExgate.com/crossex',
       '3Fund CrossExgate.com/crossex',
-      '4Make an API keyAPI Management',
+      '4Create an API keyAPI Management',
     ]);
     expect(screen.getByText('APIv4 key · Trading account · IP Permissions: Later')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'How to make a key' })).toBeNull();

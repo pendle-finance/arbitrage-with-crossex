@@ -7,7 +7,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import type { BorosSimulatedLeg } from '../../api/types';
-import { ROLL_FIT_BUFFER, capacityAt, maxRollSize, planBatch, suggestedRollSize, toleranceFor } from './rollSizing';
+import { ROLL_FIT_BUFFER, capacityAt, fitAtBand, maxRollSize, planBatch, suggestedRollSize, toleranceFor } from './rollSizing';
 
 const HL: Array<[number, number]> = [
   [0.0005, 9.44],
@@ -116,5 +116,59 @@ describe('planBatch', () => {
   it('the tighter batch decides the most that rolls', () => {
     expect(maxRollSize([{ kind: 'liquidity', marketName: 'a', maxSize: 900 }, null, { kind: 'rate-limit', marketName: 'b', maxSize: 400 }])).toBe(400);
     expect(maxRollSize([null, null])).toBeNull();
+  });
+});
+
+describe('fitAtBand — the default roll size is sized at the band, not the seed', () => {
+  const CAP = 0.1;
+  // Live 2026-09-23, the Gate / Hyperliquid 25 Sep pair (870 ETH): the HL
+  // exit's best ask was a stray 0.01 ETH at 0.37%, then 1,000 ETH at 1.10%,
+  // past the 1.0% seed. Sized at the seed the modal defaulted to 0.0095 ETH.
+  const STRAY: Array<[number, number]> = [
+    [0.0037, 0.01],
+    [0.011, 1000.01],
+    [0.0112, 1424.59],
+  ];
+  const GATE_EXIT: Array<[number, number]> = [
+    [0.0012, 3.71],
+    [0.0069, 251.76],
+    [0.012, 325.23],
+    [0.03, 900],
+  ];
+  const exit = [
+    leg({ marketName: 'Gate ETHUSDT 25 Sep 2026', depth: GATE_EXIT, maxToleranceApr: 0.0182 }),
+    leg({ marketName: 'Hyperliquid ETH 25 Sep 2026', depth: STRAY, maxToleranceApr: 0.0518 }),
+  ];
+  const entry = [leg({ depth: DEEP, maxToleranceApr: 0.02 }), leg({ depth: DEEP, maxToleranceApr: 0.02 })];
+
+  it('looks past a stray level the seed stops at', () => {
+    expect(capacityAt(STRAY, 0.01)).toBe(0.01);
+    const fit = fitAtBand(exit, entry, CAP)!;
+    expect(fit).toBeCloseTo(325.23, 9);
+    expect(suggestedRollSize(fit, 870)).toBeGreaterThan(870 * 0.2);
+  });
+
+  it("bounds each batch by its tighter leg's band, as planBatch does", () => {
+    // Gate's band (1.82% × 0.9 = 1.64%) binds the exit batch, so HL is read
+    // at 1.64% — not at its own 4.66%, which would reach levels the batch's
+    // one tolerance cannot.
+    const wideHl = [exit[0], leg({ depth: [[0.0037, 0.01], [0.03, 5000]], maxToleranceApr: 0.0518 })];
+    expect(fitAtBand(wideHl, entry, CAP)).toBe(0.01);
+  });
+
+  it('a size it suggests is one planBatch carries without a limit', () => {
+    const size = suggestedRollSize(fitAtBand(exit, entry, CAP)!, 870);
+    expect(planBatch(exit, size, 0.01, CAP)?.limit).toBeNull();
+    expect(planBatch(entry, size, 0.01, CAP)?.limit).toBeNull();
+  });
+
+  it('never reads past the app cap', () => {
+    const far = [leg({ depth: [[0.001, 1], [0.15, 9000]], maxToleranceApr: null }), leg({ depth: DEEP, maxToleranceApr: null })];
+    expect(fitAtBand(far, entry, CAP)).toBe(1);
+  });
+
+  it('has nothing to say until all four legs carry a ladder', () => {
+    expect(fitAtBand([exit[0], leg({ depth: null })], entry, CAP)).toBeNull();
+    expect(fitAtBand(exit.slice(0, 1), entry, CAP)).toBeNull();
   });
 });

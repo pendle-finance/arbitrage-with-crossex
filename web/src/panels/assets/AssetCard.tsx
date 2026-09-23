@@ -101,7 +101,7 @@ import { knownRate } from '../../lib/boros';
 import { useDebounced } from '../../lib/useDebounced';
 import { AssetBars } from './AssetBars';
 import { SinceChip } from './SinceChip';
-import { fitAcross, maxRollSize, planBatch, suggestedRollSize, type BatchLimit } from './rollSizing';
+import { fitAtBand, maxRollSize, planBatch, suggestedRollSize, type BatchLimit } from './rollSizing';
 import { useRollPublisher, useRollSignalsOptional } from '../rollSignal';
 import { ArrowLeft, ArrowRight, ChartColumnDecreasing, ChartPie, Check, ChevronDown, RotateCw, Share } from 'lucide-react';
 
@@ -1090,10 +1090,10 @@ function rollOpportunities(
  * One maturity, priced for the banner EXACTLY as the modal will price it.
  * Renders nothing; slow poll — it is a signal, the modal re-prices live.
  *
- * Two stages. First a quote at a FIFTH of the position: it says how much the
- * books take inside tolerance (`sizeWithinTolerance`, size-independent), and
- * so what size the modal will DEFAULT to — the smaller of that and the
- * position. A default under a fifth is no opportunity: the market cannot
+ * Two stages. First a quote at a FIFTH of the position: its ladders say how
+ * much the books take at the widest tolerance each batch may carry
+ * (`fitAtBand`, size-independent), and so what size the modal will DEFAULT
+ * to — the smaller of that and the position. A default under a fifth is no opportunity: the market cannot
  * take a meaningful slice. Then a quote AT that default size, both batches,
  * through the same `rollFigures` the option card uses, so the banner's rate
  * is the modal's opening headline to the decimal.
@@ -1123,22 +1123,26 @@ function RollProbe({
 }) {
   const longLeg = yuLegs.find((l) => l.venue === pair.longVenue);
   const shortLeg = yuLegs.find((l) => l.venue === pair.shortVenue);
-  const reqs = (size: number): { exit: BorosPairRequest | null; entry: BorosPairRequest | null } => {
+  const reqs = (
+    size: number,
+    exitSlip: number,
+    entrySlip: number,
+  ): { exit: BorosPairRequest | null; entry: BorosPairRequest | null } => {
     if (address === null || !(size > 0) || longLeg?.marketId === undefined || shortLeg?.marketId === undefined) {
       return { exit: null, entry: null };
     }
     return {
       exit: {
         address,
-        legA: { marketId: longLeg.marketId, direction: longLeg.side === 'LONG' ? 'short' : 'long', slippageApr: exitSlippageApr },
-        legB: { marketId: shortLeg.marketId, direction: shortLeg.side === 'LONG' ? 'short' : 'long', slippageApr: exitSlippageApr },
+        legA: { marketId: longLeg.marketId, direction: longLeg.side === 'LONG' ? 'short' : 'long', slippageApr: exitSlip },
+        legB: { marketId: shortLeg.marketId, direction: shortLeg.side === 'LONG' ? 'short' : 'long', slippageApr: exitSlip },
         size,
         intent: 'close',
       },
       entry: {
         address,
-        legA: { marketId: target.longMarketId, direction: longLeg.side === 'LONG' ? 'long' : 'short', slippageApr: entrySlippageApr },
-        legB: { marketId: target.shortMarketId, direction: shortLeg.side === 'LONG' ? 'long' : 'short', slippageApr: entrySlippageApr },
+        legA: { marketId: target.longMarketId, direction: longLeg.side === 'LONG' ? 'long' : 'short', slippageApr: entrySlip },
+        legB: { marketId: target.shortMarketId, direction: shortLeg.side === 'LONG' ? 'long' : 'short', slippageApr: entrySlip },
         size,
         intent: 'open',
       },
@@ -1146,9 +1150,10 @@ function RollProbe({
   };
   const opts = { refetchInterval: ROLL_PROBE_POLL_MS };
 
-  // Stage 1: a fifth, for the fit.
+  // Stage 1: a fifth, for the fit. The ladders it returns are the whole book,
+  // whatever size or tolerance asked for them.
   const fifth = heldSize * ROLL_OPPORTUNITY_SHARE;
-  const r1 = reqs(fifth);
+  const r1 = reqs(fifth, exitSlippageApr, entrySlippageApr);
   const exit1 = useBorosPairSimulation(r1.exit, r1.exit !== null, opts);
   const entry1 = useBorosPairSimulation(r1.entry, r1.entry !== null, opts);
   const legs1 = [exit1.data?.simulation, entry1.data?.simulation].flatMap((x) => (x ? [x.legA, x.legB] : []));
@@ -1157,14 +1162,20 @@ function RollProbe({
   const fit =
     legs1.length === 4
       ? // An older server reports no ladder; the modal then opens on the whole position.
-        (fitAcross(legs1.slice(0, 2), legs1.slice(2), exitSlippageApr, entrySlippageApr, ROLL_MAX_SLIP_PCT / 100) ?? Infinity)
+        (fitAtBand(legs1.slice(0, 2), legs1.slice(2), ROLL_MAX_SLIP_PCT / 100) ?? Infinity)
       : null;
   const size = fit === null ? null : suggestedRollSize(fit, heldSize);
   const enough = size !== null && size >= fifth - 1e-9;
 
-  // Stage 2: the modal's default size. When that IS the fifth, stage 1
-  // already holds the quote and the same keys are served from cache.
-  const r2 = enough ? reqs(size) : { exit: null, entry: null };
+  // Stage 2: the modal's default size, at the tolerance the modal gives each
+  // batch for it (`planBatch`, off the same ladders) — so both quote one
+  // request. When that IS the fifth at the seed, stage 1 already holds the
+  // quote and the same keys are served from cache.
+  const exitPlan = enough ? planBatch(legs1.slice(0, 2), size, exitSlippageApr, ROLL_MAX_SLIP_PCT / 100) : null;
+  const entryPlan = enough ? planBatch(legs1.slice(2), size, entrySlippageApr, ROLL_MAX_SLIP_PCT / 100) : null;
+  const r2 = enough
+    ? reqs(size, exitPlan?.toleranceApr ?? exitSlippageApr, entryPlan?.toleranceApr ?? entrySlippageApr)
+    : { exit: null, entry: null };
   const exit2 = useBorosPairSimulation(r2.exit, r2.exit !== null, opts);
   const entry2 = useBorosPairSimulation(r2.entry, r2.entry !== null, opts);
   const exitSim = exit2.data?.simulation;
@@ -1470,16 +1481,16 @@ export function RollOverModal({
   const capApr = ROLL_MAX_SLIP_PCT / 100;
   const entrySeedFor = (t: RollTarget): number => seedSlipPctFor(markets ?? [], [t.longMarketId, t.shortMarketId]) / 100;
   /**
-   * The default size: what fills on all four legs AT THE SEED tolerance, less
-   * a buffer (`suggestedRollSize`) — the books move between this quote and
-   * the order, and a size equal to the capacity is refused by one cancelled
-   * lot. The whole position whenever the books hold it with that to spare.
+   * The default size: what fills on all four legs at the WIDEST tolerance
+   * each batch may carry (`fitAtBand`) — `planBatch` widens to it for any
+   * size, so the seed is not the limit — less a buffer (`suggestedRollSize`):
+   * the books move between this quote and the order, and a size equal to the
+   * capacity is refused by one cancelled lot. The whole position whenever the
+   * books hold it with that to spare.
    */
   const selectedQuote = selected !== null ? legsBy[selected] : undefined;
   const selectedFit =
-    selectedQuote && target
-      ? (fitAcross(selectedQuote.exit, selectedQuote.entry, exitSlippageApr, entrySeedFor(target), capApr) ?? undefined)
-      : undefined;
+    selectedQuote && target ? (fitAtBand(selectedQuote.exit, selectedQuote.entry, capApr) ?? undefined) : undefined;
   useEffect(() => {
     if (touched || selected === null || selectedFit === undefined || appliedFor === selected) return;
     setSizeStr(fmtSize(suggestedRollSize(selectedFit, heldSize)));
@@ -3404,13 +3415,24 @@ function LegIdentity({
   const named = Boolean(name);
   return (
     <span className="inline-flex items-center gap-3 leading-none">
-      {/* The mock's leg-kind marker is a NEUTRAL grey pill — it says which
-          kind of leg this row is, it is not a status, so it carries no tone.
-          A leg that isn't there yet gets the dashed outline instead of a
-          fill, which is how the mock draws an absent thing. */}
+      {/* The leg-kind marker carries the VENUE's colour, so a mixed list reads
+          as two kinds at a glance instead of one grey column. Boros takes the
+          `info` blue this file's other leg tables already give it (the
+          `bg-info/[0.16] text-pastel-blue` badge above); the perp takes the
+          `crossex` cyan, the one token that means "via CrossEx" — the same
+          one VenueChip's ·CX and Chip's `crossex` tone use.
+          It is still NOT a status: the tone names which venue, never how the
+          leg is doing, so it stays off the grass/guava axis that means
+          good/bad everywhere else. A leg that isn't there yet keeps the
+          dashed outline instead of a fill, which is how the mock draws an
+          absent thing — absence outranks venue, so `dim` drops the colour. */}
       <span
         className={`pp-pill w-[52px] shrink-0 justify-center ${
-          dim ? 'border border-dashed border-ink-300/50 bg-transparent text-ink-400' : ''
+          dim
+            ? 'border border-dashed border-ink-300/50 bg-transparent text-ink-400'
+            : boros
+              ? 'bg-info/[0.16] text-pastel-blue'
+              : 'bg-crossex/[0.15] text-crossex'
         }`}
       >
         {boros ? 'Boros' : 'Perp'}

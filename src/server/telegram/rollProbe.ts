@@ -8,6 +8,7 @@ import {
   pairNetApr,
   pairRollGeometry,
   rollFigures,
+  rollBatchTolerance,
   rollFitSize,
   rollOpportunities,
   rollQuoteIsFillable,
@@ -65,18 +66,22 @@ export function createRollProbe(deps: RollProbeDeps): () => Promise<RollSignalIn
     const probes: Record<number, RollProbeResult> = {};
     for (const target of targets) {
       const entrySlippageApr = seedSlippageApr(markets, [target.longMarketId, target.shortMarketId]);
-      const bodies = (size: number): { exit: PairSimulateBody; entry: PairSimulateBody } => ({
+      const bodies = (
+        size: number,
+        exitSlip = exitSlippageApr,
+        entrySlip = entrySlippageApr,
+      ): { exit: PairSimulateBody; entry: PairSimulateBody } => ({
         exit: {
           address,
-          legA: { marketId: held, direction: longLeg?.side === 'LONG' ? 'short' : 'long', slippageApr: exitSlippageApr },
-          legB: { marketId: shortHeld, direction: shortLeg?.side === 'LONG' ? 'short' : 'long', slippageApr: exitSlippageApr },
+          legA: { marketId: held, direction: longLeg?.side === 'LONG' ? 'short' : 'long', slippageApr: exitSlip },
+          legB: { marketId: shortHeld, direction: shortLeg?.side === 'LONG' ? 'short' : 'long', slippageApr: exitSlip },
           size,
           intent: 'close',
         },
         entry: {
           address,
-          legA: { marketId: target.longMarketId, direction: longLeg?.side === 'LONG' ? 'long' : 'short', slippageApr: entrySlippageApr },
-          legB: { marketId: target.shortMarketId, direction: shortLeg?.side === 'LONG' ? 'long' : 'short', slippageApr: entrySlippageApr },
+          legA: { marketId: target.longMarketId, direction: longLeg?.side === 'LONG' ? 'long' : 'short', slippageApr: entrySlip },
+          legB: { marketId: target.shortMarketId, direction: shortLeg?.side === 'LONG' ? 'long' : 'short', slippageApr: entrySlip },
           size,
           intent: 'open',
         },
@@ -87,19 +92,21 @@ export function createRollProbe(deps: RollProbeDeps): () => Promise<RollSignalIn
         deps.price(fifth.exit, false),
         deps.price(fifth.entry, false),
       ]);
-      const size = rollFitSize(
-        [exitFifth.simulation.legA, exitFifth.simulation.legB],
-        [entryFifth.simulation.legA, entryFifth.simulation.legB],
-        exitSlippageApr,
-        entrySlippageApr,
-        heldSize,
-      );
+      const exitLegs = [exitFifth.simulation.legA, exitFifth.simulation.legB];
+      const entryLegs = [entryFifth.simulation.legA, entryFifth.simulation.legB];
+      const size = rollFitSize(exitLegs, entryLegs, heldSize);
       if (size === null) {
         probes[target.maturity] = { ok: false, rate: null, size: 0 };
         continue;
       }
 
-      const atSize = bodies(size);
+      // At the tolerance the modal gives each batch for this size, so the
+      // alert and the modal quote one request.
+      const atSize = bodies(
+        size,
+        rollBatchTolerance(exitLegs, size, exitSlippageApr),
+        rollBatchTolerance(entryLegs, size, entrySlippageApr),
+      );
       const [exit, entry] = await Promise.all([deps.price(atSize.exit, false), deps.price(atSize.entry, false)]);
       const exitSim = exit.simulation;
       const entrySim = entry.simulation;

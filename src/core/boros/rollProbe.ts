@@ -1,4 +1,5 @@
 import { defaultChargePerpFees } from '../../../web/src/panels/assets/assetModel';
+import { fitAtBand, planBatch, suggestedRollSize } from '../../../web/src/panels/assets/rollSizing';
 import type { BorosMarket } from './client';
 import type { BorosPairSimulation, SimulatedLeg } from './pair';
 
@@ -7,9 +8,7 @@ const EPS = 1e-9;
 
 export const ROLL_OPPORTUNITY_SHARE = 0.2;
 export const ROLL_MAX_SLIP_APR = 0.1;
-export const ROLL_FIT_BUFFER = 0.05;
 export const ROLL_FALLBACK_SLIP_APR = 0.01;
-const BAND_USE = 0.9;
 export const MAX_ROLL_TARGETS = 8;
 
 export interface RollTarget {
@@ -123,39 +122,6 @@ export function pairNetApr(pair: RollPairFacts, nowSec: number): number | null {
     : null;
 }
 
-type DepthLadder = ReadonlyArray<readonly [number, number]>;
-
-function capacityAt(depth: DepthLadder, tolerance: number): number {
-  let filled = 0;
-  for (const [adverse, cum] of depth) {
-    if (adverse > tolerance + EPS) break;
-    filled = cum;
-  }
-  return filled;
-}
-
-const allowedOf = (leg: SimulatedLeg, capApr: number): number =>
-  Math.min(capApr, typeof leg.maxToleranceApr === 'number' ? leg.maxToleranceApr * BAND_USE : capApr);
-
-export function fitAcross(
-  exitLegs: ReadonlyArray<SimulatedLeg>,
-  entryLegs: ReadonlyArray<SimulatedLeg>,
-  exitToleranceApr: number,
-  entryToleranceApr: number,
-  capApr: number,
-): number | null {
-  const all = [
-    ...exitLegs.map((l) => [l, exitToleranceApr] as const),
-    ...entryLegs.map((l) => [l, entryToleranceApr] as const),
-  ];
-  if (all.length !== 4 || all.some(([l]) => !Array.isArray(l.depth))) return null;
-  return Math.min(...all.map(([l, tol]) => capacityAt(l.depth as DepthLadder, Math.min(tol, allowedOf(l, capApr)))));
-}
-
-export function suggestedRollSize(capacity: number, held: number): number {
-  return Math.max(0, Math.min(held, capacity * (1 - ROLL_FIT_BUFFER)));
-}
-
 export function addedMarginOf(sim: BorosPairSimulation | null | undefined): number | null {
   if (!sim) return null;
   let total = 0;
@@ -248,18 +214,28 @@ export function rollFigures({
   return { netRate, spreadApr, totalCostUsd, exitPnlUsd, capitalUsd, newBorosImUsd };
 }
 
+/**
+ * The size the roll modal DEFAULTS to — what the books take at the widest
+ * tolerance each batch may carry (`fitAtBand`), less the buffer, capped at the
+ * position — or null when that is under a fifth of the position: no
+ * meaningful slice rolls, so no opportunity. One function with the modal's,
+ * so the alert quotes the size the modal opens on.
+ */
 export function rollFitSize(
   exitLegs: ReadonlyArray<SimulatedLeg>,
   entryLegs: ReadonlyArray<SimulatedLeg>,
-  exitSlippageApr: number,
-  entrySlippageApr: number,
   heldSize: number,
 ): number | null {
-  const legs = [...exitLegs, ...entryLegs];
-  if (legs.length !== 4) return null;
-  const fit = fitAcross(exitLegs, entryLegs, exitSlippageApr, entrySlippageApr, ROLL_MAX_SLIP_APR) ?? Infinity;
+  if (exitLegs.length + entryLegs.length !== 4) return null;
+  const fit = fitAtBand(exitLegs, entryLegs, ROLL_MAX_SLIP_APR) ?? Infinity;
   const size = suggestedRollSize(fit, heldSize);
   return size >= heldSize * ROLL_OPPORTUNITY_SHARE - EPS ? size : null;
+}
+
+/** The tolerance the modal gives one batch for `size` (`planBatch`), the seed
+ * when the ladders are missing — so the alert's quote is the modal's. */
+export function rollBatchTolerance(legs: ReadonlyArray<SimulatedLeg>, size: number, seedApr: number): number {
+  return planBatch(legs, size, seedApr, ROLL_MAX_SLIP_APR)?.toleranceApr ?? seedApr;
 }
 
 export function rollQuoteIsFillable(
