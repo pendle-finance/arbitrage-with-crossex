@@ -166,6 +166,18 @@ export function buildApp(deps: AppDeps): FastifyInstance {
       pathname = decodeURIComponent(pathname);
     } catch {
     }
+
+    // A page opened on 127.0.0.1 moves to localhost. The browser keeps the
+    // wallet's site access and the saved settings per host name, so the two
+    // names are two sites. The Telegram alerts link to 127.0.0.1, because
+    // Telegram drops a localhost link, and a tap landed on a site the wallet
+    // never connected: switching accounts in Rabby did nothing there. The API
+    // stays on both names, since scripts and the installers call 127.0.0.1.
+    const loopbackIp = /^127\.0\.0\.1(:\d+)?$/.exec(host ?? '');
+    if (loopbackIp && (req.method === 'GET' || req.method === 'HEAD') && !/^\/api(\/|$)/.test(pathname)) {
+      return reply.redirect(`http://localhost${loopbackIp[1] ?? ''}${req.url}`, 302);
+    }
+
     if (expectedTokenHash && pathname.startsWith('/api/') && pathname !== '/api/health') {
       const given = req.headers['x-arb-token'];
       const ok =

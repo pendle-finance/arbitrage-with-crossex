@@ -64,6 +64,33 @@ describe('host/origin guard', () => {
     expect(res.headers['content-security-policy']).toBe("frame-ancestors 'none'");
   });
 
+  // The Telegram alerts link to 127.0.0.1 (Telegram drops a localhost link),
+  // but the wallet's site access and the saved settings live on localhost.
+  it('sends a page opened on 127.0.0.1 to the same page on localhost', async () => {
+    app = makeTestApp();
+    const res = await app.inject({
+      method: 'GET',
+      url: '/?tab=positions',
+      headers: { host: '127.0.0.1:6688' },
+    });
+    expect(res.statusCode).toBe(302);
+    expect(res.headers.location).toBe('http://localhost:6688/?tab=positions');
+  });
+
+  it('keeps the API on 127.0.0.1', async () => {
+    app = makeTestApp();
+    const res = await app.inject({ method: 'GET', url: URL, headers: { ...HOST, host: '127.0.0.1:6688' } });
+    expect(res.statusCode).toBe(200);
+    const health = await app.inject({ method: 'GET', url: '/api/health', headers: { host: '127.0.0.1:6688' } });
+    expect(health.statusCode).toBe(200);
+  });
+
+  it('does not redirect a page already on localhost', async () => {
+    app = makeTestApp();
+    const res = await app.inject({ method: 'GET', url: '/?tab=balances', headers: { host: 'localhost:6688' } });
+    expect(res.statusCode).not.toBe(302);
+  });
+
   it('sends the anti-framing headers on a rejected request too', async () => {
     app = makeTestApp();
     const res = await app.inject({ method: 'GET', url: URL, headers: { host: 'evil.com' } });
