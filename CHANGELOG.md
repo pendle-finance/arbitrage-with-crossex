@@ -3,6 +3,29 @@
 Only substantial releases are listed here — each one bumps `version.json` (which is what the
 in-app update check compares against).
 
+## 1.7.2 — 2026-09-25
+
+TLDR: Settlement-fee rebates show in the terminal. A rebated wallet sees its rebate on every
+opportunity, and the rebate it has earned counts in its PnL. Viewing a wallet you are not
+logged in to is now one clean read-only view.
+
+- **Settlement-fee rebates.** Some wallets get part of the Boros settlement fee back. For
+  those wallets, each opportunity shows a small "N% fee rebate" tag, and "Include rebate in
+  APR" (on by default) adds it to the APR, the return and the ranking. The details waterfall
+  shows it as a green "Settlement rebate" bar. Boros computes the amounts; the terminal only
+  reads them for the logged-in wallet.
+- **Rebates on Positions.** The rebate earned since the start date counts in Total PnL and
+  ROI. Current APR, $/day and each pair's APR and profit use the lower settlement fee. The
+  PnL breakdown has a Rebates column, and the PnL waterfall a rebate bar. A wallet with no
+  rebate sees no change.
+- **One clean view for a wallet you are not logged in to.** Positions says "Viewing 0x…, not
+  logged in" and names the logged-in wallet to switch back to. The header hides the Gate
+  balance and margin, which belong to the logged-in account, and Opportunities no longer
+  pairs your Gate positions with that wallet's Boros legs. Switch back and the full view
+  returns.
+- **Telegram per wallet.** The setup step reads done only for the wallet the alerts are
+  linked to. Other wallets read "Not set up for this wallet".
+
 ## 1.7.1 — 2026-09-24
 
 TLDR: One Boros wallet at a time, like the Boros app, and Telegram alerts for each wallet. The
