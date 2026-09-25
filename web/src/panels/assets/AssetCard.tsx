@@ -5154,7 +5154,7 @@ null
       )}
 
       {feesOpen && (
-        <Modal title={`${group.base} — PnL breakdown`} onClose={() => setFeesOpen(false)} widthClass="w-[640px]">
+        <Modal title={`${group.base} — PnL breakdown`} onClose={() => setFeesOpen(false)} widthClass="w-[760px]">
           {(() => {
             const cell = 'px-2 py-1.5';
             const th = 'px-2 pb-1 text-[11px] font-normal text-ink-500';
@@ -5389,7 +5389,7 @@ null
                           </td>
                           <td className={`${cell} text-right text-ink-300`}>{fmtUsd(r.feesUsd)}</td>
                           {showRebate && (
-                            <td className={`${cell} text-right text-grass`}>
+                            <td className={`${cell} text-right ${r.rebateUsd > 0 ? 'text-grass' : 'text-ink-500'}`}>
                               {r.rebateUsd > 0 ? `+${fmtUsd(r.rebateUsd)}` : '—'}
                             </td>
                           )}
@@ -5416,8 +5416,21 @@ null
                   <p className="text-sm text-ink-600">No Boros activity in this window.</p>
                 )}
                 <p className="mt-3 text-[11px] text-ink-600">
-                  Settlement is net of its own fee (unavoidable, and already in the locked rate); the fee column is the TRADE fee, which subtracts.
-                  {showRebate && ' Rebates are the CrossEx settlement-fee rebate credited back, and are added into PnL.'} Dimmed = excluded.
+                  Settlement is net of its fee, already in the locked rate. Fees are trade fees.
+                  {showRebate && (
+                    <>
+                      {' '}Rebates are settlement-fee rebates added into PnL, claimable on your Boros account page{' '}
+                      <a
+                        href="https://boros.pendle.finance/portfolio?info=myAccount"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-ink-300 underline hover:text-ink-100"
+                      >
+                        here
+                      </a>
+                      .
+                    </>
+                  )}
                 </p>
               </>
             );
