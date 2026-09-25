@@ -73,6 +73,40 @@ describe('settlement fees are netted out of the locked rate', () => {
     expect(d.pairs[0].lockedAprFwd).toBeCloseTo(expected, 9);
   });
 
+  it('a current rebate discounts the settle fee in BOTH the pair and asset locked rates', () => {
+    mid = 1;
+    const g = group({
+      perpOpen: [perp({ venue: 'GATE', side: 'LONG', qty: 100 }), perp({ venue: 'HYPERLIQUID', side: 'SHORT', qty: 100 })],
+      borosOpen: [
+        yu({ venue: 'GATE', side: 'LONG', sizeToken: 100, maturity: SEP, entryApr: 0.04, settleFeeApr: 0.001 }),
+        yu({ venue: 'HYPERLIQUID', side: 'SHORT', sizeToken: 100, maturity: SEP, entryApr: 0.08, settleFeeApr: 0.001 }),
+      ],
+    });
+    // 20% rebate ⇒ the settle fee costs 0.0008 per leg instead of 0.001.
+    const rebate = {
+      mode: 'relative' as const,
+      settlementFeePercentage: 0.8,
+      rebateBps: 2000,
+      startTimestamp: null,
+      endTimestamp: null,
+      marketIds: null,
+      active: true,
+    };
+    const d = deriveAsset(g, {}, 0, NOW, undefined, rebate);
+    const notional = 100 * 2500;
+    const cap = d.pairs[0].capitalUsd;
+    const expectedPair = ((0.08 - 0.04) * notional - 2 * 0.0008 * notional) / cap;
+    expect(d.pairs[0].lockedAprFwd).toBeCloseTo(expectedPair, 9);
+    // Asset-level locked carry uses the same discount.
+    const noRebate = deriveAsset(g, {}, 0, NOW);
+    expect(d.lockedCarryPerYearUsd as number).toBeGreaterThan(noRebate.lockedCarryPerYearUsd as number);
+    expect((d.lockedCarryPerYearUsd as number) - (noRebate.lockedCarryPerYearUsd as number)).toBeCloseTo(
+      2 * 0.2 * 0.001 * notional,
+      6,
+    );
+    expect(d.rebate).toEqual(rebate);
+  });
+
   it('a missing settleFeeApr (older server) leaves the rate unchanged', () => {
     mid = 1;
     const g = group({

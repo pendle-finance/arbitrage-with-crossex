@@ -38,6 +38,7 @@ import type {
   OpenOrder,
   OpportunitiesResult,
   PositionsResponse,
+  Rebate,
   GoalKind,
   Pool,
   RebalanceJob,
@@ -73,6 +74,7 @@ export const qk = {
   assetView: (address: string, since: number | undefined, legSince = '') =>
     ['assetView', address, since, legSince] as const,
   borosAgent: ['boros', 'agent'] as const,
+  rebate: ['boros', 'rebate'] as const,
   borosPairContext: (address: string) => ['boros', 'pair', 'context', address] as const,
   opportunities: (notionalUsd: number, borosEntry: BorosEntryMode, entryMode: EntryMode, exitMode: ExitMode) =>
     ['opportunities', notionalUsd, borosEntry, entryMode, exitMode] as const,
@@ -771,6 +773,17 @@ export function useBorosAgent() {
     queryKey: qk.borosAgent,
     queryFn: () => fetchJson<BorosAgentStatus>('/boros/agent'),
     staleTime: 10_000,
+  });
+}
+
+/** The logged-in account's settlement-fee rebate config — null when this install
+ * holds no agent key or the account is not rebated. Drives the forward rate math
+ * and the opportunity badge/toggle; the realized amounts ride on the asset view. */
+export function useRebate() {
+  return useQuery({
+    queryKey: qk.rebate,
+    queryFn: () => fetchJson<Rebate | null>('/boros/rebate'),
+    staleTime: 30_000,
   });
 }
 
