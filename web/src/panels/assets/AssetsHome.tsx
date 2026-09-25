@@ -12,7 +12,7 @@
  * every number is a pure function of the venue feeds.
  */
 import { useMemo, useState } from 'react';
-import { useAccount, useAssetView, useAssetViewWindows, useBorosAgent, useFees, usePositions } from '../../api/queries';
+import { useAccount, useAssetView, useAssetViewWindows, useBorosAgent, useFees, usePositions, useRebate } from '../../api/queries';
 import { EmptyState } from '../../components/EmptyState';
 import { QueryError } from '../../components/QueryError';
 import { TableSkeleton } from '../../components/Skeleton';
@@ -22,7 +22,7 @@ import { lineFor as lineIn, liquidationLines } from '../../lib/liquidation';
 import { useBookId } from '../bookId';
 import { short } from '../HomeControls';
 import { ConnectWalletButton } from '../../components/ConnectWalletButton';
-import { useActiveWallet, useTrackedAddress } from '../trackedAddress';
+import { isSameAddress, useActiveWallet, useTrackedAddress } from '../trackedAddress';
 import { assetIsActive, deriveAsset, SECONDS_IN_YEAR, type AssetDerived } from './assetModel';
 import { legSinceParam, loadPrefs, savePrefs, type AssetViewPrefs } from './assetPrefsStore';
 import { AssetCard } from './AssetCard';
@@ -60,6 +60,14 @@ export function AssetsHome() {
   // The account's own fee schedule (VIP tier) — prices the pairs' exit-fee
   // estimate; the model falls back to a flat rate while it loads.
   const feeRows = useFees().data;
+  // The account's settlement-fee rebate config — discounts the FORWARD locked-rate
+  // math (per market, per mode); realized rebate rides on each history row. Null
+  // when not rebated. Only ever applied to the account this install is logged in
+  // AS: the rebate is the agent-owner's, so a tracked/view-only address earns no
+  // forward discount (matches the server-side gate on the realized rebateUsd join).
+  const currentRebate = useRebate().data ?? null;
+  const viewingOwn = address !== null && loggedInRoot !== null && isSameAddress(address, loggedInRoot);
+  const rebate = viewingOwn ? currentRebate : null;
   const extraSinces = useMemo(
     () => [...new Set(Object.values(prefs.sinceByAsset).filter((n) => n >= 0))],
     [prefs.sinceByAsset],
@@ -77,7 +85,7 @@ export function AssetsHome() {
           const group = gateHidden ? { ...full, perpOpen: [], perpClosed: [] } : full;
           const meta = win ?? data;
           const sinceSec = meta?.sinceSec ?? 0;
-          const d = deriveAsset(group, prefs.exclusions, sinceSec, meta?.nowSec ?? 0, feeRows);
+          const d = deriveAsset(group, prefs.exclusions, sinceSec, meta?.nowSec ?? 0, feeRows, rebate);
           const shown: AssetDerived = gateHidden ? { ...d, gaps: d.gaps.filter((gap) => gap.leg !== 'perp') } : d;
           return {
             group,
@@ -89,7 +97,7 @@ export function AssetsHome() {
           };
         })
         .filter((a) => !gateHidden || a.group.borosOpen.length > 0 || a.group.borosHistory.length > 0),
-    [data, windows.bySince, windows.errorBySince, prefs.exclusions, prefs.sinceByAsset, feeRows, gateHidden],
+    [data, windows.bySince, windows.errorBySince, prefs.exclusions, prefs.sinceByAsset, feeRows, rebate, gateHidden],
   );
   /**
    * "Hide inactive pairs": on by default, the list shows only assets with
@@ -214,10 +222,11 @@ export function AssetsHome() {
 
   return (
     <section>
-      {gateHidden && loggedInRoot && (
+      {gateHidden && address && loggedInRoot && (
         <p className="mb-4 text-xs text-ink-400">
-          Boros legs only. Gate perps show for{' '}
-          <span className="num text-ink-200">{short(loggedInRoot)}</span>.
+          Viewing <span className="num text-ink-200">{short(address)}</span>, not logged in: read-only, Boros
+          positions only. Switch your wallet to the logged-in{' '}
+          <span className="num text-ink-200">{short(loggedInRoot)}</span> for Gate perps and trading.
         </p>
       )}
 

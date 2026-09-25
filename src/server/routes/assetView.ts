@@ -49,6 +49,7 @@ import { rememberMarks } from '../../core/marks';
 import { parseSymbol } from '../../core/numbers';
 import type { AppDeps } from '../app';
 import { TTL } from '../cache';
+import { currentRebateClient, loggedInRoot } from '../borosRebate';
 import { GATE_HISTORY_FLOOR_MS, INTEREST_MAX_PAGES, INTEREST_PAGE_SIZE } from '../interestLedger';
 import { LedgerStore } from '../ledgerStore';
 import { earliestSupportedOpenMs, TrackingStartFile } from '../trackingStart';
@@ -173,6 +174,10 @@ export interface AssetBorosHistoryOut {
   settleUsd: number;
   /** The fees inside that net, positive cost (display; do not re-subtract). */
   settleFeeUsd: number;
+  /** Σ CrossEx settlement-fee rebate the backend attributed to this market's
+   * settlements inside the window — a positive credit ADDED BACK to PnL, never
+   * a re-netting. 0 when the account is not rebated. */
+  rebateUsd: number;
   /** Σ realized trade PnL, net of trade fees. */
   tradePnlUsd: number;
   /** The trade fees inside that net, positive cost (display; do not re-subtract). */
@@ -416,6 +421,43 @@ export function createAssetViewBuilder(deps: AppDeps) {
     return value;
   };
 
+  /**
+   * (marketId:timeSec) → the rebate amount (token units) the backend attributed
+   * to that settlement. Empty unless this install is logged in AS `address` (the
+   * rebate is the agent-owner's, keyed on the root) and the read succeeds — every
+   * failure degrades to no rebate, so a rebate lookup never breaks the view.
+   * The backend is the single source of truth for the amount; the terminal only
+   * joins it onto the settlements it already windows.
+   */
+  const readRebateByEvent = async (
+    address: string,
+    fromSec: number,
+    fresh: boolean,
+  ): Promise<Map<string, number>> => {
+    if (loggedInRoot() !== address) return new Map();
+    const client = currentRebateClient(deps);
+    if (!client) return new Map();
+    try {
+      const { value } = await deps.cache.get(
+        `boros:rebate-settlements:${address}:${fromSec}`,
+        TTL.boros,
+        async () => {
+          const rows = await client.settlements(fromSec);
+          const map = new Map<string, number>();
+          for (const r of rows) {
+            const key = `${r.marketId}:${r.timestamp}`;
+            map.set(key, (map.get(key) ?? 0) + norm18(r.rebateX18));
+          }
+          return map;
+        },
+        { fresh },
+      );
+      return value;
+    } catch {
+      return new Map();
+    }
+  };
+
   return async function buildAssetView(params: AssetViewParams): Promise<AssetViewOut> {
     const { address, requestedSinceSec, legSince, fresh } = params;
     const nowSec = Math.floor(Date.now() / 1000);
@@ -503,6 +545,11 @@ export function createAssetViewBuilder(deps: AppDeps) {
       readLedger(address, sinceSec, fresh),
     ]);
     const settlements = settlementWindow(ledger, sinceSec);
+    // Backend-provided per-settlement rebate amounts, joined onto the windowed
+    // events by (marketId, timeSec). Nothing before the program start is ever
+    // rebated, so the backend returns none — the client passes `sinceSec` and
+    // lets the backend bound it.
+    const rebateByEvent = await readRebateByEvent(address, sinceSec, fresh);
 
     const marketById = new Map<number, BorosMarket>(markets.map((m) => [m.marketId, m]));
     const collateralPriceUsd = resolveCollateralPricesUsd(markets);
@@ -903,6 +950,7 @@ export function createAssetViewBuilder(deps: AppDeps) {
         maturity: market.maturity,
         settleUsd: 0,
         settleFeeUsd: 0,
+        rebateUsd: 0,
         tradePnlUsd: 0,
         tradeFeeUsd: 0,
         peakSizeToken: 0,
@@ -915,6 +963,12 @@ export function createAssetViewBuilder(deps: AppDeps) {
       histByMarket.set(marketId, h);
       return h;
     };
+    // readRebateByEvent already SUMS every backend rebate row for a
+    // (marketId, timeSec) into one entry, so its value is the full rebate for
+    // that market-second. Credit it once per key — were two settlement events
+    // ever to share a (marketId, timeSec), adding per event would multiply it.
+    // A local set (never the cached map) so the shared cache is not mutated.
+    const rebateCredited = new Set<string>();
     for (const ev of settlements.events) {
       if (ev.timeSec < floorFor(ev.marketId)) continue;
       const market = marketById.get(ev.marketId);
@@ -935,6 +989,14 @@ export function createAssetViewBuilder(deps: AppDeps) {
       seen(groupFor(h._base), ev.timeSec);
       h.settleUsd += ev.settlementToken * px;
       h.settleFeeUsd += ev.feeToken * px;
+      // Same floor as the settlement it belongs to (this event already passed
+      // it above): a settlement outside the window contributes no rebate either.
+      const rebateKey = `${ev.marketId}:${ev.timeSec}`;
+      if (!rebateCredited.has(rebateKey)) {
+        const rebateTok = rebateByEvent.get(rebateKey);
+        if (rebateTok) h.rebateUsd += rebateTok * px;
+        rebateCredited.add(rebateKey);
+      }
       if (ev.positionAbs > h.peakSizeToken) {
         h.peakSizeToken = ev.positionAbs;
         h.peakNotionalUsd = ev.positionAbs * px;

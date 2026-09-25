@@ -18,10 +18,19 @@ feature launch more effect than a drip of small ones.
 3. Bump `version.json` and write its `highlights`. Users read `highlights`
    in the in-app update modal, so write them for a trader, not for a
    developer.
-4. Merge `dev` into `main`.
+4. Land it on `main`: cut `release/<version>` from `main`, cherry-pick the
+   bundle's commits from `dev`, and open that PR into `main`. Check the tree
+   matches `dev` (`git diff dev release/<version>` is empty).
+5. After the release PR merges, reset `dev` to `main`:
+   `git push --force-with-lease origin origin/main:dev`.
+
+Why: releases are squash-merged, so `dev` and `main` histories diverge and a
+`dev` → `main` PR conflicts. Resetting `dev` after each release keeps the
+next bundle a clean diff on top of `main`.
 
 `main` is what `install.sh` and the in-app update check read. The merge to
 `main` is the moment every user sees the update.
 
-There is no changeset tool, and the repo does not need one. The bundle list
-is `git log main..dev`. `version.json` highlights stay hand-written.
+There is no changeset tool, and the repo does not need one. The bundle is
+what `dev` has on top of `main` (`git diff main dev`, since `dev` is reset to
+`main` after every release). `version.json` highlights stay hand-written.

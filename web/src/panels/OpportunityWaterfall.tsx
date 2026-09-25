@@ -61,6 +61,20 @@ function costRows(pair: OpportunityPair): Array<[string, number | null, string, 
       'Boros settlement',
       `Boros settlement fees accrued to maturity ${costText(c.borosSettleFeeUsd, true)}`,
     ],
+    // A favorable (negative) cost right after the settlement fee it rebates —
+    // present only when `applyRebate` credited it (toggle on). A dashedAmber
+    // marker draws as dashed emerald because the amount is negative.
+    ...((c.borosSettleRebateUsd ?? 0) > 0
+      ? ([
+          [
+            'opp-boros-settle-rebate',
+            -(c.borosSettleRebateUsd as number),
+            dashedAmber,
+            'Settlement rebate',
+            `Boros settlement-fee rebate credited to maturity ${costText(-(c.borosSettleRebateUsd as number), true)}`,
+          ] as [string, number | null, string, string, string],
+        ])
+      : []),
     [
       'opp-perp-entry-fees',
       c.perpEntryFeesUsd,

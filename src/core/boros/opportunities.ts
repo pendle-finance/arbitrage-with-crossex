@@ -119,6 +119,9 @@ export interface OpportunityLeg {
   /** The rate this leg actually locks (receive-fixed on the short, pay-fixed on
    * the long); null when the book can't support the size. */
   execApr: number | null;
+  /** This market's settlement-fee APR (a cost to either side). Exposed per leg
+   * so the rebate overlay can discount it per market. */
+  settleFeeApr: number;
 }
 
 /** The modelled minimum capital a pair consumes, leg by leg. Each component is
@@ -626,6 +629,7 @@ function toLeg(build: MarketRowBuild, side: 'short' | 'long'): OpportunityLeg {
     base: build.row.base,
     midApr: build.row.midApr,
     execApr: exec ? exec.apr : null,
+    settleFeeApr: build.market.settleFeeApr,
   };
 }
 
