@@ -35,7 +35,13 @@ export function useSetupState(): {
       (agent.data?.configured && agent.data.expired && agent.data.root !== null && isSameAddress(agent.data.root, address))
         ? 'missing'
         : 'done',
-    telegram: telegram.data?.connected && telegram.data.state === 'connected' ? 'done' : 'missing',
+    // Alerts are per wallet: done only for the wallet the bot is linked to.
+    telegram:
+      telegram.data?.connected &&
+      telegram.data.state === 'connected' &&
+      !(telegram.data.alertWallet && address && !isSameAddress(telegram.data.alertWallet, address))
+        ? 'done'
+        : 'missing',
   };
   const missing = SETUP_STEPS.filter((step) => steps[step] === 'missing');
   return {

@@ -21,6 +21,7 @@ import { useToast } from '../../components/Toast';
 import { fmtClock, fmtSyncAge, fmtUsd } from '../../lib/fmt';
 import { useNow } from '../../lib/useNow';
 import { short } from '../HomeControls';
+import { isSameAddress, useTrackedAddressOptional } from '../trackedAddress';
 import { Ext } from '../onboardingBits';
 import { SetupRowFrame } from './SetupRowFrame';
 import type { SetupRowProps } from './setupState';
@@ -137,7 +138,12 @@ export function TelegramRow(p: SetupRowProps) {
   const linkStatus = phase === 'waiting' ? link.data?.status : undefined;
   const unlinked = unlinkedOf(info);
   const checking = isChecking(info);
-  const isConnected = info?.connected === true && info.state === 'connected' && unlinked === null && !checking;
+  // Alerts are per wallet: linked to another wallet means not set up for the viewed one.
+  const viewed = useTrackedAddressOptional()?.address ?? null;
+  const otherWallet =
+    info?.alertWallet && viewed && !isSameAddress(info.alertWallet, viewed) ? info.alertWallet : null;
+  const isConnected =
+    info?.connected === true && info.state === 'connected' && unlinked === null && !checking && otherWallet === null;
 
   useEffect(() => {
     if (linkStatus === 'confirmed') {
@@ -387,7 +393,7 @@ export function TelegramRow(p: SetupRowProps) {
       title="Telegram alerts"
       row={p}
       isDone={isConnected}
-      state={p.open && isConnected ? null : line.text}
+      state={otherWallet ? 'Not set up for this wallet' : p.open && isConnected ? null : line.text}
       isWarn={line.isWarn}
       alert={
         ((failure && p.open) || readError) && (
@@ -396,7 +402,7 @@ export function TelegramRow(p: SetupRowProps) {
           </p>
         )
       }
-      setupAction={checking ? <span /> : unlinked ? addWalletButton(unlinked, true) : setupButton}
+      setupAction={checking || otherWallet ? <span /> : unlinked ? addWalletButton(unlinked, true) : setupButton}
       skipConsequence="No warning near liquidation, interest or maturity."
     >
       {checking ? (
@@ -404,6 +410,11 @@ export function TelegramRow(p: SetupRowProps) {
           <Spinner />
           <span>Checking with the Telegram bot…</span>
         </div>
+      ) : otherWallet && viewed ? (
+        <p className="text-xs text-ink-300">
+          Alerts are linked to <span className="num text-ink-100">{short(otherWallet)}</span>, not{' '}
+          <span className="num text-ink-100">{short(viewed)}</span>. Log in as this wallet to set up its alerts.
+        </p>
       ) : unlinked && phase !== 'waiting'
         ? unlinkedBody(unlinked)
         : info && isConnected

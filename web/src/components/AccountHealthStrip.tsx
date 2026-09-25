@@ -3,6 +3,7 @@ import { useAccount, usePositions } from '../api/queries';
 import { fmtUsd } from '../lib/fmt';
 import { describeLine, liquidationLines, unknownLabel } from '../lib/liquidation';
 import { useNow } from '../lib/useNow';
+import { useActiveWallet } from '../panels/trackedAddress';
 import { MarginBreakdown } from './MarginDonut';
 import { Skeleton } from './Skeleton';
 
@@ -13,6 +14,9 @@ export function AccountHealthStrip({ children }: { children?: ReactNode }) {
   const now = useNow(60_000);
   const { data: acc } = useAccount();
   const { data: positions } = usePositions();
+  // The strip is the logged-in account's Gate margin: viewing another wallet,
+  // it would read as that wallet's. Keep the spacer so the controls stay right.
+  if (useActiveWallet().viewOnly) return <div className="ml-auto" />;
   if (!acc) {
     return (
       <div className="ml-auto flex items-center justify-end gap-4">

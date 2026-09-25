@@ -222,10 +222,11 @@ export function AssetsHome() {
 
   return (
     <section>
-      {gateHidden && loggedInRoot && (
+      {gateHidden && address && loggedInRoot && (
         <p className="mb-4 text-xs text-ink-400">
-          Boros legs only. Gate perps show for{' '}
-          <span className="num text-ink-200">{short(loggedInRoot)}</span>.
+          Viewing <span className="num text-ink-200">{short(address)}</span>, not logged in: read-only, Boros
+          positions only. Switch your wallet to the logged-in{' '}
+          <span className="num text-ink-200">{short(loggedInRoot)}</span> for Gate perps and trading.
         </p>
       )}
 
