@@ -1,12 +1,9 @@
 {
-  "version": "1.7.1",
+  "version": "1.7.2",
   "highlights": [
-    "One Boros wallet at a time, like the Boros app: view any wallet, and log in to trade it",
-    "Telegram alerts for each wallet: a warning before a leg liquidates, when a wallet starts paying interest, a week before a pair matures, and when a later maturity pays more",
-    "Log in waits for Boros to confirm, and an expired or rejected login says so",
-    "The liquidation price is the real one, however far away, and it reads Gate's margin table so it is right on a large account",
-    "A coin Gate stops pricing says so, instead of quietly dropping off the card",
-    "A setup checklist on first run, and only coins both venues support",
-    "The Spot loop shows its time at the confirm step, and Boros reads cost less"
+    "Settlement-fee rebates: a rebated wallet sees its rebate % on every opportunity and can include it in the APR",
+    "Positions count the rebate you have earned in Total PnL, the APR, the Boros table and the PnL waterfall",
+    "Viewing a wallet you are not logged in to is one clean read-only view: only that wallet, and the header says so",
+    "Telegram setup reads done only for the wallet the alerts are linked to"
   ]
 }
