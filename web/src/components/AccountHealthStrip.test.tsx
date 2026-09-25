@@ -1,10 +1,11 @@
-import { cleanup, screen } from '@testing-library/react';
+import { cleanup, screen, waitFor } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CrossexPosition, PositionsResponse } from '../api/types';
-import { accountBodies, accountHandler, baseHandlers, makeCrossexPosition } from '../test/fixtures';
+import { accountBodies, accountHandler, agentStatus, baseHandlers, makeCrossexPosition } from '../test/fixtures';
 import { env, server } from '../test/server';
 import { renderWithClient } from '../test/utils';
+import { STRATEGY_STORAGE_KEY } from '../panels/HomeControls';
 import { AccountHealthStrip } from './AccountHealthStrip';
 
 vi.mock('../lib/useNow', () => ({ useNow: () => new Date(2026, 8, 21, 14, 32).getTime() + 4 * 3_600_000 + 12 * 60_000 }));
@@ -89,5 +90,22 @@ describe('the account strip when Gate stops sending a mark', () => {
       ),
     ).toBeInTheDocument();
     expect(screen.queryByTitle(/price from Gate/)).toBeNull();
+  });
+});
+
+describe('the account strip while viewing a wallet that is not logged in', () => {
+  it('hides the logged-in account figures', async () => {
+    localStorage.setItem(STRATEGY_STORAGE_KEY, JSON.stringify({ address: `0x${'2'.repeat(40)}`, walletUpgraded: true }));
+    const eth = coin('ETH');
+    server.use(
+      http.get('/api/boros/agent', () => HttpResponse.json(env(agentStatus({ configured: true, root: `0x${'1'.repeat(40)}` })))),
+      accountHandler(accountBodies.accountA),
+      http.get('/api/positions', () => HttpResponse.json(env({ positions: eth.positions, exposure: [eth.exposure] }))),
+      ...baseHandlers(),
+    );
+    const { container } = renderWithClient(<AccountHealthStrip />);
+    // Only the empty spacer is left once the viewed wallet reads as not logged in.
+    await waitFor(() => expect(container.querySelector('div.ml-auto')?.childElementCount).toBe(0));
+    expect(screen.queryByText('Avail')).toBeNull();
   });
 });

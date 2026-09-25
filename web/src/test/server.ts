@@ -17,6 +17,8 @@ export const server = setupServer(
       }),
     ),
   ),
+  // Default: no rebate. A rebated-account case overrides this with server.use.
+  http.get('/api/boros/rebate', () => HttpResponse.json(env(null))),
 );
 
 /** Wrap data in the backend's success envelope. */

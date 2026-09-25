@@ -204,10 +204,14 @@ const closedPositions = [
   },
 ];
 
+const REBATE_ENV = ['BOROS_ROOT_ADDRESS', 'BOROS_ACCOUNT_ID', 'BOROS_AGENT_PRIVATE_KEY'] as const;
+const AGENT_KEY = `0x${'11'.repeat(32)}`;
+
 let app: FastifyInstance | undefined;
 afterEach(async () => {
   await app?.close();
   app = undefined;
+  for (const k of REBATE_ENV) delete process.env[k];
 });
 
 const get = (url: string) => app!.inject({ method: 'GET', url, headers: HOST });
@@ -309,6 +313,93 @@ describe('GET /api/asset-view/:address', () => {
       backfilling: false,
     });
     expect(data.warnings).toHaveLength(0);
+  });
+
+  it('joins the backend rebate per settlement onto its market history, priced with the same px', async () => {
+    const bodies = borosBodies();
+    // One rebated settlement, matching market 155 @ NOW-2*DAY (fee raw(2), so a
+    // 50% rebate is raw(1) = 1 token = $1 at USDT px 1). marketId:timestamp is
+    // the join key, no eventIndex on the public settlement feed.
+    bodies['/apis/v1/crossex-rebate/settlements'] = {
+      results: [
+        { marketId: 155, tokenId: 3, timestamp: NOW - 2 * DAY, eventIndex: 0, settlementFeeX18: raw(2), rebateX18: raw(1) },
+      ],
+      resumeToken: null,
+    };
+    app = makeTestApp({ borosFetch: borosStub(bodies) });
+    mockGateGet('/positions', { body: gatePositions });
+    mockGateGet('/history_positions', { body: closedPositions });
+    mockGateGet('/history_margin_interests', { body: [] });
+    // The rebate is offered only for the account this install is logged in AS.
+    process.env.BOROS_ROOT_ADDRESS = ADDR;
+    process.env.BOROS_AGENT_PRIVATE_KEY = AGENT_KEY;
+
+    const res = await get(`/api/asset-view/${ADDR}?since=0`);
+    expect(res.statusCode).toBe(200);
+    const { data } = res.json();
+    const eth = data.assets.find((a: { base: string }) => a.base === 'ETH');
+    const h155 = eth.borosHistory.find((h: { marketId: number }) => h.marketId === 155);
+    expect(h155.rebateUsd).toBeCloseTo(1, 6);
+    // A settlement with no matching rebate row stays at 0.
+    const h158 = eth.borosHistory.find((h: { marketId: number }) => h.marketId === 158);
+    expect(h158.rebateUsd).toBe(0);
+  });
+
+  it('credits a shared (marketId, timeSec) rebate once when two settlements collide', async () => {
+    const bodies = borosBodies();
+    // A SECOND settlement event at the same (marketId, timeSec) as the first.
+    // readRebateByEvent sums the backend rows for that key into one entry, so
+    // crediting it per settlement event would double it — it must land once.
+    (bodies['/apis/v1/accounts/settlement-events'] as { results: unknown[] }).results.push({
+      marketAcc: CROSS_USDT,
+      marketId: 155,
+      timestamp: NOW - 2 * DAY,
+      positionSize: raw(1_000_000),
+      settlement: raw(100),
+      fee: raw(2),
+      settlementRate: 0.07,
+    });
+    bodies['/apis/v1/crossex-rebate/settlements'] = {
+      results: [
+        { marketId: 155, tokenId: 3, timestamp: NOW - 2 * DAY, eventIndex: 0, settlementFeeX18: raw(2), rebateX18: raw(1) },
+      ],
+      resumeToken: null,
+    };
+    app = makeTestApp({ borosFetch: borosStub(bodies) });
+    mockGateGet('/positions', { body: gatePositions });
+    mockGateGet('/history_positions', { body: closedPositions });
+    mockGateGet('/history_margin_interests', { body: [] });
+    process.env.BOROS_ROOT_ADDRESS = ADDR;
+    process.env.BOROS_AGENT_PRIVATE_KEY = AGENT_KEY;
+
+    const res = await get(`/api/asset-view/${ADDR}?since=0`);
+    expect(res.statusCode).toBe(200);
+    const { data } = res.json();
+    const eth = data.assets.find((a: { base: string }) => a.base === 'ETH');
+    const h155 = eth.borosHistory.find((h: { marketId: number }) => h.marketId === 155);
+    // $1 once, not $2 — despite two settlement events sharing the key.
+    expect(h155.rebateUsd).toBeCloseTo(1, 6);
+  });
+
+  it('offers no rebate for an address this install is not logged in as', async () => {
+    const bodies = borosBodies();
+    bodies['/apis/v1/crossex-rebate/settlements'] = {
+      results: [{ marketId: 155, tokenId: 3, timestamp: NOW - 2 * DAY, eventIndex: 0, settlementFeeX18: raw(2), rebateX18: raw(1) }],
+      resumeToken: null,
+    };
+    app = makeTestApp({ borosFetch: borosStub(bodies) });
+    mockGateGet('/positions', { body: gatePositions });
+    mockGateGet('/history_positions', { body: closedPositions });
+    mockGateGet('/history_margin_interests', { body: [] });
+    // Logged in as a DIFFERENT root than the one being viewed.
+    process.env.BOROS_ROOT_ADDRESS = '0x0000000000000000000000000000000000000001';
+    process.env.BOROS_AGENT_PRIVATE_KEY = AGENT_KEY;
+
+    const res = await get(`/api/asset-view/${ADDR}?since=0`);
+    const { data } = res.json();
+    const eth = data.assets.find((a: { base: string }) => a.base === 'ETH');
+    const h155 = eth.borosHistory.find((h: { marketId: number }) => h.marketId === 155);
+    expect(h155.rebateUsd).toBe(0);
   });
 
   it('windows history to ?since= (open positions stay whole by design)', async () => {

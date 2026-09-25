@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { renderHook, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { describe, expect, it } from 'vitest';
-import { agentStatus, mockWorld } from '../../test/fixtures';
+import { agentStatus, mockWorld, telegramInfo } from '../../test/fixtures';
 import { TrackedAddressProvider } from '../trackedAddress';
 import { useSetupState } from './setupState';
 
@@ -54,5 +54,23 @@ describe('useSetupState', () => {
     await waitFor(() => expect(result.current.isLoading).toBe(false));
     expect(result.current.steps.borosWallet).toBe('done');
     expect(result.current.doneCount).toBe(2);
+  });
+
+  it('telegram linked to the viewed wallet is done', async () => {
+    localStorage.setItem('crossex.strategy.v1', JSON.stringify({ address: WALLET }));
+    mockWorld({ telegram: telegramInfo({ connected: true, state: 'connected', alertWallet: WALLET }) });
+    const { result } = renderHook(() => useSetupState(), { wrapper: hookWrapper() });
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    expect(result.current.steps.telegram).toBe('done');
+  });
+
+  it('telegram linked to another wallet is not done for the viewed one', async () => {
+    localStorage.setItem('crossex.strategy.v1', JSON.stringify({ address: WALLET }));
+    mockWorld({ telegram: telegramInfo({ connected: true, state: 'connected', alertWallet: `0x${'1'.repeat(40)}` }) });
+    const { result } = renderHook(() => useSetupState(), { wrapper: hookWrapper() });
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    expect(result.current.steps.telegram).toBe('missing');
   });
 });

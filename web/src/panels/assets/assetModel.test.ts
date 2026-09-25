@@ -317,6 +317,40 @@ describe('carry − cost', () => {
     expect(d.totals.pnlUsd).toBeCloseTo(d.totals.carryGrossUsd - d.totals.costUsd, 9);
     expect(d.totals.borosFeesAllUsd).toBeCloseTo(8, 9); // trade fees only
   });
+
+  it('adds the backend rebate into PnL and carry, keeps the identity, and honours exclusions', () => {
+    const g = group({
+      perpOpen: [perp({ symbol: 'HL', venue: 'HYPERLIQUID', side: 'LONG', qty: 1000, upnlUsd: 0, fundingUsd: 0, feesUsd: 0 })],
+      borosHistory: [
+        { marketId: 1, venue: 'HYPERLIQUID', maturity: NOW + DAY, settleUsd: 500, settleFeeUsd: 12, rebateUsd: 6, tradePnlUsd: 0, tradeFeeUsd: 0 },
+        { marketId: 2, venue: 'OKX', maturity: NOW + DAY, settleUsd: 40, settleFeeUsd: 4, rebateUsd: 2, tradePnlUsd: 0, tradeFeeUsd: 0 },
+      ],
+    });
+    const d = deriveAsset(g, {}, 0, NOW);
+    // Rebate is a credit ADDED to PnL and carry (never a re-netting of settle).
+    expect(d.totals.breakdown.borosRebateUsd).toBeCloseTo(8, 9);
+    expect(d.totals.pnlUsd).toBeCloseTo(500 + 40 + 8, 9);
+    expect(d.totals.carryGrossUsd).toBeCloseTo(500 + 40 + 8, 9);
+    // The identity still closes with the rebate inside carryGross.
+    expect(d.totals.pnlUsd).toBeCloseTo(d.totals.carryGrossUsd - d.totals.costUsd, 9);
+
+    // Excluding a market drops its rebate too.
+    const excluded = deriveAsset(g, { [borosKey(2)]: 'all' }, 0, NOW);
+    expect(excluded.totals.breakdown.borosRebateUsd).toBeCloseTo(6, 9);
+
+    // A non-rebated feed (no rebateUsd) shows zero and no PnL change.
+    const plain = deriveAsset(
+      group({
+        perpOpen: [perp({ symbol: 'HL', venue: 'HYPERLIQUID', side: 'LONG', qty: 1000, upnlUsd: 0, fundingUsd: 0, feesUsd: 0 })],
+        borosHistory: [{ marketId: 1, venue: 'HYPERLIQUID', maturity: NOW + DAY, settleUsd: 500, settleFeeUsd: 12, tradePnlUsd: 0, tradeFeeUsd: 0 }],
+      }),
+      {},
+      0,
+      NOW,
+    );
+    expect(plain.totals.breakdown.borosRebateUsd).toBe(0);
+    expect(plain.totals.pnlUsd).toBeCloseTo(500, 9);
+  });
 });
 
 describe('totals & APR', () => {

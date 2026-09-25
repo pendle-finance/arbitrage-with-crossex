@@ -9,10 +9,11 @@
  * all pure, so the panel stays a rendering concern. The one exception is the
  * pair at the bottom that reads and writes the persisted selection.
  */
-import type { OpportunityGroup, OpportunityPair } from '../api/types';
+import type { OpportunityGroup, OpportunityPair, Rebate } from '../api/types';
 import { prettyVenue } from '../lib/fmt';
 import { readJson, writeJson } from '../lib/storage';
 import { heldTagFor, repriceHeld, type HeldPerps, type HeldTag } from './heldPerps';
+import { applyRebate } from './opportunityRebate';
 
 /** One card's worth of data: the pair, plus the group context it renders in. */
 export interface OpportunityRow {
@@ -78,6 +79,12 @@ export function toRows(
   /** The perps the reader holds, and the notional the response was priced
    * at (the re-pricing needs N × T). Absent: every row is a new position. */
   holdings?: { held: HeldPerps; notionalUsd: number },
+  /** The account's active settlement-fee rebate and the notional the response
+   * was priced at, passed only while the reader keeps the "Include rebate in
+   * APR" toggle on. Absent: rank and gate on the fee the account pays today —
+   * so a non-rebated reader is byte-identical, and a rebated one who turned the
+   * toggle off sees the undiscounted list they asked for. */
+  rebate?: { config: Rebate; notionalUsd: number } | null,
 ): OpportunityRow[] {
   const rows: OpportunityRow[] = [];
   for (const group of groups) {
@@ -85,10 +92,15 @@ export function toRows(
       const held = holdings ? heldTagFor(holdings.held, group.underlying, served, group.maturity) : null;
       // RANKED on the re-priced figure, and tested for viability on it: a pair
       // the full entry cost sinks below zero can still be worth farming for
-      // someone already in it. The row carries the pair AS SERVED, though —
-      // the card re-prices it under its own toggle.
+      // someone already in it — or worth it once an active rebate is credited,
+      // so a rebate-only-profitable pair is not silently dropped from a rebated
+      // account's list nor mis-ordered against the discounted APR its card shows.
+      // The row carries the pair AS SERVED, though — the card re-prices it under
+      // its own toggles (same repriceHeld → applyRebate order used here).
       const pair = served;
-      const apr = (held && holdings ? repriceHeld(served, holdings.notionalUsd) : served).netFixedAprOnCapital;
+      const heldPriced = held && holdings ? repriceHeld(served, holdings.notionalUsd) : served;
+      const priced = rebate ? applyRebate(heldPriced, rebate.config, rebate.notionalUsd) : heldPriced;
+      const apr = priced.netFixedAprOnCapital;
       if (apr === null || !Number.isFinite(apr)) continue;
       const key = `${group.tokenId}:${group.maturity}:${pair.shortLeg.marketId}:${pair.longLeg.marketId}`;
       // A pair already on screen holds its place down to the band; a new one

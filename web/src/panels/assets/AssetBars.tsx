@@ -83,6 +83,16 @@ export function AssetBars({ totals }: { totals: AssetTotals }) {
     'Perp price basis — open uPnL + closed realized price PnL (a delta-neutral book expects ≈ 0)',
     'Perp basis',
   );
+  // The settlement-fee rebate credited back — a favorable step just before the
+  // total (pnlUsd already includes it, so the end bar still lands exactly).
+  // Skipped at 0, so a non-rebated book is unchanged.
+  bar(
+    'rebate',
+    b.borosRebateUsd,
+    'bg-emerald-400/70',
+    'Boros settlement-fee rebate credited back',
+    'Settlement rebate',
+  );
   steps.push({
     key: 'pnl',
     kind: 'total',
