@@ -72,7 +72,7 @@ import { canChartCapital, canChartProfit, OpportunityWaterfall } from './Opportu
 import { heldPerpsOf, repriceHeld, type HeldBook, type HeldTag } from './heldPerps';
 import { applyRebate } from './opportunityRebate';
 import { rebateAppliesTo, rebateChipLabel } from '../lib/rebate';
-import { useTrackedAddressOptional } from './trackedAddress';
+import { useActiveWallet, useTrackedAddressOptional } from './trackedAddress';
 import {
   applyFilters,
   hasActiveFilter,
@@ -1005,8 +1005,10 @@ export function OpportunitiesPanel() {
   const trackedAddress = useTrackedAddressOptional()?.address ?? null;
   const exposure = usePositions(trackedAddress !== null).data?.exposure;
   const borosMarkets = useBorosPairContext(trackedAddress).data?.markets;
+  // The perp exposure is the logged-in account's: never pair it with another wallet's Boros legs.
+  const viewOnly = useActiveWallet().viewOnly;
   const held = useMemo(() => {
-    if (!exposure) return undefined;
+    if (viewOnly || !exposure) return undefined;
     const books: HeldBook[] = exposure.map((g) => ({
       base: g.base,
       perps: g.legs.map((l) => ({ venue: l.exchange, side: l.side })),
@@ -1015,7 +1017,7 @@ export function OpportunitiesPanel() {
         .map((m) => ({ venue: m.venue, maturity: m.maturity })),
     }));
     return heldPerpsOf(books);
-  }, [exposure, borosMarkets]);
+  }, [viewOnly, exposure, borosMarkets]);
   const pricedAtUsd = data?.meta.notionalUsd;
   const rows = useMemo(
     () =>
