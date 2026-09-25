@@ -22,10 +22,12 @@ import type {
   AssetGroup,
   AssetPerpClosed,
   AssetPerpOpen,
+  Rebate,
   StrategyLeg,
   VenueFees,
 } from '../../api/types';
 import { sizeUnitForBase } from '../../lib/boros';
+import { rebatedSettleApr } from '../../lib/rebate';
 
 export const SECONDS_IN_YEAR = 365 * 24 * 3600;
 
@@ -345,6 +347,9 @@ export interface AssetTotals {
     /** Net of settle fees (venue reports net). */
     borosSettleUsd: number;
     borosSettleFeeUsd: number;
+    /** Backend-attributed settlement-fee rebate, a positive credit inside
+     * pnlUsd and carryGrossUsd. 0 when the account is not rebated. */
+    borosRebateUsd: number;
     /** Net of trade fees. */
     borosTradePnlUsd: number;
     borosTradeFeeUsd: number;
@@ -658,6 +663,10 @@ export interface AssetDerived {
   pendingLegs: PendingLeg[];
   /** Perp legs (or slices) left over the same way (see UnpairedPerp). */
   unpairedPerps: UnpairedPerp[];
+  /** The settlement-fee rebate config applied to the forward locked-rate math, so
+   * the card's bundle/leg views share the ONE discount (per-market, per-mode).
+   * Null = not rebated. */
+  rebate: Rebate | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -880,6 +889,10 @@ export function deriveAsset(
    * overrides) — prices the pairs' exit-fee estimate; flat fallback
    * when absent. */
   feeRows?: readonly VenueFees[],
+  /** The account's settlement-fee rebate config. Applied ONLY to the FORWARD
+   * locked-rate math (current fixed APR, per-pair est. APR), per market — realized
+   * rebate rides on each history row's `rebateUsd`. Null = none. */
+  rebate?: Rebate | null,
 ): AssetDerived {
   const unit = sizeUnitForBase(group.base);
   /** Taker rate for a perp symbol from the account's schedule, or null. */
@@ -1026,6 +1039,7 @@ export function deriveAsset(
   }
   let borosSettleUsd = 0;
   let borosSettleFeeUsd = 0;
+  let borosRebateUsd = 0;
   let borosTradePnlUsd = 0;
   let borosTradeFeeUsd = 0;
   for (const h of group.borosHistory) {
@@ -1033,6 +1047,9 @@ export function deriveAsset(
     if (keep <= 0) continue;
     borosSettleUsd += h.settleUsd * keep;
     borosSettleFeeUsd += h.settleFeeUsd * keep;
+    // The backend owns the amount; here it is only summed. A credit ADDED BACK,
+    // never a re-netting of the settlement (which is already net of its fee).
+    borosRebateUsd += (h.rebateUsd ?? 0) * keep;
     borosTradePnlUsd += h.tradePnlUsd * keep;
     borosTradeFeeUsd += h.tradeFeeUsd * keep;
   }
@@ -1044,12 +1061,20 @@ export function deriveAsset(
   }
 
   const pnlUsd =
-    perpUpnlUsd + perpFundingUsd - perpFeesUsd + perpClosedPnlUsd + borosSettleUsd + borosTradePnlUsd;
+    perpUpnlUsd +
+    perpFundingUsd -
+    perpFeesUsd +
+    perpClosedPnlUsd +
+    borosSettleUsd +
+    borosTradePnlUsd +
+    borosRebateUsd;
   // The same sum, regrouped the way a trader reads it (identical by algebra).
   const perpFundingAllUsd = perpFundingUsd + closedFundingUsd;
   const perpFeesAllUsd = perpFeesUsd + closedFeesUsd;
   const priceResidualUsd = perpUpnlUsd + closedPriceUsd;
-  const carryUsd = perpFundingAllUsd + borosSettleUsd;
+  // The rebate is carry — it gives back part of the settlement fee that lives
+  // inside net settlement carry.
+  const carryUsd = perpFundingAllUsd + borosSettleUsd + borosRebateUsd;
   /**
    * Carry as the venue paid it, and cost as what was avoidable.
    *
@@ -1063,7 +1088,8 @@ export function deriveAsset(
    * Trade fees DO ride here — a different entry could have paid less, so
    * they belong in cost, against a carry quoted gross of them.
    */
-  const carryGrossUsd = perpFundingAllUsd + borosSettleUsd + borosTradePnlUsd + borosTradeFeeUsd;
+  const carryGrossUsd =
+    perpFundingAllUsd + borosSettleUsd + borosRebateUsd + borosTradePnlUsd + borosTradeFeeUsd;
   const costUsd = perpFeesAllUsd + borosTradeFeeUsd - priceResidualUsd;
 
   // --- APR ----------------------------------------------------------------
@@ -1107,7 +1133,7 @@ export function deriveAsset(
      */
     const perYear =
       (l.side === 'SHORT' ? 1 : -1) * entryApr * l.notionalUsd * keep -
-      (l.settleFeeApr ?? 0) * l.notionalUsd * keep;
+      rebatedSettleApr(l.settleFeeApr ?? 0, rebate, l.marketId) * l.notionalUsd * keep;
     lockedCarryPerYearUsd += perYear;
     lockedToMaturityUsd += (perYear * (l.maturity - nowSec)) / SECONDS_IN_YEAR;
     lockedNotionalUsd += l.notionalUsd * keep;
@@ -1285,7 +1311,7 @@ export function deriveAsset(
           else
             perYear +=
               (b.side === 'SHORT' ? 1 : -1) * entryApr * b.notionalUsd * keep -
-              (b.settleFeeApr ?? 0) * b.notionalUsd * keep;
+              rebatedSettleApr(b.settleFeeApr ?? 0, rebate, b.marketId) * b.notionalUsd * keep;
           if (soonest === 0 || b.maturity < soonest) soonest = b.maturity;
         }
         const h = histByMarket.get(b.marketId);
@@ -1465,6 +1491,7 @@ export function deriveAsset(
         perpClosedPnlUsd,
         borosSettleUsd,
         borosSettleFeeUsd,
+        borosRebateUsd,
         borosTradePnlUsd,
         borosTradeFeeUsd,
       },
@@ -1485,5 +1512,6 @@ export function deriveAsset(
     pairs,
     pendingLegs,
     unpairedPerps,
+    rebate: rebate ?? null,
   };
 }

@@ -99,6 +99,7 @@ import {
   sizeIn,
 } from './assetModel';
 import { knownRate } from '../../lib/boros';
+import { rebatedSettleApr } from '../../lib/rebate';
 import { useDebounced } from '../../lib/useDebounced';
 import { AssetBars } from './AssetBars';
 import { SinceChip } from './SinceChip';
@@ -3584,6 +3585,7 @@ function BorosRow({
   leg,
   windowedGrossUsd,
   windowedFeesUsd,
+  windowedRebateUsd,
   exclusions,
   onExclude,
   onClose,
@@ -3601,6 +3603,9 @@ function BorosRow({
   /** This market's settle + trade fees inside the window — a MEMO on the row
    * (Boros fees are attributable per market); charged once, in COST. */
   windowedFeesUsd: number | null;
+  /** This market's settlement-fee rebate inside the window — a credit added
+   * back to PnL. 0/null when the account is not rebated. */
+  windowedRebateUsd?: number | null;
   exclusions: Exclusions;
   onExclude: Props['onExclude'];
   onClose: () => void;
@@ -3664,6 +3669,14 @@ function BorosRow({
             title="Settlement fees charged in your window. Already taken out of the figure above."
           >
             settle fees −{fmtUsd(windowedFeesUsd)}
+          </div>
+        )}
+        {windowedRebateUsd != null && windowedRebateUsd > 0 && (
+          <div
+            className="text-[10px] text-grass"
+            title="CrossEx settlement-fee rebate credited back in your window. Added into PnL."
+          >
+            rebate +{fmtUsd(windowedRebateUsd)}
           </div>
         )}
       </td>
@@ -3770,6 +3783,9 @@ function InactiveBorosRow({
         <SignedNumber value={h.settleUsd * keep} format={fmtUsd} />
         {h.settleFeeUsd * keep > 0 && (
           <div className="text-[10px] text-ink-500">settle fees −{fmtUsd(h.settleFeeUsd * keep)}</div>
+        )}
+        {(h.rebateUsd ?? 0) * keep > 0 && (
+          <div className="text-[10px] text-grass">rebate +{fmtUsd((h.rebateUsd ?? 0) * keep)}</div>
         )}
       </td>
       <td className="num text-right" title="Realised rate PnL from closing early, before its trade fee.">
@@ -4106,6 +4122,10 @@ function BundleCard({
                     const h = histByMarket.get(l.marketId);
                     return h ? h.settleFeeUsd * histKeep(h) : null;
                   })()}
+                  windowedRebateUsd={(() => {
+                    const h = histByMarket.get(l.marketId);
+                    return h ? (h.rebateUsd ?? 0) * histKeep(h) : null;
+                  })()}
                   legSince={legSince?.[borosKey(l.marketId)]}
                   onLegSince={onLegSince ? (sec) => onLegSince(borosKey(l.marketId), sec) : undefined}
                   exclusions={exclusions}
@@ -4414,7 +4434,11 @@ export function AssetCard({
         const slice = keptSlice(exclusions, borosKey(l.marketId), l.sizeToken, l.entryApr);
         const n = l.notionalUsd * slice.keep;
         if (slice.entry === null) ratePending = true;
-        else apr += ((l.side === 'SHORT' ? 1 : -1) * slice.entry - (l.settleFeeApr ?? 0)) * n;
+        else
+          apr +=
+            ((l.side === 'SHORT' ? 1 : -1) * slice.entry -
+              rebatedSettleApr(l.settleFeeApr ?? 0, derived.rebate, l.marketId)) *
+            n;
         w += n;
         yuNotional += n;
         yuQty += l.sizeToken * slice.keep;
@@ -5181,15 +5205,24 @@ null
               settleUsd: h.settleUsd * histKeep(h),
               tradeUsd: (h.tradePnlUsd + h.tradeFeeUsd) * histKeep(h),
               feesUsd: h.tradeFeeUsd * histKeep(h),
+              rebateUsd: (h.rebateUsd ?? 0) * histKeep(h),
               excluded: exclusions[borosKey(h.marketId)] === 'all',
             }));
             const borosTotals = borosRows.reduce(
               (t, r) =>
                 r.excluded
                   ? t
-                  : { settle: t.settle + r.settleUsd, trade: t.trade + r.tradeUsd, fees: t.fees + r.feesUsd },
-              { settle: 0, trade: 0, fees: 0 },
+                  : {
+                      settle: t.settle + r.settleUsd,
+                      trade: t.trade + r.tradeUsd,
+                      fees: t.fees + r.feesUsd,
+                      rebate: t.rebate + r.rebateUsd,
+                    },
+              { settle: 0, trade: 0, fees: 0, rebate: 0 },
             );
+            // The rebate column only exists for a rebated account — a non-rebated
+            // user sees the table exactly as before.
+            const showRebate = borosRows.some((r) => !r.excluded && r.rebateUsd > 0);
             const dim = (ex: boolean) => (ex ? 'opacity-40' : '');
             return (
               <>
@@ -5209,6 +5242,14 @@ null
                       <SignedNumber value={totals.priceResidualUsd} format={fmtUsd} />
                     </span>
                   </span>
+                  {totals.breakdown.borosRebateUsd > 0 && (
+                    <span title="CrossEx settlement-fee rebate credited back, included in PnL.">
+                      settlement rebate{' '}
+                      <span className="num">
+                        <SignedNumber value={totals.breakdown.borosRebateUsd} format={fmtUsd} className="!text-grass" />
+                      </span>
+                    </span>
+                  )}
                   <span
                     className="text-ink-600"
                     title="Mark value of the open Boros legs. Not counted in PnL."
@@ -5329,6 +5370,7 @@ null
                         <th className={`${th} text-right`}>Settlement</th>
                         <th className={`${th} text-right`}>Trade PnL</th>
                         <th className={`${th} text-right`}>Fees</th>
+                        {showRebate && <th className={`${th} text-right`}>Rebates</th>}
                       </tr>
                     </thead>
                     <tbody className="num">
@@ -5346,6 +5388,11 @@ null
                             <SignedNumber value={r.tradeUsd} format={fmtUsd} />
                           </td>
                           <td className={`${cell} text-right text-ink-300`}>{fmtUsd(r.feesUsd)}</td>
+                          {showRebate && (
+                            <td className={`${cell} text-right text-grass`}>
+                              {r.rebateUsd > 0 ? `+${fmtUsd(r.rebateUsd)}` : '—'}
+                            </td>
+                          )}
                         </tr>
                       ))}
                       <tr className="border-t border-ink-700 font-semibold">
@@ -5359,6 +5406,9 @@ null
                           <SignedNumber value={borosTotals.trade} format={fmtUsd} />
                         </td>
                         <td className={`${cell} text-right text-ink-200`}>{fmtUsd(borosTotals.fees)}</td>
+                        {showRebate && (
+                          <td className={`${cell} text-right text-grass`}>+{fmtUsd(borosTotals.rebate)}</td>
+                        )}
                       </tr>
                     </tbody>
                   </table>
@@ -5366,7 +5416,8 @@ null
                   <p className="text-sm text-ink-600">No Boros activity in this window.</p>
                 )}
                 <p className="mt-3 text-[11px] text-ink-600">
-                  Settlement is net of its own fee (unavoidable, and already in the locked rate); the fee column is the TRADE fee, which subtracts. Dimmed = excluded.
+                  Settlement is net of its own fee (unavoidable, and already in the locked rate); the fee column is the TRADE fee, which subtracts.
+                  {showRebate && ' Rebates are the CrossEx settlement-fee rebate credited back, and are added into PnL.'} Dimmed = excluded.
                 </p>
               </>
             );

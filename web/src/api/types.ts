@@ -511,6 +511,10 @@ export interface OpportunityCostBreakdown {
   borosTakerFeeUsd: number;
   /** (settleFeeAprA + settleFeeAprB) × N × T, accrued to maturity. */
   borosSettleFeeUsd: number;
+  /** CLIENT-ONLY: the settlement-fee rebate credited back at the account's
+   * current rate, when the "include rebate in APR" toggle is on. Set by
+   * `applyRebate` (never by the server), which also reduces `totalUsd` by it. */
+  borosSettleRebateUsd?: number;
   perpEntryFeesUsd: number | null;
   perpEntrySlippageUsd: number | null;
   /** 0 under `roll` — nothing is closed. */
@@ -546,6 +550,9 @@ export interface OpportunityLeg {
   /** The rate this leg actually locks (receive-fixed on the short, pay-fixed on
    * the long); null when the book can't support the size. */
   execApr: number | null;
+  /** This market's settlement-fee APR (a cost to either side). Exposed per leg
+   * so the rebate overlay can discount it per market. */
+  settleFeeApr: number;
 }
 
 export interface OpportunityPair {
@@ -1403,6 +1410,32 @@ export interface BorosAgentInput {
   expiry?: number;
 }
 
+/** How the account's settlement-fee rebate is priced. RELATIVE keeps a fraction
+ * of the fee (`settlementFeePercentage` = fee still paid); ABSOLUTE caps the fee
+ * at an annualized rate (`settlementFeePercentage` = the cap APR on notional). */
+export type RebateMode = 'relative' | 'absolute';
+
+/** GET /api/boros/rebate — the logged-in account's settlement-fee rebate config,
+ * for the FORWARD numbers the terminal reprices client-side. null when this
+ * install holds no agent key or the account is not rebated. One rate at a time
+ * (no history — the config is the account's ActorAddress doc). */
+export interface Rebate {
+  mode: RebateMode;
+  /** RELATIVE: the fraction of the settlement fee still PAID, in [0, 1).
+   * ABSOLUTE: the cap APR on notional (> 0). */
+  settlementFeePercentage: number;
+  /** RELATIVE only: the rebated share as integer bps, round((1 − pct) × 1e4). */
+  rebateBps: number | null;
+  /** Window start (unix sec), null = from the beginning. */
+  startTimestamp: number | null;
+  /** Window end (unix sec, exclusive), null = still active. */
+  endTimestamp: number | null;
+  /** Covered markets, null = all markets. */
+  marketIds: number[] | null;
+  /** Whether the window contains now (the backend's own reading). */
+  active: boolean;
+}
+
 // ---------------------------------------------------------------------------
 // GET /api/asset-view/:address — mirror of src/server/routes/assetView.ts.
 // The ASSET-GROUPED tracking view: every leg grouped by underlying asset,
@@ -1491,6 +1524,10 @@ export interface AssetBorosHistory {
   settleUsd: number;
   /** Fees inside that net, positive (display; never re-subtract). */
   settleFeeUsd: number;
+  /** Σ CrossEx settlement-fee rebate the backend attributed to this market's
+   * windowed settlements — a positive credit ADDED to PnL. 0/absent when the
+   * account is not rebated or on an older server. */
+  rebateUsd?: number;
   /** Σ realized trade PnL, net of trade fees. */
   tradePnlUsd: number;
   /** Fees inside that net, positive (display; never re-subtract). */

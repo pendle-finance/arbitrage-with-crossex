@@ -2,12 +2,14 @@
  * covers the wiring; these cover the rules — what counts as viable, how the two
  * legs feed one venue dimension, and what a facet count actually counts. */
 import { describe, expect, it } from 'vitest';
-import type { OpportunityGroup, OpportunityPair } from '../api/types';
+import type { OpportunityGroup, OpportunityPair, Rebate } from '../api/types';
 import {
   makeOpportunityGroup,
   makeOpportunityLeg,
   makeOpportunityPair,
   OPP_MATURITY,
+  OPP_NOTIONAL,
+  OPP_NT,
 } from '../test/fixtures';
 
 import {
@@ -130,6 +132,95 @@ describe('toRows', () => {
     ]);
 
     expect(rows.map((r) => r.asset)).toEqual(['GOLD', 'GOLD']);
+  });
+
+  it('rescues and ranks a rebate-only-profitable pair when the rebate is credited', () => {
+    // A genuine loss at the full settlement fee, consistent across every field:
+    // execSpread 2%, cost 2.1% ⇒ net −0.1%. Both legs carry a fat 1% settle fee,
+    // so a 20% rebate credits 2 × 0.8% = 1.6% back and flips the trade positive.
+    const base = makeOpportunityPair();
+    const years = OPP_NT / OPP_NOTIONAL;
+    const execSpreadApr = 0.02;
+    const totalUsd = 0.021 * OPP_NT;
+    const netFixedApr = execSpreadApr - totalUsd / OPP_NT;
+    const estProfitUsd = netFixedApr * OPP_NT;
+    const losing = makeOpportunityPair({
+      shortLeg: makeOpportunityLeg({ marketId: 5000, settleFeeApr: 0.01 }),
+      longLeg: makeOpportunityLeg({
+        marketId: 5001,
+        venue: 'BINANCE',
+        crossexVenue: 'BINANCE',
+        crossexSymbol: 'BINANCE_FUTURE_ETH_USDT',
+        settleFeeApr: 0.01,
+      }),
+      execSpreadApr,
+      costs: { ...base.costs, totalUsd, annualizedApr: totalUsd / OPP_NT },
+      netFixedApr,
+      estProfitUsd,
+      netFixedAprOnCapital: estProfitUsd / ((base.capitalUsd as number) * years),
+    });
+    const group = makeOpportunityGroup({ pairs: [losing] });
+
+    // No rebate (or the toggle off): the loss is dropped, exactly as before.
+    expect(toRows([group])).toHaveLength(0);
+
+    // Rebate credited: viable, ranked on the discounted APR, and the row still
+    // carries the pair AS SERVED so the card owns the reprice.
+    const rebate: Rebate = {
+      mode: 'relative',
+      settlementFeePercentage: 0.2,
+      rebateBps: 8000,
+      startTimestamp: null,
+      endTimestamp: null,
+      marketIds: null,
+      active: true,
+    };
+    const rows = toRows([group], undefined, undefined, { config: rebate, notionalUsd: OPP_NOTIONAL });
+    expect(rows).toHaveLength(1);
+    const creditedNet = execSpreadApr - (totalUsd - 0.016 * OPP_NT) / OPP_NT; // +1.5%
+    expect(rows[0].apr).toBeCloseTo((creditedNet * OPP_NT) / ((base.capitalUsd as number) * years), 9);
+    expect(rows[0].apr).toBeGreaterThan(0);
+    expect(rows[0].pair.netFixedAprOnCapital).toBe(losing.netFixedAprOnCapital);
+  });
+
+  it('skips the credit on markets the rebate does not cover', () => {
+    // Same losing pair, but the rebate only covers a market neither leg trades:
+    // the credit is zero, so the loss is still dropped.
+    const base = makeOpportunityPair();
+    const years = OPP_NT / OPP_NOTIONAL;
+    const totalUsd = 0.021 * OPP_NT;
+    const netFixedApr = 0.02 - totalUsd / OPP_NT;
+    const losing = makeOpportunityPair({
+      shortLeg: makeOpportunityLeg({ marketId: 5000, settleFeeApr: 0.01 }),
+      longLeg: makeOpportunityLeg({
+        marketId: 5001,
+        venue: 'BINANCE',
+        crossexVenue: 'BINANCE',
+        crossexSymbol: 'BINANCE_FUTURE_ETH_USDT',
+        settleFeeApr: 0.01,
+      }),
+      execSpreadApr: 0.02,
+      costs: { ...base.costs, totalUsd, annualizedApr: totalUsd / OPP_NT },
+      netFixedApr,
+      estProfitUsd: netFixedApr * OPP_NT,
+      netFixedAprOnCapital: (netFixedApr * OPP_NT) / ((base.capitalUsd as number) * years),
+    });
+    const rebate: Rebate = {
+      mode: 'relative',
+      settlementFeePercentage: 0.2,
+      rebateBps: 8000,
+      startTimestamp: null,
+      endTimestamp: null,
+      marketIds: [9999],
+      active: true,
+    };
+    const rows = toRows(
+      [makeOpportunityGroup({ pairs: [losing] })],
+      undefined,
+      undefined,
+      { config: rebate, notionalUsd: OPP_NOTIONAL },
+    );
+    expect(rows).toHaveLength(0);
   });
 });
 

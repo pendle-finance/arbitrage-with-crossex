@@ -458,6 +458,7 @@ export function makeOpportunityLeg(overrides: Partial<OpportunityLeg> = {}): Opp
     base: 'ETH',
     midApr: 0.09,
     execApr: 0.0895,
+    settleFeeApr: 0.001,
     ...overrides,
   };
 }
