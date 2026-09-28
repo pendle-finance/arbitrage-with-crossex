@@ -415,6 +415,32 @@ describe('BorosPairTicket', () => {
     expect(await screen.findByTitle(/caps the RATE, not the fill/i)).toBeInTheDocument();
   });
 
+  it('offers the SIZE the collateral funds, not the collateral: both legs out of one cross bucket', async () => {
+    // 500 USDT free; opening costs 0.03 per unit on HL and 0.02 on Binance.
+    // As a pair both come out of the one cross bucket: 500 / 0.05 = 10,000
+    // per leg. Alone, HL funds 500 / 0.03 ≈ 16,667.
+    const user = userEvent.setup();
+    server.use(
+      ...handlers({
+        ctx: {
+          markets: [
+            marketRow({ openCostPerSize: 0.03 }),
+            marketRow({ marketId: BN, name: 'Binance ETHUSDT 31 Aug 2026', venue: 'Binance', midApr: 0.045, openCostPerSize: 0.02 }),
+          ],
+          crossByToken: [{ tokenId: 3, available: 500 }],
+        },
+      }),
+    );
+    renderWithClient(<BorosPairTicket />);
+    await fillTicket(user);
+    const max = await screen.findByRole('button', { name: /^max 10,000 USDT$/ });
+    await user.click(max);
+    expect((screen.getByLabelText(/^Size per leg/) as HTMLInputElement).value).toBe('10000');
+
+    await user.click(screen.getByRole('radio', { name: 'Single' }));
+    expect(await screen.findByRole('button', { name: /^max 16,666\.6/ })).toBeInTheDocument();
+  });
+
   it('Single mode sends one leg, borrowing an eligible partner for the pair shape', async () => {
     // The route refuses a request whose legs name the same market, and will
     // not walk either book for one — so a single-leg ticket borrows a real

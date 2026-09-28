@@ -11,6 +11,7 @@ import {
   assetIsActive,
   perpOnlyCloseLegs,
   perpOnlyPairs,
+  borosOnlyPairs,
   deriveAsset,
   keptSlice,
   pairBorosCloseLegs,
@@ -674,5 +675,96 @@ describe('perpOnlyPairs', () => {
   it('never pairs a venue with itself, nor two perps on the same side', () => {
     expect(perpOnlyPairs([perpLeg('GATE', 'LONG', 10), perpLeg('OKX', 'LONG', 10)], []).pairs).toEqual([]);
     expect(perpOnlyPairs([perpLeg('GATE', 'LONG', 10), perpLeg('GATE', 'SHORT', 10)], []).pairs).toEqual([]);
+  });
+});
+
+describe('borosOnlyPairs', () => {
+  const M = 1_790_000_000;
+  const perpLeg = (venue: string, side: 'LONG' | 'SHORT', sizeBase: number) => ({
+    venue,
+    side,
+    symbol: `${venue}_FUTURE_ETH_USDT`,
+    sizeBase,
+    notionalUsd: sizeBase * 2500,
+    unit: 'base' as const,
+    imUsd: sizeBase * 100,
+    share: 1,
+  });
+  const yuLeg = (
+    venue: string,
+    side: 'LONG' | 'SHORT',
+    sizeBase: number,
+    maturity: number,
+    lockedApr: number | null,
+    marketId = 7,
+  ) => ({
+    venue,
+    side,
+    marketId,
+    maturity,
+    sizeBase,
+    notionalUsd: sizeBase * 2500,
+    unit: 'base' as const,
+    lockedApr,
+    imUsd: sizeBase * 3,
+    share: 1,
+  });
+
+  it('pairs his two leftover rate legs into one unit with both perps missing', () => {
+    // Gate LONG 37.3 (the unpaired slice of a leg a pair holds) + Lighter
+    // SHORT 37.3, both 30 Oct: the Boros side of a Gate/Lighter unit.
+    const gate = { ...yuLeg('GATE', 'LONG', 37.3, M, -0.0565, 1), share: 0.0734 };
+    const { pairs, restPerps, restYus } = borosOnlyPairs([], [gate, yuLeg('LIGHTER', 'SHORT', 37.3, M, 0.0831, 2)]);
+    expect(pairs).toHaveLength(1);
+    const p = pairs[0];
+    expect(`${p.longVenue}/${p.shortVenue}`).toBe('GATE/LIGHTER');
+    expect(p.maturity).toBe(M);
+    expect(p.size).toBeCloseTo(37.3, 9);
+    expect(p.longPerp).toBeNull();
+    expect(p.shortPerp).toBeNull();
+    expect(p.missingLong).toBeCloseTo(37.3, 9);
+    expect(p.missingShort).toBeCloseTo(37.3, 9);
+    expect(p.lockedSpread).toBeCloseTo(0.0266, 9);
+    // The slice keeps its share of the venue leg, so a close stays capped.
+    expect(p.longYu.share).toBeCloseTo(0.0734, 9);
+    expect(restPerps).toEqual([]);
+    expect(restYus).toEqual([]);
+  });
+
+  it('hangs a leftover perp on its unit: only the other perp is missing', () => {
+    const { pairs, restPerps } = borosOnlyPairs(
+      [perpLeg('GATE', 'LONG', 50)],
+      [yuLeg('GATE', 'LONG', 30, M, -0.05, 1), yuLeg('LIGHTER', 'SHORT', 30, M, 0.08, 2)],
+    );
+    expect(pairs).toHaveLength(1);
+    expect(pairs[0].longPerp?.sizeBase).toBe(30);
+    expect(pairs[0].missingLong).toBe(0);
+    expect(pairs[0].missingShort).toBe(30);
+    expect(pairs[0].imUsd).toBeCloseTo(30 * 3 * 2 + 30 * 100, 6);
+    // The perp's unclaimed 20 stays ungrouped.
+    expect(restPerps).toHaveLength(1);
+    expect(restPerps[0].sizeBase).toBe(20);
+  });
+
+  it('pairs the smaller size and leaves the remainder ungrouped', () => {
+    const { pairs, restYus } = borosOnlyPairs(
+      [],
+      [yuLeg('GATE', 'LONG', 100, M, -0.05, 1), yuLeg('LIGHTER', 'SHORT', 40, M, 0.08, 2)],
+    );
+    expect(pairs[0].size).toBe(40);
+    expect(restYus).toHaveLength(1);
+    expect(restYus[0].venue).toBe('GATE');
+    expect(restYus[0].sizeBase).toBe(60);
+  });
+
+  it('never blends maturities, pairs a venue with itself, or pairs two legs on one side', () => {
+    expect(borosOnlyPairs([], [yuLeg('GATE', 'LONG', 10, M, -0.05, 1), yuLeg('LIGHTER', 'SHORT', 10, M + 86_400 * 28, 0.08, 2)]).pairs).toEqual([]);
+    expect(borosOnlyPairs([], [yuLeg('GATE', 'LONG', 10, M, -0.05, 1), yuLeg('GATE', 'SHORT', 10, M, 0.08, 2)]).pairs).toEqual([]);
+    expect(borosOnlyPairs([], [yuLeg('GATE', 'LONG', 10, M, -0.05, 1), yuLeg('OKX', 'LONG', 10, M, -0.04, 2)]).pairs).toEqual([]);
+  });
+
+  it('reports no spread while a rate is pending, and skips dust', () => {
+    expect(borosOnlyPairs([], [yuLeg('GATE', 'LONG', 10, M, null, 1), yuLeg('LIGHTER', 'SHORT', 10, M, 0.08, 2)]).pairs[0].lockedSpread).toBeNull();
+    expect(borosOnlyPairs([], [yuLeg('GATE', 'LONG', 0.001, M, -0.05, 1), yuLeg('LIGHTER', 'SHORT', 0.001, M, 0.08, 2)]).pairs).toEqual([]);
   });
 });

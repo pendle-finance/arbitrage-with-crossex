@@ -1,4 +1,5 @@
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
+import { useRef } from 'react';
 import { postJson } from '../api/client';
 import { canFetch } from '../api/queries';
 import type { ActionInput, PreviewResponse } from '../api/types';
@@ -21,7 +22,17 @@ import { useDebounced } from '../lib/useDebounced';
 export function usePreviewDebounced(
   scope: string,
   actions: ActionInput[] | null,
-  opts: { debounceMs?: number; refetchInterval?: number | false } = {},
+  opts: {
+    debounceMs?: number;
+    refetchInterval?: number | false;
+    /**
+     * Says the shown preview still describes `current` although the input
+     * changed — the one case is a maker price auto-tracking the book, within a
+     * tolerance (see trackedPriceDrift.ts). When it returns true the change
+     * does NOT count as estimating; the new preview still loads behind it.
+     */
+    tolerate?: (shown: ActionInput[], current: ActionInput[]) => boolean;
+  } = {},
 ) {
   const active = useTabActive();
   const json = actions && actions.length > 0 ? JSON.stringify(actions) : '';
@@ -38,13 +49,29 @@ export function usePreviewDebounced(
     gcTime: 15_000,
   });
 
+  /** The input the SHOWN previews were computed for, and when they landed —
+   * placeholder data belongs to an earlier key, so it keeps that key's stamp. */
+  const shown = useRef<{ json: string; at: number } | null>(null);
+  if (query.data && !query.isPlaceholderData && query.dataUpdatedAt > 0) {
+    shown.current = { json: debounced, at: query.dataUpdatedAt };
+  }
+
   // A pending edit (json not yet debounced) or placeholder data from the prior
   // key means the shown previews describe a DIFFERENT input than the current one.
-  const estimating = json !== '' && (debounced !== json || query.isPlaceholderData);
+  const changed = json !== '' && (debounced !== json || query.isPlaceholderData);
+  const tolerated =
+    changed &&
+    opts.tolerate !== undefined &&
+    shown.current !== null &&
+    shown.current.json !== '' &&
+    opts.tolerate(JSON.parse(shown.current.json) as ActionInput[], JSON.parse(json) as ActionInput[]);
+  const estimating = changed && !tolerated;
 
   return {
     ...query,
     previews: json !== '' && debounced !== '' ? query.data?.previews : undefined,
     estimating,
+    /** When the shown previews were fetched (0 = none yet). */
+    shownAt: shown.current?.at ?? 0,
   };
 }

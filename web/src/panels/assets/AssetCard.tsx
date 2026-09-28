@@ -24,6 +24,7 @@ import type {
   BorosRollLegKey,
   BorosRollRequest,
   BorosSimulatedLeg,
+  StrategyLeg,
 } from '../../api/types';
 import { TokenIcon, VenueIcon } from '../../components/AssetIcon';
 import { Chip } from '../../components/Chip';
@@ -95,6 +96,8 @@ import {
   pairPerpCloseLegs,
   entryAprOf,
   perpOnlyCloseLegs,
+  borosOnlyPairs,
+  type BorosOnlyPair,
   perpOnlyPairs,
   sizeIn,
 } from './assetModel';
@@ -2839,6 +2842,235 @@ function PerpOnlyPairCard({
 }
 
 /**
+ * The mirror of PerpOnlyPairCard: a unit's two rate legs are open — the
+ * spread is locked — but one or both perps behind them are not, so the unit
+ * carries price risk. Named as a pair with its perps missing, with the way to
+ * finish the hedge (open the perps) or to stop farming it (close the Boros
+ * legs), rather than two anonymous rows under "ungrouped".
+ */
+function BorosOnlyPairCard({
+  pair,
+  base,
+  nowSec,
+  onOpenPerps,
+  onCloseBoros,
+}: {
+  pair: BorosOnlyPair;
+  base: string;
+  nowSec: number;
+  /** Arms the perp ticket for the named side(s) at this size; null when there
+   * is no trade flow to arm (a provider-less render). */
+  onOpenPerps: ((sides: { long: boolean; short: boolean }) => void) | null;
+  /** Opens the close form on this unit's two rate-leg slices. */
+  onCloseBoros: () => void;
+}) {
+  const [open, setOpen] = useState(true);
+  const needLong = pair.missingLong > 0;
+  const needShort = pair.missingShort > 0;
+  const both = needLong && needShort;
+  const cell = 'border-b border-ink-850 px-2.5 py-2';
+  const pill = 'btn !h-[30px] !px-3 !text-[12px]';
+  const sizeText = (n: number) => sizeLabel(n, pair.unit, base);
+  const sideChip = (side: 'LONG' | 'SHORT') => (
+    <Chip sm tone={side === 'LONG' ? 'green' : 'red'}>
+      {side}
+    </Chip>
+  );
+  const legName = (venue: string, kind: 'perp' | 'yu', side: 'LONG' | 'SHORT') => (
+    <span className="inline-flex items-center gap-[7px]">
+      <span className="font-medium text-ink-50">{prettyVenue(venue)}</span>
+      <span className={`rounded-full px-2 py-[3px] text-[10px] font-semibold tracking-[0.06em] ${kind === 'yu' ? 'bg-info/[0.16] text-pastel-blue' : 'bg-wash/[0.10] text-ink-300'}`}>
+        {kind === 'yu' ? 'Boros' : 'CrossEx'}
+      </span>
+      {sideChip(side)}
+    </span>
+  );
+  /** One perp row: the perp that is there, or the gap where one belongs. */
+  const perpRow = (venue: string, side: 'LONG' | 'SHORT', perp: UnpairedPerp | null, missing: number) =>
+    perp && !(missing > 0) ? (
+      <tr key={`p-${venue}`}>
+        <td className={`${cell} whitespace-nowrap`}>{legName(venue, 'perp', side)}</td>
+        <td className={`${cell} num whitespace-nowrap text-right text-ink-100`}>{sizeText(sizeIn(perp, perp.unit))}</td>
+        <td className={`${cell} num text-right text-ink-600`}>—</td>
+        <td className={`${cell} num whitespace-nowrap text-right text-ink-100`}>{fmtUsdCompact(perp.imUsd)}</td>
+      </tr>
+    ) : (
+      <tr key={`p-${venue}`} className="bg-amber-500/[0.04]">
+        <td className={`${cell} whitespace-nowrap`}>
+          <span className="inline-flex items-center gap-[7px]">
+            {legName(venue, 'perp', side)}
+            <Chip sm tone="amber">
+              missing
+            </Chip>
+          </span>
+        </td>
+        <td className={`${cell} num whitespace-nowrap text-right text-amber-200/90`}>{sizeText(missing)}</td>
+        <td className={`${cell} num text-right text-ink-600`}>—</td>
+        <td className={`${cell} whitespace-nowrap text-right`}>
+          <button
+            type="button"
+            className="btn-ghost-xs !py-[5px] !text-grass hover:!border-grass/60"
+            disabled={!onOpenPerps}
+            title={`Open only the ${prettyVenue(venue)} ${side} perp, at ${sizeText(missing)}`}
+            onClick={() => onOpenPerps?.({ long: side === 'LONG', short: side === 'SHORT' })}
+          >
+            Open leg
+          </button>
+        </td>
+      </tr>
+    );
+  return (
+    <div className="overflow-x-auto rounded-lg border border-amber-500/40 bg-ink-950/40">
+      <table className="w-full min-w-[880px] table-fixed border-collapse">
+        <PairColGroup />
+        <tbody>
+          <tr className="cursor-pointer transition-colors hover:bg-ink-850/30 [&>td]:py-3 [&>td]:align-middle" onClick={() => setOpen((v) => !v)}>
+            <td className="pl-4 pr-3">
+              <button
+                type="button"
+                aria-expanded={open}
+                className="flex min-w-0 flex-col items-start gap-1.5 text-left text-[13.5px] font-semibold leading-none text-ink-50"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setOpen((v) => !v);
+                }}
+              >
+                <span className="inline-flex min-w-0 flex-wrap items-center gap-[7px]">
+                <span className="inline-flex items-center gap-[6px]">
+                  <VenueIcon venue={pair.longVenue} size={18} />
+                  {prettyVenue(pair.longVenue)}
+                  <span className="text-[9.5px] font-semibold tracking-[0.1em] text-grass">LONG</span>
+                </span>
+                <span className="text-ink-600">/</span>
+                <span className="inline-flex items-center gap-[6px]">
+                  <VenueIcon venue={pair.shortVenue} size={18} />
+                  {prettyVenue(pair.shortVenue)}
+                  <span className="text-[9.5px] font-semibold tracking-[0.1em] text-guava">SHORT</span>
+                </span>
+                <Chip
+                  sm
+                  tone="amber"
+                  className="!font-medium"
+                  title="The rate is locked, but no perp hedges its price risk."
+                >
+                  {both ? 'Perp legs missing' : 'Perp leg missing'}
+                </Chip>
+                </span>
+                <span className="num text-[11.5px] font-normal leading-none text-ink-400">
+                  <span title="Both rate legs of this unit settle here">
+                    matures {fmtDateLocal(pair.maturity)} · {daysLeftText(pair.maturity, nowSec)}
+                  </span>
+                </span>
+              </button>
+            </td>
+            <td className="num whitespace-nowrap px-3 text-right text-[14px] font-medium text-ink-50" title={`Notional, both rate legs\t${exactUsd(pair.notionalUsd)}\nSize per side\t${exactSize(pair.size, pair.unit, base)}`}>
+              {fmtUsdCompact(pair.notionalUsd)}
+            </td>
+            <td className="num whitespace-nowrap px-3 text-right text-[14px] font-medium text-ink-50" title={`Initial margin\t${exactUsd(pair.imUsd)}`}>
+              {fmtUsdCompact(pair.imUsd)}
+            </td>
+            {/* No APR on capital until the perps are there: their margin is
+                most of the capital. The spread is already locked, though. */}
+            <td className="num whitespace-nowrap px-3 text-right text-[14px] font-medium">
+              <span className="text-ink-600" title="No APR on capital until both perps are open">—</span>
+              {pair.lockedSpread !== null && (
+                <span className="ml-2 text-[11.5px] text-ink-400" title="Receive leg minus pay leg, on notional, net of settlement fees.">
+                  <SignedNumber value={pair.lockedSpread} format={fmtPct} className="!text-ink-400" /> spread
+                </span>
+              )}
+            </td>
+            <td className="px-3 text-right text-[13px] text-ink-600" title="Not estimated until both perps are open.">—</td>
+            <td className="whitespace-nowrap pl-3 pr-4 text-right">
+              <span aria-hidden className={`pp-chevron transition-transform ${open ? 'rotate-180' : ''}`}>
+                <ChevronDown size={14} aria-hidden />
+              </span>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+      {open && (
+        <div className="px-4 pb-5 pt-3">
+          <div className="overflow-x-auto rounded border border-ink-700">
+            <table className="w-full border-collapse text-[12.5px]">
+              <thead>
+                <tr>
+                  <th className="th text-left">Leg</th>
+                  <th className="th text-right">Size</th>
+                  <th className="th text-right">Locked</th>
+                  <th className="th text-right">Initial margin</th>
+                </tr>
+              </thead>
+              <tbody>
+                {perpRow(pair.longVenue, 'LONG', pair.longPerp, pair.missingLong)}
+                {perpRow(pair.shortVenue, 'SHORT', pair.shortPerp, pair.missingShort)}
+                {[pair.longYu, pair.shortYu].map((y) => (
+                  <tr key={`y-${y.marketId}`}>
+                    <td className={`${cell} whitespace-nowrap`}>{legName(y.venue, 'yu', y.side)}</td>
+                    <td className={`${cell} num whitespace-nowrap text-right text-ink-100`}>
+                      {sizeText(sizeIn(y, y.unit))}
+                      {y.share < 0.9995 && (
+                        <span className="ml-1 text-ink-500" title="This unit's slice of the venue leg.">
+                          ({fmtPct(y.share)})
+                        </span>
+                      )}
+                    </td>
+                    <td className={`${cell} num whitespace-nowrap text-right`}>
+                      {y.lockedApr !== null ? (
+                        <SignedNumber value={y.lockedApr} format={fmtPct} />
+                      ) : (
+                        <span className="text-ink-500">pending</span>
+                      )}
+                    </td>
+                    <td className={`${cell} num whitespace-nowrap text-right text-ink-100`}>{fmtUsdCompact(y.imUsd)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {/* The two ways out: finish the hedge, or stop farming it. */}
+          <div className="mt-3 flex items-center justify-end gap-2">
+            <button
+              type="button"
+              className={`${pill} hover:!border-guava/50 hover:!text-guava`}
+              title={`Close both Boros legs of this unit — ${sizeText(pair.size)} on each side`}
+              onClick={onCloseBoros}
+            >
+              Close Boros legs
+            </button>
+            {both && (
+              <button
+                type="button"
+                className={`${pill} !border-grass/60 !text-grass hover:!border-grass hover:!bg-grass/10`}
+                disabled={!onOpenPerps}
+                title={`Open both perps together — long ${prettyVenue(pair.longVenue)}, short ${prettyVenue(pair.shortVenue)}, ${sizeText(Math.min(pair.missingLong, pair.missingShort))} each`}
+                onClick={() => onOpenPerps?.({ long: true, short: true })}
+              >
+                Open both perps
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * One leg's close. `qty` (perp, in the coin) and `slice` (Boros) cap the close
+ * at the part of a shared venue leg the caller owns; absent = the whole leg.
+ */
+type CloseLegTarget =
+  | { kind: 'perp'; leg: AssetPerpOpen; qty?: number }
+  | { kind: 'boros'; leg: AssetBorosOpen; slice?: { sizeToken: number; notionalUsd: number; share: number } };
+
+/** A Boros leg's slice worth `notionalUsd`, in the collateral token the close
+ * form sizes in. */
+function borosSlice(leg: AssetBorosOpen, notionalUsd: number): { sizeToken: number; notionalUsd: number; share: number } {
+  const share = leg.notionalUsd > 0 ? Math.min(1, notionalUsd / leg.notionalUsd) : 0;
+  return { sizeToken: leg.sizeToken * share, notionalUsd, share };
+}
+
+/**
  * Every leg no 4-leg unit claimed, as one card at the end of the pairs
  * list: perps at a venue with no YU to pair against (or the slice left once
  * the YU ran out), and YU legs with no counterpart at their maturity — the
@@ -2863,16 +3095,15 @@ function UngroupedCard({
   nowSec: number;
   defaultOpen: boolean;
   livePositions: Map<string, CrossexPosition>;
-  onCloseLeg: (leg: { kind: 'perp'; leg: AssetPerpOpen } | { kind: 'boros'; leg: AssetBorosOpen }) => void;
+  onCloseLeg: (target: CloseLegTarget) => void;
 }) {
   const [open, setOpen] = useState(defaultOpen);
   const notionalUsd = perps.reduce((t, l) => t + l.notionalUsd, 0) + yus.reduce((t, l) => t + l.notionalUsd, 0);
   const imUsd = perps.reduce((t, l) => t + l.imUsd, 0) + yus.reduce((t, l) => t + l.imUsd, 0);
   const unit = (perps[0] ?? yus[0])?.unit ?? 'usd';
   const size = perps.reduce((t, l) => t + sizeIn(l, unit), 0) + yus.reduce((t, l) => t + sizeIn(l, unit), 0);
-  /** A close from here is only for a WHOLE leg: the close forms size
-   * against the venue position, and closing all of a leg that is partly
-   * paired would break the pair it belongs to. */
+  /** A leg only partly in a pair closes just its unpaired slice: the close
+   * forms cap the size at it, so the pair's share of the leg is untouched. */
   const whole = (share: number) => share >= 0.9995;
   const sideChip = (side: 'LONG' | 'SHORT') => (
     <Chip sm tone={side === 'LONG' ? 'green' : 'red'}>
@@ -2970,7 +3201,7 @@ function UngroupedCard({
               {perps.map((l) => {
                 const leg = group.perpOpen.find((p) => p.symbol === l.symbol);
                 const live = leg !== undefined && livePositions.has(l.symbol);
-                const can = whole(l.share) && live && leg !== undefined;
+                const can = live && leg !== undefined;
                 return (
                   <tr key={`p-${l.symbol}`}>
                     <td className="whitespace-nowrap">
@@ -2994,12 +3225,12 @@ function UngroupedCard({
                     <td className="whitespace-nowrap text-right">
                       {closeBtn(
                         `Close ${prettyVenue(l.venue)} ${l.side} perp`,
-                        can ? () => onCloseLeg({ kind: 'perp', leg: leg }) : undefined,
-                        !whole(l.share)
-                          ? 'Part of this leg is in a pair — close it from its funding bundle'
-                          : !live
-                            ? 'Live position not loaded yet'
-                            : 'Close this perp leg, reduce-only.',
+                        can ? () => onCloseLeg({ kind: 'perp', leg, qty: whole(l.share) ? undefined : l.sizeBase }) : undefined,
+                        !live
+                          ? 'Live position not loaded yet'
+                          : whole(l.share)
+                            ? 'Close this perp leg, reduce-only.'
+                            : 'Close the unpaired slice of this perp leg, reduce-only. The pair keeps its share.',
                       )}
                     </td>
                   </tr>
@@ -3007,7 +3238,7 @@ function UngroupedCard({
               })}
               {yus.map((l) => {
                 const leg = group.borosOpen.find((b) => b.marketId === l.marketId);
-                const can = whole(l.share) && leg !== undefined;
+                const can = leg !== undefined;
                 const days = Math.ceil((l.maturity - nowSec) / 86_400);
                 return (
                   <tr key={`y-${l.marketId}`}>
@@ -3051,10 +3282,17 @@ function UngroupedCard({
                     <td className="whitespace-nowrap text-right">
                       {closeBtn(
                         `Close ${prettyVenue(l.venue)} ${l.side} YU`,
-                        can ? () => onCloseLeg({ kind: 'boros', leg: leg }) : undefined,
+                        can
+                          ? () =>
+                              onCloseLeg({
+                                kind: 'boros',
+                                leg,
+                                slice: whole(l.share) ? undefined : borosSlice(leg, l.notionalUsd),
+                              })
+                          : undefined,
                         whole(l.share)
                           ? 'Close this Boros leg — market order on Boros'
-                          : 'Part of this leg is in a pair — close it from its funding bundle',
+                          : 'Close the unpaired slice of this Boros leg — market order on Boros. The pair keeps its share.',
                       )}
                     </td>
                   </tr>
@@ -4298,11 +4536,10 @@ export function AssetCard({
   const [closePerps, setClosePerps] = useState<PairEstimate | null>(null);
   const [closePerpOnly, setClosePerpOnly] = useState<PerpOnlyPair | null>(null);
   const [closeBoros, setCloseBoros] = useState<PairEstimate | null>(null);
+  const [closeBorosOnly, setCloseBorosOnly] = useState<BorosOnlyPair | null>(null);
   const [rollOver, setRollOver] = useState<PairEstimate | null>(null);
   /** One leg's close, from its row's ✕. */
-  const [closeLeg, setCloseLeg] = useState<
-    { kind: 'perp'; leg: AssetPerpOpen } | { kind: 'boros'; leg: AssetBorosOpen } | null
-  >(null);
+  const [closeLeg, setCloseLeg] = useState<CloseLegTarget | null>(null);
   // The close form realises each leg's uPnL off the live position.
   const positionsData = usePositions().data;
   const livePositions = useMemo(() => {
@@ -4499,7 +4736,19 @@ export function AssetCard({
     () => perpOnlyPairs(derived.unpairedPerps, derived.pendingLegs),
     [derived.unpairedPerps, derived.pendingLegs],
   );
-  const ungroupedCount = perpOnly.restPerps.length + perpOnly.restYus.length;
+  /**
+   * Then the reverse: offsetting rate legs whose perps are missing. Not for a
+   * view-only wallet: its perps are HIDDEN, not absent, and "perp missing"
+   * would call a hedged leg unhedged — the legs stay ungrouped there.
+   */
+  const borosOnly = useMemo(
+    () =>
+      gateHidden
+        ? { pairs: [], restPerps: perpOnly.restPerps, restYus: perpOnly.restYus }
+        : borosOnlyPairs(perpOnly.restPerps, perpOnly.restYus),
+    [gateHidden, perpOnly.restPerps, perpOnly.restYus],
+  );
+  const ungroupedCount = borosOnly.restPerps.length + borosOnly.restYus.length;
   /**
    * Arm the Boros ticket for a perp-only pair's missing side(s). The
    * maturity is the one rate leg the unit still holds, when it has one —
@@ -4521,6 +4770,26 @@ export function AssetCard({
       size: perSideUsd,
       sizeBase: p.unit === 'base' ? size : undefined,
     });
+    flow.openRail();
+  };
+  /** Arm the perp ticket for a Boros-only pair's missing side(s). */
+  const openPerpsFor = (p: BorosOnlyPair, sides: { long: boolean; short: boolean }) => {
+    if (!flow) return;
+    const size = sides.long && sides.short ? Math.min(p.missingLong, p.missingShort) : sides.long ? p.missingLong : p.missingShort;
+    const notionalUsd = p.size > 0 ? (p.notionalUsd / 2) * (size / p.size) : 0;
+    const sizeBase = p.unit === 'base' ? size : undefined;
+    if (sides.long && sides.short) {
+      flow.prefillPair({ base: group.base, longVenue: p.longVenue, shortVenue: p.shortVenue, notionalUsd, sizeBase, sizeUnit: p.unit });
+    } else {
+      flow.prefillSinglePerp({
+        base: group.base,
+        venue: sides.long ? p.longVenue : p.shortVenue,
+        side: sides.long ? 'BUY' : 'SELL',
+        notionalUsd,
+        sizeBase,
+        sizeUnit: p.unit,
+      });
+    }
     flow.openRail();
   };
   // The bundles foot to the totals by construction (checked 2026-09-09:
@@ -4768,7 +5037,7 @@ export function AssetCard({
         onChange={setView}
         options={[
           { value: 'bundles', label: 'Funding Bundles', count: activeBundles.length },
-          { value: 'pairs', label: '4 Leg Pairs', count: derived.pairs.length + perpOnly.pairs.length },
+          { value: 'pairs', label: '4 Leg Pairs', count: derived.pairs.length + perpOnly.pairs.length + borosOnly.pairs.length },
         ]}
         right={
           view === 'bundles' ? (
@@ -4967,7 +5236,7 @@ null
         hidden={view !== 'pairs'}
         className="mb-3"
       >
-        {derived.pairs.length > 0 || perpOnly.pairs.length > 0 || ungroupedCount > 0 ? (
+        {derived.pairs.length > 0 || perpOnly.pairs.length > 0 || borosOnly.pairs.length > 0 || ungroupedCount > 0 ? (
           <div className="flex flex-col gap-2">
             <PairListHeader />
             {derived.pairs.map((p) => (
@@ -5007,10 +5276,20 @@ null
                 onClosePerps={() => setClosePerpOnly(p)}
               />
             ))}
+            {borosOnly.pairs.map((p) => (
+              <BorosOnlyPairCard
+                key={`bo:${p.longVenue}:${p.shortVenue}:${p.maturity}`}
+                pair={p}
+                base={group.base}
+                nowSec={nowSec}
+                onOpenPerps={flow ? (sides) => openPerpsFor(p, sides) : null}
+                onCloseBoros={() => setCloseBorosOnly(p)}
+              />
+            ))}
             {ungroupedCount > 0 && (
               <UngroupedCard
-                perps={perpOnly.restPerps}
-                yus={perpOnly.restYus}
+                perps={borosOnly.restPerps}
+                yus={borosOnly.restYus}
                 group={group}
                 base={group.base}
                 nowSec={nowSec}
@@ -5073,6 +5352,7 @@ null
       {closeLeg?.kind === 'perp' && livePositions.get(closeLeg.leg.symbol) && (
         <ClosePopover
           position={livePositions.get(closeLeg.leg.symbol)!}
+          attributedQty={closeLeg.qty}
           // The opposite perp at another venue is what cancels this leg's
           // price delta; without naming it the popover's "closing leaves
           // that one unhedged" warning could never show.
@@ -5106,14 +5386,14 @@ null
                 venue: closeLeg.leg.venue,
                 base: group.base,
                 side: closeLeg.leg.side,
-                notionalUsd: closeLeg.leg.notionalUsd,
+                notionalUsd: closeLeg.slice?.notionalUsd ?? closeLeg.leg.notionalUsd,
                 collateral: closeLeg.leg.collateral,
-                notionalToken: closeLeg.leg.sizeToken,
+                notionalToken: closeLeg.slice?.sizeToken ?? closeLeg.leg.sizeToken,
                 marketId: closeLeg.leg.marketId,
                 entryApr: closeLeg.leg.entryApr ?? undefined,
                 markApr: closeLeg.leg.markApr,
                 maturity: closeLeg.leg.maturity,
-                share: 1,
+                share: closeLeg.slice?.share ?? 1,
                 cashFlowUsd: 0,
                 mtmUsd: 0,
                 tradePnlUsd: 0,
@@ -5145,6 +5425,55 @@ null
             <CloseBorosForm
               legs={pairBorosCloseLegs(closeBoros, group)}
               onDone={() => setCloseBoros(null)}
+            />
+          </div>
+        </Modal>
+      )}
+      {closeBorosOnly !== null && (
+        <Modal
+          title={
+            <>
+              Close pair
+              <span className="ml-2 text-[12px] font-normal text-ink-400">
+                {group.base} · {prettyVenue(closeBorosOnly.longVenue)} ⇄ {prettyVenue(closeBorosOnly.shortVenue)} ·{' '}
+                {fmtDateLocal(closeBorosOnly.maturity)} · no perps
+              </span>
+            </>
+          }
+          onClose={() => setCloseBorosOnly(null)}
+          widthClass="w-[620px]"
+        >
+          <div className="flex flex-col gap-3">
+            <CloseBorosForm
+              legs={[closeBorosOnly.longYu, closeBorosOnly.shortYu].flatMap((y): StrategyLeg[] => {
+                const b = group.borosOpen.find((x) => x.marketId === y.marketId);
+                if (!b) return [];
+                const cut = borosSlice(b, y.notionalUsd);
+                return [
+                  {
+                    kind: 'boros',
+                    venue: b.venue,
+                    base: group.base,
+                    side: b.side,
+                    notionalUsd: cut.notionalUsd,
+                    collateral: b.collateral,
+                    notionalToken: cut.sizeToken,
+                    marketId: b.marketId,
+                    entryApr: b.entryApr ?? undefined,
+                    markApr: b.markApr,
+                    maturity: b.maturity,
+                    share: cut.share,
+                    cashFlowUsd: 0,
+                    mtmUsd: 0,
+                    tradePnlUsd: 0,
+                    feesUsd: 0,
+                    netUsd: 0,
+                    openedAt: null,
+                    warnings: [],
+                  },
+                ];
+              })}
+              onDone={() => setCloseBorosOnly(null)}
             />
           </div>
         </Modal>

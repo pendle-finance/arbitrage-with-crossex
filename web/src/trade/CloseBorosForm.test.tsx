@@ -417,3 +417,18 @@ describe('CloseBorosForm — full sizes on a large book', () => {
     expect(document.body.textContent).not.toMatch(/\d(k|M) ETH|e\+/);
   });
 });
+
+describe('CloseBorosForm — a slice of a shared leg', () => {
+  it('never says flat after at the max: the rest of the venue leg stays open', async () => {
+    server.use(...ready());
+    renderWithClient(<CloseBorosForm legs={[{ ...leg(), notionalToken: 37.3, share: 0.0734 }]} />);
+    expect(await screen.findByText(/the rest of the shared leg stays open/)).toBeInTheDocument();
+    expect(screen.queryByText(/flat after/)).not.toBeInTheDocument();
+  });
+
+  it('still says flat after for a whole leg at the max', async () => {
+    server.use(...ready());
+    renderWithClient(<CloseBorosForm legs={[{ ...leg(), share: 1 }]} />);
+    expect(await screen.findByText(/flat after/)).toBeInTheDocument();
+  });
+});

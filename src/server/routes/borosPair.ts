@@ -35,7 +35,7 @@ import {
   type FetchLike,
 } from '../../core/boros/client';
 import { USD_TOKEN_ID } from '../../core/boros/borosApi';
-import { normalizeUnderlying } from '../../core/boros/opportunities';
+import { borosInitialMarginUsd, normalizeUnderlying } from '../../core/boros/opportunities';
 import { COIN_NOT_SUPPORTED_TEXT, isSupportedCoin } from '../../core/coins';
 import { knownRate } from '../../core/boros/venue';
 import { readAgentApproval } from '../borosAgentApproval';
@@ -556,6 +556,26 @@ export function createPairPricer(deps: AppDeps) {
   return { loadMarkets, loadAccount, marketOr404, readGasBalance, priceRequest };
 }
 
+/**
+ * What opening ONE unit of size on this market takes out of its collateral
+ * bucket, in collateral units: the initial margin plus the taker fee. Both are
+ * linear in size (IM = N × max(|apr|, floor) × max(DTM, tThresh)/365 × kIM;
+ * fee = takerFeeRate × N × years), so the ticket divides the bucket's
+ * available by this to state the size it can fund. The rate is the larger of
+ * mark and mid — the entry the formula charges is not known before the fill,
+ * and the larger one never overstates the size. Null when the market carries
+ * no margin inputs.
+ */
+function openCostPerSize(m: BorosMarket, nowSec: number): number | null {
+  const rate = Math.max(Math.abs(m.markApr), Math.abs(m.midApr));
+  const im = borosInitialMarginUsd(m, rate, 1, nowSec);
+  if (im === null) return null;
+  const years = Math.max(0, m.maturity - nowSec) / (365 * 86_400);
+  const fee = Number.isFinite(m.takerFeeRate) && m.takerFeeRate > 0 ? m.takerFeeRate * years : 0;
+  const cost = im + fee;
+  return cost > 0 ? cost : null;
+}
+
 export function borosPairRoutes(deps: AppDeps) {
   recentExecutions.clear();
   recentRolls.clear();
@@ -708,6 +728,7 @@ export function borosPairRoutes(deps: AppDeps) {
           isolatedHasPositionOrOrders: account.isolatedOccupied.has(m.marketId),
           currentSize: account.positionByMarket.get(m.marketId) ?? 0,
           collateralPriceUsd: prices.get(m.tokenId) ?? null,
+          openCostPerSize: openCostPerSize(m, nowSec),
         }))
         .sort((x, y) => x.name.localeCompare(y.name));
 
