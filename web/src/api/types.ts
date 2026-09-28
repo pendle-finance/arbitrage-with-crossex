@@ -1047,6 +1047,10 @@ export interface BorosPairMarketRow {
   currentSize: number;
   collateralPriceUsd: number | null;
   closeOnly: boolean;
+  /** Collateral one unit of size takes to OPEN here: initial margin at the
+   * current rate plus the taker fee, both linear in size. Null when the market
+   * carries no margin inputs. Optional: an older server does not send it. */
+  openCostPerSize?: number | null;
 }
 
 /** GET /api/boros/pair/context */

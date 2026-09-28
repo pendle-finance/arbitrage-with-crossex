@@ -32,6 +32,7 @@ import { PairBookImpact } from './PriceImpactGraph';
 import { CoinCombobox, FieldLabel } from './SymbolCombobox';
 import { useTradeFlowOptional } from './TradeFlow';
 import { usePreviewDebounced } from './usePreview';
+import { TRACKED_PRICE_TOLERANCE } from './trackedPriceDrift';
 
 /** The default maker resting price: one bid–ask gap BEHIND the touch (BUY at
  * bid − gap, SELL at ask + gap). Both edges sit on the venue tick so the offset
@@ -513,6 +514,10 @@ export function PairTicket({ onExecuted }: { onExecuted?: () => void } = {}) {
       <ExecuteControl
         scope="ticket-pair"
         actions={actions}
+        // A maker price that tracks the book moves every preview; within 5 bps
+        // it is the same order (it goes out pegged to the live touch), so
+        // Execute stays armed. A typed price re-previews as before.
+        trackedPriceTolerance={trackingMaker ? TRACKED_PRICE_TOLERANCE : undefined}
         tone="cyan"
         label={
             <>

@@ -447,7 +447,11 @@ export function CloseBorosForm({
     ? legFacts.reduce((s, f) => s + (f.estPnl ?? 0), 0)
     : null;
   const sizeShown = Number(shownSize());
-  const flatAfter = Number.isFinite(sizeShown) && sizeShown >= maxCloseSize - Math.max(1e-9, maxCloseSize * 1e-7);
+  const atMax = Number.isFinite(sizeShown) && sizeShown >= maxCloseSize - Math.max(1e-9, maxCloseSize * 1e-7);
+  // A leg this close holds only a SLICE of (a pair's share of a shared venue
+  // leg) never goes flat at the max: the rest of the leg stays open.
+  const sharedLeg = closable.some((l) => (l.share ?? 1) < 0.9995);
+  const flatAfter = atMax && !sharedLeg;
 
   return (
     <div className="flex flex-col gap-4">
@@ -535,6 +539,10 @@ export function CloseBorosForm({
                   whole position · <span className="text-ink-200">flat after</span>
                 </>
               )
+            ) : atMax ? (
+              <span title="Part of a venue leg another position also holds. That part stays open.">
+                this position's share · the rest of the shared leg stays open
+              </span>
             ) : (
               'partial close'
             )}
