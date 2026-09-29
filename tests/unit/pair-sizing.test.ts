@@ -171,3 +171,22 @@ describe('shared pair sizing', () => {
     expect(codes(r)).toEqual(['ref-price-unavailable', 'ref-price-unavailable']);
   });
 });
+
+describe('POC limit price', () => {
+  // A POC price rests, so it snaps AWAY from crossing; a nearest snap can land a
+  // BUY on the ask. 65000.06 → BUY 65000 (nearest 65000.1); 65000.04 → SELL
+  // 65000.1 (nearest 65000).
+  it('snaps a resting price directionally, not to the nearest tick', async () => {
+    const clients = fakeClients([rule(GATE, '0.001'), rule(OKX, '0.0001')]);
+    const r = await resolveActions(
+      clients,
+      [
+        { kind: 'open-limit', symbol: GATE, side: 'BUY', qty: '0.01', price: '65000.06', tif: 'POC' },
+        { kind: 'open-limit', symbol: OKX, side: 'SELL', qty: '0.01', price: '65000.04', tif: 'POC' },
+      ],
+      { mode: 'execute' },
+    );
+
+    expect(r.map((l) => l.price)).toEqual(['65000', '65000.1']);
+  });
+});

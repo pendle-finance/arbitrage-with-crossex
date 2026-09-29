@@ -91,6 +91,14 @@ export function versionRoutes(deps: AppDeps) {
           retryable: false,
         });
       }
+      if (deps.updateCheck?.disabled) {
+        return refuse(reply, {
+          code: 409,
+          category: 'validation',
+          message: 'in-app update is off (UPDATE_CHECK=0) — update by hand with the install command',
+          retryable: false,
+        });
+      }
 
       let pin: string | null = null;
       if (deps.updateCheck?.current && !deps.updateCheck.disabled) {

@@ -232,6 +232,9 @@ export function dealsRoutes(deps: AppDeps) {
         }
         // Snap to the venue tick, away from crossing — this price is going to REST.
         price = formatRestPrice(n, pair.a.side, pair.a.contract, pair.a.tick);
+        if (!(Number(price) > 0)) {
+          throw new CoreError(`re-peg price ${n} is below one tick (${pair.a.tick})`, 'validation');
+        }
       } else {
         price = await deps.engine!.venue.touch(pair.a.contract, pair.a.side, pair.a.tick);
       }

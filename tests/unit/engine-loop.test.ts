@@ -179,6 +179,43 @@ describe('unreadable live order', () => {
   });
 });
 
+describe('unreadable pending order', () => {
+  // resolvePending used to `return` on a read error with no counter and no
+  // alert, while an in-doubt order may be live on the venue and filling.
+  it('alerts once when reads keep failing on a PENDING maker', async () => {
+    const w = mkWorld();
+    w.venue.nextCreate = ['unknown-delivered'];
+    await stepChecked(w);
+    expect(w.store.listOrders(w.pairId)[0].state).toBe('PENDING');
+
+    w.venue.readsFail = true;
+    await w.step(TUNING.READ_FAIL_ALERT + 3);
+
+    const maker = w.store.listOrders(w.pairId).find((o) => o.leg === 'A')!;
+    expect(maker.state).toBe('PENDING'); // a failed read resolves nothing
+    expect(maker.readFailStreak).toBeGreaterThanOrEqual(TUNING.READ_FAIL_ALERT);
+
+    const unreadable = w.store.listAlerts().filter((a) => /cannot read pending order/.test(a.message));
+    expect(unreadable).toHaveLength(1);
+    expect(unreadable[0].level).toBe('error');
+  });
+
+  it('clears the streak once the pending order is readable again', async () => {
+    const w = mkWorld();
+    w.venue.nextCreate = ['unknown-delivered'];
+    await stepChecked(w);
+    w.venue.readsFail = true;
+    await w.step(2);
+    expect(w.store.listOrders(w.pairId).find((o) => o.leg === 'A')!.readFailStreak).toBe(2);
+
+    w.venue.readsFail = false;
+    await stepChecked(w); // probe finds it → OPEN
+    const maker = w.store.listOrders(w.pairId).find((o) => o.leg === 'A')!;
+    expect(maker.state).toBe('OPEN');
+    expect(maker.readFailStreak).toBe(0);
+  });
+});
+
 describe('hedge leg unsizable (no reference price)', () => {
   // refPrice() returns null on ANY failure, and every CrossEx FUTURE symbol has
   // a positive min_notional, so sizeFor answers "cannot size safely". No B order

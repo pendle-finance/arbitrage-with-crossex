@@ -590,7 +590,10 @@ export function useBorosPairContext(address: string | null, active = true) {
   const shown = tabShown && active;
   return useQuery({
     queryKey: qk.borosPairContext(address ?? ''),
-    queryFn: () => fetchJson<BorosPairContext>(`/boros/pair/context?address=${address}`),
+    queryFn: () =>
+      fetchJson<BorosPairContext>(
+        `/boros/pair/context?address=${encodeURIComponent(address ?? '')}`,
+      ),
     enabled: (query) => Boolean(address) && canFetch(shown, query),
     placeholderData: keepPreviousData,
     refetchInterval: shown ? 15_000 : false,

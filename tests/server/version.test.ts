@@ -447,6 +447,50 @@ describe('POST /api/version/update', () => {
     }
   });
 
+  it('hands the installer no secrets from config/.env', async () => {
+    // dotenv puts the live keys in process.env, and the installer's
+    // `yarn install` runs every dependency's install scripts.
+    const planted = {
+      GATE_API_SECRET: 'gate-secret',
+      BOROS_AGENT_PRIVATE_KEY: '0xagent',
+      NODE_ENV: 'production',
+      PATH: '/usr/bin:/bin',
+    };
+    const real = Object.fromEntries(Object.keys(planted).map((k) => [k, process.env[k]]));
+    Object.assign(process.env, planted);
+    try {
+      app = makeTestApp({ install: INSTALLED });
+
+      await post();
+
+      const [, , opts] = mocks.spawn.mock.calls[0] as unknown as [
+        string,
+        string[],
+        { env: Record<string, string> },
+      ];
+      expect('GATE_API_SECRET' in opts.env).toBe(false);
+      expect('BOROS_AGENT_PRIVATE_KEY' in opts.env).toBe(false);
+      expect('NODE_ENV' in opts.env).toBe(false);
+      expect(opts.env.PATH).toBe('/usr/bin:/bin');
+    } finally {
+      for (const [k, v] of Object.entries(real)) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
+    }
+  });
+
+  it('refuses when the update check is off, and says to update by hand', async () => {
+    app = makeTestApp({ install: INSTALLED, updateCheck: { current: '1.0.0', disabled: true } });
+
+    const res = await post();
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error.message).toMatch(/UPDATE_CHECK=0/);
+    expect(res.json().error.retryable).toBe(false);
+    expect(mocks.spawn).not.toHaveBeenCalled();
+  });
+
   it('falls back to the branch when the commit is unknown', async () => {
     app = makeTestApp({
       install: INSTALLED,

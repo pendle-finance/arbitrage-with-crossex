@@ -13,6 +13,21 @@ const INSTALLER_SOURCE_WINDOWS = (): string =>
   process.env.BOROS_INSTALLER ?? INSTALLER_URL_WINDOWS;
 
 const TASK_NAME = 'BorosUpdate';
+const INSTALLER_ENV = [
+  'PATH',
+  'HOME',
+  'TMPDIR',
+  'USER',
+  'LOGNAME',
+  'SHELL',
+  'LANG',
+  'BOROS_ROOT',
+  'BOROS_PORT',
+  'BOROS_REPO',
+  'BOROS_BRANCH',
+  'BOROS_REF',
+  'BOROS_TARBALL',
+];
 const COMMIT_SHA = /^[0-9a-f]{40}$/;
 const FETCH_TIMEOUT_MS = 30_000;
 
@@ -226,8 +241,16 @@ export async function startUpdate(ref?: string | null): Promise<string> {
    *
    * A user pasting the same command into a terminal has no NODE_ENV, which is
    * why the install works by hand and only ever fails from here.
+   *
+   * The same goes for everything else in the server's env: dotenv has loaded
+   * config/.env into it (the Gate API secret, the Boros agent key), and the
+   * installer's `yarn install` runs every dependency's install scripts. So
+   * this is an allowlist, not a denylist — only the basics plus the BOROS_*
+   * knobs install.sh reads.
    */
-  const { NODE_ENV: _serviceEnv, ...installerEnv } = process.env;
+  const installerEnv = Object.fromEntries(
+    INSTALLER_ENV.flatMap((key) => (process.env[key] === undefined ? [] : [[key, process.env[key]]])),
+  );
   const child = spawn('/bin/bash', ['-c', INSTALL_CMD], {
     detached: true,
     stdio: ['ignore', log, log],

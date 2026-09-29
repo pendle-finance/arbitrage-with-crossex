@@ -70,6 +70,8 @@ Everything lands in one folder: `%LOCALAPPDATA%\CrossEx-Boros`.
 > Do **not** run this from an Administrator prompt — it doesn't need one. If your
 > organisation restricts script execution, the one-liner above already runs the installer
 > in-process; the background task it registers is a normal per-user Scheduled Task.
+> If your company sets PowerShell policy by Group Policy or AppLocker, the background
+> service can be blocked. The install then stops with an error.
 
 </details>
 
@@ -88,7 +90,7 @@ Everything lands in one folder: `%LOCALAPPDATA%\CrossEx-Boros`.
   the app itself.
 
 You can read the install script for your platform — [install.sh](install.sh) (macOS,
-~250 lines of commented shell) or [install.ps1](install.ps1) (Windows, commented
+about 470 lines of commented shell) or [install.ps1](install.ps1) (Windows, commented
 PowerShell) — or
 better, [have an AI audit the whole repo for you](#verify-this-project-yourself-with-ai)
 before running anything.
@@ -181,10 +183,17 @@ trade journal out from under a live process that is still placing orders.
   (signed, your account and orders); `api-boros.pendle.finance`
   (public market data, keyed only by an EVM address you choose to enter); the venues' public order-book endpoints
   (`fapi.binance.com`, `api.bybit.com`, `www.okx.com`, `futures.kraken.com`,
-  `api.hyperliquid.xyz`, `api.gateio.ws`) — public data, nothing about you; and
-  `raw.githubusercontent.com` — a 6-hourly read of this repo's one-line `version.json`
-  to show "update available". Nothing is ever sent, and `UPDATE_CHECK=0` disables it.
-  The installer downloads only from `nodejs.org` and `github.com`.
+  `api.hyperliquid.xyz`, `mainnet.zklighter.elliot.ai`, `api.gateio.ws`) — public data,
+  nothing about you; and `raw.githubusercontent.com` plus `api.github.com` — a 6-hourly
+  read of this repo's one-line `version.json` and latest commit, to show "update
+  available". Nothing is sent, and `UPDATE_CHECK=0` disables it. If you link Telegram
+  alerts, the app also sends your wallet address and the price levels to alert on to
+  `boros-bot-notification.pendle.finance`. Your browser itself calls
+  `api-boros.pendle.finance` (to approve the Boros agent), `raw.githubusercontent.com`
+  (the user guide) and `storage.googleapis.com` (token icons).
+  The installer downloads only from `nodejs.org` (Node.js), `github.com` and
+  `codeload.github.com` (the app), `raw.githubusercontent.com` (the install script), and
+  `registry.npmjs.org` and `registry.yarnpkg.com` (JavaScript packages).
 - **Other accounts on your computer can't drive it.** Binding to loopback stops the
   network; it does not stop another local process from simply calling the API. So every
   request that can read your account or trade must carry a random token, created on

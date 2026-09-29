@@ -250,6 +250,24 @@ describe('POST /api/deals', () => {
     expect(w.store.listPairs()).toHaveLength(1);
   });
 
+  // The maker price rests post-only: a BUY snaps DOWN. Leg A is Hyperliquid,
+  // so the 5-sig-fig cap applies too: 2499.66 → 2499.6 (nearest gives 2499.7).
+  it('snaps the maker price down for a BUY maker, not to the nearest tick', async () => {
+    const w = mkApp();
+    app = w.app;
+    mockGateGet('/rule/symbols', { body: simRules() });
+    mockGateGet('/accounts', { fixture: 'account.json' });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/deals',
+      headers: HOST,
+      payload: makerPayload({ price: '2499.66' }),
+    });
+    expect(res.statusCode, res.body).toBe(202);
+    expect(w.store.getPair('deal-000001')!.limitPrice).toBe('2499.6');
+  });
+
   it('refuses a coin outside the supported set before it ever reads a venue rule', async () => {
     const w = mkApp();
     app = w.app;
@@ -692,6 +710,24 @@ describe('deal commands + alerts', () => {
       expect(res.statusCode, price).toBe(400);
     }
     expect(w.store.getPair(w.id)!.limitPrice).toBe(before);
+  });
+
+  // A BUY re-peg snaps DOWN to the tick, so a price under one tick became "0",
+  // slipped past the empty-price check and was pinned as the maker price.
+  it('rejects a re-peg price below one tick instead of pinning 0', async () => {
+    const w = await mkWorking();
+    const before = w.store.getPair(w.id)!;
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/deals/${w.id}/repeg`,
+      headers: HOST,
+      payload: { price: '0.004' },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error.message).toMatch(/below one tick \(0\.01\)/);
+    const after = w.store.getPair(w.id)!;
+    expect(after.limitPrice).toBe(before.limitPrice);
+    expect(after.pricePolicy).toBe(before.pricePolicy);
   });
 
   it('stop → STOPPING → honest partial DONE via the driven loop', async () => {

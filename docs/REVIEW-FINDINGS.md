@@ -20,10 +20,6 @@ line numbers are omitted deliberately (they drift).
   the backoff after a failed hedge attempt, a resting maker keeps filling (and can be re-placed)
   in OPENING, while CONVERTING in the identical state pauses with "hedge owed first". Bounded by
   the hedge wall (~3 backoff windows before HALT), but strictly weaker than the rule it mirrors.
-- **Persistent read errors on a PENDING order never alert** (`src/engine/loop.ts`): the
-  read-failure streak/alert covers OPEN orders only. A PENDING order whose venue reads keep
-  erroring (revoked key, 5xx storm) freezes its pair silently, with no operator signal — even
-  though the order may be live and filling.
 - **Leg-A max-market-size check ignores `maxClip`** (`src/engine/create.ts`): the cap compares
   the FULL deal qty, but leg-A convert clips are split to at most `maxClip` — a deliberately
   clipped deal that could never send an over-cap order is rejected at creation. Fail-safe
@@ -37,10 +33,6 @@ line numbers are omitted deliberately (they drift).
   a successful-but-tierless response yields max 0, which skips the bound — and the 0 is cached
   for 10 minutes. An over-max leverage then reaches preflight, which under-reserves margin if the
   venue clamps instead of rejecting.
-- **A sub-tick explicit re-peg BUY snaps to the string `"0"`** (`src/server/routes/deals.ts`):
-  the raw input is validated `> 0`, then the directional snap floors it to `"0"`, which is truthy
-  and gets pinned as the fixed intent price — burning the reject budget with a wrong recorded
-  cause. The snapped output should be re-validated.
 - **The finish reason always blames "below B's lot"** (`src/engine/decide.ts`): an unhedged
   terminal residual is attributed to the lot even when it is whole lots blocked by
   minSize/minNotional — misleading in the post-mortem report.
@@ -61,23 +53,9 @@ line numbers are omitted deliberately (they drift).
 
 ## Web & test coverage
 
-- **The deal-view re-peg snap is nearest and side-unaware** (`web/src/trade/DealModal.tsx`):
-  `snapToTick` can round a re-peg price onto the touch; the engine then pins that price
-  (`pricePolicy 'fixed'`) into a post-only reject loop. Should use the directional
-  `formatRestPrice` like the tickets do.
-- **The server-side resting-price wiring is unpinned** (`tests/unit/format.test.ts` et al.):
-  the directional-snap helper is tested, but reverting its three call sites (actions, engine
-  create, venue gate) back to the nearest snap still passes the full suite — no test drives the
-  wiring end-to-end.
 - **The slippage band has no close-pair test** (`tests/unit/engine-loop.test.ts`): the banded
   clip is pinned for single-leg closes only; the close-PAIR path is untested, and one older test
   comment still describes the pre-fix (unpriced clip) semantics.
-- **The hand-placed-cancel test proves nothing** (`tests/server/orders.test.ts`): "still cancels
-  a hand-placed order while a deal is running" runs with no deal present, so it cannot detect a
-  guard that wrongly blocks hand-placed orders during a live deal.
-- **The Windows ACL branch has zero coverage** (`tests/unit/secret-file.test.ts`): the tests
-  exercise only the POSIX chmod path; the icacls branch — the actual substance of the Windows
-  hardening — is untested on every platform.
 
 ---
 
@@ -102,3 +80,22 @@ line numbers are omitted deliberately (they drift).
 - **The bash installers killed by argv match alone** — an editor or `tail` holding the server
   path was SIGKILLed, and a relative-args server was missed. They now confirm by the
   process's executable and sweep the private runtime, mirroring the Windows scripts.
+
+## Fixed since (2026-09-29 audit triage)
+
+- **Persistent read errors on a PENDING order never alerted** — `resolvePending` returned on a
+  read error with no counter. It now counts the streak like the OPEN path and raises one error
+  alert at the threshold, since the order may be live and filling.
+- **A sub-tick explicit re-peg BUY snapped to the string `"0"`** — the floored `"0"` was pinned
+  as the fixed maker price. The route now re-checks the snapped price and returns 400 when it is
+  below one tick.
+- **The deal-view re-peg snap was nearest and side-unaware** — `snapToTick` could round a re-peg
+  price onto the touch. The modal now uses the directional `formatRestPrice`, and a BUY below one
+  tick keeps the button disabled.
+- **The server-side resting-price wiring was unpinned** — each call site (actions, engine
+  create, venue gate touch) now has a test that fails if it goes back to the nearest snap.
+- **The hand-placed-cancel test proved nothing** — it now seeds a live deal first, so a guard
+  that wrongly blocks hand-placed orders during a deal fails it.
+- **The Windows ACL branch had zero coverage** — already covered: the "Windows branch" group in
+  `tests/unit/secret-file.test.ts` (added in the 2026-07-30 pass) drives the icacls path with a
+  stubbed `execFileSync`. This entry was stale.
