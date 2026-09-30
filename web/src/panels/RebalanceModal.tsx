@@ -17,7 +17,7 @@ import { useDebounced } from '../lib/useDebounced';
 import { useNow } from '../lib/useNow';
 import { BalanceBars, jobRows, jobSeconds, planRows, ProgressBar, ROUTE_ORDER, scaleOf, StepList, VerdictAlert } from './RebalanceBits';
 import type { BarRow, StepRow } from './RebalanceBits';
-import { AFTER_LABEL, GATE_SPOT, GOAL_LABEL, HOLD_LABEL, HOVER, MODAL_ABANDON } from './rebalanceCopy';
+import { AFTER_LABEL, GATE_SPOT, GOAL_LABEL, HOLD_ANYWAY_LABEL, HOLD_LABEL, HOVER, MODAL_ABANDON, OPTIONAL_MOVE } from './rebalanceCopy';
 import { MODAL_FEE_LABEL, MODAL_FREES, MODAL_INTEREST, MODAL_REFRESH_ROUTE, MODAL_RESUME, MODAL_STEPS, PER_MONTH } from './rebalanceCopy';
 import {
   CARD_LABEL,
@@ -361,6 +361,14 @@ export function RebalanceModal({
   // picked the amount (his catch 2026-09-19).
   const clearsBorrow = goal !== 'custom' || receivingBorrow(buckets, planSteps(plan)) !== null;
   const worth = chosen === null || !clearsBorrow ? null : worthLine(route, buckets, goal, plan.noLegs);
+  // A verdict that does not ask for the move leaves it a choice: the confirm
+  // drops to an outline and says "anyway", and a "nothing to save" verdict
+  // names the fee the choice costs.
+  const optional = worth !== null && worth.tone !== 'act';
+  const worthSub =
+    worth?.tone === 'info' && !worth.sub
+      ? OPTIONAL_MOVE(goal, route.costUsd > 0 ? fmtUsd(route.costUsd) : null)
+      : (worth?.sub ?? null);
   const scale = scaleOf(nowRows, afterRows);
   const walletPools = POOLS.filter((pool) => buckets.some((bucket) => keyOf(bucket) === poolKey(pool)));
   const presetOptions = (['even', 'repay'] as const).map((preset) => ({
@@ -554,6 +562,12 @@ export function RebalanceModal({
     } else body = (
       <>
         {header}
+        {/* The verdict FIRST, above everything it judges: read under the route
+            and its fee, "no rebalancing necessary" argued with the armed
+            confirm beneath it (his call 2026-09-30). The SAME component and
+            sentence the Balances card shows, so the verdict a trader read
+            before opening cannot disagree with the one inside the dialog. */}
+        {worth && <VerdictAlert tone={worth.tone} text={worth.text} sub={worthSub} />}
         <div className="flex flex-col gap-2 border-t border-ink-800 pt-3">
           <div className={microLabelClass}>
             <Term label="Route" text={HOVER.route} />
@@ -581,10 +595,6 @@ export function RebalanceModal({
         </div>
         <div className="flex flex-col gap-2 border-t border-ink-800 pt-3">
           <Facts items={quoteFactsOf(route, view)} />
-          {/* The SAME component and sentence the Balances card shows, so the
-              verdict a trader read before opening cannot disagree with the one
-              inside the dialog. */}
-          {worth && <VerdictAlert tone={worth.tone} text={worth.text} sub={worth.sub} />}
         </div>
         <div className="flex flex-col gap-2">
           <div className="flex flex-wrap items-center gap-3">
@@ -598,7 +608,9 @@ export function RebalanceModal({
               </button>
             ) : (
               <HoldToConfirmButton
-                tone="cyan"
+                // The one solid control is spent on a verdict that asks for
+                // the move — the Balances card's rule, kept inside the dialog.
+                tone={optional ? 'outline' : 'cyan'}
                 holdMs={holdMs}
                 disabled={lock !== null || chosen === null || start.isPending || pricing}
                 onConfirm={() =>
@@ -609,7 +621,7 @@ export function RebalanceModal({
                   )
                 }
               >
-                {HOLD_LABEL[goal]}
+                {optional ? HOLD_ANYWAY_LABEL[goal] : HOLD_LABEL[goal]}
               </HoldToConfirmButton>
             )}
             {lock !== null && <span className="text-xs text-ink-500">{lock}</span>}

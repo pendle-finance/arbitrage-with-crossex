@@ -5,6 +5,16 @@ export const borosMarketUrl = (marketId: number, direction: 'long' | 'short'): s
   `https://boros.pendle.finance/markets/${marketId}?form=market&direction=${direction}`;
 
 /**
+ * Whole days until a maturity: rounded UP, never below 0. The ONE rounding
+ * every surface prints, so the same leg cannot read a day apart on two
+ * screens (it did: Positions rounded up, Opportunities and the close form to
+ * nearest). Up, because a leg with any time left has not matured — it reads
+ * "1d", never "0d".
+ */
+export const daysToMaturity = (maturitySec: number, nowSec: number): number =>
+  Math.max(0, Math.ceil((maturitySec - nowSec) / 86_400));
+
+/**
  * Which unit a coin's size box should default to, for BOTH the perp legs and
  * the Boros legs of the same strategy.
  *

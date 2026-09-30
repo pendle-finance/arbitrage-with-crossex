@@ -1,5 +1,21 @@
 import { describe, expect, it } from 'vitest';
-import { isUsdCollateral, sizeUnitForBase } from './boros';
+import { daysToMaturity, isUsdCollateral, sizeUnitForBase } from './boros';
+
+describe('daysToMaturity', () => {
+  const NOW = 1_800_000_000;
+  const DAY = 86_400;
+  it('rounds UP, so a live leg never reads 0d and no two screens differ by a day', () => {
+    expect(daysToMaturity(NOW + 9 * DAY, NOW)).toBe(9);
+    // 9.4 days was "9d" to a nearest-rounding screen and "10d" to the rest.
+    expect(daysToMaturity(NOW + 9.4 * DAY, NOW)).toBe(10);
+    expect(daysToMaturity(NOW + 60, NOW)).toBe(1);
+  });
+
+  it('is 0 once matured, never negative', () => {
+    expect(daysToMaturity(NOW, NOW)).toBe(0);
+    expect(daysToMaturity(NOW - 3 * DAY, NOW)).toBe(0);
+  });
+});
 
 describe('sizeUnitForBase', () => {
   it('sizes the coin-margined coins in their own token', () => {

@@ -140,11 +140,13 @@ export function pairBorosCloseLegs(pair: Pick<PairEstimate, 'legs'>, group: Pick
  * locks minus what the pay leg locks, net of settlement fees. `lockedAprFwd`
  * is that same carry over CAPITAL (the leveraged figure the headline shows),
  * so the spread is recovered from it: carry per year = lockedAprFwd ×
- * capital; per-leg notional = half the pair's two perp notionals. Null when
- * either input is missing.
+ * capital; per-leg notional = half the pair's two RATE-leg notionals — the
+ * notional the carry was earned on. Not the perps': on a USD-collateral
+ * market the perp notional moves with price while the rate legs do not, and
+ * a 5% lock read 4% after a 25% rally. Null when either input is missing.
  */
-export function pairLockedSpread(pair: Pick<PairEstimate, 'lockedAprFwd' | 'capitalUsd' | 'notionalUsd'>): number | null {
-  const perLegNotional = pair.notionalUsd / 2;
+export function pairLockedSpread(pair: Pick<PairEstimate, 'lockedAprFwd' | 'capitalUsd' | 'legs'>): number | null {
+  const perLegNotional = pair.legs.reduce((t, l) => (l.kind === 'yu' ? t + l.notionalUsd : t), 0) / 2;
   return pair.lockedAprFwd !== null && perLegNotional > 0
     ? (pair.lockedAprFwd * pair.capitalUsd) / perLegNotional
     : null;
@@ -481,6 +483,9 @@ export interface PendingLeg {
   unit: 'base' | 'usd';
   /** Signed by side, as PairLegDetail.lockedApr. */
   lockedApr: number | null;
+  /** The leg's settlement fee as a yearly rate on notional, after any
+   * rebate — what a unit's spread is net of, as a 4-leg pair's is. */
+  settleFeeApr?: number;
   imUsd: number;
   /** Fraction of the venue leg (after exclusions) that no unit claimed —
    * 1 when the whole leg is pending. A close from the ungrouped list is
@@ -718,7 +723,12 @@ export function borosOnlyPairs(
         shortPerp,
         missingLong: take - (longPerp ? sizeIn(longPerp, longPerp.unit) : 0),
         missingShort: take - (shortPerp ? sizeIn(shortPerp, shortPerp.unit) : 0),
-        lockedSpread: l.lockedApr !== null && s.lockedApr !== null ? l.lockedApr + s.lockedApr : null,
+        // The 4-leg pair's definition (`pairLockedSpread`): receive minus
+        // pay, on the rate legs' notional, net of both settlement fees.
+        lockedSpread:
+          l.lockedApr !== null && s.lockedApr !== null
+            ? l.lockedApr + s.lockedApr - (l.settleFeeApr ?? 0) - (s.settleFeeApr ?? 0)
+            : null,
       });
     }
   }
@@ -1553,6 +1563,7 @@ export function deriveAsset(
       notionalUsd: b.notionalUsd * (left / (yuSize(b) || 1)),
       unit,
       lockedApr: pendingEntry === null ? null : (b.side === 'SHORT' ? 1 : -1) * pendingEntry,
+      settleFeeApr: rebatedSettleApr(b.settleFeeApr ?? 0, rebate, b.marketId),
       imUsd: b.imUsd * (left / whole),
       share: left / whole,
     });

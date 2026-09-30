@@ -79,6 +79,6 @@ describe('RollOverBanner', () => {
 
   it('nothing published, nothing rendered', () => {
     render([]);
-    expect(screen.queryByText(/Roll over now|can roll over/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Roll over now|due to roll/)).not.toBeInTheDocument();
   });
 });

@@ -18,16 +18,21 @@
  * shortfall — so the form shows what the close will DO rather than what the
  * position currently IS.
  *
- * Each leg is its own request: the route takes one marketId, and a partial
- * failure must leave the other leg's outcome legible.
+ * **Two legs go out as ONE batch.** A pair's rate legs are one hedge, so they
+ * close through `/boros/pair/execute` (intent `close`) — the path the ticket's
+ * Reduce-only uses: the server re-runs the gate, the venue accepts both
+ * orders or neither, and the ids replay instead of closing twice. Two
+ * separate requests could close one leg and fail the other, leaving a naked
+ * rate leg (his call 2026-09-30). A single leg — and the remainder after one
+ * leg of a pair is done — keeps its own cancel-and-close request.
  */
 import { Check, ChevronRight } from 'lucide-react';
-import { useMemo, useState } from 'react';
-import type { BorosPairRequest, BorosSimulatedLeg, StrategyLeg } from '../api/types';
+import { useEffect, useMemo, useState } from 'react';
+import type { BorosLegFill, BorosPairRequest, BorosSimulatedLeg, StrategyLeg } from '../api/types';
 import { VenueIcon } from '../components/AssetIcon';
 import { SignedNumber } from '../components/SignedNumber';
 import { QueryError } from '../components/QueryError';
-import { knownRate } from '../lib/boros';
+import { daysToMaturity, knownRate } from '../lib/boros';
 import { fieldValue, fmtDateLocal, fmtPct, fmtTokenQty, fmtUsd, prettyVenue, sigGrouped } from '../lib/fmt';
 import { AffixedInput, EstimateCard, EstimateRow, LegCard, SlippageLine } from './PairTicketBits';
 import { FieldLabel } from './SymbolCombobox';
@@ -36,10 +41,15 @@ import {
   useBorosCancelAndClose,
   useBorosPairContext,
   useBorosPairSimulation,
+  useExecuteBorosPair,
 } from '../api/queries';
 import { HoldToConfirmButton } from '../components/HoldToConfirmButton';
+import { uuid } from '../lib/uuid';
 import { useActiveWallet } from '../panels/trackedAddress';
 import { BorosLogInButton } from './BorosAgentSetup';
+
+/** Replay keys for the two-leg batch: one pair per intent, reused on a retry. */
+const newOrderIds = () => ({ a: `a-${uuid()}`, b: `b-${uuid()}` });
 
 /** Used until the market's own deviation cap is known, or if it is degenerate. */
 const FALLBACK_SLIPPAGE_PCT = 1;
@@ -72,6 +82,8 @@ export function CloseBorosForm({
   onDone?: () => void;
 }) {
   const close = useBorosCancelAndClose();
+  const execute = useExecuteBorosPair();
+  const busy = close.isPending || execute.isPending;
   const agent = useBorosAgent();
   const { address, canTrade, loginLabel } = useActiveWallet();
   /**
@@ -95,6 +107,8 @@ export function CloseBorosForm({
    * dressed up: that is requested − filled, which is the same number only when
    * the request covered the whole venue position. */
   const [partial, setPartial] = useState<{ marketId: number; filled: number; left: number }[]>([]);
+  /** A refusal of the two-leg batch as a whole — one reason, said once. */
+  const [batchError, setBatchError] = useState<string | null>(null);
 
   const closable = useMemo(() => legs.filter((l) => l.marketId !== undefined), [legs]);
   /**
@@ -238,18 +252,35 @@ export function CloseBorosForm({
       // the two — the honest figure when the legs differ.
       size: Math.min(...closable.map((l) => sizeOf(l).value)),
       intent: 'close',
+      // A close IS the reduction the gate asks to have acknowledged.
+      opposingAcknowledged: true,
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [address, closable, slipStr, sizeEdited, slipInvalid, anySizeInvalid, ctx.data]);
 
   const sim = useBorosPairSimulation(simReq, simReq !== null);
+  // A replay key belongs to ONE intent: a different size or tolerance is a
+  // different order and must not be answered with the previous one's fills.
+  const [orderIds, setOrderIds] = useState(newOrderIds);
+  useEffect(() => {
+    setOrderIds(newOrderIds());
+  }, [slipStr, sizeEdited]);
+  /** Both legs still to close: they go out as one gated batch, so every
+   * blocker the quote carries is about a real leg and the server will refuse
+   * on it. Once one leg is done the quote's partner is synthetic again. */
+  const atomic = closable.length === 2 && done.length === 0;
   /** Boros refuses an order worth $10 or less, and the close cancels resting
    * orders before it prices anything — so letting it through costs those
-   * orders and closes nothing. Only this blocker: the quote is a synthetic
-   * pair, and its other blockers describe the zero-sized partner leg. */
-  const anyBelowMin = (sim.data?.gate.blockers ?? []).some(
-    (b) => b.code === 'below-min-order-value' && closable.some((l) => l.marketId === b.marketId),
-  );
+   * orders and closes nothing. For a single leg, only this blocker: the quote
+   * is a synthetic pair, and its other blockers describe the zero-sized
+   * partner leg. */
+  const belowMinFor = (b: { code: string; marketId?: number }) =>
+    b.code === 'below-min-order-value' && closable.some((l) => l.marketId === b.marketId);
+  const gateBlockers = sim.data?.gate.blockers ?? [];
+  const anyBelowMin = gateBlockers.some(belowMinFor);
+  /** What stops the two-leg batch, beyond a leg under the venue minimum
+   * (which is said on its own leg). The server refuses on the same list. */
+  const batchBlockers = atomic ? gateBlockers.filter((b) => !belowMinFor(b)) : [];
   const simLegFor = (i: number): BorosSimulatedLeg | null => {
     const s = sim.data?.simulation;
     if (!s) return null;
@@ -260,20 +291,25 @@ export function CloseBorosForm({
    * Estimated slippage: how far each leg's execution sits from its own mid,
    * worst leg first — a bound that clears the worst leg clears them all.
    * Per leg, never summed: a close is one rate per market, not a spread.
+   * The quote's own figure, off the mid the bound is anchored to — not a
+   * second reading against the context's mid, which polls on its own clock.
    */
   const estSlippageApr = ((): number | null => {
     // A one-leg close quotes with a synthetic, zero-sized partner leg B
     // purely to make the pair eligible — its slippage is not this close's.
     const sim = simLegFor(0) ? (closable.length > 1 ? [simLegFor(0), simLegFor(1)] : [simLegFor(0)]) : [];
     const gaps = sim
-      .map((leg) => {
-        if (!leg || leg.execApr === null) return null;
-        const mid = ctx.data?.markets.find((m) => m.marketId === leg.marketId)?.midApr;
-        return knownRate(mid) ? Math.abs(leg.execApr - mid) : null;
-      })
-      .filter((n): n is number => n !== null);
+      .map((leg) => leg?.estSlippageApr ?? null)
+      .filter((n): n is number => n !== null)
+      // A fill better than mid is no slippage, not a negative one.
+      .map((n) => Math.max(0, n));
     return gaps.length > 0 ? Math.max(...gaps) : null;
   })();
+  /** No quote can be made at all: the markets are in, the inputs are valid,
+   * and this single leg has no sibling market to quote against. The close
+   * still goes out — its bound is mid ± the tolerance — so it is allowed,
+   * and said. While the markets are still loading the confirm waits. */
+  const unquoted = simReq === null && !ctx.isLoading && !legsBlocked && !slipInvalid && !anySizeInvalid;
 
 
   const agentBlocked = agent.isSuccess && !canTrade;
@@ -294,18 +330,122 @@ export function CloseBorosForm({
   const residualYours = done.reduce((sum, d) => sum + d.yours, 0);
   const residualOthers = done.reduce((sum, d) => sum + d.others, 0);
 
+  /**
+   * One leg's venue answer, folded into the form's outcomes.
+   *
+   * ⚠ A 200 is NOT a close.
+   *
+   * Both routes answer 200 for "nothing to close" (no fill) and for a fill
+   * that fell short or was rejected at the venue (fill.failure). Reporting
+   * HTTP success as a closed position told the user their position was gone
+   * while it was still open — the worst possible lie on a trading surface.
+   * Read the outcome instead.
+   */
+  const settle = (
+    l: StrategyLeg,
+    requested: number,
+    fill: BorosLegFill | null,
+    /** What the venue held when the close was sized, when the route says. */
+    openSize: number | undefined,
+    nothingClosed: string,
+  ) => {
+    const id = l.marketId as number;
+    // The same tolerance the depth warning uses: a book that fully covers
+    // 419.5 answers 419.49999999, and calling that a shortfall reads as "no
+    // depth" on a market with plenty.
+    const dust = Math.max(1e-6, requested * 1e-6);
+    /**
+     * The venue client stamps EVERY short fill with an `insufficient-depth`
+     * failure, including one that took most of the size. That is a partial,
+     * not a failure: something came off and the remainder is what the second
+     * press must be armed with. Only a fill that took NOTHING, or failed for
+     * another reason, is a failure.
+     */
+    const partialFill =
+      fill !== null &&
+      fill.filledSize > 0 &&
+      fill.filledSize < requested - dust &&
+      (fill.failure === null || fill.failure.code === 'insufficient-depth');
+    if (fill?.failure && !partialFill) {
+      setFailed((prev) => [...prev, { marketId: id, message: fill.failure!.message }]);
+    } else if (!fill) {
+      setFailed((prev) => [...prev, { marketId: id, message: nothingClosed }]);
+    } else if (partialFill) {
+      // SHORT of what was asked: the book ran out inside the rate bound.
+      // The only outcome that leaves something for a second press — so it
+      // is also the only one that re-seeds the size, below, rather than
+      // leaving the original amount armed under a line saying it is done.
+      const filled = fill.filledSize;
+      const left = requested - filled;
+      setPartial((prev) => [...prev, { marketId: id, filled, left }]);
+      // Re-seed the shared box with what this leg still has open. With
+      // one size for both, the SMALLEST remainder is the one that can be
+      // closed on both legs — arming more would re-strand the other.
+      setSizeEdited((prev) => {
+        const n = Number(prev ?? '');
+        return Number.isFinite(n) && n > 0 ? fieldValue(Math.min(n, left)) : fieldValue(left);
+      });
+      onClosed?.(l, filled);
+    } else {
+      // Everything asked for came off. What the venue still holds splits
+      // in two, and only one half is somebody else's — worth SAYING,
+      // neither worth arming a second close over.
+      const filled = fill.filledSize;
+      const mine = l.notionalToken ?? filled;
+      // This card's own share that the user chose not to close.
+      const yours = Math.max(0, mine - filled);
+      // The rest of the venue leg, which other positions hold.
+      const others = Math.max(0, (openSize ?? mine) - mine);
+      setDone((prev) => [
+        ...prev,
+        { marketId: id, yours: yours > dust ? yours : 0, others: others > dust ? others : 0 },
+      ]);
+      onClosed?.(l, filled);
+    }
+  };
+
   const run = async () => {
     setFailed([]);
     setPartial([]);
+    setBatchError(null);
     if (legsBlocked) return;
+
+    // Both legs of a pair: ONE gated batch, accepted whole or not at all.
+    if (atomic && simReq) {
+      const requested = simReq.size;
+      try {
+        const res = await execute.mutateAsync({ ...simReq, clientOrderIdA: orderIds.a, clientOrderIdB: orderIds.b });
+        const fills = [res.result.legA, res.result.legB];
+        // A refused batch fails every leg with the one reason the venue
+        // gave, so it is said once rather than once per leg.
+        const refused =
+          fills.every((f) => f.failure !== null && f.filledSize === 0) &&
+          fills[0].failure!.message === fills[1].failure!.message;
+        if (refused) {
+          setBatchError(fills[0].failure!.message);
+        } else {
+          closable.forEach((l, i) => {
+            const f = fills[i];
+            // A leg the server had nothing to send for comes back empty and
+            // unfailed: there was no position on it.
+            const sent = f.filledSize === 0 && f.shortfallSize === 0 && f.failure === null ? null : f;
+            const open = ctx.data?.markets.find((m) => m.marketId === l.marketId)?.currentSize;
+            settle(l, requested, sent, open === undefined ? undefined : Math.abs(open), 'There was no open position to close.');
+          });
+        }
+        // An outcome the venue never confirmed keeps its ids: a second hold
+        // is answered from the server's memo instead of closing twice.
+        if (!fills.some((f) => f.failure?.code === 'unknown')) setOrderIds(newOrderIds());
+      } catch (err) {
+        setBatchError(err instanceof Error ? err.message : String(err));
+      }
+      return;
+    }
+
     for (const l of closable) {
       const id = l.marketId as number;
       if (done.some((d) => d.marketId === id)) continue;
       const requested = sizeOf(l).value;
-      // The same tolerance the depth warning uses: a book that fully covers
-      // 419.5 answers 419.49999999, and calling that a shortfall reads as "no
-      // depth" on a market with plenty.
-      const dust = Math.max(1e-6, requested * 1e-6);
       try {
         const r = await close.mutateAsync({
           marketId: id,
@@ -313,71 +453,15 @@ export function CloseBorosForm({
           slippageApr: slipPct / 100,
           ...(address ? { address } : {}),
         });
-        /**
-         * ⚠ A 200 is NOT a close.
-         *
-         * The route answers 200 for "cancelled, nothing to close" (fill null)
-         * and for a fill that fell short or was rejected at the venue
-         * (fill.failure). Reporting HTTP success as a closed position told the
-         * user their position was gone while it was still open — the worst
-         * possible lie on a trading surface. Read the outcome instead.
-         */
-        /**
-         * The venue client stamps EVERY short fill with an
-         * `insufficient-depth` failure, including one that took most of the
-         * size. That is a partial, not a failure: something came off and the
-         * remainder is what the second press must be armed with. Only a fill
-         * that took NOTHING, or failed for another reason, is a failure.
-         */
-        const partialFill =
-          r.fill !== null &&
-          r.fill.filledSize > 0 &&
-          r.fill.filledSize < requested - dust &&
-          (r.fill.failure === null || r.fill.failure.code === 'insufficient-depth');
-        if (r.fill?.failure && !partialFill) {
-          setFailed((prev) => [...prev, { marketId: id, message: r.fill!.failure!.message }]);
-        } else if (!r.fill) {
-          setFailed((prev) => [
-            ...prev,
-            {
-              marketId: id,
-              message: r.cancelled
-                ? 'Resting orders were cancelled, but there was no open position to close.'
-                : 'Nothing was closed.',
-            },
-          ]);
-        } else if (partialFill) {
-          // SHORT of what was asked: the book ran out inside the rate bound.
-          // The only outcome that leaves something for a second press — so it
-          // is also the only one that re-seeds the size, below, rather than
-          // leaving the original amount armed under a line saying it is done.
-          const filled = r.fill!.filledSize;
-          const left = requested - filled;
-          setPartial((prev) => [...prev, { marketId: id, filled, left }]);
-          // Re-seed the shared box with what this leg still has open. With
-          // one size for both, the SMALLEST remainder is the one that can be
-          // closed on both legs — arming more would re-strand the other.
-          setSizeEdited((prev) => {
-            const n = Number(prev ?? '');
-            return Number.isFinite(n) && n > 0 ? fieldValue(Math.min(n, left)) : fieldValue(left);
-          });
-          onClosed?.(l, filled);
-        } else {
-          // Everything asked for came off. What the venue still holds splits
-          // in two, and only one half is somebody else's — worth SAYING,
-          // neither worth arming a second close over.
-          const filled = r.fill!.filledSize;
-          const mine = l.notionalToken ?? filled;
-          // This card's own share that the user chose not to close.
-          const yours = Math.max(0, mine - filled);
-          // The rest of the venue leg, which other positions hold.
-          const others = Math.max(0, (r.openSize ?? mine) - mine);
-          setDone((prev) => [
-            ...prev,
-            { marketId: id, yours: yours > dust ? yours : 0, others: others > dust ? others : 0 },
-          ]);
-          onClosed?.(l, filled);
-        }
+        settle(
+          l,
+          requested,
+          r.fill,
+          r.openSize,
+          r.cancelled
+            ? 'Resting orders were cancelled, but there was no open position to close.'
+            : 'Nothing was closed.',
+        );
       } catch (err) {
         setFailed((prev) => [
           ...prev,
@@ -470,7 +554,7 @@ export function CloseBorosForm({
           and where the mark is now. */}
       <div className="flex flex-col gap-1.5">
         {closable.map((l) => {
-          const days = l.maturity ? Math.max(0, Math.round((l.maturity - nowSec) / 86_400)) : null;
+          const days = l.maturity ? daysToMaturity(l.maturity, nowSec) : null;
           return (
             <LegCard
               key={l.marketId}
@@ -699,6 +783,14 @@ export function CloseBorosForm({
                   {noticeFor(f)}
                 </span>
               ))}
+              {/* What stops the batch as a whole — the server's own words,
+                  the same list it will refuse on. */}
+              {batchBlockers.map((b) => (
+                <span key={`${b.code}-${b.marketId ?? ''}`} className="text-[11px] text-rose-400">
+                  {b.message}
+                </span>
+              ))}
+              {batchError && <span className="text-[11px] text-rose-400">{batchError}</span>}
             </div>
           );
         })()}
@@ -732,12 +824,24 @@ export function CloseBorosForm({
         <HoldToConfirmButton
           tone="red"
           // No quote, no close: a hold with the numbers blank sends a bound
-          // nothing on screen describes.
-          disabled={close.isPending || slipInvalid || anySizeInvalid || agentBlocked || legsBlocked || sim.isError || (simReq !== null && !sim.data) || anyBelowMin}
+          // nothing on screen describes. That covers the moment the markets
+          // are still loading; a leg that CAN have no quote says so below.
+          disabled={
+            busy ||
+            slipInvalid ||
+            anySizeInvalid ||
+            agentBlocked ||
+            legsBlocked ||
+            sim.isError ||
+            ctx.isLoading ||
+            (simReq !== null && !sim.data) ||
+            anyBelowMin ||
+            batchBlockers.length > 0
+          }
           onConfirm={run}
           className="w-full"
         >
-          {close.isPending ? (
+          {busy ? (
             'Closing…'
           ) : (
             <>
@@ -747,11 +851,18 @@ export function CloseBorosForm({
           )}
         </HoldToConfirmButton>
         )}
+        {!loginLabel && unquoted && (
+          <p className="text-[11px] leading-relaxed text-amber-400/90">
+            No quote is available for this market. The close still goes out, within {slipStr}% of mid.
+          </p>
+        )}
         {!loginLabel && (
           <p className="text-[11px] leading-relaxed text-ink-400">
             {closable.length === 1
               ? 'Cancels resting orders, then sends 1 market order. The perp stays open.'
-              : `Cancels resting orders, then sends ${closable.length} market orders. Size is capped at the open size.`}
+              : atomic
+                ? 'Sends both market orders as one batch: the venue accepts both or neither. Size is capped at the open size.'
+                : `Cancels resting orders, then sends the remaining market order. Size is capped at the open size.`}
           </p>
         )}
       </div>
