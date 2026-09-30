@@ -2,7 +2,7 @@
  * The roll-over path through the asset card: a pair whose rate legs mature
  * inside the roll window (EXPIRY_WARN_SEC) is counted once in the banner, flagged on its
  * card in the 4 Leg Pairs tab, and offered a Roll over button that opens
- * the popup. A pair outside the window gets none of it.
+ * the popup. A pair outside the window keeps only the button, un-nudged.
  */
 import { cleanup, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -390,10 +390,23 @@ describe('AssetCard — roll over', () => {
     expect(within(panel).queryByText(/Boros legs? missing/)).not.toBeInTheDocument();
   });
 
-  it('a pair maturing in 40 days: no banner, no flag, no button', () => {
+  it('a pair maturing in 40 days: no banner, no flag, a folded card — and a plain Roll over button inside it', async () => {
     renderCard(book(40));
     expect(screen.queryByText(/can roll over|Roll over now/)).not.toBeInTheDocument();
     expect(screen.queryByText('ready to roll')).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Roll over' })).not.toBeInTheDocument();
+    // Nothing reminds outside the window: the card stays folded.
+    const panel = screen.getByRole('tabpanel', { name: /4 Leg Pairs/ });
+    expect(within(panel).queryByRole('button', { name: 'Roll over' })).not.toBeInTheDocument();
+
+    // The roll itself is the trader's at any time (his call 2026-09-30):
+    // unfold the pair and the action is there, without the nudge.
+    await userEvent.click(within(panel).getByRole('button', { name: /Gate LONG \/ Hyperliquid SHORT/ }));
+    const roll = within(panel).getByRole('button', { name: 'Roll over' });
+    expect(roll).not.toHaveClass('roll-nudge');
+    await userEvent.click(roll);
+    expect(within(screen.getByRole('dialog')).getByRole('heading', { name: 'Roll over — Gate / Hyperliquid' })).toBeInTheDocument();
+    // Opening it by hand raises no banner and no flag.
+    expect(screen.queryByText(/can roll over|Roll over now/)).not.toBeInTheDocument();
+    expect(screen.queryByText('ready to roll')).not.toBeInTheDocument();
   });
 });

@@ -92,6 +92,7 @@ import {
   perpKey,
   pairBorosCloseLegs,
   pairCanRoll,
+  pairRollDue,
   pairLockedSpread,
   pairPerpCloseLegs,
   entryAprOf,
@@ -415,7 +416,7 @@ function PairCard({
   focusOnShow?: boolean;
   onClosePerps: () => void;
   onCloseBoros: () => void;
-  /** Opens the roll-over popup for this pair (offered inside the window). */
+  /** Opens the roll-over popup for this pair (offered until it matures). */
   onRollOver: () => void;
   /** The card's roll signal for the asset's banner: the best maturity a
    * fifth of this pair could roll into at a better rate than it earns now,
@@ -423,7 +424,10 @@ function PairCard({
   onRollSignal?: (opportunities: RollOpportunity[]) => void;
 }) {
   const [open, setOpen] = useState(defaultOpen);
+  // The roll is OFFERED on any live pair; everything that reminds — the
+  // chips, the probes, "Show me", the button's colour — waits for the window.
   const canRoll = pairCanRoll(pair, nowSec);
+  const rollDue = pairRollDue(pair, nowSec);
   // "Show me" on the banner: expand every rollable pair, whatever the user
   // last left it at, and bring the one that matters to the top of the
   // viewport — the banner sits above the hero, the pairs list under it,
@@ -431,7 +435,7 @@ function PairCard({
   // 2026-09-20). Only on the click (nonce > 0), never on mount.
   const rootRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    if (!(showRollNonce > 0 && canRoll)) return;
+    if (!(showRollNonce > 0 && rollDue)) return;
     setOpen(true);
     if (focusOnShow && typeof rootRef.current?.scrollIntoView === 'function') {
       rootRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -506,11 +510,11 @@ function PairCard({
    * one goes up to the banner (his call 2026-09-20).
    */
   const rollAddress = useTrackedAddressOptional()?.address ?? null;
-  const rollCtx = useBorosPairContext(canRoll ? rollAddress : null);
+  const rollCtx = useBorosPairContext(rollDue ? rollAddress : null);
   const rollMarkets = rollCtx.data?.markets;
   const probeTargets = useMemo(
-    () => (canRoll && rollMarkets ? rollTargetsFor(rollMarkets, pair, base, soonest) : []),
-    [canRoll, rollMarkets, pair, base, soonest],
+    () => (rollDue && rollMarkets ? rollTargetsFor(rollMarkets, pair, base, soonest) : []),
+    [rollDue, rollMarkets, pair, base, soonest],
   );
   const { yuLegs: rollYuLegs, heldSize: rollHeldSize, pairPerpImUsd: rollPerpImUsd } = pairRollGeometry(pair);
   const [probes, setProbes] = useState<Record<number, RollProbeResult>>({});
@@ -620,7 +624,7 @@ function PairCard({
                   {prettyVenue(pair.shortVenue)}
                   <span className="text-[9.5px] font-semibold tracking-[0.1em] text-guava">SHORT</span>
                 </span>
-                {canRoll && opportunity !== null && (
+                {rollDue && opportunity !== null && (
                   <Chip
                     sm
                     tone="green"
@@ -637,7 +641,7 @@ function PairCard({
                     roll opportunity
                   </Chip>
                 )}
-                {canRoll && opportunity === null && (
+                {rollDue && opportunity === null && (
                   <Chip
                     sm
                     tone="blue"
@@ -784,9 +788,9 @@ function PairCard({
 
           {/* Share alone on the left — it is an export of what
               the card shows, so it sits apart from the
-              trades. The trades on the right as pills; the roll-over is the
-              one coloured control, and it appears exactly when the row's
-              "ready to roll" chip does. */}
+              trades. The trades on the right as pills; the roll-over is
+              there on every live pair, and turns into the one coloured
+              control exactly when the row's "ready to roll" chip shows. */}
           <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
             <span className="inline-flex flex-wrap items-center gap-2.5 text-[11px] text-ink-400">
               {canSharePair && (
@@ -837,7 +841,11 @@ function PairCard({
               {canRoll && (
                 <button
                   type="button"
-                  className={`${pill} roll-nudge !border-grass/60 !text-grass hover:!border-grass hover:!bg-grass/10`}
+                  className={
+                    rollDue
+                      ? `${pill} roll-nudge !border-grass/60 !text-grass hover:!border-grass hover:!bg-grass/10`
+                      : `${pill} hover:!border-grass/60 hover:!text-grass`
+                  }
                   title="Move the Boros legs to a later maturity."
                   onClick={onRollOver}
                 >
@@ -4596,7 +4604,7 @@ export function AssetCard({
   const nowSec = Math.floor(Date.now() / 1000);
   // Pairs inside the roll window — the banner's count, and the cards it
   // points at carry the same flag.
-  const rollable = derived.pairs.filter((p) => pairCanRoll(p, nowSec));
+  const rollable = derived.pairs.filter((p) => pairRollDue(p, nowSec));
   /** Where "Show me" lands: the FIRST pair inside the window, so every
    * rollable pair below it is in view too. Landing on the best opportunity
    * scrolled the first pair off the top (his catch 2026-09-20). */
@@ -5245,10 +5253,10 @@ null
                 pair={p}
                 base={group.base}
                 nowSec={nowSec}
-                // A pair that can roll opens expanded: its Roll over action
+                // A pair due a roll opens expanded: its Roll over action
                 // lives in the expansion, and the flag on the summary row
                 // is the reason the user came to this tab.
-                defaultOpen={pairCanRoll(p, nowSec)}
+                defaultOpen={pairRollDue(p, nowSec)}
                 showRollNonce={showRollNonce}
                 focusOnShow={p === showTarget}
                 onClosePerps={() => setClosePerps(p)}

@@ -35,7 +35,7 @@ export const SECONDS_IN_YEAR = 365 * 24 * 3600;
 export const HEDGE_TOLERANCE = 0.02;
 
 /** Boros coverage that lapses within this window gets an expiry warning —
- * and is the window a pair may be rolled in. 10 days, not the original 14:
+ * and is the window a roll is recommended in. 10 days, not the original 14:
  * his call 2026-09-20. Change it HERE only; the guide copy, the chip and
  * the tests all read this one number. */
 export const EXPIRY_WARN_SEC = 10 * 24 * 3600;
@@ -160,13 +160,23 @@ export const entryAprOf = (side: 'LONG' | 'SHORT', lockedApr: number): number =>
   side === 'SHORT' ? lockedApr : -lockedApr;
 
 /**
- * A pair whose rate legs mature inside the expiry-warn window and have not
- * matured yet — what the roll-over banner counts and the pair card flags.
- * Same window as a venue's `expiresSoon`, read per unit.
+ * A pair whose rate legs have not matured yet — what the pair card's Roll
+ * over action is offered on. No window: a roll is the trader's to make at
+ * any time (his call 2026-09-30); the window only decides when the app
+ * REMINDS (`pairRollDue`).
  */
 export function pairCanRoll(pair: Pick<PairEstimate, 'soonestMaturitySec'>, nowSec: number): boolean {
-  const m = pair.soonestMaturitySec;
-  return m > nowSec && m - nowSec < EXPIRY_WARN_SEC;
+  return pair.soonestMaturitySec > nowSec;
+}
+
+/**
+ * A pair whose rate legs mature inside the expiry-warn window and have not
+ * matured yet — what the roll-over banner counts, the pair card flags and
+ * the roll signal probes. Same window as a venue's `expiresSoon`, read per
+ * unit.
+ */
+export function pairRollDue(pair: Pick<PairEstimate, 'soonestMaturitySec'>, nowSec: number): boolean {
+  return pairCanRoll(pair, nowSec) && pair.soonestMaturitySec - nowSec < EXPIRY_WARN_SEC;
 }
 
 /** A leg's size in the unit a card displays: coin quantity or dollars. */
