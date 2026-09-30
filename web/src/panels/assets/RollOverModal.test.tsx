@@ -709,7 +709,7 @@ describe('RollOverModal — the review page', () => {
     // Hyperliquid SHORT locked 8%, closed at 6% → gains the same. 0.0877 ETH
     // at $2,500 = $219.18, before the fees PairCosts lists.
     const label = await within(dialog).findByText(/Est\. total trade PnL/);
-    expect(within(dialog).getByText('+$219.18')).toBeInTheDocument();
+    expect(within(dialog).getByText('$219.18')).toBeInTheDocument();
     const title = label.getAttribute('title') ?? '';
     // One row per leg: "venue · locked → exec" on the left, its PnL on the right.
     expect(title).toMatch(/Gate · 4\.00% → 6\.00%\t\$109\.59/);

@@ -222,6 +222,25 @@ describe('POST /api/boros/pair/simulate', () => {
     expect(calls.filter((c) => c.startsWith('/apis/v1/markets/order-book'))).toHaveLength(2);
   });
 
+  it('re-reads the mid for a quote after 5s, not the 30s the rest of the app keeps the markets for', async () => {
+    // Every bound and "Est." is measured from the market's mid. At the shared
+    // 30s it was ten times older than the 3s book beside it, and the execute
+    // (always a fresh read) could price a different bound than the one shown.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const calls: string[] = [];
+    makeApp({}, calls);
+    const lists = () =>
+      calls.filter((c) => c.startsWith('/apis/v1/markets') && !c.includes('order-book') && !c.includes('by-ids')).length;
+    await post('/api/boros/pair/simulate', pairBody());
+    const first = lists();
+    expect(first).toBeGreaterThan(0);
+    await post('/api/boros/pair/simulate', pairBody());
+    expect(lists()).toBe(first);
+    vi.setSystemTime(Date.now() + 6_000);
+    await post('/api/boros/pair/simulate', pairBody());
+    expect(lists()).toBe(first + 1);
+  });
+
   it('surfaces an ineligible pair as a reason instead of pricing it', async () => {
     const other = market(BN, 'Binance', 0.045);
     other.imData.maturity = MATURITY + DAY;

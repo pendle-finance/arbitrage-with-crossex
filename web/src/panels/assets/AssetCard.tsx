@@ -40,7 +40,6 @@ import { useTradeFlowOptional } from '../../trade/TradeFlow';
 import { useActiveWallet, useTrackedAddressOptional } from '../trackedAddress';
 import {
   useBorosAgent,
-  useBorosCancelAndClose,
   useBorosPairContext,
   useBorosPairSimulation,
   useBorosRollSimulation,
@@ -102,7 +101,7 @@ import {
   perpOnlyPairs,
   sizeIn,
 } from './assetModel';
-import { knownRate } from '../../lib/boros';
+import { daysToMaturity, knownRate } from '../../lib/boros';
 import { rebatedSettleApr } from '../../lib/rebate';
 import { useDebounced } from '../../lib/useDebounced';
 import { AssetBars } from './AssetBars';
@@ -216,7 +215,7 @@ const exactSize = (size: number, unit: 'base' | 'usd', base: string): string =>
 
 /** "16d left" / "matured" — the term in the unit a trader thinks in. */
 const daysLeftText = (maturitySec: number, nowSec: number): string => {
-  const days = Math.ceil((maturitySec - nowSec) / 86_400);
+  const days = daysToMaturity(maturitySec, nowSec);
   return days > 0 ? `${days}d left` : 'matured';
 };
 
@@ -237,7 +236,7 @@ function PairTimeline({
   const start = openedSec ?? maturitySec - SECONDS_IN_YEAR / 12;
   const span = Math.max(1, maturitySec - start);
   const pct = Math.max(0, Math.min(100, ((nowSec - start) / span) * 100));
-  const daysLeft = Math.max(0, Math.ceil((maturitySec - nowSec) / 86_400));
+  const daysLeft = daysToMaturity(maturitySec, nowSec);
   return (
     <div className="mb-4 flex flex-col gap-1.5">
       <div className="relative h-1 rounded-full bg-ink-800">
@@ -1977,7 +1976,6 @@ function RollReview({
   const agent = useBorosAgent();
   const { canTrade, loginLabel } = useActiveWallet();
   const executeRoll = useExecuteBorosRoll();
-  const cancelClose = useBorosCancelAndClose();
   const topUpGas = useTopUpGas();
   const [gasTopUpStr, setGasTopUpStr] = useState('5');
   const longLeg = yuLegs.find((l) => l.venue === pair.longVenue);
@@ -2203,7 +2201,7 @@ function RollReview({
    * simulation output (his call 2026-09-20).
    */
   const fig = rollFigures({ entrySim: entrySim ?? undefined, exitSim: exitSim ?? undefined, size, perpImUsd, maturity: target.maturity, longLeg, shortLeg, nowSec });
-  const termDays = Math.max(0, Math.ceil((target.maturity - nowSec) / 86_400));
+  const termDays = daysToMaturity(target.maturity, nowSec);
   const dayOneUsd = fig.totalCostUsd !== null && fig.exitPnlUsd !== null ? fig.exitPnlUsd - fig.totalCostUsd : null;
   const marginOk = marginNeed !== null && availableAfter !== null && marginShort === 0;
 
@@ -2365,8 +2363,6 @@ function RollReview({
         // its batch already says so, in amber, next to the Max that fixes
         // it — a second, red copy here explained nothing new.
         blockers={blockers.filter((b) => b.code !== 'slippage-exceeds-max')}
-        busyMarketId={cancelClose.isPending ? (cancelClose.variables?.marketId ?? null) : null}
-        onCancelAndClose={canTrade ? (marketId) => cancelClose.mutate({ marketId }) : undefined}
       />
       <GasTopUp
         gasBalanceUsd={roll.data?.gasBalanceUsd}
@@ -2563,7 +2559,7 @@ function RollOption({
             <span className="ml-1.5 text-[12px] font-normal text-ink-300">fixed</span>
           </span>
           <span className="num text-[11.5px] text-ink-400" title="The day the rolled legs settle.">
-            {Math.max(0, Math.ceil((target.maturity - nowSec) / 86_400))}d ({fmtDateLocal(target.maturity)})
+            {daysToMaturity(target.maturity, nowSec)}d ({fmtDateLocal(target.maturity)})
           </span>
         </span>
       </button>
@@ -3247,7 +3243,7 @@ function UngroupedCard({
               {yus.map((l) => {
                 const leg = group.borosOpen.find((b) => b.marketId === l.marketId);
                 const can = leg !== undefined;
-                const days = Math.ceil((l.maturity - nowSec) / 86_400);
+                const days = daysToMaturity(l.maturity, nowSec);
                 return (
                   <tr key={`y-${l.marketId}`}>
                     <td className="whitespace-nowrap">
@@ -3277,7 +3273,7 @@ function UngroupedCard({
                         </span>
                       )}
                     </td>
-                    <td className="num text-right font-semibold" title="The fixed rate this leg locks, net of settlement fees. + receives, − pays.">
+                    <td className="num text-right font-semibold" title="The fixed rate this leg locks, net of settlement fees. A minus means the leg pays.">
                       {l.lockedApr !== null ? (
                         <SignedNumber value={l.lockedApr} format={fmtPct} />
                       ) : (
@@ -3875,7 +3871,7 @@ function BorosRow({
             <span title="Maturity. The leg settles and ends here.">
               {fmtDateLocal(leg.maturity)}
               {(() => {
-                const days = Math.ceil((leg.maturity - Date.now() / 1000) / 86400);
+                const days = daysToMaturity(leg.maturity, Date.now() / 1000);
                 return days > 0 ? (
                   <>
                     {' · '}
@@ -4923,7 +4919,7 @@ export function AssetCard({
               title={`Carry − fees\t${fmtUsd(totals.pnlUsd - totals.priceResidualUsd)}\nOpen marks\t${fmtUsd(totals.breakdown.perpUpnlUsd)}\nClosed realized price\t${fmtUsd(totals.priceResidualUsd - totals.breakdown.perpUpnlUsd)}\n---\nTotal PnL\t${fmtUsd(totals.pnlUsd)}\n* Click for the full breakdown.`}
               onClick={() => setFeesOpen(true)}
             >
-              <SignedNumber value={totals.pnlUsd} format={fmtUsd} plus={false} />
+              <SignedNumber value={totals.pnlUsd} format={fmtUsd} />
               {/* The mock's "value + breakdown" trigger: a quiet round pie
                   beside the figure, so the breakdown is a visible control and
                   not a secret of the number. */}
@@ -4945,7 +4941,7 @@ export function AssetCard({
             >
               {derived.roi !== null && (
                 <>
-                  <SignedNumber value={derived.roi} format={fmtPct} className="!text-ink-400" plus={false} /> ROI{' '}
+                  <SignedNumber value={derived.roi} format={fmtPct} className="!text-ink-400" /> ROI{' '}
                   <span aria-hidden="true">·</span>{' '}
                 </>
               )}
@@ -4960,7 +4956,7 @@ export function AssetCard({
             </div>
             <div className="num mt-1.5 text-[20px] font-bold leading-[24.2px]">
               {derived.lockedAprFwd !== null ? (
-                <SignedNumber value={derived.lockedAprFwd} format={fmtPct} plus={false} />
+                <SignedNumber value={derived.lockedAprFwd} format={fmtPct} />
               ) : (
                 '—'
               )}
@@ -4973,7 +4969,7 @@ export function AssetCard({
                 className="num mt-2 text-[11px] leading-none text-ink-400"
                 title={`The locked rate in dollars per day.${derived.lockedNotionalUsd !== null ? `\nOn notional\t${fmtPct(derived.lockedCarryPerYearUsd / derived.lockedNotionalUsd)}\nNotional\t${fmtUsdCompact(derived.lockedNotionalUsd)}` : ''}`}
               >
-                ≈ <SignedNumber value={derived.lockedCarryPerYearUsd / 365} format={fmtUsd} className="!text-ink-400" plus={false} />
+                ≈ <SignedNumber value={derived.lockedCarryPerYearUsd / 365} format={fmtUsd} className="!text-ink-400" />
                 /day
               </div>
             )}
@@ -5727,7 +5723,7 @@ null
                           <td className={`${cell} text-right text-ink-300`}>{fmtUsd(r.feesUsd)}</td>
                           {showRebate && (
                             <td className={`${cell} text-right ${r.rebateUsd > 0 ? 'text-grass' : 'text-ink-500'}`}>
-                              {r.rebateUsd > 0 ? `+${fmtUsd(r.rebateUsd)}` : '—'}
+                              {r.rebateUsd > 0 ? fmtUsd(r.rebateUsd) : '—'}
                             </td>
                           )}
                         </tr>
@@ -5744,7 +5740,7 @@ null
                         </td>
                         <td className={`${cell} text-right text-ink-200`}>{fmtUsd(borosTotals.fees)}</td>
                         {showRebate && (
-                          <td className={`${cell} text-right text-grass`}>+{fmtUsd(borosTotals.rebate)}</td>
+                          <td className={`${cell} text-right text-grass`}>{fmtUsd(borosTotals.rebate)}</td>
                         )}
                       </tr>
                     </tbody>

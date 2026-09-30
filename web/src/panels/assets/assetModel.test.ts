@@ -15,6 +15,7 @@ import {
   deriveAsset,
   keptSlice,
   pairBorosCloseLegs,
+  pairLockedSpread,
   pairPerpCloseLegs,
   perpKey,
   SECONDS_IN_YEAR,
@@ -678,6 +679,29 @@ describe('perpOnlyPairs', () => {
   });
 });
 
+describe('pairLockedSpread — on the RATE legs’ notional', () => {
+  const leg = (kind: 'perp' | 'yu', notionalUsd: number) => ({ kind, notionalUsd });
+  // $100k a side locked at a 5% spread: $5k a year, on $20k of capital.
+  const pair = (perpNotional: number) =>
+    ({
+      lockedAprFwd: 0.25,
+      capitalUsd: 20_000,
+      legs: [leg('perp', perpNotional), leg('perp', perpNotional), leg('yu', 100_000), leg('yu', 100_000)],
+    }) as unknown as Parameters<typeof pairLockedSpread>[0];
+
+  it('reads the same 5% whatever the perps are marked at', () => {
+    expect(pairLockedSpread(pair(100_000))).toBeCloseTo(0.05, 9);
+    // The perps rallied 25%; the rate legs — and what they earn — did not move.
+    expect(pairLockedSpread(pair(125_000))).toBeCloseTo(0.05, 9);
+    expect(pairLockedSpread(pair(80_000))).toBeCloseTo(0.05, 9);
+  });
+
+  it('is null with no rate or no rate legs', () => {
+    expect(pairLockedSpread({ ...pair(100_000), lockedAprFwd: null })).toBeNull();
+    expect(pairLockedSpread({ ...pair(100_000), legs: [] })).toBeNull();
+  });
+});
+
 describe('borosOnlyPairs', () => {
   const M = 1_790_000_000;
   const perpLeg = (venue: string, side: 'LONG' | 'SHORT', sizeBase: number) => ({
@@ -761,6 +785,12 @@ describe('borosOnlyPairs', () => {
     expect(borosOnlyPairs([], [yuLeg('GATE', 'LONG', 10, M, -0.05, 1), yuLeg('LIGHTER', 'SHORT', 10, M + 86_400 * 28, 0.08, 2)]).pairs).toEqual([]);
     expect(borosOnlyPairs([], [yuLeg('GATE', 'LONG', 10, M, -0.05, 1), yuLeg('GATE', 'SHORT', 10, M, 0.08, 2)]).pairs).toEqual([]);
     expect(borosOnlyPairs([], [yuLeg('GATE', 'LONG', 10, M, -0.05, 1), yuLeg('OKX', 'LONG', 10, M, -0.04, 2)]).pairs).toEqual([]);
+  });
+
+  it('nets both settlement fees out of the spread, as a 4-leg pair does', () => {
+    const long = { ...yuLeg('GATE', 'LONG', 10, M, -0.05, 1), settleFeeApr: 0.002 };
+    const short = { ...yuLeg('LIGHTER', 'SHORT', 10, M, 0.08, 2), settleFeeApr: 0.001 };
+    expect(borosOnlyPairs([], [long, short]).pairs[0].lockedSpread).toBeCloseTo(0.08 - 0.05 - 0.003, 9);
   });
 
   it('reports no spread while a rate is pending, and skips dust', () => {

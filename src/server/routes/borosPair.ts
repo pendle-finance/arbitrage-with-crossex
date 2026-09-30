@@ -409,6 +409,16 @@ export function createPairPricer(deps: AppDeps) {
     (await deps.cache.get('boros:markets', TTL.boros, () => fetchBorosMarkets(fetchImpl), { fresh }))
       .value;
 
+  /**
+   * The markets a QUOTE is priced from, on their own short TTL (see
+   * TTL.borosQuote). A key of its own: the cache stamps an entry with the
+   * TTL of whoever fetched it, so sharing `boros:markets` would hand a quote
+   * the 30s copy the rest of the app is content with.
+   */
+  const loadQuoteMarkets = async (fresh: boolean): Promise<BorosMarket[]> =>
+    (await deps.cache.get('boros:markets:quote', TTL.borosQuote, () => fetchBorosMarkets(fetchImpl), { fresh }))
+      .value;
+
   const loadAccount = async (address: string, fresh: boolean): Promise<AccountView> => {
     // Market config only picks the IM branch; it never needs a fresh read.
     const markets = await loadMarkets(false);
@@ -477,7 +487,7 @@ export function createPairPricer(deps: AppDeps) {
 
     const [markets, account] = preloaded
       ? [preloaded.markets, preloaded.account]
-      : await Promise.all([loadMarkets(fresh), loadAccount(address, fresh)]);
+      : await Promise.all([loadQuoteMarkets(fresh), loadAccount(address, fresh)]);
     const marketA = marketOr404(markets, a.marketId);
     const marketB = marketOr404(markets, b.marketId);
     const nowSec = Math.floor(Date.now() / 1000);
@@ -553,7 +563,7 @@ export function createPairPricer(deps: AppDeps) {
     };
   };
 
-  return { loadMarkets, loadAccount, marketOr404, readGasBalance, priceRequest };
+  return { loadMarkets, loadQuoteMarkets, loadAccount, marketOr404, readGasBalance, priceRequest };
 }
 
 /**
@@ -653,7 +663,7 @@ export function borosPairRoutes(deps: AppDeps) {
     }
   };
 
-  const { loadMarkets, loadAccount, marketOr404, readGasBalance, priceRequest } = createPairPricer(deps);
+  const { loadMarkets, loadQuoteMarkets, loadAccount, marketOr404, readGasBalance, priceRequest } = createPairPricer(deps);
 
 
   return async function plugin(app: FastifyInstance): Promise<void> {
@@ -948,7 +958,7 @@ export function borosPairRoutes(deps: AppDeps) {
      */
     const priceRoll = async (body: RollBody, fresh: boolean) => {
       const address = parseAddress(body.address);
-      const [markets, account, gasBalanceUsd] = await Promise.all([loadMarkets(fresh), loadAccount(address, fresh), readGasBalance(fresh)]);
+      const [markets, account, gasBalanceUsd] = await Promise.all([loadQuoteMarkets(fresh), loadAccount(address, fresh), readGasBalance(fresh)]);
       const step = (raw: RollStepBody | undefined, intent: 'close' | 'open', acknowledged: boolean) =>
         priceRequest(
           { address, legA: raw?.legA, legB: raw?.legB, size: raw?.size, intent, opposingAcknowledged: acknowledged },

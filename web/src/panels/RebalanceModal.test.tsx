@@ -74,7 +74,7 @@ const routeGroup = () => within(dialog()).getByRole('radiogroup', { name: 'Route
 
 const pickedRow = () => within(routeGroup()).getByRole('radio', { checked: true }).closest('label') as HTMLElement;
 
-const holdButton = () => screen.getByRole('button', { name: 'Hold to rebalance' });
+const holdButton = () => screen.getByRole('button', { name: /^Hold to rebalance( anyway)?$/ });
 
 interface StartBody {
   route: string;
@@ -658,10 +658,16 @@ const withFee = (view: RebalanceView, costUsd: number): RebalanceView => ({
  * where the verdict has one. The `sr-only` severity prefix is dropped so
  * expectations read as the trader sees them.
  */
+const worthBoxes = () => {
+  // The verdict leads the plan: it sits ABOVE the route list it judges.
+  const route = routeGroup().parentElement as HTMLElement;
+  return [...(route.parentElement?.querySelectorAll(':scope > div[class*="alert-"]') ?? [])].filter(
+    (box) => box.compareDocumentPosition(route) & Node.DOCUMENT_POSITION_FOLLOWING,
+  );
+};
 const worth = () => {
-  const facts = dialog().querySelector('dl')?.parentElement as HTMLElement;
   const TONE: Record<string, string> = { 'alert-blue': 'info', 'alert-amber': 'warn', 'alert-red': 'act' };
-  return [...facts.querySelectorAll(':scope > div[class*="alert-"]')].map((box) => {
+  return worthBoxes().map((box) => {
     const [head, sub] = [...box.querySelectorAll(':scope > span:not([aria-hidden]) > span')];
     const visible = [...(head?.childNodes ?? [])]
       .filter((n) => !(n instanceof HTMLElement && n.classList.contains('sr-only')))
@@ -723,13 +729,34 @@ describe('RebalanceModal is it worth it', () => {
     // It used to read "the fee is more than 30 days of the interest it saves"
     // against that very $0.00 — a judgement divided by zero interest.
     expect(worth()).toEqual([
-      { text: 'No interest payment yet. No transfer or rebalancing necessary.', tone: 'info' },
+      {
+        text: 'No interest payment yet. No transfer or rebalancing necessary.',
+        tone: 'info',
+        sub: `Rebalancing is optional and costs ${facts().Fee}.`,
+      },
     ]);
   });
 
-  it('no borrow says so', () => {
+  it('no borrow says so, names the fee the optional move costs, and drops the confirm to an outline', () => {
     show(rebalanceViews.accountB);
-    expect(worth()).toEqual([{ text: 'No borrow. No transfer or rebalancing necessary.', tone: 'info' }]);
+    // "Not necessary" above a solid, armed confirm and a priced fee read as a
+    // contradiction: the verdict now leads, and the move is plainly a choice.
+    expect(worth()).toEqual([
+      {
+        text: 'No borrow. No transfer or rebalancing necessary.',
+        tone: 'info',
+        sub: `Rebalancing is optional and costs ${facts().Fee}.`,
+      },
+    ]);
+    const hold = screen.getByRole('button', { name: 'Hold to rebalance anyway' });
+    expect(hold.className).toContain('bg-transparent');
+    expect(screen.queryByRole('button', { name: 'Hold to rebalance' })).not.toBeInTheDocument();
+  });
+
+  it('a verdict that recommends the move keeps the solid confirm and its plain label', () => {
+    show(withFee(at4c, 0.46));
+    const hold = screen.getByRole('button', { name: 'Hold to rebalance' });
+    expect(hold.className).toContain('bg-info');
   });
 
   it('an unknown borrow rate shows rate unknown and names the failed read', () => {

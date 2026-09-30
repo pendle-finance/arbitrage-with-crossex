@@ -27,7 +27,6 @@ import { useEffect, useMemo, useState } from 'react';
 import { useTradeFlowOptional } from './TradeFlow';
 import {
   useBorosAgent,
-  useBorosCancelAndClose,
   useBorosPairContext,
   useBorosPairSimulation,
   useExecuteBorosPair,
@@ -48,7 +47,7 @@ import { AffixedInput, EstimateCard } from './PairTicketBits';
 import { QueryError } from '../components/QueryError';
 import { SegmentedToggle } from '../components/SegmentedToggle';
 import { amountError } from '../lib/amount';
-import { isUsdCollateral, knownRate } from '../lib/boros';
+import { isUsdCollateral } from '../lib/boros';
 import { fieldValue, fmtPct, sigGrouped } from '../lib/fmt';
 import { useNow } from '../lib/useNow';
 import { uuid } from '../lib/uuid';
@@ -559,9 +558,12 @@ export function BorosPairTicket({
   const estSlippageApr = ((): number | null => {
     if (!simulation) return null;
     if (activeLeg === null) return simulation.slippageApr ?? null;
+    // The quote's own figure, off the mid its bound is anchored to — a second
+    // reading against the context's mid (its own, slower poll) could disagree
+    // with the blocker the server words from this one. Better than mid is no
+    // slippage, not a negative one.
     const leg = activeLeg === 'A' ? simulation.legA : simulation.legB;
-    const mid = (activeLeg === 'A' ? rowA : rowB)?.midApr;
-    return leg.execApr !== null && knownRate(mid) ? Math.abs(leg.execApr - mid) : null;
+    return leg.estSlippageApr == null ? null : Math.max(0, leg.estSlippageApr);
   })();
   const gate = sim.data?.gate ?? null;
 
@@ -593,7 +595,6 @@ export function BorosPairTicket({
   }, [marketA, marketB, dirA, dirB, intent]);
 
   const execute = useExecuteBorosPair();
-  const cancelClose = useBorosCancelAndClose();
   const topUpGas = useTopUpGas();
 
   // Tell the host surface an execution is in flight, so it can lock its close
@@ -1110,11 +1111,7 @@ export function BorosPairTicket({
           {w}
         </p>
       ))}
-      <BlockerList
-        blockers={blockers}
-        busyMarketId={cancelClose.isPending ? cancelClose.variables?.marketId ?? null : null}
-        onCancelAndClose={canTrade ? (marketId) => cancelClose.mutate({ marketId }) : undefined}
-      />
+      <BlockerList blockers={blockers} />
       <GasTopUp
         gasBalanceUsd={sim.data?.gasBalanceUsd}
         amount={gasTopUpStr}
