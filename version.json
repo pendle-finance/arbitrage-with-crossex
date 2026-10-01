@@ -1,6 +1,7 @@
 {
-  "version": "1.7.2",
+  "version": "1.7.3",
   "highlights": [
+    "Test build for the 1.7.2 to 1.7.3 in-app update check. Not a release.",
     "Settlement-fee rebates: a rebated wallet sees its rebate % on every opportunity and can include it in the APR",
     "Positions count the rebate you have earned in Total PnL, the APR, the Boros table and the PnL waterfall",
     "Viewing a wallet you are not logged in to is one clean read-only view: only that wallet, and the header says so",
