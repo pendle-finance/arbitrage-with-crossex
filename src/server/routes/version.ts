@@ -1,15 +1,14 @@
 import type { FastifyInstance } from 'fastify';
-import type { FetchLike } from '../../core/boros/client';
 import type { AppDeps } from '../app';
 import { TTL } from '../cache';
 import { refuse } from '../errorReply';
 import { LOCK_TEXT } from '../rebalanceJob';
 import { startUpdate, updateProgress } from '../updater';
-import { compareVersions, fetchLatestVersion, type RemoteVersion } from '../version';
+import { compareVersions, fetchLatestVersion, type ReleaseFetch, type RemoteVersion } from '../version';
 import { borosExecutionsPending } from './borosPair';
 
 /**
- * GET /api/version — is a newer release published on GitHub main?
+ * GET /api/version — is a newer signed release published on GitHub?
  *
  * Always 200; never throws. The remote read happens lazily (first request),
  * only when the running copy KNOWS its own version and the check isn't
@@ -18,14 +17,14 @@ import { borosExecutionsPending } from './borosPair';
  * for the full TTL: silent by design.
  */
 export function versionRoutes(deps: AppDeps) {
-  const fetchImpl: FetchLike = deps.versionFetch ?? (globalThis.fetch as unknown as FetchLike);
+  const fetchImpl: ReleaseFetch = deps.versionFetch ?? (globalThis.fetch as unknown as ReleaseFetch);
   return async function plugin(app: FastifyInstance): Promise<void> {
     app.get('/version', async (_req, reply) => {
       const current = deps.updateCheck?.current ?? null;
       let remote: RemoteVersion | null = null;
       if (current !== null && !deps.updateCheck?.disabled) {
         remote = (
-          await deps.cache.get('version:latest', TTL.version, () => fetchLatestVersion(fetchImpl))
+          await deps.cache.get('version:latest', TTL.version, () => fetchLatestVersion(fetchImpl, current))
         ).value;
       }
       const updateAvailable =
@@ -100,20 +99,13 @@ export function versionRoutes(deps: AppDeps) {
         });
       }
 
-      let pin: string | null = null;
-      if (deps.updateCheck?.current && !deps.updateCheck.disabled) {
-        const { value } = await deps.cache.get('version:latest', TTL.version, () =>
-          fetchLatestVersion(fetchImpl),
-        );
-        pin = value?.commit ?? null;
-      }
-
-      // Windows stages the installer to disk before the task is created, so
-      // this can fail on a bad download — which belongs in the dialog the user
-      // is looking at, not in a log they would have to go find.
-      let logPath: string;
+      // The release is downloaded and checked before the installer starts, so
+      // this can fail on a bad download or a failed check — which belongs in
+      // the dialog the user is looking at, not in a log they would have to go
+      // find.
+      let started: { logPath: string; commit: string };
       try {
-        logPath = await startUpdate(pin);
+        started = await startUpdate(fetchImpl, deps.updateCheck?.current ?? '');
       } catch (err) {
         return refuse(reply, {
           code: 409,
@@ -122,7 +114,7 @@ export function versionRoutes(deps: AppDeps) {
           retryable: true,
         });
       }
-      return reply.ok({ started: true, logPath, ref: pin });
+      return reply.ok({ started: true, logPath: started.logPath, ref: started.commit });
     });
   };
 }
