@@ -39,10 +39,20 @@ $Branch   = if ($env:BOROS_BRANCH) { $env:BOROS_BRANCH } else { 'main' }
 # how you install the very tree you audited - see "Install exactly what you
 # audited" in the README.
 $Ref      = $env:BOROS_REF
-$Port     = if ($env:BOROS_PORT)   { [int]$env:BOROS_PORT } else { 6688 }
-$Root     = if ($env:BOROS_ROOT)   { $env:BOROS_ROOT }   else { Join-Path $env:LOCALAPPDATA 'CrossEx-Boros' }
-$NodeLine = 'v24'
 $TaskName = 'Arbitrage with CrossEx'
+$PrevRunner = $null
+$PrevPort   = $null
+$prevTask = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+if ($prevTask -and "$($prevTask.Actions[0].Arguments)" -match '-File "([^"]+\\run-server\.ps1)"') {
+  $PrevRunner = $Matches[1]
+  if (Test-Path -LiteralPath $PrevRunner) {
+    $portLine = Select-String -LiteralPath $PrevRunner -Pattern '^\$env:PORT = ''(\d+)''' | Select-Object -First 1
+    if ($portLine) { $PrevPort = [int]$portLine.Matches[0].Groups[1].Value }
+  }
+}
+$Port     = if ($env:BOROS_PORT) { [int]$env:BOROS_PORT } elseif ($PrevPort) { $PrevPort } else { 6688 }
+$Root     = if ($env:BOROS_ROOT) { $env:BOROS_ROOT } elseif ($PrevRunner) { Split-Path -Parent $PrevRunner } else { Join-Path $env:LOCALAPPDATA 'CrossEx-Boros' }
+$NodeLine = 'v24'
 $AppTitle = 'Arbitrage with CrossEx'
 # Display names this app shipped under before. The scheduled task and the Start
 # Menu shortcut are keyed BY NAME, so a rename orphans the old ones: the old task
