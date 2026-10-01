@@ -4598,6 +4598,26 @@ export function AssetCard({
   // Completed legs — matured Boros markets and closed perps — rendered inside
   // CARRY beside the open legs: same kind of fact, same ledger.
   const nowSec = Math.floor(Date.now() / 1000);
+  /** The part-hedged book's estimated APR, shown only where the fixed rate
+   * would be a dash. Its hover says what it is made of. */
+  const estimate = derived.lockedAprFwd === null ? derived.unlockedEstimate : null;
+  const estimateTitle =
+    estimate === null
+      ? undefined
+      : // The tooltip's own conventions: two-cell rows (the value cell never
+        // wraps, so it stays short) and "* " footnotes, which wrap.
+        [
+          'Estimate: part of this book floats.',
+          `Fixed\t${fmtPct(estimate.fixedApr)}`,
+          `Floating\t${fmtPct(estimate.floatingApr)}`,
+          ...(estimate.venues.length > 0 ? ['---'] : []),
+          ...estimate.venues.map(
+            (v) =>
+              `${prettyVenue(v.venue)}\t${v.gapUsd > 0 ? 'LONG' : 'SHORT'} ${fmtUsdCompact(Math.abs(v.gapUsd))} · ${fmtPct(v.fundingApr)}${v.source === 'current' ? ' now' : ''}`,
+          ),
+          "* Floating = unhedged size × funding (7-day average, or today's where marked now).",
+          '* Excludes price moves.',
+        ].join('\n');
   // Pairs inside the roll window — the banner's count, and the cards it
   // points at carry the same flag.
   const rollable = derived.pairs.filter((p) => pairRollDue(p, nowSec));
@@ -4951,16 +4971,33 @@ export function AssetCard({
         </div>
         <div className="ml-auto flex flex-wrap items-start justify-end gap-x-7 gap-y-4 text-right">
           <div>
-            <div className="text-[12px] font-normal leading-[14.52px] text-ink-300" title="The rate the hedge locks now, net of Boros settlement fees. A dash means the hedge is incomplete.">
-              <span className="tip-label">Current APR (Fixed)</span>
-            </div>
+            {/* A book that is not fully locked shows an ESTIMATE in place of
+                the dash, and drops "(Fixed)": part of it floats. A book that
+                shows its fixed rate is untouched (his call 2026-10-01). */}
+            {estimate !== null ? (
+              <div className="text-[12px] font-normal leading-[14.52px] text-ink-300" title={estimateTitle}>
+                <span className="tip-label">Current APR</span>
+              </div>
+            ) : (
+              <div className="text-[12px] font-normal leading-[14.52px] text-ink-300" title="The rate the hedge locks now, net of Boros settlement fees. A dash means the hedge is incomplete.">
+                <span className="tip-label">Current APR (Fixed)</span>
+              </div>
+            )}
             <div className="num mt-1.5 text-[20px] font-bold leading-[24.2px]">
               {derived.lockedAprFwd !== null ? (
                 <SignedNumber value={derived.lockedAprFwd} format={fmtPct} />
+              ) : estimate !== null ? (
+                <SignedNumber value={estimate.apr} format={fmtPct} />
               ) : (
                 '—'
               )}
             </div>
+            {estimate !== null && (
+              <div className="num mt-2 text-[11px] leading-none text-ink-400" title={estimateTitle}>
+                Fixed <SignedNumber value={estimate.fixedApr} format={fmtPct} className="!text-ink-400" /> · Floating{' '}
+                <SignedNumber value={estimate.floatingApr} format={fmtPct} className="!text-ink-400" />
+              </div>
+            )}
             {/* Gated on the APR, not just the carry: the APR also needs a
                 capital floor, and "—" over a live "$0.41/day" read as two
                 answers to one question. */}

@@ -86,7 +86,12 @@ export function AssetsHome() {
           const meta = win ?? data;
           const sinceSec = meta?.sinceSec ?? 0;
           const d = deriveAsset(group, prefs.exclusions, sinceSec, meta?.nowSec ?? 0, feeRows, rebate);
-          const shown: AssetDerived = gateHidden ? { ...d, gaps: d.gaps.filter((gap) => gap.leg !== 'perp') } : d;
+          // View-only hides the perps, it does not remove them: an estimate
+          // built without them reads every rate leg as unhedged (it printed
+          // −706% on a hedged book), so a view-only card shows the dash.
+          const shown: AssetDerived = gateHidden
+            ? { ...d, gaps: d.gaps.filter((gap) => gap.leg !== 'perp'), unlockedEstimate: null }
+            : d;
           return {
             group,
             sinceSec,

@@ -735,6 +735,40 @@ export function borosOnlyPairs(
   return { pairs, restPerps: restOf(perps, left), restYus: restOf(yus, yuLeft) };
 }
 
+/**
+ * A part-hedged book's carry, split in two. The FIXED part is every live rate
+ * leg's locked rate (net of settlement fees) — locked whether or not its perp
+ * is there. The FLOATING part is the funding the unlocked remainder earns:
+ * at each venue, the gap between perp and rate legs pays or receives that
+ * venue's funding (a LONG perp pays it, a LONG rate leg receives it), so a
+ * covered venue nets to zero and only the gap counts. 10 ETH long HL and
+ * short Gate with 6 ETH locked on each earns 4 ETH × (Gate − HL funding).
+ *
+ * The venue rate is what the account's own perps there REALISED over the
+ * last 7 days (his call 2026-10-01); a venue with only rate legs falls back
+ * to Boros's current floating rate. An estimate, not a lock: it moves with
+ * funding and can turn negative.
+ */
+export interface UnlockedEstimate {
+  /** (fixed + floating) / capital. */
+  apr: number;
+  fixedApr: number;
+  floatingApr: number;
+  fixedCarryPerYearUsd: number;
+  floatingCarryPerYearUsd: number;
+  /** One row per venue with an unlocked gap — what the floating part is made of. */
+  venues: Array<{
+    venue: string;
+    /** The venue's funding rate, longs-pay sign (positive = longs pay shorts). */
+    fundingApr: number;
+    source: '7d' | 'current';
+    /** Signed unlocked size (perp minus rate legs, LONG +), in dollars. */
+    gapUsd: number;
+    /** What that gap earns a year at `fundingApr`; negative = pays. */
+    carryPerYearUsd: number;
+  }>;
+}
+
 export interface AssetDerived {
   base: string;
   priceUsd: number;
@@ -773,6 +807,12 @@ export interface AssetDerived {
    * rate can also be quoted ON NOTIONAL (the cross-farm comparison basis),
    * not only on margin. */
   lockedNotionalUsd: number | null;
+  /**
+   * The APR a book that is NOT fully locked earns, estimated — only ever set
+   * where `lockedAprFwd` is null, so a book that shows its fixed rate keeps
+   * showing exactly that (his call 2026-10-01). See `UnlockedEstimate`.
+   */
+  unlockedEstimate: UnlockedEstimate | null;
   /** Rough per-pair decomposition (see PairEstimate). Empty when the book
    * has no long/short perp pairing to decompose. */
   pairs: PairEstimate[];
@@ -1261,6 +1301,64 @@ export function deriveAsset(
   const lockedAprFwd =
     lockedOk && capitalUsd >= MIN_APR_CAPITAL_USD ? lockedCarryPerYearUsd / capitalUsd : null;
 
+  // A book whose fixed rate cannot be quoted gets an ESTIMATE instead —
+  // never in place of one that can (see UnlockedEstimate).
+  const unlockedEstimate: UnlockedEstimate | null = (() => {
+    if (lockedAprFwd !== null || capitalUsd < MIN_APR_CAPITAL_USD) return null;
+    if (group.perpOpen.length === 0 && group.borosOpen.length === 0) return null;
+    let fixedCarry = 0;
+    for (const l of group.borosOpen) {
+      const { keep, entry } = keptSlice(exclusions, borosKey(l.marketId), l.sizeToken, l.entryApr);
+      if (keep <= 0) continue;
+      // An unknown entry rate leaves the fixed part unknown — no estimate.
+      if (entry === null) return null;
+      fixedCarry +=
+        (l.side === 'SHORT' ? 1 : -1) * entry * l.notionalUsd * keep -
+        rebatedSettleApr(l.settleFeeApr ?? 0, rebate, l.marketId) * l.notionalUsd * keep;
+    }
+    // Each venue's funding, longs-pay sign: from the perps held there (what
+    // a SHORT received is the rate; a LONG's is its negative), weighted by
+    // notional; else Boros's current floating rate on the venue's rate legs.
+    const funding = (venue: string): { rate: number; source: '7d' | 'current' } | null => {
+      let num = 0;
+      let den = 0;
+      for (const p of group.perpOpen) {
+        if (p.venue !== venue || p.fundingApr7d == null || !(p.notionalUsd > 0)) continue;
+        num += (p.side === 'SHORT' ? 1 : -1) * p.fundingApr7d * p.notionalUsd;
+        den += p.notionalUsd;
+      }
+      if (den > 0) return { rate: num / den, source: '7d' };
+      for (const b of group.borosOpen) {
+        if (b.venue !== venue || !Number.isFinite(b.floatingApr) || !(b.notionalUsd > 0)) continue;
+        num += b.floatingApr * b.notionalUsd;
+        den += b.notionalUsd;
+      }
+      return den > 0 ? { rate: num / den, source: 'current' } : null;
+    };
+    const px = unit === 'base' ? group.priceUsd : 1;
+    const venues: UnlockedEstimate['venues'] = [];
+    let floatingCarry = 0;
+    for (const v of byVenue.values()) {
+      const gapUsd = v.gap * px;
+      // Dust is a rounding residual, not an exposure.
+      if (Math.abs(gapUsd) < 1) continue;
+      const f = funding(v.venue);
+      if (f === null || !Number.isFinite(gapUsd)) return null;
+      // A LONG gap (more perp than rate leg) pays the venue's funding.
+      const carryPerYearUsd = -f.rate * gapUsd;
+      floatingCarry += carryPerYearUsd;
+      venues.push({ venue: v.venue, fundingApr: f.rate, source: f.source, gapUsd, carryPerYearUsd });
+    }
+    return {
+      apr: (fixedCarry + floatingCarry) / capitalUsd,
+      fixedApr: fixedCarry / capitalUsd,
+      floatingApr: floatingCarry / capitalUsd,
+      fixedCarryPerYearUsd: fixedCarry,
+      floatingCarryPerYearUsd: floatingCarry,
+      venues,
+    };
+  })();
+
   /**
    * PAIR ESTIMATES — decompose the book into long-venue⇄short-venue
    * 4-leg sub-strategies, proportionally. Each LONG perp venue takes a
@@ -1624,6 +1722,7 @@ export function deriveAsset(
     aprEst,
     roi,
     lockedCarryPerYearUsd: lockedOk ? lockedCarryPerYearUsd : null,
+    unlockedEstimate,
     lockedAprFwd,
     lockedToMaturityUsd: lockedOk ? lockedToMaturityUsd : null,
     lockedNotionalUsd: lockedOk && lockedNotionalUsd > 0 ? lockedNotionalUsd : null,
