@@ -416,6 +416,71 @@ describe('totals & APR', () => {
   });
 });
 
+/**
+ * A part-hedged book used to show "—" for its APR. It now gets an estimate —
+ * fixed rate legs plus the funding its unlocked part earns — and ONLY where
+ * the fixed rate would have been a dash (his call 2026-10-01).
+ */
+describe('the estimated APR of a book that is not fully locked', () => {
+  const PX = 1900;
+  // His example: 10 ETH long HL and short Gate, 6 ETH locked on each venue.
+  const book = (yuSize: number, over: { hl7d?: number | null; gate7d?: number | null } = {}) =>
+    group({
+      priceUsd: PX,
+      perpOpen: [
+        // A LONG that PAID 10% a year received −10%.
+        perp({ symbol: 'HYPERLIQUID_FUTURE_ETH_USDC', venue: 'HYPERLIQUID', side: 'LONG', qty: 10, notionalUsd: 10 * PX, imUsd: 1_000, fundingApr7d: over.hl7d === undefined ? -0.1 : over.hl7d }),
+        perp({ symbol: 'GATE_FUTURE_ETH_USDT', venue: 'GATE', side: 'SHORT', qty: 10, notionalUsd: 10 * PX, imUsd: 1_000, fundingApr7d: over.gate7d === undefined ? 0.04 : over.gate7d }),
+      ],
+      borosOpen: [
+        boros({ marketId: 1, venue: 'HYPERLIQUID', side: 'LONG', sizeToken: yuSize, notionalUsd: yuSize * PX, entryApr: 0.08, floatingApr: 0.11, imUsd: 300 }),
+        boros({ marketId: 2, venue: 'GATE', side: 'SHORT', sizeToken: yuSize, notionalUsd: yuSize * PX, entryApr: 0.05, floatingApr: -0.01, imUsd: 300 }),
+      ],
+    });
+
+  it('the unlocked 4 ETH earns (Gate − HL funding) on top of the locked legs', () => {
+    const d = deriveAsset(book(6), {}, 0, NOW);
+    expect(d.lockedAprFwd).toBeNull();
+    const e = d.unlockedEstimate!;
+    const capital = 1_000 + 1_000 + 300 + 300;
+    // Fixed: SHORT Gate receives 5%, LONG HL pays 8%, on 6 ETH each.
+    const fixed = (0.05 - 0.08) * 6 * PX;
+    // Floating: HL funding 10% (longs pay), Gate 4%: 4 ETH × (4% − 10%).
+    const floating = 4 * PX * (0.04 - 0.1);
+    expect(e.fixedCarryPerYearUsd).toBeCloseTo(fixed, 6);
+    expect(e.floatingCarryPerYearUsd).toBeCloseTo(floating, 6);
+    expect(e.apr).toBeCloseTo((fixed + floating) / capital, 9);
+    expect(e.fixedApr + e.floatingApr).toBeCloseTo(e.apr, 12);
+    expect(e.venues.map((v) => [v.venue, v.source, Math.round(v.gapUsd)])).toEqual([
+      ['HYPERLIQUID', '7d', 4 * PX],
+      ['GATE', '7d', -4 * PX],
+    ]);
+  });
+
+  it('a fully locked book keeps its fixed rate and gets no estimate', () => {
+    const d = deriveAsset(book(10), {}, 0, NOW);
+    expect(d.lockedAprFwd).not.toBeNull();
+    expect(d.unlockedEstimate).toBeNull();
+  });
+
+  it("a venue with no perp history falls back to Boros's current floating rate", () => {
+    const d = deriveAsset(book(6, { gate7d: null }), {}, 0, NOW);
+    const gate = d.unlockedEstimate!.venues.find((v) => v.venue === 'GATE')!;
+    expect(gate.source).toBe('current');
+    expect(gate.fundingApr).toBeCloseTo(-0.01, 12);
+  });
+
+  it('no estimate when a gap has no rate at all, or a rate leg has no entry', () => {
+    const noRate = book(6, { gate7d: null });
+    noRate.borosOpen = noRate.borosOpen.filter((b) => b.venue !== 'GATE');
+    expect(deriveAsset(noRate, {}, 0, NOW).unlockedEstimate).toBeNull();
+
+    const noEntry = book(6);
+    noEntry.borosOpen = [{ ...noEntry.borosOpen[0], entryApr: null }, noEntry.borosOpen[1]];
+    expect(deriveAsset(noEntry, {}, 0, NOW).unlockedEstimate).toBeNull();
+  });
+});
+
 describe('defaultChargePerpFees', () => {
   const boros = NOW - 10 * DAY;
   it('on when the perp went on with (or after) its Boros leg', () => {
