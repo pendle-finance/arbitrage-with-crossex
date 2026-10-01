@@ -48,7 +48,7 @@ export const TTL = {
    * shows up, so re-paginating this on the 30s strategy poll is pure waste —
    * at 10 pages a tick it is also the fastest way into a 429 cooldown. */
   fills: 300_000,
-  /** GitHub version.json update check — hours, not minutes: releases are
+  /** GitHub release update check — hours, not minutes: releases are
    * hand-bumped and rare, and a FAILED fetch is cached as null for the same
    * window (one quiet retry per window, silent by design). */
   version: 21_600_000,

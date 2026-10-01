@@ -184,9 +184,9 @@ trade journal out from under a live process that is still placing orders.
   (public market data, keyed only by an EVM address you choose to enter); the venues' public order-book endpoints
   (`fapi.binance.com`, `api.bybit.com`, `www.okx.com`, `futures.kraken.com`,
   `api.hyperliquid.xyz`, `mainnet.zklighter.elliot.ai`, `api.gateio.ws`) — public data,
-  nothing about you; and `raw.githubusercontent.com` plus `api.github.com` — a 6-hourly
-  read of this repo's one-line `version.json` and latest commit, to show "update
-  available". Nothing is sent, and `UPDATE_CHECK=0` disables it. If you link Telegram
+  nothing about you; and `api.github.com` plus `release-assets.githubusercontent.com` — a
+  6-hourly read of this repo's latest GitHub Release and its signed `release.json`, to
+  show "update available". Nothing is sent, and `UPDATE_CHECK=0` disables it. If you link Telegram
   alerts, the app also sends your wallet address and the price levels to alert on to
   `boros-bot-notification.pendle.finance`. Your browser itself calls
   `api-boros.pendle.finance` (to approve the Boros agent), `raw.githubusercontent.com`
@@ -293,7 +293,7 @@ Please read the installer, the uninstaller, and the application source code, the
    in signed requests to Gate.io's official API (api.gateio.ws)?
 5. Is there any telemetry, analytics, or other "phoning home" in the app or installer?
    The README claims the only outbound hosts are Gate.io, public Boros/venue market-data
-   APIs, and a version check against raw.githubusercontent.com — verify that list is
+   APIs, and a release check against api.github.com — verify that list is
    complete.
 6. Is the app's web server reachable from other devices on my network, or only from my
    own machine?

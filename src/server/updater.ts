@@ -3,15 +3,8 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
-
-const INSTALL_CMD =
-  '/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/pendle-finance/arbitrage-with-crossex/main/install.sh)"';
-const INSTALLER_URL_WINDOWS =
-  'https://raw.githubusercontent.com/pendle-finance/arbitrage-with-crossex/main/install.ps1';
-/** Dev/test override, same family as install.ps1's own BOROS_* knobs: a URL, or
- * a path to a local install.ps1 so the whole flow can be exercised offline. */
-const INSTALLER_SOURCE_WINDOWS = (): string =>
-  process.env.BOROS_INSTALLER ?? INSTALLER_URL_WINDOWS;
+import { checkFile } from './releaseVerify';
+import { downloadAsset, fetchVerifiedRelease, type ReleaseFetch } from './version';
 
 const TASK_NAME = 'BorosUpdate';
 const INSTALLER_ENV = [
@@ -29,7 +22,6 @@ const INSTALLER_ENV = [
   'BOROS_REF',
   'BOROS_TARBALL',
 ];
-const COMMIT_SHA = /^[0-9a-f]{40}$/;
 const APP_DIR = fileURLToPath(new URL('../..', import.meta.url));
 const FETCH_TIMEOUT_MS = 30_000;
 
@@ -115,8 +107,36 @@ function borosRoot(appDir = APP_DIR): string {
   return (
     installTarget(appDir).BOROS_ROOT ??
     process.env.BOROS_ROOT ??
-    path.join(process.env.LOCALAPPDATA ?? os.homedir(), 'CrossEx-Boros')
+    (process.platform === 'win32'
+      ? path.join(process.env.LOCALAPPDATA ?? os.homedir(), 'CrossEx-Boros')
+      : path.join(os.homedir(), '.boros-crossex'))
   );
+}
+
+interface StagedRelease {
+  commit: string;
+  archive: string;
+  installer: string;
+}
+
+async function stageRelease(fetchImpl: ReleaseFetch, current: string, appDir: string): Promise<StagedRelease> {
+  const release = await fetchVerifiedRelease(fetchImpl, current);
+  if (!release) throw new Error('no newer release is published — update refused');
+  const names = process.platform === 'win32' ? ['app.zip', 'install.ps1'] : ['app.tar.gz', 'install.sh'];
+  const files = await Promise.all(
+    names.map(async (name) => {
+      const bytes = await downloadAsset(fetchImpl, release.assets, name, FETCH_TIMEOUT_MS);
+      checkFile(release.manifest, name, bytes);
+      return { name, bytes };
+    }),
+  );
+  const dir = path.join(borosRoot(appDir), 'update');
+  fs.mkdirSync(dir, { recursive: true });
+  const [archive, installer] = files.map(({ name, bytes }) => {
+    fs.writeFileSync(path.join(dir, name), bytes);
+    return path.join(dir, name);
+  });
+  return { commit: release.manifest.commit, archive, installer };
 }
 
 /**
@@ -128,33 +148,11 @@ function borosRoot(appDir = APP_DIR): string {
  * verdict, not a fixed signature, so it cannot be waited out.
  *
  * So the server downloads install.ps1 itself and the task only ever runs a
- * LOCAL file with -File. Downloading here also puts a failed download in the
- * update dialog rather than in a task that quietly does nothing.
+ * LOCAL file with -File. Downloading before the task exists also puts a failed
+ * download in the update dialog rather than in a task that quietly does nothing.
  */
-async function stageWindowsInstaller(
-  logPath: string,
-  pin: string | null,
-  appDir: string,
-): Promise<void> {
-  const root = borosRoot(appDir);
-  const installer = path.join(root, 'update-installer.ps1');
-  const runner = path.join(root, 'update.ps1');
-
-  const src = INSTALLER_SOURCE_WINDOWS();
-  let script: string;
-  if (/^https?:/i.test(src)) {
-    const res = await fetch(src, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
-    if (!res.ok) throw new Error(`could not download the installer (HTTP ${res.status})`);
-    script = await res.text();
-  } else {
-    script = fs.readFileSync(src, 'utf8');
-  }
-  // A captive portal or an error page would otherwise be written out and run.
-  if (!script.includes('Arbitrage with CrossEx')) {
-    throw new Error('the downloaded installer does not look like install.ps1');
-  }
-  fs.mkdirSync(root, { recursive: true });
-  fs.writeFileSync(installer, script, 'utf8');
+function stageWindowsInstaller(logPath: string, staged: StagedRelease, appDir: string): void {
+  const runner = path.join(borosRoot(appDir), 'update.ps1');
 
   // Start-Process truncates both files, but only once the task actually fires.
   // Until then the progress panel would be reading the LAST update's output —
@@ -162,8 +160,8 @@ async function stageWindowsInstaller(
   fs.writeFileSync(logPath, '');
   fs.writeFileSync(logPath.replace(/\.log$/, '.err.log'), '');
 
-  // BOROS_REF can no longer travel on the command line, so the runner sets it.
-  // `pin` is a validated 40-char sha and '' doubles PowerShell's quote escape.
+  // BOROS_ZIP cannot travel on the command line, so the runner sets it.
+  // '' doubles PowerShell's quote escape.
   //
   // ⚠ Start-Process, NOT `& '<installer>' *> '<log>'`. Any `*>` redirection
   // makes PowerShell wrap the installer's native stderr into ErrorRecords, and
@@ -179,14 +177,14 @@ async function stageWindowsInstaller(
   const wrapper = [
     '# Generated by the in-app updater on each run. Do not edit.',
     "$ErrorActionPreference = 'Continue'",
-    ...(pin ? [`$env:BOROS_REF = '${q(pin)}'`] : []),
+    `$env:BOROS_ZIP = '${q(staged.archive)}'`,
     ...Object.entries(installTarget(appDir)).map(([k, v]) => `$env:${k} = '${q(v)}'`),
     // The update runs under a page that reloads itself onto the new copy;
     // the installer's parting Start-Process would open a duplicate tab.
     "$env:BOROS_NO_BROWSER = '1'",
     '$startArgs = @{',
     "  FilePath               = 'powershell.exe'",
-    `  ArgumentList           = @('-NoProfile','-ExecutionPolicy','Bypass','-File','"${q(installer)}"')`,
+    `  ArgumentList           = @('-NoProfile','-ExecutionPolicy','Bypass','-File','"${q(staged.installer)}"')`,
     '  NoNewWindow            = $true',
     '  Wait                   = $true',
     `  RedirectStandardOutput = '${q(logPath)}'`,
@@ -198,12 +196,16 @@ async function stageWindowsInstaller(
   fs.writeFileSync(runner, wrapper, 'utf8');
 }
 
-export async function startUpdate(ref?: string | null, appDir = APP_DIR): Promise<string> {
-  const pin = ref && COMMIT_SHA.test(ref) ? ref : null;
+export async function startUpdate(
+  fetchImpl: ReleaseFetch,
+  current: string,
+  appDir = APP_DIR,
+): Promise<{ logPath: string; commit: string }> {
   const logPath = updateLogPath(appDir);
+  const staged = await stageRelease(fetchImpl, current, appDir);
 
   if (process.platform === 'win32') {
-    await stageWindowsInstaller(logPath, pin, appDir);
+    stageWindowsInstaller(logPath, staged, appDir);
     const at = new Date(Date.now() + 60_000);
     const hhmm = `${String(at.getHours()).padStart(2, '0')}:${String(at.getMinutes()).padStart(2, '0')}`;
     execFileSync('schtasks', [
@@ -243,7 +245,7 @@ export async function startUpdate(ref?: string | null, appDir = APP_DIR): Promis
     ]);
     execFileSync('schtasks', ['/run', '/tn', TASK_NAME]);
     beginUpdateWindow();
-    return logPath;
+    return { logPath, commit: staged.commit };
   }
 
   const log = fs.openSync(logPath, 'w');
@@ -269,13 +271,13 @@ export async function startUpdate(ref?: string | null, appDir = APP_DIR): Promis
   const installerEnv = Object.fromEntries(
     INSTALLER_ENV.flatMap((key) => (process.env[key] === undefined ? [] : [[key, process.env[key]]])),
   );
-  const child = spawn('/bin/bash', ['-c', INSTALL_CMD], {
+  const child = spawn('/bin/bash', [staged.installer], {
     detached: true,
     stdio: ['ignore', log, log],
     env: {
       ...installerEnv,
       ...installTarget(appDir),
-      ...(pin ? { BOROS_REF: pin } : {}),
+      BOROS_TARBALL: staged.archive,
       // Same duplicate-tab suppression as the Windows runner.
       BOROS_NO_BROWSER: '1',
     },
@@ -306,5 +308,5 @@ export async function startUpdate(ref?: string | null, appDir = APP_DIR): Promis
   child.unref();
   fs.closeSync(log);
   beginUpdateWindow();
-  return logPath;
+  return { logPath, commit: staged.commit };
 }

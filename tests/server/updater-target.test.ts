@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { endUpdateWindow, startUpdate } from '../../src/server/updater';
+import { releaseFetch } from './helpers/release';
 
 const mocks = vi.hoisted(() => ({
   spawn: vi.fn(() => ({ unref: vi.fn(), on: vi.fn() })),
@@ -14,7 +15,11 @@ vi.mock('node:child_process', () => ({
   execFileSync: mocks.execFileSync,
 }));
 
-const KEYS = ['HOME', 'PORT', 'BOROS_ROOT', 'BOROS_PORT', 'BOROS_INSTALLER', 'LOCALAPPDATA'] as const;
+vi.mock('../../src/server/releaseKey', async () => ({
+  RELEASE_PUBLIC_KEYS: [(await import('./helpers/release')).RELEASE_TEST_PEM],
+}));
+
+const KEYS = ['HOME', 'PORT', 'BOROS_ROOT', 'BOROS_PORT', 'LOCALAPPDATA'] as const;
 
 function installedApp(root: string): string {
   const appDir = path.join(root, 'app');
@@ -22,6 +27,8 @@ function installedApp(root: string): string {
   writeFileSync(path.join(appDir, 'install-info.json'), '{"source":"github-archive"}');
   return appDir;
 }
+
+const update = (appDir: string) => startUpdate(releaseFetch(), '1.0.0', appDir);
 
 function spawnEnv(): Record<string, string> {
   const [, , opts] = mocks.spawn.mock.calls[0] as unknown as [string, string[], { env: Record<string, string> }];
@@ -48,7 +55,6 @@ describe('the update installs onto the port and folder this server runs from', (
     delete process.env.PORT;
     delete process.env.BOROS_ROOT;
     delete process.env.BOROS_PORT;
-    delete process.env.BOROS_INSTALLER;
   });
   afterEach(() => {
     Object.defineProperty(process, 'platform', realPlatform);
@@ -64,10 +70,13 @@ describe('the update installs onto the port and folder this server runs from', (
     const root = path.join(home, 'custom-root');
     process.env.PORT = '7788';
 
-    await startUpdate(null, installedApp(root));
+    await update(installedApp(root));
 
     expect(spawnEnv().BOROS_PORT).toBe('7788');
     expect(spawnEnv().BOROS_ROOT).toBe(root);
+    expect(spawnEnv().BOROS_TARBALL).toBe(path.join(root, 'update', 'app.tar.gz'));
+    expect(spawnEnv().BOROS_NO_BROWSER).toBe('1');
+    expect(mocks.spawn.mock.calls[0]).toContainEqual([path.join(root, 'update', 'install.sh')]);
   });
 
   it('macOS: the values the server derives win over the env', async () => {
@@ -77,7 +86,7 @@ describe('the update installs onto the port and folder this server runs from', (
     process.env.BOROS_PORT = '6688';
     process.env.BOROS_ROOT = path.join(home, '.boros-crossex');
 
-    await startUpdate(null, installedApp(root));
+    await update(installedApp(root));
 
     expect(spawnEnv().BOROS_PORT).toBe('7789');
     expect(spawnEnv().BOROS_ROOT).toBe(root);
@@ -87,7 +96,7 @@ describe('the update installs onto the port and folder this server runs from', (
     onPlatform('darwin');
     process.env.PORT = '6688';
 
-    await startUpdate(null, installedApp(path.join(home, '.boros-crossex')));
+    await update(installedApp(path.join(home, '.boros-crossex')));
 
     expect(spawnEnv().BOROS_PORT).toBe('6688');
     expect(spawnEnv().BOROS_ROOT).toBe(path.join(home, '.boros-crossex'));
@@ -99,7 +108,7 @@ describe('the update installs onto the port and folder this server runs from', (
     mkdirSync(checkout);
     process.env.PORT = '7788';
 
-    await startUpdate(null, checkout);
+    await update(checkout);
 
     expect('BOROS_ROOT' in spawnEnv()).toBe(false);
     expect(spawnEnv().BOROS_PORT).toBe('7788');
@@ -109,7 +118,7 @@ describe('the update installs onto the port and folder this server runs from', (
     onPlatform('darwin');
     process.env.PORT = port;
 
-    await startUpdate(null, installedApp(path.join(home, 'custom-root')));
+    await update(installedApp(path.join(home, 'custom-root')));
 
     expect('BOROS_PORT' in spawnEnv()).toBe(false);
   });
@@ -117,18 +126,17 @@ describe('the update installs onto the port and folder this server runs from', (
   it('Windows: the staged runner sets both, quoted for PowerShell', async () => {
     onPlatform('win32');
     const root = path.join(home, "O'Brien files", 'CrossEx-Boros');
-    const installer = path.join(home, 'fake-install.ps1');
-    writeFileSync(installer, '# Arbitrage with CrossEx - Windows installer (test fixture)\n');
-    process.env.BOROS_INSTALLER = installer;
     process.env.PORT = '7788';
 
-    await startUpdate(null, installedApp(root));
+    await update(installedApp(root));
 
     const runner = readFileSync(path.join(root, 'update.ps1'), 'utf8');
     const quoted = (s: string): string => s.replace(/'/g, "''");
     expect(runner).toContain(`$env:BOROS_ROOT = '${quoted(root)}'`);
     expect(runner).toContain("$env:BOROS_PORT = '7788'");
-    expect(runner).toContain(`'"${quoted(path.join(root, 'update-installer.ps1'))}"'`);
+    expect(runner).toContain(`$env:BOROS_ZIP = '${quoted(path.join(root, 'update', 'app.zip'))}'`);
+    expect(runner).toContain("$env:BOROS_NO_BROWSER = '1'");
+    expect(runner).toContain(`'"${quoted(path.join(root, 'update', 'install.ps1'))}"'`);
     expect(runner.indexOf('$env:BOROS_ROOT')).toBeLessThan(runner.indexOf('Start-Process @startArgs'));
 
     const args = (mocks.execFileSync.mock.calls as unknown as [string, string[]][])[0][1];
