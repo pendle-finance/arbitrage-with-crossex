@@ -342,6 +342,7 @@ function Build-App {
   $yarn = Join-Path $Root 'node\yarn.cmd'
   $new = Join-Path $Root 'app.new'
   $env:PATH = "$(Join-Path $Root 'node');$env:PATH"
+  $env:YARN_IGNORE_PATH = '1'
   Say 'Installing dependencies (this takes a minute on first install)...'
   & $yarn --cwd $new install --frozen-lockfile --silent --non-interactive
   if ($LASTEXITCODE -ne 0) { Fail 'dependency installation failed.' }

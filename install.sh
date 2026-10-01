@@ -221,6 +221,7 @@ run_step() {
 
 build_app() {
   local yarn="$ROOT/node/bin/yarn"
+  export YARN_IGNORE_PATH=1
   say "Installing dependencies (this takes a minute on first install)…"
   run_step "installing the server dependencies failed." \
     "$yarn" --cwd "$ROOT/app.new" install --frozen-lockfile --silent --non-interactive
