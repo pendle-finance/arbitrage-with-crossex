@@ -485,6 +485,36 @@ describe('hedge walls (hazard 7)', () => {
     expect(done.mode).toBe('DONE');
     expect(JSON.parse(done.reportJson!).bFilled).toBe('0.05'); // hedged after the wall cleared
   });
+
+  it('one failed hedge cancels the maker: no further maker fill lands before the hedge retries', async () => {
+    const w = mkWorld();
+    await stepChecked(w);
+    const maker = w.venue.liveOrder(A_CONTRACT)!;
+    w.venue.fill(maker.clientText, '0.05');
+    w.venue.nextCreate = ['reject:BALANCE_NOT_ENOUGH'];
+    await stepChecked(w);
+    expect(w.store.getPair(w.pairId)!.hedgeRejectStreak).toBe(1);
+
+    let maxUnhedged = 0n;
+    for (let i = 0; i < 3; i++) {
+      w.venue.fill(maker.clientText, '0.03');
+      const { aTrue, bTrue } = w.venue.truth();
+      if (aTrue - bTrue > maxUnhedged) maxUnhedged = aTrue - bTrue;
+      await stepChecked(w);
+    }
+    expect(fxStr(maxUnhedged)).toBe('0.08');
+    expect(fxStr(w.venue.truth().aTrue)).toBe('0.08');
+    expect(fxStr(w.venue.truth().bTrue)).toBe('0.08');
+    expect(w.venue.liveOrder(A_CONTRACT)).toBeUndefined();
+
+    await stepChecked(w);
+    const next = w.venue.liveOrder(A_CONTRACT)!;
+    expect(next.clientText).not.toBe(maker.clientText);
+    expect(fxStr(next.qty)).toBe('0.072');
+    w.venue.fill(next.clientText, '0.072');
+    await stepChecked(w, 4);
+    assertHonestReport(w);
+  });
 });
 
 describe('venue weirdness', () => {
@@ -745,7 +775,7 @@ describe('generalized deal shapes', () => {
     expect(clip.tif).toBe('ioc');
     // A banded clip is a MARKETABLE LIMIT at ref·(1 − band) for a SELL, which is
     // what this test's name has always said and what the close UI promises
-    // verbatim ("a reduce-only IOC limit at mark ± slippage"). It previously
+    // verbatim ("a reduce-only IOC limit at mid ± slippage"). It previously
     // asserted price === null — the shipped behaviour — so the user's slippage
     // number was validated, persisted, and then ignored on the wire.
     // ref 2500, band 50bp → 2500 · 0.995 = 2487.5.
@@ -934,7 +964,7 @@ describe('cutover-review regressions', () => {
     expect(JSON.parse(pair.reportJson!).reason).toContain('failing repeatedly');
   });
 
-  it('[C5] a close PAIR completes both legs as MARKET (venue-band protected, no price-limit reject)', async () => {
+  it('[C5] a close PAIR clips leg A as a banded LIMIT IOC and hedges leg B at MARKET, both reduce-only', async () => {
     const w = mkWorld({
       mode: 'CONVERTING',
       a: { side: 'SELL', reduceOnly: true },
@@ -943,10 +973,11 @@ describe('cutover-review regressions', () => {
       clipBandBp: 50,
     });
     await stepChecked(w, 8);
+    const aOrders = [...w.venue.orders.values()].filter((o) => o.contract === A_CONTRACT);
+    expect(aOrders.length).toBeGreaterThan(0);
+    expect(aOrders.every((o) => o.price === '2487.5' && o.reduceOnly && o.tif === 'ioc')).toBe(true);
     const bOrders = [...w.venue.orders.values()].filter((o) => o.contract === B_CONTRACT);
     expect(bOrders.length).toBeGreaterThan(0);
-    // Both close legs are plain MARKET IOC — no book-mid limit that the venue's
-    // own price-limit band could reject; reduce-only keeps them safe.
     expect(bOrders.every((o) => o.price === null && o.reduceOnly && o.tif === 'ioc')).toBe(true);
     assertHonestReport(w);
   });

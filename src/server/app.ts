@@ -115,6 +115,19 @@ declare module 'fastify' {
   }
 }
 
+const CONTENT_SECURITY_POLICY = [
+  "default-src 'none'",
+  "script-src 'self'",
+  "style-src 'self'",
+  "font-src 'self' data:",
+  "img-src 'self' data: https://storage.googleapis.com/boros-prod/ https://raw.githubusercontent.com/pendle-finance/arbitrage-with-crossex/",
+  "connect-src 'self' https://raw.githubusercontent.com/pendle-finance/arbitrage-with-crossex/ https://api-boros.pendle.finance/apis/",
+  "base-uri 'none'",
+  "form-action 'none'",
+  "frame-ancestors 'none'",
+  "object-src 'none'",
+].join('; ');
+
 export function buildApp(deps: AppDeps): FastifyInstance {
   const app = Fastify({ logger: false });
   // Any localhost port is trusted (the Vite dev server proxies from its own port);
@@ -140,7 +153,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     // clickjackable from any site the user happens to visit. Refuse to be
     // framed at all — the terminal is never legitimately embedded.
     reply.header('X-Frame-Options', 'DENY');
-    reply.header('Content-Security-Policy', "frame-ancestors 'none'");
+    reply.header('Content-Security-Policy', CONTENT_SECURITY_POLICY);
 
     const host = req.headers.host;
     const origin = req.headers.origin;

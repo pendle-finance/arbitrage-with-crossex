@@ -372,6 +372,7 @@ export function useSymbolDetail(symbol: string | null) {
     queryFn: () => fetchJson<SymbolDetail>(`/symbols/${encodeURIComponent(symbol ?? '')}`),
     enabled: Boolean(symbol),
     staleTime: 300_000,
+    refetchInterval: (q) => (q.state.data && !(q.state.data.leverageMax > 0) ? 10_000 : false),
   });
 }
 

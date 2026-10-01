@@ -99,3 +99,12 @@ line numbers are omitted deliberately (they drift).
 - **The Windows ACL branch had zero coverage** — already covered: the "Windows branch" group in
   `tests/unit/secret-file.test.ts` (added in the 2026-07-30 pass) drives the icacls path with a
   stubbed `execFileSync`. This entry was stale.
+- **The maker kept filling while a failed hedge waited out its backoff** — OPENING gated only on
+  an unsizable hedge, so during the 3 s backoff the maker rested (or was re-placed for the full
+  remainder) and the unhedged gap could reach the whole deal. OPENING now cancels the maker and
+  places nothing new until the hedge retries.
+- **No leverage tiers meant no leverage limit** — a symbol with no tiers cached a max of 0 for
+  10 minutes, and the deal route skipped its check at 0. A missing max now refuses the deal and
+  is never cached, and the route checks the leverage CrossEx confirms after each set.
+- **The close-band comment said reference price; the code uses book mid** — comment corrected,
+  behaviour unchanged. The close-pair test now pins leg A's banded limit price.
