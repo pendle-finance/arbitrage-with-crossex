@@ -475,9 +475,10 @@ export function classifyLegFailure(err: unknown): BorosLegFailureCode {
     // the venue may have run the batch before it failed to answer. Calling
     // that a rejection dropped the replay memo and invited a second fill.
     // (A refusal BEFORE submission never gets here as unknown — the venue
-    // adapter's `neverSentLeg` folds it back to a plain rejection.)
+    // adapter's `neverSentLeg` folds it back to a plain rejection, and a
+    // `[SIMULATE]` refusal provably sent nothing, whatever its status.)
     const status = (err.details as { status?: unknown } | undefined)?.status;
-    if (typeof status === 'number' && status >= 500) return 'unknown';
+    if (!simulated && typeof status === 'number' && status >= 500) return 'unknown';
   }
   if (!simulated && /TIMEOUT|NETWORK|UNREACHABLE|ECONN|ABORT/.test(text)) return 'unknown';
   return 'rejected';

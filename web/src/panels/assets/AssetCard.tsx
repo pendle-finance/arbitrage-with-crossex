@@ -2872,6 +2872,9 @@ function BorosOnlyPairCard({
   const needLong = pair.missingLong > 0;
   const needShort = pair.missingShort > 0;
   const both = needLong && needShort;
+  // One prefill sizes both perps alike, so it is offered only while the two
+  // gaps match; a part-covered side opens from its own row.
+  const bothEven = both && Math.abs(pair.missingLong - pair.missingShort) <= Math.max(1e-9, pair.size * 1e-6);
   const cell = 'border-b border-ink-850 px-2.5 py-2';
   const pill = 'btn !h-[30px] !px-3 !text-[12px]';
   const sizeText = (n: number) => sizeLabel(n, pair.unit, base);
@@ -2889,17 +2892,19 @@ function BorosOnlyPairCard({
       {sideChip(side)}
     </span>
   );
-  /** One perp row: the perp that is there, or the gap where one belongs. */
-  const perpRow = (venue: string, side: 'LONG' | 'SHORT', perp: UnpairedPerp | null, missing: number) =>
-    perp && !(missing > 0) ? (
+  /** A venue's perp rows: the perp that is there, then the gap still to open
+   * — both when a perp covers only part of the unit. */
+  const perpRows = (venue: string, side: 'LONG' | 'SHORT', perp: UnpairedPerp | null, missing: number) => [
+    perp && (
       <tr key={`p-${venue}`}>
         <td className={`${cell} whitespace-nowrap`}>{legName(venue, 'perp', side)}</td>
         <td className={`${cell} num whitespace-nowrap text-right text-ink-100`}>{sizeText(sizeIn(perp, perp.unit))}</td>
         <td className={`${cell} num text-right text-ink-600`}>—</td>
         <td className={`${cell} num whitespace-nowrap text-right text-ink-100`}>{fmtUsdCompact(perp.imUsd)}</td>
       </tr>
-    ) : (
-      <tr key={`p-${venue}`} className="bg-amber-500/[0.04]">
+    ),
+    missing > 0 && (
+      <tr key={`pm-${venue}`} className="bg-amber-500/[0.04]">
         <td className={`${cell} whitespace-nowrap`}>
           <span className="inline-flex items-center gap-[7px]">
             {legName(venue, 'perp', side)}
@@ -2922,7 +2927,8 @@ function BorosOnlyPairCard({
           </button>
         </td>
       </tr>
-    );
+    ),
+  ];
   return (
     <div className="overflow-x-auto rounded-lg border border-amber-500/40 bg-ink-950/40">
       <table className="w-full min-w-[880px] table-fixed border-collapse">
@@ -3005,8 +3011,8 @@ function BorosOnlyPairCard({
                 </tr>
               </thead>
               <tbody>
-                {perpRow(pair.longVenue, 'LONG', pair.longPerp, pair.missingLong)}
-                {perpRow(pair.shortVenue, 'SHORT', pair.shortPerp, pair.missingShort)}
+                {perpRows(pair.longVenue, 'LONG', pair.longPerp, pair.missingLong)}
+                {perpRows(pair.shortVenue, 'SHORT', pair.shortPerp, pair.missingShort)}
                 {[pair.longYu, pair.shortYu].map((y) => (
                   <tr key={`y-${y.marketId}`}>
                     <td className={`${cell} whitespace-nowrap`}>{legName(y.venue, 'yu', y.side)}</td>
@@ -3041,7 +3047,7 @@ function BorosOnlyPairCard({
             >
               Close Boros legs
             </button>
-            {both && (
+            {bothEven && (
               <button
                 type="button"
                 className={`${pill} !border-grass/60 !text-grass hover:!border-grass hover:!bg-grass/10`}

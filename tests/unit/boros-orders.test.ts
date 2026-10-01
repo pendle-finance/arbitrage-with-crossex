@@ -316,6 +316,11 @@ describe('classifyLegFailure', () => {
     expect(classifyLegFailure(http(500, 'INSUFFICIENT_LIQUIDITY'))).toBe('insufficient-depth');
   });
 
+  it('keeps a [SIMULATE] refusal a clean reject even on a 5xx — nothing was sent', () => {
+    const err = new CoreError('[SIMULATE] execution reverted: 0xdeadbeef', 'venue-rejected', { status: 500 });
+    expect(classifyLegFailure(err)).toBe('rejected');
+  });
+
   it('keeps the pair memo-worthy when the batch throws a 5xx: every leg reads unknown', async () => {
     const client = {
       placeMarketOrders: async () => {
