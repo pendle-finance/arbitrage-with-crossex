@@ -50,13 +50,22 @@ BRANCH="${BOROS_BRANCH:-main}"
 # how you install the very tree you audited — see "Install exactly what you
 # audited" in the README.
 REF="${BOROS_REF:-}"
-PORT="${BOROS_PORT:-6688}"
-ROOT="${BOROS_ROOT:-$HOME/.boros-crossex}"
 NODE_LINE="v24"
 LABEL="com.boros.crossex-terminal"
 APP_TITLE="Arbitrage with CrossEx"
 LOG_DIR="$HOME/Library/Logs/boros-crossex"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
+plist_value() { /usr/libexec/PlistBuddy -c "Print :$1" "$PLIST" 2>/dev/null || true; }
+PREV_PORT=""
+PREV_ROOT=""
+if [ -f "$PLIST" ]; then
+  PREV_PORT="$(plist_value EnvironmentVariables:PORT)"
+  case "$PREV_PORT" in ''|*[!0-9]*) PREV_PORT="" ;; esac
+  PREV_ROOT="$(plist_value WorkingDirectory)"
+  case "$PREV_ROOT" in */app) PREV_ROOT="${PREV_ROOT%/app}" ;; *) PREV_ROOT="" ;; esac
+fi
+PORT="${BOROS_PORT:-${PREV_PORT:-6688}}"
+ROOT="${BOROS_ROOT:-${PREV_ROOT:-$HOME/.boros-crossex}}"
 
 TMP=""
 
