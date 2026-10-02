@@ -249,14 +249,14 @@ restore_app() {
   [ -d "$ROOT/app.old" ] || return 1
   printf '\033[1;33m%s\033[0m\n' "Rolling back to the previous version…" >&2
   rm -rf "$ROOT/app.failed"
-  [ -d "$ROOT/app" ] && mv "$ROOT/app" "$ROOT/app.failed"
-  mv "$ROOT/app.old" "$ROOT/app"
+  [ -d "$ROOT/app" ] && { mv "$ROOT/app" "$ROOT/app.failed" || return 1; }
+  mv "$ROOT/app.old" "$ROOT/app" || return 1
   # install_service truncates both logs, so the restart below would wipe the
   # failed version's stderr — the only record of why it would not boot, and
   # exactly what the caller tells the user to read. Keep a copy first.
   cp "$LOG_DIR/server.err.log" "$LOG_DIR/server.failed.log" 2>/dev/null || true
   # install_service boots out the failed instance and reaps orphans for us.
-  install_service
+  install_service || return 1
   wait_for_server || return 1
   echo "      the previous version is running again at http://localhost:$PORT" >&2
   echo "      the version that failed is kept at $ROOT/app.failed" >&2
@@ -335,7 +335,7 @@ port_in_use_by_other_app() {
 }
 
 write_plist() {
-  cat > "$PLIST" <<PLIST
+  cat > "$PLIST" <<PLIST || return 1
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -378,7 +378,7 @@ write_plist() {
 </dict>
 </plist>
 PLIST
-  plutil -lint -s "$PLIST" || fail "generated LaunchAgent plist failed validation."
+  plutil -lint -s "$PLIST" || { echo "generated LaunchAgent plist failed validation." >&2; return 1; }
 }
 
 install_service() {
@@ -393,9 +393,10 @@ install_service() {
   See what it is with:  lsof -nP -iTCP:$PORT -sTCP:LISTEN
   Quit that program and re-run this installer (or re-run with BOROS_PORT=<other port>)."
   fi
-  write_plist
+  write_plist || return 1
   launchctl enable "gui/$uid/$LABEL" 2>/dev/null || true
-  launchctl bootstrap "gui/$uid" "$PLIST"
+  launchctl bootstrap "gui/$uid" "$PLIST" \
+    || { sleep 2; launchctl bootstrap "gui/$uid" "$PLIST"; } || return 1
   launchctl kickstart -k "gui/$uid/$LABEL" 2>/dev/null || true
 }
 
@@ -441,7 +442,14 @@ main() {
   fetch_app
   build_app
   swap_app
-  install_service
+  if ! install_service; then
+    if restore_app; then
+      fail "could not register the background service, so the previous version was put back and is running."
+    fi
+    fail "could not register the background service, and the previous version could not be restored.
+  NO SERVER IS RUNNING. Open deals are not being watched.
+  Re-run this installer to try again."
+  fi
   if ! wait_for_server; then
     if restore_app; then
       fail "the new version did not start, so the previous one was put back and is running.

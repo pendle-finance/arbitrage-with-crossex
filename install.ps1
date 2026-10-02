@@ -435,7 +435,10 @@ function Restore-App {
   Copy-Item (Join-Path $LogDir 'server.err.log') (Join-Path $LogDir 'server.failed.log') `
     -Force -ErrorAction SilentlyContinue
 
-  Install-Service
+  try { Install-Service } catch {
+    Write-Host "      could not register the background service: $($_.Exception.Message)" -ForegroundColor Red
+    return $false
+  }
   if (-not (Wait-ForServer)) { return $false }
   Write-Host "      the previous version is running again at http://localhost:$Port" -ForegroundColor Yellow
   Write-Host "      the version that failed is kept at $failed" -ForegroundColor DarkGray
@@ -774,7 +777,21 @@ try {
   Stop-RunningService   # must precede Swap-App - see the note there
   Swap-Node
   Swap-App
-  Install-Service
+  try { Invoke-WithRetry { Install-Service } -Tries 2 -DelayMs 2000 } catch {
+    $why = $_.Exception.Message
+    $restored = $false
+    try { $restored = Restore-App } catch {
+      Write-Host "      the rollback failed: $($_.Exception.Message)" -ForegroundColor Red
+    }
+    if ($restored) {
+      Fail "could not register the background service ($why), so the previous version was put back and is running."
+    }
+    Fail @"
+could not register the background service ($why), and the previous version could not be restored.
+  NO SERVER IS RUNNING, and nothing starts it, even after a restart. Open deals are not being watched.
+  Re-run this installer to try again.
+"@
+  }
   if (-not (Wait-ForServer)) {
     if (Restore-App) {
       Fail @"
