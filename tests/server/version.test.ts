@@ -4,19 +4,19 @@
  * (no remote read until asked), cached, and provably network-free whenever
  * the local version is unknown or the check is disabled.
  */
-import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { FetchLike } from '../../src/core/boros/client';
 import { makeClients } from '../../src/core/clients';
 import { Store } from '../../src/engine/db';
 import { gateVenue } from '../../src/engine/venueGate';
 import { JobFile, newJob, newTransferJob, TransferFile } from '../../src/server/rebalanceJob';
 import { endUpdateWindow, isUpdating, startUpdate } from '../../src/server/updater';
-import { compareVersions } from '../../src/server/version';
+import { COMMIT_URL, compareVersions, VERSION_URL } from '../../src/server/version';
 import { HOST, makeTestApp, TEST_KEY, TEST_SECRET } from './helpers/gate-nock';
-import { assetUrl, LATEST_URL, RELEASE_COMMIT, RELEASE_FILES, RELEASES_URL, releaseFetch } from './helpers/release';
 
 const mocks = vi.hoisted(() => ({
   spawn: vi.fn(() => ({ unref: vi.fn(), on: vi.fn() })),
@@ -34,28 +34,48 @@ vi.mock('../../src/server/routes/borosPair', async (importOriginal) => ({
   borosExecutionsPending: mocks.pending,
 }));
 
-vi.mock('../../src/server/releaseKey', async () => ({
-  RELEASE_PUBLIC_KEYS: [(await import('./helpers/release')).RELEASE_TEST_PEM],
-}));
+const MAIN_SHA = '3f7c1b9e2d4a6058cbe1740f9a2d5b83c6e0f1a4';
+
+/** A stand-in for install.ps1, pointed at with BOROS_INSTALLER so the Windows
+ * path stages from disk instead of the network. It only has to look enough like
+ * the real thing to pass the captive-portal guard. */
+function fakeInstaller(dir: string): string {
+  const p = path.join(dir, 'fake-install.ps1');
+  writeFileSync(p, '# Arbitrage with CrossEx - Windows installer (test fixture)\n');
+  return p;
+}
+
+/** Minimal FetchLike stub in the boros-stub style. */
+function stub(
+  body: unknown,
+  opts: { status?: number; reject?: boolean; calls?: string[]; sha?: string | null } = {},
+): FetchLike {
+  return async (url) => {
+    opts.calls?.push(url);
+    if (opts.reject) throw new Error('network down');
+    if (url === COMMIT_URL) {
+      const sha = opts.sha === undefined ? MAIN_SHA : opts.sha;
+      if (sha === null) return { ok: false, status: 404, json: async () => ({}) };
+      return { ok: true, status: 200, json: async () => ({ object: { sha } }) };
+    }
+    const status = opts.status ?? 200;
+    return { ok: status < 400, status, json: async () => body };
+  };
+}
 
 describe('GET /api/version', () => {
   let app: FastifyInstance;
-  let warn: ReturnType<typeof vi.spyOn>;
-  beforeEach(() => {
-    warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-  });
   afterEach(async () => {
-    warn.mockRestore();
     await app?.close();
   });
 
   const get = () => app.inject({ method: 'GET', url: '/api/version', headers: HOST });
 
-  it('announces a newer signed release with its highlights', async () => {
+  it('announces a newer remote with its highlights', async () => {
     const calls: string[] = [];
     app = makeTestApp({
       updateCheck: { current: '1.0.0' },
-      versionFetch: releaseFetch({ version: '1.1.0', highlights: ['a', 'b'], calls }),
+      versionFetch: stub({ version: '1.1.0', highlights: ['a', 'b'] }, { calls }),
     });
     const res = await get();
     expect(res.statusCode).toBe(200);
@@ -63,30 +83,27 @@ describe('GET /api/version', () => {
       current: '1.0.0',
       install: null,
       latest: '1.1.0',
-      latestCommit: RELEASE_COMMIT,
+      latestCommit: MAIN_SHA,
       updateAvailable: true,
       highlights: ['a', 'b'],
     });
-    expect(calls).toEqual([LATEST_URL, assetUrl('release.json'), assetUrl('release.json.sig')]);
+    expect(calls).toEqual([VERSION_URL, COMMIT_URL]);
   });
 
-  it('equal versions: no update, no highlights, nothing downloaded', async () => {
-    const calls: string[] = [];
+  it('equal versions: no update, no highlights', async () => {
     app = makeTestApp({
       updateCheck: { current: '1.1.0' },
-      versionFetch: releaseFetch({ version: '1.1.0', highlights: ['a'], calls }),
+      versionFetch: stub({ version: '1.1.0', highlights: ['a'] }),
     });
     const { data } = (await get()).json();
     expect(data.updateAvailable).toBe(false);
     expect(data.highlights).toEqual([]);
-    expect(calls).toEqual([LATEST_URL]);
-    expect(warn).not.toHaveBeenCalled();
   });
 
   it('a locally-newer dev checkout never sees the banner', async () => {
     app = makeTestApp({
       updateCheck: { current: '1.2.0' },
-      versionFetch: releaseFetch({ version: '1.1.0' }),
+      versionFetch: stub({ version: '1.1.0', highlights: [] }),
     });
     expect((await get()).json().data.updateAvailable).toBe(false);
   });
@@ -94,7 +111,7 @@ describe('GET /api/version', () => {
   it('network failure is silent: 200, no update — the route never throws', async () => {
     app = makeTestApp({
       updateCheck: { current: '1.0.0' },
-      versionFetch: releaseFetch({ reject: true }),
+      versionFetch: stub(null, { reject: true }),
     });
     const res = await get();
     expect(res.statusCode).toBe(200);
@@ -108,90 +125,46 @@ describe('GET /api/version', () => {
     });
   });
 
-  it('no Release yet (404) is no update and no error', async () => {
+  it('non-200 and malformed bodies are equally silent', async () => {
     app = makeTestApp({
       updateCheck: { current: '1.0.0' },
-      versionFetch: releaseFetch({ status: 404 }),
-    });
-    const res = await get();
-    expect(res.statusCode).toBe(200);
-    expect(res.json().data.updateAvailable).toBe(false);
-    expect(res.json().data.latest).toBeNull();
-    expect(warn).not.toHaveBeenCalled();
-  });
-
-  it('non-200 and malformed manifests are equally silent', async () => {
-    app = makeTestApp({
-      updateCheck: { current: '1.0.0' },
-      versionFetch: releaseFetch({ status: 500 }),
+      versionFetch: stub({ version: '1.1.0' }, { status: 404 }),
     });
     expect((await get()).json().data.updateAvailable).toBe(false);
     await app.close();
 
     app = makeTestApp({
       updateCheck: { current: '1.0.0' },
-      versionFetch: releaseFetch({ manifest: { version: 42 } }),
+      versionFetch: stub({ version: 42 }),
     });
     expect((await get()).json().data.latest).toBeNull();
     await app.close();
 
+    // Unparseable remote version → null compare → "not newer".
     app = makeTestApp({
       updateCheck: { current: '1.0.0' },
-      versionFetch: releaseFetch({ manifest: { version: '1.0.x' } }),
+      versionFetch: stub({ version: '1.0.x' }),
     });
     expect((await get()).json().data.updateAvailable).toBe(false);
-  });
-
-  it('a bad signature is no update, plus one log line with the reason', async () => {
-    app = makeTestApp({
-      updateCheck: { current: '1.0.0' },
-      versionFetch: releaseFetch({ badSignature: true }),
-    });
-    const { data } = (await get()).json();
-    expect(data.updateAvailable).toBe(false);
-    expect(data.latest).toBeNull();
-    expect(warn).toHaveBeenCalledTimes(1);
-    expect(String(warn.mock.calls[0][0])).toMatch(/release signature does not match — update refused/);
-  });
-
-  it('BOROS_RELEASE_TAG reads that tag, and every check still runs', async () => {
-    process.env.BOROS_RELEASE_TAG = 'v1.1.0-rc.1';
-    try {
-      const calls: string[] = [];
-      app = makeTestApp({
-        updateCheck: { current: '1.0.0' },
-        versionFetch: releaseFetch({ tag: 'v1.1.0-rc.1', calls }),
-      });
-      expect((await get()).json().data.updateAvailable).toBe(true);
-      expect(calls[0]).toBe(`${RELEASES_URL}/tags/v1.1.0-rc.1`);
-      await app.close();
-
-      app = makeTestApp({
-        updateCheck: { current: '1.0.0' },
-        versionFetch: releaseFetch({ tag: 'v1.1.0-rc.1', badSignature: true }),
-      });
-      expect((await get()).json().data.updateAvailable).toBe(false);
-    } finally {
-      delete process.env.BOROS_RELEASE_TAG;
-    }
   });
 
   it('caches the remote read — two requests, one fetch', async () => {
     const calls: string[] = [];
     app = makeTestApp({
       updateCheck: { current: '1.0.0' },
-      versionFetch: releaseFetch({ version: '1.1.0', calls }),
+      versionFetch: stub({ version: '1.1.0', highlights: [] }, { calls }),
     });
     await get();
     await get();
-    expect(calls.filter((u) => u === LATEST_URL)).toHaveLength(1);
+    expect(calls.filter((u) => u === VERSION_URL)).toHaveLength(1);
+    expect(calls.filter((u) => u === COMMIT_URL)).toHaveLength(1);
   });
 
   it('UPDATE_CHECK=0 (disabled) never touches the network', async () => {
     const calls: string[] = [];
     app = makeTestApp({
       updateCheck: { current: '1.0.0', disabled: true },
-      versionFetch: releaseFetch({ version: '9.9.9', calls }),
+      versionFetch: stub({ version: '9.9.9', highlights: [] }, { calls }),
     });
     const { data } = (await get()).json();
     expect(calls).toHaveLength(0);
@@ -209,21 +182,29 @@ describe('GET /api/version', () => {
     // Every existing test app omits updateCheck — this pins that none of them
     // can escape nock through the update check's global-fetch default.
     const calls: string[] = [];
-    app = makeTestApp({ versionFetch: releaseFetch({ version: '9.9.9', calls }) });
+    app = makeTestApp({ versionFetch: stub({ version: '9.9.9', highlights: [] }, { calls }) });
     const { data } = (await get()).json();
     expect(calls).toHaveLength(0);
     expect(data.current).toBeNull();
     expect(data.updateAvailable).toBe(false);
   });
 
-  it('refuses a signed commit that is not 40 hex characters', async () => {
+  it('a sha read that fails still announces the update, unpinned', async () => {
     app = makeTestApp({
       updateCheck: { current: '1.0.0' },
-      versionFetch: releaseFetch({ manifest: { commit: 'main; rm -rf /' } }),
+      versionFetch: stub({ version: '1.1.0', highlights: [] }, { sha: null }),
     });
     const { data } = (await get()).json();
+    expect(data.updateAvailable).toBe(true);
     expect(data.latestCommit).toBeNull();
-    expect(data.updateAvailable).toBe(false);
+  });
+
+  it('refuses a sha that is not 40 hex characters', async () => {
+    app = makeTestApp({
+      updateCheck: { current: '1.0.0' },
+      versionFetch: stub({ version: '1.1.0', highlights: [] }, { sha: 'main; rm -rf /' }),
+    });
+    expect((await get()).json().data.latestCommit).toBeNull();
   });
 
   it('echoes the installer provenance so the UI can show which commit runs', async () => {
@@ -278,21 +259,18 @@ describe('POST /api/version/update', () => {
     home = mkdtempSync(path.join(tmpdir(), 'upd-'));
     realHome = process.env.HOME;
     process.env.HOME = home;
-    process.env.BOROS_ROOT = home;
   });
   afterEach(async () => {
     if (realHome === undefined) delete process.env.HOME;
     else process.env.HOME = realHome;
-    delete process.env.BOROS_ROOT;
     await app?.close();
   });
 
   const post = () => app.inject({ method: 'POST', url: '/api/version/update', headers: HOST });
-  const SIGNED = { updateCheck: { current: '1.0.0' }, versionFetch: releaseFetch() };
 
-  it('runs the saved, hash-checked installer detached, returns its log path, and does not exit', async () => {
+  it('spawns the installer detached, returns its log path, and does not exit', async () => {
     const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
-    app = makeTestApp({ install: INSTALLED, ...SIGNED });
+    app = makeTestApp({ install: INSTALLED });
 
     const res = await post();
 
@@ -300,53 +278,19 @@ describe('POST /api/version/update', () => {
     expect(res.json().data).toEqual({
       started: true,
       logPath: path.join(home, 'Library', 'Logs', 'boros-crossex', 'update.log'),
-      ref: RELEASE_COMMIT,
+      ref: null,
     });
     expect(mocks.spawn).toHaveBeenCalledTimes(1);
     const [cmd, args, opts] = mocks.spawn.mock.calls[0] as unknown as [
       string,
       string[],
-      { detached: boolean; env: Record<string, string> },
+      { detached: boolean },
     ];
     expect(cmd).toBe('/bin/bash');
-    expect(args).toEqual([path.join(home, 'update', 'install.sh')]);
-    expect(readFileSync(args[0])).toEqual(RELEASE_FILES['install.sh']);
-    expect(opts.env.BOROS_TARBALL).toBe(path.join(home, 'update', 'app.tar.gz'));
-    expect(readFileSync(opts.env.BOROS_TARBALL)).toEqual(RELEASE_FILES['app.tar.gz']);
+    expect(args[1]).toContain('/main/install.sh');
     expect(opts.detached).toBe(true);
     expect(exit).not.toHaveBeenCalled();
     exit.mockRestore();
-  });
-
-  it('refuses a file that does not match the signed release, and runs nothing', async () => {
-    app = makeTestApp({
-      install: INSTALLED,
-      updateCheck: { current: '1.0.0' },
-      versionFetch: releaseFetch({ served: { 'app.tar.gz': Buffer.from('tampered') } }),
-    });
-
-    const res = await post();
-
-    expect(res.statusCode).toBe(409);
-    expect(res.json().error.message).toBe(
-      'could not start the update: app.tar.gz does not match the signed release — update refused',
-    );
-    expect(mocks.spawn).not.toHaveBeenCalled();
-    expect(existsSync(path.join(home, 'update', 'install.sh'))).toBe(false);
-  });
-
-  it('re-checks the signature on Update, and runs nothing when it does not match', async () => {
-    app = makeTestApp({
-      install: INSTALLED,
-      updateCheck: { current: '1.0.0' },
-      versionFetch: releaseFetch({ badSignature: true }),
-    });
-
-    const res = await post();
-
-    expect(res.statusCode).toBe(409);
-    expect(res.json().error.message).toMatch(/release signature does not match — update refused/);
-    expect(mocks.spawn).not.toHaveBeenCalled();
   });
 
   it('refuses while a deal is still working, and names it', async () => {
@@ -452,6 +396,25 @@ describe('POST /api/version/update', () => {
     expect(mocks.spawn).not.toHaveBeenCalled();
   });
 
+  it('installs the exact commit the modal advertised', async () => {
+    app = makeTestApp({
+      install: INSTALLED,
+      updateCheck: { current: '1.0.0' },
+      versionFetch: stub({ version: '1.1.0', highlights: [] }),
+    });
+
+    const res = await post();
+
+    expect(res.json().data.ref).toBe(MAIN_SHA);
+    const [, args, opts] = mocks.spawn.mock.calls[0] as unknown as [
+      string,
+      string[],
+      { env: Record<string, string> },
+    ];
+    expect(opts.env.BOROS_REF).toBe(MAIN_SHA);
+    expect(args[1]).toContain('/main/install.sh');
+  });
+
   it('never hands NODE_ENV to the installer', async () => {
     // The LaunchAgent runs the server with NODE_ENV=production. Yarn 1 reads
     // that as --production, skips devDependencies and still exits 0, so the
@@ -460,7 +423,11 @@ describe('POST /api/version/update', () => {
     const real = process.env.NODE_ENV;
     process.env.NODE_ENV = 'production';
     try {
-      app = makeTestApp({ install: INSTALLED, ...SIGNED });
+      app = makeTestApp({
+        install: INSTALLED,
+        updateCheck: { current: '1.0.0' },
+        versionFetch: stub({ version: '1.1.0', highlights: [] }),
+      });
 
       await post();
 
@@ -471,7 +438,7 @@ describe('POST /api/version/update', () => {
       ];
       expect('NODE_ENV' in opts.env).toBe(false);
       // The rest of the environment still goes through — PATH above all.
-      expect(opts.env.BOROS_TARBALL).toBe(path.join(home, 'update', 'app.tar.gz'));
+      expect(opts.env.BOROS_REF).toBe(MAIN_SHA);
       // No duplicate tab: the page the update was clicked on reloads itself.
       expect(opts.env.BOROS_NO_BROWSER).toBe('1');
     } finally {
@@ -492,7 +459,7 @@ describe('POST /api/version/update', () => {
     const real = Object.fromEntries(Object.keys(planted).map((k) => [k, process.env[k]]));
     Object.assign(process.env, planted);
     try {
-      app = makeTestApp({ install: INSTALLED, ...SIGNED });
+      app = makeTestApp({ install: INSTALLED });
 
       await post();
 
@@ -524,10 +491,30 @@ describe('POST /api/version/update', () => {
     expect(mocks.spawn).not.toHaveBeenCalled();
   });
 
+  it('falls back to the branch when the commit is unknown', async () => {
+    app = makeTestApp({
+      install: INSTALLED,
+      updateCheck: { current: '1.0.0' },
+      versionFetch: stub({ version: '1.1.0', highlights: [] }, { sha: null }),
+    });
+
+    const res = await post();
+
+    expect(res.json().data.ref).toBeNull();
+    const [, , opts] = mocks.spawn.mock.calls[0] as unknown as [
+      string,
+      string[],
+      { env: Record<string, string> },
+    ];
+    expect(opts.env.BOROS_REF).toBeUndefined();
+  });
+
   it('on Windows the installer runs as its own scheduled task, outside the service job', async () => {
     const realPlatform = Object.getOwnPropertyDescriptor(process, 'platform')!;
     Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
-    app = makeTestApp({ install: INSTALLED, ...SIGNED });
+    process.env.BOROS_ROOT = home;
+    process.env.BOROS_INSTALLER = fakeInstaller(home);
+    app = makeTestApp({ install: INSTALLED });
     try {
       const res = await post();
 
@@ -543,10 +530,13 @@ describe('POST /api/version/update', () => {
       expect(calls[2][1]).toEqual(['/run', '/tn', 'BorosUpdate']);
 
       // The installer is staged to disk and the task runs THAT.
-      expect(readFileSync(path.join(home, 'update', 'install.ps1'))).toEqual(RELEASE_FILES['install.ps1']);
-      expect(readFileSync(path.join(home, 'update', 'app.zip'))).toEqual(RELEASE_FILES['app.zip']);
+      expect(readFileSync(path.join(home, 'update-installer.ps1'), 'utf8')).toContain(
+        'Arbitrage with CrossEx',
+      );
     } finally {
       Object.defineProperty(process, 'platform', realPlatform);
+      delete process.env.BOROS_ROOT;
+      delete process.env.BOROS_INSTALLER;
     }
   });
 
@@ -557,7 +547,13 @@ describe('POST /api/version/update', () => {
   it('puts no download-and-execute on the scheduled task command line', async () => {
     const realPlatform = Object.getOwnPropertyDescriptor(process, 'platform')!;
     Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
-    app = makeTestApp({ install: INSTALLED, ...SIGNED });
+    process.env.BOROS_ROOT = home;
+    process.env.BOROS_INSTALLER = fakeInstaller(home);
+    app = makeTestApp({
+      install: INSTALLED,
+      updateCheck: { current: '1.0.0' },
+      versionFetch: stub({ version: '1.1.0', highlights: [] }),
+    });
     try {
       await post();
 
@@ -568,37 +564,37 @@ describe('POST /api/version/update', () => {
         `conhost.exe --headless powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "${path.join(home, 'update.ps1')}"`,
       );
       expect(tr).not.toMatch(/iex|Invoke-Expression|https?:|-Command/i);
-      // The archive travels in the staged runner, never on the command line.
-      expect(args.join(' ')).not.toContain('app.zip');
+      // The pin travels in the staged runner, never on the command line.
+      expect(args.join(' ')).not.toContain(MAIN_SHA);
       const runner = readFileSync(path.join(home, 'update.ps1'), 'utf8');
-      expect(runner).toContain(`$env:BOROS_ZIP = '${path.join(home, 'update', 'app.zip')}'`);
-      expect(runner).toContain(`'"${path.join(home, 'update', 'install.ps1')}"'`);
-      expect(runner).not.toContain('BOROS_REF');
+      expect(runner).toContain(`$env:BOROS_REF = '${MAIN_SHA}'`);
       // The page reloads itself onto the new copy; the installer must not
       // open a second tab on top of it.
       expect(runner).toContain("$env:BOROS_NO_BROWSER = '1'");
     } finally {
       Object.defineProperty(process, 'platform', realPlatform);
+      delete process.env.BOROS_ROOT;
+      delete process.env.BOROS_INSTALLER;
     }
   });
 
   it('reports a failed download in the dialog instead of scheduling a task that does nothing', async () => {
     const realPlatform = Object.getOwnPropertyDescriptor(process, 'platform')!;
     Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
-    app = makeTestApp({
-      install: INSTALLED,
-      updateCheck: { current: '1.0.0' },
-      versionFetch: releaseFetch({ assetStatus: { 'app.zip': 500 } }),
-    });
+    process.env.BOROS_ROOT = home;
+    process.env.BOROS_INSTALLER = path.join(home, 'does-not-exist.ps1');
+    app = makeTestApp({ install: INSTALLED });
     try {
       const res = await post();
 
       expect(res.statusCode).toBe(409);
-      expect(res.json().error.message).toBe('could not start the update: could not download app.zip (HTTP 500)');
+      expect(res.json().error.message).toMatch(/could not start the update/);
       expect(res.json().error.retryable).toBe(true);
       expect(mocks.execFileSync).not.toHaveBeenCalled();
     } finally {
       Object.defineProperty(process, 'platform', realPlatform);
+      delete process.env.BOROS_ROOT;
+      delete process.env.BOROS_INSTALLER;
     }
   });
 });
@@ -615,23 +611,24 @@ describe('the window that refuses Boros orders while an update runs', () => {
     realHome = process.env.HOME;
     process.env.HOME = home;
     // These cases cover the update WINDOW, not either platform's launch
-    // mechanism, so they run on whatever host they are on. Both stage the
-    // release under BOROS_ROOT, which would otherwise land in the real install.
+    // mechanism, so they run on whatever host they are on. On Windows that
+    // stages an installer and a log under BOROS_ROOT, which would otherwise
+    // land in the real %LOCALAPPDATA% install. The darwin branch reads neither.
+    process.env.BOROS_INSTALLER = fakeInstaller(home);
     process.env.BOROS_ROOT = home;
   });
   afterEach(() => {
     vi.useRealTimers();
     endUpdateWindow();
+    delete process.env.BOROS_INSTALLER;
     delete process.env.BOROS_ROOT;
     if (realHome === undefined) delete process.env.HOME;
     else process.env.HOME = realHome;
   });
 
-  const start = (fetchImpl = releaseFetch()) => startUpdate(fetchImpl, '1.0.0');
-
   it('opens on a launch that starts, then closes on its own after ten minutes', async () => {
     vi.useFakeTimers();
-    await start();
+    await startUpdate();
 
     expect(isUpdating()).toBe(true);
     vi.advanceTimersByTime(10 * 60_000 - 1);
@@ -641,7 +638,7 @@ describe('the window that refuses Boros orders while an update runs', () => {
   });
 
   it('closes when the installer fails to start, so orders are not refused forever', async () => {
-    await start();
+    await startUpdate();
     expect(isUpdating()).toBe(true);
 
     const handle = mocks.spawn.mock.results[0].value as { on: { mock: { calls: unknown[][] } } };
@@ -655,7 +652,7 @@ describe('the window that refuses Boros orders while an update runs', () => {
     ['a build that failed', 1, null],
     ['a kill', null, 'SIGTERM'],
   ])('closes when the installer dies after starting — %s', async (_case, code, signal) => {
-    await start();
+    await startUpdate();
     expect(isUpdating()).toBe(true);
 
     const handle = mocks.spawn.mock.results[0].value as { on: { mock: { calls: unknown[][] } } };
@@ -669,7 +666,7 @@ describe('the window that refuses Boros orders while an update runs', () => {
   });
 
   it('leaves the window open while the installer is still working', async () => {
-    await start();
+    await startUpdate();
 
     const handle = mocks.spawn.mock.results[0].value as { on: { mock: { calls: unknown[][] } } };
     const onExit = handle.on.mock.calls.find((c) => c[0] === 'exit')![1] as (
@@ -681,31 +678,66 @@ describe('the window that refuses Boros orders while an update runs', () => {
     expect(isUpdating()).toBe(true);
   });
 
+  it('refuses a ref that is not a commit sha, rather than passing it to a shell', async () => {
+    await startUpdate("main'; rm -rf ~; echo '");
+
+    const [, , opts] = mocks.spawn.mock.calls[0] as unknown as [
+      string,
+      string[],
+      { env: Record<string, string> },
+    ];
+    expect(opts.env.BOROS_REF).toBeUndefined();
+  });
+
+  it('pins the update to the commit in the staged runner on Windows', async () => {
+    const realPlatform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+    process.env.BOROS_ROOT = home;
+    process.env.BOROS_INSTALLER = fakeInstaller(home);
+    try {
+      await startUpdate(MAIN_SHA);
+
+      expect(readFileSync(path.join(home, 'update.ps1'), 'utf8')).toContain(
+        `$env:BOROS_REF = '${MAIN_SHA}'`,
+      );
+    } finally {
+      Object.defineProperty(process, 'platform', realPlatform);
+      delete process.env.BOROS_ROOT;
+      delete process.env.BOROS_INSTALLER;
+    }
+  });
+
   it('never opens when the scheduled task cannot be created', async () => {
     const realPlatform = Object.getOwnPropertyDescriptor(process, 'platform')!;
     Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+    process.env.BOROS_ROOT = home;
+    process.env.BOROS_INSTALLER = fakeInstaller(home);
     mocks.execFileSync.mockImplementationOnce(() => {
       throw new Error('schtasks is not on this machine');
     });
     try {
-      await expect(start()).rejects.toThrow(/schtasks is not on this machine/);
+      await expect(startUpdate()).rejects.toThrow(/schtasks is not on this machine/);
       expect(isUpdating()).toBe(false);
     } finally {
       Object.defineProperty(process, 'platform', realPlatform);
+      delete process.env.BOROS_ROOT;
+      delete process.env.BOROS_INSTALLER;
     }
   });
 
   it('never opens when the installer cannot be staged', async () => {
     const realPlatform = Object.getOwnPropertyDescriptor(process, 'platform')!;
     Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+    process.env.BOROS_ROOT = home;
+    process.env.BOROS_INSTALLER = path.join(home, 'nope.ps1');
     try {
-      await expect(start(releaseFetch({ served: { 'install.ps1': Buffer.from('changed') } }))).rejects.toThrow(
-        'install.ps1 does not match the signed release — update refused',
-      );
+      await expect(startUpdate()).rejects.toThrow();
       expect(isUpdating()).toBe(false);
       expect(mocks.execFileSync).not.toHaveBeenCalled();
     } finally {
       Object.defineProperty(process, 'platform', realPlatform);
+      delete process.env.BOROS_ROOT;
+      delete process.env.BOROS_INSTALLER;
     }
   });
 });

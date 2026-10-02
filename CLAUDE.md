@@ -19,12 +19,9 @@ feature launch more effect than a drip of small ones.
    in the in-app update modal, so write them for a trader, not for a
    developer.
 4. Merge `dev` into `main`.
-5. Push tag `vX.Y.Z` on the `main` commit. An Infra Senior approves the
-   `release` environment run.
 
-`main` is what `install.sh` reads. The in-app update check reads the latest
-signed GitHub Release, so the release run is the moment every user sees the
-update.
+`main` is what `install.sh` and the in-app update check read. The merge to
+`main` is the moment every user sees the update.
 
 There is no changeset tool, and the repo does not need one. The bundle list
 is `git log main..dev`. `version.json` highlights stay hand-written.

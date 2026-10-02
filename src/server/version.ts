@@ -1,33 +1,25 @@
 /**
- * Update check against the repo's latest signed GitHub Release.
+ * Update check against the repo's own `version.json` on GitHub `main`.
  *
  * The running copy's version comes from `<repoRoot>/version.json` (shipped
- * inside the install archive); the latest is the Release's `release.json`,
- * trusted only when its signature matches a release key, and cached for hours.
- * A check that can fail loudly would be worse than no check, so every failure
- * — missing local file, network, non-200, a bad signature or manifest, an
- * unparseable version — resolves to "no update", never an error. A failed
- * read or check leaves one log line with the reason.
+ * inside the install archive); the latest is one small raw-GitHub read,
+ * cached for hours. Everything here is deliberately silent: a check that can
+ * fail loudly would be worse than no check, so every failure — missing local
+ * file, network, non-200, bad JSON, unparseable version — resolves to "no
+ * update", never an error.
  */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { FetchLike } from '../core/boros/client';
-import { type ReleaseManifest, verifyRelease } from './releaseVerify';
 
-const RELEASES_URL = 'https://api.github.com/repos/pendle-finance/arbitrage-with-crossex/releases';
+export const VERSION_URL =
+  'https://raw.githubusercontent.com/pendle-finance/arbitrage-with-crossex/main/version.json';
+export const COMMIT_URL =
+  'https://api.github.com/repos/pendle-finance/arbitrage-with-crossex/git/ref/heads/main';
 export const COMMIT_SHA = /^[0-9a-f]{40}$/;
 const FETCH_TIMEOUT_MS = 5_000;
 /** Cap on remote highlights — the modal is a nudge, not a changelog. */
 const MAX_HIGHLIGHTS = 10;
-
-export type ReleaseFetch = (
-  ...args: Parameters<FetchLike>
-) => Promise<Awaited<ReturnType<FetchLike>> & { arrayBuffer(): Promise<ArrayBuffer> }>;
-
-export interface VerifiedRelease {
-  manifest: ReleaseManifest;
-  assets: Map<string, string>;
-}
 
 export interface RemoteVersion {
   version: string;
@@ -109,65 +101,35 @@ export function compareVersions(a: string, b: string): number | null {
   return 0;
 }
 
-export const releaseUrl = (): string =>
-  process.env.BOROS_RELEASE_TAG
-    ? `${RELEASES_URL}/tags/${encodeURIComponent(process.env.BOROS_RELEASE_TAG)}`
-    : `${RELEASES_URL}/latest`;
-
-export async function downloadAsset(
-  fetchImpl: ReleaseFetch,
-  assets: Map<string, string>,
-  name: string,
-  timeoutMs = FETCH_TIMEOUT_MS,
-): Promise<Buffer> {
-  const url = assets.get(name);
-  if (!url) throw new Error(`the release has no ${name} — update refused`);
-  const res = await fetchImpl(url, {
-    headers: { Accept: 'application/octet-stream' },
-    signal: AbortSignal.timeout(timeoutMs),
-  });
-  if (!res.ok) throw new Error(`could not download ${name} (HTTP ${res.status})`);
-  return Buffer.from(await res.arrayBuffer());
-}
-
-export async function fetchVerifiedRelease(
-  fetchImpl: ReleaseFetch,
-  current: string,
-): Promise<VerifiedRelease | null> {
-  const res = await fetchImpl(releaseUrl(), {
-    headers: { Accept: 'application/vnd.github+json' },
-    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-  });
-  if (res.status === 404) return null;
-  if (!res.ok) throw new Error(`could not read the release (HTTP ${res.status})`);
-  const body = (await res.json()) as { tag_name?: unknown; assets?: unknown };
-  const tag = typeof body.tag_name === 'string' ? body.tag_name.replace(/-rc\.\d+$/, '') : '';
-  if ((compareVersions(tag, current) ?? 0) <= 0) return null;
-  const assets = new Map<string, string>();
-  for (const asset of Array.isArray(body.assets) ? body.assets : []) {
-    if (typeof asset?.name === 'string' && typeof asset.url === 'string') assets.set(asset.name, asset.url);
-  }
-  const [json, signature] = await Promise.all([
-    downloadAsset(fetchImpl, assets, 'release.json'),
-    downloadAsset(fetchImpl, assets, 'release.json.sig'),
-  ]);
-  return { manifest: verifyRelease(json, signature, current), assets };
-}
-
-/** The latest signed release, when it is newer than `current`. NEVER throws —
- * any failure returns null, which the TtlCache then holds for the full TTL (one
- * quiet retry per window, not a retry storm). */
-export async function fetchLatestVersion(
-  fetchImpl: ReleaseFetch,
-  current: string,
-): Promise<RemoteVersion | null> {
+/** Fetch the latest published version.json. NEVER throws — any failure returns
+ * null, which the TtlCache then holds for the full TTL (one quiet retry per
+ * window, not a retry storm). */
+export async function fetchLatestVersion(fetchImpl: FetchLike): Promise<RemoteVersion | null> {
   try {
-    const release = await fetchVerifiedRelease(fetchImpl, current);
-    if (!release) return null;
-    const { version, highlights, commit } = release.manifest;
-    return { version, highlights: highlights.slice(0, MAX_HIGHLIGHTS), commit };
-  } catch (err) {
-    console.warn(`update check: ${(err as Error).message}`);
+    const res = await fetchImpl(VERSION_URL, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
+    if (!res.ok) return null;
+    const body = (await res.json()) as { version?: unknown; highlights?: unknown };
+    if (typeof body.version !== 'string') return null;
+    const highlights = Array.isArray(body.highlights)
+      ? body.highlights.filter((h): h is string => typeof h === 'string').slice(0, MAX_HIGHLIGHTS)
+      : [];
+    return { version: body.version, highlights, commit: await fetchMainCommit(fetchImpl) };
+  } catch {
+    return null;
+  }
+}
+
+async function fetchMainCommit(fetchImpl: FetchLike): Promise<string | null> {
+  try {
+    const res = await fetchImpl(COMMIT_URL, {
+      headers: { Accept: 'application/vnd.github+json' },
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    });
+    if (!res.ok) return null;
+    const body = (await res.json()) as { object?: { sha?: unknown } };
+    const sha = body.object?.sha;
+    return typeof sha === 'string' && COMMIT_SHA.test(sha) ? sha : null;
+  } catch {
     return null;
   }
 }

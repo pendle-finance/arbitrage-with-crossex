@@ -93,7 +93,7 @@ export interface AppDeps {
     onApproved?(): void;
   };
   /** Test seam for the GitHub update check (defaults to global fetch). */
-  versionFetch?: import('./version').ReleaseFetch;
+  versionFetch?: FetchLike;
   /** What the installer recorded about this tree (null in a source checkout).
    * Echoed on GET /api/version so a user can see which commit they run. */
   install?: import('./version').InstallInfo | null;
