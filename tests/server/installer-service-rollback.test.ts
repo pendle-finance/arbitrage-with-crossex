@@ -346,39 +346,9 @@ describe('install.ps1 rolls back when the background service cannot be registere
   });
 
   it('ends every failed rollback in Fail-NotRestored', () => {
-    expect(main).toContain('Fail-NotRestored "could not move the new version into place ($why)"');
     expect(main).toContain('Fail-NotRestored "could not register the background service ($why)"');
     expect(main).toContain("Fail-NotRestored 'the new version did not start'");
     expect(main).not.toContain('NO SERVER IS RUNNING');
-  });
-
-  it('undoes a swap that fails after the server was stopped', () => {
-    const swap = /\n {2}try \{\s*Swap-Node\s+Swap-App\s*\} catch \{([\s\S]*?)\n {2}\}/.exec(main);
-    expect(swap, 'Swap-Node and Swap-App are not inside one try').not.toBeNull();
-    expect(main.indexOf('Stop-RunningService')).toBeLessThan((swap as RegExpExecArray).index);
-    const handler = (swap as RegExpExecArray)[1].replace(/\s+/g, ' ');
-    expect(handler).toMatch(/if \(Undo-Swap\) \{ Fail "could not move the new version into place \(\$why\), so the previous version was put back and is running\." \}/);
-  });
-
-  it('Undo-Swap puts node and app back, restarts the service, and returns $false instead of throwing', () => {
-    const fn = psFunction(ps, 'Undo-Swap');
-    const body = /try \{([\s\S]*?)\} catch \{([\s\S]*?)\}/.exec(fn);
-    expect(body, 'Undo-Swap has no try/catch').not.toBeNull();
-    const [, tried, caught] = body as RegExpExecArray;
-    const steps = ['Restore-Node', 'Move-Item -Path $old -Destination $app', 'Install-Service'].map((x) => tried.indexOf(x));
-    expect(steps.every((i) => i >= 0)).toBe(true);
-    expect([...steps].sort((a, b) => a - b)).toEqual(steps);
-    expect(tried).toMatch(/if \(-not \(Test-Path \$app\)\) \{ Invoke-WithRetry \{ Move-Item -Path \$old -Destination \$app \} \}/);
-    expect(caught).toMatch(/return \$false/);
-    const tail = fn.slice(fn.indexOf(caught) + caught.length);
-    expect(tail).toMatch(/^\s*\}\s*if \(-not \(Wait-ForServer\)\) \{ return \$false \}/);
-    expect(tail).toContain('the previous version is running again at http://localhost:$Port');
-  });
-
-  it('prints the line the in-app update panel reads as a rollback on both undo paths', () => {
-    const panel = /previous version is running again|version that failed is kept/i;
-    expect(psFunction(ps, 'Undo-Swap')).toMatch(panel);
-    expect(psFunction(ps, 'Restore-App')).toMatch(panel);
   });
 
   it('clears a stale app.old before anything is stopped, and never deletes the only copy', () => {

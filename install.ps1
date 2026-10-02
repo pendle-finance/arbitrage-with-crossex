@@ -158,12 +158,8 @@ function Protect-Directory {
     # already sitting here, and a new-file probe would happily pass while the
     # database itself had been locked away.
     foreach ($f in @(Get-ChildItem -File -Force $Path -ErrorAction SilentlyContinue)) {
-      try { ([IO.File]::Open($f.FullName, 'Open', 'ReadWrite', 'ReadWrite, Delete')).Dispose() }
-      catch {
-        if ($_.Exception.GetBaseException() -is [UnauthorizedAccessException]) {
-          $ok = $false; $why = "$($f.Name): $($_.Exception.Message)"; break
-        }
-      }
+      try { ([IO.File]::Open($f.FullName, 'Open', 'ReadWrite', 'ReadWrite')).Dispose() }
+      catch { $ok = $false; $why = "$($f.Name): $($_.Exception.Message)"; break }
     }
   }
   if (-not $ok) {
@@ -417,13 +413,18 @@ function Restore-App {
   if (-not (Test-Path $old)) { return $false }
 
   Write-Host 'Rolling back to the previous version...' -ForegroundColor Yellow
+  # Not Stop-RunningService: that Fails on a busy port, and we are already on
+  # the error path. Take the task down and reap whatever the new version left.
+  Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
+  Stop-StaleServer
   try {
+    $node = Join-Path $Root 'node'
+    $nodeOld = Join-Path $Root 'node.old'
+    if (Test-Path $nodeOld) {
+      if (Test-Path $node) { Invoke-WithRetry { Move-Item -Path $node -Destination (Join-Path $Root 'node.new') } }
+      Invoke-WithRetry { Move-Item -Path $nodeOld -Destination $node }
+    }
     if (Test-Path $failed) { Invoke-WithRetry { Remove-Item -Recurse -Force $failed } }
-    # Not Stop-RunningService: that Fails on a busy port, and we are already on
-    # the error path. Take the task down and reap whatever the new version left.
-    Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
-    Stop-StaleServer
-    Restore-Node
     if (Test-Path $app)    { Invoke-WithRetry { Move-Item -Path $app -Destination $failed } }
     Invoke-WithRetry { Move-Item -Path $old -Destination $app }
   } catch {
@@ -443,30 +444,6 @@ function Restore-App {
   if (-not (Wait-ForServer)) { return $false }
   Write-Host "      the previous version is running again at http://localhost:$Port" -ForegroundColor Yellow
   Write-Host "      the version that failed is kept at $failed" -ForegroundColor DarkGray
-  return $true
-}
-
-function Restore-Node {
-  $node = Join-Path $Root 'node'
-  $nodeOld = Join-Path $Root 'node.old'
-  if (-not (Test-Path $nodeOld)) { return }
-  if (Test-Path $node) { Invoke-WithRetry { Move-Item -Path $node -Destination (Join-Path $Root 'node.new') } }
-  Invoke-WithRetry { Move-Item -Path $nodeOld -Destination $node }
-}
-
-function Undo-Swap {
-  $app = Join-Path $Root 'app'
-  $old = Join-Path $Root 'app.old'
-  try {
-    Restore-Node
-    if (-not (Test-Path $app)) { Invoke-WithRetry { Move-Item -Path $old -Destination $app } }
-    Install-Service
-  } catch {
-    Write-Host "      could not start the previous version again: $($_.Exception.Message)" -ForegroundColor Red
-    return $false
-  }
-  if (-not (Wait-ForServer)) { return $false }
-  Write-Host "      the previous version is running again at http://localhost:$Port" -ForegroundColor Yellow
   return $true
 }
 
@@ -816,16 +793,8 @@ try {
   Get-App
   Build-App
   Stop-RunningService   # must precede Swap-App - see the note there
-  try {
-    Swap-Node
-    Swap-App
-  } catch {
-    $why = $_.Exception.Message
-    if (Undo-Swap) {
-      Fail "could not move the new version into place ($why), so the previous version was put back and is running."
-    }
-    Fail-NotRestored "could not move the new version into place ($why)"
-  }
+  Swap-Node
+  Swap-App
   try { Invoke-WithRetry { Install-Service } -Tries 2 -DelayMs 2000 } catch {
     $why = $_.Exception.Message
     $restored = $false

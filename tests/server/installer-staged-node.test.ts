@@ -131,28 +131,24 @@ describe('install.ps1 stages a new Node.js runtime and swaps it in only after th
     expect(body.indexOf('throw', m[2].at)).toBeGreaterThan(m[2].at);
   });
 
-  it('Restore-Node moves the failed node aside, then puts node.old back', () => {
-    const body = psFunction('Restore-Node');
+  it('Restore-App puts node.old back after it reaps the new server and before it restarts the service', () => {
+    const body = psFunction('Restore-App');
     const all = ops(body);
     const back = moves(body).find((o) => o.from === 'node.old' && o.to === 'node');
     const aside = moves(body).find((o) => o.from === 'node');
-    expect(back, 'Restore-Node never moves node.old back to node').toBeDefined();
-    expect(aside, 'Restore-Node never moves the failed node out of the way').toBeDefined();
+    expect(back, 'Restore-App never moves node.old back to node').toBeDefined();
+    expect(aside, 'Restore-App never moves the failed node out of the way').toBeDefined();
+    const backAt = (back as Op).at;
+    const asideAt = (aside as Op).at;
     expect(['node', 'node.old']).not.toContain((aside as Op).to);
-    expect((aside as Op).at).toBeLessThan((back as Op).at);
+    expect(asideAt).toBeLessThan(backAt);
     const guard = all.find((o) => o.kind === 'test' && o.from === 'node.old');
-    expect(guard?.at ?? Number.POSITIVE_INFINITY).toBeLessThan((aside as Op).at);
-  });
-
-  it('Restore-App deletes app.failed first, then reaps the new server, then calls Restore-Node, all inside its try', () => {
-    const body = psFunction('Restore-App');
-    const tryAt = body.indexOf('try {');
-    const order = ['Remove-Item -Recurse -Force $failed', 'Unregister-ScheduledTask', 'Stop-StaleServer', 'Restore-Node', '} catch {', 'Install-Service'].map(
-      (x) => body.indexOf(x),
-    );
-    expect(tryAt).toBeGreaterThan(0);
-    expect(order.every((i) => i > tryAt)).toBe(true);
-    expect([...order].sort((a, b) => a - b)).toEqual(order);
+    expect(guard?.at ?? Number.POSITIVE_INFINITY).toBeLessThan(asideAt);
+    const reap = body.indexOf('Stop-StaleServer');
+    expect(reap).toBeGreaterThan(0);
+    expect(body.lastIndexOf('try {', asideAt)).toBeGreaterThan(reap);
+    expect(backAt).toBeLessThan(body.indexOf('} catch {'));
+    expect(backAt).toBeLessThan(body.indexOf('Install-Service'));
   });
 
   it('Remove-OldApp also deletes node.old, even without app.old, and never fails over it', () => {

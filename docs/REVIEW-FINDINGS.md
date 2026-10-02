@@ -88,7 +88,7 @@ line numbers are omitted deliberately (they drift).
   check. The icacls and npm calls now run with `Continue` for that one call.
 - **Every update reset `data\` to inherited permissions** — the probe opened existing files
   with no sharing, so the running server's open `deals.sqlite` looked like a denial. It now
-  shares read, write and delete, and only an access denial counts.
+  opens them with read-write sharing.
 - **`Install-Node` deleted the in-use runtime before the service was stopped** — on a Node
   change the old `node\` was removed under the running server. The new runtime is now
   unpacked to `node.new` and swapped in after the stop, and a failed boot puts the old one back.
@@ -97,9 +97,8 @@ line numbers are omitted deliberately (they drift).
   every minute.
 - **A failed task registration left no server** — the new version was in place, nothing was
   registered, and the user saw a raw PowerShell error. The registration is retried once, then
-  the previous version is put back and registered. The same applies to a failed swap of the
-  app or the runtime after the stop. The message says no server runs only when nothing is
-  registered to start one.
+  the previous version is put back and registered. The message says no server runs only when
+  nothing is registered to start one.
 - **`-Purge` said "Uninstalled." while the API keys were still on disk** — a locked file or a
   shell inside the folder stopped the delete silently. It now retries, names what is left,
   and fails instead.
