@@ -358,8 +358,8 @@ tested with nvm Node v22 — `nvm use 22` first.
 
 Install-time env vars (all optional): `BOROS_REF` (install an exact commit, tag or
 branch — see *Install exactly what you audited*), `BOROS_TARBALL`/`BOROS_ZIP` (install
-from a local archive), `BOROS_PORT`, `BOROS_ROOT`, `BOROS_REPO`, `BOROS_BRANCH`. A re-install
-or an update keeps the port and folder of the existing install unless you set them again.
+from a local archive), `BOROS_PORT`, `BOROS_ROOT`, `BOROS_REPO`, `BOROS_BRANCH`. A re-install,
+an update or an uninstall uses the port and folder of the existing install unless you set them again.
 
 Deployment-relevant env vars (all optional): `UPDATE_CHECK` (set `0` to disable the
 GitHub version check), `PORT` (default 6688), `ARB_DATA_DIR`

@@ -6,8 +6,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 const read = (f: string): string => readFileSync(new URL(`../../${f}`, import.meta.url), 'utf8');
 
-function configBlock(): string {
-  const sh = read('install.sh');
+function configBlock(file = 'install.sh'): string {
+  const sh = read(file);
   const start = sh.indexOf('LABEL="com.boros.crossex-terminal"');
   const end = sh.indexOf('\n', sh.indexOf('ROOT="${BOROS_ROOT'));
   expect(start).toBeGreaterThan(0);
@@ -49,8 +49,8 @@ function fakeHome(plist?: { port: string; workdir: string }): string {
   return home;
 }
 
-function runConfig(home: string, env: Record<string, string> = {}): { port: string; root: string } {
-  const script = ['set -euo pipefail', configBlock(), 'printf "%s|%s" "$PORT" "$ROOT"'].join('\n');
+function runConfig(home: string, env: Record<string, string> = {}, file = 'install.sh'): { port: string; root: string } {
+  const script = ['set -euo pipefail', configBlock(file), 'printf "%s|%s" "${PORT-}" "$ROOT"'].join('\n');
   const { BOROS_PORT: _p, BOROS_ROOT: _r, ...clean } = process.env;
   const [port, root] = execFileSync('bash', ['-c', script], {
     encoding: 'utf8',
@@ -82,6 +82,45 @@ describe.runIf(process.platform === 'darwin')('install.sh keeps the port and fol
     const home = fakeHome({ port: 'abc', workdir: '/Users/x/elsewhere' });
     expect(runConfig(home)).toEqual({ port: '6688', root: `${home}/.boros-crossex` });
   });
+});
+
+describe.runIf(process.platform === 'darwin')('uninstall.sh removes the folder of the existing install', () => {
+  const root = (home: string, env: Record<string, string> = {}): string => runConfig(home, env, 'uninstall.sh').root;
+
+  it('uses the default folder when there is no install', () => {
+    const home = fakeHome();
+    expect(root(home)).toBe(`${home}/.boros-crossex`);
+  });
+
+  it('reads the folder from the existing LaunchAgent', () => {
+    expect(root(fakeHome({ port: '7791', workdir: '/Users/x/custom-root/app' }))).toBe('/Users/x/custom-root');
+  });
+
+  it('lets BOROS_ROOT win over the existing LaunchAgent', () => {
+    const home = fakeHome({ port: '7791', workdir: '/Users/x/custom-root/app' });
+    expect(root(home, { BOROS_ROOT: '/Users/x/other' })).toBe('/Users/x/other');
+  });
+
+  it('ignores a folder that the installer did not write', () => {
+    const home = fakeHome({ port: '7791', workdir: '/Users/x/elsewhere' });
+    expect(root(home)).toBe(`${home}/.boros-crossex`);
+  });
+});
+
+describe('uninstall.ps1 resolves the folder and port as install.ps1 does', () => {
+  const block = (file: string): string => {
+    const ps = read(file);
+    const start = ps.indexOf("\n$TaskName = 'Arbitrage with CrossEx'");
+    const end = ps.indexOf('\n', ps.indexOf('\n$Root     = ', start) + 1);
+    expect(start, `${file} has no task name line`).toBeGreaterThan(0);
+    expect(end).toBeGreaterThan(start);
+    return ps.slice(start, end);
+  };
+
+  it('has the same task read and the same fallbacks', () => {
+    expect(block('uninstall.ps1')).toBe(block('install.ps1'));
+  });
+
 });
 
 describe('install.ps1 reads back what it wrote', () => {

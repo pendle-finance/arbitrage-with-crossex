@@ -102,3 +102,6 @@ line numbers are omitted deliberately (they drift).
 - **`-Purge` said "Uninstalled." while the API keys were still on disk** — a locked file or a
   shell inside the folder stopped the delete silently. It now retries, names what is left,
   and fails instead.
+- **The uninstallers ignored a custom folder and port** — with `BOROS_ROOT`/`BOROS_PORT` unset,
+  they removed the default folder and checked port 6688, so an install made elsewhere stayed.
+  They now read both from the existing task or LaunchAgent, as the installers do.

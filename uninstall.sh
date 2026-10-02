@@ -12,11 +12,17 @@
 
 set -euo pipefail
 
-ROOT="${BOROS_ROOT:-$HOME/.boros-crossex}"
 LABEL="com.boros.crossex-terminal"
 APP_TITLE="Arbitrage with CrossEx"
 LOG_DIR="$HOME/Library/Logs/boros-crossex"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
+plist_value() { /usr/libexec/PlistBuddy -c "Print :$1" "$PLIST" 2>/dev/null || true; }
+PREV_ROOT=""
+if [ -f "$PLIST" ]; then
+  PREV_ROOT="$(plist_value WorkingDirectory)"
+  case "$PREV_ROOT" in */app) PREV_ROOT="${PREV_ROOT%/app}" ;; *) PREV_ROOT="" ;; esac
+fi
+ROOT="${BOROS_ROOT:-${PREV_ROOT:-$HOME/.boros-crossex}}"
 
 say() { printf '\033[1;36m==>\033[0m %s\n' "$*"; }
 

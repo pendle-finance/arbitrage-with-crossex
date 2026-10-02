@@ -19,11 +19,21 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
-$Root     = if ($env:BOROS_ROOT) { $env:BOROS_ROOT } else { Join-Path $env:LOCALAPPDATA 'CrossEx-Boros' }
 # Resolved exactly as install.ps1 resolves it: the last-resort port guard below
 # must check the port the server was actually installed on.
-$Port     = if ($env:BOROS_PORT) { [int]$env:BOROS_PORT } else { 6688 }
 $TaskName = 'Arbitrage with CrossEx'
+$PrevRunner = $null
+$PrevPort   = $null
+$prevTask = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+if ($prevTask -and "$($prevTask.Actions[0].Arguments)" -match '-File "([^"]+\\run-server\.ps1)"') {
+  $PrevRunner = $Matches[1]
+  if (Test-Path -LiteralPath $PrevRunner) {
+    $portLine = Select-String -LiteralPath $PrevRunner -Pattern '^\$env:PORT = ''(\d+)''' | Select-Object -First 1
+    if ($portLine) { $PrevPort = [int]$portLine.Matches[0].Groups[1].Value }
+  }
+}
+$Port     = if ($env:BOROS_PORT) { [int]$env:BOROS_PORT } elseif ($PrevPort) { $PrevPort } else { 6688 }
+$Root     = if ($env:BOROS_ROOT) { $env:BOROS_ROOT } elseif ($PrevRunner) { Split-Path -Parent $PrevRunner } else { Join-Path $env:LOCALAPPDATA 'CrossEx-Boros' }
 $AppTitle = 'Arbitrage with CrossEx'
 # Kept in step with install.ps1: an uninstall must also clear the task and the
 # shortcut left by any previous product name, or they outlive the app.
