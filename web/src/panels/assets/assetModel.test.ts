@@ -11,9 +11,11 @@ import {
   assetIsActive,
   perpOnlyCloseLegs,
   perpOnlyPairs,
+  borosOnlyPairs,
   deriveAsset,
   keptSlice,
   pairBorosCloseLegs,
+  pairLockedSpread,
   pairPerpCloseLegs,
   perpKey,
   SECONDS_IN_YEAR,
@@ -414,6 +416,71 @@ describe('totals & APR', () => {
   });
 });
 
+/**
+ * A part-hedged book used to show "—" for its APR. It now gets an estimate —
+ * fixed rate legs plus the funding its unlocked part earns — and ONLY where
+ * the fixed rate would have been a dash (his call 2026-10-01).
+ */
+describe('the estimated APR of a book that is not fully locked', () => {
+  const PX = 1900;
+  // His example: 10 ETH long HL and short Gate, 6 ETH locked on each venue.
+  const book = (yuSize: number, over: { hl7d?: number | null; gate7d?: number | null } = {}) =>
+    group({
+      priceUsd: PX,
+      perpOpen: [
+        // A LONG that PAID 10% a year received −10%.
+        perp({ symbol: 'HYPERLIQUID_FUTURE_ETH_USDC', venue: 'HYPERLIQUID', side: 'LONG', qty: 10, notionalUsd: 10 * PX, imUsd: 1_000, fundingApr7d: over.hl7d === undefined ? -0.1 : over.hl7d }),
+        perp({ symbol: 'GATE_FUTURE_ETH_USDT', venue: 'GATE', side: 'SHORT', qty: 10, notionalUsd: 10 * PX, imUsd: 1_000, fundingApr7d: over.gate7d === undefined ? 0.04 : over.gate7d }),
+      ],
+      borosOpen: [
+        boros({ marketId: 1, venue: 'HYPERLIQUID', side: 'LONG', sizeToken: yuSize, notionalUsd: yuSize * PX, entryApr: 0.08, floatingApr: 0.11, imUsd: 300 }),
+        boros({ marketId: 2, venue: 'GATE', side: 'SHORT', sizeToken: yuSize, notionalUsd: yuSize * PX, entryApr: 0.05, floatingApr: -0.01, imUsd: 300 }),
+      ],
+    });
+
+  it('the unlocked 4 ETH earns (Gate − HL funding) on top of the locked legs', () => {
+    const d = deriveAsset(book(6), {}, 0, NOW);
+    expect(d.lockedAprFwd).toBeNull();
+    const e = d.unlockedEstimate!;
+    const capital = 1_000 + 1_000 + 300 + 300;
+    // Fixed: SHORT Gate receives 5%, LONG HL pays 8%, on 6 ETH each.
+    const fixed = (0.05 - 0.08) * 6 * PX;
+    // Floating: HL funding 10% (longs pay), Gate 4%: 4 ETH × (4% − 10%).
+    const floating = 4 * PX * (0.04 - 0.1);
+    expect(e.fixedCarryPerYearUsd).toBeCloseTo(fixed, 6);
+    expect(e.floatingCarryPerYearUsd).toBeCloseTo(floating, 6);
+    expect(e.apr).toBeCloseTo((fixed + floating) / capital, 9);
+    expect(e.fixedApr + e.floatingApr).toBeCloseTo(e.apr, 12);
+    expect(e.venues.map((v) => [v.venue, v.source, Math.round(v.gapUsd)])).toEqual([
+      ['HYPERLIQUID', '7d', 4 * PX],
+      ['GATE', '7d', -4 * PX],
+    ]);
+  });
+
+  it('a fully locked book keeps its fixed rate and gets no estimate', () => {
+    const d = deriveAsset(book(10), {}, 0, NOW);
+    expect(d.lockedAprFwd).not.toBeNull();
+    expect(d.unlockedEstimate).toBeNull();
+  });
+
+  it("a venue with no perp history falls back to Boros's current floating rate", () => {
+    const d = deriveAsset(book(6, { gate7d: null }), {}, 0, NOW);
+    const gate = d.unlockedEstimate!.venues.find((v) => v.venue === 'GATE')!;
+    expect(gate.source).toBe('current');
+    expect(gate.fundingApr).toBeCloseTo(-0.01, 12);
+  });
+
+  it('no estimate when a gap has no rate at all, or a rate leg has no entry', () => {
+    const noRate = book(6, { gate7d: null });
+    noRate.borosOpen = noRate.borosOpen.filter((b) => b.venue !== 'GATE');
+    expect(deriveAsset(noRate, {}, 0, NOW).unlockedEstimate).toBeNull();
+
+    const noEntry = book(6);
+    noEntry.borosOpen = [{ ...noEntry.borosOpen[0], entryApr: null }, noEntry.borosOpen[1]];
+    expect(deriveAsset(noEntry, {}, 0, NOW).unlockedEstimate).toBeNull();
+  });
+});
+
 describe('defaultChargePerpFees', () => {
   const boros = NOW - 10 * DAY;
   it('on when the perp went on with (or after) its Boros leg', () => {
@@ -674,5 +741,125 @@ describe('perpOnlyPairs', () => {
   it('never pairs a venue with itself, nor two perps on the same side', () => {
     expect(perpOnlyPairs([perpLeg('GATE', 'LONG', 10), perpLeg('OKX', 'LONG', 10)], []).pairs).toEqual([]);
     expect(perpOnlyPairs([perpLeg('GATE', 'LONG', 10), perpLeg('GATE', 'SHORT', 10)], []).pairs).toEqual([]);
+  });
+});
+
+describe('pairLockedSpread — on the RATE legs’ notional', () => {
+  const leg = (kind: 'perp' | 'yu', notionalUsd: number) => ({ kind, notionalUsd });
+  // $100k a side locked at a 5% spread: $5k a year, on $20k of capital.
+  const pair = (perpNotional: number) =>
+    ({
+      lockedAprFwd: 0.25,
+      capitalUsd: 20_000,
+      legs: [leg('perp', perpNotional), leg('perp', perpNotional), leg('yu', 100_000), leg('yu', 100_000)],
+    }) as unknown as Parameters<typeof pairLockedSpread>[0];
+
+  it('reads the same 5% whatever the perps are marked at', () => {
+    expect(pairLockedSpread(pair(100_000))).toBeCloseTo(0.05, 9);
+    // The perps rallied 25%; the rate legs — and what they earn — did not move.
+    expect(pairLockedSpread(pair(125_000))).toBeCloseTo(0.05, 9);
+    expect(pairLockedSpread(pair(80_000))).toBeCloseTo(0.05, 9);
+  });
+
+  it('is null with no rate or no rate legs', () => {
+    expect(pairLockedSpread({ ...pair(100_000), lockedAprFwd: null })).toBeNull();
+    expect(pairLockedSpread({ ...pair(100_000), legs: [] })).toBeNull();
+  });
+});
+
+describe('borosOnlyPairs', () => {
+  const M = 1_790_000_000;
+  const perpLeg = (venue: string, side: 'LONG' | 'SHORT', sizeBase: number) => ({
+    venue,
+    side,
+    symbol: `${venue}_FUTURE_ETH_USDT`,
+    sizeBase,
+    notionalUsd: sizeBase * 2500,
+    unit: 'base' as const,
+    imUsd: sizeBase * 100,
+    share: 1,
+  });
+  const yuLeg = (
+    venue: string,
+    side: 'LONG' | 'SHORT',
+    sizeBase: number,
+    maturity: number,
+    lockedApr: number | null,
+    marketId = 7,
+  ) => ({
+    venue,
+    side,
+    marketId,
+    maturity,
+    sizeBase,
+    notionalUsd: sizeBase * 2500,
+    unit: 'base' as const,
+    lockedApr,
+    imUsd: sizeBase * 3,
+    share: 1,
+  });
+
+  it('pairs his two leftover rate legs into one unit with both perps missing', () => {
+    // Gate LONG 37.3 (the unpaired slice of a leg a pair holds) + Lighter
+    // SHORT 37.3, both 30 Oct: the Boros side of a Gate/Lighter unit.
+    const gate = { ...yuLeg('GATE', 'LONG', 37.3, M, -0.0565, 1), share: 0.0734 };
+    const { pairs, restPerps, restYus } = borosOnlyPairs([], [gate, yuLeg('LIGHTER', 'SHORT', 37.3, M, 0.0831, 2)]);
+    expect(pairs).toHaveLength(1);
+    const p = pairs[0];
+    expect(`${p.longVenue}/${p.shortVenue}`).toBe('GATE/LIGHTER');
+    expect(p.maturity).toBe(M);
+    expect(p.size).toBeCloseTo(37.3, 9);
+    expect(p.longPerp).toBeNull();
+    expect(p.shortPerp).toBeNull();
+    expect(p.missingLong).toBeCloseTo(37.3, 9);
+    expect(p.missingShort).toBeCloseTo(37.3, 9);
+    expect(p.lockedSpread).toBeCloseTo(0.0266, 9);
+    // The slice keeps its share of the venue leg, so a close stays capped.
+    expect(p.longYu.share).toBeCloseTo(0.0734, 9);
+    expect(restPerps).toEqual([]);
+    expect(restYus).toEqual([]);
+  });
+
+  it('hangs a leftover perp on its unit: only the other perp is missing', () => {
+    const { pairs, restPerps } = borosOnlyPairs(
+      [perpLeg('GATE', 'LONG', 50)],
+      [yuLeg('GATE', 'LONG', 30, M, -0.05, 1), yuLeg('LIGHTER', 'SHORT', 30, M, 0.08, 2)],
+    );
+    expect(pairs).toHaveLength(1);
+    expect(pairs[0].longPerp?.sizeBase).toBe(30);
+    expect(pairs[0].missingLong).toBe(0);
+    expect(pairs[0].missingShort).toBe(30);
+    expect(pairs[0].imUsd).toBeCloseTo(30 * 3 * 2 + 30 * 100, 6);
+    // The perp's unclaimed 20 stays ungrouped.
+    expect(restPerps).toHaveLength(1);
+    expect(restPerps[0].sizeBase).toBe(20);
+  });
+
+  it('pairs the smaller size and leaves the remainder ungrouped', () => {
+    const { pairs, restYus } = borosOnlyPairs(
+      [],
+      [yuLeg('GATE', 'LONG', 100, M, -0.05, 1), yuLeg('LIGHTER', 'SHORT', 40, M, 0.08, 2)],
+    );
+    expect(pairs[0].size).toBe(40);
+    expect(restYus).toHaveLength(1);
+    expect(restYus[0].venue).toBe('GATE');
+    expect(restYus[0].sizeBase).toBe(60);
+  });
+
+  it('never blends maturities, pairs a venue with itself, or pairs two legs on one side', () => {
+    expect(borosOnlyPairs([], [yuLeg('GATE', 'LONG', 10, M, -0.05, 1), yuLeg('LIGHTER', 'SHORT', 10, M + 86_400 * 28, 0.08, 2)]).pairs).toEqual([]);
+    expect(borosOnlyPairs([], [yuLeg('GATE', 'LONG', 10, M, -0.05, 1), yuLeg('GATE', 'SHORT', 10, M, 0.08, 2)]).pairs).toEqual([]);
+    expect(borosOnlyPairs([], [yuLeg('GATE', 'LONG', 10, M, -0.05, 1), yuLeg('OKX', 'LONG', 10, M, -0.04, 2)]).pairs).toEqual([]);
+  });
+
+  it('nets both settlement fees out of the spread, as a 4-leg pair does', () => {
+    const long = { ...yuLeg('GATE', 'LONG', 10, M, -0.05, 1), settleFeeApr: 0.002 };
+    const short = { ...yuLeg('LIGHTER', 'SHORT', 10, M, 0.08, 2), settleFeeApr: 0.001 };
+    expect(borosOnlyPairs([], [long, short]).pairs[0].lockedSpread).toBeCloseTo(0.08 - 0.05 - 0.003, 9);
+  });
+
+  it('reports no spread while a rate is pending, and skips dust', () => {
+    expect(borosOnlyPairs([], [yuLeg('GATE', 'LONG', 10, M, null, 1), yuLeg('LIGHTER', 'SHORT', 10, M, 0.08, 2)]).pairs[0].lockedSpread).toBeNull();
+    expect(borosOnlyPairs([], [yuLeg('GATE', 'LONG', 0.001, M, -0.05, 1), yuLeg('LIGHTER', 'SHORT', 0.001, M, 0.08, 2)]).pairs).toEqual([]);
   });
 });

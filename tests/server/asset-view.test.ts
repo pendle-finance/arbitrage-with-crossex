@@ -226,6 +226,46 @@ describe('GET /api/asset-view/:address', () => {
     expect(calls).toHaveLength(0);
   });
 
+  it("annualises each open perp's last 7 days of funding, off its own ledger rows", async () => {
+    // The floating rate an asset's estimated APR uses for its unlocked part
+    // (his call 2026-10-01): what the position REALISED over the trailing
+    // week, not the current period — and never anything older.
+    app = makeTestApp({ borosFetch: borosStub(borosBodies()) });
+    const withIds = [
+      { ...gatePositions[0], position_id: 'hl-1' },
+      { ...gatePositions[1], position_id: 'okx-1' },
+    ];
+    mockGateGet('/positions', { body: withIds });
+    mockGateGet('/history_positions', { body: [] });
+    mockGateGet('/history_margin_interests', { body: [] });
+    const tick = (pid: string, usd: number, ageDays: number) => ({
+      business_id: `${pid}_${ageDays}`,
+      change: String(usd),
+      create_time: String((NOW - ageDays * DAY) * 1000),
+      statement_type: 'FUNDING_FEE',
+    });
+    mockGateGet('/account_book', {
+      body: [
+        // HL short received $100 a day for the week; one tick from 9 days
+        // ago sits outside it and must not count.
+        ...[1, 2, 3, 4, 5, 6, 6.5].map((d) => tick('hl-1', 100, d)),
+        tick('hl-1', 5_000, 9),
+        // OKX long paid $50 a day.
+        ...[1, 3, 5].map((d) => tick('okx-1', -50, d)),
+      ],
+    }).persist();
+
+    const res = await get(`/api/asset-view/${ADDR}?since=0`);
+    expect(res.statusCode).toBe(200);
+    const eth = res.json().data.assets.find((a: { base: string }) => a.base === 'ETH');
+    const rateOf = (venue: string) =>
+      eth.perpOpen.find((l: { venue: string }) => l.venue === venue).fundingApr7d as number;
+    const week = 7 / 365;
+    // $700 on $1,000,000 over a week; −$150 on $1,000,000 over a week.
+    expect(rateOf('HYPERLIQUID')).toBeCloseTo(700 / 1_000_000 / week, 9);
+    expect(rateOf('OKX')).toBeCloseTo(-150 / 1_000_000 / week, 9);
+  });
+
   it('rejects a since in the future', async () => {
     app = makeTestApp({ borosFetch: borosStub({}) });
     const res = await get(`/api/asset-view/${ADDR}?since=${NOW + DAY}`);

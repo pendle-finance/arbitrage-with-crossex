@@ -86,7 +86,12 @@ export function AssetsHome() {
           const meta = win ?? data;
           const sinceSec = meta?.sinceSec ?? 0;
           const d = deriveAsset(group, prefs.exclusions, sinceSec, meta?.nowSec ?? 0, feeRows, rebate);
-          const shown: AssetDerived = gateHidden ? { ...d, gaps: d.gaps.filter((gap) => gap.leg !== 'perp') } : d;
+          // View-only hides the perps, it does not remove them: an estimate
+          // built without them reads every rate leg as unhedged (it printed
+          // −706% on a hedged book), so a view-only card shows the dash.
+          const shown: AssetDerived = gateHidden
+            ? { ...d, gaps: d.gaps.filter((gap) => gap.leg !== 'perp'), unlockedEstimate: null }
+            : d;
           return {
             group,
             sinceSec,
@@ -264,7 +269,7 @@ export function AssetsHome() {
           </div>
           <div className="flex flex-wrap items-baseline gap-x-2.5 gap-y-1">
             <span className="num text-[34px] font-bold leading-none tracking-[-0.01em]">
-              <SignedNumber value={totalPnl} format={fmtUsd} plus={false} />
+              <SignedNumber value={totalPnl} format={fmtUsd} />
             </span>
             {/* Only stated when the interest is actually known: with it
                 unreadable the total IS just the cards summed, and the phrase
@@ -300,7 +305,7 @@ export function AssetsHome() {
               Realized APR ≈
             </div>
             <div className="num text-[24px] font-bold leading-[29.05px]">
-              {blendedApr !== null ? <SignedNumber value={blendedApr} format={fmtPct} plus={false} /> : '—'}
+              {blendedApr !== null ? <SignedNumber value={blendedApr} format={fmtPct} /> : '—'}
             </div>
           </div>
           <div className="flex flex-col gap-2 border-l border-ink-700 pl-9">

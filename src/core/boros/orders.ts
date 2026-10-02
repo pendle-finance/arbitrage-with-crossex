@@ -471,6 +471,13 @@ export function classifyLegFailure(err: unknown): BorosLegFailureCode {
   if (err instanceof CoreError) {
     if (err.category === 'insufficient-margin') return 'insufficient-margin';
     if (err.category === 'network' || err.category === 'rate-limited') return 'unknown';
+    // A 5xx with no reason the rules above recognise is no verdict at all:
+    // the venue may have run the batch before it failed to answer. Calling
+    // that a rejection dropped the replay memo and invited a second fill.
+    // (A refusal BEFORE submission never gets here as unknown — the venue
+    // adapter's `neverSentLeg` folds it back to a plain rejection.)
+    const status = (err.details as { status?: unknown } | undefined)?.status;
+    if (typeof status === 'number' && status >= 500) return 'unknown';
   }
   if (!simulated && /TIMEOUT|NETWORK|UNREACHABLE|ECONN|ABORT/.test(text)) return 'unknown';
   return 'rejected';

@@ -1047,6 +1047,10 @@ export interface BorosPairMarketRow {
   currentSize: number;
   collateralPriceUsd: number | null;
   closeOnly: boolean;
+  /** Collateral one unit of size takes to OPEN here: initial margin at the
+   * current rate plus the taker fee, both linear in size. Null when the market
+   * carries no margin inputs. Optional: an older server does not send it. */
+  openCostPerSize?: number | null;
 }
 
 /** GET /api/boros/pair/context */
@@ -1459,6 +1463,10 @@ export interface AssetPerpOpen {
   feesUsd: number;
   imUsd: number;
   openedAt: number | null;
+  /** Funding realised over the trailing 7 days (or the position's life, if
+   * younger), annualised on its current notional. Signed, + = received. Null
+   * when unknown. Absent from older servers. */
+  fundingApr7d?: number | null;
 }
 
 /** Closed positions since the start date, aggregated per symbol. */

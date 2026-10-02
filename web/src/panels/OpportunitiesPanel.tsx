@@ -77,6 +77,7 @@ import {
   applyFilters,
   hasActiveFilter,
   loadFilters,
+  maturityDays,
   NO_FILTERS,
   saveFilters,
   toRows,
@@ -409,7 +410,7 @@ function VenueBox({
   venue: string;
   why: string;
   fixedApr: number | null;
-  /** Receives fixed (green, "+") vs pays fixed (guava, "−"). */
+  /** Receives fixed (green, unsigned) vs pays fixed (guava, "−"). */
   positive: boolean;
   children: ReactNode;
 }) {
@@ -425,7 +426,7 @@ function VenueBox({
               positive ? 'bg-grass/10 text-grass' : 'bg-guava/10 text-guava'
             }`}
           >
-            {positive ? '+' : '−'}
+            {positive ? '' : '−'}
             {fmtPct(Math.abs(fixedApr), 1)} Fixed
           </span>
         )}
@@ -515,7 +516,7 @@ const OpportunityCard = memo(function OpportunityCard({
   // still serves them, so a loss must never wear the profit colour.
   const netNegative = capitalApr !== null && capitalApr < 0;
   const netTone = netNegative ? 'text-rose-400' : 'text-emerald-400';
-  const days = Math.max(1, Math.round(group.secondsToMaturity / 86_400));
+  const days = maturityDays(group.secondsToMaturity);
   const maturityTitle = `Matures ${fmtDateLocal(group.maturity)} · ${fmtAge(group.secondsToMaturity * 1000)} left`;
   // Token-margined groups also size in the collateral token — bracket the
   // notional with that amount (USDT groups stay pure-dollar).
@@ -790,7 +791,7 @@ const OpportunityCard = memo(function OpportunityCard({
               </span>
               <span aria-hidden="true" className="min-w-[24px] flex-1 border-t border-dashed border-ink-300/25" />
               <span className="whitespace-nowrap rounded-full border border-wash/[0.15] bg-ink-950/60 px-4 py-[5px] text-[12px] text-ink-300">
-                nets to 0 · no price risk
+                nets to 0 · no price exposure
               </span>
             </div>
             {/* Two columns only from xl: the content column is the viewport less

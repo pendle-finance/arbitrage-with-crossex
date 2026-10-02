@@ -27,7 +27,6 @@ import { useEffect, useMemo, useState } from 'react';
 import { useTradeFlowOptional } from './TradeFlow';
 import {
   useBorosAgent,
-  useBorosCancelAndClose,
   useBorosPairContext,
   useBorosPairSimulation,
   useExecuteBorosPair,
@@ -48,12 +47,13 @@ import { AffixedInput, EstimateCard } from './PairTicketBits';
 import { QueryError } from '../components/QueryError';
 import { SegmentedToggle } from '../components/SegmentedToggle';
 import { amountError } from '../lib/amount';
-import { isUsdCollateral, knownRate } from '../lib/boros';
+import { isUsdCollateral } from '../lib/boros';
 import { fieldValue, fmtPct, sigGrouped } from '../lib/fmt';
 import { useNow } from '../lib/useNow';
 import { uuid } from '../lib/uuid';
 import { useActiveWallet } from '../panels/trackedAddress';
 import { BorosAgentSetup, BorosLogInButton } from './BorosAgentSetup';
+import { maxOpenSize } from './borosMaxSize';
 import {
   BlockerList,
   GasTopUp,
@@ -353,16 +353,36 @@ export function BorosPairTicket({
     }
     return context.data.crossByToken.find((c) => c.tokenId === row.tokenId)?.available ?? null;
   };
-  // A pair is funded by BOTH legs' buckets: two cross legs share one, but an
-  // isolated leg has its own, and the size the pair can carry is the smaller.
+  /**
+   * The largest SIZE the collateral funds — not the collateral itself. A YU
+   * leg posts only its initial margin plus the taker fee, so a bucket with 5
+   * ETH free opens far more than 5 ETH of YU. A pair is ONE size on both legs:
+   * two cross legs pay out of their shared bucket together, an isolated leg out
+   * of its own, and the tighter cap wins so the legs still match (see
+   * borosMaxSize.ts). Reduce-only can only take off what is held.
+   */
+  const legFunding = (marketId: number | null, dir: BorosLegDirection) => {
+    const row = marketId !== null ? byId.get(marketId) : null;
+    if (!row) return null;
+    // An order in `dir` first eats an opposing position (+ = long held).
+    const reducible = dir === 'long' ? Math.max(0, -row.currentSize) : Math.max(0, row.currentSize);
+    return {
+      bucket: row.onIsolatedMargin ? `iso:${row.marketId}` : `cross:${row.tokenId}`,
+      available: availableFor(marketId),
+      costPerSize: row.openCostPerSize,
+      reducible,
+    };
+  };
+  const tradedLegs = (mode === 'single' ? [legFunding(marketA, dirA)] : [legFunding(marketA, dirA), legFunding(marketB, dirB)]).filter(
+    (l): l is NonNullable<ReturnType<typeof legFunding>> => l !== null,
+  );
   const availableToTrade = ((): number | null => {
-    const a = availableFor(marketA);
-    if (mode === 'single') return a;
-    const b = availableFor(marketB);
-    if (a === null) return b;
-    if (b === null) return a;
-    return Math.min(a, b);
+    if (tradedLegs.length === 0) return null;
+    if (intent === 'close') return Math.min(...tradedLegs.map((l) => l.reducible));
+    return maxOpenSize(tradedLegs);
   })();
+  /** The collateral behind that size, for the caption's hover. */
+  const freeCollateral = availableFor(marketA);
   /** The tolerance popover — closed until asked for. */
   const [slipOpen, setSlipOpen] = useState(false);
   const rowA = marketA !== null ? byId.get(marketA) ?? null : null;
@@ -538,9 +558,12 @@ export function BorosPairTicket({
   const estSlippageApr = ((): number | null => {
     if (!simulation) return null;
     if (activeLeg === null) return simulation.slippageApr ?? null;
+    // The quote's own figure, off the mid its bound is anchored to — a second
+    // reading against the context's mid (its own, slower poll) could disagree
+    // with the blocker the server words from this one. Better than mid is no
+    // slippage, not a negative one.
     const leg = activeLeg === 'A' ? simulation.legA : simulation.legB;
-    const mid = (activeLeg === 'A' ? rowA : rowB)?.midApr;
-    return leg.execApr !== null && knownRate(mid) ? Math.abs(leg.execApr - mid) : null;
+    return leg.estSlippageApr == null ? null : Math.max(0, leg.estSlippageApr);
   })();
   const gate = sim.data?.gate ?? null;
 
@@ -572,7 +595,6 @@ export function BorosPairTicket({
   }, [marketA, marketB, dirA, dirB, intent]);
 
   const execute = useExecuteBorosPair();
-  const cancelClose = useBorosCancelAndClose();
   const topUpGas = useTopUpGas();
 
   // Tell the host surface an execution is in flight, so it can lock its close
@@ -856,10 +878,16 @@ export function BorosPairTicket({
             <button
               type="button"
               className="num text-[11px] text-ink-400 transition-colors hover:text-ink-100"
-              title="What this collateral bucket can still fund. Click to size to it."
+              title={
+                intent === 'close'
+                  ? 'The most reduce-only can take off: the smaller position held. Click to size to it.'
+                  : `The largest size your collateral can open${mode === 'single' ? '' : ' on both legs'}: initial margin plus the taker fee, at the current rate${
+                      freeCollateral !== null ? `, out of ${sigGrouped(freeCollateral)} ${rowA?.collateral ?? ''} free` : ''
+                    }. Click to size to it.`
+              }
               onClick={() => setSizeStr(fieldValue(availableToTrade))}
             >
-              available{' '}
+              max{' '}
               <span className="text-link underline decoration-link/40 underline-offset-2">
                 {sigGrouped(availableToTrade)} {rowA?.collateral ?? ''}
               </span>
@@ -1083,11 +1111,7 @@ export function BorosPairTicket({
           {w}
         </p>
       ))}
-      <BlockerList
-        blockers={blockers}
-        busyMarketId={cancelClose.isPending ? cancelClose.variables?.marketId ?? null : null}
-        onCancelAndClose={canTrade ? (marketId) => cancelClose.mutate({ marketId }) : undefined}
-      />
+      <BlockerList blockers={blockers} />
       <GasTopUp
         gasBalanceUsd={sim.data?.gasBalanceUsd}
         amount={gasTopUpStr}

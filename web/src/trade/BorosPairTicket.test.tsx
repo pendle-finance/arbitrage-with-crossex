@@ -415,6 +415,32 @@ describe('BorosPairTicket', () => {
     expect(await screen.findByTitle(/caps the RATE, not the fill/i)).toBeInTheDocument();
   });
 
+  it('offers the SIZE the collateral funds, not the collateral: both legs out of one cross bucket', async () => {
+    // 500 USDT free; opening costs 0.03 per unit on HL and 0.02 on Binance.
+    // As a pair both come out of the one cross bucket: 500 / 0.05 = 10,000
+    // per leg. Alone, HL funds 500 / 0.03 ≈ 16,667.
+    const user = userEvent.setup();
+    server.use(
+      ...handlers({
+        ctx: {
+          markets: [
+            marketRow({ openCostPerSize: 0.03 }),
+            marketRow({ marketId: BN, name: 'Binance ETHUSDT 31 Aug 2026', venue: 'Binance', midApr: 0.045, openCostPerSize: 0.02 }),
+          ],
+          crossByToken: [{ tokenId: 3, available: 500 }],
+        },
+      }),
+    );
+    renderWithClient(<BorosPairTicket />);
+    await fillTicket(user);
+    const max = await screen.findByRole('button', { name: /^max 10,000 USDT$/ });
+    await user.click(max);
+    expect((screen.getByLabelText(/^Size per leg/) as HTMLInputElement).value).toBe('10000');
+
+    await user.click(screen.getByRole('radio', { name: 'Single' }));
+    expect(await screen.findByRole('button', { name: /^max 16,666\.6/ })).toBeInTheDocument();
+  });
+
   it('Single mode sends one leg, borrowing an eligible partner for the pair shape', async () => {
     // The route refuses a request whose legs name the same market, and will
     // not walk either book for one — so a single-leg ticket borrows a real
@@ -988,44 +1014,7 @@ describe('BorosPairTicket', () => {
     expect(screen.queryByText(/that is the top-up/i)).not.toBeInTheDocument();
   });
 
-  it('sends a usable cancel-and-close request — id present, no address', async () => {
-    // It previously posted an empty body to a route requiring clientOrderId, so
-    // the §6A remediation button always 400'd and was unreachable.
-    const user = userEvent.setup();
-    let body: Record<string, unknown> | null = null;
-    server.use(
-      ...handlers({
-        gate: {
-          blockers: [
-            {
-              code: 'isolated-must-switch',
-              leg: 'A',
-              marketId: HL,
-              message: 'Hyperliquid ETH 31 Aug 2026 is on isolated margin. Switch it to cross margin.',
-            },
-          ],
-        },
-      }),
-      http.post(`/api/boros/pair/market/${HL}/cancel-and-close`, async ({ request }) => {
-        body = (await request.json()) as Record<string, unknown>;
-        return HttpResponse.json(env({ marketId: HL, cancelled: true, closed: true }));
-      }),
-    );
-    renderWithClient(<BorosPairTicket />);
-    await fillTicket(user);
-
-    // A hold, not a click: this flattens a whole market position.
-    const remedy = await screen.findByRole('button', { name: /Cancel orders & close position/i });
-    await user.pointer({ keys: '[MouseLeft>]', target: remedy });
-    await waitFor(() => expect(body).not.toBeNull(), { timeout: 3_000 });
-
-    const sent = body as unknown as { clientOrderId?: string; address?: string };
-    expect(sent.clientOrderId).toMatch(/^[A-Za-z0-9_-]{8,64}$/);
-    // The account is the server's to decide — this route sizes the close from it.
-    expect(sent.address).toBeUndefined();
-  });
-
-  it('offers the §6A remediation on an isolated leg', async () => {
+  it('sends an isolated leg to Boros — no close button this app could never honour', async () => {
     const user = userEvent.setup();
     server.use(
       ...handlers({
@@ -1046,9 +1035,13 @@ describe('BorosPairTicket', () => {
     await fillTicket(user);
 
     expect(await screen.findByText(/Switch it to cross margin/i)).toBeInTheDocument();
-    expect(
-      screen.getByRole('button', { name: /Cancel orders & close position/i }),
-    ).toBeInTheDocument();
+    // The close route refuses an isolated position, so the remedy is a link
+    // to the market on Boros — the old hold button could only ever fail.
+    expect(screen.getByRole('link', { name: 'on Boros' })).toHaveAttribute(
+      'href',
+      `https://boros.pendle.finance/markets/${HL}`,
+    );
+    expect(screen.queryByRole('button', { name: /Cancel orders & close position/i })).not.toBeInTheDocument();
   });
 
   it('reports a partial fill as a residual with three follow-up actions', async () => {

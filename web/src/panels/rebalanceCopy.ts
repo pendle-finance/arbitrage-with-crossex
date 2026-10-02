@@ -41,6 +41,13 @@ export const MOVE_TO = 'to';
 export const NOTHING_TO_MOVE = 'Nothing to move.';
 export const SHORT_OF_CASH = 'more than the wallet holds.';
 export const HOLD_LABEL: Readonly<Record<GoalKind, string>> = { even: 'Hold to rebalance', repay: 'Hold to clear debt', custom: 'Hold to move' };
+/** The confirm when the verdict does not ask for the move: the trader may
+ * still run it, but the button no longer reads as the recommended step. */
+export const HOLD_ANYWAY_LABEL: Readonly<Record<GoalKind, string>> = { even: 'Hold to rebalance anyway', repay: 'Hold to clear debt anyway', custom: 'Hold to move anyway' };
+/** Under a "nothing to save" verdict in the dialog, where a fee is priced
+ * right below it: the move is a choice, and this is what it costs. */
+export const OPTIONAL_MOVE = (goal: GoalKind, fee: string | null): string =>
+  `${goal === 'custom' ? 'This move' : goal === 'repay' ? 'Clearing debt' : 'Rebalancing'} is optional${fee === null ? '' : ` and costs ${fee}`}.`;
 export const AFTER_LABEL: Readonly<Record<GoalKind, string>> = { even: 'After rebalance', repay: 'After clearing debt', custom: 'After the move' };
 
 export const MOVE_TEXT = {

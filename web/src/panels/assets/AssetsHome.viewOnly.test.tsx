@@ -112,6 +112,9 @@ describe.each([50, 6_000_000])('Positions for a view-only wallet at $%d', (size)
     expect(screen.queryByText('Missing hedge')).toBeNull();
     expect(screen.queryByText(/Boros legs? missing/)).toBeNull();
     expect(screen.queryByText(/borrow interest/)).toBeNull();
+    // Nor estimate an APR as if every rate leg were unhedged.
+    expect(screen.queryByText('Current APR')).toBeNull();
+    expect(screen.getByText('Current APR (Fixed)')).toBeInTheDocument();
   });
 });
 
