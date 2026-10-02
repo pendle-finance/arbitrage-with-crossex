@@ -105,3 +105,13 @@ line numbers are omitted deliberately (they drift).
 - **The uninstallers ignored a custom folder and port** — with `BOROS_ROOT`/`BOROS_PORT` unset,
   they removed the default folder and checked port 6688, so an install made elsewhere stayed.
   They now read both from the existing task or LaunchAgent, as the installers do.
+- **A failed installer download on macOS refused Boros writes for 10 minutes** — the update ran
+  `bash -c "$(curl …)"`. When curl failed, bash ran an empty script and exited 0, so the update
+  window stayed open and the panel showed "updating". The server now downloads `install.sh`
+  itself before the window opens, and a failed download shows in the dialog. On both platforms
+  the installer now comes from the pinned commit, not from `main`.
+- **An unknown commit installed whatever `main` had at the click** — a failed commit read was
+  cached as null for 6 hours, and the update then ran unpinned. The update now reads the commit
+  again and installs that commit with its own installer. That commit can be newer than the
+  version the dialog named. If the commit is still unknown, the update is refused and the dialog
+  points to "Run it in my terminal".

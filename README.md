@@ -186,7 +186,9 @@ trade journal out from under a live process that is still placing orders.
   `api.hyperliquid.xyz`, `mainnet.zklighter.elliot.ai`, `api.gateio.ws`) — public data,
   nothing about you; and `raw.githubusercontent.com` plus `api.github.com` — a 6-hourly
   read of this repo's one-line `version.json` and latest commit, to show "update
-  available". Nothing is sent, and `UPDATE_CHECK=0` disables it. If you link Telegram
+  available". When you click Update, the app reads the latest commit again if it does
+  not have it, and downloads that commit's install script. Nothing is sent, and
+  `UPDATE_CHECK=0` disables the check. If you link Telegram
   alerts, the app also sends your wallet address and the price levels to alert on to
   `boros-bot-notification.pendle.finance`. Your browser itself calls
   `api-boros.pendle.finance` (to approve the Boros agent), `raw.githubusercontent.com`

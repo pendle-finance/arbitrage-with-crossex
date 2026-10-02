@@ -1,8 +1,11 @@
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import nock from 'nock';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { endUpdateWindow, startUpdate } from '../../src/server/updater';
+
+const SHA = '3f7c1b9e2d4a6058cbe1740f9a2d5b83c6e0f1a4';
 
 const mocks = vi.hoisted(() => ({
   spawn: vi.fn(() => ({ unref: vi.fn(), on: vi.fn() })),
@@ -49,6 +52,10 @@ describe('the update installs onto the port and folder this server runs from', (
     delete process.env.BOROS_ROOT;
     delete process.env.BOROS_PORT;
     delete process.env.BOROS_INSTALLER;
+    nock('https://raw.githubusercontent.com')
+      .get(`/pendle-finance/arbitrage-with-crossex/${SHA}/install.sh`)
+      .reply(200, '# Arbitrage with CrossEx — macOS installer (test fixture)\n')
+      .persist();
   });
   afterEach(() => {
     Object.defineProperty(process, 'platform', realPlatform);
@@ -64,7 +71,7 @@ describe('the update installs onto the port and folder this server runs from', (
     const root = path.join(home, 'custom-root');
     process.env.PORT = '7788';
 
-    await startUpdate(null, installedApp(root));
+    await startUpdate(SHA, installedApp(root));
 
     expect(spawnEnv().BOROS_PORT).toBe('7788');
     expect(spawnEnv().BOROS_ROOT).toBe(root);
@@ -77,7 +84,7 @@ describe('the update installs onto the port and folder this server runs from', (
     process.env.BOROS_PORT = '6688';
     process.env.BOROS_ROOT = path.join(home, '.boros-crossex');
 
-    await startUpdate(null, installedApp(root));
+    await startUpdate(SHA, installedApp(root));
 
     expect(spawnEnv().BOROS_PORT).toBe('7789');
     expect(spawnEnv().BOROS_ROOT).toBe(root);
@@ -87,7 +94,7 @@ describe('the update installs onto the port and folder this server runs from', (
     onPlatform('darwin');
     process.env.PORT = '6688';
 
-    await startUpdate(null, installedApp(path.join(home, '.boros-crossex')));
+    await startUpdate(SHA, installedApp(path.join(home, '.boros-crossex')));
 
     expect(spawnEnv().BOROS_PORT).toBe('6688');
     expect(spawnEnv().BOROS_ROOT).toBe(path.join(home, '.boros-crossex'));
@@ -99,7 +106,7 @@ describe('the update installs onto the port and folder this server runs from', (
     mkdirSync(checkout);
     process.env.PORT = '7788';
 
-    await startUpdate(null, checkout);
+    await startUpdate(SHA, checkout);
 
     expect('BOROS_ROOT' in spawnEnv()).toBe(false);
     expect(spawnEnv().BOROS_PORT).toBe('7788');
@@ -109,7 +116,7 @@ describe('the update installs onto the port and folder this server runs from', (
     onPlatform('darwin');
     process.env.PORT = port;
 
-    await startUpdate(null, installedApp(path.join(home, 'custom-root')));
+    await startUpdate(SHA, installedApp(path.join(home, 'custom-root')));
 
     expect('BOROS_PORT' in spawnEnv()).toBe(false);
   });
@@ -122,7 +129,7 @@ describe('the update installs onto the port and folder this server runs from', (
     process.env.BOROS_INSTALLER = installer;
     process.env.PORT = '7788';
 
-    await startUpdate(null, installedApp(root));
+    await startUpdate(SHA, installedApp(root));
 
     const runner = readFileSync(path.join(root, 'update.ps1'), 'utf8');
     const quoted = (s: string): string => s.replace(/'/g, "''");
