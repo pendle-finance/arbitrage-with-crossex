@@ -171,7 +171,7 @@ if ($stillListening.Count -gt 0) {
 }
 
 Say 'Removing the app and its private Node.js runtime...'
-foreach ($d in @('app', 'app.new', 'app.old', 'node', 'logs')) {
+foreach ($d in @('app', 'app.new', 'app.old', 'node', 'node.new', 'node.old', 'logs')) {
   $p = Join-Path $Root $d
   if (Test-Path $p) { Remove-Item -Recurse -Force $p -ErrorAction SilentlyContinue }
 }

@@ -210,6 +210,10 @@ function Get-NodeArch {
 
 function Install-Node {
   $nodeExe = Join-Path $Root 'node\node.exe'
+  $target = Join-Path $Root 'node.new'
+  $old = Join-Path $Root 'node.old'
+  if (Test-Path $target) { Invoke-WithRetry { Remove-Item -Recurse -Force $target } }
+  if (Test-Path $old) { Invoke-WithRetry { Remove-Item -Recurse -Force $old } }
   if (Test-Path $nodeExe) {
     $v = (& $nodeExe -v 2>$null)
     if ($v -and $v.StartsWith($NodeLine)) { Say "Node.js $v already installed - skipping."; return }
@@ -236,14 +240,32 @@ function Install-Node {
 
   Expand-Archive -Path $zip -DestinationPath $script:Tmp -Force
   $extracted = Join-Path $script:Tmp ([IO.Path]::GetFileNameWithoutExtension($file))
-  $target = Join-Path $Root 'node'
-  if (Test-Path $target) { Remove-Item -Recurse -Force $target }
   Move-Item -Path $extracted -Destination $target
   Say "Node.js $(& (Join-Path $target 'node.exe') -v) installed into $Root."
 }
 
+function Get-NodeDir {
+  $staged = Join-Path $Root 'node.new'
+  if (Test-Path $staged) { $staged } else { Join-Path $Root 'node' }
+}
+
+function Swap-Node {
+  $node = Join-Path $Root 'node'
+  $old  = Join-Path $Root 'node.old'
+  $new  = Join-Path $Root 'node.new'
+  if (-not (Test-Path $new)) { return }
+  if (Test-Path $old)  { Invoke-WithRetry { Remove-Item -Recurse -Force $old } }
+  if (Test-Path $node) { Invoke-WithRetry { Move-Item -Path $node -Destination $old } }
+  try {
+    Invoke-WithRetry { Move-Item -Path $new -Destination $node }
+  } catch {
+    if (Test-Path $old) { Invoke-WithRetry { Move-Item -Path $old -Destination $node } }
+    throw
+  }
+}
+
 function Install-Yarn {
-  $nodeDir = Join-Path $Root 'node'
+  $nodeDir = Get-NodeDir
   $yarn = Join-Path $nodeDir 'yarn.cmd'
   if (Test-Path $yarn) { return }
   Say 'Installing the yarn package manager (into the private runtime only)...'
@@ -346,9 +368,10 @@ function Get-App {
 }
 
 function Build-App {
-  $yarn = Join-Path $Root 'node\yarn.cmd'
+  $nodeDir = Get-NodeDir
+  $yarn = Join-Path $nodeDir 'yarn.cmd'
   $new = Join-Path $Root 'app.new'
-  $env:PATH = "$(Join-Path $Root 'node');$env:PATH"
+  $env:PATH = "$nodeDir;$env:PATH"
   $env:YARN_IGNORE_PATH = '1'
   Say 'Installing dependencies (this takes a minute on first install)...'
   & $yarn --cwd $new install --frozen-lockfile --silent --non-interactive
@@ -393,6 +416,12 @@ function Restore-App {
   Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
   Stop-StaleServer
   try {
+    $node = Join-Path $Root 'node'
+    $nodeOld = Join-Path $Root 'node.old'
+    if (Test-Path $nodeOld) {
+      if (Test-Path $node) { Invoke-WithRetry { Move-Item -Path $node -Destination (Join-Path $Root 'node.new') } }
+      Invoke-WithRetry { Move-Item -Path $nodeOld -Destination $node }
+    }
     if (Test-Path $failed) { Invoke-WithRetry { Remove-Item -Recurse -Force $failed } }
     if (Test-Path $app)    { Invoke-WithRetry { Move-Item -Path $app -Destination $failed } }
     Invoke-WithRetry { Move-Item -Path $old -Destination $app }
@@ -417,6 +446,8 @@ function Restore-App {
 # the rollback target and must survive.
 function Remove-OldApp {
   $old = Join-Path $Root 'app.old'
+  $nodeOld = Join-Path $Root 'node.old'
+  if (Test-Path $nodeOld) { try { Invoke-WithRetry { Remove-Item -Recurse -Force $nodeOld } } catch { } }
   if (-not (Test-Path $old)) { return }
   # Retry for the reason Invoke-WithRetry exists: AV and the Search indexer open
   # a folder the moment it stops changing. Observed leaving app.old behind
@@ -741,6 +772,7 @@ try {
   Get-App
   Build-App
   Stop-RunningService   # must precede Swap-App - see the note there
+  Swap-Node
   Swap-App
   Install-Service
   if (-not (Wait-ForServer)) {
