@@ -9,7 +9,7 @@ import type { DealOrder, DealPair, DealReport, Side } from '../api/types';
 import { Modal } from '../components/Modal';
 import { Spinner } from '../components/Spinner';
 import { fmtPct, parseSymbol, prettyVenue, sig, signedClass } from '../lib/fmt';
-import { decimalsOf } from '../lib/ticks';
+import { formatRestPrice } from '../lib/ticks';
 import { useNow } from '../lib/useNow';
 import { DealBookImpact } from './PriceImpactGraph';
 
@@ -68,21 +68,6 @@ function remainderQty(target: string, done: string): string | null {
   if (!Number.isFinite(t) || !Number.isFinite(d)) return null;
   const r = t - d;
   return r > 0 ? String(+r.toFixed(10)) : null;
-}
-
-/** Snap a typed re-peg price onto the venue tick (nearest), as a plain decimal
- * string — an off-tick POC would only bounce through venue rejects. Null when
- * the input isn't a positive number yet (the button stays disabled). */
-function snapToTick(priceStr: string, tickStr: string): string | null {
-  const p = Number(priceStr);
-  if (!Number.isFinite(p) || p <= 0) return null;
-  const t = Number(tickStr);
-  if (!Number.isFinite(t) || t <= 0) return priceStr.trim();
-  const snapped = Math.round(p / t) * t;
-  if (snapped <= 0) return null;
-  // decimalsOf, not a local split('.') — a sci-notation tick ("1e-4") has no '.'
-  // and would count 0 decimals, truncating the re-peg price to an integer.
-  return snapped.toFixed(decimalsOf(tickStr));
 }
 
 interface DealSlippage {
@@ -170,7 +155,15 @@ export function DealModal({ dealId, onClose }: { dealId: string; onClose: () => 
   // Custom re-peg price (the route takes an optional body price; without one it
   // re-pegs to the fresh touch).
   const [customPx, setCustomPx] = useState('');
-  const customPrice = pair ? snapToTick(customPx, pair.a.tick) : null;
+  // Snapped side-aware (BUY down, SELL up): the engine pins this price for
+  // post-only orders, so a nearest snap onto the touch would reject every one.
+  // A BUY below one tick snaps to "0" — null keeps the button disabled.
+  const customN = Number(customPx);
+  const restPx =
+    pair && customPx.trim() !== '' && Number.isFinite(customN) && customN > 0
+      ? formatRestPrice(customN, pair.a.side, pair.a.contract, pair.a.tick)
+      : null;
+  const customPrice = restPx !== null && Number(restPx) > 0 ? restPx : null;
 
   return (
     <Modal

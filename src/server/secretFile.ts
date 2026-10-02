@@ -110,8 +110,12 @@ export function restrictToOwner(target: string): void {
       );
       icacls(['/reset']); // this path only: no /t, per install.ps1's own reasoning
     }
-  } catch {
-    /* best-effort: never block startup or a credential write on a permissions call */
+  } catch (err) {
+    // Best-effort: never block startup or a credential write on a permissions
+    // call. But say so, or a secret left readable goes unnoticed.
+    console.warn(
+      `[secretFile] could not make ${target} owner-only (${(err as Error).message}) — other accounts on this machine may be able to read it`,
+    );
   }
 }
 

@@ -117,7 +117,7 @@ export function dealsRoutes(deps: AppDeps) {
           throw new CoreError(`leverage for ${contract} must be a number`, 'validation');
         }
         const leverageMax = await leverageMaxFor(deps, contract, false);
-        if (lev < 1 || (leverageMax > 0 && lev > leverageMax)) {
+        if (lev < 1 || lev > leverageMax) {
           throw new CoreError(
             `leverage ${lev}x must be between 1 and ${leverageMax}x for ${contract}`,
             'leverage',
@@ -131,6 +131,10 @@ export function dealsRoutes(deps: AppDeps) {
       // an existing position would have had its liquidation price moved without
       // ever seeing it, on a deal that was never created.
       const applied: Array<{ contract: string; prev: number }> = [];
+      const readLeverage = async (contract: string): Promise<number> => {
+        const { body: cur } = await clients.crossEx.getCrossexPositionsLeverage({ symbols: contract });
+        return Number((cur as Record<string, unknown> | undefined)?.[contract] ?? 0);
+      };
       const restoreLeverage = async () => {
         for (const { contract, prev } of applied.reverse()) {
           if (!Number.isFinite(prev) || prev < 1) continue; // nothing trustworthy to restore
@@ -145,13 +149,17 @@ export function dealsRoutes(deps: AppDeps) {
         for (const { contract, lev } of levs) {
           let prev = 0;
           try {
-            const { body: cur } = await clients.crossEx.getCrossexPositionsLeverage({ symbols: contract });
-            prev = Number((cur as Record<string, unknown> | undefined)?.[contract] ?? 0);
+            prev = await readLeverage(contract);
           } catch {
             /* can't read it → can't restore it; recorded as 0 and skipped below */
           }
-          await setLeverage(clients.crossEx, contract, lev as number);
+          const set = await setLeverage(clients.crossEx, contract, lev as number);
           applied.push({ contract, prev });
+          const replied = Number(set?.leverage);
+          const confirmed = replied > 0 ? replied : await readLeverage(contract);
+          if (!(confirmed >= (lev as number))) {
+            throw new CoreError(`CrossEx set ${contract} to ${confirmed}x, not the ${lev}x asked`, 'leverage');
+          }
         }
       } catch (err) {
         await restoreLeverage();
@@ -232,6 +240,9 @@ export function dealsRoutes(deps: AppDeps) {
         }
         // Snap to the venue tick, away from crossing — this price is going to REST.
         price = formatRestPrice(n, pair.a.side, pair.a.contract, pair.a.tick);
+        if (!(Number(price) > 0)) {
+          throw new CoreError(`re-peg price ${n} is below one tick (${pair.a.tick})`, 'validation');
+        }
       } else {
         price = await deps.engine!.venue.touch(pair.a.contract, pair.a.side, pair.a.tick);
       }

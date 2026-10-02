@@ -19,6 +19,12 @@ vi.mock('node:child_process', () => ({
   ),
 }));
 
+// Pass-through, so one test can make a chmod fail: an ESM namespace cannot be spied on.
+vi.mock('node:fs', async (importOriginal) => {
+  const real = await importOriginal<typeof import('node:fs')>();
+  return { ...real, chmodSync: vi.fn(real.chmodSync) };
+});
+
 const execMock = vi.mocked(execFileSync);
 
 /** The icacls argument lists issued during one call (target stripped). */
@@ -66,6 +72,20 @@ describe('restrictToOwner — POSIX', () => {
 
   it('never throws on a missing path', () => {
     expect(() => restrictToOwner(path.join(os.tmpdir(), 'nope-does-not-exist-xyz'))).not.toThrow();
+  });
+
+  it('warns once, and does not throw, when the chmod fails', () => {
+    const dir = tmpDir();
+    vi.mocked(fs.chmodSync).mockImplementationOnce(() => {
+      throw new Error('EPERM: operation not permitted');
+    });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    expect(() => restrictToOwner(dir)).not.toThrow();
+
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0][0])).toMatch(/could not make .* owner-only \(EPERM/);
+    fs.rmSync(dir, { recursive: true, force: true });
   });
 });
 

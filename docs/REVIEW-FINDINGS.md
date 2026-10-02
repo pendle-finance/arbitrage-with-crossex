@@ -16,68 +16,18 @@ line numbers are omitted deliberately (they drift).
 
 ## Engine & server
 
-- **OPENING's hedge-first gating is weaker than CONVERTING's** (`src/engine/decide.ts`): during
-  the backoff after a failed hedge attempt, a resting maker keeps filling (and can be re-placed)
-  in OPENING, while CONVERTING in the identical state pauses with "hedge owed first". Bounded by
-  the hedge wall (~3 backoff windows before HALT), but strictly weaker than the rule it mirrors.
-- **Persistent read errors on a PENDING order never alert** (`src/engine/loop.ts`): the
-  read-failure streak/alert covers OPEN orders only. A PENDING order whose venue reads keep
-  erroring (revoked key, 5xx storm) freezes its pair silently, with no operator signal — even
-  though the order may be live and filling.
 - **Leg-A max-market-size check ignores `maxClip`** (`src/engine/create.ts`): the cap compares
   the FULL deal qty, but leg-A convert clips are split to at most `maxClip` — a deliberately
   clipped deal that could never send an over-cap order is rejected at creation. Fail-safe
   direction, but over-strict.
 - **Banded clips price off book mid, not the venue reference** (`src/engine/decide.ts`): the
-  comment claims the slippage band stays inside the venue's price-limit band, but `refPrice()` is
-  (bid+ask)/2 of the public book. When mid dislocates from the venue's mark by more than the
+  slippage band is applied to `refPrice()`, (bid+ask)/2 of the public book, not to the venue's
+  mark. When mid dislocates from the venue's mark by more than the
   band, every clip draws a hard price-limit reject and the close stops at the reject budget —
   exactly during the volatile conditions the band exists for. Honest stop + alert, no silent loss.
-- **Leverage upper bound fails open on an empty risk-limits reply** (`src/server/routes/deals.ts`):
-  a successful-but-tierless response yields max 0, which skips the bound — and the 0 is cached
-  for 10 minutes. An over-max leverage then reaches preflight, which under-reserves margin if the
-  venue clamps instead of rejecting.
-- **A sub-tick explicit re-peg BUY snaps to the string `"0"`** (`src/server/routes/deals.ts`):
-  the raw input is validated `> 0`, then the directional snap floors it to `"0"`, which is truthy
-  and gets pinned as the fixed intent price — burning the reject budget with a wrong recorded
-  cause. The snapped output should be re-validated.
 - **The finish reason always blames "below B's lot"** (`src/engine/decide.ts`): an unhedged
   terminal residual is attributed to the lot even when it is whole lots blocked by
   minSize/minNotional — misleading in the post-mortem report.
-
-## Installers
-
-- **`Protect-Directory`'s graceful fallback is unreachable** (`install.ps1`): under PS 5.1 with
-  `$ErrorActionPreference='Stop'`, the `2>&1` on icacls turns stderr into a terminating error
-  before the exit-code check that was meant to degrade gracefully.
-- **`Install-Node` deletes the in-use runtime before the service is stopped** (`install.ps1`):
-  on an update, the old `node/` folder is removed while the previous server may still be running
-  from it — violating the stop-before-delete ordering the script itself documents. Windows file
-  locking makes this fail loudly rather than dangerously, but the ordering should match the docs.
-- **The keepalive repetition may never tick** (`install.ps1`): the every-minute repetition is
-  grafted onto an `-AtLogOn` trigger with no `StartBoundary`; when the task is registered after
-  logon and started by hand, the repetition window never opens, leaving only the in-task
-  supervisor loop as keepalive.
-
-## Web & test coverage
-
-- **The deal-view re-peg snap is nearest and side-unaware** (`web/src/trade/DealModal.tsx`):
-  `snapToTick` can round a re-peg price onto the touch; the engine then pins that price
-  (`pricePolicy 'fixed'`) into a post-only reject loop. Should use the directional
-  `formatRestPrice` like the tickets do.
-- **The server-side resting-price wiring is unpinned** (`tests/unit/format.test.ts` et al.):
-  the directional-snap helper is tested, but reverting its three call sites (actions, engine
-  create, venue gate) back to the nearest snap still passes the full suite — no test drives the
-  wiring end-to-end.
-- **The slippage band has no close-pair test** (`tests/unit/engine-loop.test.ts`): the banded
-  clip is pinned for single-leg closes only; the close-PAIR path is untested, and one older test
-  comment still describes the pre-fix (unpriced clip) semantics.
-- **The hand-placed-cancel test proves nothing** (`tests/server/orders.test.ts`): "still cancels
-  a hand-placed order while a deal is running" runs with no deal present, so it cannot detect a
-  guard that wrongly blocks hand-placed orders during a live deal.
-- **The Windows ACL branch has zero coverage** (`tests/unit/secret-file.test.ts`): the tests
-  exercise only the POSIX chmod path; the icacls branch — the actual substance of the Windows
-  hardening — is untested on every platform.
 
 ---
 
@@ -102,3 +52,66 @@ line numbers are omitted deliberately (they drift).
 - **The bash installers killed by argv match alone** — an editor or `tail` holding the server
   path was SIGKILLed, and a relative-args server was missed. They now confirm by the
   process's executable and sweep the private runtime, mirroring the Windows scripts.
+
+## Fixed since (2026-09-29 audit triage)
+
+- **Persistent read errors on a PENDING order never alerted** — `resolvePending` returned on a
+  read error with no counter. It now counts the streak like the OPEN path and raises one error
+  alert at the threshold, since the order may be live and filling.
+- **A sub-tick explicit re-peg BUY snapped to the string `"0"`** — the floored `"0"` was pinned
+  as the fixed maker price. The route now re-checks the snapped price and returns 400 when it is
+  below one tick.
+- **The deal-view re-peg snap was nearest and side-unaware** — `snapToTick` could round a re-peg
+  price onto the touch. The modal now uses the directional `formatRestPrice`, and a BUY below one
+  tick keeps the button disabled.
+- **The server-side resting-price wiring was unpinned** — each call site (actions, engine
+  create, venue gate touch) now has a test that fails if it goes back to the nearest snap.
+- **The hand-placed-cancel test proved nothing** — it now seeds a live deal first, so a guard
+  that wrongly blocks hand-placed orders during a deal fails it.
+- **The Windows ACL branch had zero coverage** — already covered: the "Windows branch" group in
+  `tests/unit/secret-file.test.ts` (added in the 2026-07-30 pass) drives the icacls path with a
+  stubbed `execFileSync`. This entry was stale.
+- **The maker kept filling while a failed hedge waited out its backoff** — OPENING gated only on
+  an unsizable hedge, so during the 3 s backoff the maker rested (or was re-placed for the full
+  remainder) and the unhedged gap could reach the whole deal. OPENING now cancels the maker and
+  places nothing new until the hedge retries.
+- **No leverage tiers meant no leverage limit** — a symbol with no tiers cached a max of 0 for
+  10 minutes, and the deal route skipped its check at 0. A missing max now refuses the deal and
+  is never cached, and the route checks the leverage CrossEx confirms after each set.
+- **The close-band comment said reference price; the code uses book mid** — comment corrected,
+  behaviour unchanged. The close-pair test now pins leg A's banded limit price.
+
+## Fixed since (2026-10-02 installer pass, 1.7.3)
+
+- **`Protect-Directory`'s graceful fallback was unreachable** — under PS 5.1 with
+  `$ErrorActionPreference='Stop'`, icacls stderr behind `2>&1` threw before the exit-code
+  check. The icacls and npm calls now run with `Continue` for that one call.
+- **Every update reset `data\` to inherited permissions** — the probe opened existing files
+  with no sharing, so the running server's open `deals.sqlite` looked like a denial. It now
+  opens them with read-write sharing.
+- **`Install-Node` deleted the in-use runtime before the service was stopped** — on a Node
+  change the old `node\` was removed under the running server. The new runtime is now
+  unpacked to `node.new` and swapped in after the stop, and a failed boot puts the old one back.
+- **The keepalive repetition never ticked** — after an install there is no logon, so the
+  logon trigger's repetition never opened. A second, time-based trigger now re-runs the task
+  every minute.
+- **A failed task registration left no server** — the new version was in place, nothing was
+  registered, and the user saw a raw PowerShell error. The registration is retried once, then
+  the previous version is put back and registered. The message says no server runs only when
+  nothing is registered to start one.
+- **`-Purge` said "Uninstalled." while the API keys were still on disk** — a locked file or a
+  shell inside the folder stopped the delete silently. It now retries, names what is left,
+  and fails instead.
+- **The uninstallers ignored a custom folder and port** — with `BOROS_ROOT`/`BOROS_PORT` unset,
+  they removed the default folder and checked port 6688, so an install made elsewhere stayed.
+  They now read both from the existing task or LaunchAgent, as the installers do.
+- **A failed installer download on macOS refused Boros writes for 10 minutes** — the update ran
+  `bash -c "$(curl …)"`. When curl failed, bash ran an empty script and exited 0, so the update
+  window stayed open and the panel showed "updating". The server now downloads `install.sh`
+  itself before the window opens, and a failed download shows in the dialog. On both platforms
+  the installer now comes from the pinned commit, not from `main`.
+- **An unknown commit installed whatever `main` had at the click** — a failed commit read was
+  cached as null for 6 hours, and the update then ran unpinned. The update now reads the commit
+  again and installs that commit with its own installer. That commit can be newer than the
+  version the dialog named. If the commit is still unknown, the update is refused and the dialog
+  points to "Run it in my terminal".

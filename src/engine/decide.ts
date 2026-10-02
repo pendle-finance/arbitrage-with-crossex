@@ -306,9 +306,12 @@ export function decide(pair: PairRow, p: Projection, now: number, ctx: DecideCtx
         // With a band set (closes carry the user's slippage as clipBandBp) the
         // clip is a MARKETABLE LIMIT at ref·(1 ± band) — this is what the close
         // UI promises verbatim: "a reduce-only IOC limit at mid ± slippage".
-        // The band is priced off the venue REFERENCE price, not book mid, so it
-        // stays inside the venue's own price-limit band; clipBandPrice rounds
-        // BUY down / SELL up so the fill can never be worse than the band.
+        // The band is priced off the leg venue's book mid, as that UI promises.
+        // The venue's own price-limit band is measured from its mark, so a user
+        // band wider than the venue's, or a mid far from mark in a crash, draws
+        // a reject that counts toward MAX_POC_REJECTS and stops the close
+        // honestly. clipBandPrice rounds BUY down / SELL up so the fill can
+        // never be worse than the band.
         // Without a band (opens) it stays a plain MARKET IOC and the venue's own
         // band is the cap. A banded clip that whiffs is already accounted for:
         // bumpClipWall counts zero-progress terminals and decide() stops the
@@ -348,6 +351,10 @@ export function decide(pair: PairRow, p: Projection, now: number, ctx: DecideCtx
       if (hedgeOwed && hedgeSized === null) {
         if (m && m.state === 'OPEN') return { type: 'cancel', order: m };
         return { type: 'idle', reason: 'acquisition paused: hedge owed but cannot be sized (no reference price)' };
+      }
+      if (hedgeOwed && now < pair.hedgeNotBefore) {
+        if (m && m.state === 'OPEN') return { type: 'cancel', order: m };
+        return { type: 'idle', reason: 'acquisition paused: hedge failed, waiting out its backoff' };
       }
       if (m && m.state === 'OPEN') {
         // Re-peg is an intent edit: live maker price ≠ intent price → converge.
