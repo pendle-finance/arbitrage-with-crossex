@@ -113,6 +113,8 @@ main() {
   if [ "${1:-}" = "--purge" ]; then
     say "Removing API keys and trade history (--purge)…"
     rm -rf "$ROOT"
+    echo
+    echo "  Also revoke the Gate API key and the Boros agent. Deleting the file does not cancel them."
   else
     rmdir "$ROOT" 2>/dev/null || true # gone entirely if config/data were never created
     if [ -d "$ROOT" ]; then

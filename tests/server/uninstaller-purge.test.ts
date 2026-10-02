@@ -70,3 +70,12 @@ describe('uninstall.ps1 -Purge never reports success while the folder is still o
     expect(codeOnly(ps)).not.toMatch(/\bexit\b/i);
   });
 });
+
+describe('uninstall.sh --purge', () => {
+  it('prints the same revoke line as uninstall.ps1, only after the folder is deleted', () => {
+    const sh = read('uninstall.sh');
+    const purge = sh.slice(sh.indexOf('if [ "${1:-}" = "--purge" ]; then'), sh.indexOf('  else', sh.indexOf('--purge" ]; then')));
+    expect(purge.indexOf(`echo "  ${REVOKE}"`)).toBeGreaterThan(purge.indexOf('rm -rf "$ROOT"'));
+    expect(purge.indexOf('rm -rf "$ROOT"')).toBeGreaterThan(0);
+  });
+});
