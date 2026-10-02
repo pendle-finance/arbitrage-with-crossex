@@ -13,6 +13,13 @@ describe('install.ps1 tells a locked file from a denied one', () => {
   it('opens each existing file with read-write sharing, so the open deals.sqlite of a running server passes', () => {
     const fn = psFunction('Protect-Directory');
     const loop = fn.slice(fn.indexOf('Get-ChildItem -File'));
-    expect(loop).toMatch(/\[IO\.File\]::Open\(\$f\.FullName, 'Open', 'ReadWrite', 'ReadWrite'\)/);
+    expect(loop).toMatch(/\[IO\.File\]::Open\(\$f\.FullName, 'Open', 'ReadWrite', 'ReadWrite, Delete'\)/);
+  });
+
+  it('counts only a denial, not a file renamed or held open by another program', () => {
+    const fn = psFunction('Protect-Directory');
+    const loop = fn.slice(fn.indexOf('Get-ChildItem -File'), fn.indexOf('if (-not $ok)'));
+    const caught = loop.slice(loop.indexOf('catch {'));
+    expect(caught).toMatch(/if \(\$_\.Exception\.GetBaseException\(\) -is \[UnauthorizedAccessException\]\) \{\s*\$ok = \$false/);
   });
 });
