@@ -132,13 +132,13 @@ function Protect-Directory {
   # (SQLITE_CANTOPEN) on a re-install while a brand-new one was fine. NTFS
   # propagates an inheritable ACE to children by itself - recursion is not only
   # unnecessary here, it is the bug.
-  $out = & icacls $Path '/grant:r' "*${sid}:(OI)(CI)F" 2>&1
+  $out = Invoke-Native { & icacls $Path '/grant:r' "*${sid}:(OI)(CI)F" 2>&1 }
   if ($LASTEXITCODE -ne 0) {
     Write-Host "Note: could not tighten permissions on $Path - leaving Windows defaults." -ForegroundColor Yellow
     Write-Host "      $out" -ForegroundColor DarkGray
     return
   }
-  & icacls $Path '/inheritance:r' 2>&1 | Out-Null
+  Invoke-Native { & icacls $Path '/inheritance:r' 2>&1 } | Out-Null
 
   # Prove it, and prove it the way the app will actually use the folder.
   $ok = $true
@@ -165,7 +165,7 @@ function Protect-Directory {
   if (-not $ok) {
     Write-Host "Note: $Path is not usable after tightening - restoring inherited permissions." -ForegroundColor Yellow
     Write-Host "      $why" -ForegroundColor DarkGray
-    & icacls $Path '/reset' '/t' '/c' 2>&1 | Out-Null
+    Invoke-Native { & icacls $Path '/reset' '/t' '/c' 2>&1 } | Out-Null
   }
 }
 
@@ -180,6 +180,13 @@ function Invoke-WithRetry {
       Start-Sleep -Milliseconds $DelayMs
     }
   }
+}
+
+function Invoke-Native {
+  param([scriptblock]$NativeCall)
+  $eapBefore = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  try { & $NativeCall } finally { $ErrorActionPreference = $eapBefore }
 }
 
 function Remove-Temp {
@@ -247,7 +254,7 @@ function Install-Yarn {
   # everything downstream calls, would never appear. Pinning the prefix keeps the
   # runtime self-contained and removable in one delete, which is the promise the
   # installer makes.
-  & $npm install -g --silent --prefix "$nodeDir" 'yarn@1.22.22' 2>&1 | Out-Null
+  Invoke-Native { & $npm install -g --silent --prefix "$nodeDir" 'yarn@1.22.22' 2>&1 } | Out-Null
   if (-not (Test-Path $yarn)) {
     Fail "yarn installation failed (expected $yarn)."
   }
