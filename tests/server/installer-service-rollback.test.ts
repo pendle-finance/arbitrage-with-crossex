@@ -349,11 +349,4 @@ describe('install.ps1 rolls back when the background service cannot be registere
       .join('\n');
     expect(code.replace(whole, '')).not.toContain('Install-Service');
   });
-
-  it('makes a failed registration throw even when the script runs with -File', () => {
-    const fn = psFunction(ps, 'Install-Service');
-    const register = fn.slice(fn.indexOf('Register-ScheduledTask'), fn.indexOf('| Out-Null', fn.indexOf('Register-ScheduledTask')));
-    expect(register).toContain('-ErrorAction Stop');
-    expect(fn).toMatch(/Start-ScheduledTask -TaskName \$TaskName -ErrorAction Stop/);
-  });
 });

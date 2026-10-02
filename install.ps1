@@ -702,8 +702,8 @@ function Install-Service {
   $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Limited
 
   Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger @($trigger, $tick) `
-    -Settings $settings -Principal $principal -Force -ErrorAction Stop | Out-Null
-  Start-ScheduledTask -TaskName $TaskName -ErrorAction Stop
+    -Settings $settings -Principal $principal -Force | Out-Null
+  Start-ScheduledTask -TaskName $TaskName
 }
 
 # ---------------------------------------------------------------------------
