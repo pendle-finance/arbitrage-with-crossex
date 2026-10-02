@@ -4,7 +4,7 @@ import { http, HttpResponse } from 'msw';
 import type { ReactNode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { env, server } from '../test/server';
-import { qk, refreshTelegramFresh, useBorosPairContext } from './queries';
+import { qk, refreshTelegramFresh, useBorosPairContext, useSymbolDetail } from './queries';
 import { telegramInfo } from '../test/fixtures';
 
 const ADDRESS = '0x' + 'ab'.repeat(20);
@@ -55,6 +55,31 @@ describe('useBorosPairContext', () => {
 
     rerender({ active: true });
     await waitFor(() => expect(reads).toBeGreaterThan(1));
+  });
+});
+
+describe('useSymbolDetail', () => {
+  it('re-reads every 10s while leverageMax is 0, and stops once CrossEx returns a limit', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let reads = 0;
+    server.use(
+      http.get('/api/symbols/:symbol', () => {
+        reads += 1;
+        return HttpResponse.json(env({ symbol: 'GATE_FUTURE_ETH_USDT', leverageMax: reads < 3 ? 0 : 25 }));
+      }),
+    );
+    const { result } = renderHook(() => useSymbolDetail('GATE_FUTURE_ETH_USDT'), { wrapper: hookWrapper() });
+    await waitFor(() => expect(result.current.data?.leverageMax).toBe(0));
+    expect(reads).toBe(1);
+
+    await act(() => vi.advanceTimersByTimeAsync(10_000));
+    expect(reads).toBe(2);
+    await act(() => vi.advanceTimersByTimeAsync(10_000));
+    await waitFor(() => expect(result.current.data?.leverageMax).toBe(25));
+    expect(reads).toBe(3);
+
+    await act(() => vi.advanceTimersByTimeAsync(60_000));
+    expect(reads).toBe(3);
   });
 });
 

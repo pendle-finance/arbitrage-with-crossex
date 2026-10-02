@@ -251,3 +251,40 @@ describe('decide edges', () => {
     expect(a.type).toBe('idle'); // owes a hedge; must not widen the gap with a clip
   });
 });
+
+describe('OPENING pauses acquisition while a failed hedge waits out its backoff', () => {
+  const backoff = { hedgeNotBefore: 5_000, hedgeRejectStreak: 1 };
+  const partlyFilled = (over?: Partial<OrderRow>): OrderRow => order({ state: 'OPEN', cumQty: '0.05', ...over });
+  const cancelled = (): OrderRow => partlyFilled({ state: 'CLOSED', closeReason: 'cancelled', cancelRequested: 1 });
+
+  it('cancels the resting maker', () => {
+    const pair = pairRow(backoff);
+    const maker = partlyFilled();
+    expect(decide(pair, project(pair, [maker]), 0, ctx)).toEqual({ type: 'cancel', order: maker });
+  });
+
+  it('re-sends the cancel while an unconfirmed one leaves the maker OPEN', () => {
+    const pair = pairRow(backoff);
+    const maker = partlyFilled({ cancelRequested: 1 });
+    expect(decide(pair, project(pair, [maker]), 0, ctx)).toEqual({ type: 'cancel', order: maker });
+  });
+
+  it('places no new maker once the old one is closed', () => {
+    const pair = pairRow(backoff);
+    expect(decide(pair, project(pair, [cancelled()]), 0, ctx)).toEqual({
+      type: 'idle',
+      reason: 'acquisition paused: hedge failed, waiting out its backoff',
+    });
+  });
+
+  it('sends the hedge first once the backoff is over', () => {
+    const pair = pairRow(backoff);
+    expect(decide(pair, project(pair, [cancelled()]), 5_000, ctx)).toEqual({
+      type: 'place',
+      leg: 'B',
+      kind: 'taker',
+      tif: 'ioc',
+      qty: '0.05',
+    });
+  });
+});

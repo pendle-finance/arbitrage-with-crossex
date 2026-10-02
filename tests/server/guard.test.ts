@@ -61,7 +61,14 @@ describe('host/origin guard', () => {
     app = makeTestApp();
     const res = await app.inject({ method: 'GET', url: URL, headers: { host: 'localhost' } });
     expect(res.headers['x-frame-options']).toBe('DENY');
-    expect(res.headers['content-security-policy']).toBe("frame-ancestors 'none'");
+    expect(res.headers['content-security-policy']).toBe(
+      "default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self' data:; " +
+        "img-src 'self' data: https://storage.googleapis.com/boros-prod/ " +
+        'https://raw.githubusercontent.com/pendle-finance/arbitrage-with-crossex/; ' +
+        "connect-src 'self' https://raw.githubusercontent.com/pendle-finance/arbitrage-with-crossex/ " +
+        'https://api-boros.pendle.finance/apis/; ' +
+        "base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+    );
   });
 
   it('sends the anti-framing headers on a rejected request too', async () => {

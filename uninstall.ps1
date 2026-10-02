@@ -19,11 +19,21 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
-$Root     = if ($env:BOROS_ROOT) { $env:BOROS_ROOT } else { Join-Path $env:LOCALAPPDATA 'CrossEx-Boros' }
 # Resolved exactly as install.ps1 resolves it: the last-resort port guard below
 # must check the port the server was actually installed on.
-$Port     = if ($env:BOROS_PORT) { [int]$env:BOROS_PORT } else { 6688 }
 $TaskName = 'Arbitrage with CrossEx'
+$PrevRunner = $null
+$PrevPort   = $null
+$prevTask = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+if ($prevTask -and "$($prevTask.Actions[0].Arguments)" -match '-File "([^"]+\\run-server\.ps1)"') {
+  $PrevRunner = $Matches[1]
+  if (Test-Path -LiteralPath $PrevRunner) {
+    $portLine = Select-String -LiteralPath $PrevRunner -Pattern '^\$env:PORT = ''(\d+)''' | Select-Object -First 1
+    if ($portLine) { $PrevPort = [int]$portLine.Matches[0].Groups[1].Value }
+  }
+}
+$Port     = if ($env:BOROS_PORT) { [int]$env:BOROS_PORT } elseif ($PrevPort) { $PrevPort } else { 6688 }
+$Root     = if ($env:BOROS_ROOT) { $env:BOROS_ROOT } elseif ($PrevRunner) { Split-Path -Parent $PrevRunner } else { Join-Path $env:LOCALAPPDATA 'CrossEx-Boros' }
 $AppTitle = 'Arbitrage with CrossEx'
 # Kept in step with install.ps1: an uninstall must also clear the task and the
 # shortcut left by any previous product name, or they outlive the app.
@@ -32,6 +42,16 @@ $ServerEntry = Join-Path $Root 'app\src\server\index.ts'
 $RunnerPath  = Join-Path $Root 'run-server.ps1'
 
 function Say { param([string]$m) Write-Host '==> ' -ForegroundColor Cyan -NoNewline; Write-Host $m }
+
+function Invoke-WithRetry {
+  param([scriptblock]$Action, [int]$Tries = 10, [int]$DelayMs = 500)
+  for ($i = 1; $i -le $Tries; $i++) {
+    try { & $Action; return } catch {
+      if ($i -eq $Tries) { throw }
+      Start-Sleep -Milliseconds $DelayMs
+    }
+  }
+}
 
 # Both halves of the service: the node server AND the PowerShell supervisor that
 # restarts it. Stopping only node is pointless - the supervisor would bring it
@@ -161,7 +181,7 @@ if ($stillListening.Count -gt 0) {
 }
 
 Say 'Removing the app and its private Node.js runtime...'
-foreach ($d in @('app', 'app.new', 'app.old', 'node', 'logs')) {
+foreach ($d in @('app', 'app.new', 'app.old', 'node', 'node.new', 'node.old', 'logs')) {
   $p = Join-Path $Root $d
   if (Test-Path $p) { Remove-Item -Recurse -Force $p -ErrorAction SilentlyContinue }
 }
@@ -176,7 +196,23 @@ foreach ($title in @($AppTitle) + $LegacyTitles) {
 
 if ($Purge) {
   Say 'Removing API keys and trade history (-Purge)...'
-  if (Test-Path $Root) { Remove-Item -Recurse -Force $Root -ErrorAction SilentlyContinue }
+  $why = 'unknown'
+  if (Test-Path $Root) {
+    try { Invoke-WithRetry { Remove-Item -Recurse -Force $Root } } catch { $why = $_.Exception.Message }
+  }
+  if (Test-Path $Root) {
+    $keys = Join-Path $Root 'config\.env'
+    $left = @(Get-ChildItem -Force -Path $Root -ErrorAction SilentlyContinue | ForEach-Object { $_.Name }) -join ', '
+    Write-Host ''
+    if (Test-Path $keys) { Write-Host "  Your API keys are STILL ON DISK: $keys" -ForegroundColor Red }
+    Write-Host "  Could not delete $Root ($why)" -ForegroundColor Red
+    if ($left) { Write-Host "  Still in it: $left" -ForegroundColor Red }
+    Write-Host '  Close any program or window that uses this folder, then open a new' -ForegroundColor Red
+    Write-Host '  PowerShell window and run -Purge again.' -ForegroundColor Red
+    throw "could not delete $Root"
+  }
+  Write-Host ''
+  Write-Host '  Also revoke the Gate API key and the Boros agent. Deleting the file does not cancel them.'
 } else {
   # Gone entirely if config/data were never created.
   if ((Test-Path $Root) -and -not (Get-ChildItem -Path $Root -Force | Select-Object -First 1)) {

@@ -50,13 +50,22 @@ BRANCH="${BOROS_BRANCH:-main}"
 # how you install the very tree you audited — see "Install exactly what you
 # audited" in the README.
 REF="${BOROS_REF:-}"
-PORT="${BOROS_PORT:-6688}"
-ROOT="${BOROS_ROOT:-$HOME/.boros-crossex}"
 NODE_LINE="v24"
 LABEL="com.boros.crossex-terminal"
 APP_TITLE="Arbitrage with CrossEx"
 LOG_DIR="$HOME/Library/Logs/boros-crossex"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
+plist_value() { /usr/libexec/PlistBuddy -c "Print :$1" "$PLIST" 2>/dev/null || true; }
+PREV_PORT=""
+PREV_ROOT=""
+if [ -f "$PLIST" ]; then
+  PREV_PORT="$(plist_value EnvironmentVariables:PORT)"
+  case "$PREV_PORT" in ''|*[!0-9]*) PREV_PORT="" ;; esac
+  PREV_ROOT="$(plist_value WorkingDirectory)"
+  case "$PREV_ROOT" in */app) PREV_ROOT="${PREV_ROOT%/app}" ;; *) PREV_ROOT="" ;; esac
+fi
+PORT="${BOROS_PORT:-${PREV_PORT:-6688}}"
+ROOT="${BOROS_ROOT:-${PREV_ROOT:-$HOME/.boros-crossex}}"
 
 TMP=""
 
@@ -212,6 +221,7 @@ run_step() {
 
 build_app() {
   local yarn="$ROOT/node/bin/yarn"
+  export YARN_IGNORE_PATH=1
   say "Installing dependencies (this takes a minute on first install)…"
   run_step "installing the server dependencies failed." \
     "$yarn" --cwd "$ROOT/app.new" install --frozen-lockfile --silent --non-interactive
@@ -239,18 +249,29 @@ restore_app() {
   [ -d "$ROOT/app.old" ] || return 1
   printf '\033[1;33m%s\033[0m\n' "Rolling back to the previous version…" >&2
   rm -rf "$ROOT/app.failed"
-  [ -d "$ROOT/app" ] && mv "$ROOT/app" "$ROOT/app.failed"
-  mv "$ROOT/app.old" "$ROOT/app"
+  [ -d "$ROOT/app" ] && { mv "$ROOT/app" "$ROOT/app.failed" || return 1; }
+  mv "$ROOT/app.old" "$ROOT/app" || return 1
   # install_service truncates both logs, so the restart below would wipe the
   # failed version's stderr — the only record of why it would not boot, and
   # exactly what the caller tells the user to read. Keep a copy first.
   cp "$LOG_DIR/server.err.log" "$LOG_DIR/server.failed.log" 2>/dev/null || true
   # install_service boots out the failed instance and reaps orphans for us.
-  install_service
+  install_service || return 1
   wait_for_server || return 1
   echo "      the previous version is running again at http://localhost:$PORT" >&2
   echo "      the version that failed is kept at $ROOT/app.failed" >&2
   return 0
+}
+
+fail_not_restored() {
+  if launchctl print "gui/$(id -u)/$LABEL" >/dev/null 2>&1; then
+    fail "$1, and the rollback did not finish.
+  A background service is still registered, so the system keeps restarting the app.
+  Check http://localhost:$PORT in a minute. If it stays down, re-run this installer."
+  fi
+  fail "$1, and the previous version could not be restored.
+  NO SERVER IS RUNNING. Open deals are not being watched.
+  Re-run this installer to try again."
 }
 
 # Only after the new version has answered on the port. Before that, app.old is
@@ -325,7 +346,7 @@ port_in_use_by_other_app() {
 }
 
 write_plist() {
-  cat > "$PLIST" <<PLIST
+  cat > "$PLIST" <<PLIST || return 1
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -368,7 +389,7 @@ write_plist() {
 </dict>
 </plist>
 PLIST
-  plutil -lint -s "$PLIST" || fail "generated LaunchAgent plist failed validation."
+  plutil -lint -s "$PLIST" || { echo "generated LaunchAgent plist failed validation." >&2; return 1; }
 }
 
 install_service() {
@@ -383,9 +404,10 @@ install_service() {
   See what it is with:  lsof -nP -iTCP:$PORT -sTCP:LISTEN
   Quit that program and re-run this installer (or re-run with BOROS_PORT=<other port>)."
   fi
-  write_plist
+  write_plist || return 1
   launchctl enable "gui/$uid/$LABEL" 2>/dev/null || true
-  launchctl bootstrap "gui/$uid" "$PLIST"
+  launchctl bootstrap "gui/$uid" "$PLIST" \
+    || { sleep 2; launchctl bootstrap "gui/$uid" "$PLIST"; } || return 1
   launchctl kickstart -k "gui/$uid/$LABEL" 2>/dev/null || true
 }
 
@@ -431,16 +453,19 @@ main() {
   fetch_app
   build_app
   swap_app
-  install_service
+  if ! install_service; then
+    if restore_app; then
+      fail "could not register the background service, so the previous version was put back and is running."
+    fi
+    fail_not_restored "could not register the background service"
+  fi
   if ! wait_for_server; then
     if restore_app; then
       fail "the new version did not start, so the previous one was put back and is running.
   Nothing was lost — your keys and trade history are untouched.
   Why the new version failed: $LOG_DIR/server.failed.log"
     fi
-    fail "the new version did not start, and the previous one could not be restored.
-  Log: $LOG_DIR/server.err.log
-  Re-run this installer to try again."
+    fail_not_restored "the new version did not start"
   fi
   remove_old_app   # the new version answers on the port; the way back can go
   make_launcher
