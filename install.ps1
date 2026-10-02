@@ -334,6 +334,8 @@ function Get-App {
   Say 'Downloading the app...'
   $new = Join-Path $Root 'app.new'
   if (Test-Path $new) { Remove-Item -Recurse -Force $new }
+  $old = Join-Path $Root 'app.old'
+  if ((Test-Path $old) -and (Test-Path (Join-Path $Root 'app'))) { Invoke-WithRetry { Remove-Item -Recurse -Force $old } }
   New-Item -ItemType Directory -Force -Path $new | Out-Null
 
   $stage = Join-Path $script:Tmp 'app-zip'
@@ -396,7 +398,7 @@ function Swap-App {
   $app = Join-Path $Root 'app'
   $old = Join-Path $Root 'app.old'
   $new = Join-Path $Root 'app.new'
-  if (Test-Path $old) { Invoke-WithRetry { Remove-Item -Recurse -Force $old } }
+  if ((Test-Path $old) -and (Test-Path $app)) { Invoke-WithRetry { Remove-Item -Recurse -Force $old } }
   if (Test-Path $app) { Invoke-WithRetry { Move-Item -Path $app -Destination $old } }
   Invoke-WithRetry { Move-Item -Path $new -Destination $app }
   # app.old is deliberately KEPT here. It is deleted only once the new version
@@ -415,18 +417,13 @@ function Restore-App {
   if (-not (Test-Path $old)) { return $false }
 
   Write-Host 'Rolling back to the previous version...' -ForegroundColor Yellow
-  # Not Stop-RunningService: that Fails on a busy port, and we are already on
-  # the error path. Take the task down and reap whatever the new version left.
-  Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
-  Stop-StaleServer
   try {
-    $node = Join-Path $Root 'node'
-    $nodeOld = Join-Path $Root 'node.old'
-    if (Test-Path $nodeOld) {
-      if (Test-Path $node) { Invoke-WithRetry { Move-Item -Path $node -Destination (Join-Path $Root 'node.new') } }
-      Invoke-WithRetry { Move-Item -Path $nodeOld -Destination $node }
-    }
     if (Test-Path $failed) { Invoke-WithRetry { Remove-Item -Recurse -Force $failed } }
+    # Not Stop-RunningService: that Fails on a busy port, and we are already on
+    # the error path. Take the task down and reap whatever the new version left.
+    Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
+    Stop-StaleServer
+    Restore-Node
     if (Test-Path $app)    { Invoke-WithRetry { Move-Item -Path $app -Destination $failed } }
     Invoke-WithRetry { Move-Item -Path $old -Destination $app }
   } catch {
@@ -449,6 +446,46 @@ function Restore-App {
   return $true
 }
 
+function Restore-Node {
+  $node = Join-Path $Root 'node'
+  $nodeOld = Join-Path $Root 'node.old'
+  if (-not (Test-Path $nodeOld)) { return }
+  if (Test-Path $node) { Invoke-WithRetry { Move-Item -Path $node -Destination (Join-Path $Root 'node.new') } }
+  Invoke-WithRetry { Move-Item -Path $nodeOld -Destination $node }
+}
+
+function Undo-Swap {
+  $app = Join-Path $Root 'app'
+  $old = Join-Path $Root 'app.old'
+  try {
+    Restore-Node
+    if (-not (Test-Path $app)) { Invoke-WithRetry { Move-Item -Path $old -Destination $app } }
+    Install-Service
+  } catch {
+    Write-Host "      could not start the previous version again: $($_.Exception.Message)" -ForegroundColor Red
+    return $false
+  }
+  if (-not (Wait-ForServer)) { return $false }
+  Write-Host "      the previous version is running again at http://localhost:$Port" -ForegroundColor Yellow
+  return $true
+}
+
+function Fail-NotRestored {
+  param([string]$What)
+  if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) {
+    Fail @"
+$What, and the rollback did not finish.
+  A background task is still registered, so it keeps restarting the app.
+  Check http://localhost:$Port in a minute. If it stays down, re-run this installer.
+"@
+  }
+  Fail @"
+$What, and the previous version could not be restored.
+  NO SERVER IS RUNNING, and nothing starts it, even after a restart. Open deals are not being watched.
+  Re-run this installer to try again.
+"@
+}
+
 # Only after the new version has answered on the port. Before that, app.old is
 # the rollback target and must survive.
 function Remove-OldApp {
@@ -458,7 +495,7 @@ function Remove-OldApp {
   if (-not (Test-Path $old)) { return }
   # Retry for the reason Invoke-WithRetry exists: AV and the Search indexer open
   # a folder the moment it stops changing. Observed leaving app.old behind
-  # without this. Never fatal - the next Swap-App clears it.
+  # without this. Never fatal - the next run's Get-App clears it.
   try { Invoke-WithRetry { Remove-Item -Recurse -Force $old } } catch { }
 }
 
@@ -779,8 +816,16 @@ try {
   Get-App
   Build-App
   Stop-RunningService   # must precede Swap-App - see the note there
-  Swap-Node
-  Swap-App
+  try {
+    Swap-Node
+    Swap-App
+  } catch {
+    $why = $_.Exception.Message
+    if (Undo-Swap) {
+      Fail "could not move the new version into place ($why), so the previous version was put back and is running."
+    }
+    Fail-NotRestored "could not move the new version into place ($why)"
+  }
   try { Invoke-WithRetry { Install-Service } -Tries 2 -DelayMs 2000 } catch {
     $why = $_.Exception.Message
     $restored = $false
@@ -790,11 +835,7 @@ try {
     if ($restored) {
       Fail "could not register the background service ($why), so the previous version was put back and is running."
     }
-    Fail @"
-could not register the background service ($why), and the previous version could not be restored.
-  NO SERVER IS RUNNING, and nothing starts it, even after a restart. Open deals are not being watched.
-  Re-run this installer to try again.
-"@
+    Fail-NotRestored "could not register the background service ($why)"
   }
   if (-not (Wait-ForServer)) {
     if (Restore-App) {
@@ -804,11 +845,7 @@ the new version did not start, so the previous one was put back and is running.
   Why the new version failed: $LogDir\server.failed.log
 "@
     }
-    Fail @"
-the new version did not start, and the previous one could not be restored.
-  Log: $LogDir\server.err.log
-  Re-run this installer to try again.
-"@
+    Fail-NotRestored 'the new version did not start'
   }
   Remove-OldApp   # the new version answers on the port; the way back can go
   New-Launcher

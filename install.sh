@@ -248,7 +248,7 @@ swap_app() {
 restore_app() {
   [ -d "$ROOT/app.old" ] || return 1
   printf '\033[1;33m%s\033[0m\n' "Rolling back to the previous version…" >&2
-  rm -rf "$ROOT/app.failed"
+  rm -rf "$ROOT/app.failed" || return 1
   [ -d "$ROOT/app" ] && { mv "$ROOT/app" "$ROOT/app.failed" || return 1; }
   mv "$ROOT/app.old" "$ROOT/app" || return 1
   # install_service truncates both logs, so the restart below would wipe the
@@ -261,6 +261,17 @@ restore_app() {
   echo "      the previous version is running again at http://localhost:$PORT" >&2
   echo "      the version that failed is kept at $ROOT/app.failed" >&2
   return 0
+}
+
+fail_not_restored() {
+  if launchctl print "gui/$(id -u)/$LABEL" >/dev/null 2>&1; then
+    fail "$1, and the rollback did not finish.
+  A background service is still registered, so the system keeps restarting the app.
+  Check http://localhost:$PORT in a minute. If it stays down, re-run this installer."
+  fi
+  fail "$1, and the previous version could not be restored.
+  NO SERVER IS RUNNING. Open deals are not being watched.
+  Re-run this installer to try again."
 }
 
 # Only after the new version has answered on the port. Before that, app.old is
@@ -446,9 +457,7 @@ main() {
     if restore_app; then
       fail "could not register the background service, so the previous version was put back and is running."
     fi
-    fail "could not register the background service, and the previous version could not be restored.
-  NO SERVER IS RUNNING. Open deals are not being watched.
-  Re-run this installer to try again."
+    fail_not_restored "could not register the background service"
   fi
   if ! wait_for_server; then
     if restore_app; then
@@ -456,9 +465,7 @@ main() {
   Nothing was lost — your keys and trade history are untouched.
   Why the new version failed: $LOG_DIR/server.failed.log"
     fi
-    fail "the new version did not start, and the previous one could not be restored.
-  Log: $LOG_DIR/server.err.log
-  Re-run this installer to try again."
+    fail_not_restored "the new version did not start"
   fi
   remove_old_app   # the new version answers on the port; the way back can go
   make_launcher

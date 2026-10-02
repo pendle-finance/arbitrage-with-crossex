@@ -36,6 +36,7 @@ interface Setup {
   plutilFails?: number;
   healthy?: string[];
   failMv?: [string, string];
+  failRm?: string;
   fastHealth?: boolean;
   plist?: string;
   run?: string;
@@ -49,6 +50,7 @@ interface Result {
   root: string;
   calls: (tool: string) => string[];
   version: (folder: string) => string | null;
+  loaded: () => string | null;
 }
 
 function stub(bin: string, name: string, body: string): void {
@@ -74,6 +76,7 @@ function runInstaller(setup: Setup): Result {
       `echo "$*" >> '${t}/launchctl.calls'`,
       'case "$1" in',
       `  bootout) rm -f '${t}/loaded' ;;`,
+      `  print) [ -f '${t}/loaded' ] || exit 113 ;;`,
       '  bootstrap)',
       `    n=$(grep -c '^bootstrap' '${t}/launchctl.calls')`,
       `    if [ "$n" -le ${setup.bootstrapFails ?? 0} ]; then echo 'Bootstrap failed: 5: Input/output error' >&2; exit 5; fi`,
@@ -114,6 +117,17 @@ function runInstaller(setup: Setup): Result {
       ].join('\n'),
     );
   }
+  if (setup.failRm) {
+    mkdirSync(join(root, setup.failRm, 'leftover'), { recursive: true });
+    stub(
+      bin,
+      'rm',
+      [
+        `case " $* " in *' ${root}/${setup.failRm} '*) echo 'rm: forced failure' >&2; exit 1 ;; esac`,
+        'exec /bin/rm "$@"',
+      ].join('\n'),
+    );
+  }
   if (setup.fastHealth) stub(bin, 'seq', 'echo 1; echo 2; echo 3');
 
   const sh = read('install.sh');
@@ -142,6 +156,7 @@ function runInstaller(setup: Setup): Result {
     ...[
       'swap_app',
       'restore_app',
+      'fail_not_restored',
       'server_pids',
       'stop_stale_server',
       'port_in_use_by_other_app',
@@ -175,6 +190,7 @@ function runInstaller(setup: Setup): Result {
     root,
     calls: (tool) => lines(`${tool}.calls`),
     version: (folder) => (existsSync(join(root, folder, 'VERSION')) ? readFileSync(join(root, folder, 'VERSION'), 'utf8') : null),
+    loaded: () => (existsSync(join(t, 'loaded')) ? readFileSync(join(t, 'loaded'), 'utf8') : null),
   };
 }
 
@@ -204,6 +220,7 @@ describe('install.sh rolls back when the background service cannot be registered
     expect(r.ms).toBeLessThan(15_000);
     expect(r.version('app')).toBe('old');
     expect(r.version('app.failed')).toBe('new');
+    expect(r.loaded()).toBeNull();
   });
 
   it('runs the previous version when only the restore can register the service', () => {
@@ -215,6 +232,38 @@ describe('install.sh rolls back when the background service cannot be registered
     expect(r.err).not.toContain('NO SERVER IS RUNNING');
     expect(r.version('app')).toBe('old');
     expect(r.version('app.failed')).toBe('new');
+  });
+
+  it('does not say no server runs when the restored version is registered but does not answer', () => {
+    const r = runInstaller({ bootstrapFails: 2, healthy: ['none'], fastHealth: true });
+    expect(r.status).toBe(1);
+    expect(bootstraps(r)).toHaveLength(3);
+    expect(r.calls('curl').length).toBeGreaterThan(0);
+    expect(r.err).toContain('could not register the background service, and the rollback did not finish.');
+    expect(r.err).toContain('A background service is still registered');
+    expect(r.err).not.toContain('NO SERVER IS RUNNING');
+    expect(r.err).not.toContain('is running again');
+    expect(r.err).not.toContain('put back and is running');
+    expect(r.loaded()).toBe('old');
+  });
+
+  it('stops the restore when the old app.failed cannot be deleted', () => {
+    const r = runInstaller({ bootstrapFails: 99, failRm: 'app.failed' });
+    expect(r.status).toBe(1);
+    expect(r.err).toContain('NO SERVER IS RUNNING');
+    expect(existsSync(join(r.root, 'app.failed', 'app'))).toBe(false);
+    expect(r.version('app')).toBe('new');
+    expect(r.version('app.old')).toBe('old');
+    expect(r.loaded()).toBeNull();
+  });
+
+  it('says the old version is still registered when the health-check rollback cannot confirm it', () => {
+    const r = runInstaller({ healthy: ['none'], fastHealth: true });
+    expect(r.status).toBe(1);
+    expect(bootstraps(r)).toHaveLength(2);
+    expect(r.err).toContain('the new version did not start, and the rollback did not finish.');
+    expect(r.err).not.toContain('NO SERVER IS RUNNING');
+    expect(r.loaded()).toBe('old');
   });
 
   it('rolls back a plist that fails validation after the swap', () => {
@@ -282,8 +331,61 @@ describe('install.ps1 rolls back when the background service cannot be registere
     expect(handler.slice(restore, restore + guardEnd)).not.toMatch(/\bFail\b/);
     const after = handler.slice(restore + guardEnd).replace(/\s+/g, ' ');
     expect(after).toMatch(/Fail "could not register the background service \(\$why\), so the previous version was put back and is running\./);
-    expect(after).toContain('NO SERVER IS RUNNING, and nothing starts it, even after a restart.');
-    expect(after).toContain('Open deals are not being watched.');
+    expect(after).toContain('Fail-NotRestored "could not register the background service ($why)"');
+  });
+
+  it('says no server runs only when no task is left to start one', () => {
+    const fn = psFunction(ps, 'Fail-NotRestored').replace(/\s+/g, ' ');
+    const check = fn.search(/if \(Get-ScheduledTask -TaskName \$TaskName -ErrorAction SilentlyContinue\) \{ Fail @"/);
+    expect(check, 'no task check before the NO SERVER message').toBeGreaterThan(0);
+    const registered = fn.indexOf('$What, and the rollback did not finish. A background task is still registered');
+    const none = fn.indexOf('$What, and the previous version could not be restored. NO SERVER IS RUNNING, and nothing starts it');
+    expect(check).toBeLessThan(registered);
+    expect(registered).toBeLessThan(none);
+    expect(fn).toContain('Open deals are not being watched.');
+  });
+
+  it('ends every failed rollback in Fail-NotRestored', () => {
+    expect(main).toContain('Fail-NotRestored "could not move the new version into place ($why)"');
+    expect(main).toContain('Fail-NotRestored "could not register the background service ($why)"');
+    expect(main).toContain("Fail-NotRestored 'the new version did not start'");
+    expect(main).not.toContain('NO SERVER IS RUNNING');
+  });
+
+  it('undoes a swap that fails after the server was stopped', () => {
+    const swap = /\n {2}try \{\s*Swap-Node\s+Swap-App\s*\} catch \{([\s\S]*?)\n {2}\}/.exec(main);
+    expect(swap, 'Swap-Node and Swap-App are not inside one try').not.toBeNull();
+    expect(main.indexOf('Stop-RunningService')).toBeLessThan((swap as RegExpExecArray).index);
+    const handler = (swap as RegExpExecArray)[1].replace(/\s+/g, ' ');
+    expect(handler).toMatch(/if \(Undo-Swap\) \{ Fail "could not move the new version into place \(\$why\), so the previous version was put back and is running\." \}/);
+  });
+
+  it('Undo-Swap puts node and app back, restarts the service, and returns $false instead of throwing', () => {
+    const fn = psFunction(ps, 'Undo-Swap');
+    const body = /try \{([\s\S]*?)\} catch \{([\s\S]*?)\}/.exec(fn);
+    expect(body, 'Undo-Swap has no try/catch').not.toBeNull();
+    const [, tried, caught] = body as RegExpExecArray;
+    const steps = ['Restore-Node', 'Move-Item -Path $old -Destination $app', 'Install-Service'].map((x) => tried.indexOf(x));
+    expect(steps.every((i) => i >= 0)).toBe(true);
+    expect([...steps].sort((a, b) => a - b)).toEqual(steps);
+    expect(tried).toMatch(/if \(-not \(Test-Path \$app\)\) \{ Invoke-WithRetry \{ Move-Item -Path \$old -Destination \$app \} \}/);
+    expect(caught).toMatch(/return \$false/);
+    const tail = fn.slice(fn.indexOf(caught) + caught.length);
+    expect(tail).toMatch(/^\s*\}\s*if \(-not \(Wait-ForServer\)\) \{ return \$false \}/);
+    expect(tail).toContain('the previous version is running again at http://localhost:$Port');
+  });
+
+  it('prints the line the in-app update panel reads as a rollback on both undo paths', () => {
+    const panel = /previous version is running again|version that failed is kept/i;
+    expect(psFunction(ps, 'Undo-Swap')).toMatch(panel);
+    expect(psFunction(ps, 'Restore-App')).toMatch(panel);
+  });
+
+  it('clears a stale app.old before anything is stopped, and never deletes the only copy', () => {
+    const getApp = psFunction(ps, 'Get-App');
+    expect(getApp).toMatch(/if \(\(Test-Path \$old\) -and \(Test-Path \(Join-Path \$Root 'app'\)\)\) \{ Invoke-WithRetry \{ Remove-Item -Recurse -Force \$old \} \}/);
+    expect(main.indexOf('Get-App')).toBeLessThan(main.indexOf('Stop-RunningService'));
+    expect(psFunction(ps, 'Swap-App')).toMatch(/if \(\(Test-Path \$old\) -and \(Test-Path \$app\)\) \{ Invoke-WithRetry \{ Remove-Item -Recurse -Force \$old \} \}/);
   });
 
   it("Restore-App returns $false when its own service step throws", () => {
