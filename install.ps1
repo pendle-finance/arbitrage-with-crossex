@@ -39,10 +39,20 @@ $Branch   = if ($env:BOROS_BRANCH) { $env:BOROS_BRANCH } else { 'main' }
 # how you install the very tree you audited - see "Install exactly what you
 # audited" in the README.
 $Ref      = $env:BOROS_REF
-$Port     = if ($env:BOROS_PORT)   { [int]$env:BOROS_PORT } else { 6688 }
-$Root     = if ($env:BOROS_ROOT)   { $env:BOROS_ROOT }   else { Join-Path $env:LOCALAPPDATA 'CrossEx-Boros' }
-$NodeLine = 'v24'
 $TaskName = 'Arbitrage with CrossEx'
+$PrevRunner = $null
+$PrevPort   = $null
+$prevTask = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+if ($prevTask -and "$($prevTask.Actions[0].Arguments)" -match '-File "([^"]+\\run-server\.ps1)"') {
+  $PrevRunner = $Matches[1]
+  if (Test-Path -LiteralPath $PrevRunner) {
+    $portLine = Select-String -LiteralPath $PrevRunner -Pattern '^\$env:PORT = ''(\d+)''' | Select-Object -First 1
+    if ($portLine) { $PrevPort = [int]$portLine.Matches[0].Groups[1].Value }
+  }
+}
+$Port     = if ($env:BOROS_PORT) { [int]$env:BOROS_PORT } elseif ($PrevPort) { $PrevPort } else { 6688 }
+$Root     = if ($env:BOROS_ROOT) { $env:BOROS_ROOT } elseif ($PrevRunner) { Split-Path -Parent $PrevRunner } else { Join-Path $env:LOCALAPPDATA 'CrossEx-Boros' }
+$NodeLine = 'v24'
 $AppTitle = 'Arbitrage with CrossEx'
 # Display names this app shipped under before. The scheduled task and the Start
 # Menu shortcut are keyed BY NAME, so a rename orphans the old ones: the old task
@@ -122,13 +132,13 @@ function Protect-Directory {
   # (SQLITE_CANTOPEN) on a re-install while a brand-new one was fine. NTFS
   # propagates an inheritable ACE to children by itself - recursion is not only
   # unnecessary here, it is the bug.
-  $out = & icacls $Path '/grant:r' "*${sid}:(OI)(CI)F" 2>&1
+  $out = Invoke-Native { & icacls $Path '/grant:r' "*${sid}:(OI)(CI)F" 2>&1 }
   if ($LASTEXITCODE -ne 0) {
     Write-Host "Note: could not tighten permissions on $Path - leaving Windows defaults." -ForegroundColor Yellow
     Write-Host "      $out" -ForegroundColor DarkGray
     return
   }
-  & icacls $Path '/inheritance:r' 2>&1 | Out-Null
+  Invoke-Native { & icacls $Path '/inheritance:r' 2>&1 } | Out-Null
 
   # Prove it, and prove it the way the app will actually use the folder.
   $ok = $true
@@ -148,14 +158,14 @@ function Protect-Directory {
     # already sitting here, and a new-file probe would happily pass while the
     # database itself had been locked away.
     foreach ($f in @(Get-ChildItem -File -Force $Path -ErrorAction SilentlyContinue)) {
-      try { ([IO.File]::Open($f.FullName, 'Open', 'ReadWrite')).Dispose() }
+      try { ([IO.File]::Open($f.FullName, 'Open', 'ReadWrite', 'ReadWrite')).Dispose() }
       catch { $ok = $false; $why = "$($f.Name): $($_.Exception.Message)"; break }
     }
   }
   if (-not $ok) {
     Write-Host "Note: $Path is not usable after tightening - restoring inherited permissions." -ForegroundColor Yellow
     Write-Host "      $why" -ForegroundColor DarkGray
-    & icacls $Path '/reset' '/t' '/c' 2>&1 | Out-Null
+    Invoke-Native { & icacls $Path '/reset' '/t' '/c' 2>&1 } | Out-Null
   }
 }
 
@@ -170,6 +180,13 @@ function Invoke-WithRetry {
       Start-Sleep -Milliseconds $DelayMs
     }
   }
+}
+
+function Invoke-Native {
+  param([scriptblock]$NativeCall)
+  $eapBefore = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  try { & $NativeCall } finally { $ErrorActionPreference = $eapBefore }
 }
 
 function Remove-Temp {
@@ -193,6 +210,10 @@ function Get-NodeArch {
 
 function Install-Node {
   $nodeExe = Join-Path $Root 'node\node.exe'
+  $target = Join-Path $Root 'node.new'
+  $old = Join-Path $Root 'node.old'
+  if (Test-Path $target) { Invoke-WithRetry { Remove-Item -Recurse -Force $target } }
+  if (Test-Path $old) { Invoke-WithRetry { Remove-Item -Recurse -Force $old } }
   if (Test-Path $nodeExe) {
     $v = (& $nodeExe -v 2>$null)
     if ($v -and $v.StartsWith($NodeLine)) { Say "Node.js $v already installed - skipping."; return }
@@ -219,14 +240,32 @@ function Install-Node {
 
   Expand-Archive -Path $zip -DestinationPath $script:Tmp -Force
   $extracted = Join-Path $script:Tmp ([IO.Path]::GetFileNameWithoutExtension($file))
-  $target = Join-Path $Root 'node'
-  if (Test-Path $target) { Remove-Item -Recurse -Force $target }
   Move-Item -Path $extracted -Destination $target
   Say "Node.js $(& (Join-Path $target 'node.exe') -v) installed into $Root."
 }
 
+function Get-NodeDir {
+  $staged = Join-Path $Root 'node.new'
+  if (Test-Path $staged) { $staged } else { Join-Path $Root 'node' }
+}
+
+function Swap-Node {
+  $node = Join-Path $Root 'node'
+  $old  = Join-Path $Root 'node.old'
+  $new  = Join-Path $Root 'node.new'
+  if (-not (Test-Path $new)) { return }
+  if (Test-Path $old)  { Invoke-WithRetry { Remove-Item -Recurse -Force $old } }
+  if (Test-Path $node) { Invoke-WithRetry { Move-Item -Path $node -Destination $old } }
+  try {
+    Invoke-WithRetry { Move-Item -Path $new -Destination $node }
+  } catch {
+    if (Test-Path $old) { Invoke-WithRetry { Move-Item -Path $old -Destination $node } }
+    throw
+  }
+}
+
 function Install-Yarn {
-  $nodeDir = Join-Path $Root 'node'
+  $nodeDir = Get-NodeDir
   $yarn = Join-Path $nodeDir 'yarn.cmd'
   if (Test-Path $yarn) { return }
   Say 'Installing the yarn package manager (into the private runtime only)...'
@@ -237,7 +276,7 @@ function Install-Yarn {
   # everything downstream calls, would never appear. Pinning the prefix keeps the
   # runtime self-contained and removable in one delete, which is the promise the
   # installer makes.
-  & $npm install -g --silent --prefix "$nodeDir" 'yarn@1.22.22' 2>&1 | Out-Null
+  Invoke-Native { & $npm install -g --silent --prefix "$nodeDir" 'yarn@1.22.22' 2>&1 } | Out-Null
   if (-not (Test-Path $yarn)) {
     Fail "yarn installation failed (expected $yarn)."
   }
@@ -291,6 +330,8 @@ function Get-App {
   Say 'Downloading the app...'
   $new = Join-Path $Root 'app.new'
   if (Test-Path $new) { Remove-Item -Recurse -Force $new }
+  $old = Join-Path $Root 'app.old'
+  if ((Test-Path $old) -and (Test-Path (Join-Path $Root 'app'))) { Invoke-WithRetry { Remove-Item -Recurse -Force $old } }
   New-Item -ItemType Directory -Force -Path $new | Out-Null
 
   $stage = Join-Path $script:Tmp 'app-zip'
@@ -329,9 +370,11 @@ function Get-App {
 }
 
 function Build-App {
-  $yarn = Join-Path $Root 'node\yarn.cmd'
+  $nodeDir = Get-NodeDir
+  $yarn = Join-Path $nodeDir 'yarn.cmd'
   $new = Join-Path $Root 'app.new'
-  $env:PATH = "$(Join-Path $Root 'node');$env:PATH"
+  $env:PATH = "$nodeDir;$env:PATH"
+  $env:YARN_IGNORE_PATH = '1'
   Say 'Installing dependencies (this takes a minute on first install)...'
   & $yarn --cwd $new install --frozen-lockfile --silent --non-interactive
   if ($LASTEXITCODE -ne 0) { Fail 'dependency installation failed.' }
@@ -351,7 +394,7 @@ function Swap-App {
   $app = Join-Path $Root 'app'
   $old = Join-Path $Root 'app.old'
   $new = Join-Path $Root 'app.new'
-  if (Test-Path $old) { Invoke-WithRetry { Remove-Item -Recurse -Force $old } }
+  if ((Test-Path $old) -and (Test-Path $app)) { Invoke-WithRetry { Remove-Item -Recurse -Force $old } }
   if (Test-Path $app) { Invoke-WithRetry { Move-Item -Path $app -Destination $old } }
   Invoke-WithRetry { Move-Item -Path $new -Destination $app }
   # app.old is deliberately KEPT here. It is deleted only once the new version
@@ -375,6 +418,12 @@ function Restore-App {
   Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
   Stop-StaleServer
   try {
+    $node = Join-Path $Root 'node'
+    $nodeOld = Join-Path $Root 'node.old'
+    if (Test-Path $nodeOld) {
+      if (Test-Path $node) { Invoke-WithRetry { Move-Item -Path $node -Destination (Join-Path $Root 'node.new') } }
+      Invoke-WithRetry { Move-Item -Path $nodeOld -Destination $node }
+    }
     if (Test-Path $failed) { Invoke-WithRetry { Remove-Item -Recurse -Force $failed } }
     if (Test-Path $app)    { Invoke-WithRetry { Move-Item -Path $app -Destination $failed } }
     Invoke-WithRetry { Move-Item -Path $old -Destination $app }
@@ -388,21 +437,42 @@ function Restore-App {
   Copy-Item (Join-Path $LogDir 'server.err.log') (Join-Path $LogDir 'server.failed.log') `
     -Force -ErrorAction SilentlyContinue
 
-  Install-Service
+  try { Install-Service } catch {
+    Write-Host "      could not register the background service: $($_.Exception.Message)" -ForegroundColor Red
+    return $false
+  }
   if (-not (Wait-ForServer)) { return $false }
   Write-Host "      the previous version is running again at http://localhost:$Port" -ForegroundColor Yellow
   Write-Host "      the version that failed is kept at $failed" -ForegroundColor DarkGray
   return $true
 }
 
+function Fail-NotRestored {
+  param([string]$What)
+  if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) {
+    Fail @"
+$What, and the rollback did not finish.
+  A background task is still registered, so it keeps restarting the app.
+  Check http://localhost:$Port in a minute. If it stays down, re-run this installer.
+"@
+  }
+  Fail @"
+$What, and the previous version could not be restored.
+  NO SERVER IS RUNNING, and nothing starts it, even after a restart. Open deals are not being watched.
+  Re-run this installer to try again.
+"@
+}
+
 # Only after the new version has answered on the port. Before that, app.old is
 # the rollback target and must survive.
 function Remove-OldApp {
   $old = Join-Path $Root 'app.old'
+  $nodeOld = Join-Path $Root 'node.old'
+  if (Test-Path $nodeOld) { try { Invoke-WithRetry { Remove-Item -Recurse -Force $nodeOld } } catch { } }
   if (-not (Test-Path $old)) { return }
   # Retry for the reason Invoke-WithRetry exists: AV and the Search indexer open
   # a folder the moment it stops changing. Observed leaving app.old behind
-  # without this. Never fatal - the next Swap-App clears it.
+  # without this. Never fatal - the next run's Get-App clears it.
   try { Invoke-WithRetry { Remove-Item -Recurse -Force $old } } catch { }
 }
 
@@ -612,7 +682,7 @@ function Install-Service {
   # Keepalive by REPETITION, not by restart-on-failure. Task Scheduler's "if the
   # task fails, restart every N" keys off the action's exit code and quietly does
   # not fire in a number of ordinary cases - it did not bring the server back
-  # when the process was killed under test. A trigger that simply re-runs every
+  # when the process was killed under test. A time trigger that simply re-runs every
   # minute is the dependable pattern: paired with MultipleInstances = IgnoreNew
   # it is a no-op while the server is healthy, and the moment it is not, the next
   # tick starts it again. RestartCount stays as a second line of defence.
@@ -622,6 +692,8 @@ function Install-Service {
   $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
   $trigger.Repetition = (New-ScheduledTaskTrigger -Once -At (Get-Date) `
     -RepetitionInterval (New-TimeSpan -Minutes 1)).Repetition
+  $tick = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) `
+    -RepetitionInterval (New-TimeSpan -Minutes 1)
 
   $settings = New-ScheduledTaskSettingsSet `
     -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -DontStopOnIdleEnd `
@@ -629,7 +701,7 @@ function Install-Service {
     -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew -Hidden
   $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Limited
 
-  Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger `
+  Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger @($trigger, $tick) `
     -Settings $settings -Principal $principal -Force | Out-Null
   Start-ScheduledTask -TaskName $TaskName
 }
@@ -721,8 +793,19 @@ try {
   Get-App
   Build-App
   Stop-RunningService   # must precede Swap-App - see the note there
+  Swap-Node
   Swap-App
-  Install-Service
+  try { Invoke-WithRetry { Install-Service } -Tries 2 -DelayMs 2000 } catch {
+    $why = $_.Exception.Message
+    $restored = $false
+    try { $restored = Restore-App } catch {
+      Write-Host "      the rollback failed: $($_.Exception.Message)" -ForegroundColor Red
+    }
+    if ($restored) {
+      Fail "could not register the background service ($why), so the previous version was put back and is running."
+    }
+    Fail-NotRestored "could not register the background service ($why)"
+  }
   if (-not (Wait-ForServer)) {
     if (Restore-App) {
       Fail @"
@@ -731,11 +814,7 @@ the new version did not start, so the previous one was put back and is running.
   Why the new version failed: $LogDir\server.failed.log
 "@
     }
-    Fail @"
-the new version did not start, and the previous one could not be restored.
-  Log: $LogDir\server.err.log
-  Re-run this installer to try again.
-"@
+    Fail-NotRestored 'the new version did not start'
   }
   Remove-OldApp   # the new version answers on the port; the way back can go
   New-Launcher

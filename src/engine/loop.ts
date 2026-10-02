@@ -228,7 +228,23 @@ async function resolvePending(deps: LoopDeps, pair: PairRow, o: OrderRow): Promi
     venueOrderId: o.venueOrderId ?? undefined,
     clientText: o.clientId,
   });
-  if (read.kind === 'error') return; // stays PENDING; next tick retries
+  if (read.kind === 'error') {
+    // Same escalation as observeOpen: a PENDING order may be live and filling.
+    const streak = o.readFailStreak + 1;
+    deps.store.updateOrder(o.pairId, o.leg, o.seq, { readFailStreak: streak });
+    if (streak === tuning(deps).READ_FAIL_ALERT) {
+      deps.store.alert(
+        'error',
+        pair.id,
+        `cannot read pending order ${o.clientId} from the venue (${streak} consecutive failures: ${read.message}) — it may be live and filling; check credentials and connectivity`,
+        now,
+      );
+    }
+    return; // stays PENDING; next tick retries
+  }
+  if (o.readFailStreak > 0) {
+    deps.store.updateOrder(o.pairId, o.leg, o.seq, { readFailStreak: 0 }); // reachable again
+  }
   if (read.kind === 'found') {
     applySnapshot(deps, pair, o, read.snapshot);
     return;
@@ -277,8 +293,7 @@ async function observeOpen(deps: LoopDeps, pair: PairRow, o: OrderRow): Promise<
     // keeps filling while our cum_qty freezes at its last good value. project()
     // then computes unhedged from stale numbers and the deal renders as healthy
     // and progressing. Silently returning made a revoked key, a venue outage or
-    // a dead link invisible for as long as it lasted — resolvePending at least
-    // alerts once past AMBIGUITY_MS; the OPEN path had no equivalent.
+    // a dead link invisible for as long as it lasted.
     //
     // Count the streak and escalate ONCE at the threshold (the alert store
     // de-dupes against unacked rows, so this does not nag every tick).

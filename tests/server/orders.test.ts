@@ -275,10 +275,14 @@ describe('/api/orders', () => {
 
   it('DELETE /orders/:id still cancels a hand-placed order while a deal is running', async () => {
     const store = new Store(':memory:');
-    app = makeTestApp({ engine: { store, venue: new FakeVenue(), clock: new VirtualClock() } });
+    const clock = new VirtualClock();
+    app = makeTestApp({ engine: { store, venue: new FakeVenue(), clock } });
+    const o = seedPair(store, clock);
+    store.updateOrder(o.pairId, o.leg, o.seq, { state: 'OPEN', venueOrderId: '900001' });
     mockGateDelete('/orders/777777', { body: { order_id: '777777', status: 'success' } });
 
     const del = await app.inject({ method: 'DELETE', url: '/api/orders/777777', headers: HOST });
     expect(del.statusCode).toBe(200);
+    expect(store.getPair('deal-000009')!.mode).toBe('OPENING'); // the deal is untouched
   });
 });
