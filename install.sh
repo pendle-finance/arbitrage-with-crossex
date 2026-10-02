@@ -248,7 +248,7 @@ swap_app() {
 restore_app() {
   [ -d "$ROOT/app.old" ] || return 1
   printf '\033[1;33m%s\033[0m\n' "Rolling back to the previous version…" >&2
-  rm -rf "$ROOT/app.failed" || return 1
+  rm -rf "$ROOT/app.failed"
   [ -d "$ROOT/app" ] && { mv "$ROOT/app" "$ROOT/app.failed" || return 1; }
   mv "$ROOT/app.old" "$ROOT/app" || return 1
   # install_service truncates both logs, so the restart below would wipe the

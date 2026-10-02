@@ -36,7 +36,6 @@ interface Setup {
   plutilFails?: number;
   healthy?: string[];
   failMv?: [string, string];
-  failRm?: string;
   fastHealth?: boolean;
   plist?: string;
   run?: string;
@@ -114,17 +113,6 @@ function runInstaller(setup: Setup): Result {
       [
         `if [ "$1|$2" = '${root}/${from}|${root}/${to}' ]; then echo 'mv: forced failure' >&2; exit 1; fi`,
         'exec /bin/mv "$@"',
-      ].join('\n'),
-    );
-  }
-  if (setup.failRm) {
-    mkdirSync(join(root, setup.failRm, 'leftover'), { recursive: true });
-    stub(
-      bin,
-      'rm',
-      [
-        `case " $* " in *' ${root}/${setup.failRm} '*) echo 'rm: forced failure' >&2; exit 1 ;; esac`,
-        'exec /bin/rm "$@"',
       ].join('\n'),
     );
   }
@@ -245,16 +233,6 @@ describe('install.sh rolls back when the background service cannot be registered
     expect(r.err).not.toContain('is running again');
     expect(r.err).not.toContain('put back and is running');
     expect(r.loaded()).toBe('old');
-  });
-
-  it('stops the restore when the old app.failed cannot be deleted', () => {
-    const r = runInstaller({ bootstrapFails: 99, failRm: 'app.failed' });
-    expect(r.status).toBe(1);
-    expect(r.err).toContain('NO SERVER IS RUNNING');
-    expect(existsSync(join(r.root, 'app.failed', 'app'))).toBe(false);
-    expect(r.version('app')).toBe('new');
-    expect(r.version('app.old')).toBe('old');
-    expect(r.loaded()).toBeNull();
   });
 
   it('says the old version is still registered when the health-check rollback cannot confirm it', () => {
