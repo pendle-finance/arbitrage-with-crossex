@@ -630,7 +630,7 @@ function Install-Service {
   # Keepalive by REPETITION, not by restart-on-failure. Task Scheduler's "if the
   # task fails, restart every N" keys off the action's exit code and quietly does
   # not fire in a number of ordinary cases - it did not bring the server back
-  # when the process was killed under test. A trigger that simply re-runs every
+  # when the process was killed under test. A time trigger that simply re-runs every
   # minute is the dependable pattern: paired with MultipleInstances = IgnoreNew
   # it is a no-op while the server is healthy, and the moment it is not, the next
   # tick starts it again. RestartCount stays as a second line of defence.
@@ -640,6 +640,8 @@ function Install-Service {
   $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
   $trigger.Repetition = (New-ScheduledTaskTrigger -Once -At (Get-Date) `
     -RepetitionInterval (New-TimeSpan -Minutes 1)).Repetition
+  $tick = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) `
+    -RepetitionInterval (New-TimeSpan -Minutes 1)
 
   $settings = New-ScheduledTaskSettingsSet `
     -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -DontStopOnIdleEnd `
@@ -647,7 +649,7 @@ function Install-Service {
     -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew -Hidden
   $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Limited
 
-  Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger `
+  Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger @($trigger, $tick) `
     -Settings $settings -Principal $principal -Force | Out-Null
   Start-ScheduledTask -TaskName $TaskName
 }
