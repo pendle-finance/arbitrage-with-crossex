@@ -158,7 +158,7 @@ function Protect-Directory {
     # already sitting here, and a new-file probe would happily pass while the
     # database itself had been locked away.
     foreach ($f in @(Get-ChildItem -File -Force $Path -ErrorAction SilentlyContinue)) {
-      try { ([IO.File]::Open($f.FullName, 'Open', 'ReadWrite')).Dispose() }
+      try { ([IO.File]::Open($f.FullName, 'Open', 'ReadWrite', 'ReadWrite')).Dispose() }
       catch { $ok = $false; $why = "$($f.Name): $($_.Exception.Message)"; break }
     }
   }
