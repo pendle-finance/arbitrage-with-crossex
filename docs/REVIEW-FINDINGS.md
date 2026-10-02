@@ -16,46 +16,18 @@ line numbers are omitted deliberately (they drift).
 
 ## Engine & server
 
-- **OPENING's hedge-first gating is weaker than CONVERTING's** (`src/engine/decide.ts`): during
-  the backoff after a failed hedge attempt, a resting maker keeps filling (and can be re-placed)
-  in OPENING, while CONVERTING in the identical state pauses with "hedge owed first". Bounded by
-  the hedge wall (~3 backoff windows before HALT), but strictly weaker than the rule it mirrors.
 - **Leg-A max-market-size check ignores `maxClip`** (`src/engine/create.ts`): the cap compares
   the FULL deal qty, but leg-A convert clips are split to at most `maxClip` — a deliberately
   clipped deal that could never send an over-cap order is rejected at creation. Fail-safe
   direction, but over-strict.
 - **Banded clips price off book mid, not the venue reference** (`src/engine/decide.ts`): the
-  comment claims the slippage band stays inside the venue's price-limit band, but `refPrice()` is
-  (bid+ask)/2 of the public book. When mid dislocates from the venue's mark by more than the
+  slippage band is applied to `refPrice()`, (bid+ask)/2 of the public book, not to the venue's
+  mark. When mid dislocates from the venue's mark by more than the
   band, every clip draws a hard price-limit reject and the close stops at the reject budget —
   exactly during the volatile conditions the band exists for. Honest stop + alert, no silent loss.
-- **Leverage upper bound fails open on an empty risk-limits reply** (`src/server/routes/deals.ts`):
-  a successful-but-tierless response yields max 0, which skips the bound — and the 0 is cached
-  for 10 minutes. An over-max leverage then reaches preflight, which under-reserves margin if the
-  venue clamps instead of rejecting.
 - **The finish reason always blames "below B's lot"** (`src/engine/decide.ts`): an unhedged
   terminal residual is attributed to the lot even when it is whole lots blocked by
   minSize/minNotional — misleading in the post-mortem report.
-
-## Installers
-
-- **`Protect-Directory`'s graceful fallback is unreachable** (`install.ps1`): under PS 5.1 with
-  `$ErrorActionPreference='Stop'`, the `2>&1` on icacls turns stderr into a terminating error
-  before the exit-code check that was meant to degrade gracefully.
-- **`Install-Node` deletes the in-use runtime before the service is stopped** (`install.ps1`):
-  on an update, the old `node/` folder is removed while the previous server may still be running
-  from it — violating the stop-before-delete ordering the script itself documents. Windows file
-  locking makes this fail loudly rather than dangerously, but the ordering should match the docs.
-- **The keepalive repetition may never tick** (`install.ps1`): the every-minute repetition is
-  grafted onto an `-AtLogOn` trigger with no `StartBoundary`; when the task is registered after
-  logon and started by hand, the repetition window never opens, leaving only the in-task
-  supervisor loop as keepalive.
-
-## Web & test coverage
-
-- **The slippage band has no close-pair test** (`tests/unit/engine-loop.test.ts`): the banded
-  clip is pinned for single-leg closes only; the close-PAIR path is untested, and one older test
-  comment still describes the pre-fix (unpriced clip) semantics.
 
 ---
 
@@ -108,3 +80,26 @@ line numbers are omitted deliberately (they drift).
   is never cached, and the route checks the leverage CrossEx confirms after each set.
 - **The close-band comment said reference price; the code uses book mid** — comment corrected,
   behaviour unchanged. The close-pair test now pins leg A's banded limit price.
+
+## Fixed since (2026-10-02 installer pass, 1.7.3)
+
+- **`Protect-Directory`'s graceful fallback was unreachable** — under PS 5.1 with
+  `$ErrorActionPreference='Stop'`, icacls stderr behind `2>&1` threw before the exit-code
+  check. The icacls and npm calls now run with `Continue` for that one call.
+- **Every update reset `data\` to inherited permissions** — the probe opened existing files
+  with no sharing, so the running server's open `deals.sqlite` looked like a denial. It now
+  shares read, write and delete, and only an access denial counts.
+- **`Install-Node` deleted the in-use runtime before the service was stopped** — on a Node
+  change the old `node\` was removed under the running server. The new runtime is now
+  unpacked to `node.new` and swapped in after the stop, and a failed boot puts the old one back.
+- **The keepalive repetition never ticked** — after an install there is no logon, so the
+  logon trigger's repetition never opened. A second, time-based trigger now re-runs the task
+  every minute.
+- **A failed task registration left no server** — the new version was in place, nothing was
+  registered, and the user saw a raw PowerShell error. The registration is retried once, then
+  the previous version is put back and registered. The same applies to a failed swap of the
+  app or the runtime after the stop. The message says no server runs only when nothing is
+  registered to start one.
+- **`-Purge` said "Uninstalled." while the API keys were still on disk** — a locked file or a
+  shell inside the folder stopped the delete silently. It now retries, names what is left,
+  and fails instead.
