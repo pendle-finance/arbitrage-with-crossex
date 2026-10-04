@@ -145,13 +145,10 @@ export function DirectionToggle({
 /**
  * Market picker.
  *
- * Ineligible markets are HIDDEN once the other leg is chosen, and the list says
- * how many it dropped and why. §2 originally required they stay visible-but-
- * disabled, on the reasoning that a vanished market reads as "not listed" and
- * sends the user hunting. That holds when nothing explains the absence — but
- * with a pair already picked, most of the venue's markets are ineligible, and a
- * dropdown of mostly-dead options is its own kind of hunting. The caption keeps
- * the explanation §2 was protecting.
+ * Markets the other leg rules out are dropped from the list — but only the ones
+ * that can never pair: a different COLLATERAL. A different MATURITY stays in the
+ * list, because picking it rebases the partner leg (see pickLeg) rather than
+ * trapping the user on one maturity, so hiding it would hide a valid choice.
  *
  * With NO other leg selected nothing is ineligible, so the full list shows.
  */
@@ -162,8 +159,8 @@ export function DirectionToggle({
  * it puts the eligibility rules (same collateral, same maturity) in front
  * of the user instead of leaving them to be discovered as greyed options.
  *
- * The picker itself stays: `children` is the select, revealed by "Change",
- * so the eligibility filtering and its "N hidden" note are untouched.
+ * The picker itself stays: `children` is the select, so the eligibility
+ * filtering (§2) is untouched.
  */
 export function MarketCard({
   label,

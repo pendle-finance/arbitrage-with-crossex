@@ -366,11 +366,11 @@ describe('BorosPairTicket', () => {
     });
   });
 
-  it('hides ineligible markets once a leg is picked, and says how many it dropped', async () => {
-    // Reverses the original §2 rule ("never hidden, disabled WITH the reason").
-    // With a leg chosen, most of the venue's markets are ineligible, and a
-    // dropdown of mostly-dead options is its own kind of hunting — so they are
-    // dropped and a caption carries the explanation §2 was protecting.
+  it('offers a different-maturity market once a leg is picked, but drops a different-collateral one', async () => {
+    // §2: maturity is matched by rebasing the partner leg, not by hiding — so a
+    // same-collateral market at another maturity IS offered, and picking it
+    // drags the other leg along. A different collateral can never pair, so it
+    // stays dropped.
     const user = userEvent.setup();
     server.use(...handlers());
     renderWithClient(<BorosPairTicket />);
@@ -383,10 +383,11 @@ describe('BorosPairTicket', () => {
     const byLabel = (needle: string) =>
       [...legB.options].find((o) => o.textContent?.includes(needle));
 
-    // Neither the wrong maturity nor the wrong collateral is offered at all.
-    expect(byLabel('Bybit ETH 30 Sep 2026')).toBeUndefined();
+    // A different maturity is now offered — picking it rebases the pair.
+    expect(byLabel('Bybit ETH 30 Sep 2026')).toBeDefined();
+    // A different collateral can never pair, so it is still dropped.
     expect(byLabel('OKX BTC 31 Aug 2026')).toBeUndefined();
-    // The eligible one is still there and selectable.
+    // The same-maturity one is still there and selectable.
     expect(byLabel('Binance ETHUSDT')!.disabled).toBe(false);
   });
 
@@ -1453,6 +1454,77 @@ describe('BorosPairTicket — the cue prefill lands both legs on ONE maturity', 
 
     await waitFor(() => expect(screen.getByLabelText('Leg A')).toHaveValue(''));
     expect(screen.getByLabelText('Leg B')).toHaveValue('');
+  });
+});
+
+describe('BorosPairTicket — changing maturity rebases the partner leg', () => {
+  // ED-6567: the cue pre-fills a maturity but must not soft-lock it. Changing
+  // one leg's maturity straight from the dropdown drags the partner to its own
+  // market at that maturity, so the user is never forced to unselect both legs.
+  const SEP = MATURITY;
+  const DEC = MATURITY + 90 * 86_400;
+
+  it('moves leg B to its venue’s Dec market when leg A is switched to Dec', async () => {
+    server.use(
+      ...handlers({
+        ctx: context({
+          markets: [
+            marketRow({ marketId: 920, name: 'Gate ETH Sep', venue: 'Gate', maturity: SEP }),
+            marketRow({ marketId: 921, name: 'Gate ETH Dec', venue: 'Gate', maturity: DEC }),
+            marketRow({ marketId: 922, name: 'Hyperliquid ETH Sep', venue: 'Hyperliquid', maturity: SEP }),
+            marketRow({ marketId: 923, name: 'Hyperliquid ETH Dec', venue: 'Hyperliquid', maturity: DEC }),
+          ],
+        }),
+      }),
+    );
+    const user = userEvent.setup();
+    renderWithClient(
+      <BorosPrefillHarness
+        prefill={{ base: 'ETH', longVenue: 'Gate', shortVenue: 'Hyperliquid', size: 1000 }}
+      />,
+    );
+    await user.click(screen.getByRole('button', { name: 'fire' }));
+
+    // The cue lands both legs on the shared Sep maturity.
+    await waitFor(() => expect(screen.getByLabelText('Leg A')).toHaveValue('920'));
+    expect(screen.getByLabelText('Leg B')).toHaveValue('922');
+
+    // Pick Gate's Dec on leg A — leg B follows to Hyperliquid's own Dec market,
+    // no unselecting required.
+    await user.selectOptions(screen.getByLabelText('Leg A'), '921');
+    await waitFor(() => expect(screen.getByLabelText('Leg B')).toHaveValue('923'));
+  });
+
+  it('clears leg B when the partner venue has no market at the picked maturity', async () => {
+    server.use(
+      ...handlers({
+        ctx: context({
+          markets: [
+            marketRow({ marketId: 930, name: 'Gate ETH Sep', venue: 'Gate', maturity: SEP }),
+            marketRow({ marketId: 931, name: 'Gate ETH Dec', venue: 'Gate', maturity: DEC }),
+            marketRow({ marketId: 932, name: 'Hyperliquid ETH Sep', venue: 'Hyperliquid', maturity: SEP }),
+          ],
+        }),
+      }),
+    );
+    const user = userEvent.setup();
+    renderWithClient(
+      <BorosPrefillHarness
+        prefill={{ base: 'ETH', longVenue: 'Gate', shortVenue: 'Hyperliquid', size: 1000 }}
+      />,
+    );
+    await user.click(screen.getByRole('button', { name: 'fire' }));
+
+    await waitFor(() => expect(screen.getByLabelText('Leg A')).toHaveValue('930'));
+    expect(screen.getByLabelText('Leg B')).toHaveValue('932');
+
+    // Hyperliquid lists no Dec market, so leg B clears rather than deadlocking.
+    await user.selectOptions(screen.getByLabelText('Leg A'), '931');
+    await waitFor(() => expect(screen.getByLabelText('Leg B')).toHaveValue(''));
+    // And it is immediately selectable again — the dropdown still has options.
+    const legB = screen.getByLabelText('Leg B') as HTMLSelectElement;
+    expect(legB.disabled).toBe(false);
+    expect(legB.options.length).toBeGreaterThan(1);
   });
 });
 

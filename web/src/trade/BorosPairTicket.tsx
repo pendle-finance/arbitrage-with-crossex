@@ -388,14 +388,43 @@ export function BorosPairTicket({
   const rowA = marketA !== null ? byId.get(marketA) ?? null : null;
   const rowB = marketB !== null ? byId.get(marketB) ?? null : null;
 
-  // §2: eligibility is shared collateral + shared maturity. Computed here only
-  // to grey the OTHER leg's options with a reason; the server re-decides.
+  // §2: a pair needs shared collateral AND shared maturity. Only collateral is
+  // hidden here — a DIFFERENT maturity is still offered, because picking one
+  // rebases the partner leg (pickLeg) rather than locking the user to the
+  // maturity the cue happened to seed. Computed here only to drop the OTHER
+  // leg's incompatible options; the server re-decides.
   const reasonAgainst = (other: BorosPairMarketRow | null) => (m: BorosPairMarketRow): string | null => {
     if (!other) return null;
     if (m.marketId === other.marketId) return 'already the other leg';
     if (m.tokenId !== other.tokenId) return 'different collateral';
-    if (m.maturity !== other.maturity) return 'different maturity';
     return null;
+  };
+
+  /**
+   * Pick one leg's market, keeping the pair on ONE maturity by rebasing the
+   * partner — not by hiding its options (reasonAgainst no longer does).
+   *
+   * The server requires both legs on the same maturity, so when the picked
+   * maturity differs from the partner's the partner follows to its OWN market
+   * — same venue, base and collateral — at the new maturity. If that venue
+   * lists nothing there the partner clears to null rather than deadlocking the
+   * pair; the user picks it again. Last pick wins.
+   */
+  const pickLeg = (leg: 'A' | 'B') => (marketId: number | null) => {
+    const setPicked = leg === 'A' ? setMarketA : setMarketB;
+    const setPartner = leg === 'A' ? setMarketB : setMarketA;
+    const partner = leg === 'A' ? rowB : rowA;
+    setPicked(marketId);
+    const picked = marketId !== null ? byId.get(marketId) ?? null : null;
+    if (!picked || !partner || partner.maturity === picked.maturity) return;
+    const rebased = markets.find(
+      (m) =>
+        m.venue.toUpperCase() === partner.venue.toUpperCase() &&
+        m.base.toUpperCase() === partner.base.toUpperCase() &&
+        m.tokenId === partner.tokenId &&
+        m.maturity === picked.maturity,
+    );
+    setPartner(rebased ? rebased.marketId : null);
   };
 
   /**
@@ -774,7 +803,7 @@ export function BorosPairTicket({
                 value={marketA}
                 markets={markets}
                 reasonFor={reasonAgainst(rowB)}
-                onPick={setMarketA}
+                onPick={pickLeg('A')}
                 disabled={context.isPending}
               />
             </MarketCard>
@@ -818,7 +847,7 @@ export function BorosPairTicket({
                 value={marketB}
                 markets={markets}
                 reasonFor={reasonAgainst(rowA)}
-                onPick={setMarketB}
+                onPick={pickLeg('B')}
                 disabled={context.isPending}
               />
             </MarketCard>
