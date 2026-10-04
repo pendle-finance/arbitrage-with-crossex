@@ -667,6 +667,11 @@ export interface BorosOnlyPair {
   /** Receive leg minus pay leg, on notional, net of settlement fees; null
    * while either rate is pending. */
   lockedSpread: number | null;
+  /** The leftover hedge an open-only roll left behind: a perp-hedged pair at
+   * an EARLIER maturity carries the same two venues, so these perp-less rate
+   * legs double the hedge until the old legs mature, rather than being an
+   * unfinished one. Set by `markExcessBorosPairs`. */
+  isExcess?: boolean;
 }
 
 /**
@@ -733,6 +738,29 @@ export function borosOnlyPairs(
     }
   }
   return { pairs, restPerps: restOf(perps, left), restYus: restOf(yus, yuLeft) };
+}
+
+/**
+ * Flag the Boros-only units that are EXCESS rather than unfinished. An
+ * open-only roll opens the new maturity without closing the old legs, so the
+ * perps stay on the perp-hedged 4-leg pair at the OLD maturity and the new
+ * rate legs land as a perp-less unit at the LATER maturity. That unit is a
+ * second, overlapping hedge — not a pair waiting for its perps — whenever a
+ * perp-hedged pair at an earlier maturity carries both its venues. Its card
+ * then offers to close the excess legs instead of to open the "missing" ones.
+ */
+export function markExcessBorosPairs(
+  pairs: ReadonlyArray<BorosOnlyPair>,
+  hedged: ReadonlyArray<Pick<PairEstimate, 'longVenue' | 'shortVenue' | 'soonestMaturitySec'>>,
+): BorosOnlyPair[] {
+  const sameVenue = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
+  return pairs.map((p) =>
+    hedged.some(
+      (h) => h.soonestMaturitySec < p.maturity && sameVenue(h.longVenue, p.longVenue) && sameVenue(h.shortVenue, p.shortVenue),
+    )
+      ? { ...p, isExcess: true }
+      : p,
+  );
 }
 
 /**

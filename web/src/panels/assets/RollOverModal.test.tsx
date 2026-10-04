@@ -716,3 +716,88 @@ describe('RollOverModal — the review page', () => {
     expect(title).toMatch(/Hyperliquid · 8\.00% → 6\.00%\t\$109\.59/);
   });
 });
+
+/**
+ * Open-only: open the new maturity and LEAVE the old legs running. No close,
+ * so it is an ordinary pair OPEN over /boros/pair/execute — never the atomic
+ * /boros/roll/execute — and the review has no exit batch.
+ */
+describe('RollOverModal — open only (keep old legs)', () => {
+  type PairExecBody = {
+    address: string;
+    intent: string;
+    legA: { marketId: number; direction: 'long' | 'short'; slippageApr: number };
+    legB: { marketId: number; direction: 'long' | 'short'; slippageApr: number };
+    size: number;
+    clientOrderIdA: string;
+    clientOrderIdB: string;
+  };
+  const pairExecuteBody = (body: PairExecBody) =>
+    env({
+      result: {
+        legA: legFill(body.legA.marketId, body.legA.direction, body.size),
+        legB: legFill(body.legB.marketId, body.legB.direction, body.size),
+        bothLegsSubmitted: true,
+        hedgedSize: body.size,
+        unhedgedSize: 0,
+        unhedgedLeg: null,
+        realisedSpreadApr: 0.04,
+        partial: false,
+        filledNothing: false,
+      },
+      estimate: simulation({ ...body, intent: 'open' }),
+      warnings: [],
+      replayed: false,
+    });
+
+  it('sends a pair OPEN at the target market ids and size, not a roll, and shows no exit', async () => {
+    const user = userEvent.setup();
+    const opened: PairExecBody[] = [];
+    let rolls = 0;
+    install();
+    server.use(
+      http.post('/api/boros/pair/execute', async ({ request }) => {
+        const body = (await request.json()) as PairExecBody;
+        opened.push(body);
+        return HttpResponse.json(pairExecuteBody(body));
+      }),
+      http.post('/api/boros/roll/execute', () => {
+        rolls += 1;
+        return HttpResponse.json({ ok: false, error: { category: 'validation', message: 'should not roll', retryable: false } }, { status: 409 });
+      }),
+    );
+    renderWithClient(<RollOverModal pair={pair} base="ETH" nowSec={NOW} onClose={() => {}} />);
+    const dialog = await screen.findByRole('dialog');
+
+    // Switch to open-only; the primary button renames accordingly.
+    await user.click(within(dialog).getByRole('button', { name: 'Open only (keep old legs)' }));
+    const next = await within(dialog).findByRole('button', { name: 'Open new maturity' });
+    await waitFor(() => expect(next).not.toBeDisabled(), { timeout: 4_000 });
+    await user.click(next);
+
+    // The review has NO exit batch — just the new legs.
+    expect(within(dialog).queryByText('Exit')).not.toBeInTheDocument();
+    expect(within(dialog).queryByText('Re-entry')).not.toBeInTheDocument();
+    expect(within(dialog).getByText(/ties up roughly twice the Boros initial margin/)).toBeInTheDocument();
+
+    const confirm = await within(dialog).findByRole('button', { name: 'Open new maturity' });
+    await waitFor(() => expect(confirm).not.toBeDisabled(), { timeout: 4_000 });
+    await user.pointer({ keys: '[MouseLeft>]', target: confirm });
+    await waitFor(() => expect(opened).toHaveLength(1), { timeout: 4_000 });
+
+    const [body] = opened;
+    expect(body.intent).toBe('open');
+    // The new maturity's two markets, each taking the pair's own side.
+    expect(body.legA).toMatchObject({ marketId: GATE_NEW, direction: 'long' });
+    expect(body.legB).toMatchObject({ marketId: HL_NEW, direction: 'short' });
+    expect(body.size).toBe(100);
+    // Two distinct ids, kept for replay.
+    expect(body.clientOrderIdA).toBeTruthy();
+    expect(body.clientOrderIdB).toBeTruthy();
+    expect(body.clientOrderIdA).not.toBe(body.clientOrderIdB);
+    // Nothing was ever rolled.
+    expect(rolls).toBe(0);
+
+    expect(await within(dialog).findByText(/Opened 100 ETH/)).toBeInTheDocument();
+  });
+});

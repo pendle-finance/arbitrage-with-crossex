@@ -15,7 +15,9 @@ import type {
   AssetPerpClosedRow,
   AssetPerpOpen,
   BorosLegFill,
+  BorosPairBlocker,
   BorosPairContext,
+  BorosPairExecuteResponse,
   BorosPairMarketRow,
   BorosPairRequest,
   BorosPairSimulation,
@@ -43,6 +45,7 @@ import {
   useBorosPairContext,
   useBorosPairSimulation,
   useBorosRollSimulation,
+  useExecuteBorosPair,
   useExecuteBorosRoll,
   usePositions,
   useTopUpGas,
@@ -97,6 +100,7 @@ import {
   entryAprOf,
   perpOnlyCloseLegs,
   borosOnlyPairs,
+  markExcessBorosPairs,
   type BorosOnlyPair,
   perpOnlyPairs,
   sizeIn,
@@ -106,7 +110,7 @@ import { rebatedSettleApr } from '../../lib/rebate';
 import { useDebounced } from '../../lib/useDebounced';
 import { AssetBars } from './AssetBars';
 import { SinceChip } from './SinceChip';
-import { fitAtBand, maxRollSize, planBatch, suggestedRollSize, type BatchLimit } from './rollSizing';
+import { fitAtBand, fitLegsAtBand, maxRollSize, planBatch, suggestedRollSize, type BatchLimit } from './rollSizing';
 import { useRollPublisher, useRollSignalsOptional } from '../rollSignal';
 import { ArrowLeft, ArrowRight, ChartColumnDecreasing, ChartPie, Check, ChevronDown, RotateCw, Share } from 'lucide-react';
 
@@ -1492,6 +1496,16 @@ export function RollOverModal({
   const selected = picked ?? targets[0]?.maturity ?? null;
   const target = targets.find((t) => t.maturity === selected) ?? null;
   /**
+   * Close the old legs and re-open at the new maturity (the default), or open
+   * the new maturity and LEAVE the old legs running to their own maturity — a
+   * double hedge while the old pair pays out its floating exposure, cheaper
+   * than a close when the exit fees and slippage would cost more than letting
+   * it mature. Open-only quotes and sends only the entry, so the size is
+   * capped by the entry books alone.
+   */
+  const [mode, setMode] = useState<'reopen' | 'openOnly'>('reopen');
+  const openOnly = mode === 'openOnly';
+  /**
    * Each batch's tolerance, seeded per market as the review page and the
    * ticket seed theirs — so the options are priced at the bound the order
    * will actually carry, not the server's flat default.
@@ -1525,14 +1539,24 @@ export function RollOverModal({
    * books hold it with that to spare.
    */
   const selectedQuote = selected !== null ? legsBy[selected] : undefined;
+  // Open-only closes nothing, so only the entry books bound the size.
   const selectedFit =
-    selectedQuote && target ? (fitAtBand(selectedQuote.exit, selectedQuote.entry, capApr) ?? undefined) : undefined;
+    selectedQuote && target
+      ? (openOnly
+          ? fitLegsAtBand(selectedQuote.entry, capApr)
+          : fitAtBand(selectedQuote.exit, selectedQuote.entry, capApr)) ?? undefined
+      : undefined;
   useEffect(() => {
     if (touched || selected === null || selectedFit === undefined || appliedFor === selected) return;
     setSizeStr(fmtSize(suggestedRollSize(selectedFit, heldSize)));
     setAppliedFor(selected);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [touched, selected, selectedFit, appliedFor, heldSize]);
+  // Open-only caps by the entry books alone, so an untouched default re-derives
+  // when the mode flips (a touched size is the trader's, and stays).
+  useEffect(() => {
+    setAppliedFor(null);
+  }, [mode]);
   const setSize = (v: string) => {
     setTouched(true);
     setSizeStr(v);
@@ -1570,11 +1594,13 @@ export function RollOverModal({
     };
   };
   const plans = target !== null ? plansFor(target, size) : null;
+  // Open-only sends no exit batch, so only the entry's limit bounds the size.
+  const sizeLimits = openOnly
+    ? [plans?.entry?.limit ?? null]
+    : [plans?.exit?.limit ?? null, plans?.entry?.limit ?? null];
   const sizeLimit: BatchLimit | null =
-    [plans?.exit?.limit ?? null, plans?.entry?.limit ?? null]
-      .filter((l): l is BatchLimit => l !== null)
-      .sort((a, b) => a.maxSize - b.maxSize)[0] ?? null;
-  const maxRoll = maxRollSize([plans?.exit?.limit ?? null, plans?.entry?.limit ?? null]);
+    sizeLimits.filter((l): l is BatchLimit => l !== null).sort((a, b) => a.maxSize - b.maxSize)[0] ?? null;
+  const maxRoll = maxRollSize(sizeLimits);
 
   const [step, setStep] = useState<'pick' | 'review'>('pick');
   // The review page locks the modal while a batch is in flight.
@@ -1592,29 +1618,75 @@ export function RollOverModal({
       widthClass="w-[780px] max-w-[calc(100vw-32px)]"
     >
       {step === 'review' && target !== null && address !== null && ctx.data ? (
-        <RollReview
-          pair={pair}
-          yuLegs={yuLegs}
-          target={target}
-          size={size}
-          collateral={collateral}
-          address={address}
-          ctx={ctx.data}
-          oldMaturity={soonest}
-          nowSec={nowSec}
-          perpImUsd={heldSize > 0 ? pairPerpImUsd * (size / heldSize) : 0}
-          exitSeedPct={plans?.exit ? +(plans.exit.toleranceApr * 100).toFixed(2) : undefined}
-          entrySeedPct={plans?.entry ? +(plans.entry.toleranceApr * 100).toFixed(2) : undefined}
-          onBack={() => setStep('pick')}
-          onBusy={setBusy}
-          onClose={onClose}
-        />
+        openOnly ? (
+          <OpenOnlyReview
+            pair={pair}
+            yuLegs={yuLegs}
+            target={target}
+            size={size}
+            collateral={collateral}
+            address={address}
+            nowSec={nowSec}
+            entrySeedPct={plans?.entry ? +(plans.entry.toleranceApr * 100).toFixed(2) : undefined}
+            onBack={() => setStep('pick')}
+            onBusy={setBusy}
+            onClose={onClose}
+          />
+        ) : (
+          <RollReview
+            pair={pair}
+            yuLegs={yuLegs}
+            target={target}
+            size={size}
+            collateral={collateral}
+            address={address}
+            ctx={ctx.data}
+            oldMaturity={soonest}
+            nowSec={nowSec}
+            perpImUsd={heldSize > 0 ? pairPerpImUsd * (size / heldSize) : 0}
+            exitSeedPct={plans?.exit ? +(plans.exit.toleranceApr * 100).toFixed(2) : undefined}
+            entrySeedPct={plans?.entry ? +(plans.entry.toleranceApr * 100).toFixed(2) : undefined}
+            onBack={() => setStep('pick')}
+            onBusy={setBusy}
+            onClose={onClose}
+          />
+        )
       ) : (
         <>
+          {/* Close the old legs and re-open, or open the new maturity and let
+              the old legs run to maturity (a double hedge). */}
+          <div className="mb-3">
+            <div className="inline-flex rounded-md border border-ink-700 p-0.5 text-[12px]" role="group" aria-label="Roll mode">
+              {(
+                [
+                  ['reopen', 'Close & reopen'],
+                  ['openOnly', 'Open only (keep old legs)'],
+                ] as const
+              ).map(([value, label]) => (
+                <button
+                  key={value}
+                  type="button"
+                  aria-pressed={mode === value}
+                  className={`rounded px-3 py-1 transition-colors ${mode === value ? 'bg-info/20 font-medium text-ink-50' : 'text-ink-400 hover:text-ink-200'}`}
+                  onClick={() => setMode(value)}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            {openOnly && (
+              <p className="mt-2 text-[11.5px] leading-relaxed text-ink-400">
+                Opens the new maturity and leaves the old legs running — a double hedge that ties up
+                roughly twice the Boros initial margin until the old legs mature. The old legs settle
+                for free at maturity; close the excess from the position view whenever you like.
+              </p>
+            )}
+          </div>
+
           {/* A slider for the share of the position, a box for the exact
               figure — the same value, two grips. */}
           <div className="mb-3 flex flex-wrap items-center gap-3 text-xs">
-            <span className={microLabelClass}>Size to roll</span>
+            <span className={microLabelClass}>{openOnly ? 'Size to open' : 'Size to roll'}</span>
             <input
               type="range"
               className="min-w-[160px] flex-1 accent-info"
@@ -1631,7 +1703,7 @@ export function RollOverModal({
               inputMode="decimal"
               value={sizeStr}
               onChange={(e) => setSize(e.target.value)}
-              aria-label={`Size to roll (${collateral})`}
+              aria-label={`${openOnly ? 'Size to open' : 'Size to roll'} (${collateral})`}
             />
             <span className="text-ink-400">{collateral}</span>
             {/* Four grips on the same value: a quarter, half, three
@@ -1658,9 +1730,9 @@ export function RollOverModal({
               {sizeLimit.kind === 'liquidity'
                 ? `Size too big: ${sizeLimit.marketName} does not hold this much liquidity.`
                 : `Size too big: ${sizeLimit.marketName} only fills it past the venue's rate limit.`}{' '}
-              The most that rolls now is {fmtTokenQty(maxRoll, collateral)}.{' '}
+              The most that {openOnly ? 'opens' : 'rolls'} now is {fmtTokenQty(maxRoll, collateral)}.{' '}
               <button type="button" className="btn-link" onClick={() => setSize(fmtSize(suggestedRollSize(maxRoll, heldSize)))}>
-                Roll {fmtTokenQty(suggestedRollSize(maxRoll, heldSize), collateral)} instead
+                {openOnly ? 'Open' : 'Roll'} {fmtTokenQty(suggestedRollSize(maxRoll, heldSize), collateral)} instead
               </button>
             </p>
           )}
@@ -1703,10 +1775,16 @@ export function RollOverModal({
               type="button"
               className="btn-primary"
               disabled={target === null || !(size > 0) || address === null || !ctx.data}
-              title={target === null ? 'Pick a maturity to roll into' : 'Review the two batches, the tolerance and the margin before confirming'}
+              title={
+                target === null
+                  ? 'Pick a maturity to roll into'
+                  : openOnly
+                    ? 'Review the new legs, the tolerance and the margin before confirming'
+                    : 'Review the two batches, the tolerance and the margin before confirming'
+              }
               onClick={() => setStep('review')}
             >
-              Roll over
+              {openOnly ? 'Open new maturity' : 'Roll over'}
               <ArrowRight size={14} aria-hidden />
             </button>
           </div>
@@ -2422,6 +2500,267 @@ function RollReview({
 }
 
 /**
+ * The open-only review: open the new maturity and LEAVE the old legs running.
+ *
+ * Deliberately NOT a branch of RollReview — there is no close here, so no exit
+ * batch, no exit P&L, no roll memo. It is an ordinary pair OPEN at the new
+ * maturity's two markets, taking the pair's own sides, priced and sent over the
+ * same `/boros/pair` routes every other pair open uses. The result is a double
+ * hedge: the perps stay on the old 4-leg pair, and the new rate legs land as an
+ * "excess" Boros-only unit the trader closes from the position view whenever
+ * the old legs have matured (or sooner).
+ */
+function OpenOnlyReview({
+  pair,
+  yuLegs,
+  target,
+  size,
+  collateral,
+  address,
+  nowSec,
+  entrySeedPct,
+  onBack,
+  onBusy,
+  onClose,
+}: {
+  pair: PairEstimate;
+  yuLegs: PairLegDetail[];
+  target: RollTarget;
+  size: number;
+  collateral: string;
+  address: string;
+  nowSec: number;
+  /** The tolerance the pick page settled on for the entry at this size, in %
+   * APR — wider than the per-market seed when the size needed it. */
+  entrySeedPct?: number;
+  onBack: () => void;
+  onBusy: (busy: boolean) => void;
+  onClose: () => void;
+}) {
+  const agent = useBorosAgent();
+  const { canTrade, loginLabel } = useActiveWallet();
+  const execute = useExecuteBorosPair();
+  const topUpGas = useTopUpGas();
+  const [gasTopUpStr, setGasTopUpStr] = useState('5');
+  const longLeg = yuLegs.find((l) => l.venue === pair.longVenue);
+  const shortLeg = yuLegs.find((l) => l.venue === pair.shortVenue);
+
+  // One tolerance for the two entry legs — seeded as the pick page settled it,
+  // editable here. Invalid (empty, zero, over the cap) blocks the confirm.
+  const seedPct = entrySeedPct ?? ROLL_MAX_SLIP_PCT / 10;
+  const [slipEdited, setSlipEdited] = useState<string | null>(null);
+  const [slipOpen, setSlipOpen] = useState(false);
+  const slipStr = slipEdited ?? String(seedPct);
+  const slipN = Number(slipStr);
+  const slipInvalid = slipStr.trim() === '' || !Number.isFinite(slipN) || slipN <= 0 || slipN > ROLL_MAX_SLIP_PCT;
+  const slipApr = slipInvalid ? seedPct / 100 : slipN / 100;
+
+  // The pair OPEN: the new maturity's two markets, each taking the pair's own
+  // side — the same sides RollReview's re-entry opens.
+  const req: BorosPairRequest | null =
+    size > 0 && longLeg !== undefined && shortLeg !== undefined
+      ? {
+          address,
+          intent: 'open',
+          legA: { marketId: target.longMarketId, direction: longLeg.side === 'LONG' ? 'long' : 'short', slippageApr: slipApr },
+          legB: { marketId: target.shortMarketId, direction: shortLeg.side === 'LONG' ? 'long' : 'short', slippageApr: slipApr },
+          size,
+        }
+      : null;
+
+  // The report reads the execute response, not the quote — so once sent the
+  // poll stops rather than re-pricing a position that is already open.
+  const [out, setOut] = useState<{ payload: BorosPairExecuteResponse } | { error: string } | null>(null);
+  const sim = useBorosPairSimulation(req, req !== null && out === null);
+  const simulation = sim.data?.simulation ?? null;
+
+  const now = useNow(1_000);
+  const stale = sim.dataUpdatedAt > 0 ? now - sim.dataUpdatedAt > ROLL_QUOTE_MAX_AGE_MS : true;
+  const blockers: BorosPairBlocker[] = [
+    ...(sim.data?.gate.blockers ?? []),
+    ...(slipInvalid
+      ? [{ code: 'slippage-out-of-range', message: `Max slippage must be greater than 0 and at most ${ROLL_MAX_SLIP_PCT}% APR — the order would otherwise carry a rate bound you did not choose.` }]
+      : []),
+    ...(sim.isError ? [{ code: 'quote-failed', message: 'Could not price these legs.' }] : []),
+    ...(!sim.data
+      ? [{ code: 'no-quote', message: 'Waiting for a quote.' }]
+      : stale
+        ? [{ code: 'stale-simulation', message: 'The quote is out of date — waiting for a fresh one.' }]
+        : []),
+    ...(agent.data?.expired ? [{ code: 'agent-expired', message: 'Boros login expired.' }] : []),
+  ];
+
+  const [busy, setBusyState] = useState(false);
+  const setBusy = (b: boolean) => {
+    setBusyState(b);
+    onBusy(b);
+  };
+  // Two ids minted once and reused for every retry — a lost response replays
+  // from the server's memo, a refusal executes again (as the pair ticket does).
+  const ids = useRef({ a: `oa-${uuid()}`, b: `ob-${uuid()}` });
+  const canConfirm = req !== null && blockers.length === 0 && !busy && out === null && canTrade;
+
+  const run = async () => {
+    if (!req) return;
+    setBusy(true);
+    setOut(null);
+    try {
+      const payload = await execute.mutateAsync({ ...req, clientOrderIdA: ids.current.a, clientOrderIdB: ids.current.b });
+      setOut({ payload });
+    } catch (e) {
+      setOut({ error: e instanceof Error ? e.message : String(e) });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (out !== null) {
+    const result = 'payload' in out ? out.payload.result : null;
+    const tone = result === null || result.filledNothing ? 'rose' : result.partial ? 'amber' : 'green';
+    const retryable = 'error' in out || (result?.filledNothing ?? false) || (result?.partial ?? false);
+    return (
+      <div className="flex flex-col gap-2">
+        {result && <RollLegReport label="New legs" legs={[result.legA, result.legB]} collateral={collateral} tone={tone} />}
+        {result && !result.filledNothing && !result.partial && (
+          <p className="text-[11.5px] text-ink-300" role="status">
+            Opened {fmtTokenQty(result.hedgedSize, collateral)} at {fmtDateLocal(target.maturity)}. The old legs keep running —
+            close the excess from the position view once they mature.
+          </p>
+        )}
+        {result?.partial && !result.filledNothing && (
+          <p className="rounded border border-amber-500/30 bg-amber-500/[0.06] px-2.5 py-2 text-[11.5px] leading-relaxed text-amber-200" role="alert">
+            Only {fmtTokenQty(result.hedgedSize, collateral)} opened — the rest did not fill. Retry the remainder, or manage it from the position view.
+          </p>
+        )}
+        {result?.filledNothing && (
+          <p className="rounded border border-rose-500/30 bg-rose-500/[0.04] px-2.5 py-2 text-[11.5px] leading-relaxed text-rose-200" role="alert">
+            Nothing was opened — the venue refused both legs.
+          </p>
+        )}
+        {'error' in out && (
+          <p className="rounded-lg border border-rose-500/30 bg-rose-500/[0.04] px-3 py-2.5 text-[11.5px]" role="alert">
+            <span className="font-semibold text-rose-200">Open — not sent.</span> <span className="text-rose-200/80">{out.error}</span>
+          </p>
+        )}
+        {'payload' in out && out.payload.replayed && (
+          <p className="text-[11px] text-ink-400" role="status">
+            Answered from the earlier submission — nothing was sent twice.
+          </p>
+        )}
+        <div className="mt-2 flex items-center justify-end gap-2">
+          <button type="button" className="btn" onClick={onClose} disabled={busy}>
+            Close
+          </button>
+          {retryable && (
+            <HoldToConfirmButton tone="cyan" disabled={busy} onConfirm={run} title="Press and hold to send the same open again.">
+              Retry
+            </HoldToConfirmButton>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  const termDays = daysToMaturity(target.maturity, nowSec);
+  const slipLine = (
+    <SlippageLine
+      est={simulation?.slippageApr !== null && simulation?.slippageApr !== undefined ? fmtPct(simulation.slippageApr) : null}
+      max={fmtPct(slipApr * 2)}
+      unit="APR"
+      open={slipOpen}
+      onToggle={() => setSlipOpen((v) => !v)}
+      value={slipStr}
+      onChange={setSlipEdited}
+      invalid={slipInvalid}
+      invalidText={`Must be greater than 0 and at most ${ROLL_MAX_SLIP_PCT}%.`}
+      inputAriaLabel="Max slippage, % APR"
+      title={`How far this size moves the two books from mid. Capped at ${slipStr}% per leg.`}
+      hint="Max rate each leg will accept. A wider tolerance may be needed for a large size or a thin book."
+    />
+  );
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="rounded-lg border border-ink-700 bg-ink-850/40 px-4 py-3">
+        <div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-2">
+          <div className="min-w-0">
+            <div className={microLabelClass}>Open at {fmtDateLocal(target.maturity)}</div>
+            <div className="num mt-1 text-[22px] font-semibold leading-none tracking-[-0.02em]">
+              {fmtTokenQty(size, collateral)}
+              <span className="ml-2 text-[13px] font-normal text-ink-300">{termDays}d</span>
+            </div>
+            <div className="mt-1.5 text-[11.5px] text-ink-400">the old legs keep running</div>
+          </div>
+        </div>
+      </div>
+
+      {/* A double hedge: it earns nothing to close the old legs, but it costs
+          margin to hold both until they mature. */}
+      <p className="rounded-lg border border-amber-500/25 bg-amber-500/[0.04] px-3 py-2 text-[11.5px] leading-relaxed text-amber-200">
+        Holding both maturities ties up roughly twice the Boros initial margin until the old legs mature. The old legs
+        settle for free at maturity — close the excess from the position view whenever you like.
+      </p>
+
+      <EstimateCard
+        label="New legs"
+        sub={`${prettyVenue(pair.longVenue)} / ${prettyVenue(pair.shortVenue)} · ${fmtDateLocal(target.maturity)}`}
+        dataUpdatedAt={sim.dataUpdatedAt}
+        estimating={sim.isPlaceholderData}
+        isError={sim.isError}
+      >
+        {sim.isError ? (
+          <QueryError title="Couldn’t price these legs" error={sim.error} onRetry={() => sim.refetch()} />
+        ) : simulation ? (
+          <>
+            <SpreadReadout sim={simulation} between={slipLine} compact />
+            <PairCosts sim={simulation} compact />
+          </>
+        ) : (
+          <>
+            <span className="text-[11.5px] text-ink-500">{sim.isPending ? 'Pricing…' : 'No quote.'}</span>
+            {slipLine}
+          </>
+        )}
+      </EstimateCard>
+
+      <BlockerList blockers={blockers.filter((b) => b.code !== 'slippage-exceeds-max')} />
+      <GasTopUp
+        gasBalanceUsd={sim.data?.gasBalanceUsd}
+        amount={gasTopUpStr}
+        onAmountChange={setGasTopUpStr}
+        onTopUp={canTrade ? () => topUpGas.mutate({ amountUsd: Number(gasTopUpStr), address }) : undefined}
+        busy={topUpGas.isPending}
+      />
+      {topUpGas.isSuccess && (
+        <p className="rounded-lg border border-emerald-500/25 bg-emerald-500/[0.04] px-2.5 py-1.5 text-[11px] leading-relaxed text-emerald-200">
+          Sent a ${topUpGas.data.sentUsd} gas top-up. Boros credits it once the transaction is indexed, so the balance catches up within a minute — no need to send it again.
+        </p>
+      )}
+      {topUpGas.isError && <QueryError title="The gas top-up did not confirm" error={topUpGas.error} />}
+
+      <div className="mt-1 flex items-center justify-between gap-2">
+        <button type="button" className="btn" onClick={onBack} disabled={busy}>
+          <ArrowLeft size={14} aria-hidden />
+          Back
+        </button>
+        {loginLabel ? (
+          <BorosLogInButton />
+        ) : (
+          <HoldToConfirmButton
+            tone="cyan"
+            disabled={!canConfirm}
+            onConfirm={run}
+            title="Press and hold to open the two Boros legs at the new maturity, leaving the old legs running."
+          >
+            {busy ? 'Opening…' : 'Open new maturity'}
+          </HoldToConfirmButton>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
  * One maturity you could roll into, priced live.
  *
  * TWO simulations, because a roll at market is two market orders: `close` on
@@ -2940,15 +3279,21 @@ function BorosOnlyPairCard({
         <td className={`${cell} num whitespace-nowrap text-right text-amber-200/90`}>{sizeText(missing)}</td>
         <td className={`${cell} num text-right text-ink-600`}>—</td>
         <td className={`${cell} whitespace-nowrap text-right`}>
-          <button
-            type="button"
-            className="btn-ghost-xs !py-[5px] !text-grass hover:!border-grass/60"
-            disabled={!onOpenPerps}
-            title={`Open only the ${prettyVenue(venue)} ${side} perp, at ${sizeText(missing)}`}
-            onClick={() => onOpenPerps?.({ long: side === 'LONG', short: side === 'SHORT' })}
-          >
-            Open leg
-          </button>
+          {/* An excess hedge is closed, not completed — its missing perps are
+              a feature of leaving the old legs running, so no prompt to open. */}
+          {pair.isExcess ? (
+            <span className="text-ink-600">—</span>
+          ) : (
+            <button
+              type="button"
+              className="btn-ghost-xs !py-[5px] !text-grass hover:!border-grass/60"
+              disabled={!onOpenPerps}
+              title={`Open only the ${prettyVenue(venue)} ${side} perp, at ${sizeText(missing)}`}
+              onClick={() => onOpenPerps?.({ long: side === 'LONG', short: side === 'SHORT' })}
+            >
+              Open leg
+            </button>
+          )}
         </td>
       </tr>
     ),
@@ -2985,9 +3330,13 @@ function BorosOnlyPairCard({
                   sm
                   tone="amber"
                   className="!font-medium"
-                  title="The rate is locked, but no perp hedges its price risk."
+                  title={
+                    pair.isExcess
+                      ? 'A second hedge at this maturity, opened by a roll that kept the old legs. It doubles the Boros hedge until the old legs mature; close it once they have.'
+                      : 'The rate is locked, but no perp hedges its price risk.'
+                  }
                 >
-                  {both ? 'Perp legs missing' : 'Perp leg missing'}
+                  {pair.isExcess ? 'Excess hedge' : both ? 'Perp legs missing' : 'Perp leg missing'}
                 </Chip>
                 </span>
                 <span className="num text-[11.5px] font-normal leading-none text-ink-400">
@@ -3072,7 +3421,7 @@ function BorosOnlyPairCard({
             >
               Close Boros legs
             </button>
-            {bothEven && (
+            {bothEven && !pair.isExcess && (
               <button
                 type="button"
                 className={`${pill} !border-grass/60 !text-grass hover:!border-grass hover:!bg-grass/10`}
@@ -4797,13 +5146,15 @@ export function AssetCard({
    * view-only wallet: its perps are HIDDEN, not absent, and "perp missing"
    * would call a hedged leg unhedged — the legs stay ungrouped there.
    */
-  const borosOnly = useMemo(
-    () =>
-      gateHidden
-        ? { pairs: [], restPerps: perpOnly.restPerps, restYus: perpOnly.restYus }
-        : borosOnlyPairs(perpOnly.restPerps, perpOnly.restYus),
-    [gateHidden, perpOnly.restPerps, perpOnly.restYus],
-  );
+  const borosOnly = useMemo(() => {
+    const grouped = gateHidden
+      ? { pairs: [], restPerps: perpOnly.restPerps, restYus: perpOnly.restYus }
+      : borosOnlyPairs(perpOnly.restPerps, perpOnly.restYus);
+    // A perp-less unit sharing both venues with a perp-hedged pair at an
+    // earlier maturity is the excess hedge an open-only roll left behind, not
+    // a pair missing its perps.
+    return { ...grouped, pairs: markExcessBorosPairs(grouped.pairs, derived.pairs) };
+  }, [gateHidden, perpOnly.restPerps, perpOnly.restYus, derived.pairs]);
   const ungroupedCount = borosOnly.restPerps.length + borosOnly.restYus.length;
   /**
    * Arm the Boros ticket for a perp-only pair's missing side(s). The

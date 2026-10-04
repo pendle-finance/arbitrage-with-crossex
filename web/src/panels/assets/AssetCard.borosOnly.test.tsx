@@ -127,4 +127,36 @@ describe('BorosOnlyPairCard', () => {
     expect(within(table).getByText('liq 1.50%')).toBeInTheDocument();
     expect(within(table).getByText('liq 12.30%')).toBeInTheDocument();
   });
+
+  it("an excess hedge (an open-only roll's leftover) reads as excess, not as a pair missing its perps", () => {
+    const OLD = NOW + 8 * DAY;
+    const NEW = NOW + 45 * DAY;
+    // Perps + rate legs at the OLD maturity are a full 4-leg pair; the rate
+    // legs at the NEW maturity have no perps — the excess an open-only roll
+    // leaves behind, since the old pair at an earlier maturity shares both venues.
+    const group: AssetGroup = {
+      base: 'ETH',
+      supported: true,
+      priceUsd: PX,
+      earliestSec: NOW - 10 * DAY,
+      perpOpen: [perp('GATE', 'LONG', 100), perp('HYPERLIQUID', 'SHORT', 100)],
+      perpClosed: [],
+      borosOpen: [
+        { ...yu(1, 'GATE', 'LONG', 100, 0.04), maturity: OLD },
+        { ...yu(2, 'HYPERLIQUID', 'SHORT', 100, 0.08), maturity: OLD },
+        { ...yu(11, 'GATE', 'LONG', 100, 0.04), maturity: NEW },
+        { ...yu(12, 'HYPERLIQUID', 'SHORT', 100, 0.08), maturity: NEW },
+      ],
+      borosHistory: [],
+    };
+    renderCard(group);
+    // The excess card's header flips: "Excess hedge", not "Perp legs missing".
+    const chip = screen.getByText('Excess hedge');
+    expect(screen.queryByText('Perp legs missing')).toBeNull();
+    const card = chip.closest('div.overflow-x-auto') as HTMLElement;
+    // Its way out is to close the excess legs; the open-perp prompts are gone.
+    expect(within(card).getByRole('button', { name: 'Close Boros legs' })).toBeInTheDocument();
+    expect(within(card).queryByRole('button', { name: 'Open both perps' })).toBeNull();
+    expect(within(card).queryByRole('button', { name: 'Open leg' })).toBeNull();
+  });
 });

@@ -12,6 +12,7 @@ import {
   perpOnlyCloseLegs,
   perpOnlyPairs,
   borosOnlyPairs,
+  markExcessBorosPairs,
   deriveAsset,
   keptSlice,
   pairBorosCloseLegs,
@@ -861,5 +862,48 @@ describe('borosOnlyPairs', () => {
   it('reports no spread while a rate is pending, and skips dust', () => {
     expect(borosOnlyPairs([], [yuLeg('GATE', 'LONG', 10, M, null, 1), yuLeg('LIGHTER', 'SHORT', 10, M, 0.08, 2)]).pairs[0].lockedSpread).toBeNull();
     expect(borosOnlyPairs([], [yuLeg('GATE', 'LONG', 0.001, M, -0.05, 1), yuLeg('LIGHTER', 'SHORT', 0.001, M, 0.08, 2)]).pairs).toEqual([]);
+  });
+});
+
+describe('markExcessBorosPairs', () => {
+  const OLD = 1_790_000_000;
+  const NEW = OLD + 37 * DAY;
+  const yuLeg = (venue: string, side: 'LONG' | 'SHORT', maturity: number, marketId: number) => ({
+    venue,
+    side,
+    marketId,
+    maturity,
+    sizeBase: 10,
+    notionalUsd: 25_000,
+    unit: 'base' as const,
+    lockedApr: side === 'LONG' ? -0.05 : 0.08,
+    imUsd: 30,
+    share: 1,
+  });
+  /** A perp-hedged pair, only the three fields the matcher reads. */
+  const hedged = (longVenue: string, shortVenue: string, soonestMaturitySec: number) => ({ longVenue, shortVenue, soonestMaturitySec });
+  const newUnit = () =>
+    borosOnlyPairs([], [yuLeg('GATE', 'LONG', NEW, 11), yuLeg('LIGHTER', 'SHORT', NEW, 12)]).pairs;
+
+  it('marks a perp-less unit excess when a perp-hedged pair at an EARLIER maturity shares both venues', () => {
+    const marked = markExcessBorosPairs(newUnit(), [hedged('GATE', 'LIGHTER', OLD)]);
+    expect(marked).toHaveLength(1);
+    expect(marked[0].isExcess).toBe(true);
+  });
+
+  it('is not excess when the shared-venue pair is at the SAME or a LATER maturity, not earlier', () => {
+    expect(markExcessBorosPairs(newUnit(), [hedged('GATE', 'LIGHTER', NEW)])[0].isExcess).toBeUndefined();
+    expect(markExcessBorosPairs(newUnit(), [hedged('GATE', 'LIGHTER', NEW + DAY)])[0].isExcess).toBeUndefined();
+  });
+
+  it('is not excess when the earlier pair is on different venues', () => {
+    expect(markExcessBorosPairs(newUnit(), [hedged('GATE', 'OKX', OLD)])[0].isExcess).toBeUndefined();
+    expect(markExcessBorosPairs(newUnit(), [hedged('BINANCE', 'LIGHTER', OLD)])[0].isExcess).toBeUndefined();
+  });
+
+  it('once the old perp-hedged pair has matured and is gone, the surviving unit is no longer excess', () => {
+    // After the old maturity passes, deriveAsset drops the old pair, so the
+    // book collapses to this one unit — nothing earlier shares its venues.
+    expect(markExcessBorosPairs(newUnit(), [])[0].isExcess).toBeUndefined();
   });
 });
