@@ -404,3 +404,67 @@ describe('a Boros leg with no entry rate yet', () => {
     expect(d.pairs[0].lockedAprFwd).not.toBeNull();
   });
 });
+
+/**
+ * Two units on one book. Each perp used to be spread over every counterparty
+ * in proportion, so part of OKX's long faced Hyperliquid's short — whose rate
+ * legs share no maturity with OKX's — and every leg left a remainder that
+ * surfaced as "Boros leg missing" beside ungrouped rate legs (a user's
+ * report, 2026-10-04). Units now form where their rate legs pair.
+ */
+describe('several units on one book pair where their rate legs pair', () => {
+  const NOV = NOW + 85 * DAY;
+  const twoUnits = (secondMaturity: number) => {
+    mid = 1;
+    return group({
+      perpOpen: [
+        perp({ venue: 'OKX', side: 'LONG', qty: 0.17 }),
+        perp({ venue: 'LIGHTER', side: 'SHORT', qty: 0.17 }),
+        perp({ venue: 'GATE', side: 'LONG', qty: 0.2 }),
+        perp({ venue: 'HYPERLIQUID', side: 'SHORT', qty: 0.2 }),
+      ],
+      borosOpen: [
+        yu({ venue: 'OKX', side: 'LONG', sizeToken: 0.17, maturity: NOV }),
+        yu({ venue: 'LIGHTER', side: 'SHORT', sizeToken: 0.17, maturity: NOV }),
+        yu({ venue: 'GATE', side: 'LONG', sizeToken: 0.2, maturity: secondMaturity }),
+        yu({ venue: 'HYPERLIQUID', side: 'SHORT', sizeToken: 0.2, maturity: secondMaturity }),
+      ],
+    });
+  };
+  const units = (g: AssetGroup) =>
+    deriveAsset(g, {}, 0, NOW)
+      .pairs.map((p) => `${p.longVenue}/${p.shortVenue} ${p.size.toFixed(2)}`)
+      .sort();
+
+  it("his user's book: two units at different maturities stay two whole units, nothing left over", () => {
+    const g = twoUnits(OCT);
+    const d = deriveAsset(g, {}, 0, NOW);
+    expect(units(g)).toEqual(['GATE/HYPERLIQUID 0.20', 'OKX/LIGHTER 0.17']);
+    expect(d.pendingLegs).toEqual([]);
+    expect(d.unpairedPerps).toEqual([]);
+  });
+
+  it('at one maturity, two whole units — not four crossed halves', () => {
+    // OKX/Hyperliquid and Gate/Lighter would hedge too; the fewest, largest
+    // units is the reading a trader recognises.
+    expect(units(twoUnits(NOV))).toEqual(['GATE/HYPERLIQUID 0.20', 'OKX/LIGHTER 0.17']);
+  });
+
+  it('a long that genuinely spans two shorts still splits across them', () => {
+    mid = 1;
+    const g = group({
+      perpOpen: [
+        perp({ venue: 'GATE', side: 'LONG', qty: 1 }),
+        perp({ venue: 'HYPERLIQUID', side: 'SHORT', qty: 0.6 }),
+        perp({ venue: 'OKX', side: 'SHORT', qty: 0.4 }),
+      ],
+      borosOpen: [
+        yu({ venue: 'GATE', side: 'LONG', sizeToken: 1, maturity: SEP }),
+        yu({ venue: 'HYPERLIQUID', side: 'SHORT', sizeToken: 0.6, maturity: SEP }),
+        yu({ venue: 'OKX', side: 'SHORT', sizeToken: 0.4, maturity: SEP }),
+      ],
+    });
+    expect(units(g)).toEqual(['GATE/HYPERLIQUID 0.60', 'GATE/OKX 0.40']);
+    expect(deriveAsset(g, {}, 0, NOW).pendingLegs).toEqual([]);
+  });
+});

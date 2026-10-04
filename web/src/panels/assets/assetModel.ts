@@ -1395,11 +1395,23 @@ export function deriveAsset(
   /** Σ share of each perp symbol the pairs claimed — the rest is unpaired. */
   const perpClaimed = new Map<string, number>();
   /**
-   * Every long × short combination, sized L·S / max(ΣL, ΣS): each long is
-   * spread over the shorts in proportion and vice versa, no leg is ever
-   * over-allocated, and with one short and a balanced book it collapses to
-   * "each long pairs with its slice of the short" exactly as before. A
-   * book with two SHORT venues used to produce no pairs at all.
+   * Long × short perp venues are matched WHERE THEIR RATE LEGS PAIR, largest
+   * unit first: a long and a short form a unit at a maturity both venues hold
+   * rate legs for, as big as the thinnest of the four legs still allows.
+   *
+   * It used to size every combination L·S / max(ΣL, ΣS) — each perp spread
+   * over every counterparty in proportion. With two units on the book (OKX
+   * long / Lighter short at 27 Nov, Gate long / Hyperliquid short at 30 Oct)
+   * that pushed part of OKX's perp against Hyperliquid's, whose rate legs
+   * share no maturity with OKX's: the slice could pair with nothing, every
+   * leg left a remainder, and the remainders surfaced as "Boros leg missing"
+   * beside ungrouped rate legs (a user's report, 2026-10-04). At one
+   * maturity it split each unit into crossed halves instead.
+   *
+   * Where several matchings are equally valid — two longs and two shorts all
+   * at one maturity — any of them is a true hedge; the book's totals are the
+   * same either way. Largest first gives the fewest, biggest units; ties go
+   * to the earlier maturity, then the larger perps, so the result is stable.
    */
   const pool = Math.max(longTotal, shortTotal);
   if (longs.length > 0 && shorts.length > 0 && pool > 0) {
@@ -1415,10 +1427,9 @@ export function deriveAsset(
     /**
      * One row per (long venue, short venue, MATURITY) — a 4-leg arbitrage is
      * a fixed-term unit, so a venue pairing laddered across two terms is two
-     * units, not one blended row. Biggest first, then soonest: the largest
-     * has the strongest claim on the YU size a maturity can support.
+     * units, not one blended row.
      */
-    const ordered = longs
+    const combos = longs
       .flatMap((l) =>
         shorts.flatMap((sh) => {
           const lm = new Set(yuSlicesFor(l.venue).map((y) => y.maturity));
@@ -1427,12 +1438,44 @@ export function deriveAsset(
             .map((maturity) => ({ l, sh, maturity }));
         }),
       )
+      // The tie order (see above): earlier maturity, then larger perps.
       .sort(
-        (a, b) =>
-          (legSize(b.l) * legSize(b.sh)) / pool - (legSize(a.l) * legSize(a.sh)) / pool ||
-          a.maturity - b.maturity,
+        (a, b) => a.maturity - b.maturity || legSize(b.l) * legSize(b.sh) - legSize(a.l) * legSize(a.sh),
       );
-    for (const { l: lLeg, sh: sLeg, maturity } of ordered) {
+    /** What each perp leg still has to give, drawn down as units claim it. */
+    const perpLeft = new Map<AssetPerpOpen, number>([...longs, ...shorts].map((l) => [l, legSize(l)]));
+    /** Rate-leg size still unclaimed at one venue and maturity. */
+    const yuLeftAt = (venue: string, maturity: number): number =>
+      yuSlicesFor(venue)
+        .filter((y) => y.maturity === maturity)
+        .reduce((t, y) => t + (yuRemaining.get(y.marketId) ?? 0), 0);
+    /** The largest unit any combination can still form, re-judged after each
+     * claim. A combination that formed nothing is not offered again. */
+    function* largestFirst() {
+      const spent = new Set<(typeof combos)[number]>();
+      for (;;) {
+        let best: (typeof combos)[number] | null = null;
+        let bestNeed = 1e-9;
+        for (const c of combos) {
+          if (spent.has(c)) continue;
+          const need = Math.min(
+            perpLeft.get(c.l) ?? 0,
+            perpLeft.get(c.sh) ?? 0,
+            yuLeftAt(c.l.venue, c.maturity),
+            yuLeftAt(c.sh.venue, c.maturity),
+          );
+          if (need > bestNeed) {
+            best = c;
+            bestNeed = need;
+          }
+        }
+        if (best === null) return;
+        const before = perpLeft.get(best.l);
+        yield { ...best, need: bestNeed };
+        if (perpLeft.get(best.l) === before) spent.add(best);
+      }
+    }
+    for (const { l: lLeg, sh: sLeg, maturity, need } of largestFirst()) {
       const lKeep = keepOf(lLeg);
       const sKeep = keepOf(sLeg);
       const lSize = legSize(lLeg);
@@ -1450,7 +1493,7 @@ export function deriveAsset(
        * what the hedge really is rather than a perp-derived guess.
        */
       const alloc = allocateYuByMaturity(
-        (lSize * sSize) / pool,
+        need,
         yuSlicesFor(lLeg.venue).filter((y) => y.maturity === maturity),
         yuSlicesFor(sLeg.venue).filter((y) => y.maturity === maturity),
         yuRemaining,
@@ -1460,6 +1503,8 @@ export function deriveAsset(
       const allocShort = [...alloc.short.values()].reduce((a, b) => a + b, 0);
       const size = Math.min(allocLong, allocShort);
       if (!(size > 0)) continue;
+      perpLeft.set(lLeg, (perpLeft.get(lLeg) ?? 0) - size);
+      perpLeft.set(sLeg, (perpLeft.get(sLeg) ?? 0) - size);
       // Perps ride PRO-RATA with the YU size this unit claims, so several
       // maturity rows of the same venue pairing sum to the venue's real totals
       // rather than each claiming the whole perp position.
