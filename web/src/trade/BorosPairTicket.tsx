@@ -407,8 +407,9 @@ export function BorosPairTicket({
    * The server requires both legs on the same maturity, so when the picked
    * maturity differs from the partner's the partner follows to its OWN market
    * — same venue, base and collateral — at the new maturity. If that venue
-   * lists nothing there the partner clears to null rather than deadlocking the
-   * pair; the user picks it again. Last pick wins.
+   * lists nothing there — or the only match is the leg just picked, when the
+   * two legs share a venue — the partner clears to null rather than
+   * deadlocking the pair; the user picks it again. Last pick wins.
    */
   const pickLeg = (leg: 'A' | 'B') => (marketId: number | null) => {
     const setPicked = leg === 'A' ? setMarketA : setMarketB;
@@ -419,6 +420,7 @@ export function BorosPairTicket({
     if (!picked || !partner || partner.maturity === picked.maturity) return;
     const rebased = markets.find(
       (m) =>
+        m.marketId !== marketId &&
         m.venue.toUpperCase() === partner.venue.toUpperCase() &&
         m.base.toUpperCase() === partner.base.toUpperCase() &&
         m.tokenId === partner.tokenId &&

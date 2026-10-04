@@ -1526,6 +1526,34 @@ describe('BorosPairTicket — changing maturity rebases the partner leg', () => 
     expect(legB.disabled).toBe(false);
     expect(legB.options.length).toBeGreaterThan(1);
   });
+
+  it('clears the partner instead of pointing both legs at one market in a same-venue pair', async () => {
+    // Both legs on the one venue: the only market at the picked maturity IS the
+    // leg just picked, so the rebase must clear the partner rather than copy the
+    // marketId onto it (which the server would reject as 'same-market').
+    server.use(
+      ...handlers({
+        ctx: context({
+          markets: [
+            marketRow({ marketId: 940, name: 'Gate ETH Sep', venue: 'Gate', maturity: SEP }),
+            marketRow({ marketId: 941, name: 'Gate ETH Dec', venue: 'Gate', maturity: DEC }),
+          ],
+        }),
+      }),
+    );
+    const user = userEvent.setup();
+    renderWithClient(<BorosPairTicket />);
+    await waitFor(() =>
+      expect((screen.getByLabelText('Leg B') as HTMLSelectElement).options.length).toBeGreaterThan(1),
+    );
+
+    // Leg B is set first, leg A still empty.
+    await user.selectOptions(screen.getByLabelText('Leg B'), '940');
+    // Picking the same venue's other maturity on leg A would rebase leg B to
+    // Gate Dec — itself — so leg B clears instead.
+    await user.selectOptions(screen.getByLabelText('Leg A'), '941');
+    await waitFor(() => expect(screen.getByLabelText('Leg B')).toHaveValue(''));
+  });
 });
 
 describe('BorosPairTicket — target mode and a close-only market', () => {
