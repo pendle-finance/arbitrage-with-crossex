@@ -115,4 +115,16 @@ describe('BorosOnlyPairCard', () => {
     expect(screen.queryByRole('button', { name: 'Open both perps' })).toBeNull();
     expect(within(table).getAllByRole('button', { name: 'Open leg' })).toHaveLength(2);
   });
+
+  it("shows each rate leg's venue liquidation APR, looked up by market id", () => {
+    const g = book([]);
+    g.borosOpen = [
+      { ...g.borosOpen[0], liquidationApr: 0.015 },
+      { ...g.borosOpen[1], liquidationApr: 0.123 },
+    ];
+    renderCard(g);
+    const table = legTable();
+    expect(within(table).getByText('liq 1.50%')).toBeInTheDocument();
+    expect(within(table).getByText('liq 12.30%')).toBeInTheDocument();
+  });
 });

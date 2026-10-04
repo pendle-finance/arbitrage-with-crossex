@@ -46,9 +46,10 @@ function borosBodies(): Record<string, unknown> {
           marketAcc: CROSS_USDT,
           netBalance: raw(20_000),
           initialMargin: raw(10_000),
+          availableInitialMargin: raw(9_000),
           positions: [
-            { marketId: 155, signedSize: raw(-1_000_000), initialMargin: raw(5_000), orders: [] },
-            { marketId: 158, signedSize: raw(1_000_000), initialMargin: raw(5_000), orders: [] },
+            { marketId: 155, signedSize: raw(-1_000_000), initialMargin: raw(5_000), maintMargin: raw(3_000), liquidationApr: raw(0.12), orders: [] },
+            { marketId: 158, signedSize: raw(1_000_000), initialMargin: raw(5_000), maintMargin: raw(3_000), liquidationApr: raw(0.015), orders: [] },
           ],
         },
       ],
@@ -323,6 +324,19 @@ describe('GET /api/asset-view/:address', () => {
     expect(bHl.settleUsd).toBeCloseTo(3_205, 6);
     expect(bHl.mtmUsd).toBeCloseTo(820, 6);
     expect(bHl.imUsd).toBeCloseTo(5_000, 6);
+    // The venue's own liquidation APR rides on each leg (a rate, unscaled).
+    expect(bHl.liquidationApr).toBeCloseTo(0.12, 9);
+    expect(eth.borosOpen.find((l: { marketId: number }) => l.marketId === 158).liquidationApr).toBeCloseTo(0.015, 9);
+
+    // One margin bucket: the cross USDT account that holds both legs.
+    expect(data.borosMargin).toHaveLength(1);
+    expect(data.borosMargin[0]).toMatchObject({ tokenId: 3, collateral: 'USDT', isCross: true });
+    // equity 20,000 / maintenance (3,000 + 3,000); venue-reported free margin.
+    expect(data.borosMargin[0].healthFactor).toBeCloseTo(20_000 / 6_000, 9);
+    expect(data.borosMargin[0].availableToken).toBeCloseTo(9_000, 6);
+    expect(data.borosMargin[0].availableUsd).toBeCloseTo(9_000, 6);
+    expect(data.borosMargin[0].equityUsd).toBeCloseTo(20_000, 6);
+    expect(data.borosMargin[0].maintMarginUsd).toBeCloseTo(6_000, 6);
 
     // History sums: settlements + fills per market, all-time (since=0).
     const h155 = eth.borosHistory.find((h: { marketId: number }) => h.marketId === 155);
@@ -353,6 +367,87 @@ describe('GET /api/asset-view/:address', () => {
       backfilling: false,
     });
     expect(data.warnings).toHaveLength(0);
+  });
+
+  it('emits a margin row for a collateral-only bucket, with null health and the fallback available', async () => {
+    const ISO = marketAcc(ADDR, 3, 155);
+    const bodies = {
+      '/apis/v1/markets': {
+        results: [
+          {
+            marketId: 155,
+            tokenId: 3,
+            imData: { name: 'Hyperliquid ETH 31 Jul 2026', maturity: NOW + 15 * DAY },
+            extConfig: { settleFeeRate: '0', paymentPeriod: 3600 },
+            config: { status: 2 },
+            platform: { platformId: 'Hyperliquid' },
+            metadata: { underlyingSymbol: 'ETH' },
+            data: { markApr: 0.07, floatingApr: 0.07, assetMarkPrice: 1880 },
+          },
+        ],
+        total: 1,
+        skip: 0,
+      },
+      '/apis/v1/accounts/market-acc-infos-by-root': {
+        results: [{ marketAcc: ISO, netBalance: raw(500), initialMargin: raw(0), positions: [] }],
+      },
+      '/apis/v1/accounts/active-positions': { results: [] },
+      '/apis/v1/accounts/position-update-events': { results: [], resumeToken: null },
+      '/apis/v1/accounts/settlement-events': { results: [], resumeToken: null },
+    };
+    app = makeTestApp({ borosFetch: borosStub(bodies) });
+    mockGateGet('/positions', { body: [] });
+    mockGateGet('/history_positions', { body: [] });
+    mockGateGet('/history_margin_interests', { body: [] });
+
+    const res = await get(`/api/asset-view/${ADDR}?since=0`);
+    expect(res.statusCode).toBe(200);
+    const { data } = res.json();
+    expect(data.borosMargin).toHaveLength(1);
+    const b = data.borosMargin[0];
+    expect(b).toMatchObject({ tokenId: 3, collateral: 'USDT', isCross: false });
+    // No position, so no maintenance margin → nothing to liquidate against.
+    expect(b.healthFactor).toBeNull();
+    // No venue availableInitialMargin here → netBalance minus committed (0).
+    expect(b.availableToken).toBeCloseTo(500, 6);
+    expect(b.availableUsd).toBeCloseTo(500, 6);
+  });
+
+  it("keeps a bucket's health when its token has no USD price, with the USD fields null", async () => {
+    const CROSS_BNB = marketAcc(ADDR, 4); // tokenId 4 = BNB, with no BNB market to price it
+    const bodies = {
+      '/apis/v1/markets': { results: [], total: 0, skip: 0 },
+      '/apis/v1/accounts/market-acc-infos-by-root': {
+        results: [
+          {
+            marketAcc: CROSS_BNB,
+            netBalance: raw(10),
+            initialMargin: raw(4),
+            availableInitialMargin: raw(6),
+            positions: [{ marketId: 300, signedSize: raw(2), initialMargin: raw(4), maintMargin: raw(2), orders: [] }],
+          },
+        ],
+      },
+      '/apis/v1/accounts/active-positions': { results: [] },
+      '/apis/v1/accounts/position-update-events': { results: [], resumeToken: null },
+      '/apis/v1/accounts/settlement-events': { results: [], resumeToken: null },
+    };
+    app = makeTestApp({ borosFetch: borosStub(bodies) });
+    mockGateGet('/positions', { body: [] });
+    mockGateGet('/history_positions', { body: [] });
+    mockGateGet('/history_margin_interests', { body: [] });
+
+    const res = await get(`/api/asset-view/${ADDR}?since=0`);
+    expect(res.statusCode).toBe(200);
+    const { data } = res.json();
+    expect(data.borosMargin).toHaveLength(1);
+    const b = data.borosMargin[0];
+    expect(b).toMatchObject({ tokenId: 4, collateral: 'BNB', isCross: true });
+    expect(b.healthFactor).toBeCloseTo(10 / 2, 9); // equity 10 / maintenance 2
+    expect(b.availableToken).toBeCloseTo(6, 6); // venue-reported, token units
+    expect(b.availableUsd).toBeNull();
+    expect(b.equityUsd).toBeNull();
+    expect(b.maintMarginUsd).toBeNull();
   });
 
   it('joins the backend rebate per settlement onto its market history, priced with the same px', async () => {

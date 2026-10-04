@@ -381,6 +381,23 @@ function SectionTabs<T extends string>({
   );
 }
 
+/** Hover copy for a Boros leg's venue-reported liquidation rate. NOT the
+ * ticket's LIQ_TITLE, which describes the pre-trade IM-floor estimate. */
+const BOROS_LIQ_TITLE =
+  'The mark rate at which this position liquidates, as the venue reports it (reflects the collateral actually in its bucket).';
+
+/** The venue-reported liquidation APR, under a Boros leg's rate. Renders
+ * nothing when the venue reports none (flat, unpriced, no coefficients) or on
+ * an older server (absent). */
+function BorosLiqAprLine({ apr }: { apr: number | null | undefined }) {
+  if (apr == null || !Number.isFinite(apr)) return null;
+  return (
+    <div className="num text-[10px] text-ink-500" title={BOROS_LIQ_TITLE}>
+      liq {fmtPct(apr)}
+    </div>
+  );
+}
+
 /**
  * One 4-LEG PAIR as a card. The summary row carries what the pairs table
  * used to — venues, maturity, notional, capital, the rate — and expands in
@@ -393,6 +410,7 @@ function PairCard({
   pair,
   base,
   nowSec,
+  borosOpen,
   defaultOpen,
   showRollNonce = 0,
   onClosePerps,
@@ -404,6 +422,9 @@ function PairCard({
   pair: PairEstimate;
   base: string;
   nowSec: number;
+  /** The asset's open Boros legs, for the per-leg liquidation APR (looked up
+   * by marketId — never threaded through the pair's share/merge machinery). */
+  borosOpen: AssetBorosOpen[];
   defaultOpen: boolean;
   /** The roll-over banner's click counter: a rollable card opens on each bump. */
   showRollNonce?: number;
@@ -764,6 +785,9 @@ function PairCard({
                         <SignedNumber value={l.lockedApr} format={fmtPct} />
                       ) : (
                         <span className="text-ink-600">—</span>
+                      )}
+                      {l.kind === 'yu' && (
+                        <BorosLiqAprLine apr={borosOpen.find((b) => b.marketId === l.marketId)?.liquidationApr} />
                       )}
                     </td>
                     <td className={`${cell} num whitespace-nowrap text-right text-ink-100`}>
@@ -2853,12 +2877,15 @@ function BorosOnlyPairCard({
   pair,
   base,
   nowSec,
+  borosOpen,
   onOpenPerps,
   onCloseBoros,
 }: {
   pair: BorosOnlyPair;
   base: string;
   nowSec: number;
+  /** The asset's open Boros legs, for the per-leg liquidation APR. */
+  borosOpen: AssetBorosOpen[];
   /** Arms the perp ticket for the named side(s) at this size; null when there
    * is no trade flow to arm (a provider-less render). */
   onOpenPerps: ((sides: { long: boolean; short: boolean }) => void) | null;
@@ -3027,6 +3054,7 @@ function BorosOnlyPairCard({
                       ) : (
                         <span className="text-ink-500">pending</span>
                       )}
+                      <BorosLiqAprLine apr={borosOpen.find((b) => b.marketId === y.marketId)?.liquidationApr} />
                     </td>
                     <td className={`${cell} num whitespace-nowrap text-right text-ink-100`}>{fmtUsdCompact(y.imUsd)}</td>
                   </tr>
@@ -3282,6 +3310,7 @@ function UngroupedCard({
                       ) : (
                         <span className="font-normal text-ink-500">pending</span>
                       )}
+                      <BorosLiqAprLine apr={leg?.liquidationApr} />
                     </td>
                     <td className="num text-right text-ink-100" title={exactUsd(l.imUsd)}>
                       {fmtUsdCompact(l.imUsd)}
@@ -3893,7 +3922,7 @@ function BorosRow({
       </td>
       <td className="num text-right text-ink-100" title={leg.entryApr !== null && slice.at !== null && slice.entry !== leg.entryApr ? `Venue average\t${fmtPct(leg.entryApr)}\nExcluded\t${fmtTokenQty(exFrac * leg.sizeToken, leg.collateral)} at ${fmtPct(slice.at)}` : undefined}>
         {slice.entry !== null ? fmtPct(slice.entry) : <span className="text-ink-500">pending</span>} → {fmtPct(leg.markApr)}
-
+        <BorosLiqAprLine apr={leg.liquidationApr} />
       </td>
       <td
         className="num text-right"
@@ -5289,6 +5318,7 @@ null
                 pair={p}
                 base={group.base}
                 nowSec={nowSec}
+                borosOpen={group.borosOpen}
                 // A pair due a roll opens expanded: its Roll over action
                 // lives in the expansion, and the flag on the summary row
                 // is the reason the user came to this tab.
@@ -5326,6 +5356,7 @@ null
                 pair={p}
                 base={group.base}
                 nowSec={nowSec}
+                borosOpen={group.borosOpen}
                 onOpenPerps={flow ? (sides) => openPerpsFor(p, sides) : null}
                 onCloseBoros={() => setCloseBorosOnly(p)}
               />

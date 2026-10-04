@@ -1510,6 +1510,9 @@ export interface AssetBorosOpen {
   entryApr: number | null;
   markApr: number;
   floatingApr: number;
+  /** The mark rate at which the venue liquidates this leg, as it reports it
+   * (a rate, unscaled). Null when none; absent only on an older server. */
+  liquidationApr?: number | null;
   /** Cumulative settlement of the CURRENT position (display only — totals
    * come from borosHistory, which covers the same flows plus closed legs). */
   settleUsd: number;
@@ -1555,6 +1558,25 @@ export interface AssetBorosHistory {
   side?: 'LONG' | 'SHORT' | null;
 }
 
+/** One Boros margin bucket — the cross bucket of a collateral token, or one
+ * isolated position's bucket. USD fields are null when the collateral token
+ * has no live price; health is price-independent either way. */
+export interface AssetBorosMargin {
+  tokenId: number;
+  collateral: string;
+  isCross: boolean;
+  /** The market an isolated bucket backs; absent for the cross bucket. */
+  marketId?: number;
+  /** equity / maintenance margin; above 1 is safe. Null when nothing is at
+   * risk (no maintenance margin posted). */
+  healthFactor: number | null;
+  /** Free collateral in the bucket's token. */
+  availableToken: number;
+  availableUsd: number | null;
+  equityUsd: number | null;
+  maintMarginUsd: number | null;
+}
+
 export interface AssetGroup {
   base: string;
   supported: boolean;
@@ -1573,6 +1595,9 @@ export interface AssetViewResponse {
   nowSec: number;
   defaultSinceSec: number | null;
   assets: AssetGroup[];
+  /** One row per Boros margin bucket (cross + each isolated). Absent only on
+   * an older server; empty when the account holds no Boros collateral. */
+  borosMargin?: AssetBorosMargin[];
   supportedCoins: string[];
   /** Earliest activity instant in any sum — the APR clock floor. */
   earliestSec: number | null;

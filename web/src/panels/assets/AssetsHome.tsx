@@ -27,6 +27,14 @@ import { assetIsActive, deriveAsset, SECONDS_IN_YEAR, type AssetDerived } from '
 import { legSinceParam, loadPrefs, savePrefs, type AssetViewPrefs } from './assetPrefsStore';
 import { AssetCard } from './AssetCard';
 
+/** Health factor colour: red below 1.1, amber below 1.5, else the plain ink. */
+function healthClass(h: number | null): string {
+  if (h === null) return 'text-ink-50';
+  if (h < 1.1) return 'text-rose-300';
+  if (h < 1.5) return 'text-amber-200';
+  return 'text-ink-50';
+}
+
 export function AssetsHome() {
   const { address } = useTrackedAddress();
   const gateHidden = useActiveWallet().viewOnly;
@@ -225,6 +233,11 @@ export function AssetsHome() {
     );
   }
 
+  // Boros margin per bucket — shown even for a view-only wallet (the data is
+  // read-only) and even when nothing else is in the hero (collateral with no
+  // open leg still has a bucket).
+  const borosMargin = data.borosMargin ?? [];
+
   return (
     <section>
       {gateHidden && address && loggedInRoot && (
@@ -243,11 +256,13 @@ export function AssetsHome() {
       {/* The mock gives the account summary the one info border and inner glow
           no other card wears, so it leads the tab instead of reading as the
           first of the per-asset cards. */}
-      {derived.length > 0 && (
+      {(derived.length > 0 || borosMargin.length > 0) && (
       <div
         className="mb-9 flex flex-wrap items-center justify-between gap-x-10 gap-y-6 rounded border border-info/60 bg-info/[0.06] px-8 py-[30px]"
         style={{ boxShadow: 'inset 0 0 92px rgba(96,121,255,0.14)' }}
       >
+        {derived.length > 0 && (
+        <>
         <div className="flex min-w-0 flex-col gap-2">
           <div
             className="tip-label w-fit text-[14px] font-normal leading-[16.94px] text-ink-300"
@@ -313,6 +328,41 @@ export function AssetsHome() {
             <div className="num text-[24px] font-semibold leading-[29.05px] text-ink-50">{fmtUsd(totalCapital)}</div>
           </div>
         </div>
+        </>
+        )}
+
+        {/* Boros account, per margin bucket: health and free margin, so the
+            rate leg's safety and room to open more read off this page instead
+            of the Boros app. Health is price-independent; the available figure
+            falls back to the collateral token when the token has no USD price. */}
+        {borosMargin.length > 0 && (
+          <div className={`flex flex-wrap gap-x-9 gap-y-4 ${derived.length > 0 ? 'basis-full border-t border-ink-700/60 pt-6' : ''}`}>
+            <div className="w-full text-[14px] font-normal leading-[16.94px] text-ink-300" title="Your Boros margin, per collateral bucket, as the venue reports it.">
+              Boros account
+            </div>
+            {borosMargin.map((m) => (
+              <div key={`${m.tokenId}:${m.isCross ? 'cross' : m.marketId}`} className="flex flex-col gap-2">
+                <div className="num text-[13px] text-ink-300">
+                  {m.collateral} {m.isCross ? 'cross' : 'isolated'}
+                </div>
+                <div className="flex items-baseline gap-6">
+                  <span title="Equity ÷ maintenance margin. Above 1 is safe; the account liquidates at 1.">
+                    <span className="text-[11px] text-ink-500">Health </span>
+                    <span className={`num text-[18px] font-semibold leading-none ${healthClass(m.healthFactor)}`}>
+                      {m.healthFactor === null ? '—' : num(m.healthFactor, 2)}
+                    </span>
+                  </span>
+                  <span title="Free margin — what you can still post before opening more.">
+                    <span className="text-[11px] text-ink-500">Available </span>
+                    <span className="num text-[18px] font-semibold leading-none text-ink-50">
+                      {m.availableUsd !== null ? fmtUsd(m.availableUsd) : `${num(m.availableToken, 2)} ${m.collateral}`}
+                    </span>
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
       )}
 
