@@ -3,7 +3,8 @@ import { http, HttpResponse } from 'msw';
 import { useState } from 'react';
 import { describe, expect, it } from 'vitest';
 import type { ActionInput, DealRequest } from '../api/types';
-import { account, baseHandlers, echoPreviewHandler, ethPosition, previewFor } from '../test/fixtures';
+import { account, agentStatus, baseHandlers, echoPreviewHandler, ethPosition, previewFor } from '../test/fixtures';
+import { STRATEGY_STORAGE_KEY } from '../panels/HomeControls';
 import { env, server } from '../test/server';
 import { renderWithClient } from '../test/utils';
 import { ExecuteControl } from './ExecuteControl';
@@ -687,5 +688,30 @@ describe('a single resting limit order is a plain order', () => {
     expect(calls[0].b).not.toBeNull();
     // No "placed" confirmation for a real deal — that one is supervised.
     await waitFor(() => expect(screen.queryByText(/Limit order placed/)).toBeNull());
+  });
+});
+
+describe('ExecuteControl for a view-only wallet', () => {
+  it('keeps the confirm disabled and says why', async () => {
+    // Tracking a wallet that is not the logged-in one: it sees positions, trades none.
+    localStorage.setItem(STRATEGY_STORAGE_KEY, JSON.stringify({ address: `0x${'2'.repeat(40)}`, walletUpgraded: true }));
+    const calls: DealRequest[] = [];
+    server.use(
+      http.get('/api/boros/agent', () => HttpResponse.json(env(agentStatus({ configured: true, root: `0x${'1'.repeat(40)}` })))),
+      ...baseHandlers(),
+      echoPreviewHandler({ overrides: { qty: '0.4' } }),
+      dealHandler(calls),
+    );
+    try {
+      renderWithClient(<ExecuteControl scope="vo" actions={[notionalAction]} label="Execute" holdMs={50} />);
+      expect(await screen.findByText('View-only: switch to your logged-in wallet to trade.')).toBeInTheDocument();
+      const btn = screen.getByRole('button', { name: 'Execute' });
+      expect(btn).toBeDisabled();
+      fireEvent.pointerDown(btn);
+      await new Promise((r) => setTimeout(r, 120));
+      expect(calls).toHaveLength(0);
+    } finally {
+      localStorage.clear();
+    }
   });
 });

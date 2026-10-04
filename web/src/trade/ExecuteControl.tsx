@@ -39,6 +39,7 @@ import { ActionKindChip, estFeeOf, estimateMargin, feeText, SlippageBadge, Viola
 import { useTradeFlow } from './TradeFlow';
 import { usePreviewDebounced } from './usePreview';
 import { withinTrackedDrift } from './trackedPriceDrift';
+import { useActiveWallet } from '../panels/trackedAddress';
 
 const STALE_MS = 10_000;
 
@@ -103,6 +104,8 @@ export function ExecuteControl({
   hoverCard = true,
 }: Props) {
   const flow = useTradeFlow();
+  // View-only shows every position but trades none of them.
+  const viewOnly = useActiveWallet().viewOnly;
   const account = useAccount();
   const positions = usePositions();
   const now = useNow(1_000);
@@ -275,6 +278,7 @@ export function ExecuteControl({
     splitClose;
   const disabled =
     !actions ||
+    viewOnly ||
     extraDisabled ||
     execute.isPending ||
     executeSplit.isPending ||
@@ -344,6 +348,7 @@ export function ExecuteControl({
           label
         )}
       </HoldToConfirmButton>
+      {viewOnly && <p className="mt-1 text-[11px] text-ink-400">View-only: switch to your logged-in wallet to trade.</p>}
       {placedResting && (
         <div
           role="status"

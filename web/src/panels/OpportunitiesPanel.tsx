@@ -990,7 +990,10 @@ export function OpportunitiesPanel() {
   // The account's settlement-fee rebate config (null when not rebated / no agent).
   // The chip shows whenever there IS an active rebate; the toggle decides whether
   // it lands in the APR. Every affordance stays hidden for a non-rebated account.
-  const rebate = useRebate().data ?? null;
+  // The rebate is the logged-in owner's: a view-only wallet does not see it.
+  const viewOnly = useActiveWallet().viewOnly;
+  const ownRebate = useRebate().data ?? null;
+  const rebate = viewOnly ? null : ownRebate;
   const hasRebate = !!rebate && rebate.active;
 
   // Every viable PAIR, not one per group: a cohort with three markets offers
@@ -1006,10 +1009,8 @@ export function OpportunitiesPanel() {
   const trackedAddress = useTrackedAddressOptional()?.address ?? null;
   const exposure = usePositions(trackedAddress !== null).data?.exposure;
   const borosMarkets = useBorosPairContext(trackedAddress).data?.markets;
-  // The perp exposure is the logged-in account's: never pair it with another wallet's Boros legs.
-  const viewOnly = useActiveWallet().viewOnly;
   const held = useMemo(() => {
-    if (viewOnly || !exposure) return undefined;
+    if (!exposure) return undefined;
     const books: HeldBook[] = exposure.map((g) => ({
       base: g.base,
       perps: g.legs.map((l) => ({ venue: l.exchange, side: l.side })),
@@ -1018,7 +1019,7 @@ export function OpportunitiesPanel() {
         .map((m) => ({ venue: m.venue, maturity: m.maturity })),
     }));
     return heldPerpsOf(books);
-  }, [viewOnly, exposure, borosMarkets]);
+  }, [exposure, borosMarkets]);
   const pricedAtUsd = data?.meta.notionalUsd;
   const rows = useMemo(
     () =>

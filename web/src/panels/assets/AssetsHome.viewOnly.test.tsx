@@ -90,31 +90,21 @@ afterEach(() => localStorage.clear());
 describe.each([50, 6_000_000])('Positions for a view-only wallet at $%d', (size) => {
   beforeEach(() => serve(OTHER, size));
 
-  it('says whose legs these are and hides every Gate leg', async () => {
+  it('says whose wallet this is and still shows the Gate perps', async () => {
     renderWithClient(<AssetsHome />);
     expect(
       await screen.findByText(
-        (_, el) => el?.tagName === 'P' && el.textContent === 'Viewing 0x2222…2222, not logged in: read-only, Boros positions only. Switch your wallet to the logged-in 0x1111…1111 for Gate perps and trading.',
+        (_, el) =>
+          el?.tagName === 'P' &&
+          el.textContent ===
+            "Viewing 0x2222…2222, not logged in: view-only. Perps are your connected Gate account's; trading and fee rebates need the logged-in 0x1111…1111.",
       ),
     ).toBeInTheDocument();
-    expect(screen.getByText((_, el) => el?.tagName === 'DIV' && el.textContent === 'Boros PnL · 0x2222…2222')).toHaveAttribute(
-      'title',
-      'Boros legs only. Gate is not included.',
-    );
-    expect(screen.queryByText('Total Account PnL')).toBeNull();
-    expect(await screen.findByText('ETH')).toBeInTheDocument();
-    expect(screen.queryByText('SOL')).toBeNull();
-  });
-
-  it('does not call the Boros leg unhedged because the perps are hidden', async () => {
-    renderWithClient(<AssetsHome />);
-    await screen.findByText('ETH');
-    expect(screen.queryByText('Missing hedge')).toBeNull();
-    expect(screen.queryByText(/Boros legs? missing/)).toBeNull();
-    expect(screen.queryByText(/borrow interest/)).toBeNull();
-    // Nor estimate an APR as if every rate leg were unhedged.
-    expect(screen.queryByText('Current APR')).toBeNull();
-    expect(screen.getByText('Current APR (Fixed)')).toBeInTheDocument();
+    // View-only blocks trading and the owner's rebate, never the positions.
+    expect(screen.getByText('Total Account PnL')).toBeInTheDocument();
+    expect(await screen.findByText('SOL')).toBeInTheDocument();
+    expect(screen.getByText('ETH')).toBeInTheDocument();
+    expect(screen.getByText(/after .* borrow interest/)).toBeInTheDocument();
   });
 });
 

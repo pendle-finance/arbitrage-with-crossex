@@ -142,7 +142,6 @@ interface Props {
    * liquidates it, 'unknown' = Gate sent no margin figures, null = not loaded
    * or this coin has no priced leg in the connected account. */
   liquidation?: LiquidationLine | StaleLeg | 'far' | 'unknown' | null;
-  gateHidden?: boolean;
 }
 
 type StaleLeg = { base: string; venue: string; sinceMs: number };
@@ -4806,7 +4805,6 @@ export function AssetCard({
   legSince,
   onLegSince,
   liquidation = null,
-  gateHidden = false,
 }: Props) {
   const { totals, gaps, venues } = derived;
   const flow = useTradeFlowOptional();
@@ -5135,20 +5133,14 @@ export function AssetCard({
     () => perpOnlyPairs(derived.unpairedPerps, derived.pendingLegs),
     [derived.unpairedPerps, derived.pendingLegs],
   );
-  /**
-   * Then the reverse: offsetting rate legs whose perps are missing. Not for a
-   * view-only wallet: its perps are HIDDEN, not absent, and "perp missing"
-   * would call a hedged leg unhedged — the legs stay ungrouped there.
-   */
+  /** Then the reverse: offsetting rate legs whose perps are missing. */
   const borosOnly = useMemo(() => {
-    const grouped = gateHidden
-      ? { pairs: [], restPerps: perpOnly.restPerps, restYus: perpOnly.restYus }
-      : borosOnlyPairs(perpOnly.restPerps, perpOnly.restYus);
+    const grouped = borosOnlyPairs(perpOnly.restPerps, perpOnly.restYus);
     // A perp-less unit sharing both venues with a perp-hedged pair at an
     // earlier maturity is the excess hedge an open-only roll left behind, not
     // a pair missing its perps.
     return { ...grouped, pairs: markExcessBorosPairs(grouped.pairs, derived.pairs) };
-  }, [gateHidden, perpOnly.restPerps, perpOnly.restYus, derived.pairs]);
+  }, [perpOnly.restPerps, perpOnly.restYus, derived.pairs]);
   const ungroupedCount = borosOnly.restPerps.length + borosOnly.restYus.length;
   /**
    * Arm the Boros ticket for a perp-only pair's missing side(s). The
@@ -5238,7 +5230,6 @@ export function AssetCard({
           <span className="num text-[12px] text-ink-300">{fmtUsd(group.priceUsd)}</span>
         )}
         {hasLegs &&
-          !gateHidden &&
           (derived.perfect ? (
             <Chip
               tone="green"

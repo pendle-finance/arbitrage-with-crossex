@@ -23,7 +23,7 @@ import { useBookId } from '../bookId';
 import { short } from '../HomeControls';
 import { ConnectWalletButton } from '../../components/ConnectWalletButton';
 import { isSameAddress, useActiveWallet, useTrackedAddress } from '../trackedAddress';
-import { assetIsActive, deriveAsset, SECONDS_IN_YEAR, type AssetDerived } from './assetModel';
+import { assetIsActive, deriveAsset, SECONDS_IN_YEAR } from './assetModel';
 import { legSinceParam, loadPrefs, savePrefs, type AssetViewPrefs } from './assetPrefsStore';
 import { AssetCard } from './AssetCard';
 
@@ -37,7 +37,7 @@ function healthClass(h: number | null): string {
 
 export function AssetsHome() {
   const { address } = useTrackedAddress();
-  const gateHidden = useActiveWallet().viewOnly;
+  const viewOnly = useActiveWallet().viewOnly;
   const loggedInRoot = useBorosAgent().data?.root ?? null;
   const bookId = useBookId(address);
 
@@ -90,27 +90,22 @@ export function AssetsHome() {
           const win = stored !== undefined ? windows.bySince.get(stored) : undefined;
           const windowFailed = stored !== undefined && !win && windows.errorBySince.has(stored);
           const full = win ? (win.assets.find((a) => a.base === g.base) ?? { ...g, perpClosed: [], borosHistory: [] }) : g;
-          const group = gateHidden ? { ...full, perpOpen: [], perpClosed: [] } : full;
+          // A view-only wallet still sees the connected Gate account's perps:
+          // view-only blocks trading and the owner's own figures (the rebate,
+          // gated above), never the positions.
+          const group = full;
           const meta = win ?? data;
           const sinceSec = meta?.sinceSec ?? 0;
-          const d = deriveAsset(group, prefs.exclusions, sinceSec, meta?.nowSec ?? 0, feeRows, rebate);
-          // View-only hides the perps, it does not remove them: an estimate
-          // built without them reads every rate leg as unhedged (it printed
-          // −706% on a hedged book), so a view-only card shows the dash.
-          const shown: AssetDerived = gateHidden
-            ? { ...d, gaps: d.gaps.filter((gap) => gap.leg !== 'perp'), unlockedEstimate: null }
-            : d;
           return {
             group,
             sinceSec,
             storedSinceSec: stored,
             backfilling: meta?.coverage.backfilling === true,
             windowPending: stored !== undefined && !win && !windowFailed,
-            derived: shown,
+            derived: deriveAsset(group, prefs.exclusions, sinceSec, meta?.nowSec ?? 0, feeRows, rebate),
           };
-        })
-        .filter((a) => !gateHidden || a.group.borosOpen.length > 0 || a.group.borosHistory.length > 0),
-    [data, windows.bySince, windows.errorBySince, prefs.exclusions, prefs.sinceByAsset, feeRows, rebate, gateHidden],
+        }),
+    [data, windows.bySince, windows.errorBySince, prefs.exclusions, prefs.sinceByAsset, feeRows, rebate],
   );
   /**
    * "Hide inactive pairs": on by default, the list shows only assets with
@@ -155,7 +150,7 @@ export function AssetsHome() {
   // market, so it cannot sit on a card: it is charged once, here, and the
   // total then differs from the cards' sum by exactly this line.
   const interestAvailable = data?.interest?.available === true;
-  const interestUsd = !gateHidden && interestAvailable ? data!.interest!.paidUsd : 0;
+  const interestUsd = interestAvailable ? data!.interest!.paidUsd : 0;
   const totalPnl = derived.reduce((s, a) => s + a.derived.totals.pnlUsd, 0) - interestUsd;
   const totalCapital = derived.reduce((s, a) => s + a.derived.totals.capitalUsd, 0);
   // Blended APR: Σpnl over Σ(capital · its own elapsed clock) — each asset
@@ -240,11 +235,11 @@ export function AssetsHome() {
 
   return (
     <section>
-      {gateHidden && address && loggedInRoot && (
+      {viewOnly && address && loggedInRoot && (
         <p className="mb-4 text-xs text-ink-400">
-          Viewing <span className="num text-ink-200">{short(address)}</span>, not logged in: read-only, Boros
-          positions only. Switch your wallet to the logged-in{' '}
-          <span className="num text-ink-200">{short(loggedInRoot)}</span> for Gate perps and trading.
+          Viewing <span className="num text-ink-200">{short(address)}</span>, not logged in: view-only. Perps are
+          your connected Gate account's; trading and fee rebates need the logged-in{' '}
+          <span className="num text-ink-200">{short(loggedInRoot)}</span>.
         </p>
       )}
 
@@ -267,20 +262,12 @@ export function AssetsHome() {
           <div
             className="tip-label w-fit text-[14px] font-normal leading-[16.94px] text-ink-300"
             title={
-              gateHidden
-                ? 'Boros legs only. Gate is not included.'
-                : interestAvailable
-                  ? 'What the farm kept, after borrow interest.'
-                  : 'The cards summed. Borrow interest could not be read, so it is not subtracted.'
+              interestAvailable
+                ? 'What the farm kept, after borrow interest.'
+                : 'The cards summed. Borrow interest could not be read, so it is not subtracted.'
             }
           >
-            {gateHidden ? (
-              <>
-                Boros PnL · <span className="num">{short(address)}</span>
-              </>
-            ) : (
-              'Total Account PnL'
-            )}
+            Total Account PnL
           </div>
           <div className="flex flex-wrap items-baseline gap-x-2.5 gap-y-1">
             <span className="num text-[34px] font-bold leading-none tracking-[-0.01em]">
@@ -400,8 +387,7 @@ export function AssetsHome() {
                   return { ...prev, sinceByAsset };
                 });
               }}
-              liquidation={gateHidden ? null : lineFor(group.base)}
-              gateHidden={gateHidden}
+              liquidation={lineFor(group.base)}
               exclusions={prefs.exclusions}
               onExclude={(key, value) => {
                 update((prev) => {
