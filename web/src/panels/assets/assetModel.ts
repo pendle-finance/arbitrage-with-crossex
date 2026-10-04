@@ -181,6 +181,56 @@ export function pairRollDue(pair: Pick<PairEstimate, 'soonestMaturitySec'>, nowS
   return pairCanRoll(pair, nowSec) && pair.soonestMaturitySec - nowSec < EXPIRY_WARN_SEC;
 }
 
+type TimelinePair = Pick<PairEstimate, 'hedgedSinceSec' | 'soonestMaturitySec'>;
+
+/** Where a pair's timeline starts: when it was hedged, or a month before
+ * maturity when that is unknown. */
+const timelineStartSec = (pair: TimelinePair): number =>
+  pair.hedgedSinceSec ?? pair.soonestMaturitySec - SECONDS_IN_YEAR / 12;
+
+/** The span of time every pair card of one asset is drawn on. */
+export interface TimelineAxis {
+  startSec: number;
+  endSec: number;
+}
+
+/** Earliest pair start to latest maturity, with today inside it. One axis for
+ * all of an asset's pairs is what lets their bars compare: a pair that matures
+ * sooner ends further left, and the same day sits at the same point on every
+ * card. */
+export function pairTimelineAxis(pairs: ReadonlyArray<TimelinePair>, nowSec: number): TimelineAxis {
+  let startSec = nowSec;
+  let endSec = nowSec;
+  for (const p of pairs) {
+    startSec = Math.min(startSec, timelineStartSec(p));
+    endSec = Math.max(endSec, p.soonestMaturitySec);
+  }
+  return { startSec, endSec };
+}
+
+/**
+ * A pair's bar on its asset's axis, every figure in percent of the axis:
+ * where the bar starts, its length (start → maturity), how much of that has
+ * elapsed, and where today is. True time proportions throughout — the filled
+ * part over the bar is exactly the share of the pair's term that has passed.
+ */
+export function timelineBar(
+  pair: TimelinePair,
+  nowSec: number,
+  axis: TimelineAxis,
+): { leftPct: number; widthPct: number; elapsedPct: number; todayPct: number } {
+  const span = Math.max(1, axis.endSec - axis.startSec);
+  const at = (sec: number) => Math.max(0, Math.min(100, ((sec - axis.startSec) / span) * 100));
+  const start = timelineStartSec(pair);
+  const end = pair.soonestMaturitySec;
+  return {
+    leftPct: at(start),
+    widthPct: at(end) - at(start),
+    elapsedPct: at(Math.min(Math.max(nowSec, start), end)) - at(start),
+    todayPct: at(nowSec),
+  };
+}
+
 /** A leg's size in the unit a card displays: coin quantity or dollars. */
 export const sizeIn = (l: { sizeBase: number; notionalUsd: number }, unit: 'base' | 'usd'): number =>
   unit === 'base' ? l.sizeBase : l.notionalUsd;

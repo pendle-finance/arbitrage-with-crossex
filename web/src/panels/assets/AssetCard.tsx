@@ -95,6 +95,9 @@ import {
   pairBorosCloseLegs,
   pairCanRoll,
   pairRollDue,
+  pairTimelineAxis,
+  timelineBar,
+  type TimelineAxis,
   pairLockedSpread,
   pairPerpCloseLegs,
   entryAprOf,
@@ -105,7 +108,7 @@ import {
   perpOnlyPairs,
   sizeIn,
 } from './assetModel';
-import { daysToMaturity, knownRate, maturityFillPct } from '../../lib/boros';
+import { daysToMaturity, knownRate } from '../../lib/boros';
 import { rebatedSettleApr } from '../../lib/rebate';
 import { useDebounced } from '../../lib/useDebounced';
 import { AssetBars } from './AssetBars';
@@ -223,42 +226,28 @@ const daysLeftText = (maturitySec: number, nowSec: number): string => {
   return days > 0 ? `${days}d left` : 'matured';
 };
 
-/** The shared horizon every maturity bar fills against. Live Boros markets are
- * quarterlies maturing at most ~3 months out, so 90 days spans the full field
- * and a bar's fill is comparable across pairs. */
-const MATURITY_BAR_HORIZON_DAYS = 90;
-
-/** The pair's maturity as one bar: how much time is left, measured against a
- * fixed shared horizon rather than this pair's own open → maturity span. So a
- * near-expiry leg reads fuller than a freshly-opened later one, comparably
- * across pairs — which the old open-relative fill could not. The carry splits
- * earned/remaining are computed elsewhere and unchanged by this. */
-function PairTimeline({
-  openedSec,
-  maturitySec,
-  nowSec,
-}: {
-  openedSec: number | null;
-  maturitySec: number;
-  nowSec: number;
-}) {
+/** The pair's term as one bar on the asset's shared time axis: it starts when
+ * the pair was hedged and ends at maturity, the filled part is the time that
+ * has passed, and the white tick is today, at the same point on every card.
+ * Proportions are true time, so a pair that matures sooner is a shorter bar
+ * ending nearer the tick, whatever day it was opened. */
+function PairTimeline({ pair, nowSec, axis }: { pair: PairEstimate; nowSec: number; axis: TimelineAxis }) {
+  const maturitySec = pair.soonestMaturitySec;
   if (maturitySec <= 0) return null;
-  const pct = maturityFillPct(maturitySec, nowSec, MATURITY_BAR_HORIZON_DAYS);
-  const daysLeft = daysToMaturity(maturitySec, nowSec);
+  const bar = timelineBar(pair, nowSec, axis);
   return (
     <div className="mb-4 flex flex-col gap-1.5">
-      <div className="relative h-1 rounded-full bg-ink-800">
-        <div
-          className="absolute inset-y-0 left-0 rounded-full bg-info/60"
-          style={{ width: `${pct}%` }}
-        />
+      <div className="relative h-1.5 rounded-full bg-ink-800/60">
+        <div className="absolute inset-y-0 rounded-full bg-info/20" style={{ left: `${bar.leftPct}%`, width: `${bar.widthPct}%` }} />
+        <div className="absolute inset-y-0 rounded-full bg-info/60" style={{ left: `${bar.leftPct}%`, width: `${bar.elapsedPct}%` }} />
+        <div className="absolute -top-1 h-3.5 w-0.5 -translate-x-1/2 rounded bg-ink-50" style={{ left: `${bar.todayPct}%` }} title="Today" />
       </div>
       <div className="flex items-baseline justify-between gap-3 text-[11px] text-ink-400">
         <span className="num">
-          {openedSec !== null ? fmtDateLocal(openedSec) : 'start unknown'}
+          {pair.hedgedSinceSec !== null ? fmtDateLocal(pair.hedgedSinceSec) : 'start unknown'}
         </span>
         <span className="num">
-          matures {fmtDateLocal(maturitySec)} · {daysLeft}d left
+          matures {fmtDateLocal(maturitySec)} · {daysToMaturity(maturitySec, nowSec)}d left
         </span>
       </div>
     </div>
@@ -414,6 +403,7 @@ function PairCard({
   pair,
   base,
   nowSec,
+  timelineAxis,
   borosOpen,
   defaultOpen,
   showRollNonce = 0,
@@ -426,6 +416,8 @@ function PairCard({
   pair: PairEstimate;
   base: string;
   nowSec: number;
+  /** The time axis every pair card of this asset draws its timeline on. */
+  timelineAxis: TimelineAxis;
   /** The asset's open Boros legs, for the per-leg liquidation APR (looked up
    * by marketId — never threaded through the pair's share/merge machinery). */
   borosOpen: AssetBorosOpen[];
@@ -740,7 +732,7 @@ function PairCard({
 
       {open && (
         <div className="px-4 pb-5 pt-3">
-          <PairTimeline openedSec={pair.hedgedSinceSec} maturitySec={soonest} nowSec={nowSec} />
+          <PairTimeline pair={pair} nowSec={nowSec} axis={timelineAxis} />
 
           {/* No Fees and no Matures column: fees are behind the row's popup,
               and the maturity is the timeline's right edge. */}
@@ -5003,6 +4995,7 @@ export function AssetCard({
   // Pairs inside the roll window — the banner's count, and the cards it
   // points at carry the same flag.
   const rollable = derived.pairs.filter((p) => pairRollDue(p, nowSec));
+  const timelineAxis = pairTimelineAxis(derived.pairs, nowSec);
   /** Where "Show me" lands: the FIRST pair inside the window, so every
    * rollable pair below it is in view too. Landing on the best opportunity
    * scrolled the first pair off the top (his catch 2026-09-20). */
@@ -5670,6 +5663,7 @@ null
                 pair={p}
                 base={group.base}
                 nowSec={nowSec}
+                timelineAxis={timelineAxis}
                 borosOpen={group.borosOpen}
                 // A pair due a roll opens expanded: its Roll over action
                 // lives in the expansion, and the flag on the summary row

@@ -12,6 +12,8 @@ import {
   perpOnlyCloseLegs,
   perpOnlyPairs,
   borosOnlyPairs,
+  pairTimelineAxis,
+  timelineBar,
   markExcessBorosPairs,
   deriveAsset,
   keptSlice,
@@ -905,5 +907,62 @@ describe('markExcessBorosPairs', () => {
     // After the old maturity passes, deriveAsset drops the old pair, so the
     // book collapses to this one unit — nothing earlier shares its venues.
     expect(markExcessBorosPairs(newUnit(), [])[0].isExcess).toBeUndefined();
+  });
+});
+
+describe('pair timeline on a shared axis', () => {
+  const T = 1_800_000_000;
+  const D = 86_400;
+  const pair = (openedDaysAgo: number | null, maturesInDays: number) => ({
+    hedgedSinceSec: openedDaysAgo === null ? null : T - openedDaysAgo * D,
+    soonestMaturitySec: T + maturesInDays * D,
+  });
+
+  it("tells a late-opened near pair from a fresh far one (the ticket's case)", () => {
+    // Opened 2 days ago, matures in 3: most of its short term is gone.
+    const sep = pair(2, 3);
+    // Opened today, matures in 27: nothing has passed yet.
+    const oct = pair(0, 27);
+    const axis = pairTimelineAxis([sep, oct], T);
+    const a = timelineBar(sep, T, axis);
+    const b = timelineBar(oct, T, axis);
+    // The near pair ends far left of the far one's maturity, and the far one
+    // starts at today.
+    expect(a.leftPct + a.widthPct).toBeLessThan(b.leftPct + b.widthPct);
+    expect(b.leftPct).toBeCloseTo(b.todayPct, 9);
+    expect(b.elapsedPct).toBe(0);
+    // Each fill is the true share of its own term that has passed.
+    expect(a.elapsedPct / a.widthPct).toBeCloseTo(2 / 5, 9);
+  });
+
+  it('keeps true time proportions between bars', () => {
+    const short = pair(5, 5); // 10-day term
+    const long = pair(10, 30); // 40-day term
+    const axis = pairTimelineAxis([short, long], T);
+    expect(timelineBar(long, T, axis).widthPct / timelineBar(short, T, axis).widthPct).toBeCloseTo(4, 9);
+  });
+
+  it('puts today at the same point on every bar', () => {
+    const pairs = [pair(1, 3), pair(20, 60), pair(null, 15)];
+    const axis = pairTimelineAxis(pairs, T);
+    const today = pairs.map((p) => timelineBar(p, T, axis).todayPct);
+    expect(new Set(today).size).toBe(1);
+  });
+
+  it("reads a lone pair as its own plain progress bar", () => {
+    const only = pair(6, 24);
+    const bar = timelineBar(only, T, pairTimelineAxis([only], T));
+    expect(bar.leftPct).toBe(0);
+    expect(bar.widthPct).toBe(100);
+    expect(bar.elapsedPct).toBeCloseTo((6 / 30) * 100, 9);
+  });
+
+  it('starts an unknown-open pair a month before maturity, and fills a matured one whole', () => {
+    const unknown = pair(null, 10);
+    const axis = pairTimelineAxis([unknown], T);
+    expect(axis.startSec).toBe(unknown.soonestMaturitySec - SECONDS_IN_YEAR / 12);
+    const matured = pair(30, -2);
+    const bar = timelineBar(matured, T, pairTimelineAxis([matured], T));
+    expect(bar.elapsedPct).toBe(bar.widthPct);
   });
 });
