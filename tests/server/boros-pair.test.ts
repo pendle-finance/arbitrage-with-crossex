@@ -620,6 +620,42 @@ describe('POST /api/boros/pair/execute', () => {
     expect(sent.every((s) => s.sizeWei === undefined)).toBe(true);
   });
 
+  describe('resting orders', () => {
+    const recordOpts = (seen: Array<number[] | undefined>) => ({
+      placeMarketOrders: async (reqs: BorosMarketOrderRequest[], opts?: { cancelOrdersOn?: number[] }) => {
+        seen.push(opts?.cancelOrdersOn);
+        return reqs.map((r) => okFill({ marketId: r.marketId, direction: r.direction }));
+      },
+      cancelOrders: async () => {},
+      closePosition: async () => okFill(),
+    });
+
+    it("clears a close's markets of resting orders in the same batch, and only those holding one", async () => {
+      // Boros has no reduce-only flag: an order left resting could fill after
+      // the close and re-open the leg.
+      const seen: Array<number[] | undefined> = [];
+      makeApp(
+        { ...account(500_000, [{ marketId: HL, size: 100_000, resting: true }, { marketId: BN, size: -100_000 }]) },
+        undefined,
+        recordOpts(seen),
+      );
+      const res = await post(
+        '/api/boros/pair/execute',
+        pairBody({ intent: 'close', opposingAcknowledged: true, clientOrderIdA: 'coid-aaaa', clientOrderIdB: 'coid-bbbb' }),
+      );
+      expect(res.statusCode).toBe(200);
+      expect(seen).toEqual([[HL]]);
+    });
+
+    it('an open cancels nothing, even beside resting orders', async () => {
+      const seen: Array<number[] | undefined> = [];
+      makeApp({ ...account(500_000, [{ marketId: HL, size: 0, resting: true }]) }, undefined, recordOpts(seen));
+      const res = await post('/api/boros/pair/execute', pairBody({ clientOrderIdA: 'coid-aaaa', clientOrderIdB: 'coid-bbbb' }));
+      expect(res.statusCode).toBe(200);
+      expect(seen).toEqual([undefined]);
+    });
+  });
+
   it('sends a reducing TARGET as a SELL of the delta, not a buy on the side held', async () => {
     // The wizard re-run at a lower notional. The leg holds 1,000 LONG and the
     // box now says 500, so §4 reads 1,000 → 500 and the acknowledgement says

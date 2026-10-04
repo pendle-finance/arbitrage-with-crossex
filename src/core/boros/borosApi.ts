@@ -583,18 +583,33 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
     failure: { code: 'unknown', message },
   });
 
+  /** `bulkCancels` calldata clearing every resting order on these markets. */
+  const cancelCalldatas = async (marketIds: number[] = []): Promise<Hex[]> => {
+    const perMarket = await Promise.all(
+      marketIds.map(async (marketId) => {
+        const marketAcc = await marketAccFor(marketId);
+        const { calls } = await call<{ calls: PlaceOrderCall[] }>('/v1/calldata-builder/agent/cancel-orders', {
+          markets: [{ marketAcc, marketId, cancelAll: true, orderIds: [] }],
+        });
+        return (calls ?? []).map((c) => c.calldata as Hex);
+      }),
+    );
+    return perMarket.flat();
+  };
+
   const placeMarketOrders = async (
     reqs: BorosMarketOrderRequest[],
     opts?: PlaceOrdersOptions,
   ): Promise<BorosLegFill[]> => {
     if (reqs.length === 0) return [];
     let legs: Hex[];
+    let cancels: Hex[];
     try {
-      legs = await Promise.all(reqs.map(buildOrderCalldata));
+      [legs, cancels] = await Promise.all([Promise.all(reqs.map(buildOrderCalldata)), cancelCalldatas(opts?.cancelOrdersOn)]);
     } catch (err) {
       return reqs.map((req) => neverSentLeg(req, err));
     }
-    return execute(reqs, legs, opts);
+    return execute(reqs, legs, opts, cancels);
   };
 
   /**
@@ -640,10 +655,15 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
     };
   };
 
-  const rollOver = async (legs: BorosRollLeg[]): Promise<BorosLegFill[]> => {
+  const rollOver = async (
+    legs: BorosRollLeg[],
+    opts?: Pick<PlaceOrdersOptions, 'cancelOrdersOn'>,
+  ): Promise<BorosLegFill[]> => {
     if (legs.length === 0) return [];
     let calls: RollOverCall[];
+    let cancels: Hex[];
     try {
+      cancels = await cancelCalldatas(opts?.cancelOrdersOn);
       const res = await call<{ calls: RollOverCall[] }>('/v1/calldata-builder/agent/roll-over', await rollOverBody(legs));
       calls = res?.calls ?? [];
       if (calls.length !== legs.length * 2) throw new CoreError('Boros returned an unexpected number of roll-over calls', 'venue-rejected');
@@ -663,7 +683,7 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
       limitApr: c.resolved?.requestedRate ?? 0,
       clientOrderId: '',
     }));
-    return execute(reqs, calls.map((c) => c.calldata as Hex), { reducing: false, topUpAfter: legs.length });
+    return execute(reqs, calls.map((c) => c.calldata as Hex), { reducing: false, topUpAfter: legs.length }, cancels);
   };
 
   /**
@@ -684,6 +704,8 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
     reqs: BorosMarketOrderRequest[],
     legCalldatas: Hex[],
     opts?: PlaceOrdersOptions,
+    /** Calls that run ahead of everything else (resting-order cancels). */
+    leading: Hex[] = [],
   ): Promise<BorosLegFill[]> => {
     let signed: SignedCall[];
     let topUpCount: number;
@@ -691,7 +713,7 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
     try {
       const topUp = await autoTopUpCalldata(opts?.reducing === true);
       topUpCount = topUp.length;
-      signed = await signCalls([...legCalldatas.slice(0, at), ...topUp, ...legCalldatas.slice(at)]);
+      signed = await signCalls([...leading, ...legCalldatas.slice(0, at), ...topUp, ...legCalldatas.slice(at)]);
     } catch (err) {
       return reqs.map((req) => neverSentLeg(req, err));
     }
@@ -705,11 +727,13 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
       if (status !== undefined && status < 500) return reqs.map((req) => neverSentLeg(req, err));
       throw err;
     }
-    // Everything below indexes BY LEG, and the top-up occupies `topUpCount`
-    // slots of the submission starting at `at`. Read leg results off a view
-    // with those slots removed, or a leg reads the top-up's outcome as its own.
-    const legResponses = [...responses.slice(0, at), ...responses.slice(at + topUpCount)];
-    const submissionIndex = (i: number): number => (i < at ? i : i + topUpCount);
+    // Everything below indexes BY LEG: the leading cancels come first and the
+    // top-up occupies `topUpCount` slots starting at leg `at`. Read leg results
+    // off a view with those slots removed, or a leg reads another call's
+    // outcome as its own.
+    const afterLead = responses.slice(leading.length);
+    const legResponses = [...afterLead.slice(0, at), ...afterLead.slice(at + topUpCount)];
+    const submissionIndex = (i: number): number => leading.length + (i < at ? i : i + topUpCount);
 
     // With `requireSuccess` the legs stand or fall together, so one error is
     // the whole batch's — the top-up's included: it is in the same submission,
@@ -803,13 +827,9 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
     simulateRollOver,
 
     async cancelOrders(marketId: number): Promise<void> {
-      const marketAcc = await marketAccFor(marketId);
-      const { calls } = await call<{ calls: PlaceOrderCall[] }>(
-        '/v1/calldata-builder/agent/cancel-orders',
-        { markets: [{ marketAcc, marketId, cancelAll: true, orderIds: [] }] },
-      );
-      if (!calls?.length) return;
-      const res = await submitCalls(await signCalls(calls.map((c) => c.calldata)));
+      const calls = await cancelCalldatas([marketId]);
+      if (!calls.length) return;
+      const res = await submitCalls(await signCalls(calls));
       // An empty result is "we cannot tell",
       // and reporting a cancel that may never have been submitted as done is
       // the one answer a remediation path must not give.

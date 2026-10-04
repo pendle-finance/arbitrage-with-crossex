@@ -20,8 +20,9 @@
  *
  * **Two legs go out as ONE batch.** A pair's rate legs are one hedge, so they
  * close through `/boros/pair/execute` (intent `close`) — the path the ticket's
- * Reduce-only uses: the server re-runs the gate, the venue accepts both
- * orders or neither, and the ids replay instead of closing twice. Two
+ * Reduce-only uses: the server re-runs the gate, cancels both markets'
+ * resting orders in the same batch, the venue accepts all of it or none, and
+ * the ids replay instead of closing twice. Two
  * separate requests could close one leg and fail the other, leaving a naked
  * rate leg (his call 2026-09-30). A single leg — and the remainder after one
  * leg of a pair is done — keeps its own cancel-and-close request.
@@ -861,7 +862,7 @@ export function CloseBorosForm({
             {closable.length === 1
               ? 'Cancels resting orders, then sends 1 market order. The perp stays open.'
               : atomic
-                ? 'Sends both market orders as one batch: the venue accepts both or neither. Size is capped at the open size.'
+                ? 'Cancels resting orders on both markets and sends both market orders as one batch: the venue accepts all of it or none. Size is capped at the open size.'
                 : `Cancels resting orders, then sends the remaining market order. Size is capped at the open size.`}
           </p>
         )}

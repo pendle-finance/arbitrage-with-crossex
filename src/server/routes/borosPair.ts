@@ -296,6 +296,8 @@ interface AccountView {
   crossByToken: Map<number, BorosMarginBucket>;
   /** marketId → that market's own isolated bucket. */
   isolatedByMarket: Map<number, BorosMarginBucket>;
+  /** Markets with at least one resting order — what a close or roll cancels. */
+  restingOrderMarkets: Set<number>;
 }
 
 function holdsPositionOrOrders(p: {
@@ -321,8 +323,12 @@ function readAccount(zones: BorosCollateralZone[]): AccountView {
     isolatedOccupied: new Set(),
     crossByToken: new Map(),
     isolatedByMarket: new Map(),
+    restingOrderMarkets: new Set(),
   };
   for (const zone of zones) {
+    for (const group of [...(zone.cross ? [zone.cross] : []), ...zone.isolated]) {
+      for (const p of group.marketPositions) if (p.hasRestingOrders) view.restingOrderMarkets.add(p.marketId);
+    }
     if (zone.cross) {
       const used = zone.cross.marketPositions.reduce(
         (s, p) => s + norm18(p.positionInitialMargin ?? p.initialMargin),
@@ -929,6 +935,12 @@ export function borosPairRoutes(deps: AppDeps) {
           // A close only reduces, so the gas top-up stays out of its way unless
           // the budget genuinely cannot pay — an exit is never taxed a dollar.
           reducing: intent === 'close',
+          // A close clears its markets' resting orders in the same batch, so
+          // none is left to re-open a leg once it is flat.
+          cancelOrdersOn:
+            intent === 'close'
+              ? [legAOrder, legBOrder].flatMap((o) => (o && account.restingOrderMarkets.has(o.marketId) ? [o.marketId] : []))
+              : undefined,
         }).then((result) => ({ result, estimate: simulation, warnings: gate.warnings }));
         rememberExecution(memoKey, pending);
         const payload = await pending;
@@ -993,7 +1005,7 @@ export function borosPairRoutes(deps: AppDeps) {
         venue,
         venueError,
       });
-      return { exit, entry, gate, venue, simulatedAtMs: Math.min(exit.simulatedAtMs, entry.simulatedAtMs) };
+      return { exit, entry, gate, venue, account, simulatedAtMs: Math.min(exit.simulatedAtMs, entry.simulatedAtMs) };
     };
 
     app.post('/boros/roll/simulate', async (req, reply) => {
@@ -1038,7 +1050,7 @@ export function borosPairRoutes(deps: AppDeps) {
       const replay = recentRolls.get(memoKey);
       if (replay) return reply.ok({ ...(await replay.result), replayed: true });
 
-      const { exit, entry, gate } = await priceRoll(body, true);
+      const { exit, entry, gate, account } = await priceRoll(body, true);
       if (gate.blockers.length > 0) {
         return reply.code(409).send({
           ok: false,
@@ -1051,7 +1063,10 @@ export function borosPairRoutes(deps: AppDeps) {
 
       const raced = recentRolls.get(memoKey);
       if (raced) return reply.ok({ ...(await raced.result), replayed: true });
-      const pending: Promise<RollPayload> = submitBorosRoll(orders, legs).then((result) => ({
+      // The roll closes the short-dated legs, so their resting orders go in
+      // the same batch: one left behind could re-open a leg the roll just moved.
+      const cancelOrdersOn = [...new Set(legs.map((l) => l.fromMarketId))].filter((id) => account.restingOrderMarkets.has(id));
+      const pending: Promise<RollPayload> = submitBorosRoll(orders, legs, { cancelOrdersOn }).then((result) => ({
         result,
         exit: { simulation: exit.simulation, gate: exit.gate },
         entry: { simulation: entry.simulation, gate: entry.gate },

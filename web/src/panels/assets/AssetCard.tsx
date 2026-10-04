@@ -2343,6 +2343,7 @@ function RollReview({
           realises against what re-opening locks, each with its own
           tolerance and the margin it moves. */}
       <div className={microLabelClass}>How it executes</div>
+      <p className="text-[11px] text-ink-400">Resting orders on the {fmtDateLocal(oldMaturity)} markets are cancelled in the same batch.</p>
       {/* 1 then 2: the order the two batches are sent in, a numbered disc
           on each card. */}
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2 [&>*]:min-w-0">

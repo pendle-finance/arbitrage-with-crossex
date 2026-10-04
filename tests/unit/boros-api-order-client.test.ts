@@ -44,6 +44,8 @@ function fakeApi(
     orderBuildReturns?: unknown;
     /** A non-2xx answer from the roll-over builder. */
     rollBuildHttp?: { status: number; body?: unknown };
+    /** A non-2xx answer from the cancel-orders builder. */
+    cancelBuildHttp?: { status: number; body?: unknown };
     /** Body the roll-over preview answers with. */
     rollSimReturns?: unknown;
     failEnter?: string;
@@ -108,7 +110,12 @@ function fakeApi(
       });
     }
     if (path.startsWith('/v1/calldata-builder/agent/cancel-orders')) {
-      return ok({ calls: [{ calldata: '0xca' }] });
+      if (over.cancelBuildHttp) {
+        return { ok: false, status: over.cancelBuildHttp.status, json: async () => over.cancelBuildHttp!.body ?? {} };
+      }
+      // One bulkCancels per market, tagged with it so a test can tell them apart.
+      const marketId = (body.markets as Array<{ marketId: number }>)[0].marketId;
+      return ok({ calls: [{ calldata: `0xca${marketId.toString(16)}` }] });
     }
     if (path.startsWith('/v1/calldata-builder/agent/pay-treasury')) {
       return ok({ calls: [{ calldata: '0x7a' }] });
@@ -850,6 +857,107 @@ describe('makeBorosApiOrderClient — topUpAfter positions the gas top-up', () =
     expect(submission).toHaveLength(3);
     expect(submission[2].calldata).toBe('0x7a'); // top-up LAST (reqs.length = 2)
     expect(submission.slice(0, 2).every((d) => d.calldata.startsWith('0xda'))).toBe(true);
+  });
+});
+
+/**
+ * A close or roll clears its markets' resting orders in the SAME batch: one
+ * left behind could fill later and re-open the leg (Boros has no reduce-only
+ * flag), and in one batch a refused close cancels nothing either.
+ */
+describe('makeBorosApiOrderClient — cancelOrdersOn clears resting orders in the same batch', () => {
+  const lastSubmit = (api: ReturnType<typeof fakeApi>) =>
+    api.calls.filter((c) => c.path === '/v1/send-txs/bulk-calls').pop()!.body;
+  const datasOf = (body: Record<string, unknown>) => (body.datas as Array<{ calldata: string }>).map((d) => d.calldata);
+  const cancelHL = `0xca${HL.toString(16)}`;
+  const cancelBN = `0xca${BN.toString(16)}`;
+
+  it('puts the cancels first, then the closes and the top-up, and reads each leg from its own slot', async () => {
+    const api = fakeApi({
+      gasBalance: { balanceInUSD: -0.4 },
+      status: {
+        status: 'success',
+        statuses: [
+          { index: 0 }, // cancel HL
+          { index: 1 }, // cancel BN
+          { index: 2, marketOrdersExecuted: [filled(HL, '10000000000000000000')] },
+          { index: 3, marketOrdersExecuted: [filled(BN, '20000000000000000000')] },
+          { index: 4 }, // the top-up
+        ],
+      },
+    });
+    const fills = await client(api).placeMarketOrders(
+      [leg({ marketId: HL, size: 10 }), leg({ marketId: BN, direction: 'long', size: 20 })],
+      { reducing: true, topUpAfter: 2, cancelOrdersOn: [HL, BN] },
+    );
+    const submit = lastSubmit(api);
+    expect(submit.requireSuccess).toBe(true);
+    const datas = datasOf(submit);
+    expect(datas.slice(0, 2)).toEqual([cancelHL, cancelBN]);
+    expect(datas.slice(2, 4).every((d) => d.startsWith('0xda'))).toBe(true);
+    expect(datas[4]).toBe('0x7a');
+    expect(fills.map((f) => [f.marketId, f.filledSize, f.failure])).toEqual([
+      [HL, 10, null],
+      [BN, 20, null],
+    ]);
+  });
+
+  it('fails both legs, as a batch, when the venue refuses a cancel', async () => {
+    const ABORT = '[SIMULATE] Batch aborted: requireSuccess=true but some calls failed';
+    const REASON = '[SIMULATE] Order not found';
+    const api = fakeApi({ submit: () => [{ error: REASON }, { error: ABORT }, { error: ABORT }] });
+    const fills = await client(api).placeMarketOrders(
+      [leg({ marketId: HL }), leg({ marketId: BN, direction: 'long' })],
+      { reducing: true, cancelOrdersOn: [HL] },
+    );
+    expect(fills.every((f) => f.filledSize === 0 && f.failure?.message === REASON && f.failure.cause === 'batch')).toBe(true);
+  });
+
+  it('sends nothing when the cancel cannot be built', async () => {
+    const api = fakeApi({ cancelBuildHttp: { status: 400, body: { message: 'Market is expired' } } });
+    const fills = await client(api).placeMarketOrders([leg({ marketId: HL })], { reducing: true, cancelOrdersOn: [HL] });
+    expect(fills[0].failure).toMatchObject({ code: 'rejected' });
+    expect(api.calls.some((c) => c.path === '/v1/send-txs/bulk-calls')).toBe(false);
+  });
+
+  it('builds no cancel when none is asked for', async () => {
+    const api = fakeApi();
+    await client(api).placeMarketOrders([leg({ marketId: HL })], { reducing: true });
+    expect(api.calls.some((c) => c.path === '/v1/calldata-builder/agent/cancel-orders')).toBe(false);
+  });
+
+  it('leads a roll with the old markets\' cancels and still reads every leg from its own slot', async () => {
+    const legs = [
+      { fromMarketId: HL, toMarketId: HL + 1, size: 100, closeRate: 0.0925, openRate: 0.0975 },
+      { fromMarketId: BN, toMarketId: BN + 1, size: 100, closeRate: 0.0425, openRate: 0.0525 },
+    ];
+    const api = fakeApi({
+      gasBalance: { balanceInUSD: 0.1 },
+      status: {
+        status: 'success',
+        statuses: [0, 1, 2, 3, 4, 5].map((index) => ({
+          index,
+          status: 'success',
+          marketOrdersExecuted: [
+            [],
+            [{ marketId: HL, size: (100n * 10n ** 18n).toString() }],
+            [{ marketId: BN, size: (100n * 10n ** 18n).toString() }],
+            [],
+            [{ marketId: HL + 1, size: (100n * 10n ** 18n).toString() }],
+            [{ marketId: BN + 1, size: (100n * 10n ** 18n).toString() }],
+          ][index],
+        })),
+      },
+    });
+    const fills = await client(api).rollOver!(legs, { cancelOrdersOn: [HL] });
+    // [cancel HL, closeHL, closeBN, payTreasury, openHL', openBN']
+    expect(datasOf(lastSubmit(api))).toEqual([cancelHL, '0xc1', '0xc2', '0x7a', '0xo1', '0xo2']);
+    expect(fills.map((f) => [f.marketId, f.filledSize, f.failure])).toEqual([
+      [HL, 100, null],
+      [BN, 100, null],
+      [HL + 1, 100, null],
+      [BN + 1, 100, null],
+    ]);
   });
 });
 
