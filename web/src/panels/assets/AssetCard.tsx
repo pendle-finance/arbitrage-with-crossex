@@ -101,7 +101,7 @@ import {
   perpOnlyPairs,
   sizeIn,
 } from './assetModel';
-import { daysToMaturity, knownRate } from '../../lib/boros';
+import { daysToMaturity, knownRate, maturityFillPct } from '../../lib/boros';
 import { rebatedSettleApr } from '../../lib/rebate';
 import { useDebounced } from '../../lib/useDebounced';
 import { AssetBars } from './AssetBars';
@@ -219,10 +219,16 @@ const daysLeftText = (maturitySec: number, nowSec: number): string => {
   return days > 0 ? `${days}d left` : 'matured';
 };
 
-/** The pair's life as one bar: opened → now → maturity. A pair is a fixed-term
- * trade, so "how far in are we" is a fact the numbers around it all depend on
- * (the carry splits earned/remaining on exactly this axis) and no column can
- * express. */
+/** The shared horizon every maturity bar fills against. Live Boros markets are
+ * quarterlies maturing at most ~3 months out, so 90 days spans the full field
+ * and a bar's fill is comparable across pairs. */
+const MATURITY_BAR_HORIZON_DAYS = 90;
+
+/** The pair's maturity as one bar: how much time is left, measured against a
+ * fixed shared horizon rather than this pair's own open → maturity span. So a
+ * near-expiry leg reads fuller than a freshly-opened later one, comparably
+ * across pairs — which the old open-relative fill could not. The carry splits
+ * earned/remaining are computed elsewhere and unchanged by this. */
 function PairTimeline({
   openedSec,
   maturitySec,
@@ -233,9 +239,7 @@ function PairTimeline({
   nowSec: number;
 }) {
   if (maturitySec <= 0) return null;
-  const start = openedSec ?? maturitySec - SECONDS_IN_YEAR / 12;
-  const span = Math.max(1, maturitySec - start);
-  const pct = Math.max(0, Math.min(100, ((nowSec - start) / span) * 100));
+  const pct = maturityFillPct(maturitySec, nowSec, MATURITY_BAR_HORIZON_DAYS);
   const daysLeft = daysToMaturity(maturitySec, nowSec);
   return (
     <div className="mb-4 flex flex-col gap-1.5">
@@ -243,13 +247,6 @@ function PairTimeline({
         <div
           className="absolute inset-y-0 left-0 rounded-full bg-info/60"
           style={{ width: `${pct}%` }}
-        />
-        {/* The "now" marker rides the same axis rather than sitting in a
-            legend, so elapsed and remaining are read in one glance. */}
-        <div
-          className="absolute -top-1 h-3 w-px bg-ink-50"
-          style={{ left: `${pct}%` }}
-          aria-hidden="true"
         />
       </div>
       <div className="flex items-baseline justify-between gap-3 text-[11px] text-ink-400">

@@ -14,6 +14,12 @@ export const borosMarketUrl = (marketId: number, direction: 'long' | 'short'): s
 export const daysToMaturity = (maturitySec: number, nowSec: number): number =>
   Math.max(0, Math.ceil((maturitySec - nowSec) / 86_400));
 
+/** How full a maturity bar should read: time left as a fraction of a fixed
+ * shared horizon, so a near leg is further along than a far one regardless of
+ * when either opened. Uses the same whole-day rounding as the "Nd left" label. */
+export const maturityFillPct = (maturitySec: number, nowSec: number, horizonDays: number): number =>
+  Math.max(0, Math.min(100, (1 - daysToMaturity(maturitySec, nowSec) / horizonDays) * 100));
+
 /**
  * Which unit a coin's size box should default to, for BOTH the perp legs and
  * the Boros legs of the same strategy.
