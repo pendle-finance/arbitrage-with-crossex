@@ -1267,6 +1267,7 @@ function rollFigures({
   longLeg,
   shortLeg,
   nowSec,
+  keepOld = false,
 }: {
   entrySim: BorosPairSimulation | undefined;
   exitSim: BorosPairSimulation | undefined;
@@ -1278,6 +1279,9 @@ function rollFigures({
   longLeg: PairLegDetail | undefined;
   shortLeg: PairLegDetail | undefined;
   nowSec: number;
+  /** An open-only roll: the old legs stay open, so nothing is paid or
+   * realised closing them — only the new legs' opening fee counts. */
+  keepOld?: boolean;
 }): RollFigures {
   const termYears = Math.max(0, maturity - nowSec) / SECONDS_IN_YEAR;
 
@@ -1299,12 +1303,12 @@ function rollFigures({
   const newBorosImUsd = usdOf(addedMarginOf(entrySim));
   const capitalUsd = newBorosImUsd !== null ? perpImUsd + newBorosImUsd : null;
 
-  const exitCostUsd = usdOf(exitSim?.costToCrossSize);
+  const exitCostUsd = keepOld ? 0 : usdOf(exitSim?.costToCrossSize);
   const entryCostUsd = usdOf(entrySim?.costToCrossSize);
   // Closing the old legs realises their remaining locked spread against
   // today's book — money the roll makes or costs on day one, counted in
   // the earnings and the rate alongside the fees (his call 2026-09-17).
-  const exitPnlUsd = usdOf(exitPnlOf(exitSim, longLeg, shortLeg, nowSec).total);
+  const exitPnlUsd = keepOld ? 0 : usdOf(exitPnlOf(exitSim, longLeg, shortLeg, nowSec).total);
   const totalCostUsd =
     exitCostUsd !== null && entryCostUsd !== null ? exitCostUsd + entryCostUsd : null;
   const dragApr =
@@ -1748,6 +1752,7 @@ export function RollOverModal({
                   exitSlippageApr={plansFor(t, simSize).exit?.toleranceApr ?? exitSlippageApr}
                   entrySlippageApr={plansFor(t, simSize).entry?.toleranceApr ?? entrySeedFor(t)}
                   nowSec={nowSec}
+                  openOnly={openOnly}
                   selected={selected === t.maturity}
                   onSelect={() => setPicked(t.maturity)}
                   onLegs={(q) => setLegsBy((prev) => (prev[t.maturity]?.key === q.key ? prev : { ...prev, [t.maturity]: q }))}
@@ -2773,6 +2778,7 @@ function RollOption({
   exitSlippageApr,
   entrySlippageApr,
   nowSec,
+  openOnly = false,
   selected,
   onSelect,
   onLegs,
@@ -2788,6 +2794,8 @@ function RollOption({
   exitSlippageApr: number;
   entrySlippageApr: number;
   nowSec: number;
+  /** Open-only mode: priced without closing the old legs. */
+  openOnly?: boolean;
   selected: boolean;
   onSelect: () => void;
   /** The four legs as quoted, once both batches have — the modal reads their
@@ -2857,7 +2865,7 @@ function RollOption({
     exitPnlUsd,
     capitalUsd,
     newBorosImUsd,
-  } = rollFigures({ entrySim, exitSim, size, perpImUsd, maturity: target.maturity, longLeg, shortLeg, nowSec });
+  } = rollFigures({ entrySim, exitSim, size, perpImUsd, maturity: target.maturity, longLeg, shortLeg, nowSec, keepOld: openOnly });
 
   const pending = exit.isPending || entry.isPending;
   /**
@@ -2938,8 +2946,10 @@ function RollOption({
             <div
               title={
                 v.grossByMaturityUsd !== null
-                  ? `Carry to ${fmtDateLocal(target.maturity)}\t${fmtUsd(v.grossByMaturityUsd)}\nFees\t${v.totalCostUsd !== null ? `−${fmtUsd(v.totalCostUsd)}` : '—'}\nExit PnL\t${v.exitPnlUsd !== null ? `${v.exitPnlUsd >= 0 ? '+' : '−'}${fmtUsd(Math.abs(v.exitPnlUsd))}` : '—'}`
-                  : 'Carry to the new maturity − fees + exit PnL.'
+                  ? `Carry to ${fmtDateLocal(target.maturity)}\t${fmtUsd(v.grossByMaturityUsd)}\nFees\t${v.totalCostUsd !== null ? `−${fmtUsd(v.totalCostUsd)}` : '—'}${openOnly ? '' : `\nExit PnL\t${v.exitPnlUsd !== null ? `${v.exitPnlUsd >= 0 ? '+' : '−'}${fmtUsd(Math.abs(v.exitPnlUsd))}` : '—'}`}`
+                  : openOnly
+                    ? 'Carry to the new maturity − the opening fee.'
+                    : 'Carry to the new maturity − fees + exit PnL.'
               }
             >
               <div className={statLabel}>Est. earnings by maturity</div>
@@ -2970,7 +2980,7 @@ function RollOption({
               locked spread (which can pay for the fees, or add to them). The
               split is behind the ⓘ. */}
           <div className="num mt-2.5 flex items-baseline justify-between gap-3 border-t border-ink-800 pt-2 text-[11px] text-ink-500">
-            <span>Rollover Cost</span>
+            <span>{openOnly ? 'Opening cost' : 'Rollover Cost'}</span>
             <span>
               {v.totalCostUsd !== null && v.exitPnlUsd !== null ? (
                 <SignedNumber value={v.exitPnlUsd - v.totalCostUsd} format={fmtUsd} />
@@ -2979,7 +2989,11 @@ function RollOption({
               )}
               <span
                 className="ml-1 cursor-help text-ink-500"
-                title={`Exit fee\t${v.exitCostUsd !== null ? `−${fmtUsd(v.exitCostUsd)}` : '—'}\nRe-entry fee\t${v.entryCostUsd !== null ? `−${fmtUsd(v.entryCostUsd)}` : '—'}\nExit PnL\t${v.exitPnlUsd !== null ? `${v.exitPnlUsd >= 0 ? '+' : '−'}${fmtUsd(Math.abs(v.exitPnlUsd))}` : '—'}\n* All counted in the rate and the earnings above.`}
+                title={
+                  openOnly
+                    ? `Opening fee\t${v.entryCostUsd !== null ? `−${fmtUsd(v.entryCostUsd)}` : '—'}\n* The old legs stay open: no exit fee, no exit PnL.\n* Counted in the rate and the earnings above.`
+                    : `Exit fee\t${v.exitCostUsd !== null ? `−${fmtUsd(v.exitCostUsd)}` : '—'}\nRe-entry fee\t${v.entryCostUsd !== null ? `−${fmtUsd(v.entryCostUsd)}` : '—'}\nExit PnL\t${v.exitPnlUsd !== null ? `${v.exitPnlUsd >= 0 ? '+' : '−'}${fmtUsd(Math.abs(v.exitPnlUsd))}` : '—'}\n* All counted in the rate and the earnings above.`
+                }
               >
                 ⓘ
               </span>

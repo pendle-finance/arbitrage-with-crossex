@@ -801,6 +801,27 @@ describe('RollOverModal — open only (keep old legs)', () => {
     expect(await within(dialog).findByText(/Opened 100 ETH/)).toBeInTheDocument();
   });
 
+  it('prices the options without an exit: the cost is the opening fee alone', async () => {
+    // The old legs stay open, so no exit fee is paid and no exit PnL realised.
+    const user = userEvent.setup();
+    install();
+    renderWithClient(<RollOverModal pair={pair} base="ETH" nowSec={NOW} onClose={() => {}} />);
+    const dialog = await screen.findByRole('dialog');
+    const costRow = async (label: string) => (await within(dialog).findByText(label)).parentElement as HTMLElement;
+
+    // Close & reopen: the round trip, both fees and the exit PnL behind the ⓘ.
+    const roundTrip = await costRow('Rollover Cost');
+    await waitFor(() => expect(roundTrip.querySelector('[title]')?.getAttribute('title')).toMatch(/Exit PnL/));
+
+    await user.click(within(dialog).getByRole('button', { name: 'Open only (keep old legs)' }));
+    const opening = await costRow('Opening cost');
+    // 0.02 ETH to cross the entry books at $2,500: the opening fee, nothing else.
+    await waitFor(() => expect(opening).toHaveTextContent(/50\.00/));
+    const split = opening.querySelector('[title]')?.getAttribute('title') ?? '';
+    expect(split).toMatch(/^Opening fee\t.\$50\.00/);
+    expect(split).not.toMatch(/Exit fee|Exit PnL\t/);
+  });
+
   it('offers no Retry after a partial fill — the same ids would only replay it', async () => {
     const user = userEvent.setup();
     let sends = 0;
