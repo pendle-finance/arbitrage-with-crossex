@@ -973,7 +973,7 @@ export function BorosPairTicket({
               the qualification survives — on the caption that makes the claim. */}
           <span
             className="text-[11px] text-ink-400"
-            title="Enforced here by capping the size at your current position — Boros has no reduce-only order type, so check the resulting-position row. Resting orders on both markets are cancelled in the same batch."
+            title="Enforced here by capping the size at your current position — Boros has no reduce-only order type, so check the resulting-position row. Resting orders on the traded markets are cancelled in the same batch."
           >
             caps the size at your open position · cancels resting orders
           </span>

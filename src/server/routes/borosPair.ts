@@ -296,7 +296,7 @@ interface AccountView {
   crossByToken: Map<number, BorosMarginBucket>;
   /** marketId → that market's own isolated bucket. */
   isolatedByMarket: Map<number, BorosMarginBucket>;
-  /** Markets with at least one resting order — what a close or roll cancels. */
+  /** Markets with a resting order in the cross account — what a close or roll cancels. */
   restingOrderMarkets: Set<number>;
 }
 
@@ -326,9 +326,8 @@ function readAccount(zones: BorosCollateralZone[]): AccountView {
     restingOrderMarkets: new Set(),
   };
   for (const zone of zones) {
-    for (const group of [...(zone.cross ? [zone.cross] : []), ...zone.isolated]) {
-      for (const p of group.marketPositions) if (p.hasRestingOrders) view.restingOrderMarkets.add(p.marketId);
-    }
+    // Cross only: that is the account a close's cancel is sent to.
+    for (const p of zone.cross?.marketPositions ?? []) if (p.hasRestingOrders) view.restingOrderMarkets.add(p.marketId);
     if (zone.cross) {
       const used = zone.cross.marketPositions.reduce(
         (s, p) => s + norm18(p.positionInitialMargin ?? p.initialMargin),

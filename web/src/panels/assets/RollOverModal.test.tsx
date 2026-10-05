@@ -800,4 +800,38 @@ describe('RollOverModal — open only (keep old legs)', () => {
 
     expect(await within(dialog).findByText(/Opened 100 ETH/)).toBeInTheDocument();
   });
+
+  it('offers no Retry after a partial fill — the same ids would only replay it', async () => {
+    const user = userEvent.setup();
+    let sends = 0;
+    install();
+    server.use(
+      http.post('/api/boros/pair/execute', async ({ request }) => {
+        sends += 1;
+        const body = (await request.json()) as PairExecBody;
+        const full = pairExecuteBody(body) as { data: { result: Record<string, unknown> } };
+        Object.assign(full.data.result, {
+          legB: legFill(body.legB.marketId, body.legB.direction, 60),
+          hedgedSize: 60,
+          unhedgedSize: 40,
+          unhedgedLeg: 'A',
+          partial: true,
+        });
+        return HttpResponse.json(full);
+      }),
+    );
+    renderWithClient(<RollOverModal pair={pair} base="ETH" nowSec={NOW} onClose={() => {}} />);
+    const dialog = await screen.findByRole('dialog');
+    await user.click(within(dialog).getByRole('button', { name: 'Open only (keep old legs)' }));
+    const next = await within(dialog).findByRole('button', { name: 'Open new maturity' });
+    await waitFor(() => expect(next).not.toBeDisabled(), { timeout: 4_000 });
+    await user.click(next);
+    const confirm = await within(dialog).findByRole('button', { name: 'Open new maturity' });
+    await waitFor(() => expect(confirm).not.toBeDisabled(), { timeout: 4_000 });
+    await user.pointer({ keys: '[MouseLeft>]', target: confirm });
+
+    expect(await within(dialog).findByText(/the rest did not fill\. Open the remainder from the position view\./)).toBeInTheDocument();
+    expect(within(dialog).queryByRole('button', { name: /Retry/ })).not.toBeInTheDocument();
+    expect(sends).toBe(1);
+  });
 });

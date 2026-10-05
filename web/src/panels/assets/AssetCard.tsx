@@ -2609,7 +2609,9 @@ function OpenOnlyReview({
   if (out !== null) {
     const result = 'payload' in out ? out.payload.result : null;
     const tone = result === null || result.filledNothing ? 'rose' : result.partial ? 'amber' : 'green';
-    const retryable = 'error' in out || (result?.filledNothing ?? false) || (result?.partial ?? false);
+    // Not after a partial fill: the server keeps that answer for these ids, so a
+    // retry would replay it, and fresh ids would resend the full size.
+    const retryable = 'error' in out || (result?.filledNothing ?? false);
     return (
       <div className="flex flex-col gap-2">
         {result && <RollLegReport label="New legs" legs={[result.legA, result.legB]} collateral={collateral} tone={tone} />}
@@ -2621,7 +2623,7 @@ function OpenOnlyReview({
         )}
         {result?.partial && !result.filledNothing && (
           <p className="rounded border border-amber-500/30 bg-amber-500/[0.06] px-2.5 py-2 text-[11.5px] leading-relaxed text-amber-200" role="alert">
-            Only {fmtTokenQty(result.hedgedSize, collateral)} opened — the rest did not fill. Retry the remainder, or manage it from the position view.
+            Only {fmtTokenQty(result.hedgedSize, collateral)} opened — the rest did not fill. Open the remainder from the position view.
           </p>
         )}
         {result?.filledNothing && (

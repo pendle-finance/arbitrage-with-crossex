@@ -327,8 +327,9 @@ export function AssetsHome() {
             <div className="w-full text-[14px] font-normal leading-[16.94px] text-ink-300" title="Your Boros margin, per collateral bucket, as the venue reports it.">
               Boros account
             </div>
-            {borosMargin.map((m) => (
-              <div key={`${m.tokenId}:${m.isCross ? 'cross' : m.marketId}`} className="flex flex-col gap-2">
+            {borosMargin.map((m, i) => (
+              // An isolated bucket holding only collateral has no marketId.
+              <div key={`${m.tokenId}:${m.isCross ? 'cross' : (m.marketId ?? `i${i}`)}`} className="flex flex-col gap-2">
                 <div className="num text-[13px] text-ink-300">
                   {m.collateral} {m.isCross ? 'cross' : 'isolated'}
                 </div>
