@@ -8,7 +8,7 @@ interface Props {
   /** Side coloring: green (buy), red (sell), cyan (mixed/neutral). `buy` and
    * `sell` are the SOLID fills of the same two sides — the single ticket's
    * primary action, where the tinted outline read as secondary. */
-  tone?: 'green' | 'red' | 'cyan' | 'buy' | 'sell';
+  tone?: 'green' | 'red' | 'cyan' | 'buy' | 'sell' | 'outline';
   /** Extra classes appended to the base button (e.g. width/margin). */
   className?: string;
   /** Extra hover text, appended to the press-and-hold instruction — for a
@@ -24,6 +24,8 @@ const TONES: Record<NonNullable<Props['tone']>, string> = {
   cyan: 'border-transparent bg-info text-ink-50 hover:bg-info/75',
   buy: 'border-transparent bg-grass text-ink-950 hover:bg-grass/80',
   sell: 'border-transparent bg-guava text-ink-950 hover:bg-guava/80',
+  // An action the screen allows but does not recommend: no fill at all.
+  outline: 'border-ink-600 bg-transparent text-ink-100 hover:border-ink-400',
 };
 
 const R = 7;

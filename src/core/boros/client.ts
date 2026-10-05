@@ -176,6 +176,10 @@ export interface BorosMarketPosition {
   notionalSize: string;
   fixedApr: number | null;
   markApr: number;
+  /** The mark rate at which the venue liquidates this position, as it reports
+   * it (reflects the collateral actually in its bucket). norm18'd; null when
+   * the venue reports 0 or a non-finite value, or a legacy response omits it. */
+  liquidationApr?: number | null;
   pnl: {
     /** Cumulative funding settled for the CURRENT position — verified NET of
      * settlement fees (settlement = yieldReceived − yieldPaid − fee). */
@@ -189,6 +193,9 @@ export interface BorosMarketPosition {
    * as a fallback for the line above, and nothing breaks if a legacy response
    * omits it. */
   initialMargin?: string;
+  /** This position's maintenance margin (18-dec string); optional for a legacy
+   * response. Feeds the bucket health factor (equity / maintenance). */
+  maintMargin?: string;
   hasRestingOrders?: boolean;
 }
 
@@ -198,6 +205,10 @@ export interface BorosMarginGroup {
   marketAcc: string;
   netBalance: string;
   initialMargin?: string;
+  /** Free collateral the venue reports for this bucket (18-dec string);
+   * optional for a legacy response, when callers fall back to
+   * netBalance − committed margin. */
+  availableInitialMargin?: string;
   marketPositions: BorosMarketPosition[];
 }
 
@@ -545,12 +556,15 @@ export async function fetchBorosCollaterals(
     const side = toBig(p.signedSize) < 0n ? 1 : 0;
     const a = live.get(`${marketAcc.toLowerCase()}:${Number(p.marketId)}`) ?? {};
     const rate = Number(a.side ?? side) === side ? a.fixedApr : undefined;
+    const liq = norm18(p.liquidationApr as string);
     return {
       marketId: Number(p.marketId),
       side,
       notionalSize: String(p.signedSize ?? '0'),
       fixedApr: typeof rate === 'number' && Number.isFinite(rate) ? rate : null,
       markApr: marketById.get(Number(p.marketId))?.markApr ?? 0,
+      liquidationApr: liq !== 0 ? liq : null,
+      maintMargin: p.maintMargin as string | undefined,
       pnl: {
         rateSettlementPnl: String(a.settlementPnl ?? '0'),
         unrealisedPnl: String(a.unrealisedPnl ?? '0'),
@@ -572,6 +586,7 @@ export async function fetchBorosCollaterals(
       marketAcc,
       netBalance: String(r.netBalance ?? '0'),
       initialMargin: r.initialMargin as string | undefined,
+      availableInitialMargin: r.availableInitialMargin as string | undefined,
       marketPositions: Array.isArray(r.positions)
         ? (r.positions as Array<Record<string, unknown>>).map((p) =>
             toPosition(String(r.marketAcc ?? ''), p),

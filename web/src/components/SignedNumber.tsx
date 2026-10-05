@@ -2,17 +2,18 @@ import { num, signedClass } from '../lib/fmt';
 
 interface Props {
   value: number | string;
-  /** Formats the (signed) numeric value; defaults to num(n, 2). The '+' prefix
-   * for positives is added here — formatters keep their own '-' for negatives. */
+  /** Formats the (signed) numeric value; defaults to num(n, 2). Formatters
+   * keep their own '-' for negatives. */
   format?: (n: number) => string;
   className?: string;
-  /** Prefix positives with '+' (default). Headline figures pass false — the
-   * colour already carries the sign, and a '+' beside it says it twice. */
+  /** Prefix positives with '+'. Off by default: the colour already carries
+   * the sign, and a '+' beside it says it twice (his call 2026-09-30). */
   plus?: boolean;
 }
 
 /**
- * Mono tabular signed value: green > 0, red < 0, dim at 0 (positives get a '+').
+ * Mono tabular signed value: green > 0, red < 0, dim at 0. A negative keeps
+ * its '-'; a positive carries no '+'.
  *
  * ⚠ "Zero" means zero AS DISPLAYED, not `n === 0`. A value of -0.004 is
  * genuinely negative, but at 2dp it renders "-$0.00" — a minus sign and a red
@@ -21,7 +22,7 @@ interface Props {
  * formatted form carries no non-zero digit is shown dim and unsigned, matching
  * what an exact zero would look like.
  */
-export function SignedNumber({ value, format = (n) => num(n), className, plus = true }: Props) {
+export function SignedNumber({ value, format = (n) => num(n), className, plus = false }: Props) {
   const n = typeof value === 'number' ? value : Number(value);
   if (!Number.isFinite(n)) return <span className={`num text-ink-400 ${className ?? ''}`}>—</span>;
   const body = format(n);

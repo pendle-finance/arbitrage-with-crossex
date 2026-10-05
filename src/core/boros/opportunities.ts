@@ -352,6 +352,17 @@ export function borosLiquidationApr(
 }
 
 /**
+ * A margin bucket's health factor: equity over maintenance margin, the same
+ * equity/maintenance ratio CrossEx's own liquidation condition uses
+ * (web/src/lib/liquidation.ts). Both inputs are in the bucket's collateral
+ * token, so the ratio is unitless. Above 1 is safe; null when no maintenance
+ * margin is posted (nothing to liquidate against).
+ */
+export function borosHealthFactor(netBalance: number, maintMargin: number): number | null {
+  return maintMargin > 0 ? netBalance / maintMargin : null;
+}
+
+/**
  * Initial margin one perp leg posts at the venue's max leverage — what
  * `PairTicket` actually opens at. Deliberately EXCLUDES preflight's
  * `PREFLIGHT_MARGIN_BUFFER` and `TAKER_FEE_RESERVE`: those make preflight a

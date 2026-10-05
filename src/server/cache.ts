@@ -39,6 +39,12 @@ export const TTL = {
   borosHistory: 600_000,
   borosBook: 90_000,
   borosBookTrade: 3_000,
+  /** The markets list AS A QUOTE READS IT. Every rate bound and "Est."
+   * slippage is measured from the market's mid, which rides on this list —
+   * at 30s it was up to ten times older than the 3s book walked beside it,
+   * and the execute (always a fresh read) could price a different bound
+   * than the one shown. */
+  borosQuote: 5_000,
   /** Public venue-book touch for the re-peg UI — price display, not a feed. */
   book: 2_000,
   /** Fee rates, symbol rules, risk limits — effectively static. */

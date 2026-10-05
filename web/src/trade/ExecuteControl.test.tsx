@@ -3,7 +3,8 @@ import { http, HttpResponse } from 'msw';
 import { useState } from 'react';
 import { describe, expect, it } from 'vitest';
 import type { ActionInput, DealRequest } from '../api/types';
-import { account, baseHandlers, echoPreviewHandler, ethPosition, previewFor } from '../test/fixtures';
+import { account, agentStatus, baseHandlers, echoPreviewHandler, ethPosition, previewFor } from '../test/fixtures';
+import { STRATEGY_STORAGE_KEY } from '../panels/HomeControls';
 import { env, server } from '../test/server';
 import { renderWithClient } from '../test/utils';
 import { ExecuteControl } from './ExecuteControl';
@@ -171,6 +172,74 @@ describe('ExecuteControl', () => {
     fireEvent.pointerDown(go);
     await new Promise((r) => setTimeout(r, 150));
     expect(calls).toHaveLength(0);
+  });
+
+  describe('a maker price tracking the book', () => {
+    /** A maker+hedge pair whose maker price ticks on its own; every preview
+     * after the first HANGS, so the button can only be armed by the first. */
+    function TrackingPair({ tolerance }: { tolerance?: number }) {
+      const [px, setPx] = useState('2675');
+      const actions: ActionInput[] = [
+        { kind: 'open-limit', symbol: 'GATE_FUTURE_ETH_USDT', side: 'BUY', qty: '1', price: px, tif: 'POC', pairRole: 'maker', pairGroupId: 'g' },
+        { kind: 'open-market', symbol: 'OKX_FUTURE_ETH_USDT', side: 'SELL', qty: '1', pairRole: 'hedge', pairGroupId: 'g' },
+      ];
+      return (
+        <>
+          <button type="button" onClick={() => setPx('2675.5')}>
+            small tick
+          </button>
+          <button type="button" onClick={() => setPx('2690')}>
+            big move
+          </button>
+          <ExecuteControl
+            scope="track"
+            actions={actions}
+            label="Go"
+            holdMs={50}
+            previewOpts={{ debounceMs: 20 }}
+            trackedPriceTolerance={tolerance}
+          />
+        </>
+      );
+    }
+    const firstOnly = () => {
+      let n = 0;
+      return http.post('/api/preview', async ({ request }) => {
+        const { actions } = (await request.json()) as { actions: ActionInput[] };
+        n += 1;
+        if (n >= 2) await new Promise(() => {});
+        return HttpResponse.json(env({ previews: actions.map((a, i) => previewFor(a, { index: i, qty: '1' })) }));
+      });
+    };
+
+    it('stays armed through a tick inside the tolerance (2 bps of 5)', async () => {
+      server.use(...baseHandlers(), firstOnly());
+      renderWithClient(<TrackingPair tolerance={0.0005} />);
+      const go = () => screen.getByRole('button', { name: 'Go' });
+      await waitFor(() => expect(go()).toBeEnabled());
+      fireEvent.click(screen.getByText('small tick'));
+      // The re-preview hangs; the shown one still describes the order.
+      await new Promise((r) => setTimeout(r, 200));
+      expect(go()).toBeEnabled();
+    });
+
+    it('waits for a fresh preview once the move passes the tolerance (56 bps)', async () => {
+      server.use(...baseHandlers(), firstOnly());
+      renderWithClient(<TrackingPair tolerance={0.0005} />);
+      const go = () => screen.getByRole('button', { name: 'Go' });
+      await waitFor(() => expect(go()).toBeEnabled());
+      fireEvent.click(screen.getByText('big move'));
+      await waitFor(() => expect(go()).toBeDisabled(), { timeout: 2_000 });
+    });
+
+    it('without a tolerance (a typed price) every tick waits for its preview, as before', async () => {
+      server.use(...baseHandlers(), firstOnly());
+      renderWithClient(<TrackingPair />);
+      const go = () => screen.getByRole('button', { name: 'Go' });
+      await waitFor(() => expect(go()).toBeEnabled());
+      fireEvent.click(screen.getByText('small tick'));
+      await waitFor(() => expect(go()).toBeDisabled(), { timeout: 2_000 });
+    });
   });
 
   it('a STABLE intentKey retains the deal id even as actions self-mutate (maker-track double-execute guard)', async () => {
@@ -619,5 +688,30 @@ describe('a single resting limit order is a plain order', () => {
     expect(calls[0].b).not.toBeNull();
     // No "placed" confirmation for a real deal — that one is supervised.
     await waitFor(() => expect(screen.queryByText(/Limit order placed/)).toBeNull());
+  });
+});
+
+describe('ExecuteControl for a view-only wallet', () => {
+  it('keeps the confirm disabled and says why', async () => {
+    // Tracking a wallet that is not the logged-in one: it sees positions, trades none.
+    localStorage.setItem(STRATEGY_STORAGE_KEY, JSON.stringify({ address: `0x${'2'.repeat(40)}`, walletUpgraded: true }));
+    const calls: DealRequest[] = [];
+    server.use(
+      http.get('/api/boros/agent', () => HttpResponse.json(env(agentStatus({ configured: true, root: `0x${'1'.repeat(40)}` })))),
+      ...baseHandlers(),
+      echoPreviewHandler({ overrides: { qty: '0.4' } }),
+      dealHandler(calls),
+    );
+    try {
+      renderWithClient(<ExecuteControl scope="vo" actions={[notionalAction]} label="Execute" holdMs={50} />);
+      expect(await screen.findByText('View-only: switch to your logged-in wallet to trade.')).toBeInTheDocument();
+      const btn = screen.getByRole('button', { name: 'Execute' });
+      expect(btn).toBeDisabled();
+      fireEvent.pointerDown(btn);
+      await new Promise((r) => setTimeout(r, 120));
+      expect(calls).toHaveLength(0);
+    } finally {
+      localStorage.clear();
+    }
   });
 });

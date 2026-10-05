@@ -35,7 +35,7 @@ import {
   type FetchLike,
 } from '../../core/boros/client';
 import { USD_TOKEN_ID } from '../../core/boros/borosApi';
-import { normalizeUnderlying } from '../../core/boros/opportunities';
+import { borosInitialMarginUsd, normalizeUnderlying } from '../../core/boros/opportunities';
 import { COIN_NOT_SUPPORTED_TEXT, isSupportedCoin } from '../../core/coins';
 import { knownRate } from '../../core/boros/venue';
 import { readAgentApproval } from '../borosAgentApproval';
@@ -296,6 +296,8 @@ interface AccountView {
   crossByToken: Map<number, BorosMarginBucket>;
   /** marketId → that market's own isolated bucket. */
   isolatedByMarket: Map<number, BorosMarginBucket>;
+  /** Markets with a resting order in the cross account — what a close or roll cancels. */
+  restingOrderMarkets: Set<number>;
 }
 
 function holdsPositionOrOrders(p: {
@@ -321,8 +323,11 @@ function readAccount(zones: BorosCollateralZone[]): AccountView {
     isolatedOccupied: new Set(),
     crossByToken: new Map(),
     isolatedByMarket: new Map(),
+    restingOrderMarkets: new Set(),
   };
   for (const zone of zones) {
+    // Cross only: that is the account a close's cancel is sent to.
+    for (const p of zone.cross?.marketPositions ?? []) if (p.hasRestingOrders) view.restingOrderMarkets.add(p.marketId);
     if (zone.cross) {
       const used = zone.cross.marketPositions.reduce(
         (s, p) => s + norm18(p.positionInitialMargin ?? p.initialMargin),
@@ -409,6 +414,16 @@ export function createPairPricer(deps: AppDeps) {
     (await deps.cache.get('boros:markets', TTL.boros, () => fetchBorosMarkets(fetchImpl), { fresh }))
       .value;
 
+  /**
+   * The markets a QUOTE is priced from, on their own short TTL (see
+   * TTL.borosQuote). A key of its own: the cache stamps an entry with the
+   * TTL of whoever fetched it, so sharing `boros:markets` would hand a quote
+   * the 30s copy the rest of the app is content with.
+   */
+  const loadQuoteMarkets = async (fresh: boolean): Promise<BorosMarket[]> =>
+    (await deps.cache.get('boros:markets:quote', TTL.borosQuote, () => fetchBorosMarkets(fetchImpl), { fresh }))
+      .value;
+
   const loadAccount = async (address: string, fresh: boolean): Promise<AccountView> => {
     // Market config only picks the IM branch; it never needs a fresh read.
     const markets = await loadMarkets(false);
@@ -477,7 +492,7 @@ export function createPairPricer(deps: AppDeps) {
 
     const [markets, account] = preloaded
       ? [preloaded.markets, preloaded.account]
-      : await Promise.all([loadMarkets(fresh), loadAccount(address, fresh)]);
+      : await Promise.all([loadQuoteMarkets(fresh), loadAccount(address, fresh)]);
     const marketA = marketOr404(markets, a.marketId);
     const marketB = marketOr404(markets, b.marketId);
     const nowSec = Math.floor(Date.now() / 1000);
@@ -553,7 +568,27 @@ export function createPairPricer(deps: AppDeps) {
     };
   };
 
-  return { loadMarkets, loadAccount, marketOr404, readGasBalance, priceRequest };
+  return { loadMarkets, loadQuoteMarkets, loadAccount, marketOr404, readGasBalance, priceRequest };
+}
+
+/**
+ * What opening ONE unit of size on this market takes out of its collateral
+ * bucket, in collateral units: the initial margin plus the taker fee. Both are
+ * linear in size (IM = N × max(|apr|, floor) × max(DTM, tThresh)/365 × kIM;
+ * fee = takerFeeRate × N × years), so the ticket divides the bucket's
+ * available by this to state the size it can fund. The rate is the larger of
+ * mark and mid — the entry the formula charges is not known before the fill,
+ * and the larger one never overstates the size. Null when the market carries
+ * no margin inputs.
+ */
+function openCostPerSize(m: BorosMarket, nowSec: number): number | null {
+  const rate = Math.max(Math.abs(m.markApr), Math.abs(m.midApr));
+  const im = borosInitialMarginUsd(m, rate, 1, nowSec);
+  if (im === null) return null;
+  const years = Math.max(0, m.maturity - nowSec) / (365 * 86_400);
+  const fee = Number.isFinite(m.takerFeeRate) && m.takerFeeRate > 0 ? m.takerFeeRate * years : 0;
+  const cost = im + fee;
+  return cost > 0 ? cost : null;
 }
 
 export function borosPairRoutes(deps: AppDeps) {
@@ -633,7 +668,7 @@ export function borosPairRoutes(deps: AppDeps) {
     }
   };
 
-  const { loadMarkets, loadAccount, marketOr404, readGasBalance, priceRequest } = createPairPricer(deps);
+  const { loadMarkets, loadQuoteMarkets, loadAccount, marketOr404, readGasBalance, priceRequest } = createPairPricer(deps);
 
 
   return async function plugin(app: FastifyInstance): Promise<void> {
@@ -708,6 +743,7 @@ export function borosPairRoutes(deps: AppDeps) {
           isolatedHasPositionOrOrders: account.isolatedOccupied.has(m.marketId),
           currentSize: account.positionByMarket.get(m.marketId) ?? 0,
           collateralPriceUsd: prices.get(m.tokenId) ?? null,
+          openCostPerSize: openCostPerSize(m, nowSec),
         }))
         .sort((x, y) => x.name.localeCompare(y.name));
 
@@ -898,6 +934,12 @@ export function borosPairRoutes(deps: AppDeps) {
           // A close only reduces, so the gas top-up stays out of its way unless
           // the budget genuinely cannot pay — an exit is never taxed a dollar.
           reducing: intent === 'close',
+          // A close clears its markets' resting orders in the same batch, so
+          // none is left to re-open a leg once it is flat.
+          cancelOrdersOn:
+            intent === 'close'
+              ? [legAOrder, legBOrder].flatMap((o) => (o && account.restingOrderMarkets.has(o.marketId) ? [o.marketId] : []))
+              : undefined,
         }).then((result) => ({ result, estimate: simulation, warnings: gate.warnings }));
         rememberExecution(memoKey, pending);
         const payload = await pending;
@@ -927,7 +969,7 @@ export function borosPairRoutes(deps: AppDeps) {
      */
     const priceRoll = async (body: RollBody, fresh: boolean) => {
       const address = parseAddress(body.address);
-      const [markets, account, gasBalanceUsd] = await Promise.all([loadMarkets(fresh), loadAccount(address, fresh), readGasBalance(fresh)]);
+      const [markets, account, gasBalanceUsd] = await Promise.all([loadQuoteMarkets(fresh), loadAccount(address, fresh), readGasBalance(fresh)]);
       const step = (raw: RollStepBody | undefined, intent: 'close' | 'open', acknowledged: boolean) =>
         priceRequest(
           { address, legA: raw?.legA, legB: raw?.legB, size: raw?.size, intent, opposingAcknowledged: acknowledged },
@@ -962,7 +1004,7 @@ export function borosPairRoutes(deps: AppDeps) {
         venue,
         venueError,
       });
-      return { exit, entry, gate, venue, simulatedAtMs: Math.min(exit.simulatedAtMs, entry.simulatedAtMs) };
+      return { exit, entry, gate, venue, account, simulatedAtMs: Math.min(exit.simulatedAtMs, entry.simulatedAtMs) };
     };
 
     app.post('/boros/roll/simulate', async (req, reply) => {
@@ -1007,7 +1049,7 @@ export function borosPairRoutes(deps: AppDeps) {
       const replay = recentRolls.get(memoKey);
       if (replay) return reply.ok({ ...(await replay.result), replayed: true });
 
-      const { exit, entry, gate } = await priceRoll(body, true);
+      const { exit, entry, gate, account } = await priceRoll(body, true);
       if (gate.blockers.length > 0) {
         return reply.code(409).send({
           ok: false,
@@ -1020,7 +1062,10 @@ export function borosPairRoutes(deps: AppDeps) {
 
       const raced = recentRolls.get(memoKey);
       if (raced) return reply.ok({ ...(await raced.result), replayed: true });
-      const pending: Promise<RollPayload> = submitBorosRoll(orders, legs).then((result) => ({
+      // The roll closes the short-dated legs, so their resting orders go in
+      // the same batch: one left behind could re-open a leg the roll just moved.
+      const cancelOrdersOn = [...new Set(legs.map((l) => l.fromMarketId))].filter((id) => account.restingOrderMarkets.has(id));
+      const pending: Promise<RollPayload> = submitBorosRoll(orders, legs, { cancelOrdersOn }).then((result) => ({
         result,
         exit: { simulation: exit.simulation, gate: exit.gate },
         entry: { simulation: entry.simulation, gate: entry.gate },

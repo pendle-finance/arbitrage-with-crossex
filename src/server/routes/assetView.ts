@@ -42,6 +42,7 @@ import {
   type BorosTxn,
   type FetchLike,
 } from '../../core/boros/client';
+import { borosHealthFactor } from '../../core/boros/opportunities';
 import { normalizeVenue, type PerpPositionLike } from '../../core/boros/venue';
 import { isSupportedCoin, SUPPORTED_COINS } from '../../core/coins';
 import { classifyGateError, CoreError } from '../../core/errors';
@@ -65,6 +66,12 @@ export const BOROS_LIVE_TTL_MS = 60_000;
 // window instead of the last 2,000 hourly rows.
 const PAGE_LIMIT = INTEREST_PAGE_SIZE;
 const MAX_PAGES = INTEREST_MAX_PAGES;
+
+const SECONDS_PER_YEAR = 365 * 24 * 3600;
+/** The window a perp's trailing funding rate is averaged over. */
+const TRAILING_FUNDING_SEC = 7 * 24 * 3600;
+/** Younger than this, a position has no funding history worth annualising. */
+const MIN_TRAILING_FUNDING_SEC = 3600;
 
 const fin = (v: string | number | undefined | null): number => {
   const n = Number(v);
@@ -95,6 +102,11 @@ export interface AssetPerpOpenOut {
   feesUsd: number;
   imUsd: number;
   openedAt: number | null;
+  /** Funding this position realised over the trailing 7 days (or its life,
+   * if younger), annualised on its current notional. Signed, + = received.
+   * Null when the ledger could not be read in full or the position is under
+   * an hour old. */
+  fundingApr7d: number | null;
 }
 
 /** Closed positions since `since`, aggregated per symbol. Whole-lifetime
@@ -145,6 +157,9 @@ export interface AssetBorosOpenOut {
   entryApr: number | null;
   markApr: number;
   floatingApr: number;
+  /** The mark rate at which the venue liquidates this leg, as it reports it
+   * (a rate, unscaled). Null when the venue reports none. */
+  liquidationApr: number | null;
   /** Cumulative settlement of the CURRENT position, net of settle fees.
    * DISPLAY ONLY — totals come from borosHistory (see the double-count
    * guard in the header). */
@@ -202,6 +217,29 @@ export interface AssetBorosHistoryOut {
   side: 'LONG' | 'SHORT' | null;
 }
 
+/**
+ * One Boros margin bucket — the cross bucket of a collateral token, or one
+ * isolated position's bucket. Built for every bucket that holds anything, not
+ * gated on a live position or a USD price, so the account's margin is visible
+ * even when a bucket only holds collateral. USD fields are null when the
+ * collateral token has no live price; health is price-independent either way.
+ */
+export interface AssetBorosMarginOut {
+  tokenId: number;
+  collateral: string;
+  isCross: boolean;
+  /** The market an isolated bucket backs; absent for the cross bucket. */
+  marketId?: number;
+  /** equity / maintenance margin; above 1 is safe. Null when nothing is at
+   * risk (no maintenance margin posted). */
+  healthFactor: number | null;
+  /** Free collateral in the bucket's token. */
+  availableToken: number;
+  availableUsd: number | null;
+  equityUsd: number | null;
+  maintMarginUsd: number | null;
+}
+
 export interface AssetGroupOut {
   base: string;
   supported: boolean;
@@ -220,6 +258,9 @@ export interface AssetViewOut {
   nowSec: number;
   defaultSinceSec: number | null;
   assets: AssetGroupOut[];
+  /** One row per Boros margin bucket (cross + each isolated). Absent only on
+   * an older server; empty when the account holds no Boros collateral. */
+  borosMargin?: AssetBorosMarginOut[];
   supportedCoins: string[];
   /** Earliest activity instant that entered any sum (unix sec) — the APR
    * clock floor; null when nothing was found at all. */
@@ -748,6 +789,58 @@ export function createAssetViewBuilder(deps: AppDeps) {
       }
     }
 
+    /**
+     * TRAILING funding, per position: what each open perp actually collected
+     * (or paid) over the last 7 days, off the same FUNDING_FEE ledger. It is
+     * the floating rate an asset's estimated APR uses for the part of the
+     * book no Boros leg locks (his call 2026-10-01: a 7-day average, not the
+     * current period, which swings by whole percents hour to hour). Windowed
+     * on its own clock, never the asset's start date, and keyed by the hour
+     * so the week rolls forward. Null when the ledger cannot be read in full.
+     */
+    let funding7d: Map<string, number> | null = null; // positionId → USD
+    const trailingFromSec = nowSec - TRAILING_FUNDING_SEC;
+    if (perpAvailable) {
+      try {
+        const { value } = await deps.cache.get(
+          `crossex:funding-7d:${Math.floor(nowSec / 3600)}`,
+          TTL.fills,
+          async () => {
+            const byPosition = new Map<string, number>();
+            for (let page = 1; page <= 25; page += 1) {
+              const { body } = await deps.getClients().crossEx.listCrossexAccountBook({
+                statementType: 'FUNDING_FEE',
+                from: trailingFromSec * 1000,
+                limit: PAGE_LIMIT,
+                page,
+              });
+              for (const r of body as Array<{ businessId?: string; change?: string; createTime?: string }>) {
+                const pid = String(r.businessId ?? '').split('_')[0];
+                const usd = Number(r.change);
+                if (!pid || !Number.isFinite(usd) || epochToSec(fin(r.createTime)) < trailingFromSec) continue;
+                byPosition.set(pid, (byPosition.get(pid) ?? 0) + usd);
+              }
+              if ((body as unknown[]).length < PAGE_LIMIT) return byPosition;
+            }
+            // Capped: an undercounted week would state a rate nobody earned.
+            return null;
+          },
+          { fresh },
+        );
+        funding7d = value;
+      } catch {
+        funding7d = null;
+      }
+    }
+    /** A position's realised funding over the trailing week (or its life,
+     * if younger), annualised on its current notional. Signed, + = received. */
+    const fundingApr7dOf = (pid: string, notionalUsd: number, openedAt: number | null): number | null => {
+      if (funding7d === null || !pid || notionalUsd <= 0) return null;
+      const spanSec = nowSec - Math.max(trailingFromSec, openedAt ?? trailingFromSec);
+      if (spanSec < MIN_TRAILING_FUNDING_SEC) return null;
+      return (funding7d.get(pid) ?? 0) / notionalUsd / (spanSec / SECONDS_PER_YEAR);
+    };
+
     // --- Group by asset --------------------------------------------------
     const groups = new Map<string, AssetGroupOut>();
     const groupFor = (base: string): AssetGroupOut => {
@@ -807,6 +900,7 @@ export function createAssetViewBuilder(deps: AppDeps) {
         feesUsd,
         imUsd: Math.abs(fin(pos.initialMargin)),
         openedAt,
+        fundingApr7d: fundingApr7dOf(pid, notionalUsd, openedAt),
       });
     }
 
@@ -919,6 +1013,7 @@ export function createAssetViewBuilder(deps: AppDeps) {
             entryApr: p.fixedApr,
             markApr: p.markApr,
             floatingApr: market.floatingApr,
+            liquidationApr: p.liquidationApr ?? null,
             settleUsd: norm18(p.pnl.rateSettlementPnl) * px,
             mtmUsd: norm18(p.pnl.unrealisedPnl) * px,
             imUsd: norm18(p.positionInitialMargin ?? p.initialMargin) * px,
@@ -931,6 +1026,48 @@ export function createAssetViewBuilder(deps: AppDeps) {
       warnings.push(
         `${unpricedZones} Boros collateral zone(s) hold positions in a token with no live USD price — their legs are excluded from the view.`,
       );
+    }
+
+    // Boros margin per bucket: one row for the cross bucket and each isolated
+    // bucket that holds anything. Health (equity / maintenance) is unitless, so
+    // it survives an unpriced token; only the USD columns go null there. Not
+    // gated on open positions — a bucket holding only collateral is still a row.
+    const borosMargin: AssetBorosMarginOut[] = [];
+    for (const zone of zones) {
+      const px = tokenPrice(zone.tokenId);
+      const collateral = BOROS_TOKEN_SYMBOLS[zone.tokenId] ?? `token${zone.tokenId}`;
+      const buckets: Array<{ group: (typeof zone.isolated)[number]; isCross: boolean }> = [
+        ...(zone.cross ? [{ group: zone.cross, isCross: true }] : []),
+        ...zone.isolated.map((group) => ({ group, isCross: false })),
+      ];
+      for (const { group, isCross } of buckets) {
+        const equityToken = norm18(group.netBalance);
+        const holdsPosition = group.marketPositions.some((p) => norm18(p.notionalSize) !== 0);
+        if (equityToken === 0 && !holdsPosition) continue;
+        const maintToken = group.marketPositions.reduce((s, p) => s + norm18(p.maintMargin), 0);
+        const usedToken = group.marketPositions.reduce(
+          (s, p) => s + norm18(p.positionInitialMargin ?? p.initialMargin),
+          0,
+        );
+        // The venue's own free-margin figure when present (borosPair readAccount
+        // trusts it the same way); else netBalance minus committed margin.
+        const availableToken =
+          group.availableInitialMargin !== undefined
+            ? norm18(group.availableInitialMargin)
+            : equityToken - usedToken;
+        const marketId = isCross ? undefined : group.marketPositions[0]?.marketId;
+        borosMargin.push({
+          tokenId: zone.tokenId,
+          collateral,
+          isCross,
+          ...(marketId !== undefined ? { marketId } : {}),
+          healthFactor: borosHealthFactor(equityToken, maintToken),
+          availableToken,
+          availableUsd: px === null ? null : availableToken * px,
+          equityUsd: px === null ? null : equityToken * px,
+          maintMarginUsd: px === null ? null : maintToken * px,
+        });
+      }
     }
 
     // Boros history sums per market: settlements + fills since T0.
@@ -1108,6 +1245,7 @@ export function createAssetViewBuilder(deps: AppDeps) {
       nowSec,
       defaultSinceSec,
       assets,
+      borosMargin,
       supportedCoins: [...SUPPORTED_COINS],
       interest,
       earliestSec,

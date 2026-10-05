@@ -15,6 +15,7 @@ import {
   syncSettlementLedger,
   type FetchLike,
 } from '../../src/core/boros/client';
+import { borosHealthFactor } from '../../src/core/boros/opportunities';
 
 // The client tag lives in module state; reset it around every test so a case
 // that sets a version/active flag can never leak into the plain-tag assertions.
@@ -473,6 +474,34 @@ describe('fetchBorosCollaterals', () => {
     expect(p.positionInitialMargin).toBe('5');
   });
 
+  it('parses the venue liquidation APR, maintenance margin and free margin, and tolerates their absence', async () => {
+    const withFields = {
+      results: [
+        {
+          marketAcc: CROSS,
+          netBalance: '20',
+          initialMargin: '5',
+          availableInitialMargin: '7',
+          positions: [
+            // liquidationApr is an 18-dec string like every other rate (0.09).
+            { marketId: 155, signedSize: '-7', initialMargin: '5', maintMargin: '3', liquidationApr: '90000000000000000', orders: [] },
+          ],
+        },
+      ],
+    };
+    const g = (await fetchBorosCollaterals(accountStub(withFields, actives), ROOT, []))[0].cross!;
+    expect(g.availableInitialMargin).toBe('7');
+    expect(g.marketPositions[0].liquidationApr).toBeCloseTo(0.09, 12);
+    expect(g.marketPositions[0].maintMargin).toBe('3');
+
+    // The legacy `infos` fixture carries none of the three: available is
+    // undefined, maintMargin undefined, and a missing/zero liq reads as null.
+    const legacy = (await fetchBorosCollaterals(accountStub(infos, actives), ROOT, []))[0].cross!;
+    expect(legacy.availableInitialMargin).toBeUndefined();
+    expect(legacy.marketPositions[0].liquidationApr).toBeNull();
+    expect(legacy.marketPositions[0].maintMargin).toBeUndefined();
+  });
+
   it('reads resting orders from the order list instead of the initial-margin gap', async () => {
     const zones = await fetchBorosCollaterals(accountStub(infos, actives), ROOT, []);
     expect(zones[0].cross!.marketPositions[0].hasRestingOrders).toBe(false);
@@ -530,6 +559,15 @@ describe('fetchBorosCollaterals', () => {
     await expect(
       fetchBorosCollaterals(accountStub({ results: [] }, {}), ROOT, []),
     ).rejects.toMatchObject({ name: 'CoreError', category: 'network' });
+  });
+});
+
+describe('borosHealthFactor', () => {
+  it('is equity over maintenance margin, null when nothing is at risk', () => {
+    expect(borosHealthFactor(300, 200)).toBeCloseTo(1.5, 12);
+    expect(borosHealthFactor(100, 100)).toBeCloseTo(1, 12);
+    expect(borosHealthFactor(100, 0)).toBeNull();
+    expect(borosHealthFactor(100, -5)).toBeNull();
   });
 });
 

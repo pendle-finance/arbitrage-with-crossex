@@ -23,13 +23,21 @@ import { useBookId } from '../bookId';
 import { short } from '../HomeControls';
 import { ConnectWalletButton } from '../../components/ConnectWalletButton';
 import { isSameAddress, useActiveWallet, useTrackedAddress } from '../trackedAddress';
-import { assetIsActive, deriveAsset, SECONDS_IN_YEAR, type AssetDerived } from './assetModel';
+import { assetIsActive, deriveAsset, SECONDS_IN_YEAR } from './assetModel';
 import { legSinceParam, loadPrefs, savePrefs, type AssetViewPrefs } from './assetPrefsStore';
 import { AssetCard } from './AssetCard';
 
+/** Health factor colour: red below 1.1, amber below 1.5, else the plain ink. */
+function healthClass(h: number | null): string {
+  if (h === null) return 'text-ink-50';
+  if (h < 1.1) return 'text-rose-300';
+  if (h < 1.5) return 'text-amber-200';
+  return 'text-ink-50';
+}
+
 export function AssetsHome() {
   const { address } = useTrackedAddress();
-  const gateHidden = useActiveWallet().viewOnly;
+  const viewOnly = useActiveWallet().viewOnly;
   const loggedInRoot = useBorosAgent().data?.root ?? null;
   const bookId = useBookId(address);
 
@@ -82,22 +90,22 @@ export function AssetsHome() {
           const win = stored !== undefined ? windows.bySince.get(stored) : undefined;
           const windowFailed = stored !== undefined && !win && windows.errorBySince.has(stored);
           const full = win ? (win.assets.find((a) => a.base === g.base) ?? { ...g, perpClosed: [], borosHistory: [] }) : g;
-          const group = gateHidden ? { ...full, perpOpen: [], perpClosed: [] } : full;
+          // A view-only wallet still sees the connected Gate account's perps:
+          // view-only blocks trading and the owner's own figures (the rebate,
+          // gated above), never the positions.
+          const group = full;
           const meta = win ?? data;
           const sinceSec = meta?.sinceSec ?? 0;
-          const d = deriveAsset(group, prefs.exclusions, sinceSec, meta?.nowSec ?? 0, feeRows, rebate);
-          const shown: AssetDerived = gateHidden ? { ...d, gaps: d.gaps.filter((gap) => gap.leg !== 'perp') } : d;
           return {
             group,
             sinceSec,
             storedSinceSec: stored,
             backfilling: meta?.coverage.backfilling === true,
             windowPending: stored !== undefined && !win && !windowFailed,
-            derived: shown,
+            derived: deriveAsset(group, prefs.exclusions, sinceSec, meta?.nowSec ?? 0, feeRows, rebate),
           };
-        })
-        .filter((a) => !gateHidden || a.group.borosOpen.length > 0 || a.group.borosHistory.length > 0),
-    [data, windows.bySince, windows.errorBySince, prefs.exclusions, prefs.sinceByAsset, feeRows, rebate, gateHidden],
+        }),
+    [data, windows.bySince, windows.errorBySince, prefs.exclusions, prefs.sinceByAsset, feeRows, rebate],
   );
   /**
    * "Hide inactive pairs": on by default, the list shows only assets with
@@ -142,7 +150,7 @@ export function AssetsHome() {
   // market, so it cannot sit on a card: it is charged once, here, and the
   // total then differs from the cards' sum by exactly this line.
   const interestAvailable = data?.interest?.available === true;
-  const interestUsd = !gateHidden && interestAvailable ? data!.interest!.paidUsd : 0;
+  const interestUsd = interestAvailable ? data!.interest!.paidUsd : 0;
   const totalPnl = derived.reduce((s, a) => s + a.derived.totals.pnlUsd, 0) - interestUsd;
   const totalCapital = derived.reduce((s, a) => s + a.derived.totals.capitalUsd, 0);
   // Blended APR: Σpnl over Σ(capital · its own elapsed clock) — each asset
@@ -220,13 +228,18 @@ export function AssetsHome() {
     );
   }
 
+  // Boros margin per bucket — shown even for a view-only wallet (the data is
+  // read-only) and even when nothing else is in the hero (collateral with no
+  // open leg still has a bucket).
+  const borosMargin = data.borosMargin ?? [];
+
   return (
     <section>
-      {gateHidden && address && loggedInRoot && (
+      {viewOnly && address && loggedInRoot && (
         <p className="mb-4 text-xs text-ink-400">
-          Viewing <span className="num text-ink-200">{short(address)}</span>, not logged in: read-only, Boros
-          positions only. Switch your wallet to the logged-in{' '}
-          <span className="num text-ink-200">{short(loggedInRoot)}</span> for Gate perps and trading.
+          Viewing <span className="num text-ink-200">{short(address)}</span>, not logged in: view-only. Perps are
+          your connected Gate account's; trading and fee rebates need the logged-in{' '}
+          <span className="num text-ink-200">{short(loggedInRoot)}</span>.
         </p>
       )}
 
@@ -238,33 +251,27 @@ export function AssetsHome() {
       {/* The mock gives the account summary the one info border and inner glow
           no other card wears, so it leads the tab instead of reading as the
           first of the per-asset cards. */}
-      {derived.length > 0 && (
+      {(derived.length > 0 || borosMargin.length > 0) && (
       <div
         className="mb-9 flex flex-wrap items-center justify-between gap-x-10 gap-y-6 rounded border border-info/60 bg-info/[0.06] px-8 py-[30px]"
         style={{ boxShadow: 'inset 0 0 92px rgba(96,121,255,0.14)' }}
       >
+        {derived.length > 0 && (
+        <>
         <div className="flex min-w-0 flex-col gap-2">
           <div
             className="tip-label w-fit text-[14px] font-normal leading-[16.94px] text-ink-300"
             title={
-              gateHidden
-                ? 'Boros legs only. Gate is not included.'
-                : interestAvailable
-                  ? 'What the farm kept, after borrow interest.'
-                  : 'The cards summed. Borrow interest could not be read, so it is not subtracted.'
+              interestAvailable
+                ? 'What the farm kept, after borrow interest.'
+                : 'The cards summed. Borrow interest could not be read, so it is not subtracted.'
             }
           >
-            {gateHidden ? (
-              <>
-                Boros PnL · <span className="num">{short(address)}</span>
-              </>
-            ) : (
-              'Total Account PnL'
-            )}
+            Total Account PnL
           </div>
           <div className="flex flex-wrap items-baseline gap-x-2.5 gap-y-1">
             <span className="num text-[34px] font-bold leading-none tracking-[-0.01em]">
-              <SignedNumber value={totalPnl} format={fmtUsd} plus={false} />
+              <SignedNumber value={totalPnl} format={fmtUsd} />
             </span>
             {/* Only stated when the interest is actually known: with it
                 unreadable the total IS just the cards summed, and the phrase
@@ -300,7 +307,7 @@ export function AssetsHome() {
               Realized APR ≈
             </div>
             <div className="num text-[24px] font-bold leading-[29.05px]">
-              {blendedApr !== null ? <SignedNumber value={blendedApr} format={fmtPct} plus={false} /> : '—'}
+              {blendedApr !== null ? <SignedNumber value={blendedApr} format={fmtPct} /> : '—'}
             </div>
           </div>
           <div className="flex flex-col gap-2 border-l border-ink-700 pl-9">
@@ -308,6 +315,42 @@ export function AssetsHome() {
             <div className="num text-[24px] font-semibold leading-[29.05px] text-ink-50">{fmtUsd(totalCapital)}</div>
           </div>
         </div>
+        </>
+        )}
+
+        {/* Boros account, per margin bucket: health and free margin, so the
+            rate leg's safety and room to open more read off this page instead
+            of the Boros app. Health is price-independent; the available figure
+            falls back to the collateral token when the token has no USD price. */}
+        {borosMargin.length > 0 && (
+          <div className={`flex flex-wrap gap-x-9 gap-y-4 ${derived.length > 0 ? 'basis-full border-t border-ink-700/60 pt-6' : ''}`}>
+            <div className="w-full text-[14px] font-normal leading-[16.94px] text-ink-300" title="Your Boros margin, per collateral bucket, as the venue reports it.">
+              Boros account
+            </div>
+            {borosMargin.map((m, i) => (
+              // An isolated bucket holding only collateral has no marketId.
+              <div key={`${m.tokenId}:${m.isCross ? 'cross' : (m.marketId ?? `i${i}`)}`} className="flex flex-col gap-2">
+                <div className="num text-[13px] text-ink-300">
+                  {m.collateral} {m.isCross ? 'cross' : 'isolated'}
+                </div>
+                <div className="flex items-baseline gap-6">
+                  <span title="Equity ÷ maintenance margin. Above 1 is safe; the account liquidates at 1.">
+                    <span className="text-[11px] text-ink-500">Health </span>
+                    <span className={`num text-[18px] font-semibold leading-none ${healthClass(m.healthFactor)}`}>
+                      {m.healthFactor === null ? '—' : num(m.healthFactor, 2)}
+                    </span>
+                  </span>
+                  <span title="Free margin — what you can still post before opening more.">
+                    <span className="text-[11px] text-ink-500">Available </span>
+                    <span className="num text-[18px] font-semibold leading-none text-ink-50">
+                      {m.availableUsd !== null ? fmtUsd(m.availableUsd) : `${num(m.availableToken, 2)} ${m.collateral}`}
+                    </span>
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
       )}
 
@@ -345,8 +388,7 @@ export function AssetsHome() {
                   return { ...prev, sinceByAsset };
                 });
               }}
-              liquidation={gateHidden ? null : lineFor(group.base)}
-              gateHidden={gateHidden}
+              liquidation={lineFor(group.base)}
               exclusions={prefs.exclusions}
               onExclude={(key, value) => {
                 update((prev) => {
