@@ -778,7 +778,7 @@ describe('RollOverModal — open only (keep old legs)', () => {
     // The review has NO exit batch — just the new legs.
     expect(within(dialog).queryByText('Exit')).not.toBeInTheDocument();
     expect(within(dialog).queryByText('Re-entry')).not.toBeInTheDocument();
-    expect(within(dialog).getByText(/ties up roughly twice the Boros initial margin/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/half your Boros floating side is unhedged/)).toBeInTheDocument();
 
     const confirm = await within(dialog).findByRole('button', { name: 'Open new maturity' });
     await waitFor(() => expect(confirm).not.toBeDisabled(), { timeout: 4_000 });

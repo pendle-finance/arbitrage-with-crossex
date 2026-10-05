@@ -1667,9 +1667,9 @@ export function RollOverModal({
             </div>
             {openOnly && (
               <p className="mt-2 text-[11.5px] leading-relaxed text-ink-400">
-                Opens the new maturity and leaves the old legs running — a double hedge that ties up
-                roughly twice the Boros initial margin until the old legs mature. The old legs settle
-                for free at maturity; close the excess from the position view whenever you like.
+                Opens the new maturity and keeps the old legs until they mature. Until then half your
+                Boros floating side is unhedged, so rate moves hit your PnL, and it uses about 2× the
+                margin. Close the extra legs anytime from Positions.
               </p>
             )}
           </div>
@@ -2691,8 +2691,8 @@ function OpenOnlyReview({
       {/* A double hedge: it earns nothing to close the old legs, but it costs
           margin to hold both until they mature. */}
       <p className="rounded-lg border border-amber-500/25 bg-amber-500/[0.04] px-3 py-2 text-[11.5px] leading-relaxed text-amber-200">
-        Holding both maturities ties up roughly twice the Boros initial margin until the old legs mature. The old legs
-        settle for free at maturity — close the excess from the position view whenever you like.
+        Until the old legs mature, half your Boros floating side is unhedged, so rate moves hit your PnL, and it uses
+        about 2× the margin. Close the extra legs anytime from Positions.
       </p>
 
       <EstimateCard
