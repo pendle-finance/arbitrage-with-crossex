@@ -1,0 +1,411 @@
+/* Page-scoped styles for the /ltp pitch page (LtpLandingApp) — imported only
+ * there, so the terminal build never carries them. Static looks live in the
+ * component's inline styles (transcribed from the design canvas,
+ * published-ltp@f824a9b); this file holds what inline styles
+ * can't express: keyframes, hover states (the canvas's `style-hover`), and the
+ * mobile restructures. `!important` on hover colors is deliberate — the base
+ * value is an inline style, which otherwise always wins. */
+
+@keyframes lp-live-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.4);
+  }
+  50% {
+    opacity: 0.5;
+    box-shadow: 0 0 0 5px rgba(52, 211, 153, 0);
+  }
+}
+
+@keyframes lp-fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.lp-fade-up {
+  animation: lp-fade-up 0.7s ease-out both;
+}
+
+@keyframes lp-nudge {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(4px);
+  }
+}
+
+.lp-expand-all {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid #1c2029;
+  background: #0d0f13;
+  border-radius: 999px;
+  padding: 9px 18px;
+  color: #8a92a3;
+  font-size: 12.5px;
+  font-weight: 500;
+  transition: border-color 0.25s ease, color 0.25s ease;
+}
+
+.lp-expand-all:hover {
+  border-color: rgba(34, 211, 238, 0.5);
+  color: #e9ebf0;
+}
+
+.lp-expand-arrow {
+  color: #67e8f9;
+  font-size: 14px;
+  line-height: 1;
+  animation: lp-nudge 1.8s ease-in-out infinite;
+}
+
+/* Keep the pitch's typography independent of the host dashboard body. */
+.lp-root {
+  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  color: #e9ebf0;
+}
+
+.lp-root ::selection {
+  background: rgba(34, 211, 238, 0.25);
+}
+
+/* The canvas's link hover-lighten; base colors are inline, hence !important.
+ * The CTA pills manage their own hover colors. */
+.lp-root a:not(.lp-cta):hover {
+  color: #a5f3fc !important;
+}
+
+.lp-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #34d399;
+  animation: lp-live-pulse 2.2s ease-in-out infinite;
+  flex: none;
+}
+
+.lp-dot-sm {
+  width: 6px;
+  height: 6px;
+}
+
+/* Buttons carry the canvas's div styling — reset the UA chrome once. */
+.lp-btn {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  text-align: left;
+  cursor: pointer;
+}
+
+.lp-nav-pill:hover {
+  background: #151922 !important;
+  color: #e9ebf0 !important;
+}
+
+.lp-cta:hover {
+  background: #67e8f9 !important;
+  color: #062a33 !important;
+}
+
+.lp-hub-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.4);
+}
+
+.lp-opp-card:hover {
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+.lp-asm-line:hover {
+  border-color: #3a4150 !important;
+}
+
+.lp-asm-pill:hover {
+  border-color: #67e8f9 !important;
+  transform: translateY(-1px);
+}
+
+.lp-range {
+  width: 100%;
+  accent-color: #22d3ee;
+  margin: 8px 0 0;
+  display: block;
+}
+
+.lp-scroll-x {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* ---- Hub: fan + 3 cards on desktop, stacked cards (no fan) on mobile ------ */
+
+/* ---- Rail mode: the mind-map boxes sit at their sections on the left,
+ * strung on a trunk line that runs down from the title ---------------------- */
+
+.lp-sec {
+  position: relative;
+  transition: padding-left 0.55s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Per-section trunk segment; the pieces join into one continuous line. */
+.lp-sec::before {
+  content: '';
+  position: absolute;
+  left: 11px;
+  top: 0;
+  height: 100%;
+  border-left: 1.5px solid #2a3140;
+  opacity: 0;
+  transition: opacity 0.45s ease;
+  pointer-events: none;
+}
+
+/* The gap between the hub (curve endpoint) and the first section. */
+.lp-secs::before {
+  content: '';
+  position: absolute;
+  left: 11px;
+  top: -28px;
+  height: 28px;
+  border-left: 1.5px solid #2a3140;
+  opacity: 0;
+  transition: opacity 0.45s ease;
+  pointer-events: none;
+}
+
+.lp-rail .lp-sec {
+  padding-left: 34px;
+}
+
+.lp-rail .lp-sec::before,
+.lp-secs.lp-rail::before {
+  opacity: 1;
+}
+
+/* The trunk ends at the last box's elbow, not the page bottom. */
+.lp-rail .lp-sec:last-child::before {
+  height: 56px;
+}
+
+/* Elbow from the trunk into a section's box. */
+.lp-sec-stub {
+  position: absolute;
+  left: 11px;
+  top: 54px;
+  width: 23px;
+  border-top: 1.5px solid #2a3140;
+  opacity: 0;
+  transition: opacity 0.45s ease, border-color 0.3s ease;
+  pointer-events: none;
+}
+
+.lp-rail .lp-sec-stub {
+  opacity: 1;
+}
+
+.lp-sec-head {
+  padding: 6px 0 14px;
+}
+
+@media (max-width: 719px) {
+  /* !important: the base display on these elements is an inline style. */
+  .lp-hub-fan {
+    display: none !important;
+  }
+  /* Rail geometry tightens on mobile (rail is on from the start there). */
+  .lp-rail .lp-sec {
+    padding-left: 22px;
+  }
+  .lp-sec::before,
+  .lp-secs::before,
+  .lp-sec-stub {
+    left: 6px;
+  }
+  .lp-sec-stub {
+    width: 12px;
+    top: 46px;
+  }
+  .lp-sec1-stub {
+    display: none;
+  }
+}
+
+/* ---- Three-parts diagram: 2-col grid with connector zones on desktop,
+ * single stacked column with divider notes on mobile ----------------------- */
+
+.lp-sys-inner {
+  min-width: 880px;
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) 104px minmax(0, 1fr);
+  grid-template-rows: auto 52px auto;
+}
+
+.lp-sys-part1 {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.lp-sys-conn-col {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.lp-sys-part2 {
+  grid-column: 3;
+  grid-row: 1;
+}
+
+.lp-sys-conn-row {
+  grid-column: 1;
+  grid-row: 2;
+}
+
+.lp-sys-part3 {
+  grid-column: 1 / -1;
+  grid-row: 3;
+}
+
+.lp-sys-divider {
+  display: none;
+}
+
+@media (max-width: 879px) {
+  .lp-sys-inner {
+    min-width: 0;
+    display: block;
+  }
+  .lp-sys-conn-col,
+  .lp-sys-conn-row {
+    display: none !important;
+  }
+  .lp-sys-divider {
+    display: block;
+    padding: 12px 4px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    line-height: 1.55;
+    color: #5a6273;
+    text-align: center;
+  }
+}
+
+/* ---- Top-up loop: 2×2 cycle on desktop, stacked 01→04 on mobile ---------- */
+
+.lp-loop-grid {
+  display: grid;
+  grid-template-columns: 1fr 34px 1fr;
+  grid-template-rows: auto 34px auto;
+  gap: 8px;
+}
+
+.lp-loop-s1 {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.lp-loop-a1 {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.lp-loop-s2 {
+  grid-column: 3;
+  grid-row: 1;
+}
+
+.lp-loop-a4 {
+  grid-column: 1;
+  grid-row: 2;
+}
+
+.lp-loop-cycle {
+  grid-column: 2;
+  grid-row: 2;
+}
+
+.lp-loop-a2 {
+  grid-column: 3;
+  grid-row: 2;
+}
+
+.lp-loop-s4 {
+  grid-column: 1;
+  grid-row: 3;
+}
+
+.lp-loop-a3 {
+  grid-column: 2;
+  grid-row: 3;
+}
+
+.lp-loop-s3 {
+  grid-column: 3;
+  grid-row: 3;
+}
+
+.lp-loop-marrow {
+  display: none;
+}
+
+@media (max-width: 599px) {
+  .lp-loop-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .lp-loop-a1,
+  .lp-loop-a2,
+  .lp-loop-a3,
+  .lp-loop-a4,
+  .lp-loop-cycle {
+    display: none !important;
+  }
+  .lp-loop-marrow {
+    display: block;
+    text-align: center;
+    color: #3a4150;
+    font-size: 15px;
+    line-height: 1;
+  }
+  /* Visual order on mobile is the cycle order 01→02→03→04. */
+  .lp-loop-s1 {
+    order: 1;
+  }
+  .lp-loop-m1 {
+    order: 2;
+  }
+  .lp-loop-s2 {
+    order: 3;
+  }
+  .lp-loop-m2 {
+    order: 4;
+  }
+  .lp-loop-s3 {
+    order: 5;
+  }
+  .lp-loop-m3 {
+    order: 6;
+  }
+  .lp-loop-s4 {
+    order: 7;
+  }
+  .lp-loop-m4 {
+    order: 8;
+  }
+}

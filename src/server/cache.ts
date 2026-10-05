@@ -71,7 +71,12 @@ export class TtlCache {
     key: string,
     ttlMs: number,
     fetch: () => Promise<T>,
-    opts?: { fresh?: boolean },
+    opts?: {
+      fresh?: boolean;
+      /** Display-only scans may serve expired data during a background refresh.
+       * Never enable this for account state used to authorize a trade. */
+      staleWhileRevalidate?: boolean;
+    },
   ): Promise<{ value: T; stale: boolean }> {
     const now = Date.now();
     let entry = this.entries.get(key);
@@ -83,6 +88,14 @@ export class TtlCache {
     // Rate-limit cooldown (per key): serve whatever we have rather than refetch.
     // A `fresh` request bypasses this and attempts a live read anyway.
     if (entry?.has && !opts?.fresh && now < entry.cooldownUntil) {
+      return { value: entry.value as T, stale: true };
+    }
+    if (entry?.has && !opts?.fresh && opts?.staleWhileRevalidate) {
+      if (!entry.inflight) {
+        // Reuse the guarded write-back path: a later fresh fetch wins, and a
+        // busted entry cannot be resurrected by a late background response.
+        void this.get(key, ttlMs, fetch, { fresh: true }).catch(() => {});
+      }
       return { value: entry.value as T, stale: true };
     }
     if (entry?.inflight && !opts?.fresh) {

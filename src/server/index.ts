@@ -266,6 +266,14 @@ if (fs.existsSync(path.join(webDist, 'index.html'))) {
         .send(tokenizedIndexHtml(webDist, token));
     app.get('/', serveIndex);
     app.get('/index.html', serveIndex);
+    const ltpHtml = path.join(webDist, 'ltp.html');
+    if (fs.existsSync(ltpHtml)) {
+      const serveLtp = async (_req: unknown, reply: Parameters<typeof serveIndex>[1]) =>
+        reply.header('cache-control', 'no-store').type('text/html; charset=utf-8')
+          .send(fs.readFileSync(ltpHtml, 'utf8').replace(/__ARB_TOKEN__/g, token));
+      app.get('/ltp', serveLtp);
+      app.get('/ltp.html', serveLtp);
+    }
   }
   app.register(fastifyStatic, { root: webDist });
 }

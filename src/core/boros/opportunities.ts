@@ -237,7 +237,7 @@ export interface BuildOpportunitiesOptions {
   takerFeeOverride?: number;
 }
 
-const usd = (n: number): string => `$${Math.round(n).toLocaleString('en-US')}`;
+export const usd = (n: number): string => `$${Math.round(n).toLocaleString('en-US')}`;
 
 /**
  * VWAP over the FILLED portion of one Boros book side, walking levels in order
@@ -414,11 +414,50 @@ export function groupBorosMarkets(markets: BorosMarket[], nowSec: number): Marke
 // Per-market execution
 // ---------------------------------------------------------------------------
 
-interface SideExec {
+export interface SideExec {
   apr: number;
   /** USD actually available on that side; null under `mark` (no book walked). */
   filledUsd: number | null;
   insufficient: boolean;
+}
+
+/**
+ * Both exec sides of one Boros market at the chosen size — mark mode quotes the
+ * mark APR with no book, market mode walks both sides of the injected book.
+ * Shared by every opportunities engine (CrossEx, LTP) so they can never
+ * disagree on depth semantics.
+ */
+export function borosSideExec(
+  market: BorosMarket,
+  borosBooks: Map<number, BorosOrderBook | null>,
+  borosEntry: BorosEntryMode,
+  notionalUsd: number,
+  collateralPriceUsd: number | null,
+): { short: SideExec | null; long: SideExec | null; bookStatus: BookStatus } {
+  if (borosEntry === 'mark') {
+    return {
+      short: { apr: market.markApr, filledUsd: null, insufficient: false },
+      long: { apr: market.markApr, filledUsd: null, insufficient: false },
+      bookStatus: 'not-fetched',
+    };
+  }
+  let short: SideExec | null = null;
+  let long: SideExec | null = null;
+  const book = borosBooks.get(market.marketId) ?? null;
+  if (book && collateralPriceUsd !== null) {
+    const bidWalk = walkBorosBook(book.bids, notionalUsd, collateralPriceUsd);
+    const askWalk = walkBorosBook(book.asks, notionalUsd, collateralPriceUsd);
+    short = bidWalk && { apr: bidWalk.execApr, filledUsd: bidWalk.filledUsd, insufficient: bidWalk.insufficient };
+    long = askWalk && { apr: askWalk.execApr, filledUsd: askWalk.filledUsd, insufficient: askWalk.insufficient };
+  }
+  // A side with no levels at all is 'unavailable', not thin: there is no rate
+  // to quote there, and the per-side execAprs say which one is missing.
+  const bookStatus: BookStatus = !short || !long
+    ? 'unavailable'
+    : short.insufficient || long.insufficient
+      ? 'insufficient-depth'
+      : 'ok';
+  return { short, long, bookStatus };
 }
 
 interface MarketRowBuild {
@@ -443,28 +482,9 @@ function buildMarketRow(
     ? (input.symbolsByVenueBase.get(`${crossexVenue}:${base}`) ?? null)
     : null;
 
-  let short: SideExec | null = null;
-  let long: SideExec | null = null;
-  let bookStatus: BookStatus;
-  if (options.borosEntry === 'mark') {
-    short = { apr: market.markApr, filledUsd: null, insufficient: false };
-    long = { apr: market.markApr, filledUsd: null, insufficient: false };
-    bookStatus = 'not-fetched';
-  } else {
-    const book = input.borosBooks.get(market.marketId) ?? null;
-    const px = collateralPriceUsd;
-    if (book && px !== null) {
-      const bidWalk = walkBorosBook(book.bids, options.notionalUsd, px);
-      const askWalk = walkBorosBook(book.asks, options.notionalUsd, px);
-      short = bidWalk && { apr: bidWalk.execApr, filledUsd: bidWalk.filledUsd, insufficient: bidWalk.insufficient };
-      long = askWalk && { apr: askWalk.execApr, filledUsd: askWalk.filledUsd, insufficient: askWalk.insufficient };
-    }
-    // A side with no levels at all is 'unavailable', not thin: there is no rate
-    // to quote there, and the per-side execAprs say which one is missing.
-    if (!short || !long) bookStatus = 'unavailable';
-    else if (short.insufficient || long.insufficient) bookStatus = 'insufficient-depth';
-    else bookStatus = 'ok';
-  }
+  const { short, long, bookStatus } = borosSideExec(
+    market, input.borosBooks, options.borosEntry, options.notionalUsd, collateralPriceUsd,
+  );
 
   return {
     market,
@@ -492,7 +512,7 @@ function buildMarketRow(
 // Perp legs
 // ---------------------------------------------------------------------------
 
-interface PerpLegCost {
+export interface PerpLegCost {
   makerRate: number | null;
   takerRate: number | null;
   /** Crossing cost of opening this leg at N, USD, positive = paid up vs mid. */
@@ -502,7 +522,7 @@ interface PerpLegCost {
 }
 
 /** Signed-against-the-taker crossing cost of `qty` on one side, in USD. */
-function crossCostUsd(
+export function crossCostUsd(
   book: NormalizedBook,
   side: 'BUY' | 'SELL',
   qty: number,
@@ -583,7 +603,7 @@ function perpLegCost(
  * assignment that minimises fees AND slippage JOINTLY — a fee-only pick can
  * lose more on the hedge's crossing cost than it saves.
  */
-function assignPerpCosts(
+export function assignPerpCosts(
   a: PerpLegCost,
   b: PerpLegCost,
   slipOf: (leg: PerpLegCost) => number | null,
@@ -829,7 +849,7 @@ const directionApr = (build: MarketRowBuild, options: BuildOpportunitiesOptions)
   options.borosEntry === 'mark' ? build.row.markApr : build.row.midApr;
 
 /** Descending sort that always sinks nulls to the bottom. */
-const byValueDesc = (x: number | null, y: number | null): number => {
+export const byValueDesc = (x: number | null, y: number | null): number => {
   if (x === null && y === null) return 0;
   if (x === null) return 1;
   if (y === null) return -1;

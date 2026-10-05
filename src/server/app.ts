@@ -26,6 +26,7 @@ import { assetViewRoutes } from './routes/assetView';
 import { borosAgentRoutes } from './routes/borosAgent';
 import { borosPairRoutes } from './routes/borosPair';
 import { opportunitiesRoutes } from './routes/opportunities';
+import { opportunitiesLtpRoutes, type LtpOpportunitiesDeps } from './routes/opportunitiesLtp';
 import { ordersRoutes } from './routes/orders';
 import { positionsRoutes } from './routes/positions';
 import { previewRoutes } from './routes/preview';
@@ -42,7 +43,7 @@ import type { TelegramLink } from './telegram/link';
 import type { TelegramStatus } from './telegram/status';
 import type { TelegramSync } from './telegram/sync';
 
-export interface AppDeps {
+export interface AppDeps extends LtpOpportunitiesDeps {
   getClients(): Clients;
   cache: TtlCache;
   dataDir: string;
@@ -218,6 +219,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     tradesRoutes,
     symbolsRoutes,
     opportunitiesRoutes,
+    opportunitiesLtpRoutes,
     borosPairRoutes,
     assetViewRoutes,
     borosAgentRoutes,

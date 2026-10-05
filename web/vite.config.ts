@@ -26,8 +26,14 @@ const readDevToken = (): string | null => {
   }
 };
 
-export default defineConfig(() => ({
+export default defineConfig(({ mode }) => ({
   base: '/',
+  build: mode === 'ltp' ? {
+    rollupOptions: { input: {
+      index: fileURLToPath(new URL('./index.html', import.meta.url)),
+      ltp: fileURLToPath(new URL('./ltp.html', import.meta.url)),
+    } },
+  } : undefined,
   plugins: [react()],
   // No publicDir: the terminal ships no static marketing assets. The public
   // site and its OG cards live in the arbitrage-landing repo.

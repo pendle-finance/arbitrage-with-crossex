@@ -10,7 +10,8 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "build:ltp": "tsc --noEmit && vite build --mode ltp"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.59.0",

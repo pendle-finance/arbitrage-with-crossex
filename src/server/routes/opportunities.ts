@@ -65,13 +65,13 @@ interface OpportunitiesQuery {
 }
 
 /** Default quote for a venue's PUBLIC book when no CrossEx symbol names one. */
-function fallbackQuote(venue: string): string {
+export function fallbackQuote(venue: string): string {
   if (venue === 'HYPERLIQUID' || venue === 'LIGHTER') return 'USDC';
   if (venue === 'KRAKEN') return 'USD';
   return 'USDT';
 }
 
-function parseNotionalUsd(raw: string | undefined): number {
+export function parseNotionalUsd(raw: string | undefined): number {
   if (raw === undefined || raw === '') return DEFAULT_NOTIONAL_USD;
   const n = Number(raw);
   if (!Number.isFinite(n) || n < MIN_NOTIONAL_USD || n > MAX_NOTIONAL_USD) {
@@ -83,7 +83,7 @@ function parseNotionalUsd(raw: string | undefined): number {
   return n;
 }
 
-function parseMode<T extends string>(
+export function parseMode<T extends string>(
   raw: string | undefined,
   allowed: readonly T[],
   fallback: T,
