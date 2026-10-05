@@ -247,9 +247,9 @@ describe('DealModal', () => {
     expect(document.querySelector('[data-mark="fill"]')).toBeNull();
   });
 
-  it('re-pegs to a custom price, snapped to the venue tick', async () => {
+  it('re-pegs a BUY maker to a custom price, snapped DOWN to the venue tick', async () => {
     const bodies: Array<Record<string, unknown>> = [];
-    renderModal(); // default OPENING deal, tick 0.01
+    renderModal(); // default OPENING deal, leg A BUY, tick 0.01
     server.use(
       http.post('/api/deals/:id/:cmd', async ({ params, request }) => {
         bodies.push({ cmd: String(params.cmd), ...((await request.json()) as object) });
@@ -263,14 +263,43 @@ describe('DealModal', () => {
     expect(btn).toBeDisabled();
     fireEvent.change(input, { target: { value: '-5' } });
     expect(btn).toBeDisabled();
+    // Below one tick a BUY snaps to 0 → still disabled, never sent.
+    fireEvent.change(input, { target: { value: '0.004' } });
+    expect(btn).toBeDisabled();
 
-    // An off-tick price goes out snapped to the 0.01 tick.
-    fireEvent.change(input, { target: { value: '2497.137' } });
+    // 0.6 tick above 2497.13: nearest would be 2497.14, a resting BUY goes DOWN.
+    fireEvent.change(input, { target: { value: '2497.136' } });
+    expect(btn).toBeEnabled();
+    fireEvent.click(btn);
+    await waitFor(() => expect(bodies).toEqual([{ cmd: 'repeg', price: '2497.13' }]));
+    // The input clears once the command lands.
+    await waitFor(() => expect(input).toHaveValue(''));
+  });
+
+  it('re-pegs a SELL maker to a custom price, snapped UP to the venue tick', async () => {
+    const bodies: Array<Record<string, unknown>> = [];
+    renderModal(
+      makeDealView({
+        pair: {
+          a: { contract: 'GATE_FUTURE_ETH_USDT', side: 'SELL', lot: '0.001', minSize: '0', minNotional: '0', tick: '0.01' },
+          b: { contract: 'BINANCE_FUTURE_ETH_USDT', side: 'BUY', lot: '0.001', minSize: '0', minNotional: '0', tick: '0.01' },
+        },
+      }),
+    );
+    server.use(
+      http.post('/api/deals/:id/:cmd', async ({ params, request }) => {
+        bodies.push({ cmd: String(params.cmd), ...((await request.json()) as object) });
+        return HttpResponse.json(env({ id: String(params.id) }));
+      }),
+    );
+
+    const input = await screen.findByLabelText('Custom re-peg price');
+    const btn = screen.getByRole('button', { name: 'Re-peg to price' });
+    // 0.4 tick above 2497.13: nearest would be 2497.13, a resting SELL goes UP.
+    fireEvent.change(input, { target: { value: '2497.134' } });
     expect(btn).toBeEnabled();
     fireEvent.click(btn);
     await waitFor(() => expect(bodies).toEqual([{ cmd: 'repeg', price: '2497.14' }]));
-    // The input clears once the command lands.
-    await waitFor(() => expect(input).toHaveValue(''));
   });
 
   it('Convert now POSTs the command', async () => {

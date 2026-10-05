@@ -240,7 +240,7 @@ function borrowed(borrow: number): RebalanceBucket {
 }
 
 describe('borrow pill', () => {
-  it('shows the USDC borrow in the header on every tab, and opens Balances on click', async () => {
+  it('shows the USDC borrow in the header on every tab, and opens Accounts on click', async () => {
     mockApp();
     server.use(rebalanceHandler(makeRebalanceView({ buckets: [borrowed(8.5)] })));
     await renderApp();
@@ -250,16 +250,16 @@ describe('borrow pill', () => {
 
     await userEvent.click(pill);
 
-    expect(tab(/^Balances/)).toHaveAttribute('aria-selected', 'true');
+    expect(tab(/^Accounts/)).toHaveAttribute('aria-selected', 'true');
     expect(panel('balances')).toBeVisible();
     expect(within(panel('balances')).getByRole('region', { name: 'Rebalance' })).toBeVisible();
 
     await userEvent.hover(pill);
     const card = await screen.findByRole('tooltip');
-    const link = within(card).getByRole('button', { name: 'Rebalance on Balances' });
+    const link = within(card).getByRole('button', { name: 'Rebalance on Accounts' });
     await userEvent.click(link);
 
-    expect(tab(/^Balances/)).toHaveAttribute('aria-selected', 'true');
+    expect(tab(/^Accounts/)).toHaveAttribute('aria-selected', 'true');
   });
 
   it('shows a USDT borrow the same way, naming the CrossEx wallet', async () => {
@@ -277,60 +277,18 @@ describe('borrow pill', () => {
     expect(within(card).queryByText('For')).toBeNull();
   });
 
-  it('puts the nearest liquidation line in the margin gauges hover', async () => {
+  it('the header sums the accounts up: status, then available / balance per venue, and opens Accounts', async () => {
     mockApp();
     server.use(
       http.get('/api/account', () =>
-        HttpResponse.json(
-          env({
-            ...account,
-            marginBalance: '20000',
-            maintenanceMargin: '2500',
-            assets: [
-              { coin: 'USDT', exchangeType: 'CROSSEX', balance: '20000', equity: '20000', availableBalance: '20000', upnl: '0', liability: '0' },
-              { coin: 'USDC', exchangeType: 'HYPERLIQUID', balance: '0', equity: '0', availableBalance: '0', upnl: '0', liability: '0' },
-            ],
-          }),
-        ),
-      ),
-      http.get('/api/positions', () =>
-        HttpResponse.json(
-          env<PositionsResponse>({
-            positions: [
-              { ...ethPosition, symbol: 'GATE_FUTURE_ETH_USDT', positionValue: '250000', markPrice: '2300', maintenanceMargin: '1250' },
-              { ...ethPosition, symbol: 'HYPERLIQUID_FUTURE_ETH_USDC', positionValue: '250000', markPrice: '2300', maintenanceMargin: '1250' },
-            ],
-            exposure: [
-              {
-                base: 'ETH',
-                legs: [
-                  { symbol: 'GATE_FUTURE_ETH_USDT', exchange: 'GATE', quote: 'USDT', side: 'LONG', qty: 108.7, value: 250000 },
-                  { symbol: 'HYPERLIQUID_FUTURE_ETH_USDC', exchange: 'HYPERLIQUID', quote: 'USDC', side: 'SHORT', qty: 108.7, value: 250000 },
-                ],
-                longValue: 250000,
-                shortValue: 250000,
-                netValue: 0,
-                grossValue: 500000,
-                neutral: true,
-                singleLeg: false,
-              },
-            ],
-          }),
-        ),
+        HttpResponse.json(env({ ...account, marginBalance: '20000', availableMargin: '15000', maintenanceMargin: '2500' })),
       ),
     );
     await renderApp();
 
-    // The header meters carry the whole margin story in one hover title.
-    const gauges = screen.getByRole('img', { name: 'Initial and maintenance margin' });
-    await waitFor(() =>
-      expect(gauges).toHaveAttribute(
-        'title',
-        expect.stringContaining(
-          'Nearest liquidation: ETH rises to $3,764 (+64%). Losing leg: Hyperliquid short. Assumes other coins do not move.',
-        ),
-      ),
-    );
+    const status = await screen.findByRole('button', { name: /Healthy.*Gate \$15,000.*\/ \$20,000/ });
+    await userEvent.click(status);
+    expect(tab(/^Accounts/)).toHaveAttribute('aria-selected', 'true');
   });
 
   it('shows the pill under 1 USDC of borrow', async () => {

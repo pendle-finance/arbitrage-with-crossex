@@ -32,6 +32,7 @@ import { PairBookImpact } from './PriceImpactGraph';
 import { CoinCombobox, FieldLabel } from './SymbolCombobox';
 import { useTradeFlowOptional } from './TradeFlow';
 import { usePreviewDebounced } from './usePreview';
+import { TRACKED_PRICE_TOLERANCE, withinTrackedDrift } from './trackedPriceDrift';
 
 /** The default maker resting price: one bid–ask gap BEHIND the touch (BUY at
  * bid − gap, SELL at ask + gap). Both edges sit on the venue tick so the offset
@@ -252,7 +253,16 @@ export function PairTicket({ onExecuted }: { onExecuted?: () => void } = {}) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [longSym, shortSym, notionalOk, notionalStr, sizeUnit, levLong, levShort, pairGroupId, mode, makerLegPick, makerPriceStr, timeoutSec]);
 
-  const preview = usePreviewDebounced('ticket-pair', actions, { debounceMs: 400, refetchInterval: 3_000 });
+  // The same tolerance ExecuteControl runs under, so the estimate card never
+  // says "previewing…" beside an armed Execute while the maker price tracks.
+  const preview = usePreviewDebounced('ticket-pair', actions, {
+    debounceMs: 400,
+    refetchInterval: 3_000,
+    tolerate:
+      mode === 'maker' && !pricePinned
+        ? (shown, current) => withinTrackedDrift(shown, current, TRACKED_PRICE_TOLERANCE)
+        : undefined,
+  });
   const legLong = preview.previews?.[0];
   const legShort = preview.previews?.[1];
   useEffect(() => {
@@ -513,6 +523,10 @@ export function PairTicket({ onExecuted }: { onExecuted?: () => void } = {}) {
       <ExecuteControl
         scope="ticket-pair"
         actions={actions}
+        // A maker price that tracks the book moves every preview; within 5 bps
+        // it is the same order (it goes out pegged to the live touch), so
+        // Execute stays armed. A typed price re-previews as before.
+        trackedPriceTolerance={trackingMaker ? TRACKED_PRICE_TOLERANCE : undefined}
         tone="cyan"
         label={
             <>

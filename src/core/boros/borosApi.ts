@@ -583,18 +583,111 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
     failure: { code: 'unknown', message },
   });
 
+  /** `bulkCancels` calldata clearing every resting order on these markets. */
+  const cancelCalldatas = async (marketIds: number[] = []): Promise<Hex[]> => {
+    const perMarket = await Promise.all(
+      marketIds.map(async (marketId) => {
+        const marketAcc = await marketAccFor(marketId);
+        const { calls } = await call<{ calls: PlaceOrderCall[] }>('/v1/calldata-builder/agent/cancel-orders', {
+          markets: [{ marketAcc, marketId, cancelAll: true, orderIds: [] }],
+        });
+        return (calls ?? []).map((c) => c.calldata as Hex);
+      }),
+    );
+    return perMarket.flat();
+  };
+
+  /**
+   * `enterExitMarkets` calldata that frees market slots on the cross accounts
+   * these markets trade on, for the head of the same batch.
+   *
+   * A cross account may be in only so many markets (`MMMarketLimitExceeded`,
+   * MarginManager.sol), and a matured market keeps its slot until it is
+   * exited. The core builder the Boros app uses exits markets before every
+   * order (pendle-backend-v3 `TradeService.getExitMarketIds`); the open-api
+   * `place-order` this client uses does not, so it is done here:
+   * - always, every matured market: the contract lets a matured market go
+   *   even with a residual position (MarketHubEntry.sol `exitMarket`);
+   * - with `withEmpty`, also every market holding no position and no order.
+   * Never a market this batch trades.
+   *
+   * Best effort, like the gas top-up: a failed read sends the batch without
+   * exits, and the venue stays the check.
+   */
+  const exitCalldatas = async (marketIds: number[], withEmpty: boolean): Promise<Hex[]> => {
+    try {
+      const keep = new Set(marketIds);
+      const accs = [...new Set((await Promise.all(marketIds.map(marketAccFor))).map((a) => a.toLowerCase()))];
+      const infos = withEmpty
+        ? (await call<{ results?: Array<{ marketAcc?: string; positions?: Array<{ marketId: number; signedSize?: string; orders?: unknown[] }> }> }>(
+            `/v1/accounts/market-acc-infos-by-root?root=${config.root}`,
+            undefined,
+            'GET',
+          )).results ?? []
+        : [];
+      const out: Hex[] = [];
+      for (const marketAcc of accs) {
+        const { results } = await call<{ results?: Array<{ marketId: number; isMatured?: boolean }> }>(
+          `/v1/accounts/entered-markets?marketAcc=${marketAcc}`,
+          undefined,
+          'GET',
+        );
+        const exits = new Set((results ?? []).filter((m) => m.isMatured === true).map((m) => m.marketId));
+        const positions = infos.find((r) => r.marketAcc?.toLowerCase() === marketAcc)?.positions ?? [];
+        for (const p of positions) {
+          if (BigInt(p.signedSize ?? '0') === 0n && (p.orders ?? []).length === 0) exits.add(p.marketId);
+        }
+        const ids = [...exits].filter((id) => !keep.has(id));
+        if (ids.length === 0) continue;
+        const built = await call<{ calls?: PlaceOrderCall[] }>('/v1/calldata-builder/agent/exit-markets', {
+          accountId: config.accountId,
+          isCross: true,
+          marketIds: ids,
+        });
+        out.push(...(built.calls ?? []).map((c) => c.calldata as Hex));
+      }
+      return out;
+    } catch {
+      return [];
+    }
+  };
+
+  /**
+   * Run an OPENING batch with the matured exits at its head. When the venue
+   * still refuses it for the market cap, nothing traded (the batch is
+   * atomic), so it is rebuilt once with the empty markets exited too — the
+   * same slots the Boros app frees at the cap.
+   */
+  const executeOpening = async (
+    reqs: BorosMarketOrderRequest[],
+    legCalldatas: Hex[],
+    opts: PlaceOrdersOptions | undefined,
+    cancels: Hex[],
+    marketIds: number[],
+  ): Promise<BorosLegFill[]> => {
+    const exits = await exitCalldatas(marketIds, false);
+    const fills = await execute(reqs, legCalldatas, opts, [...cancels, ...exits]);
+    if (!fills.every((f) => f.failure?.code === 'market-limit' && f.filledSize === 0)) return fills;
+    const more = await exitCalldatas(marketIds, true);
+    if (more.length === 0 || more.join() === exits.join()) return fills;
+    return execute(reqs, legCalldatas, opts, [...cancels, ...more]);
+  };
+
   const placeMarketOrders = async (
     reqs: BorosMarketOrderRequest[],
     opts?: PlaceOrdersOptions,
   ): Promise<BorosLegFill[]> => {
     if (reqs.length === 0) return [];
     let legs: Hex[];
+    let cancels: Hex[];
     try {
-      legs = await Promise.all(reqs.map(buildOrderCalldata));
+      [legs, cancels] = await Promise.all([Promise.all(reqs.map(buildOrderCalldata)), cancelCalldatas(opts?.cancelOrdersOn)]);
     } catch (err) {
       return reqs.map((req) => neverSentLeg(req, err));
     }
-    return execute(reqs, legs, opts);
+    // A close enters no market, so it needs no slot.
+    if (opts?.reducing === true) return execute(reqs, legs, opts, cancels);
+    return executeOpening(reqs, legs, opts, cancels, reqs.map((r) => r.marketId));
   };
 
   /**
@@ -640,10 +733,15 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
     };
   };
 
-  const rollOver = async (legs: BorosRollLeg[]): Promise<BorosLegFill[]> => {
+  const rollOver = async (
+    legs: BorosRollLeg[],
+    opts?: Pick<PlaceOrdersOptions, 'cancelOrdersOn'>,
+  ): Promise<BorosLegFill[]> => {
     if (legs.length === 0) return [];
     let calls: RollOverCall[];
+    let cancels: Hex[];
     try {
+      cancels = await cancelCalldatas(opts?.cancelOrdersOn);
       const res = await call<{ calls: RollOverCall[] }>('/v1/calldata-builder/agent/roll-over', await rollOverBody(legs));
       calls = res?.calls ?? [];
       if (calls.length !== legs.length * 2) throw new CoreError('Boros returned an unexpected number of roll-over calls', 'venue-rejected');
@@ -663,7 +761,13 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
       limitApr: c.resolved?.requestedRate ?? 0,
       clientOrderId: '',
     }));
-    return execute(reqs, calls.map((c) => c.calldata as Hex), { reducing: false, topUpAfter: legs.length });
+    return executeOpening(
+      reqs,
+      calls.map((c) => c.calldata as Hex),
+      { reducing: false, topUpAfter: legs.length },
+      cancels,
+      legs.flatMap((l) => [l.fromMarketId, l.toMarketId]),
+    );
   };
 
   /**
@@ -684,6 +788,8 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
     reqs: BorosMarketOrderRequest[],
     legCalldatas: Hex[],
     opts?: PlaceOrdersOptions,
+    /** Calls that run ahead of everything else (resting-order cancels). */
+    leading: Hex[] = [],
   ): Promise<BorosLegFill[]> => {
     let signed: SignedCall[];
     let topUpCount: number;
@@ -691,7 +797,7 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
     try {
       const topUp = await autoTopUpCalldata(opts?.reducing === true);
       topUpCount = topUp.length;
-      signed = await signCalls([...legCalldatas.slice(0, at), ...topUp, ...legCalldatas.slice(at)]);
+      signed = await signCalls([...leading, ...legCalldatas.slice(0, at), ...topUp, ...legCalldatas.slice(at)]);
     } catch (err) {
       return reqs.map((req) => neverSentLeg(req, err));
     }
@@ -705,11 +811,13 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
       if (status !== undefined && status < 500) return reqs.map((req) => neverSentLeg(req, err));
       throw err;
     }
-    // Everything below indexes BY LEG, and the top-up occupies `topUpCount`
-    // slots of the submission starting at `at`. Read leg results off a view
-    // with those slots removed, or a leg reads the top-up's outcome as its own.
-    const legResponses = [...responses.slice(0, at), ...responses.slice(at + topUpCount)];
-    const submissionIndex = (i: number): number => (i < at ? i : i + topUpCount);
+    // Everything below indexes BY LEG: the leading cancels come first and the
+    // top-up occupies `topUpCount` slots starting at leg `at`. Read leg results
+    // off a view with those slots removed, or a leg reads another call's
+    // outcome as its own.
+    const afterLead = responses.slice(leading.length);
+    const legResponses = [...afterLead.slice(0, at), ...afterLead.slice(at + topUpCount)];
+    const submissionIndex = (i: number): number => leading.length + (i < at ? i : i + topUpCount);
 
     // With `requireSuccess` the legs stand or fall together, so one error is
     // the whole batch's — the top-up's included: it is in the same submission,
@@ -803,13 +911,9 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
     simulateRollOver,
 
     async cancelOrders(marketId: number): Promise<void> {
-      const marketAcc = await marketAccFor(marketId);
-      const { calls } = await call<{ calls: PlaceOrderCall[] }>(
-        '/v1/calldata-builder/agent/cancel-orders',
-        { markets: [{ marketAcc, marketId, cancelAll: true, orderIds: [] }] },
-      );
-      if (!calls?.length) return;
-      const res = await submitCalls(await signCalls(calls.map((c) => c.calldata)));
+      const calls = await cancelCalldatas([marketId]);
+      if (!calls.length) return;
+      const res = await submitCalls(await signCalls(calls));
       // An empty result is "we cannot tell",
       // and reporting a cancel that may never have been submitted as done is
       // the one answer a remediation path must not give.

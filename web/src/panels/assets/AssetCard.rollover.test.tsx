@@ -2,7 +2,7 @@
  * The roll-over path through the asset card: a pair whose rate legs mature
  * inside the roll window (EXPIRY_WARN_SEC) is counted once in the banner, flagged on its
  * card in the 4 Leg Pairs tab, and offered a Roll over button that opens
- * the popup. A pair outside the window gets none of it.
+ * the popup. A pair outside the window keeps only the button, un-nudged.
  */
 import { cleanup, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -110,7 +110,7 @@ describe('AssetCard — roll over', () => {
       scrolled.push(this);
     };
     renderCard(book(8));
-    await userEvent.click(await screen.findByRole('button', { name: /pair can roll over/ }));
+    await userEvent.click(await screen.findByRole('button', { name: /pair due to roll/ }));
     const panel = screen.getByRole('tabpanel', { name: /4 Leg Pairs/ });
     // The pair's card is what lands at the top of the viewport.
     expect(scrolled).toHaveLength(1);
@@ -120,7 +120,7 @@ describe('AssetCard — roll over', () => {
     await userEvent.click(within(panel).getByRole('button', { name: /Gate LONG \/ Hyperliquid SHORT/ }));
     expect(within(panel).queryByRole('button', { name: 'Roll over' })).not.toBeInTheDocument();
     // The banner must show it again, not leave the fold as the user left it.
-    await userEvent.click(screen.getByRole('button', { name: /pair can roll over/ }));
+    await userEvent.click(screen.getByRole('button', { name: /pair due to roll/ }));
     expect(within(panel).getByRole('button', { name: 'Roll over' })).toBeInTheDocument();
   });
 
@@ -128,7 +128,7 @@ describe('AssetCard — roll over', () => {
     renderCard(book(8));
     // The banner counts pairs and sends the trader to the pairs tab — which
     // is the tab a card opens on (his call 2026-09-20), so leave it first.
-    const banner = await screen.findByRole('button', { name: /^1 pair can roll over/ });
+    const banner = await screen.findByRole('button', { name: /^1 pair due to roll/ });
     expect(screen.getByRole('tab', { name: /4 Leg Pairs/ })).toHaveAttribute('aria-selected', 'true');
     await userEvent.click(screen.getByRole('tab', { name: /Funding Bundles/ }));
     expect(screen.getByRole('tab', { name: /Funding Bundles/ })).toHaveAttribute('aria-selected', 'true');
@@ -157,7 +157,7 @@ describe('AssetCard — roll over', () => {
 
   it('the banner is quiet between 10 and 7 days out, loud a week from settlement', async () => {
     renderCard(book(8));
-    const quiet = (await screen.findByRole('button', { name: /pair can roll over/ })).closest('[data-tone]')!;
+    const quiet = (await screen.findByRole('button', { name: /pair due to roll/ })).closest('[data-tone]')!;
     expect(quiet).toHaveAttribute('data-tone', 'quiet');
     expect(within(quiet as HTMLElement).queryByText(/matures in/)).not.toBeInTheDocument();
     cleanup();
@@ -168,7 +168,7 @@ describe('AssetCard — roll over', () => {
     const loud = loudBtn.closest('[data-tone]')! as HTMLElement;
     expect(loud).toHaveAttribute('data-tone', 'loud');
     expect(within(loud).getByText(/Gate \/ Hyperliquid matures in 5d/)).toBeInTheDocument();
-    expect(within(loud).queryByText(/can roll over/)).not.toBeInTheDocument();
+    expect(within(loud).queryByText(/due to roll/)).not.toBeInTheDocument();
   });
 
   it('the guide pill explains the roll, the fee saving and when to do it', async () => {
@@ -390,10 +390,23 @@ describe('AssetCard — roll over', () => {
     expect(within(panel).queryByText(/Boros legs? missing/)).not.toBeInTheDocument();
   });
 
-  it('a pair maturing in 40 days: no banner, no flag, no button', () => {
+  it('a pair maturing in 40 days: no banner, no flag, a folded card — and a plain Roll over button inside it', async () => {
     renderCard(book(40));
-    expect(screen.queryByText(/can roll over|Roll over now/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/due to roll|Roll over now/)).not.toBeInTheDocument();
     expect(screen.queryByText('ready to roll')).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Roll over' })).not.toBeInTheDocument();
+    // Nothing reminds outside the window: the card stays folded.
+    const panel = screen.getByRole('tabpanel', { name: /4 Leg Pairs/ });
+    expect(within(panel).queryByRole('button', { name: 'Roll over' })).not.toBeInTheDocument();
+
+    // The roll itself is the trader's at any time (his call 2026-09-30):
+    // unfold the pair and the action is there, without the nudge.
+    await userEvent.click(within(panel).getByRole('button', { name: /Gate LONG \/ Hyperliquid SHORT/ }));
+    const roll = within(panel).getByRole('button', { name: 'Roll over' });
+    expect(roll).not.toHaveClass('roll-nudge');
+    await userEvent.click(roll);
+    expect(within(screen.getByRole('dialog')).getByRole('heading', { name: 'Roll over — Gate / Hyperliquid' })).toBeInTheDocument();
+    // Opening it by hand raises no banner and no flag.
+    expect(screen.queryByText(/due to roll|Roll over now/)).not.toBeInTheDocument();
+    expect(screen.queryByText('ready to roll')).not.toBeInTheDocument();
   });
 });

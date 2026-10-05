@@ -92,16 +92,20 @@ export function fitAtBand(
   entryLegs: ReadonlyArray<LadderLeg>,
   capApr: number,
 ): number | null {
-  const batches = [exitLegs, entryLegs];
-  if (batches.some((b) => b.length !== 2) || [...exitLegs, ...entryLegs].some((l) => !Array.isArray(l.depth))) {
-    return null;
-  }
-  return Math.min(
-    ...batches.map((legs) => {
-      const band = Math.min(...legs.map((l) => allowedOf(l, capApr)));
-      return Math.min(...legs.map((l) => capacityAt(l.depth as DepthLadder, band)));
-    }),
-  );
+  const fits = [exitLegs, entryLegs].map((legs) => fitLegsAtBand(legs, capApr));
+  return fits.some((f) => f === null) ? null : Math.min(...(fits as number[]));
+}
+
+/**
+ * The most that fills across ONE batch's two legs at the widest tolerance it
+ * may carry: their shared band (the tighter leg's), under the app's cap. Null
+ * until both legs carry a ladder. The entry-only sizing an open-only roll
+ * needs — it closes nothing, so there is no exit batch to bind the size.
+ */
+export function fitLegsAtBand(legs: ReadonlyArray<LadderLeg>, capApr: number): number | null {
+  if (legs.length !== 2 || legs.some((l) => !Array.isArray(l.depth))) return null;
+  const band = Math.min(...legs.map((l) => allowedOf(l, capApr)));
+  return Math.min(...legs.map((l) => capacityAt(l.depth as DepthLadder, band)));
 }
 
 /** The size to suggest for a position of `held`, off a book that fills

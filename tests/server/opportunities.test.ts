@@ -250,6 +250,20 @@ describe('GET /api/opportunities', () => {
     expect(group.bestPair).toBeNull();
   });
 
+  it('does not cache a missing leverage limit for the ticket routes', async () => {
+    app = makeTestApp({ borosFetch: borosStub(borosBodies()) });
+    mockGate(1, [riskLimits[0]]);
+    mockVenueBooks();
+
+    const res = await app.inject({ method: 'GET', url: '/api/opportunities', headers: HOST });
+    expect(res.statusCode).toBe(200);
+
+    mockGateGet('/rule/risk_limits', { body: riskLimits });
+    const detail = await app.inject({ method: 'GET', url: '/api/symbols/BINANCE_FUTURE_ETH_USDT', headers: HOST });
+    expect(detail.statusCode, detail.body).toBe(200);
+    expect(detail.json().data.leverageMax).toBe(25);
+  });
+
   it('keeps the scan alive when the risk-limit read itself fails', async () => {
     app = makeTestApp({ borosFetch: borosStub(borosBodies()) });
     mockGateGet('/rule/symbols', { body: ruleSymbols });

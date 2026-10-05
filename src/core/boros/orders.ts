@@ -131,6 +131,10 @@ export type BorosLegFailureCode =
    * entry requirement, not this order's margin) and not `no-gas`
    * (`payTreasury` cannot clear it). */
   | 'min-cash'
+  /** The cross account already holds the most markets Boros lets it enter
+   * (`MMMarketLimitExceeded`, MarginManager.sol), and none could be exited:
+   * each still holds a position or an order. */
+  | 'market-limit'
   /** Anything the venue rejected for another reason. */
   | 'rejected'
   /** The submission never got a usable answer; the fill state is UNKNOWN. */
@@ -232,7 +236,7 @@ export interface BorosOrderClient {
    * with `requireSuccess`. Returns one fill per order, every close first
    * then every open, in leg order.
    */
-  rollOver?(legs: BorosRollLeg[]): Promise<BorosLegFill[]>;
+  rollOver?(legs: BorosRollLeg[], opts?: Pick<PlaceOrdersOptions, 'cancelOrdersOn'>): Promise<BorosLegFill[]>;
   /** The same batch previewed by the venue on one simulated account state. */
   simulateRollOver?(legs: BorosRollLeg[]): Promise<BorosRollSimulation>;
   /** Force-cancel every resting order on one market (§6A remediation). */
@@ -256,6 +260,14 @@ export interface PlaceOrdersOptions {
    * legs that CLOSE lets that check see the margin those closes free.
    */
   topUpAfter?: number;
+  /**
+   * Markets whose resting orders are cancelled at the head of the SAME batch.
+   * A close that left an order resting could see it fill later and re-open
+   * the leg it just closed (Boros has no reduce-only flag); in one batch the
+   * cancel and the close stand or fall together, so a refused close also
+   * cancels nothing.
+   */
+  cancelOrdersOn?: number[];
 }
 
 /** The rate bound one leg carries, from its estimate and its tolerance. */
@@ -290,6 +302,9 @@ export interface SubmitBorosPairInput {
   /** Both legs only reduce what the account already holds. Decides how hard the
    * gas top-up tries: an exit is funded only when it truly cannot pay. */
   reducing?: boolean;
+  /** Markets to clear of resting orders in the same batch (see
+   * `PlaceOrdersOptions.cancelOrdersOn`). */
+  cancelOrdersOn?: number[];
 }
 
 export interface BorosPairResult {
@@ -367,6 +382,7 @@ export async function submitBorosPair(input: SubmitBorosPairInput): Promise<Boro
         // A close frees margin; a top-up it might need (a negative budget)
         // runs its own strict margin check, so it goes after the closes.
         topUpAfter: input.reducing ? reqs.length : 0,
+        cancelOrdersOn: input.cancelOrdersOn,
       });
       submitted.forEach(({ key, req }, i) => {
         byKey.set(key, fills[i] ?? failed(req, new Error(`no result returned for leg ${key}`)));
@@ -459,6 +475,8 @@ export function classifyLegFailure(err: unknown): BorosLegFailureCode {
    * through to `rejected` and keeps the venue's own wording.
    */
   if (/TOP_UP_AT_LEAST/.test(text)) return 'min-cash';
+  // `MMMarketLimitExceeded()`, or the same words as prose.
+  if (/MARKET_?LIMIT_?EXCEEDED/.test(text)) return 'market-limit';
   if (/INSUFFICIENT[ _]GAS|GAS[ _]BALANCE/.test(text)) {
     return 'no-gas';
   }
@@ -471,6 +489,14 @@ export function classifyLegFailure(err: unknown): BorosLegFailureCode {
   if (err instanceof CoreError) {
     if (err.category === 'insufficient-margin') return 'insufficient-margin';
     if (err.category === 'network' || err.category === 'rate-limited') return 'unknown';
+    // A 5xx with no reason the rules above recognise is no verdict at all:
+    // the venue may have run the batch before it failed to answer. Calling
+    // that a rejection dropped the replay memo and invited a second fill.
+    // (A refusal BEFORE submission never gets here as unknown — the venue
+    // adapter's `neverSentLeg` folds it back to a plain rejection, and a
+    // `[SIMULATE]` refusal provably sent nothing, whatever its status.)
+    const status = (err.details as { status?: unknown } | undefined)?.status;
+    if (!simulated && typeof status === 'number' && status >= 500) return 'unknown';
   }
   if (!simulated && /TIMEOUT|NETWORK|UNREACHABLE|ECONN|ABORT/.test(text)) return 'unknown';
   return 'rejected';

@@ -10,6 +10,7 @@
  * pair at the bottom that reads and writes the persisted selection.
  */
 import type { OpportunityGroup, OpportunityPair, Rebate } from '../api/types';
+import { daysToMaturity } from '../lib/boros';
 import { prettyVenue } from '../lib/fmt';
 import { readJson, writeJson } from '../lib/storage';
 import { heldTagFor, repriceHeld, type HeldPerps, type HeldTag } from './heldPerps';
@@ -41,8 +42,7 @@ export interface OpportunityRow {
 export const venueKey = (venue: string): string => venue.trim().toUpperCase();
 
 /** Days to maturity as the cards show it, so a chip and a card never disagree. */
-export const maturityDays = (secondsToMaturity: number): number =>
-  Math.max(1, Math.round(secondsToMaturity / 86_400));
+export const maturityDays = (secondsToMaturity: number): number => Math.max(1, daysToMaturity(secondsToMaturity, 0));
 
 /** Once shown, a row survives this far below zero before it drops out. Without
  * the band a pair hovering at 0% flips in and out on every poll, and every row

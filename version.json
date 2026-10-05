@@ -1,9 +1,11 @@
 {
-  "version": "1.7.2",
+  "version": "1.7.3",
   "highlights": [
-    "Settlement-fee rebates: a rebated wallet sees its rebate % on every opportunity and can include it in the APR",
-    "Positions count the rebate you have earned in Total PnL, the APR, the Boros table and the PnL waterfall",
-    "Viewing a wallet you are not logged in to is one clean read-only view: only that wallet, and the header says so",
-    "Telegram setup reads done only for the wallet the alerts are linked to"
+    "Accounts tab: every Gate and Boros account in one list, and one health status in the header",
+    "Roll into a new maturity without closing the old legs, and pay only the opening fee",
+    "Boros pair ticket: pick the coin, then the markets, then a maturity both list; each market shows its collateral",
+    "Safer Boros closes: both legs close in one batch, and your resting orders on those markets are cancelled with them",
+    "Boros opens exit your matured markets first, so an account full of old markets can still trade",
+    "Updates keep your port and folder, and Windows installs recover on their own"
   ]
 }

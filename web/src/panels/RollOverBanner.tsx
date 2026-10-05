@@ -13,6 +13,7 @@
  * 2026-09-20).
  */
 import { useEffect, useId, useRef, useState } from 'react';
+import { daysToMaturity } from '../lib/boros';
 import { fmtDateLocal, fmtPct, prettyVenue } from '../lib/fmt';
 import { EXPIRY_WARN_DAYS } from './assets/assetModel';
 import { useRollSignalsOptional, type RollSignal } from './rollSignal';
@@ -24,7 +25,7 @@ const ROLL_URGENT_DAYS = 7;
  * the bar to a second line (his call 2026-09-20). */
 const MAX_REASONS = 2;
 
-const daysTo = (sec: number, nowSec: number) => Math.max(0, Math.ceil((sec - nowSec) / 86_400));
+const daysTo = daysToMaturity;
 
 export function RollOverBanner({ onShowPositions }: { onShowPositions: () => void }) {
   const api = useRollSignalsOptional();
@@ -44,7 +45,7 @@ export function RollOverBanner({ onShowPositions }: { onShowPositions: () => voi
         node: (
           <>
             <span className="text-ink-300">{s.asset}</span> {name}:{' '}
-            <span className="font-semibold text-emerald-300">{`${o.rate >= 0 ? '+' : ''}${fmtPct(o.rate)}`}</span>{' '}
+            <span className="font-semibold text-emerald-300">{fmtPct(o.rate)}</span>{' '}
             ({daysTo(o.maturity, nowSec)} days){' '}
             <span className="text-ink-200">
               vs {fmtPct(o.current)} ({daysTo(o.currentMaturity, nowSec)} days) now
@@ -113,7 +114,7 @@ export function RollOverBanner({ onShowPositions }: { onShowPositions: () => voi
             </>
           ) : (
             <span className="font-medium">
-              {signals.length} pair{signals.length === 1 ? '' : 's'} can roll over
+              {signals.length} pair{signals.length === 1 ? '' : 's'} due to roll
             </span>
           )}
         </button>

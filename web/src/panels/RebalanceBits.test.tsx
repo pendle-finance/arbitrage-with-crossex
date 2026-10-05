@@ -210,7 +210,7 @@ describe('the wallet hover', () => {
     expect(within(card).getByText('Cash')).toBeInTheDocument();
     expect(within(card).getByText('Unrealized PnL')).toBeInTheDocument();
     expect(within(card).getByText(HOVER_TARGET)).toBeInTheDocument();
-    expect([...card.querySelectorAll('.num')].map((el) => el.textContent)).toEqual(['20.00', '+5.00', '30.00']);
+    expect([...card.querySelectorAll('.num')].map((el) => el.textContent)).toEqual(['20.00', '5.00', '30.00']);
   });
 
   it('hover swatches', () => {

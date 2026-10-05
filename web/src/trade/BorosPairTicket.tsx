@@ -27,7 +27,6 @@ import { useEffect, useMemo, useState } from 'react';
 import { useTradeFlowOptional } from './TradeFlow';
 import {
   useBorosAgent,
-  useBorosCancelAndClose,
   useBorosPairContext,
   useBorosPairSimulation,
   useExecuteBorosPair,
@@ -48,18 +47,21 @@ import { AffixedInput, EstimateCard } from './PairTicketBits';
 import { QueryError } from '../components/QueryError';
 import { SegmentedToggle } from '../components/SegmentedToggle';
 import { amountError } from '../lib/amount';
-import { isUsdCollateral, knownRate } from '../lib/boros';
-import { fieldValue, fmtPct, sigGrouped } from '../lib/fmt';
+import { daysToMaturity, isUsdCollateral } from '../lib/boros';
+import { fieldValue, fmtDateLocal, fmtPct, sigGrouped } from '../lib/fmt';
 import { useNow } from '../lib/useNow';
 import { uuid } from '../lib/uuid';
 import { useActiveWallet } from '../panels/trackedAddress';
 import { BorosAgentSetup, BorosLogInButton } from './BorosAgentSetup';
+import { maxOpenSize } from './borosMaxSize';
+import { FieldLabel, PickChip } from './SymbolCombobox';
 import {
   BlockerList,
   GasTopUp,
   DirectionToggle,
   MarketCard,
   MarketSelect,
+  marketLabel,
   PairCosts,
   PairResultReport,
   PositionArithmetic,
@@ -150,6 +152,9 @@ export function BorosPairTicket({
 
   const [marketA, setMarketA] = useState<number | null>(null);
   const [marketB, setMarketB] = useState<number | null>(null);
+  /** The coin picked with no leg holding one yet; a picked leg's own coin
+   * always wins (see `coin`). */
+  const [coinPick, setCoinPick] = useState<string | null>(null);
   const [dirA, setDirA] = useState<BorosLegDirection>('short');
   const [dirB, setDirB] = useState<BorosLegDirection>('long');
   const [sizeStr, setSizeStr] = useState('');
@@ -353,29 +358,125 @@ export function BorosPairTicket({
     }
     return context.data.crossByToken.find((c) => c.tokenId === row.tokenId)?.available ?? null;
   };
-  // A pair is funded by BOTH legs' buckets: two cross legs share one, but an
-  // isolated leg has its own, and the size the pair can carry is the smaller.
+  /**
+   * The largest SIZE the collateral funds — not the collateral itself. A YU
+   * leg posts only its initial margin plus the taker fee, so a bucket with 5
+   * ETH free opens far more than 5 ETH of YU. A pair is ONE size on both legs:
+   * two cross legs pay out of their shared bucket together, an isolated leg out
+   * of its own, and the tighter cap wins so the legs still match (see
+   * borosMaxSize.ts). Reduce-only can only take off what is held.
+   */
+  const legFunding = (marketId: number | null, dir: BorosLegDirection) => {
+    const row = marketId !== null ? byId.get(marketId) : null;
+    if (!row) return null;
+    // An order in `dir` first eats an opposing position (+ = long held).
+    const reducible = dir === 'long' ? Math.max(0, -row.currentSize) : Math.max(0, row.currentSize);
+    return {
+      bucket: row.onIsolatedMargin ? `iso:${row.marketId}` : `cross:${row.tokenId}`,
+      available: availableFor(marketId),
+      costPerSize: row.openCostPerSize,
+      reducible,
+    };
+  };
+  const tradedLegs = (mode === 'single' ? [legFunding(marketA, dirA)] : [legFunding(marketA, dirA), legFunding(marketB, dirB)]).filter(
+    (l): l is NonNullable<ReturnType<typeof legFunding>> => l !== null,
+  );
   const availableToTrade = ((): number | null => {
-    const a = availableFor(marketA);
-    if (mode === 'single') return a;
-    const b = availableFor(marketB);
-    if (a === null) return b;
-    if (b === null) return a;
-    return Math.min(a, b);
+    if (tradedLegs.length === 0) return null;
+    if (intent === 'close') return Math.min(...tradedLegs.map((l) => l.reducible));
+    return maxOpenSize(tradedLegs);
   })();
+  /** The collateral behind that size, for the caption's hover. */
+  const freeCollateral = availableFor(marketA);
   /** The tolerance popover — closed until asked for. */
   const [slipOpen, setSlipOpen] = useState(false);
   const rowA = marketA !== null ? byId.get(marketA) ?? null : null;
   const rowB = marketB !== null ? byId.get(marketB) ?? null : null;
 
-  // §2: eligibility is shared collateral + shared maturity. Computed here only
-  // to grey the OTHER leg's options with a reason; the server re-decides.
-  const reasonAgainst = (other: BorosPairMarketRow | null) => (m: BorosPairMarketRow): string | null => {
-    if (!other) return null;
-    if (m.marketId === other.marketId) return 'already the other leg';
-    if (m.tokenId !== other.tokenId) return 'different collateral';
-    if (m.maturity !== other.maturity) return 'different maturity';
-    return null;
+  // §2: the coin first (as the perp ticket picks its coin first), then each
+  // leg's MARKET — a venue's market for that coin and collateral, whatever its
+  // maturity — then a maturity both markets list. Once a leg is picked the
+  // other lists only markets sharing its collateral. The server re-decides.
+  const sameCoin = (a: string, b: string) => a.toUpperCase() === b.toUpperCase();
+  /** One market across its maturities: same venue, coin and collateral. */
+  const marketKey = (m: BorosPairMarketRow) => `${m.venue.toUpperCase()}|${m.base.toUpperCase()}|${m.tokenId}`;
+  const coin = rowA?.base ?? rowB?.base ?? coinPick;
+  /** The coins Boros lists, the majors first in the perp ticket's order. */
+  const coins = useMemo(() => {
+    const majors = ['ETH', 'BTC', 'HYPE'];
+    const all = [...new Set(markets.map((m) => m.base.toUpperCase()))];
+    const rank = (c: string) => (majors.includes(c) ? majors.indexOf(c) : majors.length);
+    return all.sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
+  }, [markets]);
+  /** The maturities one market lists, earliest first. */
+  const maturitiesOf = (row: BorosPairMarketRow) =>
+    markets.filter((m) => marketKey(m) === marketKey(row)).map((m) => m.maturity).sort((a, b) => a - b);
+  const marketAt = (row: BorosPairMarketRow, maturity: number) =>
+    markets.find((m) => marketKey(m) === marketKey(row) && m.maturity === maturity) ?? null;
+  const pickedLegs = [rowA, mode === 'pair' ? rowB : null].filter((r): r is BorosPairMarketRow => r !== null);
+  /** The maturities every picked market lists — the dates the pair can trade. */
+  const maturities =
+    pickedLegs.length === 0 ? [] : maturitiesOf(pickedLegs[0]).filter((t) => pickedLegs.every((r) => maturitiesOf(r).includes(t)));
+  const maturity = pickedLegs.every((r) => r.maturity === pickedLegs[0]?.maturity) ? (pickedLegs[0]?.maturity ?? null) : null;
+  /** Both markets picked, and no maturity lists both: no pair to trade. */
+  const noSharedMaturity = mode === 'pair' && rowA !== null && rowB !== null && maturities.length === 0;
+
+  /**
+   * A leg's options: ONE per market of the coin — the leg's own pick in its
+   * slot, else that market at the shown maturity, else its earliest. Once the
+   * other leg is picked, only markets sharing its collateral, never itself.
+   */
+  const legOptions = (own: BorosPairMarketRow | null, other: BorosPairMarketRow | null): BorosPairMarketRow[] => {
+    const byKey = new Map<string, BorosPairMarketRow>();
+    for (const m of markets) {
+      if (coin !== null && !sameCoin(m.base, coin)) continue;
+      if (other && (marketKey(m) === marketKey(other) || m.tokenId !== other.tokenId)) continue;
+      const prev = byKey.get(marketKey(m));
+      const rank = (r: BorosPairMarketRow) => (r.marketId === own?.marketId ? 0 : r.maturity === maturity ? 1 : 2);
+      if (!prev || rank(m) < rank(prev) || (rank(m) === rank(prev) && m.maturity < prev.maturity)) byKey.set(marketKey(m), m);
+    }
+    return [...byKey.values()];
+  };
+
+  /**
+   * Pick one leg's market. With the other leg picked, both settle on a maturity
+   * the two markets share: the other leg's own when this market lists it, else
+   * the earliest they share. When they share none, both picks stay and the form
+   * says there is no pair.
+   */
+  const pickLeg = (leg: 'A' | 'B') => (marketId: number | null) => {
+    const set = leg === 'A' ? setMarketA : setMarketB;
+    const setOther = leg === 'A' ? setMarketB : setMarketA;
+    const other = mode === 'pair' ? (leg === 'A' ? rowB : rowA) : null;
+    const row = marketId !== null ? (byId.get(marketId) ?? null) : null;
+    if (!row) {
+      set(null);
+      return;
+    }
+    setCoinPick(row.base);
+    const shared = other ? maturitiesOf(row).filter((t) => maturitiesOf(other).includes(t)) : [];
+    const at = other && shared.includes(other.maturity) ? other.maturity : shared[0];
+    if (!other || at === undefined) {
+      set(row.marketId);
+      return;
+    }
+    set(marketAt(row, at)?.marketId ?? row.marketId);
+    if (other.maturity !== at) setOther(marketAt(other, at)?.marketId ?? other.marketId);
+  };
+
+  /** Change the coin: the legs belong to the old one, so they clear. */
+  const pickCoin = (next: string) => {
+    if (coin !== null && sameCoin(next, coin)) return;
+    setCoinPick(next);
+    setMarketA(null);
+    setMarketB(null);
+  };
+
+  /** Change the maturity: every picked leg moves to its own market at that date
+   * (the chips only offer dates all of them list). */
+  const pickMaturity = (next: number) => {
+    if (rowA) setMarketA(marketAt(rowA, next)?.marketId ?? rowA.marketId);
+    if (rowB && mode === 'pair') setMarketB(marketAt(rowB, next)?.marketId ?? rowB.marketId);
   };
 
   /**
@@ -492,7 +593,8 @@ export function BorosPairTicket({
               m.maturity === rowA.maturity,
           )?.marketId ?? null)
         : marketB;
-    if (!address || marketA === null || partnerId === null || !sizeOk) return null;
+    // Two markets sharing no maturity are no pair: nothing to quote.
+    if (!address || marketA === null || partnerId === null || !sizeOk || noSharedMaturity) return null;
     return {
       address,
       legA: { marketId: marketA, direction: dirA, slippageApr: aprA },
@@ -504,7 +606,7 @@ export function BorosPairTicket({
       // that fell short, whatever mode the toggle is showing.
       ...(onlyLeg ? { onlyLeg } : mode === 'single' ? { onlyLeg: 'A' as const } : {}),
     };
-  }, [address, marketA, marketB, dirA, dirB, aprA, aprB, sizeNum, sizeOk, intent, acknowledged, onlyLeg, mode, markets, rowA]);
+  }, [address, marketA, marketB, dirA, dirB, aprA, aprB, sizeNum, sizeOk, intent, acknowledged, onlyLeg, mode, markets, rowA, noSharedMaturity]);
 
   // Paused while a report is on screen: the numbers behind that report must not
   // shift under it, and nothing can be confirmed until it is dismissed. Also
@@ -538,9 +640,12 @@ export function BorosPairTicket({
   const estSlippageApr = ((): number | null => {
     if (!simulation) return null;
     if (activeLeg === null) return simulation.slippageApr ?? null;
+    // The quote's own figure, off the mid its bound is anchored to — a second
+    // reading against the context's mid (its own, slower poll) could disagree
+    // with the blocker the server words from this one. Better than mid is no
+    // slippage, not a negative one.
     const leg = activeLeg === 'A' ? simulation.legA : simulation.legB;
-    const mid = (activeLeg === 'A' ? rowA : rowB)?.midApr;
-    return leg.execApr !== null && knownRate(mid) ? Math.abs(leg.execApr - mid) : null;
+    return leg.estSlippageApr == null ? null : Math.max(0, leg.estSlippageApr);
   })();
   const gate = sim.data?.gate ?? null;
 
@@ -572,7 +677,6 @@ export function BorosPairTicket({
   }, [marketA, marketB, dirA, dirB, intent]);
 
   const execute = useExecuteBorosPair();
-  const cancelClose = useBorosCancelAndClose();
   const topUpGas = useTopUpGas();
 
   // Tell the host surface an execution is in flight, so it can lock its close
@@ -741,6 +845,21 @@ export function BorosPairTicket({
           a swap between them — the spread is one decision, and the legs were
           already coupled. A SINGLE leg keeps the plain picker and its own
           direction toggle: there is no spread to be long or short of. */}
+      {/* The coin as chips — the perp ticket's coin row — then the markets,
+          then a maturity they share (below the legs). The wizard fixes both
+          markets, so it has nothing to choose. */}
+      {!guided && (
+        <div className="flex flex-col gap-2">
+          <FieldLabel>Coin</FieldLabel>
+          <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="Coin">
+            {coins.map((c) => (
+              <PickChip key={c} active={coin !== null && sameCoin(c, coin)} onClick={() => pickCoin(c)}>
+                {c}
+              </PickChip>
+            ))}
+          </div>
+        </div>
+      )}
       {mode === 'pair' ? (
         <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-end gap-2">
           <div className="relative min-w-0">
@@ -750,9 +869,9 @@ export function BorosPairTicket({
                 label=""
                 ariaLabel="Leg A"
                 value={marketA}
-                markets={markets}
-                reasonFor={reasonAgainst(rowB)}
-                onPick={setMarketA}
+                markets={legOptions(rowA, rowB)}
+                reasonFor={() => null}
+                onPick={pickLeg('A')}
                 disabled={context.isPending}
               />
             </MarketCard>
@@ -794,9 +913,9 @@ export function BorosPairTicket({
                 label=""
                 ariaLabel="Leg B"
                 value={marketB}
-                markets={markets}
-                reasonFor={reasonAgainst(rowA)}
-                onPick={setMarketB}
+                markets={legOptions(rowB, rowA)}
+                reasonFor={() => null}
+                onPick={pickLeg('B')}
                 disabled={context.isPending}
               />
             </MarketCard>
@@ -832,13 +951,33 @@ export function BorosPairTicket({
             label=""
             ariaLabel="Market"
             value={marketA}
-            markets={markets}
-            // Single mode trades leg A alone, so nothing constrains it: the
-            // collateral/maturity rules exist to keep a PAIR compatible.
-            reasonFor={reasonAgainst(null)}
-            onPick={setMarketA}
+            // Single mode trades leg A alone: collateral matching exists to
+            // keep a PAIR compatible.
+            markets={legOptions(rowA, null)}
+            reasonFor={() => null}
+            onPick={pickLeg('A')}
             disabled={context.isPending}
           />
+        </div>
+      )}
+      {/* The maturity last: only the dates every picked market lists. Two
+          markets that share none are not a pair, and the form says so. */}
+      {!guided && pickedLegs.length > 0 && (
+        <div className="flex flex-col gap-2">
+          <FieldLabel>Maturity</FieldLabel>
+          {noSharedMaturity && rowA && rowB ? (
+            <p className="text-[11.5px] text-amber-300" role="status">
+              {marketLabel(rowA)} and {marketLabel(rowB)} share no maturity, so they can't be paired.
+            </p>
+          ) : (
+            <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="Maturity">
+              {maturities.map((m) => (
+                <PickChip key={m} active={m === maturity} onClick={() => pickMaturity(m)}>
+                  {fmtDateLocal(m)} · {daysToMaturity(m, Math.floor(now / 1000))}d
+                </PickChip>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
@@ -856,10 +995,16 @@ export function BorosPairTicket({
             <button
               type="button"
               className="num text-[11px] text-ink-400 transition-colors hover:text-ink-100"
-              title="What this collateral bucket can still fund. Click to size to it."
+              title={
+                intent === 'close'
+                  ? 'The most reduce-only can take off: the smaller position held. Click to size to it.'
+                  : `The largest size your collateral can open${mode === 'single' ? '' : ' on both legs'}: initial margin plus the taker fee, at the current rate${
+                      freeCollateral !== null ? `, out of ${sigGrouped(freeCollateral)} ${rowA?.collateral ?? ''} free` : ''
+                    }. Click to size to it.`
+              }
               onClick={() => setSizeStr(fieldValue(availableToTrade))}
             >
-              available{' '}
+              max{' '}
               <span className="text-link underline decoration-link/40 underline-offset-2">
                 {sigGrouped(availableToTrade)} {rowA?.collateral ?? ''}
               </span>
@@ -914,9 +1059,9 @@ export function BorosPairTicket({
               the qualification survives — on the caption that makes the claim. */}
           <span
             className="text-[11px] text-ink-400"
-            title="Enforced here by capping the size at your current position — Boros has no reduce-only order type, so check the resulting-position row."
+            title="Enforced here by capping the size at your current position — Boros has no reduce-only order type, so check the resulting-position row. Resting orders on the traded markets are cancelled in the same batch."
           >
-            caps the size at your open position
+            caps the size at your open position · cancels resting orders
           </span>
         </label>
       )}
@@ -1083,11 +1228,7 @@ export function BorosPairTicket({
           {w}
         </p>
       ))}
-      <BlockerList
-        blockers={blockers}
-        busyMarketId={cancelClose.isPending ? cancelClose.variables?.marketId ?? null : null}
-        onCancelAndClose={canTrade ? (marketId) => cancelClose.mutate({ marketId }) : undefined}
-      />
+      <BlockerList blockers={blockers} />
       <GasTopUp
         gasBalanceUsd={sim.data?.gasBalanceUsd}
         amount={gasTopUpStr}

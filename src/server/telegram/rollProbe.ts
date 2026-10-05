@@ -1,5 +1,5 @@
 import type { AssetGroup } from '../../../web/src/api/types';
-import { deriveAsset, pairCanRoll, type PairEstimate } from '../../../web/src/panels/assets/assetModel';
+import { deriveAsset, pairRollDue, type PairEstimate } from '../../../web/src/panels/assets/assetModel';
 import type { BorosMarket } from '../../core/boros/client';
 import type { BorosPairSimulation } from '../../core/boros/pair';
 import {
@@ -148,7 +148,7 @@ export function createRollProbe(deps: RollProbeDeps): () => Promise<RollSignalIn
     for (const group of view.assets) {
       const derived = deriveAsset(group as unknown as AssetGroup, {}, view.sinceSec, nowSec);
       for (const pair of derived.pairs) {
-        if (!pairCanRoll(pair, nowSec)) continue;
+        if (!pairRollDue(pair, nowSec)) continue;
         const signal: RollSignalInput = {
           coin: group.base,
           longVenue: pair.longVenue,

@@ -3,6 +3,51 @@
 Only substantial releases are listed here — each one bumps `version.json` (which is what the
 in-app update check compares against).
 
+## 1.7.3 — 2026-10-05
+
+TLDR: An Accounts tab and one health status in the header, for Gate and Boros together. Roll
+into a new maturity without closing the old legs. A clearer Boros pair ticket. Safer Boros
+closes. Fixes from the security audit, and updates that keep your setup.
+
+- **Accounts tab (was Balances).** One card lists every account: Gate CrossEx and each Boros
+  account, with available / balance, IM used and MM used. A Boros account reads in its own
+  coin first, with dollars under it. Every account liquidates at 100% MM used, so one scale
+  applies: amber from 67%, red from 91%. The card starts with a verdict, such as "All
+  accounts healthy" or "1 account near liquidation".
+- **One health status in the header.** It reads "Healthy", or names the account at risk, such
+  as "Boros ETH cross 95% MM used". It also shows Gate and Boros available / balance. Click it
+  to open Accounts. Every Boros leg on Positions shows its liquidation APR.
+- **Roll without closing the old legs.** The roll window has an "Open only (keep old legs)"
+  mode. It opens the new maturity and leaves the old legs to settle at maturity, so you pay no
+  exit fee. Its options show only the opening cost. The extra Boros pair reads "Excess hedge".
+- **Roll any time.** Roll over is offered on every live pair. The reminders still start 10
+  days before maturity.
+- **Boros pair ticket.** Pick the coin, then each leg's market, then a maturity both markets
+  list. Each market names its collateral, such as "Gate ETHUSDT · ETH". Two markets with no
+  shared maturity say they cannot be paired. "Available" is now the largest size your
+  collateral can open, not the collateral itself.
+- **Safer Boros closes.** Both Boros legs of a pair close in one batch: both close or
+  neither. Every close and roll also cancels your resting Boros orders on those markets in
+  the same batch, so a forgotten order cannot reopen the leg. An unclear venue error on a
+  pair now reads "unknown", and a retry cannot fill the pair twice.
+- **Boros opens free their own market slots.** A Boros account can be in only so many
+  markets, and a matured market keeps its slot until it is exited. Every open now exits your
+  matured markets first, in the same batch. If no slot can be freed, the leg says "too many
+  markets".
+- **Positions.** Leftover Boros legs at two venues form a pair card with "Perp leg(s)
+  missing". Each pair's maturity bar shows the time passed on one timeline shared by the
+  coin's pairs, with a mark for today. The APR shows even when a pair is not hedged, with the
+  floating part split out. A view-only wallet shows every position, your Gate perps
+  included. It only blocks trading and hides the rebate.
+- **Perp pairs.** Execute pair no longer stays disabled while the maker price moves. A maker
+  re-peg snaps to the right side of the book. When the hedge fails, the maker order is
+  cancelled at once. A failed status read raises an alert.
+- **Updates and install.** An update keeps a custom port and folder, and installs exactly the
+  release it shows. A failed download stops the update and says so. On Windows, the
+  installer puts the old version back if the new one cannot start, and the app restarts
+  within a minute if it stops. Uninstall with purge lists anything left on disk. The app
+  sends a strict Content-Security-Policy, with more fixes from the security audit.
+
 ## 1.7.2 — 2026-09-25
 
 TLDR: Settlement-fee rebates show in the terminal. A rebated wallet sees its rebate on every

@@ -39,7 +39,7 @@ export const wireBook = (bidTick: number, askTick: number, size = 20_000_000) =>
 
 export function account(
   netBalance: number,
-  positions: Array<{ marketId: number; size: number | string }> = [],
+  positions: Array<{ marketId: number; size: number | string; resting?: boolean }> = [],
 ): Record<string, unknown> {
   const size = (s: number | string) => (typeof s === 'string' ? s : raw(s));
   const acc = marketAcc(ADDRESS, 3);
@@ -54,7 +54,7 @@ export function account(
             marketId: p.marketId,
             signedSize: size(p.size),
             initialMargin: raw(0),
-            orders: [],
+            orders: p.resting ? [{ orderId: '1' }] : [],
           })),
         },
       ],

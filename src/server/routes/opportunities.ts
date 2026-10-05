@@ -44,6 +44,7 @@ import { parseSymbol } from '../../core/numbers';
 import { getLeverageMax } from '../../core/orders';
 import type { AppDeps } from '../app';
 import { TTL } from '../cache';
+import { requireLeverageMax } from './leverage';
 
 const DEFAULT_NOTIONAL_USD = 10_000;
 const MIN_NOTIONAL_USD = 1_000;
@@ -157,7 +158,7 @@ async function loadLeverageMax(
           TTL.static,
           async () => {
             batch ??= getLeverageMax(ruleClient(deps), symbols);
-            return (await batch).get(symbol) ?? 0;
+            return requireLeverageMax(await batch, symbol);
           },
           { fresh },
         );

@@ -2,24 +2,39 @@ import { execFileSync, spawn } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const INSTALL_CMD =
-  '/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/pendle-finance/arbitrage-with-crossex/main/install.sh)"';
-const INSTALLER_URL_WINDOWS =
-  'https://raw.githubusercontent.com/pendle-finance/arbitrage-with-crossex/main/install.ps1';
-/** Dev/test override, same family as install.ps1's own BOROS_* knobs: a URL, or
- * a path to a local install.ps1 so the whole flow can be exercised offline. */
-const INSTALLER_SOURCE_WINDOWS = (): string =>
-  process.env.BOROS_INSTALLER ?? INSTALLER_URL_WINDOWS;
+const INSTALLER_BASE = 'https://raw.githubusercontent.com/pendle-finance/arbitrage-with-crossex';
+/** Dev/test override, same family as the installers' own BOROS_* knobs: a URL,
+ * or a path to a local install.sh or install.ps1 so the whole flow can be
+ * exercised offline. */
+const installerSource = (file: string, pin: string): string =>
+  process.env.BOROS_INSTALLER ?? `${INSTALLER_BASE}/${pin}/${file}`;
 
 const TASK_NAME = 'BorosUpdate';
+const INSTALLER_ENV = [
+  'PATH',
+  'HOME',
+  'TMPDIR',
+  'USER',
+  'LOGNAME',
+  'SHELL',
+  'LANG',
+  'BOROS_ROOT',
+  'BOROS_PORT',
+  'BOROS_REPO',
+  'BOROS_BRANCH',
+  'BOROS_REF',
+  'BOROS_TARBALL',
+];
 const COMMIT_SHA = /^[0-9a-f]{40}$/;
+const APP_DIR = fileURLToPath(new URL('../..', import.meta.url));
 const FETCH_TIMEOUT_MS = 30_000;
 
-function updateLogPath(): string {
+function updateLogPath(appDir = APP_DIR): string {
   const dir =
     process.platform === 'win32'
-      ? path.join(borosRoot(), 'logs')
+      ? path.join(borosRoot(appDir), 'logs')
       : path.join(os.homedir(), 'Library', 'Logs', 'boros-crossex');
   fs.mkdirSync(dir, { recursive: true });
   return path.join(dir, 'update.log');
@@ -85,10 +100,42 @@ function beginUpdateWindow(): void {
   windowTimer.unref?.();
 }
 
-function borosRoot(): string {
+function installTarget(appDir: string): Record<string, string> {
+  const root = fs.existsSync(path.join(appDir, 'install-info.json')) ? path.dirname(appDir) : null;
+  const port = process.env.PORT;
+  return {
+    ...(root ? { BOROS_ROOT: root } : {}),
+    ...(port && /^\d+$/.test(port) ? { BOROS_PORT: port } : {}),
+  };
+}
+
+function borosRoot(appDir = APP_DIR): string {
   return (
-    process.env.BOROS_ROOT ?? path.join(process.env.LOCALAPPDATA ?? os.homedir(), 'CrossEx-Boros')
+    installTarget(appDir).BOROS_ROOT ??
+    process.env.BOROS_ROOT ??
+    path.join(process.env.LOCALAPPDATA ?? os.homedir(), 'CrossEx-Boros')
   );
+}
+
+async function loadInstaller(file: 'install.sh' | 'install.ps1', pin: string): Promise<string> {
+  const src = installerSource(file, pin);
+  let script: string;
+  if (/^https?:/i.test(src)) {
+    const res = await fetch(src, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) }).catch(
+      (err: Error & { cause?: { message?: string } }) => {
+        throw new Error(`could not download the installer (${err.cause?.message || err.message})`);
+      },
+    );
+    if (!res.ok) throw new Error(`could not download the installer (HTTP ${res.status})`);
+    script = await res.text();
+  } else {
+    script = fs.readFileSync(src, 'utf8');
+  }
+  // A captive portal or an error page would otherwise be run as the installer.
+  if (!script.includes('Arbitrage with CrossEx')) {
+    throw new Error(`the downloaded installer does not look like ${file}`);
+  }
+  return script;
 }
 
 /**
@@ -103,24 +150,12 @@ function borosRoot(): string {
  * LOCAL file with -File. Downloading here also puts a failed download in the
  * update dialog rather than in a task that quietly does nothing.
  */
-async function stageWindowsInstaller(logPath: string, pin: string | null): Promise<void> {
-  const root = borosRoot();
+async function stageWindowsInstaller(logPath: string, pin: string, appDir: string): Promise<void> {
+  const root = borosRoot(appDir);
   const installer = path.join(root, 'update-installer.ps1');
   const runner = path.join(root, 'update.ps1');
 
-  const src = INSTALLER_SOURCE_WINDOWS();
-  let script: string;
-  if (/^https?:/i.test(src)) {
-    const res = await fetch(src, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
-    if (!res.ok) throw new Error(`could not download the installer (HTTP ${res.status})`);
-    script = await res.text();
-  } else {
-    script = fs.readFileSync(src, 'utf8');
-  }
-  // A captive portal or an error page would otherwise be written out and run.
-  if (!script.includes('Arbitrage with CrossEx')) {
-    throw new Error('the downloaded installer does not look like install.ps1');
-  }
+  const script = await loadInstaller('install.ps1', pin);
   fs.mkdirSync(root, { recursive: true });
   fs.writeFileSync(installer, script, 'utf8');
 
@@ -147,13 +182,14 @@ async function stageWindowsInstaller(logPath: string, pin: string | null): Promi
   const wrapper = [
     '# Generated by the in-app updater on each run. Do not edit.',
     "$ErrorActionPreference = 'Continue'",
-    ...(pin ? [`$env:BOROS_REF = '${q(pin)}'`] : []),
+    `$env:BOROS_REF = '${q(pin)}'`,
+    ...Object.entries(installTarget(appDir)).map(([k, v]) => `$env:${k} = '${q(v)}'`),
     // The update runs under a page that reloads itself onto the new copy;
     // the installer's parting Start-Process would open a duplicate tab.
     "$env:BOROS_NO_BROWSER = '1'",
     '$startArgs = @{',
     "  FilePath               = 'powershell.exe'",
-    `  ArgumentList           = @('-NoProfile','-ExecutionPolicy','Bypass','-File','"${installer}"')`,
+    `  ArgumentList           = @('-NoProfile','-ExecutionPolicy','Bypass','-File','"${q(installer)}"')`,
     '  NoNewWindow            = $true',
     '  Wait                   = $true',
     `  RedirectStandardOutput = '${q(logPath)}'`,
@@ -165,12 +201,12 @@ async function stageWindowsInstaller(logPath: string, pin: string | null): Promi
   fs.writeFileSync(runner, wrapper, 'utf8');
 }
 
-export async function startUpdate(ref?: string | null): Promise<string> {
-  const pin = ref && COMMIT_SHA.test(ref) ? ref : null;
-  const logPath = updateLogPath();
+export async function startUpdate(pin?: string | null, appDir = APP_DIR): Promise<string> {
+  if (!pin || !COMMIT_SHA.test(pin)) throw new Error('no release commit to install');
+  const logPath = updateLogPath(appDir);
 
   if (process.platform === 'win32') {
-    await stageWindowsInstaller(logPath, pin);
+    await stageWindowsInstaller(logPath, pin, appDir);
     const at = new Date(Date.now() + 60_000);
     const hhmm = `${String(at.getHours()).padStart(2, '0')}:${String(at.getMinutes()).padStart(2, '0')}`;
     execFileSync('schtasks', [
@@ -182,7 +218,7 @@ export async function startUpdate(ref?: string | null): Promise<string> {
       // service task: a bare powershell /tr opens a console window for the
       // whole install (Windows Terminal ignores -WindowStyle Hidden), and
       // closing that window kills the installer mid-swap.
-      `conhost.exe --headless powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "${path.join(borosRoot(), 'update.ps1')}"`,
+      `conhost.exe --headless powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "${path.join(borosRoot(appDir), 'update.ps1')}"`,
       '/sc',
       'once',
       '/st',
@@ -213,6 +249,7 @@ export async function startUpdate(ref?: string | null): Promise<string> {
     return logPath;
   }
 
+  const script = await loadInstaller('install.sh', pin);
   const log = fs.openSync(logPath, 'w');
   /**
    * ⚠ NODE_ENV MUST NOT REACH THE INSTALLER.
@@ -224,16 +261,25 @@ export async function startUpdate(ref?: string | null): Promise<string> {
    * has nothing to build with and dies. Inheriting the server's environment
    * wholesale makes every update from this button fail, every time.
    *
-   * A user pasting the same command into a terminal has no NODE_ENV, which is
+   * A user running the install command in a terminal has no NODE_ENV, which is
    * why the install works by hand and only ever fails from here.
+   *
+   * The same goes for everything else in the server's env: dotenv has loaded
+   * config/.env into it (the Gate API secret, the Boros agent key), and the
+   * installer's `yarn install` runs every dependency's install scripts. So
+   * this is an allowlist, not a denylist — only the basics plus the BOROS_*
+   * knobs install.sh reads.
    */
-  const { NODE_ENV: _serviceEnv, ...installerEnv } = process.env;
-  const child = spawn('/bin/bash', ['-c', INSTALL_CMD], {
+  const installerEnv = Object.fromEntries(
+    INSTALLER_ENV.flatMap((key) => (process.env[key] === undefined ? [] : [[key, process.env[key]]])),
+  );
+  const child = spawn('/bin/bash', ['-c', script], {
     detached: true,
     stdio: ['ignore', log, log],
     env: {
       ...installerEnv,
-      ...(pin ? { BOROS_REF: pin } : {}),
+      ...installTarget(appDir),
+      BOROS_REF: pin,
       // Same duplicate-tab suppression as the Windows runner.
       BOROS_NO_BROWSER: '1',
     },

@@ -25,9 +25,10 @@ export const USER_GUIDE_HTML_URL = `https://github.com/${REPO}/blob/${BRANCH}/${
 /** Sibling docs are written relative ("./DISCLAIMER.md"). Off GitHub those would
  * resolve against the app's own origin, so send them back to the repo. */
 const DOC_BASE = `https://github.com/${REPO}/blob/${BRANCH}/docs/`;
-function absolute(href: string | undefined): string {
+export function absolute(href: string | undefined): string {
   if (!href) return USER_GUIDE_HTML_URL;
-  if (/^[a-z][a-z0-9+.-]*:/i.test(href) || href.startsWith('#')) return href;
+  if (/^https?:/i.test(href) || href.startsWith('#')) return href;
+  if (/^[a-z][a-z0-9+.-]*:/i.test(href)) return USER_GUIDE_HTML_URL;
   return new URL(href.replace(/^\.\//, ''), DOC_BASE).toString();
 }
 

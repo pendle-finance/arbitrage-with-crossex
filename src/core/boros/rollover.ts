@@ -27,7 +27,7 @@
  * answer.
  */
 import { classifyLegFailure } from './orders';
-import type { BorosLegFailureCode, BorosLegFill, BorosOrderClient, BorosRollLeg, BorosRollSimulation } from './orders';
+import type { BorosLegFailureCode, BorosLegFill, BorosOrderClient, BorosRollLeg, BorosRollSimulation, PlaceOrdersOptions } from './orders';
 import { fmtSize } from './pair';
 import type { BlockerCode, BorosPairLegInput, BorosPairSimulation, PairGate, SimulatedLeg } from './pair';
 
@@ -360,10 +360,14 @@ const KEYS: RollLegKey[] = ['exitA', 'exitB', 'entryA', 'entryB'];
  * A refusal with a status code never reaches here as a throw — the venue
  * adapter reports it as failed legs, because nothing ran.
  */
-export async function submitBorosRoll(client: BorosOrderClient, legs: BorosRollLeg[]): Promise<BorosRollResult> {
+export async function submitBorosRoll(
+  client: BorosOrderClient,
+  legs: BorosRollLeg[],
+  opts?: Pick<PlaceOrdersOptions, 'cancelOrdersOn'>,
+): Promise<BorosRollResult> {
   let fills: BorosLegFill[];
   try {
-    fills = client.rollOver ? await client.rollOver(legs) : [];
+    fills = client.rollOver ? await client.rollOver(legs, opts) : [];
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     const lost = (marketId: number, direction: 'long' | 'short', size: number): BorosLegFill => ({

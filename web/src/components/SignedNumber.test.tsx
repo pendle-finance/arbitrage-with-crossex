@@ -10,10 +10,15 @@ afterEach(cleanup);
 const cell = () => screen.getByText((_, el) => el?.tagName === 'SPAN' && el.className.includes('num'));
 
 describe('SignedNumber', () => {
-  it('marks a real gain green with a +', () => {
+  it('marks a real gain green, with no + (the colour is the sign)', () => {
     render(<SignedNumber value={1.23} format={(n) => fmtUsd(n)} />);
-    expect(cell()).toHaveTextContent('+$1.23');
+    expect(cell().textContent).toBe('$1.23');
     expect(cell().className).toContain('emerald');
+  });
+
+  it('adds the + only when asked', () => {
+    render(<SignedNumber value={1.23} format={(n) => fmtUsd(n)} plus />);
+    expect(cell().textContent).toBe('+$1.23');
   });
 
   it('marks a real loss red with a -', () => {

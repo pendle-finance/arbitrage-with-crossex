@@ -12,6 +12,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { STRATEGY_STORAGE_KEY } from '../panels/HomeControls';
 import { installFakeWallet, removeFakeWallet } from '../test/fakeWallet';
 import { server } from '../test/server';
+import { fmtDateLocal } from '../lib/fmt';
 import { renderWithClient } from '../test/utils';
 import { BorosPairTicket } from './BorosPairTicket';
 import { useTradeFlow, type BorosOpenPrefill } from './TradeFlow';
@@ -22,6 +23,12 @@ const BN = 158;
 const MATURITY = 1_800_000_000;
 
 const env = <T,>(data: T) => ({ ok: true, data, meta: { ts: Date.now() } });
+
+/** A chip in the Coin or Maturity row, by its leading text. */
+const chip = (group: 'Coin' | 'Maturity', text: string) =>
+  within(screen.getByRole('group', { name: group }))
+    .getAllByRole('button')
+    .find((b) => b.textContent?.startsWith(text)) as HTMLButtonElement;
 
 const marketRow = (over: Record<string, unknown> = {}) => ({
   marketId: HL,
@@ -366,11 +373,10 @@ describe('BorosPairTicket', () => {
     });
   });
 
-  it('hides ineligible markets once a leg is picked, and says how many it dropped', async () => {
-    // Reverses the original §2 rule ("never hidden, disabled WITH the reason").
-    // With a leg chosen, most of the venue's markets are ineligible, and a
-    // dropdown of mostly-dead options is its own kind of hunting — so they are
-    // dropped and a caption carries the explanation §2 was protecting.
+  it('lists one option per market whatever its maturity, names its collateral, and drops a different collateral', async () => {
+    // §2: the markets come first — one option per venue market for the coin,
+    // whatever its maturity — and once a leg is picked the other lists only
+    // markets sharing its collateral.
     const user = userEvent.setup();
     server.use(...handlers());
     renderWithClient(<BorosPairTicket />);
@@ -378,16 +384,11 @@ describe('BorosPairTicket', () => {
       expect((screen.getByLabelText('Leg A') as HTMLSelectElement).options.length).toBeGreaterThan(1),
     );
     await user.selectOptions(screen.getByLabelText('Leg A'), String(HL));
+    expect(chip('Coin', 'ETH')).toHaveAttribute('aria-pressed', 'true');
 
-    const legB = screen.getByLabelText('Leg B') as HTMLSelectElement;
-    const byLabel = (needle: string) =>
-      [...legB.options].find((o) => o.textContent?.includes(needle));
-
-    // Neither the wrong maturity nor the wrong collateral is offered at all.
-    expect(byLabel('Bybit ETH 30 Sep 2026')).toBeUndefined();
-    expect(byLabel('OKX BTC 31 Aug 2026')).toBeUndefined();
-    // The eligible one is still there and selectable.
-    expect(byLabel('Binance ETHUSDT')!.disabled).toBe(false);
+    const labels = [...(screen.getByLabelText('Leg B') as HTMLSelectElement).options].map((o) => o.textContent);
+    // Collateral named, no date — and a market at another maturity is still a market.
+    expect(labels).toEqual(['select a market…', 'Binance ETHUSDT · USDT', 'Bybit ETH · USDT']);
   });
 
   it('leads with the estimated spread and shows the worst case beneath it', async () => {
@@ -413,6 +414,32 @@ describe('BorosPairTicket', () => {
     renderWithClient(<BorosPairTicket />);
     await fillTicket(user);
     expect(await screen.findByTitle(/caps the RATE, not the fill/i)).toBeInTheDocument();
+  });
+
+  it('offers the SIZE the collateral funds, not the collateral: both legs out of one cross bucket', async () => {
+    // 500 USDT free; opening costs 0.03 per unit on HL and 0.02 on Binance.
+    // As a pair both come out of the one cross bucket: 500 / 0.05 = 10,000
+    // per leg. Alone, HL funds 500 / 0.03 ≈ 16,667.
+    const user = userEvent.setup();
+    server.use(
+      ...handlers({
+        ctx: {
+          markets: [
+            marketRow({ openCostPerSize: 0.03 }),
+            marketRow({ marketId: BN, name: 'Binance ETHUSDT 31 Aug 2026', venue: 'Binance', midApr: 0.045, openCostPerSize: 0.02 }),
+          ],
+          crossByToken: [{ tokenId: 3, available: 500 }],
+        },
+      }),
+    );
+    renderWithClient(<BorosPairTicket />);
+    await fillTicket(user);
+    const max = await screen.findByRole('button', { name: /^max 10,000 USDT$/ });
+    await user.click(max);
+    expect((screen.getByLabelText(/^Size per leg/) as HTMLInputElement).value).toBe('10000');
+
+    await user.click(screen.getByRole('radio', { name: 'Single' }));
+    expect(await screen.findByRole('button', { name: /^max 16,666\.6/ })).toBeInTheDocument();
   });
 
   it('Single mode sends one leg, borrowing an eligible partner for the pair shape', async () => {
@@ -586,8 +613,8 @@ describe('BorosPairTicket', () => {
     expect(confirm).toBeInTheDocument();
     // The button states the COUNT ("2 Boros market orders"); the market cards
     // name the two markets, so the selects carry them by accessible name.
-    expect(screen.getByLabelText('Leg A')).toHaveDisplayValue('Hyperliquid ETH 31 Aug 2026');
-    expect(screen.getByLabelText('Leg B')).toHaveDisplayValue('Binance ETHUSDT 31 Aug 2026');
+    expect(screen.getByLabelText('Leg A')).toHaveDisplayValue('Hyperliquid ETH · USDT');
+    expect(screen.getByLabelText('Leg B')).toHaveDisplayValue('Binance ETHUSDT · USDT');
     // Atomic acceptance is the promise; a full fill is NOT. Both halves must
     // still be stated together — overselling the batch is the failure mode —
     // so the hover is asserted to carry BOTH clauses, not just the reassuring
@@ -988,44 +1015,7 @@ describe('BorosPairTicket', () => {
     expect(screen.queryByText(/that is the top-up/i)).not.toBeInTheDocument();
   });
 
-  it('sends a usable cancel-and-close request — id present, no address', async () => {
-    // It previously posted an empty body to a route requiring clientOrderId, so
-    // the §6A remediation button always 400'd and was unreachable.
-    const user = userEvent.setup();
-    let body: Record<string, unknown> | null = null;
-    server.use(
-      ...handlers({
-        gate: {
-          blockers: [
-            {
-              code: 'isolated-must-switch',
-              leg: 'A',
-              marketId: HL,
-              message: 'Hyperliquid ETH 31 Aug 2026 is on isolated margin. Switch it to cross margin.',
-            },
-          ],
-        },
-      }),
-      http.post(`/api/boros/pair/market/${HL}/cancel-and-close`, async ({ request }) => {
-        body = (await request.json()) as Record<string, unknown>;
-        return HttpResponse.json(env({ marketId: HL, cancelled: true, closed: true }));
-      }),
-    );
-    renderWithClient(<BorosPairTicket />);
-    await fillTicket(user);
-
-    // A hold, not a click: this flattens a whole market position.
-    const remedy = await screen.findByRole('button', { name: /Cancel orders & close position/i });
-    await user.pointer({ keys: '[MouseLeft>]', target: remedy });
-    await waitFor(() => expect(body).not.toBeNull(), { timeout: 3_000 });
-
-    const sent = body as unknown as { clientOrderId?: string; address?: string };
-    expect(sent.clientOrderId).toMatch(/^[A-Za-z0-9_-]{8,64}$/);
-    // The account is the server's to decide — this route sizes the close from it.
-    expect(sent.address).toBeUndefined();
-  });
-
-  it('offers the §6A remediation on an isolated leg', async () => {
+  it('sends an isolated leg to Boros — no close button this app could never honour', async () => {
     const user = userEvent.setup();
     server.use(
       ...handlers({
@@ -1046,9 +1036,13 @@ describe('BorosPairTicket', () => {
     await fillTicket(user);
 
     expect(await screen.findByText(/Switch it to cross margin/i)).toBeInTheDocument();
-    expect(
-      screen.getByRole('button', { name: /Cancel orders & close position/i }),
-    ).toBeInTheDocument();
+    // The close route refuses an isolated position, so the remedy is a link
+    // to the market on Boros — the old hold button could only ever fail.
+    expect(screen.getByRole('link', { name: 'on Boros' })).toHaveAttribute(
+      'href',
+      `https://boros.pendle.finance/markets/${HL}`,
+    );
+    expect(screen.queryByRole('button', { name: /Cancel orders & close position/i })).not.toBeInTheDocument();
   });
 
   it('reports a partial fill as a residual with three follow-up actions', async () => {
@@ -1340,7 +1334,7 @@ describe('BorosPairTicket — market list', () => {
       expect((screen.getByLabelText('Leg A') as HTMLSelectElement).options.length).toBeGreaterThan(1),
     );
     expect(
-      within(screen.getByLabelText('Leg A')).getByRole('option', { name: 'Hyperliquid SOL 31 Aug 2026' }),
+      within(screen.getByLabelText('Leg A')).getByRole('option', { name: 'Hyperliquid SOL · SOL' }),
     ).toBeInTheDocument();
   });
 });
@@ -1460,6 +1454,155 @@ describe('BorosPairTicket — the cue prefill lands both legs on ONE maturity', 
 
     await waitFor(() => expect(screen.getByLabelText('Leg A')).toHaveValue(''));
     expect(screen.getByLabelText('Leg B')).toHaveValue('');
+  });
+});
+
+describe('BorosPairTicket — coin, then markets, then a maturity they share', () => {
+  // ED-6567: the cue pre-fills a maturity but must not lock it. The Maturity
+  // chips move BOTH legs to their own markets at the new date, so the user
+  // never has to unselect the legs to change it.
+  const SEP = MATURITY;
+  const DEC = MATURITY + 90 * 86_400;
+
+  it('moves both legs to their venues\' Dec markets when the maturity changes', async () => {
+    server.use(
+      ...handlers({
+        ctx: context({
+          markets: [
+            marketRow({ marketId: 920, name: 'Gate ETH Sep', venue: 'Gate', maturity: SEP }),
+            marketRow({ marketId: 921, name: 'Gate ETH Dec', venue: 'Gate', maturity: DEC }),
+            marketRow({ marketId: 922, name: 'Hyperliquid ETH Sep', venue: 'Hyperliquid', maturity: SEP }),
+            marketRow({ marketId: 923, name: 'Hyperliquid ETH Dec', venue: 'Hyperliquid', maturity: DEC }),
+          ],
+        }),
+      }),
+    );
+    const user = userEvent.setup();
+    renderWithClient(
+      <BorosPrefillHarness prefill={{ base: 'ETH', longVenue: 'Gate', shortVenue: 'Hyperliquid', size: 1000 }} />,
+    );
+    await user.click(screen.getByRole('button', { name: 'fire' }));
+
+    // The cue lands both legs on the shared Sep maturity, and the picker says so.
+    await waitFor(() => expect(screen.getByLabelText('Leg A')).toHaveValue('920'));
+    expect(screen.getByLabelText('Leg B')).toHaveValue('922');
+    expect(chip('Maturity', fmtDateLocal(SEP))).toHaveAttribute('aria-pressed', 'true');
+
+    await user.click(chip('Maturity', fmtDateLocal(DEC)));
+    await waitFor(() => expect(screen.getByLabelText('Leg A')).toHaveValue('921'));
+    expect(screen.getByLabelText('Leg B')).toHaveValue('923');
+  });
+
+  it('settles both legs on a maturity the two markets share when a market is picked', async () => {
+    // Gate lists Sep and Dec, Lighter only Dec: picking Lighter for leg B moves
+    // leg A to Gate's Dec, and the chips offer only Dec.
+    server.use(
+      ...handlers({
+        ctx: context({
+          markets: [
+            marketRow({ marketId: 960, name: 'Gate ETH Sep', venue: 'Gate', maturity: SEP }),
+            marketRow({ marketId: 961, name: 'Gate ETH Dec', venue: 'Gate', maturity: DEC }),
+            marketRow({ marketId: 962, name: 'Lighter ETH Dec', venue: 'Lighter', maturity: DEC }),
+          ],
+        }),
+      }),
+    );
+    const user = userEvent.setup();
+    renderWithClient(<BorosPairTicket />);
+    await waitFor(() =>
+      expect((screen.getByLabelText('Leg A') as HTMLSelectElement).options.length).toBeGreaterThan(1),
+    );
+    await user.selectOptions(screen.getByLabelText('Leg A'), '960');
+    await user.selectOptions(screen.getByLabelText('Leg B'), '962');
+
+    expect(screen.getByLabelText('Leg A')).toHaveValue('961');
+    expect(screen.getByLabelText('Leg B')).toHaveValue('962');
+    const dates = within(screen.getByRole('group', { name: 'Maturity' })).getAllByRole('button').map((b) => b.textContent);
+    expect(dates).toEqual([expect.stringContaining(fmtDateLocal(DEC))]);
+  });
+
+  it('says there is no pair when the two markets share no maturity, and quotes nothing', async () => {
+    const quoted: unknown[] = [];
+    server.use(
+      ...handlers({
+        ctx: context({
+          markets: [
+            marketRow({ marketId: 970, name: 'Gate ETH Dec', venue: 'Gate', maturity: DEC }),
+            marketRow({ marketId: 971, name: 'Hyperliquid ETH Sep', venue: 'Hyperliquid', maturity: SEP }),
+          ],
+        }),
+      }),
+      http.post('/api/boros/pair/simulate', async ({ request }) => {
+        quoted.push(await request.json());
+        return HttpResponse.json({ ok: false, error: { category: 'validation', message: 'no', retryable: false } }, { status: 409 });
+      }),
+    );
+    const user = userEvent.setup();
+    renderWithClient(<BorosPairTicket />);
+    await waitFor(() =>
+      expect((screen.getByLabelText('Leg A') as HTMLSelectElement).options.length).toBeGreaterThan(1),
+    );
+    await user.selectOptions(screen.getByLabelText('Leg A'), '970');
+    await user.selectOptions(screen.getByLabelText('Leg B'), '971');
+    await user.type(screen.getByLabelText(/^Size per leg/), '1000');
+
+    expect(
+      await screen.findByText("Gate ETH Dec · USDT and Hyperliquid ETH Sep · USDT share no maturity, so they can't be paired."),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('group', { name: 'Maturity' })).toBeNull();
+    await new Promise((r) => setTimeout(r, 400));
+    expect(quoted).toHaveLength(0);
+  });
+
+  it('offers the coins Boros lists, and a coin narrows both legs to its markets', async () => {
+    const user = userEvent.setup();
+    server.use(...handlers());
+    renderWithClient(<BorosPairTicket />);
+    await waitFor(() => expect(within(screen.getByRole('group', { name: 'Coin' })).getAllByRole('button').length).toBeGreaterThan(0));
+    const coins = within(screen.getByRole('group', { name: 'Coin' })).getAllByRole('button').map((b) => b.textContent);
+    expect(coins).toEqual(['ETH', 'BTC']);
+    // No Maturity row until a coin is chosen.
+    expect(screen.queryByRole('group', { name: 'Maturity' })).toBeNull();
+
+    await user.click(chip('Coin', 'BTC'));
+    const options = [...(screen.getByLabelText('Leg A') as HTMLSelectElement).options].map((o) => o.textContent);
+    expect(options).toEqual(['select a market…', 'OKX BTC · BTC']);
+  });
+
+  it('clears the legs when the coin changes', async () => {
+    const user = userEvent.setup();
+    server.use(...handlers());
+    renderWithClient(<BorosPairTicket />);
+    await waitFor(() =>
+      expect((screen.getByLabelText('Leg A') as HTMLSelectElement).options.length).toBeGreaterThan(1),
+    );
+    await user.selectOptions(screen.getByLabelText('Leg A'), String(HL));
+    expect(chip('Coin', 'ETH')).toHaveAttribute('aria-pressed', 'true');
+
+    await user.click(chip('Coin', 'BTC'));
+    expect(screen.getByLabelText('Leg A')).toHaveValue('');
+    expect(chip('Coin', 'BTC')).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('reads two same-named markets apart by their collateral', async () => {
+    // Hyperliquid lists BTC once against BTC and once against USDT, under the
+    // same name; only the collateral tells them apart.
+    server.use(
+      ...handlers({
+        ctx: context({
+          markets: [
+            marketRow({ marketId: 950, name: 'Hyperliquid BTC 31 Aug 2026', base: 'BTC', tokenId: 1, collateral: 'BTC' }),
+            marketRow({ marketId: 951, name: 'Hyperliquid BTC 31 Aug 2026', base: 'BTC', tokenId: 3, collateral: 'USDT' }),
+          ],
+        }),
+      }),
+    );
+    renderWithClient(<BorosPairTicket />);
+    await waitFor(() =>
+      expect((screen.getByLabelText('Leg A') as HTMLSelectElement).options.length).toBeGreaterThan(1),
+    );
+    const labels = [...(screen.getByLabelText('Leg A') as HTMLSelectElement).options].map((o) => o.textContent);
+    expect(labels).toEqual(['select a market…', 'Hyperliquid BTC · BTC', 'Hyperliquid BTC · USDT']);
   });
 });
 
