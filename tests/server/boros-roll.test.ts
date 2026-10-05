@@ -58,7 +58,7 @@ const wireBook = (midApr: number, size = 20_000_000) => ({
   long: { ia: [Math.round((midApr - 0.001) * 10_000)], sz: [raw(size)] },
 });
 
-type HeldLeg = { marketId: number; size: number; fixedApr: number; im: number };
+type HeldLeg = { marketId: number; size: number; fixedApr: number; im: number; resting?: boolean };
 
 function accountBodies(netBalance: number, legs: HeldLeg[] = []): Record<string, unknown> {
   const acc = marketAcc(ADDRESS, 3);
@@ -73,7 +73,7 @@ function accountBodies(netBalance: number, legs: HeldLeg[] = []): Record<string,
             marketId: l.marketId,
             signedSize: raw(l.size),
             initialMargin: raw(l.im),
-            orders: [],
+            orders: l.resting ? [{ orderId: '1' }] : [],
           })),
         },
       ],
@@ -295,6 +295,26 @@ describe('POST /api/boros/roll/simulate', () => {
 });
 
 describe('POST /api/boros/roll/execute', () => {
+  it('clears the old markets of resting orders in the same batch, and only those holding one', async () => {
+    // A resting order left on a market the roll just closed could fill later
+    // and re-open that leg; the new markets keep theirs.
+    const seen: Array<number[] | undefined> = [];
+    makeRollApp(
+      accountBodies(500_000, [
+        { marketId: HL, size: -100_000, fixedApr: 0.09, im: 1_000 },
+        { marketId: BN, size: 100_000, fixedApr: 0.045, im: 800, resting: true },
+      ]),
+      spyClient(async (legs, opts) => {
+        seen.push(opts?.cancelOrdersOn);
+        return rolledFills(legs);
+      }),
+    );
+    const res = await post('/api/boros/roll/execute', rollBody());
+    expect(res.statusCode).toBe(200);
+    expect(res.json().data.result.status).toBe('rolled');
+    expect(seen).toEqual([[BN]]);
+  });
+
   it('hands the venue the two legs once — old market, new market, size, both bounds — and busts the reads', async () => {
     const calls: BorosRollLeg[][] = [];
     const busted: string[] = [];

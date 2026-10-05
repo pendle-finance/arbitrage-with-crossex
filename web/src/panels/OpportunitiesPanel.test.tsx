@@ -3,9 +3,11 @@
  * cohort lives in test/fixtures; degraded variants are spelled per case. */
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it } from 'vitest';
-import type { OpportunityLeg, OpportunityPair, SymbolRule } from '../api/types';
+import { http, HttpResponse } from 'msw';
+import { afterEach, describe, expect, it } from 'vitest';
+import type { OpportunityLeg, OpportunityPair, Rebate, SymbolRule } from '../api/types';
 import {
+  agentStatus,
   baseHandlers,
   ETH_GATE,
   makeOpportunitiesResult,
@@ -18,7 +20,8 @@ import {
   OPP_NT,
   symbolHandlers,
 } from '../test/fixtures';
-import { server } from '../test/server';
+import { env, server } from '../test/server';
+import { STRATEGY_STORAGE_KEY } from './HomeControls';
 import { renderWithClient } from '../test/utils';
 import { useTradeFlow } from '../trade/TradeFlow';
 import { OPPORTUNITIES_STORAGE_KEY, OpportunitiesPanel } from './OpportunitiesPanel';
@@ -1362,5 +1365,42 @@ describe('OpportunitiesPanel — filters', () => {
       expect(screen.getByText('No fixed-return opportunities')).toBeInTheDocument(),
     );
     expect(screen.queryByRole('group', { name: 'Filter opportunities' })).not.toBeInTheDocument();
+  });
+});
+
+describe('OpportunitiesPanel — the rebate is the logged-in owner\'s', () => {
+  const ROOT = `0x${'1'.repeat(40)}`;
+  const rebate: Rebate = {
+    mode: 'relative',
+    settlementFeePercentage: 0.5,
+    rebateBps: 5_000,
+    startTimestamp: null,
+    endTimestamp: null,
+    marketIds: null,
+    active: true,
+  };
+  const serve = (address: string) => {
+    localStorage.setItem(STRATEGY_STORAGE_KEY, JSON.stringify({ address, walletUpgraded: true }));
+    server.use(
+      http.get('/api/boros/agent', () => HttpResponse.json(env(agentStatus({ configured: true, root: ROOT })))),
+      http.get('/api/boros/rebate', () => HttpResponse.json(env(rebate))),
+      opportunitiesHandler(makeOpportunitiesResult({ groups: [makeOpportunityGroup()] })),
+    );
+  };
+  afterEach(() => localStorage.clear());
+
+  it('offers the rebate toggle on the logged-in wallet', async () => {
+    serve(ROOT);
+    renderWithClient(<OpportunitiesPanel />);
+    expect(await screen.findByText('Include rebate in APR')).toBeInTheDocument();
+  });
+
+  it('hides it for a view-only wallet', async () => {
+    serve(`0x${'2'.repeat(40)}`);
+    renderWithClient(<OpportunitiesPanel />);
+    await waitFor(() => expect(toggles()).toHaveLength(1));
+    // Give the agent and rebate reads time to land before asserting absence.
+    await new Promise((r) => setTimeout(r, 100));
+    expect(screen.queryByText('Include rebate in APR')).toBeNull();
   });
 });

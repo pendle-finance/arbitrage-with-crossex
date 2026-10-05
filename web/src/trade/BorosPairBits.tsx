@@ -143,27 +143,14 @@ export function DirectionToggle({
 }
 
 /**
- * Market picker.
- *
- * Ineligible markets are HIDDEN once the other leg is chosen, and the list says
- * how many it dropped and why. §2 originally required they stay visible-but-
- * disabled, on the reasoning that a vanished market reads as "not listed" and
- * sends the user hunting. That holds when nothing explains the absence — but
- * with a pair already picked, most of the venue's markets are ineligible, and a
- * dropdown of mostly-dead options is its own kind of hunting. The caption keeps
- * the explanation §2 was protecting.
- *
- * With NO other leg selected nothing is ineligible, so the full list shows.
- */
-/**
  * One leg's market as a CARD — venue, then the three facts that decide
  * whether two markets can pair and what they cost: maturity, collateral,
  * and the mark rate. The Boros spread ticket shows the pair this way, and
  * it puts the eligibility rules (same collateral, same maturity) in front
  * of the user instead of leaving them to be discovered as greyed options.
  *
- * The picker itself stays: `children` is the select, revealed by "Change",
- * so the eligibility filtering and its "N hidden" note are untouched.
+ * The picker itself stays: `children` is the select, so the eligibility
+ * filtering (§2) is untouched.
  */
 export function MarketCard({
   label,
@@ -222,6 +209,20 @@ export function MarketCard({
   );
 }
 
+/**
+ * A market as the picker lists it: venue and symbol, then the collateral. The
+ * coin and maturity are left out (the chips above chose them), and the
+ * collateral is spelled out because two markets can share every other word —
+ * Hyperliquid lists BTC once against BTC and once against USDT.
+ */
+export const marketLabel = (m: BorosPairMarketRow): string =>
+  `${m.name.replace(/\s+\d{1,2} [A-Za-z]{3,4} \d{4}$/, '')} · ${m.collateral || `token${m.tokenId}`}`;
+
+/**
+ * Market picker. It lists only the markets that can take this leg: the chosen
+ * coin's at the chosen maturity, and — once the other leg is picked — the ones sharing its
+ * collateral. With nothing chosen yet the full list shows.
+ */
 export function MarketSelect({
   id,
   label,
@@ -265,7 +266,7 @@ export function MarketSelect({
           <option value="">select a market…</option>
           {eligible.map((m) => (
             <option key={m.marketId} value={m.marketId}>
-              {m.name}
+              {marketLabel(m)}
             </option>
           ))}
         </select>
@@ -622,16 +623,7 @@ export function GasTopUp({
 }
 
 /** Confirm blockers, each with its own remediation where one exists (§6). */
-export function BlockerList({
-  blockers,
-  onCancelAndClose,
-  busyMarketId,
-}: {
-  blockers: BorosPairBlocker[];
-  onCancelAndClose?: (marketId: number) => void;
-  /** marketId currently being remediated, so its button can show progress. */
-  busyMarketId?: number | null;
-}) {
+export function BlockerList({ blockers }: { blockers: BorosPairBlocker[] }) {
   if (blockers.length === 0) return null;
   return (
     <ul className="flex flex-col gap-1.5">
@@ -642,20 +634,22 @@ export function BlockerList({
           className="whitespace-pre-line rounded border border-guava/30 bg-guava/10 px-2.5 py-2 text-[11px] leading-relaxed text-rose-200"
         >
           {b.message}
-          {b.code === 'isolated-must-switch' && onCancelAndClose && b.marketId !== undefined && (
-            // Cancels every resting order on the market and closes its WHOLE
-            // position at market, unsized and unpreviewed — the one control
-            // here that acts on a position the user never typed a size for,
-            // so it holds like every other real-money control.
-            <HoldToConfirmButton
-              tone="red"
-              onConfirm={() => onCancelAndClose(b.marketId as number)}
-              disabled={busyMarketId === b.marketId}
-              className="mt-1.5 !rounded !px-2 !py-0.5 !text-[11px] !font-medium"
-              title="Press and hold: cancels every resting order on this market and closes its entire position at market"
-            >
-              {busyMarketId === b.marketId ? 'Working…' : 'Cancel orders & close position'}
-            </HoldToConfirmButton>
+          {b.code === 'isolated-must-switch' && b.marketId !== undefined && (
+            // A link, not a button: this app cannot close an isolated
+            // position (the close route refuses one), so the button that
+            // used to sit here could only ever fail.
+            <>
+              {' '}Cancel its orders and close the position{' '}
+              <a
+                href={`https://boros.pendle.finance/markets/${b.marketId}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="underline hover:text-rose-100"
+              >
+                on Boros
+              </a>{' '}
+              first.
+            </>
           )}
         </li>
       ))}

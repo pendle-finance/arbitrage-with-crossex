@@ -306,6 +306,45 @@ describe('classifyLegFailure', () => {
     expect(classifyLegFailure(new Error('socket timeout'))).toBe('unknown');
   });
 
+  it('treats an unexplained 5xx on the submission as UNKNOWN — the batch may have run', () => {
+    const http = (status: number, text: string) =>
+      new CoreError(`Boros API /v1/send-txs/bulk-calls — ${text}`, 'venue-rejected', { status });
+    expect(classifyLegFailure(http(500, 'HTTP 500'))).toBe('unknown');
+    expect(classifyLegFailure(http(502, 'HTTP 502'))).toBe('unknown');
+    // A 4xx is a refusal at the door, and a 5xx that names its reason keeps it.
+    expect(classifyLegFailure(http(400, 'HTTP 400'))).toBe('rejected');
+    expect(classifyLegFailure(http(500, 'INSUFFICIENT_LIQUIDITY'))).toBe('insufficient-depth');
+  });
+
+  it('keeps a [SIMULATE] refusal a clean reject even on a 5xx — nothing was sent', () => {
+    const err = new CoreError('[SIMULATE] execution reverted: 0xdeadbeef', 'venue-rejected', { status: 500 });
+    expect(classifyLegFailure(err)).toBe('rejected');
+  });
+
+  it('keeps the pair memo-worthy when the batch throws a 5xx: every leg reads unknown', async () => {
+    const client = {
+      placeMarketOrders: async () => {
+        throw new CoreError('Boros API /v1/send-txs/bulk-calls — HTTP 503', 'venue-rejected', { status: 503 });
+      },
+    } as unknown as BorosOrderClient;
+    const leg = (marketId: number, direction: 'long' | 'short') => ({
+      marketId,
+      direction,
+      size: 1,
+      limitApr: 0.05,
+      clientOrderId: `id-${marketId}`,
+    });
+    const out = await submitBorosPair({
+      client,
+      legA: leg(1, 'short'),
+      legB: leg(2, 'long'),
+      feeDragApr: 0,
+      receiveLeg: 'A',
+    });
+    expect(out.legA.failure?.code).toBe('unknown');
+    expect(out.legB.failure?.code).toBe('unknown');
+  });
+
   it('falls back to a plain rejection', () => {
     expect(classifyLegFailure(new Error('MARKET_CLOSED'))).toBe('rejected');
   });

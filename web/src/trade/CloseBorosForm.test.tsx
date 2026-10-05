@@ -399,6 +399,200 @@ describe('CloseBorosForm — the venue minimum', () => {
   });
 });
 
+/**
+ * Both rate legs of a pair are one hedge. Sent as two requests, the first
+ * could close and the second fail, leaving a naked rate leg — so they go out
+ * as ONE gated batch through the pair route (his call 2026-09-30).
+ */
+describe('CloseBorosForm — two legs close as one batch', () => {
+  const OTHER = MARKET + 1;
+  const MATURITY = 1_800_000_000;
+  const row = (marketId: number, name: string, currentSize: number) => ({
+    marketId,
+    name,
+    venue: name.split(' ')[0],
+    base: 'ETH',
+    tokenId: 2,
+    collateral: 'ETH',
+    maturity: MATURITY,
+    midApr: 0.09,
+    markApr: 0.09,
+    isolatedOnly: false,
+    onIsolatedMargin: false,
+    isolatedHasPositionOrOrders: false,
+    currentSize,
+    collateralPriceUsd: 2_460,
+  });
+  const pairLegs = (): StrategyLeg[] => [
+    makeStrategyLeg({ marketId: MARKET, notionalToken: MINE, collateral: 'ETH', side: 'LONG', venue: 'HYPERLIQUID' }),
+    makeStrategyLeg({ marketId: OTHER, notionalToken: MINE, collateral: 'ETH', side: 'SHORT', venue: 'GATE' }),
+  ];
+  const quoted = (blockers: unknown[] = []) => [
+    versionHandler(),
+    agentReady(),
+    http.get('/api/boros/pair/context', () =>
+      HttpResponse.json(
+        env({
+          markets: [row(MARKET, 'Hyperliquid ETH', MINE), row(OTHER, 'Gate ETH', -MINE)],
+          crossByToken: [{ tokenId: 2, available: 5 }],
+          isolatedByMarket: [],
+          defaultSlippageApr: 0.0025,
+          maxSlippageApr: 0.1,
+        }),
+      ),
+    ),
+    http.post('/api/boros/pair/simulate', () =>
+      HttpResponse.json(
+        env({
+          simulation: { legA: null, legB: null, collateralPriceUsd: 2_460 },
+          gate: { blockers, warnings: [], requiresAcknowledgement: false, opposingLegs: [] },
+          eligibility: { eligible: true, code: null, reason: null },
+          simulatedAtMs: Date.now(),
+          gasBalanceUsd: null,
+        }),
+      ),
+    ),
+  ];
+  const legFill = (marketId: number, direction: 'long' | 'short', over: Record<string, unknown> = {}) => ({
+    marketId,
+    direction,
+    filledSize: MINE,
+    shortfallSize: 0,
+    execApr: null,
+    feeSize: null,
+    failure: null,
+    ...over,
+  });
+  const executeReturns = (legA: unknown, legB: unknown, seen: unknown[]) =>
+    http.post('/api/boros/pair/execute', async ({ request }) => {
+      seen.push(await request.json());
+      return HttpResponse.json(
+        env({
+          result: {
+            legA,
+            legB,
+            bothLegsSubmitted: true,
+            hedgedSize: 0,
+            unhedgedSize: 0,
+            unhedgedLeg: null,
+            realisedSpreadApr: null,
+            partial: false,
+            filledNothing: false,
+          },
+          estimate: {},
+          warnings: [],
+          replayed: false,
+        }),
+      );
+    });
+  const holdBoth = async () => {
+    const btn = await screen.findByRole('button', { name: /Close 2 legs/ });
+    await waitFor(() => expect(btn).toBeEnabled());
+    fireEvent.pointerDown(btn);
+  };
+
+  it('sends ONE pair request carrying both legs and two ids — never two separate closes', async () => {
+    const sent: unknown[] = [];
+    const perLeg: unknown[] = [];
+    const closed: Array<[number, number]> = [];
+    server.use(
+      ...quoted(),
+      executeReturns(legFill(MARKET, 'short'), legFill(OTHER, 'long'), sent),
+      closeReturns({ closed: true, fill: fill(MINE) }, perLeg),
+    );
+    renderWithClient(<CloseBorosForm legs={pairLegs()} onClosed={(l, q) => closed.push([l.marketId!, q])} />);
+    await holdBoth();
+    expect(await screen.findByText(/2 legs closed/, {}, { timeout: 3_000 })).toBeInTheDocument();
+
+    expect(sent).toHaveLength(1);
+    const body = sent[0] as {
+      intent: string;
+      size: number;
+      legA: { marketId: number; direction: string };
+      legB: { marketId: number; direction: string };
+      clientOrderIdA: string;
+      clientOrderIdB: string;
+    };
+    expect(body.intent).toBe('close');
+    expect(body.size).toBe(MINE);
+    // Each leg trades AGAINST the side it holds.
+    expect(body.legA).toMatchObject({ marketId: MARKET, direction: 'short' });
+    expect(body.legB).toMatchObject({ marketId: OTHER, direction: 'long' });
+    expect(body.clientOrderIdA).toBeTruthy();
+    expect(body.clientOrderIdB).not.toBe(body.clientOrderIdA);
+    expect(perLeg).toEqual([]);
+    expect(closed).toEqual([
+      [MARKET, MINE],
+      [OTHER, MINE],
+    ]);
+  });
+
+  it('a refused batch closes nothing and gives its one reason once', async () => {
+    const sent: unknown[] = [];
+    const closed: unknown[] = [];
+    const refused = { filledSize: 0, shortfallSize: MINE, failure: { code: 'rate-deviation', message: 'rate moved too far', cause: 'batch' } };
+    server.use(
+      ...quoted(),
+      executeReturns(legFill(MARKET, 'short', refused), legFill(OTHER, 'long', refused), sent),
+    );
+    renderWithClient(<CloseBorosForm legs={pairLegs()} onClosed={() => closed.push(1)} />);
+    await holdBoth();
+    await waitFor(() => expect(screen.getAllByText(/rate moved too far/)).toHaveLength(1), { timeout: 3_000 });
+    expect(closed).toEqual([]);
+    expect(screen.queryByText(/legs closed/)).not.toBeInTheDocument();
+  });
+
+  it('a blocker on the batch is said in the server words and holds the confirm', async () => {
+    server.use(
+      ...quoted([
+        {
+          code: 'slippage-exceeds-max',
+          leg: 'A',
+          marketId: MARKET,
+          message: 'Hyperliquid ETH: this size fills 1.20% from mid, past the 0.80% max — raise the tolerance or reduce the size.',
+        },
+      ]),
+    );
+    renderWithClient(<CloseBorosForm legs={pairLegs()} />);
+    expect(await screen.findByText(/past the 0\.80% max/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Close 2 legs/ })).toBeDisabled();
+  });
+});
+
+describe('CloseBorosForm — a leg nothing can quote', () => {
+  it('says there is no quote and what bound the close carries, and still lets it through', async () => {
+    // No sibling market shares this leg's collateral and maturity, so the
+    // pair simulator has nothing to quote against. The close is still valid.
+    server.use(...ready());
+    renderWithClient(<CloseBorosForm legs={[leg()]} />);
+    expect(await screen.findByText(/No quote is available for this market/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Close leg/ })).toBeEnabled();
+  });
+
+  it('holds the confirm while the markets are still loading', async () => {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    server.use(
+      versionHandler(),
+      agentReady(),
+      http.get('/api/boros/pair/context', async () => {
+        await gate;
+        return HttpResponse.json(
+          env({ markets: [], crossByToken: [], isolatedByMarket: [], defaultSlippageApr: 0.0025, maxSlippageApr: 0.1 }),
+        );
+      }),
+    );
+    renderWithClient(<CloseBorosForm legs={[leg()]} />);
+    const btn = await screen.findByRole('button', { name: /Close leg/ });
+    expect(btn).toBeDisabled();
+    expect(screen.queryByText(/No quote is available/)).not.toBeInTheDocument();
+    release();
+    await waitFor(() => expect(btn).toBeEnabled());
+  });
+});
+
 describe('CloseBorosForm — full sizes on a large book', () => {
   it.each([
     [4100, '4,100 ETH'],
@@ -415,5 +609,20 @@ describe('CloseBorosForm — full sizes on a large book', () => {
     fireEvent.change(input, { target: { value: '99999999' } });
     expect(await screen.findByText(`size must be above 0 and at most ${text}`)).toBeInTheDocument();
     expect(document.body.textContent).not.toMatch(/\d(k|M) ETH|e\+/);
+  });
+});
+
+describe('CloseBorosForm — a slice of a shared leg', () => {
+  it('never says flat after at the max: the rest of the venue leg stays open', async () => {
+    server.use(...ready());
+    renderWithClient(<CloseBorosForm legs={[{ ...leg(), notionalToken: 37.3, share: 0.0734 }]} />);
+    expect(await screen.findByText(/the rest of the shared leg stays open/)).toBeInTheDocument();
+    expect(screen.queryByText(/flat after/)).not.toBeInTheDocument();
+  });
+
+  it('still says flat after for a whole leg at the max', async () => {
+    server.use(...ready());
+    renderWithClient(<CloseBorosForm legs={[{ ...leg(), share: 1 }]} />);
+    expect(await screen.findByText(/flat after/)).toBeInTheDocument();
   });
 });

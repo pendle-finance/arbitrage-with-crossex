@@ -458,8 +458,11 @@ describe('submitBorosRoll', () => {
     const client = { rollOver } as unknown as BorosOrderClient;
     const r = await submitBorosRoll(client, legs());
     expect(rollOver).toHaveBeenCalledTimes(1);
-    expect(rollOver).toHaveBeenCalledWith(legs());
+    expect(rollOver).toHaveBeenCalledWith(legs(), undefined);
     expect(r.status).toBe('rolled');
+    // The old markets' resting-order cancels ride along to the venue client.
+    await submitBorosRoll(client, legs(), { cancelOrdersOn: [101] });
+    expect(rollOver).toHaveBeenLastCalledWith(legs(), { cancelOrdersOn: [101] });
   });
 
   it('folds a transport throw into unknown — the batch may have gone through', async () => {

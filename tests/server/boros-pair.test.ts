@@ -222,6 +222,25 @@ describe('POST /api/boros/pair/simulate', () => {
     expect(calls.filter((c) => c.startsWith('/apis/v1/markets/order-book'))).toHaveLength(2);
   });
 
+  it('re-reads the mid for a quote after 5s, not the 30s the rest of the app keeps the markets for', async () => {
+    // Every bound and "Est." is measured from the market's mid. At the shared
+    // 30s it was ten times older than the 3s book beside it, and the execute
+    // (always a fresh read) could price a different bound than the one shown.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const calls: string[] = [];
+    makeApp({}, calls);
+    const lists = () =>
+      calls.filter((c) => c.startsWith('/apis/v1/markets') && !c.includes('order-book') && !c.includes('by-ids')).length;
+    await post('/api/boros/pair/simulate', pairBody());
+    const first = lists();
+    expect(first).toBeGreaterThan(0);
+    await post('/api/boros/pair/simulate', pairBody());
+    expect(lists()).toBe(first);
+    vi.setSystemTime(Date.now() + 6_000);
+    await post('/api/boros/pair/simulate', pairBody());
+    expect(lists()).toBe(first + 1);
+  });
+
   it('surfaces an ineligible pair as a reason instead of pricing it', async () => {
     const other = market(BN, 'Binance', 0.045);
     other.imData.maturity = MATURITY + DAY;
@@ -599,6 +618,42 @@ describe('POST /api/boros/pair/execute', () => {
     expect(res.statusCode).toBe(200);
     expect(sent).toHaveLength(2);
     expect(sent.every((s) => s.sizeWei === undefined)).toBe(true);
+  });
+
+  describe('resting orders', () => {
+    const recordOpts = (seen: Array<number[] | undefined>) => ({
+      placeMarketOrders: async (reqs: BorosMarketOrderRequest[], opts?: { cancelOrdersOn?: number[] }) => {
+        seen.push(opts?.cancelOrdersOn);
+        return reqs.map((r) => okFill({ marketId: r.marketId, direction: r.direction }));
+      },
+      cancelOrders: async () => {},
+      closePosition: async () => okFill(),
+    });
+
+    it("clears a close's markets of resting orders in the same batch, and only those holding one", async () => {
+      // Boros has no reduce-only flag: an order left resting could fill after
+      // the close and re-open the leg.
+      const seen: Array<number[] | undefined> = [];
+      makeApp(
+        { ...account(500_000, [{ marketId: HL, size: 100_000, resting: true }, { marketId: BN, size: -100_000 }]) },
+        undefined,
+        recordOpts(seen),
+      );
+      const res = await post(
+        '/api/boros/pair/execute',
+        pairBody({ intent: 'close', opposingAcknowledged: true, clientOrderIdA: 'coid-aaaa', clientOrderIdB: 'coid-bbbb' }),
+      );
+      expect(res.statusCode).toBe(200);
+      expect(seen).toEqual([[HL]]);
+    });
+
+    it('an open cancels nothing, even beside resting orders', async () => {
+      const seen: Array<number[] | undefined> = [];
+      makeApp({ ...account(500_000, [{ marketId: HL, size: 0, resting: true }]) }, undefined, recordOpts(seen));
+      const res = await post('/api/boros/pair/execute', pairBody({ clientOrderIdA: 'coid-aaaa', clientOrderIdB: 'coid-bbbb' }));
+      expect(res.statusCode).toBe(200);
+      expect(seen).toEqual([undefined]);
+    });
   });
 
   it('sends a reducing TARGET as a SELL of the delta, not a buy on the side held', async () => {

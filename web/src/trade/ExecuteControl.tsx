@@ -38,6 +38,8 @@ import { clearPendingBasket, readPendingBasket, writePendingBasket } from './pen
 import { ActionKindChip, estFeeOf, estimateMargin, feeText, SlippageBadge, ViolationList } from './previewBits';
 import { useTradeFlow } from './TradeFlow';
 import { usePreviewDebounced } from './usePreview';
+import { withinTrackedDrift } from './trackedPriceDrift';
+import { useActiveWallet } from '../panels/trackedAddress';
 
 const STALE_MS = 10_000;
 
@@ -67,6 +69,12 @@ interface Props {
    * tracked) — blocks confirm without blocking the preview that fills it. */
   extraDisabled?: boolean;
   previewOpts?: { debounceMs?: number; refetchInterval?: number };
+  /**
+   * Keep Execute armed while the ONLY change is the auto-tracked maker price,
+   * moved by at most this fraction since the shown preview. Pass it only while
+   * the price tracks the book; a typed price is the user's and re-previews.
+   */
+  trackedPriceTolerance?: number;
   className?: string;
   buttonClassName?: string;
   /** Test hook only — the product gate stays at 800ms. */
@@ -89,12 +97,15 @@ export function ExecuteControl({
   intentKey,
   extraDisabled = false,
   previewOpts,
+  trackedPriceTolerance,
   className,
   buttonClassName,
   holdMs,
   hoverCard = true,
 }: Props) {
   const flow = useTradeFlow();
+  // View-only shows every position but trades none of them.
+  const viewOnly = useActiveWallet().viewOnly;
   const account = useAccount();
   const positions = usePositions();
   const now = useNow(1_000);
@@ -125,6 +136,10 @@ export function ExecuteControl({
   const preview = usePreviewDebounced(scope, previewActions, {
     debounceMs: previewOpts?.debounceMs ?? 400,
     refetchInterval: previewOpts?.refetchInterval ?? 3_000,
+    tolerate:
+      trackedPriceTolerance !== undefined
+        ? (shown, current) => withinTrackedDrift(shown, current, trackedPriceTolerance)
+        : undefined,
   });
   const previews = preview.previews;
 
@@ -211,7 +226,9 @@ export function ExecuteControl({
   // Every deal shape needs the CURRENT preview at confirm (closes get side/qty
   // from the resolver), so the preview gate applies to all actions now.
   const needsPreview = (actions ?? []).length > 0;
-  const ageMs = preview.dataUpdatedAt > 0 ? Math.max(0, now - preview.dataUpdatedAt) : Infinity;
+  // The age of what is SHOWN: a tolerated tick keeps the previous key's result
+  // on screen, and it is that result's age the stale gate must judge.
+  const ageMs = preview.shownAt > 0 ? Math.max(0, now - preview.shownAt) : Infinity;
   const stale = needsPreview && ageMs > STALE_MS;
   const previewMissing = needsPreview && (!previews || preview.estimating || preview.isError || stale);
   const hasViolations = previews?.some((p) => p.violations.length > 0) ?? false;
@@ -261,6 +278,7 @@ export function ExecuteControl({
     splitClose;
   const disabled =
     !actions ||
+    viewOnly ||
     extraDisabled ||
     execute.isPending ||
     executeSplit.isPending ||
@@ -330,6 +348,7 @@ export function ExecuteControl({
           label
         )}
       </HoldToConfirmButton>
+      {viewOnly && <p className="mt-1 text-[11px] text-ink-400">View-only: switch to your logged-in wallet to trade.</p>}
       {placedResting && (
         <div
           role="status"

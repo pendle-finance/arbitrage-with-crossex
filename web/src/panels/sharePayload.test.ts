@@ -94,9 +94,10 @@ describe('pairSharePayload', () => {
   });
 
   it('derives the locked spread on NOTIONAL from the capital-based rate', () => {
-    // carry/yr = lockedAprFwd × capital; per-leg notional = half the pair's.
+    // carry/yr = lockedAprFwd × capital; per-leg notional = half the two RATE
+    // legs' (24.5 each) — the notional the carry is earned on, not the perps'.
     const p = pairSharePayload(pair(), 'ETH', opts);
-    expect(p.sp).toBeCloseTo((0.0292 * 200) / (98 / 2), 12);
+    expect(p.sp).toBeCloseTo((0.0292 * 200) / 24.5, 12);
   });
 
   it('omits a YU leg rate rather than publishing it as 0%', () => {
