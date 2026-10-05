@@ -1187,6 +1187,9 @@ export type BorosLegFailureCode =
   /** Mirrors src/core/boros/orders.ts: the venue's minimum cash to enter the
    * first market on a collateral token. Collateral, not gas. */
   | 'min-cash'
+  /** Mirrors src/core/boros/orders.ts: the account is in the most markets
+   * Boros allows, and none could be exited. */
+  | 'market-limit'
   | 'rejected'
   | 'unknown';
 

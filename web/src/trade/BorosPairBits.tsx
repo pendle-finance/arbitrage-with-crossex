@@ -847,6 +847,7 @@ const FAILURE_LABEL: Record<NonNullable<BorosLegFill['failure']>['code'], string
   'insufficient-margin': 'not enough margin',
   'no-gas': 'no prepaid gas',
   'min-cash': 'below the venue minimum',
+  'market-limit': 'too many markets',
   rejected: 'rejected',
   unknown: 'no confirmation',
 };
@@ -894,6 +895,9 @@ const FAILURE_HINT: Record<NonNullable<BorosLegFill['failure']>['code'], string>
   'min-cash':
     'This is the first trade on this collateral on Boros, and the venue needs a minimum balance in that account before it will accept one. ' +
     'This is collateral, not gas: topping up the gas balance will not clear it. Deposit into your Boros balance for this collateral, then re-issue.',
+  'market-limit':
+    'This collateral account is in as many Boros markets as it may hold, and each one still has a position or an order. ' +
+    'Close a position you no longer need, then re-issue.',
   rejected: 'The venue rejected the order outright — its own message is below.',
   // Deliberately terse: an 'unknown' failure always carries a specific message
   // below it, and two paragraphs saying the same thing read as two problems.
