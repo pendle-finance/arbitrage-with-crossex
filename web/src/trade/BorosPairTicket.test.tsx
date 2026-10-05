@@ -12,6 +12,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { STRATEGY_STORAGE_KEY } from '../panels/HomeControls';
 import { installFakeWallet, removeFakeWallet } from '../test/fakeWallet';
 import { server } from '../test/server';
+import { fmtDateLocal } from '../lib/fmt';
 import { renderWithClient } from '../test/utils';
 import { BorosPairTicket } from './BorosPairTicket';
 import { useTradeFlow, type BorosOpenPrefill } from './TradeFlow';
@@ -22,6 +23,12 @@ const BN = 158;
 const MATURITY = 1_800_000_000;
 
 const env = <T,>(data: T) => ({ ok: true, data, meta: { ts: Date.now() } });
+
+/** A chip in the Coin or Maturity row, by its leading text. */
+const chip = (group: 'Coin' | 'Maturity', text: string) =>
+  within(screen.getByRole('group', { name: group }))
+    .getAllByRole('button')
+    .find((b) => b.textContent?.startsWith(text)) as HTMLButtonElement;
 
 const marketRow = (over: Record<string, unknown> = {}) => ({
   marketId: HL,
@@ -377,13 +384,14 @@ describe('BorosPairTicket', () => {
       expect((screen.getByLabelText('Leg A') as HTMLSelectElement).options.length).toBeGreaterThan(1),
     );
     await user.selectOptions(screen.getByLabelText('Leg A'), String(HL));
-    expect(screen.getByLabelText('Maturity')).toHaveValue(String(MATURITY));
+    expect(chip('Coin', 'ETH')).toHaveAttribute('aria-pressed', 'true');
+    expect(chip('Maturity', fmtDateLocal(MATURITY))).toHaveAttribute('aria-pressed', 'true');
 
     const legB = screen.getByLabelText('Leg B') as HTMLSelectElement;
     const labels = [...legB.options].map((o) => o.textContent);
     // Same maturity, same collateral — offered, collateral named, no date.
     expect(labels).toContain('Binance ETHUSDT · USDT');
-    // Another maturity is not listed: change it with the maturity picker.
+    // Another maturity is not listed: change it with the Maturity chips.
     expect(labels.some((l) => l?.startsWith('Bybit'))).toBe(false);
     // A different collateral can never pair.
     expect(labels.some((l) => l?.startsWith('OKX'))).toBe(false);
@@ -1484,9 +1492,9 @@ describe('BorosPairTicket — the maturity is chosen first', () => {
     // The cue lands both legs on the shared Sep maturity, and the picker says so.
     await waitFor(() => expect(screen.getByLabelText('Leg A')).toHaveValue('920'));
     expect(screen.getByLabelText('Leg B')).toHaveValue('922');
-    expect(screen.getByLabelText('Maturity')).toHaveValue(String(SEP));
+    expect(chip('Maturity', fmtDateLocal(SEP))).toHaveAttribute('aria-pressed', 'true');
 
-    await user.selectOptions(screen.getByLabelText('Maturity'), String(DEC));
+    await user.click(chip('Maturity', fmtDateLocal(DEC)));
     await waitFor(() => expect(screen.getByLabelText('Leg A')).toHaveValue('921'));
     expect(screen.getByLabelText('Leg B')).toHaveValue('923');
   });
@@ -1512,12 +1520,42 @@ describe('BorosPairTicket — the maturity is chosen first', () => {
     await waitFor(() => expect(screen.getByLabelText('Leg A')).toHaveValue('930'));
 
     // Hyperliquid lists no Dec market, so leg B clears; leg A moves.
-    await user.selectOptions(screen.getByLabelText('Maturity'), String(DEC));
+    await user.click(chip('Maturity', fmtDateLocal(DEC)));
     await waitFor(() => expect(screen.getByLabelText('Leg B')).toHaveValue(''));
     expect(screen.getByLabelText('Leg A')).toHaveValue('931');
     // And leg B offers the Dec markets it can still take.
     const legB = screen.getByLabelText('Leg B') as HTMLSelectElement;
     expect([...legB.options].map((o) => o.value)).toEqual(['', '933']);
+  });
+
+  it('offers the coins Boros lists, and a coin narrows both legs to its markets', async () => {
+    const user = userEvent.setup();
+    server.use(...handlers());
+    renderWithClient(<BorosPairTicket />);
+    await waitFor(() => expect(within(screen.getByRole('group', { name: 'Coin' })).getAllByRole('button').length).toBeGreaterThan(0));
+    const coins = within(screen.getByRole('group', { name: 'Coin' })).getAllByRole('button').map((b) => b.textContent);
+    expect(coins).toEqual(['ETH', 'BTC']);
+    // No Maturity row until a coin is chosen.
+    expect(screen.queryByRole('group', { name: 'Maturity' })).toBeNull();
+
+    await user.click(chip('Coin', 'BTC'));
+    const options = [...(screen.getByLabelText('Leg A') as HTMLSelectElement).options].map((o) => o.textContent);
+    expect(options).toEqual(['select a market…', 'OKX BTC · BTC']);
+  });
+
+  it('clears the legs when the coin changes', async () => {
+    const user = userEvent.setup();
+    server.use(...handlers());
+    renderWithClient(<BorosPairTicket />);
+    await waitFor(() =>
+      expect((screen.getByLabelText('Leg A') as HTMLSelectElement).options.length).toBeGreaterThan(1),
+    );
+    await user.selectOptions(screen.getByLabelText('Leg A'), String(HL));
+    expect(chip('Coin', 'ETH')).toHaveAttribute('aria-pressed', 'true');
+
+    await user.click(chip('Coin', 'BTC'));
+    expect(screen.getByLabelText('Leg A')).toHaveValue('');
+    expect(chip('Coin', 'BTC')).toHaveAttribute('aria-pressed', 'true');
   });
 
   it('reads two same-named markets apart by their collateral', async () => {

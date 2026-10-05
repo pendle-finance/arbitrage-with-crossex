@@ -24,7 +24,6 @@ import { VenueIcon } from '../components/AssetIcon';
 import { HoldToConfirmButton } from '../components/HoldToConfirmButton';
 import { amountError } from '../lib/amount';
 import { fmtDateLocal, fmtPct, fmtUsd, sigGrouped } from '../lib/fmt';
-import { daysToMaturity } from '../lib/boros';
 import { ChevronDown } from 'lucide-react';
 
 /** Was this leg actually sent to the venue? A not-submitted sentinel is
@@ -212,56 +211,16 @@ export function MarketCard({
 
 /**
  * A market as the picker lists it: venue and symbol, then the collateral. The
- * maturity is left out (the maturity picker above chose it), and the
+ * coin and maturity are left out (the chips above chose them), and the
  * collateral is spelled out because two markets can share every other word —
  * Hyperliquid lists BTC once against BTC and once against USDT.
  */
 export const marketLabel = (m: BorosPairMarketRow): string =>
   `${m.name.replace(/\s+\d{1,2} [A-Za-z]{3,4} \d{4}$/, '')} · ${m.collateral || `token${m.tokenId}`}`;
 
-/** The maturity picker: chosen first, it decides which markets the legs list. */
-export function MaturitySelect({
-  id,
-  value,
-  maturities,
-  nowSec,
-  onPick,
-  disabled,
-}: {
-  id: string;
-  value: number | null;
-  maturities: number[];
-  nowSec: number;
-  onPick: (maturity: number | null) => void;
-  disabled?: boolean;
-}) {
-  return (
-    <div className="relative">
-      <select
-        id={id}
-        className="select"
-        aria-label="Maturity"
-        value={value ?? ''}
-        disabled={disabled}
-        onChange={(e) => onPick(e.target.value === '' ? null : Number(e.target.value))}
-      >
-        <option value="">select a maturity…</option>
-        {maturities.map((m) => (
-          <option key={m} value={m}>
-            {fmtDateLocal(m)} · {daysToMaturity(m, nowSec)}d
-          </option>
-        ))}
-      </select>
-      <span aria-hidden className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-ink-400">
-        <ChevronDown size={14} aria-hidden />
-      </span>
-    </div>
-  );
-}
-
 /**
  * Market picker. It lists only the markets that can take this leg: the chosen
- * maturity's, and — once the other leg is picked — the ones sharing its
+ * coin's at the chosen maturity, and — once the other leg is picked — the ones sharing its
  * collateral. With nothing chosen yet the full list shows.
  */
 export function MarketSelect({
