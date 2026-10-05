@@ -12,6 +12,7 @@
  * every number is a pure function of the venue feeds.
  */
 import { useMemo, useState } from 'react';
+import { AccountsAlert } from '../accounts/AccountsUi';
 import { useAccount, useAssetView, useAssetViewWindows, useBorosAgent, useFees, usePositions, useRebate } from '../../api/queries';
 import { EmptyState } from '../../components/EmptyState';
 import { QueryError } from '../../components/QueryError';
@@ -27,13 +28,6 @@ import { assetIsActive, deriveAsset, SECONDS_IN_YEAR } from './assetModel';
 import { legSinceParam, loadPrefs, savePrefs, type AssetViewPrefs } from './assetPrefsStore';
 import { AssetCard } from './AssetCard';
 
-/** Health factor colour: red below 1.1, amber below 1.5, else the plain ink. */
-function healthClass(h: number | null): string {
-  if (h === null) return 'text-ink-50';
-  if (h < 1.1) return 'text-rose-300';
-  if (h < 1.5) return 'text-amber-200';
-  return 'text-ink-50';
-}
 
 export function AssetsHome() {
   const { address } = useTrackedAddress();
@@ -235,6 +229,8 @@ export function AssetsHome() {
 
   return (
     <section>
+      {/* Account health lives on Accounts; here only a warning when needed. */}
+      <AccountsAlert />
       {viewOnly && address && loggedInRoot && (
         <p className="mb-4 text-xs text-ink-400">
           Viewing <span className="num text-ink-200">{short(address)}</span>, not logged in: view-only. Perps are
@@ -318,39 +314,6 @@ export function AssetsHome() {
         </>
         )}
 
-        {/* Boros account, per margin bucket: health and free margin, so the
-            rate leg's safety and room to open more read off this page instead
-            of the Boros app. Health is price-independent; the available figure
-            falls back to the collateral token when the token has no USD price. */}
-        {borosMargin.length > 0 && (
-          <div className={`flex flex-wrap gap-x-9 gap-y-4 ${derived.length > 0 ? 'basis-full border-t border-ink-700/60 pt-6' : ''}`}>
-            <div className="w-full text-[14px] font-normal leading-[16.94px] text-ink-300" title="Your Boros margin, per collateral bucket, as the venue reports it.">
-              Boros account
-            </div>
-            {borosMargin.map((m, i) => (
-              // An isolated bucket holding only collateral has no marketId.
-              <div key={`${m.tokenId}:${m.isCross ? 'cross' : (m.marketId ?? `i${i}`)}`} className="flex flex-col gap-2">
-                <div className="num text-[13px] text-ink-300">
-                  {m.collateral} {m.isCross ? 'cross' : 'isolated'}
-                </div>
-                <div className="flex items-baseline gap-6">
-                  <span title="Equity ÷ maintenance margin. Above 1 is safe; the account liquidates at 1.">
-                    <span className="text-[11px] text-ink-500">Health </span>
-                    <span className={`num text-[18px] font-semibold leading-none ${healthClass(m.healthFactor)}`}>
-                      {m.healthFactor === null ? '—' : num(m.healthFactor, 2)}
-                    </span>
-                  </span>
-                  <span title="Free margin — what you can still post before opening more.">
-                    <span className="text-[11px] text-ink-500">Available </span>
-                    <span className="num text-[18px] font-semibold leading-none text-ink-50">
-                      {m.availableUsd !== null ? fmtUsd(m.availableUsd) : `${num(m.availableToken, 2)} ${m.collateral}`}
-                    </span>
-                  </span>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
       </div>
       )}
 

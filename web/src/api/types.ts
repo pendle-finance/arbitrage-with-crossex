@@ -1575,9 +1575,14 @@ export interface AssetBorosMargin {
   healthFactor: number | null;
   /** Free collateral in the bucket's token. */
   availableToken: number;
+  /** The account's value in its own token. Absent from an older server. */
+  equityToken?: number;
   availableUsd: number | null;
   equityUsd: number | null;
   maintMarginUsd: number | null;
+  /** An isolated bucket's market venue and coin, for naming it. */
+  marketVenue?: string;
+  marketBase?: string;
 }
 
 export interface AssetGroup {

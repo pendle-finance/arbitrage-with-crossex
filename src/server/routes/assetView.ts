@@ -235,9 +235,14 @@ export interface AssetBorosMarginOut {
   healthFactor: number | null;
   /** Free collateral in the bucket's token. */
   availableToken: number;
+  /** The account's value in its token (the USD figures need a price). */
+  equityToken: number;
   availableUsd: number | null;
   equityUsd: number | null;
   maintMarginUsd: number | null;
+  /** An isolated bucket's market venue and coin, for naming it. */
+  marketVenue?: string;
+  marketBase?: string;
 }
 
 export interface AssetGroupOut {
@@ -395,6 +400,63 @@ export interface AssetViewParams {
   requestedSinceSec: number | null;
   legSince: Map<number, number>;
   fresh: boolean;
+}
+
+/**
+ * Boros margin per bucket: one row for the cross bucket and each isolated
+ * bucket that holds anything. Health (equity / maintenance) is unitless, so
+ * it survives an unpriced token; only the USD columns go null there. Not
+ * gated on open positions — a bucket holding only collateral is still a row.
+ * Shared by the asset view and the light `/boros/margin` read.
+ */
+export function borosMarginOf(
+  zones: Awaited<ReturnType<typeof fetchBorosCollaterals>>,
+  markets: BorosMarket[],
+): AssetBorosMarginOut[] {
+  const prices = resolveCollateralPricesUsd(markets);
+  const tokenPrice = (tokenId: number): number | null => prices.get(tokenId) ?? null;
+  const marketById = new Map(markets.map((m) => [m.marketId, m]));
+  const borosMargin: AssetBorosMarginOut[] = [];
+  for (const zone of zones) {
+    const px = tokenPrice(zone.tokenId);
+    const collateral = BOROS_TOKEN_SYMBOLS[zone.tokenId] ?? `token${zone.tokenId}`;
+    const buckets: Array<{ group: (typeof zone.isolated)[number]; isCross: boolean }> = [
+      ...(zone.cross ? [{ group: zone.cross, isCross: true }] : []),
+      ...zone.isolated.map((group) => ({ group, isCross: false })),
+    ];
+    for (const { group, isCross } of buckets) {
+      const equityToken = norm18(group.netBalance);
+      const holdsPosition = group.marketPositions.some((p) => norm18(p.notionalSize) !== 0);
+      if (equityToken === 0 && !holdsPosition) continue;
+      const maintToken = group.marketPositions.reduce((s, p) => s + norm18(p.maintMargin), 0);
+      const usedToken = group.marketPositions.reduce(
+        (s, p) => s + norm18(p.positionInitialMargin ?? p.initialMargin),
+        0,
+      );
+      // The venue's own free-margin figure when present (borosPair readAccount
+      // trusts it the same way); else netBalance minus committed margin.
+      const availableToken =
+        group.availableInitialMargin !== undefined
+          ? norm18(group.availableInitialMargin)
+          : equityToken - usedToken;
+      const marketId = isCross ? undefined : group.marketPositions[0]?.marketId;
+      const market = marketId !== undefined ? marketById.get(marketId) : undefined;
+      borosMargin.push({
+        tokenId: zone.tokenId,
+        collateral,
+        isCross,
+        ...(marketId !== undefined ? { marketId } : {}),
+        ...(market ? { marketVenue: market.venue, marketBase: market.base } : {}),
+        healthFactor: borosHealthFactor(equityToken, maintToken),
+        availableToken,
+        equityToken,
+        availableUsd: px === null ? null : availableToken * px,
+        equityUsd: px === null ? null : equityToken * px,
+        maintMarginUsd: px === null ? null : maintToken * px,
+      });
+    }
+  }
+  return borosMargin;
 }
 
 export function createAssetViewBuilder(deps: AppDeps) {
@@ -1028,47 +1090,7 @@ export function createAssetViewBuilder(deps: AppDeps) {
       );
     }
 
-    // Boros margin per bucket: one row for the cross bucket and each isolated
-    // bucket that holds anything. Health (equity / maintenance) is unitless, so
-    // it survives an unpriced token; only the USD columns go null there. Not
-    // gated on open positions — a bucket holding only collateral is still a row.
-    const borosMargin: AssetBorosMarginOut[] = [];
-    for (const zone of zones) {
-      const px = tokenPrice(zone.tokenId);
-      const collateral = BOROS_TOKEN_SYMBOLS[zone.tokenId] ?? `token${zone.tokenId}`;
-      const buckets: Array<{ group: (typeof zone.isolated)[number]; isCross: boolean }> = [
-        ...(zone.cross ? [{ group: zone.cross, isCross: true }] : []),
-        ...zone.isolated.map((group) => ({ group, isCross: false })),
-      ];
-      for (const { group, isCross } of buckets) {
-        const equityToken = norm18(group.netBalance);
-        const holdsPosition = group.marketPositions.some((p) => norm18(p.notionalSize) !== 0);
-        if (equityToken === 0 && !holdsPosition) continue;
-        const maintToken = group.marketPositions.reduce((s, p) => s + norm18(p.maintMargin), 0);
-        const usedToken = group.marketPositions.reduce(
-          (s, p) => s + norm18(p.positionInitialMargin ?? p.initialMargin),
-          0,
-        );
-        // The venue's own free-margin figure when present (borosPair readAccount
-        // trusts it the same way); else netBalance minus committed margin.
-        const availableToken =
-          group.availableInitialMargin !== undefined
-            ? norm18(group.availableInitialMargin)
-            : equityToken - usedToken;
-        const marketId = isCross ? undefined : group.marketPositions[0]?.marketId;
-        borosMargin.push({
-          tokenId: zone.tokenId,
-          collateral,
-          isCross,
-          ...(marketId !== undefined ? { marketId } : {}),
-          healthFactor: borosHealthFactor(equityToken, maintToken),
-          availableToken,
-          availableUsd: px === null ? null : availableToken * px,
-          equityUsd: px === null ? null : equityToken * px,
-          maintMarginUsd: px === null ? null : maintToken * px,
-        });
-      }
-    }
+    const borosMargin = borosMarginOf(zones, markets);
 
     // Boros history sums per market: settlements + fills since T0.
     interface HistAgg extends AssetBorosHistoryOut {
@@ -1263,7 +1285,27 @@ export function createAssetViewBuilder(deps: AppDeps) {
 
 export function assetViewRoutes(deps: AppDeps) {
   const buildAssetView = createAssetViewBuilder(deps);
+  const fetchImpl: FetchLike = resolveBorosFetch(deps.borosFetch);
   return async function plugin(app: FastifyInstance): Promise<void> {
+    /**
+     * Just the Boros accounts' margin — what the header's account status
+     * needs on every tab. The same two cached reads the asset view makes, so
+     * it costs nothing extra while Positions is open and little otherwise.
+     */
+    app.get('/boros/margin/:address', async (req, reply) => {
+      const address = (req.params as { address: string }).address;
+      if (!EVM_ADDRESS_RE.test(address)) {
+        throw new CoreError('invalid EVM address (expected 0x + 40 hex chars)', 'validation');
+      }
+      const markets = (await deps.cache.get('boros:markets', TTL.boros, () => fetchBorosMarkets(fetchImpl))).value;
+      const zones = (
+        await deps.cache.get(`boros:collaterals:${address}`, TTL.boros, () =>
+          fetchBorosCollaterals(fetchImpl, address, markets),
+        )
+      ).value;
+      return reply.ok({ borosMargin: borosMarginOf(zones, markets) });
+    });
+
     app.get('/asset-view/:address', async (req, reply) => {
       const raw = (req.params as { address: string }).address;
       if (!EVM_ADDRESS_RE.test(raw)) {

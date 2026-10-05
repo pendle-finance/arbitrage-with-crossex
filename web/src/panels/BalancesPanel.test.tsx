@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -136,7 +136,7 @@ async function openRebalanceDialog(user: ReturnType<typeof userEvent.setup>) {
 }
 
 function assetRows(): Record<string, string>[] {
-  const table = within(region('Assets')).getByRole('table');
+  const table = within(region('CrossEx assets')).getByRole('table');
   const headers = Array.from(table.querySelectorAll('th'), (th) => th.textContent ?? '');
   return Array.from(table.querySelectorAll('tbody tr'), (tr) =>
     Object.fromEntries(Array.from(tr.querySelectorAll('td'), (td, i) => [headers[i], td.textContent ?? ''])),
@@ -191,21 +191,23 @@ function sentencesOf(text: string): string[] {
 }
 
 describe('BalancesPanel layout', () => {
-  it('cards in order: the margin card, then one Assets card that holds Rebalance', async () => {
+  it('cards in order: every account first, then one CrossEx assets card that holds Rebalance', async () => {
     await show(ACCOUNT_A);
     expect(screen.getAllByRole('region').map((section) => section.getAttribute('aria-label'))).toEqual([
-      'Assets',
+      'Accounts',
+      'CrossEx assets',
       'Rebalance',
     ]);
-    const margin = screen.getByRole('img', { name: 'Margin usage' });
-    expect(margin.compareDocumentPosition(region('Assets')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(region('Assets')).toContainElement(region('Rebalance'));
-    expect(region('Assets')).toHaveClass('card');
+    expect(
+      region('Accounts').compareDocumentPosition(region('CrossEx assets')) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(region('CrossEx assets')).toContainElement(region('Rebalance'));
+    expect(region('CrossEx assets')).toHaveClass('card');
   });
 
   it('the Assets card shows the table first, then the borrow facts, then Rebalance and Manual Transfer side by side', async () => {
     await show(ACCOUNT_A);
-    const assets = region('Assets');
+    const assets = region('CrossEx assets');
     const table = within(assets).getByRole('table');
     const facts = region('Rebalance').querySelector('dl') as HTMLElement;
     const transfer = within(region('Rebalance')).getByRole('group', { name: 'Transfer' });
@@ -237,7 +239,7 @@ describe('BalancesPanel layout', () => {
     renderWithClient(<BalancesPanel />);
     const transfer = await screen.findByRole('group', { name: 'Transfer' });
     expect(within(transfer).getByRole('button', { name: 'Manual Transfer' })).toBeEnabled();
-    expect(await within(region('Assets')).findByText(/^Could not load Rebalance\./)).toBeInTheDocument();
+    expect(await within(region('CrossEx assets')).findByText(/^Could not load Rebalance\./)).toBeInTheDocument();
     expect(transfer).toBeInTheDocument();
   });
 
@@ -267,7 +269,7 @@ describe('BalancesPanel layout', () => {
 
     answer = 'fail';
     release();
-    expect(await within(region('Assets')).findByText(/^Could not load Rebalance\./)).toBeInTheDocument();
+    expect(await within(region('CrossEx assets')).findByText(/^Could not load Rebalance\./)).toBeInTheDocument();
     expect(window).toBeInTheDocument();
     expect(transfer).toBeInTheDocument();
 
@@ -283,17 +285,7 @@ describe('BalancesPanel layout', () => {
 
   it('assets table scrolls with the page', async () => {
     await show(ACCOUNT_B);
-    expect(within(region('Assets')).getByRole('table').parentElement).toHaveClass('max-h-none');
-  });
-
-  it('margin card gets the borrow margin', async () => {
-    await show(ACCOUNT_B);
-    expect(screen.queryByText('Initial margin · borrow')).toBeNull();
-    cleanup();
-
-    await show({ ...ACCOUNT_B, rebalance: rebalanceViews.twoBorrows, account: accountBodies.twoBorrows });
-    expect(screen.getByText('Initial margin · borrow')).toBeInTheDocument();
-    expect(screen.getByText('$48.80')).toBeInTheDocument();
+    expect(within(region('CrossEx assets')).getByRole('table').parentElement).toHaveClass('max-h-none');
   });
 
   it('one info mark', async () => {
@@ -398,7 +390,7 @@ describe('BalancesPanel assets', () => {
 
   it('has no Available column', async () => {
     await show(ACCOUNT_B);
-    const headers = [...within(region('Assets')).getByRole('table').querySelectorAll('th')].map((th) => th.textContent);
+    const headers = [...within(region('CrossEx assets')).getByRole('table').querySelectorAll('th')].map((th) => th.textContent);
     expect(headers).toEqual(['Coin', 'Equity', 'Balance', 'uPnL']);
   });
 
@@ -423,18 +415,18 @@ describe('BalancesPanel assets', () => {
       { Coin: 'USDC SPOT', Equity: '', Balance: '5.00', uPnL: '' },
     ]);
     const user = userEvent.setup();
-    const held = within(region('Assets')).getByRole('button', { name: '318.42' });
+    const held = within(region('CrossEx assets')).getByRole('button', { name: '318.42' });
     expect(held.firstElementChild).toHaveClass('text-ink-100');
     await user.hover(held);
     expect((await screen.findByRole('tooltip')).textContent).toBe('300.00 free. 18.42 is held by open Gate spot orders.');
     await user.unhover(held);
     await waitFor(() => expect(screen.queryByRole('tooltip')).toBeNull());
-    expect(within(region('Assets')).getByRole('button', { name: '5.00' })).toBeInTheDocument();
+    expect(within(region('CrossEx assets')).getByRole('button', { name: '5.00' })).toBeInTheDocument();
   });
 
   it('a spot balance with nothing held has no hover', async () => {
     await show(ACCOUNT_B);
-    expect(within(region('Assets')).queryByRole('button', { name: '318.42' })).toBeNull();
+    expect(within(region('CrossEx assets')).queryByRole('button', { name: '318.42' })).toBeNull();
   });
 
   it('assets no spot read', async () => {
@@ -443,7 +435,7 @@ describe('BalancesPanel assets', () => {
     const group = rows.findIndex((row) => row.Coin === 'Gate spot');
     expect(group).toBe(rows.length - 2);
     expect(rows[group + 1].Coin.startsWith(NO_SPOT_READ)).toBe(true);
-    expect(within(region('Assets')).getByText(NO_SPOT_READ)).toBeInTheDocument();
+    expect(within(region('CrossEx assets')).getByText(NO_SPOT_READ)).toBeInTheDocument();
   });
 });
 
@@ -456,7 +448,7 @@ describe('BalancesPanel transfer pick', () => {
     const user = userEvent.setup();
     const scroll = vi.spyOn(Element.prototype, 'scrollIntoView');
     await show(ACCOUNT_B);
-    const assets = region('Assets');
+    const assets = region('CrossEx assets');
     const rebalanceDialog = await openRebalanceDialog(user);
     await user.click(await within(rebalanceDialog).findByRole('button', { name: 'Transfer' }));
 
@@ -510,12 +502,12 @@ describe('BalancesPanel transfer pick', () => {
 describe('BalancesPanel spot group', () => {
   it('all spot coins at 0 hide the group', async () => {
     await show({ ...ACCOUNT_B, transfer: transferViews.spotZero });
-    expect(within(region('Assets')).queryByRole('button', { name: 'Gate spot' })).toBeNull();
+    expect(within(region('CrossEx assets')).queryByRole('button', { name: 'Gate spot' })).toBeNull();
   });
 
   it('no CrossEx assets and no Spot read', async () => {
     await show({ ...ACCOUNT_B, transfer: transferViews.noSpot, account: accountBodies.noAssets });
-    const assets = region('Assets');
+    const assets = region('CrossEx assets');
     expect(within(assets).queryByRole('button', { name: 'Gate spot' })).toBeNull();
     expect(within(assets).getByText(NO_SPOT_READ)).toBeInTheDocument();
     expect(within(assets).getByText('No non-zero balances')).toBeInTheDocument();
@@ -523,14 +515,14 @@ describe('BalancesPanel spot group', () => {
 
   it('an empty CrossEx with no Spot read shows the deposit hint and the spot line', async () => {
     await show({ ...ACCOUNT_B, transfer: transferViews.noSpot, account: accountBodies.noAssets });
-    const assets = region('Assets');
+    const assets = region('CrossEx assets');
     expect(within(assets).getByText('Deposit collateral to CrossEx to get started.')).toBeInTheDocument();
     expect(within(assets).getByText(NO_SPOT_READ)).toBeInTheDocument();
   });
 
   it('an empty CrossEx with spot money still lists the spot rows', async () => {
     await show({ ...ACCOUNT_B, account: accountBodies.noAssets });
-    const assets = region('Assets');
+    const assets = region('CrossEx assets');
     const rows = assetRows();
     expect(rows.map((row) => row.Coin)).toContain('Gate spot');
     expect(rows.find((row) => row.Coin === 'USDT SPOT')).toMatchObject({ Balance: '318.42' });

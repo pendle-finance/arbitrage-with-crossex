@@ -30,7 +30,7 @@ export function BorrowChip({ onOpen }: { onOpen: () => void }) {
       <div className="flex flex-col gap-2 text-xs">
         <Facts items={[borrowingFact(buckets)]} />
         <button type="button" onClick={onOpen} className="btn-link">
-          Rebalance on Balances <ChevronRight size={12} aria-hidden className="inline" />
+          Rebalance on Accounts <ChevronRight size={12} aria-hidden className="inline" />
         </button>
       </div>
     </HoverCard>

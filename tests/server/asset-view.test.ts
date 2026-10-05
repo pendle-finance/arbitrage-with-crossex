@@ -267,6 +267,25 @@ describe('GET /api/asset-view/:address', () => {
     expect(rateOf('OKX')).toBeCloseTo(-150 / 1_000_000 / week, 9);
   });
 
+  it('serves the Boros accounts alone, the same rows the asset view carries, with balance in the token', async () => {
+    // The header polls this on every tab; the asset view is far heavier.
+    app = makeTestApp({ borosFetch: borosStub(borosBodies()) });
+    mockGateGet('/positions', { body: gatePositions });
+    mockGateGet('/history_positions', { body: [] });
+    mockGateGet('/history_margin_interests', { body: [] });
+
+    const light = await get(`/api/boros/margin/${ADDR}`);
+    expect(light.statusCode).toBe(200);
+    const rows = light.json().data.borosMargin;
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ collateral: 'USDT', isCross: true, equityToken: 20_000 });
+
+    const full = await get(`/api/asset-view/${ADDR}?since=0`);
+    expect(full.json().data.borosMargin).toEqual(rows);
+
+    expect((await get('/api/boros/margin/nonsense')).statusCode).toBe(400);
+  });
+
   it('rejects a since in the future', async () => {
     app = makeTestApp({ borosFetch: borosStub({}) });
     const res = await get(`/api/asset-view/${ADDR}?since=${NOW + DAY}`);

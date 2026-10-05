@@ -141,7 +141,7 @@ A Lighter borrow of $50 pays interest on all $50. A Hyperliquid borrow of $50 pa
 
 A hedged pair is delta-neutral, but not margin-neutral. Gate liquidates the account when the margin balance falls to the maintenance margin, and the maintenance margin grows with a move against a USDC leg on Hyperliquid or Lighter: each leg's maintenance margin scales with its notional, and the losing leg drives its wallet negative, a borrow that adds 10% of itself to the maintenance margin. Each card on the Positions tab carries a chip like `Liquidation: ETH @ ~$3,150 (+37%)`: the price of the coin at which the account liquidates if only that coin moves and every other coin holds still. It turns amber inside 30% and red inside 15%. A coin that can fall to $0 or rise without limit and never liquidate the account reads `No HYPE price liquidates the account`. If Gate's margin figures are missing, the chip reads `No liquidation estimate` rather than claiming safety. The same nearest line sits in the hover of the IM and MM gauges in the header.
 
-The Balances tab shows the margin card, then the Assets table. Under the table are your borrow, its interest now and the interest paid, then **Rebalance** and **Manual Transfer**. Hover a figure to see each wallet. Rebalance splits your CrossEx equity across the three wallets by position size. Each wallet's share is its legs at mark price, divided by all legs. Equity is cash plus unrealized profit or loss.
+The Accounts tab shows every account first: Gate CrossEx and each Boros account, with available against balance, initial margin used and maintenance margin used. An account liquidates when maintenance margin used reaches 100%. Below it is the CrossEx assets table. Under the table are your borrow, its interest now and the interest paid, then **Rebalance** and **Manual Transfer**. Hover a figure to see each wallet. Rebalance splits your CrossEx equity across the three wallets by position size. Each wallet's share is its legs at mark price, divided by all legs. Equity is cash plus unrealized profit or loss.
 
 Example: $500 of positions on Gate, $250 on Hyperliquid and $250 on Lighter give 50%, 25% and 25%. With $1,000 of equity, the wallets aim for $500, $250 and $250. A wallet with no legs sends all its money to the wallets that have legs. With no open positions, there is nothing to rebalance.
 
@@ -155,7 +155,7 @@ Press **Rebalance** to open the Rebalance window. It lists the routes, and **Sho
 - **Spot loop, then Convert**: runs the rounds that fit in 15 minutes and give the lowest cost, then moves the rest with Convert.
 - **Convert**: an instant swap inside CrossEx. It costs 0.2% of the amount moved. USDC between Hyperliquid and Lighter swaps twice, through USDT, so it costs about 0.4%. Gate takes at most 500,000 in one Convert, so a larger move runs as several Converts, 2 s apart.
 
-The window shows the **Fee** and the **Interest** your borrow pays in 30 days, now and after the move. When the fee is less than 30 days of the interest it saves, the Balances tab and the window read `Rebalance is recommended.` with the days under it, for example `The fee equals 12 days of the interest it saves.` When the fee is more than 30 days of that interest, they read `Not worth it yet`. You can still rebalance. A Hyperliquid borrow under 10,000 USDC pays no interest, so with no other borrow they read `No interest payment yet`.
+The window shows the **Fee** and the **Interest** your borrow pays in 30 days, now and after the move. When the fee is less than 30 days of the interest it saves, the Accounts tab and the window read `Rebalance is recommended.` with the days under it, for example `The fee equals 12 days of the interest it saves.` When the fee is more than 30 days of that interest, they read `Not worth it yet`. You can still rebalance. A Hyperliquid borrow under 10,000 USDC pays no interest, so with no other borrow they read `No interest payment yet`.
 
 A round moves money through Gate spot, because Gate has no direct transfer between CrossEx wallets. Time and cost are for one round. Cost adds the spot fee and spread when the round buys or sells USDC.
 
@@ -178,7 +178,7 @@ You cannot stop a run once it starts. A failed step stops it. An app restart sto
 
 A stopped run shows **Resume** and **Abandon**. Resume first looks up the last send on Gate by its tag. When that lookup misses, it sweeps Gate's order history for the same tag. When Gate cannot confirm the order, the run stays stopped. Press Resume again. When Gate does not show a send after 2 min, the run stops. Resume looks again, and sends the step again only when Gate still does not show it. When Gate rate-limits the account, the run stops with **Gate is rate-limiting this account**. Nothing was sent. Press Resume a minute later. Gate allows 100 Convert quotes a day per account. When they are used up, the run stops and says so. Press Resume later: Gate's count clears within 24 hours. The app never sends a step twice on its own.
 
-When a run stops, a banner at the top of every tab shows where the money is. Click **View** to open the Balances tab.
+When a run stops, a banner at the top of every tab shows where the money is. Click **View** to open the Accounts tab.
 
 After Abandon, any money left in Gate spot is plain spot money. Move it with Manual Transfer.
 

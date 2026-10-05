@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { useCredentials, useDisclaimer, useOpenOrders, usePositions } from './api/queries';
-import { AccountHealthStrip } from './components/AccountHealthStrip';
+import { AccountStatusStrip } from './panels/accounts/AccountsUi';
 import { ActiveWalletChip } from './components/ActiveWalletChip';
 import { BorrowChip } from './components/BorrowChip';
 import { BrandMark } from './components/BrandMark';
@@ -157,6 +157,17 @@ export default function App() {
     window.scrollTo({ top: 0 });
   };
 
+  // The header status and the Positions warning open Accounts.
+  useEffect(() => {
+    const onOpen = (e: Event) => {
+      const id = (e as CustomEvent<unknown>).detail;
+      if (isTabId(id)) selectTab(id);
+    };
+    window.addEventListener('crossex:open-tab', onOpen);
+    return () => window.removeEventListener('crossex:open-tab', onOpen);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const finishSetup = () => {
     writeJson(SETUP_SHOWN_KEY, true);
     setIsChecklistKept(false);
@@ -183,12 +194,12 @@ export default function App() {
               {/* Unconfigured, /api/account 503s forever and the strip would
                   sit on its loading skeleton — hide it until keys exist. */}
               {!showsChecklist && (
-                <AccountHealthStrip>
+                <AccountStatusStrip>
                   {/* The borrow, on every tab: the Rebalance section lives on
                       Balances, and a trader on Positions would never learn
                       about it otherwise. */}
                   {isTrading && <BorrowChip onOpen={() => selectTab('balances')} />}
-                </AccountHealthStrip>
+                </AccountStatusStrip>
               )}
               {/* Row 1 is the account only — status, then settings. `ml-auto`
                   when the strip is hidden so they still sit right. */}
@@ -209,7 +220,7 @@ export default function App() {
                     // Forward-looking: what to put on next, then what is on.
                     { id: 'opportunities', label: 'Opportunities', primary: true },
                     { id: 'positions', label: 'Positions', primary: true },
-                    { id: 'balances', label: 'Balances' },
+                    { id: 'balances', label: 'Accounts' },
                     { id: 'orders', label: 'Open Orders', badge: ordersBadge },
                     { id: 'trades', label: 'Trades' },
                     { id: 'fees', label: 'Fees' },

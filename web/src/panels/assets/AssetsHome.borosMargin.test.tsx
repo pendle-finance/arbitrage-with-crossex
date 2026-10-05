@@ -1,8 +1,7 @@
 /**
- * The account hero's Boros margin readout: one tile per collateral bucket —
- * health (equity / maintenance, coloured red < 1.1 / amber < 1.5) and free
- * margin. Shown read-only even for a view-only wallet; absent when the server
- * sends no borosMargin.
+ * Positions no longer carries a Boros margin block: every account's margin
+ * lives on Accounts. Positions only says so, in one line, when an account is
+ * in trouble.
  */
 import { screen } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
@@ -71,7 +70,7 @@ const view = (borosMargin?: AssetBorosMargin[]): AssetViewResponse => ({
   warnings: [],
 });
 
-function serve(response: AssetViewResponse) {
+function serve(response: AssetViewResponse, borosMargin: AssetBorosMargin[] = response.borosMargin ?? []) {
   localStorage.setItem(STRATEGY_STORAGE_KEY, JSON.stringify({ address: ROOT, walletUpgraded: true }));
   server.use(
     http.get('/api/boros/agent', () =>
@@ -79,46 +78,28 @@ function serve(response: AssetViewResponse) {
     ),
     http.get('/api/fees', () => HttpResponse.json(env<VenueFees[]>([]))),
     http.get('/api/asset-view/:address', () => HttpResponse.json(env(response))),
+    http.get('/api/boros/margin/:address', () => HttpResponse.json(env({ borosMargin }))),
     ...baseHandlers(),
   );
 }
 
 afterEach(() => localStorage.clear());
 
-describe('AssetsHome Boros margin readout', () => {
-  it('shows one bucket tile with its health and free margin, coloured by threshold', async () => {
-    serve(
-      view([
-        bucket({ isCross: true, healthFactor: 1.05, availableUsd: 1234, availableToken: 1234 }),
-        bucket({ isCross: false, marketId: 7, healthFactor: 1.3, availableUsd: 500, availableToken: 500 }),
-        bucket({ tokenId: 2, collateral: 'ETH', isCross: true, healthFactor: 2.5, availableUsd: null, availableToken: 4 }),
-      ]),
-    );
-    renderWithClient(<AssetsHome />);
-
-    expect(await screen.findByText('Boros account')).toBeInTheDocument();
-    // Red below 1.1, amber below 1.5, plain ink otherwise.
-    expect(screen.getByText('1.05').className).toContain('text-rose-300');
-    expect(screen.getByText('1.30').className).toContain('text-amber-200');
-    expect(screen.getByText('2.50').className).toContain('text-ink-50');
-    // Free margin: priced in USD, or in the token when there is no USD price.
-    expect(screen.getByText('$1,234.00')).toBeInTheDocument();
-    expect(screen.getByText('4.00 ETH')).toBeInTheDocument();
-    expect(screen.getByText('USDT cross')).toBeInTheDocument();
-    expect(screen.getByText('USDT isolated')).toBeInTheDocument();
-  });
-
-  it('renders a null health factor as a dash', async () => {
-    serve(view([bucket({ healthFactor: null })]));
-    renderWithClient(<AssetsHome />);
-    await screen.findByText('Boros account');
-    expect(screen.getByText('Health').nextElementSibling?.textContent).toBe('—');
-  });
-
-  it('renders nothing when the server sends no borosMargin', async () => {
-    serve(view(undefined));
+describe('AssetsHome and account health', () => {
+  it('shows no Boros margin block: healthy accounts say nothing here', async () => {
+    serve(view([bucket({ maintMarginUsd: 1000, equityUsd: 5000 })]));
     renderWithClient(<AssetsHome />);
     await screen.findByText('ETH');
     expect(screen.queryByText('Boros account')).toBeNull();
+    expect(screen.queryByRole('button', { name: /View accounts/ })).toBeNull();
+  });
+
+  it('one line points at Accounts when an account nears liquidation, naming it', async () => {
+    // 4,700 of maintenance on 5,000 of balance: 94% used, past the 91% line.
+    serve(view([bucket({ maintMarginUsd: 4700, equityUsd: 5000 })]));
+    renderWithClient(<AssetsHome />);
+    const line = await screen.findByRole('button', { name: /View accounts/ });
+    expect(line).toHaveTextContent('1 account near liquidation');
+    expect(line).toHaveTextContent('Boros USDT cross at 94% MM used');
   });
 });

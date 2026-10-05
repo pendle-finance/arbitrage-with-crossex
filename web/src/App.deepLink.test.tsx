@@ -49,7 +49,7 @@ describe('deep link', () => {
     mockApp();
     renderWithClient(<App />);
 
-    expect(await selectedTab()).toHaveAccessibleName(/^Balances/);
+    expect(await selectedTab()).toHaveAccessibleName(/^Accounts/);
   });
 
   it('an unknown tab in the URL keeps the stored tab', async () => {
