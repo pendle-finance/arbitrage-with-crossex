@@ -60,6 +60,7 @@ import {
   DirectionToggle,
   MarketCard,
   MarketSelect,
+  MaturitySelect,
   PairCosts,
   PairResultReport,
   PositionArithmetic,
@@ -150,6 +151,9 @@ export function BorosPairTicket({
 
   const [marketA, setMarketA] = useState<number | null>(null);
   const [marketB, setMarketB] = useState<number | null>(null);
+  /** The maturity picked with no leg holding one yet; a picked leg's own
+   * maturity always wins (see `maturity`). */
+  const [maturityPick, setMaturityPick] = useState<number | null>(null);
   const [dirA, setDirA] = useState<BorosLegDirection>('short');
   const [dirB, setDirB] = useState<BorosLegDirection>('long');
   const [sizeStr, setSizeStr] = useState('');
@@ -388,45 +392,47 @@ export function BorosPairTicket({
   const rowA = marketA !== null ? byId.get(marketA) ?? null : null;
   const rowB = marketB !== null ? byId.get(marketB) ?? null : null;
 
-  // §2: a pair needs shared collateral AND shared maturity. Only collateral is
-  // hidden here — a DIFFERENT maturity is still offered, because picking one
-  // rebases the partner leg (pickLeg) rather than locking the user to the
-  // maturity the cue happened to seed. Computed here only to drop the OTHER
-  // leg's incompatible options; the server re-decides.
+  // §2: a pair needs shared maturity AND shared collateral. The maturity is
+  // picked first and every leg lists only its markets; once a leg is picked the
+  // other lists only markets sharing its collateral. The server re-decides.
+  const maturity = rowA?.maturity ?? rowB?.maturity ?? maturityPick;
+  const maturities = useMemo(() => [...new Set(markets.map((m) => m.maturity))].sort((a, b) => a - b), [markets]);
   const reasonAgainst = (other: BorosPairMarketRow | null) => (m: BorosPairMarketRow): string | null => {
+    if (maturity !== null && m.maturity !== maturity) return 'another maturity';
     if (!other) return null;
     if (m.marketId === other.marketId) return 'already the other leg';
     if (m.tokenId !== other.tokenId) return 'different collateral';
     return null;
   };
 
+  /** Pick one leg, and remember its maturity for when the legs are cleared. */
+  const pickLeg = (set: (id: number | null) => void) => (marketId: number | null) => {
+    set(marketId);
+    const row = marketId !== null ? byId.get(marketId) : undefined;
+    if (row) setMaturityPick(row.maturity);
+  };
+
   /**
-   * Pick one leg's market, keeping the pair on ONE maturity by rebasing the
-   * partner — not by hiding its options (reasonAgainst no longer does).
-   *
-   * The server requires both legs on the same maturity, so when the picked
-   * maturity differs from the partner's the partner follows to its OWN market
-   * — same venue, base and collateral — at the new maturity. If that venue
-   * lists nothing there — or the only match is the leg just picked, when the
-   * two legs share a venue — the partner clears to null rather than
-   * deadlocking the pair; the user picks it again. Last pick wins.
+   * Change the maturity: each picked leg moves to its OWN market — same venue,
+   * base and collateral — at the new date, so the pair stays a pair. A leg whose
+   * venue lists nothing there (or whose only match is the other leg's market)
+   * clears, and the user picks it again.
    */
-  const pickLeg = (leg: 'A' | 'B') => (marketId: number | null) => {
-    const setPicked = leg === 'A' ? setMarketA : setMarketB;
-    const setPartner = leg === 'A' ? setMarketB : setMarketA;
-    const partner = leg === 'A' ? rowB : rowA;
-    setPicked(marketId);
-    const picked = marketId !== null ? byId.get(marketId) ?? null : null;
-    if (!picked || !partner || partner.maturity === picked.maturity) return;
-    const rebased = markets.find(
-      (m) =>
-        m.marketId !== marketId &&
-        m.venue.toUpperCase() === partner.venue.toUpperCase() &&
-        m.base.toUpperCase() === partner.base.toUpperCase() &&
-        m.tokenId === partner.tokenId &&
-        m.maturity === picked.maturity,
-    );
-    setPartner(rebased ? rebased.marketId : null);
+  const pickMaturity = (next: number | null) => {
+    setMaturityPick(next);
+    const move = (row: BorosPairMarketRow | null): number | null => {
+      if (!row || next === null) return null;
+      if (row.maturity === next) return row.marketId;
+      const same = (a: string, b: string) => a.toUpperCase() === b.toUpperCase();
+      const sibling = markets.find(
+        (m) => m.maturity === next && same(m.venue, row.venue) && same(m.base, row.base) && m.tokenId === row.tokenId,
+      );
+      return sibling ? sibling.marketId : null;
+    };
+    const a = move(rowA);
+    const b = move(rowB);
+    setMarketA(a);
+    setMarketB(b !== null && b === a ? null : b);
   };
 
   /**
@@ -794,6 +800,21 @@ export function BorosPairTicket({
           a swap between them — the spread is one decision, and the legs were
           already coupled. A SINGLE leg keeps the plain picker and its own
           direction toggle: there is no spread to be long or short of. */}
+      {/* The maturity first: it decides which markets each leg lists. The
+          wizard fixes both markets, so it has nothing to choose. */}
+      {!guided && (
+        <div className="flex flex-col gap-1.5">
+          <span className="text-[12px] font-normal text-ink-300">Maturity</span>
+          <MaturitySelect
+            id="boros-maturity"
+            value={maturity}
+            maturities={maturities}
+            nowSec={Math.floor(now / 1000)}
+            onPick={pickMaturity}
+            disabled={context.isPending}
+          />
+        </div>
+      )}
       {mode === 'pair' ? (
         <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-end gap-2">
           <div className="relative min-w-0">
@@ -805,7 +826,7 @@ export function BorosPairTicket({
                 value={marketA}
                 markets={markets}
                 reasonFor={reasonAgainst(rowB)}
-                onPick={pickLeg('A')}
+                onPick={pickLeg(setMarketA)}
                 disabled={context.isPending}
               />
             </MarketCard>
@@ -849,7 +870,7 @@ export function BorosPairTicket({
                 value={marketB}
                 markets={markets}
                 reasonFor={reasonAgainst(rowA)}
-                onPick={pickLeg('B')}
+                onPick={pickLeg(setMarketB)}
                 disabled={context.isPending}
               />
             </MarketCard>
@@ -886,10 +907,10 @@ export function BorosPairTicket({
             ariaLabel="Market"
             value={marketA}
             markets={markets}
-            // Single mode trades leg A alone, so nothing constrains it: the
-            // collateral/maturity rules exist to keep a PAIR compatible.
+            // Single mode trades leg A alone: only the chosen maturity narrows
+            // it — collateral matching exists to keep a PAIR compatible.
             reasonFor={reasonAgainst(null)}
-            onPick={setMarketA}
+            onPick={pickLeg(setMarketA)}
             disabled={context.isPending}
           />
         </div>

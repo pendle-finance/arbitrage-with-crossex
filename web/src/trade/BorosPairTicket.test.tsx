@@ -366,11 +366,10 @@ describe('BorosPairTicket', () => {
     });
   });
 
-  it('offers a different-maturity market once a leg is picked, but drops a different-collateral one', async () => {
-    // §2: maturity is matched by rebasing the partner leg, not by hiding — so a
-    // same-collateral market at another maturity IS offered, and picking it
-    // drags the other leg along. A different collateral can never pair, so it
-    // stays dropped.
+  it('lists only the chosen maturity, names each market\'s collateral, and drops a different collateral', async () => {
+    // §2: the maturity is picked first (here by picking leg A), every leg lists
+    // only that maturity's markets, and once a leg is picked the other lists
+    // only markets sharing its collateral.
     const user = userEvent.setup();
     server.use(...handlers());
     renderWithClient(<BorosPairTicket />);
@@ -378,17 +377,16 @@ describe('BorosPairTicket', () => {
       expect((screen.getByLabelText('Leg A') as HTMLSelectElement).options.length).toBeGreaterThan(1),
     );
     await user.selectOptions(screen.getByLabelText('Leg A'), String(HL));
+    expect(screen.getByLabelText('Maturity')).toHaveValue(String(MATURITY));
 
     const legB = screen.getByLabelText('Leg B') as HTMLSelectElement;
-    const byLabel = (needle: string) =>
-      [...legB.options].find((o) => o.textContent?.includes(needle));
-
-    // A different maturity is now offered — picking it rebases the pair.
-    expect(byLabel('Bybit ETH 30 Sep 2026')).toBeDefined();
-    // A different collateral can never pair, so it is still dropped.
-    expect(byLabel('OKX BTC 31 Aug 2026')).toBeUndefined();
-    // The same-maturity one is still there and selectable.
-    expect(byLabel('Binance ETHUSDT')!.disabled).toBe(false);
+    const labels = [...legB.options].map((o) => o.textContent);
+    // Same maturity, same collateral — offered, collateral named, no date.
+    expect(labels).toContain('Binance ETHUSDT · USDT');
+    // Another maturity is not listed: change it with the maturity picker.
+    expect(labels.some((l) => l?.startsWith('Bybit'))).toBe(false);
+    // A different collateral can never pair.
+    expect(labels.some((l) => l?.startsWith('OKX'))).toBe(false);
   });
 
   it('leads with the estimated spread and shows the worst case beneath it', async () => {
@@ -613,8 +611,8 @@ describe('BorosPairTicket', () => {
     expect(confirm).toBeInTheDocument();
     // The button states the COUNT ("2 Boros market orders"); the market cards
     // name the two markets, so the selects carry them by accessible name.
-    expect(screen.getByLabelText('Leg A')).toHaveDisplayValue('Hyperliquid ETH 31 Aug 2026');
-    expect(screen.getByLabelText('Leg B')).toHaveDisplayValue('Binance ETHUSDT 31 Aug 2026');
+    expect(screen.getByLabelText('Leg A')).toHaveDisplayValue('Hyperliquid ETH · USDT');
+    expect(screen.getByLabelText('Leg B')).toHaveDisplayValue('Binance ETHUSDT · USDT');
     // Atomic acceptance is the promise; a full fill is NOT. Both halves must
     // still be stated together — overselling the batch is the failure mode —
     // so the hover is asserted to carry BOTH clauses, not just the reassuring
@@ -1334,7 +1332,7 @@ describe('BorosPairTicket — market list', () => {
       expect((screen.getByLabelText('Leg A') as HTMLSelectElement).options.length).toBeGreaterThan(1),
     );
     expect(
-      within(screen.getByLabelText('Leg A')).getByRole('option', { name: 'Hyperliquid SOL 31 Aug 2026' }),
+      within(screen.getByLabelText('Leg A')).getByRole('option', { name: 'Hyperliquid SOL · SOL' }),
     ).toBeInTheDocument();
   });
 });
@@ -1457,14 +1455,14 @@ describe('BorosPairTicket — the cue prefill lands both legs on ONE maturity', 
   });
 });
 
-describe('BorosPairTicket — changing maturity rebases the partner leg', () => {
-  // ED-6567: the cue pre-fills a maturity but must not soft-lock it. Changing
-  // one leg's maturity straight from the dropdown drags the partner to its own
-  // market at that maturity, so the user is never forced to unselect both legs.
+describe('BorosPairTicket — the maturity is chosen first', () => {
+  // ED-6567: the cue pre-fills a maturity but must not lock it. The maturity
+  // picker moves BOTH legs to their own markets at the new date, so the user
+  // never has to unselect the legs to change it.
   const SEP = MATURITY;
   const DEC = MATURITY + 90 * 86_400;
 
-  it('moves leg B to its venue’s Dec market when leg A is switched to Dec', async () => {
+  it('moves both legs to their venues\' Dec markets when the maturity changes', async () => {
     server.use(
       ...handlers({
         ctx: context({
@@ -1479,23 +1477,21 @@ describe('BorosPairTicket — changing maturity rebases the partner leg', () => 
     );
     const user = userEvent.setup();
     renderWithClient(
-      <BorosPrefillHarness
-        prefill={{ base: 'ETH', longVenue: 'Gate', shortVenue: 'Hyperliquid', size: 1000 }}
-      />,
+      <BorosPrefillHarness prefill={{ base: 'ETH', longVenue: 'Gate', shortVenue: 'Hyperliquid', size: 1000 }} />,
     );
     await user.click(screen.getByRole('button', { name: 'fire' }));
 
-    // The cue lands both legs on the shared Sep maturity.
+    // The cue lands both legs on the shared Sep maturity, and the picker says so.
     await waitFor(() => expect(screen.getByLabelText('Leg A')).toHaveValue('920'));
     expect(screen.getByLabelText('Leg B')).toHaveValue('922');
+    expect(screen.getByLabelText('Maturity')).toHaveValue(String(SEP));
 
-    // Pick Gate's Dec on leg A — leg B follows to Hyperliquid's own Dec market,
-    // no unselecting required.
-    await user.selectOptions(screen.getByLabelText('Leg A'), '921');
-    await waitFor(() => expect(screen.getByLabelText('Leg B')).toHaveValue('923'));
+    await user.selectOptions(screen.getByLabelText('Maturity'), String(DEC));
+    await waitFor(() => expect(screen.getByLabelText('Leg A')).toHaveValue('921'));
+    expect(screen.getByLabelText('Leg B')).toHaveValue('923');
   });
 
-  it('clears leg B when the partner venue has no market at the picked maturity', async () => {
+  it('clears the leg whose venue has no market at the new maturity, and keeps it pickable', async () => {
     server.use(
       ...handlers({
         ctx: context({
@@ -1503,56 +1499,46 @@ describe('BorosPairTicket — changing maturity rebases the partner leg', () => 
             marketRow({ marketId: 930, name: 'Gate ETH Sep', venue: 'Gate', maturity: SEP }),
             marketRow({ marketId: 931, name: 'Gate ETH Dec', venue: 'Gate', maturity: DEC }),
             marketRow({ marketId: 932, name: 'Hyperliquid ETH Sep', venue: 'Hyperliquid', maturity: SEP }),
+            marketRow({ marketId: 933, name: 'Lighter ETH Dec', venue: 'Lighter', maturity: DEC }),
           ],
         }),
       }),
     );
     const user = userEvent.setup();
     renderWithClient(
-      <BorosPrefillHarness
-        prefill={{ base: 'ETH', longVenue: 'Gate', shortVenue: 'Hyperliquid', size: 1000 }}
-      />,
+      <BorosPrefillHarness prefill={{ base: 'ETH', longVenue: 'Gate', shortVenue: 'Hyperliquid', size: 1000 }} />,
     );
     await user.click(screen.getByRole('button', { name: 'fire' }));
-
     await waitFor(() => expect(screen.getByLabelText('Leg A')).toHaveValue('930'));
-    expect(screen.getByLabelText('Leg B')).toHaveValue('932');
 
-    // Hyperliquid lists no Dec market, so leg B clears rather than deadlocking.
-    await user.selectOptions(screen.getByLabelText('Leg A'), '931');
+    // Hyperliquid lists no Dec market, so leg B clears; leg A moves.
+    await user.selectOptions(screen.getByLabelText('Maturity'), String(DEC));
     await waitFor(() => expect(screen.getByLabelText('Leg B')).toHaveValue(''));
-    // And it is immediately selectable again — the dropdown still has options.
+    expect(screen.getByLabelText('Leg A')).toHaveValue('931');
+    // And leg B offers the Dec markets it can still take.
     const legB = screen.getByLabelText('Leg B') as HTMLSelectElement;
-    expect(legB.disabled).toBe(false);
-    expect(legB.options.length).toBeGreaterThan(1);
+    expect([...legB.options].map((o) => o.value)).toEqual(['', '933']);
   });
 
-  it('clears the partner instead of pointing both legs at one market in a same-venue pair', async () => {
-    // Both legs on the one venue: the only market at the picked maturity IS the
-    // leg just picked, so the rebase must clear the partner rather than copy the
-    // marketId onto it (which the server would reject as 'same-market').
+  it('reads two same-named markets apart by their collateral', async () => {
+    // Hyperliquid lists BTC once against BTC and once against USDT, under the
+    // same name; only the collateral tells them apart.
     server.use(
       ...handlers({
         ctx: context({
           markets: [
-            marketRow({ marketId: 940, name: 'Gate ETH Sep', venue: 'Gate', maturity: SEP }),
-            marketRow({ marketId: 941, name: 'Gate ETH Dec', venue: 'Gate', maturity: DEC }),
+            marketRow({ marketId: 950, name: 'Hyperliquid BTC 31 Aug 2026', base: 'BTC', tokenId: 1, collateral: 'BTC' }),
+            marketRow({ marketId: 951, name: 'Hyperliquid BTC 31 Aug 2026', base: 'BTC', tokenId: 3, collateral: 'USDT' }),
           ],
         }),
       }),
     );
-    const user = userEvent.setup();
     renderWithClient(<BorosPairTicket />);
     await waitFor(() =>
-      expect((screen.getByLabelText('Leg B') as HTMLSelectElement).options.length).toBeGreaterThan(1),
+      expect((screen.getByLabelText('Leg A') as HTMLSelectElement).options.length).toBeGreaterThan(1),
     );
-
-    // Leg B is set first, leg A still empty.
-    await user.selectOptions(screen.getByLabelText('Leg B'), '940');
-    // Picking the same venue's other maturity on leg A would rebase leg B to
-    // Gate Dec — itself — so leg B clears instead.
-    await user.selectOptions(screen.getByLabelText('Leg A'), '941');
-    await waitFor(() => expect(screen.getByLabelText('Leg B')).toHaveValue(''));
+    const labels = [...(screen.getByLabelText('Leg A') as HTMLSelectElement).options].map((o) => o.textContent);
+    expect(labels).toEqual(['select a market…', 'Hyperliquid BTC · BTC', 'Hyperliquid BTC · USDT']);
   });
 });
 
