@@ -364,6 +364,12 @@ describe('classifyLegFailure', () => {
     expect(classifyLegFailure(topUp)).toBe('min-cash');
   });
 
+  it('reads the market cap as its own failure, not a bare rejection', () => {
+    // Seen live on 2026-10-05 with 10 markets entered, 4 of them matured.
+    expect(classifyLegFailure(new Error('[SIMULATE] MMMarketLimitExceeded()'))).toBe('market-limit');
+    expect(classifyLegFailure(new Error('Market limit exceeded'))).toBe('market-limit');
+  });
+
   it('does not let the cash floor be confused with the gas budget', () => {
     // Same account, same order, a healthy gas budget: still min-cash.
     expect(classifyLegFailure(new Error('Top up at least ~$25 to trade'))).toBe('min-cash');

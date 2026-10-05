@@ -597,6 +597,82 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
     return perMarket.flat();
   };
 
+  /**
+   * `enterExitMarkets` calldata that frees market slots on the cross accounts
+   * these markets trade on, for the head of the same batch.
+   *
+   * A cross account may be in only so many markets (`MMMarketLimitExceeded`,
+   * MarginManager.sol), and a matured market keeps its slot until it is
+   * exited. The core builder the Boros app uses exits markets before every
+   * order (pendle-backend-v3 `TradeService.getExitMarketIds`); the open-api
+   * `place-order` this client uses does not, so it is done here:
+   * - always, every matured market: the contract lets a matured market go
+   *   even with a residual position (MarketHubEntry.sol `exitMarket`);
+   * - with `withEmpty`, also every market holding no position and no order.
+   * Never a market this batch trades.
+   *
+   * Best effort, like the gas top-up: a failed read sends the batch without
+   * exits, and the venue stays the check.
+   */
+  const exitCalldatas = async (marketIds: number[], withEmpty: boolean): Promise<Hex[]> => {
+    try {
+      const keep = new Set(marketIds);
+      const accs = [...new Set((await Promise.all(marketIds.map(marketAccFor))).map((a) => a.toLowerCase()))];
+      const infos = withEmpty
+        ? (await call<{ results?: Array<{ marketAcc?: string; positions?: Array<{ marketId: number; signedSize?: string; orders?: unknown[] }> }> }>(
+            `/v1/accounts/market-acc-infos-by-root?root=${config.root}`,
+            undefined,
+            'GET',
+          )).results ?? []
+        : [];
+      const out: Hex[] = [];
+      for (const marketAcc of accs) {
+        const { results } = await call<{ results?: Array<{ marketId: number; isMatured?: boolean }> }>(
+          `/v1/accounts/entered-markets?marketAcc=${marketAcc}`,
+          undefined,
+          'GET',
+        );
+        const exits = new Set((results ?? []).filter((m) => m.isMatured === true).map((m) => m.marketId));
+        const positions = infos.find((r) => r.marketAcc?.toLowerCase() === marketAcc)?.positions ?? [];
+        for (const p of positions) {
+          if (BigInt(p.signedSize ?? '0') === 0n && (p.orders ?? []).length === 0) exits.add(p.marketId);
+        }
+        const ids = [...exits].filter((id) => !keep.has(id));
+        if (ids.length === 0) continue;
+        const built = await call<{ calls?: PlaceOrderCall[] }>('/v1/calldata-builder/agent/exit-markets', {
+          accountId: config.accountId,
+          isCross: true,
+          marketIds: ids,
+        });
+        out.push(...(built.calls ?? []).map((c) => c.calldata as Hex));
+      }
+      return out;
+    } catch {
+      return [];
+    }
+  };
+
+  /**
+   * Run an OPENING batch with the matured exits at its head. When the venue
+   * still refuses it for the market cap, nothing traded (the batch is
+   * atomic), so it is rebuilt once with the empty markets exited too — the
+   * same slots the Boros app frees at the cap.
+   */
+  const executeOpening = async (
+    reqs: BorosMarketOrderRequest[],
+    legCalldatas: Hex[],
+    opts: PlaceOrdersOptions | undefined,
+    cancels: Hex[],
+    marketIds: number[],
+  ): Promise<BorosLegFill[]> => {
+    const exits = await exitCalldatas(marketIds, false);
+    const fills = await execute(reqs, legCalldatas, opts, [...cancels, ...exits]);
+    if (!fills.every((f) => f.failure?.code === 'market-limit' && f.filledSize === 0)) return fills;
+    const more = await exitCalldatas(marketIds, true);
+    if (more.length === 0 || more.join() === exits.join()) return fills;
+    return execute(reqs, legCalldatas, opts, [...cancels, ...more]);
+  };
+
   const placeMarketOrders = async (
     reqs: BorosMarketOrderRequest[],
     opts?: PlaceOrdersOptions,
@@ -609,7 +685,9 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
     } catch (err) {
       return reqs.map((req) => neverSentLeg(req, err));
     }
-    return execute(reqs, legs, opts, cancels);
+    // A close enters no market, so it needs no slot.
+    if (opts?.reducing === true) return execute(reqs, legs, opts, cancels);
+    return executeOpening(reqs, legs, opts, cancels, reqs.map((r) => r.marketId));
   };
 
   /**
@@ -683,7 +761,13 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
       limitApr: c.resolved?.requestedRate ?? 0,
       clientOrderId: '',
     }));
-    return execute(reqs, calls.map((c) => c.calldata as Hex), { reducing: false, topUpAfter: legs.length }, cancels);
+    return executeOpening(
+      reqs,
+      calls.map((c) => c.calldata as Hex),
+      { reducing: false, topUpAfter: legs.length },
+      cancels,
+      legs.flatMap((l) => [l.fromMarketId, l.toMarketId]),
+    );
   };
 
   /**

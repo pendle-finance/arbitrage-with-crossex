@@ -131,6 +131,10 @@ export type BorosLegFailureCode =
    * entry requirement, not this order's margin) and not `no-gas`
    * (`payTreasury` cannot clear it). */
   | 'min-cash'
+  /** The cross account already holds the most markets Boros lets it enter
+   * (`MMMarketLimitExceeded`, MarginManager.sol), and none could be exited:
+   * each still holds a position or an order. */
+  | 'market-limit'
   /** Anything the venue rejected for another reason. */
   | 'rejected'
   /** The submission never got a usable answer; the fill state is UNKNOWN. */
@@ -471,6 +475,8 @@ export function classifyLegFailure(err: unknown): BorosLegFailureCode {
    * through to `rejected` and keeps the venue's own wording.
    */
   if (/TOP_UP_AT_LEAST/.test(text)) return 'min-cash';
+  // `MMMarketLimitExceeded()`, or the same words as prose.
+  if (/MARKET_?LIMIT_?EXCEEDED/.test(text)) return 'market-limit';
   if (/INSUFFICIENT[ _]GAS|GAS[ _]BALANCE/.test(text)) {
     return 'no-gas';
   }

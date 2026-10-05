@@ -57,6 +57,12 @@ function fakeApi(
     /** marketIds the venue already considers entered, per read. Successive
      * entries let a test change the answer between reads. */
     enteredReads?: number[][];
+    /** The entered-markets answer with maturity, when a test needs it. */
+    entered?: Array<{ marketId: number; isMatured: boolean }>;
+    /** A non-2xx answer from the entered-markets read. */
+    enteredHttp?: { status: number };
+    /** Positions per market on the cross account, for the empty-market exits. */
+    positions?: Array<{ marketId: number; signedSize: string; orders: unknown[] }>;
   } = {},
 ) {
   const calls: Call[] = [];
@@ -68,8 +74,18 @@ function fakeApi(
     const ok = (json: unknown) => ({ ok: true, status: 200, json: async () => json });
 
     if (path.startsWith('/v1/accounts/entered-markets')) {
+      if (over.enteredHttp) return { ok: false, status: over.enteredHttp.status, json: async () => ({}) };
+      if (over.entered) return ok({ results: over.entered });
       const next = reads.length > 1 ? reads.shift()! : (reads[0] ?? []);
       return ok({ results: next.map((marketId) => ({ marketId, isMatured: false })) });
+    }
+    if (path.startsWith('/v1/accounts/market-acc-infos-by-root')) {
+      return ok({ results: [{ marketAcc: `${ROOT}000002ffffff`, positions: over.positions ?? [] }] });
+    }
+    if (path.startsWith('/v1/calldata-builder/agent/exit-markets')) {
+      // Tagged with the markets it exits, so a test can read them off the batch.
+      const ids = body.marketIds as number[];
+      return ok({ calls: [{ calldata: `0xee${ids.map((id) => id.toString(16).padStart(4, '0')).join('')}` }] });
     }
     if (path.startsWith('/v1/calldata-builder/agent/enter-markets')) {
       return ok({ calls: [{ calldata: '0xe0' }] });
@@ -622,7 +638,10 @@ describe('makeBorosApiOrderClient — preconditions and remediation', () => {
     const api = fakeApi();
     await client(api).placeMarketOrders([leg(), leg({ marketId: BN, direction: 'long' })]);
     expect(api.calls.filter((c) => c.path.includes('enter-markets'))).toHaveLength(0);
-    expect(api.calls.filter((c) => c.path.startsWith('/v1/accounts/entered-markets'))).toHaveLength(0);
+    // The entered markets ARE read now, once per cross account, but only to
+    // find matured markets to exit — and with none matured, nothing is built.
+    expect(api.calls.filter((c) => c.path.startsWith('/v1/accounts/entered-markets'))).toHaveLength(1);
+    expect(api.calls.filter((c) => c.path.includes('exit-markets'))).toHaveLength(0);
   });
 
   it('cancels every resting order on a market', async () => {
@@ -1046,5 +1065,146 @@ describe('makeBorosApiOrderClient — a refusal before the chain never reads as 
     await expect(
       client(api).placeMarketOrders([leg(), leg({ marketId: BN, direction: 'long' })]),
     ).rejects.toThrow(/503/);
+  });
+});
+
+/**
+ * A cross account may be in only so many markets, and a matured market keeps
+ * its slot until it is exited. The Boros app's own builder exits markets
+ * before every order; the open-api `place-order` this client uses does not,
+ * so an account full of matured markets could open nothing new
+ * (`MMMarketLimitExceeded`).
+ */
+describe('makeBorosApiOrderClient — frees market slots in the same batch as an open', () => {
+  const MATURED = 102;
+  const EMPTY = 187;
+  const submits = (api: ReturnType<typeof fakeApi>) =>
+    api.calls
+      .filter((c) => c.path === '/v1/send-txs/bulk-calls')
+      .map((c) => (c.body.datas as Array<{ calldata: string }>).map((d) => d.calldata));
+  const exitOf = (...ids: number[]) => `0xee${ids.map((id) => id.toString(16).padStart(4, '0')).join('')}`;
+  const LIMIT = '[SIMULATE] MMMarketLimitExceeded()';
+  const ABORTED = 'Batch aborted: requireSuccess=true';
+
+  it('exits every matured market at the head of an opening batch, never a traded one', async () => {
+    const api = fakeApi({
+      entered: [
+        { marketId: MATURED, isMatured: true },
+        { marketId: HL, isMatured: false },
+        { marketId: EMPTY, isMatured: false },
+      ],
+    });
+    await client(api).placeMarketOrders([leg(), leg({ marketId: BN, direction: 'long' })]);
+    const [batch] = submits(api);
+    expect(batch[0]).toBe(exitOf(MATURED));
+    expect(batch.slice(1).every((d) => d.startsWith('0xda'))).toBe(true);
+    const build = api.calls.find((c) => c.path === '/v1/calldata-builder/agent/exit-markets')!;
+    expect(build.body).toEqual({ accountId: 0, isCross: true, marketIds: [MATURED] });
+  });
+
+  it('reads each leg from its own slot behind the exit', async () => {
+    const api = fakeApi({
+      entered: [{ marketId: MATURED, isMatured: true }],
+      status: {
+        status: 'success',
+        statuses: [
+          { index: 0 },
+          { index: 1, marketOrdersExecuted: [filled(HL, '10000000000000000000')] },
+          { index: 2, marketOrdersExecuted: [filled(BN, '10000000000000000000')] },
+        ],
+      },
+    });
+    const fills = await client(api).placeMarketOrders([leg(), leg({ marketId: BN, direction: 'long' })]);
+    expect(fills.map((f) => [f.marketId, f.filledSize, f.failure])).toEqual([
+      [HL, 10, null],
+      [BN, 10, null],
+    ]);
+  });
+
+  it('leaves a close alone: it enters no market, so it reads nothing and exits nothing', async () => {
+    const api = fakeApi({ entered: [{ marketId: MATURED, isMatured: true }] });
+    await client(api).placeMarketOrders([leg()], { reducing: true });
+    expect(api.calls.filter((c) => c.path.startsWith('/v1/accounts/entered-markets'))).toHaveLength(0);
+    expect(submits(api)[0].every((d) => d.startsWith('0xda'))).toBe(true);
+  });
+
+  it('still sends the order when the entered markets cannot be read', async () => {
+    const api = fakeApi({ enteredHttp: { status: 503 } });
+    await client(api).placeMarketOrders([leg()]);
+    const batches = submits(api);
+    expect(batches).toHaveLength(1);
+    expect(batches[0].every((d) => d.startsWith('0xda'))).toBe(true);
+  });
+
+  it('after a market-cap refusal, rebuilds once with the empty markets exited too', async () => {
+    let n = 0;
+    const api = fakeApi({
+      entered: [{ marketId: MATURED, isMatured: true }],
+      positions: [
+        { marketId: EMPTY, signedSize: '0', orders: [] },
+        { marketId: 213, signedSize: '0', orders: [{ id: '1' }] }, // a resting order: kept
+        { marketId: 199, signedSize: '-100', orders: [] }, // a position: kept
+        { marketId: HL, signedSize: '0', orders: [] }, // traded by this batch: kept
+      ],
+      submit: (body) => {
+        const datas = body.datas as unknown[];
+        n += 1;
+        return n === 1
+          ? datas.map((_, i) => ({ index: i, error: i === 1 ? LIMIT : ABORTED }))
+          : datas.map((_, i) => ({ txHash: '0xtx', index: i, status: 'success' }));
+      },
+      status: {
+        status: 'success',
+        statuses: [
+          { index: 0 },
+          { index: 1, marketOrdersExecuted: [filled(HL, '10000000000000000000')] },
+          { index: 2, marketOrdersExecuted: [filled(BN, '10000000000000000000')] },
+        ],
+      },
+    });
+    const fills = await client(api).placeMarketOrders([leg(), leg({ marketId: BN, direction: 'long' })]);
+    const [first, second] = submits(api);
+    expect(first[0]).toBe(exitOf(MATURED));
+    expect(second[0]).toBe(exitOf(MATURED, EMPTY));
+    expect(fills.map((f) => [f.marketId, f.filledSize, f.failure])).toEqual([
+      [HL, 10, null],
+      [BN, 10, null],
+    ]);
+  });
+
+  it('rebuilds at most once, and then says what blocks the open', async () => {
+    const api = fakeApi({
+      entered: [{ marketId: MATURED, isMatured: true }],
+      positions: [{ marketId: EMPTY, signedSize: '0', orders: [] }],
+      submit: (body) => (body.datas as unknown[]).map((_, i) => ({ index: i, error: i === 1 ? LIMIT : ABORTED })),
+    });
+    const fills = await client(api).placeMarketOrders([leg(), leg({ marketId: BN, direction: 'long' })]);
+    expect(submits(api)).toHaveLength(2);
+    expect(fills.every((f) => f.failure?.code === 'market-limit' && f.filledSize === 0)).toBe(true);
+  });
+
+  it('does not resend when there is no empty market to free', async () => {
+    const api = fakeApi({
+      entered: [{ marketId: MATURED, isMatured: true }],
+      positions: [{ marketId: 199, signedSize: '-100', orders: [] }],
+      submit: (body) => (body.datas as unknown[]).map((_, i) => ({ index: i, error: i === 1 ? LIMIT : ABORTED })),
+    });
+    await client(api).placeMarketOrders([leg(), leg({ marketId: BN, direction: 'long' })]);
+    expect(submits(api)).toHaveLength(1);
+  });
+
+  it('exits matured markets ahead of a roll, keeping both the markets it leaves and enters', async () => {
+    const api = fakeApi({
+      entered: [
+        { marketId: MATURED, isMatured: true },
+        { marketId: HL, isMatured: true }, // being left: never exited by this batch
+      ],
+    });
+    await client(api).rollOver!([
+      { fromMarketId: HL, toMarketId: HL + 1, size: 100, closeRate: 0.0925, openRate: 0.0975 },
+      { fromMarketId: BN, toMarketId: BN + 1, size: 100, closeRate: 0.0425, openRate: 0.0525 },
+    ]);
+    // Gas is healthy (the fake's $42), so no top-up sits between closes and opens.
+    expect(submits(api)[0]).toEqual([exitOf(MATURED), '0xc1', '0xc2', '0xo1', '0xo2']);
   });
 });
