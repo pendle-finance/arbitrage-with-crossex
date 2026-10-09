@@ -102,7 +102,7 @@ export function toRows(
       const priced = rebate ? applyRebate(heldPriced, rebate.config, rebate.notionalUsd) : heldPriced;
       const apr = priced.netFixedAprOnCapital;
       if (apr === null || !Number.isFinite(apr)) continue;
-      const key = `${group.tokenId}:${group.maturity}:${pair.shortLeg.marketId}:${pair.longLeg.marketId}`;
+      const key = `${group.tokenId}:${group.maturity}:${pair.borosLegs.map((leg) => leg.marketId).join(':')}`;
       // A pair already on screen holds its place down to the band; a new one
       // still has to clear zero to earn a slot.
       if (apr < (shownKeys?.has(key) ? HYSTERESIS_APR : 0)) continue;

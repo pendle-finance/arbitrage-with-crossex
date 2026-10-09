@@ -7,7 +7,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import type { BorosSimulatedLeg } from '../../api/types';
-import { ROLL_FIT_BUFFER, capacityAt, fitAtBand, maxRollSize, planBatch, suggestedRollSize, toleranceFor } from './rollSizing';
+import { ROLL_FIT_BUFFER, capacityAt, fitAtBand, fitLegsAtBand, maxRollSize, planBatch, suggestedRollSize, toleranceFor } from './rollSizing';
 
 const HL: Array<[number, number]> = [
   [0.0005, 9.44],
@@ -169,6 +169,12 @@ describe('fitAtBand — the default roll size is sized at the band, not the seed
 
   it('has nothing to say until all four legs carry a ladder', () => {
     expect(fitAtBand([exit[0], leg({ depth: null })], entry, CAP)).toBeNull();
-    expect(fitAtBand(exit.slice(0, 1), entry, CAP)).toBeNull();
+    expect(fitAtBand([], entry, CAP)).toBeNull();
+  });
+
+  it('sizes a one-leg spread batch at its own band', () => {
+    expect(fitLegsAtBand([leg({ depth: GATE_EXIT, maxToleranceApr: 0.0182 })], CAP)).toBeCloseTo(325.23, 9);
+    expect(fitAtBand(exit, [leg({ depth: DEEP, maxToleranceApr: 0.02 })], CAP)).toBeCloseTo(325.23, 9);
+    expect(fitLegsAtBand([], CAP)).toBeNull();
   });
 });

@@ -2,7 +2,7 @@
  * (the Boros pair) from the intent; a resume (initialStep 2) arms the perp
  * ticket instead and never mounts the Boros one. Prefill→ticket mechanics are
  * the tickets' own suites; panel→intent is the OpportunitiesPanel suite. */
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
 import { useEffect, useRef } from 'react';
 import { describe, expect, it } from 'vitest';
@@ -148,13 +148,17 @@ const market = (over: Record<string, unknown> = {}) => ({
 /** Pass an ARRAY of results to script SEQUENTIAL executions (a partial then
  * its completion, a retry, a close): call N answers with results[N], and the
  * last one repeats. A single result behaves as before. */
-const tradableHandlers = (result: Record<string, unknown> | Record<string, unknown>[], collateral = 'USDT') => {
+const tradableHandlers = (
+  result: Record<string, unknown> | Record<string, unknown>[],
+  collateral = 'USDT',
+  costToCrossSize = 0,
+) => {
   const sequence = Array.isArray(result) ? result : [result];
   let call = 0;
-  return tradableHandlersSeq(() => sequence[Math.min(call++, sequence.length - 1)], collateral);
+  return tradableHandlersSeq(() => sequence[Math.min(call++, sequence.length - 1)], collateral, costToCrossSize);
 };
 
-const tradableHandlersSeq = (next: () => Record<string, unknown>, collateral: string) => [
+const tradableHandlersSeq = (next: () => Record<string, unknown>, collateral: string, costToCrossSize = 0) => [
   http.get('/api/boros/agent', () =>
     HttpResponse.json(
       env({
@@ -186,10 +190,9 @@ const tradableHandlersSeq = (next: () => Record<string, unknown>, collateral: st
           collateral,
           spreadApr: 0.045,
           worstCaseSpreadApr: 0.02,
-          legA: { marketId: HL_M, direction: 'short', execApr: 0.09, feeSize: 4, marginRequired: 1, sizing: { currentSize: 0, resultingSize: -1000, flips: false } },
-          legB: { marketId: BN_M, direction: 'long', execApr: 0.042, feeSize: 4, marginRequired: 1, sizing: { currentSize: 0, resultingSize: 1000, flips: false } },
+          legs: [{ marketId: HL_M, direction: 'short', execApr: 0.09, feeSize: 4, marginRequired: 1, sizing: { currentSize: 0, resultingSize: -1000, flips: false } }, { marketId: BN_M, direction: 'long', execApr: 0.042, feeSize: 4, marginRequired: 1, sizing: { currentSize: 0, resultingSize: 1000, flips: false } }],
           takerFeeSize: 8,
-          costToCrossSize: 0,
+          costToCrossSize,
           feeDragApr: 0.003,
           marginRequiredTotal: 2,
           hedgedSize: 1000,
@@ -214,14 +217,13 @@ const tradableHandlersSeq = (next: () => Record<string, unknown>, collateral: st
 ];
 
 const CLEAN_FILL = {
-  legA: { marketId: HL_M, direction: 'short', filledSize: 1000, shortfallSize: 0, execApr: 0.09, feeSize: 4, failure: null },
-  legB: { marketId: BN_M, direction: 'long', filledSize: 1000, shortfallSize: 0, execApr: 0.042, feeSize: 4, failure: null },
+  legs: [{ marketId: HL_M, direction: 'short', filledSize: 1000, shortfallSize: 0, execApr: 0.09, feeSize: 4, failure: null }, { marketId: BN_M, direction: 'long', filledSize: 1000, shortfallSize: 0, execApr: 0.042, feeSize: 4, failure: null }],
   hedgedSize: 1000,
   unhedgedSize: 0,
   unhedgedLeg: null,
   realisedSpreadApr: 0.045,
   partial: false,
-  bothLegsSubmitted: true,
+  allLegsSubmitted: true,
 };
 
 describe('StrategyWizard — a fill that closes an existing position is not new exposure', () => {
@@ -234,14 +236,13 @@ describe('StrategyWizard — a fill that closes an existing position is not new 
     const closingFill = {
       ...CLEAN_FILL,
       estimate: {
-        legA: { sizing: { currentSize: 1000, resultingSize: 0, deltaSize: -1000, opposing: true, flips: false, clampedToClose: false } },
-        legB: { sizing: { currentSize: 0, resultingSize: 1000, deltaSize: 1000, opposing: false, flips: false, clampedToClose: false } },
+        legs: [{ sizing: { currentSize: 1000, resultingSize: 0, deltaSize: -1000, opposing: true, flips: false, clampedToClose: false } }, { sizing: { currentSize: 0, resultingSize: 1000, deltaSize: 1000, opposing: false, flips: false, clampedToClose: false } }],
       },
     };
     server.use(...tradableHandlers(closingFill), ...symbolHandlers([ETH_GATE]));
     renderWizard({ ...INTENT, maturity: MAT, borosLongVenue: 'BINANCE', borosShortVenue: 'HYPERLIQUID' });
     await waitFor(() => expect(screen.getByLabelText('Leg A')).toHaveValue(String(BN_M)));
-    const confirm = await screen.findByRole('button', { name: /Confirm — 2 Boros market orders/ });
+    const confirm = await screen.findByRole('button', { name: /Confirm · 2 Boros market orders/ });
     await waitFor(() => expect(confirm).toBeEnabled(), { timeout: 4000 });
     fireEvent.pointerDown(confirm);
     expect(await screen.findByText(/no shared size to hedge/i, {}, { timeout: 4000 })).toBeInTheDocument();
@@ -281,7 +282,7 @@ describe('StrategyWizard — the hedge is sized off the EXECUTED collateral', ()
     // is precisely the path that produced the mis-sized hedge.
     fireEvent.change(screen.getByLabelText(/^Size per leg/), { target: { value: '2' } });
 
-    const confirm = await screen.findByRole('button', { name: /Confirm — 2 Boros market orders/ });
+    const confirm = await screen.findByRole('button', { name: /Confirm · 2 Boros market orders/ });
     await waitFor(() => expect(confirm).toBeEnabled(), { timeout: 4000 });
     fireEvent.pointerDown(confirm);
 
@@ -302,12 +303,12 @@ describe('StrategyWizard — step 1 becomes a receipt once the rate is locked', 
   it('replaces the Boros form with the fill summary — ONE CTA, not two', async () => {
     /**
      * The bug this pins: the ticket stayed mounted and ARMED under the wizard's
-     * advance button, so the modal showed both `Confirm — 2 Boros market
+     * advance button, so the modal showed both `Confirm · 2 Boros market
      * orders` and `Rate locked ✓ — hedge the perps`. The same pair could then
      * be fired a second time by a user the wizard had just told the rate was
      * locked.
      */
-    server.use(...tradableHandlers(CLEAN_FILL), ...symbolHandlers([ETH_GATE]));
+    server.use(...tradableHandlers(CLEAN_FILL, 'USDT', 2.5), ...symbolHandlers([ETH_GATE]));
     renderWizard({ ...INTENT, maturity: MAT, borosLongVenue: 'BINANCE', borosShortVenue: 'HYPERLIQUID' });
 
     // The wizard's own prefill arms both legs and the size; just wait for it.
@@ -316,7 +317,7 @@ describe('StrategyWizard — step 1 becomes a receipt once the rate is locked', 
     );
     expect(screen.getByLabelText('Leg B')).toHaveValue(String(HL_M));
 
-    const confirm = await screen.findByRole('button', { name: /Confirm — 2 Boros market orders/ });
+    const confirm = await screen.findByRole('button', { name: /Confirm · 2 Boros market orders/ });
     await waitFor(() => expect(confirm).toBeEnabled(), { timeout: 4000 });
     fireEvent.pointerDown(confirm);
 
@@ -324,13 +325,19 @@ describe('StrategyWizard — step 1 becomes a receipt once the rate is locked', 
     await screen.findByText(/1,000 USDT hedged/, undefined, { timeout: 4000 });
     // …and the form is GONE: no confirm, no size box, nothing to re-fire.
     await waitFor(() =>
-      expect(screen.queryByRole('button', { name: /Confirm — 2 Boros market orders/ })).not.toBeInTheDocument(),
+      expect(screen.queryByRole('button', { name: /Confirm · 2 Boros market orders/ })).not.toBeInTheDocument(),
     );
     expect(screen.queryByLabelText(/^Size per leg/)).not.toBeInTheDocument();
     // Exactly one way forward.
     expect(screen.getByRole('button', { name: /Rate locked\s*— hedge the perps/ })).toBeInTheDocument();
     // And no Dismiss — the receipt IS the step; hiding it would blank it.
     expect(screen.queryByRole('button', { name: 'Dismiss' })).not.toBeInTheDocument();
+    const receipt = within(screen.getByRole('status'));
+    expect(receipt.getByText(/^Binance ETH 31 Aug 2026 · /)).toBeInTheDocument();
+    expect(receipt.getByText(/^Hyperliquid ETH 31 Aug 2026 · /)).toBeInTheDocument();
+    expect(receipt.queryByText(/^Leg [AB] · /)).not.toBeInTheDocument();
+    expect(receipt.getByText('Fee')).toBeInTheDocument();
+    expect(receipt.getByText('2.5 USDT')).toBeInTheDocument();
   });
 });
 
@@ -352,87 +359,80 @@ const NOT_SUBMITTED = {
 /** Both legs venue-rejected: fills 0 under a 200. The old receipt gate read
  * `unhedgedSize > 0`, which is 0 here — and showed "Rate locked ✓". */
 const ZERO_FILL = {
-  legA: { marketId: HL_M, direction: 'short', filledSize: 0, shortfallSize: 1000, execApr: null, feeSize: null, failure: { code: 'rate-deviation', message: 'rate moved beyond the band' } },
-  legB: { marketId: BN_M, direction: 'long', filledSize: 0, shortfallSize: 1000, execApr: null, feeSize: null, failure: { code: 'rate-deviation', message: 'rate moved beyond the band' } },
+  legs: [{ marketId: HL_M, direction: 'short', filledSize: 0, shortfallSize: 1000, execApr: null, feeSize: null, failure: { code: 'rate-deviation', message: 'rate moved beyond the band' } }, { marketId: BN_M, direction: 'long', filledSize: 0, shortfallSize: 1000, execApr: null, feeSize: null, failure: { code: 'rate-deviation', message: 'rate moved beyond the band' } }],
   hedgedSize: 0,
   unhedgedSize: 0,
   unhedgedLeg: null,
   realisedSpreadApr: null,
   partial: true,
-  bothLegsSubmitted: true,
+  allLegsSubmitted: true,
 };
 
 /** Leg A fills whole, leg B falls 400 short: 600 hedged, 400 directional. */
 const PARTIAL_600 = {
-  legA: { marketId: HL_M, direction: 'short', filledSize: 1000, shortfallSize: 0, execApr: 0.09, feeSize: 4, failure: null },
-  legB: { marketId: BN_M, direction: 'long', filledSize: 600, shortfallSize: 400, execApr: 0.042, feeSize: 3, failure: null },
+  legs: [{ marketId: HL_M, direction: 'short', filledSize: 1000, shortfallSize: 0, execApr: 0.09, feeSize: 4, failure: null }, { marketId: BN_M, direction: 'long', filledSize: 600, shortfallSize: 400, execApr: 0.042, feeSize: 3, failure: null }],
   hedgedSize: 600,
   unhedgedSize: 400,
-  unhedgedLeg: 'A',
+  unhedgedLeg: 0,
   realisedSpreadApr: null,
   partial: true,
-  bothLegsSubmitted: true,
+  allLegsSubmitted: true,
 };
 
 /** The 400-unit one-leg completion of PARTIAL_600's deficient leg B. */
 const COMPLETION_400 = {
-  legA: NOT_SUBMITTED,
-  legB: { marketId: BN_M, direction: 'long', filledSize: 400, shortfallSize: 0, execApr: 0.041, feeSize: 2, failure: null },
+  legs: [NOT_SUBMITTED, { marketId: BN_M, direction: 'long', filledSize: 400, shortfallSize: 0, execApr: 0.041, feeSize: 2, failure: null }],
   hedgedSize: 0,
   unhedgedSize: 0,
   unhedgedLeg: null,
   realisedSpreadApr: null,
   partial: false,
-  bothLegsSubmitted: false,
+  allLegsSubmitted: false,
 };
 
 /** The same completion, FAILED at the venue — still a 200. */
 const COMPLETION_FAIL = {
-  legA: NOT_SUBMITTED,
-  legB: { marketId: BN_M, direction: 'long', filledSize: 0, shortfallSize: 400, execApr: null, feeSize: null, failure: { code: 'insufficient-depth', message: 'not enough depth inside the band' } },
+  legs: [NOT_SUBMITTED, { marketId: BN_M, direction: 'long', filledSize: 0, shortfallSize: 400, execApr: null, feeSize: null, failure: { code: 'insufficient-depth', message: 'not enough depth inside the band' } }],
   hedgedSize: 0,
   unhedgedSize: 0,
   unhedgedLeg: null,
   realisedSpreadApr: null,
   partial: true,
-  bothLegsSubmitted: false,
+  allLegsSubmitted: false,
 };
 
 /** Both legs short by DIFFERENT amounts: 500 hedged, 200 directional. */
 const UNEVEN_PARTIAL = {
-  legA: { marketId: HL_M, direction: 'short', filledSize: 700, shortfallSize: 300, execApr: 0.09, feeSize: 3, failure: null },
-  legB: { marketId: BN_M, direction: 'long', filledSize: 500, shortfallSize: 500, execApr: 0.042, feeSize: 2, failure: null },
+  legs: [{ marketId: HL_M, direction: 'short', filledSize: 700, shortfallSize: 300, execApr: 0.09, feeSize: 3, failure: null }, { marketId: BN_M, direction: 'long', filledSize: 500, shortfallSize: 500, execApr: 0.042, feeSize: 2, failure: null }],
   hedgedSize: 500,
   unhedgedSize: 200,
-  unhedgedLeg: 'A',
+  unhedgedLeg: 0,
   realisedSpreadApr: null,
   partial: true,
-  bothLegsSubmitted: true,
+  allLegsSubmitted: true,
 };
 
 /** The pair-shaped retry Retry arms for UNEVEN_PARTIAL (min shortfall 300),
  * filling clean. The book is then 1000/800 — still 200 directional. */
 const RETRY_300 = {
-  legA: { marketId: HL_M, direction: 'short', filledSize: 300, shortfallSize: 0, execApr: 0.088, feeSize: 1, failure: null },
-  legB: { marketId: BN_M, direction: 'long', filledSize: 300, shortfallSize: 0, execApr: 0.043, feeSize: 1, failure: null },
+  legs: [{ marketId: HL_M, direction: 'short', filledSize: 300, shortfallSize: 0, execApr: 0.088, feeSize: 1, failure: null }, { marketId: BN_M, direction: 'long', filledSize: 300, shortfallSize: 0, execApr: 0.043, feeSize: 1, failure: null }],
   hedgedSize: 300,
   unhedgedSize: 0,
   unhedgedLeg: null,
   realisedSpreadApr: 0.045,
   partial: false,
-  bothLegsSubmitted: true,
+  allLegsSubmitted: true,
 };
 
 /** A deliberate one-leg lock (the ticket's Single mode). */
 const SINGLE_LOCK = {
-  legA: { marketId: HL_M, direction: 'short', filledSize: 1000, shortfallSize: 0, execApr: 0.09, feeSize: 4, failure: null },
-  legB: NOT_SUBMITTED,
+  legs: [{ marketId: HL_M, direction: 'short', filledSize: 1000, shortfallSize: 0, execApr: 0.09, feeSize: 4, failure: null }, NOT_SUBMITTED],
   hedgedSize: 0,
   unhedgedSize: 0,
   unhedgedLeg: null,
   realisedSpreadApr: null,
   partial: false,
-  bothLegsSubmitted: false,
+  allLegsSubmitted: false,
 };
 
 const WIZ = { ...INTENT, maturity: MAT, borosLongVenue: 'BINANCE', borosShortVenue: 'HYPERLIQUID' };
@@ -440,7 +440,7 @@ const WIZ = { ...INTENT, maturity: MAT, borosLongVenue: 'BINANCE', borosShortVen
 /** Arm, wait for the tradable state, hold-to-confirm the pair. */
 const confirmPair = async () => {
   await waitFor(() => expect(screen.getByLabelText('Leg A')).toHaveValue(String(BN_M)));
-  const confirm = await screen.findByRole('button', { name: /Confirm — 2 Boros market orders/ });
+  const confirm = await screen.findByRole('button', { name: /Confirm · 2 Boros market orders/ });
   await waitFor(() => expect(confirm).toBeEnabled(), { timeout: 4000 });
   fireEvent.pointerDown(confirm);
 };
@@ -481,7 +481,7 @@ describe('StrategyWizard — the book decides, not the last result', () => {
 
     // Complete the deficient leg through the ticket's own report.
     fireEvent.click(screen.getByRole('button', { name: 'Complete now at market' }));
-    const complete = await screen.findByRole('button', { name: /^Confirm — complete leg/ }, { timeout: 4000 });
+    const complete = await screen.findByRole('button', { name: /^Confirm · complete leg/ }, { timeout: 4000 });
     await waitFor(() => expect(complete).toBeEnabled(), { timeout: 4000 });
     fireEvent.pointerDown(complete);
 
@@ -503,7 +503,7 @@ describe('StrategyWizard — the book decides, not the last result', () => {
     await screen.findByText(/400 USDT is unmatched/, undefined, { timeout: 4000 });
 
     fireEvent.click(screen.getByRole('button', { name: 'Complete now at market' }));
-    const complete = await screen.findByRole('button', { name: /^Confirm — complete leg/ }, { timeout: 4000 });
+    const complete = await screen.findByRole('button', { name: /^Confirm · complete leg/ }, { timeout: 4000 });
     await waitFor(() => expect(complete).toBeEnabled(), { timeout: 4000 });
     fireEvent.pointerDown(complete);
 
@@ -531,7 +531,7 @@ describe('StrategyWizard — the book decides, not the last result', () => {
     await screen.findByText(/200 USDT is unmatched/, undefined, { timeout: 4000 });
 
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
-    const retry = await screen.findByRole('button', { name: /Confirm — 2 Boros market orders/ }, { timeout: 4000 });
+    const retry = await screen.findByRole('button', { name: /Confirm · 2 Boros market orders/ }, { timeout: 4000 });
     await waitFor(() => expect(retry).toBeEnabled(), { timeout: 4000 });
     fireEvent.pointerDown(retry);
 
@@ -557,7 +557,7 @@ describe('StrategyWizard — the book decides, not the last result', () => {
     // The wizard has no Pair/Single choice — it locks the pair the card
     // quoted. The mocked result is one-sided regardless, which is the state
     // under test: a half-filled lock must never read as a clean pair.
-    const confirm = await screen.findByRole('button', { name: /Confirm — 2 Boros market orders/ });
+    const confirm = await screen.findByRole('button', { name: /Confirm · 2 Boros market orders/ });
     await waitFor(() => expect(confirm).toBeEnabled(), { timeout: 4000 });
     fireEvent.pointerDown(confirm);
 
@@ -582,7 +582,7 @@ describe('StrategyWizard — the book decides, not the last result', () => {
     server.use(...tradableHandlers([SINGLE_LOCK]), ...symbolHandlers([ETH_GATE]));
     renderWizard(WIZ);
     await waitFor(() => expect(screen.getByLabelText('Leg A')).toHaveValue(String(BN_M)));
-    const confirm = await screen.findByRole('button', { name: /Confirm — 2 Boros market orders/ });
+    const confirm = await screen.findByRole('button', { name: /Confirm · 2 Boros market orders/ });
     await waitFor(() => expect(confirm).toBeEnabled(), { timeout: 4000 });
     fireEvent.pointerDown(confirm);
     await screen.findByText(/Only one side of the rate pair is on/, undefined, { timeout: 4000 });
@@ -646,7 +646,7 @@ describe('StrategyWizard — leaving and closing are deliberate', () => {
     await waitFor(() => expect(screen.getByLabelText('Leg A')).toHaveValue(String(BN_M)));
     expect(screen.getByRole('button', { name: 'close' })).toBeInTheDocument();
 
-    const confirm = await screen.findByRole('button', { name: /Confirm — 2 Boros market orders/ });
+    const confirm = await screen.findByRole('button', { name: /Confirm · 2 Boros market orders/ });
     await waitFor(() => expect(confirm).toBeEnabled(), { timeout: 4000 });
     fireEvent.pointerDown(confirm);
 
@@ -664,8 +664,7 @@ describe('StrategyWizard — token-collateral aggregate sizing', () => {
   it('scales the USD notional by hedged/sizeBase and passes the coin size', async () => {
     const ETH_FILL = {
       ...CLEAN_FILL,
-      legA: { ...CLEAN_FILL.legA, filledSize: 2 },
-      legB: { ...CLEAN_FILL.legB, filledSize: 2 },
+      legs: [{ ...CLEAN_FILL.legs[0], filledSize: 2 }, { ...CLEAN_FILL.legs[1], filledSize: 2 }],
       hedgedSize: 2,
     };
     server.use(...tradableHandlers(ETH_FILL, 'ETH'), ...symbolHandlers([ETH_GATE]));
@@ -682,4 +681,124 @@ describe('StrategyWizard — token-collateral aggregate sizing', () => {
       expect(pair?.payload.sizeBase).toBe(2);
     });
   }, 15_000);
+});
+
+const SPREAD_M = 59;
+const spreadHandlers = (fill: Record<string, unknown>) => [
+  http.get('/api/boros/pair/context', () =>
+    HttpResponse.json(
+      env({
+        markets: [],
+        spreadMarkets: [
+          market({ marketId: SPREAD_M, name: 'HL-Binance spread', venue: 'HL-Binance', collateral: 'ETH', spreadVenues: ['HYPERLIQUID', 'BINANCE'] }),
+        ],
+        crossByToken: [{ tokenId: 3, available: 3_000 }],
+        isolatedByMarket: [],
+        defaultSlippageApr: 0.0025,
+        maxSlippageApr: 0.1,
+      }),
+    ),
+  ),
+  http.post('/api/boros/pair/simulate', () =>
+    HttpResponse.json(
+      env({
+        simulation: {
+          collateral: 'ETH',
+          spreadApr: 0.0285,
+          worstCaseSpreadApr: 0.02,
+          legs: [{ marketId: SPREAD_M, direction: 'short', execApr: 0.0285, feeSize: 1, marginRequired: 1, sizing: { currentSize: 0, resultingSize: -2_333, flips: false } }],
+          takerFeeSize: 1,
+          costToCrossSize: 1.2,
+          feeDragApr: 0.003,
+          marginRequiredTotal: 1,
+          hedgedSize: 2_333,
+          unhedgedSize: 0,
+          collateralPriceUsd: 2_500,
+          secondsToMaturity: 1_000_000,
+          reasons: [],
+        },
+        gate: { blockers: [], warnings: [], requiresAcknowledgement: false, opposingLegs: [] },
+        eligibility: { eligible: true, code: null, reason: null },
+        simulatedAtMs: Date.now(),
+        gasBalanceUsd: 100,
+      }),
+    ),
+  ),
+  ...tradableHandlers(fill, 'ETH'),
+  ...symbolHandlers([ETH_GATE]),
+];
+
+describe('StrategyWizard — a spread open that fills 60%', () => {
+  it('sizes the perp hedge to the 60% the spread filled, at $6M', async () => {
+    const FILLED = 1_399.8;
+    const spreadPartial = {
+      legs: [
+        {
+          marketId: SPREAD_M,
+          direction: 'short',
+          filledSize: FILLED,
+          shortfallSize: 933.2,
+          execApr: 0.0285,
+          feeSize: 1,
+          failure: { code: 'insufficient-depth', message: 'thin' },
+        },
+      ],
+      hedgedSize: FILLED,
+      unhedgedSize: 0,
+      unhedgedLeg: null,
+      realisedSpreadApr: null,
+      partial: true,
+      filledNothing: false,
+      allLegsSubmitted: true,
+    };
+    server.use(...spreadHandlers(spreadPartial));
+    renderWizard({ ...WIZ, notionalUsd: 5_832_500, sizeBase: 2_333 });
+    const confirm = await screen.findByRole('button', { name: /1 Boros market order/ }, { timeout: 4000 });
+    await waitFor(() => expect(confirm).toBeEnabled(), { timeout: 4000 });
+    fireEvent.pointerDown(confirm);
+
+    await screen.findByRole('button', { name: /Rate locked/ }, { timeout: 4000 });
+    expect(within(screen.getByRole('status')).queryByText('Fee')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Rate locked/ }));
+    await waitFor(() => {
+      const pair = prefillsSeen.find((x) => x.kind === 'pair');
+      expect(pair?.payload.notionalUsd).toBeCloseTo(5_832_500 * 0.6, 0);
+      expect(pair?.payload.sizeBase).toBeCloseTo(FILLED, 6);
+    });
+  }, 20_000);
+});
+
+describe('StrategyWizard — a spread open that fills in full', () => {
+  it('shows the ticket trade fee on the step 1 receipt', async () => {
+    const spreadFull = {
+      legs: [
+        {
+          marketId: SPREAD_M,
+          direction: 'short',
+          filledSize: 2_333,
+          shortfallSize: 0,
+          execApr: 0.0285,
+          feeSize: null,
+          failure: null,
+        },
+      ],
+      hedgedSize: 2_333,
+      unhedgedSize: 0,
+      unhedgedLeg: null,
+      realisedSpreadApr: 0.0285,
+      partial: false,
+      filledNothing: false,
+      allLegsSubmitted: true,
+    };
+    server.use(...spreadHandlers(spreadFull));
+    renderWizard({ ...WIZ, notionalUsd: 5_832_500, sizeBase: 2_333 });
+    const confirm = await screen.findByRole('button', { name: /1 Boros market order/ }, { timeout: 4000 });
+    await waitFor(() => expect(confirm).toBeEnabled(), { timeout: 4000 });
+    fireEvent.pointerDown(confirm);
+
+    await screen.findByRole('button', { name: /Rate locked/ }, { timeout: 4000 });
+    const receipt = within(screen.getByRole('status'));
+    expect(receipt.getByText('Fee')).toBeInTheDocument();
+    expect(receipt.getByText('1.2 ETH')).toBeInTheDocument();
+  }, 20_000);
 });

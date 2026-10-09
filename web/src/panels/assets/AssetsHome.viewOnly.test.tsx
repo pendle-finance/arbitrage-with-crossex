@@ -31,6 +31,7 @@ const perp = (base: string, notionalUsd: number): AssetPerpOpen => ({
 });
 
 const boros = (notionalUsd: number): AssetBorosOpen => ({
+  spreadVenues: null,
   marketId: 7,
   venue: 'BINANCE',
   maturity: DEC,

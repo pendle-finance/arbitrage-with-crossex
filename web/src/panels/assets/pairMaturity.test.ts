@@ -30,6 +30,7 @@ const perp = (o: Partial<AssetPerpOpen> & { venue: string; side: 'LONG' | 'SHORT
 let mid = 1;
 const yu = (o: Partial<AssetBorosOpen> & { venue: string; side: 'LONG' | 'SHORT'; sizeToken: number; maturity: number }): AssetBorosOpen => ({
   marketId: mid++,
+  spreadVenues: null,
   collateral: 'ETH',
   notionalUsd: o.sizeToken * 2500,
   entryApr: 0.08,
@@ -130,8 +131,8 @@ describe('settlement fees are netted out of the locked rate', () => {
         yu({ venue: 'HYPERLIQUID', side: 'SHORT', sizeToken: 100, maturity: SEP }),
       ],
       borosHistory: [
-        { marketId: 1, venue: 'GATE', maturity: SEP, settleUsd: 0, settleFeeUsd: 90, tradePnlUsd: 0, tradeFeeUsd: 10 },
-        { marketId: 2, venue: 'HYPERLIQUID', maturity: SEP, settleUsd: 0, settleFeeUsd: 70, tradePnlUsd: 0, tradeFeeUsd: 30 },
+        { marketId: 1, venue: 'GATE', spreadVenues: null, maturity: SEP, settleUsd: 0, settleFeeUsd: 90, tradePnlUsd: 0, tradeFeeUsd: 10 },
+        { marketId: 2, venue: 'HYPERLIQUID', spreadVenues: null, maturity: SEP, settleUsd: 0, settleFeeUsd: 70, tradePnlUsd: 0, tradeFeeUsd: 30 },
       ],
     });
     const d = deriveAsset(g, {}, 0, NOW);

@@ -8,6 +8,7 @@
  * non-nullable parameters.
  */
 import { describe, expect, it } from 'vitest';
+import { decodeSharePayload, encodeSharePayload, roundTo } from '../lib/shareCodec';
 import { pairSharePayload } from './sharePayload';
 import type { PairEstimate, PairLegDetail } from './assets/assetModel';
 
@@ -117,5 +118,49 @@ describe('pairSharePayload', () => {
     const p = pairSharePayload(pair(), 'ETH', opts);
     expect(JSON.stringify(p)).not.toMatch(/0x[0-9a-fA-F]{8}/);
     expect(p.b).toBe('ETH');
+  });
+});
+
+describe('pairSharePayload on a spread pair', () => {
+  const OPENED = Date.UTC(2026, 9, 8) / 1000;
+  const NOV_27 = Date.UTC(2026, 10, 27) / 1000;
+  const perp = (venue: string, side: 'LONG' | 'SHORT', symbol: string): PairLegDetail => ({
+    ...yuLeg({ venue, side, sizeToken: 0.555, sizeBase: 0.555, notionalUsd: 1_700, lockedApr: null }),
+    kind: 'perp',
+    symbol,
+    marketId: undefined,
+  });
+  const ownerPair = (): PairEstimate => ({
+    ...pair({ longVenue: 'GATE', shortVenue: 'HYPERLIQUID', soonestMaturitySec: NOV_27, hedgedSinceSec: OPENED }),
+    legs: [
+      perp('GATE', 'LONG', 'GATE_FUTURE_ETH_USDT'),
+      perp('HYPERLIQUID', 'SHORT', 'HYPERLIQUID_FUTURE_ETH_USDC'),
+      {
+        ...yuLeg({
+          venue: 'HYPERLIQUID',
+          side: 'SHORT',
+          sizeToken: 0.555,
+          sizeBase: 0.555,
+          notionalUsd: 1_700,
+          lockedApr: 0.0348,
+          marketId: 59,
+          maturity: NOV_27,
+        }),
+        spreadVenues: ['HYPERLIQUID', 'GATE'],
+      },
+    ],
+  });
+
+  it('spread leg', () => {
+    const payload = pairSharePayload(ownerPair(), 'ETH', { ...opts, nowSec: OPENED });
+    const boros = payload.l.filter((l) => l.k === 'b');
+    expect(boros).toHaveLength(1);
+    expect(boros[0]).toMatchObject({ k: 'b', x: 'HYPERLIQUID_GATE', s: 'S', r: 0.0348 });
+    expect(payload.v).toBe(1);
+    const decoded = decodeSharePayload(encodeSharePayload(payload));
+    expect(decoded).toEqual({
+      ok: true,
+      payload: { ...payload, sp: roundTo(payload.sp, 4), p: Math.round(payload.p) },
+    });
   });
 });

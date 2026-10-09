@@ -47,6 +47,7 @@ const perp = (over: Partial<AssetPerpOpen>): AssetPerpOpen => ({
 const boros = (over: Partial<AssetBorosOpen>): AssetBorosOpen => ({
   marketId: 155,
   venue: 'HYPERLIQUID',
+  spreadVenues: null,
   maturity: NOW + 60 * DAY,
   collateral: 'ETH',
   side: 'LONG',
@@ -275,8 +276,8 @@ describe('exclusions', () => {
   it("'all' on a market also drops its history rows; partial does not", () => {
     const base = group({
       borosHistory: [
-        { marketId: 1, venue: 'HYPERLIQUID', maturity: NOW + DAY, settleUsd: 100, settleFeeUsd: 2, tradePnlUsd: -10, tradeFeeUsd: 10 },
-        { marketId: 2, venue: 'OKX', maturity: NOW + DAY, settleUsd: 40, settleFeeUsd: 1, tradePnlUsd: 0, tradeFeeUsd: 0 },
+        { marketId: 1, venue: 'HYPERLIQUID', spreadVenues: null, maturity: NOW + DAY, settleUsd: 100, settleFeeUsd: 2, tradePnlUsd: -10, tradeFeeUsd: 10 },
+        { marketId: 2, venue: 'OKX', spreadVenues: null, maturity: NOW + DAY, settleUsd: 40, settleFeeUsd: 1, tradePnlUsd: 0, tradeFeeUsd: 0 },
       ],
       perpClosed: [
         { symbol: 'GATE_OLD', venue: 'GATE', closedPnlUsd: 20, fundingUsd: 5, feesUsd: 3, count: 1, lastClosedAt: NOW - DAY, rows: [] },
@@ -308,7 +309,7 @@ describe('carry − cost', () => {
         { symbol: 'GATE_OLD', venue: 'GATE', closedPnlUsd: -25, fundingUsd: 80, feesUsd: 15, count: 1, lastClosedAt: NOW - DAY, rows: [] },
       ],
       borosHistory: [
-        { marketId: 1, venue: 'HYPERLIQUID', maturity: NOW + DAY, settleUsd: 500, settleFeeUsd: 12, tradePnlUsd: -30, tradeFeeUsd: 8 },
+        { marketId: 1, venue: 'HYPERLIQUID', spreadVenues: null, maturity: NOW + DAY, settleUsd: 500, settleFeeUsd: 12, tradePnlUsd: -30, tradeFeeUsd: 8 },
       ],
     });
     const d = deriveAsset(g, {}, 0, NOW);
@@ -327,8 +328,8 @@ describe('carry − cost', () => {
     const g = group({
       perpOpen: [perp({ symbol: 'HL', venue: 'HYPERLIQUID', side: 'LONG', qty: 1000, upnlUsd: 0, fundingUsd: 0, feesUsd: 0 })],
       borosHistory: [
-        { marketId: 1, venue: 'HYPERLIQUID', maturity: NOW + DAY, settleUsd: 500, settleFeeUsd: 12, rebateUsd: 6, tradePnlUsd: 0, tradeFeeUsd: 0 },
-        { marketId: 2, venue: 'OKX', maturity: NOW + DAY, settleUsd: 40, settleFeeUsd: 4, rebateUsd: 2, tradePnlUsd: 0, tradeFeeUsd: 0 },
+        { marketId: 1, venue: 'HYPERLIQUID', spreadVenues: null, maturity: NOW + DAY, settleUsd: 500, settleFeeUsd: 12, rebateUsd: 6, tradePnlUsd: 0, tradeFeeUsd: 0 },
+        { marketId: 2, venue: 'OKX', spreadVenues: null, maturity: NOW + DAY, settleUsd: 40, settleFeeUsd: 4, rebateUsd: 2, tradePnlUsd: 0, tradeFeeUsd: 0 },
       ],
     });
     const d = deriveAsset(g, {}, 0, NOW);
@@ -347,7 +348,7 @@ describe('carry − cost', () => {
     const plain = deriveAsset(
       group({
         perpOpen: [perp({ symbol: 'HL', venue: 'HYPERLIQUID', side: 'LONG', qty: 1000, upnlUsd: 0, fundingUsd: 0, feesUsd: 0 })],
-        borosHistory: [{ marketId: 1, venue: 'HYPERLIQUID', maturity: NOW + DAY, settleUsd: 500, settleFeeUsd: 12, tradePnlUsd: 0, tradeFeeUsd: 0 }],
+        borosHistory: [{ marketId: 1, venue: 'HYPERLIQUID', spreadVenues: null, maturity: NOW + DAY, settleUsd: 500, settleFeeUsd: 12, tradePnlUsd: 0, tradeFeeUsd: 0 }],
       }),
       {},
       0,
@@ -369,7 +370,7 @@ describe('totals & APR', () => {
         boros({ marketId: 1, settleUsd: 3205, mtmUsd: 820, imUsd: 500 }),
       ],
       borosHistory: [
-        { marketId: 1, venue: 'HYPERLIQUID', maturity: NOW + DAY, settleUsd: 3205, settleFeeUsd: 30, tradePnlUsd: -390, tradeFeeUsd: 390 },
+        { marketId: 1, venue: 'HYPERLIQUID', spreadVenues: null, maturity: NOW + DAY, settleUsd: 3205, settleFeeUsd: 30, tradePnlUsd: -390, tradeFeeUsd: 390 },
       ],
       perpClosed: [
         { symbol: 'OLD', venue: 'GATE', closedPnlUsd: 150, fundingUsd: 30, feesUsd: 12, count: 1, lastClosedAt: NOW - DAY, rows: [] },
@@ -595,7 +596,7 @@ describe('exclusions and maturity — his 2026-09-09 rules', () => {
       perpOpen: [perp({ symbol: 'HL', venue: 'HYPERLIQUID', side: 'LONG', qty: 1000, imUsd: 10_000 })],
       borosOpen: [boros({ marketId: 1, venue: 'HYPERLIQUID', side: 'LONG', sizeToken: 1000, imUsd: 10_000, mtmUsd: 900 })],
       borosHistory: [
-        { marketId: 1, venue: 'HYPERLIQUID', maturity: NOW + 60 * DAY, settleUsd: 3000, settleFeeUsd: 30, tradePnlUsd: -10, tradeFeeUsd: 10 },
+        { marketId: 1, venue: 'HYPERLIQUID', spreadVenues: null, maturity: NOW + 60 * DAY, settleUsd: 3000, settleFeeUsd: 30, tradePnlUsd: -10, tradeFeeUsd: 10 },
       ],
     });
     const whole = deriveAsset(g, {}, 0, NOW);
@@ -818,7 +819,7 @@ describe('borosOnlyPairs', () => {
     expect(p.missingShort).toBeCloseTo(37.3, 9);
     expect(p.lockedSpread).toBeCloseTo(0.0266, 9);
     // The slice keeps its share of the venue leg, so a close stays capped.
-    expect(p.longYu.share).toBeCloseTo(0.0734, 9);
+    expect(p.longYu?.share).toBeCloseTo(0.0734, 9);
     expect(restPerps).toEqual([]);
     expect(restYus).toEqual([]);
   });

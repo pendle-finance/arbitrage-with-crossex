@@ -4,6 +4,7 @@
 import { describe, expect, it } from 'vitest';
 import type { OpportunityGroup, OpportunityPair, Rebate } from '../api/types';
 import {
+  makeOpportunityBorosLeg,
   makeOpportunityGroup,
   makeOpportunityLeg,
   makeOpportunityPair,
@@ -46,16 +47,19 @@ function pair(
   longVenue: string,
   over: Partial<OpportunityPair> = {},
 ): OpportunityPair {
-  const leg = (side: 'short' | 'long', venue: string) =>
+  const leg = (venue: string) =>
     makeOpportunityLeg({
-      marketId: marketIdFor(side, venue),
       venue,
       crossexVenue: venue,
       crossexSymbol: `${venue}_FUTURE_ETH_${venue === 'HYPERLIQUID' ? 'USDC' : 'USDT'}`,
     });
   return makeOpportunityPair({
-    shortLeg: leg('short', shortVenue),
-    longLeg: leg('long', longVenue),
+    shortLeg: leg(shortVenue),
+    longLeg: leg(longVenue),
+    borosLegs: [
+      makeOpportunityBorosLeg({ marketId: marketIdFor('short', shortVenue), venue: shortVenue }),
+      makeOpportunityBorosLeg({ marketId: marketIdFor('long', longVenue), side: 'LONG', venue: longVenue }),
+    ],
     netFixedAprOnCapital: apr,
     ...over,
   });
@@ -115,7 +119,7 @@ describe('toRows', () => {
     expect(rows[0].venueKeys).toEqual(['HYPERLIQUID', 'BINANCE']);
     expect(rows[0].asset).toBe('ETH');
     expect(rows[0].days).toBe(30);
-    expect(rows[0].key).toContain(String(rows[0].pair.shortLeg.marketId));
+    expect(rows[0].key).toContain(String(rows[0].pair.borosLegs[0].marketId));
   });
 
   it('keys the asset on the cohort underlying, never a leg ticker', () => {
@@ -145,14 +149,15 @@ describe('toRows', () => {
     const netFixedApr = execSpreadApr - totalUsd / OPP_NT;
     const estProfitUsd = netFixedApr * OPP_NT;
     const losing = makeOpportunityPair({
-      shortLeg: makeOpportunityLeg({ marketId: 5000, settleFeeApr: 0.01 }),
       longLeg: makeOpportunityLeg({
-        marketId: 5001,
         venue: 'BINANCE',
         crossexVenue: 'BINANCE',
         crossexSymbol: 'BINANCE_FUTURE_ETH_USDT',
-        settleFeeApr: 0.01,
       }),
+      borosLegs: [
+        makeOpportunityBorosLeg({ marketId: 5000, settleFeeApr: 0.01 }),
+        makeOpportunityBorosLeg({ marketId: 5001, side: 'LONG', venue: 'BINANCE', settleFeeApr: 0.01 }),
+      ],
       execSpreadApr,
       costs: { ...base.costs, totalUsd, annualizedApr: totalUsd / OPP_NT },
       netFixedApr,
@@ -191,14 +196,15 @@ describe('toRows', () => {
     const totalUsd = 0.021 * OPP_NT;
     const netFixedApr = 0.02 - totalUsd / OPP_NT;
     const losing = makeOpportunityPair({
-      shortLeg: makeOpportunityLeg({ marketId: 5000, settleFeeApr: 0.01 }),
       longLeg: makeOpportunityLeg({
-        marketId: 5001,
         venue: 'BINANCE',
         crossexVenue: 'BINANCE',
         crossexSymbol: 'BINANCE_FUTURE_ETH_USDT',
-        settleFeeApr: 0.01,
       }),
+      borosLegs: [
+        makeOpportunityBorosLeg({ marketId: 5000, settleFeeApr: 0.01 }),
+        makeOpportunityBorosLeg({ marketId: 5001, side: 'LONG', venue: 'BINANCE', settleFeeApr: 0.01 }),
+      ],
       execSpreadApr: 0.02,
       costs: { ...base.costs, totalUsd, annualizedApr: totalUsd / OPP_NT },
       netFixedApr,

@@ -43,13 +43,12 @@ const execute = (intent: string, size: number, directions: ['long' | 'short', 'l
     headers: HOST,
     payload: {
       address: ADDRESS,
-      legA: { marketId: SOL_A, direction: directions[0], slippageApr: 0.0025 },
-      legB: { marketId: SOL_B, direction: directions[1], slippageApr: 0.0025 },
-      size,
+      legs: [
+        { marketId: SOL_A, direction: directions[0], slippageApr: 0.0025, size, clientOrderId: `coid-${intent}-${size}-a` },
+        { marketId: SOL_B, direction: directions[1], slippageApr: 0.0025, size, clientOrderId: `coid-${intent}-${size}-b` },
+      ],
       intent,
       opposingAcknowledged: true,
-      clientOrderIdA: `coid-${intent}-${size}-a`,
-      clientOrderIdB: `coid-${intent}-${size}-b`,
     },
   });
 

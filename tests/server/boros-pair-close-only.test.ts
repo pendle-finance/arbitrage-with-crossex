@@ -62,13 +62,12 @@ const post = (url: string, payload: Record<string, unknown>) =>
 
 const pairBody = (intent: 'open' | 'close', size: number) => ({
   address: ADDRESS,
-  legA: { marketId: HL, direction: 'short', slippageApr: 0.0025 },
-  legB: { marketId: BN, direction: 'long', slippageApr: 0.0025 },
-  size,
+  legs: [
+    { marketId: HL, direction: 'short', slippageApr: 0.0025, size, clientOrderId: `coid-${intent}-aaaa` },
+    { marketId: BN, direction: 'long', slippageApr: 0.0025, size, clientOrderId: `coid-${intent}-bbbb` },
+  ],
   intent,
   opposingAcknowledged: true,
-  clientOrderIdA: `coid-${intent}-aaaa`,
-  clientOrderIdB: `coid-${intent}-bbbb`,
 });
 
 describe('close-only markets', () => {

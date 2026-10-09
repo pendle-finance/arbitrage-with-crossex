@@ -114,6 +114,7 @@ const SIDE_SHORT = 1;
  * FOK, because there a total miss is the point.)
  */
 const TIF_IOC = 1;
+const TIF_FOK = 2;
 
 /**
  * Orderbook-only routing, matching what the SDK sent (`ammId ?? 0`). Omitting
@@ -229,7 +230,11 @@ export function decimalString(n: number): string {
   if (Math.abs(n) >= 1e21) {
     throw new CoreError(`size ${n} is out of range for an 18-decimal amount`, 'validation');
   }
-  return n.toFixed(DECIMALS).replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '');
+  const [mantissa, exponent] = String(Math.abs(n)).split('e');
+  const plain = exponent === undefined ? mantissa : `0.${'0'.repeat(-Number(exponent) - 1)}${mantissa.replace('.', '')}`;
+  const [whole, fraction = ''] = plain.split('.');
+  const cut = fraction.slice(0, DECIMALS).replace(/0+$/, '');
+  return `${n < 0 ? '-' : ''}${whole}${cut ? `.${cut}` : ''}`;
 }
 
 /**
@@ -546,9 +551,8 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
       // A negative budget is debt. Clear it and leave the full amount on top,
       // which is what Boros charges its own users in the same state.
       //
-      // Counted in CENTS, and the wei built from those, because `decimalString`
-      // goes through `toFixed(18)`: $1.80 as a float is 1.80000000000000004…,
-      // and formatting it to 18 places writes that tail into the amount. Round
+      // Counted in CENTS, and the wei built from those, so no float tail
+      // reaches the amount: $1.80 as a float is 1.80000000000000004…. Round
       // rather than ceil — a sub-cent under-recovery of the debt is absorbed by
       // the whole dollar sitting on top of it.
       const owed = balance < 0 ? -balance : 0;
@@ -559,7 +563,7 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
     }
   };
 
-  const buildOrderCalldata = async (req: BorosMarketOrderRequest): Promise<Hex> => {
+  const buildOrderCalldata = async (req: BorosMarketOrderRequest, tif: number): Promise<Hex> => {
     const { calls } = await call<{ calls: PlaceOrderCall[] }>(
       '/v1/calldata-builder/agent/place-order',
       {
@@ -567,7 +571,7 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
         marketId: req.marketId,
         side: req.direction === 'long' ? SIDE_LONG : SIDE_SHORT,
         size: (req.sizeWei ?? parseUnits(decimalString(req.size), DECIMALS)).toString(),
-        tif: TIF_IOC,
+        tif,
         // The worst rate this leg accepts. `slippage` is deliberately NOT sent
         // alongside: the backend derives its guard from mid ± slippage, which
         // would silently replace the bound the user's tolerance produced.
@@ -720,10 +724,11 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
     opts?: PlaceOrdersOptions,
   ): Promise<BorosLegFill[]> => {
     if (reqs.length === 0) return [];
+    const tif = opts?.timeInForce === 'fill-or-kill' ? TIF_FOK : TIF_IOC;
     let legs: Hex[];
     let cancels: Hex[];
     try {
-      [legs, cancels] = await Promise.all([Promise.all(reqs.map(buildOrderCalldata)), cancelCalldatas(opts?.cancelOrdersOn)]);
+      [legs, cancels] = await Promise.all([Promise.all(reqs.map((req) => buildOrderCalldata(req, tif))), cancelCalldatas(opts?.cancelOrdersOn)]);
     } catch (err) {
       return reqs.map((req) => neverSentLeg(req, err));
     }
@@ -745,7 +750,7 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
     legs: legs.map((l) => ({
       fromMarketId: l.fromMarketId,
       toMarketId: l.toMarketId,
-      size: parseUnits(decimalString(l.size), DECIMALS).toString(),
+      size: l.sizeWei ?? parseUnits(decimalString(l.size), DECIMALS).toString(),
       closeRate: l.closeRate,
       openRate: l.openRate,
       ammId: AMM_ORDERBOOK_ONLY,

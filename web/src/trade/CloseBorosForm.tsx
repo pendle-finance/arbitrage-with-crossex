@@ -17,23 +17,15 @@
  * at (`execApr`), the worst the bound allows (`worstApr`), and any depth
  * shortfall — so the form shows what the close will DO rather than what the
  * position currently IS.
- *
- * **Two legs go out as ONE batch.** A pair's rate legs are one hedge, so they
- * close through `/boros/pair/execute` (intent `close`) — the path the ticket's
- * Reduce-only uses: the server re-runs the gate, cancels both markets'
- * resting orders in the same batch, the venue accepts all of it or none, and
- * the ids replay instead of closing twice. Two
- * separate requests could close one leg and fail the other, leaving a naked
- * rate leg (his call 2026-09-30). A single leg — and the remainder after one
- * leg of a pair is done — keeps its own cancel-and-close request.
  */
 import { Check, ChevronRight } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import type { BorosLegFill, BorosPairRequest, BorosSimulatedLeg, StrategyLeg } from '../api/types';
-import { VenueIcon } from '../components/AssetIcon';
+import { SpreadIcon, VenueIcon } from '../components/AssetIcon';
 import { SignedNumber } from '../components/SignedNumber';
 import { QueryError } from '../components/QueryError';
 import { daysToMaturity, knownRate } from '../lib/boros';
+import { spreadLabel } from '../lib/spread';
 import { fieldValue, fmtDateLocal, fmtPct, fmtTokenQty, fmtUsd, prettyVenue, sigGrouped } from '../lib/fmt';
 import { AffixedInput, EstimateCard, EstimateRow, LegCard, SlippageLine } from './PairTicketBits';
 import { FieldLabel } from './SymbolCombobox';
@@ -49,8 +41,33 @@ import { uuid } from '../lib/uuid';
 import { useActiveWallet } from '../panels/trackedAddress';
 import { BorosLogInButton } from './BorosAgentSetup';
 
-/** Replay keys for the two-leg batch: one pair per intent, reused on a retry. */
-const newOrderIds = () => ({ a: `a-${uuid()}`, b: `b-${uuid()}` });
+const newOrderIds = (count: number): string[] => Array.from({ length: count }, (_, i) => `${i}-${uuid()}`);
+
+const WEI_DIGITS = 18;
+
+function toWei(n: number): bigint {
+  const [mantissa, exponent = '0'] = String(n).split('e');
+  const [whole, fraction = ''] = mantissa.split('.');
+  const shift = WEI_DIGITS + Number(exponent) - fraction.length;
+  const digits = BigInt(whole + fraction);
+  return shift >= 0 ? digits * 10n ** BigInt(shift) : digits / 10n ** BigInt(-shift);
+}
+
+function fromWei(wei: bigint): number {
+  const digits = wei.toString().padStart(WEI_DIGITS + 1, '0');
+  return Number(`${digits.slice(0, -WEI_DIGITS)}.${digits.slice(-WEI_DIGITS)}`);
+}
+
+const ROUND_TRIP_DIGITS = 15;
+
+function sizeAtOrBelow(wei: bigint): number {
+  const drop = wei.toString().length - ROUND_TRIP_DIGITS;
+  if (drop <= 0) return fromWei(wei);
+  const unit = 10n ** BigInt(drop);
+  return fromWei((wei / unit) * unit);
+}
+
+type CloseLeg = StrategyLeg & { spreadVenues?: [string, string] | null };
 
 /** Used until the market's own deviation cap is known, or if it is degenerate. */
 const FALLBACK_SLIPPAGE_PCT = 1;
@@ -69,7 +86,7 @@ export function CloseBorosForm({
   onClosed,
   onDone,
 }: {
-  legs: StrategyLeg[];
+  legs: CloseLeg[];
   /**
    * What actually came off each market, so the caller can shrink a claim that
    * states an absolute size.
@@ -110,26 +127,23 @@ export function CloseBorosForm({
   const [partial, setPartial] = useState<{ marketId: number; filled: number; left: number }[]>([]);
   /** A refusal of the two-leg batch as a whole — one reason, said once. */
   const [batchError, setBatchError] = useState<string | null>(null);
+  const [rest, setRest] = useState<{ marketId: number; wei: bigint }[] | null>(null);
 
   const closable = useMemo(() => legs.filter((l) => l.marketId !== undefined), [legs]);
-  /**
-   * ⚠ ONE size, TWO legs, ONE unit — or no close at all.
-   *
-   * The quote prices closable[0] and closable[1]; the run loop closes EVERY
-   * leg at the shared box number. A third leg would go out unquoted, and a
-   * USDT-margined leg beside an ETH-margined one would be sent the same raw
-   * number as two different quantities. Neither is a close the user was
-   * shown, so the form refuses and points at the legs table, where each leg
-   * closes on its own terms.
-   */
+  const pending = useMemo(() => closable.filter((l) => !done.some((d) => d.marketId === l.marketId)), [closable, done]);
   const collaterals = [...new Set(closable.map((l) => (l.collateral ?? '').toUpperCase()))];
-  const legsBlocked = closable.length > 2 || collaterals.length > 1;
-  const legsReason =
-    closable.length > 2
-      ? `This close spans ${closable.length} Boros legs, but one size can only be quoted and sent for two. Close them one at a time from the legs table.`
-      : `These legs are sized in different collateral (${collaterals.join(', ')}), so one size cannot apply to both. Close them one at a time from the legs table.`;
+  const legsBlocked = collaterals.length > 1;
+  const legsReason = `These legs are sized in different collateral (${collaterals.join(', ')}), so one size cannot apply to ${closable.length > 2 ? 'all of them' : 'both'}. Close them one at a time from the legs table.`;
 
   const ctx = useBorosPairContext(address);
+  const rowOf = (marketId: number | undefined) =>
+    ctx.data?.markets.find((m) => m.marketId === marketId) ??
+    ctx.data?.spreadMarkets?.find((m) => m.marketId === marketId);
+  const spreadOf = (l: CloseLeg) => l.spreadVenues ?? rowOf(l.marketId)?.spreadVenues ?? null;
+  const venueLabel = (l: CloseLeg): string => {
+    const venues = spreadOf(l);
+    return venues ? spreadLabel(venues) : prettyVenue(l.venue);
+  };
   /**
    * Half the MARKET'S max rate deviation — the venue's own cap on how far one
    * trade may move the rate. A bound wider than the cap can never fill, and a
@@ -140,7 +154,7 @@ export function CloseBorosForm({
    */
   const seededSlipPct = (() => {
     const caps = closable
-      .map((l) => ctx.data?.markets.find((m) => m.marketId === l.marketId)?.maxRateDeviationApr)
+      .map((l) => rowOf(l.marketId)?.maxRateDeviationApr)
       .filter((v): v is number => typeof v === 'number' && v > 0);
     if (caps.length === 0) return FALLBACK_SLIPPAGE_PCT;
     const pct = (Math.min(...caps) / 2) * 100;
@@ -157,28 +171,29 @@ export function CloseBorosForm({
   const [slipOpen, setSlipOpen] = useState(false);
   const slipStr = slipEdited ?? String(seededSlipPct);
 
-  /**
-   * Size per market. Empty means "all of it", resolved against the leg CURRENT
-   * size rather than one captured when the dialog opened.
-   *
-   * ⚠ It used to seed the input from `notionalToken` in a lazy `useState`. That
-   * ran once, but the strategy feed refreshes every 30s and a leg's size drifts
-   * — so the seeded number could end up larger than the leg it came from, and
-   * the form rejected its own autofilled value as exceeding the maximum. An
-   * unset field cannot go stale.
-   */
-  /**
-   * ONE size for the whole close, not one per leg.
-   *
-   * The request already sends `min(...)` across the legs — two boxes could
-   * only ever disagree with what actually goes out — and a hedge is closed
-   * as a unit: taking 500 off one leg and 300 off the other leaves a naked
-   * 200 nobody asked for. The cap is the SMALLEST leg, for the same reason.
-   */
   const [sizeEdited, setSizeEdited] = useState<string | null>(null);
-  const maxCloseSize = closable.length
-    ? Math.min(...closable.map((l) => l.notionalToken ?? 0))
-    : 0;
+  const heldWei = (l: CloseLeg): bigint =>
+    rest?.find((r) => r.marketId === l.marketId)?.wei ?? toWei(l.notionalToken ?? 0);
+  const heldOf = (l: CloseLeg): number => fromWei(heldWei(l));
+  const wholeOf = (l: CloseLeg): number => {
+    const held = heldOf(l);
+    const open = Math.abs(rowOf(l.marketId)?.currentSize ?? 0);
+    return open > held && open - held <= open * 1e-12 ? open : held;
+  };
+  const maxCloseWei = (() => {
+    const byVenue = new Map<string, bigint>();
+    const add = (venue: string, wei: bigint) => byVenue.set(venue, (byVenue.get(venue) ?? 0n) + wei);
+    for (const l of pending) {
+      const wei = heldWei(l);
+      const signed = l.side === 'LONG' ? wei : -wei;
+      const venues = spreadOf(l);
+      add(venues?.[0] ?? l.venue, signed);
+      if (venues) add(venues[1], -signed);
+    }
+    const sizes = [...pending.map(heldWei), ...[...byVenue.values()].map((w) => (w < 0n ? -w : w))];
+    return sizes.reduce((max, w) => (w > max ? w : max), 0n);
+  })();
+  const maxCloseSize = fromWei(maxCloseWei);
   const shownSize = (): string => sizeEdited ?? fieldValue(maxCloseSize);
 
   const slipPct = Number(slipStr);
@@ -188,93 +203,52 @@ export function CloseBorosForm({
   const MAX_SLIP_PCT = 10;
   const slipInvalid = !Number.isFinite(slipPct) || slipPct <= 0 || slipPct > MAX_SLIP_PCT;
 
-  const sizeOf = (l: StrategyLeg): { value: number; invalid: boolean } => {
-    const raw = shownSize();
-    const n = Number(raw);
-    const open = l.notionalToken ?? 0;
-    // A relative tolerance: the shown value is rounded to 8 significant digits,
-    // so on a large leg the round-trip differs from `open` by more than any
-    // fixed epsilon would allow.
-    const eps = Math.max(1e-9, maxCloseSize * 1e-7);
-    return {
-      value: Math.min(n, open),
-      invalid: raw.trim() === '' || !Number.isFinite(n) || n <= 0 || n > maxCloseSize + eps,
-    };
+  const typedSize = Number(shownSize());
+  const closesAll = Number.isFinite(typedSize) && typedSize >= maxCloseSize - Math.max(1e-9, maxCloseSize * 1e-7);
+  const typedWei = Number.isFinite(typedSize) && typedSize > 0 ? toWei(typedSize) : 0n;
+  const sizeOf = (l: CloseLeg): number => {
+    if (closesAll) return wholeOf(l);
+    if (maxCloseWei === 0n) return 0;
+    return sizeAtOrBelow((heldWei(l) * typedWei) / maxCloseWei);
   };
-  const anySizeInvalid = closable.some((l) => sizeOf(l).invalid);
+  const anySizeInvalid =
+    shownSize().trim() === '' ||
+    !Number.isFinite(typedSize) ||
+    typedSize <= 0 ||
+    typedSize > maxCloseSize + Math.max(1e-9, maxCloseSize * 1e-7) ||
+    pending.some((l) => !(sizeOf(l) > 0));
 
-  /**
-   * Quote every leg in ONE simulation.
-   *
-   * The simulator is a two-leg shape, so a single close names the same market
-   * twice and asks for leg A only — `onlyLeg` sizes the other to zero. Closing
-   * reverses the position, so each leg's direction is the opposite of the one
-   * it holds.
-   */
   const closeDir = (l: StrategyLeg) => (l.side === 'LONG' ? ('short' as const) : ('long' as const));
-  const simReq: BorosPairRequest | null = useMemo(() => {
-    if (!address || closable.length === 0 || legsBlocked || slipInvalid || anySizeInvalid) return null;
-    const a = closable[0];
+  const closeReq: BorosPairRequest | null = useMemo(() => {
+    if (!address || pending.length === 0 || legsBlocked || slipInvalid || anySizeInvalid) return null;
     const slippageApr = slipPct / 100;
-
-    /**
-     * ⚠ A single close cannot name the same market for both legs.
-     *
-     * `pairEligibility` rejects that outright ("same market — a leg cannot
-     * offset itself"), and the route only walks the books once a pair is
-     * eligible. So the duplicate-market trick returned `book: null` for BOTH
-     * legs and every quote read "book unavailable / supports 0" no matter how
-     * deep the book actually was. Leg B has to be a real, eligible partner —
-     * any market sharing this one's collateral and maturity — and `onlyLeg`
-     * then sizes it to zero so it is quoted but never traded.
-     */
-    const self = ctx.data?.markets.find((m) => m.marketId === a.marketId);
-    const partner =
-      closable[1] ??
-      (self
-        ? ctx.data?.markets.find(
-            (m) =>
-              m.marketId !== self.marketId &&
-              m.tokenId === self.tokenId &&
-              m.maturity === self.maturity,
-          )
-        : undefined);
-    // No eligible partner ⇒ no quote is possible; say nothing rather than
-    // report a bogus "no depth".
-    if (!partner) return null;
-    const b = closable[1] ?? { marketId: partner.marketId, side: a.side } as StrategyLeg;
-
     return {
       address,
-      onlyLeg: closable.length === 1 ? 'A' : undefined,
-      legA: { marketId: a.marketId as number, direction: closeDir(a), slippageApr },
-      legB: { marketId: b.marketId as number, direction: closeDir(b), slippageApr },
-      // One size drives the pair, so a two-leg close quotes at the smaller of
-      // the two — the honest figure when the legs differ.
-      size: Math.min(...closable.map((l) => sizeOf(l).value)),
+      legs: pending.map((l) => ({
+        marketId: l.marketId as number,
+        direction: closeDir(l),
+        slippageApr,
+        size: sizeOf(l),
+      })),
       intent: 'close',
       // A close IS the reduction the gate asks to have acknowledged.
       opposingAcknowledged: true,
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [address, closable, slipStr, sizeEdited, slipInvalid, anySizeInvalid, ctx.data]);
+  }, [address, pending, rest, slipStr, sizeEdited, slipInvalid, anySizeInvalid, ctx.data]);
+  const simReq = closeReq && pending.every((l) => rowOf(l.marketId)) ? closeReq : null;
 
   const sim = useBorosPairSimulation(simReq, simReq !== null);
   // A replay key belongs to ONE intent: a different size or tolerance is a
   // different order and must not be answered with the previous one's fills.
-  const [orderIds, setOrderIds] = useState(newOrderIds);
+  const [orderIds, setOrderIds] = useState(() => newOrderIds(closable.length));
   useEffect(() => {
-    setOrderIds(newOrderIds());
-  }, [slipStr, sizeEdited]);
-  /** Both legs still to close: they go out as one gated batch, so every
-   * blocker the quote carries is about a real leg and the server will refuse
-   * on it. Once one leg is done the quote's partner is synthetic again. */
-  const atomic = closable.length === 2 && done.length === 0;
+    setOrderIds(newOrderIds(closable.length));
+  }, [slipStr, sizeEdited, rest, closable.length]);
+  const atomic = closable.length > 1;
   /** Boros refuses an order worth $10 or less, and the close cancels resting
    * orders before it prices anything — so letting it through costs those
-   * orders and closes nothing. For a single leg, only this blocker: the quote
-   * is a synthetic pair, and its other blockers describe the zero-sized
-   * partner leg. */
+   * orders and closes nothing. */
   const belowMinFor = (b: { code: string; marketId?: number }) =>
     b.code === 'below-min-order-value' && closable.some((l) => l.marketId === b.marketId);
   const gateBlockers = sim.data?.gate.blockers ?? [];
@@ -282,11 +256,8 @@ export function CloseBorosForm({
   /** What stops the two-leg batch, beyond a leg under the venue minimum
    * (which is said on its own leg). The server refuses on the same list. */
   const batchBlockers = atomic ? gateBlockers.filter((b) => !belowMinFor(b)) : [];
-  const simLegFor = (i: number): BorosSimulatedLeg | null => {
-    const s = sim.data?.simulation;
-    if (!s) return null;
-    return i === 0 ? s.legA : s.legB;
-  };
+  const simLegFor = (l: StrategyLeg): BorosSimulatedLeg | null =>
+    sim.data?.simulation.legs?.find((q) => q.marketId === l.marketId) ?? null;
 
   /**
    * Estimated slippage: how far each leg's execution sits from its own mid,
@@ -296,20 +267,14 @@ export function CloseBorosForm({
    * second reading against the context's mid, which polls on its own clock.
    */
   const estSlippageApr = ((): number | null => {
-    // A one-leg close quotes with a synthetic, zero-sized partner leg B
-    // purely to make the pair eligible — its slippage is not this close's.
-    const sim = simLegFor(0) ? (closable.length > 1 ? [simLegFor(0), simLegFor(1)] : [simLegFor(0)]) : [];
-    const gaps = sim
+    const gaps = closable
+      .map(simLegFor)
       .map((leg) => leg?.estSlippageApr ?? null)
       .filter((n): n is number => n !== null)
       // A fill better than mid is no slippage, not a negative one.
       .map((n) => Math.max(0, n));
     return gaps.length > 0 ? Math.max(...gaps) : null;
   })();
-  /** No quote can be made at all: the markets are in, the inputs are valid,
-   * and this single leg has no sibling market to quote against. The close
-   * still goes out — its bound is mid ± the tolerance — so it is allowed,
-   * and said. While the markets are still loading the confirm waits. */
   const unquoted = simReq === null && !ctx.isLoading && !legsBlocked && !slipInvalid && !anySizeInvalid;
 
 
@@ -343,13 +308,13 @@ export function CloseBorosForm({
    * Read the outcome instead.
    */
   const settle = (
-    l: StrategyLeg,
+    l: CloseLeg,
     requested: number,
     fill: BorosLegFill | null,
     /** What the venue held when the close was sized, when the route says. */
     openSize: number | undefined,
     nothingClosed: string,
-  ) => {
+  ): { marketId: number; wei: bigint; partial: boolean } | null => {
     const id = l.marketId as number;
     // The same tolerance the depth warning uses: a book that fully covers
     // 419.5 answers 419.49999999, and calling that a shortfall reads as "no
@@ -377,22 +342,16 @@ export function CloseBorosForm({
       // is also the only one that re-seeds the size, below, rather than
       // leaving the original amount armed under a line saying it is done.
       const filled = fill.filledSize;
-      const left = requested - filled;
-      setPartial((prev) => [...prev, { marketId: id, filled, left }]);
-      // Re-seed the shared box with what this leg still has open. With
-      // one size for both, the SMALLEST remainder is the one that can be
-      // closed on both legs — arming more would re-strand the other.
-      setSizeEdited((prev) => {
-        const n = Number(prev ?? '');
-        return Number.isFinite(n) && n > 0 ? fieldValue(Math.min(n, left)) : fieldValue(left);
-      });
+      const leftWei = toWei(requested) - toWei(filled);
+      setPartial((prev) => [...prev, { marketId: id, filled, left: fromWei(leftWei) }]);
       onClosed?.(l, filled);
+      return { marketId: id, wei: leftWei, partial: true };
     } else {
       // Everything asked for came off. What the venue still holds splits
       // in two, and only one half is somebody else's — worth SAYING,
       // neither worth arming a second close over.
       const filled = fill.filledSize;
-      const mine = l.notionalToken ?? filled;
+      const mine = l.notionalToken === undefined ? filled : heldOf(l);
       // This card's own share that the user chose not to close.
       const yours = Math.max(0, mine - filled);
       // The rest of the venue leg, which other positions hold.
@@ -402,7 +361,16 @@ export function CloseBorosForm({
         { marketId: id, yours: yours > dust ? yours : 0, others: others > dust ? others : 0 },
       ]);
       onClosed?.(l, filled);
+      return null;
     }
+    return { marketId: id, wei: toWei(requested), partial: false };
+  };
+
+  const rearm = (outcomes: ({ marketId: number; wei: bigint; partial: boolean } | null)[]) => {
+    const left = outcomes.filter((o) => o !== null);
+    if (!left.some((o) => o.partial)) return;
+    setRest(left.map(({ marketId, wei }) => ({ marketId, wei })));
+    setSizeEdited(null);
   };
 
   const run = async () => {
@@ -411,42 +379,39 @@ export function CloseBorosForm({
     setBatchError(null);
     if (legsBlocked) return;
 
-    // Both legs of a pair: ONE gated batch, accepted whole or not at all.
-    if (atomic && simReq) {
-      const requested = simReq.size;
+    if (atomic && closeReq) {
       try {
-        const res = await execute.mutateAsync({ ...simReq, clientOrderIdA: orderIds.a, clientOrderIdB: orderIds.b });
-        const fills = [res.result.legA, res.result.legB];
-        // A refused batch fails every leg with the one reason the venue
-        // gave, so it is said once rather than once per leg.
-        const refused =
-          fills.every((f) => f.failure !== null && f.filledSize === 0) &&
-          fills[0].failure!.message === fills[1].failure!.message;
+        const res = await execute.mutateAsync({
+          ...closeReq,
+          legs: closeReq.legs.map((leg, i) => ({ ...leg, clientOrderId: orderIds[closable.indexOf(pending[i])] })),
+        });
+        const fills = res.result.legs;
+        const reason = fills[0]?.failure?.message;
+        const refused = reason !== undefined && fills.every((f) => f.filledSize === 0 && f.failure?.message === reason);
         if (refused) {
-          setBatchError(fills[0].failure!.message);
+          setBatchError(reason);
         } else {
-          closable.forEach((l, i) => {
-            const f = fills[i];
-            // A leg the server had nothing to send for comes back empty and
-            // unfailed: there was no position on it.
-            const sent = f.filledSize === 0 && f.shortfallSize === 0 && f.failure === null ? null : f;
-            const open = ctx.data?.markets.find((m) => m.marketId === l.marketId)?.currentSize;
-            settle(l, requested, sent, open === undefined ? undefined : Math.abs(open), 'There was no open position to close.');
-          });
+          rearm(
+            pending.map((l, i) => {
+              const f = fills.find((x) => x.marketId === l.marketId) ?? null;
+              const sent = f === null || (f.filledSize === 0 && f.shortfallSize === 0 && f.failure === null) ? null : f;
+              const open = rowOf(l.marketId)?.currentSize;
+              return settle(l, closeReq.legs[i].size, sent, open === undefined ? undefined : Math.abs(open), 'There was no open position to close.');
+            }),
+          );
         }
         // An outcome the venue never confirmed keeps its ids: a second hold
         // is answered from the server's memo instead of closing twice.
-        if (!fills.some((f) => f.failure?.code === 'unknown')) setOrderIds(newOrderIds());
+        if (!fills.some((f) => f.failure?.code === 'unknown')) setOrderIds(newOrderIds(closable.length));
       } catch (err) {
         setBatchError(err instanceof Error ? err.message : String(err));
       }
       return;
     }
 
-    for (const l of closable) {
+    for (const l of pending) {
       const id = l.marketId as number;
-      if (done.some((d) => d.marketId === id)) continue;
-      const requested = sizeOf(l).value;
+      const requested = sizeOf(l);
       try {
         const r = await close.mutateAsync({
           marketId: id,
@@ -454,15 +419,17 @@ export function CloseBorosForm({
           slippageApr: slipPct / 100,
           ...(address ? { address } : {}),
         });
-        settle(
-          l,
-          requested,
-          r.fill,
-          r.openSize,
-          r.cancelled
-            ? 'Resting orders were cancelled, but there was no open position to close.'
-            : 'Nothing was closed.',
-        );
+        rearm([
+          settle(
+            l,
+            requested,
+            r.fill,
+            r.openSize,
+            r.cancelled
+              ? 'Resting orders were cancelled, but there was no open position to close.'
+              : 'Nothing was closed.',
+          ),
+        ]);
       } catch (err) {
         setFailed((prev) => [
           ...prev,
@@ -516,9 +483,9 @@ export function CloseBorosForm({
   const money = (n: number) =>
     inUsd ? <SignedNumber value={n * (px as number)} format={(v) => fmtUsd(v)} /> : <SignedNumber value={n} format={(v) => fmtTokenQty(v, unit0)} />;
   const nowSec = Date.now() / 1000;
-  const legFacts = closable.map((l, i) => {
-    const q = simLegFor(i);
-    const { value, invalid } = sizeOf(l);
+  const legFacts = closable.map((l) => {
+    const q = simLegFor(l);
+    const value = sizeOf(l);
     // PnL at the rate the book would actually give, over the leg's life:
     // (locked − exec) × size × years, signed by the side being closed.
     const years = l.maturity ? Math.max(0, l.maturity - nowSec) / 31_536_000 : null;
@@ -526,17 +493,17 @@ export function CloseBorosForm({
       q?.execApr != null && l.entryApr !== undefined && years !== null
         ? (l.side === 'LONG' ? q.execApr - l.entryApr : l.entryApr - q.execApr) * value * years
         : null;
-    return { l, q, value, invalid, estPnl };
+    return { l, q, value, estPnl };
   });
   const totalPnl = legFacts.some((f) => f.estPnl !== null)
     ? legFacts.reduce((s, f) => s + (f.estPnl ?? 0), 0)
     : null;
-  const sizeShown = Number(shownSize());
-  const atMax = Number.isFinite(sizeShown) && sizeShown >= maxCloseSize - Math.max(1e-9, maxCloseSize * 1e-7);
+  const atMax = closesAll;
   // A leg this close holds only a SLICE of (a pair's share of a shared venue
   // leg) never goes flat at the max: the rest of the leg stays open.
   const sharedLeg = closable.some((l) => (l.share ?? 1) < 0.9995);
   const flatAfter = atMax && !sharedLeg;
+  const soleSpread = closable.length === 1 ? spreadOf(closable[0]) : null;
 
   return (
     <div className="flex flex-col gap-4">
@@ -560,7 +527,8 @@ export function CloseBorosForm({
             <LegCard
               key={l.marketId}
               kind="Boros"
-              venue={prettyVenue(l.venue)}
+              venue={venueLabel(l)}
+              spreadVenues={spreadOf(l)}
               side={l.side}
               sub={`${l.base}${l.maturity ? ` · ${fmtDateLocal(l.maturity)}` : ''}${days !== null ? ` · ${days}d` : ''}`}
               value={`${sigGrouped(l.notionalToken ?? 0)} ${l.collateral ?? ''}`}
@@ -576,20 +544,24 @@ export function CloseBorosForm({
             />
           );
         })}
+        {soleSpread && (
+          <span className="inline-flex items-center gap-1.5 text-[11px] text-ink-400">
+            Leaves both bundles: <VenueIcon venue={soleSpread[0]} size={14} />
+            {prettyVenue(soleSpread[0])} and <VenueIcon venue={soleSpread[1]} size={14} />
+            {prettyVenue(soleSpread[1])}.
+          </span>
+        )}
       </div>
 
-      {/* One size for the close, applied to both legs: they are one hedge,
-          and the request already sends the smaller of the two. Capped at the
-          smallest leg — past that the bigger leg would be left naked. */}
       <div className="flex flex-col gap-1.5">
         <div className="flex items-baseline justify-between gap-3">
-          <FieldLabel htmlFor="boros-close-size">{closable.length > 1 ? 'Close size · both legs' : 'Close size'}</FieldLabel>
+          <FieldLabel htmlFor="boros-close-size">{closable.length > 2 ? 'Close size · all legs' : closable.length > 1 ? 'Close size · both legs' : 'Close size'}</FieldLabel>
           {/* The ceiling, stated where the number is typed — and clickable.
               It was only discoverable by overshooting and reading an error. */}
           <button
             type="button"
             className="num text-[11px] text-ink-400 transition-colors hover:text-ink-100"
-            title={closable.length > 1 ? 'Close the whole position on both legs' : 'Close the whole position'}
+            title={closable.length > 1 ? 'Close the whole position on every leg' : 'Close the whole position'}
             onClick={() => setSizeEdited(fieldValue(maxCloseSize))}
           >
             max{' '}
@@ -605,7 +577,7 @@ export function CloseBorosForm({
             inputMode="decimal"
             value={shownSize()}
             onChange={(e) => setSizeEdited(e.target.value)}
-            aria-label="Close size, applied to both legs"
+            aria-label="Close size, applied to all legs"
           />
         </AffixedInput>
         {anySizeInvalid ? (
@@ -617,7 +589,8 @@ export function CloseBorosForm({
             {flatAfter ? (
               closable.length > 1 ? (
                 <>
-                  whole pair · <span className="text-ink-200">flat after</span> on both markets
+                  whole pair · <span className="text-ink-200">flat after</span> on{' '}
+                  {closable.length > 2 ? `all ${closable.length} markets` : 'both markets'}
                 </>
               ) : (
                 <>
@@ -677,7 +650,7 @@ export function CloseBorosForm({
             const part = partial.find((x) => x.marketId === id);
             const finished = done.find((d) => d.marketId === id);
             const q = f.q;
-            const prefix = closable.length > 1 ? `${prettyVenue(f.l.venue)}: ` : '';
+            const prefix = closable.length > 1 ? `${venueLabel(f.l)}: ` : '';
             return (
               <>
                 {finished && (
@@ -760,12 +733,17 @@ export function CloseBorosForm({
                   {legFacts.map((f) => {
                     const id = f.l.marketId as number;
                     const finished = done.find((d) => d.marketId === id);
+                    const venues = spreadOf(f.l);
                     return (
                       <tr key={id} className="border-t border-ink-800/80">
                         <td className="py-1.5 text-[12px] text-ink-50">
                           <span className="inline-flex items-center gap-1.5">
-                            <VenueIcon venue={f.l.venue} size={14} />
-                            {prettyVenue(f.l.venue)}
+                            {venues ? (
+                              <SpreadIcon venues={venues} size={14} />
+                            ) : (
+                              <VenueIcon venue={f.l.venue} size={14} />
+                            )}
+                            {venueLabel(f.l)}
                           </span>
                           {finished && <span className="ml-1.5 inline-flex items-center gap-1 text-[11px] text-emerald-300">closed<Check size={12} aria-hidden /></span>}
                         </td>
@@ -860,10 +838,10 @@ export function CloseBorosForm({
         {!loginLabel && (
           <p className="text-[11px] leading-relaxed text-ink-400">
             {closable.length === 1
-              ? 'Cancels resting orders, then sends 1 market order. The perp stays open.'
-              : atomic
-                ? 'Cancels resting orders on both markets and sends both market orders as one batch: the venue accepts all of it or none. Size is capped at the open size.'
-                : `Cancels resting orders, then sends the remaining market order. Size is capped at the open size.`}
+              ? `Cancels resting orders, then sends 1 market order. ${soleSpread ? 'The perps stay open.' : 'The perp stays open.'}`
+              : pending.length < closable.length
+                ? `Cancels resting orders, then closes the ${pending.length === 1 ? 'leg' : `${pending.length} legs`} left in one batch, all or none.`
+                : `Cancels resting orders, then closes ${closable.length > 2 ? `all ${closable.length}` : 'both'} legs in one batch, all or none.`}
           </p>
         )}
       </div>

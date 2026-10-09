@@ -155,7 +155,7 @@ describe('fixture state bodies', () => {
     expect(opportunitiesBodies.closeOnlyA.groups).toHaveLength(1);
     expect(opportunity.underlying).toBe('ETH');
     expect(opportunity.maturity).toBe(closeOnlyMarket?.maturity);
-    expect(opportunity.pairs[0].longLeg.marketId).toBe(closeOnlyMarket?.marketId);
+    expect(opportunity.pairs[0].borosLegs[1].marketId).toBe(closeOnlyMarket?.marketId);
     expect(opportunity.pairs[0].netFixedAprOnCapital).toBeGreaterThan(0);
 
     expect(JSON.stringify(whaleBook)).toContain('999999.995');
