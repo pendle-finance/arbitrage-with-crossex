@@ -731,6 +731,26 @@ describe('OpportunitiesPanel — the assumptions strip', () => {
     );
   });
 
+  it('turns a double-click on the preset amount into an editable custom size', async () => {
+    const urls: string[] = [];
+    server.use(opportunitiesHandler(makeOpportunitiesResult(), { urls }));
+    renderWithClient(<OpportunitiesPanel />);
+
+    await waitFor(() => expect(urls).toHaveLength(1));
+    await userEvent.click(screen.getByRole('radio', { name: '$100k' }));
+    await userEvent.dblClick(screen.getByText('100,000'));
+
+    // Custom starts from the amount on screen, focused and selected, so typing replaces it.
+    expect(screen.getByRole('radio', { name: /^Custom/ })).toHaveAttribute('aria-checked', 'true');
+    const size = screen.getByLabelText('Custom notional (USD)');
+    expect(size).toHaveValue('100000');
+    expect(size).toHaveFocus();
+    await userEvent.keyboard('25000');
+    await waitFor(() => expect(paramsOf(urls.at(-1)!)).toMatchObject({ notionalUsd: '25000' }), {
+      timeout: 4000,
+    });
+  });
+
   it('keeps the last valid size while the input is unusable', async () => {
     const urls: string[] = [];
     server.use(opportunitiesHandler(makeOpportunitiesResult(), { urls }));

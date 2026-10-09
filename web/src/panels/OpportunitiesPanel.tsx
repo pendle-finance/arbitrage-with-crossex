@@ -971,6 +971,9 @@ export function OpportunitiesPanel() {
   const shownKeysRef = useRef<ReadonlySet<string>>(new Set());
   const flow = useTradeFlowOptional();
   const sizeId = useId();
+  // Set by a double-click on the preset amount, so the custom input that
+  // replaces it takes focus with its digits selected.
+  const focusSizeRef = useRef(false);
 
   const persist = (next: Partial<StoredControls>) =>
     writeJson(OPPORTUNITIES_STORAGE_KEY, {
@@ -1127,11 +1130,28 @@ export function OpportunitiesPanel() {
               aria-label="Custom notional (USD)"
               value={sizeStr}
               onChange={(e) => setSizeStr(e.target.value)}
+              ref={(el) => {
+                if (!el || !focusSizeRef.current) return;
+                focusSizeRef.current = false;
+                el.focus();
+                el.select();
+              }}
               title="The notional each leg is priced at."
               className="num w-24 bg-transparent text-sm font-semibold text-ink-50 outline-none placeholder:text-ink-500"
             />
           ) : (
-            <span className="num text-sm font-semibold text-ink-50">
+            <span
+              className="num cursor-text select-none text-sm font-semibold text-ink-50"
+              title="Double-click to edit"
+              onDoubleClick={() => {
+                // Edit from the amount on screen, not the last custom size.
+                focusSizeRef.current = true;
+                setSizeStr(String(notionalUsd));
+                setSize(notionalUsd);
+                setNotionalChoice('custom');
+                persist({ notionalChoice: 'custom', customNotionalUsd: notionalUsd });
+              }}
+            >
               {notionalUsd.toLocaleString('en-US')}
             </span>
           )}
