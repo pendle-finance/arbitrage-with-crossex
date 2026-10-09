@@ -14,6 +14,7 @@ import { installFakeWallet, removeFakeWallet } from '../test/fakeWallet';
 import { server } from '../test/server';
 import { fmtDateLocal } from '../lib/fmt';
 import { renderWithClient } from '../test/utils';
+import { SPREAD_OPP_MARKET_ID, SPREAD_OPP_MATURITY } from '../test/fixtures';
 import { BorosPairTicket } from './BorosPairTicket';
 import { useTradeFlow, type BorosOpenPrefill } from './TradeFlow';
 
@@ -95,8 +96,7 @@ const simLeg = (over: Record<string, unknown> = {}) => ({
 });
 
 const simulation = (over: Record<string, unknown> = {}) => ({
-  legA: simLeg(),
-  legB: simLeg({
+  legs: [simLeg(), simLeg({
     marketId: BN,
     marketName: 'Binance ETHUSDT 31 Aug 2026',
     venue: 'Binance',
@@ -113,8 +113,8 @@ const simulation = (over: Record<string, unknown> = {}) => ({
       clampedToClose: false,
       orderSide: 'long',
     },
-  }),
-  receiveLeg: 'A',
+  })],
+  receiveLeg: 0,
   estSpreadApr: 0.045,
   worstSpreadApr: 0.04,
   costToCrossSize: 8.2,
@@ -134,14 +134,13 @@ const partialExecute = () =>
   HttpResponse.json(
     env({
       result: {
-        legA: { marketId: HL, direction: 'short', filledSize: 60_000, shortfallSize: 40_000, execApr: 0.089, feeSize: 2, failure: null },
-        legB: { marketId: BN, direction: 'long', filledSize: 100_000, shortfallSize: 0, execApr: 0.042, feeSize: 4, failure: null },
+        legs: [{ marketId: HL, direction: 'short', filledSize: 60_000, shortfallSize: 40_000, execApr: 0.089, feeSize: 2, failure: null }, { marketId: BN, direction: 'long', filledSize: 100_000, shortfallSize: 0, execApr: 0.042, feeSize: 4, failure: null }],
         hedgedSize: 60_000,
         unhedgedSize: 40_000,
-        unhedgedLeg: 'B',
+        unhedgedLeg: 1,
         realisedSpreadApr: 0.044,
         partial: true,
-        bothLegsSubmitted: true,
+        allLegsSubmitted: true,
       },
       estimate: simulation(),
       warnings: [],
@@ -201,14 +200,13 @@ function handlers(opts: {
       return HttpResponse.json(
         env({
           result: {
-            legA: { marketId: HL, direction: 'short', filledSize: 100_000, shortfallSize: 0, execApr: 0.09, feeSize: 4, failure: null },
-            legB: { marketId: BN, direction: 'long', filledSize: 100_000, shortfallSize: 0, execApr: 0.042, feeSize: 4, failure: null },
+            legs: [{ marketId: HL, direction: 'short', filledSize: 100_000, shortfallSize: 0, execApr: 0.09, feeSize: 4, failure: null }, { marketId: BN, direction: 'long', filledSize: 100_000, shortfallSize: 0, execApr: 0.042, feeSize: 4, failure: null }],
             hedgedSize: 100_000,
             unhedgedSize: 0,
             unhedgedLeg: null,
             realisedSpreadApr: 0.045,
             partial: false,
-            bothLegsSubmitted: true,
+            allLegsSubmitted: true,
           },
           estimate: simulation(),
           warnings: [],
@@ -455,14 +453,10 @@ describe('BorosPairTicket', () => {
 
     await user.click(screen.getByRole('radio', { name: 'Single' }));
     await waitFor(() => {
-      const last = bodies[bodies.length - 1] as {
-        onlyLeg?: string;
-        legA: { marketId: number };
-        legB: { marketId: number };
-      };
-      expect(last.onlyLeg).toBe('A');
+      const last = bodies[bodies.length - 1] as { onlyLeg?: number; legs: { marketId: number }[] };
+      expect(last.onlyLeg).toBe(0);
       // A real second market, never a duplicate of leg A.
-      expect(last.legB.marketId).not.toBe(last.legA.marketId);
+      expect(last.legs[1].marketId).not.toBe(last.legs[0].marketId);
     });
   });
 
@@ -495,8 +489,8 @@ describe('BorosPairTicket', () => {
     await waitFor(() => expect(bodies.length).toBeGreaterThan(0));
 
     // 1.64% cap ⇒ half is 0.82% ⇒ floored to 1 s.f. = 0.8% = 0.008 APR.
-    const last = bodies[bodies.length - 1] as { legA: { slippageApr: number } };
-    expect(last.legA.slippageApr).toBeCloseTo(0.008, 9);
+    const last = bodies[bodies.length - 1] as { legs: { slippageApr: number }[] };
+    expect(last.legs[0].slippageApr).toBeCloseTo(0.008, 9);
   });
 
   it('sends the tolerance as an APR fraction derived from a PERCENT, per leg', async () => {
@@ -509,9 +503,9 @@ describe('BorosPairTicket', () => {
 
     // The seed is half each market's max rate deviation; this fixture carries
     // no cap, so it falls back to 0.25% → 0.0025 APR on both legs.
-    const first = bodies[bodies.length - 1] as { legA: { slippageApr: number }; legB: { slippageApr: number } };
-    expect(first.legA.slippageApr).toBeCloseTo(0.0025, 9);
-    expect(first.legB.slippageApr).toBeCloseTo(0.0025, 9);
+    const first = bodies[bodies.length - 1] as { legs: { slippageApr: number }[] };
+    expect(first.legs[0].slippageApr).toBeCloseTo(0.0025, 9);
+    expect(first.legs[1].slippageApr).toBeCloseTo(0.0025, 9);
 
     // Per-leg override: leg A alone widens.
     // The tolerance controls sit behind the "Max:" disclosure now.
@@ -522,9 +516,9 @@ describe('BorosPairTicket', () => {
     await user.type(slipA, '0.8');
 
     await waitFor(() => {
-      const last = bodies[bodies.length - 1] as { legA: { slippageApr: number }; legB: { slippageApr: number } };
-      expect(last.legA.slippageApr).toBeCloseTo(0.008, 9);
-      expect(last.legB.slippageApr).toBeCloseTo(0.0025, 9);
+      const last = bodies[bodies.length - 1] as { legs: { slippageApr: number }[] };
+      expect(last.legs[0].slippageApr).toBeCloseTo(0.008, 9);
+      expect(last.legs[1].slippageApr).toBeCloseTo(0.0025, 9);
     });
   });
 
@@ -533,7 +527,7 @@ describe('BorosPairTicket', () => {
     server.use(
       ...handlers({
         sim: {
-          legA: simLeg({
+          legs: [simLeg({
             sizing: {
               currentSize: 150_000,
               deltaSize: -100_000,
@@ -543,7 +537,7 @@ describe('BorosPairTicket', () => {
               clampedToClose: false,
               orderSide: 'short',
             },
-          }),
+          }), simulation().legs[1]],
         },
       }),
     );
@@ -567,11 +561,11 @@ describe('BorosPairTicket', () => {
       ...handlers({
         gate: {
           requiresAcknowledgement: true,
-          opposingLegs: ['A'],
+          opposingLegs: [0],
           blockers: [{ code: 'flip-unacknowledged', message: 'Tick the acknowledgement.' }],
         },
         sim: {
-          legA: simLeg({
+          legs: [simLeg({
             sizing: {
               currentSize: 40_000,
               deltaSize: -100_000,
@@ -581,7 +575,7 @@ describe('BorosPairTicket', () => {
               clampedToClose: false,
               orderSide: 'short',
             },
-          }),
+          }), simulation().legs[1]],
         },
       }),
     );
@@ -634,7 +628,7 @@ describe('BorosPairTicket', () => {
         sim: {
           collateral: 'ETH',
           collateralPriceUsd: 3_000,
-          legA: simLeg({
+          legs: [simLeg({
             estFillSize: 0.01,
             marginRequired: 0.00042,
             sizing: {
@@ -646,8 +640,7 @@ describe('BorosPairTicket', () => {
               clampedToClose: false,
               orderSide: 'short',
             },
-          }),
-          legB: simLeg({
+          }), simLeg({
             marketId: BN,
             direction: 'long',
             estFillSize: 0.01,
@@ -661,7 +654,7 @@ describe('BorosPairTicket', () => {
               clampedToClose: false,
               orderSide: 'long',
             },
-          }),
+          })],
           marginRequiredTotal: 0.00073,
           hedgedSize: 0.01,
         },
@@ -694,7 +687,7 @@ describe('BorosPairTicket', () => {
         sim: {
           collateral: 'ETH',
           collateralPriceUsd: 3_000,
-          legA: simLeg({
+          legs: [simLeg({
             sizing: {
               currentSize: 0,
               deltaSize: -4_100,
@@ -704,8 +697,7 @@ describe('BorosPairTicket', () => {
               clampedToClose: false,
               orderSide: 'short',
             },
-          }),
-          legB: simLeg({
+          }), simLeg({
             marketId: BN,
             marketName: 'Binance ETHUSDT 31 Aug 2026',
             venue: 'Binance',
@@ -719,7 +711,7 @@ describe('BorosPairTicket', () => {
               clampedToClose: false,
               orderSide: 'long',
             },
-          }),
+          })],
           hedgedSize: 4_100,
         },
       }),
@@ -740,7 +732,7 @@ describe('BorosPairTicket', () => {
         sim: {
           collateral: 'ETH',
           collateralPriceUsd: 3_000,
-          legA: simLeg({
+          legs: [simLeg({
             sizing: {
               currentSize: 0,
               deltaSize: -12_345_678.9,
@@ -750,8 +742,7 @@ describe('BorosPairTicket', () => {
               clampedToClose: false,
               orderSide: 'short',
             },
-          }),
-          legB: simLeg({
+          }), simLeg({
             marketId: BN,
             marketName: 'Binance ETHUSDT 31 Aug 2026',
             venue: 'Binance',
@@ -765,7 +756,7 @@ describe('BorosPairTicket', () => {
               clampedToClose: false,
               orderSide: 'long',
             },
-          }),
+          })],
           hedgedSize: 12_345_678.9,
         },
       }),
@@ -791,7 +782,7 @@ describe('BorosPairTicket', () => {
           HttpResponse.json(
             env({
               result: {
-                legA: {
+                legs: [{
                   marketId: HL,
                   direction: 'short',
                   filledSize: 0,
@@ -799,8 +790,7 @@ describe('BorosPairTicket', () => {
                   execApr: null,
                   feeSize: null,
                   failure: { code: 'rejected', message: 'MarketNotEntered(155)' },
-                },
-                legB: {
+                }, {
                   marketId: BN,
                   direction: 'long',
                   filledSize: 0,
@@ -808,13 +798,13 @@ describe('BorosPairTicket', () => {
                   execApr: null,
                   feeSize: null,
                   failure: { code: 'rejected', message: 'MarketNotEntered(158)' },
-                },
+                }],
                 hedgedSize: 0,
                 unhedgedSize: 0,
                 unhedgedLeg: null,
                 realisedSpreadApr: null,
                 partial: true,
-                bothLegsSubmitted: true,
+                allLegsSubmitted: true,
               },
               estimate: simulation(),
               warnings: [],
@@ -854,14 +844,13 @@ describe('BorosPairTicket', () => {
           HttpResponse.json(
             env({
               result: {
-                legA: failed(HL, 'short'),
-                legB: failed(BN, 'long'),
+                legs: [failed(HL, 'short'), failed(BN, 'long')],
                 hedgedSize: 0,
                 unhedgedSize: 0,
                 unhedgedLeg: null,
                 realisedSpreadApr: null,
                 partial: true,
-                bothLegsSubmitted: true,
+                allLegsSubmitted: true,
               },
               estimate: simulation(),
               warnings: [],
@@ -1023,7 +1012,7 @@ describe('BorosPairTicket', () => {
           blockers: [
             {
               code: 'isolated-must-switch',
-              leg: 'A',
+              leg: 0,
               marketId: HL,
               message:
                 'Hyperliquid ETH 31 Aug 2026 is on isolated margin with an open position/order. Switch it to cross margin to trade this pair.',
@@ -1053,7 +1042,7 @@ describe('BorosPairTicket', () => {
           HttpResponse.json(
             env({
               result: {
-                legA: {
+                legs: [{
                   marketId: HL,
                   direction: 'short',
                   filledSize: 60_000,
@@ -1061,14 +1050,13 @@ describe('BorosPairTicket', () => {
                   execApr: 0.089,
                   feeSize: 2,
                   failure: { code: 'insufficient-depth', message: 'thin' },
-                },
-                legB: { marketId: BN, direction: 'long', filledSize: 100_000, shortfallSize: 0, execApr: 0.042, feeSize: 4, failure: null },
+                }, { marketId: BN, direction: 'long', filledSize: 100_000, shortfallSize: 0, execApr: 0.042, feeSize: 4, failure: null }],
                 hedgedSize: 60_000,
                 unhedgedSize: 40_000,
-                unhedgedLeg: 'B',
+                unhedgedLeg: 1,
                 realisedSpreadApr: 0.044,
                 partial: true,
-                bothLegsSubmitted: true,
+                allLegsSubmitted: true,
               },
               estimate: simulation(),
               warnings: [],
@@ -1089,6 +1077,9 @@ describe('BorosPairTicket', () => {
     expect(report.getByText('partially filled')).toBeInTheDocument();
     expect(report.getByText(/40,000 USDT on leg B is unhedged/i)).toBeInTheDocument();
     expect(report.getByText(/not enough depth/i)).toBeInTheDocument();
+    expect(report.getByText(/^Binance ETHUSDT 31 Aug 2026 · /)).toBeInTheDocument();
+    expect(report.queryByText(/^Leg [AB] · /)).not.toBeInTheDocument();
+    expect(report.queryByText('Fee')).not.toBeInTheDocument();
     for (const label of ['Complete now at market', 'Retry', 'Leave it']) {
       expect(report.getByRole('button', { name: label })).toBeInTheDocument();
     }
@@ -1102,7 +1093,7 @@ describe('BorosPairTicket', () => {
     server.use(
       ...handlers({
         sim: {
-          legB: simLeg({
+          legs: [simulation().legs[0], simLeg({
             marketId: BN,
             marketName: 'Binance ETHUSDT 31 Aug 2026',
             venue: 'Binance',
@@ -1111,7 +1102,7 @@ describe('BorosPairTicket', () => {
             worstApr: null,
             marginRequired: null,
             sizing: { currentSize: 100_000, deltaSize: 0, resultingSize: 100_000, opposing: false, flips: false, clampedToClose: false, orderSide: 'long' },
-          }),
+          })],
           estSpreadApr: null,
           worstSpreadApr: null,
           slippageApr: null,
@@ -1146,14 +1137,13 @@ describe('BorosPairTicket', () => {
           HttpResponse.json(
             env({
               result: {
-                legA: bothFailed(HL, 'short'),
-                legB: bothFailed(BN, 'long'),
+                legs: [bothFailed(HL, 'short'), bothFailed(BN, 'long')],
                 hedgedSize: 0,
                 unhedgedSize: 0,
                 unhedgedLeg: null,
                 realisedSpreadApr: null,
                 partial: true,
-                bothLegsSubmitted: true,
+                allLegsSubmitted: true,
               },
               estimate: simulation(),
               warnings: [],
@@ -1198,9 +1188,9 @@ describe('BorosPairTicket', () => {
 
     // …and the request says so, so the server trades one leg.
     await waitFor(() => {
-      const last = bodies[bodies.length - 1] as { onlyLeg?: string; size: number };
-      expect(last.onlyLeg).toBe('A');
-      expect(last.size).toBe(40_000);
+      const last = bodies[bodies.length - 1] as { onlyLeg?: number; legs: { size: number }[] };
+      expect(last.onlyLeg).toBe(0);
+      expect(last.legs[0].size).toBe(40_000);
     });
   });
 
@@ -1230,14 +1220,13 @@ describe('BorosPairTicket', () => {
       HttpResponse.json(
         env({
           result: {
-            legA: { marketId: HL, direction: 'short', filledSize: 60_000, shortfallSize: 40_000, execApr: 0.089, feeSize: 2, failure: null },
-            legB: { marketId: BN, direction: 'long', filledSize: 75_000, shortfallSize: 25_000, execApr: 0.042, feeSize: 3, failure: null },
+            legs: [{ marketId: HL, direction: 'short', filledSize: 60_000, shortfallSize: 40_000, execApr: 0.089, feeSize: 2, failure: null }, { marketId: BN, direction: 'long', filledSize: 75_000, shortfallSize: 25_000, execApr: 0.042, feeSize: 3, failure: null }],
             hedgedSize: 60_000,
             unhedgedSize: 15_000,
-            unhedgedLeg: 'B',
+            unhedgedLeg: 1,
             realisedSpreadApr: 0.044,
             partial: true,
-            bothLegsSubmitted: true,
+            allLegsSubmitted: true,
           },
           estimate: simulation(),
           warnings: [],
@@ -1300,10 +1289,10 @@ describe('BorosPairTicket', () => {
     await user.pointer({ keys: '[MouseLeft>]', target: confirm });
     await waitFor(() => expect(sent.length).toBe(1), { timeout: 3_000 });
 
-    const body = sent[0] as { clientOrderIdA: string; clientOrderIdB: string };
-    expect(body.clientOrderIdA).toBeTruthy();
-    expect(body.clientOrderIdB).toBeTruthy();
-    expect(body.clientOrderIdA).not.toBe(body.clientOrderIdB);
+    const body = sent[0] as { legs: { clientOrderId?: string }[] };
+    expect(body.legs[0].clientOrderId).toBeTruthy();
+    expect(body.legs[1].clientOrderId).toBeTruthy();
+    expect(body.legs[0].clientOrderId).not.toBe(body.legs[1].clientOrderId);
   });
 });
 
@@ -1683,5 +1672,235 @@ describe('BorosPairTicket — slippage is stated, not silently clamped', () => {
     // A cleared box is the same dishonesty — empty on screen, seed on the wire.
     await user.clear(slip);
     expect(await screen.findByText(/Max slippage must be greater than 0/)).toBeInTheDocument();
+  });
+});
+
+describe('BorosPairTicket — spread ticket', () => {
+  const spreadRow = (over: Record<string, unknown> = {}) =>
+    marketRow({
+      marketId: SPREAD_OPP_MARKET_ID,
+      name: 'ETH HL-Gate spread 27 Nov 2026',
+      venue: 'HL-Gate',
+      tokenId: 2,
+      collateral: 'ETH',
+      maturity: SPREAD_OPP_MATURITY,
+      midApr: 0.0348,
+      markApr: 0.0348,
+      collateralPriceUsd: 2_500,
+      spreadVenues: ['HYPERLIQUID', 'GATE'],
+      closeOnly: false,
+      ...over,
+    });
+  const spreadHandlers = (
+    onSimulate: (b: Record<string, unknown>) => void,
+    extra: {
+      available?: number;
+      execute?: () => Response;
+      onExecute?: (b: Record<string, unknown>) => void;
+      spread?: Record<string, unknown>;
+      gasBalanceUsd?: number;
+    } = {},
+  ) =>
+    handlers({
+      onSimulate,
+      execute: extra.execute,
+      onExecute: extra.onExecute,
+      gasBalanceUsd: extra.gasBalanceUsd,
+      ctx: context({
+        markets: [
+          marketRow({ marketId: 209, name: 'Hyperliquid ETH 27 Nov 2026', venue: 'Hyperliquid', tokenId: 2, collateral: 'ETH', maturity: SPREAD_OPP_MATURITY }),
+          marketRow({ marketId: 211, name: 'Gate ETHUSDT 27 Nov 2026', venue: 'Gate', tokenId: 2, collateral: 'ETH', maturity: SPREAD_OPP_MATURITY }),
+        ],
+        spreadMarkets: [spreadRow(extra.spread)],
+        crossByToken: [{ tokenId: 2, available: extra.available ?? 10 }],
+      }),
+      sim: {
+        legs: [
+          simLeg({
+            marketId: SPREAD_OPP_MARKET_ID,
+            marketName: 'ETH HL-Gate spread 27 Nov 2026',
+            venue: 'HL-Gate',
+            execApr: 0.0285,
+            liquidationApr: 0.051,
+            marginRequired: 0.000864,
+            sizing: { currentSize: 0, deltaSize: -0.121, resultingSize: -0.121, opposing: false, flips: false, clampedToClose: false, orderSide: 'short' },
+          }),
+        ],
+        estSpreadApr: 0.0265,
+        marginRequiredTotal: 0.000864,
+        costToCrossSize: 0.000017,
+        collateral: 'ETH',
+        collateralPriceUsd: 2_500,
+      },
+    });
+
+  it.each([
+    ['paused', { closeOnly: true, paused: true }, 'Market is paused.', 'paused'],
+    ['close-only', { closeOnly: true, paused: false }, 'Market takes closes only. Tick Reduce-only.', 'close only'],
+  ])('blocks a %s spread with its own reason', async (_label, spread, text, chip) => {
+    server.use(...spreadHandlers(() => {}, { spread }));
+    const user = userEvent.setup();
+    renderWithClient(
+      <BorosPrefillHarness
+        guided
+        prefill={{ base: 'ETH', longVenue: 'Gate', shortVenue: 'Hyperliquid', maturity: SPREAD_OPP_MATURITY, size: 300, sizeBase: 0.121 }}
+      />,
+    );
+    await user.click(screen.getByRole('button', { name: 'fire' }));
+    expect(await screen.findByRole('button', { name: text })).toBeDisabled();
+    expect(screen.getByText(chip)).toBeInTheDocument();
+    expect(screen.queryByText(chip === 'paused' ? 'close only' : 'paused')).toBeNull();
+  });
+
+  it('arms the one spread market, with one liquidation row and one Boros order', async () => {
+    const bodies: Record<string, unknown>[] = [];
+    server.use(...spreadHandlers((b) => bodies.push(b)));
+    const user = userEvent.setup();
+    renderWithClient(
+      <BorosPrefillHarness
+        guided
+        prefill={{ base: 'ETH', longVenue: 'Gate', shortVenue: 'Hyperliquid', maturity: SPREAD_OPP_MATURITY, size: 300, sizeBase: 0.121 }}
+      />,
+    );
+    await user.click(screen.getByRole('button', { name: 'fire' }));
+
+    const name = await screen.findByText('ETH HL-Gate spread 27 Nov 2026');
+    expect(name.parentElement?.querySelector('[aria-hidden="true"]')).not.toBeNull();
+    expect(screen.queryByText('Market A')).not.toBeInTheDocument();
+    expect(screen.getByLabelText(/^Size \(ETH\)/)).toHaveValue('0.121');
+
+    expect(await screen.findByText('Liquidation APR')).toBeInTheDocument();
+    expect(screen.queryByText(/ liquidation APR$/)).not.toBeInTheDocument();
+    expect(screen.getByText('Margin')).toBeInTheDocument();
+    expect(screen.getByText('Trade fee')).toBeInTheDocument();
+    expect(screen.getByText('Estimated spread')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Confirm · 1 Boros market order/ })).toBeInTheDocument();
+
+    await waitFor(() => expect(bodies.length).toBeGreaterThan(0));
+    const last = bodies[bodies.length - 1] as { legs: { marketId: number; direction: string; size: number }[]; onlyLeg?: number };
+    expect(last.legs).toEqual([expect.objectContaining({ marketId: SPREAD_OPP_MARKET_ID, direction: 'short', size: 0.121 })]);
+    expect(last.onlyLeg).toBeUndefined();
+  });
+
+  it('a $6M spread open that fills 60% offers Retry the rest, and the retry sends exactly the other 40%', async () => {
+    const SIZE = 2_333;
+    const FILLED = 1_399.8;
+    const REST = 933.2;
+    const spreadFill = (filledSize: number, shortfallSize: number) =>
+      HttpResponse.json(
+        env({
+          result: {
+            legs: [
+              {
+                marketId: SPREAD_OPP_MARKET_ID,
+                direction: 'short',
+                filledSize,
+                shortfallSize,
+                execApr: 0.0285,
+                feeSize: 1,
+                failure: shortfallSize > 0 ? { code: 'insufficient-depth', message: 'thin' } : null,
+              },
+            ],
+            hedgedSize: filledSize,
+            unhedgedSize: 0,
+            unhedgedLeg: null,
+            realisedSpreadApr: null,
+            partial: shortfallSize > 0,
+            filledNothing: false,
+            allLegsSubmitted: true,
+          },
+          estimate: null,
+          warnings: [],
+        }),
+      );
+    const answers = [() => spreadFill(FILLED, REST), () => spreadFill(REST, 0)];
+    let call = 0;
+    const sent: { legs: { marketId: number; direction: string; size: number }[]; onlyLeg?: number }[] = [];
+    server.use(
+      ...spreadHandlers(() => undefined, {
+        available: 3_000,
+        execute: () => answers[Math.min(call++, answers.length - 1)](),
+        onExecute: (b) => sent.push(b as (typeof sent)[number]),
+      }),
+    );
+    const user = userEvent.setup();
+    renderWithClient(
+      <BorosPrefillHarness
+        guided
+        prefill={{ base: 'ETH', longVenue: 'Gate', shortVenue: 'Hyperliquid', maturity: SPREAD_OPP_MATURITY, size: SIZE * 2_500, sizeBase: SIZE }}
+      />,
+    );
+    await user.click(screen.getByRole('button', { name: 'fire' }));
+    await screen.findByText('ETH HL-Gate spread 27 Nov 2026');
+    expect(screen.getByLabelText(/^Size \(ETH\)/)).toHaveValue(String(SIZE));
+
+    const confirm = await screen.findByRole('button', { name: /Confirm · 1 Boros market order/ });
+    await waitFor(() => expect(confirm).not.toBeDisabled());
+    await user.pointer({ keys: '[MouseLeft>]', target: confirm });
+    await waitFor(() => expect(screen.queryByRole('status')).toBeInTheDocument(), { timeout: 3_000 });
+
+    const report = within(screen.getByRole('status'));
+    expect(report.getByText('partially filled')).toBeInTheDocument();
+    expect(report.getByText(/^ETH HL-Gate spread 27 Nov 2026 · short/)).toBeInTheDocument();
+    expect(report.queryByText('Fee')).not.toBeInTheDocument();
+    expect(report.queryByRole('button', { name: 'Complete now at market' })).not.toBeInTheDocument();
+    await user.click(report.getByRole('button', { name: 'Retry the rest' }));
+
+    await waitFor(() => expect(screen.getByLabelText(/^Size \(ETH\)/)).toHaveValue(String(REST)));
+    const retry = await screen.findByRole('button', { name: /Confirm · 1 Boros market order/ });
+    await waitFor(() => expect(retry).not.toBeDisabled());
+    await user.pointer({ keys: '[MouseLeft>]', target: retry });
+    await waitFor(() => expect(sent).toHaveLength(2), { timeout: 3_000 });
+
+    expect(sent[0].legs).toEqual([expect.objectContaining({ marketId: SPREAD_OPP_MARKET_ID, direction: 'short', size: SIZE })]);
+    expect(sent[1].legs).toEqual([expect.objectContaining({ marketId: SPREAD_OPP_MARKET_ID, direction: 'short', size: REST })]);
+    expect(sent[1].onlyLeg).toBeUndefined();
+    expect(sent[0].legs[0].size * 0.6 + sent[1].legs[0].size).toBeCloseTo(SIZE, 6);
+
+    const receipt = within(await screen.findByRole('status'));
+    expect(await receipt.findByText('filled')).toBeInTheDocument();
+    expect(receipt.getByText(/^ETH HL-Gate spread 27 Nov 2026 · short/)).toBeInTheDocument();
+    expect(receipt.getByText('Fee')).toBeInTheDocument();
+    expect(receipt.getByText('0.000017 ETH')).toBeInTheDocument();
+  });
+
+  it('tops up gas on the spread market when the balance is low', async () => {
+    const bodies: Record<string, unknown>[] = [];
+    server.use(
+      ...spreadHandlers(() => {}, { gasBalanceUsd: 0.05 }),
+      http.post('/api/boros/pair/top-up-gas', async ({ request }) => {
+        bodies.push((await request.json()) as Record<string, unknown>);
+        return HttpResponse.json(env({ balanceUsd: 5.05, sentUsd: 5 }));
+      }),
+    );
+    const user = userEvent.setup();
+    renderWithClient(
+      <BorosPrefillHarness
+        guided
+        prefill={{ base: 'ETH', longVenue: 'Gate', shortVenue: 'Hyperliquid', maturity: SPREAD_OPP_MATURITY, size: 300, sizeBase: 0.121 }}
+      />,
+    );
+    await user.click(screen.getByRole('button', { name: 'fire' }));
+
+    await screen.findByLabelText(/Top up gas by hand \(USD\)/i);
+    await user.pointer({ keys: '[MouseLeft>]', target: screen.getByRole('button', { name: /Top up gas/i }) });
+    await waitFor(() => expect(bodies).toHaveLength(1), { timeout: 3_000 });
+    expect(bodies[0]).toMatchObject({ marketId: SPREAD_OPP_MARKET_ID, address: ADDRESS });
+  });
+
+  it('keeps the two single markets when the venues list no spread at that maturity', async () => {
+    const bodies: Record<string, unknown>[] = [];
+    server.use(...spreadHandlers((b) => bodies.push(b)));
+    const user = userEvent.setup();
+    renderWithClient(
+      <BorosPrefillHarness
+        prefill={{ base: 'ETH', longVenue: 'Gate', shortVenue: 'Hyperliquid', maturity: SPREAD_OPP_MATURITY + 86_400, size: 300 }}
+      />,
+    );
+    await user.click(screen.getByRole('button', { name: 'fire' }));
+
+    expect(await screen.findByText('Market A')).toBeInTheDocument();
+    expect(screen.queryByText(/HL-Gate spread/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: /HL-Gate/ })).not.toBeInTheDocument();
   });
 });

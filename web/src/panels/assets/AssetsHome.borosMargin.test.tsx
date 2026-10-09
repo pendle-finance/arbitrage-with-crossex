@@ -20,6 +20,7 @@ const DEC = Date.UTC(2026, 11, 25, 8) / 1000;
 
 const boros: AssetBorosOpen = {
   marketId: 7,
+  spreadVenues: null,
   venue: 'BINANCE',
   maturity: DEC,
   collateral: 'USDT',

@@ -51,7 +51,7 @@ describe('applyRebate', () => {
   it('credits only the in-scope leg when the rebate is market-filtered', () => {
     const pair = makeOpportunityPair();
     // Only the short leg's market (101) is covered.
-    const out = applyRebate(pair, relative({ marketIds: [pair.shortLeg.marketId] }), OPP_NOTIONAL);
+    const out = applyRebate(pair, relative({ marketIds: [pair.borosLegs[0].marketId] }), OPP_NOTIONAL);
     // One leg of two ⇒ half the full credit.
     const credit = pair.costs.borosSettleFeeUsd * 0.2 * 0.5;
     expect(out.costs.borosSettleRebateUsd).toBeCloseTo(credit, 9);

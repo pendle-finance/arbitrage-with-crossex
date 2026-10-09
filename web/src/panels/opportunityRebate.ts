@@ -26,11 +26,12 @@ export function applyRebate(
   const years = pair.secondsToMaturity / SECONDS_IN_YEAR;
   const notionalYears = notionalUsd * years;
   if (!rebate || !rebate.active || c.totalUsd === null || !(notionalYears > 0)) return pair;
-  // Per-leg: the fee saved on each market, only where the rebate reaches it.
-  const legCredit = (leg: OpportunityPair['shortLeg']): number =>
-    Math.max(0, leg.settleFeeApr - rebatedSettleApr(leg.settleFeeApr, rebate, leg.marketId)) *
-    notionalYears;
-  const credit = legCredit(pair.shortLeg) + legCredit(pair.longLeg);
+  const credit = pair.borosLegs.reduce(
+    (sum, leg) =>
+      sum +
+      Math.max(0, leg.settleFeeApr - rebatedSettleApr(leg.settleFeeApr, rebate, leg.marketId)) * notionalYears,
+    0,
+  );
   if (!(credit > 0)) return pair;
   const totalUsd = c.totalUsd - credit;
   const annualizedApr = totalUsd / notionalYears;

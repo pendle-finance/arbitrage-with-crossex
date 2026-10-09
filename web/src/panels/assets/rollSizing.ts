@@ -103,7 +103,7 @@ export function fitAtBand(
  * needs — it closes nothing, so there is no exit batch to bind the size.
  */
 export function fitLegsAtBand(legs: ReadonlyArray<LadderLeg>, capApr: number): number | null {
-  if (legs.length !== 2 || legs.some((l) => !Array.isArray(l.depth))) return null;
+  if (legs.length === 0 || legs.some((l) => !Array.isArray(l.depth))) return null;
   const band = Math.min(...legs.map((l) => allowedOf(l, capApr)));
   return Math.min(...legs.map((l) => capacityAt(l.depth as DepthLadder, band)));
 }

@@ -530,8 +530,7 @@ export interface OpportunityCostBreakdown {
  * leverage. Each component is null when an input it needs is missing, and any
  * null nulls the pair's `capitalUsd`. */
 export interface OpportunityCapitalBreakdown {
-  borosShortImUsd: number | null;
-  borosLongImUsd: number | null;
+  borosIms: { marketId: number; imUsd: number | null }[];
   perpShortImUsd: number | null;
   perpLongImUsd: number | null;
   /** Max leverage used to size the perp leg's margin; null when unknown. */
@@ -540,12 +539,18 @@ export interface OpportunityCapitalBreakdown {
 }
 
 export interface OpportunityLeg {
-  marketId: number;
   /** Boros platformName. */
   venue: string;
   crossexVenue: string;
   crossexSymbol: string;
   base: string;
+}
+
+export interface OpportunityBorosLeg {
+  marketId: number;
+  side: 'SHORT' | 'LONG';
+  venue: string;
+  spreadVenues: [string, string] | null;
   midApr: number;
   /** The rate this leg actually locks (receive-fixed on the short, pay-fixed on
    * the long); null when the book can't support the size. */
@@ -553,6 +558,7 @@ export interface OpportunityLeg {
   /** This market's settlement-fee APR (a cost to either side). Exposed per leg
    * so the rebate overlay can discount it per market. */
   settleFeeApr: number;
+  takerFeeRate: number;
 }
 
 export interface OpportunityPair {
@@ -563,6 +569,7 @@ export interface OpportunityPair {
   shortLeg: OpportunityLeg;
   /** Market B: Boros LONG fixed + perp LONG. */
   longLeg: OpportunityLeg;
+  borosLegs: OpportunityBorosLeg[];
   /** midApr_A − midApr_B — the headline spread, before any execution cost. */
   grossSpreadApr: number;
   /** execApr_A − execApr_B — what the size actually locks. */
@@ -1040,6 +1047,7 @@ export interface BorosPairMarketRow {
    * fraction (config.maxRateDeviationFactorBase1e4 / 1e4 × markApr). Half of
    * it is the default close tolerance; wider than it can never fill. */
   maxRateDeviationApr: number;
+  spreadVenues: [string, string] | null;
   isolatedOnly: boolean;
   onIsolatedMargin: boolean;
   isolatedHasPositionOrOrders: boolean;
@@ -1047,6 +1055,7 @@ export interface BorosPairMarketRow {
   currentSize: number;
   collateralPriceUsd: number | null;
   closeOnly: boolean;
+  paused?: boolean;
   /** Collateral one unit of size takes to OPEN here: initial margin at the
    * current rate plus the taker fee, both linear in size. Null when the market
    * carries no margin inputs. Optional: an older server does not send it. */
@@ -1056,6 +1065,7 @@ export interface BorosPairMarketRow {
 /** GET /api/boros/pair/context */
 export interface BorosPairContext {
   markets: BorosPairMarketRow[];
+  spreadMarkets: BorosPairMarketRow[];
   crossByToken: Array<{ tokenId: number; available: number }>;
   isolatedByMarket: Array<{ marketId: number; available: number }>;
   defaultSlippageApr: number;
@@ -1119,9 +1129,8 @@ export interface BorosSimulatedLeg {
 }
 
 export interface BorosPairSimulation {
-  legA: BorosSimulatedLeg;
-  legB: BorosSimulatedLeg;
-  receiveLeg: 'A' | 'B' | null;
+  legs: BorosSimulatedLeg[];
+  receiveLeg: number | null;
   /** Net of SETTLEMENT fees only — the taker fee is a one-off entry cost with
    * its own line (`costToCrossSize`), not part of the rate this locks. */
   estSpreadApr: number | null;
@@ -1149,7 +1158,7 @@ export interface BorosPairSimulation {
 export interface BorosPairBlocker {
   code: string;
   message: string;
-  leg?: 'A' | 'B';
+  leg?: number;
   marketId?: number;
   /** Collateral units still needed — the shortfall, never the total. */
   shortfall?: number;
@@ -1159,7 +1168,7 @@ export interface BorosPairGate {
   blockers: BorosPairBlocker[];
   warnings: string[];
   requiresAcknowledgement: boolean;
-  opposingLegs: Array<'A' | 'B'>;
+  opposingLegs: number[];
 }
 
 export interface BorosPairEligibility {
@@ -1256,13 +1265,12 @@ export interface BorosCancelAndCloseResult {
 }
 
 export interface BorosPairResult {
-  legA: BorosLegFill;
-  legB: BorosLegFill;
+  legs: BorosLegFill[];
   /** False when only one leg was submitted (a completion). */
-  bothLegsSubmitted: boolean;
+  allLegsSubmitted: boolean;
   hedgedSize: number;
   unhedgedSize: number;
-  unhedgedLeg: 'A' | 'B' | null;
+  unhedgedLeg: number | null;
   realisedSpreadApr: number | null;
   partial: boolean;
   /** Nothing filled on any submitted leg. `partial` is true here too, so check
@@ -1280,18 +1288,21 @@ export interface BorosPairExecuteResponse {
   replayed?: boolean;
 }
 
+export interface BorosPairLegBody {
+  marketId: number;
+  direction: BorosLegDirection;
+  slippageApr: number;
+  size: number;
+  clientOrderId?: string;
+}
+
 /** Request body shared by simulate and execute. */
 export interface BorosPairRequest {
   address: string;
-  /** Trade one leg only (a completion); the other is sized to zero. */
-  onlyLeg?: 'A' | 'B';
-  legA: { marketId: number; direction: BorosLegDirection; slippageApr: number };
-  legB: { marketId: number; direction: BorosLegDirection; slippageApr: number };
-  size: number;
+  legs: BorosPairLegBody[];
   intent: BorosPairIntent;
   opposingAcknowledged?: boolean;
-  clientOrderIdA?: string;
-  clientOrderIdB?: string;
+  onlyLeg?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -1301,24 +1312,21 @@ export interface BorosPairRequest {
 // request, renders the one gate the server returns, and reads the verdict.
 // ---------------------------------------------------------------------------
 
-export type BorosRollLegKey = 'exitA' | 'exitB' | 'entryA' | 'entryB';
-
-/** One leg of a roll step — the same shape as a pair leg. */
-type BorosRollLeg = { marketId: number; direction: BorosLegDirection; slippageApr: number };
+export type BorosRollLegKey = string;
 
 /** Request body shared by roll simulate and execute. `size` is in collateral
  * units, same as the pair routes; the server prices the exit `close` and the
  * entry `open` off ONE read of the account. */
 export interface BorosRollRequest {
   address: string;
-  exit: { legA: BorosRollLeg; legB: BorosRollLeg; size: number };
-  entry: { legA: BorosRollLeg; legB: BorosRollLeg; size: number };
+  exit: { legs: BorosPairLegBody[] };
+  entry: { legs: BorosPairLegBody[] };
   /** §4 acknowledgement for the ENTRY only — the exit is a close, acknowledged
    * by construction. */
   opposingAcknowledged?: boolean;
   /** Four replay keys, deduped as ONE (see recentRolls). Minted once per
    * review and reused for a retry — never re-minted. */
-  clientOrderIds?: Record<BorosRollLegKey, string>;
+  clientOrderIds?: Record<string, string>;
 }
 
 /** A roll blocker. `code` is a pair blocker code OR one of the checks that
@@ -1330,7 +1338,7 @@ export interface BorosRollBlocker {
   code: string;
   message: string;
   step?: 'exit' | 'entry';
-  leg?: 'A' | 'B';
+  leg?: number;
   marketId?: number;
 }
 
@@ -1372,7 +1380,7 @@ export interface BorosRollResult {
   /** `rolled`: every leg filled whole. `refused`: nothing traded, safe to
    * resend. `unknown`: no confirmation — check the position on Boros first. */
   status: 'rolled' | 'refused' | 'unknown';
-  legs: Record<BorosRollLegKey, BorosLegFill>;
+  legs: Record<string, BorosLegFill>;
   /** Why, for `refused`/`unknown`; the leg the venue named, when it named one. */
   reason: { code: BorosLegFailureCode; message: string; leg: BorosRollLegKey | null } | null;
   /** Collateral units moved to the new maturity; 0 unless `rolled`. */
@@ -1505,6 +1513,7 @@ export interface AssetPerpClosedRow {
 export interface AssetBorosOpen {
   marketId: number;
   venue: string;
+  spreadVenues: [string, string] | null;
   maturity: number;
   collateral: string;
   /** LONG = pays fixed, receives floating (hedges a LONG perp's funding). */
@@ -1535,6 +1544,7 @@ export interface AssetBorosOpen {
 export interface AssetBorosHistory {
   marketId: number;
   venue: string;
+  spreadVenues: [string, string] | null;
   maturity: number;
   /** Σ settlements, net of per-settlement fees. */
   settleUsd: number;

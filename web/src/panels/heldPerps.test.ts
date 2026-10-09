@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { makeOpportunityGroup, makeOpportunityPair, OPP_NT } from '../test/fixtures';
-import { heldPerpsOf, heldTagFor, repriceHeld } from './heldPerps';
+import { heldBorosOf, heldPerpsOf, heldTagFor, repriceHeld } from './heldPerps';
 import { toRows } from './opportunityFilters';
 
 const DAY = 86_400;
@@ -27,6 +27,26 @@ describe('heldPerpsOf / heldTagFor', () => {
     expect(heldTagFor(held, asset, pair, rowMaturity)).toBe('rollover');
     // Another asset on the same venues is not this pair.
     expect(heldTagFor(held, 'BTC', pair, rowMaturity)).toBeNull();
+  });
+
+  it('a spread held at a sooner maturity holds both venues and tags the later row', () => {
+    const SPREAD_MATURITY = NOW + 5 * DAY;
+    const boros = heldBorosOf(
+      [
+        { base: 'ETH', venue: 'HYPERLIQUID_GATE', maturity: SPREAD_MATURITY, currentSize: -2_333, spreadVenues: ['HYPERLIQUID', 'BINANCE'] },
+        { base: 'ETH', venue: 'BYBIT', maturity: SPREAD_MATURITY, currentSize: 0, spreadVenues: null },
+        { base: 'BTC', venue: 'BYBIT', maturity: SPREAD_MATURITY, currentSize: 5, spreadVenues: null },
+      ],
+      'eth',
+    );
+    expect(boros).toEqual([
+      { venue: 'HYPERLIQUID', maturity: SPREAD_MATURITY },
+      { venue: 'BINANCE', maturity: SPREAD_MATURITY },
+    ]);
+    const held = heldPerpsOf([
+      { base: 'ETH', perps: [{ venue: 'BINANCE', side: 'LONG' }, { venue: 'HYPERLIQUID', side: 'SHORT' }], boros },
+    ]);
+    expect(heldTagFor(held, asset, pair, rowMaturity)).toBe('rollover');
   });
 
   it('perps with NO rate legs behind them are not a hedge to roll', () => {
@@ -102,7 +122,8 @@ describe('toRows with holdings', () => {
     const mine = makeOpportunityPair();
     const stranger = {
       ...makeOpportunityPair(),
-      shortLeg: { ...mine.shortLeg, marketId: 901, venue: 'OKX', crossexVenue: 'OKX' },
+      shortLeg: { ...mine.shortLeg, venue: 'OKX', crossexVenue: 'OKX' },
+      borosLegs: [{ ...mine.borosLegs[0], marketId: 901, venue: 'OKX' }, mine.borosLegs[1]],
       netFixedAprOnCapital: (mine.netFixedAprOnCapital as number) * 10,
     };
     const group = makeOpportunityGroup({ pairs: [stranger, mine] });

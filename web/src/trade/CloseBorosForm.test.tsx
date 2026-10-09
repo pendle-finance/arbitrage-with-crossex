@@ -10,7 +10,7 @@
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { BorosCancelAndCloseResult, StrategyLeg } from '../api/types';
+import type { BorosCancelAndCloseResult, BorosPairRequest, StrategyLeg } from '../api/types';
 import { STRATEGY_STORAGE_KEY } from '../panels/HomeControls';
 import { makeStrategyLeg, versionHandler } from '../test/fixtures';
 import { env, server } from '../test/server';
@@ -40,7 +40,7 @@ const ready = () => [
   agentReady(),
   http.get('/api/boros/pair/context', () =>
     HttpResponse.json(
-      env({ markets: [], crossByToken: [], isolatedByMarket: [], defaultSlippageApr: 0.0025, maxSlippageApr: 0.1 }),
+      env({ markets: [], spreadMarkets: [], crossByToken: [], isolatedByMarket: [], defaultSlippageApr: 0.0025, maxSlippageApr: 0.1 }),
     ),
   ),
 ];
@@ -100,7 +100,7 @@ describe('CloseBorosForm — reporting what it closed', () => {
     expect(await screen.findByText(/of what you asked for is still open/)).toBeInTheDocument();
     // …and the size is re-armed at the REMAINDER, so a second press cannot
     // re-send the amount that just half-filled.
-    expect(screen.getByLabelText(/Close size, applied to both legs/)).toHaveValue('0.004');
+    expect(screen.getByLabelText(/Close size, applied to all legs/)).toHaveValue('0.004');
   });
 
   it('reports a PARTIAL as a partial even though the venue client stamps it with a failure', async () => {
@@ -120,7 +120,7 @@ describe('CloseBorosForm — reporting what it closed', () => {
     renderWithClient(<CloseBorosForm legs={[leg()]} />);
     await confirmClose();
     expect(await screen.findByText(/of what you asked for is still open/)).toBeInTheDocument();
-    expect(screen.getByLabelText(/Close size, applied to both legs/)).toHaveValue('0.004');
+    expect(screen.getByLabelText(/Close size, applied to all legs/)).toHaveValue('0.004');
     expect(screen.queryByText(/Only 0.006 of 0.01 matched/)).not.toBeInTheDocument();
   });
 
@@ -161,24 +161,7 @@ describe('CloseBorosForm — reporting what it closed', () => {
  * finish it" for a leg with nothing of the user's left in it. On a real-money
  * surface that is an invitation to send the order twice.
  */
-describe('CloseBorosForm — one size, two legs, one unit', () => {
-  it('refuses THREE legs: only two are quoted, and every leg would be sent the shared size', async () => {
-    const seen: unknown[] = [];
-    server.use(...ready(), closeReturns({ fill: fill(MINE) }, seen));
-    renderWithClient(
-      <CloseBorosForm
-        legs={[
-          makeStrategyLeg({ marketId: 155, notionalToken: MINE, collateral: 'ETH' }),
-          makeStrategyLeg({ marketId: 158, notionalToken: MINE, collateral: 'ETH' }),
-          makeStrategyLeg({ marketId: 161, notionalToken: MINE, collateral: 'ETH' }),
-        ]}
-      />,
-    );
-    expect(await screen.findByText(/spans 3 Boros legs/)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Close 3 legs/ })).toBeDisabled();
-    expect(seen).toHaveLength(0);
-  });
-
+describe('CloseBorosForm — one size, one unit', () => {
   it('refuses legs in DIFFERENT collateral: 0.01 ETH and 0.01 USDT are not one size', async () => {
     const seen: unknown[] = [];
     server.use(...ready(), closeReturns({ fill: fill(MINE) }, seen));
@@ -253,7 +236,7 @@ describe('CloseBorosForm — saying that it landed', () => {
     server.use(...ready(), closeReturns({ closed: false, fill: fill(0.004), openSize: MINE }));
     renderWithClient(<CloseBorosForm legs={[{ ...leg(), notionalToken: MINE }]} />);
     // Ask for less than the whole share.
-    fireEvent.change(screen.getByLabelText(/Close size, applied to both legs/), {
+    fireEvent.change(screen.getByLabelText(/Close size, applied to all legs/), {
       target: { value: '0.004' },
     });
     await confirmClose();
@@ -347,6 +330,7 @@ describe('CloseBorosForm — the venue minimum', () => {
       HttpResponse.json(
         env({
           markets: [marketRow(), marketRow({ marketId: MARKET + 1, name: 'Binance ETH' })],
+          spreadMarkets: [],
           crossByToken: [{ tokenId: 2, available: 5 }],
           isolatedByMarket: [],
           defaultSlippageApr: 0.0025,
@@ -357,7 +341,7 @@ describe('CloseBorosForm — the venue minimum', () => {
     http.post('/api/boros/pair/simulate', () =>
       HttpResponse.json(
         env({
-          simulation: { legA: null, legB: null, collateralPriceUsd: 2_460 },
+          simulation: { legs: [], collateralPriceUsd: 2_460 },
           gate: { blockers, warnings: [], requiresAcknowledgement: false, opposingLegs: [] },
           eligibility: { eligible: true, code: null, reason: null },
           simulatedAtMs: Date.now(),
@@ -369,7 +353,7 @@ describe('CloseBorosForm — the venue minimum', () => {
 
   const belowMin = {
     code: 'below-min-order-value',
-    leg: 'A',
+    leg: 0,
     marketId: MARKET,
     message: 'Hyperliquid ETH: this leg is worth $2.46, and Boros takes nothing at or under $10 — increase the size.',
   };
@@ -389,7 +373,7 @@ describe('CloseBorosForm — the venue minimum', () => {
       ...quoting([
         { code: 'legs-do-not-offset', message: 'Both legs point the same way — flip one to trade a spread.' },
         { code: 'flip-unacknowledged', message: 'Tick the acknowledgement.' },
-        { code: 'below-min-order-value', leg: 'B', marketId: MARKET + 1, message: 'partner leg is worth $0.00' },
+        { code: 'below-min-order-value', leg: 1, marketId: MARKET + 1, message: 'partner leg is worth $0.00' },
       ]),
     );
     renderWithClient(<CloseBorosForm legs={[leg()]} />);
@@ -434,6 +418,7 @@ describe('CloseBorosForm — two legs close as one batch', () => {
       HttpResponse.json(
         env({
           markets: [row(MARKET, 'Hyperliquid ETH', MINE), row(OTHER, 'Gate ETH', -MINE)],
+          spreadMarkets: [],
           crossByToken: [{ tokenId: 2, available: 5 }],
           isolatedByMarket: [],
           defaultSlippageApr: 0.0025,
@@ -444,7 +429,7 @@ describe('CloseBorosForm — two legs close as one batch', () => {
     http.post('/api/boros/pair/simulate', () =>
       HttpResponse.json(
         env({
-          simulation: { legA: null, legB: null, collateralPriceUsd: 2_460 },
+          simulation: { legs: [], collateralPriceUsd: 2_460 },
           gate: { blockers, warnings: [], requiresAcknowledgement: false, opposingLegs: [] },
           eligibility: { eligible: true, code: null, reason: null },
           simulatedAtMs: Date.now(),
@@ -463,15 +448,14 @@ describe('CloseBorosForm — two legs close as one batch', () => {
     failure: null,
     ...over,
   });
-  const executeReturns = (legA: unknown, legB: unknown, seen: unknown[]) =>
+  const executeReturns = (legs: unknown[], seen: unknown[]) =>
     http.post('/api/boros/pair/execute', async ({ request }) => {
       seen.push(await request.json());
       return HttpResponse.json(
         env({
           result: {
-            legA,
-            legB,
-            bothLegsSubmitted: true,
+            legs,
+            allLegsSubmitted: true,
             hedgedSize: 0,
             unhedgedSize: 0,
             unhedgedLeg: null,
@@ -497,7 +481,7 @@ describe('CloseBorosForm — two legs close as one batch', () => {
     const closed: Array<[number, number]> = [];
     server.use(
       ...quoted(),
-      executeReturns(legFill(MARKET, 'short'), legFill(OTHER, 'long'), sent),
+      executeReturns([legFill(MARKET, 'short'), legFill(OTHER, 'long')], sent),
       closeReturns({ closed: true, fill: fill(MINE) }, perLeg),
     );
     renderWithClient(<CloseBorosForm legs={pairLegs()} onClosed={(l, q) => closed.push([l.marketId!, q])} />);
@@ -505,21 +489,14 @@ describe('CloseBorosForm — two legs close as one batch', () => {
     expect(await screen.findByText(/2 legs closed/, {}, { timeout: 3_000 })).toBeInTheDocument();
 
     expect(sent).toHaveLength(1);
-    const body = sent[0] as {
-      intent: string;
-      size: number;
-      legA: { marketId: number; direction: string };
-      legB: { marketId: number; direction: string };
-      clientOrderIdA: string;
-      clientOrderIdB: string;
-    };
+    const body = sent[0] as BorosPairRequest;
     expect(body.intent).toBe('close');
-    expect(body.size).toBe(MINE);
     // Each leg trades AGAINST the side it holds.
-    expect(body.legA).toMatchObject({ marketId: MARKET, direction: 'short' });
-    expect(body.legB).toMatchObject({ marketId: OTHER, direction: 'long' });
-    expect(body.clientOrderIdA).toBeTruthy();
-    expect(body.clientOrderIdB).not.toBe(body.clientOrderIdA);
+    expect(body.legs).toHaveLength(2);
+    expect(body.legs[0]).toMatchObject({ marketId: MARKET, direction: 'short', size: MINE });
+    expect(body.legs[1]).toMatchObject({ marketId: OTHER, direction: 'long', size: MINE });
+    expect(body.legs[0].clientOrderId).toBeTruthy();
+    expect(body.legs[1].clientOrderId).not.toBe(body.legs[0].clientOrderId);
     expect(perLeg).toEqual([]);
     expect(closed).toEqual([
       [MARKET, MINE],
@@ -533,7 +510,7 @@ describe('CloseBorosForm — two legs close as one batch', () => {
     const refused = { filledSize: 0, shortfallSize: MINE, failure: { code: 'rate-deviation', message: 'rate moved too far', cause: 'batch' } };
     server.use(
       ...quoted(),
-      executeReturns(legFill(MARKET, 'short', refused), legFill(OTHER, 'long', refused), sent),
+      executeReturns([legFill(MARKET, 'short', refused), legFill(OTHER, 'long', refused)], sent),
     );
     renderWithClient(<CloseBorosForm legs={pairLegs()} onClosed={() => closed.push(1)} />);
     await holdBoth();
@@ -547,7 +524,7 @@ describe('CloseBorosForm — two legs close as one batch', () => {
       ...quoted([
         {
           code: 'slippage-exceeds-max',
-          leg: 'A',
+          leg: 0,
           marketId: MARKET,
           message: 'Hyperliquid ETH: this size fills 1.20% from mid, past the 0.80% max — raise the tolerance or reduce the size.',
         },
@@ -580,7 +557,7 @@ describe('CloseBorosForm — a leg nothing can quote', () => {
       http.get('/api/boros/pair/context', async () => {
         await gate;
         return HttpResponse.json(
-          env({ markets: [], crossByToken: [], isolatedByMarket: [], defaultSlippageApr: 0.0025, maxSlippageApr: 0.1 }),
+          env({ markets: [], spreadMarkets: [], crossByToken: [], isolatedByMarket: [], defaultSlippageApr: 0.0025, maxSlippageApr: 0.1 }),
         );
       }),
     );
@@ -602,7 +579,7 @@ describe('CloseBorosForm — full sizes on a large book', () => {
     renderWithClient(<CloseBorosForm legs={[{ ...leg(), notionalToken: size }]} />);
 
     expect(await screen.findByRole('button', { name: `max ${text}` })).toBeInTheDocument();
-    const input = screen.getByLabelText(/Close size, applied to both legs/) as HTMLInputElement;
+    const input = screen.getByLabelText(/Close size, applied to all legs/) as HTMLInputElement;
     expect(input.value).not.toContain(',');
     fireEvent.change(input, { target: { value: '100' } });
     expect(await screen.findByText(/partial close/)).toBeInTheDocument();
@@ -624,5 +601,293 @@ describe('CloseBorosForm — a slice of a shared leg', () => {
     server.use(...ready());
     renderWithClient(<CloseBorosForm legs={[{ ...leg(), share: 1 }]} />);
     expect(await screen.findByText(/flat after/)).toBeInTheDocument();
+  });
+});
+
+describe('CloseBorosForm — a mixed book: two singles and one spread', () => {
+  const MATURITY = 1_795_737_600;
+  const row = (marketId: number, name: string, venue: string, currentSize: number, spreadVenues: [string, string] | null) => ({
+    marketId,
+    name,
+    venue,
+    base: 'ETH',
+    tokenId: 2,
+    collateral: 'ETH',
+    maturity: MATURITY,
+    midApr: 0.05,
+    markApr: 0.05,
+    maxRateDeviationApr: 0.01,
+    spreadVenues,
+    isolatedOnly: false,
+    onIsolatedMargin: false,
+    isolatedHasPositionOrOrders: false,
+    currentSize,
+    collateralPriceUsd: 2_460,
+    closeOnly: false,
+  });
+  const book = (single: number, spread: number): StrategyLeg[] => [
+    makeStrategyLeg({ marketId: 51, venue: 'HYPERLIQUID', side: 'SHORT', base: 'ETH', collateral: 'ETH', notionalToken: single, maturity: MATURITY }),
+    makeStrategyLeg({ marketId: 60, venue: 'GATE', side: 'LONG', base: 'ETH', collateral: 'ETH', notionalToken: single, maturity: MATURITY }),
+    makeStrategyLeg({ marketId: 59, venue: 'HYPERLIQUID', side: 'SHORT', base: 'ETH', collateral: 'ETH', notionalToken: spread, maturity: MATURITY }),
+  ];
+  const mixed = (single: number, spread: number, sent: BorosPairRequest[]) => [
+    versionHandler(),
+    agentReady(),
+    http.get('/api/boros/pair/context', () =>
+      HttpResponse.json(
+        env({
+          markets: [row(51, 'Hyperliquid ETH', 'Hyperliquid', -single, null), row(60, 'Gate ETH', 'Gate', single, null)],
+          spreadMarkets: [row(59, 'ETH Spread', 'HL-Gate', -spread, ['HYPERLIQUID', 'GATE'])],
+          crossByToken: [{ tokenId: 2, available: 5_000 }],
+          isolatedByMarket: [],
+          defaultSlippageApr: 0.0025,
+          maxSlippageApr: 0.1,
+        }),
+      ),
+    ),
+    http.post('/api/boros/pair/simulate', () =>
+      HttpResponse.json(
+        env({
+          simulation: { legs: [], collateralPriceUsd: 2_460 },
+          gate: { blockers: [], warnings: [], requiresAcknowledgement: false, opposingLegs: [] },
+          eligibility: { eligible: true, code: null, reason: null },
+          simulatedAtMs: Date.now(),
+          gasBalanceUsd: null,
+        }),
+      ),
+    ),
+    http.post('/api/boros/pair/execute', async ({ request }) => {
+      const body = (await request.json()) as BorosPairRequest;
+      sent.push(body);
+      return HttpResponse.json(
+        env({
+          result: {
+            legs: body.legs.map((l) => ({
+              marketId: l.marketId,
+              direction: l.direction,
+              filledSize: l.size,
+              shortfallSize: 0,
+              execApr: null,
+              feeSize: null,
+              failure: null,
+            })),
+            allLegsSubmitted: true,
+            hedgedSize: 0,
+            unhedgedSize: 0,
+            unhedgedLeg: null,
+            realisedSpreadApr: null,
+            partial: false,
+            filledNothing: false,
+          },
+          estimate: {},
+          warnings: [],
+          replayed: false,
+        }),
+      );
+    }),
+  ];
+  const holdAll = async () => {
+    const btn = await screen.findByRole('button', { name: /Close 3 legs/ });
+    await waitFor(() => expect(btn).toBeEnabled());
+    fireEvent.pointerDown(btn);
+  };
+
+  it('closes three legs', async () => {
+    const sent: BorosPairRequest[] = [];
+    const perLeg: unknown[] = [];
+    const closed: Array<[number, number]> = [];
+    server.use(...mixed(0.3, 0.255, sent), closeReturns({ fill: fill(MINE) }, perLeg));
+    renderWithClient(<CloseBorosForm legs={book(0.3, 0.255)} onClosed={(l, q) => closed.push([l.marketId!, q])} />);
+
+    expect(await screen.findAllByText('HL-Gate')).not.toHaveLength(0);
+    expect(screen.getAllByText('Boros')).toHaveLength(3);
+    expect(screen.getByText('Close size · all legs')).toBeInTheDocument();
+    expect(screen.getByLabelText(/Close size, applied to all legs/)).toHaveValue('0.555');
+    expect(screen.queryByText(/This close spans/)).not.toBeInTheDocument();
+    await holdAll();
+    expect(await screen.findByText(/3 legs closed/, {}, { timeout: 3_000 })).toBeInTheDocument();
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0].intent).toBe('close');
+    expect(sent[0].legs.map((l) => [l.marketId, l.direction, l.size])).toEqual([
+      [51, 'long', 0.3],
+      [60, 'short', 0.3],
+      [59, 'long', 0.255],
+    ]);
+    expect(new Set(sent[0].legs.map((l) => l.clientOrderId)).size).toBe(3);
+    expect(perLeg).toEqual([]);
+    expect(closed).toEqual([
+      [51, 0.3],
+      [60, 0.3],
+      [59, 0.255],
+    ]);
+  });
+
+  it('partial close splits by share', async () => {
+    const sent: BorosPairRequest[] = [];
+    server.use(...mixed(0.3, 0.255, sent));
+    renderWithClient(<CloseBorosForm legs={book(0.3, 0.255)} />);
+    fireEvent.change(await screen.findByLabelText(/Close size, applied to all legs/), { target: { value: '0.2775' } });
+    await holdAll();
+    await waitFor(() => expect(sent).toHaveLength(1), { timeout: 3_000 });
+    expect(sent[0].legs.map((l) => l.size)).toEqual([0.15, 0.15, 0.1275]);
+  });
+
+  it.each([
+    ['$50', 0.0204, 0.0174, '0.0189', 0.0102, 0.0087],
+    ['$6M', 2439.02439, 2073.17073, '2256.09756', 1219.512195, 1036.585365],
+    ['$6M on a lot boundary', 4000.0002, 3000.0006, '3500.0004', 2000.0001, 1500.0003],
+  ])('rounds each leg down to the lot at %s, never past its share', async (_, single, spread, typed, halfSingle, halfSpread) => {
+    const sent: BorosPairRequest[] = [];
+    server.use(...mixed(single, spread, sent));
+    renderWithClient(<CloseBorosForm legs={book(single, spread)} />);
+    fireEvent.change(await screen.findByLabelText(/Close size, applied to all legs/), { target: { value: typed } });
+    await holdAll();
+    await waitFor(() => expect(sent).toHaveLength(1), { timeout: 3_000 });
+    const sizes = sent[0].legs.map((l) => l.size);
+    expect(sizes).toEqual([halfSingle, halfSingle, halfSpread]);
+    [single, single, spread].forEach((held, i) => {
+      expect(sizes[i]).toBeLessThanOrEqual(held / 2);
+      expect(held / 2 - sizes[i]).toBeLessThan(0.0001);
+    });
+  });
+
+  const wei = (n: number | string): bigint => {
+    const [whole, fraction = ''] = String(n).split('.');
+    return BigInt(whole + fraction.padEnd(18, '0').slice(0, 18));
+  };
+
+  it.each([
+    ['$50', 0.0204, 0.0174, '0.0150822943'],
+    ['$6M', 2333.1, 1983.135, '53.8183915'],
+  ])('never sends a partial share above its wei floor at %s', async (_, single, spread, typed) => {
+    const sent: BorosPairRequest[] = [];
+    server.use(...mixed(single, spread, sent));
+    renderWithClient(<CloseBorosForm legs={book(single, spread)} />);
+    fireEvent.change(await screen.findByLabelText(/Close size, applied to all legs/), { target: { value: typed } });
+    await holdAll();
+    await waitFor(() => expect(sent).toHaveLength(1), { timeout: 3_000 });
+    const max = wei(single) + wei(spread);
+    [single, single, spread].forEach((held, i) => {
+      const floor = (wei(held) * wei(typed)) / max;
+      const onWire = wei(sent[0].legs[i].size);
+      expect(onWire <= floor).toBe(true);
+      expect(floor - onWire < floor / 10n ** 14n).toBe(true);
+    });
+  });
+
+  it('sends the exact open size on a whole close, not the float a share left behind', async () => {
+    const sent: BorosPairRequest[] = [];
+    server.use(...mixed(0.3, 0.255, sent));
+    renderWithClient(<CloseBorosForm legs={book(0.29999999999999993, 0.255)} />);
+    await holdAll();
+    await waitFor(() => expect(sent).toHaveLength(1), { timeout: 3_000 });
+    expect(sent[0].legs.map((l) => l.size)).toEqual([0.3, 0.3, 0.255]);
+  });
+
+  const partThenFull = (single: number, spread: number, firstFills: Record<number, number>, raw: string[]) => [
+    ...mixed(single, spread, []).slice(0, 4),
+    http.post('/api/boros/pair/execute', async ({ request }) => {
+      const text = await request.text();
+      raw.push(text);
+      const body = JSON.parse(text) as BorosPairRequest;
+      const first = raw.length === 1;
+      return HttpResponse.json(
+        env({
+          result: {
+            legs: body.legs.map((l) => {
+              const filledSize = first ? (firstFills[l.marketId] ?? l.size) : l.size;
+              const short = filledSize < l.size;
+              return {
+                marketId: l.marketId,
+                direction: l.direction,
+                filledSize,
+                shortfallSize: short ? l.size - filledSize : 0,
+                execApr: null,
+                feeSize: null,
+                failure: short ? { code: 'insufficient-depth', message: 'The book ran out inside the rate bound.' } : null,
+              };
+            }),
+            allLegsSubmitted: true,
+            hedgedSize: 0,
+            unhedgedSize: 0,
+            unhedgedLeg: null,
+            realisedSpreadApr: null,
+            partial: false,
+            filledNothing: false,
+          },
+          estimate: {},
+          warnings: [],
+          replayed: false,
+        }),
+      );
+    }),
+  ];
+
+  it.each([
+    ['$50', 0.0203, 0.0172, 0.01218, '0.01218', '0.00812', 0.00812],
+    ['$6M', 2333.1, 1983.135, 1399.86, '1,399.86', '933.24', 933.24],
+  ])('a part fill at %s retries only the remainder, in one batch', async (_, single, spread, filled, filledText, leftText, left) => {
+    const raw: string[] = [];
+    const closed: Array<[number, number]> = [];
+    const perLeg: unknown[] = [];
+    server.use(...partThenFull(single, spread, { 51: filled }, raw), closeReturns({ fill: fill(MINE) }, perLeg));
+    renderWithClient(<CloseBorosForm legs={book(single, spread)} onClosed={(l, q) => closed.push([l.marketId!, q])} />);
+    await holdAll();
+    await waitFor(() => expect(raw).toHaveLength(1), { timeout: 3_000 });
+    const first = JSON.parse(raw[0]) as BorosPairRequest;
+    expect(first.legs.map((l) => [l.marketId, l.size])).toEqual([
+      [51, single],
+      [60, single],
+      [59, spread],
+    ]);
+    const chip = await screen.findByText(new RegExp(`filled ${filledText} ETH — ${leftText} ETH of what you asked for is still open`));
+    expect(chip).toBeInTheDocument();
+    expect(screen.getAllByText('closed')).toHaveLength(2);
+    expect(screen.getByLabelText(/Close size, applied to all legs/)).toHaveValue(leftText);
+
+    await holdAll();
+    await waitFor(() => expect(raw).toHaveLength(2), { timeout: 3_000 });
+    const retry = JSON.parse(raw[1]) as BorosPairRequest;
+    expect(retry.legs).toHaveLength(1);
+    expect(retry.legs[0]).toMatchObject({ marketId: 51, direction: 'long', size: left });
+    expect(raw[1]).toContain(`"size":${leftText}`);
+    expect(retry.legs[0].clientOrderId).not.toBe(first.legs[0].clientOrderId);
+    expect(perLeg).toEqual([]);
+    expect(await screen.findByText(/3 legs closed/, {}, { timeout: 3_000 })).toBeInTheDocument();
+    expect(closed).toEqual([
+      [51, filled],
+      [60, single],
+      [59, spread],
+      [51, left],
+    ]);
+  });
+
+  it('retries every leg with a remainder in one batch, each at its own size', async () => {
+    const raw: string[] = [];
+    server.use(...partThenFull(150, 300, { 51: 100, 60: 100, 59: 200 }, raw));
+    renderWithClient(<CloseBorosForm legs={book(150, 300)} />);
+    await holdAll();
+    await waitFor(() => expect(raw).toHaveLength(1), { timeout: 3_000 });
+    expect(await screen.findAllByText(/of what you asked for is still open/)).toHaveLength(3);
+    await holdAll();
+    await waitFor(() => expect(raw).toHaveLength(2), { timeout: 3_000 });
+    const retry = JSON.parse(raw[1]) as BorosPairRequest;
+    expect(retry.legs.map((l) => [l.marketId, l.size])).toEqual([
+      [51, 50],
+      [60, 50],
+      [59, 100],
+    ]);
+  });
+
+  it('keeps the spread name when the context has no row for it', async () => {
+    server.use(...ready());
+    renderWithClient(
+      <CloseBorosForm legs={[{ ...book(0.3, 0.255)[2], spreadVenues: ['HYPERLIQUID', 'GATE'] }]} />,
+    );
+    expect(await screen.findByText('HL-Gate')).toBeInTheDocument();
+    expect(screen.queryByText('Hyperliquid')).toBeNull();
+    expect(screen.getByText(/Leaves both bundles:/)).toHaveTextContent(/Leaves both bundles: .*Hyperliquid and .*Gate\./);
+    expect(screen.getByText(/The perps stay open\./)).toBeInTheDocument();
   });
 });

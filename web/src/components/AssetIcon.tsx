@@ -35,6 +35,7 @@ const VENUE_FILE: Record<string, string> = {
   BYBIT: 'Layer_x0020_1_0.svg',
   GATE: 'Frame 1000005731.svg',
   HYPERLIQUID: 'hyperliquid_icon.svg',
+  'HYPERLIQUID-GATE': 'platform-icons/hyperliquid-gate.svg',
   KUCOIN: 'KuCoin Symbol SVG.svg',
   LIGHTER: 'lighter-2.svg',
   OKX: 'okx_icon.svg',
@@ -115,4 +116,37 @@ export function VenueIcon({ venue, size = 20 }: { venue: string; size?: number }
   const src = venueIconUrl(venue);
   if (!src) return <Fallback label={venue} size={size} />;
   return <RemoteIcon src={src} label={venue} size={size} />;
+}
+
+function SpreadRectangle({ venues, size }: { venues: readonly [string, string]; size: number }) {
+  return (
+    <span
+      aria-hidden="true"
+      className="inline-flex shrink-0 items-center gap-0.5 rounded border border-ink-700 bg-ink-800 px-1 py-0.5 align-middle"
+    >
+      {venues.map((venue) => (
+        <VenueIcon key={venue} venue={venue} size={size} />
+      ))}
+    </span>
+  );
+}
+
+export function SpreadIcon({ venues, size = 16 }: { venues: readonly [string, string]; size?: number }) {
+  const file = VENUE_FILE[venues.join('-').toUpperCase()];
+  const [failed, setFailed] = useState(false);
+  useEffect(() => setFailed(false), [file]);
+  if (!file || failed) return <SpreadRectangle venues={venues} size={size} />;
+  return (
+    <img
+      src={`${BUCKET}/${encodeURIComponent(file)}`}
+      alt=""
+      aria-hidden="true"
+      width={2 * size}
+      height={size}
+      loading="lazy"
+      onError={() => setFailed(true)}
+      style={{ width: 2 * size, height: size }}
+      className="block shrink-0 rounded"
+    />
+  );
 }

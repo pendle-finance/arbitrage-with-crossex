@@ -11,6 +11,7 @@ import {
   baseHandlers,
   ETH_GATE,
   makeOpportunitiesResult,
+  makeOpportunityBorosLeg,
   makeOpportunityGroup,
   makeOpportunityLeg,
   makeOpportunityMarketRow,
@@ -74,23 +75,21 @@ const ROLL_PROFIT = rollPair().estProfitUsd as number;
 function nullBtcGroup() {
   const legs = {
     shortLeg: makeOpportunityLeg({
-      marketId: 201,
       venue: 'BYBIT',
       crossexVenue: 'BYBIT',
       crossexSymbol: 'BYBIT_FUTURE_BTC_USDT',
       base: 'BTC',
-      midApr: 0.06,
-      execApr: null,
     }),
     longLeg: makeOpportunityLeg({
-      marketId: 202,
       venue: 'GATE',
       crossexVenue: 'GATE',
       crossexSymbol: 'GATE_FUTURE_BTC_USDT',
       base: 'BTC',
-      midApr: 0.03,
-      execApr: null,
     }),
+    borosLegs: [
+      makeOpportunityBorosLeg({ marketId: 201, venue: 'BYBIT', midApr: 0.06, execApr: null }),
+      makeOpportunityBorosLeg({ marketId: 202, side: 'LONG', venue: 'GATE', midApr: 0.03, execApr: null }),
+    ],
   };
   return makeOpportunityGroup({
     tokenId: 4,
@@ -141,8 +140,10 @@ function nullBtcGroup() {
           annualizedApr: null,
         },
         capital: {
-          borosShortImUsd: 6,
-          borosLongImUsd: 3,
+          borosIms: [
+            { marketId: 201, imUsd: 6 },
+            { marketId: 202, imUsd: 3 },
+          ],
           perpShortImUsd: null,
           perpLongImUsd: null,
           shortLeverageMax: null,
@@ -231,7 +232,6 @@ describe('OpportunitiesPanel — ranking and null tolerance', () => {
             crossexSymbol: '',
           }),
           longLeg: makeOpportunityLeg({
-            marketId: 102,
             venue: 'BINANCE',
             crossexVenue: 'BINANCE',
             crossexSymbol: '',
@@ -940,10 +940,9 @@ const quoteOf = (venue: string) => (venue === 'HYPERLIQUID' ? 'USDC' : 'USDT');
  * and the symbol all name the same exchange and the same coin. Renaming only
  * `venue` decouples the field the venue facet keys on from the one Execute
  * keys on, which hides exactly the regressions these fixtures exist to catch. */
-function venueLeg(side: 'short' | 'long', venue: string, base: string): OpportunityLeg {
+function venueLeg(venue: string, base: string): OpportunityLeg {
   return {
     ...makeOpportunityLeg(),
-    marketId: marketIdFor(side, venue, base),
     venue,
     crossexVenue: venue,
     crossexSymbol: `${venue}_FUTURE_${base}_${quoteOf(venue)}`,
@@ -962,8 +961,12 @@ function venuePair(
   return {
     ...makeOpportunityPair(),
     base,
-    shortLeg: venueLeg('short', shortVenue, base),
-    longLeg: venueLeg('long', longVenue, base),
+    shortLeg: venueLeg(shortVenue, base),
+    longLeg: venueLeg(longVenue, base),
+    borosLegs: [
+      makeOpportunityBorosLeg({ marketId: marketIdFor('short', shortVenue, base), venue: shortVenue }),
+      makeOpportunityBorosLeg({ marketId: marketIdFor('long', longVenue, base), side: 'LONG', venue: longVenue }),
+    ],
     netFixedAprOnCapital: apr,
     ...over,
   };

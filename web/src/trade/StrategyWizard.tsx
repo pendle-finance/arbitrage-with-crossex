@@ -25,11 +25,13 @@
 import { ArrowRight, Check, ChevronRight } from 'lucide-react';
 import { Fragment, useEffect, useState } from 'react';
 import type { BorosLegFill, BorosLegSizing, BorosPairResult, BorosPairSimulation } from '../api/types';
+import { useBorosPairContext } from '../api/queries';
 import { Modal } from '../components/Modal';
 import { isUsdCollateral } from '../lib/boros';
 import { sig } from '../lib/fmt';
+import { useActiveWallet } from '../panels/trackedAddress';
 import { BorosPairTicket } from './BorosPairTicket';
-import { PairResultReport, legSubmitted } from './BorosPairBits';
+import { PairResultReport, legSubmitted, marketName } from './BorosPairBits';
 import { PairTicket } from './PairTicket';
 import { useTradeFlow, type StrategyWizardIntent, type TradeFlowApi } from './TradeFlow';
 
@@ -90,6 +92,7 @@ type SlotFill = {
 type StepOneBook = {
   a: SlotFill;
   b: SlotFill;
+  spread: SlotFill;
   /** The unit every `size` is in, from the ticket that traded. */
   collateral: string;
   /** Display only (spread attribution) — never a source of leg identity:
@@ -98,15 +101,18 @@ type StepOneBook = {
   /** True when the whole book is one clean pair execution — the only case
    * where that execution's realisedSpreadApr describes the book. */
   soleClean: boolean;
+  fee: number | null;
 };
 
 const EMPTY_SLOT: SlotFill = { size: 0, marketId: 0, execApr: null, baseline: null };
 const EMPTY_BOOK: StepOneBook = {
   a: EMPTY_SLOT,
   b: EMPTY_SLOT,
+  spread: EMPTY_SLOT,
   collateral: '',
   lastResult: null,
   soleClean: false,
+  fee: null,
 };
 
 
@@ -194,7 +200,12 @@ function WizardBody({
 
   /** Fold one accepted execution into the book. Replays never reach this —
    * the ticket skips `onExecuted` for them. */
-  const recordExecution = (result: BorosPairResult, collateral: string, estimate?: BorosPairSimulation | null) =>
+  const recordExecution = (
+    result: BorosPairResult,
+    collateral: string,
+    estimate?: BorosPairSimulation | null,
+    fee?: number | null,
+  ) =>
     setBook((prev) => {
       /**
        * ⚠ Reset before folding when the legs stopped being the same book.
@@ -206,19 +217,26 @@ function WizardBody({
        * whose market differs from the slot's recorded one (or a collateral
        * change) starts the book over from this execution alone.
        */
+      const isSpread = result.legs.length === 1;
+      const slots = isSpread ? [prev.spread] : [prev.a, prev.b];
+      const otherKind = isSpread ? [prev.a, prev.b] : [prev.spread];
       const marketChanged =
-        (legSubmitted(result.legA) && prev.a.marketId !== 0 && prev.a.marketId !== result.legA.marketId) ||
-        (legSubmitted(result.legB) && prev.b.marketId !== 0 && prev.b.marketId !== result.legB.marketId);
+        result.legs.some((leg, i) => legSubmitted(leg) && slots[i] && slots[i].marketId !== 0 && slots[i].marketId !== leg.marketId) ||
+        otherKind.some((slot) => slot.marketId !== 0);
       const collateralChanged =
         prev.collateral !== '' && collateral !== '' && prev.collateral !== collateral;
       const base = marketChanged || collateralChanged ? EMPTY_BOOK : prev;
-      const wasEmpty = Math.abs(base.a.size) <= EPS && Math.abs(base.b.size) <= EPS;
+      const wasEmpty = [base.a, base.b, base.spread].every((slot) => Math.abs(slot.size) <= EPS);
+      const fold = (slot: SlotFill, i: number) =>
+        result.legs[i] ? foldLeg(slot, result.legs[i], estimate?.legs[i]?.sizing ?? null) : slot;
       return {
-        a: foldLeg(base.a, result.legA, estimate?.legA?.sizing ?? null),
-        b: foldLeg(base.b, result.legB, estimate?.legB?.sizing ?? null),
+        a: isSpread ? base.a : fold(base.a, 0),
+        b: isSpread ? base.b : fold(base.b, 1),
+        spread: isSpread ? fold(base.spread, 0) : base.spread,
         collateral: collateral || base.collateral,
         lastResult: result,
-        soleClean: wasEmpty && result.bothLegsSubmitted && !result.partial,
+        soleClean: wasEmpty && result.allLegsSubmitted && !result.partial,
+        fee: fee ?? null,
       };
     });
 
@@ -226,9 +244,10 @@ function WizardBody({
   // the part that does not (residual). Same-signed slots — a deliberate
   // single-leg lock, say — have hedged 0 and read as all-residual, which is
   // exactly what they are.
-  const exposure = Math.abs(book.a.size) + Math.abs(book.b.size);
+  const spreadSize = Math.abs(book.spread.size);
+  const exposure = Math.abs(book.a.size) + Math.abs(book.b.size) + spreadSize;
   const residualSize = Math.abs(book.a.size + book.b.size);
-  const hedged = (exposure - residualSize) / 2;
+  const hedged = (exposure - spreadSize - residualSize) / 2 + spreadSize;
   const stepOneDone = hedged > EPS && residualSize <= EPS * Math.max(1, exposure);
   const lopsided = !stepOneDone && hedged > EPS;
   const oneSided = !stepOneDone && hedged <= EPS && exposure > EPS;
@@ -465,7 +484,7 @@ function WizardBody({
             <div className="rounded-lg border border-emerald-500/25 bg-emerald-500/[0.05] px-3 py-2.5 text-[12.5px] leading-relaxed text-ink-100">
               <span className="mr-2 inline-flex items-center gap-1 font-semibold text-emerald-400"><Check size={14} aria-hidden />Strategy submitted.</span>
               The perp legs are executing — the deal view tracks their fills. Your position appears
-              on the Positions page, which watches all four legs from here on.
+              on the Positions page, which watches all {book.spread.marketId !== 0 ? 'three' : 'four'} legs from here on.
             </div>
             <button
               type="button"
@@ -507,6 +526,12 @@ function WizardBody({
  * after a completion the "last result" describes only the top-up.
  */
 function StepOneReceipt({ book, hedged }: { book: StepOneBook; hedged: number }) {
+  const { address } = useActiveWallet();
+  const context = useBorosPairContext(address, false);
+  const legName = (id: number): string | null => {
+    const row = [...(context.data?.markets ?? []), ...(context.data?.spreadMarkets ?? [])].find((m) => m.marketId === id);
+    return row ? marketName(row) : null;
+  };
   const synthLeg = (slot: SlotFill): BorosLegFill => ({
     marketId: slot.marketId,
     direction: slot.size > 0 ? 'long' : 'short',
@@ -517,9 +542,8 @@ function StepOneReceipt({ book, hedged }: { book: StepOneBook; hedged: number })
     failure: null,
   });
   const result: BorosPairResult = {
-    legA: synthLeg(book.a),
-    legB: synthLeg(book.b),
-    bothLegsSubmitted: true,
+    legs: book.spread.marketId !== 0 ? [synthLeg(book.spread)] : [synthLeg(book.a), synthLeg(book.b)],
+    allLegsSubmitted: true,
     hedgedSize: hedged,
     unhedgedSize: 0,
     unhedgedLeg: null,
@@ -534,6 +558,8 @@ function StepOneReceipt({ book, hedged }: { book: StepOneBook; hedged: number })
     <PairResultReport
       result={result}
       collateral={book.collateral}
+      legName={legName}
+      fee={book.soleClean ? book.fee : null}
       onComplete={() => {}}
       onRetry={() => {}}
     />

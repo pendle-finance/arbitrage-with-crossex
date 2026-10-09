@@ -5,7 +5,7 @@
 import { useMemo, useState, type ReactNode } from 'react';
 import type { PreviewResult, SymbolRule } from '../api/types';
 import { Chip } from '../components/Chip';
-import { VenueIcon } from '../components/AssetIcon';
+import { SpreadIcon, VenueIcon } from '../components/AssetIcon';
 import { SegmentedToggle } from '../components/SegmentedToggle';
 import { bpsOf, fmtAge, fmtUsd, parseSymbol, prettyVenue, sig } from '../lib/fmt';
 import { useNow } from '../lib/useNow';
@@ -150,6 +150,7 @@ export function EstimateCard({
 export function LegCard({
   kind,
   venue,
+  spreadVenues,
   side,
   sub,
   value,
@@ -157,6 +158,7 @@ export function LegCard({
 }: {
   kind: 'Perp' | 'Boros';
   venue: string;
+  spreadVenues?: readonly [string, string] | null;
   side: 'LONG' | 'SHORT';
   sub?: ReactNode;
   value: ReactNode;
@@ -169,7 +171,7 @@ export function LegCard({
       </Chip>
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
         <span className="flex items-center gap-1.5 text-[12.5px] font-semibold text-ink-50">
-          <VenueIcon venue={venue} size={16} />
+          {spreadVenues ? <SpreadIcon venues={spreadVenues} size={16} /> : <VenueIcon venue={venue} size={16} />}
           <span className="truncate">{venue}</span>
           <Chip sm tone={side === 'LONG' ? 'green' : 'red'} className="font-semibold">
             {side}

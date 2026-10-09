@@ -1,0 +1,708 @@
+{
+  "results": [
+    {
+      "marketId": 51,
+      "address": "0xd07cad0197d5502e8a2fe03064ca35e6022be1b8",
+      "tokenId": 2,
+      "imData": {
+        "name": "Hyperliquid ETH 27 Nov 2026",
+        "symbol": "HYPERLIQUID-ETH-27NOV2026",
+        "isIsolatedOnly": false,
+        "maturity": 1795737600,
+        "tickStep": 2,
+        "iTickThresh": 770,
+        "marginFloor": 0.08003999738290433
+      },
+      "config": {
+        "maxOpenOrders": 80,
+        "markRateOracle": "0x0000000000000000000000000000000000000000",
+        "fIndexOracle": "0x627dbebfa2619d886701e7fbc47a12609bca84e9",
+        "hardOICap": "20000000000000000000000",
+        "takerFee": "500000000000000",
+        "otcFee": "500000000000000",
+        "liqSettings": {
+          "base": "250000000000000000",
+          "slope": "500000000000000000",
+          "feeRate": "500000000000000"
+        },
+        "kIM": "645161290322580645",
+        "kMM": "444444444444444444",
+        "tThresh": 432000,
+        "maxRateDeviationFactorBase1e4": 2500,
+        "closingOrderBoundBase1e4": 1000,
+        "loUpperConstBase1e4": 71,
+        "loUpperSlopeBase1e4": 10889,
+        "loLowerConstBase1e4": -71,
+        "loLowerSlopeBase1e4": 9111,
+        "status": 2,
+        "useImpliedAsMarkRate": true,
+        "softOICap": 9500,
+        "cloLowerThresh": 9300,
+        "cloUpperThresh": 9500
+      },
+      "extConfig": {
+        "ammAddress": "0xc1c3723f4b9dafd1758e980e55ee943c4238b127",
+        "ammId": 510,
+        "isPositiveAMM": true,
+        "settleFeeRate": "1000000000000000",
+        "paymentPeriod": 3600,
+        "maxUpdateDelay": 900
+      },
+      "metadata": {
+        "name": "ETHUSDC",
+        "underlyingSymbol": "ETH",
+        "fundingRateSymbol": "hyperliquid-eth",
+        "maxLeverage": 1.55,
+        "isUiWhitelisted": true,
+        "isSpreadMarket": false
+      },
+      "data": {
+        "volume24h": 0,
+        "notionalOI": 626.9950134781812,
+        "markApr": 0.0859964336437619,
+        "lastTradedApr": 0.0859964336437619,
+        "midApr": 0.0859,
+        "bestBid": 0,
+        "ammImpliedApr": 0.0859,
+        "floatingApr": 0.046527863999999995,
+        "longYieldApr": -0.45895588888324695,
+        "nextSettlementTime": 1791446400,
+        "timeToMaturity": 4294800,
+        "assetMarkPrice": 2571.7,
+        "rateSensitivity": 0.0013618721461187214,
+        "settlementsToMaturity": 1193,
+        "dailyVolatility": 0,
+        "dailyVolatilityState": "ready"
+      },
+      "platform": {
+        "name": "Hyperliquid",
+        "platformId": "Hyperliquid"
+      }
+    },
+    {
+      "marketId": 58,
+      "address": "0x37ecca739837efcb7692ccd5b142ea64bebe8d13",
+      "tokenId": 1,
+      "imData": {
+        "name": "Hyperliquid BTC - Gate BTCUSDT 27 Nov 2026",
+        "symbol": "HYPERLIQUID-BTC-GATE-BTCUSDT-27NOV2026",
+        "isIsolatedOnly": false,
+        "maturity": 1795737600,
+        "tickStep": 2,
+        "iTickThresh": 770,
+        "marginFloor": 0.08003999738290433
+      },
+      "config": {
+        "maxOpenOrders": 80,
+        "markRateOracle": "0x0000000000000000000000000000000000000000",
+        "fIndexOracle": "0x060933d6861b641a959146d61e05e2f45fa20441",
+        "hardOICap": "666000000000000000000",
+        "takerFee": "1000000000000000",
+        "otcFee": "1000000000000000",
+        "liqSettings": {
+          "base": "250000000000000000",
+          "slope": "500000000000000000",
+          "feeRate": "1000000000000000"
+        },
+        "kIM": "645161290322580645",
+        "kMM": "444444444444444444",
+        "tThresh": 432000,
+        "maxRateDeviationFactorBase1e4": 2500,
+        "closingOrderBoundBase1e4": 1000,
+        "loUpperConstBase1e4": 71,
+        "loUpperSlopeBase1e4": 10889,
+        "loLowerConstBase1e4": -71,
+        "loLowerSlopeBase1e4": 9111,
+        "status": 2,
+        "useImpliedAsMarkRate": true,
+        "softOICap": 316.35,
+        "cloLowerThresh": 309.69,
+        "cloUpperThresh": 316.35
+      },
+      "extConfig": {
+        "ammAddress": "0x10494dce5c2a3ffade29fd63d3c05be8b9367d12",
+        "ammId": 580,
+        "isPositiveAMM": true,
+        "settleFeeRate": "2000000000000000",
+        "paymentPeriod": 28800,
+        "maxUpdateDelay": 900
+      },
+      "metadata": {
+        "name": "BTC Spread",
+        "underlyingSymbol": "BTC",
+        "fundingRateSymbol": "spread-btc-hl-gate",
+        "maxLeverage": 1.55,
+        "isUiWhitelisted": true,
+        "isSpreadMarket": true
+      },
+      "data": {
+        "volume24h": 0.0006,
+        "notionalOI": 15.5,
+        "markApr": 0.060031412955532215,
+        "lastTradedApr": 0.060031412955532215,
+        "midApr": 0.06,
+        "ammImpliedApr": 0.06,
+        "floatingApr": 0.04718749200000001,
+        "longYieldApr": -0.16008371476842062,
+        "nextSettlementTime": 1791446400,
+        "timeToMaturity": 4320000,
+        "assetMarkPrice": 83103,
+        "rateSensitivity": 0.0013698630136986301,
+        "settlementsToMaturity": 150,
+        "dailyVolatility": 6.6682770416548465e-15,
+        "dailyVolatilityState": "calibrating"
+      },
+      "platform": {
+        "name": "HL-GATE",
+        "platformId": "hyperliquid-gate"
+      }
+    },
+    {
+      "marketId": 59,
+      "address": "0xd4f37189f925e2e4cec290089fa9f8602af50cc9",
+      "tokenId": 2,
+      "imData": {
+        "name": "Hyperliquid ETH - Gate ETHUSDT 27 Nov 2026",
+        "symbol": "HYPERLIQUID-ETH-GATE-ETHUSDT-27NOV2026",
+        "isIsolatedOnly": false,
+        "maturity": 1795737600,
+        "tickStep": 2,
+        "iTickThresh": 770,
+        "marginFloor": 0.08003999738290433
+      },
+      "config": {
+        "maxOpenOrders": 80,
+        "markRateOracle": "0x0000000000000000000000000000000000000000",
+        "fIndexOracle": "0xae63fe430dc38ab6753019b7e0ab1db7caabc352",
+        "hardOICap": "20000000000000000000000",
+        "takerFee": "1000000000000000",
+        "otcFee": "1000000000000000",
+        "liqSettings": {
+          "base": "250000000000000000",
+          "slope": "500000000000000000",
+          "feeRate": "1000000000000000"
+        },
+        "kIM": "645161290322580645",
+        "kMM": "444444444444444444",
+        "tThresh": 432000,
+        "maxRateDeviationFactorBase1e4": 2500,
+        "closingOrderBoundBase1e4": 1000,
+        "loUpperConstBase1e4": 71,
+        "loUpperSlopeBase1e4": 10889,
+        "loLowerConstBase1e4": -71,
+        "loLowerSlopeBase1e4": 9111,
+        "status": 2,
+        "useImpliedAsMarkRate": true,
+        "softOICap": 9500,
+        "cloLowerThresh": 9300,
+        "cloUpperThresh": 9500
+      },
+      "extConfig": {
+        "ammAddress": "0x442aeb05804f20faa90a567d395642b484b1671f",
+        "ammId": 590,
+        "isPositiveAMM": true,
+        "settleFeeRate": "2000000000000000",
+        "paymentPeriod": 28800,
+        "maxUpdateDelay": 900
+      },
+      "metadata": {
+        "name": "ETH Spread",
+        "underlyingSymbol": "ETH",
+        "fundingRateSymbol": "spread-eth-hl-gate",
+        "maxLeverage": 1.55,
+        "isUiWhitelisted": true,
+        "isSpreadMarket": true
+      },
+      "data": {
+        "volume24h": 0.04,
+        "notionalOI": 386.2,
+        "markApr": 0.060031412955532215,
+        "lastTradedApr": 0.060031412955532215,
+        "midApr": 0.060003169697689526,
+        "bestBid": 0.010049914580074619,
+        "ammImpliedApr": 0.060003169697689526,
+        "floatingApr": 0.04324286399999999,
+        "longYieldApr": -0.20937932753474567,
+        "nextSettlementTime": 1791446400,
+        "timeToMaturity": 4320000,
+        "assetMarkPrice": 2571.7,
+        "rateSensitivity": 0.0013698630136986301,
+        "settlementsToMaturity": 150,
+        "dailyVolatility": 7.924244231002908e-07,
+        "dailyVolatilityState": "calibrating"
+      },
+      "platform": {
+        "name": "HL-GATE",
+        "platformId": "hyperliquid-gate"
+      }
+    },
+    {
+      "marketId": 60,
+      "address": "0x906150e7a68d3ec9e240a39accea5ae20960efee",
+      "tokenId": 2,
+      "imData": {
+        "name": "Gate ETHUSDT 27 Nov 2026",
+        "symbol": "GATE-ETHUSDT-27NOV2026",
+        "isIsolatedOnly": false,
+        "maturity": 1795737600,
+        "tickStep": 2,
+        "iTickThresh": 583,
+        "marginFloor": 0.060031412955532215
+      },
+      "config": {
+        "maxOpenOrders": 80,
+        "markRateOracle": "0x0000000000000000000000000000000000000000",
+        "fIndexOracle": "0x22210c742168b72cd77cc2221f0f96d732c800b2",
+        "hardOICap": "20000000000000000000000",
+        "takerFee": "500000000000000",
+        "otcFee": "500000000000000",
+        "liqSettings": {
+          "base": "250000000000000000",
+          "slope": "500000000000000000",
+          "feeRate": "500000000000000"
+        },
+        "kIM": "645161290322580645",
+        "kMM": "444444444444444444",
+        "tThresh": 864000,
+        "maxRateDeviationFactorBase1e4": 2500,
+        "closingOrderBoundBase1e4": 1000,
+        "loUpperConstBase1e4": 53,
+        "loUpperSlopeBase1e4": 10889,
+        "loLowerConstBase1e4": -53,
+        "loLowerSlopeBase1e4": 9111,
+        "status": 2,
+        "useImpliedAsMarkRate": true,
+        "softOICap": 9500,
+        "cloLowerThresh": 9300,
+        "cloUpperThresh": 9500
+      },
+      "extConfig": {
+        "ammAddress": "0x4a5c84125d9f40470d98c50edec94da1603dec25",
+        "ammId": 600,
+        "isPositiveAMM": true,
+        "settleFeeRate": "1000000000000000",
+        "paymentPeriod": 28800,
+        "maxUpdateDelay": 900
+      },
+      "metadata": {
+        "name": "ETHUSDT",
+        "underlyingSymbol": "ETH",
+        "fundingRateSymbol": "gate-eth",
+        "maxLeverage": 1.55,
+        "isUiWhitelisted": true,
+        "isSpreadMarket": false
+      },
+      "data": {
+        "volume24h": 0.02,
+        "notionalOI": 386.2,
+        "markApr": 0.060031412955532215,
+        "lastTradedApr": 0.060031412955532215,
+        "midApr": 0.06,
+        "ammImpliedApr": 0.06,
+        "floatingApr": 0.003285,
+        "longYieldApr": -0.9447685738382346,
+        "nextSettlementTime": 1791446400,
+        "timeToMaturity": 4320000,
+        "assetMarkPrice": 2571.72,
+        "rateSensitivity": 0.0013698630136986301,
+        "settlementsToMaturity": 150,
+        "dailyVolatility": 0,
+        "dailyVolatilityState": "ready"
+      },
+      "platform": {
+        "name": "Gate",
+        "platformId": "Gate"
+      }
+    },
+    {
+      "marketId": 61,
+      "address": "0x11fa41ff0ae227a4b8bc52a73ba2a5dba70c3b2a",
+      "tokenId": 2,
+      "imData": {
+        "name": "Hyperliquid ETH 30 Oct 2026",
+        "symbol": "HYPERLIQUID-ETH-30OCT2026",
+        "isIsolatedOnly": false,
+        "maturity": 1793318400,
+        "tickStep": 2,
+        "iTickThresh": 770,
+        "marginFloor": 0.08003999738290433
+      },
+      "config": {
+        "maxOpenOrders": 80,
+        "markRateOracle": "0x0000000000000000000000000000000000000000",
+        "fIndexOracle": "0x25b144a2b5a00d2c9ae3b79ee4bf4130ccc149e8",
+        "hardOICap": "20000000000000000000000",
+        "takerFee": "500000000000000",
+        "otcFee": "500000000000000",
+        "liqSettings": {
+          "base": "250000000000000000",
+          "slope": "500000000000000000",
+          "feeRate": "500000000000000"
+        },
+        "kIM": "645161290322580645",
+        "kMM": "444444444444444444",
+        "tThresh": 432000,
+        "maxRateDeviationFactorBase1e4": 2500,
+        "closingOrderBoundBase1e4": 1000,
+        "loUpperConstBase1e4": 71,
+        "loUpperSlopeBase1e4": 10889,
+        "loLowerConstBase1e4": -71,
+        "loLowerSlopeBase1e4": 9111,
+        "status": 2,
+        "useImpliedAsMarkRate": true,
+        "softOICap": 9500,
+        "cloLowerThresh": 9300,
+        "cloUpperThresh": 9500
+      },
+      "extConfig": {
+        "ammAddress": "0xee212a535e6b0e750912551c046756d05d10546f",
+        "ammId": 610,
+        "isPositiveAMM": true,
+        "settleFeeRate": "1000000000000000",
+        "paymentPeriod": 3600,
+        "maxUpdateDelay": 900
+      },
+      "metadata": {
+        "name": "ETHUSDC",
+        "underlyingSymbol": "ETH",
+        "fundingRateSymbol": "hyperliquid-eth",
+        "maxLeverage": 1.55,
+        "isUiWhitelisted": true,
+        "isSpreadMarket": false
+      },
+      "data": {
+        "volume24h": 0.02,
+        "notionalOI": 386.2,
+        "markApr": 0.060031412955532215,
+        "lastTradedApr": 0.060031412955532215,
+        "midApr": 0.06,
+        "ammImpliedApr": 0.06,
+        "floatingApr": 0.046527863999999995,
+        "longYieldApr": -0.1683274468268533,
+        "nextSettlementTime": 1791446400,
+        "timeToMaturity": 1875600,
+        "assetMarkPrice": 2571.7,
+        "rateSensitivity": 0.0005947488584474885,
+        "settlementsToMaturity": 521,
+        "dailyVolatility": 0,
+        "dailyVolatilityState": "ready"
+      },
+      "platform": {
+        "name": "Hyperliquid",
+        "platformId": "Hyperliquid"
+      }
+    },
+    {
+      "marketId": 62,
+      "address": "0x8c27890bf323097d4260b13d4ecd720fa23a3e40",
+      "tokenId": 2,
+      "imData": {
+        "name": "Gate ETHUSDT 30 Oct 2026",
+        "symbol": "GATE-ETHUSDT-30OCT2026",
+        "isIsolatedOnly": false,
+        "maturity": 1793318400,
+        "tickStep": 2,
+        "iTickThresh": 583,
+        "marginFloor": 0.060031412955532215
+      },
+      "config": {
+        "maxOpenOrders": 80,
+        "markRateOracle": "0x0000000000000000000000000000000000000000",
+        "fIndexOracle": "0x96017c74123076c8003f0f3df5e7faee3910fab5",
+        "hardOICap": "20000000000000000000000",
+        "takerFee": "500000000000000",
+        "otcFee": "500000000000000",
+        "liqSettings": {
+          "base": "250000000000000000",
+          "slope": "500000000000000000",
+          "feeRate": "500000000000000"
+        },
+        "kIM": "645161290322580645",
+        "kMM": "444444444444444444",
+        "tThresh": 864000,
+        "maxRateDeviationFactorBase1e4": 2500,
+        "closingOrderBoundBase1e4": 1000,
+        "loUpperConstBase1e4": 53,
+        "loUpperSlopeBase1e4": 10889,
+        "loLowerConstBase1e4": -53,
+        "loLowerSlopeBase1e4": 9111,
+        "status": 2,
+        "useImpliedAsMarkRate": true,
+        "softOICap": 9500,
+        "cloLowerThresh": 9300,
+        "cloUpperThresh": 9500
+      },
+      "extConfig": {
+        "ammAddress": "0x88b46f3df86ae17c2772480f9a21bf99c2d61d4e",
+        "ammId": 620,
+        "isPositiveAMM": true,
+        "settleFeeRate": "1000000000000000",
+        "paymentPeriod": 28800,
+        "maxUpdateDelay": 900
+      },
+      "metadata": {
+        "name": "ETHUSDT",
+        "underlyingSymbol": "ETH",
+        "fundingRateSymbol": "gate-eth",
+        "maxLeverage": 1.55,
+        "isUiWhitelisted": true,
+        "isSpreadMarket": false
+      },
+      "data": {
+        "volume24h": 0.02,
+        "notionalOI": 386.2,
+        "markApr": 0.060031412955532215,
+        "lastTradedApr": 0.060031412955532215,
+        "midApr": 0.06,
+        "ammImpliedApr": 0.06,
+        "floatingApr": 0.003285,
+        "longYieldApr": -0.9447685738382346,
+        "nextSettlementTime": 1791446400,
+        "timeToMaturity": 1900800,
+        "assetMarkPrice": 2571.72,
+        "rateSensitivity": 0.0006027397260273973,
+        "settlementsToMaturity": 66,
+        "dailyVolatility": null,
+        "dailyVolatilityState": "new"
+      },
+      "platform": {
+        "name": "Gate",
+        "platformId": "Gate"
+      }
+    },
+    {
+      "marketId": 63,
+      "address": "0x9de019f718c262c67883990e097fe2b408331445",
+      "tokenId": 2,
+      "imData": {
+        "name": "Hyperliquid ETH - Gate ETHUSDT 30 Oct 2026",
+        "symbol": "HYPERLIQUID-ETH-GATE-ETHUSDT-30OCT2026",
+        "isIsolatedOnly": false,
+        "maturity": 1793318400,
+        "tickStep": 2,
+        "iTickThresh": 770,
+        "marginFloor": 0.08003999738290433
+      },
+      "config": {
+        "maxOpenOrders": 80,
+        "markRateOracle": "0x0000000000000000000000000000000000000000",
+        "fIndexOracle": "0xaeb09725cd24885029c108ce01a90c3d5d730a50",
+        "hardOICap": "20000000000000000000000",
+        "takerFee": "1000000000000000",
+        "otcFee": "1000000000000000",
+        "liqSettings": {
+          "base": "250000000000000000",
+          "slope": "500000000000000000",
+          "feeRate": "1000000000000000"
+        },
+        "kIM": "645161290322580645",
+        "kMM": "444444444444444444",
+        "tThresh": 432000,
+        "maxRateDeviationFactorBase1e4": 2500,
+        "closingOrderBoundBase1e4": 1000,
+        "loUpperConstBase1e4": 71,
+        "loUpperSlopeBase1e4": 10889,
+        "loLowerConstBase1e4": -71,
+        "loLowerSlopeBase1e4": 9111,
+        "status": 2,
+        "useImpliedAsMarkRate": true,
+        "softOICap": 9500,
+        "cloLowerThresh": 9300,
+        "cloUpperThresh": 9500
+      },
+      "extConfig": {
+        "ammAddress": "0xeb7ddccf5b778474913289043d283f9354a396de",
+        "ammId": 630,
+        "isPositiveAMM": true,
+        "settleFeeRate": "2000000000000000",
+        "paymentPeriod": 28800,
+        "maxUpdateDelay": 900
+      },
+      "metadata": {
+        "name": "ETH Spread",
+        "underlyingSymbol": "ETH",
+        "fundingRateSymbol": "spread-eth-hl-gate",
+        "maxLeverage": 1.55,
+        "isUiWhitelisted": true,
+        "isSpreadMarket": true
+      },
+      "data": {
+        "volume24h": 0.02,
+        "notionalOI": 386.2,
+        "markApr": 0.060031412955532215,
+        "lastTradedApr": 0.060031412955532215,
+        "midApr": 0.06,
+        "ammImpliedApr": 0.06,
+        "floatingApr": 0.04324286399999999,
+        "longYieldApr": -0.20936942717931192,
+        "nextSettlementTime": 1791446400,
+        "timeToMaturity": 1900800,
+        "assetMarkPrice": 2571.7,
+        "rateSensitivity": 0.0006027397260273973,
+        "settlementsToMaturity": 66,
+        "dailyVolatility": 7.924244231002908e-07,
+        "dailyVolatilityState": "calibrating"
+      },
+      "platform": {
+        "name": "HL-GATE",
+        "platformId": "hyperliquid-gate"
+      }
+    },
+    {
+      "marketId": 64,
+      "address": "0x75a8530c141d860721c848406a613ca47731faae",
+      "tokenId": 2,
+      "imData": {
+        "name": "Hyperliquid ETH 25 Dec 2026",
+        "symbol": "HYPERLIQUID-ETH-25DEC2026",
+        "isIsolatedOnly": false,
+        "maturity": 1798156800,
+        "tickStep": 2,
+        "iTickThresh": 770,
+        "marginFloor": 0.08003999738290433
+      },
+      "config": {
+        "maxOpenOrders": 80,
+        "markRateOracle": "0x0000000000000000000000000000000000000000",
+        "fIndexOracle": "0xb3cd670b9b138ee75cf9c0213a704ebe7e225fd7",
+        "hardOICap": "20000000000000000000000",
+        "takerFee": "500000000000000",
+        "otcFee": "500000000000000",
+        "liqSettings": {
+          "base": "250000000000000000",
+          "slope": "500000000000000000",
+          "feeRate": "500000000000000"
+        },
+        "kIM": "476190476190476190",
+        "kMM": "333333333333333333",
+        "tThresh": 432000,
+        "maxRateDeviationFactorBase1e4": 2500,
+        "closingOrderBoundBase1e4": 1000,
+        "loUpperConstBase1e4": 53,
+        "loUpperSlopeBase1e4": 10667,
+        "loLowerConstBase1e4": -53,
+        "loLowerSlopeBase1e4": 9333,
+        "status": 2,
+        "useImpliedAsMarkRate": true,
+        "softOICap": 9500,
+        "cloLowerThresh": 9300,
+        "cloUpperThresh": 9500
+      },
+      "extConfig": {
+        "ammAddress": "0xf697fe74c9e3f4c4f75e01c3e3131b3cb2c0389c",
+        "ammId": 640,
+        "isPositiveAMM": true,
+        "settleFeeRate": "1000000000000000",
+        "paymentPeriod": 3600,
+        "maxUpdateDelay": 900
+      },
+      "metadata": {
+        "name": "ETHUSDC",
+        "underlyingSymbol": "ETH",
+        "fundingRateSymbol": "hyperliquid-eth",
+        "maxLeverage": 2.1,
+        "isUiWhitelisted": true,
+        "isSpreadMarket": false
+      },
+      "data": {
+        "volume24h": 0.02,
+        "notionalOI": 386.2,
+        "markApr": 0.060031412955532215,
+        "lastTradedApr": 0.060031412955532215,
+        "midApr": 0.06,
+        "ammImpliedApr": 0.06,
+        "floatingApr": 0.046527863999999995,
+        "longYieldApr": -0.16832744682685327,
+        "nextSettlementTime": 1791446400,
+        "timeToMaturity": 6714000,
+        "assetMarkPrice": 2571.7,
+        "rateSensitivity": 0.0021289954337899548,
+        "settlementsToMaturity": 1865,
+        "dailyVolatility": null,
+        "dailyVolatilityState": "new"
+      },
+      "platform": {
+        "name": "Hyperliquid",
+        "platformId": "Hyperliquid"
+      }
+    },
+    {
+      "marketId": 65,
+      "address": "0x623275ec9771ff65e2fe5ae654577f8e203320af",
+      "tokenId": 2,
+      "imData": {
+        "name": "Gate ETHUSDT 25 Dec 2026",
+        "symbol": "GATE-ETHUSDT-25DEC2026",
+        "isIsolatedOnly": false,
+        "maturity": 1798156800,
+        "tickStep": 2,
+        "iTickThresh": 583,
+        "marginFloor": 0.060031412955532215
+      },
+      "config": {
+        "maxOpenOrders": 80,
+        "markRateOracle": "0x0000000000000000000000000000000000000000",
+        "fIndexOracle": "0x06b2bf2b1647763bb824003af02ca5464077aed0",
+        "hardOICap": "20000000000000000000000",
+        "takerFee": "500000000000000",
+        "otcFee": "500000000000000",
+        "liqSettings": {
+          "base": "250000000000000000",
+          "slope": "500000000000000000",
+          "feeRate": "500000000000000"
+        },
+        "kIM": "645161290322580645",
+        "kMM": "444444444444444444",
+        "tThresh": 864000,
+        "maxRateDeviationFactorBase1e4": 2500,
+        "closingOrderBoundBase1e4": 1000,
+        "loUpperConstBase1e4": 53,
+        "loUpperSlopeBase1e4": 10889,
+        "loLowerConstBase1e4": -53,
+        "loLowerSlopeBase1e4": 9111,
+        "status": 2,
+        "useImpliedAsMarkRate": true,
+        "softOICap": 9500,
+        "cloLowerThresh": 9300,
+        "cloUpperThresh": 9500
+      },
+      "extConfig": {
+        "ammAddress": "0x42dc9aa7ae5d1a33f9c7ae26516b8d7592e093e9",
+        "ammId": 650,
+        "isPositiveAMM": true,
+        "settleFeeRate": "1000000000000000",
+        "paymentPeriod": 28800,
+        "maxUpdateDelay": 900
+      },
+      "metadata": {
+        "name": "ETHUSDT",
+        "underlyingSymbol": "ETH",
+        "fundingRateSymbol": "gate-eth",
+        "maxLeverage": 1.55,
+        "isUiWhitelisted": true,
+        "isSpreadMarket": false
+      },
+      "data": {
+        "volume24h": 0.02,
+        "notionalOI": 386.2,
+        "markApr": 0.060031412955532215,
+        "lastTradedApr": 0.060031412955532215,
+        "midApr": 0.06,
+        "ammImpliedApr": 0.06,
+        "floatingApr": 0.003285,
+        "longYieldApr": -0.9447685738382346,
+        "nextSettlementTime": 1791446400,
+        "timeToMaturity": 6739200,
+        "assetMarkPrice": 2571.72,
+        "rateSensitivity": 0.002136986301369863,
+        "settlementsToMaturity": 234,
+        "dailyVolatility": null,
+        "dailyVolatilityState": "new"
+      },
+      "platform": {
+        "name": "Gate",
+        "platformId": "Gate"
+      }
+    }
+  ]
+}

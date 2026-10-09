@@ -105,6 +105,30 @@ describe('close sizing from $50 to $6,000,000', () => {
     const { size, sizeWei } = reducingOrderSize((-(100_000n * WEI)).toString(), 250_000);
     expect(size).toBeCloseTo(100_000, 6);
     expect(size).toBeLessThanOrEqual(100_000);
-    expect(sizeWei).toBeUndefined();
+    expect(sizeWei).toBe((100_000n * WEI).toString());
+  });
+
+  const fullCloses = [
+    { label: '$50', openWei: 19_437_123_456_789_013n },
+    { label: '$6M', openWei: 2_333_123_456_789_012_345_678n },
+  ];
+
+  it.each(fullCloses)('sends the open wei on a full close at $label, and a hair under', async ({ openWei }) => {
+    const openSize = Math.abs(norm18(openWei.toString()));
+    for (const requested of [openSize, openSize * (1 - 1e-10)]) {
+      const { sizeWei } = reducingOrderSize(openWei.toString(), requested);
+      expect(sizeWei).toBe(openWei.toString());
+      const { sizes, client } = relayCapture();
+      await client.placeMarketOrders(
+        [{ marketId: HL, direction: 'short', size: requested, limitApr: 0.08, clientOrderId: 'scale-full-1', sizeWei: sizeWei! }],
+        { reducing: true },
+      );
+      expect(sizes).toEqual([openWei.toString()]);
+    }
+  });
+
+  it.each(fullCloses)('keeps a part close at $label off the open wei', ({ openWei }) => {
+    const half = Math.abs(norm18(openWei.toString())) / 2;
+    expect(reducingOrderSize(openWei.toString(), half).sizeWei).toBeUndefined();
   });
 });

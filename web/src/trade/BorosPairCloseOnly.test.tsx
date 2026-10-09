@@ -74,8 +74,9 @@ const simLeg = (over: Record<string, unknown> = {}) => ({
 });
 
 const simulation = () => ({
-  legA: simLeg(),
-  legB: simLeg({
+  legs: [
+    simLeg(),
+    simLeg({
     marketId: BN,
     marketName: 'Binance ETHUSDT 31 Aug 2026',
     venue: 'Binance',
@@ -93,7 +94,8 @@ const simulation = () => ({
       orderSide: 'long',
     },
   }),
-  receiveLeg: 'A',
+  ],
+  receiveLeg: 0,
   estSpreadApr: 0.045,
   worstSpreadApr: 0.04,
   costToCrossSize: 8.2,
@@ -138,14 +140,13 @@ function handlers(opts: { onExecute?: (body: Record<string, unknown>) => void } 
       return HttpResponse.json(
         env({
           result: {
-            legA: { marketId: HL, direction: 'short', filledSize: 100_000, shortfallSize: 0, execApr: 0.09, feeSize: 4, failure: null },
-            legB: { marketId: BN, direction: 'long', filledSize: 100_000, shortfallSize: 0, execApr: 0.042, feeSize: 4, failure: null },
+            legs: [{ marketId: HL, direction: 'short', filledSize: 100_000, shortfallSize: 0, execApr: 0.09, feeSize: 4, failure: null }, { marketId: BN, direction: 'long', filledSize: 100_000, shortfallSize: 0, execApr: 0.042, feeSize: 4, failure: null }],
             hedgedSize: 100_000,
             unhedgedSize: 0,
             unhedgedLeg: null,
             realisedSpreadApr: 0.045,
             partial: false,
-            bothLegsSubmitted: true,
+            allLegsSubmitted: true,
           },
           estimate: simulation(),
           warnings: [],
@@ -240,7 +241,8 @@ describe('BorosPairTicket — target mode on the closeOnlyALong fixture body', (
           env({
             simulation: {
               ...simulation(),
-              legA: simLeg({
+              legs: [
+              simLeg({
                 marketId: marketA.marketId,
                 marketName: marketA.name,
                 venue: marketA.venue,
@@ -255,7 +257,7 @@ describe('BorosPairTicket — target mode on the closeOnlyALong fixture body', (
                   orderSide: 'long',
                 },
               }),
-              legB: simLeg({
+              simLeg({
                 marketId: marketB.marketId,
                 marketName: marketB.name,
                 venue: marketB.venue,
@@ -270,6 +272,7 @@ describe('BorosPairTicket — target mode on the closeOnlyALong fixture body', (
                   orderSide: 'short',
                 },
               }),
+              ],
             },
             gate: { blockers: [], warnings: [], requiresAcknowledgement: false, opposingLegs: [] },
             eligibility: { eligible: true, code: null, reason: null },

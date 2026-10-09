@@ -6,6 +6,7 @@
  * popup DISPLAYS — this module never re-derives them, so what the viewer of
  * the link sees is exactly what the sharer saw. */
 import type { ShareLegV1, SharePayloadV1 } from '../lib/shareCodec';
+import { spreadShareVenue } from '../lib/spread';
 import { pairLockedSpread, type PairEstimate } from './assets/assetModel';
 
 /** PairEstimate → the same v1 payload, for the asset view's pair popup.
@@ -44,7 +45,7 @@ export function pairSharePayload(
   const legs: ShareLegV1[] = pair.legs.map((l) => {
     const leg: ShareLegV1 = {
       k: l.kind === 'yu' ? 'b' : 'p',
-      x: l.venue,
+      x: l.kind === 'yu' && l.spreadVenues ? spreadShareVenue(l.spreadVenues) : l.venue,
       s: l.side === 'SHORT' ? 'S' : 'L',
       n: round100(l.notionalUsd),
     };

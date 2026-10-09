@@ -1,7 +1,7 @@
 /**
  * The roll-over path through the asset card: a pair whose rate legs mature
  * inside the roll window (EXPIRY_WARN_SEC) is counted once in the banner, flagged on its
- * card in the 4 Leg Pairs tab, and offered a Roll over button that opens
+ * card in the Pairs tab, and offered a Roll over button that opens
  * the popup. A pair outside the window keeps only the button, un-nudged.
  */
 import { cleanup, screen, waitFor, within } from '@testing-library/react';
@@ -33,6 +33,7 @@ const perp = (o: Partial<AssetPerpOpen> & { venue: string; side: 'LONG' | 'SHORT
 });
 
 const yu = (o: Partial<AssetBorosOpen> & { marketId: number; venue: string; side: 'LONG' | 'SHORT'; sizeToken: number; maturity: number }): AssetBorosOpen => ({
+  spreadVenues: null,
   collateral: 'ETH',
   notionalUsd: o.sizeToken * 2500,
   entryApr: 0.08,
@@ -111,7 +112,7 @@ describe('AssetCard — roll over', () => {
     };
     renderCard(book(8));
     await userEvent.click(await screen.findByRole('button', { name: /pair due to roll/ }));
-    const panel = screen.getByRole('tabpanel', { name: /4 Leg Pairs/ });
+    const panel = screen.getByRole('tabpanel', { name: /^Pairs/ });
     // The pair's card is what lands at the top of the viewport.
     expect(scrolled).toHaveLength(1);
     expect(scrolled[0]).toContainElement(within(panel).getByRole('button', { name: /Gate LONG \/ Hyperliquid SHORT/ }));
@@ -129,16 +130,16 @@ describe('AssetCard — roll over', () => {
     // The banner counts pairs and sends the trader to the pairs tab — which
     // is the tab a card opens on (his call 2026-09-20), so leave it first.
     const banner = await screen.findByRole('button', { name: /^1 pair due to roll/ });
-    expect(screen.getByRole('tab', { name: /4 Leg Pairs/ })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('tab', { name: /^Pairs/ })).toHaveAttribute('aria-selected', 'true');
     await userEvent.click(screen.getByRole('tab', { name: /Funding Bundles/ }));
     expect(screen.getByRole('tab', { name: /Funding Bundles/ })).toHaveAttribute('aria-selected', 'true');
     await userEvent.click(banner);
-    expect(screen.getByRole('tab', { name: /4 Leg Pairs/ })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('tab', { name: /^Pairs/ })).toHaveAttribute('aria-selected', 'true');
 
     // The summary row carries the FLAG; the action lives in the expansion —
     // and a rollable pair opens EXPANDED, so the action is already on
     // screen (his call 2026-09-18). No click on the row: that would fold it.
-    const panel = screen.getByRole('tabpanel', { name: /4 Leg Pairs/ });
+    const panel = screen.getByRole('tabpanel', { name: /^Pairs/ });
     expect(within(panel).getByText('ready to roll')).toBeInTheDocument();
     await userEvent.click(within(panel).getByRole('button', { name: 'Roll over' }));
 
@@ -249,7 +250,8 @@ describe('AssetCard — roll over', () => {
         }),
       ),
       http.post('/api/boros/pair/simulate', async ({ request }) => {
-        const body = (await request.json()) as { size: number; intent: string; legA: { marketId: number; direction: 'long' | 'short'; slippageApr: number }; legB: { marketId: number; direction: 'long' | 'short' } };
+        const req = (await request.json()) as { intent: string; legs: { marketId: number; direction: 'long' | 'short'; slippageApr: number; size: number }[] };
+        const body = { intent: req.intent, size: req.legs[0].size, legA: req.legs[0], legs: req.legs };
         sims.push(body);
         // A leg that opens from flat: the roll is charged its whole margin.
         const leg = (marketId: number, direction: 'long' | 'short') => ({
@@ -274,9 +276,8 @@ describe('AssetCard — roll over', () => {
           ok: true,
           data: {
             simulation: {
-              legA: leg(body.legA.marketId, body.legA.direction),
-              legB: leg(body.legB.marketId, body.legB.direction),
-              receiveLeg: 'B',
+              legs: body.legs.map((l) => leg(l.marketId, l.direction)),
+              receiveLeg: 1,
               // 50% on notional: 20 ETH × $2,500 × 0.5 = $25k a year over
               // $10k of perp margin (a fifth of $50k) + 2 ETH of new Boros
               // margin ($5k) — 166.67% on capital, far above the row's rate.
@@ -303,7 +304,7 @@ describe('AssetCard — roll over', () => {
     localStorage.setItem('crossex.strategy.v1', JSON.stringify({ address: '0x1111111111111111111111111111111111111111' }));
     renderCard(book(8));
 
-    const panel = screen.getByRole('tabpanel', { name: /4 Leg Pairs/ });
+    const panel = screen.getByRole('tabpanel', { name: /^Pairs/ });
     // A generous wait: the context and the probe are two round trips, and the
     // full suite runs this file under load.
     expect(await within(panel).findByText('roll opportunity', undefined, { timeout: 10_000 })).toBeInTheDocument();
@@ -346,7 +347,7 @@ describe('AssetCard — roll over', () => {
     // The book after a missed roll: both perps still on, both rate legs gone.
     const g = { ...book(8), borosOpen: [] };
     renderCard(g);
-    const panel = screen.getByRole('tabpanel', { name: /4 Leg Pairs/ });
+    const panel = screen.getByRole('tabpanel', { name: /^Pairs/ });
     const row = within(panel).getByRole('button', { name: /Gate LONG \/ Hyperliquid SHORT Boros legs missing/ });
     expect(row).toHaveAttribute('aria-expanded', 'true');
     // Both gaps are named, each with its own action, plus the one for both.
@@ -357,14 +358,14 @@ describe('AssetCard — roll over', () => {
     expect(within(panel).getByRole('button', { name: 'Close perps' })).toBeEnabled();
     // Nothing is left over, so there is no "Ungrouped legs" card at all.
     expect(within(panel).queryByText('Ungrouped legs')).not.toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: /4 Leg Pairs/ })).toHaveTextContent('1');
+    expect(screen.getByRole('tab', { name: /^Pairs/ })).toHaveTextContent('1');
   });
 
   it('with ONE rate leg still on, only the other side is missing — and only it can be opened', () => {
     const base = book(8);
     const g = { ...base, borosOpen: base.borosOpen.filter((l) => l.venue === 'GATE') };
     renderCard(g);
-    const panel = screen.getByRole('tabpanel', { name: /4 Leg Pairs/ });
+    const panel = screen.getByRole('tabpanel', { name: /^Pairs/ });
     expect(within(panel).getByRole('button', { name: /Gate LONG \/ Hyperliquid SHORT Boros leg missing/ })).toBeInTheDocument();
     expect(within(panel).getAllByText('missing')).toHaveLength(1);
     expect(within(panel).getAllByRole('button', { name: 'Open leg' })).toHaveLength(1);
@@ -376,7 +377,7 @@ describe('AssetCard — roll over', () => {
     const base = book(8);
     // One perp with nothing opposite it: no pair to form, so it stays loose.
     renderCard({ ...base, perpOpen: base.perpOpen.filter((p) => p.venue === 'GATE'), borosOpen: [] });
-    let panel = screen.getByRole('tabpanel', { name: /4 Leg Pairs/ });
+    let panel = screen.getByRole('tabpanel', { name: /^Pairs/ });
     expect(within(panel).getByText('Ungrouped legs')).toBeInTheDocument();
     expect(within(panel).getByText('1 perp')).toBeInTheDocument();
     expect(within(panel).queryByText(/Boros legs? missing/)).not.toBeInTheDocument();
@@ -384,7 +385,7 @@ describe('AssetCard — roll over', () => {
 
     // One rate leg with no perps at all behind it.
     renderCard({ ...base, perpOpen: [], borosOpen: base.borosOpen.filter((l) => l.venue === 'GATE') });
-    panel = screen.getByRole('tabpanel', { name: /4 Leg Pairs/ });
+    panel = screen.getByRole('tabpanel', { name: /^Pairs/ });
     expect(within(panel).getByText('Ungrouped legs')).toBeInTheDocument();
     expect(within(panel).getByText('1 YU')).toBeInTheDocument();
     expect(within(panel).queryByText(/Boros legs? missing/)).not.toBeInTheDocument();
@@ -395,7 +396,7 @@ describe('AssetCard — roll over', () => {
     expect(screen.queryByText(/due to roll|Roll over now/)).not.toBeInTheDocument();
     expect(screen.queryByText('ready to roll')).not.toBeInTheDocument();
     // Nothing reminds outside the window: the card stays folded.
-    const panel = screen.getByRole('tabpanel', { name: /4 Leg Pairs/ });
+    const panel = screen.getByRole('tabpanel', { name: /^Pairs/ });
     expect(within(panel).queryByRole('button', { name: 'Roll over' })).not.toBeInTheDocument();
 
     // The roll itself is the trader's at any time (his call 2026-09-30):

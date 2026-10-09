@@ -49,6 +49,21 @@ export interface HeldBook {
   boros: ReadonlyArray<{ venue: string; maturity: number }>;
 }
 
+export function heldBorosOf(
+  markets: ReadonlyArray<{
+    base: string;
+    venue: string;
+    maturity: number;
+    currentSize: number;
+    spreadVenues: readonly [string, string] | null;
+  }>,
+  base: string,
+): HeldBook['boros'] {
+  return markets
+    .filter((m) => m.currentSize !== 0 && m.base.toUpperCase() === base.toUpperCase())
+    .flatMap((m) => (m.spreadVenues ?? [m.venue]).map((venue) => ({ venue, maturity: m.maturity })));
+}
+
 /** Every (asset, long venue, short venue) the book holds perps on. */
 export function heldPerpsOf(books: ReadonlyArray<HeldBook>): HeldPerps {
   const out = new Map<string, number | null>();

@@ -87,12 +87,12 @@ describe('submitBorosPair — nothing filled is not a partial fill', () => {
   it('flags a double rejection as filledNothing, not just partial', async () => {
     const refused = new Error('[SIMULATE] Top up at least ~$10 to trade');
     const client = clientOf({ 155: refused, 101: refused });
-    const res = await submitBorosPair({ client, legA, legB, feeDragApr: FEE_DRAG, receiveLeg: 'A' });
+    const res = await submitBorosPair({ client, legs: [legA, legB], feeDragApr: FEE_DRAG, receiveLeg: 0 });
 
     expect(res.filledNothing).toBe(true);
     expect(res.partial).toBe(true); // still true — which is the whole problem
     expect(res.hedgedSize).toBe(0);
-    expect(res.legA.failure?.code).toBe('min-cash');
+    expect(res.legs[0].failure?.code).toBe('min-cash');
   });
 
   it('keeps a genuine partial out of the filledNothing state', async () => {
@@ -100,7 +100,7 @@ describe('submitBorosPair — nothing filled is not a partial fill', () => {
       155: fill({ marketId: 155, filledSize: 40_000, shortfallSize: 60_000 }),
       101: fill({ marketId: 101, direction: 'long', filledSize: 100_000 }),
     });
-    const res = await submitBorosPair({ client, legA, legB, feeDragApr: FEE_DRAG, receiveLeg: 'A' });
+    const res = await submitBorosPair({ client, legs: [legA, legB], feeDragApr: FEE_DRAG, receiveLeg: 0 });
 
     expect(res.partial).toBe(true);
     expect(res.filledNothing).toBe(false);
@@ -111,7 +111,7 @@ describe('submitBorosPair — nothing filled is not a partial fill', () => {
       155: fill({ marketId: 155 }),
       101: fill({ marketId: 101, direction: 'long' }),
     });
-    const res = await submitBorosPair({ client, legA, legB, feeDragApr: FEE_DRAG, receiveLeg: 'A' });
+    const res = await submitBorosPair({ client, legs: [legA, legB], feeDragApr: FEE_DRAG, receiveLeg: 0 });
 
     expect(res.filledNothing).toBe(false);
     expect(res.partial).toBe(false);
@@ -131,7 +131,7 @@ describe('submitBorosPair', () => {
       cancelOrders: async () => {},
       closePosition: async () => fill(),
     };
-    const res = await submitBorosPair({ client, legA, legB, feeDragApr: FEE_DRAG, receiveLeg: 'A' });
+    const res = await submitBorosPair({ client, legs: [legA, legB], feeDragApr: FEE_DRAG, receiveLeg: 0 });
 
     expect(placeMarketOrders).toHaveBeenCalledTimes(1);
     expect(placeMarketOrders.mock.calls[0][0].map((r) => r.marketId)).toEqual([155, 101]);
@@ -148,11 +148,11 @@ describe('submitBorosPair', () => {
       cancelOrders: async () => {},
       closePosition: async () => fill(),
     };
-    const res = await submitBorosPair({ client, legA, legB, feeDragApr: FEE_DRAG, receiveLeg: 'A' });
-    expect(res.legA.filledSize).toBe(0);
-    expect(res.legB.filledSize).toBe(0);
-    expect(res.legA.failure!.message).toMatch(/Nonces must be greater/);
-    expect(res.legB.failure!.message).toMatch(/Nonces must be greater/);
+    const res = await submitBorosPair({ client, legs: [legA, legB], feeDragApr: FEE_DRAG, receiveLeg: 0 });
+    expect(res.legs[0].filledSize).toBe(0);
+    expect(res.legs[1].filledSize).toBe(0);
+    expect(res.legs[0].failure!.message).toMatch(/Nonces must be greater/);
+    expect(res.legs[1].failure!.message).toMatch(/Nonces must be greater/);
     expect(res.hedgedSize).toBe(0);
   });
 
@@ -161,7 +161,7 @@ describe('submitBorosPair', () => {
       155: fill({ execApr: 0.0885 }),
       101: fill({ marketId: 101, direction: 'long', execApr: 0.0435 }),
     });
-    const res = await submitBorosPair({ client, legA, legB, feeDragApr: FEE_DRAG, receiveLeg: 'A' });
+    const res = await submitBorosPair({ client, legs: [legA, legB], feeDragApr: FEE_DRAG, receiveLeg: 0 });
     expect(res.realisedSpreadApr).toBeCloseTo(0.0885 - 0.0435 - FEE_DRAG, 12);
   });
 
@@ -170,13 +170,13 @@ describe('submitBorosPair', () => {
       155: fill({ filledSize: 60_000, shortfallSize: 40_000, failure: { code: 'insufficient-depth', message: 'book ran out' } }),
       101: fill({ marketId: 101, direction: 'long', execApr: 0.042 }),
     });
-    const res = await submitBorosPair({ client, legA, legB, feeDragApr: FEE_DRAG, receiveLeg: 'A' });
+    const res = await submitBorosPair({ client, legs: [legA, legB], feeDragApr: FEE_DRAG, receiveLeg: 0 });
     expect(res.partial).toBe(true);
     expect(res.hedgedSize).toBe(60_000);
     expect(res.unhedgedSize).toBe(40_000);
     // Leg B over-filled relative to A, so B carries the directional residual.
-    expect(res.unhedgedLeg).toBe('B');
-    expect(res.legA.failure!.code).toBe('insufficient-depth');
+    expect(res.unhedgedLeg).toBe(1);
+    expect(res.legs[0].failure!.code).toBe('insufficient-depth');
   });
 
   it('reports the other leg even when one leg throws outright', async () => {
@@ -184,13 +184,13 @@ describe('submitBorosPair', () => {
       155: new Error('BOROS_RATE_DEVIATION: rate too far from mark'),
       101: fill({ marketId: 101, direction: 'long', execApr: 0.042 }),
     });
-    const res = await submitBorosPair({ client, legA, legB, feeDragApr: FEE_DRAG, receiveLeg: 'A' });
-    expect(res.legA.filledSize).toBe(0);
-    expect(res.legA.failure!.code).toBe('rate-deviation');
+    const res = await submitBorosPair({ client, legs: [legA, legB], feeDragApr: FEE_DRAG, receiveLeg: 0 });
+    expect(res.legs[0].filledSize).toBe(0);
+    expect(res.legs[0].failure!.code).toBe('rate-deviation');
     // The leg that DID fill is still reported — it is live exposure.
-    expect(res.legB.filledSize).toBe(100_000);
+    expect(res.legs[1].filledSize).toBe(100_000);
     expect(res.unhedgedSize).toBe(100_000);
-    expect(res.unhedgedLeg).toBe('B');
+    expect(res.unhedgedLeg).toBe(1);
     // Nothing to compute a spread from on one side.
     expect(res.realisedSpreadApr).toBeNull();
   });
@@ -202,7 +202,7 @@ describe('submitBorosPair', () => {
       ),
     );
     const client: BorosOrderClient = { placeMarketOrders: place, cancelOrders: async () => {}, closePosition: async () => fill() };
-    await submitBorosPair({ client, legA, legB, feeDragApr: FEE_DRAG, receiveLeg: 'A' });
+    await submitBorosPair({ client, legs: [legA, legB], feeDragApr: FEE_DRAG, receiveLeg: 0 });
     // One batch, exactly the bounds handed in — no retry, no widened limit.
     expect(place).toHaveBeenCalledTimes(1);
     expect(place.mock.calls[0][0][0].limitApr).toBe(legA.limitApr);
@@ -214,7 +214,7 @@ describe('submitBorosPair', () => {
       reqs.map((r) => fill({ marketId: r.marketId, direction: r.direction })),
     );
     const client: BorosOrderClient = { placeMarketOrders: place, cancelOrders: async () => {}, closePosition: async () => fill() };
-    await submitBorosPair({ client, legA, legB, feeDragApr: FEE_DRAG, receiveLeg: 'A' });
+    await submitBorosPair({ client, legs: [legA, legB], feeDragApr: FEE_DRAG, receiveLeg: 0 });
     expect(place.mock.calls[0][0].map((r) => r.clientOrderId)).toEqual(['coid-a', 'coid-b']);
   });
 
@@ -231,12 +231,137 @@ describe('submitBorosPair', () => {
     );
     const client: BorosOrderClient = { placeMarketOrders: place, cancelOrders: async () => {}, closePosition: async () => fill() };
 
-    await submitBorosPair({ client, legA, legB, feeDragApr: FEE_DRAG, receiveLeg: 'A', reducing: true });
+    await submitBorosPair({ client, legs: [legA, legB], feeDragApr: FEE_DRAG, receiveLeg: 0, reducing: true });
     expect(opts[0].reducing).toBe(true);
     expect(opts[0].topUpAfter).toBe(2); // both legs submitted → after both
 
-    await submitBorosPair({ client, legA, legB, feeDragApr: FEE_DRAG, receiveLeg: 'A' });
+    await submitBorosPair({ client, legs: [legA, legB], feeDragApr: FEE_DRAG, receiveLeg: 0 });
     expect(opts[1].topUpAfter).toBe(0);
+  });
+});
+
+describe('submitBorosPair over legs', () => {
+  const recording = () => {
+    const calls: Array<{ reqs: BorosMarketOrderRequest[]; reducing?: boolean; topUpAfter?: number }> = [];
+    const client: BorosOrderClient = {
+      placeMarketOrders: async (reqs, o) => {
+        calls.push({ reqs, reducing: o?.reducing, topUpAfter: o?.topUpAfter });
+        return reqs.map((r) => fill({ marketId: r.marketId, direction: r.direction, filledSize: r.size, execApr: 0.05 }));
+      },
+      cancelOrders: async () => {},
+      closePosition: async () => fill(),
+    };
+    return { client, calls };
+  };
+
+  it.each([
+    ['$50', 0.015, 0.015, 0.0128],
+    ['$6M', 1_800, 1_800, 1_530.255],
+  ])('closes a mixed book of 3 legs in one reducing batch at %s', async (_, single, gate, spread) => {
+    const { client, calls } = recording();
+    const legs = [
+      req({ marketId: 51, direction: 'long', size: single, clientOrderId: 'c-51' }),
+      req({ marketId: 52, direction: 'short', size: gate, clientOrderId: 'c-52' }),
+      req({ marketId: 59, direction: 'long', size: spread, clientOrderId: 'c-59' }),
+    ];
+    const res = await submitBorosPair({ client, legs, feeDragApr: FEE_DRAG, receiveLeg: null, reducing: true });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].reqs.map((r) => [r.marketId, r.size])).toEqual([
+      [51, single],
+      [52, gate],
+      [59, spread],
+    ]);
+    expect(calls[0].reducing).toBe(true);
+    expect(calls[0].topUpAfter).toBe(3);
+    expect(res.legs.map((l) => l.filledSize)).toEqual([single, gate, spread]);
+    expect(res.allLegsSubmitted).toBe(true);
+    expect(res.partial).toBe(false);
+    expect(res.unhedgedLeg).toBeNull();
+    expect(res.realisedSpreadApr).toBeNull();
+  });
+
+  it.each([
+    ['$50', 0.015, 0.0128],
+    ['$6M', 1_800, 1_530.255],
+  ])('reports the unhedged size of a 3-leg mixed close per venue at %s', async (_, single, spread) => {
+    const legs = [
+      req({ marketId: 51, direction: 'long', size: single, clientOrderId: 'c-51' }),
+      req({ marketId: 52, direction: 'short', size: single, clientOrderId: 'c-52' }),
+      req({ marketId: 59, direction: 'long', size: spread, clientOrderId: 'c-59' }),
+    ];
+    const venues = [['HYPERLIQUID'], ['GATE'], ['HYPERLIQUID', 'GATE']];
+    const filled = (marketId: number, direction: 'long' | 'short', filledSize: number) =>
+      fill({ marketId, direction, filledSize });
+    const run = (byMarket: Record<number, BorosLegFill | Error>) =>
+      submitBorosPair({ client: clientOf(byMarket), legs, feeDragApr: FEE_DRAG, receiveLeg: null, reducing: true, venues });
+
+    const whole = await run({ 51: filled(51, 'long', single), 52: filled(52, 'short', single), 59: filled(59, 'long', spread) });
+    expect(whole.unhedgedSize).toBe(0);
+
+    const gateRefused = await run({ 51: filled(51, 'long', single), 52: new Error('rejected'), 59: filled(59, 'long', spread) });
+    expect(gateRefused.unhedgedSize).toBeCloseTo(single, 9);
+    expect(gateRefused.unhedgedLeg).toBeNull();
+
+    const spreadRefused = await run({ 51: filled(51, 'long', single), 52: filled(52, 'short', single), 59: new Error('rejected') });
+    expect(spreadRefused.unhedgedSize).toBe(0);
+  });
+
+  it('reports every leg of a 3-leg close failed when the batch throws', async () => {
+    const client = {
+      placeMarketOrders: async () => {
+        throw new Error('[SIMULATE] Batch aborted');
+      },
+    } as unknown as BorosOrderClient;
+    const legs = [req({ marketId: 51 }), req({ marketId: 52 }), req({ marketId: 59, size: 85_000 })];
+    const res = await submitBorosPair({ client, legs, feeDragApr: FEE_DRAG, receiveLeg: null, reducing: true });
+
+    expect(res.filledNothing).toBe(true);
+    expect(res.legs.map((l) => [l.marketId, l.filledSize, l.failure?.code])).toEqual([
+      [51, 0, 'rejected'],
+      [52, 0, 'rejected'],
+      [59, 0, 'rejected'],
+    ]);
+  });
+
+  it.each([
+    ['$50', 0.015],
+    ['$6M', 1_800],
+  ])('sends a 1-leg spread open as one request and hedges its whole fill at %s', async (_, size) => {
+    const { client, calls } = recording();
+    const res = await submitBorosPair({
+      client,
+      legs: [req({ marketId: 59, direction: 'short', size })],
+      feeDragApr: 0.002,
+      receiveLeg: 0,
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].reqs.map((r) => r.marketId)).toEqual([59]);
+    expect(res.hedgedSize).toBe(size);
+    expect(res.unhedgedSize).toBe(0);
+    expect(res.allLegsSubmitted).toBe(true);
+    expect(res.realisedSpreadApr).toBeCloseTo(0.05 - 0.002, 12);
+  });
+
+  it('quotes a pay-fixed 1-leg spread as a negative rate', async () => {
+    const { client } = recording();
+    const res = await submitBorosPair({
+      client,
+      legs: [req({ marketId: 59, direction: 'long' })],
+      feeDragApr: 0.002,
+      receiveLeg: null,
+    });
+    expect(res.realisedSpreadApr).toBeCloseTo(-0.05 - 0.002, 12);
+  });
+
+  it('marks a completion of one leg of two as not all legs submitted', async () => {
+    const { client, calls } = recording();
+    const res = await submitBorosPair({ client, legs: [null, legB], feeDragApr: FEE_DRAG, receiveLeg: 0 });
+    expect(calls[0].reqs.map((r) => r.marketId)).toEqual([101]);
+    expect(res.allLegsSubmitted).toBe(false);
+    expect(res.hedgedSize).toBe(0);
+    expect(res.legs[0]).toMatchObject({ marketId: 0, filledSize: 0, failure: null });
   });
 });
 
@@ -336,13 +461,12 @@ describe('classifyLegFailure', () => {
     });
     const out = await submitBorosPair({
       client,
-      legA: leg(1, 'short'),
-      legB: leg(2, 'long'),
+      legs: [leg(1, 'short'), leg(2, 'long')],
       feeDragApr: 0,
-      receiveLeg: 'A',
+      receiveLeg: 0,
     });
-    expect(out.legA.failure?.code).toBe('unknown');
-    expect(out.legB.failure?.code).toBe('unknown');
+    expect(out.legs[0].failure?.code).toBe('unknown');
+    expect(out.legs[1].failure?.code).toBe('unknown');
   });
 
   it('falls back to a plain rejection', () => {

@@ -279,15 +279,24 @@ export function opportunitiesRoutes(deps: AppDeps) {
       // is unavailable (unconfigured/down), their PUBLIC books still price the
       // slippage; the core looks them up under this same fallback key.
       const fallbackBooks = new Set<string>();
+      const addPerp = (crossexVenue: string, rawBase: string): void => {
+        const base = rawBase.toUpperCase();
+        const symbol = symbolsByVenueBase.get(`${crossexVenue}:${base}`);
+        if (symbol) perpSymbols.add(symbol);
+        else if (!rulesAvailable) fallbackBooks.add(`${crossexVenue}:${base}`);
+      };
       for (const plan of groupBorosMarkets(markets, nowSec)) {
         for (const market of plan.markets) {
           const crossexVenue = normalizeVenue(market.venue);
           if (!crossexVenues.has(crossexVenue)) continue;
           bookMarketIds.push(market.marketId);
-          const base = market.base.toUpperCase();
-          const symbol = symbolsByVenueBase.get(`${crossexVenue}:${base}`);
-          if (symbol) perpSymbols.add(symbol);
-          else if (!rulesAvailable) fallbackBooks.add(`${crossexVenue}:${base}`);
+          addPerp(crossexVenue, market.base);
+        }
+        for (const spread of plan.spreads) {
+          const venues = spread.spreadVenues;
+          if (spread.state !== 'Normal' || !venues?.every((v) => crossexVenues.has(v))) continue;
+          bookMarketIds.push(spread.marketId);
+          for (const venue of venues) addPerp(venue, spread.base);
         }
       }
 

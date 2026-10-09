@@ -18,6 +18,7 @@ import { resetAgentApprovalCache } from '../../src/server/borosAgentApproval';
 import { borosExecutionsPending } from '../../src/server/routes/borosPair';
 import { account, ADDRESS, BN, DAY, HL, market, MATURITY, NOW, OK, wireBook } from '../helpers/boros-pair-fixtures';
 import { TtlCache } from '../../src/server/cache';
+import { marketAcc, raw } from '../helpers/boros-fixtures';
 import { borosStub } from '../helpers/boros-stub';
 import { HOST, makeTestApp } from './helpers/gate-nock';
 
@@ -71,11 +72,17 @@ function makeApp(over: Record<string, unknown> = {}, calls?: string[], client?: 
   return app;
 }
 
-const pairBody = (over: Record<string, unknown> = {}) => ({
+const pairLeg = (marketId: number, direction: string, slippageApr: number, size: number, clientOrderId?: string) => ({
+  marketId,
+  direction,
+  slippageApr,
+  size,
+  clientOrderId,
+});
+
+const pairBody = ({ size = 100_000, ids, ...over }: Record<string, unknown> & { size?: number; ids?: [string, string] } = {}) => ({
   address: ADDRESS,
-  legA: { marketId: HL, direction: 'short', slippageApr: 0.0025 },
-  legB: { marketId: BN, direction: 'long', slippageApr: 0.0025 },
-  size: 100_000,
+  legs: [pairLeg(HL, 'short', 0.0025, size, ids?.[0]), pairLeg(BN, 'long', 0.0025, size, ids?.[1])],
   intent: 'open',
   ...over,
 });
@@ -191,7 +198,7 @@ describe('boros writes bust the reads they invalidate', () => {
     // only when the TTL happened to lapse, which is what "it takes a while and
     // sometimes I have to refresh" actually was.
     const { busted } = appWithBustSpy();
-    const res = await post('/api/boros/pair/execute', pairBody({ clientOrderIdA: 'coid-bust-a', clientOrderIdB: 'coid-bust-b' }));
+    const res = await post('/api/boros/pair/execute', pairBody({ ids: ['coid-bust-a', 'coid-bust-b'] }));
     expect(res.statusCode).toBe(200);
     expect(busted).toContain('boros:collaterals');
     expect(busted).toContain('boros:txns');
@@ -204,8 +211,8 @@ describe('POST /api/boros/pair/simulate', () => {
     const res = await post('/api/boros/pair/simulate', pairBody());
     expect(res.statusCode).toBe(200);
     const { data } = res.json();
-    expect(data.simulation.legA.execApr).toBeCloseTo(0.09, 9);
-    expect(data.simulation.legB.execApr).toBeCloseTo(0.042, 9);
+    expect(data.simulation.legs[0].execApr).toBeCloseTo(0.09, 9);
+    expect(data.simulation.legs[1].execApr).toBeCloseTo(0.042, 9);
     expect(data.simulation.estSpreadApr).toBeGreaterThan(data.simulation.worstSpreadApr);
     expect(data.gate.blockers).toEqual([]);
     expect(data.simulatedAtMs).toBeGreaterThan(0);
@@ -254,10 +261,10 @@ describe('POST /api/boros/pair/simulate', () => {
 
   it.each([
     ['a bad address', { address: 'nope' }],
-    ['a missing market', { legA: { direction: 'short' } }],
-    ['a bad direction', { legA: { marketId: HL, direction: 'sideways' } }],
+    ['a missing market', { legs: [{ direction: 'short', size: 100_000 }, pairLeg(BN, 'long', 0.0025, 100_000)] }],
+    ['a bad direction', { legs: [pairLeg(HL, 'sideways', 0.0025, 100_000), pairLeg(BN, 'long', 0.0025, 100_000)] }],
     ['a non-positive size', { size: 0 }],
-    ['an out-of-range tolerance', { legA: { marketId: HL, direction: 'short', slippageApr: 5 } }],
+    ['an out-of-range tolerance', { legs: [pairLeg(HL, 'short', 5, 100_000), pairLeg(BN, 'long', 0.0025, 100_000)] }],
     ['a bad intent', { intent: 'hedge' }],
   ])('rejects %s with a 400', async (_label, over) => {
     makeApp();
@@ -271,7 +278,7 @@ describe('POST /api/boros/pair/simulate', () => {
     // the rate bound the order carries.
     const res = await post(
       '/api/boros/pair/simulate',
-      pairBody({ legA: { marketId: HL, direction: 'short', slippageApr: 25 } }),
+      pairBody({ legs: [pairLeg(HL, 'short', 25, 100_000), pairLeg(BN, 'long', 0.0025, 100_000)] }),
     );
     expect(res.statusCode).toBe(400);
     expect(res.json().error.message).toMatch(/APR fraction, not percent/);
@@ -279,7 +286,7 @@ describe('POST /api/boros/pair/simulate', () => {
 
   it('names an unknown market rather than 500-ing', async () => {
     makeApp();
-    const res = await post('/api/boros/pair/simulate', pairBody({ legB: { marketId: 999, direction: 'long' } }));
+    const res = await post('/api/boros/pair/simulate', pairBody({ legs: [pairLeg(HL, 'short', 0.0025, 100_000), pairLeg(999, 'long', 0.0025, 100_000)] }));
     expect(res.statusCode).toBe(400);
     expect(res.json().error.message).toMatch(/unknown Boros market 999/);
   });
@@ -319,7 +326,7 @@ describe('POST /api/boros/pair/simulate', () => {
     const getGasBalance = vi.fn(async () => 5);
     makeApp({}, undefined, { ...orderClient(), getGasBalance });
     await post('/api/boros/pair/simulate', pairBody());
-    const res = await post('/api/boros/pair/execute', pairBody({ clientOrderIdA: 'coid-gas-a', clientOrderIdB: 'coid-gas-b' }));
+    const res = await post('/api/boros/pair/execute', pairBody({ ids: ['coid-gas-a', 'coid-gas-b'] }));
     expect(res.statusCode).toBe(200);
     expect(getGasBalance).toHaveBeenCalledTimes(2);
   });
@@ -438,6 +445,52 @@ describe('POST /api/boros/pair/top-up-gas', () => {
     expect(payTreasury).not.toHaveBeenCalled();
   });
 
+  describe('an ETH spread market', () => {
+    const SPREAD = 59;
+    const ethZone = (ethFree: number) => ({
+      '/apis/v1/markets': {
+        results: [
+          {
+            ...market(SPREAD, 'hyperliquid-gate', 0.03),
+            tokenId: 2,
+            metadata: { underlyingSymbol: 'ETH', isSpreadMarket: true },
+            data: { midApr: 0.03, markApr: 0.03, floatingApr: 0.03, notionalOI: 1_000_000, assetMarkPrice: 0.38 },
+          },
+          market(HL, 'Hyperliquid', 0.09),
+        ],
+      },
+      '/apis/v1/accounts/market-acc-infos-by-root': {
+        results: [
+          { marketAcc: marketAcc(ADDRESS, 3), netBalance: raw(500_000), initialMargin: raw(0), positions: [] },
+          { marketAcc: marketAcc(ADDRESS, 2), netBalance: raw(ethFree), initialMargin: raw(0), positions: [] },
+        ],
+      },
+    });
+
+    it('pays the top-up from the spread market\'s ETH zone', async () => {
+      const paid: Array<[number, number]> = [];
+      makeApp(ethZone(0.01), undefined, {
+        ...orderClient(),
+        payTreasury: async (amountUsd, marketId) => {
+          paid.push([amountUsd, marketId]);
+        },
+      });
+      const res = await post('/api/boros/pair/top-up-gas', { amountUsd: 5, marketId: SPREAD });
+      expect(res.statusCode).toBe(200);
+      expect(paid).toEqual([[5, SPREAD]]);
+      expect(res.json().data).toEqual({ sentUsd: 5, paidFrom: 'ETH', replayed: false });
+    });
+
+    it('prices the ETH free margin at the ETH price, not at $1 a token', async () => {
+      const payTreasury = vi.fn();
+      makeApp(ethZone(0.01), undefined, { ...orderClient(), payTreasury });
+      const res = await post('/api/boros/pair/top-up-gas', { amountUsd: 30, marketId: SPREAD });
+      expect(res.statusCode).toBeGreaterThanOrEqual(400);
+      expect(res.json().error.message).toMatch(/ETH cross margin has about \$19\.00 free/);
+      expect(payTreasury).not.toHaveBeenCalled();
+    });
+  });
+
   it('refuses an unlisted market', async () => {
     const payTreasury = vi.fn();
     makeApp({}, undefined, { ...orderClient(), payTreasury });
@@ -460,7 +513,7 @@ describe('borosExecutionsPending', () => {
     expect(borosExecutionsPending()).toBe(0);
     const res = await post(
       '/api/boros/pair/execute',
-      pairBody({ clientOrderIdA: 'coid-aaaa', clientOrderIdB: 'coid-bbbb' }),
+      pairBody({ ids: ['coid-aaaa', 'coid-bbbb'] }),
     );
     expect(res.statusCode).toBe(200);
     expect(borosExecutionsPending()).toBe(1);
@@ -480,7 +533,7 @@ describe('POST /api/boros/pair/execute', () => {
     }));
     const res = await post(
       '/api/boros/pair/execute',
-      pairBody({ clientOrderIdA: 'coid-aaaa', clientOrderIdB: 'coid-bbbb' }),
+      pairBody({ ids: ['coid-aaaa', 'coid-bbbb'] }),
     );
     expect(res.statusCode).toBe(200);
     const { data } = res.json();
@@ -506,7 +559,7 @@ describe('POST /api/boros/pair/execute', () => {
     );
     const res = await post(
       '/api/boros/pair/execute',
-      pairBody({ clientOrderIdA: 'coid-aaaa', clientOrderIdB: 'coid-bbbb' }),
+      pairBody({ ids: ['coid-aaaa', 'coid-bbbb'] }),
     );
     expect(res.statusCode).toBe(409);
     expect(res.json().data.blockers.map((b: { code: string }) => b.code)).toContain(
@@ -530,7 +583,7 @@ describe('POST /api/boros/pair/execute', () => {
     );
     const res = await post(
       '/api/boros/pair/execute',
-      pairBody({ clientOrderIdA: 'coid-aaaa', clientOrderIdB: 'coid-bbbb' }),
+      pairBody({ ids: ['coid-aaaa', 'coid-bbbb'] }),
     );
     expect(res.statusCode).toBe(409);
     expect(res.json().data.blockers.map((b: { code: string }) => b.code)).toContain(
@@ -547,13 +600,13 @@ describe('POST /api/boros/pair/execute', () => {
     ));
     const res = await post(
       '/api/boros/pair/execute',
-      pairBody({ clientOrderIdA: 'coid-aaaa', clientOrderIdB: 'coid-bbbb' }),
+      pairBody({ ids: ['coid-aaaa', 'coid-bbbb'] }),
     );
     const { data } = res.json();
     expect(data.result.partial).toBe(true);
     expect(data.result.unhedgedSize).toBe(40_000);
-    expect(data.result.unhedgedLeg).toBe('B');
-    expect(data.result.legA.failure.code).toBe('insufficient-depth');
+    expect(data.result.unhedgedLeg).toBe(1);
+    expect(data.result.legs[0].failure.code).toBe('insufficient-depth');
   });
 
   it('does not submit a leg with nothing to trade', async () => {
@@ -583,8 +636,7 @@ describe('POST /api/boros/pair/execute', () => {
         intent: 'close',
         // Closing opposes the held position, so §4's acknowledgement applies.
         opposingAcknowledged: true,
-        clientOrderIdA: 'coid-aaaa',
-        clientOrderIdB: 'coid-bbbb',
+        ids: ['coid-aaaa', 'coid-bbbb'],
       }),
     );
     expect(res.statusCode).toBe(200);
@@ -597,14 +649,14 @@ describe('POST /api/boros/pair/execute', () => {
   });
 
   it("caps a CLOSE at the venue's own wei so it can never cross flat", async () => {
-    // 0.05 as a double re-encodes to 50000000000000003 wei — three above the
-    // position. Boros has no reduce-only flag, so that overshoot would open
+    // 99999999999999999 wei reads as the double 0.1, which re-encodes to
+    // 100000000000000000 wei — one above the position. Boros has no reduce-only flag, so that overshoot would open
     // an opposing dust position too small to close. The cap is the venue's
     // integer, verbatim, exactly as `closePosition` already does.
     const sent: Array<{ marketId: number; size: number; sizeWei?: string }> = [];
     makeApp(
       {
-        ...account(500_000, [{ marketId: HL, size: '50000000000000000' }]),
+        ...account(500_000, [{ marketId: HL, size: '99999999999999999' }]),
       },
       undefined,
       {
@@ -620,18 +672,17 @@ describe('POST /api/boros/pair/execute', () => {
     const res = await post(
       '/api/boros/pair/execute',
       pairBody({
-        size: 0.05,
+        size: 0.1,
         intent: 'close',
         opposingAcknowledged: true,
-        clientOrderIdA: 'coid-aaaa',
-        clientOrderIdB: 'coid-bbbb',
+        ids: ['coid-aaaa', 'coid-bbbb'],
       }),
     );
     expect(res.statusCode).toBe(200);
     expect(sent).toHaveLength(1);
     expect(sent[0].marketId).toBe(HL);
-    expect(sent[0].size).toBeCloseTo(0.05, 12);
-    expect(sent[0].sizeWei).toBe('50000000000000000');
+    expect(sent[0].size).toBeCloseTo(0.1, 12);
+    expect(sent[0].sizeWei).toBe('99999999999999999');
   });
 
   it('does not cap an OPEN — there is no position to cross', async () => {
@@ -644,7 +695,7 @@ describe('POST /api/boros/pair/execute', () => {
       cancelOrders: async () => {},
       closePosition: async () => okFill(),
     });
-    const res = await post('/api/boros/pair/execute', pairBody({ clientOrderIdA: 'coid-aaaa', clientOrderIdB: 'coid-bbbb' }));
+    const res = await post('/api/boros/pair/execute', pairBody({ ids: ['coid-aaaa', 'coid-bbbb'] }));
     expect(res.statusCode).toBe(200);
     expect(sent).toHaveLength(2);
     expect(sent.every((s) => s.sizeWei === undefined)).toBe(true);
@@ -671,7 +722,7 @@ describe('POST /api/boros/pair/execute', () => {
       );
       const res = await post(
         '/api/boros/pair/execute',
-        pairBody({ intent: 'close', opposingAcknowledged: true, clientOrderIdA: 'coid-aaaa', clientOrderIdB: 'coid-bbbb' }),
+        pairBody({ intent: 'close', opposingAcknowledged: true, ids: ['coid-aaaa', 'coid-bbbb'] }),
       );
       expect(res.statusCode).toBe(200);
       expect(seen).toEqual([[HL]]);
@@ -680,7 +731,7 @@ describe('POST /api/boros/pair/execute', () => {
     it('an open cancels nothing, even beside resting orders', async () => {
       const seen: Array<number[] | undefined> = [];
       makeApp({ ...account(500_000, [{ marketId: HL, size: 0, resting: true }]) }, undefined, recordOpts(seen));
-      const res = await post('/api/boros/pair/execute', pairBody({ clientOrderIdA: 'coid-aaaa', clientOrderIdB: 'coid-bbbb' }));
+      const res = await post('/api/boros/pair/execute', pairBody({ ids: ['coid-aaaa', 'coid-bbbb'] }));
       expect(res.statusCode).toBe(200);
       expect(seen).toEqual([undefined]);
     });
@@ -711,15 +762,14 @@ describe('POST /api/boros/pair/execute', () => {
     const res = await post(
       '/api/boros/pair/execute',
       pairBody({
-        legA: { marketId: HL, direction: 'long', slippageApr: 0.0025 },
-        // The Binance fixture's BID sits 0.5% under its mid, so a sell there
-        // needs a tolerance that admits it; the point under test is the SIDE.
-        legB: { marketId: BN, direction: 'short', slippageApr: 0.01 },
-        size: 500,
+        legs: [
+          pairLeg(HL, 'long', 0.0025, 500, 'coid-aaaa'),
+          // The Binance fixture's BID sits 0.5% under its mid, so a sell there
+          // needs a tolerance that admits it; the point under test is the SIDE.
+          pairLeg(BN, 'short', 0.01, 500, 'coid-bbbb'),
+        ],
         intent: 'target',
         opposingAcknowledged: true,
-        clientOrderIdA: 'coid-aaaa',
-        clientOrderIdB: 'coid-bbbb',
       }),
     );
     expect(res.statusCode).toBe(200);
@@ -754,13 +804,13 @@ describe('POST /api/boros/pair/execute', () => {
     });
     const res = await post(
       '/api/boros/pair/execute',
-      pairBody({ onlyLeg: 'B', clientOrderIdA: 'coid-aaaa', clientOrderIdB: 'coid-bbbb' }),
+      pairBody({ onlyLeg: 1, ids: ['coid-aaaa', 'coid-bbbb'] }),
     );
     expect(res.statusCode).toBe(200);
     expect(sent).toEqual([[BN]]);
     // Pair-level hedge framing is dropped — one fill closing a gap is not an
     // unhedged residual.
-    expect(res.json().data.result.bothLegsSubmitted).toBe(false);
+    expect(res.json().data.result.allLegsSubmitted).toBe(false);
     expect(res.json().data.result.unhedgedSize).toBe(0);
   });
 
@@ -776,7 +826,7 @@ describe('POST /api/boros/pair/execute', () => {
       cancelOrders: async () => {},
       closePosition: async () => okFill(),
     });
-    const body = pairBody({ clientOrderIdA: 'coid-aaaa', clientOrderIdB: 'coid-bbbb' });
+    const body = pairBody({ ids: ['coid-aaaa', 'coid-bbbb'] });
 
     const first = await post('/api/boros/pair/execute', body);
     const second = await post('/api/boros/pair/execute', body);
@@ -800,8 +850,8 @@ describe('POST /api/boros/pair/execute', () => {
       cancelOrders: async () => {},
       closePosition: async () => okFill(),
     });
-    await post('/api/boros/pair/execute', pairBody({ clientOrderIdA: 'coid-aaa1', clientOrderIdB: 'coid-bbb1' }));
-    await post('/api/boros/pair/execute', pairBody({ clientOrderIdA: 'coid-aaa2', clientOrderIdB: 'coid-bbb2' }));
+    await post('/api/boros/pair/execute', pairBody({ ids: ['coid-aaa1', 'coid-bbb1'] }));
+    await post('/api/boros/pair/execute', pairBody({ ids: ['coid-aaa2', 'coid-bbb2'] }));
     expect(calls).toBe(2);
   });
 
@@ -817,7 +867,7 @@ describe('POST /api/boros/pair/execute', () => {
     });
     const res = await post(
       '/api/boros/pair/execute',
-      pairBody({ address: OTHER, clientOrderIdA: 'coid-aaaa', clientOrderIdB: 'coid-bbbb' }),
+      pairBody({ address: OTHER, ids: ['coid-aaaa', 'coid-bbbb'] }),
     );
     expect(res.statusCode).toBe(400);
     expect(res.json().error.message).toMatch(/does not match the account this install signs for/);
@@ -855,16 +905,16 @@ describe('POST /api/boros/pair/execute', () => {
     makeApp(); // no borosOrders dep
     const res = await post(
       '/api/boros/pair/execute',
-      pairBody({ clientOrderIdA: 'coid-aaaa', clientOrderIdB: 'coid-bbbb' }),
+      pairBody({ ids: ['coid-aaaa', 'coid-bbbb'] }),
     );
     expect(res.statusCode).toBe(503);
     expect(res.json().error.message).toMatch(/not configured/i);
   });
 
-  it.each([
+  it.each<[string, { ids?: [string, string] }]>([
     ['missing ids', {}],
-    ['a too-short id', { clientOrderIdA: 'abc', clientOrderIdB: 'coid-bbbb' }],
-    ['identical ids', { clientOrderIdA: 'coid-same', clientOrderIdB: 'coid-same' }],
+    ['a too-short id', { ids: ['abc', 'coid-bbbb'] }],
+    ['identical ids', { ids: ['coid-same', 'coid-same'] }],
   ])('rejects %s with a 400 before touching the venue', async (_label, over) => {
     const place = vi.fn();
     makeApp({}, undefined, orderClient(place as never));
@@ -1243,14 +1293,14 @@ describe('a Boros close at $6,000,000 that fills in part', () => {
 
     const res = await post(
       '/api/boros/pair/execute',
-      pairBody({ size: 6_000_000, intent: 'close', opposingAcknowledged: true, clientOrderIdA: 'coid-6m-a', clientOrderIdB: 'coid-6m-b' }),
+      pairBody({ size: 6_000_000, intent: 'close', opposingAcknowledged: true, ids: ['coid-6m-a', 'coid-6m-b'] }),
     );
     expect(res.statusCode).toBe(200);
     expect(sent.map((r) => r.size)).toEqual([6_000_000, 6_000_000]);
     const { result } = res.json().data;
     expect(result.partial).toBe(true);
     expect(result.unhedgedSize).toBe(2_400_000);
-    expect(result.unhedgedLeg).toBe('B');
+    expect(result.unhedgedLeg).toBe(1);
   });
 });
 

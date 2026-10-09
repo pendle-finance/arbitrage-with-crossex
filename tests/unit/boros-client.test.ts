@@ -116,6 +116,52 @@ describe('fetchBorosMarkets', () => {
     expect(markets[0].maxRateDeviationApr).toBeCloseTo(0.019, 12);
   });
 
+  it.each([
+    ['a spread mark under the floor', 0.0348, 0.25 * (1.00005 ** 1540 - 1)],
+    ['a negative mark', -0.02, 0.25 * (1.00005 ** 1540 - 1)],
+    ['a mark over the floor', 0.12, 0.03],
+  ])('sizes a spread rate band off max(floor, |mark|) for %s', async (_, markApr, band) => {
+    const markets = await fetchBorosMarkets(
+      stub(() => ({
+        body: {
+          results: [
+            {
+              marketId: 59,
+              tokenId: 2,
+              imData: { tickStep: 2, iTickThresh: 770 },
+              config: { maxRateDeviationFactorBase1e4: 2500 },
+              metadata: { isSpreadMarket: true },
+              platform: { platformId: 'hyperliquid-gate' },
+              data: { markApr },
+            },
+          ],
+        },
+      })),
+    );
+    expect(markets[0].maxRateDeviationApr).toBeCloseTo(band, 12);
+    expect(markets[0].maxRateDeviationApr).toBeGreaterThan(0);
+  });
+
+  it('keeps a single market rate band at factor × mark under the floor', async () => {
+    const markets = await fetchBorosMarkets(
+      stub(() => ({
+        body: {
+          results: [
+            {
+              marketId: 51,
+              tokenId: 2,
+              imData: { tickStep: 2, iTickThresh: 770 },
+              config: { maxRateDeviationFactorBase1e4: 2500 },
+              platform: { platformId: 'gate' },
+              data: { markApr: 0.0516 },
+            },
+          ],
+        },
+      })),
+    );
+    expect(markets[0].maxRateDeviationApr).toBeCloseTo(0.25 * 0.0516, 12);
+  });
+
   it('normalizes the initial-margin inputs (kIM is 18-dec, tThresh comes off config)', async () => {
     const markets = await fetchBorosMarkets(
       stub(() => ({
@@ -522,7 +568,7 @@ describe('fetchBorosCollaterals', () => {
     const market = {
       marketId: 155, tokenId: 3, name: '', venue: '', base: '', maturity: Date.now() / 1000 + 365 * 86_400,
       paymentPeriod: 0, settleFeeApr: 0, markApr: 0.1, floatingApr: 0, midApr: 0, notionalOi: 0, takerFeeRate: 0,
-      state: 'Normal', assetMarkPriceUsd: 1, kIM: 1, kMM: 0, imTickThresh: 0, imTickStep: 0, tThreshSec: 0, maxRateDeviationApr: 0,
+      state: 'Normal', assetMarkPriceUsd: 1, kIM: 1, kMM: 0, imTickThresh: 0, imTickStep: 0, tThreshSec: 0, maxRateDeviationApr: 0, spreadVenues: null,
     };
     const e18 = (n: number) => `${n}000000000000000000`;
     const book = (orders: Array<{ side: number; im: number }>, combined: number) => ({
@@ -572,9 +618,10 @@ describe('borosHealthFactor', () => {
 });
 
 describe('resolveCollateralPricesUsd', () => {
+  const mk = (tokenId: number, base: string, px: number) =>
+    ({ marketId: tokenId * 100, tokenId, name: '', venue: '', base, maturity: 0, paymentPeriod: 0, settleFeeApr: 0, markApr: 0, floatingApr: 0, midApr: 0, notionalOi: 0, takerFeeRate: 0, state: 'Normal', assetMarkPriceUsd: px, kIM: 0, kMM: 0, imTickThresh: 0, imTickStep: 0, tThreshSec: 0, maxRateDeviationApr: 0, spreadVenues: null }) as const;
+
   it('prices stables at 1, token collateral via a same-asset market, unknown as null', () => {
-    const mk = (tokenId: number, base: string, px: number) =>
-      ({ marketId: tokenId * 100, tokenId, name: '', venue: '', base, maturity: 0, paymentPeriod: 0, settleFeeApr: 0, markApr: 0, floatingApr: 0, midApr: 0, notionalOi: 0, takerFeeRate: 0, state: 'Normal', assetMarkPriceUsd: px, kIM: 0, kMM: 0, imTickThresh: 0, imTickStep: 0, tThreshSec: 0, maxRateDeviationApr: 0 }) as const;
     const prices = resolveCollateralPricesUsd([
       { ...mk(3, 'HYPE', 40) }, // USDT-margined HYPE book
       { ...mk(1, 'BTC', 118_000) }, // BTC-margined BTC book
@@ -583,6 +630,17 @@ describe('resolveCollateralPricesUsd', () => {
     expect(prices.get(3)).toBe(1);
     expect(prices.get(1)).toBe(118_000);
     expect(prices.get(4)).toBeNull();
+  });
+
+  it('takes the price from a single market before a spread market listed first', () => {
+    const spread = { ...mk(2, 'ETH', 0.38), marketId: 59, spreadVenues: ['HYPERLIQUID', 'GATE'] as [string, string] };
+    const prices = resolveCollateralPricesUsd([spread, { ...mk(2, 'ETH', 2490.3), marketId: 51 }]);
+    expect(prices.get(2)).toBe(2490.3);
+  });
+
+  it('takes the spread market price when the token has no single market', () => {
+    const spread = { ...mk(1, 'BTC', 82352), marketId: 58, spreadVenues: ['HYPERLIQUID', 'GATE'] as [string, string] };
+    expect(resolveCollateralPricesUsd([spread]).get(1)).toBe(82352);
   });
 });
 

@@ -178,19 +178,20 @@ const spyClient = (roll: NonNullable<BorosOrderClient['rollOver']>): BorosOrderC
   closePosition: async () => okFill(),
 });
 
+const rollLeg = (marketId: number, direction: string, slippageApr = 0.0025) => ({ marketId, direction, slippageApr, size: 100_000 });
+
+const rollIds = (a = 'roll-exit-a1', b = 'roll-exit-b1') => ({
+  [`exit:${HL}`]: a,
+  [`exit:${BN}`]: b,
+  [`entry:${HL2}`]: 'roll-entry-a1',
+  [`entry:${BN2}`]: 'roll-entry-b1',
+});
+
 const rollBody = (over: Record<string, unknown> = {}) => ({
   address: ADDRESS,
-  exit: {
-    legA: { marketId: HL, direction: 'long', slippageApr: 0.0025 },
-    legB: { marketId: BN, direction: 'short', slippageApr: 0.0025 },
-    size: 100_000,
-  },
-  entry: {
-    legA: { marketId: HL2, direction: 'short', slippageApr: 0.0025 },
-    legB: { marketId: BN2, direction: 'long', slippageApr: 0.0025 },
-    size: 100_000,
-  },
-  clientOrderIds: { exitA: 'roll-exit-a1', exitB: 'roll-exit-b1', entryA: 'roll-entry-a1', entryB: 'roll-entry-b1' },
+  exit: { legs: [rollLeg(HL, 'long'), rollLeg(BN, 'short')] },
+  entry: { legs: [rollLeg(HL2, 'short'), rollLeg(BN2, 'long')] },
+  clientOrderIds: rollIds(),
   ...over,
 });
 
@@ -230,8 +231,8 @@ describe('POST /api/boros/roll/simulate', () => {
     const { data } = res.json();
 
     // Both steps priced against ONE account read.
-    expect(data.exit.simulation.legA.execApr).toBeGreaterThan(0);
-    expect(data.entry.simulation.legA.execApr).toBeGreaterThan(0);
+    expect(data.exit.simulation.legs[0].execApr).toBeGreaterThan(0);
+    expect(data.entry.simulation.legs[0].execApr).toBeGreaterThan(0);
     // The venue previewed the same legs the execute would send.
     expect(previews).toHaveLength(1);
     expect(previews[0].map((l) => [l.fromMarketId, l.toMarketId])).toEqual([[HL, HL2], [BN, BN2]]);
@@ -363,8 +364,8 @@ describe('POST /api/boros/roll/execute', () => {
 
   it.each([
     ['missing ids', { clientOrderIds: {} }],
-    ['a too-short id', { clientOrderIds: { exitA: 'abc', exitB: 'roll-exit-b1', entryA: 'roll-entry-a1', entryB: 'roll-entry-b1' } }],
-    ['duplicate ids', { clientOrderIds: { exitA: 'dup-000001', exitB: 'dup-000001', entryA: 'roll-entry-a1', entryB: 'roll-entry-b1' } }],
+    ['a too-short id', { clientOrderIds: rollIds('abc') }],
+    ['duplicate ids', { clientOrderIds: rollIds('dup-000001', 'dup-000001') }],
   ])('rejects %s with a 400 before touching the venue', async (_label, over) => {
     const place = vi.fn(async (legs: BorosRollLeg[]) => rolledFills(legs));
     makeRollApp(heldPair, spyClient(place));
