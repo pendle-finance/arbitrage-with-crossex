@@ -778,6 +778,31 @@ describe('evaluatePairGate', () => {
     expect(short.blockers.find((b) => b.code === 'cross-short-margin')!.shortfall).toBeCloseTo(1, 6);
   });
 
+  /** A low gas budget makes the order carry a `payTreasury` paid from this
+   * same cross margin, in its collateral token. An opening that covers only
+   * the legs' margin would be refused at the venue by the top-up's strict
+   * margin check, so the gate counts it. */
+  it('counts the automatic gas top-up in the cross requirement, in collateral units', () => {
+    const sim = gateInput().simulation;
+    const im = sim.legA.marginRequired! + sim.legB.marginRequired!;
+    const exact = account({ cross: { available: im, hasPositionOrOrders: false }, gasBalanceUsd: 0 });
+    const usdt = evaluatePairGate(gateInput({ account: exact }));
+    const b = usdt.blockers.find((x) => x.code === 'cross-short-margin')!;
+    expect(b.shortfall).toBeCloseTo(1, 6); // $1 of top-up at $1/USDT
+    expect(b.message).toMatch(/including about \$1\.00 of gas top-up/);
+
+    // ETH-margined: the same dollar is 1/2500 of a token.
+    const ethSim = { ...sim, collateralPriceUsd: 2500 };
+    const eth = evaluatePairGate(gateInput({ simulation: ethSim, account: exact }));
+    expect(eth.blockers.find((x) => x.code === 'cross-short-margin')!.shortfall).toBeCloseTo(0.0004, 9);
+
+    // A healthy budget adds nothing.
+    const healthy = evaluatePairGate(
+      gateInput({ account: account({ cross: { available: im, hasPositionOrOrders: false }, gasBalanceUsd: 42 }) }),
+    );
+    expect(codes(healthy)).not.toContain('cross-short-margin');
+  });
+
   it('never lets a leg that frees margin lend it to the other leg', () => {
     const sim = gateInput().simulation;
     const imB = sim.legB.marginRequired!;
@@ -907,11 +932,11 @@ describe('evaluatePairGate', () => {
     const g = evaluatePairGate(gateInput({ account: account({ gasBalanceUsd: 0 }) }));
     const codesOut = codes(g);
     expect(codesOut).not.toContain('no-gas');
-    // Gas comes out of the USDT balance, margin out of the pair's own —
-    // different pots, so a gas warning must never read as a margin problem.
+    // Plenty of margin here, so the top-up's dollar fits and nothing blocks.
     expect(codesOut).not.toContain('cross-short-margin');
     expect(g.warnings.join(' ')).toMatch(/tops it up as it sends/i);
-    expect(g.warnings.join(' ')).toMatch(/\$1\.00 from your Boros USDT balance/i);
+    // Paid in the pair's own collateral, from its cross margin — not USDT.
+    expect(g.warnings.join(' ')).toMatch(/\$1\.00 worth of \w+ from this market's cross margin/i);
   });
 
   it('says how low a LOW balance is, and still does not block', () => {

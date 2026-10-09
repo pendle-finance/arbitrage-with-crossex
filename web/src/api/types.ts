@@ -1195,6 +1195,8 @@ export type BorosLegFailureCode =
 
 export interface TopUpGasResponse {
   sentUsd: number;
+  /** Collateral symbol the top-up was paid in (the traded market's). */
+  paidFrom?: string;
   /** True when this answer came from the server's memo — the payment for
    * this id had already landed and nothing new was sent. */
   replayed?: boolean;

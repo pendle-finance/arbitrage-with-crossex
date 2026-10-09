@@ -702,9 +702,16 @@ export function useTopUpGas() {
   // again. A success mints a fresh id for the next top-up.
   const idRef = useRef<string | null>(null);
   return useMutation({
-    mutationFn: ({ amountUsd, address }: { amountUsd: number; address: string }) => {
+    // `marketId`: the market being traded. The top-up is paid from that
+    // market's cross margin, in its collateral token.
+    mutationFn: ({ amountUsd, address, marketId }: { amountUsd: number; address: string; marketId?: number | null }) => {
       idRef.current ??= `gas-${uuid()}`.slice(0, 64);
-      return postJson<TopUpGasResponse>('/boros/pair/top-up-gas', { amountUsd, address, clientOrderId: idRef.current });
+      return postJson<TopUpGasResponse>('/boros/pair/top-up-gas', {
+        amountUsd,
+        address,
+        clientOrderId: idRef.current,
+        ...(marketId != null ? { marketId } : {}),
+      });
     },
     onSuccess: () => {
       idRef.current = null;

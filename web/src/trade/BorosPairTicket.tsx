@@ -1233,12 +1233,12 @@ export function BorosPairTicket({
         gasBalanceUsd={sim.data?.gasBalanceUsd}
         amount={gasTopUpStr}
         onAmountChange={setGasTopUpStr}
-        onTopUp={canTrade && address ? () => topUpGas.mutate({ amountUsd: Number(gasTopUpStr), address }) : undefined}
+        onTopUp={canTrade && address ? () => topUpGas.mutate({ amountUsd: Number(gasTopUpStr), address, marketId: marketA ?? marketB }) : undefined}
         busy={topUpGas.isPending}
       />
       {topUpGas.isSuccess && (
         <p className="rounded-lg border border-emerald-500/25 bg-emerald-500/[0.04] px-2.5 py-1.5 text-[11px] leading-relaxed text-emerald-200">
-          Sent a ${topUpGas.data.sentUsd} gas top-up. Boros credits it once the transaction is
+          Sent a ${topUpGas.data.sentUsd} gas top-up{topUpGas.data.paidFrom ? `, paid in ${topUpGas.data.paidFrom}` : ''}. Boros credits it once the transaction is
           indexed, so the balance above catches up within a minute — no need to send it again.
         </p>
       )}

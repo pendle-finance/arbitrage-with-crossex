@@ -340,7 +340,7 @@ describe('POST /api/boros/pair/top-up-gas', () => {
     expect(res.statusCode).toBe(200);
     expect(paid).toHaveLength(1);
     expect(paid[0][0]).toBe(5);
-    expect(res.json().data).toEqual({ sentUsd: 5, replayed: false });
+    expect(res.json().data).toEqual({ sentUsd: 5, paidFrom: 'USDT', replayed: false });
     expect(getGasBalance).not.toHaveBeenCalled();
   });
 
@@ -387,8 +387,8 @@ describe('POST /api/boros/pair/top-up-gas', () => {
     });
     const first = await post('/api/boros/pair/top-up-gas', { amountUsd: 5, clientOrderId: 'gas-0000000001' });
     const again = await post('/api/boros/pair/top-up-gas', { amountUsd: 5, clientOrderId: 'gas-0000000001' });
-    expect(first.json().data).toEqual({ sentUsd: 5, replayed: false });
-    expect(again.json().data).toEqual({ sentUsd: 5, replayed: true });
+    expect(first.json().data).toEqual({ sentUsd: 5, paidFrom: 'USDT', replayed: false });
+    expect(again.json().data).toEqual({ sentUsd: 5, paidFrom: 'USDT', replayed: true });
     expect(paid).toEqual([5]);
   });
 
@@ -414,6 +414,36 @@ describe('POST /api/boros/pair/top-up-gas', () => {
     release();
     expect((await first).statusCode).toBe(200);
     expect(paid).toEqual([5]);
+  });
+
+  it('pays from the zone of the market the user is trading', async () => {
+    const paid: Array<[number, number]> = [];
+    makeApp({}, undefined, {
+      ...orderClient(),
+      payTreasury: async (amountUsd, marketId) => {
+        paid.push([amountUsd, marketId]);
+      },
+    });
+    const res = await post('/api/boros/pair/top-up-gas', { amountUsd: 5, marketId: BN });
+    expect(res.statusCode).toBe(200);
+    expect(paid).toEqual([[5, BN]]);
+  });
+
+  it('refuses, spending nothing, when that zone cannot spare the dollars', async () => {
+    const payTreasury = vi.fn();
+    makeApp({ ...account(3) }, undefined, { ...orderClient(), payTreasury });
+    const res = await post('/api/boros/pair/top-up-gas', { amountUsd: 5, marketId: HL });
+    expect(res.statusCode).toBeGreaterThanOrEqual(400);
+    expect(res.json().error.message).toMatch(/USDT cross margin has about \$3\.00 free/);
+    expect(payTreasury).not.toHaveBeenCalled();
+  });
+
+  it('refuses an unlisted market', async () => {
+    const payTreasury = vi.fn();
+    makeApp({}, undefined, { ...orderClient(), payTreasury });
+    const res = await post('/api/boros/pair/top-up-gas', { amountUsd: 5, marketId: 4242 });
+    expect(res.statusCode).toBeGreaterThanOrEqual(400);
+    expect(payTreasury).not.toHaveBeenCalled();
   });
 
   it('answers 503 when the order client cannot top up', async () => {
