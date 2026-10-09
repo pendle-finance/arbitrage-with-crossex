@@ -34,6 +34,11 @@ export const SECONDS_IN_YEAR = 365 * 24 * 3600;
 
 /** |net|/gross under this is "hedged" — mirrors the exposure feed's 2%. */
 export const HEDGE_TOLERANCE = 0.02;
+/** The tighter band where both sides count in coins (ETH, BTC on a
+ * coin-margined Boros market): price cannot move that gap. A USDT-market leg
+ * is fixed in dollars while the perp is fixed in coins, so its gap moves with
+ * price and keeps HEDGE_TOLERANCE (his call 2026-10-09). */
+export const COIN_HEDGE_TOLERANCE = 0.001;
 
 /** Boros coverage that lapses within this window gets an expiry warning —
  * and is the window a roll is recommended in. 10 days, not the original 14:
@@ -336,6 +341,10 @@ export interface VenueHedge {
    * leg needs more LONG YU; negative → more SHORT YU (or less perp). */
   gap: number;
   covered: boolean;
+  /** Within HEDGE_TOLERANCE whatever the coin: what the locked APR needs. */
+  coveredLoose: boolean;
+  /** A Boros leg on this venue is margined in a token other than the coin. */
+  borosInDollars: boolean;
   /** Soonest maturity among this venue's Boros legs (0 = none). */
   soonestMaturity: number;
   /** Set when covered but the covering legs start maturing inside the warn
@@ -895,7 +904,7 @@ export interface AssetDerived {
   /** Net perp delta across venues, in the asset's unit (signed, LONG +). */
   netPerp: number;
   grossPerp: number;
-  /** |netPerp|/grossPerp ≤ 2% (true when no perps at all). */
+  /** |netPerp|/grossPerp ≤ 0.1% on ETH and BTC, ≤ 2% on other coins (true when no perps at all). */
   deltaNeutral: boolean;
   /** Every venue's floating leg covered AND delta-neutral. */
   perfect: boolean;
@@ -1219,6 +1228,8 @@ export function deriveAsset(
         borosSigned: 0,
         gap: 0,
         covered: false,
+        coveredLoose: false,
+        borosInDollars: false,
         soonestMaturity: 0,
         expiresSoon: false,
       };
@@ -1236,9 +1247,11 @@ export function deriveAsset(
     const keep = 1 - excludedFraction(exclusions, borosKey(l.marketId), l.sizeToken);
     if (keep <= 0) continue;
     const signed = signedBoros(l, unit, keep, group.base, group.priceUsd);
+    const inDollars = (l.collateral ?? '').toUpperCase() !== group.base.toUpperCase();
     borosVenuesOf(l).forEach((venue, i) => {
       const v = venueFor(venue);
       v.borosSigned += i === 0 ? signed : -signed;
+      if (inDollars) v.borosInDollars = true;
       if (v.soonestMaturity === 0 || l.maturity < v.soonestMaturity) {
         v.soonestMaturity = l.maturity;
       }
@@ -1249,7 +1262,9 @@ export function deriveAsset(
   for (const v of byVenue.values()) {
     v.gap = v.perpSigned - v.borosSigned;
     const scale = Math.max(Math.abs(v.perpSigned), Math.abs(v.borosSigned));
-    v.covered = scale === 0 || Math.abs(v.gap) <= scale * HEDGE_TOLERANCE;
+    const tolerance = unit === 'base' && !v.borosInDollars ? COIN_HEDGE_TOLERANCE : HEDGE_TOLERANCE;
+    v.covered = scale === 0 || Math.abs(v.gap) <= scale * tolerance;
+    v.coveredLoose = scale === 0 || Math.abs(v.gap) <= scale * HEDGE_TOLERANCE;
     v.expiresSoon =
       v.covered &&
       v.soonestMaturity > 0 &&
@@ -1286,7 +1301,9 @@ export function deriveAsset(
 
   const netPerp = venues.reduce((s, v) => s + v.perpSigned, 0);
   const grossPerp = venues.reduce((s, v) => s + Math.abs(v.perpSigned), 0);
-  const deltaNeutral = grossPerp === 0 || Math.abs(netPerp) / grossPerp <= HEDGE_TOLERANCE;
+  const perpTolerance = unit === 'base' ? COIN_HEDGE_TOLERANCE : HEDGE_TOLERANCE;
+  const deltaNeutral = grossPerp === 0 || Math.abs(netPerp) / grossPerp <= perpTolerance;
+  const deltaNeutralLoose = grossPerp === 0 || Math.abs(netPerp) / grossPerp <= HEDGE_TOLERANCE;
 
   // --- Totals -------------------------------------------------------------
   let perpUpnlUsd = 0;
@@ -1388,7 +1405,7 @@ export function deriveAsset(
   const roi = capitalUsd >= MIN_APR_CAPITAL_USD ? pnlUsd / capitalUsd : null;
 
   // Forward locked numbers — deterministic only where the hedge holds.
-  const coveredVenues = new Set([...byVenue.values()].filter((v) => v.covered).map((v) => v.venue));
+  const coveredVenues = new Set([...byVenue.values()].filter((v) => v.coveredLoose).map((v) => v.venue));
   let lockedCarryPerYearUsd = 0;
   let lockedToMaturityUsd = 0;
   let lockedNotionalUsd = 0;
@@ -1425,7 +1442,8 @@ export function deriveAsset(
   }
   // "Locked" means the whole book is: a venue with a missing or short leg
   // has no deterministic carry to quote, however good the covered half.
-  const lockedOk = anyLocked && !hasUnknownRate && deltaNeutral && gaps.length === 0;
+  const lockedOk =
+    anyLocked && !hasUnknownRate && deltaNeutralLoose && [...byVenue.values()].every((v) => v.coveredLoose);
   const lockedAprFwd =
     lockedOk && capitalUsd >= MIN_APR_CAPITAL_USD ? lockedCarryPerYearUsd / capitalUsd : null;
 
