@@ -303,23 +303,28 @@ interface AccountView {
   isolatedOccupied: Set<number>;
   /** tokenId → the cross bucket for that collateral. */
   crossByToken: Map<number, BorosMarginBucket>;
+  /** tokenId → free cross margin net of resting orders' margin too, which
+   * `payTreasury`'s `_checkIMStrict` counts. Absent when a zone's order margin
+   * is unknown. */
+  crossFreeWithOrdersByToken: Map<number, number>;
   /** marketId → that market's own isolated bucket. */
   isolatedByMarket: Map<number, BorosMarginBucket>;
   /** Markets with a resting order in the cross account — what a close or roll cancels. */
   restingOrderMarkets: Set<number>;
 }
 
-const freeCrossOf = (account: AccountView): Map<number, number> =>
-  new Map([...account.crossByToken].map(([tokenId, c]) => [tokenId, c.available]));
+const freeCrossOf = (account: AccountView): Map<number, number> => new Map(account.crossFreeWithOrdersByToken);
 
 /** The automatic gas top-up's zone: the traded one when it can spare the
  * dollars, else the best-funded one; the traded one again when none can.
- * `tradedFreeAfter` replaces the traded zone's free margin (a roll's preview). */
+ * The traded zone keeps its order-exclusive free margin (a close cancels its
+ * own orders first), or `tradedFreeAfter` (a roll's preview). */
 function gasTopUpMarketFor(markets: BorosMarket[], account: AccountView, tradedFreeAfter?: number | null) {
   return (amountUsd: number, tradedMarketId: number): number => {
     const freeCrossByToken = freeCrossOf(account);
     const tokenId = markets.find((m) => m.marketId === tradedMarketId)?.tokenId;
-    if (typeof tradedFreeAfter === 'number' && tokenId !== undefined) freeCrossByToken.set(tokenId, tradedFreeAfter);
+    const tradedFree = typeof tradedFreeAfter === 'number' ? tradedFreeAfter : account.crossByToken.get(tokenId ?? -1)?.available;
+    if (tokenId !== undefined && tradedFree !== undefined) freeCrossByToken.set(tokenId, tradedFree);
     const zone = chooseGasTopUpZone({
       amountUsd,
       markets,
@@ -355,6 +360,7 @@ function readAccount(zones: BorosCollateralZone[]): AccountView {
     crossByToken: new Map(),
     isolatedByMarket: new Map(),
     restingOrderMarkets: new Set(),
+    crossFreeWithOrdersByToken: new Map(),
   };
   for (const zone of zones) {
     // Cross only: that is the account a close's cancel is sent to.
@@ -368,6 +374,13 @@ function readAccount(zones: BorosCollateralZone[]): AccountView {
         available: norm18(zone.cross.netBalance) - used,
         hasPositionOrOrders: zone.cross.marketPositions.some(holdsPositionOrOrders),
       });
+      if (zone.cross.marketPositions.every((p) => !p.hasRestingOrders || p.initialMargin !== undefined)) {
+        const usedWithOrders = zone.cross.marketPositions.reduce(
+          (s, p) => s + Math.max(norm18(p.initialMargin ?? '0'), norm18(p.positionInitialMargin ?? p.initialMargin)),
+          0,
+        );
+        view.crossFreeWithOrdersByToken.set(zone.tokenId, norm18(zone.cross.netBalance) - usedWithOrders);
+      }
       for (const p of zone.cross.marketPositions) {
         view.positionByMarket.set(p.marketId, norm18(p.notionalSize));
         view.positionRawByMarket.set(p.marketId, String(p.notionalSize ?? '0'));

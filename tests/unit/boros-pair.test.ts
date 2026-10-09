@@ -953,13 +953,49 @@ describe('evaluatePairGate', () => {
     expect(g.warnings.join(' ')).toMatch(/\$1\.00 worth of \w+ from this market's cross margin/i);
   });
 
-  it('names another coin as the payer when this market\'s cross margin cannot spare the top-up', () => {
+  const closeAt = (size: number, gasBalanceUsd: number, available: number, collateralPriceUsd: number | null = 1) => {
+    const legA = leg({ currentSize: size });
+    const legB = leg({ market: bnMarket, book: book(101, 0.04, 0.042), direction: 'long', currentSize: -size });
+    return evaluatePairGate(
+      gateInput({
+        legA,
+        legB,
+        simulation: simulateBorosPair(simInput({ legA, legB, size, intent: 'close', collateralPriceUsd })),
+        opposingAcknowledged: true,
+        account: account({ gasBalanceUsd, cross: { available, hasPositionOrOrders: true } }),
+      }),
+    );
+  };
+
+  it.each([50, 6_000_000])('a close at gas debt names another coin as the payer when this one cannot spare it (size %s)', (size) => {
+    const g = closeAt(size, -0.02, 0.5);
+    const msg = g.warnings.join(' ');
+    expect(msg).toMatch(/cannot spare about \$1\.02, so it comes from the coin with the most free cross margin\.$/);
+    expect(msg).not.toMatch(/If none can|this market's cross margin/);
+    expect(codes(g)).toEqual([]);
+  });
+
+  it.each([
+    [0.8, 1],
+    [0, 1],
+    [0.8, null],
+  ])('a close with gas at $%s sends no top-up, so it says nothing about one (price %s)', (gas, price) => {
+    const g = closeAt(SIZE, gas, 0.5, price);
+    expect(g.warnings.join(' ')).not.toMatch(/Prepaid gas/);
+    expect(codes(g)).toEqual([]);
+  });
+
+  it.each([50, 6_000_000])('an open keeps the top-up on this market\'s cross margin, matching its blocker (size %s)', (size) => {
     const g = evaluatePairGate(
-      gateInput({ account: account({ gasBalanceUsd: -0.02, cross: { available: 0.5, hasPositionOrOrders: true } }) }),
+      gateInput({
+        simulation: simulateBorosPair(simInput({ size })),
+        account: account({ gasBalanceUsd: -0.02, cross: { available: 0.5, hasPositionOrOrders: true } }),
+      }),
     );
     const msg = g.warnings.join(' ');
-    expect(msg).toMatch(/cannot spare about \$1\.02, so it comes from the coin with the most free cross margin/);
-    expect(msg).not.toMatch(/this market's cross margin/);
+    expect(msg).toMatch(/\$1\.02 worth of \w+ from this market's cross margin/);
+    expect(msg).not.toMatch(/comes from the coin/);
+    expect(g.blockers.find((b) => b.code === 'cross-short-margin')!.message).toMatch(/including about \$1\.02 of gas top-up/);
   });
 
   it('says how low a LOW balance is, and still does not block', () => {
