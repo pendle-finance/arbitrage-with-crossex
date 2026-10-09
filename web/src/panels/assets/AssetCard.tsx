@@ -861,7 +861,7 @@ function PairCard({
               <button
                 type="button"
                 className={`${pill} hover:!border-guava/60 hover:!text-guava`}
-                title="Close both Boros legs. A shared leg closes only this pair's share."
+                title="Close this pair's Boros legs. The perps stay open. A shared leg closes only this pair's share."
                 onClick={onCloseBoros}
               >
                 Close Boros
@@ -6001,7 +6001,8 @@ null
         <Modal
           title={
             <>
-              Close pair
+              {/* Named for what it closes: the perps stay open. */}
+              {pairBorosCloseLegs(closeBoros, group).length === 1 ? 'Close Boros leg' : 'Close Boros legs'}
               <span className="ml-2 text-[12px] font-normal text-ink-400">
                 {group.base} · {prettyVenue(closeBoros.longVenue)} ⇄ {prettyVenue(closeBoros.shortVenue)}
                 {closeBoros.soonestMaturitySec > 0 ? ` · ${fmtDateLocal(closeBoros.soonestMaturitySec)}` : ''}

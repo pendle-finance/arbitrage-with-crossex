@@ -322,6 +322,17 @@ describe('AssetCard with a spread leg', () => {
     expect(dialog.textContent).toMatch(/0\.555/);
   });
 
+  it('the close form for a hedged spread pair is titled for the Boros leg, not the pair', async () => {
+    const user = userEvent.setup();
+    renderCard(book([spreadLeg]));
+    await showPairs(user);
+    await user.click(screen.getByRole('button', { name: /^Gate\s*LONG/ }));
+    await user.click(await screen.findByRole('button', { name: 'Close Boros' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog.textContent).toMatch(/^Close Boros leg/);
+    expect(dialog.textContent).not.toContain('Close pair');
+  });
+
   it('a spread-only pair closes one Boros leg', async () => {
     const user = userEvent.setup();
     renderCard({ ...book([spreadLeg]), perpOpen: [] });
