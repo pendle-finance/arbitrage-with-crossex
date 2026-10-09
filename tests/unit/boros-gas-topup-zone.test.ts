@@ -27,7 +27,7 @@ describe('chooseGasTopUpZone', () => {
     expect(zone).toMatchObject({ ok: true, marketId: 21, tokenId: 2, symbol: 'ETH', freeUsd: 1250 });
   });
 
-  it('refuses when the traded zone cannot spare the dollars, even if another can', () => {
+  it('falls back to the best-funded zone when the traded zone cannot spare the dollars', () => {
     const zone = chooseGasTopUpZone({
       amountUsd: 5,
       markets,
@@ -35,8 +35,33 @@ describe('chooseGasTopUpZone', () => {
       pricesUsd: prices,
       preferMarketId: 20,
     });
+    expect(zone).toMatchObject({ ok: true, marketId: 10, tokenId: 3, symbol: 'USDT', freeUsd: 1000 });
+  });
+
+  it.each([
+    ['$50', 1.02, 0.0004, 0.5],
+    ['$6M', 1.02, -40, 0.9],
+  ])('refuses when neither the traded zone nor any other can pay (%s book)', (_size, amountUsd, ethFree, usdtFree) => {
+    const zone = chooseGasTopUpZone({
+      amountUsd,
+      markets,
+      freeCrossByToken: new Map([[2, ethFree], [3, usdtFree]]),
+      pricesUsd: prices,
+      preferMarketId: 20,
+    });
     expect(zone.ok).toBe(false);
-    if (!zone.ok) expect(zone.message).toMatch(/ETH cross margin has about \$2\.50 free/);
+    if (!zone.ok) expect(zone.message).toMatch(/No Boros cross margin has \$1\.02 free/);
+  });
+
+  it('keeps the traded zone when it can pay, even if another zone holds more', () => {
+    const zone = chooseGasTopUpZone({
+      amountUsd: 1.02,
+      markets,
+      freeCrossByToken: new Map([[2, 0.01], [3, 6_000_000]]), // $25 of ETH vs $6M of USDT
+      pricesUsd: prices,
+      preferMarketId: 21,
+    });
+    expect(zone).toMatchObject({ ok: true, marketId: 21, tokenId: 2 });
   });
 
   it('refuses an unpriced zone rather than treating tokens as dollars', () => {

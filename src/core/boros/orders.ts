@@ -197,6 +197,7 @@ export interface BorosClosePositionRequest {
   openSizeWei: string;
   /** The direction that REDUCES: opposite the position's own side. */
   direction: BorosLegDirection;
+  gasTopUpMarket?: PlaceOrdersOptions['gasTopUpMarket'];
   /** Worst rate this close will accept, an APR fraction. */
   limitApr: number;
   clientOrderId: string;
@@ -237,7 +238,7 @@ export interface BorosOrderClient {
    * with `requireSuccess`. Returns one fill per order, every close first
    * then every open, in leg order.
    */
-  rollOver?(legs: BorosRollLeg[], opts?: Pick<PlaceOrdersOptions, 'cancelOrdersOn'>): Promise<BorosLegFill[]>;
+  rollOver?(legs: BorosRollLeg[], opts?: Pick<PlaceOrdersOptions, 'cancelOrdersOn' | 'gasTopUpMarket'>): Promise<BorosLegFill[]>;
   /** The same batch previewed by the venue on one simulated account state. */
   simulateRollOver?(legs: BorosRollLeg[]): Promise<BorosRollSimulation>;
   /** Force-cancel every resting order on one market (§6A remediation). */
@@ -270,6 +271,9 @@ export interface PlaceOrdersOptions {
    */
   cancelOrdersOn?: number[];
   timeInForce?: 'immediate-or-cancel' | 'fill-or-kill';
+  /** The market whose cross account pays the automatic gas top-up, given its
+   * dollars and the traded market. Absent: the traded market pays. */
+  gasTopUpMarket?: (amountUsd: number, tradedMarketId: number) => number;
 }
 
 /** The rate bound one leg carries, from its estimate and its tolerance. */
@@ -305,6 +309,7 @@ export interface SubmitBorosPairInput {
   /** Markets to clear of resting orders in the same batch (see
    * `PlaceOrdersOptions.cancelOrdersOn`). */
   cancelOrdersOn?: number[];
+  gasTopUpMarket?: PlaceOrdersOptions['gasTopUpMarket'];
   venues?: ReadonlyArray<readonly string[]>;
 }
 
@@ -373,6 +378,7 @@ export async function submitBorosPair(input: SubmitBorosPairInput): Promise<Boro
         // runs its own strict margin check, so it goes after the closes.
         topUpAfter: input.reducing ? reqs.length : 0,
         cancelOrdersOn: input.cancelOrdersOn,
+        gasTopUpMarket: input.gasTopUpMarket,
       });
       submitted.forEach(({ index, req }, i) => {
         byIndex.set(index, fills[i] ?? failed(req, new Error(`no result returned for leg ${index + 1}`)));
