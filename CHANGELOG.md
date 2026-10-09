@@ -3,6 +3,20 @@
 Only substantial releases are listed here — each one bumps `version.json` (which is what the
 in-app update check compares against).
 
+## 1.7.4 — 2026-10-09
+
+TLDR: Boros gas top-ups now pay from the market you trade, in that market's own coin. Accounts
+with no USDT on Boros can trade again.
+
+- **Gas top-up from the traded market.** When prepaid Boros gas runs low, an order adds about
+  $1 of gas. Before, that dollar always came out of the USDT account, so a trader with only ETH
+  or BTC collateral could not trade at all. Now it comes out of the traded market's own
+  collateral: ETH, BTC or USDT, at that coin's price.
+- **"Top up gas" pays in the market's coin too.** The answer names the coin it paid in. With
+  no market picked, it pays from the account with the most free margin.
+- **A clear warning when a coin has no price.** If Boros shows no price for the collateral,
+  the ticket says the order cannot top up gas, and points you to the Boros app.
+
 ## 1.7.3 — 2026-10-05
 
 TLDR: An Accounts tab and one health status in the header, for Gate and Boros together. Roll
