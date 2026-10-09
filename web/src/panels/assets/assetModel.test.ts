@@ -109,7 +109,7 @@ describe('hedge status', () => {
     expect(d.perfect).toBe(false);
   });
 
-  it('a partially-covered venue reports only the shortfall; within 2% counts as covered', () => {
+  it('a partially-covered venue reports only the shortfall; within 0.1% counts as covered on ETH', () => {
     const g = group({
       perpOpen: [perp({ symbol: 'HL', venue: 'HYPERLIQUID', side: 'LONG', qty: 1000 })],
       borosOpen: [boros({ marketId: 1, venue: 'HYPERLIQUID', side: 'LONG', sizeToken: 900 })],
@@ -121,9 +121,86 @@ describe('hedge status', () => {
 
     const near = group({
       perpOpen: [perp({ symbol: 'HL', venue: 'HYPERLIQUID', side: 'LONG', qty: 1000 })],
-      borosOpen: [boros({ marketId: 1, venue: 'HYPERLIQUID', side: 'LONG', sizeToken: 995 })],
+      borosOpen: [boros({ marketId: 1, venue: 'HYPERLIQUID', side: 'LONG', sizeToken: 999.5 })],
     });
     expect(deriveAsset(near, {}, 0, NOW).gaps).toHaveLength(0);
+  });
+
+  it('ETH on a coin market flags a 0.5% gap but keeps its locked APR, which holds to 2%', () => {
+    const g = group({
+      perpOpen: [
+        perp({ symbol: 'HL', venue: 'HYPERLIQUID', side: 'LONG', qty: 1000 }),
+        perp({ symbol: 'OKX', venue: 'OKX', side: 'SHORT', qty: 1000 }),
+      ],
+      borosOpen: [
+        boros({ marketId: 1, venue: 'HYPERLIQUID', side: 'LONG', sizeToken: 995 }),
+        boros({ marketId: 2, venue: 'OKX', side: 'SHORT', sizeToken: 1000 }),
+      ],
+    });
+    const d = deriveAsset(g, {}, 0, NOW);
+    expect(d.gaps).toMatchObject([{ venue: 'HYPERLIQUID', action: 'long-boros', size: 5, unit: 'base' }]);
+    expect(d.perfect).toBe(false);
+    expect(d.lockedCarryPerYearUsd).not.toBeNull();
+  });
+
+  it('a 3% ETH gap loses the locked APR as before', () => {
+    const g = group({
+      perpOpen: [
+        perp({ symbol: 'HL', venue: 'HYPERLIQUID', side: 'LONG', qty: 1000 }),
+        perp({ symbol: 'OKX', venue: 'OKX', side: 'SHORT', qty: 1000 }),
+      ],
+      borosOpen: [
+        boros({ marketId: 1, venue: 'HYPERLIQUID', side: 'LONG', sizeToken: 970 }),
+        boros({ marketId: 2, venue: 'OKX', side: 'SHORT', sizeToken: 1000 }),
+      ],
+    });
+    expect(deriveAsset(g, {}, 0, NOW).lockedCarryPerYearUsd).toBeNull();
+  });
+
+  it('ETH hedged on a USDT market keeps the 2% band, since its dollar size moves with price', () => {
+    const g = group({
+      perpOpen: [perp({ symbol: 'HL', venue: 'HYPERLIQUID', side: 'LONG', qty: 1000 })],
+      borosOpen: [
+        boros({ marketId: 1, venue: 'HYPERLIQUID', side: 'LONG', collateral: 'USDT', sizeToken: 1_890_500, notionalUsd: 1_890_500 }),
+      ],
+    });
+    expect(deriveAsset(g, {}, 0, NOW).gaps).toHaveLength(0);
+  });
+
+  it('HYPE keeps the 2% band on both checks', () => {
+    const g = group({
+      base: 'HYPE',
+      priceUsd: 85.75,
+      perpOpen: [
+        perp({ symbol: 'HL', venue: 'HYPERLIQUID', side: 'SHORT', qty: 2.3, notionalUsd: 197.23 }),
+        perp({ symbol: 'GATE', venue: 'GATE', side: 'LONG', qty: 2.3, notionalUsd: 199.0 }),
+      ],
+      borosOpen: [
+        boros({ marketId: 216, venue: 'HYPERLIQUID', side: 'SHORT', collateral: 'USDT', sizeToken: 200, notionalUsd: 200 }),
+        boros({ marketId: 217, venue: 'GATE', side: 'LONG', collateral: 'USDT', sizeToken: 200, notionalUsd: 200 }),
+      ],
+    });
+    const d = deriveAsset(g, {}, 0, NOW);
+    expect(d.gaps).toHaveLength(0);
+    expect(d.deltaNeutral).toBe(true);
+    expect(d.perfect).toBe(true);
+  });
+
+  it('ETH perps 0.5% apart are not delta-neutral', () => {
+    const g = group({
+      perpOpen: [
+        perp({ symbol: 'HL', venue: 'HYPERLIQUID', side: 'LONG', qty: 1000 }),
+        perp({ symbol: 'OKX', venue: 'OKX', side: 'SHORT', qty: 990 }),
+      ],
+      borosOpen: [
+        boros({ marketId: 1, venue: 'HYPERLIQUID', side: 'LONG', sizeToken: 1000 }),
+        boros({ marketId: 2, venue: 'OKX', side: 'SHORT', sizeToken: 990 }),
+      ],
+    });
+    const d = deriveAsset(g, {}, 0, NOW);
+    expect(d.deltaNeutral).toBe(false);
+    expect(d.perfect).toBe(false);
+    expect(d.lockedCarryPerYearUsd).not.toBeNull();
   });
 
   it('an unbalanced perp book is flagged even when every floating leg is covered', () => {

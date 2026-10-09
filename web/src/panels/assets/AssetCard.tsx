@@ -5407,7 +5407,7 @@ export function AssetCard({
               className={HEAD_CHIP}
               title={
                 derived.grossPerp > 0 && derived.netPerp !== 0
-                  ? `Every leg is covered and the perps cancel within 2%.\nResidual exposure\t${derived.netPerp > 0 ? 'LONG' : 'SHORT'} ${sizeLabel(Math.abs(derived.netPerp), venues[0]?.unit ?? 'usd', group.base)}${venues[0]?.unit === 'base' && group.priceUsd > 0 ? ` ≈ ${fmtUsdCompact(Math.abs(derived.netPerp) * group.priceUsd)}` : ''}`
+                  ? `Every leg is covered and the perps cancel within ${venues[0]?.unit === 'base' ? '0.1%' : '2%'}.\nResidual exposure\t${derived.netPerp > 0 ? 'LONG' : 'SHORT'} ${sizeLabel(Math.abs(derived.netPerp), venues[0]?.unit ?? 'usd', group.base)}${venues[0]?.unit === 'base' && group.priceUsd > 0 ? ` ≈ ${fmtUsdCompact(Math.abs(derived.netPerp) * group.priceUsd)}` : ''}`
                   : 'Every leg is covered and the perps cancel exactly.'
               }
             >
