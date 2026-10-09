@@ -1190,6 +1190,11 @@ export function evaluatePairGate(input: EvaluatePairInput): PairGate {
       'Prepaid gas on this Boros account could not be read, so this order may still be refused for gas. ' +
         'This is gas, not trading collateral: topping up your margin will not fix it.',
     );
+  } else if (gas !== undefined && gas < MIN_GAS_BALANCE_USD && !((sim.collateralPriceUsd ?? 0) > 0)) {
+    warnings.push(
+      `Prepaid gas on this Boros account is ${gas <= 0 ? 'empty' : `low, about $${gas.toFixed(2)}`}, and the ${sim.collateral} price is unknown, so this order cannot top it up and may be refused for gas. ` +
+        'Top up gas in the Boros app.',
+    );
   } else if (gas !== undefined && gas < MIN_GAS_BALANCE_USD) {
     // NOT a blocker. The order carries its own `payTreasury` and the relayer
     // counts that as a credit when it checks the budget, so a low balance stops
