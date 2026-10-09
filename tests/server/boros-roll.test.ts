@@ -433,3 +433,58 @@ describe('POST /api/boros/roll/execute', () => {
     expect(place).not.toHaveBeenCalled();
   });
 });
+
+describe('POST /api/boros/roll/execute — the gas top-up zone', () => {
+  const ETH_MARKET = 170;
+  const withEthZone = (ethFree: number): Record<string, unknown> => {
+    const rows = (heldPair['/apis/v1/accounts/market-acc-infos-by-root'] as { results: unknown[] }).results;
+    return {
+      ...heldPair,
+      '/apis/v1/markets': {
+        results: [
+          market(HL, 'Hyperliquid', 0.09),
+          market(BN, 'Binance', 0.045),
+          market(HL2, 'Hyperliquid', 0.1, MATURITY2),
+          market(BN2, 'Binance', 0.05, MATURITY2),
+          { ...market(ETH_MARKET, 'Hyperliquid', 0.05), tokenId: 2 },
+        ],
+      },
+      '/apis/v1/accounts/market-acc-infos-by-root': {
+        results: [...rows, { marketAcc: marketAcc(ADDRESS, 2), netBalance: raw(ethFree), initialMargin: raw(0), positions: [] }],
+      },
+    };
+  };
+  const rollWith = async (availableAfter: number | null, ethFree = 1) => {
+    const seen: Array<Parameters<NonNullable<BorosOrderClient['rollOver']>>[1]> = [];
+    makeRollApp(withEthZone(ethFree), {
+      ...spyClient(async (legs, opts) => {
+        seen.push(opts);
+        return rolledFills(legs);
+      }),
+      simulateRollOver: async (legs) => venueOk(legs, { availableAfter }),
+    });
+    const res = await post('/api/boros/roll/execute', rollBody());
+    expect(res.statusCode).toBe(200);
+    expect(res.json().data.result.status).toBe('rolled');
+    return seen[0]!.gasTopUpMarket!;
+  };
+
+  it('pays from the ETH zone when the USDT zone has under the top-up free after the roll', async () => {
+    expect((await rollWith(0.5))(1.02, HL)).toBe(ETH_MARKET);
+  });
+
+  it.each([
+    ['$50 left after the roll', 50],
+    ['$6M left after the roll', 6_000_000],
+  ])('keeps the rolled zone when it can pay (%s)', async (_label, after) => {
+    expect((await rollWith(after))(1.02, HL)).toBe(HL);
+  });
+
+  it('uses the current free margin when the preview gives none after the roll', async () => {
+    expect((await rollWith(null))(1.02, HL)).toBe(HL);
+  });
+
+  it('keeps the rolled zone, as before, when no zone can pay', async () => {
+    expect((await rollWith(0.5, 0))(1.02, HL)).toBe(HL);
+  });
+});

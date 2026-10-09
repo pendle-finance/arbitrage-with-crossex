@@ -309,6 +309,28 @@ interface AccountView {
   restingOrderMarkets: Set<number>;
 }
 
+const freeCrossOf = (account: AccountView): Map<number, number> =>
+  new Map([...account.crossByToken].map(([tokenId, c]) => [tokenId, c.available]));
+
+/** The automatic gas top-up's zone: the traded one when it can spare the
+ * dollars, else the best-funded one; the traded one again when none can.
+ * `tradedFreeAfter` replaces the traded zone's free margin (a roll's preview). */
+function gasTopUpMarketFor(markets: BorosMarket[], account: AccountView, tradedFreeAfter?: number | null) {
+  return (amountUsd: number, tradedMarketId: number): number => {
+    const freeCrossByToken = freeCrossOf(account);
+    const tokenId = markets.find((m) => m.marketId === tradedMarketId)?.tokenId;
+    if (typeof tradedFreeAfter === 'number' && tokenId !== undefined) freeCrossByToken.set(tokenId, tradedFreeAfter);
+    const zone = chooseGasTopUpZone({
+      amountUsd,
+      markets,
+      freeCrossByToken,
+      pricesUsd: resolveCollateralPricesUsd(markets),
+      preferMarketId: tradedMarketId,
+    });
+    return zone.ok ? zone.marketId : tradedMarketId;
+  };
+}
+
 function holdsPositionOrOrders(p: {
   notionalSize: string;
   initialMargin?: string;
@@ -561,6 +583,7 @@ export function createPairPricer(deps: AppDeps) {
       intent,
       gasBalanceUsd,
       account,
+      markets,
     };
   };
 
@@ -847,7 +870,7 @@ export function borosPairRoutes(deps: AppDeps) {
       try {
         // Fresh account read: margin and positions decide the gate, and a cached
         // copy could be up to TTL.boros old — far too stale to authorise an order.
-        const { simulation, gate, intent, account, legs: pricedLegs } = await priceRequest(body, true);
+        const { simulation, gate, intent, account, markets, legs: pricedLegs } = await priceRequest(body, true);
         const legs = pricedLegs.map((leg, i) => ({ market: leg.market, sizing: simulation.legs[i].sizing }));
         unlockCloses(legs.filter((l) => l.sizing.opposing).map((l) => l.market.marketId));
         const addsToUnsupportedCoin = legs.some(
@@ -954,6 +977,7 @@ export function borosPairRoutes(deps: AppDeps) {
             intent === 'close'
               ? legOrders.flatMap((o) => (o && account.restingOrderMarkets.has(o.marketId) ? [o.marketId] : []))
               : undefined,
+          gasTopUpMarket: gasTopUpMarketFor(markets, account),
         }).then((result) => ({ result, estimate: simulation, warnings: gate.warnings }));
         rememberExecution(memoKey, pending);
         const payload = await pending;
@@ -1088,7 +1112,7 @@ export function borosPairRoutes(deps: AppDeps) {
       const unlockRoll = lockCloses([...parseLegs(body.exit?.legs), ...parseLegs(body.entry?.legs)].map((leg) => leg.marketId));
       if (!unlockRoll) return refuse(reply, { code: 409, category: 'validation', message: ORDER_RUNNING, retryable: false });
       try {
-        const { exit, entry, gate, account, openSizeWei, plan: priced } = await priceRoll(body, true);
+        const { exit, entry, gate, venue, account, openSizeWei, plan: priced } = await priceRoll(body, true);
         if (priced?.kind === 'rollover' && (!orders.rollOver || !orders.simulateRollOver)) {
           throw new CoreError('Boros roll-over is not configured on this install.', 'not-configured');
         }
@@ -1112,7 +1136,8 @@ export function borosPairRoutes(deps: AppDeps) {
         // the same batch: one left behind could re-open a leg the roll just moved.
         const exitIds = plan.kind === 'rollover' ? plan.legs.map((l) => l.fromMarketId) : plan.closes.map((o) => o.marketId);
         const cancelOrdersOn = [...new Set(exitIds)].filter((id) => account.restingOrderMarkets.has(id));
-        const pending: Promise<RollPayload> = submitBorosRoll(orders, plan, { cancelOrdersOn }).then((result) => ({
+        const gasTopUpMarket = gasTopUpMarketFor(exit.markets, account, venue?.availableAfter);
+        const pending: Promise<RollPayload> = submitBorosRoll(orders, plan, { cancelOrdersOn, gasTopUpMarket }).then((result) => ({
           result,
           exit: { simulation: exit.simulation, gate: exit.gate },
           entry: { simulation: entry.simulation, gate: entry.gate },
@@ -1195,7 +1220,7 @@ export function borosPairRoutes(deps: AppDeps) {
         const zone = chooseGasTopUpZone({
           amountUsd,
           markets,
-          freeCrossByToken: new Map([...account.crossByToken].map(([tokenId, c]) => [tokenId, c.available])),
+          freeCrossByToken: freeCrossOf(account),
           pricesUsd: resolveCollateralPricesUsd(markets),
           preferMarketId,
         });
@@ -1404,6 +1429,7 @@ export function borosPairRoutes(deps: AppDeps) {
             // of 0 ± tolerance would be nowhere near the book.
             limitApr: limitAprFor(direction, knownRate(market.midApr) ? market.midApr : market.markApr, slippageApr),
             clientOrderId,
+            gasTopUpMarket: gasTopUpMarketFor(markets, account),
           });
           /**
            * ⚠ Bust the Boros reads this close just invalidated.

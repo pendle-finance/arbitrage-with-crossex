@@ -13,6 +13,7 @@ import type {
   BorosLegFill,
   BorosMarketOrderRequest,
   BorosOrderClient,
+  PlaceOrdersOptions,
 } from '../../src/core/boros/orders';
 import { resetAgentApprovalCache } from '../../src/server/borosAgentApproval';
 import { borosExecutionsPending } from '../../src/server/routes/borosPair';
@@ -436,18 +437,18 @@ describe('POST /api/boros/pair/top-up-gas', () => {
     expect(paid).toEqual([[5, BN]]);
   });
 
-  it('refuses, spending nothing, when that zone cannot spare the dollars', async () => {
+  it('refuses, spending nothing, when no zone can spare the dollars', async () => {
     const payTreasury = vi.fn();
     makeApp({ ...account(3) }, undefined, { ...orderClient(), payTreasury });
     const res = await post('/api/boros/pair/top-up-gas', { amountUsd: 5, marketId: HL });
     expect(res.statusCode).toBeGreaterThanOrEqual(400);
-    expect(res.json().error.message).toMatch(/USDT cross margin has about \$3\.00 free/);
+    expect(res.json().error.message).toMatch(/No Boros cross margin has \$5\.00 free.*the most is about \$3\.00 of USDT/);
     expect(payTreasury).not.toHaveBeenCalled();
   });
 
   describe('an ETH spread market', () => {
     const SPREAD = 59;
-    const ethZone = (ethFree: number) => ({
+    const ethZone = (ethFree: number, usdtFree = 500_000) => ({
       '/apis/v1/markets': {
         results: [
           {
@@ -461,7 +462,7 @@ describe('POST /api/boros/pair/top-up-gas', () => {
       },
       '/apis/v1/accounts/market-acc-infos-by-root': {
         results: [
-          { marketAcc: marketAcc(ADDRESS, 3), netBalance: raw(500_000), initialMargin: raw(0), positions: [] },
+          { marketAcc: marketAcc(ADDRESS, 3), netBalance: raw(usdtFree), initialMargin: raw(0), positions: [] },
           { marketAcc: marketAcc(ADDRESS, 2), netBalance: raw(ethFree), initialMargin: raw(0), positions: [] },
         ],
       },
@@ -481,12 +482,26 @@ describe('POST /api/boros/pair/top-up-gas', () => {
       expect(res.json().data).toEqual({ sentUsd: 5, paidFrom: 'ETH', replayed: false });
     });
 
+    it('pays from USDT when the ETH zone cannot spare the dollars, and says so', async () => {
+      const paid: Array<[number, number]> = [];
+      makeApp(ethZone(0.01), undefined, {
+        ...orderClient(),
+        payTreasury: async (amountUsd, marketId) => {
+          paid.push([amountUsd, marketId]);
+        },
+      });
+      const res = await post('/api/boros/pair/top-up-gas', { amountUsd: 30, marketId: SPREAD });
+      expect(res.statusCode).toBe(200);
+      expect(paid).toEqual([[30, HL]]);
+      expect(res.json().data).toEqual({ sentUsd: 30, paidFrom: 'USDT', replayed: false });
+    });
+
     it('prices the ETH free margin at the ETH price, not at $1 a token', async () => {
       const payTreasury = vi.fn();
-      makeApp(ethZone(0.01), undefined, { ...orderClient(), payTreasury });
+      makeApp(ethZone(0.01, 2), undefined, { ...orderClient(), payTreasury });
       const res = await post('/api/boros/pair/top-up-gas', { amountUsd: 30, marketId: SPREAD });
       expect(res.statusCode).toBeGreaterThanOrEqual(400);
-      expect(res.json().error.message).toMatch(/ETH cross margin has about \$19\.00 free/);
+      expect(res.json().error.message).toMatch(/the most is about \$19\.00 of ETH/);
       expect(payTreasury).not.toHaveBeenCalled();
     });
   });
@@ -505,6 +520,81 @@ describe('POST /api/boros/pair/top-up-gas', () => {
     expect(res.statusCode).toBe(503);
   });
 
+});
+
+describe('the automatic gas top-up picks a zone that can pay', () => {
+  const ETH_MARKET = (id: number, venue: string, apr: number) => ({ ...market(id, venue, apr), tokenId: 2 });
+  const ethBook = (ethNet: number, usdtNet: number) => {
+    const eth = marketAcc(ADDRESS, 2);
+    const held = [
+      { marketId: HL, size: 100_000 },
+      { marketId: BN, size: -100_000 },
+    ];
+    return {
+      '/apis/v1/markets': { results: [ETH_MARKET(HL, 'Hyperliquid', 0.09), ETH_MARKET(BN, 'Binance', 0.045), market(OK, 'OKX', 0.05)] },
+      '/apis/v1/accounts/market-acc-infos-by-root': {
+        results: [
+          { marketAcc: marketAcc(ADDRESS, 3), netBalance: raw(usdtNet), initialMargin: raw(0), positions: [] },
+          {
+            marketAcc: eth,
+            netBalance: raw(ethNet),
+            initialMargin: raw(0),
+            positions: held.map((p) => ({ marketId: p.marketId, signedSize: raw(p.size), initialMargin: raw(0), orders: [] })),
+          },
+        ],
+      },
+      '/apis/v1/accounts/active-positions': {
+        results: held.map((p) => ({
+          marketAcc: eth,
+          marketId: p.marketId,
+          side: p.size >= 0 ? 0 : 1,
+          fixedApr: 0,
+          signedSize: raw(p.size),
+          unrealisedPnl: '0',
+          settlementPnl: '0',
+        })),
+      },
+    };
+  };
+  const closeAtGasDebt = async (ethNet: number, usdtNet: number) => {
+    const seen: PlaceOrdersOptions[] = [];
+    makeApp(ethBook(ethNet, usdtNet), undefined, {
+      ...orderClient(),
+      getGasBalance: async () => -0.02,
+      placeMarketOrders: async (reqs, opts) => {
+        seen.push(opts ?? {});
+        return reqs.map((r) => okFill({ marketId: r.marketId, direction: r.direction, filledSize: r.size }));
+      },
+    });
+    const res = await post(
+      '/api/boros/pair/execute',
+      pairBody({ intent: 'close', opposingAcknowledged: true, ids: ['coid-gasz-a', 'coid-gasz-b'] }),
+    );
+    return { res, seen };
+  };
+
+  it('a close at gas debt on an ETH zone under margin pays from idle USDT, and the close is still sent', async () => {
+    const { res, seen } = await closeAtGasDebt(0, 5_000);
+    expect(res.statusCode).toBe(200);
+    expect(seen).toHaveLength(1);
+    expect(seen[0].reducing).toBe(true);
+    expect(seen[0].gasTopUpMarket!(1.02, HL)).toBe(OK);
+  });
+
+  it.each([
+    ['$50', 1],
+    ['$6M', 3_200],
+  ])('keeps the traded ETH zone when it can pay (%s of ETH free)', async (_book, ethNet) => {
+    const { res, seen } = await closeAtGasDebt(ethNet + 1_000, 6_000_000);
+    expect(res.statusCode).toBe(200);
+    expect(seen[0].gasTopUpMarket!(1.02, HL)).toBe(HL);
+  });
+
+  it('keeps the traded zone, as before, when no zone can pay', async () => {
+    const { res, seen } = await closeAtGasDebt(0, 0.5);
+    expect(res.statusCode).toBe(200);
+    expect(seen[0].gasTopUpMarket!(1.02, HL)).toBe(HL);
+  });
 });
 
 describe('borosExecutionsPending', () => {

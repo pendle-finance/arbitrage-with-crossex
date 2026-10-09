@@ -61,28 +61,29 @@ export const MAX_SLIPPAGE_APR = 0.1;
 
 export const MIN_GAS_BALANCE_USD = AUTO_TOP_UP_BELOW_USD;
 
+export interface GasTopUpZones {
+  markets: Pick<BorosMarket, 'marketId' | 'tokenId'>[];
+  /** Free cross margin per tokenId, collateral units. */
+  freeCrossByToken: Map<number, number>;
+  pricesUsd: Map<number, number | null>;
+}
+
 export type GasTopUpZone =
   | { ok: true; marketId: number; tokenId: number; symbol: string; freeUsd: number }
   | { ok: false; message: string };
 
 /**
- * Which cross margin pays a hand-made gas top-up.
+ * Which cross margin pays a gas top-up.
  *
  * `payTreasury` is charged to the cross account of the market it names, in
  * that market's token, and its `_checkIMStrict` refuses it when that account
  * cannot spare the amount. So the zone must be one the user actually funds:
  * the zone of the market they are trading when the caller names one, else the
- * zone with the most free margin in USD. Refused, with the reason, when the
- * chosen zone cannot cover the dollars — never routed to a zone by default.
+ * zone with the most free margin in USD. When the traded zone is short, the
+ * best-funded zone pays instead. Refused, with the reason, when no zone can
+ * cover the dollars.
  */
-export function chooseGasTopUpZone(input: {
-  amountUsd: number;
-  markets: Pick<BorosMarket, 'marketId' | 'tokenId'>[];
-  /** Free cross margin per tokenId, collateral units. */
-  freeCrossByToken: Map<number, number>;
-  pricesUsd: Map<number, number | null>;
-  preferMarketId?: number;
-}): GasTopUpZone {
+export function chooseGasTopUpZone(input: GasTopUpZones & { amountUsd: number; preferMarketId?: number }): GasTopUpZone {
   const symbolOf = (tokenId: number) => BOROS_TOKEN_SYMBOLS[tokenId] ?? `token ${tokenId}`;
   const freeUsdOf = (tokenId: number): number | null => {
     const price = input.pricesUsd.get(tokenId);
@@ -97,13 +98,7 @@ export function chooseGasTopUpZone(input: {
     if (freeUsd === null) {
       return { ok: false, message: `The ${symbol} price is unknown, so a dollar gas top-up cannot be paid from your ${symbol} margin.` };
     }
-    if (freeUsd < input.amountUsd) {
-      return {
-        ok: false,
-        message: `A gas top-up is paid from the margin of the market you trade. Your ${symbol} cross margin has about $${freeUsd.toFixed(2)} free, less than the $${input.amountUsd.toFixed(2)} top-up. Lower the amount or add ${symbol}.`,
-      };
-    }
-    return { ok: true, marketId: market.marketId, tokenId: market.tokenId, symbol, freeUsd };
+    if (freeUsd >= input.amountUsd) return { ok: true, marketId: market.marketId, tokenId: market.tokenId, symbol, freeUsd };
   }
   let best: { tokenId: number; freeUsd: number; marketId: number } | null = null;
   for (const tokenId of input.freeCrossByToken.keys()) {
@@ -1172,7 +1167,9 @@ export function evaluatePairGate(input: EvaluatePairInput): PairGate {
     const topUp = AUTO_TOP_UP_USD + (gas < 0 ? -gas : 0);
     warnings.push(
       `Prepaid gas on this Boros account is ${gas <= 0 ? 'empty' : `low, about $${gas.toFixed(2)}`}, so this order tops it up as it sends. ` +
-        `That takes about $${topUp.toFixed(2)} worth of ${sim.collateral} from this market's cross margin, on top of the margin for these legs.`,
+        ((account.cross?.available ?? 0) >= autoTopUpToken
+          ? `That takes about $${topUp.toFixed(2)} worth of ${sim.collateral} from this market's cross margin, on top of the margin for these legs.`
+          : `Your ${sim.collateral} cross margin cannot spare about $${topUp.toFixed(2)}, so it comes from the coin with the most free cross margin. If none can, Boros refuses the order.`),
     );
   }
 

@@ -1022,6 +1022,77 @@ describe('makeBorosApiOrderClient — topUpAfter positions the gas top-up', () =
     expect(submission[2].calldata).toBe('0x7a'); // top-up LAST (reqs.length = 2)
     expect(submission.slice(0, 2).every((d) => d.calldata.startsWith('0xda'))).toBe(true);
   });
+
+  describe('gasTopUpMarket picks the zone that pays', () => {
+    const USDT_MARKET = 10;
+    const twoZones = (api: ReturnType<typeof fakeApi>) =>
+      makeBorosApiOrderClient({
+        root: ROOT,
+        accountId: 0,
+        agentPrivateKey: AGENT_KEY,
+        tokenIdForMarket: (marketId) => (marketId === USDT_MARKET ? 3 : 2),
+        collateralPriceUsd: (tokenId) => (tokenId === 3 ? 1 : ETH_PRICE),
+        fetchImpl: api.fetchImpl,
+        statusAttempts: 1,
+        sleep: async () => {},
+      });
+    const payOf = (api: ReturnType<typeof fakeApi>) => api.calls.find((c) => c.path.includes('agent/pay-treasury'))!.body;
+
+    it.each([
+      ['$50', 0.02],
+      ['$6M', 2_400],
+    ])('a close at gas debt on a tight ETH account pays from USDT and still sends (%s book)', async (_book, size) => {
+      const api = fakeApi({ gasBalance: { balanceInUSD: -0.02 } });
+      const asked: Array<[number, number]> = [];
+      await twoZones(api).placeMarketOrders(
+        [leg({ marketId: HL, size }), leg({ marketId: BN, direction: 'long', size })],
+        {
+          reducing: true,
+          topUpAfter: 2,
+          gasTopUpMarket: (usd, traded) => {
+            asked.push([usd, traded]);
+            return USDT_MARKET;
+          },
+        },
+      );
+      expect(asked).toEqual([[1.02, HL]]);
+      expect(payOf(api)).toMatchObject({ isCross: true, marketId: USDT_MARKET, amount: '1020000000000000000' });
+      const submission = orderSubmit(api);
+      expect(submission).toHaveLength(3);
+      expect(submission[2].calldata).toBe('0x7a');
+      expect(submission.slice(0, 2).every((d) => d.calldata.startsWith('0xda'))).toBe(true);
+    });
+
+    it('keeps the traded zone and its amount when the chooser returns it', async () => {
+      const api = fakeApi({ gasBalance: { balanceInUSD: 0.05 } });
+      await twoZones(api).placeMarketOrders([leg()], { gasTopUpMarket: (_usd, traded) => traded });
+      expect(payOf(api)).toMatchObject({ marketId: HL, amount: '400000000000000' });
+    });
+
+    it('routes a roll\'s top-up and a single close\'s through the same chooser', async () => {
+      const rollApi = fakeApi({ gasBalance: { balanceInUSD: 0.1 } });
+      await twoZones(rollApi).rollOver!(
+        [
+          { fromMarketId: HL, toMarketId: HL + 1, size: 10, closeRate: 0.09, openRate: 0.1 },
+          { fromMarketId: BN, toMarketId: BN + 1, size: 10, closeRate: 0.045, openRate: 0.05 },
+        ],
+        { gasTopUpMarket: () => USDT_MARKET },
+      );
+      expect(payOf(rollApi)).toMatchObject({ marketId: USDT_MARKET, amount: '1000000000000000000' });
+
+      const closeApi = fakeApi({ gasBalance: { balanceInUSD: -0.5 } });
+      await twoZones(closeApi).closePosition({
+        marketId: HL,
+        size: 10,
+        openSizeWei: '10000000000000000000',
+        direction: 'long',
+        limitApr: 0.1,
+        clientOrderId: 'a-0000002',
+        gasTopUpMarket: () => USDT_MARKET,
+      });
+      expect(payOf(closeApi)).toMatchObject({ marketId: USDT_MARKET, amount: '1500000000000000000' });
+    });
+  });
 });
 
 /**

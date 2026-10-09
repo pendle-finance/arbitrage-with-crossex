@@ -953,6 +953,15 @@ describe('evaluatePairGate', () => {
     expect(g.warnings.join(' ')).toMatch(/\$1\.00 worth of \w+ from this market's cross margin/i);
   });
 
+  it('names another coin as the payer when this market\'s cross margin cannot spare the top-up', () => {
+    const g = evaluatePairGate(
+      gateInput({ account: account({ gasBalanceUsd: -0.02, cross: { available: 0.5, hasPositionOrOrders: true } }) }),
+    );
+    const msg = g.warnings.join(' ');
+    expect(msg).toMatch(/cannot spare about \$1\.02, so it comes from the coin with the most free cross margin/);
+    expect(msg).not.toMatch(/this market's cross margin/);
+  });
+
   it('says how low a LOW balance is, and still does not block', () => {
     const g = evaluatePairGate(gateInput({ account: account({ gasBalanceUsd: 0.05 }) }));
     expect(codes(g)).not.toContain('no-gas');

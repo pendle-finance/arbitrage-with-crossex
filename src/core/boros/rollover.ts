@@ -488,7 +488,7 @@ export interface BorosRollResult {
 export async function submitBorosRoll(
   client: BorosOrderClient,
   plan: RollPlan,
-  opts?: Pick<PlaceOrdersOptions, 'cancelOrdersOn'>,
+  opts?: Pick<PlaceOrdersOptions, 'cancelOrdersOn' | 'gasTopUpMarket'>,
 ): Promise<BorosRollResult> {
   let fills: BorosLegFill[];
   try {

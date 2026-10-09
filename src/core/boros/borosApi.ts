@@ -525,8 +525,8 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
    * AUTO_TOP_UP_BELOW_USD. Empty when the budget is healthy, unreadable, or
    * the collateral cannot be priced.
    *
-   * Charged on `marketId`, a market the batch itself trades: the top-up comes
-   * out of the margin the user trades with, never a zone they may not fund.
+   * Charged on `marketId`, a market the batch itself trades, unless
+   * `pickMarket` names another zone because this one cannot spare it.
    * Charging the USD zone regardless refused every order from an account with
    * no USDT (its `_checkIMStrict` reverts, and `requireSuccess` takes the
    * whole batch down with it).
@@ -537,7 +537,11 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
    * removes. If the balance really was too low the venue refuses the bundle and
    * `classifyLegFailure` reports that as a gas failure, which is the truth.
    */
-  const autoTopUpCalldata = async (reducing: boolean, marketId: number | undefined): Promise<Hex[]> => {
+  const autoTopUpCalldata = async (
+    reducing: boolean,
+    marketId: number | undefined,
+    pickMarket?: PlaceOrdersOptions['gasTopUpMarket'],
+  ): Promise<Hex[]> => {
     if (!config.collateralPriceUsd || marketId === undefined) return [];
     try {
       const balance = await readGasBalance();
@@ -557,7 +561,7 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
       // the whole dollar sitting on top of it.
       const owed = balance < 0 ? -balance : 0;
       const cents = Math.round(AUTO_TOP_UP_USD * 100) + Math.round(owed * 100);
-      return await buildPayTreasuryCalldata(cents, marketId);
+      return await buildPayTreasuryCalldata(cents, pickMarket ? pickMarket(cents / 100, marketId) : marketId);
     } catch {
       return [];
     }
@@ -782,7 +786,7 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
 
   const rollOver = async (
     legs: BorosRollLeg[],
-    opts?: Pick<PlaceOrdersOptions, 'cancelOrdersOn'>,
+    opts?: Pick<PlaceOrdersOptions, 'cancelOrdersOn' | 'gasTopUpMarket'>,
   ): Promise<BorosLegFill[]> => {
     if (legs.length === 0) return [];
     let calls: RollOverCall[];
@@ -811,7 +815,7 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
     return executeOpening(
       reqs,
       calls.map((c) => c.calldata as Hex),
-      { reducing: false, topUpAfter: legs.length },
+      { reducing: false, topUpAfter: legs.length, gasTopUpMarket: opts?.gasTopUpMarket },
       cancels,
       legs.flatMap((l) => [l.fromMarketId, l.toMarketId]),
     );
@@ -844,7 +848,7 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
     try {
       // Every leg of a batch shares one collateral (an eligible pair must, and
       // a roll moves a position within its token), so the first leg names it.
-      const topUp = await autoTopUpCalldata(opts?.reducing === true, reqs[0]?.marketId);
+      const topUp = await autoTopUpCalldata(opts?.reducing === true, reqs[0]?.marketId, opts?.gasTopUpMarket);
       topUpCount = topUp.length;
       signed = await signCalls([...leading, ...legCalldatas.slice(0, at), ...topUp, ...legCalldatas.slice(at)]);
     } catch (err) {
@@ -885,7 +889,7 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
       // Appended, never prefixed — the classifier reads a leading "[SIMULATE]".
       const topUpFailed = afterLead.slice(at, at + topUpCount).includes(failure);
       const reason = topUpFailed
-        ? `${failure.error as string} (refused call: the automatic gas top-up, paid in this market's collateral)`
+        ? `${failure.error as string} (refused call: the automatic gas top-up, paid from Boros cross margin)`
         : (failure.error as string);
       return reqs.map((req, i) => failedLeg(req, reason, legResponses[i] === failure ? 'this-leg' : 'batch'));
     }
@@ -1031,7 +1035,7 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
           // this is a shape change on their side, not a routine case.
           ...(open === null ? {} : { sizeWei: (asked < open ? asked : open).toString() }),
         },
-      ], { reducing: true, topUpAfter: 1 });
+      ], { reducing: true, topUpAfter: 1, gasTopUpMarket: req.gasTopUpMarket });
       return fill;
     },
   };
