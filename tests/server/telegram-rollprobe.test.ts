@@ -36,22 +36,39 @@ const yu = (
   settleUsd: 0,
   mtmUsd: 0,
   imUsd: o.sizeToken * 100,
+  spreadVenues: null,
   ...o,
 });
 
-const group = (base: string, marketIds: [number, number]): AssetGroup => ({
+const withBoros = (base: string, borosOpen: AssetBorosOpen[]): AssetGroup => ({
   base,
   supported: true,
   priceUsd: 2500,
   earliestSec: NOW - 10 * DAY,
   perpOpen: [perp({ venue: 'GATE', side: 'LONG', qty: 100 }), perp({ venue: 'HYPERLIQUID', side: 'SHORT', qty: 100 })],
   perpClosed: [],
-  borosOpen: [
-    yu({ marketId: marketIds[0], venue: 'GATE', side: 'LONG', sizeToken: 100, maturity: SOON, entryApr: 0.04 }),
-    yu({ marketId: marketIds[1], venue: 'HYPERLIQUID', side: 'SHORT', sizeToken: 100, maturity: SOON, entryApr: 0.08 }),
-  ],
+  borosOpen,
   borosHistory: [],
 });
+
+const group = (base: string, marketIds: [number, number]): AssetGroup =>
+  withBoros(base, [
+    yu({ marketId: marketIds[0], venue: 'GATE', side: 'LONG', sizeToken: 100, maturity: SOON, entryApr: 0.04 }),
+    yu({ marketId: marketIds[1], venue: 'HYPERLIQUID', side: 'SHORT', sizeToken: 100, maturity: SOON, entryApr: 0.08 }),
+  ]);
+
+const spreadGroup = (): AssetGroup =>
+  withBoros('ETH', [
+    yu({
+      marketId: 59,
+      venue: 'HYPERLIQUID',
+      side: 'SHORT',
+      sizeToken: 100,
+      maturity: SOON,
+      entryApr: 0.0348,
+      spreadVenues: ['HYPERLIQUID', 'GATE'],
+    }),
+  ]);
 
 const view = (assets: AssetGroup[]): AssetViewOut =>
   ({
@@ -67,7 +84,12 @@ const view = (assets: AssetGroup[]): AssetViewOut =>
   }) as unknown as AssetViewOut;
 
 const market = (marketId: number, venue: string, base: string, maturity: number): BorosMarket =>
-  ({ marketId, venue, base, maturity, state: 'Normal', maxRateDeviationApr: 0.04 }) as BorosMarket;
+  ({ marketId, venue, base, maturity, state: 'Normal', maxRateDeviationApr: 0.04, tokenId: 2, spreadVenues: null }) as BorosMarket;
+
+const spreadMarket = (marketId: number, maturity: number): BorosMarket => ({
+  ...market(marketId, 'HL-Gate', 'ETH', maturity),
+  spreadVenues: ['HYPERLIQUID', 'GATE'],
+});
 
 const leg = (over: Partial<SimulatedLeg> = {}): SimulatedLeg => ({
   marketId: 1,
@@ -95,9 +117,8 @@ const leg = (over: Partial<SimulatedLeg> = {}): SimulatedLeg => ({
 });
 
 const simulation = (over: Partial<BorosPairSimulation> = {}): BorosPairSimulation => ({
-  legA: leg(),
-  legB: leg({ marketId: 2, direction: 'short' }),
-  receiveLeg: 'B',
+  legs: [leg(), leg({ marketId: 2, direction: 'short' })],
+  receiveLeg: 1,
   estSpreadApr: 0.5,
   worstSpreadApr: 0.5,
   costToCrossSize: 0,
@@ -131,10 +152,11 @@ const deps = (over: {
   assets?: AssetGroup[];
   price?: (body: PairSimulateBody) => Promise<{ simulation: BorosPairSimulation }>;
   address?: string | null;
+  markets?: BorosMarket[];
 }) => ({
   borosAddress: () => (over.address === undefined ? ADDRESS : over.address),
   buildAssetView: async () => view(over.assets ?? [group('ETH', [1, 2])]),
-  loadMarkets: async () => markets,
+  loadMarkets: async () => over.markets ?? markets,
   price:
     over.price ??
     (async (body: PairSimulateBody) => ({ simulation: simulation({ intent: body.intent }) })),
@@ -155,12 +177,40 @@ describe('the roll probe on the server', () => {
     expect(signals[0].targets[0].apr).toBeGreaterThan(signals[0].targets[0].currentApr);
   });
 
+  it('spread pair gets roll targets', async () => {
+    const priced: PairSimulateBody[] = [];
+    const probe = createRollProbe(
+      deps({
+        assets: [spreadGroup()],
+        markets: [spreadMarket(59, SOON), spreadMarket(60, LATER), ...markets.slice(0, 4)],
+        price: async (body) => {
+          priced.push(body);
+          return {
+            simulation: simulation({
+              intent: body.intent,
+              legs: body.legs.map((l) => leg({ marketId: l.marketId, direction: l.direction })),
+              receiveLeg: 0,
+            }),
+          };
+        },
+      }),
+    );
+    const signals = await probe();
+    expect(signals).toHaveLength(1);
+    expect(signals[0].targets.length).toBeGreaterThanOrEqual(1);
+    expect(signals[0].targets[0].maturity).toBe(LATER);
+    const entry = priced.find((b) => b.intent === 'open');
+    expect(entry?.legs.map((l) => [l.marketId, l.direction])).toEqual([[60, 'short']]);
+    const exit = priced.find((b) => b.intent === 'close');
+    expect(exit?.legs.map((l) => [l.marketId, l.direction])).toEqual([[59, 'long']]);
+  });
+
   it('keeps the other pair when one pair cannot be priced', async () => {
     const probe = createRollProbe(
       deps({
         assets: [group('ETH', [1, 2]), group('BTC', [5, 6])],
         price: async (body) => {
-          if (body.legA.marketId === 5 || body.legA.marketId === 7) throw new Error('book unavailable');
+          if (body.legs[0].marketId === 5 || body.legs[0].marketId === 7) throw new Error('book unavailable');
           return { simulation: simulation({ intent: body.intent }) };
         },
       }),
@@ -181,7 +231,7 @@ describe('the roll probe on the server', () => {
         price: async (body) => ({
           simulation: simulation({
             intent: body.intent,
-            legA: leg({ bookStatus: 'unavailable', execApr: null, estFillSize: 0 }),
+            legs: [leg({ bookStatus: 'unavailable', execApr: null, estFillSize: 0 }), leg({ marketId: 2 })],
           }),
         }),
       }),

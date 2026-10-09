@@ -34,6 +34,7 @@ const perp = (venue: string, side: 'LONG' | 'SHORT', qty: number): AssetPerpOpen
 });
 
 const yu = (marketId: number, venue: string, side: 'LONG' | 'SHORT', sizeToken: number, entryApr: number): AssetBorosOpen => ({
+  spreadVenues: null,
   marketId,
   venue,
   side,

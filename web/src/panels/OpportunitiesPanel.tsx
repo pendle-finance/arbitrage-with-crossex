@@ -39,6 +39,7 @@ import type {
   BorosEntryMode,
   EntryMode,
   ExitMode,
+  OpportunityBorosLeg,
   OpportunityGroup,
   OpportunityPair,
   Rebate,
@@ -50,9 +51,10 @@ import { QueryError } from '../components/QueryError';
 import { SegmentedToggle } from '../components/SegmentedToggle';
 import { Skeleton } from '../components/Skeleton';
 import { microLabelClass } from '../components/Th';
-import { TokenIcon, VenueIcon } from '../components/AssetIcon';
+import { SpreadIcon, TokenIcon, VenueIcon } from '../components/AssetIcon';
 import { SideVenue } from '../components/VenueChip';
 import { borosMarketUrl, isUsdCollateral } from '../lib/boros';
+import { spreadLabel } from '../lib/spread';
 import {
   fmtAge,
   fmtDateLocal,
@@ -69,7 +71,7 @@ import { useTradeFlowOptional } from '../trade/TradeFlow';
 import { StrategyFreshness } from './HomeControls';
 import { OpportunityFilterBar } from './OpportunityFilterBar';
 import { canChartCapital, canChartProfit, OpportunityWaterfall } from './OpportunityWaterfall';
-import { heldPerpsOf, repriceHeld, type HeldBook, type HeldTag } from './heldPerps';
+import { heldBorosOf, heldPerpsOf, repriceHeld, type HeldBook, type HeldTag } from './heldPerps';
 import { applyRebate } from './opportunityRebate';
 import { rebateAppliesTo, rebateChipLabel } from '../lib/rebate';
 import { useActiveWallet, useTrackedAddressOptional } from './trackedAddress';
@@ -402,24 +404,28 @@ function LegRow({
  * cheap), not by book — the numbered legs carry the book. */
 function VenueBox({
   venue,
+  icon,
   why,
   fixedApr,
   positive,
+  wide = false,
   children,
 }: {
   venue: string;
-  why: string;
+  icon?: ReactNode;
+  why?: string;
   fixedApr: number | null;
   /** Receives fixed (green, unsigned) vs pays fixed (guava, "−"). */
   positive: boolean;
+  wide?: boolean;
   children: ReactNode;
 }) {
   return (
-    <div className="min-w-0 rounded border border-wash/10 p-5">
+    <div className={`min-w-0 rounded border border-wash/10 p-5${wide ? ' xl:col-span-2' : ''}`}>
       <div className="mb-4 flex flex-wrap items-center gap-x-2.5 gap-y-1.5">
-        <VenueIcon venue={venue} size={20} />
+        {icon ?? <VenueIcon venue={venue} size={20} />}
         <span className="whitespace-nowrap text-[16px] font-bold leading-[19.36px] text-ink-50">{venue}</span>
-        <span className="whitespace-nowrap text-[12px] text-ink-500">{why}</span>
+        {why && <span className="whitespace-nowrap text-[12px] text-ink-500">{why}</span>}
         {fixedApr !== null && Number.isFinite(fixedApr) && (
           <span
             className={`num ml-auto whitespace-nowrap rounded px-3 py-1.5 text-[14px] font-bold ${
@@ -496,10 +502,13 @@ const OpportunityCard = memo(function OpportunityCard({
   // markets (active window + market filter) — independent of the toggle.
   const rebateChip =
     rebate &&
-    (rebateAppliesTo(rebate, pair.shortLeg.marketId) || rebateAppliesTo(rebate, pair.longLeg.marketId))
+    pair.borosLegs.some((leg) => rebateAppliesTo(rebate, leg.marketId))
       ? rebate
       : null;
   const chips = cardChips(pair);
+  const spreadLeg = pair.borosLegs.find((leg) => leg.spreadVenues !== null) ?? null;
+  const shortBoros = pair.borosLegs.find((leg) => leg.side === 'SHORT');
+  const longBoros = pair.borosLegs.find((leg) => leg.side === 'LONG');
   // Only the PAIR's own reasons — they explain this card's own numbers. The
   // group's warnings are about the other markets in the cohort ("… has no
   // CrossEx perp venue"), and those rows stopped being displayed with the
@@ -682,7 +691,7 @@ const OpportunityCard = memo(function OpportunityCard({
               {capitalUsd === null ? (
                 <Dash why={CAPITAL_WHY} />
               ) : (
-                <span title="The minimum capital this trade posts across the four legs.">
+                <span title={`The minimum capital this trade posts across the ${spreadLeg ? 'three' : 'four'} legs.`}>
                   ~{fmtUsd(capitalUsd, 0)}
                 </span>
               )}
@@ -776,11 +785,9 @@ const OpportunityCard = memo(function OpportunityCard({
             className="mt-4 flex cursor-auto flex-col gap-3.5 border-t border-ink-800 pt-4 text-xs"
             onClick={(e) => e.stopPropagation()}
           >
-            {/* "four legs · $10k notional each", then a rule, then the
-                no-price-risk reassurance — the mock's divider line. */}
             <div className="flex flex-wrap items-center gap-x-3.5 gap-y-2.5">
               <span className="whitespace-nowrap text-[11.5px] text-ink-200">
-                four legs ·{' '}
+                {spreadLeg ? 'three' : 'four'} legs ·{' '}
                 <span className="text-link">
                   {fmtNotionalShort(notionalUsd)}
                   {collateralQty
@@ -801,7 +808,7 @@ const OpportunityCard = memo(function OpportunityCard({
               <VenueBox
                 venue={prettyVenue(pair.shortLeg.venue)}
                 why="funding is rich here"
-                fixedApr={pair.shortLeg.execApr ?? pair.shortLeg.midApr}
+                fixedApr={spreadLeg || !shortBoros ? null : (shortBoros.execApr ?? shortBoros.midApr)}
                 positive
               >
                 <LegRow
@@ -815,23 +822,16 @@ const OpportunityCard = memo(function OpportunityCard({
                       : `up to ${pair.capital.shortLeverageMax}× leverage`
                   }
                 />
-                <LegRow
-                  n={2}
-                  side="short"
-                  label={`Short ${base}`}
-                  kind="Boros"
-                  note={<RateNote midApr={pair.shortLeg.midApr} execApr={pair.shortLeg.execApr} />}
-                  href={borosMarketUrl(pair.shortLeg.marketId, 'short')}
-                />
+                {!spreadLeg && shortBoros && <BorosLegRow n={2} leg={shortBoros} label={`Short ${base}`} />}
               </VenueBox>
               <VenueBox
                 venue={prettyVenue(pair.longLeg.venue)}
                 why="funding is cheap here"
-                fixedApr={pair.longLeg.execApr ?? pair.longLeg.midApr}
+                fixedApr={spreadLeg || !longBoros ? null : (longBoros.execApr ?? longBoros.midApr)}
                 positive={false}
               >
                 <LegRow
-                  n={3}
+                  n={spreadLeg ? 2 : 3}
                   side="long"
                   label={`Long ${base}`}
                   kind="CrossEx"
@@ -841,15 +841,23 @@ const OpportunityCard = memo(function OpportunityCard({
                       : `up to ${pair.capital.longLeverageMax}× leverage`
                   }
                 />
-                <LegRow
-                  n={4}
-                  side="long"
-                  label={`Long ${base}`}
-                  kind="Boros"
-                  note={<RateNote midApr={pair.longLeg.midApr} execApr={pair.longLeg.execApr} />}
-                  href={borosMarketUrl(pair.longLeg.marketId, 'long')}
-                />
+                {!spreadLeg && longBoros && <BorosLegRow n={4} leg={longBoros} label={`Long ${base}`} />}
               </VenueBox>
+              {spreadLeg?.spreadVenues && (
+                <VenueBox
+                  venue={spreadLabel(spreadLeg.spreadVenues)}
+                  icon={<SpreadIcon venues={spreadLeg.spreadVenues} size={20} />}
+                  fixedApr={spreadLeg.execApr ?? spreadLeg.midApr}
+                  positive={(spreadLeg.side === 'SHORT' ? 1 : -1) * (spreadLeg.execApr ?? spreadLeg.midApr) >= 0}
+                  wide
+                >
+                  <BorosLegRow
+                    n={3}
+                    leg={spreadLeg}
+                    label={`${spreadLeg.side === 'SHORT' ? 'Short' : 'Long'} ${base} ${spreadLabel(spreadLeg.spreadVenues)} spread`}
+                  />
+                </VenueBox>
+              )}
             </div>
             {/* Kept from the app: the mock never says this, but it is the one
                 line that explains why four legs are not four risks. */}
@@ -904,6 +912,20 @@ const OpportunityCard = memo(function OpportunityCard({
   );
 });
 
+function BorosLegRow({ n, leg, label }: { n: number; leg: OpportunityBorosLeg; label: string }) {
+  const side = leg.side === 'SHORT' ? 'short' : 'long';
+  return (
+    <LegRow
+      n={n}
+      side={side}
+      label={label}
+      kind="Boros"
+      note={<RateNote midApr={leg.midApr} execApr={leg.execApr} />}
+      href={borosMarketUrl(leg.marketId, side)}
+    />
+  );
+}
+
 /** "at 8.0% → 7.8% after impact" — the Boros leg's mid rate and what it locks. */
 function RateNote({ midApr, execApr }: { midApr: number; execApr: number | null }) {
   // Only the rate this leg actually LOCKS. The mid → exec arrow that used to
@@ -949,6 +971,9 @@ export function OpportunitiesPanel() {
   const shownKeysRef = useRef<ReadonlySet<string>>(new Set());
   const flow = useTradeFlowOptional();
   const sizeId = useId();
+  // Set by a double-click on the preset amount, so the custom input that
+  // replaces it takes focus with its digits selected.
+  const focusSizeRef = useRef(false);
 
   const persist = (next: Partial<StoredControls>) =>
     writeJson(OPPORTUNITIES_STORAGE_KEY, {
@@ -1008,18 +1033,18 @@ export function OpportunitiesPanel() {
    */
   const trackedAddress = useTrackedAddressOptional()?.address ?? null;
   const exposure = usePositions(trackedAddress !== null).data?.exposure;
-  const borosMarkets = useBorosPairContext(trackedAddress).data?.markets;
+  const pairContext = useBorosPairContext(trackedAddress).data;
+  const borosMarkets = pairContext?.markets;
+  const spreadMarkets = pairContext?.spreadMarkets;
   const held = useMemo(() => {
     if (!exposure) return undefined;
     const books: HeldBook[] = exposure.map((g) => ({
       base: g.base,
       perps: g.legs.map((l) => ({ venue: l.exchange, side: l.side })),
-      boros: (borosMarkets ?? [])
-        .filter((m) => m.currentSize !== 0 && m.base.toUpperCase() === g.base.toUpperCase())
-        .map((m) => ({ venue: m.venue, maturity: m.maturity })),
+      boros: heldBorosOf([...(borosMarkets ?? []), ...(spreadMarkets ?? [])], g.base),
     }));
     return heldPerpsOf(books);
-  }, [exposure, borosMarkets]);
+  }, [exposure, borosMarkets, spreadMarkets]);
   const pricedAtUsd = data?.meta.notionalUsd;
   const rows = useMemo(
     () =>
@@ -1105,11 +1130,28 @@ export function OpportunitiesPanel() {
               aria-label="Custom notional (USD)"
               value={sizeStr}
               onChange={(e) => setSizeStr(e.target.value)}
+              ref={(el) => {
+                if (!el || !focusSizeRef.current) return;
+                focusSizeRef.current = false;
+                el.focus();
+                el.select();
+              }}
               title="The notional each leg is priced at."
               className="num w-24 bg-transparent text-sm font-semibold text-ink-50 outline-none placeholder:text-ink-500"
             />
           ) : (
-            <span className="num text-sm font-semibold text-ink-50">
+            <span
+              className="num cursor-text select-none text-sm font-semibold text-ink-50"
+              title="Double-click to edit"
+              onDoubleClick={() => {
+                // Edit from the amount on screen, not the last custom size.
+                focusSizeRef.current = true;
+                setSizeStr(String(notionalUsd));
+                setSize(notionalUsd);
+                setNotionalChoice('custom');
+                persist({ notionalChoice: 'custom', customNotionalUsd: notionalUsd });
+              }}
+            >
               {notionalUsd.toLocaleString('en-US')}
             </span>
           )}

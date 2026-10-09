@@ -34,6 +34,7 @@ const perp = (venue: string, side: 'LONG' | 'SHORT', fundingApr7d: number): Asse
 });
 
 const yu = (marketId: number, venue: string, side: 'LONG' | 'SHORT', sizeToken: number, entryApr: number): AssetBorosOpen => ({
+  spreadVenues: null,
   marketId,
   venue,
   side,

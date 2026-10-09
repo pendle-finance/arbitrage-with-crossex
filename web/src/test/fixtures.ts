@@ -21,6 +21,7 @@ import type {
   EvenPlan,
   Goal,
   OpportunitiesResult,
+  OpportunityBorosLeg,
   OpportunityGroup,
   OpportunityLeg,
   OpportunityMarketRow,
@@ -49,6 +50,7 @@ import type {
 } from '../api/types';
 import type { MarginTiers } from '../lib/liquidation';
 import type { SharePayloadV1 } from '../lib/shareCodec';
+import { SECONDS_IN_YEAR } from '../panels/assets/assetModel';
 import { env, server } from './server';
 
 // Re-exported so the imports above stay live for the upcoming opportunity
@@ -451,14 +453,24 @@ function ethOpportunityMarkets(): OpportunityMarketRow[] {
 
 export function makeOpportunityLeg(overrides: Partial<OpportunityLeg> = {}): OpportunityLeg {
   return {
-    marketId: 101,
     venue: 'HYPERLIQUID',
     crossexVenue: 'HYPERLIQUID',
     crossexSymbol: 'HYPERLIQUID_FUTURE_ETH_USDC',
     base: 'ETH',
+    ...overrides,
+  };
+}
+
+export function makeOpportunityBorosLeg(overrides: Partial<OpportunityBorosLeg> = {}): OpportunityBorosLeg {
+  return {
+    marketId: 101,
+    side: 'SHORT',
+    venue: 'HYPERLIQUID',
+    spreadVenues: null,
     midApr: 0.09,
     execApr: 0.0895,
     settleFeeApr: 0.001,
+    takerFeeRate: 0.0005,
     ...overrides,
   };
 }
@@ -487,29 +499,28 @@ export function makeOpportunityPair(overrides: Partial<OpportunityPair> = {}): O
   // Perp IM dominates: $10k at HL's 10x + Binance's 20x. The Boros legs post
   // the kIM formula's tiny 30-day margin.
   const capital = {
-    borosShortImUsd: 8,
-    borosLongImUsd: 4,
+    borosIms: [
+      { marketId: 101, imUsd: 8 },
+      { marketId: 102, imUsd: 4 },
+    ],
     perpShortImUsd: OPP_NOTIONAL / 10,
     perpLongImUsd: OPP_NOTIONAL / 20,
     shortLeverageMax: 10,
     longLeverageMax: 20,
   };
-  const capitalUsd =
-    capital.borosShortImUsd +
-    capital.borosLongImUsd +
-    capital.perpShortImUsd +
-    capital.perpLongImUsd;
+  const capitalUsd = 8 + 4 + capital.perpShortImUsd + capital.perpLongImUsd;
   return {
     base: 'ETH',
     shortLeg: makeOpportunityLeg(),
     longLeg: makeOpportunityLeg({
-      marketId: 102,
       venue: 'BINANCE',
       crossexVenue: 'BINANCE',
       crossexSymbol: 'BINANCE_FUTURE_ETH_USDT',
-      midApr: 0.045,
-      execApr: 0.0455,
     }),
+    borosLegs: [
+      makeOpportunityBorosLeg(),
+      makeOpportunityBorosLeg({ marketId: 102, side: 'LONG', venue: 'BINANCE', midApr: 0.045, execApr: 0.0455 }),
+    ],
     grossSpreadApr,
     execSpreadApr,
     borosImpactApr: grossSpreadApr - execSpreadApr,
@@ -531,6 +542,85 @@ export function makeOpportunityPair(overrides: Partial<OpportunityPair> = {}): O
     effectiveLeverage: OPP_NOTIONAL / capitalUsd,
     estProfitUsd,
     secondsToMaturity: OPP_SECONDS_TO_MATURITY,
+    reasons: [],
+    ...overrides,
+  };
+}
+
+export const SPREAD_OPP_NOW = 1_791_417_600;
+export const SPREAD_OPP_MATURITY = 1_795_737_600;
+export const SPREAD_OPP_MARKET_ID = 59;
+const SPREAD_BOROS_IM = OPP_NOTIONAL * 0.00707;
+
+export function makeSpreadOpportunityPair(overrides: Partial<OpportunityPair> = {}): OpportunityPair {
+  const secondsToMaturity = SPREAD_OPP_MATURITY - SPREAD_OPP_NOW;
+  const nt = OPP_NOTIONAL * (secondsToMaturity / (365 * 24 * 3600));
+  const midApr = 0.0348;
+  const execApr = midApr - 0.0005;
+  const borosTakerFeeUsd = 0.001 * nt;
+  const borosSettleFeeUsd = 0.002 * nt;
+  const perpEntryFeesUsd = 10;
+  const perpEntrySlippageUsd = 2.5;
+  const perpExitFeesUsd = 10;
+  const perpExitSlippageUsd = 2.5;
+  const totalUsd =
+    borosTakerFeeUsd +
+    borosSettleFeeUsd +
+    perpEntryFeesUsd +
+    perpEntrySlippageUsd +
+    perpExitFeesUsd +
+    perpExitSlippageUsd;
+  const netFixedApr = execApr - totalUsd / nt;
+  const estProfitUsd = netFixedApr * nt;
+  const capital = {
+    borosIms: [{ marketId: SPREAD_OPP_MARKET_ID, imUsd: SPREAD_BOROS_IM }],
+    perpShortImUsd: OPP_NOTIONAL / 10,
+    perpLongImUsd: OPP_NOTIONAL / 20,
+    shortLeverageMax: 10,
+    longLeverageMax: 20,
+  };
+  const capitalUsd = SPREAD_BOROS_IM + capital.perpShortImUsd + capital.perpLongImUsd;
+  return {
+    base: 'ETH',
+    shortLeg: makeOpportunityLeg(),
+    longLeg: makeOpportunityLeg({
+      venue: 'GATE',
+      crossexVenue: 'GATE',
+      crossexSymbol: 'GATE_FUTURE_ETH_USDT',
+    }),
+    borosLegs: [
+      makeOpportunityBorosLeg({
+        marketId: SPREAD_OPP_MARKET_ID,
+        side: 'SHORT',
+        venue: 'HL-Gate',
+        spreadVenues: ['HYPERLIQUID', 'GATE'],
+        midApr,
+        execApr,
+        settleFeeApr: 0.002,
+        takerFeeRate: 0.001,
+      }),
+    ],
+    grossSpreadApr: midApr,
+    execSpreadApr: execApr,
+    borosImpactApr: midApr - execApr,
+    makerLeg: null,
+    costs: {
+      borosTakerFeeUsd,
+      borosSettleFeeUsd,
+      perpEntryFeesUsd,
+      perpEntrySlippageUsd,
+      perpExitFeesUsd,
+      perpExitSlippageUsd,
+      totalUsd,
+      annualizedApr: totalUsd / nt,
+    },
+    capital,
+    capitalUsd,
+    netFixedApr,
+    netFixedAprOnCapital: estProfitUsd / (capitalUsd * (nt / OPP_NOTIONAL)),
+    effectiveLeverage: OPP_NOTIONAL / capitalUsd,
+    estProfitUsd,
+    secondsToMaturity,
     reasons: [],
     ...overrides,
   };
@@ -2777,7 +2867,7 @@ function borosLegs(sizeToken: number, priceUsd: number, settleUsd: number): {
   open: AssetBorosOpen[]; history: AssetBorosHistory[];
 } {
   const notionalUsd = sizeToken * priceUsd;
-  const leg = { maturity: DEC_2026_MATURITY, collateral: 'ETH', sizeToken, notionalUsd, settleFeeApr: 0.001 };
+  const leg = { maturity: DEC_2026_MATURITY, collateral: 'ETH', sizeToken, notionalUsd, settleFeeApr: 0.001, spreadVenues: null };
   return {
     open: [
       {
@@ -2791,12 +2881,12 @@ function borosLegs(sizeToken: number, priceUsd: number, settleUsd: number): {
     ],
     history: [
       {
-        marketId: 214, venue: 'BINANCE', maturity: DEC_2026_MATURITY, settleUsd, settleFeeUsd: settleUsd * 0.025,
+        marketId: 214, venue: 'BINANCE', spreadVenues: null, maturity: DEC_2026_MATURITY, settleUsd, settleFeeUsd: settleUsd * 0.025,
         tradePnlUsd: -notionalUsd * 0.0004, tradeFeeUsd: notionalUsd * 0.00025, peakSizeToken: sizeToken,
         peakNotionalUsd: notionalUsd, firstEventSec: 1_783_004_000, entryApr: 0.0712, side: 'SHORT',
       },
       {
-        marketId: 215, venue: 'HYPERLIQUID', maturity: DEC_2026_MATURITY, settleUsd: -settleUsd / 2,
+        marketId: 215, venue: 'HYPERLIQUID', spreadVenues: null, maturity: DEC_2026_MATURITY, settleUsd: -settleUsd / 2,
         settleFeeUsd: settleUsd * 0.0125, tradePnlUsd: -notionalUsd * 0.0003, tradeFeeUsd: notionalUsd * 0.00025,
         peakSizeToken: sizeToken, peakNotionalUsd: notionalUsd, firstEventSec: 1_783_004_000, entryApr: 0.0874,
         side: 'LONG',
@@ -3009,7 +3099,7 @@ function pairRow(over: Partial<BorosPairMarketRow>): BorosPairMarketRow {
     marketId: 214, name: 'Binance ETHUSDT 25 Dec 2026', venue: 'BINANCE', base: 'ETH', tokenId: 2, collateral: 'ETH',
     maturity: DEC_2026_MATURITY, midApr: 0.0688, markApr: 0.0685, maxRateDeviationApr: 0.0137, isolatedOnly: false,
     onIsolatedMargin: false, isolatedHasPositionOrOrders: false, currentSize: 0, collateralPriceUsd: 2472.74,
-    closeOnly: false, ...over,
+    closeOnly: false, spreadVenues: null, ...over,
   };
 }
 
@@ -3023,6 +3113,7 @@ function pairContext(closeOnly: 'A' | 'B', size: number): BorosPairContext {
       }),
     ],
     crossByToken: [{ tokenId: 2, available: size / 4 }],
+    spreadMarkets: [],
     isolatedByMarket: [],
     defaultSlippageApr: 0.0025,
     maxSlippageApr: 0.1,
@@ -3103,11 +3194,10 @@ function closeOnlyOpportunities(context: BorosPairContext): OpportunitiesResult 
       midApr: m.midApr, markApr: m.markApr, execShortApr: m.midApr - halfSpreadApr,
       execLongApr: m.midApr + halfSpreadApr,
     });
-  const leg = (m: BorosPairMarketRow, crossexSymbol: string, execApr: number) =>
-    makeOpportunityLeg({
-      marketId: m.marketId, venue: m.venue, crossexVenue: m.venue, crossexSymbol, base: m.base, midApr: m.midApr,
-      execApr,
-    });
+  const leg = (m: BorosPairMarketRow, crossexSymbol: string) =>
+    makeOpportunityLeg({ venue: m.venue, crossexVenue: m.venue, crossexSymbol, base: m.base });
+  const borosLeg = (m: BorosPairMarketRow, side: 'SHORT' | 'LONG', execApr: number) =>
+    makeOpportunityBorosLeg({ marketId: m.marketId, side, venue: m.venue, midApr: m.midApr, execApr });
   const hyperliquidSymbol = 'HYPERLIQUID_FUTURE_ETH_USDC';
   const binanceSymbol = 'BINANCE_FUTURE_ETH_USDT';
   const shortExecApr = hyperliquid.midApr - halfSpreadApr;
@@ -3126,8 +3216,9 @@ function closeOnlyOpportunities(context: BorosPairContext): OpportunitiesResult 
   const capitalUsd = template.capitalUsd ?? 0;
   const pair: OpportunityPair = {
     ...template,
-    shortLeg: leg(hyperliquid, hyperliquidSymbol, shortExecApr),
-    longLeg: leg(binance, binanceSymbol, longExecApr),
+    shortLeg: leg(hyperliquid, hyperliquidSymbol),
+    longLeg: leg(binance, binanceSymbol),
+    borosLegs: [borosLeg(hyperliquid, 'SHORT', shortExecApr), borosLeg(binance, 'LONG', longExecApr)],
     grossSpreadApr,
     execSpreadApr,
     borosImpactApr: grossSpreadApr - execSpreadApr,
@@ -3151,4 +3242,270 @@ function closeOnlyOpportunities(context: BorosPairContext): OpportunitiesResult 
 
 export const opportunitiesBodies = {
   closeOnlyA: closeOnlyOpportunities(pairContextBodies.closeOnlyA),
+} satisfies Record<string, OpportunitiesResult>;
+
+export const SPREAD_BOOK_PRICE = 2568;
+export const SPREAD_WHALE_NOTIONAL = 6_000_000;
+export const SPREAD_WHALE_QTY = 4672.9;
+const SPREAD_BOOK_VENUES: [string, string] = ['HYPERLIQUID', 'GATE'];
+const OCT_30_2026_MATURITY = 1_793_318_400;
+const SPREAD_BOOK_OPENED = SPREAD_OPP_NOW - 2 * 86_400;
+
+interface SpreadBookLeg {
+  marketId: number;
+  venue: string;
+  spreadVenues: [string, string] | null;
+  side: 'LONG' | 'SHORT';
+  sizeToken: number;
+  maturity: number;
+  entryApr: number;
+  markApr: number;
+  floatingApr: number;
+}
+
+const spreadBookLeg = (side: 'LONG' | 'SHORT', sizeToken: number): SpreadBookLeg => ({
+  marketId: SPREAD_OPP_MARKET_ID, venue: 'HYPERLIQUID', spreadVenues: SPREAD_BOOK_VENUES, side, sizeToken,
+  maturity: SPREAD_OPP_MATURITY, entryApr: 0.0352, markApr: 0.0348, floatingApr: 0.031,
+});
+
+const hyperliquidSingleLeg = (marketId: number, sizeToken: number, maturity: number): SpreadBookLeg => ({
+  marketId, venue: 'HYPERLIQUID', spreadVenues: null, side: 'SHORT', sizeToken, maturity, entryApr: 0.083,
+  markApr: 0.083, floatingApr: 0.0712,
+});
+
+const gateSingleLeg = (marketId: number, sizeToken: number, maturity: number): SpreadBookLeg => ({
+  marketId, venue: 'GATE', spreadVenues: null, side: 'LONG', sizeToken, maturity, entryApr: 0.0482, markApr: 0.0482,
+  floatingApr: 0.0641,
+});
+
+function spreadBookBoros(legs: SpreadBookLeg[]): { open: AssetBorosOpen[]; history: AssetBorosHistory[] } {
+  const heldYears = (SPREAD_OPP_NOW - SPREAD_BOOK_OPENED) / SECONDS_IN_YEAR;
+  const rows = legs.map((l) => {
+    const notionalUsd = l.sizeToken * SPREAD_BOOK_PRICE;
+    const sign = l.side === 'SHORT' ? 1 : -1;
+    const settleFeeApr = l.spreadVenues ? 0.002 : 0.001;
+    const takerFeeRate = l.spreadVenues ? 0.001 : 0.0005;
+    const settleUsd = sign * (l.entryApr - l.floatingApr) * notionalUsd * heldYears;
+    const tradeFeeUsd = takerFeeRate * notionalUsd * ((l.maturity - SPREAD_BOOK_OPENED) / SECONDS_IN_YEAR);
+    const open: AssetBorosOpen = {
+      marketId: l.marketId, venue: l.venue, spreadVenues: l.spreadVenues, maturity: l.maturity, collateral: 'ETH',
+      side: l.side, sizeToken: l.sizeToken, notionalUsd, entryApr: l.entryApr, markApr: l.markApr,
+      floatingApr: l.floatingApr, settleUsd,
+      mtmUsd: sign * (l.entryApr - l.markApr) * notionalUsd * ((l.maturity - SPREAD_OPP_NOW) / SECONDS_IN_YEAR),
+      imUsd: notionalUsd * 0.03, settleFeeApr,
+    };
+    const history: AssetBorosHistory = {
+      marketId: l.marketId, venue: l.venue, spreadVenues: l.spreadVenues, maturity: l.maturity, settleUsd,
+      settleFeeUsd: settleFeeApr * notionalUsd * heldYears, tradePnlUsd: -tradeFeeUsd, tradeFeeUsd,
+      peakSizeToken: l.sizeToken, peakNotionalUsd: notionalUsd, firstEventSec: SPREAD_BOOK_OPENED,
+      entryApr: l.entryApr, side: l.side,
+    };
+    return { open, history };
+  });
+  return { open: rows.map((r) => r.open), history: rows.map((r) => r.history) };
+}
+
+function spreadBookPerps(qty: number): AssetPerpOpen[] {
+  return [
+    perpLeg('GATE_FUTURE_ETH_USDT', 'LONG', qty, SPREAD_BOOK_PRICE, SPREAD_BOOK_PRICE, (3.18 / 0.555) * qty, SPREAD_BOOK_OPENED),
+    perpLeg(
+      'HYPERLIQUID_FUTURE_ETH_USDC', 'SHORT', qty, SPREAD_BOOK_PRICE, SPREAD_BOOK_PRICE, (4.87 / 0.62) * qty,
+      SPREAD_BOOK_OPENED,
+    ),
+  ];
+}
+
+function spreadBook(perps: AssetPerpOpen[], legs: SpreadBookLeg[], interestPaidUsd = 0): AssetViewResponse {
+  return {
+    ...assetView,
+    nowSec: SPREAD_OPP_NOW,
+    earliestSec: SPREAD_BOOK_OPENED,
+    assets: [{ ...assetGroup('ETH', SPREAD_BOOK_PRICE, perps, spreadBookBoros(legs)), earliestSec: SPREAD_BOOK_OPENED }],
+    interest: { paidUsd: interestPaidUsd, byCoin: { USDT: interestPaidUsd }, coversFromSec: 0, available: true },
+  };
+}
+
+export function makeSpreadWhaleBook(): AssetViewResponse {
+  return spreadBook(spreadBookPerps(SPREAD_WHALE_QTY), [spreadBookLeg('SHORT', SPREAD_WHALE_QTY)], 999_999.995);
+}
+
+export const spreadBookBodies = {
+  spread: spreadBook(spreadBookPerps(0.555), [spreadBookLeg('SHORT', 0.555)]),
+  mixed: spreadBook(spreadBookPerps(0.555), [
+    hyperliquidSingleLeg(51, 0.3, SPREAD_OPP_MATURITY),
+    gateSingleLeg(60, 0.3, SPREAD_OPP_MATURITY),
+    spreadBookLeg('SHORT', 0.255),
+  ]),
+  missing: spreadBook(spreadBookPerps(0.555), []),
+  'wrong-side': spreadBook(spreadBookPerps(0.555), [spreadBookLeg('LONG', 0.555)]),
+  'spread-only': spreadBook([], [spreadBookLeg('SHORT', 0.555)]),
+  'early-singles': spreadBook(spreadBookPerps(0.555), [
+    hyperliquidSingleLeg(61, 0.555, OCT_30_2026_MATURITY),
+    gateSingleLeg(62, 0.555, OCT_30_2026_MATURITY),
+  ]),
+  whale: makeSpreadWhaleBook(),
+} satisfies Record<string, AssetViewResponse>;
+
+export const spreadBookPositions = Object.fromEntries(
+  Object.entries(spreadBookBodies).map(([name, body]) => [
+    name,
+    {
+      ...positionsWithExposure(body.assets.flatMap((g) => g.perpOpen).map(positionFromPerp)),
+      marginTiers: GATE_RISK_TIERS,
+    },
+  ]),
+) as Record<keyof typeof spreadBookBodies, PositionsResponse>;
+
+const spreadContextRow = (
+  marketId: number, venue: string, name: string, maturity: number, midApr: number,
+  spreadVenues: [string, string] | null = null,
+): BorosPairMarketRow =>
+  pairRow({
+    marketId, venue, name, maturity, midApr, markApr: midApr, spreadVenues, collateralPriceUsd: SPREAD_BOOK_PRICE,
+    maxRateDeviationApr: spreadVenues ? 0.02 : venue === 'GATE' ? 0.0137 : 0.01856,
+  });
+
+function spreadPairContext(spreads: 'listed' | 'none' | 'paused'): BorosPairContext {
+  return {
+    markets: [
+      spreadContextRow(61, 'HYPERLIQUID', 'Hyperliquid ETH 30 Oct 2026', OCT_30_2026_MATURITY, 0.083),
+      spreadContextRow(62, 'GATE', 'Gate ETHUSDT 30 Oct 2026', OCT_30_2026_MATURITY, 0.0482),
+      spreadContextRow(51, 'HYPERLIQUID', 'Hyperliquid ETH 27 Nov 2026', SPREAD_OPP_MATURITY, 0.083),
+      spreadContextRow(60, 'GATE', 'Gate ETHUSDT 27 Nov 2026', SPREAD_OPP_MATURITY, 0.0482),
+      spreadContextRow(64, 'HYPERLIQUID', 'Hyperliquid ETH 25 Dec 2026', DEC_2026_MATURITY, 0.083),
+      spreadContextRow(65, 'GATE', 'Gate ETHUSDT 25 Dec 2026', DEC_2026_MATURITY, 0.0482),
+    ],
+    spreadMarkets:
+      spreads === 'none'
+        ? []
+        : [
+            spreadContextRow(
+              63, 'HL-Gate', 'ETH HL-Gate spread 30 Oct 2026', OCT_30_2026_MATURITY, 0.0348,
+              SPREAD_BOOK_VENUES,
+            ),
+            {
+              ...spreadContextRow(
+                SPREAD_OPP_MARKET_ID, 'HL-Gate', 'ETH HL-Gate spread 27 Nov 2026', SPREAD_OPP_MATURITY,
+                0.0348, SPREAD_BOOK_VENUES,
+              ),
+              closeOnly: spreads === 'paused',
+              paused: spreads === 'paused',
+            },
+          ],
+    crossByToken: [{ tokenId: 2, available: 116 }],
+    isolatedByMarket: [],
+    defaultSlippageApr: 0.0025,
+    maxSlippageApr: 0.1,
+  };
+}
+
+export const spreadPairContextBodies = {
+  spread: spreadPairContext('listed'),
+  'no-spread': spreadPairContext('none'),
+  'spread-paused': spreadPairContext('paused'),
+} satisfies Record<string, BorosPairContext>;
+
+export function makeSpreadWhaleOpportunityPair(): OpportunityPair {
+  const k = SPREAD_WHALE_NOTIONAL / OPP_NOTIONAL;
+  const usd = (x: number | null): number | null => (x === null ? null : x * k);
+  const pair = makeSpreadOpportunityPair();
+  return {
+    ...pair,
+    costs: {
+      ...pair.costs,
+      borosTakerFeeUsd: pair.costs.borosTakerFeeUsd * k,
+      borosSettleFeeUsd: pair.costs.borosSettleFeeUsd * k,
+      perpEntryFeesUsd: usd(pair.costs.perpEntryFeesUsd),
+      perpEntrySlippageUsd: usd(pair.costs.perpEntrySlippageUsd),
+      perpExitFeesUsd: usd(pair.costs.perpExitFeesUsd),
+      perpExitSlippageUsd: usd(pair.costs.perpExitSlippageUsd),
+      totalUsd: usd(pair.costs.totalUsd),
+    },
+    capital: {
+      ...pair.capital,
+      borosIms: pair.capital.borosIms.map((im) => ({ ...im, imUsd: usd(im.imUsd) })),
+      perpShortImUsd: usd(pair.capital.perpShortImUsd),
+      perpLongImUsd: usd(pair.capital.perpLongImUsd),
+    },
+    capitalUsd: usd(pair.capitalUsd),
+    estProfitUsd: usd(pair.estProfitUsd),
+  };
+}
+
+function spreadSinglesOpportunityPair(): OpportunityPair {
+  const spread = makeSpreadOpportunityPair();
+  const nt = OPP_NOTIONAL * (spread.secondsToMaturity / SECONDS_IN_YEAR);
+  const shortExecApr = 0.083 - 0.0005;
+  const longExecApr = 0.0482 + 0.0005;
+  const execSpreadApr = shortExecApr - longExecApr;
+  const netFixedApr = execSpreadApr - (spread.costs.totalUsd ?? 0) / nt;
+  const estProfitUsd = netFixedApr * nt;
+  const capital = { ...spread.capital, borosIms: [{ marketId: 51, imUsd: 8 }, { marketId: 60, imUsd: 4 }] };
+  const capitalUsd = 8 + 4 + (capital.perpShortImUsd ?? 0) + (capital.perpLongImUsd ?? 0);
+  return {
+    ...spread,
+    borosLegs: [
+      makeOpportunityBorosLeg({ marketId: 51, side: 'SHORT', venue: 'HYPERLIQUID', midApr: 0.083, execApr: shortExecApr }),
+      makeOpportunityBorosLeg({ marketId: 60, side: 'LONG', venue: 'GATE', midApr: 0.0482, execApr: longExecApr }),
+    ],
+    execSpreadApr,
+    borosImpactApr: spread.grossSpreadApr - execSpreadApr,
+    capital,
+    capitalUsd,
+    netFixedApr,
+    netFixedAprOnCapital: estProfitUsd / (capitalUsd * (nt / OPP_NOTIONAL)),
+    effectiveLeverage: OPP_NOTIONAL / capitalUsd,
+    estProfitUsd,
+  };
+}
+
+function btcSpreadOnlyOpportunityPair(): OpportunityPair {
+  const pair = makeSpreadOpportunityPair({
+    base: 'BTC',
+    shortLeg: makeOpportunityLeg({ crossexSymbol: 'HYPERLIQUID_FUTURE_BTC_USDC', base: 'BTC' }),
+    longLeg: makeOpportunityLeg({
+      venue: 'GATE', crossexVenue: 'GATE', crossexSymbol: 'GATE_FUTURE_BTC_USDT', base: 'BTC',
+    }),
+  });
+  return {
+    ...pair,
+    borosLegs: pair.borosLegs.map((l) => ({ ...l, marketId: 58 })),
+    capital: { ...pair.capital, borosIms: pair.capital.borosIms.map((im) => ({ ...im, marketId: 58 })) },
+  };
+}
+
+function spreadOpportunities(
+  pairs: OpportunityPair[], group: Partial<OpportunityGroup> = {}, notionalUsd = OPP_NOTIONAL,
+): OpportunitiesResult {
+  return makeOpportunitiesResult({
+    groups: [
+      makeOpportunityGroup({
+        tokenId: 2, collateral: 'ETH', collateralPriceUsd: SPREAD_BOOK_PRICE, maturity: SPREAD_OPP_MATURITY,
+        secondsToMaturity: SPREAD_OPP_MATURITY - SPREAD_OPP_NOW, underlying: 'ETH',
+        markets: [
+          makeOpportunityMarketRow({
+            marketId: 51, name: 'Hyperliquid ETH 27 Nov 2026', midApr: 0.083, markApr: 0.083, floatingApr: 0.0712,
+            execShortApr: 0.0825, execLongApr: 0.0835,
+          }),
+          makeOpportunityMarketRow({
+            marketId: 60, name: 'Gate ETHUSDT 27 Nov 2026', venue: 'GATE', crossexVenue: 'GATE',
+            crossexSymbol: 'GATE_FUTURE_ETH_USDT', midApr: 0.0482, markApr: 0.0482, floatingApr: 0.0641,
+            execShortApr: 0.0477, execLongApr: 0.0487,
+          }),
+        ],
+        pairs,
+        ...group,
+      }),
+    ],
+    meta: { ...makeOpportunitiesResult().meta, asOfSec: SPREAD_OPP_NOW, notionalUsd },
+  });
+}
+
+export const spreadOpportunitiesBodies = {
+  spread: spreadOpportunities([makeSpreadOpportunityPair()]),
+  singles: spreadOpportunities([spreadSinglesOpportunityPair()]),
+  'btc-spread-only': spreadOpportunities([btcSpreadOnlyOpportunityPair()], {
+    tokenId: 1, collateral: 'BTC', collateralPriceUsd: null, underlying: 'BTC', markets: [],
+  }),
+  whale: spreadOpportunities([makeSpreadWhaleOpportunityPair()], {}, SPREAD_WHALE_NOTIONAL),
 } satisfies Record<string, OpportunitiesResult>;

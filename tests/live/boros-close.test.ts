@@ -125,16 +125,12 @@ describe.skipIf(process.env.BOROS_CLOSE !== '1')('live Boros closes: one market 
   const post = (url: string, payload: object): Promise<LightMyRequestResponse> =>
     app!.inject({ method: 'POST', url, headers: HEADERS, payload });
 
-  const pairRequest = (legA: Leg, legB: Leg, size: number, intent: PairIntent, onlyLeg?: 'A') => ({
+  const pairRequest = (legA: Leg, legB: Leg, size: number, intent: PairIntent, onlyLeg?: number) => ({
     address: agent!.root,
-    legA: { ...legA, slippageApr },
-    legB: { ...legB, slippageApr },
-    size,
+    legs: [legA, legB].map((leg) => ({ ...leg, slippageApr, size, clientOrderId: nextId() })),
     intent,
     opposingAcknowledged: intent === 'close',
-    clientOrderIdA: nextId(),
-    clientOrderIdB: nextId(),
-    ...(onlyLeg ? { onlyLeg } : {}),
+    ...(onlyLeg !== undefined ? { onlyLeg } : {}),
   });
 
   const record = (
@@ -196,7 +192,7 @@ describe.skipIf(process.env.BOROS_CLOSE !== '1')('live Boros closes: one market 
         continue;
       }
       const { simulation, gate, gasBalanceUsd } = dataOf<BorosPairSimulateResponse>(sim);
-      const margin = (simulation.legA.marginRequired ?? Infinity) + (simulation.legB.marginRequired ?? Infinity);
+      const margin = simulation.legs.reduce((total, leg) => total + (leg.marginRequired ?? Infinity), 0);
       const available = context.crossByToken.find((c) => c.tokenId === a.tokenId)?.available ?? 0;
       console.log(
         `  ▸ ${a.name} + ${b.name}: margin ${margin} of ${available} free ${a.collateral}, gas $${gasBalanceUsd}, blockers ${gate.blockers.map((x) => x.code).join(',') || 'none'}`,
@@ -258,7 +254,7 @@ describe.skipIf(process.env.BOROS_CLOSE !== '1')('live Boros closes: one market 
       budget.beforeOrder(0, `boros cleanup close #${marketId}`);
       const res = await post(
         '/api/boros/pair/execute',
-        pairRequest({ marketId, direction }, { marketId: partner, direction: opposite(direction) }, Math.abs(held), 'close', 'A'),
+        pairRequest({ marketId, direction }, { marketId: partner, direction: opposite(direction) }, Math.abs(held), 'close', 0),
       );
       console.log(`  ▸ cleanup close on #${marketId} (held ${held}): HTTP ${res.statusCode} ${res.body}`);
     }
@@ -296,12 +292,12 @@ describe.skipIf(process.env.BOROS_CLOSE !== '1')('live Boros closes: one market 
     opened.add(a.marketId);
     const open = await post(
       '/api/boros/pair/execute',
-      pairRequest({ marketId: a.marketId, direction: 'short' }, { marketId: b.marketId, direction: 'long' }, size, 'open', 'A'),
+      pairRequest({ marketId: a.marketId, direction: 'short' }, { marketId: b.marketId, direction: 'long' }, size, 'open', 0),
     );
     expect(open.statusCode, open.body).toBe(200);
     const { result } = dataOf<BorosPairExecuteResponse>(open);
-    expect(result.legA.failure, result.legA.failure?.message).toBeNull();
-    expect(result.legA.filledSize).toBeGreaterThan(0);
+    expect(result.legs[0].failure, result.legs[0].failure?.message).toBeNull();
+    expect(result.legs[0].filledSize).toBeGreaterThan(0);
     await waitFor((zones) => positionOf(zones, a.marketId) < 0, `${a.name} to read short`);
 
     budget.beforeOrder(0, 'boros cancel-and-close');
@@ -318,7 +314,7 @@ describe.skipIf(process.env.BOROS_CLOSE !== '1')('live Boros closes: one market 
     expect(closed.fill?.shortfallSize).toBe(0);
 
     const after = await waitFor((zones) => positionOf(zones, a.marketId) === 0, `${a.name} to read flat`);
-    record('single close', [result.legA, closed.fill], [cashBefore, cashOf(after, a.tokenId)], [gasBefore, await readGas()]);
+    record('single close', [result.legs[0], closed.fill], [cashBefore, cashOf(after, a.tokenId)], [gasBefore, await readGas()]);
   }, PATH_TIMEOUT_MS);
 
   it('closes a Boros pair with intent close and reads both legs flat', async (ctx) => {
@@ -356,7 +352,7 @@ describe.skipIf(process.env.BOROS_CLOSE !== '1')('live Boros closes: one market 
     console.log(`  ▸ pair close: HTTP ${shut.statusCode} ${shut.body}`);
     expect(shut.statusCode, shut.body).toBe(200);
     const closing = dataOf<BorosPairExecuteResponse>(shut).result;
-    for (const leg of [closing.legA, closing.legB]) {
+    for (const leg of closing.legs) {
       expect(leg.failure, leg.failure?.message).toBeNull();
       expect(leg.shortfallSize).toBe(0);
     }
@@ -367,7 +363,7 @@ describe.skipIf(process.env.BOROS_CLOSE !== '1')('live Boros closes: one market 
     );
     record(
       'pair close',
-      [opening.legA, opening.legB, closing.legA, closing.legB],
+      [...opening.legs, ...closing.legs],
       [cashBefore, cashOf(after, a.tokenId)],
       [gasBefore, await readGas()],
     );

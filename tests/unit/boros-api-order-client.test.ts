@@ -4,7 +4,7 @@
  * charged, the rate bound the tolerance produced, and a fill decoded from the
  * call that emitted it.
  */
-import { keccak256, verifyTypedData, type Hex } from 'viem';
+import { keccak256, parseUnits, verifyTypedData, type Hex } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { describe, expect, it } from 'vitest';
 import {
@@ -18,7 +18,8 @@ import {
   usdCentsToCollateralWei,
   type ApiFetch,
 } from '../../src/core/boros/borosApi';
-import type { BorosMarketOrderRequest } from '../../src/core/boros/orders';
+import type { BorosMarketOrderRequest, PlaceOrdersOptions } from '../../src/core/boros/orders';
+import { submitBorosRoll } from '../../src/core/boros/rollover';
 
 const ROOT = '0x9dcf85824e024fea9e3ef583dccbea68edbc37b8' as const;
 const AGENT_KEY = `0x${'11'.repeat(32)}` as const;
@@ -185,7 +186,9 @@ const client = (
     // Both legs on ETH collateral: an eligible pair must share a token, which
     // is also what makes them one cross account.
     tokenIdForMarket: () => over.tokenId ?? 2,
-    collateralPriceUsd: over.noPrice ? undefined : () => (over.priceUsd === undefined ? ETH_PRICE : over.priceUsd),
+    collateralPriceUsd: over.noPrice
+      ? undefined
+      : (tokenId) => (tokenId !== (over.tokenId ?? 2) ? null : over.priceUsd === undefined ? ETH_PRICE : over.priceUsd),
     fetchImpl: api.fetchImpl,
     statusAttempts: 1,
     sleep: async () => {},
@@ -225,6 +228,23 @@ describe('packing', () => {
     expect(() => decimalString(1e21)).toThrow(/out of range/);
     expect(() => decimalString(Number.NaN)).toThrow(/finite/);
   });
+
+  it.each([
+    ['$50', '0.0185', '0.0185'],
+    ['$5k', '1.85', '1.85'],
+    ['$100k', '37.0', '37'],
+    ['$1M', '370.37', '370.37'],
+    ['$6M', '2222.2222', '2222.2222'],
+    ['a part close', '0.1275', '0.1275'],
+    ['a tiny size', '0.0000001', '0.0000001'],
+    ['a held size', '2333.1', '2333.1'],
+    ['a size past 18 decimals', '0.00001234567890123456', '0.000012345678901234'],
+  ])('sends %s as the decimal it holds and never more', (_label, typed, wire) => {
+    const size = Number(typed);
+    expect(decimalString(size)).toBe(wire);
+    expect(decimalString(-size)).toBe(`-${wire}`);
+    expect(parseUnits(decimalString(size), 18)).toBeLessThanOrEqual(parseUnits(typed, 18));
+  });
 });
 
 describe('makeBorosApiOrderClient — atomicity', () => {
@@ -237,6 +257,26 @@ describe('makeBorosApiOrderClient — atomicity', () => {
     // together, never as two races against the signer's nonce.
     const orderSubmit = submits[submits.length - 1];
     expect((orderSubmit.body.datas as unknown[]).length).toBe(2);
+    expect(orderSubmit.body.requireSuccess).toBe(true);
+  });
+
+  it.each([
+    ['$50', 0.015, 0.0128],
+    ['$6M', 3_000, 2_550.255],
+  ])('sends a 3-leg mixed close in one bulk-call with requireSuccess at %s', async (_, single, spread) => {
+    const api = fakeApi();
+    await client(api).placeMarketOrders(
+      [
+        leg({ direction: 'long', size: single }),
+        leg({ marketId: BN, size: single }),
+        leg({ marketId: 59, direction: 'long', size: spread }),
+      ],
+      { reducing: true },
+    );
+
+    const submits = api.calls.filter((c) => c.path === '/v1/send-txs/bulk-calls');
+    const orderSubmit = submits[submits.length - 1];
+    expect((orderSubmit.body.datas as unknown[]).length).toBe(3);
     expect(orderSubmit.body.requireSuccess).toBe(true);
   });
 
@@ -496,6 +536,43 @@ describe('makeBorosApiOrderClient — the order on the wire', () => {
     expect(build.body).toMatchObject({ side: 0, marketId: BN });
   });
 
+  const tifs = (api: ReturnType<typeof fakeApi>) =>
+    api.calls.filter((c) => c.path === '/v1/calldata-builder/agent/place-order').map((c) => c.body.tif);
+
+  it.each([
+    ['$50', 0.015],
+    ['$6M', 2_550.255],
+  ])('carries fill-or-kill on every order when asked, and IOC otherwise, at %s', async (_, size) => {
+    const reqs = [leg({ direction: 'long', size }), leg({ marketId: BN, size }), leg({ marketId: 59, size })];
+    const fillOrKill: PlaceOrdersOptions = { timeInForce: 'fill-or-kill', topUpAfter: 2 };
+    const fok = fakeApi();
+    await client(fok).placeMarketOrders(reqs, fillOrKill);
+    expect(tifs(fok)).toEqual([2, 2, 2]);
+
+    const plain = fakeApi();
+    await client(plain).placeMarketOrders(reqs, { reducing: true });
+    await client(plain).placeMarketOrders(reqs);
+    await client(plain).closePosition({ marketId: HL, direction: 'long', size, limitApr: 0.0875, clientOrderId: 'c-1', openSizeWei: '9000000000000000000000' });
+    expect(tifs(plain)).toEqual([1, 1, 1, 1, 1, 1, 1]);
+  });
+
+  it.each([
+    ['refused in simulation', [{ error: '[SIMULATE] Batch aborted: requireSuccess=true but some calls failed' }, { error: '[SIMULATE] Batch aborted: requireSuccess=true but some calls failed' }, { error: '[SIMULATE] Insufficient liquidity' }], 'insufficient-depth'],
+    ['reverted on chain', [0, 1, 2].map((index) => ({ txHash: '0xtx', index, status: 'reverted', error: '[EXECUTE] Transaction reverted' })), 'rejected'],
+  ])('reads a fill-or-kill batch %s as nothing traded, never unknown', async (_, answer, code) => {
+    const api = fakeApi({ submit: () => answer });
+    const fillOrKill: PlaceOrdersOptions = { timeInForce: 'fill-or-kill', topUpAfter: 2 };
+    const fills = await client(api).placeMarketOrders(
+      [leg({ direction: 'long' }), leg({ marketId: BN }), leg({ marketId: 59 })],
+      fillOrKill,
+    );
+    expect(fills.map((f) => [f.filledSize, f.failure?.code])).toEqual([
+      [0, code],
+      [0, code],
+      [0, code],
+    ]);
+  });
+
 });
 
 describe('makeBorosApiOrderClient — rollOver', () => {
@@ -537,12 +614,28 @@ describe('makeBorosApiOrderClient — rollOver', () => {
     expect(submit.body.requireSuccess).toBe(true);
     // [closeHL, closeBN, payTreasury, openHL', openBN'] — the top-up after the closes.
     expect((submit.body.datas as Array<{ calldata: string }>).map((d) => d.calldata)).toEqual(['0xc1', '0xc2', '0x7a', '0xo1', '0xo2']);
+    expect(api.calls.find((c) => c.path.includes('agent/pay-treasury'))!.body).toMatchObject({ marketId: HL });
     expect(fills.map((f) => [f.marketId, f.direction, f.filledSize, f.failure])).toEqual([
       [HL, 'long', 100, null],
       [BN, 'short', 100, null],
       [HL + 1, 'short', 100, null],
       [BN + 1, 'long', 100, null],
     ]);
+  });
+
+  it('puts one top-up after the closes of a batch roll, charged on the first close market', async () => {
+    const api = fakeApi({ gasBalance: { balanceInUSD: 0.1 } });
+    await submitBorosRoll(client(api), {
+      kind: 'batch',
+      closes: [leg({ direction: 'long' }), leg({ marketId: BN, clientOrderId: 'a-0000002' })],
+      opens: [leg({ marketId: 59, clientOrderId: 'a-0000003' })],
+    });
+    const pays = api.calls.filter((c) => c.path.includes('agent/pay-treasury'));
+    expect(pays).toHaveLength(1);
+    expect(pays[0].body).toMatchObject({ isCross: true, marketId: HL, amount: '400000000000000' });
+    const submit = api.calls.filter((c) => c.path === '/v1/send-txs/bulk-calls').pop()!;
+    expect((submit.body.datas as Array<{ calldata: string }>).map((d) => d.calldata).indexOf('0x7a')).toBe(2);
+    expect(submit.body.datas).toHaveLength(4);
   });
 
   it("reads the venue's preview into collateral units, sizes unsigned", async () => {
@@ -744,8 +837,8 @@ describe('makeBorosApiOrderClient — a result that says nothing is not a result
  * Boros has no reduce-only flag, so nothing at the venue stops a close at
  * flat: one unit too many crosses it and opens a fresh position the other way.
  * The route clamps the size to what is open, but it clamps two DOUBLES, and
- * the order is not built from a double — `parseUnits` of `50000000000000000 /
- * 1e18` is 50000000000000003. Three units of an opposing position, invisible,
+ * the order is not built from a double — an open of 99999999999999999 units
+ * reads as the float 0.1, which is 100000000000000000. One unit of an opposing position, invisible,
  * unclosable under the venue's $10 minimum order value, and reported as
  * "closed" because in float space the two numbers were equal.
  */
@@ -766,7 +859,7 @@ describe('closePosition — the cap that binds is in wei', () => {
 
   it('never asks for more than the venue holds, where the float rounds UP', () => {
     // 0.05 is the case that bit a real user: a clean open, and the size that
-    // cannot survive the round trip.
+    // did not survive the round trip.
     const api = fakeApi();
     return close(api, { size: 50000000000000000 / 1e18, openSizeWei: '50000000000000000' }).then(() => {
       expect(placedWei(api)).toBe(50000000000000000n);
@@ -800,7 +893,13 @@ describe('closePosition — the cap that binds is in wei', () => {
     // than throwing on the close path.
     const api = fakeApi();
     await close(api, { size: 50000000000000000 / 1e18, openSizeWei: '5e16' });
-    expect(placedWei(api)).toBe(50000000000000003n);
+    expect(placedWei(api)).toBe(50000000000000000n);
+  });
+
+  it('caps an open the float reads one unit high', async () => {
+    const api = fakeApi();
+    await close(api, { size: 0.1, openSizeWei: '99999999999999999' });
+    expect(placedWei(api)).toBe(99999999999999999n);
   });
 });
 
@@ -922,6 +1021,77 @@ describe('makeBorosApiOrderClient — topUpAfter positions the gas top-up', () =
     expect(submission).toHaveLength(3);
     expect(submission[2].calldata).toBe('0x7a'); // top-up LAST (reqs.length = 2)
     expect(submission.slice(0, 2).every((d) => d.calldata.startsWith('0xda'))).toBe(true);
+  });
+
+  describe('gasTopUpMarket picks the zone that pays', () => {
+    const USDT_MARKET = 10;
+    const twoZones = (api: ReturnType<typeof fakeApi>) =>
+      makeBorosApiOrderClient({
+        root: ROOT,
+        accountId: 0,
+        agentPrivateKey: AGENT_KEY,
+        tokenIdForMarket: (marketId) => (marketId === USDT_MARKET ? 3 : 2),
+        collateralPriceUsd: (tokenId) => (tokenId === 3 ? 1 : ETH_PRICE),
+        fetchImpl: api.fetchImpl,
+        statusAttempts: 1,
+        sleep: async () => {},
+      });
+    const payOf = (api: ReturnType<typeof fakeApi>) => api.calls.find((c) => c.path.includes('agent/pay-treasury'))!.body;
+
+    it.each([
+      ['$50', 0.02],
+      ['$6M', 2_400],
+    ])('a close at gas debt on a tight ETH account pays from USDT and still sends (%s book)', async (_book, size) => {
+      const api = fakeApi({ gasBalance: { balanceInUSD: -0.02 } });
+      const asked: Array<[number, number]> = [];
+      await twoZones(api).placeMarketOrders(
+        [leg({ marketId: HL, size }), leg({ marketId: BN, direction: 'long', size })],
+        {
+          reducing: true,
+          topUpAfter: 2,
+          gasTopUpMarket: (usd, traded) => {
+            asked.push([usd, traded]);
+            return USDT_MARKET;
+          },
+        },
+      );
+      expect(asked).toEqual([[1.02, HL]]);
+      expect(payOf(api)).toMatchObject({ isCross: true, marketId: USDT_MARKET, amount: '1020000000000000000' });
+      const submission = orderSubmit(api);
+      expect(submission).toHaveLength(3);
+      expect(submission[2].calldata).toBe('0x7a');
+      expect(submission.slice(0, 2).every((d) => d.calldata.startsWith('0xda'))).toBe(true);
+    });
+
+    it('keeps the traded zone and its amount when the chooser returns it', async () => {
+      const api = fakeApi({ gasBalance: { balanceInUSD: 0.05 } });
+      await twoZones(api).placeMarketOrders([leg()], { gasTopUpMarket: (_usd, traded) => traded });
+      expect(payOf(api)).toMatchObject({ marketId: HL, amount: '400000000000000' });
+    });
+
+    it('routes a roll\'s top-up and a single close\'s through the same chooser', async () => {
+      const rollApi = fakeApi({ gasBalance: { balanceInUSD: 0.1 } });
+      await twoZones(rollApi).rollOver!(
+        [
+          { fromMarketId: HL, toMarketId: HL + 1, size: 10, closeRate: 0.09, openRate: 0.1 },
+          { fromMarketId: BN, toMarketId: BN + 1, size: 10, closeRate: 0.045, openRate: 0.05 },
+        ],
+        { gasTopUpMarket: () => USDT_MARKET },
+      );
+      expect(payOf(rollApi)).toMatchObject({ marketId: USDT_MARKET, amount: '1000000000000000000' });
+
+      const closeApi = fakeApi({ gasBalance: { balanceInUSD: -0.5 } });
+      await twoZones(closeApi).closePosition({
+        marketId: HL,
+        size: 10,
+        openSizeWei: '10000000000000000000',
+        direction: 'long',
+        limitApr: 0.1,
+        clientOrderId: 'a-0000002',
+        gasTopUpMarket: () => USDT_MARKET,
+      });
+      expect(payOf(closeApi)).toMatchObject({ marketId: USDT_MARKET, amount: '1500000000000000000' });
+    });
   });
 });
 

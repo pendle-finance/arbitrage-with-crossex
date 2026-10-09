@@ -26,23 +26,32 @@
  * the two steps are one batch, names the legs for the venue, and reads its
  * answer.
  */
+import type { BorosMarket } from './client';
 import { classifyLegFailure } from './orders';
-import type { BorosLegFailureCode, BorosLegFill, BorosOrderClient, BorosRollLeg, BorosRollSimulation, PlaceOrdersOptions } from './orders';
-import { fmtSize } from './pair';
-import type { BlockerCode, BorosPairLegInput, BorosPairSimulation, PairGate, SimulatedLeg } from './pair';
+import type {
+  BorosLegFailureCode,
+  BorosLegFill,
+  BorosMarketOrderRequest,
+  BorosOrderClient,
+  BorosRollLeg,
+  BorosRollSimulation,
+  PlaceOrdersOptions,
+} from './orders';
+import { fmtSize, reducingOrderSize } from './pair';
+import type { BlockerCode, BorosLegDirection, BorosPairLegInput, BorosPairSimulation, PairGate, SimulatedLeg } from './pair';
+import { normalizeVenue } from './venue';
 
 /** Fills with a relative shortfall under this are whole (an 18-decimal size
  * does not survive a float round-trip exactly — see borosApi). */
 const FULL_FILL_TOLERANCE = 1e-9;
 
 export type RollStep = 'exit' | 'entry';
-export type RollLegKey = 'exitA' | 'exitB' | 'entryA' | 'entryB';
+export type RollLegKey = string;
 
 export interface RollStepInput {
   simulation: BorosPairSimulation;
   gate: PairGate;
-  legA: BorosPairLegInput;
-  legB: BorosPairLegInput;
+  legs: BorosPairLegInput[];
 }
 
 export interface EvaluateRollInput {
@@ -77,7 +86,7 @@ export interface RollBlocker {
   code: RollBlockerCode;
   message: string;
   step?: RollStep;
-  leg?: 'A' | 'B';
+  leg?: number;
   marketId?: number;
 }
 
@@ -113,8 +122,12 @@ const MARGIN_CODES: ReadonlySet<BlockerCode> = new Set(['cross-short-margin', 'i
  * and the contract's revert mid-batch (`MM_INSUFFICIENT_IM`). */
 const VENUE_MARGIN_CODE = /INSUFFICIENT_(MARGIN|IM)\b/;
 const same = (a: number, b: number): boolean => Math.abs(a - b) <= FULL_FILL_TOLERANCE * Math.max(1, Math.abs(a), Math.abs(b));
+const heldSide = (leg: SimulatedLeg): BorosLegDirection | null =>
+  leg.sizing.currentSize > 0 ? 'long' : leg.sizing.currentSize < 0 ? 'short' : null;
+const opposite = (side: BorosLegDirection): BorosLegDirection => (side === 'long' ? 'short' : 'long');
 const sum = (xs: Array<number | null>): number | null =>
   xs.every((x): x is number => x !== null) ? xs.reduce((t, x) => t + x, 0) : null;
+const venuesOf = (m: BorosMarket): readonly string[] => m.spreadVenues ?? [normalizeVenue(m.venue)];
 
 /**
  * Why the venue refused ONE leg, in the trader's terms, with that cause's own
@@ -172,7 +185,9 @@ function refusalCause(error: string, sim: SimulatedLeg | null, collateral: strin
 export function evaluateRollGate(input: EvaluateRollInput): RollGate {
   const { exit, entry, venue } = input;
   const blockers: RollBlocker[] = [];
-  const warnings = [...exit.gate.warnings, ...entry.gate.warnings];
+  // A roll is sent as one opening batch, so the entry step's gas line is the
+  // true one; the exit's, priced as a close, would contradict it.
+  const warnings = [...exit.gate.warnings.filter((w) => !w.startsWith('Prepaid gas')), ...entry.gate.warnings];
 
   const prefixed = (step: RollStep, gate: PairGate, label: string): void => {
     for (const b of gate.blockers) {
@@ -185,62 +200,124 @@ export function evaluateRollGate(input: EvaluateRollInput): RollGate {
   prefixed('entry', entry.gate, 'Re-entry');
   const stepBlockers = [...blockers];
 
-  const oldMaturity = Math.max(exit.legA.market.maturity, exit.legB.market.maturity);
-  const newMaturity = Math.min(entry.legA.market.maturity, entry.legB.market.maturity);
+  const oldMaturity = Math.max(...exit.legs.map((l) => l.market.maturity));
+  const newMaturity = Math.min(...entry.legs.map((l) => l.market.maturity));
   if (!(newMaturity > oldMaturity)) {
     blockers.push({ code: 'maturity-not-later', message: 'The new maturity must be later than the one being left.' });
   }
-  if (new Set([exit.legA, exit.legB, entry.legA, entry.legB].map((l) => l.market.tokenId)).size !== 1) {
-    blockers.push({ code: 'collateral-mismatch', message: 'All four legs must post the same collateral.' });
+  if (new Set([...exit.legs, ...entry.legs].map((l) => l.market.tokenId)).size !== 1) {
+    blockers.push({ code: 'collateral-mismatch', message: 'Every leg must post the same collateral.' });
   }
 
-  const steps = [
-    { key: 'A' as const, old: exit.simulation.legA, next: entry.simulation.legA },
-    { key: 'B' as const, old: exit.simulation.legB, next: entry.simulation.legB },
-  ];
-  for (const { key, old, next } of steps) {
-    // A roll re-creates the same shape one maturity later: same venue and
-    // underlying per leg, same side. Anything else is a different trade.
-    if (old.venue !== next.venue || old.base.toLowerCase() !== next.base.toLowerCase()) {
-      blockers.push({
-        code: 'market-mismatch',
-        leg: key,
-        message: `${next.marketName} is not a later maturity of ${old.marketName}.`,
+  const oldLegs = exit.simulation.legs.map((sim, i) => ({ sim, market: exit.legs[i].market }));
+  const newLegs = entry.simulation.legs.map((sim, i) => ({ sim, market: entry.legs[i].market }));
+  if (oldLegs.length === newLegs.length) {
+    oldLegs.forEach(({ sim: old, market: oldMarket }, index) => {
+      const { sim: next, market: nextMarket } = newLegs[index];
+      if (old.venue !== next.venue || old.base.toLowerCase() !== next.base.toLowerCase()) {
+        blockers.push({
+          code: 'market-mismatch',
+          leg: index,
+          message: `${nextMarket.name} is not a later maturity of ${oldMarket.name}.`,
+        });
+      }
+      const held = heldSide(old);
+      if (held !== null && next.sizing.orderSide !== held) {
+        blockers.push({
+          code: 'sides-mismatch',
+          leg: index,
+          message: `${nextMarket.name}: the new leg must be ${held}, the side ${oldMarket.name} holds.`,
+        });
+      }
+      if (!same(Math.abs(old.sizing.deltaSize), Math.abs(next.sizing.deltaSize))) {
+        blockers.push({
+          code: 'size-mismatch',
+          leg: index,
+          message:
+            `${oldMarket.name} closes ${Math.abs(old.sizing.deltaSize)} but ${nextMarket.name} would open ` +
+            `${Math.abs(next.sizing.deltaSize)} — a roll moves one size.`,
+        });
+      }
+    });
+  } else {
+    type StepLeg = (typeof oldLegs)[number];
+    const exposure = (legs: StepLeg[], signedOf: (sim: SimulatedLeg) => number): Map<string, number> => {
+      const out = new Map<string, number>();
+      for (const { sim, market } of legs) {
+        const signed = signedOf(sim);
+        venuesOf(market).forEach((v, i) => out.set(v, (out.get(v) ?? 0) + (i === 0 ? signed : -signed)));
+      }
+      return out;
+    };
+    const signedSize = (side: BorosLegDirection, size: number): number => (side === 'long' ? 1 : -1) * Math.abs(size);
+    const closed = exposure(oldLegs, (sim) => signedSize(opposite(sim.sizing.orderSide), sim.sizing.deltaSize));
+    const opened = exposure(newLegs, (sim) => signedSize(sim.sizing.orderSide, sim.sizing.deltaSize));
+    const base = oldLegs[0].sim.base.toLowerCase();
+    const unmatched = (legs: StepLeg[], step: RollStep, other: Map<string, number>): void =>
+      legs.forEach(({ sim, market }, index) => {
+        if (sim.base.toLowerCase() === base && venuesOf(market).every((v) => other.has(v))) return;
+        blockers.push({ code: 'market-mismatch', step, leg: index, message: `${market.name} does not match the pair being rolled.` });
       });
-    }
-    const held = old.sizing.currentSize > 0 ? 'long' : old.sizing.currentSize < 0 ? 'short' : null;
-    if (held !== null && next.sizing.orderSide !== held) {
-      blockers.push({
-        code: 'sides-mismatch',
-        leg: key,
-        message: `${next.marketName}: the new leg must be ${held}, the side ${old.marketName} holds.`,
-      });
-    }
-    // The exit clamps to what is held; the entry must be sized to that.
-    if (!same(Math.abs(old.sizing.deltaSize), Math.abs(next.sizing.deltaSize))) {
+    const before = blockers.length;
+    unmatched(oldLegs, 'exit', opened);
+    unmatched(newLegs, 'entry', closed);
+    const matched = blockers.length === before;
+    const spreadAt = newLegs.findIndex(({ market }) => market.spreadVenues !== null);
+    const target = spreadAt === -1 ? null : newLegs[spreadAt].market.spreadVenues;
+    const unevenForSpread =
+      matched && target !== null && !same(Math.abs(closed.get(target[0]) ?? 0), Math.abs(closed.get(target[1]) ?? 0));
+    if (unevenForSpread) {
       blockers.push({
         code: 'size-mismatch',
-        leg: key,
-        message:
-          `${old.marketName} closes ${Math.abs(old.sizing.deltaSize)} but ${next.marketName} would open ` +
-          `${Math.abs(next.sizing.deltaSize)} — a roll moves one size.`,
+        step: 'entry',
+        leg: spreadAt,
+        message: 'This pair holds different sizes on its two venues. One spread cannot hold both.',
       });
+    }
+    if (matched && !unevenForSpread) {
+      for (const [venue, was] of closed) {
+        const now = opened.get(venue) ?? 0;
+        const single = ({ market }: StepLeg): boolean => !market.spreadVenues && venuesOf(market)[0] === venue;
+        const atExit = oldLegs.findIndex(single);
+        const step: RollStep = atExit !== -1 ? 'exit' : 'entry';
+        const index = atExit !== -1 ? atExit : Math.max(0, newLegs.findIndex(single));
+        const { market } = (step === 'exit' ? oldLegs : newLegs)[index];
+        if (was !== 0 && now !== 0 && Math.sign(was) !== Math.sign(now)) {
+          blockers.push({
+            code: 'sides-mismatch',
+            step,
+            leg: index,
+            message: `${market.name}: the new maturity must stay ${was < 0 ? 'short' : 'long'} on this venue to keep the hedge.`,
+          });
+        } else if (!same(Math.abs(was), Math.abs(now))) {
+          blockers.push({
+            code: 'size-mismatch',
+            step,
+            leg: index,
+            message: `${market.name}: the roll closes ${fmtSize(Math.abs(was))} on this venue but opens ${fmtSize(Math.abs(now))}. A roll moves one size.`,
+          });
+        }
+      }
     }
   }
 
   // The venue's preview is the only judge of the batch as a whole: FOK fills
   // are decided level by level up to the bound, and the opens' margin only
   // after the closes have freed theirs.
-  const legs = [exit.simulation.legA, exit.simulation.legB, entry.simulation.legA, entry.simulation.legB];
-  const marketName = (marketId: number): string =>
-    legs.find((l) => l.marketId === marketId)?.marketName ?? `market ${marketId}`;
+  const markets = [...exit.legs, ...entry.legs].map((l) => l.market);
+  const marketName = (marketId: number): string => {
+    const m = markets.find((x) => x.marketId === marketId);
+    return m ? m.name : `market ${marketId}`;
+  };
   if (venue === null) {
-    blockers.push({
-      code: 'roll-unpriced',
-      message: input.venueError
-        ? `The venue could not preview this roll — ${input.venueError}`
-        : 'The venue could not preview this roll — waiting for a quote.',
-    });
+    if (rollPlanFor(exit.simulation, entry.simulation)?.kind !== 'batch') {
+      blockers.push({
+        code: 'roll-unpriced',
+        message: input.venueError
+          ? `The venue could not preview this roll — ${input.venueError}`
+          : 'The venue could not preview this roll — waiting for a quote.',
+      });
+    }
   } else if (venue.status === 'Refused') {
     const named = venue.orders.filter((o) => o.error !== null);
     if (named.length > 0) {
@@ -250,7 +327,7 @@ export function evaluateRollGate(input: EvaluateRollInput): RollGate {
       // 2026-09-22). Newline-separated; the panel renders them stacked.
       const lines = named.map((o) => {
         const step = o.action === 'close' ? exit : entry;
-        const sim = [step.simulation.legA, step.simulation.legB].find((l) => l.marketId === o.marketId) ?? null;
+        const sim = step.simulation.legs.find((l) => l.marketId === o.marketId) ?? null;
         return `${o.action === 'close' ? 'Exit' : 'Re-entry'} · ${marketName(o.marketId)} — ${refusalCause(o.error ?? '', sim, step.simulation.collateral)}`;
       });
       /**
@@ -314,27 +391,79 @@ export function evaluateRollGate(input: EvaluateRollInput): RollGate {
 
 export type RollOrderIds = Record<RollLegKey, string>;
 
-/**
- * The two legs as the venue's builder takes them: the size each old leg
- * closes (the venue caps it at the position again, in its own units) and
- * each order's rate bound. Null when a leg has nothing to trade: a batch
- * missing a leg is not a roll, and must not be sent.
- */
-export function rollLegsFor(exit: BorosPairSimulation, entry: BorosPairSimulation): BorosRollLeg[] | null {
-  const legs = (['legA', 'legB'] as const).map((key): BorosRollLeg | null => {
-    const close = exit[key];
-    const open = entry[key];
-    const size = Math.abs(close.sizing.deltaSize);
-    if (size === 0 || close.execApr === null || open.execApr === null) return null;
+export type RollPlan =
+  | { kind: 'rollover'; legs: BorosRollLeg[] }
+  | { kind: 'batch'; closes: BorosMarketOrderRequest[]; opens: BorosMarketOrderRequest[] };
+
+export interface RollPlanOptions {
+  ids?: Partial<RollOrderIds>;
+  openSizeWei?: Partial<Record<number, string>>;
+}
+
+const fillKey = (step: RollStep, marketId: number): RollLegKey => `${step}:${marketId}`;
+
+export function rollFillKeys(plan: RollPlan): RollLegKey[] {
+  return plan.kind === 'rollover'
+    ? [...plan.legs.map((l) => fillKey('exit', l.fromMarketId)), ...plan.legs.map((l) => fillKey('entry', l.toMarketId))]
+    : [...plan.closes.map((o) => fillKey('exit', o.marketId)), ...plan.opens.map((o) => fillKey('entry', o.marketId))];
+}
+
+export function rollPlanFor(
+  exit: BorosPairSimulation,
+  entry: BorosPairSimulation,
+  options: RollPlanOptions = {},
+): RollPlan | null {
+  const trades = (l: SimulatedLeg): boolean => Math.abs(l.sizing.deltaSize) > 0 && l.execApr !== null;
+  if (exit.legs.length === 0 || entry.legs.length === 0 || ![...exit.legs, ...entry.legs].every(trades)) return null;
+
+  if (exit.legs.length !== entry.legs.length) {
+    if (![...exit.legs, ...entry.legs].every((l) => l.worstApr !== null)) return null;
+    const order = (step: RollStep, leg: SimulatedLeg): BorosMarketOrderRequest => {
+      const asked = Math.abs(leg.sizing.deltaSize);
+      const openWei = step === 'exit' ? options.openSizeWei?.[leg.marketId] : undefined;
+      const reduced = openWei !== undefined ? reducingOrderSize(openWei, asked) : null;
+      return {
+        marketId: leg.marketId,
+        direction: leg.sizing.orderSide,
+        size: reduced?.size ?? asked,
+        limitApr: leg.worstApr as number,
+        clientOrderId: options.ids?.[fillKey(step, leg.marketId)] ?? fillKey(step, leg.marketId),
+        ...(reduced?.sizeWei !== undefined ? { sizeWei: reduced.sizeWei } : {}),
+      };
+    };
     return {
+      kind: 'batch',
+      closes: exit.legs.map((l) => order('exit', l)),
+      opens: entry.legs.map((l) => order('entry', l)),
+    };
+  }
+
+  const used = new Set<number>();
+  const legs: BorosRollLeg[] = [];
+  for (const close of exit.legs) {
+    const index = entry.legs.findIndex(
+      (open, i) =>
+        !used.has(i) &&
+        open.sizing.orderSide === heldSide(close) &&
+        open.venue === close.venue &&
+        open.base.toLowerCase() === close.base.toLowerCase(),
+    );
+    if (index === -1) return null;
+    used.add(index);
+    const open = entry.legs[index];
+    const asked = Math.abs(close.sizing.deltaSize);
+    const openWei = options.openSizeWei?.[close.marketId];
+    const reduced = openWei !== undefined ? reducingOrderSize(openWei, asked) : null;
+    legs.push({
       fromMarketId: close.marketId,
       toMarketId: open.marketId,
-      size,
+      size: reduced?.size ?? asked,
       closeRate: close.worstApr ?? undefined,
       openRate: open.worstApr ?? undefined,
-    };
-  });
-  return legs.every((l): l is BorosRollLeg => l !== null) ? legs : null;
+      ...(reduced?.sizeWei !== undefined ? { sizeWei: reduced.sizeWei } : {}),
+    });
+  }
+  return { kind: 'rollover', legs };
 }
 
 export interface BorosRollResult {
@@ -352,8 +481,6 @@ export interface BorosRollResult {
   rolledSize: number;
 }
 
-const KEYS: RollLegKey[] = ['exitA', 'exitB', 'entryA', 'entryB'];
-
 /**
  * Fire the batch and read the answer. A throw is folded into `unknown`:
  * the transport gave no verdict, so the fill state is genuinely uncertain.
@@ -362,12 +489,17 @@ const KEYS: RollLegKey[] = ['exitA', 'exitB', 'entryA', 'entryB'];
  */
 export async function submitBorosRoll(
   client: BorosOrderClient,
-  legs: BorosRollLeg[],
-  opts?: Pick<PlaceOrdersOptions, 'cancelOrdersOn'>,
+  plan: RollPlan,
+  opts?: Pick<PlaceOrdersOptions, 'cancelOrdersOn' | 'gasTopUpMarket'>,
 ): Promise<BorosRollResult> {
   let fills: BorosLegFill[];
   try {
-    fills = client.rollOver ? await client.rollOver(legs, opts) : [];
+    if (plan.kind === 'batch') {
+      const batch: PlaceOrdersOptions = { ...opts, topUpAfter: plan.closes.length, timeInForce: 'fill-or-kill' };
+      fills = await client.placeMarketOrders([...plan.closes, ...plan.opens], batch);
+    } else {
+      fills = client.rollOver ? await client.rollOver(plan.legs, opts) : [];
+    }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     const lost = (marketId: number, direction: 'long' | 'short', size: number): BorosLegFill => ({
@@ -379,15 +511,20 @@ export async function submitBorosRoll(
       feeSize: null,
       failure: { code: 'unknown', message: `${message} — the roll may or may not have gone through. Check the position on Boros before re-issuing.` },
     });
-    fills = [...legs.map((l) => lost(l.fromMarketId, 'short', l.size)), ...legs.map((l) => lost(l.toMarketId, 'long', l.size))];
+    fills =
+      plan.kind === 'batch'
+        ? [...plan.closes, ...plan.opens].map((o) => lost(o.marketId, o.direction, o.size))
+        : [
+            ...plan.legs.map((l) => lost(l.fromMarketId, 'short', l.size)),
+            ...plan.legs.map((l) => lost(l.toMarketId, 'long', l.size)),
+          ];
   }
-  return readRollFills(fills);
+  return readRollFills(fills, rollFillKeys(plan));
 }
 
-/** The venue's four answers as one verdict. Exported for the tests. */
-export function readRollFills(fills: BorosLegFill[]): BorosRollResult {
-  const legs = Object.fromEntries(KEYS.map((k, i) => [k, fills[i]])) as Record<RollLegKey, BorosLegFill>;
-  const entries = KEYS.map((k) => [k, legs[k]] as const);
+export function readRollFills(fills: BorosLegFill[], keys: RollLegKey[]): BorosRollResult {
+  const legs = Object.fromEntries(keys.map((k, i) => [k, fills[i]])) as Record<RollLegKey, BorosLegFill>;
+  const entries = keys.map((k) => [k, legs[k]] as const);
   const missing = entries.find(([, f]) => f === undefined);
   if (missing) {
     return { status: 'unknown', legs, reason: { code: 'unknown', message: `no result came back for ${missing[0]}`, leg: missing[0] }, rolledSize: 0 };
@@ -400,7 +537,7 @@ export function readRollFills(fills: BorosLegFill[]): BorosRollResult {
   const unknown = entries.find(([, f]) => f.failure?.code === 'unknown');
   if (unknown) return { status: 'unknown', legs, reason: reasonOf('unknown'), rolledSize: 0 };
   const failed = entries.find(([, f]) => f.failure !== null);
-  if (failed) return { status: 'refused', legs, reason: reasonOf(failed[1].failure!.code), rolledSize: 0 };
+  if (failed && fills.every((f) => f.filledSize === 0)) return { status: 'refused', legs, reason: reasonOf(failed[1].failure!.code), rolledSize: 0 };
   // Only whole fills exist under FOK. Anything else is a venue answer this
   // module cannot interpret, and the position has to be looked at.
   const whole = fills.every((f) => f.filledSize > 0 && f.shortfallSize <= FULL_FILL_TOLERANCE * f.filledSize);

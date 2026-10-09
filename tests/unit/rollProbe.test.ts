@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BorosPairSimulation, SimulatedLeg } from '../../src/core/boros/pair';
 import {
   ROLL_OPPORTUNITY_SHARE,
@@ -10,7 +11,7 @@ import {
   type RollProbeResult,
   type RollTarget,
 } from '../../src/core/boros/rollProbe';
-import type { BorosMarket } from '../../src/core/boros/client';
+import { fetchBorosMarkets, type BorosMarket, type FetchLike } from '../../src/core/boros/client';
 
 const NOW = 1_760_000_000;
 const YEAR = 365 * 24 * 3600;
@@ -49,9 +50,8 @@ const leg = (over: Partial<SimulatedLeg> = {}): SimulatedLeg => ({
 });
 
 const sim = (over: Partial<BorosPairSimulation> = {}): BorosPairSimulation => ({
-  legA: leg(),
-  legB: leg({ marketId: 2, direction: 'short' }),
-  receiveLeg: 'B',
+  legs: [leg(), leg({ marketId: 2, direction: 'short' })],
+  receiveLeg: 1,
   estSpreadApr: 0.09,
   worstSpreadApr: 0.08,
   costToCrossSize: 0,
@@ -89,7 +89,7 @@ describe('roll candidates', () => {
       market({ marketId: 6, venue: 'Gate', maturity: NOW - 86_400 }),
       market({ marketId: 7, venue: 'Hyperliquid', maturity: NOW - 86_400 }),
     ];
-    const targets = rollTargetsFor(markets, { longVenue: 'GATE', shortVenue: 'HYPERLIQUID' }, 'eth', NOW);
+    const targets = rollTargetsFor(markets, { longVenue: 'GATE', shortVenue: 'HYPERLIQUID', legs: [] }, 'eth', NOW);
     expect(targets).toEqual([
       { maturity: NOW + 30 * 86_400, longMarketId: 1, shortMarketId: 2 },
       { maturity: NOW + 60 * 86_400, longMarketId: 3, shortMarketId: 4 },
@@ -101,7 +101,55 @@ describe('roll candidates', () => {
       market({ marketId: 1, venue: 'Gate', maturity: NOW + 30 * 86_400, state: 'CloseOnly' }),
       market({ marketId: 2, venue: 'Hyperliquid', maturity: NOW + 30 * 86_400 }),
     ];
-    expect(rollTargetsFor(markets, { longVenue: 'Gate', shortVenue: 'Hyperliquid' }, 'ETH', NOW)).toEqual([]);
+    expect(rollTargetsFor(markets, { longVenue: 'Gate', shortVenue: 'Hyperliquid', legs: [] }, 'ETH', NOW)).toEqual([]);
+  });
+});
+
+describe('roll candidates on the staging spread markets', () => {
+  const fixture = JSON.parse(
+    readFileSync(new URL('../fixtures/boros/spread-2026-10-08.json', import.meta.url), 'utf8'),
+  ) as { results: unknown[] };
+  const OCT_30 = 1793318400;
+  const NOV_27 = 1795737600;
+  const DEC_25 = 1798156800;
+  const held = (marketId: number) => ({
+    kind: 'yu' as const,
+    venue: 'Hyperliquid',
+    side: 'SHORT' as const,
+    sizeToken: 1,
+    lockedApr: 0.05,
+    maturity: OCT_30,
+    marketId,
+    imUsd: 0,
+  });
+  const ownerPair = { longVenue: 'Gate', shortVenue: 'Hyperliquid', legs: [held(61), held(62)] };
+  const load = (): Promise<BorosMarket[]> =>
+    fetchBorosMarkets((async () => ({ ok: true, status: 200, json: async () => fixture })) as unknown as FetchLike);
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(Date.UTC(2026, 9, 8));
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it('target prefers the spread', async () => {
+    const markets = await load();
+    expect(markets.filter((m) => m.maturity === NOV_27 && m.base === 'ETH').map((m) => m.marketId).sort()).toEqual([51, 59, 60]);
+    expect(rollTargetsFor(markets, ownerPair, 'ETH', OCT_30)).toEqual([
+      { maturity: NOV_27, spreadMarketId: 59 },
+      { maturity: DEC_25, longMarketId: 65, shortMarketId: 64 },
+    ]);
+  });
+
+  it('offers a spread held at 30 Oct the next spread', async () => {
+    const markets = await load();
+    const spreadPair = { ...ownerPair, legs: [held(63)] };
+    expect(rollTargetsFor(markets, spreadPair, 'ETH', OCT_30)[0]).toEqual({ maturity: NOV_27, spreadMarketId: 59 });
+  });
+
+  it('skips a maturity whose spread is not trading, with no fall back to the singles', async () => {
+    const markets = (await load()).map((m) => (m.marketId === 59 ? { ...m, state: 'Paused' as BorosMarket['state'] } : m));
+    expect(rollTargetsFor(markets, ownerPair, 'ETH', OCT_30)).toEqual([{ maturity: DEC_25, longMarketId: 65, shortMarketId: 64 }]);
   });
 });
 
@@ -141,14 +189,12 @@ describe('the roll rate', () => {
     const entrySim = sim({
       estSpreadApr: 0.09,
       costToCrossSize: 4,
-      legA: leg({ marginRequired: 20 }),
-      legB: leg({ marginRequired: 30 }),
+      legs: [leg({ marginRequired: 20 }), leg({ marginRequired: 30 })],
     });
     const exitSim = sim({
       intent: 'close',
       costToCrossSize: 2,
-      legA: leg({ execApr: 0.14, estFillSize: 100 }),
-      legB: leg({ execApr: 0.12, estFillSize: 100 }),
+      legs: [leg({ execApr: 0.14, estFillSize: 100 }), leg({ execApr: 0.12, estFillSize: 100 })],
     });
     const held = {
       kind: 'yu' as const,
@@ -162,8 +208,10 @@ describe('the roll rate', () => {
       size: 100,
       perpImUsd: 10,
       maturity: NOW + YEAR / 2,
-      longLeg: { ...held, venue: 'Gate', side: 'LONG', lockedApr: -0.1 },
-      shortLeg: { ...held, venue: 'Hyperliquid', side: 'SHORT', lockedApr: 0.2 },
+      heldLegs: [
+        { ...held, venue: 'Gate', side: 'LONG', lockedApr: -0.1 },
+        { ...held, venue: 'Hyperliquid', side: 'SHORT', lockedApr: 0.2 },
+      ],
       nowSec: NOW,
     });
     expect(figures.newBorosImUsd).toBeCloseTo(50, 9);
@@ -178,11 +226,11 @@ describe('the roll rate', () => {
     // old `Math.abs` read that as an entry at +5%, so closing at −3% showed
     // a loss of 8% × size × years where the truth is a gain of 2%.
     const held = { kind: 'yu' as const, sizeToken: 1_000, imUsd: 0, maturity: NOW + YEAR };
-    const exitSim = sim({ intent: 'close', legA: leg({ execApr: -0.03, estFillSize: 1_000 }), legB: leg({ execApr: -0.03, estFillSize: 1_000 }) });
-    const long = exitPnlOf(exitSim, { ...held, venue: 'Gate', side: 'LONG', lockedApr: 0.05 }, undefined, NOW);
+    const exitSim = sim({ intent: 'close', legs: [leg({ execApr: -0.03, estFillSize: 1_000 }), leg({ execApr: -0.03, estFillSize: 1_000 })] });
+    const long = exitPnlOf(exitSim, [{ ...held, venue: 'Gate', side: 'LONG', lockedApr: 0.05 }], NOW);
     expect(long).toBeCloseTo((-0.03 - -0.05) * 1_000, 9);
     // A SHORT entered at −5% stores −0.05; closing at −3% loses 2%.
-    const short = exitPnlOf(exitSim, { ...held, venue: 'Gate', side: 'SHORT', lockedApr: -0.05 }, undefined, NOW);
+    const short = exitPnlOf(exitSim, [{ ...held, venue: 'Gate', side: 'SHORT', lockedApr: -0.05 }], NOW);
     expect(short).toBeCloseTo((-0.05 - -0.03) * 1_000, 9);
   });
 
@@ -192,15 +240,19 @@ describe('the roll rate', () => {
         entrySim: sim({
           estSpreadApr: 0.09,
           costToCrossSize: 4 * scale,
-          legA: leg({ marginRequired: 20 * scale, sizing: { ...leg().sizing, deltaSize: 100 * scale, resultingSize: 100 * scale } }),
-          legB: leg({ marginRequired: 30 * scale, sizing: { ...leg().sizing, deltaSize: 100 * scale, resultingSize: 100 * scale } }),
+          legs: [
+            leg({ marginRequired: 20 * scale, sizing: { ...leg().sizing, deltaSize: 100 * scale, resultingSize: 100 * scale } }),
+            leg({ marginRequired: 30 * scale, sizing: { ...leg().sizing, deltaSize: 100 * scale, resultingSize: 100 * scale } }),
+          ],
         }),
-        exitSim: sim({ intent: 'close', costToCrossSize: 2 * scale, legA: leg({ execApr: 0.14, estFillSize: 100 * scale }), legB: leg({ execApr: 0.12, estFillSize: 100 * scale }) }),
+        exitSim: sim({ intent: 'close', costToCrossSize: 2 * scale, legs: [leg({ execApr: 0.14, estFillSize: 100 * scale }), leg({ execApr: 0.12, estFillSize: 100 * scale })] }),
         size: 100 * scale,
         perpImUsd: 10 * scale,
         maturity: NOW + YEAR / 2,
-        longLeg: { kind: 'yu', venue: 'Gate', side: 'LONG', sizeToken: 100 * scale, imUsd: 0, lockedApr: -0.1, maturity: NOW + YEAR / 4 },
-        shortLeg: { kind: 'yu', venue: 'Hyperliquid', side: 'SHORT', sizeToken: 100 * scale, imUsd: 0, lockedApr: 0.2, maturity: NOW + YEAR / 4 },
+        heldLegs: [
+          { kind: 'yu', venue: 'Gate', side: 'LONG', sizeToken: 100 * scale, imUsd: 0, lockedApr: -0.1, maturity: NOW + YEAR / 4 },
+          { kind: 'yu', venue: 'Hyperliquid', side: 'SHORT', sizeToken: 100 * scale, imUsd: 0, lockedApr: 0.2, maturity: NOW + YEAR / 4 },
+        ],
         nowSec: NOW,
       }).netRate;
     expect(at(0.5)).toBeCloseTo(0.05, 9);

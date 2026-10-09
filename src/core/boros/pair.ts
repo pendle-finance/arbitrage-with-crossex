@@ -44,6 +44,7 @@ import {
   type BorosMarket,
   type BorosOrderBook,
 } from './client';
+import { isSpreadMarket } from './spread';
 import { absWei, decimalString } from './borosApi';
 import { parseUnits } from 'viem';
 
@@ -60,28 +61,30 @@ export const MAX_SLIPPAGE_APR = 0.1;
 
 export const MIN_GAS_BALANCE_USD = AUTO_TOP_UP_BELOW_USD;
 
+export interface GasTopUpZones {
+  markets: Pick<BorosMarket, 'marketId' | 'tokenId' | 'state' | 'spreadVenues'>[];
+  /** Free cross margin per tokenId, collateral units. */
+  freeCrossByToken: Map<number, number>;
+  pricesUsd: Map<number, number | null>;
+}
+
 export type GasTopUpZone =
   | { ok: true; marketId: number; tokenId: number; symbol: string; freeUsd: number }
   | { ok: false; message: string };
 
 /**
- * Which cross margin pays a hand-made gas top-up.
+ * Which cross margin pays a gas top-up.
  *
  * `payTreasury` is charged to the cross account of the market it names, in
  * that market's token, and its `_checkIMStrict` refuses it when that account
  * cannot spare the amount. So the zone must be one the user actually funds:
  * the zone of the market they are trading when the caller names one, else the
- * zone with the most free margin in USD. Refused, with the reason, when the
- * chosen zone cannot cover the dollars — never routed to a zone by default.
+ * zone with the most free margin in USD. When the traded zone is short, the
+ * best-funded zone pays instead, named by a live single market of its token
+ * (the backend looks the id up). Refused, with the reason, when no zone can
+ * cover the dollars.
  */
-export function chooseGasTopUpZone(input: {
-  amountUsd: number;
-  markets: Pick<BorosMarket, 'marketId' | 'tokenId'>[];
-  /** Free cross margin per tokenId, collateral units. */
-  freeCrossByToken: Map<number, number>;
-  pricesUsd: Map<number, number | null>;
-  preferMarketId?: number;
-}): GasTopUpZone {
+export function chooseGasTopUpZone(input: GasTopUpZones & { amountUsd: number; preferMarketId?: number }): GasTopUpZone {
   const symbolOf = (tokenId: number) => BOROS_TOKEN_SYMBOLS[tokenId] ?? `token ${tokenId}`;
   const freeUsdOf = (tokenId: number): number | null => {
     const price = input.pricesUsd.get(tokenId);
@@ -96,18 +99,12 @@ export function chooseGasTopUpZone(input: {
     if (freeUsd === null) {
       return { ok: false, message: `The ${symbol} price is unknown, so a dollar gas top-up cannot be paid from your ${symbol} margin.` };
     }
-    if (freeUsd < input.amountUsd) {
-      return {
-        ok: false,
-        message: `A gas top-up is paid from the margin of the market you trade. Your ${symbol} cross margin has about $${freeUsd.toFixed(2)} free, less than the $${input.amountUsd.toFixed(2)} top-up. Lower the amount or add ${symbol}.`,
-      };
-    }
-    return { ok: true, marketId: market.marketId, tokenId: market.tokenId, symbol, freeUsd };
+    if (freeUsd >= input.amountUsd) return { ok: true, marketId: market.marketId, tokenId: market.tokenId, symbol, freeUsd };
   }
   let best: { tokenId: number; freeUsd: number; marketId: number } | null = null;
   for (const tokenId of input.freeCrossByToken.keys()) {
     const freeUsd = freeUsdOf(tokenId);
-    const market = input.markets.find((m) => m.tokenId === tokenId);
+    const market = input.markets.find((m) => m.tokenId === tokenId && m.state === 'Normal' && !isSpreadMarket(m));
     if (freeUsd === null || !market) continue;
     if (!best || freeUsd > best.freeUsd) best = { tokenId, freeUsd, marketId: market.marketId };
   }
@@ -172,13 +169,12 @@ export interface PairEligibility {
 }
 
 /**
- * Can these two markets offset each other? Shared collateral and shared
+ * Can these markets offset each other? Shared collateral and shared
  * maturity, per §2 — margin MODE is deliberately not consulted, it decides
  * where margin sits, not whether a pair is valid (§6).
  */
 export function pairEligibility(
-  a: BorosMarket,
-  b: BorosMarket,
+  markets: readonly BorosMarket[],
   nowSec: number,
   intent: PairIntent = 'open',
 ): PairEligibility {
@@ -187,10 +183,10 @@ export function pairEligibility(
     code,
     reason,
   });
-  if (a.marketId === b.marketId) {
+  if (new Set(markets.map((m) => m.marketId)).size !== markets.length) {
     return no('same-market', 'same market — a leg cannot offset itself');
   }
-  const dead = [a, b].find(
+  const dead = markets.find(
     (m) => (m.state !== 'Normal' && m.state !== 'CloseOnly') || m.maturity <= nowSec,
   );
   if (dead) {
@@ -199,14 +195,16 @@ export function pairEligibility(
       dead.maturity <= nowSec ? `${dead.name} has matured` : `${dead.name} is not trading`,
     );
   }
-  if (intent !== 'close' && [a, b].some((m) => m.state === 'CloseOnly')) {
+  if (intent !== 'close' && markets.some((m) => m.state === 'CloseOnly')) {
     return no('close-only', 'This market takes closes only. Switch to Close.');
   }
-  if (a.tokenId !== b.tokenId) {
+  const [first] = markets;
+  const otherToken = markets.find((m) => m.tokenId !== first.tokenId);
+  if (otherToken) {
     const nameOf = (m: BorosMarket) => BOROS_TOKEN_SYMBOLS[m.tokenId] ?? `token#${m.tokenId}`;
-    return no('different-collateral', `different collateral — ${nameOf(a)} vs ${nameOf(b)}`);
+    return no('different-collateral', `different collateral — ${nameOf(first)} vs ${nameOf(otherToken)}`);
   }
-  if (a.maturity !== b.maturity) return no('different-maturity', 'different maturity');
+  if (markets.some((m) => m.maturity !== first.maturity)) return no('different-maturity', 'different maturity');
   return { eligible: true, code: null, reason: null };
 }
 
@@ -322,10 +320,12 @@ export interface ReducingOrderSize {
 }
 
 export function reducingOrderSize(openSizeWei: string, requested: number): ReducingOrderSize {
-  const size = Math.min(requested, Math.abs(norm18(openSizeWei)));
+  const openSize = Math.abs(norm18(openSizeWei));
+  const size = Math.min(requested, openSize);
   const open = absWei(openSizeWei);
   if (open === null) return { size, sizeWei: undefined };
-  return { size, sizeWei: parseUnits(decimalString(size), 18) > open ? open.toString() : undefined };
+  const full = requested >= openSize - Math.max(1e-12, openSize * 1e-9);
+  return { size, sizeWei: full || parseUnits(decimalString(size), 18) > open ? open.toString() : undefined };
 }
 
 // ---------------------------------------------------------------------------
@@ -440,11 +440,8 @@ export interface SimulatedLeg {
 }
 
 export interface BorosPairSimulation {
-  legA: SimulatedLeg;
-  legB: SimulatedLeg;
-  /** Which leg receives fixed; null when the two directions do not oppose, in
-   * which case the pair is not a spread and no spread number is quoted. */
-  receiveLeg: 'A' | 'B' | null;
+  legs: SimulatedLeg[];
+  receiveLeg: number | null;
   /**
    * The spread this pair locks, net of SETTLEMENT fees only.
    *
@@ -675,11 +672,10 @@ function simulateLeg(
   };
 }
 
+type SimulateBorosPairLeg = BorosPairLegInput & { size: number };
+
 export interface SimulateBorosPairInput {
-  legA: BorosPairLegInput;
-  legB: BorosPairLegInput;
-  /** Notional per leg, collateral-token units. */
-  size: number;
+  legs: SimulateBorosPairLeg[];
   intent: PairIntent;
   /**
    * Trade ONE leg only, leaving the other untouched (size 0).
@@ -690,7 +686,7 @@ export interface SimulateBorosPairInput {
    * than in a separate single-leg path so completion keeps the whole gate —
    * margin, gas, depth, eligibility — instead of a thinner copy of it.
    */
-  onlyLeg?: 'A' | 'B';
+  onlyLeg?: number;
   /** USD per collateral token; null = unpriceable (USD readouts suppressed). */
   collateralPriceUsd: number | null;
   nowSec: number;
@@ -705,17 +701,15 @@ export interface SimulateBorosPairInput {
  * never computed, so it cannot leak into a readout (§3).
  */
 export function simulateBorosPair(input: SimulateBorosPairInput): BorosPairSimulation {
-  const { legA, legB, size, intent, nowSec } = input;
+  const { intent, nowSec } = input;
   const reasons: string[] = [];
 
-  // A leg the caller excluded gets a zero size, which walks no book and
-  // produces a zero delta — the submission path then skips it entirely.
-  const sizeFor = (key: 'A' | 'B'): number =>
-    input.onlyLeg && input.onlyLeg !== key ? 0 : size;
-  const a = simulateLeg(legA, sizeFor('A'), intent, nowSec, reasons);
-  const b = simulateLeg(legB, sizeFor('B'), intent, nowSec, reasons);
+  const sizeFor = (index: number, size: number): number =>
+    input.onlyLeg !== undefined && input.onlyLeg !== index ? 0 : size;
+  const legs = input.legs.map((leg, i) => simulateLeg(leg, sizeFor(i, leg.size), intent, nowSec, reasons));
 
-  const maturity = legA.market.maturity;
+  const [first] = input.legs;
+  const maturity = first.market.maturity;
   const secondsToMaturity = Math.max(0, maturity - nowSec);
   const years = secondsToMaturity / SECONDS_IN_YEAR;
 
@@ -724,26 +718,11 @@ export function simulateBorosPair(input: SimulateBorosPairInput): BorosPairSimul
       ? input.takerFeeOverride
       : m.takerFeeRate;
 
-  /**
-   * Both fees are quoted as rates charged on notional × years, so as an APR
-   * drag they are the sum of the rates OF THE LEGS THAT ACTUALLY TRADE.
-   *
-   * A single-leg ticket carries a borrowed partner sized to zero purely to
-   * make the pair shape valid. Summing unconditionally charged that phantom
-   * leg's taker and settlement fees too — a one-leg trade was quoted double
-   * the drag it pays, which then propagated into the spread and the net APR.
-   */
-  const tradesA = Math.abs(a.sizing.deltaSize) > 0;
-  const tradesB = Math.abs(b.sizing.deltaSize) > 0;
-  // Before a size is entered NEITHER leg trades; the pair's own fees are still
-  // the right thing to quote, so fall back to both rather than reporting zero.
-  const bothIdle = !tradesA && !tradesB;
-  const takerDragApr =
-    (tradesA || bothIdle ? takerRate(legA.market) : 0) +
-    (tradesB || bothIdle ? takerRate(legB.market) : 0);
-  const settleDragApr =
-    (tradesA || bothIdle ? legA.market.settleFeeApr : 0) +
-    (tradesB || bothIdle ? legB.market.settleFeeApr : 0);
+  const tradedSizes = legs.map((l) => Math.abs(l.sizing.deltaSize));
+  const allIdle = tradedSizes.every((s) => s === 0);
+  const priced = input.legs.filter((_, i) => tradedSizes[i] > 0 || allIdle);
+  const takerDragApr = priced.reduce((sum, l) => sum + takerRate(l.market), 0);
+  const settleDragApr = priced.reduce((sum, l) => sum + l.market.settleFeeApr, 0);
   /**
    * ⚠ SETTLEMENT ONLY. The taker fee is a one-off entry cost with its own
    * line (`costToCrossSize`); settlement accrues over the position's life and
@@ -752,87 +731,44 @@ export function simulateBorosPair(input: SimulateBorosPairInput): BorosPairSimul
    */
   const feeDragApr = settleDragApr;
 
-  const receiveLeg: 'A' | 'B' | null =
-    a.direction === b.direction ? null : a.direction === 'short' ? 'A' : 'B';
-  if (receiveLeg === null) {
+  const receiveLeg = receiveLegOf(legs);
+  if (legs.length === 2 && receiveLeg === null) {
     reasons.push(
       'Both legs point the same way, so they do not offset — no spread is quoted. Flip one leg to trade a spread.',
     );
   }
 
-  const recv = receiveLeg === 'A' ? a : b;
-  const pay = receiveLeg === 'A' ? b : a;
-  const quotable = receiveLeg !== null && recv.execApr !== null && pay.execApr !== null;
-
-  const estSpreadApr = quotable ? recv.execApr! - pay.execApr! - feeDragApr : null;
-  /**
-   * SLIPPAGE: how far the book moves the trade away from mid.
-   *
-   * Built exactly like the executed spread — receive leg minus pay leg, less
-   * the same fee drag — so the difference between the two is the walk down
-   * the book and nothing else. (Subtracting an un-netted mid would report
-   * the fees as slippage.) Per leg it is |exec − mid|; for the pair it is
-   * the distance between the mid spread and the spread this size actually
-   * gets, which is what the trader gives up by crossing.
-   */
-  // The mids come off the INPUTS (a SimulatedLeg carries no market), matched
-  // to whichever side receives.
-  const recvMid = (receiveLeg === 'A' ? legA : legB).market.midApr;
-  const payMid = (receiveLeg === 'A' ? legB : legA).market.midApr;
-  const midSpreadApr =
-    quotable && knownRate(recvMid) && knownRate(payMid) ? recvMid - payMid - feeDragApr : null;
+  const signs = spreadSigns(legs, receiveLeg);
+  const signedSum = (values: number[]): number =>
+    values.reduce((sum, v, i) => sum + (signs?.[i] ?? 0) * v, 0);
+  const quotable = signs !== null && legs.every((l) => l.execApr !== null);
+  const estSpreadApr = quotable ? signedSum(legs.map((l) => l.execApr!)) - feeDragApr : null;
+  const mids = input.legs.map((l) => l.market.midApr);
+  const midSpreadApr = quotable && mids.every(knownRate) ? signedSum(mids) - feeDragApr : null;
   const slippageApr =
     midSpreadApr !== null && estSpreadApr !== null ? Math.abs(midSpreadApr - estSpreadApr) : null;
-  // Both tolerances spent at once. Equivalently estSpread − (slipA + slipB):
-  // the legs cross in opposite directions so the two slips compound.
-  const worstSpreadApr = quotable ? recv.worstApr! - pay.worstApr! - feeDragApr : null;
+  const worstSpreadApr = quotable ? signedSum(legs.map((l) => l.worstApr!)) - feeDragApr : null;
 
-  // What crossing both books costs right now, in collateral units. Sized off
-  // the notional actually expected to trade, not the requested size.
-  // ⚠ min() only when BOTH legs trade. A single-leg ticket (onlyLeg) sizes the
-  // other leg to zero, and min(size, 0) reported the taker fee as 0 on a trade
-  // that genuinely pays one — free execution is the last thing to be wrong
-  // about. With one leg live, that leg IS the traded size.
-  const sizeA = Math.abs(a.sizing.deltaSize);
-  const sizeB = Math.abs(b.sizing.deltaSize);
-  a.takerFeeCost = takerRate(legA.market) * sizeA * years;
-  b.takerFeeCost = takerRate(legB.market) * sizeB * years;
-  // The pair total is the SUM of the two legs' own fees — never the drag rate
-  // times min(sizeA, sizeB). That understated every asymmetric trade: a
-  // `target` repair with A +100 and B −40 charged 140 units of fee and
-  // showed 40 units' worth. (The min() also read 0 on a single-leg ticket,
-  // which the per-leg figures never did.)
-  const costToCrossSize = a.takerFeeCost + b.takerFeeCost;
+  legs.forEach((l, i) => {
+    l.takerFeeCost = takerRate(input.legs[i].market) * tradedSizes[i] * years;
+  });
+  const costToCrossSize = legs.reduce((sum, l) => sum + l.takerFeeCost, 0);
 
-  /**
-   * Σ of the legs that actually trade.
-   *
-   * ⚠ A leg sized to zero (a single-leg ticket's borrowed partner) never walks
-   * a book, so it has no execApr and therefore no margin — and requiring BOTH
-   * to be known reported the total as "—" on a trade whose one real leg had a
-   * perfectly good number. Null still propagates from a leg that IS trading
-   * but cannot be modelled, which is the case worth refusing to guess at.
-   */
-  const marginParts = [
-    { size: sizeA, margin: a.marginRequired },
-    { size: sizeB, margin: b.marginRequired },
-  ].filter((x) => x.size > 0);
-  const marginRequiredTotal = marginParts.some((x) => x.margin === null)
+  const marginParts = legs.filter((_, i) => tradedSizes[i] > 0).map((l) => l.marginRequired);
+  const marginRequiredTotal = marginParts.some((m) => m === null)
     ? null
-    : marginParts.reduce((sum, x) => sum + (x.margin ?? 0), 0);
+    : marginParts.reduce<number>((sum, m) => sum + (m ?? 0), 0);
 
-  // Only meaningful when BOTH legs trade. On a single-leg completion there is
-  // no pair to hedge — reporting the one fill as "unhedged" would call closing
-  // a gap the opposite of what it is.
-  const bothTrade =
-    Math.abs(a.sizing.deltaSize) > 0 && Math.abs(b.sizing.deltaSize) > 0;
-  const hedgedSize = bothTrade ? Math.min(a.estFillSize, b.estFillSize) : 0;
+  const pairTrades = legs.length === 2 && tradedSizes.every((s) => s > 0);
+  const hedgedSize =
+    legs.length === 1 ? legs[0].estFillSize : pairTrades ? Math.min(legs[0].estFillSize, legs[1].estFillSize) : 0;
   // Dust guard, as in the fill decoder: walkBorosBook accumulates `filled`
   // across levels while decrementing `remaining`, so two legs walking different
   // level counts drift by ~1e-11 at 18-decimal magnitudes. Without this a
   // perfectly matched pair reports itself as partly directional.
-  const rawUnhedged = bothTrade ? Math.abs(a.estFillSize - b.estFillSize) : 0;
-  const unhedgedSize = rawUnhedged > Math.max(1e-12, size * 1e-9) ? rawUnhedged : 0;
+  const rawUnhedged = pairTrades ? Math.abs(legs[0].estFillSize - legs[1].estFillSize) : 0;
+  const largestSize = Math.max(...input.legs.map((l) => l.size));
+  const unhedgedSize = rawUnhedged > Math.max(1e-12, largestSize * 1e-9) ? rawUnhedged : 0;
   if (unhedgedSize > 0) {
     reasons.push(
       'The two legs fill to different sizes at this notional — the difference is left directional.',
@@ -840,8 +776,7 @@ export function simulateBorosPair(input: SimulateBorosPairInput): BorosPairSimul
   }
 
   return {
-    legA: a,
-    legB: b,
+    legs,
     receiveLeg,
     estSpreadApr,
     worstSpreadApr,
@@ -854,11 +789,30 @@ export function simulateBorosPair(input: SimulateBorosPairInput): BorosPairSimul
     marginRequiredTotal,
     hedgedSize,
     unhedgedSize,
-    collateral: BOROS_TOKEN_SYMBOLS[legA.market.tokenId] ?? `token#${legA.market.tokenId}`,
+    collateral: BOROS_TOKEN_SYMBOLS[first.market.tokenId] ?? `token#${first.market.tokenId}`,
     collateralPriceUsd: input.collateralPriceUsd,
     secondsToMaturity,
     reasons,
   };
+}
+
+function receiveLegOf(legs: readonly SimulatedLeg[]): number | null {
+  if (legs.length === 1) return legs[0].direction === 'short' ? 0 : null;
+  if (legs.length !== 2 || legs[0].direction === legs[1].direction) return null;
+  return legs[0].direction === 'short' ? 0 : 1;
+}
+
+function isHedgedOpenShape(inputs: readonly BorosPairLegInput[], legs: readonly SimulatedLeg[]): boolean {
+  if (inputs.length === 1) return isSpreadMarket(inputs[0].market);
+  if (inputs.length !== 2 || inputs.some((l) => isSpreadMarket(l.market))) return false;
+  const [a, b] = legs.map((l) => Math.abs(l.sizing.deltaSize));
+  return a === 0 || b === 0 || a === b;
+}
+
+function spreadSigns(legs: readonly SimulatedLeg[], receiveLeg: number | null): number[] | null {
+  if (legs.length === 1) return [legs[0].direction === 'short' ? 1 : -1];
+  if (legs.length !== 2 || receiveLeg === null) return null;
+  return legs.map((_, i) => (i === receiveLeg ? 1 : -1));
 }
 
 // ---------------------------------------------------------------------------
@@ -907,13 +861,15 @@ export type BlockerCode =
   | 'margin-unknown'
   | 'flip-unacknowledged'
   | 'below-min-order-value'
-  | 'stale-simulation';
+  | 'stale-simulation'
+  | 'mixed-open'
+  | 'unhedged-open';
 
 export interface PairBlocker {
   code: BlockerCode;
   message: string;
   /** Which leg it is about, when it is about one. */
-  leg?: 'A' | 'B';
+  leg?: number;
   /** The market it is about — what a remediation button acts on. */
   marketId?: number;
   /** The exact top-up a margin blocker needs, collateral units — the SHORTFALL
@@ -923,8 +879,7 @@ export interface PairBlocker {
 
 export interface EvaluatePairInput {
   simulation: BorosPairSimulation;
-  legA: BorosPairLegInput;
-  legB: BorosPairLegInput;
+  legs: BorosPairLegInput[];
   account: BorosPairAccountState;
   eligibility: PairEligibility;
   /** The §4 acknowledgement, ticked by the user. */
@@ -943,7 +898,7 @@ export interface PairGate {
    * required (§4), and its copy has to say which case it is. */
   requiresAcknowledgement: boolean;
   /** The legs that oppose, so the copy can name the market and the size. */
-  opposingLegs: Array<'A' | 'B'>;
+  opposingLegs: number[];
 }
 
 /**
@@ -955,9 +910,21 @@ export interface PairGate {
  * against their own.
  */
 export function evaluatePairGate(input: EvaluatePairInput): PairGate {
-  const { simulation: sim, legA, legB, account } = input;
+  const { simulation: sim, account } = input;
   const blockers: PairBlocker[] = [];
   const warnings: string[] = [];
+
+  const spreadLegs = input.legs.filter((l) => isSpreadMarket(l.market)).length;
+  if (sim.intent !== 'close' && spreadLegs > 0 && spreadLegs < input.legs.length) {
+    blockers.push({ code: 'mixed-open', message: 'Open with spread or single markets, not both' });
+  }
+
+  if (sim.intent === 'open' && !isHedgedOpenShape(input.legs, sim.legs)) {
+    blockers.push({
+      code: 'unhedged-open',
+      message: 'Open one spread market, or two single markets on opposite sides at one size',
+    });
+  }
 
   if (!input.eligibility.eligible) {
     blockers.push({
@@ -966,10 +933,7 @@ export function evaluatePairGate(input: EvaluatePairInput): PairGate {
     });
   }
 
-  const legs: Array<{ key: 'A' | 'B'; sim: SimulatedLeg; input: BorosPairLegInput }> = [
-    { key: 'A', sim: sim.legA, input: legA },
-    { key: 'B', sim: sim.legB, input: legB },
-  ];
+  const legs = input.legs.map((legIn, index) => ({ index, sim: sim.legs[index], input: legIn }));
 
   if (legs.every((l) => Math.abs(l.sim.sizing.deltaSize) === 0)) {
     /**
@@ -988,7 +952,7 @@ export function evaluatePairGate(input: EvaluatePairInput): PairGate {
     // puts it — the guided wizard's "nothing left to do", not a missing size.
     const atTarget = sim.intent === 'target' && legs.some((l) => l.sim.sizing.currentSize !== 0);
     if (atTarget) {
-      message = 'Both legs are already at this target — there is nothing to send.';
+      message = `${legs.length === 1 ? 'This leg is' : 'Both legs are'} already at this target — there is nothing to send.`;
     } else if (adding.length) {
       message =
         `Close is reduce-only, and ${adding.map((l) => l.sim.marketName).join(' and ')} ` +
@@ -1000,14 +964,14 @@ export function evaluatePairGate(input: EvaluatePairInput): PairGate {
     blockers.push({ code: 'no-size', message });
   }
 
-  if (sim.receiveLeg === null) {
+  if (sim.legs.length === 2 && sim.receiveLeg === null) {
     blockers.push({
       code: 'legs-do-not-offset',
       message: 'Both legs point the same way — flip one to trade a spread.',
     });
   }
 
-  for (const { key, sim: leg, input: legIn } of legs) {
+  for (const { index, sim: leg, input: legIn } of legs) {
     if (Math.abs(leg.sizing.deltaSize) === 0) continue;
     // Boros refuses an order worth under $10 (DEFAULT_MIN_ORDER_VALUE,
     // trade.service) and phrases it as a raw HTTP 400 at the calldata builder —
@@ -1024,7 +988,7 @@ export function evaluatePairGate(input: EvaluatePairInput): PairGate {
     if (!flattens && value !== null && value <= MIN_ORDER_VALUE_USD) {
       blockers.push({
         code: 'below-min-order-value',
-        leg: key,
+        leg: index,
         marketId: leg.marketId,
         message:
           `${leg.marketName}: this leg is worth $${value.toFixed(2)}, and Boros takes nothing ` +
@@ -1034,14 +998,14 @@ export function evaluatePairGate(input: EvaluatePairInput): PairGate {
     if (leg.bookStatus === 'unavailable') {
       blockers.push({
         code: 'book-unavailable',
-        leg: key,
+        leg: index,
         marketId: leg.marketId,
         message: `${leg.marketName}: order book unavailable — cannot price this leg.`,
       });
     } else if (leg.execApr === null) {
       blockers.push({
         code: 'no-depth',
-        leg: key,
+        leg: index,
         marketId: leg.marketId,
         message: `${leg.marketName}: nothing resting on the side this leg would cross.`,
       });
@@ -1052,7 +1016,7 @@ export function evaluatePairGate(input: EvaluatePairInput): PairGate {
       const pct = (n: number) => `${(n * 100).toFixed(2)}%`;
       blockers.push({
         code: 'slippage-exceeds-max',
-        leg: key,
+        leg: index,
         marketId: leg.marketId,
         message:
           `${leg.marketName}: this size fills ${pct(leg.estSlippageApr ?? 0)} from mid, past the ` +
@@ -1083,7 +1047,7 @@ export function evaluatePairGate(input: EvaluatePairInput): PairGate {
         const pct = (n: number) => `${(n * 100).toFixed(2)}%`;
         blockers.push({
           code: 'rate-bound-out-of-range',
-          leg: key,
+          leg: index,
           marketId: leg.marketId,
           message:
             `${leg.marketName}: the rate bound this order carries (${pct(leg.worstApr)}) is outside ` +
@@ -1094,7 +1058,7 @@ export function evaluatePairGate(input: EvaluatePairInput): PairGate {
     if (leg.marginRequired === null && leg.execApr !== null) {
       blockers.push({
         code: 'margin-unknown',
-        leg: key,
+        leg: index,
         marketId: leg.marketId,
         message: `${leg.marketName}: initial margin cannot be modelled, so margin sufficiency is unknown.`,
       });
@@ -1105,7 +1069,7 @@ export function evaluatePairGate(input: EvaluatePairInput): PairGate {
     if (legIn.onIsolatedMargin && legIn.isolatedHasPositionOrOrders && !legIn.isolatedOnly) {
       blockers.push({
         code: 'isolated-must-switch',
-        leg: key,
+        leg: index,
         marketId: leg.marketId,
         message: `${leg.marketName} is on isolated margin with an open position/order. Switch it to cross margin to trade this pair.`,
       });
@@ -1123,7 +1087,7 @@ export function evaluatePairGate(input: EvaluatePairInput): PairGate {
   // another bucket's.
   let crossRequired = 0;
   let crossKnown = true;
-  for (const { key, sim: leg, input: legIn } of legs) {
+  for (const { index, sim: leg, input: legIn } of legs) {
     if (Math.abs(leg.sizing.deltaSize) === 0) continue;
     // What this leg still has to FUND: the resulting position's margin less
     // whatever it already posts (see `committedMargin`). Never negative — a leg
@@ -1138,7 +1102,7 @@ export function evaluatePairGate(input: EvaluatePairInput): PairGate {
       if (required !== null && required > available) {
         blockers.push({
           code: 'isolated-short-margin',
-          leg: key,
+          leg: index,
           marketId: leg.marketId,
           shortfall: required - available,
           message: `${leg.marketName} is isolated-only. You need ${fmtSize(required - available)} ${sim.collateral} in its account to open this leg.`,
@@ -1149,13 +1113,16 @@ export function evaluatePairGate(input: EvaluatePairInput): PairGate {
     if (required === null) crossKnown = false;
     else crossRequired += required;
   }
+  const tradingLegs = sim.legs.filter((l) => Math.abs(l.sizing.deltaSize) > 0).length;
   // A low gas budget makes the order carry its own top-up, paid from this same
   // cross margin in the collateral token (borosApi.autoTopUpCalldata). An
   // opening must afford it on top of the legs' margin, or `payTreasury`'s
-  // strict margin check refuses the whole batch at the venue.
+  // strict margin check refuses the whole batch at the venue. A close tops up
+  // only at gas debt (the `reducing` floor in autoTopUpCalldata).
   const gasBalance = input.account.gasBalanceUsd;
+  const topUpBelowUsd = sim.intent === 'close' ? 0 : MIN_GAS_BALANCE_USD;
   const autoTopUpUsd =
-    typeof gasBalance === 'number' && gasBalance < MIN_GAS_BALANCE_USD
+    typeof gasBalance === 'number' && gasBalance < topUpBelowUsd
       ? AUTO_TOP_UP_USD + (gasBalance < 0 ? -gasBalance : 0)
       : 0;
   const autoTopUpToken =
@@ -1163,7 +1130,8 @@ export function evaluatePairGate(input: EvaluatePairInput): PairGate {
       ? autoTopUpUsd / sim.collateralPriceUsd
       : 0;
   if (crossKnown && crossRequired > 0) {
-    crossRequired += autoTopUpToken;
+    // A close's top-up runs after its closes and may come from another coin.
+    if (sim.intent !== 'close') crossRequired += autoTopUpToken;
     const available = account.cross?.available ?? 0;
     if (crossRequired > available) {
       blockers.push({
@@ -1173,10 +1141,8 @@ export function evaluatePairGate(input: EvaluatePairInput): PairGate {
         // user never asked for, in the one message that is telling them why
         // their order cannot go out.
         message: `Cross margin is short ${fmtSize(crossRequired - available)} ${sim.collateral} to open ${
-          Math.abs(sim.legA.sizing.deltaSize) > 0 && Math.abs(sim.legB.sizing.deltaSize) > 0
-            ? 'both legs'
-            : 'this leg'
-        }${autoTopUpToken > 0 ? `, including about $${autoTopUpUsd.toFixed(2)} of gas top-up` : ''}.`,
+          tradingLegs > 2 ? 'all legs' : tradingLegs === 2 ? 'both legs' : 'this leg'
+        }${autoTopUpToken > 0 && sim.intent !== 'close' ? `, including about $${autoTopUpUsd.toFixed(2)} of gas top-up` : ''}.`,
       });
     }
   }
@@ -1190,12 +1156,12 @@ export function evaluatePairGate(input: EvaluatePairInput): PairGate {
       'Prepaid gas on this Boros account could not be read, so this order may still be refused for gas. ' +
         'This is gas, not trading collateral: topping up your margin will not fix it.',
     );
-  } else if (gas !== undefined && gas < MIN_GAS_BALANCE_USD && !((sim.collateralPriceUsd ?? 0) > 0)) {
+  } else if (gas !== undefined && gas < topUpBelowUsd && !((sim.collateralPriceUsd ?? 0) > 0)) {
     warnings.push(
       `Prepaid gas on this Boros account is ${gas <= 0 ? 'empty' : `low, about $${gas.toFixed(2)}`}, and the ${sim.collateral} price is unknown, so this order cannot top it up and may be refused for gas. ` +
         'Top up gas in the Boros app.',
     );
-  } else if (gas !== undefined && gas < MIN_GAS_BALANCE_USD) {
+  } else if (gas !== undefined && gas < topUpBelowUsd) {
     // NOT a blocker. The order carries its own `payTreasury` and the relayer
     // counts that as a credit when it checks the budget, so a low balance stops
     // nothing. Said anyway because it spends real money.
@@ -1205,12 +1171,14 @@ export function evaluatePairGate(input: EvaluatePairInput): PairGate {
     const topUp = AUTO_TOP_UP_USD + (gas < 0 ? -gas : 0);
     warnings.push(
       `Prepaid gas on this Boros account is ${gas <= 0 ? 'empty' : `low, about $${gas.toFixed(2)}`}, so this order tops it up as it sends. ` +
-        `That takes about $${topUp.toFixed(2)} worth of ${sim.collateral} from this market's cross margin, on top of the margin for these legs.`,
+        (sim.intent === 'close' && (account.cross?.available ?? 0) < autoTopUpToken
+          ? `Your ${sim.collateral} cross margin cannot spare about $${topUp.toFixed(2)}, so it comes from the coin with the most free cross margin.`
+          : `That takes about $${topUp.toFixed(2)} worth of ${sim.collateral} from this market's cross margin, on top of the margin for these legs.`),
     );
   }
 
   // --- §4 acknowledgement --------------------------------------------------
-  const opposingLegs = legs.filter((l) => l.sim.sizing.opposing).map((l) => l.key);
+  const opposingLegs = legs.filter((l) => l.sim.sizing.opposing).map((l) => l.index);
   if (opposingLegs.length > 0 && !input.opposingAcknowledged) {
     blockers.push({
       code: 'flip-unacknowledged',

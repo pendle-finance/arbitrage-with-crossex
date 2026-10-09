@@ -239,8 +239,16 @@ export function parseDateLocal(value: string): number {
   return Math.floor(new Date(`${value}T00:00`).getTime() / 1000);
 }
 
-export function fmtDateShort(unixSec: number, options: { year?: 'numeric' } = {}): string {
-  return new Date(unixSec * 1000).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: options.year });
+export function fmtDateShort(
+  unixSec: number,
+  options: { year?: 'numeric'; timeZone?: 'UTC' } = {},
+): string {
+  return new Date(unixSec * 1000).toLocaleDateString('en-GB', {
+    day: 'numeric',
+    month: 'short',
+    year: options.year,
+    timeZone: options.timeZone,
+  });
 }
 
 /** "HH:MM:SS" today, "MM-DD HH:MM:SS" otherwise. */

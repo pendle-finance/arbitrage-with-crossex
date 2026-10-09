@@ -25,6 +25,7 @@ import {
   type WaterfallStep,
 } from '../components/Waterfall';
 import { fmtPct, fmtUsd, prettyVenue } from '../lib/fmt';
+import { spreadLabel } from '../lib/spread';
 
 const SECONDS_IN_YEAR = 365 * 86_400;
 
@@ -52,7 +53,7 @@ function costRows(pair: OpportunityPair): Array<[string, number | null, string, 
       c.borosTakerFeeUsd,
       'bg-amber-500/75',
       'Boros taker fee',
-      `Boros taker fees, both legs ${costText(c.borosTakerFeeUsd)}`,
+      `Boros taker fee${pair.borosLegs.length > 1 ? 's, both legs' : ''} ${costText(c.borosTakerFeeUsd)}`,
     ],
     [
       'opp-boros-settle',
@@ -188,21 +189,28 @@ function buildCapitalSteps(pair: OpportunityPair): WaterfallStep[] {
   // Capital is neither income nor cost, so it is drawn in `info` blue rather
   // than the green/gold the profit chart uses for gains and costs — the
   // register, on an alpha ramp in stacking order.
+  const borosRows = pair.borosLegs.map((leg): [string, number | null, string, string, string] => {
+    const imUsd = cap.borosIms.find((im) => im.marketId === leg.marketId)?.imUsd ?? null;
+    const side = leg.side === 'SHORT' ? 'short' : 'long';
+    const margin = `+${fmtUsd(imUsd ?? 0)}`;
+    return leg.spreadVenues
+      ? [
+          `cap-boros-${leg.marketId}`,
+          imUsd,
+          'bg-info/45',
+          'Boros spread IM',
+          `Boros initial margin · ${spreadLabel(leg.spreadVenues)} spread (${side}) ${margin}`,
+        ]
+      : [
+          `cap-boros-${side}`,
+          imUsd,
+          'bg-info/45',
+          `Boros ${side} IM`,
+          `Boros initial margin · ${prettyVenue(leg.venue)} (${side}) ${margin}`,
+        ];
+  });
   const rows: Array<[string, number | null, string, string, string]> = [
-    [
-      'cap-boros-short',
-      cap.borosShortImUsd,
-      'bg-info/45',
-      'Boros short IM',
-      `Boros initial margin · ${prettyVenue(pair.shortLeg.venue)} (short) +${fmtUsd(cap.borosShortImUsd ?? 0)}`,
-    ],
-    [
-      'cap-boros-long',
-      cap.borosLongImUsd,
-      'bg-info/45',
-      'Boros long IM',
-      `Boros initial margin · ${prettyVenue(pair.longLeg.venue)} (long) +${fmtUsd(cap.borosLongImUsd ?? 0)}`,
-    ],
+    ...borosRows,
     [
       'cap-perp-short',
       cap.perpShortImUsd,
@@ -234,7 +242,7 @@ function buildCapitalSteps(pair: OpportunityPair): WaterfallStep[] {
     from: 0,
     to: total,
     className: 'bg-info',
-    title: `Modelled minimum capital ${fmtUsd(total)} across the four legs`,
+    title: `Modelled minimum capital ${fmtUsd(total)} across the ${pair.borosLegs.length === 1 ? 'three' : 'four'} legs`,
     axisLabel: 'Total capital',
   });
   if (import.meta.env.DEV && Math.abs(level - total) > 0.01) {

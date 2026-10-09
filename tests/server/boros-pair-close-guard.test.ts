@@ -47,13 +47,12 @@ const pairClose = (id: string) =>
     headers: HOST,
     payload: {
       address: ADDRESS,
-      legA: { marketId: HL, direction: 'short', slippageApr: 0.0025 },
-      legB: { marketId: BN, direction: 'long', slippageApr: 0.0025 },
-      size: 75_000,
+      legs: [
+        { marketId: HL, direction: 'short', slippageApr: 0.0025, size: 75_000, clientOrderId: `${id}-a` },
+        { marketId: BN, direction: 'long', slippageApr: 0.0025, size: 75_000, clientOrderId: `${id}-b` },
+      ],
       intent: 'close',
       opposingAcknowledged: true,
-      clientOrderIdA: `${id}-a`,
-      clientOrderIdB: `${id}-b`,
     },
   });
 
@@ -72,13 +71,12 @@ const target = (id: string) =>
     headers: HOST,
     payload: {
       address: ADDRESS,
-      legA: { marketId: HL, direction: 'long', slippageApr: 0.0025 },
-      legB: { marketId: BN, direction: 'short', slippageApr: 0.0025 },
-      size: 50_000,
+      legs: [
+        { marketId: HL, direction: 'long', slippageApr: 0.0025, size: 50_000, clientOrderId: `${id}-a` },
+        { marketId: BN, direction: 'short', slippageApr: 0.0025, size: 50_000, clientOrderId: `${id}-b` },
+      ],
       intent: 'target',
       opposingAcknowledged: true,
-      clientOrderIdA: `${id}-a`,
-      clientOrderIdB: `${id}-b`,
     },
   });
 
@@ -250,12 +248,11 @@ describe('cancel-and-close guards', () => {
       headers: HOST,
       payload: {
         address: ADDRESS,
-        legA: { marketId: HL, direction: 'long', slippageApr: 0.0025 },
-        legB: { marketId: BN, direction: 'short', slippageApr: 0.0025 },
-        size: 1_000,
+        legs: [
+          { marketId: HL, direction: 'long', slippageApr: 0.0025, size: 1_000, clientOrderId: 'coid-open-wait-a' },
+          { marketId: BN, direction: 'short', slippageApr: 0.0025, size: 1_000, clientOrderId: 'coid-open-wait-b' },
+        ],
         intent: 'open',
-        clientOrderIdA: 'coid-open-wait-a',
-        clientOrderIdB: 'coid-open-wait-b',
       },
     });
     const pair = await pairClose('coid-open-close');
@@ -325,12 +322,11 @@ describe('cancel-and-close guards', () => {
       headers: HOST,
       payload: {
         address: ADDRESS,
-        legA: { marketId: HL, direction: 'long', slippageApr: 0.0025 },
-        legB: { marketId: BN, direction: 'short', slippageApr: 0.01 },
-        size: 1_000,
+        legs: [
+          { marketId: HL, direction: 'long', slippageApr: 0.0025, size: 1_000, clientOrderId: 'coid-add-a' },
+          { marketId: BN, direction: 'short', slippageApr: 0.01, size: 1_000, clientOrderId: 'coid-add-b' },
+        ],
         intent: 'open',
-        clientOrderIdA: 'coid-add-a',
-        clientOrderIdB: 'coid-add-b',
       },
     });
     await Promise.race([placing, add]);

@@ -178,19 +178,20 @@ const spyClient = (roll: NonNullable<BorosOrderClient['rollOver']>): BorosOrderC
   closePosition: async () => okFill(),
 });
 
+const rollLeg = (marketId: number, direction: string, slippageApr = 0.0025) => ({ marketId, direction, slippageApr, size: 100_000 });
+
+const rollIds = (a = 'roll-exit-a1', b = 'roll-exit-b1') => ({
+  [`exit:${HL}`]: a,
+  [`exit:${BN}`]: b,
+  [`entry:${HL2}`]: 'roll-entry-a1',
+  [`entry:${BN2}`]: 'roll-entry-b1',
+});
+
 const rollBody = (over: Record<string, unknown> = {}) => ({
   address: ADDRESS,
-  exit: {
-    legA: { marketId: HL, direction: 'long', slippageApr: 0.0025 },
-    legB: { marketId: BN, direction: 'short', slippageApr: 0.0025 },
-    size: 100_000,
-  },
-  entry: {
-    legA: { marketId: HL2, direction: 'short', slippageApr: 0.0025 },
-    legB: { marketId: BN2, direction: 'long', slippageApr: 0.0025 },
-    size: 100_000,
-  },
-  clientOrderIds: { exitA: 'roll-exit-a1', exitB: 'roll-exit-b1', entryA: 'roll-entry-a1', entryB: 'roll-entry-b1' },
+  exit: { legs: [rollLeg(HL, 'long'), rollLeg(BN, 'short')] },
+  entry: { legs: [rollLeg(HL2, 'short'), rollLeg(BN2, 'long')] },
+  clientOrderIds: rollIds(),
   ...over,
 });
 
@@ -230,8 +231,8 @@ describe('POST /api/boros/roll/simulate', () => {
     const { data } = res.json();
 
     // Both steps priced against ONE account read.
-    expect(data.exit.simulation.legA.execApr).toBeGreaterThan(0);
-    expect(data.entry.simulation.legA.execApr).toBeGreaterThan(0);
+    expect(data.exit.simulation.legs[0].execApr).toBeGreaterThan(0);
+    expect(data.entry.simulation.legs[0].execApr).toBeGreaterThan(0);
     // The venue previewed the same legs the execute would send.
     expect(previews).toHaveLength(1);
     expect(previews[0].map((l) => [l.fromMarketId, l.toMarketId])).toEqual([[HL, HL2], [BN, BN2]]);
@@ -363,8 +364,8 @@ describe('POST /api/boros/roll/execute', () => {
 
   it.each([
     ['missing ids', { clientOrderIds: {} }],
-    ['a too-short id', { clientOrderIds: { exitA: 'abc', exitB: 'roll-exit-b1', entryA: 'roll-entry-a1', entryB: 'roll-entry-b1' } }],
-    ['duplicate ids', { clientOrderIds: { exitA: 'dup-000001', exitB: 'dup-000001', entryA: 'roll-entry-a1', entryB: 'roll-entry-b1' } }],
+    ['a too-short id', { clientOrderIds: rollIds('abc') }],
+    ['duplicate ids', { clientOrderIds: rollIds('dup-000001', 'dup-000001') }],
   ])('rejects %s with a 400 before touching the venue', async (_label, over) => {
     const place = vi.fn(async (legs: BorosRollLeg[]) => rolledFills(legs));
     makeRollApp(heldPair, spyClient(place));
@@ -430,5 +431,60 @@ describe('POST /api/boros/roll/execute', () => {
     expect(res.statusCode).toBe(400);
     expect(res.json().error.message).toMatch(/does not match the account this install signs for/);
     expect(place).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/boros/roll/execute — the gas top-up zone', () => {
+  const ETH_MARKET = 170;
+  const withEthZone = (ethFree: number): Record<string, unknown> => {
+    const rows = (heldPair['/apis/v1/accounts/market-acc-infos-by-root'] as { results: unknown[] }).results;
+    return {
+      ...heldPair,
+      '/apis/v1/markets': {
+        results: [
+          market(HL, 'Hyperliquid', 0.09),
+          market(BN, 'Binance', 0.045),
+          market(HL2, 'Hyperliquid', 0.1, MATURITY2),
+          market(BN2, 'Binance', 0.05, MATURITY2),
+          { ...market(ETH_MARKET, 'Hyperliquid', 0.05), tokenId: 2 },
+        ],
+      },
+      '/apis/v1/accounts/market-acc-infos-by-root': {
+        results: [...rows, { marketAcc: marketAcc(ADDRESS, 2), netBalance: raw(ethFree), initialMargin: raw(0), positions: [] }],
+      },
+    };
+  };
+  const rollWith = async (availableAfter: number | null, ethFree = 1) => {
+    const seen: Array<Parameters<NonNullable<BorosOrderClient['rollOver']>>[1]> = [];
+    makeRollApp(withEthZone(ethFree), {
+      ...spyClient(async (legs, opts) => {
+        seen.push(opts);
+        return rolledFills(legs);
+      }),
+      simulateRollOver: async (legs) => venueOk(legs, { availableAfter }),
+    });
+    const res = await post('/api/boros/roll/execute', rollBody());
+    expect(res.statusCode).toBe(200);
+    expect(res.json().data.result.status).toBe('rolled');
+    return seen[0]!.gasTopUpMarket!;
+  };
+
+  it('pays from the ETH zone when the USDT zone has under the top-up free after the roll', async () => {
+    expect((await rollWith(0.5))(1.02, HL)).toBe(ETH_MARKET);
+  });
+
+  it.each([
+    ['$50 left after the roll', 50],
+    ['$6M left after the roll', 6_000_000],
+  ])('keeps the rolled zone when it can pay (%s)', async (_label, after) => {
+    expect((await rollWith(after))(1.02, HL)).toBe(HL);
+  });
+
+  it('uses the current free margin when the preview gives none after the roll', async () => {
+    expect((await rollWith(null))(1.02, HL)).toBe(HL);
+  });
+
+  it('keeps the rolled zone, as before, when no zone can pay', async () => {
+    expect((await rollWith(0.5, 0))(1.02, HL)).toBe(HL);
   });
 });

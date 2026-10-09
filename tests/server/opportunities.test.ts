@@ -162,9 +162,9 @@ describe('GET /api/opportunities', () => {
     // The rich market is the SHORT-fixed leg; the hedge symbol is the venue's
     // USDT contract where it exists (Hyperliquid only lists USDC).
     const pair = group.bestPair;
-    expect(pair.shortLeg.marketId).toBe(HL_MARKET);
+    expect(pair.borosLegs[0].marketId).toBe(HL_MARKET);
     expect(pair.shortLeg.crossexSymbol).toBe('HYPERLIQUID_FUTURE_ETH_USDC');
-    expect(pair.longLeg.marketId).toBe(BINANCE_MARKET);
+    expect(pair.borosLegs[1].marketId).toBe(BINANCE_MARKET);
     expect(pair.longLeg.crossexSymbol).toBe('BINANCE_FUTURE_ETH_USDT');
     // Gross = 9% − 4.5%; exec = best bid 8.99% − best ask 4.51% (both books deep
     // enough at $25k), so the Boros impact is exactly the two half-spreads.
@@ -206,8 +206,8 @@ describe('GET /api/opportunities', () => {
     expect(pair.capital.perpLongImUsd).toBeCloseTo(400, 10);
     // Boros IM is small beside it: 30d at kIM 0.476, charged on 8.99% received
     // and — since 4.51% sits under it — on the 8.004% APR floor paid.
-    expect(pair.capital.borosShortImUsd).toBeCloseTo(35.186, 2);
-    expect(pair.capital.borosLongImUsd).toBeCloseTo(31.327, 2);
+    expect(pair.capital.borosIms[0].imUsd).toBeCloseTo(35.186, 2);
+    expect(pair.capital.borosIms[1].imUsd).toBeCloseTo(31.327, 2);
     expect(pair.capitalUsd).toBeCloseTo(500 + 400 + 35.186 + 31.327, 2);
 
     // The headline: the same locked dollars over capital instead of notional,
@@ -461,7 +461,8 @@ describe('GET /api/opportunities', () => {
     const { data } = res.json();
     const pair = data.groups[0].bestPair;
     expect(pair.shortLeg.crossexSymbol).toBe('HYPERLIQUID_FUTURE_ETH_USDC');
-    expect(pair.longLeg).toMatchObject({ marketId: BINANCE_MARKET, crossexVenue: 'LIGHTER', crossexSymbol: 'LIGHTER_FUTURE_ETH_USDC' });
+    expect(pair.borosLegs[1].marketId).toBe(BINANCE_MARKET);
+    expect(pair.longLeg).toMatchObject({ crossexVenue: 'LIGHTER', crossexSymbol: 'LIGHTER_FUTURE_ETH_USDC' });
     expect(pair.costs.perpEntrySlippageUsd).toBeGreaterThan(0);
     expect(pair.capitalUsd).not.toBeNull();
     expect(data.warnings).toEqual([]);
@@ -595,7 +596,7 @@ describe('GET /api/opportunities', () => {
     // No lockable rate means no Boros IM either, so capital degrades with it —
     // and says so, rather than leaving the panel's "see the notes" pointing at
     // an explanation the pair never carries.
-    expect(pair.capital.borosLongImUsd).toBeNull();
+    expect(pair.capital.borosIms[1].imUsd).toBeNull();
     expect(pair.capitalUsd).toBeNull();
     expect(pair.netFixedAprOnCapital).toBeNull();
     expect(pair.reasons.join(' ')).toMatch(
