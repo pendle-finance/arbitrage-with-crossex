@@ -78,7 +78,26 @@ const ROUTER_ADDRESS = BOROS_NETWORK.routerAddress;
 /** `marketId` sentinel for a CROSS account — max uint24. */
 export const CROSS_MARKET_ID = 0xff_ff_ff;
 
-export const USD_TOKEN_ID = 3;
+/**
+ * Whole cents of USD as a `payTreasury` amount in a collateral token.
+ *
+ * `payTreasury` moves scaled cash (18 decimals) in the token of the market it
+ * is charged on (MarginManager._transferToTreasury), and the backend credits
+ * `amount × token.usdPrice` to the gas budget. So $1 is 1e18 only for a $1
+ * token; in the ETH zone it is 1e18 / ethPrice. Rounded UP so the credit never
+ * lands under the dollars asked for. Integer maths from here on: the price is
+ * fixed to 8 decimals once, and no float ever reaches the amount.
+ */
+export function usdCentsToCollateralWei(cents: number, priceUsd: number): bigint {
+  if (!Number.isInteger(cents) || cents <= 0) throw new CoreError(`invalid top-up amount: ${cents} cents`, 'validation');
+  if (!Number.isFinite(priceUsd) || priceUsd <= 0) {
+    throw new CoreError('the collateral price is unknown, so a dollar amount cannot be converted', 'validation');
+  }
+  const priceE8 = BigInt(Math.round(priceUsd * 1e8));
+  if (priceE8 <= 0n) throw new CoreError('the collateral price is unknown, so a dollar amount cannot be converted', 'validation');
+  const numerator = BigInt(cents) * 10n ** BigInt(DECIMALS - 2) * 10n ** 8n;
+  return (numerator + priceE8 - 1n) / priceE8;
+}
 
 export { AUTO_TOP_UP_BELOW_USD, AUTO_TOP_UP_USD } from './client';
 import { AUTO_TOP_UP_BELOW_USD, AUTO_TOP_UP_USD } from './client';
@@ -149,11 +168,12 @@ export interface BorosApiConfig {
   /** marketId → collateral tokenId, needed to pack a MarketAcc. Async so the
    * caller can serve it off the same TTL-cached markets read the routes use. */
   tokenIdForMarket: (marketId: number) => Promise<number | undefined> | number | undefined;
-  /** A market in the USD collateral zone, which is where a gas top-up is
-   * charged from. Without it an order cannot carry its own top-up and the
-   * account has to be topped up by hand. Async for the same reason as
-   * `tokenIdForMarket`: it comes off the routes' cached markets read. */
-  usdMarketId?: () => Promise<number | undefined> | number | undefined;
+  /** USD price of one collateral token (tokenId), null when unpriceable. A gas
+   * top-up is paid from the cross margin of the market it is charged on, in
+   * THAT market's token, so a dollar has to be converted at this price.
+   * Without it an order cannot carry its own top-up. Async for the same reason
+   * as `tokenIdForMarket`: it comes off the routes' cached markets read. */
+  collateralPriceUsd?: (tokenId: number) => Promise<number | null | undefined> | number | null | undefined;
   baseUrl?: string;
   fetchImpl?: ApiFetch;
   /** Receipt polling, exposed so tests need no timers. */
@@ -456,16 +476,34 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
     return typeof res?.balanceInUSD === 'number' ? res.balanceInUSD : null;
   };
 
-  /** `cents`, not dollars: the exact integer→wei step is the whole point, so
-   * no float ever reaches the amount. */
+  /**
+   * `cents`, not dollars: the exact integer→wei step is the whole point, so
+   * no float ever reaches the amount.
+   *
+   * Charged to the CROSS account of `marketId`'s collateral zone, in that
+   * zone's token — the dollars are converted at the token's price. Throws when
+   * the zone or its price cannot be read: guessing would either pay from the
+   * wrong zone or treat token units as dollars.
+   */
   const buildPayTreasuryCalldata = async (cents: number, marketId: number): Promise<Hex[]> => {
+    const tokenId = await config.tokenIdForMarket(marketId);
+    if (tokenId === undefined) {
+      throw new CoreError(`Boros market ${marketId} is not listed, so its collateral is unknown.`, 'validation');
+    }
+    const priceUsd = config.collateralPriceUsd ? await config.collateralPriceUsd(tokenId) : null;
+    if (typeof priceUsd !== 'number' || !(priceUsd > 0)) {
+      throw new CoreError(
+        `The USD price of Boros collateral token ${tokenId} is unknown, so a $${cents / 100} gas top-up cannot be converted into it.`,
+        'venue-rejected',
+      );
+    }
     const { calls } = await call<{ calls: PlaceOrderCall[] }>(
       '/v1/calldata-builder/agent/pay-treasury',
       {
         accountId: config.accountId,
         isCross: true,
         marketId,
-        amount: (BigInt(cents) * 10n ** BigInt(DECIMALS - 2)).toString(),
+        amount: usdCentsToCollateralWei(cents, priceUsd).toString(),
       },
     );
     if (!calls?.length) {
@@ -480,7 +518,13 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
   /**
    * The top-up an order carries so it can pay its own gas — see
    * AUTO_TOP_UP_BELOW_USD. Empty when the budget is healthy, unreadable, or
-   * there is no USD market to charge.
+   * the collateral cannot be priced.
+   *
+   * Charged on `marketId`, a market the batch itself trades: the top-up comes
+   * out of the margin the user trades with, never a zone they may not fund.
+   * Charging the USD zone regardless refused every order from an account with
+   * no USDT (its `_checkIMStrict` reverts, and `requireSuccess` takes the
+   * whole batch down with it).
    *
    * Best effort ON PURPOSE. Every failure here returns [] and lets the order go
    * out: the budget may well be fine, and refusing to trade because a
@@ -488,8 +532,8 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
    * removes. If the balance really was too low the venue refuses the bundle and
    * `classifyLegFailure` reports that as a gas failure, which is the truth.
    */
-  const autoTopUpCalldata = async (reducing: boolean): Promise<Hex[]> => {
-    if (!config.usdMarketId) return [];
+  const autoTopUpCalldata = async (reducing: boolean, marketId: number | undefined): Promise<Hex[]> => {
+    if (!config.collateralPriceUsd || marketId === undefined) return [];
     try {
       const balance = await readGasBalance();
       // An EXIT is funded only when it genuinely cannot pay. The relayer's floor
@@ -499,8 +543,6 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
       // OPEN keeps the buffer: it is the order that should not stall next time.
       const floor = reducing ? 0 : AUTO_TOP_UP_BELOW_USD;
       if (balance === null || balance >= floor) return [];
-      const marketId = await config.usdMarketId();
-      if (marketId === undefined) return [];
       // A negative budget is debt. Clear it and leave the full amount on top,
       // which is what Boros charges its own users in the same state.
       //
@@ -795,7 +837,9 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
     let topUpCount: number;
     const at = Math.max(0, Math.min(reqs.length, opts?.topUpAfter ?? 0));
     try {
-      const topUp = await autoTopUpCalldata(opts?.reducing === true);
+      // Every leg of a batch shares one collateral (an eligible pair must, and
+      // a roll moves a position within its token), so the first leg names it.
+      const topUp = await autoTopUpCalldata(opts?.reducing === true, reqs[0]?.marketId);
       topUpCount = topUp.length;
       signed = await signCalls([...leading, ...legCalldatas.slice(0, at), ...topUp, ...legCalldatas.slice(at)]);
     } catch (err) {
@@ -831,9 +875,14 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
     const failure =
       responses.find((r) => r?.error && !BATCH_ABORTED.test(r.error)) ?? responses.find((r) => r?.error);
     if (failure) {
-      return reqs.map((req, i) =>
-        failedLeg(req, failure.error as string, legResponses[i] === failure ? 'this-leg' : 'batch'),
-      );
+      // The top-up's own refusal (its strict margin check, usually) is named as
+      // the top-up's: reported bare it reads as the LEGS lacking margin.
+      // Appended, never prefixed — the classifier reads a leading "[SIMULATE]".
+      const topUpFailed = afterLead.slice(at, at + topUpCount).includes(failure);
+      const reason = topUpFailed
+        ? `${failure.error as string} (refused call: the automatic gas top-up, paid in this market's collateral)`
+        : (failure.error as string);
+      return reqs.map((req, i) => failedLeg(req, reason, legResponses[i] === failure ? 'this-leg' : 'batch'));
     }
 
     const txHash = responses.find((r) => r?.txHash)?.txHash;

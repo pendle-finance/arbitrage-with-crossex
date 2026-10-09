@@ -8,7 +8,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import fastifyStatic from '@fastify/static';
-import { fetchBorosMarkets, resolveBorosFetch, setClientTagContext } from '../core/boros/client';
+import { fetchBorosMarkets, resolveBorosFetch, resolveCollateralPricesUsd, setClientTagContext } from '../core/boros/client';
 import { makeClientsIfConfigured, requireClients, type Clients } from '../core/clients';
 import { Store } from '../engine/db';
 import { startLoop, type LoopDeps } from '../engine/loop';
@@ -16,7 +16,7 @@ import { gateVenue } from '../engine/venueGate';
 import type { Clock, VenuePort } from '../engine/types';
 import { buildApp } from './app';
 import { readBorosAgentConfig } from './borosAgent';
-import { makeBorosApiOrderClient, USD_TOKEN_ID } from '../core/boros/borosApi';
+import { makeBorosApiOrderClient } from '../core/boros/borosApi';
 import type { BorosOrderClient } from '../core/boros/orders';
 import { TtlCache, TTL } from './cache';
 import { readOrCreateApiToken } from './authToken';
@@ -153,12 +153,13 @@ try {
         return value.find((m) => m.marketId === marketId)?.tokenId;
       },
       // Same cached read, so an order that has to top its own gas up costs no
-      // extra upstream traffic.
-      usdMarketId: async () => {
+      // extra upstream traffic. The top-up is paid in the traded market's own
+      // collateral, so its dollars are converted at that token's price.
+      collateralPriceUsd: async (tokenId) => {
         const { value } = await cache.get('boros:markets', TTL.boros, () =>
           fetchBorosMarkets(resolveBorosFetch()),
         );
-        return value.find((m) => m.tokenId === USD_TOKEN_ID)?.marketId;
+        return resolveCollateralPricesUsd(value).get(tokenId) ?? null;
       },
     });
     console.log(

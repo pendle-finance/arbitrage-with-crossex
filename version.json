@@ -1,11 +1,8 @@
 {
-  "version": "1.7.3",
+  "version": "1.7.4",
   "highlights": [
-    "Accounts tab: every Gate and Boros account in one list, and one health status in the header",
-    "Roll into a new maturity without closing the old legs, and pay only the opening fee",
-    "Boros pair ticket: pick the coin, then the markets, then a maturity both list; each market shows its collateral",
-    "Safer Boros closes: both legs close in one batch, and your resting orders on those markets are cancelled with them",
-    "Boros opens exit your matured markets first, so an account full of old markets can still trade",
-    "Updates keep your port and folder, and Windows installs recover on their own"
+    "Boros gas top-ups pay from the market you trade, in its own coin: ETH, BTC or USDT",
+    "Accounts with no USDT on Boros can trade again",
+    "\"Top up gas\" names the coin it paid in"
   ]
 }
