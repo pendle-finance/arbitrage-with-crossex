@@ -15,6 +15,7 @@ import {
   makeBorosApiOrderClient,
   packAccount,
   packMarketAcc,
+  usdCentsToCollateralWei,
   type ApiFetch,
 } from '../../src/core/boros/borosApi';
 import type { BorosMarketOrderRequest } from '../../src/core/boros/orders';
@@ -23,7 +24,8 @@ const ROOT = '0x9dcf85824e024fea9e3ef583dccbea68edbc37b8' as const;
 const AGENT_KEY = `0x${'11'.repeat(32)}` as const;
 const HL = 155;
 const BN = 158;
-const USD_MARKET = 900;
+/** ETH at $2,500: $1 of gas is exactly 0.0004 ETH = 4e14 scaled. */
+const ETH_PRICE = 2500;
 
 interface Call {
   path: string;
@@ -172,15 +174,18 @@ function fakeApi(
   return { calls, fetchImpl };
 }
 
-const client = (api: ReturnType<typeof fakeApi>, over: { noUsdMarket?: boolean } = {}) =>
+const client = (
+  api: ReturnType<typeof fakeApi>,
+  over: { noPrice?: boolean; tokenId?: number; priceUsd?: number | null } = {},
+) =>
   makeBorosApiOrderClient({
     root: ROOT,
     accountId: 0,
     agentPrivateKey: AGENT_KEY,
     // Both legs on ETH collateral: an eligible pair must share a token, which
     // is also what makes them one cross account.
-    tokenIdForMarket: () => 2,
-    usdMarketId: over.noUsdMarket ? undefined : () => USD_MARKET,
+    tokenIdForMarket: () => over.tokenId ?? 2,
+    collateralPriceUsd: over.noPrice ? undefined : () => (over.priceUsd === undefined ? ETH_PRICE : over.priceUsd),
     fetchImpl: api.fetchImpl,
     statusAttempts: 1,
     sleep: async () => {},
@@ -283,7 +288,7 @@ describe('makeBorosApiOrderClient — an order tops up its own gas', () => {
       .map((c) => c.body.datas as Array<{ calldata: string }>)
       .pop()!;
 
-  it('prepends a pay-treasury when the budget is low, and charges the USD market', async () => {
+  it('prepends a pay-treasury when the budget is low, charged on the TRADED market in its own token', async () => {
     const api = fakeApi({ gasBalance: { balanceInUSD: 0.05 } });
     await client(api).placeMarketOrders([leg(), leg({ marketId: BN, direction: 'long' })]);
 
@@ -291,10 +296,18 @@ describe('makeBorosApiOrderClient — an order tops up its own gas', () => {
     expect(orderSubmit(api)).toHaveLength(3); // top-up + two legs, ONE submission
 
     const pay = api.calls.find((c) => c.path.includes('agent/pay-treasury'))!;
-    // The top-up comes out of USD collateral, so it must not be charged
-    // through one of the ETH markets being traded.
-    expect(pay.body.marketId).toBe(USD_MARKET);
-    expect(pay.body.amount).toBe('1000000000000000000'); // $1, 18dp
+    // An ETH-only account holds no USDT: charging the USD zone reverted the
+    // top-up's margin check and refused the whole batch. It is paid from the
+    // ETH cross margin the legs trade with — so $1 is 1/2500 ETH, not 1 ETH.
+    expect(pay.body).toMatchObject({ isCross: true, marketId: HL });
+    expect(pay.body.amount).toBe('400000000000000'); // $1 / $2,500 = 0.0004 ETH, 18dp
+  });
+
+  it('keeps a $1 token at $1 = 1e18 (the USDT zone)', async () => {
+    const api = fakeApi({ gasBalance: { balanceInUSD: 0.05 } });
+    await client(api, { tokenId: 3, priceUsd: 1 }).placeMarketOrders([leg()]);
+    const pay = api.calls.find((c) => c.path.includes('agent/pay-treasury'))!;
+    expect(pay.body.amount).toBe('1000000000000000000');
   });
 
   it('clears the debt as well when the budget is already negative', async () => {
@@ -303,7 +316,7 @@ describe('makeBorosApiOrderClient — an order tops up its own gas', () => {
 
     const pay = api.calls.find((c) => c.path.includes('agent/pay-treasury'))!;
     // $1 on top of the $0.80 owed — the venue charges its own users the same.
-    expect(pay.body.amount).toBe('1800000000000000000');
+    expect(pay.body.amount).toBe('720000000000000'); // $1.80 / $2,500
   });
 
   it('leaves a healthy budget alone', async () => {
@@ -330,7 +343,7 @@ describe('makeBorosApiOrderClient — an order tops up its own gas', () => {
     await client(api).placeMarketOrders([leg()], { reducing: true });
 
     const pay = api.calls.find((c) => c.path.includes('agent/pay-treasury'))!;
-    expect(pay.body.amount).toBe('1400000000000000000'); // $1 on top of $0.40 owed
+    expect(pay.body.amount).toBe('560000000000000'); // ($1 + $0.40 owed) / $2,500
   });
 
   /** The top-up occupies slot 0, so a leg reading results positionally would
@@ -366,15 +379,42 @@ describe('makeBorosApiOrderClient — an order tops up its own gas', () => {
     expect(fills[0].failure?.code).toBe('insufficient-margin');
   });
 
+  it('names the top-up as the refused call, keeping the venue text first', async () => {
+    const api = fakeApi({
+      gasBalance: { balanceInUSD: 0 },
+      submit: () => [
+        { error: '[SIMULATE] MMInsufficientIM()' },
+        { error: '[SIMULATE] Batch aborted: requireSuccess=true and a previous call failed' },
+        { error: '[SIMULATE] Batch aborted: requireSuccess=true and a previous call failed' },
+      ],
+    });
+    const fills = await client(api).placeMarketOrders([leg(), leg({ marketId: BN, direction: 'long' })]);
+    for (const f of fills) {
+      expect(f.failure?.message).toMatch(/^\[SIMULATE\] MMInsufficientIM\(\)/);
+      expect(f.failure?.message).toMatch(/automatic gas top-up/);
+      expect(f.failure?.cause).toBe('batch');
+    }
+  });
+
   /** Best effort by design: a supplementary read must never be the reason a
    * trade does not go out. If the budget really was too low the venue refuses
    * the bundle, and that is reported as a gas failure. */
   it('sends the order anyway when it cannot work out a top-up', async () => {
     const api = fakeApi({ gasBalance: { balanceInUSD: 0 } });
-    await client(api, { noUsdMarket: true }).placeMarketOrders([leg()]);
+    await client(api, { noPrice: true }).placeMarketOrders([leg()]);
 
     expect(api.calls.some((c) => c.path.includes('agent/pay-treasury'))).toBe(false);
     expect(orderSubmit(api)).toHaveLength(1);
+  });
+
+  /** An unpriced token must never be paid as if it were dollars. */
+  it('sends no top-up when the collateral price is unknown', async () => {
+    for (const priceUsd of [null, 0, Number.NaN]) {
+      const api = fakeApi({ gasBalance: { balanceInUSD: 0 } });
+      await client(api, { priceUsd }).placeMarketOrders([leg()]);
+      expect(api.calls.some((c) => c.path.includes('agent/pay-treasury'))).toBe(false);
+      expect(orderSubmit(api)).toHaveLength(1);
+    }
   });
 
   it('sends the order anyway when the gas balance cannot be read', async () => {
@@ -790,7 +830,7 @@ describe('makeBorosApiOrderClient — the gas top-up', () => {
 
     const build = api.calls.find((c) => c.path === '/v1/calldata-builder/agent/pay-treasury')!;
     expect(build.body).toMatchObject({ accountId: 0, isCross: true, marketId: HL });
-    expect(build.body.amount).toBe('5000000000000000000');
+    expect(build.body.amount).toBe('2000000000000000'); // $5 / $2,500 = 0.002 ETH
 
     const datas = api.calls.find((c) => c.path === '/v1/send-txs/bulk-calls')!.body.datas as Array<{
       calldata: string;
@@ -799,6 +839,12 @@ describe('makeBorosApiOrderClient — the gas top-up', () => {
     expect(datas).toHaveLength(1);
     expect(datas[0].calldata).toBe('0x7a');
     expect(datas[0].signature).toMatch(/^0x[0-9a-f]+$/);
+  });
+
+  it('refuses to pay when the collateral price is unknown, before building anything', async () => {
+    const api = fakeApi({});
+    await expect(client(api, { priceUsd: null }).payTreasury!(5, HL)).rejects.toThrow(/price .* is unknown/i);
+    expect(api.calls.some((c) => c.path.includes('agent/pay-treasury'))).toBe(false);
   });
 
   it('raises on a refusal, which the venue delivers by RESOLVING', async () => {
@@ -1013,7 +1059,9 @@ describe('makeBorosApiOrderClient — requireSuccess failure attribution', () =>
       leg({ marketId: HL }),
       leg({ marketId: BN, direction: 'long' }),
     ]);
-    expect(fills.every((f) => f.failure?.message === REASON)).toBe(true);
+    // The venue's reason leads; the note says it was the top-up, not a leg.
+    expect(fills.every((f) => f.failure?.message.startsWith(REASON))).toBe(true);
+    expect(fills.every((f) => /automatic gas top-up/.test(f.failure?.message ?? ''))).toBe(true);
     expect(fills.every((f) => f.failure?.code === 'insufficient-margin')).toBe(true);
     expect(fills.every((f) => f.failure?.cause === 'batch')).toBe(true);
   });
@@ -1041,7 +1089,7 @@ describe('makeBorosApiOrderClient — a refusal before the chain never reads as 
       accountId: 0,
       agentPrivateKey: AGENT_KEY,
       tokenIdForMarket: () => 2,
-      usdMarketId: () => USD_MARKET,
+      collateralPriceUsd: () => ETH_PRICE,
       fetchImpl: async () => {
         throw new Error('ECONNRESET');
       },
@@ -1206,5 +1254,31 @@ describe('makeBorosApiOrderClient — frees market slots in the same batch as an
     ]);
     // Gas is healthy (the fake's $42), so no top-up sits between closes and opens.
     expect(submits(api)[0]).toEqual([exitOf(MATURED), '0xc1', '0xc2', '0xo1', '0xo2']);
+  });
+});
+
+describe('usdCentsToCollateralWei — dollars into the collateral token', () => {
+  it('is exact for a $1 token', () => {
+    expect(usdCentsToCollateralWei(100, 1)).toBe(10n ** 18n);
+    expect(usdCentsToCollateralWei(180, 1)).toBe(18n * 10n ** 17n);
+  });
+
+  it('divides by the token price', () => {
+    expect(usdCentsToCollateralWei(100, 2500)).toBe(4n * 10n ** 14n); // 0.0004 ETH
+    expect(usdCentsToCollateralWei(100, 100_000)).toBe(10n ** 13n); // 0.00001 BTC
+  });
+
+  it('rounds UP so the credit never lands under the dollars asked for', () => {
+    const wei = usdCentsToCollateralWei(100, 3);
+    expect(wei).toBe(333333333333333334n);
+    expect(wei * 3n).toBeGreaterThanOrEqual(10n ** 18n);
+  });
+
+  it('refuses an unknown price or a non-integer amount', () => {
+    for (const p of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(() => usdCentsToCollateralWei(100, p)).toThrow(/price is unknown/);
+    }
+    expect(() => usdCentsToCollateralWei(1.5, 1)).toThrow(/invalid top-up amount/);
+    expect(() => usdCentsToCollateralWei(0, 1)).toThrow(/invalid top-up amount/);
   });
 });

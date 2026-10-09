@@ -11,13 +11,14 @@ import type {
   BorosPairMarketRow,
   BorosPairSimulateResponse,
 } from '../../web/src/api/types';
-import { makeBorosApiOrderClient, USD_TOKEN_ID } from '../../src/core/boros/borosApi';
+import { makeBorosApiOrderClient } from '../../src/core/boros/borosApi';
 import {
   BOROS_TOKEN_SYMBOLS,
   fetchBorosCollaterals,
   fetchBorosMarkets,
   norm18,
   resolveBorosFetch,
+  resolveCollateralPricesUsd,
   type BorosCollateralZone,
   type BorosMarket,
 } from '../../src/core/boros/client';
@@ -225,7 +226,7 @@ describe.skipIf(process.env.BOROS_CLOSE !== '1')('live Boros closes: one market 
     orders = makeBorosApiOrderClient({
       ...agent,
       tokenIdForMarket: async (marketId) => (await loadMarkets()).find((m) => m.marketId === marketId)?.tokenId,
-      usdMarketId: async () => (await loadMarkets()).find((m) => m.tokenId === USD_TOKEN_ID)?.marketId,
+      collateralPriceUsd: async (tokenId) => resolveCollateralPricesUsd(await loadMarkets()).get(tokenId) ?? null,
     });
     app = buildApp({
       getClients: () => clients,
