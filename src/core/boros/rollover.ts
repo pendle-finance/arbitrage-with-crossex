@@ -185,7 +185,9 @@ function refusalCause(error: string, sim: SimulatedLeg | null, collateral: strin
 export function evaluateRollGate(input: EvaluateRollInput): RollGate {
   const { exit, entry, venue } = input;
   const blockers: RollBlocker[] = [];
-  const warnings = [...exit.gate.warnings, ...entry.gate.warnings];
+  // A roll is sent as one opening batch, so the entry step's gas line is the
+  // true one; the exit's, priced as a close, would contradict it.
+  const warnings = [...exit.gate.warnings.filter((w) => !w.startsWith('Prepaid gas')), ...entry.gate.warnings];
 
   const prefixed = (step: RollStep, gate: PairGate, label: string): void => {
     for (const b of gate.blockers) {

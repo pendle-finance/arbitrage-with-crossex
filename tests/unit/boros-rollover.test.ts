@@ -349,6 +349,14 @@ describe('evaluateRollGate', () => {
     const g = evaluateRollGate({ exit: step(exitLegs(), 'close', SIZE, low), entry: step(entryLegs(), 'open', SIZE, low), venue: venueOk() });
     expect(g.warnings.filter((w) => /tops it up as it sends/.test(w))).toHaveLength(1);
   });
+
+  it('says one gas line at gas debt on a short zone, the one the roll batch sends', () => {
+    const debt = { ...account, gasBalanceUsd: -0.5, cross: { available: 0, hasPositionOrOrders: true } };
+    const g = evaluateRollGate({ exit: step(exitLegs(), 'close', SIZE, debt), entry: step(entryLegs(), 'open', SIZE, debt), venue: venueOk() });
+    const gas = g.warnings.filter((w) => w.startsWith('Prepaid gas'));
+    expect(gas).toHaveLength(1);
+    expect(gas[0]).toMatch(/from this market's cross margin/);
+  });
 });
 
 describe('rollPlanFor', () => {

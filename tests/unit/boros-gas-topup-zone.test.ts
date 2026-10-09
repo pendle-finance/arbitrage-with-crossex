@@ -7,11 +7,12 @@
 import { describe, expect, it } from 'vitest';
 import { chooseGasTopUpZone } from '../../src/core/boros/pair';
 
+const plain = { state: 'Normal', spreadVenues: null };
 const markets = [
-  { marketId: 10, tokenId: 3 }, // USDT
-  { marketId: 20, tokenId: 2 }, // ETH
-  { marketId: 21, tokenId: 2 },
-  { marketId: 30, tokenId: 1 }, // BTC
+  { marketId: 10, tokenId: 3, ...plain }, // USDT
+  { marketId: 20, tokenId: 2, ...plain }, // ETH
+  { marketId: 21, tokenId: 2, ...plain },
+  { marketId: 30, tokenId: 1, ...plain }, // BTC
 ];
 const prices = new Map<number, number | null>([[3, 1], [2, 2500], [1, 100_000]]);
 
@@ -51,6 +52,40 @@ describe('chooseGasTopUpZone', () => {
     });
     expect(zone.ok).toBe(false);
     if (!zone.ok) expect(zone.message).toMatch(/No Boros cross margin has \$1\.02 free/);
+  });
+
+  it('names a live single market of the paying coin, never a spread or a paused one', () => {
+    const zone = chooseGasTopUpZone({
+      amountUsd: 5,
+      markets: [
+        { marketId: 20, tokenId: 2, ...plain },
+        { marketId: 59, tokenId: 3, state: 'Normal', spreadVenues: ['HYPERLIQUID', 'GATE'] as [string, string] },
+        { marketId: 11, tokenId: 3, state: 'Paused', spreadVenues: null },
+        { marketId: 12, tokenId: 3, ...plain },
+      ],
+      freeCrossByToken: new Map([[2, 0.001], [3, 1000]]),
+      pricesUsd: prices,
+      preferMarketId: 20,
+    });
+    expect(zone).toMatchObject({ ok: true, marketId: 12, tokenId: 3 });
+  });
+
+  it.each([
+    ['$50', 0.0004, 60],
+    ['$6M', 0.0004, 6_000_000],
+  ])('skips a coin with no live single market as the payer (%s of USDT)', (_size, ethFree, usdtFree) => {
+    const zone = chooseGasTopUpZone({
+      amountUsd: 1.02,
+      markets: [
+        { marketId: 20, tokenId: 2, ...plain },
+        { marketId: 59, tokenId: 3, state: 'Normal', spreadVenues: ['HYPERLIQUID', 'GATE'] as [string, string] },
+        { marketId: 11, tokenId: 3, state: 'CloseOnly', spreadVenues: null },
+      ],
+      freeCrossByToken: new Map([[2, ethFree], [3, usdtFree]]),
+      pricesUsd: prices,
+      preferMarketId: 20,
+    });
+    expect(zone.ok).toBe(false);
   });
 
   it('keeps the traded zone when it can pay, even if another zone holds more', () => {

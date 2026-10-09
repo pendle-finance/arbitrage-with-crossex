@@ -496,12 +496,12 @@ describe('POST /api/boros/pair/top-up-gas', () => {
       expect(res.json().data).toEqual({ sentUsd: 30, paidFrom: 'USDT', replayed: false });
     });
 
-    it('prices the ETH free margin at the ETH price, not at $1 a token', async () => {
+    it('refuses when ETH is short and USDT cannot pay; a spread-only ETH zone is no fallback', async () => {
       const payTreasury = vi.fn();
       makeApp(ethZone(0.01, 2), undefined, { ...orderClient(), payTreasury });
       const res = await post('/api/boros/pair/top-up-gas', { amountUsd: 30, marketId: SPREAD });
       expect(res.statusCode).toBeGreaterThanOrEqual(400);
-      expect(res.json().error.message).toMatch(/the most is about \$19\.00 of ETH/);
+      expect(res.json().error.message).toMatch(/No Boros cross margin has \$30\.00 free.*the most is about \$2\.00 of USDT/);
       expect(payTreasury).not.toHaveBeenCalled();
     });
   });
@@ -524,7 +524,7 @@ describe('POST /api/boros/pair/top-up-gas', () => {
 
 describe('the automatic gas top-up picks a zone that can pay', () => {
   const ETH_MARKET = (id: number, venue: string, apr: number) => ({ ...market(id, venue, apr), tokenId: 2 });
-  const ethBook = (ethNet: number, usdtNet: number) => {
+  const ethBook = (ethNet: number, usdtNet: number, usdtPositions: Array<Record<string, unknown>> = []) => {
     const eth = marketAcc(ADDRESS, 2);
     const held = [
       { marketId: HL, size: 100_000 },
@@ -534,7 +534,7 @@ describe('the automatic gas top-up picks a zone that can pay', () => {
       '/apis/v1/markets': { results: [ETH_MARKET(HL, 'Hyperliquid', 0.09), ETH_MARKET(BN, 'Binance', 0.045), market(OK, 'OKX', 0.05)] },
       '/apis/v1/accounts/market-acc-infos-by-root': {
         results: [
-          { marketAcc: marketAcc(ADDRESS, 3), netBalance: raw(usdtNet), initialMargin: raw(0), positions: [] },
+          { marketAcc: marketAcc(ADDRESS, 3), netBalance: raw(usdtNet), initialMargin: raw(0), positions: usdtPositions },
           {
             marketAcc: eth,
             netBalance: raw(ethNet),
@@ -556,9 +556,9 @@ describe('the automatic gas top-up picks a zone that can pay', () => {
       },
     };
   };
-  const closeAtGasDebt = async (ethNet: number, usdtNet: number) => {
+  const closeAtGasDebt = async (ethNet: number, usdtNet: number, usdtPositions?: Array<Record<string, unknown>>) => {
     const seen: PlaceOrdersOptions[] = [];
-    makeApp(ethBook(ethNet, usdtNet), undefined, {
+    makeApp(ethBook(ethNet, usdtNet, usdtPositions), undefined, {
       ...orderClient(),
       getGasBalance: async () => -0.02,
       placeMarketOrders: async (reqs, opts) => {
@@ -587,6 +587,29 @@ describe('the automatic gas top-up picks a zone that can pay', () => {
   ])('keeps the traded ETH zone when it can pay (%s of ETH free)', async (_book, ethNet) => {
     const { res, seen } = await closeAtGasDebt(ethNet + 1_000, 6_000_000);
     expect(res.statusCode).toBe(200);
+    expect(seen[0].gasTopUpMarket!(1.02, HL)).toBe(HL);
+  });
+
+  it.each([
+    ['$50', 20, 19.5],
+    ['$6M', 6_000_000, 5_999_999.5],
+  ])('does not pick a USDT zone whose resting orders hold its margin (%s of USDT)', async (_book, usdtNet, orderIm) => {
+    const { res, seen } = await closeAtGasDebt(0, usdtNet, [
+      { marketId: OK, signedSize: '0', initialMargin: raw(orderIm), orders: [{ side: 0, initialMargin: raw(orderIm) }] },
+    ]);
+    expect(res.statusCode).toBe(200);
+    expect(seen[0].gasTopUpMarket!(1.02, HL)).toBe(HL);
+  });
+
+  it('pays from a USDT zone whose resting orders leave enough free', async () => {
+    const { seen } = await closeAtGasDebt(0, 20, [
+      { marketId: OK, signedSize: '0', initialMargin: raw(10), orders: [{ side: 0, initialMargin: raw(10) }] },
+    ]);
+    expect(seen[0].gasTopUpMarket!(1.02, HL)).toBe(OK);
+  });
+
+  it('skips a USDT zone with resting orders whose margin is not reported', async () => {
+    const { seen } = await closeAtGasDebt(0, 5_000, [{ marketId: OK, signedSize: '0', orders: [{ side: 0 }] }]);
     expect(seen[0].gasTopUpMarket!(1.02, HL)).toBe(HL);
   });
 

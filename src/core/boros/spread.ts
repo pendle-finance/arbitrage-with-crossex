@@ -6,7 +6,7 @@ export function parseSpreadVenues(isSpread: boolean, platformId: string): [strin
   return isSpread && platformId === 'hyperliquid-gate' ? ['HYPERLIQUID', 'GATE'] : null;
 }
 
-export const isSpreadMarket = (m: BorosMarket): boolean => Array.isArray(m.spreadVenues);
+export const isSpreadMarket = (m: Pick<BorosMarket, 'spreadVenues'>): boolean => Array.isArray(m.spreadVenues);
 
 export function findSpread({
   markets,
