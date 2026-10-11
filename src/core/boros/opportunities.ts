@@ -35,6 +35,7 @@
  */
 import { touchOf, type NormalizedBook } from '../estimate/books';
 import { walkBook } from '../estimate/fill';
+import { borosRateBand, rateInsideBand } from './rateBounds';
 import { resolveFeeRates, resolveVenueFeeRates, type VenueFeeRow } from '../estimate/fees';
 import { BOROS_TOKEN_SYMBOLS, type BorosMarket, type BorosOrderBook } from './client';
 import { normalizeVenue, SECONDS_IN_YEAR } from './venue';
@@ -253,22 +254,24 @@ export function walkBorosBook(
   levels: Array<[number, number]>,
   targetUsd: number,
   collateralPriceUsd: number,
-): { execApr: number; filledUsd: number; insufficient: boolean } | null {
+): { execApr: number; lastApr: number; filledUsd: number; insufficient: boolean } | null {
   if (!Array.isArray(levels) || !(targetUsd > 0) || !(collateralPriceUsd > 0)) return null;
   let remaining = targetUsd;
   let weighted = 0;
   let filled = 0;
+  let lastApr: number | null = null;
   for (const [apr, size] of levels) {
     if (!Number.isFinite(apr) || !(size > 0)) continue;
     const levelUsd = size * collateralPriceUsd;
     const take = remaining < levelUsd ? remaining : levelUsd;
     weighted += take * apr;
     filled += take;
+    lastApr = apr;
     remaining -= take; // exact 0 on the final level (take === remaining)
     if (remaining === 0) break;
   }
-  if (filled === 0) return null;
-  return { execApr: weighted / filled, filledUsd: filled, insufficient: remaining > 0 };
+  if (filled === 0 || lastApr === null) return null;
+  return { execApr: weighted / filled, lastApr, filledUsd: filled, insufficient: remaining > 0 };
 }
 
 // ---------------------------------------------------------------------------
@@ -428,6 +431,8 @@ interface MarketRowBuild {
   short: SideExec | null;
   /** Lifting the asks — the pay-fixed (LONG) side. */
   long: SideExec | null;
+  shortIssue: string | null;
+  longIssue: string | null;
 }
 
 function buildMarketRow(
@@ -445,19 +450,35 @@ function buildMarketRow(
 
   let short: SideExec | null = null;
   let long: SideExec | null = null;
+  let shortIssue: string | null = null;
+  let longIssue: string | null = null;
+  const band = borosRateBand(market);
+  if (band === null) {
+    shortIssue = longIssue = `${market.name}: native rate-band inputs are missing or invalid — its executable rate and APR are unknown.`;
+  }
   let bookStatus: BookStatus;
   if (options.borosEntry === 'mark') {
-    short = { apr: market.markApr, filledUsd: null, insufficient: false };
-    long = { apr: market.markApr, filledUsd: null, insufficient: false };
-    bookStatus = 'not-fetched';
+    if (band !== null) {
+      short = { apr: market.markApr, filledUsd: null, insufficient: false };
+      long = { apr: market.markApr, filledUsd: null, insufficient: false };
+    }
+    bookStatus = band === null ? 'unavailable' : 'not-fetched';
   } else {
     const book = input.borosBooks.get(market.marketId) ?? null;
     const px = collateralPriceUsd;
-    if (book && px !== null) {
+    if (book && px !== null && band !== null) {
       const bidWalk = walkBorosBook(book.bids, options.notionalUsd, px);
       const askWalk = walkBorosBook(book.asks, options.notionalUsd, px);
-      short = bidWalk && { apr: bidWalk.execApr, filledUsd: bidWalk.filledUsd, insufficient: bidWalk.insufficient };
-      long = askWalk && { apr: askWalk.execApr, filledUsd: askWalk.filledUsd, insufficient: askWalk.insufficient };
+      short = bidWalk && rateInsideBand(bidWalk.lastApr, band)
+        ? { apr: bidWalk.execApr, filledUsd: bidWalk.filledUsd, insufficient: bidWalk.insufficient } : null;
+      long = askWalk && rateInsideBand(askWalk.lastApr, band)
+        ? { apr: askWalk.execApr, filledUsd: askWalk.filledUsd, insufficient: askWalk.insufficient } : null;
+      if (bidWalk && !rateInsideBand(bidWalk.lastApr, band)) {
+        shortIssue = `${market.name}: the receive-fixed last matched rate is outside the native band — no executable APR at this size.`;
+      }
+      if (askWalk && !rateInsideBand(askWalk.lastApr, band)) {
+        longIssue = `${market.name}: the pay-fixed last matched rate is outside the native band — no executable APR at this size.`;
+      }
     }
     // A side with no levels at all is 'unavailable', not thin: there is no rate
     // to quote there, and the per-side execAprs say which one is missing.
@@ -470,6 +491,8 @@ function buildMarketRow(
     market,
     short,
     long,
+    shortIssue,
+    longIssue,
     row: {
       marketId: market.marketId,
       name: market.name,
@@ -657,6 +680,8 @@ function depthReason(
     return `Can't price ${ctx.plan.collateral} collateral in USD (no reference market) — the Boros book on ${build.row.name} can't be sized in dollars.`;
   }
   if (!exec) {
+    const issue = sideLabel === 'receive-fixed' ? build.shortIssue : build.longIssue;
+    if (issue !== null) return issue;
     return `No Boros order book for ${build.row.name} (market #${build.row.marketId}) — its ${sideLabel} rate at ${usd(notionalUsd)} is unknown.`;
   }
   return `The Boros book on ${build.row.name} (market #${build.row.marketId}) only has ${usd(exec.filledUsd ?? 0)} of ${sideLabel} depth — ${usd(notionalUsd)} is needed to lock this leg.`;

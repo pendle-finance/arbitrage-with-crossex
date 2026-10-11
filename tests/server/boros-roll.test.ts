@@ -44,7 +44,7 @@ const market = (marketId: number, platformName: string, midApr: number, maturity
   extConfig: { settleFeeRate: '1000000000000000', paymentPeriod: 3600 },
   platform: { platformId: platformName },
   metadata: { underlyingSymbol: 'ETH' },
-  config: { status: 2, takerFee: '500000000000000', kIM: raw(imInputs.kIM), tThresh: imInputs.tThreshSec },
+  config: { status: 2, takerFee: '500000000000000', maxRateDeviationFactorBase1e4: 2500, kIM: raw(imInputs.kIM), tThresh: imInputs.tThreshSec },
   data: { midApr, markApr: midApr, floatingApr: 0.05, notionalOI: 12_000_000, assetMarkPrice: 1900 },
 });
 

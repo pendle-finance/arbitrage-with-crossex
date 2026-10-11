@@ -20,6 +20,7 @@ import { CoreError } from '../errors';
 import { BOOK_VENUES } from '../estimate/books';
 import { borosInitialMarginUsd } from './opportunities';
 import { normalizeVenue } from './venue';
+import { nativeRateDeviationApr } from './rateBounds';
 
 /** The api-gateway surface (`/apis` → api-gateway → open-api's `open-api-v2/…`
  * mounts). New endpoints live here — the bare `/open-api` prefix is deprecated. */
@@ -111,14 +112,10 @@ export interface BorosMarket {
   takerFeeRate: number;
   /**
    * The venue's own cap on how far a trade may move the rate, as an APR
-   * fraction: `config.maxRateDeviationFactorBase1e4 / 1e4 × markApr`.
-   *
-   * The factor is a FRACTION OF THE MARK, not the deviation itself — 2500 on a
-   * 6.57% market is 0.25 × 0.0657 = 1.64% APR, which is what the venue UI shows
-   * as "max rate deviation". A close bound wider than this can never fill, so
-   * half of it is the natural default slippage.
+   * fraction: factor / 1e4 × max(IM APR floor, abs(markApr)).
+   * Null when any native input is missing/invalid. Zero is a genuine zero cap.
    */
-  maxRateDeviationApr: number;
+  maxRateDeviationApr: number | null;
   /** Lifecycle state; "Normal" means live and tradable. */
   state: string;
   /** USD price of the market's UNDERLYING asset. */
@@ -410,8 +407,12 @@ function normalizeBorosMarket(m: Record<string, unknown>, nowSec: number): Boros
       midApr: Number(data.midApr ?? 0),
       notionalOi: Number(data.notionalOI ?? 0),
       takerFeeRate: norm18(config.takerFee as string),
-      maxRateDeviationApr:
-        (Number(config.maxRateDeviationFactorBase1e4 ?? 0) / 1e4) * Number(data.markApr ?? 0),
+      maxRateDeviationApr: nativeRateDeviationApr({
+        markApr: data.markApr,
+        iTickThresh: imData.iTickThresh,
+        tickStep: imData.tickStep,
+        factorBase1e4: config.maxRateDeviationFactorBase1e4,
+      }),
       state:
         maturity > 0 && maturity <= nowSec ? 'Matured' : (MARKET_STATUS[Number(config.status)] ?? 'Unknown'),
       assetMarkPriceUsd: Number(data.assetMarkPrice ?? 0),

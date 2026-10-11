@@ -735,7 +735,7 @@ export function borosPairRoutes(deps: AppDeps) {
           markApr: m.markApr,
           // The venue's own cap on how far a trade may move the rate. Sent per
           // market because it is per market: half of it is the natural default
-          // close tolerance, and a bound wider than it can never fill.
+          // close tolerance. Actual matched rates must remain in the band.
           maxRateDeviationApr: m.maxRateDeviationApr,
           isolatedOnly: m.isolatedOnly === true,
           closeOnly: m.state === 'CloseOnly',

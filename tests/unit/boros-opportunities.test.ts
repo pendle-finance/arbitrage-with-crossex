@@ -216,6 +216,24 @@ describe('walkBorosBook', () => {
 describe('buildOpportunities — canonical pair (both-market entry, close at maturity)', () => {
   const result = () => buildOpportunities(input(), opts());
 
+  it('does not advertise an APR when a final matched tick breaches the native band', () => {
+    const books = new Map(input().borosBooks);
+    books.set(155, { marketId: 155, bids: [[0.09, N - 1], [0.07, 1]], asks: [[0.0901, N * 2]] });
+    const group = buildOpportunities(input({ borosBooks: books }), opts()).groups[0];
+    expect(group.pairs[0].execSpreadApr).toBeNull();
+    expect(group.pairs[0].netFixedAprOnCapital).toBeNull();
+    expect(group.pairs[0].reasons.join(' ')).toMatch(/last matched rate is outside the native band/);
+    expect(group.bestPair).toBeNull();
+  });
+
+  it('does not advertise an executable APR when native band inputs are unknown', () => {
+    for (const borosEntry of ['market', 'mark'] as const) {
+      const group = buildOpportunities(input({ markets: [{ ...hlMarket, maxRateDeviationApr: null }, bnMarket] }), opts({ borosEntry })).groups[0];
+      expect(group.pairs[0].netFixedAprOnCapital).toBeNull();
+      expect(group.pairs[0].reasons.join(' ')).toMatch(/native rate-band inputs are missing or invalid/);
+    }
+  });
+
   it('pairs the high-mid market SHORT against the low-mid market LONG', () => {
     const group = result().groups[0];
     expect(group.tokenId).toBe(3);
@@ -683,7 +701,7 @@ describe('buildOpportunities — degraded modes', () => {
 
   it('a Boros venue in lower case still finds its CrossEx perp', () => {
     const LT_SYMBOL = 'LIGHTER_FUTURE_ETH_USDC';
-    const ltMarket: BorosMarket = { ...bnMarket, marketId: 187, name: 'Lighter ETH 31 Aug 2026', venue: 'lighter', midApr: 0.07 };
+    const ltMarket: BorosMarket = { ...bnMarket, marketId: 187, name: 'Lighter ETH 31 Aug 2026', venue: 'lighter', markApr: 0.07, midApr: 0.07 };
     const built = buildOpportunities(
       input({
         markets: [hlMarket, ltMarket],
@@ -715,7 +733,7 @@ describe('buildOpportunities — degraded modes', () => {
 
   it('a venue pairs as soon as CrossEx lists it, with no code change', () => {
     const LT_SYMBOL = 'LIGHTER_FUTURE_ETH_USDC';
-    const ltMarket: BorosMarket = { ...bnMarket, marketId: 187, name: 'Lighter ETH 31 Aug 2026', venue: 'Lighter', midApr: 0.07 };
+    const ltMarket: BorosMarket = { ...bnMarket, marketId: 187, name: 'Lighter ETH 31 Aug 2026', venue: 'Lighter', markApr: 0.07, midApr: 0.07 };
     const markets = [hlMarket, bnMarket, ltMarket];
     const listed = buildOpportunities(
       input({
@@ -827,7 +845,7 @@ describe('buildOpportunities — ranking', () => {
     // A second, WIDER cohort on a later maturity, plus a third whose only
     // Binance leg has no CrossEx symbol (so it can produce no priceable pair).
     const later = MATURITY + 60 * DAY;
-    const wideHl: BorosMarket = { ...hlMarket, marketId: 255, maturity: later, midApr: 0.14 };
+    const wideHl: BorosMarket = { ...hlMarket, marketId: 255, maturity: later, markApr: 0.14, midApr: 0.14 };
     const wideBn: BorosMarket = { ...bnMarket, marketId: 201, maturity: later, midApr: 0.04 };
     const deadHl: BorosMarket = {
       ...hlMarket,

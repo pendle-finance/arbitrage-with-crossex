@@ -1036,10 +1036,8 @@ export interface BorosPairMarketRow {
   maturity: number;
   midApr: number;
   markApr: number;
-  /** The venue's cap on how far one trade may move the rate, as an APR
-   * fraction (config.maxRateDeviationFactorBase1e4 / 1e4 × markApr). Half of
-   * it is the default close tolerance; wider than it can never fill. */
-  maxRateDeviationApr: number;
+  /** factor / 1e4 × max(IM APR floor, abs(markApr)); null if unknown. */
+  maxRateDeviationApr: number | null;
   isolatedOnly: boolean;
   onIsolatedMargin: boolean;
   isolatedHasPositionOrOrders: boolean;
@@ -1099,8 +1097,8 @@ export interface BorosSimulatedLeg {
    * `[adverse distance from mid (APR fraction), cumulative size]`. Answers
    * "what tolerance does size s need" for any s off one quote. */
   depth?: Array<[number, number]> | null;
-  /** The widest tolerance whose rate bound stays inside the venue's max rate
-   * deviation band; null when the market reports no cap. */
+  /** Distance from mid to the native band's adverse edge. Wider declared
+   * limits are valid if the actual last fill stays inside the band. */
   maxToleranceApr?: number | null;
   estFillSize: number;
   shortfallSize: number;

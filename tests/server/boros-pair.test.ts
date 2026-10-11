@@ -199,6 +199,38 @@ describe('boros writes bust the reads they invalidate', () => {
 });
 
 describe('POST /api/boros/pair/simulate', () => {
+  it('uses the native IM floor for a low-mark market and permits a valid fill', async () => {
+    const original = market(BN, 'Binance', 0.017755345);
+    const binance = { ...original, imData: { ...original.imData, iTickThresh: 583 } };
+    makeApp({
+      '/apis/v1/markets': { results: [market(HL, 'Hyperliquid', 0.09), binance] },
+      [`/apis/v1/markets/order-book?marketId=${BN}`]: wireBook(175, 238),
+    });
+    const res = await post('/api/boros/pair/simulate', pairBody({
+      legB: { marketId: BN, direction: 'long', slippageApr: 0.01 },
+    }));
+    expect(res.statusCode).toBe(200);
+    expect(res.json().data.simulation.legB.execApr).toBeCloseTo(0.0238, 9);
+    expect(res.json().data.gate.blockers).toEqual([]);
+  });
+
+  it('does not reject a wide declared limit when all actual fills are valid', async () => {
+    makeApp();
+    const res = await post('/api/boros/pair/simulate', pairBody({
+      legA: { marketId: HL, direction: 'short', slippageApr: 0.03 },
+    }));
+    expect(res.statusCode).toBe(200);
+    expect(res.json().data.gate.blockers).toEqual([]);
+  });
+
+  it('keeps an absent native deviation factor unknown and blocks confirmation', async () => {
+    const binance = market(BN, 'Binance', 0.045);
+    const { maxRateDeviationFactorBase1e4: _factor, ...config } = binance.config;
+    makeApp({ '/apis/v1/markets': { results: [market(HL, 'Hyperliquid', 0.09), { ...binance, config }] } });
+    const res = await post('/api/boros/pair/simulate', pairBody());
+    expect(res.json().data.gate.blockers.map((b: { code: string }) => b.code)).toContain('rate-band-unknown');
+  });
+
   it('prices the pair and reports a clean gate', async () => {
     makeApp();
     const res = await post('/api/boros/pair/simulate', pairBody());

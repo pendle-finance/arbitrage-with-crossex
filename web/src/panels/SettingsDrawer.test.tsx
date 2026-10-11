@@ -210,6 +210,51 @@ describe('SettingsDrawer', () => {
     expect(within(telegram).queryByRole('button', { name: 'Expand' })).toBeNull();
   });
 
+  it.each([
+    ['before the first successful sync', telegramInfo({
+      connected: true,
+      state: 'connected',
+      settings: null,
+      lastSyncAt: null,
+      lastSyncError: null,
+      unlinkedWallet: WALLET,
+    })],
+    ['after a successful sync for the previous wallet', {
+      ...connectedTelegram(), alertWallet: PASTED, unlinkedWallet: WALLET,
+    }],
+  ] as const)('an unlinked wallet keeps its setup action %s', async (_scenario, info) => {
+    const user = userEvent.setup();
+    const open = vi.spyOn(window, 'open').mockReturnValue(null);
+    let linkBody: unknown = null;
+    const url = 'https://bot.test/alerts?crossex=existing-terminal';
+    mockAllDone(info);
+    server.use(
+      http.post('/api/telegram/link', async ({ request }) => {
+        linkBody = await request.json();
+        return HttpResponse.json(env({ url, expiresAt: Date.now() + 600_000 }));
+      }),
+      http.get('/api/telegram/link', () => HttpResponse.json(env({ status: 'pending', url, expiresAt: Date.now() + 600_000 }))),
+    );
+
+    try {
+      renderDrawer();
+      const telegram = row('Telegram alerts');
+      const setup = await within(telegram).findByRole('button', { name: 'Set up' });
+      expect(within(telegram).getByText('not set up')).toBeInTheDocument();
+      expect(setup).toBeEnabled();
+      expect(within(telegram).queryByText('Checking…')).toBeNull();
+
+      await user.click(setup);
+      await waitFor(() => expect(linkBody).toEqual({ addWallet: true }));
+      expect(open).toHaveBeenCalledTimes(1);
+      expect(await within(telegram).findByText(
+        'Waiting for you to confirm on the Boros notifications page',
+      )).toBeInTheDocument();
+    } finally {
+      open.mockRestore();
+    }
+  });
+
   it('replaced', async () => {
     mockAllDone(telegramInfo({ state: 'replaced' }));
     renderDrawer();

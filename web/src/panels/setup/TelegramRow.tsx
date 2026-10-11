@@ -91,13 +91,17 @@ function syncFailure(info: TelegramInfo): string | null {
   return [`Sync failed at ${fmtClock(error.at)}.`, since, 'Retrying.'].filter(Boolean).join(' ');
 }
 
-/** A stored key the bot has not answered for yet (the server just started):
- * not "connected", which would read as a green tick and "None on". */
-const isChecking = (info: TelegramInfo | undefined): boolean =>
-  info?.state === 'connected' && info.settings === null && info.lastSyncAt === null && info.lastSyncError === null;
-
 const unlinkedOf = (info: TelegramInfo | undefined): string | null =>
   info?.connected === true && info.state === 'connected' && info.unlinkedWallet ? info.unlinkedWallet : null;
+
+/** A stored key the bot has not answered for yet (the server just started).
+ * An explicitly unlinked wallet is already resolved and needs its setup action. */
+const isChecking = (info: TelegramInfo | undefined): boolean =>
+  info?.state === 'connected' &&
+  unlinkedOf(info) === null &&
+  info.settings === null &&
+  info.lastSyncAt === null &&
+  info.lastSyncError === null;
 
 function stateLine(info: TelegramInfo | undefined, now: number): { text: string | null; isWarn: boolean } {
   if (!info) return { text: null, isWarn: false };
@@ -141,7 +145,8 @@ export function TelegramRow(p: SetupRowProps) {
   // Alerts are per wallet: linked to another wallet means not set up for the viewed one.
   const viewed = useTrackedAddressOptional()?.address ?? null;
   const otherWallet =
-    info?.alertWallet && viewed && !isSameAddress(info.alertWallet, viewed) ? info.alertWallet : null;
+    info?.alertWallet && viewed && !isSameAddress(info.alertWallet, viewed) &&
+    !(unlinked && isSameAddress(unlinked, viewed)) ? info.alertWallet : null;
   const isConnected =
     info?.connected === true && info.state === 'connected' && unlinked === null && !checking && otherWallet === null;
 

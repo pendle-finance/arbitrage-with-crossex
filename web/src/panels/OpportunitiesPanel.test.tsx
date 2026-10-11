@@ -274,7 +274,7 @@ describe('OpportunitiesPanel — capital basis', () => {
     renderWithClient(<OpportunitiesPanel />);
 
     await waitFor(() => expect(toggles()).toHaveLength(1));
-    expect(screen.getByTitle(/Locked fixed spread annualized/)).toHaveTextContent('7.0%');
+    expect(screen.getByTitle(/Estimated return after modeled costs/)).toHaveTextContent('7.0%');
     expect(screen.getByText('(30d)')).toBeInTheDocument();
     expect(screen.getByText('~$1,512')).toBeInTheDocument();
     expect(screen.getByTitle('Estimated profit by maturity on $10,000 per leg')).toHaveTextContent(

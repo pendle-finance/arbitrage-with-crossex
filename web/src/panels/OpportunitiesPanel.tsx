@@ -323,7 +323,7 @@ const CAPITAL_WHY =
 /** The hero's title: same wording as the Positions card, plus what "capital"
  * means for a trade that isn't open yet. */
 const CAPITAL_APR_TITLE =
-  'Locked fixed spread annualized on the minimum capital this trade posts.';
+  'Estimated return after modeled costs, annualized on modeled minimum capital. Extra collateral, reserve cash and collateral hedging costs lower the APR on your total funds.';
 
 /** One "$10k · Short ETH · BYBIT · <note>" row of the 4-leg explainer. The four
  * cells are a fragment so the parent grid keeps both rows aligned. */
@@ -656,11 +656,12 @@ const OpportunityCard = memo(function OpportunityCard({
             )}
             {/* "APR" is its own muted label in the mock, not part of the
                 number — the figure stays the loudest thing on the card. */}
-            <span className="text-sm font-medium text-ink-200">APR</span>
+            <span className="text-sm font-medium text-ink-200">Est. APR</span>
             <span className="text-[12.5px] text-ink-400" title={maturityTitle}>
               ({days}d)
             </span>
               </span>
+            <span className="text-[11px] text-ink-400">On modeled minimum capital</span>
             {/* Details as a dotted-underline text link rather than a button:
                 expanding is the quiet, reversible move and should not carry
                 the weight of the one that opens a position. Still a real

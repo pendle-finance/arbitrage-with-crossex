@@ -36,6 +36,7 @@ import {
   type BookStatus,
 } from './opportunities';
 import { SECONDS_IN_YEAR, knownRate } from './venue';
+import { borosRateBand, rateInsideBand } from './rateBounds';
 import {
   AUTO_TOP_UP_BELOW_USD,
   AUTO_TOP_UP_USD,
@@ -385,7 +386,7 @@ export interface SimulatedLeg {
    * buy. Mid, not exec: "Est." and "Max" measure from the same
    * number, so an estimate inside the max is a fill inside the bound. */
   worstApr: number | null;
-  /** estSlippageApr is past the tolerance: the order would not fill inside
+  /** A matched level is past the tolerance: the order would not fill inside
    * its own bound, so it is refused before the wire (dapp-nitro's
    * PRICE_IMPACT_EXCEEDS_SLIPPAGE), not after. */
   slippageExceeded: boolean;
@@ -410,9 +411,9 @@ export interface SimulatedLeg {
    */
   depth: Array<[number, number]> | null;
   /**
-   * The WIDEST tolerance whose rate bound (mid ± tolerance) still sits inside
-   * the venue's max-rate-deviation band (mark ± cap) — past it the order is
-   * refused whatever the book holds (the gate's `rate-bound-out-of-range`).
+   * The distance from mid to the native band's adverse edge. Widening past
+   * this does not add executable depth; the declared limit may be wider if
+   * the actual last matched rate remains inside the band.
    * 0 when mid already sits at or past the band's edge; null when the market
    * reports no cap, mark or mid.
    */
@@ -602,20 +603,19 @@ function simulateLeg(
   const anchor = mid ?? execApr;
   const worstApr =
     anchor === null ? null : orderSide === 'short' ? anchor - slippageApr : anchor + slippageApr;
-  const slippageExceeded = size > 0 && estSlippageApr !== null && estSlippageApr > slippageApr + 1e-12;
+  const toleranceSize = levels && worstApr !== null
+    ? sizeWithinBound(levels, orderSide, worstApr) : null;
+  const slippageExceeded = size > 0 && toleranceSize !== null && toleranceSize + 1e-12 < size;
   // The venue refuses a market order whose last matched level sits past
   // mark ± its max rate deviation, whatever bound the order carries — so
   // what fills whole is the depth inside the NEARER of the two edges.
-  const cap = leg.market.maxRateDeviationApr;
-  const mark = leg.market.markApr;
+  const band = borosRateBand(leg.market);
   const bandEdge =
-    knownRate(mark) && Number.isFinite(cap) && cap > 0 ? (orderSide === 'short' ? mark - cap : mark + cap) : null;
+    band === null ? null : orderSide === 'short' ? band.low : band.high;
   const fitEdge =
-    worstApr === null || mid === null
+    worstApr === null || mid === null || bandEdge === null
       ? null
-      : bandEdge === null
-        ? worstApr
-        : orderSide === 'short'
+      : orderSide === 'short'
           ? Math.max(worstApr, bandEdge)
           : Math.min(worstApr, bandEdge);
   const fitSize = levels && fitEdge !== null ? sizeWithinBound(levels, orderSide, fitEdge) : null;
@@ -901,6 +901,7 @@ export type BlockerCode =
   | 'no-depth'
   | 'slippage-exceeds-max'
   | 'rate-bound-out-of-range'
+  | 'rate-band-unknown'
   | 'isolated-must-switch'
   | 'isolated-short-margin'
   | 'cross-short-margin'
@@ -1045,6 +1046,9 @@ export function evaluatePairGate(input: EvaluatePairInput): PairGate {
         marketId: leg.marketId,
         message: `${leg.marketName}: nothing resting on the side this leg would cross.`,
       });
+    } else if (leg.bookStatus === 'insufficient-depth') {
+      blockers.push({ code: 'no-depth', leg: key, marketId: leg.marketId,
+        message: `${leg.marketName}: the book cannot fill this order completely — reduce the size.` });
     } else if (leg.slippageExceeded) {
       // The fill already sits past the bound the order would carry, so the
       // venue would reject or fill nothing. Said here, while the size is
@@ -1055,40 +1059,24 @@ export function evaluatePairGate(input: EvaluatePairInput): PairGate {
         leg: key,
         marketId: leg.marketId,
         message:
-          `${leg.marketName}: this size fills ${pct(leg.estSlippageApr ?? 0)} from mid, past the ` +
-          `${pct(leg.slippageApr)} max — raise the tolerance or reduce the size.`,
+          `${leg.marketName}: not all matched levels fit inside the ${pct(leg.slippageApr)} max ` +
+          `from mid — raise the tolerance or reduce the size.`,
       });
     }
-    /**
-     * §2b — the RATE BOUND the order carries must sit inside the venue's own
-     * max rate deviation band (mark ± `maxRateDeviationApr`).
-     *
-     * ⚠ This is about `worstApr`, NOT the execution rate. The order is sent
-     * with its bound as the limit, and dapp-nitro refuses a limit outside the
-     * band with "Executed Rate Out of Range" — so a leg whose FILL is
-     * comfortably inside the band is still rejected when its tolerance
-     * reaches past it. Nothing checked this before: the panel quoted a clean
-     * fill and the venue threw the order out (his catch 2026-09-18, seen on a
-     * 442 ETH roll where Gate's bound was 6.48% against a 6.09% ceiling).
-     *
-     * Only when the cap is known and positive; a market that does not report
-     * one is left to the venue rather than guessed at.
-     */
-    const cap = legIn.market.maxRateDeviationApr;
-    const mark = legIn.market.markApr;
-    if (leg.worstApr !== null && Number.isFinite(cap) && cap > 0 && knownRate(mark)) {
-      const lo = mark - cap;
-      const hi = mark + cap;
-      if (leg.worstApr < lo || leg.worstApr > hi) {
+    // The native core validates the LAST matched tick, not the order's
+    // declared limit. Inspect the whole walk: VWAP can hide an invalid tail.
+    const band = borosRateBand(legIn.market);
+    if (band === null) {
+      blockers.push({ code: 'rate-band-unknown', leg: key, marketId: leg.marketId,
+        message: `${leg.marketName}: native rate-band inputs are missing or invalid — cannot validate this order. Refresh market data.` });
+    } else if (legIn.book) {
+      const levels = leg.sizing.orderSide === 'long' ? legIn.book.asks : legIn.book.bids;
+      const walk = walkBorosBook(levels, Math.abs(leg.sizing.deltaSize), 1);
+      if (walk && !rateInsideBand(walk.lastApr, band)) {
         const pct = (n: number) => `${(n * 100).toFixed(2)}%`;
-        blockers.push({
-          code: 'rate-bound-out-of-range',
-          leg: key,
-          marketId: leg.marketId,
-          message:
-            `${leg.marketName}: the rate bound this order carries (${pct(leg.worstApr)}) is outside ` +
-            `the venue's ${pct(lo)}–${pct(hi)} band, so it would be rejected — tighten the tolerance or reduce the size.`,
-        });
+        blockers.push({ code: 'rate-bound-out-of-range', leg: key, marketId: leg.marketId,
+          message: `${leg.marketName}: the last matched rate (${pct(walk.lastApr)}) is outside ` +
+            `the native ${pct(band.low)}–${pct(band.high)} band — reduce the size or wait for the book to change.` });
       }
     }
     if (leg.marginRequired === null && leg.execApr !== null) {

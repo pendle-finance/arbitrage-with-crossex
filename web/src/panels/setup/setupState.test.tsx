@@ -73,4 +73,16 @@ describe('useSetupState', () => {
     await waitFor(() => expect(result.current.isLoading).toBe(false));
     expect(result.current.steps.telegram).toBe('missing');
   });
+
+  it('a stored Telegram connection is not done when the active wallet is unlinked', async () => {
+    localStorage.setItem('crossex.strategy.v1', JSON.stringify({ address: WALLET }));
+    mockWorld({ telegram: telegramInfo({
+      connected: true, state: 'connected', unlinkedWallet: WALLET,
+      settings: null, lastSyncAt: null, lastSyncError: null,
+    }) });
+    const { result } = renderHook(() => useSetupState(), { wrapper: hookWrapper() });
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    expect(result.current.steps.telegram).toBe('missing');
+  });
 });

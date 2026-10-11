@@ -398,32 +398,46 @@ describe('simulateBorosPair', () => {
     const blocker = g.blockers.find((b) => b.code === 'slippage-exceeds-max');
     expect(blocker).toBeDefined();
     expect(blocker!.leg).toBe('A');
-    expect(blocker!.message).toMatch(/1\.00% from mid/);
     expect(blocker!.message).toMatch(/0\.25% max/);
   });
 
-  it('refuses a leg whose RATE BOUND falls outside the venue band, even when the fill is fine', () => {
-    /**
-     * The order is sent carrying `worstApr` as its limit, and the venue
-     * rejects a limit outside mark ± maxRateDeviationApr with "Executed Rate
-     * Out of Range". A clean fill is no defence: what matters is the bound.
-     *
-     * hlMarket marks 8.9% with a 1.6% cap ⇒ the band is 7.3%–10.5%. A short
-     * leg hitting bids at 9% with a 2% tolerance carries a bound of 7%, which
-     * is under the floor, while its own fill sits comfortably inside.
-     */
-    const sim = simulateBorosPair(
-      simInput({ legA: leg({ slippageApr: 0.02 }), size: 1_000 }),
-    );
+  it('allows a wide declared limit when actual matched rates stay in the native band', () => {
+    const sim = simulateBorosPair(simInput({ legA: leg({ slippageApr: 0.02 }), size: 1_000 }));
     expect(sim.legA.execApr).toBeCloseTo(0.09, 12);
-    expect(sim.legA.slippageExceeded).toBe(false); // the FILL is fine
-    expect(sim.legA.worstApr).toBeCloseTo(0.07, 12); // the BOUND is not
+    expect(sim.legA.worstApr).toBeCloseTo(0.07, 12); // below the 7.3% band floor
     const g = evaluatePairGate(gateInput({ simulation: sim }));
-    const blocker = g.blockers.find((b) => b.code === 'rate-bound-out-of-range');
-    expect(blocker).toBeDefined();
-    expect(blocker!.leg).toBe('A');
-    expect(blocker!.message).toMatch(/7\.00%/);
-    expect(blocker!.message).toMatch(/7\.30%–10\.50%/);
+    expect(g.blockers.find((b) => b.code === 'rate-bound-out-of-range')).toBeUndefined();
+  });
+
+  it('blocks an out-of-band final tick even when VWAP remains inside the band', () => {
+    const legA = leg({ slippageApr: 0.03,
+      book: { marketId: 155, bids: [[0.09, 99_000], [0.07, 1_000]], asks: [[0.092, 100_000]] } });
+    const sim = simulateBorosPair(simInput({ legA }));
+    expect(sim.legA.execApr).toBeCloseTo(0.0898, 12);
+    const g = evaluatePairGate(gateInput({ simulation: sim, legA }));
+    expect(g.blockers.find((b) => b.code === 'rate-bound-out-of-range')?.message).toMatch(/last matched rate.*7.00%/);
+  });
+
+  it('blocks a final tick outside slippage even when average impact fits', () => {
+    const legA = leg({ slippageApr: 0.0025,
+      book: { marketId: 155, bids: [[0.09, 99_000], [0.08, 1_000]], asks: [[0.092, 100_000]] } });
+    const sim = simulateBorosPair(simInput({ legA }));
+    expect(sim.legA.estSlippageApr).toBeCloseTo(0.0001, 12);
+    expect(sim.legA.slippageExceeded).toBe(true);
+    expect(evaluatePairGate(gateInput({ simulation: sim, legA })).blockers.some((b) => b.code === 'slippage-exceeds-max')).toBe(true);
+  });
+
+  it('fails closed when the native band is unknown', () => {
+    const legA = leg({ market: { ...hlMarket, maxRateDeviationApr: null } });
+    const sim = simulateBorosPair(simInput({ legA }));
+    expect(sim.legA.sizeWithinTolerance).toBeNull();
+    expect(evaluatePairGate(gateInput({ simulation: sim, legA })).blockers.some((b) => b.code === 'rate-band-unknown')).toBe(true);
+  });
+
+  it('blocks an order that cannot be filled completely', () => {
+    const legA = leg({ book: book(155, 0.09, 0.092, 1_000) });
+    const sim = simulateBorosPair(simInput({ legA }));
+    expect(evaluatePairGate(gateInput({ simulation: sim, legA })).blockers.some((b) => b.code === 'no-depth')).toBe(true);
   });
 
   it('allows a bound that sits inside the venue band', () => {
@@ -589,7 +603,7 @@ describe('simulateBorosPair', () => {
     expect(buy.maxToleranceApr).toBeCloseTo(0.018, 12);
     expect(sell.maxToleranceApr).toBeCloseTo(0.022, 12);
     // No cap reported → left to the venue, not guessed.
-    const capless = simulateBorosPair(simInput({ legA: leg({ market: { ...market, maxRateDeviationApr: 0 } }) })).legA;
+    const capless = simulateBorosPair(simInput({ legA: leg({ market: { ...market, maxRateDeviationApr: null } }) })).legA;
     expect(capless.maxToleranceApr).toBeNull();
   });
 

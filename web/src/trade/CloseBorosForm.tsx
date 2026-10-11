@@ -132,8 +132,8 @@ export function CloseBorosForm({
   const ctx = useBorosPairContext(address);
   /**
    * Half the MARKET'S max rate deviation — the venue's own cap on how far one
-   * trade may move the rate. A bound wider than the cap can never fill, and a
-   * close is not hunting a rate, so half of it is the natural default.
+   * trade may move the rate. Half of it is a conservative default; actual
+   * matched rates, rather than the declared limit, must remain in the band.
    *
    * Per market, so a multi-leg close seeds from the tightest of them: one
    * tolerance drives the form, and the tighter cap is the binding one.

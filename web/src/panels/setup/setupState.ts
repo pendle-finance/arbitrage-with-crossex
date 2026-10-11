@@ -39,6 +39,7 @@ export function useSetupState(): {
     telegram:
       telegram.data?.connected &&
       telegram.data.state === 'connected' &&
+      !telegram.data.unlinkedWallet &&
       !(telegram.data.alertWallet && address && !isSameAddress(telegram.data.alertWallet, address))
         ? 'done'
         : 'missing',

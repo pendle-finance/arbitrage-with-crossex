@@ -89,7 +89,7 @@ describe('fetchBorosMarkets', () => {
             {
               marketId: 155,
               tokenId: 3,
-              imData: { name: 'Hyperliquid ETH 31 Jul 2026', maturity: Math.floor(Date.now() / 1000) + 30 * 86_400 },
+              imData: { name: 'Hyperliquid ETH 31 Jul 2026', maturity: Math.floor(Date.now() / 1000) + 30 * 86_400, iTickThresh: 583, tickStep: 2 },
               config: { status: 2, takerFee: '500000000000000', maxRateDeviationFactorBase1e4: 2500 },
               extConfig: { settleFeeRate: '1000000000000000', paymentPeriod: 3600 },
               platform: { platformId: 'Hyperliquid' },
@@ -110,7 +110,7 @@ describe('fetchBorosMarkets', () => {
     expect(markets[0].notionalOi).toBe(801.005045896532); // collateral units, NOT USD
     expect(markets[0].takerFeeRate).toBeCloseTo(0.0005, 12);
     expect(markets[0].state).toBe('Normal');
-    // maxRateDeviation is a FRACTION OF THE MARK, not the deviation itself:
+    // The 6% IM floor is below this 7.6% mark, so the mark dominates:
     // 2500/1e4 = 0.25, and 0.25 x 7.6% = 1.9% APR. Reading the factor as the
     // cap directly would have quoted 25%.
     expect(markets[0].maxRateDeviationApr).toBeCloseTo(0.019, 12);

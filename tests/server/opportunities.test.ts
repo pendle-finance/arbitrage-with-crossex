@@ -43,6 +43,7 @@ function borosBodies(): Record<string, unknown> {
     config: {
       status: 2,
       takerFee: '500000000000000',
+      maxRateDeviationFactorBase1e4: 2500,
       kIM: raw(imInputs.kIM),
       tThresh: imInputs.tThreshSec,
     },

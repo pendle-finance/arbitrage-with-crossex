@@ -43,11 +43,9 @@ const TOLERANCE_HEADROOM = 1.1;
 const TOLERANCE_STEP = 0.0001;
 
 /**
- * How much of the venue's band an AUTO tolerance may use. The band hangs off
- * mark and the bound off mid, and both drift between the quote and the order:
- * a tolerance set to the band's very edge tripped the gate's own
- * `rate-bound-out-of-range` a moment later ("6.12% is outside 3.67%–6.12%",
- * his catch 2026-09-22). A tenth of the room is kept back.
+ * How much of the native executable band an AUTO tolerance may use.
+ * Keep a tenth of the room back for movement between quote and submission.
+ * Wider declared limits are valid, but do not add executable depth.
  */
 const BAND_USE = 0.9;
 

@@ -504,14 +504,11 @@ export function BorosPairTicket({
   /**
    * The default tolerance, from the markets' OWN max rate deviation.
    *
-   * A bound wider than the venue's cap can never fill, and a close is not
-   * hunting a rate, so half the cap is the natural default — the same rule the
-   * close dialog uses. Across a SPREAD both legs must clear their own cap, so
-   * the seed is the mean of the two halves: `(capA + capB) / 2 / 2` — which is
-   * `(capA + capB) / 4`. On a single leg it degenerates to that leg's cap / 2.
-   *
-   * Floored to one significant figure, and never rounded up: a seeded bound
-   * must stay strictly inside the cap it came from.
+   * Half the native deviation seeds a conservative default. Both legs retain
+   * their own executable-depth checks; a wide declared limit is valid when
+   * actual matched rates remain inside the native band.
+   * The seed is the mean of the two halves, rounded down to one significant
+   * figure. It is a default, not the maximum permitted tolerance.
    */
   const capOf = (id: number | null): number | null => {
     const m = id === null ? undefined : byId.get(id);
