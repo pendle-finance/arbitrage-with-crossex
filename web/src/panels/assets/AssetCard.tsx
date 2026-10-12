@@ -30,7 +30,8 @@ import type {
   StrategyLeg,
 } from '../../api/types';
 import { SpreadIcon, TokenIcon, VenueIcon } from '../../components/AssetIcon';
-import { spreadLabel } from '../../lib/spread';
+import { spreadName } from '../../lib/spread';
+import { SpreadName } from '../../components/SpreadName';
 import { Chip } from '../../components/Chip';
 import { HoverCard } from '../../components/HoverCard';
 import { Spinner } from '../../components/Spinner';
@@ -51,10 +52,9 @@ import {
   useExecuteBorosPair,
   useExecuteBorosRoll,
   usePositions,
-  useTopUpGas,
 } from '../../api/queries';
 import { HoldToConfirmButton } from '../../components/HoldToConfirmButton';
-import { BlockerList, GasTopUp, LegFillLine, legLetter, LiquidationRows, PairCosts, PositionArithmetic, SpreadReadout } from '../../trade/BorosPairBits';
+import { BlockerList, LegFillLine, legLetter, LiquidationRows, PairCosts, PositionArithmetic, SpreadReadout } from '../../trade/BorosPairBits';
 import { EstimateCard, EstimateRow, SlippageLine, StepBadge } from '../../trade/PairTicketBits';
 import { QueryError } from '../../components/QueryError';
 import { uuid } from '../../lib/uuid';
@@ -759,7 +759,7 @@ function PairCard({
                         {l.kind === 'yu' && l.spreadVenues ? (
                           <>
                             <SpreadIcon venues={l.spreadVenues} />
-                            <span className="font-medium text-ink-50">{spreadLabel(l.spreadVenues)}</span>
+                            <SpreadName base={base} venues={l.spreadVenues} />
                           </>
                         ) : (
                           <span className="font-medium text-ink-50">{prettyVenue(l.venue)}</span>
@@ -2161,8 +2161,6 @@ function RollReview({
   const agent = useBorosAgent();
   const { canTrade, loginLabel } = useActiveWallet();
   const executeRoll = useExecuteBorosRoll();
-  const topUpGas = useTopUpGas();
-  const [gasTopUpStr, setGasTopUpStr] = useState('5');
   // ---- tolerance --------------------------------------------------------
   /**
    * One tolerance PER BATCH, in % APR as the ticket takes it: the old legs'
@@ -2541,19 +2539,6 @@ function RollReview({
         // it — a second, red copy here explained nothing new.
         blockers={blockers.filter((b) => b.code !== 'slippage-exceeds-max')}
       />
-      <GasTopUp
-        gasBalanceUsd={roll.data?.gasBalanceUsd}
-        amount={gasTopUpStr}
-        onAmountChange={setGasTopUpStr}
-        onTopUp={canTrade ? () => topUpGas.mutate({ amountUsd: Number(gasTopUpStr), address, marketId: targetMarketIds(target)[0] }) : undefined}
-        busy={topUpGas.isPending}
-      />
-      {topUpGas.isSuccess && (
-        <p className="rounded-lg border border-emerald-500/25 bg-emerald-500/[0.04] px-2.5 py-1.5 text-[11px] leading-relaxed text-emerald-200">
-          Sent a ${topUpGas.data.sentUsd} gas top-up. Boros credits it once the transaction is indexed, so the balance catches up within a minute — no need to send it again.
-        </p>
-      )}
-      {topUpGas.isError && <QueryError title="The gas top-up did not confirm" error={topUpGas.error} />}
 
       <div className="mt-1 flex items-center justify-between gap-2">
         <button type="button" className="btn" onClick={onBack} disabled={busy}>
@@ -2618,8 +2603,6 @@ function OpenOnlyReview({
   const agent = useBorosAgent();
   const { canTrade, loginLabel } = useActiveWallet();
   const execute = useExecuteBorosPair();
-  const topUpGas = useTopUpGas();
-  const [gasTopUpStr, setGasTopUpStr] = useState('5');
   // One tolerance for the two entry legs — seeded as the pick page settled it,
   // editable here. Invalid (empty, zero, over the cap) blocks the confirm.
   const seedPct = entrySeedPct ?? ROLL_MAX_SLIP_PCT / 10;
@@ -2793,19 +2776,6 @@ function OpenOnlyReview({
       </EstimateCard>
 
       <BlockerList blockers={blockers.filter((b) => b.code !== 'slippage-exceeds-max')} />
-      <GasTopUp
-        gasBalanceUsd={sim.data?.gasBalanceUsd}
-        amount={gasTopUpStr}
-        onAmountChange={setGasTopUpStr}
-        onTopUp={canTrade ? () => topUpGas.mutate({ amountUsd: Number(gasTopUpStr), address, marketId: targetMarketIds(target)[0] }) : undefined}
-        busy={topUpGas.isPending}
-      />
-      {topUpGas.isSuccess && (
-        <p className="rounded-lg border border-emerald-500/25 bg-emerald-500/[0.04] px-2.5 py-1.5 text-[11px] leading-relaxed text-emerald-200">
-          Sent a ${topUpGas.data.sentUsd} gas top-up. Boros credits it once the transaction is indexed, so the balance catches up within a minute — no need to send it again.
-        </p>
-      )}
-      {topUpGas.isError && <QueryError title="The gas top-up did not confirm" error={topUpGas.error} />}
 
       <div className="mt-1 flex items-center justify-between gap-2">
         <button type="button" className="btn" onClick={onBack} disabled={busy}>
@@ -3104,7 +3074,7 @@ function PerpOnlyPairCard({
       {spreadVenues ? (
         <>
           <SpreadIcon venues={spreadVenues} />
-          <span className="font-medium text-ink-50">{spreadLabel(spreadVenues)}</span>
+          <SpreadName base={base} venues={spreadVenues} />
         </>
       ) : (
         <span className="font-medium text-ink-50">{prettyVenue(venue)}</span>
@@ -3283,7 +3253,7 @@ function PerpOnlyPairCard({
                 disabled={!onOpenBoros}
                 title={
                   spread
-                    ? `Open the ${spreadLabel(spread)} spread leg, at ${sizeText(Math.min(pair.missingLong, pair.missingShort))}`
+                    ? `Open the ${spreadName(base, spread)} leg, at ${sizeText(Math.min(pair.missingLong, pair.missingShort))}`
                     : `Open both Boros legs together — long ${prettyVenue(pair.longVenue)}, short ${prettyVenue(pair.shortVenue)}, ${sizeText(Math.min(pair.missingLong, pair.missingShort))} each`
                 }
                 onClick={() => onOpenBoros?.({ long: true, short: true })}
@@ -3344,7 +3314,7 @@ function BorosOnlyPairCard({
       {spreadVenues ? (
         <>
           <SpreadIcon venues={spreadVenues} />
-          <span className="font-medium text-ink-50">{spreadLabel(spreadVenues)}</span>
+          <SpreadName base={base} venues={spreadVenues} />
         </>
       ) : (
         <span className="font-medium text-ink-50">{prettyVenue(venue)}</span>
@@ -4351,7 +4321,7 @@ function BorosRow({
     <tr className="group">
       <td className="whitespace-nowrap">
         <LegIdentity
-          name={leg.spreadVenues ? spreadLabel(leg.spreadVenues) : prettyVenue(leg.venue)}
+          name={leg.spreadVenues ? spreadName(base, leg.spreadVenues) : prettyVenue(leg.venue)}
           kind="boros"
           chips={
             <>
@@ -4436,7 +4406,7 @@ function BorosRow({
         <EditCell
           leading={deficit && <OpenMoreButton gap={deficit} base={base} onOpen={onOpenMore} />}
           exKey={key}
-          label={leg.spreadVenues ? `${spreadLabel(leg.spreadVenues)} spread` : `${prettyVenue(leg.venue)} ${leg.side} YU`}
+          label={leg.spreadVenues ? spreadName(base, leg.spreadVenues) : `${prettyVenue(leg.venue)} ${leg.side} YU`}
           unit={leg.collateral}
           legQty={leg.sizeToken}
           entry={leg.entryApr}
@@ -5617,7 +5587,7 @@ export function AssetCard({
         onChange={setView}
         options={[
           { value: 'bundles', label: 'Funding Bundles', count: activeBundles.length },
-          { value: 'pairs', label: 'Pairs', count: derived.pairs.length + perpOnly.pairs.length + borosOnly.pairs.length },
+          { value: 'pairs', label: 'Fixed Rate Pairs', count: derived.pairs.length + perpOnly.pairs.length + borosOnly.pairs.length },
         ]}
         right={
           view === 'bundles' ? (
@@ -5956,11 +5926,11 @@ null
         <Modal
           title={
             <>
-              {closeLeg.leg.spreadVenues ? `Close ${spreadLabel(closeLeg.leg.spreadVenues)} spread` : 'Close Boros leg'}
+              {closeLeg.leg.spreadVenues ? `Close ${spreadName(group.base, closeLeg.leg.spreadVenues)}` : 'Close Boros leg'}
               <span className="ml-2 text-[12px] font-normal text-ink-400">
-                {closeLeg.leg.spreadVenues ? '' : `${prettyVenue(closeLeg.leg.venue)} · `}
-                {group.base}
-                {closeLeg.leg.maturity ? ` · ${fmtDateLocal(closeLeg.leg.maturity)}` : ''} ·{' '}
+                {/* A spread's title already names the coin. */}
+                {closeLeg.leg.spreadVenues ? '' : `${prettyVenue(closeLeg.leg.venue)} · ${group.base} · `}
+                {closeLeg.leg.maturity ? `${fmtDateLocal(closeLeg.leg.maturity)} · ` : ''}
                 {closeLeg.leg.side.toLowerCase()}
               </span>
             </>

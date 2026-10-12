@@ -42,16 +42,16 @@ describe('OpportunitiesPanel — spread market', () => {
 
     const borosLinks = screen.getAllByRole('link', { name: /funding on Boros/ });
     expect(borosLinks).toHaveLength(1);
-    expect(borosLinks[0]).toHaveAccessibleName('Short ETH HL-Gate spread funding on Boros');
+    expect(borosLinks[0]).toHaveAccessibleName('Short ETH Spread HL-GATE funding on Boros');
     expect(borosLinks[0]).toHaveAttribute(
       'href',
       'https://boros.pendle.finance/markets/59?form=market&direction=short',
     );
 
-    const legLabels = ['Short ETH', 'Long ETH', 'Short ETH HL-Gate spread'].map((label) => screen.getByText(label));
+    const legLabels = ['Short ETH', 'Long ETH', 'Short ETH Spread HL-GATE'].map((label) => screen.getByText(label));
     expect(legLabels[0].compareDocumentPosition(legLabels[1]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(legLabels[1].compareDocumentPosition(legLabels[2]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(screen.getByText('HL-Gate')).toBeInTheDocument();
+    expect(screen.getByText('ETH Spread HL-GATE')).toBeInTheDocument();
     expect(screen.getAllByText(/ Fixed$/)).toHaveLength(1);
 
     expect(screen.getByText('Boros spread IM')).toBeInTheDocument();

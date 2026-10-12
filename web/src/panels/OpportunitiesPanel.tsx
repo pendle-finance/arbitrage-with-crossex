@@ -54,7 +54,7 @@ import { microLabelClass } from '../components/Th';
 import { SpreadIcon, TokenIcon, VenueIcon } from '../components/AssetIcon';
 import { SideVenue } from '../components/VenueChip';
 import { borosMarketUrl, isUsdCollateral } from '../lib/boros';
-import { spreadLabel } from '../lib/spread';
+import { spreadName } from '../lib/spread';
 import {
   fmtAge,
   fmtDateLocal,
@@ -845,7 +845,7 @@ const OpportunityCard = memo(function OpportunityCard({
               </VenueBox>
               {spreadLeg?.spreadVenues && (
                 <VenueBox
-                  venue={spreadLabel(spreadLeg.spreadVenues)}
+                  venue={spreadName(base, spreadLeg.spreadVenues)}
                   icon={<SpreadIcon venues={spreadLeg.spreadVenues} size={20} />}
                   fixedApr={spreadLeg.execApr ?? spreadLeg.midApr}
                   positive={(spreadLeg.side === 'SHORT' ? 1 : -1) * (spreadLeg.execApr ?? spreadLeg.midApr) >= 0}
@@ -854,7 +854,7 @@ const OpportunityCard = memo(function OpportunityCard({
                   <BorosLegRow
                     n={3}
                     leg={spreadLeg}
-                    label={`${spreadLeg.side === 'SHORT' ? 'Short' : 'Long'} ${base} ${spreadLabel(spreadLeg.spreadVenues)} spread`}
+                    label={`${spreadLeg.side === 'SHORT' ? 'Short' : 'Long'} ${spreadName(base, spreadLeg.spreadVenues)}`}
                   />
                 </VenueBox>
               )}

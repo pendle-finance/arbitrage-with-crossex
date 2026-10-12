@@ -31,12 +31,12 @@ describe('shareCardLines', () => {
     ]);
   });
 
-  it('names a spread leg HL-Gate, not the raw Hyperliquid_gate id', () => {
+  it('names a spread leg as Boros does, not the raw Hyperliquid_gate id', () => {
     const spread = makeSharePayload({
       l: [{ k: 'b', x: 'HYPERLIQUID_GATE', s: 'S', n: 1700, r: 0.0348 }, ...payload.l.slice(2)],
     });
     const { legs } = shareCardLines(spread);
-    expect(legs[0]).toMatchObject({ kind: 'Boros', venue: 'HL-Gate', detail: '3.48% fixed' });
+    expect(legs[0]).toMatchObject({ kind: 'Boros', venue: 'HYPE Spread HL-GATE', detail: '3.48% fixed' });
     expect(legs[1].venue).toBe('Hyperliquid');
   });
 

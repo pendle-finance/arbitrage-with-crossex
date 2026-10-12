@@ -246,7 +246,6 @@ export interface BorosOrderClient {
   /** Force-close the whole netted position on one market (§6A remediation). */
   closePosition(req: BorosClosePositionRequest): Promise<BorosLegFill>;
   getGasBalance?(): Promise<number | null>;
-  payTreasury?(amountUsd: number, marketId: number): Promise<void>;
 }
 
 export interface PlaceOrdersOptions {

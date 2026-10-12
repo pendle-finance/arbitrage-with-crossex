@@ -25,7 +25,7 @@ import { SpreadIcon, VenueIcon } from '../components/AssetIcon';
 import { SignedNumber } from '../components/SignedNumber';
 import { QueryError } from '../components/QueryError';
 import { daysToMaturity, knownRate } from '../lib/boros';
-import { spreadLabel } from '../lib/spread';
+import { spreadName } from '../lib/spread';
 import { fieldValue, fmtDateLocal, fmtPct, fmtTokenQty, fmtUsd, prettyVenue, sigGrouped } from '../lib/fmt';
 import { AffixedInput, EstimateCard, EstimateRow, LegCard, SlippageLine } from './PairTicketBits';
 import { FieldLabel } from './SymbolCombobox';
@@ -142,7 +142,7 @@ export function CloseBorosForm({
   const spreadOf = (l: CloseLeg) => l.spreadVenues ?? rowOf(l.marketId)?.spreadVenues ?? null;
   const venueLabel = (l: CloseLeg): string => {
     const venues = spreadOf(l);
-    return venues ? spreadLabel(venues) : prettyVenue(l.venue);
+    return venues ? spreadName(l.base, venues) : prettyVenue(l.venue);
   };
   /**
    * Half the MARKET'S max rate deviation — the venue's own cap on how far one

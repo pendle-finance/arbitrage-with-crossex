@@ -1202,15 +1202,6 @@ export type BorosLegFailureCode =
   | 'rejected'
   | 'unknown';
 
-export interface TopUpGasResponse {
-  sentUsd: number;
-  /** Collateral symbol the top-up was paid in (the traded market's). */
-  paidFrom?: string;
-  /** True when this answer came from the server's memo — the payment for
-   * this id had already landed and nothing new was sent. */
-  replayed?: boolean;
-}
-
 export interface RunUpdateResponse {
   started: true;
   logPath: string;

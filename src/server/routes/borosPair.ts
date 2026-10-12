@@ -39,7 +39,6 @@ import { COIN_NOT_SUPPORTED_TEXT, isSupportedCoin } from '../../core/coins';
 import { knownRate, normalizeVenue } from '../../core/boros/venue';
 import { isSpreadMarket } from '../../core/boros/spread';
 import { readAgentApproval } from '../borosAgentApproval';
-import { maskAddress } from './borosAgent';
 import { isUpdating } from '../updater';
 import {
   classifyLegFailure,
@@ -110,9 +109,6 @@ const CLOSE_SLIPPAGE_APR = 0.01;
  * double-fill, not every double-fill.
  */
 const EXECUTION_MEMO_MS = 10 * 60_000;
-
-const MIN_TOP_UP_USD = 2;
-const MAX_TOP_UP_USD = 100;
 
 /** Wire shape of one leg, as the panel sends it. */
 interface LegBody {
@@ -570,10 +566,19 @@ export function createPairPricer(deps: AppDeps) {
 
     const gasBalanceUsd = preloaded ? preloaded.gasBalanceUsd : await readGasBalance(fresh);
 
+    // The best-funded OTHER coin, for an open whose own coin cannot spare the
+    // gas top-up after its legs.
+    const fallbackZone = chooseGasTopUpZone({
+      amountUsd: 0,
+      markets,
+      freeCrossByToken: new Map([...freeCrossOf(account)].filter(([t]) => t !== tokenId)),
+      pricesUsd: resolveCollateralPricesUsd(markets),
+    });
     const accountState: BorosPairAccountState = {
       cross: account.crossByToken.get(tokenId) ?? null,
       isolatedByMarket: account.isolatedByMarket,
       gasBalanceUsd,
+      gasFallbackFreeUsd: fallbackZone.ok ? fallbackZone.freeUsd : null,
     };
     const simulatedAtMs = Date.now();
     const gate = evaluatePairGate({
@@ -990,7 +995,9 @@ export function borosPairRoutes(deps: AppDeps) {
             intent === 'close'
               ? legOrders.flatMap((o) => (o && account.restingOrderMarkets.has(o.marketId) ? [o.marketId] : []))
               : undefined,
-          gasTopUpMarket: gasTopUpMarketFor(markets, account),
+          // An open the gate sent to the fallback treats its own coin as having
+          // nothing to spare, so the top-up comes from the best-funded one.
+          gasTopUpMarket: gasTopUpMarketFor(markets, account, intent !== 'close' && gate.gasTopUpFromFallback ? 0 : undefined),
         }).then((result) => ({ result, estimate: simulation, warnings: gate.warnings }));
         rememberExecution(memoKey, pending);
         const payload = await pending;
@@ -1164,92 +1171,6 @@ export function borosPairRoutes(deps: AppDeps) {
       } finally {
         unlockRoll();
       }
-    });
-
-    /**
-     * ⚠ A top-up is an on-chain payment with no venue-side dedupe. Two things
-     * keep a re-press from paying twice: ONE top-up in flight at a time, and a
-     * replay memo keyed by the caller's id — a response lost after the payment
-     * landed answers the retry from the memo instead of paying again. A memo
-     * entry is dropped when its payment FAILED, so a genuine retry can pay.
-     */
-    const topUps = new Map<string, Promise<{ sentUsd: number; paidFrom: string }>>();
-    let topUpInFlight = false;
-    app.post('/boros/pair/top-up-gas', async (req, reply) => {
-      const body = (req.body ?? {}) as { amountUsd?: unknown; clientOrderId?: unknown; address?: unknown; marketId?: unknown };
-      const amountUsd = Number(body.amountUsd);
-      if (!Number.isFinite(amountUsd) || amountUsd < MIN_TOP_UP_USD || amountUsd > MAX_TOP_UP_USD) {
-        throw new CoreError(
-          `amountUsd must be between $${MIN_TOP_UP_USD} and $${MAX_TOP_UP_USD}`,
-          'validation',
-        );
-      }
-      // The top-up always pays from the logged-in wallet. A tracked wallet
-      // that is not logged in must not get a payment it never made.
-      if (body.address !== undefined) {
-        const address = parseAddress(body.address);
-        const root = configuredRoot();
-        if (root && address !== root) {
-          throw new CoreError(
-            `Top up works only for the logged-in wallet ${maskAddress(root)}. Log in to ${maskAddress(address)} first.`,
-            'validation',
-          );
-        }
-      }
-      // The market the user is trading, so the top-up is paid from THAT
-      // collateral. Optional: without it the best-funded cross zone pays.
-      let preferMarketId: number | undefined;
-      if (body.marketId !== undefined && body.marketId !== null) {
-        const id = Number(body.marketId);
-        if (!Number.isInteger(id) || id <= 0) throw new CoreError('marketId must be a positive integer', 'validation');
-        preferMarketId = id;
-      }
-      const clientOrderId =
-        body.clientOrderId === undefined ? null : parseClientOrderId(body.clientOrderId, 'clientOrderId');
-      const prior = clientOrderId === null ? undefined : topUps.get(clientOrderId);
-      if (prior) return reply.ok({ ...(await prior), replayed: true });
-      const orders = deps.getBorosOrders?.();
-      if (!orders?.payTreasury) {
-        throw new CoreError(
-          'Boros gas top-up is not configured on this install.',
-          'not-configured',
-        );
-      }
-      assertNotUpdating();
-      await assertAgentNotExpired();
-      if (topUpInFlight) {
-        throw new CoreError(
-          'a gas top-up is already in flight — wait for it to land before sending another.',
-          'validation',
-        );
-      }
-      topUpInFlight = true;
-      const payment = (async () => {
-        const root = configuredRoot();
-        if (!root) throw new CoreError('Log in to a Boros wallet to top up its gas.', 'not-configured');
-        // Fresh: the free margin decides whether the payment can pass its
-        // strict margin check, and a cached copy may predate a trade.
-        const [markets, account] = await Promise.all([loadMarkets(false), loadAccount(root, true)]);
-        const zone = chooseGasTopUpZone({
-          amountUsd,
-          markets,
-          freeCrossByToken: freeCrossOf(account),
-          pricesUsd: resolveCollateralPricesUsd(markets),
-          preferMarketId,
-        });
-        if (!zone.ok) throw new CoreError(zone.message, 'insufficient-margin');
-        await orders.payTreasury!(amountUsd, zone.marketId);
-        deps.cache.bust('boros:gas-balance');
-        deps.cache.bust('boros:collaterals');
-        return { sentUsd: amountUsd, paidFrom: zone.symbol };
-      })().finally(() => {
-        topUpInFlight = false;
-      });
-      if (clientOrderId !== null) {
-        topUps.set(clientOrderId, payment);
-        payment.catch(() => topUps.delete(clientOrderId));
-      }
-      return reply.ok({ ...(await payment), replayed: false });
     });
 
     /**

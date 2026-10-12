@@ -592,7 +592,7 @@ export function makeSpreadOpportunityPair(overrides: Partial<OpportunityPair> = 
       makeOpportunityBorosLeg({
         marketId: SPREAD_OPP_MARKET_ID,
         side: 'SHORT',
-        venue: 'HL-Gate',
+        venue: 'HL-GATE',
         spreadVenues: ['HYPERLIQUID', 'GATE'],
         midApr,
         execApr,
@@ -3380,12 +3380,12 @@ function spreadPairContext(spreads: 'listed' | 'none' | 'paused'): BorosPairCont
         ? []
         : [
             spreadContextRow(
-              63, 'HL-Gate', 'ETH HL-Gate spread 30 Oct 2026', OCT_30_2026_MATURITY, 0.0348,
+              63, 'HL-GATE', 'ETH Spread HL-GATE 30 Oct 2026', OCT_30_2026_MATURITY, 0.0348,
               SPREAD_BOOK_VENUES,
             ),
             {
               ...spreadContextRow(
-                SPREAD_OPP_MARKET_ID, 'HL-Gate', 'ETH HL-Gate spread 27 Nov 2026', SPREAD_OPP_MATURITY,
+                SPREAD_OPP_MARKET_ID, 'HL-GATE', 'ETH Spread HL-GATE 27 Nov 2026', SPREAD_OPP_MATURITY,
                 0.0348, SPREAD_BOOK_VENUES,
               ),
               closeOnly: spreads === 'paused',

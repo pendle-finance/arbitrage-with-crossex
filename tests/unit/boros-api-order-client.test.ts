@@ -920,52 +920,6 @@ describe('absWei', () => {
   });
 });
 
-describe('makeBorosApiOrderClient — the gas top-up', () => {
-  it('signs the builder\'s calldata and submits it, billed on the market it is given', async () => {
-    const api = fakeApi({});
-    await client(api).payTreasury!(5, HL);
-
-    expect(api.calls.some((c) => c.path.startsWith('/v1/accounts/entered-markets'))).toBe(false);
-
-    const build = api.calls.find((c) => c.path === '/v1/calldata-builder/agent/pay-treasury')!;
-    expect(build.body).toMatchObject({ accountId: 0, isCross: true, marketId: HL });
-    expect(build.body.amount).toBe('2000000000000000'); // $5 / $2,500 = 0.002 ETH
-
-    const datas = api.calls.find((c) => c.path === '/v1/send-txs/bulk-calls')!.body.datas as Array<{
-      calldata: string;
-      signature: string;
-    }>;
-    expect(datas).toHaveLength(1);
-    expect(datas[0].calldata).toBe('0x7a');
-    expect(datas[0].signature).toMatch(/^0x[0-9a-f]+$/);
-  });
-
-  it('refuses to pay when the collateral price is unknown, before building anything', async () => {
-    const api = fakeApi({});
-    await expect(client(api, { priceUsd: null }).payTreasury!(5, HL)).rejects.toThrow(/price .* is unknown/i);
-    expect(api.calls.some((c) => c.path.includes('agent/pay-treasury'))).toBe(false);
-  });
-
-  it('raises on a refusal, which the venue delivers by RESOLVING', async () => {
-    const api = fakeApi({ payReturns: [{ error: 'MMInsufficientCash()' }] });
-    await expect(client(api).payTreasury!(5, HL)).rejects.toThrow(/refused the gas top-up/i);
-  });
-
-  it('raises when the submission says nothing at all', async () => {
-    for (const body of [{}, null, []]) {
-      const api = fakeApi({ payReturns: body });
-      await expect(client(api).payTreasury!(5, HL)).rejects.toThrow(/cannot tell whether it landed/i);
-    }
-  });
-
-});
-
-/**
- * `topUpAfter` decides where the auto gas top-up sits in the submission. The
- * relayer sums the whole batch and checks it once, so the credit counts
- * wherever it sits — what the position decides is when `payTreasury`'s own
- * strict margin check runs. A roll places it after the closes (index 2).
- */
 describe('makeBorosApiOrderClient — topUpAfter positions the gas top-up', () => {
   const orderSubmit = (api: ReturnType<typeof fakeApi>) =>
     api.calls
