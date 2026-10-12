@@ -55,7 +55,6 @@ import type {
   TransferView,
   VenueFees,
   UpdateStatus,
-  TopUpGasResponse,
   RunUpdateResponse,
   UpdateProgress,
 } from './types';
@@ -691,32 +690,6 @@ export function useExecuteBorosRoll() {
       void qc.invalidateQueries({ queryKey: ['boros', 'pair', 'context'] });
       void qc.invalidateQueries({ queryKey: ['assetView'] });
       void qc.invalidateQueries({ queryKey: qk.positions });
-    },
-  });
-}
-
-export function useTopUpGas() {
-  const qc = useQueryClient();
-  // One id per ATTEMPT-UNTIL-SUCCESS: a re-press after a lost response sends
-  // the same id, and the server answers from its memo instead of paying
-  // again. A success mints a fresh id for the next top-up.
-  const idRef = useRef<string | null>(null);
-  return useMutation({
-    // `marketId`: the market being traded. The top-up is paid from that
-    // market's cross margin, in its collateral token.
-    mutationFn: ({ amountUsd, address, marketId }: { amountUsd: number; address: string; marketId?: number | null }) => {
-      idRef.current ??= `gas-${uuid()}`.slice(0, 64);
-      return postJson<TopUpGasResponse>('/boros/pair/top-up-gas', {
-        amountUsd,
-        address,
-        clientOrderId: idRef.current,
-        ...(marketId != null ? { marketId } : {}),
-      });
-    },
-    onSuccess: () => {
-      idRef.current = null;
-      void qc.invalidateQueries({ queryKey: ['boros', 'pair', 'simulate'] });
-      void qc.invalidateQueries({ queryKey: qk.borosAgent });
     },
   });
 }

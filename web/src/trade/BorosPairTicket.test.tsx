@@ -925,9 +925,8 @@ describe('BorosPairTicket', () => {
     expect(screen.getByRole('button', { name: /Confirm/i })).toBeEnabled();
   });
 
-  it('still offers a manual top-up on a low balance, at an amount the user can edit', async () => {
+  it('offers no manual top-up on a low balance: the order tops itself up', async () => {
     const user = userEvent.setup();
-    const bodies: Record<string, unknown>[] = [];
     server.use(
       ...handlers({
         gasBalanceUsd: 0.05,
@@ -937,33 +936,14 @@ describe('BorosPairTicket', () => {
           ],
         },
       }),
-      http.post('/api/boros/pair/top-up-gas', async ({ request }) => {
-        bodies.push((await request.json()) as Record<string, unknown>);
-        return HttpResponse.json(env({ balanceUsd: 20.05 }));
-      }),
     );
     renderWithClient(<BorosPairTicket />);
     await fillTicket(user);
 
-    const field = (await screen.findByLabelText(/Top up gas by hand \(USD\)/i)) as HTMLInputElement;
-    expect(field.value).toBe('5');
-    const button = screen.getByRole('button', { name: /Top up gas/i });
-
-    await user.clear(field);
-    await user.type(field, '1');
-    expect(button).toBeDisabled();
-    expect(screen.getByText('Minimum is 2')).toBeInTheDocument();
-    await user.clear(field);
-    await user.type(field, '500');
-    expect(button).toBeDisabled();
-    expect(screen.getByText('Maximum is 100')).toBeInTheDocument();
-
-    await user.clear(field);
-    await user.type(field, '20');
-    // A hold, not a click: it moves margin.
-    await user.pointer({ keys: '[MouseLeft>]', target: button });
-    await waitFor(() => expect(bodies.length).toBe(1), { timeout: 3_000 });
-    expect(bodies[0]).toMatchObject({ amountUsd: 20, address: ADDRESS, clientOrderId: expect.stringMatching(/^gas-/) });
+    expect(await screen.findByText(/tops it up as it sends/i)).toBeInTheDocument();
+    expect(screen.queryByLabelText(/Top up gas/i)).toBeNull();
+    expect(screen.queryByRole('button', { name: /Top up gas/i })).toBeNull();
+    expect(screen.getByRole('button', { name: /Confirm/i })).toBeEnabled();
   });
 
   it('says reduce-only is enforced by sizing, not by the venue', async () => {
@@ -1679,8 +1659,8 @@ describe('BorosPairTicket — spread ticket', () => {
   const spreadRow = (over: Record<string, unknown> = {}) =>
     marketRow({
       marketId: SPREAD_OPP_MARKET_ID,
-      name: 'ETH HL-Gate spread 27 Nov 2026',
-      venue: 'HL-Gate',
+      name: 'ETH Spread HL-GATE 27 Nov 2026',
+      venue: 'HL-GATE',
       tokenId: 2,
       collateral: 'ETH',
       maturity: SPREAD_OPP_MATURITY,
@@ -1718,8 +1698,8 @@ describe('BorosPairTicket — spread ticket', () => {
         legs: [
           simLeg({
             marketId: SPREAD_OPP_MARKET_ID,
-            marketName: 'ETH HL-Gate spread 27 Nov 2026',
-            venue: 'HL-Gate',
+            marketName: 'ETH Spread HL-GATE 27 Nov 2026',
+            venue: 'HL-GATE',
             execApr: 0.0285,
             liquidationApr: 0.051,
             marginRequired: 0.000864,
@@ -1764,7 +1744,7 @@ describe('BorosPairTicket — spread ticket', () => {
     );
     await user.click(screen.getByRole('button', { name: 'fire' }));
 
-    const name = await screen.findByText('ETH HL-Gate spread 27 Nov 2026');
+    const name = await screen.findByText('ETH Spread HL-GATE 27 Nov 2026');
     expect(name.parentElement?.querySelector('[aria-hidden="true"]')).not.toBeNull();
     expect(screen.queryByText('Market A')).not.toBeInTheDocument();
     expect(screen.getByLabelText(/^Size \(ETH\)/)).toHaveValue('0.121');
@@ -1831,7 +1811,7 @@ describe('BorosPairTicket — spread ticket', () => {
       />,
     );
     await user.click(screen.getByRole('button', { name: 'fire' }));
-    await screen.findByText('ETH HL-Gate spread 27 Nov 2026');
+    await screen.findByText('ETH Spread HL-GATE 27 Nov 2026');
     expect(screen.getByLabelText(/^Size \(ETH\)/)).toHaveValue(String(SIZE));
 
     const confirm = await screen.findByRole('button', { name: /Confirm · 1 Boros market order/ });
@@ -1841,7 +1821,7 @@ describe('BorosPairTicket — spread ticket', () => {
 
     const report = within(screen.getByRole('status'));
     expect(report.getByText('partially filled')).toBeInTheDocument();
-    expect(report.getByText(/^ETH HL-Gate spread 27 Nov 2026 · short/)).toBeInTheDocument();
+    expect(report.getByText(/^ETH Spread HL-GATE 27 Nov 2026 · short/)).toBeInTheDocument();
     expect(report.queryByText('Fee')).not.toBeInTheDocument();
     expect(report.queryByRole('button', { name: 'Complete now at market' })).not.toBeInTheDocument();
     await user.click(report.getByRole('button', { name: 'Retry the rest' }));
@@ -1859,33 +1839,9 @@ describe('BorosPairTicket — spread ticket', () => {
 
     const receipt = within(await screen.findByRole('status'));
     expect(await receipt.findByText('filled')).toBeInTheDocument();
-    expect(receipt.getByText(/^ETH HL-Gate spread 27 Nov 2026 · short/)).toBeInTheDocument();
+    expect(receipt.getByText(/^ETH Spread HL-GATE 27 Nov 2026 · short/)).toBeInTheDocument();
     expect(receipt.getByText('Fee')).toBeInTheDocument();
     expect(receipt.getByText('0.000017 ETH')).toBeInTheDocument();
-  });
-
-  it('tops up gas on the spread market when the balance is low', async () => {
-    const bodies: Record<string, unknown>[] = [];
-    server.use(
-      ...spreadHandlers(() => {}, { gasBalanceUsd: 0.05 }),
-      http.post('/api/boros/pair/top-up-gas', async ({ request }) => {
-        bodies.push((await request.json()) as Record<string, unknown>);
-        return HttpResponse.json(env({ balanceUsd: 5.05, sentUsd: 5 }));
-      }),
-    );
-    const user = userEvent.setup();
-    renderWithClient(
-      <BorosPrefillHarness
-        guided
-        prefill={{ base: 'ETH', longVenue: 'Gate', shortVenue: 'Hyperliquid', maturity: SPREAD_OPP_MATURITY, size: 300, sizeBase: 0.121 }}
-      />,
-    );
-    await user.click(screen.getByRole('button', { name: 'fire' }));
-
-    await screen.findByLabelText(/Top up gas by hand \(USD\)/i);
-    await user.pointer({ keys: '[MouseLeft>]', target: screen.getByRole('button', { name: /Top up gas/i }) });
-    await waitFor(() => expect(bodies).toHaveLength(1), { timeout: 3_000 });
-    expect(bodies[0]).toMatchObject({ marketId: SPREAD_OPP_MARKET_ID, address: ADDRESS });
   });
 
   it('keeps the two single markets when the venues list no spread at that maturity', async () => {
@@ -1900,7 +1856,7 @@ describe('BorosPairTicket — spread ticket', () => {
     await user.click(screen.getByRole('button', { name: 'fire' }));
 
     expect(await screen.findByText('Market A')).toBeInTheDocument();
-    expect(screen.queryByText(/HL-Gate spread/)).not.toBeInTheDocument();
-    expect(screen.queryByRole('option', { name: /HL-Gate/ })).not.toBeInTheDocument();
+    expect(screen.queryByText(/Spread HL-GATE/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: /HL-GATE/ })).not.toBeInTheDocument();
   });
 });

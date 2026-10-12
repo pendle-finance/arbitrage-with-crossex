@@ -30,7 +30,6 @@ import {
   useBorosPairContext,
   useBorosPairSimulation,
   useExecuteBorosPair,
-  useTopUpGas,
 } from '../api/queries';
 import type {
   BorosPairSimulation,
@@ -57,7 +56,6 @@ import { maxOpenSize } from './borosMaxSize';
 import { FieldLabel, PickChip } from './SymbolCombobox';
 import {
   BlockerList,
-  GasTopUp,
   DirectionToggle,
   MarketCard,
   MarketSelect,
@@ -177,7 +175,6 @@ export function BorosPairTicket({
    * call 2026-09-18).
    */
   const intent: BorosPairIntent = intentRaw;
-  const [gasTopUpStr, setGasTopUpStr] = useState('5');
 
   /**
    * A card asked to open its missing Boros legs: pick the two markets that
@@ -716,7 +713,6 @@ export function BorosPairTicket({
   }, [marketA, marketB, dirA, dirB, intent]);
 
   const execute = useExecuteBorosPair();
-  const topUpGas = useTopUpGas();
 
   // Tell the host surface an execution is in flight, so it can lock its close
   // controls (see the prop doc). Cleared on unmount so a host never stays
@@ -1247,7 +1243,7 @@ export function BorosPairTicket({
           />
 
           <PairCosts sim={simulation} singleLeg={activeLeg} />
-          <PositionArithmetic sim={simulation} singleLeg={activeLeg} spreadVenues={rowA?.spreadVenues} />
+          <PositionArithmetic sim={simulation} singleLeg={activeLeg} spreadVenues={rowA?.spreadVenues} base={rowA?.base} />
 
           {simulation.reasons.length ? (
             <ul className="flex flex-col gap-1 border-t border-ink-800/80 pt-2 text-[10.5px] leading-relaxed text-ink-400">
@@ -1286,22 +1282,6 @@ export function BorosPairTicket({
         </p>
       ))}
       <BlockerList blockers={blockers} />
-      <GasTopUp
-        gasBalanceUsd={sim.data?.gasBalanceUsd}
-        amount={gasTopUpStr}
-        onAmountChange={setGasTopUpStr}
-        onTopUp={canTrade && address ? () => topUpGas.mutate({ amountUsd: Number(gasTopUpStr), address, marketId: marketA ?? marketB }) : undefined}
-        busy={topUpGas.isPending}
-      />
-      {topUpGas.isSuccess && (
-        <p className="rounded-lg border border-emerald-500/25 bg-emerald-500/[0.04] px-2.5 py-1.5 text-[11px] leading-relaxed text-emerald-200">
-          Sent a ${topUpGas.data.sentUsd} gas top-up{topUpGas.data.paidFrom ? `, paid in ${topUpGas.data.paidFrom}` : ''}. Boros credits it once the transaction is
-          indexed, so the balance above catches up within a minute — no need to send it again.
-        </p>
-      )}
-      {topUpGas.isError && (
-        <QueryError title="The gas top-up did not confirm" error={topUpGas.error} />
-      )}
 
       {execute.isError && <QueryError title="The pair was not sent" error={execute.error} />}
 

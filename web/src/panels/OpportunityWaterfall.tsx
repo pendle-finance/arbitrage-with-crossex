@@ -25,7 +25,7 @@ import {
   type WaterfallStep,
 } from '../components/Waterfall';
 import { fmtPct, fmtUsd, prettyVenue } from '../lib/fmt';
-import { spreadLabel } from '../lib/spread';
+import { spreadName } from '../lib/spread';
 
 const SECONDS_IN_YEAR = 365 * 86_400;
 
@@ -199,7 +199,7 @@ function buildCapitalSteps(pair: OpportunityPair): WaterfallStep[] {
           imUsd,
           'bg-info/45',
           'Boros spread IM',
-          `Boros initial margin · ${spreadLabel(leg.spreadVenues)} spread (${side}) ${margin}`,
+          `Boros initial margin · ${spreadName(pair.base, leg.spreadVenues)} (${side}) ${margin}`,
         ]
       : [
           `cap-boros-${side}`,

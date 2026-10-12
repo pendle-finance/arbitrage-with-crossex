@@ -989,21 +989,6 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
 
     getGasBalance: readGasBalance,
 
-    async payTreasury(amountUsd: number, marketId: number): Promise<void> {
-      const calldatas = await buildPayTreasuryCalldata(Math.round(amountUsd * 100), marketId);
-      const res = await submitCalls(await signCalls(calldatas));
-      if (!res.length) {
-        throw new CoreError(
-          `Boros returned no result for the $${amountUsd} gas top-up — cannot tell whether it landed.`,
-          'venue-rejected',
-        );
-      }
-      const refused = res.find((r) => r?.error);
-      if (refused) {
-        throw new CoreError(`Boros refused the gas top-up: ${refused.error}`, 'venue-rejected');
-      }
-    },
-
     /**
      * A close is an ordinary opposing market order — Boros has no close
      * primitive and no reduce-only flag — so it goes out on exactly the same

@@ -87,7 +87,7 @@ const market = (marketId: number, venue: string, base: string, maturity: number)
   ({ marketId, venue, base, maturity, state: 'Normal', maxRateDeviationApr: 0.04, tokenId: 2, spreadVenues: null }) as BorosMarket;
 
 const spreadMarket = (marketId: number, maturity: number): BorosMarket => ({
-  ...market(marketId, 'HL-Gate', 'ETH', maturity),
+  ...market(marketId, 'HL-GATE', 'ETH', maturity),
   spreadVenues: ['HYPERLIQUID', 'GATE'],
 });
 

@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fetchBorosMarket, fetchBorosMarkets, type BorosMarket, type FetchLike } from '../../src/core/boros/client';
 import { groupBorosMarkets } from '../../src/core/boros/opportunities';
 import { findSpread, isSpreadMarket, parseSpreadVenues, readSpreadSide } from '../../src/core/boros/spread';
-import { spreadLabel } from '../../web/src/lib/spread';
+import { spreadName, spreadPlatform } from '../../web/src/lib/spread';
 
 type RawMarket = Record<string, unknown>;
 
@@ -61,7 +61,7 @@ describe('spread markets', () => {
     expect(byId(markets, 63).spreadVenues).toEqual(['HYPERLIQUID', 'GATE']);
     expect(byId(markets, 51).spreadVenues).toBeNull();
     expect(byId(markets, 60).spreadVenues).toBeNull();
-    expect(byId(markets, 59).venue).toBe('HL-Gate');
+    expect(byId(markets, 59).venue).toBe('HL-GATE');
     expect(byId(markets, 51).venue).toBe('Hyperliquid');
     expect(byId(markets, 60).venue).toBe('Gate');
     expect(isSpreadMarket(byId(markets, 59))).toBe(true);
@@ -75,9 +75,9 @@ describe('spread markets', () => {
   it('names a spread from its two venues and keeps a single market on its Boros name', async () => {
     const markets = await fetchBorosMarkets(serve(fixture.results));
 
-    expect(byId(markets, 59).name).toBe('ETH HL-Gate spread 27 Nov 2026');
-    expect(byId(markets, 58).name).toBe('BTC HL-Gate spread 27 Nov 2026');
-    expect(byId(markets, 63).name).toBe('ETH HL-Gate spread 30 Oct 2026');
+    expect(byId(markets, 59).name).toBe('ETH Spread HL-GATE 27 Nov 2026');
+    expect(byId(markets, 58).name).toBe('BTC Spread HL-GATE 27 Nov 2026');
+    expect(byId(markets, 63).name).toBe('ETH Spread HL-GATE 30 Oct 2026');
     expect(byId(markets, 51).name).toBe('Hyperliquid ETH 27 Nov 2026');
     expect(byId(markets, 60).name).toBe('Gate ETHUSDT 27 Nov 2026');
   });
@@ -170,9 +170,10 @@ describe('spread markets', () => {
     expect(readSpreadSide(venues, {})).toBeNull();
   });
 
-  it('names the spread from its venues', () => {
-    expect(spreadLabel(['HYPERLIQUID', 'GATE'])).toBe('HL-Gate');
-    expect(spreadLabel(['GATE', 'HYPERLIQUID'])).toBe('Gate-HL');
-    expect(spreadLabel(['BINANCE', 'OKX'])).toBe('Binance-OKX');
+  it('names the spread as the Boros app does', () => {
+    expect(spreadPlatform(['HYPERLIQUID', 'GATE'])).toBe('HL-GATE');
+    expect(spreadPlatform(['GATE', 'HYPERLIQUID'])).toBe('GATE-HL');
+    expect(spreadPlatform(['BINANCE', 'OKX'])).toBe('BINANCE-OKX');
+    expect(spreadName('ETH', ['HYPERLIQUID', 'GATE'])).toBe('ETH Spread HL-GATE');
   });
 });

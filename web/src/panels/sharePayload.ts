@@ -1,4 +1,4 @@
-/** The asset view's 4-leg pair → the v1 share payload.
+/** The asset view's pair → the v1 share payload.
  *
  * WHITELIST-COPY ONLY — every field is named here explicitly, and the pair
  * is never spread. That is the privacy contract: nothing identifying has a
@@ -7,7 +7,45 @@
  * the link sees is exactly what the sharer saw. */
 import type { ShareLegV1, SharePayloadV1 } from '../lib/shareCodec';
 import { spreadShareVenue } from '../lib/spread';
-import { pairLockedSpread, type PairEstimate } from './assets/assetModel';
+import { pairLockedSpread, type PairEstimate, type PairLegDetail } from './assets/assetModel';
+
+type ShareSourceLeg = Pick<PairLegDetail, 'kind' | 'venue' | 'side' | 'notionalUsd' | 'sizeBase' | 'lockedApr' | 'spreadVenues'>;
+
+/**
+ * Every Boros leg of the pair as ONE spread leg, however Boros holds it: a
+ * spread market, two single legs, or both (mozzarella, 2026-10-12). Two single
+ * legs on venues A and B lock the same thing a spread on A−B does, so the card
+ * reads the same in every case. The leg is sized per perp side (a spread counts
+ * whole, a single half, as `pairLockedSpread` counts it) and carries the pair's
+ * net locked spread. Left as they are when the Boros legs do not span exactly
+ * two venues, or the singles on one venue disagree on side.
+ */
+export function borosLegsAsSpread(legs: readonly ShareSourceLeg[], lockedSpread: number): ShareSourceLeg[] {
+  const yu = legs.filter((l) => l.kind === 'yu');
+  if (yu.length === 0) return [...legs];
+  const real = yu.find((l) => l.spreadVenues);
+  const venueSet = new Set(yu.flatMap((l) => (l.spreadVenues ? [...l.spreadVenues] : [l.venue]).map((v) => v.toUpperCase())));
+  if (venueSet.size !== 2) return [...legs];
+  // The order Boros names its one spread by (HL first), else A to Z.
+  const venues = (real?.spreadVenues?.map((v) => v.toUpperCase()) ??
+    [...venueSet].sort((a, b) => (a === 'HYPERLIQUID' ? -1 : b === 'HYPERLIQUID' ? 1 : a < b ? -1 : 1))) as [string, string];
+  const firstSides = new Set(yu.filter((l) => !l.spreadVenues && l.venue.toUpperCase() === venues[0]).map((l) => l.side));
+  if (firstSides.size > 1) return [...legs];
+  const side = real?.side ?? [...firstSides][0];
+  if (!side) return [...legs];
+  const half = (l: ShareSourceLeg) => (l.spreadVenues ? 1 : 0.5);
+  const merged: ShareSourceLeg = {
+    kind: 'yu',
+    venue: venues[0],
+    side,
+    notionalUsd: yu.reduce((t, l) => t + l.notionalUsd * half(l), 0),
+    sizeBase: yu.reduce((t, l) => t + l.sizeBase * half(l), 0),
+    // Unknown when any leg's rate is: a guess here would be a public claim.
+    lockedApr: yu.every((l) => l.lockedApr !== null) ? lockedSpread : null,
+    spreadVenues: venues,
+  };
+  return [...legs.filter((l) => l.kind !== 'yu'), merged];
+}
 
 /** PairEstimate → the same v1 payload, for the asset view's pair popup.
  *
@@ -42,7 +80,8 @@ export function pairSharePayload(
   // Same $100 bucket as the strategy card: an exact notional would join a
   // public Boros fill uniquely.
   const round100 = (v: number) => Math.round(v / 100) * 100;
-  const legs: ShareLegV1[] = pair.legs.map((l) => {
+  const sp = pairLockedSpread({ ...pair, lockedAprFwd: opts.lockedAprFwd }) ?? 0;
+  const legs: ShareLegV1[] = borosLegsAsSpread(pair.legs, sp).map((l) => {
     const leg: ShareLegV1 = {
       k: l.kind === 'yu' ? 'b' : 'p',
       x: l.kind === 'yu' && l.spreadVenues ? spreadShareVenue(l.spreadVenues) : l.venue,
@@ -83,7 +122,7 @@ export function pairSharePayload(
     // NOTIONAL, not the leveraged-on-capital `lockedAprFwd` (which read as a
     // 32% "spread" beside a 26% APR). Same helper as the pair card's
     // sub-line, so the link shows the figure the sharer saw.
-    sp: pairLockedSpread({ ...pair, lockedAprFwd: opts.lockedAprFwd }) ?? 0,
+    sp,
     // A pair only exists once both sides are on, and assetModel builds it from
     // legs that are open on both venues.
     h: 'h',

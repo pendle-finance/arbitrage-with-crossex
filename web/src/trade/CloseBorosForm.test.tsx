@@ -637,7 +637,7 @@ describe('CloseBorosForm — a mixed book: two singles and one spread', () => {
       HttpResponse.json(
         env({
           markets: [row(51, 'Hyperliquid ETH', 'Hyperliquid', -single, null), row(60, 'Gate ETH', 'Gate', single, null)],
-          spreadMarkets: [row(59, 'ETH Spread', 'HL-Gate', -spread, ['HYPERLIQUID', 'GATE'])],
+          spreadMarkets: [row(59, 'ETH Spread', 'HL-GATE', -spread, ['HYPERLIQUID', 'GATE'])],
           crossByToken: [{ tokenId: 2, available: 5_000 }],
           isolatedByMarket: [],
           defaultSlippageApr: 0.0025,
@@ -699,7 +699,7 @@ describe('CloseBorosForm — a mixed book: two singles and one spread', () => {
     server.use(...mixed(0.3, 0.255, sent), closeReturns({ fill: fill(MINE) }, perLeg));
     renderWithClient(<CloseBorosForm legs={book(0.3, 0.255)} onClosed={(l, q) => closed.push([l.marketId!, q])} />);
 
-    expect(await screen.findAllByText('HL-Gate')).not.toHaveLength(0);
+    expect(await screen.findAllByText('ETH Spread HL-GATE')).not.toHaveLength(0);
     expect(screen.getAllByText('Boros')).toHaveLength(3);
     expect(screen.getByText('Close size · all legs')).toBeInTheDocument();
     expect(screen.getByLabelText(/Close size, applied to all legs/)).toHaveValue('0.555');
@@ -885,7 +885,7 @@ describe('CloseBorosForm — a mixed book: two singles and one spread', () => {
     renderWithClient(
       <CloseBorosForm legs={[{ ...book(0.3, 0.255)[2], spreadVenues: ['HYPERLIQUID', 'GATE'] }]} />,
     );
-    expect(await screen.findByText('HL-Gate')).toBeInTheDocument();
+    expect(await screen.findByText('ETH Spread HL-GATE')).toBeInTheDocument();
     expect(screen.queryByText('Hyperliquid')).toBeNull();
     expect(screen.getByText(/Leaves both bundles:/)).toHaveTextContent(/Leaves both bundles: .*Hyperliquid and .*Gate\./);
     expect(screen.getByText(/The perps stay open\./)).toBeInTheDocument();

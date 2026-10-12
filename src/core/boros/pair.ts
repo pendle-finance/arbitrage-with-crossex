@@ -845,6 +845,10 @@ export interface BorosPairAccountState {
    * an install that cannot place orders anyway.
    */
   gasBalanceUsd?: number | null;
+  /** The most free cross margin, in USD, in any OTHER coin a gas top-up can be
+   * paid from (one with a live single market). An open whose own coin cannot
+   * spare the top-up after its legs pays it from there. Unknown = 0. */
+  gasFallbackFreeUsd?: number | null;
 }
 
 export type BlockerCode =
@@ -899,6 +903,9 @@ export interface PairGate {
   requiresAcknowledgement: boolean;
   /** The legs that oppose, so the copy can name the market and the size. */
   opposingLegs: number[];
+  /** An open's gas top-up cannot come from its own coin after the legs, so the
+   * order pays it from the coin with the most free cross margin. */
+  gasTopUpFromFallback: boolean;
 }
 
 /**
@@ -1129,9 +1136,19 @@ export function evaluatePairGate(input: EvaluatePairInput): PairGate {
     autoTopUpUsd > 0 && sim.collateralPriceUsd !== null && sim.collateralPriceUsd > 0
       ? autoTopUpUsd / sim.collateralPriceUsd
       : 0;
+  // An open's top-up runs before its orders. When its own coin cannot spare it
+  // on top of the legs, another coin with enough free cross margin pays it, as
+  // a close's does, so the open is not blocked for one dollar of gas.
+  const openTopUpElsewhere =
+    sim.intent !== 'close' &&
+    autoTopUpUsd > 0 &&
+    autoTopUpToken > 0 &&
+    crossKnown &&
+    crossRequired + autoTopUpToken > (account.cross?.available ?? 0) &&
+    (input.account.gasFallbackFreeUsd ?? 0) >= autoTopUpUsd;
   if (crossKnown && crossRequired > 0) {
     // A close's top-up runs after its closes and may come from another coin.
-    if (sim.intent !== 'close') crossRequired += autoTopUpToken;
+    if (sim.intent !== 'close' && !openTopUpElsewhere) crossRequired += autoTopUpToken;
     const available = account.cross?.available ?? 0;
     if (crossRequired > available) {
       blockers.push({
@@ -1142,7 +1159,7 @@ export function evaluatePairGate(input: EvaluatePairInput): PairGate {
         // their order cannot go out.
         message: `Cross margin is short ${fmtSize(crossRequired - available)} ${sim.collateral} to open ${
           tradingLegs > 2 ? 'all legs' : tradingLegs === 2 ? 'both legs' : 'this leg'
-        }${autoTopUpToken > 0 && sim.intent !== 'close' ? `, including about $${autoTopUpUsd.toFixed(2)} of gas top-up` : ''}.`,
+        }${autoTopUpToken > 0 && sim.intent !== 'close' && !openTopUpElsewhere ? `, including about $${autoTopUpUsd.toFixed(2)} of gas top-up` : ''}.`,
       });
     }
   }
@@ -1171,7 +1188,7 @@ export function evaluatePairGate(input: EvaluatePairInput): PairGate {
     const topUp = AUTO_TOP_UP_USD + (gas < 0 ? -gas : 0);
     warnings.push(
       `Prepaid gas on this Boros account is ${gas <= 0 ? 'empty' : `low, about $${gas.toFixed(2)}`}, so this order tops it up as it sends. ` +
-        (sim.intent === 'close' && (account.cross?.available ?? 0) < autoTopUpToken
+        ((sim.intent === 'close' && (account.cross?.available ?? 0) < autoTopUpToken) || openTopUpElsewhere
           ? `Your ${sim.collateral} cross margin cannot spare about $${topUp.toFixed(2)}, so it comes from the coin with the most free cross margin.`
           : `That takes about $${topUp.toFixed(2)} worth of ${sim.collateral} from this market's cross margin, on top of the margin for these legs.`),
     );
@@ -1200,6 +1217,7 @@ export function evaluatePairGate(input: EvaluatePairInput): PairGate {
     warnings,
     requiresAcknowledgement: opposingLegs.length > 0,
     opposingLegs,
+    gasTopUpFromFallback: openTopUpElsewhere,
   };
 }
 

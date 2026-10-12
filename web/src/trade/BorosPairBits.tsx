@@ -21,10 +21,9 @@ import type {
 } from '../api/types';
 import { Chip } from '../components/Chip';
 import { SpreadIcon, VenueIcon } from '../components/AssetIcon';
-import { HoldToConfirmButton } from '../components/HoldToConfirmButton';
-import { amountError } from '../lib/amount';
 import { fmtDateShort, fmtDateUtc, fmtPct, fmtUsd, sigGrouped } from '../lib/fmt';
-import { spreadLabel, type SpreadVenues } from '../lib/spread';
+import { spreadName, type SpreadVenues } from '../lib/spread';
+import { SpreadName } from '../components/SpreadName';
 import { ChevronDown } from 'lucide-react';
 
 /** Was this leg actually sent to the venue? A not-submitted sentinel is
@@ -36,12 +35,6 @@ export const legSubmitted = (leg: BorosLegFill): boolean =>
 export const legLetter = (index: number): string => String.fromCharCode(65 + index);
 
 
-const MIN_TOP_UP_USD = 2;
-const MAX_TOP_UP_USD = 100;
-/** Mirrors MIN_GAS_BALANCE_USD server-side, the same way MIN_TOP_UP_USD mirrors
- * the route's own bound. Only decides whether to OFFER the manual top-up — the
- * order tops itself up regardless, so a drift here costs nothing. */
-const LOW_GAS_USD = 0.3;
 
 /** USD at a precision that suits the amount. A whole-dollar format reads a
  * real $0.45 of margin as "$0", which is the same "it will do nothing"
@@ -221,7 +214,7 @@ export function MarketCard({
  */
 export const marketName = (row: BorosPairMarketRow): string =>
   row.spreadVenues
-    ? `${row.base} ${spreadLabel(row.spreadVenues)} spread ${fmtDateShort(row.maturity, { year: 'numeric', timeZone: 'UTC' })}`
+    ? `${spreadName(row.base, row.spreadVenues)} ${fmtDateShort(row.maturity, { year: 'numeric', timeZone: 'UTC' })}`
     : row.name;
 
 export const marketLabel = (m: BorosPairMarketRow): string =>
@@ -452,8 +445,11 @@ export function PositionArithmetic({
   sim,
   singleLeg,
   spreadVenues,
+  base,
 }: {
   sim: BorosPairSimulation;
+  /** The coin a spread leg is named for; the collateral when not given. */
+  base?: string;
   singleLeg?: SoloLeg;
   spreadVenues?: SpreadVenues | null;
 }) {
@@ -482,7 +478,7 @@ export function PositionArithmetic({
             {/* Venue only: the colour of the figure carries the side. */}
             <span className="flex min-w-0 items-center gap-1.5 text-[12px] text-ink-200">
               {spread ? <SpreadIcon venues={spread} /> : <VenueIcon venue={leg.venue} size={16} />}
-              <span className="truncate">{spread ? `${spreadLabel(spread)} spread` : leg.venue}</span>
+              {spread ? <SpreadName base={base ?? sim.collateral} venues={spread} /> : <span className="truncate">{leg.venue}</span>}
             </span>
             <span
               className="num shrink-0 text-[12px] text-ink-400"
@@ -566,65 +562,6 @@ export function PairCosts({
     </div>
   );
 }
-/**
- * The manual gas top-up.
- *
- * An order tops its own gas up as it sends (AUTO_TOP_UP_BELOW_USD in borosApi),
- * so this is no longer the way to get an order out — it used to hang off a
- * blocker, which made a low balance a dead end. It stays for the two cases the
- * automatic one does not cover: prepaying more than an order would, and an
- * install where the automatic top-up cannot run (no USD market, or the balance
- * could not be read) and the venue refuses the order for gas.
- */
-export function GasTopUp({
-  gasBalanceUsd,
-  amount,
-  onAmountChange,
-  onTopUp,
-  busy,
-}: {
-  gasBalanceUsd?: number | null;
-  amount?: string;
-  onAmountChange?: (raw: string) => void;
-  onTopUp?: () => void;
-  busy?: boolean;
-}) {
-  if (!onTopUp || gasBalanceUsd === null || gasBalanceUsd === undefined) return null;
-  if (gasBalanceUsd >= LOW_GAS_USD) return null;
-  const err = amountError(amount ?? '', { min: MIN_TOP_UP_USD, max: MAX_TOP_UP_USD });
-  return (
-    <div className="flex flex-wrap items-center gap-1.5 card px-2.5 py-2 text-[11px] text-ink-300">
-      <label htmlFor="boros-gas-topup" className="text-ink-400">
-        Top up gas by hand (USD)
-      </label>
-      <input
-        id="boros-gas-topup"
-        className={`input num w-20 py-0.5 text-[11px] ${err ? '!border-rose-500/60' : ''}`}
-        inputMode="decimal"
-        aria-invalid={err ? true : undefined}
-        aria-describedby={err ? 'boros-gas-topup-error' : undefined}
-        value={amount ?? ''}
-        onChange={(e) => onAmountChange?.(e.target.value)}
-      />
-      {/* Moves margin into the gas budget — a hold, like every other
-          real-money control here, not a click. */}
-      <HoldToConfirmButton
-        onConfirm={onTopUp}
-        disabled={busy || err !== null || !amount?.trim()}
-        className="!rounded !px-2 !py-0.5 !text-[11px] !font-medium"
-        title="Press and hold to move this amount from margin into the gas budget"
-      >
-        {busy ? 'Topping up…' : 'Top up gas'}
-      </HoldToConfirmButton>
-      {err && (
-        <p id="boros-gas-topup-error" role="alert" className="w-full text-rose-300">
-          {err}
-        </p>
-      )}
-    </div>
-  );
-}
-
 /** Confirm blockers, each with its own remediation where one exists (§6). */
 export function BlockerList({ blockers }: { blockers: BorosPairBlocker[] }) {
   if (blockers.length === 0) return null;

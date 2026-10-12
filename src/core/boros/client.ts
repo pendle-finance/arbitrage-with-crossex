@@ -16,7 +16,7 @@
  */
 import { BOROS_NETWORK } from '../../../web/src/lib/borosNetwork';
 import { prettyVenue } from '../../../web/src/lib/fmt';
-import { spreadLabel } from '../../../web/src/lib/spread';
+import { spreadName, spreadPlatform } from '../../../web/src/lib/spread';
 import { CoreError } from '../errors';
 import { BOOK_VENUES } from '../estimate/books';
 import { borosInitialMarginUsd } from './opportunities';
@@ -414,9 +414,9 @@ function normalizeBorosMarket(m: Record<string, unknown>, nowSec: number): Boros
       marketId: Number(m.marketId),
       tokenId: Number(m.tokenId),
       name: spreadVenues
-        ? `${base} ${spreadLabel(spreadVenues)} spread ${due.getUTCDate()} ${due.toLocaleString('en-US', { month: 'short', timeZone: 'UTC' })} ${due.getUTCFullYear()}`
+        ? `${spreadName(base, spreadVenues)} ${due.getUTCDate()} ${due.toLocaleString('en-US', { month: 'short', timeZone: 'UTC' })} ${due.getUTCFullYear()}`
         : String(imData.name ?? ''),
-      venue: spreadVenues ? spreadLabel(spreadVenues) : venue,
+      venue: spreadVenues ? spreadPlatform(spreadVenues) : venue,
       base,
       maturity,
       paymentPeriod: Number(extConfig.paymentPeriod ?? 0),

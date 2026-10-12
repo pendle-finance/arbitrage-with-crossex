@@ -333,195 +333,6 @@ describe('POST /api/boros/pair/simulate', () => {
   });
 });
 
-describe('POST /api/boros/pair/top-up-gas', () => {
-  it('pays once and echoes the amount SENT, never a freshly read balance', async () => {
-    const paid: Array<[number, number]> = [];
-    const getGasBalance = vi.fn(async () => 0.05);
-    makeApp({}, undefined, {
-      ...orderClient(),
-      payTreasury: async (amountUsd, marketId) => {
-        paid.push([amountUsd, marketId]);
-      },
-      getGasBalance,
-    });
-    const res = await post('/api/boros/pair/top-up-gas', { amountUsd: 5 });
-    expect(res.statusCode).toBe(200);
-    expect(paid).toHaveLength(1);
-    expect(paid[0][0]).toBe(5);
-    expect(res.json().data).toEqual({ sentUsd: 5, paidFrom: 'USDT', replayed: false });
-    expect(getGasBalance).not.toHaveBeenCalled();
-  });
-
-  it('tops up an account that has entered no market — the cold start', async () => {
-    const paid: number[] = [];
-    makeApp({}, undefined, {
-      ...orderClient(),
-      payTreasury: async (amountUsd) => {
-        paid.push(amountUsd);
-      },
-    });
-    const res = await post('/api/boros/pair/top-up-gas', { amountUsd: 5 });
-    expect(res.statusCode).toBe(200);
-    expect(paid).toEqual([5]);
-  });
-
-  it.each([
-    ['under the floor, where the ops-fee sweep would eat it', 1],
-    ['over the cap, which the user cannot get back', 500],
-    ['not a number', 'five'],
-    ['absent', undefined],
-  ])('refuses an amount %s without spending anything', async (_label, amountUsd) => {
-    const payTreasury = vi.fn();
-    makeApp({}, undefined, { ...orderClient(), payTreasury });
-    const res = await post('/api/boros/pair/top-up-gas', { amountUsd });
-    expect(res.statusCode).toBe(400);
-    expect(payTreasury).not.toHaveBeenCalled();
-  });
-
-
-  it('answers 503 when this install cannot place Boros orders at all', async () => {
-    makeApp();
-    const res = await post('/api/boros/pair/top-up-gas', { amountUsd: 5 });
-    expect(res.statusCode).toBe(503);
-  });
-
-  it('pays ONCE for a re-press with the same id — a lost response is answered from the memo', async () => {
-    const paid: number[] = [];
-    makeApp({}, undefined, {
-      ...orderClient(),
-      payTreasury: async (amountUsd) => {
-        paid.push(amountUsd);
-      },
-    });
-    const first = await post('/api/boros/pair/top-up-gas', { amountUsd: 5, clientOrderId: 'gas-0000000001' });
-    const again = await post('/api/boros/pair/top-up-gas', { amountUsd: 5, clientOrderId: 'gas-0000000001' });
-    expect(first.json().data).toEqual({ sentUsd: 5, paidFrom: 'USDT', replayed: false });
-    expect(again.json().data).toEqual({ sentUsd: 5, paidFrom: 'USDT', replayed: true });
-    expect(paid).toEqual([5]);
-  });
-
-  it('refuses a second top-up while one is still in flight', async () => {
-    let release: () => void = () => {};
-    const landed = new Promise<void>((r) => {
-      release = r;
-    });
-    const paid: number[] = [];
-    makeApp({}, undefined, {
-      ...orderClient(),
-      payTreasury: async (amountUsd) => {
-        paid.push(amountUsd);
-        await landed;
-      },
-    });
-    const first = post('/api/boros/pair/top-up-gas', { amountUsd: 5, clientOrderId: 'gas-000000000a' });
-    // Let the first request reach the payment before the second arrives.
-    await new Promise((r) => setTimeout(r, 20));
-    const second = await post('/api/boros/pair/top-up-gas', { amountUsd: 5, clientOrderId: 'gas-000000000b' });
-    expect(second.statusCode).toBe(400);
-    expect(second.json().error.message).toMatch(/already in flight/);
-    release();
-    expect((await first).statusCode).toBe(200);
-    expect(paid).toEqual([5]);
-  });
-
-  it('pays from the zone of the market the user is trading', async () => {
-    const paid: Array<[number, number]> = [];
-    makeApp({}, undefined, {
-      ...orderClient(),
-      payTreasury: async (amountUsd, marketId) => {
-        paid.push([amountUsd, marketId]);
-      },
-    });
-    const res = await post('/api/boros/pair/top-up-gas', { amountUsd: 5, marketId: BN });
-    expect(res.statusCode).toBe(200);
-    expect(paid).toEqual([[5, BN]]);
-  });
-
-  it('refuses, spending nothing, when no zone can spare the dollars', async () => {
-    const payTreasury = vi.fn();
-    makeApp({ ...account(3) }, undefined, { ...orderClient(), payTreasury });
-    const res = await post('/api/boros/pair/top-up-gas', { amountUsd: 5, marketId: HL });
-    expect(res.statusCode).toBeGreaterThanOrEqual(400);
-    expect(res.json().error.message).toMatch(/No Boros cross margin has \$5\.00 free.*the most is about \$3\.00 of USDT/);
-    expect(payTreasury).not.toHaveBeenCalled();
-  });
-
-  describe('an ETH spread market', () => {
-    const SPREAD = 59;
-    const ethZone = (ethFree: number, usdtFree = 500_000) => ({
-      '/apis/v1/markets': {
-        results: [
-          {
-            ...market(SPREAD, 'hyperliquid-gate', 0.03),
-            tokenId: 2,
-            metadata: { underlyingSymbol: 'ETH', isSpreadMarket: true },
-            data: { midApr: 0.03, markApr: 0.03, floatingApr: 0.03, notionalOI: 1_000_000, assetMarkPrice: 0.38 },
-          },
-          market(HL, 'Hyperliquid', 0.09),
-        ],
-      },
-      '/apis/v1/accounts/market-acc-infos-by-root': {
-        results: [
-          { marketAcc: marketAcc(ADDRESS, 3), netBalance: raw(usdtFree), initialMargin: raw(0), positions: [] },
-          { marketAcc: marketAcc(ADDRESS, 2), netBalance: raw(ethFree), initialMargin: raw(0), positions: [] },
-        ],
-      },
-    });
-
-    it('pays the top-up from the spread market\'s ETH zone', async () => {
-      const paid: Array<[number, number]> = [];
-      makeApp(ethZone(0.01), undefined, {
-        ...orderClient(),
-        payTreasury: async (amountUsd, marketId) => {
-          paid.push([amountUsd, marketId]);
-        },
-      });
-      const res = await post('/api/boros/pair/top-up-gas', { amountUsd: 5, marketId: SPREAD });
-      expect(res.statusCode).toBe(200);
-      expect(paid).toEqual([[5, SPREAD]]);
-      expect(res.json().data).toEqual({ sentUsd: 5, paidFrom: 'ETH', replayed: false });
-    });
-
-    it('pays from USDT when the ETH zone cannot spare the dollars, and says so', async () => {
-      const paid: Array<[number, number]> = [];
-      makeApp(ethZone(0.01), undefined, {
-        ...orderClient(),
-        payTreasury: async (amountUsd, marketId) => {
-          paid.push([amountUsd, marketId]);
-        },
-      });
-      const res = await post('/api/boros/pair/top-up-gas', { amountUsd: 30, marketId: SPREAD });
-      expect(res.statusCode).toBe(200);
-      expect(paid).toEqual([[30, HL]]);
-      expect(res.json().data).toEqual({ sentUsd: 30, paidFrom: 'USDT', replayed: false });
-    });
-
-    it('refuses when ETH is short and USDT cannot pay; a spread-only ETH zone is no fallback', async () => {
-      const payTreasury = vi.fn();
-      makeApp(ethZone(0.01, 2), undefined, { ...orderClient(), payTreasury });
-      const res = await post('/api/boros/pair/top-up-gas', { amountUsd: 30, marketId: SPREAD });
-      expect(res.statusCode).toBeGreaterThanOrEqual(400);
-      expect(res.json().error.message).toMatch(/No Boros cross margin has \$30\.00 free.*the most is about \$2\.00 of USDT/);
-      expect(payTreasury).not.toHaveBeenCalled();
-    });
-  });
-
-  it('refuses an unlisted market', async () => {
-    const payTreasury = vi.fn();
-    makeApp({}, undefined, { ...orderClient(), payTreasury });
-    const res = await post('/api/boros/pair/top-up-gas', { amountUsd: 5, marketId: 4242 });
-    expect(res.statusCode).toBeGreaterThanOrEqual(400);
-    expect(payTreasury).not.toHaveBeenCalled();
-  });
-
-  it('answers 503 when the order client cannot top up', async () => {
-    makeApp({}, undefined, orderClient());
-    const res = await post('/api/boros/pair/top-up-gas', { amountUsd: 5 });
-    expect(res.statusCode).toBe(503);
-  });
-
-});
-
 describe('the automatic gas top-up picks a zone that can pay', () => {
   const ETH_MARKET = (id: number, venue: string, apr: number) => ({ ...market(id, venue, apr), tokenId: 2 });
   const ethBook = (ethNet: number, usdtNet: number, usdtPositions: Array<Record<string, unknown>> = []) => {
@@ -611,6 +422,57 @@ describe('the automatic gas top-up picks a zone that can pay', () => {
   it('skips a USDT zone with resting orders whose margin is not reported', async () => {
     const { seen } = await closeAtGasDebt(0, 5_000, [{ marketId: OK, signedSize: '0', orders: [{ side: 0 }] }]);
     expect(seen[0].gasTopUpMarket!(1.02, HL)).toBe(HL);
+  });
+
+  /** 1.7.5: an open whose ETH cannot spare the top-up after its legs pays it
+   * from idle USDT instead of blocking. The ETH free margin is set to exactly
+   * what the legs need, read from a first simulate. */
+  it.each([
+    ['$50', 50],
+    ['$6M', 6_000_000],
+  ])('an open on a tight ETH book pays its top-up from idle USDT (%s of USDT)', async (_book, usdtNet) => {
+    const openBody = (ids?: [string, string]) => ({
+      address: ADDRESS,
+      legs: [pairLeg(HL, 'long', 0.02, 1_000, ids?.[0]), pairLeg(BN, 'short', 0.02, 1_000, ids?.[1])],
+      intent: 'open',
+    });
+    makeApp(ethBook(1_000, usdtNet), undefined, { ...orderClient(), getGasBalance: async () => 0 });
+    const probe = (await post('/api/boros/pair/simulate', openBody())).json().data;
+    const need = (probe.simulation.legs as Array<{ marginRequired: number }>).reduce((t, l) => t + l.marginRequired, 0);
+    expect(need).toBeGreaterThan(0);
+    await app!.close();
+
+    const seen: PlaceOrdersOptions[] = [];
+    makeApp(ethBook(need, usdtNet), undefined, {
+      ...orderClient(),
+      getGasBalance: async () => 0,
+      placeMarketOrders: async (reqs, opts) => {
+        seen.push(opts ?? {});
+        return reqs.map((r) => okFill({ marketId: r.marketId, direction: r.direction, filledSize: r.size }));
+      },
+    });
+    const res = await post('/api/boros/pair/execute', openBody(['coid-gaso-a', 'coid-gaso-b']));
+    expect(res.json().error?.message ?? null).toBeNull();
+    expect(res.statusCode).toBe(200);
+    expect(seen).toHaveLength(1);
+    expect(seen[0].reducing).toBeFalsy();
+    expect(seen[0].gasTopUpMarket!(1, HL)).toBe(OK);
+  });
+
+  it('blocks that open when USDT cannot pay the top-up either', async () => {
+    const openBody = {
+      address: ADDRESS,
+      legs: [pairLeg(HL, 'long', 0.02, 1_000, 'coid-gasn-a'), pairLeg(BN, 'short', 0.02, 1_000, 'coid-gasn-b')],
+      intent: 'open',
+    };
+    makeApp(ethBook(1_000, 0.5), undefined, { ...orderClient(), getGasBalance: async () => 0 });
+    const probe = (await post('/api/boros/pair/simulate', openBody)).json().data;
+    const need = (probe.simulation.legs as Array<{ marginRequired: number }>).reduce((t, l) => t + l.marginRequired, 0);
+    await app!.close();
+    makeApp(ethBook(need, 0.5), undefined, { ...orderClient(), getGasBalance: async () => 0 });
+    const res = await post('/api/boros/pair/execute', openBody);
+    expect(res.statusCode).toBeGreaterThanOrEqual(400);
+    expect(JSON.stringify(res.json())).toMatch(/including about \$1\.00 of gas top-up/);
   });
 
   it('keeps the traded zone, as before, when no zone can pay', async () => {
@@ -1417,32 +1279,6 @@ describe('a Boros close at $6,000,000 that fills in part', () => {
   });
 });
 
-describe('POST /api/boros/pair/top-up-gas — only the logged-in wallet', () => {
-  it('refuses a top-up for a wallet that is not logged in, and pays nothing', async () => {
-    const payTreasury = vi.fn(async () => {});
-    makeApp({}, undefined, { ...orderClient(), payTreasury });
-    const res = await post('/api/boros/pair/top-up-gas', { amountUsd: 5, address: OTHER });
-    expect(res.statusCode).toBe(400);
-    expect(res.json().error.message).toBe(
-      'Top up works only for the logged-in wallet 0x1111…1111. Log in to 0x2222…2222 first.',
-    );
-    expect(payTreasury).not.toHaveBeenCalled();
-  });
-
-  it('pays for the logged-in wallet in any letter case', async () => {
-    const paid: number[] = [];
-    makeApp({}, undefined, {
-      ...orderClient(),
-      payTreasury: async (amountUsd) => {
-        paid.push(amountUsd);
-      },
-    });
-    const res = await post('/api/boros/pair/top-up-gas', { amountUsd: 5, address: ADDRESS.toUpperCase().replace('0X', '0x') });
-    expect(res.statusCode).toBe(200);
-    expect(paid).toEqual([5]);
-  });
-});
-
 describe('the approval read on a write route', () => {
   afterEach(() => {
     delete process.env.BOROS_AGENT_PRIVATE_KEY;
@@ -1453,7 +1289,6 @@ describe('the approval read on a write route', () => {
     resetAgentApprovalCache();
     process.env.BOROS_AGENT_PRIVATE_KEY = `0x${'a'.repeat(64)}`;
     const stub = borosStub(bodies());
-    const paid: number[] = [];
     app = makeTestApp({
       borosFetch: (url, init) =>
         url.includes('/agents/expiry-time')
@@ -1461,17 +1296,11 @@ describe('the approval read on a write route', () => {
               init?.signal?.addEventListener('abort', () => reject(new Error('aborted')));
             })
           : stub(url, init),
-      getBorosOrders: () => ({
-        ...orderClient(),
-        payTreasury: async (amountUsd: number) => {
-          paid.push(amountUsd);
-        },
-      }),
+      getBorosOrders: () => orderClient(),
     });
     const started = Date.now();
-    const res = await post('/api/boros/pair/top-up-gas', { amountUsd: 5 });
+    const res = await post('/api/boros/pair/execute', pairBody({ ids: ['coid-appr-a', 'coid-appr-b'] }));
     expect(res.statusCode).toBe(200);
-    expect(paid).toEqual([5]);
     expect(Date.now() - started).toBeLessThan(4_000);
   }, 8_000);
 });

@@ -817,6 +817,53 @@ describe('evaluatePairGate', () => {
     expect(codes(healthy)).not.toContain('cross-short-margin');
   });
 
+  /** 1.7.5: an open whose own coin cannot spare the top-up after its legs
+   * pays it from the best-funded other coin, as a close does, instead of
+   * blocking for one dollar of gas. */
+  it.each([
+    ['$50', 50],
+    ['$6M', 6_000_000],
+  ])('an open takes the top-up from another coin when its own cannot spare it (%s elsewhere)', (_book, otherUsd) => {
+    const sim = { ...gateInput().simulation, collateralPriceUsd: 2500 };
+    const im = sim.legs.reduce((t, l) => t + l.marginRequired!, 0);
+    const g = evaluatePairGate(
+      gateInput({
+        simulation: sim,
+        account: account({ cross: { available: im, hasPositionOrOrders: false }, gasBalanceUsd: 0, gasFallbackFreeUsd: otherUsd }),
+      }),
+    );
+    expect(codes(g)).not.toContain('cross-short-margin');
+    expect(g.gasTopUpFromFallback).toBe(true);
+    expect(g.warnings.join(' ')).toMatch(/cannot spare about \$1\.00, so it comes from the coin with the most free cross margin/);
+  });
+
+  it('still blocks an open when no other coin can pay the top-up either', () => {
+    const sim = { ...gateInput().simulation, collateralPriceUsd: 2500 };
+    const im = sim.legs.reduce((t, l) => t + l.marginRequired!, 0);
+    const g = evaluatePairGate(
+      gateInput({
+        simulation: sim,
+        account: account({ cross: { available: im, hasPositionOrOrders: false }, gasBalanceUsd: 0, gasFallbackFreeUsd: 0.99 }),
+      }),
+    );
+    expect(g.blockers.find((b) => b.code === 'cross-short-margin')!.message).toMatch(/including about \$1\.00 of gas top-up/);
+    expect(g.gasTopUpFromFallback).toBe(false);
+  });
+
+  it('keeps the top-up on the traded coin when it can spare it', () => {
+    const sim = { ...gateInput().simulation, collateralPriceUsd: 2500 };
+    const im = sim.legs.reduce((t, l) => t + l.marginRequired!, 0);
+    const g = evaluatePairGate(
+      gateInput({
+        simulation: sim,
+        account: account({ cross: { available: im + 0.001, hasPositionOrOrders: false }, gasBalanceUsd: 0, gasFallbackFreeUsd: 1_000 }),
+      }),
+    );
+    expect(codes(g)).not.toContain('cross-short-margin');
+    expect(g.gasTopUpFromFallback).toBe(false);
+    expect(g.warnings.join(' ')).toMatch(/from this market's cross margin/);
+  });
+
   it('never lets a leg that frees margin lend it to the other leg', () => {
     const sim = gateInput().simulation;
     const imB = sim.legs[1].marginRequired!;
@@ -1152,8 +1199,8 @@ describe('pairs over legs: spread opens and mixed closes', () => {
   const spreadMarket: BorosMarket = {
     ...hlMarket,
     marketId: 59,
-    name: 'HL-Gate ETH 31 Aug 2026',
-    venue: 'HL-Gate',
+    name: 'HL-GATE ETH 31 Aug 2026',
+    venue: 'HL-GATE',
     spreadVenues: ['HYPERLIQUID', 'GATE'],
     takerFeeRate: 0.001,
     settleFeeApr: 0.002,

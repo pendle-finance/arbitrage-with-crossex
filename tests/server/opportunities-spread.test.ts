@@ -125,7 +125,7 @@ describe('GET /api/opportunities with spread markets', () => {
     expect(pair?.borosLegs[0]).toMatchObject({
       marketId: 59,
       side: 'SHORT',
-      venue: 'HL-Gate',
+      venue: 'HL-GATE',
       spreadVenues: ['HYPERLIQUID', 'GATE'],
     });
     expect(pair?.grossSpreadApr).toBeCloseTo(0.060003169697689526, 12);

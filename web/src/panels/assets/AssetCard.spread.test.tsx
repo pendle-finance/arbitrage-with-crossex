@@ -76,7 +76,7 @@ const book = (borosOpen: AssetBorosOpen[], borosHistory: AssetBorosHistory[] = [
 const spreadRow = {
   marketId: SPREAD,
   name: 'ETH Spread',
-  venue: 'HL-Gate',
+  venue: 'HL-GATE',
   base: 'ETH',
   tokenId: 2,
   collateral: 'ETH',
@@ -120,7 +120,7 @@ const cardTree = (group: AssetGroup) => (
 const renderCard = (group: AssetGroup) => renderWithClient(cardTree(group));
 
 const showPairs = async (user: ReturnType<typeof userEvent.setup>) => {
-  await user.click(screen.getByRole('tab', { name: /^Pairs/ }));
+  await user.click(screen.getByRole('tab', { name: /^Fixed Rate Pairs/ }));
 };
 const showBundles = async (user: ReturnType<typeof userEvent.setup>) => {
   await user.click(screen.getByRole('tab', { name: /^Funding Bundles/ }));
@@ -149,7 +149,7 @@ beforeEach(() => {
 });
 
 describe('AssetCard with a spread leg', () => {
-  it('pair row reads HL-Gate', async () => {
+  it('pair row reads HL-GATE', async () => {
     const user = userEvent.setup();
     renderCard(book([spreadLeg]));
     await showPairs(user);
@@ -157,16 +157,16 @@ describe('AssetCard with a spread leg', () => {
     const table = screen.getByRole('columnheader', { name: 'Leg' }).closest('table') as HTMLElement;
     const rows = within(table).getAllByRole('row').slice(1);
     expect(rows).toHaveLength(3);
-    const borosRow = rows.find((r) => within(r).queryByText('HL-Gate'))!;
+    const borosRow = rows.find((r) => within(r).queryByText('HL-GATE'))!;
     expect(within(borosRow).getByText('Boros')).toBeInTheDocument();
     expect(within(borosRow).getByText('SHORT')).toBeInTheDocument();
     const text = document.body.textContent ?? '';
-    expect(text).not.toMatch(/HL-GATE|Hyperliquid-gate|HYPERLIQUID-GATE/);
+    expect(text).not.toMatch(/Hyperliquid-gate|HYPERLIQUID-GATE|HYPERLIQUID_GATE/);
   });
 
   it('tab reads Pairs', () => {
     renderCard(book([spreadLeg]));
-    expect(screen.getByRole('tab', { name: /^Pairs \(\d+\)$/ })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /^Fixed Rate Pairs \(\d+\)$/ })).toBeInTheDocument();
     expect(screen.queryByText(/4 Leg Pairs/)).toBeNull();
   });
 
@@ -178,7 +178,7 @@ describe('AssetCard with a spread leg', () => {
     const open = await screen.findByRole('button', { name: 'Open Boros leg' });
     expect(screen.queryByRole('button', { name: 'Open leg' })).toBeNull();
     expect(screen.queryByText('Open both Boros legs')).toBeNull();
-    expect(screen.getAllByText('HL-Gate').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('HL-GATE').length).toBeGreaterThan(0);
     await user.click(open);
     await waitFor(() => expect(lastPrefill).not.toBeNull());
     expect(lastPrefill).toMatchObject({ base: 'ETH', longVenue: 'GATE', shortVenue: 'HYPERLIQUID' });
@@ -205,7 +205,7 @@ describe('AssetCard with a spread leg', () => {
     await showPairs(user);
     expect(await screen.findByRole('button', { name: 'Open Boros leg' })).toBeInTheDocument();
     expect(screen.queryByText('Open both Boros legs')).toBeNull();
-    expect(screen.getAllByText('HL-Gate').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('HL-GATE').length).toBeGreaterThan(0);
   });
 
   it('missing pair shows a skeleton while the spread lookup loads', async () => {
@@ -288,7 +288,7 @@ describe('AssetCard with a spread leg', () => {
     expect(bundleRow(/^Gate\s*LONG/).textContent).not.toContain('12.34');
     expect(within(hl).getByText(/receive/).textContent).toMatch(/receive\s*3\.48%/);
     await user.click(screen.getByRole('button', { name: /^Hyperliquid\s*SHORT/ }));
-    const spreadRows = (await screen.findAllByText('HL-Gate')).map((el) => el.closest('tr') as HTMLElement);
+    const spreadRows = (await screen.findAllByText('ETH Spread HL-GATE')).map((el) => el.closest('tr') as HTMLElement);
     expect(spreadRows).toHaveLength(1);
     expect(spreadRows[0].textContent).toMatch(/3\.48%/);
     expect(spreadRows[0].textContent).not.toContain('in Hyperliquid');
@@ -304,7 +304,7 @@ describe('AssetCard with a spread leg', () => {
     await user.click(screen.getByRole('button', { name: /^Gate\s*LONG/ }));
     await waitFor(() => expect(screen.getAllByText('in Hyperliquid')).toHaveLength(2));
     for (const el of screen.getAllByText('in Hyperliquid')) {
-      expect(el.closest('tr')?.textContent).toContain('HL-Gate');
+      expect(el.closest('tr')?.textContent).toContain('HL-GATE');
     }
   });
 
@@ -314,11 +314,11 @@ describe('AssetCard with a spread leg', () => {
     await showBundles(user);
     await user.click(screen.getByRole('button', { name: /^Gate\s*LONG/ }));
     await user.click(screen.getByRole('button', { name: /^Hyperliquid\s*SHORT/ }));
-    const closes = await screen.findAllByRole('button', { name: 'Close HL-Gate spread' });
+    const closes = await screen.findAllByRole('button', { name: 'Close ETH Spread HL-GATE' });
     expect(closes).toHaveLength(2);
     await user.click(closes[closes.length - 1]);
     const dialog = await screen.findByRole('dialog');
-    expect(dialog.textContent).toContain('Close HL-Gate spread');
+    expect(dialog.textContent).toContain('Close ETH Spread HL-GATE');
     expect(dialog.textContent).toMatch(/0\.555/);
   });
 

@@ -100,7 +100,7 @@ const context = () => ({
     marketRow(GATE_NEW, 'Gate', NEW),
     marketRow(HL_NEW, 'Hyperliquid', NEW),
   ],
-  spreadMarkets: spreadListed ? [{ ...marketRow(SPREAD_NEW, 'HL-Gate', NEW), spreadVenues: ['HYPERLIQUID', 'GATE'] as [string, string], closeOnly: spreadCloseOnly }] : [],
+  spreadMarkets: spreadListed ? [{ ...marketRow(SPREAD_NEW, 'HL-GATE', NEW), spreadVenues: ['HYPERLIQUID', 'GATE'] as [string, string], closeOnly: spreadCloseOnly }] : [],
   crossByToken: [{ tokenId: 3, available: 1_000 }],
   isolatedByMarket: [],
   defaultSlippageApr: 0.0025,
@@ -499,51 +499,6 @@ describe('RollOverModal — spread target', () => {
     const dialog = await screen.findByRole('dialog');
     expect(await within(dialog).findByText(/there is nothing to roll into yet/, undefined, { timeout: 4_000 })).toBeInTheDocument();
     expect(entries).toHaveLength(0);
-  });
-});
-
-describe('RollOverModal, gas top-up on a spread target', () => {
-  const lowGas = () => {
-    spreadListed = true;
-    const bodies: Record<string, unknown>[] = [];
-    install({ gasBalanceUsd: 0.05 });
-    server.use(
-      http.post('/api/boros/pair/top-up-gas', async ({ request }) => {
-        bodies.push((await request.json()) as Record<string, unknown>);
-        return HttpResponse.json(env({ balanceUsd: 5.05, sentUsd: 5 }));
-      }),
-    );
-    return bodies;
-  };
-
-  const holdTopUp = async (user: ReturnType<typeof userEvent.setup>, dialog: HTMLElement, bodies: Record<string, unknown>[]) => {
-    await within(dialog).findByLabelText(/Top up gas by hand \(USD\)/i, undefined, { timeout: 4_000 });
-    await user.pointer({ keys: '[MouseLeft>]', target: within(dialog).getByRole('button', { name: /Top up gas/i }) });
-    await waitFor(() => expect(bodies).toHaveLength(1), { timeout: 3_000 });
-    expect(bodies[0]).toMatchObject({ marketId: SPREAD_NEW, address: ADDRESS });
-  };
-
-  it('the roll review tops up gas on the spread market', async () => {
-    const bodies = lowGas();
-    const user = userEvent.setup();
-    renderWithClient(<RollOverModal pair={pair} base="ETH" nowSec={NOW} onClose={() => {}} />);
-    const dialog = await screen.findByRole('dialog');
-    const next = await within(dialog).findByRole('button', { name: 'Roll over' });
-    await waitFor(() => expect(next).not.toBeDisabled(), { timeout: 4_000 });
-    await user.click(next);
-    await holdTopUp(user, dialog, bodies);
-  });
-
-  it('the open-only review tops up gas on the spread market', async () => {
-    const bodies = lowGas();
-    const user = userEvent.setup();
-    renderWithClient(<RollOverModal pair={pair} base="ETH" nowSec={NOW} onClose={() => {}} />);
-    const dialog = await screen.findByRole('dialog');
-    await user.click(within(dialog).getByRole('button', { name: 'Open only (keep old legs)' }));
-    const next = await within(dialog).findByRole('button', { name: 'Open new maturity' });
-    await waitFor(() => expect(next).not.toBeDisabled(), { timeout: 4_000 });
-    await user.click(next);
-    await holdTopUp(user, dialog, bodies);
   });
 });
 
