@@ -4116,7 +4116,10 @@ function LegIdentity({
   const boros = kind === 'boros';
   const named = Boolean(name);
   return (
-    <span className="inline-flex items-center gap-3 leading-none">
+    // max-w-full + min-w-0 + flex-wrap: in a fixed-width column a long name
+    // ("ETH Spread HL-GATE") plus its chips wraps the chips to a second line
+    // instead of running into the Size column.
+    <span className="inline-flex max-w-full items-center gap-3 leading-none">
       {/* The leg-kind marker carries the VENUE's colour, so a mixed list reads
           as two kinds at a glance instead of one grey column. Boros takes the
           `info` blue this file's other leg tables already give it (the
@@ -4139,8 +4142,8 @@ function LegIdentity({
       >
         {boros ? 'Boros' : 'Perp'}
       </span>
-      <span className="flex flex-col gap-1">
-        <span className="inline-flex items-center gap-[7px]">
+      <span className="flex min-w-0 flex-col gap-1">
+        <span className="flex flex-wrap items-center gap-x-[7px] gap-y-1">
           {named ? (
             <span className={`text-[12.5px] font-medium leading-none ${dim ? 'text-ink-200' : 'text-ink-50'}`}>{name}</span>
           ) : (

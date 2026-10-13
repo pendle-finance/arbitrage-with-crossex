@@ -1679,6 +1679,7 @@ describe('BorosPairTicket — spread ticket', () => {
       onExecute?: (b: Record<string, unknown>) => void;
       spread?: Record<string, unknown>;
       gasBalanceUsd?: number;
+      extraMarkets?: ReturnType<typeof marketRow>[];
     } = {},
   ) =>
     handlers({
@@ -1690,6 +1691,7 @@ describe('BorosPairTicket — spread ticket', () => {
         markets: [
           marketRow({ marketId: 209, name: 'Hyperliquid ETH 27 Nov 2026', venue: 'Hyperliquid', tokenId: 2, collateral: 'ETH', maturity: SPREAD_OPP_MATURITY }),
           marketRow({ marketId: 211, name: 'Gate ETHUSDT 27 Nov 2026', venue: 'Gate', tokenId: 2, collateral: 'ETH', maturity: SPREAD_OPP_MATURITY }),
+          ...(extra.extraMarkets ?? []),
         ],
         spreadMarkets: [spreadRow(extra.spread)],
         crossByToken: [{ tokenId: 2, available: extra.available ?? 10 }],
@@ -1844,9 +1846,118 @@ describe('BorosPairTicket — spread ticket', () => {
     expect(receipt.getByText('0.000017 ETH')).toBeInTheDocument();
   });
 
-  it('keeps the two single markets when the venues list no spread at that maturity', async () => {
+  /** The free ticket with Hyperliquid in slot A and Gate in slot B. */
+  const pickHlGate = async (user: ReturnType<typeof userEvent.setup>) => {
+    renderWithClient(<BorosPairTicket />);
+    await waitFor(() =>
+      expect((screen.getByLabelText('Leg A') as HTMLSelectElement).options.length).toBeGreaterThan(1),
+    );
+    await user.selectOptions(screen.getByLabelText('Leg A'), '209');
+    await user.selectOptions(screen.getByLabelText('Leg B'), '211');
+  };
+  type SimBody = { legs: { marketId: number; direction: string; size: number }[] };
+
+  it('defaults a picked Pair to its spread market and sends one order on it', async () => {
     const bodies: Record<string, unknown>[] = [];
     server.use(...spreadHandlers((b) => bodies.push(b)));
+    const user = userEvent.setup();
+    await pickHlGate(user);
+
+    expect(await screen.findByText('ETH Spread HL-GATE 27 Nov 2026')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Leg A')).not.toBeInTheDocument();
+    expect(screen.getByText(/1 Boros order instead of 2/)).toBeInTheDocument();
+    expect(screen.getByRole('group', { name: 'Maturity' })).toBeInTheDocument();
+    await user.type(screen.getByLabelText(/^Size \(ETH\)/), '0.121');
+
+    await waitFor(() => expect(bodies.length).toBeGreaterThan(0));
+    const last = bodies[bodies.length - 1] as SimBody;
+    // Slot A short on Hyperliquid = short the spread, whose first venue is Hyperliquid.
+    expect(last.legs).toEqual([expect.objectContaining({ marketId: SPREAD_OPP_MARKET_ID, direction: 'short', size: 0.121 })]);
+    expect(await screen.findByRole('button', { name: /Confirm · 1 Boros market order/ })).toBeInTheDocument();
+  });
+
+  it('"Use 2 single markets" puts the picked singles back and keeps them', async () => {
+    const bodies: Record<string, unknown>[] = [];
+    server.use(...spreadHandlers((b) => bodies.push(b)));
+    const user = userEvent.setup();
+    await pickHlGate(user);
+    await user.click(await screen.findByRole('button', { name: 'Use 2 single markets' }));
+
+    expect(screen.getByLabelText('Leg A')).toHaveValue('209');
+    expect(screen.getByLabelText('Leg B')).toHaveValue('211');
+    // Swapping the two singles is still the trader's choice of singles.
+    await user.click(screen.getByRole('button', { name: 'Swap markets' }));
+    expect(screen.getByLabelText('Leg A')).toHaveValue('211');
+    await user.type(screen.getByLabelText(/^Size per leg/), '0.121');
+    await waitFor(() => expect(bodies.length).toBeGreaterThan(0));
+    expect((bodies[bodies.length - 1] as SimBody).legs.map((l) => l.marketId)).toEqual([211, 209]);
+
+    await user.click(screen.getByRole('button', { name: 'Use ETH Spread HL-GATE' }));
+    expect(await screen.findByText('ETH Spread HL-GATE 27 Nov 2026')).toBeInTheDocument();
+  });
+
+  it('swaps sides on the spread, and the singles behind it follow', async () => {
+    const bodies: Record<string, unknown>[] = [];
+    server.use(...spreadHandlers((b) => bodies.push(b)));
+    const user = userEvent.setup();
+    await pickHlGate(user);
+    await user.click(await screen.findByRole('button', { name: 'Swap sides' }));
+    await user.type(screen.getByLabelText(/^Size \(ETH\)/), '0.121');
+    await waitFor(() =>
+      expect((bodies[bodies.length - 1] as SimBody | undefined)?.legs).toEqual([
+        expect.objectContaining({ marketId: SPREAD_OPP_MARKET_ID, direction: 'long' }),
+      ]),
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Use 2 single markets' }));
+    // Long the spread = long Hyperliquid, short Gate: Gate now sits in the short slot A.
+    expect(screen.getByLabelText('Leg A')).toHaveValue('211');
+    expect(screen.getByLabelText('Leg B')).toHaveValue('209');
+  });
+
+  it.each([
+    ['paused', { closeOnly: true, paused: true }],
+    ['close-only', { closeOnly: true, paused: false }],
+  ])('keeps the singles when the spread is %s', async (_label, spread) => {
+    server.use(...spreadHandlers(() => {}, { spread }));
+    const user = userEvent.setup();
+    await pickHlGate(user);
+    expect(screen.getByLabelText('Leg A')).toHaveValue('209');
+    expect(screen.getByLabelText('Leg B')).toHaveValue('211');
+    expect(screen.queryByText(/Spread HL-GATE/)).not.toBeInTheDocument();
+  });
+
+  it('a close goes back to the singles when the spread holds nothing', async () => {
+    server.use(...spreadHandlers(() => {}));
+    const user = userEvent.setup();
+    await pickHlGate(user);
+    await screen.findByText('ETH Spread HL-GATE 27 Nov 2026');
+    await user.click(screen.getByRole('checkbox', { name: 'Reduce-only' }));
+    await waitFor(() => expect(screen.getByLabelText('Leg A')).toHaveValue('209'));
+    expect(screen.getByLabelText('Leg B')).toHaveValue('211');
+  });
+
+  it('a close stays on the spread when the spread holds the position', async () => {
+    server.use(...spreadHandlers(() => {}, { spread: { currentSize: -0.121 } }));
+    const user = userEvent.setup();
+    await pickHlGate(user);
+    await screen.findByText('ETH Spread HL-GATE 27 Nov 2026');
+    await user.click(screen.getByRole('checkbox', { name: 'Reduce-only' }));
+    expect(screen.getByText('ETH Spread HL-GATE 27 Nov 2026')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Leg A')).not.toBeInTheDocument();
+  });
+
+  it('keeps the two single markets when the venues list no spread at that maturity', async () => {
+    const bodies: Record<string, unknown>[] = [];
+    const LATER = SPREAD_OPP_MATURITY + 86_400;
+    server.use(
+      ...spreadHandlers((b) => bodies.push(b), {
+        extraMarkets: [
+          marketRow({ marketId: 219, name: 'Hyperliquid ETH 28 Nov 2026', venue: 'Hyperliquid', tokenId: 2, collateral: 'ETH', maturity: LATER }),
+          marketRow({ marketId: 221, name: 'Gate ETHUSDT 28 Nov 2026', venue: 'Gate', tokenId: 2, collateral: 'ETH', maturity: LATER }),
+        ],
+      }),
+    );
     const user = userEvent.setup();
     renderWithClient(
       <BorosPrefillHarness
