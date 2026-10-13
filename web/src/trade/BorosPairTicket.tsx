@@ -46,6 +46,7 @@ import { AffixedInput, EstimateCard } from './PairTicketBits';
 import { QueryError } from '../components/QueryError';
 import { SegmentedToggle } from '../components/SegmentedToggle';
 import { amountError } from '../lib/amount';
+import { spreadName } from '../lib/spread';
 import { daysToMaturity, isUsdCollateral } from '../lib/boros';
 import { fieldValue, fmtDateLocal, fmtPct, sigGrouped } from '../lib/fmt';
 import { useNow } from '../lib/useNow';
@@ -359,6 +360,15 @@ export function BorosPairTicket({
   const [onlyLeg, setOnlyLeg] = useState<number | null>(null);
   /** Pair (both legs) or Single (leg A alone) — the user's own choice. */
   const [mode, setMode] = useState<'pair' | 'single'>('pair');
+  /**
+   * The two single markets a spread stands in for. Set when the ticket swaps
+   * a picked Pair for the spread market that covers it, so "Use 2 single
+   * markets" can put them back. Null for a spread a card or the wizard armed.
+   */
+  const [behind, setBehind] = useState<{ a: number; b: number; dirA: BorosLegDirection } | null>(null);
+  /** The pair (`A|B` market ids) the trader moved back to singles, so the
+   * spread default does not undo that choice. */
+  const [singlesKey, setSinglesKey] = useState<string | null>(null);
 
   const byId = useMemo(
     () => new Map([...markets, ...spreadMarkets].map((m) => [m.marketId, m])),
@@ -440,9 +450,14 @@ export function BorosPairTicket({
   const marketAt = (row: BorosPairMarketRow, maturity: number) =>
     markets.find((m) => marketKey(m) === marketKey(row) && m.maturity === maturity) ?? null;
   const pickedLegs = [rowA, mode === 'pair' ? rowB : null].filter((r): r is BorosPairMarketRow => r !== null);
+  /** The markets the maturity chips follow: the singles behind a spread, else the picked legs. */
+  const chipLegs =
+    isSpread && behind
+      ? [byId.get(behind.a), byId.get(behind.b)].filter((r): r is BorosPairMarketRow => r !== undefined)
+      : pickedLegs;
   /** The maturities every picked market lists — the dates the pair can trade. */
   const maturities =
-    pickedLegs.length === 0 ? [] : maturitiesOf(pickedLegs[0]).filter((t) => pickedLegs.every((r) => maturitiesOf(r).includes(t)));
+    chipLegs.length === 0 ? [] : maturitiesOf(chipLegs[0]).filter((t) => chipLegs.every((r) => maturitiesOf(r).includes(t)));
   const maturity = pickedLegs.every((r) => r.maturity === pickedLegs[0]?.maturity) ? (pickedLegs[0]?.maturity ?? null) : null;
   /** Both markets picked, and no maturity lists both: no pair to trade. */
   const noSharedMaturity = mode === 'pair' && rowA !== null && rowB !== null && maturities.length === 0;
@@ -496,11 +511,23 @@ export function BorosPairTicket({
     setCoinPick(next);
     setMarketA(null);
     setMarketB(null);
+    setBehind(null);
   };
 
   /** Change the maturity: every picked leg moves to its own market at that date
    * (the chips only offer dates all of them list). */
   const pickMaturity = (next: number) => {
+    // On a spread that stands in for two singles, move the singles: the
+    // default below puts the spread back when that date lists one too.
+    if (isSpread && behind) {
+      const [ra, rb] = [byId.get(behind.a), byId.get(behind.b)];
+      if (!ra || !rb) return;
+      setMarketA(marketAt(ra, next)?.marketId ?? ra.marketId);
+      setMarketB(marketAt(rb, next)?.marketId ?? rb.marketId);
+      setDirA(behind.dirA);
+      setBehind(null);
+      return;
+    }
     if (rowA) setMarketA(marketAt(rowA, next)?.marketId ?? rowA.marketId);
     if (rowB && mode === 'pair') setMarketB(marketAt(rowB, next)?.marketId ?? rowB.marketId);
   };
@@ -522,6 +549,72 @@ export function BorosPairTicket({
   useEffect(() => {
     setDirB(dirA === 'short' ? 'long' : 'short');
   }, [dirA]);
+
+  /**
+   * The spread market that covers a picked Pair: same coin, collateral and
+   * maturity, and its two venues are the two legs' venues. One order on it
+   * replaces the two single orders.
+   */
+  const spreadFor = (a: BorosPairMarketRow | null, b: BorosPairMarketRow | null): BorosPairMarketRow | null => {
+    if (!a || !b || a.spreadVenues || b.spreadVenues) return null;
+    if (a.maturity !== b.maturity || a.tokenId !== b.tokenId || sameCoin(a.venue, b.venue)) return null;
+    return (
+      spreadMarkets.find(
+        (m) =>
+          m.spreadVenues !== null &&
+          sameCoin(m.base, a.base) &&
+          m.maturity === a.maturity &&
+          m.tokenId === a.tokenId &&
+          [a.venue, b.venue].every((v) => (m.spreadVenues ?? []).some((k) => sameCoin(k, v))),
+      ) ?? null
+    );
+  };
+  /** An open goes to the spread while it takes opens; a close only when the
+   * spread holds the position, since the singles' own size is not on it. */
+  const wantSpread = (sp: BorosPairMarketRow) => (intent === 'close' ? sp.currentSize !== 0 : !sp.closeOnly);
+  const pairSpread = !isSpread && mode === 'pair' ? spreadFor(rowA, rowB) : null;
+  /** Order-free, so swapping the two singles keeps the trader's choice. */
+  const keyOf = (a: number | null, b: number | null) => [a, b].sort().join('|');
+  const pairKey = keyOf(marketA, marketB);
+  /** Back to the two singles, and keep them for this pair. */
+  const useSingles = () => {
+    if (!behind) return;
+    setSinglesKey(keyOf(behind.a, behind.b));
+    setMarketA(behind.a);
+    setMarketB(behind.b);
+    setDirA(behind.dirA);
+    setBehind(null);
+  };
+  /** Swap sides on a spread: the singles behind it swap slots with it. */
+  const swapSpread = () => {
+    setDirA((d) => (d === 'short' ? 'long' : 'short'));
+    setBehind((was) => (was ? { a: was.b, b: was.a, dirA: was.dirA } : was));
+  };
+  /**
+   * Default a Pair to its spread market (mozzarella 2026-10-13): one order,
+   * one margin and one fee, where Boros lists one. The spread side follows
+   * the leg on its first venue. "Use 2 single markets" undoes it, and a close
+   * on singles the spread does not hold goes back to them.
+   */
+  useEffect(() => {
+    if (guided || mode !== 'pair' || onlyLeg !== null) return;
+    if (isSpread) {
+      if (behind && rowA && !wantSpread(rowA)) {
+        setMarketA(behind.a);
+        setMarketB(behind.b);
+        setDirA(behind.dirA);
+        setBehind(null);
+      }
+      return;
+    }
+    if (!pairSpread || !rowA || !wantSpread(pairSpread) || singlesKey === pairKey) return;
+    const aOnFirst = sameCoin(rowA.venue, pairSpread.spreadVenues?.[0] ?? '');
+    setBehind({ a: rowA.marketId, b: rowB!.marketId, dirA });
+    setMarketA(pairSpread.marketId);
+    setMarketB(null);
+    setDirA(aOnFirst ? dirA : dirA === 'short' ? 'long' : 'short');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [guided, mode, onlyLeg, isSpread, pairSpread?.marketId, pairKey, intent, singlesKey, rowA?.closeOnly, rowA?.currentSize, pairSpread?.closeOnly, pairSpread?.currentSize]);
 
   const sizeNum = Number(sizeStr);
   const sizeErr = amountError(sizeStr);
@@ -862,6 +955,7 @@ export function BorosPairTicket({
           value={mode}
           onChange={(next) => {
             if (isSpread) setMarketA(null);
+            setBehind(null);
             setMode(next);
           }}
           fill
@@ -893,19 +987,42 @@ export function BorosPairTicket({
         </div>
       )}
       {isSpread ? (
-        <div className="relative min-w-0">
-          <MarketCard label="Market" row={rowA} side={dirA} locked>
-            {null}
-          </MarketCard>
-          {rowA?.closeOnly && (
-            <Chip
-              tone="amber"
-              sm
-              className="absolute right-2 top-2"
-              title="This market only accepts orders that reduce your position."
-            >
-              {rowA.paused ? 'paused' : 'close only'}
-            </Chip>
+        <div className="flex min-w-0 flex-col gap-1.5">
+          <div className="grid grid-cols-[minmax(0,1fr)_auto] items-end gap-2">
+            <div className="relative min-w-0">
+              <MarketCard label="Market" row={rowA} side={dirA} locked>
+                {null}
+              </MarketCard>
+              {rowA?.closeOnly && (
+                <Chip
+                  tone="amber"
+                  sm
+                  className="absolute right-2 top-2"
+                  title="This market only accepts orders that reduce your position."
+                >
+                  {rowA.paused ? 'paused' : 'close only'}
+                </Chip>
+              )}
+            </div>
+            {!guided && (
+              <button
+                type="button"
+                aria-label="Swap sides"
+                title="Swap long and short on the spread"
+                onClick={swapSpread}
+                className="mb-[2px] flex h-6 w-6 items-center justify-center rounded-full border border-ink-600 bg-ink-900 text-[11px] text-ink-300 transition-colors hover:border-ink-400 hover:text-ink-50"
+              >
+                ⇄
+              </button>
+            )}
+          </div>
+          {!guided && behind && (
+            <p className="text-[11.5px] text-ink-300">
+              1 Boros order instead of 2.{' '}
+              <button type="button" onClick={useSingles} className="text-pastel-blue underline-offset-2 hover:underline">
+                Use 2 single markets
+              </button>
+            </p>
           )}
         </div>
       ) : mode === 'pair' ? (
@@ -1008,9 +1125,17 @@ export function BorosPairTicket({
           />
         </div>
       )}
+      {!guided && !isSpread && pairSpread && wantSpread(pairSpread) && singlesKey === pairKey && (
+        <p className="text-[11.5px] text-ink-300">
+          <button type="button" onClick={() => setSinglesKey(null)} className="text-pastel-blue underline-offset-2 hover:underline">
+            Use {spreadName(pairSpread.base, pairSpread.spreadVenues!)}
+          </button>{' '}
+          · 1 Boros order instead of 2
+        </p>
+      )}
       {/* The maturity last: only the dates every picked market lists. Two
           markets that share none are not a pair, and the form says so. */}
-      {!guided && !isSpread && pickedLegs.length > 0 && (
+      {!guided && (!isSpread || behind) && chipLegs.length > 0 && (
         <div className="flex flex-col gap-2">
           <FieldLabel>Maturity</FieldLabel>
           {noSharedMaturity && rowA && rowB ? (
