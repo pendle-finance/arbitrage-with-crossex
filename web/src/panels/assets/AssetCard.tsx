@@ -4085,7 +4085,7 @@ function OpenMoreButton({ gap, base, onOpen }: { gap: HedgeGapRow; base: string;
       title={onOpen ? `Opens the order ticket with ${gapAsk(gap, base)}.` : 'Order ticket unavailable here'}
       onClick={onOpen}
     >
-      open more
+      Open more
     </button>
   );
 }
@@ -5693,7 +5693,7 @@ null
                             title="Count the whole leg in the farm again."
                             onClick={() => onExclude(r.key, undefined)}
                           >
-                            restore
+                            Restore
                           </button>
                           <EditCell
                             exKey={r.key}

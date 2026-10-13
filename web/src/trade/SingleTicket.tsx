@@ -350,13 +350,13 @@ export function SingleTicket() {
             <FieldLabel htmlFor="ticket-price">Limit price</FieldLabel>
             <span className="flex gap-1">
               <button type="button" className="btn-ghost-xs" disabled={!ref} onClick={() => setQuickPrice(1)}>
-                mark
+                Mark
               </button>
               <button type="button" className="btn-ghost-xs" disabled={!ref} onClick={() => setQuickPrice(0.999)}>
-                mark−0.1%
+                Mark −0.1%
               </button>
               <button type="button" className="btn-ghost-xs" disabled={!ref} onClick={() => setQuickPrice(1.001)}>
-                mark+0.1%
+                Mark +0.1%
               </button>
             </span>
           </div>
