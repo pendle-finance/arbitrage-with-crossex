@@ -1167,10 +1167,9 @@ export function BorosPairTicket({
               {
                 value: 'spread',
                 label: spreadName(routeSpread.base, routeSpread.spreadVenues!),
-                sub: '1 order',
                 title: 'One order on the spread market: one margin, one fee.',
               },
-              { value: 'singles', label: '2 single markets', sub: '2 orders' },
+              { value: 'singles', label: '2 single markets' },
             ]}
           />
         </div>
