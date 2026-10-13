@@ -147,9 +147,12 @@ describe('roll candidates on the staging spread markets', () => {
     expect(rollTargetsFor(markets, spreadPair, 'ETH', OCT_30)[0]).toEqual({ maturity: NOV_27, spreadMarketId: 59 });
   });
 
-  it('skips a maturity whose spread is not trading, with no fall back to the singles', async () => {
-    const markets = (await load()).map((m) => (m.marketId === 59 ? { ...m, state: 'Paused' as BorosMarket['state'] } : m));
-    expect(rollTargetsFor(markets, ownerPair, 'ETH', OCT_30)).toEqual([{ maturity: DEC_25, longMarketId: 65, shortMarketId: 64 }]);
+  it.each(['Paused', 'CloseOnly'] as const)('a %s spread counts as no spread: that maturity rolls into the singles', async (state) => {
+    const markets = (await load()).map((m) => (m.marketId === 59 ? { ...m, state: state as BorosMarket['state'] } : m));
+    expect(rollTargetsFor(markets, ownerPair, 'ETH', OCT_30)).toEqual([
+      { maturity: NOV_27, longMarketId: 60, shortMarketId: 51 },
+      { maturity: DEC_25, longMarketId: 65, shortMarketId: 64 },
+    ]);
   });
 });
 

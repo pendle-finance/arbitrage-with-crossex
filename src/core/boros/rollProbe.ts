@@ -84,15 +84,13 @@ export function rollTargetsFor(
   const later = markets.filter((m) => m.maturity > after && m.base.toLowerCase() === base.toLowerCase());
   const heldIds = new Set(pair.legs.filter((l) => l.kind === 'yu').map((l) => l.marketId));
   const tokenId = markets.find((m) => heldIds.has(m.marketId))?.tokenId;
-  const spreadListed = (maturity: number): boolean =>
-    later.some(
-      (m) => m.maturity === maturity && m.tokenId === tokenId && (m.spreadVenues?.every((v) => venues.includes(v)) ?? false),
-    );
   const targets: RollTarget[] = [];
   for (const maturity of [...new Set(later.map((m) => m.maturity))].sort((a, b) => a - b)) {
-    if (tokenId !== undefined && spreadListed(maturity)) {
-      const spread = findSpread({ markets: later, venues, maturity, tokenId, base });
-      if (spread) targets.push({ maturity, spreadMarketId: spread.marketId });
+    // Only a trading spread takes the roll (findSpread wants Normal). A
+    // close-only or paused one counts as no spread: the singles stand.
+    const spread = tokenId !== undefined ? findSpread({ markets: later, venues, maturity, tokenId, base }) : null;
+    if (spread) {
+      targets.push({ maturity, spreadMarketId: spread.marketId });
       continue;
     }
     const singles = later.filter((m) => m.maturity === maturity && m.state === 'Normal' && !isSpreadMarket(m));

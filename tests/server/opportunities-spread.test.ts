@@ -201,6 +201,15 @@ describe('GET /api/opportunities with spread markets', () => {
     }
   });
 
+  it('a spread at exactly 0 is still the pair, on its first-venue-short side', async () => {
+    const results = fixture.results.map((r) => (r.marketId === 59 ? withRates(r, 0) : r));
+    const data = await opportunities(results, { 59: book(-1, 1) });
+    const pair = hlGatePair(data, NOV_27);
+    expect(pair?.borosLegs.map((l) => [l.marketId, l.side])).toEqual([[59, 'SHORT']]);
+    expect(pair?.shortLeg.crossexVenue).toBe('HYPERLIQUID');
+    expect(pairsAt(data, NOV_27).flatMap((p) => p.borosLegs.map((l) => l.marketId))).not.toContain(51);
+  });
+
   it('thin book still uses the spread', async () => {
     const data = await opportunities(fixture.results, { 59: book(599, 601, 50 / ETH_PRICE) });
     const pair = hlGatePair(data, NOV_27);

@@ -45,6 +45,7 @@ import { legLetter, size as fmtSize, type SoloLeg } from './BorosPairBits';
 import { AffixedInput, EstimateCard } from './PairTicketBits';
 import { QueryError } from '../components/QueryError';
 import { SegmentedToggle } from '../components/SegmentedToggle';
+import { SpreadIcon } from '../components/AssetIcon';
 import { amountError } from '../lib/amount';
 import { spreadName } from '../lib/spread';
 import { daysToMaturity, isUsdCollateral } from '../lib/boros';
@@ -300,12 +301,20 @@ export function BorosPairTicket({
             (openPrefill.maturity === undefined || m.maturity === openPrefill.maturity) &&
             [openPrefill.longVenue, openPrefill.shortVenue].every((v) => (m.spreadVenues ?? []).some((k) => sameVenue(k, v))),
         );
-    const spread = soonest(spreads.filter((m) => !m.closeOnly)) ?? soonest(spreads);
+    // A close-only or paused spread cannot open, so the pair is armed as if
+    // there were none: on its two singles.
+    const spread = soonest(spreads.filter((m) => !m.closeOnly));
     if (spread?.spreadVenues) {
       setMarketA(spread.marketId);
       setMarketB(null);
       setMode('pair');
       setDirA(sameVenue(spread.spreadVenues[0], openPrefill.shortVenue) ? 'short' : 'long');
+      // The singles it stands in for fill the pickers, as when the trader
+      // picks the pair by hand: one layout however the ticket was opened.
+      const single = (venue: string | null) =>
+        anyTerm(venue).find((m) => m.maturity === spread.maturity && m.tokenId === spread.tokenId);
+      const [l, s] = [single(openPrefill.longVenue), single(openPrefill.shortVenue)];
+      setBehind(l && s ? { a: l.marketId, b: s.marketId, dirA: 'long' } : null);
     } else if (onlyOne) {
       // Single mode trades leg A, so whichever side is real becomes leg A.
       const solo = long ?? short;
@@ -321,6 +330,7 @@ export function BorosPairTicket({
       // Seeding leg A is enough: the coupling above gives leg B the far side.
       setDirA('long');
     }
+    if (!spread?.spreadVenues) setBehind(null);
     setIntent('open');
     /**
      * A Boros size is denominated in the market's COLLATERAL, so the collateral
@@ -334,7 +344,6 @@ export function BorosPairTicket({
     const usdPegged = isUsdCollateral(picked?.collateral);
     const chosen = usdPegged ? openPrefill.size : openPrefill.sizeBase;
     setSizeStr(chosen !== undefined && chosen > 0 ? fieldValue(chosen) : '');
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openNonce, marketsReady]);
   const [sharedSlip, setSharedSlip] = useState<string | null>(null);
@@ -366,9 +375,6 @@ export function BorosPairTicket({
    * markets" can put them back. Null for a spread a card or the wizard armed.
    */
   const [behind, setBehind] = useState<{ a: number; b: number; dirA: BorosLegDirection } | null>(null);
-  /** The pair (`A|B` market ids) the trader moved back to singles, so the
-   * spread default does not undo that choice. */
-  const [singlesKey, setSinglesKey] = useState<string | null>(null);
 
   const byId = useMemo(
     () => new Map([...markets, ...spreadMarkets].map((m) => [m.marketId, m])),
@@ -583,36 +589,22 @@ export function BorosPairTicket({
    * spread holds the position, since the singles' own size is not on it. */
   const wantSpread = (sp: BorosPairMarketRow) => (intent === 'close' ? sp.currentSize !== 0 : !sp.closeOnly);
   const pairSpread = !isSpread && mode === 'pair' ? spreadFor(rowA, rowB) : null;
-  /** Order-free, so swapping the two singles keeps the trader's choice. */
-  const keyOf = (a: number | null, b: number | null) => [a, b].sort().join('|');
-  const pairKey = keyOf(marketA, marketB);
-  /** Back to the two singles, and keep them for this pair. */
-  const useSingles = () => {
-    if (!behind) return;
-    setSinglesKey(keyOf(behind.a, behind.b));
-    setMarketA(behind.a);
-    setMarketB(behind.b);
-    setDirA(behind.dirA);
-    setBehind(null);
-  };
   /** Slot A's side: on a spread, the side the singles had when it took over. */
   const slotDirA: BorosLegDirection = isSpread && behind ? behind.dirA : dirA;
-  /** The spread the "Trade on" toggle offers: the one in use, else the one
-   * that covers the picked pair. */
-  const routeSpread = isSpread && behind ? rowA : pairSpread && wantSpread(pairSpread) ? pairSpread : null;
   /** Swap sides on a spread: the singles behind it swap slots with it. */
   const swapSpread = () => {
     setDirA((d) => (d === 'short' ? 'long' : 'short'));
     setBehind((was) => (was ? { a: was.b, b: was.a, dirA: was.dirA } : was));
   };
   /**
-   * Default a Pair to its spread market (mozzarella 2026-10-13): one order,
-   * one margin and one fee, where Boros lists one. The spread side follows
-   * the leg on its first venue. "Use 2 single markets" undoes it, and a close
-   * on singles the spread does not hold goes back to them.
+   * A Pair trades on its spread market wherever Boros lists one that takes the
+   * trade: one order, one margin and one fee. It is not the trader's choice
+   * (spec ED-6607). The spread side follows the leg on its first venue. A
+   * spread that stops taking the trade (close-only mid-session, or a close on
+   * singles it does not hold) hands the pair back to its singles.
    */
   useEffect(() => {
-    if (guided || mode !== 'pair' || onlyLeg !== null) return;
+    if (mode !== 'pair' || onlyLeg !== null) return;
     if (isSpread) {
       if (behind && rowA && !wantSpread(rowA)) {
         setMarketA(behind.a);
@@ -622,14 +614,14 @@ export function BorosPairTicket({
       }
       return;
     }
-    if (!pairSpread || !rowA || !wantSpread(pairSpread) || singlesKey === pairKey) return;
+    if (!pairSpread || !rowA || !wantSpread(pairSpread)) return;
     const aOnFirst = sameCoin(rowA.venue, pairSpread.spreadVenues?.[0] ?? '');
     setBehind({ a: rowA.marketId, b: rowB!.marketId, dirA });
     setMarketA(pairSpread.marketId);
     setMarketB(null);
     setDirA(aOnFirst ? dirA : dirA === 'short' ? 'long' : 'short');
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [guided, mode, onlyLeg, isSpread, pairSpread?.marketId, pairKey, intent, singlesKey, rowA?.closeOnly, rowA?.currentSize, pairSpread?.closeOnly, pairSpread?.currentSize]);
+  }, [mode, onlyLeg, isSpread, pairSpread?.marketId, marketA, marketB, intent, rowA?.closeOnly, rowA?.currentSize, pairSpread?.closeOnly, pairSpread?.currentSize]);
 
   const sizeNum = Number(sizeStr);
   const sizeErr = amountError(sizeStr);
@@ -969,7 +961,13 @@ export function BorosPairTicket({
           ariaLabel="Boros ticket mode"
           value={mode}
           onChange={(next) => {
-            if (isSpread) setMarketA(null);
+            // Single trades leg A alone, so a spread hands back its singles
+            // (leg A is the first); a spread with none behind it clears.
+            if (isSpread) {
+              setMarketA(behind ? behind.a : null);
+              setMarketB(behind ? behind.b : null);
+              if (behind) setDirA(behind.dirA);
+            }
             setBehind(null);
             setMode(next);
           }}
@@ -1153,25 +1151,15 @@ export function BorosPairTicket({
           )}
         </div>
       )}
-      {/* Where a spread market covers the pair, which Boros market takes the
-          order: the spread (one order, one margin, one fee) or the two singles. */}
-      {!guided && mode === 'pair' && routeSpread && (
+      {/* The pickers show the pair; this names the one market the order goes
+          to when a spread covers it. Stated, not chosen. */}
+      {isSpread && behind && rowA?.spreadVenues && (
         <div className="flex flex-col gap-2">
           <FieldLabel>Trade on</FieldLabel>
-          <SegmentedToggle<'spread' | 'singles'>
-            ariaLabel="Trade on"
-            value={isSpread ? 'spread' : 'singles'}
-            onChange={(next) => (next === 'singles' ? useSingles() : setSinglesKey(null))}
-            fill
-            options={[
-              {
-                value: 'spread',
-                label: spreadName(routeSpread.base, routeSpread.spreadVenues!),
-                title: 'One order on the spread market: one margin, one fee.',
-              },
-              { value: 'singles', label: '2 single markets' },
-            ]}
-          />
+          <span className="flex min-w-0 items-center gap-1.5 text-[13px] font-medium text-ink-50">
+            <SpreadIcon venues={rowA.spreadVenues} />
+            <span className="truncate">{spreadName(rowA.base, rowA.spreadVenues)}</span>
+          </span>
         </div>
       )}
 

@@ -1,4 +1,5 @@
 import type { BorosMarket } from './client';
+import { knownRate } from './venue';
 
 export type SpreadSide = 'SHORT' | 'LONG';
 
@@ -7,6 +8,11 @@ export function parseSpreadVenues(isSpread: boolean, platformId: string): [strin
 }
 
 export const isSpreadMarket = (m: Pick<BorosMarket, 'spreadVenues'>): boolean => Array.isArray(m.spreadVenues);
+
+/** A rate the feed knows on this market. On a single the feed's 0 means none
+ * (see knownRate); a spread trades around 0, so its 0 is a real level. */
+export const knownRateOf = (m: Pick<BorosMarket, 'spreadVenues'>, n: number | null | undefined): n is number =>
+  isSpreadMarket(m) ? typeof n === 'number' && Number.isFinite(n) : knownRate(n);
 
 export function findSpread({
   markets,

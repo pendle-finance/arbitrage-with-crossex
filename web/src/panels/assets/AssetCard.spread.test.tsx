@@ -184,7 +184,7 @@ describe('AssetCard with a spread leg', () => {
     expect(lastPrefill).toMatchObject({ base: 'ETH', longVenue: 'GATE', shortVenue: 'HYPERLIQUID' });
   });
 
-  it('missing with a close-only spread keeps the spread row, with no fall back to two singles', async () => {
+  it('missing with a close-only spread counts as no spread: it offers both singles', async () => {
     server.use(
       http.get('/api/boros/pair/context', () =>
         HttpResponse.json({
@@ -203,9 +203,8 @@ describe('AssetCard with a spread leg', () => {
     const user = userEvent.setup();
     renderCard(book([]));
     await showPairs(user);
-    expect(await screen.findByRole('button', { name: 'Open Boros leg' })).toBeInTheDocument();
-    expect(screen.queryByText('Open both Boros legs')).toBeNull();
-    expect(screen.getAllByText('HL-GATE').length).toBeGreaterThan(0);
+    expect(await screen.findByText('Open both Boros legs')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Open Boros leg' })).toBeNull();
   });
 
   it('missing pair shows a skeleton while the spread lookup loads', async () => {
@@ -277,6 +276,15 @@ describe('AssetCard with a spread leg', () => {
     expect(hl.compareDocumentPosition(gate) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(hl.textContent).toContain('1 active');
     expect(gate.textContent).toContain('1 active');
+  });
+
+  it('a venue the spread hedges stays an active bundle when its own perp is gone', async () => {
+    const user = userEvent.setup();
+    renderCard({ ...book([spreadLeg]), perpOpen: [perp('HYPERLIQUID', 'SHORT', 0.555)] });
+    await showBundles(user);
+    expect(screen.getByRole('button', { name: /^Gate perp leg missing 1 active$/ })).toBeInTheDocument();
+    expect(screen.getAllByRole('tab', { name: 'Funding Bundles (2)' }).length).toBeGreaterThan(0);
+    expect(screen.queryByText('Closed Funding Bundles')).not.toBeInTheDocument();
   });
 
   it('spread sits on the first venue', async () => {

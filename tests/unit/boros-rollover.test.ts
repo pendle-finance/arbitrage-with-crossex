@@ -499,6 +499,16 @@ describe('spread rolls', () => {
     ]);
   });
 
+  it('a batch roll with no venue preview shows the re-entry margin shortfall as a warning, not a silent pass', () => {
+    const exit = step(exitLegs(), 'close');
+    const open = step([leg(spreadNew, 'short')], 'open');
+    const short = { code: 'cross-short-margin' as const, message: 'Not enough ETH cross margin' };
+    const entry = { ...open, gate: { ...open.gate, blockers: [...open.gate.blockers, short] } };
+    const g = evaluateRollGate({ exit, entry, venue: null });
+    expect(g.blockers).toEqual([]);
+    expect(g.warnings).toContain('Re-entry: Not enough ETH cross margin (before the closes free their margin)');
+  });
+
   it('rolls a spread into the next spread with one roll-over leg, which still needs the venue preview', () => {
     const exit = step(spreadExit(), 'close');
     const entry = step([leg(spreadNew, 'short')], 'open');
@@ -689,9 +699,7 @@ describe('spread rolls', () => {
         ['size-mismatch', 'entry', 'This pair holds different sizes on its two venues. One spread cannot hold both.'],
       ]);
       const intoSingles = stepEach([[leg(hlNew, 'short'), b.hl + b.sp], [leg(bnNew, 'long'), b.bn + b.sp]], 'open');
-      expect(evaluateRollGate({ exit, entry: intoSingles, venue: null }).blockers.map((x) => [x.code, x.step])).toEqual([
-        ['unhedged-open', 'entry'],
-      ]);
+      expect(evaluateRollGate({ exit, entry: intoSingles, venue: null }).blockers).toEqual([]);
     });
 
     it.each([
