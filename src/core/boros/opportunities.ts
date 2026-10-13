@@ -933,7 +933,9 @@ export function buildOpportunities(
         if (directionApr(a, options) <= directionApr(b, options)) continue;
         if (a.row.crossexVenue === b.row.crossexVenue) continue;
         const venues = [a.row.crossexVenue, b.row.crossexVenue];
-        if (plan.spreads.some((m) => m.spreadVenues?.every((v) => venues.includes(v)))) continue;
+        // A tradable spread replaces the two singles, even with an empty book.
+        // A paused or close-only one cannot open, so the singles stand.
+        if (plan.spreads.some((m) => m.state === 'Normal' && m.spreadVenues?.every((v) => venues.includes(v)))) continue;
         const boros: BorosLegBuild[] = [
           { build: a, side: 'SHORT' },
           { build: b, side: 'LONG' },

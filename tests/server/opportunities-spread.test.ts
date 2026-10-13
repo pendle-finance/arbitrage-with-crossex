@@ -186,12 +186,16 @@ describe('GET /api/opportunities with spread markets', () => {
     expect(pair?.grossSpreadApr).toBeCloseTo(0.03, 12);
   });
 
-  it('paused spread hides the pair', async () => {
+  it('a paused or close-only spread gives the pair back to the two singles', async () => {
     for (const status of [0, 1]) {
       const results = fixture.results.map((r) => (r.marketId === 59 ? withStatus(r, status) : r));
       const data = await opportunities(results);
-      expect(hlGatePair(data, NOV_27)).toBeUndefined();
-      expect(pairsAt(data, NOV_27)).toEqual([]);
+      const pair = hlGatePair(data, NOV_27);
+      expect(pair?.borosLegs.map((l) => [l.marketId, l.spreadVenues])).toEqual([
+        [51, null],
+        [60, null],
+      ]);
+      expect(pairsAt(data, NOV_27).flatMap((p) => p.borosLegs.map((l) => l.marketId))).not.toContain(59);
       await app?.close();
       app = undefined;
     }
