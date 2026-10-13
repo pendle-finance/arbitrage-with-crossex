@@ -450,6 +450,9 @@ export function BorosPairTicket({
   const marketAt = (row: BorosPairMarketRow, maturity: number) =>
     markets.find((m) => marketKey(m) === marketKey(row) && m.maturity === maturity) ?? null;
   const pickedLegs = [rowA, mode === 'pair' ? rowB : null].filter((r): r is BorosPairMarketRow => r !== null);
+  /** What each slot shows: the singles behind a spread, else the picked legs. */
+  const slotA = isSpread && behind ? (byId.get(behind.a) ?? null) : rowA;
+  const slotB = isSpread && behind ? (byId.get(behind.b) ?? null) : rowB;
   /** The markets the maturity chips follow: the singles behind a spread, else the picked legs. */
   const chipLegs =
     isSpread && behind
@@ -488,7 +491,14 @@ export function BorosPairTicket({
   const pickLeg = (leg: 'A' | 'B') => (marketId: number | null) => {
     const set = leg === 'A' ? setMarketA : setMarketB;
     const setOther = leg === 'A' ? setMarketB : setMarketA;
-    const other = mode === 'pair' ? (leg === 'A' ? rowB : rowA) : null;
+    const other = mode === 'pair' ? (leg === 'A' ? slotB : slotA) : null;
+    // On a spread the pickers show the singles behind it: a pick goes back to
+    // singles, and the default below puts a spread back if the new pair has one.
+    if (isSpread && behind) {
+      setDirA(behind.dirA);
+      setBehind(null);
+      setOther(other?.marketId ?? null);
+    }
     const row = marketId !== null ? (byId.get(marketId) ?? null) : null;
     if (!row) {
       set(null);
@@ -585,6 +595,11 @@ export function BorosPairTicket({
     setDirA(behind.dirA);
     setBehind(null);
   };
+  /** Slot A's side: on a spread, the side the singles had when it took over. */
+  const slotDirA: BorosLegDirection = isSpread && behind ? behind.dirA : dirA;
+  /** The spread the "Trade on" toggle offers: the one in use, else the one
+   * that covers the picked pair. */
+  const routeSpread = isSpread && behind ? rowA : pairSpread && wantSpread(pairSpread) ? pairSpread : null;
   /** Swap sides on a spread: the singles behind it swap slots with it. */
   const swapSpread = () => {
     setDirA((d) => (d === 'short' ? 'long' : 'short'));
@@ -986,7 +1001,7 @@ export function BorosPairTicket({
           </div>
         </div>
       )}
-      {isSpread ? (
+      {isSpread && !behind ? (
         <div className="flex min-w-0 flex-col gap-1.5">
           <div className="grid grid-cols-[minmax(0,1fr)_auto] items-end gap-2">
             <div className="relative min-w-0">
@@ -1016,38 +1031,30 @@ export function BorosPairTicket({
               </button>
             )}
           </div>
-          {!guided && behind && (
-            <p className="text-[11.5px] text-ink-300">
-              1 Boros order instead of 2.{' '}
-              <button type="button" onClick={useSingles} className="text-pastel-blue underline-offset-2 hover:underline">
-                Use 2 single markets
-              </button>
-            </p>
-          )}
         </div>
       ) : mode === 'pair' ? (
         <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-end gap-2">
           <div className="relative min-w-0">
-            <MarketCard label="Market A" row={rowA} side={dirA} locked={guided}>
+            <MarketCard label="Market A" row={slotA} side={slotDirA} locked={guided}>
               <MarketSelect
                 id="boros-leg-a"
                 label=""
                 ariaLabel="Leg A"
-                value={marketA}
-                markets={legOptions(rowA, rowB)}
+                value={slotA?.marketId ?? null}
+                markets={legOptions(slotA, slotB)}
                 reasonFor={() => null}
                 onPick={pickLeg('A')}
                 disabled={context.isPending}
               />
             </MarketCard>
-            {rowA?.closeOnly && (
+            {slotA?.closeOnly && (
               <Chip
                 tone="amber"
                 sm
                 className="absolute right-2 top-2"
                 title="This market only accepts orders that reduce your position."
               >
-                {rowA?.paused ? 'paused' : 'close only'}
+                {slotA?.paused ? 'paused' : 'close only'}
               </Chip>
             )}
           </div>
@@ -1061,8 +1068,9 @@ export function BorosPairTicket({
             type="button"
             aria-label="Swap markets"
             title="Swap the two markets between their slots"
-            disabled={marketA === null && marketB === null}
+            disabled={slotA === null && slotB === null}
             onClick={() => {
+              if (isSpread) return swapSpread();
               setMarketA(marketB);
               setMarketB(marketA);
             }}
@@ -1072,26 +1080,26 @@ export function BorosPairTicket({
           </button>
           )}
           <div className="relative min-w-0">
-            <MarketCard label="Market B" row={rowB} side={dirB} locked={guided}>
+            <MarketCard label="Market B" row={slotB} side={slotDirA === 'short' ? 'long' : 'short'} locked={guided}>
               <MarketSelect
                 id="boros-leg-b"
                 label=""
                 ariaLabel="Leg B"
-                value={marketB}
-                markets={legOptions(rowB, rowA)}
+                value={slotB?.marketId ?? null}
+                markets={legOptions(slotB, slotA)}
                 reasonFor={() => null}
                 onPick={pickLeg('B')}
                 disabled={context.isPending}
               />
             </MarketCard>
-            {rowB?.closeOnly && (
+            {slotB?.closeOnly && (
               <Chip
                 tone="amber"
                 sm
                 className="absolute right-2 top-2"
                 title="This market only accepts orders that reduce your position."
               >
-                {rowB?.paused ? 'paused' : 'close only'}
+                {slotB?.paused ? 'paused' : 'close only'}
               </Chip>
             )}
           </div>
@@ -1125,14 +1133,6 @@ export function BorosPairTicket({
           />
         </div>
       )}
-      {!guided && !isSpread && pairSpread && wantSpread(pairSpread) && singlesKey === pairKey && (
-        <p className="text-[11.5px] text-ink-300">
-          <button type="button" onClick={() => setSinglesKey(null)} className="text-pastel-blue underline-offset-2 hover:underline">
-            Use {spreadName(pairSpread.base, pairSpread.spreadVenues!)}
-          </button>{' '}
-          · 1 Boros order instead of 2
-        </p>
-      )}
       {/* The maturity last: only the dates every picked market lists. Two
           markets that share none are not a pair, and the form says so. */}
       {!guided && (!isSpread || behind) && chipLegs.length > 0 && (
@@ -1151,6 +1151,28 @@ export function BorosPairTicket({
               ))}
             </div>
           )}
+        </div>
+      )}
+      {/* Where a spread market covers the pair, which Boros market takes the
+          order: the spread (one order, one margin, one fee) or the two singles. */}
+      {!guided && mode === 'pair' && routeSpread && (
+        <div className="flex flex-col gap-2">
+          <FieldLabel>Trade on</FieldLabel>
+          <SegmentedToggle<'spread' | 'singles'>
+            ariaLabel="Trade on"
+            value={isSpread ? 'spread' : 'singles'}
+            onChange={(next) => (next === 'singles' ? useSingles() : setSinglesKey(null))}
+            fill
+            options={[
+              {
+                value: 'spread',
+                label: spreadName(routeSpread.base, routeSpread.spreadVenues!),
+                sub: '1 order',
+                title: 'One order on the spread market: one margin, one fee.',
+              },
+              { value: 'singles', label: '2 single markets', sub: '2 orders' },
+            ]}
+          />
         </div>
       )}
 
