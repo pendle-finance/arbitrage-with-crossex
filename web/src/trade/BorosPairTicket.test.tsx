@@ -1846,6 +1846,9 @@ describe('BorosPairTicket — spread ticket', () => {
     expect(receipt.getByText('0.000017 ETH')).toBeInTheDocument();
   });
 
+  /** One option of the "Trade on" toggle. */
+  const route = (name: string) =>
+    within(screen.getByRole('radiogroup', { name: 'Trade on' })).getByRole('radio', { name: new RegExp(`^${name}`) });
   /** The free ticket with Hyperliquid in slot A and Gate in slot B. */
   const pickHlGate = async (user: ReturnType<typeof userEvent.setup>) => {
     renderWithClient(<BorosPairTicket />);
@@ -1863,10 +1866,12 @@ describe('BorosPairTicket — spread ticket', () => {
     const user = userEvent.setup();
     await pickHlGate(user);
 
-    expect(await screen.findByText('ETH Spread HL-GATE 27 Nov 2026')).toBeInTheDocument();
-    expect(screen.queryByLabelText('Leg A')).not.toBeInTheDocument();
-    expect(screen.getByText(/1 Boros order instead of 2/)).toBeInTheDocument();
+    // One layout either way: the pickers keep the singles, and "Trade on" says the spread takes the order.
+    await waitFor(() => expect(route('ETH Spread HL-GATE')).toHaveAttribute('aria-checked', 'true'));
+    expect(screen.getByLabelText('Leg A')).toHaveValue('209');
+    expect(screen.getByLabelText('Leg B')).toHaveValue('211');
     expect(screen.getByRole('group', { name: 'Maturity' })).toBeInTheDocument();
+    expect(screen.queryByText(/1 Boros order instead of 2/)).not.toBeInTheDocument();
     await user.type(screen.getByLabelText(/^Size \(ETH\)/), '0.121');
 
     await waitFor(() => expect(bodies.length).toBeGreaterThan(0));
@@ -1876,13 +1881,15 @@ describe('BorosPairTicket — spread ticket', () => {
     expect(await screen.findByRole('button', { name: /Confirm · 1 Boros market order/ })).toBeInTheDocument();
   });
 
-  it('"Use 2 single markets" puts the picked singles back and keeps them', async () => {
+  it('"2 single markets" puts the picked singles back and keeps them', async () => {
     const bodies: Record<string, unknown>[] = [];
     server.use(...spreadHandlers((b) => bodies.push(b)));
     const user = userEvent.setup();
     await pickHlGate(user);
-    await user.click(await screen.findByRole('button', { name: 'Use 2 single markets' }));
+    await waitFor(() => expect(route('ETH Spread HL-GATE')).toHaveAttribute('aria-checked', 'true'));
+    await user.click(route('2 single markets'));
 
+    expect(route('2 single markets')).toHaveAttribute('aria-checked', 'true');
     expect(screen.getByLabelText('Leg A')).toHaveValue('209');
     expect(screen.getByLabelText('Leg B')).toHaveValue('211');
     // Swapping the two singles is still the trader's choice of singles.
@@ -1892,8 +1899,8 @@ describe('BorosPairTicket — spread ticket', () => {
     await waitFor(() => expect(bodies.length).toBeGreaterThan(0));
     expect((bodies[bodies.length - 1] as SimBody).legs.map((l) => l.marketId)).toEqual([211, 209]);
 
-    await user.click(screen.getByRole('button', { name: 'Use ETH Spread HL-GATE' }));
-    expect(await screen.findByText('ETH Spread HL-GATE 27 Nov 2026')).toBeInTheDocument();
+    await user.click(route('ETH Spread HL-GATE'));
+    await waitFor(() => expect(route('ETH Spread HL-GATE')).toHaveAttribute('aria-checked', 'true'));
   });
 
   it('swaps sides on the spread, and the singles behind it follow', async () => {
@@ -1901,7 +1908,10 @@ describe('BorosPairTicket — spread ticket', () => {
     server.use(...spreadHandlers((b) => bodies.push(b)));
     const user = userEvent.setup();
     await pickHlGate(user);
-    await user.click(await screen.findByRole('button', { name: 'Swap sides' }));
+    await waitFor(() => expect(route('ETH Spread HL-GATE')).toHaveAttribute('aria-checked', 'true'));
+    await user.click(screen.getByRole('button', { name: 'Swap markets' }));
+    // The pickers show the singles in their new slots.
+    expect(screen.getByLabelText('Leg A')).toHaveValue('211');
     await user.type(screen.getByLabelText(/^Size \(ETH\)/), '0.121');
     await waitFor(() =>
       expect((bodies[bodies.length - 1] as SimBody | undefined)?.legs).toEqual([
@@ -1909,7 +1919,7 @@ describe('BorosPairTicket — spread ticket', () => {
       ]),
     );
 
-    await user.click(screen.getByRole('button', { name: 'Use 2 single markets' }));
+    await user.click(route('2 single markets'));
     // Long the spread = long Hyperliquid, short Gate: Gate now sits in the short slot A.
     expect(screen.getByLabelText('Leg A')).toHaveValue('211');
     expect(screen.getByLabelText('Leg B')).toHaveValue('209');
@@ -1924,16 +1934,17 @@ describe('BorosPairTicket — spread ticket', () => {
     await pickHlGate(user);
     expect(screen.getByLabelText('Leg A')).toHaveValue('209');
     expect(screen.getByLabelText('Leg B')).toHaveValue('211');
-    expect(screen.queryByText(/Spread HL-GATE/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('radiogroup', { name: 'Trade on' })).not.toBeInTheDocument();
   });
 
   it('a close goes back to the singles when the spread holds nothing', async () => {
     server.use(...spreadHandlers(() => {}));
     const user = userEvent.setup();
     await pickHlGate(user);
-    await screen.findByText('ETH Spread HL-GATE 27 Nov 2026');
+    await waitFor(() => expect(route('ETH Spread HL-GATE')).toHaveAttribute('aria-checked', 'true'));
     await user.click(screen.getByRole('checkbox', { name: 'Reduce-only' }));
-    await waitFor(() => expect(screen.getByLabelText('Leg A')).toHaveValue('209'));
+    await waitFor(() => expect(screen.queryByRole('radiogroup', { name: 'Trade on' })).not.toBeInTheDocument());
+    expect(screen.getByLabelText('Leg A')).toHaveValue('209');
     expect(screen.getByLabelText('Leg B')).toHaveValue('211');
   });
 
@@ -1941,10 +1952,9 @@ describe('BorosPairTicket — spread ticket', () => {
     server.use(...spreadHandlers(() => {}, { spread: { currentSize: -0.121 } }));
     const user = userEvent.setup();
     await pickHlGate(user);
-    await screen.findByText('ETH Spread HL-GATE 27 Nov 2026');
+    await waitFor(() => expect(route('ETH Spread HL-GATE')).toHaveAttribute('aria-checked', 'true'));
     await user.click(screen.getByRole('checkbox', { name: 'Reduce-only' }));
-    expect(screen.getByText('ETH Spread HL-GATE 27 Nov 2026')).toBeInTheDocument();
-    expect(screen.queryByLabelText('Leg A')).not.toBeInTheDocument();
+    expect(route('ETH Spread HL-GATE')).toHaveAttribute('aria-checked', 'true');
   });
 
   it('keeps the two single markets when the venues list no spread at that maturity', async () => {
