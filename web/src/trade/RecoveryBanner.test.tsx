@@ -57,7 +57,7 @@ describe('RecoveryBanner', () => {
   it('standing engine alerts render with an ack control when no deal is active', async () => {
     renderBanner([], [{ id: 1, ts: 0, level: 'error', pairId: null, message: 'hedge wall: retries failing', ack: 0 }]);
     expect(await screen.findByRole('alert')).toHaveTextContent(/hedge wall/);
-    expect(screen.getByRole('button', { name: 'ack' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Ack' })).toBeInTheDocument();
   });
 
   it('rebalance alert has view', async () => {

@@ -372,7 +372,7 @@ export function DealModal({ dealId, onClose }: { dealId: string; onClose: () => 
               >
                 <span>{a.message}</span>
                 <button type="button" className="btn-ghost-xs shrink-0" onClick={() => ack.mutate(a.id)}>
-                  ack
+                  Ack
                 </button>
               </div>
             ))}
