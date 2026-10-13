@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fetchBorosMarket, fetchBorosMarkets, type BorosMarket, type FetchLike } from '../../src/core/boros/client';
 import { groupBorosMarkets } from '../../src/core/boros/opportunities';
-import { findSpread, isSpreadMarket, parseSpreadVenues, readSpreadSide } from '../../src/core/boros/spread';
+import { findSpread, isSpreadMarket, knownRateOf, parseSpreadVenues, readSpreadSide } from '../../src/core/boros/spread';
 import { spreadName, spreadPlatform } from '../../web/src/lib/spread';
 
 type RawMarket = Record<string, unknown>;
@@ -159,6 +159,25 @@ describe('spread markets', () => {
       expect(byId(markets, 59).state).toBe(state);
       expect(findSpread({ markets, venues: ['HYPERLIQUID', 'GATE'], maturity: NOV_27, tokenId: ETH, base: 'ETH' })).toBeNull();
     }
+  });
+
+  it('reads a spread at 0 as a real rate, and a single at 0 as none', () => {
+    const spread = { spreadVenues: ['HYPERLIQUID', 'GATE'] as [string, string] };
+    const single = { spreadVenues: null };
+    expect(knownRateOf(spread, 0)).toBe(true);
+    expect(knownRateOf(spread, -0.01)).toBe(true);
+    expect(knownRateOf(spread, Number.NaN)).toBe(false);
+    expect(knownRateOf(single, 0)).toBe(false);
+    expect(knownRateOf(single, -0.01)).toBe(true);
+  });
+
+  it('a spread with no mid falls back to its mark', async () => {
+    const results = fixture.results.map((r) =>
+      r.marketId === 59 ? { ...r, data: { ...(r.data as object), midApr: undefined, markApr: 0.012 } } : r,
+    );
+    const markets = await fetchBorosMarkets((async () => ({ ok: true, status: 200, json: async () => ({ results }) })) as unknown as FetchLike);
+    expect(markets.find((m) => m.marketId === 59)?.midApr).toBe(0.012);
+    expect(markets.find((m) => m.marketId === 51)?.midApr).not.toBe(0.012);
   });
 
   it('picks the spread side from the perps', () => {

@@ -189,10 +189,22 @@ export function evaluateRollGate(input: EvaluateRollInput): RollGate {
   // true one; the exit's, priced as a close, would contradict it.
   const warnings = [...exit.gate.warnings.filter((w) => !w.startsWith('Prepaid gas')), ...entry.gate.warnings];
 
+  // A batch roll (singles ↔ spread) gets no venue preview, so nothing else
+  // judges its margin.
+  const unpreviewedBatch = venue === null && rollPlanFor(exit.simulation, entry.simulation)?.kind === 'batch';
   const prefixed = (step: RollStep, gate: PairGate, label: string): void => {
     for (const b of gate.blockers) {
-      // The entry's margin was judged before the exit — replaced by `margin` below.
-      if (step === 'entry' && MARGIN_CODES.has(b.code)) continue;
+      // The entry's margin was judged before the exit — replaced by `margin`
+      // below. With no preview to replace it, it is shown, not dropped; only
+      // as a warning, since the closes may free enough.
+      if (step === 'entry' && MARGIN_CODES.has(b.code)) {
+        if (unpreviewedBatch) warnings.push(`${label}: ${b.message} (before the closes free their margin)`);
+        continue;
+      }
+      // A roll re-opens what each venue already holds, so two singles of
+      // slightly different sizes are the book as it stands, not a lopsided
+      // new open. The exposure checks below keep each venue's size and side.
+      if (step === 'entry' && b.code === 'unhedged-open') continue;
       blockers.push({ code: b.code, message: `${label}: ${b.message}`, step, leg: b.leg, marketId: b.marketId });
     }
   };

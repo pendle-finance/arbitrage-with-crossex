@@ -486,7 +486,7 @@ describe('RollOverModal — spread target', () => {
     expect(Object.keys(sent[0].clientOrderIds)).toContain(`entry:${SPREAD_NEW}`);
   });
 
-  it('a close-only spread at the target maturity blocks the roll there, with no fall back to singles', async () => {
+  it('a close-only spread at the target maturity counts as no spread: the roll goes into the two singles', async () => {
     spreadListed = true;
     spreadCloseOnly = true;
     const entries: PairSimBody[] = [];
@@ -496,9 +496,10 @@ describe('RollOverModal — spread target', () => {
       },
     });
     renderWithClient(<RollOverModal pair={pair} base="ETH" nowSec={NOW} onClose={() => {}} />);
-    const dialog = await screen.findByRole('dialog');
-    expect(await within(dialog).findByText(/there is nothing to roll into yet/, undefined, { timeout: 4_000 })).toBeInTheDocument();
-    expect(entries).toHaveLength(0);
+    await screen.findByRole('dialog');
+    await waitFor(() => expect(entries.length).toBeGreaterThan(0), { timeout: 4_000 });
+    expect(entries.at(-1)!.legs.map((l) => l.marketId).sort()).toEqual([GATE_NEW, HL_NEW].sort());
+    expect(entries.some((b) => b.legs.some((l) => l.marketId === SPREAD_NEW))).toBe(false);
   });
 });
 

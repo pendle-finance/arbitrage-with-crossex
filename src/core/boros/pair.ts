@@ -35,7 +35,7 @@ import {
   walkBorosBook,
   type BookStatus,
 } from './opportunities';
-import { SECONDS_IN_YEAR, knownRate } from './venue';
+import { SECONDS_IN_YEAR } from './venue';
 import {
   AUTO_TOP_UP_BELOW_USD,
   AUTO_TOP_UP_USD,
@@ -44,7 +44,7 @@ import {
   type BorosMarket,
   type BorosOrderBook,
 } from './client';
-import { isSpreadMarket } from './spread';
+import { isSpreadMarket, knownRateOf } from './spread';
 import { absWei, decimalString } from './borosApi';
 import { parseUnits } from 'viem';
 
@@ -99,7 +99,14 @@ export function chooseGasTopUpZone(input: GasTopUpZones & { amountUsd: number; p
     if (freeUsd === null) {
       return { ok: false, message: `The ${symbol} price is unknown, so a dollar gas top-up cannot be paid from your ${symbol} margin.` };
     }
-    if (freeUsd >= input.amountUsd) return { ok: true, marketId: market.marketId, tokenId: market.tokenId, symbol, freeUsd };
+    // The same coin's margin pays either way; the id the backend charges it
+    // to must be a trading single (as in the fallback below), never a spread
+    // or a close-only market.
+    const payer =
+      market.state === 'Normal' && !isSpreadMarket(market)
+        ? market
+        : input.markets.find((m) => m.tokenId === market.tokenId && m.state === 'Normal' && !isSpreadMarket(m));
+    if (freeUsd >= input.amountUsd && payer) return { ok: true, marketId: payer.marketId, tokenId: payer.tokenId, symbol, freeUsd };
   }
   let best: { tokenId: number; freeUsd: number; marketId: number } | null = null;
   for (const tokenId of input.freeCrossByToken.keys()) {
@@ -589,7 +596,7 @@ function simulateLeg(
   }
 
   const execApr = walk ? walk.execApr : null;
-  const mid = knownRate(leg.market.midApr) ? leg.market.midApr : null;
+  const mid = knownRateOf(leg.market, leg.market.midApr) ? leg.market.midApr : null;
   // A SELL is hurt by a LOWER rate, a BUY by a HIGHER one — which way is
   // wrong is a property of the order, so it follows `orderSide` too.
   const estSlippageApr =
@@ -606,7 +613,7 @@ function simulateLeg(
   const cap = leg.market.maxRateDeviationApr;
   const mark = leg.market.markApr;
   const bandEdge =
-    knownRate(mark) && Number.isFinite(cap) && cap > 0 ? (orderSide === 'short' ? mark - cap : mark + cap) : null;
+    knownRateOf(leg.market, mark) && Number.isFinite(cap) && cap > 0 ? (orderSide === 'short' ? mark - cap : mark + cap) : null;
   const fitEdge =
     worstApr === null || mid === null
       ? null
@@ -744,7 +751,8 @@ export function simulateBorosPair(input: SimulateBorosPairInput): BorosPairSimul
   const quotable = signs !== null && legs.every((l) => l.execApr !== null);
   const estSpreadApr = quotable ? signedSum(legs.map((l) => l.execApr!)) - feeDragApr : null;
   const mids = input.legs.map((l) => l.market.midApr);
-  const midSpreadApr = quotable && mids.every(knownRate) ? signedSum(mids) - feeDragApr : null;
+  const midsKnown = input.legs.every((l) => knownRateOf(l.market, l.market.midApr));
+  const midSpreadApr = quotable && midsKnown ? signedSum(mids) - feeDragApr : null;
   const slippageApr =
     midSpreadApr !== null && estSpreadApr !== null ? Math.abs(midSpreadApr - estSpreadApr) : null;
   const worstSpreadApr = quotable ? signedSum(legs.map((l) => l.worstApr!)) - feeDragApr : null;
@@ -1047,7 +1055,7 @@ export function evaluatePairGate(input: EvaluatePairInput): PairGate {
      */
     const cap = legIn.market.maxRateDeviationApr;
     const mark = legIn.market.markApr;
-    if (leg.worstApr !== null && Number.isFinite(cap) && cap > 0 && knownRate(mark)) {
+    if (leg.worstApr !== null && Number.isFinite(cap) && cap > 0 && knownRateOf(legIn.market, mark)) {
       const lo = mark - cap;
       const hi = mark + cap;
       if (leg.worstApr < lo || leg.worstApr > hi) {

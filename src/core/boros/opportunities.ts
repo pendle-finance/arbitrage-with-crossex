@@ -946,8 +946,10 @@ export function buildOpportunities(
     for (const build of spreadBuilds) {
       const venues = build.market.spreadVenues;
       const rate = directionApr(build, options);
-      if (!venues || rate === 0 || !venues.every((v) => input.crossexVenues.has(v))) continue;
-      const side: SpreadSide = rate > 0 ? 'SHORT' : 'LONG';
+      if (!venues || !venues.every((v) => input.crossexVenues.has(v))) continue;
+      // A spread at exactly 0 is still the pair's one route (the singles were
+      // skipped for it), so it keeps the first-venue-short side, not no side.
+      const side: SpreadSide = rate >= 0 ? 'SHORT' : 'LONG';
       const [shortVenue, longVenue] = side === 'SHORT' ? venues : [venues[1], venues[0]];
       const shortLeg = spreadPerpLeg(shortVenue, build, input);
       const longLeg = spreadPerpLeg(longVenue, build, input);

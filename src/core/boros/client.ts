@@ -423,7 +423,9 @@ function normalizeBorosMarket(m: Record<string, unknown>, nowSec: number): Boros
       settleFeeApr: norm18(extConfig.settleFeeRate as string),
       markApr: Number(data.markApr ?? 0),
       floatingApr: Number(data.floatingApr ?? 0),
-      midApr: Number(data.midApr ?? 0),
+      // A spread trades around 0, so its 0 is a real level (see knownRateOf);
+      // one with no mid falls back to its mark rather than to a false 0.
+      midApr: Number(data.midApr ?? (spreadVenues ? data.markApr : undefined) ?? 0),
       notionalOi: Number(data.notionalOI ?? 0),
       takerFeeRate: norm18(config.takerFee as string),
       maxRateDeviationApr:

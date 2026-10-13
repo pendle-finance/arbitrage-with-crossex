@@ -1060,13 +1060,15 @@ function rollTargetsFor(
   const targets: RollTarget[] = [];
   for (const maturity of [...new Set(later.map((m) => m.maturity))].sort((a, b) => a - b)) {
     const atMaturity = later.filter((m) => m.maturity === maturity);
+    // A close-only or paused spread counts as no spread: the singles stand.
     const spread = atMaturity.find(
       (m) =>
+        !m.closeOnly &&
         (tokenId === undefined || m.tokenId === tokenId) &&
         (m.spreadVenues?.every((v) => sameVenue(v, pair.longVenue) || sameVenue(v, pair.shortVenue)) ?? false),
     );
     if (spread?.spreadVenues) {
-      if (!spread.closeOnly) targets.push({ maturity, spreadMarketId: spread.marketId, spreadVenues: spread.spreadVenues });
+      targets.push({ maturity, spreadMarketId: spread.marketId, spreadVenues: spread.spreadVenues });
       continue;
     }
     const long = atMaturity.find((m) => !m.spreadVenues && sameVenue(m.venue, pair.longVenue));
@@ -5173,7 +5175,9 @@ export function AssetCard({
       const closedPerps = closedPerpRows.filter((r) => r.venue === venue);
       const closedAgg = group.perpClosed.filter((r) => r.venue === venue);
       const gapsHere = gaps.filter((g) => g.venue === venue);
-      const active = perps.length > 0 || boros.length > 0;
+      // A venue the spread hedges is live even with its own perp gone: the
+      // spread row sits here, and the missing perp is the gap to show.
+      const active = perps.length > 0 || boros.length > 0 || spreadHedges.length > 0;
       let w = 0;
       let apr = 0;
       let yuNotional = 0;
@@ -5286,8 +5290,10 @@ export function AssetCard({
     if (!(p.missingLong > 0 && p.missingShort > 0)) return null;
     const maturity = borosMaturityFor(p);
     const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
+    // A close-only or paused spread counts as no spread: offer both singles.
     const spread = (spreadCtx.data?.spreadMarkets ?? []).find(
       (m) =>
+        !m.closeOnly &&
         m.maturity > nowSec &&
         (maturity === undefined || m.maturity === maturity) &&
         same(m.base, group.base) &&

@@ -36,8 +36,8 @@ import {
 } from '../../core/boros/client';
 import { borosInitialMarginUsd, normalizeUnderlying } from '../../core/boros/opportunities';
 import { COIN_NOT_SUPPORTED_TEXT, isSupportedCoin } from '../../core/coins';
-import { knownRate, normalizeVenue } from '../../core/boros/venue';
-import { isSpreadMarket } from '../../core/boros/spread';
+import { normalizeVenue } from '../../core/boros/venue';
+import { isSpreadMarket, knownRateOf } from '../../core/boros/spread';
 import { readAgentApproval } from '../borosAgentApproval';
 import { isUpdating } from '../updater';
 import {
@@ -934,6 +934,7 @@ export function borosPairRoutes(deps: AppDeps) {
         ): BorosMarketOrderRequest | null => {
           const size = Math.abs(leg.sizing.deltaSize);
           if (size === 0 || leg.execApr === null) return null;
+          const legMarket = pricedLegs.find((p) => p.market.marketId === leg.marketId)?.market ?? { spreadVenues: null };
           const raw = account.positionRawByMarket.get(leg.marketId);
           const reducing =
             leg.sizing.opposing && !leg.sizing.flips && raw !== undefined ? reducingOrderSize(raw, size) : null;
@@ -952,7 +953,7 @@ export function borosPairRoutes(deps: AppDeps) {
             size: reducing?.size ?? size,
             // Bound off the book MID, the same anchor the ticket's "Est." and
             // "Max" use; a mid-less market falls back to the fill rate.
-            limitApr: limitAprFor(orderSide, knownRate(leg.midApr) ? leg.midApr : leg.execApr, leg.slippageApr),
+            limitApr: limitAprFor(orderSide, knownRateOf(legMarket, leg.midApr) ? leg.midApr : leg.execApr, leg.slippageApr),
             clientOrderId,
             ...(reducing?.sizeWei !== undefined ? { sizeWei: reducing.sizeWei } : {}),
           };
@@ -1361,7 +1362,7 @@ export function borosPairRoutes(deps: AppDeps) {
              */
             // A market with no mid (the feed's 0) falls back to the mark: a bound
             // of 0 ± tolerance would be nowhere near the book.
-            limitApr: limitAprFor(direction, knownRate(market.midApr) ? market.midApr : market.markApr, slippageApr),
+            limitApr: limitAprFor(direction, knownRateOf(market, market.midApr) ? market.midApr : market.markApr, slippageApr),
             clientOrderId,
             gasTopUpMarket: gasTopUpMarketFor(markets, account),
           });

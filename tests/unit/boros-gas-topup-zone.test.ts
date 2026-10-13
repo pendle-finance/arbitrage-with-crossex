@@ -88,6 +88,20 @@ describe('chooseGasTopUpZone', () => {
     expect(zone.ok).toBe(false);
   });
 
+  it.each<[string, { marketId: number; tokenId: number; state: string; spreadVenues: [string, string] | null }]>([
+    ['a spread', { marketId: 59, tokenId: 2, state: 'Normal', spreadVenues: ['HYPERLIQUID', 'GATE'] }],
+    ['a close-only market', { marketId: 22, tokenId: 2, state: 'CloseOnly', spreadVenues: null }],
+  ])('a trade on %s pays from its own coin, charged to a live single of that coin', (_label, traded) => {
+    const zone = chooseGasTopUpZone({
+      amountUsd: 5,
+      markets: [...markets, traded],
+      freeCrossByToken: new Map([[2, 0.5]]),
+      pricesUsd: prices,
+      preferMarketId: traded.marketId,
+    });
+    expect(zone).toMatchObject({ ok: true, marketId: 20, tokenId: 2, symbol: 'ETH' });
+  });
+
   it('keeps the traded zone when it can pay, even if another zone holds more', () => {
     const zone = chooseGasTopUpZone({
       amountUsd: 1.02,
