@@ -1044,7 +1044,8 @@ export interface BorosPairMarketRow {
   midApr: number;
   markApr: number;
   /** The venue's cap on how far one trade may move the rate, as an APR
-   * fraction (config.maxRateDeviationFactorBase1e4 / 1e4 × markApr). Half of
+   * fraction (config.maxRateDeviationFactorBase1e4 / 1e4 × max(IM rate floor,
+   * |markApr|)). Half of
    * it is the default close tolerance; wider than it can never fill. */
   maxRateDeviationApr: number;
   spreadVenues: [string, string] | null;

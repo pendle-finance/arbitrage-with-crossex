@@ -113,9 +113,9 @@ export interface BorosMarket {
   takerFeeRate: number;
   /**
    * The venue's own cap on how far a trade may move the rate, as an APR
-   * fraction: `factor / 1e4 × markApr`. A spread market uses the venue's own
-   * `factor / 1e4 × max(floor, |markApr|)`, the floor being the IM rate floor
-   * (pendle-core-v3 `MarketOrderAndOtc.sol:135`).
+   * fraction: `factor / 1e4 × max(floor, |markApr|)`, the floor being the IM
+   * rate floor (pendle-core-v3 `MarketOrderAndOtc.sol:135`, the same on every
+   * market; the Boros app's `getMaxRateDeviation` matches it).
    *
    * The factor is a FRACTION OF THE MARK, not the deviation itself — 2500 on a
    * 12% market is 0.25 × 0.12 = 3% APR. A close bound wider than this can never fill, so
@@ -430,12 +430,10 @@ function normalizeBorosMarket(m: Record<string, unknown>, nowSec: number): Boros
       takerFeeRate: norm18(config.takerFee as string),
       maxRateDeviationApr:
         (Number(config.maxRateDeviationFactorBase1e4 ?? 0) / 1e4) *
-        (spreadVenues
-          ? Math.max(
-              1.00005 ** (Number(imData.iTickThresh ?? 0) * Number(imData.tickStep ?? 0)) - 1,
-              Math.abs(Number(data.markApr ?? 0)),
-            )
-          : Number(data.markApr ?? 0)),
+        Math.max(
+          1.00005 ** (Number(imData.iTickThresh ?? 0) * Number(imData.tickStep ?? 0)) - 1,
+          Math.abs(Number(data.markApr ?? 0)),
+        ),
       // A spread Boros still lists as a dev test (isUiWhitelisted false, so not
       // in the Boros app) takes no opens here either; a held one still closes.
       state:
