@@ -139,6 +139,24 @@ describe('a spread leg in the Positions model', () => {
     expect(d.unpairedPerps).toEqual([]);
   });
 
+  it('a spread at another term does not take perps from hedged singles', () => {
+    // "Spread first" holds within one venue pairing and term only. Across
+    // terms the larger unit claims first, as before the split.
+    const OCT30 = NOV27 - 28 * 86_400;
+    const d = deriveAsset(
+      group({
+        perpOpen: ownerPerps(0.3),
+        borosOpen: [...mixedBook().slice(0, 2), { ...boros(63, 'SHORT', 0.1, 0.03, SPREAD), maturity: OCT30 }],
+      }),
+      {},
+      0,
+      NOW,
+    );
+    expect(d.pairs.map((p) => [p.kind, p.soonestMaturitySec])).toEqual([['singles', NOV27]]);
+    expect(d.pairs[0].size).toBeCloseTo(0.3, 9);
+    expect(d.pendingLegs.map((l) => l.marketId)).toEqual([63]);
+  });
+
   it('each pair of a mixed book quotes its own locked spread', () => {
     // 100× the book: each pair's capital clears the $100 floor for an APR.
     const d = deriveAsset(group({ perpOpen: ownerPerps(55.5), borosOpen: mixedBook(100) }), {}, 0, NOW);
