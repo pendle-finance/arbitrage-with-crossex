@@ -14,8 +14,10 @@ order. ETH and BTC coin books need a 0.1% match to read "Hedged".
   coin, collateral and maturity, the pair uses it: 1 Boros order, one fee and one margin
   instead of two. Without one, the pair keeps its 2 single Boros legs. Opportunities,
   Positions, Funding Bundles, close, roll, Telegram roll alerts and share links all read a
-  spread leg as one leg that covers both venues. A pair can hold singles and a spread at the
-  same time; close and roll handle both in one batch. Any two venues work, not only
+  spread leg as one leg that covers both venues. If you hold a spread and 2 singles at the
+  same venues and maturity, Fixed Rate Pairs shows them as 2 pairs, so you can compare their
+  rates and close or roll each one on its own. The spread pair is hedged by your perps first;
+  a pair the perps do not cover shows the missing perps. Any two venues work, not only
   Hyperliquid and Gate. A spread that Boros has not launched in its app yet is treated as
   close-only: it takes no new orders.
 - **Order ticket uses the spread.** Boros rates → Pair: when the two picked markets have a
