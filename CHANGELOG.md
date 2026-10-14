@@ -3,6 +3,42 @@
 Only substantial releases are listed here — each one bumps `version.json` (which is what the
 in-app update check compares against).
 
+## 1.7.5 — 2026-10-14
+
+TLDR: Boros spread markets. Where Boros lists one, a single Boros order hedges a
+Hyperliquid/Gate pair, so a pair has 3 legs instead of 4. Low Boros gas no longer stops an
+order. ETH and BTC coin books need a 0.1% match to read "Hedged".
+
+- **Spread markets.** A spread market such as "ETH Spread HL-GATE" is one Boros market that
+  pays the funding gap between two venues. Where Boros lists one for a pair's two venues,
+  coin, collateral and maturity, the pair uses it: 1 Boros order, one fee and one margin
+  instead of two. Without one, the pair keeps its 2 single Boros legs. Opportunities,
+  Positions, Funding Bundles, close, roll, Telegram roll alerts and share links all read a
+  spread leg as one leg that covers both venues. A pair can hold singles and a spread at the
+  same time; close and roll handle both in one batch. Any two venues work, not only
+  Hyperliquid and Gate. A spread that Boros has not launched in its app yet is treated as
+  close-only: it takes no new orders.
+- **Order ticket uses the spread.** Boros rates → Pair: when the two picked markets have a
+  trading spread market, the order goes on the spread. A "Trade on ETH Spread HL-GATE" line
+  says so. A paused or close-only spread trades the singles.
+- **Low gas no longer stops an order.** An order still adds about $1 of Boros gas when gas
+  runs low. If the traded coin cannot spare it, the dollar now comes from the coin with the
+  most free cross margin. Before, the open was blocked and a close at gas debt failed. The
+  "Top up gas by hand" box is gone, because every order tops up by itself. A close shows a
+  gas line only when gas is below $0.
+- **Perfect hedge 0.1% on ETH and BTC coin books.** "Hedged" and the "To complete the hedge"
+  hint now need the legs within 0.1%, not 2%, on ETH and BTC coin-margined books. USDT-market
+  legs, HYPE and other coins keep 2%. The locked APR and profit at maturity do not change.
+- **Rolls match your coin.** Roll over and the Telegram roll alert now offer markets in the
+  coin you hold. Before, a BTC Hyperliquid/Gate pair was offered a USDT market and got no
+  roll alert.
+- **Share links.** The share card shows a pair's Boros side as one spread row. Long Boros legs
+  now read the right way round on the share page. Links shared before keep their old numbers.
+- **Smaller changes.** The Pairs tab is "Fixed Rate Pairs". The form that closes only the
+  Boros legs is titled "Close Boros legs". Double-click the amount on Opportunities to edit it.
+  Long leg names wrap instead of running into the Size column. Boxed buttons start with a
+  capital: "Open more", "Ack", "Restore", "Mark".
+
 ## 1.7.4 — 2026-10-09
 
 TLDR: Boros gas top-ups now pay from the market you trade, in that market's own coin. Accounts
