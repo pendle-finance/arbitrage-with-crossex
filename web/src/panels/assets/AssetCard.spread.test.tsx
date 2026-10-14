@@ -391,6 +391,15 @@ describe('AssetCard with a spread leg', () => {
     expect(screen.queryByRole('button', { name: 'Open Boros leg' })).toBeNull();
   });
 
+  it('perps plus a part single still offer singles, not the spread', async () => {
+    const user = userEvent.setup();
+    const part = { ...single(60, 'GATE', 'LONG', 0.048), sizeToken: 0.005, notionalUsd: 0.005 * PX };
+    renderCard({ ...book([part]), perpOpen: [perp('HYPERLIQUID', 'SHORT', 0.3), perp('GATE', 'LONG', 0.3)] });
+    await showPairs(user);
+    expect(await screen.findByRole('button', { name: 'Open both Boros legs' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Open Boros leg' })).toBeNull();
+  });
+
   it('a spread-only pair closes one Boros leg', async () => {
     const user = userEvent.setup();
     renderCard({ ...book([spreadLeg]), perpOpen: [] });
