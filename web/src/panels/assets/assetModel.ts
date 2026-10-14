@@ -1612,30 +1612,30 @@ export function deriveAsset(
         .filter((y) => y.maturity === maturity)
         .reduce((t, y) => t + (yuRemaining.get(y.marketId) ?? 0), 0);
     /** The largest unit any combination can still form, re-judged after each
-     * claim. A combination that formed nothing is not offered again. Spread
-     * units claim the perps first; single-market units take what is left
-     * (owner 2026-10-14). */
+     * claim. A combination that formed nothing is not offered again. Units
+     * rank by everything their venues and term can still pair, spread and
+     * singles together, as before the split; within one venue pairing and
+     * term the spread claims the perps first (owner 2026-10-14). */
     function* largestFirst() {
       const spent = new Set<(typeof combos)[number]>();
       for (;;) {
         let best: (typeof combos)[number] | null = null;
-        let bestNeed = 1e-9;
-        for (const kind of ['spread', 'singles'] as const) {
-          for (const c of combos) {
-            if (c.kind !== kind || spent.has(c)) continue;
-            const need = Math.min(
-              perpLeft.get(c.l) ?? 0,
-              perpLeft.get(c.sh) ?? 0,
-              kind === 'spread'
-                ? spreadLeftAt(c.l.venue, c.sh.venue, c.maturity)
-                : Math.min(yuLeftAt(c.l.venue, c.maturity), yuLeftAt(c.sh.venue, c.maturity)),
-            );
-            if (need > bestNeed) {
-              best = c;
-              bestNeed = need;
-            }
+        let bestRank = 1e-9;
+        let bestNeed = 0;
+        for (const c of combos) {
+          if (spent.has(c)) continue;
+          const perps = Math.min(perpLeft.get(c.l) ?? 0, perpLeft.get(c.sh) ?? 0);
+          const spreadLeft = spreadLeftAt(c.l.venue, c.sh.venue, c.maturity);
+          const singlesLeft = Math.min(yuLeftAt(c.l.venue, c.maturity), yuLeftAt(c.sh.venue, c.maturity));
+          const need = Math.min(perps, c.kind === 'spread' ? spreadLeft : singlesLeft);
+          // Strictly greater: the spread combo comes first in `combos`, so it
+          // wins the tie with its singles twin.
+          const rank = Math.min(perps, spreadLeft + singlesLeft);
+          if (need > 1e-9 && rank > bestRank) {
+            best = c;
+            bestRank = rank;
+            bestNeed = need;
           }
-          if (best !== null) break;
         }
         if (best === null) return;
         const before = perpLeft.get(best.l);
