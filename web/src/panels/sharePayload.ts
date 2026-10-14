@@ -7,7 +7,7 @@
  * the link sees is exactly what the sharer saw. */
 import type { ShareLegV1, SharePayloadV1 } from '../lib/shareCodec';
 import { spreadShareVenue } from '../lib/spread';
-import { pairLockedSpread, type PairEstimate, type PairLegDetail } from './assets/assetModel';
+import { entryAprOf, pairLockedSpread, type PairEstimate, type PairLegDetail } from './assets/assetModel';
 
 type ShareSourceLeg = Pick<PairLegDetail, 'kind' | 'venue' | 'side' | 'notionalUsd' | 'sizeBase' | 'lockedApr' | 'spreadVenues'>;
 
@@ -88,7 +88,10 @@ export function pairSharePayload(
       s: l.side === 'SHORT' ? 'S' : 'L',
       n: round100(l.notionalUsd),
     };
-    if (l.kind === 'yu' && l.lockedApr !== null) leg.r = l.lockedApr;
+    // `r` is the leg's entry fixed rate (the codec's contract), which the
+    // share page reads with the side: SHORT receives it, LONG pays it.
+    // `lockedApr` is signed for the trader (LONG = −entry), so turn it back.
+    if (l.kind === 'yu' && l.lockedApr !== null) leg.r = entryAprOf(l.side, l.lockedApr);
     // `tn`/`ts` is a COIN quantity — every leg carries one.
     if (SYMBOL_RE.test(base) && l.sizeBase > 0 && leg.n > 0) {
       const tn = sig4(l.sizeBase);
