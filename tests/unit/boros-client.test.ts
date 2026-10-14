@@ -142,7 +142,14 @@ describe('fetchBorosMarkets', () => {
     expect(markets[0].maxRateDeviationApr).toBeGreaterThan(0);
   });
 
-  it('keeps a single market rate band at factor × mark under the floor', async () => {
+  // The contract checks every market against factor × max(floor, |mark|).
+  // Most live singles mark under their floor (Gate ETHUSDT 4.19% on a 6% floor),
+  // so factor × mark alone blocked bounds the venue takes.
+  it.each([
+    ['a mark under the floor', 0.0516, 0.25 * (1.00005 ** 1540 - 1)],
+    ['a negative mark', -0.1384, 0.25 * 0.1384],
+    ['a mark over the floor', 0.12, 0.03],
+  ])('sizes a single market rate band off max(floor, |mark|) for %s', async (_, markApr, band) => {
     const markets = await fetchBorosMarkets(
       stub(() => ({
         body: {
@@ -153,13 +160,14 @@ describe('fetchBorosMarkets', () => {
               imData: { tickStep: 2, iTickThresh: 770 },
               config: { maxRateDeviationFactorBase1e4: 2500 },
               platform: { platformId: 'gate' },
-              data: { markApr: 0.0516 },
+              data: { markApr },
             },
           ],
         },
       })),
     );
-    expect(markets[0].maxRateDeviationApr).toBeCloseTo(0.25 * 0.0516, 12);
+    expect(markets[0].maxRateDeviationApr).toBeCloseTo(band, 12);
+    expect(markets[0].maxRateDeviationApr).toBeGreaterThan(0);
   });
 
   it('normalizes the initial-margin inputs (kIM is 18-dec, tThresh comes off config)', async () => {
