@@ -29,6 +29,9 @@ order. ETH and BTC coin books need a 0.1% match to read "Hedged".
 - **Perfect hedge 0.1% on ETH and BTC coin books.** "Hedged" and the "To complete the hedge"
   hint now need the legs within 0.1%, not 2%, on ETH and BTC coin-margined books. USDT-market
   legs, HYPE and other coins keep 2%. The locked APR and profit at maturity do not change.
+- **Bigger Boros orders fill.** The order ticket now uses the same rate limit as Boros. Before,
+  it used a tighter one on most markets (Gate ETHUSDT 27 Nov: ±1.05% instead of ±1.50%), so it
+  blocked wider tolerances and capped large orders that Boros would have filled.
 - **Rolls match your coin.** Roll over and the Telegram roll alert now offer markets in the
   coin you hold. Before, a BTC Hyperliquid/Gate pair was offered a USDT market and got no
   roll alert.
