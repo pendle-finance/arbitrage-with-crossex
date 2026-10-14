@@ -618,11 +618,12 @@ export function perpOnlyCloseLegs(pair: Pick<PerpOnlyPair, 'long' | 'short'>): P
   return [pair.long, pair.short].map((l) => ({ symbol: l.symbol, qty: l.sizeBase, venue: l.venue, partial: l.share < 0.9995 }));
 }
 
-/** What a side still has to open: under 1e-9 is float residue (0.949 − 0.158
- * against 0.791 left "missing <0.000001 ETH" with an Open leg button). */
+/** What a side still has to open. Float residue is not missing: 0.949 − 0.158
+ * against 0.791 left "missing <0.000001 ETH" with an Open leg button. The cut
+ * is relative too, as a dollar-unit leg of $8M has float steps above 1e-9. */
 function missingOf(take: number, have: { unit: 'base' | 'usd'; sizeBase: number; notionalUsd: number } | null): number {
   const m = take - (have ? sizeIn(have, have.unit) : 0);
-  return m > 1e-9 ? m : 0;
+  return m > Math.max(1e-9, take * 1e-9) ? m : 0;
 }
 
 /** A pair this small is rounding, not a position: left among the ungrouped. */
@@ -778,31 +779,53 @@ export function borosOnlyPairs(
   };
 
   const pairs: BorosOnlyPair[] = [];
-  // Legs opened together are the same size, so the closest sizes match
-  // first, then the largest. Largest first alone split a Gate/Hyperliquid
-  // remainder (0.261 each) when a 233 ETH Binance long sat at the same
-  // maturity: the Hyperliquid short went to Binance.
+  // Two greedy orders, and the one that pairs more notional wins. Largest
+  // first is 1.7.4's order. Closest size first keeps legs opened together
+  // (the same size) in one unit: largest first gave a 0.261 Hyperliquid
+  // single to a 233 ETH Binance leg at the same date and left its Gate twin
+  // alone. Closest first loses when a venue holds both sides (Gate L 5, HL S
+  // 5.1, HL L 5, Lighter S 5 after an open-only roll pairs only Gate/Lighter),
+  // so it wins only on a tie.
   const candidates = shorts.flatMap((s) =>
     longs.filter((l) => l.venue !== s.venue && l.unit === s.unit && l.maturity === s.maturity).map((l) => ({ s, l })),
   );
-  const gap = ({ s, l }: { s: PendingLeg; l: PendingLeg }) => {
-    const a = yuLeft.get(l) ?? 0;
-    const b = yuLeft.get(s) ?? 0;
-    return Math.abs(a - b) / Math.max(a, b);
-  };
-  for (;;) {
-    let best = -1;
-    for (let i = 0; i < candidates.length; i++) {
-      const c = candidates[i];
-      if (!((yuLeft.get(c.l) ?? 0) > 0 && (yuLeft.get(c.s) ?? 0) > 0)) continue;
-      if (best < 0 || gap(c) < gap(candidates[best])) best = i;
+  const greedy = (closest: boolean) => {
+    const rest = new Map(yuLeft);
+    const pool = [...candidates];
+    const gap = ({ s, l }: { s: PendingLeg; l: PendingLeg }) => {
+      const a = rest.get(l) ?? 0;
+      const b = rest.get(s) ?? 0;
+      return Math.abs(a - b) / Math.max(a, b);
+    };
+    const out: { s: PendingLeg; l: PendingLeg; take: number }[] = [];
+    let paired = 0;
+    for (;;) {
+      let best = -1;
+      for (let i = 0; i < pool.length; i++) {
+        const c = pool[i];
+        if (!((rest.get(c.l) ?? 0) > 0 && (rest.get(c.s) ?? 0) > 0)) continue;
+        if (best < 0) best = i;
+        if (!closest) break;
+        if (gap(c) < gap(pool[best])) best = i;
+      }
+      if (best < 0) break;
+      const { s, l } = pool.splice(best, 1)[0];
+      const take = Math.min(rest.get(l) ?? 0, rest.get(s) ?? 0);
+      const usd = slice(l, take).notionalUsd + slice(s, take).notionalUsd;
+      if (usd < PERP_ONLY_DUST_USD) continue;
+      rest.set(l, (rest.get(l) ?? 0) - take);
+      rest.set(s, (rest.get(s) ?? 0) - take);
+      out.push({ s, l, take });
+      paired += usd;
     }
-    if (best < 0) break;
-    const { s, l } = candidates.splice(best, 1)[0];
-    const take = Math.min(yuLeft.get(l) ?? 0, yuLeft.get(s) ?? 0);
+    return { out, paired };
+  };
+  const byLargest = greedy(false);
+  const byClosest = greedy(true);
+  const matches = byClosest.paired >= byLargest.paired * (1 - 1e-9) ? byClosest.out : byLargest.out;
+  for (const { s, l, take } of matches) {
     const longYu = slice(l, take);
     const shortYu = slice(s, take);
-    if (longYu.notionalUsd + shortYu.notionalUsd < PERP_ONLY_DUST_USD) continue;
     yuLeft.set(l, (yuLeft.get(l) ?? 0) - take);
     yuLeft.set(s, (yuLeft.get(s) ?? 0) - take);
 

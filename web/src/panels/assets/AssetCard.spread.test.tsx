@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { delay, http, HttpResponse } from 'msw';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AssetBorosHistory, AssetBorosOpen, AssetGroup, AssetPerpOpen } from '../../api/types';
 import { server } from '../../test/server';
 import { renderWithClient } from '../../test/utils';
@@ -365,6 +365,8 @@ describe('AssetCard with a spread leg', () => {
     await showPairs(user);
     const rows = screen.getAllByRole('button', { name: /^Gate\s*LONG/ });
     expect(rows).toHaveLength(2);
+    // The spread pair names its market, so the twins read differently.
+    expect(rows.filter((r) => /ETH Spread HL-GATE/.test(r.textContent ?? ''))).toHaveLength(1);
     for (const [i, legs] of [
       [0, 1],
       [1, 2],
@@ -396,8 +398,22 @@ describe('AssetCard with a spread leg', () => {
     const part = { ...single(60, 'GATE', 'LONG', 0.048), sizeToken: 0.005, notionalUsd: 0.005 * PX };
     renderCard({ ...book([part]), perpOpen: [perp('HYPERLIQUID', 'SHORT', 0.3), perp('GATE', 'LONG', 0.3)] });
     await showPairs(user);
-    expect(await screen.findByRole('button', { name: 'Open both Boros legs' })).toBeInTheDocument();
+    // Each single opens alone: a pair ticket would route to a trading spread.
+    expect(await screen.findAllByRole('button', { name: 'Open leg' })).toHaveLength(2);
+    expect(screen.queryByRole('button', { name: 'Open both Boros legs' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Open Boros leg' })).toBeNull();
+  });
+
+  it('a spread and 2 singles with no perps are 2 Boros-only cards with their own keys', async () => {
+    const user = userEvent.setup();
+    const errors: string[] = [];
+    const spy = vi.spyOn(console, 'error').mockImplementation((...a: unknown[]) => void errors.push(a.map(String).join(' ')));
+    renderCard({ ...book([spreadLeg, single(51, 'HYPERLIQUID', 'SHORT', 0.083), single(60, 'GATE', 'LONG', 0.048)]), perpOpen: [] });
+    await showPairs(user);
+    expect(await screen.findByRole('button', { name: 'Close Boros leg' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Close Boros legs' })).toBeInTheDocument();
+    spy.mockRestore();
+    expect(errors.filter((e) => /same key/.test(e))).toEqual([]);
   });
 
   it('a spread-only pair closes one Boros leg', async () => {

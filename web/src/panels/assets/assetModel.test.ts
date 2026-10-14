@@ -833,6 +833,16 @@ describe('perpOnlyPairs', () => {
     expect(p.missingLong).toBe(0);
     expect(p.missingShort).toBe(0.791);
   });
+
+  it('float residue on a dollar-unit leg of millions is not missing either', () => {
+    const usd = (l: ReturnType<typeof perpLeg>, n: number) => ({ ...l, unit: 'usd' as const, notionalUsd: n });
+    const take = 9_876_543.21;
+    const [p] = perpOnlyPairs(
+      [usd(perpLeg('GATE', 'LONG', 1), take), usd(perpLeg('HYPERLIQUID', 'SHORT', 1), take)],
+      [{ ...yuLeg('GATE', 'LONG', 1, 1_790_000_000), unit: 'usd' as const, notionalUsd: take - take * 2 ** -51 }],
+    ).pairs;
+    expect(p.missingLong).toBe(0);
+  });
 });
 
 describe('pairLockedSpread — on the RATE legs’ notional', () => {
@@ -950,6 +960,22 @@ describe('borosOnlyPairs', () => {
       ],
     );
     expect(pairs.map((p) => `${p.longVenue}/${p.shortVenue} ${p.size}`).sort()).toEqual(['BINANCE/LIGHTER 191.6', 'GATE/HYPERLIQUID 0.261']);
+  });
+
+  it('keeps largest first when closest first would strand a venue that holds both sides', () => {
+    // After an open-only roll: Gate L 5 with HL S 5.1 (a part-fill), HL L 5
+    // with Lighter S 5. Closest first pairs only Gate/Lighter and strands both
+    // HL legs; largest first pairs all 10.
+    const { pairs } = borosOnlyPairs(
+      [],
+      [
+        yuLeg('GATE', 'LONG', 5, M, -0.05, 1),
+        yuLeg('HYPERLIQUID', 'SHORT', 5.1, M, 0.08, 2),
+        yuLeg('HYPERLIQUID', 'LONG', 5, M, -0.05, 3),
+        yuLeg('LIGHTER', 'SHORT', 5, M, 0.08, 4),
+      ],
+    );
+    expect(pairs.map((p) => `${p.longVenue}/${p.shortVenue} ${p.size}`).sort()).toEqual(['GATE/HYPERLIQUID 5', 'HYPERLIQUID/LIGHTER 5']);
   });
 
   it('never blends maturities, pairs a venue with itself, or pairs two legs on one side', () => {
