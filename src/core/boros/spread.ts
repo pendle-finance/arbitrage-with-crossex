@@ -21,35 +21,6 @@ export const isSpreadMarket = (m: Pick<BorosMarket, 'spreadVenues'>): boolean =>
 export const knownRateOf = (m: Pick<BorosMarket, 'spreadVenues'>, n: number | null | undefined): n is number =>
   isSpreadMarket(m) ? typeof n === 'number' && Number.isFinite(n) : knownRate(n);
 
-/** The funding gap below which leg 1 − leg 2 and leg 2 − leg 1 are too close to tell apart. */
-const ORDER_CHECK_MIN_GAP = 0.005;
-
-/**
- * True when a spread's live floating rate reads as leg 2 − leg 1. The backend
- * sets each leg's sign by hand, apart from the platformId order, so the order
- * is checked against the singles' live funding where Boros lists both venues
- * for the coin. False when it cannot tell: no single on a venue, or the two
- * venues fund within 0.5%.
- */
-export function readsReversed(spread: BorosMarket, markets: ReadonlyArray<BorosMarket>): boolean {
-  const venues = spread.spreadVenues;
-  if (!venues || !knownRateOf(spread, spread.floatingApr)) return false;
-  const funding = (venue: string): number | undefined =>
-    markets.find(
-      (m) =>
-        !isSpreadMarket(m) &&
-        m.base.toLowerCase() === spread.base.toLowerCase() &&
-        normalizeVenue(m.venue) === venue &&
-        knownRate(m.floatingApr),
-    )?.floatingApr;
-  const first = funding(venues[0]);
-  const second = funding(venues[1]);
-  if (first === undefined || second === undefined) return false;
-  const gap = first - second;
-  if (Math.abs(gap) < ORDER_CHECK_MIN_GAP) return false;
-  return Math.abs(spread.floatingApr + gap) < Math.abs(spread.floatingApr - gap);
-}
-
 export function findSpread({
   markets,
   venues,

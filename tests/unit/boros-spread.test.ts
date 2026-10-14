@@ -140,26 +140,6 @@ describe('spread markets', () => {
     expect(byId(other, 904).venue).toBe('BINANCE-OKX');
   });
 
-  it('drops a spread whose live rate reads against its leg order, and keeps the singles', async () => {
-    // Labelled gate-hyperliquid but priced HL − Gate (+4.32%, the singles fund 4.65% and 0.33%).
-    const mislabelled = withPlatformId(903, 'gate-hyperliquid');
-    const markets = await fetchBorosMarkets(serve([mislabelled, ...fixture.results.filter((r) => r.marketId !== 59)]));
-    expect(markets.map((m) => m.marketId)).not.toContain(903);
-    expect(markets.map((m) => m.marketId)).toEqual(expect.arrayContaining([51, 60]));
-    expect(findSpread({ markets, venues: ['HYPERLIQUID', 'GATE'], maturity: NOV_27, tokenId: ETH, base: 'ETH' })).toBeNull();
-  });
-
-  it('keeps a spread when its leg order cannot be checked', async () => {
-    // No Binance single to read: the leg order stands.
-    const unchecked = withFloating(withPlatformId(904, 'binance-gate'), -0.2);
-    const markets = await fetchBorosMarkets(serve([...fixture.results, unchecked]));
-    expect(byId(markets, 904).spreadVenues).toEqual(['BINANCE', 'GATE']);
-    // Two venues funding within 0.5% cannot tell the orders apart.
-    const close = fixture.results.map((r) => (r.marketId === 60 ? withFloating(r, 0.044) : r));
-    const near = await fetchBorosMarkets(serve([...close, withFloating(withPlatformId(905, 'gate-hyperliquid'), 0.04)]));
-    expect(byId(near, 905).spreadVenues).toEqual(['GATE', 'HYPERLIQUID']);
-  });
-
   it('a spread Boros lists as a dev test takes no opens, but a held one still closes', async () => {
     const results = fixture.results.map((r) => (r.marketId === 59 ? withMetadata(r, { isUiWhitelisted: false }) : r));
     const markets = await fetchBorosMarkets(serve(results));

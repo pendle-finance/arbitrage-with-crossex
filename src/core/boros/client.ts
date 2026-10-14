@@ -20,7 +20,7 @@ import { spreadName, spreadPlatform } from '../../../web/src/lib/spread';
 import { CoreError } from '../errors';
 import { BOOK_VENUES } from '../estimate/books';
 import { borosInitialMarginUsd } from './opportunities';
-import { parseSpreadVenues, readsReversed } from './spread';
+import { parseSpreadVenues } from './spread';
 import { normalizeVenue } from './venue';
 
 /** The api-gateway surface (`/apis` → api-gateway → open-api's `open-api-v2/…`
@@ -366,10 +366,7 @@ export async function fetchBorosMarkets(fetchImpl: FetchLike): Promise<BorosMark
     if (resumeToken === null || added.length === 0) break;
   }
   const nowSec = Date.now() / 1000;
-  const markets = out.filter((m) => !isUnreadableSpread(m)).map((m) => normalizeBorosMarket(m, nowSec));
-  // A spread priced against its platformId's leg order would be hedged with
-  // both perps on the wrong side; the pair keeps its singles instead.
-  return markets.filter((m) => !readsReversed(m, markets));
+  return out.filter((m) => !isUnreadableSpread(m)).map((m) => normalizeBorosMarket(m, nowSec));
 }
 
 /**
