@@ -341,6 +341,56 @@ describe('AssetCard with a spread leg', () => {
     expect(dialog.textContent).not.toContain('Close pair');
   });
 
+  // mozzarella 2026-10-14: spread and single markets are separate groups.
+  const single = (marketId: number, venue: string, side: 'LONG' | 'SHORT', entryApr: number): AssetBorosOpen => ({
+    ...spreadLeg,
+    marketId,
+    venue,
+    spreadVenues: null,
+    side,
+    sizeToken: 0.3,
+    notionalUsd: 0.3 * PX,
+    entryApr,
+    markApr: entryApr,
+  });
+
+  it('a spread and two singles at the same venues and term are two pairs, each closing its own legs', async () => {
+    const user = userEvent.setup();
+    const g = {
+      ...book([spreadLeg, single(51, 'HYPERLIQUID', 'SHORT', 0.083), single(60, 'GATE', 'LONG', 0.048)]),
+      perpOpen: [perp('HYPERLIQUID', 'SHORT', 0.855), perp('GATE', 'LONG', 0.855)],
+    };
+    renderCard(g);
+    expect(screen.getByRole('tab', { name: 'Fixed Rate Pairs (2)' })).toBeInTheDocument();
+    await showPairs(user);
+    const rows = screen.getAllByRole('button', { name: /^Gate\s*LONG/ });
+    expect(rows).toHaveLength(2);
+    for (const [i, legs] of [
+      [0, 1],
+      [1, 2],
+    ] as const) {
+      await user.click(screen.getAllByRole('button', { name: /^Gate\s*LONG/ })[i]);
+      const closes = await screen.findAllByRole('button', { name: 'Close Boros' });
+      await user.click(closes[closes.length - 1]);
+      const dialog = await screen.findByRole('dialog');
+      expect(within(dialog).getAllByText('Boros')).toHaveLength(legs);
+      await user.keyboard('{Escape}');
+      await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+      await user.click(screen.getAllByRole('button', { name: /^Gate\s*LONG/ })[i]);
+    }
+  });
+
+  it('perps plus one single offer the other single, even with a spread listed', async () => {
+    const user = userEvent.setup();
+    renderCard({ ...book([single(60, 'GATE', 'LONG', 0.048)]), perpOpen: [perp('HYPERLIQUID', 'SHORT', 0.3), perp('GATE', 'LONG', 0.3)] });
+    await showPairs(user);
+    expect(await screen.findByRole('button', { name: 'Open leg' })).toHaveAttribute(
+      'title',
+      expect.stringMatching(/^Open only the Hyperliquid SHORT Boros leg/),
+    );
+    expect(screen.queryByRole('button', { name: 'Open Boros leg' })).toBeNull();
+  });
+
   it('a spread-only pair closes one Boros leg', async () => {
     const user = userEvent.setup();
     renderCard({ ...book([spreadLeg]), perpOpen: [] });

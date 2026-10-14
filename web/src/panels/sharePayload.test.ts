@@ -35,6 +35,7 @@ const yuLeg = (over: Partial<PairLegDetail> = {}): PairLegDetail => ({
 const pair = (over: Partial<PairEstimate> = {}): PairEstimate => ({
   longVenue: 'gate',
   shortVenue: 'hyperliquid',
+  kind: 'singles',
   size: 0.01,
   unit: 'base',
   notionalUsd: 98,

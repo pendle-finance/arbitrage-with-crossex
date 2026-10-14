@@ -934,7 +934,7 @@ describe('RollOverModal — open only (keep old legs)', () => {
 
 describe('RollOverModal — per-venue exposure', () => {
   const SPREAD_OLD = 58;
-  const bookOf = (single: { gate: number; hl: number }, spread: number) => {
+  const bookOf = (single: { gate: number; hl: number }, spread: number, kind?: 'spread' | 'singles') => {
     const sized = (l: AssetBorosOpen, size: number): AssetBorosOpen => ({ ...l, sizeToken: size, notionalUsd: size * 2500 });
     const g: AssetGroup = {
       ...group,
@@ -950,7 +950,8 @@ describe('RollOverModal — per-venue exposure', () => {
           : []),
       ],
     };
-    return deriveAsset(g, {}, 0, NOW).pairs[0];
+    const pairs = deriveAsset(g, {}, 0, NOW).pairs;
+    return pairs.find((p) => p.kind === kind) ?? pairs[0];
   };
   const exposureOf = (legs: { marketId: number; size: number }[], sign: 1 | -1) => {
     let gate = 0;
@@ -994,17 +995,26 @@ describe('RollOverModal — per-venue exposure', () => {
     ['$50', 0.01, 0.01],
     ['$6M', 1261.25, 1071.75],
   ] as const) {
-    it(`mixed book at ${label}: the whole roll closes each leg in full and opens one spread at the venue exposure`, async () => {
+    // A mixed book is two pairs (mozzarella 2026-10-14); each rolls on its own.
+    it(`mixed book at ${label}: the spread pair's whole roll closes the spread and opens the new one`, async () => {
       spreadListed = true;
-      const p = bookOf({ gate: single, hl: single }, spread);
-      expect(p.legs.filter((l) => l.kind === 'yu')).toHaveLength(3);
+      const p = bookOf({ gate: single, hl: single }, spread, 'spread');
+      expect(p.legs.filter((l) => l.kind === 'yu').map((l) => l.marketId)).toEqual([SPREAD_OLD]);
+      const { exit, entry } = await quoted(p);
+      expect(exit.map((l) => [l.marketId, l.size])).toEqual([[SPREAD_OLD, spread]]);
+      expect(entry).toEqual([expect.objectContaining({ marketId: SPREAD_NEW, direction: 'short', size: spread })]);
+    });
+
+    it(`mixed book at ${label}: the singles pair's whole roll closes both singles and opens one spread at the venue exposure`, async () => {
+      spreadListed = true;
+      const p = bookOf({ gate: single, hl: single }, spread, 'singles');
+      expect(p.legs.filter((l) => l.kind === 'yu')).toHaveLength(2);
       const { exit, entry } = await quoted(p);
       expect(exit.map((l) => [l.marketId, l.size])).toEqual([
         [GATE_OLD, single],
         [HL_OLD, single],
-        [SPREAD_OLD, spread],
       ].sort((a, b) => p.legs.findIndex((l) => l.marketId === a[0]) - p.legs.findIndex((l) => l.marketId === b[0])));
-      expect(entry).toEqual([expect.objectContaining({ marketId: SPREAD_NEW, direction: 'short', size: single + spread })]);
+      expect(entry).toEqual([expect.objectContaining({ marketId: SPREAD_NEW, direction: 'short', size: single })]);
       const before = held(p);
       const out = exposureOf(exit, -1);
       const add = exposureOf(entry, 1);
@@ -1014,7 +1024,7 @@ describe('RollOverModal — per-venue exposure', () => {
 
     it(`mixed book at ${label}: half a roll keeps each venue's exposure`, async () => {
       spreadListed = true;
-      const p = bookOf({ gate: single, hl: single }, spread);
+      const p = bookOf({ gate: single, hl: single }, spread, 'singles');
       const { exit, entry, size } = await quoted(p, '50%');
       expect(entry).toEqual([expect.objectContaining({ marketId: SPREAD_NEW, size })]);
       const before = held(p);
