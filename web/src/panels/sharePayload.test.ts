@@ -204,15 +204,22 @@ describe('pairSharePayload on a spread pair', () => {
         yuLeg({ venue: 'LIGHTER', side: 'LONG', notionalUsd: 1_000, lockedApr: -0.04 }),
       ],
     });
-    const boros = pairSharePayload(okxLighter, 'ETH', opts).l.filter((l) => l.k === 'b');
+    const payload = pairSharePayload(okxLighter, 'ETH', opts);
+    const boros = payload.l.filter((l) => l.k === 'b');
     // LIGHTER first; its single is LONG, so the LIGHTER−OKX spread is long.
     expect(boros).toEqual([expect.objectContaining({ x: 'LIGHTER_OKX', s: 'L', n: 1_000 })]);
+    // `r` is the entry rate a LONG pays: −spread, so the page reads "receive".
+    expect(payload.sp).toBeGreaterThan(0);
+    expect(boros[0].r).toBeCloseTo(-payload.sp, 12);
   });
 
   it('keeps the legs apart when they do not form one spread', () => {
     const threeVenues = pair({
       legs: [yuLeg({ venue: 'GATE' }), yuLeg({ venue: 'OKX', side: 'SHORT' }), yuLeg({ venue: 'LIGHTER', side: 'SHORT' })],
     });
-    expect(pairSharePayload(threeVenues, 'ETH', opts).l.filter((l) => l.k === 'b')).toHaveLength(3);
+    const boros = pairSharePayload(threeVenues, 'ETH', opts).l.filter((l) => l.k === 'b');
+    expect(boros).toHaveLength(3);
+    // A LONG single held at 5.04% sends its entry rate, +5.04%: the page reads "pay".
+    expect(boros.find((l) => l.s === 'L')?.r).toBe(0.0504);
   });
 });
