@@ -487,6 +487,9 @@ export interface PairEstimate {
   /** LONG perp venue / SHORT perp venue. */
   longVenue: string;
   shortVenue: string;
+  /** What the Boros side is: one spread market, or two single markets. A
+   * book holding both at the same venues and term shows two pairs. */
+  kind: 'spread' | 'singles';
   /** Paired size in the asset's unit. */
   size: number;
   unit: 'base' | 'usd';
@@ -1577,9 +1580,11 @@ export function deriveAsset(
         .filter((b) => b.maturity === maturity)
         .reduce((t, b) => t + (yuRemaining.get(b.marketId) ?? 0), 0);
     /**
-     * One row per (long venue, short venue, MATURITY) — a 4-leg arbitrage is
-     * a fixed-term unit, so a venue pairing laddered across two terms is two
-     * units, not one blended row.
+     * One row per (long venue, short venue, MATURITY, kind) — a 4-leg
+     * arbitrage is a fixed-term unit, so a venue pairing laddered across two
+     * terms is two units, not one blended row. A spread market and two single
+     * markets at the same venues and term are two units too: traders compare
+     * the two and close them at different times (mozzarella 2026-10-14).
      */
     const combos = longs
       .flatMap((l) =>
@@ -1589,7 +1594,10 @@ export function deriveAsset(
             .map((y) => y.maturity)
             .filter((m) => lm.has(m));
           const spreadMaturities = spreadsFor(l.venue, sh.venue).map((b) => b.maturity);
-          return [...new Set([...shared, ...spreadMaturities])].map((maturity) => ({ l, sh, maturity }));
+          return [
+            ...[...new Set(spreadMaturities)].map((maturity) => ({ l, sh, maturity, kind: 'spread' as const })),
+            ...[...new Set(shared)].map((maturity) => ({ l, sh, maturity, kind: 'singles' as const })),
+          ];
         }),
       )
       // The tie order (see above): earlier maturity, then larger perps.
@@ -1604,24 +1612,30 @@ export function deriveAsset(
         .filter((y) => y.maturity === maturity)
         .reduce((t, y) => t + (yuRemaining.get(y.marketId) ?? 0), 0);
     /** The largest unit any combination can still form, re-judged after each
-     * claim. A combination that formed nothing is not offered again. */
+     * claim. A combination that formed nothing is not offered again. Spread
+     * units claim the perps first; single-market units take what is left
+     * (owner 2026-10-14). */
     function* largestFirst() {
       const spent = new Set<(typeof combos)[number]>();
       for (;;) {
         let best: (typeof combos)[number] | null = null;
         let bestNeed = 1e-9;
-        for (const c of combos) {
-          if (spent.has(c)) continue;
-          const need = Math.min(
-            perpLeft.get(c.l) ?? 0,
-            perpLeft.get(c.sh) ?? 0,
-            spreadLeftAt(c.l.venue, c.sh.venue, c.maturity) +
-              Math.min(yuLeftAt(c.l.venue, c.maturity), yuLeftAt(c.sh.venue, c.maturity)),
-          );
-          if (need > bestNeed) {
-            best = c;
-            bestNeed = need;
+        for (const kind of ['spread', 'singles'] as const) {
+          for (const c of combos) {
+            if (c.kind !== kind || spent.has(c)) continue;
+            const need = Math.min(
+              perpLeft.get(c.l) ?? 0,
+              perpLeft.get(c.sh) ?? 0,
+              kind === 'spread'
+                ? spreadLeftAt(c.l.venue, c.sh.venue, c.maturity)
+                : Math.min(yuLeftAt(c.l.venue, c.maturity), yuLeftAt(c.sh.venue, c.maturity)),
+            );
+            if (need > bestNeed) {
+              best = c;
+              bestNeed = need;
+            }
           }
+          if (best !== null) break;
         }
         if (best === null) return;
         const before = perpLeft.get(best.l);
@@ -1629,7 +1643,7 @@ export function deriveAsset(
         if (perpLeft.get(best.l) === before) spent.add(best);
       }
     }
-    for (const { l: lLeg, sh: sLeg, maturity, need } of largestFirst()) {
+    for (const { l: lLeg, sh: sLeg, maturity, kind, need } of largestFirst()) {
       const lKeep = keepOf(lLeg);
       const sKeep = keepOf(sLeg);
       const lSize = legSize(lLeg);
@@ -1640,7 +1654,8 @@ export function deriveAsset(
       const shortBoros = group.borosOpen.filter(
         (b) => !isSpreadLeg(b) && b.venue === sLeg.venue && b.maturity === maturity && borosKeepOf(b) > 0,
       );
-      const spreadBoros = spreadsFor(lLeg.venue, sLeg.venue).filter((b) => b.maturity === maturity);
+      const spreadBoros =
+        kind === 'spread' ? spreadsFor(lLeg.venue, sLeg.venue).filter((b) => b.maturity === maturity) : [];
       const spreadAlloc = new Map<number, number>();
       let spreadGot = 0;
       for (const b of spreadBoros) {
@@ -1657,13 +1672,16 @@ export function deriveAsset(
        * Allocation runs first and the perps follow it, so the row's size is
        * what the hedge really is rather than a perp-derived guess.
        */
-      const alloc = allocateYuByMaturity(
-        need - spreadGot,
-        yuSlicesFor(lLeg.venue).filter((y) => y.maturity === maturity),
-        yuSlicesFor(sLeg.venue).filter((y) => y.maturity === maturity),
-        yuRemaining,
-        yuRemaining,
-      );
+      const alloc =
+        kind === 'spread'
+          ? { long: new Map<number, number>(), short: new Map<number, number>() }
+          : allocateYuByMaturity(
+              need,
+              yuSlicesFor(lLeg.venue).filter((y) => y.maturity === maturity),
+              yuSlicesFor(sLeg.venue).filter((y) => y.maturity === maturity),
+              yuRemaining,
+              yuRemaining,
+            );
       const allocLong = [...alloc.long.values()].reduce((a, b) => a + b, 0);
       const allocShort = [...alloc.short.values()].reduce((a, b) => a + b, 0);
       const size = spreadGot + Math.min(allocLong, allocShort);
@@ -1799,6 +1817,7 @@ export function deriveAsset(
       pairs.push({
         longVenue: lLeg.venue,
         shortVenue: sLeg.venue,
+        kind,
         size,
         unit,
         notionalUsd,
@@ -1824,7 +1843,7 @@ export function deriveAsset(
      */
     const merged = new Map<string, PairEstimate>();
     for (const p of pairs) {
-      const k = `${p.longVenue}:${p.shortVenue}:${p.soonestMaturitySec}`;
+      const k = `${p.longVenue}:${p.shortVenue}:${p.soonestMaturitySec}:${p.kind}`;
       const prev = merged.get(k);
       if (!prev) {
         merged.set(k, p);

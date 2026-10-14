@@ -106,34 +106,101 @@ describe('a spread leg in the Positions model', () => {
     expect(d.lockedAprFwd).not.toBeNull();
   });
 
-  it('mixed book is one book', () => {
+  // mozzarella 2026-10-14: a spread market and two single markets at the same
+  // venues and term are two groups, so a trader can compare and close them
+  // apart. The spread takes the perps first (owner).
+  const kinds = (d: ReturnType<typeof deriveAsset>) =>
+    Object.fromEntries(d.pairs.map((p) => [p.kind, p]));
+
+  it('mixed book with full perps is two pairs: the spread and the singles', () => {
     const d = deriveAsset(group({ perpOpen: ownerPerps(), borosOpen: mixedBook() }), {}, 0, NOW);
     expect(venue(d, 'HYPERLIQUID')?.borosSigned).toBeCloseTo(-0.555, 9);
     expect(venue(d, 'GATE')?.borosSigned).toBeCloseTo(0.555, 9);
     expect(d.gaps).toEqual([]);
-    expect(d.pairs).toHaveLength(1);
-    const pair = d.pairs[0];
-    expect(pair.legs.filter((l) => l.kind === 'yu')).toHaveLength(3);
-    expect(pair.size).toBeCloseTo(0.555, 9);
-    expect(pairBorosCloseLegs(pair, group({ borosOpen: mixedBook() })).map((l) => l.notionalToken)).toEqual([
-      expect.closeTo(0.3, 9),
-      expect.closeTo(0.3, 9),
+    expect(d.pairs).toHaveLength(2);
+    const { spread, singles } = kinds(d);
+    expect(spread.size).toBeCloseTo(0.255, 9);
+    expect(spread.legs.filter((l) => l.kind === 'yu').map((l) => l.marketId)).toEqual([59]);
+    expect(singles.size).toBeCloseTo(0.3, 9);
+    expect(singles.legs.filter((l) => l.kind === 'yu').map((l) => l.marketId).sort()).toEqual([51, 60]);
+    // Each pair closes only its own Boros legs.
+    expect(pairBorosCloseLegs(spread, group({ borosOpen: mixedBook() })).map((l) => l.notionalToken)).toEqual([
       expect.closeTo(0.255, 9),
     ]);
-    const carry = (0.083 - 0.0482 - 0.002) * 0.3 + (0.0352 - 0.002) * 0.255;
-    expect(pairLockedSpread(pair)).toBeCloseTo(carry / 0.555, 9);
+    expect(pairBorosCloseLegs(singles, group({ borosOpen: mixedBook() })).map((l) => l.notionalToken)).toEqual([
+      expect.closeTo(0.3, 9),
+      expect.closeTo(0.3, 9),
+    ]);
+    // Each pair carries its own perp slice; the two sum to the whole perp.
+    const perpQty = (p: typeof spread, v: string) => p.legs.find((l) => l.kind === 'perp' && l.venue === v)!.sizeBase;
+    expect(perpQty(spread, 'GATE')).toBeCloseTo(0.255, 9);
+    expect(perpQty(singles, 'GATE')).toBeCloseTo(0.3, 9);
+    expect(d.pendingLegs).toEqual([]);
+    expect(d.unpairedPerps).toEqual([]);
+  });
+
+  it('each pair of a mixed book quotes its own locked spread', () => {
+    // 100× the book: each pair's capital clears the $100 floor for an APR.
+    const d = deriveAsset(group({ perpOpen: ownerPerps(55.5), borosOpen: mixedBook(100) }), {}, 0, NOW);
+    expect(pairLockedSpread(kinds(d).spread)).toBeCloseTo(0.0352 - 0.002, 9);
+    expect(pairLockedSpread(kinds(d).singles)).toBeCloseTo(0.083 - 0.0482 - 0.002, 9);
   });
 
   it.each([
     ['$50', 50 / PRICE / 0.555],
     ['$6M', 6_000_000 / PRICE / 0.555],
-  ])('mixed book is one book at %s', (_label, k) => {
+  ])('mixed book is two pairs at %s', (_label, k) => {
     const d = deriveAsset(group({ perpOpen: ownerPerps(0.555 * k), borosOpen: mixedBook(k) }), {}, 0, NOW);
     expect(d.gaps).toEqual([]);
-    expect(d.pairs).toHaveLength(1);
-    expect(d.pairs[0].size).toBeCloseTo(0.555 * k, 9);
+    expect(d.pairs).toHaveLength(2);
+    expect(kinds(d).spread.size).toBeCloseTo(0.255 * k, 9);
+    expect(kinds(d).singles.size).toBeCloseTo(0.3 * k, 9);
     expect(d.pendingLegs).toEqual([]);
     expect(d.unpairedPerps).toEqual([]);
+  });
+
+  it('spread or singles alone with perps is one pair', () => {
+    const spreadOnly = deriveAsset(group({ perpOpen: ownerPerps(0.255), borosOpen: [mixedBook()[2]] }), {}, 0, NOW);
+    expect(spreadOnly.pairs.map((p) => p.kind)).toEqual(['spread']);
+    const singlesOnly = deriveAsset(group({ perpOpen: ownerPerps(0.3), borosOpen: mixedBook().slice(0, 2) }), {}, 0, NOW);
+    expect(singlesOnly.pairs.map((p) => p.kind)).toEqual(['singles']);
+  });
+
+  it('mixed book with part perps: the spread is hedged first, the singles show the missing perps', () => {
+    const d = deriveAsset(group({ perpOpen: ownerPerps(0.4), borosOpen: mixedBook() }), {}, 0, NOW);
+    const { spread, singles } = kinds(d);
+    expect(spread.size).toBeCloseTo(0.255, 9);
+    expect(singles.size).toBeCloseTo(0.145, 9);
+    const perpOnly = perpOnlyPairs(d.unpairedPerps, d.pendingLegs);
+    const units = borosOnlyPairs(perpOnly.restPerps, perpOnly.restYus);
+    expect(units.pairs).toHaveLength(1);
+    expect(units.pairs[0].borosLegs.map((l) => l.marketId).sort()).toEqual([51, 60]);
+    expect(units.pairs[0].size).toBeCloseTo(0.155, 9);
+    expect(units.pairs[0].missingLong).toBeCloseTo(0.155, 9);
+    expect(units.pairs[0].missingShort).toBeCloseTo(0.155, 9);
+  });
+
+  it('mixed book with perps smaller than the spread: both groups show missing perps', () => {
+    const d = deriveAsset(group({ perpOpen: ownerPerps(0.2), borosOpen: mixedBook() }), {}, 0, NOW);
+    expect(d.pairs.map((p) => p.kind)).toEqual(['spread']);
+    expect(d.pairs[0].size).toBeCloseTo(0.2, 9);
+    const perpOnly = perpOnlyPairs(d.unpairedPerps, d.pendingLegs);
+    const units = borosOnlyPairs(perpOnly.restPerps, perpOnly.restYus);
+    expect(units.pairs).toHaveLength(2);
+    const spreadUnit = units.pairs.find((u) => u.borosLegs.some((l) => l.spreadVenues))!;
+    const singlesUnit = units.pairs.find((u) => u.borosLegs.every((l) => !l.spreadVenues))!;
+    expect(spreadUnit.size).toBeCloseTo(0.055, 9);
+    expect(singlesUnit.size).toBeCloseTo(0.3, 9);
+  });
+
+  it('mixed book with no perps: two Boros-only groups, both missing their perps', () => {
+    const d = deriveAsset(group({ borosOpen: mixedBook() }), {}, 0, NOW);
+    expect(d.pairs).toEqual([]);
+    const perpOnly = perpOnlyPairs(d.unpairedPerps, d.pendingLegs);
+    const units = borosOnlyPairs(perpOnly.restPerps, perpOnly.restYus);
+    expect(units.pairs).toHaveLength(2);
+    expect(units.pairs.map((u) => u.size).sort()).toEqual([expect.closeTo(0.255, 9), expect.closeTo(0.3, 9)]);
+    expect(units.pairs.every((u) => u.missingLong > 0 && u.missingShort > 0)).toBe(true);
   });
 
   it('spread counted once', () => {
@@ -153,7 +220,7 @@ describe('a spread leg in the Positions model', () => {
     );
     expect(d.totals.breakdown.borosSettleUsd).toBeCloseTo(0.4 - 0.2 + 0.05, 9);
     expect(d.totals.breakdown.borosTradeFeeUsd).toBeCloseTo(0.09, 9);
-    expect(d.pairs[0].borosFeesPaidUsd).toBeCloseTo(0.09, 9);
+    expect(d.pairs.reduce((t, p) => t + p.borosFeesPaidUsd, 0)).toBeCloseTo(0.09, 9);
   });
 
   it('wrong-side spread stands alone', () => {

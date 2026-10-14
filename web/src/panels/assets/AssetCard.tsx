@@ -1013,8 +1013,8 @@ const ROLL_FALLBACK_SLIP_PCT = 1;
 /** The slider's shortcuts, as shares of the position. */
 const ROLL_SHARE_STEPS = [0.25, 0.5, 0.75, 1] as const;
 /** One key per pair, for the cards and the roll signals alike. */
-const pairKey = (p: Pick<PairEstimate, 'longVenue' | 'shortVenue' | 'soonestMaturitySec'>): string =>
-  `${p.longVenue}:${p.shortVenue}:${p.soonestMaturitySec}`;
+const pairKey = (p: Pick<PairEstimate, 'longVenue' | 'shortVenue' | 'soonestMaturitySec' | 'kind'>): string =>
+  `${p.longVenue}:${p.shortVenue}:${p.soonestMaturitySec}:${p.kind}`;
 
 /** Largest 1-significant-figure value at or below `x` (0.8208 → 0.8) — the
  * ticket's and the close form's own rounding, so the three seed alike. Down

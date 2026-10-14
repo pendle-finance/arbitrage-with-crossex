@@ -205,6 +205,20 @@ describe('the roll probe on the server', () => {
     expect(exit?.legs.map((l) => [l.marketId, l.direction])).toEqual([[59, 'long']]);
   });
 
+  it('a spread pair and a singles pair at the same venues and term send one roll alert', async () => {
+    // The card shows them as two pairs (mozzarella 2026-10-14); the bot keys
+    // alerts by coin, venues and maturity, so it gets one.
+    const mixed = withBoros('ETH', [
+      ...spreadGroup().borosOpen.map((b) => ({ ...b, sizeToken: 60, notionalUsd: 60 * 2500 })),
+      yu({ marketId: 1, venue: 'GATE', side: 'LONG', sizeToken: 40, maturity: SOON, entryApr: 0.04 }),
+      yu({ marketId: 2, venue: 'HYPERLIQUID', side: 'SHORT', sizeToken: 40, maturity: SOON, entryApr: 0.08 }),
+    ]);
+    const signals = await createRollProbe(
+      deps({ assets: [mixed], markets: [spreadMarket(59, SOON), spreadMarket(60, LATER), ...markets.slice(0, 4)] }),
+    )();
+    expect(signals.map((s) => [s.coin, s.longVenue, s.shortVenue, s.maturity])).toEqual([['ETH', 'GATE', 'HYPERLIQUID', SOON]]);
+  });
+
   it('keeps the other pair when one pair cannot be priced', async () => {
     const probe = createRollProbe(
       deps({
