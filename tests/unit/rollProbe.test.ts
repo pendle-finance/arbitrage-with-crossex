@@ -8,6 +8,7 @@ import {
   rollFitSize,
   rollOpportunities,
   rollTargetsFor,
+  type RollPairFacts,
   type RollProbeResult,
   type RollTarget,
 } from '../../src/core/boros/rollProbe';
@@ -93,6 +94,22 @@ describe('roll candidates', () => {
     expect(targets).toEqual([
       { maturity: NOW + 30 * 86_400, longMarketId: 1, shortMarketId: 2 },
       { maturity: NOW + 60 * 86_400, longMarketId: 3, shortMarketId: 4 },
+    ]);
+  });
+
+  it('rolls into the held coin\'s markets, not another collateral at the same venue', () => {
+    // Prod 27 Nov: Hyperliquid BTC lists 219 (USDT) before 220 (BTC).
+    const at = NOW + 30 * 86_400;
+    const markets = [
+      market({ marketId: 201, venue: 'Hyperliquid', base: 'BTC', tokenId: 1, maturity: NOW - 86_400 }),
+      market({ marketId: 205, venue: 'Gate', base: 'BTC', tokenId: 1, maturity: NOW - 86_400 }),
+      market({ marketId: 219, venue: 'Hyperliquid', base: 'BTC', tokenId: 3, maturity: at }),
+      market({ marketId: 220, venue: 'Hyperliquid', base: 'BTC', tokenId: 1, maturity: at }),
+      market({ marketId: 222, venue: 'Gate', base: 'BTC', tokenId: 1, maturity: at }),
+    ];
+    const legs = [201, 205].map((marketId) => ({ kind: 'yu' as const, marketId }) as RollPairFacts['legs'][number]);
+    expect(rollTargetsFor(markets, { longVenue: 'Gate', shortVenue: 'Hyperliquid', legs }, 'BTC', NOW)).toEqual([
+      { maturity: at, longMarketId: 222, shortMarketId: 220 },
     ]);
   });
 

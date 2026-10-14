@@ -93,8 +93,12 @@ const marketRow = (marketId: number, venue: string, maturity: number) => ({
 const SPREAD_NEW = 59;
 let spreadListed = false;
 let spreadCloseOnly = false;
+/** A Hyperliquid market on another collateral at the new maturity, listed first. */
+const HL_NEW_USDT = 13;
+let otherCollateral = false;
 const context = () => ({
   markets: [
+    ...(otherCollateral ? [{ ...marketRow(HL_NEW_USDT, 'Hyperliquid', NEW), tokenId: 1, collateral: 'USDT' }] : []),
     marketRow(GATE_OLD, 'Gate', OLD),
     marketRow(HL_OLD, 'Hyperliquid', OLD),
     marketRow(GATE_NEW, 'Gate', NEW),
@@ -314,6 +318,7 @@ beforeEach(() => {
   bandApr = undefined;
   spreadListed = false;
   spreadCloseOnly = false;
+  otherCollateral = false;
 });
 
 describe('RollOverModal — the pick page', () => {
@@ -500,6 +505,23 @@ describe('RollOverModal — spread target', () => {
     await waitFor(() => expect(entries.length).toBeGreaterThan(0), { timeout: 4_000 });
     expect(entries.at(-1)!.legs.map((l) => l.marketId).sort()).toEqual([GATE_NEW, HL_NEW].sort());
     expect(entries.some((b) => b.legs.some((l) => l.marketId === SPREAD_NEW))).toBe(false);
+  });
+});
+
+describe('RollOverModal — collateral', () => {
+  it('rolls into the held coin\'s market when the venue lists another collateral at the new maturity', async () => {
+    otherCollateral = true;
+    const entries: PairSimBody[] = [];
+    install({
+      onPairSimulate: (b) => {
+        if (b.intent === 'open') entries.push(b);
+      },
+    });
+    renderWithClient(<RollOverModal pair={pair} base="ETH" nowSec={NOW} onClose={() => {}} />);
+    await screen.findByRole('dialog');
+    await waitFor(() => expect(entries.length).toBeGreaterThan(0), { timeout: 4_000 });
+    expect(entries.at(-1)!.legs.map((l) => l.marketId).sort()).toEqual([GATE_NEW, HL_NEW].sort());
+    expect(entries.some((b) => b.legs.some((l) => l.marketId === HL_NEW_USDT))).toBe(false);
   });
 });
 
