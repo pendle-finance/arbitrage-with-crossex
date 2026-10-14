@@ -20,7 +20,7 @@ import { spreadName, spreadPlatform } from '../../../web/src/lib/spread';
 import { CoreError } from '../errors';
 import { BOOK_VENUES } from '../estimate/books';
 import { borosInitialMarginUsd } from './opportunities';
-import { parseSpreadVenues } from './spread';
+import { parseSpreadVenues, readsReversed } from './spread';
 import { normalizeVenue } from './venue';
 
 /** The api-gateway surface (`/apis` → api-gateway → open-api's `open-api-v2/…`
@@ -366,7 +366,10 @@ export async function fetchBorosMarkets(fetchImpl: FetchLike): Promise<BorosMark
     if (resumeToken === null || added.length === 0) break;
   }
   const nowSec = Date.now() / 1000;
-  return out.filter((m) => !isUnreadableSpread(m)).map((m) => normalizeBorosMarket(m, nowSec));
+  const markets = out.filter((m) => !isUnreadableSpread(m)).map((m) => normalizeBorosMarket(m, nowSec));
+  // A spread priced against its platformId's leg order would be hedged with
+  // both perps on the wrong side; the pair keeps its singles instead.
+  return markets.filter((m) => !readsReversed(m, markets));
 }
 
 /**
@@ -436,8 +439,14 @@ function normalizeBorosMarket(m: Record<string, unknown>, nowSec: number): Boros
               Math.abs(Number(data.markApr ?? 0)),
             )
           : Number(data.markApr ?? 0)),
+      // A spread Boros still lists as a dev test (isUiWhitelisted false, so not
+      // in the Boros app) takes no opens here either; a held one still closes.
       state:
-        maturity > 0 && maturity <= nowSec ? 'Matured' : (MARKET_STATUS[Number(config.status)] ?? 'Unknown'),
+        maturity > 0 && maturity <= nowSec
+          ? 'Matured'
+          : spreadVenues && metadata.isUiWhitelisted === false && Number(config.status) === 2
+            ? 'CloseOnly'
+            : (MARKET_STATUS[Number(config.status)] ?? 'Unknown'),
       assetMarkPriceUsd: Number(data.assetMarkPrice ?? 0),
       kIM: norm18(config.kIM as string),
       kMM: norm18(config.kMM as string),

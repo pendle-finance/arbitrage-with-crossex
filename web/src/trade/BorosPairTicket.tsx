@@ -585,9 +585,14 @@ export function BorosPairTicket({
       ) ?? null
     );
   };
-  /** An open goes to the spread while it takes opens; a close only when the
-   * spread holds the position, since the singles' own size is not on it. */
-  const wantSpread = (sp: BorosPairMarketRow) => (intent === 'close' ? sp.currentSize !== 0 : !sp.closeOnly);
+  /** The two singles a Pair is on: behind the spread, else the picked legs. */
+  const singles = isSpread && behind ? [byId.get(behind.a), byId.get(behind.b)] : [rowA, rowB];
+  const singlesHeld = singles.some((r) => (r?.currentSize ?? 0) !== 0);
+  /** An open goes to the spread while it takes opens. A close goes to it only
+   * when it holds the position and the singles hold none: a close on held
+   * singles must close the singles. */
+  const wantSpread = (sp: BorosPairMarketRow) =>
+    intent === 'close' ? sp.currentSize !== 0 && !singlesHeld : !sp.closeOnly;
   const pairSpread = !isSpread && mode === 'pair' ? spreadFor(rowA, rowB) : null;
   /** Slot A's side: on a spread, the side the singles had when it took over. */
   const slotDirA: BorosLegDirection = isSpread && behind ? behind.dirA : dirA;
@@ -621,7 +626,7 @@ export function BorosPairTicket({
     setMarketB(null);
     setDirA(aOnFirst ? dirA : dirA === 'short' ? 'long' : 'short');
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode, onlyLeg, isSpread, pairSpread?.marketId, marketA, marketB, intent, rowA?.closeOnly, rowA?.currentSize, pairSpread?.closeOnly, pairSpread?.currentSize]);
+  }, [mode, onlyLeg, isSpread, pairSpread?.marketId, marketA, marketB, intent, rowA?.closeOnly, rowA?.currentSize, pairSpread?.closeOnly, pairSpread?.currentSize, singlesHeld]);
 
   const sizeNum = Number(sizeStr);
   const sizeErr = amountError(sizeStr);

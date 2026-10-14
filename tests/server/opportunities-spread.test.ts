@@ -208,13 +208,26 @@ describe('GET /api/opportunities with spread markets', () => {
     expect(ids).not.toContainEqual([901, 902]);
   });
 
-  it('a spread listed Gate first shorts Gate when its rate is positive', async () => {
-    const results = fixture.results.map((r) => (r.marketId === 59 ? onPlatform(r, 59, 'gate-hyperliquid') : r));
-    const data = await opportunities(results);
+  it('a spread listed Gate first, priced Gate − HL, keeps the same two perps on the other Boros side', async () => {
+    const flipped = (r: RawMarket): RawMarket => {
+      const { midApr, floatingApr } = r.data as { midApr: number; floatingApr: number };
+      const row = withRates(onPlatform(r, 59, 'gate-hyperliquid'), -midApr);
+      return { ...row, data: { ...(row.data as RawMarket), floatingApr: -floatingApr } };
+    };
+    const results = fixture.results.map((r) => (r.marketId === 59 ? flipped(r) : r));
+    const data = await opportunities(results, { 59: book(-601, -599) });
     const pair = hlGatePair(data, NOV_27);
-    expect(pair?.borosLegs[0]).toMatchObject({ marketId: 59, side: 'SHORT', spreadVenues: ['GATE', 'HYPERLIQUID'] });
-    expect(pair?.shortLeg.crossexVenue).toBe('GATE');
-    expect(pair?.longLeg.crossexVenue).toBe('HYPERLIQUID');
+    expect(pair?.borosLegs[0]).toMatchObject({ marketId: 59, side: 'LONG', spreadVenues: ['GATE', 'HYPERLIQUID'] });
+    expect(pair?.shortLeg.crossexVenue).toBe('HYPERLIQUID');
+    expect(pair?.longLeg.crossexVenue).toBe('GATE');
+  });
+
+  it('a dev-test spread leaves the pair on its singles', async () => {
+    const results = fixture.results.map((r) =>
+      r.marketId === 59 ? { ...r, metadata: { ...(r.metadata as RawMarket), isUiWhitelisted: false } } : r,
+    );
+    const data = await opportunities(results);
+    expect(hlGatePair(data, NOV_27)?.borosLegs.map((l) => l.marketId)).toEqual([51, 60]);
   });
 
   it('a spread on a venue CrossEx does not list stays out', async () => {
