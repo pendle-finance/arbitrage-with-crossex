@@ -1,10 +1,17 @@
 import type { BorosMarket } from './client';
-import { knownRate } from './venue';
+import { knownRate, normalizeVenue } from './venue';
 
 export type SpreadSide = 'SHORT' | 'LONG';
 
+/** A spread's platformId joins its two legs' venue ids in leg order
+ * ("hyperliquid-gate"), and its rate is leg 1 − leg 2 (pendle-backend-v3
+ * 7de820d0c). Any two distinct venues read, in that order; anything else is
+ * unreadable. A venue CrossEx does not trade is filtered where pairs are built. */
 export function parseSpreadVenues(isSpread: boolean, platformId: string): [string, string] | null {
-  return isSpread && platformId === 'hyperliquid-gate' ? ['HYPERLIQUID', 'GATE'] : null;
+  if (!isSpread) return null;
+  const legs = platformId.split('-').map(normalizeVenue);
+  if (legs.length !== 2 || !legs.every((v) => /^[A-Z0-9]+$/.test(v)) || legs[0] === legs[1]) return null;
+  return [legs[0], legs[1]];
 }
 
 export const isSpreadMarket = (m: Pick<BorosMarket, 'spreadVenues'>): boolean => Array.isArray(m.spreadVenues);

@@ -42,6 +42,11 @@ const onPlatform = (row: RawMarket, marketId: number, platformId: string): RawMa
   platform: { name: platformId, platformId },
 });
 
+const asSpread = (row: RawMarket, marketId: number, platformId: string): RawMarket => ({
+  ...onPlatform(row, marketId, platformId),
+  metadata: { ...(row.metadata as RawMarket), isSpreadMarket: true },
+});
+
 const book = (bidTick: number, askTick: number, bidSize = 5_000) => ({
   long: { ia: [bidTick], sz: [raw(bidSize)] },
   short: { ia: [askTick], sz: [raw(5_000)] },
@@ -184,6 +189,38 @@ describe('GET /api/opportunities with spread markets', () => {
     ]);
     expect(pair?.capital.borosIms.map((l) => l.marketId)).toEqual([901, 902]);
     expect(pair?.grossSpreadApr).toBeCloseTo(0.03, 12);
+  });
+
+  it('a spread on any two CrossEx venues takes their pair', async () => {
+    const results = [
+      ...fixture.results,
+      withRates(onPlatform(rowOf(64), 901, 'OKX'), 0.08),
+      withRates(onPlatform(rowOf(65), 902, 'Lighter'), 0.05),
+      withRates(asSpread(rowOf(64), 903, 'okx-lighter'), 0.03),
+    ];
+    const data = await opportunities(results);
+    const pair = pairsAt(data, DEC_25).find((p) => p.borosLegs.some((l) => l.marketId === 903));
+    expect(pair?.borosLegs).toHaveLength(1);
+    expect(pair?.borosLegs[0]).toMatchObject({ side: 'SHORT', venue: 'OKX-LIGHTER', spreadVenues: ['OKX', 'LIGHTER'] });
+    expect(pair?.shortLeg.crossexVenue).toBe('OKX');
+    expect(pair?.longLeg).toMatchObject({ crossexVenue: 'LIGHTER', crossexSymbol: 'LIGHTER_FUTURE_ETH_USDC' });
+    const ids = pairsAt(data, DEC_25).map((p) => p.borosLegs.map((l) => l.marketId).sort());
+    expect(ids).not.toContainEqual([901, 902]);
+  });
+
+  it('a spread listed Gate first shorts Gate when its rate is positive', async () => {
+    const results = fixture.results.map((r) => (r.marketId === 59 ? onPlatform(r, 59, 'gate-hyperliquid') : r));
+    const data = await opportunities(results);
+    const pair = hlGatePair(data, NOV_27);
+    expect(pair?.borosLegs[0]).toMatchObject({ marketId: 59, side: 'SHORT', spreadVenues: ['GATE', 'HYPERLIQUID'] });
+    expect(pair?.shortLeg.crossexVenue).toBe('GATE');
+    expect(pair?.longLeg.crossexVenue).toBe('HYPERLIQUID');
+  });
+
+  it('a spread on a venue CrossEx does not list stays out', async () => {
+    const results = [...fixture.results, withRates(asSpread(rowOf(64), 903, 'okx-kraken'), 0.03)];
+    const data = await opportunities(results);
+    expect(data.groups.flatMap((g) => g.pairs.flatMap((p) => p.borosLegs.map((l) => l.marketId)))).not.toContain(903);
   });
 
   it('a paused or close-only spread gives the pair back to the two singles', async () => {

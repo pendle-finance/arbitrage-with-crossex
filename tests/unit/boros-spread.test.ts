@@ -84,12 +84,14 @@ describe('spread markets', () => {
 
   it('drops an unreadable spread', async () => {
     expect(parseSpreadVenues(true, 'hyperliquid-gate-okx')).toBeNull();
-    expect(parseSpreadVenues(true, 'foo-gate')).toBeNull();
+    expect(parseSpreadVenues(true, 'gate-')).toBeNull();
     expect(parseSpreadVenues(true, 'gate-gate')).toBeNull();
+    expect(parseSpreadVenues(true, 'Gate-gate')).toBeNull();
+    expect(parseSpreadVenues(true, 'hyperliquid gate')).toBeNull();
     expect(parseSpreadVenues(true, '')).toBeNull();
 
     const markets = await fetchBorosMarkets(
-      serve([...fixture.results, withPlatformId(901, 'hyperliquid-gate-okx'), withPlatformId(902, 'foo-gate')]),
+      serve([...fixture.results, withPlatformId(901, 'hyperliquid-gate-okx'), withPlatformId(902, 'gate-')]),
     );
     const ids = markets.map((m) => m.marketId);
     expect(ids).not.toContain(901);
@@ -105,21 +107,26 @@ describe('spread markets', () => {
     expect(isSpreadMarket(history)).toBe(false);
   });
 
-  it('ignores a gate-hyperliquid spread until its sign order is confirmed', async () => {
-    expect(parseSpreadVenues(true, 'gate-hyperliquid')).toBeNull();
-    expect(parseSpreadVenues(true, 'Hyperliquid-Gate')).toBeNull();
+  it('reads any two venues in leg order, as the backend prices leg 1 − leg 2', async () => {
     expect(parseSpreadVenues(true, 'hyperliquid-gate')).toEqual(['HYPERLIQUID', 'GATE']);
+    expect(parseSpreadVenues(true, 'Hyperliquid-Gate')).toEqual(['HYPERLIQUID', 'GATE']);
+    expect(parseSpreadVenues(true, 'gate-hyperliquid')).toEqual(['GATE', 'HYPERLIQUID']);
+    expect(parseSpreadVenues(true, 'binance-okx')).toEqual(['BINANCE', 'OKX']);
 
     const reversed = withPlatformId(903, 'gate-hyperliquid');
     const markets = await fetchBorosMarkets(serve([reversed, ...fixture.results.filter((r) => r.marketId !== 59)]));
-    expect(markets.map((m) => m.marketId)).not.toContain(903);
-    expect(findSpread({ markets, venues: ['HYPERLIQUID', 'GATE'], maturity: NOV_27, tokenId: ETH, base: 'ETH' })).toBeNull();
+    const held = byId(markets, 903);
+    expect(held.spreadVenues).toEqual(['GATE', 'HYPERLIQUID']);
+    expect(held.name).toBe('ETH Spread GATE-HL 27 Nov 2026');
+    expect(findSpread({ markets, venues: ['HYPERLIQUID', 'GATE'], maturity: NOV_27, tokenId: ETH, base: 'ETH' })?.marketId).toBe(903);
+    // Short the spread = short leg 1, here Gate.
+    expect(readSpreadSide(held.spreadVenues!, { GATE: 'SHORT', HYPERLIQUID: 'LONG' })).toBe('SHORT');
+    expect(readSpreadSide(held.spreadVenues!, { HYPERLIQUID: 'SHORT', GATE: 'LONG' })).toBe('LONG');
 
-    const grouped = groupBorosMarkets(markets, NOW_MS / 1000);
-    expect(grouped.flatMap((g) => [...g.markets, ...g.spreads].map((m) => m.marketId))).not.toContain(903);
-
-    const held = await fetchBorosMarket(serve([reversed]), 903);
-    expect(isSpreadMarket(held)).toBe(false);
+    const other = await fetchBorosMarkets(serve([withPlatformId(904, 'binance-okx')]));
+    expect(byId(other, 904).spreadVenues).toEqual(['BINANCE', 'OKX']);
+    expect(byId(other, 904).name).toBe('ETH Spread BINANCE-OKX 27 Nov 2026');
+    expect(byId(other, 904).venue).toBe('BINANCE-OKX');
   });
 
   it('finds the Normal spread for two venues in either order', async () => {
