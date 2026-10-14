@@ -12,6 +12,8 @@ import type { BorosMarket, BorosOrderBook } from '../../src/core/boros/client';
 import {
   borosAprFloor,
   borosInitialMarginUsd,
+  borosLiquidationApr,
+  borosLiquidationRate,
   buildOpportunities,
   groupBorosMarkets,
   normalizeUnderlying,
@@ -347,6 +349,69 @@ describe('borosInitialMarginUsd', () => {
   it('is null — never 0 — when the margin coefficient is absent', () => {
     expect(borosInitialMarginUsd({ ...hlMarket, kIM: 0 }, 0.09, N, NOW)).toBeNull();
     expect(borosInitialMarginUsd({ ...hlMarket, kIM: NaN }, 0.09, N, NOW)).toBeNull();
+  });
+});
+
+describe('borosLiquidationRate', () => {
+  // Live prod positions on 2026-10-14, with the liquidationApr the venue's
+  // Explorer.calcLiquidationRate reported for each. availValue is the
+  // account's value less this position's value and MM, from
+  // /v1/accounts/market-acc-infos-by-root; t is data.timeToMaturity.
+  const floorAt = (iTickThresh: number, tickStep: number) => 1.00005 ** (iTickThresh * tickStep) - 1;
+  const t = 1_353_600 / SECONDS_IN_YEAR;
+  it.each([
+    // [market, size, availValue, kMM, floor, tThresh (s), venue liquidationApr]
+    ['216 HYPE short, mark above the floor', -200, 42.302315700960776, 2 / 3, floorAt(1134, 2), 432_000, 2.956661852716088],
+    ['217 HYPE long, mark below minus the floor', 200, 41.13959774416658, 2 / 3, floorAt(1134, 2), 432_000, -2.875395289140153],
+    ['201 BTC long, mark inside the floor', 13.90022719314599, 0.05915736747162836, 4 / 9, floorAt(770, 2), 432_000, -0.06357906125467241],
+    ['203 BTC short, 10-day tThresh', -24.87988, 0.16664755315819701, 4 / 9, floorAt(583, 2), 864_000, 0.10803539855657097],
+  ])('matches the venue on %s', (_label, size, avail, kMM, floor, tThreshSec, venue) => {
+    const got = borosLiquidationRate(size, avail, kMM, floor, t, tThreshSec / SECONDS_IN_YEAR);
+    expect(got).toBeCloseTo(venue, 9);
+  });
+});
+
+describe('borosLiquidationApr', () => {
+  const { kIM, kMM } = imInputs;
+
+  it('solves a short above the floor with MM growing with the mark', () => {
+    // Liquidated where cash 0.09 × (kIM + 1) × t equals MM kMM × mark × t
+    // less the position value −mark × t. The old closed form gave 10.29%.
+    expect(borosLiquidationApr(hlMarket, 0.09, 'short', NOW)).toBeCloseTo((0.09 * (1 + kIM)) / (1 + kMM), 12);
+  });
+
+  it('solves a short that opens inside the floor and liquidates above it', () => {
+    // Margin is charged at the floor; at liquidation the mark is past it, so
+    // MM uses the mark. The old closed form kept MM at the floor: 8.143%.
+    const liq = borosLiquidationApr(hlMarket, 0.07, 'short', NOW)!;
+    expect(liq).toBeCloseTo((FLOOR * kIM + 0.07) / (1 + kMM), 12);
+    expect(liq).toBeGreaterThan(FLOOR);
+  });
+
+  it('keeps MM at the floor when the mark stays inside it', () => {
+    // Long at 4.2%: liq = 4.2% − floor × (kIM − kMM), same as before.
+    expect(borosLiquidationApr(hlMarket, 0.042, 'long', NOW)).toBeCloseTo(0.042 - FLOOR * (kIM - kMM), 12);
+  });
+
+  it('mirrors a long on a negative rate', () => {
+    expect(borosLiquidationApr(hlMarket, -0.09, 'long', NOW)).toBeCloseTo((-0.09 * (1 + kIM)) / (1 + kMM), 12);
+  });
+
+  it('uses tThresh for the margin time near maturity', () => {
+    // 1 day left, 5-day tThresh: margin and MM use 5 days, the value 1 day.
+    const near = { ...hlMarket, maturity: NOW + DAY };
+    expect(borosLiquidationApr(near, 0.09, 'short', NOW)).toBeCloseTo((0.09 * kIM * 5 + 0.09) / (1 + kMM * 5), 12);
+  });
+
+  it('is null past max(250%, 10 × |mark|), where the Boros app shows N/A', () => {
+    const liq = (2.4 * (1 + kIM)) / (1 + kMM); // ≈ 266%
+    expect(borosLiquidationApr({ ...hlMarket, markApr: 0.089 }, 2.4, 'short', NOW)).toBeNull();
+    expect(borosLiquidationApr({ ...hlMarket, markApr: 0.3 }, 2.4, 'short', NOW)).toBeCloseTo(liq, 12);
+  });
+
+  it('is null on a matured market or without kMM', () => {
+    expect(borosLiquidationApr({ ...hlMarket, maturity: NOW }, 0.09, 'short', NOW)).toBeNull();
+    expect(borosLiquidationApr({ ...hlMarket, kMM: 0 }, 0.09, 'short', NOW)).toBeNull();
   });
 });
 

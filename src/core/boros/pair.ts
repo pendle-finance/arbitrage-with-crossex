@@ -433,7 +433,8 @@ export interface SimulatedLeg {
   marginRequired: number | null;
   /** The mark rate at which the RESULTING position, backed by exactly its
    * initial margin, is liquidated (see borosLiquidationApr). Null when the
-   * leg ends flat, has no rate, or the market carries no margin coefficients. */
+   * leg ends flat, has no rate, the market carries no margin coefficients,
+   * or the rate is past the range the Boros app shows (it shows "N/A"). */
   liquidationApr: number | null;
   /** Effective tolerance after clamping. */
   slippageApr: number;

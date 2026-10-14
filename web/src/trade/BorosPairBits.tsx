@@ -395,7 +395,7 @@ export function SpreadReadout({
         <Row
           label="Liquidation APR"
           title={liqTitle}
-          value={<span className={lone.liquidationApr == null ? 'text-ink-500' : undefined}>{pct(lone.liquidationApr)}</span>}
+          value={<LiqValue leg={lone} />}
         />
       )}
       {between}
@@ -411,6 +411,23 @@ export function SpreadReadout({
 const LIQ_TITLE =
   'The mark rate at which this leg is liquidated if only its required margin backs it — extra collateral in the bucket moves it further out.';
 
+/** The Boros app's hover for a liquidation rate it shows as "N/A". */
+const LIQ_NA_TITLE = 'Position risk is low, so there is no liquidation rate for the time being.';
+
+/** A leg's liquidation rate. "N/A", as the Boros app shows it, when the leg
+ * still holds a position but no rate is in range; "—" when it ends flat or
+ * has no rate. */
+function LiqValue({ leg, className = '', tone = '' }: { leg: BorosSimulatedLeg; className?: string; tone?: string }) {
+  if (leg.liquidationApr == null && leg.execApr !== null && leg.sizing.resultingSize !== 0) {
+    return <span className={`${className} text-ink-500`} title={LIQ_NA_TITLE}>N/A</span>;
+  }
+  return (
+    <span className={`${className} ${leg.liquidationApr == null ? 'text-ink-500' : tone}`}>
+      {pct(leg.liquidationApr)}
+    </span>
+  );
+}
+
 /** One row per venue: two liquidation rates crammed onto a single line read
  * as one fact about the pair, when they are two independent points — Boros
  * liquidates per market (his call 2026-09-18). */
@@ -422,9 +439,7 @@ export function LiquidationRows({ sim }: { sim: BorosPairSimulation }) {
           <span className="min-w-0 truncate text-[12px] text-ink-200" title={LIQ_TITLE}>
             {label} liquidation APR
           </span>
-          <span className={`num shrink-0 text-[12.5px] ${leg.liquidationApr === null ? 'text-ink-500' : 'text-ink-50'}`}>
-            {pct(leg.liquidationApr)}
-          </span>
+          <LiqValue leg={leg} className="num shrink-0 text-[12.5px]" tone="text-ink-50" />
         </div>
       ))}
     </div>

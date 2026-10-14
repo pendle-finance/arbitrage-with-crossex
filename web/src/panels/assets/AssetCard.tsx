@@ -383,9 +383,18 @@ const BOROS_LIQ_TITLE =
 
 /** The venue-reported liquidation APR, under a Boros leg's rate. Renders
  * nothing when the venue reports none (flat, unpriced, no coefficients) or on
- * an older server (absent). */
-function BorosLiqAprLine({ apr }: { apr: number | null | undefined }) {
-  if (apr == null || !Number.isFinite(apr)) return null;
+ * an older server (absent). "N/A" past max(250%, 10 × |mark|), as the Boros
+ * app shows it (dapp-nitro isLiquidationAprOutOfRange). */
+function BorosLiqAprLine({ leg }: { leg: Pick<AssetBorosOpen, 'liquidationApr' | 'markApr'> | undefined }) {
+  const apr = leg?.liquidationApr;
+  if (!leg || apr == null || !Number.isFinite(apr)) return null;
+  if (Math.abs(apr) > Math.max(2.5, 10 * Math.abs(leg.markApr))) {
+    return (
+      <div className="num text-[10px] text-ink-500" title="Position risk is low, so there is no liquidation rate for the time being.">
+        liq N/A
+      </div>
+    );
+  }
   return (
     <div className="num text-[10px] text-ink-500" title={BOROS_LIQ_TITLE}>
       liq {fmtPct(apr)}
@@ -795,7 +804,7 @@ function PairCard({
                         <span className="text-ink-600">—</span>
                       )}
                       {l.kind === 'yu' && (
-                        <BorosLiqAprLine apr={borosOpen.find((b) => b.marketId === l.marketId)?.liquidationApr} />
+                        <BorosLiqAprLine leg={borosOpen.find((b) => b.marketId === l.marketId)} />
                       )}
                     </td>
                     <td className={`${cell} num whitespace-nowrap text-right text-ink-100`}>
@@ -3480,7 +3489,7 @@ function BorosOnlyPairCard({
                       ) : (
                         <span className="text-ink-500">pending</span>
                       )}
-                      <BorosLiqAprLine apr={borosOpen.find((b) => b.marketId === y.marketId)?.liquidationApr} />
+                      <BorosLiqAprLine leg={borosOpen.find((b) => b.marketId === y.marketId)} />
                     </td>
                     <td className={`${cell} num whitespace-nowrap text-right text-ink-100`}>{fmtUsdCompact(y.imUsd)}</td>
                   </tr>
@@ -3740,7 +3749,7 @@ function UngroupedCard({
                       ) : (
                         <span className="font-normal text-ink-500">pending</span>
                       )}
-                      <BorosLiqAprLine apr={leg?.liquidationApr} />
+                      <BorosLiqAprLine leg={leg} />
                     </td>
                     <td className="num text-right text-ink-100" title={exactUsd(l.imUsd)}>
                       {fmtUsdCompact(l.imUsd)}
@@ -4366,7 +4375,7 @@ function BorosRow({
         ) : (
           <>
             {slice.entry !== null ? fmtPct(slice.entry) : <span className="text-ink-500">pending</span>} → {fmtPct(leg.markApr)}
-            <BorosLiqAprLine apr={leg.liquidationApr} />
+            <BorosLiqAprLine leg={leg} />
           </>
         )}
       </td>

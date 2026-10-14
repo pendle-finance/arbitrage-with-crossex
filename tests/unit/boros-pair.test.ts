@@ -473,17 +473,16 @@ describe('simulateBorosPair', () => {
     expect(sim.legs[0].marginRequired).not.toBeCloseTo(sim.legs[1].marginRequired!, 6);
   });
 
-  it('reports where the RESULTING position liquidates: a (kIM − kMM) rate move away, on the losing side', () => {
+  it('reports where the RESULTING position liquidates, solved as the contract does', () => {
     const sim = simulateBorosPair(simInput());
-    // Δ = max(|apr|, floor) × max(DTM, tThresh)/DTM × (kIM − kMM); DTM (30d)
-    // beats the 5d threshold here, so the time factor is 1.
-    const gap = imInputs.kIM - imInputs.kMM;
-    // Leg A SHORT at 9%: receives fixed, so a RISING rate liquidates it.
-    expect(sim.legs[0].liquidationApr).toBeCloseTo(0.09 + 0.09 * gap, 9);
-    // Leg B LONG at 4.2%: the floor (≈8.004%) sets the margin, and the
-    // position loses when the rate FALLS.
+    const { kIM, kMM } = imInputs;
+    // Leg A SHORT at 9%, above the floor: MM grows with the mark, so
+    // liq = 9% × (1 + kIM) / (1 + kMM). DTM (30d) beats the 5d threshold.
+    expect(sim.legs[0].liquidationApr).toBeCloseTo((0.09 * (1 + kIM)) / (1 + kMM), 9);
+    // Leg B LONG at 4.2%: the floor (≈8.004%) sets the margin and the MM,
+    // and the position loses when the rate FALLS.
     const floor = 1.00005 ** (770 * 2) - 1;
-    expect(sim.legs[1].liquidationApr).toBeCloseTo(0.042 - floor * gap, 9);
+    expect(sim.legs[1].liquidationApr).toBeCloseTo(0.042 - floor * (kIM - kMM), 9);
   });
 
   it('has no liquidation rate for a leg that ends flat or a market without kMM', () => {

@@ -129,6 +129,21 @@ describe('BorosOnlyPairCard', () => {
     expect(within(table).getByText('liq 12.30%')).toBeInTheDocument();
   });
 
+  it('shows N/A, as the Boros app does, past max(250%, 10 × |mark|)', () => {
+    const g = book([]);
+    g.borosOpen = [
+      { ...g.borosOpen[0], markApr: 0.05, liquidationApr: -9.57 },
+      { ...g.borosOpen[1], markApr: 0.05, liquidationApr: 2.4 },
+    ];
+    renderCard(g);
+    const table = legTable();
+    expect(within(table).getByText('liq N/A')).toHaveAttribute(
+      'title',
+      'Position risk is low, so there is no liquidation rate for the time being.',
+    );
+    expect(within(table).getByText('liq 240.00%')).toBeInTheDocument();
+  });
+
   it("an excess hedge (an open-only roll's leftover) reads as excess, not as a pair missing its perps", () => {
     const OLD = NOW + 8 * DAY;
     const NEW = NOW + 45 * DAY;

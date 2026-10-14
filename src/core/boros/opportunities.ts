@@ -321,24 +321,59 @@ export function borosInitialMarginUsd(
 }
 
 /**
- * The mark rate at which a Boros position backed by EXACTLY its initial
- * margin is liquidated.
+ * The mark rate at which a Boros position liquidates: the 3-case solve of
+ * `Explorer.calcLiquidationRate` (pendle-core-v3), which the venue reports for
+ * held positions and the backend runs on its order simulation. All inputs are
+ * per unit and in years: `size` is signed (long > 0), `availValue` is the
+ * account's value without this position's value and MM, `t` the time to
+ * maturity, `tThresh` the market's time floor, `floor` its rate floor.
  *
- * A fixed-rate position's mark-to-market is linear in the rate move —
- * ΔPnL ≈ −Δrate × N × DTM/365 for a short (receive fixed), the mirror for a
- * long — and the IM and MM formulas are the same expression scaled by kIM and
- * kMM. So the loss that eats the equity down to maintenance is
- * N × max(|apr|, floor) × max(DTM, tThresh)/365 × (kIM − kMM), and the rate
- * move that produces it is
- *   Δ = max(|apr|, floor) × max(DTM, tThresh)/DTM × (kIM − kMM).
- * A short (receives fixed) loses when the rate RISES: liq = apr + Δ. A long
- * loses when it falls: liq = apr − Δ. Discounting is ignored, as it is in the
- * IM formula itself.
+ * MM = |size| × max(|mark|, floor) × kMM × max(t, tThresh). Equity is
+ * availValue + size × mark × t, so each case solves equity = MM for one shape
+ * of MM: mark inside the floor, above it, below its negative. Null when no
+ * case holds (the contract's 0). Checked against 106 live positions'
+ * liquidationApr on 2026-10-14: all equal.
+ */
+export function borosLiquidationRate(
+  size: number,
+  availValue: number,
+  kMM: number,
+  floor: number,
+  t: number,
+  tThresh: number,
+): number | null {
+  const sizeT = size * t;
+  const mm = Math.abs(size) * kMM * Math.max(t, tThresh);
+  // Near maturity the contract charges a different MM to a position whose
+  // mark rate has the same sign as its size; the solve does not cover it.
+  const switched = (rate: number) => t < tThresh * kMM && size * rate > 0;
+  if (sizeT !== 0) {
+    const rate = (mm * floor - availValue) / sizeT;
+    if (Math.abs(rate) <= floor) return rate;
+  }
+  if (sizeT - mm !== 0) {
+    const rate = -availValue / (sizeT - mm);
+    if (rate > floor && !switched(rate)) return rate;
+  }
+  if (sizeT + mm !== 0) {
+    const rate = -availValue / (sizeT + mm);
+    if (rate < -floor && !switched(rate)) return rate;
+  }
+  return null;
+}
+
+/**
+ * The mark rate at which a Boros position backed by EXACTLY its initial
+ * margin is liquidated, solved as the contract does (borosLiquidationRate).
+ * After the fill the account holds the initial margin less the upfront fixed
+ * cost, size × execApr × t, and nothing else.
  *
  * This is the FLOOR of the distance, not the account's actual one: cross
  * collateral beyond the IM, or a fatter isolated bucket, moves it further
- * out. Null when either coefficient is missing, kMM is not below kIM, or the
- * market has matured.
+ * out. Null when either coefficient is missing, kMM is not below kIM, the
+ * market has matured, or the contract finds no rate. Also null past
+ * max(250%, 10 × |mark|), where the Boros app shows "N/A" (dapp-nitro
+ * isLiquidationAprOutOfRange).
  */
 export function borosLiquidationApr(
   m: BorosMarket,
@@ -351,10 +386,14 @@ export function borosLiquidationApr(
   if (!Number.isFinite(execApr)) return null;
   const dtmDays = (m.maturity - nowSec) / DAY_SECONDS;
   if (!(dtmDays > 0)) return null;
-  const tThreshDays = (Number.isFinite(m.tThreshSec) ? m.tThreshSec : 0) / DAY_SECONDS;
-  const rate = Math.max(Math.abs(execApr), borosAprFloor(m));
-  const move = (rate * Math.max(dtmDays, tThreshDays) * (m.kIM - m.kMM)) / dtmDays;
-  return side === 'short' ? execApr + move : execApr - move;
+  const t = dtmDays / DAYS_IN_YEAR;
+  const tThresh = (Number.isFinite(m.tThreshSec) ? m.tThreshSec : 0) / DAY_SECONDS / DAYS_IN_YEAR;
+  const floor = borosAprFloor(m);
+  const size = side === 'long' ? 1 : -1;
+  const cash = Math.max(Math.abs(execApr), floor) * m.kIM * Math.max(t, tThresh) - size * execApr * t;
+  const liq = borosLiquidationRate(size, cash, m.kMM, floor, t, tThresh);
+  if (liq === null || Math.abs(liq) > Math.max(2.5, 10 * Math.abs(m.markApr))) return null;
+  return liq;
 }
 
 /**
