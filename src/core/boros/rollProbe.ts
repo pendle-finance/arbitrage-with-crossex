@@ -93,7 +93,15 @@ export function rollTargetsFor(
       targets.push({ maturity, spreadMarketId: spread.marketId });
       continue;
     }
-    const singles = later.filter((m) => m.maturity === maturity && m.state === 'Normal' && !isSpreadMarket(m));
+    // The held coin's markets only: Hyperliquid BTC lists a BTC and a USDT
+    // market at one maturity, and a roll cannot change collateral.
+    const singles = later.filter(
+      (m) =>
+        m.maturity === maturity &&
+        m.state === 'Normal' &&
+        !isSpreadMarket(m) &&
+        (tokenId === undefined || m.tokenId === tokenId),
+    );
     const long = singles.find((m) => sameVenue(m.venue, pair.longVenue));
     const short = singles.find((m) => sameVenue(m.venue, pair.shortVenue));
     if (long && short) targets.push({ maturity, longMarketId: long.marketId, shortMarketId: short.marketId });

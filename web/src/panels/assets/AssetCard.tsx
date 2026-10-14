@@ -1071,8 +1071,13 @@ function rollTargetsFor(
       targets.push({ maturity, spreadMarketId: spread.marketId, spreadVenues: spread.spreadVenues });
       continue;
     }
-    const long = atMaturity.find((m) => !m.spreadVenues && sameVenue(m.venue, pair.longVenue));
-    const short = atMaturity.find((m) => !m.spreadVenues && sameVenue(m.venue, pair.shortVenue));
+    // The held coin's singles only: a roll cannot change collateral.
+    const single = (venue: string) =>
+      atMaturity.find(
+        (m) => !m.spreadVenues && sameVenue(m.venue, venue) && (tokenId === undefined || m.tokenId === tokenId),
+      );
+    const long = single(pair.longVenue);
+    const short = single(pair.shortVenue);
     if (long && short) targets.push({ maturity, longMarketId: long.marketId, shortMarketId: short.marketId });
   }
   return targets;
