@@ -485,6 +485,9 @@ function PairCard({
    */
   const [sharePayload, setSharePayload] = useState<SharePayloadV1 | null>(null);
   const soonest = pair.soonestMaturitySec;
+  // A spread pair names its market under the venues: its singles twin
+  // shows the same venues and date.
+  const spreadHeld = pair.kind === 'spread' ? (pair.legs.find((l) => l.kind === 'yu' && l.spreadVenues)?.spreadVenues ?? null) : null;
   // Fee → APR: one-off fees spread over the pair's FULL hedged life
   // (first-fully-hedged → soonest maturity), on the same capital base as the
   // locked APR. Falls back to the remaining term when no leg start is known.
@@ -684,6 +687,7 @@ function PairCard({
                     rides under the venues as the pair's own sub-line (the
                     mock's pattern) rather than taking a column of its own. */}
                 <span className="num text-[11.5px] font-normal leading-none text-ink-400">
+                  {spreadHeld && <>{spreadName(base, spreadHeld)} · </>}
                   {soonest > 0 ? (
                     <span title="Every leg of this pair settles here">
                       matures {fmtDateLocal(soonest)} · {daysLeftText(soonest, nowSec)}
@@ -3262,7 +3266,10 @@ function PerpOnlyPairCard({
             >
               Close perps
             </button>
-            {both && (
+            {/* A held single keeps the unit on singles (rule 5), but a pair
+                ticket routes to a trading spread, so each missing single
+                opens on its own Open leg button. */}
+            {both && !held && (
               <button
                 type="button"
                 className={`${pill} !border-grass/60 !text-grass hover:!border-grass hover:!bg-grass/10`}
@@ -5861,7 +5868,7 @@ null
             )}
             {borosOnly.pairs.map((p) => (
               <BorosOnlyPairCard
-                key={`bo:${p.longVenue}:${p.shortVenue}:${p.maturity}`}
+                key={`bo:${p.longVenue}:${p.shortVenue}:${p.maturity}:${p.longYu ? 'singles' : 'spread'}`}
                 pair={p}
                 base={group.base}
                 nowSec={nowSec}
