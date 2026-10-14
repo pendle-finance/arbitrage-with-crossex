@@ -618,6 +618,13 @@ export function perpOnlyCloseLegs(pair: Pick<PerpOnlyPair, 'long' | 'short'>): P
   return [pair.long, pair.short].map((l) => ({ symbol: l.symbol, qty: l.sizeBase, venue: l.venue, partial: l.share < 0.9995 }));
 }
 
+/** What a side still has to open: under 1e-9 is float residue (0.949 − 0.158
+ * against 0.791 left "missing <0.000001 ETH" with an Open leg button). */
+function missingOf(take: number, have: { unit: 'base' | 'usd'; sizeBase: number; notionalUsd: number } | null): number {
+  const m = take - (have ? sizeIn(have, have.unit) : 0);
+  return m > 1e-9 ? m : 0;
+}
+
 /** A pair this small is rounding, not a position: left among the ungrouped. */
 const PERP_ONLY_DUST_USD = 50;
 /** Below this share of its leg, a remainder is rounding and is not listed. */
@@ -676,8 +683,8 @@ export function perpOnlyPairs(
         imUsd: long.imUsd + short.imUsd + (longYu?.imUsd ?? 0) + (shortYu?.imUsd ?? 0),
         longYu,
         shortYu,
-        missingLong: take - (longYu ? sizeIn(longYu, longYu.unit) : 0),
-        missingShort: take - (shortYu ? sizeIn(shortYu, shortYu.unit) : 0),
+        missingLong: missingOf(take, longYu),
+        missingShort: missingOf(take, shortYu),
       });
     }
   }
@@ -771,42 +778,58 @@ export function borosOnlyPairs(
   };
 
   const pairs: BorosOnlyPair[] = [];
-  for (const s of shorts) {
-    for (const l of longs) {
-      if (l.venue === s.venue || l.unit !== s.unit || l.maturity !== s.maturity) continue;
-      const take = Math.min(yuLeft.get(l) ?? 0, yuLeft.get(s) ?? 0);
-      if (!(take > 0)) continue;
-      const longYu = slice(l, take);
-      const shortYu = slice(s, take);
-      if (longYu.notionalUsd + shortYu.notionalUsd < PERP_ONLY_DUST_USD) continue;
-      yuLeft.set(l, (yuLeft.get(l) ?? 0) - take);
-      yuLeft.set(s, (yuLeft.get(s) ?? 0) - take);
-
-      const longPerp = perpAt(l.venue, 'LONG', l.unit, take);
-      const shortPerp = longPerp ? null : perpAt(s.venue, 'SHORT', l.unit, take);
-      pairs.push({
-        longVenue: l.venue,
-        shortVenue: s.venue,
-        maturity: l.maturity,
-        longYu,
-        shortYu,
-        borosLegs: [longYu, shortYu],
-        size: take,
-        unit: l.unit,
-        notionalUsd: longYu.notionalUsd + shortYu.notionalUsd,
-        imUsd: longYu.imUsd + shortYu.imUsd + (longPerp?.imUsd ?? 0) + (shortPerp?.imUsd ?? 0),
-        longPerp,
-        shortPerp,
-        missingLong: take - (longPerp ? sizeIn(longPerp, longPerp.unit) : 0),
-        missingShort: take - (shortPerp ? sizeIn(shortPerp, shortPerp.unit) : 0),
-        // The 4-leg pair's definition (`pairLockedSpread`): receive minus
-        // pay, on the rate legs' notional, net of both settlement fees.
-        lockedSpread:
-          l.lockedApr !== null && s.lockedApr !== null
-            ? l.lockedApr + s.lockedApr - (l.settleFeeApr ?? 0) - (s.settleFeeApr ?? 0)
-            : null,
-      });
+  // Legs opened together are the same size, so the closest sizes match
+  // first, then the largest. Largest first alone split a Gate/Hyperliquid
+  // remainder (0.261 each) when a 233 ETH Binance long sat at the same
+  // maturity: the Hyperliquid short went to Binance.
+  const candidates = shorts.flatMap((s) =>
+    longs.filter((l) => l.venue !== s.venue && l.unit === s.unit && l.maturity === s.maturity).map((l) => ({ s, l })),
+  );
+  const gap = ({ s, l }: { s: PendingLeg; l: PendingLeg }) => {
+    const a = yuLeft.get(l) ?? 0;
+    const b = yuLeft.get(s) ?? 0;
+    return Math.abs(a - b) / Math.max(a, b);
+  };
+  for (;;) {
+    let best = -1;
+    for (let i = 0; i < candidates.length; i++) {
+      const c = candidates[i];
+      if (!((yuLeft.get(c.l) ?? 0) > 0 && (yuLeft.get(c.s) ?? 0) > 0)) continue;
+      if (best < 0 || gap(c) < gap(candidates[best])) best = i;
     }
+    if (best < 0) break;
+    const { s, l } = candidates.splice(best, 1)[0];
+    const take = Math.min(yuLeft.get(l) ?? 0, yuLeft.get(s) ?? 0);
+    const longYu = slice(l, take);
+    const shortYu = slice(s, take);
+    if (longYu.notionalUsd + shortYu.notionalUsd < PERP_ONLY_DUST_USD) continue;
+    yuLeft.set(l, (yuLeft.get(l) ?? 0) - take);
+    yuLeft.set(s, (yuLeft.get(s) ?? 0) - take);
+
+    const longPerp = perpAt(l.venue, 'LONG', l.unit, take);
+    const shortPerp = longPerp ? null : perpAt(s.venue, 'SHORT', l.unit, take);
+    pairs.push({
+      longVenue: l.venue,
+      shortVenue: s.venue,
+      maturity: l.maturity,
+      longYu,
+      shortYu,
+      borosLegs: [longYu, shortYu],
+      size: take,
+      unit: l.unit,
+      notionalUsd: longYu.notionalUsd + shortYu.notionalUsd,
+      imUsd: longYu.imUsd + shortYu.imUsd + (longPerp?.imUsd ?? 0) + (shortPerp?.imUsd ?? 0),
+      longPerp,
+      shortPerp,
+      missingLong: missingOf(take, longPerp),
+      missingShort: missingOf(take, shortPerp),
+      // The 4-leg pair's definition (`pairLockedSpread`): receive minus
+      // pay, on the rate legs' notional, net of both settlement fees.
+      lockedSpread:
+        l.lockedApr !== null && s.lockedApr !== null
+          ? l.lockedApr + s.lockedApr - (l.settleFeeApr ?? 0) - (s.settleFeeApr ?? 0)
+          : null,
+    });
   }
   for (const y of yus) {
     if (!y.spreadVenues) continue;
@@ -833,8 +856,8 @@ export function borosOnlyPairs(
       imUsd: leg.imUsd + (longPerp?.imUsd ?? 0) + (shortPerp?.imUsd ?? 0),
       longPerp,
       shortPerp,
-      missingLong: take - (longPerp ? sizeIn(longPerp, longPerp.unit) : 0),
-      missingShort: take - (shortPerp ? sizeIn(shortPerp, shortPerp.unit) : 0),
+      missingLong: missingOf(take, longPerp),
+      missingShort: missingOf(take, shortPerp),
       lockedSpread: y.lockedApr !== null ? y.lockedApr - (y.settleFeeApr ?? 0) : null,
     });
   }

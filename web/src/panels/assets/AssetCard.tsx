@@ -5302,6 +5302,9 @@ export function AssetCard({
   };
   const listedSpreadFor = (p: PerpOnlyPair): [string, string] | null => {
     if (!(p.missingLong > 0 && p.missingShort > 0)) return null;
+    // A single already held, even a part one, keeps the unit on singles
+    // (mozzarella 2026-10-14, rule 5): the spread would hide it.
+    if (p.longYu || p.shortYu) return null;
     const maturity = borosMaturityFor(p);
     const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
     // A close-only or paused spread counts as no spread: offer both singles.

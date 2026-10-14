@@ -823,6 +823,16 @@ describe('perpOnlyPairs', () => {
     expect(perpOnlyPairs([perpLeg('GATE', 'LONG', 10), perpLeg('OKX', 'LONG', 10)], []).pairs).toEqual([]);
     expect(perpOnlyPairs([perpLeg('GATE', 'LONG', 10), perpLeg('GATE', 'SHORT', 10)], []).pairs).toEqual([]);
   });
+
+  it('float residue is not a missing leg', () => {
+    // A Gate single of 0.949 − 0.158 behind 0.791 perps: 1e-16 short, not "missing <0.000001 ETH".
+    const [p] = perpOnlyPairs(
+      [perpLeg('GATE', 'LONG', 0.791), perpLeg('HYPERLIQUID', 'SHORT', 0.791)],
+      [yuLeg('GATE', 'LONG', 0.949 - 0.158, 1_790_000_000)],
+    ).pairs;
+    expect(p.missingLong).toBe(0);
+    expect(p.missingShort).toBe(0.791);
+  });
 });
 
 describe('pairLockedSpread — on the RATE legs’ notional', () => {
@@ -925,6 +935,21 @@ describe('borosOnlyPairs', () => {
     expect(restYus).toHaveLength(1);
     expect(restYus[0].venue).toBe('GATE');
     expect(restYus[0].sizeBase).toBe(60);
+  });
+
+  it('matches the closest sizes first: a remainder pair is not split by a larger book', () => {
+    // mozzarella 2026-10-14, rule 3: the Gate/Hyperliquid singles' unhedged
+    // 0.261 stays one unit although a 233 ETH Binance long shares the date.
+    const { pairs } = borosOnlyPairs(
+      [],
+      [
+        yuLeg('BINANCE', 'LONG', 233, M, -0.06, 1),
+        yuLeg('LIGHTER', 'SHORT', 191.6, M, 0.049, 2),
+        yuLeg('GATE', 'LONG', 0.261, M, -0.062, 3),
+        yuLeg('HYPERLIQUID', 'SHORT', 0.261, M, 0.154, 4),
+      ],
+    );
+    expect(pairs.map((p) => `${p.longVenue}/${p.shortVenue} ${p.size}`).sort()).toEqual(['BINANCE/LIGHTER 191.6', 'GATE/HYPERLIQUID 0.261']);
   });
 
   it('never blends maturities, pairs a venue with itself, or pairs two legs on one side', () => {
