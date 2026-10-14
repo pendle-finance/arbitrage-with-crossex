@@ -32,6 +32,11 @@ order. ETH and BTC coin books need a 0.1% match to read "Hedged".
 - **Bigger Boros orders fill.** The order ticket now uses the same rate limit as Boros. Before,
   it used a tighter one on most markets (Gate ETHUSDT 27 Nov: ±1.05% instead of ±1.50%), so it
   blocked wider tolerances and capped large orders that Boros would have filled.
+- **Liquidation APR matches Boros.** The order ticket now works out a Boros leg's liquidation
+  rate the way the Boros contract does. Before, a short showed liquidation too far away once
+  the rate passed the margin floor: Hyperliquid ETH 27 Nov, short at 7.87%, showed 9.48%; the
+  real figure is 9.03%. As in the Boros app, a rate past 250% (or past 10 × the mark rate)
+  shows "N/A", in the ticket and under held Boros legs.
 - **Rolls match your coin.** Roll over and the Telegram roll alert now offer markets in the
   coin you hold. Before, a BTC Hyperliquid/Gate pair was offered a USDT market and got no
   roll alert.
