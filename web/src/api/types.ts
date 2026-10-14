@@ -1118,8 +1118,9 @@ export interface BorosSimulatedLeg {
   bookStatus: BorosBookStatus;
   marginRequired: number | null;
   /** The mark rate at which the resulting position, backed by exactly its
-   * initial margin, is liquidated. Null when flat, unpriced, or the market
-   * carries no margin coefficients. Optional only for an older server. */
+   * initial margin, is liquidated. Null when flat, unpriced, the market
+   * carries no margin coefficients, or past the range the Boros app shows.
+   * Optional only for an older server. */
   liquidationApr?: number | null;
   slippageApr: number;
   sizing: BorosLegSizing;
