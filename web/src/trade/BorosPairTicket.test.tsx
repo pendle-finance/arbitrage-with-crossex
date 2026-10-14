@@ -1888,6 +1888,25 @@ describe('BorosPairTicket — spread ticket', () => {
     expect(await screen.findByRole('button', { name: /Confirm · 1 Boros market order/ })).toBeInTheDocument();
   });
 
+  it('reads the side from the spread\'s own leg order, whichever venue it lists first', async () => {
+    const bodies: Record<string, unknown>[] = [];
+    server.use(
+      ...spreadHandlers((b) => bodies.push(b), {
+        spread: { name: 'ETH Spread GATE-HL 27 Nov 2026', venue: 'GATE-HL', spreadVenues: ['GATE', 'HYPERLIQUID'] },
+      }),
+    );
+    const user = userEvent.setup();
+    await pickHlGate(user);
+    await waitFor(() => expect(screen.getByText('ETH Spread GATE-HL')).toBeInTheDocument());
+    await user.type(screen.getByLabelText(/^Size \(ETH\)/), '0.121');
+    // Slot A short on Hyperliquid = short leg 2 = long a spread listed Gate first.
+    await waitFor(() =>
+      expect((bodies[bodies.length - 1] as SimBody | undefined)?.legs).toEqual([
+        expect.objectContaining({ marketId: SPREAD_OPP_MARKET_ID, direction: 'long', size: 0.121 }),
+      ]),
+    );
+  });
+
   it('offers no way to put a pair with a tradable spread on its singles', async () => {
     server.use(...spreadHandlers(() => {}));
     const user = userEvent.setup();
