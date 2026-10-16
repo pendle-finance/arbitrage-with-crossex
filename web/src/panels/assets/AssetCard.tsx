@@ -3149,9 +3149,7 @@ function PerpOnlyPairCard({
     yu && !(missing > 0) ? (
       <tr key={`yu-${venue}`}>
         <td className={`${cell} whitespace-nowrap`}>{legName(venue, 'yu', side)}</td>
-        <td className={`${cell} num whitespace-nowrap text-right text-ink-100`} title={HELD_OF_TARGET_TITLE}>
-          {ofTarget(sizeIn(yu, yu.unit))}
-        </td>
+        <td className={`${cell} num whitespace-nowrap text-right text-ink-100`}>{sizeText(sizeIn(yu, yu.unit))}</td>
         <td className={`${cell} num whitespace-nowrap text-right`}>
           {yu.lockedApr !== null ? (
             <SignedNumber value={yu.lockedApr} format={fmtPct} />
@@ -3416,9 +3414,7 @@ function BorosOnlyPairCard({
     !(missing > 0) && perp && (
       <tr key={`p-${venue}`}>
         <td className={`${cell} whitespace-nowrap`}>{legName(venue, 'perp', side)}</td>
-        <td className={`${cell} num whitespace-nowrap text-right text-ink-100`} title={HELD_OF_TARGET_TITLE}>
-          {ofTarget(sizeIn(perp, perp.unit))}
-        </td>
+        <td className={`${cell} num whitespace-nowrap text-right text-ink-100`}>{sizeText(sizeIn(perp, perp.unit))}</td>
         <td className={`${cell} num text-right text-ink-600`}>—</td>
         <td className={`${cell} num whitespace-nowrap text-right text-ink-100`}>{fmtUsdCompact(perp.imUsd)}</td>
       </tr>
