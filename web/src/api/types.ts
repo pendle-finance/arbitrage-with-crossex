@@ -1117,6 +1117,9 @@ export interface BorosSimulatedLeg {
   shortfallSize: number;
   bookStatus: BorosBookStatus;
   marginRequired: number | null;
+  /** Margin a reducing trade stops posting (the size it closes, at mark).
+   * Optional only for test fixtures. */
+  marginReleased?: number | null;
   /** The mark rate at which the resulting position, backed by exactly its
    * initial margin, is liquidated. Null when flat, unpriced, the market
    * carries no margin coefficients, or past the range the Boros app shows.
@@ -1149,6 +1152,8 @@ export interface BorosPairSimulation {
    * SLIPPAGE proper: distance from mid, not unused tolerance. */
   slippageApr?: number | null;
   marginRequiredTotal: number | null;
+  /** Σ of the legs' `marginReleased`. Optional only for test fixtures. */
+  marginReleasedTotal?: number | null;
   hedgedSize: number;
   unhedgedSize: number;
   collateral: string;

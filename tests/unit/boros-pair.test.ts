@@ -734,6 +734,26 @@ describe('evaluatePairGate', () => {
     expect(codes(g)).not.toContain('below-min-order-value');
   });
 
+  it('a close states the margin it releases: the closed size at mark, not what is left', () => {
+    // IM = N × max(|mark|, floor) × max(DTM, tThresh) / 365 × kIM. Leg A's
+    // mark (8.9%) beats the floor; leg B's (4.6%) does not.
+    const floor = 1.00005 ** (770 * 2) - 1;
+    const im = (n: number, rate: number) => (n * rate * 30 * imInputs.kIM) / 365;
+    const legA = leg({ currentSize: -5, direction: 'long' });
+    const legB = leg({ market: bnMarket, book: book(101, 0.04, 0.042), direction: 'short', currentSize: 5 });
+    // A whole close leaves nothing, so marginRequired is 0 — the old "freed".
+    const whole = simulateBorosPair(simInput({ legA, legB, size: 5, intent: 'close' }));
+    expect(whole.marginRequiredTotal).toBeCloseTo(0, 12);
+    expect(whole.legs[0].marginReleased).toBeCloseTo(im(5, 0.089), 9);
+    expect(whole.legs[1].marginReleased).toBeCloseTo(im(5, floor), 9);
+    expect(whole.marginReleasedTotal).toBeCloseTo(im(5, 0.089) + im(5, floor), 9);
+    // A part close releases the part it closes.
+    const part = simulateBorosPair(simInput({ legA, legB, size: 2, intent: 'close' }));
+    expect(part.marginReleasedTotal).toBeCloseTo(im(2, 0.089) + im(2, floor), 9);
+    // An open releases nothing.
+    expect(simulateBorosPair(simInput()).marginReleasedTotal).toBe(0);
+  });
+
   it('blocks an ineligible pair', () => {
     const g = evaluatePairGate(
       gateInput({ eligibility: pairEligibility([hlMarket, { ...bnMarket, tokenId: 1 }], NOW) }),
