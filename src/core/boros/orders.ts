@@ -68,24 +68,6 @@ export interface BorosMarketOrderRequest {
 }
 
 /**
- * One leg of a roll-over, as the venue's own builder takes it: the position on
- * `fromMarketId` is closed (opposite side, capped at what is held — sized by
- * the venue from the on-chain position, never from this float) and the same
- * side re-opened at the same size on `toMarketId`. Every order is FOK, so a
- * batch of these submitted with `requireSuccess` moves every leg in full or
- * nothing. `closeRate` / `openRate` are the worst rates each order accepts.
- */
-export interface BorosRollLeg {
-  fromMarketId: number;
-  toMarketId: number;
-  /** Collateral units, positive. */
-  size: number;
-  sizeWei?: string;
-  closeRate?: number;
-  openRate?: number;
-}
-
-/**
  * The venue's preview of a roll: the batch run in order on one simulated
  * account, so it answers the two things no book walk can — does every FOK
  * order fill whole inside its bound, and does the account still clear its
@@ -233,20 +215,10 @@ export interface BorosOrderClient {
    */
   placeMarketOrders(reqs: BorosMarketOrderRequest[], opts?: PlaceOrdersOptions): Promise<BorosLegFill[]>;
   /**
-   * Roll positions to a later maturity as ONE all-or-nothing batch: the
-   * venue builds every close and open (FOK), this signs and submits them
-   * with `requireSuccess`. Returns one fill per order, every close first
-   * then every open, in leg order.
+   * A roll — every close, then every open, FOK — previewed by the venue on
+   * one simulated account state, as `placeMarketOrders` would send it.
    */
-  rollOver?(legs: BorosRollLeg[], opts?: Pick<PlaceOrdersOptions, 'cancelOrdersOn' | 'gasTopUpMarket'>): Promise<BorosLegFill[]>;
-  /** The same batch previewed by the venue on one simulated account state. */
-  simulateRollOver?(legs: BorosRollLeg[]): Promise<BorosRollSimulation>;
-  /**
-   * A roll that is not leg for leg (two singles into one spread, or the
-   * reverse), previewed the same way: every close, then every open, on one
-   * simulated account state.
-   */
-  simulateRollOverOrders?(closes: BorosMarketOrderRequest[], opens: BorosMarketOrderRequest[]): Promise<BorosRollSimulation>;
+  simulateRollOver?(closes: BorosMarketOrderRequest[], opens: BorosMarketOrderRequest[]): Promise<BorosRollSimulation>;
   /** Force-cancel every resting order on one market (§6A remediation). */
   cancelOrders(marketId: number): Promise<void>;
   /** Force-close the whole netted position on one market (§6A remediation). */

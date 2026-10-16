@@ -2487,7 +2487,7 @@ function RollReview({
         <EstimateRow
           label="Required margin"
           sub="for the new legs"
-          title="Initial margin the two new legs post, summed."
+          title="Initial margin the new legs post, summed."
           value={
             marginNeed !== null ? (
               <>

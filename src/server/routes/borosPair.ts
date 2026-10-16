@@ -1067,14 +1067,7 @@ export function borosPairRoutes(deps: AppDeps) {
       // finds, an input it rejects). A 429, a 5xx or a dropped connection is
       // the next poll's problem: for those "waiting for a quote" is the truth.
       let venueError: string | null = null;
-      // A leg-for-leg roll and a singles ↔ spread roll are previewed by two
-      // venue endpoints that judge the batch the same way.
-      const preview =
-        plan?.kind === 'rollover'
-          ? orders?.simulateRollOver?.(plan.legs)
-          : plan?.kind === 'batch'
-            ? orders?.simulateRollOverOrders?.(plan.closes, plan.opens)
-            : undefined;
+      const preview = plan ? orders?.simulateRollOver?.(plan.closes, plan.opens) : undefined;
       const venue = preview
         ? await preview.catch((err: unknown) => {
             const status = err instanceof CoreError ? (err.details as { status?: number } | undefined)?.status : undefined;
@@ -1140,11 +1133,8 @@ export function borosPairRoutes(deps: AppDeps) {
       const unlockRoll = lockCloses([...parseLegs(body.exit?.legs), ...parseLegs(body.entry?.legs)].map((leg) => leg.marketId));
       if (!unlockRoll) return refuse(reply, { code: 409, category: 'validation', message: ORDER_RUNNING, retryable: false });
       try {
-        const { exit, entry, gate, venue, account, openSizeWei, plan: priced } = await priceRoll(body, true);
-        if (
-          (priced?.kind === 'rollover' && (!orders.rollOver || !orders.simulateRollOver)) ||
-          (priced?.kind === 'batch' && !orders.simulateRollOverOrders)
-        ) {
+        const { exit, entry, gate, venue, account, openSizeWei } = await priceRoll(body, true);
+        if (!orders.simulateRollOver) {
           throw new CoreError('Boros roll-over is not configured on this install.', 'not-configured');
         }
         if (gate.blockers.length > 0) {
@@ -1165,8 +1155,7 @@ export function borosPairRoutes(deps: AppDeps) {
         if (raced) return reply.ok({ ...(await raced.result), replayed: true });
         // The roll closes the short-dated legs, so their resting orders go in
         // the same batch: one left behind could re-open a leg the roll just moved.
-        const exitIds = plan.kind === 'rollover' ? plan.legs.map((l) => l.fromMarketId) : plan.closes.map((o) => o.marketId);
-        const cancelOrdersOn = [...new Set(exitIds)].filter((id) => account.restingOrderMarkets.has(id));
+        const cancelOrdersOn = [...new Set(plan.closes.map((o) => o.marketId))].filter((id) => account.restingOrderMarkets.has(id));
         const gasTopUpMarket = gasTopUpMarketFor(exit.markets, account, venue?.availableAfter);
         const pending: Promise<RollPayload> = submitBorosRoll(orders, plan, { cancelOrdersOn, gasTopUpMarket }).then((result) => ({
           result,

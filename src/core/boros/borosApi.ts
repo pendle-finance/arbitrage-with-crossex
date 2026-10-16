@@ -58,7 +58,6 @@ import {
   type BorosLegFill,
   type BorosMarketOrderRequest,
   type BorosOrderClient,
-  type BorosRollLeg,
   type BorosRollSimulation,
   type PlaceOrdersOptions,
 } from './orders';
@@ -110,8 +109,8 @@ const SIDE_SHORT = 1;
  * Time-in-force 1 = IOC: take what the book gives, cancel the rest. GTC would
  * leave a resting order nobody asked for; FOK turns every thin book into a
  * total miss rather than a partial fill the panel can report and complete.
- * (The roll-over is the exception — the venue's own builder makes its legs
- * FOK, because there a total miss is the point.)
+ * (The roll-over is the exception — its legs go FOK, because there a total
+ * miss is the point.)
  */
 const TIF_IOC = 1;
 const TIF_FOK = 2;
@@ -286,15 +285,6 @@ interface RollOverSimulationWire {
     fee?: string | null;
     error?: string | null;
   }>;
-}
-
-/** One call of the venue's roll-over builder: a `place-order` call plus what it trades. */
-interface RollOverCall extends PlaceOrderCall {
-  action: 'close' | 'open';
-  marketId: number;
-  /** 18-decimal integer string. */
-  size: string;
-  resolved?: { side?: number; requestedRate?: number };
 }
 
 interface TxResponse {
@@ -741,26 +731,6 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
     return executeOpening(reqs, legs, opts, cancels, reqs.map((r) => r.marketId));
   };
 
-  /**
-   * The venue builds the whole roll — every close sized from the on-chain
-   * position and every open at that size, all FOK — and reports each call's
-   * market, side and size, which is what the fills are read against. The
-   * top-up goes between the closes and the opens: funded like an open, its
-   * strict margin check after the closes freed their margin.
-   */
-  /** The body both roll-over endpoints take: the legs in the venue's units. */
-  const rollOverBody = async (legs: BorosRollLeg[]) => ({
-    marketAcc: await marketAccFor(legs[0].fromMarketId),
-    legs: legs.map((l) => ({
-      fromMarketId: l.fromMarketId,
-      toMarketId: l.toMarketId,
-      size: l.sizeWei ?? parseUnits(decimalString(l.size), DECIMALS).toString(),
-      closeRate: l.closeRate,
-      openRate: l.openRate,
-      ammId: AMM_ORDERBOOK_ONLY,
-    })),
-  });
-
   const readRollSimulation = (res: RollOverSimulationWire): BorosRollSimulation => {
     const units = (raw: string | null | undefined): number | null =>
       raw === null || raw === undefined ? null : Number(formatUnits(BigInt(raw), DECIMALS));
@@ -783,16 +753,13 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
     };
   };
 
-  const simulateRollOver = async (legs: BorosRollLeg[]): Promise<BorosRollSimulation> =>
-    readRollSimulation(await call<RollOverSimulationWire>('/v1/simulations/roll-over', await rollOverBody(legs)));
-
   /**
-   * A roll that is not leg for leg (two singles into one spread, or the
-   * reverse), previewed as the batch `placeMarketOrders` sends: every close,
+   * A roll previewed as the batch `placeMarketOrders` sends: every close,
    * then every open, FOK, on one simulated account state. The venue sizes
-   * each close from the position it holds, capped at the size asked.
+   * each close from the position it holds, capped at the size asked, and
+   * judges each order with the rate guard `/place-order` gives it.
    */
-  const simulateRollOverOrders = async (
+  const simulateRollOver = async (
     closes: BorosMarketOrderRequest[],
     opens: BorosMarketOrderRequest[],
   ): Promise<BorosRollSimulation> => {
@@ -808,43 +775,6 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
         closes: closes.map(wire),
         opens: opens.map((req) => ({ ...wire(req), side: req.direction === 'long' ? SIDE_LONG : SIDE_SHORT })),
       }),
-    );
-  };
-
-  const rollOver = async (
-    legs: BorosRollLeg[],
-    opts?: Pick<PlaceOrdersOptions, 'cancelOrdersOn' | 'gasTopUpMarket'>,
-  ): Promise<BorosLegFill[]> => {
-    if (legs.length === 0) return [];
-    let calls: RollOverCall[];
-    let cancels: Hex[];
-    try {
-      cancels = await cancelCalldatas(opts?.cancelOrdersOn);
-      const res = await call<{ calls: RollOverCall[] }>('/v1/calldata-builder/agent/roll-over', await rollOverBody(legs));
-      calls = res?.calls ?? [];
-      if (calls.length !== legs.length * 2) throw new CoreError('Boros returned an unexpected number of roll-over calls', 'venue-rejected');
-    } catch (err) {
-      // Closes then opens, the order the venue would have answered in.
-      const refused = (marketId: number, direction: BorosLegDirection, size: number) =>
-        neverSentLeg({ marketId, direction, size, limitApr: 0, clientOrderId: '' }, err);
-      return [
-        ...legs.map((l) => refused(l.fromMarketId, 'short', l.size)),
-        ...legs.map((l) => refused(l.toMarketId, 'long', l.size)),
-      ];
-    }
-    const reqs = calls.map((c) => ({
-      marketId: c.marketId,
-      direction: (c.resolved?.side === SIDE_SHORT ? 'short' : 'long') as BorosLegDirection,
-      size: Number(formatUnits(BigInt(c.size), DECIMALS)),
-      limitApr: c.resolved?.requestedRate ?? 0,
-      clientOrderId: '',
-    }));
-    return executeOpening(
-      reqs,
-      calls.map((c) => c.calldata as Hex),
-      { reducing: false, topUpAfter: legs.length, gasTopUpMarket: opts?.gasTopUpMarket },
-      cancels,
-      legs.flatMap((l) => [l.fromMarketId, l.toMarketId]),
     );
   };
 
@@ -992,9 +922,7 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
 
   return {
     placeMarketOrders,
-    rollOver,
     simulateRollOver,
-    simulateRollOverOrders,
 
     async cancelOrders(marketId: number): Promise<void> {
       const calls = await cancelCalldatas([marketId]);
