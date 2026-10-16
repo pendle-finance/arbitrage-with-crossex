@@ -366,7 +366,7 @@ describe('POST /api/boros/roll/execute', () => {
     // round-trip exactly); the venue caps the close at the position in wei.
     calls[0].forEach((o) => expect(o.size).toBeCloseTo(100_000, 6));
 
-    expect(busted).toContain('boros:collaterals');
+    expect(busted.some((k) => k.startsWith('boros:collaterals:'))).toBe(true);
   });
 
   it('re-runs the roll gate server-side and refuses a blocked roll with a 409', async () => {

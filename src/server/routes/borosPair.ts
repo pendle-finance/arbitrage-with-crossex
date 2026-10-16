@@ -476,6 +476,31 @@ export function createPairPricer(deps: AppDeps) {
     return readAccount(value);
   };
 
+  const settleMaxMs = deps.borosSettle?.maxMs ?? 6_000;
+  const settleSleep = deps.borosSettle?.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  /**
+   * After a Boros write: drop the fills it changed, then re-read the account
+   * until Boros shows the trade, and keep that read cached for the cards.
+   * Boros shows a batch 1–2 s after the send returns, so the page's instant
+   * re-read got the old position and the cache kept it for 30 s (2026-10-16).
+   * A read that never shows the trade (nothing filled, or Boros is slow) is
+   * not kept.
+   */
+  const settleAfterWrite = async (address: string, before: AccountView, traded: readonly number[]): Promise<void> => {
+    bustBorosFills(deps.cache, traded);
+    const raw = (a: AccountView, id: number) => a.positionRawByMarket.get(id) ?? '0';
+    const deadline = Date.now() + settleMaxMs;
+    for (;;) {
+      const after = await loadAccount(address, true).catch(() => null);
+      if (after && traded.some((id) => raw(after, id) !== raw(before, id))) return;
+      if (after === null || Date.now() + 1_000 > deadline) {
+        deps.cache.bust(`boros:collaterals:${address}`);
+        return;
+      }
+      await settleSleep(1_000);
+    }
+  };
+
   /** A book fresh enough to place an order against — never the scan's entry. */
   const loadTradeBook = async (marketId: number): Promise<BorosOrderBook | null> => {
     try {
@@ -605,7 +630,7 @@ export function createPairPricer(deps: AppDeps) {
     };
   };
 
-  return { loadMarkets, loadQuoteMarkets, loadAccount, marketOr404, readGasBalance, priceRequest };
+  return { loadMarkets, loadQuoteMarkets, loadAccount, settleAfterWrite, marketOr404, readGasBalance, priceRequest };
 }
 
 /**
@@ -629,19 +654,15 @@ function openCostPerSize(m: BorosMarket, nowSec: number): number | null {
 }
 
 /**
- * Drop the cached Boros fills a write can change: every held market's, and
- * the closed-market entry of each market it traded (closed, re-opened and
- * closed again, that entry would miss the new fills). Every other closed
- * market takes no new fills. Busting them all re-read each one, paced under
- * the venue's rate limit: the cards then took about 50 s to show a trade.
+ * Drop the cached Boros fills a write changed: the traded markets', held or
+ * closed (closed, re-opened and closed again, the closed entry would miss the
+ * new fills). No other market has a new fill from this write. Busting every
+ * market re-read each one, paced under the venue's rate limit: the cards then
+ * took about 50 s to show a trade (2026-10-16).
  */
 function bustBorosFills(cache: AppDeps['cache'], marketIds: readonly number[]): void {
   const traded = new Set(marketIds.map(String));
-  cache.bustWhere((key) => {
-    if (!key.startsWith('boros:txns:')) return false;
-    const [, , , marketId, kind] = key.split(':');
-    return kind === 'live' || traded.has(marketId);
-  });
+  cache.bustWhere((key) => key.startsWith('boros:txns:') && traded.has(key.split(':')[3]));
 }
 
 export function borosPairRoutes(deps: AppDeps) {
@@ -721,7 +742,7 @@ export function borosPairRoutes(deps: AppDeps) {
     }
   };
 
-  const { loadMarkets, loadQuoteMarkets, loadAccount, marketOr404, readGasBalance, priceRequest } = createPairPricer(deps);
+  const { loadMarkets, loadQuoteMarkets, loadAccount, settleAfterWrite, marketOr404, readGasBalance, priceRequest } = createPairPricer(deps);
 
 
   return async function plugin(app: FastifyInstance): Promise<void> {
@@ -1029,8 +1050,7 @@ export function borosPairRoutes(deps: AppDeps) {
          * snapshot. The position then appeared only when the TTL happened to
          * lapse — "it takes a while, and sometimes I have to refresh by hand".
          */
-        deps.cache.bust('boros:collaterals');
-        bustBorosFills(deps.cache, simulation.legs.map((l) => l.marketId));
+        await settleAfterWrite(parseAddress(body.address), account, simulation.legs.map((l) => l.marketId));
 
         if (thrown.length > 0) {
           const unknown = classifyLegFailure(thrown[0]) === 'unknown';
@@ -1189,8 +1209,11 @@ export function borosPairRoutes(deps: AppDeps) {
         }));
         rememberRoll(memoKey, pending);
         const payload = await pending;
-        deps.cache.bust('boros:collaterals');
-        bustBorosFills(deps.cache, [...exit.simulation.legs, ...entry.simulation.legs].map((l) => l.marketId));
+        await settleAfterWrite(
+          parseAddress(body.address),
+          account,
+          [...exit.simulation.legs, ...entry.simulation.legs].map((l) => l.marketId),
+        );
         return reply.ok({ ...payload, replayed: false });
       } finally {
         unlockRoll();
@@ -1399,8 +1422,7 @@ export function borosPairRoutes(deps: AppDeps) {
            * the CrossEx writes: a write busts what it changed (deals.ts busts
            * `account`, leverage.ts busts `positions`).
            */
-          deps.cache.bust('boros:collaterals');
-          bustBorosFills(deps.cache, [marketId]);
+          await settleAfterWrite(address, account, [marketId]);
 
           return reply.ok({
             marketId,
