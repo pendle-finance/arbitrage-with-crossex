@@ -6,7 +6,7 @@
  */
 import { keccak256, parseUnits, verifyTypedData, type Hex } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   absWei,
   BOROS_API_BASE,
@@ -672,6 +672,30 @@ describe('makeBorosApiOrderClient — a roll', () => {
     // Never a market the roll trades (HL is matured but closed by the roll; BN is empty but closed by it).
     expect(sent).toEqual([[MATURED], [MATURED, EMPTY]]);
     expect(sim.status).toBe('Succeed');
+  });
+
+  it('a polled preview reuses its account reads for 15 s; a send, or the 15 s, reads afresh', async () => {
+    const api = fakeApi();
+    const c = client(api);
+    const reads = (path: string) => api.calls.filter((x) => x.path.startsWith(path)).length;
+    await c.simulateRollOver!(closes(), opens());
+    await c.simulateRollOver!(closes(), opens());
+    // The venue meters the IP: the 5-unit root read once, not once a poll.
+    expect(reads('/v1/accounts/market-acc-infos-by-root')).toBe(1);
+    expect(reads('/v1/accounts/entered-markets')).toBe(1);
+    expect(reads('/v2/simulations/roll-over')).toBe(2);
+    const t0 = Date.now();
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(t0 + 16_000);
+    try {
+      await c.simulateRollOver!(closes(), opens());
+      expect(reads('/v1/accounts/market-acc-infos-by-root')).toBe(2);
+      await submitBorosRoll(c, { closes: closes(), opens: opens() });
+      const before = reads('/v1/accounts/market-acc-infos-by-root');
+      await c.simulateRollOver!(closes(), opens());
+      expect(reads('/v1/accounts/market-acc-infos-by-root')).toBe(before + 1);
+    } finally {
+      clock.mockRestore();
+    }
   });
 
   it('previews a roll as explicit closes and opens, the batch placeMarketOrders sends', async () => {
