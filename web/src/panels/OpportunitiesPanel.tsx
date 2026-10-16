@@ -503,6 +503,7 @@ const OpportunityCard = memo(function OpportunityCard({
   const rebatedLegs = rebate ? pair.borosLegs.filter((leg) => rebateAppliesTo(rebate, leg.marketId)) : [];
   const rebatedMarketIds = rebatedLegs.map((leg) => leg.marketId);
   const rebateChip = rebate && rebatedLegs.length > 0 ? rebate : null;
+  const rebateLegs = rebateChip ? rebateLegsNote(rebateChip, rebatedLegs) : '';
   const chips = cardChips(pair);
   const spreadLeg = pair.borosLegs.find((leg) => leg.spreadVenues !== null) ?? null;
   const shortBoros = pair.borosLegs.find((leg) => leg.side === 'SHORT');
@@ -605,12 +606,11 @@ const OpportunityCard = memo(function OpportunityCard({
           <Chip
             sm
             tone="green"
-            title={[
-              `Boros settlement-fee rebate on this account${rebateChip.startTimestamp ? ` since ${fmtDateLocal(rebateChip.startTimestamp)}` : ''}.`,
-              rebateLegsNote(rebateChip, rebatedLegs),
-            ]
-              .filter(Boolean)
-              .join(' ')}
+            title={
+              rebateLegs
+                ? `Settlement-fee rebate:\n${rebateLegs}`
+                : `Boros settlement-fee rebate on this account${rebateChip.startTimestamp ? ` since ${fmtDateLocal(rebateChip.startTimestamp)}` : ''}`
+            }
           >
             {rebateChipLabel(rebateChip, rebatedMarketIds)}
           </Chip>
