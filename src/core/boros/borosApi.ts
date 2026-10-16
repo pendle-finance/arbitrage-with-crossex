@@ -761,8 +761,7 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
     })),
   });
 
-  const simulateRollOver = async (legs: BorosRollLeg[]): Promise<BorosRollSimulation> => {
-    const res = await call<RollOverSimulationWire>('/v1/simulations/roll-over', await rollOverBody(legs));
+  const readRollSimulation = (res: RollOverSimulationWire): BorosRollSimulation => {
     const units = (raw: string | null | undefined): number | null =>
       raw === null || raw === undefined ? null : Number(formatUnits(BigInt(raw), DECIMALS));
     return {
@@ -782,6 +781,34 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
       availableAfterExit: units(res.exitState?.availableInitialMargin),
       marginRequired: units(res.marginRequired) ?? 0,
     };
+  };
+
+  const simulateRollOver = async (legs: BorosRollLeg[]): Promise<BorosRollSimulation> =>
+    readRollSimulation(await call<RollOverSimulationWire>('/v1/simulations/roll-over', await rollOverBody(legs)));
+
+  /**
+   * A roll that is not leg for leg (two singles into one spread, or the
+   * reverse), previewed as the batch `placeMarketOrders` sends: every close,
+   * then every open, FOK, on one simulated account state. The venue sizes
+   * each close from the position it holds, capped at the size asked.
+   */
+  const simulateRollOverOrders = async (
+    closes: BorosMarketOrderRequest[],
+    opens: BorosMarketOrderRequest[],
+  ): Promise<BorosRollSimulation> => {
+    const wire = (req: BorosMarketOrderRequest) => ({
+      marketId: req.marketId,
+      size: req.sizeWei ?? parseUnits(decimalString(req.size), DECIMALS).toString(),
+      rate: req.limitApr,
+      ammId: AMM_ORDERBOOK_ONLY,
+    });
+    return readRollSimulation(
+      await call<RollOverSimulationWire>('/v1/simulations/roll-over-orders', {
+        marketAcc: await marketAccFor(closes[0].marketId),
+        closes: closes.map(wire),
+        opens: opens.map((req) => ({ ...wire(req), side: req.direction === 'long' ? SIDE_LONG : SIDE_SHORT })),
+      }),
+    );
   };
 
   const rollOver = async (
@@ -967,6 +994,7 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
     placeMarketOrders,
     rollOver,
     simulateRollOver,
+    simulateRollOverOrders,
 
     async cancelOrders(marketId: number): Promise<void> {
       const calls = await cancelCalldatas([marketId]);

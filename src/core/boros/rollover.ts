@@ -18,7 +18,8 @@
  *
  * What this module does NOT do: size legs, walk books or judge margin —
  * each step is priced by `simulateBorosPair` + `evaluatePairGate`, and the
- * batch as a whole by the venue's own preview (`simulations/roll-over`),
+ * batch as a whole by the venue's own preview (`simulations/roll-over`, or
+ * `simulations/roll-over-orders` for a singles ↔ spread roll),
  * which runs the four orders in order on one account state and is the only
  * thing that can say whether a FOK fills whole and whether the account
  * still clears its initial margin once the closes have freed theirs. This
@@ -189,18 +190,11 @@ export function evaluateRollGate(input: EvaluateRollInput): RollGate {
   // true one; the exit's, priced as a close, would contradict it.
   const warnings = [...exit.gate.warnings.filter((w) => !w.startsWith('Prepaid gas')), ...entry.gate.warnings];
 
-  // A batch roll (singles ↔ spread) gets no venue preview, so nothing else
-  // judges its margin.
-  const unpreviewedBatch = venue === null && rollPlanFor(exit.simulation, entry.simulation)?.kind === 'batch';
   const prefixed = (step: RollStep, gate: PairGate, label: string): void => {
     for (const b of gate.blockers) {
       // The entry's margin was judged before the exit — replaced by `margin`
-      // below. With no preview to replace it, it is shown, not dropped; only
-      // as a warning, since the closes may free enough.
-      if (step === 'entry' && MARGIN_CODES.has(b.code)) {
-        if (unpreviewedBatch) warnings.push(`${label}: ${b.message} (before the closes free their margin)`);
-        continue;
-      }
+      // below, which the venue judges after the closes have freed theirs.
+      if (step === 'entry' && MARGIN_CODES.has(b.code)) continue;
       // A roll re-opens what each venue already holds, so two singles of
       // slightly different sizes are the book as it stands, not a lopsided
       // new open. The exposure checks below keep each venue's size and side.
@@ -322,14 +316,12 @@ export function evaluateRollGate(input: EvaluateRollInput): RollGate {
     return m ? m.name : `market ${marketId}`;
   };
   if (venue === null) {
-    if (rollPlanFor(exit.simulation, entry.simulation)?.kind !== 'batch') {
-      blockers.push({
-        code: 'roll-unpriced',
-        message: input.venueError
-          ? `The venue could not preview this roll — ${input.venueError}`
-          : 'The venue could not preview this roll — waiting for a quote.',
-      });
-    }
+    blockers.push({
+      code: 'roll-unpriced',
+      message: input.venueError
+        ? `The venue could not preview this roll — ${input.venueError}`
+        : 'The venue could not preview this roll — waiting for a quote.',
+    });
   } else if (venue.status === 'Refused') {
     const named = venue.orders.filter((o) => o.error !== null);
     if (named.length > 0) {

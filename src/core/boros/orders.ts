@@ -241,6 +241,12 @@ export interface BorosOrderClient {
   rollOver?(legs: BorosRollLeg[], opts?: Pick<PlaceOrdersOptions, 'cancelOrdersOn' | 'gasTopUpMarket'>): Promise<BorosLegFill[]>;
   /** The same batch previewed by the venue on one simulated account state. */
   simulateRollOver?(legs: BorosRollLeg[]): Promise<BorosRollSimulation>;
+  /**
+   * A roll that is not leg for leg (two singles into one spread, or the
+   * reverse), previewed the same way: every close, then every open, on one
+   * simulated account state.
+   */
+  simulateRollOverOrders?(closes: BorosMarketOrderRequest[], opens: BorosMarketOrderRequest[]): Promise<BorosRollSimulation>;
   /** Force-cancel every resting order on one market (§6A remediation). */
   cancelOrders(marketId: number): Promise<void>;
   /** Force-close the whole netted position on one market (§6A remediation). */

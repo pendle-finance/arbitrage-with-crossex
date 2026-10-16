@@ -1067,14 +1067,21 @@ export function borosPairRoutes(deps: AppDeps) {
       // finds, an input it rejects). A 429, a 5xx or a dropped connection is
       // the next poll's problem: for those "waiting for a quote" is the truth.
       let venueError: string | null = null;
-      const venue =
-        plan?.kind === 'rollover' && orders?.simulateRollOver
-          ? await orders.simulateRollOver(plan.legs).catch((err: unknown) => {
-              const status = err instanceof CoreError ? (err.details as { status?: number } | undefined)?.status : undefined;
-              venueError = status !== undefined && status < 500 && status !== 429 ? describeLegFailure(err) : null;
-              return null;
-            })
-          : null;
+      // A leg-for-leg roll and a singles ↔ spread roll are previewed by two
+      // venue endpoints that judge the batch the same way.
+      const preview =
+        plan?.kind === 'rollover'
+          ? orders?.simulateRollOver?.(plan.legs)
+          : plan?.kind === 'batch'
+            ? orders?.simulateRollOverOrders?.(plan.closes, plan.opens)
+            : undefined;
+      const venue = preview
+        ? await preview.catch((err: unknown) => {
+            const status = err instanceof CoreError ? (err.details as { status?: number } | undefined)?.status : undefined;
+            venueError = status !== undefined && status < 500 && status !== 429 ? describeLegFailure(err) : null;
+            return null;
+          })
+        : null;
       const gate = evaluateRollGate({
         exit: { simulation: exit.simulation, gate: exit.gate, legs: exit.legs },
         entry: { simulation: entry.simulation, gate: entry.gate, legs: entry.legs },
@@ -1134,7 +1141,10 @@ export function borosPairRoutes(deps: AppDeps) {
       if (!unlockRoll) return refuse(reply, { code: 409, category: 'validation', message: ORDER_RUNNING, retryable: false });
       try {
         const { exit, entry, gate, venue, account, openSizeWei, plan: priced } = await priceRoll(body, true);
-        if (priced?.kind === 'rollover' && (!orders.rollOver || !orders.simulateRollOver)) {
+        if (
+          (priced?.kind === 'rollover' && (!orders.rollOver || !orders.simulateRollOver)) ||
+          (priced?.kind === 'batch' && !orders.simulateRollOverOrders)
+        ) {
           throw new CoreError('Boros roll-over is not configured on this install.', 'not-configured');
         }
         if (gate.blockers.length > 0) {
