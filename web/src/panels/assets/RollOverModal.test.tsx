@@ -712,6 +712,56 @@ describe('RollOverModal — the review page', () => {
     expect(sent[0].entry.legs[1].slippageApr).toBeCloseTo(0.02, 9);
   });
 
+  it('F-D: a new market that holds the other side asks for the tick, shows it, and sends it', async () => {
+    const user = userEvent.setup();
+    const sims: RollBody[] = [];
+    const sent: RollBody[] = [];
+    install({ onRollExecute: (body) => { sent.push(body); return okRoll(body); } });
+    // Another pair holds 0.004 the other way on the re-entry's first market:
+    // Boros nets the two, so the roll flips that position.
+    server.use(
+      http.post('/api/boros/roll/simulate', async ({ request }) => {
+        const body = (await request.json()) as RollBody;
+        sims.push(body);
+        const acked = body.opposingAcknowledged === true;
+        const entry = simulation({ ...body.entry, intent: 'open' });
+        const l0 = entry.legs[0];
+        const held = l0.direction === 'short' ? 0.004 : -0.004;
+        l0.sizing = { ...l0.sizing, currentSize: held, resultingSize: held + l0.sizing.deltaSize, opposing: true, flips: true };
+        return HttpResponse.json(
+          env({
+            exit: { simulation: simulation({ ...body.exit, intent: 'close' }), gate: pairGate() },
+            entry: { simulation: entry, gate: { ...pairGate(), requiresAcknowledgement: true, opposingLegs: [0] } },
+            gate: rollGate({
+              blockers: acked ? [] : [{ code: 'flip-unacknowledged', message: 'Re-entry: Tick the acknowledgement to confirm what happens to your existing position.' }],
+            }),
+            cancelOrdersOn: [],
+            simulatedAtMs: Date.now(),
+            gasBalanceUsd: 5,
+          }),
+        );
+      }),
+    );
+    renderWithClient(<RollOverModal pair={pair} base="ETH" nowSec={NOW} onClose={() => {}} />);
+    const dialog = await screen.findByRole('dialog');
+    const next = await within(dialog).findByRole('button', { name: 'Roll over' });
+    await waitFor(() => expect(next).not.toBeDisabled(), { timeout: 4_000 });
+    await user.click(next);
+
+    const box = await within(dialog).findByRole('checkbox');
+    expect(within(dialog).getByText(/I understand this closes my existing .* position of 0\.004 ETH, realising its PnL, and opens/)).toBeInTheDocument();
+    const confirm = within(dialog).getByRole('button', { name: 'Roll over' });
+    expect(confirm).toBeDisabled();
+    expect(sims.at(-1)!.opposingAcknowledged).toBe(false);
+
+    await user.click(box);
+    await waitFor(() => expect(confirm).not.toBeDisabled(), { timeout: 4_000 });
+    expect(sims.at(-1)!.opposingAcknowledged).toBe(true);
+    await user.pointer({ keys: '[MouseLeft>]', target: confirm });
+    await waitFor(() => expect(sent).toHaveLength(1), { timeout: 4_000 });
+    expect(sent[0].opposingAcknowledged).toBe(true);
+  });
+
   it('reads the margin, the warnings and the blockers straight from the roll gate', async () => {
     const user = userEvent.setup();
     install({

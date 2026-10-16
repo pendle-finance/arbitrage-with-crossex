@@ -54,7 +54,7 @@ import {
   usePositions,
 } from '../../api/queries';
 import { HoldToConfirmButton } from '../../components/HoldToConfirmButton';
-import { BlockerList, LegFillLine, legLetter, LiquidationRows, PairCosts, PositionArithmetic, SpreadReadout } from '../../trade/BorosPairBits';
+import { BlockerList, LegFillLine, legLetter, LiquidationRows, OpposingAcknowledgement, PairCosts, PositionArithmetic, SpreadReadout } from '../../trade/BorosPairBits';
 import { EstimateCard, EstimateRow, SlippageLine, StepBadge } from '../../trade/PairTicketBits';
 import { QueryError } from '../../components/QueryError';
 import { uuid } from '../../lib/uuid';
@@ -1316,6 +1316,17 @@ function RollProbe({
   }, [settled, ok, netRate, size]);
   return null;
 }
+/**
+ * The roll's §4 tick. It is about a SPECIFIC set of orders, so any change to
+ * the markets, sides or sizes clears it, as the ticket's does.
+ */
+function useAcknowledgement(legs: BorosPairLegBody[]): { checked: boolean; set: (checked: boolean) => void } {
+  const [checked, set] = useState(false);
+  const key = JSON.stringify(legs.map((l) => [l.marketId, l.direction, l.size]));
+  useEffect(() => set(false), [key]);
+  return { checked, set };
+}
+
 /** The probe's poll: a signal for a banner, not a quote for an order. */
 const ROLL_PROBE_POLL_MS = 60_000;
 
@@ -2251,14 +2262,16 @@ function RollReview({
    * ONE request for the whole roll. Closing reverses each held leg (a LONG is
    * closed by selling); re-opening takes the same sides at the new maturity.
    * The exit is a close, acknowledged by construction — a roll IS closing
-   * these legs — and the entry acknowledges nothing, exactly as the old
-   * two-request flow passed nothing for it: a fresh maturity holds no position
-   * to oppose.
+   * these legs. The entry needs the trader's tick when a new market already
+   * holds the other side, from another pair: Boros nets the two, so the roll
+   * reduces or flips that position.
    */
   const rollExitLegs = exitLegBodies({ pair, slippageApr: exitSlip.apr, size });
+  const rollEntryLegs = entryLegBodies({ target, pair, slippageApr: entrySlip.apr, size });
+  const acked = useAcknowledgement(rollEntryLegs);
   const rollReq: BorosRollRequest | null =
     rollExitLegs !== null
-      ? { address, exit: { legs: rollExitLegs }, entry: { legs: entryLegBodies({ target, pair, slippageApr: entrySlip.apr, size }) } }
+      ? { address, exit: { legs: rollExitLegs }, entry: { legs: rollEntryLegs }, opposingAcknowledged: acked.checked }
       : null;
   // The report page reads the execute response, not the quote — so once the
   // roll has been sent the poll stops rather than re-pricing a closed pair.
@@ -2594,6 +2607,9 @@ function RollReview({
           {w}
         </p>
       ))}
+      {roll.data?.entry.gate.requiresAcknowledgement && entrySim && (
+        <OpposingAcknowledgement sim={entrySim} checked={acked.checked} onChange={acked.set} />
+      )}
       <BlockerList
         // A fill past the tolerance still blocks (it is in `blockers`), but
         // its batch already says so, in amber, next to the Max that fixes
@@ -2676,8 +2692,10 @@ function OpenOnlyReview({
 
   // The pair OPEN: the new maturity's two markets, each taking the pair's own
   // side — the same sides RollReview's re-entry opens.
+  const openLegs = entryLegBodies({ target, pair, slippageApr: slipApr, size });
+  const acked = useAcknowledgement(openLegs);
   const req: BorosPairRequest | null =
-    size > 0 && yuLegs.length > 0 ? { address, intent: 'open', legs: entryLegBodies({ target, pair, slippageApr: slipApr, size }) } : null;
+    size > 0 && yuLegs.length > 0 ? { address, intent: 'open', legs: openLegs, opposingAcknowledged: acked.checked } : null;
 
   // The report reads the execute response, not the quote — so once sent the
   // poll stops rather than re-pricing a position that is already open.
@@ -2836,6 +2854,9 @@ function OpenOnlyReview({
         )}
       </EstimateCard>
 
+      {sim.data?.gate.requiresAcknowledgement && simulation && (
+        <OpposingAcknowledgement sim={simulation} checked={acked.checked} onChange={acked.set} />
+      )}
       <BlockerList blockers={blockers.filter((b) => b.code !== 'slippage-exceeds-max')} />
 
       <div className="mt-1 flex items-center justify-between gap-2">

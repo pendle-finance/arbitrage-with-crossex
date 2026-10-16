@@ -672,8 +672,24 @@ export function perpOnlyPairs(
   // What each venue side lacks: its perps minus all its singles, a single
   // that ends up ungrouped at another date included. Spent part by part, in
   // order, so two parts never both open the same gap.
-  const singles = yus.filter((y) => !isSpreadLeg(y));
+  //
+  // Singles the grouping treats as rounding are not counted: smallest first,
+  // while what a side skips stays under the dust line. A $10 Gate single
+  // behind 0.949 ETH of perps cut Gate's gap to 0.945 against Hyperliquid's
+  // 0.949, and the uneven gaps lost the spread offer (owner 2026-10-16:
+  // offer the spread at 0.949, the single stays ungrouped).
   const sideKey = (venue: string, side: 'LONG' | 'SHORT') => `${venue}:${side}`;
+  const skipped = new Map<string, number>();
+  const singles = yus
+    .filter((y) => !isSpreadLeg(y))
+    .sort((a, b) => a.notionalUsd - b.notionalUsd)
+    .filter((y) => {
+      const k = sideKey(y.venue, y.side);
+      const usd = (skipped.get(k) ?? 0) + y.notionalUsd;
+      if (usd * 2 >= PERP_ONLY_DUST_USD) return true;
+      skipped.set(k, usd);
+      return false;
+    });
   const room = new Map<string, number>();
   for (const p of perps) room.set(sideKey(p.venue, p.side), (room.get(sideKey(p.venue, p.side)) ?? 0) + sizeIn(p, p.unit));
   for (const y of singles) room.set(sideKey(y.venue, y.side), (room.get(sideKey(y.venue, y.side)) ?? 0) - sizeIn(y, y.unit));
