@@ -640,10 +640,10 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
   };
 
   /**
-   * An open roll window previews every 4 s, and the venue meters each client
-   * IP at 200 computing units a minute (the root's market-acc infos cost 5).
-   * Read afresh on every poll, the preview alone spent 14 units a poll, 210 a
-   * minute, and every read from the IP failed with 429 until the minute
+   * An open roll window previews on a poll (4 s until 1.7.6, now 10 s), and
+   * the venue meters each client IP at 200 computing units a minute (the
+   * root's market-acc infos cost 5). Read afresh on every 4 s poll, the
+   * preview alone spent 14 units a poll, 210 a minute, and every read from the IP failed with 429 until the minute
    * turned. So a polled preview reuses its account reads for
    * PREVIEW_READ_TTL_MS. The check before a send reads fresh (`fresh`), and a
    * send or a cancel clears the reads before it starts and after it ends, so

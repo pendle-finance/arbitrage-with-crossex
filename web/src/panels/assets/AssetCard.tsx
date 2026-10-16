@@ -54,7 +54,7 @@ import {
   usePositions,
 } from '../../api/queries';
 import { HoldToConfirmButton } from '../../components/HoldToConfirmButton';
-import { BlockerList, LegFillLine, legLetter, LiquidationRows, OpposingAcknowledgement, PairCosts, PositionArithmetic, SpreadReadout } from '../../trade/BorosPairBits';
+import { BlockerList, LegFillLine, legLetter, LiquidationRows, marketName, OpposingAcknowledgement, PairCosts, PositionArithmetic, SpreadReadout } from '../../trade/BorosPairBits';
 import { EstimateCard, EstimateRow, SlippageLine, StepBadge } from '../../trade/PairTicketBits';
 import { QueryError } from '../../components/QueryError';
 import { uuid } from '../../lib/uuid';
@@ -109,6 +109,7 @@ import {
   markRolledBorosPairs,
   type BorosOnlyPair,
   perpOnlyPairs,
+  PERP_ONLY_DUST_USD,
   sizeIn,
 } from './assetModel';
 import { daysToMaturity, knownRate } from '../../lib/boros';
@@ -209,11 +210,22 @@ const sizeLabel = (size: number, unit: 'base' | 'usd', base: string): string =>
 
 /** "0.2 / 0.296 ETH": what a leg holds against what this card needs of it
  * (his call 2026-10-16: a missing leg shows its true size, not the gap only). */
-const heldOfTarget = (held: number, target: number, unit: 'base' | 'usd', base: string): string =>
-  unit === 'base'
-    ? `${fmtTokenQty(held, base).replace(new RegExp(` ${base}$`), '')} / ${fmtTokenQty(target, base)}`
-    : `${fmtUsdCompact(held)} / ${fmtUsdCompact(target)}`;
+const heldOfTarget = (held: number, target: number, unit: 'base' | 'usd', base: string): string => {
+  // At size both can round to one label: a 49 ETH gap read "2.4k / 2.4k ETH".
+  // Then both print exact.
+  const exact = held < target && sizeLabel(held, unit, base) === sizeLabel(target, unit, base);
+  const f = (n: number) => (exact ? exactSize(n, unit, base) : sizeLabel(n, unit, base));
+  return unit === 'base' ? `${f(held).replace(new RegExp(` ${base}$`), '')} / ${f(target)}` : `${f(held)} / ${f(target)}`;
+};
 const HELD_OF_TARGET_TITLE = 'Held / needed for this card';
+
+/** A size in a unit, as dollars across both of the unit's legs. */
+const gapUsd = (pair: { size: number; notionalUsd: number }, size: number): number =>
+  pair.size > 0 ? (Math.abs(size) / pair.size) * pair.notionalUsd : 0;
+/** Two gaps that differ by under the dust line open as one, at the smaller. */
+const gapsEven = (pair: { size: number; notionalUsd: number; missingLong: number; missingShort: number }): boolean =>
+  Math.abs(pair.missingLong - pair.missingShort) <= Math.max(1e-9, pair.size * 1e-6) ||
+  gapUsd(pair, pair.missingLong - pair.missingShort) < PERP_ONLY_DUST_USD;
 
 /** The hover on "(52.00%)" after a leg size: the card holds only part of the
  * position, so it lists the whole, this card's part, and the rest. */
@@ -221,9 +233,9 @@ const shareTitle = (slice: number, share: number, unit: 'base' | 'usd', base: st
   const whole = share > 0 ? slice / share : slice;
   return [
     unpaired ? `${fmtPct(share)} of the position is unpaired` : `This pair uses ${fmtPct(share)} of the position`,
-    `Whole position\t${sizeLabel(whole, unit, base)}`,
-    `${unpaired ? 'Unpaired' : 'This pair'}\t${sizeLabel(slice, unit, base)}`,
-    `${unpaired ? 'In pairs' : 'Other cards'}\t${sizeLabel(Math.max(0, whole - slice), unit, base)}`,
+    `Whole position\t${exactSize(whole, unit, base)}`,
+    `${unpaired ? 'Unpaired' : 'This pair'}\t${exactSize(slice, unit, base)}`,
+    `${unpaired ? 'In pairs' : 'Other cards'}\t${exactSize(Math.max(0, whole - slice), unit, base)}`,
   ].join('\n');
 };
 
@@ -1316,6 +1328,18 @@ function RollProbe({
   }, [settled, ok, netRate, size]);
   return null;
 }
+/** What an open-only roll leaves, in the covered card's terms. */
+function OpenOnlyNote({ oldMaturity, className }: { oldMaturity: number; className: string }) {
+  const old = fmtDateLocal(oldMaturity);
+  return (
+    <ul className={`list-disc pl-4 text-[11.5px] leading-relaxed ${className}`}>
+      <li>Old legs run to {old}; their perps then hedge the new legs.</li>
+      <li>Until then: no perps on the new legs, so rate moves hit your PnL, and about 2× Boros margin.</li>
+      <li>To end the overlap sooner: close the {old} legs.</li>
+    </ul>
+  );
+}
+
 /**
  * The roll's §4 tick. It is about a SPECIFIC set of orders, so any change to
  * the markets, sides or sizes clears it, as the ticket's does.
@@ -1825,13 +1849,7 @@ export function RollOverModal({
                 </button>
               ))}
             </div>
-            {openOnly && (
-              <p className="mt-2 text-[11.5px] leading-relaxed text-ink-400">
-                Opens the new maturity and keeps the old legs until they mature. Until then half your
-                Boros floating side is unhedged, so rate moves hit your PnL, and it uses about 2× the
-                margin. Close the extra legs anytime from Positions.
-              </p>
-            )}
+            {openOnly && <OpenOnlyNote oldMaturity={soonest} className="mt-2 text-ink-400" />}
           </div>
 
           {/* A slider for the share of the position, a box for the exact
@@ -1900,6 +1918,7 @@ export function RollOverModal({
                 <RollOption
                   key={t.maturity}
                   target={t}
+                  base={base}
                   pair={pair}
                   yuLegs={yuLegs}
                   size={simSize}
@@ -2273,12 +2292,18 @@ function RollReview({
     rollExitLegs !== null
       ? { address, exit: { legs: rollExitLegs }, entry: { legs: rollEntryLegs }, opposingAcknowledged: acked.checked }
       : null;
+  /** A spread prints its terminal name in the tick, as in the ticket. */
+  const nameOf = (id: number): string | null => {
+    const m = [...ctx.markets, ...(ctx.spreadMarkets ?? [])].find((x) => x.marketId === id);
+    return m ? marketName(m) : null;
+  };
   // The report page reads the execute response, not the quote — so once the
   // roll has been sent the poll stops rather than re-pricing a closed pair.
   const [out, setOut] = useState<{ payload: BorosRollExecuteResponse } | { error: string } | null>(null);
   const roll = useBorosRollSimulation(rollReq, rollReq !== null && out === null, ROLL_POLL_MS);
   const exitSim = roll.data?.exit.simulation ?? null;
   const entrySim = roll.data?.entry.simulation ?? null;
+  const ackShown = roll.data?.entry.gate.requiresAcknowledgement === true;
   const pending = roll.isPending;
 
   // ---- margin (the venue's) -----------------------------------------------
@@ -2582,10 +2607,10 @@ function RollReview({
                 {usdNote(availableAfterExit)}
               </>
             ) : (
-              // The venue reports no post-batch state when it refuses: nothing
-              // executed, so there is nothing to quote. Naming that beats a "—"
-              // that reads as a figure we failed to fetch.
-              <span className="text-ink-400">Simulation failed</span>
+              // No preview yet, a lost one (429), or a refusal with no state:
+              // the reason is in the box below. "Simulation failed" here read
+              // as mozzarella's 1.7.5 bug on every first open.
+              <span className="text-ink-400">{pending ? '…' : '—'}</span>
             )
           }
           strong
@@ -2607,14 +2632,15 @@ function RollReview({
           {w}
         </p>
       ))}
-      {roll.data?.entry.gate.requiresAcknowledgement && entrySim && (
-        <OpposingAcknowledgement sim={entrySim} checked={acked.checked} onChange={acked.set} />
+      {ackShown && entrySim && (
+        <OpposingAcknowledgement sim={entrySim} checked={acked.checked} onChange={acked.set} nameOf={nameOf} />
       )}
       <BlockerList
         // A fill past the tolerance still blocks (it is in `blockers`), but
         // its batch already says so, in amber, next to the Max that fixes
-        // it — a second, red copy here explained nothing new.
-        blockers={blockers.filter((b) => b.code !== 'slippage-exceeds-max')}
+        // it — a second, red copy here explained nothing new. The same for
+        // the tick: the box above is the ask.
+        blockers={blockers.filter((b) => b.code !== 'slippage-exceeds-max' && !(ackShown && b.code === 'flip-unacknowledged'))}
       />
 
       <div className="mt-1 flex items-center justify-between gap-2">
@@ -2645,10 +2671,9 @@ function RollReview({
  * Deliberately NOT a branch of RollReview — there is no close here, so no exit
  * batch, no exit P&L, no roll memo. It is an ordinary pair OPEN at the new
  * maturity's two markets, taking the pair's own sides, priced and sent over the
- * same `/boros/pair` routes every other pair open uses. The result is a double
- * hedge: the perps stay on the old 4-leg pair, and the new rate legs land as an
- * "excess" Boros-only unit the trader closes from the position view whenever
- * the old legs have matured (or sooner).
+ * same `/boros/pair` routes every other pair open uses. The new rate legs land
+ * as a "Rolled · covered" card: the old pair's perps hedge them once the old
+ * legs mature, and closing the old legs sooner ends the overlap.
  */
 function OpenOnlyReview({
   pair,
@@ -2702,6 +2727,7 @@ function OpenOnlyReview({
   const [out, setOut] = useState<{ payload: BorosPairExecuteResponse } | { error: string } | null>(null);
   const sim = useBorosPairSimulation(req, req !== null && out === null, { refetchInterval: ROLL_POLL_MS });
   const simulation = sim.data?.simulation ?? null;
+  const ackShown = sim.data?.gate.requiresAcknowledgement === true;
 
   const now = useNow(1_000);
   const stale = sim.dataUpdatedAt > 0 ? now - sim.dataUpdatedAt > ROLL_QUOTE_MAX_AGE_MS : true;
@@ -2754,13 +2780,13 @@ function OpenOnlyReview({
         {result && <RollLegReport label="New legs" legs={result.legs} collateral={collateral} tone={tone} />}
         {result && !result.filledNothing && !result.partial && (
           <p className="text-[11.5px] text-ink-300" role="status">
-            Opened {fmtTokenQty(result.hedgedSize, collateral)} at {fmtDateLocal(target.maturity)}. The old legs keep running —
-            close the excess from the position view once they mature.
+            Opened {fmtTokenQty(result.hedgedSize, collateral)} at {fmtDateLocal(target.maturity)}. The {fmtDateLocal(pair.soonestMaturitySec)} legs
+            run to maturity; their perps then hedge the new legs.
           </p>
         )}
         {result?.partial && !result.filledNothing && (
           <p className="rounded border border-amber-500/30 bg-amber-500/[0.06] px-2.5 py-2 text-[11.5px] leading-relaxed text-amber-200" role="alert">
-            Only {fmtTokenQty(result.hedgedSize, collateral)} opened — the rest did not fill. Open the remainder from the position view.
+            Only {fmtTokenQty(result.hedgedSize, collateral)} opened — the rest did not fill. Open the rest from Fixed Rate Pairs.
           </p>
         )}
         {result?.filledNothing && (
@@ -2825,12 +2851,7 @@ function OpenOnlyReview({
         </div>
       </div>
 
-      {/* A double hedge: it earns nothing to close the old legs, but it costs
-          margin to hold both until they mature. */}
-      <p className="rounded-lg border border-amber-500/25 bg-amber-500/[0.04] px-3 py-2 text-[11.5px] leading-relaxed text-amber-200">
-        Until the old legs mature, half your Boros floating side is unhedged, so rate moves hit your PnL, and it uses
-        about 2× the margin. Close the extra legs anytime from Positions.
-      </p>
+      <OpenOnlyNote oldMaturity={pair.soonestMaturitySec} className="rounded-lg border border-amber-500/25 bg-amber-500/[0.04] px-3 py-2 text-amber-200" />
 
       <EstimateCard
         label="New legs"
@@ -2854,10 +2875,8 @@ function OpenOnlyReview({
         )}
       </EstimateCard>
 
-      {sim.data?.gate.requiresAcknowledgement && simulation && (
-        <OpposingAcknowledgement sim={simulation} checked={acked.checked} onChange={acked.set} />
-      )}
-      <BlockerList blockers={blockers.filter((b) => b.code !== 'slippage-exceeds-max')} />
+      {ackShown && simulation && <OpposingAcknowledgement sim={simulation} checked={acked.checked} onChange={acked.set} />}
+      <BlockerList blockers={blockers.filter((b) => b.code !== 'slippage-exceeds-max' && !(ackShown && b.code === 'flip-unacknowledged'))} />
 
       <div className="mt-1 flex items-center justify-between gap-2">
         <button type="button" className="btn" onClick={onBack} disabled={busy}>
@@ -2892,6 +2911,7 @@ function OpenOnlyReview({
  */
 function RollOption({
   target,
+  base,
   pair,
   yuLegs,
   size,
@@ -2906,6 +2926,8 @@ function RollOption({
   onLegs,
 }: {
   target: RollTarget;
+  /** The asset, for the spread market's name. */
+  base: string;
   pair: PairEstimate;
   yuLegs: PairLegDetail[];
   /** The size being rolled, in the collateral token — the modal's input. */
@@ -3026,6 +3048,11 @@ function RollOption({
           <span className="num text-[11.5px] text-ink-400" title="The day the rolled legs settle.">
             {daysToMaturity(target.maturity, nowSec)}d ({fmtDateLocal(target.maturity)})
           </span>
+          {/* Spread and singles are separate cards (mozzarella 2026-10-14): say
+              which one the roll lands in. */}
+          <span className="text-[11px] text-ink-500">
+            → {'spreadMarketId' in target ? <SpreadName base={base} venues={target.spreadVenues} /> : 'singles'}
+          </span>
         </span>
       </button>
 
@@ -3139,7 +3166,9 @@ function PerpOnlyPairCard({
   const needShort = pair.missingShort > 0;
   const both = needLong && needShort;
   // A cap on one side leaves the two gaps unequal: each opens from its row.
-  const bothEven = both && Math.abs(pair.missingLong - pair.missingShort) <= Math.max(1e-9, pair.size * 1e-6);
+  // Gaps that differ by under the dust line are even: the spread (or both
+  // legs) opens at the smaller one. Two $20 slivers no longer lose the offer.
+  const bothEven = both && gapsEven(pair);
   const spread = bothEven ? listedSpread : null;
   const held = pair.longYu ?? pair.shortYu;
   const cell = 'border-b border-ink-850 px-2.5 py-2';
@@ -3181,7 +3210,7 @@ function PerpOnlyPairCard({
    * $0.01 cut said "Gate already holds 0.205 ETH at 30 Oct" and "open 0.143"
    * under "0 / 0.143".
    */
-  const capShows = (held: number, missing: number) => sizeText(Math.max(0, missing)) !== sizeText(Math.max(0, pair.size - held));
+  const capShows = (held: number, missing: number) => gapUsd(pair, Math.max(0, pair.size - held) - Math.max(0, missing)) >= PERP_ONLY_DUST_USD;
   /** The open the S1 cap allows, when it is less than the leg's gap. */
   const cappedOpen = (held: number, missing: number) =>
     missing > 0 && capShows(held, missing) ? (
@@ -3422,7 +3451,7 @@ function BorosOnlyPairCard({
   const both = needLong && needShort;
   // One prefill sizes both perps alike, so it is offered only while the two
   // gaps match; a part-covered side opens from its own row.
-  const bothEven = both && Math.abs(pair.missingLong - pair.missingShort) <= Math.max(1e-9, pair.size * 1e-6);
+  const bothEven = both && gapsEven(pair);
   const cell = 'border-b border-ink-850 px-2.5 py-2';
   const pill = 'btn !h-[30px] !px-3 !text-[12px]';
   const sizeText = (n: number) => sizeLabel(n, pair.unit, base);

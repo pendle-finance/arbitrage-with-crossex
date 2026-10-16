@@ -203,6 +203,21 @@ describe('evaluateRollGate', () => {
     expect(fix).toBe('Fix: Close a position you no longer need, then roll.');
   });
 
+  // A whole roll exits the old markets once flat, so on a part roll "roll the
+  // whole position" is the fix that keeps every other position open.
+  it('a market-limit refusal on a part roll offers the whole roll first', () => {
+    const error = 'MMMarketLimitExceeded()';
+    const venue = venueOk({
+      status: 'Refused',
+      reason: { code: 'MM_MARKET_LIMIT_EXCEEDED', message: error },
+      orders: venueOk().orders.map((o, i) => ({ ...o, filled: false, matchedSize: null, error: i === 2 ? error : null })),
+      availableAfter: null,
+    });
+    const exit = step(exitLegs(SIZE * 2), 'close', SIZE);
+    const fix = evaluateRollGate({ ...rollInput({ exit }), venue }).blockers[0].message.split('\n').at(-1);
+    expect(fix).toBe('Fix: Roll the whole position (it frees the old markets), or close a position you no longer need.');
+  });
+
   // Live 16 Oct: both opens refused for the market cap read as one sentence
   // twice. Legs sharing a cause share one bullet, and the fix is said once.
   it('groups the legs that share a cause into one bullet and says each fix once', () => {

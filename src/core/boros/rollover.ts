@@ -144,7 +144,7 @@ const SELF_SWAP = /self\s*swap/i;
  * that cannot supply the size at ANY rate is liquidity; one that can, but not
  * inside the bound, is slippage. Every other cause keeps the venue's words.
  */
-function refusalCause(error: string, sim: SimulatedLeg | null, collateral: string): Refusal {
+function refusalCause(error: string, sim: SimulatedLeg | null, collateral: string, partRoll = false): Refusal {
   const pct = (n: number) => `${(n * 100).toFixed(2)}%`;
   const reduce = 'Reduce the size.';
   switch (classifyLegFailure(error)) {
@@ -191,7 +191,12 @@ function refusalCause(error: string, sim: SimulatedLeg | null, collateral: strin
     // Reached when the roll needs more slots than its closes free, for
     // example one spread into two singles with every other market in use.
     case 'market-limit':
-      return { cause: 'Market limit reached: every Boros market slot holds a position or an order.', fix: 'Close a position you no longer need, then roll.' };
+      // A whole roll exits the old markets once they are flat (G1), so on a
+      // part roll that is the fix that keeps every other position.
+      return {
+        cause: 'Market limit reached: every Boros market slot holds a position or an order.',
+        fix: partRoll ? 'Roll the whole position (it frees the old markets), or close a position you no longer need.' : 'Close a position you no longer need, then roll.',
+      };
     default:
       return SELF_SWAP.test(error)
         ? { cause: 'Your own order on this market blocks the fill.', fix: 'Cancel it on Boros, then roll.' }
@@ -246,6 +251,7 @@ export function evaluateRollGate(input: EvaluateRollInput): RollGate {
   };
   prefixed('exit', exit.gate, 'Exit');
   prefixed('entry', entry.gate, 'Re-entry');
+  const partRoll = exit.simulation.legs.some((l) => l.sizing.resultingSize !== 0);
   const stepBlockers = [...blockers];
 
   const oldMaturity = Math.max(...exit.legs.map((l) => l.market.maturity));
@@ -381,7 +387,7 @@ export function evaluateRollGate(input: EvaluateRollInput): RollGate {
         const sim = step.simulation.legs.find((l) => l.marketId === o.marketId) ?? null;
         return {
           leg: { action: o.action === 'close' ? 'Exit' : 'Re-entry', market: marketName(o.marketId) },
-          refusal: refusalCause(o.error ?? '', sim, step.simulation.collateral),
+          refusal: refusalCause(o.error ?? '', sim, step.simulation.collateral, partRoll),
         };
       });
       /**
@@ -421,7 +427,7 @@ export function evaluateRollGate(input: EvaluateRollInput): RollGate {
       const refusal: Refusal = VENUE_MARGIN_CODE.test(venue.reason?.code ?? '')
         ? { cause: `${why}.`, fix: 'Add margin or roll a smaller size.' }
         : cause === 'market-limit' || cause === 'no-gas' || SELF_SWAP.test(why)
-          ? refusalCause(why, null, '')
+          ? refusalCause(why, null, '', partRoll)
           : { cause: `${why}.`, fix: 'Widen the tolerance or reduce the size.' };
       blockers.push({ code: 'venue-refused', message: refusalMessage([{ leg: null, refusal }]) });
     }

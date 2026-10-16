@@ -1039,6 +1039,12 @@ describe('markRolledBorosPairs', () => {
     expect(p.missingShort).toBe(5);
   });
 
+  it('bigger by under $50 is two venues rounding apart, not new exposure: still covered', () => {
+    // 0.00001 ETH over the old pair is $0.03; 0.1 ETH over is $250 and stays missing.
+    expect(markRolledBorosPairs(newUnit(10.00001), [hedged('GATE', 'LIGHTER', OLD)])[0].coveredFromSec).toBe(OLD);
+    expect(markRolledBorosPairs(newUnit(10.1), [hedged('GATE', 'LIGHTER', OLD)])[0].coveredFromSec).toBeUndefined();
+  });
+
   it('two old pairs on the same venues (spread and singles twins) add up', () => {
     const marked = markRolledBorosPairs(newUnit(10), [hedged('GATE', 'LIGHTER', OLD, 6), hedged('GATE', 'LIGHTER', OLD - DAY, 4)]);
     expect(marked[0].coveredFromSec).toBe(OLD);

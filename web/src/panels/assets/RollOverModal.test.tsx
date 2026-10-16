@@ -924,7 +924,7 @@ describe('RollOverModal — open only (keep old legs)', () => {
     // The review has NO exit batch — just the new legs.
     expect(within(dialog).queryByText('Exit')).not.toBeInTheDocument();
     expect(within(dialog).queryByText('Re-entry')).not.toBeInTheDocument();
-    expect(within(dialog).getByText(/half your Boros floating side is unhedged/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/no perps on the new legs, so rate moves hit your PnL/)).toBeInTheDocument();
 
     const confirm = await within(dialog).findByRole('button', { name: 'Open new maturity' });
     await waitFor(() => expect(confirm).not.toBeDisabled(), { timeout: 4_000 });
@@ -996,7 +996,7 @@ describe('RollOverModal — open only (keep old legs)', () => {
     await waitFor(() => expect(confirm).not.toBeDisabled(), { timeout: 4_000 });
     await user.pointer({ keys: '[MouseLeft>]', target: confirm });
 
-    expect(await within(dialog).findByText(/the rest did not fill\. Open the remainder from the position view\./)).toBeInTheDocument();
+    expect(await within(dialog).findByText(/the rest did not fill\. Open the rest from Fixed Rate Pairs\./)).toBeInTheDocument();
     expect(within(dialog).queryByRole('button', { name: /Retry/ })).not.toBeInTheDocument();
     expect(sends).toBe(1);
   });
