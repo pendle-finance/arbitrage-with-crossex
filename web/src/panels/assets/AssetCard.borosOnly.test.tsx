@@ -4,7 +4,7 @@
  * side as its own "missing" row; "Open both perps" sizes both sides alike, so
  * it is offered only while the two gaps match.
  */
-import { screen, within } from '@testing-library/react';
+import { fireEvent, screen, within } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { AssetBorosOpen, AssetGroup, AssetPerpOpen } from '../../api/types';
@@ -174,6 +174,60 @@ describe('BorosOnlyPairCard', () => {
     expect(within(card).getByRole('button', { name: 'Close Boros legs' })).toBeInTheDocument();
     expect(within(card).queryByRole('button', { name: 'Open both perps' })).toBeNull();
     expect(within(card).queryByRole('button', { name: 'Open leg' })).toBeNull();
+    // Its perp rows name the old pair that holds the perps, not a gap.
+    const table = within(card).getByRole('columnheader', { name: 'Leg' }).closest('table') as HTMLElement;
+    expect(within(table).queryByText('missing')).toBeNull();
+    const from = within(table).getAllByText(`from ${fmtDateShort(OLD)} pair`);
+    expect(from).toHaveLength(2);
+    expect(from[0].closest('tr')).toHaveTextContent(/100 ETH/);
+    expect(from[0].closest('tr')).not.toHaveTextContent(/\//);
+  });
+
+  it('a rolled unit with a part perp shows that perp, and the old pair covers the rest', () => {
+    const OLD = NOW + 8 * DAY;
+    const NEW = NOW + 45 * DAY;
+    const group: AssetGroup = {
+      base: 'ETH',
+      supported: true,
+      priceUsd: PX,
+      earliestSec: NOW - 10 * DAY,
+      perpOpen: [perp('GATE', 'LONG', 100), perp('HYPERLIQUID', 'SHORT', 110)],
+      perpClosed: [],
+      borosOpen: [
+        { ...yu(1, 'GATE', 'LONG', 100, 0.04), maturity: OLD },
+        { ...yu(2, 'HYPERLIQUID', 'SHORT', 100, 0.08), maturity: OLD },
+        { ...yu(11, 'GATE', 'LONG', 100, 0.04), maturity: NEW },
+        { ...yu(12, 'HYPERLIQUID', 'SHORT', 100, 0.08), maturity: NEW },
+      ],
+      borosHistory: [],
+    };
+    renderCard(group);
+    const card = screen.getByText(`Rolled · covered from ${fmtDateShort(OLD)}`).closest('div.overflow-x-auto') as HTMLElement;
+    const table = within(card).getByRole('columnheader', { name: 'Leg' }).closest('table') as HTMLElement;
+    const hl = within(table)
+      .getAllByRole('row')
+      .filter((r) => /HyperliquidCrossEx/.test(r.textContent ?? ''));
+    expect(hl.map((r) => r.textContent)).toEqual([
+      expect.stringMatching(/^HyperliquidCrossExSHORT10 ETH/),
+      expect.stringMatching(new RegExp(`^HyperliquidCrossExSHORTfrom ${fmtDateShort(OLD)} pair90 ETH`)),
+    ]);
+  });
+
+  it('a Boros leg shared with another card shows its percent, and the hover breaks it down', () => {
+    const g = book([]);
+    g.borosOpen = [yu(1, 'GATE', 'LONG', 150, 0.04), yu(2, 'HYPERLIQUID', 'SHORT', 100, 0.08)];
+    renderCard(g);
+    const pct = within(legTable()).getByText('(66.67%)');
+    expect(pct).toHaveAttribute(
+      'title',
+      ['This pair uses 66.67% of the position', 'Whole position\t150 ETH', 'This pair\t100 ETH', 'Other cards\t50 ETH'].join('\n'),
+    );
+    // The ungrouped card holds the other 50 ETH.
+    fireEvent.click(screen.getByText('Ungrouped legs'));
+    expect(screen.getByText('(33.33%)')).toHaveAttribute(
+      'title',
+      ['33.33% of the position is unpaired', 'Whole position\t150 ETH', 'Unpaired\t50 ETH', 'In pairs\t100 ETH'].join('\n'),
+    );
   });
 
   it('a roll into a bigger size asks for perps for the whole new size (case 1)', () => {
