@@ -41,7 +41,7 @@ import type {
 } from '../api/types';
 import { Chip } from '../components/Chip';
 import { HoldToConfirmButton } from '../components/HoldToConfirmButton';
-import { legLetter, size as fmtSize, type SoloLeg } from './BorosPairBits';
+import { legLetter, OpposingAcknowledgement, type SoloLeg } from './BorosPairBits';
 import { AffixedInput, EstimateCard } from './PairTicketBits';
 import { QueryError } from '../components/QueryError';
 import { SegmentedToggle } from '../components/SegmentedToggle';
@@ -1391,20 +1391,7 @@ export function BorosPairTicket({
       )}
       {/* --- §4 acknowledgement ------------------------------------------- */}
       {gate?.requiresAcknowledgement && simulation && (
-        <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/[0.05] px-2.5 py-2 text-[11px] leading-relaxed text-amber-100">
-          <input
-            type="checkbox"
-            className="mt-0.5"
-            checked={acknowledged}
-            onChange={(e) => setAcknowledged(e.target.checked)}
-          />
-          <span>
-            {simulation.legs
-              .filter((leg) => leg.sizing.opposing)
-              .map((leg) => acknowledgementText({ ...leg, marketName: legName(leg.marketId) ?? leg.marketName }, simulation.collateral))
-              .join(' ')}
-          </span>
-        </label>
+        <OpposingAcknowledgement sim={simulation} checked={acknowledged} onChange={setAcknowledged} nameOf={legName} />
       )}
 
       {/* --- §7 warnings + blockers --------------------------------------- */}
@@ -1547,27 +1534,6 @@ export function BorosPairTicket({
       </div>
     </div>
   );
-}
-
-function acknowledgementText(
-  leg: { marketName: string; sizing: { currentSize: number; resultingSize: number; flips: boolean } },
-  collateral: string,
-): string {
-  const { sizing } = leg;
-  // The same magnitude-scaled formatter as every other size on the ticket:
-  // fixed 2dp printed a 0.0123 BTC position as "0.01 BTC" in the one line
-  // that binds the user to what happens to it.
-  const held = fmtSize(Math.abs(sizing.currentSize));
-  const side = sizing.currentSize > 0 ? 'long' : 'short';
-  if (sizing.flips) {
-    const opened = fmtSize(Math.abs(sizing.resultingSize));
-    return `I understand this closes my existing ${leg.marketName} ${side} position of ${held} ${collateral}, realising its PnL, and opens ${opened} ${collateral} in the opposite direction.`;
-  }
-  if (sizing.resultingSize === 0) {
-    return `I understand this closes my existing ${leg.marketName} ${side} position of ${held} ${collateral} in full, realising its PnL.`;
-  }
-  const to = fmtSize(Math.abs(sizing.resultingSize));
-  return `I understand this reduces my existing ${leg.marketName} ${side} position of ${held} ${collateral} to ${to} ${collateral}, realising part of its PnL.`;
 }
 
 function SlipInput({

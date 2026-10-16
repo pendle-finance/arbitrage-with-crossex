@@ -183,9 +183,35 @@ describe('a perp unit splits by the size each held single covers', () => {
     // $50 a side of BTC perps: the 0.36/4.03 single is under $5, a rounding leg.
     const k = 50 / (4.03 * COIN.base.price);
     const { po, bo } = run(book('base', k, PERPS(4.03), [{ id: 1, venue: 'GATE', side: 'LONG', size: 0.36, maturity: OCT30 }]));
-    // The sliver still counts against what Gate lacks: its open stops at 3.67.
-    expect(po.pairs.map((p) => read(p, k))).toEqual([part(4.03, null, null, 3.67, 4.03)]);
+    // The sliver is rounding to the cap too, so both sides open 4.03 and the
+    // gaps stay even (owner 2026-10-16, F-B).
+    expect(po.pairs.map((p) => read(p, k))).toEqual([part(4.03, null, null, 4.03, 4.03)]);
     expect(bo.restYus.map((y) => [y.venue, y.sizeBase / k])).toEqual([['GATE', expect.closeTo(0.36, 9)]]);
+  });
+
+  // Live 16 Oct (F-B): a $10 Gate single behind 0.949 ETH of perps cut
+  // Gate's gap to 0.945 against Hyperliquid's 0.949, and the uneven gaps lost
+  // the spread offer.
+  it('a $10 single leaves both gaps at the whole unit, so the spread is offered', () => {
+    const k = 10 / (0.004 * COIN.base.price);
+    const { po, bo } = run(book('base', k, PERPS(0.949), [{ id: 1, venue: 'GATE', side: 'LONG', size: 0.004, maturity: NOV27 }]));
+    expect(po.pairs.map((p) => read(p, k))).toEqual([part(0.949, null, null, 0.949, 0.949)]);
+    expect(po.pairs[0].heldElsewhereLong).toBeUndefined();
+    expect(bo.restYus.map((y) => [y.venue, y.sizeBase / k])).toEqual([['GATE', expect.closeTo(0.004, 9)]]);
+  });
+
+  it('small singles count once together they pass the dust line', () => {
+    // Three $10 Gate singles: the two smallest stay under it ($20), the third
+    // does not ($30), so Gate lacks the unit less that one.
+    const k = 10 / (0.004 * COIN.base.price);
+    const { po } = run(
+      book('base', k, PERPS(0.949), [
+        { id: 1, venue: 'GATE', side: 'LONG', size: 0.004, maturity: NOV27 },
+        { id: 2, venue: 'GATE', side: 'LONG', size: 0.004, maturity: OCT30 },
+        { id: 3, venue: 'GATE', side: 'LONG', size: 0.004, maturity: NOV27 + 28 * 86_400 },
+      ]),
+    );
+    expect(po.pairs.map((p) => read(p, k))).toEqual([part(0.949, null, null, 0.945, 0.949)]);
   });
 
   // Live 16 Oct: a 0.348 ETH Gate single on a 0.348125 unit showed no held
