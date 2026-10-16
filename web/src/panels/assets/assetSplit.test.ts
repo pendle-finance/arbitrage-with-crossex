@@ -188,6 +188,19 @@ describe('a perp unit splits by the size each held single covers', () => {
     expect(bo.restYus.map((y) => [y.venue, y.sizeBase / k])).toEqual([['GATE', expect.closeTo(0.36, 9)]]);
   });
 
+  // Live 16 Oct: a 0.348 ETH Gate single on a 0.348125 unit showed no held
+  // row, only "missing 0.000125 ETH, Open leg" — an order Boros refuses.
+  for (const k of [1, 50]) {
+    it(`a held side short by a rounding rest shows as held, not missing (x${k})`, () => {
+      const { po } = run(book('base', k, PERPS(0.348125 / 30), [{ id: 1, venue: 'GATE', side: 'LONG', size: 0.348 / 30, maturity: OCT30 }]));
+      const [p] = po.pairs;
+      expect(po.pairs).toHaveLength(1);
+      expect(held(p.longYu)).toBe('GATE@OCT30');
+      expect(p.missingLong).toBe(0);
+      expect(p.missingShort / k).toBeCloseTo(0.348125 / 30, 9);
+    });
+  }
+
   it('0.05 BTC is a part of its own, not dust', () => {
     const { po } = run(book('base', 1, PERPS(4), [{ id: 1, venue: 'GATE', side: 'LONG', size: 0.05, maturity: OCT30 }]));
     expect(po.pairs.map((p) => read(p, 1))).toEqual([part(0.05, 'GATE@OCT30', null, 0, 0.05), part(3.95, null, null, 3.95, 3.95)]);
