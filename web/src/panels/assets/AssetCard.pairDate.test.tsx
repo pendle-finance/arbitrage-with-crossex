@@ -375,4 +375,24 @@ describe('an open stops at what the venue lacks (owner 2026-10-16)', () => {
     await waitFor(() => expect(flow?.borosOpenPrefill).not.toBeNull());
     expect(flow?.borosOpenPrefill).toMatchObject({ longVenue: null, shortVenue: 'HYPERLIQUID', maturity: NOV, sizeBase: 1, size: 80_000 });
   });
+
+  // Live 16 Oct: a $0.01 cut said "already holds" and "open 0.143" under "0 / 0.143".
+  it('a cut too small to read: no reason line, no open line', async () => {
+    const user = userEvent.setup();
+    renderCard(
+      book(
+        'BTC',
+        [perp('BTC', 'GATE', 'LONG', 4), perp('BTC', 'HYPERLIQUID', 'SHORT', 4)],
+        [leg('BTC', 'GATE', 'LONG', 3, NOV), leg('BTC', 'HYPERLIQUID', 'SHORT', 1.000001, DEC)],
+      ),
+    );
+    await showPairs(user);
+    const hl = await waitFor(() => {
+      const r = screen.getAllByRole('row').find((x) => /^HyperliquidBoros.*0 \/ 3 BTC/.test(x.textContent ?? ''));
+      expect(r).toBeTruthy();
+      return r!;
+    });
+    expect(hl.textContent).not.toMatch(/open |already holds/);
+    expect(screen.queryByText(/Hyperliquid already holds/)).toBeNull();
+  });
 });
