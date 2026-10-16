@@ -1076,7 +1076,12 @@ export function borosPairRoutes(deps: AppDeps) {
       const venue = preview
         ? await preview.catch((err: unknown) => {
             const status = err instanceof CoreError ? (err.details as { status?: number } | undefined)?.status : undefined;
-            venueError = status !== undefined && status < 500 && status !== 429 ? describeLegFailure(err) : null;
+            venueError =
+              status === 429
+                ? 'Boros rate limit reached. It retries in 10 s.'
+                : status !== undefined && status < 500
+                  ? describeLegFailure(err)
+                  : null;
             return null;
           })
         : null;

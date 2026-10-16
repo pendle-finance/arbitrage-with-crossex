@@ -285,9 +285,12 @@ describe('POST /api/boros/roll/simulate', () => {
     expect(await unpriced(new CoreError('Boros API /v1/simulations/roll-over — HTTP 404: Position not found', 'venue-rejected', { status: 404 }))).toMatch(
       /^The venue could not preview this roll — .*Position not found/,
     );
-    // A rate limit or an outage is the next poll's problem.
+    // A rate limit says so: "waiting for a quote" hid it while the poll hit the cap.
+    expect(await unpriced(new CoreError('Boros API — HTTP 429: Too Many Requests', 'rate-limited', { status: 429 }))).toBe(
+      'The venue could not preview this roll — Boros rate limit reached. It retries in 10 s.',
+    );
+    // An outage is the next poll's problem.
     for (const err of [
-      new CoreError('Boros API — HTTP 429: Too Many Requests', 'rate-limited', { status: 429 }),
       new CoreError('Boros API — HTTP 503: upstream unavailable', 'venue-rejected', { status: 503 }),
       new Error('fetch failed'),
     ]) {

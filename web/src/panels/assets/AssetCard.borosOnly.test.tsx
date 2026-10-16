@@ -116,6 +116,27 @@ describe('BorosOnlyPairCard', () => {
     expect(within(table).getAllByRole('button', { name: 'Open leg' })).toHaveLength(2);
   });
 
+  it('gaps that differ by under $25 a side are even: "Open both perps" stays, at the smaller gap', () => {
+    // 60 vs 59.995 ETH missing: 0.005 ETH is $12.50, rounding between venues.
+    renderCard(book([perp('GATE', 'LONG', 40), perp('HYPERLIQUID', 'SHORT', 40.005)]));
+    expect(screen.getByRole('button', { name: 'Open both perps' })).toHaveAttribute('title', expect.stringMatching(/60 ETH each$/));
+  });
+
+  it('gaps 1 ETH apart ($2,500) are not even: each side opens from its own row', () => {
+    renderCard(book([perp('GATE', 'LONG', 40), perp('HYPERLIQUID', 'SHORT', 41)]));
+    expect(screen.queryByRole('button', { name: 'Open both perps' })).toBeNull();
+  });
+
+  it('at size, a gap the compact label would hide prints exact: not "2.4k / 2.4k ETH"', () => {
+    const g = book([perp('GATE', 'LONG', 2_351)]);
+    g.borosOpen = [yu(1, 'GATE', 'LONG', 2_400, 0.04), yu(2, 'HYPERLIQUID', 'SHORT', 2_400, 0.08)];
+    renderCard(g);
+    const rows = within(legTable()).getAllByRole('row').slice(1);
+    const gate = rows.find((r) => /Gate/.test(r.textContent ?? '') && /CrossEx/.test(r.textContent ?? ''));
+    expect(gate?.textContent).not.toMatch(/2\.4k \/ 2\.4k/);
+    expect(gate?.textContent).toMatch(/2,351 \/ 2,400 ETH/);
+  });
+
   it("shows each rate leg's venue liquidation APR, looked up by market id", () => {
     const g = book([]);
     g.borosOpen = [

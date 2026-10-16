@@ -638,7 +638,7 @@ function missingOf(take: number, have: { unit: 'base' | 'usd'; sizeBase: number;
 }
 
 /** A pair this small is rounding, not a position: left among the ungrouped. */
-const PERP_ONLY_DUST_USD = 50;
+export const PERP_ONLY_DUST_USD = 50;
 /** Below this share of its leg, a remainder is rounding and is not listed. */
 const PERP_ONLY_REST_SHARE = 0.005;
 
@@ -1003,7 +1003,11 @@ export function markRolledBorosPairs(
       (h) => h.soonestMaturitySec < p.maturity && sameVenue(h.longVenue, p.longVenue) && sameVenue(h.shortVenue, p.shortVenue),
     );
     const room = old.reduce((sum, h) => sum + (left.get(h) ?? 0), 0);
-    if (old.length === 0 || p.size > room * (1 + 1e-9)) continue;
+    // Bigger by under the dust line is rounding between two venues' size
+    // steps, not new exposure: 1e-9 alone read a 2,400.000003 ETH roll of a
+    // 2,400 ETH pair as 2,400 ETH of perps missing.
+    const extraUsd = p.size > 0 ? ((p.size - room) / p.size) * p.notionalUsd : 0;
+    if (old.length === 0 || (p.size > room * (1 + 1e-9) && extraUsd >= PERP_ONLY_DUST_USD)) continue;
     // Earliest old pair first; covered once the last pair it draws on ends.
     let need = p.size;
     let from = 0;
