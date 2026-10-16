@@ -3134,9 +3134,15 @@ function PerpOnlyPairCard({
       .map((y) => `${sizeText(sizeIn(y, y.unit))} at ${fmtDateShort(y.maturity)}`)
       .join(', ')}`;
   const ofTarget = (held: number) => heldOfTarget(held, pair.size, pair.unit, base);
+  /**
+   * The S1 cap cut the open by an amount the trader can read. Live 16 Oct: a
+   * $0.01 cut said "Gate already holds 0.205 ETH at 30 Oct" and "open 0.143"
+   * under "0 / 0.143".
+   */
+  const capShows = (held: number, missing: number) => sizeText(Math.max(0, missing)) !== sizeText(Math.max(0, pair.size - held));
   /** The open the S1 cap allows, when it is less than the leg's gap. */
   const cappedOpen = (held: number, missing: number) =>
-    missing > 0 && missing < pair.size - held - Math.max(1e-9, pair.size * 1e-6) ? (
+    missing > 0 && capShows(held, missing) ? (
       <div className="text-[11px] text-ink-400">open {sizeText(missing)}</div>
     ) : null;
   const yuRow = (venue: string, side: 'LONG' | 'SHORT', yu: PendingLeg | null, missing: number, heldElsewhere?: PendingLeg[]) =>
@@ -3164,7 +3170,9 @@ function PerpOnlyPairCard({
               missing
             </Chip>
           </span>
-          {heldElsewhere && <div className="num mt-1 text-[11px] text-ink-400">{heldText(venue, heldElsewhere)}</div>}
+          {heldElsewhere && capShows(yu ? sizeIn(yu, yu.unit) : 0, missing) && (
+            <div className="num mt-1 text-[11px] text-ink-400">{heldText(venue, heldElsewhere)}</div>
+          )}
         </td>
         <td className={`${cell} num whitespace-nowrap text-right ${missing > 0 ? 'text-amber-200/90' : 'text-ink-400'}`} title={HELD_OF_TARGET_TITLE}>
           {ofTarget(yu ? sizeIn(yu, yu.unit) : 0)}
