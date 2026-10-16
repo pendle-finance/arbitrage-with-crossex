@@ -346,13 +346,14 @@ describe('an open stops at what the venue lacks (owner 2026-10-16)', () => {
     expect(screen.queryByRole('button', { name: /^Open (both )?Boros leg/ })).toBeNull();
   });
 
-  it('perps 3: each Boros leg reads held / target for this card', async () => {
+  it('perps 3: a held leg reads its size, a missing one held / target', async () => {
     const user = userEvent.setup();
     renderCard(capBook(3));
     await showPairs(user);
     const row = (venue: string) => screen.getAllByRole('row').find((r) => (r.textContent ?? '').startsWith(`${venue}Boros`));
     await screen.findByText(reason);
-    expect(row('Gate')?.textContent).toMatch(/3 \/ 3 BTC/);
+    expect(row('Gate')?.textContent).toMatch(/3 BTC/);
+    expect(row('Gate')?.textContent).not.toMatch(/\//);
     // Held elsewhere, so nothing to open here: the target still shows.
     expect(row('Hyperliquid')?.textContent).toMatch(/0 \/ 3 BTC/);
     expect(row('Hyperliquid')?.textContent).not.toMatch(/open /);
