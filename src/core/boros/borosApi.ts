@@ -654,7 +654,12 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
    * Best effort, like the gas top-up: a failed read sends the batch without
    * exits, and the venue stays the check.
    */
-  const exitCalldatas = async (marketIds: number[], withEmpty: boolean): Promise<Hex[]> => {
+  /**
+   * The cross markets an opening batch exits at its head, per account: every
+   * matured one, and with `withEmpty` every one holding no position and no
+   * order. Never a market the batch trades. Empty when they cannot be read.
+   */
+  const exitMarketIdsFor = async (marketIds: number[], withEmpty: boolean): Promise<Array<{ marketAcc: string; ids: number[] }>> => {
     try {
       const keep = new Set(marketIds);
       const accs = [...new Set((await Promise.all(marketIds.map(marketAccFor))).map((a) => a.toLowerCase()))];
@@ -665,7 +670,7 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
             'GET',
           )).results ?? []
         : [];
-      const out: Hex[] = [];
+      const out: Array<{ marketAcc: string; ids: number[] }> = [];
       for (const marketAcc of accs) {
         const { results } = await call<{ results?: Array<{ marketId: number; isMatured?: boolean }> }>(
           `/v1/accounts/entered-markets?marketAcc=${marketAcc}`,
@@ -678,7 +683,18 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
           if (BigInt(p.signedSize ?? '0') === 0n && (p.orders ?? []).length === 0) exits.add(p.marketId);
         }
         const ids = [...exits].filter((id) => !keep.has(id));
-        if (ids.length === 0) continue;
+        if (ids.length > 0) out.push({ marketAcc, ids });
+      }
+      return out;
+    } catch {
+      return [];
+    }
+  };
+
+  const exitCalldatas = async (marketIds: number[], withEmpty: boolean): Promise<Hex[]> => {
+    try {
+      const out: Hex[] = [];
+      for (const { ids } of await exitMarketIdsFor(marketIds, withEmpty)) {
         const built = await call<{ calls?: PlaceOrderCall[] }>('/v1/calldata-builder/agent/exit-markets', {
           accountId: config.accountId,
           isCross: true,
@@ -754,10 +770,12 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
   };
 
   /**
-   * A roll previewed as the batch `placeMarketOrders` sends: every close,
-   * then every open, FOK, on one simulated account state. The venue sizes
-   * each close from the position it holds, capped at the size asked, and
-   * judges each order with the rate guard `/place-order` gives it.
+   * A roll previewed as the batch `placeMarketOrders` sends: the market exits
+   * at its head, every close, then every open, FOK, on one simulated account
+   * state. The venue sizes each close from the position it holds, capped at
+   * the size asked, and judges each order with the rate guard `/place-order`
+   * gives it. Like `executeOpening`, a refusal for the market cap is asked
+   * again with the empty markets exited too.
    */
   const simulateRollOver = async (
     closes: BorosMarketOrderRequest[],
@@ -769,13 +787,24 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
       rate: req.limitApr,
       ammId: AMM_ORDERBOOK_ONLY,
     });
-    return readRollSimulation(
-      await call<RollOverSimulationWire>('/v2/simulations/roll-over', {
-        marketAcc: await marketAccFor(closes[0].marketId),
-        closes: closes.map(wire),
-        opens: opens.map((req) => ({ ...wire(req), side: req.direction === 'long' ? SIDE_LONG : SIDE_SHORT })),
-      }),
-    );
+    const marketAcc = await marketAccFor(closes[0].marketId);
+    const marketIds = [...closes, ...opens].map((o) => o.marketId);
+    const exitsFor = async (withEmpty: boolean): Promise<number[]> =>
+      (await exitMarketIdsFor(marketIds, withEmpty)).find((e) => e.marketAcc === marketAcc.toLowerCase())?.ids ?? [];
+    const run = async (exitMarketIds: number[]) =>
+      readRollSimulation(
+        await call<RollOverSimulationWire>('/v2/simulations/roll-over', {
+          marketAcc,
+          closes: closes.map(wire),
+          opens: opens.map((req) => ({ ...wire(req), side: req.direction === 'long' ? SIDE_LONG : SIDE_SHORT })),
+          ...(exitMarketIds.length > 0 ? { exitMarketIds } : {}),
+        }),
+      );
+    const exits = await exitsFor(false);
+    const first = await run(exits);
+    if (first.status !== 'Refused' || first.reason?.code !== 'MM_MARKET_LIMIT_EXCEEDED') return first;
+    const more = await exitsFor(true);
+    return more.length === 0 || more.join() === exits.join() ? first : run(more);
   };
 
   /**

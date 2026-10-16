@@ -47,7 +47,7 @@ function fakeApi(
     orderBuildReturns?: unknown;
     /** A non-2xx answer from the cancel-orders builder. */
     cancelBuildHttp?: { status: number; body?: unknown };
-    /** Body the roll-over preview answers with. */
+    /** Body the roll-over preview answers with, or a function of the request body (undefined = the default success). */
     rollSimReturns?: unknown;
     failEnter?: string;
     /** Raw body the ENTER submission answers with, for the shapes that are
@@ -96,7 +96,9 @@ function fakeApi(
       return ok({ calls: [{ calldata: `0xda${calls.length.toString(16).padStart(2, '0')}` }] });
     }
     if (path.startsWith('/v2/simulations/roll-over')) {
-      if (over.rollSimReturns !== undefined) return ok(over.rollSimReturns);
+      const scripted =
+        typeof over.rollSimReturns === 'function' ? (over.rollSimReturns as (b: Record<string, unknown>) => unknown)(body) : over.rollSimReturns;
+      if (scripted !== undefined) return ok(scripted);
       const closes = body.closes as Array<{ marketId: number; size: string }>;
       const opens = body.opens as Array<{ marketId: number; size: string }>;
       const wei = (n: number) => (BigInt(n) * 10n ** 18n).toString();
@@ -646,6 +648,30 @@ describe('makeBorosApiOrderClient — a roll', () => {
     // A venue that reports no exit state (older, or the closes could not run) reads as unknown, not 0.
     expect(refused).toMatchObject({ status: 'Refused', reason: { code: 'MARKET_ORDER_FOK_NOT_FILLED' }, availableAfter: null, availableAfterExit: null });
     expect(refused.orders[0]).toEqual({ action: 'open', marketId: HL + 1, filled: false, matchedSize: null, matchedApr: null, fee: null, error: 'Insufficient liquidity' });
+  });
+
+  it('previews the market exits execute sends, and at the cap asks again with the empty markets exited', async () => {
+    const MATURED = 102;
+    const EMPTY = 199;
+    const capped = {
+      status: 'Refused',
+      reason: { errorCode: 'MM_MARKET_LIMIT_EXCEEDED', message: 'MMMarketLimitExceeded()' },
+      preState: { availableInitialMargin: '0' },
+      postState: null,
+      marginRequired: '0',
+      orders: [],
+    };
+    const api = fakeApi({
+      entered: [{ marketId: MATURED, isMatured: true }, { marketId: HL, isMatured: true }],
+      positions: [{ marketId: EMPTY, signedSize: '0', orders: [] }, { marketId: BN, signedSize: '0', orders: [] }],
+      // Refused at the cap until the empty market is exited too; then the fake's default success.
+      rollSimReturns: (b: Record<string, unknown>) => ((b.exitMarketIds as number[]).includes(EMPTY) ? undefined : capped),
+    });
+    const sim = await client(api).simulateRollOver!(closes(), opens());
+    const sent = api.calls.filter((c) => c.path === '/v2/simulations/roll-over').map((c) => c.body.exitMarketIds);
+    // Never a market the roll trades (HL is matured but closed by the roll; BN is empty but closed by it).
+    expect(sent).toEqual([[MATURED], [MATURED, EMPTY]]);
+    expect(sim.status).toBe('Succeed');
   });
 
   it('previews a roll as explicit closes and opens, the batch placeMarketOrders sends', async () => {
