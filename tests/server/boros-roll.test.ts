@@ -301,20 +301,35 @@ describe('POST /api/boros/roll/execute', () => {
     // A resting order left on a market the roll just closed could fill later
     // and re-open that leg; the new markets keep theirs.
     const seen: Array<number[] | undefined> = [];
+    const previewed: Array<number[] | undefined> = [];
     makeRollApp(
       accountBodies(500_000, [
         { marketId: HL, size: -100_000, fixedApr: 0.09, im: 1_000 },
         { marketId: BN, size: 100_000, fixedApr: 0.045, im: 800, resting: true },
       ]),
-      spyClient(async (orders, opts) => {
-        seen.push(opts?.cancelOrdersOn);
-        return rolledFills(orders);
-      }),
+      {
+        ...spyClient(async (orders, opts) => {
+          seen.push(opts?.cancelOrdersOn);
+          return rolledFills(orders);
+        }),
+        // The preview cancels the same orders first: one in a close's path would refuse it (MarketSelfSwap).
+        simulateRollOver: async (closes, opens, opts) => {
+          previewed.push(opts?.cancelOrdersOn);
+          return venueOk(closes, opens);
+        },
+      },
     );
     const res = await post('/api/boros/roll/execute', rollBody());
     expect(res.statusCode).toBe(200);
     expect(res.json().data.result.status).toBe('rolled');
     expect(seen).toEqual([[BN]]);
+    expect(previewed).toEqual([[BN]]);
+
+    previewed.length = 0;
+    const sim = await post('/api/boros/roll/simulate', rollBody());
+    expect(previewed).toEqual([[BN]]);
+    // The review names the cancel only when there is one.
+    expect(sim.json().data.cancelOrdersOn).toEqual([BN]);
   });
 
   it('sends the two closes then the two opens as one batch, each with its bound, and busts the reads', async () => {

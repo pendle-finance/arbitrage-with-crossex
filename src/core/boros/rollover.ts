@@ -126,6 +126,11 @@ const sum = (xs: Array<number | null>): number | null =>
   xs.every((x): x is number => x !== null) ? xs.reduce((t, x) => t + x, 0) : null;
 const venuesOf = (m: BorosMarket): readonly string[] => m.spreadVenues ?? [normalizeVenue(m.venue)];
 
+/** `MarketSelfSwap` (MarketOrderAndOtc.sol): the order would fill against the
+ * account's own resting order. Spelled "Self swapping error" by the SDK's
+ * message table, `MarketSelfSwap()` without it. */
+const SELF_SWAP = /self\s*swap/i;
+
 /**
  * Why the venue refused ONE leg, in the trader's terms, with that cause's own
  * remedy.
@@ -174,8 +179,14 @@ function refusalCause(error: string, sim: SimulatedLeg | null, collateral: strin
       return `${error}. Add margin or roll a smaller size.`;
     case 'no-gas':
       return `${error}. Top up the gas balance.`;
+    // Reached when the roll needs more slots than its closes free, for
+    // example one spread into two singles with every other market in use.
+    case 'market-limit':
+      return 'This account is in as many Boros markets as it may hold, and each one has a position or an order. Close a position you no longer need, then roll.';
     default:
-      return `${error}.`;
+      return SELF_SWAP.test(error)
+        ? 'Your own resting order on this market is in the way. Cancel it on Boros, then roll.'
+        : `${error}.`;
   }
 }
 
@@ -312,12 +323,17 @@ export function evaluateRollGate(input: EvaluateRollInput): RollGate {
     return m ? m.name : `market ${marketId}`;
   };
   if (venue === null) {
-    blockers.push({
-      code: 'roll-unpriced',
-      message: input.venueError
-        ? `The venue could not preview this roll — ${input.venueError}`
-        : 'The venue could not preview this roll — waiting for a quote.',
-    });
+    // A leg with no rate to send at never reaches the preview (`rollPlanFor`
+    // returns null), so no quote is coming; that leg's own book blocker says why.
+    const unpriceable = stepBlockers.some((b) => b.code === 'no-depth' || b.code === 'book-unavailable');
+    if (!unpriceable) {
+      blockers.push({
+        code: 'roll-unpriced',
+        message: input.venueError
+          ? `The venue could not preview this roll — ${input.venueError}`
+          : 'The venue could not preview this roll — waiting for a quote.',
+      });
+    }
   } else if (venue.status === 'Refused') {
     const named = venue.orders.filter((o) => o.error !== null);
     if (named.length > 0) {

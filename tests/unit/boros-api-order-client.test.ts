@@ -1402,6 +1402,246 @@ describe('makeBorosApiOrderClient — frees market slots in the same batch as an
   });
 });
 
+/**
+ * At the 10-market cap with every slot live, the opens of a roll can enter
+ * their markets only once the old ones are gone. A close does not exit its
+ * market, and the head exits run while the old markets are still live, so
+ * the batch exits each market a close takes WHOLE right behind the closes.
+ */
+describe('makeBorosApiOrderClient — a roll exits the markets its closes empty, before the opens', () => {
+  const W = (n: number) => (BigInt(n) * 10n ** 18n).toString();
+  const SPREAD_OLD = 58;
+  const SPREAD_NEW = 60;
+  const exitOf = (...ids: number[]) => `0xee${ids.map((id) => id.toString(16).padStart(4, '0')).join('')}`;
+  const submits = (api: ReturnType<typeof fakeApi>) =>
+    api.calls
+      .filter((c) => c.path === '/v1/send-txs/bulk-calls')
+      .map((c) => (c.body.datas as Array<{ calldata: string }>).map((d) => d.calldata));
+  const LIMIT = '[SIMULATE] MMMarketLimitExceeded()';
+  const ABORTED = 'Batch aborted: requireSuccess=true';
+  /** The venue at the cap, every slot live: the first open is refused unless an exit runs right behind the `closes` (after `lead` head calls). */
+  const atCap = (closes: number, lead = 0) => (body: Record<string, unknown>) => {
+    const datas = (body.datas as Array<{ calldata: string }>).map((d) => d.calldata);
+    const at = lead + closes;
+    return datas[at]?.startsWith('0xee')
+      ? datas.map((_, i) => ({ txHash: '0xtx', index: i, status: 'success' }))
+      : datas.map((_, i) => ({ index: i, error: i === at ? LIMIT : ABORTED }));
+  };
+  const closeHL = (size = 100) => leg({ marketId: HL, direction: 'long', size, sizeWei: W(size), clientOrderId: 'r-0000001' });
+  const closeBN = (size = 100) => leg({ marketId: BN, direction: 'short', size, sizeWei: W(size), clientOrderId: 'r-0000002' });
+  const openHL = () => leg({ marketId: HL + 1, direction: 'short', size: 100, sizeWei: W(100), clientOrderId: 'r-0000003' });
+  const openBN = () => leg({ marketId: BN + 1, direction: 'long', size: 100, sizeWei: W(100), clientOrderId: 'r-0000004' });
+  // The trader holds HL short and BN long: the closes buy HL back and sell BN.
+  const pairHeld = [
+    { marketId: HL, signedSize: `-${W(100)}`, orders: [] },
+    { marketId: BN, signedSize: W(100), orders: [] },
+  ];
+
+  it('rolls a whole pair at the cap: [closes, exit of both old markets, opens], each leg read from its own slot', async () => {
+    const api = fakeApi({
+      positions: pairHeld,
+      submit: atCap(2),
+      status: {
+        status: 'success',
+        statuses: [0, 1, 2, 3, 4].map((index) => ({
+          index,
+          status: 'success',
+          marketOrdersExecuted: index === 2 ? [] : [{ marketId: [HL, BN, 0, HL + 1, BN + 1][index], size: W(100) }],
+        })),
+      },
+    });
+    const r = await submitBorosRoll(client(api), { closes: [closeHL(), closeBN()], opens: [openHL(), openBN()] });
+    const [batch] = submits(api);
+    expect(submits(api)).toHaveLength(1);
+    expect(batch).toHaveLength(5);
+    expect(batch[2]).toBe(exitOf(HL, BN));
+    expect([batch[0], batch[1], batch[3], batch[4]].every((d) => d.startsWith('0xda'))).toBe(true);
+    expect(r.status).toBe('rolled');
+    expect(Object.values(r.legs).map((f) => [f.marketId, f.filledSize])).toEqual([
+      [HL, 100],
+      [BN, 100],
+      [HL + 1, 100],
+      [BN + 1, 100],
+    ]);
+  });
+
+  it('puts the exits after the closes and ahead of the gas top-up, behind the head exits and cancels', async () => {
+    const MATURED = 102;
+    const api = fakeApi({
+      positions: pairHeld,
+      entered: [{ marketId: MATURED, isMatured: true }],
+      gasBalance: { balanceInUSD: 0.1 },
+    });
+    await submitBorosRoll(client(api), { closes: [closeHL(), closeBN()], opens: [openHL(), openBN()] }, { cancelOrdersOn: [HL] });
+    const [batch] = submits(api);
+    // [cancel HL, exit matured, close HL, close BN, exit HL+BN, top-up, open HL', open BN']
+    expect(batch[0]).toBe(`0xca${HL.toString(16)}`);
+    expect(batch[1]).toBe(exitOf(MATURED));
+    expect(batch[4]).toBe(exitOf(HL, BN));
+    expect(batch[5]).toBe('0x7a');
+    expect(batch).toHaveLength(8);
+  });
+
+  it('never exits on a part roll: the market still holds the rest', async () => {
+    const api = fakeApi({ positions: [{ marketId: HL, signedSize: `-${W(150)}`, orders: [] }, { marketId: BN, signedSize: W(150), orders: [] }] });
+    await submitBorosRoll(client(api), { closes: [closeHL(), closeBN()], opens: [openHL(), openBN()] });
+    const [batch] = submits(api);
+    expect(batch.some((d) => d.startsWith('0xee'))).toBe(false);
+    expect(batch).toHaveLength(4);
+  });
+
+  it('keeps a market another pair shares: a larger netted position, or an order the batch keeps', async () => {
+    const api = fakeApi({
+      positions: [
+        { marketId: HL, signedSize: `-${W(200)}`, orders: [] }, // another pair holds 100 more
+        { marketId: BN, signedSize: W(100), orders: [{ id: '7' }] }, // an order the batch does not cancel
+        { marketId: 59, signedSize: W(100), orders: [] }, // whole, so it goes
+      ],
+    });
+    await submitBorosRoll(client(api), {
+      closes: [closeHL(), closeBN(), leg({ marketId: 59, direction: 'short', size: 100, sizeWei: W(100), clientOrderId: 'r-0000005' })],
+      opens: [leg({ marketId: SPREAD_NEW, size: 100, sizeWei: W(100), clientOrderId: 'r-0000006' })],
+    });
+    const [batch] = submits(api);
+    expect(batch.filter((d) => d.startsWith('0xee'))).toEqual([exitOf(59)]);
+  });
+
+  it('at the cap, cancels the orders on the old markets, then exits them behind the closes', async () => {
+    // HL holds a same-side order (in the close's path), BN a take-profit (the other side). Both go.
+    const withOrders = [
+      { marketId: HL, signedSize: `-${W(100)}`, orders: [{ id: '1', side: 1 }] },
+      { marketId: BN, signedSize: W(100), orders: [{ id: '2', side: 0 }] },
+    ];
+    const api = fakeApi({ positions: withOrders });
+    // At the cap: the slot behind the two cancels and the two closes must be the exit.
+    const capped = fakeApi({ positions: withOrders, submit: atCap(2, 2) });
+    for (const venue of [api, capped]) {
+      const r = await submitBorosRoll(client(venue), { closes: [closeHL(), closeBN()], opens: [openHL(), openBN()] }, { cancelOrdersOn: [HL, BN] });
+      const [batch] = submits(venue);
+      // [cancel HL, cancel BN, close HL, close BN, exit HL+BN, open HL', open BN']
+      expect(batch.slice(0, 2)).toEqual([`0xca${HL.toString(16)}`, `0xca${BN.toString(16)}`]);
+      expect(batch[4]).toBe(exitOf(HL, BN));
+      expect(batch).toHaveLength(7);
+      expect(r.status).not.toBe('refused');
+    }
+  });
+
+  it('cancels the orders on a part roll, but never exits: the market still holds the rest', async () => {
+    const api = fakeApi({ positions: [{ marketId: HL, signedSize: `-${W(150)}`, orders: [{ id: '1' }] }, { marketId: BN, signedSize: W(150), orders: [] }] });
+    await submitBorosRoll(client(api), { closes: [closeHL(), closeBN()], opens: [openHL(), openBN()] }, { cancelOrdersOn: [HL] });
+    const [batch] = submits(api);
+    expect(batch[0]).toBe(`0xca${HL.toString(16)}`);
+    expect(batch.some((d) => d.startsWith('0xee'))).toBe(false);
+    expect(batch).toHaveLength(5);
+  });
+
+  it('previews the cancels the send makes, and the exit they allow', async () => {
+    const api = fakeApi({ positions: [{ marketId: HL, signedSize: `-${W(100)}`, orders: [{ id: '1', side: 1 }] }, pairHeld[1]] });
+    await client(api).simulateRollOver!([closeHL(), closeBN()], [openHL(), openBN()], { cancelOrdersOn: [HL] });
+    const sent = api.calls.find((c) => c.path === '/v2/simulations/roll-over')!.body;
+    expect(sent.cancelMarketIds).toEqual([HL]);
+    expect(sent.exitAfterCloseMarketIds).toEqual([HL, BN]);
+
+    // Without the cancel, the order keeps HL in its slot, and no cancel goes on the wire.
+    const kept = fakeApi({ positions: [{ marketId: HL, signedSize: `-${W(100)}`, orders: [{ id: '1', side: 1 }] }, pairHeld[1]] });
+    await client(kept).simulateRollOver!([closeHL(), closeBN()], [openHL(), openBN()]);
+    const bare = kept.calls.find((c) => c.path === '/v2/simulations/roll-over')!.body;
+    expect(bare).not.toHaveProperty('cancelMarketIds');
+    expect(bare.exitAfterCloseMarketIds).toEqual([BN]);
+  });
+
+  it('never exits a close on the wrong side, or a market the batch also opens on', async () => {
+    const api = fakeApi({ positions: [{ marketId: HL, signedSize: W(100), orders: [] }, { marketId: BN, signedSize: W(100), orders: [] }] });
+    // HL is held LONG, so a "close" that buys more is no close; BN is traded twice.
+    await client(api).placeMarketOrders([closeHL(), closeBN(), leg({ marketId: BN, size: 1, clientOrderId: 'r-0000009' })], {
+      topUpAfter: 2,
+      timeInForce: 'fill-or-kill',
+    });
+    expect(submits(api)[0].some((d) => d.startsWith('0xee'))).toBe(false);
+  });
+
+  it('rolls spread to spread: [close old spread, exit it, open new spread]', async () => {
+    const api = fakeApi({ positions: [{ marketId: SPREAD_OLD, signedSize: W(100), orders: [] }], submit: atCap(1) });
+    const r = await submitBorosRoll(client(api), {
+      closes: [leg({ marketId: SPREAD_OLD, direction: 'short', size: 100, sizeWei: W(100) })],
+      opens: [leg({ marketId: SPREAD_NEW, direction: 'long', size: 100, sizeWei: W(100), clientOrderId: 'r-0000002' })],
+    });
+    const [batch] = submits(api);
+    expect(batch[1]).toBe(exitOf(SPREAD_OLD));
+    expect(batch).toHaveLength(3);
+    expect(r.status).not.toBe('refused');
+  });
+
+  it('rolls singles into a spread: [close HL, close BN, exit both, open spread]', async () => {
+    const api = fakeApi({ positions: pairHeld, submit: atCap(2) });
+    const r = await submitBorosRoll(client(api), {
+      closes: [closeHL(), closeBN()],
+      opens: [leg({ marketId: SPREAD_NEW, direction: 'short', size: 100, sizeWei: W(100), clientOrderId: 'r-0000003' })],
+    });
+    const [batch] = submits(api);
+    expect(submits(api)).toHaveLength(1);
+    expect(batch[2]).toBe(exitOf(HL, BN));
+    expect(batch).toHaveLength(4);
+    expect(r.status).not.toBe('refused');
+  });
+
+  it('names the exit as the refused call when the venue denies it', async () => {
+    const api = fakeApi({
+      positions: pairHeld,
+      submit: (body) => (body.datas as unknown[]).map((_, i) => ({ index: i, error: i === 2 ? '[SIMULATE] MMMarketExitDenied()' : ABORTED })),
+    });
+    const r = await submitBorosRoll(client(api), { closes: [closeHL(), closeBN()], opens: [openHL(), openBN()] });
+    expect(r.status).toBe('refused');
+    expect(r.reason?.message).toBe('[SIMULATE] MMMarketExitDenied() (refused call: the exit of a market the closes leave empty)');
+    expect(Object.values(r.legs).every((f) => f.failure?.cause === 'batch')).toBe(true);
+  });
+
+  it('sends the roll without these exits when the account cannot be read', async () => {
+    const api = fakeApi({ positions: pairHeld });
+    const base = api.fetchImpl;
+    const flaky: ApiFetch = async (url, init) =>
+      url.includes('market-acc-infos-by-root') ? { ok: false, status: 503, json: async () => ({}) } : base(url, init);
+    await submitBorosRoll(client({ ...api, fetchImpl: flaky }), { closes: [closeHL(), closeBN()], opens: [openHL(), openBN()] });
+    const [batch] = submits(api);
+    expect(batch).toHaveLength(4);
+    expect(batch.some((d) => d.startsWith('0xee'))).toBe(false);
+  });
+
+  it('previews the same exits in exitAfterCloseMarketIds, on the first ask and on the cap retry', async () => {
+    const EMPTY = 199;
+    const capped = {
+      status: 'Refused',
+      reason: { errorCode: 'MM_MARKET_LIMIT_EXCEEDED', message: 'MMMarketLimitExceeded()' },
+      preState: { availableInitialMargin: '0' },
+      postState: null,
+      marginRequired: '0',
+      orders: [],
+    };
+    const api = fakeApi({
+      positions: [...pairHeld, { marketId: EMPTY, signedSize: '0', orders: [] }],
+      rollSimReturns: (b: Record<string, unknown>) => ((b.exitMarketIds as number[] | undefined)?.includes(EMPTY) ? undefined : capped),
+    });
+    const sim = await client(api).simulateRollOver!([closeHL(), closeBN()], [openHL(), openBN()]);
+    const sent = api.calls.filter((c) => c.path === '/v2/simulations/roll-over').map((c) => [c.body.exitMarketIds, c.body.exitAfterCloseMarketIds]);
+    expect(sent).toEqual([
+      [undefined, [HL, BN]],
+      [[EMPTY], [HL, BN]],
+    ]);
+    expect(sim.status).toBe('Succeed');
+
+    // A part roll sends no such field.
+    const part = fakeApi({ positions: [{ marketId: HL, signedSize: `-${W(150)}`, orders: [] }] });
+    await client(part).simulateRollOver!([closeHL()], [openHL()]);
+    expect(part.calls.find((c) => c.path === '/v2/simulations/roll-over')!.body).not.toHaveProperty('exitAfterCloseMarketIds');
+  });
+
+  it('leaves a plain pair open alone: no leading closes, no such exits', async () => {
+    const api = fakeApi({ positions: pairHeld });
+    await client(api).placeMarketOrders([closeHL(), closeBN()]);
+    expect(submits(api)[0].some((d) => d.startsWith('0xee'))).toBe(false);
+  });
+});
+
 describe('usdCentsToCollateralWei — dollars into the collateral token', () => {
   it('is exact for a $1 token', () => {
     expect(usdCentsToCollateralWei(100, 1)).toBe(10n ** 18n);

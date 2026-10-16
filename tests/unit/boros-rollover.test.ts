@@ -157,6 +157,53 @@ describe('evaluateRollGate', () => {
     expect(g.margin).toEqual({ need: null, availableBefore: null, availableAfter: null, availableAfterExit: null, shortfall: 0 });
   });
 
+  it('a new market whose book has no price on the open side: its own blocker says why, not "waiting for a quote"', () => {
+    // A fresh listing: bids only, and the re-entry opens long on it.
+    const fresh = { ...book(bnNew), asks: [] };
+    const entry = step([leg(hlNew, 'short'), leg(bnNew, 'long', { book: fresh })], 'open');
+    // No rate to send at, so the batch is never previewed.
+    expect(rollPlanFor(rollInput().exit.simulation, entry.simulation)).toBeNull();
+    const g = evaluateRollGate({ ...rollInput({ entry }), venue: null });
+    // Still blocked, by the step that cannot price, and only by it.
+    expect(g.blockers.map((b) => b.code)).toEqual(['no-depth']);
+    expect(g.blockers[0].message).toBe('Re-entry: Binance ETH new: nothing resting on the side this leg would cross.');
+    // A book that could not be fetched at all is the same: its step says so.
+    const unread = step([leg(hlNew, 'short'), leg(bnNew, 'long', { book: null })], 'open');
+    expect(evaluateRollGate({ ...rollInput({ entry: unread }), venue: null }).blockers.map((b) => b.code)).toEqual(['book-unavailable']);
+    // A priced batch whose preview went unanswered (429, timeout) keeps waiting.
+    expect(evaluateRollGate({ ...rollInput(), venue: null }).blockers.map((b) => b.message)).toEqual([
+      'The venue could not preview this roll — waiting for a quote.',
+    ]);
+  });
+
+  it('a self-swap names the trader\'s own resting order and how to clear it', () => {
+    for (const error of ['Self swapping error', 'MarketSelfSwap()']) {
+      const venue = venueOk({
+        status: 'Refused',
+        reason: { code: 'MarketSelfSwap', message: error },
+        orders: venueOk().orders.map((o, i) => ({ ...o, filled: false, matchedSize: null, error: i === 2 ? error : null })),
+        availableAfter: null,
+      });
+      const [, line, ...rest] = evaluateRollGate({ ...rollInput(), venue }).blockers[0].message.split('\n');
+      expect(line).toBe('Re-entry · Hyperliquid ETH new — Your own resting order on this market is in the way. Cancel it on Boros, then roll.');
+      expect(rest).toEqual([]);
+    }
+  });
+
+  it('a full market cap says which slot to free, not the raw contract error', () => {
+    const error = 'MMMarketLimitExceeded()';
+    const venue = venueOk({
+      status: 'Refused',
+      reason: { code: 'MM_MARKET_LIMIT_EXCEEDED', message: error },
+      orders: venueOk().orders.map((o, i) => ({ ...o, filled: false, matchedSize: null, error: i === 2 ? error : null })),
+      availableAfter: null,
+    });
+    const [, line] = evaluateRollGate({ ...rollInput(), venue }).blockers[0].message.split('\n');
+    expect(line).toBe(
+      'Re-entry · Hyperliquid ETH new — This account is in as many Boros markets as it may hold, and each one has a position or an order. Close a position you no longer need, then roll.',
+    );
+  });
+
   it("blocks on the venue's refusal, naming the legs the book cannot fill", () => {
     const venue = venueOk({
       status: 'Refused',
