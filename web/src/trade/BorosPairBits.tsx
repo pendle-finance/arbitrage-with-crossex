@@ -551,7 +551,7 @@ export function PairCosts({
               ? 'Initial margin this leg consumes'
               : 'The two legs summed, not netted: each bucket must carry its own margin.'
         }
-        value={<CollateralAmount n={sim.marginRequiredTotal} sim={sim} />}
+        value={<CollateralAmount n={freeing ? (sim.marginReleasedTotal ?? null) : sim.marginRequiredTotal} sim={sim} />}
       />
       {!oneLeg && !freeing && !compact &&
         sim.legs.map((leg, i) => (
