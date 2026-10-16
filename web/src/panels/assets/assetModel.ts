@@ -738,8 +738,16 @@ export function perpOnlyPairs(
         const base = `${l.symbol}:${s.symbol}:${heldIds}`;
         const n = keyCount.get(base) ?? 0;
         keyCount.set(base, n + 1);
-        const capLong = capped(l, missingOf(p.size, p.longYu));
-        const capShort = capped(s, missingOf(p.size, p.shortYu));
+        // A held side short by less than half the dust line is rounding: a
+        // dust rest rode on this part. Live 16 Oct: a 0.348 single on a
+        // 0.348125 unit hid the held row behind "missing 0.000125, Open leg",
+        // an order Boros refuses (under $10).
+        const gap = (perp: UnpairedPerp, yu: PendingLeg | null) => {
+          const m = missingOf(p.size, yu);
+          return yu && slice(perp, m).notionalUsd * 2 < PERP_ONLY_DUST_USD ? 0 : m;
+        };
+        const capLong = capped(l, gap(l, p.longYu));
+        const capShort = capped(s, gap(s, p.shortYu));
         pairs.push({
           partKey: `${base}:${n}`,
           longVenue: l.venue,
