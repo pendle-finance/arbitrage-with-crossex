@@ -19,6 +19,7 @@ import { resetAgentApprovalCache } from '../../src/server/borosAgentApproval';
 import { borosExecutionsPending } from '../../src/server/routes/borosPair';
 import { account, ADDRESS, BN, DAY, HL, market, MATURITY, NOW, OK, wireBook } from '../helpers/boros-pair-fixtures';
 import { TtlCache } from '../../src/server/cache';
+import { CoreError } from '../../src/core/errors';
 import { marketAcc, raw } from '../helpers/boros-fixtures';
 import { borosStub } from '../helpers/boros-stub';
 import { HOST, makeTestApp } from './helpers/gate-nock';
@@ -252,6 +253,66 @@ describe('boros writes bust the reads they invalidate', () => {
     const reread = vi.fn(async () => []);
     await cache.get(`boros:collaterals:${ADDRESS}`, 30_000, reread);
     expect(reread).not.toHaveBeenCalled();
+  });
+
+  it('keeps the old fills while it waits, then drops them and the gas balance', async () => {
+    // A card poll during the wait must not re-read the fills before Boros shows
+    // the trade: that read would be kept for 60 s without it.
+    const after = bodies(account(500_000, [{ marketId: HL, size: -100_000 }, { marketId: BN, size: 100_000 }]));
+    let infoReads = 0;
+    const stub = borosStub(bodies());
+    const cache = new TtlCache();
+    const fills = `boros:txns:0xacc:${HL}:live`;
+    await cache.get(fills, 600_000, async () => 'old');
+    const keptDuringWait: boolean[] = [];
+    app = makeTestApp({
+      borosFetch: async (url: string) => {
+        if (new URL(url).pathname.endsWith('/market-acc-infos-by-root') && ++infoReads >= 3) return borosStub(after)(url);
+        if (new URL(url).pathname.endsWith('/active-positions') && infoReads >= 3) return borosStub(after)(url);
+        return stub(url);
+      },
+      getBorosOrders: () => orderClient(),
+      cache,
+      borosSettle: {
+        maxMs: 60_000,
+        sleep: async () => void keptDuringWait.push((await cache.get(fills, 600_000, async () => 'new')).value === 'old'),
+      },
+    });
+    const res = await post('/api/boros/pair/execute', pairBody({ ids: ['coid-wait-a', 'coid-wait-b'] }));
+    expect(res.statusCode).toBe(200);
+    expect(keptDuringWait).toEqual([true]);
+    const reread = vi.fn(async () => 'new');
+    await cache.get(fills, 600_000, reread);
+    expect(reread).toHaveBeenCalled();
+    const gas = vi.fn(async () => 1);
+    await cache.get('boros:gas-balance', 30_000, gas);
+    expect(gas).toHaveBeenCalled();
+  });
+
+  it('drops the account read and the fills when a close fails after the cancel landed', async () => {
+    const cache = new TtlCache();
+    app = makeTestApp({
+      borosFetch: borosStub(bodies({ ...account(500_000, [{ marketId: HL, size: 75_000 }]) })),
+      getBorosOrders: () => ({
+        placeMarketOrders: async (reqs) => reqs.map(() => okFill()),
+        cancelOrders: async () => {},
+        closePosition: async () => {
+          throw new CoreError('Boros did not answer in time', 'network');
+        },
+      }),
+      cache,
+    });
+    const fills = `boros:txns:0xacc:${HL}:live`;
+    await cache.get(fills, 600_000, async () => 'old');
+    const res = await post(`/api/boros/pair/market/${HL}/cancel-and-close`, { clientOrderId: 'coid-close-throws' });
+    expect(res.statusCode).toBeGreaterThanOrEqual(400);
+    expect(res.json().error.message).toMatch(/already been cancelled/);
+    const reread = vi.fn(async () => []);
+    await cache.get(`boros:collaterals:${ADDRESS}`, 30_000, reread);
+    expect(reread).toHaveBeenCalled();
+    const refills = vi.fn(async () => 'new');
+    await cache.get(fills, 600_000, refills);
+    expect(refills).toHaveBeenCalled();
   });
 
   it('keeps no read when Boros never shows the trade in time', async () => {

@@ -479,26 +479,30 @@ export function createPairPricer(deps: AppDeps) {
   const settleMaxMs = deps.borosSettle?.maxMs ?? 6_000;
   const settleSleep = deps.borosSettle?.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   /**
-   * After a Boros write: drop the fills it changed, then re-read the account
-   * until Boros shows the trade, and keep that read cached for the cards.
+   * After a Boros write: re-read the account until Boros shows the trade,
+   * keep that read cached for the cards, then drop the fills it changed.
    * Boros shows a batch 1–2 s after the send returns, so the page's instant
    * re-read got the old position and the cache kept it for 30 s (2026-10-16).
    * A read that never shows the trade (nothing filled, or Boros is slow) is
    * not kept.
    */
   const settleAfterWrite = async (address: string, before: AccountView, traded: readonly number[]): Promise<void> => {
-    bustBorosFills(deps.cache, traded);
     const raw = (a: AccountView, id: number) => a.positionRawByMarket.get(id) ?? '0';
     const deadline = Date.now() + settleMaxMs;
     for (;;) {
       const after = await loadAccount(address, true).catch(() => null);
-      if (after && traded.some((id) => raw(after, id) !== raw(before, id))) return;
+      if (after && traded.some((id) => raw(after, id) !== raw(before, id))) break;
       if (after === null || Date.now() + 1_000 > deadline) {
         deps.cache.bust(`boros:collaterals:${address}`);
-        return;
+        break;
       }
       await settleSleep(1_000);
     }
+    // After the wait, not before it: a card poll during the wait would
+    // re-read the fills before Boros shows the trade, and keep that read.
+    bustBorosFills(deps.cache, traded);
+    // A send spends gas, and a send at gas debt tops it up.
+    deps.cache.bust('boros:gas-balance');
   };
 
   /** A book fresh enough to place an order against — never the scan's entry. */
@@ -561,10 +565,12 @@ export function createPairPricer(deps: AppDeps) {
     const eligibility = pairEligibility(legMarkets, nowSec, intent);
 
     // Only walk books once the pair is worth pricing — an ineligible pair has a
-    // reason to show, not a quote.
-    const books = eligibility.eligible
-      ? await Promise.all(legMarkets.map((m) => loadTradeBook(m.marketId)))
-      : legMarkets.map(() => null);
+    // reason to show, not a quote. The gas read needs neither, so it runs
+    // beside the books (both catch every error).
+    const [books, gasBalanceUsd] = await Promise.all([
+      eligibility.eligible ? Promise.all(legMarkets.map((m) => loadTradeBook(m.marketId))) : legMarkets.map(() => null),
+      preloaded ? preloaded.gasBalanceUsd : readGasBalance(fresh),
+    ]);
 
     const legs: BorosPairLegInput[] = legMarkets.map((market, i) => ({
       market,
@@ -588,8 +594,6 @@ export function createPairPricer(deps: AppDeps) {
       nowSec,
       takerFeeOverride,
     });
-
-    const gasBalanceUsd = preloaded ? preloaded.gasBalanceUsd : await readGasBalance(fresh);
 
     // The best-funded OTHER coin, for an open whose own coin cannot spare the
     // gas top-up after its legs.
@@ -1370,6 +1374,9 @@ export function borosPairRoutes(deps: AppDeps) {
           const current = account.positionByMarket.get(marketId) ?? 0;
 
           if (current === 0) {
+            // The read above came 0–2 s after the cancel, so it can still list the
+            // cancelled orders. Do not keep it for the cards.
+            deps.cache.bust(`boros:collaterals:${address}`);
             return reply.ok({ marketId, cancelled: true, closed: false, fill: null });
           }
           // Reduce = trade the opposite way to the position's sign.
@@ -1438,6 +1445,10 @@ export function borosPairRoutes(deps: AppDeps) {
             openSize,
           });
         } catch (err) {
+          // The cancel landed, and a close that timed out may have filled: the
+          // cards must not keep a read from before either.
+          deps.cache.bust(`boros:collaterals:${address}`);
+          bustBorosFills(deps.cache, [marketId]);
           const msg = err instanceof Error ? err.message : String(err);
           throw new CoreError(
             // "any", not "the": cancelOrders sends cancelAll and reports no

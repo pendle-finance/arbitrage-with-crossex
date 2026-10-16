@@ -574,12 +574,17 @@ function PairCard({
     () => (rollCtx.data ? [...rollCtx.data.markets, ...(rollCtx.data.spreadMarkets ?? [])] : undefined),
     [rollCtx.data],
   );
+  // A pair with no rate (under $100, or a rate unknown) has nothing to compare
+  // a probe against, so it sends none: each probe is a paid Boros simulate.
+  const probing = rollDue && netApr !== null;
   const probeTargets = useMemo(
-    () => (rollDue && rollMarkets ? rollTargetsFor(rollMarkets, pair, base, soonest) : []),
-    [rollDue, rollMarkets, pair, base, soonest],
+    () => (probing && rollMarkets ? rollTargetsFor(rollMarkets, pair, base, soonest) : []),
+    [probing, rollMarkets, pair, base, soonest],
   );
   const { yuLegs: rollYuLegs, heldSize: rollHeldSize, pairPerpImUsd: rollPerpImUsd } = pairRollGeometry(pair);
   const [probes, setProbes] = useState<Record<number, RollProbeResult>>({});
+  // Results from before a no-rate spell must not price a later chip.
+  if (!probing && Object.keys(probes).length > 0) setProbes({});
   const opportunities = useMemo(
     () => rollOpportunities(probes, probeTargets, netApr, soonest),
     [probes, probeTargets, netApr, soonest],

@@ -388,6 +388,31 @@ export async function fetchBorosMarket(fetchImpl: FetchLike, marketId: number): 
   return normalizeBorosMarket(found, Date.now() / 1000);
 }
 
+/**
+ * The same read for many ids: up to 100 ids a call, for 2 CU. Boros leaves
+ * out an id it does not serve (no 404), so the map simply lacks it.
+ */
+export async function fetchBorosMarketsByIds(
+  fetchImpl: FetchLike,
+  marketIds: readonly number[],
+): Promise<Map<number, BorosMarket>> {
+  const out = new Map<number, BorosMarket>();
+  for (let i = 0; i < marketIds.length; i += 100) {
+    const body = (await requestJson(
+      fetchImpl,
+      `${BOROS_GATEWAY_BASE_URL}/v1/markets/by-ids?marketIds=${marketIds.slice(i, i + 100).join(',')}`,
+    )) as { results?: Array<Record<string, unknown>> };
+    if (!Array.isArray(body?.results)) {
+      throw new CoreError('Boros /markets/by-ids: unexpected response shape (no results[])', 'network');
+    }
+    const nowSec = Date.now() / 1000;
+    for (const m of body.results) {
+      if (Number.isFinite(Number(m.marketId))) out.set(Number(m.marketId), normalizeBorosMarket(m, nowSec));
+    }
+  }
+  return out;
+}
+
 const MARKET_STATUS: Record<number, string> = { 0: 'Paused', 1: 'CloseOnly', 2: 'Normal' };
 
 function isUnreadableSpread(m: Record<string, unknown>): boolean {

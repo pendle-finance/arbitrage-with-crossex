@@ -421,6 +421,7 @@ export function useDealView(id: string | null) {
     void qc.invalidateQueries({ queryKey: qk.positions });
     void qc.invalidateQueries({ queryKey: ['assetView'] });
     void qc.invalidateQueries({ queryKey: qk.account });
+    void qc.invalidateQueries({ queryKey: qk.openOrders });
   }, [id, mode, qc]);
 
   return query;
@@ -655,7 +656,9 @@ export function useExecuteBorosPair() {
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['boros', 'pair', 'context'] });
       void qc.invalidateQueries({ queryKey: ['assetView'] });
-      void qc.invalidateQueries({ queryKey: qk.positions });
+      // The header margin reads the same server entry the trade just refreshed.
+      // CrossEx positions are left alone: a Boros trade cannot change them.
+      void qc.invalidateQueries({ queryKey: ['borosMargin'] });
     },
   });
 }
@@ -689,7 +692,9 @@ export function useExecuteBorosRoll() {
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['boros', 'pair', 'context'] });
       void qc.invalidateQueries({ queryKey: ['assetView'] });
-      void qc.invalidateQueries({ queryKey: qk.positions });
+      // The header margin reads the same server entry the trade just refreshed.
+      // CrossEx positions are left alone: a Boros trade cannot change them.
+      void qc.invalidateQueries({ queryKey: ['borosMargin'] });
     },
   });
 }
@@ -760,7 +765,9 @@ export function useBorosCancelAndClose() {
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['boros', 'pair', 'context'] });
       void qc.invalidateQueries({ queryKey: ['assetView'] });
-      void qc.invalidateQueries({ queryKey: qk.positions });
+      // The header margin reads the same server entry the trade just refreshed.
+      // CrossEx positions are left alone: a Boros trade cannot change them.
+      void qc.invalidateQueries({ queryKey: ['borosMargin'] });
     },
   });
 }
