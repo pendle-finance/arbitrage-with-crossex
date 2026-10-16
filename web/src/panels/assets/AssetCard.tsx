@@ -207,6 +207,14 @@ const listCoins = (coins: string[]): string =>
 const sizeLabel = (size: number, unit: 'base' | 'usd', base: string): string =>
   unit === 'base' ? fmtTokenQty(size, base) : fmtUsdCompact(size);
 
+/** "0.2 / 0.296 ETH": what a leg holds against what this card needs of it
+ * (his call 2026-10-16: a missing leg shows its true size, not the gap only). */
+const heldOfTarget = (held: number, target: number, unit: 'base' | 'usd', base: string): string =>
+  unit === 'base'
+    ? `${fmtTokenQty(held, base).replace(new RegExp(` ${base}$`), '')} / ${fmtTokenQty(target, base)}`
+    : `${fmtUsdCompact(held)} / ${fmtUsdCompact(target)}`;
+const HELD_OF_TARGET_TITLE = 'Held / needed for this card';
+
 /**
  * The unrounded figure behind an abbreviated one ("1.6k ETH" → "1,539.103
  * ETH"), for a `title`. Sizes here are abbreviated to keep the columns
@@ -3125,11 +3133,19 @@ function PerpOnlyPairCard({
       .slice(0, 2)
       .map((y) => `${sizeText(sizeIn(y, y.unit))} at ${fmtDateShort(y.maturity)}`)
       .join(', ')}`;
+  const ofTarget = (held: number) => heldOfTarget(held, pair.size, pair.unit, base);
+  /** The open the S1 cap allows, when it is less than the leg's gap. */
+  const cappedOpen = (held: number, missing: number) =>
+    missing > 0 && missing < pair.size - held - Math.max(1e-9, pair.size * 1e-6) ? (
+      <div className="text-[11px] text-ink-400">open {sizeText(missing)}</div>
+    ) : null;
   const yuRow = (venue: string, side: 'LONG' | 'SHORT', yu: PendingLeg | null, missing: number, heldElsewhere?: PendingLeg[]) =>
     yu && !(missing > 0) ? (
       <tr key={`yu-${venue}`}>
         <td className={`${cell} whitespace-nowrap`}>{legName(venue, 'yu', side)}</td>
-        <td className={`${cell} num whitespace-nowrap text-right text-ink-100`}>{sizeText(sizeIn(yu, yu.unit))}</td>
+        <td className={`${cell} num whitespace-nowrap text-right text-ink-100`} title={HELD_OF_TARGET_TITLE}>
+          {ofTarget(sizeIn(yu, yu.unit))}
+        </td>
         <td className={`${cell} num whitespace-nowrap text-right`}>
           {yu.lockedApr !== null ? (
             <SignedNumber value={yu.lockedApr} format={fmtPct} />
@@ -3150,8 +3166,9 @@ function PerpOnlyPairCard({
           </span>
           {heldElsewhere && <div className="num mt-1 text-[11px] text-ink-400">{heldText(venue, heldElsewhere)}</div>}
         </td>
-        <td className={`${cell} num whitespace-nowrap text-right ${missing > 0 ? 'text-amber-200/90' : 'text-ink-600'}`}>
-          {missing > 0 ? sizeText(missing) : '—'}
+        <td className={`${cell} num whitespace-nowrap text-right ${missing > 0 ? 'text-amber-200/90' : 'text-ink-400'}`} title={HELD_OF_TARGET_TITLE}>
+          {ofTarget(yu ? sizeIn(yu, yu.unit) : 0)}
+          {cappedOpen(yu ? sizeIn(yu, yu.unit) : 0, missing)}
         </td>
         <td className={`${cell} num text-right text-ink-600`}>—</td>
         <td className={`${cell} whitespace-nowrap text-right`}>
@@ -3265,8 +3282,9 @@ function PerpOnlyPairCard({
                         </Chip>
                       </span>
                     </td>
-                    <td className={`${cell} num whitespace-nowrap text-right text-amber-200/90`}>
-                      {sizeText(Math.min(pair.missingLong, pair.missingShort))}
+                    <td className={`${cell} num whitespace-nowrap text-right text-amber-200/90`} title={HELD_OF_TARGET_TITLE}>
+                      {ofTarget(0)}
+                      {cappedOpen(0, Math.min(pair.missingLong, pair.missingShort))}
                     </td>
                     <td className={`${cell} num text-right text-ink-600`}>—</td>
                     <td className={`${cell} num text-right text-ink-600`}>—</td>
@@ -3383,11 +3401,16 @@ function BorosOnlyPairCard({
   );
   /** A venue's perp rows: the perp that is there, then the gap still to open
    * — both when a perp covers only part of the unit. */
+  const ofTarget = (held: number) => heldOfTarget(held, pair.size, pair.unit, base);
+  /** A venue's perp row: what it holds against what the unit needs, one row
+   * even when a perp covers only part of the unit. */
   const perpRows = (venue: string, side: 'LONG' | 'SHORT', perp: UnpairedPerp | null, missing: number) => [
-    perp && (
+    !(missing > 0) && perp && (
       <tr key={`p-${venue}`}>
         <td className={`${cell} whitespace-nowrap`}>{legName(venue, 'perp', side)}</td>
-        <td className={`${cell} num whitespace-nowrap text-right text-ink-100`}>{sizeText(sizeIn(perp, perp.unit))}</td>
+        <td className={`${cell} num whitespace-nowrap text-right text-ink-100`} title={HELD_OF_TARGET_TITLE}>
+          {ofTarget(sizeIn(perp, perp.unit))}
+        </td>
         <td className={`${cell} num text-right text-ink-600`}>—</td>
         <td className={`${cell} num whitespace-nowrap text-right text-ink-100`}>{fmtUsdCompact(perp.imUsd)}</td>
       </tr>
@@ -3402,7 +3425,9 @@ function BorosOnlyPairCard({
             </Chip>
           </span>
         </td>
-        <td className={`${cell} num whitespace-nowrap text-right text-amber-200/90`}>{sizeText(missing)}</td>
+        <td className={`${cell} num whitespace-nowrap text-right text-amber-200/90`} title={HELD_OF_TARGET_TITLE}>
+          {ofTarget(perp ? sizeIn(perp, perp.unit) : 0)}
+        </td>
         <td className={`${cell} num text-right text-ink-600`}>—</td>
         <td className={`${cell} whitespace-nowrap text-right`}>
           {/* A rolled unit's perps come free when the old legs mature: no
