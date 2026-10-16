@@ -1365,6 +1365,8 @@ export interface BorosRollSimulateResponse {
   exit: { simulation: BorosPairSimulation; gate: BorosPairGate };
   entry: { simulation: BorosPairSimulation; gate: BorosPairGate };
   gate: BorosRollGate;
+  /** The old markets whose resting orders the batch cancels first. */
+  cancelOrdersOn: number[];
   simulatedAtMs: number;
   gasBalanceUsd: number | null;
 }

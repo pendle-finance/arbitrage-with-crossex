@@ -14,7 +14,7 @@ import {
   borosOnlyPairs,
   pairTimelineAxis,
   timelineBar,
-  markExcessBorosPairs,
+  markRolledBorosPairs,
   deriveAsset,
   keptSlice,
   pairBorosCloseLegs,
@@ -996,46 +996,75 @@ describe('borosOnlyPairs', () => {
   });
 });
 
-describe('markExcessBorosPairs', () => {
+describe('markRolledBorosPairs', () => {
   const OLD = 1_790_000_000;
   const NEW = OLD + 37 * DAY;
-  const yuLeg = (venue: string, side: 'LONG' | 'SHORT', maturity: number, marketId: number) => ({
+  const yuLeg = (venue: string, side: 'LONG' | 'SHORT', maturity: number, marketId: number, sizeBase = 10) => ({
     venue,
     side,
     marketId,
     maturity,
-    sizeBase: 10,
-    notionalUsd: 25_000,
+    sizeBase,
+    notionalUsd: 2_500 * sizeBase,
     unit: 'base' as const,
     lockedApr: side === 'LONG' ? -0.05 : 0.08,
     imUsd: 30,
     share: 1,
   });
-  /** A perp-hedged pair, only the three fields the matcher reads. */
-  const hedged = (longVenue: string, shortVenue: string, soonestMaturitySec: number) => ({ longVenue, shortVenue, soonestMaturitySec });
-  const newUnit = () =>
-    borosOnlyPairs([], [yuLeg('GATE', 'LONG', NEW, 11), yuLeg('LIGHTER', 'SHORT', NEW, 12)]).pairs;
+  /** A perp-hedged pair, only the four fields the matcher reads. */
+  const hedged = (longVenue: string, shortVenue: string, soonestMaturitySec: number, size = 10) => ({
+    longVenue,
+    shortVenue,
+    soonestMaturitySec,
+    size,
+  });
+  const newUnit = (size = 10, maturity = NEW) =>
+    borosOnlyPairs([], [yuLeg('GATE', 'LONG', maturity, 11, size), yuLeg('LIGHTER', 'SHORT', maturity, 12, size)]).pairs;
 
-  it('marks a perp-less unit excess when a perp-hedged pair at an EARLIER maturity shares both venues', () => {
-    const marked = markExcessBorosPairs(newUnit(), [hedged('GATE', 'LIGHTER', OLD)]);
+  it('marks an open-only roll of the same size as covered from the old maturity', () => {
+    const marked = markRolledBorosPairs(newUnit(), [hedged('GATE', 'LIGHTER', OLD)]);
     expect(marked).toHaveLength(1);
-    expect(marked[0].isExcess).toBe(true);
+    expect(marked[0].coveredFromSec).toBe(OLD);
   });
 
-  it('is not excess when the shared-venue pair is at the SAME or a LATER maturity, not earlier', () => {
-    expect(markExcessBorosPairs(newUnit(), [hedged('GATE', 'LIGHTER', NEW)])[0].isExcess).toBeUndefined();
-    expect(markExcessBorosPairs(newUnit(), [hedged('GATE', 'LIGHTER', NEW + DAY)])[0].isExcess).toBeUndefined();
+  it('a smaller roll is covered too: the old perps are bigger than it', () => {
+    expect(markRolledBorosPairs(newUnit(4), [hedged('GATE', 'LIGHTER', OLD)])[0].coveredFromSec).toBe(OLD);
   });
 
-  it('is not excess when the earlier pair is on different venues', () => {
-    expect(markExcessBorosPairs(newUnit(), [hedged('GATE', 'OKX', OLD)])[0].isExcess).toBeUndefined();
-    expect(markExcessBorosPairs(newUnit(), [hedged('BINANCE', 'LIGHTER', OLD)])[0].isExcess).toBeUndefined();
+  it('a bigger roll is new exposure: perps missing for its full size (case 1, owner 2026-10-16)', () => {
+    // 1 BTC hedged at 30 Oct, 5 BTC opened at 27 Nov: all 5 BTC ask for perps.
+    const [p] = markRolledBorosPairs(newUnit(5), [hedged('GATE', 'LIGHTER', OLD, 1)]);
+    expect(p.coveredFromSec).toBeUndefined();
+    expect(p.missingLong).toBe(5);
+    expect(p.missingShort).toBe(5);
   });
 
-  it('once the old perp-hedged pair has matured and is gone, the surviving unit is no longer excess', () => {
+  it('two old pairs on the same venues (spread and singles twins) add up', () => {
+    const marked = markRolledBorosPairs(newUnit(10), [hedged('GATE', 'LIGHTER', OLD, 6), hedged('GATE', 'LIGHTER', OLD - DAY, 4)]);
+    expect(marked[0].coveredFromSec).toBe(OLD);
+  });
+
+  it('two rolled units draw on one old pair: the earlier one first, the other is new exposure', () => {
+    const units = [...newUnit(10, NEW + DAY), ...newUnit(10, NEW)];
+    const marked = markRolledBorosPairs(units, [hedged('GATE', 'LIGHTER', OLD, 10)]);
+    expect(marked.find((p) => p.maturity === NEW)?.coveredFromSec).toBe(OLD);
+    expect(marked.find((p) => p.maturity === NEW + DAY)?.coveredFromSec).toBeUndefined();
+  });
+
+  it('is not rolled when the shared-venue pair is at the SAME or a LATER maturity, not earlier', () => {
+    expect(markRolledBorosPairs(newUnit(), [hedged('GATE', 'LIGHTER', NEW)])[0].coveredFromSec).toBeUndefined();
+    expect(markRolledBorosPairs(newUnit(), [hedged('GATE', 'LIGHTER', NEW + DAY)])[0].coveredFromSec).toBeUndefined();
+  });
+
+  it('is not rolled when the earlier pair is on different venues', () => {
+    expect(markRolledBorosPairs(newUnit(), [hedged('GATE', 'OKX', OLD)])[0].coveredFromSec).toBeUndefined();
+    expect(markRolledBorosPairs(newUnit(), [hedged('BINANCE', 'LIGHTER', OLD)])[0].coveredFromSec).toBeUndefined();
+  });
+
+  it('once the old perp-hedged pair has matured and is gone, the surviving unit is no longer rolled', () => {
     // After the old maturity passes, deriveAsset drops the old pair, so the
     // book collapses to this one unit — nothing earlier shares its venues.
-    expect(markExcessBorosPairs(newUnit(), [])[0].isExcess).toBeUndefined();
+    expect(markRolledBorosPairs(newUnit(), [])[0].coveredFromSec).toBeUndefined();
   });
 });
 
