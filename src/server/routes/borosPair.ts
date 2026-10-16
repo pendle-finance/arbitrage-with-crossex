@@ -1067,7 +1067,12 @@ export function borosPairRoutes(deps: AppDeps) {
       // finds, an input it rejects). A 429, a 5xx or a dropped connection is
       // the next poll's problem: for those "waiting for a quote" is the truth.
       let venueError: string | null = null;
-      const preview = plan ? orders?.simulateRollOver?.(plan.closes, plan.opens) : undefined;
+      // The roll closes the short-dated legs, so their resting orders go in
+      // the same batch: one left behind could re-open a leg the roll just moved.
+      // The preview cancels the same ones, or an order in a close's path
+      // (MarketSelfSwap) blocks a roll the send would pass.
+      const cancelOrdersOn = plan ? [...new Set(plan.closes.map((o) => o.marketId))].filter((id) => account.restingOrderMarkets.has(id)) : [];
+      const preview = plan ? orders?.simulateRollOver?.(plan.closes, plan.opens, { cancelOrdersOn }) : undefined;
       const venue = preview
         ? await preview.catch((err: unknown) => {
             const status = err instanceof CoreError ? (err.details as { status?: number } | undefined)?.status : undefined;
@@ -1081,16 +1086,17 @@ export function borosPairRoutes(deps: AppDeps) {
         venue,
         venueError,
       });
-      return { exit, entry, gate, venue, account, openSizeWei, plan, simulatedAtMs: Math.min(exit.simulatedAtMs, entry.simulatedAtMs) };
+      return { exit, entry, gate, venue, account, openSizeWei, plan, cancelOrdersOn, simulatedAtMs: Math.min(exit.simulatedAtMs, entry.simulatedAtMs) };
     };
 
     app.post('/boros/roll/simulate', async (req, reply) => {
-      const { exit, entry, gate, venue, simulatedAtMs } = await priceRoll(req.body as RollBody, false);
+      const { exit, entry, gate, venue, cancelOrdersOn, simulatedAtMs } = await priceRoll(req.body as RollBody, false);
       return reply.ok({
         exit: { simulation: exit.simulation, gate: exit.gate },
         entry: { simulation: entry.simulation, gate: entry.gate },
         gate,
         venue,
+        cancelOrdersOn,
         simulatedAtMs,
         gasBalanceUsd: entry.gasBalanceUsd ?? null,
       });
@@ -1133,7 +1139,7 @@ export function borosPairRoutes(deps: AppDeps) {
       const unlockRoll = lockCloses([...parseLegs(body.exit?.legs), ...parseLegs(body.entry?.legs)].map((leg) => leg.marketId));
       if (!unlockRoll) return refuse(reply, { code: 409, category: 'validation', message: ORDER_RUNNING, retryable: false });
       try {
-        const { exit, entry, gate, venue, account, openSizeWei } = await priceRoll(body, true);
+        const { exit, entry, gate, venue, account, openSizeWei, cancelOrdersOn } = await priceRoll(body, true);
         if (!orders.simulateRollOver) {
           throw new CoreError('Boros roll-over is not configured on this install.', 'not-configured');
         }
@@ -1153,9 +1159,6 @@ export function borosPairRoutes(deps: AppDeps) {
 
         const raced = recentRolls.get(memoKey);
         if (raced) return reply.ok({ ...(await raced.result), replayed: true });
-        // The roll closes the short-dated legs, so their resting orders go in
-        // the same batch: one left behind could re-open a leg the roll just moved.
-        const cancelOrdersOn = [...new Set(plan.closes.map((o) => o.marketId))].filter((id) => account.restingOrderMarkets.has(id));
         const gasTopUpMarket = gasTopUpMarketFor(exit.markets, account, venue?.availableAfter);
         const pending: Promise<RollPayload> = submitBorosRoll(orders, plan, { cancelOrdersOn, gasTopUpMarket }).then((result) => ({
           result,
