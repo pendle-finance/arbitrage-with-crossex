@@ -215,6 +215,18 @@ const heldOfTarget = (held: number, target: number, unit: 'base' | 'usd', base: 
     : `${fmtUsdCompact(held)} / ${fmtUsdCompact(target)}`;
 const HELD_OF_TARGET_TITLE = 'Held / needed for this card';
 
+/** The hover on "(52.00%)" after a leg size: the card holds only part of the
+ * position, so it lists the whole, this card's part, and the rest. */
+const shareTitle = (slice: number, share: number, unit: 'base' | 'usd', base: string, unpaired = false): string => {
+  const whole = share > 0 ? slice / share : slice;
+  return [
+    unpaired ? `${fmtPct(share)} of the position is unpaired` : `This pair uses ${fmtPct(share)} of the position`,
+    `Whole position\t${sizeLabel(whole, unit, base)}`,
+    `${unpaired ? 'Unpaired' : 'This pair'}\t${sizeLabel(slice, unit, base)}`,
+    `${unpaired ? 'In pairs' : 'Other cards'}\t${sizeLabel(Math.max(0, whole - slice), unit, base)}`,
+  ].join('\n');
+};
+
 /**
  * The unrounded figure behind an abbreviated one ("1.6k ETH" → "1,539.103
  * ETH"), for a `title`. Sizes here are abbreviated to keep the columns
@@ -800,10 +812,7 @@ function PairCard({
                     <td className={`${cell} num whitespace-nowrap text-right text-ink-100`}>
                       <span title={exactSize(sizeIn(l, pair.unit), pair.unit, base)}>{sizeLabel(sizeIn(l, pair.unit), pair.unit, base)}</span>
                       {l.share < 0.9995 && (
-                        <span
-                          className="text-ink-500"
-                          title="Shared with another pair. Only this slice counts here."
-                        >
+                        <span className="text-ink-500" title={shareTitle(sizeIn(l, pair.unit), l.share, pair.unit, base)}>
                           {' '}
                           ({fmtPct(l.share)})
                         </span>
@@ -3411,7 +3420,8 @@ function BorosOnlyPairCard({
   /** A venue's perp row: what it holds against what the unit needs, one row
    * even when a perp covers only part of the unit. */
   const perpRows = (venue: string, side: 'LONG' | 'SHORT', perp: UnpairedPerp | null, missing: number) => [
-    !(missing > 0) && perp && (
+    // On a rolled unit a part perp keeps its own row; the old pair covers the rest.
+    (!(missing > 0) || pair.coveredFromSec !== undefined) && perp && (
       <tr key={`p-${venue}`}>
         <td className={`${cell} whitespace-nowrap`}>{legName(venue, 'perp', side)}</td>
         <td className={`${cell} num whitespace-nowrap text-right text-ink-100`}>{sizeText(sizeIn(perp, perp.unit))}</td>
@@ -3419,7 +3429,24 @@ function BorosOnlyPairCard({
         <td className={`${cell} num whitespace-nowrap text-right text-ink-100`}>{fmtUsdCompact(perp.imUsd)}</td>
       </tr>
     ),
-    missing > 0 && (
+    // A rolled unit's perps are the old pair's, and pass to it when the old
+    // legs mature: not a gap to open.
+    missing > 0 && pair.coveredFromSec !== undefined && (
+      <tr key={`pc-${venue}`}>
+        <td className={`${cell} whitespace-nowrap`}>
+          <span className="inline-flex items-center gap-[7px]">
+            {legName(venue, 'perp', side)}
+            <Chip sm title={`Held by the ${fmtDateShort(pair.coveredFromSec)} pair. Hedges these legs from ${fmtDateShort(pair.coveredFromSec)}.`}>
+              from {fmtDateShort(pair.coveredFromSec)} pair
+            </Chip>
+          </span>
+        </td>
+        <td className={`${cell} num whitespace-nowrap text-right text-ink-100`}>{sizeText(missing)}</td>
+        <td className={`${cell} num text-right text-ink-600`}>—</td>
+        <td className={`${cell} num text-right text-ink-600`}>—</td>
+      </tr>
+    ),
+    missing > 0 && pair.coveredFromSec === undefined && (
       <tr key={`pm-${venue}`} className="bg-amber-500/[0.04]">
         <td className={`${cell} whitespace-nowrap`}>
           <span className="inline-flex items-center gap-[7px]">
@@ -3434,21 +3461,15 @@ function BorosOnlyPairCard({
         </td>
         <td className={`${cell} num text-right text-ink-600`}>—</td>
         <td className={`${cell} whitespace-nowrap text-right`}>
-          {/* A rolled unit's perps come free when the old legs mature: no
-              prompt to open more. */}
-          {pair.coveredFromSec !== undefined ? (
-            <span className="text-ink-600">—</span>
-          ) : (
-            <button
-              type="button"
-              className="btn-ghost-xs !py-[5px] !text-grass hover:!border-grass/60"
-              disabled={!onOpenPerps}
-              title={`Open only the ${prettyVenue(venue)} ${side} perp, at ${sizeText(missing)}`}
-              onClick={() => onOpenPerps?.({ long: side === 'LONG', short: side === 'SHORT' })}
-            >
-              Open leg
-            </button>
-          )}
+          <button
+            type="button"
+            className="btn-ghost-xs !py-[5px] !text-grass hover:!border-grass/60"
+            disabled={!onOpenPerps}
+            title={`Open only the ${prettyVenue(venue)} ${side} perp, at ${sizeText(missing)}`}
+            onClick={() => onOpenPerps?.({ long: side === 'LONG', short: side === 'SHORT' })}
+          >
+            Open leg
+          </button>
         </td>
       </tr>
     ),
@@ -3551,7 +3572,7 @@ function BorosOnlyPairCard({
                     <td className={`${cell} num whitespace-nowrap text-right text-ink-100`}>
                       {sizeText(sizeIn(y, y.unit))}
                       {y.share < 0.9995 && (
-                        <span className="ml-1 text-ink-500" title="This unit's slice of the venue leg.">
+                        <span className="ml-1 text-ink-500" title={shareTitle(sizeIn(y, y.unit), y.share, y.unit, base)}>
                           ({fmtPct(y.share)})
                         </span>
                       )}
@@ -3811,7 +3832,7 @@ function UngroupedCard({
                       <span title={exactSize(sizeIn(l, l.unit), l.unit, base)}>{sizeLabel(sizeIn(l, l.unit), l.unit, base)}</span>
                       <span className="ml-1 text-ink-500">({fmtUsdCompact(l.notionalUsd)})</span>
                       {!whole(l.share) && (
-                        <span className="ml-1 text-ink-500" title="Only this slice is unpaired.">
+                        <span className="ml-1 text-ink-500" title={shareTitle(sizeIn(l, l.unit), l.share, l.unit, base, true)}>
                           ({fmtPct(l.share)})
                         </span>
                       )}
