@@ -54,7 +54,8 @@ function ratePct(rebate: Rebate): string {
 }
 
 function labelOf(mode: Rebate['mode'], pcts: string[]): string {
-  return mode === 'absolute' ? `Fee capped at ${pcts.join('-')}` : `${pcts.join('-')} fee rebate`;
+  const range = pcts.length > 1 ? `${pcts[0].replace(/%$/, '')}-${pcts[pcts.length - 1]}` : pcts[0];
+  return mode === 'absolute' ? `Fee capped at ${range}` : `${range} fee rebate`;
 }
 
 /** The chip label for the opportunity card: relative → "20% fee rebate";
@@ -72,7 +73,7 @@ export function rebateLegsNote(
 ): string {
   const pcts = legs.map((leg) => ratePct(rebateForMarket(rebate, leg.marketId)));
   if (new Set(pcts).size < 2) return '';
-  return legs.map((leg, i) => `${leg.venue} ${leg.side.toLowerCase()} leg: ${pcts[i]}.`).join(' ');
+  return legs.map((leg, i) => `• ${leg.venue} ${leg.side.toLowerCase()}: ${pcts[i]}`).join('\n');
 }
 
 export function rebateAccountLabel(rebate: Rebate): string {

@@ -102,15 +102,17 @@ describe('per-market overrides', () => {
     expect(rebateChipLabel(nayt, [232])).toBe('50% fee rebate');
     expect(rebateChipLabel(nayt, [1])).toBe('40% fee rebate');
     expect(rebateChipLabel(nayt, [232, 233])).toBe('50% fee rebate');
-    expect(rebateChipLabel(nayt, [1, 232])).toBe('40%-50% fee rebate');
-    expect(rebateChipLabel(nayt, [232, 1])).toBe('40%-50% fee rebate');
+    expect(rebateChipLabel(nayt, [1, 232])).toBe('40-50% fee rebate');
+    expect(rebateChipLabel(nayt, [232, 1])).toBe('40-50% fee rebate');
     expect(rebateChipLabel(nayt)).toBe('40% fee rebate');
+    const abs = absolute({ marketFeeOverrides: [{ marketId: 7, settlementFeePercentage: 0.02, rebateBps: null }] });
+    expect(rebateChipLabel(abs, [7, 8])).toBe('Fee capped at 2-5%');
   });
 
   it('names each leg rate only when the legs differ', () => {
     const short = { marketId: 1, venue: 'Hyperliquid', side: 'SHORT' as const };
     const long = { marketId: 232, venue: 'Gate', side: 'LONG' as const };
-    expect(rebateLegsNote(nayt, [short, long])).toBe('Hyperliquid short leg: 40%. Gate long leg: 50%.');
+    expect(rebateLegsNote(nayt, [short, long])).toBe('• Hyperliquid short: 40%\n• Gate long: 50%');
     expect(rebateLegsNote(nayt, [{ ...short, marketId: 233 }, long])).toBe('');
   });
 
