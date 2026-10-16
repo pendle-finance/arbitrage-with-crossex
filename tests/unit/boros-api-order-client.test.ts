@@ -111,9 +111,9 @@ function fakeApi(
         ],
       });
     }
-    if (path.startsWith('/v1/simulations/roll-over')) {
+    if (path.startsWith('/v1/simulations/roll-over') || path.startsWith('/v2/simulations/roll-over')) {
       if (over.rollSimReturns !== undefined) return ok(over.rollSimReturns);
-      // `/roll-over` takes legs; `/roll-over-orders` takes the closes and opens themselves.
+      // v1 `/roll-over` takes legs; v2 takes the closes and opens themselves.
       const legs = (body.legs ?? []) as Array<{ fromMarketId: number; toMarketId: number; size: string }>;
       const closes = (body.closes as Array<{ marketId: number; size: string }> | undefined) ?? legs.map((l) => ({ marketId: l.fromMarketId, size: l.size }));
       const opens = (body.opens as Array<{ marketId: number; size: string }> | undefined) ?? legs.map((l) => ({ marketId: l.toMarketId, size: l.size }));
@@ -679,7 +679,7 @@ describe('makeBorosApiOrderClient — rollOver', () => {
       [leg({ direction: 'long', limitApr: 0.091 }), leg({ marketId: BN, size: 10, sizeWei: '9999999999999999999', limitApr: 0.044 })],
       [leg({ marketId: 59, direction: 'short', limitApr: 0.031 })],
     );
-    const sent = api.calls.find((c) => c.path === '/v1/simulations/roll-over-orders')!.body;
+    const sent = api.calls.find((c) => c.path === '/v2/simulations/roll-over')!.body;
     expect(sent.closes).toEqual([
       { marketId: HL, size: (10n * 10n ** 18n).toString(), rate: 0.091, ammId: 0 },
       { marketId: BN, size: '9999999999999999999', rate: 0.044, ammId: 0 },
