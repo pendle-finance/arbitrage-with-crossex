@@ -185,8 +185,8 @@ describe('evaluateRollGate', () => {
         availableAfter: null,
       });
       const [, line, ...rest] = evaluateRollGate({ ...rollInput(), venue }).blockers[0].message.split('\n');
-      expect(line).toBe('Re-entry · Hyperliquid ETH new — Your own resting order on this market is in the way. Cancel it on Boros, then roll.');
-      expect(rest).toEqual([]);
+      expect(line).toBe('• Re-entry · Hyperliquid ETH new: Your own order on this market blocks the fill.');
+      expect(rest).toEqual(['Fix: Cancel it on Boros, then roll.']);
     }
   });
 
@@ -198,10 +198,26 @@ describe('evaluateRollGate', () => {
       orders: venueOk().orders.map((o, i) => ({ ...o, filled: false, matchedSize: null, error: i === 2 ? error : null })),
       availableAfter: null,
     });
-    const [, line] = evaluateRollGate({ ...rollInput(), venue }).blockers[0].message.split('\n');
-    expect(line).toBe(
-      'Re-entry · Hyperliquid ETH new — This account is in as many Boros markets as it may hold, and each one has a position or an order. Close a position you no longer need, then roll.',
-    );
+    const [, line, fix] = evaluateRollGate({ ...rollInput(), venue }).blockers[0].message.split('\n');
+    expect(line).toBe('• Re-entry · Hyperliquid ETH new: Market limit reached: every Boros market slot holds a position or an order.');
+    expect(fix).toBe('Fix: Close a position you no longer need, then roll.');
+  });
+
+  // Live 16 Oct: both opens refused for the market cap read as one sentence
+  // twice. Legs sharing a cause share one bullet, and the fix is said once.
+  it('groups the legs that share a cause into one bullet and says each fix once', () => {
+    const error = 'MMMarketLimitExceeded()';
+    const venue = venueOk({
+      status: 'Refused',
+      reason: { code: 'MM_MARKET_LIMIT_EXCEEDED', message: error },
+      orders: venueOk().orders.map((o, i) => ({ ...o, filled: false, matchedSize: null, error: i >= 2 ? error : null })),
+      availableAfter: null,
+    });
+    expect(evaluateRollGate({ ...rollInput(), venue }).blockers[0].message.split('\n')).toEqual([
+      'The venue refuses this roll:',
+      '• Re-entry · Hyperliquid ETH new, Binance ETH new: Market limit reached: every Boros market slot holds a position or an order.',
+      'Fix: Close a position you no longer need, then roll.',
+    ]);
   });
 
   it("blocks on the venue's refusal, naming the legs the book cannot fill", () => {
@@ -220,10 +236,8 @@ describe('evaluateRollGate', () => {
     expect(head).toBe('The venue refuses this roll:');
     // …and this side's book does NOT agree it is short, so no depth is quoted:
     // a book that moved since it was read has nothing truthful to add.
-    expect(line).toBe(
-      'Re-entry · Hyperliquid ETH new — Slippage too high: the size does not fill inside the tolerance. Widen the tolerance or reduce the size.',
-    );
-    expect(rest).toEqual([]);
+    expect(line).toBe('• Re-entry · Hyperliquid ETH new: Slippage too high: the size does not fill inside the tolerance.');
+    expect(rest).toEqual(['Fix: Widen the tolerance or reduce the size.']);
   });
 
   it('gives each refused leg its own line, cause and remedy', () => {
@@ -236,10 +250,16 @@ describe('evaluateRollGate', () => {
     });
     const lines = evaluateRollGate({ ...rollInput(), venue }).blockers[0].message.split('\n');
     // The leg the venue did not name (it simply never ran) gets no line.
-    expect(lines).toHaveLength(4);
-    expect(lines[1]).toMatch(/^Exit · .+ — Slippage too high: /);
-    expect(lines[2]).toMatch(/^Re-entry · .+ — Rate limit exceeded \(Large Rate Deviation\): .+ Reduce the size\.$/);
-    expect(lines[3]).toMatch(/^Re-entry · .+ — Not enough margin\. Add margin or roll a smaller size\.$/);
+    expect(lines).toHaveLength(7);
+    expect(lines[1]).toMatch(/^• Exit · .+: Slippage too high: /);
+    expect(lines[2]).toMatch(/^• Re-entry · .+: Rate limit exceeded \(Large Rate Deviation\): the rate sits too far from the venue's mark\.$/);
+    expect(lines[3]).toMatch(/^• Re-entry · .+: Not enough margin\.$/);
+    // Each cause's own remedy, once.
+    expect(lines.slice(4)).toEqual([
+      'Fix: Widen the tolerance or reduce the size.',
+      'Fix: Reduce the size.',
+      'Fix: Add margin or roll a smaller size.',
+    ]);
   });
 
   it("reports ONE error per leg: the venue's line replaces the pair gate's for a leg both flagged", () => {
@@ -263,9 +283,10 @@ describe('evaluateRollGate', () => {
     // One box, one line per leg: A in the venue's words, B in the gate's.
     expect(g.blockers.map((b) => b.code)).toEqual(['venue-refused']);
     const lines = g.blockers[0].message.split('\n');
-    expect(lines).toHaveLength(3);
-    expect(lines[1]).toMatch(/^Re-entry · .+ — Slippage too high: /);
-    expect(lines[2]).toBe('Re-entry · B: bound outside the band');
+    expect(lines).toHaveLength(4);
+    expect(lines[1]).toMatch(/^• Re-entry · .+: Slippage too high: /);
+    expect(lines[2]).toBe('• Re-entry · B: bound outside the band');
+    expect(lines[3]).toBe('Fix: Widen the tolerance or reduce the size.');
   });
 
   it('keeps every distinct cause a leg the venue did not name carries', () => {
@@ -285,7 +306,11 @@ describe('evaluateRollGate', () => {
       availableAfter: null,
     });
     const lines = evaluateRollGate({ ...rollInput({ entry: flagged }), venue }).blockers[0].message.split('\n');
-    expect(lines.slice(2)).toEqual(['Re-entry · B: bound outside the band', 'Re-entry · B: margin unknown']);
+    expect(lines.slice(2)).toEqual([
+      '• Re-entry · B: bound outside the band',
+      '• Re-entry · B: margin unknown',
+      'Fix: Widen the tolerance or reduce the size.',
+    ]);
   });
 
   it('calls it liquidity only when the whole book cannot supply the size', () => {
@@ -300,7 +325,10 @@ describe('evaluateRollGate', () => {
     });
     const g = evaluateRollGate({ ...rollInput({ exit: thin }), venue });
     const refused = g.blockers.find((b) => b.code === 'venue-refused');
-    expect(refused?.message.split('\n')[1]).toMatch(/^Exit · .+ — Insufficient liquidity: the whole book holds 1 \w+\. Reduce the size\.$/);
+    expect(refused?.message.split('\n').slice(1)).toEqual([
+      expect.stringMatching(/^• Exit · .+: Insufficient liquidity: the whole book holds 1 \w+\.$/),
+      'Fix: Reduce the size.',
+    ]);
   });
 
   it('names how much the book DOES fill whole when the venue refuses a leg for liquidity', () => {
@@ -318,14 +346,15 @@ describe('evaluateRollGate', () => {
     // line names the cause as slippage and the depth that does fill.
     expect(g.blockers[0].message.split('\n')).toEqual([
       'The venue refuses this roll:',
-      'Re-entry · Hyperliquid ETH new — Slippage too high: only 562.6 USDT fills inside the 0.25% tolerance. Widen the tolerance or reduce the size.',
+      '• Re-entry · Hyperliquid ETH new: Slippage too high: only 562.6 USDT fills inside the 0.25% tolerance.',
+      'Fix: Widen the tolerance or reduce the size.',
     ]);
   });
 
   it("blocks on the venue's margin refusal and reports the shortfall it simulated", () => {
     const venue = venueOk({ status: 'Refused', reason: { code: 'INSUFFICIENT_MARGIN', message: 'InsufficientMargin' }, availableAfter: -250 });
     const g = evaluateRollGate({ ...rollInput(), venue });
-    expect(g.blockers[0].message).toBe('The venue refuses this roll — InsufficientMargin. Add margin or roll a smaller size.');
+    expect(g.blockers[0].message).toBe('The venue refuses this roll:\n• InsufficientMargin.\nFix: Add margin or roll a smaller size.');
     expect(g.margin.shortfall).toBe(250);
   });
 
@@ -335,7 +364,7 @@ describe('evaluateRollGate', () => {
     const venue = venueOk({ status: 'Refused', reason: { code: 'MM_MARKET_LIMIT_EXCEEDED', message: 'MMMarketLimitExceeded()' }, availableAfter: null });
     const g = evaluateRollGate({ ...rollInput(), venue });
     expect(g.blockers[0].message).toBe(
-      'The venue refuses this roll — This account is in as many Boros markets as it may hold, and each one has a position or an order. Close a position you no longer need, then roll.',
+      'The venue refuses this roll:\n• Market limit reached: every Boros market slot holds a position or an order.\nFix: Close a position you no longer need, then roll.',
     );
   });
 
@@ -351,7 +380,7 @@ describe('evaluateRollGate', () => {
       marginRequired: 1_000,
     });
     const g = evaluateRollGate({ ...rollInput(), venue });
-    expect(g.blockers[0].message).toBe('The venue refuses this roll — Not enough margin. Add margin or roll a smaller size.');
+    expect(g.blockers[0].message).toBe('The venue refuses this roll:\n• Not enough margin.\nFix: Add margin or roll a smaller size.');
     expect(g.margin).toEqual({ need: 1_000, availableBefore: 5_000, availableAfter: null, availableAfterExit: 700, shortfall: 300 });
   });
 

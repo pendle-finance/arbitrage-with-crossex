@@ -252,7 +252,7 @@ describe('POST /api/boros/roll/simulate', () => {
     const res = await post('/api/boros/roll/simulate', rollBody());
     expect(res.statusCode).toBe(200);
     const blocker = res.json().data.gate.blockers.find((b: { code: string }) => b.code === 'venue-refused');
-    expect(blocker.message).toMatch(/^The venue refuses this roll:\nRe-entry · Hyperliquid ETH 60d — /);
+    expect(blocker.message).toMatch(/^The venue refuses this roll:\n• Re-entry · Hyperliquid ETH 60d: /);
     // Execute re-asks the venue, gets the same refusal, and sends nothing.
     const exec = await post('/api/boros/roll/execute', rollBody());
     expect(exec.statusCode).toBe(409);

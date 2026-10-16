@@ -144,14 +144,19 @@ const SELF_SWAP = /self\s*swap/i;
  * that cannot supply the size at ANY rate is liquidity; one that can, but not
  * inside the bound, is slippage. Every other cause keeps the venue's words.
  */
-function refusalCause(error: string, sim: SimulatedLeg | null, collateral: string): string {
+function refusalCause(error: string, sim: SimulatedLeg | null, collateral: string): Refusal {
   const pct = (n: number) => `${(n * 100).toFixed(2)}%`;
+  const reduce = 'Reduce the size.';
   switch (classifyLegFailure(error)) {
     case 'insufficient-depth': {
       if (sim === null || sim.shortfallSize > 0 || sim.bookStatus !== 'ok') {
-        return sim !== null && sim.bookStatus !== 'unavailable'
-          ? `Insufficient liquidity: the whole book holds ${fmtSize(sim.estFillSize)} ${collateral}. Reduce the size.`
-          : 'Insufficient liquidity. Reduce the size.';
+        return {
+          cause:
+            sim !== null && sim.bookStatus !== 'unavailable'
+              ? `Insufficient liquidity: the whole book holds ${fmtSize(sim.estFillSize)} ${collateral}.`
+              : 'Insufficient liquidity.',
+          fix: reduce,
+        };
       }
       // Widening only helps while the venue's rate band has room for the
       // bound. When even the widest tolerance the band allows does not hold
@@ -164,30 +169,60 @@ function refusalCause(error: string, sim: SimulatedLeg | null, collateral: strin
           withinBand = cum;
         }
         if (withinBand < size) {
-          return `Rate limit exceeded: only ${fmtSize(withinBand)} ${collateral} fills inside the venue's max rate deviation. Reduce the size.`;
+          return { cause: `Rate limit exceeded: only ${fmtSize(withinBand)} ${collateral} fills inside the venue's max rate deviation.`, fix: reduce };
         }
       }
       // Only when this side's book AGREES it is short: one that has moved
       // since it was read has nothing truthful to add (nerax1s, e79d672).
-      return sim.sizeWithinTolerance !== null && sim.sizeWithinTolerance < size
-        ? `Slippage too high: only ${fmtSize(sim.sizeWithinTolerance)} ${collateral} fills inside the ${pct(sim.slippageApr)} tolerance. Widen the tolerance or reduce the size.`
-        : 'Slippage too high: the size does not fill inside the tolerance. Widen the tolerance or reduce the size.';
+      return {
+        cause:
+          sim.sizeWithinTolerance !== null && sim.sizeWithinTolerance < size
+            ? `Slippage too high: only ${fmtSize(sim.sizeWithinTolerance)} ${collateral} fills inside the ${pct(sim.slippageApr)} tolerance.`
+            : 'Slippage too high: the size does not fill inside the tolerance.',
+        fix: 'Widen the tolerance or reduce the size.',
+      };
     }
     case 'rate-deviation':
-      return `Rate limit exceeded (${error}): the rate sits too far from the venue's mark. Reduce the size.`;
+      return { cause: `Rate limit exceeded (${error}): the rate sits too far from the venue's mark.`, fix: reduce };
     case 'insufficient-margin':
-      return `${error}. Add margin or roll a smaller size.`;
+      return { cause: `${error}.`, fix: 'Add margin or roll a smaller size.' };
     case 'no-gas':
-      return `${error}. Top up the gas balance.`;
+      return { cause: `${error}.`, fix: 'Top up the gas balance.' };
     // Reached when the roll needs more slots than its closes free, for
     // example one spread into two singles with every other market in use.
     case 'market-limit':
-      return 'This account is in as many Boros markets as it may hold, and each one has a position or an order. Close a position you no longer need, then roll.';
+      return { cause: 'Market limit reached: every Boros market slot holds a position or an order.', fix: 'Close a position you no longer need, then roll.' };
     default:
       return SELF_SWAP.test(error)
-        ? 'Your own resting order on this market is in the way. Cancel it on Boros, then roll.'
-        : `${error}.`;
+        ? { cause: 'Your own order on this market blocks the fill.', fix: 'Cancel it on Boros, then roll.' }
+        : { cause: `${error}.`, fix: null };
   }
+}
+
+interface Refusal {
+  cause: string;
+  /** The cause's own remedy, said once per message however many legs share it. */
+  fix: string | null;
+}
+
+/** "The venue refuses this roll:", one bullet per cause naming the legs that
+ * share it, then each distinct fix once (his call 2026-10-16: no wall of text). */
+function refusalMessage(
+  items: ReadonlyArray<{ leg: { action: string; market: string } | null; refusal: Refusal }>,
+  extra: readonly string[] = [],
+): string {
+  const byCause = new Map<string, { labels: Map<string, string[]>; fix: string | null }>();
+  for (const { leg, refusal } of items) {
+    const group = byCause.get(refusal.cause) ?? { labels: new Map<string, string[]>(), fix: refusal.fix };
+    if (leg !== null) group.labels.set(leg.action, [...(group.labels.get(leg.action) ?? []), leg.market]);
+    byCause.set(refusal.cause, group);
+  }
+  const bullets = [...byCause].map(([cause, { labels }]) => {
+    const who = [...labels].map(([action, markets]) => `${action} · ${markets.join(', ')}`).join('; ');
+    return `• ${who ? `${who}: ` : ''}${cause}`;
+  });
+  const fixes = [...new Set([...byCause.values()].flatMap((g) => (g.fix ? [g.fix] : [])))].map((f) => `Fix: ${f}`);
+  return ['The venue refuses this roll:', ...bullets, ...extra.map((e) => `• ${e}`), ...fixes].join('\n');
 }
 
 export function evaluateRollGate(input: EvaluateRollInput): RollGate {
@@ -341,10 +376,13 @@ export function evaluateRollGate(input: EvaluateRollInput): RollGate {
       // the four legs can fail for four different reasons, and one shared
       // "widen the tolerance" is wrong advice for the margin one (his call
       // 2026-09-22). Newline-separated; the panel renders them stacked.
-      const lines = named.map((o) => {
+      const items = named.map((o) => {
         const step = o.action === 'close' ? exit : entry;
         const sim = step.simulation.legs.find((l) => l.marketId === o.marketId) ?? null;
-        return `${o.action === 'close' ? 'Exit' : 'Re-entry'} · ${marketName(o.marketId)} — ${refusalCause(o.error ?? '', sim, step.simulation.collateral)}`;
+        return {
+          leg: { action: o.action === 'close' ? 'Exit' : 'Re-entry', market: marketName(o.marketId) },
+          refusal: refusalCause(o.error ?? '', sim, step.simulation.collateral),
+        };
       });
       /**
        * ONE error per leg, in one list (his call 2026-09-22). The pair gates
@@ -373,21 +411,19 @@ export function evaluateRollGate(input: EvaluateRollInput): RollGate {
         seen.add(`${key}:${b.code}`);
         folded.push(b.message.replace(/^(Exit|Re-entry): /, '$1 · '));
       }
-      blockers.push({ code: 'venue-refused', message: ['The venue refuses this roll:', ...lines, ...folded].join('\n') });
+      blockers.push({ code: 'venue-refused', message: refusalMessage(items, folded) });
     } else {
       const why = venue.reason?.message ?? 'refused';
       const cause = classifyLegFailure(why);
       // No one order to blame: two opens that each pass alone can still need
       // one more market slot than the closes free (live 16 Oct). The cause's
       // own advice, then; "widen" is only for a fill problem.
-      blockers.push({
-        code: 'venue-refused',
-        message: VENUE_MARGIN_CODE.test(venue.reason?.code ?? '')
-          ? `The venue refuses this roll — ${why}. Add margin or roll a smaller size.`
-          : cause === 'market-limit' || cause === 'no-gas' || SELF_SWAP.test(why)
-            ? `The venue refuses this roll — ${refusalCause(why, null, '')}`
-            : `The venue refuses this roll — ${why}. Widen the tolerance or reduce the size.`,
-      });
+      const refusal: Refusal = VENUE_MARGIN_CODE.test(venue.reason?.code ?? '')
+        ? { cause: `${why}.`, fix: 'Add margin or roll a smaller size.' }
+        : cause === 'market-limit' || cause === 'no-gas' || SELF_SWAP.test(why)
+          ? refusalCause(why, null, '')
+          : { cause: `${why}.`, fix: 'Widen the tolerance or reduce the size.' };
+      blockers.push({ code: 'venue-refused', message: refusalMessage([{ leg: null, refusal }]) });
     }
   }
 
