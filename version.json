@@ -1,9 +1,9 @@
 {
-  "version": "1.7.5",
+  "version": "1.7.6",
   "highlights": [
-    "Spread markets: where Boros lists one, a single Boros order hedges your Hyperliquid/Gate pair",
-    "Orders never stop on low Boros gas: the top-up comes from your best-funded coin when the traded one can't spare it",
-    "ETH and BTC coin books show \"Hedged\" only when the legs match within 0.1%",
-    "The Pairs tab is now \"Fixed Rate Pairs\". A spread and single legs show as separate pairs, so you can compare and close them apart"
+    "Roll between singles and a spread: Boros previews every roll, and the window shows the margin it needs",
+    "Fixed Rate Pairs splits your book by size, so a small single no longer hides the spread offer",
+    "A trade shows on your cards in seconds, not minutes",
+    "Clearer roll messages, and a roll into a market you hold the other way can now be sent"
   ]
 }
