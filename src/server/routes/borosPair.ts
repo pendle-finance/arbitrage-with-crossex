@@ -1072,7 +1072,7 @@ export function borosPairRoutes(deps: AppDeps) {
       // The preview cancels the same ones, or an order in a close's path
       // (MarketSelfSwap) blocks a roll the send would pass.
       const cancelOrdersOn = plan ? [...new Set(plan.closes.map((o) => o.marketId))].filter((id) => account.restingOrderMarkets.has(id)) : [];
-      const preview = plan ? orders?.simulateRollOver?.(plan.closes, plan.opens, { cancelOrdersOn }) : undefined;
+      const preview = plan ? orders?.simulateRollOver?.(plan.closes, plan.opens, { cancelOrdersOn, fresh }) : undefined;
       const venue = preview
         ? await preview.catch((err: unknown) => {
             const status = err instanceof CoreError ? (err.details as { status?: number } | undefined)?.status : undefined;

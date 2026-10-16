@@ -644,8 +644,10 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
    * IP at 200 computing units a minute (the root's market-acc infos cost 5).
    * Read afresh on every poll, the preview alone spent 14 units a poll, 210 a
    * minute, and every read from the IP failed with 429 until the minute
-   * turned. So a preview reuses its account reads for PREVIEW_READ_TTL_MS. A
-   * send always reads fresh, and clears them.
+   * turned. So a polled preview reuses its account reads for
+   * PREVIEW_READ_TTL_MS. The check before a send reads fresh (`fresh`), and a
+   * send or a cancel clears the reads before it starts and after it ends, so
+   * no read taken mid-send outlives it.
    */
   const previewReads = new Map<string, { at: number; value: Promise<unknown> }>();
   const previewRead = <T>(key: string, load: () => Promise<T>): Promise<T> => {
@@ -847,9 +849,10 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
   const simulateRollOver = async (
     closes: BorosMarketOrderRequest[],
     opens: BorosMarketOrderRequest[],
-    opts?: Pick<PlaceOrdersOptions, 'cancelOrdersOn'>,
+    opts?: Pick<PlaceOrdersOptions, 'cancelOrdersOn'> & { fresh?: boolean },
   ): Promise<BorosRollSimulation> => {
     const cancelMarketIds = opts?.cancelOrdersOn ?? [];
+    const cached = opts?.fresh !== true;
     const wire = (req: BorosMarketOrderRequest) => ({
       marketId: req.marketId,
       size: req.sizeWei ?? parseUnits(decimalString(req.size), DECIMALS).toString(),
@@ -859,10 +862,10 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
     const marketAcc = await marketAccFor(closes[0].marketId);
     const marketIds = [...closes, ...opens].map((o) => o.marketId);
     const exitsFor = async (withEmpty: boolean): Promise<number[]> =>
-      (await exitMarketIdsFor(marketIds, withEmpty, true)).find((e) => e.marketAcc === marketAcc.toLowerCase())?.ids ?? [];
+      (await exitMarketIdsFor(marketIds, withEmpty, cached)).find((e) => e.marketAcc === marketAcc.toLowerCase())?.ids ?? [];
     const [exits, exitAfterCloseMarketIds] = await Promise.all([
       exitsFor(false),
-      flatAfterCloses([...closes, ...opens], closes.length, cancelMarketIds, true),
+      flatAfterCloses([...closes, ...opens], closes.length, cancelMarketIds, cached),
     ]);
     const run = async (exitMarketIds: number[]) =>
       readRollSimulation(
@@ -895,7 +898,16 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
    * runs (MarginManager.sol) — a caller whose leading legs CLOSE positions
    * places it after them, so that check sees the margin they free.
    */
-  const execute = async (
+  const execute = async (...args: Parameters<typeof executeOnce>): ReturnType<typeof executeOnce> => {
+    // A send changes the account: no read from before or during it is reused.
+    previewReads.clear();
+    try {
+      return await executeOnce(...args);
+    } finally {
+      previewReads.clear();
+    }
+  };
+  const executeOnce = async (
     reqs: BorosMarketOrderRequest[],
     legCalldatas: Hex[],
     opts?: PlaceOrdersOptions,
@@ -905,8 +917,6 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
      * exits of the markets those closes empty). */
     between: Hex[] = [],
   ): Promise<BorosLegFill[]> => {
-    // A send changes the account: the next preview reads it afresh.
-    previewReads.clear();
     let signed: SignedCall[];
     let topUpCount: number;
     const at = Math.max(0, Math.min(reqs.length, opts?.topUpAfter ?? 0));
@@ -1039,7 +1049,8 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
     async cancelOrders(marketId: number): Promise<void> {
       const calls = await cancelCalldatas([marketId]);
       if (!calls.length) return;
-      const res = await submitCalls(await signCalls(calls));
+      previewReads.clear();
+      const res = await submitCalls(await signCalls(calls)).finally(() => previewReads.clear());
       // An empty result is "we cannot tell",
       // and reporting a cancel that may never have been submitted as done is
       // the one answer a remediation path must not give.

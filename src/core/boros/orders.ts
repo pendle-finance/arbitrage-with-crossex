@@ -218,11 +218,13 @@ export interface BorosOrderClient {
    * A roll — every close, then every open, FOK — previewed by the venue on
    * one simulated account state, as `placeMarketOrders` would send it. Pass
    * the batch's own `cancelOrdersOn`: the preview cancels those orders first.
+   * `fresh` reads the account afresh: the check before a send must not judge
+   * it on a polled preview's reads.
    */
   simulateRollOver?(
     closes: BorosMarketOrderRequest[],
     opens: BorosMarketOrderRequest[],
-    opts?: Pick<PlaceOrdersOptions, 'cancelOrdersOn'>,
+    opts?: Pick<PlaceOrdersOptions, 'cancelOrdersOn'> & { fresh?: boolean },
   ): Promise<BorosRollSimulation>;
   /** Force-cancel every resting order on one market (§6A remediation). */
   cancelOrders(marketId: number): Promise<void>;
