@@ -1024,8 +1024,20 @@ function PairCard({
  * runs -- both NET of the round trip, so the headline is a number actually
  * received -- and the selected option opens its own fee breakdown underneath.
  */
-/** Mirrors SIMULATION_MAX_AGE_MS in the ticket and src/core/boros/pair.ts. */
-const ROLL_QUOTE_MAX_AGE_MS = 12_000;
+/**
+ * The roll windows' poll. Each poll reads three books and the venue's preview,
+ * and the venue meters each client IP at 200 computing units a minute: a 4 s
+ * poll used most of that, so a second window or a burst hit 429 and the window
+ * fell back to "waiting for a quote".
+ */
+const ROLL_POLL_MS = 10_000;
+/**
+ * Longer than the ticket's 12 s (SIMULATION_MAX_AGE_MS): the roll polls every
+ * 10 s, so 12 s would flag a slow poll as out of date. The send re-fetches
+ * the books and re-simulates, so this only hides a quote that stopped
+ * refreshing — two missed polls.
+ */
+const ROLL_QUOTE_MAX_AGE_MS = 25_000;
 /** The ticket's cap on the tolerance, in % APR. */
 const ROLL_MAX_SLIP_PCT = 10;
 /** Used when no market on a batch reports a usable deviation cap — the same
@@ -2251,7 +2263,7 @@ function RollReview({
   // The report page reads the execute response, not the quote — so once the
   // roll has been sent the poll stops rather than re-pricing a closed pair.
   const [out, setOut] = useState<{ payload: BorosRollExecuteResponse } | { error: string } | null>(null);
-  const roll = useBorosRollSimulation(rollReq, rollReq !== null && out === null);
+  const roll = useBorosRollSimulation(rollReq, rollReq !== null && out === null, ROLL_POLL_MS);
   const exitSim = roll.data?.exit.simulation ?? null;
   const entrySim = roll.data?.entry.simulation ?? null;
   const pending = roll.isPending;
@@ -2670,7 +2682,7 @@ function OpenOnlyReview({
   // The report reads the execute response, not the quote — so once sent the
   // poll stops rather than re-pricing a position that is already open.
   const [out, setOut] = useState<{ payload: BorosPairExecuteResponse } | { error: string } | null>(null);
-  const sim = useBorosPairSimulation(req, req !== null && out === null);
+  const sim = useBorosPairSimulation(req, req !== null && out === null, { refetchInterval: ROLL_POLL_MS });
   const simulation = sim.data?.simulation ?? null;
 
   const now = useNow(1_000);
@@ -2899,8 +2911,8 @@ function RollOption({
       ? { address, legs: entryLegBodies({ target, pair, slippageApr: entrySlippageApr, size }), intent: 'open' }
       : null;
 
-  const exit = useBorosPairSimulation(exitReq, exitReq !== null);
-  const entry = useBorosPairSimulation(entryReq, entryReq !== null);
+  const exit = useBorosPairSimulation(exitReq, exitReq !== null, { refetchInterval: ROLL_POLL_MS });
+  const entry = useBorosPairSimulation(entryReq, entryReq !== null, { refetchInterval: ROLL_POLL_MS });
 
   /**
    * Each leg's depth ladder, from the freshest quote of each batch — a

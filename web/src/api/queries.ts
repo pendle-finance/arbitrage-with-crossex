@@ -667,13 +667,13 @@ export function useExecuteBorosPair() {
  * The whole request is the key, so any field change is a different quote, and
  * a stale quote never survives a remount (gcTime 0).
  */
-export function useBorosRollSimulation(req: BorosRollRequest | null, enabled = true) {
+export function useBorosRollSimulation(req: BorosRollRequest | null, enabled = true, refetchInterval = 4_000) {
   return useQuery({
     queryKey: ['boros', 'roll', 'simulate', JSON.stringify(req)] as const,
     queryFn: () => postJson<BorosRollSimulateResponse>('/boros/roll/simulate', req),
     enabled: Boolean(req) && enabled,
     placeholderData: keepPreviousData,
-    refetchInterval: 4_000,
+    refetchInterval,
     gcTime: 0,
   });
 }
