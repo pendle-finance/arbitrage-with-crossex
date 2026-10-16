@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Rebate } from '../api/types';
-import { rebateAccountLabel, rebateAppliesTo, rebatedSettleApr, rebateChipLabel } from './rebate';
+import { rebateAccountLabel, rebateAppliesTo, rebatedSettleApr, rebateChipLabel, rebateLegsNote } from './rebate';
 
 const relative = (over: Partial<Rebate> = {}): Rebate => ({
   mode: 'relative',
@@ -102,8 +102,16 @@ describe('per-market overrides', () => {
     expect(rebateChipLabel(nayt, [232])).toBe('50% fee rebate');
     expect(rebateChipLabel(nayt, [1])).toBe('40% fee rebate');
     expect(rebateChipLabel(nayt, [232, 233])).toBe('50% fee rebate');
-    expect(rebateChipLabel(nayt, [1, 232])).toBe('40% / 50% fee rebate');
+    expect(rebateChipLabel(nayt, [1, 232])).toBe('40%-50% fee rebate');
+    expect(rebateChipLabel(nayt, [232, 1])).toBe('40%-50% fee rebate');
     expect(rebateChipLabel(nayt)).toBe('40% fee rebate');
+  });
+
+  it('names each leg rate only when the legs differ', () => {
+    const short = { marketId: 1, venue: 'Hyperliquid', side: 'SHORT' as const };
+    const long = { marketId: 232, venue: 'Gate', side: 'LONG' as const };
+    expect(rebateLegsNote(nayt, [short, long])).toBe('Hyperliquid short leg: 40%. Gate long leg: 50%.');
+    expect(rebateLegsNote(nayt, [{ ...short, marketId: 233 }, long])).toBe('');
   });
 
   it('lists the differing market rates in the account label', () => {

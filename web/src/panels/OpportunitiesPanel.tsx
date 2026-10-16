@@ -73,7 +73,7 @@ import { OpportunityFilterBar } from './OpportunityFilterBar';
 import { canChartCapital, canChartProfit, OpportunityWaterfall } from './OpportunityWaterfall';
 import { heldBorosOf, heldPerpsOf, repriceHeld, type HeldBook, type HeldTag } from './heldPerps';
 import { applyRebate } from './opportunityRebate';
-import { rebateAccountLabel, rebateAppliesTo, rebateChipLabel } from '../lib/rebate';
+import { rebateAccountLabel, rebateAppliesTo, rebateChipLabel, rebateLegsNote } from '../lib/rebate';
 import { useActiveWallet, useTrackedAddressOptional } from './trackedAddress';
 import {
   applyFilters,
@@ -500,10 +500,9 @@ const OpportunityCard = memo(function OpportunityCard({
   }, [hasPerps, served, notionalUsd, rebate, includeRebate]);
   // The chip shows whenever the rebate actually reaches one of this card's two
   // markets (active window + market filter) — independent of the toggle.
-  const rebatedMarketIds = rebate
-    ? pair.borosLegs.filter((leg) => rebateAppliesTo(rebate, leg.marketId)).map((leg) => leg.marketId)
-    : [];
-  const rebateChip = rebate && rebatedMarketIds.length > 0 ? rebate : null;
+  const rebatedLegs = rebate ? pair.borosLegs.filter((leg) => rebateAppliesTo(rebate, leg.marketId)) : [];
+  const rebatedMarketIds = rebatedLegs.map((leg) => leg.marketId);
+  const rebateChip = rebate && rebatedLegs.length > 0 ? rebate : null;
   const chips = cardChips(pair);
   const spreadLeg = pair.borosLegs.find((leg) => leg.spreadVenues !== null) ?? null;
   const shortBoros = pair.borosLegs.find((leg) => leg.side === 'SHORT');
@@ -606,7 +605,12 @@ const OpportunityCard = memo(function OpportunityCard({
           <Chip
             sm
             tone="green"
-            title={`Boros settlement-fee rebate on this account${rebateChip.startTimestamp ? ` since ${fmtDateLocal(rebateChip.startTimestamp)}` : ''}`}
+            title={[
+              `Boros settlement-fee rebate on this account${rebateChip.startTimestamp ? ` since ${fmtDateLocal(rebateChip.startTimestamp)}` : ''}.`,
+              rebateLegsNote(rebateChip, rebatedLegs),
+            ]
+              .filter(Boolean)
+              .join(' ')}
           >
             {rebateChipLabel(rebateChip, rebatedMarketIds)}
           </Chip>

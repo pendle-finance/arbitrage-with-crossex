@@ -44,20 +44,35 @@ function pctLabel(fraction: number): string {
   return `${Number.isInteger(pct) ? pct : pct.toFixed(2)}%`;
 }
 
+function rateOf(rebate: Rebate): number {
+  if (rebate.mode === 'absolute') return rebate.settlementFeePercentage;
+  return rebate.rebateBps != null ? rebate.rebateBps / 1e4 : 1 - rebate.settlementFeePercentage;
+}
+
 function ratePct(rebate: Rebate): string {
-  if (rebate.mode === 'absolute') return pctLabel(rebate.settlementFeePercentage);
-  return pctLabel(rebate.rebateBps != null ? rebate.rebateBps / 1e4 : 1 - rebate.settlementFeePercentage);
+  return pctLabel(rateOf(rebate));
 }
 
 function labelOf(mode: Rebate['mode'], pcts: string[]): string {
-  return mode === 'absolute' ? `Fee capped at ${pcts.join(' / ')}` : `${pcts.join(' / ')} fee rebate`;
+  return mode === 'absolute' ? `Fee capped at ${pcts.join('-')}` : `${pcts.join('-')} fee rebate`;
 }
 
 /** The chip label for the opportunity card: relative → "20% fee rebate";
  * absolute → "Fee capped at 5%". */
 export function rebateChipLabel(rebate: Rebate, marketIds?: number[]): string {
-  const rates = marketIds?.length ? marketIds.map((id) => rebateForMarket(rebate, id)) : [rebate];
-  return labelOf(rebate.mode, [...new Set(rates.map(ratePct))]);
+  const rates = (marketIds?.length ? marketIds.map((id) => rebateForMarket(rebate, id)) : [rebate]).map(rateOf);
+  const lo = Math.min(...rates);
+  const hi = Math.max(...rates);
+  return labelOf(rebate.mode, pctLabel(lo) === pctLabel(hi) ? [pctLabel(lo)] : [pctLabel(lo), pctLabel(hi)]);
+}
+
+export function rebateLegsNote(
+  rebate: Rebate,
+  legs: { marketId: number; venue: string; side: 'SHORT' | 'LONG' }[],
+): string {
+  const pcts = legs.map((leg) => ratePct(rebateForMarket(rebate, leg.marketId)));
+  if (new Set(pcts).size < 2) return '';
+  return legs.map((leg, i) => `${leg.venue} ${leg.side.toLowerCase()} leg: ${pcts[i]}.`).join(' ');
 }
 
 export function rebateAccountLabel(rebate: Rebate): string {
