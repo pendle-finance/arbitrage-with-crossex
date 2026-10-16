@@ -19,7 +19,7 @@
  * What this module does NOT do: size legs, walk books or judge margin —
  * each step is priced by `simulateBorosPair` + `evaluatePairGate`, and the
  * batch as a whole by the venue's own preview (`simulations/roll-over`, or
- * `simulations/roll-over-orders` for a singles ↔ spread roll),
+ * `v2/simulations/roll-over` for a singles ↔ spread roll),
  * which runs the four orders in order on one account state and is the only
  * thing that can say whether a FOK fills whole and whether the account
  * still clears its initial margin once the closes have freed theirs. This

@@ -803,7 +803,7 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
       ammId: AMM_ORDERBOOK_ONLY,
     });
     return readRollSimulation(
-      await call<RollOverSimulationWire>('/v1/simulations/roll-over-orders', {
+      await call<RollOverSimulationWire>('/v2/simulations/roll-over', {
         marketAcc: await marketAccFor(closes[0].marketId),
         closes: closes.map(wire),
         opens: opens.map((req) => ({ ...wire(req), side: req.direction === 'long' ? SIDE_LONG : SIDE_SHORT })),
