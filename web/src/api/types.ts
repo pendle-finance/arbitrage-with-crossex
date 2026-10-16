@@ -1442,8 +1442,15 @@ export interface Rebate {
   endTimestamp: number | null;
   /** Covered markets, null = all markets. */
   marketIds: number[] | null;
+  marketFeeOverrides?: RebateMarketOverride[];
   /** Whether the window contains now (the backend's own reading). */
   active: boolean;
+}
+
+export interface RebateMarketOverride {
+  marketId: number;
+  settlementFeePercentage: number;
+  rebateBps: number | null;
 }
 
 // ---------------------------------------------------------------------------
