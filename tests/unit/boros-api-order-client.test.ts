@@ -698,6 +698,30 @@ describe('makeBorosApiOrderClient — a roll', () => {
     }
   });
 
+  it('the check before a send reads fresh, and a read taken during a send is not reused after it', async () => {
+    // A preview polled while the send is on the wire sees the account before it.
+    let during: Promise<unknown> | null = null;
+    const api = fakeApi({
+      submit: (body) => {
+        during ??= c.simulateRollOver!(closes(), opens());
+        return ((body.datas as unknown[] | undefined) ?? [null]).map((_, i) => ({ txHash: '0xtx', index: i, status: 'success' }));
+      },
+    });
+    const c = client(api);
+    const reads = () => api.calls.filter((x) => x.path.startsWith('/v1/accounts/market-acc-infos-by-root')).length;
+    await c.simulateRollOver!(closes(), opens());
+    expect(reads()).toBe(1);
+    // A polled read is 0 s old; the check before a send still reads afresh.
+    await c.simulateRollOver!(closes(), opens(), { fresh: true });
+    expect(reads()).toBe(2);
+    await submitBorosRoll(c, { closes: closes(), opens: opens() });
+    expect(during).not.toBeNull();
+    await during;
+    const after = reads();
+    await c.simulateRollOver!(closes(), opens());
+    expect(reads()).toBe(after + 1);
+  });
+
   it('previews a roll as explicit closes and opens, the batch placeMarketOrders sends', async () => {
     const api = fakeApi();
     const sim = await client(api).simulateRollOver!(
