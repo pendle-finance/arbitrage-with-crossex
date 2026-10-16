@@ -688,6 +688,13 @@ describe('makeBorosApiOrderClient — a roll', () => {
     // Side is the venue enum: 0 = LONG, 1 = SHORT.
     expect(sent.opens).toEqual([{ marketId: 59, side: 1, size: (10n * 10n ** 18n).toString(), rate: 0.031, ammId: 0 }]);
     expect(sim).toMatchObject({ status: 'Succeed', availableBefore: 5_000, availableAfterExit: 5_300, availableAfter: 4_100, marginRequired: 700 });
+    expect(sent.marketAcc).toBe(packMarketAcc(ROOT, 0, 2, CROSS_MARKET_ID));
+    expect(sim.orders.map((o) => [o.action, o.marketId])).toEqual([
+      ['close', HL],
+      ['close', BN],
+      ['open', 59],
+    ]);
+    sim.orders.forEach((o) => expect(o.matchedSize).toBeCloseTo(10, 9));
   });
 });
 
