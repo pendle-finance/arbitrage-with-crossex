@@ -628,6 +628,22 @@ function openCostPerSize(m: BorosMarket, nowSec: number): number | null {
   return cost > 0 ? cost : null;
 }
 
+/**
+ * Drop the cached Boros fills a write can change: every held market's, and
+ * the closed-market entry of each market it traded (closed, re-opened and
+ * closed again, that entry would miss the new fills). Every other closed
+ * market takes no new fills. Busting them all re-read each one, paced under
+ * the venue's rate limit: the cards then took about 50 s to show a trade.
+ */
+function bustBorosFills(cache: AppDeps['cache'], marketIds: readonly number[]): void {
+  const traded = new Set(marketIds.map(String));
+  cache.bustWhere((key) => {
+    if (!key.startsWith('boros:txns:')) return false;
+    const [, , , marketId, kind] = key.split(':');
+    return kind === 'live' || traded.has(marketId);
+  });
+}
+
 export function borosPairRoutes(deps: AppDeps) {
   recentExecutions.clear();
   recentRolls.clear();
@@ -1014,7 +1030,7 @@ export function borosPairRoutes(deps: AppDeps) {
          * lapse — "it takes a while, and sometimes I have to refresh by hand".
          */
         deps.cache.bust('boros:collaterals');
-        deps.cache.bust('boros:txns');
+        bustBorosFills(deps.cache, simulation.legs.map((l) => l.marketId));
 
         if (thrown.length > 0) {
           const unknown = classifyLegFailure(thrown[0]) === 'unknown';
@@ -1174,7 +1190,7 @@ export function borosPairRoutes(deps: AppDeps) {
         rememberRoll(memoKey, pending);
         const payload = await pending;
         deps.cache.bust('boros:collaterals');
-        deps.cache.bust('boros:txns');
+        bustBorosFills(deps.cache, [...exit.simulation.legs, ...entry.simulation.legs].map((l) => l.marketId));
         return reply.ok({ ...payload, replayed: false });
       } finally {
         unlockRoll();
@@ -1384,7 +1400,7 @@ export function borosPairRoutes(deps: AppDeps) {
            * `account`, leverage.ts busts `positions`).
            */
           deps.cache.bust('boros:collaterals');
-          deps.cache.bust('boros:txns');
+          bustBorosFills(deps.cache, [marketId]);
 
           return reply.ok({
             marketId,
