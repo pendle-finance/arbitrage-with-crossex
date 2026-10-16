@@ -375,13 +375,18 @@ export function evaluateRollGate(input: EvaluateRollInput): RollGate {
       }
       blockers.push({ code: 'venue-refused', message: ['The venue refuses this roll:', ...lines, ...folded].join('\n') });
     } else {
+      const why = venue.reason?.message ?? 'refused';
+      const cause = classifyLegFailure(why);
+      // No one order to blame: two opens that each pass alone can still need
+      // one more market slot than the closes free (live 16 Oct). The cause's
+      // own advice, then; "widen" is only for a fill problem.
       blockers.push({
         code: 'venue-refused',
-        message: `The venue refuses this roll — ${venue.reason?.message ?? 'refused'}. ${
-          VENUE_MARGIN_CODE.test(venue.reason?.code ?? '')
-            ? 'Add margin or roll a smaller size.'
-            : 'Widen the tolerance or reduce the size.'
-        }`,
+        message: VENUE_MARGIN_CODE.test(venue.reason?.code ?? '')
+          ? `The venue refuses this roll — ${why}. Add margin or roll a smaller size.`
+          : cause === 'market-limit' || cause === 'no-gas' || SELF_SWAP.test(why)
+            ? `The venue refuses this roll — ${refusalCause(why, null, '')}`
+            : `The venue refuses this roll — ${why}. Widen the tolerance or reduce the size.`,
       });
     }
   }
