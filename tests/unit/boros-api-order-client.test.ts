@@ -45,8 +45,6 @@ function fakeApi(
     /** Body the place-order calldata builder answers with, to drive the
      * "returned no calldata" refusal before anything reaches the chain. */
     orderBuildReturns?: unknown;
-    /** A non-2xx answer from the roll-over builder. */
-    rollBuildHttp?: { status: number; body?: unknown };
     /** A non-2xx answer from the cancel-orders builder. */
     cancelBuildHttp?: { status: number; body?: unknown };
     /** Body the roll-over preview answers with. */
@@ -97,26 +95,10 @@ function fakeApi(
       if (over.orderBuildReturns !== undefined) return ok(over.orderBuildReturns);
       return ok({ calls: [{ calldata: `0xda${calls.length.toString(16).padStart(2, '0')}` }] });
     }
-    if (path.startsWith('/v1/calldata-builder/agent/roll-over')) {
-      if (over.rollBuildHttp) {
-        return { ok: false, status: over.rollBuildHttp.status, json: async () => over.rollBuildHttp!.body ?? {} };
-      }
-      // Closes then opens, each naming its market, side (0 long / 1 short) and size.
-      const legs = body.legs as Array<{ fromMarketId: number; toMarketId: number; size: string; closeRate?: number; openRate?: number }>;
-      const closeSide = (i: number) => (i === 0 ? 0 : 1); // HL was SHORT (closes long), BN was LONG (closes short)
-      return ok({
-        calls: [
-          ...legs.map((l, i) => ({ calldata: `0xc${i + 1}`, accountId: 0, action: 'close', marketId: l.fromMarketId, size: l.size, resolved: { side: closeSide(i), requestedRate: l.closeRate } })),
-          ...legs.map((l, i) => ({ calldata: `0xo${i + 1}`, accountId: 0, action: 'open', marketId: l.toMarketId, size: l.size, resolved: { side: 1 - closeSide(i), requestedRate: l.openRate } })),
-        ],
-      });
-    }
-    if (path.startsWith('/v1/simulations/roll-over') || path.startsWith('/v2/simulations/roll-over')) {
+    if (path.startsWith('/v2/simulations/roll-over')) {
       if (over.rollSimReturns !== undefined) return ok(over.rollSimReturns);
-      // v1 `/roll-over` takes legs; v2 takes the closes and opens themselves.
-      const legs = (body.legs ?? []) as Array<{ fromMarketId: number; toMarketId: number; size: string }>;
-      const closes = (body.closes as Array<{ marketId: number; size: string }> | undefined) ?? legs.map((l) => ({ marketId: l.fromMarketId, size: l.size }));
-      const opens = (body.opens as Array<{ marketId: number; size: string }> | undefined) ?? legs.map((l) => ({ marketId: l.toMarketId, size: l.size }));
+      const closes = body.closes as Array<{ marketId: number; size: string }>;
+      const opens = body.opens as Array<{ marketId: number; size: string }>;
       const wei = (n: number) => (BigInt(n) * 10n ** 18n).toString();
       return ok({
         status: 'Succeed',
@@ -578,29 +560,18 @@ describe('makeBorosApiOrderClient — the order on the wire', () => {
 
 });
 
-describe('makeBorosApiOrderClient — rollOver', () => {
-  const legs = [
-    { fromMarketId: HL, toMarketId: HL + 1, size: 100, closeRate: 0.0925, openRate: 0.0975 },
-    { fromMarketId: BN, toMarketId: BN + 1, size: 100, closeRate: 0.0425, openRate: 0.0525 },
+describe('makeBorosApiOrderClient — a roll', () => {
+  const W100 = (100n * 10n ** 18n).toString();
+  const closes = () => [
+    leg({ marketId: HL, direction: 'long', size: 100, limitApr: 0.0925, clientOrderId: 'r-0000001' }),
+    leg({ marketId: BN, direction: 'short', size: 100, limitApr: 0.0425, clientOrderId: 'r-0000002' }),
+  ];
+  const opens = () => [
+    leg({ marketId: HL + 1, direction: 'short', size: 100, limitApr: 0.0975, clientOrderId: 'r-0000003' }),
+    leg({ marketId: BN + 1, direction: 'long', size: 100, limitApr: 0.0525, clientOrderId: 'r-0000004' }),
   ];
 
-  it('asks the venue for the whole roll once, on the cross account, orderbook-only, sizes in wei', async () => {
-    const api = fakeApi();
-    await client(api).rollOver!(legs);
-    const build = api.calls.filter((c) => c.path === '/v1/calldata-builder/agent/roll-over');
-    expect(build).toHaveLength(1);
-    expect(build[0].body).toMatchObject({
-      marketAcc: packMarketAcc(ROOT, 0, 2, CROSS_MARKET_ID),
-      legs: [
-        { fromMarketId: HL, toMarketId: HL + 1, size: (100n * 10n ** 18n).toString(), closeRate: 0.0925, openRate: 0.0975, ammId: 0 },
-        { fromMarketId: BN, toMarketId: BN + 1, size: (100n * 10n ** 18n).toString(), closeRate: 0.0425, openRate: 0.0525, ammId: 0 },
-      ],
-    });
-    // No per-leg place-order builds: the venue built all four.
-    expect(api.calls.some((c) => c.path === '/v1/calldata-builder/agent/place-order')).toBe(false);
-  });
-
-  it("submits the venue's calls as ONE batch, closes then opens, top-up between them, and reads a fill per call", async () => {
+  it('sends a leg-for-leg roll as ONE FOK batch through place-order: closes, the top-up, then opens', async () => {
     const api = fakeApi({
       gasBalance: { balanceInUSD: 0.1 },
       status: {
@@ -608,28 +579,32 @@ describe('makeBorosApiOrderClient — rollOver', () => {
         statuses: [0, 1, 2, 3, 4].map((index) => ({
           index,
           status: 'success',
-          marketOrdersExecuted: index === 2 ? [] : [{ marketId: [HL, BN, 0, HL + 1, BN + 1][index], size: (100n * 10n ** 18n).toString() }],
+          marketOrdersExecuted: index === 2 ? [] : [{ marketId: [HL, BN, 0, HL + 1, BN + 1][index], size: W100 }],
         })),
       },
     });
-    const fills = await client(api).rollOver!(legs);
-    const submit = api.calls.find((c) => c.path === '/v1/send-txs/bulk-calls' && (c.body.datas as unknown[]).length === 5)!;
-    expect(submit.body.requireSuccess).toBe(true);
-    // [closeHL, closeBN, payTreasury, openHL', openBN'] — the top-up after the closes.
-    expect((submit.body.datas as Array<{ calldata: string }>).map((d) => d.calldata)).toEqual(['0xc1', '0xc2', '0x7a', '0xo1', '0xo2']);
-    expect(api.calls.find((c) => c.path.includes('agent/pay-treasury'))!.body).toMatchObject({ marketId: HL });
-    expect(fills.map((f) => [f.marketId, f.direction, f.filledSize, f.failure])).toEqual([
-      [HL, 'long', 100, null],
-      [BN, 'short', 100, null],
-      [HL + 1, 'short', 100, null],
-      [BN + 1, 'long', 100, null],
+    const r = await submitBorosRoll(client(api), { closes: closes(), opens: opens() });
+    expect(api.calls.some((c) => c.path.startsWith('/v1/calldata-builder/agent/roll-over'))).toBe(false);
+    const builds = api.calls.filter((c) => c.path === '/v1/calldata-builder/agent/place-order');
+    // Each order FOK (tif 2) at its own bound, orderbook-only.
+    expect(builds.map((b) => [b.body.marketId, b.body.side, b.body.tif, b.body.rate, b.body.ammId])).toEqual([
+      [HL, 0, 2, 0.0925, 0],
+      [BN, 1, 2, 0.0425, 0],
+      [HL + 1, 1, 2, 0.0975, 0],
+      [BN + 1, 0, 2, 0.0525, 0],
     ]);
+    const submit = api.calls.filter((c) => c.path === '/v1/send-txs/bulk-calls').pop()!;
+    expect(submit.body.requireSuccess).toBe(true);
+    const datas = (submit.body.datas as Array<{ calldata: string }>).map((d) => d.calldata);
+    expect(datas).toHaveLength(5);
+    expect(datas.indexOf('0x7a')).toBe(2);
+    expect(r.status).toBe('rolled');
+    expect(Object.keys(r.legs)).toEqual([`exit:${HL}`, `exit:${BN}`, `entry:${HL + 1}`, `entry:${BN + 1}`]);
   });
 
   it('puts one top-up after the closes of a batch roll, charged on the first close market', async () => {
     const api = fakeApi({ gasBalance: { balanceInUSD: 0.1 } });
     await submitBorosRoll(client(api), {
-      kind: 'batch',
       closes: [leg({ direction: 'long' }), leg({ marketId: BN, clientOrderId: 'a-0000002' })],
       opens: [leg({ marketId: 59, clientOrderId: 'a-0000003' })],
     });
@@ -643,8 +618,8 @@ describe('makeBorosApiOrderClient — rollOver', () => {
 
   it("reads the venue's preview into collateral units, sizes unsigned", async () => {
     const api = fakeApi();
-    const sim = await client(api).simulateRollOver!(legs);
-    expect((api.calls.find((c) => c.path === '/v1/simulations/roll-over')!.body.legs as Array<{ fromMarketId: number }>).map((l) => l.fromMarketId)).toEqual([HL, BN]);
+    const sim = await client(api).simulateRollOver!(closes(), opens());
+    expect((api.calls.find((c) => c.path === '/v2/simulations/roll-over')!.body.closes as Array<{ marketId: number }>).map((l) => l.marketId)).toEqual([HL, BN]);
     expect(sim.status).toBe('Succeed');
     expect(sim.availableBefore).toBe(5_000);
     expect(sim.availableAfter).toBe(4_100);
@@ -667,15 +642,15 @@ describe('makeBorosApiOrderClient — rollOver', () => {
         orders: [{ action: 'open', marketId: HL + 1, filled: false, matched: null, fee: null, error: 'Insufficient liquidity' }],
       },
     });
-    const refused = await client(refusedApi).simulateRollOver!(legs);
+    const refused = await client(refusedApi).simulateRollOver!(closes(), opens());
     // A venue that reports no exit state (older, or the closes could not run) reads as unknown, not 0.
     expect(refused).toMatchObject({ status: 'Refused', reason: { code: 'MARKET_ORDER_FOK_NOT_FILLED' }, availableAfter: null, availableAfterExit: null });
     expect(refused.orders[0]).toEqual({ action: 'open', marketId: HL + 1, filled: false, matchedSize: null, matchedApr: null, fee: null, error: 'Insufficient liquidity' });
   });
 
-  it('previews a singles ↔ spread roll as explicit closes and opens, the batch placeMarketOrders sends', async () => {
+  it('previews a roll as explicit closes and opens, the batch placeMarketOrders sends', async () => {
     const api = fakeApi();
-    const sim = await client(api).simulateRollOverOrders!(
+    const sim = await client(api).simulateRollOver!(
       [leg({ direction: 'long', limitApr: 0.091 }), leg({ marketId: BN, size: 10, sizeWei: '9999999999999999999', limitApr: 0.044 })],
       [leg({ marketId: 59, direction: 'short', limitApr: 0.031 })],
     );
@@ -687,15 +662,6 @@ describe('makeBorosApiOrderClient — rollOver', () => {
     // Side is the venue enum: 0 = LONG, 1 = SHORT.
     expect(sent.opens).toEqual([{ marketId: 59, side: 1, size: (10n * 10n ** 18n).toString(), rate: 0.031, ammId: 0 }]);
     expect(sim).toMatchObject({ status: 'Succeed', availableBefore: 5_000, availableAfterExit: 5_300, availableAfter: 4_100, marginRequired: 700 });
-  });
-
-  it('reports a builder refusal as four rejected legs — nothing was sent', async () => {
-    const api = fakeApi({ rollBuildHttp: { status: 404, body: { message: 'Market position not found' } } });
-    const fills = await client(api).rollOver!(legs);
-    expect(fills).toHaveLength(4);
-    expect(fills.map((f) => f.marketId)).toEqual([HL, BN, HL + 1, BN + 1]);
-    expect(fills.every((f) => f.failure?.code === 'rejected' && /Market position not found/.test(f.failure.message))).toBe(true);
-    expect(api.calls.some((c) => c.path === '/v1/send-txs/bulk-calls')).toBe(false);
   });
 });
 
@@ -1044,11 +1010,12 @@ describe('makeBorosApiOrderClient — topUpAfter positions the gas top-up', () =
 
     it('routes a roll\'s top-up and a single close\'s through the same chooser', async () => {
       const rollApi = fakeApi({ gasBalance: { balanceInUSD: 0.1 } });
-      await twoZones(rollApi).rollOver!(
-        [
-          { fromMarketId: HL, toMarketId: HL + 1, size: 10, closeRate: 0.09, openRate: 0.1 },
-          { fromMarketId: BN, toMarketId: BN + 1, size: 10, closeRate: 0.045, openRate: 0.05 },
-        ],
+      await submitBorosRoll(
+        twoZones(rollApi),
+        {
+          closes: [leg({ marketId: HL, direction: 'long' }), leg({ marketId: BN, clientOrderId: 'a-0000002' })],
+          opens: [leg({ marketId: HL + 1, clientOrderId: 'a-0000003' }), leg({ marketId: BN + 1, direction: 'long', clientOrderId: 'a-0000004' })],
+        },
         { gasTopUpMarket: () => USDT_MARKET },
       );
       expect(payOf(rollApi)).toMatchObject({ marketId: USDT_MARKET, amount: '1000000000000000000' });
@@ -1135,10 +1102,7 @@ describe('makeBorosApiOrderClient — cancelOrdersOn clears resting orders in th
   });
 
   it('leads a roll with the old markets\' cancels and still reads every leg from its own slot', async () => {
-    const legs = [
-      { fromMarketId: HL, toMarketId: HL + 1, size: 100, closeRate: 0.0925, openRate: 0.0975 },
-      { fromMarketId: BN, toMarketId: BN + 1, size: 100, closeRate: 0.0425, openRate: 0.0525 },
-    ];
+    const W100 = (100n * 10n ** 18n).toString();
     const api = fakeApi({
       gasBalance: { balanceInUSD: 0.1 },
       status: {
@@ -1146,21 +1110,24 @@ describe('makeBorosApiOrderClient — cancelOrdersOn clears resting orders in th
         statuses: [0, 1, 2, 3, 4, 5].map((index) => ({
           index,
           status: 'success',
-          marketOrdersExecuted: [
-            [],
-            [{ marketId: HL, size: (100n * 10n ** 18n).toString() }],
-            [{ marketId: BN, size: (100n * 10n ** 18n).toString() }],
-            [],
-            [{ marketId: HL + 1, size: (100n * 10n ** 18n).toString() }],
-            [{ marketId: BN + 1, size: (100n * 10n ** 18n).toString() }],
-          ][index],
+          marketOrdersExecuted: [[], [{ marketId: HL, size: W100 }], [{ marketId: BN, size: W100 }], [], [{ marketId: HL + 1, size: W100 }], [{ marketId: BN + 1, size: W100 }]][index],
         })),
       },
     });
-    const fills = await client(api).rollOver!(legs, { cancelOrdersOn: [HL] });
+    const r = await submitBorosRoll(
+      client(api),
+      {
+        closes: [leg({ marketId: HL, direction: 'long', size: 100 }), leg({ marketId: BN, size: 100, clientOrderId: 'a-0000002' })],
+        opens: [leg({ marketId: HL + 1, size: 100, clientOrderId: 'a-0000003' }), leg({ marketId: BN + 1, direction: 'long', size: 100, clientOrderId: 'a-0000004' })],
+      },
+      { cancelOrdersOn: [HL] },
+    );
     // [cancel HL, closeHL, closeBN, payTreasury, openHL', openBN']
-    expect(datasOf(lastSubmit(api))).toEqual([cancelHL, '0xc1', '0xc2', '0x7a', '0xo1', '0xo2']);
-    expect(fills.map((f) => [f.marketId, f.filledSize, f.failure])).toEqual([
+    const datas = datasOf(lastSubmit(api));
+    expect(datas[0]).toBe(cancelHL);
+    expect(datas[3]).toBe('0x7a');
+    expect(datas).toHaveLength(6);
+    expect(Object.values(r.legs).map((f) => [f.marketId, f.filledSize, f.failure])).toEqual([
       [HL, 100, null],
       [BN, 100, null],
       [HL + 1, 100, null],
@@ -1391,12 +1358,14 @@ describe('makeBorosApiOrderClient — frees market slots in the same batch as an
         { marketId: HL, isMatured: true }, // being left: never exited by this batch
       ],
     });
-    await client(api).rollOver!([
-      { fromMarketId: HL, toMarketId: HL + 1, size: 100, closeRate: 0.0925, openRate: 0.0975 },
-      { fromMarketId: BN, toMarketId: BN + 1, size: 100, closeRate: 0.0425, openRate: 0.0525 },
-    ]);
+    await submitBorosRoll(client(api), {
+      closes: [leg({ marketId: HL, direction: 'long' }), leg({ marketId: BN, clientOrderId: 'a-0000002' })],
+      opens: [leg({ marketId: HL + 1, clientOrderId: 'a-0000003' }), leg({ marketId: BN + 1, direction: 'long', clientOrderId: 'a-0000004' })],
+    });
     // Gas is healthy (the fake's $42), so no top-up sits between closes and opens.
-    expect(submits(api)[0]).toEqual([exitOf(MATURED), '0xc1', '0xc2', '0xo1', '0xo2']);
+    const [batch] = submits(api);
+    expect(batch[0]).toBe(exitOf(MATURED));
+    expect(batch).toHaveLength(5);
   });
 });
 

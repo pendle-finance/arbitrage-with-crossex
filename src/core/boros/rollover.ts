@@ -2,30 +2,27 @@
  * Roll-over: close a Boros pair at one maturity and re-open it at a later
  * one, as ONE all-or-nothing batch.
  *
- * The venue's own builder (`calldata-builder/agent/roll-over`) makes the four
- * orders — close A, close B, open A′, open B′, every one FOK, the closes
- * sized from the on-chain position — and they go out as a single
- * `tryAggregate` with `requireSuccess`. The venue simulates the batch before
- * submitting it (the calls run in order, in one state, so the opens are
- * checked against the margin the closes free), refuses the whole thing if
- * any call would fail, and on-chain a revert anywhere undoes everything. FOK
- * closes the last gap: an IOC leg that fills PART of its size still
- * succeeds, so `requireSuccess` alone would let the old legs close 100%
- * while the new ones open 60%. Under FOK a leg either fills whole or
- * reverts, and its revert takes the batch. A roll therefore ends in exactly
- * one of three states: rolled in full, nothing happened, or the venue never
- * confirmed (`unknown`).
+ * The batch is every close, then every open, each FOK, sent by
+ * `placeMarketOrders` as a single `tryAggregate` with `requireSuccess`. The
+ * venue simulates the batch before submitting it (the calls run in order, in
+ * one state, so the opens are checked against the margin the closes free),
+ * refuses the whole thing if any call would fail, and on-chain a revert
+ * anywhere undoes everything. FOK closes the last gap: an IOC leg that fills
+ * PART of its size still succeeds, so `requireSuccess` alone would let the
+ * old legs close 100% while the new ones open 60%. Under FOK a leg either
+ * fills whole or reverts, and its revert takes the batch. A roll therefore
+ * ends in exactly one of three states: rolled in full, nothing happened, or
+ * the venue never confirmed (`unknown`).
  *
  * What this module does NOT do: size legs, walk books or judge margin —
  * each step is priced by `simulateBorosPair` + `evaluatePairGate`, and the
- * batch as a whole by the venue's own preview (`simulations/roll-over`, or
- * `v2/simulations/roll-over` for a singles ↔ spread roll),
- * which runs the four orders in order on one account state and is the only
- * thing that can say whether a FOK fills whole and whether the account
- * still clears its initial margin once the closes have freed theirs. This
- * module combines those verdicts, adds the checks that only exist because
- * the two steps are one batch, names the legs for the venue, and reads its
- * answer.
+ * batch as a whole by the venue's own preview (`v2/simulations/roll-over`),
+ * which runs the same orders in the same order on one account state and is
+ * the only thing that can say whether a FOK fills whole and whether the
+ * account still clears its initial margin once the closes have freed theirs.
+ * This module combines those verdicts, adds the checks that only exist
+ * because the two steps are one batch, names the legs for the venue, and
+ * reads its answer.
  */
 import type { BorosMarket } from './client';
 import { classifyLegFailure } from './orders';
@@ -34,7 +31,6 @@ import type {
   BorosLegFill,
   BorosMarketOrderRequest,
   BorosOrderClient,
-  BorosRollLeg,
   BorosRollSimulation,
   PlaceOrdersOptions,
 } from './orders';
@@ -395,9 +391,11 @@ export function evaluateRollGate(input: EvaluateRollInput): RollGate {
 
 export type RollOrderIds = Record<RollLegKey, string>;
 
-export type RollPlan =
-  | { kind: 'rollover'; legs: BorosRollLeg[] }
-  | { kind: 'batch'; closes: BorosMarketOrderRequest[]; opens: BorosMarketOrderRequest[] };
+/** Every close, then every open: the batch the venue previews and `placeMarketOrders` sends. */
+export interface RollPlan {
+  closes: BorosMarketOrderRequest[];
+  opens: BorosMarketOrderRequest[];
+}
 
 export interface RollPlanOptions {
   ids?: Partial<RollOrderIds>;
@@ -407,9 +405,7 @@ export interface RollPlanOptions {
 const fillKey = (step: RollStep, marketId: number): RollLegKey => `${step}:${marketId}`;
 
 export function rollFillKeys(plan: RollPlan): RollLegKey[] {
-  return plan.kind === 'rollover'
-    ? [...plan.legs.map((l) => fillKey('exit', l.fromMarketId)), ...plan.legs.map((l) => fillKey('entry', l.toMarketId))]
-    : [...plan.closes.map((o) => fillKey('exit', o.marketId)), ...plan.opens.map((o) => fillKey('entry', o.marketId))];
+  return [...plan.closes.map((o) => fillKey('exit', o.marketId)), ...plan.opens.map((o) => fillKey('entry', o.marketId))];
 }
 
 export function rollPlanFor(
@@ -417,57 +413,44 @@ export function rollPlanFor(
   entry: BorosPairSimulation,
   options: RollPlanOptions = {},
 ): RollPlan | null {
-  const trades = (l: SimulatedLeg): boolean => Math.abs(l.sizing.deltaSize) > 0 && l.execApr !== null;
+  const trades = (l: SimulatedLeg): boolean => Math.abs(l.sizing.deltaSize) > 0 && l.execApr !== null && l.worstApr !== null;
   if (exit.legs.length === 0 || entry.legs.length === 0 || ![...exit.legs, ...entry.legs].every(trades)) return null;
 
-  if (exit.legs.length !== entry.legs.length) {
-    if (![...exit.legs, ...entry.legs].every((l) => l.worstApr !== null)) return null;
-    const order = (step: RollStep, leg: SimulatedLeg): BorosMarketOrderRequest => {
-      const asked = Math.abs(leg.sizing.deltaSize);
-      const openWei = step === 'exit' ? options.openSizeWei?.[leg.marketId] : undefined;
-      const reduced = openWei !== undefined ? reducingOrderSize(openWei, asked) : null;
-      return {
-        marketId: leg.marketId,
-        direction: leg.sizing.orderSide,
-        size: reduced?.size ?? asked,
-        limitApr: leg.worstApr as number,
-        clientOrderId: options.ids?.[fillKey(step, leg.marketId)] ?? fillKey(step, leg.marketId),
-        ...(reduced?.sizeWei !== undefined ? { sizeWei: reduced.sizeWei } : {}),
-      };
-    };
+  const order = (step: RollStep, leg: SimulatedLeg, sizedAs?: BorosMarketOrderRequest): BorosMarketOrderRequest => {
+    const asked = Math.abs(leg.sizing.deltaSize);
+    const openWei = step === 'exit' ? options.openSizeWei?.[leg.marketId] : undefined;
+    const reduced = openWei !== undefined ? reducingOrderSize(openWei, asked) : null;
+    const sizeWei = sizedAs ? sizedAs.sizeWei : reduced?.sizeWei;
     return {
-      kind: 'batch',
-      closes: exit.legs.map((l) => order('exit', l)),
-      opens: entry.legs.map((l) => order('entry', l)),
+      marketId: leg.marketId,
+      direction: leg.sizing.orderSide,
+      size: sizedAs?.size ?? reduced?.size ?? asked,
+      limitApr: leg.worstApr as number,
+      clientOrderId: options.ids?.[fillKey(step, leg.marketId)] ?? fillKey(step, leg.marketId),
+      ...(sizeWei !== undefined ? { sizeWei } : {}),
     };
-  }
+  };
+  const closes = exit.legs.map((l) => order('exit', l));
+  // Singles ↔ spread: each open at its own size; the gate checks each venue's exposure.
+  if (exit.legs.length !== entry.legs.length) return { closes, opens: entry.legs.map((l) => order('entry', l)) };
 
+  // Leg for leg: each open re-opens its close's venue and side at the close's
+  // size, to the wei, so the new maturity holds exactly what the old one did.
   const used = new Set<number>();
-  const legs: BorosRollLeg[] = [];
-  for (const close of exit.legs) {
+  const opens: BorosMarketOrderRequest[] = [];
+  for (const [i, close] of exit.legs.entries()) {
     const index = entry.legs.findIndex(
-      (open, i) =>
-        !used.has(i) &&
+      (open, j) =>
+        !used.has(j) &&
         open.sizing.orderSide === heldSide(close) &&
         open.venue === close.venue &&
         open.base.toLowerCase() === close.base.toLowerCase(),
     );
     if (index === -1) return null;
     used.add(index);
-    const open = entry.legs[index];
-    const asked = Math.abs(close.sizing.deltaSize);
-    const openWei = options.openSizeWei?.[close.marketId];
-    const reduced = openWei !== undefined ? reducingOrderSize(openWei, asked) : null;
-    legs.push({
-      fromMarketId: close.marketId,
-      toMarketId: open.marketId,
-      size: reduced?.size ?? asked,
-      closeRate: close.worstApr ?? undefined,
-      openRate: open.worstApr ?? undefined,
-      ...(reduced?.sizeWei !== undefined ? { sizeWei: reduced.sizeWei } : {}),
-    });
+    opens.push(order('entry', entry.legs[index], closes[i]));
   }
-  return { kind: 'rollover', legs };
+  return { closes, opens };
 }
 
 export interface BorosRollResult {
@@ -498,12 +481,8 @@ export async function submitBorosRoll(
 ): Promise<BorosRollResult> {
   let fills: BorosLegFill[];
   try {
-    if (plan.kind === 'batch') {
-      const batch: PlaceOrdersOptions = { ...opts, topUpAfter: plan.closes.length, timeInForce: 'fill-or-kill' };
-      fills = await client.placeMarketOrders([...plan.closes, ...plan.opens], batch);
-    } else {
-      fills = client.rollOver ? await client.rollOver(plan.legs, opts) : [];
-    }
+    const batch: PlaceOrdersOptions = { ...opts, topUpAfter: plan.closes.length, timeInForce: 'fill-or-kill' };
+    fills = await client.placeMarketOrders([...plan.closes, ...plan.opens], batch);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     const lost = (marketId: number, direction: 'long' | 'short', size: number): BorosLegFill => ({
@@ -515,13 +494,7 @@ export async function submitBorosRoll(
       feeSize: null,
       failure: { code: 'unknown', message: `${message} — the roll may or may not have gone through. Check the position on Boros before re-issuing.` },
     });
-    fills =
-      plan.kind === 'batch'
-        ? [...plan.closes, ...plan.opens].map((o) => lost(o.marketId, o.direction, o.size))
-        : [
-            ...plan.legs.map((l) => lost(l.fromMarketId, 'short', l.size)),
-            ...plan.legs.map((l) => lost(l.toMarketId, 'long', l.size)),
-          ];
+    fills = [...plan.closes, ...plan.opens].map((o) => lost(o.marketId, o.direction, o.size));
   }
   return readRollFills(fills, rollFillKeys(plan));
 }

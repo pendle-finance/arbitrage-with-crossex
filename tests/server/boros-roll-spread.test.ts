@@ -5,7 +5,6 @@ import type {
   BorosLegFill,
   BorosMarketOrderRequest,
   BorosOrderClient,
-  BorosRollLeg,
   BorosRollSimulation,
   PlaceOrdersOptions,
 } from '../../src/core/boros/orders';
@@ -82,31 +81,22 @@ const fill = (marketId: number, direction: 'long' | 'short', size: number): Boro
   failure: null,
 });
 
-const venueOk = (legs: BorosRollLeg[]): BorosRollSimulation => ({
+const venueOk = (closes: BorosMarketOrderRequest[], opens: BorosMarketOrderRequest[]): BorosRollSimulation => ({
   status: 'Succeed',
   reason: null,
   orders: [
-    ...legs.map((l) => ({ action: 'close' as const, marketId: l.fromMarketId, filled: true, matchedSize: l.size, matchedApr: 0.06, fee: 0.001, error: null })),
-    ...legs.map((l) => ({ action: 'open' as const, marketId: l.toMarketId, filled: true, matchedSize: l.size, matchedApr: 0.06, fee: 0.001, error: null })),
+    ...closes.map((o) => ({ action: 'close' as const, marketId: o.marketId, filled: true, matchedSize: o.size, matchedApr: 0.06, fee: 0.001, error: null })),
+    ...opens.map((o) => ({ action: 'open' as const, marketId: o.marketId, filled: true, matchedSize: o.size, matchedApr: 0.06, fee: 0.001, error: null })),
   ],
   availableBefore: 100_000,
   availableAfter: 99_000,
   availableAfterExit: 99_500,
   marginRequired: 1_000,
 });
-const venueOkOrders = (closes: BorosMarketOrderRequest[], opens: BorosMarketOrderRequest[]): BorosRollSimulation => ({
-  ...venueOk([]),
-  orders: [
-    ...closes.map((o) => ({ action: 'close' as const, marketId: o.marketId, filled: true, matchedSize: o.size, matchedApr: 0.06, fee: 0.001, error: null })),
-    ...opens.map((o) => ({ action: 'open' as const, marketId: o.marketId, filled: true, matchedSize: o.size, matchedApr: 0.06, fee: 0.001, error: null })),
-  ],
-});
 
 interface Calls {
   placed: Array<{ reqs: BorosMarketOrderRequest[]; opts: PlaceOrdersOptions | undefined }>;
-  rolled: BorosRollLeg[][];
-  previewed: BorosRollLeg[][];
-  previewedOrders: Array<{ closes: BorosMarketOrderRequest[]; opens: BorosMarketOrderRequest[] }>;
+  previewed: Array<{ closes: BorosMarketOrderRequest[]; opens: BorosMarketOrderRequest[] }>;
 }
 
 function recordingClient(calls: Calls): BorosOrderClient {
@@ -115,20 +105,9 @@ function recordingClient(calls: Calls): BorosOrderClient {
       calls.placed.push({ reqs, opts });
       return reqs.map((r) => fill(r.marketId, r.direction, r.size));
     },
-    rollOver: async (legs) => {
-      calls.rolled.push(legs);
-      return [
-        ...legs.map((l) => fill(l.fromMarketId, 'long', l.size)),
-        ...legs.map((l) => fill(l.toMarketId, 'short', l.size)),
-      ];
-    },
-    simulateRollOver: async (legs) => {
-      calls.previewed.push(legs);
-      return venueOk(legs);
-    },
-    simulateRollOverOrders: async (closes, opens) => {
-      calls.previewedOrders.push({ closes, opens });
-      return venueOkOrders(closes, opens);
+    simulateRollOver: async (closes, opens) => {
+      calls.previewed.push({ closes, opens });
+      return venueOk(closes, opens);
     },
     cancelOrders: async () => {},
     closePosition: async (r) => fill(r.marketId, r.direction, r.size),
@@ -141,7 +120,7 @@ beforeEach(() => {
   vi.useFakeTimers({ toFake: ['Date'] });
   vi.setSystemTime(NOW_MS);
   process.env.BOROS_ROOT_ADDRESS = ADDRESS;
-  calls = { placed: [], rolled: [], previewed: [], previewedOrders: [] };
+  calls = { placed: [], previewed: [] };
 });
 afterEach(async () => {
   await app?.close();
@@ -191,15 +170,13 @@ describe('POST /api/boros/roll/execute with spread markets', () => {
     // The venue previews the batch as sent: both closes, then the spread open.
     expect(sim.json().data.gate.blockers).toEqual([]);
     expect(sim.json().data.gate.margin).toMatchObject({ need: 1_000, availableBefore: 100_000, availableAfterExit: 99_500, availableAfter: 99_000 });
-    const [preview] = calls.previewedOrders;
+    const [preview] = calls.previewed;
     expect(preview.closes.map((o) => [o.marketId, o.direction])).toEqual([[HL_OCT, 'long'], [GATE_OCT, 'short']]);
     expect(preview.opens.map((o) => [o.marketId, o.direction])).toEqual([[SPREAD_NOV, 'short']]);
     expect(preview.opens[0].size).toBeCloseTo(size, 6);
 
     const res = await post('/api/boros/roll/execute', body);
     expect(res.statusCode, res.body).toBe(200);
-    expect(calls.rolled).toHaveLength(0);
-    expect(calls.previewed).toHaveLength(0);
     expect(calls.placed).toHaveLength(1);
     const { reqs, opts } = calls.placed[0];
     expect(reqs.map((r) => [r.marketId, r.direction])).toEqual([
@@ -227,11 +204,15 @@ describe('POST /api/boros/roll/execute with spread markets', () => {
     const body = rollBody([leg(SPREAD_OCT, 'long', 0.3)], [leg(SPREAD_NOV, 'short', 0.3)], 'a17');
     const res = await post('/api/boros/roll/execute', body);
     expect(res.statusCode, res.body).toBe(200);
-    expect(calls.placed).toHaveLength(0);
-    expect(calls.rolled).toHaveLength(1);
-    expect(calls.rolled[0]).toHaveLength(1);
-    expect(calls.rolled[0][0]).toMatchObject({ fromMarketId: SPREAD_OCT, toMarketId: SPREAD_NOV });
-    expect(calls.rolled[0][0].size).toBeCloseTo(0.3, 9);
+    expect(calls.previewed.map((p) => [p.closes.map((o) => o.marketId), p.opens.map((o) => o.marketId)])).toEqual([[[SPREAD_OCT], [SPREAD_NOV]]]);
+    expect(calls.placed).toHaveLength(1);
+    const { reqs, opts } = calls.placed[0];
+    expect(reqs.map((r) => [r.marketId, r.direction])).toEqual([
+      [SPREAD_OCT, 'long'],
+      [SPREAD_NOV, 'short'],
+    ]);
+    expect(opts).toMatchObject({ topUpAfter: 1, timeInForce: 'fill-or-kill' });
+    reqs.forEach((r) => expect(r.size).toBeCloseTo(0.3, 9));
     expect(res.json().data.result.status).toBe('rolled');
   });
 
@@ -240,11 +221,9 @@ describe('POST /api/boros/roll/execute with spread markets', () => {
     const body = rollBody([leg(SPREAD_NOV, 'long', 0.3)], [leg(HL_DEC, 'short', 0.3), leg(GATE_DEC, 'long', 0.3)], 'a18');
     const res = await post('/api/boros/roll/execute', body);
     expect(res.statusCode, res.body).toBe(200);
-    expect(calls.previewedOrders.map((p) => [p.closes.map((o) => o.marketId), p.opens.map((o) => o.marketId)])).toEqual([
+    expect(calls.previewed.map((p) => [p.closes.map((o) => o.marketId), p.opens.map((o) => o.marketId)])).toEqual([
       [[SPREAD_NOV], [HL_DEC, GATE_DEC]],
     ]);
-    expect(calls.rolled).toHaveLength(0);
-    expect(calls.previewed).toHaveLength(0);
     expect(calls.placed).toHaveLength(1);
     expect(calls.placed[0].reqs.map((r) => [r.marketId, r.direction])).toEqual([
       [SPREAD_NOV, 'long'],
@@ -264,7 +243,6 @@ describe('POST /api/boros/roll/execute with spread markets', () => {
     const res = await post('/api/boros/roll/execute', body);
     expect(res.statusCode).toBe(400);
     expect(calls.placed).toHaveLength(0);
-    expect(calls.rolled).toHaveLength(0);
   });
 
   it.each([
@@ -363,8 +341,12 @@ describe('POST /api/boros/roll/execute closes the exact open size', () => {
     const body = rollBody([leg(SPREAD_OCT, 'long', below(size))], [leg(SPREAD_NOV, 'short', below(size))], 'dust-rollover');
     const res = await post('/api/boros/roll/execute', body);
     expect(res.statusCode, res.body).toBe(200);
-    expect(calls.rolled[0].map((l) => [l.fromMarketId, l.toMarketId, l.sizeWei])).toEqual([[SPREAD_OCT, SPREAD_NOV, wei(size)]]);
-    expect(calls.previewed[0][0].sizeWei).toBe(wei(size));
+    // The open re-opens the close's exact wei, in the preview and in the batch sent.
+    expect(calls.placed[0].reqs.map((r) => [r.marketId, r.sizeWei])).toEqual([
+      [SPREAD_OCT, wei(size)],
+      [SPREAD_NOV, wei(size)],
+    ]);
+    expect([...calls.previewed[0].closes, ...calls.previewed[0].opens].map((r) => r.sizeWei)).toEqual([wei(size), wei(size)]);
   });
 });
 
