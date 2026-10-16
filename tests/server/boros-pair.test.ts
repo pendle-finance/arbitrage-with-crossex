@@ -189,7 +189,7 @@ describe('boros writes bust the reads they invalidate', () => {
       getBorosOrders: () => client ?? orderClient(),
       cache,
     });
-    return { busted };
+    return { busted, cache };
   }
 
   it('an OPEN busts the cached Boros reads, like a close does', async () => {
@@ -202,7 +202,25 @@ describe('boros writes bust the reads they invalidate', () => {
     const res = await post('/api/boros/pair/execute', pairBody({ ids: ['coid-bust-a', 'coid-bust-b'] }));
     expect(res.statusCode).toBe(200);
     expect(busted).toContain('boros:collaterals');
-    expect(busted).toContain('boros:txns');
+  });
+
+  it("drops the held markets' fills and the traded markets' history, and keeps every other closed market's", async () => {
+    // Busting every closed market's fills re-read each one under the rate
+    // limit: on prod the cards took about 50 s to show a close (2026-10-16).
+    const { cache } = appWithBustSpy();
+    const acc = '0xacc';
+    const keys = {
+      tradedPast: `boros:txns:${acc}:${HL}:past`,
+      otherPast: `boros:txns:${acc}:999:past`,
+      otherLive: `boros:txns:${acc}:998:live`,
+    };
+    for (const k of Object.values(keys)) await cache.get(k, 600_000, async () => 'old');
+    const res = await post('/api/boros/pair/execute', pairBody({ ids: ['coid-fills-a', 'coid-fills-b'] }));
+    expect(res.statusCode).toBe(200);
+    const cached = async (k: string) => (await cache.get(k, 600_000, async () => 'new')).value === 'old';
+    expect(await cached(keys.tradedPast)).toBe(false);
+    expect(await cached(keys.otherLive)).toBe(false);
+    expect(await cached(keys.otherPast)).toBe(true);
   });
 });
 

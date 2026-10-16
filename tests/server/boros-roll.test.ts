@@ -367,7 +367,6 @@ describe('POST /api/boros/roll/execute', () => {
     calls[0].forEach((o) => expect(o.size).toBeCloseTo(100_000, 6));
 
     expect(busted).toContain('boros:collaterals');
-    expect(busted).toContain('boros:txns');
   });
 
   it('re-runs the roll gate server-side and refuses a blocked roll with a 409', async () => {
