@@ -113,7 +113,10 @@ function fakeApi(
     }
     if (path.startsWith('/v1/simulations/roll-over')) {
       if (over.rollSimReturns !== undefined) return ok(over.rollSimReturns);
-      const legs = body.legs as Array<{ fromMarketId: number; toMarketId: number; size: string }>;
+      // `/roll-over` takes legs; `/roll-over-orders` takes the closes and opens themselves.
+      const legs = (body.legs ?? []) as Array<{ fromMarketId: number; toMarketId: number; size: string }>;
+      const closes = (body.closes as Array<{ marketId: number; size: string }> | undefined) ?? legs.map((l) => ({ marketId: l.fromMarketId, size: l.size }));
+      const opens = (body.opens as Array<{ marketId: number; size: string }> | undefined) ?? legs.map((l) => ({ marketId: l.toMarketId, size: l.size }));
       const wei = (n: number) => (BigInt(n) * 10n ** 18n).toString();
       return ok({
         status: 'Succeed',
@@ -123,8 +126,8 @@ function fakeApi(
         postState: { availableInitialMargin: wei(4_100) },
         marginRequired: wei(700),
         orders: [
-          ...legs.map((l) => ({ action: 'close', marketId: l.fromMarketId, filled: true, matched: { size: `-${l.size}`, cost: '0', rate: 0.091 }, fee: wei(4), error: null })),
-          ...legs.map((l) => ({ action: 'open', marketId: l.toMarketId, filled: true, matched: { size: l.size, cost: '0', rate: 0.099 }, fee: wei(4), error: null })),
+          ...closes.map((o) => ({ action: 'close', marketId: o.marketId, filled: true, matched: { size: `-${o.size}`, cost: '0', rate: 0.091 }, fee: wei(4), error: null })),
+          ...opens.map((o) => ({ action: 'open', marketId: o.marketId, filled: true, matched: { size: o.size, cost: '0', rate: 0.099 }, fee: wei(4), error: null })),
         ],
       });
     }
@@ -668,6 +671,22 @@ describe('makeBorosApiOrderClient — rollOver', () => {
     // A venue that reports no exit state (older, or the closes could not run) reads as unknown, not 0.
     expect(refused).toMatchObject({ status: 'Refused', reason: { code: 'MARKET_ORDER_FOK_NOT_FILLED' }, availableAfter: null, availableAfterExit: null });
     expect(refused.orders[0]).toEqual({ action: 'open', marketId: HL + 1, filled: false, matchedSize: null, matchedApr: null, fee: null, error: 'Insufficient liquidity' });
+  });
+
+  it('previews a singles ↔ spread roll as explicit closes and opens, the batch placeMarketOrders sends', async () => {
+    const api = fakeApi();
+    const sim = await client(api).simulateRollOverOrders!(
+      [leg({ direction: 'long', limitApr: 0.091 }), leg({ marketId: BN, size: 10, sizeWei: '9999999999999999999', limitApr: 0.044 })],
+      [leg({ marketId: 59, direction: 'short', limitApr: 0.031 })],
+    );
+    const sent = api.calls.find((c) => c.path === '/v1/simulations/roll-over-orders')!.body;
+    expect(sent.closes).toEqual([
+      { marketId: HL, size: (10n * 10n ** 18n).toString(), rate: 0.091, ammId: 0 },
+      { marketId: BN, size: '9999999999999999999', rate: 0.044, ammId: 0 },
+    ]);
+    // Side is the venue enum: 0 = LONG, 1 = SHORT.
+    expect(sent.opens).toEqual([{ marketId: 59, side: 1, size: (10n * 10n ** 18n).toString(), rate: 0.031, ammId: 0 }]);
+    expect(sim).toMatchObject({ status: 'Succeed', availableBefore: 5_000, availableAfterExit: 5_300, availableAfter: 4_100, marginRequired: 700 });
   });
 
   it('reports a builder refusal as four rejected legs — nothing was sent', async () => {

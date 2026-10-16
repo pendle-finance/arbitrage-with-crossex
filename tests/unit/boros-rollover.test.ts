@@ -475,7 +475,7 @@ describe('spread rolls', () => {
   it.each([50, 6_000_000])('rolls two singles into the spread as one batch, closes first (%d)', (size) => {
     const exit = step(exitLegs(size), 'close', size);
     const entry = step([leg(spreadNew, 'short')], 'open', size);
-    expect(evaluateRollGate({ exit, entry, venue: null }).blockers).toEqual([]);
+    expect(evaluateRollGate({ exit, entry, venue: venueOk() }).blockers).toEqual([]);
     const plan = rollPlanFor(exit.simulation, entry.simulation, { ids: { 'exit:155': 'id-1' } })!;
     expect(plan.kind).toBe('batch');
     if (plan.kind !== 'batch') return;
@@ -490,7 +490,7 @@ describe('spread rolls', () => {
   it.each([50, 6_000_000])('rolls the spread into two singles as one batch (%d)', (size) => {
     const exit = step(spreadExit(size), 'close', size);
     const entry = step(entryLegs(), 'open', size);
-    expect(evaluateRollGate({ exit, entry, venue: null }).blockers).toEqual([]);
+    expect(evaluateRollGate({ exit, entry, venue: venueOk() }).blockers).toEqual([]);
     const plan = rollPlanFor(exit.simulation, entry.simulation)!;
     expect(plan.kind === 'batch' && [...plan.closes, ...plan.opens].map((o) => [o.marketId, o.direction, o.size])).toEqual([
       [157, 'long', size],
@@ -499,14 +499,16 @@ describe('spread rolls', () => {
     ]);
   });
 
-  it('a batch roll with no venue preview shows the re-entry margin shortfall as a warning, not a silent pass', () => {
+  it('a batch roll with no venue preview is blocked like any roll, and the re-entry margin is the venue\'s', () => {
     const exit = step(exitLegs(), 'close');
     const open = step([leg(spreadNew, 'short')], 'open');
     const short = { code: 'cross-short-margin' as const, message: 'Not enough ETH cross margin' };
     const entry = { ...open, gate: { ...open.gate, blockers: [...open.gate.blockers, short] } };
-    const g = evaluateRollGate({ exit, entry, venue: null });
+    expect(evaluateRollGate({ exit, entry, venue: null }).blockers.map((b) => b.code)).toEqual(['roll-unpriced']);
+    // Judged before the closes free their margin, the stale shortfall gives way to the venue's figures.
+    const g = evaluateRollGate({ exit, entry, venue: venueOk({ marginRequired: 40, availableAfterExit: 560, availableAfter: 520 }) });
     expect(g.blockers).toEqual([]);
-    expect(g.warnings).toContain('Re-entry: Not enough ETH cross margin (before the closes free their margin)');
+    expect(g.margin).toMatchObject({ need: 40, availableAfterExit: 560, availableAfter: 520, shortfall: 0 });
   });
 
   it('rolls a spread into the next spread with one roll-over leg, which still needs the venue preview', () => {
@@ -518,13 +520,13 @@ describe('spread rolls', () => {
   });
 
   it('refuses a spread on the other side of the singles it replaces', () => {
-    const g = evaluateRollGate({ exit: step(exitLegs(), 'close'), entry: step([leg(spreadNew, 'long')], 'open'), venue: null });
+    const g = evaluateRollGate({ exit: step(exitLegs(), 'close'), entry: step([leg(spreadNew, 'long')], 'open'), venue: venueOk() });
     expect(g.blockers.filter((b) => b.code === 'sides-mismatch').map((b) => b.leg)).toEqual([0, 1]);
   });
 
   it('refuses a spread over other venues than the singles', () => {
     const other = { ...spreadNew, spreadVenues: ['HYPERLIQUID', 'GATE'] as [string, string] };
-    const g = evaluateRollGate({ exit: step(exitLegs(), 'close'), entry: step([leg(other, 'short')], 'open'), venue: null });
+    const g = evaluateRollGate({ exit: step(exitLegs(), 'close'), entry: step([leg(other, 'short')], 'open'), venue: venueOk() });
     const mismatch = g.blockers.filter((b) => b.code === 'market-mismatch');
     expect(mismatch.map((b) => [b.step, b.leg])).toEqual([
       ['exit', 1],
@@ -666,7 +668,7 @@ describe('spread rolls', () => {
         target === 'spread'
           ? stepEach([[leg(spreadNew, 'short'), open]], 'open')
           : stepEach([[leg(hlNew, 'short'), open], [leg(bnNew, 'long'), f * (b.bn + b.sp)]], 'open');
-      expect(evaluateRollGate({ exit, entry, venue: null }).blockers).toEqual([]);
+      expect(evaluateRollGate({ exit, entry, venue: venueOk() }).blockers).toEqual([]);
       const plan = rollPlanFor(exit.simulation, entry.simulation)!;
       if (plan.kind !== 'batch') throw new Error('expected a batch plan');
       expect(plan.closes.map((o) => [o.marketId, o.direction])).toEqual([
@@ -694,12 +696,12 @@ describe('spread rolls', () => {
     ])('%s: refuses a spread target when the two venues hold different sizes, and rolls the same book into singles', (_label, perVenue) => {
       const b = book(perVenue, 0.3, 0.25);
       const exit = exitOf(b, 1);
-      const intoSpread = evaluateRollGate({ exit, entry: stepEach([[leg(spreadNew, 'short'), b.hl + b.sp]], 'open'), venue: null });
+      const intoSpread = evaluateRollGate({ exit, entry: stepEach([[leg(spreadNew, 'short'), b.hl + b.sp]], 'open'), venue: venueOk() });
       expect(intoSpread.blockers.map((x) => [x.code, x.step, x.message])).toEqual([
         ['size-mismatch', 'entry', 'This pair holds different sizes on its two venues. One spread cannot hold both.'],
       ]);
       const intoSingles = stepEach([[leg(hlNew, 'short'), b.hl + b.sp], [leg(bnNew, 'long'), b.bn + b.sp]], 'open');
-      expect(evaluateRollGate({ exit, entry: intoSingles, venue: null }).blockers).toEqual([]);
+      expect(evaluateRollGate({ exit, entry: intoSingles, venue: venueOk() }).blockers).toEqual([]);
     });
 
     it.each([
@@ -715,7 +717,7 @@ describe('spread rolls', () => {
         ],
         'close',
       );
-      const g = evaluateRollGate({ exit, entry: stepEach([[leg(spreadNew, 'short'), 2 * b.sp]], 'open'), venue: null });
+      const g = evaluateRollGate({ exit, entry: stepEach([[leg(spreadNew, 'short'), 2 * b.sp]], 'open'), venue: venueOk() });
       expect(g.blockers).toEqual([]);
     });
 
@@ -732,7 +734,7 @@ describe('spread rolls', () => {
       );
       const intoSpread = stepEach([[leg(spreadNew, 'short'), pair]], 'open');
       const intoSingles = stepEach([[leg(hlNew, 'short'), pair], [leg(bnNew, 'long'), pair]], 'open');
-      expect(evaluateRollGate({ exit, entry: intoSpread, venue: null }).blockers).toEqual([]);
+      expect(evaluateRollGate({ exit, entry: intoSpread, venue: venueOk() }).blockers).toEqual([]);
       expect(evaluateRollGate({ exit, entry: intoSingles, venue: null }).blockers.map((x) => x.code)).toEqual(['roll-unpriced']);
       const plan = rollPlanFor(exit.simulation, intoSpread.simulation)!;
       expect(plan.kind === 'batch' && plan.closes.map((o) => o.size)).toEqual([pair, pair]);
@@ -749,7 +751,7 @@ describe('spread rolls', () => {
         ],
         'close',
       );
-      const g = evaluateRollGate({ exit, entry: stepEach([[leg(spreadNew, 'short'), pair]], 'open'), venue: null });
+      const g = evaluateRollGate({ exit, entry: stepEach([[leg(spreadNew, 'short'), pair]], 'open'), venue: venueOk() });
       expect(g.blockers.map((x) => [x.code, x.step])).toEqual([['size-mismatch', 'entry']]);
     });
 
@@ -769,7 +771,7 @@ describe('spread rolls', () => {
         'close',
       );
       const entry = stepEach([[leg(spreadNew, 'short'), below(single) + sp]], 'open');
-      expect(evaluateRollGate({ exit, entry, venue: null }).blockers).toEqual([]);
+      expect(evaluateRollGate({ exit, entry, venue: venueOk() }).blockers).toEqual([]);
       const openSizeWei = { [hlOld.marketId]: singleWei, [bnOld.marketId]: singleWei, [spreadOld.marketId]: spWei };
       const plan = rollPlanFor(exit.simulation, entry.simulation, { openSizeWei })!;
       expect(plan.kind === 'batch' && plan.closes.map((o) => o.sizeWei)).toEqual([singleWei, singleWei, spWei]);
@@ -787,7 +789,7 @@ describe('spread rolls', () => {
 
     it('refuses an entry that opens less than the venue exposure it closes', () => {
       const b = book(2_333);
-      const g = evaluateRollGate({ exit: exitOf(b, 1), entry: stepEach([[leg(spreadNew, 'short'), b.sp]], 'open'), venue: null });
+      const g = evaluateRollGate({ exit: exitOf(b, 1), entry: stepEach([[leg(spreadNew, 'short'), b.sp]], 'open'), venue: venueOk() });
       expect(g.blockers.map((x) => [x.code, x.step, x.leg])).toEqual([
         ['size-mismatch', 'exit', 0],
         ['size-mismatch', 'exit', 1],
