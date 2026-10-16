@@ -124,6 +124,8 @@ const AMM_ORDERBOOK_ONLY = 0;
 
 /** How long one submission may take before the fill state is UNKNOWN. */
 const SUBMIT_TIMEOUT_MS = 60_000;
+/** How long a roll preview reuses its account reads (see `previewRead`). */
+const PREVIEW_READ_TTL_MS = 15_000;
 
 /** The backend's per-call error for the calls that did NOT fail when a
  * `requireSuccess` batch is refused in simulation (send-txs.service). */
@@ -637,9 +639,35 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
     return perMarket.flat();
   };
 
+  /**
+   * An open roll window previews every 4 s, and the venue meters each client
+   * IP at 200 computing units a minute (the root's market-acc infos cost 5).
+   * Read afresh on every poll, the preview alone spent 14 units a poll, 210 a
+   * minute, and every read from the IP failed with 429 until the minute
+   * turned. So a preview reuses its account reads for PREVIEW_READ_TTL_MS. A
+   * send always reads fresh, and clears them.
+   */
+  const previewReads = new Map<string, { at: number; value: Promise<unknown> }>();
+  const previewRead = <T>(key: string, load: () => Promise<T>): Promise<T> => {
+    const hit = previewReads.get(key);
+    if (hit && Date.now() - hit.at < PREVIEW_READ_TTL_MS) return hit.value as Promise<T>;
+    const value = load();
+    previewReads.set(key, { at: Date.now(), value });
+    value.catch(() => previewReads.delete(key));
+    return value;
+  };
+
   type MarketAccInfo = { marketAcc?: string; positions?: Array<{ marketId: number; signedSize?: string; orders?: unknown[] }> };
-  const readMarketAccInfos = async (): Promise<MarketAccInfo[]> =>
-    (await call<{ results?: MarketAccInfo[] }>(`/v1/accounts/market-acc-infos-by-root?root=${config.root}`, undefined, 'GET')).results ?? [];
+  const readMarketAccInfos = async (cached = false): Promise<MarketAccInfo[]> => {
+    const read = async () =>
+      (await call<{ results?: MarketAccInfo[] }>(`/v1/accounts/market-acc-infos-by-root?root=${config.root}`, undefined, 'GET')).results ?? [];
+    return cached ? previewRead('infos', read) : read();
+  };
+  const readEnteredMarkets = (marketAcc: string, cached = false) => {
+    const read = () =>
+      call<{ results?: Array<{ marketId: number; isMatured?: boolean }> }>(`/v1/accounts/entered-markets?marketAcc=${marketAcc}`, undefined, 'GET');
+    return cached ? previewRead(`entered:${marketAcc}`, read) : read();
+  };
 
   /**
    * `enterExitMarkets` calldata that frees market slots on the cross accounts
@@ -663,18 +691,14 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
    * matured one, and with `withEmpty` every one holding no position and no
    * order. Never a market the batch trades. Empty when they cannot be read.
    */
-  const exitMarketIdsFor = async (marketIds: number[], withEmpty: boolean): Promise<Array<{ marketAcc: string; ids: number[] }>> => {
+  const exitMarketIdsFor = async (marketIds: number[], withEmpty: boolean, cached = false): Promise<Array<{ marketAcc: string; ids: number[] }>> => {
     try {
       const keep = new Set(marketIds);
       const accs = [...new Set((await Promise.all(marketIds.map(marketAccFor))).map((a) => a.toLowerCase()))];
-      const infos = withEmpty ? await readMarketAccInfos() : [];
+      const infos = withEmpty ? await readMarketAccInfos(cached) : [];
       const out: Array<{ marketAcc: string; ids: number[] }> = [];
       for (const marketAcc of accs) {
-        const { results } = await call<{ results?: Array<{ marketId: number; isMatured?: boolean }> }>(
-          `/v1/accounts/entered-markets?marketAcc=${marketAcc}`,
-          undefined,
-          'GET',
-        );
+        const { results } = await readEnteredMarkets(marketAcc, cached);
         const exits = new Set((results ?? []).filter((m) => m.isMatured === true).map((m) => m.marketId));
         const positions = infos.find((r) => r.marketAcc?.toLowerCase() === marketAcc)?.positions ?? [];
         for (const p of positions) {
@@ -724,10 +748,10 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
    * the batch keeps keeps its slot. Best effort, like the head exits: an
    * unreadable account exits nothing.
    */
-  const flatAfterCloses = async (reqs: BorosMarketOrderRequest[], closeCount: number, cancelled: number[] = []): Promise<number[]> => {
+  const flatAfterCloses = async (reqs: BorosMarketOrderRequest[], closeCount: number, cancelled: number[] = [], cached = false): Promise<number[]> => {
     if (closeCount <= 0) return [];
     try {
-      const infos = await readMarketAccInfos();
+      const infos = await readMarketAccInfos(cached);
       const out: number[] = [];
       for (const req of reqs.slice(0, closeCount)) {
         const marketAcc = (await marketAccFor(req.marketId)).toLowerCase();
@@ -835,8 +859,11 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
     const marketAcc = await marketAccFor(closes[0].marketId);
     const marketIds = [...closes, ...opens].map((o) => o.marketId);
     const exitsFor = async (withEmpty: boolean): Promise<number[]> =>
-      (await exitMarketIdsFor(marketIds, withEmpty)).find((e) => e.marketAcc === marketAcc.toLowerCase())?.ids ?? [];
-    const [exits, exitAfterCloseMarketIds] = await Promise.all([exitsFor(false), flatAfterCloses([...closes, ...opens], closes.length, cancelMarketIds)]);
+      (await exitMarketIdsFor(marketIds, withEmpty, true)).find((e) => e.marketAcc === marketAcc.toLowerCase())?.ids ?? [];
+    const [exits, exitAfterCloseMarketIds] = await Promise.all([
+      exitsFor(false),
+      flatAfterCloses([...closes, ...opens], closes.length, cancelMarketIds, true),
+    ]);
     const run = async (exitMarketIds: number[]) =>
       readRollSimulation(
         await call<RollOverSimulationWire>('/v2/simulations/roll-over', {
@@ -878,6 +905,8 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
      * exits of the markets those closes empty). */
     between: Hex[] = [],
   ): Promise<BorosLegFill[]> => {
+    // A send changes the account: the next preview reads it afresh.
+    previewReads.clear();
     let signed: SignedCall[];
     let topUpCount: number;
     const at = Math.max(0, Math.min(reqs.length, opts?.topUpAfter ?? 0));
