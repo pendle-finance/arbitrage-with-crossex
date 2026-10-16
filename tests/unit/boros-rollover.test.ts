@@ -329,6 +329,16 @@ describe('evaluateRollGate', () => {
     expect(g.margin.shortfall).toBe(250);
   });
 
+  // Live 16 Oct: two opens that each pass alone, but need one more market
+  // slot than the closes free. No order is to blame; "widen" was wrong advice.
+  it('a market-limit refusal with no one order to blame gets the market-limit advice', () => {
+    const venue = venueOk({ status: 'Refused', reason: { code: 'MM_MARKET_LIMIT_EXCEEDED', message: 'MMMarketLimitExceeded()' }, availableAfter: null });
+    const g = evaluateRollGate({ ...rollInput(), venue });
+    expect(g.blockers[0].message).toBe(
+      'The venue refuses this roll — This account is in as many Boros markets as it may hold, and each one has a position or an order. Close a position you no longer need, then roll.',
+    );
+  });
+
   it("reads the contract's mid-batch margin revert as a margin refusal, sized off the account once the closes ran", () => {
     // Reverts before the venue's own post-batch check: no after-state. The
     // opens were judged on the margin left once the closes ran, which the
