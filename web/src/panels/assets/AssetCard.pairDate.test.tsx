@@ -346,6 +346,18 @@ describe('an open stops at what the venue lacks (owner 2026-10-16)', () => {
     expect(screen.queryByRole('button', { name: /^Open (both )?Boros leg/ })).toBeNull();
   });
 
+  it('perps 3: each Boros leg reads held / target for this card', async () => {
+    const user = userEvent.setup();
+    renderCard(capBook(3));
+    await showPairs(user);
+    const row = (venue: string) => screen.getAllByRole('row').find((r) => (r.textContent ?? '').startsWith(`${venue}Boros`));
+    await screen.findByText(reason);
+    expect(row('Gate')?.textContent).toMatch(/3 \/ 3 BTC/);
+    // Held elsewhere, so nothing to open here: the target still shows.
+    expect(row('Hyperliquid')?.textContent).toMatch(/0 \/ 3 BTC/);
+    expect(row('Hyperliquid')?.textContent).not.toMatch(/open /);
+  });
+
   it('perps 4: HL opens the 1 BTC it lacks, at the held single date', async () => {
     const user = userEvent.setup();
     renderCard(capBook(4));
@@ -356,6 +368,9 @@ describe('an open stops at what the venue lacks (owner 2026-10-16)', () => {
       'Open only the Hyperliquid SHORT Boros leg, at 1 BTC',
       'Open only the Gate LONG Boros leg, at 1 BTC',
     ]);
+    // The 3 BTC card: HL needs 3 here but lacks only 1, so the row says both.
+    const hl = screen.getAllByRole('row').find((r) => /^HyperliquidBoros.*0 \/ 3 BTC/.test(r.textContent ?? ''));
+    expect(hl?.textContent).toMatch(/0 \/ 3 BTCopen 1 BTC/);
     await user.click(opens[0]);
     await waitFor(() => expect(flow?.borosOpenPrefill).not.toBeNull());
     expect(flow?.borosOpenPrefill).toMatchObject({ longVenue: null, shortVenue: 'HYPERLIQUID', maturity: NOV, sizeBase: 1, size: 80_000 });

@@ -101,18 +101,16 @@ describe('BorosOnlyPairCard', () => {
     expect(screen.getByRole('button', { name: 'Open both perps' })).toBeInTheDocument();
   });
 
-  it('a part-covering perp is shown, the rest of its side is a gap, and "Open both perps" is withheld', () => {
+  it('a part-covering perp reads held / target on one row, and "Open both perps" is withheld', () => {
     renderCard(book([perp('GATE', 'LONG', 40)]));
     const table = legTable();
     const rows = within(table).getAllByRole('row').slice(1);
-    // Gate perp (held 40), Gate perp gap (60), Hyperliquid perp gap (100), two rate legs.
-    expect(rows).toHaveLength(5);
+    // Gate perp (40 of 100), Hyperliquid perp (0 of 100), two rate legs.
+    expect(rows).toHaveLength(4);
     const missing = rows.filter((r) => within(r).queryByText('missing'));
     expect(missing).toHaveLength(2);
-    expect(missing[0]).toHaveTextContent(/60/);
-    expect(missing[1]).toHaveTextContent(/100/);
-    expect(rows[0]).toHaveTextContent(/40/);
-    expect(within(rows[0]).queryByText('missing')).toBeNull();
+    expect(missing[0]).toHaveTextContent(/40 \/ 100 ETH/);
+    expect(missing[1]).toHaveTextContent(/missing0 \/ 100 ETH/);
     // The gaps differ (60 vs 100): one prefill would under-hedge the short side.
     expect(screen.queryByRole('button', { name: 'Open both perps' })).toBeNull();
     expect(within(table).getAllByRole('button', { name: 'Open leg' })).toHaveLength(2);
