@@ -988,13 +988,17 @@ export function markRolledBorosPairs(
     );
     const room = old.reduce((sum, h) => sum + (left.get(h) ?? 0), 0);
     if (old.length === 0 || p.size > room * (1 + 1e-9)) continue;
+    // Earliest old pair first; covered once the last pair it draws on ends.
     let need = p.size;
-    for (const h of old) {
+    let from = 0;
+    for (const h of [...old].sort((a, b) => a.soonestMaturitySec - b.soonestMaturitySec)) {
       const t = Math.min(need, left.get(h) ?? 0);
+      if (!(t > 0)) continue;
       left.set(h, (left.get(h) ?? 0) - t);
       need -= t;
+      from = Math.max(from, h.soonestMaturitySec);
     }
-    marks.set(p, Math.max(...old.map((h) => h.soonestMaturitySec)));
+    marks.set(p, from);
   }
   return pairs.map((p) => (marks.has(p) ? { ...p, coveredFromSec: marks.get(p) } : p));
 }

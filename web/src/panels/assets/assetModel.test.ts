@@ -1044,6 +1044,11 @@ describe('markRolledBorosPairs', () => {
     expect(marked[0].coveredFromSec).toBe(OLD);
   });
 
+  it('a unit covered by the earlier of two old pairs is covered from that pair\'s date', () => {
+    const marked = markRolledBorosPairs(newUnit(4), [hedged('GATE', 'LIGHTER', OLD, 6), hedged('GATE', 'LIGHTER', OLD - DAY, 4)]);
+    expect(marked[0].coveredFromSec).toBe(OLD - DAY);
+  });
+
   it('two rolled units draw on one old pair: the earlier one first, the other is new exposure', () => {
     const units = [...newUnit(10, NEW + DAY), ...newUnit(10, NEW)];
     const marked = markRolledBorosPairs(units, [hedged('GATE', 'LIGHTER', OLD, 10)]);
