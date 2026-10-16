@@ -8,6 +8,7 @@ import { screen, within } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { AssetBorosOpen, AssetGroup, AssetPerpOpen } from '../../api/types';
+import { fmtDateShort } from '../../lib/fmt';
 import { server } from '../../test/server';
 import { renderWithClient } from '../../test/utils';
 import { AssetCard } from './AssetCard';
@@ -144,7 +145,7 @@ describe('BorosOnlyPairCard', () => {
     expect(within(table).getByText('liq 240.00%')).toBeInTheDocument();
   });
 
-  it("an excess hedge (an open-only roll's leftover) reads as excess, not as a pair missing its perps", () => {
+  it("an open-only roll of the same size reads as rolled, not as a pair missing its perps", () => {
     const OLD = NOW + 8 * DAY;
     const NEW = NOW + 45 * DAY;
     // Perps + rate legs at the OLD maturity are a full 4-leg pair; the rate
@@ -166,13 +167,40 @@ describe('BorosOnlyPairCard', () => {
       borosHistory: [],
     };
     renderCard(group);
-    // The excess card's header flips: "Excess hedge", not "Perp legs missing".
-    const chip = screen.getByText('Excess hedge');
+    // The rolled card's header flips: "Rolled · covered from <old date>", not "Perp legs missing".
+    const chip = screen.getByText(`Rolled · covered from ${fmtDateShort(OLD)}`);
+    expect(chip.closest('[title]')?.getAttribute('title')).toContain(`From ${fmtDateShort(OLD)}: the old legs' perps hedge them.`);
     expect(screen.queryByText('Perp legs missing')).toBeNull();
     const card = chip.closest('div.overflow-x-auto') as HTMLElement;
     // Its way out is to close the excess legs; the open-perp prompts are gone.
     expect(within(card).getByRole('button', { name: 'Close Boros legs' })).toBeInTheDocument();
     expect(within(card).queryByRole('button', { name: 'Open both perps' })).toBeNull();
     expect(within(card).queryByRole('button', { name: 'Open leg' })).toBeNull();
+  });
+
+  it('a roll into a bigger size asks for perps for the whole new size (case 1)', () => {
+    const OLD = NOW + 8 * DAY;
+    const NEW = NOW + 45 * DAY;
+    // 100 hedged at OLD; 500 opened at NEW. All 500 is new exposure, not a roll the old perps cover.
+    const group: AssetGroup = {
+      base: 'ETH',
+      supported: true,
+      priceUsd: PX,
+      earliestSec: NOW - 10 * DAY,
+      perpOpen: [perp('GATE', 'LONG', 100), perp('HYPERLIQUID', 'SHORT', 100)],
+      perpClosed: [],
+      borosOpen: [
+        { ...yu(1, 'GATE', 'LONG', 100, 0.04), maturity: OLD },
+        { ...yu(2, 'HYPERLIQUID', 'SHORT', 100, 0.08), maturity: OLD },
+        { ...yu(11, 'GATE', 'LONG', 500, 0.04), maturity: NEW },
+        { ...yu(12, 'HYPERLIQUID', 'SHORT', 500, 0.08), maturity: NEW },
+      ],
+      borosHistory: [],
+    };
+    renderCard(group);
+    expect(screen.queryByText(/^Rolled · covered from/)).toBeNull();
+    const chip = screen.getByText('Perp legs missing');
+    const card = chip.closest('div.overflow-x-auto') as HTMLElement;
+    expect(within(card).getByRole('button', { name: 'Open both perps' })).toBeInTheDocument();
   });
 });
