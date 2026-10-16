@@ -42,7 +42,9 @@ on the cards in seconds.
   own rate. A card with two rates shows "40-50%"; the hover gives each leg's rate.
 - **Trades show in seconds.** After a Boros trade, the cards update within a few seconds.
   Before, they took up to 2 minutes, because the terminal re-read the fill history of every
-  market the account ever traded.
+  market the account ever traded. The header margin updates with the cards.
+- **Fewer Boros reads.** A pair under $100, which shows no rate, no longer sends roll probes.
+  Matured markets load in one read. A new wallet's settlement history loads once, not twice.
 - **Smaller changes.** Each roll option names its target ("→ singles" or the spread). The roll
   window shows "—" until the preview is back. A Boros rate limit reads "Boros rate limit
   reached. It retries in 10 s." Exact sizes show when a short label would read
