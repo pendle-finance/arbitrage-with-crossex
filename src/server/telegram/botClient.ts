@@ -46,6 +46,8 @@ export interface BotClient {
 
 /** How a bot without the link wallet check refuses the field (Nest's whitelist). */
 const OLD_BOT_NO_WALLET = /property wallet should not exist/;
+/** How a bot older than the roll kind refuses it. */
+const OLD_BOT_NO_ROLL_KIND = /property kind should not exist/;
 
 export class BotAuthError extends Error {
   constructor(readonly reason: BotAuthReason) {
@@ -159,7 +161,23 @@ export function createBotClient(opts: BotClientOptions): BotClient {
       await call('GET', '/terminal', { key });
     },
     async putTriggers(key, body) {
-      const reply = await call('PUT', '/terminal/triggers', { key, body });
+      // A bot older than the roll kind refuses the field. That bot keys spread
+      // and singles twins as one alert, so it gets the first twin only, as
+      // before 1.7.6.
+      const reply = await call('PUT', '/terminal/triggers', { key, body }).catch((err: unknown) => {
+        if (!(err instanceof Error && OLD_BOT_NO_ROLL_KIND.test(err.message))) throw err;
+        const coins = body.coins.map((c) => {
+          const seen = new Set<string>();
+          const rolls = c.rolls.flatMap(({ kind: _kind, ...roll }) => {
+            const twin = `${roll.longVenue}:${roll.shortVenue}:${roll.maturity}`;
+            if (seen.has(twin)) return [];
+            seen.add(twin);
+            return [roll];
+          });
+          return { ...c, rolls };
+        });
+        return call('PUT', '/terminal/triggers', { key, body: { ...body, coins } });
+      });
       return { settings: settingsOf(reply), wallet: walletOf(reply) };
     },
     async patchSettings(key, body) {

@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { BotAuthError } from '../../src/server/telegram/botClient';
+import { BotAuthError, type TriggerSync } from '../../src/server/telegram/botClient';
 import { newTelegramKey, readTelegramKey, writeTelegramKey } from '../../src/server/telegram/keyFile';
 import { createTelegramLink } from '../../src/server/telegram/link';
 import { TelegramStatus } from '../../src/server/telegram/status';
@@ -87,6 +87,28 @@ describe('x-terminal-wallet header', () => {
       { keyHash: 'h', version: '1', wallet: ROOT.toLowerCase() },
       { keyHash: 'h', version: '1' },
     ]);
+  });
+
+  it('an older bot that refuses the roll kind gets the sync again without it, one roll per twin pair', async () => {
+    const roll = { longVenue: 'GATE', shortVenue: 'HYPERLIQUID', maturity: 1_800_000_000, targets: [] };
+    const coin = {
+      coin: 'ETH',
+      legs: [],
+      liquidation: { down: null, up: null },
+      interest: { down: null, up: null },
+      rolls: [{ ...roll, kind: 'spread' as const }, { ...roll, kind: 'singles' as const, targets: [{ maturity: 1_810_000_000, apr: 0.05, currentApr: 0.04 }] }],
+    } as unknown as TriggerSync['coins'][number];
+    const body: TriggerSync = { syncedAt: '2026-10-16T00:00:00.000Z', port: 1, version: '1', coins: [coin] };
+    const stub = stubWith(async (call) =>
+      JSON.stringify(call.body).includes('"kind"')
+        ? { status: 400, body: { message: ['coins.0.rolls.0.property kind should not exist'], statusCode: 400 } }
+        : { status: 200, body: { settings: { liquidation: true, interest: true } } },
+    );
+    await stub.bot.putTriggers('k', body);
+    const sent = stub.to('PUT', '/terminal/triggers').map((c) => (c.body as TriggerSync).coins[0].rolls);
+    // The retry drops the field and keeps the first twin only, as 1.7.5 sent.
+    expect(sent[1]).toEqual([roll]);
+    expect(sent[0].map((r) => r.kind)).toEqual(['spread', 'singles']);
   });
 
   it('any other 400 is not retried', async () => {
