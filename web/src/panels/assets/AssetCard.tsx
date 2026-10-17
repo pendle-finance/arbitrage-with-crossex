@@ -3944,7 +3944,7 @@ function MissingRow({ gap, base, onOpen, asPair }: { gap: HedgeGapRow; base: str
           kind={gap.leg}
           dim
           sub="not open yet"
-          chips={<Chip sm tone="amber">missing</Chip>}
+          chips={<Chip sm tone="amber" className="num">missing {sizeLabel(gap.size, gap.unit, base)}</Chip>}
         />
       </td>
       <td className="num text-right text-ink-300">
