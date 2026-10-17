@@ -405,7 +405,7 @@ describe('AssetCard — roll over', () => {
     const row = within(panel).getByRole('button', { name: /Gate LONG \/ Hyperliquid SHORT Boros legs missing/ });
     expect(row).toHaveAttribute('aria-expanded', 'true');
     // Both gaps are named, each with its own action, plus the one for both.
-    expect(within(panel).getAllByText('missing')).toHaveLength(2);
+    expect(within(panel).getAllByText('missing 100 ETH')).toHaveLength(2);
     expect(within(panel).getAllByRole('button', { name: 'Open leg' })).toHaveLength(2);
     expect(within(panel).getByRole('button', { name: 'Open both Boros legs' })).toBeInTheDocument();
     // … and the other way out: stop farming it.
@@ -421,7 +421,7 @@ describe('AssetCard — roll over', () => {
     renderCard(g);
     const panel = screen.getByRole('tabpanel', { name: /^Fixed Rate Pairs/ });
     expect(within(panel).getByRole('button', { name: /Gate LONG \/ Hyperliquid SHORT Boros leg missing/ })).toBeInTheDocument();
-    expect(within(panel).getAllByText('missing')).toHaveLength(1);
+    expect(within(panel).getAllByText('missing 100 ETH')).toHaveLength(1);
     expect(within(panel).getAllByRole('button', { name: 'Open leg' })).toHaveLength(1);
     expect(within(panel).queryByRole('button', { name: 'Open both Boros legs' })).not.toBeInTheDocument();
     expect(within(panel).getByRole('button', { name: 'Close perps' })).toBeEnabled();

@@ -839,11 +839,6 @@ export interface BorosOnlyPair {
   /** Receive leg minus pay leg, on notional, net of settlement fees; null
    * while either rate is pending. */
   lockedSpread: number | null;
-  /** Set when an open-only roll left these legs: a perp-hedged pair at an
-   * EARLIER maturity on the same two venues is at least this size, so its
-   * perps cover these legs once it matures. The old pair's maturity. Set by
-   * `markRolledBorosPairs`. */
-  coveredFromSec?: number;
 }
 
 /**
@@ -980,47 +975,6 @@ export function borosOnlyPairs(
     });
   }
   return { pairs, restPerps: restOf(perps, left), restYus: restOf(yus, yuLeft) };
-}
-
-/**
- * Flag the Boros-only units an open-only roll left. Such a roll opens the new
- * maturity and keeps the old legs, so the perps stay on the old pair and the
- * new rate legs land here without perps. When the old pairs on the same two
- * venues hold at least this unit's size, their perps cover it once they
- * mature: the card says so instead of asking for perps. A bigger unit is new
- * exposure (owner 2026-10-16): it stays "perp legs missing" for its full size.
- * Earlier units draw on the old pairs' size first.
- */
-export function markRolledBorosPairs(
-  pairs: ReadonlyArray<BorosOnlyPair>,
-  hedged: ReadonlyArray<Pick<PairEstimate, 'longVenue' | 'shortVenue' | 'soonestMaturitySec' | 'size'>>,
-): BorosOnlyPair[] {
-  const sameVenue = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
-  const left = new Map(hedged.map((h) => [h, h.size]));
-  const marks = new Map<BorosOnlyPair, number>();
-  for (const p of [...pairs].sort((a, b) => a.maturity - b.maturity)) {
-    const old = hedged.filter(
-      (h) => h.soonestMaturitySec < p.maturity && sameVenue(h.longVenue, p.longVenue) && sameVenue(h.shortVenue, p.shortVenue),
-    );
-    const room = old.reduce((sum, h) => sum + (left.get(h) ?? 0), 0);
-    // Bigger by under the dust line is rounding between two venues' size
-    // steps, not new exposure: 1e-9 alone read a 2,400.000003 ETH roll of a
-    // 2,400 ETH pair as 2,400 ETH of perps missing.
-    const extraUsd = p.size > 0 ? ((p.size - room) / p.size) * p.notionalUsd : 0;
-    if (old.length === 0 || (p.size > room * (1 + 1e-9) && extraUsd >= PERP_ONLY_DUST_USD)) continue;
-    // Earliest old pair first; covered once the last pair it draws on ends.
-    let need = p.size;
-    let from = 0;
-    for (const h of [...old].sort((a, b) => a.soonestMaturitySec - b.soonestMaturitySec)) {
-      const t = Math.min(need, left.get(h) ?? 0);
-      if (!(t > 0)) continue;
-      left.set(h, (left.get(h) ?? 0) - t);
-      need -= t;
-      from = Math.max(from, h.soonestMaturitySec);
-    }
-    marks.set(p, from);
-  }
-  return pairs.map((p) => (marks.has(p) ? { ...p, coveredFromSec: marks.get(p) } : p));
 }
 
 /**
@@ -1739,6 +1693,7 @@ export function deriveAsset(
    * at one maturity — any of them is a true hedge; the book's totals are the
    * same either way. Largest first gives the fewest, biggest units; ties go
    * to the earlier maturity, then the larger perps, so the result is stable.
+   * One exception: within one venue pairing the further maturity goes first.
    */
   const pool = Math.max(longTotal, shortTotal);
   if (longs.length > 0 && shorts.length > 0 && pool > 0) {
@@ -1816,6 +1771,23 @@ export function deriveAsset(
           }
         }
         if (best === null) return;
+        // Within one venue pairing, the further maturity takes the perps
+        // first: after a roll that keeps the old legs, the new legs are the
+        // hedged pair and the old ones show what they lack (mozzarella
+        // 2026-10-17). At one maturity the spread still comes first. Dust
+        // units keep today's order.
+        for (const c of combos) {
+          if (spent.has(c) || c.l !== best.l || c.sh !== best.sh || !(c.maturity > best.maturity)) continue;
+          const perps = Math.min(perpLeft.get(c.l) ?? 0, perpLeft.get(c.sh) ?? 0);
+          const left = c.kind === 'spread' ? spreadLeftAt(c.l.venue, c.sh.venue, c.maturity) : Math.min(yuLeftAt(c.l.venue, c.maturity), yuLeftAt(c.sh.venue, c.maturity));
+          const need = Math.min(perps, left);
+          // A later unit under the dust line does not take the main pair's perps.
+          const usd = unit === 'usd' ? need : c.l.qty > 0 ? (need * c.l.notionalUsd) / c.l.qty : 0;
+          if (need > 1e-9 && usd * 2 >= PERP_ONLY_DUST_USD) {
+            best = c;
+            bestNeed = need;
+          }
+        }
         const before = perpLeft.get(best.l);
         yield { ...best, need: bestNeed };
         if (perpLeft.get(best.l) === before) spent.add(best);
