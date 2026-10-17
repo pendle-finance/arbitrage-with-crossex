@@ -82,6 +82,30 @@ describe('makeRebateClient — status', () => {
     expect(s.rebate?.endTimestamp).toBe(START + 1000);
   });
 
+  it('parses per-market overrides and drops malformed entries', async () => {
+    const s = await client(
+      stub({
+        '/apis/v1/crossex-rebate/status': {
+          rebate: {
+            ...relative,
+            marketFeeOverrides: [
+              { marketId: 232, settlementFeePercentage: 0.5, rebateBps: 5000 },
+              { marketId: '233', settlementFeePercentage: 0.5, rebateBps: 5000 },
+              { marketId: 234 },
+              null,
+            ],
+          },
+        },
+      }),
+    ).status();
+    expect(s.rebate?.marketFeeOverrides).toEqual([{ marketId: 232, settlementFeePercentage: 0.5, rebateBps: 5000 }]);
+  });
+
+  it('defaults overrides to empty when the backend omits them', async () => {
+    const s = await client(stub({ '/apis/v1/crossex-rebate/status': { rebate: relative } })).status();
+    expect(s.rebate?.marketFeeOverrides).toEqual([]);
+  });
+
   it('normalises a non-rebated account to rebate null', async () => {
     const s = await client(stub({ '/apis/v1/crossex-rebate/status': { root: ROOT, accountId: 0, rebate: null } })).status();
     expect(s.rebate).toBeNull();

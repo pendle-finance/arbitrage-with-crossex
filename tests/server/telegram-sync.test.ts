@@ -259,6 +259,38 @@ describe('the trigger sync', () => {
     ]);
   });
 
+  it('twin pairs at one date are stored apart: an unpriced twin keeps its own targets', async () => {
+    link();
+    const stub = botStub();
+    const base = rollSignal();
+    const spread: RollSignalInput = { ...base, kind: 'spread', marketIds: [59], targets: [] };
+    const singles: RollSignalInput = {
+      ...base,
+      kind: 'singles',
+      marketIds: [1, 2],
+      targets: [{ maturity: base.targets[0].maturity, apr: 0.04, currentApr: 0.02 }],
+    };
+    let priced = true;
+    const probeRolls = vi.fn(async () =>
+      priced ? [spread, singles] : [{ ...spread, unpriced: true }, { ...singles, targets: [], unpriced: true }],
+    );
+    const { sync } = makeSync(stub.bot, { probeRolls });
+
+    sync.start();
+    await vi.waitFor(() => expect(stub.puts()).toHaveLength(1));
+    priced = false;
+    sync.requestSync('check');
+    await vi.waitFor(() => expect(stub.puts()).toHaveLength(2));
+
+    const roll = { longVenue: 'GATE', shortVenue: 'HYPERLIQUID', maturity: base.maturity };
+    const expected = [
+      { ...roll, kind: 'spread', targets: [] },
+      { ...roll, kind: 'singles', targets: singles.targets },
+    ];
+    expect(rollsOf(stub.puts()[0])).toEqual(expected);
+    expect(rollsOf(stub.puts()[1])).toEqual(expected);
+  });
+
   it('a wallet switch drops the targets probed for the previous wallet', async () => {
     link();
     const stub = botStub();

@@ -81,8 +81,15 @@ export interface RebateConfig {
   endTimestamp: number | null;
   /** The markets the rebate covers, null = all markets. */
   marketIds: number[] | null;
+  marketFeeOverrides: RebateMarketOverride[];
   /** Whether the window contains now — the backend's own reading. */
   active: boolean;
+}
+
+export interface RebateMarketOverride {
+  marketId: number;
+  settlementFeePercentage: number;
+  rebateBps: number | null;
 }
 
 export interface RebateStatus {
@@ -139,8 +146,21 @@ function parseRebate(raw: unknown): RebateConfig | null {
     startTimestamp: num(r.startTimestamp),
     endTimestamp: num(r.endTimestamp),
     marketIds: Array.isArray(r.marketIds) ? r.marketIds.map(Number).filter(Number.isFinite) : null,
+    marketFeeOverrides: parseOverrides(r.marketFeeOverrides, mode),
     active: r.active === true,
   };
+}
+
+function parseOverrides(raw: unknown, mode: RebateMode): RebateMarketOverride[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.flatMap((o): RebateMarketOverride[] => {
+    if (!o || typeof o !== 'object') return [];
+    const { marketId, settlementFeePercentage, rebateBps } = o as Record<string, unknown>;
+    if (typeof marketId !== 'number' || !Number.isInteger(marketId)) return [];
+    if (typeof settlementFeePercentage !== 'number' || !Number.isFinite(settlementFeePercentage)) return [];
+    const bps = typeof rebateBps === 'number' && Number.isFinite(rebateBps) ? rebateBps : null;
+    return [{ marketId, settlementFeePercentage, rebateBps: mode === 'relative' ? bps : null }];
+  });
 }
 
 export function makeRebateClient(config: RebateClientConfig): RebateClient {

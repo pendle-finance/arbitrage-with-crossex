@@ -27,7 +27,7 @@ import type { FastifyInstance } from 'fastify';
 import {
   createRequestPacer,
   fetchBorosCollaterals,
-  fetchBorosMarket,
+  fetchBorosMarketsByIds,
   fetchBorosMarkets,
   fetchBorosTransactions,
   settlementWindow,
@@ -741,12 +741,18 @@ export function createAssetViewBuilder(deps: AppDeps) {
       for (const ev of settlements.events) referenced.add(ev.marketId);
       for (const txns of txnsByToken.values()) for (const t of txns) referenced.add(t.marketId);
       const unknown = [...referenced].filter((id) => !marketById.has(id));
+      // One by-ids read for every id this view misses (up to 100 ids for 2 CU),
+      // not one read per id. Each id keeps its own cache entry.
+      let batch: Promise<Map<number, BorosMarket>> | undefined;
       const resolved = await Promise.all(
         unknown.map(async (id) => {
           try {
-            const { value } = await deps.cache.get(`boros:market:${id}`, TTL.static, () =>
-              fetchBorosMarket(fetchImpl, id),
-            );
+            const { value } = await deps.cache.get(`boros:market:${id}`, TTL.static, async () => {
+              batch ??= fetchBorosMarketsByIds(fetchImpl, unknown);
+              const market = (await batch).get(id);
+              if (!market) throw new CoreError(`Boros /markets/by-ids ${id}: not served`, 'network');
+              return market;
+            });
             return value;
           } catch {
             return null; // stays unmapped; counted into the warning below
@@ -1287,8 +1293,20 @@ export function createAssetViewBuilder(deps: AppDeps) {
   };
 }
 
+/**
+ * One builder per app. The builder holds the settlement ledgers, the fill
+ * memory and the pacer, so a second one (the Telegram roll probe had its own)
+ * swept a new wallet's whole settlement history a second time.
+ */
+const builders = new WeakMap<AppDeps, ReturnType<typeof createAssetViewBuilder>>();
+export function assetViewBuilderFor(deps: AppDeps): ReturnType<typeof createAssetViewBuilder> {
+  let builder = builders.get(deps);
+  if (!builder) builders.set(deps, (builder = createAssetViewBuilder(deps)));
+  return builder;
+}
+
 export function assetViewRoutes(deps: AppDeps) {
-  const buildAssetView = createAssetViewBuilder(deps);
+  const buildAssetView = assetViewBuilderFor(deps);
   const fetchImpl: FetchLike = resolveBorosFetch(deps.borosFetch);
   return async function plugin(app: FastifyInstance): Promise<void> {
     /**
@@ -1297,10 +1315,13 @@ export function assetViewRoutes(deps: AppDeps) {
      * it costs nothing extra while Positions is open and little otherwise.
      */
     app.get('/boros/margin/:address', async (req, reply) => {
-      const address = (req.params as { address: string }).address;
-      if (!EVM_ADDRESS_RE.test(address)) {
+      const raw = (req.params as { address: string }).address;
+      if (!EVM_ADDRESS_RE.test(raw)) {
         throw new CoreError('invalid EVM address (expected 0x + 40 hex chars)', 'validation');
       }
+      // Lowercase, as the asset view and the Boros writes key it: a trade
+      // refreshes only the lowercase entry.
+      const address = raw.toLowerCase();
       const markets = (await deps.cache.get('boros:markets', TTL.boros, () => fetchBorosMarkets(fetchImpl))).value;
       const zones = (
         await deps.cache.get(`boros:collaterals:${address}`, TTL.boros, () =>

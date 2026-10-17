@@ -134,6 +134,13 @@ export class TtlCache {
     }
   }
 
+  /** Invalidate every key `match` accepts. */
+  bustWhere(match: (key: string) => boolean): void {
+    for (const key of [...this.entries.keys()]) {
+      if (match(key)) this.entries.delete(key);
+    }
+  }
+
   /** Move a key to the most-recently-used end (Map preserves insertion order). */
   private touch(key: string, entry: Entry): void {
     this.entries.delete(key);

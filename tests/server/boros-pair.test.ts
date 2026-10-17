@@ -19,6 +19,7 @@ import { resetAgentApprovalCache } from '../../src/server/borosAgentApproval';
 import { borosExecutionsPending } from '../../src/server/routes/borosPair';
 import { account, ADDRESS, BN, DAY, HL, market, MATURITY, NOW, OK, wireBook } from '../helpers/boros-pair-fixtures';
 import { TtlCache } from '../../src/server/cache';
+import { CoreError } from '../../src/core/errors';
 import { marketAcc, raw } from '../helpers/boros-fixtures';
 import { borosStub } from '../helpers/boros-stub';
 import { HOST, makeTestApp } from './helpers/gate-nock';
@@ -189,7 +190,7 @@ describe('boros writes bust the reads they invalidate', () => {
       getBorosOrders: () => client ?? orderClient(),
       cache,
     });
-    return { busted };
+    return { busted, cache };
   }
 
   it('an OPEN busts the cached Boros reads, like a close does', async () => {
@@ -201,8 +202,126 @@ describe('boros writes bust the reads they invalidate', () => {
     const { busted } = appWithBustSpy();
     const res = await post('/api/boros/pair/execute', pairBody({ ids: ['coid-bust-a', 'coid-bust-b'] }));
     expect(res.statusCode).toBe(200);
-    expect(busted).toContain('boros:collaterals');
-    expect(busted).toContain('boros:txns');
+    expect(busted).toContain(`boros:collaterals:${ADDRESS}`);
+  });
+
+  it("drops the traded markets' fills, held or closed, and keeps every other market's", async () => {
+    // Busting every closed market's fills re-read each one under the rate
+    // limit: on prod the cards took about 50 s to show a close (2026-10-16).
+    const { cache } = appWithBustSpy();
+    const acc = '0xacc';
+    const keys = {
+      tradedPast: `boros:txns:${acc}:${HL}:past`,
+      tradedLive: `boros:txns:${acc}:${BN}:live`,
+      otherPast: `boros:txns:${acc}:999:past`,
+      otherLive: `boros:txns:${acc}:998:live`,
+    };
+    for (const k of Object.values(keys)) await cache.get(k, 600_000, async () => 'old');
+    const res = await post('/api/boros/pair/execute', pairBody({ ids: ['coid-fills-a', 'coid-fills-b'] }));
+    expect(res.statusCode).toBe(200);
+    const cached = async (k: string) => (await cache.get(k, 600_000, async () => 'new')).value === 'old';
+    expect(await cached(keys.tradedPast)).toBe(false);
+    expect(await cached(keys.tradedLive)).toBe(false);
+    expect(await cached(keys.otherLive)).toBe(true);
+    expect(await cached(keys.otherPast)).toBe(true);
+  });
+
+  // Live 2026-10-16: Boros showed a batch 1–2 s after the send returned, so the
+  // page's instant re-read got the old position and kept it for 30 s.
+  it('waits until Boros shows the trade, then keeps that read for the cards', async () => {
+    const before = bodies();
+    const after = bodies(account(500_000, [{ marketId: HL, size: -100_000 }, { marketId: BN, size: 100_000 }]));
+    let infoReads = 0;
+    let slept = 0;
+    const stub = borosStub(before);
+    const cache = new TtlCache();
+    app = makeTestApp({
+      // The pre-trade read and the first read after the send are old; the third shows the trade.
+      borosFetch: async (url: string) => {
+        if (new URL(url).pathname.endsWith('/market-acc-infos-by-root') && ++infoReads >= 3) return borosStub(after)(url);
+        if (new URL(url).pathname.endsWith('/active-positions') && infoReads >= 3) return borosStub(after)(url);
+        return stub(url);
+      },
+      getBorosOrders: () => orderClient(),
+      cache,
+      borosSettle: { maxMs: 60_000, sleep: async () => void slept++ },
+    });
+    const res = await post('/api/boros/pair/execute', pairBody({ ids: ['coid-settle-a', 'coid-settle-b'] }));
+    expect(res.statusCode).toBe(200);
+    expect(infoReads).toBe(3);
+    expect(slept).toBe(1);
+    const reread = vi.fn(async () => []);
+    await cache.get(`boros:collaterals:${ADDRESS}`, 30_000, reread);
+    expect(reread).not.toHaveBeenCalled();
+  });
+
+  it('keeps the old fills while it waits, then drops them and the gas balance', async () => {
+    // A card poll during the wait must not re-read the fills before Boros shows
+    // the trade: that read would be kept for 60 s without it.
+    const after = bodies(account(500_000, [{ marketId: HL, size: -100_000 }, { marketId: BN, size: 100_000 }]));
+    let infoReads = 0;
+    const stub = borosStub(bodies());
+    const cache = new TtlCache();
+    const fills = `boros:txns:0xacc:${HL}:live`;
+    await cache.get(fills, 600_000, async () => 'old');
+    const keptDuringWait: boolean[] = [];
+    app = makeTestApp({
+      borosFetch: async (url: string) => {
+        if (new URL(url).pathname.endsWith('/market-acc-infos-by-root') && ++infoReads >= 3) return borosStub(after)(url);
+        if (new URL(url).pathname.endsWith('/active-positions') && infoReads >= 3) return borosStub(after)(url);
+        return stub(url);
+      },
+      getBorosOrders: () => orderClient(),
+      cache,
+      borosSettle: {
+        maxMs: 60_000,
+        sleep: async () => void keptDuringWait.push((await cache.get(fills, 600_000, async () => 'new')).value === 'old'),
+      },
+    });
+    const res = await post('/api/boros/pair/execute', pairBody({ ids: ['coid-wait-a', 'coid-wait-b'] }));
+    expect(res.statusCode).toBe(200);
+    expect(keptDuringWait).toEqual([true]);
+    const reread = vi.fn(async () => 'new');
+    await cache.get(fills, 600_000, reread);
+    expect(reread).toHaveBeenCalled();
+    const gas = vi.fn(async () => 1);
+    await cache.get('boros:gas-balance', 30_000, gas);
+    expect(gas).toHaveBeenCalled();
+  });
+
+  it('drops the account read and the fills when a close fails after the cancel landed', async () => {
+    const cache = new TtlCache();
+    app = makeTestApp({
+      borosFetch: borosStub(bodies({ ...account(500_000, [{ marketId: HL, size: 75_000 }]) })),
+      getBorosOrders: () => ({
+        placeMarketOrders: async (reqs) => reqs.map(() => okFill()),
+        cancelOrders: async () => {},
+        closePosition: async () => {
+          throw new CoreError('Boros did not answer in time', 'network');
+        },
+      }),
+      cache,
+    });
+    const fills = `boros:txns:0xacc:${HL}:live`;
+    await cache.get(fills, 600_000, async () => 'old');
+    const res = await post(`/api/boros/pair/market/${HL}/cancel-and-close`, { clientOrderId: 'coid-close-throws' });
+    expect(res.statusCode).toBeGreaterThanOrEqual(400);
+    expect(res.json().error.message).toMatch(/already been cancelled/);
+    const reread = vi.fn(async () => []);
+    await cache.get(`boros:collaterals:${ADDRESS}`, 30_000, reread);
+    expect(reread).toHaveBeenCalled();
+    const refills = vi.fn(async () => 'new');
+    await cache.get(fills, 600_000, refills);
+    expect(refills).toHaveBeenCalled();
+  });
+
+  it('keeps no read when Boros never shows the trade in time', async () => {
+    const { cache } = appWithBustSpy();
+    const res = await post('/api/boros/pair/execute', pairBody({ ids: ['coid-settle-c', 'coid-settle-d'] }));
+    expect(res.statusCode).toBe(200);
+    const reread = vi.fn(async () => []);
+    await cache.get(`boros:collaterals:${ADDRESS}`, 30_000, reread);
+    expect(reread).toHaveBeenCalled();
   });
 });
 

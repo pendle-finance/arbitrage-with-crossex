@@ -11,7 +11,7 @@
 import { CoreError } from '../../src/core/errors';
 import type { FastifyInstance } from 'fastify';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { BorosLegFill, BorosOrderClient, BorosRollLeg, BorosRollSimulation } from '../../src/core/boros/orders';
+import type { BorosLegFill, BorosMarketOrderRequest, BorosOrderClient, BorosRollSimulation } from '../../src/core/boros/orders';
 import { imInputs, marketAcc, raw } from '../helpers/boros-fixtures';
 import { TtlCache } from '../../src/server/cache';
 import { borosStub } from '../helpers/boros-stub';
@@ -128,19 +128,19 @@ const okFill = (over: Partial<BorosLegFill> = {}): BorosLegFill => ({
   failure: null,
   ...over,
 });
-/** The venue's four answers to a roll — closes then opens — every one whole. */
-const rolledFills = (legs: BorosRollLeg[]): BorosLegFill[] => [
-  ...legs.map((l) => okFill({ marketId: l.fromMarketId, direction: 'long', filledSize: l.size, shortfallSize: 0 })),
-  ...legs.map((l) => okFill({ marketId: l.toMarketId, direction: 'short', filledSize: l.size, shortfallSize: 0 })),
-];
+type Orders = BorosMarketOrderRequest[];
+type Place = BorosOrderClient['placeMarketOrders'];
+/** The venue's answers to a roll — closes then opens — every one whole. */
+const rolledFills = (orders: Orders): BorosLegFill[] =>
+  orders.map((o) => okFill({ marketId: o.marketId, direction: o.direction, filledSize: o.size, shortfallSize: 0 }));
 
 /** The venue's preview of a roll that goes through. */
-const venueOk = (legs: BorosRollLeg[], over: Partial<BorosRollSimulation> = {}): BorosRollSimulation => ({
+const venueOk = (closes: Orders, opens: Orders, over: Partial<BorosRollSimulation> = {}): BorosRollSimulation => ({
   status: 'Succeed',
   reason: null,
   orders: [
-    ...legs.map((l) => ({ action: 'close' as const, marketId: l.fromMarketId, filled: true, matchedSize: l.size, matchedApr: 0.09, fee: 4, error: null })),
-    ...legs.map((l) => ({ action: 'open' as const, marketId: l.toMarketId, filled: true, matchedSize: l.size, matchedApr: 0.1, fee: 4, error: null })),
+    ...closes.map((o) => ({ action: 'close' as const, marketId: o.marketId, filled: true, matchedSize: o.size, matchedApr: 0.09, fee: 4, error: null })),
+    ...opens.map((o) => ({ action: 'open' as const, marketId: o.marketId, filled: true, matchedSize: o.size, matchedApr: 0.1, fee: 4, error: null })),
   ],
   availableBefore: 500_000,
   availableAfter: 480_000,
@@ -149,31 +149,25 @@ const venueOk = (legs: BorosRollLeg[], over: Partial<BorosRollSimulation> = {}):
   ...over,
 });
 
-/** A client that records its ONE rollOver call and scripts the fills; the venue's preview says yes unless told otherwise. */
+/** A client that records each batch it sends and scripts the fills; the venue's preview says yes unless told otherwise. */
 function capturingClient(
-  calls: BorosRollLeg[][],
-  roll?: (legs: BorosRollLeg[]) => BorosLegFill[],
-  preview?: (legs: BorosRollLeg[]) => Promise<BorosRollSimulation>,
+  calls: Orders[],
+  roll?: (orders: Orders) => BorosLegFill[],
+  preview?: (closes: Orders, opens: Orders) => Promise<BorosRollSimulation>,
 ): BorosOrderClient {
   return {
-    placeMarketOrders: async () => {
-      throw new Error('a roll must not go through placeMarketOrders');
+    placeMarketOrders: async (orders) => {
+      calls.push(orders);
+      return roll ? roll(orders) : rolledFills(orders);
     },
-    rollOver: async (legs) => {
-      calls.push(legs);
-      return roll ? roll(legs) : rolledFills(legs);
-    },
-    simulateRollOver: async (legs) => (preview ? preview(legs) : venueOk(legs)),
+    simulateRollOver: async (closes, opens) => (preview ? preview(closes, opens) : venueOk(closes, opens)),
     cancelOrders: async () => {},
     closePosition: async () => okFill(),
   };
 }
-const spyClient = (roll: NonNullable<BorosOrderClient['rollOver']>): BorosOrderClient => ({
-  placeMarketOrders: async () => {
-    throw new Error('a roll must not go through placeMarketOrders');
-  },
-  rollOver: roll,
-  simulateRollOver: async (legs) => venueOk(legs),
+const spyClient = (roll: Place): BorosOrderClient => ({
+  placeMarketOrders: roll,
+  simulateRollOver: async (closes, opens) => venueOk(closes, opens),
   cancelOrders: async () => {},
   closePosition: async () => okFill(),
 });
@@ -220,11 +214,11 @@ const post = (url: string, payload: unknown) =>
 
 describe('POST /api/boros/roll/simulate', () => {
   it("prices both steps, asks the venue to preview the batch, and returns its verdict and margin", async () => {
-    const calls: BorosRollLeg[][] = [];
-    const previews: BorosRollLeg[][] = [];
-    makeRollApp(heldPair, capturingClient(calls, undefined, async (legs) => {
-      previews.push(legs);
-      return venueOk(legs);
+    const calls: Orders[] = [];
+    const previews: Array<{ closes: Orders; opens: Orders }> = [];
+    makeRollApp(heldPair, capturingClient(calls, undefined, async (closes, opens) => {
+      previews.push({ closes, opens });
+      return venueOk(closes, opens);
     }));
     const res = await post('/api/boros/roll/simulate', rollBody());
     expect(res.statusCode).toBe(200);
@@ -233,9 +227,10 @@ describe('POST /api/boros/roll/simulate', () => {
     // Both steps priced against ONE account read.
     expect(data.exit.simulation.legs[0].execApr).toBeGreaterThan(0);
     expect(data.entry.simulation.legs[0].execApr).toBeGreaterThan(0);
-    // The venue previewed the same legs the execute would send.
+    // The venue previewed the same orders the execute would send.
     expect(previews).toHaveLength(1);
-    expect(previews[0].map((l) => [l.fromMarketId, l.toMarketId])).toEqual([[HL, HL2], [BN, BN2]]);
+    expect(previews[0].closes.map((o) => [o.marketId, o.direction])).toEqual([[HL, 'long'], [BN, 'short']]);
+    expect(previews[0].opens.map((o) => [o.marketId, o.direction])).toEqual([[HL2, 'short'], [BN2, 'long']]);
     // A clean roll — no blockers; the margin is the venue's, not an estimate.
     expect(data.gate.blockers).toEqual([]);
     expect(data.gate.margin).toEqual({ need: 9_000, availableBefore: 500_000, availableAfter: 480_000, availableAfterExit: 489_000, shortfall: 0 });
@@ -245,22 +240,28 @@ describe('POST /api/boros/roll/simulate', () => {
   });
 
   it("blocks on the venue's refusal, naming the step and market the book cannot fill", async () => {
-    const refused = (legs: BorosRollLeg[]) =>
-      venueOk(legs, {
+    const refused = (closes: Orders, opens: Orders) =>
+      venueOk(closes, opens, {
         status: 'Refused',
         reason: { code: 'MARKET_ORDER_FOK_NOT_FILLED', message: 'Insufficient liquidity' },
-        orders: venueOk(legs).orders.map((o) => ({ ...o, filled: false, matchedSize: null, error: o.marketId === HL2 ? 'Insufficient liquidity' : null })),
+        orders: venueOk(closes, opens).orders.map((o) => ({ ...o, filled: false, matchedSize: null, error: o.marketId === HL2 ? 'Insufficient liquidity' : null })),
         availableAfter: null,
       });
-    makeRollApp(heldPair, capturingClient([], undefined, async (legs) => refused(legs)));
+    const calls: Orders[] = [];
+    makeRollApp(heldPair, capturingClient(calls, undefined, async (closes, opens) => refused(closes, opens)));
     const res = await post('/api/boros/roll/simulate', rollBody());
     expect(res.statusCode).toBe(200);
     const blocker = res.json().data.gate.blockers.find((b: { code: string }) => b.code === 'venue-refused');
-    expect(blocker.message).toMatch(/^The venue refuses this roll:\nRe-entry · Hyperliquid ETH 60d — /);
+    expect(blocker.message).toMatch(/^The venue refuses this roll:\n• Re-entry · Hyperliquid ETH 60d: /);
+    // Execute re-asks the venue, gets the same refusal, and sends nothing.
+    const exec = await post('/api/boros/roll/execute', rollBody());
+    expect(exec.statusCode).toBe(409);
+    expect(exec.json().data.blockers.map((b: { code: string }) => b.code)).toContain('venue-refused');
+    expect(calls).toHaveLength(0);
   });
 
   it('blocks when the venue cannot preview the batch — and execute refuses with a 409', async () => {
-    const calls: BorosRollLeg[][] = [];
+    const calls: Orders[] = [];
     makeRollApp(heldPair, capturingClient(calls, undefined, async () => {
       throw new Error('boom');
     }));
@@ -284,9 +285,12 @@ describe('POST /api/boros/roll/simulate', () => {
     expect(await unpriced(new CoreError('Boros API /v1/simulations/roll-over — HTTP 404: Position not found', 'venue-rejected', { status: 404 }))).toMatch(
       /^The venue could not preview this roll — .*Position not found/,
     );
-    // A rate limit or an outage is the next poll's problem.
+    // A rate limit says so: "waiting for a quote" hid it while the poll hit the cap.
+    expect(await unpriced(new CoreError('Boros API — HTTP 429: Too Many Requests', 'rate-limited', { status: 429 }))).toBe(
+      'The venue could not preview this roll — Boros rate limit reached. It retries in 10 s.',
+    );
+    // An outage is the next poll's problem.
     for (const err of [
-      new CoreError('Boros API — HTTP 429: Too Many Requests', 'rate-limited', { status: 429 }),
       new CoreError('Boros API — HTTP 503: upstream unavailable', 'venue-rejected', { status: 503 }),
       new Error('fetch failed'),
     ]) {
@@ -300,24 +304,39 @@ describe('POST /api/boros/roll/execute', () => {
     // A resting order left on a market the roll just closed could fill later
     // and re-open that leg; the new markets keep theirs.
     const seen: Array<number[] | undefined> = [];
+    const previewed: Array<number[] | undefined> = [];
     makeRollApp(
       accountBodies(500_000, [
         { marketId: HL, size: -100_000, fixedApr: 0.09, im: 1_000 },
         { marketId: BN, size: 100_000, fixedApr: 0.045, im: 800, resting: true },
       ]),
-      spyClient(async (legs, opts) => {
-        seen.push(opts?.cancelOrdersOn);
-        return rolledFills(legs);
-      }),
+      {
+        ...spyClient(async (orders, opts) => {
+          seen.push(opts?.cancelOrdersOn);
+          return rolledFills(orders);
+        }),
+        // The preview cancels the same orders first: one in a close's path would refuse it (MarketSelfSwap).
+        simulateRollOver: async (closes, opens, opts) => {
+          previewed.push(opts?.cancelOrdersOn);
+          return venueOk(closes, opens);
+        },
+      },
     );
     const res = await post('/api/boros/roll/execute', rollBody());
     expect(res.statusCode).toBe(200);
     expect(res.json().data.result.status).toBe('rolled');
     expect(seen).toEqual([[BN]]);
+    expect(previewed).toEqual([[BN]]);
+
+    previewed.length = 0;
+    const sim = await post('/api/boros/roll/simulate', rollBody());
+    expect(previewed).toEqual([[BN]]);
+    // The review names the cancel only when there is one.
+    expect(sim.json().data.cancelOrdersOn).toEqual([BN]);
   });
 
-  it('hands the venue the two legs once — old market, new market, size, both bounds — and busts the reads', async () => {
-    const calls: BorosRollLeg[][] = [];
+  it('sends the two closes then the two opens as one batch, each with its bound, and busts the reads', async () => {
+    const calls: Orders[] = [];
     const busted: string[] = [];
     const cache = new TtlCache();
     const realBust = cache.bust.bind(cache);
@@ -333,25 +352,27 @@ describe('POST /api/boros/roll/execute', () => {
     expect(data.result.status).toBe('rolled');
     expect(data.replayed).toBe(false);
 
-    // Exactly one roll, two legs: the venue builds the four FOK orders itself.
+    // Exactly one batch of four orders, closes first.
     expect(calls).toHaveLength(1);
     // Closing the HL short buys at mid + tol; re-opening it sells at the new mid − tol.
-    expect(calls[0].map((l) => [l.fromMarketId, l.toMarketId, l.closeRate, l.openRate])).toEqual([
-      [HL, HL2, 0.09 + 0.0025, 0.1 - 0.0025],
-      [BN, BN2, 0.045 - 0.0025, 0.05 + 0.0025],
+    expect(calls[0].map((o) => [o.marketId, o.direction, o.clientOrderId])).toEqual([
+      [HL, 'long', 'roll-exit-a1'],
+      [BN, 'short', 'roll-exit-b1'],
+      [HL2, 'short', 'roll-entry-a1'],
+      [BN2, 'long', 'roll-entry-b1'],
     ]);
+    [0.09 + 0.0025, 0.045 - 0.0025, 0.1 - 0.0025, 0.05 + 0.0025].forEach((apr, i) => expect(calls[0][i].limitApr).toBeCloseTo(apr, 12));
     // The size is the position as a float (an 18-decimal integer does not
     // round-trip exactly); the venue caps the close at the position in wei.
-    calls[0].forEach((l) => expect(l.size).toBeCloseTo(100_000, 6));
+    calls[0].forEach((o) => expect(o.size).toBeCloseTo(100_000, 6));
 
-    expect(busted).toContain('boros:collaterals');
-    expect(busted).toContain('boros:txns');
+    expect(busted.some((k) => k.startsWith('boros:collaterals:'))).toBe(true);
   });
 
   it('re-runs the roll gate server-side and refuses a blocked roll with a 409', async () => {
     // The default account is FLAT, so the exit has nothing to close — the pair
     // gate's own blocker, surfaced through the roll gate with an "Exit:" prefix.
-    const place = vi.fn(async (legs: BorosRollLeg[]) => rolledFills(legs));
+    const place = vi.fn(async (orders: Orders) => rolledFills(orders));
     makeRollApp({}, spyClient(place));
     const res = await post('/api/boros/roll/execute', rollBody());
     expect(res.statusCode).toBe(409);
@@ -367,7 +388,7 @@ describe('POST /api/boros/roll/execute', () => {
     ['a too-short id', { clientOrderIds: rollIds('abc') }],
     ['duplicate ids', { clientOrderIds: rollIds('dup-000001', 'dup-000001') }],
   ])('rejects %s with a 400 before touching the venue', async (_label, over) => {
-    const place = vi.fn(async (legs: BorosRollLeg[]) => rolledFills(legs));
+    const place = vi.fn(async (orders: Orders) => rolledFills(orders));
     makeRollApp(heldPair, spyClient(place));
     const res = await post('/api/boros/roll/execute', rollBody(over));
     expect(res.statusCode).toBe(400);
@@ -377,7 +398,7 @@ describe('POST /api/boros/roll/execute', () => {
   it('replays a resend of the same four ids after a rolled result, without a second submission', async () => {
     // Boros has no client-order-id, so nothing at the venue dedupes: without the
     // memo a lost response plus a Confirm press rolls the position twice.
-    const calls: BorosRollLeg[][] = [];
+    const calls: Orders[] = [];
     makeRollApp(heldPair, capturingClient(calls));
     const body = rollBody();
 
@@ -396,9 +417,9 @@ describe('POST /api/boros/roll/execute', () => {
     // A roll the venue turned away provably traded nothing, so its ids may be
     // reused; only a rolled/unknown outcome is remembered.
     let n = 0;
-    const refuse = spyClient(async (legs) => {
+    const refuse = spyClient(async (orders) => {
       n += 1;
-      return rolledFills(legs).map((f) =>
+      return rolledFills(orders).map((f) =>
         okFill({ ...f, filledSize: 0, shortfallSize: 100_000, failure: { code: 'insufficient-margin', message: '[SIMULATE] Not enough margin', cause: 'batch' } }),
       );
     });
@@ -419,13 +440,13 @@ describe('POST /api/boros/roll/execute', () => {
     const res = await post('/api/boros/roll/execute', rollBody());
     expect(res.statusCode).toBe(503);
     expect(res.json().error.message).toMatch(/not configured/i);
-    // …or one that predates the venue's roll-over builder.
+    // …or one that predates the venue's roll preview.
     makeRollApp(heldPair, { placeMarketOrders: async () => [], cancelOrders: async () => {}, closePosition: async () => okFill() });
     expect((await post('/api/boros/roll/execute', rollBody())).statusCode).toBe(503);
   });
 
   it('refuses to roll an account other than the one it signs for', async () => {
-    const place = vi.fn(async (legs: BorosRollLeg[]) => rolledFills(legs));
+    const place = vi.fn(async (orders: Orders) => rolledFills(orders));
     makeRollApp(heldPair, spyClient(place));
     const res = await post('/api/boros/roll/execute', rollBody({ address: OTHER }));
     expect(res.statusCode).toBe(400);
@@ -455,13 +476,13 @@ describe('POST /api/boros/roll/execute — the gas top-up zone', () => {
     };
   };
   const rollWith = async (availableAfter: number | null, ethFree = 1) => {
-    const seen: Array<Parameters<NonNullable<BorosOrderClient['rollOver']>>[1]> = [];
+    const seen: Array<Parameters<Place>[1]> = [];
     makeRollApp(withEthZone(ethFree), {
-      ...spyClient(async (legs, opts) => {
+      ...spyClient(async (orders, opts) => {
         seen.push(opts);
-        return rolledFills(legs);
+        return rolledFills(orders);
       }),
-      simulateRollOver: async (legs) => venueOk(legs, { availableAfter }),
+      simulateRollOver: async (closes, opens) => venueOk(closes, opens, { availableAfter }),
     });
     const res = await post('/api/boros/roll/execute', rollBody());
     expect(res.statusCode).toBe(200);

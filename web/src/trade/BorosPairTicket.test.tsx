@@ -1681,6 +1681,7 @@ describe('BorosPairTicket — spread ticket', () => {
       gasBalanceUsd?: number;
       extraMarkets?: ReturnType<typeof marketRow>[];
       singles?: Record<string, unknown>;
+      gateSingle?: Record<string, unknown>;
     } = {},
   ) =>
     handlers({
@@ -1691,7 +1692,7 @@ describe('BorosPairTicket — spread ticket', () => {
       ctx: context({
         markets: [
           marketRow({ marketId: 209, name: 'Hyperliquid ETH 27 Nov 2026', venue: 'Hyperliquid', tokenId: 2, collateral: 'ETH', maturity: SPREAD_OPP_MATURITY, ...extra.singles }),
-          marketRow({ marketId: 211, name: 'Gate ETHUSDT 27 Nov 2026', venue: 'Gate', tokenId: 2, collateral: 'ETH', maturity: SPREAD_OPP_MATURITY, ...extra.singles }),
+          marketRow({ marketId: 211, name: 'Gate ETHUSDT 27 Nov 2026', venue: 'Gate', tokenId: 2, collateral: 'ETH', maturity: SPREAD_OPP_MATURITY, ...extra.singles, ...extra.gateSingle }),
           ...(extra.extraMarkets ?? []),
         ],
         spreadMarkets: [spreadRow(extra.spread)],
@@ -1977,8 +1978,29 @@ describe('BorosPairTicket — spread ticket', () => {
     expect(tradeOn()).toBeInTheDocument();
   });
 
-  it('a close on held singles closes the singles, even when the spread holds a position too', async () => {
-    server.use(...spreadHandlers(() => {}, { spread: { currentSize: -0.05 }, singles: { currentSize: 0.2 } }));
+  // Owner 2026-10-16, case 7: a close stays on a spread that holds a position.
+  it('a close stays on the spread when both singles are held too', async () => {
+    server.use(...spreadHandlers(() => {}, { spread: { currentSize: 0.05 }, singles: { currentSize: 0.2 } }));
+    const user = userEvent.setup();
+    await pickHlGate(user);
+    await waitFor(() => expect(tradeOn()).toBeInTheDocument());
+    await user.click(screen.getByRole('checkbox', { name: 'Reduce-only' }));
+    expect(tradeOn()).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: /^max\s*0\.05 ETH/ })).toBeInTheDocument();
+  });
+
+  it('a 3.64 spread with one 0.36 Gate single held: Reduce-only stays on the spread, max 3.64', async () => {
+    server.use(...spreadHandlers(() => {}, { spread: { currentSize: 3.64 }, gateSingle: { currentSize: 0.36 } }));
+    const user = userEvent.setup();
+    await pickHlGate(user);
+    await waitFor(() => expect(tradeOn()).toBeInTheDocument());
+    await user.click(screen.getByRole('checkbox', { name: 'Reduce-only' }));
+    expect(tradeOn()).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: /^max\s*3\.64 ETH/ })).toBeInTheDocument();
+  });
+
+  it('a close with one single held and an empty spread goes to the singles', async () => {
+    server.use(...spreadHandlers(() => {}, { gateSingle: { currentSize: 0.36 } }));
     const user = userEvent.setup();
     await pickHlGate(user);
     await waitFor(() => expect(tradeOn()).toBeInTheDocument());
@@ -1986,6 +2008,15 @@ describe('BorosPairTicket — spread ticket', () => {
     await waitFor(() => expect(tradeOn()).not.toBeInTheDocument());
     expect(screen.getByLabelText('Leg A')).toHaveValue('209');
     expect(screen.getByLabelText('Leg B')).toHaveValue('211');
+  });
+
+  it('an open with a single held still trades on the spread (ED-6607)', async () => {
+    server.use(...spreadHandlers(() => {}, { spread: { currentSize: 3.64 }, gateSingle: { currentSize: 0.36 } }));
+    const user = userEvent.setup();
+    await pickHlGate(user);
+    await waitFor(() => expect(tradeOn()).toBeInTheDocument());
+    expect(screen.getByRole('checkbox', { name: 'Reduce-only' })).not.toBeChecked();
+    expect(await screen.findByRole('button', { name: /Confirm · 1 Boros market order/ })).toBeInTheDocument();
   });
 
   it('keeps the two single markets when the venues list no spread at that maturity', async () => {

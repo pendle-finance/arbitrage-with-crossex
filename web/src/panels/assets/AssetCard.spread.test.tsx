@@ -393,15 +393,24 @@ describe('AssetCard with a spread leg', () => {
     expect(screen.queryByRole('button', { name: 'Open Boros leg' })).toBeNull();
   });
 
-  it('perps plus a part single still offer singles, not the spread', async () => {
+  it('perps plus a part single split by size: the covered part offers the other single, the rest the spread', async () => {
     const user = userEvent.setup();
-    const part = { ...single(60, 'GATE', 'LONG', 0.048), sizeToken: 0.005, notionalUsd: 0.005 * PX };
+    const errors: string[] = [];
+    const spy = vi.spyOn(console, 'error').mockImplementation((...a: unknown[]) => void errors.push(a.map(String).join(' ')));
+    const part = { ...single(60, 'GATE', 'LONG', 0.048), sizeToken: 0.05, notionalUsd: 0.05 * PX };
     renderCard({ ...book([part]), perpOpen: [perp('HYPERLIQUID', 'SHORT', 0.3), perp('GATE', 'LONG', 0.3)] });
     await showPairs(user);
-    // Each single opens alone: a pair ticket would route to a trading spread.
-    expect(await screen.findAllByRole('button', { name: 'Open leg' })).toHaveLength(2);
+    const openLeg = await screen.findAllByRole('button', { name: 'Open leg' });
+    expect(openLeg).toHaveLength(1);
+    expect(openLeg[0]).toHaveAttribute('title', expect.stringMatching(/^Open only the Hyperliquid SHORT Boros leg, at 0\.05\b/));
+    const spread = await screen.findByRole('button', { name: 'Open Boros leg' });
+    expect(spread).toHaveAttribute('title', expect.stringMatching(/HL-GATE leg, at 0\.25\b/));
     expect(screen.queryByRole('button', { name: 'Open both Boros legs' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Open Boros leg' })).toBeNull();
+    await user.click(spread);
+    await waitFor(() => expect(lastPrefill).not.toBeNull());
+    expect(lastPrefill).toMatchObject({ longVenue: 'GATE', shortVenue: 'HYPERLIQUID', maturity: MATURITY, sizeBase: 0.25 });
+    spy.mockRestore();
+    expect(errors.filter((e) => /same key/.test(e))).toEqual([]);
   });
 
   it('a spread and 2 singles with no perps are 2 Boros-only cards with their own keys', async () => {
