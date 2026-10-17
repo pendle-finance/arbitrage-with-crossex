@@ -170,20 +170,15 @@ export function createRollProbe(deps: RollProbeDeps): () => Promise<RollSignalIn
     let logged = false;
     for (const group of view.assets) {
       const derived = deriveAsset(group as unknown as AssetGroup, {}, view.sinceSec, nowSec);
-      // A spread pair and a single-market pair at the same venues and term
-      // are two rows on the card but one roll alert: the bot keys alerts by
-      // coin, venues and maturity.
-      const seen = new Set<string>();
       for (const pair of derived.pairs) {
         if (!pairRollDue(pair, nowSec)) continue;
-        const key = `${pair.longVenue}:${pair.shortVenue}:${pair.soonestMaturitySec}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
         const signal: RollSignalInput = {
           coin: group.base,
           longVenue: pair.longVenue,
           shortVenue: pair.shortVenue,
           maturity: pair.soonestMaturitySec,
+          kind: pair.kind,
+          marketIds: heldMarketIds(pair),
           targets: [],
         };
         try {
@@ -205,6 +200,12 @@ export function createRollProbe(deps: RollProbeDeps): () => Promise<RollSignalIn
     }
     return signals;
   };
+}
+
+function heldMarketIds(pair: PairEstimate): number[] {
+  return pairRollGeometry(pair)
+    .yuLegs.flatMap((l) => (l.marketId === undefined ? [] : [l.marketId]))
+    .sort((a, b) => a - b);
 }
 
 /** A leg whose book did not load quotes as unfillable, which reads exactly

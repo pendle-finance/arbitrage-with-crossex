@@ -29,7 +29,7 @@ import { createTelegramLink } from './telegram/link';
 import { TelegramStatus } from './telegram/status';
 import { createRollProbe } from './telegram/rollProbe';
 import { createTelegramSync, readTriggerCoins } from './telegram/sync';
-import { createAssetViewBuilder } from './routes/assetView';
+import { assetViewBuilderFor } from './routes/assetView';
 import { configuredRoot, createPairPricer } from './routes/borosPair';
 import { readInstallInfo, readLocalVersion } from './version';
 
@@ -177,7 +177,6 @@ const telegramBot = createBotClient({
   wallet: configuredRoot,
 });
 const telegramStatus = new TelegramStatus();
-let assetViewBuilder: ReturnType<typeof createAssetViewBuilder> | null = null;
 let pairPricer: ReturnType<typeof createPairPricer> | null = null;
 const telegramSync = createTelegramSync({
   dataDir,
@@ -186,7 +185,7 @@ const telegramSync = createTelegramSync({
   readCoins: () => readTriggerCoins({ cache, getClients }),
   probeRolls: createRollProbe({
     borosAddress: configuredRoot,
-    buildAssetView: (params) => (assetViewBuilder ??= createAssetViewBuilder(appDeps))(params),
+    buildAssetView: (params) => assetViewBuilderFor(appDeps)(params),
     loadMarkets: (fresh) => (pairPricer ??= createPairPricer(appDeps)).loadMarkets(fresh),
     price: (body, fresh) => (pairPricer ??= createPairPricer(appDeps)).priceRequest(body, fresh),
     now: Date.now,

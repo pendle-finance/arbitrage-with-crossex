@@ -343,6 +343,60 @@ describe('AssetCard — roll over', () => {
     expect(headline.textContent).toBe(`${promised.textContent}fixed`);
   }, 20_000);
 
+  it('a pair with no rate (under $100) sends no roll probe: there is nothing to compare it with', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const row = (marketId: number, venue: string, maturity: number) => ({
+      marketId,
+      name: `${venue} ETH`,
+      venue,
+      base: 'ETH',
+      tokenId: 3,
+      collateral: 'ETH',
+      maturity,
+      midApr: 0.06,
+      markApr: 0.06,
+      maxRateDeviationApr: 0.02,
+      isolatedOnly: false,
+      onIsolatedMargin: false,
+      isolatedHasPositionOrOrders: false,
+      currentSize: 0,
+      collateralPriceUsd: 2500,
+    });
+    let contextServed = false;
+    let sims = 0;
+    server.use(
+      http.get('/api/boros/pair/context', () => {
+        contextServed = true;
+        return HttpResponse.json({
+          ok: true,
+          data: {
+            markets: [row(1, 'Gate', now + 8 * DAY), row(2, 'Hyperliquid', now + 8 * DAY), row(11, 'Gate', now + 45 * DAY), row(12, 'Hyperliquid', now + 45 * DAY)],
+            crossByToken: [],
+            isolatedByMarket: [],
+            defaultSlippageApr: 0.0025,
+            maxSlippageApr: 0.1,
+          },
+        });
+      }),
+      http.post('/api/boros/pair/simulate', () => {
+        sims += 1;
+        return HttpResponse.json({ ok: false, error: { message: 'not expected' } }, { status: 500 });
+      }),
+    );
+    localStorage.setItem('crossex.strategy.v1', JSON.stringify({ address: '0x1111111111111111111111111111111111111111' }));
+    // 0.01 ETH a leg: about $25 of notional, under the $100 the rate needs.
+    const tiny = book(8);
+    tiny.perpOpen = [perp({ venue: 'GATE', side: 'LONG', qty: 0.01 }), perp({ venue: 'HYPERLIQUID', side: 'SHORT', qty: 0.01 })];
+    tiny.borosOpen = tiny.borosOpen.map((l) => ({ ...l, sizeToken: 0.01, notionalUsd: 25, imUsd: 1 }));
+    renderCard(tiny);
+
+    const panel = screen.getByRole('tabpanel', { name: /^Fixed Rate Pairs/ });
+    expect(await within(panel).findByText('ready to roll')).toBeInTheDocument();
+    await waitFor(() => expect(contextServed).toBe(true));
+    await new Promise((r) => setTimeout(r, 300));
+    expect(sims).toBe(0);
+  });
+
   it('offsetting perps with no rate legs are ONE pair with its Boros side missing, not loose legs', () => {
     // The book after a missed roll: both perps still on, both rate legs gone.
     const g = { ...book(8), borosOpen: [] };
@@ -351,7 +405,7 @@ describe('AssetCard — roll over', () => {
     const row = within(panel).getByRole('button', { name: /Gate LONG \/ Hyperliquid SHORT Boros legs missing/ });
     expect(row).toHaveAttribute('aria-expanded', 'true');
     // Both gaps are named, each with its own action, plus the one for both.
-    expect(within(panel).getAllByText('missing')).toHaveLength(2);
+    expect(within(panel).getAllByText('missing 100 ETH')).toHaveLength(2);
     expect(within(panel).getAllByRole('button', { name: 'Open leg' })).toHaveLength(2);
     expect(within(panel).getByRole('button', { name: 'Open both Boros legs' })).toBeInTheDocument();
     // … and the other way out: stop farming it.
@@ -367,7 +421,7 @@ describe('AssetCard — roll over', () => {
     renderCard(g);
     const panel = screen.getByRole('tabpanel', { name: /^Fixed Rate Pairs/ });
     expect(within(panel).getByRole('button', { name: /Gate LONG \/ Hyperliquid SHORT Boros leg missing/ })).toBeInTheDocument();
-    expect(within(panel).getAllByText('missing')).toHaveLength(1);
+    expect(within(panel).getAllByText('missing 100 ETH')).toHaveLength(1);
     expect(within(panel).getAllByRole('button', { name: 'Open leg' })).toHaveLength(1);
     expect(within(panel).queryByRole('button', { name: 'Open both Boros legs' })).not.toBeInTheDocument();
     expect(within(panel).getByRole('button', { name: 'Close perps' })).toBeEnabled();

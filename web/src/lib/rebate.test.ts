@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Rebate } from '../api/types';
-import { rebateAppliesTo, rebatedSettleApr, rebateChipLabel } from './rebate';
+import { rebateAccountLabel, rebateAppliesTo, rebatedSettleApr, rebateChipLabel, rebateLegsNote } from './rebate';
 
 const relative = (over: Partial<Rebate> = {}): Rebate => ({
   mode: 'relative',
@@ -68,5 +68,56 @@ describe('rebateChipLabel', () => {
 
   it('falls back to 1 − pct when rebateBps is absent', () => {
     expect(rebateChipLabel(relative({ rebateBps: null }))).toBe('20% fee rebate');
+  });
+});
+
+describe('per-market overrides', () => {
+  const nayt = relative({
+    settlementFeePercentage: 0.6,
+    rebateBps: 4000,
+    marketIds: [1, 232, 233],
+    marketFeeOverrides: [
+      { marketId: 232, settlementFeePercentage: 0.5, rebateBps: 5000 },
+      { marketId: 233, settlementFeePercentage: 0.5, rebateBps: 5000 },
+    ],
+  });
+
+  it('prices an overridden market at its own rate and others at the base rate', () => {
+    expect(rebatedSettleApr(0.001, nayt, 232)).toBeCloseTo(0.0005, 12);
+    expect(rebatedSettleApr(0.001, nayt, 1)).toBeCloseTo(0.0006, 12);
+  });
+
+  it('caps an absolute override at its own rate', () => {
+    const abs = absolute({ marketFeeOverrides: [{ marketId: 7, settlementFeePercentage: 0.02, rebateBps: null }] });
+    expect(rebatedSettleApr(0.08, abs, 7)).toBeCloseTo(0.02, 12);
+    expect(rebatedSettleApr(0.08, abs, 8)).toBeCloseTo(0.05, 12);
+  });
+
+  it('does not let an override reach a market outside marketIds', () => {
+    const scoped = relative({ marketIds: [1], marketFeeOverrides: [{ marketId: 9, settlementFeePercentage: 0.5, rebateBps: 5000 }] });
+    expect(rebatedSettleApr(0.001, scoped, 9)).toBe(0.001);
+  });
+
+  it('labels a card by the rates of its own markets', () => {
+    expect(rebateChipLabel(nayt, [232])).toBe('50% fee rebate');
+    expect(rebateChipLabel(nayt, [1])).toBe('40% fee rebate');
+    expect(rebateChipLabel(nayt, [232, 233])).toBe('50% fee rebate');
+    expect(rebateChipLabel(nayt, [1, 232])).toBe('40-50% fee rebate');
+    expect(rebateChipLabel(nayt, [232, 1])).toBe('40-50% fee rebate');
+    expect(rebateChipLabel(nayt)).toBe('40% fee rebate');
+    const abs = absolute({ marketFeeOverrides: [{ marketId: 7, settlementFeePercentage: 0.02, rebateBps: null }] });
+    expect(rebateChipLabel(abs, [7, 8])).toBe('Fee capped at 2-5%');
+  });
+
+  it('names each leg rate only when the legs differ', () => {
+    const short = { marketId: 1, venue: 'Hyperliquid', side: 'SHORT' as const };
+    const long = { marketId: 232, venue: 'Gate', side: 'LONG' as const };
+    expect(rebateLegsNote(nayt, [short, long])).toBe('• Hyperliquid short: 40%\n• Gate long: 50%');
+    expect(rebateLegsNote(nayt, [{ ...short, marketId: 233 }, long])).toBe('');
+  });
+
+  it('lists the differing market rates in the account label', () => {
+    expect(rebateAccountLabel(nayt)).toBe('40% fee rebate, 50% on markets 232, 233');
+    expect(rebateAccountLabel(relative())).toBe('20% fee rebate');
   });
 });

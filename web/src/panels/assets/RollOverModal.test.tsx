@@ -7,7 +7,7 @@
  * drives the review. The pick page still prices its options over
  * /boros/pair/simulate, so those mocks stay.
  */
-import { screen, waitFor, within } from '@testing-library/react';
+import { cleanup, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HttpResponse, http } from 'msw';
 import { beforeEach, describe, expect, it } from 'vitest';
@@ -96,13 +96,14 @@ let spreadCloseOnly = false;
 /** A Hyperliquid market on another collateral at the new maturity, listed first. */
 const HL_NEW_USDT = 13;
 let otherCollateral = false;
+let hlNewCloseOnly = false;
 const context = () => ({
   markets: [
     ...(otherCollateral ? [{ ...marketRow(HL_NEW_USDT, 'Hyperliquid', NEW), tokenId: 1, collateral: 'USDT' }] : []),
     marketRow(GATE_OLD, 'Gate', OLD),
     marketRow(HL_OLD, 'Hyperliquid', OLD),
     marketRow(GATE_NEW, 'Gate', NEW),
-    marketRow(HL_NEW, 'Hyperliquid', NEW),
+    { ...marketRow(HL_NEW, 'Hyperliquid', NEW), closeOnly: hlNewCloseOnly },
   ],
   spreadMarkets: spreadListed ? [{ ...marketRow(SPREAD_NEW, 'HL-GATE', NEW), spreadVenues: ['HYPERLIQUID', 'GATE'] as [string, string], closeOnly: spreadCloseOnly }] : [],
   crossByToken: [{ tokenId: 3, available: 1_000 }],
@@ -253,6 +254,8 @@ function install(
      * "confirm stays disabled until a fresh quote lands" case. */
     rollSimGate?: Promise<void>;
     gasBalanceUsd?: number;
+    /** The old markets with resting orders the roll cancels. */
+    cancelOrdersOn?: number[];
   } = {},
 ) {
   let n = 0;
@@ -284,6 +287,7 @@ function install(
           exit: { simulation: simulation({ ...body.exit, intent: 'close' }), gate: pairGate() },
           entry: { simulation: simulation({ ...body.entry, intent: 'open' }), gate: pairGate() },
           gate: opts.gate ? opts.gate() : rollGate(),
+          cancelOrdersOn: opts.cancelOrdersOn ?? [],
           simulatedAtMs: Date.now(),
           gasBalanceUsd: opts.gasBalanceUsd ?? 5,
         }),
@@ -319,6 +323,7 @@ beforeEach(() => {
   spreadListed = false;
   spreadCloseOnly = false;
   otherCollateral = false;
+  hlNewCloseOnly = false;
 });
 
 describe('RollOverModal — the pick page', () => {
@@ -489,6 +494,21 @@ describe('RollOverModal — spread target', () => {
     expect(sent[0].entry.legs).toEqual([expect.objectContaining({ marketId: SPREAD_NEW, direction: 'short', size: 100 })]);
     expect(sent[0].exit.legs).toHaveLength(2);
     expect(Object.keys(sent[0].clientOrderIds)).toContain(`entry:${SPREAD_NEW}`);
+  });
+
+  it('a close-only single at the target maturity is no target: the window does not open on a market that takes no open', async () => {
+    hlNewCloseOnly = true;
+    const entries: PairSimBody[] = [];
+    install({
+      onPairSimulate: (b) => {
+        if (b.intent === 'open') entries.push(b);
+      },
+    });
+    renderWithClient(<RollOverModal pair={pair} base="ETH" nowSec={NOW} onClose={() => {}} />);
+    const dialog = await screen.findByRole('dialog');
+    expect(await within(dialog).findByText(/there is nothing to roll into yet/, undefined, { timeout: 4_000 })).toBeInTheDocument();
+    expect(entries).toEqual([]);
+    expect(within(dialog).getByRole('button', { name: 'Roll over' })).toBeDisabled();
   });
 
   it('a close-only spread at the target maturity counts as no spread: the roll goes into the two singles', async () => {
@@ -692,6 +712,56 @@ describe('RollOverModal — the review page', () => {
     expect(sent[0].entry.legs[1].slippageApr).toBeCloseTo(0.02, 9);
   });
 
+  it('F-D: a new market that holds the other side asks for the tick, shows it, and sends it', async () => {
+    const user = userEvent.setup();
+    const sims: RollBody[] = [];
+    const sent: RollBody[] = [];
+    install({ onRollExecute: (body) => { sent.push(body); return okRoll(body); } });
+    // Another pair holds 0.004 the other way on the re-entry's first market:
+    // Boros nets the two, so the roll flips that position.
+    server.use(
+      http.post('/api/boros/roll/simulate', async ({ request }) => {
+        const body = (await request.json()) as RollBody;
+        sims.push(body);
+        const acked = body.opposingAcknowledged === true;
+        const entry = simulation({ ...body.entry, intent: 'open' });
+        const l0 = entry.legs[0];
+        const held = l0.direction === 'short' ? 0.004 : -0.004;
+        l0.sizing = { ...l0.sizing, currentSize: held, resultingSize: held + l0.sizing.deltaSize, opposing: true, flips: true };
+        return HttpResponse.json(
+          env({
+            exit: { simulation: simulation({ ...body.exit, intent: 'close' }), gate: pairGate() },
+            entry: { simulation: entry, gate: { ...pairGate(), requiresAcknowledgement: true, opposingLegs: [0] } },
+            gate: rollGate({
+              blockers: acked ? [] : [{ code: 'flip-unacknowledged', message: 'Re-entry: Tick the acknowledgement to confirm what happens to your existing position.' }],
+            }),
+            cancelOrdersOn: [],
+            simulatedAtMs: Date.now(),
+            gasBalanceUsd: 5,
+          }),
+        );
+      }),
+    );
+    renderWithClient(<RollOverModal pair={pair} base="ETH" nowSec={NOW} onClose={() => {}} />);
+    const dialog = await screen.findByRole('dialog');
+    const next = await within(dialog).findByRole('button', { name: 'Roll over' });
+    await waitFor(() => expect(next).not.toBeDisabled(), { timeout: 4_000 });
+    await user.click(next);
+
+    const box = await within(dialog).findByRole('checkbox');
+    expect(within(dialog).getByText(/I understand this closes my existing .* position of 0\.004 ETH, realising its PnL, and opens/)).toBeInTheDocument();
+    const confirm = within(dialog).getByRole('button', { name: 'Roll over' });
+    expect(confirm).toBeDisabled();
+    expect(sims.at(-1)!.opposingAcknowledged).toBe(false);
+
+    await user.click(box);
+    await waitFor(() => expect(confirm).not.toBeDisabled(), { timeout: 4_000 });
+    expect(sims.at(-1)!.opposingAcknowledged).toBe(true);
+    await user.pointer({ keys: '[MouseLeft>]', target: confirm });
+    await waitFor(() => expect(sent).toHaveLength(1), { timeout: 4_000 });
+    expect(sent[0].opposingAcknowledged).toBe(true);
+  });
+
   it('reads the margin, the warnings and the blockers straight from the roll gate', async () => {
     const user = userEvent.setup();
     install({
@@ -854,7 +924,7 @@ describe('RollOverModal — open only (keep old legs)', () => {
     // The review has NO exit batch — just the new legs.
     expect(within(dialog).queryByText('Exit')).not.toBeInTheDocument();
     expect(within(dialog).queryByText('Re-entry')).not.toBeInTheDocument();
-    expect(within(dialog).getByText(/half your Boros floating side is unhedged/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/Your perps hedge the new legs\. The .* legs stay open, with no perps/)).toBeInTheDocument();
 
     const confirm = await within(dialog).findByRole('button', { name: 'Open new maturity' });
     await waitFor(() => expect(confirm).not.toBeDisabled(), { timeout: 4_000 });
@@ -926,7 +996,7 @@ describe('RollOverModal — open only (keep old legs)', () => {
     await waitFor(() => expect(confirm).not.toBeDisabled(), { timeout: 4_000 });
     await user.pointer({ keys: '[MouseLeft>]', target: confirm });
 
-    expect(await within(dialog).findByText(/the rest did not fill\. Open the remainder from the position view\./)).toBeInTheDocument();
+    expect(await within(dialog).findByText(/the rest did not fill\. Open the rest from Fixed Rate Pairs\./)).toBeInTheDocument();
     expect(within(dialog).queryByRole('button', { name: /Retry/ })).not.toBeInTheDocument();
     expect(sends).toBe(1);
   });
@@ -990,6 +1060,89 @@ describe('RollOverModal — per-venue exposure', () => {
   };
   const held = (p: ReturnType<typeof bookOf>) =>
     exposureOf(p.legs.filter((l) => l.kind === 'yu').map((l) => ({ marketId: l.marketId!, size: l.sizeToken })), 1);
+
+  /** Roll the default size, or a typed one; the sizes the execute sends, by market. */
+  const rollAt = async (p: ReturnType<typeof bookOf>, typed?: string) => {
+    const user = userEvent.setup();
+    const sent: RollBody[] = [];
+    install({ onRollExecute: (body) => { sent.push(body); return okRoll(body); } });
+    renderWithClient(<RollOverModal pair={p} base="ETH" nowSec={NOW} onClose={() => {}} />);
+    const dialog = await screen.findByRole('dialog');
+    if (typed !== undefined) {
+      const box = within(dialog).getByLabelText('Size to roll (ETH)');
+      await user.clear(box);
+      await user.type(box, typed);
+    }
+    const next = await within(dialog).findByRole('button', { name: 'Roll over' });
+    await waitFor(() => expect(next).not.toBeDisabled(), { timeout: 4_000 });
+    await user.click(next);
+    const confirm = await within(dialog).findByRole('button', { name: 'Roll over' });
+    await waitFor(() => expect(confirm).not.toBeDisabled(), { timeout: 4_000 });
+    await user.pointer({ keys: '[MouseLeft>]', target: confirm });
+    await waitFor(() => expect(sent).toHaveLength(1), { timeout: 4_000 });
+    const sizes = (legs: Leg[]) => Object.fromEntries(legs.map((l) => [l.marketId, l.size]));
+    return { exit: sizes(sent[0].exit.legs), entry: sizes(sent[0].entry.legs) };
+  };
+
+  // A part fill leaves more decimals than the box shows (0.3598764 reads
+  // 0.359876); the whole roll must still move every wei, on each venue. A
+  // pair holds the smaller venue's size, so Hyperliquid's extra stays put.
+  for (const [label, gate, hl] of [
+    ['coin-sized', 0.3598764, 0.3598764],
+    ['dollar-sized', 1261.2500004, 1261.2500004],
+    ['uneven', 0.3598764, 0.5000004],
+  ] as const) {
+    it(`${label} hold: the default whole roll sends the pair's size exactly on each venue`, async () => {
+      const p = bookOf({ gate, hl }, 0);
+      const { exit, entry } = await rollAt(p);
+      expect(exit).toEqual({ [GATE_OLD]: gate, [HL_OLD]: gate });
+      expect(entry).toEqual({ [GATE_NEW]: gate, [HL_NEW]: gate });
+    });
+  }
+
+  it('a size typed as the held size to display precision rolls the whole', async () => {
+    const p = bookOf({ gate: 0.3598764, hl: 0.3598764 }, 0);
+    expect((await rollAt(p, '0.359876')).exit).toEqual({ [GATE_OLD]: 0.3598764, [HL_OLD]: 0.3598764 });
+  });
+
+  it('a smaller typed size still rolls part', async () => {
+    const p = bookOf({ gate: 0.3598764, hl: 0.3598764 }, 0);
+    const { exit, entry } = await rollAt(p, '0.35');
+    expect(exit).toEqual({ [GATE_OLD]: 0.35, [HL_OLD]: 0.35 });
+    expect(entry).toEqual({ [GATE_NEW]: 0.35, [HL_NEW]: 0.35 });
+  });
+
+  /** Open the review at the default size, or a typed one; its text. */
+  const reviewAt = async (p: ReturnType<typeof bookOf>, typed?: string, cancelOrdersOn = [GATE_OLD]) => {
+    const user = userEvent.setup();
+    install({ cancelOrdersOn });
+    renderWithClient(<RollOverModal pair={p} base="ETH" nowSec={NOW} onClose={() => {}} />);
+    const dialog = await screen.findByRole('dialog');
+    if (typed !== undefined) {
+      const box = within(dialog).getByLabelText('Size to roll (ETH)');
+      await user.clear(box);
+      await user.type(box, typed);
+    }
+    const next = await within(dialog).findByRole('button', { name: 'Roll over' });
+    await waitFor(() => expect(next).not.toBeDisabled(), { timeout: 4_000 });
+    await user.click(next);
+    await within(dialog).findByText('How it executes');
+    return dialog.textContent ?? '';
+  };
+
+  it('G10: a part roll says the kept part loses its orders too; a whole roll keeps the plain line', async () => {
+    const p = bookOf({ gate: 0.3598764, hl: 0.3598764 }, 0);
+    const part = await reviewAt(p, '0.2');
+    expect(part).toMatch(/Your orders on the \S+ markets are cancelled, also for the part you keep\. Place them again after the roll\./);
+    cleanup();
+    const whole = await reviewAt(p);
+    expect(whole).toMatch(/Resting orders on the \S+ markets are cancelled in the same batch\./);
+    expect(whole).not.toMatch(/also for the part you keep/);
+    cleanup();
+    // No resting order on the old markets: no cancel line at all.
+    const none = await reviewAt(p, '0.2', []);
+    expect(none).not.toMatch(/are cancelled/);
+  });
 
   for (const [label, single, spread] of [
     ['$50', 0.01, 0.01],

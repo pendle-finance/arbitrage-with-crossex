@@ -1,5 +1,18 @@
 # Working in this repo
 
+## Correct first, then simple
+
+1. **Correct first.** A change must do the right thing for every case a real
+   trader can reach, including the in-between ones: a part fill, a part hold,
+   a book that mixes two rules.
+2. **Then as simple and clean as possible.** Cut code only after the change is
+   correct. Never pick a shorter fix that is wrong for a case you can name.
+
+Why: in 1.7.5 a held Boros single that covered only part of a perp unit
+turned the whole unit into singles. A trader with a 0.36 BTC single behind
+4.03 BTC of perps lost the spread offer for the other 3.67 BTC. The correct
+fix splits the unit by size.
+
 ## Release workflow
 
 Bundle changes. Do not ship one feature per release.
