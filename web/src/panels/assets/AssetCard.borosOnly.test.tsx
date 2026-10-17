@@ -8,7 +8,7 @@ import { fireEvent, screen, within } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { AssetBorosOpen, AssetGroup, AssetPerpOpen } from '../../api/types';
-import { fmtDateShort } from '../../lib/fmt';
+import { fmtDateLocal } from '../../lib/fmt';
 import { server } from '../../test/server';
 import { renderWithClient } from '../../test/utils';
 import { AssetCard } from './AssetCard';
@@ -97,7 +97,7 @@ describe('BorosOnlyPairCard', () => {
     renderCard(book([]));
     expect(screen.getByText('Perp legs missing')).toBeInTheDocument();
     const table = legTable();
-    expect(within(table).getAllByText('missing')).toHaveLength(2);
+    expect(within(table).getAllByText('missing 100 ETH')).toHaveLength(2);
     expect(screen.getByRole('button', { name: 'Open both perps' })).toBeInTheDocument();
   });
 
@@ -107,10 +107,10 @@ describe('BorosOnlyPairCard', () => {
     const rows = within(table).getAllByRole('row').slice(1);
     // Gate perp (40 of 100), Hyperliquid perp (0 of 100), two rate legs.
     expect(rows).toHaveLength(4);
-    const missing = rows.filter((r) => within(r).queryByText('missing'));
+    const missing = rows.filter((r) => within(r).queryByText(/^missing /));
     expect(missing).toHaveLength(2);
-    expect(missing[0]).toHaveTextContent(/40 \/ 100 ETH/);
-    expect(missing[1]).toHaveTextContent(/missing0 \/ 100 ETH/);
+    expect(missing[0]).toHaveTextContent(/missing 60 ETH40 \/ 100 ETH/);
+    expect(missing[1]).toHaveTextContent(/missing 100 ETH0 \/ 100 ETH/);
     // The gaps differ (60 vs 100): one prefill would under-hedge the short side.
     expect(screen.queryByRole('button', { name: 'Open both perps' })).toBeNull();
     expect(within(table).getAllByRole('button', { name: 'Open leg' })).toHaveLength(2);
@@ -164,74 +164,44 @@ describe('BorosOnlyPairCard', () => {
     expect(within(table).getByText('liq 240.00%')).toBeInTheDocument();
   });
 
-  it("an open-only roll of the same size reads as rolled, not as a pair missing its perps", () => {
-    const OLD = NOW + 8 * DAY;
-    const NEW = NOW + 45 * DAY;
-    // Perps + rate legs at the OLD maturity are a full 4-leg pair; the rate
-    // legs at the NEW maturity have no perps — the excess an open-only roll
-    // leaves behind, since the old pair at an earlier maturity shares both venues.
-    const group: AssetGroup = {
-      base: 'ETH',
-      supported: true,
-      priceUsd: PX,
-      earliestSec: NOW - 10 * DAY,
-      perpOpen: [perp('GATE', 'LONG', 100), perp('HYPERLIQUID', 'SHORT', 100)],
-      perpClosed: [],
-      borosOpen: [
-        { ...yu(1, 'GATE', 'LONG', 100, 0.04), maturity: OLD },
-        { ...yu(2, 'HYPERLIQUID', 'SHORT', 100, 0.08), maturity: OLD },
-        { ...yu(11, 'GATE', 'LONG', 100, 0.04), maturity: NEW },
-        { ...yu(12, 'HYPERLIQUID', 'SHORT', 100, 0.08), maturity: NEW },
-      ],
-      borosHistory: [],
-    };
-    renderCard(group);
-    // The rolled card's header flips: "Rolled · covered from <old date>", not "Perp legs missing".
-    const chip = screen.getByText(`Rolled · covered from ${fmtDateShort(OLD)}`);
-    expect(chip.closest('[title]')?.getAttribute('title')).toContain(`From ${fmtDateShort(OLD)}: the old legs' perps hedge them.`);
-    expect(screen.queryByText('Perp legs missing')).toBeNull();
-    const card = chip.closest('div.overflow-x-auto') as HTMLElement;
-    // Its way out is to close the excess legs; the open-perp prompts are gone.
-    expect(within(card).getByRole('button', { name: 'Close Boros legs' })).toBeInTheDocument();
-    expect(within(card).queryByRole('button', { name: 'Open both perps' })).toBeNull();
-    expect(within(card).queryByRole('button', { name: 'Open leg' })).toBeNull();
-    // Its perp rows name the old pair that holds the perps, not a gap.
+  /** 100 ETH hedged at OLD, and the same venues' rate legs at NEW: what a roll that keeps the old legs leaves. */
+  const rolledBook = (newSize: number, hlPerp = 100): AssetGroup => ({
+    base: 'ETH',
+    supported: true,
+    priceUsd: PX,
+    earliestSec: NOW - 10 * DAY,
+    perpOpen: [perp('GATE', 'LONG', 100), perp('HYPERLIQUID', 'SHORT', hlPerp)],
+    perpClosed: [],
+    borosOpen: [
+      { ...yu(1, 'GATE', 'LONG', 100, 0.04), maturity: NOW + 8 * DAY },
+      { ...yu(2, 'HYPERLIQUID', 'SHORT', 100, 0.08), maturity: NOW + 8 * DAY },
+      { ...yu(11, 'GATE', 'LONG', newSize, 0.04), maturity: NOW + 45 * DAY },
+      { ...yu(12, 'HYPERLIQUID', 'SHORT', newSize, 0.08), maturity: NOW + 45 * DAY },
+    ],
+    borosHistory: [],
+  });
+  const missingCard = () => screen.getByText('Perp legs missing').closest('div.overflow-x-auto') as HTMLElement;
+
+  it('a roll that keeps the old legs: the new date holds the perps, the old legs show what they lack (mozzarella 2026-10-17)', () => {
+    renderCard(rolledBook(100));
+    expect(screen.queryByText(/^Rolled · covered from/)).toBeNull();
+    const card = missingCard();
+    expect(card).toHaveTextContent(`matures ${fmtDateLocal(NOW + 8 * DAY)}`);
     const table = within(card).getByRole('columnheader', { name: 'Leg' }).closest('table') as HTMLElement;
-    expect(within(table).queryByText('missing')).toBeNull();
-    const from = within(table).getAllByText(`from ${fmtDateShort(OLD)} pair`);
-    expect(from).toHaveLength(2);
-    expect(from[0].closest('tr')).toHaveTextContent(/100 ETH/);
-    expect(from[0].closest('tr')).not.toHaveTextContent(/\//);
+    // The badge names the gap; Size keeps held / needed.
+    const gaps = within(table).getAllByText('missing 100 ETH');
+    expect(gaps).toHaveLength(2);
+    expect(gaps[0].closest('tr')).toHaveTextContent('0 / 100 ETH');
+    expect(within(card).getByRole('button', { name: 'Open both perps' })).toBeInTheDocument();
   });
 
-  it('a rolled unit with a part perp shows that perp, and the old pair covers the rest', () => {
-    const OLD = NOW + 8 * DAY;
-    const NEW = NOW + 45 * DAY;
-    const group: AssetGroup = {
-      base: 'ETH',
-      supported: true,
-      priceUsd: PX,
-      earliestSec: NOW - 10 * DAY,
-      perpOpen: [perp('GATE', 'LONG', 100), perp('HYPERLIQUID', 'SHORT', 110)],
-      perpClosed: [],
-      borosOpen: [
-        { ...yu(1, 'GATE', 'LONG', 100, 0.04), maturity: OLD },
-        { ...yu(2, 'HYPERLIQUID', 'SHORT', 100, 0.08), maturity: OLD },
-        { ...yu(11, 'GATE', 'LONG', 100, 0.04), maturity: NEW },
-        { ...yu(12, 'HYPERLIQUID', 'SHORT', 100, 0.08), maturity: NEW },
-      ],
-      borosHistory: [],
-    };
-    renderCard(group);
-    const card = screen.getByText(`Rolled · covered from ${fmtDateShort(OLD)}`).closest('div.overflow-x-auto') as HTMLElement;
-    const table = within(card).getByRole('columnheader', { name: 'Leg' }).closest('table') as HTMLElement;
+  it('a part perp left on the old card shows held / needed, and the badge the rest', () => {
+    renderCard(rolledBook(100, 110));
+    const table = within(missingCard()).getByRole('columnheader', { name: 'Leg' }).closest('table') as HTMLElement;
     const hl = within(table)
       .getAllByRole('row')
       .filter((r) => /HyperliquidCrossEx/.test(r.textContent ?? ''));
-    expect(hl.map((r) => r.textContent)).toEqual([
-      expect.stringMatching(/^HyperliquidCrossExSHORT10 ETH/),
-      expect.stringMatching(new RegExp(`^HyperliquidCrossExSHORTfrom ${fmtDateShort(OLD)} pair90 ETH`)),
-    ]);
+    expect(hl.map((r) => r.textContent)).toEqual([expect.stringMatching(/^HyperliquidCrossExSHORTmissing 90 ETH10 \/ 100 ETH/)]);
   });
 
   it('a Boros leg shared with another card shows its percent, and the hover breaks it down', () => {
@@ -251,29 +221,10 @@ describe('BorosOnlyPairCard', () => {
     );
   });
 
-  it('a roll into a bigger size asks for perps for the whole new size (case 1)', () => {
-    const OLD = NOW + 8 * DAY;
-    const NEW = NOW + 45 * DAY;
-    // 100 hedged at OLD; 500 opened at NEW. All 500 is new exposure, not a roll the old perps cover.
-    const group: AssetGroup = {
-      base: 'ETH',
-      supported: true,
-      priceUsd: PX,
-      earliestSec: NOW - 10 * DAY,
-      perpOpen: [perp('GATE', 'LONG', 100), perp('HYPERLIQUID', 'SHORT', 100)],
-      perpClosed: [],
-      borosOpen: [
-        { ...yu(1, 'GATE', 'LONG', 100, 0.04), maturity: OLD },
-        { ...yu(2, 'HYPERLIQUID', 'SHORT', 100, 0.08), maturity: OLD },
-        { ...yu(11, 'GATE', 'LONG', 500, 0.04), maturity: NEW },
-        { ...yu(12, 'HYPERLIQUID', 'SHORT', 500, 0.08), maturity: NEW },
-      ],
-      borosHistory: [],
-    };
-    renderCard(group);
+  it('a roll into a bigger size: the new date takes the perps, and both dates show what they lack', () => {
+    // 100 hedged at OLD; 500 opened at NEW. The perps go to NEW; 400 at NEW and all 100 at OLD lack perps.
+    renderCard(rolledBook(500));
     expect(screen.queryByText(/^Rolled · covered from/)).toBeNull();
-    const chip = screen.getByText('Perp legs missing');
-    const card = chip.closest('div.overflow-x-auto') as HTMLElement;
-    expect(within(card).getByRole('button', { name: 'Open both perps' })).toBeInTheDocument();
+    expect(screen.getAllByText('Perp legs missing')).toHaveLength(2);
   });
 });

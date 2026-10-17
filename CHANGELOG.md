@@ -29,11 +29,13 @@ on the cards in seconds.
   window used the whole limit and every Boros read failed for up to a minute.
 - **Fixed Rate Pairs split by size.** A held single that covers part of a perp unit no longer
   turns the whole unit into singles: the rest keeps its spread offer. Opens are capped at what
-  the venue lacks. Missing legs read "held / needed", for example "0 / 0.05 ETH". Gaps that
+  the venue lacks. Missing legs read "held / needed", for example "0 / 0.05 ETH", and the badge
+  names the gap: "missing 0.05 ETH". Gaps that
   differ by under $25 a side count as even. A single under $50 no longer hides the spread offer.
-- **Open-only rolls.** A roll that keeps the old legs reads "Rolled · covered from <date>" on
-  the new legs. A bigger one shows its missing perps for the whole new size. The window says,
-  in three bullets, what stays unhedged until the old legs mature.
+- **Open-only rolls.** After a roll that keeps the old legs, the perps hedge the new, later
+  legs. The old legs show as their own card, with the perps they lack, until they mature.
+  Within one venue pair, the further maturity always takes the perps first. The roll window
+  says this in three bullets.
 - **Share of a shared leg.** The percent after a leg size has a hover with the whole position,
   this pair's part and the other cards' part.
 - **Telegram roll alerts.** One suggestion per held pair, with its kind (singles or spread, to

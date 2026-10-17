@@ -924,7 +924,7 @@ describe('RollOverModal — open only (keep old legs)', () => {
     // The review has NO exit batch — just the new legs.
     expect(within(dialog).queryByText('Exit')).not.toBeInTheDocument();
     expect(within(dialog).queryByText('Re-entry')).not.toBeInTheDocument();
-    expect(within(dialog).getByText(/no perps on the new legs, so rate moves hit your PnL/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/Your perps hedge the new legs\. The .* legs stay open, with no perps/)).toBeInTheDocument();
 
     const confirm = await within(dialog).findByRole('button', { name: 'Open new maturity' });
     await waitFor(() => expect(confirm).not.toBeDisabled(), { timeout: 4_000 });
