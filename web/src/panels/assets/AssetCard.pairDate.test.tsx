@@ -3,7 +3,7 @@
  * perps" arms on a spread unit, and the date a Boros open arms when the unit
  * holds no rate leg (rule A1), the same on both tabs.
  */
-import { screen, waitFor } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { beforeEach, describe, expect, it } from 'vitest';
@@ -307,6 +307,17 @@ describe('case 5: the Funding Bundles pair open uses the same date as the Fixed 
     const user = userEvent.setup();
     renderCard(case5Book());
     expect(await pairsArm(user, 'Open both Boros legs')).toMatchObject({ longVenue: 'OKX', shortVenue: 'LIGHTER', maturity: DEC });
+  });
+
+  it('a bundle leg not open yet names its gap on the badge, not a bare "missing" (owner 2026-10-17)', async () => {
+    const user = userEvent.setup();
+    renderCard(case5Book());
+    await user.click(screen.getByRole('tab', { name: /^Funding Bundles/ }));
+    await user.click(screen.getByRole('button', { name: /^OKX/ }));
+    const rows = (await screen.findAllByText('not open yet')).map((el) => el.closest('tr') as HTMLElement);
+    expect(rows.length).toBeGreaterThan(0);
+    for (const row of rows) expect(within(row).getByText('missing 1 BTC')).toBeInTheDocument();
+    expect(screen.queryByText('missing')).not.toBeInTheDocument();
   });
 
   const okxLighter = () => listSpreads([spreadRow(NOV, { venue: 'OKX-LIGHTER', spreadVenues: ['OKX', 'LIGHTER'] })]);
