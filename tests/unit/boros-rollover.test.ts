@@ -631,6 +631,20 @@ describe('spread rolls', () => {
     expect(g.margin).toMatchObject({ need: 40, availableAfterExit: 560, availableAfter: 520, shortfall: 0 });
   });
 
+  // A whole spread roll frees one slot; two new singles need two (report 2026-10-18).
+  it('a market-limit refusal on a part spread-to-singles roll does not offer the whole roll', () => {
+    const error = 'MMMarketLimitExceeded()';
+    const venue = venueOk({ status: 'Refused', reason: { code: 'MM_MARKET_LIMIT_EXCEEDED', message: error }, orders: [], availableAfter: null });
+    const exit = step(spreadExit(SIZE * 2), 'close', SIZE);
+    const fix = evaluateRollGate({ exit, entry: step(entryLegs(), 'open'), venue }).blockers[0].message.split('\n').at(-1);
+    expect(fix).toBe('Fix: Close a position you no longer need, then roll.');
+    // One of the two singles already held: the whole roll frees the one slot the other needs.
+    const entry = step([leg(hlNew, 'short', { currentSize: -SIZE }), leg(bnNew, 'long')], 'open');
+    expect(evaluateRollGate({ exit, entry, venue }).blockers[0].message.split('\n').at(-1)).toBe(
+      'Fix: Roll the whole position (it frees the old markets), or close a position you no longer need.',
+    );
+  });
+
   it('rolls a spread into the next spread with one close and one open, which still needs the venue preview', () => {
     const exit = step(spreadExit(), 'close');
     const entry = step([leg(spreadNew, 'short')], 'open');
