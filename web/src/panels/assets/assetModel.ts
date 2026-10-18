@@ -1776,24 +1776,30 @@ export function deriveAsset(
         // hedged pair and the old ones show what they lack (mozzarella
         // 2026-10-17). At one maturity the spread still comes first. Dust
         // units keep today's order.
+        const usdOf = (c: (typeof combos)[number], size: number) =>
+          unit === 'usd' ? size : c.l.qty > 0 ? (size * c.l.notionalUsd) / c.l.qty : 0;
+        let take = bestNeed;
         for (const c of combos) {
           if (spent.has(c) || c.l !== best.l || c.sh !== best.sh || !(c.maturity > best.maturity)) continue;
           const perps = Math.min(perpLeft.get(c.l) ?? 0, perpLeft.get(c.sh) ?? 0);
           const left = c.kind === 'spread' ? spreadLeftAt(c.l.venue, c.sh.venue, c.maturity) : Math.min(yuLeftAt(c.l.venue, c.maturity), yuLeftAt(c.sh.venue, c.maturity));
           const need = Math.min(perps, left);
           // A later unit under the dust line does not take the main pair's perps.
-          const usd = unit === 'usd' ? need : c.l.qty > 0 ? (need * c.l.notionalUsd) / c.l.qty : 0;
-          if (need > 1e-9 && usd * 2 >= PERP_ONLY_DUST_USD) {
+          if (need > 1e-9 && usdOf(c, need) * 2 >= PERP_ONLY_DUST_USD) {
             best = c;
             bestNeed = need;
+            // A roll that filled a hair short leaves the old legs a dust rest
+            // of the perps: it is rounding, so it rides on the new unit
+            // instead of showing as a $2 hedged card (report 2026-10-18).
+            take = usdOf(c, perps - need) * 2 < PERP_ONLY_DUST_USD ? perps : need;
           }
         }
         const before = perpLeft.get(best.l);
-        yield { ...best, need: bestNeed };
+        yield { ...best, need: bestNeed, take };
         if (perpLeft.get(best.l) === before) spent.add(best);
       }
     }
-    for (const { l: lLeg, sh: sLeg, maturity, kind, need } of largestFirst()) {
+    for (const { l: lLeg, sh: sLeg, maturity, kind, need, take } of largestFirst()) {
       const lKeep = keepOf(lLeg);
       const sKeep = keepOf(sLeg);
       const lSize = legSize(lLeg);
@@ -1836,13 +1842,15 @@ export function deriveAsset(
       const allocShort = [...alloc.short.values()].reduce((a, b) => a + b, 0);
       const size = spreadGot + Math.min(allocLong, allocShort);
       if (!(size > 0)) continue;
-      perpLeft.set(lLeg, (perpLeft.get(lLeg) ?? 0) - size);
-      perpLeft.set(sLeg, (perpLeft.get(sLeg) ?? 0) - size);
+      // The perps' dust rest, when this unit takes it (see largestFirst).
+      const perpSize = size + (take - need);
+      perpLeft.set(lLeg, (perpLeft.get(lLeg) ?? 0) - perpSize);
+      perpLeft.set(sLeg, (perpLeft.get(sLeg) ?? 0) - perpSize);
       // Perps ride PRO-RATA with the YU size this unit claims, so several
       // maturity rows of the same venue pairing sum to the venue's real totals
       // rather than each claiming the whole perp position.
-      const lShare = size / lSize; // slice of the long perp leg
-      const share = size / sSize; // slice of the short perp leg
+      const lShare = perpSize / lSize; // slice of the long perp leg
+      const share = perpSize / sSize; // slice of the short perp leg
       let cap = lLeg.imUsd * lKeep * lShare + sLeg.imUsd * sKeep * share;
       let perYear = 0;
       let hasUnknownPairRate = false;

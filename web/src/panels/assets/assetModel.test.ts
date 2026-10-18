@@ -1036,6 +1036,17 @@ describe('a roll that keeps the old legs: the further maturity takes the perps',
     expect(old?.size).toBeCloseTo(10, 9);
   });
 
+  it('a roll that filled a hair short takes the perps\' dust rest: no sliver hedged card on the old date (report 2026-10-18)', () => {
+    // 0.001 ETH a side is $1.90; 100 of 99.9999 is $0.19.
+    for (const [whole, rolled] of [[0.949, 0.948], [100, 99.9999]]) {
+      const d = deriveAsset(group({ perpOpen: perps(whole), borosOpen: [...singles(OLD, whole, 1), ...singles(NEW, rolled, 11)] }), {}, 0, NOW);
+      expect(d.pairs.map((p) => p.soonestMaturitySec)).toEqual([NEW]);
+      for (const l of d.pairs[0].legs.filter((x) => x.kind === 'perp')) expect(l.sizeBase).toBeCloseTo(whole, 9);
+      expect(pendingAt(d, OLD)).toEqual([1, 2]);
+      expect(d.unpairedPerps).toEqual([]);
+    }
+  });
+
   it('other venue pairings keep largest first', () => {
     // Gate long perp 10 against HL short 10 (old date) or Lighter short 1 (new date).
     const g = group({
