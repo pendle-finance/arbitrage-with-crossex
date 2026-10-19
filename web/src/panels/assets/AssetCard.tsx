@@ -5482,14 +5482,17 @@ export function AssetCard({
   /**
    * Markets the card would open on that the account holds the other way.
    * The open would net against them, not hedge, so the card offers Close
-   * there instead of Open (report 2026-10-18).
+   * there instead of Open (report 2026-10-18). A wrong-way spread counts
+   * at any maturity: as its own card it offered the perps the other way.
    */
   const heldOtherWayFor = (p: PerpOnlyPair): AssetBorosOpen[] => {
     const maturity = borosMaturityFor(p);
-    const spreadId = p.missingLong > 0 && p.missingShort > 0 ? defaultSpreadFor(p.longVenue, p.shortVenue)?.marketId : undefined;
+    const bothMissing = p.missingLong > 0 && p.missingShort > 0;
     return group.borosOpen.filter((b) =>
       b.spreadVenues
-        ? b.marketId === spreadId && !spreadFits(b, p.longVenue, p.shortVenue)
+        ? bothMissing &&
+          b.spreadVenues.every((v) => v === p.longVenue || v === p.shortVenue) &&
+          !spreadFits(b, p.longVenue, p.shortVenue)
         : b.maturity === maturity &&
           ((p.missingLong > 0 && b.venue === p.longVenue && b.side === 'SHORT') ||
             (p.missingShort > 0 && b.venue === p.shortVenue && b.side === 'LONG')),
