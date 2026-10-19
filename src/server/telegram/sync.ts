@@ -35,6 +35,7 @@ export type RollSignalInput = TriggerRoll & {
   /** The probe could not price this pair (a Boros 429, a book that did not
    * load). Its targets are unknown, not empty: keep the last ones. */
   unpriced?: boolean;
+  marketIds?: number[];
 };
 
 export interface TelegramSync {
@@ -95,7 +96,7 @@ function parseRollSignals(raw: unknown, fileAt: number): StoredSignal[] | null {
   const signals: StoredSignal[] = [];
   for (const item of raw) {
     if (typeof item !== 'object' || item === null) return null;
-    const { coin, longVenue, shortVenue, maturity, targets, at } = item as Record<string, unknown>;
+    const { coin, longVenue, shortVenue, maturity, kind, marketIds, targets, at } = item as Record<string, unknown>;
     if (typeof coin !== 'string' || typeof longVenue !== 'string' || typeof shortVenue !== 'string') return null;
     if (typeof maturity !== 'number' || !Number.isInteger(maturity)) return null;
     signals.push({
@@ -103,6 +104,10 @@ function parseRollSignals(raw: unknown, fileAt: number): StoredSignal[] | null {
       longVenue,
       shortVenue,
       maturity,
+      ...(kind === 'spread' || kind === 'singles' ? { kind } : {}),
+      ...(Array.isArray(marketIds) && marketIds.every((id) => Number.isInteger(id))
+        ? { marketIds: marketIds as number[] }
+        : {}),
       targets: parseRollTargets(targets),
       at: typeof at === 'number' && Number.isFinite(at) ? at : fileAt,
     });
@@ -122,8 +127,8 @@ function parseRollFile(raw: unknown): RollFile | null {
   return parsed && { at, wallet: typeof wallet === 'string' ? wallet.toLowerCase() : null, signals: parsed };
 }
 
-const signalKey = (s: TriggerRoll & { coin: string }): string =>
-  `${s.coin.toUpperCase()}:${s.longVenue}-${s.shortVenue}:${s.maturity}`;
+const signalKey = (s: RollSignalInput): string =>
+  `${s.coin.toUpperCase()}:${s.longVenue}-${s.shortVenue}:${s.maturity}:${(s.marketIds ?? []).join(',')}`;
 
 function rollKeys(signals: RollSignalInput[]): Set<string> {
   const keys = new Set<string>();
@@ -131,7 +136,7 @@ function rollKeys(signals: RollSignalInput[]): Set<string> {
     const coin = signal.coin.toUpperCase();
     keys.add(`${coin}:${signal.maturity}`);
     for (const target of signal.targets) {
-      keys.add(`${coin}:${signal.longVenue}-${signal.shortVenue}:${signal.maturity}:${target.maturity}`);
+      keys.add(`${signalKey(signal)}:${target.maturity}`);
     }
   }
   return keys;
@@ -172,6 +177,7 @@ export function createTelegramSync(opts: TelegramSyncOptions): TelegramSync {
         longVenue: s.longVenue,
         shortVenue: s.shortVenue,
         maturity: s.maturity,
+        ...(s.kind ? { kind: s.kind } : {}),
         targets: at - s.at <= ROLL_TARGET_TTL_MS ? s.targets : [],
       }));
 
@@ -179,7 +185,14 @@ export function createTelegramSync(opts: TelegramSyncOptions): TelegramSync {
     const at = opts.now();
     const previous = new Map(rollSignals.map((s) => [signalKey(s), s]));
     const next: StoredSignal[] = signals.map((s) => {
-      const base = { coin: s.coin, longVenue: s.longVenue, shortVenue: s.shortVenue, maturity: s.maturity };
+      const base = {
+        coin: s.coin,
+        longVenue: s.longVenue,
+        shortVenue: s.shortVenue,
+        maturity: s.maturity,
+        ...(s.kind ? { kind: s.kind } : {}),
+        ...(s.marketIds ? { marketIds: s.marketIds } : {}),
+      };
       // An unpriced pair keeps what it had, on its old stamp, so a read that
       // failed neither blanks a real target nor passes an old one off as new.
       const kept = s.unpriced ? previous.get(signalKey(s)) : undefined;

@@ -14,7 +14,6 @@ import {
   borosOnlyPairs,
   pairTimelineAxis,
   timelineBar,
-  markExcessBorosPairs,
   deriveAsset,
   keptSlice,
   pairBorosCloseLegs,
@@ -996,46 +995,117 @@ describe('borosOnlyPairs', () => {
   });
 });
 
-describe('markExcessBorosPairs', () => {
-  const OLD = 1_790_000_000;
-  const NEW = OLD + 37 * DAY;
-  const yuLeg = (venue: string, side: 'LONG' | 'SHORT', maturity: number, marketId: number) => ({
-    venue,
-    side,
-    marketId,
-    maturity,
-    sizeBase: 10,
-    notionalUsd: 25_000,
-    unit: 'base' as const,
-    lockedApr: side === 'LONG' ? -0.05 : 0.08,
-    imUsd: 30,
-    share: 1,
-  });
-  /** A perp-hedged pair, only the three fields the matcher reads. */
-  const hedged = (longVenue: string, shortVenue: string, soonestMaturitySec: number) => ({ longVenue, shortVenue, soonestMaturitySec });
-  const newUnit = () =>
-    borosOnlyPairs([], [yuLeg('GATE', 'LONG', NEW, 11), yuLeg('LIGHTER', 'SHORT', NEW, 12)]).pairs;
+describe('a roll that keeps the old legs: the further maturity takes the perps', () => {
+  const OLD = NOW + 20 * DAY;
+  const NEW = NOW + 57 * DAY;
+  const perps = (qty = 10) => [
+    perp({ symbol: 'GATE_L', venue: 'GATE', side: 'LONG', qty, notionalUsd: qty * 1900 }),
+    perp({ symbol: 'HL_S', venue: 'HYPERLIQUID', side: 'SHORT', qty, notionalUsd: qty * 1900 }),
+  ];
+  const singles = (maturity: number, size: number, id: number) => [
+    boros({ marketId: id, venue: 'GATE', side: 'LONG', maturity, sizeToken: size, notionalUsd: size * 1900 }),
+    boros({ marketId: id + 1, venue: 'HYPERLIQUID', side: 'SHORT', maturity, sizeToken: size, notionalUsd: size * 1900 }),
+  ];
+  const pendingAt = (d: ReturnType<typeof deriveAsset>, maturity: number) =>
+    d.pendingLegs.filter((l) => l.maturity === maturity).map((l) => l.marketId).sort();
 
-  it('marks a perp-less unit excess when a perp-hedged pair at an EARLIER maturity shares both venues', () => {
-    const marked = markExcessBorosPairs(newUnit(), [hedged('GATE', 'LIGHTER', OLD)]);
-    expect(marked).toHaveLength(1);
-    expect(marked[0].isExcess).toBe(true);
+  it('equal sizes: the new date is the hedged pair, the old legs wait for perps (mozzarella 2026-10-17)', () => {
+    const d = deriveAsset(group({ perpOpen: perps(), borosOpen: [...singles(OLD, 10, 1), ...singles(NEW, 10, 11)] }), {}, 0, NOW);
+    expect(d.pairs.map((p) => p.soonestMaturitySec)).toEqual([NEW]);
+    expect(pendingAt(d, OLD)).toEqual([1, 2]);
   });
 
-  it('is not excess when the shared-venue pair is at the SAME or a LATER maturity, not earlier', () => {
-    expect(markExcessBorosPairs(newUnit(), [hedged('GATE', 'LIGHTER', NEW)])[0].isExcess).toBeUndefined();
-    expect(markExcessBorosPairs(newUnit(), [hedged('GATE', 'LIGHTER', NEW + DAY)])[0].isExcess).toBeUndefined();
+  it('a smaller roll takes its size of the perps; the old pair keeps the rest', () => {
+    const d = deriveAsset(group({ perpOpen: perps(), borosOpen: [...singles(OLD, 10, 1), ...singles(NEW, 4, 11)] }), {}, 0, NOW);
+    const at = (m: number) => d.pairs.find((p) => p.soonestMaturitySec === m);
+    expect(at(NEW)?.size).toBeCloseTo(4, 9);
+    expect(at(OLD)?.size).toBeCloseTo(6, 9);
   });
 
-  it('is not excess when the earlier pair is on different venues', () => {
-    expect(markExcessBorosPairs(newUnit(), [hedged('GATE', 'OKX', OLD)])[0].isExcess).toBeUndefined();
-    expect(markExcessBorosPairs(newUnit(), [hedged('BINANCE', 'LIGHTER', OLD)])[0].isExcess).toBeUndefined();
+  it('singles to a later spread: the spread takes the perps', () => {
+    const spread = boros({ marketId: 21, venue: 'HL-GATE', spreadVenues: ['HYPERLIQUID', 'GATE'], side: 'SHORT', maturity: NEW, sizeToken: 10, notionalUsd: 19_000 });
+    const d = deriveAsset(group({ perpOpen: perps(), borosOpen: [...singles(OLD, 10, 1), spread] }), {}, 0, NOW);
+    expect(d.pairs.map((p) => p.soonestMaturitySec)).toEqual([NEW]);
+    expect(pendingAt(d, OLD)).toEqual([1, 2]);
   });
 
-  it('once the old perp-hedged pair has matured and is gone, the surviving unit is no longer excess', () => {
-    // After the old maturity passes, deriveAsset drops the old pair, so the
-    // book collapses to this one unit — nothing earlier shares its venues.
-    expect(markExcessBorosPairs(newUnit(), [])[0].isExcess).toBeUndefined();
+  it('a later unit under the $50 dust line does not take the main pair\'s perps', () => {
+    // 0.001 ETH a side is $1.90.
+    const d = deriveAsset(group({ perpOpen: perps(), borosOpen: [...singles(OLD, 10, 1), ...singles(NEW, 0.001, 11)] }), {}, 0, NOW);
+    const old = d.pairs.find((p) => p.soonestMaturitySec === OLD);
+    expect(old?.size).toBeCloseTo(10, 9);
+  });
+
+  it('a roll that filled a hair short takes the perps\' dust rest: no sliver hedged card on the old date (report 2026-10-18)', () => {
+    // 0.001 ETH a side is $1.90; 100 of 99.9999 is $0.19.
+    for (const [whole, rolled] of [[0.949, 0.948], [100, 99.9999]]) {
+      const d = deriveAsset(group({ perpOpen: perps(whole), borosOpen: [...singles(OLD, whole, 1), ...singles(NEW, rolled, 11)] }), {}, 0, NOW);
+      expect(d.pairs.map((p) => p.soonestMaturitySec)).toEqual([NEW]);
+      for (const l of d.pairs[0].legs.filter((x) => x.kind === 'perp')) expect(l.sizeBase).toBeCloseTo(whole, 9);
+      expect(pendingAt(d, OLD)).toEqual([1, 2]);
+      expect(d.unpairedPerps).toEqual([]);
+    }
+  });
+
+  // Gate L 2 / HL S 1 / Lighter S 1 perps; Gate/HL at 27 Nov, Gate/Lighter at 25 Dec, a stray HL 25 Dec leg.
+  const sharedGate = (gateNew: number) =>
+    group({
+      perpOpen: [...perps(1).slice(1), perp({ symbol: 'GATE_L', venue: 'GATE', side: 'LONG', qty: 2, notionalUsd: 3800 }), perp({ symbol: 'LIGHTER_S', venue: 'LIGHTER', side: 'SHORT', qty: 1, notionalUsd: 1900 })],
+      borosOpen: [
+        ...singles(OLD, 1, 1),
+        ...singles(NEW, 1, 11).map((b) => (b.venue === 'GATE' ? { ...b, sizeToken: gateNew, notionalUsd: gateNew * 1900 } : b)),
+        boros({ marketId: 31, venue: 'LIGHTER', side: 'SHORT', maturity: NEW, sizeToken: 1, notionalUsd: 1900 }),
+      ],
+    });
+  const units = (d: ReturnType<typeof deriveAsset>) =>
+    d.pairs.map((p) => `${p.longVenue}/${p.shortVenue} ${p.soonestMaturitySec === OLD ? 'old' : 'new'} ${p.size.toFixed(6)}`).sort();
+
+  it('further first does not take a leg another venue pairing needs at that date (report 2026-10-18)', () => {
+    expect(units(deriveAsset(sharedGate(1), {}, 0, NOW))).toEqual(['GATE/HYPERLIQUID old 1.000000', 'GATE/LIGHTER new 1.000000']);
+  });
+
+  it('the fallback is per venue pairing: an unrelated open-only roll in the same coin keeps further first', () => {
+    const g = sharedGate(1);
+    const mixed = group({
+      perpOpen: [
+        ...g.perpOpen,
+        perp({ symbol: 'BINANCE_L', venue: 'BINANCE', side: 'LONG', qty: 3, notionalUsd: 5700 }),
+        perp({ symbol: 'OKX_S', venue: 'OKX', side: 'SHORT', qty: 3, notionalUsd: 5700 }),
+      ],
+      borosOpen: [
+        ...g.borosOpen,
+        ...[OLD, NEW].flatMap((maturity, i) => [
+          boros({ marketId: 41 + 2 * i, venue: 'BINANCE', side: 'LONG', maturity, sizeToken: 3, notionalUsd: 5700 }),
+          boros({ marketId: 42 + 2 * i, venue: 'OKX', side: 'SHORT', maturity, sizeToken: 3, notionalUsd: 5700 }),
+        ]),
+      ],
+    });
+    expect(units(deriveAsset(mixed, {}, 0, NOW))).toEqual(['BINANCE/OKX new 3.000000', 'GATE/HYPERLIQUID old 1.000000', 'GATE/LIGHTER new 1.000000']);
+  });
+
+  it('with room for both at the later date, further first still holds', () => {
+    expect(units(deriveAsset(sharedGate(2), {}, 0, NOW))).toEqual(['GATE/HYPERLIQUID new 1.000000', 'GATE/LIGHTER new 1.000000']);
+  });
+
+  it('a single held against its perp is no hedge: HL short perps and an HL LONG single (report 2026-10-18)', () => {
+    const wrong = singles(OLD, 10, 1).map((b) => ({ ...b, side: 'LONG' as const }));
+    const d = deriveAsset(group({ perpOpen: perps(), borosOpen: wrong }), {}, 0, NOW);
+    expect(d.pairs).toEqual([]);
+    expect(pendingAt(d, OLD)).toEqual([1, 2]);
+  });
+
+  it('other venue pairings keep largest first', () => {
+    // Gate long perp 10 against HL short 10 (old date) or Lighter short 1 (new date).
+    const g = group({
+      perpOpen: [...perps(), perp({ symbol: 'LIGHTER_S', venue: 'LIGHTER', side: 'SHORT', qty: 1, notionalUsd: 1900 })],
+      borosOpen: [
+        ...singles(OLD, 10, 1),
+        boros({ marketId: 31, venue: 'GATE', side: 'LONG', maturity: NEW, sizeToken: 1, notionalUsd: 1900 }),
+        boros({ marketId: 32, venue: 'LIGHTER', side: 'SHORT', maturity: NEW, sizeToken: 1, notionalUsd: 1900 }),
+      ],
+    });
+    const d = deriveAsset(g, {}, 0, NOW);
+    expect(d.pairs.find((p) => p.soonestMaturitySec === OLD)?.size).toBeCloseTo(10, 9);
   });
 });
 

@@ -2,29 +2,27 @@
  * Roll-over: close a Boros pair at one maturity and re-open it at a later
  * one, as ONE all-or-nothing batch.
  *
- * The venue's own builder (`calldata-builder/agent/roll-over`) makes the four
- * orders — close A, close B, open A′, open B′, every one FOK, the closes
- * sized from the on-chain position — and they go out as a single
- * `tryAggregate` with `requireSuccess`. The venue simulates the batch before
- * submitting it (the calls run in order, in one state, so the opens are
- * checked against the margin the closes free), refuses the whole thing if
- * any call would fail, and on-chain a revert anywhere undoes everything. FOK
- * closes the last gap: an IOC leg that fills PART of its size still
- * succeeds, so `requireSuccess` alone would let the old legs close 100%
- * while the new ones open 60%. Under FOK a leg either fills whole or
- * reverts, and its revert takes the batch. A roll therefore ends in exactly
- * one of three states: rolled in full, nothing happened, or the venue never
- * confirmed (`unknown`).
+ * The batch is every close, then every open, each FOK, sent by
+ * `placeMarketOrders` as a single `tryAggregate` with `requireSuccess`. The
+ * venue simulates the batch before submitting it (the calls run in order, in
+ * one state, so the opens are checked against the margin the closes free),
+ * refuses the whole thing if any call would fail, and on-chain a revert
+ * anywhere undoes everything. FOK closes the last gap: an IOC leg that fills
+ * PART of its size still succeeds, so `requireSuccess` alone would let the
+ * old legs close 100% while the new ones open 60%. Under FOK a leg either
+ * fills whole or reverts, and its revert takes the batch. A roll therefore
+ * ends in exactly one of three states: rolled in full, nothing happened, or
+ * the venue never confirmed (`unknown`).
  *
  * What this module does NOT do: size legs, walk books or judge margin —
  * each step is priced by `simulateBorosPair` + `evaluatePairGate`, and the
- * batch as a whole by the venue's own preview (`simulations/roll-over`),
- * which runs the four orders in order on one account state and is the only
- * thing that can say whether a FOK fills whole and whether the account
- * still clears its initial margin once the closes have freed theirs. This
- * module combines those verdicts, adds the checks that only exist because
- * the two steps are one batch, names the legs for the venue, and reads its
- * answer.
+ * batch as a whole by the venue's own preview (`v2/simulations/roll-over`),
+ * which runs the same orders in the same order on one account state and is
+ * the only thing that can say whether a FOK fills whole and whether the
+ * account still clears its initial margin once the closes have freed theirs.
+ * This module combines those verdicts, adds the checks that only exist
+ * because the two steps are one batch, names the legs for the venue, and
+ * reads its answer.
  */
 import type { BorosMarket } from './client';
 import { classifyLegFailure } from './orders';
@@ -33,7 +31,6 @@ import type {
   BorosLegFill,
   BorosMarketOrderRequest,
   BorosOrderClient,
-  BorosRollLeg,
   BorosRollSimulation,
   PlaceOrdersOptions,
 } from './orders';
@@ -129,6 +126,11 @@ const sum = (xs: Array<number | null>): number | null =>
   xs.every((x): x is number => x !== null) ? xs.reduce((t, x) => t + x, 0) : null;
 const venuesOf = (m: BorosMarket): readonly string[] => m.spreadVenues ?? [normalizeVenue(m.venue)];
 
+/** `MarketSelfSwap` (MarketOrderAndOtc.sol): the order would fill against the
+ * account's own resting order. Spelled "Self swapping error" by the SDK's
+ * message table, `MarketSelfSwap()` without it. */
+const SELF_SWAP = /self\s*swap/i;
+
 /**
  * Why the venue refused ONE leg, in the trader's terms, with that cause's own
  * remedy.
@@ -142,14 +144,19 @@ const venuesOf = (m: BorosMarket): readonly string[] => m.spreadVenues ?? [norma
  * that cannot supply the size at ANY rate is liquidity; one that can, but not
  * inside the bound, is slippage. Every other cause keeps the venue's words.
  */
-function refusalCause(error: string, sim: SimulatedLeg | null, collateral: string): string {
+function refusalCause(error: string, sim: SimulatedLeg | null, collateral: string, wholeRollHelps = false): Refusal {
   const pct = (n: number) => `${(n * 100).toFixed(2)}%`;
+  const reduce = 'Reduce the size.';
   switch (classifyLegFailure(error)) {
     case 'insufficient-depth': {
       if (sim === null || sim.shortfallSize > 0 || sim.bookStatus !== 'ok') {
-        return sim !== null && sim.bookStatus !== 'unavailable'
-          ? `Insufficient liquidity: the whole book holds ${fmtSize(sim.estFillSize)} ${collateral}. Reduce the size.`
-          : 'Insufficient liquidity. Reduce the size.';
+        return {
+          cause:
+            sim !== null && sim.bookStatus !== 'unavailable'
+              ? `Insufficient liquidity: the whole book holds ${fmtSize(sim.estFillSize)} ${collateral}.`
+              : 'Insufficient liquidity.',
+          fix: reduce,
+        };
       }
       // Widening only helps while the venue's rate band has room for the
       // bound. When even the widest tolerance the band allows does not hold
@@ -162,24 +169,65 @@ function refusalCause(error: string, sim: SimulatedLeg | null, collateral: strin
           withinBand = cum;
         }
         if (withinBand < size) {
-          return `Rate limit exceeded: only ${fmtSize(withinBand)} ${collateral} fills inside the venue's max rate deviation. Reduce the size.`;
+          return { cause: `Rate limit exceeded: only ${fmtSize(withinBand)} ${collateral} fills inside the venue's max rate deviation.`, fix: reduce };
         }
       }
       // Only when this side's book AGREES it is short: one that has moved
       // since it was read has nothing truthful to add (nerax1s, e79d672).
-      return sim.sizeWithinTolerance !== null && sim.sizeWithinTolerance < size
-        ? `Slippage too high: only ${fmtSize(sim.sizeWithinTolerance)} ${collateral} fills inside the ${pct(sim.slippageApr)} tolerance. Widen the tolerance or reduce the size.`
-        : 'Slippage too high: the size does not fill inside the tolerance. Widen the tolerance or reduce the size.';
+      return {
+        cause:
+          sim.sizeWithinTolerance !== null && sim.sizeWithinTolerance < size
+            ? `Slippage too high: only ${fmtSize(sim.sizeWithinTolerance)} ${collateral} fills inside the ${pct(sim.slippageApr)} tolerance.`
+            : 'Slippage too high: the size does not fill inside the tolerance.',
+        fix: 'Widen the tolerance or reduce the size.',
+      };
     }
     case 'rate-deviation':
-      return `Rate limit exceeded (${error}): the rate sits too far from the venue's mark. Reduce the size.`;
+      return { cause: `Rate limit exceeded (${error}): the rate sits too far from the venue's mark.`, fix: reduce };
     case 'insufficient-margin':
-      return `${error}. Add margin or roll a smaller size.`;
+      return { cause: `${error}.`, fix: 'Add margin or roll a smaller size.' };
     case 'no-gas':
-      return `${error}. Top up the gas balance.`;
+      return { cause: `${error}.`, fix: 'Top up the gas balance.' };
+    // Reached when the roll needs more slots than its closes free, for
+    // example one spread into two singles with every other market in use.
+    case 'market-limit':
+      // A whole roll exits the old markets once they are flat (G1), so on a
+      // part roll that is the fix that keeps every other position.
+      return {
+        cause: 'Market limit reached: every Boros market slot holds a position or an order.',
+        fix: wholeRollHelps ? 'Roll the whole position (it frees the old markets), or close a position you no longer need.' : 'Close a position you no longer need, then roll.',
+      };
     default:
-      return `${error}.`;
+      return SELF_SWAP.test(error)
+        ? { cause: 'Your own order on this market blocks the fill.', fix: 'Cancel it on Boros, then roll.' }
+        : { cause: `${error}.`, fix: null };
   }
+}
+
+interface Refusal {
+  cause: string;
+  /** The cause's own remedy, said once per message however many legs share it. */
+  fix: string | null;
+}
+
+/** "The venue refuses this roll:", one bullet per cause naming the legs that
+ * share it, then each distinct fix once (his call 2026-10-16: no wall of text). */
+function refusalMessage(
+  items: ReadonlyArray<{ leg: { action: string; market: string } | null; refusal: Refusal }>,
+  extra: readonly string[] = [],
+): string {
+  const byCause = new Map<string, { labels: Map<string, string[]>; fix: string | null }>();
+  for (const { leg, refusal } of items) {
+    const group = byCause.get(refusal.cause) ?? { labels: new Map<string, string[]>(), fix: refusal.fix };
+    if (leg !== null) group.labels.set(leg.action, [...(group.labels.get(leg.action) ?? []), leg.market]);
+    byCause.set(refusal.cause, group);
+  }
+  const bullets = [...byCause].map(([cause, { labels }]) => {
+    const who = [...labels].map(([action, markets]) => `${action} · ${markets.join(', ')}`).join('; ');
+    return `• ${who ? `${who}: ` : ''}${cause}`;
+  });
+  const fixes = [...new Set([...byCause.values()].flatMap((g) => (g.fix ? [g.fix] : [])))].map((f) => `Fix: ${f}`);
+  return ['The venue refuses this roll:', ...bullets, ...extra.map((e) => `• ${e}`), ...fixes].join('\n');
 }
 
 export function evaluateRollGate(input: EvaluateRollInput): RollGate {
@@ -189,18 +237,11 @@ export function evaluateRollGate(input: EvaluateRollInput): RollGate {
   // true one; the exit's, priced as a close, would contradict it.
   const warnings = [...exit.gate.warnings.filter((w) => !w.startsWith('Prepaid gas')), ...entry.gate.warnings];
 
-  // A batch roll (singles ↔ spread) gets no venue preview, so nothing else
-  // judges its margin.
-  const unpreviewedBatch = venue === null && rollPlanFor(exit.simulation, entry.simulation)?.kind === 'batch';
   const prefixed = (step: RollStep, gate: PairGate, label: string): void => {
     for (const b of gate.blockers) {
       // The entry's margin was judged before the exit — replaced by `margin`
-      // below. With no preview to replace it, it is shown, not dropped; only
-      // as a warning, since the closes may free enough.
-      if (step === 'entry' && MARGIN_CODES.has(b.code)) {
-        if (unpreviewedBatch) warnings.push(`${label}: ${b.message} (before the closes free their margin)`);
-        continue;
-      }
+      // below, which the venue judges after the closes have freed theirs.
+      if (step === 'entry' && MARGIN_CODES.has(b.code)) continue;
       // A roll re-opens what each venue already holds, so two singles of
       // slightly different sizes are the book as it stands, not a lopsided
       // new open. The exposure checks below keep each venue's size and side.
@@ -210,6 +251,12 @@ export function evaluateRollGate(input: EvaluateRollInput): RollGate {
   };
   prefixed('exit', exit.gate, 'Exit');
   prefixed('entry', entry.gate, 'Re-entry');
+  // A whole roll helps at the market limit only when the old markets it
+  // frees cover the new ones its opens need: one spread into two singles
+  // frees one slot and needs two (report 2026-10-18).
+  const wholeRollHelps =
+    exit.simulation.legs.some((l) => l.sizing.resultingSize !== 0) &&
+    exit.legs.length >= entry.simulation.legs.filter((l) => l.sizing.currentSize === 0).length;
   const stepBlockers = [...blockers];
 
   const oldMaturity = Math.max(...exit.legs.map((l) => l.market.maturity));
@@ -322,7 +369,10 @@ export function evaluateRollGate(input: EvaluateRollInput): RollGate {
     return m ? m.name : `market ${marketId}`;
   };
   if (venue === null) {
-    if (rollPlanFor(exit.simulation, entry.simulation)?.kind !== 'batch') {
+    // A leg with no rate to send at never reaches the preview (`rollPlanFor`
+    // returns null), so no quote is coming; that leg's own book blocker says why.
+    const unpriceable = stepBlockers.some((b) => b.code === 'no-depth' || b.code === 'book-unavailable');
+    if (!unpriceable) {
       blockers.push({
         code: 'roll-unpriced',
         message: input.venueError
@@ -337,10 +387,13 @@ export function evaluateRollGate(input: EvaluateRollInput): RollGate {
       // the four legs can fail for four different reasons, and one shared
       // "widen the tolerance" is wrong advice for the margin one (his call
       // 2026-09-22). Newline-separated; the panel renders them stacked.
-      const lines = named.map((o) => {
+      const items = named.map((o) => {
         const step = o.action === 'close' ? exit : entry;
         const sim = step.simulation.legs.find((l) => l.marketId === o.marketId) ?? null;
-        return `${o.action === 'close' ? 'Exit' : 'Re-entry'} · ${marketName(o.marketId)} — ${refusalCause(o.error ?? '', sim, step.simulation.collateral)}`;
+        return {
+          leg: { action: o.action === 'close' ? 'Exit' : 'Re-entry', market: marketName(o.marketId) },
+          refusal: refusalCause(o.error ?? '', sim, step.simulation.collateral, wholeRollHelps),
+        };
       });
       /**
        * ONE error per leg, in one list (his call 2026-09-22). The pair gates
@@ -369,16 +422,19 @@ export function evaluateRollGate(input: EvaluateRollInput): RollGate {
         seen.add(`${key}:${b.code}`);
         folded.push(b.message.replace(/^(Exit|Re-entry): /, '$1 · '));
       }
-      blockers.push({ code: 'venue-refused', message: ['The venue refuses this roll:', ...lines, ...folded].join('\n') });
+      blockers.push({ code: 'venue-refused', message: refusalMessage(items, folded) });
     } else {
-      blockers.push({
-        code: 'venue-refused',
-        message: `The venue refuses this roll — ${venue.reason?.message ?? 'refused'}. ${
-          VENUE_MARGIN_CODE.test(venue.reason?.code ?? '')
-            ? 'Add margin or roll a smaller size.'
-            : 'Widen the tolerance or reduce the size.'
-        }`,
-      });
+      const why = venue.reason?.message ?? 'refused';
+      const cause = classifyLegFailure(why);
+      // No one order to blame: two opens that each pass alone can still need
+      // one more market slot than the closes free (live 16 Oct). The cause's
+      // own advice, then; "widen" is only for a fill problem.
+      const refusal: Refusal = VENUE_MARGIN_CODE.test(venue.reason?.code ?? '')
+        ? { cause: `${why}.`, fix: 'Add margin or roll a smaller size.' }
+        : cause === 'market-limit' || cause === 'no-gas' || SELF_SWAP.test(why)
+          ? refusalCause(why, null, '', wholeRollHelps)
+          : { cause: `${why}.`, fix: 'Widen the tolerance or reduce the size.' };
+      blockers.push({ code: 'venue-refused', message: refusalMessage([{ leg: null, refusal }]) });
     }
   }
 
@@ -403,9 +459,11 @@ export function evaluateRollGate(input: EvaluateRollInput): RollGate {
 
 export type RollOrderIds = Record<RollLegKey, string>;
 
-export type RollPlan =
-  | { kind: 'rollover'; legs: BorosRollLeg[] }
-  | { kind: 'batch'; closes: BorosMarketOrderRequest[]; opens: BorosMarketOrderRequest[] };
+/** Every close, then every open: the batch the venue previews and `placeMarketOrders` sends. */
+export interface RollPlan {
+  closes: BorosMarketOrderRequest[];
+  opens: BorosMarketOrderRequest[];
+}
 
 export interface RollPlanOptions {
   ids?: Partial<RollOrderIds>;
@@ -415,9 +473,7 @@ export interface RollPlanOptions {
 const fillKey = (step: RollStep, marketId: number): RollLegKey => `${step}:${marketId}`;
 
 export function rollFillKeys(plan: RollPlan): RollLegKey[] {
-  return plan.kind === 'rollover'
-    ? [...plan.legs.map((l) => fillKey('exit', l.fromMarketId)), ...plan.legs.map((l) => fillKey('entry', l.toMarketId))]
-    : [...plan.closes.map((o) => fillKey('exit', o.marketId)), ...plan.opens.map((o) => fillKey('entry', o.marketId))];
+  return [...plan.closes.map((o) => fillKey('exit', o.marketId)), ...plan.opens.map((o) => fillKey('entry', o.marketId))];
 }
 
 export function rollPlanFor(
@@ -425,57 +481,44 @@ export function rollPlanFor(
   entry: BorosPairSimulation,
   options: RollPlanOptions = {},
 ): RollPlan | null {
-  const trades = (l: SimulatedLeg): boolean => Math.abs(l.sizing.deltaSize) > 0 && l.execApr !== null;
+  const trades = (l: SimulatedLeg): boolean => Math.abs(l.sizing.deltaSize) > 0 && l.execApr !== null && l.worstApr !== null;
   if (exit.legs.length === 0 || entry.legs.length === 0 || ![...exit.legs, ...entry.legs].every(trades)) return null;
 
-  if (exit.legs.length !== entry.legs.length) {
-    if (![...exit.legs, ...entry.legs].every((l) => l.worstApr !== null)) return null;
-    const order = (step: RollStep, leg: SimulatedLeg): BorosMarketOrderRequest => {
-      const asked = Math.abs(leg.sizing.deltaSize);
-      const openWei = step === 'exit' ? options.openSizeWei?.[leg.marketId] : undefined;
-      const reduced = openWei !== undefined ? reducingOrderSize(openWei, asked) : null;
-      return {
-        marketId: leg.marketId,
-        direction: leg.sizing.orderSide,
-        size: reduced?.size ?? asked,
-        limitApr: leg.worstApr as number,
-        clientOrderId: options.ids?.[fillKey(step, leg.marketId)] ?? fillKey(step, leg.marketId),
-        ...(reduced?.sizeWei !== undefined ? { sizeWei: reduced.sizeWei } : {}),
-      };
-    };
+  const order = (step: RollStep, leg: SimulatedLeg, sizedAs?: BorosMarketOrderRequest): BorosMarketOrderRequest => {
+    const asked = Math.abs(leg.sizing.deltaSize);
+    const openWei = step === 'exit' ? options.openSizeWei?.[leg.marketId] : undefined;
+    const reduced = openWei !== undefined ? reducingOrderSize(openWei, asked) : null;
+    const sizeWei = sizedAs ? sizedAs.sizeWei : reduced?.sizeWei;
     return {
-      kind: 'batch',
-      closes: exit.legs.map((l) => order('exit', l)),
-      opens: entry.legs.map((l) => order('entry', l)),
+      marketId: leg.marketId,
+      direction: leg.sizing.orderSide,
+      size: sizedAs?.size ?? reduced?.size ?? asked,
+      limitApr: leg.worstApr as number,
+      clientOrderId: options.ids?.[fillKey(step, leg.marketId)] ?? fillKey(step, leg.marketId),
+      ...(sizeWei !== undefined ? { sizeWei } : {}),
     };
-  }
+  };
+  const closes = exit.legs.map((l) => order('exit', l));
+  // Singles ↔ spread: each open at its own size; the gate checks each venue's exposure.
+  if (exit.legs.length !== entry.legs.length) return { closes, opens: entry.legs.map((l) => order('entry', l)) };
 
+  // Leg for leg: each open re-opens its close's venue and side at the close's
+  // size, to the wei, so the new maturity holds exactly what the old one did.
   const used = new Set<number>();
-  const legs: BorosRollLeg[] = [];
-  for (const close of exit.legs) {
+  const opens: BorosMarketOrderRequest[] = [];
+  for (const [i, close] of exit.legs.entries()) {
     const index = entry.legs.findIndex(
-      (open, i) =>
-        !used.has(i) &&
+      (open, j) =>
+        !used.has(j) &&
         open.sizing.orderSide === heldSide(close) &&
         open.venue === close.venue &&
         open.base.toLowerCase() === close.base.toLowerCase(),
     );
     if (index === -1) return null;
     used.add(index);
-    const open = entry.legs[index];
-    const asked = Math.abs(close.sizing.deltaSize);
-    const openWei = options.openSizeWei?.[close.marketId];
-    const reduced = openWei !== undefined ? reducingOrderSize(openWei, asked) : null;
-    legs.push({
-      fromMarketId: close.marketId,
-      toMarketId: open.marketId,
-      size: reduced?.size ?? asked,
-      closeRate: close.worstApr ?? undefined,
-      openRate: open.worstApr ?? undefined,
-      ...(reduced?.sizeWei !== undefined ? { sizeWei: reduced.sizeWei } : {}),
-    });
+    opens.push(order('entry', entry.legs[index], closes[i]));
   }
-  return { kind: 'rollover', legs };
+  return { closes, opens };
 }
 
 export interface BorosRollResult {
@@ -506,12 +549,8 @@ export async function submitBorosRoll(
 ): Promise<BorosRollResult> {
   let fills: BorosLegFill[];
   try {
-    if (plan.kind === 'batch') {
-      const batch: PlaceOrdersOptions = { ...opts, topUpAfter: plan.closes.length, timeInForce: 'fill-or-kill' };
-      fills = await client.placeMarketOrders([...plan.closes, ...plan.opens], batch);
-    } else {
-      fills = client.rollOver ? await client.rollOver(plan.legs, opts) : [];
-    }
+    const batch: PlaceOrdersOptions = { ...opts, topUpAfter: plan.closes.length, timeInForce: 'fill-or-kill' };
+    fills = await client.placeMarketOrders([...plan.closes, ...plan.opens], batch);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     const lost = (marketId: number, direction: 'long' | 'short', size: number): BorosLegFill => ({
@@ -523,13 +562,7 @@ export async function submitBorosRoll(
       feeSize: null,
       failure: { code: 'unknown', message: `${message} — the roll may or may not have gone through. Check the position on Boros before re-issuing.` },
     });
-    fills =
-      plan.kind === 'batch'
-        ? [...plan.closes, ...plan.opens].map((o) => lost(o.marketId, o.direction, o.size))
-        : [
-            ...plan.legs.map((l) => lost(l.fromMarketId, 'short', l.size)),
-            ...plan.legs.map((l) => lost(l.toMarketId, 'long', l.size)),
-          ];
+    fills = [...plan.closes, ...plan.opens].map((o) => lost(o.marketId, o.direction, o.size));
   }
   return readRollFills(fills, rollFillKeys(plan));
 }

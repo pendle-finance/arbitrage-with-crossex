@@ -13,6 +13,9 @@ export interface TriggerRoll {
   longVenue: string;
   shortVenue: string;
   maturity: number;
+  /** One spread market or two singles. Spread and singles twins share venues
+   * and maturity, so the bot tells their alerts apart by this. */
+  kind?: 'spread' | 'singles';
   targets: Array<{ maturity: number; apr: number; currentApr: number }>;
 }
 

@@ -104,6 +104,9 @@ export interface AppDeps {
   /** `interest` absent keeps the all-time interest ledger in memory: tests only. */
   rebalance?: { jobs: JobFile; interest?: InterestFile; sleep?: (ms: number) => Promise<void>; onDone?: () => void };
   transfer?: { jobs: TransferFile; sleep?: (ms: number) => Promise<void>; onDone?: () => void };
+  /** How long a Boros write waits for Boros to show the trade before it answers
+   * (default 6 s, polled each 1 s). Tests set `maxMs: 0`. */
+  borosSettle?: { maxMs?: number; sleep?: (ms: number) => Promise<void> };
   /** `wallet` is the Boros wallet the bot client names in x-terminal-wallet. */
   telegram?: { link: TelegramLink; sync: TelegramSync; status: TelegramStatus; bot: BotClient; wallet?: () => string | null };
 }

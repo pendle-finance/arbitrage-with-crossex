@@ -431,6 +431,10 @@ export interface SimulatedLeg {
   bookStatus: BookStatus;
   /** Initial margin this leg posts at the rate it locks, collateral units. */
   marginRequired: number | null;
+  /** Initial margin a REDUCING trade stops posting: the margin of the size it
+   * closes, at the mark the venue margins a held position at (the fill when
+   * the mark is unknown). 0 when the leg does not reduce, null when unpriced. */
+  marginReleased: number | null;
   /** The mark rate at which the RESULTING position, backed by exactly its
    * initial margin, is liquidated (see borosLiquidationApr). Null when the
    * leg ends flat, has no rate, the market carries no margin coefficients,
@@ -487,6 +491,8 @@ export interface BorosPairSimulation {
   /** Σ of the legs' margin; null if either leg's is unknown. Displayed per leg
    * as well — per-market floors differ, so one figure hides the asymmetry. */
   marginRequiredTotal: number | null;
+  /** Σ of the legs' `marginReleased`; null if either leg's is unknown. */
+  marginReleasedTotal: number | null;
   /** min(fill A, fill B) — the size that actually ends up hedged. */
   hedgedSize: number;
   /** How much of the entered size ends up directional if both legs fill to
@@ -644,6 +650,18 @@ function simulateLeg(
     );
   }
 
+  // What a close releases. `marginRequired` is sized off what is LEFT, which
+  // a whole close makes 0, so the exit step showed "Margin freed 0".
+  const cur = sizing.currentSize;
+  const res = sizing.resultingSize;
+  const reducing = cur !== 0 && Math.sign(res) !== -Math.sign(cur) && Math.abs(res) < Math.abs(cur);
+  const releaseApr = knownRateOf(leg.market, leg.market.markApr) ? leg.market.markApr : execApr;
+  const marginReleased = !reducing
+    ? 0
+    : releaseApr === null
+      ? null
+      : borosInitialMarginUsd(leg.market, releaseApr, Math.abs(cur) - Math.abs(res), nowSec);
+
   // Liquidation is a fact about the position that RESULTS, so its side is the
   // sign of the netted size — not the order's side, and not the side held
   // before this trade.
@@ -673,6 +691,7 @@ function simulateLeg(
     shortfallSize: Math.max(0, size - estFill),
     bookStatus,
     marginRequired,
+    marginReleased,
     liquidationApr,
     slippageApr,
     sizing,
@@ -767,6 +786,9 @@ export function simulateBorosPair(input: SimulateBorosPairInput): BorosPairSimul
   const marginRequiredTotal = marginParts.some((m) => m === null)
     ? null
     : marginParts.reduce<number>((sum, m) => sum + (m ?? 0), 0);
+  const marginReleasedTotal = legs.some((l) => l.marginReleased === null)
+    ? null
+    : legs.reduce((sum, l) => sum + (l.marginReleased ?? 0), 0);
 
   const pairTrades = legs.length === 2 && tradedSizes.every((s) => s > 0);
   const hedgedSize =
@@ -796,6 +818,7 @@ export function simulateBorosPair(input: SimulateBorosPairInput): BorosPairSimul
     takerDragApr,
     intent,
     marginRequiredTotal,
+    marginReleasedTotal,
     hedgedSize,
     unhedgedSize,
     collateral: BOROS_TOKEN_SYMBOLS[first.market.tokenId] ?? `token#${first.market.tokenId}`,

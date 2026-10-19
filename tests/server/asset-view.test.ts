@@ -286,6 +286,20 @@ describe('GET /api/asset-view/:address', () => {
     expect((await get('/api/boros/margin/nonsense')).statusCode).toBe(400);
   });
 
+  it('keys the header margin by the lowercase address, as the asset view and the trades do', async () => {
+    // A trade refreshes only the lowercase entry, so a checksummed key kept
+    // the margin from before the trade for 30 s.
+    const calls: string[] = [];
+    app = makeTestApp({ borosFetch: borosStub(borosBodies(), calls) });
+    mockGateGet('/positions', { body: [] });
+    mockGateGet('/history_positions', { body: [] });
+    mockGateGet('/history_margin_interests', { body: [] });
+
+    expect((await get(`/api/boros/margin/${ADDR}`)).statusCode).toBe(200);
+    expect((await get(`/api/asset-view/${ADDR}?since=0`)).statusCode).toBe(200);
+    expect(calls.filter((c) => c.includes('/market-acc-infos-by-root'))).toHaveLength(1);
+  });
+
   it('rejects a since in the future', async () => {
     app = makeTestApp({ borosFetch: borosStub({}) });
     const res = await get(`/api/asset-view/${ADDR}?since=${NOW + DAY}`);
@@ -656,6 +670,46 @@ describe('GET /api/asset-view/:address', () => {
     expect(btc.borosHistory).toHaveLength(1);
     expect(btc.borosHistory[0]).toMatchObject({ marketId: 42, venue: 'BINANCE' });
     expect(btc.borosHistory[0].settleUsd).toBeCloseTo(75, 6);
+    expect(data.warnings).toHaveLength(0);
+  });
+
+  it('looks up every matured market in one by-ids read', async () => {
+    const bodies = borosBodies();
+    const settled = (bodies['/apis/v1/accounts/settlement-events'] as { results: unknown[] }).results;
+    const matured = (marketId: number, name: string) => ({
+      marketId,
+      tokenId: 3,
+      imData: { name, maturity: NOW - 30 * DAY },
+      extConfig: { settleFeeRate: '1000000000000000', paymentPeriod: 28800 },
+      platform: { platformId: 'Binance' },
+      metadata: { underlyingSymbol: 'BTC' },
+      data: {},
+      config: { status: 2 },
+    });
+    for (const marketId of [42, 43]) {
+      settled.push({
+        marketAcc: CROSS_USDT,
+        marketId,
+        timestamp: NOW - DAY,
+        positionSize: raw(500),
+        settlement: raw(75),
+        fee: raw(1),
+        settlementRate: 0.07,
+      });
+    }
+    bodies['/apis/v1/markets/by-ids'] = { results: [matured(42, 'Binance BTC 31 Jul 2026'), matured(43, 'Binance BTC 28 Aug 2026')] };
+    const calls: string[] = [];
+    app = makeTestApp({ borosFetch: borosStub(bodies, calls) });
+    mockGateGet('/positions', { body: [] });
+    mockGateGet('/history_positions', { body: [] });
+    mockGateGet('/history_margin_interests', { body: [] });
+
+    const { data } = (await get(`/api/asset-view/${ADDR}`)).json();
+    const btc = data.assets.find((a: { base: string }) => a.base === 'BTC');
+    expect(btc.borosHistory.map((r: { marketId: number }) => r.marketId).sort()).toEqual([42, 43]);
+    const byIds = calls.filter((c) => c.startsWith('/apis/v1/markets/by-ids'));
+    expect(byIds).toHaveLength(1);
+    expect(new URLSearchParams(byIds[0].split('?')[1]).get('marketIds')?.split(',').sort()).toEqual(['42', '43']);
     expect(data.warnings).toHaveLength(0);
   });
 

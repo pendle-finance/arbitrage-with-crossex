@@ -54,7 +54,7 @@ import {
   usePositions,
 } from '../../api/queries';
 import { HoldToConfirmButton } from '../../components/HoldToConfirmButton';
-import { BlockerList, LegFillLine, legLetter, LiquidationRows, PairCosts, PositionArithmetic, SpreadReadout } from '../../trade/BorosPairBits';
+import { BlockerList, LegFillLine, legLetter, LiquidationRows, marketName, OpposingAcknowledgement, PairCosts, PositionArithmetic, SpreadReadout } from '../../trade/BorosPairBits';
 import { EstimateCard, EstimateRow, SlippageLine, StepBadge } from '../../trade/PairTicketBits';
 import { QueryError } from '../../components/QueryError';
 import { uuid } from '../../lib/uuid';
@@ -106,10 +106,12 @@ import {
   entryAprOf,
   perpOnlyCloseLegs,
   borosOnlyPairs,
-  markExcessBorosPairs,
   type BorosOnlyPair,
   perpOnlyPairs,
+  PERP_ONLY_DUST_USD,
+  borosSizeIn,
   sizeIn,
+  spreadFits,
 } from './assetModel';
 import { daysToMaturity, knownRate } from '../../lib/boros';
 import { rebatedSettleApr } from '../../lib/rebate';
@@ -206,6 +208,44 @@ const listCoins = (coins: string[]): string =>
 
 const sizeLabel = (size: number, unit: 'base' | 'usd', base: string): string =>
   unit === 'base' ? fmtTokenQty(size, base) : fmtUsdCompact(size);
+
+/** "0.2 / 0.296 ETH": what a leg holds against what this card needs of it
+ * (his call 2026-10-16: a missing leg shows its true size, not the gap only). */
+const heldOfTarget = (held: number, target: number, unit: 'base' | 'usd', base: string): string => {
+  // At size both can round to one label: a 49 ETH gap read "2.4k / 2.4k ETH".
+  // Then both print exact.
+  const exact = held < target && sizeLabel(held, unit, base) === sizeLabel(target, unit, base);
+  const f = (n: number) => (exact ? exactSize(n, unit, base) : sizeLabel(n, unit, base));
+  return unit === 'base' ? `${f(held).replace(new RegExp(` ${base}$`), '')} / ${f(target)}` : `${f(held)} / ${f(target)}`;
+};
+const HELD_OF_TARGET_TITLE = 'Held / needed for this card';
+/** A missing leg's badge names the gap, so the trader does not work it out
+ * from held / needed (mozzarella 2026-10-17). */
+const MissingChip = ({ held, target, unit, base }: { held: number; target: number; unit: 'base' | 'usd'; base: string }) => (
+  <Chip sm tone="amber">
+    missing {sizeLabel(Math.max(0, target - held), unit, base)}
+  </Chip>
+);
+
+/** A size in a unit, as dollars across both of the unit's legs. */
+const gapUsd = (pair: { size: number; notionalUsd: number }, size: number): number =>
+  pair.size > 0 ? (Math.abs(size) / pair.size) * pair.notionalUsd : 0;
+/** Two gaps that differ by under the dust line open as one, at the smaller. */
+const gapsEven = (pair: { size: number; notionalUsd: number; missingLong: number; missingShort: number }): boolean =>
+  Math.abs(pair.missingLong - pair.missingShort) <= Math.max(1e-9, pair.size * 1e-6) ||
+  gapUsd(pair, pair.missingLong - pair.missingShort) < PERP_ONLY_DUST_USD;
+
+/** The hover on "(52.00%)" after a leg size: the card holds only part of the
+ * position, so it lists the whole, this card's part, and the rest. */
+const shareTitle = (slice: number, share: number, unit: 'base' | 'usd', base: string, unpaired = false): string => {
+  const whole = share > 0 ? slice / share : slice;
+  return [
+    unpaired ? `${fmtPct(share)} of the position is unpaired` : `This pair uses ${fmtPct(share)} of the position`,
+    `Whole position\t${exactSize(whole, unit, base)}`,
+    `${unpaired ? 'Unpaired' : 'This pair'}\t${exactSize(slice, unit, base)}`,
+    `${unpaired ? 'In pairs' : 'Other cards'}\t${exactSize(Math.max(0, whole - slice), unit, base)}`,
+  ].join('\n');
+};
 
 /**
  * The unrounded figure behind an abbreviated one ("1.6k ETH" → "1,539.103
@@ -542,12 +582,17 @@ function PairCard({
     () => (rollCtx.data ? [...rollCtx.data.markets, ...(rollCtx.data.spreadMarkets ?? [])] : undefined),
     [rollCtx.data],
   );
+  // A pair with no rate (under $100, or a rate unknown) has nothing to compare
+  // a probe against, so it sends none: each probe is a paid Boros simulate.
+  const probing = rollDue && netApr !== null;
   const probeTargets = useMemo(
-    () => (rollDue && rollMarkets ? rollTargetsFor(rollMarkets, pair, base, soonest) : []),
-    [rollDue, rollMarkets, pair, base, soonest],
+    () => (probing && rollMarkets ? rollTargetsFor(rollMarkets, pair, base, soonest) : []),
+    [probing, rollMarkets, pair, base, soonest],
   );
   const { yuLegs: rollYuLegs, heldSize: rollHeldSize, pairPerpImUsd: rollPerpImUsd } = pairRollGeometry(pair);
   const [probes, setProbes] = useState<Record<number, RollProbeResult>>({});
+  // Results from before a no-rate spell must not price a later chip.
+  if (!probing && Object.keys(probes).length > 0) setProbes({});
   const opportunities = useMemo(
     () => rollOpportunities(probes, probeTargets, netApr, soonest),
     [probes, probeTargets, netApr, soonest],
@@ -792,10 +837,7 @@ function PairCard({
                     <td className={`${cell} num whitespace-nowrap text-right text-ink-100`}>
                       <span title={exactSize(sizeIn(l, pair.unit), pair.unit, base)}>{sizeLabel(sizeIn(l, pair.unit), pair.unit, base)}</span>
                       {l.share < 0.9995 && (
-                        <span
-                          className="text-ink-500"
-                          title="Shared with another pair. Only this slice counts here."
-                        >
+                        <span className="text-ink-500" title={shareTitle(sizeIn(l, pair.unit), l.share, pair.unit, base)}>
                           {' '}
                           ({fmtPct(l.share)})
                         </span>
@@ -1007,8 +1049,20 @@ function PairCard({
  * runs -- both NET of the round trip, so the headline is a number actually
  * received -- and the selected option opens its own fee breakdown underneath.
  */
-/** Mirrors SIMULATION_MAX_AGE_MS in the ticket and src/core/boros/pair.ts. */
-const ROLL_QUOTE_MAX_AGE_MS = 12_000;
+/**
+ * The roll windows' poll. Each poll reads three books and the venue's preview,
+ * and the venue meters each client IP at 200 computing units a minute: a 4 s
+ * poll used most of that, so a second window or a burst hit 429 and the window
+ * fell back to "waiting for a quote".
+ */
+const ROLL_POLL_MS = 10_000;
+/**
+ * Longer than the ticket's 12 s (SIMULATION_MAX_AGE_MS): the roll polls every
+ * 10 s, so 12 s would flag a slow poll as out of date. The send re-fetches
+ * the books and re-simulates, so this only hides a quote that stopped
+ * refreshing — two missed polls.
+ */
+const ROLL_QUOTE_MAX_AGE_MS = 25_000;
 /** The ticket's cap on the tolerance, in % APR. */
 const ROLL_MAX_SLIP_PCT = 10;
 /** Used when no market on a batch reports a usable deviation cap — the same
@@ -1084,10 +1138,13 @@ function rollTargetsFor(
       targets.push({ maturity, spreadMarketId: spread.marketId, spreadVenues: spread.spreadVenues });
       continue;
     }
-    // The held coin's singles only: a roll cannot change collateral.
+    // The held coin's singles only: a roll cannot change collateral. A
+    // close-only single takes no open, so that maturity is no target (as the
+    // Telegram probe, which wants Normal).
     const single = (venue: string) =>
       atMaturity.find(
-        (m) => !m.spreadVenues && sameVenue(m.venue, venue) && (tokenId === undefined || m.tokenId === tokenId),
+        (m) =>
+          !m.spreadVenues && !m.closeOnly && sameVenue(m.venue, venue) && (tokenId === undefined || m.tokenId === tokenId),
       );
     const long = single(pair.longVenue);
     const short = single(pair.shortVenue);
@@ -1284,6 +1341,30 @@ function RollProbe({
   }, [settled, ok, netRate, size]);
   return null;
 }
+/** What an open-only roll leaves: the perps hedge the later legs first, so
+ * the old legs show as their own card with perps missing (mozzarella 2026-10-17). */
+function OpenOnlyNote({ oldMaturity, className }: { oldMaturity: number; className: string }) {
+  const old = fmtDateLocal(oldMaturity);
+  return (
+    <ul className={`list-disc pl-4 text-[11.5px] leading-relaxed ${className}`}>
+      <li>Your perps hedge the new legs. The {old} legs stay open, with no perps, until {old}.</li>
+      <li>Until then: rate moves on the {old} legs hit your PnL, and about 2× Boros margin.</li>
+      <li>To end the overlap sooner: close the {old} legs.</li>
+    </ul>
+  );
+}
+
+/**
+ * The roll's §4 tick. It is about a SPECIFIC set of orders, so any change to
+ * the markets, sides or sizes clears it, as the ticket's does.
+ */
+function useAcknowledgement(legs: BorosPairLegBody[]): { checked: boolean; set: (checked: boolean) => void } {
+  const [checked, set] = useState(false);
+  const key = JSON.stringify(legs.map((l) => [l.marketId, l.direction, l.size]));
+  useEffect(() => set(false), [key]);
+  return { checked, set };
+}
+
 /** The probe's poll: a signal for a banner, not a quote for an order. */
 const ROLL_PROBE_POLL_MS = 60_000;
 
@@ -1669,7 +1750,9 @@ export function RollOverModal({
   };
   const parsedSize = Number(sizeStr);
   const sizeOk = Number.isFinite(parsedSize) && parsedSize > 0;
-  const size = sizeOk ? Math.min(parsedSize, heldSize) : 0;
+  // The box holds six decimals, so a size that reads as the whole position IS
+  // the whole: 0.359876 of a 0.3598764 hold left 0.0000004 on the old date.
+  const size = !sizeOk ? 0 : parsedSize >= heldSize || fmtSize(parsedSize) === fmtSize(heldSize) ? heldSize : parsedSize;
   // The slider re-simulates on every step; the options only see a size that
   // has stood still for a beat, so a drag is one quote, not forty.
   const simSize = useDebounced(size, 250);
@@ -1780,13 +1863,7 @@ export function RollOverModal({
                 </button>
               ))}
             </div>
-            {openOnly && (
-              <p className="mt-2 text-[11.5px] leading-relaxed text-ink-400">
-                Opens the new maturity and keeps the old legs until they mature. Until then half your
-                Boros floating side is unhedged, so rate moves hit your PnL, and it uses about 2× the
-                margin. Close the extra legs anytime from Positions.
-              </p>
-            )}
+            {openOnly && <OpenOnlyNote oldMaturity={soonest} className="mt-2 text-ink-400" />}
           </div>
 
           {/* A slider for the share of the position, a box for the exact
@@ -1855,6 +1932,7 @@ export function RollOverModal({
                 <RollOption
                   key={t.maturity}
                   target={t}
+                  base={base}
                   pair={pair}
                   yuLegs={yuLegs}
                   size={simSize}
@@ -2217,21 +2295,29 @@ function RollReview({
    * ONE request for the whole roll. Closing reverses each held leg (a LONG is
    * closed by selling); re-opening takes the same sides at the new maturity.
    * The exit is a close, acknowledged by construction — a roll IS closing
-   * these legs — and the entry acknowledges nothing, exactly as the old
-   * two-request flow passed nothing for it: a fresh maturity holds no position
-   * to oppose.
+   * these legs. The entry needs the trader's tick when a new market already
+   * holds the other side, from another pair: Boros nets the two, so the roll
+   * reduces or flips that position.
    */
   const rollExitLegs = exitLegBodies({ pair, slippageApr: exitSlip.apr, size });
+  const rollEntryLegs = entryLegBodies({ target, pair, slippageApr: entrySlip.apr, size });
+  const acked = useAcknowledgement(rollEntryLegs);
   const rollReq: BorosRollRequest | null =
     rollExitLegs !== null
-      ? { address, exit: { legs: rollExitLegs }, entry: { legs: entryLegBodies({ target, pair, slippageApr: entrySlip.apr, size }) } }
+      ? { address, exit: { legs: rollExitLegs }, entry: { legs: rollEntryLegs }, opposingAcknowledged: acked.checked }
       : null;
+  /** A spread prints its terminal name in the tick, as in the ticket. */
+  const nameOf = (id: number): string | null => {
+    const m = [...ctx.markets, ...(ctx.spreadMarkets ?? [])].find((x) => x.marketId === id);
+    return m ? marketName(m) : null;
+  };
   // The report page reads the execute response, not the quote — so once the
   // roll has been sent the poll stops rather than re-pricing a closed pair.
   const [out, setOut] = useState<{ payload: BorosRollExecuteResponse } | { error: string } | null>(null);
-  const roll = useBorosRollSimulation(rollReq, rollReq !== null && out === null);
+  const roll = useBorosRollSimulation(rollReq, rollReq !== null && out === null, ROLL_POLL_MS);
   const exitSim = roll.data?.exit.simulation ?? null;
   const entrySim = roll.data?.entry.simulation ?? null;
+  const ackShown = roll.data?.entry.gate.requiresAcknowledgement === true;
   const pending = roll.isPending;
 
   // ---- margin (the venue's) -----------------------------------------------
@@ -2438,7 +2524,14 @@ function RollReview({
           realises against what re-opening locks, each with its own
           tolerance and the margin it moves. */}
       <div className={microLabelClass}>How it executes</div>
-      <p className="text-[11px] text-ink-400">Resting orders on the {fmtDateLocal(oldMaturity)} markets are cancelled in the same batch.</p>
+      {/* Cancels are per market: a part roll also drops the kept part's orders. */}
+      {(roll.data?.cancelOrdersOn.length ?? 0) > 0 && (
+        <p className="text-[11px] text-ink-400">
+          {size < pairRollGeometry(pair).heldSize
+            ? `Your orders on the ${fmtDateLocal(oldMaturity)} markets are cancelled, also for the part you keep. Place them again after the roll.`
+            : `Resting orders on the ${fmtDateLocal(oldMaturity)} markets are cancelled in the same batch.`}
+        </p>
+      )}
       {/* 1 then 2: the order the two batches are sent in, a numbered disc
           on each card. */}
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2 [&>*]:min-w-0">
@@ -2487,7 +2580,7 @@ function RollReview({
         <EstimateRow
           label="Required margin"
           sub="for the new legs"
-          title="Initial margin the two new legs post, summed."
+          title="Initial margin the new legs post, summed."
           value={
             marginNeed !== null ? (
               <>
@@ -2528,10 +2621,10 @@ function RollReview({
                 {usdNote(availableAfterExit)}
               </>
             ) : (
-              // The venue reports no post-batch state when it refuses: nothing
-              // executed, so there is nothing to quote. Naming that beats a "—"
-              // that reads as a figure we failed to fetch.
-              <span className="text-ink-400">Simulation failed</span>
+              // No preview yet, a lost one (429), or a refusal with no state:
+              // the reason is in the box below. "Simulation failed" here read
+              // as mozzarella's 1.7.5 bug on every first open.
+              <span className="text-ink-400">{pending ? '…' : '—'}</span>
             )
           }
           strong
@@ -2553,11 +2646,15 @@ function RollReview({
           {w}
         </p>
       ))}
+      {ackShown && entrySim && (
+        <OpposingAcknowledgement sim={entrySim} checked={acked.checked} onChange={acked.set} nameOf={nameOf} />
+      )}
       <BlockerList
         // A fill past the tolerance still blocks (it is in `blockers`), but
         // its batch already says so, in amber, next to the Max that fixes
-        // it — a second, red copy here explained nothing new.
-        blockers={blockers.filter((b) => b.code !== 'slippage-exceeds-max')}
+        // it — a second, red copy here explained nothing new. The same for
+        // the tick: the box above is the ask.
+        blockers={blockers.filter((b) => b.code !== 'slippage-exceeds-max' && !(ackShown && b.code === 'flip-unacknowledged'))}
       />
 
       <div className="mt-1 flex items-center justify-between gap-2">
@@ -2588,10 +2685,9 @@ function RollReview({
  * Deliberately NOT a branch of RollReview — there is no close here, so no exit
  * batch, no exit P&L, no roll memo. It is an ordinary pair OPEN at the new
  * maturity's two markets, taking the pair's own sides, priced and sent over the
- * same `/boros/pair` routes every other pair open uses. The result is a double
- * hedge: the perps stay on the old 4-leg pair, and the new rate legs land as an
- * "excess" Boros-only unit the trader closes from the position view whenever
- * the old legs have matured (or sooner).
+ * same `/boros/pair` routes every other pair open uses. The perps then hedge
+ * the new, later legs, and the old legs show as their own card with perps
+ * missing until they mature; closing them sooner ends the overlap.
  */
 function OpenOnlyReview({
   pair,
@@ -2635,14 +2731,17 @@ function OpenOnlyReview({
 
   // The pair OPEN: the new maturity's two markets, each taking the pair's own
   // side — the same sides RollReview's re-entry opens.
+  const openLegs = entryLegBodies({ target, pair, slippageApr: slipApr, size });
+  const acked = useAcknowledgement(openLegs);
   const req: BorosPairRequest | null =
-    size > 0 && yuLegs.length > 0 ? { address, intent: 'open', legs: entryLegBodies({ target, pair, slippageApr: slipApr, size }) } : null;
+    size > 0 && yuLegs.length > 0 ? { address, intent: 'open', legs: openLegs, opposingAcknowledged: acked.checked } : null;
 
   // The report reads the execute response, not the quote — so once sent the
   // poll stops rather than re-pricing a position that is already open.
   const [out, setOut] = useState<{ payload: BorosPairExecuteResponse } | { error: string } | null>(null);
-  const sim = useBorosPairSimulation(req, req !== null && out === null);
+  const sim = useBorosPairSimulation(req, req !== null && out === null, { refetchInterval: ROLL_POLL_MS });
   const simulation = sim.data?.simulation ?? null;
+  const ackShown = sim.data?.gate.requiresAcknowledgement === true;
 
   const now = useNow(1_000);
   const stale = sim.dataUpdatedAt > 0 ? now - sim.dataUpdatedAt > ROLL_QUOTE_MAX_AGE_MS : true;
@@ -2695,13 +2794,13 @@ function OpenOnlyReview({
         {result && <RollLegReport label="New legs" legs={result.legs} collateral={collateral} tone={tone} />}
         {result && !result.filledNothing && !result.partial && (
           <p className="text-[11.5px] text-ink-300" role="status">
-            Opened {fmtTokenQty(result.hedgedSize, collateral)} at {fmtDateLocal(target.maturity)}. The old legs keep running —
-            close the excess from the position view once they mature.
+            Opened {fmtTokenQty(result.hedgedSize, collateral)} at {fmtDateLocal(target.maturity)}. Your perps now hedge the new legs. The{' '}
+            {fmtDateLocal(pair.soonestMaturitySec)} legs stay open, with no perps, until {fmtDateLocal(pair.soonestMaturitySec)}.
           </p>
         )}
         {result?.partial && !result.filledNothing && (
           <p className="rounded border border-amber-500/30 bg-amber-500/[0.06] px-2.5 py-2 text-[11.5px] leading-relaxed text-amber-200" role="alert">
-            Only {fmtTokenQty(result.hedgedSize, collateral)} opened — the rest did not fill. Open the remainder from the position view.
+            Only {fmtTokenQty(result.hedgedSize, collateral)} opened — the rest did not fill. Open the rest from Fixed Rate Pairs.
           </p>
         )}
         {result?.filledNothing && (
@@ -2766,12 +2865,7 @@ function OpenOnlyReview({
         </div>
       </div>
 
-      {/* A double hedge: it earns nothing to close the old legs, but it costs
-          margin to hold both until they mature. */}
-      <p className="rounded-lg border border-amber-500/25 bg-amber-500/[0.04] px-3 py-2 text-[11.5px] leading-relaxed text-amber-200">
-        Until the old legs mature, half your Boros floating side is unhedged, so rate moves hit your PnL, and it uses
-        about 2× the margin. Close the extra legs anytime from Positions.
-      </p>
+      <OpenOnlyNote oldMaturity={pair.soonestMaturitySec} className="rounded-lg border border-amber-500/25 bg-amber-500/[0.04] px-3 py-2 text-amber-200" />
 
       <EstimateCard
         label="New legs"
@@ -2795,7 +2889,8 @@ function OpenOnlyReview({
         )}
       </EstimateCard>
 
-      <BlockerList blockers={blockers.filter((b) => b.code !== 'slippage-exceeds-max')} />
+      {ackShown && simulation && <OpposingAcknowledgement sim={simulation} checked={acked.checked} onChange={acked.set} />}
+      <BlockerList blockers={blockers.filter((b) => b.code !== 'slippage-exceeds-max' && !(ackShown && b.code === 'flip-unacknowledged'))} />
 
       <div className="mt-1 flex items-center justify-between gap-2">
         <button type="button" className="btn" onClick={onBack} disabled={busy}>
@@ -2830,6 +2925,7 @@ function OpenOnlyReview({
  */
 function RollOption({
   target,
+  base,
   pair,
   yuLegs,
   size,
@@ -2844,6 +2940,8 @@ function RollOption({
   onLegs,
 }: {
   target: RollTarget;
+  /** The asset, for the spread market's name. */
+  base: string;
   pair: PairEstimate;
   yuLegs: PairLegDetail[];
   /** The size being rolled, in the collateral token — the modal's input. */
@@ -2870,8 +2968,8 @@ function RollOption({
       ? { address, legs: entryLegBodies({ target, pair, slippageApr: entrySlippageApr, size }), intent: 'open' }
       : null;
 
-  const exit = useBorosPairSimulation(exitReq, exitReq !== null);
-  const entry = useBorosPairSimulation(entryReq, entryReq !== null);
+  const exit = useBorosPairSimulation(exitReq, exitReq !== null, { refetchInterval: ROLL_POLL_MS });
+  const entry = useBorosPairSimulation(entryReq, entryReq !== null, { refetchInterval: ROLL_POLL_MS });
 
   /**
    * Each leg's depth ladder, from the freshest quote of each batch — a
@@ -2963,6 +3061,11 @@ function RollOption({
           </span>
           <span className="num text-[11.5px] text-ink-400" title="The day the rolled legs settle.">
             {daysToMaturity(target.maturity, nowSec)}d ({fmtDateLocal(target.maturity)})
+          </span>
+          {/* Spread and singles are separate cards (mozzarella 2026-10-14): say
+              which one the roll lands in. */}
+          <span className="text-[11px] text-ink-500">
+            → {'spreadMarketId' in target ? <SpreadName base={base} venues={target.spreadVenues} /> : 'singles'}
           </span>
         </span>
       </button>
@@ -3058,13 +3161,21 @@ function PerpOnlyPairCard({
   base,
   nowSec,
   listedSpread,
+  heldOtherWay,
+  priceUsd,
   onOpenBoros,
+  onCloseBoros,
   onClosePerps,
 }: {
   pair: PerpOnlyPair;
   base: string;
   nowSec: number;
   listedSpread: [string, string] | null;
+  /** Markets an Open here would trade that the account holds the other way. */
+  heldOtherWay: AssetBorosOpen[];
+  priceUsd: number;
+  /** Opens the close form on one Boros leg. */
+  onCloseBoros: (leg: AssetBorosOpen) => void;
   /** Opens the close form on this unit's two perp slices — the other way
    * out of a hedge with no rate side: stop farming it. */
   onClosePerps: () => void;
@@ -3076,8 +3187,15 @@ function PerpOnlyPairCard({
   const needLong = pair.missingLong > 0;
   const needShort = pair.missingShort > 0;
   const both = needLong && needShort;
-  const spread = both ? listedSpread : null;
+  // A cap on one side leaves the two gaps unequal: each opens from its row.
+  // Gaps that differ by under the dust line are even: the spread (or both
+  // legs) opens at the smaller one. Two $20 slivers no longer lose the offer.
+  const bothEven = both && gapsEven(pair);
+  const spread = bothEven ? listedSpread : null;
   const held = pair.longYu ?? pair.shortYu;
+  // A dust leg held the other way still shows with its Close, but netting
+  // it would barely dent the open, so it does not hide the Opens.
+  const blocking = heldOtherWay.filter((b) => b.notionalUsd * 2 >= PERP_ONLY_DUST_USD);
   const cell = 'border-b border-ink-850 px-2.5 py-2';
   // The mock's row actions: the house outline at the compact size. The old
   // full-round pill was this app's own shape; dapp-nitro keeps the 5px radius
@@ -3106,7 +3224,24 @@ function PerpOnlyPairCard({
     </span>
   );
   /** One rate-leg row: the leg that is there, or the gap where one belongs. */
-  const yuRow = (venue: string, side: 'LONG' | 'SHORT', yu: PendingLeg | null, missing: number) =>
+  const heldText = (venue: string, legs: PendingLeg[]) =>
+    `${prettyVenue(venue)} already holds ${legs
+      .slice(0, 2)
+      .map((y) => `${sizeText(sizeIn(y, y.unit))} at ${fmtDateShort(y.maturity)}`)
+      .join(', ')}`;
+  const ofTarget = (held: number) => heldOfTarget(held, pair.size, pair.unit, base);
+  /**
+   * The S1 cap cut the open by an amount the trader can read. Live 16 Oct: a
+   * $0.01 cut said "Gate already holds 0.205 ETH at 30 Oct" and "open 0.143"
+   * under "0 / 0.143".
+   */
+  const capShows = (held: number, missing: number) => gapUsd(pair, Math.max(0, pair.size - held) - Math.max(0, missing)) >= PERP_ONLY_DUST_USD;
+  /** The open the S1 cap allows, when it is less than the leg's gap. */
+  const cappedOpen = (held: number, missing: number) =>
+    missing > 0 && capShows(held, missing) ? (
+      <div className="text-[11px] text-ink-400">open {sizeText(missing)}</div>
+    ) : null;
+  const yuRow = (venue: string, side: 'LONG' | 'SHORT', yu: PendingLeg | null, missing: number, heldElsewhere?: PendingLeg[]) =>
     yu && !(missing > 0) ? (
       <tr key={`yu-${venue}`}>
         <td className={`${cell} whitespace-nowrap`}>{legName(venue, 'yu', side)}</td>
@@ -3125,23 +3260,29 @@ function PerpOnlyPairCard({
         <td className={`${cell} whitespace-nowrap`}>
           <span className="inline-flex items-center gap-[7px]">
             {legName(venue, 'yu', side)}
-            <Chip sm tone="amber">
-              missing
-            </Chip>
+            <MissingChip held={yu ? sizeIn(yu, yu.unit) : 0} target={pair.size} unit={pair.unit} base={base} />
           </span>
+          {heldElsewhere && capShows(yu ? sizeIn(yu, yu.unit) : 0, missing) && (
+            <div className="num mt-1 text-[11px] text-ink-400">{heldText(venue, heldElsewhere)}</div>
+          )}
         </td>
-        <td className={`${cell} num whitespace-nowrap text-right text-amber-200/90`}>{sizeText(missing)}</td>
+        <td className={`${cell} num whitespace-nowrap text-right ${missing > 0 ? 'text-amber-200/90' : 'text-ink-400'}`} title={HELD_OF_TARGET_TITLE}>
+          {ofTarget(yu ? sizeIn(yu, yu.unit) : 0)}
+          {cappedOpen(yu ? sizeIn(yu, yu.unit) : 0, missing)}
+        </td>
         <td className={`${cell} num text-right text-ink-600`}>—</td>
         <td className={`${cell} whitespace-nowrap text-right`}>
-          <button
-            type="button"
-            className="btn-ghost-xs !py-[5px] !text-grass hover:!border-grass/60"
-            disabled={!onOpenBoros}
-            title={`Open only the ${prettyVenue(venue)} ${side} Boros leg, at ${sizeText(missing)}`}
-            onClick={() => onOpenBoros?.({ long: side === 'LONG', short: side === 'SHORT' })}
-          >
-            Open leg
-          </button>
+          {missing > 0 && !blocking.some((b) => !b.spreadVenues && b.venue === venue) && (
+            <button
+              type="button"
+              className="btn-ghost-xs !py-[5px] !text-grass hover:!border-grass/60"
+              disabled={!onOpenBoros}
+              title={`Open only the ${prettyVenue(venue)} ${side} Boros leg, at ${sizeText(missing)}`}
+              onClick={() => onOpenBoros?.({ long: side === 'LONG', short: side === 'SHORT' })}
+            >
+              Open leg
+            </button>
+          )}
         </td>
       </tr>
     );
@@ -3236,23 +3377,49 @@ function PerpOnlyPairCard({
                     <td className={`${cell} whitespace-nowrap`}>
                       <span className="inline-flex items-center gap-[7px]">
                         {legName(spread[0], 'yu', spread[0].toLowerCase() === pair.shortVenue.toLowerCase() ? 'SHORT' : 'LONG', spread)}
-                        <Chip sm tone="amber">
-                          missing
-                        </Chip>
+                        <MissingChip held={0} target={pair.size} unit={pair.unit} base={base} />
                       </span>
                     </td>
-                    <td className={`${cell} num whitespace-nowrap text-right text-amber-200/90`}>
-                      {sizeText(Math.min(pair.missingLong, pair.missingShort))}
+                    <td className={`${cell} num whitespace-nowrap text-right text-amber-200/90`} title={HELD_OF_TARGET_TITLE}>
+                      {ofTarget(0)}
+                      {cappedOpen(0, Math.min(pair.missingLong, pair.missingShort))}
                     </td>
                     <td className={`${cell} num text-right text-ink-600`}>—</td>
                     <td className={`${cell} num text-right text-ink-600`}>—</td>
                   </tr>
                 ) : (
                   <>
-                    {yuRow(pair.longVenue, 'LONG', pair.longYu, pair.missingLong)}
-                    {yuRow(pair.shortVenue, 'SHORT', pair.shortYu, pair.missingShort)}
+                    {yuRow(pair.longVenue, 'LONG', pair.longYu, pair.missingLong, pair.heldElsewhereLong)}
+                    {yuRow(pair.shortVenue, 'SHORT', pair.shortYu, pair.missingShort, pair.heldElsewhereShort)}
                   </>
                 )}
+                {heldOtherWay.map((b) => {
+                  const size = sizeText(borosSizeIn(b, pair.unit, base, priceUsd));
+                  return (
+                    <tr key={`ow-${b.marketId}`}>
+                      <td className={`${cell} whitespace-nowrap`}>
+                        <span className="inline-flex items-center gap-[7px]">
+                          {legName(b.venue, 'yu', b.side, b.spreadVenues)}
+                          <Chip sm tone="amber" title={`You hold ${b.side} ${size} here. Opening the hedge would net against it. Close it first.`}>
+                            held other way
+                          </Chip>
+                        </span>
+                      </td>
+                      <td className={`${cell} num whitespace-nowrap text-right text-ink-100`}>{size}</td>
+                      <td className={`${cell} num text-right text-ink-600`}>—</td>
+                      <td className={`${cell} whitespace-nowrap text-right`}>
+                        <button
+                          type="button"
+                          className="btn-ghost-xs !py-[5px] hover:!border-guava/50 hover:!text-guava"
+                          title={`Close the ${b.side} ${size}, then open the hedge`}
+                          onClick={() => onCloseBoros(b)}
+                        >
+                          Close
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -3269,7 +3436,7 @@ function PerpOnlyPairCard({
             {/* A held single keeps the unit on singles (rule 5), but a pair
                 ticket routes to a trading spread, so each missing single
                 opens on its own Open leg button. */}
-            {both && !held && (
+            {bothEven && !held && blocking.length === 0 && (
               <button
                 type="button"
                 className={`${pill} !border-grass/60 !text-grass hover:!border-grass hover:!bg-grass/10`}
@@ -3323,7 +3490,7 @@ function BorosOnlyPairCard({
   const both = needLong && needShort;
   // One prefill sizes both perps alike, so it is offered only while the two
   // gaps match; a part-covered side opens from its own row.
-  const bothEven = both && Math.abs(pair.missingLong - pair.missingShort) <= Math.max(1e-9, pair.size * 1e-6);
+  const bothEven = both && gapsEven(pair);
   const cell = 'border-b border-ink-850 px-2.5 py-2';
   const pill = 'btn !h-[30px] !px-3 !text-[12px]';
   const sizeText = (n: number) => sizeLabel(n, pair.unit, base);
@@ -3350,8 +3517,11 @@ function BorosOnlyPairCard({
   );
   /** A venue's perp rows: the perp that is there, then the gap still to open
    * — both when a perp covers only part of the unit. */
+  const ofTarget = (held: number) => heldOfTarget(held, pair.size, pair.unit, base);
+  /** A venue's perp row: what it holds against what the unit needs, one row
+   * even when a perp covers only part of the unit. */
   const perpRows = (venue: string, side: 'LONG' | 'SHORT', perp: UnpairedPerp | null, missing: number) => [
-    perp && (
+    !(missing > 0) && perp && (
       <tr key={`p-${venue}`}>
         <td className={`${cell} whitespace-nowrap`}>{legName(venue, 'perp', side)}</td>
         <td className={`${cell} num whitespace-nowrap text-right text-ink-100`}>{sizeText(sizeIn(perp, perp.unit))}</td>
@@ -3364,29 +3534,23 @@ function BorosOnlyPairCard({
         <td className={`${cell} whitespace-nowrap`}>
           <span className="inline-flex items-center gap-[7px]">
             {legName(venue, 'perp', side)}
-            <Chip sm tone="amber">
-              missing
-            </Chip>
+            <MissingChip held={perp ? sizeIn(perp, perp.unit) : 0} target={pair.size} unit={pair.unit} base={base} />
           </span>
         </td>
-        <td className={`${cell} num whitespace-nowrap text-right text-amber-200/90`}>{sizeText(missing)}</td>
+        <td className={`${cell} num whitespace-nowrap text-right text-amber-200/90`} title={HELD_OF_TARGET_TITLE}>
+          {ofTarget(perp ? sizeIn(perp, perp.unit) : 0)}
+        </td>
         <td className={`${cell} num text-right text-ink-600`}>—</td>
         <td className={`${cell} whitespace-nowrap text-right`}>
-          {/* An excess hedge is closed, not completed — its missing perps are
-              a feature of leaving the old legs running, so no prompt to open. */}
-          {pair.isExcess ? (
-            <span className="text-ink-600">—</span>
-          ) : (
-            <button
-              type="button"
-              className="btn-ghost-xs !py-[5px] !text-grass hover:!border-grass/60"
-              disabled={!onOpenPerps}
-              title={`Open only the ${prettyVenue(venue)} ${side} perp, at ${sizeText(missing)}`}
-              onClick={() => onOpenPerps?.({ long: side === 'LONG', short: side === 'SHORT' })}
-            >
-              Open leg
-            </button>
-          )}
+          <button
+            type="button"
+            className="btn-ghost-xs !py-[5px] !text-grass hover:!border-grass/60"
+            disabled={!onOpenPerps}
+            title={`Open only the ${prettyVenue(venue)} ${side} perp, at ${sizeText(missing)}`}
+            onClick={() => onOpenPerps?.({ long: side === 'LONG', short: side === 'SHORT' })}
+          >
+            Open leg
+          </button>
         </td>
       </tr>
     ),
@@ -3423,13 +3587,9 @@ function BorosOnlyPairCard({
                   sm
                   tone="amber"
                   className="!font-medium"
-                  title={
-                    pair.isExcess
-                      ? 'A second hedge at this maturity, opened by a roll that kept the old legs. It doubles the Boros hedge until the old legs mature; close it once they have.'
-                      : 'The rate is locked, but no perp hedges its price risk.'
-                  }
+                  title="The rate is locked, but no perp hedges its price risk."
                 >
-                  {pair.isExcess ? 'Excess hedge' : both ? 'Perp legs missing' : 'Perp leg missing'}
+                  {both ? 'Perp legs missing' : 'Perp leg missing'}
                 </Chip>
                 </span>
                 <span className="num text-[11.5px] font-normal leading-none text-ink-400">
@@ -3485,7 +3645,7 @@ function BorosOnlyPairCard({
                     <td className={`${cell} num whitespace-nowrap text-right text-ink-100`}>
                       {sizeText(sizeIn(y, y.unit))}
                       {y.share < 0.9995 && (
-                        <span className="ml-1 text-ink-500" title="This unit's slice of the venue leg.">
+                        <span className="ml-1 text-ink-500" title={shareTitle(sizeIn(y, y.unit), y.share, y.unit, base)}>
                           ({fmtPct(y.share)})
                         </span>
                       )}
@@ -3518,7 +3678,7 @@ function BorosOnlyPairCard({
             >
               {pair.borosLegs.length === 1 ? 'Close Boros leg' : 'Close Boros legs'}
             </button>
-            {bothEven && !pair.isExcess && (
+            {bothEven && (
               <button
                 type="button"
                 className={`${pill} !border-grass/60 !text-grass hover:!border-grass hover:!bg-grass/10`}
@@ -3745,7 +3905,7 @@ function UngroupedCard({
                       <span title={exactSize(sizeIn(l, l.unit), l.unit, base)}>{sizeLabel(sizeIn(l, l.unit), l.unit, base)}</span>
                       <span className="ml-1 text-ink-500">({fmtUsdCompact(l.notionalUsd)})</span>
                       {!whole(l.share) && (
-                        <span className="ml-1 text-ink-500" title="Only this slice is unpaired.">
+                        <span className="ml-1 text-ink-500" title={shareTitle(sizeIn(l, l.unit), l.share, l.unit, base, true)}>
                           ({fmtPct(l.share)})
                         </span>
                       )}
@@ -3824,7 +3984,7 @@ function MissingRow({ gap, base, onOpen, asPair }: { gap: HedgeGapRow; base: str
           kind={gap.leg}
           dim
           sub="not open yet"
-          chips={<Chip sm tone="amber">missing</Chip>}
+          chips={<Chip sm tone="amber" className="num">missing {sizeLabel(gap.size, gap.unit, base)}</Chip>}
         />
       </td>
       <td className="num text-right text-ink-300">
@@ -4980,12 +5140,11 @@ export function AssetCard({
         const longVenue = long ? g.venue : partner.venue;
         const shortVenue = long ? partner.venue : g.venue;
         if (g.leg === 'boros') {
-          const anyM = group.borosOpen.map((b) => b.maturity);
           flow.prefillBorosOpen({
             base: group.base,
             longVenue,
             shortVenue,
-            maturity: anyM.length > 0 ? Math.min(...anyM) : undefined,
+            maturity: defaultMaturityFor(longVenue, shortVenue),
             size: notionalUsd,
             sizeBase,
           });
@@ -5283,48 +5442,77 @@ export function AssetCard({
   );
   const trackedAddress = useTrackedAddressOptional()?.address ?? null;
   const spreadCtx = useBorosPairContext(
-    perpOnly.pairs.some((p) => p.missingLong > 0 && p.missingShort > 0) ? trackedAddress : null,
+    perpOnly.pairs.some((p) => p.missingLong > 0 && p.missingShort > 0) || missing('boros').some((g) => pairPartner(g))
+      ? trackedAddress
+      : null,
   );
   const spreadPending = trackedAddress !== null && spreadCtx.isPending && spreadCtx.failureCount === 0;
-  /** Then the reverse: offsetting rate legs whose perps are missing. */
-  const borosOnly = useMemo(() => {
-    const grouped = borosOnlyPairs(perpOnly.restPerps, perpOnly.restYus);
-    // A perp-less unit sharing both venues with a perp-hedged pair at an
-    // earlier maturity is the excess hedge an open-only roll left behind, not
-    // a pair missing its perps.
-    return { ...grouped, pairs: markExcessBorosPairs(grouped.pairs, derived.pairs) };
-  }, [perpOnly.restPerps, perpOnly.restYus, derived.pairs]);
-  const ungroupedCount = borosOnly.restPerps.length + borosOnly.restYus.length;
+  /** Rule A1 (owner 2026-10-16): the trading spread at D, else the latest before D, else the soonest; none, D. */
+  const laddered = derived.pairs.map((x) => x.soonestMaturitySec).filter((m) => m > nowSec);
+  const ladderMaturity = laddered.length > 0 ? Math.max(...laddered) : undefined;
+  const defaultSpreadFor = (longVenue: string, shortVenue: string) => {
+    const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
+    const listed = (spreadCtx.data?.spreadMarkets ?? [])
+      .filter(
+        (m) =>
+          !m.closeOnly &&
+          m.maturity > nowSec &&
+          same(m.base, group.base) &&
+          (m.spreadVenues?.every((v) => same(v, longVenue) || same(v, shortVenue)) ?? false),
+      )
+      .sort((a, b) => a.maturity - b.maturity);
+    const upToD = ladderMaturity === undefined ? [] : listed.filter((m) => m.maturity <= ladderMaturity);
+    return upToD[upToD.length - 1] ?? listed[0] ?? null;
+  };
+  const defaultMaturityFor = (longVenue: string, shortVenue: string): number | undefined =>
+    defaultSpreadFor(longVenue, shortVenue)?.maturity ?? ladderMaturity;
   /**
    * Arm the Boros ticket for a perp-only pair's missing side(s). The
    * maturity is the one rate leg the unit still holds, when it has one —
-   * the missing leg must settle with it; otherwise the latest maturity this
-   * asset already farms, so the new legs join the ladder rather than landing
-   * on whichever market the ticket lists first.
+   * the missing leg must settle with it; otherwise the A1 date above.
    */
   const borosMaturityFor = (p: PerpOnlyPair): number | undefined => {
     const held = p.longYu ?? p.shortYu;
-    const laddered = derived.pairs.map((x) => x.soonestMaturitySec).filter((m) => m > nowSec);
-    return held ? held.maturity : laddered.length > 0 ? Math.max(...laddered) : undefined;
+    return held ? held.maturity : defaultMaturityFor(p.longVenue, p.shortVenue);
   };
   const listedSpreadFor = (p: PerpOnlyPair): [string, string] | null => {
     if (!(p.missingLong > 0 && p.missingShort > 0)) return null;
     // A single already held, even a part one, keeps the unit on singles
     // (mozzarella 2026-10-14, rule 5): the spread would hide it.
     if (p.longYu || p.shortYu) return null;
-    const maturity = borosMaturityFor(p);
-    const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
-    // A close-only or paused spread counts as no spread: offer both singles.
-    const spread = (spreadCtx.data?.spreadMarkets ?? []).find(
-      (m) =>
-        !m.closeOnly &&
-        m.maturity > nowSec &&
-        (maturity === undefined || m.maturity === maturity) &&
-        same(m.base, group.base) &&
-        (m.spreadVenues?.every((v) => same(v, p.longVenue) || same(v, p.shortVenue)) ?? false),
-    );
-    return spread?.spreadVenues ?? null;
+    return defaultSpreadFor(p.longVenue, p.shortVenue)?.spreadVenues ?? null;
   };
+  /**
+   * Markets the card would open on that the account holds the other way.
+   * The open would net against them, not hedge, so the card offers Close
+   * there instead of Open (report 2026-10-18). A wrong-way spread counts
+   * at any maturity, whatever singles the card holds: as its own card it
+   * offered the perps the other way.
+   */
+  const heldOtherWayFor = (p: PerpOnlyPair): AssetBorosOpen[] => {
+    const maturity = borosMaturityFor(p);
+    return group.borosOpen.filter((b) =>
+      b.spreadVenues
+        ? b.spreadVenues.every((v) => v === p.longVenue || v === p.shortVenue) &&
+          !spreadFits(b, p.longVenue, p.shortVenue)
+        : b.maturity === maturity &&
+          ((p.missingLong > 0 && b.venue === p.longVenue && b.side === 'SHORT') ||
+            (p.missingShort > 0 && b.venue === p.shortVenue && b.side === 'LONG')),
+    );
+  };
+  // A leg held the other way shows once, on the perps-only card with its
+  // Close. As its own Boros-only card it offered "Open perps" the other way,
+  // which closes the held perps.
+  const otherWayKey = perpOnly.pairs
+    .flatMap((p) => heldOtherWayFor(p).map((b) => b.marketId))
+    .sort((a, b) => a - b)
+    .join();
+  /** Then the reverse: offsetting rate legs whose perps are missing. */
+  const borosOnly = useMemo(() => {
+    const otherWay = new Set(otherWayKey.split(',').map(Number));
+    return borosOnlyPairs(perpOnly.restPerps, perpOnly.restYus.filter((y) => !otherWay.has(y.marketId)));
+  }, [perpOnly.restPerps, perpOnly.restYus, otherWayKey]);
+  const ungroupedCount = borosOnly.restPerps.length + borosOnly.restYus.length;
   const openBorosFor = (p: PerpOnlyPair, sides: { long: boolean; short: boolean }) => {
     if (!flow) return;
     const size = sides.long && sides.short ? Math.min(p.missingLong, p.missingShort) : sides.long ? p.missingLong : p.missingShort;
@@ -5343,7 +5531,7 @@ export function AssetCard({
   const openPerpsFor = (p: BorosOnlyPair, sides: { long: boolean; short: boolean }) => {
     if (!flow) return;
     const size = sides.long && sides.short ? Math.min(p.missingLong, p.missingShort) : sides.long ? p.missingLong : p.missingShort;
-    const notionalUsd = p.size > 0 ? (p.notionalUsd / 2) * (size / p.size) : 0;
+    const notionalUsd = p.unit === 'usd' ? size : p.size > 0 ? (p.notionalUsd / p.borosLegs.length) * (size / p.size) : 0;
     const sizeBase = p.unit === 'base' ? size : undefined;
     if (sides.long && sides.short) {
       flow.prefillPair({ base: group.base, longVenue: p.longVenue, shortVenue: p.shortVenue, notionalUsd, sizeBase, sizeUnit: p.unit });
@@ -5853,15 +6041,18 @@ null
             ))}
             {perpOnly.pairs.map((p) =>
               spreadPending && p.missingLong > 0 && p.missingShort > 0 ? (
-                <Skeleton key={`po:${p.longVenue}:${p.shortVenue}`} className="h-12 w-full" />
+                <Skeleton key={p.partKey} className="h-12 w-full" />
               ) : (
                 <PerpOnlyPairCard
-                  key={`po:${p.longVenue}:${p.shortVenue}`}
+                  key={p.partKey}
                   pair={p}
                   base={group.base}
                   nowSec={nowSec}
                   listedSpread={listedSpreadFor(p)}
+                  heldOtherWay={heldOtherWayFor(p)}
+                  priceUsd={group.priceUsd}
                   onOpenBoros={flow ? (sides) => openBorosFor(p, sides) : null}
+                  onCloseBoros={(leg) => setCloseLeg({ kind: 'boros', leg })}
                   onClosePerps={() => setClosePerpOnly(p)}
                 />
               ),

@@ -105,6 +105,15 @@ describe('TtlCache', () => {
     expect(f).toHaveBeenCalledTimes(2); // busted → refetched
   });
 
+  it('bustWhere(match) invalidates only the keys it accepts', async () => {
+    const cache = new TtlCache();
+    await cache.get('a:live', 60_000, async () => 'old');
+    await cache.get('a:past', 60_000, async () => 'old');
+    cache.bustWhere((k) => k.endsWith(':live'));
+    expect((await cache.get('a:live', 60_000, async () => 'new')).value).toBe('new');
+    expect((await cache.get('a:past', 60_000, async () => 'new')).value).toBe('old');
+  });
+
   it('a bust during an inflight fetch is not undone when that fetch resolves', async () => {
     const cache = new TtlCache();
     let resolve!: (v: string) => void;

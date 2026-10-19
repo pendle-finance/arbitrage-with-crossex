@@ -41,7 +41,7 @@ import type {
 } from '../api/types';
 import { Chip } from '../components/Chip';
 import { HoldToConfirmButton } from '../components/HoldToConfirmButton';
-import { legLetter, size as fmtSize, type SoloLeg } from './BorosPairBits';
+import { legLetter, OpposingAcknowledgement, type SoloLeg } from './BorosPairBits';
 import { AffixedInput, EstimateCard } from './PairTicketBits';
 import { QueryError } from '../components/QueryError';
 import { SegmentedToggle } from '../components/SegmentedToggle';
@@ -585,14 +585,10 @@ export function BorosPairTicket({
       ) ?? null
     );
   };
-  /** The two singles a Pair is on: behind the spread, else the picked legs. */
-  const singles = isSpread && behind ? [byId.get(behind.a), byId.get(behind.b)] : [rowA, rowB];
-  const singlesHeld = singles.some((r) => (r?.currentSize ?? 0) !== 0);
-  /** An open goes to the spread while it takes opens. A close goes to it only
-   * when it holds the position and the singles hold none: a close on held
-   * singles must close the singles. */
-  const wantSpread = (sp: BorosPairMarketRow) =>
-    intent === 'close' ? sp.currentSize !== 0 && !singlesHeld : !sp.closeOnly;
+  /** An open goes to the spread while it takes opens. A close goes to it while
+   * it holds a position, held singles or not (owner 2026-10-16): one held
+   * single left the spread with a max of 0. Singles close in Single mode. */
+  const wantSpread = (sp: BorosPairMarketRow) => (intent === 'close' ? sp.currentSize !== 0 : !sp.closeOnly);
   const pairSpread = !isSpread && mode === 'pair' ? spreadFor(rowA, rowB) : null;
   /** Slot A's side: on a spread, the side the singles had when it took over. */
   const slotDirA: BorosLegDirection = isSpread && behind ? behind.dirA : dirA;
@@ -626,7 +622,7 @@ export function BorosPairTicket({
     setMarketB(null);
     setDirA(aOnFirst ? dirA : dirA === 'short' ? 'long' : 'short');
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode, onlyLeg, isSpread, pairSpread?.marketId, marketA, marketB, intent, rowA?.closeOnly, rowA?.currentSize, pairSpread?.closeOnly, pairSpread?.currentSize, singlesHeld]);
+  }, [mode, onlyLeg, isSpread, pairSpread?.marketId, marketA, marketB, intent, rowA?.closeOnly, rowA?.currentSize, pairSpread?.closeOnly, pairSpread?.currentSize]);
 
   const sizeNum = Number(sizeStr);
   const sizeErr = amountError(sizeStr);
@@ -1395,20 +1391,7 @@ export function BorosPairTicket({
       )}
       {/* --- §4 acknowledgement ------------------------------------------- */}
       {gate?.requiresAcknowledgement && simulation && (
-        <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/[0.05] px-2.5 py-2 text-[11px] leading-relaxed text-amber-100">
-          <input
-            type="checkbox"
-            className="mt-0.5"
-            checked={acknowledged}
-            onChange={(e) => setAcknowledged(e.target.checked)}
-          />
-          <span>
-            {simulation.legs
-              .filter((leg) => leg.sizing.opposing)
-              .map((leg) => acknowledgementText({ ...leg, marketName: legName(leg.marketId) ?? leg.marketName }, simulation.collateral))
-              .join(' ')}
-          </span>
-        </label>
+        <OpposingAcknowledgement sim={simulation} checked={acknowledged} onChange={setAcknowledged} nameOf={legName} />
       )}
 
       {/* --- §7 warnings + blockers --------------------------------------- */}
@@ -1551,27 +1534,6 @@ export function BorosPairTicket({
       </div>
     </div>
   );
-}
-
-function acknowledgementText(
-  leg: { marketName: string; sizing: { currentSize: number; resultingSize: number; flips: boolean } },
-  collateral: string,
-): string {
-  const { sizing } = leg;
-  // The same magnitude-scaled formatter as every other size on the ticket:
-  // fixed 2dp printed a 0.0123 BTC position as "0.01 BTC" in the one line
-  // that binds the user to what happens to it.
-  const held = fmtSize(Math.abs(sizing.currentSize));
-  const side = sizing.currentSize > 0 ? 'long' : 'short';
-  if (sizing.flips) {
-    const opened = fmtSize(Math.abs(sizing.resultingSize));
-    return `I understand this closes my existing ${leg.marketName} ${side} position of ${held} ${collateral}, realising its PnL, and opens ${opened} ${collateral} in the opposite direction.`;
-  }
-  if (sizing.resultingSize === 0) {
-    return `I understand this closes my existing ${leg.marketName} ${side} position of ${held} ${collateral} in full, realising its PnL.`;
-  }
-  const to = fmtSize(Math.abs(sizing.resultingSize));
-  return `I understand this reduces my existing ${leg.marketName} ${side} position of ${held} ${collateral} to ${to} ${collateral}, realising part of its PnL.`;
 }
 
 function SlipInput({

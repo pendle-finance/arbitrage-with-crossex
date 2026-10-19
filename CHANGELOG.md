@@ -3,6 +3,62 @@
 Only substantial releases are listed here — each one bumps `version.json` (which is what the
 in-app update check compares against).
 
+## 1.7.6 — 2026-10-17
+
+TLDR: Every roll is one batch that Boros previews first, singles ↔ spread included. Fixed Rate
+Pairs splits a book by size, so a part single no longer hides the spread offer. A trade shows
+on the cards in seconds.
+
+- **Every roll: one batch, one preview.** A roll sends its closes and then its opens in one
+  batch, all or none. Before the send, Boros previews the whole batch and the roll window
+  shows the required and available margin from it. This works for singles → singles,
+  singles → spread, spread → singles and spread → spread, whole or in part. Before, a roll
+  between singles and a spread showed "Simulation failed" and no margin. A roll with no
+  preview is blocked. The exact size held moves, so no dust stays behind. A whole roll exits
+  the old markets once they are flat, so it works at the 10-market limit.
+- **Clearer roll refusals.** One bullet per cause, and each fix said once. The market limit,
+  your own order on the market and low gas each have plain text. On a part roll at the
+  market limit, the fix offers the whole roll only when it frees enough markets (except when
+  another pair shares the market; fixed in 1.7.7).
+- **Roll into a market you hold the other way.** When the new market holds the opposite side
+  of another pair, the roll window shows the same tick box as the order ticket. Before, the
+  roll was stuck behind a blocker with no box.
+- **"Margin freed" is right.** The exit step shows the margin the close releases. Before, a
+  whole close showed 0.
+- **Rolls stay inside the Boros rate limit.** Roll windows refresh every 10 s and reuse the
+  account reads for 15 s. The check before a send always reads fresh. Before, one open roll
+  window used the whole limit and every Boros read failed for up to a minute.
+- **Fixed Rate Pairs split by size.** A held single that covers part of a perp unit no longer
+  turns the whole unit into singles: the rest keeps its spread offer. Opens are capped at what
+  the venue lacks. Missing legs read "held / needed", for example "0 / 0.05 ETH", and the badge
+  names the gap: "missing 0.05 ETH", also on the Funding Bundles row. Gaps that
+  differ by under $25 a side count as even. A single under $50 no longer hides the spread offer.
+- **Open-only rolls.** After a roll that keeps the old legs, the perps hedge the new, later
+  legs. The old legs show as their own card, with the perps they lack, until they mature.
+  Within one venue pair, the further maturity takes the perps first, unless that hedges less
+  of the book. A roll that fills a hair short leaves no tiny card on the old date. The roll
+  window says this in three bullets.
+- **A Boros leg held the other way.** The card marks it "held other way" and offers Close,
+  not Open. Before, the Open would net against it, and a wrong-way spread offered perps that
+  would close the ones you hold. A single counts only on its hedge side: before, an HL long
+  single behind HL short perps read as hedged.
+- **Share of a shared leg.** The percent after a leg size has a hover with the whole position,
+  this pair's part and the other cards' part.
+- **Telegram roll alerts.** One suggestion per held pair, with its kind (singles or spread, to
+  singles or spread) and its markets.
+- **Boros rebate per market.** The rebate chip and "Include rebate in APR" use each market's
+  own rate. A card with two rates shows "40-50%"; the hover gives each leg's rate.
+- **Trades show in seconds.** After a Boros trade, the cards update within a few seconds.
+  Before, they took up to 2 minutes, because the terminal re-read the fill history of every
+  market the account ever traded. The header margin updates with the cards.
+- **Fewer Boros reads.** A pair under $100, which shows no rate, no longer sends roll probes.
+  Matured markets load in one read. A new wallet's settlement history loads once, not twice.
+- **Smaller changes.** Each roll option names its target ("→ singles" or the spread). The roll
+  window shows "—" until the preview is back. A Boros rate limit reads "Boros rate limit
+  reached. It retries in 10 s." Exact sizes show when a short label would read
+  "2.4k / 2.4k ETH". Reduce-only on a pair stays on a held spread; close singles from their
+  pair card.
+
 ## 1.7.5 — 2026-10-14
 
 TLDR: Boros spread markets. Where Boros lists one, a single Boros order hedges a

@@ -551,7 +551,7 @@ export function PairCosts({
               ? 'Initial margin this leg consumes'
               : 'The two legs summed, not netted: each bucket must carry its own margin.'
         }
-        value={<CollateralAmount n={sim.marginRequiredTotal} sim={sim} />}
+        value={<CollateralAmount n={freeing ? (sim.marginReleasedTotal ?? null) : sim.marginRequiredTotal} sim={sim} />}
       />
       {!oneLeg && !freeing && !compact &&
         sim.legs.map((leg, i) => (
@@ -889,4 +889,56 @@ function FailureDetail({ fill }: { fill: BorosLegFill }) {
       )}
     </p>
   );
+}
+
+/**
+ * §4: the tick a trade needs before it reduces, closes or flips a position
+ * the account already holds. Boros nets to one position per market, so an
+ * open on a market another pair holds the other side of changes THAT
+ * position too. The ticket and both roll reviews show the same box.
+ */
+export function OpposingAcknowledgement({
+  sim,
+  checked,
+  onChange,
+  nameOf,
+}: {
+  sim: BorosPairSimulation;
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+  /** The market's display name, when the caller has a better one. */
+  nameOf?: (marketId: number) => string | null;
+}) {
+  return (
+    <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/[0.05] px-2.5 py-2 text-[11px] leading-relaxed text-amber-100">
+      <input type="checkbox" className="mt-0.5" checked={checked} onChange={(e) => onChange(e.target.checked)} />
+      <span>
+        {sim.legs
+          .filter((leg) => leg.sizing.opposing)
+          .map((leg) => acknowledgementText({ ...leg, marketName: nameOf?.(leg.marketId) ?? leg.marketName }, sim.collateral))
+          .join(' ')}
+      </span>
+    </label>
+  );
+}
+
+export function acknowledgementText(
+  leg: { marketName: string; sizing: { currentSize: number; resultingSize: number; flips: boolean } },
+  collateral: string,
+): string {
+  const { sizing } = leg;
+  // The same magnitude-scaled formatter as every other size on the ticket:
+  // fixed 2dp printed a 0.0123 BTC position as "0.01 BTC" in the one line
+  // that binds the user to what happens to it.
+  const held = size(Math.abs(sizing.currentSize));
+  const side = sizing.currentSize > 0 ? 'long' : 'short';
+  if (sizing.flips) {
+    const opened = size(Math.abs(sizing.resultingSize));
+    return `I understand this closes my existing ${leg.marketName} ${side} position of ${held} ${collateral}, realising its PnL, and opens ${opened} ${collateral} in the opposite direction.`;
+  }
+  if (sizing.resultingSize === 0) {
+    return `I understand this closes my existing ${leg.marketName} ${side} position of ${held} ${collateral} in full, realising its PnL.`;
+  }
+  const to = size(Math.abs(sizing.resultingSize));
+  return `I understand this reduces my existing ${leg.marketName} ${side} position of ${held} ${collateral} to ${to} ${collateral}, realising part of its PnL.`;
 }

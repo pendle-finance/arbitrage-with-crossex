@@ -104,6 +104,8 @@ export function makeTestApp(overrides?: Partial<AppDeps>): FastifyInstance {
       venue: gateVenue(getClients),
       clock: { now: () => Date.now() },
     },
+    // A stub account never moves, so a write would wait the whole settle time.
+    borosSettle: { maxMs: 0 },
     ...overrides,
   });
 }
