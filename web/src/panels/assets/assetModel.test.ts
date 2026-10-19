@@ -1064,6 +1064,25 @@ describe('a roll that keeps the old legs: the further maturity takes the perps',
     expect(units(deriveAsset(sharedGate(1), {}, 0, NOW))).toEqual(['GATE/HYPERLIQUID old 1.000000', 'GATE/LIGHTER new 1.000000']);
   });
 
+  it('the fallback is per venue pairing: an unrelated open-only roll in the same coin keeps further first', () => {
+    const g = sharedGate(1);
+    const mixed = group({
+      perpOpen: [
+        ...g.perpOpen,
+        perp({ symbol: 'BINANCE_L', venue: 'BINANCE', side: 'LONG', qty: 3, notionalUsd: 5700 }),
+        perp({ symbol: 'OKX_S', venue: 'OKX', side: 'SHORT', qty: 3, notionalUsd: 5700 }),
+      ],
+      borosOpen: [
+        ...g.borosOpen,
+        ...[OLD, NEW].flatMap((maturity, i) => [
+          boros({ marketId: 41 + 2 * i, venue: 'BINANCE', side: 'LONG', maturity, sizeToken: 3, notionalUsd: 5700 }),
+          boros({ marketId: 42 + 2 * i, venue: 'OKX', side: 'SHORT', maturity, sizeToken: 3, notionalUsd: 5700 }),
+        ]),
+      ],
+    });
+    expect(units(deriveAsset(mixed, {}, 0, NOW))).toEqual(['BINANCE/OKX new 3.000000', 'GATE/HYPERLIQUID old 1.000000', 'GATE/LIGHTER new 1.000000']);
+  });
+
   it('with room for both at the later date, further first still holds', () => {
     expect(units(deriveAsset(sharedGate(2), {}, 0, NOW))).toEqual(['GATE/HYPERLIQUID new 1.000000', 'GATE/LIGHTER new 1.000000']);
   });
