@@ -18,7 +18,7 @@ on the cards in seconds.
   the old markets once they are flat, so it works at the 10-market limit.
 - **Clearer roll refusals.** One bullet per cause, and each fix said once. The market limit,
   your own order on the market and low gas each have plain text. On a part roll at the
-  market limit, the fix offers the whole roll first.
+  market limit, the fix offers the whole roll only when it frees enough markets.
 - **Roll into a market you hold the other way.** When the new market holds the opposite side
   of another pair, the roll window shows the same tick box as the order ticket. Before, the
   roll was stuck behind a blocker with no box.
@@ -34,8 +34,12 @@ on the cards in seconds.
   differ by under $25 a side count as even. A single under $50 no longer hides the spread offer.
 - **Open-only rolls.** After a roll that keeps the old legs, the perps hedge the new, later
   legs. The old legs show as their own card, with the perps they lack, until they mature.
-  Within one venue pair, the further maturity always takes the perps first. The roll window
-  says this in three bullets.
+  Within one venue pair, the further maturity takes the perps first, unless that hedges less
+  of the book. A roll that fills a hair short leaves no tiny card on the old date. The roll
+  window says this in three bullets.
+- **A Boros leg held the other way.** The card marks it "held other way" and offers Close,
+  not Open. Before, the Open would net against it, and a wrong-way spread offered perps that
+  would close the ones you hold.
 - **Share of a shared leg.** The percent after a leg size has a hover with the whole position,
   this pair's part and the other cards' part.
 - **Telegram roll alerts.** One suggestion per held pair, with its kind (singles or spread, to
