@@ -460,6 +460,17 @@ describe('a Boros leg held the other way', () => {
     expect(await screen.findByRole('dialog')).toBeInTheDocument();
   });
 
+  it('a spread held the other way at a later maturity than the default: still Close, no perps the other way', async () => {
+    // Staging 2026-10-19: LONG on the 27 Nov spread while the default is the 30 Oct one.
+    const user = userEvent.setup();
+    renderCard(book([{ ...spreadLeg, marketId: SPREAD + 1, maturity: MATURITY + 28 * DAY, side: 'LONG' }]));
+    await showPairs(user);
+    expect(await screen.findByText('held other way')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Open Boros leg' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Open both perps' })).toBeNull();
+    expect(screen.queryByText('Ungrouped legs')).toBeNull();
+  });
+
   it('a single held the other way: that side has no Open leg; the other side keeps its own', async () => {
     const user = userEvent.setup();
     // Perps long Gate / short HL; Gate holds its long single, HL holds a LONG (the wrong way).
