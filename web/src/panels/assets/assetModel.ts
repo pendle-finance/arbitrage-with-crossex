@@ -1112,7 +1112,7 @@ const signedBoros = (
 
 const borosVenuesOf = (l: Pick<AssetBorosOpen, 'venue' | 'spreadVenues'>): readonly string[] => l.spreadVenues ?? [l.venue];
 
-const spreadFits = (l: Pick<AssetBorosOpen, 'side' | 'spreadVenues'>, longVenue: string, shortVenue: string): boolean => {
+export const spreadFits = (l: Pick<AssetBorosOpen, 'side' | 'spreadVenues'>, longVenue: string, shortVenue: string): boolean => {
   if (!l.spreadVenues) return false;
   const [first, second] = l.spreadVenues;
   return l.side === 'SHORT' ? first === shortVenue && second === longVenue : first === longVenue && second === shortVenue;
@@ -1725,9 +1725,12 @@ function deriveAssetBy(
   const pool = Math.max(longTotal, shortTotal);
   if (longs.length > 0 && shorts.length > 0 && pool > 0) {
     const histByMarket = new Map(group.borosHistory.map((h) => [h.marketId, h]));
-    const yuSlicesFor = (venue: string): YuSlice[] =>
+    /** A venue's singles on one side. A single hedges a perp only on the
+     * perp's own side: Hyperliquid short perps and a Hyperliquid LONG single
+     * are not a hedge (report 2026-10-18). */
+    const yuSlicesFor = (venue: string, side: 'LONG' | 'SHORT'): YuSlice[] =>
       group.borosOpen
-        .filter((b) => !isSpreadLeg(b) && b.venue === venue && borosKeepOf(b) > 0)
+        .filter((b) => !isSpreadLeg(b) && b.venue === venue && b.side === side && borosKeepOf(b) > 0)
         .map((b) => ({
           marketId: b.marketId,
           maturity: b.maturity,
@@ -1749,8 +1752,8 @@ function deriveAssetBy(
     const combos = longs
       .flatMap((l) =>
         shorts.flatMap((sh) => {
-          const lm = new Set(yuSlicesFor(l.venue).map((y) => y.maturity));
-          const shared = yuSlicesFor(sh.venue)
+          const lm = new Set(yuSlicesFor(l.venue, 'LONG').map((y) => y.maturity));
+          const shared = yuSlicesFor(sh.venue, 'SHORT')
             .map((y) => y.maturity)
             .filter((m) => lm.has(m));
           const spreadMaturities = spreadsFor(l.venue, sh.venue).map((b) => b.maturity);
@@ -1767,8 +1770,8 @@ function deriveAssetBy(
     /** What each perp leg still has to give, drawn down as units claim it. */
     const perpLeft = new Map<AssetPerpOpen, number>([...longs, ...shorts].map((l) => [l, legSize(l)]));
     /** Rate-leg size still unclaimed at one venue and maturity. */
-    const yuLeftAt = (venue: string, maturity: number): number =>
-      yuSlicesFor(venue)
+    const yuLeftAt = (venue: string, side: 'LONG' | 'SHORT', maturity: number): number =>
+      yuSlicesFor(venue, side)
         .filter((y) => y.maturity === maturity)
         .reduce((t, y) => t + (yuRemaining.get(y.marketId) ?? 0), 0);
     /** The largest unit any combination can still form, re-judged after each
@@ -1786,7 +1789,7 @@ function deriveAssetBy(
           if (spent.has(c)) continue;
           const perps = Math.min(perpLeft.get(c.l) ?? 0, perpLeft.get(c.sh) ?? 0);
           const spreadLeft = spreadLeftAt(c.l.venue, c.sh.venue, c.maturity);
-          const singlesLeft = Math.min(yuLeftAt(c.l.venue, c.maturity), yuLeftAt(c.sh.venue, c.maturity));
+          const singlesLeft = Math.min(yuLeftAt(c.l.venue, 'LONG', c.maturity), yuLeftAt(c.sh.venue, 'SHORT', c.maturity));
           const need = Math.min(perps, c.kind === 'spread' ? spreadLeft : singlesLeft);
           // Strictly greater: the spread combo comes first in `combos`, so it
           // wins the tie with its singles twin.
@@ -1809,7 +1812,7 @@ function deriveAssetBy(
         for (const c of order.furtherFirst ? combos : []) {
           if (spent.has(c) || c.l !== best.l || c.sh !== best.sh || !(c.maturity > best.maturity)) continue;
           const perps = Math.min(perpLeft.get(c.l) ?? 0, perpLeft.get(c.sh) ?? 0);
-          const left = c.kind === 'spread' ? spreadLeftAt(c.l.venue, c.sh.venue, c.maturity) : Math.min(yuLeftAt(c.l.venue, c.maturity), yuLeftAt(c.sh.venue, c.maturity));
+          const left = c.kind === 'spread' ? spreadLeftAt(c.l.venue, c.sh.venue, c.maturity) : Math.min(yuLeftAt(c.l.venue, 'LONG', c.maturity), yuLeftAt(c.sh.venue, 'SHORT', c.maturity));
           const need = Math.min(perps, left);
           // A later unit under the dust line does not take the main pair's perps.
           if (need > 1e-9 && usdOf(c, need) * 2 >= PERP_ONLY_DUST_USD) {
@@ -1833,10 +1836,10 @@ function deriveAssetBy(
       const lSize = legSize(lLeg);
       const sSize = legSize(sLeg);
       const longBoros = group.borosOpen.filter(
-        (b) => !isSpreadLeg(b) && b.venue === lLeg.venue && b.maturity === maturity && borosKeepOf(b) > 0,
+        (b) => !isSpreadLeg(b) && b.venue === lLeg.venue && b.side === 'LONG' && b.maturity === maturity && borosKeepOf(b) > 0,
       );
       const shortBoros = group.borosOpen.filter(
-        (b) => !isSpreadLeg(b) && b.venue === sLeg.venue && b.maturity === maturity && borosKeepOf(b) > 0,
+        (b) => !isSpreadLeg(b) && b.venue === sLeg.venue && b.side === 'SHORT' && b.maturity === maturity && borosKeepOf(b) > 0,
       );
       const spreadBoros =
         kind === 'spread' ? spreadsFor(lLeg.venue, sLeg.venue).filter((b) => b.maturity === maturity) : [];
@@ -1861,8 +1864,8 @@ function deriveAssetBy(
           ? { long: new Map<number, number>(), short: new Map<number, number>() }
           : allocateYuByMaturity(
               need,
-              yuSlicesFor(lLeg.venue).filter((y) => y.maturity === maturity),
-              yuSlicesFor(sLeg.venue).filter((y) => y.maturity === maturity),
+              yuSlicesFor(lLeg.venue, 'LONG').filter((y) => y.maturity === maturity),
+              yuSlicesFor(sLeg.venue, 'SHORT').filter((y) => y.maturity === maturity),
               yuRemaining,
               yuRemaining,
             );

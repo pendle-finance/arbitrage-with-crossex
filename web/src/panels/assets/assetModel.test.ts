@@ -1068,6 +1068,13 @@ describe('a roll that keeps the old legs: the further maturity takes the perps',
     expect(units(deriveAsset(sharedGate(2), {}, 0, NOW))).toEqual(['GATE/HYPERLIQUID new 1.000000', 'GATE/LIGHTER new 1.000000']);
   });
 
+  it('a single held against its perp is no hedge: HL short perps and an HL LONG single (report 2026-10-18)', () => {
+    const wrong = singles(OLD, 10, 1).map((b) => ({ ...b, side: 'LONG' as const }));
+    const d = deriveAsset(group({ perpOpen: perps(), borosOpen: wrong }), {}, 0, NOW);
+    expect(d.pairs).toEqual([]);
+    expect(pendingAt(d, OLD)).toEqual([1, 2]);
+  });
+
   it('other venue pairings keep largest first', () => {
     // Gate long perp 10 against HL short 10 (old date) or Lighter short 1 (new date).
     const g = group({
