@@ -109,7 +109,9 @@ import {
   type BorosOnlyPair,
   perpOnlyPairs,
   PERP_ONLY_DUST_USD,
+  borosSizeIn,
   sizeIn,
+  spreadFits,
 } from './assetModel';
 import { daysToMaturity, knownRate } from '../../lib/boros';
 import { rebatedSettleApr } from '../../lib/rebate';
@@ -3159,13 +3161,21 @@ function PerpOnlyPairCard({
   base,
   nowSec,
   listedSpread,
+  heldOtherWay,
+  priceUsd,
   onOpenBoros,
+  onCloseBoros,
   onClosePerps,
 }: {
   pair: PerpOnlyPair;
   base: string;
   nowSec: number;
   listedSpread: [string, string] | null;
+  /** Markets an Open here would trade that the account holds the other way. */
+  heldOtherWay: AssetBorosOpen[];
+  priceUsd: number;
+  /** Opens the close form on one Boros leg. */
+  onCloseBoros: (leg: AssetBorosOpen) => void;
   /** Opens the close form on this unit's two perp slices — the other way
    * out of a hedge with no rate side: stop farming it. */
   onClosePerps: () => void;
@@ -3259,7 +3269,7 @@ function PerpOnlyPairCard({
         </td>
         <td className={`${cell} num text-right text-ink-600`}>—</td>
         <td className={`${cell} whitespace-nowrap text-right`}>
-          {missing > 0 && (
+          {missing > 0 && !heldOtherWay.some((b) => !b.spreadVenues && b.venue === venue) && (
             <button
               type="button"
               className="btn-ghost-xs !py-[5px] !text-grass hover:!border-grass/60"
@@ -3380,6 +3390,33 @@ function PerpOnlyPairCard({
                     {yuRow(pair.shortVenue, 'SHORT', pair.shortYu, pair.missingShort, pair.heldElsewhereShort)}
                   </>
                 )}
+                {heldOtherWay.map((b) => {
+                  const size = sizeText(borosSizeIn(b, pair.unit, base, priceUsd));
+                  return (
+                    <tr key={`ow-${b.marketId}`}>
+                      <td className={`${cell} whitespace-nowrap`}>
+                        <span className="inline-flex items-center gap-[7px]">
+                          {legName(b.venue, 'yu', b.side, b.spreadVenues)}
+                          <Chip sm tone="amber" title={`You hold ${b.side} ${size} here. Opening the hedge would net against it. Close it first.`}>
+                            held other way
+                          </Chip>
+                        </span>
+                      </td>
+                      <td className={`${cell} num whitespace-nowrap text-right text-ink-100`}>{size}</td>
+                      <td className={`${cell} num text-right text-ink-600`}>—</td>
+                      <td className={`${cell} whitespace-nowrap text-right`}>
+                        <button
+                          type="button"
+                          className="btn-ghost-xs !py-[5px] hover:!border-guava/50 hover:!text-guava"
+                          title={`Close the ${b.side} ${size}, then open the hedge`}
+                          onClick={() => onCloseBoros(b)}
+                        >
+                          Close
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -3396,7 +3433,7 @@ function PerpOnlyPairCard({
             {/* A held single keeps the unit on singles (rule 5), but a pair
                 ticket routes to a trading spread, so each missing single
                 opens on its own Open leg button. */}
-            {bothEven && !held && (
+            {bothEven && !held && heldOtherWay.length === 0 && (
               <button
                 type="button"
                 className={`${pill} !border-grass/60 !text-grass hover:!border-grass hover:!bg-grass/10`}
@@ -5447,6 +5484,22 @@ export function AssetCard({
     if (p.longYu || p.shortYu) return null;
     return defaultSpreadFor(p.longVenue, p.shortVenue)?.spreadVenues ?? null;
   };
+  /**
+   * Markets the card would open on that the account holds the other way.
+   * The open would net against them, not hedge, so the card offers Close
+   * there instead of Open (report 2026-10-18).
+   */
+  const heldOtherWayFor = (p: PerpOnlyPair): AssetBorosOpen[] => {
+    const maturity = borosMaturityFor(p);
+    const spreadId = p.missingLong > 0 && p.missingShort > 0 ? defaultSpreadFor(p.longVenue, p.shortVenue)?.marketId : undefined;
+    return group.borosOpen.filter((b) =>
+      b.spreadVenues
+        ? b.marketId === spreadId && !spreadFits(b, p.longVenue, p.shortVenue)
+        : b.maturity === maturity &&
+          ((p.missingLong > 0 && b.venue === p.longVenue && b.side === 'SHORT') ||
+            (p.missingShort > 0 && b.venue === p.shortVenue && b.side === 'LONG')),
+    );
+  };
   const openBorosFor = (p: PerpOnlyPair, sides: { long: boolean; short: boolean }) => {
     if (!flow) return;
     const size = sides.long && sides.short ? Math.min(p.missingLong, p.missingShort) : sides.long ? p.missingLong : p.missingShort;
@@ -5983,7 +6036,10 @@ null
                   base={group.base}
                   nowSec={nowSec}
                   listedSpread={listedSpreadFor(p)}
+                  heldOtherWay={heldOtherWayFor(p)}
+                  priceUsd={group.priceUsd}
                   onOpenBoros={flow ? (sides) => openBorosFor(p, sides) : null}
+                  onCloseBoros={(leg) => setCloseLeg({ kind: 'boros', leg })}
                   onClosePerps={() => setClosePerpOnly(p)}
                 />
               ),

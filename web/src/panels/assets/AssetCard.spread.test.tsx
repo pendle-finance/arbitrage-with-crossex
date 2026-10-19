@@ -434,3 +434,44 @@ describe('AssetCard with a spread leg', () => {
     expect(screen.queryByRole('button', { name: 'Close Boros legs' })).toBeNull();
   });
 });
+
+// A market held the other way: an Open there nets against it, not hedges (report 2026-10-18).
+describe('a Boros leg held the other way', () => {
+  const single = (venue: string, side: 'LONG' | 'SHORT', marketId: number): AssetBorosOpen => ({
+    ...spreadLeg,
+    marketId,
+    venue,
+    spreadVenues: null,
+    side,
+  });
+
+  it('a spread held the other way: the card offers Close, not Open', async () => {
+    const user = userEvent.setup();
+    renderCard(book([{ ...spreadLeg, side: 'LONG' }]));
+    await showPairs(user);
+    const tag = await screen.findByText('held other way');
+    expect(tag).toHaveAttribute('title', 'You hold LONG 0.555 ETH here. Opening the hedge would net against it. Close it first.');
+    expect(screen.queryByRole('button', { name: 'Open Boros leg' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Open both Boros legs' })).toBeNull();
+    await user.click(within(tag.closest('tr') as HTMLElement).getByRole('button', { name: 'Close' }));
+    expect(await screen.findByRole('dialog')).toBeInTheDocument();
+  });
+
+  it('a single held the other way: that side has no Open leg; the other side keeps its own', async () => {
+    const user = userEvent.setup();
+    // Perps long Gate / short HL; Gate holds its long single, HL holds a LONG (the wrong way).
+    renderCard(book([single('GATE', 'LONG', 60), single('HYPERLIQUID', 'LONG', 51)]));
+    await showPairs(user);
+    const tag = await screen.findByText('held other way');
+    expect(within(tag.closest('tr') as HTMLElement).getByText('Hyperliquid')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Open leg' })).toBeNull();
+  });
+
+  it('a leg held the right way shows no tag', async () => {
+    const user = userEvent.setup();
+    renderCard(book([single('GATE', 'LONG', 60)]));
+    await showPairs(user);
+    expect(await screen.findByRole('button', { name: 'Open leg' })).toBeInTheDocument();
+    expect(screen.queryByText('held other way')).toBeNull();
+  });
+});
