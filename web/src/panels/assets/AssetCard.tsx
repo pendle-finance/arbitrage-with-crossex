@@ -5444,11 +5444,6 @@ export function AssetCard({
       : null,
   );
   const spreadPending = trackedAddress !== null && spreadCtx.isPending && spreadCtx.failureCount === 0;
-  /** Then the reverse: offsetting rate legs whose perps are missing. */
-  const borosOnly = useMemo(() => {
-    return borosOnlyPairs(perpOnly.restPerps, perpOnly.restYus);
-  }, [perpOnly.restPerps, perpOnly.restYus]);
-  const ungroupedCount = borosOnly.restPerps.length + borosOnly.restYus.length;
   /** Rule A1 (owner 2026-10-16): the trading spread at D, else the latest before D, else the soonest; none, D. */
   const laddered = derived.pairs.map((x) => x.soonestMaturitySec).filter((m) => m > nowSec);
   const ladderMaturity = laddered.length > 0 ? Math.max(...laddered) : undefined;
@@ -5500,6 +5495,19 @@ export function AssetCard({
             (p.missingShort > 0 && b.venue === p.shortVenue && b.side === 'LONG')),
     );
   };
+  // A leg held the other way shows once, on the perps-only card with its
+  // Close. As its own Boros-only card it offered "Open perps" the other way,
+  // which closes the held perps.
+  const otherWayKey = perpOnly.pairs
+    .flatMap((p) => heldOtherWayFor(p).map((b) => b.marketId))
+    .sort((a, b) => a - b)
+    .join();
+  /** Then the reverse: offsetting rate legs whose perps are missing. */
+  const borosOnly = useMemo(() => {
+    const otherWay = new Set(otherWayKey.split(',').map(Number));
+    return borosOnlyPairs(perpOnly.restPerps, perpOnly.restYus.filter((y) => !otherWay.has(y.marketId)));
+  }, [perpOnly.restPerps, perpOnly.restYus, otherWayKey]);
+  const ungroupedCount = borosOnly.restPerps.length + borosOnly.restYus.length;
   const openBorosFor = (p: PerpOnlyPair, sides: { long: boolean; short: boolean }) => {
     if (!flow) return;
     const size = sides.long && sides.short ? Math.min(p.missingLong, p.missingShort) : sides.long ? p.missingLong : p.missingShort;

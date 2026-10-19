@@ -453,6 +453,9 @@ describe('a Boros leg held the other way', () => {
     expect(tag).toHaveAttribute('title', 'You hold LONG 0.555 ETH here. Opening the hedge would net against it. Close it first.');
     expect(screen.queryByRole('button', { name: 'Open Boros leg' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Open both Boros legs' })).toBeNull();
+    // Shown once: no Boros-only card offering perps the other way, no ungrouped copy.
+    expect(screen.queryByRole('button', { name: 'Open both perps' })).toBeNull();
+    expect(screen.queryByText('Ungrouped legs')).toBeNull();
     await user.click(within(tag.closest('tr') as HTMLElement).getByRole('button', { name: 'Close' }));
     expect(await screen.findByRole('dialog')).toBeInTheDocument();
   });
@@ -465,6 +468,7 @@ describe('a Boros leg held the other way', () => {
     const tag = await screen.findByText('held other way');
     expect(within(tag.closest('tr') as HTMLElement).getByText('Hyperliquid')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Open leg' })).toBeNull();
+    expect(screen.queryByText('Ungrouped legs')).toBeNull();
   });
 
   it('a leg held the right way shows no tag', async () => {
