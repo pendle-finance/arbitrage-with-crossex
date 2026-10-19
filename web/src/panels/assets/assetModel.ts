@@ -1287,6 +1287,13 @@ function mergeLegs(a: readonly PairLegDetail[], b: readonly PairLegDetail[]): Pa
   return out;
 }
 
+/**
+ * Two pairing orders, and the further-maturity one wins unless largest first
+ * hedges more notional. Further first can take a leg another venue pairing
+ * needs at that date: Gate L 2 / HL S 1 / Lighter S 1 perps, Gate/HL at
+ * 27 Nov and Gate/Lighter at 25 Dec, plus a stray HL 25 Dec leg. Further
+ * first hedged 1 ETH there, largest first 2 (report 2026-10-18).
+ */
 export function deriveAsset(
   group: AssetGroup,
   exclusions: Exclusions,
@@ -1299,6 +1306,25 @@ export function deriveAsset(
   /** The account's settlement-fee rebate config. Applied ONLY to the FORWARD
    * locked-rate math (current fixed APR, per-pair est. APR), per market — realized
    * rebate rides on each history row's `rebateUsd`. Null = none. */
+  rebate?: Rebate | null,
+): AssetDerived {
+  const order = { furtherFirst: true, moved: false };
+  const further = deriveAssetBy(order, group, exclusions, sinceSec, nowSec, feeRows, rebate);
+  if (!order.moved) return further;
+  const largest = deriveAssetBy({ furtherFirst: false, moved: false }, group, exclusions, sinceSec, nowSec, feeRows, rebate);
+  const hedged = (d: AssetDerived) => d.pairs.reduce((t, p) => t + p.notionalUsd, 0);
+  return hedged(further) >= hedged(largest) * (1 - 1e-9) ? further : largest;
+}
+
+function deriveAssetBy(
+  /** Whether the further maturity of one venue pairing takes the perps
+   * first; `moved` is set when that changed a pick. */
+  order: { furtherFirst: boolean; moved: boolean },
+  group: AssetGroup,
+  exclusions: Exclusions,
+  sinceSec: number,
+  nowSec: number,
+  feeRows?: readonly VenueFees[],
   rebate?: Rebate | null,
 ): AssetDerived {
   const unit = sizeUnitForBase(group.base);
@@ -1693,7 +1719,8 @@ export function deriveAsset(
    * at one maturity — any of them is a true hedge; the book's totals are the
    * same either way. Largest first gives the fewest, biggest units; ties go
    * to the earlier maturity, then the larger perps, so the result is stable.
-   * One exception: within one venue pairing the further maturity goes first.
+   * One exception: within one venue pairing the further maturity goes first,
+   * unless that hedges less notional (see deriveAsset).
    */
   const pool = Math.max(longTotal, shortTotal);
   if (longs.length > 0 && shorts.length > 0 && pool > 0) {
@@ -1779,7 +1806,7 @@ export function deriveAsset(
         const usdOf = (c: (typeof combos)[number], size: number) =>
           unit === 'usd' ? size : c.l.qty > 0 ? (size * c.l.notionalUsd) / c.l.qty : 0;
         let take = bestNeed;
-        for (const c of combos) {
+        for (const c of order.furtherFirst ? combos : []) {
           if (spent.has(c) || c.l !== best.l || c.sh !== best.sh || !(c.maturity > best.maturity)) continue;
           const perps = Math.min(perpLeft.get(c.l) ?? 0, perpLeft.get(c.sh) ?? 0);
           const left = c.kind === 'spread' ? spreadLeftAt(c.l.venue, c.sh.venue, c.maturity) : Math.min(yuLeftAt(c.l.venue, c.maturity), yuLeftAt(c.sh.venue, c.maturity));
@@ -1788,6 +1815,7 @@ export function deriveAsset(
           if (need > 1e-9 && usdOf(c, need) * 2 >= PERP_ONLY_DUST_USD) {
             best = c;
             bestNeed = need;
+            order.moved = true;
             // A roll that filled a hair short leaves the old legs a dust rest
             // of the perps: it is rounding, so it rides on the new unit
             // instead of showing as a $2 hedged card (report 2026-10-18).

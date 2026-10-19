@@ -1047,6 +1047,27 @@ describe('a roll that keeps the old legs: the further maturity takes the perps',
     }
   });
 
+  // Gate L 2 / HL S 1 / Lighter S 1 perps; Gate/HL at 27 Nov, Gate/Lighter at 25 Dec, a stray HL 25 Dec leg.
+  const sharedGate = (gateNew: number) =>
+    group({
+      perpOpen: [...perps(1).slice(1), perp({ symbol: 'GATE_L', venue: 'GATE', side: 'LONG', qty: 2, notionalUsd: 3800 }), perp({ symbol: 'LIGHTER_S', venue: 'LIGHTER', side: 'SHORT', qty: 1, notionalUsd: 1900 })],
+      borosOpen: [
+        ...singles(OLD, 1, 1),
+        ...singles(NEW, 1, 11).map((b) => (b.venue === 'GATE' ? { ...b, sizeToken: gateNew, notionalUsd: gateNew * 1900 } : b)),
+        boros({ marketId: 31, venue: 'LIGHTER', side: 'SHORT', maturity: NEW, sizeToken: 1, notionalUsd: 1900 }),
+      ],
+    });
+  const units = (d: ReturnType<typeof deriveAsset>) =>
+    d.pairs.map((p) => `${p.longVenue}/${p.shortVenue} ${p.soonestMaturitySec === OLD ? 'old' : 'new'} ${p.size.toFixed(6)}`).sort();
+
+  it('further first does not take a leg another venue pairing needs at that date (report 2026-10-18)', () => {
+    expect(units(deriveAsset(sharedGate(1), {}, 0, NOW))).toEqual(['GATE/HYPERLIQUID old 1.000000', 'GATE/LIGHTER new 1.000000']);
+  });
+
+  it('with room for both at the later date, further first still holds', () => {
+    expect(units(deriveAsset(sharedGate(2), {}, 0, NOW))).toEqual(['GATE/HYPERLIQUID new 1.000000', 'GATE/LIGHTER new 1.000000']);
+  });
+
   it('other venue pairings keep largest first', () => {
     // Gate long perp 10 against HL short 10 (old date) or Lighter short 1 (new date).
     const g = group({
