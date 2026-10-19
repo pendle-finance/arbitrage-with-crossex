@@ -18,7 +18,8 @@ on the cards in seconds.
   the old markets once they are flat, so it works at the 10-market limit.
 - **Clearer roll refusals.** One bullet per cause, and each fix said once. The market limit,
   your own order on the market and low gas each have plain text. On a part roll at the
-  market limit, the fix offers the whole roll only when it frees enough markets.
+  market limit, the fix offers the whole roll only when it frees enough markets (except when
+  another pair shares the market; fixed in 1.7.7).
 - **Roll into a market you hold the other way.** When the new market holds the opposite side
   of another pair, the roll window shows the same tick box as the order ticket. Before, the
   roll was stuck behind a blocker with no box.
@@ -30,7 +31,7 @@ on the cards in seconds.
 - **Fixed Rate Pairs split by size.** A held single that covers part of a perp unit no longer
   turns the whole unit into singles: the rest keeps its spread offer. Opens are capped at what
   the venue lacks. Missing legs read "held / needed", for example "0 / 0.05 ETH", and the badge
-  names the gap: "missing 0.05 ETH". Gaps that
+  names the gap: "missing 0.05 ETH", also on the Funding Bundles row. Gaps that
   differ by under $25 a side count as even. A single under $50 no longer hides the spread offer.
 - **Open-only rolls.** After a roll that keeps the old legs, the perps hedge the new, later
   legs. The old legs show as their own card, with the perps they lack, until they mature.
@@ -39,7 +40,8 @@ on the cards in seconds.
   window says this in three bullets.
 - **A Boros leg held the other way.** The card marks it "held other way" and offers Close,
   not Open. Before, the Open would net against it, and a wrong-way spread offered perps that
-  would close the ones you hold.
+  would close the ones you hold. A single counts only on its hedge side: before, an HL long
+  single behind HL short perps read as hedged.
 - **Share of a shared leg.** The percent after a leg size has a hover with the whole position,
   this pair's part and the other cards' part.
 - **Telegram roll alerts.** One suggestion per held pair, with its kind (singles or spread, to

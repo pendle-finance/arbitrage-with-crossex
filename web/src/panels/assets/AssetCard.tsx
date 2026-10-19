@@ -3193,6 +3193,9 @@ function PerpOnlyPairCard({
   const bothEven = both && gapsEven(pair);
   const spread = bothEven ? listedSpread : null;
   const held = pair.longYu ?? pair.shortYu;
+  // A dust leg held the other way still shows with its Close, but netting
+  // it would barely dent the open, so it does not hide the Opens.
+  const blocking = heldOtherWay.filter((b) => b.notionalUsd * 2 >= PERP_ONLY_DUST_USD);
   const cell = 'border-b border-ink-850 px-2.5 py-2';
   // The mock's row actions: the house outline at the compact size. The old
   // full-round pill was this app's own shape; dapp-nitro keeps the 5px radius
@@ -3269,7 +3272,7 @@ function PerpOnlyPairCard({
         </td>
         <td className={`${cell} num text-right text-ink-600`}>—</td>
         <td className={`${cell} whitespace-nowrap text-right`}>
-          {missing > 0 && !heldOtherWay.some((b) => !b.spreadVenues && b.venue === venue) && (
+          {missing > 0 && !blocking.some((b) => !b.spreadVenues && b.venue === venue) && (
             <button
               type="button"
               className="btn-ghost-xs !py-[5px] !text-grass hover:!border-grass/60"
@@ -3433,7 +3436,7 @@ function PerpOnlyPairCard({
             {/* A held single keeps the unit on singles (rule 5), but a pair
                 ticket routes to a trading spread, so each missing single
                 opens on its own Open leg button. */}
-            {bothEven && !held && heldOtherWay.length === 0 && (
+            {bothEven && !held && blocking.length === 0 && (
               <button
                 type="button"
                 className={`${pill} !border-grass/60 !text-grass hover:!border-grass hover:!bg-grass/10`}
@@ -5483,15 +5486,14 @@ export function AssetCard({
    * Markets the card would open on that the account holds the other way.
    * The open would net against them, not hedge, so the card offers Close
    * there instead of Open (report 2026-10-18). A wrong-way spread counts
-   * at any maturity: as its own card it offered the perps the other way.
+   * at any maturity, whatever singles the card holds: as its own card it
+   * offered the perps the other way.
    */
   const heldOtherWayFor = (p: PerpOnlyPair): AssetBorosOpen[] => {
     const maturity = borosMaturityFor(p);
-    const bothMissing = p.missingLong > 0 && p.missingShort > 0;
     return group.borosOpen.filter((b) =>
       b.spreadVenues
-        ? bothMissing &&
-          b.spreadVenues.every((v) => v === p.longVenue || v === p.shortVenue) &&
+        ? b.spreadVenues.every((v) => v === p.longVenue || v === p.shortVenue) &&
           !spreadFits(b, p.longVenue, p.shortVenue)
         : b.maturity === maturity &&
           ((p.missingLong > 0 && b.venue === p.longVenue && b.side === 'SHORT') ||

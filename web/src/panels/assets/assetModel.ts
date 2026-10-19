@@ -700,7 +700,7 @@ export function perpOnlyPairs(
       room.set(k, r - missing);
       return { missing };
     }
-    // A gap a part of its size would be dust (both sides under $50) is rounding.
+    // A gap a part of its size would be dust (under $50 for both sides together) is rounding.
     const m = slice(perp, r).notionalUsd * 2 < PERP_ONLY_DUST_USD ? 0 : r;
     room.set(k, r - m);
     const held = singles
@@ -1292,7 +1292,8 @@ function mergeLegs(a: readonly PairLegDetail[], b: readonly PairLegDetail[]): Pa
  * hedges more notional. Further first can take a leg another venue pairing
  * needs at that date: Gate L 2 / HL S 1 / Lighter S 1 perps, Gate/HL at
  * 27 Nov and Gate/Lighter at 25 Dec, plus a stray HL 25 Dec leg. Further
- * first hedged 1 ETH there, largest first 2 (report 2026-10-18).
+ * first hedged 1 ETH there, largest first 2 (report 2026-10-18). Judged per
+ * venue pairing, so an unrelated roll in the same coin keeps further first.
  */
 export function deriveAsset(
   group: AssetGroup,
@@ -1308,18 +1309,25 @@ export function deriveAsset(
    * rebate rides on each history row's `rebateUsd`. Null = none. */
   rebate?: Rebate | null,
 ): AssetDerived {
-  const order = { furtherFirst: true, moved: false };
-  const further = deriveAssetBy(order, group, exclusions, sinceSec, nowSec, feeRows, rebate);
-  if (!order.moved) return further;
-  const largest = deriveAssetBy({ furtherFirst: false, moved: false }, group, exclusions, sinceSec, nowSec, feeRows, rebate);
   const hedged = (d: AssetDerived) => d.pairs.reduce((t, p) => t + p.notionalUsd, 0);
-  return hedged(further) >= hedged(largest) * (1 - 1e-9) ? further : largest;
+  const largestFor = new Set<string>();
+  const order = { largestFor, moved: new Set<string>() };
+  let best = deriveAssetBy(order, group, exclusions, sinceSec, nowSec, feeRows, rebate);
+  for (const pairing of order.moved) {
+    const trial = deriveAssetBy({ largestFor: new Set([...largestFor, pairing]), moved: new Set() }, group, exclusions, sinceSec, nowSec, feeRows, rebate);
+    if (hedged(trial) > hedged(best) * (1 + 1e-9)) {
+      best = trial;
+      largestFor.add(pairing);
+    }
+  }
+  return best;
 }
 
 function deriveAssetBy(
-  /** Whether the further maturity of one venue pairing takes the perps
-   * first; `moved` is set when that changed a pick. */
-  order: { furtherFirst: boolean; moved: boolean },
+  /** The venue pairings ("GATE/HYPERLIQUID") that keep largest first; the
+   * rest take the further maturity first. `moved` collects the pairings
+   * where that changed a pick. */
+  order: { largestFor: ReadonlySet<string>; moved: Set<string> },
   group: AssetGroup,
   exclusions: Exclusions,
   sinceSec: number,
@@ -1809,7 +1817,8 @@ function deriveAssetBy(
         const usdOf = (c: (typeof combos)[number], size: number) =>
           unit === 'usd' ? size : c.l.qty > 0 ? (size * c.l.notionalUsd) / c.l.qty : 0;
         let take = bestNeed;
-        for (const c of order.furtherFirst ? combos : []) {
+        const pairing = `${best.l.venue}/${best.sh.venue}`;
+        for (const c of order.largestFor.has(pairing) ? [] : combos) {
           if (spent.has(c) || c.l !== best.l || c.sh !== best.sh || !(c.maturity > best.maturity)) continue;
           const perps = Math.min(perpLeft.get(c.l) ?? 0, perpLeft.get(c.sh) ?? 0);
           const left = c.kind === 'spread' ? spreadLeftAt(c.l.venue, c.sh.venue, c.maturity) : Math.min(yuLeftAt(c.l.venue, 'LONG', c.maturity), yuLeftAt(c.sh.venue, 'SHORT', c.maturity));
@@ -1818,7 +1827,7 @@ function deriveAssetBy(
           if (need > 1e-9 && usdOf(c, need) * 2 >= PERP_ONLY_DUST_USD) {
             best = c;
             bestNeed = need;
-            order.moved = true;
+            order.moved.add(pairing);
             // A roll that filled a hair short leaves the old legs a dust rest
             // of the perps: it is rounding, so it rides on the new unit
             // instead of showing as a $2 hedged card (report 2026-10-18).
