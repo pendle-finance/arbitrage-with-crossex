@@ -2794,8 +2794,8 @@ function OpenOnlyReview({
         {result && <RollLegReport label="New legs" legs={result.legs} collateral={collateral} tone={tone} />}
         {result && !result.filledNothing && !result.partial && (
           <p className="text-[11.5px] text-ink-300" role="status">
-            Opened {fmtTokenQty(result.hedgedSize, collateral)} at {fmtDateLocal(target.maturity)}. The {fmtDateLocal(pair.soonestMaturitySec)} legs
-            run to maturity; their perps then hedge the new legs.
+            Opened {fmtTokenQty(result.hedgedSize, collateral)} at {fmtDateLocal(target.maturity)}. Your perps now hedge the new legs. The{' '}
+            {fmtDateLocal(pair.soonestMaturitySec)} legs stay open, with no perps, until {fmtDateLocal(pair.soonestMaturitySec)}.
           </p>
         )}
         {result?.partial && !result.filledNothing && (
