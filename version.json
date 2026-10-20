@@ -1,9 +1,8 @@
 {
-  "version": "1.7.6",
+  "version": "1.7.7",
   "highlights": [
-    "Roll between singles and a spread: Boros previews every roll, and the window shows the margin it needs",
-    "Fixed Rate Pairs splits your book by size, so a small single no longer hides the spread offer",
-    "A trade shows on your cards in seconds, not minutes",
-    "Clearer roll messages, and a roll into a market you hold the other way can now be sent"
+    "Log in to Boros from any page address, not only localhost:6688",
+    "If Boros does not approve a new login, your working login comes back",
+    "Rejecting the wallet prompt or closing the tab no longer logs out the wallet that trades"
   ]
 }
