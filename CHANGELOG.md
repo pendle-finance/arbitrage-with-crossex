@@ -3,6 +3,26 @@
 Only substantial releases are listed here — each one bumps `version.json` (which is what the
 in-app update check compares against).
 
+## 1.7.7 — 2026-10-21
+
+TLDR: Log in to Boros from any page address. A login that Boros does not approve puts your
+working login back.
+
+- **Log in from any page address.** Before, the login worked only at `localhost:6688`. From
+  any other address, for example through a load balancer, it ended with "Not approved". The
+  browser sent the approval to Boros, and Boros refuses pages it does not list. Now the
+  terminal sends the approval itself.
+- **A failed login keeps your working login.** The wallet signs first. The terminal saves
+  nothing before the signature. If you reject the prompt or close the tab, the wallet that
+  trades now keeps trading. If Boros does not approve the new login, the terminal puts the
+  old login back. It says "<wallet> is still logged in" only when Boros shows that login
+  approved.
+- **Smaller things.** "Logged in" shows only for the login you just signed, not for an older
+  login of the same wallet. The README shows how to open the terminal on a remote machine
+  through an SSH tunnel.
+
+Existing installs get this through the in-app Update.
+
 ## 1.7.6 — 2026-10-17
 
 TLDR: Every roll is one batch that Boros previews first, singles ↔ spread included. Fixed Rate
