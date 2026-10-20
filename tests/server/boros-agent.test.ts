@@ -4,7 +4,7 @@
  * The properties worth pinning are all safety ones: a root PRIVATE key is
  * refused outright, the key is never echoed back or exposed by GET, the file it
  * lands in is 0600, provisioning hot-swaps the live client without a restart,
- * a refused approval puts the replaced login back, an unsure one does not, and
+ * an approval Boros does not confirm puts the replaced login back, and
  * DELETE is honest that it has not revoked anything on-chain.
  */
 import * as fs from 'node:fs';
@@ -358,15 +358,23 @@ describe('PUT with the signed approval: the server sends it to Boros', () => {
   type Answer = { status: number; body?: unknown } | Error;
   let answer: Answer;
   let gate: Promise<void> | null;
+  let expiryGate: Promise<void> | null;
+  let chainExpiry: number;
   let relays: { url: string; body: unknown; liveKey?: string }[];
 
   beforeEach(async () => {
     await app?.close();
     answer = { status: 201, body: { approveAgentResult: { txHash: '0xtx', status: 'success' } } };
     gate = null;
+    expiryGate = null;
+    chainExpiry = Math.floor(Date.now() / 1000) + 30 * 86400;
     relays = [];
     app = makeTestApp({
       borosFetch: async (url, init) => {
+        if (url.includes('/agents/expiry-time')) {
+          if (expiryGate) await expiryGate;
+          return { ok: true, status: 200, json: async () => ({ expiryTime: chainExpiry }) };
+        }
         if (!url.includes('/send-txs/approve')) return { ok: true, status: 200, json: async () => ({ results: [] }) };
         relays.push({ url, body: JSON.parse(init?.body ?? 'null'), liveKey: process.env.BOROS_AGENT_PRIVATE_KEY });
         if (gate) await gate;
@@ -397,17 +405,30 @@ describe('PUT with the signed approval: the server sends it to Boros', () => {
     expect(res.payload).not.toContain(KEY_B);
   });
 
+  it('keeps the new key when Boros says success with an error it could not decode', async () => {
+    await put(good);
+    answer = { status: 201, body: { approveAgentResult: { status: 'success', error: '[EXECUTE] decode mismatch' } } };
+    const res = await login();
+    expect(res.statusCode).toBe(200);
+    expect(process.env.BOROS_AGENT_PRIVATE_KEY).toBe(KEY_B);
+  });
+
   it.each<[string, Answer]>([
     ['a bad signature', { status: 400, body: { message: 'Invalid signature for approveAgent message' } }],
-    ['a revert in simulation', { status: 201, body: { approveAgentResult: { error: '[SIMULATE] AuthInvalidNonce()' } } }],
+    ['a revert', { status: 201, body: { approveAgentResult: { status: 'reverted', error: '[SIMULATE] AuthInvalidNonce()' } } }],
     ['a 422: nothing was sent', { status: 422, body: { message: 'transaction rejected' } }],
-  ])('on %s, puts the replaced login back and says so', async (_name, refusal) => {
+    ['a 408: the tx is still in flight', { status: 408, body: { message: 'transaction is still being sent' } }],
+    ['the catch-all 400', { status: 400, body: { message: 'Failed to approve agent: receipt timeout' } }],
+    ['a 5xx', { status: 503, body: null }],
+    ['no answer at all', new Error('socket hang up')],
+  ])('on %s, puts the replaced login back and says so', async (_name, failure) => {
     await put({ ...good, accountId: 3 });
     const before = installed;
-    answer = refusal;
+    answer = failure;
     const res = await login();
     expect(res.statusCode).toBe(400);
-    expect(res.json().error.message).toMatch(/^Boros .*0x1111…1111 is still logged in\.$/);
+    expect(res.json().error.message).toMatch(/^Boros .*\. 0x1111…1111 is still logged in\.$/);
+    expect(res.json().error.retryable).toBe(false);
     expect(process.env.BOROS_AGENT_PRIVATE_KEY).toBe(AGENT_KEY);
     expect(process.env.BOROS_ACCOUNT_ID).toBe('3');
     expect(process.env.BOROS_PREV_AGENT_PRIVATE_KEY).toBeUndefined();
@@ -420,11 +441,11 @@ describe('PUT with the signed approval: the server sends it to Boros', () => {
     answer = { status: 400, body: { message: 'Invalid signature for approveAgent message' } };
     const res = await login();
     expect(res.json().error.message).toBe(
-      'Boros /v1/send-txs/approve failed (HTTP 400): Invalid signature for approveAgent message',
+      'Boros /v1/send-txs/approve failed (HTTP 400): Invalid signature for approveAgent message.',
     );
     for (const k of ENV_KEYS) delete process.env[k];
-    answer = { status: 201, body: { approveAgentResult: { error: '[SIMULATE] AuthInvalidNonce()' } } };
-    expect((await login()).json().error.message).toBe('Boros refused the approval: [SIMULATE] AuthInvalidNonce()');
+    answer = { status: 201, body: { approveAgentResult: { status: 'reverted', error: '[SIMULATE] AuthInvalidNonce()' } } };
+    expect((await login()).json().error.message).toBe('Boros refused the approval: [SIMULATE] AuthInvalidNonce().');
   });
 
   it('answers 429 when Boros rate-limits, and puts the login back', async () => {
@@ -435,26 +456,21 @@ describe('PUT with the signed approval: the server sends it to Boros', () => {
     expect(process.env.BOROS_AGENT_PRIVATE_KEY).toBe(AGENT_KEY);
   });
 
-  it('a refused first login has nothing to put back: the key stays and shows as not approved', async () => {
+  it('does not call a login "still logged in" when the chain shows it dead', async () => {
+    await put(good);
+    chainExpiry = 0;
     answer = { status: 400, body: { message: 'Invalid signature for approveAgent message' } };
+    const res = await login();
+    expect(res.json().error.message).not.toMatch(/still logged in/);
+    expect(process.env.BOROS_AGENT_PRIVATE_KEY).toBe(AGENT_KEY);
+  });
+
+  it('a failed first login has nothing to put back: the key stays and the status shows if it lands', async () => {
+    answer = { status: 408, body: { message: 'transaction is still being sent' } };
     const res = await login();
     expect(res.statusCode).toBe(400);
     expect(res.json().error.message).not.toMatch(/still logged in/);
     expect(process.env.BOROS_AGENT_PRIVATE_KEY).toBe(KEY_B);
-  });
-
-  it.each<[string, Answer]>([
-    ['a 408: the tx is still in flight', { status: 408, body: { message: 'transaction is still being sent' } }],
-    ['the catch-all 400 after the send', { status: 400, body: { message: 'Failed to approve agent: receipt timeout' } }],
-    ['a 5xx', { status: 503, body: null }],
-    ['no answer at all', new Error('socket hang up')],
-  ])('on %s, keeps the new key so the browser can wait for the chain', async (_name, unsure) => {
-    await put(good);
-    answer = unsure;
-    const res = await login();
-    expect(res.statusCode).toBe(200);
-    expect(process.env.BOROS_AGENT_PRIVATE_KEY).toBe(KEY_B);
-    expect(process.env.BOROS_PREV_AGENT_PRIVATE_KEY).toBe(AGENT_KEY);
   });
 
   it('does not undo a login that replaced this one while Boros was answering', async () => {
@@ -471,6 +487,35 @@ describe('PUT with the signed approval: the server sends it to Boros', () => {
     expect(res.statusCode).toBe(400);
     expect(res.json().error.message).not.toMatch(/still logged in/);
     expect(process.env.BOROS_AGENT_PRIVATE_KEY).toBe(KEY_C);
+  });
+
+  it('a status read of the old key that lands after a new PUT keeps the stash', async () => {
+    await put(good);
+    let release!: () => void;
+    expiryGate = new Promise((r) => (release = r));
+    const read = app!.inject({ method: 'GET', url: '/api/boros/agent?fresh=1', headers: HOST });
+    await new Promise((r) => setTimeout(r, 20));
+    await put({ root: ROOT_B, accountId: 0, agentPrivateKey: KEY_B });
+    release();
+    await read;
+    expect(process.env.BOROS_PREV_AGENT_PRIVATE_KEY).toBe(AGENT_KEY);
+  });
+
+  it('a key that cannot be saved is a plain refusal, and nothing goes to Boros', async () => {
+    await app?.close();
+    app = makeTestApp({
+      borosFetch: async () => {
+        relays.push({ url: 'called', body: null });
+        return { ok: true, status: 200, json: async () => ({}) };
+      },
+      getBorosOrders: () => installed,
+      borosAgent: { envPath: path.dirname(envPath), hardenConfigDir: true, setOrderClient: (c) => (installed = c) },
+    });
+    const res = await login();
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error.message).toMatch(/^Could not save the login on this machine: /);
+    expect(res.json().error.retryable).toBe(false);
+    expect(relays).toHaveLength(0);
   });
 
   it('refuses calldata that is not hex, before saving or sending anything', async () => {

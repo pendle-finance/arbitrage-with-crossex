@@ -143,7 +143,9 @@ export function borosAgentRoutes(deps: AppDeps) {
               {
                 fresh: (req.query as { fresh?: string } | undefined)?.fresh === '1',
                 onApproved: () => {
-                  clearPrev(deps.borosAgent);
+                  // A PUT may have replaced this key while Boros answered. Its
+                  // stash is then the login to put back: keep it.
+                  if (process.env.BOROS_AGENT_PRIVATE_KEY === agentPrivateKey) clearPrev(deps.borosAgent);
                   deps.borosAgent?.onApproved?.();
                 },
               },
@@ -248,22 +250,30 @@ export function borosAgentRoutes(deps: AppDeps) {
       // failing to save would leave a live, year-long approval for a key
       // nobody holds. A saved key with no approval is inert: the status reads
       // the chain and shows it as not approved.
-      const installed = install(svc, { root, accountId, agentPrivateKey, expiry }, stash);
+      let installed: ReturnType<typeof install>;
+      try {
+        installed = install(svc, { root, accountId, agentPrivateKey, expiry }, stash);
+      } catch (err) {
+        // A plain refusal, so the browser shows it instead of waiting on Boros.
+        throw new CoreError(`Could not save the login on this machine: ${(err as Error)?.message ?? String(err)}`);
+      }
       if (approveAgentCalldata === undefined) return reply.ok(installed);
 
-      // Only a clear refusal undoes the login. When the approval may still
-      // land, the new key stays and the browser waits for the chain.
       const outcome = await relayAgentApproval(resolveBorosFetch(deps.borosFetch), approveAgentCalldata);
-      if (outcome.kind !== 'refused') return reply.ok(installed);
+      if (outcome.ok) return reply.ok(installed);
 
-      // Put the replaced login back, unless another login has replaced this
-      // one in the meantime. A first login has nothing to put back: its key
-      // stays and shows as not approved.
-      let message = outcome.message;
+      // Keep the new key only when Boros approved it. Otherwise put the
+      // replaced login back: if the approval still lands, it only leaves an
+      // agent nobody holds, while a key that never lands leaves no way to
+      // trade. Skipped when another login replaced this one meanwhile. A
+      // first login has nothing to put back: its key stays and the status
+      // shows whether it landed.
+      let message = outcome.message.replace(/\.?$/, '.');
       if (process.env.BOROS_AGENT_PRIVATE_KEY === agentPrivateKey && hasPrev()) {
         const prev = readPrev();
         install(svc, prev, PREV_CLEARED);
-        message += ` ${maskAddress(prev.root)} is still logged in.`;
+        const back = await readAgentApproval(resolveBorosFetch(deps.borosFetch), prev, { fresh: true });
+        if (back.state === 'approved') message += ` ${maskAddress(prev.root)} is still logged in.`;
       }
       throw new CoreError(message, outcome.rateLimited ? 'rate-limited' : 'venue-rejected');
     });
