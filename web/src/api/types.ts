@@ -1425,6 +1425,8 @@ export interface BorosAgentInput {
   agentPrivateKey: string;
   /** Absolute unix seconds the approval was signed until. */
   expiry?: number;
+  /** The root-signed approveAgent call. The server sends it to Boros. */
+  approveAgentCalldata?: string;
 }
 
 /** How the account's settlement-fee rebate is priced. RELATIVE keeps a fraction

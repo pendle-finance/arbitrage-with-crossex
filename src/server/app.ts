@@ -124,7 +124,7 @@ const CONTENT_SECURITY_POLICY = [
   "style-src 'self'",
   "font-src 'self' data:",
   "img-src 'self' data: https://storage.googleapis.com/boros-prod/ https://raw.githubusercontent.com/pendle-finance/arbitrage-with-crossex/",
-  "connect-src 'self' https://raw.githubusercontent.com/pendle-finance/arbitrage-with-crossex/ https://api-boros.pendle.finance/apis/",
+  "connect-src 'self' https://raw.githubusercontent.com/pendle-finance/arbitrage-with-crossex/",
   "base-uri 'none'",
   "form-action 'none'",
   "frame-ancestors 'none'",

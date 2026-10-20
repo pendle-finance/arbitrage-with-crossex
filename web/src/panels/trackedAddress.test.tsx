@@ -14,7 +14,7 @@ const PASTED = `0x3f2a${'1'.repeat(32)}91c0`;
 
 vi.mock('../lib/borosAgentApi', () => ({
   generateAgentKey: () => ({ privateKey: `0x${'a'.repeat(64)}`, address: `0x${'3'.repeat(40)}` }),
-  approveAgent: vi.fn(async () => ({ txHash: '0xtx' })),
+  signAgentApproval: vi.fn(async () => '0xabcd'),
 }));
 
 const stored = (): Record<string, unknown> | null => JSON.parse(localStorage.getItem(STRATEGY_STORAGE_KEY) ?? 'null');
