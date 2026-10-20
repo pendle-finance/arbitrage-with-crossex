@@ -1,12 +1,12 @@
 /**
  * Boros agent provisioning: the browser connects a wallet, generates a
- * delegated agent key, approves it on-chain with the ROOT wallet's own
- * signature, and hands only the agent key here.
+ * delegated agent key, has the ROOT wallet sign its approval, and hands the
+ * agent key and the signed approval here. This server sends the approval to
+ * Boros.
  *
  *   GET    /api/boros/agent  — masked status
- *   PUT    /api/boros/agent  — install a generated agent key
+ *   PUT    /api/boros/agent  — install a generated agent key, and send its approval
  *   DELETE /api/boros/agent  — forget it locally
- *   POST   /api/boros/agent/rollback — put back the login a rejected prompt replaced
  *
  * WHY THE KEY COMES HERE AT ALL, rather than the browser signing every order:
  * this terminal runs as a background service and its whole safety story is that
@@ -27,15 +27,20 @@
 import type { FastifyInstance } from 'fastify';
 import { CoreError } from '../../core/errors';
 import { makeBorosApiOrderClient } from '../../core/boros/borosApi';
-import { fetchBorosMarkets, resolveBorosFetch, resolveCollateralPricesUsd } from '../../core/boros/client';
+import {
+  fetchBorosMarkets,
+  relayAgentApproval,
+  resolveBorosFetch,
+  resolveCollateralPricesUsd,
+} from '../../core/boros/client';
 import type { AppDeps } from '../app';
 import { TTL } from '../cache';
 import { readAgentApproval, resetAgentApprovalCache } from '../borosAgentApproval';
-import { refuse } from '../errorReply';
 import { rewriteEnvFile } from './credentials';
 
 const PRIVATE_KEY_RE = /^0x[0-9a-fA-F]{64}$/;
 const ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
+const HEX_RE = /^0x[0-9a-fA-F]+$/;
 
 /** Show enough of the agent key's OWNER to recognise, never the key itself. */
 export const maskAddress = (a: string): string => `${a.slice(0, 6)}…${a.slice(-4)}`;
@@ -44,7 +49,7 @@ type AgentService = NonNullable<AppDeps['borosAgent']>;
 type AgentLogin = { root: string; accountId: number; agentPrivateKey: string; expiry?: number };
 
 /** The login a PUT replaced. Kept until the chain shows the new key approved,
- * so a rejected wallet prompt can put the working login back. */
+ * so a refused approval can put the working login back. */
 const PREV_KEYS = [
   'BOROS_PREV_ROOT_ADDRESS',
   'BOROS_PREV_ACCOUNT_ID',
@@ -70,6 +75,16 @@ const applyToProcess = (entries: Record<string, string>): void => {
 };
 
 const hasPrev = (): boolean => Boolean(process.env.BOROS_PREV_ROOT_ADDRESS && process.env.BOROS_PREV_AGENT_PRIVATE_KEY);
+
+const readPrev = (): AgentLogin => {
+  const rawExpiry = Number(process.env.BOROS_PREV_AGENT_EXPIRY);
+  return {
+    root: process.env.BOROS_PREV_ROOT_ADDRESS ?? '',
+    accountId: Number(process.env.BOROS_PREV_ACCOUNT_ID ?? 0) || 0,
+    agentPrivateKey: process.env.BOROS_PREV_AGENT_PRIVATE_KEY ?? '',
+    expiry: Number.isFinite(rawExpiry) && rawExpiry > 0 ? rawExpiry : undefined,
+  };
+};
 
 const clearPrev = (svc: AgentService | undefined): void => {
   if (!PREV_KEYS.some((k) => process.env[k])) return;
@@ -164,6 +179,7 @@ export function borosAgentRoutes(deps: AppDeps) {
             accountId?: number;
             agentPrivateKey?: string;
             expiry?: number;
+            approveAgentCalldata?: string;
           }
         | undefined;
       const root = body?.root?.trim();
@@ -205,6 +221,13 @@ export function borosAgentRoutes(deps: AppDeps) {
         throw new CoreError('accountId must be a non-negative integer');
       }
 
+      // Optional: without it the PUT only installs the key, as it did before
+      // the server sent approvals. Scripts that approve elsewhere rely on that.
+      const approveAgentCalldata = body?.approveAgentCalldata;
+      if (approveAgentCalldata !== undefined && (typeof approveAgentCalldata !== 'string' || !HEX_RE.test(approveAgentCalldata))) {
+        throw new CoreError('approveAgentCalldata must be 0x hex');
+      }
+
       // Keep the login this replaces until the new key is approved. When a
       // stash already exists, the current key was never seen approved, so
       // the stash is still the last working login: keep it.
@@ -221,25 +244,28 @@ export function borosAgentRoutes(deps: AppDeps) {
         };
       }
 
-      return reply.ok(install(svc, { root, accountId, agentPrivateKey, expiry }, stash));
-    });
+      // The key is saved BEFORE the approval is sent. Approving first and then
+      // failing to save would leave a live, year-long approval for a key
+      // nobody holds. A saved key with no approval is inert: the status reads
+      // the chain and shows it as not approved.
+      const installed = install(svc, { root, accountId, agentPrivateKey, expiry }, stash);
+      if (approveAgentCalldata === undefined) return reply.ok(installed);
 
-    app.post('/boros/agent/rollback', async (_req, reply) => {
-      const svc = deps.borosAgent;
-      if (!svc) throw new CoreError('Boros agent service not configured on this server');
-      const root = process.env.BOROS_PREV_ROOT_ADDRESS;
-      const agentPrivateKey = process.env.BOROS_PREV_AGENT_PRIVATE_KEY;
-      if (!root || !agentPrivateKey) {
-        return refuse(reply, { code: 409, category: 'validation', message: 'Nothing to restore.', retryable: false });
+      // Only a clear refusal undoes the login. When the approval may still
+      // land, the new key stays and the browser waits for the chain.
+      const outcome = await relayAgentApproval(resolveBorosFetch(deps.borosFetch), approveAgentCalldata);
+      if (outcome.kind !== 'refused') return reply.ok(installed);
+
+      // Put the replaced login back, unless another login has replaced this
+      // one in the meantime. A first login has nothing to put back: its key
+      // stays and shows as not approved.
+      let message = outcome.message;
+      if (process.env.BOROS_AGENT_PRIVATE_KEY === agentPrivateKey && hasPrev()) {
+        const prev = readPrev();
+        install(svc, prev, PREV_CLEARED);
+        message += ` ${maskAddress(prev.root)} is still logged in.`;
       }
-      const rawExpiry = Number(process.env.BOROS_PREV_AGENT_EXPIRY);
-      const login: AgentLogin = {
-        root,
-        accountId: Number(process.env.BOROS_PREV_ACCOUNT_ID ?? 0) || 0,
-        agentPrivateKey,
-        expiry: Number.isFinite(rawExpiry) && rawExpiry > 0 ? rawExpiry : undefined,
-      };
-      return reply.ok(install(svc, login, PREV_CLEARED));
+      throw new CoreError(message, outcome.rateLimited ? 'rate-limited' : 'venue-rejected');
     });
 
     app.delete('/boros/agent', async (_req, reply) => {

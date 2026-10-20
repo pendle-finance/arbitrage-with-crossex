@@ -20,10 +20,10 @@ const BOT_DOWN = 'Telegram alerts are not available yet. Try again later.';
 const ALERTS_URL = 'https://boros-bot-notification.pendle.finance/alerts';
 const BOT_UNREACHABLE = "Bot not reached. Retry, or stop each wallet's alerts on the Boros notifications page.";
 
-const approveAgent = vi.fn(async () => ({ txHash: '0xtx' }));
+const signAgentApproval = vi.fn(async () => '0xabcd');
 vi.mock('../../lib/borosAgentApi', () => ({
   generateAgentKey: () => ({ privateKey: `0x${'a'.repeat(64)}`, address: `0x${'3'.repeat(40)}` }),
-  approveAgent,
+  signAgentApproval,
 }));
 
 const connectedTelegram = (over: Partial<TelegramInfo> = {}): TelegramInfo =>
@@ -73,7 +73,7 @@ beforeEach(() => {
 afterEach(() => {
   delete (window as unknown as { ethereum?: unknown }).ethereum;
   vi.restoreAllMocks();
-  approveAgent.mockClear();
+  signAgentApproval.mockClear();
 });
 
 describe('SetupPage · Gate API key', () => {
@@ -182,7 +182,7 @@ describe('SetupPage · Boros wallet', () => {
     expect(await within(wallet).findByText('0xab18…ed9d')).toBeInTheDocument();
     expect(within(wallet).getByText('Not logged in')).toBeInTheDocument();
     expect(within(wallet).queryByText('View only')).toBeNull();
-    expect(approveAgent).not.toHaveBeenCalled();
+    expect(signAgentApproval).not.toHaveBeenCalled();
     const request = (window as unknown as { ethereum: { request: ReturnType<typeof vi.fn> } }).ethereum.request;
     const methods = request.mock.calls.map(([arg]) => (arg as { method: string }).method);
     expect(methods).toContain('eth_requestAccounts');

@@ -20,6 +20,7 @@ import { spreadName, spreadPlatform } from '../../../web/src/lib/spread';
 import { CoreError } from '../errors';
 import { BOOK_VENUES } from '../estimate/books';
 import { borosInitialMarginUsd } from './opportunities';
+import { extractApiDetail } from './orders';
 import { parseSpreadVenues } from './spread';
 import { normalizeVenue } from './venue';
 
@@ -341,6 +342,62 @@ export async function fetchBorosAgentExpiry(
     throw new CoreError('Boros /agents/expiry-time: unexpected response shape', 'network');
   }
   return expiry;
+}
+
+/** What Boros said about a relayed agent approval. `unknown` means it may
+ * still land: Boros sent it, or stopped waiting while it was in flight. */
+export type AgentApprovalOutcome =
+  | { kind: 'sent' }
+  | { kind: 'refused'; message: string; rateLimited: boolean }
+  | { kind: 'unknown' };
+
+/**
+ * POST {gateway}/v1/send-txs/approve — Pendle's relayer submits the root's
+ * signed approveAgent call and pays the gas.
+ *
+ * The server sends it, not the browser: Boros CORS refuses any page origin it
+ * does not list, such as a terminal opened through a load balancer.
+ *
+ * Not every error is a refusal. Boros answers 408 when it stopped waiting on a
+ * tx still in flight, and its catch-all 400 "Failed to approve agent: …" also
+ * wraps a receipt wait that failed after the send (open-api send-txs.service).
+ */
+export async function relayAgentApproval(
+  fetchImpl: FetchLike,
+  approveAgentCalldata: string,
+): Promise<AgentApprovalOutcome> {
+  const path = '/v1/send-txs/approve';
+  const clientTag =
+    'pendle_client=boroscrossex' + clientTagState.version + (clientTagState.active ? '_active' : '');
+  let resp: Awaited<ReturnType<FetchLike>>;
+  try {
+    resp = await fetchImpl(`${BOROS_GATEWAY_BASE_URL}${path}?${clientTag}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ approveAgentCalldata }),
+      // Boros gives up at 40 s on its own. Wait longer, so its answer comes first.
+      signal: AbortSignal.timeout(45_000),
+    });
+  } catch {
+    return { kind: 'unknown' };
+  }
+  const body = await resp.json().catch(() => null);
+  if (resp.ok) {
+    // Set only when the call reverted, in simulation or on chain.
+    const error = (body as { approveAgentResult?: { error?: string } } | null)?.approveAgentResult?.error;
+    return error
+      ? { kind: 'refused', message: `Boros refused the approval: ${error}`, rateLimited: false }
+      : { kind: 'sent' };
+  }
+  const detail = extractApiDetail(body);
+  if (resp.status === 408 || resp.status >= 500 || detail?.startsWith('Failed to approve agent')) {
+    return { kind: 'unknown' };
+  }
+  return {
+    kind: 'refused',
+    message: `Boros ${path} failed (HTTP ${resp.status})${detail ? `: ${detail}` : ''}`,
+    rateLimited: resp.status === 429,
+  };
 }
 
 /** GET {gateway}/v1/markets → normalized markets.
