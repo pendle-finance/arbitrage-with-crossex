@@ -624,6 +624,36 @@ describe('BorosAgentSetup — waiting for Boros', () => {
     expect(screen.queryByText(/^Logged in 0x/)).toBeNull();
   });
 
+  it('an older login of the same wallet does not read as the new one', async () => {
+    // The server puts the old login back when Boros does not approve the new
+    // one. Same wallet, but its expiry is the old one.
+    vi.useFakeTimers({ shouldAdvanceTime: true, toFake: ['setTimeout'] });
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    installWallet();
+    seedRoot();
+    const OLD_EXPIRY = Math.floor(Date.now() / 1000) + 5 * 86400;
+    let sent = false;
+    server.use(
+      http.get('/api/boros/agent', () =>
+        HttpResponse.json(
+          env(status({ configured: true, root: ROOT, approval: 'approved', expiry: OLD_EXPIRY })),
+        ),
+      ),
+      http.put('/api/boros/agent', () => {
+        sent = true;
+        return HttpResponse.error();
+      }),
+    );
+    renderWithClient(<BorosLogInButton renew />);
+    await user.click(await screen.findByRole('button', { name: 'Renew login for 0x1111…1111' }));
+    await waitFor(() => expect(sent).toBe(true));
+    for (let i = 0; i < 25 && !screen.queryByText(/not confirmed/); i++) {
+      await vi.advanceTimersByTimeAsync(1500);
+    }
+    expect(await screen.findByText(/Boros has not confirmed yet/)).toBeInTheDocument();
+    expect(screen.queryByText(/^Logged in 0x/)).toBeNull();
+  });
+
   it('labels each step in the order it happens', async () => {
     const user = userEvent.setup();
     let giveAccount: (a: string[]) => void = () => {};

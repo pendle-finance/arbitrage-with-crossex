@@ -56,12 +56,12 @@ const approvalExpiryAt = (): number => Math.floor(Date.now() / 1000) + APPROVAL_
 const CONFIRM_TRIES = 20;
 const CONFIRM_EVERY_MS = 1500;
 
-type Step = 'idle' | 'connecting' | 'replace' | 'approving' | 'saving' | 'confirming';
+type Step = 'idle' | 'connecting' | 'replace' | 'approving' | 'sending' | 'confirming';
 
 const STEP_LABEL: Record<Exclude<Step, 'idle'>, string> = {
   connecting: 'Open your wallet…',
   replace: 'Waiting for your answer…',
-  saving: 'Sending the approval to Boros…',
+  sending: 'Sending the approval to Boros…',
   approving: 'Sign in your wallet…',
   confirming: 'Waiting for Boros…',
 };
@@ -75,13 +75,15 @@ const TELEGRAM_REFRESH_MS = 2_000;
 
 type Confirmed = 'approved' | 'older-server' | 'timeout' | 'unchecked';
 
-async function waitForApproval(root: string): Promise<Confirmed> {
+async function waitForApproval(root: string, expiry: number): Promise<Confirmed> {
   let lastUnknown = false;
   for (let i = 0; i < CONFIRM_TRIES; i++) {
     const s = await fetchJson<BorosAgentStatus>('/boros/agent?fresh=1').catch(() => null);
     if (s?.root && isSameAddress(s.root, root)) {
       if (!('approval' in s)) return 'older-server';
-      if (s.approval === 'approved') return 'approved';
+      // The expiry tells this login from an older one of the same wallet,
+      // which the server puts back when Boros does not approve the new one.
+      if (s.approval === 'approved' && (s.expiry ?? expiry) === expiry) return 'approved';
       lastUnknown = s.approval === 'unknown';
     }
     if (i < CONFIRM_TRIES - 1) await sleep(CONFIRM_EVERY_MS);
@@ -164,10 +166,10 @@ function useBorosLogIn(onDone?: (root: string) => void, expected?: string | null
       // The key and the signed approval go to the local server in ONE request,
       // after the signature: a rejected prompt or a closed tab leaves the
       // working login alone. The server saves the key, sends the approval, and
-      // undoes the login only if Boros refuses it. The browser cannot send the
+      // keeps the new login only if Boros approves it. The browser cannot send the
       // approval itself: Boros CORS refuses a page served from any origin it
       // does not list, such as a terminal behind a load balancer.
-      setStep('saving');
+      setStep('sending');
       try {
         await provision.mutateAsync({
           root: wallet.address,
@@ -186,7 +188,7 @@ function useBorosLogIn(onDone?: (root: string) => void, expected?: string | null
 
       // Not done until Boros shows the approval.
       setStep('confirming');
-      const confirmed = await waitForApproval(wallet.address);
+      const confirmed = await waitForApproval(wallet.address, expiry);
       void qc.invalidateQueries({ queryKey: qk.borosAgent });
       if (confirmed === 'timeout') {
         setError('Boros has not confirmed yet. If Log in still shows in a minute, log in again.');

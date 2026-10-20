@@ -179,13 +179,14 @@ trade journal out from under a live process that is still placing orders.
 - **The app is not reachable from the network.** The server binds to `127.0.0.1`
   (this-machine-only) and additionally rejects any request whose Host/Origin isn't
   localhost. Nobody on your Wi-Fi can see it. Running it on a remote machine? Open
-  it through an SSH tunnel (`ssh -N -L 6688:127.0.0.1:6688 you@host`), then
-  http://localhost:6688. Do not put it behind a proxy: anyone who can load the page
+  it through an SSH tunnel (`ssh -N -L 16688:127.0.0.1:6688 you@host`), then
+  http://localhost:16688. Do not put it behind a proxy: anyone who can load the page
   can trade.
 - **No telemetry, no analytics.** The app's only outbound requests are: `api.gateio.ws`
   (signed, your account and orders); `api-boros.pendle.finance`
-  (public market data, keyed only by an EVM address you choose to enter, and the
-  Boros agent approval your wallet signs); the venues' public order-book endpoints
+  (public market data, keyed only by an EVM address you choose to enter; the Boros
+  orders your agent key signs; and the agent approval your wallet signs); the venues'
+  public order-book endpoints
   (`fapi.binance.com`, `api.bybit.com`, `www.okx.com`, `futures.kraken.com`,
   `api.hyperliquid.xyz`, `mainnet.zklighter.elliot.ai`, `api.gateio.ws`) — public data,
   nothing about you; and `raw.githubusercontent.com` plus `api.github.com` — a 6-hourly

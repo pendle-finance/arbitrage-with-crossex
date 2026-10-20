@@ -344,12 +344,11 @@ export async function fetchBorosAgentExpiry(
   return expiry;
 }
 
-/** What Boros said about a relayed agent approval. `unknown` means it may
- * still land: Boros sent it, or stopped waiting while it was in flight. */
-export type AgentApprovalOutcome =
-  | { kind: 'sent' }
-  | { kind: 'refused'; message: string; rateLimited: boolean }
-  | { kind: 'unknown' };
+/** Whether Boros approved a relayed agent approval. A failure may still land
+ * on chain later: Boros's 408 means the tx is still in flight, and its
+ * catch-all 400 "Failed to approve agent: …" covers errors before and after
+ * the send (open-api send-txs.service). */
+export type AgentApprovalOutcome = { ok: true } | { ok: false; message: string; rateLimited: boolean };
 
 /**
  * POST {gateway}/v1/send-txs/approve — Pendle's relayer submits the root's
@@ -357,10 +356,6 @@ export type AgentApprovalOutcome =
  *
  * The server sends it, not the browser: Boros CORS refuses any page origin it
  * does not list, such as a terminal opened through a load balancer.
- *
- * Not every error is a refusal. Boros answers 408 when it stopped waiting on a
- * tx still in flight, and its catch-all 400 "Failed to approve agent: …" also
- * wraps a receipt wait that failed after the send (open-api send-txs.service).
  */
 export async function relayAgentApproval(
   fetchImpl: FetchLike,
@@ -378,23 +373,20 @@ export async function relayAgentApproval(
       // Boros gives up at 40 s on its own. Wait longer, so its answer comes first.
       signal: AbortSignal.timeout(45_000),
     });
-  } catch {
-    return { kind: 'unknown' };
+  } catch (err) {
+    return { ok: false, message: `Boros ${path} did not answer: ${(err as Error)?.message ?? String(err)}`, rateLimited: false };
   }
   const body = await resp.json().catch(() => null);
   if (resp.ok) {
-    // Set only when the call reverted, in simulation or on chain.
-    const error = (body as { approveAgentResult?: { error?: string } } | null)?.approveAgentResult?.error;
-    return error
-      ? { kind: 'refused', message: `Boros refused the approval: ${error}`, rateLimited: false }
-      : { kind: 'sent' };
+    // `error` alone is not a refusal: Boros also fills it on a call that
+    // landed but could not be decoded. Only `reverted` means it did not land.
+    const result = (body as { approveAgentResult?: { status?: string; error?: string } } | null)?.approveAgentResult;
+    if (result?.status !== 'reverted') return { ok: true };
+    return { ok: false, message: `Boros refused the approval: ${result.error ?? 'reverted'}`, rateLimited: false };
   }
   const detail = extractApiDetail(body);
-  if (resp.status === 408 || resp.status >= 500 || detail?.startsWith('Failed to approve agent')) {
-    return { kind: 'unknown' };
-  }
   return {
-    kind: 'refused',
+    ok: false,
     message: `Boros ${path} failed (HTTP ${resp.status})${detail ? `: ${detail}` : ''}`,
     rateLimited: resp.status === 429,
   };
