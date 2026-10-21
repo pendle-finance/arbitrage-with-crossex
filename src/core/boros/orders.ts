@@ -227,7 +227,7 @@ export interface BorosOrderClient {
     opts?: Pick<PlaceOrdersOptions, 'cancelOrdersOn'> & { fresh?: boolean },
   ): Promise<BorosRollSimulation>;
   /** Force-cancel every resting order on one market (§6A remediation). */
-  cancelOrders(marketId: number): Promise<void>;
+  cancelOrders(marketId: number, gasTopUpMarket?: PlaceOrdersOptions['gasTopUpMarket']): Promise<void>;
   /** Force-close the whole netted position on one market (§6A remediation). */
   closePosition(req: BorosClosePositionRequest): Promise<BorosLegFill>;
   getGasBalance?(): Promise<number | null>;

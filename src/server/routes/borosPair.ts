@@ -1353,7 +1353,7 @@ export function borosPairRoutes(deps: AppDeps) {
         // an order that fills between a read and the cancel would leave the
         // close sized to a stale position, overshooting past flat into a fresh
         // one (Boros has no reduce-only flag to stop it).
-        await orders.cancelOrders(marketId);
+        await orders.cancelOrders(marketId, gasTopUpMarketFor(preMarkets, preAccount));
 
         /** ⚠ THE CANCEL HAS LANDED and nothing below undoes it, so every failure
          * from here has to say so — reporting only the close error read as
