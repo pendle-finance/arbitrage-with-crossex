@@ -126,6 +126,8 @@ const AMM_ORDERBOOK_ONLY = 0;
 const SUBMIT_TIMEOUT_MS = 60_000;
 /** How long a roll preview reuses its account reads (see `previewRead`). */
 const PREVIEW_READ_TTL_MS = 15_000;
+/** Boros books a payTreasury credit only once sync indexes it (9.4 s after the tx, staging 2026-10-21). */
+const GAS_CREDIT_POLLS = 20;
 
 /** The backend's per-call error for the calls that did NOT fail when a
  * `requireSuccess` batch is refused in simulation (send-txs.service). */
@@ -1064,12 +1066,17 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
       const refused = res.find((r) => r?.error && !BATCH_ABORTED.test(r.error)) ?? res.find((r) => r?.error);
       if (refused && res.slice(cancels.length).includes(refused)) {
         throw new CoreError(
-          `Boros refused the automatic gas top-up sent with the cancel, so no order was cancelled: ${refused.error}`,
+          'Gas top-up failed, so nothing was cancelled or closed. Add cash to this coin\'s Boros cross account, then close again. ' +
+            `(Boros: ${(refused.error as string).replace(/^\[SIMULATE\] /, '')})`,
           'venue-rejected',
         );
       }
       if (refused) {
         throw new CoreError(`Boros refused the cancel: ${refused.error}`, 'venue-rejected');
+      }
+      for (let poll = 0; topUp.length && poll < GAS_CREDIT_POLLS; poll += 1) {
+        await sleep(1_000);
+        if (((await readGasBalance().catch(() => null)) ?? -1) >= 0) return;
       }
     },
 
