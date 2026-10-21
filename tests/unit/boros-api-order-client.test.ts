@@ -155,6 +155,7 @@ function fakeApi(
       return ok(over.status ?? { status: 'success', statuses: [] });
     }
     if (path.startsWith('/v1/accounts/gas-balance')) {
+      if (typeof over.gasBalance === 'function') return ok((over.gasBalance as () => unknown)());
       return ok(over.gasBalance === undefined ? { balanceInUSD: 42 } : over.gasBalance);
     }
     return { ok: false, status: 404, json: async () => ({ message: 'nope' }) };
@@ -881,7 +882,27 @@ describe('makeBorosApiOrderClient — preconditions and remediation', () => {
         submit: () => [{ error: ABORT }, { error: '[SIMULATE] MMInsufficientIM' }],
       });
       const err = client(api).cancelOrders(HL);
-      await expect(err).rejects.toThrow(/gas top-up sent with the cancel, so no order was cancelled: \[SIMULATE\] MMInsufficientIM/);
+      await expect(err).rejects.toThrow(
+        "Gas top-up failed, so nothing was cancelled or closed. Add cash to this coin's Boros cross account, then close again. (Boros: MMInsufficientIM)",
+      );
+      expect(submits(api)).toHaveLength(1);
+    });
+
+    const gasReads = (api: ReturnType<typeof fakeApi>) =>
+      api.calls.filter((c) => c.path.startsWith('/v1/accounts/gas-balance')).length;
+
+    it('waits until Boros books the top-up credit before it returns', async () => {
+      const balances = [-0.4, -0.41, 0.99];
+      const api = fakeApi({ gasBalance: () => ({ balanceInUSD: balances.shift() }) });
+      await client(api).cancelOrders(HL);
+      expect(gasReads(api)).toBe(3);
+      expect(submits(api)).toHaveLength(1);
+    });
+
+    it('stops waiting after 20 reads when the credit never shows, without an error', async () => {
+      const api = fakeApi({ gasBalance: { balanceInUSD: -0.4 } });
+      await expect(client(api).cancelOrders(HL)).resolves.toBeUndefined();
+      expect(gasReads(api)).toBe(21);
       expect(submits(api)).toHaveLength(1);
     });
 
@@ -892,6 +913,7 @@ describe('makeBorosApiOrderClient — preconditions and remediation', () => {
       const [sent] = submits(api);
       expect((sent.datas as Array<{ calldata: string }>).map((d) => d.calldata)).toEqual([`0xca${HL.toString(16)}`]);
       expect(sent.requireSuccess).toBe(false);
+      expect(gasReads(api)).toBe(1);
     });
   });
 
