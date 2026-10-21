@@ -1046,11 +1046,12 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
     placeMarketOrders,
     simulateRollOver,
 
-    async cancelOrders(marketId: number): Promise<void> {
-      const calls = await cancelCalldatas([marketId]);
-      if (!calls.length) return;
+    async cancelOrders(marketId: number, gasTopUpMarket?: PlaceOrdersOptions['gasTopUpMarket']): Promise<void> {
+      const cancels = await cancelCalldatas([marketId]);
+      if (!cancels.length) return;
       previewReads.clear();
-      const res = await submitCalls(await signCalls(calls)).finally(() => previewReads.clear());
+      const topUp = await autoTopUpCalldata(true, marketId, gasTopUpMarket);
+      const res = await submitCalls(await signCalls([...cancels, ...topUp])).finally(() => previewReads.clear());
       // An empty result is "we cannot tell",
       // and reporting a cancel that may never have been submitted as done is
       // the one answer a remediation path must not give.
@@ -1060,7 +1061,13 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
           'venue-rejected',
         );
       }
-      const refused = res.find((r) => r?.error);
+      const refused = res.find((r) => r?.error && !BATCH_ABORTED.test(r.error)) ?? res.find((r) => r?.error);
+      if (refused && res.slice(cancels.length).includes(refused)) {
+        throw new CoreError(
+          `Boros refused the automatic gas top-up sent with the cancel, so no order was cancelled: ${refused.error}`,
+          'venue-rejected',
+        );
+      }
       if (refused) {
         throw new CoreError(`Boros refused the cancel: ${refused.error}`, 'venue-rejected');
       }

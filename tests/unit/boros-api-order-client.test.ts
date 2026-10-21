@@ -854,6 +854,47 @@ describe('makeBorosApiOrderClient — preconditions and remediation', () => {
     });
   });
 
+  describe('a cancel at gas debt pays its own gas', () => {
+    const submits = (api: ReturnType<typeof fakeApi>) =>
+      api.calls.filter((c) => c.path === '/v1/send-txs/bulk-calls').map((c) => c.body);
+
+    it('sends the cancels then a pay-treasury in one requireSuccess batch, in the picked zone', async () => {
+      const api = fakeApi({ gasBalance: { balanceInUSD: -0.4 } });
+      const asked: Array<[number, number]> = [];
+      await client(api).cancelOrders(HL, (usd, traded) => {
+        asked.push([usd, traded]);
+        return BN;
+      });
+      expect(asked).toEqual([[1.4, HL]]);
+      const pay = api.calls.find((c) => c.path.includes('agent/pay-treasury'))!.body;
+      expect(pay).toMatchObject({ isCross: true, marketId: BN, amount: '560000000000000' });
+      const sent = submits(api);
+      expect(sent).toHaveLength(1);
+      expect((sent[0].datas as Array<{ calldata: string }>).map((d) => d.calldata)).toEqual([`0xca${HL.toString(16)}`, '0x7a']);
+      expect(sent[0].requireSuccess).toBe(true);
+    });
+
+    it('names the gas top-up when Boros refuses it, and cancels nothing', async () => {
+      const ABORT = '[SIMULATE] Batch aborted: requireSuccess=true but some calls failed';
+      const api = fakeApi({
+        gasBalance: { balanceInUSD: -0.4 },
+        submit: () => [{ error: ABORT }, { error: '[SIMULATE] MMInsufficientIM' }],
+      });
+      const err = client(api).cancelOrders(HL);
+      await expect(err).rejects.toThrow(/gas top-up sent with the cancel, so no order was cancelled: \[SIMULATE\] MMInsufficientIM/);
+      expect(submits(api)).toHaveLength(1);
+    });
+
+    it.each([0, 0.05, 42])('sends the cancel alone at a gas balance of $%s', async (balanceInUSD) => {
+      const api = fakeApi({ gasBalance: { balanceInUSD } });
+      await client(api).cancelOrders(HL, () => BN);
+      expect(api.calls.some((c) => c.path.includes('agent/pay-treasury'))).toBe(false);
+      const [sent] = submits(api);
+      expect((sent.datas as Array<{ calldata: string }>).map((d) => d.calldata)).toEqual([`0xca${HL.toString(16)}`]);
+      expect(sent.requireSuccess).toBe(false);
+    });
+  });
+
   it('reads the prepaid gas balance in USD', async () => {
     const api = fakeApi();
     expect(await client(api).getGasBalance?.()).toBe(42);
