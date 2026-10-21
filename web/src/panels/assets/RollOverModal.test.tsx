@@ -496,6 +496,25 @@ describe('RollOverModal — spread target', () => {
     expect(Object.keys(sent[0].clientOrderIds)).toContain(`entry:${SPREAD_NEW}`);
   });
 
+  it('spread target, open only: the review names the spread market it opens, not the two venues', async () => {
+    spreadListed = true;
+    const user = userEvent.setup();
+    const entries: PairSimBody[] = [];
+    install({
+      onPairSimulate: (b) => {
+        if (b.intent === 'open') entries.push(b);
+      },
+    });
+    renderWithClient(<RollOverModal pair={pair} base="ETH" nowSec={NOW} onClose={() => {}} />);
+    const dialog = await screen.findByRole('dialog');
+    await user.click(within(dialog).getByRole('button', { name: 'Open only (keep old legs)' }));
+    const next = await within(dialog).findByRole('button', { name: 'Open new maturity' });
+    await waitFor(() => expect(next).not.toBeDisabled(), { timeout: 4_000 });
+    await user.click(next);
+    expect(await within(dialog).findByText(/^ETH Spread HL-GATE · /)).toBeInTheDocument();
+    await waitFor(() => expect(entries.at(-1)!.legs).toEqual([expect.objectContaining({ marketId: SPREAD_NEW, direction: 'short' })]), { timeout: 4_000 });
+  });
+
   it('a close-only single at the target maturity is no target: the window does not open on a market that takes no open', async () => {
     hlNewCloseOnly = true;
     const entries: PairSimBody[] = [];
