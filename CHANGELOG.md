@@ -5,21 +5,23 @@ in-app update check compares against).
 
 ## 1.7.7 — 2026-10-21
 
-TLDR: Log in to Boros from any page address. A login that Boros does not approve puts your
-working login back.
+TLDR: Boros login works when the page is not opened at localhost. A login that Boros does
+not approve puts your working login back.
 
-- **Log in from any page address.** Before, the login worked only at `localhost:6688`. From
-  any other address, for example through a load balancer, it ended with "Not approved". The
-  browser sent the approval to Boros, and Boros refuses pages it does not list. Now the
-  terminal sends the approval itself.
+- **Log in when the page is not on localhost.** Before, the login worked only when the page
+  address was `localhost` or `127.0.0.1`. From any other address, for example a proxy in front
+  of the terminal, it ended with "Not approved". The browser sent the approval to Boros, and
+  Boros refuses pages it does not list. Now the terminal sends the approval itself. Do not put
+  the terminal behind a proxy: anyone who can load the page can trade. To reach a remote
+  machine, use the SSH tunnel that the README shows.
 - **A failed login keeps your working login.** The wallet signs first. The terminal saves
-  nothing before the signature. If you reject the prompt or close the tab, the wallet that
-  trades now keeps trading. If Boros does not approve the new login, the terminal puts the
-  old login back. It says "<wallet> is still logged in" only when Boros shows that login
-  approved.
+  nothing before the signature. Before, the new key replaced your working login while the
+  wallet prompt was open, and closing the tab then left you logged out. Now the wallet that
+  trades keeps trading until Boros approves the new login. If Boros does not approve it, the
+  terminal puts the old login back. It says "<wallet> is still logged in" only when Boros
+  shows that login approved.
 - **Smaller things.** "Logged in" shows only for the login you just signed, not for an older
-  login of the same wallet. The README shows how to open the terminal on a remote machine
-  through an SSH tunnel.
+  login of the same wallet.
 
 Existing installs get this through the in-app Update.
 
