@@ -1810,6 +1810,7 @@ export function RollOverModal({
         openOnly ? (
           <OpenOnlyReview
             pair={pair}
+            base={base}
             yuLegs={yuLegs}
             target={target}
             size={size}
@@ -2691,6 +2692,7 @@ function RollReview({
  */
 function OpenOnlyReview({
   pair,
+  base,
   yuLegs,
   target,
   size,
@@ -2703,6 +2705,7 @@ function OpenOnlyReview({
   onClose,
 }: {
   pair: PairEstimate;
+  base: string;
   yuLegs: PairLegDetail[];
   target: RollTarget;
   size: number;
@@ -2869,7 +2872,7 @@ function OpenOnlyReview({
 
       <EstimateCard
         label="New legs"
-        sub={`${prettyVenue(pair.longVenue)} / ${prettyVenue(pair.shortVenue)} · ${fmtDateLocal(target.maturity)}`}
+        sub={`${'spreadVenues' in target ? spreadName(base, target.spreadVenues) : `${prettyVenue(pair.longVenue)} / ${prettyVenue(pair.shortVenue)}`} · ${fmtDateLocal(target.maturity)}`}
         dataUpdatedAt={sim.dataUpdatedAt}
         estimating={sim.isPlaceholderData}
         isError={sim.isError}
