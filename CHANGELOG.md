@@ -6,7 +6,7 @@ in-app update check compares against).
 ## 1.7.7 — 2026-10-21
 
 TLDR: Boros login works when the page is not opened at localhost. A login that Boros does
-not approve puts your working login back.
+not approve puts your working login back. Closing one Boros leg works when gas is in debt.
 
 - **Log in when the page is not on localhost.** Before, the login worked only when the page
   address was `localhost` or `127.0.0.1`. From any other address, for example a proxy in front
@@ -20,6 +20,12 @@ not approve puts your working login back.
   trades keeps trading until Boros approves the new login. If Boros does not approve it, the
   terminal puts the old login back. It says "<wallet> is still logged in" only when Boros
   shows that login approved.
+- **Close one Boros leg when gas is in debt.** Before, closing one leg at a negative gas
+  balance could fail with "Insufficient gas balance", and the leg stayed open. The close
+  cancels that market's orders first, and that cancel went out with no gas top-up, so Boros
+  refused it. Now the cancel carries the top-up ($1 plus the debt, from cross margin), and
+  the close waits until Boros books it, so the top-up is paid once. If the top-up fails, the
+  error says to add cash to that coin's Boros cross account.
 - **Smaller things.** "Logged in" shows only for the login you just signed, not for an older
   login of the same wallet.
 
