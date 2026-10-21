@@ -65,8 +65,7 @@ describe('host/origin guard', () => {
       "default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self' data:; " +
         "img-src 'self' data: https://storage.googleapis.com/boros-prod/ " +
         'https://raw.githubusercontent.com/pendle-finance/arbitrage-with-crossex/; ' +
-        "connect-src 'self' https://raw.githubusercontent.com/pendle-finance/arbitrage-with-crossex/ " +
-        'https://api-boros.pendle.finance/apis/; ' +
+        "connect-src 'self' https://raw.githubusercontent.com/pendle-finance/arbitrage-with-crossex/; " +
         "base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
     );
   });

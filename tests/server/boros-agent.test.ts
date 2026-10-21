@@ -4,13 +4,14 @@
  * The properties worth pinning are all safety ones: a root PRIVATE key is
  * refused outright, the key is never echoed back or exposed by GET, the file it
  * lands in is 0600, provisioning hot-swaps the live client without a restart,
- * and DELETE is honest that it has not revoked anything on-chain.
+ * an approval Boros does not confirm puts the replaced login back, and
+ * DELETE is honest that it has not revoked anything on-chain.
  */
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import type { FastifyInstance } from 'fastify';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BorosOrderClient } from '../../src/core/boros/orders';
 import { readAgentApproval, resetAgentApprovalCache } from '../../src/server/borosAgentApproval';
 import { borosStub } from '../helpers/boros-stub';
@@ -277,7 +278,6 @@ describe('keep the previous login until the new one is approved', () => {
   const ROOT_B = `0x${'2'.repeat(40)}`;
   const KEY_B = `0x${'b'.repeat(64)}`;
   const EXPIRY_A = Math.floor(Date.now() / 1000) + 30 * 86400;
-  const rollback = () => app!.inject({ method: 'POST', url: '/api/boros/agent/rollback', headers: HOST });
   const envFile = () => fs.readFileSync(envPath, 'utf8');
 
   it('PUT stashes the login it replaces, and the reply carries no key', async () => {
@@ -307,50 +307,12 @@ describe('keep the previous login until the new one is approved', () => {
     expect(process.env.BOROS_PREV_AGENT_PRIVATE_KEY).toBe(AGENT_KEY);
   });
 
-  it('rollback restores the stash and hot-swaps the order client', async () => {
-    await put({ ...good, accountId: 3, expiry: EXPIRY_A });
-    await put({ root: ROOT_B, accountId: 0, agentPrivateKey: KEY_B });
-    const before = installed;
-
-    const res = await rollback();
-    expect(res.statusCode).toBe(200);
-    expect(res.json().data).toEqual({
-      configured: true,
-      root: ROOT,
-      rootMasked: '0x1111…1111',
-      accountId: 3,
-      expiry: EXPIRY_A,
-    });
-    expect(res.payload).not.toContain(AGENT_KEY);
-    expect(res.payload).not.toContain(KEY_B);
-    expect(installed).toBeDefined();
-    expect(installed).not.toBe(before);
-    expect(process.env.BOROS_ROOT_ADDRESS).toBe(ROOT);
-    expect(process.env.BOROS_AGENT_PRIVATE_KEY).toBe(AGENT_KEY);
-    expect(process.env.BOROS_ACCOUNT_ID).toBe('3');
-    expect(process.env.BOROS_AGENT_EXPIRY).toBe(String(EXPIRY_A));
-    expect(process.env.BOROS_PREV_AGENT_PRIVATE_KEY).toBeUndefined();
-    expect(envFile()).toContain(`BOROS_AGENT_PRIVATE_KEY=${AGENT_KEY}`);
-    expect(envFile()).not.toContain(KEY_B);
-  });
-
-  it('rollback with nothing stashed is refused and changes nothing', async () => {
-    await put(good);
-    const before = installed;
-    const res = await rollback();
-    expect(res.statusCode).toBe(409);
-    expect(res.json().error.message).toBe('Nothing to restore.');
-    expect(installed).toBe(before);
-    expect(process.env.BOROS_AGENT_PRIVATE_KEY).toBe(AGENT_KEY);
-  });
-
   it('DELETE clears the stash', async () => {
     await put(good);
     await put({ root: ROOT_B, accountId: 0, agentPrivateKey: KEY_B });
     await app!.inject({ method: 'DELETE', url: '/api/boros/agent', headers: HOST });
     expect(process.env.BOROS_PREV_AGENT_PRIVATE_KEY).toBeUndefined();
     expect(envFile()).not.toContain(AGENT_KEY);
-    expect((await rollback()).statusCode).toBe(409);
   });
 
   it('clears the stash when the chain first shows the new key approved', async () => {
@@ -386,7 +348,188 @@ describe('keep the previous login until the new one is approved', () => {
     expect(approvedCalls).toBe(1);
     expect(process.env.BOROS_PREV_AGENT_PRIVATE_KEY).toBeUndefined();
     expect(envFile()).not.toContain(AGENT_KEY);
-    expect((await rollback()).statusCode).toBe(409);
+  });
+});
+
+describe('PUT with the signed approval: the server sends it to Boros', () => {
+  const ROOT_B = `0x${'2'.repeat(40)}`;
+  const KEY_B = `0x${'b'.repeat(64)}`;
+  const CALLDATA = `0x${'ab'.repeat(40)}`;
+  type Answer = { status: number; body?: unknown } | Error;
+  let answer: Answer;
+  let gate: Promise<void> | null;
+  let expiryGate: Promise<void> | null;
+  let chainExpiry: number;
+  let relays: { url: string; body: unknown; liveKey?: string }[];
+
+  beforeEach(async () => {
+    await app?.close();
+    answer = { status: 201, body: { approveAgentResult: { txHash: '0xtx', status: 'success' } } };
+    gate = null;
+    expiryGate = null;
+    chainExpiry = Math.floor(Date.now() / 1000) + 30 * 86400;
+    relays = [];
+    app = makeTestApp({
+      borosFetch: async (url, init) => {
+        if (url.includes('/agents/expiry-time')) {
+          if (expiryGate) await expiryGate;
+          return { ok: true, status: 200, json: async () => ({ expiryTime: chainExpiry }) };
+        }
+        if (!url.includes('/send-txs/approve')) return { ok: true, status: 200, json: async () => ({ results: [] }) };
+        relays.push({ url, body: JSON.parse(init?.body ?? 'null'), liveKey: process.env.BOROS_AGENT_PRIVATE_KEY });
+        if (gate) await gate;
+        if (answer instanceof Error) throw answer;
+        const { status, body } = answer;
+        return { ok: status < 400, status, json: async () => body ?? null };
+      },
+      getBorosOrders: () => installed,
+      borosAgent: { envPath, hardenConfigDir: true, setOrderClient: (c) => (installed = c) },
+    });
+  });
+
+  const login = (calldata: unknown = CALLDATA) =>
+    put({ root: ROOT_B, accountId: 0, agentPrivateKey: KEY_B, approveAgentCalldata: calldata });
+
+  it('saves the key first, then sends the exact calldata to Boros with the client tag', async () => {
+    await put(good);
+    const res = await login();
+    expect(res.statusCode).toBe(200);
+    expect(res.json().data).toMatchObject({ configured: true, root: ROOT_B });
+    expect(relays).toHaveLength(1);
+    expect(relays[0].url).toMatch(/\/apis\/v1\/send-txs\/approve\?pendle_client=boroscrossex/);
+    expect(relays[0].body).toEqual({ approveAgentCalldata: CALLDATA });
+    expect(relays[0].liveKey).toBe(KEY_B);
+    expect(process.env.BOROS_AGENT_PRIVATE_KEY).toBe(KEY_B);
+    // Cleared later, when the chain first shows KEY_B approved.
+    expect(process.env.BOROS_PREV_AGENT_PRIVATE_KEY).toBe(AGENT_KEY);
+    expect(res.payload).not.toContain(KEY_B);
+  });
+
+  it('keeps the new key when Boros says success with an error it could not decode', async () => {
+    await put(good);
+    answer = { status: 201, body: { approveAgentResult: { status: 'success', error: '[EXECUTE] decode mismatch' } } };
+    const res = await login();
+    expect(res.statusCode).toBe(200);
+    expect(process.env.BOROS_AGENT_PRIVATE_KEY).toBe(KEY_B);
+  });
+
+  it.each<[string, Answer]>([
+    ['a bad signature', { status: 400, body: { message: 'Invalid signature for approveAgent message' } }],
+    ['a revert', { status: 201, body: { approveAgentResult: { status: 'reverted', error: '[SIMULATE] AuthInvalidNonce()' } } }],
+    ['a 422: nothing was sent', { status: 422, body: { message: 'transaction rejected' } }],
+    ['a 408: the tx is still in flight', { status: 408, body: { message: 'transaction is still being sent' } }],
+    ['the catch-all 400', { status: 400, body: { message: 'Failed to approve agent: receipt timeout' } }],
+    ['a 5xx', { status: 503, body: null }],
+    ['no answer at all', new Error('socket hang up')],
+  ])('on %s, puts the replaced login back and says so', async (_name, failure) => {
+    await put({ ...good, accountId: 3 });
+    const before = installed;
+    answer = failure;
+    const res = await login();
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error.message).toMatch(/^Boros .*\. 0x1111…1111 is still logged in\.$/);
+    expect(res.json().error.retryable).toBe(false);
+    expect(process.env.BOROS_AGENT_PRIVATE_KEY).toBe(AGENT_KEY);
+    expect(process.env.BOROS_ACCOUNT_ID).toBe('3');
+    expect(process.env.BOROS_PREV_AGENT_PRIVATE_KEY).toBeUndefined();
+    expect(installed).not.toBe(before);
+    expect(fs.readFileSync(envPath, 'utf8')).not.toContain(KEY_B);
+    expect(res.payload).not.toContain(AGENT_KEY);
+  });
+
+  it('keeps Boros text word for word', async () => {
+    answer = { status: 400, body: { message: 'Invalid signature for approveAgent message' } };
+    const res = await login();
+    expect(res.json().error.message).toBe(
+      'Boros /v1/send-txs/approve failed (HTTP 400): Invalid signature for approveAgent message.',
+    );
+    for (const k of ENV_KEYS) delete process.env[k];
+    answer = { status: 201, body: { approveAgentResult: { status: 'reverted', error: '[SIMULATE] AuthInvalidNonce()' } } };
+    expect((await login()).json().error.message).toBe('Boros refused the approval: [SIMULATE] AuthInvalidNonce().');
+  });
+
+  it('answers 429 when Boros rate-limits, and puts the login back', async () => {
+    await put(good);
+    answer = { status: 429, body: { message: 'Approving agents too frequently' } };
+    const res = await login();
+    expect(res.statusCode).toBe(429);
+    expect(process.env.BOROS_AGENT_PRIVATE_KEY).toBe(AGENT_KEY);
+  });
+
+  it('does not call a login "still logged in" when the chain shows it dead', async () => {
+    await put(good);
+    chainExpiry = 0;
+    answer = { status: 400, body: { message: 'Invalid signature for approveAgent message' } };
+    const res = await login();
+    expect(res.json().error.message).not.toMatch(/still logged in/);
+    expect(process.env.BOROS_AGENT_PRIVATE_KEY).toBe(AGENT_KEY);
+  });
+
+  it('a failed first login has nothing to put back: the key stays and the status shows if it lands', async () => {
+    answer = { status: 408, body: { message: 'transaction is still being sent' } };
+    const res = await login();
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error.message).not.toMatch(/still logged in/);
+    expect(process.env.BOROS_AGENT_PRIVATE_KEY).toBe(KEY_B);
+  });
+
+  it('does not undo a login that replaced this one while Boros was answering', async () => {
+    await put(good);
+    let release!: () => void;
+    gate = new Promise((r) => (release = r));
+    answer = { status: 400, body: { message: 'Invalid signature for approveAgent message' } };
+    const pending = login();
+    await vi.waitFor(() => expect(relays).toHaveLength(1));
+    const KEY_C = `0x${'c'.repeat(64)}`;
+    await put({ root: ROOT_B, accountId: 0, agentPrivateKey: KEY_C });
+    release();
+    const res = await pending;
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error.message).not.toMatch(/still logged in/);
+    expect(process.env.BOROS_AGENT_PRIVATE_KEY).toBe(KEY_C);
+  });
+
+  it('a status read of the old key that lands after a new PUT keeps the stash', async () => {
+    await put(good);
+    let release!: () => void;
+    expiryGate = new Promise((r) => (release = r));
+    const read = app!.inject({ method: 'GET', url: '/api/boros/agent?fresh=1', headers: HOST });
+    await new Promise((r) => setTimeout(r, 20));
+    await put({ root: ROOT_B, accountId: 0, agentPrivateKey: KEY_B });
+    release();
+    await read;
+    expect(process.env.BOROS_PREV_AGENT_PRIVATE_KEY).toBe(AGENT_KEY);
+  });
+
+  it('a key that cannot be saved is a plain refusal, and nothing goes to Boros', async () => {
+    await app?.close();
+    app = makeTestApp({
+      borosFetch: async () => {
+        relays.push({ url: 'called', body: null });
+        return { ok: true, status: 200, json: async () => ({}) };
+      },
+      getBorosOrders: () => installed,
+      borosAgent: { envPath: path.dirname(envPath), hardenConfigDir: true, setOrderClient: (c) => (installed = c) },
+    });
+    const res = await login();
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error.message).toMatch(/^Could not save the login on this machine: /);
+    expect(res.json().error.retryable).toBe(false);
+    expect(relays).toHaveLength(0);
+  });
+
+  it('refuses calldata that is not hex, before saving or sending anything', async () => {
+    const res = await login('nope');
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error.message).toBe('approveAgentCalldata must be 0x hex');
+    expect(relays).toHaveLength(0);
+    expect(installed).toBeUndefined();
+  });
+
+  it('without calldata, only saves the key and sends nothing', async () => {
+    const res = await put({ root: ROOT_B, accountId: 0, agentPrivateKey: KEY_B });
+    expect(res.statusCode).toBe(200);
+    expect(relays).toHaveLength(0);
   });
 });
 

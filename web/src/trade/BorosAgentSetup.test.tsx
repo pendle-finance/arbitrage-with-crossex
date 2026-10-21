@@ -1,7 +1,8 @@
 /**
  * Boros agent setup. What matters here is what the user is told before two
- * wallet prompts, and that the generated key goes to localhost and nowhere
- * else — never rendered, never in a URL.
+ * wallet prompts, that the generated key goes to the local server and nowhere
+ * else — never rendered, never in a URL — and that nothing is stored before
+ * the wallet signs.
  */
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -17,7 +18,7 @@ const ROOT = '0x1111111111111111111111111111111111111111';
 const AGENT_KEY = `0x${'a'.repeat(64)}`;
 const AGENT_ADDRESS = '0x2222222222222222222222222222222222222222';
 const env = <T,>(data: T) => ({ ok: true, data, meta: { ts: Date.now() } });
-const NOTHING_TO_RESTORE = { ok: false, error: { category: 'unknown', message: 'Nothing to restore.', retryable: false } };
+const CALLDATA = `0x${'ab'.repeat(40)}`;
 
 const status = (over: Record<string, unknown> = {}) => ({
   configured: false,
@@ -30,16 +31,16 @@ const status = (over: Record<string, unknown> = {}) => ({
   ...over,
 });
 
-/** Order of effects, so the test can pin that the key is stored BEFORE a
- * year-long on-chain approval is submitted for it. */
+/** Order of effects, so the test can pin that nothing is stored before the
+ * wallet has signed. */
 const calls: string[] = [];
-const approveAgent = vi.fn(async (_input: { expiry: number; agentAddress: string }) => {
-  calls.push('approve');
-  return { txHash: '0xtx' };
+const signAgentApproval = vi.fn(async (_input: { expiry: number; agentAddress: string }) => {
+  calls.push('sign');
+  return CALLDATA;
 });
 vi.mock('../lib/borosAgentApi', () => ({
   generateAgentKey: () => ({ privateKey: AGENT_KEY, address: AGENT_ADDRESS }),
-  approveAgent,
+  signAgentApproval,
 }));
 
 /** A minimal injected wallet that accepts everything. */
@@ -90,7 +91,7 @@ describe('BorosAgentSetup', () => {
     await waitFor(() => expect(screen.queryByRole('button', { name: 'Connect wallet' })).toBeNull());
     expect(request.mock.calls.map(([a]) => a.method)).not.toContain('eth_chainId');
     expect(stored).toBe(false);
-    expect(approveAgent).not.toHaveBeenCalled();
+    expect(signAgentApproval).not.toHaveBeenCalled();
   });
 
   it('sends the generated key to localhost and never renders it', async () => {
@@ -113,7 +114,7 @@ describe('BorosAgentSetup', () => {
     await user.click(await screen.findByRole('button', { name: 'Log in to trade 0x1111…1111' }));
     await waitFor(() => expect(body).not.toBeNull());
 
-    expect(body).toMatchObject({ root: ROOT, accountId: 0, agentPrivateKey: AGENT_KEY });
+    expect(body).toMatchObject({ root: ROOT, accountId: 0, agentPrivateKey: AGENT_KEY, approveAgentCalldata: CALLDATA });
     // The key must not appear anywhere on screen.
     expect(document.body.textContent).not.toContain(AGENT_KEY);
     expect(document.body.textContent).not.toContain('aaaaaaaa');
@@ -145,22 +146,19 @@ describe('BorosAgentSetup', () => {
     expect(expiry).toBeGreaterThan(now);
     expect(expiry).toBeLessThan(now + 400 * 24 * 3600);
 
-    // And the approval was actually SUBMITTED, for the same timestamp and the
-    // key that was just stored.
-    await waitFor(() => expect(approveAgent).toHaveBeenCalledTimes(1));
-    expect(approveAgent.mock.calls[0][0]).toMatchObject({
+    // And the wallet signed the approval for the same timestamp and the key
+    // that was stored.
+    expect(signAgentApproval).toHaveBeenCalledTimes(1);
+    expect(signAgentApproval.mock.calls[0][0]).toMatchObject({
       expiry,
       agentAddress: AGENT_ADDRESS,
       root: ROOT,
     });
   });
 
-  it('stores the key BEFORE approving it on-chain', async () => {
-    // Both orders have a failure window; only this one is recoverable. A key
-    // stored without an approval is inert and the next attempt overwrites it,
-    // while approving first and failing to store strands a live, year-long
-    // approval for a key the browser is about to forget — gas spent, and
-    // revocable only by hand in the Boros app.
+  it('stores nothing until the wallet has signed', async () => {
+    // A rejected prompt or a closed tab must leave the working login alone.
+    // The server saves the key before it sends the approval.
     const user = userEvent.setup();
     installWallet();
     server.use(
@@ -178,7 +176,7 @@ describe('BorosAgentSetup', () => {
     renderWithClient(<BorosLogInButton />);
     await user.click(await screen.findByRole('button', { name: 'Log in to trade 0x1111…1111' }));
 
-    await waitFor(() => expect(calls).toEqual(['store', 'approve']));
+    await waitFor(() => expect(calls).toEqual(['sign', 'store']));
   });
 
   it('reports a rejected wallet prompt without leaving the button spinning', async () => {
@@ -188,12 +186,12 @@ describe('BorosAgentSetup', () => {
         throw Object.assign(new Error('User rejected the request'), { code: 4001 });
       }),
     };
-    let rolledBack = false;
+    let stored = false;
     server.use(
       http.get('/api/boros/agent', () => HttpResponse.json(env(status()))),
-      http.post('/api/boros/agent/rollback', () => {
-        rolledBack = true;
-        return HttpResponse.json(NOTHING_TO_RESTORE, { status: 409 });
+      http.put('/api/boros/agent', () => {
+        stored = true;
+        return HttpResponse.json(env(status()));
       }),
     );
     localStorage.setItem('crossex.strategy.v1', JSON.stringify({ address: ROOT, walletUpgraded: true }));
@@ -203,7 +201,7 @@ describe('BorosAgentSetup', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(/rejected/i);
     // Recoverable: the button is live again, not stuck mid-step.
     expect(screen.getByRole('button', { name: 'Log in to trade 0x1111…1111' })).not.toBeDisabled();
-    expect(rolledBack).toBe(false);
+    expect(stored).toBe(false);
   });
 
   it('tells the user when there is no wallet at all, instead of offering a dead button', async () => {
@@ -283,7 +281,7 @@ describe('BorosAgentSetup — no gas balance on the strip', () => {
     await user.click(screen.getByRole('button', { name: 'Log in 0x1111…1111' }));
     await waitFor(() => expect(body).not.toBeNull());
     expect(body).toMatchObject({ root: ROOT, accountId: 0 });
-    await waitFor(() => expect(approveAgent).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(signAgentApproval).toHaveBeenCalledTimes(1));
     localStorage.clear();
   });
 
@@ -340,7 +338,7 @@ describe('BorosAgentSetup — no gas balance on the strip', () => {
       'Your browser wallet is 0x1111…1111. Switch it to 0x3333…3333 to log in.',
     );
     expect(stored).toBe(false);
-    expect(approveAgent).not.toHaveBeenCalled();
+    expect(signAgentApproval).not.toHaveBeenCalled();
     localStorage.clear();
   });
 });
@@ -368,7 +366,7 @@ describe('BorosAgentSetup — the chain decides "logged in"', () => {
     await user.click(await screen.findByRole('button', { name: 'Cancel' }));
     expect(await screen.findByRole('button', { name: 'Log in to trade 0x1111…1111' })).toBeEnabled();
     expect(stored).toBe(false);
-    expect(approveAgent).not.toHaveBeenCalled();
+    expect(signAgentApproval).not.toHaveBeenCalled();
   });
 
   it('does not ask when the other login is already dead', async () => {
@@ -468,91 +466,82 @@ describe('BorosAgentSetup — the chain decides "logged in"', () => {
   });
 });
 
-describe('BorosAgentSetup — a failed approval rolls back', () => {
+describe('BorosAgentSetup — the server decides what a failed approval undoes', () => {
   const OTHER = '0x3333333333333333333333333333333333333333';
   const rejected = () => Object.assign(new Error('User rejected the request'), { code: 4001 });
+  const loggedInOther = () =>
+    http.get('/api/boros/agent', () =>
+      HttpResponse.json(env(status({ configured: true, root: OTHER, rootMasked: '0x3333…3333', approval: 'approved' }))),
+    );
+  beforeEach(() => localStorage.setItem('crossex.strategy.v1', JSON.stringify({ address: ROOT, walletUpgraded: true })));
   afterEach(() => localStorage.clear());
 
-  it('restores the previous login and says it is still logged in', async () => {
+  it('a rejected signature sends nothing: the other login keeps trading', async () => {
     const user = userEvent.setup();
     installWallet();
-    localStorage.setItem('crossex.strategy.v1', JSON.stringify({ address: ROOT, walletUpgraded: true }));
-    approveAgent.mockImplementationOnce(async () => {
+    signAgentApproval.mockImplementationOnce(async () => {
       throw rejected();
     });
-    const order: string[] = [];
+    let stored = false;
     server.use(
-      http.get('/api/boros/agent', () =>
-        HttpResponse.json(env(status({ configured: true, root: OTHER, rootMasked: '0x3333…3333', approval: 'approved' }))),
-      ),
+      loggedInOther(),
       http.put('/api/boros/agent', () => {
-        order.push('store');
+        stored = true;
         return HttpResponse.json(env(status({ configured: true, root: ROOT })));
-      }),
-      http.post('/api/boros/agent/rollback', () => {
-        order.push('rollback');
-        return HttpResponse.json(env(status({ configured: true, root: OTHER, approval: 'approved' })));
       }),
     );
     renderWithClient(<BorosLogInButton />);
     await user.click(await screen.findByRole('button', { name: 'Log in to trade 0x1111…1111' }));
     await user.click(await screen.findByRole('button', { name: 'Log in 0x1111…1111' }));
 
-    expect(await screen.findByRole('alert')).toHaveTextContent(
-      'You rejected the request in your wallet. 0x3333…3333 is still logged in.',
+    expect(await screen.findByRole('alert')).toHaveTextContent(/^You rejected the request in your wallet\.$/);
+    expect(stored).toBe(false);
+    expect(screen.getByRole('button', { name: 'Log in to trade 0x1111…1111' })).toBeEnabled();
+  });
+
+  it('shows the refusal the server sends, including the login it put back', async () => {
+    const user = userEvent.setup();
+    installWallet();
+    const refusal = 'Boros refused the approval: [SIMULATE] AuthInvalidNonce() 0x3333…3333 is still logged in.';
+    server.use(
+      loggedInOther(),
+      http.put('/api/boros/agent', () =>
+        HttpResponse.json(
+          { ok: false, error: { category: 'venue-rejected', message: refusal, retryable: false } },
+          { status: 400 },
+        ),
+      ),
     );
-    expect(order).toEqual(['store', 'rollback']);
+    renderWithClient(<BorosLogInButton />);
+    await user.click(await screen.findByRole('button', { name: 'Log in to trade 0x1111…1111' }));
+    await user.click(await screen.findByRole('button', { name: 'Log in 0x1111…1111' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(refusal);
     expect(screen.queryByText(/^Logged in 0x/)).toBeNull();
     expect(screen.getByRole('button', { name: 'Log in to trade 0x1111…1111' })).toBeEnabled();
   });
 
-  it('names the login the server restored, not the one on screen before', async () => {
+  it.each([
+    ['the connection drops', () => HttpResponse.error()],
+    ['a proxy answers 504 with its own page', () => new HttpResponse('<html>Gateway Timeout</html>', { status: 504 })],
+  ])('when %s, waits for the chain instead of calling it a failure', async (_name, noAnswer) => {
     const user = userEvent.setup();
     installWallet();
-    localStorage.setItem('crossex.strategy.v1', JSON.stringify({ address: ROOT, walletUpgraded: true }));
-    approveAgent.mockImplementationOnce(async () => {
-      throw rejected();
-    });
-    const OLDER = '0x4444444444444444444444444444444444444444';
+    let sent = false;
     server.use(
       http.get('/api/boros/agent', () =>
-        HttpResponse.json(env(status({ configured: true, root: OTHER, rootMasked: '0x3333…3333', approval: 'approved' }))),
+        HttpResponse.json(env(sent ? status({ configured: true, root: ROOT, approval: 'approved' }) : status())),
       ),
-      http.put('/api/boros/agent', () => HttpResponse.json(env(status({ configured: true, root: ROOT })))),
-      http.post('/api/boros/agent/rollback', () =>
-        HttpResponse.json(env(status({ configured: true, root: OLDER, approval: 'approved' }))),
-      ),
-    );
-    renderWithClient(<BorosLogInButton />);
-    await user.click(await screen.findByRole('button', { name: 'Log in to trade 0x1111…1111' }));
-    await user.click(await screen.findByRole('button', { name: 'Log in 0x1111…1111' }));
-
-    expect(await screen.findByRole('alert')).toHaveTextContent(
-      'You rejected the request in your wallet. 0x4444…4444 is still logged in.',
-    );
-  });
-
-  it('with no previous login, a 409 from the rollback is ignored and only the error shows', async () => {
-    const user = userEvent.setup();
-    installWallet();
-    localStorage.setItem('crossex.strategy.v1', JSON.stringify({ address: ROOT, walletUpgraded: true }));
-    approveAgent.mockImplementationOnce(async () => {
-      throw rejected();
-    });
-    let rollbacks = 0;
-    server.use(
-      http.get('/api/boros/agent', () => HttpResponse.json(env(status()))),
-      http.put('/api/boros/agent', () => HttpResponse.json(env(status({ configured: true, root: ROOT })))),
-      http.post('/api/boros/agent/rollback', () => {
-        rollbacks += 1;
-        return HttpResponse.json(NOTHING_TO_RESTORE, { status: 409 });
+      http.put('/api/boros/agent', () => {
+        sent = true;
+        return noAnswer();
       }),
     );
     renderWithClient(<BorosLogInButton />);
     await user.click(await screen.findByRole('button', { name: 'Log in to trade 0x1111…1111' }));
 
-    await waitFor(() => expect(rollbacks).toBe(1));
-    expect(await screen.findByRole('alert')).toHaveTextContent(/^You rejected the request in your wallet\.$/);
+    expect(await screen.findAllByText(/^Logged in 0x1111…1111/)).toHaveLength(2);
+    expect(screen.queryByText(/network error|returned HTTP/)).toBeNull();
   });
 });
 
@@ -635,6 +624,36 @@ describe('BorosAgentSetup — waiting for Boros', () => {
     expect(screen.queryByText(/^Logged in 0x/)).toBeNull();
   });
 
+  it('an older login of the same wallet does not read as the new one', async () => {
+    // The server puts the old login back when Boros does not approve the new
+    // one. Same wallet, but its expiry is the old one.
+    vi.useFakeTimers({ shouldAdvanceTime: true, toFake: ['setTimeout'] });
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    installWallet();
+    seedRoot();
+    const OLD_EXPIRY = Math.floor(Date.now() / 1000) + 5 * 86400;
+    let sent = false;
+    server.use(
+      http.get('/api/boros/agent', () =>
+        HttpResponse.json(
+          env(status({ configured: true, root: ROOT, approval: 'approved', expiry: OLD_EXPIRY })),
+        ),
+      ),
+      http.put('/api/boros/agent', () => {
+        sent = true;
+        return HttpResponse.error();
+      }),
+    );
+    renderWithClient(<BorosLogInButton renew />);
+    await user.click(await screen.findByRole('button', { name: 'Renew login for 0x1111…1111' }));
+    await waitFor(() => expect(sent).toBe(true));
+    for (let i = 0; i < 25 && !screen.queryByText(/not confirmed/); i++) {
+      await vi.advanceTimersByTimeAsync(1500);
+    }
+    expect(await screen.findByText(/Boros has not confirmed yet/)).toBeInTheDocument();
+    expect(screen.queryByText(/^Logged in 0x/)).toBeNull();
+  });
+
   it('labels each step in the order it happens', async () => {
     const user = userEvent.setup();
     let giveAccount: (a: string[]) => void = () => {};
@@ -647,12 +666,10 @@ describe('BorosAgentSetup — waiting for Boros', () => {
     });
     seedRoot();
     let finishStore: () => void = () => {};
-    let finishApprove: () => void = () => {};
+    let finishSign: () => void = () => {};
     let finishRead: () => void = () => {};
     let stored = false;
-    approveAgent.mockImplementationOnce(
-      () => new Promise((r) => (finishApprove = () => r({ txHash: '0xtx' }))),
-    );
+    signAgentApproval.mockImplementationOnce(() => new Promise((r) => (finishSign = () => r(CALLDATA))));
     server.use(
       http.get('/api/boros/agent', async ({ request }) => {
         const fresh = new URL(request.url).searchParams.get('fresh') === '1';
@@ -671,10 +688,10 @@ describe('BorosAgentSetup — waiting for Boros', () => {
 
     expect(await screen.findByRole('button', { name: 'Open your wallet…' })).toBeDisabled();
     giveAccount([ROOT]);
-    expect(await screen.findByRole('button', { name: 'Saving the key on this machine…' })).toBeDisabled();
-    finishStore();
     expect(await screen.findByRole('button', { name: 'Sign in your wallet…' })).toBeDisabled();
-    finishApprove();
+    finishSign();
+    expect(await screen.findByRole('button', { name: 'Sending the approval to Boros…' })).toBeDisabled();
+    finishStore();
     expect(await screen.findByRole('button', { name: 'Waiting for Boros…' })).toBeDisabled();
     finishRead();
     expect(await screen.findAllByText(/^Logged in 0x/)).toHaveLength(2);

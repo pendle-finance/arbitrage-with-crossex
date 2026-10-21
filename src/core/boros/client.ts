@@ -20,6 +20,7 @@ import { spreadName, spreadPlatform } from '../../../web/src/lib/spread';
 import { CoreError } from '../errors';
 import { BOOK_VENUES } from '../estimate/books';
 import { borosInitialMarginUsd } from './opportunities';
+import { extractApiDetail } from './orders';
 import { parseSpreadVenues } from './spread';
 import { normalizeVenue } from './venue';
 
@@ -341,6 +342,54 @@ export async function fetchBorosAgentExpiry(
     throw new CoreError('Boros /agents/expiry-time: unexpected response shape', 'network');
   }
   return expiry;
+}
+
+/** Whether Boros approved a relayed agent approval. A failure may still land
+ * on chain later: Boros's 408 means the tx is still in flight, and its
+ * catch-all 400 "Failed to approve agent: …" covers errors before and after
+ * the send (open-api send-txs.service). */
+export type AgentApprovalOutcome = { ok: true } | { ok: false; message: string; rateLimited: boolean };
+
+/**
+ * POST {gateway}/v1/send-txs/approve — Pendle's relayer submits the root's
+ * signed approveAgent call and pays the gas.
+ *
+ * The server sends it, not the browser: Boros CORS refuses any page origin it
+ * does not list, such as a terminal opened through a load balancer.
+ */
+export async function relayAgentApproval(
+  fetchImpl: FetchLike,
+  approveAgentCalldata: string,
+): Promise<AgentApprovalOutcome> {
+  const path = '/v1/send-txs/approve';
+  const clientTag =
+    'pendle_client=boroscrossex' + clientTagState.version + (clientTagState.active ? '_active' : '');
+  let resp: Awaited<ReturnType<FetchLike>>;
+  try {
+    resp = await fetchImpl(`${BOROS_GATEWAY_BASE_URL}${path}?${clientTag}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ approveAgentCalldata }),
+      // Boros gives up at 40 s on its own. Wait longer, so its answer comes first.
+      signal: AbortSignal.timeout(45_000),
+    });
+  } catch (err) {
+    return { ok: false, message: `Boros ${path} did not answer: ${(err as Error)?.message ?? String(err)}`, rateLimited: false };
+  }
+  const body = await resp.json().catch(() => null);
+  if (resp.ok) {
+    // `error` alone is not a refusal: Boros also fills it on a call that
+    // landed but could not be decoded. Only `reverted` means it did not land.
+    const result = (body as { approveAgentResult?: { status?: string; error?: string } } | null)?.approveAgentResult;
+    if (result?.status !== 'reverted') return { ok: true };
+    return { ok: false, message: `Boros refused the approval: ${result.error ?? 'reverted'}`, rateLimited: false };
+  }
+  const detail = extractApiDetail(body);
+  return {
+    ok: false,
+    message: `Boros ${path} failed (HTTP ${resp.status})${detail ? `: ${detail}` : ''}`,
+    rateLimited: resp.status === 429,
+  };
 }
 
 /** GET {gateway}/v1/markets → normalized markets.

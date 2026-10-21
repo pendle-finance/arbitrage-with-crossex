@@ -11,8 +11,10 @@
  * wallet prompts and an unexplained popup is how people click through things
  * they did not mean to:
  *   1. Connect            — read the address, switch to Arbitrum if needed
- *   2. Approve the agent  — ONE on-chain transaction, signed by the wallet
- *   3. Hand over the key  — POSTed to localhost, stored 0600
+ *   2. Approve the agent  — ONE signature in the wallet
+ *   3. Hand over the key  — the key and the signed approval go to the local
+ *                           server in one PUT; it stores the key 0600 and
+ *                           sends the approval to Boros
  *
  * The generated key never leaves this machine: it goes from `Agent.create` to
  * the local server and nowhere else. It is not logged, not put in a URL, and
@@ -20,7 +22,7 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import type { Hex } from 'viem';
-import { fetchJson, postJson } from '../api/client';
+import { ApiError, fetchJson } from '../api/client';
 import { qk, refreshTelegramFresh, useBorosAgent, useProvisionBorosAgent, useTelegramLinked } from '../api/queries';
 import type { BorosAgentStatus } from '../api/types';
 import { ConnectWalletButton } from '../components/ConnectWalletButton';
@@ -54,12 +56,12 @@ const approvalExpiryAt = (): number => Math.floor(Date.now() / 1000) + APPROVAL_
 const CONFIRM_TRIES = 20;
 const CONFIRM_EVERY_MS = 1500;
 
-type Step = 'idle' | 'connecting' | 'replace' | 'approving' | 'saving' | 'confirming';
+type Step = 'idle' | 'connecting' | 'replace' | 'approving' | 'sending' | 'confirming';
 
 const STEP_LABEL: Record<Exclude<Step, 'idle'>, string> = {
   connecting: 'Open your wallet…',
   replace: 'Waiting for your answer…',
-  saving: 'Saving the key on this machine…',
+  sending: 'Sending the approval to Boros…',
   approving: 'Sign in your wallet…',
   confirming: 'Waiting for Boros…',
 };
@@ -73,13 +75,15 @@ const TELEGRAM_REFRESH_MS = 2_000;
 
 type Confirmed = 'approved' | 'older-server' | 'timeout' | 'unchecked';
 
-async function waitForApproval(root: string): Promise<Confirmed> {
+async function waitForApproval(root: string, expiry: number): Promise<Confirmed> {
   let lastUnknown = false;
   for (let i = 0; i < CONFIRM_TRIES; i++) {
     const s = await fetchJson<BorosAgentStatus>('/boros/agent?fresh=1').catch(() => null);
     if (s?.root && isSameAddress(s.root, root)) {
       if (!('approval' in s)) return 'older-server';
-      if (s.approval === 'approved') return 'approved';
+      // The expiry tells this login from an older one of the same wallet,
+      // which the server puts back when Boros does not approve the new one.
+      if (s.approval === 'approved' && (s.expiry ?? expiry) === expiry) return 'approved';
       lastUnknown = s.approval === 'unknown';
     }
     if (i < CONFIRM_TRIES - 1) await sleep(CONFIRM_EVERY_MS);
@@ -113,8 +117,6 @@ function useBorosLogIn(onDone?: (root: string) => void, expected?: string | null
     setLoginInFlight(true);
     setError(null);
     setNote(null);
-    const prev = status.data?.configured && status.data.root ? status.data.root : null;
-    let provisioned = false;
     try {
       setStep('connecting');
       const wallet = await connectWallet();
@@ -149,28 +151,11 @@ function useBorosLogIn(onDone?: (root: string) => void, expected?: string | null
       // The API module is imported LAZILY: it pulls viem's ABI encoder, and
       // this is a one-time flow most sessions never run, so the main chunk
       // must not pay for a button most users press once.
-      setStep('saving');
-      const { generateAgentKey, approveAgent } = await import('../lib/borosAgentApi');
+      setStep('approving');
+      const { generateAgentKey, signAgentApproval } = await import('../lib/borosAgentApi');
       const { privateKey, address: agentAddress } = generateAgentKey();
       const expiry = approvalExpiryAt();
-
-      // The key is handed over BEFORE the approval is submitted. Both orders
-      // have a failure window, and this is the recoverable one: a key stored
-      // without an approval is inert and the next attempt overwrites it, while
-      // approving first and failing to store would strand a live, year-long
-      // on-chain approval for a key the browser is about to forget — costing
-      // gas, and revocable only by hand in the Boros app. The server reads the
-      // chain, so an inert key shows as "not approved", never as "can trade".
-      await provision.mutateAsync({
-        root: wallet.address,
-        accountId: 0,
-        agentPrivateKey: privateKey as Hex,
-        expiry,
-      });
-      provisioned = true;
-
-      setStep('approving');
-      await approveAgent({
+      const approveAgentCalldata = await signAgentApproval({
         walletClient: wallet.client,
         root: wallet.address,
         accountId: 0,
@@ -178,10 +163,32 @@ function useBorosLogIn(onDone?: (root: string) => void, expected?: string | null
         expiry,
       });
 
+      // The key and the signed approval go to the local server in ONE request,
+      // after the signature: a rejected prompt or a closed tab leaves the
+      // working login alone. The server saves the key, sends the approval, and
+      // keeps the new login only if Boros approves it. The browser cannot send the
+      // approval itself: Boros CORS refuses a page served from any origin it
+      // does not list, such as a terminal behind a load balancer.
+      setStep('sending');
+      try {
+        await provision.mutateAsync({
+          root: wallet.address,
+          accountId: 0,
+          agentPrivateKey: privateKey as Hex,
+          expiry,
+          approveAgentCalldata,
+        });
+      } catch (err) {
+        void qc.invalidateQueries({ queryKey: qk.borosAgent });
+        // `retryable` here means the server never answered: the connection
+        // dropped, or a proxy sent its own error page. The server still acts on
+        // Boros's answer, so read the chain below instead of guessing.
+        if (!(err instanceof ApiError && err.retryable)) throw err;
+      }
+
       // Not done until Boros shows the approval.
-      provisioned = false;
       setStep('confirming');
-      const confirmed = await waitForApproval(wallet.address);
+      const confirmed = await waitForApproval(wallet.address, expiry);
       void qc.invalidateQueries({ queryKey: qk.borosAgent });
       if (confirmed === 'timeout') {
         setError('Boros has not confirmed yet. If Log in still shows in a minute, log in again.');
@@ -200,16 +207,7 @@ function useBorosLogIn(onDone?: (root: string) => void, expected?: string | null
       tracked?.followBrowserWallet(wallet.address);
       onDone?.(wallet.address);
     } catch (err) {
-      // The server restores its saved login, which can be older than `prev`.
-      let restored: string | null = null;
-      if (provisioned) {
-        restored = await postJson<BorosAgentStatus>('/boros/agent/rollback', {}).then(
-          (back) => back?.root || prev,
-          () => null,
-        );
-        void qc.invalidateQueries({ queryKey: qk.borosAgent });
-      }
-      setError(`${describeWalletError(err)}${restored ? ` ${short(restored)} is still logged in.` : ''}`);
+      setError(describeWalletError(err));
     } finally {
       setStep('idle');
       setLoginInFlight(false);

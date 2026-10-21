@@ -1,14 +1,13 @@
 /**
- * Delegated-agent provisioning against the Boros REST API directly — no
- * `@pendle/boros-sdk-public`.
+ * Delegated-agent provisioning for Boros — no `@pendle/boros-sdk-public`.
  *
  * Two steps, and only ONE wallet prompt:
  *
  *   1. Mint an agent keypair locally, from the browser's CSPRNG.
- *   2. Have the ROOT wallet EIP-712-sign an `ApproveAgentMessage`, encode it
- *      into the router's relayable `approveAgent(req, signature)` overload, and
- *      POST it to `/v1/send-txs/approve` — where Pendle's bot submits it and
- *      pays the gas, so the user needs no ETH on Arbitrum.
+ *   2. Have the ROOT wallet EIP-712-sign an `ApproveAgentMessage` and encode it
+ *      into the router's relayable `approveAgent(req, signature)` overload. The
+ *      local server POSTs that to `/v1/send-txs/approve`, where Pendle's bot
+ *      submits it and pays the gas, so the user needs no ETH on Arbitrum.
  *
  * ⚠ THE KEY IS RANDOM, not derived from a wallet signature. The SDK derived it
  * from a signed "welcome message", which reads like a recoverable derivation
@@ -23,9 +22,6 @@
 import { BOROS_NETWORK } from './borosNetwork';
 import { encodeFunctionData, toHex, type Address, type Hex, type WalletClient } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
-
-/** The documented production host (the OpenAPI spec's only `servers` entry). */
-export const BOROS_API_BASE = BOROS_NETWORK.apiBase;
 
 /** Arbitrum One, and the router the approval is bound to. Both are part of the
  * EIP-712 domain, so a wrong value yields a signature the contract rejects
@@ -109,26 +105,6 @@ export function generateAgentKey(): GeneratedAgent {
  */
 const approvalNonce = (): bigint => BigInt(Date.now()) * 1000n;
 
-export class BorosApiError extends Error {}
-
-async function postJson<T>(path: string, body: unknown): Promise<T> {
-  const resp = await fetch(`${BOROS_API_BASE}${path}`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  const json = (await resp.json().catch(() => null)) as
-    | (T & { message?: string | string[]; error?: string })
-    | null;
-  if (!resp.ok) {
-    const detail = json?.message ?? json?.error;
-    throw new BorosApiError(
-      `Boros ${path} failed (HTTP ${resp.status})${detail ? `: ${Array.isArray(detail) ? detail.join('; ') : detail}` : ''}`,
-    );
-  }
-  return json as T;
-}
-
 export interface ApproveAgentInput {
   walletClient: WalletClient;
   /** The account being delegated — the connected wallet's address. */
@@ -143,16 +119,14 @@ export interface ApproveAgentInput {
 }
 
 /**
- * Approve the agent on-chain, submitted by Pendle's relayer.
+ * Have the root wallet sign the agent's approval, and return the router call
+ * that carries it. The local server sends it to Pendle's relayer.
  *
- * Returns once the endpoint answers, and throws on a refusal it reports. The
- * calldata is NOT checked here or known to be checked upstream, so nothing
- * catches a malformed encoding before it is broadcast — what protects the user
- * is the signature itself: it commits to this exact message under the router's
- * EIP-712 domain, so calldata that does not match is rejected on-chain rather
- * than approving something else.
+ * What protects the user is the signature itself: it commits to this exact
+ * message under the router's EIP-712 domain, so calldata that does not match
+ * is rejected rather than approving something else.
  */
-export async function approveAgent(input: ApproveAgentInput): Promise<{ txHash?: string }> {
+export async function signAgentApproval(input: ApproveAgentInput): Promise<Hex> {
   const accountId = input.accountId ?? 0;
   const message = {
     root: input.root,
@@ -169,16 +143,9 @@ export async function approveAgent(input: ApproveAgentInput): Promise<{ txHash?:
     primaryType: 'ApproveAgentMessage',
     message,
   });
-  const approveAgentCalldata = encodeFunctionData({
+  return encodeFunctionData({
     abi: APPROVE_AGENT_ABI,
     functionName: 'approveAgent',
     args: [message, signature],
   });
-  const res = await postJson<{ approveAgentResult?: { txHash?: string; error?: string } }>(
-    '/v1/send-txs/approve',
-    { approveAgentCalldata },
-  );
-  const result = res?.approveAgentResult;
-  if (result?.error) throw new BorosApiError(`Boros refused the approval: ${result.error}`);
-  return { txHash: result?.txHash };
 }
