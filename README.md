@@ -419,19 +419,6 @@ yarn test:web    # frontend component tests (jsdom + msw)
 yarn verify      # typecheck + all of the above ("check" is shadowed by a yarn builtin)
 ```
 
-**Live trade suite** (places REAL ~$20 orders on your REAL account; run only deliberately):
-
-```bash
-LIVE_TRADE_ACK="I understand real orders will be placed with real money" yarn test:live
-yarn live:cleanup   # standalone cleanup if a run dies (only touches attributable test orders)
-```
-
-Interlocks: the env flag + the literal ack sentence + a hard $100/order ceiling in code +
-a preflight that refuses to run if the test symbols carry ANY existing position/order +
-a cumulative run budget. Every order is tagged `lt<runId>_…` so cleanup is precise; a
-markdown run report (orders, fees actually paid, order-state strings observed) is written
-even on failure.
-
 ## Symbol format
 
 `{EXCHANGE}_{BUSINESS}_{BASE}_{QUOTE}` — perps are `business_type = FUTURE`, e.g.
@@ -443,7 +430,7 @@ curl -s "https://api.gateio.ws/api/v4/crossex/rule/symbols" | jq '.[] | select(.
 
 ## How it works / internals
 
-- `src/core/` — framework-free domain library shared by the server, the live suite, and tests:
+- `src/core/` — framework-free domain library shared by the server and tests:
   - `clients.ts` — `.env` → authenticated `ApiClient` + typed `CrossExApi`/`SpotApi`/`FuturesApi`
     (HMAC-SHA512 signing via the SDK); `makeClients(creds?)` supports credential hot-swap;
     `makeClientsIfConfigured()` lets the server boot with no keys (first-run setup).
