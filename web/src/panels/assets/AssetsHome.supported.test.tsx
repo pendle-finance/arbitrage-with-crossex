@@ -80,6 +80,7 @@ describe('AssetsHome with a held coin the terminal does not support', () => {
       ...baseHandlers(),
       http.get('/api/credentials', () => HttpResponse.json(env({ configured: true, keyMasked: 'gk_****abcd' }))),
       http.get('/api/fees', () => HttpResponse.json(env<VenueFees[]>([]))),
+      http.get('/api/asset-prefs/:book', () => HttpResponse.json(env({ sinceByAsset: {}, exclusions: {}, legSince: {} }))),
       http.get('/api/asset-view/:address', ({ request }) => {
         requested.push(new URL(request.url));
         return HttpResponse.json(env(assetView));

@@ -213,9 +213,9 @@ describe('case 6: rule A1 picks the date for a perps-only unit', () => {
   it.each([
     ['the case 6 book: a spread at 27 Nov only, D = 25 Dec', [NOV], NOV],
     ['a spread at D wins over an earlier one', [NOV, DEC], DEC],
-    ['the latest spread before D, not one after it', [NOV, FEB], NOV],
+    ['#54: the card date D is not listed, so the latest listed date', [NOV, FEB], FEB],
     ['the latest of two before D', [SOON, NOV], NOV],
-    ['only after D: the soonest', [FEB, FEB + 90 * DAY], FEB],
+    ['#54: only dates after D listed, so the latest of them', [FEB, FEB + 90 * DAY], FEB + 90 * DAY],
   ])('%s', async (_label, listed, want) => {
     listSpreads(listed.map((m) => spreadRow(m)));
     const user = userEvent.setup();
@@ -346,46 +346,44 @@ describe('an open stops at what the venue lacks (owner 2026-10-16)', () => {
       [perp('BTC', 'GATE', 'LONG', perps), perp('BTC', 'HYPERLIQUID', 'SHORT', perps)],
       [leg('BTC', 'GATE', 'LONG', 3, NOV), leg('BTC', 'HYPERLIQUID', 'SHORT', 3, DEC)],
     );
-  const reason = `Hyperliquid already holds 3 BTC at ${fmtDateShort(DEC)}`;
+  const reason = (close: number) => `Gate LONG holds 3 BTC at ${fmtDateShort(NOV)}. Close ${close} BTC of it to open here.`;
 
-  it('perps 3: the card says why, and offers no HL open', async () => {
+  it('perps 3: the card takes the later HL leg (score date term), says why and what to close (#48), and offers no Gate open', async () => {
     const user = userEvent.setup();
     renderCard(capBook(3));
     await showPairs(user);
-    expect(await screen.findByText(reason)).toBeTruthy();
+    expect(await screen.findByText(reason(3))).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Open leg' })).toBeNull();
     expect(screen.queryByRole('button', { name: /^Open (both )?Boros leg/ })).toBeNull();
   });
 
-  it('perps 3: a held leg reads its size, a missing one held / target', async () => {
+  it('perps 3: a held leg reads its size, a missing one held / target (the card holds the later HL leg)', async () => {
     const user = userEvent.setup();
     renderCard(capBook(3));
     await showPairs(user);
     const row = (venue: string) => screen.getAllByRole('row').find((r) => (r.textContent ?? '').startsWith(`${venue}Boros`));
-    await screen.findByText(reason);
-    expect(row('Gate')?.textContent).toMatch(/3 BTC/);
-    expect(row('Gate')?.textContent).not.toMatch(/\//);
-    // Held elsewhere, so nothing to open here: the target still shows.
-    expect(row('Hyperliquid')?.textContent).toMatch(/0 \/ 3 BTC/);
-    expect(row('Hyperliquid')?.textContent).not.toMatch(/open /);
+    await screen.findByText(reason(3));
+    expect(row('Hyperliquid')?.textContent).toMatch(/3 BTC/);
+    expect(row('Hyperliquid')?.textContent).not.toMatch(/\//);
+    expect(row('Gate')?.textContent).toMatch(/0 \/ 3 BTC/);
+    expect(row('Gate')?.textContent).not.toMatch(/\/ 3 BTCopen /);
   });
 
-  it('perps 4: HL opens the 1 BTC it lacks, at the held single date', async () => {
+  it('perps 4: Gate opens the 1 BTC it lacks, at the held single date; the line names the 2 BTC to close (#48)', async () => {
     const user = userEvent.setup();
     renderCard(capBook(4));
     await showPairs(user);
-    expect(await screen.findByText(reason)).toBeTruthy();
+    expect(await screen.findByText(reason(2))).toBeTruthy();
     const opens = screen.getAllByRole('button', { name: 'Open leg' });
     expect(opens.map((b) => b.getAttribute('title'))).toEqual([
-      'Open only the Hyperliquid SHORT Boros leg, at 1 BTC',
       'Open only the Gate LONG Boros leg, at 1 BTC',
+      'Open only the Hyperliquid SHORT Boros leg, at 1 BTC',
     ]);
-    // The 3 BTC card: HL needs 3 here but lacks only 1, so the row says both.
-    const hl = screen.getAllByRole('row').find((r) => /^HyperliquidBoros.*0 \/ 3 BTC/.test(r.textContent ?? ''));
-    expect(hl?.textContent).toMatch(/0 \/ 3 BTCopen 1 BTC/);
+    const gate = screen.getAllByRole('row').find((r) => /^GateBoros.*0 \/ 3 BTC/.test(r.textContent ?? ''));
+    expect(gate?.textContent).toMatch(/0 \/ 3 BTCopen 1 BTC/);
     await user.click(opens[0]);
     await waitFor(() => expect(flow?.borosOpenPrefill).not.toBeNull());
-    expect(flow?.borosOpenPrefill).toMatchObject({ longVenue: null, shortVenue: 'HYPERLIQUID', maturity: NOV, sizeBase: 1, size: 80_000 });
+    expect(flow?.borosOpenPrefill).toMatchObject({ longVenue: 'GATE', shortVenue: null, maturity: DEC, sizeBase: 1, size: 80_000 });
   });
 
   // Live 16 Oct: a $0.01 cut said "already holds" and "open 0.143" under "0 / 0.143".

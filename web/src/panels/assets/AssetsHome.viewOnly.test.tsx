@@ -81,6 +81,7 @@ function serve(address: string, notionalUsd: number) {
       HttpResponse.json(env(agentStatus({ configured: true, root: ROOT, rootMasked: '0x1111…1111' }))),
     ),
     http.get('/api/fees', () => HttpResponse.json(env<VenueFees[]>([]))),
+    http.get('/api/asset-prefs/:book', () => HttpResponse.json(env({ sinceByAsset: {}, exclusions: {}, legSince: {} }))),
     http.get('/api/asset-view/:address', () => HttpResponse.json(env(view(notionalUsd)))),
     ...baseHandlers(),
   );

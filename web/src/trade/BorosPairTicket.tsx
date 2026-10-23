@@ -24,7 +24,7 @@
  */
 import { ChevronRight } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
-import { useTradeFlowOptional } from './TradeFlow';
+import { useTradeFlowOptional, type BorosOpenPrefill } from './TradeFlow';
 import {
   useBorosAgent,
   useBorosPairContext,
@@ -95,6 +95,59 @@ function floorTo1Sf(x: number): number {
 /** Client order ids must survive a lost response so a resend cannot double-fill,
  * but must be fresh for a genuinely new order. Keyed on the intent below. */
 const newOrderIds = () => [`a-${uuid()}`, `b-${uuid()}`];
+
+export type OpenMarketsPick = {
+  long: BorosPairMarketRow | undefined;
+  short: BorosPairMarketRow | undefined;
+  spread: BorosPairMarketRow | undefined;
+  onlyOne: boolean;
+};
+
+export function pickOpenMarkets(
+  markets: readonly BorosPairMarketRow[],
+  spreadMarkets: readonly BorosPairMarketRow[],
+  prefill: Pick<BorosOpenPrefill, 'base' | 'longVenue' | 'shortVenue' | 'maturity'>,
+): OpenMarketsPick {
+  const anyTerm = (venue: string | null) =>
+    venue === null
+      ? []
+      : markets.filter((m) => m.venue.toUpperCase() === venue.toUpperCase() && m.base.toUpperCase() === prefill.base.toUpperCase());
+  const at = (venue: string | null) => anyTerm(venue).filter((m) => prefill.maturity === undefined || m.maturity === prefill.maturity);
+  const soonest = (ms: BorosPairMarketRow[]): BorosPairMarketRow | undefined => [...ms].sort((a, b) => a.maturity - b.maturity)[0];
+  const shared = (ls: BorosPairMarketRow[], ss: BorosPairMarketRow[]) => {
+    const shortMaturities = new Set(ss.map((m) => m.maturity));
+    const l = soonest(ls.filter((m) => shortMaturities.has(m.maturity)));
+    return { long: l, short: l ? ss.find((m) => m.maturity === l.maturity) : undefined };
+  };
+  const longAt = at(prefill.longVenue);
+  const shortAt = at(prefill.shortVenue);
+  const onlyOne = (prefill.longVenue === null) !== (prefill.shortVenue === null);
+  let long: BorosPairMarketRow | undefined;
+  let short: BorosPairMarketRow | undefined;
+  if (longAt.length > 0 && shortAt.length > 0) {
+    ({ long, short } = shared(longAt, shortAt));
+  } else if (!onlyOne) {
+    ({ long, short } = shared(
+      longAt.length > 0 ? longAt : anyTerm(prefill.longVenue),
+      shortAt.length > 0 ? shortAt : anyTerm(prefill.shortVenue),
+    ));
+  } else {
+    long = soonest(longAt.length > 0 ? longAt : anyTerm(prefill.longVenue));
+    short = soonest(shortAt.length > 0 ? shortAt : anyTerm(prefill.shortVenue));
+  }
+  const sameVenue = (a: string, b: string | null) => b !== null && a.toUpperCase() === b.toUpperCase();
+  const spreads = onlyOne
+    ? []
+    : spreadMarkets.filter(
+        (m) =>
+          m.spreadVenues !== null &&
+          m.base.toUpperCase() === prefill.base.toUpperCase() &&
+          (prefill.maturity === undefined || m.maturity === prefill.maturity) &&
+          [prefill.longVenue, prefill.shortVenue].every((v) => (m.spreadVenues ?? []).some((k) => sameVenue(k, v))),
+      );
+  const spread = soonest(spreads.filter((m) => !m.closeOnly));
+  return { long, short, spread, onlyOne };
+}
 
 /** `active` = the ticket is the visible venue. A hidden-but-mounted ticket
  * (see TradeRail) keeps its report and completion state but stops polling the
@@ -200,50 +253,8 @@ export function BorosPairTicket({
     // ticket) was dropped and the ticket just sat empty. `marketsReady` in the
     // deps re-runs it the moment the list is there.
     if (!openNonce || !openPrefill || !marketsReady) return;
-    const at = (venue: string | null) =>
-      venue === null
-        ? []
-        : markets.filter(
-            (m) =>
-              m.venue.toUpperCase() === venue.toUpperCase() &&
-              m.base.toUpperCase() === openPrefill.base.toUpperCase() &&
-              // A venue lists the same base at several maturities; picking the
-              // wrong one gives two legs that cannot pair with each other.
-              (openPrefill.maturity === undefined || m.maturity === openPrefill.maturity),
-          );
-    const longAt = at(openPrefill.longVenue);
-    const shortAt = at(openPrefill.shortVenue);
-    /**
-     * ⚠ Resolve the two legs TOGETHER, on a maturity they SHARE.
-     *
-     * Taking each leg's first match independently is a bug the caller cannot
-     * fix from outside: the cue that opens a card's missing Boros legs has no
-     * maturity to send (that card has no Boros legs, so its maturity is the 0
-     * sentinel), and the venues then land wherever their own list order puts
-     * them. Observed live: Gate lists exactly one ETH market (25 Sep) while
-     * Hyperliquid lists 25 Dec FIRST — so the ticket armed Gate-Sep against
-     * HL-Dec, a pair that cannot trade. Each leg then filtered the other out
-     * of its own dropdown and the ticket reported "different maturity" about
-     * a pair the user never chose.
-     *
-     * The intersection is both the fix and the honest answer: when the two
-     * venues share no maturity there is no pair to arm, and leaving the legs
-     * unresolved beats arming an impossible one.
-     *
-     * Soonest shared maturity wins — the nearest expiry is the liquid one.
-     */
-    type Market = (typeof markets)[number];
-    const soonest = (ms: Market[]): Market | undefined =>
-      [...ms].sort((a, b) => a.maturity - b.maturity)[0];
-    let long: Market | undefined;
-    let short: Market | undefined;
-    /**
-     * One venue = one leg. A missing-leg row asks for exactly the leg it is
-     * missing, so opening a PAIR here would silently create a second position
-     * the card never asked for — and on a card that is already lopsided, that
-     * is the opposite of the repair the user clicked.
-     */
-    const onlyOne = (openPrefill.longVenue === null) !== (openPrefill.shortVenue === null);
+    const { long, short, spread, onlyOne } = pickOpenMarkets(markets, spreadMarkets, openPrefill);
+    const sameVenue = (a: string, b: string | null) => b !== null && a.toUpperCase() === b.toUpperCase();
     const anyTerm = (venue: string | null) =>
       venue === null
         ? []
@@ -252,58 +263,6 @@ export function BorosPairTicket({
               m.venue.toUpperCase() === venue.toUpperCase() &&
               m.base.toUpperCase() === openPrefill.base.toUpperCase(),
           );
-    const shared = (ls: Market[], ss: Market[]) => {
-      const shortMaturities = new Set(ss.map((m) => m.maturity));
-      const l = soonest(ls.filter((m) => shortMaturities.has(m.maturity)));
-      return { long: l, short: l ? ss.find((m) => m.maturity === l.maturity) : undefined };
-    };
-    if (longAt.length > 0 && shortAt.length > 0) {
-      ({ long, short } = shared(longAt, shortAt));
-    } else if (!onlyOne) {
-      // A PAIR was asked for, but one venue lists nothing at the requested
-      // maturity. Falling through to "each side's soonest" armed the other
-      // venue at the requested term against this one at ANY term — the very
-      // cross-maturity pair the intersection above exists to prevent. Re-
-      // resolve both sides on a maturity they share; none shared ⇒ no pair.
-      ({ long, short } = shared(
-        longAt.length > 0 ? longAt : anyTerm(openPrefill.longVenue),
-        shortAt.length > 0 ? shortAt : anyTerm(openPrefill.shortVenue),
-      ));
-    } else {
-      // Single-leg prefills: only one side was asked for, so there is nothing
-      // to agree with and the soonest at that venue is the right default.
-      // If the asked-for maturity is not listed at this venue at all, the
-      // hedge is still perp↔YU on ONE venue and the term is the user's to
-      // pick — arm the venue's soonest market rather than an empty dropdown
-      // (the leg is missing; an unarmed ticket is not the safer state).
-      long = soonest(longAt.length > 0 ? longAt : anyTerm(openPrefill.longVenue));
-      short = soonest(shortAt.length > 0 ? shortAt : anyTerm(openPrefill.shortVenue));
-    }
-    /**
-     * ⚠ Always ASSIGN, never "assign if found".
-     *
-     * These used to be `if (long) setMarketA(...)`, which left a previous
-     * prefill's market in place whenever the new one resolved to nothing. A
-     * stale leg is not a harmless leftover here: each leg filters the other's
-     * dropdown by collateral and maturity, so one leftover 25 Dec market
-     * narrowed the other leg to the handful that could pair with IT — the
-     * ticket looked broken, showing one wrong-maturity option and a caption
-     * blaming a pair the user never chose. Clearing to null is always right:
-     * a market that could not be resolved is one this ticket must not claim.
-     */
-    const sameVenue = (a: string, b: string | null) => b !== null && a.toUpperCase() === b.toUpperCase();
-    const spreads = onlyOne
-      ? []
-      : spreadMarkets.filter(
-          (m) =>
-            m.spreadVenues !== null &&
-            m.base.toUpperCase() === openPrefill.base.toUpperCase() &&
-            (openPrefill.maturity === undefined || m.maturity === openPrefill.maturity) &&
-            [openPrefill.longVenue, openPrefill.shortVenue].every((v) => (m.spreadVenues ?? []).some((k) => sameVenue(k, v))),
-        );
-    // A close-only or paused spread cannot open, so the pair is armed as if
-    // there were none: on its two singles.
-    const spread = soonest(spreads.filter((m) => !m.closeOnly));
     if (spread?.spreadVenues) {
       setMarketA(spread.marketId);
       setMarketB(null);

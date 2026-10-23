@@ -78,6 +78,8 @@ export function ClosePairForm({
   const qtyEps = Math.max(1e-9, maxCloseQty * 1e-7);
   const qtyInvalid =
     qtyStr.trim() === '' || !Number.isFinite(qtyNum) || qtyNum <= 0 || qtyNum > maxCloseQty + qtyEps;
+  const atMax = qtyNum >= maxCloseQty - qtyEps;
+  const closeQtyOf = (legQty: number) => (atMax ? legQty : Math.min(qtyNum, legQty));
   // null, not [] — ExecuteControl disables on `!actions`, and an empty array
   // is truthy, so [] would leave the button live with nothing to send.
   const actions: ActionInput[] | null =
@@ -94,8 +96,8 @@ export function ClosePairForm({
           // typed size can be the whole of the smaller leg and only part of
           // the larger one, and a qty-less action there would close the
           // larger leg entirely — leaving the difference naked.
-          ...(l.partial || Math.min(qtyNum, l.qty) < l.qty - Math.max(1e-9, l.qty * 1e-7)
-            ? { qty: String(Math.min(qtyNum, l.qty)) }
+          ...(l.partial || closeQtyOf(l.qty) < l.qty - Math.max(1e-9, l.qty * 1e-7)
+            ? { qty: fieldValue(closeQtyOf(l.qty)) }
             : {}),
         }))
       : null;
@@ -142,7 +144,7 @@ export function ClosePairForm({
           const live = livePositions?.get(l.symbol);
           const held = live ? Math.abs(Number(live.positionQty)) : null;
           const { quote } = parseSymbol(l.symbol);
-          const slice = held !== null && l.qty < held * 0.9995;
+          const slice = l.partial === true;
           return (
             <LegCard
               key={l.symbol}
