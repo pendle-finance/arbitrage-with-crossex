@@ -1157,7 +1157,8 @@ export function evaluatePairGate(input: EvaluatePairInput): PairGate {
   // cross margin in the collateral token (borosApi.autoTopUpCalldata). An
   // opening must afford it on top of the legs' margin, or `payTreasury`'s
   // strict margin check refuses the whole batch at the venue. A close tops up
-  // only at gas debt (the `reducing` floor in autoTopUpCalldata).
+  // at gas debt (the `reducing` floor in autoTopUpCalldata), or after the
+  // relayer refuses it for gas, which it cannot know here.
   const gasBalance = input.account.gasBalanceUsd;
   const topUpBelowUsd = sim.intent === 'close' ? 0 : MIN_GAS_BALANCE_USD;
   const autoTopUpUsd =

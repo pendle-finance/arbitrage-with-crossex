@@ -18,7 +18,7 @@ import {
   usdCentsToCollateralWei,
   type ApiFetch,
 } from '../../src/core/boros/borosApi';
-import type { BorosMarketOrderRequest, PlaceOrdersOptions } from '../../src/core/boros/orders';
+import { classifyLegFailure, type BorosMarketOrderRequest, type PlaceOrdersOptions } from '../../src/core/boros/orders';
 import { submitBorosRoll } from '../../src/core/boros/rollover';
 
 const ROOT = '0x9dcf85824e024fea9e3ef583dccbea68edbc37b8' as const;
@@ -42,6 +42,10 @@ function fakeApi(
     /** A non-2xx HTTP response the ORDER submission answers with, so `call`
      * throws a CoreError carrying the status — the 4xx-vs-5xx split. */
     submitHttp?: { status: number; body?: unknown };
+    /** Like `submitHttp`, for the FIRST order submission only. */
+    submitHttpOnce?: { status: number; body?: unknown };
+    /** Body `/send-txs/trace` answers with, per (agent, nonce) body. */
+    trace?: (body: Record<string, unknown>) => unknown;
     /** Body the place-order calldata builder answers with, to drive the
      * "returned no calldata" refusal before anything reaches the chain. */
     orderBuildReturns?: unknown;
@@ -148,8 +152,16 @@ function fakeApi(
       if (over.submitHttp) {
         return { ok: false, status: over.submitHttp.status, json: async () => over.submitHttp!.body ?? {} };
       }
+      if (over.submitHttpOnce) {
+        const once = over.submitHttpOnce;
+        over.submitHttpOnce = undefined;
+        return { ok: false, status: once.status, json: async () => once.body ?? {} };
+      }
       if (over.submit) return ok(over.submit(body));
       return ok(datas.map((_, i) => ({ txHash: '0xtx', index: i, status: 'success' })));
+    }
+    if (path.startsWith('/v1/send-txs/trace') && over.trace) {
+      return ok(over.trace(body));
     }
     if (path.startsWith('/v1/send-txs/tx-status-with-events')) {
       return ok(over.status ?? { status: 'success', statuses: [] });
@@ -1367,6 +1379,157 @@ describe('makeBorosApiOrderClient — a refusal before the chain never reads as 
     await expect(
       client(api).placeMarketOrders([leg(), leg({ marketId: BN, direction: 'long' })]),
     ).rejects.toThrow(/503/);
+  });
+});
+
+/**
+ * A send whose answer never came back (a 408, a 5xx, a reply with no
+ * transaction) is looked up in Boros's trace by its nonce before the
+ * terminal says anything. A 408 used to read as a refusal, so the trader was
+ * told nothing traded while the relayer was still sending it.
+ */
+describe('makeBorosApiOrderClient — an unsure send is traced', () => {
+  const MARKET_ACC = packMarketAcc(ROOT, 0, 2, CROSS_MARKET_ID).toLowerCase();
+  const PENDING = { message: 'submission is still being sent — do not resubmit; poll /trace (submissionId=abc)' };
+  const traces = (api: ReturnType<typeof fakeApi>) => api.calls.filter((c) => c.path === '/v1/send-txs/trace');
+  const pair = () => [leg(), leg({ marketId: BN, direction: 'long' })];
+
+  it('reads each leg\'s fill off the traced transaction, by this account, market and side', async () => {
+    const api = fakeApi({
+      submitHttp: { status: 408, body: PENDING },
+      trace: () => ({ submissionStatus: 'PROCESSED', nonceStatus: 'PROCESSED', result: { txHash: '0xtraced' } }),
+      status: {
+        status: 'success',
+        statuses: [
+          // Another signer's call merged into the same transaction.
+          { index: 0, status: 'success', marketOrdersExecuted: [{ marketId: HL, side: 1, size: parseUnits('3', 18).toString(), user: '0xother' }] },
+          { index: 1, status: 'success', marketOrdersExecuted: [{ marketId: HL, side: 1, size: parseUnits('10', 18).toString(), user: MARKET_ACC }] },
+          { index: 2, status: 'success', marketOrdersExecuted: [{ marketId: BN, side: 0, size: parseUnits('4', 18).toString(), user: MARKET_ACC }] },
+        ],
+      },
+    });
+    const fills = await client(api).placeMarketOrders(pair());
+    expect(fills.map((f) => f.filledSize)).toEqual([10, 4]);
+    expect(fills[0].failure).toBeNull();
+    expect(fills[1].failure?.code).toBe('insufficient-depth');
+    // Traced by the agent and each leg's own nonce.
+    const [first] = traces(api);
+    expect(first.body.agent).toBe(privateKeyToAccount(AGENT_KEY).address);
+    expect(typeof first.body.nonce).toBe('string');
+  });
+
+  it('says a leg did not trade when the traced transaction holds no fill for it', async () => {
+    const api = fakeApi({
+      submitHttp: { status: 503 },
+      trace: () => ({ submissionStatus: 'PROCESSED', result: { txHash: '0xtraced' } }),
+      status: { status: 'success', statuses: [{ index: 0, status: 'success', marketOrdersExecuted: [] }] },
+    });
+    const [fill] = await client(api).placeMarketOrders([leg()]);
+    expect(fill.filledSize).toBe(0);
+    expect(fill.failure?.message).toBe('Boros sent 0xtraced, and this leg did not trade in it.');
+  });
+
+  it('waits out PROCESSING, then reads the transaction', async () => {
+    const answers = ['PROCESSING', 'PROCESSING', 'PROCESSED'];
+    const api = fakeApi({
+      submitHttp: { status: 408, body: PENDING },
+      trace: () => ({ submissionStatus: answers.shift() ?? 'PROCESSED', result: { txHash: '0xtraced' } }),
+      status: { status: 'success', statuses: [{ index: 0, status: 'success', marketOrdersExecuted: [{ marketId: HL, side: 1, size: parseUnits('10', 18).toString(), user: MARKET_ACC }] }] },
+    });
+    const [fill] = await client(api).placeMarketOrders([leg()]);
+    expect(fill.filledSize).toBe(10);
+    expect(traces(api)).toHaveLength(3);
+  });
+
+  it('reports every leg not sent when Boros marks the batch SEND_FAILED', async () => {
+    const api = fakeApi({ submitHttp: { status: 503 }, trace: () => ({ submissionStatus: 'SEND_FAILED' }) });
+    const fills = await client(api).placeMarketOrders(pair());
+    expect(fills.every((f) => f.failure?.code === 'rejected' && f.filledSize === 0)).toBe(true);
+  });
+
+  it('reports a leg not sent when its call has no transaction', async () => {
+    const api = fakeApi({ submitHttp: { status: 408, body: PENDING }, trace: () => ({ submissionStatus: 'PROCESSED' }) });
+    const fills = await client(api).placeMarketOrders(pair());
+    expect(fills.every((f) => f.failure?.code === 'rejected')).toBe(true);
+  });
+
+  it('keeps a 408 UNKNOWN, never a refusal, when the trace never settles', async () => {
+    const api = fakeApi({ submitHttp: { status: 408, body: PENDING }, trace: () => ({ submissionStatus: 'PROCESSING' }) });
+    const err = await client(api).placeMarketOrders(pair()).catch((e: unknown) => e);
+    expect(classifyLegFailure(err)).toBe('unknown');
+    expect(traces(api)).toHaveLength(10);
+  });
+
+  it('traces a reply that carries no transaction hash', async () => {
+    const api = fakeApi({
+      submit: (body) => (body.datas as unknown[]).map(() => ({})),
+      trace: () => ({ submissionStatus: 'PROCESSED', result: { txHash: '0xtraced' } }),
+      status: { status: 'success', statuses: [{ index: 0, status: 'success', marketOrdersExecuted: [{ marketId: HL, side: 1, size: parseUnits('10', 18).toString(), user: MARKET_ACC }] }] },
+    });
+    const [fill] = await client(api).placeMarketOrders([leg()]);
+    expect(fill.filledSize).toBe(10);
+  });
+
+  it('calls two legs on one market and side unknown, since their fills cannot be told apart', async () => {
+    const api = fakeApi({
+      submitHttp: { status: 408, body: PENDING },
+      trace: () => ({ submissionStatus: 'PROCESSED', result: { txHash: '0xtraced' } }),
+      status: { status: 'success', statuses: [{ index: 0, status: 'success', marketOrdersExecuted: [] }] },
+    });
+    const fills = await client(api).placeMarketOrders([leg(), leg({ clientOrderId: 'b' })]);
+    expect(fills.every((f) => f.failure?.code === 'unknown')).toBe(true);
+  });
+});
+
+/**
+ * The relayer charges gas before it sends and refuses a batch the balance
+ * cannot cover. A close tops up only at debt, so a balance of a few cents
+ * was refused on every retry.
+ */
+describe('makeBorosApiOrderClient — a send refused for gas goes once more with a top-up', () => {
+  const NO_GAS = { message: 'Insufficient gas balance for 0xabc. Current: 0.01, Required delta: 0.03, Floor: 0' };
+  const submits = (api: ReturnType<typeof fakeApi>) =>
+    api.calls.filter((c) => c.path === '/v1/send-txs/bulk-calls').map((c) => (c.body.datas as Array<{ calldata: string }>).map((d) => d.calldata));
+
+  it('resends a close at $0.01 of gas with a top-up after the close, and reads its fill', async () => {
+    const api = fakeApi({
+      gasBalance: { balanceInUSD: 0.01 },
+      submitHttpOnce: { status: 400, body: NO_GAS },
+      status: { status: 'success', statuses: [{ index: 0, status: 'success', marketOrdersExecuted: [filled(HL, parseUnits('10', 18).toString())] }] },
+    });
+    const [fill] = await client(api).placeMarketOrders([leg()], { reducing: true, topUpAfter: 1 });
+    const sent = submits(api);
+    expect(sent).toHaveLength(2);
+    expect(sent[0]).toHaveLength(1);
+    expect(sent[1][1]).toBe('0x7a');
+    const pay = api.calls.find((c) => c.path.includes('agent/pay-treasury'))!;
+    expect(pay.body.amount).toBe('400000000000000'); // $1 / $2,500
+    expect(fill.filledSize).toBe(10);
+  });
+
+  it('resends only once', async () => {
+    const api = fakeApi({ gasBalance: { balanceInUSD: 0.01 }, submitHttp: { status: 400, body: NO_GAS } });
+    const [fill] = await client(api).placeMarketOrders([leg()], { reducing: true });
+    expect(submits(api)).toHaveLength(2);
+    expect(fill.failure?.code).toBe('no-gas');
+  });
+
+  it('does not resend a batch that already carried a top-up', async () => {
+    const api = fakeApi({ gasBalance: { balanceInUSD: -0.4 }, submitHttp: { status: 400, body: NO_GAS } });
+    await client(api).placeMarketOrders([leg()], { reducing: true });
+    expect(submits(api)).toHaveLength(1);
+  });
+
+  it('does not resend a refusal that is not about gas', async () => {
+    const api = fakeApi({ gasBalance: { balanceInUSD: 0.01 }, submitHttp: { status: 400, body: { message: 'unsorted/used nonces' } } });
+    await client(api).placeMarketOrders([leg()], { reducing: true });
+    expect(submits(api)).toHaveLength(1);
+  });
+
+  it('resends a cancel at $0.01 of gas with a top-up', async () => {
+    const api = fakeApi({ gasBalance: { balanceInUSD: 0.01 }, submitHttpOnce: { status: 400, body: NO_GAS } });
+    await client(api).cancelOrders(HL);
+    expect(submits(api)).toEqual([[`0xca${HL.toString(16)}`], [`0xca${HL.toString(16)}`, '0x7a']]);
   });
 });
 
