@@ -488,8 +488,9 @@ export function classifyLegFailure(err: unknown): BorosLegFailureCode {
     // (A refusal BEFORE submission never gets here as unknown — the venue
     // adapter's `neverSentLeg` folds it back to a plain rejection, and a
     // `[SIMULATE]` refusal provably sent nothing, whatever its status.)
+    // A 408 is the relayer still sending the batch ("do not resubmit").
     const status = (err.details as { status?: unknown } | undefined)?.status;
-    if (!simulated && typeof status === 'number' && status >= 500) return 'unknown';
+    if (!simulated && typeof status === 'number' && (status >= 500 || status === 408)) return 'unknown';
   }
   if (!simulated && /TIMEOUT|NETWORK|UNREACHABLE|ECONN|ABORT/.test(text)) return 'unknown';
   return 'rejected';
