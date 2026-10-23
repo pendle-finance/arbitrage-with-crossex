@@ -243,6 +243,10 @@ export interface OpportunitiesParams {
 export const OPPORTUNITY_NOTIONAL_MIN = 1_000;
 export const OPPORTUNITY_NOTIONAL_MAX = 100_000_000;
 
+/** Mirror of PERP_SLIPPAGE_CLIP_USD (src/core/boros/opportunities.ts): above
+ * this per-leg notional, perp slippage is priced at this order size's rate. */
+export const PERP_SLIPPAGE_CLIP_USD = 1_000_000;
+
 /** Mirror of the server's simulated CrossEx fee tiers
  * (src/core/estimate/crossexFeeTiers.ts) — anything else is a 400. */
 export const OPPORTUNITY_FEE_TIERS = Array.from(
