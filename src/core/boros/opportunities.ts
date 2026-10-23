@@ -549,7 +549,7 @@ interface PerpLegCost {
 }
 
 /** Signed-against-the-taker crossing cost of `qty` on one side, in USD. */
-function crossCostUsd(
+export function crossCostUsd(
   book: NormalizedBook,
   side: 'BUY' | 'SELL',
   qty: number,
@@ -559,6 +559,26 @@ function crossCostUsd(
   if (!walk) return null;
   const perUnit = side === 'BUY' ? walk.avgPrice - mid : mid - walk.avgPrice;
   return { costUsd: perUnit * qty, exhausted: walk.exhausted };
+}
+
+/** The largest single perp order the slippage model walks a book for. A bigger
+ * leg is assumed TWAP'd in clips of this size, each crossing a refilled book —
+ * so it pays the clip's crossing RATE on the full notional. A book walk's
+ * average cost per unit never falls with size, so this can only lower the
+ * estimate, never raise it. Mirrored in web/src/api/queries.ts. */
+export const PERP_SLIPPAGE_CLIP_USD = 1_000_000;
+
+/** `crossCostUsd` for a USD notional, walked at most one clip deep and scaled
+ * to the whole notional (see PERP_SLIPPAGE_CLIP_USD). */
+export function clippedCrossCostUsd(
+  book: NormalizedBook,
+  side: 'BUY' | 'SELL',
+  notionalUsd: number,
+  mid: number,
+): { costUsd: number; exhausted: boolean } | null {
+  const clipUsd = Math.min(notionalUsd, PERP_SLIPPAGE_CLIP_USD);
+  const clip = crossCostUsd(book, side, clipUsd / mid, mid);
+  return clip && { ...clip, costUsd: clip.costUsd * (notionalUsd / clipUsd) };
 }
 
 /** venueBooks key for a leg. A leg without a live CrossEx symbol falls back to
@@ -606,14 +626,13 @@ function perpLegCost(
     );
     return cost;
   }
-  const qty = notionalUsd / touch.mid;
-  const entry = crossCostUsd(book, side === 'SHORT' ? 'SELL' : 'BUY', qty, touch.mid);
-  const exit = crossCostUsd(book, side === 'SHORT' ? 'BUY' : 'SELL', qty, touch.mid);
+  const entry = clippedCrossCostUsd(book, side === 'SHORT' ? 'SELL' : 'BUY', notionalUsd, touch.mid);
+  const exit = clippedCrossCostUsd(book, side === 'SHORT' ? 'BUY' : 'SELL', notionalUsd, touch.mid);
   cost.entrySlipUsd = entry ? entry.costUsd : null;
   cost.exitSlipUsd = exit ? exit.costUsd : null;
   if (entry?.exhausted || exit?.exhausted) {
     reasons.push(
-      `The ${leg.crossexVenue} ${label} book runs out of depth before ${usd(notionalUsd)} — its slippage estimate extrapolates the last level.`,
+      `The ${leg.crossexVenue} ${label} book runs out of depth before ${usd(Math.min(notionalUsd, PERP_SLIPPAGE_CLIP_USD))} — its slippage estimate extrapolates the last level.`,
     );
   }
   if (!entry || !exit) {

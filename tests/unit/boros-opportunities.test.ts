@@ -15,8 +15,11 @@ import {
   borosLiquidationApr,
   borosLiquidationRate,
   buildOpportunities,
+  clippedCrossCostUsd,
+  crossCostUsd,
   groupBorosMarkets,
   normalizeUnderlying,
+  PERP_SLIPPAGE_CLIP_USD,
   perpInitialMarginUsd,
   walkBorosBook,
   type BuildOpportunitiesInput,
@@ -1071,5 +1074,44 @@ describe('buildOpportunities — meta', () => {
       entryMode: 'maker-hedge',
       exitMode: 'roll',
     });
+  });
+});
+
+// Perp slippage past one clip: a leg bigger than PERP_SLIPPAGE_CLIP_USD is
+// priced at the clip's crossing RATE on its full notional (TWAP'd in clips),
+// never by walking the whole book in one go.
+describe('clippedCrossCostUsd', () => {
+  const MID = 100;
+  // Asks thin out with distance from mid: $0.5M at +1, $1M at +2, then $10M at
+  // +10, so a walk past the clip gets much worse per unit.
+  const BOOK: NormalizedBook = {
+    bids: [[99, 1e9]],
+    asks: [
+      [101, 5_000],
+      [102, 10_000],
+      [110, 100_000],
+    ],
+    ts: 0,
+  };
+
+  it('is the plain walk at or below one clip', () => {
+    for (const n of [250_000, PERP_SLIPPAGE_CLIP_USD]) {
+      expect(clippedCrossCostUsd(BOOK, 'BUY', n, MID)).toEqual(crossCostUsd(BOOK, 'BUY', n / MID, MID));
+    }
+  });
+
+  it('prices a $10M leg at ten times the $1M cost', () => {
+    const clip = crossCostUsd(BOOK, 'BUY', PERP_SLIPPAGE_CLIP_USD / MID, MID)!;
+    const ten = clippedCrossCostUsd(BOOK, 'BUY', 10 * PERP_SLIPPAGE_CLIP_USD, MID)!;
+    expect(ten.costUsd).toBeCloseTo(10 * clip.costUsd, 6);
+    expect(ten.exhausted).toBe(false);
+  });
+
+  it('never exceeds the one-shot walk of the full notional', () => {
+    for (const n of [1.5e6, 3e6, 10e6, 50e6]) {
+      const clipped = clippedCrossCostUsd(BOOK, 'BUY', n, MID)!.costUsd;
+      const oneShot = crossCostUsd(BOOK, 'BUY', n / MID, MID)!.costUsd;
+      expect(clipped).toBeLessThanOrEqual(oneShot);
+    }
   });
 });
