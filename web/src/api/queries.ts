@@ -12,9 +12,11 @@ import {
 import { useEffect, useRef } from 'react';
 import { del, fetchJson, patchJson, postJson, putJson } from './client';
 import { useTabActive } from '../components/TabBar';
+import { useToast } from '../components/Toast';
 import { uuid } from '../lib/uuid';
 import type {
   AssetBorosMargin,
+  AssetViewPrefs,
   AssetViewResponse,
   BorosCancelAndCloseResult,
   DealAlert,
@@ -73,6 +75,7 @@ export const qk = {
   symbolDetail: (symbol: string) => ['symbolDetail', symbol] as const,
   assetView: (address: string, since: number | undefined, legSince = '') =>
     ['assetView', address, since, legSince] as const,
+  assetPrefs: (book: string) => ['assetPrefs', book] as const,
   borosAgent: ['boros', 'agent'] as const,
   rebate: ['boros', 'rebate'] as const,
   borosPairContext: (address: string) => ['boros', 'pair', 'context', address] as const,
@@ -194,6 +197,82 @@ export function useAssetView(address: string | null, since?: number, legSince = 
   });
 }
 
+export type AssetPrefsPatch = {
+  [K in keyof AssetViewPrefs]?: Record<string, AssetViewPrefs[K][string] | null>;
+};
+
+const PREFS_SECTIONS = ['sinceByAsset', 'exclusions', 'legSince'] as const;
+
+const assetPrefsPath = (book: string): string => `/asset-prefs/${encodeURIComponent(book)}`;
+
+function mergeAssetPrefs(prev: AssetViewPrefs, patch: AssetPrefsPatch): AssetViewPrefs {
+  const next: AssetViewPrefs = {
+    ...prev,
+    sinceByAsset: { ...prev.sinceByAsset },
+    exclusions: { ...prev.exclusions },
+    legSince: { ...prev.legSince },
+  };
+  for (const section of PREFS_SECTIONS) {
+    const target: Record<string, unknown> = next[section];
+    for (const [key, value] of Object.entries(patch[section] ?? {})) {
+      if (value === null) delete target[key];
+      else target[key] = value;
+    }
+  }
+  return next;
+}
+
+export function useAssetPrefs(book: string, enabled = true) {
+  return useQuery({
+    queryKey: qk.assetPrefs(book),
+    queryFn: () => fetchJson<AssetViewPrefs & { unreadable?: true }>(assetPrefsPath(book)),
+    enabled,
+    refetchOnWindowFocus: true,
+  });
+}
+
+export function usePatchAssetPrefs(book: string) {
+  const qc = useQueryClient();
+  const toast = useToast();
+  const key = qk.assetPrefs(book);
+  return useMutation({
+    mutationKey: key,
+    mutationFn: async (patch: AssetPrefsPatch) => {
+      await importSettled;
+      return patchJson<AssetViewPrefs>(assetPrefsPath(book), patch);
+    },
+    onMutate: async (patch) => {
+      await qc.cancelQueries({ queryKey: key });
+      qc.setQueryData<AssetViewPrefs>(key, (prev) => (prev ? mergeAssetPrefs(prev, patch) : prev));
+    },
+    onSuccess: (saved) => {
+      if (qc.isMutating({ mutationKey: key }) !== 1) return;
+      qc.setQueryData<AssetViewPrefs & { unreadable?: true }>(key, (prev) =>
+        prev?.unreadable ? { ...saved, unreadable: true } : saved,
+      );
+    },
+    onError: () => {
+      toast.push('error', 'Could not save. Try again.', { key: 'asset-prefs-save' });
+      void qc.invalidateQueries({ queryKey: key });
+    },
+  });
+}
+
+const IMPORT_TIMEOUT_MS = 10_000;
+
+let importSettled: Promise<void> = Promise.resolve();
+
+export function importAssetPrefs(raw: unknown): Promise<void> {
+  const run = new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('The import did not answer in 10 s.')), IMPORT_TIMEOUT_MS);
+    postJson<unknown>('/asset-prefs/import', raw)
+      .then(() => resolve(), reject)
+      .finally(() => clearTimeout(timer));
+  });
+  importSettled = run.catch(() => undefined);
+  return run;
+}
+
 /** One asset-view fetch per DISTINCT window — the start date is per asset,
  * but the server windows a whole response at once, so assets sharing a date
  * share a request (usually one or two in practice). Returns since → data. */
@@ -242,6 +321,10 @@ export interface OpportunitiesParams {
  * a 400, so the hook must not send it. */
 export const OPPORTUNITY_NOTIONAL_MIN = 1_000;
 export const OPPORTUNITY_NOTIONAL_MAX = 100_000_000;
+
+/** Mirror of PERP_SLIPPAGE_CLIP_USD (src/core/boros/opportunities.ts): above
+ * this per-leg notional, perp slippage is priced at this order size's rate. */
+export const PERP_SLIPPAGE_CLIP_USD = 1_000_000;
 
 /** Mirror of the server's simulated CrossEx fee tiers
  * (src/core/estimate/crossexFeeTiers.ts) — anything else is a 400. */

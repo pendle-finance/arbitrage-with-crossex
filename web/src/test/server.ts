@@ -19,6 +19,8 @@ export const server = setupServer(
   ),
   // Default: no rebate. A rebated-account case overrides this with server.use.
   http.get('/api/boros/rebate', () => HttpResponse.json(env(null))),
+  http.get('/api/asset-prefs/:book', () => HttpResponse.json(env({ sinceByAsset: {}, exclusions: {}, legSince: {} }))),
+  http.post('/api/asset-prefs/import', () => HttpResponse.json(env({}))),
 );
 
 /** Wrap data in the backend's success envelope. */

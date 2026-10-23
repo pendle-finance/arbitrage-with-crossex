@@ -731,6 +731,24 @@ describe('OpportunitiesPanel — the assumptions strip', () => {
     );
   });
 
+  it('notes the $1M perp slippage assumption only above $1M per leg', async () => {
+    const result = (notionalUsd: number) => {
+      const r = makeOpportunitiesResult();
+      return { ...r, meta: { ...r.meta, notionalUsd } };
+    };
+    const note = /Perp slippage is estimated at a \$1M notional size/;
+
+    server.use(opportunitiesHandler(result(1_000_000)));
+    const { unmount } = renderWithClient(<OpportunitiesPanel />);
+    await waitFor(() => expect(toggles()).toHaveLength(1));
+    expect(screen.queryByText(note)).toBeNull();
+    unmount();
+
+    server.use(opportunitiesHandler(result(10_000_000)));
+    renderWithClient(<OpportunitiesPanel />);
+    expect(await screen.findByText(note)).toBeInTheDocument();
+  });
+
   it('turns a double-click on the preset amount into an editable custom size', async () => {
     const urls: string[] = [];
     server.use(opportunitiesHandler(makeOpportunitiesResult(), { urls }));

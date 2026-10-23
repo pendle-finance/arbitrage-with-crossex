@@ -7,9 +7,10 @@
 import { cleanup, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AssetBorosOpen, AssetGroup, AssetPerpOpen } from '../../api/types';
 import { server } from '../../test/server';
+import { DATES, groupOf, NOW, PX, hedgedCards } from '../../test/assetCardBooks';
 import { renderWithClient } from '../../test/utils';
 import { AssetCard } from './AssetCard';
 import { RollOverBanner } from '../RollOverBanner';
@@ -384,10 +385,9 @@ describe('AssetCard — roll over', () => {
       }),
     );
     localStorage.setItem('crossex.strategy.v1', JSON.stringify({ address: '0x1111111111111111111111111111111111111111' }));
-    // 0.01 ETH a leg: about $25 of notional, under the $100 the rate needs.
     const tiny = book(8);
-    tiny.perpOpen = [perp({ venue: 'GATE', side: 'LONG', qty: 0.01 }), perp({ venue: 'HYPERLIQUID', side: 'SHORT', qty: 0.01 })];
-    tiny.borosOpen = tiny.borosOpen.map((l) => ({ ...l, sizeToken: 0.01, notionalUsd: 25, imUsd: 1 }));
+    tiny.perpOpen = [perp({ venue: 'GATE', side: 'LONG', qty: 0.04 }), perp({ venue: 'HYPERLIQUID', side: 'SHORT', qty: 0.04 })];
+    tiny.borosOpen = tiny.borosOpen.map((l) => ({ ...l, sizeToken: 0.04, notionalUsd: 100, imUsd: 1 }));
     renderCard(tiny);
 
     const panel = screen.getByRole('tabpanel', { name: /^Fixed Rate Pairs/ });
@@ -464,4 +464,106 @@ describe('AssetCard — roll over', () => {
     expect(screen.queryByText(/due to roll|Roll over now/)).not.toBeInTheDocument();
     expect(screen.queryByText('ready to roll')).not.toBeInTheDocument();
   });
+
+  it("F37 half roll closes the card's 6 ETH, not the leg's 10", async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(NOW * 1000);
+    const row = (marketId: number, venue: string, maturity: number) => ({
+      marketId,
+      name: `${venue} ETH`,
+      venue,
+      base: 'ETH',
+      tokenId: 3,
+      collateral: 'ETH',
+      maturity,
+      midApr: 0.06,
+      markApr: 0.06,
+      maxRateDeviationApr: 0.02,
+      isolatedOnly: false,
+      onIsolatedMargin: false,
+      isolatedHasPositionOrOrders: false,
+      currentSize: 0,
+      collateralPriceUsd: PX,
+    });
+    const exits: Array<{ marketId: number; size: number }[]> = [];
+    server.use(
+      http.get('/api/boros/pair/context', () =>
+        HttpResponse.json({
+          ok: true,
+          data: {
+            markets: [row(101, 'Gate', DATES.O), row(102, 'Gate', DATES.N), row(103, 'Hyperliquid', DATES.O), row(104, 'Hyperliquid', DATES.N)],
+            crossByToken: [],
+            isolatedByMarket: [],
+            defaultSlippageApr: 0.0025,
+            maxSlippageApr: 0.1,
+          },
+        }),
+      ),
+      http.post('/api/boros/pair/simulate', async ({ request }) => {
+        const req = (await request.json()) as { intent: string; legs: { marketId: number; direction: 'long' | 'short'; size: number }[] };
+        if (req.intent === 'close') exits.push(req.legs.map((l) => ({ marketId: l.marketId, size: l.size })).sort((a, b) => a.marketId - b.marketId));
+        const size = req.legs[0].size;
+        return HttpResponse.json({
+          ok: true,
+          data: {
+            simulation: {
+              legs: req.legs.map((l) => ({
+                marketId: l.marketId,
+                marketName: `m${l.marketId}`,
+                venue: l.marketId <= 102 ? 'Gate' : 'Hyperliquid',
+                base: 'ETH',
+                direction: l.direction,
+                execApr: 0.06,
+                worstApr: 0.06,
+                estFillSize: l.size,
+                shortfallSize: 0,
+                bookStatus: 'ok',
+                slippageExceeded: false,
+                marginRequired: 1,
+                slippageApr: 0.01,
+                sizing: { currentSize: 0, deltaSize: l.size, resultingSize: l.size, opposing: false, flips: false, clampedToClose: false, orderSide: l.direction },
+              })),
+              receiveLeg: 1,
+              estSpreadApr: 0.05,
+              worstSpreadApr: 0.045,
+              costToCrossSize: 0.01,
+              feeDragApr: 0.002,
+              marginRequiredTotal: 2,
+              hedgedSize: size,
+              unhedgedSize: 0,
+              collateral: 'ETH',
+              collateralPriceUsd: PX,
+              secondsToMaturity: 35 * DAY,
+              reasons: [],
+            },
+            gate: { blockers: [], warnings: [], requiresAcknowledgement: false, opposingLegs: [] },
+            eligibility: { eligible: true, code: null, reason: null },
+            simulatedAtMs: Date.now(),
+            gasBalanceUsd: 5,
+          },
+        });
+      }),
+    );
+    localStorage.setItem('crossex.strategy.v1', JSON.stringify({ address: '0x1111111111111111111111111111111111111111' }));
+    try {
+      renderCard(groupOf(['G L 10', 'H S 10', 'G LONG 6 O', 'G LONG 4 N', 'H SHORT 10 O']));
+      const [card] = await waitFor(() => {
+        const found = hedgedCards();
+        expect(found).toHaveLength(1);
+        return found;
+      });
+      await userEvent.click(within(card).getByRole('button', { name: 'Roll over' }));
+      const dialog = screen.getByRole('dialog');
+      expect(await within(dialog).findByRole('textbox', { name: 'Size to roll (ETH)' }, { timeout: 10_000 })).toHaveValue('6');
+      await waitFor(() => expect(exits.length).toBeGreaterThan(0), { timeout: 10_000 });
+      for (const legs of exits) {
+        expect(legs).toEqual([
+          { marketId: 101, size: 6 },
+          { marketId: 103, size: 6 },
+        ]);
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  }, 20_000);
 });

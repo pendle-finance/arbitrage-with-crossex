@@ -10,8 +10,6 @@ import {
   defaultChargePerpFees,
   assetIsActive,
   perpOnlyCloseLegs,
-  perpOnlyPairs,
-  borosOnlyPairs,
   pairTimelineAxis,
   timelineBar,
   deriveAsset,
@@ -19,6 +17,7 @@ import {
   pairBorosCloseLegs,
   pairLockedSpread,
   pairPerpCloseLegs,
+  pairRollDue,
   perpKey,
   SECONDS_IN_YEAR,
 } from './assetModel';
@@ -735,115 +734,6 @@ describe('assetIsActive', () => {
 });
 
 
-describe('perpOnlyPairs', () => {
-  const perpLeg = (venue: string, side: 'LONG' | 'SHORT', sizeBase: number) => ({
-    venue,
-    side,
-    symbol: `${venue}_FUTURE_ETH_USDT`,
-    sizeBase,
-    notionalUsd: sizeBase * 2500,
-    unit: 'base' as const,
-    imUsd: sizeBase * 100,
-    share: 1,
-  });
-  const yuLeg = (venue: string, side: 'LONG' | 'SHORT', sizeBase: number, maturity: number) => ({
-    venue,
-    side,
-    marketId: 7,
-    maturity,
-    sizeBase,
-    notionalUsd: sizeBase * 2500,
-    unit: 'base' as const,
-    lockedApr: -0.066,
-    imUsd: sizeBase * 3,
-    share: 1,
-  });
-
-  it('matches his book after a missed roll: one short against two longs, largest first', () => {
-    // HL short 1665 against Gate long 1340 + OKX long 325; OKX still has its
-    // September rate leg, Hyperliquid's and Gate's have matured.
-    const { pairs, restPerps, restYus } = perpOnlyPairs(
-      [perpLeg('HYPERLIQUID', 'SHORT', 1665), perpLeg('GATE', 'LONG', 1340), perpLeg('OKX', 'LONG', 325)],
-      [yuLeg('OKX', 'LONG', 325, 1_790_000_000)],
-    );
-    expect(pairs.map((p) => `${p.longVenue}/${p.shortVenue}:${p.size}`)).toEqual(['GATE/HYPERLIQUID:1340', 'OKX/HYPERLIQUID:325']);
-    // Gate/HL has NO rate legs: both are missing, at the full size.
-    expect(pairs[0].longYu).toBeNull();
-    expect(pairs[0].shortYu).toBeNull();
-    expect(pairs[0].missingLong).toBe(1340);
-    expect(pairs[0].missingShort).toBe(1340);
-    // The short perp is SLICED to the unit: 1340 of HL's 1665, pro rata.
-    expect(pairs[0].short.sizeBase).toBe(1340);
-    expect(pairs[0].short.imUsd).toBeCloseTo(1340 * 100, 6);
-    expect(pairs[0].notionalUsd).toBeCloseTo(2 * 1340 * 2500, 6);
-    // OKX/HL keeps OKX's rate leg; only Hyperliquid's is missing.
-    expect(pairs[1].longYu?.venue).toBe('OKX');
-    expect(pairs[1].missingLong).toBe(0);
-    expect(pairs[1].missingShort).toBe(325);
-    expect(pairs[1].imUsd).toBeCloseTo(325 * 100 * 2 + 325 * 3, 6);
-    // Closing the unit closes its SLICES: all of Gate's long, but only 1340
-    // of Hyperliquid's 1665 short — the rest hedges the OKX unit.
-    expect(perpOnlyCloseLegs(pairs[0])).toEqual([
-      { symbol: 'GATE_FUTURE_ETH_USDT', qty: 1340, venue: 'GATE', partial: false },
-      { symbol: 'HYPERLIQUID_FUTURE_ETH_USDT', qty: 1340, venue: 'HYPERLIQUID', partial: true },
-    ]);
-    // Everything was claimed: nothing is left ungrouped.
-    expect(restPerps).toEqual([]);
-    expect(restYus).toEqual([]);
-  });
-
-  it('leaves an unmatched remainder, and a rate leg with no perp, among the ungrouped', () => {
-    const { pairs, restPerps, restYus } = perpOnlyPairs(
-      [perpLeg('GATE', 'LONG', 100), perpLeg('HYPERLIQUID', 'SHORT', 60)],
-      [yuLeg('BINANCE', 'LONG', 10, 1_790_000_000)],
-    );
-    expect(pairs).toHaveLength(1);
-    expect(pairs[0].size).toBe(60);
-    expect(restPerps).toHaveLength(1);
-    expect(restPerps[0].venue).toBe('GATE');
-    expect(restPerps[0].sizeBase).toBe(40);
-    expect(restPerps[0].share).toBeCloseTo(0.4, 9);
-    expect(restYus).toHaveLength(1);
-  });
-
-  it('drops a rounding sliver between two venues\' sizes instead of listing it as a loose leg', () => {
-    // His real book: OKX perp 324.865 against a 325 rate leg, and HL's short
-    // 0.135 over the two longs — each well under half a percent of its leg.
-    const { pairs, restPerps, restYus } = perpOnlyPairs(
-      [perpLeg('HYPERLIQUID', 'SHORT', 1665), perpLeg('GATE', 'LONG', 1340), perpLeg('OKX', 'LONG', 324.865)],
-      [yuLeg('OKX', 'LONG', 325, 1_790_000_000)],
-    );
-    expect(pairs).toHaveLength(2);
-    expect(restPerps).toEqual([]);
-    expect(restYus).toEqual([]);
-  });
-
-  it('never pairs a venue with itself, nor two perps on the same side', () => {
-    expect(perpOnlyPairs([perpLeg('GATE', 'LONG', 10), perpLeg('OKX', 'LONG', 10)], []).pairs).toEqual([]);
-    expect(perpOnlyPairs([perpLeg('GATE', 'LONG', 10), perpLeg('GATE', 'SHORT', 10)], []).pairs).toEqual([]);
-  });
-
-  it('float residue is not a missing leg', () => {
-    // A Gate single of 0.949 − 0.158 behind 0.791 perps: 1e-16 short, not "missing <0.000001 ETH".
-    const [p] = perpOnlyPairs(
-      [perpLeg('GATE', 'LONG', 0.791), perpLeg('HYPERLIQUID', 'SHORT', 0.791)],
-      [yuLeg('GATE', 'LONG', 0.949 - 0.158, 1_790_000_000)],
-    ).pairs;
-    expect(p.missingLong).toBe(0);
-    expect(p.missingShort).toBe(0.791);
-  });
-
-  it('float residue on a dollar-unit leg of millions is not missing either', () => {
-    const usd = (l: ReturnType<typeof perpLeg>, n: number) => ({ ...l, unit: 'usd' as const, notionalUsd: n });
-    const take = 9_876_543.21;
-    const [p] = perpOnlyPairs(
-      [usd(perpLeg('GATE', 'LONG', 1), take), usd(perpLeg('HYPERLIQUID', 'SHORT', 1), take)],
-      [{ ...yuLeg('GATE', 'LONG', 1, 1_790_000_000), unit: 'usd' as const, notionalUsd: take - take * 2 ** -51 }],
-    ).pairs;
-    expect(p.missingLong).toBe(0);
-  });
-});
-
 describe('pairLockedSpread — on the RATE legs’ notional', () => {
   const leg = (kind: 'perp' | 'yu', notionalUsd: number) => ({ kind, notionalUsd });
   // $100k a side locked at a 5% spread: $5k a year, on $20k of capital.
@@ -867,134 +757,6 @@ describe('pairLockedSpread — on the RATE legs’ notional', () => {
   });
 });
 
-describe('borosOnlyPairs', () => {
-  const M = 1_790_000_000;
-  const perpLeg = (venue: string, side: 'LONG' | 'SHORT', sizeBase: number) => ({
-    venue,
-    side,
-    symbol: `${venue}_FUTURE_ETH_USDT`,
-    sizeBase,
-    notionalUsd: sizeBase * 2500,
-    unit: 'base' as const,
-    imUsd: sizeBase * 100,
-    share: 1,
-  });
-  const yuLeg = (
-    venue: string,
-    side: 'LONG' | 'SHORT',
-    sizeBase: number,
-    maturity: number,
-    lockedApr: number | null,
-    marketId = 7,
-  ) => ({
-    venue,
-    side,
-    marketId,
-    maturity,
-    sizeBase,
-    notionalUsd: sizeBase * 2500,
-    unit: 'base' as const,
-    lockedApr,
-    imUsd: sizeBase * 3,
-    share: 1,
-  });
-
-  it('pairs his two leftover rate legs into one unit with both perps missing', () => {
-    // Gate LONG 37.3 (the unpaired slice of a leg a pair holds) + Lighter
-    // SHORT 37.3, both 30 Oct: the Boros side of a Gate/Lighter unit.
-    const gate = { ...yuLeg('GATE', 'LONG', 37.3, M, -0.0565, 1), share: 0.0734 };
-    const { pairs, restPerps, restYus } = borosOnlyPairs([], [gate, yuLeg('LIGHTER', 'SHORT', 37.3, M, 0.0831, 2)]);
-    expect(pairs).toHaveLength(1);
-    const p = pairs[0];
-    expect(`${p.longVenue}/${p.shortVenue}`).toBe('GATE/LIGHTER');
-    expect(p.maturity).toBe(M);
-    expect(p.size).toBeCloseTo(37.3, 9);
-    expect(p.longPerp).toBeNull();
-    expect(p.shortPerp).toBeNull();
-    expect(p.missingLong).toBeCloseTo(37.3, 9);
-    expect(p.missingShort).toBeCloseTo(37.3, 9);
-    expect(p.lockedSpread).toBeCloseTo(0.0266, 9);
-    // The slice keeps its share of the venue leg, so a close stays capped.
-    expect(p.longYu?.share).toBeCloseTo(0.0734, 9);
-    expect(restPerps).toEqual([]);
-    expect(restYus).toEqual([]);
-  });
-
-  it('hangs a leftover perp on its unit: only the other perp is missing', () => {
-    const { pairs, restPerps } = borosOnlyPairs(
-      [perpLeg('GATE', 'LONG', 50)],
-      [yuLeg('GATE', 'LONG', 30, M, -0.05, 1), yuLeg('LIGHTER', 'SHORT', 30, M, 0.08, 2)],
-    );
-    expect(pairs).toHaveLength(1);
-    expect(pairs[0].longPerp?.sizeBase).toBe(30);
-    expect(pairs[0].missingLong).toBe(0);
-    expect(pairs[0].missingShort).toBe(30);
-    expect(pairs[0].imUsd).toBeCloseTo(30 * 3 * 2 + 30 * 100, 6);
-    // The perp's unclaimed 20 stays ungrouped.
-    expect(restPerps).toHaveLength(1);
-    expect(restPerps[0].sizeBase).toBe(20);
-  });
-
-  it('pairs the smaller size and leaves the remainder ungrouped', () => {
-    const { pairs, restYus } = borosOnlyPairs(
-      [],
-      [yuLeg('GATE', 'LONG', 100, M, -0.05, 1), yuLeg('LIGHTER', 'SHORT', 40, M, 0.08, 2)],
-    );
-    expect(pairs[0].size).toBe(40);
-    expect(restYus).toHaveLength(1);
-    expect(restYus[0].venue).toBe('GATE');
-    expect(restYus[0].sizeBase).toBe(60);
-  });
-
-  it('matches the closest sizes first: a remainder pair is not split by a larger book', () => {
-    // mozzarella 2026-10-14, rule 3: the Gate/Hyperliquid singles' unhedged
-    // 0.261 stays one unit although a 233 ETH Binance long shares the date.
-    const { pairs } = borosOnlyPairs(
-      [],
-      [
-        yuLeg('BINANCE', 'LONG', 233, M, -0.06, 1),
-        yuLeg('LIGHTER', 'SHORT', 191.6, M, 0.049, 2),
-        yuLeg('GATE', 'LONG', 0.261, M, -0.062, 3),
-        yuLeg('HYPERLIQUID', 'SHORT', 0.261, M, 0.154, 4),
-      ],
-    );
-    expect(pairs.map((p) => `${p.longVenue}/${p.shortVenue} ${p.size}`).sort()).toEqual(['BINANCE/LIGHTER 191.6', 'GATE/HYPERLIQUID 0.261']);
-  });
-
-  it('keeps largest first when closest first would strand a venue that holds both sides', () => {
-    // After an open-only roll: Gate L 5 with HL S 5.1 (a part-fill), HL L 5
-    // with Lighter S 5. Closest first pairs only Gate/Lighter and strands both
-    // HL legs; largest first pairs all 10.
-    const { pairs } = borosOnlyPairs(
-      [],
-      [
-        yuLeg('GATE', 'LONG', 5, M, -0.05, 1),
-        yuLeg('HYPERLIQUID', 'SHORT', 5.1, M, 0.08, 2),
-        yuLeg('HYPERLIQUID', 'LONG', 5, M, -0.05, 3),
-        yuLeg('LIGHTER', 'SHORT', 5, M, 0.08, 4),
-      ],
-    );
-    expect(pairs.map((p) => `${p.longVenue}/${p.shortVenue} ${p.size}`).sort()).toEqual(['GATE/HYPERLIQUID 5', 'HYPERLIQUID/LIGHTER 5']);
-  });
-
-  it('never blends maturities, pairs a venue with itself, or pairs two legs on one side', () => {
-    expect(borosOnlyPairs([], [yuLeg('GATE', 'LONG', 10, M, -0.05, 1), yuLeg('LIGHTER', 'SHORT', 10, M + 86_400 * 28, 0.08, 2)]).pairs).toEqual([]);
-    expect(borosOnlyPairs([], [yuLeg('GATE', 'LONG', 10, M, -0.05, 1), yuLeg('GATE', 'SHORT', 10, M, 0.08, 2)]).pairs).toEqual([]);
-    expect(borosOnlyPairs([], [yuLeg('GATE', 'LONG', 10, M, -0.05, 1), yuLeg('OKX', 'LONG', 10, M, -0.04, 2)]).pairs).toEqual([]);
-  });
-
-  it('nets both settlement fees out of the spread, as a 4-leg pair does', () => {
-    const long = { ...yuLeg('GATE', 'LONG', 10, M, -0.05, 1), settleFeeApr: 0.002 };
-    const short = { ...yuLeg('LIGHTER', 'SHORT', 10, M, 0.08, 2), settleFeeApr: 0.001 };
-    expect(borosOnlyPairs([], [long, short]).pairs[0].lockedSpread).toBeCloseTo(0.08 - 0.05 - 0.003, 9);
-  });
-
-  it('reports no spread while a rate is pending, and skips dust', () => {
-    expect(borosOnlyPairs([], [yuLeg('GATE', 'LONG', 10, M, null, 1), yuLeg('LIGHTER', 'SHORT', 10, M, 0.08, 2)]).pairs[0].lockedSpread).toBeNull();
-    expect(borosOnlyPairs([], [yuLeg('GATE', 'LONG', 0.001, M, -0.05, 1), yuLeg('LIGHTER', 'SHORT', 0.001, M, 0.08, 2)]).pairs).toEqual([]);
-  });
-});
-
 describe('a roll that keeps the old legs: the further maturity takes the perps', () => {
   const OLD = NOW + 20 * DAY;
   const NEW = NOW + 57 * DAY;
@@ -1007,7 +769,14 @@ describe('a roll that keeps the old legs: the further maturity takes the perps',
     boros({ marketId: id + 1, venue: 'HYPERLIQUID', side: 'SHORT', maturity, sizeToken: size, notionalUsd: size * 1900 }),
   ];
   const pendingAt = (d: ReturnType<typeof deriveAsset>, maturity: number) =>
-    d.pendingLegs.filter((l) => l.maturity === maturity).map((l) => l.marketId).sort();
+    [
+      ...d.pendingLegs,
+      ...d.borosOnly.flatMap((p) => p.borosLegs),
+      ...d.perpOnly.flatMap((p) => [p.longYu, p.shortYu, ...p.otherWay].flatMap((l) => (l ? [l] : []))),
+    ]
+      .filter((l) => l.maturity === maturity)
+      .map((l) => l.marketId)
+      .sort();
 
   it('equal sizes: the new date is the hedged pair, the old legs wait for perps (mozzarella 2026-10-17)', () => {
     const d = deriveAsset(group({ perpOpen: perps(), borosOpen: [...singles(OLD, 10, 1), ...singles(NEW, 10, 11)] }), {}, 0, NOW);
@@ -1163,5 +932,341 @@ describe('pair timeline on a shared axis', () => {
     const matured = pair(30, -2);
     const bar = timelineBar(matured, T, pairTimelineAxis([matured], T));
     expect(bar.elapsedPct).toBe(bar.widthPct);
+  });
+});
+
+describe('market-blind grouping in the model', () => {
+  const P = 2500;
+  const OCT = NOW + 20 * DAY;
+  const NOV = NOW + 48 * DAY;
+  const gp = (venue: string, side: 'LONG' | 'SHORT', qty: number, over: Partial<AssetPerpOpen> = {}) =>
+    perp({ symbol: `${venue}_FUTURE_ETH_USDT`, venue, side, qty, notionalUsd: qty * P, entryPrice: P, markPrice: P, imUsd: qty * 10, ...over });
+  const yu = (marketId: number, venue: string, side: 'LONG' | 'SHORT', size: number, maturity: number, over: Partial<AssetBorosOpen> = {}) =>
+    boros({ marketId, venue, side, sizeToken: size, notionalUsd: size * P, maturity, imUsd: size, ...over });
+  const book = (perpOpen: AssetPerpOpen[], borosOpen: AssetBorosOpen[], over: Partial<AssetGroup> = {}) =>
+    group({ priceUsd: P, perpOpen, borosOpen, ...over });
+  const b15 = (extra = 0) =>
+    book(
+      [gp('GATE', 'LONG', 10 + extra), gp('HYPERLIQUID', 'SHORT', 10 + extra)],
+      [yu(1, 'GATE', 'LONG', 6, OCT), yu(2, 'GATE', 'LONG', 4, NOV), yu(3, 'HYPERLIQUID', 'SHORT', 10, OCT)],
+    );
+  const r6 = (n: number) => Math.round(n * 1e6) / 1e6;
+  const cardsOf = (d: ReturnType<typeof deriveAsset>) =>
+    [
+      ...d.pairs.map((p) => `H ${p.longVenue}/${p.shortVenue} ${p.soonestMaturitySec} ${r6(p.size)}`),
+      ...d.perpOnly.map((p) => `BM ${p.longVenue}/${p.shortVenue} ${(p.longYu ?? p.shortYu)?.marketId ?? '-'} ${r6(p.size)}`),
+      ...d.borosOnly.map((p) => `PM ${p.longVenue}/${p.shortVenue} ${p.maturity} ${r6(p.size)}`),
+    ].sort();
+  const ungroupedOf = (d: ReturnType<typeof deriveAsset>) => [
+    ...d.pendingLegs.map((l) => `${l.marketId} ${r6(l.sizeBase)}`),
+    ...d.unpairedPerps.map((l) => `${l.symbol} ${r6(l.sizeBase)}`),
+  ];
+
+  it('half roll in the model', () => {
+    const d = deriveAsset(b15(), {}, 0, NOW);
+    expect(cardsOf(d)).toEqual([`BM GATE/HYPERLIQUID 2 4`, `H GATE/HYPERLIQUID ${OCT} 6`]);
+    const card = d.perpOnly[0];
+    expect(card.longYu).toMatchObject({ marketId: 2, venue: 'GATE', side: 'LONG', maturity: NOV });
+    expect(card.longYu?.sizeBase).toBeCloseTo(4, 9);
+    expect(ungroupedOf(d)).toEqual(['3 4']);
+    expect(d.pendingLegs[0]).toMatchObject({ venue: 'HYPERLIQUID', side: 'SHORT', maturity: OCT });
+    expect(card.missingLong).toBe(0);
+    expect(card.missingShort).toBe(0);
+    expect(card.heldElsewhereShort?.map((l) => `${l.marketId} ${r6(l.sizeBase)}`)).toEqual(['3 10']);
+    expect(card.offerMaturity).toBe(NOV);
+    expect(perpOnlyCloseLegs(card).map((l) => `${l.venue} ${r6(l.qty)} ${l.partial}`)).toEqual(['GATE 4 true', 'HYPERLIQUID 4 true']);
+  });
+
+  it('half roll: the old leg rest takes the extra perps', () => {
+    const d = deriveAsset(b15(2), {}, 0, NOW);
+    expect(cardsOf(d)).toEqual(['BM GATE/HYPERLIQUID 2 4', 'BM GATE/HYPERLIQUID 3 2', `H GATE/HYPERLIQUID ${OCT} 6`]);
+    expect(d.perpOnly.find((p) => p.shortYu?.marketId === 3)?.offerMaturity).toBe(OCT);
+    expect(ungroupedOf(d)).toEqual(['3 2']);
+  });
+
+  it('half roll at a $6M book keeps the same cards and offer cut', () => {
+    const g = b15();
+    const k = 240;
+    const big = {
+      ...g,
+      perpOpen: g.perpOpen.map((l) => ({ ...l, qty: l.qty * k, notionalUsd: l.notionalUsd * k, imUsd: l.imUsd * k })),
+      borosOpen: g.borosOpen.map((b) => ({ ...b, sizeToken: b.sizeToken * k, notionalUsd: b.notionalUsd * k, imUsd: b.imUsd * k })),
+    };
+    const d = deriveAsset(big, {}, 0, NOW);
+    expect(cardsOf(d)).toEqual([`BM GATE/HYPERLIQUID 2 ${4 * k}`, `H GATE/HYPERLIQUID ${OCT} ${6 * k}`]);
+    expect(ungroupedOf(d)).toEqual([`3 ${4 * k}`]);
+    expect(d.perpOnly[0].missingShort).toBe(0);
+    expect(d.perpOnly[0].heldElsewhereShort?.map((l) => r6(l.sizeBase))).toEqual([10 * k]);
+  });
+
+  it('half roll after the old date', () => {
+    const d = deriveAsset(b15(), {}, 0, OCT + 1);
+    expect(cardsOf(d)).toEqual(['BM GATE/HYPERLIQUID - 6', 'BM GATE/HYPERLIQUID 2 4']);
+    expect(d.pairs).toEqual([]);
+    expect(ungroupedOf(d)).toEqual([]);
+    const open = d.perpOnly.find((p) => !p.longYu && !p.shortYu);
+    expect(open?.missingLong).toBeCloseTo(6, 9);
+    expect(open?.missingShort).toBeCloseTo(6, 9);
+  });
+
+  it('offer date after a half roll', () => {
+    const g = b15(2);
+    const d = deriveAsset({ ...g, borosOpen: g.borosOpen.map((b) => (b.marketId === 3 ? { ...b, sizeToken: 6, notionalUsd: 6 * P } : b)) }, {}, 0, NOW);
+    expect(cardsOf(d)).toEqual(['BM GATE/HYPERLIQUID - 2', 'BM GATE/HYPERLIQUID 2 4', `H GATE/HYPERLIQUID ${OCT} 6`]);
+    const open = d.perpOnly.find((p) => Math.abs(p.size - 2) < 1e-9);
+    expect(open?.longYu).toBeNull();
+    expect(open?.shortYu).toBeNull();
+    expect(open?.offerMaturity).toBe(NOV);
+    expect(open?.missingLong).toBeCloseTo(2, 9);
+    expect(open?.missingShort).toBeCloseTo(2, 9);
+  });
+
+  it('unknown price keeps the cards in the model', () => {
+    const d = deriveAsset({ ...b15(), priceUsd: 0 }, {}, 0, NOW);
+    expect(cardsOf(d)).toEqual([`BM GATE/HYPERLIQUID 2 4`, `H GATE/HYPERLIQUID ${OCT} 6`]);
+    expect(ungroupedOf(d)).toEqual(['3 4']);
+  });
+
+  it('hedge check leaves twins out', () => {
+    const d = deriveAsset(
+      book(
+        [
+          gp('BINANCE', 'LONG', 4),
+          gp('BINANCE', 'LONG', 1, { symbol: 'BINANCE_FUTURE_ETH_USDC', quoteTwin: true }),
+          gp('HYPERLIQUID', 'SHORT', 4),
+        ],
+        [yu(1, 'BINANCE', 'LONG', 4, NOV), yu(2, 'HYPERLIQUID', 'SHORT', 4, NOV)],
+      ),
+      {},
+      0,
+      NOW,
+    );
+    const binance = d.venues.find((v) => v.venue === 'BINANCE');
+    expect(binance?.perpSigned).toBeCloseTo(4, 9);
+    expect(binance?.borosSigned).toBeCloseTo(4, 9);
+    expect(binance?.covered).toBe(true);
+    expect(d.gaps).toEqual([]);
+    expect(cardsOf(d)).toEqual([`H BINANCE/HYPERLIQUID ${NOV} 4`]);
+    expect(d.unpairedPerps.map((p) => `${p.symbol} ${r6(p.sizeBase)} ${p.quoteTwin}`)).toEqual(['BINANCE_FUTURE_ETH_USDC 1 true']);
+  });
+
+  it('F51 a USDC twin counts in the net perps at every rung', () => {
+    for (const usd of [50, 5_000, 100_000, 1_000_000, 6_000_000]) {
+      const q = usd / P;
+      const d = deriveAsset(
+        book(
+          [
+            gp('BINANCE', 'LONG', 4 * q),
+            gp('BINANCE', 'LONG', q, { symbol: 'BINANCE_FUTURE_ETH_USDC', quoteTwin: true }),
+            gp('HYPERLIQUID', 'SHORT', 4 * q),
+          ],
+          [yu(1, 'BINANCE', 'LONG', 4 * q, NOV), yu(2, 'HYPERLIQUID', 'SHORT', 4 * q, NOV)],
+        ),
+        {},
+        0,
+        NOW,
+      );
+      expect(r6(d.netPerp), `${usd}`).toBe(r6(q));
+      expect(r6(d.grossPerp), `${usd}`).toBe(r6(9 * q));
+      expect(d.deltaNeutral, `${usd}`).toBe(false);
+      expect(d.perfect, `${usd}`).toBe(false);
+      expect(d.gaps, `${usd}`).toEqual([]);
+    }
+  });
+
+  it('S-CLOSE-02 a row is a part close unless it is the whole venue position, at every rung', () => {
+    for (const usd of [50, 5_000, 100_000, 1_000_000, 6_000_000]) {
+      const k = usd / 6_000_000;
+      const g = book(
+        [gp('HYPERLIQUID', 'LONG', 2400 * k), gp('GATE', 'SHORT', 2399.04 * k), gp('LIGHTER', 'SHORT', 0.96 * k)],
+        [
+          yu(1, 'HYPERLIQUID', 'LONG', 2399.04 * k, NOV),
+          yu(2, 'GATE', 'SHORT', 2399.04 * k, NOV),
+          yu(3, 'HYPERLIQUID', 'LONG', 0.96 * k, NOV),
+          yu(4, 'LIGHTER', 'SHORT', 0.96 * k, NOV),
+        ],
+      );
+      const held = new Map(g.perpOpen.map((l) => [l.symbol, l.qty]));
+      const d = deriveAsset(g, {}, 0, NOW);
+      const legs = [...d.pairs.flatMap((pair) => pairPerpCloseLegs(pair)), ...d.perpOnly.flatMap((pair) => perpOnlyCloseLegs(pair))];
+      expect(legs.length, `${usd}`).toBeGreaterThan(0);
+      for (const leg of legs) {
+        const whole = held.get(leg.symbol) ?? 0;
+        expect(leg.partial, `${usd} ${leg.venue} ${leg.qty} of ${whole}`).toBe(Math.abs(leg.qty - whole) > 1e-9 * whole);
+      }
+      if (usd >= 1_000_000) {
+        expect(cardsOf(d), `${usd}`).toEqual([`H HYPERLIQUID/GATE ${NOV} ${r6(2399.04 * k)}`, `H HYPERLIQUID/LIGHTER ${NOV} ${r6(0.96 * k)}`]);
+        const main = d.pairs.find((pair) => pair.shortVenue === 'GATE');
+        const hl = main ? pairPerpCloseLegs(main).find((l) => l.venue === 'HYPERLIQUID') : undefined;
+        expect(hl, `${usd}`).toEqual({ symbol: 'HYPERLIQUID_FUTURE_ETH_USDT', qty: 2399.04 * k, venue: 'HYPERLIQUID', partial: true });
+      }
+    }
+  });
+
+  it('S-CLOSE-02 a part-excluded perp closes only the kept part', () => {
+    const d = deriveAsset(
+      book([gp('GATE', 'LONG', 10), gp('HYPERLIQUID', 'SHORT', 6)], [yu(1, 'GATE', 'LONG', 6, NOV), yu(2, 'HYPERLIQUID', 'SHORT', 6, NOV)]),
+      { [perpKey('GATE_FUTURE_ETH_USDT')]: 4 },
+      0,
+      NOW,
+    );
+    expect(cardsOf(d)).toEqual([`H GATE/HYPERLIQUID ${NOV} 6`]);
+    expect(pairPerpCloseLegs(d.pairs[0]).map((l) => `${l.venue} ${r6(l.qty)} ${l.partial}`)).toEqual(['GATE 6 true', 'HYPERLIQUID 6 false']);
+  });
+
+  it('B24 the open beside a tiny Boros leg offers the rest', () => {
+    const d = deriveAsset(book([gp('GATE', 'LONG', 1), gp('HYPERLIQUID', 'SHORT', 1)], [yu(1, 'GATE', 'LONG', 0.008, NOV)]), {}, 0, NOW);
+    expect(cardsOf(d)).toEqual(['BM GATE/HYPERLIQUID - 1']);
+    expect(ungroupedOf(d)).toEqual(['1 0.008']);
+    expect(r6(d.perpOnly[0].missingLong)).toBe(0.992);
+    expect(d.perpOnly[0].missingShort).toBe(1);
+  });
+
+  it('#75 an excluded leg blocks the open that nets against it', () => {
+    const d = deriveAsset(
+      book([gp('GATE', 'LONG', 1), gp('HYPERLIQUID', 'SHORT', 1)], [yu(5, 'HYPERLIQUID', 'LONG', 1, OCT), yu(6, 'GATE', 'LONG', 1, NOV)]),
+      { [borosKey(5)]: 'all', [borosKey(6)]: 1 },
+      0,
+      NOW,
+    );
+    expect(cardsOf(d)).toEqual(['BM GATE/HYPERLIQUID - 1']);
+    const card = d.perpOnly[0];
+    expect(card.otherWay).toEqual([]);
+    expect(card.missingShort).toBe(1);
+    expect(card.excludedNetsShort).toEqual([{ marketId: 5, venue: 'HYPERLIQUID', side: 'LONG', maturity: OCT }]);
+    expect(card.missingLong).toBe(1);
+    expect(card.excludedNetsLong).toEqual([]);
+  });
+
+  it('a held-other-way leg is listed on its card and blocks that side', () => {
+    const d = deriveAsset(book([gp('GATE', 'LONG', 1), gp('HYPERLIQUID', 'SHORT', 1)], [yu(5, 'HYPERLIQUID', 'LONG', 1, OCT)]), {}, 0, NOW);
+    expect(cardsOf(d)).toEqual(['BM GATE/HYPERLIQUID - 1']);
+    const card = d.perpOnly[0];
+    expect(card.otherWay.map((l) => `${l.marketId} ${r6(l.sizeBase)}`)).toEqual(['5 1']);
+    expect(card.otherWay[0].wrongSide).toEqual({ blocks: true, againstVenue: 'HYPERLIQUID' });
+    expect(card.blockedShort).toBe(true);
+    expect(card.missingShort).toBe(0);
+    expect(card.missingLong).toBeCloseTo(1, 9);
+    expect(d.pendingLegs).toEqual([]);
+  });
+
+  it('a leg on another card does not cut the offer in the model', () => {
+    const d = deriveAsset(
+      book([gp('GATE', 'LONG', 10), gp('HYPERLIQUID', 'SHORT', 10)], [yu(1, 'GATE', 'LONG', 10, NOV), yu(2, 'LIGHTER', 'SHORT', 10, NOV)]),
+      {},
+      0,
+      NOW,
+    );
+    expect(cardsOf(d)).toEqual(['BM GATE/HYPERLIQUID - 10', `PM GATE/LIGHTER ${NOV} 10`]);
+    const card = d.perpOnly[0];
+    expect(card.missingLong).toBeCloseTo(10, 9);
+    expect(card.missingShort).toBeCloseTo(10, 9);
+    expect(card.heldElsewhereLong).toBeUndefined();
+    expect(card.offerMaturity).toBe(NOV);
+  });
+
+  it('a part exclude row carries its size in the market unit', () => {
+    const d = deriveAsset(
+      book([], [yu(4, 'GATE', 'LONG', 25_000, NOV, { collateral: 'USDT', notionalUsd: 25_000 })], { priceUsd: 2500 }),
+      {},
+      0,
+      NOW,
+    );
+    expect(d.pendingLegs[0].sizeBase).toBeCloseTo(10, 9);
+    expect(d.pendingLegs[0].rowSizeToken).toBeCloseTo(25_000, 6);
+  });
+
+  it('exclusion of a closed leg changes nothing', () => {
+    expect(deriveAsset(b15(), { 'boros:999': 'all', 'boros:998': { qty: 2 } }, 0, NOW)).toEqual(deriveAsset(b15(), {}, 0, NOW));
+  });
+
+  it('ED-6648 only matured legs', () => {
+    const d = deriveAsset(book([], [yu(1, 'GATE', 'LONG', 1, OCT), yu(2, 'HYPERLIQUID', 'SHORT', 1, OCT)]), {}, 0, OCT + DAY);
+    expect(cardsOf(d)).toEqual([]);
+    expect(ungroupedOf(d)).toEqual([]);
+  });
+
+  it('ED-6648 everything closed', () => {
+    const d = deriveAsset(book([], []), {}, 0, NOW);
+    expect([d.pairs, d.perpOnly, d.borosOnly, d.pendingLegs, d.unpairedPerps]).toEqual([[], [], [], [], []]);
+  });
+
+  it('ED-6648 another coin never mixes', () => {
+    const btc = group({
+      base: 'BTC',
+      priceUsd: 60_000,
+      perpOpen: [
+        perp({ symbol: 'GATE_FUTURE_BTC_USDT', venue: 'GATE', side: 'LONG', qty: 10, notionalUsd: 600_000 }),
+        perp({ symbol: 'HYPERLIQUID_FUTURE_BTC_USDC', venue: 'HYPERLIQUID', side: 'SHORT', qty: 10, notionalUsd: 600_000 }),
+      ],
+      borosOpen: [
+        boros({ marketId: 11, venue: 'GATE', side: 'LONG', collateral: 'BTC', sizeToken: 6, notionalUsd: 360_000, maturity: NOV }),
+        boros({ marketId: 12, venue: 'HYPERLIQUID', side: 'SHORT', collateral: 'BTC', sizeToken: 6, notionalUsd: 360_000, maturity: NOV }),
+      ],
+    });
+    const eth = deriveAsset(b15(), {}, 0, NOW);
+    const other = deriveAsset(btc, {}, 0, NOW);
+    expect(cardsOf(eth)).toEqual([`BM GATE/HYPERLIQUID 2 4`, `H GATE/HYPERLIQUID ${OCT} 6`]);
+    expect(cardsOf(other)).toEqual(['BM GATE/HYPERLIQUID - 4', `H GATE/HYPERLIQUID ${NOV} 6`]);
+    expect(other.pairs[0].legs.map((l) => l.marketId ?? l.symbol).sort()).toEqual([11, 12, 'GATE_FUTURE_BTC_USDT', 'HYPERLIQUID_FUTURE_BTC_USDC'].sort());
+  });
+
+  const g17 = () => book([gp('GATE', 'LONG', 1), gp('HYPERLIQUID', 'SHORT', 1)], [yu(1, 'GATE', 'LONG', 1, OCT), yu(2, 'HYPERLIQUID', 'SHORT', 1, OCT)]);
+
+  it('ED-6648 maturing today', () => {
+    expect(cardsOf(deriveAsset(g17(), {}, 0, OCT - 1))).toEqual([`H GATE/HYPERLIQUID ${OCT} 1`]);
+  });
+
+  it('ED-6648 at the maturity second', () => {
+    expect(cardsOf(deriveAsset(g17(), {}, 0, OCT))).toEqual(['BM GATE/HYPERLIQUID - 1']);
+  });
+
+  it('ED-6648 maturing today: roll due', () => {
+    const d = deriveAsset(g17(), {}, 0, OCT - 1);
+    expect(pairRollDue(d.pairs[0], OCT - 1)).toBe(true);
+  });
+});
+
+describe('sizes at scale', () => {
+  it('card sizes equal the leg sizes at every rung', () => {
+    const bookAt = (base: string, price: number, qty: number, borosSize: number, collateral: string) =>
+      group({
+        base,
+        priceUsd: price,
+        perpOpen: [
+          perp({ symbol: 'GATE', venue: 'GATE', side: 'LONG', qty, notionalUsd: qty * price, imUsd: (qty * price) / 10 }),
+          perp({ symbol: 'HL', venue: 'HYPERLIQUID', side: 'SHORT', qty, notionalUsd: qty * price, imUsd: (qty * price) / 10 }),
+        ],
+        borosOpen: [
+          boros({ marketId: 1, venue: 'GATE', side: 'LONG', collateral, sizeToken: borosSize, notionalUsd: qty * price, imUsd: (qty * price) / 25 }),
+          boros({ marketId: 2, venue: 'HYPERLIQUID', side: 'SHORT', collateral, sizeToken: borosSize, notionalUsd: qty * price, imUsd: (qty * price) / 25 }),
+        ],
+      });
+    const rungs = [
+      ...[0.01, 1, 100, 2_400].map((qty) => ({ g: bookAt('ETH', 2_500, qty, qty, 'ETH'), qty, usd: qty * 2_500 })),
+      ...[50, 5_000, 100_000, 1_000_000, 6_000_000].map((usd) => ({ g: bookAt('HYPE', 40, usd / 40, usd, 'USDT'), qty: usd / 40, usd })),
+    ];
+    for (const { g, qty, usd } of rungs) {
+      const d = deriveAsset(g, {}, 0, NOW);
+      if (usd < 50) {
+        expect(d.pairs, `${usd}`).toEqual([]);
+        const [card] = d.perpOnly;
+        for (const leg of [card.long, card.short, ...d.pendingLegs]) {
+          expect(leg.sizeBase, `${usd}`).toBe(qty);
+          expect(leg.share, `${usd}`).toBe(1);
+        }
+        continue;
+      }
+      expect(d.pairs, `${usd}`).toHaveLength(1);
+      const [pair] = d.pairs;
+      expect(pair.legs).toHaveLength(4);
+      for (const leg of pair.legs) {
+        expect(leg.sizeBase, `${usd} ${leg.venue} ${leg.kind}`).toBe(qty);
+        expect(leg.notionalUsd, `${usd} ${leg.venue} ${leg.kind}`).toBe(usd);
+        expect(leg.share, `${usd} ${leg.venue} ${leg.kind}`).toBe(1);
+      }
+      expect(pairPerpCloseLegs(pair).map((l) => l.qty)).toEqual([qty, qty]);
+      expect(pairPerpCloseLegs(pair).every((l) => !l.partial)).toBe(true);
+    }
   });
 });

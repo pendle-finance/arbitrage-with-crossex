@@ -47,7 +47,7 @@ import { normalizeVenue, type PerpPositionLike } from '../../core/boros/venue';
 import { isSupportedCoin, SUPPORTED_COINS } from '../../core/coins';
 import { classifyGateError, CoreError } from '../../core/errors';
 import { rememberMarks } from '../../core/marks';
-import { parseSymbol } from '../../core/numbers';
+import { isQuoteTwin, parseSymbol } from '../../core/numbers';
 import type { AppDeps } from '../app';
 import { TTL } from '../cache';
 import { currentRebateClient, loggedInRoot } from '../borosRebate';
@@ -107,6 +107,7 @@ export interface AssetPerpOpenOut {
    * Null when the ledger could not be read in full or the position is under
    * an hour old. */
   fundingApr7d: number | null;
+  quoteTwin: boolean;
 }
 
 /** Closed positions since `since`, aggregated per symbol. Whole-lifetime
@@ -940,7 +941,7 @@ export function createAssetViewBuilder(deps: AppDeps) {
     for (const pos of perpPositions) {
       const qty = fin(pos.positionQty);
       if (qty === 0) continue;
-      const { exchange, base } = parseSymbol(pos.symbol ?? '');
+      const { exchange, base, quote } = parseSymbol(pos.symbol ?? '');
       if (!base) continue;
       const openedAtRaw = fin(pos.createTime);
       const openedAt = openedAtRaw > 0 ? epochToSec(openedAtRaw) : null;
@@ -971,6 +972,7 @@ export function createAssetViewBuilder(deps: AppDeps) {
         imUsd: Math.abs(fin(pos.initialMargin)),
         openedAt,
         fundingApr7d: fundingApr7dOf(pid, notionalUsd, openedAt),
+        quoteTwin: isQuoteTwin(exchange, quote),
       });
     }
 

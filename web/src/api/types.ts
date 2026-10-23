@@ -1489,6 +1489,7 @@ export interface AssetPerpOpen {
    * younger), annualised on its current notional. Signed, + = received. Null
    * when unknown. Absent from older servers. */
   fundingApr7d?: number | null;
+  quoteTwin?: boolean;
 }
 
 /** Closed positions since the start date, aggregated per symbol. */
@@ -1617,6 +1618,12 @@ export interface AssetGroup {
   perpClosed: AssetPerpClosed[];
   borosOpen: AssetBorosOpen[];
   borosHistory: AssetBorosHistory[];
+}
+
+export interface AssetViewPrefs {
+  sinceByAsset: Record<string, number>;
+  exclusions: Record<string, number | { qty: number; at?: number } | 'all'>;
+  legSince: Record<string, number>;
 }
 
 export interface AssetViewResponse {

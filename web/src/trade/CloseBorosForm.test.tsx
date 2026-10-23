@@ -597,6 +597,53 @@ describe('CloseBorosForm — a slice of a shared leg', () => {
     expect(screen.queryByText(/flat after/)).not.toBeInTheDocument();
   });
 
+  const heldOnChain = (currentSize: number) =>
+    http.get('/api/boros/pair/context', () =>
+      HttpResponse.json(
+        env({
+          markets: [
+            {
+              marketId: MARKET,
+              name: 'Gate ETH',
+              venue: 'Gate',
+              base: 'ETH',
+              tokenId: 2,
+              collateral: 'ETH',
+              maturity: 1_795_737_600,
+              midApr: 0.05,
+              markApr: 0.05,
+              maxRateDeviationApr: 0.01,
+              spreadVenues: null,
+              isolatedOnly: false,
+              onIsolatedMargin: false,
+              isolatedHasPositionOrOrders: false,
+              currentSize,
+              collateralPriceUsd: 2_460,
+              closeOnly: false,
+            },
+          ],
+          spreadMarkets: [],
+          crossByToken: [],
+          isolatedByMarket: [],
+          defaultSlippageApr: 0.0025,
+          maxSlippageApr: 0.1,
+        }),
+      ),
+    );
+
+  it.each([0.02, 2, 40, 400, 2_400])('S-CLOSE-08 the kept part of a part-excluded leg is never flat (%s ETH)', async (kept) => {
+    server.use(versionHandler(), agentReady(), heldOnChain(kept * 2.5));
+    renderWithClient(<CloseBorosForm legs={[{ ...leg(), notionalToken: kept, share: 1 }]} />);
+    expect(await screen.findByText(/the rest of the shared leg stays open/)).toBeInTheDocument();
+    expect(screen.queryByText(/flat after/)).not.toBeInTheDocument();
+  });
+
+  it('flat after when the close takes the whole on-chain leg', async () => {
+    server.use(versionHandler(), agentReady(), heldOnChain(2_400));
+    renderWithClient(<CloseBorosForm legs={[{ ...leg(), notionalToken: 2_400, share: 1 }]} />);
+    expect(await screen.findByText(/flat after/)).toBeInTheDocument();
+  });
+
   it('still says flat after for a whole leg at the max', async () => {
     server.use(...ready());
     renderWithClient(<CloseBorosForm legs={[{ ...leg(), share: 1 }]} />);

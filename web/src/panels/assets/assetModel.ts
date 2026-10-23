@@ -28,7 +28,8 @@ import type {
 } from '../../api/types';
 import { sizeUnitForBase } from '../../lib/boros';
 import { rebatedSettleApr } from '../../lib/rebate';
-import { isSpreadLeg } from '../../lib/spread';
+import { isSpreadLeg, venueLegsOf } from '../../lib/spread';
+import { groupBook, sameSize, type GroupCard, type WrongSide } from './grouping';
 
 export const SECONDS_IN_YEAR = 365 * 24 * 3600;
 
@@ -102,7 +103,7 @@ export interface PerpCloseLeg {
 export function pairPerpCloseLegs(pair: Pick<PairEstimate, 'legs'>): PerpCloseLeg[] {
   return pair.legs
     .filter((l) => l.kind === 'perp' && l.symbol !== undefined)
-    .map((l) => ({ symbol: l.symbol as string, qty: l.sizeToken, venue: l.venue, partial: l.share < 0.9995 }));
+    .map((l) => ({ symbol: l.symbol as string, qty: l.sizeToken, venue: l.venue, partial: !sameSize(l.share, 1) }));
 }
 
 /** The Boros legs of a pair as the close form's StrategyLeg rows: the
@@ -559,6 +560,8 @@ export interface PendingLeg {
    * 1 when the whole leg is pending. A close from the ungrouped list is
    * capped at this slice, so a leg partly in a pair keeps the pair's share. */
   share: number;
+  rowSizeToken: number;
+  wrongSide?: WrongSide;
 }
 
 /**
@@ -576,8 +579,8 @@ export interface UnpairedPerp {
   notionalUsd: number;
   unit: 'base' | 'usd';
   imUsd: number;
-  /** As PendingLeg.share. */
   share: number;
+  quoteTwin: boolean;
 }
 
 /**
@@ -620,191 +623,33 @@ export interface PerpOnlyPair {
    * first — what the card names as the reason. */
   heldElsewhereLong?: PendingLeg[];
   heldElsewhereShort?: PendingLeg[];
+  blockedLong: boolean;
+  blockedShort: boolean;
+  excludedNetsLong: ExcludedNet[];
+  excludedNetsShort: ExcludedNet[];
+  otherWay: PendingLeg[];
+  offerMaturity: number | null;
 }
+
+export type ExcludedNet = { marketId: number; venue: string; side: 'LONG' | 'SHORT'; maturity: number };
 
 /** A perp-only pair's two perps as the close form's rows: each SLICE, not
  * the venue's whole position — Hyperliquid's short may be shared with
  * another unit, and closing all of it would strip that one's hedge too. */
 export function perpOnlyCloseLegs(pair: Pick<PerpOnlyPair, 'long' | 'short'>): PerpCloseLeg[] {
-  return [pair.long, pair.short].map((l) => ({ symbol: l.symbol, qty: l.sizeBase, venue: l.venue, partial: l.share < 0.9995 }));
+  return [pair.long, pair.short].map((l) => ({ symbol: l.symbol, qty: l.sizeBase, venue: l.venue, partial: !sameSize(l.share, 1) }));
 }
 
 /** What a side still has to open. Float residue is not missing: 0.949 − 0.158
  * against 0.791 left "missing <0.000001 ETH" with an Open leg button. The cut
  * is relative too, as a dollar-unit leg of $8M has float steps above 1e-9. */
 function missingOf(take: number, have: { unit: 'base' | 'usd'; sizeBase: number; notionalUsd: number } | null): number {
-  const m = take - (have ? sizeIn(have, have.unit) : 0);
-  return m > Math.max(1e-9, take * 1e-9) ? m : 0;
+  return residueOf(take, have ? sizeIn(have, have.unit) : 0);
 }
 
-/** A pair this small is rounding, not a position: left among the ungrouped. */
-export const PERP_ONLY_DUST_USD = 50;
-/** Below this share of its leg, a remainder is rounding and is not listed. */
-const PERP_ONLY_REST_SHARE = 0.005;
-
-/**
- * Match the unpaired perps into offsetting units, largest first, then split
- * each unit by the size each held rate leg covers (owner 2026-10-16). A
- * long and a short single at one maturity make one part; every other single
- * makes its own part, the other side missing at that single's maturity
- * (rule 5); the rest is one part with no rate leg (rule 4). Largest single
- * first, so a small leftover never sets the date for the whole unit.
- * Whatever is left — an unmatched remainder, a YU with no perp, a YU bigger
- * than its perps — comes back as `restPerps` / `restYus`, re-scaled, for the
- * ungrouped card.
- */
-export function perpOnlyPairs(
-  perps: ReadonlyArray<UnpairedPerp>,
-  yus: ReadonlyArray<PendingLeg>,
-): { pairs: PerpOnlyPair[]; restPerps: UnpairedPerp[]; restYus: PendingLeg[] } {
-  const left = new Map<UnpairedPerp, number>(perps.map((l) => [l, sizeIn(l, l.unit)]));
-  const yuLeft = new Map<PendingLeg, number>(yus.map((l) => [l, sizeIn(l, l.unit)]));
-  const bySize = (a: UnpairedPerp, b: UnpairedPerp) => b.notionalUsd - a.notionalUsd || a.venue.localeCompare(b.venue);
-  const longs = perps.filter((l) => l.side === 'LONG').sort(bySize);
-  const shorts = perps.filter((l) => l.side === 'SHORT').sort(bySize);
-  const avail = (y: PendingLeg) => yuLeft.get(y) ?? 0;
-  const claim = (y: PendingLeg | null, t: number): PendingLeg | null => {
-    if (!y) return null;
-    yuLeft.set(y, avail(y) - t);
-    return slice(y, t);
-  };
-
-  // What each venue side lacks: its perps minus all its singles, a single
-  // that ends up ungrouped at another date included. Spent part by part, in
-  // order, so two parts never both open the same gap.
-  //
-  // Singles the grouping treats as rounding are not counted: smallest first,
-  // while what a side skips stays under the dust line. A $10 Gate single
-  // behind 0.949 ETH of perps cut Gate's gap to 0.945 against Hyperliquid's
-  // 0.949, and the uneven gaps lost the spread offer (owner 2026-10-16:
-  // offer the spread at 0.949, the single stays ungrouped).
-  const sideKey = (venue: string, side: 'LONG' | 'SHORT') => `${venue}:${side}`;
-  const skipped = new Map<string, number>();
-  const singles = yus
-    .filter((y) => !isSpreadLeg(y))
-    .sort((a, b) => a.notionalUsd - b.notionalUsd)
-    .filter((y) => {
-      const k = sideKey(y.venue, y.side);
-      const usd = (skipped.get(k) ?? 0) + y.notionalUsd;
-      if (usd * 2 >= PERP_ONLY_DUST_USD) return true;
-      skipped.set(k, usd);
-      return false;
-    });
-  const room = new Map<string, number>();
-  for (const p of perps) room.set(sideKey(p.venue, p.side), (room.get(sideKey(p.venue, p.side)) ?? 0) + sizeIn(p, p.unit));
-  for (const y of singles) room.set(sideKey(y.venue, y.side), (room.get(sideKey(y.venue, y.side)) ?? 0) - sizeIn(y, y.unit));
-  const capped = (perp: UnpairedPerp, missing: number): { missing: number; held?: PendingLeg[] } => {
-    const k = sideKey(perp.venue, perp.side);
-    const r = Math.max(0, room.get(k) ?? 0);
-    if (r >= missing - Math.max(1e-9, missing * 1e-9)) {
-      room.set(k, r - missing);
-      return { missing };
-    }
-    // A gap a part of its size would be dust (under $50 for both sides together) is rounding.
-    const m = slice(perp, r).notionalUsd * 2 < PERP_ONLY_DUST_USD ? 0 : r;
-    room.set(k, r - m);
-    const held = singles
-      .filter((y) => y.venue === perp.venue && y.side === perp.side)
-      .sort((a, b) => sizeIn(b, b.unit) - sizeIn(a, a.unit) || a.maturity - b.maturity);
-    return { missing: m, held };
-  };
-
-  const pairs: PerpOnlyPair[] = [];
-  const keyCount = new Map<string, number>();
-  for (const s of shorts) {
-    for (const l of longs) {
-      if (l.venue === s.venue || l.unit !== s.unit) continue;
-      const take = Math.min(left.get(l) ?? 0, left.get(s) ?? 0);
-      if (!(take > 0)) continue;
-      const dust = (t: number) => slice(l, t).notionalUsd + slice(s, t).notionalUsd < PERP_ONLY_DUST_USD;
-      if (dust(take)) continue;
-      left.set(l, (left.get(l) ?? 0) - take);
-      left.set(s, (left.get(s) ?? 0) - take);
-
-      // The pending rate legs at the two venues, each on its perp's side.
-      const held = (venue: string, side: 'LONG' | 'SHORT') =>
-        yus.filter((y) => !isSpreadLeg(y) && y.venue === venue && y.side === side && avail(y) > 0);
-      const heldLong = held(l.venue, 'LONG');
-      const heldShort = held(s.venue, 'SHORT');
-      const parts: { size: number; longYu: PendingLeg | null; shortYu: PendingLeg | null }[] = [];
-      let rest = take;
-      const part = (ly: PendingLeg | null, sy: PendingLeg | null) => {
-        const t = Math.min(rest, ly ? avail(ly) : rest, sy ? avail(sy) : rest);
-        // A sliver of a rate leg stays ungrouped; its perps join the rest.
-        if (!(t > 0) || dust(t)) return;
-        parts.push({ size: t, longYu: claim(ly, t), shortYu: claim(sy, t) });
-        rest -= t;
-      };
-      const largest = (a: PendingLeg, b: PendingLeg) => avail(b) - avail(a) || a.maturity - b.maturity;
-      for (const ly of [...heldLong].sort(largest)) {
-        for (const sy of [...heldShort].sort(largest)) if (sy.maturity === ly.maturity) part(ly, sy);
-      }
-      const lone = [...heldLong.map((y) => ({ y, long: true })), ...heldShort.map((y) => ({ y, long: false }))]
-        .filter(({ y }) => avail(y) > 0)
-        .sort((a, b) => largest(a.y, b.y) || a.y.venue.localeCompare(b.y.venue));
-      for (const { y, long } of lone) part(long ? y : null, long ? null : y);
-      // A dust rest is rounding: it rides on the last part, as before the split.
-      if (parts.length === 0 || (rest > 0 && !dust(rest))) parts.push({ size: rest, longYu: null, shortYu: null });
-      else parts[parts.length - 1].size += rest;
-
-      for (const p of parts) {
-        const long = slice(l, p.size);
-        const short = slice(s, p.size);
-        const heldIds = [p.longYu, p.shortYu].flatMap((y) => (y ? [y.marketId] : [])).join('+') || 'none';
-        const base = `${l.symbol}:${s.symbol}:${heldIds}`;
-        const n = keyCount.get(base) ?? 0;
-        keyCount.set(base, n + 1);
-        // A held side short by less than half the dust line is rounding: a
-        // dust rest rode on this part. Live 16 Oct: a 0.348 single on a
-        // 0.348125 unit hid the held row behind "missing 0.000125, Open leg",
-        // an order Boros refuses (under $10).
-        const gap = (perp: UnpairedPerp, yu: PendingLeg | null) => {
-          const m = missingOf(p.size, yu);
-          return yu && slice(perp, m).notionalUsd * 2 < PERP_ONLY_DUST_USD ? 0 : m;
-        };
-        const capLong = capped(l, gap(l, p.longYu));
-        const capShort = capped(s, gap(s, p.shortYu));
-        pairs.push({
-          partKey: `${base}:${n}`,
-          longVenue: l.venue,
-          shortVenue: s.venue,
-          long,
-          short,
-          size: p.size,
-          unit: l.unit,
-          notionalUsd: long.notionalUsd + short.notionalUsd,
-          imUsd: long.imUsd + short.imUsd + (p.longYu?.imUsd ?? 0) + (p.shortYu?.imUsd ?? 0),
-          longYu: p.longYu,
-          shortYu: p.shortYu,
-          missingLong: capLong.missing,
-          missingShort: capShort.missing,
-          ...(capLong.held?.length ? { heldElsewhereLong: capLong.held } : {}),
-          ...(capShort.held?.length ? { heldElsewhereShort: capShort.held } : {}),
-        });
-      }
-    }
-  }
-  return { pairs, restPerps: restOf(perps, left), restYus: restOf(yus, yuLeft) };
-}
-
-/** A leftover leg cut down to `take` of its size, every figure pro rata. */
-function slice<T extends { sizeBase: number; notionalUsd: number; imUsd: number; share: number; unit: 'base' | 'usd' }>(l: T, take: number): T {
-  const whole = sizeIn(l, l.unit);
-  const f = whole > 0 ? take / whole : 0;
-  return { ...l, sizeBase: l.sizeBase * f, notionalUsd: l.notionalUsd * f, imUsd: l.imUsd * f, share: l.share * f };
-}
-
-/** What the units left of each leg, re-scaled, for the ungrouped card. */
-function restOf<T extends UnpairedPerp | PendingLeg>(all: ReadonlyArray<T>, m: Map<T, number>): T[] {
-  return all.flatMap((l) => {
-    const rem = m.get(l) ?? 0;
-    const whole = sizeIn(l, l.unit);
-    // A sliver of a leg the units all but consumed (a 325 YU against a
-    // 324.87 perp) is rounding between two venues' sizes, not a loose leg
-    // worth a card of its own: under half a percent of the leg is dropped.
-    if (!(rem > 0) || (whole > 0 && rem / whole < PERP_ONLY_REST_SHARE)) return [];
-    return [rem >= whole ? l : slice(l, rem)];
-  });
+function residueOf(whole: number, part: number): number {
+  const rest = whole - part;
+  return rest > Math.max(1e-9, whole * 1e-9) ? rest : 0;
 }
 
 /**
@@ -839,142 +684,6 @@ export interface BorosOnlyPair {
   /** Receive leg minus pay leg, on notional, net of settlement fees; null
    * while either rate is pending. */
   lockedSpread: number | null;
-}
-
-/**
- * Match leftover rate legs into Boros-side units — LONG against SHORT, other
- * venue, same maturity, largest first — and hang a leftover perp at a matched
- * venue on its unit. Runs on what `perpOnlyPairs` left, so a perp is only here
- * when it had no other perp to offset. Never blends two maturities.
- */
-export function borosOnlyPairs(
-  perps: ReadonlyArray<UnpairedPerp>,
-  yus: ReadonlyArray<PendingLeg>,
-): { pairs: BorosOnlyPair[]; restPerps: UnpairedPerp[]; restYus: PendingLeg[] } {
-  const left = new Map<UnpairedPerp, number>(perps.map((l) => [l, sizeIn(l, l.unit)]));
-  const yuLeft = new Map<PendingLeg, number>(yus.map((l) => [l, sizeIn(l, l.unit)]));
-  const bySize = (a: PendingLeg, b: PendingLeg) => b.notionalUsd - a.notionalUsd || a.venue.localeCompare(b.venue);
-  const singles = yus.filter((l) => !isSpreadLeg(l));
-  const longs = singles.filter((l) => l.side === 'LONG').sort(bySize);
-  const shorts = singles.filter((l) => l.side === 'SHORT').sort(bySize);
-
-  const perpAt = (venue: string, side: 'LONG' | 'SHORT', unit: 'base' | 'usd', take: number): UnpairedPerp | null => {
-    const found = perps
-      .filter((p) => p.venue === venue && p.side === side && p.unit === unit && (left.get(p) ?? 0) > 0)
-      .sort((a, b) => b.notionalUsd - a.notionalUsd)[0];
-    if (!found) return null;
-    const t = Math.min(take, left.get(found) ?? 0);
-    left.set(found, (left.get(found) ?? 0) - t);
-    return slice(found, t);
-  };
-
-  const pairs: BorosOnlyPair[] = [];
-  // Two greedy orders, and the one that pairs more notional wins. Largest
-  // first is 1.7.4's order. Closest size first keeps legs opened together
-  // (the same size) in one unit: largest first gave a 0.261 Hyperliquid
-  // single to a 233 ETH Binance leg at the same date and left its Gate twin
-  // alone. Closest first loses when a venue holds both sides (Gate L 5, HL S
-  // 5.1, HL L 5, Lighter S 5 after an open-only roll pairs only Gate/Lighter),
-  // so it wins only on a tie.
-  const candidates = shorts.flatMap((s) =>
-    longs.filter((l) => l.venue !== s.venue && l.unit === s.unit && l.maturity === s.maturity).map((l) => ({ s, l })),
-  );
-  const greedy = (closest: boolean) => {
-    const rest = new Map(yuLeft);
-    const pool = [...candidates];
-    const gap = ({ s, l }: { s: PendingLeg; l: PendingLeg }) => {
-      const a = rest.get(l) ?? 0;
-      const b = rest.get(s) ?? 0;
-      return Math.abs(a - b) / Math.max(a, b);
-    };
-    const out: { s: PendingLeg; l: PendingLeg; take: number }[] = [];
-    let paired = 0;
-    for (;;) {
-      let best = -1;
-      for (let i = 0; i < pool.length; i++) {
-        const c = pool[i];
-        if (!((rest.get(c.l) ?? 0) > 0 && (rest.get(c.s) ?? 0) > 0)) continue;
-        if (best < 0) best = i;
-        if (!closest) break;
-        if (gap(c) < gap(pool[best])) best = i;
-      }
-      if (best < 0) break;
-      const { s, l } = pool.splice(best, 1)[0];
-      const take = Math.min(rest.get(l) ?? 0, rest.get(s) ?? 0);
-      const usd = slice(l, take).notionalUsd + slice(s, take).notionalUsd;
-      if (usd < PERP_ONLY_DUST_USD) continue;
-      rest.set(l, (rest.get(l) ?? 0) - take);
-      rest.set(s, (rest.get(s) ?? 0) - take);
-      out.push({ s, l, take });
-      paired += usd;
-    }
-    return { out, paired };
-  };
-  const byLargest = greedy(false);
-  const byClosest = greedy(true);
-  const matches = byClosest.paired >= byLargest.paired * (1 - 1e-9) ? byClosest.out : byLargest.out;
-  for (const { s, l, take } of matches) {
-    const longYu = slice(l, take);
-    const shortYu = slice(s, take);
-    yuLeft.set(l, (yuLeft.get(l) ?? 0) - take);
-    yuLeft.set(s, (yuLeft.get(s) ?? 0) - take);
-
-    const longPerp = perpAt(l.venue, 'LONG', l.unit, take);
-    const shortPerp = longPerp ? null : perpAt(s.venue, 'SHORT', l.unit, take);
-    pairs.push({
-      longVenue: l.venue,
-      shortVenue: s.venue,
-      maturity: l.maturity,
-      longYu,
-      shortYu,
-      borosLegs: [longYu, shortYu],
-      size: take,
-      unit: l.unit,
-      notionalUsd: longYu.notionalUsd + shortYu.notionalUsd,
-      imUsd: longYu.imUsd + shortYu.imUsd + (longPerp?.imUsd ?? 0) + (shortPerp?.imUsd ?? 0),
-      longPerp,
-      shortPerp,
-      missingLong: missingOf(take, longPerp),
-      missingShort: missingOf(take, shortPerp),
-      // The 4-leg pair's definition (`pairLockedSpread`): receive minus
-      // pay, on the rate legs' notional, net of both settlement fees.
-      lockedSpread:
-        l.lockedApr !== null && s.lockedApr !== null
-          ? l.lockedApr + s.lockedApr - (l.settleFeeApr ?? 0) - (s.settleFeeApr ?? 0)
-          : null,
-    });
-  }
-  for (const y of yus) {
-    if (!y.spreadVenues) continue;
-    const take = yuLeft.get(y) ?? 0;
-    if (!(take > 0)) continue;
-    const leg = slice(y, take);
-    if (leg.notionalUsd < PERP_ONLY_DUST_USD) continue;
-    yuLeft.set(y, 0);
-    const [first, second] = y.spreadVenues;
-    const shortVenue = y.side === 'SHORT' ? first : second;
-    const longVenue = y.side === 'SHORT' ? second : first;
-    const longPerp = perpAt(longVenue, 'LONG', y.unit, take);
-    const shortPerp = longPerp ? null : perpAt(shortVenue, 'SHORT', y.unit, take);
-    pairs.push({
-      longVenue,
-      shortVenue,
-      maturity: y.maturity,
-      longYu: null,
-      shortYu: null,
-      borosLegs: [leg],
-      size: take,
-      unit: y.unit,
-      notionalUsd: leg.notionalUsd,
-      imUsd: leg.imUsd + (longPerp?.imUsd ?? 0) + (shortPerp?.imUsd ?? 0),
-      longPerp,
-      shortPerp,
-      missingLong: missingOf(take, longPerp),
-      missingShort: missingOf(take, shortPerp),
-      lockedSpread: y.lockedApr !== null ? y.lockedApr - (y.settleFeeApr ?? 0) : null,
-    });
-  }
-  return { pairs, restPerps: restOf(perps, left), restYus: restOf(yus, yuLeft) };
 }
 
 /**
@@ -1058,6 +767,8 @@ export interface AssetDerived {
   /** Rough per-pair decomposition (see PairEstimate). Empty when the book
    * has no long/short perp pairing to decompose. */
   pairs: PairEstimate[];
+  perpOnly: PerpOnlyPair[];
+  borosOnly: BorosOnlyPair[];
   /** YU legs left over once every 4-leg unit is formed (see PendingLeg). */
   pendingLegs: PendingLeg[];
   /** Perp legs (or slices) left over the same way (see UnpairedPerp). */
@@ -1112,119 +823,6 @@ const signedBoros = (
 
 const borosVenuesOf = (l: Pick<AssetBorosOpen, 'venue' | 'spreadVenues'>): readonly string[] => l.spreadVenues ?? [l.venue];
 
-export const spreadFits = (l: Pick<AssetBorosOpen, 'side' | 'spreadVenues'>, longVenue: string, shortVenue: string): boolean => {
-  if (!l.spreadVenues) return false;
-  const [first, second] = l.spreadVenues;
-  return l.side === 'SHORT' ? first === shortVenue && second === longVenue : first === longVenue && second === shortVenue;
-};
-
-/** One venue's YU legs, as the allocator sees them. */
-export interface YuSlice {
-  marketId: number;
-  maturity: number;
-  /** Size in the asset's unit, AFTER exclusions. */
-  size: number;
-}
-
-/** How much of each side's YU legs a pair receives, by market id. */
-export interface YuAllocation {
-  long: Map<number, number>;
-  short: Map<number, number>;
-}
-
-/**
- * Allocate YU legs to a pair, MATCHING MATURITIES FIRST.
- *
- * The old rule scaled every YU at a venue by one perp-derived fraction, so a
- * book laddered across two maturities had each pair carry a slice of BOTH —
- * blending two locked rates and two terms into a single "Est. fixed APR"
- * while the timeline showed only the soonest. On a book whose legs were
- * opened as matched pairs (the normal case) that is pure fiction: the exact
- * pairing exists and the numbers should show it.
- *
- * So: for each maturity present on both sides, pair as much as that maturity
- * can support (capped by what this pair's perp size still needs, and by what
- * earlier pairs left unclaimed). Whatever the pair still needs after that —
- * a genuinely unmatched ladder, a one-sided maturity — falls back to the old
- * proportional split over the REMAINING legs, so nothing is lost and a book
- * with no clean pairing behaves exactly as before.
- *
- * `need` is the pair's perp-derived size; `remainingLong`/`remainingShort`
- * are mutated so pairs allocated earlier cannot be double-counted.
- */
-export function allocateYuByMaturity(
-  need: number,
-  longLegs: readonly YuSlice[],
-  shortLegs: readonly YuSlice[],
-  remainingLong: Map<number, number>,
-  remainingShort: Map<number, number>,
-): YuAllocation {
-  const long = new Map<number, number>();
-  const short = new Map<number, number>();
-  if (!(need > 0)) return { long, short };
-
-  const take = (
-    legs: readonly YuSlice[],
-    remaining: Map<number, number>,
-    out: Map<number, number>,
-    want: number,
-    maturity: number | null,
-  ): number => {
-    let got = 0;
-    // Biggest first: a ladder's main leg should absorb the pair, not be
-    // fragmented across the dust legs that happen to sort earlier.
-    const pool = [...legs]
-      .filter((l) => maturity === null || l.maturity === maturity)
-      .sort((a, b) => (remaining.get(b.marketId) ?? 0) - (remaining.get(a.marketId) ?? 0));
-    for (const l of pool) {
-      if (got >= want - 1e-9) break;
-      const avail = remaining.get(l.marketId) ?? 0;
-      if (avail <= 0) continue;
-      const t = Math.min(avail, want - got);
-      remaining.set(l.marketId, avail - t);
-      out.set(l.marketId, (out.get(l.marketId) ?? 0) + t);
-      got += t;
-    }
-    return got;
-  };
-
-  // Phase 1 — maturities present on BOTH sides, soonest first (the nearest
-  // expiry is the one a trader is managing).
-  const shared = [...new Set(longLegs.map((l) => l.maturity))]
-    .filter((m) => shortLegs.some((s) => s.maturity === m))
-    .sort((a, b) => a - b);
-  let placed = 0;
-  for (const m of shared) {
-    if (placed >= need - 1e-9) break;
-    const want = need - placed;
-    // Probe both sides against a copy first: a maturity can only pair as far
-    // as its THINNER side goes, and taking the fat side first would strand
-    // size that the other side cannot match.
-    const probeL = new Map(remainingLong);
-    const probeS = new Map(remainingShort);
-    const canL = take(longLegs, probeL, new Map(), want, m);
-    const canS = take(shortLegs, probeS, new Map(), want, m);
-    const pairable = Math.min(canL, canS);
-    if (pairable <= 1e-9) continue;
-    take(longLegs, remainingLong, long, pairable, m);
-    take(shortLegs, remainingShort, short, pairable, m);
-    placed += pairable;
-  }
-
-  /**
-   * No cross-maturity fallback: a 4-leg unit settles at ONE maturity, so
-   * size that this maturity cannot pair is not part of it. It stays in the
-   * remaining pool and surfaces as a pending leg — which is the honest
-   * answer for a ladder mid-roll, and stops a unit claiming hedge that
-   * matures on a different day.
-   *
-   * `placed` is deliberately unused past here; it stays for readability of
-   * the loop above.
-   */
-  void placed;
-  return { long, short };
-}
-
 /**
  * The kept fraction of a Boros market's HISTORY under its exclusion. A partial
  * exclusion scales settled PnL by the same fraction it scales capital — a
@@ -1246,55 +844,15 @@ export function borosHistoryKeep(
   return legQty > 0 ? 1 - excludedFraction(exclusions, key, legQty) : 1;
 }
 
-/**
- * Legs of two merged sub-pairs. ONE venue position attributed to both
- * sub-pairs — a single YU leg hedging two perp books at a venue, or the
- * short perp each of two long books took a share of — must come back as one
- * leg, or the close forms see the same market or symbol twice: an
- * ineligible Boros "pair" they cannot quote, and a close submitted twice.
- */
-function mergeLegs(a: readonly PairLegDetail[], b: readonly PairLegDetail[]): PairLegDetail[] {
-  const out: PairLegDetail[] = [...a];
-  const same = (x: PairLegDetail, y: PairLegDetail) =>
-    x.kind === y.kind &&
-    x.side === y.side &&
-    (x.kind === 'yu' ? x.marketId !== undefined && x.marketId === y.marketId : x.symbol !== undefined && x.symbol === y.symbol);
-  for (const leg of b) {
-    const i = out.findIndex((o) => same(o, leg));
-    if (i < 0) {
-      out.push(leg);
-      continue;
-    }
-    const prev = out[i];
-    const notionalUsd = prev.notionalUsd + leg.notionalUsd;
-    out[i] = {
-      ...prev,
-      share: Math.min(1, prev.share + leg.share),
-      sizeToken: prev.sizeToken + leg.sizeToken,
-      sizeBase: prev.sizeBase + leg.sizeBase,
-      notionalUsd,
-      // Same market, same locked rate in practice; weight by notional regardless.
-      lockedApr:
-        prev.lockedApr !== null && leg.lockedApr !== null && notionalUsd > 0
-          ? (prev.lockedApr * prev.notionalUsd + leg.lockedApr * leg.notionalUsd) / notionalUsd
-          : (prev.lockedApr ?? leg.lockedApr),
-      feesUsd: prev.feesUsd + leg.feesUsd,
-      imUsd: prev.imUsd + leg.imUsd,
-      imAtOpenUsd:
-        prev.imAtOpenUsd !== null && leg.imAtOpenUsd !== null ? prev.imAtOpenUsd + leg.imAtOpenUsd : null,
-    };
-  }
-  return out;
-}
+export const excludedNetsOf = (borosOpen: AssetBorosOpen[], exclusions: Exclusions, venue: string, side: 'LONG' | 'SHORT'): ExcludedNet[] =>
+  borosOpen
+    .flatMap((b) => {
+      if (!(excludedFraction(exclusions, borosKey(b.marketId), b.sizeToken) > 0)) return [];
+      const leg = venueLegsOf(b, 1).find((l) => l.venue === venue && l.side !== side);
+      return leg ? [{ marketId: b.marketId, venue, side: leg.side, maturity: b.maturity }] : [];
+    })
+    .sort((a, b) => a.maturity - b.maturity || a.marketId - b.marketId);
 
-/**
- * Two pairing orders, and the further-maturity one wins unless largest first
- * hedges more notional. Further first can take a leg another venue pairing
- * needs at that date: Gate L 2 / HL S 1 / Lighter S 1 perps, Gate/HL at
- * 27 Nov and Gate/Lighter at 25 Dec, plus a stray HL 25 Dec leg. Further
- * first hedged 1 ETH there, largest first 2 (report 2026-10-18). Judged per
- * venue pairing, so an unrelated roll in the same coin keeps further first.
- */
 export function deriveAsset(
   group: AssetGroup,
   exclusions: Exclusions,
@@ -1307,32 +865,6 @@ export function deriveAsset(
   /** The account's settlement-fee rebate config. Applied ONLY to the FORWARD
    * locked-rate math (current fixed APR, per-pair est. APR), per market — realized
    * rebate rides on each history row's `rebateUsd`. Null = none. */
-  rebate?: Rebate | null,
-): AssetDerived {
-  const hedged = (d: AssetDerived) => d.pairs.reduce((t, p) => t + p.notionalUsd, 0);
-  const largestFor = new Set<string>();
-  const order = { largestFor, moved: new Set<string>() };
-  let best = deriveAssetBy(order, group, exclusions, sinceSec, nowSec, feeRows, rebate);
-  for (const pairing of order.moved) {
-    const trial = deriveAssetBy({ largestFor: new Set([...largestFor, pairing]), moved: new Set() }, group, exclusions, sinceSec, nowSec, feeRows, rebate);
-    if (hedged(trial) > hedged(best) * (1 + 1e-9)) {
-      best = trial;
-      largestFor.add(pairing);
-    }
-  }
-  return best;
-}
-
-function deriveAssetBy(
-  /** The venue pairings ("GATE/HYPERLIQUID") that keep largest first; the
-   * rest take the further maturity first. `moved` collects the pairings
-   * where that changed a pick. */
-  order: { largestFor: ReadonlySet<string>; moved: Set<string> },
-  group: AssetGroup,
-  exclusions: Exclusions,
-  sinceSec: number,
-  nowSec: number,
-  feeRows?: readonly VenueFees[],
   rebate?: Rebate | null,
 ): AssetDerived {
   const unit = sizeUnitForBase(group.base);
@@ -1388,10 +920,12 @@ function deriveAssetBy(
     return v;
   };
 
+  const twinSigned = new Map<string, number>();
   for (const l of group.perpOpen) {
     const keep = 1 - excludedFraction(exclusions, perpKey(l.symbol), l.qty);
     if (keep <= 0) continue;
-    venueFor(l.venue).perpSigned += signedPerp(l, unit, keep);
+    if (l.quoteTwin) twinSigned.set(l.venue, (twinSigned.get(l.venue) ?? 0) + signedPerp(l, unit, keep));
+    else venueFor(l.venue).perpSigned += signedPerp(l, unit, keep);
   }
   for (const l of group.borosOpen) {
     const keep = 1 - excludedFraction(exclusions, borosKey(l.marketId), l.sizeToken);
@@ -1449,8 +983,10 @@ function deriveAssetBy(
     (a, b) => Math.abs(b.perpSigned) - Math.abs(a.perpSigned) || a.venue.localeCompare(b.venue),
   );
 
-  const netPerp = venues.reduce((s, v) => s + v.perpSigned, 0);
-  const grossPerp = venues.reduce((s, v) => s + Math.abs(v.perpSigned), 0);
+  const perpNets = new Map(venues.map((v) => [v.venue, v.perpSigned]));
+  for (const [venue, signed] of twinSigned) perpNets.set(venue, (perpNets.get(venue) ?? 0) + signed);
+  const netPerp = [...perpNets.values()].reduce((s, n) => s + n, 0);
+  const grossPerp = [...perpNets.values()].reduce((s, n) => s + Math.abs(n), 0);
   const perpTolerance = unit === 'base' ? COIN_HEDGE_TOLERANCE : HEDGE_TOLERANCE;
   const deltaNeutral = grossPerp === 0 || Math.abs(netPerp) / grossPerp <= perpTolerance;
   const deltaNeutralLoose = grossPerp === 0 || Math.abs(netPerp) / grossPerp <= HEDGE_TOLERANCE;
@@ -1674,448 +1210,300 @@ function deriveAssetBy(
     };
   })();
 
-  /**
-   * PAIR ESTIMATES — decompose the book into long-venue⇄short-venue
-   * 4-leg sub-strategies, proportionally. Each LONG perp venue takes a
-   * size-proportional slice of the whole SHORT side (and of the short
-   * venues' Boros legs); its own venue's Boros legs ride along whole.
-   */
   const keepOf = (l: AssetPerpOpen) => 1 - excludedFraction(exclusions, perpKey(l.symbol), l.qty);
   const borosKeepOf = (l: AssetBorosOpen) =>
     1 - excludedFraction(exclusions, borosKey(l.marketId), l.sizeToken);
-  /** A YU leg's whole size in the asset's unit, by its own collateral. */
   const yuSize = (l: AssetBorosOpen) => borosSizeIn(l, unit, group.base, group.priceUsd);
-  const longs = group.perpOpen.filter((l) => l.side === 'LONG' && keepOf(l) > 0);
-  const shorts = group.perpOpen.filter((l) => l.side === 'SHORT' && keepOf(l) > 0);
   const legSize = (l: AssetPerpOpen) => (unit === 'base' ? l.qty : l.notionalUsd) * keepOf(l);
-  const longTotal = longs.reduce((t, l) => t + legSize(l), 0);
-  const shortTotal = shorts.reduce((t, l) => t + legSize(l), 0);
-  const pairs: PairEstimate[] = [];
-  const pendingLegs: PendingLeg[] = [];
-  const unpairedPerps: UnpairedPerp[] = [];
-  /**
-   * What each YU leg still has to give, drawn down as pairs claim it.
-   * Shared across the whole loop so a leg can never be allocated twice —
-   * the old flat `share` could, whenever the perp shares summed past 1.
-   * Declared outside the pairing block: a book that forms no pair at all
-   * (one perp side, or none) leaves EVERY leg unclaimed, and the ungrouped
-   * list below must still say so.
-   */
-  const yuRemaining = new Map<number, number>(
-    group.borosOpen.map((b) => [
-      b.marketId,
-      yuSize(b) * borosKeepOf(b),
-    ]),
-  );
-  /** Σ share of each perp symbol the pairs claimed — the rest is unpaired. */
-  const perpClaimed = new Map<string, number>();
-  /**
-   * Long × short perp venues are matched WHERE THEIR RATE LEGS PAIR, largest
-   * unit first: a long and a short form a unit at a maturity both venues hold
-   * rate legs for, as big as the thinnest of the four legs still allows.
-   *
-   * It used to size every combination L·S / max(ΣL, ΣS) — each perp spread
-   * over every counterparty in proportion. With two units on the book (OKX
-   * long / Lighter short at 27 Nov, Gate long / Hyperliquid short at 30 Oct)
-   * that pushed part of OKX's perp against Hyperliquid's, whose rate legs
-   * share no maturity with OKX's: the slice could pair with nothing, every
-   * leg left a remainder, and the remainders surfaced as "Boros leg missing"
-   * beside ungrouped rate legs (a user's report, 2026-10-04). At one
-   * maturity it split each unit into crossed halves instead.
-   *
-   * Where several matchings are equally valid — two longs and two shorts all
-   * at one maturity — any of them is a true hedge; the book's totals are the
-   * same either way. Largest first gives the fewest, biggest units; ties go
-   * to the earlier maturity, then the larger perps, so the result is stable.
-   * One exception: within one venue pairing the further maturity goes first,
-   * unless that hedges less notional (see deriveAsset).
-   */
-  const pool = Math.max(longTotal, shortTotal);
-  if (longs.length > 0 && shorts.length > 0 && pool > 0) {
-    const histByMarket = new Map(group.borosHistory.map((h) => [h.marketId, h]));
-    /** A venue's singles on one side. A single hedges a perp only on the
-     * perp's own side: Hyperliquid short perps and a Hyperliquid LONG single
-     * are not a hedge (report 2026-10-18). */
-    const yuSlicesFor = (venue: string, side: 'LONG' | 'SHORT'): YuSlice[] =>
-      group.borosOpen
-        .filter((b) => !isSpreadLeg(b) && b.venue === venue && b.side === side && borosKeepOf(b) > 0)
-        .map((b) => ({
-          marketId: b.marketId,
-          maturity: b.maturity,
-          size: yuSize(b) * borosKeepOf(b),
-        }));
-    const spreadsFor = (longVenue: string, shortVenue: string): AssetBorosOpen[] =>
-      group.borosOpen.filter((b) => spreadFits(b, longVenue, shortVenue) && borosKeepOf(b) > 0);
-    const spreadLeftAt = (longVenue: string, shortVenue: string, maturity: number): number =>
-      spreadsFor(longVenue, shortVenue)
-        .filter((b) => b.maturity === maturity)
-        .reduce((t, b) => t + (yuRemaining.get(b.marketId) ?? 0), 0);
-    /**
-     * One row per (long venue, short venue, MATURITY, kind) — a 4-leg
-     * arbitrage is a fixed-term unit, so a venue pairing laddered across two
-     * terms is two units, not one blended row. A spread market and two single
-     * markets at the same venues and term are two units too: traders compare
-     * the two and close them at different times (mozzarella 2026-10-14).
-     */
-    const combos = longs
-      .flatMap((l) =>
-        shorts.flatMap((sh) => {
-          const lm = new Set(yuSlicesFor(l.venue, 'LONG').map((y) => y.maturity));
-          const shared = yuSlicesFor(sh.venue, 'SHORT')
-            .map((y) => y.maturity)
-            .filter((m) => lm.has(m));
-          const spreadMaturities = spreadsFor(l.venue, sh.venue).map((b) => b.maturity);
-          return [
-            ...[...new Set(spreadMaturities)].map((maturity) => ({ l, sh, maturity, kind: 'spread' as const })),
-            ...[...new Set(shared)].map((maturity) => ({ l, sh, maturity, kind: 'singles' as const })),
-          ];
-        }),
-      )
-      // The tie order (see above): earlier maturity, then larger perps.
-      .sort(
-        (a, b) => a.maturity - b.maturity || legSize(b.l) * legSize(b.sh) - legSize(a.l) * legSize(a.sh),
-      );
-    /** What each perp leg still has to give, drawn down as units claim it. */
-    const perpLeft = new Map<AssetPerpOpen, number>([...longs, ...shorts].map((l) => [l, legSize(l)]));
-    /** Rate-leg size still unclaimed at one venue and maturity. */
-    const yuLeftAt = (venue: string, side: 'LONG' | 'SHORT', maturity: number): number =>
-      yuSlicesFor(venue, side)
-        .filter((y) => y.maturity === maturity)
-        .reduce((t, y) => t + (yuRemaining.get(y.marketId) ?? 0), 0);
-    /** The largest unit any combination can still form, re-judged after each
-     * claim. A combination that formed nothing is not offered again. Units
-     * rank by everything their venues and term can still pair, spread and
-     * singles together, as before the split; within one venue pairing and
-     * term the spread claims the perps first (owner 2026-10-14). */
-    function* largestFirst() {
-      const spent = new Set<(typeof combos)[number]>();
-      for (;;) {
-        let best: (typeof combos)[number] | null = null;
-        let bestRank = 1e-9;
-        let bestNeed = 0;
-        for (const c of combos) {
-          if (spent.has(c)) continue;
-          const perps = Math.min(perpLeft.get(c.l) ?? 0, perpLeft.get(c.sh) ?? 0);
-          const spreadLeft = spreadLeftAt(c.l.venue, c.sh.venue, c.maturity);
-          const singlesLeft = Math.min(yuLeftAt(c.l.venue, 'LONG', c.maturity), yuLeftAt(c.sh.venue, 'SHORT', c.maturity));
-          const need = Math.min(perps, c.kind === 'spread' ? spreadLeft : singlesLeft);
-          // Strictly greater: the spread combo comes first in `combos`, so it
-          // wins the tie with its singles twin.
-          const rank = Math.min(perps, spreadLeft + singlesLeft);
-          if (need > 1e-9 && rank > bestRank) {
-            best = c;
-            bestRank = rank;
-            bestNeed = need;
-          }
-        }
-        if (best === null) return;
-        // Within one venue pairing, the further maturity takes the perps
-        // first: after a roll that keeps the old legs, the new legs are the
-        // hedged pair and the old ones show what they lack (mozzarella
-        // 2026-10-17). At one maturity the spread still comes first. Dust
-        // units keep today's order.
-        const usdOf = (c: (typeof combos)[number], size: number) =>
-          unit === 'usd' ? size : c.l.qty > 0 ? (size * c.l.notionalUsd) / c.l.qty : 0;
-        let take = bestNeed;
-        const pairing = `${best.l.venue}/${best.sh.venue}`;
-        for (const c of order.largestFor.has(pairing) ? [] : combos) {
-          if (spent.has(c) || c.l !== best.l || c.sh !== best.sh || !(c.maturity > best.maturity)) continue;
-          const perps = Math.min(perpLeft.get(c.l) ?? 0, perpLeft.get(c.sh) ?? 0);
-          const left = c.kind === 'spread' ? spreadLeftAt(c.l.venue, c.sh.venue, c.maturity) : Math.min(yuLeftAt(c.l.venue, 'LONG', c.maturity), yuLeftAt(c.sh.venue, 'SHORT', c.maturity));
-          const need = Math.min(perps, left);
-          // A later unit under the dust line does not take the main pair's perps.
-          if (need > 1e-9 && usdOf(c, need) * 2 >= PERP_ONLY_DUST_USD) {
-            best = c;
-            bestNeed = need;
-            order.moved.add(pairing);
-            // A roll that filled a hair short leaves the old legs a dust rest
-            // of the perps: it is rounding, so it rides on the new unit
-            // instead of showing as a $2 hedged card (report 2026-10-18).
-            take = usdOf(c, perps - need) * 2 < PERP_ONLY_DUST_USD ? perps : need;
-          }
-        }
-        const before = perpLeft.get(best.l);
-        yield { ...best, need: bestNeed, take };
-        if (perpLeft.get(best.l) === before) spent.add(best);
-      }
-    }
-    for (const { l: lLeg, sh: sLeg, maturity, kind, need, take } of largestFirst()) {
-      const lKeep = keepOf(lLeg);
-      const sKeep = keepOf(sLeg);
-      const lSize = legSize(lLeg);
-      const sSize = legSize(sLeg);
-      const longBoros = group.borosOpen.filter(
-        (b) => !isSpreadLeg(b) && b.venue === lLeg.venue && b.side === 'LONG' && b.maturity === maturity && borosKeepOf(b) > 0,
-      );
-      const shortBoros = group.borosOpen.filter(
-        (b) => !isSpreadLeg(b) && b.venue === sLeg.venue && b.side === 'SHORT' && b.maturity === maturity && borosKeepOf(b) > 0,
-      );
-      const spreadBoros =
-        kind === 'spread' ? spreadsFor(lLeg.venue, sLeg.venue).filter((b) => b.maturity === maturity) : [];
-      const spreadAlloc = new Map<number, number>();
-      let spreadGot = 0;
-      for (const b of spreadBoros) {
-        const avail = yuRemaining.get(b.marketId) ?? 0;
-        const t = Math.min(avail, need - spreadGot);
-        if (!(t > 0)) continue;
-        yuRemaining.set(b.marketId, avail - t);
-        spreadAlloc.set(b.marketId, t);
-        spreadGot += t;
-      }
-      /**
-       * The YU size THIS maturity can actually pair, capped by the perp
-       * pairing it sits inside: a unit is only as big as its thinnest leg.
-       * Allocation runs first and the perps follow it, so the row's size is
-       * what the hedge really is rather than a perp-derived guess.
-       */
-      const alloc =
-        kind === 'spread'
-          ? { long: new Map<number, number>(), short: new Map<number, number>() }
-          : allocateYuByMaturity(
-              need,
-              yuSlicesFor(lLeg.venue, 'LONG').filter((y) => y.maturity === maturity),
-              yuSlicesFor(sLeg.venue, 'SHORT').filter((y) => y.maturity === maturity),
-              yuRemaining,
-              yuRemaining,
-            );
-      const allocLong = [...alloc.long.values()].reduce((a, b) => a + b, 0);
-      const allocShort = [...alloc.short.values()].reduce((a, b) => a + b, 0);
-      const size = spreadGot + Math.min(allocLong, allocShort);
-      if (!(size > 0)) continue;
-      // The perps' dust rest, when this unit takes it (see largestFirst).
-      const perpSize = size + (take - need);
-      perpLeft.set(lLeg, (perpLeft.get(lLeg) ?? 0) - perpSize);
-      perpLeft.set(sLeg, (perpLeft.get(sLeg) ?? 0) - perpSize);
-      // Perps ride PRO-RATA with the YU size this unit claims, so several
-      // maturity rows of the same venue pairing sum to the venue's real totals
-      // rather than each claiming the whole perp position.
-      const lShare = perpSize / lSize; // slice of the long perp leg
-      const share = perpSize / sSize; // slice of the short perp leg
-      let cap = lLeg.imUsd * lKeep * lShare + sLeg.imUsd * sKeep * share;
-      let perYear = 0;
-      let hasUnknownPairRate = false;
-      let soonest = 0;
-      const legs: PairLegDetail[] = [
-        {
-          venue: lLeg.venue,
-          kind: 'perp',
-          side: 'LONG',
-          share: lShare,
-          sizeToken: lLeg.qty * lKeep * lShare,
-          sizeBase: lLeg.qty * lKeep * lShare,
-          notionalUsd: lLeg.notionalUsd * lKeep * lShare,
-          lockedApr: null,
-          feesUsd: lLeg.feesUsd * lKeep * lShare,
-          symbol: lLeg.symbol,
-          maturity: 0,
-          imUsd: lLeg.imUsd * lKeep * lShare,
-          imAtOpenUsd: null,
-        },
-        {
-          venue: sLeg.venue,
-          kind: 'perp',
-          side: 'SHORT',
-          share,
-          sizeToken: sLeg.qty * sKeep * share,
-          sizeBase: sLeg.qty * sKeep * share,
-          notionalUsd: sLeg.notionalUsd * sKeep * share,
-          lockedApr: null,
-          feesUsd: sLeg.feesUsd * sKeep * share,
-          symbol: sLeg.symbol,
-          maturity: 0,
-          imUsd: sLeg.imUsd * sKeep * share,
-          imAtOpenUsd: null,
-        },
-      ];
-      // "First fully hedged" = the LATEST leg start: the hedge only exists
-      // once every leg is in place. Perps carry their open time; a Boros
-      // leg's first settlement/trade stands in for its open (hourly, so at
-      // most an hour late). Legs with no known start are skipped.
-      let hedgedSince = 0;
-      const legStart = (t: number | null | undefined) => {
-        if (t && t > hedgedSince) hedgedSince = t;
-      };
-      legStart(lLeg.openedAt);
-      legStart(sLeg.openedAt);
-      const perpOpened = Math.max(lLeg.openedAt ?? 0, sLeg.openedAt ?? 0);
-      let borosOpened = Number.POSITIVE_INFINITY;
-      let borosFeesPaidUsd = 0;
-      const addBoros = (b: AssetBorosOpen, frac: number) => {
-        const slice = keptSlice(exclusions, borosKey(b.marketId), b.sizeToken, b.entryApr);
-        const keep = slice.keep * frac;
-        const entryApr = slice.entry;
-        cap += b.imUsd * keep;
-        if (b.maturity > nowSec) {
-          // Net of the settlement fee — see the asset-level note: a cost to
-          // either side, unavoidable, so it lives inside the locked rate.
-          if (entryApr === null) hasUnknownPairRate = true;
-          else
-            perYear +=
-              (b.side === 'SHORT' ? 1 : -1) * entryApr * b.notionalUsd * keep -
-              rebatedSettleApr(b.settleFeeApr ?? 0, rebate, b.marketId) * b.notionalUsd * keep;
-          if (soonest === 0 || b.maturity < soonest) soonest = b.maturity;
-        }
-        const h = histByMarket.get(b.marketId);
-        // TRADE fees only: settlement fees are already netted out of the
-        // locked rate above, and charging them again here would double-count
-        // them against the same carry.
-        const fees = h ? h.tradeFeeUsd * keep : 0;
-        borosFeesPaidUsd += fees;
-        legStart(h?.firstEventSec);
-        if (h?.firstEventSec) borosOpened = Math.min(borosOpened, h.firstEventSec);
-        legs.push({
-          venue: b.venue,
-          kind: 'yu',
-          side: b.side,
-          share: frac,
-          sizeToken: b.sizeToken * keep,
-          sizeBase: borosSizeIn(b, 'base', group.base, group.priceUsd) * keep,
-          notionalUsd: b.notionalUsd * keep,
-          lockedApr: entryApr === null ? null : (b.side === 'SHORT' ? 1 : -1) * entryApr,
-          feesUsd: fees,
-          maturity: b.maturity,
-          marketId: b.marketId,
-          spreadVenues: b.spreadVenues,
-          imUsd: b.imUsd * keep,
-          imAtOpenUsd:
-            h?.firstEventSec && b.maturity > nowSec && b.maturity > h.firstEventSec
-              ? (b.imUsd * keep * (b.maturity - h.firstEventSec)) / (b.maturity - nowSec)
-              : null,
-        });
-      };
-      for (const b of longBoros) {
-        const got = alloc.long.get(b.marketId) ?? 0;
-        const whole = yuSize(b) * borosKeepOf(b);
-        if (got > 0 && whole > 0) addBoros(b, got / whole);
-      }
-      for (const b of shortBoros) {
-        const got = alloc.short.get(b.marketId) ?? 0;
-        const whole = yuSize(b) * borosKeepOf(b);
-        if (got > 0 && whole > 0) addBoros(b, got / whole);
-      }
-      for (const b of spreadBoros) {
-        const got = spreadAlloc.get(b.marketId) ?? 0;
-        const whole = yuSize(b) * borosKeepOf(b);
-        if (got > 0 && whole > 0) addBoros(b, got / whole);
-      }
-      const notionalUsd = lLeg.notionalUsd * lKeep * lShare + sLeg.notionalUsd * sKeep * share;
-      // Exit cost: both perp legs crossed once at taker — the account's own
-      // per-venue schedule when known, a flat 4.5bp otherwise.
-      const FALLBACK_TAKER_RATE = 0.00045;
-      const exitFeeUsd =
-        lLeg.notionalUsd * lKeep * lShare * (takerOf(lLeg.symbol) ?? FALLBACK_TAKER_RATE) +
-        sLeg.notionalUsd * sKeep * share * (takerOf(sLeg.symbol) ?? FALLBACK_TAKER_RATE);
-      // A 4-leg arbitrage needs all four: a perp AND a YU at each venue.
-      // Two perps with a YU on one side only are a hedge in progress, and
-      // quoting them as a "pair" would lend a locked rate to a book that has
-      // none yet — the missing-leg rows already say what to open.
-      if (spreadGot <= 0 && (longBoros.length === 0 || shortBoros.length === 0)) continue;
-      perpClaimed.set(lLeg.symbol, (perpClaimed.get(lLeg.symbol) ?? 0) + lShare);
-      perpClaimed.set(sLeg.symbol, (perpClaimed.get(sLeg.symbol) ?? 0) + share);
-      pairs.push({
-        longVenue: lLeg.venue,
-        shortVenue: sLeg.venue,
-        kind,
-        size,
-        unit,
-        notionalUsd,
-        capitalUsd: cap,
-        lockedAprFwd:
-          cap >= MIN_APR_CAPITAL_USD && perYear !== 0 && !hasUnknownPairRate ? perYear / cap : null,
-        exitFeeUsd,
-        hedgedSinceSec: hedgedSince > 0 && hedgedSince < nowSec ? hedgedSince : null,
-        perpOpenedSec: perpOpened > 0 ? perpOpened : null,
-        borosOpenedSec: Number.isFinite(borosOpened) ? borosOpened : null,
-        soonestMaturitySec: maturity > nowSec ? maturity : soonest,
-        legs,
-        perpFeesPaidUsd: lLeg.feesUsd * lKeep * lShare + sLeg.feesUsd * sKeep * share,
-        borosFeesPaidUsd,
-      });
-    }
-    /**
-     * Merge units that are the SAME venue pairing at the SAME maturity.
-     * Two perp positions on one venue (an ETH_USDT and an ETH_USDC book,
-     * say) generate one triple each, and showing them apart reads as two
-     * hedges when it is one — with two nearly-identical APRs sitting side
-     * by side, which is exactly what a duplicate looks like.
-     */
-    const merged = new Map<string, PairEstimate>();
-    for (const p of pairs) {
-      const k = `${p.longVenue}:${p.shortVenue}:${p.soonestMaturitySec}:${p.kind}`;
-      const prev = merged.get(k);
-      if (!prev) {
-        merged.set(k, p);
-        continue;
-      }
-      const cap = prev.capitalUsd + p.capitalUsd;
-      // Rates combine on capital — the only weighting under which the
-      // merged row earns what its two halves earned.
-      const apr =
-        prev.lockedAprFwd !== null && p.lockedAprFwd !== null && cap > 0
-          ? (prev.lockedAprFwd * prev.capitalUsd + p.lockedAprFwd * p.capitalUsd) / cap
-          : (prev.lockedAprFwd ?? p.lockedAprFwd);
-      merged.set(k, {
-        ...prev,
-        size: prev.size + p.size,
-        notionalUsd: prev.notionalUsd + p.notionalUsd,
-        capitalUsd: cap,
-        lockedAprFwd: apr,
-        exitFeeUsd: prev.exitFeeUsd + p.exitFeeUsd,
-        perpFeesPaidUsd: prev.perpFeesPaidUsd + p.perpFeesPaidUsd,
-        borosFeesPaidUsd: prev.borosFeesPaidUsd + p.borosFeesPaidUsd,
-        legs: mergeLegs(prev.legs, p.legs),
-        hedgedSinceSec:
-          prev.hedgedSinceSec !== null && p.hedgedSinceSec !== null
-            ? Math.max(prev.hedgedSinceSec, p.hedgedSinceSec)
-            : (prev.hedgedSinceSec ?? p.hedgedSinceSec),
-      });
-    }
-    pairs.length = 0;
-    pairs.push(...merged.values());
-    pairs.sort((a, b) => b.notionalUsd - a.notionalUsd || a.soonestMaturitySec - b.soonestMaturitySec);
-  }
-  /**
-   * Whatever no 4-leg unit could claim: the far end of a ladder mid-roll,
-   * a rate leg opened before its hedge, a perp at a venue with no YU. Dust
-   * below 0.1% of the leg is a rounding residual, not a position — it would
-   * read as a phantom "pending" row on a book that is fully paired.
-   */
-  for (const b of group.borosOpen) {
-    const left = yuRemaining.get(b.marketId) ?? 0;
-    const whole = yuSize(b) * borosKeepOf(b);
-    if (whole <= 0 || left <= whole * 0.001) continue;
-    const pendingEntry = keptSlice(exclusions, borosKey(b.marketId), b.sizeToken, b.entryApr).entry;
-    pendingLegs.push({
+  const keptPerps = group.perpOpen.filter((l) => keepOf(l) > 0);
+  const keptBoros = group.borosOpen.filter((b) => borosKeepOf(b) > 0);
+  const borosById = new Map(keptBoros.map((b) => [b.marketId, b]));
+  const histByMarket = new Map(group.borosHistory.map((h) => [h.marketId, h]));
+  const result = groupBook({
+    perps: keptPerps.map((l) => ({
+      venue: l.venue,
+      side: l.side,
+      symbol: l.symbol,
+      size: legSize(l),
+      notionalUsd: l.notionalUsd * keepOf(l),
+      quoteTwin: l.quoteTwin ?? false,
+    })),
+    boros: keptBoros.map((b) => {
+      const size = yuSize(b) * borosKeepOf(b);
+      return { marketId: b.marketId, legs: venueLegsOf(b, size), size, notionalUsd: b.notionalUsd * borosKeepOf(b), maturity: b.maturity };
+    }),
+    restShare: unit === 'base' ? 0.001 : 0.005,
+  });
+
+  const perpSharesOf = (venue: string, side: 'LONG' | 'SHORT', size: number) => {
+    const at = keptPerps.filter((l) => l.venue === venue && l.side === side && !l.quoteTwin);
+    const total = at.reduce((t, l) => t + legSize(l), 0);
+    return total > 0 ? at.map((l) => ({ l, share: size / total })) : [];
+  };
+  const unpairedOf = (l: AssetPerpOpen, share: number): UnpairedPerp => {
+    const f = keepOf(l) * share;
+    return {
+      venue: l.venue,
+      side: l.side,
+      symbol: l.symbol,
+      sizeBase: l.qty * f,
+      notionalUsd: l.notionalUsd * f,
+      unit,
+      imUsd: l.imUsd * f,
+      share: f,
+      quoteTwin: l.quoteTwin ?? false,
+    };
+  };
+  const perpRowOf = (row: { venue: string; side: 'LONG' | 'SHORT'; size: number } | undefined): UnpairedPerp | null => {
+    if (!row) return null;
+    const [first, ...rest] = perpSharesOf(row.venue, row.side, row.size).map(({ l, share }) => unpairedOf(l, share));
+    if (!first) return null;
+    return rest.reduce(
+      (t, p) => ({ ...t, sizeBase: t.sizeBase + p.sizeBase, notionalUsd: t.notionalUsd + p.notionalUsd, imUsd: t.imUsd + p.imUsd }),
+      first,
+    );
+  };
+  const pendingOf = (b: AssetBorosOpen, size: number, wrongSide?: WrongSide | null): PendingLeg => {
+    const f = yuSize(b) > 0 ? size / yuSize(b) : 0;
+    const kept = yuSize(b) * borosKeepOf(b);
+    const entry = keptSlice(exclusions, borosKey(b.marketId), b.sizeToken, b.entryApr).entry;
+    const token = yuSize(b) > 0 ? (b.sizeToken * size) / yuSize(b) : 0;
+    return {
       venue: b.venue,
       side: b.side,
       marketId: b.marketId,
       spreadVenues: b.spreadVenues,
       maturity: b.maturity,
-      sizeBase: borosSizeIn(b, 'base', group.base, group.priceUsd) * (left / (yuSize(b) || 1)),
-      notionalUsd: b.notionalUsd * (left / (yuSize(b) || 1)),
+      sizeBase: borosSizeIn(b, 'base', group.base, group.priceUsd) * f,
+      notionalUsd: b.notionalUsd * f,
       unit,
-      lockedApr: pendingEntry === null ? null : (b.side === 'SHORT' ? 1 : -1) * pendingEntry,
+      lockedApr: entry === null ? null : (b.side === 'SHORT' ? 1 : -1) * entry,
       settleFeeApr: rebatedSettleApr(b.settleFeeApr ?? 0, rebate, b.marketId),
-      imUsd: b.imUsd * (left / whole),
-      share: left / whole,
+      imUsd: b.imUsd * f,
+      share: kept > 0 ? size / kept : 0,
+      rowSizeToken: sameSize(token, b.sizeToken) ? b.sizeToken : Number(token.toPrecision(12)),
+      ...(wrongSide ? { wrongSide } : {}),
+    };
+  };
+  const pendingRowsOf = (rows: ReadonlyArray<{ marketId: number; size: number }>): PendingLeg[] =>
+    rows.flatMap((row) => {
+      const b = borosById.get(row.marketId);
+      return b ? [pendingOf(b, row.size)] : [];
     });
-  }
-  pendingLegs.sort((a, b) => a.maturity - b.maturity || b.notionalUsd - a.notionalUsd);
-  for (const l of [...longs, ...shorts]) {
-    const keep = keepOf(l);
-    const left = 1 - Math.min(1, perpClaimed.get(l.symbol) ?? 0);
-    if (keep <= 0 || left <= 0.001) continue;
-    unpairedPerps.push({
-      venue: l.venue,
-      side: l.side,
-      symbol: l.symbol,
-      sizeBase: l.qty * keep * left,
-      notionalUsd: l.notionalUsd * keep * left,
+
+  const FALLBACK_TAKER_RATE = 0.00045;
+  const pairOf = (card: GroupCard): PairEstimate => {
+    const legs: PairLegDetail[] = [];
+    let cap = 0;
+    let notionalUsd = 0;
+    let exitFeeUsd = 0;
+    let perpFeesPaidUsd = 0;
+    let borosFeesPaidUsd = 0;
+    let perYear = 0;
+    let hasUnknownPairRate = false;
+    let hedgedSince = 0;
+    let perpOpened = 0;
+    let borosOpened = Number.POSITIVE_INFINITY;
+    const legStart = (t: number | null | undefined) => {
+      if (t && t > hedgedSince) hedgedSince = t;
+    };
+    for (const { l, share } of card.perps.flatMap((row) => perpSharesOf(row.venue, row.side, row.size))) {
+      const f = keepOf(l) * share;
+      cap += l.imUsd * f;
+      notionalUsd += l.notionalUsd * f;
+      exitFeeUsd += l.notionalUsd * f * (takerOf(l.symbol) ?? FALLBACK_TAKER_RATE);
+      perpFeesPaidUsd += l.feesUsd * f;
+      legStart(l.openedAt);
+      perpOpened = Math.max(perpOpened, l.openedAt ?? 0);
+      legs.push({
+        venue: l.venue,
+        kind: 'perp',
+        side: l.side,
+        share: f,
+        sizeToken: l.qty * f,
+        sizeBase: l.qty * f,
+        notionalUsd: l.notionalUsd * f,
+        lockedApr: null,
+        feesUsd: l.feesUsd * f,
+        symbol: l.symbol,
+        maturity: 0,
+        imUsd: l.imUsd * f,
+        imAtOpenUsd: null,
+      });
+    }
+    for (const row of card.boros) {
+      const b = borosById.get(row.marketId);
+      const kept = b ? yuSize(b) * borosKeepOf(b) : 0;
+      if (!b || !(kept > 0)) continue;
+      const frac = row.size / kept;
+      const slice = keptSlice(exclusions, borosKey(b.marketId), b.sizeToken, b.entryApr);
+      const keep = slice.keep * frac;
+      const entryApr = slice.entry;
+      cap += b.imUsd * keep;
+      if (entryApr === null) hasUnknownPairRate = true;
+      else
+        perYear +=
+          (b.side === 'SHORT' ? 1 : -1) * entryApr * b.notionalUsd * keep -
+          rebatedSettleApr(b.settleFeeApr ?? 0, rebate, b.marketId) * b.notionalUsd * keep;
+      const h = histByMarket.get(b.marketId);
+      const fees = h ? h.tradeFeeUsd * keep : 0;
+      borosFeesPaidUsd += fees;
+      legStart(h?.firstEventSec);
+      if (h?.firstEventSec) borosOpened = Math.min(borosOpened, h.firstEventSec);
+      legs.push({
+        venue: b.venue,
+        kind: 'yu',
+        side: b.side,
+        share: frac,
+        sizeToken: b.sizeToken * keep,
+        sizeBase: borosSizeIn(b, 'base', group.base, group.priceUsd) * keep,
+        notionalUsd: b.notionalUsd * keep,
+        lockedApr: entryApr === null ? null : (b.side === 'SHORT' ? 1 : -1) * entryApr,
+        feesUsd: fees,
+        maturity: b.maturity,
+        marketId: b.marketId,
+        spreadVenues: b.spreadVenues,
+        imUsd: b.imUsd * keep,
+        imAtOpenUsd:
+          h?.firstEventSec && b.maturity > nowSec && b.maturity > h.firstEventSec
+            ? (b.imUsd * keep * (b.maturity - h.firstEventSec)) / (b.maturity - nowSec)
+            : null,
+      });
+    }
+    return {
+      longVenue: card.longVenue,
+      shortVenue: card.shortVenue,
+      kind: card.spread ? 'spread' : 'singles',
+      size: card.size,
       unit,
-      imUsd: l.imUsd * keep * left,
-      share: left,
+      notionalUsd,
+      capitalUsd: cap,
+      lockedAprFwd: cap >= MIN_APR_CAPITAL_USD && perYear !== 0 && !hasUnknownPairRate ? perYear / cap : null,
+      exitFeeUsd,
+      hedgedSinceSec: hedgedSince > 0 && hedgedSince < nowSec ? hedgedSince : null,
+      perpOpenedSec: perpOpened > 0 ? perpOpened : null,
+      borosOpenedSec: Number.isFinite(borosOpened) ? borosOpened : null,
+      soonestMaturitySec: card.maturity ?? 0,
+      legs,
+      perpFeesPaidUsd,
+      borosFeesPaidUsd,
+    };
+  };
+
+  const otherWayIds = new Set([
+    ...result.cards.flatMap((c) => c.otherWay.map((w) => w.marketId)),
+    ...result.ungrouped.boros.filter((b) => b.wrongSide).map((b) => b.marketId),
+  ]);
+  const heldElsewhereOf = (venue: string, side: 'LONG' | 'SHORT'): PendingLeg[] =>
+    keptBoros
+      .flatMap((b) => {
+        if (otherWayIds.has(b.marketId) || !venueLegsOf(b, 1).some((l) => l.venue === venue && l.side === side)) return [];
+        const kept = yuSize(b) * borosKeepOf(b);
+        const away = result.cards.reduce((t, c) => {
+          const row = c.boros.find((r) => r.marketId === b.marketId);
+          return t + (row && !c.perps.some((p) => p.venue === venue && p.side === side) ? row.size : 0);
+        }, 0);
+        const counted = residueOf(kept, away);
+        return counted > 0 ? [pendingOf(b, counted)] : [];
+      })
+      .sort((a, b) => sizeIn(b, b.unit) - sizeIn(a, a.unit) || a.maturity - b.maturity);
+  const cardDates = result.cards.flatMap((c) => (c.maturity === null ? [] : [c.maturity]));
+  const latestCardDate = cardDates.length > 0 ? Math.max(...cardDates) : null;
+
+  const pairs: PairEstimate[] = [];
+  const perpOnly: PerpOnlyPair[] = [];
+  const borosOnly: BorosOnlyPair[] = [];
+  const keyCount = new Map<string, number>();
+  for (const card of result.cards) {
+    if (card.kind === 'hedged') {
+      pairs.push(pairOf(card));
+      continue;
+    }
+    const longPerp = perpRowOf(card.perps.find((p) => p.side === 'LONG'));
+    const shortPerp = perpRowOf(card.perps.find((p) => p.side === 'SHORT'));
+    const borosLegs = pendingRowsOf(card.boros);
+    if (card.kind === 'perpMissing') {
+      const notionalUsd = borosLegs.reduce((t, y) => t + y.notionalUsd, 0);
+      borosOnly.push({
+        longVenue: card.longVenue,
+        shortVenue: card.shortVenue,
+        maturity: card.maturity ?? 0,
+        longYu: card.spread ? null : (borosLegs.find((y) => y.side === 'LONG') ?? null),
+        shortYu: card.spread ? null : (borosLegs.find((y) => y.side === 'SHORT') ?? null),
+        borosLegs,
+        size: card.size,
+        unit,
+        notionalUsd,
+        imUsd: borosLegs.reduce((t, y) => t + y.imUsd, 0) + (longPerp?.imUsd ?? 0) + (shortPerp?.imUsd ?? 0),
+        longPerp,
+        shortPerp,
+        missingLong: missingOf(card.size, longPerp),
+        missingShort: missingOf(card.size, shortPerp),
+        lockedSpread: borosLegs.every((y) => y.lockedApr !== null)
+          ? borosLegs.reduce((t, y) => t + (y.lockedApr ?? 0) - (y.settleFeeApr ?? 0), 0)
+          : null,
+      });
+      continue;
+    }
+    if (!longPerp || !shortPerp) continue;
+    const cut = (side: 'LONG' | 'SHORT', offer: number, blocked: boolean) =>
+      card.holds !== side && !blocked && residueOf(card.size, offer) > 0 ? heldElsewhereOf(side === 'LONG' ? card.longVenue : card.shortVenue, side) : [];
+    const heldLong = cut('LONG', card.offer.long, card.blocked.long);
+    const heldShort = cut('SHORT', card.offer.short, card.blocked.short);
+    const heldTotal = borosLegs.reduce((t, y) => t + sizeIn(y, y.unit), 0);
+    const parts = borosLegs.length > 0 ? borosLegs.map((y) => ({ y, f: heldTotal > 0 ? sizeIn(y, y.unit) / heldTotal : 1 })) : [{ y: null, f: 1 }];
+    parts.forEach(({ y, f }, i) => {
+      const scale = (p: UnpairedPerp): UnpairedPerp => ({ ...p, sizeBase: p.sizeBase * f, notionalUsd: p.notionalUsd * f, imUsd: p.imUsd * f, share: p.share * f });
+      const long = scale(longPerp);
+      const short = scale(shortPerp);
+      const base = `${long.symbol}:${short.symbol}:${y?.marketId ?? 'none'}`;
+      const n = keyCount.get(base) ?? 0;
+      keyCount.set(base, n + 1);
+      perpOnly.push({
+        partKey: `${base}:${n}`,
+        longVenue: card.longVenue,
+        shortVenue: card.shortVenue,
+        long,
+        short,
+        size: card.size * f,
+        unit,
+        notionalUsd: long.notionalUsd + short.notionalUsd,
+        imUsd: long.imUsd + short.imUsd + (y?.imUsd ?? 0),
+        longYu: y?.side === 'LONG' ? y : null,
+        shortYu: y?.side === 'SHORT' ? y : null,
+        missingLong: card.offer.long * f,
+        missingShort: card.offer.short * f,
+        blockedLong: card.blocked.long,
+        blockedShort: card.blocked.short,
+        excludedNetsLong: card.offer.long > 0 ? excludedNetsOf(group.borosOpen, exclusions, card.longVenue, 'LONG') : [],
+        excludedNetsShort: card.offer.short > 0 ? excludedNetsOf(group.borosOpen, exclusions, card.shortVenue, 'SHORT') : [],
+        otherWay:
+          i === 0
+            ? card.otherWay.flatMap((w) => {
+                const b = borosById.get(w.marketId);
+                return b ? [pendingOf(b, yuSize(b) * borosKeepOf(b), { blocks: w.blocks, againstVenue: w.againstVenue })] : [];
+              })
+            : [],
+        offerMaturity: y ? y.maturity : latestCardDate,
+        ...(heldLong.length > 0 ? { heldElsewhereLong: heldLong } : {}),
+        ...(heldShort.length > 0 ? { heldElsewhereShort: heldShort } : {}),
+      });
     });
   }
+  pairs.sort((a, b) => b.notionalUsd - a.notionalUsd || a.soonestMaturitySec - b.soonestMaturitySec);
+  perpOnly.sort((a, b) => b.notionalUsd - a.notionalUsd || a.partKey.localeCompare(b.partKey));
+  borosOnly.sort((a, b) => b.notionalUsd - a.notionalUsd || a.maturity - b.maturity || a.longVenue.localeCompare(b.longVenue));
+
+  const pendingLegs = result.ungrouped.boros.flatMap((row) => {
+    const b = borosById.get(row.marketId);
+    return b ? [pendingOf(b, row.size, row.wrongSide)] : [];
+  });
+  pendingLegs.sort((a, b) => a.maturity - b.maturity || b.notionalUsd - a.notionalUsd);
+  const unpairedPerps = result.ungrouped.perps.flatMap((p) =>
+    p.quoteTwin
+      ? keptPerps.filter((l) => l.symbol === p.symbol).map((l) => unpairedOf(l, p.size / legSize(l)))
+      : perpSharesOf(p.venue, p.side, p.size).map(({ l, share }) => unpairedOf(l, share)),
+  );
   unpairedPerps.sort((a, b) => b.notionalUsd - a.notionalUsd || a.venue.localeCompare(b.venue));
 
   return {
@@ -2161,6 +1549,8 @@ function deriveAssetBy(
     lockedToMaturityUsd: lockedOk ? lockedToMaturityUsd : null,
     lockedNotionalUsd: lockedOk && lockedNotionalUsd > 0 ? lockedNotionalUsd : null,
     pairs,
+    perpOnly,
+    borosOnly,
     pendingLegs,
     unpairedPerps,
     rebate: rebate ?? null,

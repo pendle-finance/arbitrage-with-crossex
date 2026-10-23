@@ -201,7 +201,7 @@ describe('BorosOnlyPairCard', () => {
     const hl = within(table)
       .getAllByRole('row')
       .filter((r) => /HyperliquidCrossEx/.test(r.textContent ?? ''));
-    expect(hl.map((r) => r.textContent)).toEqual([expect.stringMatching(/^HyperliquidCrossExSHORTmissing 90 ETH10 \/ 100 ETH/)]);
+    expect(hl.map((r) => r.textContent)).toEqual([expect.stringMatching(/^HyperliquidCrossExSHORTmissing 90 ETHThe other 100 ETH of the Hyperliquid perp is on another card\.10 \/ 100 ETH/)]);
   });
 
   it('a Boros leg shared with another card shows its percent, and the hover breaks it down', () => {

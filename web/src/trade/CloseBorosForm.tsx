@@ -501,7 +501,10 @@ export function CloseBorosForm({
   const atMax = closesAll;
   // A leg this close holds only a SLICE of (a pair's share of a shared venue
   // leg) never goes flat at the max: the rest of the leg stays open.
-  const sharedLeg = closable.some((l) => (l.share ?? 1) < 0.9995);
+  const sharedLeg = closable.some((l) => {
+    const open = Math.abs(rowOf(l.marketId)?.currentSize ?? 0);
+    return open > 0 ? wholeOf(l) < open : (l.share ?? 1) < 0.9995;
+  });
   const flatAfter = atMax && !sharedLeg;
   const soleSpread = closable.length === 1 ? spreadOf(closable[0]) : null;
 

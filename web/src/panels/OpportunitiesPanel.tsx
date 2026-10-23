@@ -13,7 +13,7 @@
  * drive. Executing only PREFILLS the pair ticket — submission stays behind its
  * hold-to-confirm control.
  */
-import { ArrowRight, ArrowUpRight } from 'lucide-react';
+import { ArrowRight, ArrowUpRight, Info } from 'lucide-react';
 import {
   memo,
   useCallback,
@@ -30,6 +30,7 @@ import {
   isValidOpportunityNotional,
   OPPORTUNITY_NOTIONAL_MAX,
   OPPORTUNITY_NOTIONAL_MIN,
+  PERP_SLIPPAGE_CLIP_USD,
   useBorosPairContext,
   useOpportunities,
   usePositions,
@@ -1189,6 +1190,18 @@ export function OpportunitiesPanel() {
         {sizeErr && (
           <span role="alert" className="text-[10.5px] text-guava">
             {sizeErr}
+          </span>
+        )}
+        {/* Above one clip the cards price perp slippage as a TWAP in $1M
+            orders (src/core/boros/opportunities.ts). The open ticket still
+            walks the full book. */}
+        {pricedNotionalUsd > PERP_SLIPPAGE_CLIP_USD && (
+          <span className="flex max-w-[26rem] items-start gap-1.5 text-[10.5px] text-ink-400">
+            <Info size={12} aria-hidden className="mt-px flex-none text-amber-400" />
+            <span>
+              Perp slippage is estimated at a $1M notional size. Above that, TWAP the perp side to
+              keep slippage close to this estimate.
+            </span>
           </span>
         )}
       </div>
