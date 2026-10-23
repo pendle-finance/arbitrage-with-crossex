@@ -132,10 +132,6 @@ describe('ClosePairForm — the slippage the user sets is the slippage sent', ()
 
 describe('ClosePairForm — one size, both legs, never a naked remainder', () => {
   it('names a qty on the LARGER leg when the typed size is only part of it', async () => {
-    // The cap is the smaller leg (1.2). Left at the cap, the smaller leg may
-    // close qty-less (its whole position) but the larger leg must carry
-    // qty=1.2 — a qty-less action there would close all 1.89 and leave 0.69
-    // naked, from a form whose point is closing the hedge as a unit.
     const seen: ActionInput[][] = [];
     server.use(...baseHandlers(), previewSpy(seen));
     renderWithClient(
@@ -147,12 +143,44 @@ describe('ClosePairForm — one size, both legs, never a naked remainder', () =>
         ]}
       />,
     );
+    fireEvent.change(screen.getByLabelText('Close size, applied to both legs'), { target: { value: '1' } });
+    await waitFor(() => expect(qtysOf(seen.at(-1))).toEqual(['1', '1']), { timeout: 4000 });
+  });
+
+  const RUNGS = [50, 5_000, 100_000, 1_000_000, 6_000_000];
+  it.each(RUNGS)("S-CLOSE-01 close perps sends each row's size at every rung ($%i)", async (usd) => {
+    const gate = usd / 2500;
+    const hl = Number((gate * 1.0005).toPrecision(8));
+    const seen: ActionInput[][] = [];
+    server.use(...baseHandlers(), previewSpy(seen));
+    const first = renderWithClient(
+      <ClosePairForm
+        base="ETH"
+        legs={[
+          { symbol: 'GATE_FUTURE_ETH_USDT', qty: gate, venue: 'GATE', partial: true },
+          { symbol: 'HYPERLIQUID_FUTURE_ETH_USDT', qty: hl, venue: 'HYPERLIQUID', partial: true },
+        ]}
+      />,
+    );
+    await waitFor(() => expect(qtysOf(seen.at(-1))).toEqual([String(gate), String(hl)]), { timeout: 4000 });
+    first.unmount();
+
+    seen.length = 0;
+    renderWithClient(
+      <ClosePairForm
+        base="ETH"
+        legs={[
+          { symbol: 'GATE_FUTURE_ETH_USDT', qty: gate, venue: 'GATE' },
+          { symbol: 'HYPERLIQUID_FUTURE_ETH_USDT', qty: hl, venue: 'HYPERLIQUID' },
+        ]}
+      />,
+    );
     await waitFor(() => expect(seen.length).toBeGreaterThan(0), { timeout: 4000 });
-    const qtyOf = (as: ActionInput[]) =>
-      as.map((a) => (a.kind === 'close-position' ? a.qty : undefined));
-    expect(qtyOf(seen.at(-1)!)).toEqual([undefined, '1.2']);
+    expect(qtysOf(seen.at(-1))).toEqual([undefined, undefined]);
   });
 });
+
+const qtysOf = (as: ActionInput[] | undefined) => as?.map((a) => (a.kind === 'close-position' ? a.qty : undefined));
 
 describe('ClosePairForm — slippage is part of the close intent', () => {
   it('mints a NEW deal id when slippage changes after a lost response', async () => {

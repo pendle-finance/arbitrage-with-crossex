@@ -1164,7 +1164,7 @@ describe('RollOverModal — per-venue exposure', () => {
   });
 
   for (const [label, single, spread] of [
-    ['$50', 0.01, 0.01],
+    ['$50 (#14)', 0.02, 0.02],
     ['$6M', 1261.25, 1071.75],
   ] as const) {
     // A mixed book is two pairs (mozzarella 2026-10-14); each rolls on its own.

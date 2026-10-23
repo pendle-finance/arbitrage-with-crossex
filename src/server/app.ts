@@ -34,6 +34,7 @@ import { rebalanceRoutes } from './routes/rebalance';
 import { symbolsRoutes } from './routes/symbols';
 import { shareLinkRoutes } from './routes/shareLink';
 import { telegramRoutes } from './routes/telegram';
+import { assetPrefsRoutes } from './routes/assetPrefs';
 import { transferRoutes } from './routes/transfer';
 import { versionRoutes } from './routes/version';
 import { tradesRoutes } from './routes/trades';
@@ -223,6 +224,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     opportunitiesRoutes,
     borosPairRoutes,
     assetViewRoutes,
+    assetPrefsRoutes,
     borosAgentRoutes,
     rebateRoutes,
     booksRoutes,

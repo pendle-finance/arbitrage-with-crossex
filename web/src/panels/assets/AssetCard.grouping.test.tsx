@@ -1,0 +1,345 @@
+import { screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { http, HttpResponse } from 'msw';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { ActionInput, AssetGroup, PreviewResponse } from '../../api/types';
+import { ADDRESS, DATES, NOW, PX, PrefillProbe, cardList, cardsTitled, expand, groupOf, hedgedCards, listMarkets, prefill, showPairs, spreadRow, textOf } from '../../test/assetCardBooks';
+import { previewFor } from '../../test/fixtures';
+import { env, server } from '../../test/server';
+import { renderWithClient } from '../../test/utils';
+import { STRATEGY_STORAGE_KEY } from '../HomeControls';
+import { AssetCard } from './AssetCard';
+import { deriveAsset } from './assetModel';
+
+function renderCard(group: AssetGroup) {
+  return renderWithClient(
+    <>
+      <AssetCard
+        group={group}
+        derived={deriveAsset(group, {}, 0, NOW)}
+        sinceSec={0}
+        windowPending={false}
+        storedSinceSec={undefined}
+        defaultSinceSec={null}
+        backfilling={false}
+        supportedCoins={['ETH']}
+        onChangeSince={() => {}}
+        exclusions={{}}
+        onExclude={() => {}}
+      />
+      <PrefillProbe />
+    </>,
+  );
+}
+
+const B15_HELD_TEN = ['G L 10', 'H S 10', 'G LONG 6 O', 'G LONG 4 N', 'H SHORT 10 O'];
+const B15_CLOSED_FOUR = ['G L 10', 'H S 10', 'G LONG 6 O', 'G LONG 4 N', 'H SHORT 6 O'];
+const B21 = ['G L 1', 'H S 1', 'H LONG 1 O'];
+const RUNGS = [50, 5_000, 100_000, 1_000_000, 6_000_000];
+
+function previewSpy(): ActionInput[][] {
+  const seen: ActionInput[][] = [];
+  server.use(
+    http.post('/api/preview', async ({ request }) => {
+      seen.push(((await request.clone().json()) as { actions: ActionInput[] }).actions);
+      const { actions } = (await request.clone().json()) as { actions: ActionInput[] };
+      return HttpResponse.json(
+        env<PreviewResponse>({
+          previews: actions.map((a) =>
+            previewFor(a, { side: 'SELL', type: 'LIMIT', tif: 'IOC', reduceOnly: true, qty: '1', price: String(PX), estNotional: PX, closing: { positionQty: '1', upnl: '0', mark: PX } }),
+          ),
+        }),
+      );
+    }),
+  );
+  return seen;
+}
+const closeQtys = (actions: ActionInput[] | undefined) =>
+  Object.fromEntries((actions ?? []).map((a) => [a.kind === 'close-position' ? a.symbol : a.kind, a.kind === 'close-position' ? a.qty : undefined]));
+
+beforeEach(() => {
+  prefill.current = null;
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(new Date('2026-10-23T00:00:00Z'));
+  localStorage.setItem(STRATEGY_STORAGE_KEY, JSON.stringify({ address: ADDRESS }));
+  server.use(http.get('/api/positions', () => HttpResponse.json({ positions: [] })));
+  listMarkets([]);
+});
+
+describe('the card, by the grouping DoD', () => {
+  it('half roll: no open while the old leg is held', async () => {
+    const user = userEvent.setup();
+    renderCard(groupOf(B15_HELD_TEN));
+    await showPairs(user);
+    const [card] = await waitFor(() => {
+      const found = cardsTitled(/Boros leg missing/);
+      expect(found).toHaveLength(1);
+      return found;
+    });
+    expect(textOf(card)).toContain('Hyperliquid SHORT holds 10 ETH at 30 Oct. Close 4 ETH of it to open here.');
+    expect(within(card).queryByRole('button', { name: /^Open/ })).toBeNull();
+  });
+
+  it('half roll: open after the old leg is closed', async () => {
+    const user = userEvent.setup();
+    renderCard(groupOf(B15_CLOSED_FOUR));
+    await showPairs(user);
+    const [card] = await waitFor(() => {
+      const found = cardsTitled(/Boros leg missing/);
+      expect(found).toHaveLength(1);
+      return found;
+    });
+    expect(textOf(card)).not.toContain(' holds ');
+    await user.click(within(card).getByRole('button', { name: 'Open leg' }));
+    await waitFor(() => expect(prefill.current).not.toBeNull());
+    expect(prefill.current).toMatchObject({ base: 'ETH', longVenue: null, shortVenue: 'HYPERLIQUID', maturity: DATES.N, sizeBase: 4 });
+  });
+
+  it('offer date after a half roll', async () => {
+    const user = userEvent.setup();
+    listMarkets([spreadRow(DATES.O), spreadRow(DATES.N)]);
+    renderCard(groupOf(['G L 2', 'H S 2', ...B15_CLOSED_FOUR]));
+    await showPairs(user);
+    const [card] = await waitFor(() => {
+      const found = cardsTitled(/no rate leg/);
+      expect(found).toHaveLength(1);
+      return found;
+    });
+    expect(cardsTitled(/Boros leg missing/)).toHaveLength(2);
+    await user.click(await within(card).findByRole('button', { name: 'Open Boros leg' }));
+    await waitFor(() => expect(prefill.current).not.toBeNull());
+    expect(prefill.current).toMatchObject({ longVenue: 'GATE', shortVenue: 'HYPERLIQUID', maturity: DATES.N, sizeBase: 2 });
+  });
+
+  it('a leg on another card does not cut the offer', async () => {
+    const user = userEvent.setup();
+    renderCard(groupOf(['G L 10', 'H S 10', 'G LONG 10 N', 'LI SHORT 10 N']));
+    await showPairs(user);
+    const [card] = await waitFor(() => {
+      const found = cardsTitled(/Boros legs missing/);
+      expect(found).toHaveLength(1);
+      return found;
+    });
+    expect(cardsTitled(/Perp legs? missing/)).toHaveLength(1);
+    expect(textOf(card)).not.toContain(' holds ');
+    await user.click(await within(card).findByRole('button', { name: 'Open both Boros legs' }));
+    await waitFor(() => expect(prefill.current).not.toBeNull());
+    expect(prefill.current).toMatchObject({ longVenue: 'GATE', shortVenue: 'HYPERLIQUID', sizeBase: 10 });
+  });
+
+  it("no Boros leg anywhere: today's date rule", async () => {
+    listMarkets([spreadRow(DATES.N), spreadRow(DATES.O)]);
+    const user = userEvent.setup();
+    renderCard(groupOf(['G L 1', 'H S 1']));
+    await showPairs(user);
+    await user.click(await screen.findByRole('button', { name: 'Open Boros leg' }));
+    await waitFor(() => expect(prefill.current).not.toBeNull());
+    expect(prefill.current).toMatchObject({ maturity: DATES.O });
+  });
+
+  it('latest date with no open market', async () => {
+    const book = ['G L 2', 'H S 2', ...B15_CLOSED_FOUR];
+    listMarkets([spreadRow(DATES.O), spreadRow(DATES.N, true), spreadRow(DATES.D)]);
+    const user = userEvent.setup();
+    const first = renderCard(groupOf(book));
+    await showPairs(user);
+    const [card] = await waitFor(() => {
+      const found = cardsTitled(/no rate leg/);
+      expect(found).toHaveLength(1);
+      return found;
+    });
+    await user.click(await within(card).findByRole('button', { name: 'Open Boros leg' }));
+    await waitFor(() => expect(prefill.current).not.toBeNull());
+    expect(prefill.current).toMatchObject({ maturity: DATES.D });
+    first.unmount();
+
+    prefill.current = null;
+    listMarkets([spreadRow(DATES.N, true)]);
+    renderCard(groupOf(book));
+    await showPairs(user);
+    const [again] = await waitFor(() => {
+      const found = cardsTitled(/no rate leg/);
+      expect(found).toHaveLength(1);
+      return found;
+    });
+    await user.click(await within(again).findByRole('button', { name: 'Open both Boros legs' }));
+    await waitFor(() => expect(prefill.current).not.toBeNull());
+    expect(prefill.current).toMatchObject({ maturity: DATES.O });
+  });
+
+  it('ED-6648 shared long closes once', async () => {
+    const user = userEvent.setup();
+    renderCard(groupOf(['G L 2', 'H S 1', 'LI S 1', 'G LONG 2 N', 'H SHORT 1 N', 'LI SHORT 1 N']));
+    await showPairs(user);
+    const card = await waitFor(() => {
+      const found = hedgedCards().filter((el) => /Hyperliquid/.test(textOf(el)));
+      expect(found).toHaveLength(1);
+      return found[0];
+    });
+    await expand(user, card);
+    await user.click(within(card).getByRole('button', { name: 'Close perps' }));
+    const dialog = await screen.findByRole('dialog');
+    const text = textOf(dialog);
+    expect(text).toMatch(/PerpGate.*?pair slice1 ETH.*?PerpHyperliquid.*?whole position1 ETH/);
+    expect(text).not.toMatch(/\b2 ETH/);
+  });
+
+  it('ED-6648 spread on other venues', async () => {
+    const user = userEvent.setup();
+    renderCard(groupOf(['G L 1', 'H S 1', 'LI-G SHORT 1 N']));
+    await showPairs(user);
+    await waitFor(() => expect(cardsTitled(/Boros legs missing/)).toHaveLength(1));
+    const perpMissing = cardsTitled(/Perp legs? missing/);
+    expect(perpMissing).toHaveLength(1);
+    expect(textOf(perpMissing[0])).toMatch(/Lighter/);
+    const borosMissing = cardsTitled(/Boros legs missing/)[0];
+    expect(textOf(borosMissing)).not.toContain(' holds ');
+    expect(await within(borosMissing).findByRole('button', { name: 'Open both Boros legs' })).toBeInTheDocument();
+    expect(textOf(borosMissing)).toMatch(/Gate/);
+    expect(textOf(borosMissing)).toMatch(/Hyperliquid/);
+  });
+
+  it('close perps sends the row size', async () => {
+    const user = userEvent.setup();
+    const seen = previewSpy();
+    renderCard(groupOf(['G L 0.949', 'H S 0.95', 'G LONG 0.949 N', 'H SHORT 0.949 N']));
+    await showPairs(user);
+    const [card] = await waitFor(() => {
+      const found = hedgedCards();
+      expect(found).toHaveLength(1);
+      return found;
+    });
+    await expand(user, card);
+    await user.click(within(card).getByRole('button', { name: 'Close perps' }));
+    const text = textOf(await screen.findByRole('dialog'));
+    expect(text).toMatch(/PerpGate.*?position0\.949 ETH.*?PerpHyperliquid.*?position0\.95 ETH/);
+    await waitFor(() => expect(seen.length).toBeGreaterThan(0), { timeout: 4000 });
+    expect(closeQtys(seen.at(-1))).toEqual({ GATE_FUTURE_ETH_USDT: undefined, HYPERLIQUID_FUTURE_ETH_USDT: undefined });
+  });
+
+  it.each(RUNGS)('S-CLOSE-02 a row short of its venue position sends its own size at every rung ($%i)', async (usd) => {
+    const hl = usd / PX;
+    const gate = Number((hl * 0.9996).toPrecision(8));
+    const lighter = Number((hl - gate).toPrecision(8));
+    const ownCard = 2 * lighter * PX >= 50;
+    const user = userEvent.setup();
+    const seen = previewSpy();
+    renderCard(groupOf([`H L ${hl}`, `G S ${gate}`, `LI S ${lighter}`, `H LONG ${hl} N`, `G SHORT ${gate} N`, `LI SHORT ${lighter} N`]));
+    await showPairs(user);
+    const card = await waitFor(() => {
+      const found = cardList().filter((el) => /Gate/.test(textOf(el)) && !/Ungrouped legs/.test(textOf(el)));
+      expect(found).toHaveLength(1);
+      return found[0];
+    });
+    await expand(user, card);
+    await user.click(within(card).getByRole('button', { name: 'Close perps' }));
+    await waitFor(() => expect(seen.length).toBeGreaterThan(0), { timeout: 4000 });
+    expect(closeQtys(seen.at(-1))).toEqual({ HYPERLIQUID_FUTURE_ETH_USDT: ownCard ? String(gate) : undefined, GATE_FUTURE_ETH_USDT: undefined });
+  });
+
+  it.each(RUNGS)('S-OPEN-01 open prefill prices the capped size at every rung ($%i)', async (usd) => {
+    const size = usd / PX;
+    const user = userEvent.setup();
+    renderCard(groupOf([`G L ${Number((size * 1.0003).toPrecision(8))}`, `H S ${size}`]));
+    await showPairs(user);
+    await user.click(await screen.findByRole('button', { name: 'Open both Boros legs' }));
+    await waitFor(() => expect(prefill.current).not.toBeNull());
+    const armed = prefill.current as { size: number; sizeBase: number };
+    expect(armed.sizeBase).toBe(size);
+    expect(armed.size).toBe(size * PX);
+  });
+
+  it('blocked row says why', async () => {
+    const user = userEvent.setup();
+    renderCard(groupOf(B21));
+    await showPairs(user);
+    const [card] = await waitFor(() => {
+      const found = cardsTitled(/Boros legs missing/);
+      expect(found).toHaveLength(1);
+      return found;
+    });
+    expect(textOf(card)).toContain('Close the Wrong side Hyperliquid LONG at 30 Oct to open here.');
+  });
+
+  it('blocked row says why when a spread blocks it', async () => {
+    const user = userEvent.setup();
+    renderCard(groupOf(['G L 1', 'H S 1', 'H-G LONG 1 N']));
+    await showPairs(user);
+    const [card] = await waitFor(() => {
+      const found = cardsTitled(/Boros legs missing/);
+      expect(found).toHaveLength(1);
+      return found;
+    });
+    const line = 'Close the Wrong side Spread HL-GATE LONG at 27 Nov to open here.';
+    expect(textOf(card).split(line)).toHaveLength(3);
+    expect(textOf(card)).not.toContain('blocks this open');
+  });
+
+  it('blocked row names the Wrong side leg that blocks, not a small one before it', async () => {
+    const user = userEvent.setup();
+    renderCard(groupOf(['G L 2', 'H S 2', 'H LONG 0.008 O', 'H LONG 2 N']));
+    await showPairs(user);
+    const [card] = await waitFor(() => {
+      const found = cardsTitled(/Boros legs missing/);
+      expect(found).toHaveLength(1);
+      return found;
+    });
+    expect(textOf(card)).toContain('Close the Wrong side Hyperliquid LONG at 27 Nov to open here.');
+    expect(textOf(card)).not.toContain('Close the Wrong side Hyperliquid LONG at 30 Oct');
+  });
+
+  it('the wrong-side hover names the venue the spread points against', async () => {
+    const user = userEvent.setup();
+    renderCard(groupOf(['G L 1', 'LI S 1', 'H-G LONG 1 N']));
+    await showPairs(user);
+    await user.hover(await screen.findByText('Wrong side'));
+    expect(await screen.findByRole('tooltip')).toHaveTextContent("Adds to the Gate perp's funding risk.");
+  });
+
+  it('an open-only roll card says where the perps are', async () => {
+    const user = userEvent.setup();
+    renderCard(groupOf(['G L 10', 'H S 10', 'G LONG 10 O', 'H SHORT 10 O', 'G LONG 10 N', 'H SHORT 10 N']));
+    await showPairs(user);
+    const [card] = await waitFor(() => {
+      const found = cardsTitled(/Perp legs missing/);
+      expect(found).toHaveLength(1);
+      return found;
+    });
+    expect(textOf(card)).toContain('The other 10 ETH of the Gate perp is on another card.');
+    expect(textOf(card)).toContain('The other 10 ETH of the Hyperliquid perp is on another card.');
+  });
+
+  it('the other-card line skips a USDC twin', async () => {
+    const user = userEvent.setup();
+    const book = groupOf(['G L 4', 'H S 4', 'G LONG 4 O', 'H SHORT 4 O', 'G LONG 4 N', 'H SHORT 4 N']);
+    book.perpOpen.unshift({ ...book.perpOpen[0], symbol: 'GATE_FUTURE_ETH_USDC', qty: 3, notionalUsd: 3 * PX, quoteTwin: true });
+    renderCard(book);
+    await showPairs(user);
+    const [card] = await waitFor(() => {
+      const found = cardsTitled(/Perp legs missing/);
+      expect(found).toHaveLength(1);
+      return found;
+    });
+    expect(textOf(card)).toContain('The other 4 ETH of the Gate perp is on another card.');
+    expect(textOf(card)).not.toContain('The other 3 ETH');
+  });
+
+  it('close-first hover only when it blocks', async () => {
+    const user = userEvent.setup();
+    const first = renderCard(groupOf(B21));
+    await showPairs(user);
+    const blocking = await screen.findByText('Wrong side');
+    await user.hover(blocking);
+    const tip = await screen.findByRole('tooltip');
+    expect(tip).toHaveTextContent("Adds to the Hyperliquid perp's funding risk.");
+    expect(tip).toHaveTextContent('Close it, then open the hedge.');
+    first.unmount();
+
+    renderCard(groupOf(['G L 1', 'H S 1', 'H LONG 0.008 O']));
+    await showPairs(user);
+    await user.hover(await screen.findByText('Wrong side'));
+    const free = await screen.findByRole('tooltip');
+    expect(free).toHaveTextContent("Adds to the Hyperliquid perp's funding risk.");
+    expect(free).not.toHaveTextContent('Close it');
+  });
+});

@@ -70,7 +70,7 @@ export function ClosePopover({
     attributedQty !== undefined &&
     Number.isFinite(attributedQty) &&
     attributedQty > 0 &&
-    attributedQty < wholeQty * 0.999;
+    attributedQty < wholeQty;
   const [slipStr, setSlipStr] = useState('0.5');
   /**
    * ONE size box, pre-filled with the maximum, exactly as the Boros and pair

@@ -7,58 +7,99 @@
  *      per-leg exclusions for positions that aren't part of the farm.
  *   2. Lifetime PnL + capital since a user-chosen start date, from the
  *      venues' own records (open positions live, closed ones from history).
- *
- * Durable state is ONLY `crossex.assetView.v1` (start date + exclusions);
- * every number is a pure function of the venue feeds.
  */
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { AccountsAlert } from '../accounts/AccountsUi';
-import { useAccount, useAssetView, useAssetViewWindows, useBorosAgent, useFees, usePositions, useRebate } from '../../api/queries';
+import {
+  importAssetPrefs,
+  useAccount,
+  useAssetPrefs,
+  useAssetView,
+  useAssetViewWindows,
+  useBorosAgent,
+  useFees,
+  usePatchAssetPrefs,
+  usePositions,
+  useRebate,
+  type AssetPrefsPatch,
+} from '../../api/queries';
+import type { AssetViewPrefs } from '../../api/types';
 import { EmptyState } from '../../components/EmptyState';
 import { QueryError } from '../../components/QueryError';
 import { TableSkeleton } from '../../components/Skeleton';
+import { useToast } from '../../components/Toast';
 import { SignedNumber } from '../../components/SignedNumber';
 import { fmtPct, fmtUsd, num } from '../../lib/fmt';
 import { lineFor as lineIn, liquidationLines } from '../../lib/liquidation';
-import { useBookId } from '../bookId';
+import { bookKey, useBookId } from '../bookId';
 import { short } from '../HomeControls';
 import { ConnectWalletButton } from '../../components/ConnectWalletButton';
 import { isSameAddress, useActiveWallet, useTrackedAddress } from '../trackedAddress';
 import { assetIsActive, deriveAsset, SECONDS_IN_YEAR } from './assetModel';
-import { legSinceParam, loadPrefs, savePrefs, type AssetViewPrefs } from './assetPrefsStore';
+import { clearLegacyPrefs, dropLegacyKeys, legacyExclusionsFor, legSinceParam, readLegacyPrefs } from './assetPrefsStore';
 import { AssetCard } from './AssetCard';
+import { sizesForWholeExclusions } from './excludeLeg';
 
+const NO_PREFS: AssetViewPrefs = { sinceByAsset: {}, exclusions: {}, legSince: {} };
 
 export function AssetsHome() {
   const { address } = useTrackedAddress();
   const viewOnly = useActiveWallet().viewOnly;
   const loggedInRoot = useBorosAgent().data?.root ?? null;
-  const bookId = useBookId(address);
+  const book = bookKey(useBookId(address));
 
-  const [prefs, setPrefs] = useState<AssetViewPrefs>(() => loadPrefs(bookId));
-  // A book switch swaps the whole prefs record — reload, don't carry over.
-  const [prefsBook, setPrefsBook] = useState(bookId);
-  if (prefsBook !== bookId) {
-    setPrefsBook(bookId);
-    setPrefs(loadPrefs(bookId));
-  }
-  /**
-   * FUNCTIONAL update. The leg-edit modal fires two writes on one Save
-   * (exclusion, then "counted from"); built off the render-time `prefs`
-   * the second spread the stale object and wiped the first — an exclusion
-   * that visibly saved and then was not there.
-   */
-  const update = (fn: (prev: AssetViewPrefs) => AssetViewPrefs) => {
-    setPrefs((prev) => {
-      const next = fn(prev);
-      savePrefs(bookId, next);
-      return next;
+  const [legacy, setLegacy] = useState<'none' | 'moving' | 'failed'>(() =>
+    readLegacyPrefs() === null ? 'none' : 'moving',
+  );
+  const moving = useRef(false);
+  useEffect(() => {
+    if (legacy !== 'moving' || moving.current) return;
+    moving.current = true;
+    importAssetPrefs(readLegacyPrefs()).then(
+      () => {
+        clearLegacyPrefs();
+        setLegacy('none');
+      },
+      () => setLegacy('failed'),
+    );
+  }, [legacy]);
+
+  const prefsQuery = useAssetPrefs(book, legacy !== 'moving' && address !== null);
+  const savePrefs = usePatchAssetPrefs(book);
+  const toast = useToast();
+  const [legacyRev, bumpLegacy] = useReducer((n: number) => n + 1, 0);
+  const legacyExclusions = useMemo(
+    () => (legacy === 'failed' ? legacyExclusionsFor(book) : {}),
+    [legacy, book, legacyRev],
+  );
+  const prefs = useMemo(() => {
+    const saved = prefsQuery.data ?? NO_PREFS;
+    return legacy === 'failed' ? { ...saved, exclusions: { ...legacyExclusions, ...saved.exclusions } } : saved;
+  }, [prefsQuery.data, legacy, legacyExclusions]);
+  const save = (patch: AssetPrefsPatch, onError?: () => void) =>
+    savePrefs.mutate(patch, {
+      onSuccess: () => {
+        if (legacy !== 'failed') return;
+        dropLegacyKeys(book, patch);
+        bumpLegacy();
+      },
+      onError,
     });
-  };
 
   const legSince = legSinceParam(prefs.legSince);
   const query = useAssetView(address, undefined, legSince);
   const data = query.data;
+  const sized = useRef(new Set<string>());
+  useEffect(() => {
+    if (legacy === 'moving' || !data || !prefsQuery.data) return;
+    const legs = data.assets.flatMap((g) => g.borosOpen);
+    const fresh = Object.entries(sizesForWholeExclusions(prefsQuery.data.exclusions, legs)).filter(
+      ([key]) => !sized.current.has(`${book}|${key}`),
+    );
+    if (fresh.length === 0) return;
+    for (const [key] of fresh) sized.current.add(`${book}|${key}`);
+    save({ exclusions: Object.fromEntries(fresh) });
+  }, [legacy, data, prefsQuery.data, book]);
   // The account's own fee schedule (VIP tier) — prices the pairs' exit-fee
   // estimate; the model falls back to a flat rate while it loads.
   const feeRows = useFees().data;
@@ -204,16 +245,23 @@ export function AssetsHome() {
     );
   }
 
-  if (query.isError) {
+  if (prefsQuery.isError || query.isError) {
     return (
       <section>
         {header}
-        <QueryError title="Couldn't load the asset view" error={query.error} onRetry={() => query.refetch()} />
+        <QueryError
+          title="Couldn't load the asset view"
+          error={prefsQuery.error ?? query.error}
+          onRetry={() => {
+            if (prefsQuery.isError) void prefsQuery.refetch();
+            if (query.isError) void query.refetch();
+          }}
+        />
       </section>
     );
   }
 
-  if (!data) {
+  if (!data || !prefsQuery.data) {
     return (
       <section>
         {header}
@@ -231,6 +279,14 @@ export function AssetsHome() {
     <section>
       {/* Account health lives on Accounts; here only a warning when needed. */}
       <AccountsAlert />
+      {prefsQuery.data.unreadable && (
+        <p className="mb-4 text-xs text-ink-300">Saved exclusions could not be read. They were kept as a backup file.</p>
+      )}
+      {legacy === 'failed' && (
+        <p className="mb-4 text-xs text-ink-300">
+          Could not move this browser's saved exclusions to the terminal. It tries again on the next load.
+        </p>
+      )}
       {viewOnly && address && loggedInRoot && (
         <p className="mb-4 text-xs text-ink-400">
           Viewing <span className="num text-ink-200">{short(address)}</span>, not logged in: view-only. Perps are
@@ -343,33 +399,19 @@ export function AssetsHome() {
               defaultSinceSec={data.defaultSinceSec}
               backfilling={backfilling}
               supportedCoins={data.supportedCoins}
-              onChangeSince={(sec) => {
-                update((prev) => {
-                  const sinceByAsset = { ...prev.sinceByAsset };
-                  if (sec !== undefined && sec >= 0) sinceByAsset[group.base] = sec;
-                  else delete sinceByAsset[group.base];
-                  return { ...prev, sinceByAsset };
-                });
-              }}
+              onChangeSince={(sec) =>
+                save({ sinceByAsset: { [group.base]: sec !== undefined && sec >= 0 ? sec : null } })
+              }
               liquidation={lineFor(group.base)}
               exclusions={prefs.exclusions}
               onExclude={(key, value) => {
-                update((prev) => {
-                  const exclusions = { ...prev.exclusions };
-                  if (value === undefined) delete exclusions[key];
-                  else exclusions[key] = value;
-                  return { ...prev, exclusions };
-                });
+                if (value === undefined) toast.clear(key);
+                save({ exclusions: { [key]: value ?? null } }, () => toast.clear(key));
               }}
               legSince={prefs.legSince}
-              onLegSince={(key, sec) => {
-                update((prev) => {
-                  const next = { ...prev.legSince };
-                  if (sec === undefined || !(sec > 0)) delete next[key];
-                  else next[key] = sec;
-                  return { ...prev, legSince: next };
-                });
-              }}
+              onLegSince={(key, sec) =>
+                save({ legSince: { [key]: sec !== undefined && sec > 0 ? sec : null } })
+              }
             />
           ))}
         </div>

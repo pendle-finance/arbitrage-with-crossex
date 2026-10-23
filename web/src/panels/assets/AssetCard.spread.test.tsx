@@ -445,12 +445,14 @@ describe('a Boros leg held the other way', () => {
     side,
   });
 
-  it('a spread held the other way: the card offers Close, not Open', async () => {
+  it('a spread held the other way: the card offers Close, not Open; tagged Wrong side (#71)', async () => {
     const user = userEvent.setup();
     renderCard(book([{ ...spreadLeg, side: 'LONG' }]));
     await showPairs(user);
-    const tag = await screen.findByText('held other way');
-    expect(tag).toHaveAttribute('title', 'You hold LONG 0.555 ETH here. Opening the hedge would net against it. Close it first.');
+    const tag = await screen.findByText('Wrong side');
+    await user.hover(tag);
+    expect(await screen.findByText("Adds to the Hyperliquid perp's funding risk. Close it, then open the hedge.")).toBeInTheDocument();
+    await user.unhover(tag);
     expect(screen.queryByRole('button', { name: 'Open Boros leg' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Open both Boros legs' })).toBeNull();
     // Shown once: no Boros-only card offering perps the other way, no ungrouped copy.
@@ -460,53 +462,52 @@ describe('a Boros leg held the other way', () => {
     expect(await screen.findByRole('dialog')).toBeInTheDocument();
   });
 
-  it('a spread held the other way at a later maturity than the default: still Close, no perps the other way', async () => {
+  it('a spread held the other way at a later maturity than the default: still Close, no perps the other way, tagged Wrong side (#71)', async () => {
     // Staging 2026-10-19: LONG on the 27 Nov spread while the default is the 30 Oct one.
     const user = userEvent.setup();
     renderCard(book([{ ...spreadLeg, marketId: SPREAD + 1, maturity: MATURITY + 28 * DAY, side: 'LONG' }]));
     await showPairs(user);
-    expect(await screen.findByText('held other way')).toBeInTheDocument();
+    expect(await screen.findByText('Wrong side')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Open Boros leg' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Open both perps' })).toBeNull();
     expect(screen.queryByText('Ungrouped legs')).toBeNull();
   });
 
-  it('a spread held the other way while one side holds its single: still Close, no perps the other way', async () => {
+  it('a spread held the other way while one side holds its single: still Close, no perps the other way, tagged Wrong side (#71), and it blocks the HL single too (#18)', async () => {
     // Final review 2026-10-19: Gate holds its long single, so only the HL side is missing.
     const user = userEvent.setup();
     renderCard(book([single('GATE', 'LONG', 60), { ...spreadLeg, marketId: SPREAD + 1, maturity: MATURITY + 28 * DAY, side: 'LONG' }]));
     await showPairs(user);
-    const tag = await screen.findByText('held other way');
+    const tag = await screen.findByText('Wrong side');
     expect(within(tag.closest('tr') as HTMLElement).getByRole('button', { name: 'Close' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Open both perps' })).toBeNull();
-    // The HL single still opens: it does not net against the spread market.
-    expect(screen.getByRole('button', { name: 'Open leg' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Open leg' })).toBeNull();
   });
 
-  it('a dust leg held the other way shows its Close but does not hide the Open', async () => {
+  it('a dust leg held the other way shows its Close but does not hide the Open, tagged Wrong side (#71)', async () => {
     const user = userEvent.setup();
     renderCard(book([{ ...single('HYPERLIQUID', 'LONG', 51), sizeToken: 0.001, notionalUsd: 0.001 * PX }]));
     await showPairs(user);
-    expect(await screen.findByText('held other way')).toBeInTheDocument();
+    expect(await screen.findByText('Wrong side')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Open Boros leg' })).toBeInTheDocument();
   });
 
-  it('a single held the other way: that side has no Open leg; the other side keeps its own', async () => {
+  it('a single held the other way: that side has no Open leg; the other side keeps its own, tagged Wrong side (#71)', async () => {
     const user = userEvent.setup();
     // Perps long Gate / short HL; Gate holds its long single, HL holds a LONG (the wrong way).
     renderCard(book([single('GATE', 'LONG', 60), single('HYPERLIQUID', 'LONG', 51)]));
     await showPairs(user);
-    const tag = await screen.findByText('held other way');
+    const tag = await screen.findByText('Wrong side');
     expect(within(tag.closest('tr') as HTMLElement).getByText('Hyperliquid')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Open leg' })).toBeNull();
     expect(screen.queryByText('Ungrouped legs')).toBeNull();
   });
 
-  it('a leg held the right way shows no tag', async () => {
+  it('a leg held the right way shows no Wrong side tag (#71)', async () => {
     const user = userEvent.setup();
     renderCard(book([single('GATE', 'LONG', 60)]));
     await showPairs(user);
     expect(await screen.findByRole('button', { name: 'Open leg' })).toBeInTheDocument();
-    expect(screen.queryByText('held other way')).toBeNull();
+    expect(screen.queryByText('Wrong side')).toBeNull();
   });
 });
