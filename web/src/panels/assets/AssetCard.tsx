@@ -5643,7 +5643,7 @@ export function AssetCard({
     const keptSize = isPart ? (rowSize * keptToken) / y.rowSizeToken : rowSize;
     return (
       <BorosRowMenu
-        label={isPart ? `Exclude ${exactSize(rowSize, y.unit, group.base)} from arb` : 'Exclude from arb'}
+        label={isPart ? `Exclude ${exactSize(rowSize, y.unit, group.base)}` : 'Exclude'}
         onExclude={() =>
           excludeWithUndo(
             key,

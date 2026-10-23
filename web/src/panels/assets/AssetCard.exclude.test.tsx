@@ -64,7 +64,6 @@ const PART_FILL = ['G L 10', 'H S 10', 'G LONG 10 N', 'H SHORT 6 N'];
 const KEY_104 = 'boros:104';
 const KEY_101 = 'boros:101';
 const EXCLUDED_NOTE = 'Not part of the arb: out of the hedge, PnL and capital.';
-const MENU_NOTE = 'Not part of the arb. Moves it to Excluded: out of the hedge, PnL and capital.';
 
 type User = ReturnType<typeof userEvent.setup>;
 
@@ -159,7 +158,7 @@ describe('Exclude from the card, by the DoD', () => {
     await showPairs(user);
     const card = await pickBorosCard(/Boros leg missing/);
     await user.click(menuButton(card));
-    await user.click(await screen.findByRole('button', { name: 'Exclude 4 ETH from arb' }));
+    await user.click(await screen.findByRole('button', { name: 'Exclude 4 ETH' }));
     expect(spy).toHaveBeenCalledTimes(1);
     expect(spy.mock.calls[0]).toEqual([KEY_101, { qty: 4 }]);
   });
@@ -300,8 +299,8 @@ describe('Exclude from the card, by the DoD', () => {
     await user.click(menuButton(closeRow('Close Hyperliquid SHORT YU')));
     const menu = await screen.findByRole('tooltip');
     expect(within(menu).getAllByRole('button')).toHaveLength(1);
-    expect(within(menu).getByRole('button')).toHaveTextContent('Exclude from arb');
-    expect(menu).toHaveTextContent(MENU_NOTE);
+    expect(within(menu).getByRole('button')).toHaveTextContent(/^Exclude$/);
+    expect(menu).not.toHaveTextContent('Not part of the arb');
   });
 
   it('Restore brings it back', async () => {
@@ -382,7 +381,7 @@ describe('Exclude from the card, by the DoD', () => {
     const first = renderCard(groupOf(book, patch), { [KEY_101]: { qty: 2, at: 100 } }, spy);
     await showPairs(user);
     await user.click(menuButton(await pickBorosCard(/Boros leg missing/)));
-    await user.click(await screen.findByRole('button', { name: 'Exclude 4 ETH from arb' }));
+    await user.click(await screen.findByRole('button', { name: 'Exclude 4 ETH' }));
     expect(spy).toHaveBeenLastCalledWith(KEY_101, { qty: 6, at: 300 });
     first.unmount();
 
@@ -390,7 +389,7 @@ describe('Exclude from the card, by the DoD', () => {
     renderCard(groupOf(book, patch), { [KEY_101]: 2 }, legacy);
     await showPairs(user);
     await user.click(menuButton(await pickBorosCard(/Boros leg missing/)));
-    await user.click(await screen.findByRole('button', { name: 'Exclude 4 ETH from arb' }));
+    await user.click(await screen.findByRole('button', { name: 'Exclude 4 ETH' }));
     expect(legacy).toHaveBeenLastCalledWith(KEY_101, { qty: 6 });
   });
 
