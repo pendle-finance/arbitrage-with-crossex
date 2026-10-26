@@ -237,6 +237,7 @@ const BlockedOpen = ({ reason, children }: { reason?: string; children: React.Re
     <>{children}</>
   );
 const WRONG_SIDE_TINT = 'bg-guava/[0.04]';
+const BLOCKED_OPEN = 'cursor-not-allowed !border-ink-700/60 !bg-transparent !text-ink-500';
 
 function LegName({ venue, kind, side, base, spreadVenues }: { venue: string; kind: 'perp' | 'yu'; side: 'LONG' | 'SHORT'; base: string; spreadVenues?: [string, string] | null }) {
   return (
@@ -3191,13 +3192,14 @@ function RollOption({
   );
 }
 
-const excludedNetText = (n: ExcludedNet) =>
-  `${prettyVenue(n.venue)} ${n.side} at ${fmtDateShort(n.maturity)} is excluded and would net. Pick another date or restore it.`;
+type NamedNet = ExcludedNet & { name: string };
+
+const excludedNetText = (n: NamedNet) => `${n.name} at ${fmtDateShort(n.maturity)} is excluded and would net. Pick another date or restore it.`;
 
 type ExcludedNets = {
-  long: ExcludedNet | null;
-  short: ExcludedNet | null;
-  pair: { long: ExcludedNet | null; short: ExcludedNet | null };
+  long: NamedNet | null;
+  short: NamedNet | null;
+  pair: { long: NamedNet | null; short: NamedNet | null };
 };
 
 /**
@@ -3283,12 +3285,13 @@ function PerpOnlyPairCard({
     missing > 0 && capShows(held, missing) ? (
       <div className="text-[11px] text-ink-400">open {sizeText(missing)}</div>
     ) : null;
-  const yuRow = (venue: string, side: 'LONG' | 'SHORT', yu: PendingLeg | null, missing: number, blocked: boolean, net: ExcludedNet | null, shownNet: ExcludedNet | null, heldElsewhere?: PendingLeg[]) => {
+  const yuRow = (venue: string, side: 'LONG' | 'SHORT', yu: PendingLeg | null, missing: number, blocked: boolean, net: NamedNet | null, heldElsewhere?: PendingLeg[]) => {
     const heldHere = yu ? sizeIn(yu, yu.unit) : 0;
+    const heldLine = heldElsewhere && capShows(heldHere, missing) ? heldText(heldElsewhere, Math.max(0, pair.size - heldHere - missing)) : null;
     const why = [
-      heldElsewhere && capShows(heldHere, missing) ? heldText(heldElsewhere, Math.max(0, pair.size - heldHere - missing)) : null,
+      heldLine,
       blocked && !(missing > 0) ? blockedText(venue, side) : null,
-      shownNet && missing > 0 ? excludedNetText(shownNet) : null,
+      net && missing > 0 ? excludedNetText(net) : null,
     ].filter((s): s is string => s !== null);
     const canOpen = missing > 0 && !net;
     return yu && !(missing > 0) ? (
@@ -3325,10 +3328,10 @@ function PerpOnlyPairCard({
             <BlockedOpen reason={canOpen ? undefined : why.join(' ')}>
               <button
                 type="button"
-                className={`btn-ghost-xs !py-[5px] !text-grass ${canOpen ? 'hover:!border-grass/60' : 'cursor-not-allowed opacity-40'}`}
+                className={`btn-ghost-xs !py-[5px] ${canOpen ? '!text-grass hover:!border-grass/60' : BLOCKED_OPEN}`}
                 disabled={!onOpenBoros}
                 aria-disabled={!canOpen}
-                title={canOpen ? [`Open only the ${prettyVenue(venue)} ${side} Boros leg, at ${sizeText(missing)}${why.length > 0 ? '.' : ''}`, ...why].join(' ') : undefined}
+                title={canOpen ? `Open only the ${prettyVenue(venue)} ${side} Boros leg, at ${sizeText(missing)}${heldLine ? `. ${heldLine}` : ''}` : undefined}
                 onClick={canOpen ? () => onOpenBoros?.({ long: side === 'LONG', short: side === 'SHORT' }) : undefined}
               >
                 Open leg
@@ -3441,7 +3444,7 @@ function PerpOnlyPairCard({
                     {eitherNet ? (
                       <td className={`${cell} whitespace-nowrap text-right`}>
                         <BlockedOpen reason={excludedNetText(eitherNet)}>
-                          <button type="button" className="btn-ghost-xs !py-[5px] !text-grass cursor-not-allowed opacity-40" aria-disabled>
+                          <button type="button" className={`btn-ghost-xs !py-[5px] ${BLOCKED_OPEN}`} aria-disabled>
                             Open leg
                           </button>
                         </BlockedOpen>
@@ -3452,8 +3455,8 @@ function PerpOnlyPairCard({
                   </tr>
                 ) : (
                   <>
-                    {yuRow(pair.longVenue, 'LONG', pair.longYu, pair.missingLong, pair.blockedLong, excludedNet.long, excludedNet.long ?? pairNet('long'), pair.heldElsewhereLong)}
-                    {yuRow(pair.shortVenue, 'SHORT', pair.shortYu, pair.missingShort, pair.blockedShort, excludedNet.short, excludedNet.short ?? pairNet('short'), pair.heldElsewhereShort)}
+                    {yuRow(pair.longVenue, 'LONG', pair.longYu, pair.missingLong, pair.blockedLong, excludedNet.long, pair.heldElsewhereLong)}
+                    {yuRow(pair.shortVenue, 'SHORT', pair.shortYu, pair.missingShort, pair.blockedShort, excludedNet.short, pair.heldElsewhereShort)}
                   </>
                 )}
                 {pair.otherWay.map((y) => {
@@ -3498,20 +3501,25 @@ function PerpOnlyPairCard({
             {/* A held single keeps the unit on singles (rule 5), but a pair
                 ticket routes to a trading spread, so each missing single
                 opens on its own Open leg button. */}
-            {bothEven && !held && !eitherNet && (
-              <button
-                type="button"
-                className={`${pill} !border-grass/60 !text-grass hover:!border-grass hover:!bg-grass/10`}
-                disabled={!onOpenBoros}
-                title={
-                  spread
-                    ? `Open the ${spreadName(base, spread)} leg, at ${sizeText(Math.min(pair.missingLong, pair.missingShort))}`
-                    : `Open both Boros legs together — long ${prettyVenue(pair.longVenue)}, short ${prettyVenue(pair.shortVenue)}, ${sizeText(Math.min(pair.missingLong, pair.missingShort))} each`
-                }
-                onClick={() => onOpenBoros?.({ long: true, short: true })}
-              >
-                {spread ? 'Open Boros leg' : 'Open both Boros legs'}
-              </button>
+            {bothEven && !held && !(eitherNet && (excludedNet.long || excludedNet.short)) && (
+              <BlockedOpen reason={eitherNet ? excludedNetText(eitherNet) : undefined}>
+                <button
+                  type="button"
+                  className={`${pill} ${eitherNet ? BLOCKED_OPEN : '!border-grass/60 !text-grass hover:!border-grass hover:!bg-grass/10'}`}
+                  disabled={!onOpenBoros}
+                  aria-disabled={!!eitherNet}
+                  title={
+                    eitherNet
+                      ? undefined
+                      : spread
+                        ? `Open the ${spreadName(base, spread)} leg, at ${sizeText(Math.min(pair.missingLong, pair.missingShort))}`
+                        : `Open both Boros legs together — long ${prettyVenue(pair.longVenue)}, short ${prettyVenue(pair.shortVenue)}, ${sizeText(Math.min(pair.missingLong, pair.missingShort))} each`
+                  }
+                  onClick={eitherNet ? undefined : () => onOpenBoros?.({ long: true, short: true })}
+                >
+                  {spread ? 'Open Boros leg' : 'Open both Boros legs'}
+                </button>
+              </BlockedOpen>
             )}
           </div>
         </div>
@@ -4066,8 +4074,8 @@ function MissingRow({ gap, base, onOpen, asPair, blocked }: { gap: HedgeGapRow; 
         <BlockedOpen reason={blocked}>
           <button
             type="button"
-            className={`btn-ghost-xs !text-gold ${blocked ? 'cursor-not-allowed opacity-40' : 'hover:!border-gold/50'}`}
-            disabled={!onOpen}
+            className={`btn-ghost-xs ${blocked ? BLOCKED_OPEN : '!text-gold hover:!border-gold/50'}`}
+            disabled={!onOpen && !blocked}
             aria-disabled={!!blocked}
             title={blocked ? undefined : onOpen ? (asPair ? 'Opens the pair ticket with both missing legs.' : `Opens the order ticket with ${gapAsk(gap, base)}.`) : 'Order ticket unavailable here'}
             onClick={blocked ? undefined : onOpen}
@@ -4335,8 +4343,8 @@ function OpenMoreButton({ gap, base, onOpen, blocked }: { gap: HedgeGapRow; base
     <BlockedOpen reason={blocked}>
       <button
         type="button"
-        className={`btn-ghost-xs !text-gold ${blocked ? 'cursor-not-allowed opacity-40' : 'hover:!border-gold/50'}`}
-        disabled={!onOpen}
+        className={`btn-ghost-xs ${blocked ? BLOCKED_OPEN : '!text-gold hover:!border-gold/50'}`}
+        disabled={!onOpen && !blocked}
         aria-disabled={!!blocked}
         title={blocked ? undefined : onOpen ? `Opens the order ticket with ${gapAsk(gap, base)}.` : 'Order ticket unavailable here'}
         onClick={blocked ? undefined : onOpen}
@@ -4901,7 +4909,7 @@ function BundleCard({
   onCloseLeg: (target: CloseLegTarget) => void;
   deficitFor: (venue: string, leg: 'perp' | 'boros') => HedgeGapRow | undefined;
   armGap: (g: HedgeGapRow) => (() => void) | undefined;
-  gapNet: (g: HedgeGapRow) => ExcludedNet | null;
+  gapNet: (g: HedgeGapRow) => NamedNet | null;
   pairPartner: (g: HedgeGapRow) => HedgeGapRow | undefined;
   /** More than one live bundle on this asset — the perps' price PnL cancels
    * across them, which is what the Trade PnL caption says. */
@@ -5587,11 +5595,16 @@ export function AssetCard({
     maturity: borosMaturityFor(p),
   });
   const isSpread = (n: ExcludedNet) => Boolean(group.borosOpen.find((b) => b.marketId === n.marketId)?.spreadVenues);
-  const netsAt = (list: ExcludedNet[], market: BorosPairMarketRow | undefined, maturity: number | undefined): ExcludedNet | null => {
+  const named = (n: ExcludedNet | undefined): NamedNet | null => {
+    if (!n) return null;
+    const leg = group.borosOpen.find((b) => b.marketId === n.marketId);
+    return { ...n, name: leg?.spreadVenues ? `${legVenueName(leg)} ${leg.side}` : `${prettyVenue(n.venue)} ${n.side}` };
+  };
+  const netsAt = (list: ExcludedNet[], market: BorosPairMarketRow | undefined, maturity: number | undefined): NamedNet | null => {
     if (list.length === 0) return null;
-    if (!spreadCtx.data) return maturity === undefined ? list[0] : (list.find((n) => !isSpread(n) && n.maturity === maturity) ?? null);
-    if (!market) return list[0];
-    return list.find((n) => (market.spreadVenues ? n.marketId === market.marketId : !isSpread(n) && n.maturity === market.maturity)) ?? null;
+    if (!spreadCtx.data) return named(maturity === undefined ? list[0] : list.find((n) => !isSpread(n) && n.maturity === maturity));
+    if (!market) return named(list[0]);
+    return named(list.find((n) => (market.spreadVenues ? n.marketId === market.marketId : !isSpread(n) && n.maturity === market.maturity)));
   };
   const landNets = (at: ReturnType<typeof gapBorosPrefill>) => {
     const lands = pickOpenMarkets(spreadCtx.data?.markets ?? [], spreadCtx.data?.spreadMarkets ?? [], at);
@@ -5600,7 +5613,7 @@ export function AssetCard({
     const shortNet = at.shortVenue === null ? null : netsAt(excludedNetsOf(group.borosOpen, exclusions, at.shortVenue, 'SHORT'), both ? (lands.spread ?? lands.short) : lands.short, at.maturity);
     return { long: longNet, short: shortNet };
   };
-  const gapNet = (g: HedgeGapRow): ExcludedNet | null => {
+  const gapNet = (g: HedgeGapRow): NamedNet | null => {
     if (g.leg !== 'boros') return null;
     const nets = landNets(gapBorosPrefill(g));
     return nets.long ?? nets.short;
