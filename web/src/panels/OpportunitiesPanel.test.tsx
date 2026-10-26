@@ -651,7 +651,7 @@ describe('OpportunitiesPanel — breakdown waterfalls', () => {
 });
 
 describe('OpportunitiesPanel — the assumptions strip', () => {
-  it('keeps the knobs behind the strip and defaults to $10k at market', async () => {
+  it('keeps the knobs behind the strip and defaults to $1M at market', async () => {
     const urls: string[] = [];
     server.use(opportunitiesHandler(makeOpportunitiesResult(), { urls }));
     renderWithClient(<OpportunitiesPanel />);
@@ -659,7 +659,7 @@ describe('OpportunitiesPanel — the assumptions strip', () => {
     await waitFor(() => expect(urls).toHaveLength(1));
     expect(paramsOf(urls.at(-1)!)).toMatchObject({
       borosEntry: 'market',
-      notionalUsd: '10000',
+      notionalUsd: '1000000',
       entryMode: 'both-market',
       exitMode: 'roll',
     });
@@ -667,7 +667,7 @@ describe('OpportunitiesPanel — the assumptions strip', () => {
     // the rarer knobs. There is no Boros-entry control any more — every card
     // is priced market-at-size.
     expect(screen.getByRole('radiogroup', { name: 'Notional' })).toBeInTheDocument();
-    expect(screen.getByRole('radio', { name: '$10k' })).toHaveAttribute('aria-checked', 'true');
+    expect(screen.getByRole('radio', { name: '$1M' })).toHaveAttribute('aria-checked', 'true');
     expect(screen.queryByLabelText('Custom notional (USD)')).not.toBeInTheDocument();
     await openAssumptions();
     expect(screen.queryByRole('radiogroup', { name: 'Boros entry' })).not.toBeInTheDocument();
@@ -688,6 +688,10 @@ describe('OpportunitiesPanel — the assumptions strip', () => {
     await userEvent.click(screen.getByRole('radio', { name: '$500k' }));
     await waitFor(() =>
       expect(paramsOf(urls.at(-1)!)).toMatchObject({ borosEntry: 'market', notionalUsd: '500000' }),
+    );
+    await userEvent.click(screen.getByRole('radio', { name: '$1M' }));
+    await waitFor(() =>
+      expect(paramsOf(urls.at(-1)!)).toMatchObject({ borosEntry: 'market', notionalUsd: '1000000' }),
     );
   });
 
@@ -721,7 +725,7 @@ describe('OpportunitiesPanel — the assumptions strip', () => {
     await userEvent.click(screen.getByRole('radio', { name: /^Custom/ }));
 
     const size = screen.getByLabelText('Custom notional (USD)');
-    expect(size).toHaveValue('10000');
+    expect(size).toHaveValue('1000000');
     await userEvent.clear(size);
     await userEvent.type(size, '25000');
     await waitFor(
@@ -782,7 +786,7 @@ describe('OpportunitiesPanel — the assumptions strip', () => {
     // Well past the debounce: no request carries the empty (or a 0) size, and
     // the cards still render off the last good one.
     await new Promise((r) => setTimeout(r, 600));
-    expect(urls.every((u) => paramsOf(u).notionalUsd === '10000')).toBe(true);
+    expect(urls.every((u) => paramsOf(u).notionalUsd === '1000000')).toBe(true);
     expect(toggles()).toHaveLength(1);
   });
 
@@ -844,7 +848,7 @@ describe('OpportunitiesPanel — empty and error states', () => {
     expect(await screen.findByText('No fixed-return opportunities')).toBeInTheDocument();
     expect(
       screen.getByText(
-        /\$10,000 notional at market size, both legs market perp entry and roll over/,
+        /\$1,000,000 notional at market size, both legs market perp entry and roll over/,
       ),
     ).toBeInTheDocument();
   });

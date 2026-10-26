@@ -93,19 +93,21 @@ export const OPPORTUNITIES_STORAGE_KEY = 'crossex.opportunities.v2';
  * them into two independent knobs, so v1 blobs are migrated once and dropped. */
 const LEGACY_STORAGE_KEY = 'crossex.opportunities.v1';
 
-/** The notional every card is priced at: three presets or a typed size. */
-type NotionalChoice = '10k' | '100k' | '500k' | 'custom';
+/** The notional every card is priced at: four presets or a typed size. */
+type NotionalChoice = '10k' | '100k' | '500k' | '1m' | 'custom';
 
 const NOTIONAL_PRESETS: Record<Exclude<NotionalChoice, 'custom'>, number> = {
   '10k': 10_000,
   '100k': 100_000,
   '500k': 500_000,
+  '1m': 1_000_000,
 };
 
 const NOTIONAL_OPTIONS: { value: NotionalChoice; label: string }[] = [
   { value: '10k', label: '$10k' },
   { value: '100k', label: '$100k' },
   { value: '500k', label: '$500k' },
+  { value: '1m', label: '$1M' },
   { value: 'custom', label: 'Custom…' },
 ];
 
@@ -145,8 +147,8 @@ export interface StoredControls {
 }
 
 const DEFAULTS: StoredControls = {
-  notionalChoice: '10k',
-  customNotionalUsd: 10_000,
+  notionalChoice: '1m',
+  customNotionalUsd: 1_000_000,
   borosEntry: 'market',
   entryMode: 'both-market',
   // 'roll' by default: an assumed exit cost is a decision the user has not
