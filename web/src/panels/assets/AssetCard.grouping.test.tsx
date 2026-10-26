@@ -9,6 +9,7 @@ import { env, server } from '../../test/server';
 import { renderWithClient } from '../../test/utils';
 import { STRATEGY_STORAGE_KEY } from '../HomeControls';
 import { AssetCard } from './AssetCard';
+import { blockedReason, blockedReasons } from '../../test/blockedReason';
 import { deriveAsset } from './assetModel';
 
 function renderCard(group: AssetGroup) {
@@ -79,7 +80,7 @@ describe('the card, by the grouping DoD', () => {
     });
     const open = within(card).getByRole('button', { name: 'Open leg' });
     expect(open).toHaveAttribute('aria-disabled', 'true');
-    expect(open).toHaveAttribute('title', 'Hyperliquid SHORT holds 10 ETH at 30 Oct. Close 4 ETH of it to open here.');
+    expect(await blockedReason(user, open)).toBe('Hyperliquid SHORT holds 10 ETH at 30 Oct. Close 4 ETH of it to open here.');
     expect(textOf(open.closest('tr') as HTMLElement)).not.toContain(' holds ');
     expect(textOf(card)).not.toContain('to open here');
     await user.click(open);
@@ -265,7 +266,7 @@ describe('the card, by the grouping DoD', () => {
       expect(found).toHaveLength(1);
       return found;
     });
-    expect(deadOpens(card).map((b) => b.title)).toContain('Close the Wrong side Hyperliquid LONG at 30 Oct to open here.');
+    expect(await blockedReasons(user, deadOpens(card))).toContain('Close the Wrong side Hyperliquid LONG at 30 Oct to open here.');
     expect(textOf(card)).not.toContain('to open here');
   });
 
@@ -289,7 +290,7 @@ describe('the card, by the grouping DoD', () => {
       return found;
     });
     const line = 'Close the Wrong side Spread HL-GATE LONG at 27 Nov to open here.';
-    expect(deadOpens(card).map((b) => b.title)).toEqual([line, line]);
+    expect(await blockedReasons(user, deadOpens(card))).toEqual([line, line]);
     expect(textOf(card)).not.toContain('to open here');
   });
 
@@ -302,7 +303,7 @@ describe('the card, by the grouping DoD', () => {
       expect(found).toHaveLength(1);
       return found;
     });
-    const titles = deadOpens(card).map((b) => b.title);
+    const titles = await blockedReasons(user, deadOpens(card));
     expect(titles).toContain('Close the Wrong side Hyperliquid LONG at 27 Nov to open here.');
     expect(titles.join(' ')).not.toContain('Close the Wrong side Hyperliquid LONG at 30 Oct');
   });
