@@ -45,16 +45,16 @@ describe('UnevenFillWarning', () => {
     expect(onUse).toHaveBeenCalledWith(0.775);
   });
 
-  it('shows no button without a handler or with nothing hedged', () => {
-    const { rerender } = render(<UnevenFillWarning sim={pair(0.775, 0.225)} />);
-    expect(screen.queryByRole('button')).toBeNull();
-    rerender(<UnevenFillWarning sim={pair(0, 1)} onUse={() => {}} />);
+  it('shows no button without a handler', () => {
+    render(<UnevenFillWarning sim={pair(0.775, 0.225)} />);
     expect(screen.getByText(/would be left unhedged/)).toBeInTheDocument();
     expect(screen.queryByRole('button')).toBeNull();
   });
 
-  it('renders nothing when both legs fill evenly or only one leg trades', () => {
+  it('renders nothing when both legs fill evenly, one leg fills nothing, or only one leg trades', () => {
     const { container, rerender } = render(<UnevenFillWarning sim={pair(1, 0)} onUse={() => {}} />);
+    expect(container).toBeEmptyDOMElement();
+    rerender(<UnevenFillWarning sim={pair(0, 0.775)} onUse={() => {}} />);
     expect(container).toBeEmptyDOMElement();
     rerender(
       <UnevenFillWarning
