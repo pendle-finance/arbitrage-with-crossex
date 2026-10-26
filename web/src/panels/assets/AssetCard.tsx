@@ -237,6 +237,9 @@ const BlockedOpen = ({ reason, children }: { reason?: string; children: React.Re
     <>{children}</>
   );
 const WRONG_SIDE_TINT = 'bg-guava/[0.04]';
+const blockingWrongSide = (legs: PendingLeg[], venue: string, side: 'LONG' | 'SHORT') =>
+  legs.find((w) => w.wrongSide?.blocks && venueLegsOf(w, 1).some((l) => l.venue.toLowerCase() === venue.toLowerCase() && l.side !== side));
+const closeWrongSideText = (y: PendingLeg) => `Close the Wrong side ${legVenueName(y)} ${y.side} at ${fmtDateShort(y.maturity)} to open here.`;
 const BLOCKED_OPEN = 'cursor-not-allowed !border-ink-700/60 !bg-transparent !text-ink-500';
 
 function LegName({ venue, kind, side, base, spreadVenues }: { venue: string; kind: 'perp' | 'yu'; side: 'LONG' | 'SHORT'; base: string; spreadVenues?: [string, string] | null }) {
@@ -249,6 +252,7 @@ function LegName({ venue, kind, side, base, spreadVenues }: { venue: string; kin
         </>
       ) : (
         <>
+          <VenueIcon venue={venue} size={16} />
           <span className="font-medium text-ink-50">{prettyVenue(venue)}</span>
         </>
       )}
@@ -3266,10 +3270,9 @@ function PerpOnlyPairCard({
     return `${legVenueName(named)} ${named.side} holds ${sizeText(sizeIn(named, named.unit))} at ${fmtDateShort(named.maturity)}. Close ${sizeText(close)} of it to open here.`;
   };
   const blockedText = (venue: string, side: 'LONG' | 'SHORT') => {
-    const nets = (w: PendingLeg) => w.wrongSide?.blocks && venueLegsOf(w, 1).some((l) => l.venue.toLowerCase() === venue.toLowerCase() && l.side !== side);
-    const y = pair.otherWay.find(nets) ?? wrongSideLegs.find(nets);
+    const y = blockingWrongSide([...pair.otherWay, ...wrongSideLegs], venue, side);
     return y
-      ? `Close the Wrong side ${legVenueName(y)} ${y.side} at ${fmtDateShort(y.maturity)} to open here.`
+      ? closeWrongSideText(y)
       : `A Wrong side ${prettyVenue(venue)} leg blocks this open. Close it first.`;
   };
   const pairNet = (side: 'long' | 'short') => (bothEven && !held ? excludedNet.pair[side] : null);
@@ -3912,7 +3915,7 @@ function UngroupedCard({
                           l.quoteTwin ? (
                             <>
                               {sideChip(l.side)}
-                              <AmberTag tag="USDC twin">USDC twin: Boros tracks the USDT perp's funding, not this one.</AmberTag>
+                              <AmberTag tag="USDC perp · no Boros hedge">Boros tracks the USDT perp's funding, not this USDC one, so no Boros leg can hedge it. The terminal never opens USDC perps.</AmberTag>
                             </>
                           ) : (
                             sideChip(l.side)
@@ -4890,6 +4893,7 @@ function BundleCard({
   deficitFor,
   armGap,
   gapNet,
+  gapFlip,
   pairPartner,
   multiVenue,
 }: {
@@ -4911,6 +4915,7 @@ function BundleCard({
   deficitFor: (venue: string, leg: 'perp' | 'boros') => HedgeGapRow | undefined;
   armGap: (g: HedgeGapRow) => (() => void) | undefined;
   gapNet: (g: HedgeGapRow) => NamedNet | null;
+  gapFlip: (g: HedgeGapRow) => string | undefined;
   pairPartner: (g: HedgeGapRow) => HedgeGapRow | undefined;
   /** More than one live bundle on this asset — the perps' price PnL cancels
    * across them, which is what the Trade PnL caption says. */
@@ -5099,7 +5104,7 @@ function BundleCard({
                   leg={l}
                   base={base}
                   deficit={i === 0 ? deficitFor(l.venue, 'boros') : undefined}
-                  blocked={(() => { const g = i === 0 ? deficitFor(l.venue, 'boros') : undefined; const n = g ? gapNet(g) : null; return n ? excludedNetText(n) : undefined; })()}
+                  blocked={(() => { const g = i === 0 ? deficitFor(l.venue, 'boros') : undefined; if (!g) return undefined; const n = gapNet(g); return n ? excludedNetText(n) : gapFlip(g); })()}
                   onOpenMore={(() => { const g = i === 0 ? deficitFor(l.venue, 'boros') : undefined; return g ? armGap(g) : undefined; })()}
                   onClose={() => onCloseLeg({ kind: 'boros', leg: l, slice: keptOf(l) })}
                   windowedGrossUsd={(() => {
@@ -5138,7 +5143,7 @@ function BundleCard({
                 />
               ))}
               {missing.filter((g) => g.leg === 'boros').map((g) => (
-                <MissingRow key="missing-boros" gap={g} base={base} onOpen={armGap(g)} asPair={!!pairPartner(g)} blocked={(() => { const n = gapNet(g); return n ? excludedNetText(n) : undefined; })()} />
+                <MissingRow key="missing-boros" gap={g} base={base} onOpen={armGap(g)} asPair={!!pairPartner(g)} blocked={(() => { const n = gapNet(g); return n ? excludedNetText(n) : gapFlip(g); })()} />
               ))}
               {inactiveCount > 0 && b.active && (
                 <tr>
@@ -5239,8 +5244,17 @@ export function AssetCard({
       maturity: pool.length > 0 ? Math.min(...pool) : undefined,
     };
   };
+  const wrongSideLegs = [...derived.perpOnly.flatMap((x) => x.otherWay), ...derived.pendingLegs.filter((y) => y.wrongSide)];
+  const gapFlipText = (g: HedgeGapRow): string | undefined => {
+    if (g.leg !== 'boros') return undefined;
+    const partner = gapPartner(g);
+    const y = [g, ...(partner ? [partner] : [])]
+      .map((x) => blockingWrongSide(wrongSideLegs, x.venue, x.action.startsWith('long') ? 'LONG' : 'SHORT'))
+      .find((w) => w !== undefined);
+    return y ? closeWrongSideText(y) : undefined;
+  };
   const armGap = (g: HedgeGapRow): (() => void) | undefined => {
-    if (!flow || gapNet(g)) return undefined;
+    if (!flow || gapNet(g) || gapFlipText(g)) return undefined;
     return () => {
       const long = g.action.startsWith('long');
       // Only a MISSING leg pairs up with a missing leg elsewhere. A deficit
@@ -5637,7 +5651,6 @@ export function AssetCard({
   };
   const ungroupedCount = derived.unpairedPerps.length + derived.pendingLegs.length;
   const looseIds = new Set(derived.pendingLegs.map((y) => y.marketId));
-  const wrongSideLegs = [...derived.perpOnly.flatMap((x) => x.otherWay), ...derived.pendingLegs.filter((y) => y.wrongSide)];
   const excludeWithUndo = useExcludeWithUndo(exclusions, onExclude);
   const excludeMenu = (y: PendingLeg): React.ReactNode => {
     const leg = group.borosOpen.find((b) => b.marketId === y.marketId);
@@ -6020,6 +6033,7 @@ export function AssetCard({
                 deficitFor={deficitFor}
                 armGap={armGap}
                 gapNet={gapNet}
+                gapFlip={gapFlipText}
                 pairPartner={gapPartner}
                 multiVenue={activeBundles.length > 1}
               />
@@ -6084,6 +6098,7 @@ export function AssetCard({
                     deficitFor={deficitFor}
                     armGap={armGap}
                     gapNet={gapNet}
+                    gapFlip={gapFlipText}
                     pairPartner={gapPartner}
                   />
                 ))}
