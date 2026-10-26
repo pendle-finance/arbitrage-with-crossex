@@ -56,6 +56,11 @@ function previewSpy(): ActionInput[][] {
   return seen;
 }
 const deadOpens = (el: HTMLElement) => within(el).queryAllByRole('button', { name: 'Open leg' }).filter((b) => b.getAttribute('aria-disabled') === 'true');
+async function openLegTexts(user: ReturnType<typeof userEvent.setup>, el: HTMLElement): Promise<string[]> {
+  const opens = within(el).getAllByRole('button', { name: 'Open leg' });
+  const live = opens.filter((b) => b.getAttribute('aria-disabled') !== 'true').map((b) => b.title);
+  return [...live, ...(await blockedReasons(user, opens.filter((b) => b.getAttribute('aria-disabled') === 'true')))];
+}
 const closeQtys = (actions: ActionInput[] | undefined) =>
   Object.fromEntries((actions ?? []).map((a) => [a.kind === 'close-position' ? a.symbol : a.kind, a.kind === 'close-position' ? a.qty : undefined]));
 
@@ -130,6 +135,9 @@ describe('the card, by the grouping DoD', () => {
     });
     expect(cardsTitled(/Perp legs? missing/)).toHaveLength(1);
     expect(textOf(card)).not.toContain(' holds ');
+    const texts = await openLegTexts(user, card);
+    expect(texts.length).toBeGreaterThan(0);
+    for (const t of texts) expect(t).not.toContain(' holds ');
     await user.click(await within(card).findByRole('button', { name: 'Open both Boros legs' }));
     await waitFor(() => expect(prefill.current).not.toBeNull());
     expect(prefill.current).toMatchObject({ longVenue: 'GATE', shortVenue: 'HYPERLIQUID', sizeBase: 10 });
@@ -202,6 +210,9 @@ describe('the card, by the grouping DoD', () => {
     expect(textOf(perpMissing[0])).toMatch(/Lighter/);
     const borosMissing = cardsTitled(/Boros legs missing/)[0];
     expect(textOf(borosMissing)).not.toContain(' holds ');
+    const texts = await openLegTexts(user, borosMissing);
+    expect(texts.length).toBeGreaterThan(0);
+    for (const t of texts) expect(t).not.toContain(' holds ');
     expect(await within(borosMissing).findByRole('button', { name: 'Open both Boros legs' })).toBeInTheDocument();
     expect(textOf(borosMissing)).toMatch(/Gate/);
     expect(textOf(borosMissing)).toMatch(/Hyperliquid/);

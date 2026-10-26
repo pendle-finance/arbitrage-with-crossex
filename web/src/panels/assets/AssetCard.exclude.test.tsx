@@ -628,6 +628,84 @@ describe('Exclude from the card, by the DoD', () => {
     expect([lands.long?.maturity, lands.short?.maturity]).toEqual([DATES.N, DATES.N]);
   });
 
+  it.each([50 / PX, 6_000_000 / PX])('#82 a blocked bundle button stays hoverable and focusable (%s ETH)', async (q) => {
+    listSingles([singleRow('Hyperliquid', DATES.O)]);
+    const user = userEvent.setup();
+    renderCard(groupOf([`G L ${q}`, `H S ${q}`, `G LONG ${q} N`, `H LONG ${q} O`]), { 'boros:102': 'all' });
+    await openBundle(user, /Hyperliquid/);
+    const row = await waitFor(() => screen.getByText(/not open yet/).closest('tr') as HTMLElement);
+    await waitFor(() => expect(within(row).getByRole('button', { name: /open Boros leg/ })).toHaveAttribute('aria-disabled', 'true'));
+    const open = within(row).getByRole('button', { name: /open Boros leg/ });
+    expect(open).not.toBeDisabled();
+    expect(open.className).not.toMatch(/grass|gold/);
+    open.focus();
+    expect(open).toHaveFocus();
+    expect(await blockedReason(user, open)).toBe(NET_HL_30);
+    await user.click(open);
+    expect(prefill.current).toBeNull();
+  });
+
+  it.each([50 / PX, 6_000_000 / PX])('#82 a blocked open-both bundle button is not natively disabled (%s ETH)', async (q) => {
+    server.use(http.get('/api/boros/pair/context', () => new Promise<never>(() => {})));
+    const user = userEvent.setup();
+    renderCard(groupOf([`G L ${q}`, `H S ${q}`, `H LONG ${q} O`]), { [KEY_101]: 'all' });
+    await openBundle(user, /Hyperliquid/);
+    const opens = await waitFor(() => {
+      const found = screen.getAllByRole('button', { name: /open (both )?Boros legs?/ });
+      expect(found.length).toBeGreaterThan(0);
+      expect(found.every(isDead)).toBe(true);
+      return found;
+    });
+    for (const b of opens) expect(b).not.toBeDisabled();
+    expect(await blockedReasons(user, opens)).toContain(NET_HL_30);
+    for (const b of opens) await user.click(b);
+    expect(prefill.current).toBeNull();
+  });
+
+  it.each([50 / PX, 6_000_000 / PX])('#75 the netting spread row names the excluded spread (%s ETH)', async (q) => {
+    const spreadId = 900 + DATES.O;
+    listMarkets([spreadRow(DATES.O)]);
+    const user = userEvent.setup();
+    renderCard(groupOf([`G L ${q}`, `H S ${q}`, `H-G LONG ${q} O`], { 101: { marketId: spreadId } }), { [`boros:${spreadId}`]: 'all' });
+    await showPairs(user);
+    const card = await pickBorosCard(/no rate leg/);
+    const open = await waitFor(() => {
+      const dead = opensIn(card, 'Open leg').filter(isDead);
+      expect(dead).toHaveLength(1);
+      return dead[0];
+    });
+    expect(await blockedReason(user, open)).toBe('Spread HL-GATE LONG at 30 Oct is excluded and would net. Pick another date or restore it.');
+    expect(open.className).not.toMatch(/grass|gold/);
+    expect(textOf(card)).not.toContain('would net');
+    expect(within(card).queryByRole('button', { name: /^Open (both )?Boros legs?$/ })).toBeNull();
+    await user.click(open);
+    expect(prefill.current).toBeNull();
+  });
+
+  it.each([50 / PX, 6_000_000 / PX])('#75 a live Open leg does not carry the pair net sentence (%s ETH)', async (q) => {
+    listSingles([singleRow('Gate', DATES.N), singleRow('Hyperliquid', DATES.O)]);
+    const user = userEvent.setup();
+    renderCard(groupOf([`G L ${q}`, `H S ${q}`, `G SHORT ${q} O`]), { [KEY_101]: 'all' });
+    await showPairs(user);
+    const card = await pickBorosCard(/Boros legs missing/);
+    const live = await waitFor(() => {
+      const found = opensIn(card, 'Open leg').filter((b) => !isDead(b));
+      expect(found).toHaveLength(2);
+      return found;
+    });
+    const pairOpen = within(card).getByRole('button', { name: 'Open both Boros legs' });
+    expect(isDead(pairOpen)).toBe(true);
+    expect(pairOpen.className).not.toMatch(/grass|gold/);
+    expect(pairOpen).not.toBeDisabled();
+    expect(await blockedReason(user, pairOpen)).toMatch(/^Gate SHORT at 30 Oct is excluded and would net\. Pick another date or restore it\.$/);
+    await user.click(pairOpen);
+    expect(prefill.current).toBeNull();
+    expect(live.map((b) => b.title)).toEqual([
+      expect.stringMatching(/^Open only the Gate LONG Boros leg, at \S+ ETH$/),
+      expect.stringMatching(/^Open only the Hyperliquid SHORT Boros leg, at \S+ ETH$/),
+    ]);
+  });
+
   it.each([...RUNGS.map((usd) => usd / PX), 1_200])('close a slice of a part-excluded leg sends the slice (%s ETH)', async (row) => {
     const user = userEvent.setup();
     renderCard(groupOf([`G LONG ${row * 3} N`]), { [KEY_101]: { qty: row * 2 } });
