@@ -857,26 +857,7 @@ function PairCard({
                 {pair.legs.map((l, i) => (
                   <tr key={i}>
                     <td className={`${cell} whitespace-nowrap`}>
-                      <span className="inline-flex items-center gap-[7px]">
-                        {l.kind === 'yu' && l.spreadVenues ? (
-                          <>
-                            <SpreadIcon venues={l.spreadVenues} />
-                            <SpreadName base={base} venues={l.spreadVenues} />
-                          </>
-                        ) : (
-                          <span className="font-medium text-ink-50">{prettyVenue(l.venue)}</span>
-                        )}
-                        <span
-                          className={`rounded-full px-2 py-[3px] text-[10px] font-semibold tracking-[0.06em] ${
-                            l.kind === 'yu' ? 'bg-info/[0.16] text-pastel-blue' : 'bg-wash/[0.10] text-ink-300'
-                          }`}
-                        >
-                          {l.kind === 'yu' ? 'Boros' : 'CrossEx'}
-                        </span>
-                        <Chip sm tone={l.side === 'LONG' ? 'green' : 'red'}>
-                          {l.side}
-                        </Chip>
-                      </span>
+                      <LegName venue={l.venue} kind={l.kind} side={l.side} base={base} spreadVenues={l.kind === 'yu' ? l.spreadVenues : null} />
                     </td>
                     <td className={`${cell} num whitespace-nowrap text-right text-ink-100`}>
                       <span title={exactSize(sizeIn(l, pair.unit), pair.unit, base)}>{exactSize(sizeIn(l, pair.unit), pair.unit, base)}</span>
@@ -3909,6 +3890,7 @@ function UngroupedCard({
                     <td className="whitespace-nowrap">
                       <LegIdentity
                         kind="perp"
+                        venue={l.venue}
                         name={prettyVenue(l.venue)}
                         sub={whole(l.share) ? 'CrossEx · not in a pair' : `CrossEx · ${fmtPct(l.share)} of the leg unpaired`}
                         chips={
@@ -3956,6 +3938,8 @@ function UngroupedCard({
                     <td className="whitespace-nowrap">
                       <LegIdentity
                         kind="boros"
+                        venue={l.venue}
+                        spreadVenues={l.spreadVenues}
                         name={prettyVenue(l.venue)}
                         sub={
                           <span title="Maturity. No counterpart settles on this day.">
@@ -4060,6 +4044,7 @@ function MissingRow({ gap, base, onOpen, asPair, blocked }: { gap: HedgeGapRow; 
     <tr className="opacity-50">
       <td className="whitespace-nowrap">
         <LegIdentity
+          venue={gap.venue}
           name={prettyVenue(gap.venue)}
           kind={gap.leg}
           dim
@@ -4366,11 +4351,15 @@ function OpenMoreButton({ gap, base, onOpen, blocked }: { gap: HedgeGapRow; base
 function LegIdentity({
   kind,
   dim,
+  venue,
+  spreadVenues,
   name,
   sub,
   chips,
 }: {
   kind: 'perp' | 'boros';
+  venue?: string;
+  spreadVenues?: [string, string] | null;
   /** A finished or absent leg — drawn quieter. */
   dim?: boolean;
   /** The venue, for rows that sit in a MIXED list (ungrouped legs, closed
@@ -4414,7 +4403,10 @@ function LegIdentity({
       <span className="flex min-w-0 flex-col gap-1">
         <span className="flex flex-wrap items-center gap-x-[7px] gap-y-1">
           {named ? (
-            <span className={`text-[12.5px] font-medium leading-none ${dim ? 'text-ink-200' : 'text-ink-50'}`}>{name}</span>
+            <span className={`inline-flex items-center gap-[7px] text-[12.5px] font-medium leading-none ${dim ? 'text-ink-200' : 'text-ink-50'}`}>
+              {venue && <span className={`inline-flex ${dim ? 'opacity-60' : ''}`}>{spreadVenues ? <SpreadIcon venues={spreadVenues} /> : <VenueIcon venue={venue} size={16} />}</span>}
+              {name}
+            </span>
           ) : (
             <span className={`num text-[12.5px] font-medium leading-none ${dim ? 'text-ink-200' : 'text-ink-50'}`}>{sub}</span>
           )}
@@ -4501,6 +4493,7 @@ function PerpRow({
         {/* The side is on the bundle row above; every leg of a bundle
             shares it, so repeating it per row said nothing new. */}
         <LegIdentity
+          venue={leg.venue}
           name={prettyVenue(leg.venue)}
           kind="perp"
           sub="CrossEx"
@@ -4595,6 +4588,8 @@ function BorosRow({
     <tr className="group">
       <td className="whitespace-nowrap">
         <LegIdentity
+          venue={leg.venue}
+          spreadVenues={leg.spreadVenues}
           name={leg.spreadVenues ? spreadName(base, leg.spreadVenues) : prettyVenue(leg.venue)}
           kind="boros"
           chips={
@@ -4731,6 +4726,7 @@ function InactiveBorosRow({
     <tr className="text-ink-300">
       <td className="whitespace-nowrap">
         <LegIdentity
+          venue={h.venue}
           name={prettyVenue(h.venue)}
           kind="boros"
           dim
@@ -4805,6 +4801,7 @@ function ClosedPerpRow({ row, base }: { row: AssetPerpClosedRow & { symbol: stri
     <tr className="text-ink-300">
       <td className="whitespace-nowrap">
         <LegIdentity
+          venue={row.venue}
           name={prettyVenue(row.venue)}
           kind="perp"
           dim
