@@ -267,6 +267,55 @@ describe('hedge status', () => {
     expect(d.lockedAprFwd).toBeLessThan(0);
   });
 
+  it('a USDT-margined leg against a coin-margined one on the same venue is Wrong side', () => {
+    const d = deriveAsset(
+      group({
+        base: 'BTC',
+        priceUsd: 100_000,
+        perpOpen: [
+          perp({ symbol: 'HL_BTC', venue: 'HYPERLIQUID', side: 'LONG', qty: 1, notionalUsd: 100_000, entryPrice: 100_000, markPrice: 100_000 }),
+          perp({ symbol: 'BN_BTC', venue: 'BINANCE', side: 'SHORT', qty: 1, notionalUsd: 100_000, entryPrice: 100_000, markPrice: 100_000 }),
+        ],
+        borosOpen: [
+          boros({ marketId: 137, venue: 'HYPERLIQUID', side: 'LONG', collateral: 'BTC', sizeToken: 1, notionalUsd: 100_000 }),
+          boros({ marketId: 194, venue: 'HYPERLIQUID', side: 'SHORT', collateral: 'USDT', sizeToken: 100_000, notionalUsd: 100_000 }),
+          boros({ marketId: 138, venue: 'BINANCE', side: 'SHORT', collateral: 'BTC', sizeToken: 1, notionalUsd: 100_000 }),
+        ],
+      }),
+      {},
+      0,
+      NOW,
+    );
+    expect(d.pairs).toHaveLength(1);
+    expect(d.pairs[0].size).toBeCloseTo(1, 9);
+    expect(d.pendingLegs.map((y) => [y.marketId, y.side, y.wrongSide?.againstVenue])).toEqual([[194, 'SHORT', 'HYPERLIQUID']]);
+    expect(d.gaps.map((x) => [x.venue, x.action, x.sizeBase])).toEqual([['HYPERLIQUID', 'long-boros', 1]]);
+  });
+
+  it('a negative entry rate keeps its sign in the pair rate', () => {
+    const book = (longEntry: number, shortEntry: number) =>
+      deriveAsset(
+        group({
+          base: 'BTC',
+          priceUsd: 100_000,
+          perpOpen: [
+            perp({ symbol: 'HL_BTC', venue: 'HYPERLIQUID', side: 'LONG', qty: 1, notionalUsd: 100_000, imUsd: 10_000 }),
+            perp({ symbol: 'BN_BTC', venue: 'BINANCE', side: 'SHORT', qty: 1, notionalUsd: 100_000, imUsd: 10_000 }),
+          ],
+          borosOpen: [
+            boros({ marketId: 137, venue: 'HYPERLIQUID', side: 'LONG', collateral: 'BTC', sizeToken: 1, notionalUsd: 100_000, entryApr: longEntry, imUsd: 1_000 }),
+            boros({ marketId: 138, venue: 'BINANCE', side: 'SHORT', collateral: 'BTC', sizeToken: 1, notionalUsd: 100_000, entryApr: shortEntry, imUsd: 1_000 }),
+          ],
+        }),
+        {},
+        0,
+        NOW,
+      ).pairs[0].lockedAprFwd;
+    expect(book(-0.02, 0.01)).toBeCloseTo(3_000 / 22_000, 9);
+    expect(book(0.02, 0.05)).toBeCloseTo(3_000 / 22_000, 9);
+    expect(book(0.03, -0.01)).toBeCloseTo(-4_000 / 22_000, 9);
+  });
+
   it('a coin-margined leg on the same coin is still read as coins', () => {
     const d = deriveAsset(
       group({

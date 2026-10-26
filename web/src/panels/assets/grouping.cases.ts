@@ -383,6 +383,33 @@ export const CASES: GroupCase[] = [
     cards: null,
   },
   {
+    title: 'two longs, two shorts, uneven sizes: the fewest cards',
+    spec: ['G L 3', 'O L 1', 'H S 2', 'LI S 2', 'G LONG 3 N g', 'O LONG 1 N o', 'H SHORT 2 N h', 'LI SHORT 2 N l'],
+    cards: ['H G/H N 1', 'H G/LI N 2', 'H O/H N 1'],
+  },
+  {
+    title: 'one long against shorts on two venues',
+    spec: ['G L 2', 'H S 1', 'LI S 1', 'G LONG 2 N g', 'H SHORT 1 N h', 'LI SHORT 1 N l'],
+    cards: ['H G/H N 1', 'H G/LI N 1'],
+  },
+  {
+    title: 'two longs, two shorts, one rate leg missing',
+    spec: ['G L 1', 'O L 1', 'H S 1', 'LI S 1', 'G LONG 1 N g', 'O LONG 1 N o', 'H SHORT 1 N h'],
+    cards: ['BM G/LI N holdsL 1', 'H O/H N 1'],
+    offers: { 'BM G/LI N holdsL': ['LI SHORT 1'] },
+  },
+  {
+    title: 'very large sizes: a millionth of a coin rides inside the card',
+    spec: ['G L 6000000.000001', 'H S 6000000', 'G LONG 5999999.999999 N g', 'H SHORT 6000000 N h'],
+    cards: ['H G/H N 6000000.000001'],
+  },
+  {
+    title: 'very large sizes: two singles that add to the perp make one card',
+    spec: ['G L 2400', 'H S 2400', 'G LONG 800.0000001 N g', 'G LONG 1599.9999999 N g2', 'H SHORT 2400 N h'],
+    cards: ['H G/H N 2400'],
+    rows: { 'H G/H N': ['G|L 2400', 'H|S 2400', 'g 800', 'g2 1600', 'h 2400'] },
+  },
+  {
     title: 'ED-6648 very large sizes ($15B)',
     spec: ['G L 6000000', 'H S 6000000', 'G LONG 3600000 N g', 'H SHORT 3600000 N h'],
     cards: ['BM G/H - 2400000', 'H G/H N 3600000'],
