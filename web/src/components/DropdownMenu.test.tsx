@@ -167,6 +167,17 @@ describe('DropdownMenu', () => {
     expect(trigger).toHaveFocus();
   });
 
+  it('the Space that opens the menu does not select the first item', async () => {
+    const { trigger, spies } = renderMenu();
+    trigger.focus();
+    fireEvent.keyDown(trigger, { key: ' ' });
+    await screen.findByRole('menu');
+    expect(item('Alpha')).toHaveFocus();
+    expect(fireEvent.keyUp(item('Alpha'), { key: ' ' })).toBe(false);
+    expect(spies.a).not.toHaveBeenCalled();
+    expect(screen.getByRole('menu')).toBeInTheDocument();
+  });
+
   it('a double click fires once', async () => {
     const { trigger, spies } = renderMenu();
     await userEvent.click(trigger);

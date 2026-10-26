@@ -123,6 +123,11 @@ export function DropdownMenu({
     const list = menuItems();
     if (list.length === 0) return;
     const at = list.indexOf(document.activeElement as HTMLElement);
+    if ((e.key === 'Enter' || e.key === ' ') && at >= 0) {
+      e.preventDefault();
+      select(items[at]);
+      return;
+    }
     const next =
       e.key === 'ArrowDown'
         ? (at + 1) % list.length
@@ -167,6 +172,9 @@ export function DropdownMenu({
             aria-label={label}
             tabIndex={-1}
             onKeyDown={onMenuKey}
+            onKeyUp={(e) => {
+              if (e.key === ' ') e.preventDefault();
+            }}
             style={{ left: place.left, top: place.top, bottom: place.bottom }}
             className="pp-tooltip fixed z-50 min-w-32 p-px outline-none"
           >
