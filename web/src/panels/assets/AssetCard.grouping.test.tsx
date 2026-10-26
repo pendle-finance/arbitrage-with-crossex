@@ -281,6 +281,57 @@ describe('the card, by the grouping DoD', () => {
     expect(textOf(card)).not.toContain('to open here');
   });
 
+  describe('Funding Bundles never opens into a Wrong side leg', () => {
+    const FLIP_O = 'Close the Wrong side Hyperliquid LONG at 30 Oct to open here.';
+    const borosOpens = () => screen.queryAllByRole('button', { name: /^(open (both )?Boros legs?|Open more)$/ });
+    const isDead = (b: HTMLElement) => b.getAttribute('aria-disabled') === 'true';
+    async function showBundles(user: ReturnType<typeof userEvent.setup>) {
+      await user.click(screen.getByRole('tab', { name: /^Funding Bundles/ }));
+      for (const name of [/Gate/, /Hyperliquid/]) {
+        const bundle = screen.getAllByRole('button', { name }).find((b) => b.getAttribute('aria-expanded') === 'false');
+        if (bundle) await user.click(bundle);
+      }
+    }
+
+    it.each(RUNGS.map((usd) => usd / PX))('Open more on the Wrong side leg is grey; Gate still opens its own leg (%s ETH)', async (q) => {
+      const user = userEvent.setup();
+      renderCard(groupOf([`G L ${q}`, `H S ${q}`, `H LONG ${q} O`]));
+      await showBundles(user);
+      const more = await screen.findByRole('button', { name: 'Open more' });
+      expect(more).toHaveAttribute('aria-disabled', 'true');
+      expect(await blockedReason(user, more)).toBe(FLIP_O);
+      await user.click(more);
+      expect(prefill.current).toBeNull();
+      const live = borosOpens().filter((b) => !isDead(b));
+      expect(live.map((b) => textOf(b.closest('tr') as HTMLElement))).toEqual([expect.stringMatching(/^BorosGate/)]);
+      await user.click(live[0]);
+      await waitFor(() => expect(prefill.current).toMatchObject({ longVenue: 'GATE', shortVenue: null }));
+    });
+
+    it('a missing row is grey when a Wrong side leg at another date would net', async () => {
+      const user = userEvent.setup();
+      renderCard(groupOf(['G L 1', 'H S 1', 'G LONG 1 O', 'H SHORT 0.5 O', 'H LONG 0.5 N']));
+      await showBundles(user);
+      const open = await screen.findByRole('button', { name: 'open Boros leg' });
+      expect(open).toHaveAttribute('aria-disabled', 'true');
+      expect(await blockedReason(user, open)).toBe('Close the Wrong side Hyperliquid LONG at 27 Nov to open here.');
+      await user.click(open);
+      expect(prefill.current).toBeNull();
+    });
+
+    it('a dust Wrong side leg does not block', async () => {
+      const user = userEvent.setup();
+      renderCard(groupOf(['G L 1', 'H S 1', 'H LONG 0.008 O']));
+      await showBundles(user);
+      const opens = await waitFor(() => {
+        const found = borosOpens();
+        expect(found.length).toBeGreaterThan(0);
+        return found;
+      });
+      expect(opens.filter(isDead)).toEqual([]);
+    });
+  });
+
   it('a Wrong side row has a faint red tint, the missing rows do not', async () => {
     const user = userEvent.setup();
     renderCard(groupOf(B21));
@@ -351,6 +402,9 @@ describe('the card, by the grouping DoD', () => {
     });
     expect(textOf(card)).not.toContain('The other ');
     expect(textOf(card)).not.toContain('is in Ungrouped');
+    const ungrouped = cardList().find((el) => /Ungrouped legs/.test(textOf(el))) as HTMLElement;
+    await expand(user, ungrouped);
+    expect(textOf(ungrouped)).toContain('USDC perp · no Boros hedge');
   });
 
   it('close-first hover only when it blocks', async () => {

@@ -295,14 +295,14 @@ describe('Exclude from the card, by the DoD', () => {
     expect(textOf(excludedBlock())).toBe(onPairs);
   });
 
-  it('an Excluded row has the card row format: Boros pill, side tag, the card columns, no venue icon', async () => {
+  it('an Excluded row has the card row format: Boros pill, side tag, the card columns, the venue icon', async () => {
     const user = userEvent.setup();
     renderCard(groupOf(B13), { [KEY_101]: 'all' });
     await showPairs(user);
     const block = excludedBlock();
     expect(within(block).getAllByRole('columnheader').map((h) => h.textContent)).toEqual(['Leg', 'Size', 'Locked', 'Initial margin', '']);
     const row = within(block).getByRole('button', { name: 'Restore' }).closest('tr') as HTMLElement;
-    expect(row.querySelector('img[aria-hidden="true"]')).toBeNull();
+    expect(row.querySelector('img[aria-hidden="true"]')).not.toBeNull();
     expect(within(row).getByText('Boros')).toHaveClass('bg-info/[0.16]');
     const cardRow = screen.getAllByRole('row').find((r) => !block.contains(r) && /^GateBorosLONG/.test(r.textContent ?? '')) as HTMLElement;
     const cardSide = within(cardRow).getByText('LONG');
