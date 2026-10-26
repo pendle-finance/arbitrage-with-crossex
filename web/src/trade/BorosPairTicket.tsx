@@ -67,6 +67,7 @@ import {
   PairResultReport,
   PositionArithmetic,
   SpreadReadout,
+  UnevenFillWarning,
 } from './BorosPairBits';
 
 /**
@@ -1362,6 +1363,9 @@ export function BorosPairTicket({
           {w}
         </p>
       ))}
+      {simulation && !oneMarket && onlyLeg === null && (
+        <UnevenFillWarning sim={simulation} onUse={(size) => setSizeStr(fieldValue(Math.floor(size * 1e8) / 1e8))} />
+      )}
       <BlockerList blockers={blockers} />
 
       {execute.isError && <QueryError title="The pair was not sent" error={execute.error} />}
