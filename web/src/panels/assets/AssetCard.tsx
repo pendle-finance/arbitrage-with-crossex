@@ -228,6 +228,14 @@ const AmberTag = ({ tag, children }: { tag: string; children: string }) => (
     {children}
   </HoverCard>
 );
+const BlockedOpen = ({ reason, children }: { reason?: string; children: React.ReactNode }) =>
+  reason ? (
+    <HoverCard wrapsControl underline={false} icon={false} widthPx={280} label={children}>
+      {reason}
+    </HoverCard>
+  ) : (
+    <>{children}</>
+  );
 const WRONG_SIDE_TINT = 'bg-guava/[0.04]';
 
 function LegName({ venue, kind, side, base, spreadVenues }: { venue: string; kind: 'perp' | 'yu'; side: 'LONG' | 'SHORT'; base: string; spreadVenues?: [string, string] | null }) {
@@ -3314,16 +3322,18 @@ function PerpOnlyPairCard({
         <td className={`${cell} num text-right text-ink-600`}>—</td>
         <td className={`${cell} whitespace-nowrap text-right`}>
           {(canOpen || why.length > 0) && (
-            <button
-              type="button"
-              className={`btn-ghost-xs !py-[5px] !text-grass ${canOpen ? 'hover:!border-grass/60' : 'cursor-not-allowed opacity-40'}`}
-              disabled={!onOpenBoros}
-              aria-disabled={!canOpen}
-              title={canOpen ? [`Open only the ${prettyVenue(venue)} ${side} Boros leg, at ${sizeText(missing)}${why.length > 0 ? '.' : ''}`, ...why].join(' ') : why.join(' ')}
-              onClick={canOpen ? () => onOpenBoros?.({ long: side === 'LONG', short: side === 'SHORT' }) : undefined}
-            >
-              Open leg
-            </button>
+            <BlockedOpen reason={canOpen ? undefined : why.join(' ')}>
+              <button
+                type="button"
+                className={`btn-ghost-xs !py-[5px] !text-grass ${canOpen ? 'hover:!border-grass/60' : 'cursor-not-allowed opacity-40'}`}
+                disabled={!onOpenBoros}
+                aria-disabled={!canOpen}
+                title={canOpen ? [`Open only the ${prettyVenue(venue)} ${side} Boros leg, at ${sizeText(missing)}${why.length > 0 ? '.' : ''}`, ...why].join(' ') : undefined}
+                onClick={canOpen ? () => onOpenBoros?.({ long: side === 'LONG', short: side === 'SHORT' }) : undefined}
+              >
+                Open leg
+              </button>
+            </BlockedOpen>
           )}
         </td>
       </tr>
@@ -3430,9 +3440,11 @@ function PerpOnlyPairCard({
                     <td className={`${cell} num text-right text-ink-600`}>—</td>
                     {eitherNet ? (
                       <td className={`${cell} whitespace-nowrap text-right`}>
-                        <button type="button" className="btn-ghost-xs !py-[5px] !text-grass cursor-not-allowed opacity-40" aria-disabled title={excludedNetText(eitherNet)}>
-                          Open leg
-                        </button>
+                        <BlockedOpen reason={excludedNetText(eitherNet)}>
+                          <button type="button" className="btn-ghost-xs !py-[5px] !text-grass cursor-not-allowed opacity-40" aria-disabled>
+                            Open leg
+                          </button>
+                        </BlockedOpen>
                       </td>
                     ) : (
                       <td className={`${cell} num text-right text-ink-600`}>—</td>
@@ -4051,17 +4063,19 @@ function MissingRow({ gap, base, onOpen, asPair, blocked }: { gap: HedgeGapRow; 
       <td className="text-right text-ink-600">—</td>
       <td className="text-right text-ink-600">—</td>
       <td className="whitespace-nowrap text-right">
-        <button
-          type="button"
-          className={`btn-ghost-xs !text-gold ${blocked ? 'cursor-not-allowed opacity-40' : 'hover:!border-gold/50'}`}
-          disabled={!onOpen}
-          aria-disabled={!!blocked}
-          title={blocked ?? (onOpen ? (asPair ? 'Opens the pair ticket with both missing legs.' : `Opens the order ticket with ${gapAsk(gap, base)}.`) : 'Order ticket unavailable here')}
-          onClick={blocked ? undefined : onOpen}
-        >
-          {asPair ? `open both ${boros ? 'Boros' : 'perp'} legs` : `open ${boros ? 'Boros' : 'perp'} leg`}
-          <ArrowRight size={12} aria-hidden />
-        </button>
+        <BlockedOpen reason={blocked}>
+          <button
+            type="button"
+            className={`btn-ghost-xs !text-gold ${blocked ? 'cursor-not-allowed opacity-40' : 'hover:!border-gold/50'}`}
+            disabled={!onOpen}
+            aria-disabled={!!blocked}
+            title={blocked ? undefined : onOpen ? (asPair ? 'Opens the pair ticket with both missing legs.' : `Opens the order ticket with ${gapAsk(gap, base)}.`) : 'Order ticket unavailable here'}
+            onClick={blocked ? undefined : onOpen}
+          >
+            {asPair ? `open both ${boros ? 'Boros' : 'perp'} legs` : `open ${boros ? 'Boros' : 'perp'} leg`}
+            <ArrowRight size={12} aria-hidden />
+          </button>
+        </BlockedOpen>
       </td>
     </tr>
   );
@@ -4318,16 +4332,18 @@ function EditCell({
 
 function OpenMoreButton({ gap, base, onOpen, blocked }: { gap: HedgeGapRow; base: string; onOpen?: () => void; blocked?: string }) {
   return (
-    <button
-      type="button"
-      className={`btn-ghost-xs !text-gold ${blocked ? 'cursor-not-allowed opacity-40' : 'hover:!border-gold/50'}`}
-      disabled={!onOpen}
-      aria-disabled={!!blocked}
-      title={blocked ?? (onOpen ? `Opens the order ticket with ${gapAsk(gap, base)}.` : 'Order ticket unavailable here')}
-      onClick={blocked ? undefined : onOpen}
-    >
-      Open more
-    </button>
+    <BlockedOpen reason={blocked}>
+      <button
+        type="button"
+        className={`btn-ghost-xs !text-gold ${blocked ? 'cursor-not-allowed opacity-40' : 'hover:!border-gold/50'}`}
+        disabled={!onOpen}
+        aria-disabled={!!blocked}
+        title={blocked ? undefined : onOpen ? `Opens the order ticket with ${gapAsk(gap, base)}.` : 'Order ticket unavailable here'}
+        onClick={blocked ? undefined : onOpen}
+      >
+        Open more
+      </button>
+    </BlockedOpen>
   );
 }
 

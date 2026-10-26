@@ -13,6 +13,7 @@ import { renderWithClient } from '../../test/utils';
 import { useTradeFlowOptional } from '../../trade/TradeFlow';
 import { STRATEGY_STORAGE_KEY } from '../HomeControls';
 import { AssetCard } from './AssetCard';
+import { blockedReason } from '../../test/blockedReason';
 import { deriveAsset } from './assetModel';
 import { fmtDateShort } from '../../lib/fmt';
 
@@ -354,7 +355,7 @@ describe('an open stops at what the venue lacks (owner 2026-10-16)', () => {
     await showPairs(user);
     const open = await screen.findByRole('button', { name: 'Open leg' });
     expect(open).toHaveAttribute('aria-disabled', 'true');
-    expect(open).toHaveAttribute('title', reason(3));
+    expect(await blockedReason(user, open)).toBe(reason(3));
     expect(screen.queryByText(reason(3))).toBeNull();
     await user.click(open);
     expect(flow?.borosOpenPrefill ?? null).toBeNull();
@@ -366,7 +367,7 @@ describe('an open stops at what the venue lacks (owner 2026-10-16)', () => {
     renderCard(capBook(3));
     await showPairs(user);
     const row = (venue: string) => screen.getAllByRole('row').find((r) => (r.textContent ?? '').startsWith(`${venue}Boros`));
-    await screen.findByTitle(reason(3));
+    await screen.findByRole('button', { name: 'Open leg' });
     expect(row('Hyperliquid')?.textContent).toMatch(/3 BTC/);
     expect(row('Hyperliquid')?.textContent).not.toMatch(/\//);
     expect(row('Gate')?.textContent).toMatch(/0 \/ 3 BTC/);

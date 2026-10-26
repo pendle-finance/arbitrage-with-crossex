@@ -16,6 +16,7 @@ import { STRATEGY_STORAGE_KEY } from '../HomeControls';
 import { TrackedAddressProvider } from '../trackedAddress';
 import { AssetsHome } from './AssetsHome';
 import { AssetCard } from './AssetCard';
+import { blockedReason, blockedReasons } from '../../test/blockedReason';
 import { deriveAsset, type ExclusionEntry, type Exclusions } from './assetModel';
 
 type ExcludeSpy = (key: string, value: ExclusionEntry | undefined) => void;
@@ -462,7 +463,8 @@ describe('Exclude from the card, by the DoD', () => {
     await showPairs(user);
     const blocked = await pickBorosCard(/Boros legs missing/);
     expect(textOf(blocked)).not.toContain('Wrong side');
-    await waitFor(() => expect(opensIn(blocked, 'Open leg').filter(isDead).map((b) => b.title)).toEqual([net]));
+    await waitFor(() => expect(opensIn(blocked, 'Open leg').filter(isDead)).toHaveLength(1));
+    expect(await blockedReasons(user, opensIn(blocked, 'Open leg').filter(isDead))).toEqual([net]);
     expect(textOf(blocked)).not.toContain(net);
     expect(within(blocked).queryByRole('button', { name: 'Open both Boros legs' })).toBeNull();
     expect(opensIn(blocked, 'Open leg').filter((b) => !isDead(b))).toHaveLength(1);
@@ -487,7 +489,7 @@ describe('Exclude from the card, by the DoD', () => {
     expect(textOf(card)).not.toContain('would net');
     const open = within(card).getByRole('button', { name: 'Open leg' });
     expect(open).toHaveAttribute('aria-disabled', 'true');
-    expect(open).toHaveAttribute('title', NET_HL_30);
+    expect(await blockedReason(user, open)).toBe(NET_HL_30);
     await user.click(open);
     expect(prefill.current).toBeNull();
     expect(within(card).getAllByRole('button', { name: /^Open/ })).toEqual([open]);
@@ -525,9 +527,9 @@ describe('Exclude from the card, by the DoD', () => {
     renderCard(groupOf([`G L ${q}`, `H S ${q}`, `G LONG ${q} N`, `H LONG ${q} O`]), { 'boros:102': 'all' });
     await openBundle(user, /Hyperliquid/);
     const row = await waitFor(() => screen.getByText(/not open yet/).closest('tr') as HTMLElement);
-    await waitFor(() => expect(within(row).getByRole('button', { name: /open Boros leg/ })).toHaveAttribute('title', NET_HL_30));
+    await waitFor(() => expect(within(row).getByRole('button', { name: /open Boros leg/ })).toHaveAttribute('aria-disabled', 'true'));
     const open = within(row).getByRole('button', { name: /open Boros leg/ });
-    expect(open).toHaveAttribute('aria-disabled', 'true');
+    expect(await blockedReason(user, open)).toBe(NET_HL_30);
     expect(textOf(row)).not.toContain('would net');
     await user.click(open);
     expect(prefill.current).toBeNull();
@@ -538,8 +540,8 @@ describe('Exclude from the card, by the DoD', () => {
     const user = userEvent.setup();
     renderCard(groupOf([`G L ${q}`, `H S ${q}`, `H LONG ${q} O`]), { 'boros:101': 'all' });
     await openBundle(user, /Hyperliquid/);
-    await waitFor(() => expect(screen.getAllByRole('button', { name: /open (both )?Boros legs?/ }).map((b) => b.title)).toContain(NET_HL_30));
-    expect(screen.getAllByRole('button', { name: /open (both )?Boros legs?/ }).every(isDead)).toBe(true);
+    await waitFor(() => expect(screen.getAllByRole('button', { name: /open (both )?Boros legs?/ }).every(isDead)).toBe(true));
+    expect(await blockedReasons(user, screen.getAllByRole('button', { name: /open (both )?Boros legs?/ }))).toContain(NET_HL_30);
     expect(screen.queryByText(NET_HL_30)).toBeNull();
   });
 
@@ -563,7 +565,8 @@ describe('Exclude from the card, by the DoD', () => {
     const pairs = renderCard(groupOf(book), { [KEY_101]: 'all' });
     await showPairs(user);
     const card = await pickBorosCard(/Boros legs missing/);
-    await waitFor(() => expect(opensIn(card, 'Open leg').filter(isDead).map((b) => b.title)).toEqual([net]));
+    await waitFor(() => expect(opensIn(card, 'Open leg').filter(isDead)).toHaveLength(1));
+    expect(await blockedReasons(user, opensIn(card, 'Open leg').filter(isDead))).toEqual([net]);
     expect(textOf(card)).not.toContain(net);
     const [hlOpen] = opensIn(card, 'Open leg').filter(isDead);
     expect(hlOpen.closest('tr')?.textContent).toMatch(/^HyperliquidBorosSHORT/);
@@ -582,7 +585,7 @@ describe('Exclude from the card, by the DoD', () => {
     await waitFor(() => expect(opensIn(hl, /open/)).toHaveLength(1));
     const [hlBundleOpen] = opensIn(hl, /open/);
     expect(hlBundleOpen).toHaveAttribute('aria-disabled', 'true');
-    expect(hlBundleOpen).toHaveAttribute('title', net);
+    expect(await blockedReason(user, hlBundleOpen)).toBe(net);
     expect(textOf(hl)).not.toContain('would net');
     await user.click(hlBundleOpen);
     expect(prefill.current).toBeNull();
@@ -603,8 +606,8 @@ describe('Exclude from the card, by the DoD', () => {
     renderCard(groupOf([`G L ${q}`, `H S ${q}`, `H LONG ${q} O`, `G SHORT ${q} O`]), { [KEY_101]: 'all', 'boros:102': 'all' });
     const { gate, hl } = await bundleGapRows(user);
     for (const row of [hl, gate]) {
-      await waitFor(() => expect(opensIn(row, /open/).map((b) => b.title).join(' ')).toContain('would net'));
-      expect(opensIn(row, /open/).every(isDead)).toBe(true);
+      await waitFor(() => expect(opensIn(row, /open/).every(isDead)).toBe(true));
+      expect((await blockedReasons(user, opensIn(row, /open/))).join(' ')).toContain('would net');
       for (const b of opensIn(row, /open/)) await user.click(b);
     }
     expect(prefill.current).toBeNull();
