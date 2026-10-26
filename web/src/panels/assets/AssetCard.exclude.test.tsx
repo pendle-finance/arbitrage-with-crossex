@@ -683,6 +683,29 @@ describe('Exclude from the card, by the DoD', () => {
     expect(prefill.current).toBeNull();
   });
 
+  it.each([50 / PX, 6_000_000 / PX])('#75 a netting spread with singles listed shows its reason once (%s ETH)', async (q) => {
+    const spreadId = 900 + DATES.O;
+    const singles = [singleRow('Gate', DATES.O), singleRow('Hyperliquid', DATES.O)];
+    server.use(
+      http.get('/api/boros/pair/context', () =>
+        HttpResponse.json(env({ markets: singles, spreadMarkets: [spreadRow(DATES.O)], crossByToken: [], isolatedByMarket: [], defaultSlippageApr: 0.0025, maxSlippageApr: 0.1 })),
+      ),
+    );
+    const user = userEvent.setup();
+    renderCard(groupOf([`G L ${q}`, `H S ${q}`, `H-G LONG ${q} O`], { 101: { marketId: spreadId } }), { [`boros:${spreadId}`]: 'all' });
+    await showPairs(user);
+    const card = await pickBorosCard(/no rate leg/);
+    const open = await waitFor(() => {
+      const dead = opensIn(card, 'Open leg').filter(isDead);
+      expect(dead).toHaveLength(1);
+      return dead[0];
+    });
+    expect(await blockedReason(user, open)).toBe('Spread HL-GATE LONG at 30 Oct is excluded and would net. Pick another date or restore it.');
+    expect(within(card).queryByRole('button', { name: /^Open (both )?Boros legs?$/ })).toBeNull();
+    await user.click(open);
+    expect(prefill.current).toBeNull();
+  });
+
   it.each([50 / PX, 6_000_000 / PX])('#75 a live Open leg does not carry the pair net sentence (%s ETH)', async (q) => {
     listSingles([singleRow('Gate', DATES.N), singleRow('Hyperliquid', DATES.O)]);
     const user = userEvent.setup();

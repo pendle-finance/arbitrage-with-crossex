@@ -3501,7 +3501,7 @@ function PerpOnlyPairCard({
             {/* A held single keeps the unit on singles (rule 5), but a pair
                 ticket routes to a trading spread, so each missing single
                 opens on its own Open leg button. */}
-            {bothEven && !held && !(eitherNet && (excludedNet.long || excludedNet.short)) && (
+            {bothEven && !held && !(eitherNet && (spread || excludedNet.long || excludedNet.short)) && (
               <BlockedOpen reason={eitherNet ? excludedNetText(eitherNet) : undefined}>
                 <button
                   type="button"
