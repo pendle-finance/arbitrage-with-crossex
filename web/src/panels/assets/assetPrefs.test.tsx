@@ -468,7 +468,7 @@ async function rowMenuExclude(): Promise<HTMLElement> {
   const toggle = await screen.findByRole('button', { name: /Ungrouped legs/ });
   if (toggle.getAttribute('aria-expanded') === 'false') await userEvent.click(toggle);
   await userEvent.click(screen.getByRole('button', { name: 'More actions' }));
-  return screen.findByRole('button', { name: /^Exclude/ });
+  return screen.findByRole('menuitem', { name: /^Exclude/ });
 }
 
 const excludedToast = () => screen.queryAllByRole('alert').find((a) => /excluded\.$/.test(a.textContent ?? '') || /excluded\.Undo$/.test(a.textContent ?? ''));
