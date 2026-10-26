@@ -618,6 +618,26 @@ describe('BorosPairTicket', () => {
     expect(atomicity).toMatch(/can still fill short/i);
   });
 
+  it('warns when the books fill the legs unevenly and offers the size both legs fill', async () => {
+    const user = userEvent.setup();
+    const sizes: unknown[] = [];
+    server.use(
+      ...handlers({
+        sim: { hedgedSize: 60_000, unhedgedSize: 40_000 },
+        onSimulate: (body) => sizes.push((body.legs as { size: number }[])[0].size),
+      }),
+    );
+    renderWithClient(<BorosPairTicket />);
+    await fillTicket(user);
+
+    expect(
+      await screen.findByText('Only 60,000 USDT fills on both legs. 40,000 USDT would be left unhedged.'),
+    ).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Use 60,000 USDT' }));
+    expect(screen.getByLabelText(/^Size per leg/)).toHaveValue('60000');
+    await waitFor(() => expect(sizes).toContain(60_000));
+  });
+
   it('renders ETH-collateral sizes at real precision, never rounded to 0', async () => {
     // The bug this pins: a 0.01 ETH ticket showed "0" everywhere — est. fill,
     // margin, trade and resulting position — because the columns were formatted

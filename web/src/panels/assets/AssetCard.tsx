@@ -55,7 +55,7 @@ import {
   usePositions,
 } from '../../api/queries';
 import { HoldToConfirmButton } from '../../components/HoldToConfirmButton';
-import { BlockerList, LegFillLine, legLetter, LiquidationRows, marketName, OpposingAcknowledgement, PairCosts, PositionArithmetic, SpreadReadout } from '../../trade/BorosPairBits';
+import { BlockerList, LegFillLine, legLetter, LiquidationRows, marketName, OpposingAcknowledgement, PairCosts, PositionArithmetic, SpreadReadout, UnevenFillWarning } from '../../trade/BorosPairBits';
 import { EstimateCard, EstimateRow, SlippageLine, StepBadge } from '../../trade/PairTicketBits';
 import { QueryError } from '../../components/QueryError';
 import { uuid } from '../../lib/uuid';
@@ -2933,6 +2933,7 @@ function OpenOnlyReview({
       </EstimateCard>
 
       {ackShown && simulation && <OpposingAcknowledgement sim={simulation} checked={acked.checked} onChange={acked.set} />}
+      {simulation && <UnevenFillWarning sim={simulation} />}
       <BlockerList blockers={blockers.filter((b) => b.code !== 'slippage-exceeds-max' && !(ackShown && b.code === 'flip-unacknowledged'))} />
 
       <div className="mt-1 flex items-center justify-between gap-2">

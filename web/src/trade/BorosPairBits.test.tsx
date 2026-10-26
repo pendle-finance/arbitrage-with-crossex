@@ -1,7 +1,7 @@
-import { render, screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { fireEvent, render, screen } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
 import type { BorosPairSimulation, BorosSimulatedLeg } from '../api/types';
-import { LiquidationRows } from './BorosPairBits';
+import { LiquidationRows, UnevenFillWarning } from './BorosPairBits';
 
 const leg = (venue: string, liquidationApr: number | null, resultingSize: number): BorosSimulatedLeg =>
   ({
@@ -23,5 +23,45 @@ describe('LiquidationRows', () => {
       'Position risk is low, so there is no liquidation rate for the time being.',
     );
     expect(screen.getByText('—')).toBeInTheDocument();
+  });
+});
+
+describe('UnevenFillWarning', () => {
+  const pair = (hedgedSize: number, unhedgedSize: number) =>
+    ({
+      legs: [leg('Gate', null, -1), leg('Hyperliquid', null, 1)],
+      hedgedSize,
+      unhedgedSize,
+      collateral: 'ETH',
+    }) as unknown as BorosPairSimulation;
+
+  it('names the hedged and unhedged sizes and sets the size to the hedged one', () => {
+    const onUse = vi.fn();
+    render(<UnevenFillWarning sim={pair(0.775, 0.225)} onUse={onUse} />);
+    expect(
+      screen.getByText('Only 0.775 ETH fills on both legs. 0.225 ETH would be left unhedged.'),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Use 0.775 ETH' }));
+    expect(onUse).toHaveBeenCalledWith(0.775);
+  });
+
+  it('shows no button without a handler or with nothing hedged', () => {
+    const { rerender } = render(<UnevenFillWarning sim={pair(0.775, 0.225)} />);
+    expect(screen.queryByRole('button')).toBeNull();
+    rerender(<UnevenFillWarning sim={pair(0, 1)} onUse={() => {}} />);
+    expect(screen.getByText(/would be left unhedged/)).toBeInTheDocument();
+    expect(screen.queryByRole('button')).toBeNull();
+  });
+
+  it('renders nothing when both legs fill evenly or only one leg trades', () => {
+    const { container, rerender } = render(<UnevenFillWarning sim={pair(1, 0)} onUse={() => {}} />);
+    expect(container).toBeEmptyDOMElement();
+    rerender(
+      <UnevenFillWarning
+        sim={{ ...pair(1, 0.2), legs: [leg('Gate', null, 1)] } as BorosPairSimulation}
+        onUse={() => {}}
+      />,
+    );
+    expect(container).toBeEmptyDOMElement();
   });
 });

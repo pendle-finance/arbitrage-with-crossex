@@ -612,6 +612,28 @@ export function BlockerList({ blockers }: { blockers: BorosPairBlocker[] }) {
   );
 }
 
+export function UnevenFillWarning({ sim, onUse }: { sim: BorosPairSimulation; onUse?: (size: number) => void }) {
+  if (sim.legs.length !== 2 || !(sim.unhedgedSize > 0)) return null;
+  const unit = sim.collateral;
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5 rounded-lg border border-amber-500/25 bg-amber-500/[0.04] px-2.5 py-1.5 text-[11px] leading-relaxed text-amber-200">
+      <span>
+        Only {sigGrouped(sim.hedgedSize)} {unit} fills on both legs. {sigGrouped(sim.unhedgedSize)} {unit} would be
+        left unhedged.
+      </span>
+      {onUse && sim.hedgedSize > 0 && (
+        <button
+          type="button"
+          className="rounded border border-amber-400/40 px-2 py-0.5 font-medium text-amber-100 transition-colors hover:bg-amber-500/10"
+          onClick={() => onUse(sim.hedgedSize)}
+        >
+          Use {sigGrouped(sim.hedgedSize)} {unit}
+        </button>
+      )}
+    </div>
+  );
+}
+
 /** §5's report: what filled, the realised spread, and the residual. */
 export function PairResultReport({
   result,
