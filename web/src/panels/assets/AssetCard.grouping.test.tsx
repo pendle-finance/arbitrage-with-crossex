@@ -281,6 +281,23 @@ describe('the card, by the grouping DoD', () => {
     expect(textOf(card)).not.toContain('to open here');
   });
 
+  it('every leg row shows its venue icon, on both tabs', async () => {
+    const user = userEvent.setup();
+    renderCard(groupOf(B15_HELD_TEN));
+    const legRows = () =>
+      [...document.querySelectorAll('tbody tr')].filter((tr) => /^(Perp|Boros)?(Gate|Hyperliquid)/.test(tr.querySelector('td')?.textContent ?? '')) as HTMLElement[];
+    const iconless = () => legRows().filter((tr) => !tr.querySelector('td img')).map(textOf);
+    await showPairs(user);
+    const ungrouped = cardList().find((el) => /Ungrouped legs/.test(textOf(el))) as HTMLElement;
+    await expand(user, ungrouped);
+    expect(legRows().length).toBeGreaterThanOrEqual(6);
+    expect(iconless()).toEqual([]);
+    await user.click(screen.getByRole('tab', { name: /^Funding Bundles/ }));
+    for (const b of screen.getAllByRole('button').filter((x) => x.getAttribute('aria-expanded') === 'false' && /Gate|Hyperliquid/.test(textOf(x)))) await user.click(b);
+    await waitFor(() => expect(legRows().filter((tr) => /^(Perp|Boros)/.test(textOf(tr))).length).toBeGreaterThanOrEqual(4));
+    expect(iconless()).toEqual([]);
+  });
+
   describe('Funding Bundles never opens into a Wrong side leg', () => {
     const FLIP_O = 'Close the Wrong side Hyperliquid LONG at 30 Oct to open here.';
     const borosOpens = () => screen.queryAllByRole('button', { name: /^(open (both )?Boros legs?|Open more)$/ });
