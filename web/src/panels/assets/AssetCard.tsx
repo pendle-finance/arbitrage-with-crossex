@@ -228,6 +228,31 @@ const AmberTag = ({ tag, children }: { tag: string; children: string }) => (
     {children}
   </HoverCard>
 );
+const WRONG_SIDE_TINT = 'bg-guava/[0.04]';
+
+function LegName({ venue, kind, side, base, spreadVenues }: { venue: string; kind: 'perp' | 'yu'; side: 'LONG' | 'SHORT'; base: string; spreadVenues?: [string, string] | null }) {
+  return (
+    <span className="inline-flex items-center gap-[7px]">
+      {spreadVenues ? (
+        <>
+          <SpreadIcon venues={spreadVenues} />
+          <SpreadName base={base} venues={spreadVenues} />
+        </>
+      ) : (
+        <>
+          <span className="font-medium text-ink-50">{prettyVenue(venue)}</span>
+        </>
+      )}
+      <span className={`rounded-full px-2 py-[3px] text-[10px] font-semibold tracking-[0.06em] ${kind === 'yu' ? 'bg-info/[0.16] text-pastel-blue' : 'bg-wash/[0.10] text-ink-300'}`}>
+        {kind === 'yu' ? 'Boros' : 'CrossEx'}
+      </span>
+      <Chip sm tone={side === 'LONG' ? 'green' : 'red'}>
+        {side}
+      </Chip>
+    </span>
+  );
+}
+
 const WrongSideTag = ({ leg }: { leg: PendingLeg }) => (
   <AmberTag tag="Wrong side">
     {`Adds to the ${prettyVenue(leg.wrongSide?.againstVenue ?? leg.venue)} perp's funding risk.${leg.wrongSide?.blocks ? ' Close it, then open the hedge.' : ''}`}
@@ -3221,26 +3246,8 @@ function PerpOnlyPairCard({
   // on every button, and reserves colour for what the action does.
   const pill = 'btn !h-[30px] !px-3 !text-[12px]';
   const sizeText = (n: number) => exactSize(n, pair.unit, base);
-  const sideChip = (side: 'LONG' | 'SHORT') => (
-    <Chip sm tone={side === 'LONG' ? 'green' : 'red'}>
-      {side}
-    </Chip>
-  );
   const legName = (venue: string, kind: 'perp' | 'yu', side: 'LONG' | 'SHORT', spreadVenues?: [string, string] | null) => (
-    <span className="inline-flex items-center gap-[7px]">
-      {spreadVenues ? (
-        <>
-          <SpreadIcon venues={spreadVenues} />
-          <SpreadName base={base} venues={spreadVenues} />
-        </>
-      ) : (
-        <span className="font-medium text-ink-50">{prettyVenue(venue)}</span>
-      )}
-      <span className={`rounded-full px-2 py-[3px] text-[10px] font-semibold tracking-[0.06em] ${kind === 'yu' ? 'bg-info/[0.16] text-pastel-blue' : 'bg-wash/[0.10] text-ink-300'}`}>
-        {kind === 'yu' ? 'Boros' : 'CrossEx'}
-      </span>
-      {sideChip(side)}
-    </span>
+    <LegName venue={venue} kind={kind} side={side} base={base} spreadVenues={spreadVenues} />
   );
   /** One rate-leg row: the leg that is there, or the gap where one belongs. */
   const heldText = (legs: PendingLeg[], close: number) => {
@@ -3268,8 +3275,15 @@ function PerpOnlyPairCard({
     missing > 0 && capShows(held, missing) ? (
       <div className="text-[11px] text-ink-400">open {sizeText(missing)}</div>
     ) : null;
-  const yuRow = (venue: string, side: 'LONG' | 'SHORT', yu: PendingLeg | null, missing: number, blocked: boolean, net: ExcludedNet | null, shownNet: ExcludedNet | null, heldElsewhere?: PendingLeg[]) =>
-    yu && !(missing > 0) ? (
+  const yuRow = (venue: string, side: 'LONG' | 'SHORT', yu: PendingLeg | null, missing: number, blocked: boolean, net: ExcludedNet | null, shownNet: ExcludedNet | null, heldElsewhere?: PendingLeg[]) => {
+    const heldHere = yu ? sizeIn(yu, yu.unit) : 0;
+    const why = [
+      heldElsewhere && capShows(heldHere, missing) ? heldText(heldElsewhere, Math.max(0, pair.size - heldHere - missing)) : null,
+      blocked && !(missing > 0) ? blockedText(venue, side) : null,
+      shownNet && missing > 0 ? excludedNetText(shownNet) : null,
+    ].filter((s): s is string => s !== null);
+    const canOpen = missing > 0 && !net;
+    return yu && !(missing > 0) ? (
       <tr key={`yu-${venue}`}>
         <td className={`${cell} whitespace-nowrap`}>{legName(venue, 'yu', side)}</td>
         <td className={`${cell} num whitespace-nowrap text-right text-ink-100`}>{sizeText(sizeIn(yu, yu.unit))}</td>
@@ -3290,29 +3304,23 @@ function PerpOnlyPairCard({
         <td className={`${cell} whitespace-nowrap`}>
           <span className="inline-flex items-center gap-[7px]">
             {legName(venue, 'yu', side)}
-            <MissingChip held={yu ? sizeIn(yu, yu.unit) : 0} target={pair.size} unit={pair.unit} base={base} />
+            <MissingChip held={heldHere} target={pair.size} unit={pair.unit} base={base} />
           </span>
-          {heldElsewhere && capShows(yu ? sizeIn(yu, yu.unit) : 0, missing) && (
-            <div className="num mt-1 text-[11px] text-ink-400">
-              {heldText(heldElsewhere, Math.max(0, pair.size - (yu ? sizeIn(yu, yu.unit) : 0) - missing))}
-            </div>
-          )}
-          {blocked && !(missing > 0) && <div className="num mt-1 text-[11px] text-ink-400">{blockedText(venue, side)}</div>}
-          {shownNet && missing > 0 && <div className="num mt-1 text-[11px] text-ink-400">{excludedNetText(shownNet)}</div>}
         </td>
         <td className={`${cell} num whitespace-nowrap text-right ${missing > 0 ? 'text-amber-200/90' : 'text-ink-400'}`} title={HELD_OF_TARGET_TITLE}>
-          {ofTarget(yu ? sizeIn(yu, yu.unit) : 0)}
-          {cappedOpen(yu ? sizeIn(yu, yu.unit) : 0, missing)}
+          {ofTarget(heldHere)}
+          {cappedOpen(heldHere, missing)}
         </td>
         <td className={`${cell} num text-right text-ink-600`}>—</td>
         <td className={`${cell} whitespace-nowrap text-right`}>
-          {missing > 0 && !net && (
+          {(canOpen || why.length > 0) && (
             <button
               type="button"
-              className="btn-ghost-xs !py-[5px] !text-grass hover:!border-grass/60"
+              className={`btn-ghost-xs !py-[5px] !text-grass ${canOpen ? 'hover:!border-grass/60' : 'cursor-not-allowed opacity-40'}`}
               disabled={!onOpenBoros}
-              title={`Open only the ${prettyVenue(venue)} ${side} Boros leg, at ${sizeText(missing)}`}
-              onClick={() => onOpenBoros?.({ long: side === 'LONG', short: side === 'SHORT' })}
+              aria-disabled={!canOpen}
+              title={canOpen ? [`Open only the ${prettyVenue(venue)} ${side} Boros leg, at ${sizeText(missing)}${why.length > 0 ? '.' : ''}`, ...why].join(' ') : why.join(' ')}
+              onClick={canOpen ? () => onOpenBoros?.({ long: side === 'LONG', short: side === 'SHORT' }) : undefined}
             >
               Open leg
             </button>
@@ -3320,6 +3328,7 @@ function PerpOnlyPairCard({
         </td>
       </tr>
     );
+  };
   return (
     <div className="overflow-x-auto rounded-lg border border-amber-500/40 bg-ink-950/40">
       <table className="w-full min-w-[880px] table-fixed border-collapse">
@@ -3413,14 +3422,21 @@ function PerpOnlyPairCard({
                         {legName(spread[0], 'yu', spread[0].toLowerCase() === pair.shortVenue.toLowerCase() ? 'SHORT' : 'LONG', spread)}
                         <MissingChip held={0} target={pair.size} unit={pair.unit} base={base} />
                       </span>
-                      {eitherNet && <div className="num mt-1 text-[11px] text-ink-400">{excludedNetText(eitherNet)}</div>}
                     </td>
                     <td className={`${cell} num whitespace-nowrap text-right text-amber-200/90`} title={HELD_OF_TARGET_TITLE}>
                       {ofTarget(0)}
                       {cappedOpen(0, Math.min(pair.missingLong, pair.missingShort))}
                     </td>
                     <td className={`${cell} num text-right text-ink-600`}>—</td>
-                    <td className={`${cell} num text-right text-ink-600`}>—</td>
+                    {eitherNet ? (
+                      <td className={`${cell} whitespace-nowrap text-right`}>
+                        <button type="button" className="btn-ghost-xs !py-[5px] !text-grass cursor-not-allowed opacity-40" aria-disabled title={excludedNetText(eitherNet)}>
+                          Open leg
+                        </button>
+                      </td>
+                    ) : (
+                      <td className={`${cell} num text-right text-ink-600`}>—</td>
+                    )}
                   </tr>
                 ) : (
                   <>
@@ -3431,7 +3447,7 @@ function PerpOnlyPairCard({
                 {pair.otherWay.map((y) => {
                   const size = sizeText(sizeIn(y, y.unit));
                   return (
-                    <tr key={`ow-${y.marketId}`}>
+                    <tr key={`ow-${y.marketId}`} className={WRONG_SIDE_TINT}>
                       <td className={`${cell} whitespace-nowrap`}>
                         <span className="inline-flex items-center gap-[7px]">
                           {legName(y.venue, 'yu', y.side, y.spreadVenues)}
@@ -3504,8 +3520,6 @@ function BorosOnlyPairCard({
   base,
   nowSec,
   borosOpen,
-  perpOpen,
-  unpaired,
   excludeMenu,
   onOpenPerps,
   onCloseBoros,
@@ -3515,8 +3529,6 @@ function BorosOnlyPairCard({
   nowSec: number;
   /** The asset's open Boros legs, for the per-leg liquidation APR. */
   borosOpen: AssetBorosOpen[];
-  perpOpen: AssetPerpOpen[];
-  unpaired: UnpairedPerp[];
   excludeMenu: (leg: PendingLeg) => React.ReactNode;
   /** Arms the perp ticket for the named side(s) at this size; null when there
    * is no trade flow to arm (a provider-less render). */
@@ -3534,44 +3546,14 @@ function BorosOnlyPairCard({
   const cell = 'border-b border-ink-850 px-2.5 py-2';
   const pill = 'btn !h-[30px] !px-3 !text-[12px]';
   const sizeText = (n: number) => exactSize(n, pair.unit, base);
-  const sideChip = (side: 'LONG' | 'SHORT') => (
-    <Chip sm tone={side === 'LONG' ? 'green' : 'red'}>
-      {side}
-    </Chip>
-  );
   const legName = (venue: string, kind: 'perp' | 'yu', side: 'LONG' | 'SHORT', spreadVenues?: [string, string] | null) => (
-    <span className="inline-flex items-center gap-[7px]">
-      {spreadVenues ? (
-        <>
-          <SpreadIcon venues={spreadVenues} />
-          <SpreadName base={base} venues={spreadVenues} />
-        </>
-      ) : (
-        <span className="font-medium text-ink-50">{prettyVenue(venue)}</span>
-      )}
-      <span className={`rounded-full px-2 py-[3px] text-[10px] font-semibold tracking-[0.06em] ${kind === 'yu' ? 'bg-info/[0.16] text-pastel-blue' : 'bg-wash/[0.10] text-ink-300'}`}>
-        {kind === 'yu' ? 'Boros' : 'CrossEx'}
-      </span>
-      {sideChip(side)}
-    </span>
+    <LegName venue={venue} kind={kind} side={side} base={base} spreadVenues={spreadVenues} />
   );
   /** A venue's perp rows: the perp that is there, then the gap still to open
    * — both when a perp covers only part of the unit. */
   const ofTarget = (held: number) => heldOfTarget(held, pair.size, pair.unit, base);
   /** A venue's perp row: what it holds against what the unit needs, one row
    * even when a perp covers only part of the unit. */
-  const onOtherCards = (venue: string, side: 'LONG' | 'SHORT', perp: UnpairedPerp | null): number => {
-    const leg = perpOpen.find((x) => x.venue.toLowerCase() === venue.toLowerCase() && x.side === side && !x.quoteTwin);
-    if (!leg || !(leg.qty > 0)) return 0;
-    const rest = Math.max(0, (pair.unit === 'base' ? leg.qty : leg.notionalUsd) - (perp ? sizeIn(perp, perp.unit) : 0));
-    return (pair.unit === 'base' ? rest * (leg.notionalUsd / leg.qty) : rest) >= DUST_USD ? rest : 0;
-  };
-  const inUngrouped = (venue: string, side: 'LONG' | 'SHORT', rest: number) => {
-    const loose = unpaired
-      .filter((u) => u.venue.toLowerCase() === venue.toLowerCase() && u.side === side && !u.quoteTwin)
-      .reduce((t, u) => t + sizeIn(u, u.unit), 0);
-    return loose > 0 && sameSize(loose, rest);
-  };
   const perpRows = (venue: string, side: 'LONG' | 'SHORT', perp: UnpairedPerp | null, missing: number) => [
     !(missing > 0) && perp && (
       <tr key={`p-${venue}`}>
@@ -3588,11 +3570,6 @@ function BorosOnlyPairCard({
             {legName(venue, 'perp', side)}
             <MissingChip held={perp ? sizeIn(perp, perp.unit) : 0} target={pair.size} unit={pair.unit} base={base} />
           </span>
-          {onOtherCards(venue, side, perp) > 0 && (
-            <div className="num mt-1 text-[11px] text-ink-400">
-              {`The other ${sizeText(onOtherCards(venue, side, perp))} of the ${prettyVenue(venue)} perp ${inUngrouped(venue, side, onOtherCards(venue, side, perp)) ? 'is in Ungrouped' : 'is on another card'}.`}
-            </div>
-          )}
         </td>
         <td className={`${cell} num whitespace-nowrap text-right text-amber-200/90`} title={HELD_OF_TARGET_TITLE}>
           {ofTarget(perp ? sizeIn(perp, perp.unit) : 0)}
@@ -3951,7 +3928,7 @@ function UngroupedCard({
                 const can = leg !== undefined;
                 const days = daysToMaturity(l.maturity, nowSec);
                 return (
-                  <tr key={`y-${l.marketId}`}>
+                  <tr key={`y-${l.marketId}`} className={l.wrongSide ? WRONG_SIDE_TINT : undefined}>
                     <td className="whitespace-nowrap">
                       <LegIdentity
                         kind="boros"
@@ -4065,7 +4042,6 @@ function MissingRow({ gap, base, onOpen, asPair, blocked }: { gap: HedgeGapRow; 
           sub="not open yet"
           chips={<Chip sm tone="amber" className="num">missing {exactSize(gap.size, gap.unit, base)}</Chip>}
         />
-        {blocked && <div className="num mt-1 text-[11px] text-ink-300">{blocked}</div>}
       </td>
       <td className="num text-right text-ink-300">
         {exactSize(gap.want, gap.unit, base)}
@@ -4075,18 +4051,17 @@ function MissingRow({ gap, base, onOpen, asPair, blocked }: { gap: HedgeGapRow; 
       <td className="text-right text-ink-600">—</td>
       <td className="text-right text-ink-600">—</td>
       <td className="whitespace-nowrap text-right">
-        {!blocked && (
-          <button
-            type="button"
-            className="btn-ghost-xs !text-gold hover:!border-gold/50"
-            disabled={!onOpen}
-            title={onOpen ? (asPair ? 'Opens the pair ticket with both missing legs.' : `Opens the order ticket with ${gapAsk(gap, base)}.`) : 'Order ticket unavailable here'}
-            onClick={onOpen}
-          >
-            {asPair ? `open both ${boros ? 'Boros' : 'perp'} legs` : `open ${boros ? 'Boros' : 'perp'} leg`}
-            <ArrowRight size={12} aria-hidden />
-          </button>
-        )}
+        <button
+          type="button"
+          className={`btn-ghost-xs !text-gold ${blocked ? 'cursor-not-allowed opacity-40' : 'hover:!border-gold/50'}`}
+          disabled={!onOpen}
+          aria-disabled={!!blocked}
+          title={blocked ?? (onOpen ? (asPair ? 'Opens the pair ticket with both missing legs.' : `Opens the order ticket with ${gapAsk(gap, base)}.`) : 'Order ticket unavailable here')}
+          onClick={blocked ? undefined : onOpen}
+        >
+          {asPair ? `open both ${boros ? 'Boros' : 'perp'} legs` : `open ${boros ? 'Boros' : 'perp'} leg`}
+          <ArrowRight size={12} aria-hidden />
+        </button>
       </td>
     </tr>
   );
@@ -4341,14 +4316,15 @@ function EditCell({
   );
 }
 
-function OpenMoreButton({ gap, base, onOpen }: { gap: HedgeGapRow; base: string; onOpen?: () => void }) {
+function OpenMoreButton({ gap, base, onOpen, blocked }: { gap: HedgeGapRow; base: string; onOpen?: () => void; blocked?: string }) {
   return (
     <button
       type="button"
-      className="btn-ghost-xs !text-gold hover:!border-gold/50"
+      className={`btn-ghost-xs !text-gold ${blocked ? 'cursor-not-allowed opacity-40' : 'hover:!border-gold/50'}`}
       disabled={!onOpen}
-      title={onOpen ? `Opens the order ticket with ${gapAsk(gap, base)}.` : 'Order ticket unavailable here'}
-      onClick={onOpen}
+      aria-disabled={!!blocked}
+      title={blocked ?? (onOpen ? `Opens the order ticket with ${gapAsk(gap, base)}.` : 'Order ticket unavailable here')}
+      onClick={blocked ? undefined : onOpen}
     >
       Open more
     </button>
@@ -4614,7 +4590,6 @@ function BorosRow({
             </span>
           }
         />
-        {blocked && <div className="num mt-1 text-[11px] text-ink-300">{blocked}</div>}
       </td>
       <td className="num text-right" title={exFrac > 0 ? `Whole leg\t${fmtTokenQty(leg.sizeToken, leg.collateral)} (${fmtUsdCompact(leg.notionalUsd)})\nExcluded\t${fmtTokenQty(exFrac * leg.sizeToken, leg.collateral)}` : undefined}>
         {fmtTokenQty(leg.sizeToken * slice.keep, leg.collateral)}
@@ -4675,7 +4650,7 @@ function BorosRow({
       </td>
       <td className="whitespace-nowrap text-right">
         <EditCell
-          leading={deficit && !blocked && <OpenMoreButton gap={deficit} base={base} onOpen={onOpenMore} />}
+          leading={deficit && <OpenMoreButton gap={deficit} base={base} onOpen={onOpenMore} blocked={blocked} />}
           exKey={key}
           label={leg.spreadVenues ? spreadName(base, leg.spreadVenues) : `${prettyVenue(leg.venue)} ${leg.side} YU`}
           unit={leg.collateral}
@@ -5354,6 +5329,7 @@ export function AssetCard({
   // Boros legs only — a perp is never excluded (his call 2026-09-09).
   const excludedRows = [
     ...borosVisible.map((l) => ({
+      leg: l,
       key: borosKey(l.marketId),
       label: `${legVenueName(l)} ${l.side}${l.spreadVenues ? '' : ' YU'} · ${fmtDateLocal(l.maturity)}`,
       unit: l.collateral,
@@ -6159,8 +6135,6 @@ export function AssetCard({
                 base={group.base}
                 nowSec={nowSec}
                 borosOpen={group.borosOpen}
-                perpOpen={group.perpOpen}
-                unpaired={derived.unpairedPerps}
                 excludeMenu={excludeMenu}
                 onOpenPerps={flow ? (sides) => openPerpsFor(p, sides) : null}
                 onCloseBoros={() => setCloseBorosOnly(p)}
@@ -6194,13 +6168,24 @@ export function AssetCard({
               <span className="text-[11px] text-ink-400">Not part of the arb: out of the hedge, PnL and capital.</span>
             </div>
             <table className="w-full border-collapse text-[12.5px] [&_td]:border-b [&_td]:border-ink-850 [&_td]:px-2.5 [&_td]:py-2 [&_tr:last-child_td]:border-b-0">
+              <thead>
+                <tr>
+                  <th className="th text-left">Leg</th>
+                  <th className="th text-right">Size</th>
+                  <th className="th text-right">Locked</th>
+                  <th className="th text-right">Initial margin</th>
+                  <th className="th" />
+                </tr>
+              </thead>
               <tbody>
                 {excludedRows.map((r) => {
                   const at = exclusionAt(exclusions[r.key]);
                   const show = (v: number) => (r.entryKind === 'rate' ? fmtPct(v) : fmtUsd(v));
                   return (
                     <tr key={r.key}>
-                      <td className="whitespace-nowrap text-ink-50">{r.label}</td>
+                      <td className="whitespace-nowrap">
+                        <LegName venue={r.leg.venue} kind="yu" side={r.leg.side} base={group.base} spreadVenues={r.leg.spreadVenues} />
+                      </td>
                       <td className="num whitespace-nowrap text-right text-ink-100">
                         {fmtTokenQty(r.frac * r.legQty, r.unit)}
                         <span className="ml-1 text-ink-400">{r.frac >= 1 ? 'whole leg' : 'slice'}</span>
@@ -6216,6 +6201,7 @@ export function AssetCard({
                           </span>
                         )}
                       </td>
+                      <td className="num whitespace-nowrap text-right text-ink-100">{fmtUsdCompact(r.leg.imUsd * r.frac)}</td>
                       <td className="whitespace-nowrap text-right">
                         <span className="inline-flex items-center gap-1">
                           <button

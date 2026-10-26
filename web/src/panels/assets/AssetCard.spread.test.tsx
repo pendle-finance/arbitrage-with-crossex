@@ -481,7 +481,7 @@ describe('a Boros leg held the other way', () => {
     const tag = await screen.findByText('Wrong side');
     expect(within(tag.closest('tr') as HTMLElement).getByRole('button', { name: 'Close' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Open both perps' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Open leg' })).toBeNull();
+    expect(screen.getAllByRole('button', { name: 'Open leg' }).map((b) => b.getAttribute('aria-disabled'))).toEqual(['true']);
   });
 
   it('a dust leg held the other way shows its Close but does not hide the Open, tagged Wrong side (#71)', async () => {
@@ -499,7 +499,7 @@ describe('a Boros leg held the other way', () => {
     await showPairs(user);
     const tag = await screen.findByText('Wrong side');
     expect(within(tag.closest('tr') as HTMLElement).getByText('Hyperliquid')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Open leg' })).toBeNull();
+    expect(screen.getAllByRole('button', { name: 'Open leg' }).map((b) => b.getAttribute('aria-disabled'))).toEqual(['true']);
     expect(screen.queryByText('Ungrouped legs')).toBeNull();
   });
 

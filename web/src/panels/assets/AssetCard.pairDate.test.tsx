@@ -352,8 +352,12 @@ describe('an open stops at what the venue lacks (owner 2026-10-16)', () => {
     const user = userEvent.setup();
     renderCard(capBook(3));
     await showPairs(user);
-    expect(await screen.findByText(reason(3))).toBeTruthy();
-    expect(screen.queryByRole('button', { name: 'Open leg' })).toBeNull();
+    const open = await screen.findByRole('button', { name: 'Open leg' });
+    expect(open).toHaveAttribute('aria-disabled', 'true');
+    expect(open).toHaveAttribute('title', reason(3));
+    expect(screen.queryByText(reason(3))).toBeNull();
+    await user.click(open);
+    expect(flow?.borosOpenPrefill ?? null).toBeNull();
     expect(screen.queryByRole('button', { name: /^Open (both )?Boros leg/ })).toBeNull();
   });
 
@@ -362,7 +366,7 @@ describe('an open stops at what the venue lacks (owner 2026-10-16)', () => {
     renderCard(capBook(3));
     await showPairs(user);
     const row = (venue: string) => screen.getAllByRole('row').find((r) => (r.textContent ?? '').startsWith(`${venue}Boros`));
-    await screen.findByText(reason(3));
+    await screen.findByTitle(reason(3));
     expect(row('Hyperliquid')?.textContent).toMatch(/3 BTC/);
     expect(row('Hyperliquid')?.textContent).not.toMatch(/\//);
     expect(row('Gate')?.textContent).toMatch(/0 \/ 3 BTC/);
@@ -373,12 +377,13 @@ describe('an open stops at what the venue lacks (owner 2026-10-16)', () => {
     const user = userEvent.setup();
     renderCard(capBook(4));
     await showPairs(user);
-    expect(await screen.findByText(reason(2))).toBeTruthy();
-    const opens = screen.getAllByRole('button', { name: 'Open leg' });
+    const opens = await screen.findAllByRole('button', { name: 'Open leg' });
     expect(opens.map((b) => b.getAttribute('title'))).toEqual([
-      'Open only the Gate LONG Boros leg, at 1 BTC',
+      `Open only the Gate LONG Boros leg, at 1 BTC. ${reason(2)}`,
       'Open only the Hyperliquid SHORT Boros leg, at 1 BTC',
     ]);
+    expect(opens.some((b) => b.getAttribute('aria-disabled') === 'true')).toBe(false);
+    expect(screen.queryByText(reason(2))).toBeNull();
     const gate = screen.getAllByRole('row').find((r) => /^GateBoros.*0 \/ 3 BTC/.test(r.textContent ?? ''));
     expect(gate?.textContent).toMatch(/0 \/ 3 BTCopen 1 BTC/);
     await user.click(opens[0]);

@@ -54,6 +54,7 @@ function previewSpy(): ActionInput[][] {
   );
   return seen;
 }
+const deadOpens = (el: HTMLElement) => within(el).queryAllByRole('button', { name: 'Open leg' }).filter((b) => b.getAttribute('aria-disabled') === 'true');
 const closeQtys = (actions: ActionInput[] | undefined) =>
   Object.fromEntries((actions ?? []).map((a) => [a.kind === 'close-position' ? a.symbol : a.kind, a.kind === 'close-position' ? a.qty : undefined]));
 
@@ -76,8 +77,14 @@ describe('the card, by the grouping DoD', () => {
       expect(found).toHaveLength(1);
       return found;
     });
-    expect(textOf(card)).toContain('Hyperliquid SHORT holds 10 ETH at 30 Oct. Close 4 ETH of it to open here.');
-    expect(within(card).queryByRole('button', { name: /^Open/ })).toBeNull();
+    const open = within(card).getByRole('button', { name: 'Open leg' });
+    expect(open).toHaveAttribute('aria-disabled', 'true');
+    expect(open).toHaveAttribute('title', 'Hyperliquid SHORT holds 10 ETH at 30 Oct. Close 4 ETH of it to open here.');
+    expect(textOf(open.closest('tr') as HTMLElement)).not.toContain(' holds ');
+    expect(textOf(card)).not.toContain('to open here');
+    await user.click(open);
+    expect(prefill.current).toBeNull();
+    expect(within(card).queryByRole('button', { name: /^Open (both )?Boros leg/ })).toBeNull();
   });
 
   it('half roll: open after the old leg is closed', async () => {
@@ -258,7 +265,18 @@ describe('the card, by the grouping DoD', () => {
       expect(found).toHaveLength(1);
       return found;
     });
-    expect(textOf(card)).toContain('Close the Wrong side Hyperliquid LONG at 30 Oct to open here.');
+    expect(deadOpens(card).map((b) => b.title)).toContain('Close the Wrong side Hyperliquid LONG at 30 Oct to open here.');
+    expect(textOf(card)).not.toContain('to open here');
+  });
+
+  it('a Wrong side row has a faint red tint, the missing rows do not', async () => {
+    const user = userEvent.setup();
+    renderCard(groupOf(B21));
+    await showPairs(user);
+    const row = (await screen.findByText('Wrong side')).closest('tr') as HTMLElement;
+    expect(row).toHaveClass('bg-guava/[0.04]');
+    const [card] = cardsTitled(/Boros legs missing/);
+    for (const b of deadOpens(card)) expect(b.closest('tr')).not.toHaveClass('bg-guava/[0.04]');
   });
 
   it('blocked row says why when a spread blocks it', async () => {
@@ -271,8 +289,8 @@ describe('the card, by the grouping DoD', () => {
       return found;
     });
     const line = 'Close the Wrong side Spread HL-GATE LONG at 27 Nov to open here.';
-    expect(textOf(card).split(line)).toHaveLength(3);
-    expect(textOf(card)).not.toContain('blocks this open');
+    expect(deadOpens(card).map((b) => b.title)).toEqual([line, line]);
+    expect(textOf(card)).not.toContain('to open here');
   });
 
   it('blocked row names the Wrong side leg that blocks, not a small one before it', async () => {
@@ -284,8 +302,9 @@ describe('the card, by the grouping DoD', () => {
       expect(found).toHaveLength(1);
       return found;
     });
-    expect(textOf(card)).toContain('Close the Wrong side Hyperliquid LONG at 27 Nov to open here.');
-    expect(textOf(card)).not.toContain('Close the Wrong side Hyperliquid LONG at 30 Oct');
+    const titles = deadOpens(card).map((b) => b.title);
+    expect(titles).toContain('Close the Wrong side Hyperliquid LONG at 27 Nov to open here.');
+    expect(titles.join(' ')).not.toContain('Close the Wrong side Hyperliquid LONG at 30 Oct');
   });
 
   it('the wrong-side hover names the venue the spread points against', async () => {
@@ -296,20 +315,18 @@ describe('the card, by the grouping DoD', () => {
     expect(await screen.findByRole('tooltip')).toHaveTextContent("Adds to the Gate perp's funding risk.");
   });
 
-  it('an open-only roll card says where the perps are', async () => {
+  it('an open-only roll card carries no line about the perps on other cards', async () => {
     const user = userEvent.setup();
     renderCard(groupOf(['G L 10', 'H S 10', 'G LONG 10 O', 'H SHORT 10 O', 'G LONG 10 N', 'H SHORT 10 N']));
     await showPairs(user);
-    const [card] = await waitFor(() => {
-      const found = cardsTitled(/Perp legs missing/);
-      expect(found).toHaveLength(1);
-      return found;
-    });
-    expect(textOf(card)).toContain('The other 10 ETH of the Gate perp is on another card.');
-    expect(textOf(card)).toContain('The other 10 ETH of the Hyperliquid perp is on another card.');
+    await waitFor(() => expect(cardsTitled(/Perp legs missing/)).toHaveLength(1));
+    for (const el of screen.getAllByRole('row')) {
+      expect(textOf(el)).not.toContain('is on another card');
+      expect(textOf(el)).not.toContain('is in Ungrouped');
+    }
   });
 
-  it('the other-card line skips a USDC twin', async () => {
+  it('a USDC twin adds no other-card line', async () => {
     const user = userEvent.setup();
     const book = groupOf(['G L 4', 'H S 4', 'G LONG 4 O', 'H SHORT 4 O', 'G LONG 4 N', 'H SHORT 4 N']);
     book.perpOpen.unshift({ ...book.perpOpen[0], symbol: 'GATE_FUTURE_ETH_USDC', qty: 3, notionalUsd: 3 * PX, quoteTwin: true });
@@ -320,8 +337,8 @@ describe('the card, by the grouping DoD', () => {
       expect(found).toHaveLength(1);
       return found;
     });
-    expect(textOf(card)).toContain('The other 4 ETH of the Gate perp is on another card.');
-    expect(textOf(card)).not.toContain('The other 3 ETH');
+    expect(textOf(card)).not.toContain('The other ');
+    expect(textOf(card)).not.toContain('is in Ungrouped');
   });
 
   it('close-first hover only when it blocks', async () => {
