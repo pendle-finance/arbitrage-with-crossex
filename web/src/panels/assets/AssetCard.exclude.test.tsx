@@ -102,7 +102,7 @@ const excludedBlock = () => screen.getByText('Excluded').parentElement?.parentEl
 
 async function clickExclude(user: User, row: HTMLElement) {
   await user.click(menuButton(row));
-  await user.click(await screen.findByRole('button', { name: /^Exclude/ }));
+  await user.click(await screen.findByRole('menuitem', { name: /^Exclude/ }));
 }
 
 async function openBundle(user: User, name: RegExp) {
@@ -162,7 +162,7 @@ describe('Exclude from the card, by the DoD', () => {
     await showPairs(user);
     const card = await pickBorosCard(/Boros leg missing/);
     await user.click(menuButton(card));
-    await user.click(await screen.findByRole('button', { name: 'Exclude 4 ETH' }));
+    await user.click(await screen.findByRole('menuitem', { name: 'Exclude 4 ETH' }));
     expect(spy).toHaveBeenCalledTimes(1);
     expect(spy.mock.calls[0]).toEqual([KEY_101, { qty: 4 }]);
   });
@@ -317,10 +317,11 @@ describe('Exclude from the card, by the DoD', () => {
     await showPairs(user);
     await openUngrouped(user);
     await user.click(menuButton(closeRow('Close Hyperliquid SHORT YU')));
-    const menu = await screen.findByRole('tooltip');
-    expect(within(menu).getAllByRole('button')).toHaveLength(1);
-    expect(within(menu).getByRole('button')).toHaveTextContent(/^Exclude$/);
-    expect(menu).not.toHaveTextContent('Not part of the arb');
+    const menu = await screen.findByRole('menu');
+    expect(within(menu).getAllByRole('menuitem')).toHaveLength(1);
+    expect(within(menu).getByRole('menuitem')).toHaveTextContent(/^Exclude$/);
+    expect(within(menu).queryAllByRole('button')).toHaveLength(0);
+    expect(menu.textContent).toBe('Exclude');
   });
 
   it('Restore brings it back', async () => {
@@ -353,9 +354,9 @@ describe('Exclude from the card, by the DoD', () => {
     await showPairs(user);
     await openUngrouped(user);
     await user.click(menuButton(closeRow('Close Hyperliquid SHORT YU')));
-    await screen.findByRole('tooltip');
+    await screen.findByRole('menu');
     await user.click(document.body);
-    await waitFor(() => expect(screen.queryByRole('tooltip')).toBeNull());
+    await waitFor(() => expect(screen.queryByRole('menu')).toBeNull());
     expect(spy).not.toHaveBeenCalled();
   });
 
@@ -401,7 +402,7 @@ describe('Exclude from the card, by the DoD', () => {
     const first = renderCard(groupOf(book, patch), { [KEY_101]: { qty: 2, at: 100 } }, spy);
     await showPairs(user);
     await user.click(menuButton(await pickBorosCard(/Boros leg missing/)));
-    await user.click(await screen.findByRole('button', { name: 'Exclude 4 ETH' }));
+    await user.click(await screen.findByRole('menuitem', { name: 'Exclude 4 ETH' }));
     expect(spy).toHaveBeenLastCalledWith(KEY_101, { qty: 6, at: 300 });
     first.unmount();
 
@@ -409,7 +410,7 @@ describe('Exclude from the card, by the DoD', () => {
     renderCard(groupOf(book, patch), { [KEY_101]: 2 }, legacy);
     await showPairs(user);
     await user.click(menuButton(await pickBorosCard(/Boros leg missing/)));
-    await user.click(await screen.findByRole('button', { name: 'Exclude 4 ETH' }));
+    await user.click(await screen.findByRole('menuitem', { name: 'Exclude 4 ETH' }));
     expect(legacy).toHaveBeenLastCalledWith(KEY_101, { qty: 6 });
   });
 
