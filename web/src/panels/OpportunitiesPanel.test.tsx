@@ -735,6 +735,25 @@ describe('OpportunitiesPanel — the assumptions strip', () => {
     );
   });
 
+  it('keeps a typed custom size when a preset is clicked before the debounce lands', async () => {
+    const urls: string[] = [];
+    server.use(opportunitiesHandler(makeOpportunitiesResult(), { urls }));
+    renderWithClient(<OpportunitiesPanel />);
+
+    await waitFor(() => expect(urls).toHaveLength(1));
+    await userEvent.click(screen.getByRole('radio', { name: /^Custom/ }));
+    const size = screen.getByLabelText('Custom capital (USD)');
+    await userEvent.clear(size);
+    await userEvent.type(size, '50000');
+    await userEvent.click(screen.getByRole('radio', { name: '$1M' }));
+    await new Promise((r) => setTimeout(r, 600));
+    await userEvent.click(screen.getByRole('radio', { name: /^Custom/ }));
+
+    // The box and the query agree on the size typed.
+    expect(screen.getByLabelText('Custom capital (USD)')).toHaveValue('50000');
+    await waitFor(() => expect(paramsOf(urls.at(-1)!)).toMatchObject({ capitalUsd: '50000' }));
+  });
+
   it('notes the $1M perp slippage assumption only when a card is above $1M per leg', async () => {
     const result = (notionalUsd: number) =>
       makeOpportunitiesResult({ groups: [makeOpportunityGroup({ pairs: [makeOpportunityPair({ notionalUsd })] })] });
