@@ -66,10 +66,26 @@ describe('POST /api/preview', () => {
     const [buy, sell] = previews.map((p) => p.violations.map((v) => v.code));
     expect(buy).toContain('exceeds-max-position');
     expect(previews[0].violations.find((v) => v.code === 'exceeds-max-position')?.message).toMatch(
-      /^this open takes the GATE_FUTURE_ETH_USDT position to \$52,\d{3},\d{3}, above the largest CrossEx takes \(\$50,000,000\)$/,
+      /^this open takes the GATE_FUTURE_ETH_USDT position to \$52,\d{3},\d{3}, above its \$49,000,000 limit \(2% under the CrossEx risk-limit cap\)$/,
     );
     // Selling shrinks the long: no cap to pass.
     expect(sell).not.toContain('exceeds-max-position');
+  });
+
+  it('a sell that shrinks a position above the cap is no violation', async () => {
+    app = makeTestApp();
+    mockGateGet('/rule/symbols', { fixture: RULES });
+    mockGateGet('/fee', { fixture: 'fee.json' });
+    mockSpotTicker('ETH_USDT', '2000');
+    mockGateGet('/rule/risk_limits', { fixture: 'risk-limits.json' });
+    // Holding 26,000 long = $52M, above the $49M limit; selling 1,000 leaves $50M.
+    mockGateGet('/positions', { body: [{ symbol: 'GATE_FUTURE_ETH_USDT', position_qty: '26000' }] });
+
+    const { previews } = await preview([
+      { kind: 'open-market', symbol: 'GATE_FUTURE_ETH_USDT', side: 'SELL', qty: '1000', leverage: 25 },
+    ]);
+
+    expect(previews[0].violations.map((v) => v.code)).not.toContain('exceeds-max-position');
   });
 
   it('a below-min-notional action returns a STRUCTURED violation inline, not a 400', async () => {
